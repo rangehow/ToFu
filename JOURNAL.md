@@ -1,6 +1,17 @@
 # Project Journal
 
 
+### 2026-07-23(续10) — 「翻历史余额每次点开都卡 8 秒」三步根治落地:历史日结算即钉死 + 前端月度成本 IDB 秒开 + 扫描挪出事件循环(commit `621b634`,4 文件,新测 9/9 绿含 failing-first + NEUTER / 全套 daily_report 50/50 / collect 7834)。
+- **owner 诉求:** 日志实证 `_get_monthly_costs 2026-07 ... in 8.11s`(16 命中 + 6 过去日重扫 + 今天现场扫)已确认;不要再解释,直接实现「翻历史余额秒开」。三步一起上。
+- **真因回顾(非归错天):** 费用早按每条消息 `msg['timestamp']` 归日(autopilot 跟进轮自带 `int(time.time()*1000)`,`autopilot.py:1098`),跨零点天然分到第二天——归因本来就对、历史值本来就稳。慢的是「重算成同一个值」:`invalidate_cost_cache_for_messages` 因一个跨天会话把它碰过的**每个历史日**缓存全抹掉 → 下次开又重扫。
+- **修 #1 历史日钉死(`cost.py`,+72):** 新增 `_persisted_cost_dates`(一条 `date IN (...)` 查出哪些天已持久化)+ `_should_pin_day`(严格早于今天 **且** 已持久化 → pin)。`invalidate_cost_cache_for_messages` 里把 pinned 天从失效集中剔除:跨零点编辑今天只能丢**今天**(未结算),昨天的快照 + 缓存 hit 原样保留。显式重算(直接 `invalidate_day_cost_cache` / 强制 regen)不走这条路,不受影响。
+- **修 #2 前端月度成本 IDB 秒开(`myday.js`,+72):** `_mydayIDB` 升到 VER 2,加 `months` store + `getMonth/putMonth`。`_mydayFetchMonthOverview` 先从 IDB 把 `_costDays`/`_convDays` 瞬间画出(历史 ¥ 立即出现),再拉 `Api.daily.calendar` 校准并回写——完全复刻正文的 instant-paint 模式(正文早有、金额之前没享受到)。
+- **修 #3 扫描挪出事件循环(`daily_report.py`,+4):** `raw_costs = await asyncio.to_thread(_get_monthly_costs, year, month)`——8 秒不再冻结整个事件循环/其它请求。
+- **failing-first + NEUTER:** `TestSettledDayPinning`(predicate 真值表 / 跨零点 pin 昨天丢今天 / NEUTER `_should_pin_day→False` 证明承重)+ `TestPastMonthNoRescan`(全缓存过去月 `_scan_costs_in_range` **零调用**)。NEUTER 实证:把 `_should_pin_day` 打回恒 `False` → `test_should_pin_predicate` + `test_cross_midnight_edit_pins_yesterday_drops_today` 双双变红(`'2026-07-22' in {...}` = 昨天又被抹),还原后 50/50 全绿。
+- **性能实证:** 全缓存过去月(2026-06)`_get_monthly_costs` = **0 次扫描 / 0.07ms**(对比冷扫 8.11s)。
+- **git 纪律(共享 HEAD、~130 sibling WIP 脏文件):** `commit -- <4 显式路径>`,`git show HEAD --stat` 确认仅 4 文件、NO LEAK。
+
+
 ### 2026-07-23(续9) — 「prompt cache 达到完美了吗?不许猜、用 DB 实测,不想看到任何 client miss」用真实 DB 重建钉死:所谓 client miss 全是监控误标,真实流量 client 侧 miss = 0(commit `c34abe3`,2 文件 +41,新测 8/8 绿含 failing-first)。
 - **owner 诉求:** 查最近日志确认 prompt cache 是否零 client miss;不许推测成因,直接用 DB 数据实测;不在乎成本。
 - **数据源(非猜):** `[CacheRoundRecord]` 是每轮机读判决记录(`_detect.py::_emit_round_record`,带 `bucket`/`body_identical`/`culprits`),876 条,用项目自带 `aggregate_round_records` 聚合:`no_break` 830、`upstream_identical` 30、`turn_boundary_rebill` 8、**`body_change` 8**。`body_change` 桶读作「客户端侧 miss」——正是 owner 不想看到的。

@@ -1,5 +1,20 @@
 # Project Journal
 
+
+### 2026-07-23(续8) — 「reasoning_content 还是没显示、debug 面板里明明有」根因用真实 renderMessage + 活体 DB 钉死并根修:段时间线丢终局思考(commit `752927b`,3 文件 +278/-7,新测 2/2 绿含 NEUTER + 相邻 24/24 无回归)。
+- **owner 诉求:** 「conv `mrx3tv0ha8ffkc` 只显示工具调用,`content`/`reasoning_content` 都不见——但 debug 面板里两者都在。这个 bug 已经修过太多次,这次彻底查清为什么老失败,然后真正修好。」
+- **诚实纠错前提(不重蹈覆辙):** 前几轮全在追 `superseded` 徽章,那是**不同的 bug**——本 bug 是 `content`/`reasoning_content` 消失,是**渲染丢失**,与徽章无关。
+- **数据层 vs 渲染层分层验证:** 活体 DB 直连(bypass 78KB dump 截断):asst message 有 `content` 1569 字 + `thinking` 353 字 + `segments` 31 段(末两段是 `type:thinking terminal=True`(353)/`type:text deliverable=True terminal=True`(1569))+ `toolRounds` 19 轮。**数据是完整的**,病根在渲染路径。
+- **JSDOM 真渲染器复现钉死断点:** 载入真 `escape_html.js`+`safe_html.js`+`translation_model.js`+`translation_indicator.js`+`tool_rounds.js`+`chat_render.js`,喂喂给它这份 fixture(避免 stub 骗自己):`CONTENT_RENDERED=true` / `TERMINAL_THINKING_RENDERED=false` / `PERROUND_THINKING_RENDERED=true`——**终局思考被吞、内容还在**。也在**服务 bundle** `bundle-a6551c82.js` 里定位到压缩形态 `if(e.thinking&&!u)`(u=`_segTimelineRendered`)——线上就是丢的。
+- **根因链:** commit `099d80c`(2026-07-16)让段时间线成为唯一渲染路径,`renderSegmentTimelineHTML` **有意** `if (s.terminal) continue` 跳过所有 terminal 段(`tool_rounds.js:3438`);deliverable 有独立的 `else if (msg.content)` 分支(不受门控)所以幸存;但 `msg.thinking` 的独立块被 `!_segTimelineRendered` **过度抑制**——假设「时间线已含思考」只对**逐轮**思考成立,终局思考(`task['thinking']`,每轮重置,后面没有工具轮)**从不 inline**,又被静默抑制 → 每个正常多工具轮都在丢终局 reasoning_content。
+- **为何老修不掉:** 前几个「superseded 修复」都在追徽章,从没碰这里;`test_frontend_segment_timeline.py` 的 fixture 把 `msg.thinking` 设成**逐轮**思考(`reason0`,llmRound:0),从没测过与逐轮**不同**的终局思考——盲点闭环。
+- **根修(`chat_render.js`,+19/-1):** `if (msg.thinking && !_segTimelineRendered)` → `if (msg.thinking)`,并加长注释解释为什么这个「看似冗余的」渲染必须保留(不重复:终局字符串与每段逐轮字符串同一时刻分属不同的累加器)。
+- **失败优先守卫(`test_frontend_terminal_thinking_render.py`,新增 247 行):** 驱动 REAL `renderMessage`,喂喂 fixture(逐轮 `PERROUND_REASON_0` + 终局 `TERMINAL_REASON_XYZ` + deliverable `THE FINAL ANSWER`),断言 timeline+deliverable+per-round+standalone-terminal-thinking-block **同时**渲染。**NEUTER-1** 把门 revert 回 `&& !_segTimelineRendered` → `terminal_thinking_block_present` 变红。证明 load-bearing。
+- **回归 + 修相邻测:** `test_frontend_autopilot_vu_timeline.py` 的 `a_vu_thinking_suppressed` 编码的正是本 bug 的错误行为,翻转为 `a_vu_terminal_thinking_rendered`。合并跑 vu-timeline+新守卫+segment-timeline 全绿(24/24);abort-toolrounds/action-index/vu-rerender 7/7 无回归。`test_frontend_autopilot_flat_render` 的 3 项失败是既存的 index-baked-onclick 陈旧基线(与 commit `94035a1` 相关),经干净 HEAD 复跑验证与本改无关。
+- **git 纪律:** `reset -q HEAD .` → 仅 add 3 文件 → `--cached --numstat`(chat_render 19/1、vu-timeline 12/6、新测 247/0)→ `commit -F- -- <路径>` → `git show HEAD --stat` = 仅 3 文件 +278/-7,NO LEAK。`752927b`。
+- **给 owner 的部署说明:** 修复在服务器**重启 + 硬刷新浏览器**后生效——因为线上 bundle `bundle-a6551c82.js` 仍是旧的(编译时含 `if(e.thinking&&!u)`);Tofu bundler 是启动/`GET /` 时按内容哈希重建,无热更新。这不是 agent 能做的动作,owner 需要重启。
+
+
 ### 2026-07-23(续7) — 「mrx3tv0ha8ffkc 还是出现 superseded、没修好」用活体 DB 钉死真因并补上最后一个渲染面:LIVE 流式 `_syncToolRoundsDOM` 从未跑 superseded 过滤(commit `c74e3bf`,2 文件 +254,新测 3/3 绿含 NEUTER + 失败优先双红 / collect 41 正常)。
 - **owner 诉求:** 指名 `mrx3tv0ha8ffkc` 仍渲染 superseded/interrupted,前一轮(`931481d`/`ff6f6ee`)没修掉,让我查清。
 - **活体取证(不猜):** 该会话 `task_results.tool_rounds=NULL`、数据在 `segments`(31/34);但 `conversations.messages` blob 里 message[1](done)/message[3](running)**同时**有 `toolRounds`(19/55)+`segments`。用真实数据跑 predicate:message[1] 正确丢 5/19、message[3] 丢 11/55——**持久化/reload 渲染早就是干净的**。superseded husk 确carry `badge='superseded'`+`toolContent=null`,且 tc_id 全互异无碰撞。

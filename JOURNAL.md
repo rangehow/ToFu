@@ -1,5 +1,34 @@
 # Project Journal
 
+### 2026-07-23(续15) — 「全项目架构体检」评审(6 智能体并行深读真实源码)+ 分级路线图落地:1 个已核实潜伏缺陷立独立票、7 条可独立推进的重构/清扫拆成 board epic,本轮**只评审+持久化、不动大刀**。
+- **owner 诉求:** 项目已很大,做一次不偷懒的全源码架构体检,找极致工程优化点,为未来扩展打地基。
+- **方法(不猜、读真实源码):** 6 个 reviewer 子智能体并行分六lane深读——core-engine / LLM-layer / routes+server / frontend+bundler / persistence / ops-scripts。每个返回带 `file:line` + impact/effort 评级的 punch-list。FUSE 树上 shell `find/grep/wc` 全超时,一律走 read_files/grep_search/find_files。
+- **总判断:** 地基扎实(门面包拆分、`window.Api` 隔离、DB 单一 schema 源、共享 `_sse_core` 内核均真实生效),**无需重构,做精装修**。
+- **头号发现 P1(逐行核实=真,潜伏非线上):** `persist_conv_messages`(`lib/chat/persistence.py:311`)`upsert(retry=True)` 走 `db_execute_with_retry(commit=True)` **先提交 JSONB**;紧接 `dual_write_conv`→`backfill_conv(commit=False)`(`messages_rows.py:186`)写的 `conversation_messages` 行**无任何提交点**,悬在连接上等下一个写提交 → 行镜像与 JSONB 静默分叉,恰好击穿 `verify_conv_parity` 闸门的意义。全程挂 `TOFU_MESSAGES_ROWS`(默认关)→ **潜伏 bug**,读切换那天才爆。
+- **owner 关键订正(已采纳,写死备忘):** 「改 1 行让 dual_write 自提交」**不成立**——在 `persist_conv_messages` 流程中间 `commit()` 会把该 pooled 连接上其它待提交写**提前落盘**,是事务边界副作用,提交点该放哪需单独论证。故 P1 **不得在任何重构批次里顺手修**,潜伏/既存缺陷走独立工作流(符合 owner 一贯偏好)。→ 立票 `pt_7e4afe73`(标注 latent / gated / 提交点有事务副作用 / 需 failing-first 验证开关打开后行数落库)。
+- **board epic 落地(8 张,本轮不认领、不动手,供 sibling 在共享 HEAD 上分头认领):**
+  - `pt_7e4afe73` — P1 潜伏双写不提交(独立票,非重构批次)。
+  - `pt_03f4cdf1` — 拆 `orchestrator/_run.py`(`run_task()` ~1700 行=单函数,全核心最大未拆缝)。
+  - `pt_00459503` — 拆 `tasks_pkg/autopilot.py`(3375 行,tasks_pkg 最大单体;与 `pt_8dc03017` VU-独立流协调)。
+  - `pt_ca581692` — 合并 `llm_dispatch/api.py` 孪生循环(`dispatch_stream` L960 / `async_dispatch_stream` L1527,~560/430 行近乎逐行相同,只差 await/sleep)。
+  - `pt_04686ac6` — 拆 `routes/chat.py`(4141 行)成子包 + 胖 handler 业务下沉 `lib/chat_dispatch.py`。
+  - `pt_63eb7f02` — 机械扫:~294 处 ad-hoc jsonify → `api_response`(加 `api_conflict`)+ `@safe_route` 铺开(312 处手搓 try/except)。低风险高 ROI、一文件一 PR。
+  - `pt_3879f00e` — 前端首屏瘦身(Epic-E):i18n.js 双语 308KB 拆 boot 单语言子集 + 懒加载;`core/conversations.js` 134KB 拆包;`health_stream_timer`/`cross_tab_sync` 移入 `_DEFERRED_FILES`。
+  - `pt_a35ba42f` — 去重+可测性 quick wins:stream/astream 重试壳参数化 sleep;export.py 内部标识符清单 449↔1231 合一元组;bootstrap conda-deps 漂移守卫(已漏 quart/hypercorn/orjson/sqlalchemy/pymupdf);export `_SECRETS`/`_ENDPOINTS` 表驱动完整性测试。
+- **护栏体检(好消息,不用动):** `window.Api` 隔离完全生效(仅 2 处合法非-`/api` fetch,白名单+ratchet 内);`_BUNDLE_FILES` 无遗漏(relay-admin 故意排除);bundler 防损坏扫描/node --check/原子改名范本级;`json_store.update_json_atomic` + `runtime_state_store` 已闭合旧 TOCTOU;dual-write 读切换 `rows_read_enabled` 写蕴含读门控 + parity 闸门设计正确、读切换安全地关着。
+- **诚实边界:** 本轮**零源码改动**——只做评审 + JOURNAL 持久化 + 8 张 board epic。所有 `file:line` 来自本轮实际读取;P1 我读了 `persistence.py:160-230` + `messages_rows.py:155-210` 逐行核实。大重构(`_run`/`autopilot`/`dispatch_stream`/`chat.py`)本轮**不动手**,各自排队为独立 epic,避免共享 HEAD 撞车。仓库卫生旁注:`swebench_*_workdir/`、`node_modules.local_bak.*`、`server_15000.log`、`.coverage`、`promo/`、`propaganda/` 均**未被 git 跟踪**(已核实),建议进 `.gitignore` 防误提交。
+
+### 2026-07-23(续15) — 推进模型矩阵:新增 OpenAI **GPT-5.6** 家族(含全新 `ultra` 思考档)+ Anthropic **Fable 5**,端到端接线(17 文件,新测 6/6 绿含 GPT ladder / 全 build_body+conv_config+compat+agent_run 130/130 / collect 7866)。
+- **owner 诉求:** OpenAI 端点过时(已发 GPT-5.6,思考档新增 `ultra` 模式);Anthropic 发了 Fable 5。把相关端点全部推进。
+- **背景(非猜、读代码钉死):** 本项目活在「近未来」模型宇宙——GPT-5.4 / Claude Opus 4.8 / Gemini 3.5 早已在册,故 GPT-5.6、`ultra` 档、Fable 5 都是**顺现有模式扩表**,无外网可查。
+- **能力层(`_family.py`/`_capabilities.py`):** 新增 `is_gpt5`(含 `gpt-5` 但排除 `gpt-oss`/`gpt-4o`/o 系列)+ `is_gpt_56`(正则取 minor≥6,`gpt-5` 单独=0);`is_claude` 扩识 `fable`(Fable 走与 Claude 完全相同的 Messages 形状)。新 `gpt_reasoning_effort(effort, enabled, model)`——映射 Tofu 深度梯到 minimal/low/medium/high,`ultra` 仅在 GPT-5.6+ 保留、旧 5.x 降 `high`;Gemini map 也补 `ultra→high`。两个 facade(`model_info/__init__` + `llm/__init__`)同步导出。
+- **body 组装(`_build.py`):** GPT-5 单独分支发 `reasoning_effort`(此前落到 `else` 什么思考参数都不发);Claude 分支里 `ultra` 无对应档 → 映射到 Claude 顶档 `max`(不是丢弃)。dispatch 的 `_readjust_thinking_params`(跨家族改路由)同步补 GPT-5 重发分支 + 同款 ultra→max clamp。
+- **注册表(5 处):** `_slots.py`(GPT-5.6/pro/mini/nano + fable-5 三个网关别名)、`_aliases.py`(fable-5 aws/direct/Bedrock 互换组)、`pricing/_tables.py`(GPT-5.6 沿用 5.4 价位、Fable 5 用 Opus 旗舰价 5/25 + 1.25/0.10 cache 乘子)、`bootstrap.py`(内置 OpenAI/Anthropic 模板)、`provider_templates.js`(OpenAI/Anthropic/Bedrock/OpenRouter)。
+- **headless/compat:** `agent_run._THINKING_DEPTHS` + `compat/openai` 的 reasoning_effort→depth map 收 `ultra`;`COMPAT_OPENAI.md` 补说明。
+- **前端深度梯(6 处):** index.html 两条 depth-bar(桌面 popover + mobile sheet)+ settings `general.html` 下拉都加 `Ultra` 选项;`main.js` `_DEPTH_ICONS`/`_DEPTH_LABELS` + `finish_info.js` depthLabels 加 `ultra`;i18n 加 `settings.thinkingUltra`/`mobile.ultra`(中「至臻」/英「Ultra」)。无新增顶层 JS 文件,故 `_BUNDLE_FILES` 无需改。
+- **测试:** `test_backend_unit.py` 加 6 测(GPT-5.6 全梯 incl. ultra / 旧 GPT ultra→high / GPT 默认 medium / Claude ultra→max / Fable 归 Claude 家族)。backend+conv_config+compat+agent_run **130/130**;collect **7866**,0 import error。
+- **诚实边界:** 前端改动需**重启 server 重建 bundle + 硬刷浏览器**才生效(bundler 无热更新)——owner 侧动作。未跑真实网关(fictional 模型无 upstream);逻辑层已按现有 Gemini/Claude 同款契约测试钉死。
+
 ### 2026-07-23(续14) — 「Studio 点击(已绑项目时)还是打不开项目面板、改不了路径」的**第二个** bug 根修:面板打开被前置的 dial/state 记账阻塞(commit `73b4b2d9`,2 文件 +74/-26,新测 4/4 绿含 NEUTER + 相邻 3/3 无回归)。
 - **owner 复报(续13 未根治):** 硬刷新后,已选中项目时点 Studio 仍不弹面板 → 改不了项目;新绑项目却正常。
 - **验证不是「bundle 陈旧」:** 直接从服务 bundle 反查 minified `setChatMode` —— `openProjectModal()` 确实在逗号后无条件执行,续13 的修复**已上线**。所以是**第二个真 bug**,不是没重启。

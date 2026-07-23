@@ -3996,8 +3996,35 @@ function renderPreferenceLearnedHtml(learned) {
   return `<div class="pref-learned-box">${rows}</div>`;
 }
 
+/* A "superseded" orphan round: an early-announced tool_start that was left
+ * result-less when a discarded FloorRetry / stream-retry attempt's tc_id never
+ * survived into the final assistant_msg, then settled by the backend
+ * reconcile_announced_rounds (badge='superseded', interrupted=true, NO real
+ * result). It is pure noise — its adopted twin (or the recovered response) is
+ * the real call — so we DROP it from the render entirely rather than show a
+ * misleading "interrupted" chip for a call the user never actually lost.
+ *
+ * NOT dropped: a genuine user-Stop dangling round (badge='interrupted', from
+ * _finalize_dangling_tool_rounds) — the user really interrupted that one, so it
+ * keeps its static interrupted affordance. Discriminator = the 'superseded'
+ * badge, which ONLY reconcile_announced_rounds stamps. */
+function _isSupersededOrphanRound(r) {
+  if (!r || r.status !== "aborted") return false;
+  const meta = (r.results && r.results[0]) || {};
+  // result-less: reconcile writes a single meta with no tool content/toolContent
+  const hasRealResult = r.toolContent != null
+    || (meta && (meta.fetched || (meta.fetchedChars | 0) > 0));
+  return meta.badge === "superseded" && !hasRealResult;
+}
+
 function renderToolRoundsHTML(rounds, isStreaming, segments) {
   if (!rounds || rounds.length === 0) return "";
+  /* ★ Drop superseded orphan rounds (FloorRetry/stream-retry duplicates left
+   *   result-less and reconciled) so they never render a misleading
+   *   "interrupted" chip. The user's real call is the adopted/recovered twin.
+   *   Genuine user-Stop interruptions (badge='interrupted') are kept. */
+  rounds = rounds.filter((r) => !_isSupersededOrphanRound(r));
+  if (rounds.length === 0) return "";
   /* ★ UNIFIED: every round — tool calls AND swarm panels — goes into
    *   the single ptool-panel in chronological order. Swarm rounds
    *   render the full agent dashboard inline as a "row" so the user

@@ -122,6 +122,50 @@ class TestGetConversationRaw:
         assert td['arg'] == 'lib/foo.py'   # primary arg extracted from args.path
         assert td['status'] == 'done'
 
+    def _capture_post_build_meta(self, fn_args):
+        """Drive the REAL _handle_conv_ref_tool _post_build closure without a
+        live executor. Stubs ``simple_call`` in the _brain module to capture the
+        ``post_build`` callback (mirrors test_mcp_tool_links.PostBuildTitleTest),
+        then invokes it against a fresh ``meta`` dict and returns that meta."""
+        import lib.tasks_pkg.handlers.misc._brain as brain
+
+        captured = {}
+
+        def _fake_simple_call(task, fn, args, rn, round_entry, tc_id,
+                              *, executor, source, module_tag='', title='',
+                              post_build=None, **_kw):
+            captured['post_build'] = post_build
+            return tc_id, 'ok', False
+
+        orig = brain.simple_call
+        brain.simple_call = _fake_simple_call
+        try:
+            brain._handle_conv_ref_tool(
+                {'convId': None}, {}, 'get_conversation', 't', fn_args,
+                1, {}, {}, '/tmp/x', False,
+            )
+            meta = {}
+            captured['post_build'](meta, 'RAW JSON DUMP', fn_args)
+            return meta
+        finally:
+            brain.simple_call = orig
+
+    def test_handler_attaches_digest_in_raw_mode(self):
+        # THE RAW-MODE FIX (2026-07-23): a get_conversation(raw=True) read used
+        # to SKIP the digest card (the `_fn_args.get('raw')` short-circuit), so
+        # the human saw the ugly 78KB JSON blob truncated by L0. The handler
+        # must now attach `convDigest` for raw reads too (rebuilt off the DB).
+        meta_raw = self._capture_post_build_meta(
+            {'conversation_id': self.cid, 'raw': True})
+        assert 'convDigest' in meta_raw, 'raw-mode read must still attach the card'
+        assert meta_raw['convDigest']['convId'] == self.cid
+        assert meta_raw['convDigest']['msgCount'] == 2
+        # …and the default (non-raw) read attaches it as before (no regression).
+        meta_default = self._capture_post_build_meta(
+            {'conversation_id': self.cid})
+        assert 'convDigest' in meta_default
+        assert meta_default['convDigest']['convId'] == self.cid
+
     def test_build_digest_self_reference_is_none(self):
         # Digesting the CURRENT conversation is a no-op (caller falls back).
         assert build_conversation_digest(self.cid, current_conv_id=self.cid) is None
@@ -130,8 +174,10 @@ class TestGetConversationRaw:
         assert build_conversation_digest('does-not-exist-xyz') is None
 
     def test_build_digest_long_preview(self, flask_client):
-        # A message longer than the 400-char preview must be previewed to ~400
-        # and carry an (expandable) `full` that is longer than the preview.
+        # A message longer than the 750-char preview (B-widening 2026-07-23)
+        # must be previewed to ~750 and carry an (expandable) `full` longer
+        # than the preview.
+        from lib.conv_ref._detail import DIGEST_PREVIEW
         from lib.database import DOMAIN_CHAT, get_thread_db
         from lib.database._core_schema import CONVERSATIONS, upsert
         now = int(time.time() * 1000)
@@ -149,8 +195,10 @@ class TestGetConversationRaw:
         try:
             d = build_conversation_digest(cid)
             row = d['messages'][0]
-            # Preview is bounded (400 + ellipsis), full is much longer.
-            assert 380 <= len(row['text']) <= 402
+            # Preview is bounded to the DEFAULT preview length (+ ellipsis),
+            # full is much longer. Assert against the constant so it can't drift.
+            assert DIGEST_PREVIEW == 750
+            assert (DIGEST_PREVIEW - 20) <= len(row['text']) <= (DIGEST_PREVIEW + 2)
             assert row['text'].endswith('…')
             assert 'full' in row and len(row['full']) > len(row['text'])
         finally:

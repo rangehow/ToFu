@@ -24,9 +24,14 @@ MAX_CHARS = 80000
 # TAIL (where it ended up / the conclusion) with a "… X omitted …" marker in
 # between — showing only the opening N messages is the least useful slice.
 DIGEST_HEAD = 3          # opening messages always kept (the "what is this about")
-DIGEST_TAIL = 60         # most-recent messages kept (the "where did it end up")
-DIGEST_PREVIEW = 400     # per-message text preview length (chars)
-DIGEST_FULL_CAP = 4000   # per-message expandable full-text cap (chars)
+DIGEST_TAIL = 100        # most-recent messages kept (the "where did it end up")
+DIGEST_PREVIEW = 750     # per-message text preview length (chars)
+DIGEST_FULL_CAP = 8000   # per-message expandable full-text cap (chars)
+# NOTE (2026-07-23): tail/preview/full were widened (60/400/4000 → 100/750/8000)
+# because L0 disk-persistence (lib/tasks_pkg/compaction) is the safety net for an
+# oversized RENDERED result — the digest can afford to carry more of the
+# conversation. This is a deliberate, bounded widening, NOT "unlimited": the
+# digest stays a PROJECTION (the verbatim record is the model-view transcript).
 
 
 def _digest_tool_desc(rnd):

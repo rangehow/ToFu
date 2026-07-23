@@ -71,7 +71,7 @@ var _i18n = {
   'conn.restoredReattach': { zh: '已重连 {n} 个进行中的任务，流式已恢复。', en: 'Reconnected {n} running task(s) — streaming resumed.' },
   'conn.restoredRecovered': { zh: '已从服务器恢复 {n} 个对话，结果已更新。', en: 'Recovered {n} conversation(s) from server. Results updated.' },
   'conn.loadTimedOut': { zh: '加载超时 — 服务器可能繁忙，请重试。', en: 'Loading timed out — the server may be busy.' },
-  'convWindow.loadToolActivity': { zh: '加载工具活动（{n} 轮）', en: 'Load tool activity ({n})' },
+  'convWindow.loadToolActivity': { zh: '加载工具活动（{n} 次调用）', en: 'Load tool activity ({n} calls)' },
   // ── Recoverable connection-drop block (server_offline ONLY): a friendly,
   //    TRUTHFUL headline + recovery hint shown in the assistant error bubble
   //    instead of raw "Server offline" jargon. The key message: the drop is a
@@ -1027,6 +1027,9 @@ var _i18n = {
   'update.applyStarting': { zh: '正在准备更新…', en: 'Preparing update…' },
   'update.applyStartFailed': { zh: '无法启动更新，请稍后再试。', en: 'Could not start the update. Please try again.' },
   'update.applyTimeout': { zh: '更新耗时异常，请检查服务器日志。', en: 'The update is taking unusually long — check the server log.' },
+  'update.logLabel': { zh: '完整日志', en: 'Full log' },
+  'update.copyLog': { zh: '复制日志', en: 'Copy log' },
+  'update.logCopied': { zh: '已复制', en: 'Copied' },
   'settings.loadingFailed': { zh: '加载服务器配置失败。请检查服务器是否正在运行。', en: 'Failed to load server config. Please check if the server is running.' },
   'settings.noProviders': { zh: '还没有配置服务商。点击"+ 自定义服务商"开始添加。', en: 'No providers configured. Click "+ Custom Provider" to start.' },
   'settings.keys': { zh: '个密钥', en: 'keys' },

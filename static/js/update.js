@@ -400,7 +400,7 @@ function _onUpdateDone(r) {
     if (r.changed && r.deps_changed && !r.deps_installed) {
       _renderDepsFailed(r);
     } else {
-      _showUpdateError(r.error || t('update.applyFailed'));
+      _showUpdateError(r.error || t('update.applyFailed'), r.detail || r.deps_detail || '');
     }
     if (typeof debugLog === 'function') {
       debugLog('[Update] apply failed: ' + (r.error || ''), 'error');
@@ -436,20 +436,78 @@ function _onUpdateDone(r) {
   }
 }
 
-/** Render a terminal error message in the action area. */
-function _showUpdateError(msg) {
-  const area = document.getElementById('updateActionArea');
-  if (area) area.innerHTML = '<p class="upd-error">' + escapeHtml(String(msg)) + '</p>';
+/** Build a full, scrollable log block with a "copy" button.
+ *  The COMPLETE text is shown verbatim (never truncated) so the operator can
+ *  read and copy-paste the whole error — the reported gap was a mangled tail.
+ *  The raw log is stashed on the element (dataset) so the copy button lifts
+ *  the exact bytes, not the HTML-escaped/DOM-reflowed version. */
+function _updateLogBlockHtml(logText) {
+  const text = String(logText || '');
+  if (!text) return '';
+  // Base64-stash the raw log so the copy handler recovers exact bytes without
+  // re-reading escaped DOM text (encodeURIComponent handles any UTF-8).
+  let stash = '';
+  try { stash = btoa(unescape(encodeURIComponent(text))); } catch (e) { stash = ''; }
+  const copyIcon =
+    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+    '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>' +
+    '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+  return '<div class="upd-log" data-log="' + escapeHtml(stash) + '">' +
+    '<div class="upd-log-head">' +
+      '<span class="upd-log-label">' + escapeHtml(t('update.logLabel')) + '</span>' +
+      '<button type="button" class="upd-log-copy" onclick="_copyUpdateLog(this)">' +
+        copyIcon + '<span class="upd-log-copy-txt">' + escapeHtml(t('update.copyLog')) + '</span>' +
+      '</button>' +
+    '</div>' +
+    '<pre class="upd-files upd-log-pre">' + escapeHtml(text) + '</pre>' +
+  '</div>';
 }
 
-/** Code was pulled but pip install failed — explain + still allow restart. */
+/** Copy the full raw log of the nearest .upd-log block to the clipboard. */
+function _copyUpdateLog(btn) {
+  const wrap = btn && btn.closest ? btn.closest('.upd-log') : null;
+  if (!wrap) return;
+  let text = '';
+  try { text = decodeURIComponent(escape(atob(wrap.dataset.log || ''))); }
+  catch (e) { text = (wrap.querySelector('.upd-log-pre') || {}).textContent || ''; }
+  const done = function () {
+    const txt = btn.querySelector('.upd-log-copy-txt');
+    const orig = txt ? txt.textContent : '';
+    if (txt) txt.textContent = t('update.logCopied');
+    btn.classList.add('copied');
+    setTimeout(function () {
+      btn.classList.remove('copied');
+      if (txt) txt.textContent = orig;
+    }, 1500);
+  };
+  if (typeof _safeClipboardWrite === 'function') {
+    _safeClipboardWrite(text).then(done).catch(function () {});
+  } else if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(function () {});
+  }
+}
+
+/** Render a terminal error message in the action area.
+ *  When a diagnostic ``detail`` log is available (e.g. an unexpected apply
+ *  failure), show it IN FULL with a copy button so the user can paste it. */
+function _showUpdateError(msg, detail) {
+  const area = document.getElementById('updateActionArea');
+  if (!area) return;
+  area.innerHTML =
+    '<p class="upd-error">' + escapeHtml(String(msg)) + '</p>' +
+    _updateLogBlockHtml(detail);
+}
+
+/** Code was pulled but pip install failed — explain + still allow restart.
+ *  Shows the COMPLETE dependency-install log (no truncation) with a copy
+ *  button so the operator can paste the whole error verbatim. */
 function _renderDepsFailed(b) {
   const area = document.getElementById('updateActionArea');
   if (!area) return;
-  const detail = (b.deps_detail || '').slice(-600);
   area.innerHTML =
     '<p class="upd-warn">' + escapeHtml(t('update.depsFailed').replace('%s', 'v' + (b.new_version || ''))) + '</p>' +
-    (detail ? '<pre class="upd-files">' + escapeHtml(detail) + '</pre>' : '') +
+    _updateLogBlockHtml(b.deps_detail || '') +
     '<button class="upd-apply-btn" id="updateRestartBtn" onclick="restartServer()">' +
     escapeHtml(t('update.restartBtn')) + '</button>' +
     '<p class="upd-hint">' + escapeHtml(t('update.restartHint')) + '</p>';

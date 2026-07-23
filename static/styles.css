@@ -539,8 +539,13 @@ html[data-rail] .folder-quickadd{display:none}
 [data-theme="light"] .debug-msg-block.debug-msg-compacted{border-left-color:#b45309}
 [data-theme="tofu"] .debug-compact-badge{color:#B8884A;background:rgba(184,136,74,0.14);border-color:rgba(184,136,74,0.45)}
 [data-theme="tofu"] .debug-msg-block.debug-msg-compacted{border-left-color:#B8884A}
-.input-area{flex-shrink:0;background:var(--bg-primary);padding:12px 24px 20px;border-top:1px solid var(--border)}.input-inner{max-width:var(--toolbar-w,820px);margin:0 auto;transition:max-width .4s ease}.image-previews{display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap}.img-preview{position:relative;width:64px;height:64px;border-radius:var(--radius-sm);overflow:hidden;border:1px solid var(--border);cursor:pointer;transition:border-color .2s,box-shadow .2s,transform .12s}.img-preview:hover{border-color:var(--accent)}.img-preview[data-img-idx]{cursor:grab}.img-preview[data-img-idx]:active{cursor:grabbing}.img-preview img{width:100%;height:100%;object-fit:cover}.img-preview .remove-img{position:absolute;top:2px;right:2px;width:18px;height:18px;background:rgba(0,0,0,0.7);color:white;border:none;border-radius:50%;font-size:10px;cursor:pointer;display:flex;align-items:center;justify-content:center}.img-preview .img-size{position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,0.7);color:#aaa;font-size:9px;text-align:center;padding:1px 0;font-family:'JetBrains Mono',monospace}.img-preview.pdf-page{border-color:rgba(207,167,56,0.35)}.img-preview .pdf-badge{position:absolute;top:2px;left:2px;background:rgba(207,167,56,0.9);color:#fff;font-size:7px;font-weight:700;padding:1px 4px;border-radius:3px;font-family:'JetBrains Mono',monospace}.img-preview.img-dragging{opacity:.4;cursor:grabbing}.img-preview[data-img-idx].img-drop-target{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent);transform:translateY(-2px) scale(1.04)}
+.input-area{flex-shrink:0;background:var(--bg-primary);padding:12px 24px 20px;border-top:1px solid var(--border)}.input-inner{max-width:var(--toolbar-w,820px);margin:0 auto;transition:max-width .4s ease}.image-previews{display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap}.img-preview{position:relative;width:64px;height:64px;border-radius:var(--radius-sm);overflow:hidden;border:1px solid var(--border);cursor:pointer;transition:border-color .2s,box-shadow .2s,transform .12s}.img-preview:hover{border-color:var(--accent)}.img-preview[data-img-idx]{cursor:pointer}.img-preview[data-img-idx]:active{cursor:pointer}.img-preview img{width:100%;height:100%;object-fit:cover}.img-preview .remove-img{position:absolute;top:2px;right:2px;width:18px;height:18px;background:rgba(0,0,0,0.7);color:white;border:none;border-radius:50%;font-size:10px;cursor:pointer;display:flex;align-items:center;justify-content:center}.img-preview .img-size{position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,0.7);color:#aaa;font-size:9px;text-align:center;padding:1px 0;font-family:'JetBrains Mono',monospace}.img-preview.pdf-page{border-color:rgba(207,167,56,0.35)}.img-preview .pdf-badge{position:absolute;top:2px;left:2px;background:rgba(207,167,56,0.9);color:#fff;font-size:7px;font-weight:700;padding:1px 4px;border-radius:3px;font-family:'JetBrains Mono',monospace}.img-preview.img-dragging{opacity:.4;cursor:move}.img-preview[data-img-idx].img-drop-target{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent);transform:translateY(-2px) scale(1.04)}
 .img-preview.img-processing{cursor:default}.img-preview .img-processing-overlay{position:absolute;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(1px)}.img-preview .img-processing-spinner{width:20px;height:20px;border:2px solid rgba(255,255,255,0.35);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite}
+
+/* Drag-reorder follow indicator — a small dashed square trailing the cursor
+   like a subscript, signalling "repositioning this image". pointer-events:none
+   so it never intercepts drop targeting. */
+.img-drag-ghost{position:fixed;z-index:10000;width:30px;height:30px;border:2px dashed var(--accent);border-radius:6px;background:rgba(110,86,207,0.10);pointer-events:none;opacity:.95;left:-9999px;top:-9999px}
 .pdf-progress{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--thinking-bg);border:1px solid var(--thinking-border);border-radius:var(--radius-sm);margin-bottom:8px;font-size:12px;color:var(--thinking-text);animation:fadeIn .3s ease}.pdf-progress .pulse{width:6px;height:6px;background:var(--thinking-text);border-radius:50%;animation:pulse 1.5s infinite;flex-shrink:0}.pdf-progress-bar{flex:1;height:4px;background:var(--border);border-radius:2px;overflow:hidden}.pdf-progress-fill{height:100%;background:var(--thinking-text);border-radius:2px;transition:width .3s ease}
 /* ═══ Input Box: Flux Neural Interface ═══ */
 @property --glow-angle{syntax:'<angle>';initial-value:0deg;inherits:false}
@@ -683,6 +688,16 @@ textarea::placeholder{color:var(--text-tertiary)}
 .upd-uptodate,.upd-ready{color:var(--text-primary);font-size:14px;line-height:1.5}
 .upd-hint{color:var(--text-tertiary);font-size:12px;margin-top:10px;line-height:1.4}
 .upd-files{margin-top:10px;padding:9px 11px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;font-size:12px;font-family:var(--font-mono,monospace);color:var(--text-secondary);max-height:160px;overflow:auto;white-space:pre-wrap}
+/* Full update log block: header (label + copy button) over a scrollable pre.
+   The pre shows the COMPLETE log verbatim so the operator can read/copy all. */
+.upd-log{margin-top:12px}
+.upd-log-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.upd-log-label{font-size:12px;font-weight:700;color:var(--text-secondary)}
+.upd-log-copy{display:inline-flex;align-items:center;gap:5px;padding:4px 9px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:7px;font-size:12px;color:var(--text-secondary);cursor:pointer;transition:background-color .15s ease,color .15s ease}
+.upd-log-copy:hover{background:var(--bg-tertiary,var(--bg-secondary));color:var(--text-primary)}
+.upd-log-copy svg{flex-shrink:0;display:block}
+.upd-log-copy.copied{color:var(--accent)}
+.upd-log-pre{margin-top:0;max-height:280px}
 .upd-apply-btn{margin-top:16px;width:100%;padding:11px 16px;background:var(--accent);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;transition:background-color .15s ease,opacity .15s ease;display:flex;align-items:center;justify-content:center;gap:8px}
 .upd-apply-btn:hover{background:var(--accent-hover)}
 .upd-apply-btn:disabled{opacity:.55;cursor:default}
@@ -12409,6 +12424,9 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
 [data-theme="tofu"] .upd-badge.ok .upd-badge-icon{background:#4ade80;color:#1a1814;border-radius:var(--radius-sm)}
 [data-theme="tofu"] .upd-badge.warn{background:#f5eedd;color:#3d362c}
 [data-theme="tofu"] .upd-files{border-radius:var(--radius-sm);border:2px solid #1a1814;background:#f5eedd;color:#3d362c}
+[data-theme="tofu"] .upd-log-label{color:#1a1814}
+[data-theme="tofu"] .upd-log-copy{border:2px solid #1a1814;border-radius:var(--radius-sm);background:#f5eedd;color:#1a1814;font-weight:700}
+[data-theme="tofu"] .upd-log-copy.copied{color:#2f7d4f}
 [data-theme="tofu"] .upd-ready,[data-theme="tofu"] .upd-uptodate,[data-theme="tofu"] .upd-warn{color:#1a1814}
 [data-theme="tofu"] .upd-hint{color:#3d362c}
 /* Check-failure card — ink heading, muted reason */

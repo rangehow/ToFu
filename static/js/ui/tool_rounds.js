@@ -3352,6 +3352,22 @@ function renderSegmentTimelineHTML(segments, msg, idx) {
    * up as a positional tool body nor inflate the "N tools" header. */
   const _injByAnchor = new Map();
   const realRounds = [];
+  /* ★ Superseded-orphan drop, SEGMENT-TIMELINE path (parity with
+   *   renderToolRoundsHTML's filter). A FloorRetry / stream-retry duplicate
+   *   whose tc_id never survived into the final assistant_msg is stamped
+   *   badge='superseded' (result-less) by the backend reconcile_announced_rounds
+   *   — its adopted/recovered twin is the real call. This path renders from
+   *   `segments` (assemble_segments mints a tool_use segment for EVERY round,
+   *   carrying only {content,status} with NO badge), so the toolRounds-side
+   *   filter never runs here — the exact coverage gap that left a misleading
+   *   "interrupted" chip on a reloaded turn. Drop these rounds from `realRounds`
+   *   EARLY so both the render AND the header count / data-full-count (which read
+   *   realRounds.length) exclude them together; record their tc_ids so the
+   *   segment walk skips the matching tool_use WITHOUT falling to positional
+   *   no-id resolution (which could otherwise mis-grab an unrelated round).
+   *   Authoritative signal is the 'superseded' badge — NOT blind name+arg
+   *   structural matching (a turn may legitimately call the same tool twice). */
+  const _supersededTcIds = new Set();
   for (const r of allRounds) {
     if (r && (r._userSteerInject || r._peerInject || r._inboxInject)) {
       const injRound = r._userSteerInject ? r.steerRound
@@ -3359,6 +3375,8 @@ function renderSegmentTimelineHTML(segments, msg, idx) {
       const anchor = (injRound || 0) - 1;
       if (!_injByAnchor.has(anchor)) _injByAnchor.set(anchor, []);
       _injByAnchor.get(anchor).push(r);
+    } else if (_isSupersededOrphanRound(r)) {
+      if (r && r.toolCallId) _supersededTcIds.add(String(r.toolCallId));
     } else {
       realRounds.push(r);
     }
@@ -3386,12 +3404,18 @@ function renderSegmentTimelineHTML(segments, msg, idx) {
       batches.push(cur);
       curKey = key;
     }
-    cur.segs.push(s);
     if (s.type === "tool_use") {
+      // A superseded-orphan tool_use (its round was dropped from realRounds
+      // above): skip it entirely — no chip, and DON'T consume a positional
+      // no-id round for it (that would mis-pair an unrelated body).
+      if (s.id && _supersededTcIds.has(String(s.id))) continue;
+      cur.segs.push(s);
       // Resolve the render-rich round for this tool_use.
       let r = s.id ? byId.get(String(s.id)) : null;
       if (!r && noIdCursor < noId.length) r = noId[noIdCursor++];
       if (r) cur.rounds.push(r);
+    } else {
+      cur.segs.push(s);
     }
   }
   if (batches.length === 0) return "";

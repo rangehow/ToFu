@@ -711,6 +711,117 @@ def test_finalize_task_lane_runs_all_five_teardown_steps():
         td.set_req_id = _real_set_req_id
 
 
+# ── Slice 6: _post_loop submodule (post-loop success tail + fatal-path) ─
+# Extracts the ~200-line post-loop block: success-tail (append-final,
+# write-back, save-to-store, finalize-and-emit-done) + fatal-path
+# (user-error extraction, endpoint-managed short-circuit, turn-level
+# auto-retry, recovery-carrier re-stamp, terminal-DONE + persist).
+
+@_unit
+def test_post_loop_submodule_exposes_finalize_after_loop_and_handle_task_fatal():
+    """Slice 6 (pt_03f4cdf1): _post_loop.py exposes both extracted
+    functions as module-level callables."""
+    import importlib
+    mod = importlib.import_module('lib.tasks_pkg.orchestrator._post_loop')
+    for name in ('finalize_after_loop', 'handle_task_fatal'):
+        assert hasattr(mod, name), (
+            f'lib.tasks_pkg.orchestrator._post_loop missing {name}')
+        assert callable(getattr(mod, name)), (
+            f'{name} is not callable (got '
+            f'{type(getattr(mod, name)).__name__})')
+
+
+@_unit
+def test_run_py_imports_and_calls_post_loop_helpers():
+    """Slice 6: _run.py must import from _post_loop AND call both
+    helpers at the right sites (success tail + fatal handler)."""
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, 'lib/tasks_pkg/orchestrator/_run.py'),
+              encoding='utf-8') as f:
+        src = f.read()
+    assert 'from lib.tasks_pkg.orchestrator._post_loop import' in src, (
+        '_run.py must import from lib.tasks_pkg.orchestrator._post_loop')
+    assert 'finalize_after_loop(' in src, (
+        '_run.py must CALL finalize_after_loop at the success-tail site')
+    assert 'handle_task_fatal(task, e)' in src, (
+        '_run.py must CALL handle_task_fatal at the except Exception site')
+    # The specific inline patterns that lived in the extracted blocks are
+    # GONE from _run.py — guards against silent revert.
+    assert 'Appended final assistant reply to messages' not in src, (
+        '_run.py must NOT carry the "Appended final assistant reply" log '
+        'string — that lives in _post_loop.finalize_after_loop now')
+    assert 'format_llm_error_for_user' not in src, (
+        '_run.py must NOT carry the format_llm_error_for_user import — '
+        'that lives in _post_loop.handle_task_fatal now')
+
+
+@_unit
+def test_handle_task_fatal_endpoint_managed_short_circuit():
+    """Slice 6: handle_task_fatal returns True when task carries
+    _endpoint_managed=True (caller must return early so endpoint.py
+    handles the error). Byte-identical to the pre-slice inline
+    ``if task.get('_endpoint_managed'): return`` gate."""
+    import lib.tasks_pkg.orchestrator._post_loop as pl
+
+    task = {'id': 'tid-ep', '_endpoint_managed': True,
+            'config': {'model': 'test-model'}}
+    exc = ValueError('boom')
+
+    result = pl.handle_task_fatal(task, exc)
+    assert result is True, (
+        f'handle_task_fatal must return True when _endpoint_managed '
+        f'(caller returns early); got {result}')
+    # task fields still stamped (caller reads them from endpoint.py).
+    assert task.get('status') == 'error'
+    assert task.get('finishReason') == 'error'
+    assert task.get('error') is not None
+
+
+@_unit
+def test_finalize_after_loop_no_assistant_msg_still_dispatches():
+    """Slice 6: finalize_after_loop with assistant_msg=None must skip
+    the "append final assistant reply" branch (the ``if assistant_msg
+    and not assistant_msg.get('tool_calls'):`` gate) but STILL run the
+    write-back + save + finalize_and_emit_done dispatch. Same as inline
+    pre-slice behaviour."""
+    import lib.tasks_pkg.orchestrator._post_loop as pl
+
+    calls = []
+
+    # Stub _finalize_and_emit_done to observe dispatch without running
+    # its real body (which needs a lot of infra).
+    orig_finalize = pl._finalize_and_emit_done
+    try:
+        pl._finalize_and_emit_done = lambda task, **kw: calls.append(
+            ('finalize_and_emit_done', task.get('id'), kw.get('round_num')))
+        task = {'id': 'tid-empty', 'convId': '', 'messages': []}
+        messages = [{'role': 'user', 'content': 'hi'}]
+        pl.finalize_after_loop(
+            task, cfg={}, tid='tid-empty', model='m', preset='',
+            thinking_depth=None, thinking_enabled=False,
+            temperature=None, max_tokens=None,
+            messages=messages, original_messages=[],
+            tool_list=None, assistant_msg=None, round_num=0,
+            accumulated_usage={}, api_rounds=[],
+            last_finish_reason=None, last_usage=None,
+            tool_call_happened=False, all_search_results_text=[],
+            project_path='', project_enabled=False,
+            keep_tool_history=False, conv_id='',
+            loop_exit_reason='max_rounds_exhausted',
+            abort_detected_phase=None,
+        )
+        # task['messages'] MUST have been written back (this is the
+        # invariant endpoint mode depends on).
+        assert task.get('messages') is messages, (
+            'task["messages"] must be written back to the passed-in list')
+        # _finalize_and_emit_done MUST have been dispatched.
+        assert calls == [('finalize_and_emit_done', 'tid-empty', 0)], (
+            f'expected exactly one _finalize_and_emit_done dispatch; got {calls}')
+    finally:
+        pl._finalize_and_emit_done = orig_finalize
+
+
 if __name__ == '__main__':
     tests = [
         test_orchestrator_facade_symbols_all_importable,
@@ -730,6 +841,10 @@ if __name__ == '__main__':
         test_teardown_submodule_exists_and_exposes_finalize_task_lane,
         test_run_py_calls_finalize_task_lane_in_finally,
         test_finalize_task_lane_runs_all_five_teardown_steps,
+        test_post_loop_submodule_exposes_finalize_after_loop_and_handle_task_fatal,
+        test_run_py_imports_and_calls_post_loop_helpers,
+        test_handle_task_fatal_endpoint_managed_short_circuit,
+        test_finalize_after_loop_no_assistant_msg_still_dispatches,
     ]
     for fn in tests:
         fn()

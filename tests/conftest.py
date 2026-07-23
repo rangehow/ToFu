@@ -300,11 +300,18 @@ _NC_GUARDED_SOURCES = (
     'lib/conversations/project_brain_influence.py',
     'lib/conversations/project_peer.py',
     'lib/message_queue.py',
-    'lib/tasks_pkg/compaction/_persist.py',
+    'lib/tasks_pkg/compaction/_persist/_splitters.py',
     'lib/tools/conversation.py',
     'lib/scheduler/manager.py',
     'lib/project_mod/config.py',
     'routes/conversations.py',
+    # Frontend: test_frontend_tofu_scene_pixeldiff.py byte-patches this shipped
+    # source IN PLACE (record-freeze + pale-neuter) and restores in a finally.
+    # If the node subprocess is SIGKILLed / times out, the finally is skipped
+    # and the shipped file is left neutered — poisoning every later tofu-scene
+    # test. It is the only UNPROTECTED in-place shipped-source writer, so it
+    # belongs on the belt like the on-disk NC .py targets above.
+    'static/js/tofu-scene.js',
 )
 _ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _nc_source_snapshots: dict = {}

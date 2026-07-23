@@ -45,129 +45,17 @@ logger = get_logger(__name__)
 chat_bp = Blueprint('chat', __name__)
 
 
-def _dumps_yielding(obj) -> str:
-    """Serialize a (potentially multi-MB) SSE snapshot off the event loop.
-
-    Background: the C accelerator behind ``json.dumps`` holds the GIL for the
-    *entire* call and never releases it mid-encode, so wrapping plain
-    ``json.dumps`` in ``asyncio.to_thread`` does NOT free the loop — a 10 MB
-    conversation snapshot still stalls ``accept()`` for ~40 ms (the wedge
-    behind the 15000 incident).
-
-    ``orjson.dumps`` encodes the same 10 MB in ~5 ms — fast enough that the
-    loop stall drops to ~4 ms even though it, too, holds the GIL; the encode
-    is simply over before it matters, and it also tames the pathological
-    "one huge string field" shape that ``iterencode`` (one atomic chunk)
-    cannot. It is the primary path.
-
-    orjson rejects a handful of inputs the stdlib tolerates (notably non-str
-    dict keys → ``JSONEncodeError``/``TypeError``). For those rare snapshots
-    we fall back to ``JSONEncoder.iterencode``, which yields to the
-    interpreter between chunks so the loop can still breathe.
-
-    The two encoders differ only in item separators (orjson is compact:
-    ``,``/``:`` vs stdlib ``, ``/``: ``); both are valid JSON the frontend
-    parses identically.
-    """
-    try:
-        return orjson.dumps(obj).decode('utf-8')
-    except (TypeError, ValueError) as e:
-        logger.warning('[Chat] orjson snapshot encode failed (%s); '
-                       'falling back to stdlib iterencode', e)
-        return ''.join(json.JSONEncoder(ensure_ascii=False).iterencode(obj))
-
-
-def _running_checkpoint_verdict(sharded: bool):
-    """Decide how to report a DB checkpoint with status='running' whose task is
-    ABSENT from this replica's memory (Epic C §4.1 / §6.4).
-
-    Returns ``(effective_status, reconnect_hint)``:
-      * sharded (redis, multi-replica): ``('running', True)`` — the task is
-        (probably) alive on another replica; the client re-routes via taskId
-        affinity. NO cross-replica liveness probe, NO DB flip to interrupted.
-      * single-process (inproc): ``('interrupted', False)`` — absent genuinely
-        means the server crashed mid-task; keep the crash-recovery behaviour
-        byte-identical to before Epic C.
-    """
-    if sharded:
-        return ('running', True)
-    return ('interrupted', False)
-
-
-def _log_poll_task_id_mismatch(db, conv_id, polled_task_id, db_meta):
-    """P0 observability: log the activeTaskId ↔ message _taskId inconsistency
-    behind an empty-metadata interrupted poll.
-
-    When a poll serves an ``interrupted`` result whose metadata is EMPTY (no
-    finishReason/usage/apiRounds — the finish-bar shows only the model name),
-    the underlying cause is almost always an ID desync: the conversation's
-    ``settings.activeTaskId`` no longer matches the task the client polled OR
-    the trailing assistant message's ``_taskId``. Surfacing that mismatch here
-    means the empty finish-bar is diagnosable from ``app.log`` alone, without a
-    post-hoc DB query. Best-effort — never raises into the poll response.
-    """
-    try:
-        has_meta = any(db_meta.get(k) for k in ('finishReason', 'usage', 'apiRounds'))
-        if has_meta or not conv_id:
-            return
-        row = db.execute(
-            'SELECT settings, messages FROM conversations WHERE id=? AND user_id=1',
-            (conv_id,)
-        ).fetchone()
-        if not row:
-            return
-        try:
-            settings = json.loads(row['settings'] or '{}') or {}
-        except (json.JSONDecodeError, TypeError):
-            settings = {}
-        active_task_id = settings.get('activeTaskId')
-        reconciled_at = settings.get('_reconciledAt')
-        msg_task_id = None
-        try:
-            messages = json.loads(row['messages'] or '[]')
-            for m in reversed(messages):
-                if m.get('role') == 'assistant':
-                    msg_task_id = m.get('_taskId')
-                    break
-        except (json.JSONDecodeError, TypeError):
-            pass
-        logger.warning(
-            '[Chat] Poll %s — EMPTY-metadata interrupted result; ID inconsistency: '
-            'polled=%s activeTaskId=%s msg_taskId=%s _reconciledAt=%s. '
-            'Finish-bar will show only the model name (finishReason/usage/apiRounds never persisted). '
-            'This is the interrupted-turn ID desync (empty finish-bar + flicker) class.',
-            polled_task_id[:8], polled_task_id[:8],
-            (active_task_id[:8] if active_task_id else 'none'),
-            (msg_task_id[:8] if msg_task_id else 'none'),
-            reconciled_at or 'none')
-    except Exception as _e:
-        logger.debug('[Chat] poll ID-mismatch probe failed conv=%s: %s',
-                     conv_id[:8] if conv_id else '?', _e)
-
-
-def _loads_yielding(raw):
-    """Parse a (potentially multi-MB) JSON snapshot with minimal GIL-hold.
-
-    The mirror of :func:`_dumps_yielding` for the DECODE direction. The
-    stdlib ``json.loads`` C accelerator holds the GIL for the whole parse,
-    so a multi-MB ``tool_rounds`` blob decoded inside the sync SSE fallback
-    generators (``gen_done`` / ``gen_persisted``) stalls the event loop just
-    as an on-loop encode would — those generators run each ``next()`` in the
-    executor via Quart's ``run_sync_iterable``, but the GIL is still held for
-    the whole call so the loop thread is starved regardless (the same trap
-    documented for ``to_thread(json.dumps)``).
-
-    ``orjson.loads`` parses the same blob several times faster and releases
-    the GIL far sooner, dropping the stall below the danger threshold. It
-    accepts ``str`` or ``bytes``. On the rare input orjson rejects we fall
-    back to stdlib ``json.loads`` so behaviour is never worse than before.
-    """
-    try:
-        return orjson.loads(raw)
-    except (TypeError, ValueError) as e:
-        logger.warning('[Chat] orjson snapshot parse failed (%s); '
-                       'falling back to stdlib json.loads', e)
-        return json.loads(raw)
+# ─── Pure helpers extracted to routes/chat_helpers.py (pt_04686ac6 slice 1) ───
+# The four functions below (_dumps_yielding, _running_checkpoint_verdict,
+# _log_poll_task_id_mismatch, _loads_yielding) moved to routes/chat_helpers.py.
+# Re-exported here so every ``from routes.chat import _dumps_yielding``-style
+# call site keeps working unchanged. See tests/test_routes_chat_wire_parity.py.
+from routes.chat_helpers import (  # noqa: E402,F401  (re-export, kept for external imports)
+    _dumps_yielding,
+    _loads_yielding,
+    _log_poll_task_id_mismatch,
+    _running_checkpoint_verdict,
+)
 # v1 blueprint for the JSON routes (the carve-out /api/chat/stream/<id> stays on chat_bp).
 from routes.api_v1.chat import api_v1_chat_bp  # noqa: E402
 
@@ -1541,30 +1429,9 @@ def chat_continue():
 # ══════════════════════════════════════════════════════════
 
 
-def _warm_resume_serviceable(resume_cursor, n_events):
-    """Decide whether a warm (in-memory) Last-Event-ID resume is serviceable.
-
-    Returns True iff ``resume_cursor`` names a position the in-memory event
-    buffer can actually replay from — i.e. the next event to send
-    (``resume_cursor + 1``) is at or before the current buffer length.
-
-    When False the caller MUST fall back to a full state-snapshot
-    (a "resync"), exactly as the cold path does, instead of slicing
-    ``events[resume_from:]`` into an empty list. An empty slice on an
-    ahead-of-buffer cursor used to leave the warm stream sending nothing
-    until the next live event (a silent stall) and mis-index the live loop.
-    A cursor that is plausibly behind the buffer (``>= -1``, in range) stays
-    serviceable; only an out-of-range-ahead cursor forces resync.
-
-    ``resume_cursor`` is the SSE ``Last-Event-ID`` (id of the last RECEIVED
-    event); ``-1``/``0`` etc. are normal early cursors. The boundary case
-    ``resume_from == n_events`` IS serviceable (empty replay, then live
-    streaming continues from exactly that index).
-    """
-    if resume_cursor is None or resume_cursor < 0:
-        return False  # no/invalid cursor → fresh snapshot (caller's else-branch)
-    resume_from = resume_cursor + 1
-    return resume_from <= n_events
+# _warm_resume_serviceable moved to routes/chat_helpers.py (pt_04686ac6 slice 1).
+# Re-exported so ``from routes.chat import _warm_resume_serviceable`` keeps working.
+from routes.chat_helpers import _warm_resume_serviceable  # noqa: E402,F401
 
 
 @chat_bp.route('/api/chat/stream/<task_id>', methods=['GET'])

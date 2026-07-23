@@ -618,8 +618,7 @@ def update_provider_template():
             logger.error('[TemplateUpdate] Failed to update %s: %s', fpath, e, exc_info=True)
 
     if not updated_files:
-        return jsonify({'ok': False,
-                       'error': "Template key '%s' not found in any JS file" % tpl_key}), 404
+        return api_error("Template key '%s' not found in any JS file" % tpl_key, status=404)
 
     return jsonify({
         'ok': True,

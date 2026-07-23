@@ -194,6 +194,14 @@ def _sites():
              old_src="return jsonify({'error': 'pdf_render_failed', 'detail': str(e)}), 503",
              new_src="return api_error('pdf_render_failed', status=503, detail=str(e))"),
 
+        # ── routes/config.py template-update 404 (续18 batch) ──
+        dict(file='routes/config.py', category='B', status=404,
+             legacy_body={'ok': False,
+                          'error': "Template key '%s' not found in any JS file" % 'foo'},
+             new=lambda: api_error("Template key '%s' not found in any JS file" % 'foo', status=404),
+             old_src="return jsonify({'ok': False,\n                       'error': \"Template key '%s' not found in any JS file\" % tpl_key}), 404",
+             new_src="return api_error(\"Template key '%s' not found in any JS file\" % tpl_key, status=404)"),
+
         # ── chat.py helper-return sites (续18 batch): _start_task_from_messages
         #    returns (task_id, err_tuple) where err_tuple is (Response, status).
         #    The caller returns err_tuple raw → wire-identical to a direct

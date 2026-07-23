@@ -1,0 +1,254 @@
+#!/usr/bin/env python3
+"""Failing-first test for the LATENT P1 defect (board epic ``pt_7e4afe73``).
+
+**Defect (verified 2026-07-23 by reading source, not runtime):**
+``lib/chat/persistence.py::persist_conv_messages`` calls
+``upsert(..., retry=True)`` which routes through ``db_execute_with_retry(...,
+commit=True)`` — so the authoritative JSONB write to ``conversations.messages``
+IS committed before the function returns. Immediately afterwards it calls
+``dual_write_conv(db, conv_id, messages, now_ms=now_ms)`` which delegates to
+``backfill_conv(db, conv_id, messages, commit=False)`` — so the mirrored
+``conversation_messages`` rows are INSERTED into a new implicit transaction on
+the same pooled connection but NEVER COMMITTED before the function returns.
+
+**Live-bug status: LATENT.** The whole dual-write path is gated by
+``TOFU_MESSAGES_ROWS`` (default off, see
+``lib/database/messages_rows.py::rows_write_enabled``), so real traffic today
+never trips it. But the moment the flag flips ON — Phase 5 read cutover — the
+row mirror will silently diverge from the JSONB truth: any code path that lets
+the connection return to the pool (or crashes) before another commit lands
+will lose the mirror rows. The existing sibling test
+``tests/test_messages_rows.py::test_dual_write_through_persist_conv_messages_when_on``
+hides the bug: it manually calls ``db.commit()`` right after
+``persist_conv_messages`` and then reads on the SAME connection — so both the
+commit gap and the "reader sees its own uncommitted writes" quirk mask it.
+
+**Why this test is skip-by-default:** it is a RED-target for the future fix,
+NOT a regression guard — until the P1 epic is claimed, HEAD is legitimately
+red under this assertion. Setting ``TOFU_P1_FAILING_FIRST=1`` activates it so
+whoever picks up ``pt_7e4afe73`` gets a concrete failing test to drive their
+fix off. Once the fix lands (whatever the correct commit-point turns out to
+be — see the owner's transaction-boundary caveat in JOURNAL 续15/续18), delete
+the skip marker so the test becomes a permanent guard.
+
+**Why the test does not itself apply the fix:** per the owner directive (JOURNAL
+续15), "the commit-point placement inside ``persist_conv_messages`` has
+transaction-boundary side effects — a mid-flow ``db.commit()`` would flush any
+OTHER pending writes on the pooled connection prematurely." That analysis is
+epic-scope work, not test scaffolding.
+
+**Activation:** ``TOFU_P1_FAILING_FIRST=1 python3 tests/test_p1_dual_write_commit_gap.py``
+or ``pytest tests/test_p1_dual_write_commit_gap.py``.
+
+**What the test does:** With ``TOFU_MESSAGES_ROWS=1`` set:
+  1. Call ``persist_conv_messages`` on a fresh conv (JSONB commits inside).
+  2. On the SAME thread-db, immediately call ``db.rollback()`` — this
+     drops the current implicit transaction on that connection, which
+     is exactly what would happen if the caller crashed / returned
+     without a follow-up commit. The committed JSONB write is unaffected;
+     any uncommitted mirror rows vanish.
+  3. Query ``conversation_messages`` and assert the mirror is still
+     complete. Under the current defect: it is EMPTY → RED (bug demonstrated).
+"""
+
+import json
+import os
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Flask→Quart shim (matches the rest of the suite).
+import quart as _quart
+sys.modules.setdefault('flask', _quart)
+
+# DATA-LOSS GUARD (same rationale as tests/test_messages_rows.py's header):
+# force a test DB for standalone runs so we never write against a real DB.
+if __name__ == '__main__':
+    from tests._standalone_guard import guard_standalone_db
+    guard_standalone_db('test_p1_dual_write_commit_gap.__main__')
+
+# Standard pytest skip control — HEAD is legitimately red under this assertion
+# until pt_7e4afe73 lands, so default-skip and require an explicit env flag.
+# Emit both a pytest skip marker AND an early return for __main__ so the two
+# invocation modes behave the same.
+_ACTIVATION_ENV = 'TOFU_P1_FAILING_FIRST'
+_SKIP_REASON = (
+    f'Failing-first target for pt_7e4afe73 (P1 dual-write commit gap). '
+    f'Set {_ACTIVATION_ENV}=1 to run — until the epic lands this test is '
+    f'expected to be RED, so it stays skipped in the default suite.'
+)
+
+
+def _p1_active() -> bool:
+    return str(os.environ.get(_ACTIVATION_ENV, '') or '').strip().lower() in (
+        '1', 'true', 'yes', 'on')
+
+
+try:  # pytest available → use its skip API
+    import pytest
+except ImportError:  # pragma: no cover — standalone run without pytest
+    pytest = None  # type: ignore[assignment]
+
+
+# Per-test skip decorator instead of a module-level pytestmark: the
+# meta-test (test_activation_gate_metadata) must ALWAYS run, so it can
+# guard the file's self-documenting invariants even when the P1 gate is off.
+def _skip_unless_p1(fn):
+    if pytest is None:  # standalone: rely on the __main__ gate below
+        return fn
+    return pytest.mark.skipif(not _p1_active(), reason=_SKIP_REASON)(fn)
+
+
+# A tiny sample; the parity of the mirror is proven by
+# tests/test_messages_rows.py already — this test only cares about DURABILITY.
+SAMPLE_MSGS = [
+    {'role': 'user', 'content': 'p1 latent', '_msgId': 'p1-m0', 'timestamp': 1},
+    {'role': 'assistant', 'content': 'reply', '_msgId': 'p1-m1', 'timestamp': 2},
+]
+
+
+def _ensure_table():
+    """Idempotent conversation_messages create (mirrors test_messages_rows.py)."""
+    from lib.database import DOMAIN_CHAT, get_thread_db
+    from lib.database import _core
+    from lib.database._core_schema import CONVERSATION_MESSAGES, create_if_absent
+    backend = getattr(_core, '_BACKEND', 'sqlite')
+    if backend == 'pg':
+        from lib.database._schema_pg import _table_exists
+    else:
+        from lib.database._schema_sqlite import _table_exists
+    db = get_thread_db(DOMAIN_CHAT)
+    create_if_absent(db, CONVERSATION_MESSAGES, table_exists=_table_exists)
+    db.execute('CREATE INDEX IF NOT EXISTS idx_conv_msgs_conv '
+               'ON conversation_messages(conv_id, seq)')
+    db.commit()
+
+
+def _unit(fn):
+    """Attach @pytest.mark.unit when pytest is available (project convention).
+
+    Kept as a helper (not a bare decorator at each test) so the file still
+    imports cleanly in the pytest-less standalone run.
+    """
+    if pytest is None:
+        return fn
+    return pytest.mark.unit(fn)
+
+
+@_unit
+@_skip_unless_p1
+def test_dual_write_rows_are_durable_across_rollback():
+    """P1 (pt_7e4afe73): after persist_conv_messages returns, the mirrored
+    conversation_messages rows MUST be durably committed — surviving a rollback
+    of whatever transaction the caller happens to be in next.
+
+    Currently RED: dual_write_conv calls backfill_conv(commit=False), so the
+    mirror rows sit in the current implicit transaction on the same connection.
+    A rollback() (or a caller-side abort / process crash before the next commit)
+    drops them, and a follow-up read from ANY other connection sees zero rows —
+    silent divergence from the JSONB truth.
+
+    Guarded by ``TOFU_P1_FAILING_FIRST=1``.
+    """
+    if not _p1_active():
+        # pytest handles this via pytestmark; the guard here is only for the
+        # __main__ path (which explicitly checks _p1_active before running).
+        return
+
+    from lib.database import DOMAIN_CHAT, get_thread_db, db_execute_with_retry
+    from lib.chat.persistence import persist_conv_messages
+
+    _ensure_table()
+    conv_id = 'cv-p1-latent-' + str(int(time.time() * 1000))
+    os.environ['TOFU_MESSAGES_ROWS'] = '1'
+    db = get_thread_db(DOMAIN_CHAT)
+    try:
+        # Deep-copy the messages: persist_conv_messages backfills _msgIds in
+        # place. Any shared reference would leak that mutation into SAMPLE_MSGS
+        # across parametrised runs.
+        msgs = [dict(m) for m in SAMPLE_MSGS]
+        persist_conv_messages(db, conv_id, msgs, 'p1-latent')
+
+        # The JSONB write inside persist_conv_messages went through
+        # db_execute_with_retry(commit=True), so it is durable. The mirror
+        # rows, however, ride the CURRENT implicit transaction; a rollback here
+        # models "the caller aborts / crashes / hits an error before its own
+        # next commit". If dual_write_conv committed its own writes, the rows
+        # would survive; if not, they vanish.
+        db.rollback()
+
+        # JSONB truth should be intact (invariant proven separately, asserted
+        # here so the test's own diagnostics distinguish the two failure modes:
+        # JSONB gone would be a totally different bug, not P1).
+        conv_row = db.execute(
+            'SELECT msg_count FROM conversations WHERE id=? AND user_id=1',
+            (conv_id,)).fetchone()
+        assert conv_row is not None, (
+            'sanity: JSONB conversation row must survive the rollback '
+            '(persist_conv_messages committed it via upsert(retry=True))')
+        assert int(conv_row['msg_count'] if hasattr(conv_row, 'keys')
+                   else conv_row[0]) == len(SAMPLE_MSGS), (
+            'sanity: JSONB msg_count must match — this test is about the '
+            'MIRROR, not the JSONB truth')
+
+        # The failing-first assertion. Under the current defect this returns 0.
+        cnt_row = db.execute(
+            'SELECT COUNT(*) AS n FROM conversation_messages WHERE conv_id=?',
+            (conv_id,)).fetchone()
+        n = int(cnt_row['n'] if hasattr(cnt_row, 'keys') else cnt_row[0])
+        assert n == len(SAMPLE_MSGS), (
+            f'P1 defect confirmed: persist_conv_messages left {n} mirror '
+            f'rows (expected {len(SAMPLE_MSGS)}) — dual_write_conv writes '
+            f'through backfill_conv(commit=False), so the mirror rows sit '
+            f'in the caller\'s uncommitted transaction and vanish on '
+            f'rollback / crash / connection release. Fix must ensure the '
+            f'mirror is committed at a safe transaction boundary '
+            f'(NOT necessarily inside dual_write_conv itself — see JOURNAL '
+            f'续15/续18 for the transaction-boundary caveat).'
+        )
+    finally:
+        # Housekeeping regardless of test outcome.
+        os.environ.pop('TOFU_MESSAGES_ROWS', None)
+        try:
+            db_execute_with_retry(
+                db, 'DELETE FROM conversation_messages WHERE conv_id=?',
+                (conv_id,))
+            db_execute_with_retry(
+                db, 'DELETE FROM conversations WHERE id=? AND user_id=1',
+                (conv_id,))
+            db.commit()
+        except Exception:
+            db.rollback()
+
+
+@_unit
+def test_activation_gate_metadata():
+    """Meta-test: the file itself declares its RED-target status via
+    ``TOFU_P1_FAILING_FIRST`` and ties itself to epic ``pt_7e4afe73``. This
+    keeps the file self-documenting for whoever picks up the epic.
+    """
+    with open(__file__, encoding='utf-8') as f:
+        src = f.read()
+    assert 'TOFU_P1_FAILING_FIRST' in src
+    assert 'pt_7e4afe73' in src
+    assert 'skip-by-default' in src.lower() or 'default-skip' in src.lower()
+
+
+if __name__ == '__main__':
+    if not _p1_active():
+        print(f'SKIP (set {_ACTIVATION_ENV}=1 to run)')
+        sys.exit(0)
+    for name, fn in sorted(globals().items()):
+        if name.startswith('test_') and callable(fn):
+            try:
+                fn()
+                print('ok', name)
+            except AssertionError as e:
+                # Under the current defect the durability test is expected RED;
+                # print + re-raise so the exit code still signals failure to
+                # anyone who explicitly activated the run.
+                print('FAIL', name)
+                print(' ', str(e))
+                raise
+    print('ALL PASSED')

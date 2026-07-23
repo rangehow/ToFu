@@ -119,15 +119,19 @@ function setChatMode(mode) {
   if (mode === 'studio') {
     const hasProject = (typeof projectState !== 'undefined')
       && projectState && projectState.active && projectState.path;
-    if (!hasProject) {
-      // Don't flip the dial yet — wait for a real project attach. Just open
-      // the panel; onProjectAttached() promotes to studio on success.
-      if (typeof openProjectModal === 'function') openProjectModal();
-      return;
+    // The Studio segment IS the project affordance now (the standalone project
+    // button is gone), so it must ALWAYS open the project panel — otherwise a
+    // conv that is already in Studio has no way left to change its project
+    // path (clicking Studio again would be a silent no-op). When no project is
+    // attached yet the dial waits for a real attach (onProjectAttached promotes
+    // to studio on success); when one is already attached we keep the dial in
+    // studio and reopen the panel so the path can be managed/changed.
+    if (hasProject) {
+      _applyChatModeUI('studio');
+      _saveConvToolState();
+      debugLog('Mode: Studio (project attached)', 'success');
     }
-    _applyChatModeUI('studio');
-    _saveConvToolState();
-    debugLog('Mode: Studio (project attached)', 'success');
+    if (typeof openProjectModal === 'function') openProjectModal();
     return;
   }
   // chat. Switching AWAY from studio while a project is attached would be

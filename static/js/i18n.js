@@ -3010,6 +3010,13 @@ var _i18n = {
   'convDigest.expand': { zh: '展开', en: 'expand' },
   'convDigest.omitted': { zh: '… 省略 {n} 条消息 …', en: '… {n} messages omitted …' },
   'convDigest.summary': { zh: '摘要', en: 'summary' },
+  'convDigest.raw': { zh: 'RAW · 调试', en: 'RAW · debug' },
+  'convDigest.rev': { zh: '版本', en: 'rev' },
+  'convDigest.rawTip': { zh: '原始调试读取——每条消息附带底层元数据（模型、token、结束原因、消息 ID）。', en: 'Raw debug read — shows per-message low-level metadata (model, tokens, finish reason, id).' },
+  'convDigest.metaModel': { zh: '模型', en: 'model' },
+  'convDigest.metaTokens': { zh: 'token 输入/输出', en: 'tokens in/out' },
+  'convDigest.metaFinish': { zh: '结束原因', en: 'finish reason' },
+  'convDigest.metaId': { zh: '消息 ID', en: 'message id' },
   // ── Commit result card (project_commit) ──
   'commitCard.outCommitted': { zh: '已提交', en: 'committed' },
   'commitCard.outPlanned': { zh: '仅预览', en: 'plan only' },

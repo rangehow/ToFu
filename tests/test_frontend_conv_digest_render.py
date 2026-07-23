@@ -59,6 +59,30 @@ _DIGEST_JSON = r"""{
 }"""
 
 
+# RAW-mode digest: carries `raw:true` + `rev` + per-message low-level metadata
+# (model / usage / finishReason / msgId). The card must render the RAW badge and
+# at least one metadata chip — the visible difference from a normal read.
+_DIGEST_RAW_JSON = r"""{
+  "convId": "convRAW9999",
+  "title": "Debug read",
+  "preset": "opus",
+  "msgCount": 2,
+  "createdAt": 1700000000000,
+  "updatedAt": 1700000500000,
+  "raw": true,
+  "rev": 7,
+  "messages": [
+    { "index": 1, "role": "user", "text": "hello", "ts": 1700000000000,
+      "msgId": "u-abc" },
+    { "index": 2, "role": "assistant", "text": "hi there", "ts": 1700000100000,
+      "model": "aws.claude-opus-4.8", "finishReason": "stop", "msgId": "a-xyz",
+      "usage": { "in": 1234, "out": 56 } }
+  ],
+  "truncated": false,
+  "omitted": 0
+}"""
+
+
 _BODY = r"""
 const { setup } = require(process.env.JSDOM_HARNESS);
 const { document, check, report } = setup({
@@ -127,8 +151,26 @@ check('fallback_not_notext', (function () {
   return summ && !summ.classList.contains('ptool-convdigest-notext');
 })());
 
+// (7) NON-raw card must NOT render the RAW badge or any metadata chip.
+check('nonraw_no_rawbadge', !d.querySelector('.ptool-convdigest-rawbadge'));
+check('nonraw_no_metachip', !d.querySelector('.ptool-convdigest-metachip'));
+
+// (8) RAW card renders the RAW badge + per-message metadata chips.
+const cdRaw = JSON.parse(DIGEST_RAW_JSON_PH);
+const dRaw = frag(_renderConvDigest(cdRaw));
+check('raw_badge_present', !!dRaw.querySelector('.ptool-convdigest-rawbadge'));
+check('raw_rev_shown', dRaw.querySelector('.ptool-convdigest-rawbadge').textContent.indexOf('7') !== -1);
+check('raw_model_chip', !!dRaw.querySelector('.ptool-convdigest-meta-model') &&
+  dRaw.textContent.indexOf('aws.claude-opus-4.8') !== -1);
+check('raw_token_chip', !!dRaw.querySelector('.ptool-convdigest-meta-tok') &&
+  dRaw.textContent.indexOf('1234') !== -1 && dRaw.textContent.indexOf('56') !== -1);
+check('raw_finish_chip', !!dRaw.querySelector('.ptool-convdigest-meta-fr') &&
+  dRaw.textContent.indexOf('stop') !== -1);
+check('raw_msgid_chip', !!dRaw.querySelector('.ptool-convdigest-meta-id') &&
+  dRaw.textContent.indexOf('a-xyz') !== -1);
+
 report();
-""".replace("DIGEST_JSON_PH", __import__("json").dumps(_DIGEST_JSON))
+""".replace("DIGEST_JSON_PH", __import__("json").dumps(_DIGEST_JSON)).replace("DIGEST_RAW_JSON_PH", __import__("json").dumps(_DIGEST_RAW_JSON))
 
 
 def test_conv_digest_render():
@@ -136,7 +178,7 @@ def test_conv_digest_render():
         target_js=os.path.join(JS_DIR, "ui", "tool_rounds.js"),
         body_js=_BODY,
         extra_targets=[os.path.join(JS_DIR, "ui", "streaming_swarm_panel.js")],
-        min_pass=17,
+        min_pass=25,
         label="conv digest render",
     )
 
@@ -185,6 +227,57 @@ def test_NC_tool_arg_is_load_bearing(tmp_path):
         )
         assert "PASS NC_arg_gone" in out, out
         assert "PASS NC_name_kept" in out, out
+    finally:
+        with open(src, encoding="utf-8") as f:
+            assert f.read() == original, "shipped tool_rounds.js must be byte-identical"
+
+
+# NEUTER for the RAW branch: force `isRaw` off → the RAW badge + all metadata
+# chips must vanish EVEN when the digest carries raw:true, proving the `cd.raw`
+# gate is load-bearing (a raw card is only richer BECAUSE of this branch).
+_NEUTER_RAW_BODY = r"""
+const { setup } = require(process.env.JSDOM_HARNESS);
+const { document, check, report } = setup({
+  root: process.argv[3],
+  html: '<!DOCTYPE html><body></body>',
+  targets: [process.argv[4], process.argv[2]],
+  globals: { _convRenderFingerprint: () => 0, conversations: [], activeConvId: null },
+});
+function frag(html) { const d = document.createElement('div'); d.innerHTML = html; return d; }
+const cd = JSON.parse(DIGEST_RAW_JSON_PH);
+const dRaw = frag(_renderConvDigest(cd));
+// Under NEUTER isRaw is forced false → no badge, no metadata chips …
+check('NC_no_rawbadge', !dRaw.querySelector('.ptool-convdigest-rawbadge'));
+check('NC_no_metachip', !dRaw.querySelector('.ptool-convdigest-metachip'));
+// … but the ordinary card body still renders (only the raw branch was cut).
+check('NC_card_still_renders', !!dRaw.querySelector('.ptool-convdigest'));
+report();
+""".replace("DIGEST_RAW_JSON_PH", __import__("json").dumps(_DIGEST_RAW_JSON))
+
+
+def test_NC_raw_branch_is_load_bearing(tmp_path):
+    """NEUTER: force `isRaw` off in _renderConvDigest → the RAW badge and every
+    metadata chip disappear even for a raw:true digest, proving the cd.raw gate
+    is load-bearing. Shipped tool_rounds.js is byte-identical afterwards."""
+    src = os.path.join(JS_DIR, "ui", "tool_rounds.js")
+    with open(src, encoding="utf-8") as f:
+        original = f.read()
+    anchor = "const isRaw = !!cd.raw;"
+    assert anchor in original, "isRaw anchor not found in tool_rounds.js"
+    patched = original.replace(anchor, "const isRaw = false;  // NC", 1)
+    assert patched != original, "NC patch did not apply"
+    nc_path = tmp_path / "tool_rounds_nc_raw.js"
+    nc_path.write_text(patched, encoding="utf-8")
+    try:
+        out = run_harness(
+            target_js=str(nc_path),
+            body_js=_NEUTER_RAW_BODY,
+            extra_targets=[os.path.join(JS_DIR, "ui", "streaming_swarm_panel.js")],
+            min_pass=3,
+            label="conv digest RAW NEUTER",
+        )
+        assert "PASS NC_no_rawbadge" in out, out
+        assert "PASS NC_no_metachip" in out, out
     finally:
         with open(src, encoding="utf-8") as f:
             assert f.read() == original, "shipped tool_rounds.js must be byte-identical"

@@ -1144,6 +1144,20 @@ function _renderConvDigest(cd) {
       _convMetaAbsTime(cd.updatedAt))}">${escapeHtml(
       _t("convDigest.updated", "updated {t}").replace("{t}", updRel))}</span>`);
   }
+  // ── RAW/debug badge: only for a get_conversation(raw=true) read. Marks the
+  //    card as the debug view (per-message low-level metadata chips below) so
+  //    a raw read is visibly RICHER than a normal read — inline SVG per §3.4
+  //    (no emoji/glyph). A `rev` is appended when present. ──
+  const isRaw = !!cd.raw;
+  if (isRaw) {
+    const revTxt = (cd.rev != null)
+      ? " · " + _t("convDigest.rev", "rev") + " " + cd.rev : "";
+    const bugSvg = '<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="m8 2 1.88 1.88"/><path d="M14.12 3.88 16 2"/><path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"/><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"/><path d="M12 20v-9"/><path d="M6.53 9C4.6 8.8 3 7.1 3 5"/><path d="M6 13H2"/><path d="M3 21c0-2.1 1.7-3.9 3.8-4"/><path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"/><path d="M22 13h-4"/><path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"/></svg>';
+    metaBits.push(`<span class="ptool-convdigest-rawbadge icon-box" title="${escapeHtml(
+      _t("convDigest.rawTip", "Raw debug read — shows per-message low-level metadata (model, tokens, finish reason, id)."))}">` +
+      bugSvg + `<span class="ptool-convdigest-rawbadge-lbl">${escapeHtml(
+        _t("convDigest.raw", "RAW · debug"))}${escapeHtml(revTxt)}</span></span>`);
+  }
   let html = `<div class="ptool-convdigest">` +
     `<div class="ptool-convdigest-meta">${metaBits.join("")}</div>` +
     `<div class="ptool-convdigest-msgs">`;
@@ -1187,6 +1201,31 @@ function _renderConvDigest(cd) {
     if (m.pdfs) {
       hints.push(`<span class="ptool-convdigest-att">${escapeHtml(
         _t("convDigest.pdfs", "{n} PDF").replace("{n}", m.pdfs))}</span>`);
+    }
+    // ── RAW-mode per-message metadata chips (model / tokens / finishReason /
+    //    msgId). Rendered ONLY when the digest is a raw read AND the field is
+    //    present — a few compact chips, never the whole message. This is the
+    //    visible difference between a raw and a normal card. ──
+    if (isRaw) {
+      if (m.model) {
+        hints.push(`<span class="ptool-convdigest-metachip ptool-convdigest-meta-model" title="${escapeHtml(
+          _t("convDigest.metaModel", "model"))}">${escapeHtml(String(m.model))}</span>`);
+      }
+      if (m.usage && (m.usage.in != null || m.usage.out != null)) {
+        const inT = (m.usage.in != null) ? m.usage.in : "?";
+        const outT = (m.usage.out != null) ? m.usage.out : "?";
+        hints.push(`<span class="ptool-convdigest-metachip ptool-convdigest-meta-tok" title="${escapeHtml(
+          _t("convDigest.metaTokens", "tokens in/out"))}">${escapeHtml(
+          "tok " + inT + "/" + outT)}</span>`);
+      }
+      if (m.finishReason) {
+        hints.push(`<span class="ptool-convdigest-metachip ptool-convdigest-meta-fr" title="${escapeHtml(
+          _t("convDigest.metaFinish", "finish reason"))}">${escapeHtml(String(m.finishReason))}</span>`);
+      }
+      if (m.msgId) {
+        hints.push(`<span class="ptool-convdigest-metachip ptool-convdigest-meta-id" title="${escapeHtml(
+          _t("convDigest.metaId", "message id"))}">${escapeHtml(String(m.msgId))}</span>`);
+      }
     }
     const text = (m.text || "").trim();
     // Per-message expand: when a capped `full` text exists and differs from the

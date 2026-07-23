@@ -67,7 +67,9 @@ def _handle_conv_ref_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cf
             return
         try:
             from lib.conv_ref import build_conversation_digest
-            digest = build_conversation_digest(conv_id, current_conv_id=current_conv_id)
+            digest = build_conversation_digest(
+                conv_id, current_conv_id=current_conv_id,
+                raw=bool(_fn_args.get('raw')))
         except Exception as e:
             logger.debug('[ConvRef] digest build failed for %s: %s', conv_id, e)
             return

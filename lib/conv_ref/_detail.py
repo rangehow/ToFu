@@ -225,7 +225,7 @@ def get_conversation(conversation_id, include_tool_details=True,
 
 
 def build_conversation_digest(conversation_id, current_conv_id=None,
-                              head=DIGEST_HEAD, tail=DIGEST_TAIL):
+                              head=DIGEST_HEAD, tail=DIGEST_TAIL, raw=False):
     """Build a STRUCTURED digest of a conversation for the human-view card.
 
     This is the display sibling of :func:`get_conversation` (which returns the
@@ -251,6 +251,10 @@ def build_conversation_digest(conversation_id, current_conv_id=None,
         current_conv_id: the active conversation (self-reference is a no-op).
         head: opening messages always kept.
         tail: most-recent messages kept.
+        raw: when True, mark the digest ``raw: true`` + carry the row-level
+            ``rev``, and attach per-message low-level metadata
+            (``model`` / ``usage`` / ``finishReason`` / ``msgId``) so the human
+            card visibly reflects the debug read. Non-raw omits all of these.
 
     Returns:
         A dict ``{convId, title, preset, msgCount, createdAt, updatedAt,
@@ -265,7 +269,7 @@ def build_conversation_digest(conversation_id, current_conv_id=None,
     try:
         db = _get_db()
         row = db.execute(
-            'SELECT id, title, messages, settings, created_at, updated_at '
+            'SELECT id, title, messages, settings, created_at, updated_at, rev '
             'FROM conversations WHERE id=? AND user_id=?',
             (conversation_id, DEFAULT_USER_ID)
         ).fetchone()
@@ -368,6 +372,34 @@ def build_conversation_digest(conversation_id, current_conv_id=None,
                     tools.append(desc)
             if tools:
                 entry['tools'] = tools
+        # ── RAW-mode per-message metadata (debug view) ──
+        # Only in raw mode do we surface the low-level fields the prose/normal
+        # card drops — a few compact chips per row (model / token usage /
+        # finish reason / message id), NOT the whole message. This is what
+        # makes a raw read visibly RICHER than a normal read in the human card
+        # (previously identical). The full verbatim JSON still lives on the
+        # "model view" channel.
+        if raw:
+            mdl = msg.get('model')
+            if isinstance(mdl, str) and mdl.strip():
+                entry['model'] = mdl.strip()
+            fr = msg.get('finishReason')
+            if isinstance(fr, str) and fr.strip():
+                entry['finishReason'] = fr.strip()
+            mid = msg.get('_msgId')
+            if isinstance(mid, str) and mid.strip():
+                entry['msgId'] = mid.strip()
+            usage = msg.get('usage')
+            if isinstance(usage, dict):
+                inp = usage.get('input_tokens')
+                out = usage.get('output_tokens')
+                u = {}
+                if isinstance(inp, (int, float)):
+                    u['in'] = int(inp)
+                if isinstance(out, (int, float)):
+                    u['out'] = int(out)
+                if u:
+                    entry['usage'] = u
         return entry
 
     rows = []
@@ -384,7 +416,7 @@ def build_conversation_digest(conversation_id, current_conv_id=None,
         rows.append(_row(i, msg))
         prev_idx = i
 
-    return {
+    result = {
         'convId': conversation_id,
         'title': row['title'] or '(untitled)',
         'preset': settings.get('preset', ''),
@@ -396,6 +428,15 @@ def build_conversation_digest(conversation_id, current_conv_id=None,
         'omitted': omitted,
         'trailingDropped': trailing_dropped,
     }
+    if raw:
+        # Mark the digest as a RAW/debug view + carry the row-level revision so
+        # the frontend can render a distinct "RAW · debug" badge. Non-raw reads
+        # get NONE of these keys (byte-identical to the prior behaviour).
+        result['raw'] = True
+        rev = row['rev']
+        if isinstance(rev, (int, float)):
+            result['rev'] = int(rev)
+    return result
 
 
 def _render_raw_conversation(row, conversation_id):

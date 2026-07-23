@@ -122,6 +122,35 @@ class TestGetConversationRaw:
         assert td['arg'] == 'lib/foo.py'   # primary arg extracted from args.path
         assert td['status'] == 'done'
 
+    def test_build_digest_raw_carries_metadata(self):
+        # raw=True → dict marked raw + top-level rev + per-message low-level
+        # metadata (model / usage / finishReason / msgId) on the assistant row.
+        d = build_conversation_digest(self.cid, raw=True)
+        assert d is not None
+        assert d.get('raw') is True
+        assert d.get('rev') is not None and isinstance(d['rev'], int)
+        a = d['messages'][1]  # the assistant message
+        assert a['model'] == 'test-model-x'
+        assert a['finishReason'] == 'stop'
+        assert a['msgId'] == 'a-1'
+        assert a['usage'] == {'in': 10, 'out': 3}
+        # The user row carries none of the assistant-only fields.
+        u = d['messages'][0]
+        assert 'model' not in u and 'finishReason' not in u and 'usage' not in u
+
+    def test_build_digest_default_omits_raw_metadata(self):
+        # raw=False (default) → NONE of the raw markers/metadata appear
+        # (byte-identical to the prior digest shape).
+        d = build_conversation_digest(self.cid)
+        assert d is not None
+        assert 'raw' not in d
+        assert 'rev' not in d
+        for row in d['messages']:
+            assert 'model' not in row
+            assert 'usage' not in row
+            assert 'finishReason' not in row
+            assert 'msgId' not in row
+
     def _capture_post_build_meta(self, fn_args):
         """Drive the REAL _handle_conv_ref_tool _post_build closure without a
         live executor. Stubs ``simple_call`` in the _brain module to capture the
@@ -160,11 +189,15 @@ class TestGetConversationRaw:
         assert 'convDigest' in meta_raw, 'raw-mode read must still attach the card'
         assert meta_raw['convDigest']['convId'] == self.cid
         assert meta_raw['convDigest']['msgCount'] == 2
+        # …and the raw flag propagates through the handler so the card renders
+        # the RAW badge + per-message metadata (the fix this turn).
+        assert meta_raw['convDigest'].get('raw') is True
         # …and the default (non-raw) read attaches it as before (no regression).
         meta_default = self._capture_post_build_meta(
             {'conversation_id': self.cid})
         assert 'convDigest' in meta_default
         assert meta_default['convDigest']['convId'] == self.cid
+        assert 'raw' not in meta_default['convDigest']
 
     def test_build_digest_self_reference_is_none(self):
         # Digesting the CURRENT conversation is a no-op (caller falls back).

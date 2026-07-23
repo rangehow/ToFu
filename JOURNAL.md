@@ -1,5 +1,14 @@
 # Project Journal
 
+### 2026-07-23(续16) — 架构体检路线图落地①:`pt_a35ba42f` 去重+可测性 quick wins 四合一(commit `06d4f58a`,8 文件 +394/-72,新测 16/16 绿含双 NEUTER + 相邻 62/62 无回归)。
+- **背景:** 续15 评审开出的 8 张 board epic,先挑碰撞面最小、纯低风险的 `pt_a35ba42f`(共享 HEAD 上不与 sibling 抢文件)开工。
+- **① LLM stream 重试去重(`lib/llm/_transport.py` + stream.py/astream.py):** sync `stream_chat` 与 async `async_stream_chat` 的重试循环体逐行相同、只差 sleep(`abortable_sleep` vs `await async_abortable_sleep`)。抽出**无 sleep 的决策逻辑**成 3 个共享纯函数——`attach_limit_learned`(usage 挂 model-limit 标记)/ `apply_model_limit_retry`(clamp max_tokens + 返回 marker)/ `prepare_retryable_wait`(abort 检查→算 wait→日志→非终局返 wait、终局 re-raise)。**关键:sleep 仍留在各 transport 模块本地**——测试 monkeypatch 的是 `lib.llm._transport.abortable_sleep`,决策抽走但 sleep 不动,seam 零扰动。两循环体各减 ~27 行。
+- **② export.py 内部标识符单一真相源:** 4 个纯子串内部标识符(`hadoop-aipnlp`/`ruanjunhao04`/`M-TransferContext-INF-CELL`/`gray-release-ai-gpt-test`)之前在 `_sanitize_source_opensource`(step 13/13b `.replace()`)**和** `_opensource_sanitize_triggers`(文件开启触发列表)**各写一份**。漂移=静默泄漏:新增密钥若只加 scrub 不加 trigger → 携带它的文件永不被打开 → scrub 规则不跑 → 明文出海。新增 `_INTERNAL_IDENTIFIER_REPLACEMENTS` 元组同时驱动两侧,不可能再漂移。
+- **③ export 触发列表完整性守卫(表驱动):** 新 `test_export_sanitize_trigger_completeness.py`(6 测)断言每个 `_SECRETS`/`_ENDPOINTS`/`_INTERNAL_DOMAIN_LITERALS`/`_INTERNAL_IDENTIFIER_REPLACEMENTS` 键都能被合并触发正则命中,并 round-trip 验证标识符确被 scrub。守卫文件自身随导出树出海,故内部 token 全部**碎片拼接**(不留连续字面量),沿用 `test_export_oversized_leak_scan.py` 的既有约定。
+- **④ bootstrap.py conda-deps 漂移根修 + 守卫:** 「三份平行依赖清单」漂移 bug 的 bootstrap 半——conda-forge 修复清单 `_CONDA_PYTHON_DEPS` 只有 transitive `flask`(**无 quart/hypercorn** ASGI 栈)、缺 `orjson`(REQUIRED,SSE 快照)+ `sqlalchemy`(chat 热路径 `lib/chat/persistence.py`→`_core_schema` **无条件** import)。在只有 conda 路径能用的 CentOS-7 类主机上(pip manylinux wheel 撞 glibc 2.17)= 依赖修复后服务器**永远起不来**。补齐 4 个 + `_CRITICAL_BOOT_PACKAGES` 守卫;新 `test_bootstrap_conda_deps_coverage.py`(3 测)锁两不变量:关键包既在 conda 清单、又在 requirements.txt 声明。**未改 requirements.txt**(只读取比对)。
+- **NEUTER 实证:** 抽掉 `prepare_retryable_wait` 终局 re-raise → retry-helper 测试红;从 conda 清单删 `quart` → coverage 守卫 2 测红;还原均复绿。ruff:三 llm 文件 + bootstrap 全绿;export.py 的 6 个 ruff error 经 `git show HEAD:export.py` 比对**为既存**(2251–2549 行,与我改动无关),按「既存问题独立工作流」不在本批处理。
+- **git 纪律(共享 HEAD、大量 sibling WIP):** `reset -q HEAD .` → 仅 add 8 具名文件 → `--cached --numstat` 核对(确认 requirements.txt 未入)→ `commit -- <8 路径>` → `show HEAD --stat` = 仅 8 文件 +394/-72,NO LEAK。**部署:** 纯 Python + 测试,无前端 bundle 影响;stream 重试路径行为不变。
+
 ### 2026-07-23(续15) — 「全项目架构体检」评审(6 智能体并行深读真实源码)+ 分级路线图落地:1 个已核实潜伏缺陷立独立票、7 条可独立推进的重构/清扫拆成 board epic,本轮**只评审+持久化、不动大刀**。
 - **owner 诉求:** 项目已很大,做一次不偷懒的全源码架构体检,找极致工程优化点,为未来扩展打地基。
 - **方法(不猜、读真实源码):** 6 个 reviewer 子智能体并行分六lane深读——core-engine / LLM-layer / routes+server / frontend+bundler / persistence / ops-scripts。每个返回带 `file:line` + impact/effort 评级的 punch-list。FUSE 树上 shell `find/grep/wc` 全超时,一律走 read_files/grep_search/find_files。

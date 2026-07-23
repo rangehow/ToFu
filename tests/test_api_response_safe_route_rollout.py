@@ -61,6 +61,8 @@ except ImportError:  # pragma: no cover
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _OPTIMIZER_PATH = os.path.join(_ROOT, 'routes', 'api_v1', 'optimizer.py')
 _AGENTS_PATH = os.path.join(_ROOT, 'routes', 'api_v1', 'agents.py')
+_CONFIG_PATH = os.path.join(_ROOT, 'routes', 'config.py')
+_PAPER_PATH = os.path.join(_ROOT, 'routes', 'paper.py')
 
 
 def _unit(fn):
@@ -176,6 +178,33 @@ def _optimizer_src() -> str:
 
 def _agents_src() -> str:
     with open(_AGENTS_PATH, encoding='utf-8') as f:
+        return f.read()
+
+
+# ── Batch 5 (config.py + paper.py) ──────────────────────────────────
+# Same strict gate: FINAL except is a pure logger.error/warning +
+# api_internal_error(e) with no distinct context, no side effects.
+# Batch 5 audit found 6 candidates matching:
+#   * routes/config.py — feishu_status, discover_models_endpoint
+#   * routes/paper.py  — list_library, upsert_library_entry,
+#                        delete_library_entry, prune_broken_library_rows
+# list_library has an INNER try/except (hasReport soft-fail) that stays.
+_CONVERTED_CONFIG_HANDLERS = ('feishu_status', 'discover_models_endpoint')
+_CONVERTED_PAPER_HANDLERS = (
+    'list_library',
+    'upsert_library_entry',
+    'delete_library_entry',
+    'prune_broken_library_rows',
+)
+
+
+def _config_src() -> str:
+    with open(_CONFIG_PATH, encoding='utf-8') as f:
+        return f.read()
+
+
+def _paper_src() -> str:
+    with open(_PAPER_PATH, encoding='utf-8') as f:
         return f.read()
 
 
@@ -417,6 +446,92 @@ def test_batch4_unconverted_agents_keep_their_reasons():
         'swarm_abort: expected log_traceback=False override to survive')
 
 
+# ── Batch 5 shipped-source guards ─────────────────────────────────
+
+@_unit
+def test_batch5_converted_config_handlers_have_safe_route():
+    """batch 5: 2 config.py handlers carry @safe_route directly above def."""
+    src = _config_src()
+    for name in _CONVERTED_CONFIG_HANDLERS:
+        pattern = re.compile(
+            r'@safe_route\b[^\n]*\ndef\s+' + re.escape(name) + r'\s*\(',
+            re.MULTILINE)
+        assert pattern.search(src), (
+            f'{name}: expected @safe_route immediately before its def line '
+            f'in routes/config.py — the pt_63eb7f02 batch-5 rollout '
+            f'hasn\'t landed or has been undone')
+
+
+@_unit
+def test_batch5_converted_paper_handlers_have_safe_route():
+    """batch 5: 4 paper.py library handlers carry @safe_route
+    (async def variant — @safe_route is dual-mode)."""
+    src = _paper_src()
+    for name in _CONVERTED_PAPER_HANDLERS:
+        pattern = re.compile(
+            r'@safe_route\b[^\n]*\nasync\s+def\s+' + re.escape(name) + r'\s*\(',
+            re.MULTILINE)
+        assert pattern.search(src), (
+            f'{name}: expected @safe_route immediately before its "async '
+            f'def" line in routes/paper.py')
+
+
+@_unit
+def test_batch5_ad_hoc_final_except_patterns_gone():
+    """batch 5: the specific "except Exception → api_internal_error(e)"
+    trailing pattern that @safe_route replaces is GONE from each
+    converted handler.
+
+    We do NOT forbid all try/except in these files — list_library still
+    keeps an inner try/except for the hasReport soft-fail. What we forbid
+    is the SPECIFIC trailing pattern: an except Exception followed by
+    ``return api_internal_error(e)`` on the NEXT line (that's the ad-hoc
+    wrap @safe_route replaces).
+    """
+    for path in (_CONFIG_PATH, _PAPER_PATH):
+        with open(path, encoding='utf-8') as f:
+            src = f.read()
+        # In config.py we specifically drop feishu_status + discover_models
+        # ad-hoc wraps. In paper.py we drop the 4 library ones. Both files
+        # legitimately RETAIN api_internal_error calls at OTHER call sites
+        # (with distinct context= strings — image_gen-style). So we search
+        # for the LITERAL 3-line ad-hoc pattern that only ever appeared
+        # around the converted handlers.
+        for _label, _fn_marker in (
+            ('feishu_status', 'def feishu_status'),
+            ('discover_models_endpoint', 'def discover_models_endpoint'),
+            ('list_library', 'async def list_library'),
+            ('upsert_library_entry', 'async def upsert_library_entry'),
+            ('delete_library_entry', 'async def delete_library_entry'),
+            ('prune_broken_library_rows', 'async def prune_broken_library_rows'),
+        ):
+            if _fn_marker not in src:
+                continue
+            slc = _slice_after(src, _fn_marker, 60)
+            # The forbidden pattern: except Exception + return
+            # api_internal_error(e) inside the slice.
+            has_forbidden = bool(re.search(
+                r'except\s+Exception\s+as\s+\w+\s*:\s*\n'
+                r'\s*logger\.(?:error|warning)\(.*?\n'
+                r'\s*return\s+api_internal_error\(e\)',
+                slc, re.DOTALL))
+            assert not has_forbidden, (
+                f'{_label}: still contains the ad-hoc "except Exception → '
+                f'api_internal_error(e)" wrap that @safe_route was meant to '
+                f'replace. slice (first 400 chars): {slc[:400]!r}')
+
+
+def _slice_after(src: str, marker: str, max_lines: int) -> str:
+    """Return a bounded slice of src starting at the first occurrence of
+    ``marker`` and running for ``max_lines`` lines (or to EOF)."""
+    idx = src.find(marker)
+    if idx < 0:
+        return ''
+    tail = src[idx:]
+    lines = tail.split('\n', max_lines + 1)[:max_lines + 1]
+    return '\n'.join(lines)
+
+
 if __name__ == '__main__':
     tests = [
         test_safe_route_wraps_sync_handler_500_envelope,
@@ -428,6 +543,9 @@ if __name__ == '__main__':
         test_batch4_converted_agents_handlers_have_safe_route,
         test_batch4_converted_agents_no_ad_hoc_final_except,
         test_batch4_unconverted_agents_keep_their_reasons,
+        test_batch5_converted_config_handlers_have_safe_route,
+        test_batch5_converted_paper_handlers_have_safe_route,
+        test_batch5_ad_hoc_final_except_patterns_gone,
     ]
     for fn in tests:
         fn()

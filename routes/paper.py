@@ -55,6 +55,7 @@ from lib.api_response import (
     api_internal_error,
     api_not_found,
     api_ok,
+    safe_route,
 )
 from lib.database import (
     DOMAIN_CHAT,
@@ -2419,62 +2420,65 @@ def upload_paper():
 # ══════════════════════════════════════════════════════
 
 @api_v1_paper_bp.route('/api/v1/paper/library', methods=['GET'])
+@safe_route
 async def list_library():
     """Return all papers on the current user's bookshelf, newest first.
 
     Each entry includes a ``hasReport`` flag computed from ``paper_reports``
     so the UI can show a "· report" badge without a second round-trip.
+
+    @safe_route (pt_63eb7f02 batch 5): the outer try/except was pure
+    logger.error + api_internal_error; @safe_route reproduces it. The
+    INNER try/except around the hasReport lookup (a soft-fail with
+    local recovery: log.debug + fall through) is DELIBERATELY retained.
     """
-    try:
-        rows = await async_fetchall(
-            'SELECT ' + ', '.join(_PAPER_LIB_COLUMNS) +
-            ' FROM paper_library WHERE user_id=? ORDER BY updated_at DESC',
-            (DEFAULT_USER_ID,), domain=DOMAIN_CHAT,
-        )
-        papers = [_lib_row_to_dict(r) for r in rows]
+    rows = await async_fetchall(
+        'SELECT ' + ', '.join(_PAPER_LIB_COLUMNS) +
+        ' FROM paper_library WHERE user_id=? ORDER BY updated_at DESC',
+        (DEFAULT_USER_ID,), domain=DOMAIN_CHAT,
+    )
+    papers = [_lib_row_to_dict(r) for r in rows]
 
-        # Reap GHOST rows — non-viewable bookshelf entries left by the OLD
-        # fire-and-forget persistence (a client PUT that raced/replaced a failed
-        # upload wrote a row with no PDF). A row is a ghost when its
-        # ``pdfFilename`` is empty OR the referenced file is missing from
-        # PAPER_DIR. We HARD-SKIP them from the listing (never return them —
-        # returning one reproduces the vanishing-paper ghost the user saw) but
-        # do NOT delete: a FUSE/cross-DC mount can transiently report a real
-        # file missing, and a listing must never be a destructive operation.
-        # A recovered mount makes a real paper reappear on the next listing.
-        _kept = [p for p in papers if not _is_ghost_library_row(p)]
-        _reaped = len(papers) - len(_kept)
-        if _reaped:
-            logger.info('[Paper:Library] Reaped %d ghost row(s) (empty/missing PDF) '
-                        'from listing (kept in DB, non-destructive)', _reaped)
-        papers = _kept
+    # Reap GHOST rows — non-viewable bookshelf entries left by the OLD
+    # fire-and-forget persistence (a client PUT that raced/replaced a failed
+    # upload wrote a row with no PDF). A row is a ghost when its
+    # ``pdfFilename`` is empty OR the referenced file is missing from
+    # PAPER_DIR. We HARD-SKIP them from the listing (never return them —
+    # returning one reproduces the vanishing-paper ghost the user saw) but
+    # do NOT delete: a FUSE/cross-DC mount can transiently report a real
+    # file missing, and a listing must never be a destructive operation.
+    # A recovered mount makes a real paper reappear on the next listing.
+    _kept = [p for p in papers if not _is_ghost_library_row(p)]
+    _reaped = len(papers) - len(_kept)
+    if _reaped:
+        logger.info('[Paper:Library] Reaped %d ghost row(s) (empty/missing PDF) '
+                    'from listing (kept in DB, non-destructive)', _reaped)
+    papers = _kept
 
-        # Single-query JOIN-ish: collect hashes, ask paper_reports which exist
-        hashes = [p['paperHash'] for p in papers if p['paperHash']]
-        reported = set()
-        if hashes:
-            try:
-                placeholders = ','.join(['?'] * len(hashes))
-                rrows = await async_fetchall(
-                    'SELECT DISTINCT paper_hash FROM paper_reports '
-                    'WHERE paper_hash IN (' + placeholders + ')',
-                    tuple(hashes), domain=DOMAIN_CHAT,
-                )
-                reported = {r['paper_hash'] for r in rrows}
-            except Exception as e:
-                logger.debug('[Paper:Library] hasReport lookup failed: %s', e)
-        for p in papers:
-            p['hasReport'] = bool(p['paperHash'] and p['paperHash'] in reported)
+    # Single-query JOIN-ish: collect hashes, ask paper_reports which exist
+    hashes = [p['paperHash'] for p in papers if p['paperHash']]
+    reported = set()
+    if hashes:
+        try:
+            placeholders = ','.join(['?'] * len(hashes))
+            rrows = await async_fetchall(
+                'SELECT DISTINCT paper_hash FROM paper_reports '
+                'WHERE paper_hash IN (' + placeholders + ')',
+                tuple(hashes), domain=DOMAIN_CHAT,
+            )
+            reported = {r['paper_hash'] for r in rrows}
+        except Exception as e:
+            logger.debug('[Paper:Library] hasReport lookup failed: %s', e)
+    for p in papers:
+        p['hasReport'] = bool(p['paperHash'] and p['paperHash'] in reported)
 
-        logger.debug('[Paper:Library] Listed %d papers (%d with reports)',
-                     len(papers), len(reported))
-        return api_ok({'papers': papers})
-    except Exception as e:
-        logger.error('[Paper:Library] List failed: %s', e, exc_info=True)
-        return api_internal_error(e)
+    logger.debug('[Paper:Library] Listed %d papers (%d with reports)',
+                 len(papers), len(reported))
+    return api_ok({'papers': papers})
 
 
 @api_v1_paper_bp.route('/api/v1/paper/library/<paper_id>', methods=['PUT'])
+@safe_route
 async def upsert_library_entry(paper_id):
     """Create or update a paper on the bookshelf.
 
@@ -2596,15 +2600,13 @@ async def upsert_library_entry(paper_id):
         finally:
             _pool_put(db)
 
-    try:
-        await asyncio.to_thread(_do_upsert)
-        return api_ok({'id': paper_id, 'updatedAt': now_ms})
-    except Exception as e:
-        logger.error('[Paper:Library] Upsert failed for %s: %s', paper_id[:16], e, exc_info=True)
-        return api_internal_error(e)
+    # @safe_route (pt_63eb7f02 batch 5) catches any exception from _do_upsert.
+    await asyncio.to_thread(_do_upsert)
+    return api_ok({'id': paper_id, 'updatedAt': now_ms})
 
 
 @api_v1_paper_bp.route('/api/v1/paper/library/<paper_id>', methods=['DELETE'])
+@safe_route
 async def delete_library_entry(paper_id):
     """Remove a paper from the bookshelf.
 
@@ -2631,15 +2633,13 @@ async def delete_library_entry(paper_id):
         finally:
             _pool_put(db)
 
-    try:
-        await asyncio.to_thread(_do_delete)
-        return api_ok()
-    except Exception as e:
-        logger.error('[Paper:Library] Delete failed for %s: %s', paper_id[:16], e, exc_info=True)
-        return api_internal_error(e)
+    # @safe_route (pt_63eb7f02 batch 5) catches any exception from _do_delete.
+    await asyncio.to_thread(_do_delete)
+    return api_ok()
 
 
 @api_v1_paper_bp.route('/api/v1/paper/library/prune-broken', methods=['POST'])
+@safe_route
 async def prune_broken_library_rows():
     """One-time cleanup of DEFINITIVELY-broken stub rows (opt-in, destructive).
 
@@ -2685,12 +2685,9 @@ async def prune_broken_library_rows():
             _pool_put(db)
         return pruned_ids
 
-    try:
-        ids = await asyncio.to_thread(_prune)
-        return api_ok({'pruned': len(ids), 'ids': ids})
-    except Exception as e:
-        logger.error('[Paper:Library] Prune failed: %s', e, exc_info=True)
-        return api_internal_error(e)
+    # @safe_route (pt_63eb7f02 batch 5) catches any exception from _prune.
+    ids = await asyncio.to_thread(_prune)
+    return api_ok({'pruned': len(ids), 'ids': ids})
 
 
 

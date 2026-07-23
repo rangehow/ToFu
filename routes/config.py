@@ -12,7 +12,7 @@ from flask import jsonify, request
 
 from lib.config_dir import config_path as _config_path
 from lib.log import get_logger
-from lib.api_response import api_bad_request, api_error, api_internal_error, api_ok
+from lib.api_response import api_bad_request, api_error, api_internal_error, api_ok, safe_route
 from lib.request_parser import parse_body
 
 logger = get_logger(__name__)
@@ -379,8 +379,15 @@ def get_server_config():
 
 
 @config_bp.route('/api/v1/feishu/status')
+@safe_route
 def feishu_status():
-    """Return Feishu bot runtime status."""
+    """Return Feishu bot runtime status.
+
+    @safe_route (pt_63eb7f02 batch 5): the ad-hoc "except Exception →
+    api_internal_error(e)" wrap around the body was a pure logger.warning
+    + api_internal_error with no distinct context / side effects; the
+    decorator reproduces it via fn.__qualname__.
+    """
     from lib.feishu._state import (
         ALLOWED_USERS,
         APP_ID,
@@ -390,22 +397,18 @@ def feishu_status():
         WORKSPACE_ROOT,
         _conversations,
     )
-    try:
-        active_users = len(_conversations)
-        return jsonify({
-            'ok': True,
-            'enabled': ENABLED,
-            'connected': _feishu_is_connected(),
-            'app_id_masked': ('***' + APP_ID[-4:]) if len(APP_ID) > 4 else '',
-            'has_secret': bool(APP_SECRET),
-            'active_users': active_users,
-            'allowed_users': sorted(ALLOWED_USERS),
-            'default_project': DEFAULT_PROJECT_PATH,
-            'workspace_root': WORKSPACE_ROOT,
-        })
-    except Exception as e:
-        logger.warning('[Feishu] Status check error: %s', e, exc_info=True)
-        return api_internal_error(e)
+    active_users = len(_conversations)
+    return jsonify({
+        'ok': True,
+        'enabled': ENABLED,
+        'connected': _feishu_is_connected(),
+        'app_id_masked': ('***' + APP_ID[-4:]) if len(APP_ID) > 4 else '',
+        'has_secret': bool(APP_SECRET),
+        'active_users': active_users,
+        'allowed_users': sorted(ALLOWED_USERS),
+        'default_project': DEFAULT_PROJECT_PATH,
+        'workspace_root': WORKSPACE_ROOT,
+    })
 
 
 @config_bp.route('/api/v1/providers/balance', methods=['POST'])
@@ -449,8 +452,14 @@ def check_provider_balance():
 
 
 @config_bp.route('/api/v1/providers/discover-models', methods=['POST'])
+@safe_route
 def discover_models_endpoint():
-    """Auto-discover models from a provider's /v1/models endpoint."""
+    """Auto-discover models from a provider's /v1/models endpoint.
+
+    @safe_route (pt_63eb7f02 batch 5): the ad-hoc "except Exception \u2192
+    api_internal_error(e)" wrapping the discover_models + enrich pass was
+    pure logger.error + api_internal_error; @safe_route reproduces it.
+    """ 
     data = parse_body()
     base_url = data.get('base_url', '').strip()
     api_key = data.get('api_key', '').strip()
@@ -461,18 +470,16 @@ def discover_models_endpoint():
     if not api_key:
         return api_bad_request('api_key is required')
 
-    try:
-        from lib.llm_dispatch.discovery import discover_models, enrich_models_with_pricing
-        models = discover_models(base_url, api_key, models_path=models_path)
-        if not models:
-            return api_error('No models found at %s' % base_url, status=404)
+    # @safe_route on the enclosing view catches any exception from either
+    # discover_models or enrich_models_with_pricing (pt_63eb7f02 batch 5).
+    from lib.llm_dispatch.discovery import discover_models, enrich_models_with_pricing
+    models = discover_models(base_url, api_key, models_path=models_path)
+    if not models:
+        return api_error('No models found at %s' % base_url, status=404)
 
-        models = enrich_models_with_pricing(models)
-        logger.info('[Discovery] Endpoint returned %d models for %s', len(models), base_url)
-        return api_ok({'models': models})
-    except Exception as e:
-        logger.error('[Discovery] Endpoint failed: %s', e, exc_info=True)
-        return api_internal_error(e)
+    models = enrich_models_with_pricing(models)
+    logger.info('[Discovery] Endpoint returned %d models for %s', len(models), base_url)
+    return api_ok({'models': models})
 
 
 @config_bp.route('/api/v1/providers/templates/update', methods=['PUT'])

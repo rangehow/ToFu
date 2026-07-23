@@ -726,7 +726,222 @@ def build_fresh_state_snapshot(task: dict[str, Any]):
     return state, meta, cursor
 
 
+def is_task_terminal(task: dict[str, Any]) -> bool:
+    """Predicate: is the task truly finished from the SSE stream's POV?
+    (pt_04686ac6 slice 8; moved from a chat_stream local closure).
+
+    True iff ``task['status'] != 'running'`` AND NOT
+    ``task.get('_autopilot_deciding')``.
+
+    ``task['status']`` flips to 'done' (orchestrator _run_loop tail)
+    BEFORE the autopilot end-of-turn hook runs its multi-second VU
+    LLM call; the baton-carrying ``done`` event is only appended
+    AFTER.  Synthesizing a late ``done`` during that window closes
+    the SSE stream without the ``autopilotNextTaskId`` /
+    ``autopilotVuMessage`` handoff, stranding the already-spawned
+    follow-up — the conv goes idle until a manual refresh.  Treat
+    the decision window as still-running so the loop keeps the
+    stream open until the real done event arrives.
+    """
+    return task['status'] != 'running' and not task.get('_autopilot_deciding')
+
+
+def apply_autopilot_baton(task: dict[str, Any], evt: dict[str, Any]) -> dict[str, Any]:
+    """Stamp the autopilot follow-up baton onto a SYNTHESIZED done
+    event (pt_04686ac6 slice 8; moved from a chat_stream local closure).
+
+    The orchestrator's REAL done event carries
+    ``autopilotNextTaskId`` / ``autopilotVuMessage`` directly, but
+    every late / synthetic done built by the SSE stream helpers uses
+    ``extract_task_meta()``, which does NOT include them.  If a
+    synthetic done is ever sent for an autopilot turn (cold replay,
+    resume, or a residual status-flip race), copy the baton from the
+    transport-agnostic stash so the frontend still attaches to the
+    spawned follow-up instead of stranding it.  Mirrors the
+    ``chat_poll`` baton surfacing.
+
+    Returns the (mutated) ``evt`` for call-site chaining.
+    """
+    _ap = task.get('_autopilot_followup')
+    if _ap:
+        evt['autopilotNextTaskId'] = _ap['next_task_id']
+        evt['autopilotVuMessage'] = _ap['vu_msg']
+    return evt
+
+
+@dataclass
+class LiveTickAction:
+    """Result of ``next_live_tick``: what the LIVE-stream driver should
+    do THIS tick (pt_04686ac6 slice 8).
+
+    Every field except ``kind`` is optional; the driver reads only the
+    fields relevant to ``kind``. This keeps the dataclass a flat, easy-
+    to-inspect value object (no discriminated-union machinery) while
+    still steering the driver to the right branch.
+
+    Attributes:
+        kind: One of
+          * ``'sse_timeout'`` — driver yields ``timeout_evt`` (JSON
+            SSE frame WITHOUT ``id:`` — synthetic) then RETURNS
+            (closes the stream so the frontend switches to polling).
+          * ``'events'`` — driver yields each ``(event_id, event)``
+            in ``frames`` as ``id: <n>\\ndata: <json>\\n\\n``, stamps
+            ``_events_sent`` up, sets ``last_t = now``, and if a
+            frame's type is ``'done'`` RETURNS immediately (the
+            orchestrator's real done). Otherwise advances ``cursor``
+            to ``next_cursor`` and continues.
+          * ``'late_done'`` — driver yields ``late_done_evt`` as
+            ``id: <next_cursor>\\ndata: <json>\\n\\n`` then RETURNS.
+          * ``'superseded'`` — driver just RETURNS (the newer reader
+            takes over).
+          * ``'keepalive'`` — driver yields ``: keepalive\\n\\n``,
+            updates ``last_t = now``, refreshes the SSE slot lease.
+          * ``'sleep'`` — driver does ``await asyncio.sleep(0.05)``
+            and loops.
+        timeout_evt: SSE_TIMEOUT event dict (set only when
+            kind='sse_timeout').
+        frames: List of ``(event_id, event)`` tuples (set only when
+            kind='events').
+        next_cursor: Advance cursor value; set for 'events'
+            (post-drain new length) and 'late_done' (== len(events)
+            at time of the check — used as the ``id:`` on the
+            synthesized frame).
+        late_done_evt: Fully-populated DONE event (set only when
+            kind='late_done'); baton already applied.
+    """
+    kind: str
+    timeout_evt: dict[str, Any] | None = None
+    frames: list | None = None
+    next_cursor: int | None = None
+    late_done_evt: dict[str, Any] | None = None
+
+
+def next_live_tick(
+    task: dict[str, Any],
+    cursor: int,
+    sse_gen: int,
+    stream_start: float,
+    sse_max_duration: float,
+    last_t: float,
+    now: float,
+    task_id_short: str,
+) -> LiveTickAction:
+    """LIVE-path tick planner (pt_04686ac6 slice 8).
+
+    Called once per iteration of chat_stream's ``while True`` loop
+    with the caller's current time, cursor, and stream-start.
+    Deterministic — the same inputs always yield the same
+    ``LiveTickAction``. Reads ``task`` under ``events_lock`` when
+    slicing new events; otherwise no side effects except logging.
+
+    Decision order (matches the pre-slice inline block byte-for-byte):
+      1. Elapsed > SSE_MAX_DURATION → ``sse_timeout``.
+      2. Drain new events past ``cursor``. If any → ``events``.
+      3. Task terminal AND drain was empty → ``late_done``.
+      4. Newer SSE reader present → ``superseded``.
+      5. Gap since last emit > 15s → ``keepalive``.
+      6. Else → ``sleep``.
+
+    Args:
+        task: The in-memory task dict.
+        cursor: The current SSE-cursor (index into task['events']).
+        sse_gen: The generation id captured when THIS reader opened
+            (for supersede detection).
+        stream_start: Wall-clock time (seconds) when the SSE stream
+            opened; used for the max-duration guard.
+        sse_max_duration: Max SSE stream lifetime in seconds
+            (default 7200 in the caller; parameterized so tests can
+            drive tighter bounds).
+        last_t: Wall-clock time of the last emit (event/keepalive/
+            preamble). Used for the 15s keepalive gap.
+        now: Wall-clock time NOW (passed in so tests are
+            deterministic; production uses ``time.time()``).
+        task_id_short: 8-char task id for log lines.
+
+    Returns:
+        A ``LiveTickAction`` with ``kind`` naming the branch and
+        exactly the fields that branch needs populated.
+    """
+    from lib.agent_core.events import EventType, build_event
+    from lib.chat.persistence import extract_task_meta as _extract_task_meta
+
+    # 1. SSE max-duration guard.
+    _elapsed = now - stream_start
+    if _elapsed > sse_max_duration:
+        _conv_id = task.get('convId', '?')
+        logger.warning(
+            '[Chat] SSE stream %s conv=%s closing after %.0fs (max %.0fs) — '
+            'task still running (status=%s). '
+            'Frontend will switch to polling to pick up the result.',
+            task_id_short, _conv_id, _elapsed, sse_max_duration,
+            task.get('status', '?'))
+        timeout_evt = build_event(
+            EventType.SSE_TIMEOUT,
+            message='SSE connection reached maximum duration. Switching to '
+                    'polling — task is still running.')
+        return LiveTickAction(kind='sse_timeout', timeout_evt=timeout_evt)
+
+    # 2. Drain new events past cursor (under lock).
+    with task['events_lock']:
+        new_evts = task['events'][cursor:]
+        _cursor_before = cursor
+        _new_cursor = len(task['events'])
+    if new_evts:
+        frames = [(_cursor_before + idx, ev) for idx, ev in enumerate(new_evts)]
+        return LiveTickAction(kind='events', frames=frames,
+                              next_cursor=_new_cursor)
+
+    # 3. Task terminal + no new events → synthesize LATE done.
+    if is_task_terminal(task):
+        late_done = build_event(EventType.DONE)
+        late_meta = _extract_task_meta(task)
+        late_done.update(late_meta)
+        if task.get('error'):
+            late_done['error'] = task['error']
+        # Severity split: an aborted/interrupted/normally-stopped
+        # task that needs a LATE done synthesis is expected:
+        #   - aborted/interrupted: user hit Stop after orchestrator
+        #     already flushed its own done event.
+        #   - stop: task finished normally between the queue poll and
+        #     this status check (the common 157-line/day pattern).
+        # Anything else (length, content_filter, error, etc.) still
+        # signals a missed done-event — keep as warning.
+        _late_fr = late_meta.get('finishReason', '?')
+        _is_benign = _late_fr in ('aborted', 'interrupted', 'stop')
+        _log_fn = logger.info if _is_benign else logger.warning
+        _err_obj = task.get('error')
+        _err_summary = (
+            _err_obj.get('detail') or _err_obj.get('message') or _err_obj.get('kind')
+            if isinstance(_err_obj, dict) else (_err_obj or 'none')
+        )
+        _log_fn('[Chat] SSE stream %s emitting LATE done '
+                '(task finished but no done event in queue) — '
+                'finishReason=%s model=%s error=%s',
+                task_id_short, _late_fr,
+                late_meta.get('model', '?'), _err_summary)
+        apply_autopilot_baton(task, late_done)
+        return LiveTickAction(kind='late_done', late_done_evt=late_done,
+                              next_cursor=_new_cursor)
+
+    # 4. Newer SSE reader → close this stale one.
+    _gen_now = task.get('_sse_gen_id', sse_gen)
+    if _gen_now != sse_gen:
+        logger.info('[Chat] SSE stream %s superseded by newer reader (gen %d→%d) — '
+                    'closing stale reader',
+                    task_id_short, sse_gen, _gen_now)
+        return LiveTickAction(kind='superseded')
+
+    # 5. Keepalive on >15s gap since last emit.
+    if now - last_t > 15:
+        return LiveTickAction(kind='keepalive')
+
+    # 6. Nothing to do → sleep.
+    return LiveTickAction(kind='sleep')
+
+
 __all__ = [
     'SendIntent', 'classify_send_intent', 'build_cold_replay_response',
     'WarmResumePlan', 'plan_warm_resume', 'build_fresh_state_snapshot',
+    'LiveTickAction', 'next_live_tick', 'is_task_terminal',
+    'apply_autopilot_baton',
 ]

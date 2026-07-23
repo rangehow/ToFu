@@ -835,6 +835,277 @@ def test_build_fresh_state_snapshot_carries_full_task_state():
     assert meta.get('model') == 'gpt-4'
 
 
+# ── Slice 8: chat_stream LIVE-path tick planner → lib/chat_dispatch.next_live_tick ─
+# Extracts the ~92-line ``while True`` main loop tick decision (abort-cascade +
+# task_terminal + baton-attach + SSE-timeout + supersede-detect + keepalive
+# gap) into a pure(-ish) tick planner. Also moves the two pure-over-``task``
+# closures (``_task_terminal`` + ``_apply_autopilot_baton``) to module-level
+# in lib/chat_dispatch.py so warm-resume / fresh-terminal / LIVE-late-done
+# can all share ONE definition.
+
+@_unit
+def test_chat_dispatch_exposes_next_live_tick_and_helpers():
+    """Slice 8 (pt_04686ac6): lib/chat_dispatch.py exposes:
+      * LiveTickAction (dataclass)
+      * next_live_tick (callable)
+      * is_task_terminal (pure predicate on task)
+      * apply_autopilot_baton (mutates evt in-place; returns evt)
+    """
+    import importlib
+    mod = importlib.import_module('lib.chat_dispatch')
+    for name in ('LiveTickAction', 'next_live_tick',
+                 'is_task_terminal', 'apply_autopilot_baton'):
+        assert hasattr(mod, name), f'lib.chat_dispatch missing {name}'
+    assert callable(mod.next_live_tick), 'next_live_tick must be callable'
+    assert callable(mod.is_task_terminal)
+    assert callable(mod.apply_autopilot_baton)
+
+
+@_unit
+def test_chat_stream_delegates_live_loop_to_next_live_tick():
+    """Slice 8: routes/chat.py::chat_stream must import + call the
+    extracted tick planner. Guards against silent revert to the inline
+    ~92-line while-loop body."""
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, 'routes/chat.py'), encoding='utf-8') as f:
+        src = f.read()
+    # Slice 8: the import + call site must both be present (a raw
+    # mention in a comment is not enough — that's the class of NEUTER
+    # a silent-revert would produce). The import string is exact so a
+    # deletion / rename trips it.
+    assert 'from lib.chat_dispatch import next_live_tick' in src, (
+        'routes/chat.py must IMPORT next_live_tick from lib.chat_dispatch '
+        '(slice 8 pt_04686ac6)')
+    # The call must appear with an argument list (a mere reference in
+    # a comment does not).
+    import re as _re
+    assert _re.search(r'\bnext_live_tick\s*\(', src), (
+        'routes/chat.py must CALL next_live_tick(...) — a bare mention '
+        'in a comment does not satisfy slice 8')
+    # Specific inline call-site markers that USED to live in the LIVE
+    # loop are GONE.
+    assert 'SSE connection reached maximum duration' not in src, (
+        'routes/chat.py must NOT carry the SSE_TIMEOUT message literal — '
+        'extracted to next_live_tick')
+    assert 'superseded by newer reader' not in src, (
+        'routes/chat.py must NOT carry the supersede log line — '
+        'extracted to next_live_tick')
+    assert 'emitting LATE done' not in src, (
+        'routes/chat.py must NOT carry the LATE-done log line — '
+        'extracted to next_live_tick')
+
+
+@_unit
+def test_is_task_terminal_pure_over_task():
+    """Slice 8: is_task_terminal is a pure predicate — True iff
+    task.status != 'running' AND NOT task.get('_autopilot_deciding').
+
+    Guards the invariant: don't synthesize a late 'done' during the
+    autopilot end-of-turn window (see the ★ docstring in the original
+    closure — parent status flipped 'done' but VU LLM baton not yet
+    written to task['_autopilot_followup']).
+    """
+    from lib.chat_dispatch import is_task_terminal
+    # Running task → not terminal.
+    assert is_task_terminal({'status': 'running'}) is False
+    # Done task, no autopilot window → terminal.
+    assert is_task_terminal({'status': 'done'}) is True
+    # Done task, autopilot deciding → NOT terminal (baton race guard).
+    assert is_task_terminal(
+        {'status': 'done', '_autopilot_deciding': True}) is False
+    # Error task → terminal (still done, not deciding).
+    assert is_task_terminal({'status': 'error'}) is True
+
+
+@_unit
+def test_apply_autopilot_baton_copies_next_task_id_and_vu_msg():
+    """Slice 8: apply_autopilot_baton stamps
+    autopilotNextTaskId / autopilotVuMessage onto the passed event when
+    task has a '_autopilot_followup' stash; no-op otherwise.
+    Returns the (mutated) event for call-site convenience.
+    """
+    from lib.chat_dispatch import apply_autopilot_baton
+    # With follow-up: baton fields copied.
+    evt = {'type': 'done'}
+    task = {'_autopilot_followup': {
+        'next_task_id': 'task-next-abc',
+        'vu_msg': {'role': 'user', 'content': 'follow-up prompt'},
+    }}
+    result = apply_autopilot_baton(task, evt)
+    assert result is evt, 'must return the same evt object (mutation)'
+    assert evt['autopilotNextTaskId'] == 'task-next-abc'
+    assert evt['autopilotVuMessage'] == {
+        'role': 'user', 'content': 'follow-up prompt'}
+    # Without follow-up: no-op, evt unchanged.
+    evt2 = {'type': 'done'}
+    apply_autopilot_baton({}, evt2)
+    assert evt2 == {'type': 'done'}
+    assert 'autopilotNextTaskId' not in evt2
+
+
+@_unit
+def test_next_live_tick_sse_timeout_action():
+    """Slice 8: SSE stream exceeding max duration returns
+    LiveTickAction(kind='sse_timeout', timeout_evt=<SSE_TIMEOUT>).
+    Byte-parity: the timeout_evt MUST carry a
+    'SSE connection reached maximum duration' message so the frontend's
+    switch-to-polling toast fires identically to the pre-slice inline
+    build_event call.
+    """
+    from lib.chat_dispatch import next_live_tick
+    import threading
+    task = {
+        'events': [],
+        'events_lock': threading.Lock(),
+        'status': 'running',
+        'convId': 'cv-timeout',
+    }
+    # stream_start = 0.0, now = 7300 → elapsed 7300 > 7200 max.
+    v = next_live_tick(
+        task=task, cursor=0, sse_gen=1,
+        stream_start=0.0, sse_max_duration=7200,
+        last_t=7200.0, now=7300.0, task_id_short='t-timeout',
+    )
+    assert v.kind == 'sse_timeout', f'expected sse_timeout; got {v.kind}'
+    assert isinstance(v.timeout_evt, dict)
+    assert 'SSE connection reached maximum duration' in (
+        v.timeout_evt.get('message') or '')
+
+
+@_unit
+def test_next_live_tick_events_action_slices_from_cursor():
+    """Slice 8: with new events past the cursor, the tick returns
+    kind='events' with frames = [(event_id, event), ...] indexed from
+    cursor_before onward and next_cursor = new len(events).
+    """
+    from lib.chat_dispatch import next_live_tick
+    import threading
+    task = {
+        'events': [
+            {'type': 'delta', 'text': 'a'},   # id 0
+            {'type': 'delta', 'text': 'b'},   # id 1
+            {'type': 'delta', 'text': 'c'},   # id 2
+        ],
+        'events_lock': threading.Lock(),
+        'status': 'running',
+    }
+    v = next_live_tick(
+        task=task, cursor=1, sse_gen=1,
+        stream_start=0.0, sse_max_duration=7200,
+        last_t=0.0, now=1.0, task_id_short='t-events',
+    )
+    assert v.kind == 'events', f'expected events; got {v.kind}'
+    assert v.frames == [
+        (1, {'type': 'delta', 'text': 'b'}),
+        (2, {'type': 'delta', 'text': 'c'}),
+    ], f'frames must be [(eid, evt)] from cursor onward; got {v.frames}'
+    assert v.next_cursor == 3
+
+
+@_unit
+def test_next_live_tick_late_done_when_task_terminal_no_new_events():
+    """Slice 8: task terminal + no new events past cursor → tick
+    synthesizes the late DONE event with baton applied and returns
+    kind='late_done' + late_done_evt carrying autopilot baton copies
+    when task has _autopilot_followup.
+    """
+    from lib.chat_dispatch import next_live_tick
+    import threading
+    task = {
+        'events': [{'type': 'delta'}],          # 1 event
+        'events_lock': threading.Lock(),
+        'status': 'done',
+        'error': None,
+        '_autopilot_followup': {
+            'next_task_id': 'task-baton', 'vu_msg': {'x': 1}},
+    }
+    v = next_live_tick(
+        task=task, cursor=1, sse_gen=1,   # cursor already past all events
+        stream_start=0.0, sse_max_duration=7200,
+        last_t=0.0, now=1.0, task_id_short='t-latedone',
+    )
+    assert v.kind == 'late_done', f'expected late_done; got {v.kind}'
+    assert v.late_done_evt.get('type') == 'done'
+    # Baton stamped.
+    assert v.late_done_evt.get('autopilotNextTaskId') == 'task-baton'
+    assert v.late_done_evt.get('autopilotVuMessage') == {'x': 1}
+    # next_cursor == len(events) so caller uses it as the id: field.
+    assert v.next_cursor == 1
+
+
+@_unit
+def test_next_live_tick_superseded_when_sse_gen_advanced():
+    """Slice 8: task['_sse_gen_id'] advanced beyond our gen (a newer
+    SSE reader took over) → tick returns kind='superseded' so caller
+    closes the stale stream.
+
+    Sequenced AFTER the events-drain check: if the task also has
+    unread events, the events path runs FIRST (drains + advances
+    cursor), THEN a subsequent tick sees supersede. This matches the
+    pre-slice inline block's control-flow order.
+    """
+    from lib.chat_dispatch import next_live_tick
+    import threading
+    task = {
+        'events': [],           # no events to drain
+        'events_lock': threading.Lock(),
+        'status': 'running',    # NOT terminal — so late_done doesn't fire
+        '_sse_gen_id': 5,       # a newer reader bumped the counter
+    }
+    v = next_live_tick(
+        task=task, cursor=0, sse_gen=3,   # we opened at gen=3, now 5
+        stream_start=0.0, sse_max_duration=7200,
+        last_t=0.0, now=1.0, task_id_short='t-super',
+    )
+    assert v.kind == 'superseded', f'expected superseded; got {v.kind}'
+
+
+@_unit
+def test_next_live_tick_keepalive_on_15s_gap():
+    """Slice 8: no new events + not terminal + not superseded + gap >
+    15s since last output → tick returns kind='keepalive' so caller
+    yields the ``: keepalive\\n\\n`` comment and refreshes its SSE slot
+    lease.
+    """
+    from lib.chat_dispatch import next_live_tick
+    import threading
+    task = {
+        'events': [],
+        'events_lock': threading.Lock(),
+        'status': 'running',
+    }
+    v = next_live_tick(
+        task=task, cursor=0, sse_gen=1,
+        stream_start=0.0, sse_max_duration=7200,
+        last_t=0.0, now=20.0,  # 20 - 0 = 20 > 15
+        task_id_short='t-keep',
+    )
+    assert v.kind == 'keepalive', f'expected keepalive; got {v.kind}'
+
+
+@_unit
+def test_next_live_tick_sleep_default():
+    """Slice 8: no new events + not terminal + not superseded + gap <=
+    15s → tick returns kind='sleep' (the caller just does
+    ``await asyncio.sleep(0.05)`` and loops).
+    """
+    from lib.chat_dispatch import next_live_tick
+    import threading
+    task = {
+        'events': [],
+        'events_lock': threading.Lock(),
+        'status': 'running',
+    }
+    v = next_live_tick(
+        task=task, cursor=0, sse_gen=1,
+        stream_start=0.0, sse_max_duration=7200,
+        last_t=5.0, now=10.0,  # 10 - 5 = 5 < 15
+        task_id_short='t-sleep',
+    )
+    assert v.kind == 'sleep', f'expected sleep; got {v.kind}'
+
+
 # ── Slice 6: chat_stream cold-path → lib/chat_dispatch.build_cold_replay_response ─
 # Extracts the ~170-line cold-path (task not in memory) block:
 # persisted-event replay OR DB snapshot OR not-found.
@@ -956,6 +1227,16 @@ if __name__ == '__main__':
         test_plan_warm_resume_none_on_cursor_ahead_of_buffer,
         test_plan_warm_resume_serviceable_slices_post_cursor_events,
         test_build_fresh_state_snapshot_carries_full_task_state,
+        test_chat_dispatch_exposes_next_live_tick_and_helpers,
+        test_chat_stream_delegates_live_loop_to_next_live_tick,
+        test_is_task_terminal_pure_over_task,
+        test_apply_autopilot_baton_copies_next_task_id_and_vu_msg,
+        test_next_live_tick_sse_timeout_action,
+        test_next_live_tick_events_action_slices_from_cursor,
+        test_next_live_tick_late_done_when_task_terminal_no_new_events,
+        test_next_live_tick_superseded_when_sse_gen_advanced,
+        test_next_live_tick_keepalive_on_15s_gap,
+        test_next_live_tick_sleep_default,
     ]
     for fn in tests:
         fn()

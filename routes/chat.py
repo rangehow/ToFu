@@ -1120,38 +1120,19 @@ async def chat_stream(task_id):
 
     _stream_start = time.time()
     _events_sent = 0
+    # pt_04686ac6 slice 8: the two closures below (``_task_terminal``,
+    # ``_apply_autopilot_baton``) moved to lib.chat_dispatch as
+    # module-level helpers so warm-resume / fresh-terminal / LIVE-tick
+    # planners can all share ONE definition. Bind local names here so
+    # every call-site below keeps the pre-slice call shape.
+    from lib.chat_dispatch import (
+        is_task_terminal as _is_task_terminal_lib,
+        apply_autopilot_baton as _apply_autopilot_baton_lib,
+    )
     def _task_terminal():
-        """True iff the task is finished AND not mid-autopilot-decision.
-
-        ``task['status']`` flips to 'done' (orchestrator _run_loop tail)
-        BEFORE the autopilot end-of-turn hook runs its multi-second VU LLM
-        call; the baton-carrying ``done`` event is only appended AFTER.
-        Synthesizing a late ``done`` during that window closes the SSE
-        stream without the ``autopilotNextTaskId``/``autopilotVuMessage``
-        handoff, stranding the already-spawned follow-up — the conv goes
-        idle (sidebar dot off, pause→send, translation fires) until a
-        manual refresh.  Treat the decision window as still-running so the
-        loop keeps the stream open until the real done event arrives.
-        """
-        return task['status'] != 'running' and not task.get('_autopilot_deciding')
-
+        return _is_task_terminal_lib(task)
     def _apply_autopilot_baton(evt):
-        """Stamp the autopilot follow-up baton onto a SYNTHESIZED done event.
-
-        The orchestrator's REAL done event carries
-        ``autopilotNextTaskId``/``autopilotVuMessage`` directly, but every
-        late/synthetic done built here uses ``extract_task_meta()`` which does
-        NOT include them.  If a synthetic done is ever sent for an autopilot
-        turn (cold replay, resume, or a residual status-flip race), copy the
-        baton from the transport-agnostic stash so the frontend still attaches
-        to the spawned follow-up instead of stranding it.  Mirrors the
-        ``chat_poll`` baton surfacing below.
-        """
-        _ap = task.get('_autopilot_followup')
-        if _ap:
-            evt['autopilotNextTaskId'] = _ap['next_task_id']
-            evt['autopilotVuMessage'] = _ap['vu_msg']
-        return evt
+        return _apply_autopilot_baton_lib(task, evt)
 
     async def generate():
         nonlocal _events_sent
@@ -1216,93 +1197,56 @@ async def chat_stream(task_id):
                 yield f'id: {cursor}\ndata: {json.dumps(done_evt, ensure_ascii=False)}\n\n'
                 return
 
-        _MAX_SSE_DURATION = 7200  # 2 hours — absolute max SSE stream lifetime
+        # LIVE-path main loop (pt_04686ac6 slice 8): every tick's
+        # decision (drain / late-done / supersede / keepalive / sleep /
+        # timeout) lives in ``next_live_tick``. This driver is a thin
+        # dispatcher: pass current cursor / time / stream_start in,
+        # yield the frames the verdict names, advance the cursor.
+        from lib.chat_dispatch import next_live_tick
+        _MAX_SSE_DURATION = 7200  # 2 hours
         last_t = time.time()
         while True:
-            # ── Guard: absolute SSE stream duration limit ──
-            _elapsed = time.time() - _stream_start
-            if _elapsed > _MAX_SSE_DURATION:
-                _conv_id = task.get('convId', '?')
-                logger.warning('[Chat] SSE stream %s conv=%s closing after %.0fs (max %ds) — '
-                               'task still running (status=%s), %d events sent so far. '
-                               'Frontend will switch to polling to pick up the result.',
-                               task_id[:8], _conv_id, _elapsed, _MAX_SSE_DURATION,
-                               task.get('status', '?'), _events_sent)
-                # ★ DO NOT abort the backend task — it's still doing useful work.
-                # Send an informational event (NOT 'done') so the frontend shows a toast,
-                # then close the SSE stream. The frontend detects the stream closed
-                # without a 'done' event → _trySSE returns false → _pollFallback kicks in.
-                timeout_notice = build_event(
-                    EventType.SSE_TIMEOUT,
-                    message='SSE connection reached maximum duration. Switching to polling — task is still running.')
-                yield f'data: {json.dumps(timeout_notice, ensure_ascii=False)}\n\n'
+            _now = time.time()
+            _tick = next_live_tick(
+                task=task, cursor=cursor, sse_gen=_sse_gen,
+                stream_start=_stream_start, sse_max_duration=_MAX_SSE_DURATION,
+                last_t=last_t, now=_now, task_id_short=task_id[:8],
+            )
+            if _tick.kind == 'sse_timeout':
+                yield f'data: {json.dumps(_tick.timeout_evt, ensure_ascii=False)}\n\n'
                 return
-
-            with task['events_lock']:
-                new_evts = task['events'][cursor:]
-                _cursor_before = cursor
-                cursor = len(task['events'])
-            for idx, ev in enumerate(new_evts):
-                eid = _cursor_before + idx
-                yield f'id: {eid}\ndata: {json.dumps(ev, ensure_ascii=False)}\n\n'
-                _events_sent += 1
-                last_t = time.time()
-                if ev.get('type') == 'done':
-                    _done_fr = ev.get('finishReason', '?')
-                    _done_err = ev.get('error')
-                    _done_err_summary = (
-                        _done_err.get('kind') if isinstance(_done_err, dict)
-                        else (_done_err or 'none')
-                    )
-                    logger.info('[Chat] SSE stream %s finished normally — %d events sent in %.1fs '
-                               'finishReason=%s error=%s',
-                               task_id[:8], _events_sent, time.time() - _stream_start,
-                               _done_fr, _done_err_summary)
-                    return
-            if _task_terminal() and not new_evts:
-                late_done = build_event(EventType.DONE)
-                late_meta = _extract_task_meta(task)
-                late_done.update(late_meta)
-                if task['error']:
-                    late_done['error'] = task['error']
-                # ★ Severity split: an aborted/interrupted/normally-stopped
-                #   task that needs a LATE done synthesis is expected:
-                #   - aborted/interrupted: user hit Stop after orchestrator
-                #     already flushed its own done event.
-                #   - stop: task finished normally between the queue poll and
-                #     this status check (the common 157-line/day pattern).
-                #   Anything else (length, content_filter, error, etc.) still
-                #   signals a missed done-event — keep as warning.
-                _late_fr = late_meta.get('finishReason', '?')
-                _is_benign = _late_fr in ('aborted', 'interrupted', 'stop')
-                _log_fn = logger.info if _is_benign else logger.warning
-                _err_obj = task['error']
-                _err_summary = (
-                    _err_obj.get('detail') or _err_obj.get('message') or _err_obj.get('kind')
-                    if isinstance(_err_obj, dict) else (_err_obj or 'none')
-                )
-                _log_fn('[Chat] SSE stream %s emitting LATE done '
-                        '(task finished but no done event in queue) — '
-                        'finishReason=%s model=%s error=%s',
-                        task_id[:8], _late_fr,
-                        late_meta.get('model', '?'), _err_summary)
-                _apply_autopilot_baton(late_done)
-                yield f'id: {cursor}\ndata: {json.dumps(late_done, ensure_ascii=False)}\n\n'
+            if _tick.kind == 'events':
+                for eid, ev in _tick.frames:
+                    yield f'id: {eid}\ndata: {json.dumps(ev, ensure_ascii=False)}\n\n'
+                    _events_sent += 1
+                    last_t = time.time()
+                    if ev.get('type') == 'done':
+                        _done_fr = ev.get('finishReason', '?')
+                        _done_err = ev.get('error')
+                        _done_err_summary = (
+                            _done_err.get('kind') if isinstance(_done_err, dict)
+                            else (_done_err or 'none')
+                        )
+                        logger.info(
+                            '[Chat] SSE stream %s finished normally — %d events sent in %.1fs '
+                            'finishReason=%s error=%s',
+                            task_id[:8], _events_sent, time.time() - _stream_start,
+                            _done_fr, _done_err_summary)
+                        return
+                cursor = _tick.next_cursor
+                continue
+            if _tick.kind == 'late_done':
+                yield (f'id: {_tick.next_cursor}\n'
+                       f'data: {json.dumps(_tick.late_done_evt, ensure_ascii=False)}\n\n')
                 return
-            # ★ SSE reader dedup: if a newer SSE reader connected, exit this one
-            if task.get('_sse_gen_id', _sse_gen) != _sse_gen:
-                logger.info('[Chat] SSE stream %s superseded by newer reader (gen %d→%d) — '
-                           'closing stale reader after %d events in %.1fs',
-                           task_id[:8], _sse_gen, task.get('_sse_gen_id', -1),
-                           _events_sent, time.time() - _stream_start)
+            if _tick.kind == 'superseded':
                 return
-            if time.time() - last_t > 15:
+            if _tick.kind == 'keepalive':
                 yield ': keepalive\n\n'
                 last_t = time.time()
-                # Heartbeat: re-arm the per-principal SSE slot lease so a
-                # living long stream never expires; the lease TTL only
-                # reclaims a slot whose owner crashed (design §5.2).
                 _sse_limiter.refresh(_sse_token)
+                continue
+            # 'sleep' — nothing to do this tick.
             await asyncio.sleep(0.05)
 
     async def generate_with_disconnect_log():

@@ -1,5 +1,16 @@
 # Project Journal
 
+### 2026-07-23 — 「工具轮 interrupted 满屏 + 后续轮模型对整turn失忆」四层根修:FloorRetry 复用工具回调制造孤儿轮 + 重建器 all-or-nothing 门塌整turn(4 commit `f83de51`/`e8acae3`/`466a690`/`02019db`,相关套件 137/137 绿 + collect 7794 唯一既知 pty flake)。
+- **现象(owner 截图 `mrw0rubcbb5qv9`):** 一条正常完成(`finishReason=stop`)的会话里冒出 21 个 `interrupted` 工具轮徽章;更严重的是后续轮**模型完全看不到这一turn的 66 次工具调用**。
+- **推翻自己前两轮的错误诊断(诚实纠错):** ①「每个孤儿有 done 双胞胎」→ 错,19/21 无双胞胎;②「孤儿来自 stream.py 瞬时断线重连」→ 错,日志 `Transient error:1`、`reconciled orphan:0`。**真凶是 `manager/_stream.py` 的 `[FloorRetry]`**(缓存地板塌陷时重发相同 body 重掷网关缓存骰子,默认 ON):它**复用同一个 `on_tool_call_ready`**,每次被丢弃的重发都 announce 一个新 tc_id 的 `searching` 轮 → 进不了最终 `assistant_msg` → 孤儿 → task-end `_finalize_dangling_tool_rounds` 扫成 `aborted`+空结果。
+- **最严重项(模型上下文污染,活体实证):** 模型侧历史由 `_reconstruct_tool_call_messages`(`conv_message_builder/_toolcalls.py`)从 `toolRounds` 重建。旧逻辑首遍校验 `if status!='done' or toolContent is None: return None`——**一个孤儿废掉整turn** → 回退 lossy `toolSummary` 纯文本占位。实测 `mrw0rubcbb5qv9` message[1] 66 个真工具轮 → 塌成 1871 字纯文本;后续轮模型对这 66 次调用失忆 + prompt-cache 前缀破碎。
+- **四层根修(owner 拍板:过滤按「字段完整性」非 status;接受首个 chip 延迟几百 ms;四层全做):**
+  - **Layer 2(最高优先,读时进行=追溯修好所有历史脏对话,无需 DB 迁移)`f83de51`:** `_reconstruct_tool_call_messages` 入口过滤 `_is_reconstructable_round`(toolCallId+toolName+非 None toolContent),丢不可重建行、用幸存者重建;带真实结果的中断轮(toolContent 非空)保留。**验收线复现:message[1] None→115 条消息含 66 tool_call,message[3]→24。**
+  - **Layer 1 `e8acae3`:** FloorRetry 重发传 `on_tool_call_ready=None`(与 on_thinking/on_content 同构),丢弃的重发不再 announce 孤儿。
+  - **Layer 3 `466a690`(pin,非改码):** 用 git 时间线钉死——reconcile 已在正确层级(`_run.py:1294` 拿 FloorRetry 采纳后的 msg),脏对话(19:49)早于 reconcile 提交 `21adb4c`(23:32),不是层级漏洞;加集成 pin 锁死层级。
+  - **Layer 4(前端)`02019db`:** `tool_rounds.js::renderToolRoundsHTML` 过滤 `_isSupersededOrphanRound`(badge='superseded'+无真实结果),孤儿不再渲染误导性 chip;真·用户 Stop(badge='interrupted')保留。
+- **纪律:** 每层失败优先测试 + NEUTER 均验证 load-bearing;显式 pathspec 提交,`git show --stat` 四笔各仅动预期文件、零越界;137 相关测试绿 + 全仓 collect 7794(唯一 error 仍是既知 `test_run_command_pty_streaming` 的 `pty_supported` import flake)。
+
 ### 2026-07-23 — 「查看对话」digest 收官:raw 模式不挂卡片 = 截图那坨 78KB 原始 JSON,根修 + 放宽 B(commit `bad71d3`,4 文件 +95/-12,三套件 31/31 绿 / collect 7786,唯一 error 仍是既知 pty flake)。
 - **现象(owner 截图):** 卡片没渲染,反而是「Raw Conversation Record」标题 + `json · 65 lines` + 「Output too large → persisted to file → Preview」。
 - **根因链(读代码钉死,非猜):** 截图头「Raw Conversation Record」全项目只有 `_render_raw_conversation`(`_detail.py`)产出 → 这次模型调的是 `get_conversation(raw=true)`。而 `_brain.py::_post_build` 有短路 `if fn_name != 'get_conversation' or _fn_args.get('raw'): return` → raw 模式**不挂 convDigest** → 前端 `_structuredConvMetaBody` 无卡片可选,回退渲 `round.toolContent`(原始 78KB JSON)→ 撞 L0 `_persist_to_disk` 的「Output too large → 落盘 + 2000 字 preview」。所以看着「不好看且不全」——其实 raw 是**最全**的,只是被 L0 截断成 preview。

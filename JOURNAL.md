@@ -1,6 +1,26 @@
 # Project Journal
 
 
+### 2026-07-23(续12) — 「自动更新的前端日志不够完整、要能完整显示 + 一键复制」根修:依赖安装失败日志的**双重截断**去掉 + 加复制按钮(commit,5 文件 +276/-12,新测 13/13 绿含 NEUTER + 全 update 套件 16/16 / collect 7844)。
+- **owner 诉求(截图 `No module named pip`):** 更新卡片里 pip 失败日志显示不全、也无法复制粘贴给我。要求前端**完整显示** + 加**复制日志**按钮。
+- **真因(读代码钉死双截断链):** ①后端 `_install_requirements`(`lib/self_update/_requirements.py`)pip 失败时 `tail=(err or out)[-500:]` → deps_detail 只剩 500 字尾巴;②前端 `_renderDepsFailed`(`update.js`)再 `.slice(-600)` 二次砍 → 只剩一截尾巴,`FIRST_LINE`(如 venv python 路径)被丢;③根本没有复制按钮。路由 `routes/api_v1/update.py` 用 `{'type':'done', **result}` 原样透传,不是瓶颈。
+- **修 #1 后端(+10/-3):** 新增 `_DEPS_LOG_MAX=20000`,失败日志 `full[-_DEPS_LOG_MAX:]` 给 UI(仍有界,护 push 通道/DB),短尾 `[-500:]` 仍进 server 日志行。
+- **修 #2 前端(+65/-7):** 抽出 `_updateLogBlockHtml(logText)` —— **完整**日志逐字渲染进可滚动 `.upd-log` 块,原始字节 base64 塞进 `data-log`;新 `_copyUpdateLog(btn)` 从 base64 stash 取**精确原始字节**(非 escape 后的 DOM 文本),复用 `_safeClipboardWrite`(HTTP 非安全上下文兜底)。`_renderDepsFailed` 去掉 `.slice`;`_showUpdateError(msg, detail)` 意外失败也带完整日志块。i18n 加 `logLabel`/`copyLog`/`logCopied`;styles.css 加 `.upd-log` 头+复制按钮(含 tofu 主题变体)。
+- **测试 + NEUTER(`test_frontend_update_deps_log.py`,13 检查):** 真 shipped `update.js` under node,喂 >5KB 多行日志,断言首行+尾行 marker 都在(无截断)、复制**精确字节**、`_showUpdateError` 带 detail 渲日志块/无 detail 不渲。NEUTER 把 `.slice(-600)` 塞回 → 首行 marker 消失(证明「不截断」承重)。
+- **踩坑(记忆点):** Node 21+ 自带**只读** `navigator` 全局,harness 里 `global.navigator={...}` 被静默忽略、writeText 永不触发 → 必须 `Object.defineProperty(global,'navigator',{...,configurable:true,writable:true})`。
+- **git 纪律(共享 HEAD、~130 sibling WIP 脏文件):** `reset -q HEAD .` → 仅 add 5 文件 → `--cached --numstat` 核对 → `commit -F- -- <5 路径>` → `git show HEAD --stat` = 仅 5 文件 +276/-12,NO LEAK。**部署说明:** 前端改动需服务器重启重建 bundle + 硬刷新浏览器才生效(bundler 无热更新)。
+
+
+### 2026-07-23(续12) — 「为什么 Ctrl+C 停不了服务器了」三件套 UX 根修:优雅关闭不再是「静默慢排水+无逃生口」——补终端可见提示 + 二次 Ctrl+C 立即强退 + 默认排水窗口 10s/8s→3s/3s(2 文件 server.py/bootstrap.py,ast 双通过)。
+- **owner 诉求:** 优雅关闭如果只是慢慢排水就没意义;必须①告诉用户正在发生什么、②缩短等待。
+- **真因(非坏,是最近改动的有意为之):** `_signal_shutdown`(server.py:2429)收到 SIGINT/SIGTERM/SIGHUP **只置 `_shutdown_requested` 标志、不抛不退**,交给 `_shutdown_trigger` 轮询 → Hypercorn `graceful_timeout=10`(排 HTTP)+ 关后 agent 任务 quiesce 排水 `TOFU_SHUTDOWN_DRAIN_SECS=8`。用户视角=按下 Ctrl+C 后**静默冻结约 10~18s**,且连按无升级(同一处理器只重复 `set()`)——比旧的瞬杀体验更差。改法动机注释本身写得对(避免 `sys.exit` 抛 `SystemExit` 打断 Hypercorn 排水),但漏了两件事:**可见性 + 逃生口**。
+- **修 #1 可见性(server.py):** 首个信号时向 **stderr(终端)** 打黄色 `Shutting down gracefully — draining… Press Ctrl+C again to force-quit`;原 `_server_log.info` 只进 `logs/app.log`、终端看不到,这正是「静默冻结」观感的根。任务排水阶段也补一行 `Waiting up to Ns for M running task(s)… (Ctrl+C to skip)`。
+- **修 #2 逃生口(server.py):** `_signal_shutdown` 开头加 `if _shutdown_requested.is_set(): os._exit(130)`——**第二次 Ctrl+C 立即强退**。`os._exit` 跳过 atexit 的 PG-stop,但 `mark_clean('signal')` 在第一次信号已写,下次启动仍判为 clean exit(非 OS kill)。
+- **修 #3 缩短等待(server.py):** `graceful_timeout` 10→**3**s(新 env `TOFU_GRACEFUL_TIMEOUT`),`TOFU_SHUTDOWN_DRAIN_SECS` 默认 8→**3**s。最坏静默窗口 ~18s→~6s,且随时二次 Ctrl+C 归零。
+- **配套修(bootstrap.py):** `_try_start_server` 原本 `if rc == 0` 才当正常退出、否则喂 LLM 依赖修复 loop。二次 Ctrl+C 强退返回 **130**(SIGTERM=143)会被误判为 crash → 改成 `if rc in (0, 130, 143): sys.exit(0)`,信号退出不再触发修复 loop。
+- **诚实边界:** 未加自动化测试(信号/进程退出行为难在单测里可靠复现,且改动是启动脚本级的 stderr 文案 + 常量);已用 `ast.parse` 双文件语法校验。生效需**重启服务器**(启动脚本改动,无热更新)——这是人类动作,请 owner 重启后按一下 Ctrl+C 验证黄色提示 + 二次 Ctrl+C 秒退。
+
+
 ### 2026-07-23(续11) — 「历史工具调用旁白没触发翻译」根因三件套落地根修:segment-less 行的旁白从 toolRounds 合成翻译 + already-target 不再丢已翻缓存 + 可追溯 WARNING(2 文件源 +2 测试,新测 5/5 + 增量 26/26 + safety-net 4/4 绿含 failing-first + 源码级 NEUTER 真红 / collect 50)。
 - **owner 诉求:** conv `mrx815iwc3zrtr` msg[1] 的历史逐轮旁白("I'll implement all three steps...")永远英文不翻;上一轮只诊断没落地。要求三件一起交付,不打补丁,失败优先 + NEUTER + 实证日志,写进 JOURNAL。
 - **总闸(活体 PG + 日志钉死,非猜):** msg[1] 持久化只有 `toolRounds`(21 轮、每轮 `assistantContent` 英文旁白)**无 `segments` 数组**;`task_results.segments` 有 153KB 权威 thin 但 `_rehydrate_segments_from_task_results`(routes/conversations.py:428)**只读展示、从不写回**,故 messages 列永远 segment-less。所有旁白翻译路径(`has_untranslated_narration`/`needs_segment_narration_translation`/`_build_segment_translation_map`→`_read_message_segments`)全部只认 `msg.segments`,segment-less 行**对翻译系统隐身**。加之最终答案已是中文 → `_maybe_auto_translate_assistant` 走「already in target language」提前 return → `cancel_incremental` 把增量 worker 已翻的 11 段**直接丢弃**;而中文其实早在 `_translatePartialByRound` 字段里躺着没人用。

@@ -6,13 +6,21 @@ The plan: routes/chat.py (~2500 lines) is being decomposed into a
 ``routes/chat/`` sub-package (``_helpers.py`` first slice, then eventually
 ``send.py`` / ``stream.py`` / ``poll_abort.py``), with ``routes/chat.py``
 kept as a **re-export facade** so import contracts and Blueprint
-registrations stay byte-identical. The first slice (this commit) extracts
-the 5 pure utilities with NO module-level mutable state:
+registrations stay byte-identical. Landed so far:
 
-  _dumps_yielding, _running_checkpoint_verdict, _log_poll_task_id_mismatch,
-  _loads_yielding, _warm_resume_serviceable
+  * Slice 1 → ``routes/chat_helpers.py``: 5 pure utilities with NO
+    module-level mutable state (``_dumps_yielding`` /
+    ``_running_checkpoint_verdict`` / ``_log_poll_task_id_mismatch`` /
+    ``_loads_yielding`` / ``_warm_resume_serviceable``).
+  * Slice 2 → ``routes/chat_state.py``: the send-abort marker BUNDLE
+    (``_send_abort_marker`` dict + ``_send_abort_marker_lock`` +
+    ``_mark_conv_aborted`` / ``_was_aborted_after`` — the four items
+    that share ONE piece of module-level state; they must live in the
+    same module and be re-exported through routes.chat as a set so
+    nobody imports half of the pair).
 
-into ``routes/chat/_helpers.py`` and re-exports them from ``routes/chat.py``.
+Both slices keep ``routes/chat.py`` importable via re-export blocks so
+every ``from routes.chat import _X`` call site keeps working unchanged.
 
 This test is the CONTRACT the split must preserve. It runs BEFORE and AFTER
 the extraction; the numbers must match. It intentionally does NOT hardcode
@@ -146,6 +154,79 @@ def test_pure_helper_wire_parity_smoke():
     assert _warm_resume_serviceable(3, 10) is True   # resume_from=4 <= 10
     assert _warm_resume_serviceable(9, 10) is True   # resume_from=10 <= 10 (boundary)
     assert _warm_resume_serviceable(10, 10) is False  # resume_from=11 > 10 → resync
+
+
+@_unit
+def test_abort_marker_bundle_semantics():
+    """pt_04686ac6 slice 2: the abort-marker BUNDLE must reproduce the
+    exact original send-abort race semantics after being moved out of
+    chat.py's module namespace.
+
+    The bundle is _send_abort_marker (dict) + _send_abort_marker_lock
+    + _mark_conv_aborted() + _was_aborted_after(). All four names MUST
+    resolve via routes.chat (re-export) AND via routes.chat_state (the
+    real home). AND they must operate on the SAME shared state — a
+    write via routes.chat_state._mark_conv_aborted MUST be visible to a
+    routes.chat._was_aborted_after read (and vice versa). A duplicated-
+    state bug (a naive "copy the dict into two modules" split) would
+    trip this.
+
+    Semantics guarded (byte-identical to the original chat.py code):
+      1. no prior mark          → _was_aborted_after(...) is False
+      2. mark then check with ts EARLIER than the mark → True
+      3. mark then check with ts AFTER the mark        → False (the
+         send that started AFTER the abort is not "aborted by it")
+      4. empty conv_id / None since_ts                 → False (guard)
+    """
+    import time as _t
+    import routes.chat as _rc
+    import routes.chat_state as _rs
+
+    # Every name must exist on BOTH modules — proves the re-export is real
+    # and points at the same object.
+    for name in ('_send_abort_marker', '_send_abort_marker_lock',
+                 '_mark_conv_aborted', '_was_aborted_after'):
+        assert hasattr(_rc, name), f'routes.chat missing re-export: {name}'
+        assert hasattr(_rs, name), f'routes.chat_state missing: {name}'
+        assert getattr(_rc, name) is getattr(_rs, name), (
+            f'{name}: re-export must point at the SAME object (a copy '
+            f'would split state — a mark via one namespace would be '
+            f'invisible to a check via the other)')
+
+    conv_id = 'test-abort-marker-cv'
+    # Clean up any stale entry from a prior run to make the test
+    # order-independent (a bare dict in module scope survives across
+    # tests in the same process).
+    with _rs._send_abort_marker_lock:
+        _rs._send_abort_marker.pop(conv_id, None)
+
+    # 1) No prior mark → False regardless of since_ts.
+    assert _rc._was_aborted_after(conv_id, _t.time()) is False
+    assert _rc._was_aborted_after(conv_id, 0) is False
+
+    # 4) Empty conv_id / None since_ts → False (guard clauses).
+    assert _rc._was_aborted_after('', _t.time()) is False
+    assert _rc._was_aborted_after(conv_id, None) is False
+
+    # 2) Mark, then check with an EARLIER since_ts → True (an abort
+    #    that landed AFTER our send started is the race we detect).
+    _earlier = _t.time() - 10
+    _rs._mark_conv_aborted(conv_id)  # write via chat_state
+    assert _rc._was_aborted_after(conv_id, _earlier) is True  # read via chat re-export
+
+    # 3) Mark, then check with a LATER since_ts → False (a send that
+    #    started AFTER the abort is not "aborted by it").
+    _later = _t.time() + 10
+    assert _rc._was_aborted_after(conv_id, _later) is False
+
+    # Reverse-direction cross-module wire check: mark via chat re-export,
+    # read via chat_state — same shared state, same verdict.
+    _rc._mark_conv_aborted(conv_id)
+    assert _rs._was_aborted_after(conv_id, _earlier) is True
+
+    # Cleanup.
+    with _rs._send_abort_marker_lock:
+        _rs._send_abort_marker.pop(conv_id, None)
 
 
 # ── Layer 2: Blueprint route wire-parity ──────────────────────────────

@@ -220,25 +220,19 @@ def chat_start():
 #  request started' and bail out before persisting / enqueueing /
 #  dispatching anything.
 # ══════════════════════════════════════════════════════════
-_send_abort_marker = {}               # conv_id -> abort_wall_clock_seconds
-_send_abort_marker_lock = threading.Lock()
-
-
-def _mark_conv_aborted(conv_id):
-    """Record that this conv was aborted at wall clock ``time.time()``."""
-    if not conv_id:
-        return
-    with _send_abort_marker_lock:
-        _send_abort_marker[conv_id] = time.time()
-
-
-def _was_aborted_after(conv_id, since_ts):
-    """Return True if /api/chat/abort-conv ran for this conv after ``since_ts``."""
-    if not conv_id or since_ts is None:
-        return False
-    with _send_abort_marker_lock:
-        ts = _send_abort_marker.get(conv_id)
-    return ts is not None and ts >= since_ts
+# ─── Send-abort marker bundle extracted to routes/chat_state.py (pt_04686ac6 slice 2) ───
+# _send_abort_marker (dict) + _send_abort_marker_lock (threading.Lock) +
+# _mark_conv_aborted() + _was_aborted_after() moved as an ATOMIC BUNDLE — the state
+# and the two functions that manipulate it MUST live in the same module so nobody can
+# import half of the pair. Re-exported here so every "from routes.chat import
+# _mark_conv_aborted / _was_aborted_after" call site keeps working unchanged.
+# See tests/test_routes_chat_wire_parity.py for the guard.
+from routes.chat_state import (  # noqa: E402,F401  (re-export)
+    _mark_conv_aborted,
+    _send_abort_marker,
+    _send_abort_marker_lock,
+    _was_aborted_after,
+)
 
 
 @api_v1_chat_bp.route('/api/v1/chat/translate-status/<conv_id>', methods=['GET'], endpoint='ui_chat_send_translate_status')

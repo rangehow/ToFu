@@ -62,7 +62,7 @@ def translate_openai_request(body: dict) -> tuple[list[dict], dict, dict]:
     eff = body.get('reasoning_effort') or body.get('reasoning', {}).get('effort')
     if eff:
         depth_map = {'low': 'medium', 'medium': 'high',
-                      'high': 'max', 'minimal': 'medium'}
+                      'high': 'max', 'minimal': 'medium', 'ultra': 'ultra'}
         cfg['thinkingDepth'] = depth_map.get(eff, eff)
         cfg['thinkingEnabled'] = True
 

@@ -18,6 +18,10 @@ logger = get_logger(__name__)
 #  These are overridden by benchmark data at runtime.
 # ══════════════════════════════════════════════════════════════
 DEFAULT_SLOT_CONFIGS = {
+    # ── Anthropic Fable 5 (creative-flagship line, May 2026) ──
+    'fable-5':                       {'caps': {'text', 'vision', 'thinking'},      'rpm': 30,  'latency': 5000, 'cost': 0.015},
+    'aws.fable-5':                   {'caps': {'text', 'vision', 'thinking'},      'rpm': 30,  'latency': 5000, 'cost': 0.015},
+    'us.anthropic.fable-5-v1:0':     {'caps': {'text', 'vision', 'thinking'},      'rpm': 30,  'latency': 5000, 'cost': 0.015},
     # ── Claude (Anthropic — current gen: 4.8 flagship, May 2026) ──
     'claude-opus-4-8':               {'caps': {'text', 'vision', 'thinking'},      'rpm': 30,  'latency': 5000, 'cost': 0.015},
     # ── Claude (Anthropic — 4.7 family, Apr 2026) ──
@@ -57,6 +61,11 @@ DEFAULT_SLOT_CONFIGS = {
     'aws.claude-sonnet-4.6':         {'caps': {'text', 'vision', 'thinking'},      'rpm': 50,  'latency': 2000, 'cost': 0.015},
     'vertex.claude-sonnet-4.6':      {'caps': {'text', 'vision', 'thinking'},      'rpm': 50,  'latency': 2000, 'cost': 0.015},
 
+    # ── OpenAI (GPT-5.6 family — May 2026; adds the 'ultra' reasoning tier) ──
+    'gpt-5.6':                       {'caps': {'text', 'vision', 'thinking'},      'rpm': 30,  'latency': 3000, 'cost': 0.015},
+    'gpt-5.6-pro':                   {'caps': {'text', 'vision', 'thinking'},      'rpm': 10,  'latency': 10000,'cost': 0.180},
+    'gpt-5.6-mini':                  {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 60,  'latency': 2000, 'cost': 0.005},
+    'gpt-5.6-nano':                  {'caps': {'text', 'vision', 'cheap'},         'rpm': 200, 'latency': 1000, 'cost': 0.001},
     # ── OpenAI (GPT-5.4 family — March 2026) ──
     'gpt-5.4':                       {'caps': {'text', 'vision', 'thinking'},      'rpm': 30,  'latency': 3000, 'cost': 0.015},
     'gpt-5.4-pro':                   {'caps': {'text', 'vision', 'thinking'},      'rpm': 10,  'latency': 10000,'cost': 0.180},
@@ -176,6 +185,7 @@ DEFAULT_SLOT_CONFIGS = {
 
     # ── GLM Turbo / Kimi older / MiniMax older — TokenHub catalog ──
     'glm-5-turbo':                   {'caps': {'text', 'cheap'},                   'rpm': 60,  'latency': 2000, 'cost': 0.002},
+    'kimi-k3':                       {'caps': {'text', 'thinking', 'cheap'},       'rpm': 60,  'latency': 3000, 'cost': 0.0083},
     'kimi-k2.6':                     {'caps': {'text', 'cheap'},                   'rpm': 30,  'latency': 3000, 'cost': 0.003},
     'kimi-k2.5':                     {'caps': {'text', 'cheap'},                   'rpm': 30,  'latency': 3000, 'cost': 0.002},
     'minimax-m2.5':                  {'caps': {'text', 'cheap'},                   'rpm': 60,  'latency': 2000, 'cost': 0.001},

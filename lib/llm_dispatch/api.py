@@ -568,7 +568,10 @@ def _readjust_thinking_params(body: dict, new_model: str, thinking_format: str):
     the wrong format, causing HTTP 400 errors. This function detects mismatches
     and converts to the correct format for the new model.
     """
-    from lib.llm import is_claude, is_doubao, is_gemini, is_glm, is_longcat, is_minimax, is_qwen
+    from lib.llm import (
+        is_claude, is_doubao, is_gemini, is_glm, is_gpt5, is_longcat,
+        is_minimax, is_qwen,
+    )
 
     # Detect current thinking state from the body
     thinking_dict = body.get('thinking')
@@ -642,6 +645,9 @@ def _readjust_thinking_params(body: dict, new_model: str, thinking_format: str):
             kw = {}
         kw['enable_thinking'] = bool(is_enabled)
         body['chat_template_kwargs'] = kw
+    elif not _tf and is_gpt5(new_model):
+        from lib.llm import gpt_reasoning_effort
+        body['reasoning_effort'] = gpt_reasoning_effort(effort, is_enabled, new_model)
     elif _tf == 'reasoning_effort' or (not _tf and is_gemini(new_model)):
         from lib.llm import gemini_reasoning_effort
         body['reasoning_effort'] = gemini_reasoning_effort(effort, is_enabled)
@@ -675,6 +681,9 @@ def _readjust_thinking_params(body: dict, new_model: str, thinking_format: str):
                 # xhigh is Opus 4.7-only; downgrade on older Claude to avoid HTTP 400.
                 if effort == 'xhigh' and not is_claude_opus_47(new_model):
                     effort = 'high'
+                elif effort == 'ultra':
+                    # 'ultra' is a GPT-5.6 tier; map to Claude's top rung.
+                    effort = 'max'
                 body['effort'] = effort
     # else: standard OpenAI-compatible — no thinking params needed
 

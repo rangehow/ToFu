@@ -18,9 +18,14 @@ logger = get_logger(__name__)
 # ══════════════════════════════════════════════════════════
 
 def is_claude(model: str) -> bool:
-    """Anthropic Claude models (including AWS/GCP-prefixed variants)."""
+    """Anthropic models (Claude + Fable, including AWS/GCP-prefixed variants).
+
+    ``fable`` is Anthropic's Fable line (Fable 5, May 2026) — it speaks the
+    same Messages API shape as Claude (thinking.type='adaptive', cache
+    1.25/0.10 multipliers, no assistant prefill), so every Claude-family
+    code path treats it identically."""
     m = model.lower()
-    return 'claude' in m or 'anthropic' in m
+    return 'claude' in m or 'anthropic' in m or 'fable' in m
 
 
 def is_claude_opus_47(model: str) -> bool:
@@ -98,6 +103,34 @@ def is_ernie(model: str) -> bool:
 def is_gpt(model: str) -> bool:
     """OpenAI GPT models (gpt-4, gpt-4.1, gpt-4o, etc.)."""
     return 'gpt' in model.lower()
+
+
+def is_gpt5(model: str) -> bool:
+    """OpenAI GPT-5 family reasoning models (gpt-5, gpt-5.2, gpt-5.4, gpt-5.6,
+    including -mini / -nano / -pro / -codex variants).
+
+    These take the OpenAI-native ``reasoning_effort`` knob. Deliberately
+    excludes ``gpt-oss`` (no 'gpt-5' substring) and the o-series / gpt-4o
+    (which route through the plain-OpenAI branch unchanged).
+    """
+    return 'gpt-5' in model.lower()
+
+
+def is_gpt_56(model: str) -> bool:
+    """GPT-5.6+ — the first GPT generation to expose the ``ultra`` reasoning
+    effort tier. Older GPT-5.x models clamp ``ultra`` down to ``high``.
+
+    Extracts the minor version from ``gpt-5``/``gpt-5.6``/``gpt-5.6-mini`` and
+    returns True iff minor >= 6 (``gpt-5`` alone == minor 0).
+    """
+    m = model.lower()
+    if 'gpt-5' not in m:
+        return False
+    match = re.search(r'gpt-5(?:[.\-](\d+))?', m)
+    if not match:
+        return False
+    minor = int(match.group(1)) if match.group(1) else 0
+    return minor >= 6
 
 
 def is_deepseek(model: str) -> bool:

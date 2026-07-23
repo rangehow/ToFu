@@ -197,6 +197,58 @@ class TestBuildBody:
                           thinking_enabled=True, stream=False)
         assert body.get('reasoning_effort') == 'medium'
 
+    def test_gpt5_reasoning_effort_ladder(self):
+        """GPT-5 family is a reasoning model driven by the OpenAI-native
+        ``reasoning_effort`` string. build_body maps Tofu's depth ladder onto
+        minimal/low/medium/high, and the ``ultra`` tier only survives on
+        GPT-5.6+ (older GPT-5.x clamp it to high). No thinking/enable_thinking
+        block is ever emitted for GPT."""
+        from lib.llm import build_body
+
+        # GPT-5.6 accepts the full ladder incl. ultra.
+        cases_56 = {'off': 'minimal', 'low': 'low', 'medium': 'medium',
+                    'high': 'high', 'xhigh': 'high', 'max': 'high',
+                    'ultra': 'ultra'}
+        for depth, expected in cases_56.items():
+            body = build_body('gpt-5.6', self.DUMMY_MSGS, max_tokens=4096,
+                              thinking_enabled=(depth != 'off'),
+                              thinking_depth=depth, stream=False)
+            assert body.get('reasoning_effort') == expected, (depth, body)
+            assert 'thinking' not in body
+            assert 'enable_thinking' not in body
+
+    def test_gpt5_ultra_downgrades_on_pre_56(self):
+        """``ultra`` is a GPT-5.6-only tier; on GPT-5.4 it clamps to high."""
+        from lib.llm import build_body
+        body = build_body('gpt-5.4', self.DUMMY_MSGS, max_tokens=4096,
+                          thinking_enabled=True, thinking_depth='ultra',
+                          stream=False)
+        assert body.get('reasoning_effort') == 'high'
+
+    def test_gpt5_default_effort_medium(self):
+        from lib.llm import build_body
+        body = build_body('gpt-5.6-mini', self.DUMMY_MSGS, max_tokens=4096,
+                          thinking_enabled=True, stream=False)
+        assert body.get('reasoning_effort') == 'medium'
+
+    def test_claude_ultra_maps_to_max(self):
+        """``ultra`` has no Claude tier; build_body maps it to Claude's top
+        rung (max) rather than dropping the effort."""
+        from lib.llm import build_body
+        body = build_body('claude-opus-4-8', self.DUMMY_MSGS, max_tokens=4096,
+                          thinking_enabled=True, thinking_depth='ultra',
+                          stream=False)
+        assert body.get('effort') == 'max'
+
+    def test_fable_detected_as_claude_family(self):
+        """Anthropic Fable models take the Claude thinking shape."""
+        from lib.llm import build_body, is_claude
+        assert is_claude('fable-5')
+        body = build_body('fable-5', self.DUMMY_MSGS, max_tokens=4096,
+                          thinking_enabled=True, stream=False)
+        assert body.get('thinking', {}).get('type') == 'adaptive'
+        assert 'enable_thinking' not in body
+
     def test_tools_passed_through(self):
         from lib.llm import build_body
 
@@ -415,6 +467,28 @@ class TestThinkingFormatDetection:
             out = _disc.discover_models('http://10.0.0.1:8080/v1', 'x')
         assert out, 'expected at least one model'
         assert out[0]['owned_by'] == 'sglang'
+
+    def test_fable_discovery_capabilities_and_thinking_format(self):
+        """Auto-discovery must treat Anthropic Fable as a Claude-family model
+        everywhere: _infer_capabilities gives it vision+thinking (not plain
+        text), and _detect_thinking_format gives it the Claude thinking_type
+        shape even when the brand isn't exactly 'claude' (proxy / Bedrock).
+
+        Regression guard for the discovery gap that would otherwise register a
+        freshly-probed Fable as a text-only, non-thinking, no-vision model."""
+        from lib.llm_dispatch.discovery import (
+            _detect_thinking_format, _infer_capabilities,
+        )
+        assert _infer_capabilities('fable-5') == {'text', 'vision', 'thinking'}
+        # Parity with a known-good Claude flagship.
+        assert _infer_capabilities('claude-opus-4-8') >= {'text', 'vision'}
+        # A gateway/Bedrock-hosted Fable whose brand isn't 'claude' still gets
+        # the Claude thinking shape via the name-hint vote.
+        assert _detect_thinking_format(
+            [{'model_id': 'fable-5'}], 'generic') == 'thinking_type'
+        assert _detect_thinking_format(
+            [{'model_id': 'us.anthropic.fable-5-v1:0'}],
+            'bedrock') == 'thinking_type'
 
 
 # ═══════════════════════════════════════════════════════════

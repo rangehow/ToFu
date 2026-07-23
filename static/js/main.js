@@ -29,9 +29,9 @@ function _purgeEmptyConvs() {
 }
 // ── Per-conversation tool state helpers ──
 /* ── Brand detection for model_id — reuse _detectBrand from settings.js ── */
-const _DEPTH_ICONS  = { off: '', medium: '', high: '', xhigh: '', max: '' };
+const _DEPTH_ICONS  = { off: '', medium: '', high: '', xhigh: '', max: '', ultra: '' };
 const _DEPTH_ICON_FALLBACK = '';
-const _DEPTH_LABELS = { off: 'Off', medium: 'Med', high: 'High', xhigh: 'xHigh', max: 'Max' };
+const _DEPTH_LABELS = { off: 'Off', medium: 'Med', high: 'High', xhigh: 'xHigh', max: 'Max', ultra: 'Ultra' };
 /* Models whose model_id indicates thinking/depth support.
  * Uses server-provided thinking_default from _registeredModels;
  * falls back to regex before server config loads. */
@@ -900,10 +900,7 @@ function _installViewportHeightGuard() {
         e.preventDefault();
         hasImage = true;
         const f = item.getAsFile();
-        const d = await processImageFile(f);
-        pendingImages.push(d);
-        renderImagePreviews();
-        if (typeof _igUpdateGenButton === 'function') _igUpdateGenButton();
+        await _handleImageDrop(f);
       }
     }
     // Detect log noise in pasted text — server-side via /api/v1/logs/clean

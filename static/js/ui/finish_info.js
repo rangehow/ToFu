@@ -726,8 +726,8 @@ function renderFinishInfo(msg, isLiveTail) {
   const thk = u.reasoning_tokens || u.thinking_tokens || 0;
 
   // ★ Model tag — auto-detect brand from model_id
-  const depthIcons = { medium: '', high: '', max: '' };
-  const depthLabels = { medium: "Med", high: "Hi", max: "Max" };
+  const depthIcons = { medium: '', high: '', max: '', ultra: '' };
+  const depthLabels = { medium: "Med", high: "Hi", max: "Max", ultra: "Ultra" };
   // ★ Resolve the ACTUAL slot that served this turn — real model / key /
   //   provider, recorded by the dispatcher in usage._dispatch. The preset
   //   ("opus") and msg.model can be an alias that routes to a different

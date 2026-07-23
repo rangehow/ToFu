@@ -149,9 +149,10 @@ _BUILTIN_PROVIDER_TEMPLATES = [
      'name': 'OpenAI',
      'base_url': 'https://api.openai.com/v1',
      'models': [
+         {'model_id': 'gpt-5.6',      'capabilities': ['text', 'vision', 'thinking']},
+         {'model_id': 'gpt-5.6-mini', 'capabilities': ['text', 'vision', 'thinking', 'cheap']},
+         {'model_id': 'gpt-5.6-nano', 'capabilities': ['text', 'vision', 'cheap']},
          {'model_id': 'gpt-5.4',      'capabilities': ['text', 'vision', 'thinking']},
-         {'model_id': 'gpt-5.4-mini', 'capabilities': ['text', 'vision', 'thinking', 'cheap']},
-         {'model_id': 'gpt-5.4-nano', 'capabilities': ['text', 'vision', 'cheap']},
          {'model_id': 'o3',           'capabilities': ['text', 'vision', 'thinking']},
          {'model_id': 'o4-mini',      'capabilities': ['text', 'vision', 'thinking', 'cheap']},
          {'model_id': 'gpt-4.1',      'capabilities': ['text', 'vision']},
@@ -161,6 +162,8 @@ _BUILTIN_PROVIDER_TEMPLATES = [
      'name': 'Anthropic',
      'base_url': 'https://api.anthropic.com/v1',
      'models': [
+         {'model_id': 'fable-5',           'capabilities': ['text', 'vision', 'thinking']},
+         {'model_id': 'claude-opus-4-8',   'capabilities': ['text', 'vision', 'thinking']},
          {'model_id': 'claude-opus-4-7',   'capabilities': ['text', 'vision', 'thinking']},
          {'model_id': 'claude-sonnet-4-6', 'capabilities': ['text', 'vision', 'thinking']},
          {'model_id': 'claude-haiku-4-5',  'capabilities': ['text', 'vision', 'cheap']},
@@ -185,6 +188,7 @@ _BUILTIN_PROVIDER_TEMPLATES = [
      'name': 'Moonshot (Kimi)',
      'base_url': 'https://api.moonshot.ai/v1',
      'models': [
+         {'model_id': 'kimi-k3',          'capabilities': ['text', 'thinking', 'cheap']},
          {'model_id': 'kimi-k2.6',        'capabilities': ['text', 'vision', 'thinking', 'cheap']},
          {'model_id': 'kimi-k2-thinking', 'capabilities': ['text', 'thinking', 'cheap']},
      ]},
@@ -1658,8 +1662,10 @@ def _try_start_server(first_attempt: bool = False) -> tuple[bool, str, int]:
     stderr_text = ''.join(stderr_lines)
 
     # Exit code 0 means graceful shutdown (user hit Ctrl+C, SIGTERM, etc.)
-    # — that's not a crash, it's intentional.
-    if rc == 0:
+    # — that's not a crash, it's intentional. 130 (SIGINT / a second-Ctrl+C
+    # force-quit) and 143 (SIGTERM) are likewise deliberate stops, not crashes:
+    # do NOT feed them into the LLM dependency-repair loop.
+    if rc in (0, 130, 143):
         sys.exit(0)
 
     # Non-zero exit → crash.

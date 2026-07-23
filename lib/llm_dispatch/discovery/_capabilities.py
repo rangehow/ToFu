@@ -27,6 +27,7 @@ _IMAGE_GEN_PAT = re.compile(r'(dall-?e|[-_]image|image[-_])', re.I)
 #   • Kimi K2-thinking variants
 #   • Qwen3-* (dual-mode by default — name doesn't reveal it)
 #   • DeepSeek V4 (dual-mode)
+#   • Anthropic Fable ("fable-5" — Claude-family reasoning model, no hint)
 # Self-hosted vLLM/SGLang deployments expose those models with their
 # raw IDs (e.g. "glm5.1-fp8") and won't pick up thinking auto-tagging
 # unless the regex covers them explicitly.
@@ -34,7 +35,8 @@ _THINKING_PAT = re.compile(
     r'(think|reason|\bo[1234]-|\bo[1234]\b|ernie-x'
     r'|glm[-_]?(?:4\.[5-9]|[5-9])'
     r'|qwen-?3'
-    r'|deepseek-?v[4-9])',
+    r'|deepseek-?v[4-9]'
+    r'|fable)',
     re.I,
 )
 
@@ -43,6 +45,7 @@ _VISION_PAT = re.compile(
     r'(vision|vl\b|vlm'
     r'|gpt-4[.o]|gpt-5'                     # GPT-4o+, GPT-5+
     r'|claude.*(opus|sonnet|haiku)'          # All Claude 3+ have vision
+    r'|fable'                                # Anthropic Fable (Claude-family, multimodal)
     r'|gemini(?!.*lite)'                     # Gemini (except flash-lite)
     r'|qwen.*(vl|max|plus)'                 # Qwen VL/Max/Plus
     r'|ernie-5\.0'                           # ERNIE 5.0 is natively multimodal

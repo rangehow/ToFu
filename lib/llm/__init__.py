@@ -55,6 +55,7 @@ from lib.llm_errors import (  # noqa: F401
 from lib.model_info import (  # noqa: F401
     _clamp_max_tokens,
     gemini_reasoning_effort,
+    gpt_reasoning_effort,
     is_claude,
     is_claude_opus_47,
     is_doubao,
@@ -62,6 +63,8 @@ from lib.model_info import (  # noqa: F401
     is_gemini,
     is_glm,
     is_gpt,
+    is_gpt5,
+    is_gpt_56,
     is_kimi,
     is_longcat,
     is_minimax,
@@ -121,9 +124,9 @@ __all__ = [
     '_classify_http_error',
     # model detection (re-exported)
     'is_claude', 'is_claude_opus_47', 'is_doubao', 'is_ernie',
-    'is_gemini', 'is_glm', 'is_gpt', 'is_kimi', 'is_longcat',
-    'is_minimax', 'is_qwen', 'model_supports_vision',
-    'gemini_reasoning_effort',
+    'is_gemini', 'is_glm', 'is_gpt', 'is_gpt5', 'is_gpt_56', 'is_kimi',
+    'is_longcat', 'is_minimax', 'is_qwen', 'model_supports_vision',
+    'gemini_reasoning_effort', 'gpt_reasoning_effort',
     '_clamp_max_tokens',
     # sanitization (re-exported)
     '_fix_empty_user_messages',

@@ -27,7 +27,8 @@
 - **headless/compat:** `agent_run._THINKING_DEPTHS` + `compat/openai` 的 reasoning_effort→depth map 收 `ultra`;`COMPAT_OPENAI.md` 补说明。
 - **前端深度梯(6 处):** index.html 两条 depth-bar(桌面 popover + mobile sheet)+ settings `general.html` 下拉都加 `Ultra` 选项;`main.js` `_DEPTH_ICONS`/`_DEPTH_LABELS` + `finish_info.js` depthLabels 加 `ultra`;i18n 加 `settings.thinkingUltra`/`mobile.ultra`(中「至臻」/英「Ultra」)。无新增顶层 JS 文件,故 `_BUNDLE_FILES` 无需改。
 - **测试:** `test_backend_unit.py` 加 6 测(GPT-5.6 全梯 incl. ultra / 旧 GPT ultra→high / GPT 默认 medium / Claude ultra→max / Fable 归 Claude 家族)。backend+conv_config+compat+agent_run **130/130**;collect **7866**,0 import error。
-- **诚实边界:** 前端改动需**重启 server 重建 bundle + 硬刷浏览器**才生效(bundler 无热更新)——owner 侧动作。未跑真实网关(fictional 模型无 upstream);逻辑层已按现有 Gemini/Claude 同款契约测试钉死。
+- **自动发现补漏(owner review 抓出的第 4 项,resolved):** `lib/llm_dispatch/discovery/_capabilities.py` + `_thinking.py` 的启发式此前**不认 Fable**——`_infer_capabilities('fable-5')` 只返回 `{'text'}`(丢 vision+thinking),`_detect_thinking_format([{'model_id':'fable-5'}],'generic')` 返回 `''`(仅 brand 恰为 `claude` 时才命中)。后果:用户新加一个探测到 `fable-5` 的 Anthropic provider(或 gateway/Bedrock 代理)会被登记成不能思考、不能看图的纯文本模型,`thinking.adaptive` 永不构建。既然「Fable 处处即 Claude 家族」,让发现层也一致:`fable` 加进 `_THINKING_PAT` + `_VISION_PAT` + `_THINKING_FORMAT_HINTS`(→`thinking_type`)。新增发现测试断言 `_infer_capabilities('fable-5')=={'text','vision','thinking'}` 且 generic/bedrock brand 下都得 `thinking_type`;并直接探测证 `deepseek-chat` 等未受影响(不过宽)。GPT-5.6 的 vision 走 `_VISION_PAT` 已有的 `gpt-5` 分支,无需改。
+- **诚实边界:** 前端改动需**重启 server 重建 bundle + 硬刷浏览器**才生效(bundler 无热更新)——owner 侧动作。未跑真实网关(fictional 模型无 upstream);逻辑层已按现有 Gemini/Claude 同款契约测试钉死。测试:backend_unit **59/59**(+1 Fable 发现)、collect **7867**。
 
 ### 2026-07-23(续14) — 「Studio 点击(已绑项目时)还是打不开项目面板、改不了路径」的**第二个** bug 根修:面板打开被前置的 dial/state 记账阻塞(commit `73b4b2d9`,2 文件 +74/-26,新测 4/4 绿含 NEUTER + 相邻 3/3 无回归)。
 - **owner 复报(续13 未根治):** 硬刷新后,已选中项目时点 Studio 仍不弹面板 → 改不了项目;新绑项目却正常。

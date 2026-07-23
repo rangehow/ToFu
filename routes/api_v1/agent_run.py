@@ -119,7 +119,7 @@ api_v1_agent_run_bp = Blueprint('api_v1_agent_run', __name__)
 # ── Capability translation ──────────────────────────────────────────
 
 
-_THINKING_DEPTHS = {'low', 'medium', 'high', 'xhigh', 'max'}
+_THINKING_DEPTHS = {'low', 'medium', 'high', 'xhigh', 'max', 'ultra'}
 
 # Friendly tool tags → orchestrator cfg toggles.
 _TOOL_TAG_MAP = {

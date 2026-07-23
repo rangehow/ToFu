@@ -18,12 +18,14 @@ from lib.log import get_logger
 from lib.model_info import (
     _clamp_max_tokens,
     gemini_reasoning_effort,
+    gpt_reasoning_effort,
     is_claude,
     is_claude_opus_47,
     is_doubao,
     is_ernie,
     is_gemini,
     is_glm,
+    is_gpt5,
     is_kimi,
     is_longcat,
     is_minimax,
@@ -231,6 +233,14 @@ def build_body(model, messages, *, max_tokens=128000, temperature=1.0,
     elif not _tf and is_minimax(model):
         body['temperature'] = temperature or 0.7
         body['reasoning_split'] = True
+    elif not _tf and is_gpt5(model):
+        # OpenAI GPT-5 family is a reasoning model driven by the native
+        # ``reasoning_effort`` string (minimal/low/medium/high, plus the
+        # GPT-5.6 ``ultra`` tier). gpt_reasoning_effort maps Tofu's depth
+        # ladder and downgrades ``ultra`` to ``high`` on pre-5.6 models.
+        # Temperature is omitted — GPT-5 reasoning ignores sampling params.
+        body['reasoning_effort'] = gpt_reasoning_effort(
+            _effort, thinking_enabled, model)
     elif not _tf and is_claude(model) and thinking_enabled:
         body['thinking'] = {'type': 'adaptive'}
         if is_claude_opus_47(model):
@@ -242,6 +252,12 @@ def build_body(model, messages, *, max_tokens=128000, temperature=1.0,
                 logger.info('[build_body] effort=xhigh not supported on %s — '
                             'downgrading to high', model)
                 _effort = 'high'
+            elif _effort == 'ultra':
+                # ``ultra`` is a GPT-5.6 tier with no Claude equivalent —
+                # map to Claude's top rung (max) so the effort is honoured.
+                logger.info('[build_body] effort=ultra has no Claude tier on '
+                            '%s — mapping to max', model)
+                _effort = 'max'
             body['effort'] = _effort
     else:
         body['temperature'] = temperature

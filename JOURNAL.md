@@ -1,5 +1,22 @@
 # Project Journal
 
+### 2026-07-23(续14) — 「Studio 点击(已绑项目时)还是打不开项目面板、改不了路径」的**第二个** bug 根修:面板打开被前置的 dial/state 记账阻塞(commit `73b4b2d9`,2 文件 +74/-26,新测 4/4 绿含 NEUTER + 相邻 3/3 无回归)。
+- **owner 复报(续13 未根治):** 硬刷新后,已选中项目时点 Studio 仍不弹面板 → 改不了项目;新绑项目却正常。
+- **验证不是「bundle 陈旧」:** 直接从服务 bundle 反查 minified `setChatMode` —— `openProjectModal()` 确实在逗号后无条件执行,续13 的修复**已上线**。所以是**第二个真 bug**,不是没重启。
+- **真因(不对称就是线索):** 续13 虽把 `openProjectModal()` 放到 `hasProject` 块**之后**无条件调用,但在 has-project 分支里 `_applyChatModeUI('studio')` + `_saveConvToolState()` 跑在**开面板之前**。任一同步抛错 → `openProjectModal()` 永不执行。这精确解释「已绑项目改不了(要走记账)/新绑正常(跳过记账)」。
+- **修法(+17/-8):** 把 `openProjectModal()` 提到**最前、无条件**;dial/state 记账降级为 best-effort,包 `try/catch`(失败只 `console.warn`),**永不阻塞项目入口**。
+- **failing-first + NEUTER(测试 +57/-18):** harness 加可注入的「抛错版 `_applyChatModeUI`」+ `order[]` 记录副作用顺序 + 容忍同步抛错(旧代码无 try/catch)。新增 ①throw 时面板仍开、②`order[0]==='open'`(开面板先于记账)。**NEUTER** 把顺序改回「记账→开面板」且注入抛错 → `openCount==0`(bug 复现),证明 open-first 承重。
+- **git 纪律(共享 HEAD、大量 sibling WIP):** `reset -q HEAD .` → 仅 add 2 文件 → `--cached --numstat` 核对 → `commit -F- -- <2 路径>` → `show HEAD --stat` = 仅 2 文件,NO LEAK。**部署:** 需服务器重启重建 bundle + 硬刷新才生效。
+
+### 2026-07-23(续14) — 「订阅登录自动生成的灰色服务商:是什么、为什么删了又出现、加专属标识+logo、预设模型对齐最新」四合一根修(6 文件 +~110,新测 11+17/28 绿含 NEUTER + collect 7860)。
+- **owner 诉求(截图那张灰色 `Claude (Pro/Max subscription)` 卡):** ①这是什么配置、为什么删了又自动出现;②给它设计专属标识 + logo,前端要讲清工作原理;③预设模型对齐 Anthropic/OpenAI 最新。
+- **真因(读代码钉死,非猜):** OAuth 订阅登录成功后 `lib/oauth/outbound.provision_oauth_provider` 往 `server_config.json` 写一条**托管服务商**,带 `brand:'oauth'` + `oauth:'claude'|'codex'` + 哨兵 key `'oauth-managed'`。前端 `provider_render.js:47` `brand = p.brand || _detectBrand(...)` → `'oauth'` 在 `_BRAND_ICONS` 无条目 → 回落灰色 `generic` 盒(截图)。「删了又出现」= 通用列表的删除 `_deleteProvider`(`template_actions.js`)**只 splice 内存数组**,磁盘 token(`data/config/oauth/<p>.json`)原封不动 → 下次登录/换 token 触发幂等 `provision_*` 复活;唯一清 token 的路径是 `logout_oauth`(同时 `delete_token` + `deprovision`)。
+- **修 #1 专属标识 + 真 logo(`provider_render.js`):** 新增 `oauthKind = p.oauth` / `isManagedOAuth`,对托管卡把 `brand` 重映射为真实品牌(`codex→openai` / 否则 `claude`)→ 头部渲染真 Claude/OpenAI SVG 而非灰盒。头部徽章用「订阅登录」(琥珀 `stg-badge-oauth` + `Icon('plug')`)取代误导性的「N 密钥」;展开体顶部加解释横幅 `stg-oauth-note`(讲清:用订阅额度、token 实时取、无需 API Key、**要移除请点退出登录**、只删卡片会复活)。
+- **修 #2 删除即退出登录(`provider_render.js` + `template_actions.js`):** 托管卡的危险按钮换成「退出登录」→ 新 `_logoutManagedProvider(idx)`:确认后 `Api.oauth.logoutPost`(404/405 回退 GET)→ 服务端已 deprovision → 本地 splice + 刷新 OAuth 卡。`_deleteProvider` 也加护栏:`if (p.oauth) return _logoutManagedProvider(...)`,任何入口删托管卡都走 logout,从根上堵掉「删了又回来」。
+- **修 #3 预设模型对齐最新(`lib/oauth/outbound.py::_MANAGED_SPECS`):** Claude → `claude-opus-4-5-20251101`(2025-11-24 GA,Anthropic 官网+CNBC+InfoWorld 三源确认)+ sonnet-4-5 + haiku-4-5,全带 thinking;Codex → `gpt-5.2-codex`(OpenAI 开发者文档 GA)+ 5.1/5-codex。**诚实边界:** 搜索里出现的 `claude-opus-4-6/4-7`、`Fable 5` 仅来自一份 LLM-generated gist 和一个可疑页面,**未采纳**——只用可交叉验证的官方 GA ID。
+- **测试(failing-first + NEUTER):** 后端 `test_oauth_outbound.py` 加 `test_managed_models_are_current`(断言 opus-4-5 / gpt-5.2-codex 在列、Claude 全带 thinking),11/11 绿。新 `test_frontend_oauth_managed_provider.py`(JSDOM 驱动真 `provider_render.js`+`branding.js`+`icons.js`,17 检查):托管卡出真 Claude logo(22px 头部图标带 `#D97706`)、订阅徽章、无「密钥」徽章、解释横幅、logout 按钮、无 `_deleteProvider(0)`;普通云商无回归;**NEUTER** 去掉 brand 重映射 → 22px 头部琥珀色消失(证明重映射承重)。踩坑:真 `_renderModelCard` 覆盖 stub、模型卡自身也含 Claude 色,故 NEUTER 断言按 **22px 头部图标**精确匹配,避开 18px 模型卡的干扰。
+- **回归 + 诚实边界:** collect 7860 / 0 err;`node --check` 三文件语法 OK;OAuth+相邻前端 26/26 绿。`test_frontend_i18n_key_coverage.py` 有 1 条**预存**失败——flagged 的 `branch.*`/`mobile.*`/`compactCard.rounds`/`sidebar.*` 全属 sibling WIP 文件(`branch.js`/`main_folders_mobile.js`/`conversation_list.js` 工作树 `M`,非我改),我新增的 7 个 key 全部 zh+en 已定义、不在缺失名单。**部署说明:** 前端改动需重启 server 重建 bundle + 硬刷浏览器(bundler 无热更新)。
+
 ### 2026-07-23(续13) — 「项目助手按钮没了、Studio 点不动就改不了项目路径」根修:Studio 档现在**总是**打开项目面板(commit `288f0d3a`,2 文件 +143/-8,新测 3/3 绿含 NEUTER + 相邻 toolbar/chat_mode 18/18 无回归)。
 - **owner 诉求:** 独立的「项目助手」按钮被折进 Air/Pro/Studio 档位后,Studio 成了管理项目的唯一入口;但已经绑了项目再点 Studio 没反应 → **改不了项目路径**。
 - **真因(读代码钉死,`main_toolbar_ui.js:118` `setChatMode`):** `mode==='studio'` 只在 `!hasProject`(尚未绑项目)时才 `openProjectModal()`;一旦已绑项目走 `_applyChatModeUI('studio')` + `return`,**从不重开面板**。旧世界里还有独立项目按钮兜底,折叠进档位后这条兜底没了 → 已 Studio 的会话彻底没有改路径的入口(反复点 Studio = 静默 no-op)。

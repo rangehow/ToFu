@@ -250,6 +250,12 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
     #   would silently persist the first-attempt residue (the live 3411→215
     #   loss). We converge ONCE after the loop, covering both doors.
     _fr_adopted = False
+    # ★ HONEST ACCOUNTING: every attempt the gateway processed (whether
+    #   ADOPTED or DISCARDED) was BILLED. Collect their usage dicts here
+    #   so the outer LLM-fallback loop can append them to api_rounds and
+    #   accumulate them — the "reported cost < actual gateway bill" bug
+    #   is impossible when every billed request appears once in api_rounds.
+    _fr_discarded_billing = []  # list of {'model', 'usage', 'tag'}
     try:
         from lib.tasks_pkg import floor_retry as _fr
         _conv_for_fr = task.get('convId', '') or ''
@@ -257,6 +263,11 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
                 and _fr.is_floor_collapse(usage)
                 and _fr.wire_prefix_stable(_conv_for_fr, usage)):
             _fr_max = _fr.floor_retry_max()
+            # The primary attempt (whose msg/usage `usage` currently holds) is
+            # the FIRST billed request; it is about to be superseded by a resend
+            # if one recovers. Preserve its usage now so it survives the
+            # `usage = _rusage` reassignments below.
+            _fr_primary_billed_usage = dict(usage) if isinstance(usage, dict) else None
             for _fr_i in range(_fr_max):
                 if task.get('aborted', False):
                     break
@@ -296,6 +307,20 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
                                    '%s: %s', pfx, _fr_i + 1,
                                    type(_rerr).__name__, str(_rerr)[:120])
                     break
+                # ★ HONEST ACCOUNTING: the CURRENT `usage` is about to be
+                #   superseded. Whatever it points to now (the primary attempt
+                #   on iter 0, or the previously-floored resend on iter >0) was
+                #   BILLED by the gateway — preserve it before overwriting.
+                if isinstance(usage, dict):
+                    _disc_tag_suffix = ('primary' if _fr_i == 0
+                                        else f'resend{_fr_i}')
+                    _fr_discarded_billing.append({
+                        'model': model,
+                        'usage': {k: v for k, v in usage.items()
+                                  if k != '_extra_billing_rounds'},
+                        'tag': f'{tag}-FLOOR-DISCARDED-{_disc_tag_suffix}'
+                        if tag else f'FLOOR-DISCARDED-{_disc_tag_suffix}',
+                    })
                 if not _fr.is_floor_collapse(_rusage):
                     # Recovered: the resend hit the now-visible cache write.
                     # Adopt its response + usage (a genuine cache read, cheaper
@@ -341,6 +366,24 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
                     'resend (content=%dchars thinking=%dchars) — prevents first-'
                     'attempt residue from being persisted',
                     pfx, len(task['content']), len(task['thinking']))
+
+    # ★ HONEST ACCOUNTING: expose every discarded-but-billed FloorRetry
+    #   attempt on the returned usage dict so the LLM-fallback loop can
+    #   append them to api_rounds and accumulated_usage. The gateway billed
+    #   each of these; the cost popover / wallet / daily-report MUST see them.
+    #   Silent covering-up of billed rounds is what motivated flipping the
+    #   floor-retry default OFF — but even opt-in usage must be honest.
+    if _fr_discarded_billing and isinstance(usage, dict):
+        # dict.setdefault: never clobber a caller-provided list (defensive).
+        _bill_list = usage.setdefault('_extra_billing_rounds', [])
+        if isinstance(_bill_list, list):
+            _bill_list.extend(_fr_discarded_billing)
+        else:
+            usage['_extra_billing_rounds'] = list(_fr_discarded_billing)
+        logger.warning('%s [FloorRetry] preserved %d discarded-but-billed '
+                       'attempt(s) for honest cost accounting: tags=%s',
+                       pfx, len(_fr_discarded_billing),
+                       [b['tag'] for b in _fr_discarded_billing])
 
     # ★ Propagate provider_id from dispatch metadata into task
     _dispatch = (usage or {}).get('_dispatch', {})

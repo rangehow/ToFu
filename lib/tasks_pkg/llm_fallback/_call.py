@@ -183,6 +183,32 @@ def _llm_call_with_fallback(task, body, model, round_num, max_tokens,
             api_rounds.append({'round': round_num + 1, 'model': model,
                                'usage': dict(usage), 'tag': f'R{round_num+1}'})
             _emit_round_usage(task, round_num + 1, model, usage, tag=f'R{round_num+1}')
+            # ★ HONEST ACCOUNTING: bill every DISCARDED FloorRetry attempt the
+            #   gateway processed. Each was a real request the provider charged
+            #   for — hiding them made cost popover / wallet debit / daily
+            #   report under-report by ~9%~50% per triggered round. See
+            #   lib.tasks_pkg.floor_retry docstring for the full story.
+            _extra = (usage or {}).get('_extra_billing_rounds') or []
+            for _bill in _extra:
+                _bill_usage = _bill.get('usage') or {}
+                for k, v in _bill_usage.items():
+                    if isinstance(v, (int, float)):
+                        accumulated_usage[k] = accumulated_usage.get(k, 0) + v
+                api_rounds.append({
+                    'round': round_num + 1,
+                    'model': _bill.get('model') or model,
+                    'usage': dict(_bill_usage),
+                    'tag': _bill.get('tag') or f'R{round_num+1}-DISCARDED',
+                })
+                _emit_round_usage(task, round_num + 1,
+                                  _bill.get('model') or model,
+                                  _bill_usage,
+                                  tag=_bill.get('tag') or f'R{round_num+1}-DISCARDED')
+            if _extra:
+                logger.warning('[%s] conv=%s billed %d discarded FloorRetry '
+                               'attempt(s) into api_rounds/accumulated_usage — '
+                               'cost popover now matches gateway bill',
+                               tid, task.get('convId', ''), len(_extra))
 
         _content_len = len(assistant_msg.get('content', '') or '')
         _tool_calls = len(assistant_msg.get('tool_calls', []))
@@ -310,6 +336,23 @@ def _llm_call_with_fallback(task, body, model, round_num, max_tokens,
                                            'usage': dict(usage), 'tag': f'R{round_num+1}-REACTIVE'})
                         _emit_round_usage(task, round_num + 1, model, usage,
                                            tag=f'R{round_num+1}-REACTIVE')
+                        # Honest accounting (same as primary path)
+                        for _bill in (usage.get('_extra_billing_rounds') or []):
+                            _bu = _bill.get('usage') or {}
+                            for k, v in _bu.items():
+                                if isinstance(v, (int, float)):
+                                    accumulated_usage[k] = accumulated_usage.get(k, 0) + v
+                            api_rounds.append({
+                                'round': round_num + 1,
+                                'model': _bill.get('model') or model,
+                                'usage': dict(_bu),
+                                'tag': _bill.get('tag') or f'R{round_num+1}-REACTIVE-DISCARDED',
+                            })
+                            _emit_round_usage(task, round_num + 1,
+                                              _bill.get('model') or model,
+                                              _bu,
+                                              tag=_bill.get('tag') or
+                                              f'R{round_num+1}-REACTIVE-DISCARDED')
                     return {
                         'assistant_msg': assistant_msg,
                         'finish_reason': finish_reason,
@@ -508,6 +551,23 @@ def _llm_call_with_fallback(task, body, model, round_num, max_tokens,
                                    'usage': dict(usage), 'tag': f'R{round_num+1}-FALLBACK'})
                 _emit_round_usage(task, round_num + 1, _FALLBACK_MODEL, usage,
                                    tag=f'R{round_num+1}-FALLBACK')
+                # Honest accounting (same as primary path)
+                for _bill in (usage.get('_extra_billing_rounds') or []):
+                    _bu = _bill.get('usage') or {}
+                    for k, v in _bu.items():
+                        if isinstance(v, (int, float)):
+                            accumulated_usage[k] = accumulated_usage.get(k, 0) + v
+                    api_rounds.append({
+                        'round': round_num + 1,
+                        'model': _bill.get('model') or _FALLBACK_MODEL,
+                        'usage': dict(_bu),
+                        'tag': _bill.get('tag') or f'R{round_num+1}-FALLBACK-DISCARDED',
+                    })
+                    _emit_round_usage(task, round_num + 1,
+                                      _bill.get('model') or _FALLBACK_MODEL,
+                                      _bu,
+                                      tag=_bill.get('tag') or
+                                      f'R{round_num+1}-FALLBACK-DISCARDED')
 
             _fb_content_len = len(assistant_msg.get('content', '') or '')
             _fb_tool_calls = len(assistant_msg.get('tool_calls', []))

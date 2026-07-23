@@ -1,4 +1,4 @@
-"""lib/chat_dispatch.py — chat_send + chat_stream business-logic sinks (pt_04686ac6 slices 5-6).
+"""lib/chat_dispatch.py — chat_send + chat_stream business-logic sinks (pt_04686ac6 slices 5-7).
 
 **Extraction context** (board epic ``pt_04686ac6054a451e``):
 
@@ -8,6 +8,11 @@
     cold-path (task not in memory) resume-serviceability + snapshot
     generation for both the persisted-events replay and the DB-only
     synthetic state+done paths.
+  * Slice 7 — ``plan_warm_resume`` + ``build_fresh_state_snapshot``:
+    chat_stream's warm-path Last-Event-ID parse, ``_warm_resume_serviceable``
+    verdict + resume-snapshot builder AND the fresh-connection full-state
+    snapshot builder. Two pure(-ish) helpers so the chat_stream generate()
+    closure shrinks to a thin cursor+yield driver.
 
 ``routes/chat.py::chat_send`` used to inline ~175 lines of business
 logic between "user_msg was built with auto-translate" and "no active
@@ -528,4 +533,200 @@ async def build_cold_replay_response(task_id: str, last_event_id_header: str):
     return api_not_found('Task not found')
 
 
-__all__ = ['SendIntent', 'classify_send_intent', 'build_cold_replay_response']
+@dataclass
+class WarmResumePlan:
+    """Result of ``plan_warm_resume``: enough state to drive the warm
+    resume yields (pt_04686ac6 slice 7).
+
+    Attributes:
+        resume_from: The event-log index the caller resumes streaming
+            from (per the SSE spec, ``cursor + 1`` — Last-Event-ID is the
+            id of the last RECEIVED event).
+        replay_events: Copy of ``task['events'][resume_from:]`` taken
+            under ``events_lock``; the caller yields these back to the
+            client as ``id:``-tagged replay frames.
+        resume_state: The leading ``state`` event the caller emits BEFORE
+            the delta replay (see the ★ comment about the frontend
+            keep-longer guard adopting a full snapshot on a fresh
+            placeholder). Carries ``content`` / ``thinking`` /
+            ``status`` / ``toolRounds`` + optional ``createdAt``,
+            ``error`` copied from the task under the lock.
+        serviceable: Always True on a returned plan — kept as an explicit
+            attribute so a False-y check on the plan itself never fires
+            by mistake (a plan with 0 replay events is still valid — it
+            triggers the terminal ``late_done`` synth in the caller).
+    """
+    resume_from: int
+    replay_events: list
+    resume_state: dict[str, Any]
+    serviceable: bool = True
+
+
+def plan_warm_resume(
+    task: dict[str, Any],
+    last_event_id_hdr: str,
+    task_id_short: str,
+) -> WarmResumePlan | None:
+    """chat_stream warm-path resume planner (pt_04686ac6 slice 7).
+
+    Called by ``routes/chat.py::chat_stream`` inside its generate()
+    closure. Handles the two-part decision the pre-slice inline code
+    made:
+
+      1. Parse ``Last-Event-ID`` to an int cursor. Empty / non-numeric
+         → cursor=None → no valid resume → return None (caller falls
+         through to ``build_fresh_state_snapshot``).
+      2. Check ``_warm_resume_serviceable(cursor, len(task['events']))``
+         under ``events_lock``. When True: slice ``task['events']`` from
+         cursor+1, capture the resume state, return a ``WarmResumePlan``.
+         When False (cursor ahead of buffer / trimmed): return None so
+         the caller emits a full-state resync snapshot.
+
+    Args:
+        task: The in-memory task dict (must have ``events``,
+            ``events_lock``, ``content``, ``thinking``, ``status``,
+            ``error``, ``toolRounds``).
+        last_event_id_hdr: Raw ``Last-Event-ID`` HTTP header value
+            (empty string when absent).
+        task_id_short: An 8-char task id for log lines (matches the
+            pre-slice inline ``task_id[:8]`` style).
+
+    Returns:
+        A ``WarmResumePlan`` when the cursor is in-buffer; ``None``
+        when the caller should build a fresh snapshot instead.
+    """
+    _cursor_hdr = (last_event_id_hdr or '').strip()
+    if not _cursor_hdr:
+        return None
+    try:
+        _cursor = int(_cursor_hdr)
+    except (ValueError, TypeError):
+        logger.debug('[Chat] SSE stream %s ignoring invalid Last-Event-ID: %s',
+                     task_id_short, _cursor_hdr)
+        return None
+    logger.info('[Chat] SSE stream %s reconnecting with Last-Event-ID=%d',
+                task_id_short, _cursor)
+
+    # Late import to keep chat_dispatch import-lightweight for tests
+    # (routes.chat_helpers re-exports _warm_resume_serviceable, which
+    # is a 4-line pure function so the extra module load is cheap).
+    from routes.chat_helpers import _warm_resume_serviceable
+    from lib.agent_core.events import EventType, build_event
+
+    with task['events_lock']:
+        if not _warm_resume_serviceable(_cursor, len(task['events'])):
+            if _cursor >= 0:
+                logger.info('[Chat] SSE stream %s Last-Event-ID=%d is ahead of '
+                            'buffer (len=%d) — full-snapshot resync',
+                            task_id_short, _cursor, len(task['events']))
+            return None
+        _resume_from = _cursor + 1
+        _replay = task['events'][_resume_from:]
+        # ★ Build the resume state under the SAME lock that sliced the
+        #   replay list, so the state and the deltas are internally
+        #   consistent (a mid-lock append to task['content'] on the
+        #   producer side otherwise races).  Mirrors the pre-slice
+        #   inline block's second ``with task['events_lock']:`` — kept
+        #   as ONE lock hold for slice 7 since the two blocks were
+        #   trivially adjacent and the extra release+reacquire was
+        #   pure overhead (no other awaits between them).
+        _state = build_event(
+            EventType.STATE, content=task['content'],
+            thinking=task['thinking'], status=task['status'],
+        )
+        _created = task.get('created_at')
+        if _created:
+            _state['createdAt'] = int(_created * 1000)
+        if task['error']:
+            _state['error'] = task['error']
+        _state['toolRounds'] = task['toolRounds']
+
+    return WarmResumePlan(
+        resume_from=_resume_from,
+        replay_events=_replay,
+        resume_state=_state,
+        serviceable=True,
+    )
+
+
+def build_fresh_state_snapshot(task: dict[str, Any]):
+    """chat_stream fresh-connection snapshot builder (pt_04686ac6 slice 7).
+
+    Called by ``routes/chat.py::chat_stream`` when ``plan_warm_resume``
+    returned None (no cursor / cursor ahead of buffer). Builds the full
+    state event + meta dict + cursor exactly as the pre-slice inline
+    block did.
+
+    Runs the entire snapshot compose under ``events_lock`` so a
+    concurrent producer append cannot split content across the state
+    read and the cursor snapshot.
+
+    Args:
+        task: The in-memory task dict.
+
+    Returns:
+        (state, meta, cursor):
+          * state: the ``state`` event dict to encode + yield
+            (via ``asyncio.to_thread(_dumps_yielding, state)`` — the
+            caller does the offload since this fn stays synchronous).
+          * meta: the raw ``_extract_task_meta(task)`` dict; caller
+            reuses it if the task is already terminal to synthesize
+            the trailing ``done`` event.
+          * cursor: ``len(task['events'])`` — where the live-stream
+            loop should start reading from.
+    """
+    from lib.agent_core.events import EventType, build_event
+    from lib.chat.persistence import extract_task_meta as _extract_task_meta
+
+    with task['events_lock']:
+        state = build_event(
+            EventType.STATE, content=task['content'],
+            thinking=task['thinking'], status=task['status'],
+        )
+        _created = task.get('created_at')
+        if _created:
+            state['createdAt'] = int(_created * 1000)
+        if task['error']:
+            state['error'] = task['error']
+        if task['toolRounds']:
+            state['toolRounds'] = task['toolRounds']
+        meta = _extract_task_meta(task)
+        for key in ('finishReason', 'usage', 'model', 'thinkingDepth'):
+            if meta.get(key):
+                state[key] = meta[key]
+        if task.get('preset'):
+            state['preset'] = task['preset']
+        if task.get('_memoryPrefetch'):
+            state['memoryPrefetch'] = task['_memoryPrefetch']
+        if task.get('_preferencesApplied'):
+            state['preferencesApplied'] = task['_preferencesApplied']
+        if task.get('_relatedConversations'):
+            state['relatedConversations'] = task['_relatedConversations']
+        if task.get('_preferencesLearned'):
+            state['preferencesLearned'] = task['_preferencesLearned']
+        # inbox-inject sidecars (swarm/peer/user-steer) — survive an
+        # SSE-broken resume so the in-timeline inject chips repaint.
+        if task.get('_inboxInjects'):
+            state['inboxInjects'] = task['_inboxInjects']
+        if task.get('_peerInjects'):
+            state['peerInjects'] = task['_peerInjects']
+        if task.get('_userSteerInjects'):
+            state['userSteerInjects'] = task['_userSteerInjects']
+        if task.get('endpoint_mode'):
+            state['endpointMode'] = True
+            state['endpointPhase'] = task.get('_endpoint_phase', 'planning')
+            state['endpointIteration'] = task.get('_endpoint_iteration', 0)
+            ep_turns = task.get('_endpoint_turns')
+            if ep_turns:
+                state['endpointTurns'] = ep_turns
+            if task.get('_endpoint_stop_reason'):
+                state['endpointStopReason'] = task['_endpoint_stop_reason']
+        cursor = len(task['events'])
+
+    return state, meta, cursor
+
+
+__all__ = [
+    'SendIntent', 'classify_send_intent', 'build_cold_replay_response',
+    'WarmResumePlan', 'plan_warm_resume', 'build_fresh_state_snapshot',
+]

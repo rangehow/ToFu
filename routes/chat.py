@@ -1113,16 +1113,10 @@ async def chat_stream(task_id):
 
     # ★ Item 6: Last-Event-ID reconnection — if the client provides a cursor,
     #   skip the full state snapshot and resume from that event index.
-    _last_event_id = request.headers.get('Last-Event-ID', '').strip()
-    _resume_cursor = None
-    if _last_event_id:
-        try:
-            _resume_cursor = int(_last_event_id)
-            logger.info('[Chat] SSE stream %s reconnecting with Last-Event-ID=%d',
-                        task_id[:8], _resume_cursor)
-        except (ValueError, TypeError):
-            logger.debug('[Chat] SSE stream %s ignoring invalid Last-Event-ID: %s',
-                         task_id[:8], _last_event_id)
+    #   The Last-Event-ID parse + _warm_resume_serviceable verdict now
+    #   live in ``plan_warm_resume`` (pt_04686ac6 slice 7). Capture the
+    #   raw header here so the closure below can hand it to the planner.
+    _last_event_id_hdr = request.headers.get('Last-Event-ID', '')
 
     _stream_start = time.time()
     _events_sent = 0
@@ -1164,67 +1158,28 @@ async def chat_stream(task_id):
         for _ in range(4):
             yield ':' + ' ' * 2048 + '\n\n'
 
-        with task['events_lock']:
-            # ★ If resuming via Last-Event-ID, skip the state snapshot and
-            #   replay only events AFTER the cursor. Per the SSE spec,
-            #   Last-Event-ID is the id of the last *received* event, so
-            #   we resume from cursor + 1 to avoid re-sending it.
-            # ★ Resync guard: if the cursor is AHEAD of the in-memory buffer
-            #   (e.g. the buffer was trimmed, or a stale/over-eager client),
-            #   _warm_resume_serviceable() is False → fall through to a full
-            #   state snapshot instead of slicing an empty list (which would
-            #   silently stall the stream and mis-index the live loop).
-            if _warm_resume_serviceable(_resume_cursor, len(task['events'])):
-                resume_from = _resume_cursor + 1
-                missed_evts = task['events'][resume_from:]
-            else:
-                if _resume_cursor is not None and _resume_cursor >= 0:
-                    logger.info('[Chat] SSE stream %s Last-Event-ID=%d is ahead of '
-                                'buffer (len=%d) — full-snapshot resync',
-                                task_id[:8], _resume_cursor, len(task['events']))
-                missed_evts = None
-                resume_from = None
-                cursor = len(task['events'])
+        # Warm-path resume planning (pt_04686ac6 slice 7): parse the
+        # Last-Event-ID cursor, verdict _warm_resume_serviceable, build
+        # the leading resume state — all under events_lock inside
+        # plan_warm_resume. Returns None when the client sent no cursor
+        # OR the cursor is ahead of the buffer (trimmed / stale) → fall
+        # through to build_fresh_state_snapshot.
+        from lib.chat_dispatch import plan_warm_resume, build_fresh_state_snapshot
+        _warm_plan = plan_warm_resume(task, _last_event_id_hdr, task_id[:8])
 
-        if resume_from is not None:
+        if _warm_plan is not None:
+            resume_from = _warm_plan.resume_from
+            missed_evts = _warm_plan.replay_events
             cursor = resume_from
-            # ★ Reassert a leading full-state snapshot BEFORE replaying the
-            #   post-cursor deltas. A warm resume that landed on a fresh empty
-            #   assistant placeholder (initActiveTasks Case-A stale-tail /
-            #   connectToTask stale-turn guard → toolRounds:[]) has NO cached
-            #   rounds, so a delta-only replay would render starting at whatever
-            #   round the first missed tool_start carried (the round-10 strand,
-            #   conv mrbf9px2g5mct3). Emit the COMPLETE task['toolRounds']
-            #   (+ content/thinking) read under the lock; the frontend's
-            #   _snapshotLongerRounds keep-longer guard ADOPTS it when the client
-            #   cache is short and harmlessly IGNORES it when equal/longer — so a
-            #   shorter buffer can never collapse a longer one. Like the fresh
-            #   path it carries NO id: (synthetic; avoids a cursor collision with
-            #   the first replayed event).
-            with task['events_lock']:
-                resume_state = build_event(
-                    EventType.STATE, content=task['content'],
-                    thinking=task['thinking'], status=task['status'],
-                )
-                # ★ Server-authoritative task start (ms) — seed the elapsed timer
-                #   from the real start on a Last-Event-ID resume too.
-                _created = task.get('created_at')
-                if _created:
-                    resume_state['createdAt'] = int(_created * 1000)
-                if task['error']:
-                    resume_state['error'] = task['error']
-                resume_state['toolRounds'] = task['toolRounds']
-            _resume_state_payload = json.dumps(resume_state, ensure_ascii=False)
+            _resume_state_payload = json.dumps(_warm_plan.resume_state, ensure_ascii=False)
             yield f'data: {_resume_state_payload}\n\n'
             _events_sent += 1
-            # Resume path: replay missed events since Last-Event-ID
             for idx, ev in enumerate(missed_evts):
                 eid = resume_from + idx
                 yield f'id: {eid}\ndata: {json.dumps(ev, ensure_ascii=False)}\n\n'
                 _events_sent += 1
                 if ev.get('type') == 'done':
                     return
-            # Advance cursor past replayed events for live streaming loop
             cursor = resume_from + len(missed_evts)
             if _task_terminal() and not missed_evts:
                 late_done = build_event(EventType.DONE)
@@ -1236,74 +1191,19 @@ async def chat_stream(task_id):
                 yield f'id: {cursor}\ndata: {json.dumps(late_done, ensure_ascii=False)}\n\n'
                 return
         else:
-            # Fresh connection path: send full state snapshot
-            with task['events_lock']:
-                state = build_event(
-                    EventType.STATE, content=task['content'],
-                    thinking=task['thinking'], status=task['status'],
-                )
-                # ★ Server-authoritative task start (ms) so a reconnecting client
-                #   seeds its elapsed timer from the REAL start, not from 0.
-                _created = task.get('created_at')
-                if _created:
-                    state['createdAt'] = int(_created * 1000)
-                if task['error']:
-                    state['error'] = task['error']
-                if task['toolRounds']:
-                    state['toolRounds'] = task['toolRounds']
-                meta = _extract_task_meta(task)
-                for key in ('finishReason', 'usage', 'model', 'thinkingDepth'):
-                    if meta.get(key):
-                        state[key] = meta[key]
-                if task.get('preset'):
-                    state['preset'] = task['preset']
-                if task.get('_memoryPrefetch'):
-                    state['memoryPrefetch'] = task['_memoryPrefetch']
-                if task.get('_preferencesApplied'):
-                    state['preferencesApplied'] = task['_preferencesApplied']
-                if task.get('_relatedConversations'):
-                    state['relatedConversations'] = task['_relatedConversations']
-                if task.get('_preferencesLearned'):
-                    state['preferencesLearned'] = task['_preferencesLearned']
-                # inbox-inject sidecars (swarm/peer/user-steer) — survive an
-                # SSE-broken resume so the in-timeline inject chips repaint.
-                if task.get('_inboxInjects'):
-                    state['inboxInjects'] = task['_inboxInjects']
-                if task.get('_peerInjects'):
-                    state['peerInjects'] = task['_peerInjects']
-                if task.get('_userSteerInjects'):
-                    state['userSteerInjects'] = task['_userSteerInjects']
-                # ★ Endpoint mode: include phase and completed turns for reconnection
-                if task.get('endpoint_mode'):
-                    state['endpointMode'] = True
-                    state['endpointPhase'] = task.get('_endpoint_phase', 'planning')
-                    state['endpointIteration'] = task.get('_endpoint_iteration', 0)
-                    ep_turns = task.get('_endpoint_turns')
-                    if ep_turns:
-                        state['endpointTurns'] = ep_turns
-                    # ★ Authoritative finished signal — when task has completed
-                    #   (_finalize set _endpoint_phase='done'), propagate the
-                    #   stop reason so the frontend's reconnect paths never
-                    #   create a ghost worker after Critic STOP approval.
-                    if task.get('_endpoint_stop_reason'):
-                        state['endpointStopReason'] = task['_endpoint_stop_reason']
-                cursor = len(task['events'])
-
+            # Fresh connection path: build the full-state snapshot via
+            # the extracted helper. ``state`` is the event dict, ``meta``
+            # is reused for the terminal-done synth below, ``cursor`` is
+            # where the live-stream loop starts reading from.
+            state, meta, cursor = build_fresh_state_snapshot(task)
             # ★ State snapshot gets NO id: field — it's synthetic, not a real
             #   event from the events array. Only real events (deltas, phases,
-            #   done) get id: fields. This prevents the id collision between
+            #   done) get id: fields. This prevents an id collision between
             #   the state snapshot and the first live event at the same cursor.
-            #   If the client only received the state snapshot and reconnects,
-            #   _lastEventId will be null → fresh connection with full state.
-            # ★ Robustness: the snapshot serializes the ENTIRE conversation
-            #   content + thinking + toolRounds. For very large conversations
-            #   this json.dumps is multi-millisecond CPU work; running it
-            #   directly on the event-loop thread stalls accept()/all other
-            #   connections (a single big conv could make the whole page go
-            #   dark). Offload to the executor via _dumps_yielding (orjson —
-            #   plain json.dumps holds the GIL for the whole call so to_thread
-            #   alone does NOT free the loop). Live deltas below stay inline →
-            #   streaming latency unchanged.
+            # ★ Offload the multi-MB state encode via ``_dumps_yielding``
+            #   (orjson-first) on the executor: plain json.dumps holds
+            #   the GIL for the whole call so to_thread alone would not
+            #   free the loop for accept()/other connections.
             _state_payload = await asyncio.to_thread(_dumps_yielding, state)
             yield f'data: {_state_payload}\n\n'
 

@@ -610,6 +610,231 @@ def test_classify_send_intent_aborted_kind_on_translate_abort():
         _rs._was_aborted_after = orig
 
 
+# ── Slice 7: chat_stream warm-resume plan → lib/chat_dispatch.plan_warm_resume ─
+# Extracts the ~130-line warm-path snapshot generation (Last-Event-ID parse,
+# _warm_resume_serviceable verdict, resume-snapshot + fresh-snapshot builders)
+# from the ``chat_stream.generate`` closure into two pure(-ish) helpers in
+# lib/chat_dispatch.py:
+#
+#   * ``plan_warm_resume(task, last_event_id_hdr, task_id_short)
+#       -> WarmResumePlan | None``
+#       Returns None on a fresh (no valid cursor / cursor ahead of buffer)
+#       connection so the caller falls through to build_fresh_state_snapshot.
+#       Returns a WarmResumePlan{resume_from, replay_events, resume_state,
+#       serviceable=True} when the cursor is in-buffer — resume_state is
+#       the leading state event to emit AFTER the delta replay's cursor
+#       computation but BEFORE the yields (mirrors the original inline code
+#       shape byte-for-byte).
+#
+#   * ``build_fresh_state_snapshot(task) -> (state, meta, cursor)``
+#       Reads task under events_lock and builds the fresh-path state event
+#       + meta dict + advance cursor exactly as the pre-slice inline code
+#       did. Caller does the ``asyncio.to_thread(_dumps_yielding, state)``
+#       encode and the yield.
+
+@_unit
+def test_chat_dispatch_exposes_plan_warm_resume():
+    """Slice 7 (pt_04686ac6): lib/chat_dispatch.py exposes plan_warm_resume
+    + WarmResumePlan dataclass + build_fresh_state_snapshot."""
+    import importlib
+    mod = importlib.import_module('lib.chat_dispatch')
+    for name in ('plan_warm_resume', 'WarmResumePlan',
+                 'build_fresh_state_snapshot'):
+        assert hasattr(mod, name), f'lib.chat_dispatch missing {name}'
+    assert callable(mod.plan_warm_resume), 'plan_warm_resume must be callable'
+    assert callable(mod.build_fresh_state_snapshot), (
+        'build_fresh_state_snapshot must be callable')
+
+
+@_unit
+def test_chat_stream_delegates_warm_resume_to_dispatch():
+    """Slice 7: routes/chat.py::chat_stream must call plan_warm_resume
+    (warm-path cursor+snapshot planner) and build_fresh_state_snapshot
+    (fresh-path snapshot builder). Guards against silent revert to the
+    inline ~130-line block."""
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, 'routes/chat.py'), encoding='utf-8') as f:
+        src = f.read()
+    # Slice 7 imports plan_warm_resume AND build_fresh_state_snapshot
+    # together (they are the two halves of the warm/fresh split), so the
+    # import line must name BOTH — a slice-6-only cold-path import does
+    # not satisfy this.
+    assert ('from lib.chat_dispatch import plan_warm_resume, '
+            'build_fresh_state_snapshot') in src, (
+        'routes/chat.py must import plan_warm_resume + '
+        'build_fresh_state_snapshot from lib.chat_dispatch '
+        '(slice 7 pt_04686ac6)')
+    assert 'plan_warm_resume(' in src, (
+        'routes/chat.py must CALL plan_warm_resume in chat_stream')
+    assert 'build_fresh_state_snapshot(' in src, (
+        'routes/chat.py must CALL build_fresh_state_snapshot in chat_stream')
+    # Specific inline call-site marker strings that USED to live inside
+    # chat_stream's warm-path are GONE.
+    assert 'full-snapshot resync' not in src, (
+        'routes/chat.py must NOT carry the "full-snapshot resync" log line — '
+        'extracted to plan_warm_resume')
+    assert 'reconnecting with Last-Event-ID' not in src, (
+        'routes/chat.py must NOT carry the Last-Event-ID reconnect log line — '
+        'extracted to plan_warm_resume')
+    # Fresh-path inline field-copy loop markers are GONE.
+    assert "state['memoryPrefetch']" not in src, (
+        "state['memoryPrefetch'] assignment must live in "
+        "build_fresh_state_snapshot, not chat_stream inline")
+    assert "state['endpointPhase']" not in src, (
+        "state['endpointPhase'] assignment must live in "
+        "build_fresh_state_snapshot, not chat_stream inline")
+
+
+@_unit
+def test_plan_warm_resume_none_on_no_cursor():
+    """Slice 7: plan_warm_resume returns None when the client sends NO
+    Last-Event-ID header (fresh connection) → caller falls through to
+    build_fresh_state_snapshot."""
+    import lib.chat_dispatch as cd
+    import threading
+    task = {
+        'events': [{'type': 'delta', 'text': 'x'}],
+        'events_lock': threading.Lock(),
+    }
+    plan = cd.plan_warm_resume(task, '', 'task-fresh')
+    assert plan is None, (
+        f'empty Last-Event-ID must yield None (fresh path); got {plan!r}')
+
+
+@_unit
+def test_plan_warm_resume_none_on_cursor_ahead_of_buffer():
+    """Slice 7: plan_warm_resume returns None when the cursor is AHEAD
+    of the in-memory buffer (buffer trimmed / stale client) →
+    _warm_resume_serviceable=False → caller does a full resync snapshot.
+
+    Guards against a naive extraction that returns an empty replay slice
+    (which would silently stall the stream and mis-index the live loop).
+    """
+    import lib.chat_dispatch as cd
+    import threading
+    task = {
+        'events': [{'type': 'delta'}, {'type': 'delta'}],  # len=2
+        'events_lock': threading.Lock(),
+    }
+    # cursor=10 is way past len(events)=2 → resume_from=11 > 2 → False.
+    plan = cd.plan_warm_resume(task, '10', 'task-stale')
+    assert plan is None, (
+        f'cursor ahead of buffer must yield None (resync); got {plan!r}')
+
+
+@_unit
+def test_plan_warm_resume_serviceable_slices_post_cursor_events():
+    """Slice 7: valid cursor in-buffer returns a WarmResumePlan with
+    resume_from = cursor + 1 (SSE spec: Last-Event-ID is the id of the
+    last RECEIVED event, resume AFTER it) and replay_events sliced from
+    exactly that index onward.
+
+    Wire-parity check: matches the pre-slice inline
+    ``task['events'][cursor+1:]`` behaviour byte-for-byte.
+    """
+    import lib.chat_dispatch as cd
+    import threading
+    task = {
+        'content': 'hi',
+        'thinking': '',
+        'status': 'running',
+        'error': None,
+        'toolRounds': [],
+        'events': [
+            {'type': 'delta', 'text': 'a'},   # id 0
+            {'type': 'delta', 'text': 'b'},   # id 1
+            {'type': 'delta', 'text': 'c'},   # id 2
+            {'type': 'delta', 'text': 'd'},   # id 3
+        ],
+        'events_lock': threading.Lock(),
+    }
+    # cursor=1 → resume_from=2 → replay [{c}, {d}]
+    plan = cd.plan_warm_resume(task, '1', 'task-warm')
+    assert plan is not None
+    assert plan.serviceable is True
+    assert plan.resume_from == 2, (
+        f'resume_from must be cursor+1 (SSE spec); got {plan.resume_from}')
+    assert plan.replay_events == [
+        {'type': 'delta', 'text': 'c'},
+        {'type': 'delta', 'text': 'd'},
+    ], f'replay_events must slice task[events][resume_from:]; got {plan.replay_events}'
+    # The leading state must carry content / thinking / status /
+    # toolRounds (the resume-snapshot invariant — see the ★ comment
+    # in the pre-slice inline code about frontend keep-longer guard).
+    assert plan.resume_state['content'] == 'hi'
+    assert plan.resume_state['status'] == 'running'
+    assert plan.resume_state['toolRounds'] == []
+
+
+@_unit
+def test_build_fresh_state_snapshot_carries_full_task_state():
+    """Slice 7: build_fresh_state_snapshot returns (state, meta, cursor)
+    matching the pre-slice inline field-copy loop:
+
+      * state['content'], state['thinking'], state['status'] set from task
+      * state['createdAt'] = task['created_at'] * 1000 when present
+      * state['toolRounds'] emitted only when truthy
+      * meta fields (finishReason / usage / model / thinkingDepth) copied
+        from _extract_task_meta into state when truthy
+      * state['preset'] / memoryPrefetch / preferencesApplied /
+        relatedConversations / preferencesLearned / inboxInjects /
+        peerInjects / userSteerInjects — each copied only when present
+      * endpoint_mode → endpointMode / endpointPhase / endpointIteration /
+        endpointTurns / endpointStopReason
+      * cursor == len(task['events'])
+
+    Byte-parity against the ~55-line inline block.
+    """
+    import lib.chat_dispatch as cd
+    import threading
+    task = {
+        'content': 'hello',
+        'thinking': 'thoughts',
+        'status': 'running',
+        'error': None,
+        'toolRounds': [{'name': 'read_files'}],
+        'events': ['e0', 'e1', 'e2'],
+        'events_lock': threading.Lock(),
+        'created_at': 1_700_000_000.5,
+        'finishReason': 'stop',
+        'usage': {'prompt': 10},
+        'model': 'gpt-4',
+        'thinkingDepth': 3,
+        'preset': 'default',
+        '_memoryPrefetch': [{'m': 1}],
+        '_preferencesApplied': ['pref1'],
+        'endpoint_mode': True,
+        '_endpoint_phase': 'critic',
+        '_endpoint_iteration': 2,
+        '_endpoint_turns': [{'t': 1}],
+        '_endpoint_stop_reason': 'critic_approved',
+    }
+    state, meta, cursor = cd.build_fresh_state_snapshot(task)
+    assert state['content'] == 'hello'
+    assert state['thinking'] == 'thoughts'
+    assert state['status'] == 'running'
+    assert state['createdAt'] == int(1_700_000_000.5 * 1000)
+    assert state['toolRounds'] == [{'name': 'read_files'}]
+    assert state['finishReason'] == 'stop'
+    assert state['usage'] == {'prompt': 10}
+    assert state['model'] == 'gpt-4'
+    assert state['thinkingDepth'] == 3
+    assert state['preset'] == 'default'
+    assert state['memoryPrefetch'] == [{'m': 1}]
+    assert state['preferencesApplied'] == ['pref1']
+    assert state['endpointMode'] is True
+    assert state['endpointPhase'] == 'critic'
+    assert state['endpointIteration'] == 2
+    assert state['endpointTurns'] == [{'t': 1}]
+    assert state['endpointStopReason'] == 'critic_approved'
+    assert cursor == 3  # len(events)
+    # meta must carry the raw dict extract_task_meta produced (chat_stream
+    # uses this for the fresh-terminal done event).
+    assert meta.get('finishReason') == 'stop'
+    assert meta.get('model') == 'gpt-4'
+
+
 # ── Slice 6: chat_stream cold-path → lib/chat_dispatch.build_cold_replay_response ─
 # Extracts the ~170-line cold-path (task not in memory) block:
 # persisted-event replay OR DB snapshot OR not-found.
@@ -725,6 +950,12 @@ if __name__ == '__main__':
         test_chat_dispatch_exposes_build_cold_replay_response,
         test_chat_stream_delegates_cold_path_to_dispatch,
         test_build_cold_replay_response_returns_not_found_when_task_absent,
+        test_chat_dispatch_exposes_plan_warm_resume,
+        test_chat_stream_delegates_warm_resume_to_dispatch,
+        test_plan_warm_resume_none_on_no_cursor,
+        test_plan_warm_resume_none_on_cursor_ahead_of_buffer,
+        test_plan_warm_resume_serviceable_slices_post_cursor_events,
+        test_build_fresh_state_snapshot_carries_full_task_state,
     ]
     for fn in tests:
         fn()

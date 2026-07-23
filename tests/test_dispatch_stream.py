@@ -273,6 +273,54 @@ class TestDispatchStreamAllUnreachable:
 
 
 @pytest.mark.unit
+class TestFinalizeStreamSuccessHelper:
+    """The success-path bookkeeping shared by the sync + async dispatch loops
+    was extracted into ``_finalize_stream_success``. Pin its contract directly
+    so a drift in WHICH usage fields get stamped fails here (both loops call
+    it identically, so this covers both)."""
+
+    def _state(self, hard=0, r429=0):
+        from lib.llm_dispatch.api import _StreamRetryState
+        st = _StreamRetryState()
+        st.hard_attempts = hard
+        st._429_count = r429
+        return st
+
+    def test_stamps_dispatch_metadata_and_records_success(self):
+        from lib.llm_dispatch.api import _finalize_stream_success
+        slot = _make_slot(model='gpt-4o', key='kZ')
+        usage = {'completion_tokens': 11}
+        st = self._state(hard=1, r429=2)
+        _finalize_stream_success(slot, usage, latency=123.4, ttft=45.6,
+                                 state=st, cache_conv_id='', tag='[t]')
+        assert usage['_dispatch']['model'] == 'gpt-4o'
+        assert usage['_dispatch']['key'] == 'kZ'
+        assert usage['_dispatch']['latency_ms'] == 123
+        assert usage['_dispatch']['attempt'] == 2      # hard_attempts + 1
+        assert usage['_dispatch']['429_retries'] == 2
+        assert slot.last_success_time > 0
+        assert slot.consecutive_errors == 0
+
+    def test_non_dict_usage_is_tolerated(self):
+        from lib.llm_dispatch.api import _finalize_stream_success
+        slot = _make_slot()
+        st = self._state()
+        # Some providers return None usage — must not raise, must still record.
+        _finalize_stream_success(slot, None, latency=10.0, ttft=None,
+                                 state=st, cache_conv_id='', tag='[t]')
+        assert slot.last_success_time > 0
+
+    def test_output_tokens_from_output_tokens_key(self):
+        from lib.llm_dispatch.api import _finalize_stream_success
+        slot = _make_slot()
+        # Anthropic-shape usage uses output_tokens, not completion_tokens.
+        usage = {'output_tokens': 9}
+        _finalize_stream_success(slot, usage, latency=5.0, ttft=None,
+                                 state=self._state(), cache_conv_id='', tag='[t]')
+        assert usage['_dispatch']['model'] == slot.model
+
+
+@pytest.mark.unit
 class TestDispatchStreamAbort:
     def test_abort_propagates_and_releases_slot(self, monkeypatch):
         from lib.llm_dispatch import api

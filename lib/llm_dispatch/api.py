@@ -780,6 +780,53 @@ def _adapt_stream_body_for_slot(slot, body_or_messages, is_body, *,
     )
 
 
+def _finalize_stream_success(slot, usage, *, latency, ttft, state,
+                             cache_conv_id, tag):
+    """Shared success-path bookkeeping for both stream dispatch loops.
+
+    The sync ``dispatch_stream`` and async ``async_dispatch_stream`` loops
+    differ in their transport call + the production-only pre-send gates the
+    sync path carries (cgroup headroom, warm-key hold, big-prefix admission),
+    so the LOOPS are intentionally NOT unified. But the moment a slot answers,
+    both do the identical side-effect sequence — record output tokens, mark the
+    slot healthy, stamp ``usage['_dispatch']`` metadata, run the premature-close
+    cooldown check, and record the conv's stream-end for the cache-settle gate.
+    That verbatim block lived twice and could drift on WHICH usage fields get
+    stamped; it now lives here.
+
+    Mutates ``usage`` in place (stamps ``_dispatch``) and returns nothing.
+    """
+    _out_tokens = 0
+    if isinstance(usage, dict):
+        _out_tokens = (usage.get('completion_tokens')
+                       or usage.get('output_tokens') or 0)
+        try:
+            _out_tokens = int(_out_tokens)
+        except (ValueError, TypeError) as _e_audit:
+            logger.debug('[api] _finalize_stream_success caught %s: %s',
+                         type(_e_audit).__name__, _e_audit)
+            _out_tokens = 0
+    _prev_ce = slot.consecutive_errors
+    slot.record_success(latency, ttft_ms=ttft, output_tokens=_out_tokens)
+    if isinstance(usage, dict):
+        usage['_dispatch'] = {
+            'key': slot.key_name, 'model': slot.model,
+            'key_tail': (slot.api_key or '')[-4:],
+            'provider_id': slot.provider_id,
+            'latency_ms': round(latency),
+            'attempt': state.hard_attempts + 1,
+            '429_retries': state._429_count,
+        }
+    _cool_slot_on_premature_close(slot, usage, _prev_ce)
+    if cache_conv_id:
+        try:
+            from lib.llm_dispatch.cache_settle import (
+                is_cold_write, record_stream_end)
+            record_stream_end(cache_conv_id, cold_write=is_cold_write(usage))
+        except ImportError as _cs_err:
+            logger.debug('%s cache-settle record unavailable: %s', tag, _cs_err)
+
+
 class _StreamRetryState:
     """Shared retry/exclusion bookkeeping for the streaming dispatch loops.
 
@@ -1050,27 +1097,17 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
     except Exception as _hr_e:
         logger.debug('%s cgroup headroom check skipped: %s', log_prefix, _hr_e)
 
-    # ★ hard_attempts counts only non-429 failures; 429 loops forever.
-    #   Set _MAX_429_CYCLES = 0 to disable the cap (retry indefinitely).
-    #   The abort_check runs every cycle so the user can always cancel.
-    _MAX_429_CYCLES = 0  # 0 = infinite; set >0 to re-enable safety cap
+    # ★ hard_attempts counts only non-429 failures; 429 loops forever
+    #   (the abort_check runs every cycle so the user can always cancel).
+    #   A blanket 429-cycle cap was intentionally removed: the meaningful
+    #   bound is the gateway-outage cap below (whole-upstream 5xx storm),
+    #   which frees the worker without capping genuine per-key contention.
 
     while state.hard_attempts < max_retries:
         # Abort check — let the user cancel during 429 cycling
         if abort_check and abort_check():
             from lib.llm import AbortedError as _AE
             raise _AE('Aborted during dispatch retry')
-
-        # ★ Safety cap on 429 cycling — if we've been rate-limited for
-        #   too many cycles, something is fundamentally wrong (e.g. payload
-        #   too large causing 413 on some slots and 429 on the rest).
-        if _MAX_429_CYCLES > 0 and state._429_count >= _MAX_429_CYCLES:
-            logger.error(
-                '%s dispatch_stream: 429 cycling exceeded safety cap '
-                '(%d cycles) — giving up. Last error: %s',
-                log_prefix, _MAX_429_CYCLES, str(state.last_err)[:200])
-            raise state.last_err or RuntimeError(
-                'Rate-limited %d times without success' % state._429_count)
 
         # ★ Gateway-outage cap — when the WHOLE upstream is down (only
         #   502/503/504 coming back from every slot for > the outage budget),
@@ -1324,29 +1361,9 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
                 api_protocol=slot.protocol or 'openai',
             )
             latency = (time.time() - t0) * 1000
-            _out_tokens = 0
-            if isinstance(usage, dict):
-                _out_tokens = (usage.get('completion_tokens')
-                               or usage.get('output_tokens') or 0)
-                try:
-                    _out_tokens = int(_out_tokens)
-                except (ValueError, TypeError) as _e_audit:
-                    logger.debug('[api] dispatch_stream caught %s: %s', type(_e_audit).__name__, _e_audit)
-                    _out_tokens = 0
-            _prev_ce = slot.consecutive_errors
-            slot.record_success(latency, ttft_ms=ttft_value[0],
-                                output_tokens=_out_tokens)
-            # Inject dispatch metadata so callers know which slot served this
-            if isinstance(usage, dict):
-                usage['_dispatch'] = {
-                    'key': slot.key_name, 'model': slot.model,
-                    'key_tail': (slot.api_key or '')[-4:],
-                    'provider_id': slot.provider_id,
-                    'latency_ms': round(latency),
-                    'attempt': state.hard_attempts + 1,
-                    '429_retries': state._429_count,
-                }
-            _cool_slot_on_premature_close(slot, usage, _prev_ce)
+            _finalize_stream_success(
+                slot, usage, latency=latency, ttft=ttft_value[0], state=state,
+                cache_conv_id=_cache_conv_id, tag=tag)
             if state._429_count > 0:
                 logger.info('%s dispatch_stream OK after %d 429-retries: '
                             'finish_reason=%s model=%s provider=%s latency=%.0fms',
@@ -1358,19 +1375,6 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
                             log_prefix, finish, slot.model,
                             slot.provider_id, latency, state.hard_attempts + 1,
                             max_retries)
-            # ── Cache write-visibility settle: mark this conv's stream END ──
-            # The NEXT big request on this conversation measures its gap from
-            # here and settles if it arrives before the prior write is visible
-            # (see cache_settle.py / settle_before_send above).
-            if _cache_conv_id:
-                try:
-                    from lib.llm_dispatch.cache_settle import (
-                        is_cold_write, record_stream_end)
-                    record_stream_end(_cache_conv_id,
-                                      cold_write=is_cold_write(usage))
-                except ImportError as _cs_err:
-                    logger.debug('%s cache-settle record unavailable: %s',
-                                 tag, _cs_err)
             return msg, finish, usage
 
         except RateLimitError as e:
@@ -1674,40 +1678,11 @@ async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
                 abort_check=abort_check, log_prefix=tag,
                 api_protocol=slot.protocol or 'openai')
             latency = (time.time() - t0) * 1000
-            _out_tokens = 0
-            if isinstance(usage, dict):
-                _out_tokens = (usage.get('completion_tokens')
-                               or usage.get('output_tokens') or 0)
-                try:
-                    _out_tokens = int(_out_tokens)
-                except (ValueError, TypeError) as _e_audit:
-                    logger.debug('[api] async_dispatch_stream caught %s: %s',
-                                 type(_e_audit).__name__, _e_audit)
-                    _out_tokens = 0
-            _prev_ce = slot.consecutive_errors
-            slot.record_success(latency, ttft_ms=ttft_value[0],
-                                output_tokens=_out_tokens)
-            if isinstance(usage, dict):
-                usage['_dispatch'] = {
-                    'key': slot.key_name, 'model': slot.model,
-                    'key_tail': (slot.api_key or '')[-4:],
-                    'provider_id': slot.provider_id,
-                    'latency_ms': round(latency),
-                    'attempt': state.hard_attempts + 1,
-                    '429_retries': state._429_count,
-                }
-            _cool_slot_on_premature_close(slot, usage, _prev_ce)
+            _finalize_stream_success(
+                slot, usage, latency=latency, ttft=ttft_value[0], state=state,
+                cache_conv_id=_cache_conv_id, tag=tag)
             logger.debug('%s async_dispatch_stream OK: finish=%s model=%s '
                          'latency=%.0fms', log_prefix, finish, slot.model, latency)
-            if _cache_conv_id:
-                try:
-                    from lib.llm_dispatch.cache_settle import (
-                        is_cold_write, record_stream_end)
-                    record_stream_end(_cache_conv_id,
-                                      cold_write=is_cold_write(usage))
-                except ImportError as _cs_err:
-                    logger.debug('%s cache-settle record (async) unavailable: %s',
-                                 tag, _cs_err)
             return msg, finish, usage
 
         except RateLimitError as e:

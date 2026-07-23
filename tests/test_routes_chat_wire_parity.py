@@ -489,6 +489,127 @@ def test_run_py_no_longer_carries_inline_start_task_for_conv():
         'routes/chat.py must import from routes.chat_task_start')
 
 
+# ── Slice 5: chat_send business logic → lib/chat_dispatch.py ─────────
+# Extracts the ~180-line queue classification + autopilot-followup
+# detection + abort-on-send race + inject-mode steer + queue-with-
+# pending-row-mirror pipeline into a testable pure-ish function.
+
+@_unit
+def test_chat_dispatch_module_exists_and_exposes_classifier():
+    """Slice 5 (pt_04686ac6): lib/chat_dispatch.py exposes
+    classify_send_intent + the SendIntent dataclass."""
+    import importlib
+    mod = importlib.import_module('lib.chat_dispatch')
+    assert hasattr(mod, 'classify_send_intent'), (
+        'lib.chat_dispatch missing classify_send_intent')
+    assert callable(mod.classify_send_intent), (
+        'classify_send_intent must be a callable function')
+    assert hasattr(mod, 'SendIntent'), (
+        'lib.chat_dispatch missing SendIntent dataclass')
+
+
+@_unit
+def test_chat_send_delegates_to_classify_send_intent():
+    """Slice 5: routes/chat.py::chat_send must import + call the
+    extracted classifier. Guards against silent revert to the inline
+    ~180-line block."""
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, 'routes/chat.py'), encoding='utf-8') as f:
+        src = f.read()
+    assert 'from lib.chat_dispatch import classify_send_intent' in src, (
+        'routes/chat.py must import classify_send_intent from '
+        'lib.chat_dispatch (slice 5 pt_04686ac6)')
+    # Specific inline call-site marker strings that USED TO live inside
+    # chat_send are GONE (they now live in lib/chat_dispatch.py).
+    assert '⚠️ Abort-on-send: task %s marked aborted' not in src, (
+        'routes/chat.py must NOT carry the "Abort-on-send" log line — '
+        "it lives in lib.chat_dispatch.classify_send_intent now")
+    assert '⚡ superseding %d in-flight autopilot' not in src, (
+        'routes/chat.py must NOT carry the autopilot-followup supersede '
+        'log line — extracted')
+    assert '➡ STEER (injected into running turn)' not in src, (
+        'routes/chat.py must NOT carry the STEER log line — extracted')
+    assert '➡ QUEUED (active task running)' not in src, (
+        'routes/chat.py must NOT carry the QUEUED log line — extracted')
+
+
+@_unit
+def test_classify_send_intent_none_on_no_running_task():
+    """Slice 5: when no task is running for the conversation and no
+    other classifier branch fires, classify_send_intent returns None
+    so chat_send falls through to the immediate-start path.
+
+    Uses monkey-patches on lib.tasks_pkg tasks / tasks_lock so no real
+    DB or Flask app context is needed. This is the load-bearing
+    invariant that the extracted classifier's None branch really is a
+    "no-op, proceed to immediate start"."""
+    import sys
+    import types
+    # Ensure lib.tasks_pkg's tasks dict/lock are available for the
+    # classifier to consult. Real module is fine — just make sure
+    # the ``tasks`` dict has no entries for our test conv.
+    tasks_pkg = sys.modules.get('lib.tasks_pkg')
+    if tasks_pkg is None:
+        import importlib
+        tasks_pkg = importlib.import_module('lib.tasks_pkg')
+    orig_tasks = dict(getattr(tasks_pkg, 'tasks', {}))
+    # Route the classifier's "was aborted during translate?" to False
+    # so the abort-early branch doesn't fire.
+    import routes.chat_state as _rs
+    orig_was_aborted = _rs._was_aborted_after
+    _rs._was_aborted_after = lambda cid, ts: False
+    # Route has_autopilot_marker to False so the supersede branch
+    # doesn't fire even if a followup task exists.
+    import lib.message_queue as _mq
+    orig_marker = getattr(_mq, 'has_autopilot_marker', None)
+    _mq.has_autopilot_marker = lambda cid: False
+    try:
+        import lib.chat_dispatch as cd
+
+        result = cd.classify_send_intent(
+            db=None, conv_id='cv-none', config={}, payload={},
+            data={}, messages=[], is_new=False, title='t',
+            user_msg={'content': 'hi'}, settings_patch=None,
+            text='hi', send_started_at=0.0,
+        )
+        assert result is None, (
+            f'no running task + no abort + no steer + no supersede '
+            f'MUST return None (fall through to immediate-start); '
+            f'got {result!r}')
+    finally:
+        _rs._was_aborted_after = orig_was_aborted
+        if orig_marker is not None:
+            _mq.has_autopilot_marker = orig_marker
+        # Restore any tasks we accidentally polluted.
+        tasks_pkg.tasks.clear()
+        tasks_pkg.tasks.update(orig_tasks)
+
+
+@_unit
+def test_classify_send_intent_aborted_kind_on_translate_abort():
+    """Slice 5: when _was_aborted_after returns True (user hit Stop
+    during auto-translate), classifier returns SendIntent(kind='aborted',
+    response={'aborted': True, 'convId': <cid>}). Verifies the exact
+    response shape chat_send previously returned inline."""
+    import routes.chat_state as _rs
+    orig = _rs._was_aborted_after
+    _rs._was_aborted_after = lambda cid, ts: True
+    try:
+        import lib.chat_dispatch as cd
+        result = cd.classify_send_intent(
+            db=None, conv_id='cv-aborted', config={}, payload={},
+            data={}, messages=[], is_new=False, title='t',
+            user_msg={'content': ''}, settings_patch=None,
+            text='hi', send_started_at=1.0,
+        )
+        assert result is not None
+        assert result.kind == 'aborted'
+        assert result.response == {'aborted': True, 'convId': 'cv-aborted'}
+    finally:
+        _rs._was_aborted_after = orig
+
+
 if __name__ == '__main__':
     tests = [
         test_routes_chat_symbols_all_importable,
@@ -501,6 +622,10 @@ if __name__ == '__main__':
         test_run_py_no_longer_carries_inline_start_task_for_conv,
         test_chat_bp_rules_snapshot,
         test_api_v1_chat_bp_rules_snapshot,
+        test_chat_dispatch_module_exists_and_exposes_classifier,
+        test_chat_send_delegates_to_classify_send_intent,
+        test_classify_send_intent_none_on_no_running_task,
+        test_classify_send_intent_aborted_kind_on_translate_abort,
     ]
     for fn in tests:
         fn()

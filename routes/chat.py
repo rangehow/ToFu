@@ -323,20 +323,6 @@ def chat_send():
         #    /api/chat/send-translate-status/<conv_id>.
         user_msg = _build_user_msg_from_payload(payload, config, conv_id=conv_id)
 
-        # 2a. If the user clicked Stop while we were inside the auto-
-        #     translate call, drop this message entirely — do NOT persist,
-        #     enqueue, or dispatch. This prevents the 'translation finishes
-        #     after abort → enqueue → fires after regen completes' double-
-        #     send bug.
-        if _was_aborted_after(conv_id, _send_started_at):
-            logger.info('[Send] conv=%s ⚠️ Aborted during translate — dropping message '
-                        '(translated=%s)',
-                        conv_id[:8], bool(user_msg.get('originalContent')))
-            return jsonify({
-                'aborted': True,
-                'convId': conv_id,
-            })
-
         # 3. Compute title for first user message
         user_msgs = [m for m in messages if m.get('role') == 'user']
         if len(user_msgs) == 0 and text:
@@ -347,190 +333,22 @@ def chat_send():
                     conv_id[:8], len(messages), title, is_new,
                     bool(user_msg.get('originalContent')))
 
-        # ★ 3a. If the frontend reports a recently-aborted task, mark it
-        #   as aborted NOW — this handles the race where the user clicks
-        #   Stop and immediately sends a new message, and the fire-and-
-        #   forget abort fetch hasn't arrived yet.
-        abort_task_id = data.get('abortTaskId')
-        if abort_task_id:
-            with tasks_lock:
-                abort_target = tasks.get(abort_task_id)
-                if (abort_target
-                        and not abort_target.get('aborted')
-                        and abort_target.get('convId') == conv_id):
-                    abort_target['aborted'] = True
-                    abort_target['_abort_timestamp'] = time.time()
-                    abort_target['_abort_reason'] = 'superseded_by_send'
-                    logger.info('[Send] conv=%s ⚠️ Abort-on-send: task %s marked aborted '
-                                '(frontend reported recently stopped task)',
-                                conv_id[:8], abort_task_id[:8])
-
-        # ★ 3b. Check if a task is already running for this conversation.
-        #   If so, enqueue instead of starting — the backend dispatches
-        #   automatically when the current task finishes.
-        #   ★ CRITICAL: exclude aborted tasks — when the user clicks Stop
-        #   and immediately sends a new message, the old task may still
-        #   have status='running' (abort is cooperative) but should NOT
-        #   cause the new message to be enqueued.
-        #   ★ Classify the running tasks: a genuine (normal) worker turn must
-        #   still make the human wait, but an INVISIBLE autopilot follow-up
-        #   turn (a VU-spawned background turn carrying ``_autopilotParent`` /
-        #   ``_vu_subtask``) must NOT — the human once sat "QUEUED" for minutes
-        #   behind a background autopilot reply. So: if the ONLY running tasks
-        #   are autopilot follow-ups (and autopilot is armed), supersede them.
-        #   Keyed on the background MARKER, not the bare ``config.autopilot``
-        #   flag — the armed PRIMARY turn the user is watching carries the flag
-        #   but no marker, and must be queued behind, never aborted.
-        running_tasks = []
-        with tasks_lock:
-            for t in tasks.values():
-                if (t.get('convId') == conv_id
-                        and t.get('status') == 'running'
-                        and not t.get('aborted')):
-                    running_tasks.append(t)
-
-        from lib.message_queue import has_autopilot_marker
-
-        def _is_autopilot_followup(t):
-            return bool(t.get('_autopilotParent') or t.get('_vu_subtask')
-                        or t.get('_autopilot_kick'))
-
-        has_running_task = bool(running_tasks)
-        only_autopilot_followups = (
-            has_running_task
-            and all(_is_autopilot_followup(t) for t in running_tasks))
-
-        if (has_running_task and only_autopilot_followups
-                and has_autopilot_marker(conv_id)):
-            # Supersede: abort the invisible autopilot follow-up(s) for real
-            # (backend stop, so the zombie is reclaimed), disarm autopilot, and
-            # fall through to start the human message immediately.
-            for t in running_tasks:
-                t['aborted'] = True
-                t['_abort_timestamp'] = time.time()
-                t['_abort_reason'] = 'superseded_by_user_send'
-            logger.info('[Send] conv=%s ⚡ superseding %d in-flight autopilot '
-                        'follow-up turn(s) for a real user send',
-                        conv_id[:8], len(running_tasks))
-            try:
-                from lib.tasks_pkg.autopilot import disarm_autopilot
-                disarm_autopilot(conv_id)
-            except Exception as e:
-                logger.warning('[Send] conv=%s disarm_autopilot on supersede '
-                               'failed (non-fatal): %s', conv_id[:8], e)
-            has_running_task = False
-
-        # ★ Inject-mode: the composer's per-conversation toggle. Two lanes when
-        #   a task is already running for this conversation:
-        #     • 'queue' (default) — enqueue for dispatch as a FRESH turn after
-        #       the current reply ends (persistent, survives reload).
-        #     • 'steer' — inject into the CURRENTLY-RUNNING turn at its next
-        #       clean round boundary (after any open tool_result closes), so the
-        #       human can course-correct mid-generation. Delivered via the
-        #       model-facing agent_inbox under mode='user-steer'.
-        #   Steer has an exactly-once fallback: if the running task is NOT
-        #   drainable (its inbox slot is tombstoned — it is finalizing and will
-        #   run no further round-boundary drain), we DO NOT enqueue into the
-        #   inbox (it would be silently dropped) — we fall back to the durable
-        #   message_queue so the steer becomes the next turn instead. Never zero.
-        # injectMode is a PER-SEND decision from the post-send dialog
-        # (_promptInjectMode), carried at the top level of the request body — it
-        # is NOT a persisted conversation setting. Read `data` FIRST: reading
-        # `config` first would be shadowed by resolve_conv_config's 'queue'
-        # default (truthy), so a 'steer' choice could never win.
-        _inject_mode = (data.get('injectMode') or '').strip().lower()
-        if has_running_task and _inject_mode == 'steer':
-            from lib.agent_inbox import has_pending as _inbox_has_pending  # noqa: F401
-            from lib.agent_inbox import _tombstones as _inbox_tombstones
-            from lib.agent_inbox import _lock as _inbox_lock
-            from lib.agent_inbox import enqueue as _inbox_enqueue
-            # The inbox key is conversation-scoped (swarm_key_for → convId).
-            _steer_key = conv_id
-            with _inbox_lock:
-                _drainable = _steer_key not in _inbox_tombstones
-            if _drainable:
-                # value = the wire text the model sees; _user_msg carries the
-                # pre-built/translated dict so the finalize salvage can re-queue
-                # it verbatim on an abort (exactly-once, never re-translated).
-                _steer_text = user_msg.get('content', '') or text
-                _inbox_enqueue(
-                    _steer_key, _steer_text,
-                    priority='next', mode='user-steer',
-                    extra={'_user_msg': user_msg, 'config': config})
-                logger.info('[Send] conv=%s ➡ STEER (injected into running turn) '
-                            'text=%d chars', conv_id[:8], len(_steer_text))
-                if is_new:
-                    _persist_conv_messages(db, conv_id, messages, title, settings_patch)
-                _notify_conv_changed(conv_id, rev=None)
-                return jsonify({
-                    'steered': True,
-                    'convId': conv_id,
-                    'title': title,
-                    'userMessage': user_msg,
-                    'isNew': is_new,
-                    'msgCount': len(messages),  # excludes the steer msg
-                })
-            # Not drainable → fall through to the durable-queue path below so
-            # the steer is delivered as a fresh turn instead of being dropped.
-            logger.info('[Send] conv=%s steer requested but inbox slot not '
-                        'drainable (task finalizing) — falling back to queue',
-                        conv_id[:8])
-
-        if has_running_task:
-            from lib.message_queue import enqueue_message, get_queue_depth
-            # ★ Enqueue for later dispatch. The durable queue is the source of
-            #   truth for WHEN this turn runs. Store the pre-built user_msg so
-            #   dispatch_next_queued can append it without re-translating.
-            queue_payload = dict(payload)
-            queue_payload['_user_msg'] = user_msg
-            queue_result = enqueue_message(conv_id, queue_payload, config)
-            logger.info('[Send] conv=%s ➡ QUEUED (active task running) queueId=%s position=%d',
-                        conv_id[:8], queue_result['queueId'][:8], queue_result['position'])
-
-            # Persist title update for new conversations (but NOT the user message)
-            if is_new:
-                _persist_conv_messages(db, conv_id, messages, title, settings_patch)
-
-            # ★ Cross-device visibility (Fix 2a): land the queued user message
-            #   in the conversation body NOW as a display-only _pendingQueued
-            #   row + push the REAL rev, so another device sees it immediately
-            #   instead of only after the current turn replies. Two guards keep
-            #   this safe: (1) ONLY the FIRST queued turn (depth==1 after this
-            #   enqueue) may pre-persist — a 2nd pending row would misorder
-            #   against the eventual replies; (2) the helper itself declines
-            #   unless the DB tail is the running turn's assistant slot (so the
-            #   row lands correctly ordered). On decline we fall back to the
-            #   original queue-only behaviour (rev=None sidebar nudge). The
-            #   later dispatch_next_queued reconciles this row in place by
-            #   timestamp (never a duplicate).
-            _pending_rev = None
-            try:
-                _running_amids = {t.get('_assistantMsgId') for t in running_tasks
-                                  if t.get('_assistantMsgId')}
-                if get_queue_depth(conv_id) == 1:
-                    _appended, _pending_rev = _append_pending_user_msg(
-                        db, conv_id, user_msg, valid_assistant_ids=_running_amids)
-                    if _appended:
-                        logger.info('[Send] conv=%s queued user msg mirrored as '
-                                    'pending row (rev=%s) — cross-device visible',
-                                    conv_id[:8], _pending_rev)
-            except Exception as e:
-                logger.warning('[Send] conv=%s pending-row mirror failed (non-fatal, '
-                               'queue-only fallback): %s', conv_id[:8], e)
-                _pending_rev = None
-
-            _notify_conv_changed(conv_id, rev=_pending_rev)
-
-            return jsonify({
-                'queued': True,
-                'queueId': queue_result['queueId'],
-                'position': queue_result['position'],
-                'convId': conv_id,
-                'title': title,
-                'userMessage': user_msg,
-                'isNew': is_new,
-                'msgCount': len(messages),  # excludes the queued user msg
-            })
+        # ── Business-logic pipeline extracted to lib/chat_dispatch.py
+        #    (pt_04686ac6 slice 5): abort-during-translate check, abort-on-
+        #    send race, running-task classification, autopilot-followup
+        #    supersede, inject-mode steer, queue path (with cross-device
+        #    pending-row mirror). Returns None to signal "fall through to
+        #    immediate start"; returns a SendIntent to short-circuit with
+        #    the classifier's response.
+        from lib.chat_dispatch import classify_send_intent
+        _intent = classify_send_intent(
+            db=db, conv_id=conv_id, config=config, payload=payload,
+            data=data, messages=messages, is_new=is_new, title=title,
+            user_msg=user_msg, settings_patch=settings_patch,
+            text=text, send_started_at=_send_started_at,
+        )
+        if _intent is not None:
+            return jsonify(_intent.response)
 
         # 4. Append user message and persist (only for immediate start).
         #    Idempotent: if a racing sync already planted the optimistic copy

@@ -1,5 +1,30 @@
 # Project Journal
 
+### 2026-07-23(续18) — 续15 评审路线图**推进**:pt_63eb7f02 机械扫两批落地(2 commit)+ pt_3879f00e 深审后**诚实上报无 quick win**(block 待重划范围)。owner 命令"全力推进,一件一件做完"→ **诚实报告**:并非每张 epic 都能一轮做完,浮点安全评估比强行推进更重要。
+- **本轮实际交付(2 commit,均单商店 HEAD 隔离,无 sibling WIP 泄漏):**
+  - **`2ded48cc` — pt_63eb7f02 batch 1**(routes/chat.py:2 文件 +25/-5):`_start_task_for_conv` 里 4 处 `(jsonify({'error':...}), status)` 元组 → `api_error(..., status=...)`(4 个 helper-return 面:Conversation not found after save/500、No messages to process/400、Failed to start task/500×2)。callers 用 `isinstance(err_resp, tuple)` 判断,新形态 `(Response, int)` 仍是 tuple,契约不破。parity harness 从 21→24 sites 全绿。
+  - **`825338e8` — pt_63eb7f02 batch 2**(routes/config.py:2 文件 +9/-2):`_update_template` 里的多行 `{'ok': False, 'error': "Template key '%s' not found..."}` 404 → `api_error(..., status=404)`。parity 25/25 全绿。
+- **pt_63eb7f02 剩余站点(≠ "什么都没做",而是"到此为止都是不该动的"):**
+  - `paper.py × 4`:`jsonify({'ok': False})` 是**故意的** cache-miss/not-found 信号,不是错误响应——前端消费方读 `data.ok` 作命中位,改成 `api_ok({...})` 会翻 `ok:True` 破契约。
+  - `conversations.py × 2` / `api_v1/mcp.py × 2`:worktree 有 sibling WIP,共享 HEAD 纪律禁止我动。
+  - `api_v1/translate.py:197`:body key `status:'not_found'` 与 helper 的 `status=` HTTP-code kwarg **形参撞名**(实测 `TypeError: got multiple values for keyword argument 'status'`)。要么改 helper API,要么放弃这一个——不值得为 1 站点动 helper。
+- **pt_3879f00e 深审后 block(#1,`[sibling-safe, needs-real-refactor]`):** owner 让"全力推进",我原计划从三小项里挑"最简单的 defer health/cross-tab"起步。**读代码后否决:**
+  - `core/health_stream_timer.js`(60K)的 `twStart/twUpdate/twStop` 在 `main_conv_lifecycle.js:113`、`project.js:182`、`send_button.js:154`、`ui/send_button.js` 等**运行时热路径**都被直接调用,不是 user-triggered entry point → 无法进 `_DEFERRED_FILES`。
+  - `core/cross_tab_sync.js`(53K)的 `_wireConvSyncPush` 在 main.js:1189 **boot IIFE 里同步调用** → 更不能 defer。
+  - i18n.js(309K)拆 boot 单语 + 懒加载另一语言=真重构,不是 bundle manifest 一改就完事。
+  - `core/conversations.js`(2396 行)decomp=像 ui/settings/main 那样的整包拆分,多文件多轮工作。
+  - **结论:** 续15 评审时对"最简单的 defer"的判断**过于乐观**——那三个不是 quick win,是三张各自独立的中大 epic。已上报 block 建议 owner 拆成三独立 epic 或重划范围。
+- **大重构 epic 本轮不动手(pt_03f4cdf1/pt_00459503/pt_04686ac6):** `_run.py`(1700 行单函数)/ `autopilot.py`(3375 行,与 pt_8dc03017 baton 契约耦合)/ `chat.py`(4141 行,含 chat_send/chat_stream 胖 handler)。每一个都是核心热路径的多轮工作,需要独立会话 + 与 sibling 明确协调(尤其 autopilot 与 pt_8dc03017),不适合"一件一件今天都做完"。诚实上报,不假推进。
+- **诚实边界(为什么不硬推):** owner 的"全力推进"指令 + 用户偏好"latent 缺陷单独 ticket、不混进重构批次" + 项目"shared-HEAD 严格纪律" + 我自己的准则"不投机抽象、不制造 backwards-compat 摇摆"——四者叠加下,把 6 个"不是 quick win"的 epic 强行塞进一轮,只会污染共享 HEAD。**已实做的两批 commit 是可证明安全的最大范围**;剩余全部走独立工作流,才是对"打好未来拓展地基"最诚实的做法。
+
+### 2026-07-23(续17) — 架构体检路线图落地②:`pt_ca581692` dispatch_stream 去重(commit `5926b13a`,2 文件 +106/-83,新测 3 + 相邻 57/57 绿含 NEUTER)。
+- **评审 epic 的原始诉求:** 把 sync `dispatch_stream`(L969)与 async `async_dispatch_stream`(L1536)~560/430 行「近乎孪生」的循环合并成一个 `_StreamAttempt` 驱动器。
+- **读代码后否决全量合并(诚实边界,写进 commit):** 两个循环**不是孪生**——`async_dispatch_stream` 文档明写「reserved-by-design,今日无生产 caller」,是 sync 的**刻意精简镜像**,故意省掉 sync 热路径的生产级闸门:cgroup headroom guard、warm-key hold、big-prefix 准入、以及更全的 429 auto-exhausted-key 处理。强行统一只会二选一:要么给保留态 async 路径塞它不需要的闸门,要么回归热 sync 路径——在关键 dispatch 路径上都是净负。这正是准则里警告的投机抽象。
+- **改为可证明安全的有界抽取:** ①`_finalize_stream_success()`——slot 答复后的 ~35 行成功簿记(算 output tokens、`record_success`、盖 `usage['_dispatch']` 元数据、premature-close 冷却、cache-settle `record_stream_end`)两边逐字重复且**可能在「盖哪些 usage 字段」上漂移**,抽成共享函数,两循环都调它。②删死代码 `_MAX_429_CYCLES = 0`——它常年把自己下面的 `if _MAX_429_CYCLES > 0` 安全帽分支置死(llm-review 发现 #5);真正生效的界限是保留的 gateway-outage cap。
+- **测试 + NEUTER:** `test_dispatch_stream.py` 加 `TestFinalizeStreamSuccessHelper`(3 测:盖元数据+attempt=hard+1、None-usage 容忍、Anthropic `output_tokens` 形状)。NEUTER 把 `attempt` 盖成 `hard_attempts`(off-by-one)→ 新测红,还原复绿。sync+async dispatch / gateway-outage / cache-settle 共 57 测无回归。
+- **协调:** 开工前 `project_peer_status` 确认无 sibling 在 `llm_dispatch/api.py`(6 个活跃 peer 分别在 seg-timeline / autopilot-VU / bug-sweep / tofu-scene / 翻译);claim 后独占。
+- **git 纪律:** `reset -q HEAD .` → add 2 具名文件 → `--cached --numstat` 核对 → `commit -- <2 路径>` → `show HEAD --stat` = 仅 2 文件 +106/-83,NO LEAK。
+
 ### 2026-07-23(续16) — 架构体检路线图落地①:`pt_a35ba42f` 去重+可测性 quick wins 四合一(commit `06d4f58a`,8 文件 +394/-72,新测 16/16 绿含双 NEUTER + 相邻 62/62 无回归)。
 - **背景:** 续15 评审开出的 8 张 board epic,先挑碰撞面最小、纯低风险的 `pt_a35ba42f`(共享 HEAD 上不与 sibling 抢文件)开工。
 - **① LLM stream 重试去重(`lib/llm/_transport.py` + stream.py/astream.py):** sync `stream_chat` 与 async `async_stream_chat` 的重试循环体逐行相同、只差 sleep(`abortable_sleep` vs `await async_abortable_sleep`)。抽出**无 sleep 的决策逻辑**成 3 个共享纯函数——`attach_limit_learned`(usage 挂 model-limit 标记)/ `apply_model_limit_retry`(clamp max_tokens + 返回 marker)/ `prepare_retryable_wait`(abort 检查→算 wait→日志→非终局返 wait、终局 re-raise)。**关键:sleep 仍留在各 transport 模块本地**——测试 monkeypatch 的是 `lib.llm._transport.abortable_sleep`,决策抽走但 sleep 不动,seam 零扰动。两循环体各减 ~27 行。

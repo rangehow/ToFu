@@ -57,29 +57,40 @@ def _set_chat_mode_fn() -> str:
 
 
 HARNESS = textwrap.dedent("""
-    // Minimal stubs the shipped setChatMode references.
+    // Minimal stubs the shipped setChatMode references. `order` records the
+    // sequence of side effects so we can assert the panel opens FIRST.
     let openCount = 0;
     let applied = null;
     let saved = 0;
+    const order = [];
+    const throwInApply = {throw_in_apply};
     global.projectState = {projectState_js};
-    global.openProjectModal = () => {{ openCount++; }};
-    global._applyChatModeUI = (m) => {{ applied = m; }};
-    global._saveConvToolState = () => {{ saved++; }};
+    global.openProjectModal = () => {{ openCount++; order.push('open'); }};
+    global._applyChatModeUI = (m) => {{
+      order.push('apply');
+      if (throwInApply) throw new Error('simulated dial bookkeeping failure');
+      applied = m;
+    }};
+    global._saveConvToolState = () => {{ saved++; order.push('save'); }};
     global.clearProject = () => {{}};
     global.debugLog = () => {{}};
     global.chatMode = 'chat';
 
     {set_chat_mode}
 
-    setChatMode('studio');
+    // Tolerate a synchronous throw (the pre-fix code had no try/catch; the
+    // neuter reproduces that) so we can still observe whether the panel opened.
+    try {{ setChatMode('studio'); }} catch (e) {{ order.push('threw'); }}
 
-    console.log(JSON.stringify({{ openCount, applied, saved }}));
+    console.log(JSON.stringify({{ openCount, applied, saved, order }}));
 """)
 
 
-def _run(set_chat_mode: str, project_state: dict) -> dict:
+def _run(set_chat_mode: str, project_state: dict,
+         throw_in_apply: bool = False) -> dict:
     script = HARNESS.format(set_chat_mode=set_chat_mode,
-                            projectState_js=json.dumps(project_state))
+                            projectState_js=json.dumps(project_state),
+                            throw_in_apply="true" if throw_in_apply else "false")
     proc = subprocess.run([_node(), "-e", script], cwd=ROOT,
                           capture_output=True, text=True)
     assert proc.returncode == 0, f"node failed: {proc.stderr}"
@@ -106,26 +117,54 @@ def test_studio_reopens_panel_when_project_already_attached():
     )
     assert out["applied"] == "studio", "dial stays in studio when a project is attached"
     assert out["saved"] == 1, "tool state should persist when re-selecting studio"
+    # The panel must open FIRST — before the dial/state bookkeeping — so that
+    # bookkeeping can never block the affordance.
+    assert out["order"][0] == "open", (
+        "openProjectModal must run BEFORE _applyChatModeUI/_saveConvToolState"
+    )
 
 
-def test_NC_early_return_without_open_breaks_has_project_case():
-    """Neuter: restore the old behavior (return before opening in the
-    has-project branch) → the reported bug reappears (panel never opens)."""
+def test_studio_opens_panel_even_when_dial_bookkeeping_throws():
+    """The real second bug: when a project is already attached, the pre-fix
+    code ran _applyChatModeUI + _saveConvToolState BEFORE opening the panel. If
+    either threw synchronously the panel never opened — so an already-attached
+    conv could never change its path, while attaching a fresh one (which skips
+    that bookkeeping) worked. The panel must open regardless."""
+    out = _run(_set_chat_mode_fn(), WITH_PROJECT, throw_in_apply=True)
+    assert out["openCount"] == 1, (
+        "panel must open even if the dial bookkeeping throws"
+    )
+    assert out["order"][0] == "open", "panel opens first, before the throwing bookkeeping"
+
+
+def test_NC_open_after_bookkeeping_breaks_when_bookkeeping_throws():
+    """Neuter: move the openProjectModal call to AFTER the bookkeeping block
+    (the pre-fix ordering). With a throwing _applyChatModeUI the panel never
+    opens — proving the open-first ordering is load-bearing."""
     fn = _set_chat_mode_fn()
-    # Re-insert an early return right after the has-project apply block, before
-    # the unconditional openProjectModal call — mirroring the pre-fix code.
     neutered = fn.replace(
-        "      debugLog('Mode: Studio (project attached)', 'success');\n    }\n"
         "    if (typeof openProjectModal === 'function') openProjectModal();\n"
+        "    if (hasProject) {\n"
+        "      try {\n"
+        "        _applyChatModeUI('studio');\n"
+        "        _saveConvToolState();\n"
+        "        debugLog('Mode: Studio (project attached)', 'success');\n"
+        "      } catch (err) {\n"
+        "        console.warn('[setChatMode] studio dial bookkeeping failed:', err);\n"
+        "      }\n"
+        "    }\n"
         "    return;",
+        "    if (hasProject) {\n"
+        "      _applyChatModeUI('studio');\n"
+        "      _saveConvToolState();\n"
         "      debugLog('Mode: Studio (project attached)', 'success');\n"
-        "      return;\n    }\n"
+        "    }\n"
         "    if (typeof openProjectModal === 'function') openProjectModal();\n"
         "    return;",
     )
     assert neutered != fn, "neuter substitution did not apply"
-    out = _run(neutered, WITH_PROJECT)
+    out = _run(neutered, WITH_PROJECT, throw_in_apply=True)
     assert out["openCount"] == 0, (
-        "NEUTER must reproduce the bug: with the early return, an already-"
-        "attached project never reopens the panel"
+        "NEUTER must reproduce the bug: bookkeeping-before-open + a throw means "
+        "the panel never opens"
     )

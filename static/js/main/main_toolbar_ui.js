@@ -122,16 +122,25 @@ function setChatMode(mode) {
     // The Studio segment IS the project affordance now (the standalone project
     // button is gone), so it must ALWAYS open the project panel — otherwise a
     // conv that is already in Studio has no way left to change its project
-    // path (clicking Studio again would be a silent no-op). When no project is
-    // attached yet the dial waits for a real attach (onProjectAttached promotes
-    // to studio on success); when one is already attached we keep the dial in
-    // studio and reopen the panel so the path can be managed/changed.
-    if (hasProject) {
-      _applyChatModeUI('studio');
-      _saveConvToolState();
-      debugLog('Mode: Studio (project attached)', 'success');
-    }
+    // path (clicking Studio again would be a silent no-op).
+    //
+    // Open the panel FIRST and unconditionally: the panel opening must not
+    // depend on the dial/state bookkeeping below succeeding. Previously the
+    // has-project branch ran _applyChatModeUI + _saveConvToolState BEFORE
+    // opening — if either threw synchronously the panel never opened, so an
+    // already-attached conv could never change its path (while attaching a
+    // fresh one, which skips that bookkeeping, worked). The dial bookkeeping is
+    // now best-effort and cannot block the affordance.
     if (typeof openProjectModal === 'function') openProjectModal();
+    if (hasProject) {
+      try {
+        _applyChatModeUI('studio');
+        _saveConvToolState();
+        debugLog('Mode: Studio (project attached)', 'success');
+      } catch (err) {
+        console.warn('[setChatMode] studio dial bookkeeping failed:', err);
+      }
+    }
     return;
   }
   // chat. Switching AWAY from studio while a project is attached would be

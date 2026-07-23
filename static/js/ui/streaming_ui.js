@@ -565,6 +565,41 @@ function _repositionInjectGroups(body, rounds) {
 }
 
 function _syncToolRoundsDOM(container, rounds) {
+  /* ★ Superseded-orphan drop, LIVE-streaming path (parity with the SETTLED
+   *   renderToolRoundsHTML / renderSegmentTimelineHTML filters in
+   *   ui/tool_rounds.js). A FloorRetry / stream-retry duplicate whose tc_id
+   *   never survived into the final assistant_msg is stamped badge='superseded'
+   *   (result-less) by the backend reconcile_announced_rounds — its adopted /
+   *   recovered twin is the real call. This LIVE path was the remaining
+   *   coverage gap: it renders straight from msg.toolRounds and never ran the
+   *   filter, so the husk showed a misleading "interrupted"/"superseded" chip
+   *   for the whole rest of the turn, only vanishing on a full page reload
+   *   (which rebuilds via the already-fixed renderSegmentTimelineHTML). Two
+   *   steps are needed here (not just a render-list filter): the husk's slot
+   *   was already CREATED as 'searching' on tool_start, THEN downgraded by
+   *   reconcile, so we must also PRUNE that stale [data-prn] slot. Filtering
+   *   `rounds` up-front also keeps the header count / fingerprint / visible-
+   *   window all consistent, since the whole function keys off `rounds`. */
+  if (typeof _isSupersededOrphanRound === "function") {
+    let _hasSup = false;
+    for (const r of rounds) { if (_isSupersededOrphanRound(r)) { _hasSup = true; break; } }
+    if (_hasSup) {
+      for (const r of rounds) {
+        if (!_isSupersededOrphanRound(r)) continue;
+        const _slot = container.querySelector(`[data-prn="${r.roundNum}"]`);
+        if (_slot) {
+          const _grp = _slot.parentElement;
+          _slot.remove();
+          /* Drop a group left empty by the pruned husk (shouldn't normally
+           * happen — the recovered twin shares the batch — but keep the DOM
+           * clean if it does). */
+          if (_grp && _grp.classList.contains("ptool-turn")
+              && !_grp.querySelector("[data-prn]")) _grp.remove();
+        }
+      }
+      rounds = rounds.filter((r) => !_isSupersededOrphanRound(r));
+    }
+  }
   // ★ Fast-path: skip if rounds haven't changed since last sync
   let _fp = rounds.length;
   for (let i = 0; i < rounds.length; i++) {

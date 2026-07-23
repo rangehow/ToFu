@@ -182,34 +182,62 @@ class StreamingToolAccumulator:
         return dict(self._announced)
 
     def reconcile_announced_rounds(self, assistant_msg: dict) -> int:
-        """Settle orphan early-announced rounds left by a discarded stream retry.
+        """Settle orphan early-announced rounds whose tc_id was superseded.
 
-        ``on_tool_call_ready`` fires PER STREAM ATTEMPT, and ``stream_chat``
-        (lib/llm/stream.py) transparently RE-RUNS the SSE stream up to
-        ``MAX_STREAM_RETRIES`` times on a transient mid-stream error while
-        reusing the SAME callback. If an early attempt streamed a tool call's
-        arguments far enough to fire the callback, ``_emit_tool_start`` already
-        appended a ``status='searching'`` round to ``task['toolRounds']`` and
-        emitted a ``tool_start`` — the live spinner. The retry then re-streams
-        the same call under a FRESH ``tc_id``. Only the FINAL attempt's tool
-        calls survive into ``assistant_msg['tool_calls']``, so the dispatch
-        pipeline only ever settles those ids; every discarded attempt's round
-        is orphaned at ``searching`` forever (a permanently-spinning tool row,
-        live AND after reload since it persists into ``conversations.messages``).
+        ``on_tool_call_ready`` fires as each tool call's arguments finish
+        streaming; ``_emit_tool_start`` immediately appends a
+        ``status='searching'`` round to ``task['toolRounds']`` and emits a
+        ``tool_start`` (the live spinner). A round is ORPHANED when its
+        ``tc_id`` is NOT present in the FINAL adopted ``assistant_msg`` — the
+        dispatch pipeline only settles ids that ARE in that message, so an
+        orphan would spin at ``searching`` forever (live AND after reload,
+        since it persists into ``conversations.messages``).
+
+        TWO distinct upstream causes produce such an orphan — this method
+        handles both, but they are NOT equally common (verified against
+        production ``logs/app.log``):
+
+          1. **FloorRetry adoption (the dominant, effectively sole cause).**
+             ``stream_llm_response`` resends the IDENTICAL body on a byte-stable
+             cache floor-collapse (``TOFU_CACHE_FLOOR_RETRY``, default ON) and
+             ADOPTS the recovered resend's response. The resend re-mints tool
+             calls under FRESH ``tc_id``s, so the first attempt's already-
+             announced rounds are not in the adopted message → orphaned. The
+             resend itself no longer announces (Layer-1 passes
+             ``on_tool_call_ready=None``), so the orphan is always the FIRST
+             attempt's round. ``task['_floor_retry_adopted']`` flags this.
+          2. **Transient stream retry.** ``stream_chat`` transparently re-runs
+             the SSE stream up to ``MAX_STREAM_RETRIES`` on a mid-stream error
+             while reusing the SAME callback; an early attempt that fired the
+             callback leaves a fresh-``tc_id`` orphan. In production this path
+             fired ZERO times over the sampled window (all observed orphans
+             were cause #1) — the original docstring/log wrongly blamed THIS
+             cause exclusively, which is why the symptom was repeatedly
+             mis-traced across sessions.
 
         This runs once, right after the LLM call returns, BEFORE
-        ``parse_tool_calls``: for every announced round whose ``tc_id`` is NOT
-        present in the final ``assistant_msg['tool_calls']``, it stamps a
+        ``parse_tool_calls``: for every orphaned announced round it stamps a
         terminal ``aborted`` status and emits a ``tool_result``-class event (via
-        ``_finalize_tool_round``) so the live stream and the persisted/reloaded
-        DB state agree — the same discipline as the task-end dangling sweep
-        (``orchestrator._finalize_dangling_tool_rounds``), applied here at the
-        per-round seam where the orphan is created.
+        ``_finalize_tool_round``, ``badge='superseded'``) so the live stream and
+        the persisted/reloaded DB state agree — the same discipline as the
+        task-end dangling sweep (``orchestrator._finalize_dangling_tool_rounds``),
+        applied at the per-round seam where the orphan is created. The husk is
+        DROPPED from both render paths and from model-context reconstruction
+        (``_isSupersededOrphanRound`` / ``_is_reconstructable_round``), so it is
+        never shown nor sent to the model — it exists only to flip the spinner.
 
         Returns the number of orphan rounds finalized.
         """
         if not self._announced:
             return 0
+        # True cause of any orphan this call settles (see docstring): FloorRetry
+        # adoption re-minted tc_ids, vs a transient stream retry. Read the marker
+        # stream_llm_response stamps; default to the retry story only when the
+        # marker is absent (older call sites / tests).
+        _fr_adopted = bool(self._task.get('_floor_retry_adopted'))
+        _cause = ('a FloorRetry resend adoption (identical-body cache-floor '
+                  'recovery re-minted tc_ids)' if _fr_adopted
+                  else 'a discarded stream-retry attempt')
         final_ids = {
             (tc.get('id') or '')
             for tc in (assistant_msg.get('tool_calls') or [])
@@ -236,10 +264,15 @@ class StreamingToolAccumulator:
                 continue
             tool_name = entry.get('toolName') or 'tool'
             query = entry.get('query') or tool_name
+            _snippet = ('Superseded — an identical-body resend recovered a '
+                        'cheaper cache read and its response was adopted, so '
+                        'this earlier call was dropped.' if _fr_adopted
+                        else 'Superseded — the stream reconnected and re-issued '
+                        'this call.')
             meta = {
                 'toolName': tool_name,
                 'title': query,
-                'snippet': 'Superseded — the stream reconnected and re-issued this call.',
+                'snippet': _snippet,
                 'source': 'Interrupted',
                 'fetched': False,
                 'fetchedChars': 0,
@@ -255,9 +288,8 @@ class StreamingToolAccumulator:
                 finalized += 1
                 logger.info(
                     '[%s] StreamingToolExec: settled orphan early-announced '
-                    'round %s (tool=%s tc_id=%s) — left "searching" by a '
-                    'discarded stream-retry attempt',
-                    self._tid, rn, tool_name, tc_id[:8])
+                    'round %s (tool=%s tc_id=%s) — superseded by %s',
+                    self._tid, rn, tool_name, tc_id[:8], _cause)
             except Exception as e:
                 entry['status'] = 'aborted'
                 finalized += 1
@@ -267,8 +299,20 @@ class StreamingToolAccumulator:
                     self._tid, rn, tool_name, e, exc_info=True)
         if finalized:
             logger.info('[%s] StreamingToolExec: reconciled %d orphan '
-                        'early-announced round(s) after stream retry',
-                        self._tid, finalized)
+                        'early-announced round(s) — cause=%s',
+                        self._tid, finalized,
+                        'floor_retry_adoption' if _fr_adopted else 'stream_retry')
+            try:
+                from lib.log import audit_log
+                audit_log('tool_round_superseded',
+                          task_id=self._task.get('id', '') or '',
+                          conv_id=self._task.get('convId', '') or '',
+                          count=finalized,
+                          cause=('floor_retry_adoption' if _fr_adopted
+                                 else 'stream_retry'))
+            except Exception as _ae:
+                logger.debug('[%s] audit_log(tool_round_superseded) failed: %s',
+                             self._tid, _ae)
         return finalized
 
     def on_tool_call_ready(self, tool_call: dict):

@@ -272,6 +272,122 @@ def test_floorretry_first_attempt_orphan_reconciled(monkeypatch):
     assert acc.announced_tc_map['tc_A'][1].get('toolContent') is None
 
 
+def test_stream_stamps_floor_retry_adopted_marker(monkeypatch):
+    """The TRUE-CAUSE marker: stream_llm_response must set
+    task['_floor_retry_adopted']=True when it adopts a recovered resend, and
+    reset it to False on a round that did NOT adopt (so a later non-adopting
+    round can't read a stale True). This marker is what lets
+    reconcile_announced_rounds attribute an orphan to FloorRetry vs a stream
+    retry — the mis-attribution that made this symptom un-traceable for
+    sessions (app.log proved stream retries=0 while FloorRetry drove 100%)."""
+    import lib.tasks_pkg.manager as _mgr
+    monkeypatch.setenv('TOFU_CACHE_FLOOR_RETRY', '1')
+    monkeypatch.setenv('TOFU_CACHE_FLOOR_RETRY_MAX', '2')
+
+    # Case A: floor then recover → adopted True.
+    conv_a = 'cfr-mark-a'
+    _seed_wire_fp(conv_a, [{'k': 'a'}])
+    seq_a = [_FLOOR_USAGE, _HIT_USAGE]
+    calls_a = {'n': 0}
+
+    def _disp_a(body, **kwargs):
+        i = calls_a['n']; calls_a['n'] += 1
+        return ({'role': 'assistant', 'content': 'ok'}, 'stop', dict(seq_a[min(i, len(seq_a) - 1)]))
+
+    task_a = _task(conv_a)
+    _orig = _mgr.dispatch_stream
+    _mgr.dispatch_stream = _disp_a
+    try:
+        _mgr.stream_llm_response(task_a, _body(), tag='FR')
+    finally:
+        _mgr.dispatch_stream = _orig
+    assert task_a.get('_floor_retry_adopted') is True, (
+        'adopting a recovered resend must stamp the true-cause marker')
+
+    # Case B: a healthy round (no floor collapse) → marker reset to False.
+    conv_b = 'cfr-mark-b'
+    _seed_wire_fp(conv_b, [{'k': 'a'}])
+    calls_b = {'n': 0}
+
+    def _disp_b(body, **kwargs):
+        calls_b['n'] += 1
+        return ({'role': 'assistant', 'content': 'ok'}, 'stop', dict(_HIT_USAGE))
+
+    task_b = _task(conv_b)
+    task_b['_floor_retry_adopted'] = True   # pretend a prior round left it True
+    _mgr.dispatch_stream = _disp_b
+    try:
+        _mgr.stream_llm_response(task_b, _body(), tag='FR')
+    finally:
+        _mgr.dispatch_stream = _orig
+    assert calls_b['n'] == 1, 'healthy round must not resend'
+    assert task_b.get('_floor_retry_adopted') is False, (
+        'a non-adopting round must RESET the marker (no stale True)')
+
+
+def test_reconcile_logs_true_cause_floor_retry_vs_stream_retry(monkeypatch):
+    """reconcile_announced_rounds must attribute the orphan to its TRUE cause,
+    driven by task['_floor_retry_adopted']:
+      * marker True  → audit cause='floor_retry_adoption' + FloorRetry snippet
+      * marker absent → audit cause='stream_retry' (legacy default)
+    This replaces the hardcoded — and, per app.log, FALSE — 'discarded
+    stream-retry attempt' story that was emitted unconditionally.
+    NEUTER-adjacent: the two branches assert DIFFERENT causes for the SAME
+    orphan shape, so a regression that hardcodes one cause fails one branch."""
+    import threading as _thr2
+    from lib.tasks_pkg.streaming_tool_executor import StreamingToolAccumulator
+    import lib.tasks_pkg.streaming_tool_executor as _ste
+
+    captured = []
+
+    def _fake_audit(event, **kw):
+        captured.append((event, kw))
+
+    monkeypatch.setattr(_ste, 'audit_log', _fake_audit, raising=False)
+    # audit_log is imported lazily inside reconcile via `from lib.log import
+    # audit_log`, so patch it on lib.log too.
+    import lib.log as _log
+    monkeypatch.setattr(_log, 'audit_log', _fake_audit, raising=False)
+
+    def _mk_acc(marker):
+        task = {'id': 'task-cause', 'convId': 'cfr-cause', 'content': '',
+                'thinking': '', 'config': {}, 'events': [], 'toolRounds': [],
+                'content_lock': _thr2.Lock(), 'events_lock': _thr2.Lock()}
+        if marker is not None:
+            task['_floor_retry_adopted'] = marker
+        acc = StreamingToolAccumulator(task, project_path='/tmp',
+                                       round_num=0, project_enabled=True)
+        # Announce tc_A (an orphan — final msg carries a DIFFERENT id).
+        acc.on_tool_call_ready({'id': 'tc_A', 'type': 'function',
+                                'function': {'name': 'read_files', 'arguments': '{}'}})
+        final_msg = {'role': 'assistant', 'tool_calls': [
+            {'id': 'tc_B', 'type': 'function',
+             'function': {'name': 'read_files', 'arguments': '{}'}}]}
+        return acc, final_msg
+
+    # Branch 1: FloorRetry adoption marker set.
+    captured.clear()
+    acc1, msg1 = _mk_acc(True)
+    n1 = acc1.reconcile_announced_rounds(msg1)
+    assert n1 == 1
+    ev1 = [kw for (name, kw) in captured if name == 'tool_round_superseded']
+    assert ev1 and ev1[0].get('cause') == 'floor_retry_adoption', (
+        f'marker True must audit floor_retry_adoption; got {ev1}')
+    # The husk snippet reflects the resend-adoption cause, not stream reconnect.
+    husk1 = acc1.announced_tc_map['tc_A'][1]['results'][0]
+    assert 'resend' in husk1['snippet'].lower(), (
+        f'FloorRetry husk snippet must mention the resend; got {husk1["snippet"]!r}')
+
+    # Branch 2: no marker → legacy stream-retry attribution.
+    captured.clear()
+    acc2, msg2 = _mk_acc(None)
+    n2 = acc2.reconcile_announced_rounds(msg2)
+    assert n2 == 1
+    ev2 = [kw for (name, kw) in captured if name == 'tool_round_superseded']
+    assert ev2 and ev2[0].get('cause') == 'stream_retry', (
+        f'no marker must audit stream_retry; got {ev2}')
+
+
 def test_resend_does_not_reuse_tool_callback(monkeypatch):
     """Layer-1 orphan fix: the FIRST dispatch carries the orchestrator's
     on_tool_call_ready (early tool_start announcements), but every FloorRetry

@@ -72,6 +72,11 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
     _tid = task.get('id')
     if _tid and not body.get('_task_id'):
         body['_task_id'] = _tid
+    # ★ Reset the per-round FloorRetry-adoption marker so reconcile_announced_rounds
+    #   (called by _run.py right after this returns) attributes THIS round's
+    #   orphans correctly — a round that adopted then a later round that did not
+    #   must not read a stale True.
+    task['_floor_retry_adopted'] = False
     # ★ Init to 0.0 (epoch) so the FIRST content/thinking delta checkpoints
     #   immediately, then settle into the _STREAM_CHECKPOINT_INTERVAL cadence.
     #   Starting at time.time() left a pre-first-checkpoint window where a
@@ -320,6 +325,16 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
         with task['content_lock']:
             task['content'] = msg.get('content') or ''
             task['thinking'] = msg.get('reasoning_content') or ''
+        # ★ Record the TRUE cause of any orphan tool round this turn produces.
+        #   When a FloorRetry resend is adopted, the FIRST attempt's tool calls
+        #   (announced live via on_tool_call_ready → 'searching' rounds) are NOT
+        #   in the adopted msg (the resend re-minted fresh tc_ids), so
+        #   reconcile_announced_rounds settles them as 'superseded' orphans.
+        #   This marker lets reconcile log the accurate cause (FloorRetry
+        #   adoption) instead of the hardcoded — and, per the app.log evidence,
+        #   FALSE — "discarded stream-retry attempt" story: stream transient
+        #   retries were 0 while FloorRetry drove 100% of observed orphans.
+        task['_floor_retry_adopted'] = True
         logger.info('%s [FloorRetry] converged task content/thinking from adopted '
                     'resend (content=%dchars thinking=%dchars) — prevents first-'
                     'attempt residue from being persisted',

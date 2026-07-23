@@ -523,6 +523,85 @@ def test_NC_unfiltered_superseded_orphan_reappears_and_inflates_count():
     assert out.count('PASS') >= 2, f'expected >=2 PASS, got:\n{out}'
 
 
+# ── Live-status leak: a superseded husk whose LIVE status is 'done' ──
+# The reconcile emits a tool_result SSE event (no status field), so the pure
+# reducer's 'tool_result' case settles the LIVE round to status='done'. Only
+# the backend's LOCAL entry becomes status='aborted' (→ what the persisted
+# snapshot carries). The OLD predicate gated on status==='aborted', so during
+# the live turn (status 'done') the husk LEAKED a misleading chip; it only
+# vanished after the done-event/reload rewrote status to 'aborted'. The fix
+# keys on badge+result-less regardless of status → dropped on BOTH paths.
+_LIVE_DONE_LEAK_HARNESS = _STUBS + r"""
+const src = process.env.TL_SRC;
+eval(src);
+const out = [];
+function check(name, cond){ out.push((cond ? 'PASS ' : 'FAIL ') + name); }
+
+// A superseded husk exactly as the LIVE reducer leaves it: badge='superseded',
+// result-less, but status='done' (the tool_result event carried no status, so
+// reduceStreamState's tool_result case set status='done').
+const liveHusk = { toolCallId: 'dup', toolName: 'list_dir', status: 'done',
+  llmRound: 0, toolContent: null,
+  results: [{ badge: 'superseded', source: 'Interrupted', interrupted: true,
+              fetched: false, fetchedChars: 0 }] };
+const realTwin = { toolCallId: 'real', toolName: 'list_dir', status: 'done',
+  llmRound: 0, toolContent: 'Directory: lib', results: [{ source: 'Project' }] };
+
+// The predicate must drop the live-'done' husk (the leak) …
+check('drops_live_done_husk', _isSupersededOrphanRound(liveHusk) === true);
+// … and must NOT drop the real completed twin …
+check('keeps_real_twin', _isSupersededOrphanRound(realTwin) === false);
+// … nor a still-in-flight round (searching, results=null → no badge).
+check('keeps_inflight', _isSupersededOrphanRound(
+  { toolCallId: 'x', toolName: 'grep_search', status: 'searching', results: null }) === false);
+
+// End-to-end: the segment-timeline render with a LIVE-'done' husk must still
+// render exactly ONE chip (the real twin), not two.
+const segments = [
+  { type: 'tool_use', id: 'dup', name: 'list_dir', input: '{"path":"lib"}', llmRound: 0,
+    result: { content: null, status: 'done' } },
+  { type: 'tool_use', id: 'real', name: 'list_dir', input: '{"path":"lib"}', llmRound: 0,
+    result: { content: 'Directory: lib', status: 'done' } },
+  { type: 'text', text: 'ANSWER', deliverable: true, terminal: true },
+];
+const msg = { role: 'assistant', content: 'ANSWER', finishReason: 'stop',
+  toolRounds: [liveHusk, realTwin] };
+const html = renderSegmentTimelineHTML(segments, msg, 0);
+const nTools = (html.match(/<TOOL name=list_dir>/g) || []).length;
+check('live_done_exactly_one_tool', nTools === 1);
+console.log(out.join('\n'));
+"""
+
+
+@pytest.mark.skipif(not shutil.which('node'), reason='node not installed')
+def test_superseded_husk_dropped_even_when_live_status_done():
+    """Root-fix: a superseded orphan whose LIVE status is 'done' (because the
+    reconcile's tool_result SSE event carried no status, so the reducer settled
+    the live round to 'done') must STILL be dropped. The old predicate gated on
+    status==='aborted' and thus leaked the husk for the whole live turn — it
+    only disappeared after the done-event/reload rewrote status to 'aborted'.
+    Keying on badge+result-less drops it on both the live and persisted paths."""
+    out = _run(_LIVE_DONE_LEAK_HARNESS)
+    fails = [ln for ln in out.splitlines() if ln.startswith('FAIL')]
+    assert not fails, 'live-done husk leak failures:\n' + out
+    assert out.count('PASS') >= 4, f'expected >=4 PASS, got:\n{out}'
+
+
+def test_predicate_not_gated_on_aborted_status():
+    """Guard the fix in source: _isSupersededOrphanRound must NOT gate on
+    status==='aborted' (the old check that leaked the live-'done' husk). The
+    authoritative signal is the 'superseded' badge + result-less."""
+    src = open(TR_JS, encoding='utf-8').read()
+    start = src.index('function _isSupersededOrphanRound(')
+    end = src.index('\nfunction renderToolRoundsHTML(')
+    body = src[start:end]
+    assert 'r.status !== "aborted"' not in body, (
+        'the predicate must not early-return on status!=="aborted" — that gate '
+        'leaked the live-"done" husk (fixed by keying on badge+result-less)')
+    assert 'meta.badge === "superseded"' in body, (
+        'the predicate must key on the authoritative superseded badge')
+
+
 def test_source_has_timeline_helper():
     src = open(TR_JS, encoding='utf-8').read()
     assert 'function renderSegmentTimelineHTML(' in src

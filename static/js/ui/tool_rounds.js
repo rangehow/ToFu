@@ -4033,11 +4033,24 @@ function renderPreferenceLearnedHtml(learned) {
  * keeps its static interrupted affordance. Discriminator = the 'superseded'
  * badge, which ONLY reconcile_announced_rounds stamps. */
 function _isSupersededOrphanRound(r) {
-  if (!r || r.status !== "aborted") return false;
+  if (!r) return false;
   const meta = (r.results && r.results[0]) || {};
   // result-less: reconcile writes a single meta with no tool content/toolContent
   const hasRealResult = r.toolContent != null
     || (meta && (meta.fetched || (meta.fetchedChars | 0) > 0));
+  // ★ Authoritative signal is the 'superseded' badge (ONLY
+  //   reconcile_announced_rounds stamps it) + result-less — NOT the status.
+  //   The status intentionally DIFFERS between the two apply paths for the
+  //   SAME husk: the backend stamps entry.status='aborted' locally (→ what the
+  //   persisted/reloaded snapshot carries), but the live tool_result SSE event
+  //   the reconcile emitted carries no status, so the pure reducer's
+  //   'tool_result' case settles the live round to status='done'. Gating on
+  //   status==='aborted' (the old guard) therefore dropped the husk ONLY after
+  //   the done-event/reload rewrote it to 'aborted' — the live in-turn round
+  //   stayed 'done' and rendered a misleading "interrupted"/"superseded" chip
+  //   for the whole rest of the turn. Keying on badge+result-less drops it on
+  //   BOTH paths. A still-in-flight round (status 'searching'/'executing') has
+  //   results=null → meta={} → badge undefined → correctly NOT dropped. */
   return meta.badge === "superseded" && !hasRealResult;
 }
 

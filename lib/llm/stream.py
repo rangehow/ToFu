@@ -22,8 +22,10 @@ from lib.llm._transport import (
     CONNECT_TIMEOUT,
     MAX_STREAM_RETRIES,
     abortable_sleep,
+    apply_model_limit_retry,
+    attach_limit_learned,
     get_sync_session,
-    retry_wait,
+    prepare_retryable_wait,
 )
 from lib.llm_errors import (
     AbortedError,
@@ -68,10 +70,7 @@ def stream_chat(body, *, on_thinking=None, on_content=None,
                 attempt=attempt, api_key=api_key, base_url=base_url,
                 extra_headers=extra_headers, api_protocol=api_protocol,
                 oauth=oauth)
-            if _limit_learned:
-                if usage is None:
-                    usage = {}
-                usage['_model_limit_learned'] = _limit_learned
+            usage = attach_limit_learned(usage, _limit_learned)
             return msg, finish_reason, usage
         except (RateLimitError, PermissionError_, AbortedError, ContentFilterError, PromptTooLongError, EndpointUnreachableError):
             # EndpointUnreachableError: the host is down — retrying it on
@@ -79,28 +78,12 @@ def stream_chat(body, *, on_thinking=None, on_content=None,
             # the dispatch layer, which cools this slot and fails over.
             raise
         except ModelLimitError as e:
-            body['max_tokens'] = e.detected_limit
-            _limit_learned = {
-                'model': e.model,
-                'old_limit': e.requested_limit,
-                'new_limit': e.detected_limit,
-            }
-            logger.warning('%s ⚙️ Auto-learned max_tokens for %s: %d → %d, retrying…',
-                          log_prefix, e.model, e.requested_limit, e.detected_limit)
+            _limit_learned = apply_model_limit_retry(body, e, log_prefix)
             continue
         except _RETRYABLE as e:
             last_err = e
-            if attempt < MAX_STREAM_RETRIES:
-                if abort_check and abort_check():
-                    logger.debug('%s ✋ Abort detected before retry sleep, stopping.', log_prefix)
-                    raise AbortedError('User aborted before retry')
-                wait = retry_wait(attempt)
-                logger.warning('%s ⚠ Transient error (attempt %d): '
-                      '%s: %s — retrying in %.1fs …', log_prefix, attempt + 1, type(e).__name__, e, wait, exc_info=True)
-                abortable_sleep(wait, abort_check)
-            else:
-                logger.error('%s ✖ All %d attempts failed.', log_prefix, 1 + MAX_STREAM_RETRIES, exc_info=True)
-                raise
+            wait = prepare_retryable_wait(attempt, e, abort_check, log_prefix)
+            abortable_sleep(wait, abort_check)
     raise last_err
 
 

@@ -72,6 +72,68 @@ async def async_abortable_sleep(seconds: float, abort_check=None, interval: floa
         await asyncio.sleep(min(interval, max(0, remaining)))
 
 
+def attach_limit_learned(usage, limit_learned):
+    """Attach an auto-learned model-limit marker to a usage dict.
+
+    Shared by the sync + async stream retry loops so the ``usage`` shape stays
+    identical across transports. Returns the (possibly newly-created) usage
+    dict; a no-op returning ``usage`` unchanged when ``limit_learned`` is falsy.
+    """
+    if not limit_learned:
+        return usage
+    if usage is None:
+        usage = {}
+    usage['_model_limit_learned'] = limit_learned
+    return usage
+
+
+def apply_model_limit_retry(body, err, log_prefix=''):
+    """Handle a ``ModelLimitError`` in a stream retry loop.
+
+    Clamps ``body['max_tokens']`` to the endpoint-detected limit and returns the
+    ``_limit_learned`` marker dict (attached to ``usage`` on the eventual
+    success via :func:`attach_limit_learned`). Shared by both transports.
+    """
+    body['max_tokens'] = err.detected_limit
+    logger.warning('%s ⚙️ Auto-learned max_tokens for %s: %d → %d, retrying…',
+                   log_prefix, err.model, err.requested_limit, err.detected_limit)
+    return {
+        'model': err.model,
+        'old_limit': err.requested_limit,
+        'new_limit': err.detected_limit,
+    }
+
+
+def prepare_retryable_wait(attempt, err, abort_check, log_prefix=''):
+    """Shared decision for a ``_RETRYABLE`` error in the stream retry loop.
+
+    On a NON-final attempt: honor abort (raise ``AbortedError``), compute the
+    backoff wait, log the transient-error warning, and RETURN the wait. The
+    caller performs the actual sleep in its own sync/async idiom
+    (``abortable_sleep`` / ``async_abortable_sleep`` bound in the caller's
+    module) so the transport-level monkeypatch seam the tests rely on stays
+    intact. On the FINAL attempt: log the exhaustion error and re-raise ``err``.
+
+    Returns:
+        float: the number of seconds the caller should sleep before retrying.
+
+    Raises:
+        AbortedError: abort was requested before the retry sleep.
+        The original ``err``: no attempts remain.
+    """
+    if attempt < MAX_STREAM_RETRIES:
+        if abort_check and abort_check():
+            logger.debug('%s ✋ Abort detected before retry sleep, stopping.', log_prefix)
+            raise AbortedError('User aborted before retry')
+        wait = retry_wait(attempt)
+        logger.warning('%s ⚠ Transient error (attempt %d): %s: %s — retrying in %.1fs …',
+                       log_prefix, attempt + 1, type(err).__name__, err, wait, exc_info=True)
+        return wait
+    logger.error('%s ✖ All %d attempts failed.', log_prefix,
+                 1 + MAX_STREAM_RETRIES, exc_info=True)
+    raise err
+
+
 def headers():
     """Build default request headers with current API key."""
     return {

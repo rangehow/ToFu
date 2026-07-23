@@ -474,6 +474,19 @@ def _call_llm(error_text: str, cfg: dict) -> dict:
 # on CentOS-7-class hosts where pip's manylinux wheels crash with
 # "GLIBC_2.25 not found" (classic lxml failure mode).
 _CONDA_PYTHON_DEPS = [
+    # ── Boot-critical: the server cannot start without these ──
+    # quart + hypercorn are the ASGI stack (server.py); flask is only a
+    # transitive dep of quart, so listing flask alone left the conda repair
+    # path installing a web framework the app doesn't actually run on.
+    'quart>=0.20',
+    'hypercorn>=0.17',
+    # orjson is REQUIRED (not optional) — the SSE state snapshot in
+    # routes/chat.py depends on it to avoid the event-loop stall (see
+    # requirements.txt). sqlalchemy is imported UNCONDITIONALLY in the chat
+    # hot-path (lib/chat/persistence.py → _core_schema), so its absence breaks
+    # chat send, not just an optional feature.
+    'orjson>=3.9',
+    'sqlalchemy>=2.0',
     'flask>=3.0',
     'flask-compress>=1.14',
     'requests>=2.31',
@@ -486,6 +499,12 @@ _CONDA_PYTHON_DEPS = [
     'lxml_html_clean>=0.4',
     'mcp>=1.0',
 ]
+
+# Boot-critical packages the conda-forge repair path MUST cover — asserted by
+# tests/test_bootstrap_conda_deps_coverage.py so this list can never again
+# silently drift below what server boot + the chat hot-path require. Names are
+# the bare (version-stripped, lower-cased) package names.
+_CRITICAL_BOOT_PACKAGES = ('quart', 'hypercorn', 'orjson', 'sqlalchemy')
 
 
 def _running_in_conda_env() -> bool:

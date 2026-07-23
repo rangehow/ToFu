@@ -449,6 +449,22 @@ _INTERNAL_DOMAIN_LITERALS = [
     '.meituan.com',
 ]
 
+# Plain-substring internal identifiers scrubbed verbatim in opensource exports,
+# each paired with its opensource-safe replacement. SINGLE SOURCE OF TRUTH: both
+# the scrub (``_sanitize_source_opensource``) and the file-open trigger list
+# (``_opensource_sanitize_triggers``) are driven from this tuple, so they can
+# never drift. A drift would be a silent leak — a file whose secret IS scrubbed
+# but whose trigger substring is missing never gets OPENED, so the scrub rule
+# never runs. Add a new internal identifier HERE and it is both scrubbed and
+# triggered automatically. (Endpoints/domains/paths handled by regex live in
+# ``_ENDPOINTS`` / ``_INTERNAL_DOMAIN_LITERALS`` / the path regexes below.)
+_INTERNAL_IDENTIFIER_REPLACEMENTS = (
+    ('hadoop-aipnlp',              'your-user'),
+    ('ruanjunhao04',              'your-username'),
+    ('M-TransferContext-INF-CELL', 'X-Custom-Header'),
+    ('gray-release-ai-gpt-test',  'your-header-value'),
+)
+
 
 def _sanitize_defaults_for_export(content: str, filepath: str,
                                     version: str = '') -> str:
@@ -628,14 +644,13 @@ def _sanitize_source_opensource(content: str, filepath: str) -> str:
     for domain in _INTERNAL_DOMAIN_LITERALS:
         content = content.replace(domain, '.internal.example.com')
 
-    # 13. Clean hardcoded username / user path references
-    content = content.replace('hadoop-aipnlp', 'your-user')
-    content = content.replace('ruanjunhao04', 'your-username')
-
-    # 13b. Clean internal HTTP header / gray-release tokens that leak via
-    #      probe scripts and dispatcher header migrations.
-    content = content.replace('M-TransferContext-INF-CELL', 'X-Custom-Header')
-    content = content.replace('gray-release-ai-gpt-test', 'your-header-value')
+    # 13. Clean plain-substring internal identifiers (usernames, HTTP header /
+    #     gray-release tokens that leak via probe scripts + dispatcher header
+    #     migrations). Driven from the single-source-of-truth tuple so the scrub
+    #     and the file-open trigger list in _opensource_sanitize_triggers can
+    #     never drift apart.
+    for ident, replacement in _INTERNAL_IDENTIFIER_REPLACEMENTS:
+        content = content.replace(ident, replacement)
 
     # 14. Strip internal-only MCP catalog entries from lib/mcp/registry.py.
     #     Entries inside the '# ── Meituan Internal' block reference
@@ -1231,17 +1246,14 @@ def _opensource_sanitize_triggers() -> list[str]:
     for s in _INTERNAL_DOMAIN_LITERALS:
         triggers.append(re.escape(s))
     # Internal identifiers that the secret-scan also catches —
-    # MUST be in the sanitize trigger list so the rules below run.
-    for s in (
-        '/mnt/dolphinfs',
-        'hadoop-aipnlp',
-        'ruanjunhao04',
-        'M-TransferContext-INF-CELL',
-        'gray-release-ai-gpt-test',
-        'sankuai.com',
-        'meituan.com',
-    ):
+    # MUST be in the sanitize trigger list so the rules below run. The
+    # plain-substring identifiers come from the single-source-of-truth
+    # _INTERNAL_IDENTIFIER_REPLACEMENTS tuple (so scrub + trigger can't drift);
+    # the path/domain literals stay explicit here.
+    for s in ('/mnt/dolphinfs', 'sankuai.com', 'meituan.com'):
         triggers.append(re.escape(s))
+    for ident, _replacement in _INTERNAL_IDENTIFIER_REPLACEMENTS:
+        triggers.append(re.escape(ident))
     return triggers
 
 

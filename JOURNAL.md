@@ -1,5 +1,15 @@
 # Project Journal
 
+### 2026-07-23(续6) — 「查看对话」收官两问:自引用拒绝确认保留 + raw/非raw 前端卡片逐字节相同的真 bug 根修(commit `7dc4bcc`,7 文件 +226/-6,三套件 34/34 绿含双 NEUTER / collect 7827 唯一既知 pty flake)。
+- **owner 两问:** ①「让 `mrx3tv0ha8ffkc` 自己审自己被拒了」②「raw 与非 raw 前端显示没区别,需优化」。
+- **问①判定=保留(owner 拍板认同):** `_detail.py:126` 的自引用拒绝是对的——当前会话上下文已在模型窗口、且本轮未落库,读自己只拿到半截旧记录。调试某会话渲染的正道是**从另一个会话** `get_conversation(<id>, raw=true)`。不动。
+- **问②真根因(读代码钉死,是上一轮 `bad71d3` 的副作用):** 为消灭「raw 那坨 78KB 丑 JSON」,`bad71d3` 让 raw 也挂**和非 raw 完全相同**的 `convDigest` 卡片——但 `_brain.py:70` 调 `build_conversation_digest` **没传 raw**,digest dict 无任何 raw 标记,前端 `_renderConvDigest` 只认那 dict → 两模式渲染**逐字节相同**。raw 的全部价值(每条 `model`/`usage` token/`finishReason`/`_msgId`、行级 `rev`)在人类卡片里**全丢**,只有「模型原文」通道有区别。
+- **修法(B 方案,owner 明确「执行 B 不要再问」):** ①后端 `build_conversation_digest(raw=)`(SELECT 补 `rev`):raw 时 dict 打 `raw:true`+`rev`,每条消息附 `model`/`usage{in,out}`/`finishReason`/`msgId`;**非 raw 一个字段不加,与旧行为逐字节一致**。②`_brain.py` 传 `raw=bool(_fn_args.get('raw'))`。③前端 `cd.raw` → meta 行渲「RAW · 调试」徽章(**内联 SVG bug 图标,遵 §3.4 禁 emoji/glyph**)+ 每条 model/token/finishReason/msgId 小 chip;非 raw 不渲。metadata 是每条几个 chip、不是塞整条 message(L0 是安全网非借口)。
+- **一个自查修正(测试驱动抓到):** 初版把 `rev`/token 数走 `_t(...).replace("{n}",…)` i18n 模板——但 jsdom 的 `t` stub 回显 key、丢 `{n}`,数字消失(`raw_rev_shown`/`raw_token_chip` 变红)。**数字是数据不该走翻译模板**:改为 `_t("convDigest.rev","rev")+" "+cd.rev`、token 直接 `"tok "+in+"/"+out`;删掉不再用的 `convDigest.tokFmt` key。这也顺带避开了 ↓↑ glyph。
+- **测试 + 双 NEUTER:** 后端 `test_build_digest_raw_carries_metadata`(raw 带 `raw:true`+`rev`+assistant 行 model/usage/finishReason/msgId,user 行不带 assistant-only 字段)+ `test_build_digest_default_omits_raw_metadata`(默认全不带);handler 测试补 raw 传播断言。JSDOM 加 8 检查(非 raw 无徽章/chip、raw 有徽章+rev+model/token/finish/msgid chip),min_pass 17→25;新 `test_NC_raw_branch_is_load_bearing` 把 `isRaw` 打成 `false` → 徽章+chip 全灭、普通卡片仍渲(证 `cd.raw` 门 load-bearing),shipped 文件跑后逐字节还原。三套件 34/34。
+- **git 纪律(共享 HEAD、~130 sibling WIP 脏文件,`conversation.py` 等非我改动):** `reset -q HEAD .` → 仅 add 7 文件 → `--cached --numstat` 核对 → `commit -F- -- <7 路径>` → `git show HEAD --stat` = 仅 7 文件 +226/-6,NO LEAK。`7dc4bcc`。collect 7827,唯一 error 仍是既知 `test_run_command_pty_streaming.py` pty flake。
+
+
 
 ### 2026-07-23(续5) — 「superseded / interrupted 工具徽章频繁出现、看不懂」用 app.log 钉死真因并双面根修:虚假归因(怪 stream-retry,实为 FloorRetry 采纳)+ live-'done' 泄漏(commit `931481d`,5 文件 +294/-27,新测全绿含失败优先双红 + NEUTER / 相邻 reducer/render 34 绿)。
 - **owner 诉求:** 「superseded / interrupted 现在频繁出现,看不懂;无论返回给模型的还是前端显示的,都必须是正确的工具执行结果。立刻加日志追踪、彻底回溯根修。」

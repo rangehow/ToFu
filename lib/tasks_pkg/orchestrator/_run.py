@@ -101,6 +101,7 @@ from lib.tasks_pkg.orchestrator._vu_startup import (
     _vu_phase as _extracted_vu_phase,
     start_external_edit_probe,
 )
+from lib.tasks_pkg.orchestrator._prefetch import start_prefetches
 
 
 
@@ -340,21 +341,13 @@ def run_task(task: dict[str, Any]) -> None:
         human_guidance_enabled = mcfg.get('human_guidance_enabled', False)
         scheduler_enabled = mcfg.get('scheduler_enabled', False)
         # ── Memory Prefetch: start loading project and memory contexts in
-        #    background threads while tool assembly runs (FUSE I/O can be slow).
-        #    Inspired by Claude Code's startRelevantMemoryPrefetch().
-        from concurrent.futures import ThreadPoolExecutor as _PrefetchPool
-        _prefetch_executor = _PrefetchPool(max_workers=2,
-                                           thread_name_prefix='mem-prefetch')
-        _prefetch_project_future = None
-        _prefetch_memory_future = None
-
-        if project_enabled and project_path:
-            _prefetch_conv_id = task.get('convId') or task.get('id') or ''
-            def _prefetch_project():
-                from lib.project_mod import get_context_for_prompt
-                return get_context_for_prompt(project_path,
-                                              conv_id=_prefetch_conv_id or None)
-            _prefetch_project_future = _prefetch_executor.submit(_prefetch_project)
+        #    background threads while tool assembly runs. Extracted to
+        #    lib.tasks_pkg.orchestrator._prefetch (pt_03f4cdf1 slice 3).
+        #    Owner: this function creates the pool + futures; the finally
+        #    block at end-of-run shuts it down.
+        _prefetch_executor = start_prefetches(
+            task, cfg=cfg, project_path=project_path,
+            project_enabled=project_enabled, memory_enabled=memory_enabled)
 
         # Simple heuristic: if any tool-providing feature is enabled, we'll
         # have real tools → need memory injection + accumulation instructions.
@@ -363,32 +356,6 @@ def run_task(task: dict[str, Any]) -> None:
                                 desktop_enabled or swarm_enabled or
                                 code_exec_enabled or image_gen_enabled)
         _pp = project_path if project_enabled else None
-        # ★ Extra workspace roots for memory scoping (multi-root session).
-        #   Memories are READ (listed / searched / prefetched) across the
-        #   primary + every extra root, unioned and de-duplicated; NEW
-        #   memories are still written only to the primary project_path.
-        #   Mirrors the projectPaths[1:] extraction used for file tools.
-        _mem_extra_paths = []
-        if project_enabled and _pp:
-            _all_mem_paths = cfg.get('projectPaths') or []
-            _mem_extra_paths = [p for p in _all_mem_paths[1:]
-                                if p and p != _pp] if len(_all_mem_paths) > 1 else []
-        # Memory toggle gates EVERYTHING memory-related: the count-hint
-        # background load, the per-turn prefetch (BM25 + cheap-LLM rerank),
-        # and the accumulation instructions injected into the system prompt.
-        # AI still accumulates memories in the background via the
-        # search_memories / create_memory tools — only the proactive
-        # injection path is muted.
-        if memory_enabled:
-            def _prefetch_memory():
-                from lib.memory import build_memory_context
-                return build_memory_context(project_path=_pp,
-                                            extra_paths=_mem_extra_paths)
-            _prefetch_memory_future = _prefetch_executor.submit(_prefetch_memory)
-
-        # Store prefetch futures on the task for _inject_system_contexts to use
-        task['_prefetch_project'] = _prefetch_project_future
-        task['_prefetch_memory'] = _prefetch_memory_future
 
         # ── Section 2: Tool Assembly ──
         _vu_phase('Autopilot：装配工具、准备工作区…')
@@ -625,6 +592,22 @@ def run_task(task: dict[str, Any]) -> None:
                     except (KeyError, TypeError) as _e_audit:
                         logger.debug('[orchestrator] run_task caught %s: %s', type(_e_audit).__name__, _e_audit)
                         continue
+                # ★ Extra workspace roots for memory scoping — recomputed
+                #   locally at the (single) call site since pt_03f4cdf1
+                #   slice 3 moved the prefetch pool init out of run_task.
+                #   The same derivation is done inside start_prefetches
+                #   for the background memory prefetch; they're
+                #   deliberately independent so a future consumer can be
+                #   added without threading a shared list through the
+                #   call stack. Same rule: extras are projectPaths[1:]
+                #   minus the primary, empty when disabled.
+                _mem_extra_paths: list[str] = []
+                if project_enabled and _pp:
+                    _all_mem_paths = cfg.get('projectPaths') or []
+                    _mem_extra_paths = (
+                        [p for p in _all_mem_paths[1:]
+                         if p and p != _pp]
+                        if len(_all_mem_paths) > 1 else [])
                 run_memory_prefetch(
                     messages,
                     project_path=project_path if project_enabled else None,

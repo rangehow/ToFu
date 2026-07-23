@@ -307,6 +307,163 @@ def test_vu_phase_behavior_gated_on_vu_startup_flag():
         vus.append_event = orig
 
 
+# ── Slice 3: _prefetch submodule (memory + project prefetches) ──────
+# Extracts the pool creation + two prefetch closures + task-attach into
+# lib/tasks_pkg/orchestrator/_prefetch.py; _run.py's finally block still
+# owns the pool.shutdown() teardown.
+
+@_unit
+def test_prefetch_submodule_exists_and_exposes_start_prefetches():
+    """Slice 3 (pt_03f4cdf1): ``_prefetch`` submodule exists and
+    exposes ``start_prefetches`` as a module-level callable."""
+    import importlib
+    mod = importlib.import_module('lib.tasks_pkg.orchestrator._prefetch')
+    assert hasattr(mod, 'start_prefetches'), (
+        'lib.tasks_pkg.orchestrator._prefetch missing start_prefetches')
+    assert callable(mod.start_prefetches), (
+        f'start_prefetches is not callable (got '
+        f'{type(mod.start_prefetches).__name__})')
+
+
+@_unit
+def test_run_py_imports_the_extracted_prefetch_helper():
+    """Slice 3: _run.py must actually import from
+    lib.tasks_pkg.orchestrator._prefetch. Guards against a silent
+    revert to the inline closures."""
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, 'lib/tasks_pkg/orchestrator/_run.py'),
+              encoding='utf-8') as f:
+        src = f.read()
+    assert 'from lib.tasks_pkg.orchestrator._prefetch import' in src, (
+        '_run.py must import from lib.tasks_pkg.orchestrator._prefetch '
+        '(slice 3 pt_03f4cdf1).')
+    assert 'start_prefetches' in src, (
+        '_run.py must reference start_prefetches at the call site')
+
+
+@_unit
+def test_prefetch_behaviour_flags_gate_the_two_submits():
+    """Slice 3: ``start_prefetches`` MUST reproduce the original
+    behavioural gating:
+      * project_enabled=True + project_path → submits _prefetch_project
+        (stashed on task['_prefetch_project'])
+      * project_enabled=False (or no project_path) → task['_prefetch_project'] is None
+      * memory_enabled=True → submits _prefetch_memory
+      * memory_enabled=False → task['_prefetch_memory'] is None
+      * returned pool is a live ThreadPoolExecutor the caller owns
+    Monkey-patches the two lib functions so no real project/memory IO
+    happens. Uses a synchronous fake pool that just records .submit()
+    calls, so the test is deterministic + doesn't leak threads."""
+    import lib.tasks_pkg.orchestrator._prefetch as pf
+
+    # Fake executor to record submit() calls without spawning threads.
+    class _FakePool:
+        def __init__(self):
+            self.submitted = []
+
+            class _FakeFuture:
+                def __init__(self, name): self.name = name
+
+            self._FakeFuture = _FakeFuture
+
+        def submit(self, fn, *a, **kw):
+            fut = self._FakeFuture(getattr(fn, '__name__', 'anon'))
+            self.submitted.append((fut.name, a, kw))
+            return fut
+
+        def shutdown(self, wait=False):
+            pass
+
+    # Stub project + memory lib calls so no real IO fires.
+    import types
+    fake_project_mod = types.ModuleType('lib.project_mod.stub')
+    fake_project_mod.get_context_for_prompt = lambda *a, **kw: 'PROJECT_CTX'
+    fake_memory_mod = types.ModuleType('lib.memory.stub')
+    fake_memory_mod.build_memory_context = lambda *a, **kw: 'MEMORY_CTX'
+
+    import sys
+    orig_project = sys.modules.get('lib.project_mod')
+    orig_memory = sys.modules.get('lib.memory')
+    orig_pool = pf._PrefetchPool
+    try:
+        # Route the closure's ``from lib.project_mod import
+        # get_context_for_prompt`` to the fake by patching the
+        # attribute on the real module object.
+        if orig_project is not None:
+            _orig_gcfp = getattr(orig_project, 'get_context_for_prompt', None)
+            orig_project.get_context_for_prompt = fake_project_mod.get_context_for_prompt
+        if orig_memory is not None:
+            _orig_bmc = getattr(orig_memory, 'build_memory_context', None)
+            orig_memory.build_memory_context = fake_memory_mod.build_memory_context
+        # Force start_prefetches to construct our fake pool.
+        pf._PrefetchPool = lambda *a, **kw: _FakePool()
+
+        # Case 1: both project + memory ON → two submits.
+        task = {'id': 'tid-both', 'convId': 'cv1'}
+        pool = pf.start_prefetches(
+            task, cfg={},
+            project_path='/proj/A', project_enabled=True,
+            memory_enabled=True)
+        assert isinstance(pool, _FakePool)
+        names = [n for (n, _a, _kw) in pool.submitted]
+        assert '_prefetch_project' in names, (
+            f'expected _prefetch_project submitted; got {names}')
+        assert '_prefetch_memory' in names, (
+            f'expected _prefetch_memory submitted; got {names}')
+        assert task.get('_prefetch_project') is not None
+        assert task.get('_prefetch_memory') is not None
+
+        # Case 2: project OFF → no project future.
+        task2 = {'id': 'tid-nomem-only', 'convId': 'cv2'}
+        pool2 = pf.start_prefetches(
+            task2, cfg={},
+            project_path='', project_enabled=False,
+            memory_enabled=True)
+        names2 = [n for (n, _a, _kw) in pool2.submitted]
+        assert '_prefetch_project' not in names2
+        assert '_prefetch_memory' in names2
+        assert task2.get('_prefetch_project') is None
+        assert task2.get('_prefetch_memory') is not None
+
+        # Case 3: memory OFF → no memory future.
+        task3 = {'id': 'tid-noproj-only', 'convId': 'cv3'}
+        pool3 = pf.start_prefetches(
+            task3, cfg={},
+            project_path='/proj/B', project_enabled=True,
+            memory_enabled=False)
+        names3 = [n for (n, _a, _kw) in pool3.submitted]
+        assert '_prefetch_project' in names3
+        assert '_prefetch_memory' not in names3
+        assert task3.get('_prefetch_project') is not None
+        assert task3.get('_prefetch_memory') is None
+
+        # Case 4: both OFF → no submits at all, but the pool still exists
+        # (the caller expects a shutdown-able return value regardless).
+        task4 = {'id': 'tid-neither'}
+        pool4 = pf.start_prefetches(
+            task4, cfg={},
+            project_path='', project_enabled=False,
+            memory_enabled=False)
+        assert not pool4.submitted, (
+            f'no prefetch flags enabled must submit nothing; got '
+            f'{pool4.submitted}')
+        assert task4.get('_prefetch_project') is None
+        assert task4.get('_prefetch_memory') is None
+    finally:
+        pf._PrefetchPool = orig_pool
+        if orig_project is not None:
+            if _orig_gcfp is not None:
+                orig_project.get_context_for_prompt = _orig_gcfp
+            else:
+                del orig_project.get_context_for_prompt
+        if orig_memory is not None:
+            if _orig_bmc is not None:
+                orig_memory.build_memory_context = _orig_bmc
+            else:
+                del orig_memory.build_memory_context
+
+
 if __name__ == '__main__':
     tests = [
         test_orchestrator_facade_symbols_all_importable,
@@ -317,6 +474,9 @@ if __name__ == '__main__':
         test_vu_startup_submodule_exists_and_exposes_helpers,
         test_run_py_imports_the_extracted_vu_startup_helpers,
         test_vu_phase_behavior_gated_on_vu_startup_flag,
+        test_prefetch_submodule_exists_and_exposes_start_prefetches,
+        test_run_py_imports_the_extracted_prefetch_helper,
+        test_prefetch_behaviour_flags_gate_the_two_submits,
     ]
     for fn in tests:
         fn()

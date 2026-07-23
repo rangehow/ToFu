@@ -60,6 +60,7 @@ except ImportError:  # pragma: no cover
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _OPTIMIZER_PATH = os.path.join(_ROOT, 'routes', 'api_v1', 'optimizer.py')
+_AGENTS_PATH = os.path.join(_ROOT, 'routes', 'api_v1', 'agents.py')
 
 
 def _unit(fn):
@@ -148,8 +149,33 @@ _CONVERTED_HANDLERS = ('list_proposals', 'get_proposal', 'run_now')
 _UNCONVERTED_HANDLERS = ('approve_proposal', 'revert_proposal')
 
 
+# ── Batch 4 (agents.py) ────────────────────────────────────────────
+# Same strict gate as batch 3 (optimizer.py): only handlers whose FINAL
+# except is a pure `logger.exception + api_internal_error(e)` with no
+# distinct context and no side effects. Batch 4 audit of agents.py's
+# 24 try/except blocks yielded EXACTLY ONE match: memory_search. The
+# other 23 blocks all have a legitimate non-@safe_route reason:
+#   * `except ImportError` (module-availability check → distinct context)
+#   * `except BadRequest` (400 with field, NOT 500)
+#   * `except (ValueError, TypeError)` (recovery-with-default)
+#   * `except Exception` with a DISTINCT context= or log_traceback=False
+# Documented so a future PR expanding this list understands the gate.
+_CONVERTED_AGENTS_HANDLERS = ('memory_search',)
+_UNCONVERTED_AGENTS_HANDLERS_SAMPLE = (
+    'image_gen',  # BadRequest handler has field='prompt' fallback that
+                  # @safe_route's generic _handle would not preserve.
+    'swarm_abort',  # except carries log_traceback=False (warning-level,
+                    # not exception dump); @safe_route defaults to True.
+)
+
+
 def _optimizer_src() -> str:
     with open(_OPTIMIZER_PATH, encoding='utf-8') as f:
+        return f.read()
+
+
+def _agents_src() -> str:
+    with open(_AGENTS_PATH, encoding='utf-8') as f:
         return f.read()
 
 
@@ -279,6 +305,116 @@ def test_metadata_lists_stay_in_sync():
     assert _UNCONVERTED_HANDLERS, 'unconverted list must not be empty'
     overlap = set(_CONVERTED_HANDLERS) & set(_UNCONVERTED_HANDLERS)
     assert not overlap, f'a handler cannot be both converted and not: {overlap}'
+    # Same invariant on batch 4 (agents.py).
+    assert _CONVERTED_AGENTS_HANDLERS, 'agents-converted list must not be empty'
+    assert _UNCONVERTED_AGENTS_HANDLERS_SAMPLE, 'agents-unconverted sample must not be empty'
+    overlap4 = (set(_CONVERTED_AGENTS_HANDLERS)
+                & set(_UNCONVERTED_AGENTS_HANDLERS_SAMPLE))
+    assert not overlap4, f'agents: cannot be both: {overlap4}'
+
+
+# ── Batch 4 shipped-source guards ──────────────────────────────────
+
+@_unit
+def test_batch4_converted_agents_handlers_have_safe_route():
+    """batch 4: routes/api_v1/agents.py memory_search MUST carry
+    @safe_route immediately above its ``def`` line — same source-level
+    regression tripwire as batch 3, but for the agents file."""
+    src = _agents_src()
+    for name in _CONVERTED_AGENTS_HANDLERS:
+        pattern = re.compile(
+            r'@safe_route\b[^\n]*\ndef\s+' + re.escape(name) + r'\s*\(',
+            re.MULTILINE)
+        assert pattern.search(src), (
+            f'{name}: expected @safe_route immediately before its def line '
+            f'in routes/api_v1/agents.py — the pt_63eb7f02 batch-4 '
+            f'rollout hasn\'t landed or has been undone')
+
+
+@_unit
+def test_batch4_converted_agents_no_ad_hoc_final_except():
+    """batch 4: the SPECIFIC ad-hoc final try/except that @safe_route
+    replaces must be gone from memory_search.
+
+    memory_search's ORIGINAL last block was::
+
+        try:
+            results = search_memories(query, top_k=top_k)
+        except Exception as e:
+            logger.exception('[api_v1.memory] search failed')
+            return api_internal_error(e)
+
+    After batch 4 the ``search_memories`` call must be OUTSIDE any
+    ``try``/``except Exception`` block within its own body (the earlier
+    ``except ImportError`` for the module import and the
+    ``except (ValueError, TypeError)`` for ``int(top_k)`` are DIFFERENT
+    exception classes and are legitimately retained; we only forbid
+    ``except Exception`` INSIDE memory_search).
+    """
+    src = _agents_src()
+
+    # Extract the memory_search function body slice.
+    m = re.search(
+        r'^def memory_search\s*\(.*?\n(.*?)(?=\n(?:def |@[a-zA-Z_].*\n(?:async )?def |__all__))',
+        src, re.MULTILINE | re.DOTALL)
+    assert m, 'could not locate memory_search body slice — parser drift?'
+    body = m.group(1)
+
+    # The forbidden pattern: except Exception + return api_internal_error(...)
+    # anywhere in the memory_search body.
+    has_except_exception = re.search(
+        r'except\s+Exception\s+as\s+\w+\s*:', body) is not None
+    has_internal_error_return = 'api_internal_error(e)' in body \
+        or 'return api_internal_error(e,' in body \
+        and 'context=' not in body.split('api_internal_error(e', 1)[1][:50]
+    # More precise: the specific ad-hoc "search_memories → except Exception"
+    # pattern is gone.
+    ad_hoc_present = re.search(
+        r'try:\s*\n\s*results\s*=\s*search_memories\(.*?\)\s*\n'
+        r'\s*except\s+Exception\s+as\s+\w+\s*:',
+        body, re.DOTALL) is not None
+    assert not ad_hoc_present, (
+        'memory_search: the ad-hoc "try search_memories → '
+        'except Exception → api_internal_error" block is still present. '
+        '@safe_route was supposed to replace it.')
+
+
+@_unit
+def test_batch4_unconverted_agents_keep_their_reasons():
+    """batch 4: image_gen + swarm_abort must NOT be @safe_route-decorated
+    — their except handlers do things a bare @safe_route cannot express:
+
+      * image_gen: ``except BadRequest as e: return api_bad_request(str(e),
+        field=e.field or 'prompt')`` — the ``or 'prompt'`` fallback would
+        be lost (safe_route's _handle uses ``field=e.field`` verbatim).
+      * swarm_abort: ``return api_internal_error(e, context='Swarm abort
+        failed', ..., log_traceback=False)`` — the log_traceback=False
+        override + distinct context= would collapse under @safe_route.
+
+    Guard the specific signals so a future overzealous cleanup that adds
+    @safe_route to either function trips this test.
+    """
+    src = _agents_src()
+    # Neither handler is decorated with @safe_route.
+    for name in _UNCONVERTED_AGENTS_HANDLERS_SAMPLE:
+        pattern = re.compile(
+            r'@safe_route\b[^\n]*\ndef\s+' + re.escape(name) + r'\s*\(',
+            re.MULTILINE)
+        assert not pattern.search(src), (
+            f'{name} in routes/api_v1/agents.py MUST NOT be @safe_route-'
+            f'decorated — its except handler does something @safe_route '
+            f'cannot express. See _UNCONVERTED_AGENTS_HANDLERS_SAMPLE '
+            f'docstring in this test file for the specific reason.')
+
+    # The load-bearing signals are still present.
+    assert "field=e.field or 'prompt'" in src, (
+        "image_gen: expected \"field=e.field or 'prompt'\" fallback to "
+        'survive — this is the reason image_gen was NOT converted')
+    assert "context='Swarm abort failed'" in src, (
+        "swarm_abort: expected context='Swarm abort failed' distinct "
+        'context to survive — reason it was not converted')
+    assert 'log_traceback=False' in src, (
+        'swarm_abort: expected log_traceback=False override to survive')
 
 
 if __name__ == '__main__':
@@ -289,6 +425,9 @@ if __name__ == '__main__':
         test_converted_handlers_no_longer_hand_roll_the_500_try_except,
         test_unconverted_handlers_keep_their_side_effect_except_blocks,
         test_metadata_lists_stay_in_sync,
+        test_batch4_converted_agents_handlers_have_safe_route,
+        test_batch4_converted_agents_no_ad_hoc_final_except,
+        test_batch4_unconverted_agents_keep_their_reasons,
     ]
     for fn in tests:
         fn()

@@ -1,6 +1,18 @@
 # Project Journal
 
 
+### 2026-07-23(续9) — 「prompt cache 达到完美了吗?不许猜、用 DB 实测,不想看到任何 client miss」用真实 DB 重建钉死:所谓 client miss 全是监控误标,真实流量 client 侧 miss = 0(commit `c34abe3`,2 文件 +41,新测 8/8 绿含 failing-first)。
+- **owner 诉求:** 查最近日志确认 prompt cache 是否零 client miss;不许推测成因,直接用 DB 数据实测;不在乎成本。
+- **数据源(非猜):** `[CacheRoundRecord]` 是每轮机读判决记录(`_detect.py::_emit_round_record`,带 `bucket`/`body_identical`/`culprits`),876 条,用项目自带 `aggregate_round_records` 聚合:`no_break` 830、`upstream_identical` 30、`turn_boundary_rebill` 8、**`body_change` 8**。`body_change` 桶读作「客户端侧 miss」——正是 owner 不想看到的。
+- **可疑点:** 8 条 `body_change` **全部** `body_identical=true`、`routing_diff=[]`、`ttl_flip=false`、无 `culprits` —— 桶名说「我们的 body 变了」但每个指纹字段都说字节没变,自相矛盾(与 journal 记录的 `cache_mid_out_of_window` 检测器劫持同一 bug 类)。
+- **DB 直接实证(不靠日志判决):** 用 `debug/cache_db_replay_live.py` 的 `_load_real_messages`(走生产 `build_api_messages_from_db` + `_inject_system_contexts`)从 DB 重建 8 个会话,再用生产 `build_body` + `_wire_field_prefix`/`_prefix_culprits` 离线核验轮间 wire 字节。7/8 判为 **STABLE(字节逐字相同 → upstream miss,非 client 改动)**;第 8 个(`mrx815iw`)仍在飞、只 1 boundary 可重建,其自身日志 cause 也已带同款 byte-identical upstream 文本。
+- **根 bug(读代码钉死):** `classify_verdict` 把 `no_cache_reuse` 判决键与真 client 键(`system_prompt`/`tools`/`model`/`prefix_mutation`)并列 → 落 `body_change`。但 break 代码**只在 `client_changes` 为空时**才返回 `{no_cache_reuse: cause}`,故该键**永不可能**是真 client body 改动;byte-identical 的它就是 upstream。直接复现:`classify_verdict({'no_cache_reuse': <upstream text>})` → `body_change`(错)。
+- **修法(`_detect.py`,+9):** 在 client-change 分支内,若 cause 含 `'upstream cache miss'` → 返回 `BUCKET_UPSTREAM`,否则才 `BUCKET_BODY_CHANGE`。真 `system_prompt`/`prefix_mutation` 仍归 `body_change`(不把真 client miss 洗成 upstream)。
+- **failing-first + 回归:** 新测 `test_no_cache_reuse_byte_identical_is_upstream_not_body_change`(byte-identical no_cache_reuse → upstream;system_prompt/prefix_mutation → 仍 body_change)先红后绿;`test_cache_round_record.py` 8/8;相邻 `test_cache_improvements`/`replay`/`namespace_fingerprint`/`deploy_verdict_freshness` 103/103 无回归。
+- **最终判决(仅真实会话、排除我自己跑测试时 16:14 注入的 `wire-2`/`nr-*`/`cul-*`/`replay-*` 合成 fixture):** 904 判决轮 → `no_break` 856、`upstream_identical` 40、`turn_boundary_rebill` 8,**client 侧 miss = 0**。即:剩余 miss 全是网关侧随机 upstream(客户端无杠杆)+ 正常换轮重计费。之前「有 client miss」纯属监控误标,不是真的重复计费。
+- **git 纪律(共享 HEAD、期间撞到 sibling 的 `index.lock`):** 未强删锁,`sleep` 等其释放 → `reset -q HEAD .` → 仅 add 2 文件 → `--cached --numstat`(_detect 9/0、测试 32/0)→ `commit -F- -- <2 路径>` → `show HEAD --stat` = 仅 2 文件 +41,NO LEAK。`c34abe3`。
+
+
 ### 2026-07-23(续9) — 「查有没有残留 bug、根修」全量 collect 门用真实证据钉死一个被长期误诊的**确定性** ImportError:孤儿 PTY 测试在收集期阻断整个 7829 测试套件(commit `e04032a`,1 文件 +14/-1,collect 7829+1err → 7830 绿 / 隔离 1 skipped)。
 - **owner 诉求:** 「近期演进冒出太多问题,查有没有残留 bug 并从根上修。」
 - **方法:先跑 collect 门找导入级破坏,而非猜。** 共享 HEAD 处于集成 merge(`91956a9` 合 `tofu/integration`)后、155 个 sibling WIP 脏文件。`write_tools.py → write_tools/` 包拆分导入干净(排除)。collect 门唯一 error:`ImportError: cannot import name 'pty_supported' from 'lib.compat'`,**Interrupted: 1 error during collection** → 中断**整个套件**收集。

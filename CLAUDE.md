@@ -96,31 +96,37 @@ lib/                   — Core business logic
     image_gen.py       — image generation tool wrappers
     code_exec.py       — sandboxed code execution
     conversation.py    — conversation-control tools
-  tasks_pkg/           — Task orchestration, compaction, execution
-    orchestrator.py    — Main run_task loop, SSE event emission
-    manager.py         — Task registry + lifecycle (persist via shared
-                         _merge_tool_rounds / _upsert_task_row helpers)
-    commit_round.py    — Per-round file-history snapshot (daemon-thread
+  tasks_pkg/           — Task orchestration, compaction, execution. Most large
+                         modules are now facade-preserving PACKAGES (dir/ with a
+                         re-exporting __init__.py), not single files:
+    orchestrator/      — Main run_task loop, SSE event emission (_run / _finalize / _turn)
+    manager/           — Task registry + lifecycle (_registry / _persist / _recovery /
+                         _stream / _sync / _events / _maintenance / _state)
+    commit_round/      — Per-round file-history snapshot (daemon-thread
                          make_snapshot + round_committed SSE) +
                          derive_round_modified_files (extracted from orchestrator)
-    auto_translate.py  — Server-side auto-translate safety net for assistant +
+    auto_translate/    — Server-side auto-translate safety net for assistant +
                          endpoint-critic messages (extracted from manager)
-    executor.py        — Tool execution entry (+ content_ref resolution)
-    executor_image.py  — Image-gen tool execution path
-    streaming_tool_executor.py — Streaming-tool variant
-    tool_dispatch.py   — Tool-name → handler routing
-    tool_display.py, tool_hooks.py — Tool UX + before/after hooks
-    endpoint.py        — Endpoint mode (Planner→Worker→Critic loop)
-    endpoint_prompts.py, endpoint_review.py — Prompts + critic/planner turns
+    executor/          — Tool execution entry (+ content_ref resolution)
+    executor_image/    — Image-gen tool execution path
+    streaming_tool_executor.py — Streaming-tool variant (single file)
+    tool_dispatch/     — Tool-name → handler routing
+    tool_display/      — Tool UX; tool_hooks.py (single file) — before/after hooks
+    endpoint/          — Endpoint mode (Planner→Worker→Critic loop; _run / _replan /
+                         _sync / _translate)
+    endpoint_prompts/  — Prompts; endpoint_review.py (single file) — critic/planner turns
                          (verdict parsing delegates to lib/agent_verdict/)
-    compaction.py      — Context-window compaction (3-layer)
-    cache_tracking.py, llm_fallback.py, stream_handler.py — Prompt-cache
+    compaction/        — Context-window compaction (3-layer; _layer1 / _manual /
+                         _reactive/ / _steps / _tokens …)
+    cache_tracking/, llm_fallback/, stream_handler/ — Prompt-cache
                          tracking, model-swap fallback, stream classifier
-    system_context.py, message_builder.py, conv_message_builder.py,
-    server_message_store.py, model_config.py, attachments.py — Context
-                         assembly, message transforms, per-turn file injection
+    system_context/, message_builder/, conv_message_builder/,
+    server_message_store/ — Context assembly, message transforms, per-turn
+                         file injection (system_context/: _inject / _profile /
+                         _reminders / _search)
+    model_config.py, attachments.py — Per-model config, attachment handling (single files)
     approval.py, human_guidance.py, stdin_handler.py — Write-approval,
-                         ask_user, blocking stdin requests
+                         ask_user, blocking stdin requests (single files)
     handlers/          — Per-tool execution handlers (misc, project, search, browser, mcp, memory, code_exec, _adapter)
   project_mod/         — Project file tools (list/read/write/grep/run)
     tools.py           — Tool dispatch facade: execute_tool registry
@@ -568,7 +574,7 @@ multi-tenant deployment would splice the operator's memories (and the global
 `.tofu_user_profile.md` preference file) into an unrelated API caller's prompt.
 That is both a hallucination vector and a privacy/isolation leak. The
 prompt-assembly side already suppresses a capability's description when its flag
-is off (`system_context.py` gates `<memory_accumulation>` / `[USER PREFERENCE
+is off (`system_context/_inject.py` gates `<memory_accumulation>` / `[USER PREFERENCE
 PROFILE]`), so the fix is purely about the DEFAULT a headless caller lands on.
 
 **The mechanism (single source of truth):**
@@ -591,7 +597,8 @@ PROFILE]`), so the fix is purely about the DEFAULT a headless caller lands on.
 **Rules when adding a NEW capability that injects operator-personal state:**
 1. Add ONE `PersonalCapability` entry to `PERSONAL_CAPABILITIES` with
    `headless_default=False`.
-2. Gate its prompt injection in `system_context.py` on the flag (so an
+2. Gate its prompt injection in the `system_context/` package (`_inject.py`
+   for memory, `_profile.py` for the preference profile) on the flag (so an
    un-provided capability is never described to the model).
 3. Do NOT add per-surface `setdefault` overrides — the single
    `apply_headless_personal_defaults` call already covers every headless
@@ -634,7 +641,7 @@ def handle():
 logger.info('[Task:%s] status=%s → %s', task_id, old_status, new_status)
 ```
 
-**Endpoint mode (Planner → Worker → Critic)** — `lib/tasks_pkg/endpoint.py`
+**Endpoint mode (Planner → Worker → Critic)** — `lib/tasks_pkg/endpoint/`
 runs a three-way critic verdict loop:
 - **`[VERDICT: STOP]`** → terminate (approved).
 - **`[VERDICT: CONTINUE_WORKER]`** → inject critic feedback as a user
@@ -870,12 +877,12 @@ Before submitting any code change, verify:
 | Push a real-time event to the frontend | `lib/push.py::push_event(channel, task_id, event)` — auto-fired by `TaskRuntime.append_event` (§4.7) |
 | Change LLM behavior | `lib/llm/` (package), `lib/llm_dispatch/` (package) |
 | Adjust per-model token caps | `lib/model_info/` (`_clamp_max_tokens`) |
-| Add a new tool | Define in `lib/tools/` (pick the right submodule or add one) → register routing in `lib/tasks_pkg/tool_dispatch.py` → add handler in `lib/tasks_pkg/handlers/` |
+| Add a new tool | Define in `lib/tools/` (pick the right submodule or add one) → register routing in `lib/tasks_pkg/tool_dispatch/` → add handler in `lib/tasks_pkg/handlers/` |
 | Add a new API endpoint | Land it on `/api/v1/*` first: `routes/api_v1/` (Blueprint) → `routes/api_v1/__init__.py` (`ALL_V1_BLUEPRINTS`); use `api_ok` / `api_error` (§4.6) + `@require_scope` + `@api_meta` (§15) |
 | Mount an optional feature bundle (e.g. trading) | `routes/plugin_registry.py` — `tofu.blueprints` / `tofu.startup` / `tofu.task_runtimes` entry-point groups |
 | Fix streaming issues | `lib/llm/stream.py` (SSE) → `routes/chat.py` (delivery) |
-| Debug task flow | `lib/tasks_pkg/orchestrator.py`, `lib/tasks_pkg/manager.py` |
-| Debug endpoint (Planner/Worker/Critic) | `lib/tasks_pkg/endpoint.py`, `endpoint_prompts.py`, `endpoint_review.py` |
+| Debug task flow | `lib/tasks_pkg/orchestrator/`, `lib/tasks_pkg/manager/` |
+| Debug endpoint (Planner/Worker/Critic) | `lib/tasks_pkg/endpoint/`, `endpoint_prompts/`, `endpoint_review.py` |
 | Change project file tools | `lib/project_mod/tools.py`, `lib/project_mod/read_tools.py`, `lib/project_mod/write_tools.py` |
 | Read local files (images/PDF/Office) | `lib/file_reader/` (core) → `lib/project_mod/read_tools.py` (`_read_absolute_file`) |
 | Manage memory / stored notes (legacy "skills") | `lib/memory/storage.py`, `lib/memory/tools.py`, `routes/memory.py`, on-disk `<project>/.tofu/skills/` (project scope); global memories moved to the server store `<data>/memories/global/` (2026-06) |

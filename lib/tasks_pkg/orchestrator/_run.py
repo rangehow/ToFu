@@ -103,6 +103,7 @@ from lib.tasks_pkg.orchestrator._vu_startup import (
     start_external_edit_probe,  # noqa: F401  (also invoked indirectly via setup_project_context)
 )
 from lib.tasks_pkg.orchestrator._prefetch import start_prefetches
+from lib.tasks_pkg.orchestrator._teardown import finalize_task_lane
 
 
 
@@ -1650,46 +1651,11 @@ def run_task(task: dict[str, Any]) -> None:
                          exc_info=True)
         raise
     finally:
-        # ── Presence: this conversation's turn ended — transition its peer to
-        #    IDLE (keep it; the sweep fades it after the idle window, and an
-        #    autopilot follow-up turn re-announces the SAME peer to ACTIVE, so
-        #    we never flicker gone→active between back-to-back turns). Reads
-        #    config defensively (an early fatal may precede cfg binding). ──
-        try:
-            _fin_cfg = task.get('config') or {}
-            _fin_pp = _fin_cfg.get('projectPath') or ''
-            _fin_cid = task.get('convId') or ''
-            if _fin_pp and _fin_cid:
-                from lib.presence import mark_idle as _presence_mark_idle
-                _presence_mark_idle(_fin_pp, _fin_cid)
-        except Exception as _pe:
-            logger.debug('[Task:%s] presence mark_idle failed: %s', tid, _pe)
-        # ── Clear the per-task request-id correlation tag (pooled threads are
-        #    reused; a stale tid would mis-attribute the NEXT task's logs). ──
-        set_req_id('')
-        # ── Clear the hard provider pin so it can't bleed into the NEXT
-        #    task that lands on this pooled worker thread. ──
-        try:
-            from lib.llm_dispatch.provider_pin import clear_pinned_provider
-            clear_pinned_provider()
-        except Exception as _pp_err:
-            logger.debug('[Task:%s] clear_pinned_provider failed: %s', tid, _pp_err)
-        # ── Clear the conversation binding (pooled threads are reused). ──
-        try:
-            from lib.llm_dispatch.conv_affinity import clear_conv_affinity
-            clear_conv_affinity()
-        except Exception as _ca_err:
-            logger.debug('[Task:%s] clear_conv_affinity failed: %s', tid, _ca_err)
-        # ── Release this worker thread's thread-local DB connection back to
-        #    the shared pool.  run_task runs on long-lived threads (the
-        #    asyncio.to_thread default pool, or daemon task threads); without
-        #    this each one would pin a PG connection for its entire lifetime,
-        #    exhausting the connection semaphore under high concurrency
-        #    (see the "pool exhausted / tracked_threads ≫ active" symptom). ──
-        try:
-            from lib.agent_core.store import get_conversation_store
-            get_conversation_store().release_connection()
-        except Exception as _ctd_err:
-            logger.debug('[Task:%s] release_connection on task end failed: %s',
-                         tid, _ctd_err)
+        # 5-step teardown lane extracted to
+        # lib.tasks_pkg.orchestrator._teardown.finalize_task_lane
+        # (pt_03f4cdf1 slice 5): presence.mark_idle + set_req_id('') +
+        # clear_pinned_provider + clear_conv_affinity +
+        # get_conversation_store().release_connection(). Each step is
+        # its own try/except so one failure never blocks the others.
+        finalize_task_lane(task, tid=tid)
 

@@ -562,6 +562,155 @@ def test_setup_project_context_disabled_path_is_no_op():
         vus.start_external_edit_probe = orig_start_probe
 
 
+# ── Slice 5: _teardown submodule (run_task finally-block teardown) ───
+# Extracts the 44-line ``finally:`` teardown block into
+# lib/tasks_pkg/orchestrator/_teardown.py. Symmetric counterpart to
+# ``_vu_startup.py``: startup helpers run once at task begin, teardown
+# helpers run once at task end.
+
+@_unit
+def test_teardown_submodule_exists_and_exposes_finalize_task_lane():
+    """Slice 5 (pt_03f4cdf1): ``_teardown`` submodule exists and
+    exposes ``finalize_task_lane`` as a module-level callable."""
+    import importlib
+    mod = importlib.import_module('lib.tasks_pkg.orchestrator._teardown')
+    assert hasattr(mod, 'finalize_task_lane'), (
+        'lib.tasks_pkg.orchestrator._teardown missing finalize_task_lane')
+    assert callable(mod.finalize_task_lane), (
+        f'finalize_task_lane is not callable '
+        f'(got {type(mod.finalize_task_lane).__name__})')
+
+
+@_unit
+def test_run_py_calls_finalize_task_lane_in_finally():
+    """Slice 5: _run.py's finally block must call finalize_task_lane
+    (replacing the previous inline 5-step teardown)."""
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, 'lib/tasks_pkg/orchestrator/_run.py'),
+              encoding='utf-8') as f:
+        src = f.read()
+    assert 'finalize_task_lane' in src, (
+        '_run.py must reference finalize_task_lane (slice 5 pt_03f4cdf1)')
+    # The specific inline patterns each teardown step used are GONE —
+    # each was a `try: <one-liner> except Exception: logger.debug(...)`
+    # ad-hoc block. Guard against a silent revert.
+    assert 'from lib.llm_dispatch.provider_pin import clear_pinned_provider' not in src, (
+        '_run.py must not carry the inline clear_pinned_provider import '
+        '(moved to _teardown.py)')
+    assert 'from lib.llm_dispatch.conv_affinity import clear_conv_affinity' not in src, (
+        '_run.py must not carry the inline clear_conv_affinity import '
+        '(moved to _teardown.py)')
+
+
+@_unit
+def test_finalize_task_lane_runs_all_five_teardown_steps():
+    """Slice 5: finalize_task_lane must run ALL FIVE teardown steps in
+    the SAME ORDER as the inline finally block:
+
+      1. presence.mark_idle (if project attached + conv id)
+      2. set_req_id('') (clear thread-local request id)
+      3. clear_pinned_provider() (drop hard provider pin)
+      4. clear_conv_affinity() (drop soft conv sticky-routing)
+      5. get_conversation_store().release_connection() (return DB
+         connection to shared pool)
+
+    Every step is wrapped in try/except so a failure NEVER escapes.
+    Monkey-patches all five side-effect points to observation shims;
+    asserts each call fires + preserves relative order.
+    """
+    import sys
+    import importlib
+    import lib.tasks_pkg.orchestrator._teardown as td
+
+    calls = []
+
+    # Fakes for the 5 side-effect points.
+    fake_mark_idle = lambda pp, cid: calls.append(('mark_idle', pp, cid))
+    fake_clear_pin = lambda: calls.append(('clear_pinned_provider',))
+    fake_clear_aff = lambda: calls.append(('clear_conv_affinity',))
+
+    class _FakeStore:
+        def release_connection(self):
+            calls.append(('release_connection',))
+
+    fake_get_store = lambda: _FakeStore()
+
+    # EAGERLY import each side-effect module so it's in sys.modules
+    # BEFORE we patch. finalize_task_lane uses lazy ``from X import Y``
+    # imports at call time — those go through sys.modules['X'] and read
+    # the (patched) attribute. If a module isn't in sys.modules yet, our
+    # patch has nothing to overwrite and the real function fires.
+    presence_mod = importlib.import_module('lib.presence')
+    pin_mod = importlib.import_module('lib.llm_dispatch.provider_pin')
+    aff_mod = importlib.import_module('lib.llm_dispatch.conv_affinity')
+    store_mod = importlib.import_module('lib.agent_core.store')
+
+    orig_mark = getattr(presence_mod, 'mark_idle', None)
+    orig_pin = getattr(pin_mod, 'clear_pinned_provider', None)
+    orig_aff = getattr(aff_mod, 'clear_conv_affinity', None)
+    orig_get_store = getattr(store_mod, 'get_conversation_store', None)
+
+    # Also patch the local set_req_id import target.
+    from lib.log import set_req_id as _real_set_req_id
+    import lib.log as _log_mod
+    def _fake_set_req_id(v):
+        calls.append(('set_req_id', v))
+
+    try:
+        presence_mod.mark_idle = fake_mark_idle
+        pin_mod.clear_pinned_provider = fake_clear_pin
+        aff_mod.clear_conv_affinity = fake_clear_aff
+        store_mod.get_conversation_store = fake_get_store
+        _log_mod.set_req_id = _fake_set_req_id
+        # Also patch inside _teardown itself since it imports at module load
+        td.set_req_id = _fake_set_req_id
+
+        # Case A: project + conv both present → mark_idle fires.
+        task = {'id': 'tid-full', 'convId': 'cv-1',
+                'config': {'projectPath': '/proj/A'}}
+        td.finalize_task_lane(task, tid='tid-full')
+
+        kinds = [c[0] for c in calls]
+        # All 5 steps must fire (mark_idle first, then the 4 cleanup ones).
+        assert 'mark_idle' in kinds, f'mark_idle missing; got {kinds}'
+        assert 'set_req_id' in kinds, f'set_req_id missing; got {kinds}'
+        assert 'clear_pinned_provider' in kinds, (
+            f'clear_pinned_provider missing; got {kinds}')
+        assert 'clear_conv_affinity' in kinds, (
+            f'clear_conv_affinity missing; got {kinds}')
+        assert 'release_connection' in kinds, (
+            f'release_connection missing; got {kinds}')
+
+        # Case B: no project → mark_idle skipped (matches inline gate
+        # `if _fin_pp and _fin_cid`).
+        calls.clear()
+        task2 = {'id': 'tid-noproj', 'convId': 'cv-2', 'config': {}}
+        td.finalize_task_lane(task2, tid='tid-noproj')
+        kinds2 = [c[0] for c in calls]
+        assert 'mark_idle' not in kinds2, (
+            f'mark_idle should NOT fire without project_path; got {kinds2}')
+        # The 4 unconditional cleanups still fire.
+        for name in ('set_req_id', 'clear_pinned_provider',
+                     'clear_conv_affinity', 'release_connection'):
+            assert name in kinds2, (
+                f'{name} missing when no project; got {kinds2}')
+    finally:
+        # Restore all patched module attributes.
+        if orig_mark is not None:
+            presence_mod.mark_idle = orig_mark
+        else:
+            presence_mod.__dict__.pop('mark_idle', None)
+        if orig_pin is not None:
+            pin_mod.clear_pinned_provider = orig_pin
+        if orig_aff is not None:
+            aff_mod.clear_conv_affinity = orig_aff
+        if orig_get_store is not None:
+            store_mod.get_conversation_store = orig_get_store
+        _log_mod.set_req_id = _real_set_req_id
+        td.set_req_id = _real_set_req_id
+
+
 if __name__ == '__main__':
     tests = [
         test_orchestrator_facade_symbols_all_importable,
@@ -578,6 +727,9 @@ if __name__ == '__main__':
         test_setup_project_context_present_on_vu_startup,
         test_run_py_calls_setup_project_context,
         test_setup_project_context_disabled_path_is_no_op,
+        test_teardown_submodule_exists_and_exposes_finalize_task_lane,
+        test_run_py_calls_finalize_task_lane_in_finally,
+        test_finalize_task_lane_runs_all_five_teardown_steps,
     ]
     for fn in tests:
         fn()

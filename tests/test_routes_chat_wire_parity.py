@@ -18,9 +18,16 @@ registrations stay byte-identical. Landed so far:
     that share ONE piece of module-level state; they must live in the
     same module and be re-exported through routes.chat as a set so
     nobody imports half of the pair).
+  * Slice 3 → ``routes/chat_side_effects.py``: ``_truncate_conv_history``
+    (the IO-heavy helper that clears the message-queue + server-message
+    -store side channels after a conv history truncate). Kept OUT of
+    ``chat_helpers.py`` to preserve that module's "pure + import-
+    lightweight" invariant; kept OUT of ``chat_state.py`` because it
+    owns no state (it acts on state living in OTHER lib.* packages).
 
-Both slices keep ``routes/chat.py`` importable via re-export blocks so
-every ``from routes.chat import _X`` call site keeps working unchanged.
+All three slices keep ``routes/chat.py`` importable via re-export
+blocks so every ``from routes.chat import _X`` call site keeps working
+unchanged.
 
 This test is the CONTRACT the split must preserve. It runs BEFORE and AFTER
 the extraction; the numbers must match. It intentionally does NOT hardcode
@@ -229,6 +236,65 @@ def test_abort_marker_bundle_semantics():
         _rs._send_abort_marker.pop(conv_id, None)
 
 
+@_unit
+def test_truncate_conv_history_side_effect_wire():
+    """pt_04686ac6 slice 3: ``_truncate_conv_history`` must be importable
+    from ``routes.chat`` (re-export) AND ``routes.chat_side_effects`` (real
+    home), point at the SAME object, and — when invoked — call BOTH
+    downstream side-effect points (``lib.message_queue.clear_queue`` +
+    ``lib.tasks_pkg.server_message_store.clear``). A future slice that
+    accidentally drops one clear (the specific class of bug the helper's
+    docstring warns against — "folding both into one helper makes the
+    invariant impossible to half-apply") is caught here.
+
+    Monkey-patches the two lib entry points to observation-only shims;
+    does NOT touch a real message queue or message store.
+    """
+    import importlib
+    import routes.chat as _rc
+    import routes.chat_side_effects as _rs
+
+    # Symbol wire: both modules expose it AND they are the same object.
+    assert hasattr(_rc, '_truncate_conv_history'), 'routes.chat missing re-export'
+    assert hasattr(_rs, '_truncate_conv_history'), 'routes.chat_side_effects missing'
+    assert _rc._truncate_conv_history is _rs._truncate_conv_history, (
+        'routes.chat._truncate_conv_history must be the SAME object as '
+        'routes.chat_side_effects._truncate_conv_history (re-export, not copy)')
+
+    # Behavioural wire: invoking it calls BOTH downstream clears.
+    calls = []
+
+    def _fake_clear_queue(conv_id):
+        calls.append(('clear_queue', conv_id))
+        return 0
+
+    def _fake_clear_store(conv_id):
+        calls.append(('clear_store', conv_id))
+
+    mq_mod = importlib.import_module('lib.message_queue')
+    ms_mod = importlib.import_module('lib.tasks_pkg.server_message_store')
+    orig_cq = mq_mod.clear_queue
+    orig_cs = ms_mod.clear
+    try:
+        mq_mod.clear_queue = _fake_clear_queue
+        ms_mod.clear = _fake_clear_store
+        _rc._truncate_conv_history('cv-truncate-test')
+    finally:
+        mq_mod.clear_queue = orig_cq
+        ms_mod.clear = orig_cs
+
+    kinds = {c[0] for c in calls}
+    assert 'clear_queue' in kinds, (
+        '_truncate_conv_history did NOT invoke lib.message_queue.clear_queue — '
+        "the 'clear the queued phantom turn' half of the invariant is broken")
+    assert 'clear_store' in kinds, (
+        '_truncate_conv_history did NOT invoke lib.tasks_pkg.'
+        "server_message_store.clear — the 'clear the tool-history mirror' "
+        'half of the invariant is broken (regen/edit would replay stale rounds)')
+    assert {c[1] for c in calls} == {'cv-truncate-test'}, (
+        'both clears must receive the same conv_id we passed in')
+
+
 # ── Layer 2: Blueprint route wire-parity ──────────────────────────────
 
 def _collect_bp_rules(bp_name: str) -> frozenset:
@@ -371,6 +437,8 @@ if __name__ == '__main__':
         test_routes_chat_symbols_all_importable,
         test_extracted_helpers_are_callable,
         test_pure_helper_wire_parity_smoke,
+        test_abort_marker_bundle_semantics,
+        test_truncate_conv_history_side_effect_wire,
         test_chat_bp_rules_snapshot,
         test_api_v1_chat_bp_rules_snapshot,
     ]

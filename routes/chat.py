@@ -246,50 +246,16 @@ def chat_send_translate_status(conv_id):
     return jsonify(get_send_translate_status(conv_id) or {})
 
 
-def _truncate_conv_history(conv_id):
-    """Discharge every server-side obligation that follows truncating a conv.
-
-    Any route that rewrites a conversation's history to a shorter prefix
-    (regenerate, edit-and-resend) MUST clear the two in-memory side-channels
-    that outlive the DB write, or the next task replays stale state:
-
-      * the message QUEUE — a previous /api/chat/send aborted mid-translate
-        may have left an enqueued message; without clearing it the queue
-        auto-dispatches a phantom turn after this run completes;
-      * the server-side tool-history STORE
-        (lib/tasks_pkg/server_message_store) — a full-fidelity in-memory copy
-        of the prior turns' tool_use/tool_result rounds, keyed by conv_id and
-        driven by keepToolHistory (default ON). On the next task the
-        orchestrator's rebuild_messages_with_history REPLACES the DB-built
-        (now-truncated) messages with that stored copy, which still holds the
-        rounds we just truncated away — so every regen/edit would replay an
-        ever-growing stale context instead of the truncated one. Clearing it
-        forces a clean rebuild from the truncated DB state; the preserved
-        turns' tool history is reconstructed from their stored toolRounds by
-        conv_message_builder, so no real context is lost.
-
-    Folding both into one helper makes the invariant impossible to
-    half-apply: a future truncating route calls this once instead of
-    re-deriving (and forgetting one of) the two clears. Best-effort — each
-    failure is logged, never raised.
-
-    Args:
-        conv_id: The conversation whose history was just truncated.
-    """
-    try:
-        from lib.message_queue import clear_queue
-        _cleared = clear_queue(conv_id)
-        if _cleared:
-            logger.info('[Regen] conv=%s cleared %d stale queued message(s) before regen',
-                        conv_id[:8], _cleared)
-    except Exception as e:
-        logger.warning('[Regen] Failed to clear queue for conv=%s: %s', conv_id[:8], e)
-
-    try:
-        from lib.tasks_pkg.server_message_store import clear as _clear_msg_store
-        _clear_msg_store(conv_id)
-    except Exception as e:
-        logger.warning('[Regen] Failed to clear message store for conv=%s: %s', conv_id[:8], e)
+# ─── _truncate_conv_history moved to routes/chat_side_effects.py (pt_04686ac6 slice 3) ───
+# The IO-heavy helper that clears the message-queue + server-message-store side
+# channels after a conv history truncate. Kept out of routes/chat_helpers.py to
+# preserve that module's "pure + import-lightweight" invariant; kept out of
+# routes/chat_state.py because it owns no state (it acts on state living in
+# OTHER lib.* packages). Re-exported here so
+# ``from routes.chat import _truncate_conv_history`` (e.g.
+# tests/test_regen_clears_msg_store.py) keeps working unchanged. See
+# tests/test_routes_chat_wire_parity.py for the guard.
+from routes.chat_side_effects import _truncate_conv_history  # noqa: E402,F401
 
 
 def _start_task_for_conv(conv_id, config, data=None):

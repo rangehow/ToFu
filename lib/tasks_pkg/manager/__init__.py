@@ -77,8 +77,16 @@ from lib.tasks_pkg.manager._events import (  # noqa: E402,F401
     append_event,
     find_message_by_id,
     _assign_message_ids,
+    _new_assistant_slot,
     _strip_base64_for_snapshot,
 )
+
+# The pre-split ``manager.py`` imported these at module level (``from
+# lib.agent_core.events import EventType, build_event``), so call sites and
+# tests reach them via ``lib.tasks_pkg.manager`` (e.g.
+# ``mgr.build_event(mgr.EventType.DELTA, ...)``). Re-export to preserve that
+# facade — dropping them in the split was silent drift.
+from lib.agent_core.events import EventType, build_event, emit  # noqa: E402,F401
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -127,6 +135,7 @@ from lib.tasks_pkg.manager._sync import (  # noqa: E402,F401
 from lib.tasks_pkg.manager._registry import (  # noqa: E402,F401
     create_task,
     discard_task,
+    is_carrier_task,
     list_running_tasks,
     abort_running_tasks_for_conv,
     quiesce_running_tasks,
@@ -177,10 +186,11 @@ __all__ = [
     # shared state
     'tasks', 'tasks_lock',
     # registry
-    'create_task', 'discard_task', 'list_running_tasks',
+    'create_task', 'discard_task', 'is_carrier_task', 'list_running_tasks',
     'abort_running_tasks_for_conv', 'quiesce_running_tasks',
     # events
     'append_event', 'find_message_by_id',
+    'build_event', 'EventType', 'emit',
     # persistence
     'build_result_meta', 'persist_task_result',
     'load_tool_rounds_from_conversation', 'load_endpoint_turns_from_conversation',

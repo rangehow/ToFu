@@ -291,6 +291,11 @@ def _llm_call_with_fallback(task, body, model, round_num, max_tokens,
                     'type': 'phase',
                     'phase': 'retrying',
                     'detail': f'⚡ 上下文超长，已自动压缩 (reactive compact {_attempts + 1}/{_REACTIVE_COMPACT_MAX_RETRIES})…',
+                    'detailKey': 'stream.phase.reactiveCompact',
+                    'detailArgs': {
+                        'attempt': _attempts + 1,
+                        'max': _REACTIVE_COMPACT_MAX_RETRIES,
+                    },
                 })
 
                 # Retry the LLM call with compacted messages

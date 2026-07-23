@@ -301,22 +301,55 @@ function updateStreamingUI(msg) {
         const freezeIdx = content.lastIndexOf("\n\n", content.length - 60);
 
         if (freezeIdx > 100 && content.length > 300) {
-          const frozenText = content.slice(0, freezeIdx);
           const tailText = content.slice(freezeIdx);
 
-          /* ★ PERF: reuse cached frozen HTML if freeze point didn't move */
-          let frozenHtml;
-          if (frozenLen === freezeIdx && contentZone._frozenHtml) {
-            frozenHtml = contentZone._frozenHtml;
+          if (frozenLen > 0 && mdContentEl && tailEl) {
+            /* ★ FLICKER FIX (root cause): the old refreeze rebuilt the ENTIRE
+             *   `.md-content` innerHTML every ~600 chars, recreating the
+             *   already-committed frozen nodes and re-parsing the whole answer
+             *   — a visible full-content flash on long replies. Instead keep the
+             *   existing frozen DOM intact: render ONLY the newly-frozen segment
+             *   (content between the old and new freeze points; both sit on
+             *   `\n\n` block boundaries, so rendering the segment independently
+             *   is faithful to rendering the whole prefix) and insert it as new
+             *   frozen siblings right before the tail, then reset only the small
+             *   tail. Nothing already painted is torn down, so no flash. Freeze
+             *   points advance monotonically (lastIndexOf ceiling grows with
+             *   content), so freezeIdx >= frozenLen always holds here. */
+            if (freezeIdx > frozenLen) {
+              const newlyFrozen = content.slice(frozenLen, freezeIdx);
+              let _nfHtml;
+              try { _nfHtml = renderMarkdown(newlyFrozen); }
+              catch (_) { _nfHtml = escapeHtml(newlyFrozen); }
+              tailEl.insertAdjacentHTML('beforebegin', _nfHtml);
+              contentZone._frozenLen = freezeIdx;
+            }
+            /* freezeIdx === frozenLen: the overflowing tail has no new `\n\n`
+             * boundary (one long paragraph) — nothing new to freeze; just
+             * refresh the tail in place. */
+            try { tailEl.innerHTML = renderMarkdown(tailText); }
+            catch (_) { tailEl.innerHTML = escapeHtml(tailText); }
+            /* The whole-prefix cache is no longer maintained on the incremental
+             * path (the frozen DOM itself is now the source of truth). */
+            contentZone._frozenHtml = null;
           } else {
-            frozenHtml = renderMarkdown(frozenText);
-            contentZone._frozenHtml = frozenHtml;
+            /* First substantial render (or frozen DOM missing): build the split
+             * structure ONCE. Subsequent frames take the fast path or the
+             * incremental branch above, so this full build is not a per-frame
+             * cost and cannot flash repeatedly. */
+            const frozenText = content.slice(0, freezeIdx);
+            let frozenHtml;
+            if (frozenLen === freezeIdx && contentZone._frozenHtml) {
+              frozenHtml = contentZone._frozenHtml;
+            } else {
+              frozenHtml = renderMarkdown(frozenText);
+              contentZone._frozenHtml = frozenHtml;
+            }
+            const tailHtml = renderMarkdown(tailText);
+            contentZone.innerHTML =
+              `<div class="md-content">${frozenHtml}<div class="md-stream-tail">${tailHtml}</div></div>`;
+            contentZone._frozenLen = freezeIdx;
           }
-
-          const tailHtml = renderMarkdown(tailText);
-          contentZone.innerHTML =
-            `<div class="md-content">${frozenHtml}<div class="md-stream-tail">${tailHtml}</div></div>`;
-          contentZone._frozenLen = freezeIdx;
         } else {
           /* Content too short to split — render whole thing */
           contentZone.innerHTML = `<div class="md-content">${renderMarkdown(content)}</div>`;
@@ -348,6 +381,21 @@ function updateStreamingUI(msg) {
   let _phaseKey = "";
   let _phaseHtml = "";
   const _phaseIcons = { llm_thinking: "", tool_exec: "", compacting: "" };
+  /* ★ i18n resolver: our OWN fixed-chrome phase labels (llm_thinking,
+   *   waiting_model, compacting, reactive-compact retrying) now ship a
+   *   stable `detailKey` (+ optional `detailArgs`) alongside their English
+   *   `detail`. Prefer the localized key when present; fall back to `detail`
+   *   for headless callers / third-party phases that don't set one. Guarded
+   *   so unit harnesses that eval this file without i18n.js don't throw. */
+  function _phaseDetailText(p) {
+    if (!p) return "";
+    const _key = p.detailKey || "";
+    if (_key && typeof t === 'function') {
+      try { return t(_key, p.detailArgs || undefined); }
+      catch (e) { console.debug('[stream-phase] t() failed for', _key, e); }
+    }
+    return p.detail || "";
+  }
   if (phase && phase.phase === "thinking_active") {
     /* ★ Model is actively generating thinking tokens (works on ALL rounds,
      *   even when msg.content is already non-empty from previous tool rounds) */
@@ -357,32 +405,38 @@ function updateStreamingUI(msg) {
     _phaseHtml = `<div class="stream-phase stream-phase-thinking"><span class="stream-phase-text">${escapeHtml(t('stream.phase.reasoning'))}<span class="stream-phase-counter" data-counter="thinking">${escapeHtml(t('stream.phase.chars', { n: _thSize }))}</span></span><span class="stream-phase-dots"><span>.</span><span>.</span><span>.</span></span></div>`;
   } else if (phase && phase.phase === "llm_thinking") {
     const icon = _phaseIcons[phase.phase];
-    _phaseKey = "think:" + phase.detail + (phase.toolContext || "");
+    const _txt = _phaseDetailText(phase);
+    _phaseKey = "think:" + (phase.detailKey || phase.detail) + (phase.toolContext || "");
     const ctx = phase.toolContext
       ? `<span class="stream-phase-ctx">${escapeHtml(phase.toolContext)}</span>`
       : "";
-    _phaseHtml = `<div class="stream-phase"><span class="stream-phase-icon">${icon}</span><span class="stream-phase-text">${escapeHtml(phase.detail)}${ctx}</span><span class="stream-phase-dots"><span>.</span><span>.</span><span>.</span></span></div>`;
+    _phaseHtml = `<div class="stream-phase"><span class="stream-phase-icon">${icon}</span><span class="stream-phase-text">${escapeHtml(_txt)}${ctx}</span><span class="stream-phase-dots"><span>.</span><span>.</span><span>.</span></span></div>`;
   } else if (phase && phase.phase === "waiting_model" && !hasActiveSearch) {
     /* ★ Request is in flight but the model hasn't emitted its first token
      *   yet (prompt prefill / TTFT), or the next turn is a silent tool call
      *   with no preamble. Emitted by stream_llm_response right before
      *   dispatch_stream; cleared by the first content/thinking delta, or
      *   yielded to the tool UI once a tool_start makes hasActiveSearch true. */
-    _phaseKey = "waiting-model:" + (phase.detail || "");
-    _phaseHtml = `<div class="stream-phase"><span class="stream-phase-text">${escapeHtml(phase.detail || t('stream.phase.waitingModel'))}</span><span class="stream-phase-dots"><span>.</span><span>.</span><span>.</span></span></div>`;
+    const _txt = _phaseDetailText(phase) || t('stream.phase.waitingModel');
+    _phaseKey = "waiting-model:" + (phase.detailKey || phase.detail || "");
+    _phaseHtml = `<div class="stream-phase"><span class="stream-phase-text">${escapeHtml(_txt)}</span><span class="stream-phase-dots"><span>.</span><span>.</span><span>.</span></span></div>`;
   } else if (phase && phase.phase === "compacting") {
-    _phaseKey = "compact:" + phase.detail;
-    _phaseHtml = `<div class="stream-phase"><span class="stream-phase-text">${escapeHtml(phase.detail)}</span><span class="stream-phase-dots"><span>.</span><span>.</span><span>.</span></span></div>`;
+    const _txt = _phaseDetailText(phase);
+    _phaseKey = "compact:" + (phase.detailKey || phase.detail);
+    _phaseHtml = `<div class="stream-phase"><span class="stream-phase-text">${escapeHtml(_txt)}</span><span class="stream-phase-dots"><span>.</span><span>.</span><span>.</span></span></div>`;
   } else if (phase && phase.phase === "retrying") {
+    const _txt = _phaseDetailText(phase) || t('stream.phase.retrying');
     _phaseKey = "retry:" + (phase.attempt || 0);
-    _phaseHtml = `<div class="stream-phase stream-phase-retrying"><span class="stream-phase-icon">${Icon('refresh', 14)}</span><span class="stream-phase-text">${escapeHtml(phase.detail || t('stream.phase.retrying'))}</span><span class="stream-phase-dots"><span>.</span><span>.</span><span>.</span></span></div>`;
+    _phaseHtml = `<div class="stream-phase stream-phase-retrying"><span class="stream-phase-icon">${Icon('refresh', 14)}</span><span class="stream-phase-text">${escapeHtml(_txt)}</span><span class="stream-phase-dots"><span>.</span><span>.</span><span>.</span></span></div>`;
   } else if (phase && phase.phase === "tool_exec" && !hasActiveSearch) {
-    _phaseKey = "exec:" + phase.detail;
-    _phaseHtml = `<div class="stream-phase"><span class="stream-phase-text">${escapeHtml(phase.detail)}</span><span class="stream-phase-dots"><span>.</span><span>.</span><span>.</span></span></div>`;
-  } else if (phase && phase.phase === "working" && phase.detail) {
+    const _txt = _phaseDetailText(phase);
+    _phaseKey = "exec:" + (phase.detailKey || phase.detail);
+    _phaseHtml = `<div class="stream-phase"><span class="stream-phase-text">${escapeHtml(_txt)}</span><span class="stream-phase-dots"><span>.</span><span>.</span><span>.</span></span></div>`;
+  } else if (phase && phase.phase === "working" && (phase.detailKey || phase.detail)) {
     /* Generic "working" phase from external backends (e.g. "Initializing Claude Code...") */
-    _phaseKey = "working:" + phase.detail;
-    _phaseHtml = `<div class="stream-phase"><span class="stream-phase-text">${escapeHtml(phase.detail)}</span><span class="stream-phase-dots"><span>.</span><span>.</span><span>.</span></span></div>`;
+    const _txt = _phaseDetailText(phase);
+    _phaseKey = "working:" + (phase.detailKey || phase.detail);
+    _phaseHtml = `<div class="stream-phase"><span class="stream-phase-text">${escapeHtml(_txt)}</span><span class="stream-phase-dots"><span>.</span><span>.</span><span>.</span></span></div>`;
   } else if (hasActiveSearch) {
     _phaseKey = "search";
     _phaseHtml = "";
@@ -394,7 +448,7 @@ function updateStreamingUI(msg) {
     _phaseKey = "think-only";
     const _thLen = msg.thinking.length;
     const _thSize = _thLen >= 1024 ? `${(_thLen / 1024).toFixed(1)}k` : `${_thLen}`;
-    _phaseHtml = `<div class="stream-phase stream-phase-thinking"><span class="stream-phase-text">${escapeHtml(t('stream.phase.deepThinking'))}<span class="stream-phase-counter">${escapeHtml(t('stream.phase.chars', { n: _thSize }))}</span></span><span class="stream-phase-dots"><span>.</span><span>.</span><span>.</span></span></div>`;
+    _phaseHtml = `<div class="stream-phase stream-phase-thinking"><span class="stream-phase-text">${escapeHtml(t('stream.phase.reasoning'))}<span class="stream-phase-counter">${escapeHtml(t('stream.phase.chars', { n: _thSize }))}</span></span><span class="stream-phase-dots"><span>.</span><span>.</span><span>.</span></span></div>`;
   } else {
     _phaseKey = "none";
     _phaseHtml = "";
@@ -486,8 +540,9 @@ function _renderStreamRoundProse(groupEl, round) {
     thinkEl.remove();
   }
 
-  // ── Per-round narration (English) — hidden while auto-translate is live
-  //    (the incremental translator paints the Chinese into .stream-seg-narration). ──
+  // ── Per-round narration (English) — hidden ONLY for a round whose Chinese
+  //    twin has landed (see the per-round .xlate-hidden gate below); otherwise
+  //    it stays visible as the fallback. ──
   const _narr = round.assistantContent || "";
   let narrEl = _q("stream-seg-en-narration");
   if (_narr) {
@@ -508,6 +563,14 @@ function _renderStreamRoundProse(groupEl, round) {
       catch (_e) { narrEl.textContent = _narr; }
       narrEl._lastNarrHtml = narrEl.innerHTML;
     }
+    /* ★ PER-ROUND bilingual gate: hide this round's English ONLY when its
+     * Chinese twin (.stream-seg-narration, painted by the incremental
+     * translator) already exists for the SAME round. A tool-sync re-render can
+     * run after the translator painted Chinese, so re-assert the class here;
+     * and never hide a round whose Chinese hasn't landed — that was the
+     * "intermediate narration vanishes under auto-translate" bug. */
+    const _zhTwin = _q("stream-seg-narration");
+    narrEl.classList.toggle("xlate-hidden", !!_zhTwin);
   } else if (narrEl) {
     narrEl.remove();
   }
@@ -523,7 +586,7 @@ function _renderStreamRoundProse(groupEl, round) {
   }
 }
 
-/* ── Live DOM reposition of synthetic inject-row groups ─────────────────
+/* ── Live DOM reposition of synthetic inject-row groups ──────────────────
  * The main _syncToolRoundsDOM loop appends a NEW group with `body.appendChild`
  * and never relocates an existing one. A mid-turn inject chip (steer / peer /
  * async swarm) always arrives AFTER its anchor round's tool_start events (the
@@ -631,6 +694,15 @@ function _syncToolRoundsDOM(container, rounds) {
     if (r._translatedQuestion) _fp = Math.imul(_fp, 31) + r._translatedQuestion.length;
     if (r._timerPolls) _fp = Math.imul(_fp, 31) + r._timerPolls.length;
     if (r._timerSkipCount) _fp = Math.imul(_fp, 31) + r._timerSkipCount;
+    /* ★ Timer next-poll rollover — fold the scheduled next-poll time (in
+     *   seconds) so a new nextPollTs (sent every poll/skip via timer_poll_check)
+     *   ALWAYS forces this round to re-render and refresh its [data-timer-next]
+     *   attribute. Unlike swarm's data-sw-start (an immutable START time), the
+     *   timer countdown target CHANGES each cycle, so relying on _timerPolls
+     *   length correlation alone would be an implicit rollover dependency — this
+     *   makes the attribute update an explicit guarantee. The 1Hz ticker then
+     *   only animates the seconds within a cycle. */
+    if (r._timerNextPollTs) _fp = Math.imul(_fp, 31) + ((r._timerNextPollTs / 1000) | 0);
     /* ★ Swarm fields — without these, swarm_agent_* events mutate
      *   round._swarmAgents but the fingerprint stays equal, the gate
      *   bails, and the panel never re-renders until page refresh. */

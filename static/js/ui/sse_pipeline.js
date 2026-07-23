@@ -1182,11 +1182,16 @@ function dispatchSSEEvent(line, ctx) {
         /* Phase events during critic review — update critic buf instead */
         if (_epCriticBuf)
           _epCriticBuf.phase = { phase: ev.phase, detail: ev.detail || "",
+            detailKey: ev.detailKey || "", detailArgs: ev.detailArgs || null,
             tools: ev.tools || [], toolContext: ev.toolContext || "", round: ev.roundNum || 0 };
       } else if (buf) {
         buf.phase = {
           phase: ev.phase,
           detail: ev.detail || "",
+          /* ★ i18n plumb: renderers prefer detailKey→t() over `detail`, which
+           * remains the English fallback for headless / non-i18n clients. */
+          detailKey: ev.detailKey || "",
+          detailArgs: ev.detailArgs || null,
           tools: ev.tools || [],
           toolContext: ev.toolContext || "",
           round: ev.roundNum || 0,
@@ -1842,12 +1847,18 @@ function dispatchSSEEvent(line, ctx) {
         }
         for (const _k of ['finishReason', 'usage', 'preset', 'toolSummary',
                           'model', 'provider_id', 'apiRounds', 'modifiedFiles',
-                          'modifiedFileList', 'cost', '_taskId',
+                          'modifiedFileList', 'cost', '_taskId', '_msgId',
                           'fallbackModel', 'fallbackFrom', 'fallbackReason',
                           'fallbackKind', 'error', 'thinkingDepth', '_gitSha',
                           '_memoryPrefetch', '_preferencesApplied',
                           '_relatedConversations', '_preferencesLearned',
                           '_inboxInjects', '_peerInjects', '_userSteerInjects']) {
+          /* ★ _msgId: adopt the server's committed id so the live bubble and
+           *   the DB row share ONE identity. With the backend now honouring the
+           *   client _assistantMsgId (manager._new_assistant_slot) they already
+           *   match; this keeps them aligned even for legacy/headless turns
+           *   where the server minted its own UUID — a reconnect / rescue-PUT
+           *   dedup then recognises the bubble and never appends a duplicate. */
           if (_cm[_k] != null) assistantMsg[_k] = _cm[_k];
         }
         assistantMsg._committedProjection = true;

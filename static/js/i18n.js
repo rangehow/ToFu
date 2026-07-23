@@ -2207,6 +2207,29 @@ var _i18n = {
   'stream.phase.waitingModel': { zh: '已发送给模型，等待开始回复…', en: 'Sent to the model, waiting for it to start replying…' },
   'stream.phase.retrying': { zh: '正在重试…', en: 'Retrying…' },
   'stream.phase.waiting': { zh: '等待中…', en: 'Waiting…' },
+  // Backend-emitted phase.detail localizations. Each corresponds to a
+  // `detailKey` shipped alongside a legacy English `detail` fallback so
+  // headless clients that don't localize still render sensible text.
+  'stream.phase.generatingResponse': {
+    zh: '正在生成回复…',
+    en: 'Generating response…',
+  },
+  'stream.phase.analyzingRound': {
+    zh: '正在分析结果并规划下一步…（第 {round} 轮）',
+    en: 'Analyzing results and planning next step… (round {round})',
+  },
+  'stream.phase.waitingForModel': {
+    zh: '已发送给 {model}，等待开始回复…',
+    en: 'Sent to {model}, waiting for it to start replying…',
+  },
+  'stream.phase.compactingWindow': {
+    zh: '正在压缩早期上下文以适配窗口…',
+    en: 'Compressing earlier context to fit the window…',
+  },
+  'stream.phase.reactiveCompact': {
+    zh: '⚡ 上下文超长，已自动压缩（reactive compact {attempt}/{max}）…',
+    en: '⚡ Prompt too long — auto-compacted (reactive compact {attempt}/{max})…',
+  },
   'stream.thinking.active': { zh: '思考中...', en: 'Thinking...' },
   'stream.thinking.done': { zh: '思考过程', en: 'Thinking Process' },
   'stream.roundMessages': { zh: 'Round {round} · {n}条', en: 'Round {round} · {n} msgs' },

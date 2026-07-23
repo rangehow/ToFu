@@ -100,24 +100,33 @@ function _fmtElapsed(ms) {
 function _streamPhaseLabel(buf) {
   const p = buf && buf.phase;
   if (!p || !p.phase) return '';
-  // p.detail is backend-supplied dynamic text — pass it through verbatim (same
-  // ruling as the assistant/critic prose: live server text isn't UI chrome).
-  // Only OUR OWN generic fallback labels are localized (zh primary).
+  // Prefer the stable `detailKey` when the backend attached one (our own
+  // fixed-chrome phases: llm_thinking, waiting_model, compacting, reactive
+  // compact retrying). Third-party / dynamic `detail` strings still render
+  // verbatim (same ruling as assistant/critic prose: live server text isn't
+  // UI chrome). The per-phase generic fallback labels remain the last resort.
+  const _resolvedDetail = (() => {
+    if (p.detailKey && typeof t === 'function') {
+      try { return t(p.detailKey, p.detailArgs || undefined); }
+      catch (e) { console.debug('[stream-phase-label] t() failed for', p.detailKey, e); }
+    }
+    return p.detail ? String(p.detail) : '';
+  })();
   switch (p.phase) {
     case 'tool_exec':
-      return p.detail ? String(p.detail) : _connT('conn.phaseTools');
+      return _resolvedDetail || _connT('conn.phaseTools');
     case 'llm_thinking':
-      return p.detail ? String(p.detail) : _connT('conn.phaseThinking');
+      return _resolvedDetail || _connT('conn.phaseThinking');
     case 'thinking_active':
       return _connT('conn.phaseReasoning');
     case 'compacting':
-      return p.detail ? String(p.detail) : _connT('conn.phaseCompacting');
+      return _resolvedDetail || _connT('conn.phaseCompacting');
     case 'retrying':
-      return p.detail ? String(p.detail) : _connT('conn.phaseRetrying');
+      return _resolvedDetail || _connT('conn.phaseRetrying');
     case 'working':
-      return p.detail ? String(p.detail) : _connT('conn.phaseWorking');
+      return _resolvedDetail || _connT('conn.phaseWorking');
     case 'autopilot_thinking':
-      return p.detail ? String(p.detail) : _connT('conn.phaseAutopilot');
+      return _resolvedDetail || _connT('conn.phaseAutopilot');
     default:
       return '';
   }

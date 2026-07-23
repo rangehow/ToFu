@@ -1,6 +1,29 @@
 # Project Journal
 
 
+
+### 2026-07-23(续13) — 「stream 阶段显示的文本没走 i18n」根修:PHASE 事件补 `detailKey`(+ `detailArgs`),前端优先走 `t()` 定位化,英文 `detail` 保留给 headless 客户端做兜底(12 文件 +330 左右,新测 8/8 绿 + 相邻 20/20 无回归 + event-registry 5/5)。
+- **owner 诉求:** 「stream phase 里显示的文本没做 i18n」——UI 默认中文,但流式 HUD 的 `.stream-phase-text`(还有 `_streamPhaseLabel` 的 HUD 后缀)一直照原样渲染后端英文 `detail`:`"Generating response…"` / `"Sent to {model}, waiting…"` / `"Analyzing results and planning next step… (round N)"` / `"Compressing earlier context…"` / reactive-compact retry 的硬编码中文。
+- **真因(读代码钉死,非猜):** 前端 `streaming_ui.js`(更新阶段块)+ `_streamPhaseLabel`(HUD 后缀)都有 `t('stream.phase.*')` 兜底键,但**只在 `phase.detail` 为空时才触发**——后端每一处 PHASE 都塞了英文 `detail`,兜底永远走不到。同时 `_streamPhaseLabel` 的注释还写着「`p.detail` 是 backend 动态文本,原样透传」——那对 tool_exec / 第三方 `working` 是对的,对**我们自己 4 处固定 UI chrome**(`llm_thinking`/`waiting_model`/`compacting`/reactive-compact `retrying`)就是纯 i18n 漏。 
+- **修法(可选加、无 wire regression):** PHASE 事件补两个可选字段——`detailKey`(稳定 i18n key)和 `detailArgs`(插值参数,如 `{round:3}` / `{model:'claude-4'}` / `{attempt:2,max:3}`);现代客户端过 `t()` 定位化,headless / 未做 i18n 的第三方客户端继续读 `detail`,零 wire regression。
+- **后端触点(4 处 emit + 1 处 poll snapshot + 1 处 contract):**
+  - `orchestrator/_finalize.py::_emit_tool_round_phase` — round 0 挂 `stream.phase.generatingResponse`;round N 挂 `stream.phase.analyzingRound` + `detailArgs={round: N+1}`。
+  - `manager/_stream.py` — pre-dispatch `waiting_model` 挂 `stream.phase.waitingForModel` + `detailArgs={model: _model_label}`。
+  - `compaction/_layer2/_compact.py::force_compact_if_needed` — `compacting` 挂 `stream.phase.compactingWindow`。
+  - `llm_fallback/_call.py` — reactive-compact retry 挂 `stream.phase.reactiveCompact` + `detailArgs={attempt, max}`(顺便让原本硬编中文的这一行也能 en 起来)。
+  - `manager/_events.py` — `task['phase']`(poll-fallback 消费者读取的对象)转发 `detailKey`/`detailArgs`,但**只在字段存在时才写**,避免对第三方 emit 塞空 key 骗后续 `detailKey→t()` 消费者。
+  - `agent_core/events.py` — PHASE `EventSpec.fields` 注册两个新字段 + 文档「英文 fallback / headless client 用」。
+- **前端触点(3 处):**
+  - `i18n.js` — 新增 5 个 key(`generatingResponse`/`analyzingRound`/`waitingForModel`/`compactingWindow`/`reactiveCompact`)+ 中英双份,复用现有 `{n}` 插值。
+  - `ui/sse_pipeline.js` — `buf.phase` / `_epCriticBuf.phase` 都把 `ev.detailKey`/`ev.detailArgs` 落进去。
+  - `ui/streaming_ui.js` — 提出小工具 `_phaseDetailText(p)`:`p.detailKey && t(...)` 优先,失败再回 `p.detail`;`_phaseKey`(用于 flicker-guard 的 dedupe key)也从 `phase.detailKey || phase.detail` 派生,避免 zh/en 切换触发无谓 DOM 重绘。`_streamPhaseLabel` 同样重写为「detailKey→t() 优先」。
+- **测试(1 新文件 `test_stream_phase_i18n.py`,8 测,后端 7 前端 1):**
+  - 后端半:驱动真实的 `_emit_tool_round_phase`(round 0/round N)+ 真实的 `append_event` 走 `manager/_events.py` 落 `task['phase']`,断言 `detailKey`/`detailArgs` 都在,并显式验证「无 detailKey 的第三方 phase 不会被塞空 key」这条 back-compat 契约。compacting / waiting_model / reactive-compact 三处走源码级断言(在 `force_compact_if_needed` 只在超阈值时触发,不适合单测里驱动)。
+  - 前端半:jsdom 载入真实 `static/js/ui/streaming_ui.js`,喂喂 zh `t()` 表 + 每个固定 phase 的 fixture,断言 (1) `.stream-phase-text` 里出现的是中文,不含英文串;(2) 插值 `{round}` / `{model}` / `{attempt}/{max}` 全部正确;(3) **无 detailKey 的传统 phase**(第三方 plugin 只塞 `detail`)仍原样 verbatim 渲染——把「back-compat」也钉死。
+- **contract 契约测试:** `test_event_emit.py` 的两条 byte-identity 测试(`test_emit_tool_round_phase_round0` / `_with_tools`)锁定的正是这两次 emit 的 dict 精确形状+ key 顺序,同步补上新增字段(`detail`/`detailKey`/`detailArgs`/`toolContext`/`roundNum`),确保未来任何 emit 内部改动都会立刻在 wire byte 层面被抓到。
+- **回归证据:** `test_event_emit`(12) + `test_stream_phase_i18n`(8) + `test_frontend_streaming_ui`(1) + `test_frontend_stream_deferred_no_wipe`(1) + `test_frontend_twflush_msg_fallback`(1) + `test_frontend_autopilot_warmup`(3) + `test_autopilot_startup_granular_phases`(4) + `test_orchestration_endpoint_adapter`(10) + `test_event_registry`(5) = **45 测全绿**。
+- **诚实边界:** JS bundle 还是老的 `bundle-a6551c82.js`,生效需要**重启 server + 硬刷浏览器**(bundler 是启动/`GET /` 时按内容 hash 重建的);这是 owner 侧动作,不是 agent 能做的。tool_exec(如 `🔍 Searching the web`)+ 第三方 `working` phase 仍继续走 `detail` 原样透传(它们的文本是动态构造的、目前也没有稳定 i18n key)——本次只精修「我们自己发出的 4 处固定 UI chrome」这个明确子集,不做投机性扩面。
+
 ### 2026-07-23(续12) — 「自动更新的前端日志不够完整、要能完整显示 + 一键复制」根修:依赖安装失败日志的**双重截断**去掉 + 加复制按钮(commit,5 文件 +276/-12,新测 13/13 绿含 NEUTER + 全 update 套件 16/16 / collect 7844)。
 - **owner 诉求(截图 `No module named pip`):** 更新卡片里 pip 失败日志显示不全、也无法复制粘贴给我。要求前端**完整显示** + 加**复制日志**按钮。
 - **真因(读代码钉死双截断链):** ①后端 `_install_requirements`(`lib/self_update/_requirements.py`)pip 失败时 `tail=(err or out)[-500:]` → deps_detail 只剩 500 字尾巴;②前端 `_renderDepsFailed`(`update.js`)再 `.slice(-600)` 二次砍 → 只剩一截尾巴,`FIRST_LINE`(如 venv python 路径)被丢;③根本没有复制按钮。路由 `routes/api_v1/update.py` 用 `{'type':'done', **result}` 原样透传,不是瓶颈。

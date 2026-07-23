@@ -189,9 +189,19 @@ def _check_suspicious_completion(task, last_finish_reason, _loop_exit_reason,
 from lib.utils import repair_json as _repair_json  # noqa: F401
 
 def _emit_tool_round_phase(task, assistant_msg, round_num):
-    """Emit a 'phase' event describing the current tool round for the frontend."""
+    """Emit a 'phase' event describing the current tool round for the frontend.
+
+    Ships a stable ``detailKey`` (+ ``detailArgs``) alongside the legacy English
+    ``detail``: modern clients pass ``detailKey`` through their i18n table so
+    the label reads in the UI language (zh by default); older / headless
+    clients that don't localize keep rendering ``detail`` unchanged.
+    """
     if round_num == 0:
-        append_event(task, build_event(EventType.PHASE, phase='llm_thinking', detail='Generating response…', roundNum=1))
+        append_event(task, build_event(
+            EventType.PHASE, phase='llm_thinking',
+            detail='Generating response…',
+            detailKey='stream.phase.generatingResponse',
+            roundNum=1))
     else:
         tool_names = [tc['function']['name'] for tc in assistant_msg.get('tool_calls', [])]
         unique_names = list(dict.fromkeys(tool_names))
@@ -200,6 +210,8 @@ def _emit_tool_round_phase(task, assistant_msg, round_num):
         append_event(task, build_event(
             EventType.PHASE, phase='llm_thinking',
             detail=f'Analyzing results and planning next step… (round {round_num+1})',
+            detailKey='stream.phase.analyzingRound',
+            detailArgs={'round': round_num + 1},
             toolContext=summary,
             roundNum=round_num + 1,
         ))

@@ -182,6 +182,13 @@ def append_event(task, event):
     # ★ Track phase in task for polling fallback
     if event.get('type') == 'phase':
         p = {'phase': event['phase'], 'detail': event.get('detail', '')}
+        # ★ i18n plumb: forward the stable detailKey (+ optional detailArgs) so
+        #   the poll-fallback consumer localizes the label the same way the
+        #   live SSE consumer does. Empty/absent keys fall back to `detail`.
+        if event.get('detailKey'):
+            p['detailKey'] = event['detailKey']
+        if event.get('detailArgs'):
+            p['detailArgs'] = event['detailArgs']
         if event.get('toolContext'): p['toolContext'] = event['toolContext']
         if event.get('tools'): p['tools'] = event['tools']
         # The PHASE wire event now carries the unified canonical `roundNum`

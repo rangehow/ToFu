@@ -199,7 +199,15 @@ _SPECS: tuple[EventSpec, ...] = (
     EventSpec(EventType.PHASE, _C.LIFECYCLE,
               'Progress / status hint for the current turn.',
               fields={'phase': "phase key (llm_thinking|tool_exec|retrying|working|…)",
-                      'detail': 'human-readable detail', 'roundNum': 'round number'}),
+                      'detail': 'human-readable detail (English fallback; '
+                                'headless / non-i18n clients render this verbatim)',
+                      'detailKey': '(optional) stable i18n key the client resolves '
+                                   'through its translation table so the label reads '
+                                   'in the UI language; falls back to `detail` when '
+                                   'absent',
+                      'detailArgs': '(optional) interpolation args for `detailKey` '
+                                    '(e.g. {"round": 3, "model": "claude-4"})',
+                      'roundNum': 'round number'}),
     EventSpec(EventType.ROUND_START, _C.LIFECYCLE,
               'Explicit start boundary of an LLM round (the orchestrator loop '
               'index). Emitted at the TOP of every round the model actually '
@@ -526,6 +534,10 @@ _SPECS: tuple[EventSpec, ...] = (
                       'pollId': 'stable per-poll id ({timerId}.p{N}) for log/DB/UI correlation',
                       'decision': 'started|wait|ready|skipped|error|parse_error',
                       'reason': 'LLM/decision rationale',
+                      'conditionKind': 'current decision tier (llm|hybrid|code) — '
+                                       'sent every poll so the UI reflects a mid-run '
+                                       'hybrid→code auto-promotion, not just the '
+                                       'creation-time kind',
                       'rawContent': "the LLM's full raw output (sent only on parse_error/error)",
                       'tokensUsed': 'tokens spent on this poll',
                       'checkInstruction': '(started) what is being verified',

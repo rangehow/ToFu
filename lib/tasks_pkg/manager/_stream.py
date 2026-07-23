@@ -199,6 +199,8 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
     append_event(task, build_event(
         EventType.PHASE, phase='waiting_model',
         detail=f'Sent to {_model_label}, waiting for it to start replying…',
+        detailKey='stream.phase.waitingForModel',
+        detailArgs={'model': _model_label},
         model=model))
 
     # Resolve dispatch_stream THROUGH the package facade at call time so a test's

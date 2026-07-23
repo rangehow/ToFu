@@ -193,6 +193,26 @@ def _sites():
              new=lambda: api_error('pdf_render_failed', status=503, detail='boom'),
              old_src="return jsonify({'error': 'pdf_render_failed', 'detail': str(e)}), 503",
              new_src="return api_error('pdf_render_failed', status=503, detail=str(e))"),
+
+        # ── chat.py helper-return sites (续18 batch): _start_task_from_messages
+        #    returns (task_id, err_tuple) where err_tuple is (Response, status).
+        #    The caller returns err_tuple raw → wire-identical to a direct
+        #    return jsonify(...)-with-status. Category C: bare {'error':...}.
+        dict(file='routes/chat.py', category='C', status=500,
+             legacy_body={'error': 'Conversation not found after save'},
+             new=lambda: api_error('Conversation not found after save', status=500),
+             old_src="return None, (jsonify({'error': 'Conversation not found after save'}), 500)",
+             new_src="return None, api_error('Conversation not found after save', status=500)"),
+        dict(file='routes/chat.py', category='C', status=400,
+             legacy_body={'error': 'No messages to process'},
+             new=lambda: api_error('No messages to process', status=400),
+             old_src="return None, (jsonify({'error': 'No messages to process'}), 400)",
+             new_src="return None, api_error('No messages to process', status=400)"),
+        dict(file='routes/chat.py', category='C', status=500,
+             legacy_body={'error': 'Failed to start task'},
+             new=lambda: api_error('Failed to start task', status=500),
+             old_src="return None, (jsonify({'error': 'Failed to start task'}), 500)",
+             new_src="return None, api_error('Failed to start task', status=500)"),
     ]
 
 

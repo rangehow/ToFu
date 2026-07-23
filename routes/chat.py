@@ -11,7 +11,7 @@ from flask import Blueprint, jsonify, request
 from lib.agent_core.events import EventType, build_event
 from lib.database import DOMAIN_CHAT, get_db
 from lib.log import audit_log, get_logger
-from lib.api_response import api_bad_request, api_internal_error, api_not_found, api_ok, sse_response
+from lib.api_response import api_bad_request, api_error, api_internal_error, api_not_found, api_ok, sse_response
 from lib.request_parser import parse_body
 from routes.api_v1.auth import current_auth, require_scope
 
@@ -445,9 +445,9 @@ def _start_task_for_conv(conv_id, config, data=None):
     _exclude_last = bool(config.get('excludeLast', False))
     api_messages = build_api_messages_from_db(conv_id, config, exclude_last=_exclude_last)
     if api_messages is None:
-        return None, (jsonify({'error': 'Conversation not found after save'}), 500)
+        return None, api_error('Conversation not found after save', status=500)
     if not api_messages:
-        return None, (jsonify({'error': 'No messages to process'}), 400)
+        return None, api_error('No messages to process', status=400)
 
     task = create_task(conv_id, api_messages, config)
     task['_attended'] = True
@@ -535,7 +535,7 @@ def _start_task_for_conv(conv_id, config, data=None):
                 source='routes.chat',
                 raw=str(_spawn_err),
             )
-            return None, (jsonify({'error': 'Failed to start task'}), 500)
+            return None, api_error('Failed to start task', status=500)
     else:
         logger.info('[Chat] Starting task %s for conv %s model=%s',
                     task_id[:8], conv_id[:8], _cfg_model)
@@ -555,7 +555,7 @@ def _start_task_for_conv(conv_id, config, data=None):
                 source='routes.chat',
                 raw=str(_spawn_err),
             )
-            return None, (jsonify({'error': 'Failed to start task'}), 500)
+            return None, api_error('Failed to start task', status=500)
 
     return task_id, None
 

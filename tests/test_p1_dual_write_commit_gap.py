@@ -40,15 +40,33 @@ epic-scope work, not test scaffolding.
 **Activation:** ``TOFU_P1_FAILING_FIRST=1 python3 tests/test_p1_dual_write_commit_gap.py``
 or ``pytest tests/test_p1_dual_write_commit_gap.py``.
 
-**What the test does:** With ``TOFU_MESSAGES_ROWS=1`` set:
-  1. Call ``persist_conv_messages`` on a fresh conv (JSONB commits inside).
-  2. On the SAME thread-db, immediately call ``db.rollback()`` — this
-     drops the current implicit transaction on that connection, which
-     is exactly what would happen if the caller crashed / returned
-     without a follow-up commit. The committed JSONB write is unaffected;
-     any uncommitted mirror rows vanish.
-  3. Query ``conversation_messages`` and assert the mirror is still
-     complete. Under the current defect: it is EMPTY → RED (bug demonstrated).
+**What the test does:** With ``TOFU_MESSAGES_ROWS=1`` set — TWO complementary
+angles on the same "not-durable" invariant, because P1 has two real production
+triggers, not one:
+
+  1. ``test_dual_write_rows_are_durable_across_rollback`` (crash-half):
+     ``persist_conv_messages`` → ``db.rollback()`` on the SAME connection →
+     read on the same connection. Models "caller aborts / raises / hits an
+     error before its own next commit". The committed JSONB write is
+     unaffected; any uncommitted mirror rows vanish. Under the current
+     defect: 0 rows → RED.
+
+  2. ``test_dual_write_rows_are_durable_across_pool_return`` (pool-half):
+     ``persist_conv_messages`` on the pooled thread-db → open a SEPARATE
+     independent connection via ``_new_connection()`` and read
+     ``conversation_messages`` from IT. This is the more common production
+     path: connection returns to the pool with an uncommitted mirror hanging
+     in an implicit transaction, then either (a) another borrower's
+     rollback / crash drops it, or (b) PG's ``idle_in_transaction_session_timeout``
+     server-side-aborts it. On SQLite (test backend) WAL isolation makes the
+     separate-connection SELECT see ONLY committed writes, which is exactly
+     the durability property we care about: if any borrower ever needs to see
+     those mirror rows, they must be committed by the writer. Under the
+     current defect: 0 rows from the second connection → RED.
+
+Two separate assertions rather than one so a partial future fix (e.g. only
+fixing the crash-half via a caller-side ``finally``) still surfaces the
+pool-half regression cleanly.
 """
 
 import json
@@ -223,16 +241,139 @@ def test_dual_write_rows_are_durable_across_rollback():
 
 
 @_unit
+@_skip_unless_p1
+def test_dual_write_rows_are_durable_across_pool_return():
+    """P1 (pt_7e4afe73) — the pool-return / next-borrower half.
+
+    The more common production trigger than caller-crash: after
+    ``persist_conv_messages`` returns, its pooled ``db`` connection goes back
+    to the shared pool with an UNCOMMITTED implicit transaction holding the
+    mirror rows. Two things happen in real deployments:
+
+      * The next borrower's ``rollback()`` or crash drops the mirror
+        implicitly — the mirror rows never existed as far as any observer is
+        concerned. (Multi-worker Quart is the canonical shape here.)
+      * PG's ``idle_in_transaction_session_timeout`` server-side-aborts the
+        transaction after N minutes of idle, dropping the mirror the same way.
+
+    The invariant this test asserts (backend-independent): a DIFFERENT
+    connection than the writer must be able to see the mirror rows. On the
+    SQLite test backend WAL isolation makes uncommitted writes invisible to
+    other connections; on PG multi-connection semantics behave the same. So
+    querying ``conversation_messages`` from a fresh independent connection
+    (via ``_new_connection()``, which bypasses both thread-local caching AND
+    the pool) is the correct universal probe: if it sees the rows, they are
+    truly durable; if it does not, they are still trapped in the writer's
+    uncommitted transaction.
+
+    Under the current defect: this SELECT returns 0 → RED. Guarded by
+    ``TOFU_P1_FAILING_FIRST=1``.
+    """
+    if not _p1_active():
+        return  # pytest handles this via _skip_unless_p1; __main__ gate is the guard
+
+    from lib.database import DOMAIN_CHAT, get_thread_db, db_execute_with_retry
+    from lib.database._core import _new_connection
+    from lib.chat.persistence import persist_conv_messages
+
+    _ensure_table()
+    conv_id = 'cv-p1-pool-' + str(int(time.time() * 1000))
+    os.environ['TOFU_MESSAGES_ROWS'] = '1'
+    writer_db = get_thread_db(DOMAIN_CHAT)
+    reader_db = None
+    try:
+        msgs = [dict(m) for m in SAMPLE_MSGS]
+        persist_conv_messages(writer_db, conv_id, msgs, 'p1-pool')
+        # DELIBERATELY do NOT commit or rollback on the writer connection.
+        # This is the load-bearing distinction from the sibling test: we
+        # model the exact production shape where the writer thread's next
+        # line of code was "return" (implicit end-of-turn), leaving the
+        # mirror rows suspended in an uncommitted transaction that some
+        # future borrower or timeout will resolve — not the writer.
+
+        # Independent, fresh connection: bypasses thread-local caching and
+        # the pool, so it CANNOT observe uncommitted state from writer_db.
+        # This is the durability probe: "does any other observer see the
+        # mirror rows?".
+        reader_db = _new_connection()
+
+        # JSONB truth: committed by persist_conv_messages via upsert(retry=
+        # True) → visible from the independent connection (sanity check;
+        # distinguishes this bug from a completely-broken persist path).
+        conv_row = reader_db.execute(
+            'SELECT msg_count FROM conversations WHERE id=? AND user_id=1',
+            (conv_id,)).fetchone()
+        assert conv_row is not None, (
+            'sanity: JSONB conversation row must be visible from an '
+            'independent connection (persist_conv_messages committed it)')
+        assert int(conv_row['msg_count'] if hasattr(conv_row, 'keys')
+                   else conv_row[0]) == len(SAMPLE_MSGS), (
+            'sanity: JSONB msg_count parity via independent connection')
+
+        # The failing-first assertion: mirror rows must be observable from a
+        # connection OTHER than the writer's. Under current defect → 0.
+        cnt_row = reader_db.execute(
+            'SELECT COUNT(*) AS n FROM conversation_messages WHERE conv_id=?',
+            (conv_id,)).fetchone()
+        n = int(cnt_row['n'] if hasattr(cnt_row, 'keys') else cnt_row[0])
+        assert n == len(SAMPLE_MSGS), (
+            f'P1 defect confirmed (pool-return half): a fresh independent '
+            f'connection sees {n} mirror rows (expected {len(SAMPLE_MSGS)}) '
+            f'immediately after persist_conv_messages returned — they are '
+            f'trapped in the writer connection\'s uncommitted transaction '
+            f'and will be dropped by whichever future event resolves that '
+            f'transaction (next borrower rollback / caller crash / PG '
+            f'idle_in_transaction_session_timeout). Fix must land the '
+            f'mirror in a committed state before the writer connection '
+            f'returns to the pool. See JOURNAL 续15/续18 for the '
+            f'transaction-boundary caveat on WHERE to place that commit.'
+        )
+    finally:
+        os.environ.pop('TOFU_MESSAGES_ROWS', None)
+        # Close the independent reader connection first so it does not hold
+        # a lock on the row we're about to clean up.
+        if reader_db is not None:
+            try:
+                reader_db.close()
+            except Exception:
+                pass
+        # Rollback the writer's still-uncommitted implicit transaction so
+        # the cleanup writes below see a clean slate.
+        try:
+            writer_db.rollback()
+        except Exception:
+            pass
+        try:
+            db_execute_with_retry(
+                writer_db, 'DELETE FROM conversation_messages WHERE conv_id=?',
+                (conv_id,))
+            db_execute_with_retry(
+                writer_db, 'DELETE FROM conversations WHERE id=? AND user_id=1',
+                (conv_id,))
+            writer_db.commit()
+        except Exception:
+            writer_db.rollback()
+
+
+@_unit
 def test_activation_gate_metadata():
     """Meta-test: the file itself declares its RED-target status via
     ``TOFU_P1_FAILING_FIRST`` and ties itself to epic ``pt_7e4afe73``. This
     keeps the file self-documenting for whoever picks up the epic.
+
+    Also guards that BOTH complementary durability tests remain present —
+    partial deletion of one half would silently narrow the RED target.
     """
     with open(__file__, encoding='utf-8') as f:
         src = f.read()
     assert 'TOFU_P1_FAILING_FIRST' in src
     assert 'pt_7e4afe73' in src
     assert 'skip-by-default' in src.lower() or 'default-skip' in src.lower()
+    # Both durability tests must be present — the crash-half and the
+    # pool-return half cover different production triggers and are not
+    # substitutes for one another.
+    assert 'def test_dual_write_rows_are_durable_across_rollback' in src
+    assert 'def test_dual_write_rows_are_durable_across_pool_return' in src
 
 
 if __name__ == '__main__':

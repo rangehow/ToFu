@@ -1,6 +1,19 @@
 # Project Journal
 
 
+### 2026-07-23(续3) — 「确保这个 bug 永不再发」:审计 FloorRetry 是否唯一入口 + 加类级结构护栏(commit `d0bf85d`,2 文件 +155,新测 6/6 绿含 NEUTER + 相邻 `test_todo_continuation` 13/13 无回归 / collect 7815 唯一既知 pty flake)。
+- **owner 诉求:** 点修(`6464592`)只关了 FloorRetry 那一扇门;「永不再发」要求(a)证明 FloorRetry 是这个 **bug 类** 的唯一活门,(b)加**结构护栏**让任何**将来**的重新引入被自动抓住、而非静默落库。
+- **bug 类的本质:** `task['content']` 是**只追加的 delta 累加器**(`_stream.py::_on_content` line 140 `+= cd`),`_sync.py:483` 落库读**这条**;返回值 `assistant_msg['content']` 才是**权威答案**。任何 retry/resend/fallback 换入新的权威 `msg` 却不回灌累加器,就重演静默丢失(计费很多、落库很少)。
+- **审计重试家族(逐门判定,非猜):**
+  - **主发(`_call.py:144`)/ reactive-compact(298)/ fallback(474)** 都用**默认 `on_content`** → 照常累加进 `task['content']`,两轨同步,**安全**。
+  - **premature-close `continue`(`_run.py:1313` → `_analyse.py`)**:其触发**前提就是首attempt无正文**(`not round_content.strip()`),所以重试进入时 `task['content']` 是空基底,默认 `on_content` 累加全文 → **无重复、无分叉,安全**。
+  - **FloorRetry(`_stream.py:269`)** 是**唯一**用 `on_thinking=None, on_content=None` 的门(为修更早的孤儿轮 bug `21adb4c`),故只有它破坏不变量。**结论:FloorRetry 是唯一活门,已在 `6464592` 关闭。**
+- **类级结构护栏(`_finalize.py::_check_suspicious_completion`,+40,commit `d0bf85d`):** 这函数在 finalize 跑、**同时**握有落库的 `task['content']` 和权威 `assistant_msg` —— 是**路径无关**的天然拦截点。新增判据:`assistant_msg['content']` 有实质正文(>200)但落库累加器只留 <60% **且** 差额 >200 字符(且非 aborted)→ 记 `suspicion` + `logger.error` + `audit_log('content_track_divergence')`。任何**将来**在**任何**路径上的重新引入,都会**响亮**出现在 error.log + 审计里,而不是静默落库。阈值刻意留裕度(footer/sanitize 的小改动不误报)。
+- **回归 + NEUTER(`test_content_track_divergence_guard.py`,6 测):** ①divergence 触发(3411→215 形状);②审计事件发出;③④⑤⑥四个静默用例(两轨一致/边际 delta/aborted/权威本身很短)。NEUTER 把判据首行改 `if False and` → ①②双双变红,四个静默用例仍绿(它们断言**不**触发);恢复复绿。证明护栏 load-bearing。相邻 `test_todo_continuation`(同调 `_check_suspicious_completion` 的消费者)13/13 无回归。
+- **防御纵深两层:** L1 点修(`6464592`,`_stream.py` 采纳后回灌,治本、覆盖两门)+ L2 类级护栏(`d0bf85d`,`_finalize.py` 结果级检测,兜底任何未来路径)。
+- **git 纪律:** `reset -q HEAD .` → 仅 add 2 文件 → `--cached --numstat`(_finalize 40/0、新测 115/0)→ `commit -F- -- <路径>` → `git show HEAD --stat` = 仅 2 文件 +155,NO LEAK。`d0bf85d`。collect 7815(唯一 error 仍是既知 pty flake)。
+
+
 ### 2026-07-23(续2) — 「一条正常完成的会话,前端显示的却是半截 preamble、不是那份大报告」根因钉死并根修:FloorRetry 采纳流用 `on_content=None`,`task['content']` 停在首发残留,`_sync` 落库丢全文(commit `6464592`,2 文件 +284,新测 5/5 绿含双门 NEUTER + segments 双列一致实证 / collect 7801 唯一既知 pty flake)。
 - **现象(owner 截图 `mrwwmp0z6u0gkn`):** message[3] 是一条 `finishReason=stop` 正常完成的 assistant 消息,但气泡里渲染的是「This is important — the `activeTaskId` clear at line 326…」这句**中途过渡语(215 字符)**,不是模型真正生成的那份 `## 一句话结论` 大报告。owner 质疑「明明最后内容是大报告,前端为什么显示错」。
 - **诊断分两层,且**两次都先证伪自己**:**

@@ -1,6 +1,16 @@
 # Project Journal
 
 
+### 2026-07-23(续9) — 「查有没有残留 bug、根修」全量 collect 门用真实证据钉死一个被长期误诊的**确定性** ImportError:孤儿 PTY 测试在收集期阻断整个 7829 测试套件(commit `e04032a`,1 文件 +14/-1,collect 7829+1err → 7830 绿 / 隔离 1 skipped)。
+- **owner 诉求:** 「近期演进冒出太多问题,查有没有残留 bug 并从根上修。」
+- **方法:先跑 collect 门找导入级破坏,而非猜。** 共享 HEAD 处于集成 merge(`91956a9` 合 `tofu/integration`)后、155 个 sibling WIP 脏文件。`write_tools.py → write_tools/` 包拆分导入干净(排除)。collect 门唯一 error:`ImportError: cannot import name 'pty_supported' from 'lib.compat'`,**Interrupted: 1 error during collection** → 中断**整个套件**收集。
+- **根因(git 实证,非架构推断):** `tests/test_run_command_pty_streaming.py` 在 `b704f08`(“Commit working-tree changes…”批量提交)中**先于其特性落地**——`lib.compat.pty_supported` 从**未**在 `lib/` 存在过(`git log -S pty_supported -- lib/` 空),`TOFU_RUN_COMMAND_PTY` 也只出现在该测试+journal、`tool_run_command` 有 `on_chunk` 但**无任何 PTY 路径**。它**顶层无守卫**的 `from lib.compat import pty_supported` 在**收集期**抛错。
+- **纠正长期误诊:** JOURNAL 反复把这条记成「已知 pty flake」——**错**。ImportError 是**确定性**的,不是 flake;它让每个 sibling 的强制 `--collect-only` 门**永久变红**。
+- **根修(外科式,拒绝 scope creep):** 不去建一个 owner 没要求的跨平台 PTY 子系统(共享 HEAD、merge 中,且 owner 偏好把 latent bug 留在独立工作流)。把导入包进**模块级 graceful skip**:`try: from lib.compat import pty_supported / except ImportError: pytest.skip(..., allow_module_level=True)`。收集不再中断;特性哪天真落地,导入成功、测试自动恢复运行(每条仍受 per-platform `skipif(not pty_supported())` 门控)。
+- **验证:** 隔离跑 = `1 skipped`(非 error);全量 collect 从 `7829 collected, 1 error`(中断)→ **7830 collected, 0 error**。
+- **git 纪律(共享 HEAD、155 脏文件):** `reset -q HEAD .` → 仅 add 1 文件 → `--cached --numstat`=14/1 单文件 → `commit -F- -- <路径>` → `git show HEAD --stat` = 仅 1 文件 +14/-1,NO LEAK。`e04032a`。
+
+
 ### 2026-07-23(续8) — 「reasoning_content 还是没显示、debug 面板里明明有」根因用真实 renderMessage + 活体 DB 钉死并根修:段时间线丢终局思考(commit `752927b`,3 文件 +278/-7,新测 2/2 绿含 NEUTER + 相邻 24/24 无回归)。
 - **owner 诉求:** 「conv `mrx3tv0ha8ffkc` 只显示工具调用,`content`/`reasoning_content` 都不见——但 debug 面板里两者都在。这个 bug 已经修过太多次,这次彻底查清为什么老失败,然后真正修好。」
 - **诚实纠错前提(不重蹈覆辙):** 前几轮全在追 `superseded` 徽章,那是**不同的 bug**——本 bug 是 `content`/`reasoning_content` 消失,是**渲染丢失**,与徽章无关。

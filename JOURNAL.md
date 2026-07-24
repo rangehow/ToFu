@@ -1,6 +1,13 @@
 # Project Journal
 
 
+### 2026-07-24(续25) — 「Retrying… Endpoint unreachable (kimi-k3, attempt 1)」原始英文 token 泄漏根修:dispatch 重试 HUD 全面 i18n 化 + typed reasonKey(commit 见下,本 commit 3 文件 +259/-12;另 2 文件经 sibling af44e4e9 扫入已在 HEAD;新/扩 15 测全绿含 NEUTER,相邻 32/32,collect 8374 0 err)。
+- **现象与根因(日志实证):** 22:07–22:16 又一波网关劣化窗口,kimi-k3 两个 key **同时** `('Connection aborted.', TimeoutError('The write operation timed out'))` —— 请求体上传 aigc.sankuai.com 途中写超时(高轮次 R22–R72 大 prompt 尤甚),与今日 16:42–17:33 已发报告(docs/GATEWAY_INCIDENT_2026-07-24.md,144 次写超时)同族:故障在网关/代理层,非模型本身。客户端按设计熔断 30s + 排除 slot 对 + failover 自愈,0 终败。**可见层根因** = dispatcher 内部英文 log token 经 `_on_retry` 裸拼进 PHASE `detail` 直渲 HUD。
+- **修复(wire 契约零破坏):** `_on_retry` 三分支(429 / 带 reason / 裸)全部补 `detailKey`+`detailArgs`;已知 reason token 经 `_RETRY_REASON_KEYS`(6 token)映射 typed `reasonKey`;legacy `detail` 逐字节保留给 headless;`detailArgs.model` 走 `_display_model_name`(新 wire 面,aws. 前缀不再入 UI,legacy detail 保持原样)。前端 `_phaseDetailText` 与 `_streamPhaseLabel` **双渲染器**同步解析嵌套 reasonKey(未知 key 回落裸 reason,与未知 detailKey 同裁)。
+- **测试:** 后端 6 行为测(真驱 `stream_llm_response` + 脚本化 dispatch 发 on_retry;429/reason/无 reason/前缀剥离/未知 reason 零 reasonKey,RED=failing-first 于无 detailKey 的旧发射器)+ 双渲染器 parity 静态守卫;harness 探针 8–11(zh 因果+插值 / 未知回落 / 429 / generic);NEUTER:scratch 删 `_args.reason = _r` 行 → 英文 token 真的回漏(PASS=因果证明)。
+- **落地拓扑(shared-HEAD 实况):** 我 staged 的 health_stream_timer.js / i18n.js 两个 partial hunk 被 sibling `af44e4e9` 连其 ConvView 迁移一起扫入 HEAD(内容逐字节完好,其续23 条目已披露),故本 commit 只含 _stream.py / streaming_ui.js / test_stream_phase_i18n.py 三件套;i18n.js 残留 +5 为另一 sibling 的队列 WIP,未扫入。
+- **范围外(诚实):** swarm/agent.py worker 气泡 retrying 同款裸 reason 拼接(形状不同,未动);_finalize.py turn auto-retry 已双语(无需动)。
+
 ### 2026-07-24(续24) — 「不该想办法测试图像/语音这些模态吗」落地:访问矩阵探测升级为按模态真实探测(epic `pt_210ab99ffb7b48cb`,commit `be63588f`,4 文件 +491/-50,套件 16 面全绿含双 NEUTER,collect **8383** 0 err)。续21 把非聊天模型一律 skipped 是诚实但无用——本 commit 让矩阵真正测每种模态。(编号说明:落笔时「续22」已被 sibling 的美团模型市场条目占用,故用续24。)
 - **按模态走真实面(镜像 app 自身调用路径):** image_gen → `openai_image` 槽走 `/images/generations`,其余走 `/chat/completions` + `modalities:['TEXT','IMAGE']`(gemini 式,镜像 lib/image_gen/_slots.py;网关上旧探测缺的就是 modalities 字段,带上后路由到图像绑定);transcription → multipart `/audio/transcriptions` 携**程序生成的 0.3s 静音 WAV**(~10KB,RIFF 头+全零 PCM,真实语音永不出机);embedding → `/embeddings` 一个单词。
 - **成本守卫(诚实计费):** 图像每次 attempt 真实生成一张计费图 → **强制单 attempt**(不管矩阵探测次数选几)+ 超时下限 60s(生成常 10-40s);embedding/transcription 便宜,保留多 attempt 滤假 429。matrixProbeHint 文案如实披露四种模态各发什么 + 图像按 1 次生成计费。

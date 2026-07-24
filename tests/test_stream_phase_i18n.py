@@ -147,6 +147,100 @@ class TestBackendEmittersShipDetailKey(unittest.TestCase):
         self.assertIn("detailKey='stream.phase.waitingForModel'", src)
         self.assertIn("detailArgs={'model': _model_label}", src)
 
+    # ── _on_retry (dispatch retry HUD): the "Retrying… Endpoint unreachable
+    #    (kimi-k3, attempt 1)" raw-English leak — must ship structured
+    #    detailKey/detailArgs (+ typed reasonKey) so the HUD localizes. ──
+
+    def _drive_retry(self, reason, status_code, model='kimi-k3'):
+        """Drive the REAL stream_llm_response with a scripted dispatch that
+        fires on_retry once and then succeeds; return the retry PHASE event.
+
+        RED without the fix: no detailKey/detailArgs on the event (the
+        NEUTER state is exactly the pre-fix emitter — these assertions fail
+        on KeyError)."""
+        import threading as _thr
+        import lib.tasks_pkg.manager as _mgr
+
+        task = {'id': 'task-retry-i18n', 'convId': 'retry-conv',
+                'content': '', 'thinking': '', 'config': {}, 'events': [],
+                'toolRounds': [], 'content_lock': _thr.Lock(),
+                'events_lock': _thr.Lock()}
+
+        def _fake_dispatch(body, **kwargs):
+            cb = kwargs.get('on_retry')
+            if cb:
+                cb(1, reason=reason, status_code=status_code)
+            return ({'role': 'assistant', 'content': 'ok',
+                     'reasoning_content': ''}, 'stop', {})
+
+        _orig = _mgr.dispatch_stream
+        _mgr.dispatch_stream = _fake_dispatch
+        try:
+            _mgr.stream_llm_response(
+                task, {'model': model,
+                       'messages': [{'role': 'user', 'content': 'go'}]},
+                tag='R1')
+        finally:
+            _mgr.dispatch_stream = _orig
+        evs = [e for e in task['events']
+               if e.get('type') == 'phase' and e.get('phase') == 'retrying'
+               and e.get('statusCode') == status_code]
+        self.assertTrue(evs, f'no retrying phase event in {task["events"]!r}')
+        return evs[-1]
+
+    def test_on_retry_429_ships_rate_limited_key(self):
+        ev = self._drive_retry('Waiting for model (rate-limited)', 429)
+        self.assertEqual(ev['detailKey'], 'stream.phase.retryRateLimited')
+        self.assertEqual(ev['detailArgs'],
+                         {'model': 'kimi-k3', 'attempt': 1})
+        # Legacy zh detail preserved byte-identical for headless clients.
+        self.assertEqual(ev['detail'],
+                         '⏳ 模型 kimi-k3 限流中，正在排队重试 (第 1 次)…')
+
+    def test_on_retry_endpoint_unreachable_ships_reason_key(self):
+        ev = self._drive_retry('Endpoint unreachable', 0)
+        self.assertEqual(ev['detailKey'], 'stream.phase.retryReason')
+        self.assertEqual(ev['detailArgs'], {
+            'reason': 'Endpoint unreachable',
+            'reasonKey': 'stream.retryReason.endpointUnreachable',
+            'model': 'kimi-k3', 'attempt': 1})
+        # Legacy English detail preserved byte-identical.
+        self.assertEqual(ev['detail'],
+                         'Retrying… Endpoint unreachable (kimi-k3, attempt 1)')
+
+    def test_on_retry_unknown_reason_omits_reason_key(self):
+        ev = self._drive_retry('HTTP 503', 0)
+        self.assertEqual(ev['detailKey'], 'stream.phase.retryReason')
+        self.assertEqual(ev['detailArgs']['reason'], 'HTTP 503')
+        self.assertNotIn('reasonKey', ev['detailArgs'])
+
+    def test_on_retry_no_reason_ships_generic_key(self):
+        ev = self._drive_retry('', 0)
+        self.assertEqual(ev['detailKey'], 'stream.phase.retryGeneric')
+        self.assertEqual(ev['detailArgs'],
+                         {'model': 'kimi-k3', 'attempt': 1})
+        self.assertEqual(ev['detail'], 'Retrying kimi-k3… (attempt 1)')
+
+    def test_on_retry_display_label_strips_gateway_prefix(self):
+        """detailArgs.model is NEW wire surface → user-facing label, so the
+        internal routing prefix must not leak (legacy detail keeps the raw
+        model for wire parity)."""
+        ev = self._drive_retry('Endpoint unreachable', 0,
+                               model='aws.claude-opus-4.8')
+        self.assertEqual(ev['detailArgs']['model'], 'claude-opus-4.8')
+        self.assertIn('aws.claude-opus-4.8', ev['detail'])
+
+    def test_reasonkey_resolution_present_in_both_renderers(self):
+        """Parity guard: the HUD (streaming_ui) and the stream-timer label
+        (health_stream_timer) BOTH resolve the nested reasonKey — fixing
+        only one would leave the raw English token visible in the other."""
+        snippet = 'if (_r && _r !== _args.reasonKey) _args.reason = _r;'
+        for rel in (('static', 'js', 'ui', 'streaming_ui.js'),
+                    ('static', 'js', 'core', 'health_stream_timer.js')):
+            with open(os.path.join(ROOT, *rel), encoding='utf-8') as f:
+                self.assertIn(snippet, f.read(),
+                              f'{rel[-1]} lost the reasonKey resolution')
+
 
 # ═════════════════════════════════════════════════════════════════════
 #  Frontend half — jsdom drives the real streaming_ui.js phase renderer
@@ -190,6 +284,10 @@ const _ZH = {
   'stream.phase.retrying':           '正在重试…',
   'stream.phase.waiting':            '等待中…',
   'stream.phase.chars':              '{n} 字符',
+  'stream.phase.retryRateLimited':   '⏳ 模型 {model} 限流中，正在排队重试（第 {attempt} 次）…',
+  'stream.phase.retryReason':        '重试中…{reason}（{model}，第 {attempt} 次）',
+  'stream.phase.retryGeneric':       '正在重试 {model}…（第 {attempt} 次）',
+  'stream.retryReason.endpointUnreachable': '连不上模型服务器（网关/网络波动，正在自动切换通道）',
 };
 win.t = global.t = (k, o) => {
   let v = _ZH[k];
@@ -228,7 +326,18 @@ win.streamBufs = global.streamBufs = new Map();
 win.conversations = global.conversations = [{ id: 'c1', messages: [] }];
 global.activeConvId = win.activeConvId = 'c1';
 
-eval(fs.readFileSync(process.argv[3], 'utf8'));  // ui/streaming_ui.js
+/* NEUTER mode (argv[4] === 'neuter-reasonkey'): strip the reasonKey
+ * resolution line from a SCRATCH copy of the source before eval. The retry
+ * probes then prove the raw English token leaks back — causality evidence
+ * that the block under test is what localizes the cause. */
+const _NEUTER = process.argv[4] === 'neuter-reasonkey';
+let _src = fs.readFileSync(process.argv[3], 'utf8');
+if (_NEUTER) {
+  const _target = 'if (_r && _r !== _args.reasonKey) _args.reason = _r;';
+  if (!_src.includes(_target)) throw new Error('neuter target line missing from streaming_ui.js');
+  _src = _src.replace(_target, '/* NEUTERED reasonKey resolution */');
+}
+eval(_src);  // ui/streaming_ui.js
 
 const out = [];
 function check(name, cond, note) {
@@ -342,11 +451,79 @@ function _renderAndProbe(phase) {
     html.includes('stream.phase.thisKeyDoesNotExist'), html);
 }
 
+// ── 8. retrying with typed reasonKey → localized CAUSE + interpolation ──
+//    (the reported bug: "Retrying… Endpoint unreachable (kimi-k3, attempt 1)")
+if (!_NEUTER) {
+  const html = _renderAndProbe({
+    phase: 'retrying',
+    detail: 'Retrying… Endpoint unreachable (kimi-k3, attempt 1)',
+    detailKey: 'stream.phase.retryReason',
+    detailArgs: { reason: 'Endpoint unreachable', reasonKey: 'stream.retryReason.endpointUnreachable', model: 'kimi-k3', attempt: 1 },
+    attempt: 1,
+  });
+  check('retry_reason_localized_cause', html.includes('连不上模型服务器'), html);
+  check('retry_reason_raw_english_not_shown', !html.includes('Endpoint unreachable'), html);
+  check('retry_reason_model_and_attempt_interpolated',
+    html.includes('kimi-k3') && html.includes('第 1 次'), html);
+}
+
+// ── 9. retrying with UNKNOWN reasonKey → raw reason fallback ──
+{
+  const html = _renderAndProbe({
+    phase: 'retrying',
+    detail: 'Retrying… HTTP 503 (kimi-k3, attempt 2)',
+    detailKey: 'stream.phase.retryReason',
+    detailArgs: { reason: 'HTTP 503', reasonKey: 'stream.retryReason.httpError', model: 'kimi-k3', attempt: 2 },
+    attempt: 2,
+  });
+  check('retry_unknown_reason_falls_back_to_raw', html.includes('HTTP 503'), html);
+}
+
+// ── 10. 429 retry branch → localized rate-limit text ──
+{
+  const html = _renderAndProbe({
+    phase: 'retrying',
+    detail: '⏳ 模型 kimi-k3 限流中，正在排队重试 (第 3 次)…',
+    detailKey: 'stream.phase.retryRateLimited',
+    detailArgs: { model: 'kimi-k3', attempt: 3 },
+    attempt: 3,
+  });
+  check('retry_429_localized',
+    html.includes('限流中') && html.includes('kimi-k3') && html.includes('第 3 次'), html);
+}
+
+// ── 11. generic retry (no reason) → localized ──
+{
+  const html = _renderAndProbe({
+    phase: 'retrying',
+    detail: 'Retrying kimi-k3… (attempt 2)',
+    detailKey: 'stream.phase.retryGeneric',
+    detailArgs: { model: 'kimi-k3', attempt: 2 },
+    attempt: 2,
+  });
+  check('retry_generic_localized',
+    html.includes('正在重试 kimi-k3') && html.includes('第 2 次'), html);
+}
+
+// ── NEUTER-only: with the resolution line stripped, the raw English token
+//    MUST leak back into the HUD (proves the block causes the localization). ──
+if (_NEUTER) {
+  const html = _renderAndProbe({
+    phase: 'retrying',
+    detail: 'Retrying… Endpoint unreachable (kimi-k3, attempt 1)',
+    detailKey: 'stream.phase.retryReason',
+    detailArgs: { reason: 'Endpoint unreachable', reasonKey: 'stream.retryReason.endpointUnreachable', model: 'kimi-k3', attempt: 1 },
+    attempt: 1,
+  });
+  check('NEUTER_raw_english_leaks', html.includes('Endpoint unreachable'), html);
+  check('NEUTER_zh_cause_absent', !html.includes('连不上模型服务器'), html);
+}
+
 console.log(out.join('\n'));
 """
 
 
-def _run_harness():
+def _run_harness(neuter=False):
     harness = os.path.join(HERE, '_stream_phase_i18n_harness.js')
     with open(harness, 'w') as f:
         f.write(_HARNESS)
@@ -355,6 +532,7 @@ def _run_harness():
             ['node', harness,
              ROOT,                                            # argv[2]
              os.path.join(JS_DIR, 'ui', 'streaming_ui.js'),  # argv[3]
+             'neuter-reasonkey' if neuter else '',           # argv[4]
              ],
             capture_output=True, text=True, timeout=60,
         )
@@ -367,15 +545,28 @@ def _run_harness():
     assert proc.returncode == 0, f'node failed: {proc.stderr}\n{output}'
     fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
     assert not fails, 'stream-phase i18n failures:\n' + output
-    assert output.count('PASS') >= 10, (
-        f'expected >=10 PASS lines, got:\n{output}')
+    return output
 
 
 @pytest.mark.skipif(not _node_deps_available(),
                     reason='node + jsdom dev-deps not installed (run npm install)')
 def test_stream_phase_i18n_frontend():
     """Frontend renderer prefers detailKey → t() over raw detail."""
-    _run_harness()
+    output = _run_harness()
+    assert output.count('PASS') >= 17, (
+        f'expected >=17 PASS lines, got:\n{output}')
+
+
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
+def test_stream_phase_retry_reasonkey_neuter():
+    """NEUTER proof: stripping the reasonKey-resolution line from a scratch
+    copy of streaming_ui.js makes the raw English dispatcher token
+    ("Endpoint unreachable") leak back into the HUD — proving the block
+    under test is what localizes the retry cause."""
+    output = _run_harness(neuter=True)
+    assert 'PASS NEUTER_raw_english_leaks' in output, output
+    assert 'PASS NEUTER_zh_cause_absent' in output, output
 
 
 if __name__ == '__main__':

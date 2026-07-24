@@ -391,7 +391,18 @@ function updateStreamingUI(msg) {
     if (!p) return "";
     const _key = p.detailKey || "";
     if (_key && typeof t === 'function') {
-      try { return t(_key, p.detailArgs || undefined); }
+      try {
+        const _args = p.detailArgs ? Object.assign({}, p.detailArgs) : undefined;
+        /* ★ Nested typed cause: retry phases ship a stable `reasonKey`
+         *   alongside the raw English `reason` token so the HUD localizes the
+         *   cause too ("Endpoint unreachable" → zh). An unknown key falls back
+         *   to the raw reason (same ruling as an unknown detailKey). */
+        if (_args && _args.reasonKey) {
+          const _r = t(_args.reasonKey);
+          if (_r && _r !== _args.reasonKey) _args.reason = _r;
+        }
+        return t(_key, _args || undefined);
+      }
       catch (e) { console.debug('[stream-phase] t() failed for', _key, e); }
     }
     return p.detail || "";

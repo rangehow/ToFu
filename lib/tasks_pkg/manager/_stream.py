@@ -34,6 +34,23 @@ def _display_model_name(model: str) -> str:
             name = name[len(prefix):]
             break
     return name
+
+
+# Dispatcher retry-reason tokens → typed i18n keys. The dispatcher
+# (lib/llm_dispatch/api.py) passes short English log tokens as ``reason``;
+# leaking them verbatim into the phase HUD showed raw English jargon
+# mid-generation ("Retrying… Endpoint unreachable (kimi-k3, attempt 1)").
+# Mapping the known tokens to stable reasonKeys lets the frontend localize
+# the cause; unknown tokens fall back to the raw reason (same ruling as an
+# unknown detailKey).
+_RETRY_REASON_KEYS = {
+    'Endpoint unreachable': 'stream.retryReason.endpointUnreachable',
+    'Request timed out': 'stream.retryReason.requestTimedOut',
+    'Waiting for model (rate-limited)': 'stream.retryReason.waitingForModel',
+    'Key balance exhausted': 'stream.retryReason.keyBalanceExhausted',
+    'Key auto-exhausted (consecutive 429s)': 'stream.retryReason.keyAutoExhausted',
+    'Rate limited (429)': 'stream.retryReason.rateLimited',
+}
 # ── Streaming checkpoint interval (seconds) ──
 # During LLM token streaming, we periodically persist partial content to
 # the DB so data survives server crashes even when there are no tool rounds.
@@ -186,20 +203,40 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
         generic spinner.  Previously users just saw "Waiting…" for 60-120s
         during 429 cycling with no indication that the server was alive
         and actively retrying.
+
+        i18n: ships ``detailKey``/``detailArgs`` (plus a typed ``reasonKey``
+        for known dispatcher reason tokens) so the frontend HUD localizes;
+        the legacy ``detail`` string is kept byte-identical for headless /
+        non-i18n clients. ``detailArgs['model']`` uses the display label
+        (gateway prefixes stripped) — it is new wire surface, not a legacy
+        string change.
         """
+        _label = _display_model_name(model)
         if status_code == 429:
             # Rate-limit: surface the model clearly and phrase it as a
             # queue wait rather than an error.
             detail = (f'⏳ 模型 {model} 限流中，正在排队重试 '
                       f'(第 {attempt} 次)…')
+            detail_key = 'stream.phase.retryRateLimited'
+            detail_args = {'model': _label, 'attempt': attempt}
         elif reason:
             detail = f'Retrying… {reason} ({model}, attempt {attempt})'
+            detail_key = 'stream.phase.retryReason'
+            detail_args = {'reason': reason, 'model': _label,
+                           'attempt': attempt}
+            _reason_key = _RETRY_REASON_KEYS.get(reason)
+            if _reason_key:
+                detail_args['reasonKey'] = _reason_key
         else:
             detail = f'Retrying {model}… (attempt {attempt})'
+            detail_key = 'stream.phase.retryGeneric'
+            detail_args = {'model': _label, 'attempt': attempt}
         append_event(task, build_event(
             EventType.PHASE,
             phase='retrying',
             detail=detail,
+            detailKey=detail_key,
+            detailArgs=detail_args,
             attempt=attempt,
             statusCode=status_code,
             model=model,
@@ -304,12 +341,12 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
             for _fr_i in range(_fr_max):
                 if task.get('aborted', False):
                     break
+                _fr_u = normalize_usage(usage)
                 logger.warning(
                     '%s conv=%s [FloorRetry] byte-stable floor-collapse '
                     '(read=%s write=%s) — resending identical body (%d/%d)',
                     pfx, _conv_for_fr,
-                    (usage or {}).get('cache_read_tokens'),
-                    (usage or {}).get('cache_creation_input_tokens'),
+                    _fr_u['cache_read'], _fr_u['cache_write'],
                     _fr_i + 1, _fr_max)
                 try:
                     # ★ Layer-1 orphan fix: a FloorRetry resend re-streams the
@@ -358,10 +395,10 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
                     # Recovered: the resend hit the now-visible cache write.
                     # Adopt its response + usage (a genuine cache read, cheaper
                     # AND the same conversation content — the body was identical).
+                    _ru = normalize_usage(_rusage)
                     logger.warning('%s conv=%s [FloorRetry] RECOVERED on resend %d '
                                    '(read=%s write=%s)', pfx, _conv_for_fr, _fr_i + 1,
-                                   (_rusage or {}).get('cache_read_tokens'),
-                                   (_rusage or {}).get('cache_creation_input_tokens'))
+                                   _ru['cache_read'], _ru['cache_write'])
                     msg, finish_reason, usage = _rmsg, _rfin, _rusage
                     _fr_adopted = True
                     break

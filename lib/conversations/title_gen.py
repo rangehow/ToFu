@@ -24,6 +24,51 @@ logger = get_logger(__name__)
 # substring cap so a generated title never overflows the sidebar row.
 TITLE_MAX_CHARS = 60
 
+# ── Thinking-model exclusion list (pt_title_gen_robust P1) ──
+# Root cause pinned 2026-07-24 by debug/title_gen_repro.py: cheap-pool
+# models carrying BOTH `cheap` AND `thinking` capabilities burn the entire
+# max_tokens=512 budget on internal reasoning tokens, leaving the visible
+# title empty or a single stray character (the "跨" incident on
+# mryjczi2v9ck9k, dispatched to deepseek-v4-pro at 14:07:01). A 5-forced
+# sample against deepseek-v4-pro reproduced finish_reason=length +
+# empty content 1/5 (20% blast).
+#
+# Design: rather than introducing a new `non_thinking` capability tier —
+# which would fork the capability_taxonomy.py single source of truth — we
+# pass this set as ``exclude_models=`` to ``dispatch_chat``. Zero schema
+# change; the dispatcher already honors the parameter.
+#
+# INVARIANT: this set MUST equal every model with BOTH `cheap` AND
+# `thinking` capabilities in bootstrap._BUILTIN_PROVIDER_TEMPLATES.
+# tests/test_title_gen_robust.py::test_constant_matches_bootstrap_derivation
+# guards this at CI time — any new such model added to bootstrap without
+# updating this constant will flip that test red.
+_THINKING_MODELS_TO_EXCLUDE = frozenset({
+    # OpenAI o-series (cheap + thinking)
+    'o4-mini',
+    # DeepSeek (cheap + thinking pair)
+    'deepseek-v4-pro',
+    'deepseek-v4-flash',
+    # GLM (only glm-4.7 has cheap+thinking; glm-5.x are thinking-only, non-cheap)
+    'glm-4.7',
+    # Kimi (all 3 are cheap+thinking)
+    'kimi-k3',
+    'kimi-k2.6',
+    'kimi-k2-thinking',
+    # Qwen (max/plus are cheap+thinking; flash is cheap-only)
+    'qwen3-max',
+    'qwen-plus',
+    # Gemini (2.5-pro is cheap+thinking; 2.5-flash & 3.1-flash-lite are cheap-only)
+    'gemini-2.5-pro',
+    # xAI (grok-4.20 is cheap+thinking; 4.1-mini is cheap-only)
+    'grok-4.20',
+    # Doubao (pro is cheap+thinking; lite is cheap-only)
+    'doubao-seed-2-0-pro-260215',
+    # OpenRouter relay (google/gemini-3.1-pro-preview is the only
+    # cheap+thinking entry in the OpenRouter builtin template)
+    'google/gemini-3.1-pro-preview',
+})
+
 _SYSTEM_PROMPT_BASE = (
     'You write a concise, information-dense title for a chat conversation, '
     'shown in a narrow sidebar. The reader must grasp what this specific '
@@ -243,6 +288,9 @@ def generate_conversation_title(messages: list, lang: str | None = None) -> str:
             max_tokens=512,
             temperature=0.2,
             capability='cheap',
+            # P1 pt_title_gen_robust: block cheap-pool thinking models that
+            # burn max_tokens on reasoning and leave title empty/single-char.
+            exclude_models=list(_THINKING_MODELS_TO_EXCLUDE),
             log_prefix='[TitleGen]',
         )
     except Exception as e:

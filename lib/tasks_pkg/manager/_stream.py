@@ -350,8 +350,26 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
     #   event's committedMessage (existing mechanism), so no new visual behavior.
     if _fr_adopted:
         with task['content_lock']:
+            _discarded_content = task['content']
+            _discarded_thinking = task['thinking']
             task['content'] = msg.get('content') or ''
             task['thinking'] = msg.get('reasoning_content') or ''
+        # ★ Record the DISCARDED first-attempt text verbatim (bounded). The
+        #   ~5s streaming checkpoint mirrors task['content']/['thinking'] into
+        #   conversations.messages DURING the attempt — so after this
+        #   convergence the conv row can still hold the discarded draft while
+        #   the task holds the adopted one. Downstream guards (the terminal
+        #   content guard / CAS re-read guard in _sync.py) treat "existing >
+        #   new" as "frontend genuinely won"; an EXACT byte-match against this
+        #   recorded residue is how they tell our own discarded attempt apart
+        #   from a real frontend win and overwrite it with the authoritative
+        #   final answer (the live mrxij7q34xm070 "abrupt stop" bug: the
+        #   4344-char discarded draft survived with a stop finish-tag).
+        if _discarded_content or _discarded_thinking:
+            _residue = task.setdefault('_floor_retry_residue', [])
+            if len(_residue) < 8:
+                _residue.append({'content': _discarded_content,
+                                 'thinking': _discarded_thinking})
         # ★ Record the TRUE cause of any orphan tool round this turn produces.
         #   When a FloorRetry resend is adopted, the FIRST attempt's tool calls
         #   (announced live via on_tool_call_ready → 'searching' rounds) are NOT

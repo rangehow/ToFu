@@ -371,6 +371,32 @@ def _reconcile_orphan_placeholder_on_settle(task):
                        conv_id[:8], e, exc_info=True)
 
 
+def _is_floor_retry_residue(task, msg_dict):
+    """True when ``msg_dict``'s content+thinking BYTE-MATCH a FloorRetry first
+    attempt this task DISCARDED (recorded at adoption — see _stream.py's
+    ``_floor_retry_residue``).
+
+    The ~5s streaming checkpoint mirrors ``task['content']``/``['thinking']``
+    into the conversation row DURING an attempt; when a resend is adopted the
+    row can still hold the discarded draft (longer than the final answer). The
+    "existing > new → frontend genuinely won" guards must NOT treat that
+    residue as a frontend win — a genuine frontend write can never byte-match
+    a server-internal discarded attempt. Both fields must match the SAME
+    residue entry exactly, so a row the frontend genuinely touched (edited /
+    translated mid-flight) still qualifies as a frontend win.
+    """
+    residue = (task or {}).get('_floor_retry_residue') or []
+    if not residue:
+        return False
+    content = (msg_dict or {}).get('content') or ''
+    thinking = (msg_dict or {}).get('thinking') or ''
+    for r in residue:
+        if (content == (r.get('content') or '')
+                and thinking == (r.get('thinking') or '')):
+            return True
+    return False
+
+
 def _sync_result_to_conversation(task, meta):
     """Write the completed task result into the conversation's messages in the DB.
 
@@ -655,7 +681,26 @@ def _sync_result_to_conversation(task, meta):
         # ★ Merge checkpoint toolRounds for continue flow
         tool_rounds = _merge_tool_rounds(task)
 
-        if existing_content_len > new_content_len and existing_thinking_len > new_thinking_len:
+        # ★ FloorRetry-residue exemption: decide BEFORE the guard. When the
+        #   "longer existing content" byte-matches a first attempt THIS task
+        #   discarded (recorded at adoption in _stream.py) and mirrored here
+        #   by the streaming checkpoint before convergence, it is NOT a
+        #   frontend win — the guard must not engage, so the normal path
+        #   overwrites the residue with the authoritative final answer (the
+        #   mrxij7q34xm070 root bug: the discarded 4344-char R3 draft
+        #   out-ranked the 3751-char R7 answer, and the residue then rode
+        #   _committedMsg verbatim to the client).
+        _fr_residue_exempt = (existing_content_len > new_content_len
+                              and existing_thinking_len > new_thinking_len
+                              and _is_floor_retry_residue(task, last_msg))
+        if _fr_residue_exempt:
+            logger.info('%s conv=%s Content guard: existing=%d+%d > new=%d+%d but '
+                        'existing BYTE-MATCHES this task\'s discarded FloorRetry '
+                        'attempt — overwriting with the authoritative final answer',
+                        pfx, conv_id, existing_content_len, existing_thinking_len,
+                        new_content_len, new_thinking_len)
+        if existing_content_len > new_content_len and existing_thinking_len > new_thinking_len \
+                and not _fr_residue_exempt:
             # ★ FIX: Even when frontend has more content (synced before us),
             #   still update toolRounds + metadata — the backend has richer
             #   tool data (toolContent, assistantContent) that the frontend
@@ -946,10 +991,14 @@ def _sync_result_to_conversation(task, meta):
             _fresh_tail = _fresh_messages[-1]
             if (_fresh_tail.get('role') == 'assistant'
                     and len(_fresh_tail.get('content') or '') >= new_content_len
-                    and len(_fresh_tail.get('thinking') or '') >= new_thinking_len):
+                    and len(_fresh_tail.get('thinking') or '') >= new_thinking_len
+                    and not _is_floor_retry_residue(task, _fresh_tail)):
                 # Genuine frontend win landed between our read and our write:
                 # a fuller answer is already persisted. Do NOT shrink it — the
                 # historical "safe skip", now proven rather than assumed.
+                # A byte-match against this task's discarded FloorRetry attempt
+                # is NOT a frontend win (the residue exemption): fall through
+                # to the graft + retry so the final answer overwrites it.
                 logger.info('%s conv=%s terminal CAS miss %d/%d — fresh row holds '
                             '>= our content (frontend genuinely won); not shrinking',
                             pfx, conv_id, _cas_attempt + 1, MAX_TERMINAL_CAS)
@@ -1266,21 +1315,39 @@ def _sync_partial_to_conversation(task):
             # is lost — only the mid-stream messages mirror lags by < threshold.
             _content_grew = bool(content and len(content) > existing_content_len)
             _thinking_grew = bool(thinking and len(thinking) > existing_thinking_len)
+            # ★ Convergence, not just growth (FloorRetry-residue root fix): the
+            #   authoritative task text can legitimately SHRINK mid-task — a
+            #   FloorRetry adoption discards the first attempt AFTER its deltas
+            #   were already mirrored here by earlier checkpoints, and the
+            #   per-round reset restarts prose per round. A grew-only guard
+            #   pinned the longest-ever attempt in the row forever (later
+            #   rounds — including the final answer — never exceeded it), which
+            #   then poisoned the terminal content guard into "frontend
+            #   genuinely won" (live conv mrxij7q34xm070: the 4344-char
+            #   discarded R3 draft out-ranked the 3751-char R7 answer).
+            #   Write whenever the value differs (non-empty only — an empty
+            #   post-reset accumulator must never wipe the mirror); a SHRINK is
+            #   semantically load-bearing, so it bypasses delta coalescing.
+            _content_changed = bool(content and content != (last_msg.get('content') or ''))
+            _thinking_changed = bool(thinking and thinking != (last_msg.get('thinking') or ''))
+            _content_shrank = _content_changed and not _content_grew
+            _thinking_shrank = _thinking_changed and not _thinking_grew
             _pending_delta = ((len(content) - existing_content_len if _content_grew else 0)
                               + (len(thinking) - existing_thinking_len if _thinking_grew else 0))
             _terminal = bool(task.get('finishReason')
                              or task.get('status') in ('done', 'error', 'aborted'))
             # The text delta alone justifies a write only when it is big enough
-            # (or coalescing is disabled, or the task is terminal).
-            _text_write_worthy = _pending_delta > 0 and (
+            # (or coalescing is disabled, or the task is terminal, or it is a
+            # convergence shrink as above).
+            _text_write_worthy = (_pending_delta > 0 and (
                 CHECKPOINT_MIN_DELTA_CHARS == 0
                 or _terminal
                 or _pending_delta >= CHECKPOINT_MIN_DELTA_CHARS
-            )
+            )) or _content_shrank or _thinking_shrank
 
-            if _content_grew:
+            if _content_changed:
                 last_msg['content'] = content
-            if _thinking_grew:
+            if _thinking_changed:
                 last_msg['thinking'] = thinking
             if _text_write_worthy:
                 mutated = True

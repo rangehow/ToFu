@@ -113,21 +113,16 @@ MODEL_PRICING = {
     'gpt-image-1':                   {'input': 0.0,  'output': 0.0,  'cacheWriteMul': 0, 'cacheReadMul': 0, 'name': 'GPT Image 1'},
     'gpt-image-1-mini':              {'input': 0.0,  'output': 0.0,  'cacheWriteMul': 0, 'cacheReadMul': 0, 'name': 'GPT Image 1 Mini'},
     'dall-e-3':                      {'input': 0.0,  'output': 0.0,  'cacheWriteMul': 0, 'cacheReadMul': 0, 'name': 'DALL-E 3'},
-    # ── OpenAI (GPT-5.6 family — May 2026; adds 'ultra' reasoning tier) ──
+    # ── OpenAI (GPT-5.6 family — May 2026) ──
+    # Two-tier lineup: flagship + pro. No mini/nano this generation.
     'gpt-5.6':                   {'input': 2.50, 'output': 15.00, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GPT-5.6'},
     'gpt-5.6-pro':               {'input': 30.0, 'output': 180.0, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GPT-5.6 Pro'},
-    'gpt-5.6-mini':              {'input': 0.75, 'output': 4.50, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GPT-5.6 Mini'},
-    'gpt-5.6-nano':              {'input': 0.20, 'output': 1.25, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GPT-5.6 Nano'},
-    # ── OpenAI (GPT-5.4 family — March 2026) ──
+    # ── OpenAI (GPT-5.4 family — March 2026; kept as the cost tier) ──
     'gpt-5.4':                   {'input': 2.50, 'output': 15.00, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GPT-5.4'},
     'gpt-5.4-pro':               {'input': 30.0, 'output': 180.0, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GPT-5.4 Pro'},
     'gpt-5.4-mini':              {'input': 0.75, 'output': 4.50, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GPT-5.4 Mini'},
     'gpt-5.4-nano':              {'input': 0.20, 'output': 1.25, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GPT-5.4 Nano'},
-    # ── OpenAI (GPT-5 family) ──
-    'gpt-5':                     {'input': 1.25, 'output': 10.00, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GPT-5'},
-    'gpt-5.2':                   {'input': 1.75, 'output': 14.00, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GPT-5.2'},
-    'gpt-5-mini':                {'input': 0.25, 'output': 2.00, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GPT-5 Mini'},
-    'gpt-5-nano':                {'input': 0.05, 'output': 0.40, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GPT-5 Nano'},
+    # Original GPT-5 family retired — see _slots.py comment.
     # ── OpenAI (o-series reasoning) ──
     'o3':                        {'input': 2.00, 'output': 8.00, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.50, 'name': 'o3'},
     'o4-mini':                   {'input': 1.10, 'output': 4.40, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.50, 'name': 'o4-mini'},

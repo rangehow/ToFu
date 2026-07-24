@@ -828,7 +828,8 @@ def chat_continue():
         try:
             from lib.tasks_pkg.segments import resume_prefill_from_segments
             _resume_prefill = resume_prefill_from_segments(
-                assistant_msg.get('segments'), _model, finish_reason=_finish_reason)
+                assistant_msg.get('segments'), _model, finish_reason=_finish_reason,
+                content=_orig_full_content)
         except Exception as _rp_e:
             logger.debug('[Continue] resume-prefill extraction failed (non-fatal): %s', _rp_e)
 

@@ -46,11 +46,19 @@ logger = get_logger(__name__)
 def stream_chat(body, *, on_thinking=None, on_content=None,
                 on_tool_call_ready=None,
                 abort_check=None, log_prefix='', api_key=None, base_url=None,
-                extra_headers=None, api_protocol='openai', oauth=''):
+                extra_headers=None, api_protocol='openai', oauth='',
+                on_attempt_restart=None):
     """Streaming chat completion with callbacks.
 
     Automatically retries on transient connection errors up to
     MAX_STREAM_RETRIES times.
+
+    ``on_attempt_restart`` (optional): fired with ``reason=<str>`` whenever an
+    in-flight attempt is being DISCARDED and the request is about to restart
+    from scratch. Any content/thinking already delivered via on_content /
+    on_thinking during that attempt will be re-streamed — the callee must drop
+    its partial accumulation (e.g. truncate back to the per-round base) so the
+    re-streamed text does not stack on the abandoned attempt's tail.
 
     Returns:
         (assistant_msg, finish_reason, usage)
@@ -59,6 +67,14 @@ def stream_chat(body, *, on_thinking=None, on_content=None,
         RateLimitError, PermissionError_, AbortedError,
         ContentFilterError, PromptTooLongError, RetryableAPIError
     """
+    def _fire_attempt_restart(reason: str) -> None:
+        if on_attempt_restart is None:
+            return
+        try:
+            on_attempt_restart(reason=reason)
+        except Exception as _oar_e:
+            logger.debug('%s on_attempt_restart raised: %s', log_prefix, _oar_e)
+
     last_err = None
     _limit_learned = None
     for attempt in range(1 + MAX_STREAM_RETRIES):
@@ -79,9 +95,16 @@ def stream_chat(body, *, on_thinking=None, on_content=None,
             raise
         except ModelLimitError as e:
             _limit_learned = apply_model_limit_retry(body, e, log_prefix)
+            # The clamped retry restarts from scratch — anything streamed so
+            # far belongs to a discarded attempt.
+            _fire_attempt_restart('model-limit clamp retry')
             continue
         except _RETRYABLE as e:
             last_err = e
+            if attempt < MAX_STREAM_RETRIES:
+                # Another attempt WILL run from scratch — the partial stream
+                # from this attempt is being abandoned.
+                _fire_attempt_restart('transport retry: %s' % e.__class__.__name__)
             wait = prepare_retryable_wait(attempt, e, abort_check, log_prefix)
             abortable_sleep(wait, abort_check)
     raise last_err

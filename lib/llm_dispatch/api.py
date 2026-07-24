@@ -1039,7 +1039,7 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
                     capability='text', prefer_model=None, tools=None,
                     max_retries=3, log_prefix='', strict_model=False,
                     on_retry=None, avoid_pairs=None,
-                    exclude_models=None):
+                    exclude_models=None, on_attempt_restart=None):
     """Smart dispatch for streaming requests.
 
     Accepts either:
@@ -1092,6 +1092,18 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
         stream_chat,
     )
     from lib.llm_errors import EndpointUnreachableError
+
+    def _fire_attempt_restart(reason: str) -> None:
+        """Notify the callee an in-flight attempt is being discarded and the
+        request restarts from scratch (its partial stream will be re-sent).
+        Distinct from on_retry: that one also fires for pure cooldown waits
+        where NO attempt ran and nothing needs truncation."""
+        if on_attempt_restart is None:
+            return
+        try:
+            on_attempt_restart(reason=reason)
+        except Exception as _oar_e:
+            logger.debug('%s on_attempt_restart raised: %s', log_prefix, _oar_e)
 
     dispatcher = get_dispatcher()
     state = _StreamRetryState(exclude_models=exclude_models, avoid_pairs=avoid_pairs)
@@ -1377,6 +1389,7 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
                 on_tool_call_ready=on_tool_call_ready,
                 abort_check=abort_check,
                 log_prefix=tag,
+                on_attempt_restart=on_attempt_restart,
                 api_protocol=slot.protocol or 'openai',
             )
             latency = (time.time() - t0) * 1000
@@ -1415,6 +1428,7 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
                 if on_retry:
                     on_retry(attempt=state.hard_attempts,
                              reason='Key balance exhausted', status_code=429)
+                _fire_attempt_restart('key balance exhausted')
                 continue
             state.note_free_429(is_gateway=bool(getattr(e, 'is_gateway', False)))
             # ★ Don't exclude anything — slot.record_error() sets a 0.5s
@@ -1454,11 +1468,13 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
                         on_retry(attempt=state.hard_attempts,
                                  reason='Key auto-exhausted (consecutive 429s)',
                                  status_code=429)
+                    _fire_attempt_restart('key auto-exhausted (consecutive 429s)')
                     continue
             except Exception as e:
                 logger.debug('%s is_key_enabled probe failed (stream): %s', log_prefix, e)
             if on_retry:
                 on_retry(attempt=state._429_count, reason='Rate limited (429)', status_code=429)
+            _fire_attempt_restart('rate limited (429) — rotating slot')
             time.sleep(0.3)
             # ★ Don't increment hard_attempts — 429 retries are free
             continue

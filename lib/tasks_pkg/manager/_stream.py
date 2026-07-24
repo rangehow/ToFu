@@ -77,6 +77,17 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
     #   orphans correctly — a round that adopted then a later round that did not
     #   must not read a stale True.
     task['_floor_retry_adopted'] = False
+    # ★ Per-round BASE for attempt-restart truncation: a transport/dispatch
+    #   retry discards an in-flight attempt whose deltas already landed in
+    #   task['content']/['thinking'] (and were checkpointed into the conv row).
+    #   Capture the round's starting text so _on_attempt_restart can truncate
+    #   back to exactly it — the re-streamed attempt then never stacks on the
+    #   abandoned one's tail (the "transport-retry 自愈后重复文本落库" latent
+    #   class, pt_6e12b1ffd95a453e). The shrink-convergent checkpoint path
+    #   then settles the row to the retried attempt's text.
+    with task['content_lock']:
+        _round_base_content = task['content']
+        _round_base_thinking = task['thinking']
     # ★ Init to 0.0 (epoch) so the FIRST content/thinking delta checkpoints
     #   immediately, then settle into the _STREAM_CHECKPOINT_INTERVAL cadence.
     #   Starting at time.time() left a pre-first-checkpoint window where a
@@ -145,6 +156,26 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
             task['content'] += cd
         append_event(task, build_event(EventType.DELTA, content=cd))
         _maybe_checkpoint_during_stream()
+
+    def _on_attempt_restart(reason=''):
+        """A transport/dispatch-level retry discarded an in-flight attempt:
+        truncate the task's text accumulators back to this round's base so the
+        re-streamed attempt doesn't stack on the abandoned one's partial tail.
+        No-op when nothing was streamed this attempt (pure cooldown waits).
+        Deliberately NOT passed to the FloorRetry resend call — during resends
+        the first attempt's text is still the fallback content and must
+        survive unless a resend is adopted."""
+        with task['content_lock']:
+            _c, _t = task['content'], task['thinking']
+            if _c == _round_base_content and _t == _round_base_thinking:
+                return
+            task['content'] = _round_base_content
+            task['thinking'] = _round_base_thinking
+        logger.info('%s conv=%s attempt-restart (%s): truncated discarded '
+                    'partial attempt text content %d→%d, thinking %d→%d chars',
+                    pfx, task.get('convId', ''), reason,
+                    len(_c), len(_round_base_content),
+                    len(_t), len(_round_base_thinking))
 
     def _on_retry(attempt, reason='', status_code=0):
         """Emit SSE phase event so user sees retry status instead of 'Waiting…'.
@@ -224,6 +255,7 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
         strict_model=True,
         on_retry=_on_retry,
         avoid_pairs=_avoid_pairs,
+        on_attempt_restart=_on_attempt_restart,
     )
 
     # ★ Timing fallback: if the first round was tool-call-only (no content/

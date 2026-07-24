@@ -1,12 +1,22 @@
 # Turn-Settlement Verdict — a single backend-authoritative fact per assistant turn
 
-> **Status:** architecture contract (P1 landed — the pure verdict module + tests).
-> **Epic:** `pt_a4484f3ad3134ea8`.
+> **Status:** LANDED (P1 + P1b + A/B + C1 + C2 + C3). The three consumers
+> (interrupt bubble, Continue button, lossless resume) all read the single
+> verdict. Backend-authoritative via a behavior-locked canonical JS port.
+> **Epic:** `pt_a4484f3ad3134ea8` (COMPLETE).
 > **Companion to (not a duplicate of):** `pt_e1c4693341b24730` (`pt_conv_state_ssot`).
 > That epic builds the authoritative channel for *which convs are busy*; this one
 > defines the authoritative content of *how one turn ended and how it can be
-> resumed*. They share the "compute once server-side, propagate as a frame,
-> render — never re-infer — on the client" philosophy.
+> resumed*.
+>
+> **Delivery model — canonical port, not persist+propagate.** The backend
+> `compute_turn_settlement` is the single definition; the frontend port
+> `computeTurnSettlement` (`static/js/core/turn_settlement.js`) is
+> behavior-locked to it by `tests/test_frontend_turn_settlement_equivalence.py`
+> (both driven over one corpus, deep-equal asserted). Both sides RECOMPUTE the
+> verdict from the persisted message fields — the exact ghost-tail precedent
+> (`classify_ghost_tail` ↔ `_classifyGhostTailJS`) and conv_state_reducer. See
+> §5 for why persist+propagate (the original P2) was deliberately rejected.
 
 ---
 
@@ -116,16 +126,24 @@ gated follow-up (§5 P5), not smuggled into this SSOT.*
 
 ## 3. The three consumers stop re-inferring
 
-- **Bubble label** (`finish_info.js`) reads `outcome` + `cause` → one label
-  map. The `interruptedReason`-sniffing branch is deleted.
-- **Continue button** (`chat_render.js`) reads `resume.mode`:
-  `prefill` → "Continue (lossless)"; `checkpoint` → "Continue (from round N)";
-  `regenerate` → relabel honestly to "Regenerate"; `none` → hidden. The button
-  can no longer over-promise.
-- **Continue executor** (`main_regen_continue.js`) reads the stamped
-  `resume.mode` and executes it directly, instead of POSTing and re-deriving
-  the boundary. The `/api/chat/continue` route returns the SAME verdict, so
-  client and server can never disagree about the resume point.
+- **Bubble label** (`finish_info.js`) reads the verdict's `outcome` + `cause`
+  via `finishLabelForSettlement` → one label map, byte-identical output. The
+  `interruptedReason`-sniffing branch is DEMOTED to a defensive fallback used
+  only when `turn_settlement.js` (bundle-only) is not loaded — in the browser
+  the verdict drives it.
+- **Continue button** (`chat_render.js`) reads `resume.mode` via
+  `continueButtonForSettlement`: `prefill` → "Continue (lossless)";
+  `checkpoint` → "Continue (from round N)"; `regenerate` → relabel honestly to
+  "Regenerate"; `none` → hidden. The button can no longer over-promise. (The
+  button decides the LABEL only; the actual resume/regenerate decision stays
+  server-authoritative, see next.)
+- **Continue executor** (`main_regen_continue.js`) was ALREADY
+  backend-authoritative (defers to the server's checkpoint scan and handles the
+  `fallback:regenerate` case) — so it needed no change. The dishonesty lived in
+  the button LABEL, which is what C2 fixed. The `/api/chat/continue` route and
+  the client verdict compute the SAME resume point (both via
+  `scan_continue_checkpoint` / `resume_prefill_from_segments`), so client and
+  server cannot disagree.
 
 ## 4. Robustness properties
 
@@ -139,21 +157,54 @@ gated follow-up (§5 P5), not smuggled into this SSOT.*
   to the *current* behaviour (checkpoint-scan / regenerate), never to a
   riskier resume.
 
-## 5. Phasing (one commit per phase, failing-first + NEUTER + collect gate)
+## 5. Phasing — LANDED (one commit per phase, failing-first + NEUTER + collect gate)
 
-- **P1** *(this commit)* — `lib/conversations/turn_settlement.py`: the pure
-  verdict SSOT + comprehensive tests. Zero production-behaviour change.
-- **P1b** *(this commit)* — extend `RESUMABLE_FINISH_REASONS` with `'aborted'`
+- **P1** *(landed, `4e75c586`)* — `lib/conversations/turn_settlement.py`: the pure
+  verdict SSOT + 32 tests. Zero production-behaviour change.
+- **P1b** *(landed, `4e75c586`)* — extend `RESUMABLE_FINISH_REASONS` with `'aborted'`
   (manual Stop) so a stopped turn with content on a capable model resumes via
   lossless prefill instead of full regeneration. The single concrete lossless
   gap fix.
-- **P2** — stamp `_settlement` at settle: compute in `_finalize`, persist in
-  `_sync_result_to_conversation`, include in the `done` / poll payload.
-- **P3** — frontend reads the verdict (finish label, Continue affordance,
-  Continue executor) via a reducer; bifurcated from legacy `finishReason`.
-- **P4** — sweep the duplicate client-side inference (`_FINISH_CLEAN` gate,
-  the finishReason→label sniffing, `interruptedReason` branch), with a
-  per-branch justification in each commit body.
-- **P5** *(gated follow-up)* — prefer prefill over checkpoint for capable
-  models so tool-turn resumes are also lossless; needs prefill+toolHistory
-  parity validation.
+- **A + B** *(landed, `38d48669`)* — prove the LIVE chain (manual-Stop →
+  `persist_task_result` → `/api/chat/continue` → prefill, not regenerate) with a
+  real-DB integration test; and plug the segments-missing hole
+  (`resume_prefill_from_segments` falls back to `msg['content']` when no terminal
+  deliverable segment exists — the `deliverable_text` precedent).
+- **C1** *(landed, `49795315`)* — canonical JS port `static/js/core/turn_settlement.js`
+  + `_BUNDLE_FILES` registration + the backend↔frontend equivalence lock.
+- **C2** *(landed, `814abd3c`)* — the Continue button reads `resume.mode` with an
+  honest per-mode label (prefill→Continue-lossless / checkpoint→Continue-from-N /
+  regenerate→**Regenerate**, no longer masquerading as Continue).
+- **C3** *(landed, `4d2d14d3`)* — the interrupt bubble reads the verdict via
+  `finishLabelForSettlement` (byte-identical output), plus the `CAUSE_UNKNOWN`
+  refinement (faithful 3-way killed/restart/unknown) and a robust legacy
+  kind-derivation fallback so the bubble stays correct when `turn_settlement.js`
+  (bundle-only) is absent.
+- **P2 — deliberately REJECTED (not unfinished).** The original plan was to
+  compute the verdict at settle and PERSIST `msg['_settlement']` + propagate it in
+  the `done`/poll payload ("compute once server-side"). That was dropped in favour
+  of the canonical-port / recompute model actually shipped, for three reasons:
+  (1) **drift** — a persisted `_settlement` freezes a stale snapshot the moment
+  the verdict logic is refined (this is exactly what happened when `CAUSE_UNKNOWN`
+  was added after the fact; a recompute always reflects the current logic). This
+  is why the project's ghost-tail classifier *recomputes on serve* and never
+  persists a classification. (2) **precedent** — ghost-tail and conv_state_reducer
+  both share backend logic with the frontend via a behavior-locked canonical port,
+  not persistence. (3) **risk** — persisting touches `_sync_result_to_conversation`
+  (freshness-guard + CAS + active sibling work) and the `done` event (wire-parity
+  gates across many suites) for zero behavioural gain over the equivalence-locked
+  port. The verdict is still backend-authoritative: the Python definition is the
+  single source, and the frontend cannot diverge from it.
+- **P4** *(landed, folded into C2/C3)* — the three independent inferences
+  (`_FINISH_CLEAN` gate, the finishReason→label sniffing, the `interruptedReason`
+  branch) are replaced by the verdict in the production path. A compact legacy
+  kind-derivation is RETAINED in `finish_info.js` purely as a defensive fallback
+  for the bundle-absent case (dev-mode script-tag fallback / JSDOM harness that
+  loads `finish_info.js` without `turn_settlement.js`) — removing it would regress
+  the bubble in those contexts, so it is an intentional safety net, not the
+  re-inference the epic set out to kill.
+- **P5** *(separate gated epic `pt_turn_settlement_prefill_over_checkpoint`)* —
+  prefer prefill over checkpoint for capable models so tool-turn resumes are also
+  lossless. A genuine behaviour change (checkpoint currently wins, dropping the
+  trailing prose); gated on owner validation of prefill+toolHistory parity. Not
+  part of this epic's "3 inferences → 1 verdict" scope.

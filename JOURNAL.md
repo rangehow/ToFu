@@ -2,6 +2,16 @@
 
 
 
+### 2026-07-24(续20) — RENDER_CONTRACT Phase 3.5 §5 step 4 落地:SEAM-2 折叠 + 全量删 ConvView 缺失 fallback + boot 检查运行时证明(commit `ded8b89d`,14 文件 +367/-144,新守卫 4 测全绿含 NEUTER,ratchet 192→**157**,相邻 38/38 核心 + sse_dispatch 修后 3/3,collect 8314 0 err)。owner 验收 step 3 抓「SEAM-2 调用边界仍裸露 + fallback 是孪生温床 + boot 检查只有静态存在证明」三项,全部并入本 commit。
+- **(a) SEAM-2 折叠:** `ConvView.replaceAll(convId, {forceScroll})` 升为唯一公共全屏重画入口,**16 个调用点 ×9 文件**从裸 `renderChat(...)` 迁移(translation_render×2 / edit×3 / send×3 / regen×3 / sse_pipeline×1 / stream_lifecycle×1 / streaming_render×2 / conv_lifecycle×2);`chat_render.js` 声明为**接缝引擎**(ratchet 接缝侧钉 8,与 conv_view 并列)—— 引擎的裸写是投影实现,不是第二个公共入口。剩余 ~43 个 `renderChat(`(conversations×9/cross_tab_sync×4/image-gen×6/…)列入 §5 step 5 清单。
+- **(b) 全量删 fallback:** 6 处 `_streamingBubbleHTML` else 分支(sse_pipeline)+ 1(send_pipeline)+ 1(main_translating_bubble)删除,6 个 `typeof window.ConvView.` 存在性守卫拍平为直调;2 个删后悬空 `inner` 声明顺手清扫。**孪生气泡温床关闭**:bundle 缺失不再是"每调用点静默劣化",而是启动即红横幅。
+- **(c) boot 检查运行时证明(owner 补的证据缺口):** 静态存在 ≠ 运行触发 —— JSDOM 里 `window.ConvView` 置 undefined,用 pre-eval 包装捕获 console.error,eval 真实 main.js → **横幅真的挂上 DOM + error 真的发出**;NEUTER:ConvView stub 在场 → 无横幅无 error。argv 映射踩坑:`run_harness(extra_targets=)` 是 argv[4] 而非 argv[3](那是 ROOT)。
+- **ratchet 192→157:** 三分来源 —— fallback 删除 + **scanner v3**(字符串换成非空占位 `""`,`classList.remove('cv-off')` 不再被数成 DOM detach;v2 在此假阳性)+ chat_render 引擎挪接缝侧。静态守卫新增:禁 `typeof window.ConvView.` 守卫 / 禁 `_streamingBubbleHTML` else 分支 / 迁移文件零裸 `renderChat(`(剥注释后)。
+- **测试契约随行:** sse_dispatch harness 的 ConvView stub 补 `replaceAll/upsertMessage/startStreaming`(step-4 使接缝无条件,stub 缺口 = TypeError)。translation_render warn 文案 `renderChat→ConvView.replaceAll`(代码已迁、文案滞后,还顺带撞 fold 守卫)。
+- **相邻裁决(stash 证伪):** sse_dispatch×2 是我引入(已修);`state_snapshot_no_wipe×2` + `recommend_stream_render×3` 全量 stash 我的 step-4 源文件后仍红 → **sibling e25b712c(Phase-3 reducer 路由)引入的预存在红**(harness 从未 stub `projectColdSnapshot`;verbatim-neuter 钉的源行也随该 sibling 漂移),非我引入。collect 一次 1 err 复跑变 8314/0 = sibling 写文件半途的瞬态。
+- **§7.4 设计写入 plan(等实现):** reconnect byte-parity 锚点 —— 冷开重连 vs live 同画一个 in-flight turn,在 checkpoint 边界上 `#streaming-body` 子树逐字节相等;RED 先行证两路真的分叉,§7 streamBufs 退役落 Green。与 step-4 删 fallback 同属「无第二写路」一族。
+- **git 纪律:** 提交前逐文件核 diff 幅度;显式 pathspec;`git show --stat` 与暂存一致;JOURNAL 照旧「提取 sibling 续19 块→checkout→插入→commit→原样插回」。
+
 ### 2026-07-24(续16) — msgid 重复气泡**全链路闭合**:前端 dedup 半外科提取入库 + 套件随批入库(`09fee050`,2 文件 +296,环 10/10 绿,collect **8301** 0 err)。Brain 自动派发我自己开的移交票 `pt_c53c279b16494657`,本回合闭环。
 - **认领即判定可自治推进(不落入 cooldown 空转):** 三个被问询的活跃 sibling(mryp5mg2/mryoxmil)均否认持有 conversations.js WIP;`mergeServerConvShells` 侧栏特征溯源到 7/16、7/18 两个**已不活跃**会话 → 属主不在场,block 成 [sibling]/[human-gated] 都只会再造一个 pt_39b79cc4 式空转票。改走**外科路径**:从混合 WIP(5 个互不相关特征:dedup / mergeServerConvShells / _serverTotalCount C4 / listMeta 迁移 / queue-mirror unify)中**只提取**与本 epic 配对的 serverAsstTaskIds dedup 三小 hunk(全部自包含于 `_rebaseUnackedTail`,与其余特征零符号耦合),其余 4 个特征原样留在 worktree 给属主。
 - **操作序列(shared-HEAD 纪律):** 备份混合 WIP(md5)→ `git checkout HEAD` 净版 → apply_diffs 重放仅 dedup 三 hunk → 环测(msgid 6 + lost_ack 2 + cross_tab_rev_guard 2 = **10/10**)+ `diff` 证 dedup 区与 WIP **逐字节相等** → commit(具名 add + cached stat 复核)→ **还原混合 WIP** 覆盖回 worktree → 验证剩余 diff 恰为其余 4 特征、零 dedup 残留 → 套件在 HEAD+parked-WIP 下仍 6/6。

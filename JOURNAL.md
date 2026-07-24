@@ -1,6 +1,14 @@
 # Project Journal
 
 
+
+### 2026-07-25 — 「点了 Studio 弹项目面板、不选直接关、还是 Studio」根修:Studio⟺项目不变式两洞闭合(epic `pt_17c32572bf1a49d1`,2 commit:主修 `8c2970d3` 3 文件 +287/-5 + 顺手陈旧基线 `a913a9c4` 1 文件 +16/-5;新套件 11 测全绿含双 NEUTER,相邻 4 套件全绿,collect **8467** 0 err)。
+- **现象与根因(两洞合流,缺一不可):** 点击链路本身是对的——`setChatMode('studio')` 无项目只弹面板、不动档位(test_frontend_studio_reopens_project 第一条早已钉死),所以「关面板后还是 Studio」说明它**从未退出** Studio:①`onProjectCleared`/`onProjectAttached` 只重画不落盘,清项目后 `conv.chatMode` 残留 `'studio'` + 空 `projectPath`(毒化);②`_restoreConvToolState` 盲信存储档位(`conv.chatMode || derive`),刷新/切会话把毒化状态复活成 Studio。owner 当前会话即被此链毒化。
+- **修复(最小两刀):** ①挂载/清除时档位变化立即 `_saveConvToolState()` 落盘(堵毒化源头,attach/clear 对称);②恢复路径钳制——`_storedMode === 'studio' && !conv.projectPath` ⇒ 回落 `'chat'`(自愈已毒化会话;恢复仍保持 paint-only,钳制不碰合法 studio/legacy air/pro)。`main_send_pipeline.js` 等处的同类 `_saveConvToolState` 钩为 sibling WIP,未动。
+- **测试:** 新 `tests/test_frontend_studio_requires_project.py` 11 测(node 驱动真实 `_restoreConvToolState`/`_deriveChatModeFromFlags`/`onProjectAttached`/`onProjectCleared` 切片):毒化钳回 / 合法 studio 存活 / legacy 无 chatMode 派生 / air 非 studio 档不误伤 / 挂载·清除落盘计数 / 静态钉;**双 NEUTER**(剥钳制→毒化 conv 复活成 Studio=原 bug 回归;剥落盘钩→saved=0=毒化源头重现)。
+- **顺手闭环的预存在红(独立 commit,stash 隔离证伪非我引入):** `test_frontend_project_auto_enable_modes.py::test_mpapplyfolders_calls_auto_enable` 是陈旧基线——断言的 `_autoEnableProjectModes()` 接线早被 owner(2026-07-19)刻意拆除(project.js 注释明示「tier 与执行策略解耦」),反转为 `test_mpapplyfolders_retires_auto_enable` 钉现行契约(apply 路径禁 auto-enable + 必须经 onProjectAttached 晋升),套件 6/6 回绿。
+- **邻近红(非我引入,stash 复证,留属主):** test_frontend_toolbar_declutter ×2(node harness 崩溃 rc=1)、test_frontend_boot_early_active_paint ×2,HEAD 原态同样红。
+- **生效边界(诚实):** 纯前端(main.js/main_toolbar_ui.js 在 `_BUNDLE_FILES`)——需**服务端重启重建 bundle + 浏览器硬刷新**;已被毒化的会话在新代码下刷新即自愈(钳制),或立刻点一次「Chat」手动落盘治愈。
 ### 2026-07-24(续26) — pt_18ebee9c9ea64cf3 收口:swarm 工作气泡 dispatch 重试 i18n 全链路闭合(brain 自主派发,commit 见下,9 文件,新测 26 面全绿含 NEUTER,相邻 110/110,collect **8418** 0 err)。
 - **链路审计(先画清三张图再动刀):** ①endpoint/orchestration 工作气泡 = agent `_on_dispatch_retry` → `_emit_stream_phase` → engine `_stream_sink`(`**meta` 透传,orchestration_engine.py:1644)→ step_phase → EndpointEventAdapter → wire phase → streaming_ui HUD(328ef338 已会解析);②纯 swarm 模式 stream_sink=None 相位事件根本不出门;③swarm 面板卡片相位 pill = master `_on_retry_callback` 的 swarm_agent_phase → 前端只消费 status/phase → `phaseMap` 无 `retrying` → 裸英文 token 落 pill。
 - **SSOT 抽取:** 新 `lib/llm_dispatch/retry_i18n.py`(GATEWAY_PREFIXES / display_model_name / RETRY_REASON_KEYS / `retry_phase_fields`)——dispatcher 自家包拥有 reason token 映射,两个 emitter 永不漂移;manager/_stream.py 删本地三件套改 import(私有名别名保留,manager facade 再导出零破坏,15 测重构后仍全绿)。

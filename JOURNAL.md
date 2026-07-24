@@ -1,5 +1,13 @@
 # Project Journal
 
+### 2026-07-25 — 错误气泡「中英双语同屏」根修:typed error envelope 按 UI 语言渲染(commit `4efa1d76`,7 文件 +658/-9,新套件 18 面全绿含 NEUTER + parity 守卫,相邻 envelope/conn_recover/bundle 等 36+10 绿,collect **8467** 0 err)。owner 两问:①kimi-k3 为什么报 Endpoint unreachable;②为什么中英一起显示。
+- **①根因(日志实证,与模型无关):** 2026-07-25 00:26–00:58 第三波网关劣化(同 docs/GATEWAY_INCIDENT_2026-07-24.md 家族):aigc.sankuai.com **请求体上传途中写超时** `('Connection aborted.', TimeoutError('The write operation timed out'))`,R22–R70 高轮次大 prompt 尤甚;两个 sankuai_key **同时**同症(2×23=46 次,00:26–00:58 窗口 ~68 次)——故障在网关/代理层,非 kimi-k3 服务本身(单 key 故障不会双 key 对称同秒同症)。客户端按设计熔断 30s+排除 slot 对;仅 2 个 endpoint 任务(00:52/00:57,高轮次)撞穿全部自愈撞上"无 fallback 模型"终败。00:58 后自愈,07:25 发 2 张图调用成功。改进项=给"全部端点不可达"也提供 fallback(产品取舍,开票层面非 bug)。
+- **②双语根因:** `lib/error_envelope/_build.py` 把 zh+en **同时烘进** `message`/`hint` 字符串,`renderErrorEnvelope` 原样直渲——任何 UI 语言都看到双语墙。这是历史 wire 契约(headless 客户端依赖),不能像普通文案一样直接换 t()。
+- **修法(镜像 stream-phase HUD 先例,wire 零破坏):** envelope 新增可选 `titleKey`/`hintKey`(`err.k.<kind>.title`/`.hint`);legacy 双语 `message`/`hint` **逐字节保留**(headless + 旧 bundle + 已落库的旧 envelope 回退渲染);自定义 message/hint 覆盖时**不发射**键(除非显式配对——`_call.py` 的 invalid_image 两变体各挂 `hintMany`/`hintSize`)。前端 chip/title/hint 三处按**当前 UI 语言**解析;`_envResolveI18n` 直读 `_i18n` 表,undefined-aware 区分「空串条目」(aborted 无 hint,`t()` 的 `||` 链会 key-echo,已抓真 bug)与「未知键」(→legacy 回退,表格漂移/新后端+旧前端安全)。chip.en 与旧 `ERROR_KIND_LABELS` 逐字节一致(en UI 徽章零变化)。
+- **测试:** 新 `tests/test_error_envelope_i18n.py` 18 面——后端发射(21 kind 键齐/legacy 逐字节/覆盖抑制键/unknown kind 降级/generic from_exception);**parity 守卫**(i18n 表 zh+en 与 `_constants.py _TITLES` 逐字节一致 + chip.en==ERROR_KIND_LABELS,漂移即红);node harness 驱真实 i18n.js+error_envelope.js(zh 纯中文/en 纯英文/无章 legacy 双语原样/未知键回退/aborted 无 hint 块/message helper 本地化);**NEUTER**(剥解析缝→双语回漏=因果证明)。既有 `test_frontend_conn_error_recover.py` harness 随行提取 3 个新 helper(函数提取式 harness 惯例),断言零改 7/7 回绿。
+- **邻近红(全部证伪非我引入,留属主):** bundle_manifest_parity(model_caps 缺 script 标签,HEAD 原态即红)、skills_prefetch(_inject.py sibling WIP)、flat_render(translation_indicator/translation_model sibling WIP)。
+- **生效边界(诚实):** 后端 `_build.py` 随服务重启生效;前端(i18n.js/error_envelope.js 在 `_BUNDLE_FILES`)需**重启重建 bundle + 硬刷新**;已落库的旧错误消息(无键)继续按双语渲染(正确回退语义,不修历史)。owner 报告的卡片是重启前旧代码渲染的现行 wire,重启后新错误即按 UI 语言单语显示。
+
 
 
 ### 2026-07-25 — 「点了 Studio 弹项目面板、不选直接关、还是 Studio」根修:Studio⟺项目不变式两洞闭合(epic `pt_17c32572bf1a49d1`,2 commit:主修 `8c2970d3` 3 文件 +287/-5 + 顺手陈旧基线 `a913a9c4` 1 文件 +16/-5;新套件 11 测全绿含双 NEUTER,相邻 4 套件全绿,collect **8467** 0 err)。

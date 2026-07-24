@@ -26,6 +26,7 @@
     { "model_id": "MiniMax-M3",              "capabilities": ["text", "vision", "thinking", "cheap"],                 "rpm": 60,  "cost": 0.002 },
     { "model_id": "MiniMax-M2.7",            "capabilities": ["text", "cheap"],                                       "rpm": 90,  "cost": 0.001 },
     { "model_id": "MiniMax-M2.5",            "capabilities": ["text", "thinking", "cheap"],                            "rpm": 60,  "cost": 0.001 },
+    { "model_id": "kimi-k3",                 "capabilities": ["text", "vision", "video", "thinking", "cheap"],           "rpm": 30,  "cost": 0.008 },
     { "model_id": "gpt-4.1-mini",            "capabilities": ["text", "vision", "cheap"],                    "rpm": 60,  "cost": 0.001 },
     { "model_id": "glm-5.2",                "capabilities": ["text", "thinking"],              "rpm": 60,  "cost": 0.004 },
     { "model_id": "glm-5.1",                "aliases": ["glm-5.1-huawei"], "capabilities": ["text", "thinking"],              "rpm": 60,  "cost": 0.004 },

@@ -150,8 +150,7 @@ _BUILTIN_PROVIDER_TEMPLATES = [
      'base_url': 'https://api.openai.com/v1',
      'models': [
          {'model_id': 'gpt-5.6',      'capabilities': ['text', 'vision', 'thinking']},
-         {'model_id': 'gpt-5.6-mini', 'capabilities': ['text', 'vision', 'thinking', 'cheap']},
-         {'model_id': 'gpt-5.6-nano', 'capabilities': ['text', 'vision', 'cheap']},
+         {'model_id': 'gpt-5.6-pro',  'capabilities': ['text', 'vision', 'thinking']},
          {'model_id': 'gpt-5.4',      'capabilities': ['text', 'vision', 'thinking']},
          {'model_id': 'o3',           'capabilities': ['text', 'vision', 'thinking']},
          {'model_id': 'o4-mini',      'capabilities': ['text', 'vision', 'thinking', 'cheap']},
@@ -188,7 +187,7 @@ _BUILTIN_PROVIDER_TEMPLATES = [
      'name': 'Moonshot (Kimi)',
      'base_url': 'https://api.moonshot.ai/v1',
      'models': [
-         {'model_id': 'kimi-k3',          'capabilities': ['text', 'thinking', 'cheap']},
+         {'model_id': 'kimi-k3',          'capabilities': ['text', 'vision', 'video', 'thinking', 'cheap']},
          {'model_id': 'kimi-k2.6',        'capabilities': ['text', 'vision', 'thinking', 'cheap']},
          {'model_id': 'kimi-k2-thinking', 'capabilities': ['text', 'thinking', 'cheap']},
      ]},

@@ -227,7 +227,7 @@ class TestBuildBody:
 
     def test_gpt5_default_effort_medium(self):
         from lib.llm import build_body
-        body = build_body('gpt-5.6-mini', self.DUMMY_MSGS, max_tokens=4096,
+        body = build_body('gpt-5.6-pro', self.DUMMY_MSGS, max_tokens=4096,
                           thinking_enabled=True, stream=False)
         assert body.get('reasoning_effort') == 'medium'
 
@@ -489,6 +489,34 @@ class TestThinkingFormatDetection:
         assert _detect_thinking_format(
             [{'model_id': 'us.anthropic.fable-5-v1:0'}],
             'bedrock') == 'thinking_type'
+
+    def test_kimi_k3_discovery_is_multimodal_thinking(self):
+        """Auto-discovery must recognise Kimi K3 as natively multimodal
+        (text + vision + VIDEO) AND always-on thinking.
+
+        Regression guard for the discovery gap that shipped K3 as a plain
+        text-only model — the K2.5/K2.6 vision regex left K3 out, and
+        thinking wasn't inferable from the name (K3 hides its "always-on
+        thinking" behind reasoning_effort). Both are now name-hinted so a
+        freshly-probed K3 provider registers with the right caps without
+        needing the DEFAULT_SLOT_CONFIGS fallback.
+
+        Reference: platform.kimi.com/docs/guide/use-kimi-vision-model +
+        platform.kimi.ai/docs/guide/kimi-k3-quickstart ('native visual
+        understanding … always runs in thinking mode')."""
+        from lib.llm_dispatch.discovery import _infer_capabilities
+        caps = _infer_capabilities('kimi-k3')
+        assert 'text' in caps
+        assert 'vision' in caps, f"K3 vision missing: {caps}"
+        assert 'video' in caps, f"K3 video missing: {caps}"
+        assert 'thinking' in caps, f"K3 thinking missing: {caps}"
+        # K2.5/K2.6 vision baseline stays intact (parity).
+        assert 'vision' in _infer_capabilities('kimi-k2.6')
+        assert 'vision' in _infer_capabilities('kimi-k2.5')
+        # 'video' is opt-in — only kimi-k3 currently claims it via name hint.
+        assert 'video' not in _infer_capabilities('kimi-k2.6')
+        assert 'video' not in _infer_capabilities('claude-opus-4-8')
+        assert 'video' not in _infer_capabilities('gpt-5.6')
 
 
 # ═══════════════════════════════════════════════════════════

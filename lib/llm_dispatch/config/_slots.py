@@ -61,21 +61,26 @@ DEFAULT_SLOT_CONFIGS = {
     'aws.claude-sonnet-4.6':         {'caps': {'text', 'vision', 'thinking'},      'rpm': 50,  'latency': 2000, 'cost': 0.015},
     'vertex.claude-sonnet-4.6':      {'caps': {'text', 'vision', 'thinking'},      'rpm': 50,  'latency': 2000, 'cost': 0.015},
 
-    # ── OpenAI (GPT-5.6 family — May 2026; adds the 'ultra' reasoning tier) ──
+    # ── OpenAI (GPT-5.6 family — May 2026) ──
+    # GPT-5.6 dropped the mini/nano SKUs — the generation ships as a two-tier
+    # flagship/pro lineup only. Adds the 'ultra' reasoning-effort tier.
     'gpt-5.6':                       {'caps': {'text', 'vision', 'thinking'},      'rpm': 30,  'latency': 3000, 'cost': 0.015},
     'gpt-5.6-pro':                   {'caps': {'text', 'vision', 'thinking'},      'rpm': 10,  'latency': 10000,'cost': 0.180},
-    'gpt-5.6-mini':                  {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 60,  'latency': 2000, 'cost': 0.005},
-    'gpt-5.6-nano':                  {'caps': {'text', 'vision', 'cheap'},         'rpm': 200, 'latency': 1000, 'cost': 0.001},
-    # ── OpenAI (GPT-5.4 family — March 2026) ──
+    # NOTE: There is NO GPT-5.5. OpenAI's actual release cadence went
+    # 5.2 (Nov 2025) → 5.4 (Mar 2026) → 5.6 (May 2026), skipping the odd
+    # minor for the same reason iPhone 9 / Windows 9 were skipped: the
+    # 5.5 number was reserved for an internal branch that never shipped
+    # externally. Do NOT add a 'gpt-5.5' entry here.
+    # ── OpenAI (GPT-5.4 family — March 2026; kept as the cost tier) ──
     'gpt-5.4':                       {'caps': {'text', 'vision', 'thinking'},      'rpm': 30,  'latency': 3000, 'cost': 0.015},
     'gpt-5.4-pro':                   {'caps': {'text', 'vision', 'thinking'},      'rpm': 10,  'latency': 10000,'cost': 0.180},
     'gpt-5.4-mini':                  {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 60,  'latency': 2000, 'cost': 0.005},
     'gpt-5.4-nano':                  {'caps': {'text', 'vision', 'cheap'},         'rpm': 200, 'latency': 1000, 'cost': 0.001},
-    # ── OpenAI (GPT-5 family) ──
-    'gpt-5':                         {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 30,  'latency': 3000, 'cost': 0.010},
-    'gpt-5.2':                       {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 30,  'latency': 3000, 'cost': 0.014},
-    'gpt-5-mini':                    {'caps': {'text', 'vision', 'cheap'},         'rpm': 60,  'latency': 2000, 'cost': 0.002},
-    'gpt-5-nano':                    {'caps': {'text', 'cheap'},                   'rpm': 200, 'latency': 1000, 'cost': 0.001},
+    # NOTE: The original GPT-5 family (gpt-5, gpt-5.2, gpt-5-mini, gpt-5-nano)
+    # has been retired — 5.4 and 5.6 fully cover its capabilities and the
+    # OpenAI gateway no longer routes to them. Codex-branded snapshots
+    # (gpt-5.2-codex / gpt-5.1-codex-mini) remain in the Codex block below
+    # since Codex is a separate lineup on its own cadence.
     # ── OpenAI (o-series reasoning) ──
     'o3':                            {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 30,  'latency': 5000, 'cost': 0.010},
     'o4-mini':                       {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 30,  'latency': 3000, 'cost': 0.005},
@@ -185,7 +190,9 @@ DEFAULT_SLOT_CONFIGS = {
 
     # ── GLM Turbo / Kimi older / MiniMax older — TokenHub catalog ──
     'glm-5-turbo':                   {'caps': {'text', 'cheap'},                   'rpm': 60,  'latency': 2000, 'cost': 0.002},
-    'kimi-k3':                       {'caps': {'text', 'thinking', 'cheap'},       'rpm': 60,  'latency': 3000, 'cost': 0.0083},
+    # kimi-k3 (2026-07-17): native vision + native VIDEO understanding,
+    # always-on thinking mode. See platform.kimi.com/docs/guide/use-kimi-vision-model.
+    'kimi-k3':                       {'caps': {'text', 'vision', 'video', 'thinking', 'cheap'}, 'rpm': 60,  'latency': 3000, 'cost': 0.0083},
     'kimi-k2.6':                     {'caps': {'text', 'cheap'},                   'rpm': 30,  'latency': 3000, 'cost': 0.003},
     'kimi-k2.5':                     {'caps': {'text', 'cheap'},                   'rpm': 30,  'latency': 3000, 'cost': 0.002},
     'minimax-m2.5':                  {'caps': {'text', 'cheap'},                   'rpm': 60,  'latency': 2000, 'cost': 0.001},

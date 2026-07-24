@@ -60,7 +60,10 @@ const _BRAND_PATTERNS = [
   // Bedrock must come before claude — Bedrock endpoints host Claude models
   // but the provider identity is AWS/Bedrock.
   [/bedrock|bedrock-runtime|amazonaws\.com\/openai|^us\.anthropic\.|^us\.amazon\.|amazon\.titan|amazon\.nova/i, 'bedrock'],
-  [/claude|anthropic|opus|sonnet|haiku/i, 'claude'],
+  // 'fable' = Anthropic Fable (Fable 5+): same Messages-API family as Claude,
+  // so it must render with the Claude brand logo + amber color (backend already
+  // treats it as Claude family — see lib/model_info/_family.is_claude).
+  [/claude|anthropic|opus|sonnet|haiku|fable/i, 'claude'],
   [/gpt|openai|o[134]-|chatgpt|dall/i,   'openai'],
   [/gemini|gemma|palm|bard/i,             'gemini'],
   [/qwen|tongyi|qwq/i,                    'qwen'],

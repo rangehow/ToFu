@@ -90,6 +90,9 @@ CAPABILITY_SEMANTICS: dict[str, dict[str, object]] = {
     'vision': {
         'role': 'multimodal-input', 'endpoint': 'chat_completions',
         'in_chat_picker': True, 'is_dispatch_chat': True},
+    'video': {
+        'role': 'multimodal-input', 'endpoint': 'chat_completions',
+        'in_chat_picker': True, 'is_dispatch_chat': True},
     'thinking': {
         'role': 'chat', 'endpoint': 'chat_completions',
         'in_chat_picker': True, 'is_dispatch_chat': True},

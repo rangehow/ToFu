@@ -50,7 +50,7 @@ const _PROVIDER_TEMPLATES = [
     base_url: 'https://api.moonshot.ai/v1',
     balance_url: '',
     models: [
-      { model_id: 'kimi-k3',                  capabilities: ['text', 'thinking', 'cheap'],            rpm: 60,  cost: 0.0083 },
+      { model_id: 'kimi-k3',                  capabilities: ['text', 'vision', 'video', 'thinking', 'cheap'], rpm: 60,  cost: 0.0083 },
       { model_id: 'kimi-k2.6',                capabilities: ['text', 'vision', 'thinking', 'cheap'],  rpm: 60,  cost: 0.0017 },
       { model_id: 'kimi-k2.5',                capabilities: ['text', 'vision', 'thinking', 'cheap'],  rpm: 60,  cost: 0.003 },
       { model_id: 'kimi-k2-0905-preview',     capabilities: ['text', 'thinking', 'cheap'],            rpm: 60,  cost: 0.003 },
@@ -82,8 +82,7 @@ const _PROVIDER_TEMPLATES = [
     models: [
       { model_id: 'gpt-5.6',       capabilities: ['text', 'vision', 'thinking'],   rpm: 30,  cost: 0.015 },
       { model_id: 'gpt-5.6-pro',   capabilities: ['text', 'vision', 'thinking'],   rpm: 10,  cost: 0.180 },
-      { model_id: 'gpt-5.6-mini',  capabilities: ['text', 'vision', 'thinking', 'cheap'],   rpm: 60,  cost: 0.005 },
-      { model_id: 'gpt-5.6-nano',  capabilities: ['text', 'vision', 'cheap'],      rpm: 200, cost: 0.001 },
+      // NOTE: GPT-5.6 has no mini/nano SKU — two-tier lineup this generation.
       { model_id: 'gpt-5.4',       capabilities: ['text', 'vision', 'thinking'],   rpm: 30,  cost: 0.015 },
       { model_id: 'gpt-5.4-mini',  capabilities: ['text', 'vision', 'thinking', 'cheap'],   rpm: 60,  cost: 0.005 },
       { model_id: 'o3',            capabilities: ['text', 'vision', 'thinking', 'cheap'],   rpm: 30,  cost: 0.010 },
@@ -222,8 +221,8 @@ const _PROVIDER_TEMPLATES = [
       { model_id: 'glm-4.7',                capabilities: ['cheap', 'text'],                   rpm: 60,   cost: 0.0011 },
       { model_id: 'glm-5',                  capabilities: ['text'],                   rpm: 60,   cost: 0.0015 },
       { model_id: 'gui-plus',               capabilities: ['text', 'cheap'],                            rpm: 60,   cost: 0.005 },
-      { model_id: 'kimi-k3',                capabilities: ['cheap', 'text', 'thinking'],       rpm: 60,   cost: 0.0083 },
-      { model_id: 'kimi/kimi-k3',           capabilities: ['cheap', 'text', 'thinking'],       rpm: 60,   cost: 0.0083 },
+      { model_id: 'kimi-k3',                capabilities: ['cheap', 'text', 'vision', 'video', 'thinking'], rpm: 60,   cost: 0.0083 },
+      { model_id: 'kimi/kimi-k3',           capabilities: ['cheap', 'text', 'vision', 'video', 'thinking'], rpm: 60,   cost: 0.0083 },
       { model_id: 'kimi-k2-thinking',       capabilities: ['cheap', 'text', 'thinking'],       rpm: 60,   cost: 0.0012 },
       { model_id: 'kimi-k2.5',              capabilities: ['cheap', 'text'],                   rpm: 60,   cost: 0.0011 },
       { model_id: 'kimi/kimi-k2.5',         capabilities: ['cheap', 'text'],                   rpm: 60,   cost: 0.0011 },
@@ -492,7 +491,7 @@ const _PROVIDER_TEMPLATES = [
       { model_id: 'qwen3-coder-480b-a35b-instruct',  capabilities: ['text', 'cheap'],                        rpm: 60,   cost: 0.001 },
       // ── Other hosted models ──
       { model_id: 'glm-5.1',                          capabilities: ['text', 'thinking'],            rpm: 60,   cost: 0.003 },
-      { model_id: 'kimi-k3',                          capabilities: ['text', 'thinking', 'cheap'],            rpm: 60,   cost: 0.0083 },
+      { model_id: 'kimi-k3',                          capabilities: ['text', 'vision', 'video', 'thinking', 'cheap'], rpm: 60,   cost: 0.0083 },
       { model_id: 'kimi-k2.5',                        capabilities: ['text', 'thinking', 'cheap'],            rpm: 60,   cost: 0.002 },
       { model_id: 'minimax-m2.5',                     capabilities: ['text', 'thinking', 'cheap'],            rpm: 60,   cost: 0.002 },
       // ── Embeddings ──

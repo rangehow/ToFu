@@ -316,6 +316,56 @@ class PushClient:
 hub = PushHub()
 
 
+def build_conv_state_snapshot(user_id: int = 1) -> dict:
+    """Build the ``conv_state_snapshot`` frame for a client that just
+    subscribed to ``notify:*``.
+
+    Content sourced from ONE call to
+    ``lib.tasks_pkg.manager._registry.snapshot_running_by_conv`` — the SSOT
+    for "which convs have live tasks" (carrier / aborted / empty-convId
+    filter shared with the notify_conv_changed seam so client sidebar and
+    connect-snapshot cannot disagree by construction).
+
+    Each conv's entry independently carries a fresh
+    ``[monotonic_ns, replica_id]`` rev tuple (owner mandate: per-conv rev,
+    NOT a single frame-wide rev — a stale ``conv_changed`` for one conv
+    must not be able to override the snapshot's state for OTHER convs).
+
+    Best-effort: a registry snapshot failure returns an empty ``convs``
+    dict — the client still receives the frame and treats it as "no live
+    tasks", which is the safe default (a false negative extinguishes a
+    busy dot; a real notify frame within seconds re-lights it).
+    """
+    try:
+        # Late import — the manager package is not always importable at
+        # push module load time (e.g. tests that only exercise the hub).
+        from lib.tasks_pkg.manager._registry import snapshot_running_by_conv
+        raw = snapshot_running_by_conv()
+    except Exception as _e:
+        logger.debug('[Push] snapshot_running_by_conv failed (%s); '
+                     'sending empty snapshot', _e)
+        raw = {}
+    try:
+        from lib.conversations.meta_cache import _running_task_ids_rev
+    except Exception as _ie:
+        logger.debug('[Push] _running_task_ids_rev import failed (%s); '
+                     'sending snapshot without per-conv rev', _ie)
+        _running_task_ids_rev = lambda: [0, '']  # noqa: E731
+    convs: dict[str, dict] = {}
+    for conv_id, tids in raw.items():
+        convs[conv_id] = {
+            'runningTaskIds': list(tids),
+            'runningTaskIdsRev': _running_task_ids_rev(),
+        }
+    return {
+        'channel': 'notify',
+        'taskId': '*',
+        'type': 'conv_state_snapshot',
+        'userId': user_id,
+        'convs': convs,
+    }
+
+
 def push_event(channel: str, task_id: str, payload: dict):
     """Convenience function — push an event via the global hub."""
     hub.push_event(channel, task_id, payload)

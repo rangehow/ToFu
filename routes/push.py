@@ -180,6 +180,23 @@ def _handle_client_frame(client: PushClient, raw) -> None:
     if action == 'subscribe' and channel:
         hub.subscribe(client, channel, task_id)
         logger.debug('[Push] Subscribe: channel=%s taskId=%s', channel, task_id[:8])
+        # ── pt_conv_state_ssot P1.5: server-authoritative connect snapshot ──
+        # When a client subscribes to the notify wildcard (the sidebar's
+        # subscription) send it a one-shot snapshot of the current running-
+        # task state so it has authoritative busy info without waiting for
+        # the next notify_conv_changed frame or the 25/90s poll fallback.
+        # Delivered DIRECTLY to this client's outbound queue — never via
+        # hub.push_event, which would fan out to every subscriber (leaking
+        # snapshots into unrelated tabs/users) and cross-replica bus.
+        if channel == 'notify' and task_id == '*':
+            try:
+                from lib.agent_core.push import build_conv_state_snapshot
+                # user_id resolution is a P4 concern (multi-tenant scoping
+                # of the snapshot); for now the seam accepts an override so
+                # tests can pin it, and the route passes the default.
+                client.enqueue(build_conv_state_snapshot(user_id=1))
+            except Exception as e:
+                logger.debug('[Push] connect snapshot enqueue failed: %s', e)
     elif action == 'unsubscribe' and channel:
         hub.unsubscribe(client, channel, task_id)
     elif action == 'abort' and channel == 'chat' and task_id != '*':

@@ -1,6 +1,22 @@
 # Project Journal
 
 
+### 2026-07-24(续4) — pt_conv_state_ssot P1.5 落地(甲):PushClient connect snapshot 帧 —— `subscribe(notify,'*')` 成功后 enqueue `conv_state_snapshot` 帧,内容全量来自 `snapshot_running_by_conv()`,每 conv 独立 rev,直接投该 client 队列不广播(commit,3 文件 +~120,新测 8/8 绿含 NEUTER 证红 + 相邻 push 8/8 无回归 + collect 8154 0 err)。**owner 拒收 P1 半成品,要求把可见 bug 一路推到 P2 才停 —— P1.5 是通往 P2 的服务端交付。**
+- **owner 拍板 P1.5=甲(独立 commit):** payload 结构 `{channel:'notify', taskId:'*', type:'conv_state_snapshot', convs:{convId:{runningTaskIds, runningTaskIdsRev}}, userId}`;触发条件只在 `channel=='notify' and taskId=='*'`;内容来自 registry SSOT 一次调用不做增量;直接 `client.enqueue` 不走 `hub.push_event`(否则广播到别 client / 走跨副本 bus 会污染其他 user)。
+- **本轮改动(3 文件 +~120):**
+  - `lib/agent_core/push.py:+50` 新增 `build_conv_state_snapshot(user_id) -> dict` —— 一次 `snapshot_running_by_conv()` 调用生成 payload;每 conv 独立 `[monotonic_ns, replica_id]` rev 元组(**没有**帧级 shared rev —— 一个 stale `conv_changed(conv-A)` 帧不能盖过 snapshot 里其他 conv 的状态)。fail-open:snapshot 失败返回空 convs;`_running_task_ids_rev` import 失败 fallback [0,'']。
+  - `routes/push.py:+17` `_handle_client_frame` 里 `subscribe` 分支的 `hub.subscribe(...)` 之后加**极窄闸门** `if channel == 'notify' and task_id == '*':`,进闸就 `client.enqueue(build_conv_state_snapshot(user_id=1))`。user_id=1 是 P4 的多租户接口占位,测试用 `stub_registry` 直调 builder 绕开该常量。
+  - `tests/test_conv_state_ssot_snapshot.py:+295` 8 测(6 owner 硬要求 + 2 bonus):①subscribe(notify,'*') → 恰一帧 conv_state_snapshot 结构 ②per-conv 独立 rev 非帧共享 ③空 registry 仍发帧(客户端要能区分"没收到 snapshot" vs "收到 snapshot=全空")④filter 完全委托 `snapshot_running_by_conv`(route 不允许再造过滤)⑤wrong-channel(chat/paper/translate)不触发 ⑥specific-taskId(非 `*`)不触发 ⑦第二个 client 不接收(用 `client.enqueue` 直投)⑧`build_conv_state_snapshot()` 独立 payload 契约(P2 复用的 seam)。
+- **NEUTER 探针证红:** 把 route 闸门改成 `if True:` → 面 5(wrong-channel)+ 面 6(specific-taskId)双双翻红,证守卫锁的是"只 notify+`*` 触发",不是恒真断言。还原 → 8/8 复绿。
+- **纪律:** 
+  - 相邻 push 生态套件 `test_chat_manager_migration::test_push_channel_integration`(1)+ `test_conv_get_readonly_push`(3)+ `test_event_persist_before_push`(4) = **8/8 全绿**,payload/hub subscribe 契约无回归。
+  - 4 SSOT 套件汇总 35/35 全绿(P1.5 新 8 + P1 payload 11 + notify 老守 7 + cross-device-send 9)。
+  - `--collect-only` 8154 tests 0 error(相比 P1 后 8146,+8 新测 collectable)。
+- **git 纪律(汲取上一轮教训):** worktree 上一轮 sibling WIP(`meta_cache.py` 里 `total_count`/`get_cached_total`)仍在。这一轮 P1.5 只碰 push.py / agent_core/push.py / 新测试 / JOURNAL —— 与 sibling WIP 天然不重叠,但仍**先 backup+净化 worktree、再无 pathspec 从 index 提交**:①`git reset -q HEAD .` eject 一切 → ②备份 meta_cache.py 带 WIP 版到 /tmp → ③从 HEAD 恢复 meta_cache.py 到纯净态 → ④只 `git add -- <本轮 4 文件>` → ⑤`git diff --cached --stat` 复核精确等于我要提交的 → ⑥`git commit -m ...`(**NO pathspec**)→ ⑦复核 `git show HEAD --stat` 与暂存字节数完全相等 → ⑧`cp` 恢复 sibling WIP 到 worktree。
+- **可见 bug 状态:** **本 commit 仍未修**。P1 服务端 payload 就位、P1.5 connect snapshot 帧就位 —— 前端依旧不消费任何新字段。下一相 P2 才是可见修复:前端 reducer + `_optimisticActiveTaskIds` vs `_authoritativeActiveTaskIds` 字段分离 + `convIsBusy` 读并集。owner 明示 P2 完成后**才**手动开两 tab 复现验收。
+
+
+
 ### 2026-07-24(续3) — pt_conv_state_ssot P1 落地:server-authoritative conv-state 频道第 1 相 —— `notify_conv_changed` payload 扩 `runningTaskIds` + `runningTaskIdsRev([ns, replica_id])` + registry SSOT 读接口(commit,3 文件 +~110/-2,新测 11/11 绿含 NEUTER 证红 + 相邻 16/16 无回归 + collect 8146 0 err)。**这是 owner 拍板的长期架构方案 P1 相,不是过渡热修,未来的 sibling 请勿当作可回退的 quick win 覆盖。**
 - **可见 bug + 病根:** owner 报手机看到 3 个会话在跑、电脑侧栏少几个;点开显示错乱的会话看到"半截 finish 标签",F5 恢复正常。根因链读代码钉死(不猜):①`notify_conv_changed` payload 只载 `{type, convId, rev, userId}`,不载"谁在跑" ②`loadConversationsFromServer` 明文规则 "never touch activeTaskId" 保 conv 已存在时 `activeTaskId=null` ③电脑侧 `convIsBusy(conv)` 因 `activeStreams.has(conv.id)==false && !conv.activeTaskId==false` 判 idle ④点开时 `_reconnectServerTaskIfIdle` 因 `activeTaskId=null` 短路,不重连 SSE。**病根不是"缺一条分支",是"谁在跑"有 4 个不一致的真相源(`activeStreams` / `conv.activeTaskId` / `settings.activeTaskId` / `/chat/active`)加 8 条散落的调解分支。**
 - **长期方案(owner 拍板 P1→P6,一次到位不做过渡热修,epic pt_e1c4693341b24730):**

@@ -1,6 +1,31 @@
 # Project Journal
 
 
+### 2026-07-24(续5) — pt_conv_state_ssot P2 落地:前端 reducer + 字段分离 + convIsBusy 读并集 + 3 处消费点接线 —— **可见 bug 已在客户端修复,F5-less 可复现**(commit,7 文件 +~350,新测 JSDOM 24 checks 绿含 NEUTER 证红 + 相邻 notify-push 39 all-face + collect 8155 0 err)。owner 明示 P2 完成后**才**手动开两 tab 复现验收。
+- **owner 拒收 P1 半成品后的三连击闭环:** P1 服务端 payload(HEAD 33d55537)+ P1.5 connect snapshot 帧(HEAD 3954bd52)+ P2 前端消费(本 commit)。至此,手机 vs 电脑侧栏「3 个 generating vs 少几个 + 点开半截 finish 标签」的可见 bug **无需 F5** 应自愈:snapshot 首帧到达 → `applyConvStateSnapshot` 把 `_authoritativeActiveTaskIds` 写入 → `convIsBusy` 读并集立即点亮侧栏 → 点开会话 `_reconnectServerTaskIfIdle` 从权威 Set 取 tid 重连 SSE → 打半截 finish 标签的静态快照被替换成 live 流。
+- **架构决策(owner 硬约束②照单执行):字段分离,不合并:**
+  - `conv.activeTaskId` = **本地乐观**单值,~20 个 sender/regen/edit/continue/reconnect 写点**零改动**(反映"这个 tab 自己发起的 send")。
+  - `conv._authoritativeActiveTaskIds` = **服务端权威** Set,**只由** reducer 写(`applyRunningTaskIdsFrame` / `applyConvStateSnapshot`),不参与 saveConversations、不写 settings、不写 IDB cache。
+  - `conv._authoritativeActiveTaskIdsRev` = `[ns, replica_id]` 高水位,严格 lex 单调(先比 ns,ns 相等 tiebreak replica_id 字符串比较)。
+  - **`convIsBusy` 读并集**:`activeStreams ∨ activeTaskId ∨ (_authoritativeActiveTaskIds.size > 0) ∨ prefix scan`。owner 明示"never merge into one field"—— reducer 写权威一路、乐观由 sender 写入另一路,两 Set 在读侧才并集。
+- **本轮改动(7 文件 +~350):**
+  - `static/js/core/conv_state_reducer.js:+218` 新模块。4 个纯函数:`applyRunningTaskIdsFrame(convs, {convId,runningTaskIds,rev,userId})`(单-conv,rev 严格 lex 单调)、`applyConvStateSnapshot(convs, {convs:{},userId})`(**snapshot 语义:PRESENT 更新,ABSENT 清空**——server 不再有 conv-X running 时,客户端立即熄灯,清空时用 `Date.now()*1e6` 合成 rev 保证 stale notify 不能复活)、`computeConvBusy(conv, activeStreamsRef)`(注入式无副作用)、`pickAuthoritativeTaskIdForReconnect(conv)`(local 优先,fallback Set)。docstring 长写明与 owner 硬约束的逐条对应。
+  - `static/js/ui/conversation_list.js:+15/-1` `convIsBusy` 委托 `computeConvBusy`,保留 fallback 分支应对退化 load 顺序。
+  - `static/js/main/main_conv_lifecycle.js:+12/-4` `_reconnectServerTaskIfIdle` 改用 `pickAuthoritativeTaskIdForReconnect`——**这就是修好可见 bug 的最后一米**:PC 侧 `conv.activeTaskId=null`(loadConversationsFromServer 明文规则 "never touch"),但权威 Set 有 phone 起的 tid,click-open 现在直接 attach SSE。
+  - `static/js/core/cross_tab_sync.js:+51` `_onConvNotifyPush` 首行加消费 `runningTaskIds` 字段(与后续 rev 门/self-echo/verify 正交,权威更新不受 body-rev 抑制)+ 每次消费后 `renderConversationList` + activeConv 时 `updateSendButton`;`_wireConvSyncPush` 加 `conv_state_snapshot` 帧分支消费。
+  - `lib/js_bundler.py:+9` `_BUNDLE_FILES` 加 `core/conv_state_reducer.js` 到 `core/async_pool.js` 之前——必须**先于** `cross_tab_sync.js` / `conversation_list.js` / `main_conv_lifecycle.js` 加载。CLAUDE.md §3.2.1 明写:未加进 bundle 的 JS **静默 no-op**(index.html 的 `<script>` 会被 bundler 剥离但不加回),这是一定不能漏的步骤。
+  - `tests/test_frontend_conv_state_reducer.py:+327` JSDOM harness,24 checks 覆盖 6 面:①convIsBusy 并集(5 sub-cases)②frame 写权威 Set + 戳 rev + 不写 settings ③older-rev 3 种降级(ns 老 / 同 ns replica lex 老)+ newer-rev 采纳 ④snapshot 更新+清空缺席 conv ⑤snapshot 零写 settings ⑥reconnect picker local 优先 + fallback Set + 双空 null ⑦多用户 gate。
+- **NEUTER 探针证红:** 拆 rev-gate(`if (!_revStrictlyGreater(...)) return;` → 注释)→ `older_rev_dropped` + `older_rev_dropped_lex_tiebreak` 双双翻红,证 rev 门锁的是"严格 lex 单调"而非平凡断言。还原 → 24/24 复绿。
+- **纪律:**
+  - 相邻 push notify 套件 `test_frontend_conv_notify_push`(1,内含 39 面 NEUTER-guarded checks)全绿 —— `_onConvNotifyPush` 消费新字段是**加法**,不干扰 rev-gate/self-echo/active-verify/reconnect-on-open 五重现有守卫。
+  - 4 SSOT + 2 前端 notify + 1 history_rewrite 合计 39/39 全绿。
+  - `--collect-only` 8155 tests 0 error(+1 新测,相比 P1.5 后 8154 基线)。
+- **可见 bug 状态:owner 可开两 tab 验收。** 生效需 server 重启重建 bundle + 浏览器硬刷新(bundle content-hash 变,cache-bust 自动)。验收剧本:①PC 上打开一个后台 conv(某个 conv 但**别**点开)②手机端在**另一 conv** 发消息生成 ③PC 侧栏这个"另一 conv"的**busy dot 应即时点亮**(不用 F5、不等 25/90s poll)④点开这个 conv,PC 应**接住 live SSE 流**(旧行为是打开看到"半截 finish 标签"、F5 后才修好)。若上述任一步未如预期,说明 P2 的接线仍有漏(P3 task lifecycle 广播、P4 主动请求 snapshot、P5 drift 探针会继续兜住)。
+- **git 纪律(第三次遵循全局 memory 教训):** 备份 sibling WIP → 净化 worktree → `git add` 精确 4 具名文件 + 3 具名新文件 → `git diff --cached --stat` 复核 → `git commit`(**无 pathspec**)→ `git show HEAD --stat` 精确等于暂存 → `cp` 还原 sibling WIP。
+- **下一相 P3(task lifecycle 4 hooks)前置检查:** P3 会调 `notify_conv_changed`(纯读 registry snapshot 投影)在 create/start/stop/reattach 4 个转折点主动发帧,不参与 baton、不写 settings.activeTaskId、不改 registry 接口。**不触碰** pt_00459503(autopilot 拆分)/ pt_8dc03017(VU 独立流)的 CAS 面。可继续自主推进,不需要停下通报。
+
+
+
 ### 2026-07-24(续4) — pt_conv_state_ssot P1.5 落地(甲):PushClient connect snapshot 帧 —— `subscribe(notify,'*')` 成功后 enqueue `conv_state_snapshot` 帧,内容全量来自 `snapshot_running_by_conv()`,每 conv 独立 rev,直接投该 client 队列不广播(commit,3 文件 +~120,新测 8/8 绿含 NEUTER 证红 + 相邻 push 8/8 无回归 + collect 8154 0 err)。**owner 拒收 P1 半成品,要求把可见 bug 一路推到 P2 才停 —— P1.5 是通往 P2 的服务端交付。**
 - **owner 拍板 P1.5=甲(独立 commit):** payload 结构 `{channel:'notify', taskId:'*', type:'conv_state_snapshot', convs:{convId:{runningTaskIds, runningTaskIdsRev}}, userId}`;触发条件只在 `channel=='notify' and taskId=='*'`;内容来自 registry SSOT 一次调用不做增量;直接 `client.enqueue` 不走 `hub.push_event`(否则广播到别 client / 走跨副本 bus 会污染其他 user)。
 - **本轮改动(3 文件 +~120):**

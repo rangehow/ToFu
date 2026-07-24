@@ -878,6 +878,21 @@ function showConvSummary(badgeEl, ev) {
  * @returns {boolean}
  */
 function convIsBusy(conv) {
+  /* pt_conv_state_ssot P2: delegate to the reducer's UNION predicate so
+   * the "supposed to be running" fact is a single computation across:
+   * - local activeStreams (this tab's live SSE)
+   * - local optimistic conv.activeTaskId (this tab's own send)
+   * - server-authoritative conv._authoritativeActiveTaskIds (sibling
+   *   device generating, or connect-snapshot at boot)
+   * - prefix scan for branch/compound task IDs.
+   * The reducer is bundled BEFORE this file (core/conv_state_reducer.js
+   * in _BUNDLE_FILES); computeConvBusy accepts activeStreams via
+   * dependency injection, keeping the fn side-effect-free. */
+  if (typeof computeConvBusy === 'function') {
+    return computeConvBusy(conv, activeStreams);
+  }
+  /* Fallback for degenerate load orders (bundle build partial). Same
+   * two-source predicate the pre-P2 code shipped. */
   if (!conv) return false;
   if (activeStreams.has(conv.id) || !!conv.activeTaskId) return true;
   const prefix = conv.id + ":";

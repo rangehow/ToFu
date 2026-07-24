@@ -396,6 +396,14 @@ _BUNDLE_FILES = [
     # reconnect "thundering herd" (all N conv reattach/probe calls firing at
     # once on wake). Leaf module (window only); load before its consumers
     # core/cross_tab_sync.js + core/health_stream_timer.js.
+    # pt_conv_state_ssot P2 (2026-07-24) — pure reducer for server-
+    # authoritative conv busy state (applyRunningTaskIdsFrame /
+    # applyConvStateSnapshot / computeConvBusy / pickAuthoritativeTaskIdForReconnect).
+    # Consumed by ui/conversation_list.js (convIsBusy union read),
+    # core/cross_tab_sync.js (notify + conv_state_snapshot frame dispatch),
+    # main/main_conv_lifecycle.js (reconnect target picker). Leaf module
+    # (window only); MUST load before every consumer.
+    'core/conv_state_reducer.js',
     'core/async_pool.js',
     'core/cross_tab_sync.js',
     'core/conversations.js',

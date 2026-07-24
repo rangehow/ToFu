@@ -102,14 +102,26 @@ function newChat() {
 function _reconnectServerTaskIfIdle(id) {
   if (typeof activeStreams === 'undefined' || activeStreams.has(id)) return false;
   const conv = conversations.find((x) => x.id === id);
-  if (!conv || !conv.activeTaskId) return false;
+  if (!conv) return false;
+  /* pt_conv_state_ssot P2: pick the reconnect target from the UNION —
+   * conv.activeTaskId (this tab's own send) preferred, else any tid from
+   * the server-authoritative Set (sibling device's live task). The Set
+   * fixes the phone-vs-PC symptom: PC has activeTaskId=null (because
+   * loadConversationsFromServer refuses to overwrite the null preserved
+   * from initial load), yet the sidebar dot lit because the authoritative
+   * Set carried the phone-originated tid. Clicking through must now attach
+   * to that live task instead of no-op'ing. */
+  const targetTid = (typeof pickAuthoritativeTaskIdForReconnect === 'function')
+    ? pickAuthoritativeTaskIdForReconnect(conv)
+    : (conv.activeTaskId || null);
+  if (!targetTid) return false;
   if (typeof connectToTask !== 'function') return false;
   console.info(
     `[loadConversation] 🔗 Reconnect-on-open — conv=${id.slice(0,8)} ` +
-    `activeTaskId=${conv.activeTaskId.slice(0,8)} (no live stream in this tab, ` +
+    `taskId=${targetTid.slice(0,8)} (no live stream in this tab, ` +
     `task running server-side)`
   );
-  connectToTask(id, conv.activeTaskId);
+  connectToTask(id, targetTid);
   /* connectToTask synchronously sets the activeStreams entry + arms twStart
    * (before its first await), then inserts the streaming bubble. Repaint the
    * statics + the single streaming bubble exactly like boot's _ensureNewest so

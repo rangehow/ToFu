@@ -278,6 +278,37 @@ function _onConvNotifyPush(frame) {
     if (!frame) return;
     const type = frame.type;
     if (type !== "conv_changed" && type !== "conv_deleted") return;
+    /* pt_conv_state_ssot P2: consume the server-authoritative busy
+     * signal (runningTaskIds + runningTaskIdsRev) IF present on this
+     * frame. This is orthogonal to the rev-gated body verify below —
+     * a payload can carry ONLY the busy update (no message rev bump)
+     * and still legitimately advance the authoritative Set. The
+     * reducer is idempotent + rev-gated internally, so calling it here
+     * for every conv_changed frame is safe. */
+    if (type === "conv_changed" &&
+        typeof applyRunningTaskIdsFrame === "function" &&
+        (Array.isArray(frame.runningTaskIds) || frame.runningTaskIdsRev)) {
+      applyRunningTaskIdsFrame(conversations, {
+        convId: frame.convId,
+        runningTaskIds: frame.runningTaskIds || [],
+        runningTaskIdsRev: frame.runningTaskIdsRev,
+        userId: frame.userId,
+      });
+      /* Repaint the sidebar so the busy dot flips immediately for a
+       * background conv — the verify branch below only fires for the
+       * ACTIVE conv (and only on a rev bump). Cheap: renderConversationList
+       * is hash-gated internally and no-ops when nothing changed. */
+      if (typeof renderConversationList === "function") {
+        renderConversationList();
+      }
+      if (typeof updateSendButton === "function") {
+        /* If the busy update concerns activeConvId, the composer's
+         * Stop/Send button state may need to flip too. */
+        if (typeof activeConvId !== "undefined" && frame.convId === activeConvId) {
+          updateSendButton();
+        }
+      }
+    }
     /* Multi-user gate (forward-safe): drop a frame for another user. When no
      *   user identity is established (single-user today) every frame is ours. */
     const myUser = (typeof window._currentUserId !== "undefined" && window._currentUserId !== null)
@@ -1050,6 +1081,25 @@ function _wireConvSyncPush() {
       _onConvNotifyPush(frame);
     else if (frame && frame.type === "folders_changed")
       _onFoldersChangedPush(frame);
+    else if (frame && frame.type === "conv_state_snapshot") {
+      /* pt_conv_state_ssot P1.5 → P2 connection: the server sends a
+       * one-shot snapshot of the full running-task projection on every
+       * subscribe(notify, '*'). Apply it, then repaint the sidebar so a
+       * conv that was busy-in-registry lights its dot immediately (no
+       * 25/90s poll wait). The reducer clears convs ABSENT from the
+       * snapshot (server no longer has them running), which is what
+       * fixes the "phone finished but PC still shows busy" mirror case
+       * for a stale local dot. */
+      if (typeof applyConvStateSnapshot === "function") {
+        applyConvStateSnapshot(conversations, frame);
+        if (typeof renderConversationList === "function") {
+          renderConversationList();
+        }
+        if (typeof updateSendButton === "function") {
+          updateSendButton();
+        }
+      }
+    }
   });
   /* ★ Third "回来即新" resume trigger: when the push socket RECONNECTS after a
    *   drop, we may have missed `notify` frames while it was down — reconcile

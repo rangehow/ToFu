@@ -593,6 +593,14 @@ async function mpApplyFolders() {
     _saveConvProjectPath(_prevProjectState.path || "",
                          (_prevProjectState.extraRoots || []).map(r => typeof r === 'string' ? r : r.path));
     _updateProjectUI();
+    /* ★ Studio ⟺ a project is attached. Rolling back to a state with NO
+     * project must demote the dial as well — the optimistic promotion was
+     * already persisted by onProjectAttached, so without this the conv is
+     * left in the poisoned "Studio + no project" shape (durably so, since
+     * the promotion now saves immediately). onProjectCleared repaints AND
+     * persists the fallback. When the previous state DID have a project the
+     * tier stays Studio — still truthful. */
+    if (!_prevProjectState.path && typeof onProjectCleared === 'function') onProjectCleared();
     document.getElementById("projectModal").classList.add("open");
     const statusEl = document.getElementById("projectModalStatus");
     if (statusEl) {

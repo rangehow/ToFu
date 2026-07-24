@@ -40,6 +40,7 @@ pytestmark = pytest.mark.unit
 ROOT = Path(__file__).resolve().parent.parent
 MAIN_JS = ROOT / "static" / "js" / "main.js"
 TOOLBAR_JS = ROOT / "static" / "js" / "main" / "main_toolbar_ui.js"
+PROJECT_JS = ROOT / "static" / "js" / "project.js"
 
 RESTORE_CLAMP = "(_storedMode === 'studio' && !conv.projectPath) ? 'chat' : _storedMode"
 PERSIST_HOOK = "if (typeof _saveConvToolState === 'function') _saveConvToolState();"
@@ -252,6 +253,160 @@ def test_NC_on_project_cleared_without_persist_reopens_poison():
     assert out["saved"] == 0, (
         "NEUTER must reproduce the poison: repaint without persist leaves "
         "conv.chatMode stale"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Failure-rollback demotion — mpApplyFolders' optimistic promotion must be
+# rolled back TOGETHER with the project state when setPaths fails
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Owner-acceptance catch on the first batch: mpApplyFolders promotes the dial
+# to Studio optimistically (onProjectAttached — which now persists
+# immediately), then reconciles Api.project.setPaths in the background. The
+# catch branch reverted projectState + conv paths but NEVER demoted the dial,
+# so a first-attach failure left the conv in the same poisoned
+# "Studio + no project" shape — and now durably persisted. The fix: when the
+# rolled-back previous state had no project, call onProjectCleared() (which
+# repaints AND persists); when it DID have a project, Studio stays.
+
+DEMOTION_LINE = ("if (!_prevProjectState.path && "
+                 "typeof onProjectCleared === 'function') onProjectCleared();")
+
+# Stubs for every bare call inside the real mpApplyFolders. The tier hooks
+# (onProjectAttached / onProjectCleared) are the REAL shipped functions so
+# the assertions observe the true end-state (dial + persist), and
+# _applyChatModeUI is a recorder that also tracks the global chatMode like
+# the real one does.
+MP_APPLY_HARNESS = """
+const appliedLog = [];
+const savePathCalls = [];
+let saved = 0;
+let chatMode = __CHAT_MODE__;
+const stub = () => {};
+const _applyChatModeUI = (m) => { appliedLog.push(m); chatMode = m; };
+const _saveConvToolState = () => { saved++; };
+const _saveConvProjectPath = (p, extras) => { savePathCalls.push({ p: p || '' }); };
+const _applyProjectData = stub, _updateProjectUI = stub, closeProjectModal = stub,
+      saveRecentProject = stub, debugLog = stub, renderConversationList = stub,
+      saveConversations = stub, escapeHtml = (s) => String(s);
+const document = { getElementById: (id) => ({
+  classList: { add() {}, remove() {} },
+  set innerHTML(v) {}, get innerHTML() { return ''; },
+}) };
+const Api = { project: { setPaths: __SET_PATHS__ } };
+const conversations = [];
+let activeConvId = 'c1';
+let _mpFolders = ['/__new__'];
+let _mpReadOnly = new Set();
+let projectState = __PREV_STATE__;
+__ON_ATTACHED__
+__ON_CLEARED__
+let opaCalls = 0, opcCalls = 0;
+const _origOPA = onProjectAttached, _origOPC = onProjectCleared;
+onProjectAttached = function () { opaCalls++; return _origOPA(); };
+onProjectCleared = function () { opcCalls++; return _origOPC(); };
+__MP_APPLY__
+(async () => {
+  await mpApplyFolders();
+  console.log(JSON.stringify({
+    appliedLog, saved, savePathCalls, opaCalls, opcCalls,
+    chatMode, statePath: projectState.path || '',
+  }));
+})();
+"""
+
+FAIL_SET_PATHS = ("async () => ({ ok: false, json: async () => "
+                  "({ error: 'boom' }) })")
+OK_SET_PATHS = ("async () => ({ ok: true, json: async () => "
+                "({ path: '/__new__', active: true }) })")
+NO_PREV_PROJECT = {"active": False, "path": "", "extraRoots": []}
+WITH_PREV_PROJECT = {"active": True, "path": "/old", "extraRoots": []}
+
+
+def _run_mp_apply(prev_state: dict, chat_mode: str,
+                  set_paths: str = FAIL_SET_PATHS,
+                  mp_src: str | None = None) -> dict:
+    src = mp_src or _slice_fn(PROJECT_JS.read_text(encoding="utf-8"),
+                              "async function mpApplyFolders() {")
+    script = (MP_APPLY_HARNESS
+              .replace("__CHAT_MODE__", json.dumps(chat_mode))
+              .replace("__SET_PATHS__", set_paths)
+              .replace("__PREV_STATE__", json.dumps(prev_state))
+              .replace("__ON_ATTACHED__", _toolbar_fn("onProjectAttached"))
+              .replace("__ON_CLEARED__", _toolbar_fn("onProjectCleared"))
+              .replace("__MP_APPLY__", src))
+    return _run(script)
+
+
+def test_rollback_without_prior_project_demotes_and_persists():
+    """First-attach failure: optimistic promotion (studio, persisted) →
+    setPaths fails → rollback to NO project must demote to chat AND persist
+    (saved a second time), so the conv never rests in 'studio + no project'."""
+    out = _run_mp_apply(NO_PREV_PROJECT, "chat")
+    assert out["opaCalls"] == 1 and out["opcCalls"] == 1
+    assert out["appliedLog"] == ["studio", "chat"], (
+        "the optimistic studio promotion must be repainted back to chat on "
+        "rollback when there is no prior project"
+    )
+    assert out["chatMode"] == "chat"
+    assert out["saved"] == 2, (
+        "both the promotion AND the rollback demotion must be persisted — "
+        "a repaint without save is exactly the poison this suite guards"
+    )
+    assert out["savePathCalls"][-1]["p"] == "", "project path must roll back"
+
+
+def test_rollback_with_prior_project_keeps_studio():
+    """Changing paths on an already-attached project: failure rolls back to
+    the OLD project — Studio stays truthful, no demotion, no extra save."""
+    out = _run_mp_apply(WITH_PREV_PROJECT, "studio")
+    assert out["opcCalls"] == 0, (
+        "demotion must NOT fire when the rolled-back state still has a project"
+    )
+    assert out["chatMode"] == "studio"
+    assert out["appliedLog"] == [], "dial was already studio — no repaint"
+    assert out["saved"] == 0
+    assert out["savePathCalls"][-1]["p"] == "/old", (
+        "the prior project path must be restored"
+    )
+    assert out["statePath"] == "/old"
+
+
+def test_success_path_still_promotes_without_demotion():
+    """Happy path unchanged: setPaths succeeds → studio promotion persists,
+    demotion never fires."""
+    out = _run_mp_apply(NO_PREV_PROJECT, "chat", set_paths=OK_SET_PATHS)
+    assert out["chatMode"] == "studio"
+    assert out["appliedLog"] == ["studio"]
+    assert out["saved"] == 1
+    assert out["opcCalls"] == 0
+
+
+def test_NC_rollback_without_demotion_strands_studio():
+    """Neuter: strip the rollback demotion from the REAL mpApplyFolders and
+    the first-attach failure strands the dial at Studio with no project —
+    the exact poisoned shape the owner caught."""
+    src = _slice_fn(PROJECT_JS.read_text(encoding="utf-8"),
+                    "async function mpApplyFolders() {")
+    assert DEMOTION_LINE in src, "harness stale: demotion line not found"
+    neutered = src.replace(DEMOTION_LINE, "")
+    assert neutered != src
+    out = _run_mp_apply(NO_PREV_PROJECT, "chat", mp_src=neutered)
+    assert out["opcCalls"] == 0
+    assert out["chatMode"] == "studio", (
+        "NEUTER must reproduce the bug: without the demotion, a failed "
+        "first-attach strands the dial at Studio with no project attached"
+    )
+    assert out["savePathCalls"][-1]["p"] == ""
+
+
+def test_rollback_demotion_present_in_project_js():
+    src = _slice_fn(PROJECT_JS.read_text(encoding="utf-8"),
+                    "async function mpApplyFolders() {")
+    assert DEMOTION_LINE in src, (
+        "static/js/project.js mpApplyFolders catch branch lost the rollback "
+        "demotion — a failed first-attach would strand Studio with no project"
     )
 
 

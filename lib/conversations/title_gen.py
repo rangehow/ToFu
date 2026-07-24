@@ -284,104 +284,133 @@ def generate_conversation_title(messages: list, lang: str | None = None) -> str:
         parts.append(f'Assistant: {first_assistant[:800]}')
     convo = '\n\n'.join(parts)
 
+    prompt_messages = [
+        {'role': 'system', 'content': _system_prompt(lang)},
+        {'role': 'user',
+         'content': f'Conversation:\n\n{convo}\n\nTitle:'},
+    ]
+
+    # ── P3 pt_title_gen_robust: single automatic retry on suspicious result ──
+    # If the first attempt hits any of the three suspicious patterns
+    # (finish=length / cleaned <=3 chars / clean-drop with >=2 lines), rerun
+    # ONCE with the offending model added to exclude_models. Two failures →
+    # fall back to _fallback_title. Explicit `for attempt in range(2):`
+    # loop (per owner: no recursion + private kwargs).
+    excluded_this_call: set[str] = set(_THINKING_MODELS_TO_EXCLUDE)
+    title = ''
+    last_content = ''
     started = time.time()
-    try:
-        from lib.llm_dispatch import dispatch_chat
-        content, _usage = dispatch_chat(
-            [
-                {'role': 'system', 'content': _system_prompt(lang)},
-                {'role': 'user',
-                 'content': f'Conversation:\n\n{convo}\n\nTitle:'},
-            ],
-            # A title is at most TITLE_MAX_CHARS, but the budget must cover
-            # the model's reasoning trace too: the 'cheap' pool is full of
-            # thinking models (deepseek-v4, glm, qwen3-max, kimi-thinking),
-            # and for some of them (e.g. deepseek-reasoner) thinking is on by
-            # definition and its tokens count against max_tokens. 32 tokens
-            # truncated good titles mid-word (e.g. "更新 GLM-5.2 …" → "更新 GL")
-            # and starved thinking models into empty output. dispatch_chat
-            # already defaults thinking_enabled=False (disabling thinking where
-            # the model honors the flag); the final string is collapsed to one
-            # line and hard-capped by _clean_title, so a generous ceiling only
-            # buys completeness, never a longer title.
-            max_tokens=512,
-            temperature=0.2,
-            capability='cheap',
-            # P1 pt_title_gen_robust: block cheap-pool thinking models that
-            # burn max_tokens on reasoning and leave title empty/single-char.
-            exclude_models=list(_THINKING_MODELS_TO_EXCLUDE),
-            log_prefix='[TitleGen]',
-        )
-    except Exception as e:
-        logger.warning('[TitleGen] dispatch_chat failed after %.1fs: %s — '
-                       'falling back to first-message heuristic',
-                       time.time() - started, e)
-        return _fallback_title(messages)
+    for attempt in range(2):
+        try:
+            from lib.llm_dispatch import dispatch_chat
+            content, _usage = dispatch_chat(
+                prompt_messages,
+                # A title is at most TITLE_MAX_CHARS, but the budget must cover
+                # the model's reasoning trace too: the 'cheap' pool is full of
+                # thinking models (deepseek-v4, glm, qwen3-max, kimi-thinking),
+                # and for some of them (e.g. deepseek-reasoner) thinking is on
+                # by definition and its tokens count against max_tokens. 32
+                # tokens truncated good titles mid-word (e.g.
+                # "更新 GLM-5.2 …" → "更新 GL") and starved thinking models
+                # into empty output. dispatch_chat already defaults
+                # thinking_enabled=False (disabling thinking where the model
+                # honors the flag); the final string is collapsed to one line
+                # and hard-capped by _clean_title, so a generous ceiling only
+                # buys completeness, never a longer title.
+                max_tokens=512,
+                temperature=0.2,
+                capability='cheap',
+                # P1: base thinking-model exclusion; P3 augments with the
+                # first-attempt's actual model on retry (see below).
+                exclude_models=list(excluded_this_call),
+                log_prefix='[TitleGen]' if attempt == 0 else '[TitleGen:retry]',
+            )
+        except Exception as e:
+            logger.warning(
+                '[TitleGen] dispatch_chat failed on attempt %d/%d '
+                'after %.1fs: %s',
+                attempt + 1, 2, time.time() - started, e)
+            if attempt == 1:
+                logger.warning('[TitleGen] both attempts failed — '
+                               'falling back to first-message heuristic')
+                return _fallback_title(messages)
+            continue
 
-    elapsed = time.time() - started
+        elapsed = time.time() - started
+        last_content = content if isinstance(content, str) else ''
 
-    # ── Root-cause diagnostic capture ──
-    # A single-character title observed in the wild (2026-07-24 "跨") could
-    # have come from at least three distinct root causes — a thinking-model
-    # burning the whole max_tokens budget on reasoning, `_clean_title`'s
-    # first-non-empty-line rule dropping the real payload, or plain
-    # small-model flakiness. Only the model's raw response can tell them
-    # apart, so record it (plus the dispatch metadata) BEFORE cleaning.
-    _usage_d = _usage if isinstance(_usage, dict) else {}
-    _dispatch = _usage_d.get('_dispatch') or {}
-    _actual_model = _dispatch.get('model') or '?'
-    _finish_reason = _usage_d.get('finish_reason') or ''
-    _prompt_tokens = _usage_d.get('prompt_tokens') or 0
-    _completion_tokens = (_usage_d.get('completion_tokens')
-                          or _usage_d.get('output_tokens') or 0)
-    _reasoning_tokens = _usage_d.get('reasoning_tokens') or 0
-    _raw = content if isinstance(content, str) else ''
-    _raw_stripped = _raw.strip()
-    _raw_lines = [ln for ln in _raw_stripped.splitlines() if ln.strip()]
-    _raw_line_count = len(_raw_lines)
+        # ── Root-cause diagnostic capture (P0 log-hardening) ──
+        _usage_d = _usage if isinstance(_usage, dict) else {}
+        _dispatch = _usage_d.get('_dispatch') or {}
+        _actual_model = _dispatch.get('model') or '?'
+        _finish_reason = _usage_d.get('finish_reason') or ''
+        _prompt_tokens = _usage_d.get('prompt_tokens') or 0
+        _completion_tokens = (_usage_d.get('completion_tokens')
+                              or _usage_d.get('output_tokens') or 0)
+        _reasoning_tokens = _usage_d.get('reasoning_tokens') or 0
+        _raw = last_content
+        _raw_stripped = _raw.strip()
+        _raw_lines = [ln for ln in _raw_stripped.splitlines() if ln.strip()]
+        _raw_line_count = len(_raw_lines)
 
-    title = _clean_title(content or '')
+        title = _clean_title(_raw)
 
-    # Log the full observation set at INFO — this is the record that lets
-    # next-time triage skip the "was it thinking-budget or clean-title?"
-    # guessing game. %.200r keeps the raw preview safe for arbitrary content.
-    logger.info(
-        '[TitleGen] model=%s finish=%s tokens[prompt=%d comp=%d reason=%d] '
-        'raw_chars=%d raw_lines=%d elapsed=%.1fs '
-        'raw_preview=%.200r clean_title=%.60r',
-        _actual_model, _finish_reason or '?',
-        _prompt_tokens, _completion_tokens, _reasoning_tokens,
-        len(_raw), _raw_line_count, elapsed,
-        _raw_stripped, title)
-
-    # Elevate the three known-suspicious patterns to WARNING so error.log
-    # captures them without a user having to report the bug. These are
-    # observations, not policy decisions — behaviour is unchanged.
-    _suspicious_reasons = []
-    if _finish_reason == 'length':
-        _suspicious_reasons.append(
-            f'model hit max_tokens ceiling '
-            f'(completion={_completion_tokens}, reasoning={_reasoning_tokens})')
-    if _raw_line_count >= 2 and title and len(title) < len(_raw_stripped) - 2:
-        _dropped = _raw_lines[1:]
-        _suspicious_reasons.append(
-            f'_clean_title dropped {_raw_line_count - 1} extra non-empty '
-            f'line(s): {_dropped[:3]!r}')
-    if title and len(title) <= 3 and _raw_line_count <= 1:
-        _suspicious_reasons.append(
-            f'model produced a title <=3 chars long (title={title!r})')
-    if _suspicious_reasons:
-        logger.warning(
-            '[TitleGen] suspicious result on model=%s: %s | '
-            'raw=%.200r final=%.60r',
-            _actual_model, ' | '.join(_suspicious_reasons),
+        logger.info(
+            '[TitleGen] attempt=%d/%d model=%s finish=%s '
+            'tokens[prompt=%d comp=%d reason=%d] raw_chars=%d raw_lines=%d '
+            'elapsed=%.1fs raw_preview=%.200r clean_title=%.60r',
+            attempt + 1, 2, _actual_model, _finish_reason or '?',
+            _prompt_tokens, _completion_tokens, _reasoning_tokens,
+            len(_raw), _raw_line_count, elapsed,
             _raw_stripped, title)
 
-    if not title:
-        logger.info('[TitleGen] empty/unusable model output (%.80r) after '
-                    '%.1fs — using fallback', content, elapsed)
-        return _fallback_title(messages)
-    return title
+        # Compute suspicious reasons — same three patterns as the log
+        # hardening step, now ALSO drives the retry decision.
+        _suspicious_reasons = []
+        if _finish_reason == 'length':
+            _suspicious_reasons.append(
+                f'model hit max_tokens ceiling '
+                f'(completion={_completion_tokens}, '
+                f'reasoning={_reasoning_tokens})')
+        if (_raw_line_count >= 2 and title
+                and len(title) < len(_raw_stripped) - 2):
+            _dropped = _raw_lines[1:]
+            _suspicious_reasons.append(
+                f'_clean_title dropped {_raw_line_count - 1} extra non-empty '
+                f'line(s): {_dropped[:3]!r}')
+        if title and len(title) <= 3 and _raw_line_count <= 1:
+            _suspicious_reasons.append(
+                f'model produced a title <=3 chars long (title={title!r})')
+        if not title:
+            _suspicious_reasons.append('cleaned title is empty')
+
+        if _suspicious_reasons:
+            logger.warning(
+                '[TitleGen] suspicious result on attempt %d/%d model=%s: %s | '
+                'raw=%.200r final=%.60r',
+                attempt + 1, 2, _actual_model,
+                ' | '.join(_suspicious_reasons), _raw_stripped, title)
+            if attempt == 0:
+                # Add the failing model to the per-call exclusion set so the
+                # dispatcher must pick a different slot for the retry.
+                if _actual_model and _actual_model != '?':
+                    excluded_this_call.add(_actual_model)
+                logger.info(
+                    '[TitleGen] retrying once with %s added to exclude_models',
+                    _actual_model)
+                continue
+            # attempt == 1: retry also bad — fall through to fallback below.
+            break
+
+        # Clean, non-suspicious result — return it.
+        return title
+
+    # Both attempts produced suspicious/empty output.
+    logger.info(
+        '[TitleGen] both attempts produced suspicious output '
+        '(last_content=%.80r, last_title=%.60r) — using fallback',
+        last_content, title)
+    return _fallback_title(messages)
 
 
 __all__ = ['generate_conversation_title', 'first_user_text', 'TITLE_MAX_CHARS']

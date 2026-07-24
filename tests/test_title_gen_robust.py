@@ -190,3 +190,216 @@ def test_clean_title_label_before_merge():
     got = tg._clean_title('Title:\n主题内容')
     assert got == '主题内容', (
         f'label-before-merge order broken: got {got!r}')
+
+
+# ─────────────────────────────────────────────────────────────
+# P3: on a suspicious result (finish=length OR <=3 chars OR empty)
+# do exactly ONE automatic retry with the failing model added to
+# exclude_models. Two failures → _fallback_title.
+# ─────────────────────────────────────────────────────────────
+
+
+def _make_dispatch_stub(scripted_returns):
+    """Build a fake dispatch_chat that returns items from a list in order.
+
+    Each item is ``(content, usage)`` — usage MUST carry _dispatch.model
+    so the retry logic can add it to exclude_models on the next attempt.
+    The stub also RECORDS every call's ``exclude_models`` kwarg into
+    ``captured_calls`` for assertions.
+    """
+    calls: list[dict] = []
+    idx = [0]
+
+    def _stub(msgs, **kwargs):
+        i = idx[0]
+        idx[0] += 1
+        calls.append({
+            'attempt': i,
+            'exclude_models': list(kwargs.get('exclude_models') or []),
+            'kwargs': kwargs,
+        })
+        if i >= len(scripted_returns):
+            raise RuntimeError(
+                f'stub called {i+1} times, only scripted {len(scripted_returns)}')
+        return scripted_returns[i]
+
+    return _stub, calls
+
+
+def test_retry_on_finish_length_then_success():
+    """1st call: deepseek burnout (finish=length, empty content).
+    2nd call: gpt-4.1-mini stop, real title.
+    Must return 2nd call's title, and 2nd call's exclude_models must
+    contain the 1st call's actual model."""
+    tg = importlib.import_module('lib.conversations.title_gen')
+    scripted = [
+        # Attempt 1: A-class burnout on a non-thinking model that leaked
+        # through (imagine a corp gateway slot with unclamped budget).
+        ('', {
+            'finish_reason': 'length',
+            'completion_tokens': 512,
+            'reasoning_tokens': 500,
+            '_dispatch': {'model': 'flaky-flash-3'},
+        }),
+        # Attempt 2: healthy stop.
+        ('跨设备同步机制现状解析', {
+            'finish_reason': 'stop',
+            'completion_tokens': 20,
+            '_dispatch': {'model': 'gpt-4.1-mini'},
+        }),
+    ]
+    stub, calls = _make_dispatch_stub(scripted)
+    fake_mod = types.ModuleType('lib.llm_dispatch')
+    fake_mod.dispatch_chat = stub
+    sys.modules['lib.llm_dispatch'] = fake_mod
+    try:
+        title = tg.generate_conversation_title(
+            [{'role': 'user', 'content': 'test'},
+             {'role': 'assistant', 'content': 'ok'}],
+            lang='zh')
+    finally:
+        sys.modules.pop('lib.llm_dispatch', None)
+
+    assert title == '跨设备同步机制现状解析', (
+        f'retry should have returned attempt-2 title, got {title!r}')
+    assert len(calls) == 2, (
+        f'expected exactly 2 dispatch calls, got {len(calls)}')
+    # Attempt 2's exclude_models must contain attempt 1's model.
+    a2_ex = calls[1]['exclude_models']
+    assert 'flaky-flash-3' in a2_ex, (
+        f'retry exclude_models {a2_ex} missing failing model flaky-flash-3')
+    # Attempt 2 must ALSO still carry the base thinking-model exclusion set.
+    a1_ex = set(calls[0]['exclude_models'])
+    assert a1_ex.issubset(set(a2_ex)), (
+        'retry lost the base thinking-exclusion set')
+
+
+def test_retry_on_short_title_then_success():
+    """1st call: single-char 「跨」 (C-class flake).
+    2nd call: real title. Same contract — retry must happen."""
+    tg = importlib.import_module('lib.conversations.title_gen')
+    scripted = [
+        ('跨', {
+            'finish_reason': 'stop',
+            'completion_tokens': 4,
+            '_dispatch': {'model': 'flaky-mini'},
+        }),
+        ('跨设备同步机制现状', {
+            'finish_reason': 'stop',
+            'completion_tokens': 15,
+            '_dispatch': {'model': 'reliable-mini'},
+        }),
+    ]
+    stub, calls = _make_dispatch_stub(scripted)
+    fake_mod = types.ModuleType('lib.llm_dispatch')
+    fake_mod.dispatch_chat = stub
+    sys.modules['lib.llm_dispatch'] = fake_mod
+    try:
+        title = tg.generate_conversation_title(
+            [{'role': 'user', 'content': 'test'},
+             {'role': 'assistant', 'content': 'ok'}],
+            lang='zh')
+    finally:
+        sys.modules.pop('lib.llm_dispatch', None)
+
+    assert title == '跨设备同步机制现状', (
+        f'retry should return attempt-2 title, got {title!r}')
+    assert len(calls) == 2
+    assert 'flaky-mini' in calls[1]['exclude_models']
+
+
+def test_both_attempts_bad_falls_back():
+    """1st call: length burnout empty. 2nd call: still empty (worst case).
+    Must fall back to _fallback_title (truncated first user message)."""
+    tg = importlib.import_module('lib.conversations.title_gen')
+    scripted = [
+        ('', {
+            'finish_reason': 'length',
+            '_dispatch': {'model': 'flaky-1'},
+        }),
+        ('', {
+            'finish_reason': 'length',
+            '_dispatch': {'model': 'flaky-2'},
+        }),
+    ]
+    stub, calls = _make_dispatch_stub(scripted)
+    fake_mod = types.ModuleType('lib.llm_dispatch')
+    fake_mod.dispatch_chat = stub
+    sys.modules['lib.llm_dispatch'] = fake_mod
+    try:
+        title = tg.generate_conversation_title(
+            [{'role': 'user', 'content': '这是用户第一条消息内容用来做 fallback'},
+             {'role': 'assistant', 'content': 'ok'}],
+            lang='zh')
+    finally:
+        sys.modules.pop('lib.llm_dispatch', None)
+
+    # After both attempts fail, _fallback_title returns the truncated first
+    # user message (not a model-generated title).
+    assert '这是用户第一条消息内容' in title, (
+        f'expected fallback to first-user-message text, got {title!r}')
+    assert len(calls) == 2, (
+        f'expected exactly 2 attempts before falling back, got {len(calls)}')
+
+
+def test_no_retry_on_first_success():
+    """First call clean → NO retry. Dispatcher must be called exactly once."""
+    tg = importlib.import_module('lib.conversations.title_gen')
+    scripted = [
+        ('正常的六字标题', {
+            'finish_reason': 'stop',
+            '_dispatch': {'model': 'gpt-4.1-mini'},
+        }),
+    ]
+    stub, calls = _make_dispatch_stub(scripted)
+    fake_mod = types.ModuleType('lib.llm_dispatch')
+    fake_mod.dispatch_chat = stub
+    sys.modules['lib.llm_dispatch'] = fake_mod
+    try:
+        title = tg.generate_conversation_title(
+            [{'role': 'user', 'content': 'x'},
+             {'role': 'assistant', 'content': 'y'}],
+            lang='zh')
+    finally:
+        sys.modules.pop('lib.llm_dispatch', None)
+
+    assert title == '正常的六字标题'
+    assert len(calls) == 1, (
+        f'first attempt was clean, dispatcher must NOT be re-called; '
+        f'got {len(calls)} calls')
+
+
+def test_retry_neuter_would_regress_without_retry_logic():
+    """NEUTER contract: if the retry loop were removed and a single bad
+    call directly returned _clean_title(''), test_retry_on_finish_length
+    would return '' (or _fallback_title on empty), which is NOT the
+    happy-path attempt-2 title. This test asserts the retry-produced
+    title differs from both the bad first attempt AND the fallback —
+    proving the retry logic is actually the reason we get the good title."""
+    tg = importlib.import_module('lib.conversations.title_gen')
+    scripted = [
+        ('', {'finish_reason': 'length',
+              '_dispatch': {'model': 'bad-model'}}),
+        ('好标题内容', {'finish_reason': 'stop',
+              '_dispatch': {'model': 'good-model'}}),
+    ]
+    stub, calls = _make_dispatch_stub(scripted)
+    fake_mod = types.ModuleType('lib.llm_dispatch')
+    fake_mod.dispatch_chat = stub
+    sys.modules['lib.llm_dispatch'] = fake_mod
+    try:
+        title = tg.generate_conversation_title(
+            [{'role': 'user', 'content': 'msg body for fallback'},
+             {'role': 'assistant', 'content': 'a'}],
+            lang='zh')
+    finally:
+        sys.modules.pop('lib.llm_dispatch', None)
+
+    # Must NOT be the first-attempt empty result.
+    assert title != '', 'retry did not run — returned first-attempt empty'
+    # Must NOT be the fallback (first-user-message truncation).
+    assert 'msg body' not in title, (
+        f'retry did not run — fell back to first-user-message: {title!r}')
+    # MUST be the second attempt's clean title.
+    assert title == '好标题内容', (
+        f'expected retry to produce attempt-2 title, got {title!r}')

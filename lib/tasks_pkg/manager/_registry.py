@@ -429,6 +429,24 @@ def abort_running_tasks_for_conv(conv_id: str, exclude_task_id: str | None = Non
     if aborted:
         logger.info('[Manager] conv=%s Auto-aborted %d stale task(s) before starting new task %s',
                     conv_id[:8], aborted, (exclude_task_id or '?')[:8])
+        # ── pt_conv_state_ssot P3: task lifecycle stop broadcast ──
+        # Aborting a stale task flips ``t['aborted']=True`` but nobody
+        # calls notify_conv_changed for this conv — the frame carrying
+        # the fresh runningTaskIds projection (which no longer includes
+        # the aborted tid, since snapshot_running_by_conv filters both
+        # status!=running AND aborted) never leaves the server, so a
+        # sibling device holding the busy dot for the superseded task
+        # sees it stay lit until its next poll (25/90s later). Emit ONE
+        # notify frame for the whole sweep (consolidates a multi-abort
+        # into a single frame, not one per aborted tid). Fail-open: a
+        # push transport error must never break the abort path.
+        try:
+            from lib.conversations.meta_cache import notify_conv_changed
+            notify_conv_changed(conv_id, rev=None)
+        except Exception as _ne:
+            logger.warning(
+                '[Manager] conv=%s supersede-abort notify skipped: %s',
+                conv_id[:8], _ne)
     return aborted
 
 

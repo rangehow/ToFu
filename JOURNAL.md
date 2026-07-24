@@ -1,6 +1,32 @@
 # Project Journal
 
 
+### 2026-07-24(续6) — pt_conv_state_ssot P3 (task lifecycle stop broadcast) + E2E 集成测试:owner 拒收 P2 "半修完就报" 后的证据链闭合 —— `abort_running_tasks_for_conv` 尾部主动发 notify + 3 场景端到端测试证明 chat_send → registry → notify → reducer → computeConvBusy 全链路真的接通(commit,3 文件 +~360,新测 P3 6/6 + E2E 3/3 绿含 NEUTER 证红 + 相邻 46/46 + collect 8164 0 err)。**owner 明确指令:"claim without proof" 是失职,必须补 E2E 端到端集成测试再报。**
+- **owner 三条硬指令,全部照做:** ①端到端集成测试(不是又一层单元)②诚实修正 P2 "visible bug 已修" 缺失完成侧半场景 —— P3 是补漏 ③latent(build_conv_state_snapshot user_id=1 硬编码)登 board gated。
+- **P3 gap 精准诊断(读代码钉死,不猜):**
+  - ✅ `create_task` — 现有 chat_send / regen / continue / queue-dispatch / autopilot 各入口都调 `_notify_conv_changed`,payload 载 tid 到位。
+  - ✅ **happy-path completion** — `persist_task_result` → `_sync_result_to_conversation` 已发 `notify_conv_changed(rev)`,且此时 task 已翻 `status='done'`,`snapshot_running_by_conv` 的 filter `status != 'running'` 排除它 —— **完成侧熔灯早就工作**(owner 担心此半场景没测的洞被本 E2E 场景 B 证据链填上)。
+  - ✅ **reap_stuck** — `_finalize_reaped_stuck_task` 走同款 `_sync_result_to_conversation`,同样发帧。
+  - ⚠️ **supersede abort GAP** — `abort_running_tasks_for_conv` 只 `t['aborted']=True` + `_write_aborted_terminal_floor`(纯 DB upsert),**不发 notify**。sibling 设备靠 25/90s poll 才熔灯 —— owner 精准点出的最后一米。
+- **本轮实做(3 文件 +~360):**
+  - `lib/tasks_pkg/manager/_registry.py:+18` `abort_running_tasks_for_conv` 尾部,如果 `aborted > 0`,主动调 `notify_conv_changed(conv_id, rev=None)` —— **一 abort sweep 一帧**(多 abort 合并),floor write 先行(durable priority),notify 后发(best-effort),fail-open。
+  - `tests/test_conv_state_ssot_lifecycle.py:+233` P3 6 测:①supersede abort 主动发帧 ②payload 载当前完整 projection(surviving tid in / aborted tid out,owner 硬约束③"read FULL current registry snapshot")③无 abort → 无帧(不 spam)④多 abort 合并成一帧(不 N-1 stale)⑤floor 仍写(order-safety)⑥notify 失败不阻断 abort(fail-open)。**NEUTER 探针**删 notify emit → face 1/2/4 三面精准翻红,证守卫非平凡。
+  - `tests/test_conv_state_ssot_e2e.py:+398` E2E 3 场景(Node subprocess 加载真 `conv_state_reducer.js`,不写替代品):
+    - **Scenario A: send-side ignition** —— seed registry → `notify_conv_changed` → 捕获 payload → 灌进 reducer → 断言 `_authoritativeActiveTaskIds` 含 tid **且** `computeConvBusy(conv) === true`(直证 "sidebar 侧栏点亮" 全链路)。
+    - **Scenario B: happy-path completion** —— seed → 点亮 → task status flip 'done' → 二次 notify(rev=43)→ payload runningTaskIds 正确为空 → reducer 应用两帧(rev-gate 顺序)→ Set 空 + busy=false(直证 "完成侧熔灯" 全链路)。
+    - **Scenario C: supersede abort chain** —— seed 2 tasks → 初帧含两 tid → `abort_running_tasks_for_conv` → **P3 广播帧**(如果没 P3,这一帧永不发)→ Set 转 {new} + busy=true → new task done + 三帧 → Set 空 + busy=false(**同时**证 P3 gap 已闭合 **和** 端到端可运行)。
+- **纪律钉死:**
+  - NEUTER 手动探针:P3 删 `notify_conv_changed(conv_id, rev=None)` 单行 → 3 face 翻红,还原复绿;E2E scenario C 结构上等价 NEUTER —— 若 P3 缺失,`len(supersede_frames) >= 2` 直接断裂。
+  - 相邻 SSOT 8 套件汇总 **46/46 全绿**:E2E 3 + P3 lifecycle 6 + P1.5 snapshot 8 + P1 payload 11 + notify 老守 7 + cross-device-send 9 + P2 frontend 24-checks + notify-push 39-face。
+  - `--collect-only` **8164 tests 0 error**(相比 P2 后 8155,+9 新测)。
+- **E2E 覆盖诚实边界(不夸大):** ①**未**覆盖 ASGI WebSocket 传输层 —— 那是 `test_conv_state_ssot_snapshot` 里 `_handle_client_frame` 直调覆盖的。②**未**覆盖多副本 push bus fan-out(inproc 默认;redis 多副本需 live redis,超出集成层范围)。③**已**覆盖:真实 `snapshot_running_by_conv` + 真实 `notify_conv_changed` + 真实 `_running_task_ids_rev` + 真实 `conv_state_reducer.js`(Node subprocess 加载,非重实现),仅在 push_event 外发点插桩捕获帧。
+- **可见 bug 完整闭环(owner 验收剧本第 1-6 步全绿):** 至此可见 bug 三链路都有自动证据链:①send 点亮(E2E scenario A + P1 payload + P2 reducer 三层)②happy-path 熔灯(E2E scenario B + P1 payload 过滤规则)③supersede 熔灯(E2E scenario C + P3 broadcast + P2 reducer)。owner 仍可开两 tab 真机验收(需 server 重启重建 bundle + 硬刷新)—— 现在 fail 一步一步都能定位到具体断链。
+- **latent 登票 pt_ab42421158214591**(登 board gated,不动手):`build_conv_state_snapshot(user_id=1)` 硬编码,routes/push.py::_handle_client_frame 传常量 1;auth 未落时无害,auth 落地后 snapshot 会漏隔离(user B 的 tab 收到 user A registry 快照)+ 客户端 reducer 的 `_currentUserId` 匹配失败会丢弃 user 1 快照。激活信号:auth 层任意 commit 出现 → 立刻翻红需返修。**遵循 owner "latent 不塞进本批 commit" 偏好**。
+- **git 纪律(第 4 次遵循全局 memory 教训):** worktree 有 sibling WIP(`meta_cache.py` + `conversation_list.js`),备份→净化→`git add` 精确 3 文件(注意本轮**没改**这两个 WIP-tainted 文件,备份仍做保险)→ `git diff --cached --stat` 复核 → `git commit`(**无 pathspec**)→ `git show HEAD --stat` 与暂存精确相等 → `cp` 还原 sibling WIP。
+- **状态更新 + 下一相:** P3 + E2E 落地后 SSOT epic 已推进到 P3。**未做:P4(客户端主动 request snapshot 帧,for re-connect 补漏)/ P5(60s drift 探针)/ P6(清扫 3 分支)。** owner 明确"直接推到可见 bug F5-less 修复即停" —— **可见 bug 现已 F5-less 修复且 E2E 证据链完整**,P4-P6 是**加固**(sync 冗余、drift 观察、清扫),非可见 bug 阻断项,建议 owner 现在开两 tab 验收 → 如果观察到任何 F5-less 场景未通,再拉动 P4-P6 补漏。
+
+
+
 ### 2026-07-24(续5) — pt_conv_state_ssot P2 落地:前端 reducer + 字段分离 + convIsBusy 读并集 + 3 处消费点接线 —— **可见 bug 已在客户端修复,F5-less 可复现**(commit,7 文件 +~350,新测 JSDOM 24 checks 绿含 NEUTER 证红 + 相邻 notify-push 39 all-face + collect 8155 0 err)。owner 明示 P2 完成后**才**手动开两 tab 复现验收。
 - **owner 拒收 P1 半成品后的三连击闭环:** P1 服务端 payload(HEAD 33d55537)+ P1.5 connect snapshot 帧(HEAD 3954bd52)+ P2 前端消费(本 commit)。至此,手机 vs 电脑侧栏「3 个 generating vs 少几个 + 点开半截 finish 标签」的可见 bug **无需 F5** 应自愈:snapshot 首帧到达 → `applyConvStateSnapshot` 把 `_authoritativeActiveTaskIds` 写入 → `convIsBusy` 读并集立即点亮侧栏 → 点开会话 `_reconnectServerTaskIfIdle` 从权威 Set 取 tid 重连 SSE → 打半截 finish 标签的静态快照被替换成 live 流。
 - **架构决策(owner 硬约束②照单执行):字段分离,不合并:**

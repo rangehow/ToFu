@@ -1,5 +1,13 @@
 # Project Journal
 
+
+
+### 2026-07-25(续) — owner 验收抓漏:mpApplyFolders 失败回退不降级档位根修(commit `5fbc40e3`,2 文件 +163,套件扩至 16 测全绿含三重 NEUTER,相邻环 67/67,collect **8475** 0 err)。
+- **漏洞(owner 验收原话):** 乐观挂载 → `onProjectAttached()` 晋升 studio(上一批改后**立刻落盘+同步**)→ 后台 setPaths 失败 → catch 回退 projectState/conv 路径但**从不降级档位**——首次挂载即失败时停在「Studio+无项目」,且因落盘钩比以往更粘,恢复钳制要等下次刷新才救得回。
+- **修复:** catch 分支按前态分治——`_prevProjectState.path` 为空 ⇒ 调 `onProjectCleared()`(借既有落盘钩重画+持久化);前态有项目 ⇒ 档位保持 studio(仍然诚实)。两种情况均有行为钉。
+- **要求 3 全路径审计(结论:catch 分支是最后一个毒化生产者):** `_applyChatModeUI` 是全局唯一赋值者,studio 调用点仅 setChatMode(项目闸)/onProjectAttached(真实挂载)/恢复钳制三处;`conv.chatMode` 唯一写入者 `_saveConvToolState`(逐字抄受守全局);新会话不带 chatMode 字段(恢复时派生,无 projectPath ⇒ chat);main_conv_lifecycle 两处为只读解析快照;后端从不往存档写 'studio';跨端同步只能运输修复前写入的毒化对,恢复钳制每次加载自愈。
+- **测试(Harness C,node 驱动真实 mpApplyFolders + 真实 tier 钩):** 无前态项目失败回退 ⇒ 降 chat 且**二次落盘**;有前态项目 ⇒ 保 studio 零降级且恢复 /old;成功路径 ⇒ 照常晋升零误伤;NEUTER(剥降级行)⇒ 首次挂载失败真的滞留 Studio。
+- **落地拓扑:** project.js 工作区混入 sibling 的 streamBufs 删除 hunk(RENDER_CONTRACT §7 WIP)——按 hunk 拆 patch 只暂存我的降级块,commit 不含 pathspec,sibling hunk 零损留在工作区。
 ### 2026-07-25 — 错误气泡「中英双语同屏」根修:typed error envelope 按 UI 语言渲染(commit `4efa1d76`,7 文件 +658/-9,新套件 18 面全绿含 NEUTER + parity 守卫,相邻 envelope/conn_recover/bundle 等 36+10 绿,collect **8467** 0 err)。owner 两问:①kimi-k3 为什么报 Endpoint unreachable;②为什么中英一起显示。
 - **①根因(日志实证,与模型无关):** 2026-07-25 00:26–00:58 第三波网关劣化(同 docs/GATEWAY_INCIDENT_2026-07-24.md 家族):aigc.sankuai.com **请求体上传途中写超时** `('Connection aborted.', TimeoutError('The write operation timed out'))`,R22–R70 高轮次大 prompt 尤甚;两个 sankuai_key **同时**同症(2×23=46 次,00:26–00:58 窗口 ~68 次)——故障在网关/代理层,非 kimi-k3 服务本身(单 key 故障不会双 key 对称同秒同症)。客户端按设计熔断 30s+排除 slot 对;仅 2 个 endpoint 任务(00:52/00:57,高轮次)撞穿全部自愈撞上"无 fallback 模型"终败。00:58 后自愈,07:25 发 2 张图调用成功。改进项=给"全部端点不可达"也提供 fallback(产品取舍,开票层面非 bug)。
 - **②双语根因:** `lib/error_envelope/_build.py` 把 zh+en **同时烘进** `message`/`hint` 字符串,`renderErrorEnvelope` 原样直渲——任何 UI 语言都看到双语墙。这是历史 wire 契约(headless 客户端依赖),不能像普通文案一样直接换 t()。

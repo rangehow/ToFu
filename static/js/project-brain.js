@@ -36,6 +36,7 @@
     run_concluded: 'rocket',
     claimed: 'package',
     blocked: 'alertTriangle',
+    answered: 'check',
     decided: 'lightbulb',
     proposed_decision: 'messageSquare',
     dismissed: 'ban',
@@ -474,7 +475,7 @@
     // its full self instead of a dead mid-word fragment. Short summaries have
     // no summary_full → render as-is with no clamp chrome.
     var fullText = (ev.payload && ev.payload.summary_full) || ev.summary || kindLabel;
-    summary.innerHTML = _clampBlock(_esc(fullText), fullText);
+    summary.innerHTML = _clampBlock(_mdLite(fullText), fullText);
     body.appendChild(summary);
 
     // Timestamp row — a legend without WHEN is only half a fix. Relative text
@@ -638,6 +639,20 @@
     return escapeHtml(String(s == null ? '' : s));
   }
 
+  /** Markdown-LITE inline renderer for panel display text (Pillar #1 of the
+   *  unified interaction redesign). Escape FIRST, then transform — the only
+   *  XSS-safe order. Supports **bold**, `code`, [label](https://url)
+   *  (http/https only) and newlines. Deliberately tiny: no lists/tables/raw
+   *  HTML (raw markup stays visible-escaped instead of executed). */
+  function _mdLite(text) {
+    var s = _esc(text == null ? '' : String(text));
+    s = s.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+    s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g,
+      '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    return s.replace(/\n/g, '<br>');
+  }
+
   // ── Charter column ──────────────────────────────────────────────
   // Renders the north-star content + committed decisions, plus PENDING
   // proposed_decision events (pulled from the live feed state) each with a
@@ -675,7 +690,7 @@
     if (content) {
       parts.push('<div class="pb-charter-northstar-row">' +
         '<div class="pb-charter-northstar" data-charter-northstar="1">' +
-        _clampBlock(_esc(content), content) + '</div>' +
+        _clampBlock(_mdLite(content), content) + '</div>' +
         '<div class="pb-charter-row-actions">' +
         _charterActBtn('pb-charter-edit-northstar', 'edit',
           'projectBrain.editNorthStar', 'Edit north star',
@@ -690,7 +705,7 @@
         var d = decisions[i];
         var txt = (d && typeof d === 'object') ? (d.text || '') : String(d);
         parts.push('<li data-decision-idx="' + i + '">' +
-          '<div class="pb-decision-text">' + _clampBlock(_esc(txt), txt) + '</div>' +
+          '<div class="pb-decision-text">' + _clampBlock(_mdLite(txt), txt) + '</div>' +
           '<div class="pb-charter-row-actions">' +
           _charterActBtn('pb-decision-edit', 'edit',
             'projectBrain.editDecision', 'Edit',
@@ -717,7 +732,7 @@
         parts.push(
           '<div class="pb-proposal" data-event-id="' + _esc(p.event_id) +
           '" data-proposal-id="' + _esc(pid) + '">' +
-          '<div class="pb-proposal-text">' + _clampBlock(_esc(ptext), ptext) + '</div>' +
+          '<div class="pb-proposal-text">' + _clampBlock(_mdLite(ptext), ptext) + '</div>' +
           '<div class="pb-proposal-actions">' +
           '<button type="button" class="pb-proposal-commit" data-text="' + _esc(ptext) +
           '" data-ver="' + version + '" data-proposal-id="' + _esc(pid) + '">' +
@@ -1020,6 +1035,19 @@
         + '">' + ((typeof Icon === 'function') ? Icon('rocket', 11) : '')
         + '<span>' + _esc(_t('projectBrain.dispatched', 'auto')) + '</span></span>'
       : '';
+    // "auto-starts" hint — the epic is genuinely pickable RIGHT NOW (deps done,
+    // not on a cooldown, not live-claimed, has a routing target). The backend
+    // stamps `dispatchable` (never inferred client-side); the frontend just
+    // renders that the ~30s heartbeat sweep will pick it up, and to which
+    // conversation. This answers "why is nothing happening — will it ever fire".
+    var pending = (t.status === 'open' && t.dispatchable)
+      ? '<span class="pb-board-badge pb-board-badge-pending" title="'
+        + _esc(_t('projectBrain.autoStartTitle',
+                  'The project brain heartbeat (~30s) will pick this up automatically'))
+        + (t.dispatch_target ? ' → ' + _esc(t.dispatch_target) : '')
+        + '">' + ((typeof Icon === 'function') ? Icon('clock', 11) : '')
+        + '<span>' + _esc(_t('projectBrain.autoStart', 'auto-starts ~30s')) + '</span></span>'
+      : '';
     // Human lifecycle controls, gated by status:
     //   • complete + block on open|claimed (live-work lifecycle)
     //   • reopen on claimed (break a stuck live claim) AND done (revive)
@@ -1033,17 +1061,26 @@
     if (t.status === 'claimed' || t.status === 'done') {
       acts.push(_boardActionBtn('reopen', 'refresh', 'projectBrain.actReopen', 'Reopen'));
     }
+    // Answered chip — the human's answer that unblocked this epic (the
+    // decision travels WITH the card so any reader sees what was decided).
+    var answered = String(t.human_answer || '').trim()
+      ? '<span class="pb-board-badge pb-board-badge-answered" title="'
+        + _esc(String(t.human_answer).slice(0, 300)) + '">'
+        + ((typeof Icon === 'function') ? Icon('check', 11) : '')
+        + '<span>' + _esc(_t('projectBrain.yourAnswer', 'Your answer')) + ': '
+        + _esc(String(t.human_answer).slice(0, 60)) + '</span></span>'
+      : '';
     var actionsRow = acts.length
       ? '<div class="pb-board-card-actions">' + acts.join('') + '</div>' : '';
     // A board epic title can be a multi-sentence design description (stored
     // full, up to 2000 chars). Render it through the clamp so a long title
     // collapses with a Show more/less toggle instead of a wall of text — the
     // full text is always the expandable source (never a clipped fragment).
-    var titleHtml = _clampBlock(_esc(t.title), t.title || '');
+    var titleHtml = _clampBlock(_mdLite(t.title), t.title || '');
     return '<div class="pb-board-card pb-board-' + _esc(t.status) + '" data-task-id="' +
       _esc(t.id) + '">' +
       '<div class="pb-board-title">' + titleHtml + '</div>' +
-      '<div class="pb-board-card-meta">' + ownerChip + badge + '</div>' +
+      '<div class="pb-board-card-meta">' + ownerChip + badge + pending + answered + '</div>' +
       actionsRow + '</div>';
   }
 
@@ -1058,7 +1095,7 @@
       ? '<button type="button" class="pb-conv-chip" data-conv-id="' + _esc(owner) + '">' +
         _esc(owner) + '</button>'
       : '';
-    var titleHtml = _clampBlock(_esc(t.title), t.title || '');
+    var titleHtml = _clampBlock(_mdLite(t.title), t.title || '');
     return '<div class="pb-board-card pb-board-held" data-task-id="' +
       _esc(t.id) + '">' +
       '<div class="pb-board-title">' + titleHtml + '</div>' +
@@ -1073,27 +1110,139 @@
    *  carries the [human-gated]/[sibling] class tag) and the approximate
    *  retry-in minutes — the answer to "why is nothing happening" that was
    *  invisible before. It still offers reopen (human forces an immediate retry,
-   *  resetting the cooldown) and complete. */
+   *  resetting the cooldown) and complete.
+   *
+   *  ONE clamp per card (Pillar #3 of the redesign): title + reason render in
+   *  a SINGLE collapsed block — the old title-clamp + reason-clamp pair was
+   *  the "several 展开全文 per epic" complaint. */
   function _blockedCard(t) {
     var mins = Math.max(0, Math.round((Number(t.blocked_until || 0) - Date.now()) / 60000));
     var reason = (t.block_reason || '').trim();
     var cnt = Number(t.block_count || 0);
     var meta = _esc(_t('projectBrain.blockedRetry', 'auto-retry in') + ' ~' + mins + 'm')
-      + (cnt ? ' · ' + _esc('' + cnt + '×') : '');
-    var reasonHtml = reason
-      ? '<div class="pb-board-block-reason">' + _clampBlock(_esc(reason), reason) + '</div>'
-      : '';
+      + (cnt ? ' · ' + _esc(_t('projectBrain.blockedCount', 'blocked %d×')
+                            .replace('%d', cnt)) : '');
+    var headText = String(t.title || '') + (reason ? '\n\n' + reason : '');
+    var headHtml = _clampBlock(_mdLite(headText), headText);
     var acts = [
       _boardActionBtn('reopen', 'refresh', 'projectBrain.actReopen', 'Reopen'),
       _boardActionBtn('complete', 'check', 'projectBrain.actComplete', 'Done'),
     ];
-    var titleHtml = _clampBlock(_esc(t.title), t.title || '');
     return '<div class="pb-board-card pb-board-blocked" data-task-id="' +
       _esc(t.id) + '">' +
-      '<div class="pb-board-title">' + titleHtml + '</div>' +
-      reasonHtml +
+      '<div class="pb-board-title">' + headHtml + '</div>' +
       '<div class="pb-board-card-meta pb-board-block-meta">' + meta + '</div>' +
       '<div class="pb-board-card-actions">' + acts.join('') + '</div></div>';
+  }
+
+  /** Render one AWAITING-ANSWER epic card (Pillar #3 — the ask_human-style
+   *  closure for board work). A [human-gated] block with a structured
+   *  question renders the QUESTION as the primary content with one-click
+   *  option chips + a free-text input; submitting calls board/answer, which
+   *  clears the gate and IMMEDIATELY re-dispatches the epic with the answer
+   *  in its kickoff. Reopen/Done stay available as secondary lifecycle
+   *  controls. ONE clamp per card (title+reason combined). */
+  function _answerCard(t) {
+    var q = (t.block_question && typeof t.block_question === 'object')
+      ? t.block_question : { q: '', options: [] };
+    var opts = Array.isArray(q.options) ? q.options : [];
+    var chips = opts.map(function (o, i) {
+      var label = (o && o.label) ? String(o.label) : '';
+      if (!label) return '';
+      var desc = (o && o.description) ? String(o.description) : '';
+      return '<button type="button" class="pb-chip pb-board-act" data-act="answerOpt"'
+        + ' data-idx="' + i + '"'
+        + (desc ? ' title="' + _esc(desc) + '"' : '')
+        + ' data-pb-src="' + _esc(label) + '">' + _mdLite(label) + '</button>';
+    }).join('');
+    var inputRow = '<div class="pb-answer-input-row">'
+      + '<input type="text" class="pb-answer-text" placeholder="'
+      + _esc(_t('projectBrain.answerPlaceholder',
+                'Type your answer (or pick an option above)…')) + '">'
+      + '<button type="button" class="pb-board-act pb-board-act-answer pb-btn-primary"'
+      + ' data-act="answerSubmit">'
+      + ((typeof Icon === 'function') ? Icon('check', 12) : '')
+      + '<span>' + _esc(_t('projectBrain.answerSubmit', 'Submit answer')) + '</span></button>'
+      + '</div>';
+    var questionBox = '<div class="pb-question">'
+      + '<div class="pb-question-label">'
+      + ((typeof Icon === 'function') ? Icon('alertTriangle', 12) : '')
+      + _esc(_t('projectBrain.needsYourDecision', 'Your decision needed')) + '</div>'
+      + '<div class="pb-question-q" data-pb-src="' + _esc(q.q || '') + '">'
+      + _mdLite(q.q || '') + '</div>'
+      + (chips ? '<div class="pb-chip-row">' + chips + '</div>' : '')
+      + inputRow + '</div>';
+    var cnt = Number(t.block_count || 0);
+    var meta = _esc(_t('projectBrain.awaitingAnswerMeta', 'waiting for your answer'))
+      + (cnt ? ' · ' + _esc(_t('projectBrain.blockedCount', 'blocked %d×')
+                            .replace('%d', cnt)) : '');
+    var reason = (t.block_reason || '').trim();
+    var headText = String(t.title || '') + (reason ? '\n\n' + reason : '');
+    var headHtml = _clampBlock(_mdLite(headText), headText);
+    var acts = [
+      _boardActionBtn('reopen', 'refresh', 'projectBrain.actReopen', 'Reopen'),
+      _boardActionBtn('complete', 'check', 'projectBrain.actComplete', 'Done'),
+    ];
+    return '<div class="pb-board-card pb-board-awaiting" data-task-id="' +
+      _esc(t.id) + '">' +
+      '<div class="pb-board-title">' + headHtml + '</div>' +
+      questionBox +
+      '<div class="pb-board-card-meta pb-board-block-meta">' + meta + '</div>' +
+      '<div class="pb-board-card-actions">' + acts.join('') + '</div></div>';
+  }
+
+  /** Look up a task on the last-rendered board snapshot (answer acts need the
+   *  structured question's option labels). */
+  function _findBoardTask(taskId) {
+    var tasks = (_state.board && _state.board.tasks) || [];
+    for (var i = 0; i < tasks.length; i++) {
+      if (tasks[i] && tasks[i].id === taskId) return tasks[i];
+    }
+    return null;
+  }
+
+  /** Inline note editor replacing window.prompt (Pillar #2 — unified
+   *  in-panel interaction). Toggles under the clicked Block button; submit
+   *  calls board/block with the note as the reason. */
+  function _openBlockNoteEditor(btn, taskId, path, convId) {
+    var card = btn && btn.closest ? btn.closest('.pb-board-card') : null;
+    if (!card) return;
+    var existing = card.querySelector('.pb-note-editor');
+    if (existing) { existing.remove(); return; }
+    var editor = document.createElement('div');
+    editor.className = 'pb-note-editor';
+    editor.innerHTML = '<input type="text" class="pb-note-text" placeholder="'
+      + _esc(_t('projectBrain.blockReasonPrompt', 'Why is this blocked?')) + '">'
+      + '<button type="button" class="pb-board-act pb-btn-primary" data-note-submit="1">'
+      + _esc(_t('projectBrain.blockNoteSubmit', 'Mark blocked')) + '</button>'
+      + '<button type="button" class="pb-board-act" data-note-cancel="1">'
+      + _esc(_t('projectBrain.blockNoteCancel', 'Cancel')) + '</button>';
+    card.appendChild(editor);
+    var input = editor.querySelector('.pb-note-text');
+    if (input && input.focus) input.focus();
+    function submit() {
+      var reason = input ? (input.value || '').trim() : '';
+      var call = Api.project.boardBlock(path, taskId, convId, reason);
+      var submitBtn = editor.querySelector('[data-note-submit]');
+      if (submitBtn) submitBtn.disabled = true;
+      Promise.resolve(call).then(function () {
+        refreshBoard(path);
+        refreshInfluence(path);
+      }).catch(function (e) {
+        if (typeof console !== 'undefined') console.warn('[ProjectBrain] board block failed', e);
+        if (submitBtn) submitBtn.disabled = false;
+      });
+    }
+    editor.querySelector('[data-note-submit]').addEventListener('click', submit);
+    editor.querySelector('[data-note-cancel]').addEventListener('click', function () {
+      editor.remove();
+    });
+    if (input) {
+      input.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter') { ev.preventDefault(); submit(); }
+        if (ev.key === 'Escape') { editor.remove(); }
+      });
+    }
   }
 
   /** Dispatch a per-card human mutation → backend → refreshBoard (no local
@@ -1109,11 +1258,22 @@
     } else if (act === 'reopen' && typeof api.boardReopen === 'function') {
       call = api.boardReopen(path, taskId, convId);
     } else if (act === 'block' && typeof api.boardBlock === 'function') {
-      var reason = '';
-      if (typeof prompt === 'function') {
-        reason = prompt(_t('projectBrain.blockReasonPrompt', 'Why is this blocked?')) || '';
-      }
-      call = api.boardBlock(path, taskId, convId, reason);
+      _openBlockNoteEditor(btn, taskId, path, convId);
+      return;  // the inline editor owns the rest of the flow
+    } else if (act === 'answerOpt' && typeof api.boardAnswer === 'function') {
+      var task = _findBoardTask(taskId);
+      var q = (task && task.block_question) || {};
+      var opts = Array.isArray(q.options) ? q.options : [];
+      var opt = opts[Number(btn ? btn.getAttribute('data-idx') : -1)];
+      var optLabel = (opt && opt.label) ? String(opt.label).trim() : '';
+      if (!optLabel) return;
+      call = api.boardAnswer(path, taskId, convId, optLabel);
+    } else if (act === 'answerSubmit' && typeof api.boardAnswer === 'function') {
+      var cardEl = btn && btn.closest ? btn.closest('.pb-board-card') : null;
+      var input = cardEl ? cardEl.querySelector('.pb-answer-text') : null;
+      var freeText = input ? (input.value || '').trim() : '';
+      if (!freeText) { if (input && input.focus) input.focus(); return; }
+      call = api.boardAnswer(path, taskId, convId, freeText);
     }
     if (!call) return;
     if (btn) btn.disabled = true;
@@ -1126,22 +1286,51 @@
     });
   }
 
-  /** Prompt for a title and post a new OPEN epic (created_by_conv = displayed
-   *  conv). Disabled entirely when there's no conversation context (the
-   *  backend refuses a blank convId, so the UI must not offer it). */
+  /** Post a new OPEN epic via an INLINE toolbar editor (created_by_conv =
+   *  displayed conv) — the same in-panel editor family as the block-note and
+   *  answer inputs (no window.prompt anywhere in the panel). Disabled
+   *  entirely when there's no conversation context (the backend refuses a
+   *  blank convId, so the UI must not offer it). */
   function _boardPostNew() {
     var api = (typeof Api !== 'undefined' && Api.project) ? Api.project : null;
     var path = _state.path || _displayedProjectPath();
     var convId = _boardConvId();
     if (!api || !path || !convId || typeof api.boardPost !== 'function') return;
-    var title = (typeof prompt === 'function')
-      ? (prompt(_t('projectBrain.newEpicPrompt', 'New epic title')) || '').trim() : '';
-    if (!title) return;
-    Promise.resolve(api.boardPost(path, { title: title, convId: convId })).then(function () {
-      refreshBoard(path);
-    }).catch(function (e) {
-      if (typeof console !== 'undefined') console.warn('[ProjectBrain] board post failed', e);
+    var toolbar = document.querySelector('#projectBrainBoardBody .pb-board-toolbar');
+    if (!toolbar || toolbar.querySelector('.pb-note-editor')) return;
+    var editor = document.createElement('div');
+    editor.className = 'pb-note-editor pb-new-epic-editor';
+    editor.innerHTML = '<input type="text" class="pb-note-text" placeholder="'
+      + _esc(_t('projectBrain.newEpicPrompt', 'New epic title')) + '">'
+      + '<button type="button" class="pb-board-act pb-btn-primary" data-note-submit="1">'
+      + _esc(_t('projectBrain.newEpic', 'New epic')) + '</button>'
+      + '<button type="button" class="pb-board-act" data-note-cancel="1">'
+      + _esc(_t('projectBrain.blockNoteCancel', 'Cancel')) + '</button>';
+    toolbar.appendChild(editor);
+    var input = editor.querySelector('.pb-note-text');
+    if (input && input.focus) input.focus();
+    function submit() {
+      var title = input ? (input.value || '').trim() : '';
+      if (!title) { if (input && input.focus) input.focus(); return; }
+      var submitBtn = editor.querySelector('[data-note-submit]');
+      if (submitBtn) submitBtn.disabled = true;
+      Promise.resolve(api.boardPost(path, { title: title, convId: convId }))
+        .then(function () { refreshBoard(path); })
+        .catch(function (e) {
+          if (typeof console !== 'undefined') console.warn('[ProjectBrain] board post failed', e);
+          if (submitBtn) submitBtn.disabled = false;
+        });
+    }
+    editor.querySelector('[data-note-submit]').addEventListener('click', submit);
+    editor.querySelector('[data-note-cancel]').addEventListener('click', function () {
+      editor.remove();
     });
+    if (input) {
+      input.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter') { ev.preventDefault(); submit(); }
+        if (ev.key === 'Escape') { editor.remove(); }
+      });
+    }
   }
 
   function renderBoard(board) {
@@ -1154,7 +1343,7 @@
       _setTabCount('pbTabCountBoard', 0);
       return;
     }
-    var cols = { open: [], claimed: [], done: [], blocked: [] };
+    var cols = { open: [], claimed: [], done: [], blocked: [], awaiting: [] };
     var held = [];
     var _nowMs = Date.now();
     for (var i = 0; i < tasks.length; i++) {
@@ -1168,6 +1357,12 @@
       // — matching render_board_block's Held filter (kind=='lease' AND
       // status=='claimed').
       if (t.kind === 'lease') { if (t.status === 'claimed') held.push(t); continue; }
+      // A PENDING structured human question waits for the ANSWER, not for
+      // time — its own lane at the TOP regardless of cooldown state
+      // (auto-retry is paused backend-side until answered; answering
+      // re-dispatches the epic immediately).
+      if (t.status === 'open' && t.block_question &&
+          !String(t.human_answer || '').trim()) { cols.awaiting.push(t); continue; }
       // An epic on a LIVE block cooldown (stored status='open' but
       // blocked_until in the future) goes to its own Blocked lane — NOT the
       // Open lane (where it would read as "claim me"), mirroring the backend
@@ -1180,7 +1375,8 @@
     }
     // Board badge = live epics needing attention (open + claimed), not done,
     // blocked (waiting on a gate), or path leases.
-    _setTabCount('pbTabCountBoard', cols.open.length + cols.claimed.length);
+    _setTabCount('pbTabCountBoard',
+      cols.open.length + cols.claimed.length + cols.awaiting.length);
     function lane(key, labelKey) {
       var cards = cols[key].map(_boardCard).join('') ||
         '<div class="pb-board-lane-empty">—</div>';
@@ -1225,8 +1421,20 @@
         ' <span class="pb-board-count">' + cols.blocked.length + '</span></div>' +
         blockedCards + '</div>';
     }
+    // Awaiting-answer lane (pending human questions) — TOP of the board,
+    // the one place the operator is asked to ACT.
+    var awaitingLane = '';
+    if (cols.awaiting.length) {
+      awaitingLane = '<div class="pb-board-lane pb-board-lane-awaiting">' +
+        '<div class="pb-board-lane-head">' +
+        ((typeof Icon === 'function') ? Icon('alertTriangle', 12) : '') +
+        ' ' + _esc(_t('projectBrain.laneAwaiting', 'Awaiting your answer')) +
+        ' <span class="pb-board-count">' + cols.awaiting.length + '</span></div>' +
+        cols.awaiting.map(_answerCard).join('') + '</div>';
+    }
     el.innerHTML =
       '<div class="pb-board-toolbar">' + newBtn + '</div>' +
+      awaitingLane +
       lane('open', 'projectBrain.laneOpen') +
       lane('claimed', 'projectBrain.laneClaimed') +
       blockedLane +
@@ -1247,6 +1455,17 @@
     // "＋ New epic"
     var nb = el.querySelector('#pbBoardNewBtn');
     if (nb && !nb.disabled) nb.addEventListener('click', _boardPostNew);
+    // Answer inputs: Enter submits (same as clicking 提交回答).
+    var answerInputs = el.querySelectorAll('.pb-answer-text');
+    for (var ai = 0; ai < answerInputs.length; ai++) {
+      answerInputs[ai].addEventListener('keydown', function (ev) {
+        if (ev.key !== 'Enter') return;
+        ev.preventDefault();
+        var card = ev.currentTarget.closest ? ev.currentTarget.closest('.pb-board-card') : null;
+        var submit = card ? card.querySelector('.pb-board-act[data-act="answerSubmit"]') : null;
+        if (submit) submit.click();
+      });
+    }
     // Per-card human lifecycle actions (complete / block / reopen).
     var actBtns = el.querySelectorAll('.pb-board-act');
     for (var a = 0; a < actBtns.length; a++) {
@@ -1264,6 +1483,7 @@
     var api = (typeof Api !== 'undefined' && Api.project) ? Api.project : null;
     if (!api || !path || typeof api.board !== 'function') return;
     Promise.resolve(api.board(path)).then(function (board) {
+      _state.board = board || {};  // answer acts resolve option labels from it
       renderBoard(board || {});
     }).catch(function (e) {
       if (typeof console !== 'undefined') console.warn('[ProjectBrain] board load failed', e);
@@ -1364,13 +1584,13 @@
         _esc(_t('projectBrain.infCharterHead', 'Bound by the charter')) + '</div>');
       if (charter.content) {
         cparts.push('<div class="pb-inf-northstar">' +
-          _clampBlock(_esc(charter.content), charter.content) + '</div>');
+          _clampBlock(_mdLite(charter.content), charter.content) + '</div>');
       }
       var decs = charter.decisions || [];
       if (decs.length) {
         cparts.push('<ul class="pb-inf-decisions">');
         for (var i = 0; i < Math.min(decs.length, 6); i++) {
-          cparts.push('<li>' + _clampBlock(_esc(decs[i]), String(decs[i])) + '</li>');
+          cparts.push('<li>' + _clampBlock(_mdLite(decs[i]), String(decs[i])) + '</li>');
         }
         cparts.push('</ul>');
       }

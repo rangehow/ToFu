@@ -20187,6 +20187,39 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
 .pb-board-act{display:inline-flex;align-items:center;gap:4px;background:var(--bg-secondary);color:var(--text-secondary);border:1px solid var(--border);border-radius:var(--pb-radius-sm);padding:4px 9px;font-size:11px;font-weight:600;font-family:inherit;cursor:pointer;transition:color var(--transition),border-color var(--transition),background var(--transition)}
 .pb-board-act:hover{color:var(--text-primary);border-color:var(--border-light)}
 .pb-board-act:disabled{opacity:0.55;cursor:default}
+/* ── Unified board interaction primitives (Pillar #2 of the panel redesign) ── */
+/* Primary CTA (submit answer / mark blocked) — same family as .pb-board-act,
+   one accent fill so the eye lands on the single forward action. */
+.pb-board-act.pb-btn-primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.pb-board-act.pb-btn-primary:hover{background:var(--accent-hover);color:#fff;border-color:var(--accent-hover)}
+.pb-board-act:focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 60%,transparent);outline-offset:1px}
+/* Awaiting-answer lane + card — the ONE place the operator must act. */
+.pb-board-lane-awaiting .pb-board-lane-head{color:var(--accent)}
+.pb-board-lane-awaiting .pb-board-count{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 34%,transparent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.pb-board-card.pb-board-awaiting{border-left:3px solid var(--accent)}
+/* Structured question panel — the decision is the primary content, not a
+   blob buried under a wall of English reason text. */
+.pb-question{margin-top:10px;padding:10px 12px;border:1px solid color-mix(in srgb,var(--accent) 30%,transparent);border-radius:var(--pb-radius-sm);background:color-mix(in srgb,var(--accent) 6%,transparent)}
+.pb-question-label{display:flex;align-items:center;gap:5px;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--accent);margin-bottom:6px}
+.pb-question-label svg{display:block}
+.pb-question-q{font-size:12.5px;line-height:1.6;color:var(--text-primary);overflow-wrap:anywhere;word-break:break-word}
+.pb-question-q code{font-family:var(--font-mono,monospace);font-size:11.5px;background:var(--bg-tertiary);padding:1px 5px;border-radius:4px}
+.pb-chip-row{display:flex;flex-wrap:wrap;gap:7px;margin-top:9px}
+.pb-chip{display:inline-flex;align-items:center;gap:4px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-light);border-radius:var(--pb-radius-chip);padding:5px 12px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;transition:background var(--transition),border-color var(--transition),transform 0.1s ease}
+.pb-chip:hover{background:var(--bg-hover);border-color:var(--accent)}
+.pb-chip:active{transform:scale(0.97)}
+.pb-chip:disabled{opacity:0.55;cursor:default}
+.pb-answer-input-row{display:flex;gap:7px;margin-top:9px}
+.pb-answer-text{flex:1;min-width:0;background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--pb-radius-sm);padding:6px 10px;font-size:12px;color:var(--text-primary);font-family:inherit}
+.pb-answer-text:focus{outline:none;border-color:var(--accent)}
+/* Inline note editor (replaces window.prompt for Block) — same family as the
+   answer input row so every in-panel prompt looks + behaves identically. */
+.pb-note-editor{display:flex;gap:7px;margin-top:9px;padding-top:9px;border-top:1px dashed var(--border)}
+.pb-note-text{flex:1;min-width:0;background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--pb-radius-sm);padding:6px 10px;font-size:12px;color:var(--text-primary);font-family:inherit}
+.pb-note-text:focus{outline:none;border-color:var(--accent)}
+/* Answered badge — the human's decision travels with the unblocked epic. */
+.pb-board-badge-answered{background:color-mix(in srgb,var(--pb-green,#3fb950) 12%,transparent);color:var(--pb-green,#3fb950);border:1px solid color-mix(in srgb,var(--pb-green,#3fb950) 30%,transparent)}
+.pb-board-badge-answered svg{width:11px;height:11px}
 
 /* collab-bar conflict styling (shares this block's ownership). */
 .collab-seg-conflict{color:var(--pb-red);font-weight:600}

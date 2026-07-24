@@ -102,6 +102,48 @@ def gpt_reasoning_effort(effort, thinking_enabled: bool = True,
     return eff
 
 
+# Moonshot Kimi K3 reasoning-effort ladder.
+#
+# K3 always thinks (thinking cannot be disabled) and takes the TOP-LEVEL
+# ``reasoning_effort`` string: low / high / max (default max) — per the
+# official quickstart (platform.kimi.ai/docs/guide/kimi-k3-quickstart) and
+# verified live against the sankuai gateway 2026-07-24. Sending any
+# temperature other than 1.0 earns an HTTP 400
+# (``invalid temperature: only 1 is allowed for this model``), so K3 bodies
+# must omit temperature entirely.
+#
+# Tofu's depth ladder (off/low/medium/high/xhigh/max/ultra) collapses onto
+# K3's three rungs, rounding UP so a depth never gets less reasoning than
+# asked for. ``off`` maps to ``low`` — the closest legal rung, since K3 has
+# no true off switch.
+_KIMI_K3_EFFORT_MAP = {
+    'off': 'low', 'minimal': 'low',
+    'low': 'low',
+    'medium': 'high',
+    'high': 'high',
+    'xhigh': 'max', 'max': 'max',
+    # 'ultra' is a GPT-5.6-only tier — K3's top rung is max.
+    'ultra': 'max',
+}
+
+
+def kimi_k3_reasoning_effort(effort, thinking_enabled: bool = True) -> str:
+    """Map a Tofu thinking-depth value to a Kimi K3 ``reasoning_effort``.
+
+    Args:
+        effort: Tofu depth ladder value (off/low/medium/high/xhigh/max/ultra)
+            or None.
+        thinking_enabled: When False, force ``low`` — K3 cannot truly disable
+            thinking, so ``low`` is the cheapest legal rung.
+
+    Returns:
+        One of ``'low'`` / ``'high'`` / ``'max'``.
+    """
+    if not thinking_enabled:
+        return 'low'
+    return _KIMI_K3_EFFORT_MAP.get((effort or 'medium').lower(), 'high')
+
+
 
 # ══════════════════════════════════════════════════════════
 #  Continue / Resume capability probes

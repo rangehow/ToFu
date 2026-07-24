@@ -563,14 +563,16 @@ def _readjust_thinking_params(body: dict, new_model: str, thinking_format: str):
       - MiniMax:  reasoning_split = True
       - Qwen/LongCat: enable_thinking = True/False
       - Gemini 3.x: reasoning_effort = 'minimal'/'low'/'medium'/'high'
+      - Kimi K3:    reasoning_effort = 'low'/'high'/'max', NO temperature
+      - Kimi K2:    thinking.type = 'enabled'/'disabled'
 
     When dispatch swaps the model (e.g. Claude → Doubao), the body may carry
     the wrong format, causing HTTP 400 errors. This function detects mismatches
     and converts to the correct format for the new model.
     """
     from lib.llm import (
-        is_claude, is_doubao, is_gemini, is_glm, is_gpt5, is_longcat,
-        is_minimax, is_qwen,
+        is_claude, is_doubao, is_gemini, is_glm, is_gpt5, is_kimi,
+        is_kimi_k3, is_longcat, is_minimax, is_qwen,
     )
 
     # Detect current thinking state from the body
@@ -655,6 +657,15 @@ def _readjust_thinking_params(body: dict, new_model: str, thinking_format: str):
         body['enable_thinking'] = is_enabled
     elif _tf == 'thinking_type' or (not _tf and is_doubao(new_model)):
         body['thinking'] = {'type': 'enabled' if is_enabled else 'disabled'}
+    elif not _tf and is_kimi(new_model):
+        if is_kimi_k3(new_model):
+            # K3: top-level reasoning_effort only; temperature stripped below.
+            from lib.llm import kimi_k3_reasoning_effort
+            body['reasoning_effort'] = kimi_k3_reasoning_effort(
+                effort, is_enabled)
+        else:
+            body['thinking'] = {'type': 'enabled' if is_enabled else 'disabled'}
+            body['temperature'] = 1.0 if is_enabled else 0.6
     elif not _tf and is_glm(new_model):
         body['thinking'] = {'type': 'enabled' if is_enabled else 'disabled'}
         if is_enabled:
@@ -693,6 +704,14 @@ def _readjust_thinking_params(body: dict, new_model: str, thinking_format: str):
     from lib.llm import is_claude_opus_47
     if is_claude_opus_47(new_model):
         for _k in ('temperature', 'top_p', 'top_k'):
+            body.pop(_k, None)
+
+    # ── Kimi K3 fixes temperature=1.0 — any other value is HTTP 400 ──
+    # Strip unconditionally: a body swapped in from another family (e.g.
+    # Qwen's temperature=0.7) would otherwise carry a rejected value.
+    if is_kimi_k3(new_model):
+        for _k in ('temperature', 'top_p', 'presence_penalty',
+                   'frequency_penalty'):
             body.pop(_k, None)
 
     # Observability: which dialect actually landed on the wire? Debug

@@ -66,9 +66,11 @@ from lib.model_info import (  # noqa: F401
     is_gpt5,
     is_gpt_56,
     is_kimi,
+    is_kimi_k3,
     is_longcat,
     is_minimax,
     is_qwen,
+    kimi_k3_reasoning_effort,
     model_supports_vision,
 )
 
@@ -125,8 +127,9 @@ __all__ = [
     # model detection (re-exported)
     'is_claude', 'is_claude_opus_47', 'is_doubao', 'is_ernie',
     'is_gemini', 'is_glm', 'is_gpt', 'is_gpt5', 'is_gpt_56', 'is_kimi',
-    'is_longcat', 'is_minimax', 'is_qwen', 'model_supports_vision',
+    'is_kimi_k3', 'is_longcat', 'is_minimax', 'is_qwen', 'model_supports_vision',
     'gemini_reasoning_effort', 'gpt_reasoning_effort',
+    'kimi_k3_reasoning_effort',
     '_clamp_max_tokens',
     # sanitization (re-exported)
     '_fix_empty_user_messages',

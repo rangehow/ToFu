@@ -95,6 +95,18 @@ def is_kimi(model: str) -> bool:
     return 'kimi' in m or 'moonshot' in m
 
 
+def is_kimi_k3(model: str) -> bool:
+    """Moonshot Kimi K3 specifically (kimi-k3, kimi-k3.1, …).
+
+    K3 speaks a DIFFERENT thinking contract from the K2 line: top-level
+    ``reasoning_effort`` (low/high/max, default max) and a fixed
+    temperature=1.0 that rejects any other value with HTTP 400 (verified
+    live against the sankuai gateway 2026-07-24). The K2-style
+    ``thinking:{type:...}`` + temperature shape must NOT be sent to K3.
+    """
+    return 'kimi-k3' in model.lower()
+
+
 def is_ernie(model: str) -> bool:
     """Baidu ERNIE models (ERNIE-5.0, ERNIE-X1, ERNIE-4.5, etc.)."""
     return 'ernie' in model.lower()

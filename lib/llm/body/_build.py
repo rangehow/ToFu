@@ -27,9 +27,11 @@ from lib.model_info import (
     is_glm,
     is_gpt5,
     is_kimi,
+    is_kimi_k3,
     is_longcat,
     is_minimax,
     is_qwen,
+    kimi_k3_reasoning_effort,
     model_supports_vision,
 )
 
@@ -57,7 +59,8 @@ def build_body(model, messages, *, max_tokens=128000, temperature=1.0,
 
     Handles provider-specific parameters automatically:
       - Claude:   thinking.type='adaptive', effort param, cache breakpoints
-      - Kimi:     thinking.type='enabled'/'disabled', fixed temp
+      - Kimi K3:  top-level reasoning_effort (low/high/max), no temperature
+      - Kimi K2:  thinking.type='enabled'/'disabled', fixed temp
       - GLM:      thinking.type='enabled', temperature clamped to (0, 1)
       - Doubao:   thinking.type='enabled'/'disabled'
       - LongCat:  enable_thinking flag, temperature adjustment
@@ -220,13 +223,23 @@ def build_body(model, messages, *, max_tokens=128000, temperature=1.0,
             body['thinking'] = {'type': 'disabled'}
             body['temperature'] = max(temperature, 0.01) if temperature else 0.7
     elif not _tf and is_kimi(model):
-        _is_k2_thinking = 'k2-thinking' in model.lower() and 'turbo' not in model.lower()
-        if _is_k2_thinking or thinking_enabled:
-            body['thinking'] = {'type': 'enabled'}
-            body['temperature'] = 1.0
+        if is_kimi_k3(model):
+            # K3 contract (official quickstart + verified live against the
+            # sankuai gateway 2026-07-24): top-level ``reasoning_effort``
+            # (low/high/max, default max); K3 always thinks, so depth 'off'
+            # degrades to 'low'. Temperature is FIXED at 1.0 — sending any
+            # other value is HTTP 400 — so it must be omitted entirely.
+            body['reasoning_effort'] = kimi_k3_reasoning_effort(
+                _effort, thinking_enabled)
         else:
-            body['thinking'] = {'type': 'disabled'}
-            body['temperature'] = 0.6
+            _is_k2_thinking = ('k2-thinking' in model.lower()
+                               and 'turbo' not in model.lower())
+            if _is_k2_thinking or thinking_enabled:
+                body['thinking'] = {'type': 'enabled'}
+                body['temperature'] = 1.0
+            else:
+                body['thinking'] = {'type': 'disabled'}
+                body['temperature'] = 0.6
         body.pop('top_p', None)
         body.pop('presence_penalty', None)
         body.pop('frequency_penalty', None)

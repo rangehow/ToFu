@@ -240,6 +240,66 @@ class TestBuildBody:
                           stream=False)
         assert body.get('effort') == 'max'
 
+    def test_kimi_k3_reasoning_effort_ladder(self):
+        """Kimi K3 takes the TOP-LEVEL ``reasoning_effort`` string
+        (low/high/max, default max — official quickstart, verified live
+        against the sankuai gateway 2026-07-24). Tofu's depth ladder
+        collapses onto the three K3 rungs rounding UP; no thinking /
+        enable_thinking block may be emitted."""
+        from lib.llm import build_body
+
+        cases = {'off': 'low', 'low': 'low', 'medium': 'high',
+                 'high': 'high', 'xhigh': 'max', 'max': 'max',
+                 'ultra': 'max'}
+        for depth, expected in cases.items():
+            body = build_body('kimi-k3', self.DUMMY_MSGS, max_tokens=4096,
+                              thinking_enabled=(depth != 'off'),
+                              thinking_depth=depth, stream=False)
+            assert body.get('reasoning_effort') == expected, (depth, body)
+            assert 'thinking' not in body
+            assert 'enable_thinking' not in body
+
+    def test_kimi_k3_never_emits_temperature(self):
+        """K3 fixes temperature=1.0 — any other value is HTTP 400
+        (``invalid temperature: only 1 is allowed for this model``,
+        verified live 2026-07-24). build_body must OMIT temperature for
+        K3 in both thinking states. Regression guard for the bug where
+        depth='off' sent temperature=0.6 and every K3 request 400'd."""
+        from lib.llm import build_body
+
+        for thinking_enabled in (True, False):
+            body = build_body('kimi-k3', self.DUMMY_MSGS, max_tokens=4096,
+                              thinking_enabled=thinking_enabled,
+                              temperature=0.6, stream=False)
+            assert 'temperature' not in body, (thinking_enabled, body)
+            assert 'top_p' not in body
+            assert 'thinking' not in body
+        # thinking off degrades to the cheapest legal rung (K3 always thinks)
+        body = build_body('kimi-k3', self.DUMMY_MSGS, max_tokens=4096,
+                          thinking_enabled=False, stream=False)
+        assert body.get('reasoning_effort') == 'low'
+
+    def test_kimi_k3_default_effort_high(self):
+        from lib.llm import build_body
+        body = build_body('kimi-k3', self.DUMMY_MSGS, max_tokens=4096,
+                          thinking_enabled=True, stream=False)
+        assert body.get('reasoning_effort') == 'high'
+
+    def test_kimi_k2_shape_unchanged(self):
+        """The K3 fix must not disturb the K2 line's wire shape."""
+        from lib.llm import build_body
+
+        body = build_body('kimi-k2.6', self.DUMMY_MSGS, max_tokens=4096,
+                          thinking_enabled=True, stream=False)
+        assert body.get('thinking') == {'type': 'enabled'}
+        assert body.get('temperature') == 1.0
+        assert 'reasoning_effort' not in body
+        body = build_body('kimi-k2.6', self.DUMMY_MSGS, max_tokens=4096,
+                          thinking_enabled=False, stream=False)
+        assert body.get('thinking') == {'type': 'disabled'}
+        assert body.get('temperature') == 0.6
+        assert 'reasoning_effort' not in body
+
     def test_fable_detected_as_claude_family(self):
         """Anthropic Fable models take the Claude thinking shape."""
         from lib.llm import build_body, is_claude
@@ -656,6 +716,61 @@ class TestReadjustThinkingParams:
         body = {'model': 'gemini-3.5-flash', 'reasoning_effort': 'minimal'}
         _readjust_thinking_params(body, 'doubao-pro', '')
         assert body.get('thinking') == {'type': 'disabled'}
+
+    def test_swap_to_kimi_k3_emits_reasoning_effort_and_strips_temperature(self):
+        """A Qwen body (enable_thinking + temperature=0.7) re-routed to K3
+        must shed both — K3 rejects temperature != 1.0 with HTTP 400 and
+        takes only top-level reasoning_effort."""
+        from lib.llm_dispatch.api import _readjust_thinking_params
+
+        body = {'model': 'qwen3.5-plus', 'enable_thinking': True,
+                'temperature': 0.7}
+        _readjust_thinking_params(body, 'kimi-k3', '')
+        assert body.get('reasoning_effort') == 'high'
+        assert 'enable_thinking' not in body
+        assert 'thinking' not in body
+        assert 'temperature' not in body
+
+    def test_swap_to_kimi_k3_carries_effort(self):
+        from lib.llm_dispatch.api import _readjust_thinking_params
+
+        body = {'model': 'claude-sonnet-4',
+                'thinking': {'type': 'adaptive'}, 'effort': 'max',
+                'temperature': 1.0}
+        _readjust_thinking_params(body, 'kimi-k3', '')
+        assert body.get('reasoning_effort') == 'max'
+        assert 'thinking' not in body
+        assert 'effort' not in body
+        assert 'temperature' not in body
+
+    def test_swap_to_kimi_k3_thinking_off_degrades_to_low(self):
+        from lib.llm_dispatch.api import _readjust_thinking_params
+
+        body = {'model': 'qwen3.5-plus', 'enable_thinking': False,
+                'temperature': 0.7}
+        _readjust_thinking_params(body, 'kimi-k3', '')
+        assert body.get('reasoning_effort') == 'low'
+        assert 'temperature' not in body
+
+    def test_swap_from_kimi_k3_to_qwen_drops_reasoning_effort(self):
+        from lib.llm_dispatch.api import _readjust_thinking_params
+
+        body = {'model': 'kimi-k3', 'reasoning_effort': 'high'}
+        _readjust_thinking_params(body, 'qwen3.5-plus', '')
+        assert 'reasoning_effort' not in body
+        assert body.get('enable_thinking') is True
+
+    def test_swap_to_kimi_k2_keeps_thinking_type(self):
+        """K2 models re-routed via dispatch keep the thinking.type shape
+        (previously the dispatcher had NO kimi branch and silently stripped
+        thinking params on any swap to a kimi slot)."""
+        from lib.llm_dispatch.api import _readjust_thinking_params
+
+        body = {'model': 'qwen3.5-plus', 'enable_thinking': True}
+        _readjust_thinking_params(body, 'kimi-k2.6', '')
+        assert body.get('thinking') == {'type': 'enabled'}
+        assert body.get('temperature') == 1.0
+        assert 'enable_thinking' not in body
 
 
 # ═══════════════════════════════════════════════════════════

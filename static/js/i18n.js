@@ -2409,6 +2409,7 @@ var _i18n = {
   'swarm.phase.error': { zh: '错误', en: 'Error' },
   'swarm.phase.queued': { zh: '排队中', en: 'Queued' },
   'swarm.phase.running': { zh: '工作中…', en: 'Working…' },
+  'swarm.phase.retrying': { zh: '重试中…', en: 'Retrying…' },
   'swarm.phase.noResult': { zh: '无结果', en: 'No result' },
   'swarm.autoContinue': { zh: '子智能体完成后自动继续', en: 'Continued automatically after sub-agents finished' },
 

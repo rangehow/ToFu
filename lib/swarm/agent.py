@@ -25,6 +25,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from lib.llm import build_body as _default_build_body
 from lib.llm_dispatch import dispatch_stream as _default_dispatch_stream
+from lib.llm_dispatch.retry_i18n import retry_phase_fields
 from lib.log import get_logger
 from lib.project_mod import format_tool_args_brief
 from lib.protocols import BodyBuilder
@@ -46,6 +47,33 @@ from lib.swarm.tools import ARTIFACT_TOOLS
 from lib.tool_input_repair import ingest_tool_call
 
 logger = get_logger(__name__)
+
+
+def _build_dispatch_retry_phase(attempt: int, reason: str,
+                                status_code: int, model: str):
+    """Compute (legacy_detail, meta) for a dispatch-retry 'retrying' phase.
+
+    Module-level seam (unit-testable) — the closure ``_on_dispatch_retry``
+    below is a thin adapter over this. The legacy English ``detail`` string
+    is computed EXACTLY as before (byte-parity for headless clients); the
+    structured ``detailKey``/``detailArgs`` (+ typed ``reasonKey`` for known
+    dispatcher reason tokens) come from the SHARED helper
+    (lib/llm_dispatch/retry_i18n.retry_phase_fields) so this emitter can
+    never drift from the main chat bubble's mapping
+    (pt_18ebee9c9ea64cf3 — the "Retrying… Endpoint unreachable" raw-token
+    leak family).
+    """
+    _r = reason or 'Retrying'
+    if status_code == 429 and 'rate' not in _r.lower():
+        _r = f'{_r} (rate-limited)'
+    legacy = f'{_r}… (attempt {attempt})' if attempt else f'{_r}…'
+    fields = retry_phase_fields(model=model, attempt=attempt, reason=reason,
+                                status_code=status_code,
+                                legacy_detail=legacy)
+    meta = {'attempt': attempt, 'status_code': status_code,
+            'detailKey': fields['detailKey'],
+            'detailArgs': fields['detailArgs']}
+    return fields['detail'], meta
 
 # ─────────────────────────────────────────────────
 #  Constants
@@ -697,13 +725,12 @@ class SubAgent:
                 # 'retrying' phase on the worker bubble. Bounded by the
                 # dispatcher itself (fires on the 1st cooldown cycle, then
                 # every ~20 cycles ≈ 6s), so no per-cycle spam here.
-                _r = reason or 'Retrying'
-                if status_code == 429 and 'rate' not in _r.lower():
-                    _r = f'{_r} (rate-limited)'
-                self._emit_stream_phase(
-                    'retrying',
-                    f'{_r}… (attempt {attempt})' if attempt else f'{_r}…',
-                    attempt=attempt, status_code=status_code)
+                # Structured detailKey/detailArgs ride the **meta passthrough
+                # (engine _stream_sink → step_phase → EndpointEventAdapter)
+                # so the frontend HUD localizes the cause.
+                _d, _meta = _build_dispatch_retry_phase(
+                    attempt, reason, status_code, self.model)
+                self._emit_stream_phase('retrying', _d, **_meta)
 
             try:
                 msg, stop_reason, usage = self._dispatch_stream(

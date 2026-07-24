@@ -486,6 +486,7 @@ function _buildSwarmPanelHTML(round, allRounds) {
         searching: t("swarm.phase.searching"), coding: t("swarm.phase.coding"), analyzing: t("swarm.phase.analyzing"),
         done: t("swarm.phase.complete"), completed: t("swarm.phase.complete"), failed: t("swarm.phase.failed"), error: t("swarm.phase.error"),
         pending: t("swarm.phase.queued"), running: t("swarm.phase.running"), waiting: t("swarm.phase.queued"), queued: t("swarm.phase.queued"),
+        retrying: t("swarm.phase.retrying"),
         unknown: t("swarm.phase.noResult"),
       };
       /* Status wins for a terminated agent: if status is done/failed but the

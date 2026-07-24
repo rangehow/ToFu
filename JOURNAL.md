@@ -1,6 +1,14 @@
 # Project Journal
 
 
+### 2026-07-24(续26) — pt_18ebee9c9ea64cf3 收口:swarm 工作气泡 dispatch 重试 i18n 全链路闭合(brain 自主派发,commit 见下,9 文件,新测 26 面全绿含 NEUTER,相邻 110/110,collect **8418** 0 err)。
+- **链路审计(先画清三张图再动刀):** ①endpoint/orchestration 工作气泡 = agent `_on_dispatch_retry` → `_emit_stream_phase` → engine `_stream_sink`(`**meta` 透传,orchestration_engine.py:1644)→ step_phase → EndpointEventAdapter → wire phase → streaming_ui HUD(328ef338 已会解析);②纯 swarm 模式 stream_sink=None 相位事件根本不出门;③swarm 面板卡片相位 pill = master `_on_retry_callback` 的 swarm_agent_phase → 前端只消费 status/phase → `phaseMap` 无 `retrying` → 裸英文 token 落 pill。
+- **SSOT 抽取:** 新 `lib/llm_dispatch/retry_i18n.py`(GATEWAY_PREFIXES / display_model_name / RETRY_REASON_KEYS / `retry_phase_fields`)——dispatcher 自家包拥有 reason token 映射,两个 emitter 永不漂移;manager/_stream.py 删本地三件套改 import(私有名别名保留,manager facade 再导出零破坏,15 测重构后仍全绿)。
+- **emitter + 适配器:** agent.py 新模块级缝 `_build_dispatch_retry_phase`(可测;legacy detail 逐字节),closure 变薄;adapter `_on_step_phase` 转发 detailKey/detailArgs(无 keys 的旧事件 wire 形状逐字节不变,有专测钉死;verifier(emits=user)跳过行为不动)。
+- **面板:** phaseMap 补 `retrying:` + i18n 键 `swarm.phase.retrying`(zh 重试中…)。
+- **测试:** 后端 21 测(helper 6 + seam 6 含 legacy 逐字节/429 后缀不双加/0 次无后缀 + adapter 3 + engine 透传静态钉 + closure 委托静态钉 + dispatcher 6 token 全集映射守卫);前端 harness 6 探针(zh pill/零裸 token/邻居相位不破坏/status-wins desync 保留/恰 1 个 retry pill)+ NEUTER(scratch 删 phaseMap 行 → 裸英文回漏)+ 2 静态钉。
+- **顺手治好的预存在红(独立 commit,stash 证伪非我引入):** test_frontend_swarm_realtime_fingerprint harness 缺 `translationFingerprint` stub(sibling 把它挪进 translation_model.js 后 harness 没跟上),照 test_frontend_bg_refresh_scroll.py:146 先例补 `() => '0:F:'`。
+
 ### 2026-07-24 — 输入框排队栏重设计:可折叠 + 五源分样式(2 commit:功能 `d1f28583` 6 文件 +712/-30 + owner 验收抓出的展开态布局回归修复 `23e3ba13` 2 文件 +39/-1;新套件 9 测全绿含双 NEUTER,4 个队列套件 **21/21**,14 个 eval 同文件套件 65/65,collect **8397** 0 err)。
 - **折叠状态机(治好「队列淹没聊天区」):** 头部 chevron toggle;状态按会话存 `localStorage`(`tofu.queueCollapsed.<convId>`)——轮询会重建整个 bar 的 innerHTML,状态不能放 DOM——每次渲染经 `_queueCollapsedNow` 重放;**≥4 条**待派发消息(`QUEUE_AUTO_COLLAPSE_MIN`,autopilot 哨兵不计入)默认收起,显式展开(pref='0')优先于自动规则。折叠态单行保留:数量 + 「下一条」预览 + autopilot 徽标,信息不打盲。
 - **五源分类(按来源分样式):** `_queueSourceOf` 唯一判定 own / agent / operator / workflow / autopilot → 行级 `qsrc-*` 类,CSS 左缘着色 + 编号徽章(agent 紫 / operator 琥珀 / workflow 青 / autopilot 靛蓝虚线框);非人源带来源行——agent/operator 显示「来自《会话标题》」可点击跳转(`convTitleById` 解析标题,不显示裸 id),workflow(项目大脑 KIND_WORKFLOW 派发)显示静态「项目大脑派发」标签(无会话可跳,不可点击)。链路端到端活:后端 `get_queue` 返回 kind/isPeerMessage/fromConv/isPeerHuman,`_refreshServerQueue` 透传全部字段(owner 独立核实)。

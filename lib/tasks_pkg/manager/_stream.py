@@ -11,6 +11,11 @@ import time
 from lib.agent_core.events import EventType, build_event
 from lib.cost import normalize_usage
 from lib.llm_dispatch import dispatch_stream
+from lib.llm_dispatch.retry_i18n import (
+    GATEWAY_PREFIXES as _GATEWAY_PREFIXES,
+    display_model_name as _display_model_name,
+    retry_phase_fields,
+)
 from lib.log import get_logger
 
 from lib.tasks_pkg.manager._events import append_event
@@ -19,38 +24,18 @@ from lib.tasks_pkg.manager._sync import checkpoint_task_partial
 logger = get_logger(__name__)
 
 
-# Gateway/provider routing prefixes that are an internal dispatch detail, not
-# something the user picked. Mirrors the canonical list in
-# lib/llm_dispatch/discovery.py so the user-facing model name (e.g.
-# "claude-opus-4.8") never leaks "aws.claude-opus-4.8" into the UI.
-_GATEWAY_PREFIXES = ('aws.', 'vertex.', 'gcp.', 'azure.', 'bedrock.')
-
-
-def _display_model_name(model: str) -> str:
-    """Strip internal gateway/provider prefixes for a user-facing label."""
-    name = model or 'the model'
-    for prefix in _GATEWAY_PREFIXES:
-        if name.startswith(prefix):
-            name = name[len(prefix):]
-            break
-    return name
-
-
-# Dispatcher retry-reason tokens → typed i18n keys. The dispatcher
-# (lib/llm_dispatch/api.py) passes short English log tokens as ``reason``;
-# leaking them verbatim into the phase HUD showed raw English jargon
-# mid-generation ("Retrying… Endpoint unreachable (kimi-k3, attempt 1)").
-# Mapping the known tokens to stable reasonKeys lets the frontend localize
-# the cause; unknown tokens fall back to the raw reason (same ruling as an
-# unknown detailKey).
-_RETRY_REASON_KEYS = {
-    'Endpoint unreachable': 'stream.retryReason.endpointUnreachable',
-    'Request timed out': 'stream.retryReason.requestTimedOut',
-    'Waiting for model (rate-limited)': 'stream.retryReason.waitingForModel',
-    'Key balance exhausted': 'stream.retryReason.keyBalanceExhausted',
-    'Key auto-exhausted (consecutive 429s)': 'stream.retryReason.keyAutoExhausted',
-    'Rate limited (429)': 'stream.retryReason.rateLimited',
-}
+# ``_GATEWAY_PREFIXES`` / ``_display_model_name`` / the retry-reason mapping
+# live in lib/llm_dispatch/retry_i18n.py (single source of truth shared with
+# the swarm emitter, pt_18ebee9c9ea64cf3) — imported above under their legacy
+# private names so this module's existing references AND the manager facade's
+# re-export (manager/__init__.py) keep working byte-identically.
+#
+# The dispatcher (lib/llm_dispatch/api.py) passes short English log tokens as
+# ``reason``; leaking them verbatim into the phase HUD showed raw English
+# jargon mid-generation ("Retrying… Endpoint unreachable (kimi-k3, attempt
+# 1)"). retry_phase_fields maps the known tokens to stable typed reasonKeys
+# so the frontend localizes the cause; unknown tokens fall back to the raw
+# reason (same ruling as an unknown detailKey).
 # ── Streaming checkpoint interval (seconds) ──
 # During LLM token streaming, we periodically persist partial content to
 # the DB so data survives server crashes even when there are no tool rounds.
@@ -209,34 +194,28 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
         the legacy ``detail`` string is kept byte-identical for headless /
         non-i18n clients. ``detailArgs['model']`` uses the display label
         (gateway prefixes stripped) — it is new wire surface, not a legacy
-        string change.
+        string change. The structured fields come from the SHARED helper
+        (lib/llm_dispatch/retry_i18n.retry_phase_fields) so the swarm
+        emitter can never drift from this mapping.
         """
-        _label = _display_model_name(model)
         if status_code == 429:
             # Rate-limit: surface the model clearly and phrase it as a
             # queue wait rather than an error.
-            detail = (f'⏳ 模型 {model} 限流中，正在排队重试 '
-                      f'(第 {attempt} 次)…')
-            detail_key = 'stream.phase.retryRateLimited'
-            detail_args = {'model': _label, 'attempt': attempt}
+            _legacy = (f'⏳ 模型 {model} 限流中，正在排队重试 '
+                       f'(第 {attempt} 次)…')
         elif reason:
-            detail = f'Retrying… {reason} ({model}, attempt {attempt})'
-            detail_key = 'stream.phase.retryReason'
-            detail_args = {'reason': reason, 'model': _label,
-                           'attempt': attempt}
-            _reason_key = _RETRY_REASON_KEYS.get(reason)
-            if _reason_key:
-                detail_args['reasonKey'] = _reason_key
+            _legacy = f'Retrying… {reason} ({model}, attempt {attempt})'
         else:
-            detail = f'Retrying {model}… (attempt {attempt})'
-            detail_key = 'stream.phase.retryGeneric'
-            detail_args = {'model': _label, 'attempt': attempt}
+            _legacy = f'Retrying {model}… (attempt {attempt})'
+        _fields = retry_phase_fields(model=model, attempt=attempt,
+                                     reason=reason, status_code=status_code,
+                                     legacy_detail=_legacy)
         append_event(task, build_event(
             EventType.PHASE,
             phase='retrying',
-            detail=detail,
-            detailKey=detail_key,
-            detailArgs=detail_args,
+            detail=_fields['detail'],
+            detailKey=_fields['detailKey'],
+            detailArgs=_fields['detailArgs'],
             attempt=attempt,
             statusCode=status_code,
             model=model,

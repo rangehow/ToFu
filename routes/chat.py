@@ -732,86 +732,9 @@ def chat_regenerate():
 # ══════════════════════════════════════════════════════════
 
 
-def _continue_via_prefill_only(db, conv_id, messages, assistant_msg, title,
-                               config, settings_patch, resume_prefill,
-                               orig_full_content, data):
-    """Case 3 — resume a NO-TOOL mid-answer turn via assistant prefill.
-
-    There is no tool-call checkpoint (``scan is None``), so the classic
-    Continue path would fall back to regenerate-from-scratch. But the provider
-    tolerates a trailing assistant prefill and the turn ended mid-answer, so we
-    feed the model its own half-written string and let it continue the SAME
-    tokens instead of restarting.
-
-    Unlike the tool-checkpoint rollback (which DISCARDS the mid-prose tail and
-    regenerates), prefill mode CONTINUES the same string — nothing is discarded.
-    So the message content stays as the full prior answer (the base the
-    continuation extends); there is NO ``priorContent`` block. The streaming
-    checkpoint grows ``content`` as continuation tokens arrive, so a mid-stream
-    reload shows [full prior answer] + [partial continuation]. Persist BEFORE
-    starting so a streaming checkpoint can't race the rollback.
-    """
-    # Keep the full prior answer as the continuation base (content is already
-    # orig_full_content; assert it explicitly for clarity). Clear the live
-    # thinking tail (prefill carries content only — the reasoning trace can't
-    # be replayed on the wire) but stash it display-only, mirroring case 2.
-    assistant_msg['content'] = orig_full_content
-    _prior_think = assistant_msg.get('thinking') or ''
-    assistant_msg['thinking'] = ''
-    if _prior_think:
-        assistant_msg['priorThinking'] = _prior_think
-    for stale_key in ('finishReason', 'toolSummary', 'error'):
-        assistant_msg.pop(stale_key, None)
-
-    _persist_conv_messages(db, conv_id, messages, title, settings_patch)
-
-    cfg_payload = dict(config)
-    cfg_payload['excludeLast'] = True
-    cfg_payload['resumePrefill'] = resume_prefill
-    # Seed task['content'] with the full pre-rollback answer so the resumed
-    # turn displays everything the user already saw plus the continuation.
-    cfg_payload['contentPrefix'] = orig_full_content
-
-    task_id, err_resp = _start_task_for_conv(conv_id, cfg_payload, data)
-    if err_resp is not None:
-        return err_resp if not isinstance(err_resp, tuple) else err_resp
-
-    try:
-        from lib.conversations import set_conversation_settings
-        # notify=False: _notify_conv_changed is emitted below (no double push).
-        set_conversation_settings(conv_id, {'activeTaskId': task_id},
-                                  db=db, notify=False)
-    except Exception as e:
-        logger.warning('[Continue] Failed to update activeTaskId (prefill-only): %s', e)
-
-    _notify_conv_changed(conv_id, rev=None)
-    try:
-        from lib.log import audit_log as _audit_log
-        _audit_log('continue_prefill_only', conv_id=conv_id,
-                   prefillChars=len(resume_prefill),
-                   origContentChars=len(orig_full_content))
-    except Exception as e:
-        logger.debug('[Continue] audit_log (prefill-only) failed (non-fatal): %s', e)
-
-    return jsonify({
-        'taskId': task_id,
-        'convId': conv_id,
-        'checkpoint': {
-            'keptRounds': 0,
-            'discardedRounds': 0,
-            'preservedContentLen': len(orig_full_content),
-            'discardedContentLen': 0,
-            'preservedThinkingChars': 0,
-            'discardedThinking': 0,
-            'resumeMode': 'prefill',
-            # Prefill CONTINUES the same string — nothing discarded, so the
-            # full prior answer is the continuation base and there is NO
-            # priorContent block. The reasoning tail is display-only.
-            'contentPrefix': orig_full_content,
-            'priorContent': '',
-            'priorThinking': assistant_msg.get('priorThinking') or '',
-        },
-    })
+# _continue_via_prefill_only extracted to lib/chat_dispatch.py
+# (pt_04686ac6 slice 9) — see ``dispatch_prefill_continue``.
+from lib.chat_dispatch import dispatch_prefill_continue
 
 
 @api_v1_chat_bp.route('/api/v1/chat/continue', methods=['POST'], endpoint='ui_chat_continue')
@@ -906,9 +829,23 @@ def chat_continue():
                 logger.info('[Continue] conv=%s no tool checkpoint but resumable '
                             'prefill (%d chars) — resuming via assistant prefill (case 3)',
                             conv_id[:8], len(_resume_prefill))
-                return _continue_via_prefill_only(
-                    db, conv_id, messages, assistant_msg, title, config,
-                    settings_patch, _resume_prefill, _orig_full_content, data)
+                from lib.conversations import set_conversation_settings as _scs
+                from lib.log import audit_log as _al
+                _res = dispatch_prefill_continue(
+                    db=db, conv_id=conv_id, messages=messages,
+                    assistant_msg=assistant_msg, title=title, config=config,
+                    settings_patch=settings_patch,
+                    resume_prefill=_resume_prefill,
+                    orig_full_content=_orig_full_content, data=data,
+                    _start_task_for_conv=_start_task_for_conv,
+                    _persist_conv_messages=_persist_conv_messages,
+                    _set_conversation_settings=_scs,
+                    _notify_conv_changed=_notify_conv_changed,
+                    _audit_log=_al,
+                )
+                if _res.kind == 'passthrough':
+                    return _res.err_resp
+                return jsonify(_res.payload)
             logger.info('[Continue] conv=%s no tool-call checkpoint available — fallback to regenerate',
                         conv_id[:8])
             return jsonify({'fallback': 'regenerate', 'reason': 'no_checkpoint'})

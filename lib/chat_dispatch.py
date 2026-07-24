@@ -939,9 +939,136 @@ def next_live_tick(
     return LiveTickAction(kind='sleep')
 
 
+# ── Slice 9 (pt_04686ac6): dispatch_prefill_continue ─────────────────
+#
+# Extracts routes/chat.py::_continue_via_prefill_only — the last ~78-line
+# independent closure in the file (per the epic's ordered plan). Case 3
+# of the Continue flow: no tool-call checkpoint but a resumable prefill
+# was extracted from segments; feed the model its own half-written string
+# and let it continue the SAME tokens.
+#
+# The route helper previously wrapped ALL of: assistant_msg mutation
+# (content ← orig_full, thinking → priorThinking iff non-empty, stale
+# key strip), persist, cfg_payload build (excludeLast / resumePrefill /
+# contentPrefix), dispatch through _start_task_for_conv, stamp
+# activeTaskId, notify_conv_changed, audit_log, and build the
+# checkpoint jsonify payload.
+#
+# After extraction: chat_continue's inline call becomes:
+#
+#   res = dispatch_prefill_continue(...)
+#   if res.kind == 'passthrough':
+#       return res.err_resp
+#   return jsonify(res.payload)
+#
+# The collaborators (_start_task_for_conv, _persist_conv_messages,
+# set_conversation_settings, _notify_conv_changed, _audit_log) are
+# passed as callables so the extraction is unit-testable without a
+# Flask app context and without the routes.* / lib.conversations /
+# lib.log import graph. Real callers hand in the module bindings.
+
+
+@dataclass
+class PrefillContinueResult:
+    """Discriminated union — either the caller wraps `payload` in
+    jsonify(...) OR returns `err_resp` verbatim (task-start failure).
+    """
+    kind: str  # 'payload' | 'passthrough'
+    payload: dict[str, Any] | None = None
+    err_resp: Any = None
+
+
+def dispatch_prefill_continue(
+    db: Any,
+    conv_id: str,
+    messages: list,
+    assistant_msg: dict[str, Any],
+    title: Any,
+    config: dict[str, Any],
+    settings_patch: Any,
+    resume_prefill: str,
+    orig_full_content: str,
+    data: dict[str, Any],
+    *,
+    _start_task_for_conv,
+    _persist_conv_messages,
+    _set_conversation_settings,
+    _notify_conv_changed,
+    _audit_log,
+) -> PrefillContinueResult:
+    """Case 3 continue: resume a NO-TOOL mid-answer turn via assistant prefill.
+
+    See the module docstring above for the full contract. The route
+    layer supplies its module-scoped collaborators as keyword-only
+    callables — this keeps the extraction unit-testable without any
+    routes.* / lib.conversations / lib.log side imports.
+    """
+    # Keep the full prior answer as the continuation base. Clear the
+    # live thinking tail (prefill carries content only on the wire) but
+    # stash it display-only when non-empty, mirroring case 2.
+    assistant_msg['content'] = orig_full_content
+    _prior_think = assistant_msg.get('thinking') or ''
+    assistant_msg['thinking'] = ''
+    if _prior_think:
+        assistant_msg['priorThinking'] = _prior_think
+    for stale_key in ('finishReason', 'toolSummary', 'error'):
+        assistant_msg.pop(stale_key, None)
+
+    _persist_conv_messages(db, conv_id, messages, title, settings_patch)
+
+    cfg_payload = dict(config)
+    cfg_payload['excludeLast'] = True
+    cfg_payload['resumePrefill'] = resume_prefill
+    # Seed task['content'] with the full pre-rollback answer so the
+    # resumed turn displays everything the user already saw plus the
+    # continuation.
+    cfg_payload['contentPrefix'] = orig_full_content
+
+    task_id, err_resp = _start_task_for_conv(conv_id, cfg_payload, data)
+    if err_resp is not None:
+        return PrefillContinueResult(kind='passthrough', err_resp=err_resp)
+
+    try:
+        # notify=False: _notify_conv_changed is emitted below (no double push).
+        _set_conversation_settings(conv_id, {'activeTaskId': task_id},
+                                   db=db, notify=False)
+    except Exception as e:
+        logger.warning('[Continue] Failed to update activeTaskId (prefill-only): %s', e)
+
+    _notify_conv_changed(conv_id, rev=None)
+    try:
+        _audit_log('continue_prefill_only', conv_id=conv_id,
+                   prefillChars=len(resume_prefill),
+                   origContentChars=len(orig_full_content))
+    except Exception as e:
+        logger.debug('[Continue] audit_log (prefill-only) failed (non-fatal): %s', e)
+
+    return PrefillContinueResult(kind='payload', payload={
+        'taskId': task_id,
+        'convId': conv_id,
+        'checkpoint': {
+            'keptRounds': 0,
+            'discardedRounds': 0,
+            'preservedContentLen': len(orig_full_content),
+            'discardedContentLen': 0,
+            'preservedThinkingChars': 0,
+            'discardedThinking': 0,
+            'resumeMode': 'prefill',
+            # Prefill CONTINUES the same string — nothing discarded, so
+            # the full prior answer is the continuation base and there
+            # is NO priorContent block. The reasoning tail is display-
+            # only.
+            'contentPrefix': orig_full_content,
+            'priorContent': '',
+            'priorThinking': assistant_msg.get('priorThinking') or '',
+        },
+    })
+
+
 __all__ = [
     'SendIntent', 'classify_send_intent', 'build_cold_replay_response',
     'WarmResumePlan', 'plan_warm_resume', 'build_fresh_state_snapshot',
     'LiveTickAction', 'next_live_tick', 'is_task_terminal',
     'apply_autopilot_baton',
+    'PrefillContinueResult', 'dispatch_prefill_continue',
 ]

@@ -1106,6 +1106,228 @@ def test_next_live_tick_sleep_default():
     assert v.kind == 'sleep', f'expected sleep; got {v.kind}'
 
 
+# ── Slice 9: chat_continue prefill-only path → lib/chat_dispatch.dispatch_prefill_continue ─
+# Extracts the ~78-line ``_continue_via_prefill_only`` closure (the last
+# independent, pure-in-shape closure in routes/chat.py per the epic plan).
+# The route helper wrapped: assistant_msg mutation (content/thinking/
+# stale-key strip), persist, build cfg_payload with excludeLast/
+# resumePrefill/contentPrefix, dispatch through _start_task_for_conv,
+# stamp activeTaskId, notify_conv_changed, audit_log, and build the
+# checkpoint response envelope.
+#
+# After extraction: chat_continue's inline `_continue_via_prefill_only`
+# call site becomes a `dispatch_prefill_continue(...)` call whose result
+# is either a passthrough error Response (task-start failure) or the
+# checkpoint payload dict the route wraps in a single ``jsonify(...)``.
+
+@_unit
+def test_chat_dispatch_exposes_dispatch_prefill_continue():
+    """Slice 9 (pt_04686ac6): lib/chat_dispatch.py exposes
+    dispatch_prefill_continue as a module-level callable + PrefillContinueResult
+    dataclass with `kind` ∈ {'payload','passthrough'} discriminator."""
+    import importlib
+    mod = importlib.import_module('lib.chat_dispatch')
+    for name in ('PrefillContinueResult', 'dispatch_prefill_continue'):
+        assert hasattr(mod, name), f'lib.chat_dispatch missing {name}'
+    assert callable(mod.dispatch_prefill_continue), (
+        'dispatch_prefill_continue must be callable')
+
+
+@_unit
+def test_chat_continue_delegates_prefill_only_to_dispatch():
+    """Slice 9: routes/chat.py::chat_continue must delegate the
+    no-tool-checkpoint-with-resumable-prefill branch (case 3) to
+    lib.chat_dispatch.dispatch_prefill_continue. The old inline
+    ``_continue_via_prefill_only(...)`` closure must be GONE from
+    routes/chat.py."""
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, 'routes/chat.py'), encoding='utf-8') as f:
+        src = f.read()
+    assert 'from lib.chat_dispatch import dispatch_prefill_continue' in src, (
+        'routes/chat.py must IMPORT dispatch_prefill_continue from '
+        'lib.chat_dispatch (slice 9 pt_04686ac6)')
+    import re as _re
+    assert _re.search(r'\bdispatch_prefill_continue\s*\(', src), (
+        'routes/chat.py must CALL dispatch_prefill_continue(...) — a bare '
+        'mention in a comment does not satisfy slice 9')
+    # The old inline closure must be GONE — a silent revert would leave
+    # its `def _continue_via_prefill_only(` re-declared.
+    assert 'def _continue_via_prefill_only(' not in src, (
+        'routes/chat.py must NOT re-declare the _continue_via_prefill_only '
+        'closure — extracted to dispatch_prefill_continue')
+    # Specific marker log-lines that USED to live in the closure body
+    # must NOT be back in routes/chat.py.
+    assert 'continue_prefill_only' not in src, (
+        "routes/chat.py must NOT carry the 'continue_prefill_only' audit "
+        'event name — extracted to dispatch_prefill_continue')
+
+
+@_unit
+def test_dispatch_prefill_continue_mutates_assistant_msg():
+    """Slice 9: assistant_msg is mutated in place:
+      * content ← orig_full_content (continuation base preserved).
+      * thinking cleared, priorThinking stashed IF non-empty.
+      * stale keys (finishReason/toolSummary/error) dropped.
+
+    Mutation is what makes the follow-on ``_persist_conv_messages`` write
+    the right shape to DB — regressing it would silently corrupt the
+    resume state.
+    """
+    from lib.chat_dispatch import dispatch_prefill_continue
+
+    orig_full = 'Once upon a time in ancient China'
+    resume_prefill = 'time in ancient China'  # tail suffix
+    assistant_msg = {
+        'role': 'assistant',
+        'content': 'stale short prefix',   # must be OVERWRITTEN with orig_full
+        'thinking': 'live thinking tail',  # must be MOVED to priorThinking
+        'finishReason': 'stop',            # must be POPPED
+        'toolSummary': {'x': 1},           # must be POPPED
+        'error': 'anything',               # must be POPPED
+    }
+    messages = [
+        {'role': 'user', 'content': 'q'},
+        assistant_msg,
+    ]
+
+    # Stub the collaborators so we exercise the mutation branch without
+    # a real DB / Flask app context.
+    def _fake_start_task(conv_id, cfg_payload, data):
+        # Confirms cfg_payload propagation while we're here.
+        assert cfg_payload.get('excludeLast') is True
+        assert cfg_payload.get('resumePrefill') == resume_prefill
+        assert cfg_payload.get('contentPrefix') == orig_full
+        return 'task-new-123', None
+
+    result = dispatch_prefill_continue(
+        db=None, conv_id='cv-mutate', messages=messages,
+        assistant_msg=assistant_msg, title=None, config={'model': 'm'},
+        settings_patch=None, resume_prefill=resume_prefill,
+        orig_full_content=orig_full, data={},
+        _start_task_for_conv=_fake_start_task,
+        _persist_conv_messages=lambda *a, **kw: None,
+        _set_conversation_settings=lambda *a, **kw: None,
+        _notify_conv_changed=lambda *a, **kw: None,
+        _audit_log=lambda *a, **kw: None,
+    )
+    # Assistant message mutations — the SoT for what a mid-stream reload
+    # will render post-Continue.
+    assert assistant_msg['content'] == orig_full
+    assert assistant_msg['thinking'] == ''
+    assert assistant_msg['priorThinking'] == 'live thinking tail'
+    for stale_key in ('finishReason', 'toolSummary', 'error'):
+        assert stale_key not in assistant_msg, (
+            f'{stale_key} must be stripped on prefill-only continue')
+    # And the result is a payload result (not a passthrough).
+    assert result.kind == 'payload'
+
+
+@_unit
+def test_dispatch_prefill_continue_builds_checkpoint_payload():
+    """Slice 9: checkpoint payload dict is byte-identical to the
+    pre-slice inline `jsonify({...})` body. Regressing any field
+    (resumeMode / keptRounds / preservedContentLen / priorThinking) is
+    a wire break the frontend depends on.
+    """
+    from lib.chat_dispatch import dispatch_prefill_continue
+
+    orig_full = 'abc123abc123'  # 12 chars
+    resume_prefill = '123'      # 3 chars
+    assistant_msg = {'role': 'assistant', 'content': orig_full,
+                     'thinking': ''}  # no priorThinking case
+    messages = [assistant_msg]
+
+    result = dispatch_prefill_continue(
+        db=None, conv_id='cv-payload', messages=messages,
+        assistant_msg=assistant_msg, title=None, config={},
+        settings_patch=None, resume_prefill=resume_prefill,
+        orig_full_content=orig_full, data={},
+        _start_task_for_conv=lambda *a, **kw: ('task-xyz', None),
+        _persist_conv_messages=lambda *a, **kw: None,
+        _set_conversation_settings=lambda *a, **kw: None,
+        _notify_conv_changed=lambda *a, **kw: None,
+        _audit_log=lambda *a, **kw: None,
+    )
+    assert result.kind == 'payload'
+    payload = result.payload
+    assert payload['taskId'] == 'task-xyz'
+    assert payload['convId'] == 'cv-payload'
+    cp = payload['checkpoint']
+    assert cp['keptRounds'] == 0
+    assert cp['discardedRounds'] == 0
+    assert cp['preservedContentLen'] == len(orig_full) == 12
+    assert cp['discardedContentLen'] == 0
+    assert cp['preservedThinkingChars'] == 0
+    assert cp['discardedThinking'] == 0
+    assert cp['resumeMode'] == 'prefill'
+    assert cp['contentPrefix'] == orig_full
+    assert cp['priorContent'] == ''
+    assert cp['priorThinking'] == ''
+
+
+@_unit
+def test_dispatch_prefill_continue_passes_through_start_task_err_resp():
+    """Slice 9: when ``_start_task_for_conv`` returns (None, err_resp),
+    dispatch_prefill_continue MUST NOT persist activeTaskId or notify;
+    it MUST return kind='passthrough' with the err_resp unchanged so the
+    route hands it to the caller verbatim.
+    """
+    from lib.chat_dispatch import dispatch_prefill_continue
+
+    # Sentinel object that stands in for the api_error Response — the
+    # dispatcher must not touch it, only propagate.
+    ERR_SENTINEL = object()
+
+    activeTaskId_calls = []
+    notify_calls = []
+
+    result = dispatch_prefill_continue(
+        db=None, conv_id='cv-err', messages=[{'role': 'assistant', 'content': ''}],
+        assistant_msg={'role': 'assistant', 'content': 'x'},
+        title=None, config={}, settings_patch=None,
+        resume_prefill='p', orig_full_content='x', data={},
+        _start_task_for_conv=lambda *a, **kw: (None, ERR_SENTINEL),
+        _persist_conv_messages=lambda *a, **kw: None,
+        _set_conversation_settings=lambda *a, **kw: activeTaskId_calls.append(kw),
+        _notify_conv_changed=lambda *a, **kw: notify_calls.append(kw),
+        _audit_log=lambda *a, **kw: None,
+    )
+    assert result.kind == 'passthrough'
+    assert result.err_resp is ERR_SENTINEL
+    # Byte-parity: the pre-slice route returned err_resp BEFORE
+    # set_conversation_settings / notify — so those must not have fired.
+    assert activeTaskId_calls == [], (
+        'set_conversation_settings must NOT run when _start_task_for_conv errored')
+    assert notify_calls == [], (
+        '_notify_conv_changed must NOT run when _start_task_for_conv errored')
+
+
+@_unit
+def test_dispatch_prefill_continue_omits_priorthinking_key_when_empty():
+    """Slice 9: byte-parity guard — pre-slice code stashed
+    ``priorThinking`` ONLY when the original ``thinking`` was truthy.
+    An empty thinking string must leave the key OUT of assistant_msg
+    (mid-stream reload sees no 'earlier thinking' collapsed block).
+    """
+    from lib.chat_dispatch import dispatch_prefill_continue
+
+    assistant_msg = {'role': 'assistant', 'content': 'x', 'thinking': ''}
+    dispatch_prefill_continue(
+        db=None, conv_id='cv-empty-think',
+        messages=[assistant_msg], assistant_msg=assistant_msg,
+        title=None, config={}, settings_patch=None,
+        resume_prefill='p', orig_full_content='x', data={},
+        _start_task_for_conv=lambda *a, **kw: ('t-1', None),
+        _persist_conv_messages=lambda *a, **kw: None,
+        _set_conversation_settings=lambda *a, **kw: None,
+        _notify_conv_changed=lambda *a, **kw: None,
+        _audit_log=lambda *a, **kw: None,
+    )
+    assert 'priorThinking' not in assistant_msg, (
+        'priorThinking must NOT be stashed when original thinking was empty')
+
+
 # ── Slice 6: chat_stream cold-path → lib/chat_dispatch.build_cold_replay_response ─
 # Extracts the ~170-line cold-path (task not in memory) block:
 # persisted-event replay OR DB snapshot OR not-found.
@@ -1237,6 +1459,12 @@ if __name__ == '__main__':
         test_next_live_tick_superseded_when_sse_gen_advanced,
         test_next_live_tick_keepalive_on_15s_gap,
         test_next_live_tick_sleep_default,
+        test_chat_dispatch_exposes_dispatch_prefill_continue,
+        test_chat_continue_delegates_prefill_only_to_dispatch,
+        test_dispatch_prefill_continue_mutates_assistant_msg,
+        test_dispatch_prefill_continue_builds_checkpoint_payload,
+        test_dispatch_prefill_continue_passes_through_start_task_err_resp,
+        test_dispatch_prefill_continue_omits_priorthinking_key_when_empty,
     ]
     for fn in tests:
         fn()

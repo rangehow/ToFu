@@ -1,5 +1,11 @@
 # Project Journal
 
+# Project Journal
+
+### 2026-07-24 — pt_750459ac export/gitignore 漂移修复:5 个被强行跟踪的 debug 脚本 `git rm --cached` 出索引(commit `d3856403`,5 文件索引删除 −941,文件全部留在盘上,守卫套件 test_gitignore_covers_export_excludes 3/3 回绿)。
+- **起:** 我在 pt_229606ca 终验环里撞见这张 2 面红并开票;首 dispatch 误判为「owner-only 拍板(A untrack vs B 进 keepers)」block 了,二 dispatch 复核后推翻自己——**A 是唯一符合惯例的客观解,根本无需拍板**:export.py:406 把 debug/ 整体列 opensource 排除(「never imported by the app」),.gitignore:66 已有 `/debug/` 规则,盘上 192 个文件里 187 个本就遵守惯例;5 个离群者全是近期 session 越过规则强行跟踪的内部验收/审计脚本(cache 成本验收读 logs/app.log、CSS 死码清扫扫本仓 styles.css),而 _OPENSOURCE_KEEP_FILES 是给公共构建必需文件(scripts/gen_desktop_icons.py)用的,完全不沾边。
+- **陷阱(共享 HEAD 纪律新条款):** `git rm --cached` 把删除放进索引后,`git commit -- <paths>` 的 partial-commit 语义是「取工作区状态入索引」——盘上文件仍在(被 /debug/ 忽略)→ 报 'no changes added' 退出 1,**不会**把文件重新加回(虚惊但安全)。对**已暂存的忽略路径删除**,正确姿势是先 `git diff --cached --stat` 核索引只有目标变更,再**不带 pathspec** 提交。
+- **教训:** 守卫测试(test_no_tracked_file_is_opensource_excluded)自 2026-07-20 起默默挡着这类漂移,是近两批 session(cache 验收/CSS 清扫)把脚本 `git add` 进索引才翻红;开 debug 脚本请留在盘上别入库。
 
 ### 2026-07-24(续25) — 「Retrying… Endpoint unreachable (kimi-k3, attempt 1)」原始英文 token 泄漏根修:dispatch 重试 HUD 全面 i18n 化 + typed reasonKey(commit 见下,本 commit 3 文件 +259/-12;另 2 文件经 sibling af44e4e9 扫入已在 HEAD;新/扩 15 测全绿含 NEUTER,相邻 32/32,collect 8374 0 err)。
 - **现象与根因(日志实证):** 22:07–22:16 又一波网关劣化窗口,kimi-k3 两个 key **同时** `('Connection aborted.', TimeoutError('The write operation timed out'))` —— 请求体上传 aigc.sankuai.com 途中写超时(高轮次 R22–R72 大 prompt 尤甚),与今日 16:42–17:33 已发报告(docs/GATEWAY_INCIDENT_2026-07-24.md,144 次写超时)同族:故障在网关/代理层,非模型本身。客户端按设计熔断 30s + 排除 slot 对 + failover 自愈,0 终败。**可见层根因** = dispatcher 内部英文 log token 经 `_on_retry` 裸拼进 PHASE `detail` 直渲 HUD。

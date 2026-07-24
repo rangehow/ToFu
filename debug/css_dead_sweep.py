@@ -1,8 +1,23 @@
 #!/usr/bin/env python3
-"""One-shot dead-CSS sweeper: removes rules from static/styles.css whose
-selector classes are ALL in the verified dead set (debug/css_dead_selectors.txt)
-AND include at least one of the top-N classes by bytes. Conservative by
-construction — a rule mixing a dead class with a live one is kept.
+"""Dead-CSS sweeper for static/styles.css.
+
+PASS-2 criterion (supersedes the pass-1 "every class dead" rule, which the
+owner showed was over-conservative for compound selectors like
+`.search-round-block.searching` — `searching` is alive, but the compound
+requires ONE element to carry BOTH classes, so with `search-round-block`
+absent from the DOM the branch can NEVER match):
+
+  1. Split the selector into comma branches at bracket/paren depth 0.
+  2. A branch is UNMATCHABLE iff its positive chain (attribute selectors
+     and :not(...) arguments stripped — they never REQUIRE a class)
+     contains >= 1 verified-dead class. A branch with no positive classes
+     (pure element/attribute/pseudo) is always treated as possibly live.
+  3. Delete the rule iff EVERY branch is unmatchable; keep it whole if any
+     branch might match.
+
+Scope: ALL verified-dead classes in debug/css_dead_selectors.txt (the
+post-hardening list: library-injected hljs/katex excluded, backend markup
+rescued). rg re-verified zero references tree-wide before each run.
 Prints per-run stats; re-run debug/css_style_audit.py afterwards to confirm.
 """
 import re
@@ -13,9 +28,41 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / 'debug'))
 from css_style_audit import parse_rules, strip_comments, CLASS_RE  # noqa: E402
 
-TOP_N = 30
 CSS = ROOT / 'static' / 'styles.css'
 DEAD_LIST = ROOT / 'debug' / 'css_dead_selectors.txt'
+
+ATTR_RE = re.compile(r'\[[^\]]*\]')
+NOT_RE = re.compile(r':not\([^()]*\)')
+
+
+def split_branches(selector: str) -> list[str]:
+    """Split a selector on commas at bracket/paren depth 0 (commas inside
+    [attr="a,b"] or :not(.a, .b) do not split)."""
+    branches, depth, cur = [], 0, []
+    for ch in selector:
+        if ch in '[(':
+            depth += 1
+        elif ch in '])':
+            depth = max(0, depth - 1)
+        if ch == ',' and depth == 0:
+            branches.append(''.join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    branches.append(''.join(cur))
+    return [b.strip() for b in branches if b.strip()]
+
+
+def branch_unmatchable(branch: str, dead: set[str]) -> bool:
+    """True iff the branch REQUIRES a verified-dead class: strip attribute
+    selectors and :not(...) arguments (neither requires a class), then any
+    remaining positive-chain class that is dead makes the whole branch
+    impossible to match. No positive classes -> possibly live."""
+    positive = NOT_RE.sub('', ATTR_RE.sub('', branch))
+    classes = CLASS_RE.findall(positive)
+    if not classes:
+        return False
+    return any(c in dead for c in classes)
 
 
 def main() -> None:
@@ -26,8 +73,8 @@ def main() -> None:
             nbytes = int(line.split('B')[0].strip())
             dead_entries.append((m.group(1), nbytes))
     dead_all = {c for c, _ in dead_entries}
-    top_n = {c for c, _ in sorted(dead_entries, key=lambda e: -e[1])[:TOP_N]}
-    print(f'verified dead set: {len(dead_all)} classes; deleting rules touching top {len(top_n)}')
+    print(f'verified dead set: {len(dead_all)} classes; '
+          f'pass-2 criterion: all comma branches unmatchable -> delete')
 
     raw = CSS.read_text(encoding='utf-8')
     css = strip_comments(raw)
@@ -99,16 +146,16 @@ def main() -> None:
         if end < n and css_aligned[end:end+1] == '\n':
             end += 1
         if selector:
-            classes = set(CLASS_RE.findall(selector))
-            if classes and classes <= dead_all and classes & top_n:
+            branches = split_branches(selector)
+            if branches and all(branch_unmatchable(b, dead_all) for b in branches):
                 remove_spans.append((i, end, selector[:60]))
-            elif classes & (dead_all & top_n):
+            elif any(branch_unmatchable(b, dead_all) for b in branches):
                 kept_with_dead += 1
         i = k
 
     total_bytes = sum(e - s for s, e, _ in remove_spans)
     print(f'rules to remove: {len(remove_spans)} (~{total_bytes:,} B); '
-          f'kept despite dead-class mix: {kept_with_dead}')
+          f'kept (some branch still matchable): {kept_with_dead}')
     for s, e, sel in remove_spans[:12]:
         print(f'  - {sel}')
 

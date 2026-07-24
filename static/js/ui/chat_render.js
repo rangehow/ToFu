@@ -1570,26 +1570,43 @@ function renderMessage(msg, idx) {
       ? `<button class="msg-action-btn msg-regen-btn" onclick="event.stopPropagation();regenerateFromUser(_msgElIndex(this))" title="${escapeHtml(_mt('msgAction.regenTitle', 'Regenerate response from this message'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> ${escapeHtml(_mt('msgAction.regen', 'Regen'))}</button>`
       : "";
     const conv_ = getActiveConv();
-    /* ★ Continue is a RESUME affordance for an INTERRUPTED/TRUNCATED turn —
-     *   it POSTs to /api/chat/continue to pick up from the last tool-call
-     *   checkpoint. On a CLEAN finish (end_turn/stop/stop_sequence — the same
-     *   reasons that earn the green ✓ in finish_info.js) there is nothing to
-     *   resume, so showing it is meaningless and misleading. Gate it as the
-     *   exact complement of that ✓: only offer Continue when the last
-     *   assistant turn did NOT finish normally (length / max_tokens /
-     *   tool_rounds_exhausted / premature_close / aborted / interrupted / …).
-     *   A missing finishReason (legacy / unknown) still shows it, so we never
-     *   silently drop the recovery path for a genuinely-truncated old turn. */
-    const _FINISH_CLEAN = ["stop", "end_turn", "stop_sequence"];
+    /* ★ Continue is a RESUME affordance for an INTERRUPTED/TRUNCATED turn.
+     *   pt_turn_settlement: the affordance is driven by the single
+     *   backend-authoritative settlement verdict (computeTurnSettlement,
+     *   canonical JS port) via continueButtonForSettlement — NOT by a local
+     *   finishReason-name sniff. The verdict's resume.mode decides:
+     *     none       → clean finish, nothing to resume → hide the button.
+     *     prefill    → lossless resume → "Continue" (tooltip: seamless).
+     *     checkpoint → resume from the tool-call checkpoint → "Continue"
+     *                  (tooltip: drops the trailing draft).
+     *     regenerate → NO honest resume → the button is honestly labelled
+     *                  "Regenerate" (it no longer masquerades as "Continue"
+     *                  only to silently fall back to a full regeneration —
+     *                  that was the "button says Continue, actually
+     *                  regenerates" lie). The click still goes through
+     *                  continueAssistant, which re-verifies against the
+     *                  server's authoritative checkpoint scan and handles the
+     *                  fallback. A missing finishReason (legacy / unknown)
+     *                  keeps the recovery path open exactly as before. */
     const isLastAssistant =
       !isUser &&
       conv_ &&
       idx === conv_.messages.length - 1 &&
       !activeStreams.has(conv_.id);
-    const _turnFinishedClean = _FINISH_CLEAN.includes(msg.finishReason);
-    const continueH = (isLastAssistant && !_turnFinishedClean)
-      ? `<button class="msg-action-btn msg-continue-btn" onclick="event.stopPropagation();continueAssistant()" title="${escapeHtml(_mt('msgAction.continueTitle', 'Continue generating from where it left off'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg> ${escapeHtml(_mt('msgAction.continue', 'Continue'))}</button>`
-      : "";
+    const _tsVerdict = (typeof computeTurnSettlement === 'function')
+      ? computeTurnSettlement(msg, msg.model || (typeof serverModel !== 'undefined' ? serverModel : null))
+      : null;
+    const _tsBtn = (typeof continueButtonForSettlement === 'function')
+      ? continueButtonForSettlement(_tsVerdict)
+      : { show: false };
+    let continueH = "";
+    if (isLastAssistant && _tsBtn.show) {
+      if (_tsBtn.kind === 'regenerate') {
+        continueH = `<button class="msg-action-btn msg-continue-btn" onclick="event.stopPropagation();continueAssistant()" title="${escapeHtml(_mt(_tsBtn.titleKey, 'Regenerate this response'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> ${escapeHtml(_mt(_tsBtn.labelKey, 'Regen'))}</button>`;
+      } else {
+        continueH = `<button class="msg-action-btn msg-continue-btn" onclick="event.stopPropagation();continueAssistant()" title="${escapeHtml(_mt(_tsBtn.titleKey, 'Continue generating from where it left off'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg> ${escapeHtml(_mt(_tsBtn.labelKey, 'Continue'))}</button>`;
+      }
+    }
     const isShowingTrans = _tr.showing;
     // Show the Translate button on: (a) assistant messages, (b) endpoint
     // critic review messages (role=user + _isEndpointReview) — they

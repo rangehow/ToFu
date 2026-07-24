@@ -204,6 +204,42 @@ function computeTurnSettlement(msg, model, segments) {
   };
 }
 
+/* Decide the Continue-button affordance for a settlement verdict — the pure
+ * fact the chat_render button gate consumes, so the gate stays a thin
+ * renderer and this logic is Node-testable. Returns:
+ *   { show:false }                                         — completed / no verdict
+ *   { show:true, kind:'continue',   lossless:true,  labelKey, titleKey } — prefill
+ *   { show:true, kind:'continue',   lossless:false, keptRounds, labelKey, titleKey } — checkpoint
+ *   { show:true, kind:'regenerate', lossless:false, labelKey, titleKey } — regenerate
+ * The 'regenerate' case is the honesty fix: when no honest resume exists the
+ * button no longer masquerades as "Continue" (which silently fell back to a
+ * full regeneration) — it is labelled "Regenerate". */
+function continueButtonForSettlement(verdict) {
+  if (!verdict || !verdict.resume) return { show: false };
+  const mode = verdict.resume.mode;
+  if (mode === TS_MODE_NONE) return { show: false };
+  if (mode === TS_MODE_PREFILL) {
+    return { show: true, kind: 'continue', lossless: true,
+             labelKey: 'msgAction.continue', titleKey: 'msgAction.continueLosslessTitle' };
+  }
+  if (mode === TS_MODE_CHECKPOINT) {
+    return { show: true, kind: 'continue', lossless: false,
+             keptRounds: verdict.resume.keptRounds || 0,
+             labelKey: 'msgAction.continue', titleKey: 'msgAction.continueFromRoundTitle' };
+  }
+  return { show: true, kind: 'regenerate', lossless: false,
+           labelKey: 'msgAction.regen', titleKey: 'msgAction.regenerateTitle' };
+}
+
+/* ── Publish under both bare + window scopes so the Node equivalence harness's
+ *   (0, eval)(src) and the browser's bundle both see them (conv_state_reducer
+ *   precedent). */
+if (typeof window !== 'undefined') {
+  window.computeTurnSettlement = computeTurnSettlement;
+  window.continueButtonForSettlement = continueButtonForSettlement;
+  window._tsScanKeptRounds = _tsScanKeptRounds;
+  window._tsHasRealRound = _tsHasRealRound;
+}
 /* ── Publish under both bare + window scopes so the Node equivalence harness's
  *   (0, eval)(src) and the browser's bundle both see them (conv_state_reducer
  *   precedent). */

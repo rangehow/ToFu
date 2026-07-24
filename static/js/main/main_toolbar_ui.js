@@ -8,6 +8,72 @@
    scope — no imports / exports needed.
    ═══════════════════════════════════════════════════════════════════ */
 
+// ══════════════════════════════════════════════════════
+//  Defensive fallback for isChatModel / applyCapabilityTaxonomy
+//
+//  core/model_caps.js is the SSOT for chat-vs-non-chat classification,
+//  and normally loads BEFORE this file. But if the bundle ever ships
+//  without it (stale bundler manifest, minifier regression, CDN partial
+//  fetch, _BUNDLE_FILES drift), every model picker that calls the
+//  bare identifier `isChatModel(m)` would throw ReferenceError and
+//  strand the dropdown empty. To keep the dropdown alive we install a
+//  local fallback here — a hardcoded copy of CHAT_EXCLUDED_CAPS from
+//  lib/model_info/capability_taxonomy.py, byte-identical to the
+//  literal in core/model_caps.js. When model_caps.js DID load, that
+//  file's definitions run first and this block is a no-op.
+//
+//  Kept in lock-step with the Python SSOT by
+//  tests/test_frontend_model_caps_bundled.py (parity + neuter).
+// ══════════════════════════════════════════════════════
+(function _installModelCapsFallback() {
+  if (typeof window === 'undefined') return;
+  var _FE_CHAT_EXCLUDED_FALLBACK = ['image_gen', 'embedding', 'transcription'];
+  if (typeof window.isChatModel !== 'function') {
+    var _set = new Set(_FE_CHAT_EXCLUDED_FALLBACK);
+    window.isChatModel = function _isChatModelFallback(m) {
+      if (!m) return true;
+      var caps = m.capabilities;
+      if (!caps || caps.length === 0) return true;
+      for (var i = 0; i < caps.length; i++) if (_set.has(caps[i])) return false;
+      return true;
+    };
+    // Reachable only when core/model_caps.js failed to load — the SSOT
+    // version overrides this at its own IIFE and this branch never fires.
+    try { console.warn('[Tofu] core/model_caps.js absent — using hardcoded chat-filter fallback in main_toolbar_ui.js'); } catch (_) {}
+  }
+  if (typeof window.applyCapabilityTaxonomy !== 'function') {
+    // Minimal shim so the /api/server-config ingestion path stays functional
+    // even without model_caps.js — swap in the server's chat_excluded_caps
+    // if provided. Same behavioural contract as the real one, minus the
+    // dispatcher-set bookkeeping (frontend doesn't filter with that anyway).
+    window.applyCapabilityTaxonomy = function _applyCapabilityTaxonomyFallback(payload) {
+      if (!payload || typeof payload !== 'object') return;
+      var xs = payload.chat_excluded_caps;
+      if (!Array.isArray(xs) || xs.length === 0) return;
+      var _set2 = new Set(xs);
+      window.isChatModel = function _isChatModelFallback2(m) {
+        if (!m) return true;
+        var caps = m.capabilities;
+        if (!caps || caps.length === 0) return true;
+        for (var i = 0; i < caps.length; i++) if (_set2.has(caps[i])) return false;
+        return true;
+      };
+    };
+  }
+})();
+
+/** One-shot console warning when the model-caps SSOT is missing at call time.
+ *  Kept debounced (per-page-load) so a big model list doesn't spam the console.
+ *  Referenced by the guarded filters in this file and in
+ *  static/js/settings/visibility_defaults.js. */
+var _modelCapsMissingWarned = false;
+function _warnModelCapsMissing() {
+  if (_modelCapsMissingWarned) return;
+  _modelCapsMissingWarned = true;
+  try { console.warn('[Tofu] isChatModel unavailable — showing all models unfiltered (non-chat models may appear in the picker)'); } catch (_) {}
+}
+if (typeof window !== 'undefined') window._warnModelCapsMissing = _warnModelCapsMissing;
+
 // ── Toggles ──
 function toggleThinking() {
   thinkingEnabled = !thinkingEnabled;
@@ -201,6 +267,12 @@ function _populateModelDropdown(models) {
   const visibleModels = models.filter(m => {
     if (m.model_id === config.model) return true;  // always keep current model
     if (_hiddenModels.has(m.model_id)) return false;
+    // Guard: if core/model_caps.js failed to load (stale bundle, minifier
+    // regression, CDN partial fetch, …), fall through to "show everything"
+    // rather than throw ReferenceError and leave the dropdown empty. An ASR
+    // model leaking into the picker is a known small annoyance; a black
+    // dropdown is a hard failure. See tests/test_frontend_model_caps_bundled.py.
+    if (typeof isChatModel !== 'function') { _warnModelCapsMissing(); return true; }
     return isChatModel(m);
   });
 
@@ -344,6 +416,7 @@ function _loadServerConfigAndPopulate() {
        * chat model — pick randomly to avoid always landing on the same one. */
       const chatModels = (models || []).filter(m => {
         if (_hiddenModels.has(m.model_id)) return false;
+        if (typeof isChatModel !== 'function') { _warnModelCapsMissing(); return true; }
         return isChatModel(m);
       });
       const availableIds = new Set(chatModels.map(m => m.model_id));

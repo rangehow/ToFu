@@ -140,9 +140,14 @@ function _renderDropdownVisibility() {
 
   // Collect all chat models from all enabled providers. isChatModel comes
   // from core/model_caps.js — SSOT for chat vs non-chat classification.
+  // Guard: a stale/incomplete bundle can strand this filter without
+  // isChatModel(); degrade to "show everything" instead of throwing and
+  // leaving the settings list empty. Same rationale as main_toolbar_ui.
+  var _hasCaps = (typeof isChatModel === 'function');
+  if (!_hasCaps && typeof _warnModelCapsMissing === 'function') _warnModelCapsMissing();
   var allModels = _getAllModels().filter(function(entry) {
     if (entry.provider.enabled === false) return false;
-    return isChatModel(entry.model);
+    return _hasCaps ? isChatModel(entry.model) : true;
   });
 
   if (allModels.length === 0) {
@@ -236,9 +241,12 @@ function _toggleAllDropdownModels(show) {
  */
 function _populateModelDefaults(cfg) {
   // Collect all chat models (exclude non-chat caps via core/model_caps.js).
+  // Guard: see _renderDropdownVisibility above — same failure mode.
+  var _hasCapsDef = (typeof isChatModel === 'function');
+  if (!_hasCapsDef && typeof _warnModelCapsMissing === 'function') _warnModelCapsMissing();
   var chatModels = _getAllModels().filter(function(entry) {
     if (entry.provider.enabled === false) return false;
-    return isChatModel(entry.model);
+    return _hasCapsDef ? isChatModel(entry.model) : true;
   });
 
   // Deduplicate by model_id

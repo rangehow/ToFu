@@ -1812,6 +1812,10 @@ function _renderUnifiedToolLine(round, isSearching) {
    *   Surfacing it tells the user the displayed/executed args differ from
    *   the model's raw (broken) output. */
   const repairedBadge = _renderToolRepairedBadge(round);
+  /* Shared locals handed to the per-branch renderer helpers below — built
+   * once; each helper destructures only what it needs so the moved code
+   * stays byte-identical to the pre-split inline branches. */
+  const ctx = { svg, td, q, results, meta, rootPill, cmdRootPill, repairedBadge, isSearching };
 
   // ★ Async-swarm inbox injection — synthetic timeline row marking the point
   //   where the model received N <swarm-update> messages (sub-agent results)
@@ -1844,7 +1848,135 @@ function _renderUnifiedToolLine(round, isSearching) {
     return _renderHumanGuidanceCard(round, svg);
   }
 
-  // ★ Human Guidance — skipped (task ended before user answered)
+  // ★ Human Guidance — skipped (task ended before user answered) /
+  //   submitted but not yet confirmed by server (tool_result pending)
+  const hgRowHtml = _renderHumanGuidanceRows(round, ctx);
+  if (hgRowHtml) return hgRowHtml;
+
+  // ★ Pending approval state — show approve/reject buttons
+  const approvalHtml = _renderPendingApprovalBlock(round, ctx);
+  if (approvalHtml) return approvalHtml;
+
+  // ★ Timer Watcher: render collapsible poll checks
+  if ((round._timerPolls && round._timerPolls.length > 0) || round._timerSkipCount) {
+    return _renderTimerWatcherBlock(round, svg);
+  }
+  // Timer tool with "searching" status but no polls yet — show initial waiting
+  // After reconnection, backend now includes _timerPolls in state snapshots,
+  // so this state should be brief (only before the first poll fires).
+  const timerWaitHtml = _renderTimerWaitingRow(round, ctx);
+  if (timerWaitHtml) return timerWaitHtml;
+
+  // ★ Interactive stdin: subprocess is waiting for user keyboard input
+  const stdinHtml = _renderStdinBlock(round, ctx);
+  if (stdinHtml) return stdinHtml;
+
+  // ★ Interrupted — the task was aborted (Stop) while this tool round was
+  //   still in-flight. The backend dangling-round sweep
+  //   (orchestrator._finalize_dangling_tool_rounds) stamps status='aborted'
+  //   on rounds the abort short-circuit left in 'searching'. Render a static
+  //   "interrupted" affordance — NO spinner — so it never shows "Running…"
+  //   live or after reload. Real results (if any) fall through to the normal
+  //   done renderers below, since the sweep only marks result-less rounds.
+  const abortedHtml = _renderAbortedRow(round, ctx);
+  if (abortedHtml) return abortedHtml;
+
+  const searchingHtml = _renderSearchingRow(round, ctx);
+  if (searchingHtml) return searchingHtml;
+
+  // ★ run_command / code_exec: render as inline terminal block with collapsible output
+  const cmdDoneHtml = _renderCmdDoneBlock(round, ctx);
+  if (cmdDoneHtml) return cmdDoneHtml;
+
+  // ★ browser_execute_js — render as an inline code block (JS in, result out),
+  //   mirroring the run_command terminal block. A cramped one-line "12165686:
+  //   (() => {…" row is unreadable; show the full snippet + collapsible result.
+  const execJsHtml = _renderBrowserExecJsBlock(round, ctx);
+  if (execJsHtml) return execJsHtml;
+
+  // ★ Web search / fetch — descriptive 0-result reason row, or collapsible
+  //   result list (per-query grouping, vertical cards, engine breakdown).
+  const searchRowsHtml = _renderSearchRows(round, ctx);
+  if (searchRowsHtml) return searchRowsHtml;
+
+  // ★ read_files / inspect_image image(s): render inline thumbnails when the
+  //   backend attached data URIs (meta.imageDataUris).
+  const readImgHtml = _renderReadImagesBlock(round, ctx);
+  if (readImgHtml) return readImgHtml;
+
+  // ★ Image generation / editing: render inline image card.
+  const imageGenHtml = _renderImageGenBlock(round, ctx);
+  if (imageGenHtml) return imageGenHtml;
+
+  // Determine badge
+  const badgeHtml = _computeToolBadgeHtml(round, ctx);
+
+  const compactionLabelHtml = _renderCompactionLabel(round);
+  // ★ create_memory / update_memory / merge_memories — collapsible,
+  //   Markdown-rendered preview of the saved memory body itself (mirrors the
+  //   apply_diff expand block). The opaque description-snippet "Preview" was
+  //   useless to users; expanding now shows the actual memory text, well-
+  //   rendered. The full body lives in round.toolArgs.body. update_memory may
+  //   omit body on a partial (name/tags-only) update — the body.trim() guard
+  //   below falls through to the normal row in that case.
+  if ((round.toolName === "create_memory" || round.toolName === "update_memory" || round.toolName === "merge_memories") && round.toolArgs) {
+    const memHtml = _renderMemoryBlock(round, svg, q, compactionLabelHtml, rootPill, badgeHtml);
+    if (memHtml) return memHtml;
+  }
+
+  // ★ todo_write — collapsible checklist progress card (state glyphs + a slim
+  //   progress bar), rendered off the structured meta.todos the backend
+  //   attaches. Falls through to the generic line only if the list is absent.
+  if (round.toolName === "todo_write") {
+    const todoHtml = _renderTodoBlock(round, svg, q, badgeHtml);
+    if (todoHtml) return todoHtml;
+  }
+
+  // ★ write_file — collapsible inline preview of the written content,
+  //   mirroring the apply_diff expand-on-click block.
+  const writeFileHtml = _renderWriteFileBlock(round, ctx, badgeHtml, compactionLabelHtml);
+  if (writeFileHtml) return writeFileHtml;
+
+  // ★ Single apply_diff / insert_content — collapsible inline diff
+  const singleDiffHtml = _renderSingleDiffBlock(round, ctx, badgeHtml, compactionLabelHtml);
+  if (singleDiffHtml) return singleDiffHtml;
+
+  // ★ Batch edit tools (apply_diffs / insert_contents) — collapsible per-edit list
+  const batchEditsHtml = _renderBatchEditsBlock(round, ctx, badgeHtml, compactionLabelHtml);
+  if (batchEditsHtml) return batchEditsHtml;
+
+  // ★ Project-brain / conversation-meta tools — render their full prose
+  //   output in a collapsible Markdown card instead of the bare generic line
+  //   (which hid all the content). Only when the round has settled (done);
+  //   the in-flight "searching…" state is handled by the generic active
+  //   branch above.
+  if (_isRoundConvMeta(round) && round.status !== "rejected") {
+    const convMetaHtml = _renderConvMetaBlock(round, svg, q, badgeHtml);
+    if (convMetaHtml) return convMetaHtml;
+  }
+
+  return `<div class="ptool-line">
+       <span class="ptool-icon">${svg}</span>
+       ${compactionLabelHtml}
+       ${rootPill}
+       <span class="ptool-text">${q}</span>
+       ${repairedBadge}
+       ${badgeHtml}
+       ${_rowModelViewBtn(round)}
+     </div>`;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * Per-branch renderers for _renderUnifiedToolLine. Each helper guards on its
+ * own trigger condition and returns "" when the branch does not apply, so the
+ * dispatcher stays a flat ordered list of `if (html) return html;` probes —
+ * the probe ORDER is the render priority and must not change.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+// ★ Human Guidance — skipped (task ended before user answered) /
+//   submitted but not yet confirmed by server (tool_result pending)
+function _renderHumanGuidanceRows(round, ctx) {
+  const { svg, td } = ctx;
   if (round.status === "done" && round.toolName === "ask_human" && round._hgSkipped) {
     const skippedQ = escapeHtml((round.guidanceQuestion || '').slice(0, 60));
     return `<div class="ptool-line hg-skipped-line">
@@ -1853,8 +1985,6 @@ function _renderUnifiedToolLine(round, isSearching) {
       <span class="ptool-badge ptool-badge-skip">${escapeHtml(t('project.hgUnanswered'))}</span>
     </div>`;
   }
-
-  // ★ Human Guidance — submitted but not yet confirmed by server (tool_result pending)
   if (round.status === "submitted" && round.toolName === "ask_human") {
     const respPreview = escapeHtml((round._hgUserResponse || '').slice(0, 80));
     return `<div class="ptool-line hg-submitted-line">
@@ -1864,90 +1994,94 @@ function _renderUnifiedToolLine(round, isSearching) {
       <span class="hg-submitted-spinner" title="${escapeHtml(t('project.hgWaitingContinue'))}"></span>
     </div>`;
   }
+  return "";
+}
 
-  // ★ Pending approval state — show approve/reject buttons
-  if (round.status === "pending_approval" && round.approvalId) {
-    const aid = escapeHtml(round.approvalId);
-    const ameta = round.approvalMeta || {};
-    let detailHtml = "";
-    if (ameta.batchMode && ameta.editSummaries) {
-      // ★ Batch apply_diff — show collapsible preview of all edits
-      const edits = ameta.editSummaries;
-      const maxPreviewLines = 12;
-      let batchHtml = `<div class="ptool-batch-header">${edits.length} edit${edits.length > 1 ? "s" : ""} across ${ameta.path || "?"}</div>`;
-      edits.forEach((ed, i) => {
-        const sLines = (ed.search || "").split("\n");
-        const rLines = (ed.replace || "").split("\n");
-        const sShow = sLines.slice(0, maxPreviewLines);
-        const rShow = rLines.slice(0, maxPreviewLines);
-        let diffLines = "";
-        sShow.forEach((l) => {
-          diffLines += `<div class="ptool-diff-line ptool-diff-del"><span class="ptool-diff-sign">-</span><span class="ptool-diff-code">${escapeHtml(l)}</span></div>`;
-        });
-        if (sLines.length > maxPreviewLines)
-          diffLines += `<div class="ptool-diff-line ptool-diff-del ptool-diff-ellipsis"><span class="ptool-diff-sign"> </span><span class="ptool-diff-code">… ${sLines.length - maxPreviewLines} more lines</span></div>`;
-        diffLines += `<div class="ptool-diff-separator"></div>`;
-        rShow.forEach((l) => {
-          diffLines += `<div class="ptool-diff-line ptool-diff-add"><span class="ptool-diff-sign">+</span><span class="ptool-diff-code">${escapeHtml(l)}</span></div>`;
-        });
-        if (rLines.length > maxPreviewLines)
-          diffLines += `<div class="ptool-diff-line ptool-diff-add ptool-diff-ellipsis"><span class="ptool-diff-sign"> </span><span class="ptool-diff-code">… ${rLines.length - maxPreviewLines} more lines</span></div>`;
-        const desc = ed.description ? escapeHtml(ed.description) : `Edit ${i + 1}`;
-        const pathLabel = escapeHtml(ed.path || "?");
-        batchHtml += `<details class="ptool-batch-edit"${i === 0 ? " open" : ""}>
+// ★ Pending approval state — show approve/reject buttons
+function _renderPendingApprovalBlock(round, ctx) {
+  const { svg, q } = ctx;
+  if (!(round.status === "pending_approval" && round.approvalId)) return "";
+  const aid = escapeHtml(round.approvalId);
+  const ameta = round.approvalMeta || {};
+  let detailHtml = "";
+  if (ameta.batchMode && ameta.editSummaries) {
+    // ★ Batch apply_diff — show collapsible preview of all edits
+    const edits = ameta.editSummaries;
+    const maxPreviewLines = 12;
+    let batchHtml = `<div class="ptool-batch-header">${edits.length} edit${edits.length > 1 ? "s" : ""} across ${ameta.path || "?"}</div>`;
+    edits.forEach((ed, i) => {
+      const sLines = (ed.search || "").split("\n");
+      const rLines = (ed.replace || "").split("\n");
+      const sShow = sLines.slice(0, maxPreviewLines);
+      const rShow = rLines.slice(0, maxPreviewLines);
+      let diffLines = "";
+      sShow.forEach((l) => {
+        diffLines += `<div class="ptool-diff-line ptool-diff-del"><span class="ptool-diff-sign">-</span><span class="ptool-diff-code">${escapeHtml(l)}</span></div>`;
+      });
+      if (sLines.length > maxPreviewLines)
+        diffLines += `<div class="ptool-diff-line ptool-diff-del ptool-diff-ellipsis"><span class="ptool-diff-sign"> </span><span class="ptool-diff-code">… ${sLines.length - maxPreviewLines} more lines</span></div>`;
+      diffLines += `<div class="ptool-diff-separator"></div>`;
+      rShow.forEach((l) => {
+        diffLines += `<div class="ptool-diff-line ptool-diff-add"><span class="ptool-diff-sign">+</span><span class="ptool-diff-code">${escapeHtml(l)}</span></div>`;
+      });
+      if (rLines.length > maxPreviewLines)
+        diffLines += `<div class="ptool-diff-line ptool-diff-add ptool-diff-ellipsis"><span class="ptool-diff-sign"> </span><span class="ptool-diff-code">… ${rLines.length - maxPreviewLines} more lines</span></div>`;
+      const desc = ed.description ? escapeHtml(ed.description) : `Edit ${i + 1}`;
+      const pathLabel = escapeHtml(ed.path || "?");
+      batchHtml += `<details class="ptool-batch-edit"${i === 0 ? " open" : ""}>
           <summary class="ptool-batch-summary"><span class="ptool-batch-idx">#${i + 1}</span> <span class="ptool-batch-path">${pathLabel}</span> <span class="ptool-batch-desc">${desc}</span> <span class="ptool-batch-stats">${ed.searchLines || "?"}→${ed.replaceLines || "?"} lines</span></summary>
           <div class="ptool-diff-preview">${diffLines}</div>
         </details>`;
-      });
-      if ((ameta.editCount || edits.length) > edits.length)
-        batchHtml += `<div class="ptool-batch-more">… and ${ameta.editCount - edits.length} more edits</div>`;
-      detailHtml = `<div class="ptool-batch-preview">${batchHtml}</div>`;
-    } else if (ameta.search != null && ameta.replace != null) {
-      // Single apply_diff — show search→replace preview with line-by-line diff
-      const searchLines = (ameta.search || "").split("\n");
-      const replaceLines = (ameta.replace || "").split("\n");
-      const totalSearchLines = ameta.searchLines || searchLines.length;
-      const totalSearchChars = ameta.searchChars || ameta.search.length;
-      const totalReplaceLines = ameta.replaceLines || replaceLines.length;
-      const totalReplaceChars = ameta.replaceChars || ameta.replace.length;
-      const maxLines = 30;
-      const searchShow = searchLines.slice(0, maxLines);
-      const replaceShow = replaceLines.slice(0, maxLines);
-      let diffLines = "";
-      searchShow.forEach((l) => {
-        diffLines += `<div class="ptool-diff-line ptool-diff-del"><span class="ptool-diff-sign">-</span><span class="ptool-diff-code">${escapeHtml(l)}</span></div>`;
-      });
-      if (totalSearchLines > maxLines)
-        diffLines += `<div class="ptool-diff-line ptool-diff-del ptool-diff-ellipsis"><span class="ptool-diff-sign"> </span><span class="ptool-diff-code">… ${totalSearchLines - maxLines} more lines (${totalSearchLines} lines · ${totalSearchChars.toLocaleString()} chars total)</span></div>`;
-      diffLines += `<div class="ptool-diff-separator"></div>`;
-      replaceShow.forEach((l) => {
-        diffLines += `<div class="ptool-diff-line ptool-diff-add"><span class="ptool-diff-sign">+</span><span class="ptool-diff-code">${escapeHtml(l)}</span></div>`;
-      });
-      if (totalReplaceLines > maxLines)
-        diffLines += `<div class="ptool-diff-line ptool-diff-add ptool-diff-ellipsis"><span class="ptool-diff-sign"> </span><span class="ptool-diff-code">… ${totalReplaceLines - maxLines} more lines (${totalReplaceLines} lines · ${totalReplaceChars.toLocaleString()} chars total)</span></div>`;
-      detailHtml = `<div class="ptool-diff-preview">${diffLines}</div>`;
-    } else if (ameta.command != null) {
-      // run_command — show command preview
-      const cmdText = escapeHtml(ameta.command || "");
-      const cmdDescHtml = ameta.description
-        ? `<div class="ptool-cmd-desc">${escapeHtml(ameta.description)}</div>`
-        : "";
-      detailHtml = `<div class="ptool-diff-preview">${cmdDescHtml}<pre class="ptool-cmd-code" style="margin:0;padding:8px 12px;font-size:12px;"><code>$ ${cmdText}</code></pre></div>`;
-    } else if (ameta.contentPreview) {
-      const previewLines = (ameta.contentPreview || "")
-        .split("\n")
-        .slice(0, 12);
-      let previewContent = previewLines
-        .map(
-          (l) =>
-            `<div class="ptool-diff-line ptool-diff-add"><span class="ptool-diff-sign">+</span><span class="ptool-diff-code">${escapeHtml(l)}</span></div>`,
-        )
-        .join("");
-      if ((ameta.contentPreview || "").split("\n").length > 12)
-        previewContent += `<div class="ptool-diff-line ptool-diff-add ptool-diff-ellipsis"><span class="ptool-diff-sign"> </span><span class="ptool-diff-code">… more lines</span></div>`;
-      detailHtml = `<div class="ptool-diff-preview">${previewContent}<div class="ptool-write-meta">${ameta.contentLines || "?"} lines · ${(ameta.contentChars || 0).toLocaleString()} chars</div></div>`;
-    }
-    return `<div class="ptool-pending-wrap">
+    });
+    if ((ameta.editCount || edits.length) > edits.length)
+      batchHtml += `<div class="ptool-batch-more">… and ${ameta.editCount - edits.length} more edits</div>`;
+    detailHtml = `<div class="ptool-batch-preview">${batchHtml}</div>`;
+  } else if (ameta.search != null && ameta.replace != null) {
+    // Single apply_diff — show search→replace preview with line-by-line diff
+    const searchLines = (ameta.search || "").split("\n");
+    const replaceLines = (ameta.replace || "").split("\n");
+    const totalSearchLines = ameta.searchLines || searchLines.length;
+    const totalSearchChars = ameta.searchChars || ameta.search.length;
+    const totalReplaceLines = ameta.replaceLines || replaceLines.length;
+    const totalReplaceChars = ameta.replaceChars || ameta.replace.length;
+    const maxLines = 30;
+    const searchShow = searchLines.slice(0, maxLines);
+    const replaceShow = replaceLines.slice(0, maxLines);
+    let diffLines = "";
+    searchShow.forEach((l) => {
+      diffLines += `<div class="ptool-diff-line ptool-diff-del"><span class="ptool-diff-sign">-</span><span class="ptool-diff-code">${escapeHtml(l)}</span></div>`;
+    });
+    if (totalSearchLines > maxLines)
+      diffLines += `<div class="ptool-diff-line ptool-diff-del ptool-diff-ellipsis"><span class="ptool-diff-sign"> </span><span class="ptool-diff-code">… ${totalSearchLines - maxLines} more lines (${totalSearchLines} lines · ${totalSearchChars.toLocaleString()} chars total)</span></div>`;
+    diffLines += `<div class="ptool-diff-separator"></div>`;
+    replaceShow.forEach((l) => {
+      diffLines += `<div class="ptool-diff-line ptool-diff-add"><span class="ptool-diff-sign">+</span><span class="ptool-diff-code">${escapeHtml(l)}</span></div>`;
+    });
+    if (totalReplaceLines > maxLines)
+      diffLines += `<div class="ptool-diff-line ptool-diff-add ptool-diff-ellipsis"><span class="ptool-diff-sign"> </span><span class="ptool-diff-code">… ${totalReplaceLines - maxLines} more lines (${totalReplaceLines} lines · ${totalReplaceChars.toLocaleString()} chars total)</span></div>`;
+    detailHtml = `<div class="ptool-diff-preview">${diffLines}</div>`;
+  } else if (ameta.command != null) {
+    // run_command — show command preview
+    const cmdText = escapeHtml(ameta.command || "");
+    const cmdDescHtml = ameta.description
+      ? `<div class="ptool-cmd-desc">${escapeHtml(ameta.description)}</div>`
+      : "";
+    detailHtml = `<div class="ptool-diff-preview">${cmdDescHtml}<pre class="ptool-cmd-code" style="margin:0;padding:8px 12px;font-size:12px;"><code>$ ${cmdText}</code></pre></div>`;
+  } else if (ameta.contentPreview) {
+    const previewLines = (ameta.contentPreview || "")
+      .split("\n")
+      .slice(0, 12);
+    let previewContent = previewLines
+      .map(
+        (l) =>
+          `<div class="ptool-diff-line ptool-diff-add"><span class="ptool-diff-sign">+</span><span class="ptool-diff-code">${escapeHtml(l)}</span></div>`,
+      )
+      .join("");
+    if ((ameta.contentPreview || "").split("\n").length > 12)
+      previewContent += `<div class="ptool-diff-line ptool-diff-add ptool-diff-ellipsis"><span class="ptool-diff-sign"> </span><span class="ptool-diff-code">… more lines</span></div>`;
+    detailHtml = `<div class="ptool-diff-preview">${previewContent}<div class="ptool-write-meta">${ameta.contentLines || "?"} lines · ${(ameta.contentChars || 0).toLocaleString()} chars</div></div>`;
+  }
+  return `<div class="ptool-pending-wrap">
          <div class="ptool-line ptool-pending">
            <span class="ptool-icon">${svg}</span>
            <span class="ptool-text">${q}</span>
@@ -1959,35 +2093,35 @@ function _renderUnifiedToolLine(round, isSearching) {
            <button class="ptool-reject-btn" onclick="event.stopPropagation();resolveWriteApproval('${aid}',false)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Reject</button>
          </div>
        </div>`;
-  }
+}
 
-  // ★ Timer Watcher: render collapsible poll checks
-  if ((round._timerPolls && round._timerPolls.length > 0) || round._timerSkipCount) {
-    return _renderTimerWatcherBlock(round, svg);
+// Timer tool with "searching" status but no polls yet — show initial waiting
+// After reconnection, backend now includes _timerPolls in state snapshots,
+// so this state should be brief (only before the first poll fires).
+function _renderTimerWaitingRow(round, ctx) {
+  const { q } = ctx;
+  if (!(round.toolName === "timer_create" && round.status === "searching" && !round._timerPolls)) return "";
+  // ★ Try to recover timer polls from the API if timerId is known
+  if (round._timerTimerId && !round._timerPollsRecoveryAttempted) {
+    round._timerPollsRecoveryAttempted = true;
+    _recoverTimerPolls(round);
   }
-  // Timer tool with "searching" status but no polls yet — show initial waiting
-  // After reconnection, backend now includes _timerPolls in state snapshots,
-  // so this state should be brief (only before the first poll fires).
-  if (round.toolName === "timer_create" && round.status === "searching" && !round._timerPolls) {
-    // ★ Try to recover timer polls from the API if timerId is known
-    if (round._timerTimerId && !round._timerPollsRecoveryAttempted) {
-      round._timerPollsRecoveryAttempted = true;
-      _recoverTimerPolls(round);
-    }
-    return `<div class="ptool-line ptool-active">
+  return `<div class="ptool-line ptool-active">
          <span class="ptool-icon">${Icon('timer')}</span>
          <span class="ptool-text">${q || escapeHtml(t('timerBlock.watcherTitle'))}</span>
          <span class="ptool-badge ptool-badge-warn">${escapeHtml(t('timerBlock.waitingFirstPoll'))}</span>
          <span class="ptool-spinner"></span>
        </div>`;
-  }
+}
 
-  // ★ Interactive stdin: subprocess is waiting for user keyboard input
-  if (round.status === "awaiting_stdin" && round.stdinId) {
-    const cmdText = escapeHtml(round.query || round.stdinCommand || "");
-    const promptText = escapeHtml(round.stdinPrompt || "");
-    const sid = escapeHtml(round.stdinId);
-    return `<div class="ptool-cmd-block ptool-cmd-stdin" data-rn="${round.roundNum}">
+// ★ Interactive stdin: subprocess is waiting for user keyboard input
+function _renderStdinBlock(round, ctx) {
+  const { svg, rootPill } = ctx;
+  if (!(round.status === "awaiting_stdin" && round.stdinId)) return "";
+  const cmdText = escapeHtml(round.query || round.stdinCommand || "");
+  const promptText = escapeHtml(round.stdinPrompt || "");
+  const sid = escapeHtml(round.stdinId);
+  return `<div class="ptool-cmd-block ptool-cmd-stdin" data-rn="${round.roundNum}">
          <div class="ptool-cmd-header">
            <span class="ptool-cmd-icon">${svg}</span>
            ${rootPill}
@@ -2012,51 +2146,57 @@ function _renderUnifiedToolLine(round, isSearching) {
            </div>
          </div>
        </div>`;
-  }
+}
 
-  // ★ Interrupted — the task was aborted (Stop) while this tool round was
-  //   still in-flight. The backend dangling-round sweep
-  //   (orchestrator._finalize_dangling_tool_rounds) stamps status='aborted'
-  //   on rounds the abort short-circuit left in 'searching'. Render a static
-  //   "interrupted" affordance — NO spinner — so it never shows "Running…"
-  //   live or after reload. Real results (if any) fall through to the normal
-  //   done renderers below, since the sweep only marks result-less rounds.
-  if (round.status === "aborted" && !(round.results && round.results.length && !meta.interrupted)) {
-    const cmdText = escapeHtml(round.query || meta.title || td.label || round.toolName || "");
-    return `<div class="ptool-line ptool-interrupted" data-rn="${round.roundNum}">
+// ★ Interrupted — the task was aborted (Stop) while this tool round was
+//   still in-flight. The backend dangling-round sweep
+//   (orchestrator._finalize_dangling_tool_rounds) stamps status='aborted'
+//   on rounds the abort short-circuit left in 'searching'. Render a static
+//   "interrupted" affordance — NO spinner — so it never shows "Running…"
+//   live or after reload. Real results (if any) fall through to the normal
+//   done renderers below, since the sweep only marks result-less rounds.
+function _renderAbortedRow(round, ctx) {
+  const { svg, td, meta, rootPill } = ctx;
+  if (!(round.status === "aborted" && !(round.results && round.results.length && !meta.interrupted))) return "";
+  const cmdText = escapeHtml(round.query || meta.title || td.label || round.toolName || "");
+  return `<div class="ptool-line ptool-interrupted" data-rn="${round.roundNum}">
          <span class="ptool-icon">${svg}</span>
          ${rootPill}
          <span class="ptool-text">${cmdText}</span>
          <span class="ptool-badge ptool-badge-interrupted">interrupted</span>
        </div>`;
-  }
+}
 
-  if (isSearching) {
-    // ★ run_command / code_exec: show running state with full command.
-    //   If streaming output has started arriving via tool_progress events,
-    //   render it live inside the block so the user can follow along.
-    if (round.toolName === "run_command" || round.toolName === "code_exec") {
-      const cmdText = escapeHtml(round.query || "");
-      let _cmdDesc = "";
-      try {
-        const _a = typeof round.toolArgs === "string" ? JSON.parse(round.toolArgs) : (round.toolArgs || {});
-        _cmdDesc = (_a && _a.description) || "";
-      } catch (_e) { /* malformed toolArgs — skip description */ }
-      const descInlineHtml = _cmdDesc
-        ? `<span class="ptool-cmd-desc-inline" title="${escapeHtml(_cmdDesc)}">${escapeHtml(_cmdDesc)}</span>`
-        : "";
-      const partial = typeof round._partialOutput === "string" ? round._partialOutput : "";
-      let liveOutHtml = "";
-      if (partial) {
-        // Cap the live-view length so the DOM stays snappy on very chatty
-        // commands; the authoritative full output lands in meta.output on done.
-        const MAX_LIVE = 20000;
-        const shown = partial.length > MAX_LIVE
-          ? ("… [" + (partial.length - MAX_LIVE).toLocaleString() + " earlier chars elided] …\n" + partial.slice(-MAX_LIVE))
-          : partial;
-        liveOutHtml = `<pre class="ptool-cmd-output ptool-cmd-output-live"><code>${escapeHtml(shown)}</code></pre>`;
-      }
-      return `<div class="ptool-cmd-block ptool-cmd-running">
+// In-flight ("searching") states: running command with live output, search
+// orbit animation, or the generic active row.
+function _renderSearchingRow(round, ctx) {
+  const { svg, q, rootPill, cmdRootPill, repairedBadge, isSearching } = ctx;
+  if (!isSearching) return "";
+  // ★ run_command / code_exec: show running state with full command.
+  //   If streaming output has started arriving via tool_progress events,
+  //   render it live inside the block so the user can follow along.
+  if (round.toolName === "run_command" || round.toolName === "code_exec") {
+    const cmdText = escapeHtml(round.query || "");
+    let _cmdDesc = "";
+    try {
+      const _a = typeof round.toolArgs === "string" ? JSON.parse(round.toolArgs) : (round.toolArgs || {});
+      _cmdDesc = (_a && _a.description) || "";
+    } catch (_e) { /* malformed toolArgs — skip description */ }
+    const descInlineHtml = _cmdDesc
+      ? `<span class="ptool-cmd-desc-inline" title="${escapeHtml(_cmdDesc)}">${escapeHtml(_cmdDesc)}</span>`
+      : "";
+    const partial = typeof round._partialOutput === "string" ? round._partialOutput : "";
+    let liveOutHtml = "";
+    if (partial) {
+      // Cap the live-view length so the DOM stays snappy on very chatty
+      // commands; the authoritative full output lands in meta.output on done.
+      const MAX_LIVE = 20000;
+      const shown = partial.length > MAX_LIVE
+        ? ("… [" + (partial.length - MAX_LIVE).toLocaleString() + " earlier chars elided] …\n" + partial.slice(-MAX_LIVE))
+        : partial;
+      liveOutHtml = `<pre class="ptool-cmd-output ptool-cmd-output-live"><code>${escapeHtml(shown)}</code></pre>`;
+    }
+    return `<div class="ptool-cmd-block ptool-cmd-running">
            <div class="ptool-cmd-header">
              <span class="ptool-cmd-icon">${svg}</span>
              ${cmdRootPill}
@@ -2067,67 +2207,69 @@ function _renderUnifiedToolLine(round, isSearching) {
            <pre class="ptool-cmd-code"><code>$ ${cmdText}</code></pre>
            ${liveOutHtml}
          </div>`;
-    }
-    // ★ Web search: show orbit animation
-    if (_isRoundSearch(round)) {
-      return `<div class="ptool-line ptool-active ptool-search-line">
+  }
+  // ★ Web search: show orbit animation
+  if (_isRoundSearch(round)) {
+    return `<div class="ptool-line ptool-active ptool-search-line">
            <span class="ptool-icon"><div class="search-orbit-container" style="width:16px;height:16px"><div class="search-orbit-center" style="inset:4px"></div><div class="search-orbit-dot" style="width:3px;height:3px;margin:-1.5px"></div><div class="search-orbit-dot" style="width:3px;height:3px;margin:-1.5px"></div><div class="search-orbit-dot" style="width:3px;height:3px;margin:-1.5px"></div></div></span>
            <span class="ptool-text">${q}</span>
            <span class="ptool-spinner"></span>
          </div>`;
-    }
-    return `<div class="ptool-line ptool-active">
+  }
+  return `<div class="ptool-line ptool-active">
          <span class="ptool-icon">${svg}</span>
          ${rootPill}
          <span class="ptool-text">${q}</span>
          ${repairedBadge}
          <span class="ptool-spinner"></span>
        </div>`;
-  }
+}
 
-  // ★ run_command / code_exec: render as inline terminal block with collapsible output
-  if ((round.toolName === "run_command" || round.toolName === "code_exec") && (meta.command != null || meta.output != null)) {
-    const cmd = escapeHtml(meta.command || round.query || "");
-    const descInlineHtml = meta.description
-      ? `<span class="ptool-cmd-desc-inline" title="${escapeHtml(meta.description)}">${escapeHtml(meta.description)}</span>`
-      : "";
-    const output = meta.output || "";
-    const exitCode = meta.exitCode ?? "?";
-    const timedOut = meta.timedOut || false;
-    // ★ "not run": the command was refused/blocked BEFORE it executed (read-only
-    //   root, dangerous pattern, no project, pre-hook block, abort, start error).
-    //   There is no real exit code — show the cause, never the cryptic "exit ?".
-    const notRun = meta.notRun === true || exitCode === "not-run";
-    const isOk = !notRun && (exitCode === "0" || exitCode === 0);
-    const statusCls = notRun
-      ? "ptool-cmd-notrun"
-      : timedOut
-        ? "ptool-cmd-timeout"
-        : isOk
-          ? "ptool-cmd-ok"
-          : "ptool-cmd-err";
-    const notRunBadge = meta.badge && meta.badge !== `exit ${exitCode}`
-      ? meta.badge : "not run";
-    const statusLabel = notRun
-      ? `⊘ ${escapeHtml(notRunBadge)}`
-      : timedOut
-        ? "timeout"
-        : isOk
-          ? "✓ done"
-          : `✗ exit ${exitCode}`;
-    // For a not-run command the reason IS the message — surface it inline
-    // (not hidden behind a collapse toggle) so the user sees why immediately.
-    const reason = notRun ? (meta.reason || output || "") : "";
-    let outputHtml = "";
-    if (notRun && reason) {
-      outputHtml = `<div class="ptool-cmd-reason">${escapeHtml(reason)}</div>`;
-    } else if (output) {
-      outputHtml = `<div class="ptool-cmd-output-wrap">
+// ★ run_command / code_exec: render as inline terminal block with collapsible output
+function _renderCmdDoneBlock(round, ctx) {
+  const { svg, meta, cmdRootPill } = ctx;
+  if (!((round.toolName === "run_command" || round.toolName === "code_exec") && (meta.command != null || meta.output != null))) return "";
+  const cmd = escapeHtml(meta.command || round.query || "");
+  const descInlineHtml = meta.description
+    ? `<span class="ptool-cmd-desc-inline" title="${escapeHtml(meta.description)}">${escapeHtml(meta.description)}</span>`
+    : "";
+  const output = meta.output || "";
+  const exitCode = meta.exitCode ?? "?";
+  const timedOut = meta.timedOut || false;
+  // ★ "not run": the command was refused/blocked BEFORE it executed (read-only
+  //   root, dangerous pattern, no project, pre-hook block, abort, start error).
+  //   There is no real exit code — show the cause, never the cryptic "exit ?".
+  const notRun = meta.notRun === true || exitCode === "not-run";
+  const isOk = !notRun && (exitCode === "0" || exitCode === 0);
+  const statusCls = notRun
+    ? "ptool-cmd-notrun"
+    : timedOut
+      ? "ptool-cmd-timeout"
+      : isOk
+        ? "ptool-cmd-ok"
+        : "ptool-cmd-err";
+  const notRunBadge = meta.badge && meta.badge !== `exit ${exitCode}`
+    ? meta.badge : "not run";
+  const statusLabel = notRun
+    ? `⊘ ${escapeHtml(notRunBadge)}`
+    : timedOut
+      ? "timeout"
+      : isOk
+        ? "✓ done"
+        : `✗ exit ${exitCode}`;
+  // For a not-run command the reason IS the message — surface it inline
+  // (not hidden behind a collapse toggle) so the user sees why immediately.
+  const reason = notRun ? (meta.reason || output || "") : "";
+  let outputHtml = "";
+  if (notRun && reason) {
+    outputHtml = `<div class="ptool-cmd-reason">${escapeHtml(reason)}</div>`;
+  } else if (output) {
+    outputHtml = `<div class="ptool-cmd-output-wrap">
            <div class="ptool-cmd-toggle" onclick="event.stopPropagation();var w=this.parentElement;w.classList.toggle('expanded');this.textContent=w.classList.contains('expanded')?'▾ Collapse':'▸ Show output';">▸ Show output</div>
            <pre class="ptool-cmd-output"><code>${escapeHtml(output)}</code></pre>
          </div>`;
-    }
-    return `<div class="ptool-cmd-block ${statusCls}" data-rn="${round.roundNum}">
+  }
+  return `<div class="ptool-cmd-block ${statusCls}" data-rn="${round.roundNum}">
          <div class="ptool-cmd-header">
            <span class="ptool-cmd-icon">${svg}</span>
            ${cmdRootPill}
@@ -2138,38 +2280,40 @@ function _renderUnifiedToolLine(round, isSearching) {
          <pre class="ptool-cmd-code"><code>$ ${cmd}</code></pre>
          ${outputHtml}
        </div>`;
-  }
+}
 
-  // ★ browser_execute_js — render as an inline code block (JS in, result out),
-  //   mirroring the run_command terminal block. A cramped one-line "12165686:
-  //   (() => {…" row is unreadable; show the full snippet + collapsible result.
-  if (round.toolName === "browser_execute_js") {
-    let jsCode = "";
-    let jsDesc = "";
-    try {
-      const a = typeof round.toolArgs === "string" ? JSON.parse(round.toolArgs) : (round.toolArgs || {});
-      jsCode = (a && a.code) || "";
-      jsDesc = (a && a.description) || "";
-    } catch (_e) { /* malformed toolArgs */ }
-    const isErr = meta.badge === "error";
-    const statusLabel = isErr ? "✗ error" : "✓ ok";
-    const statusCls = isErr ? "ptool-cmd-err" : "ptool-cmd-ok";
-    // The result returned to the model lives in round.toolContent.
-    const out = typeof round.toolContent === "string" ? round.toolContent : "";
-    let outputHtml = "";
-    if (out) {
-      outputHtml = `<div class="ptool-cmd-output-wrap">
+// ★ browser_execute_js — render as an inline code block (JS in, result out),
+//   mirroring the run_command terminal block. A cramped one-line "12165686:
+//   (() => {…" row is unreadable; show the full snippet + collapsible result.
+function _renderBrowserExecJsBlock(round, ctx) {
+  const { svg, meta, rootPill } = ctx;
+  if (!(round.toolName === "browser_execute_js")) return "";
+  let jsCode = "";
+  let jsDesc = "";
+  try {
+    const a = typeof round.toolArgs === "string" ? JSON.parse(round.toolArgs) : (round.toolArgs || {});
+    jsCode = (a && a.code) || "";
+    jsDesc = (a && a.description) || "";
+  } catch (_e) { /* malformed toolArgs */ }
+  const isErr = meta.badge === "error";
+  const statusLabel = isErr ? "✗ error" : "✓ ok";
+  const statusCls = isErr ? "ptool-cmd-err" : "ptool-cmd-ok";
+  // The result returned to the model lives in round.toolContent.
+  const out = typeof round.toolContent === "string" ? round.toolContent : "";
+  let outputHtml = "";
+  if (out) {
+    outputHtml = `<div class="ptool-cmd-output-wrap">
            <div class="ptool-cmd-toggle" onclick="event.stopPropagation();var w=this.parentElement;w.classList.toggle('expanded');this.textContent=w.classList.contains('expanded')?'▾ Collapse':'▸ Show result';">▸ Show result</div>
            <pre class="ptool-cmd-output"><code>${escapeHtml(out)}</code></pre>
          </div>`;
-    }
-    const descHtml = jsDesc
-      ? `<div class="ptool-cmd-desc">${escapeHtml(jsDesc)}</div>`
-      : "";
-    const codeHtml = jsCode
-      ? `<pre class="ptool-cmd-code"><code>${escapeHtml(jsCode)}</code></pre>`
-      : "";
-    return `<div class="ptool-cmd-block ptool-cmd-js ${statusCls}" data-rn="${round.roundNum}">
+  }
+  const descHtml = jsDesc
+    ? `<div class="ptool-cmd-desc">${escapeHtml(jsDesc)}</div>`
+    : "";
+  const codeHtml = jsCode
+    ? `<pre class="ptool-cmd-code"><code>${escapeHtml(jsCode)}</code></pre>`
+    : "";
+  return `<div class="ptool-cmd-block ptool-cmd-js ${statusCls}" data-rn="${round.roundNum}">
          <div class="ptool-cmd-header">
            <span class="ptool-cmd-icon">${svg}</span>
            ${rootPill}
@@ -2181,8 +2325,12 @@ function _renderUnifiedToolLine(round, isSearching) {
          ${codeHtml}
          ${outputHtml}
        </div>`;
-  }
+}
 
+// ★ Web search / fetch — descriptive 0-result reason row, or collapsible
+//   result list (per-query grouping, vertical cards, engine breakdown).
+function _renderSearchRows(round, ctx) {
+  const { svg, q, results } = ctx;
   // ★ Web search / fetch with 0 results — show descriptive reason
   if ((_isRoundSearch(round) || _isRoundFetch(round)) && results.length === 0) {
     const diag = round.searchDiag;
@@ -2342,35 +2490,39 @@ function _renderUnifiedToolLine(round, isSearching) {
          <div class="ptool-results-content">${verticalHtml}${items}${engineBkdnHtml}</div>
        </div>`;
   }
+  return "";
+}
 
-  // ★ read_files / inspect_image image(s): render inline thumbnails when the
-  //   backend attached data URIs (meta.imageDataUris). Each descriptor carries
-  //   a full data: URL the browser can render directly. inspect_image is the
-  //   zoom/rotate/crop viewer — it gets a distinct accent + an "ops" chip
-  //   describing the transform (e.g. "crop, 2×").
-  if ((round.toolName === "read_files" || round.toolName === "inspect_image" || round.toolName === "browser_screenshot") &&
-      Array.isArray(meta.imageDataUris) && meta.imageDataUris.length) {
-    const imgs = meta.imageDataUris.filter((d) => d && d.uri);
-    if (imgs.length) {
-      const isInspect = round.toolName === "inspect_image";
-      const multi = imgs.length > 1;
-      const tiles = imgs.map((d) => {
-        const cap = escapeHtml(d.filename || d.format || "");
-        return `<figure class="rf-img-tile">
+// ★ read_files / inspect_image image(s): render inline thumbnails when the
+//   backend attached data URIs (meta.imageDataUris). Each descriptor carries
+//   a full data: URL the browser can render directly. inspect_image is the
+//   zoom/rotate/crop viewer — it gets a distinct accent + an "ops" chip
+//   describing the transform (e.g. "crop, 2×").
+function _renderReadImagesBlock(round, ctx) {
+  const { svg, q, meta } = ctx;
+  if (!((round.toolName === "read_files" || round.toolName === "inspect_image" || round.toolName === "browser_screenshot") &&
+      Array.isArray(meta.imageDataUris) && meta.imageDataUris.length)) return "";
+  const imgs = meta.imageDataUris.filter((d) => d && d.uri);
+  if (!imgs.length) return "";
+  const isInspect = round.toolName === "inspect_image";
+  const multi = imgs.length > 1;
+  const tiles = imgs.map((d) => {
+    const cap = escapeHtml(d.filename || d.format || "");
+    return `<figure class="rf-img-tile">
              <img src="${escapeHtml(d.uri)}" alt="${cap}" loading="lazy"
                   onclick="_openImageFullscreen(this.src)" />
              ${cap ? `<figcaption class="rf-img-cap" title="${cap}">${cap}</figcaption>` : ""}
            </figure>`;
-      }).join("");
-      // inspect_image: prefer the ops badge (crop/zoom/rotate); read_files
-      // multi: image count; else fall back to the generic meta badge.
-      const opsChip = isInspect && meta.inspectOps
-        ? `<span class="ptool-badge rf-inspect-chip" title="${escapeHtml(_localizeInspectOps(t, meta.inspectOps, "title"))}">${escapeHtml(_localizeInspectOps(t, meta.inspectOps))}</span>`
-        : "";
-      const countBadge = multi
-        ? `<span class="ptool-badge ptool-badge-info">${imgs.length} images</span>`
-        : (!isInspect && meta.badge ? `<span class="ptool-badge ptool-badge-info">${escapeHtml(meta.badge)}</span>` : "");
-      return `<div class="ptool-readimg-block${isInspect ? " ptool-inspectimg-block" : ""}" data-rn="${round.roundNum}">
+  }).join("");
+  // inspect_image: prefer the ops badge (crop/zoom/rotate); read_files
+  // multi: image count; else fall back to the generic meta badge.
+  const opsChip = isInspect && meta.inspectOps
+    ? `<span class="ptool-badge rf-inspect-chip" title="${escapeHtml(_localizeInspectOps(t, meta.inspectOps, "title"))}">${escapeHtml(_localizeInspectOps(t, meta.inspectOps))}</span>`
+    : "";
+  const countBadge = multi
+    ? `<span class="ptool-badge ptool-badge-info">${imgs.length} images</span>`
+    : (!isInspect && meta.badge ? `<span class="ptool-badge ptool-badge-info">${escapeHtml(meta.badge)}</span>` : "");
+  return `<div class="ptool-readimg-block${isInspect ? " ptool-inspectimg-block" : ""}" data-rn="${round.roundNum}">
            <div class="ptool-line ptool-readimg-header">
              <span class="ptool-icon">${svg}</span>
              <span class="ptool-text">${q}</span>
@@ -2380,50 +2532,51 @@ function _renderUnifiedToolLine(round, isSearching) {
            </div>
            <div class="rf-img-grid${multi ? " rf-img-grid-multi" : ""}${isInspect ? " rf-img-grid-inspect" : ""}">${tiles}</div>
          </div>`;
-    }
-  }
+}
 
-  // ★ Image generation / editing: render inline image card.
-  //   The two functions are visually distinguished by a mode theme:
-  //   • generate → magenta "Generated" theme + framed-photo icon
-  //   • edit     → cyan "Edited" theme + wand icon + before→after strip
-  if (_isRoundImageGen(round)) {
-    const isEdit = meta.imageMode === "edit";
-    const modeCls = isEdit ? "ig-mode-edit" : "ig-mode-generate";
-    const modeChip = isEdit
-      ? `<span class="ig-mode-chip ig-mode-chip-edit" title="Edited an existing image">${_imageEditChipSvg}Edited</span>`
-      : `<span class="ig-mode-chip ig-mode-chip-gen" title="Generated from a text prompt">${_imageGenChipSvg}Generated</span>`;
-    const srcUrl = meta.imageSourceUrl || "";
-    const imgUri = meta.imageDataUri || "";
-    const imgErr = meta.imageError || "";
-    const prompt = meta.imagePrompt || escapeHtml(round.query || "").replace(/^🎨\s*Generating[^:]*:\s*/i, "");
-    const imgAR = meta.imageAspectRatio || "";
-    const imgRes = meta.imageResolution || "";
-    const paramsBadges = (imgAR || imgRes)
-      ? `<span class="ptool-badge ptool-badge-info ig-params">${imgAR ? escapeHtml(imgAR) : ""}${imgAR && imgRes ? " · " : ""}${imgRes ? escapeHtml(imgRes) : ""}</span>`
+// ★ Image generation / editing: render inline image card.
+//   The two functions are visually distinguished by a mode theme:
+//   • generate → magenta "Generated" theme + framed-photo icon
+//   • edit     → cyan "Edited" theme + wand icon + before→after strip
+function _renderImageGenBlock(round, ctx) {
+  const { svg, q, meta } = ctx;
+  if (!_isRoundImageGen(round)) return "";
+  const isEdit = meta.imageMode === "edit";
+  const modeCls = isEdit ? "ig-mode-edit" : "ig-mode-generate";
+  const modeChip = isEdit
+    ? `<span class="ig-mode-chip ig-mode-chip-edit" title="Edited an existing image">${_imageEditChipSvg}Edited</span>`
+    : `<span class="ig-mode-chip ig-mode-chip-gen" title="Generated from a text prompt">${_imageGenChipSvg}Generated</span>`;
+  const srcUrl = meta.imageSourceUrl || "";
+  const imgUri = meta.imageDataUri || "";
+  const imgErr = meta.imageError || "";
+  const prompt = meta.imagePrompt || escapeHtml(round.query || "").replace(/^🎨\s*Generating[^:]*:\s*/i, "");
+  const imgAR = meta.imageAspectRatio || "";
+  const imgRes = meta.imageResolution || "";
+  const paramsBadges = (imgAR || imgRes)
+    ? `<span class="ptool-badge ptool-badge-info ig-params">${imgAR ? escapeHtml(imgAR) : ""}${imgAR && imgRes ? " · " : ""}${imgRes ? escapeHtml(imgRes) : ""}</span>`
+    : "";
+  if (imgUri) {
+    const projPath = meta.imageProjectPath || "";
+    const svgUrl = meta.svgSavedUrl || "";
+    const svgPath = meta.svgProjectPath || "";
+    const hasSvg = !!(svgUrl || svgPath);
+    const svgBadge = hasSvg
+      ? `<span class="ptool-badge ptool-badge-info ig-svg-badge" title="${escapeHtml("SVG version generated" + (svgPath ? ": " + svgPath : ""))}">SVG</span>`
       : "";
-    if (imgUri) {
-      const projPath = meta.imageProjectPath || "";
-      const svgUrl = meta.svgSavedUrl || "";
-      const svgPath = meta.svgProjectPath || "";
-      const hasSvg = !!(svgUrl || svgPath);
-      const svgBadge = hasSvg
-        ? `<span class="ptool-badge ptool-badge-info ig-svg-badge" title="${escapeHtml("SVG version generated" + (svgPath ? ": " + svgPath : ""))}">SVG</span>`
-        : "";
-      const svgBtn = svgUrl
-        ? `<button class="ig-action-btn" onclick="event.stopPropagation();window.open('${escapeHtml(svgUrl)}','_blank')" title="${escapeHtml("Open SVG" + (svgPath ? " — " + svgPath : ""))}">SVG</button>`
-        : "";
-      const pathBadges = [
-        projPath ? `<span class="ig-path-chip" title="Saved to project: ${escapeHtml(projPath)}"><span class="ig-path-icon">${Icon('image', 12)}</span>${escapeHtml(projPath)}</span>` : "",
-        svgPath ? `<span class="ig-path-chip ig-path-chip-svg" title="SVG saved to project: ${escapeHtml(svgPath)}"><span class="ig-path-icon">⬡</span>${escapeHtml(svgPath)}</span>` : "",
-      ].filter(Boolean).join("");
-      const pathFooter = pathBadges
-        ? `<div class="ig-path-bar">${pathBadges}</div>`
-        : "";
-      // For edits with a loadable source, show a before→after strip so the
-      // transformation is obvious at a glance; otherwise a single result image.
-      const imageArea = (isEdit && srcUrl)
-        ? `<div class="ig-beforeafter">
+    const svgBtn = svgUrl
+      ? `<button class="ig-action-btn" onclick="event.stopPropagation();window.open('${escapeHtml(svgUrl)}','_blank')" title="${escapeHtml("Open SVG" + (svgPath ? " — " + svgPath : ""))}">SVG</button>`
+      : "";
+    const pathBadges = [
+      projPath ? `<span class="ig-path-chip" title="Saved to project: ${escapeHtml(projPath)}"><span class="ig-path-icon">${Icon('image', 12)}</span>${escapeHtml(projPath)}</span>` : "",
+      svgPath ? `<span class="ig-path-chip ig-path-chip-svg" title="SVG saved to project: ${escapeHtml(svgPath)}"><span class="ig-path-icon">⬡</span>${escapeHtml(svgPath)}</span>` : "",
+    ].filter(Boolean).join("");
+    const pathFooter = pathBadges
+      ? `<div class="ig-path-bar">${pathBadges}</div>`
+      : "";
+    // For edits with a loadable source, show a before→after strip so the
+    // transformation is obvious at a glance; otherwise a single result image.
+    const imageArea = (isEdit && srcUrl)
+      ? `<div class="ig-beforeafter">
                <figure class="ig-ba-item">
                  <img src="${escapeHtml(srcUrl)}" alt="source image" loading="lazy"
                       onclick="event.stopPropagation();_openImageFullscreen(this.src)" />
@@ -2436,9 +2589,9 @@ function _renderUnifiedToolLine(round, isSearching) {
                  <figcaption>After</figcaption>
                </figure>
              </div>`
-        : `<img src="${imgUri}" alt="${escapeHtml((prompt || "").slice(0, 100))}" loading="lazy"
+      : `<img src="${imgUri}" alt="${escapeHtml((prompt || "").slice(0, 100))}" loading="lazy"
                   onclick="_openImageFullscreen(this.src)" />`;
-      return `<div class="ptool-imagegen-block ${modeCls}" data-rn="${round.roundNum}">
+    return `<div class="ptool-imagegen-block ${modeCls}" data-rn="${round.roundNum}">
            <div class="ptool-line ptool-imagegen-header">
              <span class="ptool-icon">${svg}</span>
              <span class="ptool-text">${q}</span>
@@ -2461,8 +2614,8 @@ function _renderUnifiedToolLine(round, isSearching) {
              ${pathFooter}
            </div>
          </div>`;
-    } else if (imgErr) {
-      return `<div class="ptool-imagegen-block ptool-imagegen-error ${modeCls}" data-rn="${round.roundNum}">
+  } else if (imgErr) {
+    return `<div class="ptool-imagegen-block ptool-imagegen-error ${modeCls}" data-rn="${round.roundNum}">
            <div class="ptool-line">
              <span class="ptool-icon">${svg}</span>
              <span class="ptool-text">${q}</span>
@@ -2475,11 +2628,11 @@ function _renderUnifiedToolLine(round, isSearching) {
              <div class="ig-error-text">${escapeHtml(imgErr)}</div>
            </div>
          </div>`;
-    }
-    // In-progress: no image yet, no error — show animated working state
-    const progressBadge = meta.badge || (isEdit ? "editing…" : "generating…");
-    const progressCls = progressBadge.includes("rate limited") ? "ptool-badge-err" : "ptool-badge-warn";
-    return `<div class="ptool-imagegen-block ptool-imagegen-loading ${modeCls}" data-rn="${round.roundNum}">
+  }
+  // In-progress: no image yet, no error — show animated working state
+  const progressBadge = meta.badge || (isEdit ? "editing…" : "generating…");
+  const progressCls = progressBadge.includes("rate limited") ? "ptool-badge-err" : "ptool-badge-warn";
+  return `<div class="ptool-imagegen-block ptool-imagegen-loading ${modeCls}" data-rn="${round.roundNum}">
          <div class="ptool-line ptool-active">
            <span class="ptool-icon">${svg}</span>
            <span class="ptool-text">${q}</span>
@@ -2489,9 +2642,12 @@ function _renderUnifiedToolLine(round, isSearching) {
            <span class="ptool-spinner"></span>
          </div>
        </div>`;
-  }
+}
 
-  // Determine badge
+// Determine the trailing badge (explicit meta.badge → token count → fetched
+// chars → generic ✓ done).
+function _computeToolBadgeHtml(round, ctx) {
+  const { meta, results } = ctx;
   let badgeHtml = "";
   if (meta.badge) {
     const isWrite =
@@ -2542,25 +2698,28 @@ function _renderUnifiedToolLine(round, isSearching) {
     const elapsed = round._elapsed ? ` · ${round._elapsed}` : "";
     badgeHtml = `<span class="ptool-badge ptool-badge-ok">✓ done${elapsed}</span>`;
   }
+  return badgeHtml;
+}
 
-  /* COMPACTION LABEL (mandatory per UX directive):
-   *
-   * If this row's tool result has been replaced by a server-side
-   * compaction placeholder (round.compactionLayer is set by the
-   * `tool_compacted` SSE event), render an UNAMBIGUOUS solid-color
-   * pill that says exactly what happened. NO opacity fading, NO
-   * subtle accent strips that read as decoration — the user has to
-   * know at a glance: "this tool result is no longer in the model's
-   * view; here is the layer responsible."
-   *
-   * Layers (from compaction.py):
-   *   L0 — born too big, persisted to disk, model never saw full text
-   *   L1 — was visible once, aged out of the hot tail (60 rounds back)
-   *   L3 — replaced by an LLM-generated summary (transcript_archive)
-   *
-   * The label is placed BEFORE the tool name so it's the first thing
-   * the eye lands on, and uses solid colors at full opacity per the
-   * "no transparency" rule. */
+/* COMPACTION LABEL (mandatory per UX directive):
+ *
+ * If this row's tool result has been replaced by a server-side
+ * compaction placeholder (round.compactionLayer is set by the
+ * `tool_compacted` SSE event), render an UNAMBIGUOUS solid-color
+ * pill that says exactly what happened. NO opacity fading, NO
+ * subtle accent strips that read as decoration — the user has to
+ * know at a glance: "this tool result is no longer in the model's
+ * view; here is the layer responsible."
+ *
+ * Layers (from compaction.py):
+ *   L0 — born too big, persisted to disk, model never saw full text
+ *   L1 — was visible once, aged out of the hot tail (60 rounds back)
+ *   L3 — replaced by an LLM-generated summary (transcript_archive)
+ *
+ * The label is placed BEFORE the tool name so it's the first thing
+ * the eye lands on, and uses solid colors at full opacity per the
+ * "no transparency" rule. */
+function _renderCompactionLabel(round) {
   let compactionLabelHtml = "";
   if (round.compactionLayer) {
     const layer = round.compactionLayer;       // 'L0' | 'L1' | 'L3'
@@ -2586,37 +2745,22 @@ function _renderUnifiedToolLine(round, isSearching) {
         (reduction ? `<span class="ptool-compaction-delta">${reduction.trim()}</span>` : '') +
       `</span>`;
   }
-  // ★ create_memory / update_memory / merge_memories — collapsible,
-  //   Markdown-rendered preview of the saved memory body itself (mirrors the
-  //   apply_diff expand block). The opaque description-snippet "Preview" was
-  //   useless to users; expanding now shows the actual memory text, well-
-  //   rendered. The full body lives in round.toolArgs.body. update_memory may
-  //   omit body on a partial (name/tags-only) update — the body.trim() guard
-  //   below falls through to the normal row in that case.
-  if ((round.toolName === "create_memory" || round.toolName === "update_memory" || round.toolName === "merge_memories") && round.toolArgs) {
-    const memHtml = _renderMemoryBlock(round, svg, q, compactionLabelHtml, rootPill, badgeHtml);
-    if (memHtml) return memHtml;
-  }
+  return compactionLabelHtml;
+}
 
-  // ★ todo_write — collapsible checklist progress card (state glyphs + a slim
-  //   progress bar), rendered off the structured meta.todos the backend
-  //   attaches. Falls through to the generic line only if the list is absent.
-  if (round.toolName === "todo_write") {
-    const todoHtml = _renderTodoBlock(round, svg, q, badgeHtml);
-    if (todoHtml) return todoHtml;
-  }
-
-  // ★ write_file — collapsible inline preview of the written content,
-  //   mirroring the apply_diff expand-on-click block. The full content
-  //   lives in round.toolArgs.content; render it as added lines so the
-  //   user can review what was written instead of an opaque "Preview".
-  if (round.toolName === "write_file" && round.toolArgs) {
-    let pe = null;
-    try { pe = typeof round.toolArgs === 'string' ? JSON.parse(round.toolArgs) : round.toolArgs; } catch (_) {}
-    if (pe && typeof pe.content === 'string' && pe.content.length) {
-      const diffHtml = _renderLineDiff("", pe.content);
-      if (diffHtml) {
-        return `<details class="ptool-batch-done-block" data-rn="${round.roundNum}">
+// ★ write_file — collapsible inline preview of the written content,
+//   mirroring the apply_diff expand-on-click block. The full content
+//   lives in round.toolArgs.content; render it as added lines so the
+//   user can review what was written instead of an opaque "Preview".
+function _renderWriteFileBlock(round, ctx, badgeHtml, compactionLabelHtml) {
+  const { svg, q, rootPill } = ctx;
+  if (!(round.toolName === "write_file" && round.toolArgs)) return "";
+  let pe = null;
+  try { pe = typeof round.toolArgs === 'string' ? JSON.parse(round.toolArgs) : round.toolArgs; } catch (_) {}
+  if (!(pe && typeof pe.content === 'string' && pe.content.length)) return "";
+  const diffHtml = _renderLineDiff("", pe.content);
+  if (!diffHtml) return "";
+  return `<details class="ptool-batch-done-block" data-rn="${round.roundNum}">
              <summary class="ptool-line ptool-batch-done-header">
                <span class="ptool-icon">${svg}</span>
                ${compactionLabelHtml}
@@ -2628,83 +2772,83 @@ function _renderUnifiedToolLine(round, isSearching) {
                <div class="ptool-batch-done-single">${diffHtml}</div>
              </div>
            </details>`;
-      }
-    }
-  }
+}
 
-  // ★ Single apply_diff / insert_content — collapsible inline diff
-  if (!meta.editSummaries && (round.toolName === "apply_diff" || round.toolName === "insert_content") && round.toolArgs) {
-    let pe = null;
-    try { pe = typeof round.toolArgs === 'string' ? JSON.parse(round.toolArgs) : round.toolArgs; } catch (_) {}
-    if (pe && (pe.search || pe.anchor)) {
+// ★ Single apply_diff / insert_content — collapsible inline diff
+function _renderSingleDiffBlock(round, ctx, badgeHtml, compactionLabelHtml) {
+  const { svg, q, meta, rootPill } = ctx;
+  if (!(!meta.editSummaries && (round.toolName === "apply_diff" || round.toolName === "insert_content") && round.toolArgs)) return "";
+  let pe = null;
+  try { pe = typeof round.toolArgs === 'string' ? JSON.parse(round.toolArgs) : round.toolArgs; } catch (_) {}
+  if (!(pe && (pe.search || pe.anchor))) return "";
+  const isInsert = !pe.search && pe.anchor;
+  const oldText = pe.search || pe.anchor || "";
+  const newText = isInsert
+    ? ((pe.position === "before" ? (pe.content + "\n") : "") + (pe.anchor || "") + (pe.position !== "before" ? ("\n" + pe.content) : ""))
+    : (pe.replace || "");
+  const diffHtml = _renderLineDiff(oldText, newText);
+  if (!diffHtml) return "";
+  return `<details class="ptool-batch-done-block" data-rn="${round.roundNum}">
+             <summary class="ptool-line ptool-batch-done-header">
+               <span class="ptool-icon">${svg}</span>
+               ${compactionLabelHtml}
+               ${rootPill}
+               <span class="ptool-text">${q}</span>
+               ${badgeHtml}
+             </summary>
+             <div class="ptool-batch-done-list">
+               <div class="ptool-batch-done-single">${diffHtml}</div>
+             </div>
+           </details>`;
+}
+
+// ★ Batch edit tools (apply_diffs / insert_contents) — collapsible per-edit list
+//   Guard on toolName: editSummaries is only meaningful for the batch edit
+//   tools. Without this guard, ANY round whose results[0] happens to carry
+//   an editSummaries array (e.g. a tool_result leaked from a sub-agent's
+//   apply_diffs grafted onto a same-roundNum run_command — see
+//   sse_handlers_tool.js roundNum fallback) renders as a batch-edit block.
+function _renderBatchEditsBlock(round, ctx, badgeHtml, compactionLabelHtml) {
+  const { svg, q, meta, rootPill } = ctx;
+  const _isBatchEditTool = round.toolName === "apply_diffs" || round.toolName === "insert_contents";
+  if (!(_isBatchEditTool && meta.editSummaries && Array.isArray(meta.editSummaries) && meta.editSummaries.length > 1)) return "";
+  const edits = meta.editSummaries;
+  let parsedEdits = null;
+  if (round.toolArgs) {
+    try {
+      const args = typeof round.toolArgs === 'string' ? JSON.parse(round.toolArgs) : round.toolArgs;
+      if (args.edits && Array.isArray(args.edits)) parsedEdits = args.edits;
+    } catch (_) {}
+  }
+  // The header already names the target file (e.g. "Patch /a/b/c.sh (2 edits)").
+  // Only repeat a per-row path when edits span DIFFERENT files, and then show
+  // just the basename — never the full absolute path, which would starve the
+  // description column down to one character per line.
+  const _multiFile = edits.some(e => (e.path || "") !== (edits[0].path || ""));
+  let itemsHtml = "";
+  edits.forEach((ed, i) => {
+    const statusIcon = ed.status === "fail"
+      ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'
+      : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+    const statusCls = ed.status === "fail" ? "ptool-batch-fail" : "ptool-batch-ok";
+    const rawDesc = ed.description ? _stripPathPrefixFromDesc(ed.description, ed.path) : "";
+    const desc = rawDesc ? escapeHtml(rawDesc) : `Edit ${i + 1}`;
+    const fullPath = ed.path || "";
+    const baseName = fullPath ? (fullPath.split("/").filter(Boolean).pop() || fullPath) : "";
+    const pathHtml = (_multiFile && baseName)
+      ? `<span class="ptool-batch-path" title="${escapeHtml(fullPath)}">${escapeHtml(baseName)}</span>`
+      : "";
+    let diffHtml = "";
+    if (ed.status !== "fail" && parsedEdits && parsedEdits[i]) {
+      const pe = parsedEdits[i];
       const isInsert = !pe.search && pe.anchor;
       const oldText = pe.search || pe.anchor || "";
       const newText = isInsert
         ? ((pe.position === "before" ? (pe.content + "\n") : "") + (pe.anchor || "") + (pe.position !== "before" ? ("\n" + pe.content) : ""))
         : (pe.replace || "");
-      const diffHtml = _renderLineDiff(oldText, newText);
-      if (diffHtml) {
-        return `<details class="ptool-batch-done-block" data-rn="${round.roundNum}">
-             <summary class="ptool-line ptool-batch-done-header">
-               <span class="ptool-icon">${svg}</span>
-               ${compactionLabelHtml}
-               ${rootPill}
-               <span class="ptool-text">${q}</span>
-               ${badgeHtml}
-             </summary>
-             <div class="ptool-batch-done-list">
-               <div class="ptool-batch-done-single">${diffHtml}</div>
-             </div>
-           </details>`;
-      }
+      if (oldText || newText) diffHtml = _renderLineDiff(oldText, newText);
     }
-  }
-
-  // ★ Batch edit tools (apply_diffs / insert_contents) — collapsible per-edit list
-  //   Guard on toolName: editSummaries is only meaningful for the batch edit
-  //   tools. Without this guard, ANY round whose results[0] happens to carry
-  //   an editSummaries array (e.g. a tool_result leaked from a sub-agent's
-  //   apply_diffs grafted onto a same-roundNum run_command — see
-  //   sse_handlers_tool.js roundNum fallback) renders as a batch-edit block.
-  const _isBatchEditTool = round.toolName === "apply_diffs" || round.toolName === "insert_contents";
-  if (_isBatchEditTool && meta.editSummaries && Array.isArray(meta.editSummaries) && meta.editSummaries.length > 1) {
-    const edits = meta.editSummaries;
-    let parsedEdits = null;
-    if (round.toolArgs) {
-      try {
-        const args = typeof round.toolArgs === 'string' ? JSON.parse(round.toolArgs) : round.toolArgs;
-        if (args.edits && Array.isArray(args.edits)) parsedEdits = args.edits;
-      } catch (_) {}
-    }
-    // The header already names the target file (e.g. "Patch /a/b/c.sh (2 edits)").
-    // Only repeat a per-row path when edits span DIFFERENT files, and then show
-    // just the basename — never the full absolute path, which would starve the
-    // description column down to one character per line.
-    const _multiFile = edits.some(e => (e.path || "") !== (edits[0].path || ""));
-    let itemsHtml = "";
-    edits.forEach((ed, i) => {
-      const statusIcon = ed.status === "fail"
-        ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'
-        : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
-      const statusCls = ed.status === "fail" ? "ptool-batch-fail" : "ptool-batch-ok";
-      const rawDesc = ed.description ? _stripPathPrefixFromDesc(ed.description, ed.path) : "";
-      const desc = rawDesc ? escapeHtml(rawDesc) : `Edit ${i + 1}`;
-      const fullPath = ed.path || "";
-      const baseName = fullPath ? (fullPath.split("/").filter(Boolean).pop() || fullPath) : "";
-      const pathHtml = (_multiFile && baseName)
-        ? `<span class="ptool-batch-path" title="${escapeHtml(fullPath)}">${escapeHtml(baseName)}</span>`
-        : "";
-      let diffHtml = "";
-      if (ed.status !== "fail" && parsedEdits && parsedEdits[i]) {
-        const pe = parsedEdits[i];
-        const isInsert = !pe.search && pe.anchor;
-        const oldText = pe.search || pe.anchor || "";
-        const newText = isInsert
-          ? ((pe.position === "before" ? (pe.content + "\n") : "") + (pe.anchor || "") + (pe.position !== "before" ? ("\n" + pe.content) : ""))
-          : (pe.replace || "");
-        if (oldText || newText) diffHtml = _renderLineDiff(oldText, newText);
-      }
-      itemsHtml += `<details class="ptool-batch-done-edit ${statusCls}">
+    itemsHtml += `<details class="ptool-batch-done-edit ${statusCls}">
         <summary class="ptool-batch-done-summary">
           <span class="ptool-batch-status">${statusIcon}</span>
           <span class="ptool-batch-idx">${i + 1}</span>
@@ -2713,8 +2857,8 @@ function _renderUnifiedToolLine(round, isSearching) {
         </summary>
         ${diffHtml}
       </details>`;
-    });
-    return `<details class="ptool-batch-done-block" open data-rn="${round.roundNum}">
+  });
+  return `<details class="ptool-batch-done-block" open data-rn="${round.roundNum}">
          <summary class="ptool-line ptool-batch-done-header">
            <span class="ptool-icon">${svg}</span>
            ${compactionLabelHtml}
@@ -2724,27 +2868,6 @@ function _renderUnifiedToolLine(round, isSearching) {
          </summary>
          <div class="ptool-batch-done-list">${itemsHtml}</div>
        </details>`;
-  }
-
-  // ★ Project-brain / conversation-meta tools — render their full prose
-  //   output in a collapsible Markdown card instead of the bare generic line
-  //   (which hid all the content). Only when the round has settled (done);
-  //   the in-flight "searching…" state is handled by the generic active
-  //   branch above.
-  if (_isRoundConvMeta(round) && round.status !== "rejected") {
-    const convMetaHtml = _renderConvMetaBlock(round, svg, q, badgeHtml);
-    if (convMetaHtml) return convMetaHtml;
-  }
-
-  return `<div class="ptool-line">
-       <span class="ptool-icon">${svg}</span>
-       ${compactionLabelHtml}
-       ${rootPill}
-       <span class="ptool-text">${q}</span>
-       ${repairedBadge}
-       ${badgeHtml}
-       ${_rowModelViewBtn(round)}
-     </div>`;
 }
 
 /* Format a token count compactly: 12000 → "12k", 1500000 → "1.5M". */

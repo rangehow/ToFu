@@ -319,6 +319,59 @@ def list_running_tasks(exclude_conv_id: str | None = None) -> list[dict]:
     return [entry for _created, entry in by_key.values()]
 
 
+def snapshot_running_by_conv() -> dict[str, list[str]]:
+    """Return ``{conv_id: [task_id, ...]}`` for every non-carrier running task.
+
+    P1 of pt_conv_state_ssot: the single read the ``notify_conv_changed`` seam
+    uses to project the busy fact into the outbound frame. This is the SSOT
+    for "which conversations have live tasks", replacing the settings-derived
+    ``activeTaskId`` (single value) heuristic that made cross-device sidebars
+    disagree.
+
+    Semantics — deliberately DIFFERENT from ``list_running_tasks``:
+
+      * **NO activity/wedge filter.** A task whose event/heartbeat clocks have
+        gone silent is still "supposed to be running" from the sidebar's POV
+        — the reaper (~30 min) is what decides it is finally stuck, at which
+        point it writes a terminal row and this snapshot drops it naturally.
+        The restart-guard needs strict liveness ("is anyone actually working
+        right now"); the busy-dot needs the broader "is it supposed to be
+        working" so a temporarily-quiet task does not extinguish the dot and
+        then re-light it 100 ms later. Two different questions → two
+        different helpers.
+      * **Carrier filter (same as list_running_tasks).** Autopilot VU
+        sub-tasks and inline reporter carriers must not surface — they
+        have no user-visible bubble and would light a permanent phantom
+        sidebar dot.
+      * **Empty-convId tasks dropped.** A task with no ``convId`` cannot be
+        projected into any sidebar row; it stays invisible.
+      * **Aborted / non-running dropped.** Once ``t['aborted']`` flips true
+        the dot should extinguish immediately, so the client sees Send (not
+        Stop) the instant supersede fires.
+      * **Multiple tasks per conv preserved.** ``list_running_tasks`` dedups
+        to one representative per conv for the restart guard's counting; we
+        do NOT — the client needs the FULL set so ``_reconnectServerTaskIfIdle``
+        can rejoin any of them, and later drift-check equality is strict.
+
+    Read-only. Snapshot taken under ``tasks_lock``; safe to call from any
+    thread. Ordering within each conv's list is registry-iteration order
+    (approximately creation order) — deterministic per-process but not
+    guaranteed across replicas. Clients treat the list as a SET.
+    """
+    out: dict[str, list[str]] = {}
+    with tasks_lock:
+        for tid, t in tasks.items():
+            if t.get('status') != 'running' or t.get('aborted'):
+                continue
+            if is_carrier_task(t):
+                continue
+            conv = t.get('convId') or ''
+            if not conv:
+                continue
+            out.setdefault(conv, []).append(tid)
+    return out
+
+
 def abort_running_tasks_for_conv(conv_id: str, exclude_task_id: str | None = None) -> int:
     """Abort all running tasks for a conversation, except the excluded one.
 

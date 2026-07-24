@@ -145,6 +145,42 @@ def invalidate_meta_cache(user_id: int = DEFAULT_USER_ID):
             logger.debug('[meta_cache] cross-replica invalidation publish failed: %s', e)
 
 
+# ── pt_conv_state_ssot P1: monotonic rev tuple ──────────────────────
+#
+# runningTaskIdsRev on every notify frame is a two-element ``[ns, replica_id]``
+# JSON array so the client can idempotent-gate with a plain lex compare and
+# never accept a reordered stale frame:
+#
+#   * ns          — ``time.monotonic_ns()``. Strictly increasing within a
+#                   single process, immune to wall-clock rewind. Two frames
+#                   from the SAME replica can be compared directly on ns.
+#   * replica_id  — reuses the ``TOFU_REPLICA_ID or pid`` convention already
+#                   in ``lib.agent_core.push.PushHub._replica_id`` so we do
+#                   NOT introduce a second replica-identity source. Two
+#                   frames from DIFFERENT replicas are ordered by (ns, rid)
+#                   lex — an arbitrary but stable tiebreak.
+#
+# Owner mandate (2026-07-24): "activeTaskIdsRev is not a plain counter …
+# nanotime + replica_id tiebreak". This is that tuple.
+
+def _replica_id() -> str:
+    """Resolve THIS replica's stable id — same rule PushHub uses."""
+    rid = os.environ.get('TOFU_REPLICA_ID')
+    if rid:
+        return rid
+    return str(os.getpid())
+
+
+def _running_task_ids_rev() -> list:
+    """Return a fresh ``[monotonic_ns, replica_id_str]`` tuple.
+
+    Each call yields a strictly-later ns than the previous call in the same
+    process (guaranteed by ``time.monotonic_ns()``). Two callers on
+    different replicas break ties by replica_id lex compare.
+    """
+    return [time.monotonic_ns(), _replica_id()]
+
+
 def notify_conv_changed(conv_id, *, rev=None, deleted: bool = False,
                         user_id: int = DEFAULT_USER_ID) -> None:
     """Invalidate the sidebar cache AND push a real-time change signal to clients.
@@ -184,6 +220,24 @@ def notify_conv_changed(conv_id, *, rev=None, deleted: bool = False,
                 payload['rev'] = int(rev)
             except (TypeError, ValueError):
                 logger.debug('[meta_cache] conv=%s non-int rev=%r dropped', conv_id, rev)
+        # ── pt_conv_state_ssot P1: server-authoritative busy signal ──
+        # Every notify frame carries a fresh (monotonic_ns, replica_id) tuple
+        # so the client can idempotent-gate on strictly-increasing time. The
+        # runningTaskIds list is a SNAPSHOT projection of the task registry
+        # for THIS conv (the SSOT for "who is running"), never derived from
+        # settings.activeTaskId. Deleted frames omit the list — a gone conv
+        # has no busy concept — but keep the rev tuple so the client's gate
+        # has a uniform key across conv_changed and conv_deleted.
+        payload['runningTaskIdsRev'] = _running_task_ids_rev()
+        if not deleted:
+            try:
+                from lib.tasks_pkg.manager._registry import snapshot_running_by_conv
+                snap = snapshot_running_by_conv()
+            except Exception as _re:
+                logger.debug('[meta_cache] conv=%s registry snapshot failed: %s',
+                             conv_id, _re)
+                snap = {}
+            payload['runningTaskIds'] = list(snap.get(conv_id, []))
         push_event('notify', conv_id, payload)
     except Exception as e:
         logger.debug('[meta_cache] conv-changed push skipped conv=%s: %s', conv_id, e)

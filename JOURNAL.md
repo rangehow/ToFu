@@ -1,6 +1,27 @@
 # Project Journal
 
 
+### 2026-07-24(续3) — pt_conv_state_ssot P1 落地:server-authoritative conv-state 频道第 1 相 —— `notify_conv_changed` payload 扩 `runningTaskIds` + `runningTaskIdsRev([ns, replica_id])` + registry SSOT 读接口(commit,3 文件 +~110/-2,新测 11/11 绿含 NEUTER 证红 + 相邻 16/16 无回归 + collect 8146 0 err)。**这是 owner 拍板的长期架构方案 P1 相,不是过渡热修,未来的 sibling 请勿当作可回退的 quick win 覆盖。**
+- **可见 bug + 病根:** owner 报手机看到 3 个会话在跑、电脑侧栏少几个;点开显示错乱的会话看到"半截 finish 标签",F5 恢复正常。根因链读代码钉死(不猜):①`notify_conv_changed` payload 只载 `{type, convId, rev, userId}`,不载"谁在跑" ②`loadConversationsFromServer` 明文规则 "never touch activeTaskId" 保 conv 已存在时 `activeTaskId=null` ③电脑侧 `convIsBusy(conv)` 因 `activeStreams.has(conv.id)==false && !conv.activeTaskId==false` 判 idle ④点开时 `_reconnectServerTaskIfIdle` 因 `activeTaskId=null` 短路,不重连 SSE。**病根不是"缺一条分支",是"谁在跑"有 4 个不一致的真相源(`activeStreams` / `conv.activeTaskId` / `settings.activeTaskId` / `/chat/active`)加 8 条散落的调解分支。**
+- **长期方案(owner 拍板 P1→P6,一次到位不做过渡热修,epic pt_e1c4693341b24730):**
+  - **P1(本 commit)**:服务端 payload 扩 SSOT 字段 + registry 读接口。
+  - P1.5: PushClient connect snapshot 帧(等 owner 甲/乙裁决拆独立 commit 或塞回 P1)。
+  - P2: 前端 reducer + `conv._optimisticActiveTaskIds` vs `_authoritativeActiveTaskIds` 字段分离、`convIsBusy` 读并集。
+  - P3: task lifecycle 4 hooks(create/start/stop/reattach)全量 snapshot 广播。
+  - P4: push connect/reconnect snapshot 接入。
+  - P5: 60s sync-drift 探针(digest 含 activeTaskIds + rev 双维度)。
+  - P6: 扫 `_reconcileStuckActiveTaskPins` / `_startOfflineRecoveryPolling` / 25s-vs-90s 节流(每个删除 commit body 写明新架构接住哪个场景)。
+- **硬约束(owner 拍板,写进 epic + 每 phase 遵守):** ①`runningTaskIdsRev` = `(monotonic_ns, replica_id)` 元组,不是 int——replica-safe against clock rewind;②客户端**字段分离**乐观 vs 权威,`convIsBusy` 读并集不合并;③task registry 是**唯一**物理载体,不允许再读 `settings.activeTaskId`;④P5 探针 digest 含 rev,顺手把消息内容漂移也覆盖;⑤P6 每个清扫必须证明冗余(新架构接住原场景),不静默删。
+- **本轮改动(3 文件 +~110/-2):**
+  - `lib/tasks_pkg/manager/_registry.py:+53` 新增 `snapshot_running_by_conv() -> dict[str, list[str]]`——SSOT 读:全量扫 `tasks_lock`,按 `convId` 分组,carrier 过滤复用 `is_carrier_task` 同款判据。**语义与 `list_running_tasks` 刻意不同**:no activity/wedge filter(重启守卫要"当下真活"、侧栏要"应该在跑"——两个问题两个 helper),no dedup(客户端要全集做 reconnect 决策)。docstring 详列 4 项过滤规则 + 2 项与 restart-guard 的差异。
+  - `lib/conversations/meta_cache.py:+34` 加 `_replica_id()`(复用 `TOFU_REPLICA_ID or pid` 与 push.py 同一约定)+ `_running_task_ids_rev()`(`[monotonic_ns, replica_id_str]`)+ `notify_conv_changed` payload 追加 `runningTaskIdsRev` 恒载 / `runningTaskIds` 仅非 deleted 载。deleted 帧刻意不载 list 但载 rev——客户端幂等门跨 conv_changed / conv_deleted 用统一 key。
+  - `tests/test_conv_state_ssot_payload.py:+297` 11 测:①content-change 载新字段 ②读 registry 不读 settings(NEUTER 证红:改 `list(snap.get(...))` → `[]`,`test_running_task_ids_reads_registry_not_settings` 翻红,证守卫非平凡)③跨 conv 不串号 ④rev tuple 结构 ⑤ns 进程内严格单调 ⑥replica_id 匹配 push hub 约定 ⑦deleted 帧不载 list 但载 rev ⑧user_id 隔离 ⑨snapshot 过滤 carrier ⑩过滤 aborted/done ⑪registry 崩了 fail-open。
+- **纪律钉死:** ①`--collect-only` 全量 8146 tests 0 error(相比 7827 基线,新 11 项加 collectable);②相邻 `test_conv_changed_notify` 7/7 + `test_cross_device_send_visibility` 9/9,共 27/27 全绿——payload 扩展是**纯加法零回归**;③NEUTER 手动探针实证:强制 `runningTaskIds=[]` → `test_running_task_ids_reads_registry_not_settings` 翻红,证测试锁的是"读 registry"不锁的是"字段存在";还原后 27/27 复绿;④epic pt_e1c4693341b24730 已在 board 立票 + claim,depends_on pt_00459503 / pt_8dc03017,write_set 声明含未来 phase 的 13 个目标文件避免 sibling 撞车。
+- **前端影响:零。** 前端仍读 `conv.activeTaskId` 单值,新增字段 `runningTaskIds` / `runningTaskIdsRev` 前端未消费——payload 加法对老客户端无害(未知字段直接忽略)。P2 才把前端 `convIsBusy` 切到读并集。用户报的可见 bug(手机 vs 电脑侧栏不一致)**本 commit 尚未修好**,是长期方案的第 1 相,payload 已就位等 P1.5+P2 落地才可见效。这是 owner 明示"一次到位不做过渡热修"的必然节奏,不是遗漏。
+- **待 owner 决:** P1.5(connect snapshot 帧)拆独立 commit(甲,推荐)或塞回 P1 补一 commit(乙)。默认按甲进 next commit。
+
+
+
 ### 2026-07-24(续2) — 死样式第二遍清扫:分支级不可命中判据,323 规则 −32.6KB(commit,死字节 16,374→**0**;owner 验收"这 218 类死字节应压到接近 0"达成)。
 - **owner 复核抓的实质残留(判据升级的根源):** pass-1「规则内类全死才删」对复合选择器过度保守——`.search-round-block.searching` 里 `searching` 是活类整条被保,但它要求**同一元素**同时带两类;`search-round-block` 不在 DOM,分支数学上永不可命中。榜首 `.search-round-block` pass-1 后仍有 18 处引用,103 条「混合保守保留」全是这类。
 - **pass-2 判据(先单测 10/10 再动手):** ①选择器按括号深度 0 切逗号分支(`:not(.a,.b)`、`[d="a,b"]` 内的逗号不切);②分支**正链**(剥掉属性选择器与 `:not(...)` 实参——它们从不要求类)含 ≥1 verified-dead 类即不可命中;无正链类的分支一律视为可能存活;③**所有**分支不可命中才删整条。形态覆盖:复合死+活、`:hover` 后缀、组合子 `.dead > span`、`:not(.dead)`(能匹配绝大多数元素→必须保)、属性值里的类名(不构成要求→必须保)。

@@ -26,6 +26,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from lib.llm import build_body as _default_build_body
 from lib.llm_dispatch import dispatch_stream as _default_dispatch_stream
 from lib.log import get_logger
+from lib.project_mod import format_tool_args_brief
 from lib.protocols import BodyBuilder
 from lib.swarm.protocol import (
     ArtifactStore,
@@ -952,11 +953,17 @@ class SubAgent:
         logger.debug('[Agent:%s] Round %d → TOOL_CALL %s args=%s',
                      self.agent_id, round_num, fn_name, str(fn_args)[:300])
 
+        # One name-keyed brief drives BOTH the persisted tool_log below and
+        # the live SSE events — reload recovery replays tool_log verbatim
+        # (master._snapshot_tool_timeline), so a single formatting call keeps
+        # the live and recovered panels identical.
+        args_brief = format_tool_args_brief(fn_name, fn_args)
+
         # Log the tool call
         self.result.tool_log.append({
             'round': round_num,
             'tool': fn_name,
-            'args_brief': str(fn_args)[:200],
+            'args_brief': args_brief,
             'timestamp': time.time(),
         })
 
@@ -964,7 +971,6 @@ class SubAgent:
         # Surfaces the agent's execution timeline in the swarm panel —
         # the user sees each sub-agent tool call live, not just an
         # aggregate `Using X, Y, Z` summary.
-        args_brief = str(fn_args)[:200]
         self._emit_event(
             'agent_tool_call',
             f'🔧 [{self.spec.role}] {fn_name}',

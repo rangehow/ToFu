@@ -564,23 +564,25 @@ function _renderStreamRoundProse(groupEl, round) {
       narrEl._lastNarrHtml = narrEl.innerHTML;
     }
     /* ★ PER-ROUND bilingual gate: hide this round's English ONLY when its
-     * Chinese twin (.stream-seg-narration, painted by the incremental
-     * translator) already exists for the SAME round. A tool-sync re-render can
-     * run after the translator painted Chinese, so re-assert the class here;
-     * and never hide a round whose Chinese hasn't landed — that was the
-     * "intermediate narration vanishes under auto-translate" bug. */
-    const _zhTwin = _q("stream-seg-narration");
+     * Chinese twin (painted by the incremental translator) already exists for
+     * the SAME round. The zh node carries the SETTLED class list
+     * (`seg-narration`, byte parity with the cold render — see
+     * translation_render.js), so it is found here by EXCLUSION from the
+     * English sibling. A tool-sync re-render can run after the translator
+     * painted Chinese, so re-assert the class here; and never hide a round
+     * whose Chinese hasn't landed — that was the "intermediate narration
+     * vanishes under auto-translate" bug. */
+    const _zhTwin = _q("seg-narration:not(.stream-seg-en-narration)");
     narrEl.classList.toggle("xlate-hidden", !!_zhTwin);
   } else if (narrEl) {
     narrEl.remove();
   }
 
   /* Deterministic sibling order directly before the card: thinking → English
-   * narration → Chinese narration (the incremental translator paints the
-   * latter into `.stream-seg-narration`). insertBefore(el, groupEl) applied in
+   * narration → Chinese narration. insertBefore(el, groupEl) applied in
    * this order lands them contiguous and correctly sequenced regardless of
    * which path (tool sync vs. translate push) created them first. */
-  const _zh = _q("stream-seg-narration");
+  const _zh = _q("seg-narration:not(.stream-seg-en-narration)");
   for (const el of [thinkEl, narrEl, _zh]) {
     if (el && el.parentNode === body) body.insertBefore(el, groupEl);
   }

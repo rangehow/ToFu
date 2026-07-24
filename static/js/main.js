@@ -765,6 +765,26 @@ function _installViewportHeightGuard() {
   // WebView zero-height guard FIRST — before any layout-dependent init, so the
   // document has a real pixel height for the flex chain to fill.
   try { _installViewportHeightGuard(); } catch (_) {}
+  /* RENDER_CONTRACT Phase 3.5 §5 step-4 precondition: ConvView is the single
+   * DOM-apply seam for #chatInner. If the bundler dropped conv_view.js (the
+   * CLAUDE.md §3.2.1 silent-no-op failure mode: the <script> tag is stripped
+   * from index.html but never added to the bundle), every ConvView call site
+   * would silently degrade. Turn that into a LOUD startup failure instead —
+   * a fixed banner + console.error at boot, before any render runs. */
+  if (typeof window.ConvView === 'undefined' || typeof window.ConvView.apply !== 'function') {
+    const _cvBootMsg = '[ConvView] MISSING at boot — the JS bundle is broken ' +
+      '(conv_view.js absent from _BUNDLE_FILES in lib/js_bundler.py?). ' +
+      'Chat rendering cannot proceed safely; do NOT ignore this banner.';
+    console.error(_cvBootMsg);
+    try {
+      const _cvBanner = document.createElement('div');
+      _cvBanner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;' +
+        'background:#7f1d1d;color:#fff;padding:10px 16px;' +
+        'font:13px/1.4 monospace;text-align:center;';
+      _cvBanner.textContent = _cvBootMsg;
+      (document.body || document.documentElement).appendChild(_cvBanner);
+    } catch (_) { /* banner is best-effort; the console.error already fired */ }
+  }
   // ── Init model toggle from config ──
   (function initModelToggle() {
     thinkingEnabled = true;

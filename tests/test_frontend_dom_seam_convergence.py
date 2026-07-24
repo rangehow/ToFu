@@ -1,39 +1,48 @@
 #!/usr/bin/env python3
-"""RENDER_CONTRACT Phase 3.5 — DOM-apply single-seam: failing-first anchors + ratchet.
+"""RENDER_CONTRACT Phase 3.5 — DOM-apply single-seam: parity guards + ratchet.
 
-TESTS-FIRST by design. Docs: docs/RENDER_CONTRACT_PHASE3_5_PLAN.md.
+Docs: docs/RENDER_CONTRACT_PHASE3_5_PLAN.md. Step 2 (this commit) landed
+``ConvView.apply`` + the translation_render.js convergence + the streaming_ui
+/health_stream_timer census join + the boot-time ConvView hard check, so the
+two former RED anchors are now STANDING GREEN guards:
 
-THREE guards, three different colours today:
+1. ``test_convview_exposes_single_apply_entry`` — **standing guard** (was RED
+   anchor ①). ``ConvView.apply(convId, idx, msg)`` is THE single public
+   DOM-apply entry; every CONTENT-DERIVED write converges onto it. This test
+   keeps it from being renamed/removed.
 
-1. ``test_convview_exposes_single_apply_entry`` — **RED anchor.**
-   Phase 3.5 §5 step 2 introduces ``ConvView.apply(convId, idx, msg)`` as THE
-   single public DOM-apply entry (wraps renderMessage + _evictByMsgId +
-   fingerprint). Today ConvView has no such method — this fails until it lands.
+2. ``test_live_vs_cold_narration_byte_parity`` — **standing parity guard**
+   (was RED anchor ②, JSDOM). For the SAME narration fact, the LIVE
+   translation preview painted into the streaming bubble
+   (``_renderStreamingTranslatePreview``) is byte-identical to the COLD
+   settled render's narration slot (``_applyPartialByRoundToSettled`` over a
+   slot built to the exact tool_rounds.js:_renderSegNarrationHTML contract).
+   Step 2 made them equal by changing the LIVE side to the settled class
+   contract (`md-content seg-narration`, dropping the live-only
+   `stream-seg-narration` marker) — a side-pin check asserts the live node
+   carries exactly the settled class list, so the anchor can't rot in
+   either direction. NEUTER: an injected byte difference must be detected.
 
-2. ``test_live_vs_cold_narration_byte_parity`` — **RED anchor (JSDOM).**
-   The acceptance claim, generalized from Phase 3's reducer parity to the DOM:
-   for the SAME narration fact, the LIVE translation preview painted into the
-   streaming bubble (``_renderStreamingTranslatePreview``) must be byte-identical
-   to the COLD settled render's narration slot (the markup
-   ``tool_rounds.js:_renderNarrationSegments`` emits, painted by
-   ``_applyPartialByRoundToSettled``). Today the live painter creates
-   ``class="md-content seg-narration stream-seg-narration"`` while the settled
-   renderer emits ``class="md-content seg-narration"`` — a one-class byte
-   divergence between two projection paths for one fact. Both sides of the
-   comparison are produced by REAL production code (translation_render.js);
-   only the settled slot's initial markup is hand-built to the exact
-   tool_rounds.js:3387 contract. NEUTER included: an injected byte difference
-   must be detected, and the observed divergence must be exactly the known
-   class-list one (so the test rots with the code, not with the harness).
+3. ``test_raw_dom_write_ratchet`` — **monotonic-decrease ratchet** over the
+   15 non-seam files. A single-pass tokenizer strips comments + strings and
+   counts ``innerHTML=`` / ``outerHTML=`` / ``insertAdjacentHTML(`` /
+   ``appendChild(`` / ``.remove()``; each file must stay ≤ its baseline.
+   streaming_ui.js (49) + core/health_stream_timer.js (10) joined in step 2
+   after a repo-wide census proved they write inside #chatInner (the census
+   also EXEMPTED ui/turn_nav.js — sidebar #turnNav + detached-builder — and
+   ui/finish_info.js — zero #chatInner writes, popover attaches to body;
+   see plan §2.15). conv_view.js is excluded — it IS the seam.
+   NEUTER: poisoning a file's source with one extra raw op must increment
+   the count.
 
-3. ``test_raw_dom_write_ratchet`` — **GREEN today, guards the floor.**
-   Static audit of the 13 non-seam files: a single-pass tokenizer strips
-   comments + strings, then count
-   ``innerHTML=`` / ``outerHTML=`` / ``insertAdjacentHTML(`` / ``appendChild(``
-   / ``.remove()``, assert each file's count is ≤ its 2026-07-24 baseline
-   (monotonic-decrease ratchet, same pattern as test_frontend_api_isolation.py).
-   conv_view.js is excluded — it IS the seam. NEUTER included: poisoning a
-   file's source in-memory with one extra raw op must trip the detector.
+4. ``test_ratchet_baseline_matches_plan_total`` — the baselines sum to the
+   plan's §2.14 tally (207 non-seam raw ops after step 2).
+
+5. ``test_boot_hard_check_convview_present`` — the step-4 precondition,
+   landed early in step 2: main.js init carries the boot-time ConvView hard
+   check (loud banner + console.error when the bundler dropped conv_view.js),
+   AND conv_view.js precedes main.js in lib/js_bundler._BUNDLE_FILES so the
+   check can actually observe the absence.
 
 Run: PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q \\
        tests/test_frontend_dom_seam_convergence.py
@@ -52,34 +61,33 @@ pytestmark = pytest.mark.unit
 
 CONV_VIEW = os.path.join(JS_DIR, 'conv_view.js')
 TRANSLATION_RENDER = os.path.join(JS_DIR, 'ui', 'translation_render.js')
+MAIN_JS = os.path.join(JS_DIR, 'main.js')
+BUNDLER = os.path.join(ROOT, 'lib', 'js_bundler.py')
 
 
 # ════════════════════════════════════════════════════════════════════
-# 1. ConvView.apply existence anchor (RED until Phase 3.5 step 2)
+# 1. ConvView.apply existence guard (standing; was RED anchor ①)
 # ════════════════════════════════════════════════════════════════════
 
 def test_convview_exposes_single_apply_entry():
-    """Phase 3.5's single public DOM-apply entry must exist on ConvView.
+    """ConvView.apply(convId, idx, msg) — THE single public DOM-apply entry.
 
-    RED on HEAD: conv_view.js exposes upsertMessage / removeMessage /
-    removeAfter / replaceAll / startStreaming / finalizeStreaming — six
-    lifecycle methods, no unified ``apply``. The 58 CONTENT-DERIVED raw write
-    sites in the §2 table converge onto this one method; the anchor flips
-    GREEN the commit it lands.
+    Was RED anchor ① in the step-1 commit; flipped GREEN when step 2 landed
+    the method (renderMessage + identity sweep + fingerprint refresh). Kept
+    as a standing guard so the seam cannot be renamed or removed while the
+    §2 table's CONTENT-DERIVED sites still converge onto it.
     """
     with open(CONV_VIEW, encoding='utf-8') as f:
         src = f.read()
-    assert re.search(r'\bapply\s*:\s*function\b', src) or \
-           re.search(r'\bapplyMessage\s*:\s*function\b', src), (
-        'PHASE 3.5 RED ANCHOR: ConvView has no single apply entry. '
-        'Phase 3.5 step 2 adds ConvView.apply(convId, idx, msg) — the one '
-        'public method every CONTENT-DERIVED write routes through '
-        '(docs/RENDER_CONTRACT_PHASE3_5_PLAN.md §5). This test stays RED '
-        'until that lands; do NOT silence it by renaming an existing method.')
+    assert re.search(r'\bapply\s*:\s*function\b', src), (
+        'ConvView.apply is gone — the single DOM-apply seam '
+        '(docs/RENDER_CONTRACT_PHASE3_5_PLAN.md §5 step 2) was renamed or '
+        'removed. Restore it, or migrate every converged call site in the '
+        'same commit.')
 
 
 # ════════════════════════════════════════════════════════════════════
-# 2. Live-vs-cold narration byte parity (RED anchor, JSDOM)
+# 2. Live-vs-cold narration byte parity (standing; was RED anchor ②, JSDOM)
 # ════════════════════════════════════════════════════════════════════
 
 _BODY = r"""
@@ -118,8 +126,12 @@ const BY_ROUND = { 0: ZH };
 // ── LIVE path: the real streaming translation preview painter. ──
 const liveOk = window._renderStreamingTranslatePreview('c1', 'm1', ZH, BY_ROUND);
 check('live_preview_painted', liveOk === true);
+/* The live zh node now carries the SETTLED class list (no stream- marker) —
+ * locate it by exclusion from the English sibling, exactly like the real
+ * query sites (translation_render.js + streaming_ui.js). */
 const liveNarr = document.querySelector(
-  '#streaming-msg .stream-seg-narration[data-seg-round="L0"]');
+  '#streaming-msg .seg-narration[data-seg-round="L0"]' +
+  ':not(.stream-seg-en-narration)');
 check('live_narration_node_exists', !!liveNarr);
 
 // ── COLD path: the real settled-slot painter over a tool_rounds-contract slot. ──
@@ -136,12 +148,12 @@ console.error('LIVE  : ' + liveOuter);
 console.error('COLD  : ' + coldOuter);
 check('ANCHOR_live_cold_narration_byte_identical', liveOuter === coldOuter);
 
-// ── Sanity: the divergence, when present, is ONLY the live side's extra
-//    `stream-seg-narration` class (documents the exact fix target; if some
-//    OTHER byte starts differing this check fails too, forcing a re-audit). ──
-const normalized = liveOuter.replace(' stream-seg-narration', '');
-check('divergence_is_exactly_the_extra_live_class',
-      liveOuter !== coldOuter && normalized === coldOuter);
+// ── Side-pin: the LIVE painter changed to the settled contract
+//    (`md-content seg-narration`, tool_rounds.js:_renderSegNarrationHTML) —
+//    never the reverse. Trips if a future edit re-adds a live-only marker
+//    class OR the settled renderer's class list drifts. ──
+check('live_class_is_the_settled_contract',
+      !!liveNarr && liveNarr.className === 'md-content seg-narration');
 
 // ── NEUTER: the comparator must detect an injected byte difference. ──
 const coldNarr2 = document.querySelector('#msg-0 .seg-narration[data-seg-round="L0"]');
@@ -157,11 +169,14 @@ report();
 def test_live_vs_cold_narration_byte_parity():
     """One narration fact, one DOM fragment — live preview == cold settled render.
 
-    RED on HEAD: the live painter adds `stream-seg-narration` to the class list
-    (translation_render.js:175) while the settled renderer emits only
-    `md-content seg-narration` (tool_rounds.js:3387). Phase 3.5 routes both
-    through one projection (ConvView.apply → renderMessage), making the live
-    and cold bytes identical; which side changes is the implementer's choice.
+    Was RED anchor ② in the step-1 commit (live side carried an extra
+    `stream-seg-narration` class). Step 2 changed the LIVE painter to the
+    settled class contract — visuals unchanged because the live panel carries
+    `seg-timeline`, so `.seg-timeline .seg-narration` (styles.css:6096,
+    values identical to the now-inert `.stream-seg-narration` block at :6158)
+    applies verbatim. Both sides of the comparison are produced by REAL
+    production code (translation_render.js); only the settled slot's initial
+    markup is hand-built to the tool_rounds.js contract.
     """
     output = run_harness(
         target_js=TRANSLATION_RENDER,
@@ -171,19 +186,18 @@ def test_live_vs_cold_narration_byte_parity():
     )
     assert 'PASS live_preview_painted' in output, output
     assert 'PASS cold_settled_painted' in output, output
+    assert 'PASS live_class_is_the_settled_contract' in output, output
     assert 'PASS NEUTER_injected_byte_difference_detected' in output, output
-    # The sanity check documents today's exact divergence; when the fix lands
-    # on EITHER side, live==cold makes the anchor pass and this sanity check
-    # flips to its equality branch — update it in the same commit.
     assert 'PASS ANCHOR_live_cold_narration_byte_identical' in output, (
-        'PHASE 3.5 RED ANCHOR: live translation preview and cold settled '
-        'render emit different bytes for the same narration fact '
-        '(see stderr for the two fragments). Converge both onto one '
-        'projection per docs/RENDER_CONTRACT_PHASE3_5_PLAN.md §3.\n' + output)
+        'LIVE/COLD PARITY BROKE — the live translation preview and the cold '
+        'settled render emit different bytes for the same narration fact '
+        '(see stderr for the two fragments). One narration fact must project '
+        'to one DOM fragment (docs/RENDER_CONTRACT_PHASE3_5_PLAN.md §3).\n'
+        + output)
 
 
 # ════════════════════════════════════════════════════════════════════
-# 3. Raw DOM-write ratchet (GREEN today; monotonic decrease)
+# 3. Raw DOM-write ratchet (monotonic decrease)
 # ════════════════════════════════════════════════════════════════════
 
 _RAW_PATS = [
@@ -193,17 +207,21 @@ _RAW_PATS = [
     r'\.remove\s*\(\s*\)',
 ]
 
-# 2026-07-24 baseline, measured with the single-pass tokenizer in
+# Baselines measured 2026-07-24 with the single-pass tokenizer in
 # _scan_raw_dom_ops (docs/RENDER_CONTRACT_PHASE3_5_PLAN.md §4). A file's
 # count may only go DOWN as its CONTENT-DERIVED sites converge onto
 # ConvView.apply; any NEW raw write trips the ratchet. conv_view.js is
 # excluded — it IS the seam (its raw ops are the allowed writes).
+# turn_nav.js / finish_info.js are exempt per plan §2.15 (sidebar +
+# detached-builder / zero #chatInner writes — census-verified).
 _RATCHET_BASELINE = {
+    'static/js/ui/streaming_ui.js': 49,
     'static/js/main/main_send_pipeline.js': 23,
     'static/js/ui/streaming_render.js': 21,
-    'static/js/ui/translation_render.js': 18,
     'static/js/image-gen.js': 18,
     'static/js/ui/sse_pipeline.js': 17,
+    'static/js/ui/translation_render.js': 17,
+    'static/js/core/health_stream_timer.js': 10,
     'static/js/main/main_conv_lifecycle.js': 10,
     'static/js/ui/chat_render.js': 10,
     'static/js/ui/edit_message.js': 7,
@@ -275,16 +293,16 @@ def test_raw_dom_write_ratchet():
 
 
 def test_ratchet_baseline_matches_plan_total():
-    """The baselines sum to the plan's §2.14 tally (149 non-seam raw ops)."""
-    assert sum(_RATCHET_BASELINE.values()) == 149, (
-        f'baseline sum {sum(_RATCHET_BASELINE.values())} != 149 — the plan '
+    """The baselines sum to the plan's §2.14 tally (207 non-seam raw ops)."""
+    assert sum(_RATCHET_BASELINE.values()) == 207, (
+        f'baseline sum {sum(_RATCHET_BASELINE.values())} != 207 — the plan '
         '§2.14 tally and this ratchet drifted apart; update both together')
 
 
 def test_NEUTER_ratchet_detects_injected_raw_op():
     """NEUTER: poisoning a file's source with one extra raw op must increment
     the count — proves the audit is load-bearing, not decorative."""
-    rel = 'static/js/main/main_send_pipeline.js'   # lowest baseline (1)
+    rel = 'static/js/main/main_send_pipeline.js'   # mid-table baseline (23)
     with open(os.path.join(ROOT, rel), encoding='utf-8') as f:
         clean = f.read()
     baseline = _scan_raw_dom_ops(clean)
@@ -295,11 +313,53 @@ def test_NEUTER_ratchet_detects_injected_raw_op():
         'expected +1; the ratchet scan is blind to a real raw write')
 
 
+# ════════════════════════════════════════════════════════════════════
+# 4. Boot-time ConvView hard check (step-4 precondition, landed in step 2)
+# ════════════════════════════════════════════════════════════════════
+
+def test_boot_hard_check_convview_present():
+    """main.js init must loudly fail at boot when ConvView is missing.
+
+    The bundler's silent-no-op failure mode (CLAUDE.md §3.2.1: a <script> tag
+    stripped from index.html but never added to _BUNDLE_FILES) used to mean
+    `typeof window.ConvView === 'undefined'` at runtime with per-call silent
+    degradation. The boot check turns that into an explicit startup failure
+    (console.error + fixed banner) BEFORE any render runs. Two static facts
+    are pinned here: the check exists in main.js's init IIFE, and conv_view.js
+    precedes main.js in _BUNDLE_FILES (otherwise the check runs before the
+    seam's slot and can never observe its absence correctly).
+    """
+    with open(MAIN_JS, encoding='utf-8') as f:
+        main_src = f.read()
+    assert 'MISSING at boot' in main_src and 'window.ConvView' in main_src, (
+        'boot-time ConvView hard check is gone from main.js — the §5 step-4 '
+        'precondition (loud startup failure instead of silent per-call '
+        'degradation) must stay; see docs/RENDER_CONTRACT_PHASE3_5_PLAN.md §5')
+    init_pos = main_src.find('(function init()')
+    check_pos = main_src.find('MISSING at boot')
+    assert 0 <= init_pos < check_pos, (
+        'the ConvView boot check must run INSIDE main.js\'s init IIFE')
+
+    with open(BUNDLER, encoding='utf-8') as f:
+        bundler_src = f.read()
+    m = re.search(r'_BUNDLE_FILES\s*(?::\s*list\[str\])?\s*=\s*\[(.*?)\]',
+                  bundler_src, re.DOTALL)
+    assert m, 'could not locate _BUNDLE_FILES in lib/js_bundler.py'
+    entries = re.findall(r"'([^']+\.js)'", m.group(1))
+    assert 'conv_view.js' in entries, (
+        'conv_view.js missing from _BUNDLE_FILES — the boot check would fire '
+        'on every page load (and rightly so)')
+    assert entries.index('conv_view.js') < entries.index('main.js'), (
+        'conv_view.js must precede main.js in _BUNDLE_FILES so the boot '
+        'check observes the seam\'s absence, not a load-order artifact')
+
+
 if __name__ == '__main__':
     for fn in (test_convview_exposes_single_apply_entry,
                test_raw_dom_write_ratchet,
                test_ratchet_baseline_matches_plan_total,
-               test_NEUTER_ratchet_detects_injected_raw_op):
+               test_NEUTER_ratchet_detects_injected_raw_op,
+               test_boot_hard_check_convview_present):
         try:
             fn()
             print('  PASS', fn.__name__)

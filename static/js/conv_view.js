@@ -142,6 +142,64 @@
       return true;
     },
 
+    /** THE single public DOM-apply entry (RENDER_CONTRACT Phase 3.5 §5).
+     *
+     *  Every CONTENT-DERIVED write to #chatInner routes through here so the
+     *  rendered DOM is a pure projection of the message document:
+     *  `renderMessage(msg, idx)` is the ONE projection; `_evictByMsgId`
+     *  enforces the identity invariant (one _msgId ⇒ at most one DOM node);
+     *  the fingerprint cache is refreshed so the next renderChat does not
+     *  needlessly re-swap.
+     *
+     *  Semantics = upsert keyed on identity: replace the existing node
+     *  IN PLACE when found (position preserved — the translate/edit path),
+     *  append to the tail otherwise (the send/error-bubble path). Callers
+     *  whose target may be mid-index-drift MUST existence-check first and
+     *  fall back to renderChat (see _renderMsgInPlace) — an append lands at
+     *  the tail, which is wrong for a drifted mid-list message.
+     *
+     *  Do NOT target the live `#streaming-msg` bubble with this method —
+     *  that lifecycle belongs to startStreaming/finalizeStreaming.
+     *
+     *  @param {string} convId
+     *  @param {number} idx     — index into conv.messages (renderMessage key)
+     *  @param {Object} msg     — the message object (must carry _msgId;
+     *                            _ensureMsgId stamps one when missing).
+     *  @returns {boolean} true if the DOM was mutated.
+     */
+    apply: function (convId, idx, msg) {
+      if (typeof activeConvId !== 'undefined' && activeConvId !== convId) return false;
+      const conv = _findConv(convId);
+      if (!conv || !msg) return false;
+      if (typeof _ensureMsgId === 'function') _ensureMsgId(msg);
+      const inner = document.getElementById('chatInner');
+      if (!inner) return false;
+      if (typeof idx !== 'number' || idx < 0) idx = _idxOf(conv, msg);
+      if (idx < 0) return false;
+      if (typeof renderMessage !== 'function') return false;
+      const html = renderMessage(msg, idx);
+      if (!html) return false;
+      const existing = _findMsgEl(inner, msg, idx);
+      if (existing) {
+        existing.outerHTML = html;
+      } else {
+        inner.insertAdjacentHTML('beforeend', html);
+      }
+      /* Identity sweep: the swap/insert is the SOLE node for this _msgId —
+       * evict any stranded twin (drifted static bubble, stale placeholder)
+       * so the invariant holds no matter which path created it. */
+      if (msg._msgId) {
+        const keep = document.getElementById('msg-' + idx);
+        _evictByMsgId(inner, msg._msgId, keep);
+      }
+      if (typeof _lastRenderedFingerprint !== 'undefined' &&
+          typeof _convRenderFingerprint === 'function') {
+        try { _lastRenderedFingerprint = _convRenderFingerprint(conv); }
+        catch (e) { /* best-effort cache update */ }
+      }
+      return true;
+    },
+
     /** Remove a single message's DOM element by msg id or index.
      *  Does NOT touch conv.messages — caller is responsible for
      *  the model-side mutation. */
@@ -305,6 +363,12 @@
       if (!html) return false;
       const ct = document.getElementById('chatContainer');
       const savedScroll = ct ? ct.scrollTop : -1;
+      /* ★ JUMP FIX: decide the target BEFORE the swap. A reader parked at the
+       *   bottom (the common case at turn end) should stay pinned to the bottom;
+       *   otherwise we hold their exact offset. Measured on the OLD DOM so the
+       *   streaming-bubble geometry is what we compare against. */
+      const _wasNearBottom = (ct && typeof isNearBottom === 'function')
+        ? isNearBottom(80) : false;
       try {
         sm.outerHTML = html;
       } catch (e) {
@@ -324,7 +388,33 @@
         const _keep = document.getElementById('msg-' + idx);
         _evictByMsgId(_inner, msg._msgId, _keep);
       }
-      if (savedScroll >= 0 && ct) ct.scrollTop = savedScroll;
+      /* ★ JUMP FIX — two parts:
+       *   (1) The final `renderMessage` collapses the thinking block, drops the
+       *       phase indicator and re-runs syntax highlighting, so the finalized
+       *       node is a DIFFERENT height than the streaming bubble. Restoring the
+       *       raw pre-swap scrollTop therefore visually shifts content. Instead:
+       *       if the reader was at the bottom, re-pin to the bottom; else hold
+       *       their offset. Write with smooth OFF (via _withInstantScroll) so the
+       *       chat-container's `scroll-behavior:smooth` does not ANIMATE the snap
+       *       — the animated slide is the "莫名跳动" the user sees.
+       *   (2) hljs highlighting and (lazy) KaTeX typesetting change block heights
+       *       AFTER this synchronous pass, so a scroll set now is stale the moment
+       *       they land. Re-apply the same target on the next two frames (rAF²) so
+       *       the final position is taken AFTER layout settles — killing the
+       *       "定位完再变高" second jump. */
+      const _repin = () => {
+        if (!ct) return;
+        const _apply = () => {
+          if (_wasNearBottom) ct.scrollTop = ct.scrollHeight;
+          else if (savedScroll >= 0) ct.scrollTop = savedScroll;
+        };
+        if (typeof _withInstantScroll === 'function') _withInstantScroll(ct, _apply);
+        else _apply();
+      };
+      _repin();
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => requestAnimationFrame(_repin));
+      }
       if (typeof _lastRenderedFingerprint !== 'undefined' &&
           typeof _convRenderFingerprint === 'function') {
         try { _lastRenderedFingerprint = _convRenderFingerprint(conv); }

@@ -1,12 +1,15 @@
 # RENDER_CONTRACT Phase 3.5 — make the DOM-apply layer single-seamed too
 
-> **Status: DESIGN + tests-first RED skeleton only. NO production code touched in this commit.**
+> **Status: §5 step 1 (design + failing-first skeleton) and step 2 (`ConvView.apply` +
+> translation_render convergence + census join + boot hard check) are LANDED.**
 > Companion: [`RENDER_CONTRACT.md`](RENDER_CONTRACT.md) §1 Invariant 1 (`DOM = render(messages, rev)`),
 > [`RENDER_CONTRACT_PHASE3_PLAN.md`](RENDER_CONTRACT_PHASE3_PLAN.md) (the message-document reducer).
 > This plan closes the gap Phase 3 did NOT close: **Phase 3 unified the message-document
 > projection (live/warm/cold/poll → `{content, thinking, toolRounds}`). It did NOT unify
-> the DOM-apply layer.** `conv.messages` is the SSOT, but ~111 raw DOM writes still reach
-> `#chatInner` without going through ConvView, so the rendered DOM is NOT yet a pure
+> the DOM-apply layer.** `conv.messages` is the SSOT, but 217 raw DOM writes (census-complete
+> as of step 2 — the first-pass 14-file/157 tally missed `streaming_ui.js`, the hottest
+> per-frame writer, and `health_stream_timer.js`; see §2.15) still reach `#chatInner`
+> without going through ConvView, so the rendered DOM is NOT yet a pure
 > function of the message document.
 >
 > **Measurement note (2026-07-24):** raw-op counts come from the single-pass
@@ -26,7 +29,7 @@
 
 ConvView is today the single seam for the **streaming-bubble lifecycle only**; the rest of
 the DOM-apply layer is a second tier (`renderChat()` + a large fleet of raw DOM ops) that
-still owns ~149 writes. Phase 3.5 makes the DOM apply layer single-seamed: every write to
+still owns ~207 writes. Phase 3.5 makes the DOM apply layer single-seamed: every write to
 `#chatInner` either (a) derives from a message-document change via `ConvView`, or (b) is
 explicitly classified STRUCT-ONLY (scroll/window management) and allowed to stay, or (c) is
 a PENDING placeholder that must NOT read message fields and therefore cannot diverge.
@@ -45,19 +48,23 @@ The confusion today is that these three classes are **interleaved inside the sam
 (e.g. `_surgicalRerenderMsg` does BOTH a STRUCT-ONLY re-anchor AND a CONTENT-DERIVED
 `el.outerHTML = renderMessage(...)`). Phase 3.5 splits them at the call site.
 
-## 2. The 111-site reclassification table
+## 2. The 217-site reclassification table
 
 `N = current raw count` measured 2026-07-24 by the §4 audit (single-pass tokenizer strips
 comments + strings, then counts `innerHTML=` / `outerHTML=` / `insertAdjacentHTML(` /
-`appendChild(` / `.remove()`).
-ConvView itself has 8 raw ops (it IS the seam — those are the ALLOWED writes). Every other
+`appendChild(` / `.remove()`). **Census completeness** (step 2): a repo-wide tokenizer scan
+of every `static/js/**` file (§2.15) added `streaming_ui.js` (49) and
+`core/health_stream_timer.js` (10) to the ratchet and formally exempted `turn_nav.js` /
+`finish_info.js` — no third chatInner writer is unaccounted for.
+ConvView itself has 10 raw ops (it IS the seam — those are the ALLOWED writes). Every other
 file's raw ops are listed below with a class + a Phase-3.5 target.
 
-### 2.1 `static/js/conv_view.js` — N=8 → THE SEAM (keep)
+### 2.1 `static/js/conv_view.js` — N=10 → THE SEAM (keep)
 
 | Line cluster | Op | Class | Target |
 |---|---|---|---|
 | ~137 | `existing.outerHTML = html` (upsert) | SEAM | keep — this IS `upsertMessage` |
+| ~195 | `existing.outerHTML = html` / `inner.insertAdjacentHTML` (**`apply`**, step 2) | SEAM | keep — this IS the single public entry every CONTENT-DERIVED site converges onto |
 | ~164 | `el.remove()` (removeMessage) | SEAM | keep |
 | ~226 | `inner.insertAdjacentHTML` (startStreaming) | SEAM | keep |
 | ~272 | `sm.outerHTML = html` (finalizeStreaming) | SEAM | keep |
@@ -140,20 +147,19 @@ delegates to). Phase 3.5 does NOT rewrite them — it moves their call boundary 
 | 143, 263, 279, 384, 484 | `msgEl.outerHTML = renderMessage(msg, idx)` | CONTENT-DERIVED | `ConvView.apply` |
 | 550 | `insertAdjacentHTML(renderMessage(errAssistant,…))` | CONTENT-DERIVED | `ConvView.apply` |
 
-### 2.9 `static/js/ui/translation_render.js` — N=18 → CONVERGE (the "translation lands but UI doesn't refresh" bug home)
+### 2.9 `static/js/ui/translation_render.js` — N=17 (was 18) → CONVERGED in step 2 (the "translation lands but UI doesn't refresh" bug home)
 
-| Line | Op | Class | Target |
-|---|---|---|---|
-| 64 | `el.outerHTML = renderMessage(msg, idx)` (`_renderMsgInPlace`) | CONTENT-DERIVED | `ConvView.apply` |
-| 95, 100, 107, 112–113, 131, 137 | translate-loading patch (status / preview into `#translate-loading-N`) | CONTENT-DERIVED | these read `msg._translateStatus` / `_translatePartial` → the indicator becomes a projection of the msg; route via `ConvView.apply` (or keep as a msg-scoped sub-projection ConvView owns) |
-| 184, 192 | streaming narration `innerHTML` | CONTENT-DERIVED | `_renderStreamingTranslatePreview` reads `msg._translatePartialByRound` → ConvView streaming-body seam |
-| 212, 217, 232, 240, 277, 285 | settled per-round narration `innerHTML` | CONTENT-DERIVED | `_applyPartialByRoundToSettled` reads the msg → ConvView.apply |
+| Line | Op | Class | Target | State |
+|---|---|---|---|---|
+| 64 | `el.outerHTML = renderMessage(msg, idx)` (`_renderMsgInPlace`) | CONTENT-DERIVED | `ConvView.apply` | **✅ step 2** — routes through `ConvView.apply` (cv-off scroll dance kept; no raw fallback — §5 step-4 boot check guarantees the seam) |
+| 95, 100, 107, 112–113, 131, 137 | translate-loading patch (status / preview into `#translate-loading-N`) | CONTENT-DERIVED | **sanctioned surgical exception** — a full `ConvView.apply` per poll tick would restart the `.translate-spinner` CSS keyframe (the exact reason `_patchTranslateLoadingDom` exists); the completion path always ends in a whole-bubble `ConvView.apply`, so the indicator is a transient sub-projection of the same msg | keep, named here |
+| 184, 192 | streaming narration `innerHTML` | CONTENT-DERIVED | `_renderStreamingTranslatePreview` — live in-bubble sub-projection; **step 2 made its zh node byte-identical to the settled slot** (dropped `stream-seg-narration`; visuals unchanged via `.seg-timeline .seg-narration`, styles.css:6096 ≡ :6158 values) | ✅ parity landed |
+| 212, 217, 232, 240, 277, 285 | settled per-round narration `innerHTML` | CONTENT-DERIVED | `_applyPartialByRoundToSettled` — the COLD side of the §3 anchor; surgical per-round paint is its purpose (a whole-bubble apply would defeat retro-translation streaming) | keep, named here |
 
 This file is the single biggest CONTENT-DERIVED cluster and the direct cause of the
-"translation lands but the UI doesn't refresh" bug family — because it writes DOM from
-`msg._translate*` WITHOUT going through the same projection as a cold reload. Phase 3.5
-makes its emit path (`emitMessageChanged`) call `ConvView.apply`, so live translation and
-cold reload produce byte-identical DOM.
+"translation lands but the UI doesn't refresh" bug family. Step 2 made its whole-bubble
+path (`emitMessageChanged` → `_renderMsgInPlace`) call `ConvView.apply`, and made the
+live preview's zh narration byte-identical to the cold render (the §3 anchor, now GREEN).
 
 ### 2.10 `static/js/image-gen.js` — N=18 + `image-gen-batch.js` — N=5 → mixed
 
@@ -187,17 +193,65 @@ cold reload produce byte-identical DOM.
 |---|---|---|---|
 | 1747, 1767, 2300 | `inner.innerHTML = …error welcome…` | PENDING-PLACEHOLDER | keep — fixed error string, no msg field |
 
+### 2.15 Census join (step 2) — `streaming_ui.js` + `health_stream_timer.js`, and the exemption register
+
+The first-pass table missed the hottest writer of all. A repo-wide tokenizer census
+(every `static/js/**` file, `*.nc_copy.js` and vendor libs excluded) proved the full set of
+chatInner writers and closed the "ratchet is blind on the hottest file" hole.
+
+#### 2.15.1 `static/js/ui/streaming_ui.js` — N=49 → the live projection engine (JOINED the ratchet)
+
+| Line cluster | Op | Class | Target |
+|---|---|---|---|
+| ~31 | `body.innerHTML = …` (seed zone skeleton in `#streaming-body`) | CONTENT-DERIVED (live) | live-projection engine — see below |
+| ~293, ~330 | `tailEl.innerHTML = renderMarkdown(tail)` | CONTENT-DERIVED (live) | same |
+| ~324, ~1000 | `insertAdjacentHTML` (refreeze / turn headers) | CONTENT-DERIVED (live) | same |
+| ~508–596 | `_renderStreamRoundProse` — think/narration `innerHTML` + `remove()` | CONTENT-DERIVED (live) | already byte-parity-claimed with the settled `_renderTimelineBatch`; the §3 anchor covers its narration twin |
+| ~740–900 | tool panel / group / slot `appendChild` + `innerHTML` | CONTENT-DERIVED (live) | same |
+| various | sentinel / evict `remove()` | STRUCT-ONLY | keep |
+
+**Classification verdict: CONTENT-DERIVED (live-projection engine).** Its zones project the
+SAME `assistantMsg` the reducer mutates — the divergence risk is not *what* it reads but
+*where the write comes from* on non-SSE triggers (`health_stream_timer._streamFrameArg`,
+poll fallback, VU events — the §7 streamBufs retirement). Per-frame `ConvView.apply` is
+explicitly REJECTED as the convergence target: a full `renderMessage` per rAF is a perf
+regression the lazy-window machinery exists to avoid. Convergence path for this file =
+§7 (its reads move onto the message document) + the ratchet (no NEW raw writes), not
+apply-per-frame.
+
+#### 2.15.2 `static/js/core/health_stream_timer.js` — N=10 → liveness banner inside the bubble (JOINED)
+
+| Line cluster | Op | Class | Target |
+|---|---|---|---|
+| ~910–912 | `statusZone.appendChild(banner)` + `banner.innerHTML` (liveness warning inside `#streaming-body`) | CONTENT-DERIVED (reads `buf.phase`) | §7 retirement — read `phase` from the message document / reducer, not `streamBufs` |
+| various | timer text / cleanup `remove()` | STRUCT-ONLY | keep |
+
+#### 2.15.3 Exemption register (census-verified, with reasons)
+
+| File | Raw ops | Verdict | Evidence |
+|---|---|---|---|
+| `static/js/ui/turn_nav.js` | 7 | **EXEMPT** — other-root + detached-builder | writes target `#turnNav` (sidebar, L50/84/87); L141 `wrapper.innerHTML` only parses an HTML string into a detached fragment for lazy-load prepend — no chatInner mutation via the 4 audited patterns |
+| `static/js/ui/finish_info.js` | 0 | **EXEMPT** — zero chatInner writes | tokenizer finds no raw ops; the cost popover appends to `document.body` (L663), not `#chatInner` |
+
+Any OTHER `static/js/**` file with tokenizer count > 0 either sits in the §2 tables or is
+listed here — the census is closed-world: a new file gaining a chatInner write fails the
+ratchet only after it is added to `_RATCHET_BASELINE`, so **adding new files to the ratchet
+when they first gain a chatInner write is part of every future step's checklist.**
+
 ### 2.14 Tally
 
 | Class | Count | Phase-3.5 action |
 |---|---|---|
-| SEAM (conv_view.js) | 8 | keep — this IS the seam |
+| SEAM (conv_view.js) | 10 | keep — this IS the seam (includes `apply`, landed step 2) |
 | SEAM-2 (chat_render reconcile) | ~7 | fold call boundary into `ConvView.apply`/`replaceAll` |
-| CONTENT-DERIVED | ~85 | route through `ConvView.apply` — the byte-parity test (§3) is the guard |
-| STRUCT-ONLY | ~28 | keep, explicitly allowlisted |
+| CONTENT-DERIVED | ~132 (incl. streaming_ui live-engine ~45 + health_stream_timer banner ~2) | route through `ConvView.apply` — or, for the live projection engine, §7 retirement of its second data source; the byte-parity test (§3) is the guard |
+| STRUCT-ONLY | ~34 | keep, explicitly allowlisted |
 | PENDING-PLACEHOLDER | ~18 | keep, must never read `msg.*` |
-| NOT-#chatInner | ~11 | excluded from class rules, still under the ratchet |
-| **Total raw ops (tokenizer)** | **157 = 8 seam + 149 non-seam** | ~55 stay (seam+struct+placeholder) + **~85 converge to ConvView** |
+| NOT-#chatInner | ~16 | excluded from class rules, still under the ratchet |
+| **Total raw ops (tokenizer)** | **217 = 10 seam + 207 non-seam** | ~69 stay (seam+struct+placeholder) + **~132 converge / de-fork** |
+
+Exact per-file numbers live in `_RATCHET_BASELINE` (the guard); the class split above is
+the §2 tables' cluster-level rollup (±3).
 
 ## 3. The failing-first byte-parity test (the Phase-3 acceptance anchor, generalized to DOM)
 
@@ -213,47 +267,69 @@ COLD  : settled msg → renderMessage(msg, idx)                       → coldHT
 ASSERT: liveHTML === coldHTML        // byte-identical #chatInner subtree
 ```
 
-**RED today** because the ~58 CONTENT-DERIVED raw writes project message fields through a
-DIFFERENT code path than `renderMessage` — so e.g. the live translation-preview DOM
-(`translation_render.js:184` `_renderStreamingTranslatePreview`) does NOT equal what a cold
-`renderMessage` produces for the same `msg._translatePartialByRound`. The test fails on
-exactly those divergences, one assertion per site-class.
+**RED at step 1** because the ~85 CONTENT-DERIVED raw writes (~132 after the step-2 census
+joined `streaming_ui.js` / `health_stream_timer.js`) project message fields through a
+DIFFERENT code path than `renderMessage` — the concrete first instance: the live
+translation-preview zh node (`_renderStreamingTranslatePreview`) carried an extra
+`stream-seg-narration` class that the cold settled render
+(`tool_rounds.js:_renderSegNarrationHTML`) never emits.
 
-**GREEN** when every CONTENT-DERIVED write routes through `ConvView.apply` (which calls
-`renderMessage`), so live and cold share the single projection.
+**GREEN for the narration anchor as of step 2:** the LIVE painter changed to the settled
+class contract (`md-content seg-narration`; visuals unchanged — the live panel carries
+`seg-timeline`, so `.seg-timeline .seg-narration` at styles.css:6096 applies, values
+identical to the now-inert `.stream-seg-narration` block at :6158, whose cleanup is
+deferred to the CSS-owning sibling). The test's side-pin check
+(`live_class_is_the_settled_contract`) locks WHICH side moved, so the anchor can't rot in
+either direction. The remaining CONTENT-DERIVED sites flip GREEN as §5 steps 3–4 route
+them through `ConvView.apply`.
 
-**NEUTER (committed, proves the test is load-bearing):** `test_NEUTER_raw_translation_preview_diverges`
-— inside the harness, simulate the *current* behaviour: take the settled cold message, apply
-a `_translatePartialByRound` via the *raw* `narr.innerHTML = …` path (the translation_render
-idiom) instead of through `renderMessage`, and assert the two DOM strings DIFFER. This proves
-the parity assertion is actually measuring the projection path, not vacuously passing. When
-the fix lands (translation goes through ConvView.apply → renderMessage), the NEUTER's raw
-path still diverges (by construction) but the REAL path now matches — so the main test flips
-GREEN while the NEUTER stays as the standing "this is what divergence looks like" reference.
+**NEUTERs (all real, all in `tests/test_frontend_dom_seam_convergence.py`):**
+1. `NEUTER_injected_byte_difference_detected` — embedded in the JSDOM harness: mutating
+   the cold slot by one byte must be detected by the comparator.
+2. `test_NEUTER_ratchet_detects_injected_raw_op` — poisoning a ratcheted file's source
+   with one extra raw op must increment its count.
+3. Step-2 NEUTER **round-trip** (run manually at landing, reproduced in the commit
+   message): a scratch copy of `translation_render.js` with the old
+   `stream-seg-narration` class re-added flips the anchor RED (both the byte anchor and
+   the side-pin trip) — proving the GREEN is load-bearing, not vacuous.
 
 ## 4. The ratchet guard (no NEW raw writes)
 
-A second test in the same file statically audits the 14 files: strip comments + strings,
-count the 5 raw-DOM op patterns, and assert each file's count is **≤ its §2 baseline**. This
-is the monotonic-decrease ratchet (same pattern as `test_frontend_api_isolation.py`): the
-baseline only ever goes DOWN as sites converge to ConvView; any NEW raw write fails CI.
-Baselines (2026-07-24, tokenizer-measured): main_send_pipeline 23, streaming_render 21,
-translation_render 18, image-gen 18, sse_pipeline 17, main_conv_lifecycle 10, chat_render 10,
-conv_view 8 (seam — pinned, not ratcheted down), edit_message 7, stream_lifecycle 6,
-main_translating_bubble 6, image-gen-batch 5, main_regen_continue 4, core/conversations 4.
+A second test in the same file statically audits the 15 non-seam files (tokenizer strip,
+count the 4 raw-DOM op patterns), asserting each file's count is **≤ its §2 baseline** —
+the monotonic-decrease ratchet (same pattern as `test_frontend_api_isolation.py`): the
+baseline only ever goes DOWN as sites converge; any NEW raw write fails CI.
+Baselines (2026-07-24, tokenizer-measured): streaming_ui 49, main_send_pipeline 23,
+streaming_render 21, image-gen 18, sse_pipeline 17, translation_render 17,
+health_stream_timer 10, main_conv_lifecycle 10, chat_render 10, conv_view 10 (seam —
+pinned, not ratcheted down), edit_message 7, stream_lifecycle 6, main_translating_bubble 6,
+image-gen-batch 5, main_regen_continue 4, core/conversations 4. Sum(non-seam) = 207.
 
 ## 5. Landing order (each step committable + tested; mirrors Phase 3 §7)
 
-1. **This plan + failing-first test skeleton (RED).** [THIS COMMIT]
-2. Add `ConvView.apply(convId, idx, msg)` as the single public entry that wraps
-   `renderMessage` + `_evictByMsgId` + fingerprint update; re-route the highest-bug-density
-   cluster first — `translation_render.js` (§2.9) — through it. Byte-parity test: translation
-   assertion flips GREEN; ratchet drops ~18.
+1. **This plan + failing-first test skeleton (RED).** ✅ LANDED (`d0ec8dca`).
+2. **`ConvView.apply` + translation_render convergence + census join + boot hard check.**
+   ✅ LANDED (this commit): `ConvView.apply(convId, idx, msg)` = `renderMessage` +
+   identity sweep (`_evictByMsgId`) + fingerprint refresh; `_renderMsgInPlace` routes
+   through it; the narration byte-parity anchor flipped GREEN (live side moved to the
+   settled class contract); ratchet joined by `streaming_ui.js` (49) +
+   `health_stream_timer.js` (10); **the step-4 boot-check precondition landed EARLY**
+   (see below); translation_render 18→17. NEUTER round-trip verified.
 3. Route the send/regen/edit single-message swaps (§2.5/2.6/2.8) through `ConvView.apply`.
    Ratchet drops; more parity assertions flip GREEN.
 4. Fold the `renderChat`/`_surgicalTruncateDOM` call boundary into `ConvView.replaceAll` /
    `ConvView.apply`; delete the per-call `window.ConvView` raw fallbacks (§2.4). Ratchet
    approaches the STRUCT/PENDING floor.
+   **Precondition (LANDED in step 2): the boot-time ConvView hard check** — before ANY
+   fallback is deleted, a missing ConvView must fail LOUDLY at startup, not degrade
+   silently per call site. `main.js` init now checks
+   `typeof window.ConvView?.apply === 'function'` and, on absence, fires
+   `console.error` + pins a fixed banner (`[ConvView] MISSING at boot — the JS bundle is
+   broken…`). This kills the twin-bubble breeding ground (the raw fallbacks) without
+   turning a bundler slip into runtime per-point crashes — the failure mode moves from
+   "silent wrong DOM" to "explicit broken boot". Guard:
+   `test_boot_hard_check_convview_present` (check exists in init + `conv_view.js`
+   precedes `main.js` in `_BUNDLE_FILES`).
 5. Declare the remaining STRUCT-ONLY + PENDING-PLACEHOLDER sites as the permanent allowlist;
    the ratchet baseline becomes the floor and the byte-parity test is fully GREEN.
 
@@ -265,3 +341,53 @@ main_translating_bubble 6, image-gen-batch 5, main_regen_continue 4, core/conver
   `lib/agent_core/events.py` (Phase 3's wire contract — separate sign-off), and the DB
   (`_sync_*` writers — Phase 4). The VU render in `streaming_render.js:428-491` is listed
   here ONLY for its DOM-write classification; its baton semantics are untouched.
+
+---
+
+## 7. streamBufs disposition — the second live fact-source, enumerated and judged
+
+`conv.messages` is the SSOT, but `streamBufs` (declared `core.js:150`) is a **parallel
+live content source**: SSE deltas write it, and several readers paint from it OUTSIDE the
+SSE-delta path. Hard rule (owner, 2026-07-24): **anything read outside the SSE-delta path
+to mutate the DOM is a second fact source** — it must get a retirement path or an explicit
+exemption argument. Full census (every `streamBufs` access, read vs write, outcome):
+
+### 7.1 PAINT-SOURCE — must retire (8 readers)
+
+| Site | What it paints | Retirement path |
+|---|---|---|
+| `health_stream_timer.js:814` `_updateStreamTimerUI` reads `buf.phase` → liveness banner in bubble | banner | read `phase` from the reducer/message doc (phase is already a reducer field) |
+| `health_stream_timer.js:996` `_streamFrameArg` reads `buf.content/thinking/toolRounds/phase` → `updateStreamingUI` | whole live bubble | build the frame arg from the message-doc projection (the checkpoint fallback already does `buf?.content \|\| lastMsg.content` — make the doc the ONLY source) |
+| `sse_pipeline.js:2072` `_trySSE` closure — deltas write buf → `twUpdate` → paint | whole live bubble | deltas write the reducer/message doc directly (they ALREADY mutate `assistantMsg` in the same handler — buf is a pure mirror); `twUpdate` reads from the doc |
+| `sse_poll_fallback.js:59` poll writes buf → `twUpdate` → paint | whole live bubble | poll writes the message doc; `twUpdate` reads from the doc |
+| `stream_lifecycle.js:138` + `:171` `showStreamingUIForConv` / deferred re-render read buf → `updateStreamingUI` | reconnect repaint | read from the message doc (checkpoint fallback already does) |
+| `stream_lifecycle.js:660,729,744` HG-translate sync reads buf → `twUpdate` | tool rounds | `twUpdate` reads `toolRounds` from the message doc directly |
+| `streaming_render.js:414` VU event reads buf → `twUpdate` | VU bubble | VU events write the message doc; `twUpdate` reads from there |
+| `project.js:178` `_collapseHgRoundAfterSubmit` reads buf → `twUpdate` | tool rounds | same — doc direct |
+
+**Unified retirement sketch (one mechanism, 8 sites):** `streamBufs` fields are mirrors of
+`assistantMsg` fields (every delta writes BOTH in the same handler). Delete the buffer as a
+READ source: `twUpdate`/`_streamFrameArg`/`showStreamingUIForConv` project from
+`assistantMsg` (the doc); writers stop mirroring. The buffer's only remaining legitimate
+role — an existence flag for "a stream is live on this conv" — is already served by
+`activeStreams` / the task registry. This lands as its own step between §5.4 and §5.5, with
+the §3 byte-parity anchor extended to the reconnect path (cold-open vs live-paint of an
+in-flight turn).
+
+### 7.2 BUFFER-ONLY — allowed, with justification (5 readers)
+
+| Site | Why it can never diverge |
+|---|---|
+| `health_stream_timer.js:1079,1092,1098` `streamBufs.has()` presence checks + console.warn diagnostics | presence flag only — no DOM mutation from buffer CONTENT (the `_twFlush` paint itself is driven by SSE/poll data) |
+| `sse_pipeline.js:481,519` `connectToTask` seeds buf FROM `assistantMsg` checkpoint | write direction is doc → buf (never buf → DOM) |
+| `cross_tab_sync.js:588` `_revalidateOnResume` presence check → triggers `_twFlush` | presence flag only |
+| `conversations.js:2036` `_rebaseUnackedTail` seeds buf FROM `lastLocal` | doc → buf seed, never an independent paint |
+| `main_send_pipeline.js:964` `console.info` diagnostic | log-only |
+
+### 7.3 What changes TODAY (step 2)
+
+Nothing in this commit touches streamBufs reads/writes — the disposition above is the
+*judgment* the owner asked for, not a refactor. The two ratchet-joined files
+(`streaming_ui.js`, `health_stream_timer.js`) are now covered against NEW raw writes, and
+the retirement is scheduled as its own step so it rides the §3 anchor extension rather
+than landing unguarded.

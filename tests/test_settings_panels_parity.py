@@ -231,6 +231,8 @@ _SETTINGS_ONLY_CSS_PREFIXES = (
     r'\.stg-matrix', r'\.stg-mx-',          # api / access-matrix widget (batch C)
     r'\.sysprompt',                         # general / system-prompt editor (batch C)
     r'\.stg-dropdown-visibility',           # preset / display (batch C)
+    r'\.chip\b', r'\.auth-src',             # search / network (batch D)
+    r'\.two-col',                           # settings row layout (batch D)
 )
 
 # Documented cascade-safety exceptions: rules that MUST stay in styles.css even

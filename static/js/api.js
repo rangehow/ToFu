@@ -31,7 +31,7 @@
      Api.<domain>.<method>   — domain-grouped public surface:
                                 folders, paperFolders, conversations, chat, paper,
                                 translate, daily, project, settings,
-                                memory, mcp, oauth, optimizer, image,
+                                memory, skills, mcp, oauth, optimizer, image,
                                 pdf, browser, scheduler, ...
 
    Error model
@@ -291,10 +291,17 @@
     create:         (entry)     => post('/api/v1/memory', entry, { parse: 'response' }),
     remove:         (id)        => del(`/api/v1/memory/${encodeURIComponent(id)}`, { parse: 'response' }),
     toggle:         (id)        => post(`/api/v1/memory/${encodeURIComponent(id)}/toggle`, undefined, { parse: 'response' }),
-    files:          (id)        => get(`/api/v1/memory/${encodeURIComponent(id)}/files`),
-    install:        (formData)  => request('/api/v1/memory/install', { method: 'POST', body: formData, parse: 'response' }),
-    catalog:        ()          => get('/api/v1/memory/catalog'),
-    catalogInstall: (skillId, scope) => post('/api/v1/memory/catalog/install', { skill_id: skillId, scope: scope || 'project' }, { parse: 'response' }),
+  };
+
+  // skills (user-installed skill packages — a different noun from memory)
+  const skills = {
+    list:           (scope)     => get('/api/v1/skills', { query: { scope: scope || 'all' } }),
+    uninstall:      (id)        => del(`/api/v1/skills/${encodeURIComponent(id)}`, { parse: 'response' }),
+    toggle:         (id)        => post(`/api/v1/skills/${encodeURIComponent(id)}/toggle`, undefined, { parse: 'response' }),
+    files:          (id)        => get(`/api/v1/skills/${encodeURIComponent(id)}/files`),
+    install:        (formData)  => request('/api/v1/skills/install', { method: 'POST', body: formData, parse: 'response' }),
+    catalog:        ()          => get('/api/v1/skills/catalog'),
+    catalogInstall: (skillId, scope) => post('/api/v1/skills/catalog/install', { skill_id: skillId, scope: scope || 'project' }, { parse: 'response' }),
   };
 
   // profile (personal-preference profile) ---------------------------
@@ -1224,7 +1231,7 @@
     ApiError,
     _resolve,         // exposed for SSE/WS path building
     // domains
-    folders, paperFolders, orchestrations, memory, profile, timer, scheduler, optimizer, compactions,
+    folders, paperFolders, orchestrations, memory, skills, profile, timer, scheduler, optimizer, compactions,
     conversations, text, translate, chat, images, pdf, doc, audio, artifacts,
     health, pricing, clientError, serverConfig, browser, project, daily, paper,
     features, providers, dispatch, oauth, mcp, update, trading, authSources,

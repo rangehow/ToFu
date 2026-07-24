@@ -3,8 +3,8 @@
    Mirrors mcp-tab patterns from settings.js.
    ═══════════════════════════════════════════════════════════ */
 
-var _skillsCatalog = [];          // entries from /api/v1/memory/catalog
-var _skillsInstalled = [];        // package memories from /api/v1/memory
+var _skillsCatalog = [];          // entries from /api/v1/skills/catalog
+var _skillsInstalled = [];        // installed packages from /api/v1/skills
 var _skillsScope = 'catalog';     // 'catalog' | 'installed'
 var _skillsActiveCategory = 'all';
 var _skillsSearchQuery = '';
@@ -17,11 +17,11 @@ var _SKILLS_PAGE_SIZE = 12;       // cards per page (grid-friendly)
 async function _populateSkillsTab() {
   try {
     var [cdata, ldata] = await Promise.all([
-      Api.memory.catalog(),
-      Api.memory.list('all'),
+      Api.skills.catalog(),
+      Api.skills.list('all'),
     ]);
     _skillsCatalog = (cdata && cdata.catalog) || [];
-    var all = (ldata && (ldata.memories || ldata.skills)) || [];
+    var all = (ldata && ldata.skills) || [];
     _skillsInstalled = all.filter(function (m) { return m.is_package; });
     _skillsRender();
     _skillsAttachDropZone();
@@ -271,7 +271,7 @@ async function _skillsCatalogInstall(skillId, btn) {
   if (btn) { btn.disabled = true; btn.textContent = t('skills.installing'); }
   _skillsToast(t('skills.downloadingInstalling', { id: skillId }));
   try {
-    var r = await Api.memory.catalogInstall(skillId, 'project');
+    var r = await Api.skills.catalogInstall(skillId, 'project');
     var d = (r ? await r.json().catch(function () { return {}; }) : {});
     if (!r || !r.ok) {
       _skillsToast(t('skills.installFailed', { err: (d.error || r.statusText) }), 'error');
@@ -293,7 +293,7 @@ async function _skillsCatalogInstall(skillId, btn) {
 async function _skillsUninstall(memoryId) {
   if (!await showConfirm(t('skills.uninstallConfirm', { id: memoryId }), { danger: true })) return;
   try {
-    var r = await Api.memory.remove(memoryId);
+    var r = await Api.skills.uninstall(memoryId);
     if (!r || !r.ok) {
       var d = (r ? await r.json().catch(function () { return {}; }) : {});
       _skillsToast(t('skills.uninstallFailed', { err: (d.error || (r && r.statusText) || t('skills.noResponse')) }), 'error');
@@ -308,7 +308,7 @@ async function _skillsUninstall(memoryId) {
 
 async function _skillsToggleEnabled(memoryId, btn) {
   try {
-    var r = await Api.memory.toggle(memoryId);
+    var r = await Api.skills.toggle(memoryId);
     if (!r || !r.ok) throw new Error('HTTP ' + (r ? r.status : 'no response'));
     await _populateSkillsTab();
   } catch (e) {
@@ -329,7 +329,7 @@ async function _skillsViewFiles(memoryId) {
   listEl.innerHTML = '';
   overlay.style.display = 'flex';
   try {
-    var d = await Api.memory.files(memoryId);
+    var d = await Api.skills.files(memoryId);
     if (!d) {
       descEl.textContent = t('skills.filesLoadFailed');
       return;

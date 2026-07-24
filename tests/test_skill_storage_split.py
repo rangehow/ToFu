@@ -186,7 +186,7 @@ def test_legacy_project_global_package_copied_to_skills_store(isolated):
 
 @pytest.mark.unit
 def test_installer_targets_split_trees(isolated):
-    from lib.memory.installer import install_skill_package
+    from lib.skills import install_skill_package
     proj = _proj(isolated)
 
     # NB: the package id derives from the SKILL.md ``name``, not the zip

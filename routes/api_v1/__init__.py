@@ -46,6 +46,7 @@ from .desktop import api_v1_desktop_bp
 from .browser import api_v1_browser_bp
 from .auth_sources import api_v1_auth_sources_bp
 from .memory import api_v1_memory_bp
+from .skills import api_v1_skills_bp
 from .mcp import api_v1_mcp_bp
 from .daily_report import api_v1_daily_report_bp
 from .oauth import api_v1_oauth_bp
@@ -87,6 +88,7 @@ ALL_V1_BLUEPRINTS = [
     api_v1_browser_bp,
     api_v1_auth_sources_bp,
     api_v1_memory_bp,
+    api_v1_skills_bp,
     api_v1_mcp_bp,
     api_v1_daily_report_bp,
     api_v1_oauth_bp,

@@ -1,4 +1,4 @@
-"""lib/memory/catalog.py \u2014 Curated catalog of well-known skill packages.
+"""lib/skills/catalog.py — Curated catalog of well-known skill packages.
 
 Mirrors the shape of ``lib/mcp/registry.py``: each entry describes a
 downloadable skill package (Anthropic Skills, OpenClaw skills, team-specific
@@ -10,8 +10,8 @@ needed to render and install it. Install flow:
 
 1. User clicks \u201cInstall\u201d on a card.
 2. Backend downloads the zip to memory (bounded by
-   :data:`lib.memory.installer._MAX_BYTES`).
-3. :func:`lib.memory.installer.install_skill_package` extracts it.
+   :data:`lib.skills.installer._MAX_BYTES`).
+3. :func:`lib.skills.installer.install_skill_package` extracts it.
 
 Adding entries: append to :data:`CATALOG` at the bottom of this file. Only
 ``id`` / ``name`` / ``description`` / ``download_url`` are required.

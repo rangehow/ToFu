@@ -31,7 +31,7 @@ from lib.log import get_logger
 
 logger = get_logger(__name__)
 
-__all__ = ['list_skills', 'get_skill']
+__all__ = ['list_skills', 'get_skill', 'uninstall_skill']
 
 
 def list_skills(project_path: str | None = None,
@@ -86,3 +86,50 @@ def get_skill(skill_id: str,
         if s['id'] == skill_id:
             return s
     return None
+
+
+def uninstall_skill(skill_id: str,
+                    project_path: str | None = None,
+                    extra_paths: list[str] | None = None) -> bool:
+    """Uninstall a skill package (remove its directory). USER action.
+
+    This is the Skills-tab uninstall path — deliberately NOT routed
+    through ``lib.memory.storage.delete_memory`` (which is model-CRUD
+    guarded and refuses packages). Path-safety: the package dir must
+    live inside a known skills tree (a root's ``.tofu/skills/`` or the
+    server-side global skills store).
+
+    Returns True if the package was removed.
+    """
+    import shutil
+
+    from lib.memory.storage import (
+        PROJECT_SKILLS_SUBDIR,
+        _iter_roots,
+        _server_global_skills_dir,
+    )
+
+    skill = get_skill(skill_id, project_path, extra_paths=extra_paths)
+    if not skill:
+        return False
+    pkg = skill.get('package_dir')
+    if not pkg or not os.path.isdir(pkg):
+        logger.warning('[Skills] uninstall: package dir missing for %s (%r)',
+                       skill_id, pkg)
+        return False
+
+    allowed = [os.path.realpath(_server_global_skills_dir())]
+    allowed += [
+        os.path.realpath(os.path.join(r, PROJECT_SKILLS_SUBDIR))
+        for r in _iter_roots(project_path, extra_paths)
+    ]
+    pkg_real = os.path.realpath(pkg)
+    if not any(pkg_real.startswith(a + os.sep) or pkg_real == a
+               for a in allowed):
+        logger.warning('[Skills] uninstall refused — outside skills trees: '
+                       '%s', pkg)
+        return False
+
+    shutil.rmtree(pkg)
+    logger.info('[Skills] uninstalled skill package %s (%s)', skill_id, pkg)
+    return True

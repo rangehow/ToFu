@@ -1,47 +1,15 @@
-    3294 B   28 rules  .autopilot-run-fold-summary
-    2981 B   29 rules  .search-round-block
-    1985 B   16 rules  .search-badge
+    2470 B   26 rules  .search-round-block
     1158 B    9 rules  .sw-a-completed
-    1155 B    7 rules  .scheduler-badge
-    1150 B   10 rules  .browser-badge
-    1084 B    8 rules  .code-exec-badge
-    1074 B    8 rules  .memory-badge
     1042 B    8 rules  .sw-a-error
-     961 B    8 rules  .fetch-badge
-     951 B    7 rules  .apf-report-btn
-     877 B    3 rules  .indexing
-     859 B    4 rules  .hljs-meta
-     857 B    7 rules  .apf-summarize-btn
-     809 B    3 rules  .hljs-variable
-     803 B    5 rules  .mp-tag
+     788 B    9 rules  .search-badge
      758 B    9 rules  .mp-failed
      737 B   12 rules  .debug-line
-     728 B    6 rules  .search-round-count
-     640 B    6 rules  .search-round-num
      603 B    6 rules  .mp-skipped
-     535 B    3 rules  .stg-preset-select
-     533 B    7 rules  .search-round-toggle
-     517 B    3 rules  .mp-folder-tags
-     513 B    7 rules  .search-round-label
-     508 B    4 rules  .ptool-cmd-elapsed
-     507 B    5 rules  .branch-search-round
-     485 B    5 rules  .tofu-mascot-svg
-     476 B    3 rules  .ptool-cmd-progress-bar
-     468 B    2 rules  .hljs-attr
-     468 B    2 rules  .hljs-attribute
-     468 B    2 rules  .hljs-literal
-     468 B    2 rules  .hljs-number
-     461 B    3 rules  .paper-report-tool-status
-     459 B    5 rules  .pricing-stat
-     457 B    4 rules  .pricing-stat-value
-     451 B    4 rules  .endpoint-result-tag
      442 B    4 rules  .branch-send-btn
+     442 B    4 rules  .tofu-mascot-svg
      441 B    5 rules  .search-round-header
      432 B    3 rules  .project-brain-toggle
      425 B    4 rules  .mp-expandable
-     424 B    3 rules  .apf-count
-     422 B    2 rules  .hljs-keyword
-     422 B    2 rules  .hljs-type
      412 B    2 rules  .pb-kind-aborted
      412 B    2 rules  .pb-kind-blocked
      412 B    2 rules  .pb-kind-dismissed
@@ -54,10 +22,6 @@
      391 B    6 rules  .search-round-icon
      390 B    3 rules  .tctx-tone-mcp
      388 B    3 rules  .tctx-tone-ai
-     387 B    1 rules  .hljs-operator
-     387 B    1 rules  .hljs-selector-attr
-     387 B    1 rules  .hljs-selector-class
-     387 B    1 rules  .hljs-selector-id
      386 B    3 rules  .tctx-tone-code
      386 B    3 rules  .tctx-tone-net
      386 B    3 rules  .tctx-tone-search
@@ -86,48 +50,45 @@
      344 B    1 rules  .ctx-tray-cell-fill
      344 B    1 rules  .ctx-tray-cells
      344 B    1 rules  .ctx-tray-seeds
+     337 B    3 rules  .search-round-count
      334 B    4 rules  .branch-search-results
      332 B    2 rules  .stg-preset-row
+     317 B    4 rules  .search-round-toggle
      315 B    3 rules  .ptool-cmd-progress
+     314 B    4 rules  .browser-badge
      312 B    2 rules  .class_
      312 B    2 rules  .function_
-     312 B    2 rules  .hljs-title
-     298 B    1 rules  .hljs-doctag
-     298 B    1 rules  .hljs-template-tag
-     298 B    1 rules  .hljs-template-variable
      298 B    2 rules  .pb-kind-claimed
      298 B    2 rules  .pb-kind-started
      294 B    2 rules  .branch-mode-banner-close
+     288 B    3 rules  .search-round-num
      287 B    2 rules  .vu-private-summary
-     281 B    2 rules  .apf-incomplete
-     273 B    4 rules  .bb-dot
+     277 B    4 rules  .branch-search-round
      272 B    1 rules  .sw-inbox-row-payload
      271 B    1 rules  .sw-get-card
      261 B    1 rules  .is-focused
      252 B    2 rules  .vu-investigation-header
-     249 B    2 rules  .hljs-name
-     249 B    2 rules  .hljs-selector-tag
+     251 B    2 rules  .paper-report-tool-status
      249 B    3 rules  .mp-chevron
      245 B    1 rules  .paper-report-tool-log
-     242 B    3 rules  .cb-dot
      241 B    1 rules  .branch-reply-quote
-     241 B    3 rules  .fb-dot
      239 B    2 rules  .branch-typing-indicator
-     239 B    3 rules  .mem-dot
+     239 B    3 rules  .search-round-label
      236 B    3 rules  .pb-dot
      234 B    2 rules  .vu-handoff-header
+     232 B    3 rules  .endpoint-result-tag
      231 B    1 rules  .stg-preset-header
      230 B    1 rules  .sw-init
+     228 B    3 rules  .pricing-stat
      224 B    2 rules  .vu-private-zone
-     213 B    1 rules  .proactive-count
      211 B    3 rules  .ptool-cmd-output-curline
+     210 B    2 rules  .code-exec-badge
      210 B    2 rules  .folder-nav-btn
-     209 B    2 rules  .hljs-regexp
-     209 B    2 rules  .hljs-string
+     210 B    2 rules  .scheduler-badge
+     207 B    2 rules  .memory-badge
      203 B    1 rules  .scheduler-panel-title
      203 B    2 rules  .stg-preset-label
      192 B    1 rules  .user-translating
-     190 B    2 rules  .apf-toggle
      190 B    1 rules  .pricing-info-panel
      186 B    1 rules  .epi-spinner
      185 B    1 rules  .inherited__
@@ -135,28 +96,19 @@
      184 B    1 rules  .pb-board-lane-done
      184 B    1 rules  .pb-board-lane-open
      181 B    1 rules  .settings-label
-     180 B    2 rules  .sc-dot
      178 B    2 rules  .pricing-stat-label
      174 B    1 rules  .vu-investigation-icon
      169 B    1 rules  .upd-inline-spin
      168 B    1 rules  .paper-report-sections-tracker
-     167 B    2 rules  .hljs-built_in
-     167 B    2 rules  .hljs-symbol
-     166 B    2 rules  .hljs-comment
      166 B    2 rules  .tl-error
      166 B    2 rules  .tl-parse_error
-     165 B    1 rules  .hljs-quote
-     165 B    1 rules  .hljs-selector-pseudo
      161 B    1 rules  .ig-spinner
      158 B    1 rules  .tool-exec-pulse
-     154 B    1 rules  .pricing-source
      153 B    2 rules  .is-referenced
      153 B    1 rules  .pb-board-lane-claimed
      153 B    1 rules  .settings-key-stats
      153 B    2 rules  .vu-sent-zone
      152 B    1 rules  .stg-badge-bal-low
-     151 B    2 rules  .hljs-addition
-     151 B    2 rules  .hljs-deletion
      149 B    2 rules  .branch-msg-content
      149 B    2 rules  .search-round-content
      147 B    1 rules  .branch-node-streaming-dot
@@ -182,8 +134,6 @@
      120 B    1 rules  .tofu-cheek-r
      118 B    1 rules  .app-root
      118 B    1 rules  .chat-shell
-     118 B    1 rules  .hljs-code
-     118 B    1 rules  .hljs-formula
      118 B    2 rules  .memory-btn-close
      116 B    1 rules  .stg-badge-bal-warn
      115 B    1 rules  .pb-board-act-complete
@@ -206,8 +156,9 @@
       97 B    2 rules  .tl-ready
       95 B    2 rules  .tl-wait
       94 B    1 rules  .reply-quote-chip-info
-      93 B    1 rules  .act_failed
       93 B    1 rules  .branch-thinking-body
+      92 B    1 rules  .apf-toggle
+      92 B    1 rules  .autopilot-run-fold-summary
       90 B    1 rules  .branch-search-header
       90 B    1 rules  .tofu-eye
       88 B    1 rules  .ig-model-desc
@@ -215,30 +166,26 @@
       87 B    1 rules  .pb-board-act-defer
       87 B    1 rules  .pm-section-hint
       86 B    1 rules  .spin-icon
+      83 B    1 rules  .pricing-stat-value
       82 B    1 rules  .sw-await-card-label
       82 B    1 rules  .sw-get-card-label
       81 B    1 rules  .sw-await-card-icon
       81 B    1 rules  .sw-get-card-icon
       81 B    1 rules  .sw-inbox-row-item
       81 B    1 rules  .sw-init-icon
-      80 B    1 rules  .cost-highlight
       80 B    1 rules  .pb-board-done
       79 B    1 rules  .pricing-actions
       78 B    1 rules  .ps-dd-divider
       78 B    1 rules  .tofu-eye-l
       78 B    1 rules  .tofu-eye-r
-      77 B    1 rules  .apf-label
       77 B    1 rules  .folder-badge-more
       77 B    1 rules  .sw-a-tools-label
-      72 B    1 rules  .apf-hint
-      68 B    1 rules  .hljs-emphasis
+      76 B    1 rules  .ptool-cmd-elapsed
       68 B    1 rules  .pb-board-claimed
+      67 B    1 rules  .bb-dot
       67 B    1 rules  .pb-board-open
       66 B    1 rules  .branch-search-waiting
       65 B    1 rules  .branch-search-query
-      65 B    1 rules  .hljs-section
-      64 B    1 rules  .apf-icon
-      64 B    1 rules  .hljs-strong
       62 B    1 rules  .pb-watch-item-goal
       60 B    1 rules  .branch-search-approval
       60 B    1 rules  .s-in_progress
@@ -247,6 +194,7 @@
       59 B    1 rules  .tp-skipped
       58 B    1 rules  .pricing-grid
       57 B    1 rules  .sw-init-header
+      56 B    1 rules  .fetch-badge
       56 B    1 rules  .pb-icon
       56 B    1 rules  .settings-model-row
       54 B    1 rules  .branch-reply-quote-icon
@@ -259,8 +207,6 @@
       49 B    1 rules  .hg-icon
       49 B    1 rules  .pb-watch-item-concern
       48 B    1 rules  .branch-search-count
-      48 B    1 rules  .hljs-bullet
-      47 B    1 rules  .hljs-subst
       46 B    1 rules  .sel-icon
       44 B    1 rules  .vu-handoff-icon
       44 B    1 rules  .vu-private-icon

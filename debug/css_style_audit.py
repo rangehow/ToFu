@@ -36,6 +36,18 @@ COMMENT_RE = re.compile(r'/\*.*?\*/', re.S)
 THEME_ATTR_RE = re.compile(r'\[\s*data-theme\s*=\s*["\']([^"\']+)["\']\s*\]')
 CLASS_RE = re.compile(r'\.(-?[_a-zA-Z]+[_a-zA-Z0-9-]*)')
 
+# Runtime-injected class families — vendor libraries that stamp class names
+# onto DOM nodes they generate at RUNTIME, so the literals never appear in
+# our JS/HTML/Python source yet the rules are very much alive:
+#   hljs-*   highlight.js tokenizer spans (static/vendor/highlight.min.js,
+#            driven by static/js/core/markdown.js) — 53 .hljs rules in
+#            styles.css; deleting them silently breaks code-highlight themes.
+#   katex    KaTeX math markup (static/vendor/katex/) is generated at render
+#            time; styles.css carries .katex / .katex-display overrides.
+# Basis verified 2026-07-24: owner caught .hljs-meta/.hljs-variable in the
+# first dead list as a live false positive.
+LIBRARY_INJECTED_PREFIXES = ('hljs', 'katex')
+
 
 def strip_comments(css: str) -> str:
     return COMMENT_RE.sub('', css)
@@ -262,8 +274,12 @@ def main() -> None:
 
     dead = []
     dyn_skipped = 0
+    lib_skipped = 0
     for cls in sorted(all_classes):
         if cls in corpus:
+            continue
+        if any(cls.startswith(p) for p in LIBRARY_INJECTED_PREFIXES):
+            lib_skipped += 1
             continue
         if any(cls.startswith(p) for p in dyn_prefixes):
             dyn_skipped += 1
@@ -271,6 +287,45 @@ def main() -> None:
         # byte attribution: only rules whose every class is unreferenced
         rule_bytes = sum(b for b, _sel, classes in class_rules[cls])
         dead.append((cls, len(class_rules[cls]), rule_bytes))
+
+    # ── backend markup scan: server-rendered HTML (paper engine, export
+    #    templates, routes) can reference classes that never appear in the
+    #    frontend corpus. One alternation regex over all candidates.
+    #    File enumeration goes through the GIT INDEX (rglob on this FUSE
+    #    mount blows the time budget walking dirs); reads carry a deadline
+    #    and report partial coverage honestly.
+    import subprocess as _sp
+    import time as _time
+    _t0 = _time.time()
+    BACKEND_READ_BUDGET_S = 240
+    if dead:
+        cand_re = re.compile(r'\b(' + '|'.join(re.escape(d[0]) for d in dead) + r')\b')
+        backend_hits = set()
+        try:
+            listing = _sp.run(['git', 'ls-files', 'lib', 'routes'], cwd=ROOT,
+                              capture_output=True, text=True, timeout=60).stdout
+            py_files = [ROOT / f for f in listing.splitlines() if f.endswith('.py')]
+        except Exception:
+            py_files = []
+        n_read = 0
+        deadline_hit = False
+        for p in py_files:
+            if _time.time() - _t0 > BACKEND_READ_BUDGET_S:
+                deadline_hit = True
+                break
+            try:
+                text = p.read_text(encoding='utf-8', errors='ignore')
+            except OSError:
+                continue
+            n_read += 1
+            for m in cand_re.finditer(text):
+                backend_hits.add(m.group(1))
+        if backend_hits:
+            dead = [d for d in dead if d[0] not in backend_hits]
+        coverage = f'{n_read}/{len(py_files)}'
+        print(f'backend corpus: {coverage} .py files in {_time.time() - _t0:.1f}s'
+              f'{" (DEADLINE HIT — partial)" if deadline_hit else ""}, '
+              f'{len(backend_hits)} candidates rescued')
 
     # second pass for precise byte attribution: a rule counts only if ALL its
     # classes are dead
@@ -298,6 +353,7 @@ def main() -> None:
 
     print(f'\n== (b) dead selectors ==')
     print(f'distinct class selectors: {len(all_classes):,}')
+    print(f'library-injected exclusions ({LIBRARY_INJECTED_PREFIXES}): {lib_skipped:,}')
     print(f'dynamic-prefix exclusions (kept alive, conservative): {dyn_skipped:,}')
     print(f'VERIFIED dead classes: {len(dead):,}')
     print(f'dead-rule bytes (rules whose classes are ALL dead): {precise_dead_bytes:,} '

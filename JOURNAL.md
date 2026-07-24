@@ -1,18 +1,18 @@
 # Project Journal
 
 
-### 2026-07-24 — 「一次都没触发」的再发阀门关闭
-# Project Journal
-
-
 ### 2026-07-24(续26) — 「新探测的负面判定到不了用户眼前」根修:probe_surface 出处章(epic `pt_fab00a5fecaa4af4`,commit `7d478ca6`,3 文件 +208/-14,套件 17/17 绿含跨栈 NEUTER,collect **8398** 0 err)。owner 核实并下令:按模态探测(be63588f)的**负面判定被两道前端闸全吞**——只缺这一环。
 - **漏洞(owner 实证):** 后端 cell 只有 status/detail/recommend_disable,**没记录判定出自哪个探测面**。于是:①`_reconcileProbeNonChat` 不分青红皂白把非聊天模型的任何非 ok/skipped cell 降级 skipped——新图像探测在 `/images/generations` 拿到**真实** not_found,ingest 瞬间被改写成「不适用」,用户永远看不到;②`_applyMatrixRecommendations` 对非聊天模型**无条件**拒绝禁用——后端正确打的 recommend_disable=true 永远无法生效。净效果:happy path(ok)能显示,但探测存在的意义(暴露死模型)被吞掉一半。
 - **根修(不绕过):** 每个 cell 盖章 `probe_surface`('chat'|'image'|'transcription'|'embedding',skipped 盖 'none'),随快照自然落盘;前端 reconcile 只降级**无章或 'chat' 章**的 cell(真·陈旧),有真实模态面章的判定原样展示(detail 不改写、summary 不重算);apply 守卫只拒无真实模态判定的 cell——**该模型自身模态面的 not_found 必须允许禁用,这正是新功能的核心价值**。旧快照(无章)按陈旧自愈,语义正确,零迁移。
 - **测试 17 面:** 后端章断言(chat/image/alias/embedding/transcription 各归其章,skipped→'none',legacy→'chat');前端 harness 跑真实 access_matrix.js——fresh 模态 not_found + recommend_disable **ingest 后存活**(status/flag/detail 原样)**且被 apply 执行**(disabled_ids 写入),陈旧无章 cell 照旧自愈+照旧被拒;**跨栈 NEUTER**:副本剥掉章 → 后端产出无章 fresh not_found → **未改动的真实前端** reconcile 把它吞成 skipped——证章是区分力的唯一来源。
 - **生效边界(诚实):** 后端随服务重启生效;前端(access_matrix.js 在 _BUNDLE_FILES)需重启重建 bundle + 浏览器硬刷新。旧探测缓存无需手动清。
 
-### 2026-07-24 — 「一次都没触发」的再发阀门关闭
-:usage 缓存字段 SSOT 静态守卫(commit `dd6c79be`,新套件 5/5 绿含 NEUTER,相邻 cost+floor_retry+stream **119/119**,collect **8397** 0 err)。owner 验收 146a872b 时点名:12 个直读点已清零,但没有任何守卫阻止下一个功能再写一处 `usage.get('cache_read_tokens')` 绕过 normalize_usage —— 同一盲区会静悄悄长回来。
+### 2026-07-24 — pt_750459ac export/gitignore 漂移修复:5 个被强行跟踪的 debug 脚本 `git rm --cached` 出索引(commit `d3856403`,5 文件索引删除 −941,文件全部留在盘上,守卫套件 test_gitignore_covers_export_excludes 3/3 回绿)。
+- **起:** 我在 pt_229606ca 终验环里撞见这张 2 面红并开票;首 dispatch 误判为「owner-only 拍板(A untrack vs B 进 keepers)」block 了,二 dispatch 复核后推翻自己——**A 是唯一符合惯例的客观解,根本无需拍板**:export.py:406 把 debug/ 整体列 opensource 排除(「never imported by the app」),.gitignore:66 已有 `/debug/` 规则,盘上 192 个文件里 187 个本就遵守惯例;5 个离群者全是近期 session 越过规则强行跟踪的内部验收/审计脚本(cache 成本验收读 logs/app.log、CSS 死码清扫扫本仓 styles.css),而 _OPENSOURCE_KEEP_FILES 是给公共构建必需文件(scripts/gen_desktop_icons.py)用的,完全不沾边。
+- **陷阱(共享 HEAD 纪律新条款):** `git rm --cached` 把删除放进索引后,`git commit -- <paths>` 的 partial-commit 语义是「取工作区状态入索引」——盘上文件仍在(被 /debug/ 忽略)→ 报 'no changes added' 退出 1,**不会**把文件重新加回(虚惊但安全)。对**已暂存的忽略路径删除**,正确姿势是先 `git diff --cached --stat` 核索引只有目标变更,再**不带 pathspec** 提交。
+- **教训:** 守卫测试(test_no_tracked_file_is_opensource_excluded)自 2026-07-20 起默默挡着这类漂移,是近两批 session(cache 验收/CSS 清扫)把脚本 `git add` 进索引才翻红;开 debug 脚本请留在盘上别入库。
+
+### 2026-07-24 — 「一次都没触发」的再发阀门关闭:usage 缓存字段 SSOT 静态守卫(commit `dd6c79be`,新套件 5/5 绿含 NEUTER,相邻 cost+floor_retry+stream **119/119**,collect **8397** 0 err)。owner 验收 146a872b 时点名:12 个直读点已清零,但没有任何守卫阻止下一个功能再写一处 `usage.get('cache_read_tokens')` 绕过 normalize_usage —— 同一盲区会静悄悄长回来。
 - **守卫(AST 级,ratchet 制):** 扫描 lib/**/*.py,禁读缓存别名全宇宙(subscript-Load + .get/.pop/.setdefault × canonical 2 + vendor 6 拼写);写入/构造/关键字参数/normalize_usage 路径合法。白名单 3 条带理由(SSOT 自身 / Anthropic 协议翻译器 / paper _meta 读自己的规范化累加器),配卫生测试:条目必须指向真实文件 + 必须仍被需要(ratchet 只缩不胀)。NEUTER:合成违规源码必抓 2 命中。
 - **FloorRetry 两处日志行(read=/write= 打印 None)修直:** OpenAI 形 usage 的 write= 与 Anthropic 形的 read= 都会印 None,已改走 normalize_usage。landing 路径记录:我 staged 的 _stream.py hunk 被 sibling `328ef338`(续25 retry-HUD i18n)飞行中扫入 HEAD,逐字节核验两处俱在、零丢失;sibling 条目已如实披露。
 - **FUSE 大坑(写遍历守卫者必读):** lib/.project_sessions/ 藏每会话 shadow.git(数万对象文件),`os.walk` 下去直接挂死数分钟;守卫 prune `__pycache__` + 全部点目录后 1.5s 跑完。ripgrep 系工具不吃这个亏(尊重 .gitignore),纯 Python 遍历必须自觉 prune。

@@ -1,6 +1,15 @@
 # Project Journal
 
 
+### 2026-07-24 — 「swarm 面板工具行看不出在读/写哪个文件」根修:args_brief 从裸 repr 截断改为按工具名提取关键参数(commit `d4bc5ea3`,6 文件 +288/-6,新测 12/12 绿含手动 NEUTER + 相邻 150 绿)。
+- **owner 定位(直接给根因,照单执行):** swarm 子代理工具行 `lib/swarm/agent.py:959/:967` 用 `str(fn_args)[:200]`、timer toolTrace `lib/scheduler/timer/_poll.py:549` 用 `str(arguments)[:120]`——write_file/apply_diff 的 `content`/`search` 常被模型先发射,`path` 挤不进窗口;read_files 批量显示 `{'reads': [{'path': …` 噪音。重载恢复走 `master._snapshot_tool_timeline` 回放 tool_log 同一 `args_brief`,live 与恢复同根。
+- **修法(后端源头,零前端补丁):** `lib/project_mod/tools.py` 新增 `format_tool_args_brief(fn_name, fn_args, max_len=200)`——project 系复用 `project_tool_display`(新 `_PROJECT_DISPLAY_TOOLS` frozenset 锚定其分支集合防漂移)、web_search→query、fetch_url→url(批量 `N searches/URLs: a; b; …`)、run_command→command、未知工具回落有界截断 repr;原始 JSON 字符串先 coerce(timer 传裸 arguments 安全)。`swarm/agent.py` 的 tool_log 与两处 SSE 合一为**同一次** formatter 调用(消除两处独立格式化未来漂移)。`_poll.py` 同款(max_len=120)。
+- **测试纪律:** failing-first(旧代码 collection-error 红)→ 实现后 12 测绿;接线测试 monkeypatch 证明 tool_log 与 SSE 同源;持久 NEUTER 断言「旧 repr 截断不可能满足新契约」;手动 NEUTER 探针(换回 `str(fn_args)[:200]`)证红复绿。`test_timer_poll_agent_loop` 旧期望裸 JSON 更新为 `'Read 1 file: a'`。相邻 swarm_snapshot_persist 11 / frontend_swarm_recovery 1 / timer_poll_agent_loop 4 / swarm_async+project_tools 134 全绿;`--collect-only` 8006、0 error;ruff clean。
+- **踩坑(自伤、已修):** 两次把 `insert_content` 当 apply_diff 用——content 里重复了 anchor 文本,导致 tools.py 出现重复 `def project_tool_display` + 重复 run_command 尾巴,ruff F811/SyntaxError 当场抓住并修复。教训已存记忆:insert_content 是纯追加,content 不得含 anchor。
+- **协调:** 开工前 `project_message` 与 mryaor7h(工具面板前端优化)互认边界——它只碰前端 JS/CSS,我只碰两个后端文件,无重叠。工作树有 sibling 把 `write_tools.py` 拆成 `write_tools/` 包(untracked WIP),我的 import 经由其包 `__init__` 正常解析,未受影响;提交仅 6 个具名文件,`git show HEAD --stat` 核对无泄漏。
+- **部署说明:** 纯后端 Python 改动,前端零改动、bundle 无需重建;运行中的 server 需重启加载新代码后,swarm 面板新起的子代理任务才会显示格式化标签(旧任务的 tool_log 是历史数据,不回填)。
+
+
 ### 2026-07-24(续) — pt_13862a83(dispatcher `audio_chat` issubset 潜伏面)Part A 审计 + 守卫落地(commit `b32fe6b6`,1 文件 +141,新测 3/3 绿含 NEUTER)。
 - **背景:** 上一批 commit `e0a49243` 拆出 taxonomy SSOT 后,`DISPATCHER_NON_CHAT_CAPS` 里的 `audio_chat` 走 `issubset` 语义——「只有 `{audio_chat}`、无 `text`」的假想 slot 会被静默排除。按 owner「latent 不塞进重构批次」偏好独立开票 pt_13862a83。
 - **Part A 全量审计(4 处 `audio_chat` 载体,逐一核对):**

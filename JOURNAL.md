@@ -1,6 +1,14 @@
 # Project Journal
 
 
+### 2026-07-24(续2) — 死样式第二遍清扫:分支级不可命中判据,323 规则 −32.6KB(commit,死字节 16,374→**0**;owner 验收"这 218 类死字节应压到接近 0"达成)。
+- **owner 复核抓的实质残留(判据升级的根源):** pass-1「规则内类全死才删」对复合选择器过度保守——`.search-round-block.searching` 里 `searching` 是活类整条被保,但它要求**同一元素**同时带两类;`search-round-block` 不在 DOM,分支数学上永不可命中。榜首 `.search-round-block` pass-1 后仍有 18 处引用,103 条「混合保守保留」全是这类。
+- **pass-2 判据(先单测 10/10 再动手):** ①选择器按括号深度 0 切逗号分支(`:not(.a,.b)`、`[d="a,b"]` 内的逗号不切);②分支**正链**(剥掉属性选择器与 `:not(...)` 实参——它们从不要求类)含 ≥1 verified-dead 类即不可命中;无正链类的分支一律视为可能存活;③**所有**分支不可命中才删整条。形态覆盖:复合死+活、`:hover` 后缀、组合子 `.dead > span`、`:not(.dead)`(能匹配绝大多数元素→必须保)、属性值里的类名(不构成要求→必须保)。
+- **范围与验证链:** 全部 218 个 verified-dead 类,删除前 rg 全树复核**零引用**(排除 styles.css/审计脚本/清单自身)。删 323 规则,1,049,506 → 1,016,898 B;两轮累计 1,064,035 → 1,016,898 = **−47,137 B(4.4%)**。审计重跑:死类 218→12、**死规则字节 16,374→0(0.0%)**。残余 22~24 条保留规则是把死 `.sw-a-error/.sw-a-completed` 与活 `.sw-a-done/.sw-a-failed` 放同一逗号列表的(如 `.sw-agent.sw-a-done,.sw-agent.sw-a-completed`)——按判据整条保留,正确。
+- **遗留说明(小尾巴,不动):** 死类榜残留 12 个类、0 字节——它们仍出现在被保留的混合规则里,类本身仍零外部引用;唯一全删它们的路是把逗号列表拆开(改活规则的写法),超出机械清扫范围,留给后续手工评估。
+- **验收口径:** `_build_minified()` 冒烟重建 `styles-6ecb0143.css`(773KB,较清扫前 805KB);wire-parity 2/2、settings parity 13/13、icon-box 8/8(合计 23/23);collect **8127** 0 error。
+- **判据教训(写进 sweep 脚本 docstring):** 「类在源码里零引用 ⇒ 样式规则可删」必须按**分支可命中性**判定,不能按「规则内类全死」——复合选择器里活类救不回一个死类分支。
+
 ### 2026-07-24(续) — 工具面板 wire-parity 永久守卫收编 + 死样式清单硬化后清扫(2 commit:`245ee3fc`→守卫门禁、`<sweep>` 105 死规则 −14.5KB;owner 验收口径:清扫完 + 守卫收编完)。
 - **owner 验收前抓到会咬人的假阳性:** 首版 dead list 里的 `.hljs-meta`/`.hljs-variable` 是 highlight.js 分词器**运行时**打在代码块上的类(vendor/highlight.min.js,由 core/markdown.js 驱动),字面量永不出现在源码,但规则活着——照单删会静默崩代码高亮主题。两条指令:①harness 收编 tests/ 做永久守卫;②清单硬化后再清扫。
 - **守卫收编(commit,4 文件 +403):** `tests/test_frontend_tool_rounds_wire_parity.py` + harness/battery/baseline 三件套。harness 显式 `process.exit(0)`(老 JSDOM harness 不退出导致 60s 超时的预存缺陷不再复现,全程 1.05s)。41 round 电池被 `test_battery_covers_every_branch_helper` 反向锁覆盖(防未来新 helper 无渲染直出)。**NEUTER 实证:** 基线改 1 字符即红,还原复绿。基线重生成方法写在模块 docstring。

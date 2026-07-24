@@ -1,6 +1,15 @@
 # Project Journal
 
 
+
+### 2026-07-24(续15) — pt_6e12b1ffd95a453e 收口:FloorRetry 收敛丢前文根修(base-preserve,`59d31608`)+ 重复 assistant 气泡 msgid 后端半根修(`0318d10d`)+ 两个红基线治好(`e55c3617`)(新测 3 面含 failing-first+NEUTER,55/55 环绿,collect **8260** 0 err)。
+- **epic 协作拓扑(多 sibling 接力同一张票):** mryp5mg2 先落 `4f15f11d`(残留三缝隙)+ `34471811`(attempt-restart 截断)。本会话认领 epic 后审计发现 **owner 票中第二半仍未修**:FloorRetry 收敛是整体覆盖 `task['content']=msg.content`,而主编排器**无逐轮 content 重置**(仅 `_run.py:501` contentPrefix 播种,owner 在票里亲自纠正过这个误解)→ 多轮 turn 中 R3 采纳重发会**丢掉 R1+R2 已交付的 preamble**。
+- **base-preserve 根修(`59d31608`,2 文件 +209):** 收敛改为 `_round_base_content + msg.content`(复用 sibling 在 stream entry 捕获的 round base;thinking 轴同理)。residue 记录保持 FULL 快照不动——终态守卫豁免按全文字节匹配,截 base 会静默破坏契约(有专测钉死)。failing-first:wholesale 时恰第 1 面红(累积文本塌成 16 字);NEUTER:还原 wholesale 恰该面红,sibling residue 8 面不受影响(base='' 时两语义等价)。
+- **msgid 发散 UUID 根修后端半(`0318d10d`,1 文件 +7/-4):** `_sync.py` 两处 assistant 槽创建点(terminal `_sync_result_to_conversation` + partial `_sync_partial_to_conversation`)原从裸 dict + `_assign_message_ids` 盖**新服务端 UUID**,无视 client 发的 `_assistantMsgId` → 前端 live 气泡(按 tmp_ id 键控)重连/rescue-PUT 合并时永不匹配已提交行 → 二次 append(793/3728 活体会话可见重复气泡)。改用**已入库**的 `_new_assistant_slot(task)`(采纳语义存在已久,两个调用点一直没接线)。sibling failing-first 套件 `test_assistant_msgid_unification.py` 6/6 转绿,但**刻意未入库**:其前端层依赖第三方 sibling 的 conversations.js 未提交 WIP(_rebaseUnackedTail dedup,~116 行),入库即给干净 HEAD 留 2 面红(pt_39b79cc4 十一次空转的教训)。已转 mryoxmil 确认 WIP 归属,落地时套件随行。
+- **红基线×2(`e55c3617`):** ①`test_interrupted_turn_metadata`:假 DB 行缺第三列 rev(Phase-4 CAS `ec6a2865` 后陈旧),`row[2]` IndexError 被 CAS 三次重试的 debug 吞掉 → 永远不落盘,P1a 两面在空捕获上断言失败(生产代码一直是对的);②收编孤儿 `test_stream_first_checkpoint` 绑定修复(作者不明,mtime 16:21):改绑 manager 包门面,对齐生产 `stream_llm_response` 的运行时门面解析。两者均先在干净 HEAD 复现红再验证转绿。
+- **机械清扫零产出(诚实记录):** bundler allowlist 审计 diff 全部是 `_DEFERRED_FILES` 刻意延迟加载(image-gen/paper/orchestration/project-brain/task-mode 均有逐文件 deferred 注释),非 bug;lib 内 `print(` 全部位于 `pg_admin.py` CLI 管理员工具,非 §2.1 诊断日志违规。spawn_agents 本会话工具表不可用,未 fan-out 新一轮语义深扫。
+- **shared-HEAD 纪律:** 3 个精确 commit(具名 add + `--cached --stat` 复核 + `show HEAD --stat` 逐字节相等);msgid 修复前先 stash 到干净 HEAD 复现失败,证明红非 sibling 修复污染;_sync/_stream 操作全程 `/tmp` 备份 + md5 校验还原。sibling WIP 零触碰。
+
 ### 2026-07-24(续13)
 ### 2026-07-24(续14) — 「mrxij7q34xm070 为何戛然而止」根修:FloorRetry 首发残留三缝隙根修(2 commit:`4f15f11d` 残留根修 + `34471811` transport-retry 每轮截断,新测 14/14 绿含三重 NEUTER 矩阵,collect 8249 0 err) + 线上数据修复(备份 /tmp/mrxij7q34xm070_messages_backup.json)。认领并闭环 board epic `pt_6e12b1ffd95a453e`。
 - **现象(用户截图):** 气泡正文在「**一句话总结**:别去搞跨公」半句处截断,下方却挂着完整 finish 标签(✓ ¥7.78 / 850.2k→13.1k [7轮] / 5e6e7502)——看起来像生成突然中断,**实际完整跑完了**:R7 真实终稿 3751+442 字(finish=stop,结尾「…要我动手吗?」)完整躺在 task_results。

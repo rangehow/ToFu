@@ -1398,6 +1398,31 @@
 }
 .stg-mxe-ovrow input:disabled { opacity: 0.4; background: var(--s-cream); }
 .stg-cap-btn.stg-mxe-cap.locked { opacity: 0.35; cursor: not-allowed; }
+/* ── Cascade repair (2026-07-24): the settings shell is `.modal.settings-panel`
+   (index.html:942), so two legacy generic-modal rules in styles.css reach
+   this editor and out-specify its single-class rules:
+     .modal label{display:block;…margin-bottom:6px}        (styles.css:2959)
+     .modal input,.modal select{width:100%;padding:10px 12px;
+        margin-bottom:16px;…}                               (styles.css:2959)
+   Effect: `.stg-mxe-chk` loses inline-flex, and the checkbox input stretches
+   to width:100% of the label — Blink paints the ~13px checkbox square
+   centered in that full-width box while the label text wraps to the next
+   line, so each checkbox appears ABOVE its own label with a tall empty gap;
+   the RPM number input also picks up margin-bottom:16px and inflates its
+   row. Re-assert the editor layout at higher specificity (settings.css also
+   wins ties by load order). Guard: tests/test_frontend_matrix_editor_cascade.py */
+.settings-panel .stg-mx-editor .stg-mxe-chk {
+  display: inline-flex;
+  margin-bottom: 0;
+  font-size: 11px; font-weight: 700; color: var(--s-ink);
+  text-transform: none; letter-spacing: normal;
+}
+.settings-panel .stg-mx-editor .stg-mxe-chk input[type="checkbox"] {
+  width: auto; padding: 0; margin: 0;
+}
+.settings-panel .stg-mx-editor .stg-mxe-ovrow input[type="number"] {
+  margin-bottom: 0;
+}
 @media (max-width: 640px) {
   .stg-mx-keyhead, .stg-mx-cell { min-width: 76px; }
   .stg-mxe-chk { min-width: 100%; }

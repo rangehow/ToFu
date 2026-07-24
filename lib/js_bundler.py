@@ -372,7 +372,7 @@ _BUNDLE_FILES = [
     # generateId, _ensureMsgId, scrollToBottom, ...) BEFORE these load,
     # so each extracted file can reference them at module-load time.
     # Symbols share window scope; no exports/imports needed.
-    # See `.tofu/skills/frontend-core-decomposition.md` for rationale.
+    # See `.tofu/memories/frontend-core-decomposition.md` for rationale.
     'core/folders.js',
     'core/cost.js',
     'core/debug_panel.js',
@@ -458,7 +458,7 @@ _BUNDLE_FILES = [
     # The 11 files below were extracted from ui.js (8917 LOC). Concatenated
     # in load order — symbols share window scope so no exports needed.
     # IMPORTANT: this list MUST stay in dependency order.
-    # See `.tofu/skills/ui-decomposition.md` for the rationale.
+    # See `.tofu/memories/ui-decomposition.md` for the rationale.
     # Shared image fullscreen/download helpers (_openImageFullscreen /
     # _downloadGenImage). CORE because chat_render.js + tool_rounds.js call
     # them via inline onclick= on image thumbnails; image-gen.js (their old
@@ -574,7 +574,7 @@ _BUNDLE_FILES = [
     # ── settings/ subpackage (split 2026-05-28 from monolithic settings.js) ──
     # The 15 files below were extracted from settings.js (4755 LOC).
     # Concatenated in load order; symbols share window scope.
-    # See `.tofu/skills/frontend-settings-decomposition.md`.
+    # See `.tofu/memories/frontend-settings-decomposition.md`.
     'settings/branding.js',
     'settings/provider_templates.js',
     'settings/auto_setup.js',
@@ -600,7 +600,7 @@ _BUNDLE_FILES = [
     # ── main/ subpackage (split 2026-05-28 from monolithic main.js) ──
     # The 8 files below were extracted from main.js. They must come BEFORE
     # main.js so the boot IIFE in main.js can reference their symbols.
-    # See `.tofu/skills/frontend-main-decomposition.md` for the rationale.
+    # See `.tofu/memories/frontend-main-decomposition.md` for the rationale.
     'main/main_conv_lifecycle.js',
     'main/main_translating_bubble.js',
     'main/main_send_pipeline.js',

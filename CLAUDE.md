@@ -127,7 +127,7 @@ lib/                   — Core business logic
     model_config.py, attachments.py — Per-model config, attachment handling (single files)
     approval.py, human_guidance.py, stdin_handler.py — Write-approval,
                          ask_user, blocking stdin requests (single files)
-    handlers/          — Per-tool execution handlers (misc, project, search, browser, mcp, memory, code_exec, _adapter)
+    handlers/          — Per-tool execution handlers (misc, project, search, browser, mcp, memory, skills, code_exec, _adapter)
   project_mod/         — Project file tools (list/read/write/grep/run)
     tools.py           — Tool dispatch facade: execute_tool registry
                          (_EXEC_HANDLERS name→handler) + re-exports
@@ -148,7 +148,27 @@ lib/                   — Core business logic
   # content filter). They are NO LONGER in-tree; chatui seams via
   # lib/search_bridge.py + lib/tools/search.py / lib/tools/browser.py. See §11.
   mcp/                 — Model Context Protocol client, registry, config
-  memory/              — Memory / stored-notes layer (storage, relevance, injection, tools)
+  memory/              — Memory / stored-notes layer (storage, relevance, injection, tools).
+                         MODEL-authored experience notes: flat *.md files at
+                         <project>/.tofu/memories/ + <data>/memories/global/,
+                         discovered by BM25 prefetch + search_memories.
+  skills/              — USER-installed skill packages (Anthropic AgentSkills
+                         format) — a DIFFERENT NOUN from memory/ (decoupled
+                         2026-07, epic pt_229606ca): registry (enumerate /
+                         uninstall), injection (the always-visible
+                         <available_skills> index, spliced as its own cache
+                         block by system_context/_inject.py), activate
+                         (activate_skill progressive-disclosure loader —
+                         returns the SKILL.md guide + bundled-file manifest),
+                         installer (zip → validated package), catalog
+                         (curated store). Packages live at
+                         <project>/.tofu/skills/<id>/ + <data>/skills/global/<id>/.
+                         The model channel is READ-ONLY (one tool:
+                         activate_skill); install/uninstall/toggle are
+                         user-only (Settings → Skills / routes/api_v1/skills.py);
+                         memory CRUD refuses packages (_guard_not_package) and
+                         packages are excluded from the memory corpus
+                         (get_eligible_memories include_packages=False).
   conversations/       — Conversation persistence + the Project Brain (cross-conversation
                          coordination): charter, board/epics, activity feed, peer messaging
                          (project_peer.py), path leases, status lane, reconcile. See
@@ -197,7 +217,7 @@ routes/                — Quart Blueprints. Top-level: chat (+ chat_queue / cha
   api_v1/              — Headless `/api/v1/*` surface (the canonical API — see §15):
                          agents, agent_run, auth, billing, capabilities, chat,
                          conversations, daily_report, folders, keys, logs, mcp, memory,
-                         oauth, optimizer, orchestrations, paper, project, providers,
+                         skills, oauth, optimizer, orchestrations, paper, project, providers,
                          scheduler, swarm, tasks, translate, update, users, webhooks, …
   __init__.py          — ALL_BLUEPRINTS + register_all(); plugin blueprints mount via
                          routes/plugin_registry.py (entry-point groups — see §4.1)
@@ -380,7 +400,7 @@ This is the single seam between frontend and backend. It exists so:
 - migrating an endpoint from legacy → `/api/v1` touches one file;
 - cross-cutting concerns (timeout, error shape, auth) live in one place;
 - the frontend stays a thin renderer, never re-implementing backend logic
-  (see `.tofu/skills/separation-of-concerns-directive.md`).
+  (see `.tofu/memories/separation-of-concerns-directive.md`).
 
 The rule is enforced by `tests/test_frontend_api_isolation.py`, which
 maintains a per-file ratchet (`BASELINE`) of remaining legacy calls.
@@ -529,7 +549,7 @@ _LOCAL_IDC = os.environ.get('CROSS_DC_LOCAL_IDC', '')
 > declared in `lib/agent_artifacts.py`. Never invent a bare/un-prefixed name.**
 
 As the assistant works it deposits runtime state in the user's project:
-`.tofu/` (file-history backups + memories), `.tofu_trash/` (recoverable
+`.tofu/` (file-history backups + memories + skills), `.tofu_trash/` (recoverable
 deletes), `.tofu_sandbox/` (restricted-run shims), `.tofu_env.json` (env
 marker). Many independent mechanisms must recognise these as "agent junk, not
 source": `.gitignore` generation (`lib/project_mod/indexer.py`), the export
@@ -885,9 +905,9 @@ Before submitting any code change, verify:
 | Debug endpoint (Planner/Worker/Critic) | `lib/tasks_pkg/endpoint/`, `endpoint_prompts/`, `endpoint_review.py` |
 | Change project file tools | `lib/project_mod/tools.py`, `lib/project_mod/read_tools.py`, `lib/project_mod/write_tools.py` |
 | Read local files (images/PDF/Office) | `lib/file_reader/` (core) → `lib/project_mod/read_tools.py` (`_read_absolute_file`) |
-| Manage memory / stored notes (legacy "skills") | `lib/memory/storage.py`, `lib/memory/tools.py`, `routes/memory.py`, on-disk `<project>/.tofu/skills/` (project scope); global memories moved to the server store `<data>/memories/global/` (2026-06) |
-| Install Anthropic / OpenClaw / AgentSkills `.zip` packages (drag-and-drop) | `lib/memory/installer.py` → `POST /api/v1/memory/install` (multipart). Packages live as `<.tofu/skills>/<name>/SKILL.md` + references/ + scripts/. Treated identically to flat `.md` memories by BM25 / search_memories — frontend marks them with a `SKILL` badge. `install.sh` is **never auto-executed**; surfaced as `install_hints`. |
-| Skills store / curated catalog / file browser | `lib/memory/catalog.py` (curated `SkillCatalogEntry` list), `routes/api_v1/memory.py` (`/api/v1/memory/catalog`, `/api/v1/memory/catalog/install`, `/api/v1/memory/<id>/files`), `static/js/skills.js`, Settings → **Skills** tab. App-Store layout mirrors the MCP tab: search + scope tabs (Catalog / Installed) + category pills + grid + drag-drop zone. Catalog one-click installs download a `.zip` over HTTPS (capped at 50 MB) and feed it to `install_skill_package`. |
+| Manage memory / stored notes | `lib/memory/storage/`, `lib/memory/tools.py`, `routes/api_v1/memory.py`, on-disk `<project>/.tofu/memories/` (project scope); global memories live in the server store `<data>/memories/global/` |
+| Install Anthropic / OpenClaw / AgentSkills `.zip` packages (drag-and-drop) | `lib/skills/installer.py` → `POST /api/v1/skills/install` (multipart). Packages live as `<project>/.tofu/skills/<name>/SKILL.md` + references/ + scripts/. They are a DIFFERENT NOUN from memories: advertised via the always-visible `<available_skills>` index and loaded on demand with `activate_skill` (progressive disclosure) — NOT mixed into the BM25 / search_memories memory corpus. `install.sh` is **never auto-executed**; surfaced as `install_hints`. |
+| Skills store / curated catalog / file browser | `lib/skills/catalog.py` (curated `SkillCatalogEntry` list), `routes/api_v1/skills.py` (`/api/v1/skills/catalog`, `/api/v1/skills/catalog/install`, `/api/v1/skills/<id>/files`), `static/js/skills.js`, Settings → **Skills** tab. App-Store layout mirrors the MCP tab: search + scope tabs (Catalog / Installed) + category pills + grid + drag-drop zone. Catalog one-click installs download a `.zip` over HTTPS (capped at 50 MB) and feed it to `install_skill_package`. |
 | Modify trading features | External `tofu-trading` package (extracted 2026-06) — mounts via `tofu.blueprints` entry point; not in this repo |
 | Reusable agent base (run loop, dispatch, TaskRuntime, push, profiles) | `lib/agent_core/` (facade `__init__.py`; `task_runtime.py`, `push.py`, `events.py`, `profiles.py`) |
 | Per-user billing / wallet / cost ledger | `lib/billing/` (wallet, ledger, pricing, users, payments/), `routes/api_v1/billing.py` |
@@ -1014,7 +1034,8 @@ conversation itself — that's always the DB query above.
   `data/config/` within the project directory — NOT in `~/.chatui/` (legacy global). This means
   multiple copies on the same machine have fully independent configs, databases, and API keys.
   Config files: `data/config/server_config.json`, `data/config/features.json`, `data/config/daily_reports/`.
-  Project-scoped memory / skill notes are stored under `<project>/.tofu/skills/`;
+  Project-scoped memories are stored under `<project>/.tofu/memories/` and project skill
+  packages under `<project>/.tofu/skills/<id>/` (split 2026-07);
   global memories moved (2026-06) to the server-side store `<data>/memories/global/`
   so they are shared across projects and reachable in a project-less chat (the legacy
   `<project>/.tofu/skills/global/` dir is still read and migrated once, idempotently).

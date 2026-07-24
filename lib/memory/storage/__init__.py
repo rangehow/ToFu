@@ -4,7 +4,14 @@ Memories are plain Markdown files stored in:
   • Global:  <data>/memories/global/*.md  — server-side store, shared across
              ALL projects and reachable even with no project attached.
              ``<data>`` is ``$TOFU_DATA_DIR`` when set, else ``<root>/data``.
-  • Project: <project>/.tofu/skills/*.md   — travels with the project tree.
+  • Project: <project>/.tofu/memories/*.md — travels with the project
+             tree (pre-split flat files at ``.tofu/skills/*.md`` are moved
+             here by an idempotent migration on first read).
+
+SKILL PACKAGES (``<dir>/<id>/SKILL.md``) are a different noun: they live at
+``<project>/.tofu/skills/<id>/`` + ``<data>/skills/global/<id>/`` and are
+enumerated by ``lib/skills/registry`` — this module only hosts their shared
+file/frontmatter helpers.
 
 The global store moved out of ``<project>/.tofu/skills/global/`` (2026-06):
 rooting a "global" memory under one project meant it was invisible from every

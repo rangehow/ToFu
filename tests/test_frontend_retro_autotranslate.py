@@ -7,7 +7,7 @@ WHY
 ---
 The per-conversation ``autoTranslate`` flag is FROZEN at send-time so a mid-task
 toggle can't change an in-flight run (the cross-talk fix — see
-``.tofu/skills/finishstream-global-autotranslate-bug.md``). But that freeze used
+``.tofu/memories/finishstream-global-autotranslate-bug.md``). But that freeze used
 to ALSO veto the on-open retro-translate forever: a conversation started while
 the toggle was OFF could never be auto-translated even after the user turned the
 global toggle ON, so an already-generated reply sat there demanding a manual

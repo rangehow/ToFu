@@ -120,7 +120,7 @@ def build_memory_context(project_path=None, extra_paths=None):
     #   precise N has marginal value to the model (it has the search_memories
     #   tool + the per-turn <relevant_memories> prefetch block), so we keep the
     #   wording byte-stable across memory-CRUD turns. See
-    #   .tofu/skills/prefix-mutation-cache-miss-truncate-old-tool-results.md.
+    #   .tofu/memories/prefix-mutation-cache-miss-truncate-old-tool-results.md.
     return (
         'You have accumulated memories available. '
         'A `<relevant_memories>` block is auto-injected when prefetch finds matches; '

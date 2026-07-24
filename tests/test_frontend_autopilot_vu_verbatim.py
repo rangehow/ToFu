@@ -4,7 +4,7 @@ frontend-reconstructed value that falls back to the local stream buffer.
 
 WHY
 ---
-Directive (2026-07-02, see .tofu/skills/separation-of-concerns-directive.md):
+Directive (2026-07-02, see .tofu/memories/separation-of-concerns-directive.md):
 a chat-inner bubble that has SETTLED must render from a single backend record,
 verbatim. The prior `autopilot_vu_done` code reconstructed the settled message:
 

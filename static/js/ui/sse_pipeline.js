@@ -1754,31 +1754,49 @@ function dispatchSSEEvent(line, ctx) {
          cache intact — surface the "apply on next conversation" banner. */
       if (typeof onToolsetDiverged === 'function') onToolsetDiverged(!!ev.toolsetDiverged, convId, ev.toolsetDiff);
       /* The turn-ctx capsule on the triggering user turn was captured from
-         the LIVE toolbar at send time, but the latch held back this diff so
-         the turn actually ran with the FROZEN tool set. Correct that turn's
-         _ctx note in place (added=held-back-on → drop; removed=held-back-off
-         → restore) so the gutter capsule reflects what truly ran, then
-         persist + re-render. See info-rail.js::reconcileTurnCtxCapsule. */
-      if (ev.toolsetDiverged && ev.toolsetDiff
-          && typeof reconcileTurnCtxCapsule === 'function') {
-        try {
-          const _rc = conversations.find((c) => c.id === convId);
-          if (_rc && Array.isArray(_rc.messages)) {
-            let _uIdx = -1;
-            for (let i = _rc.messages.length - 1; i >= 0; i--) {
-              if (_rc.messages[i] && _rc.messages[i].role === 'user') { _uIdx = i; break; }
-            }
-            const _uMsg = _uIdx >= 0 ? _rc.messages[_uIdx] : null;
-            if (_uMsg && _uMsg._ctx && reconcileTurnCtxCapsule(_uMsg._ctx, ev.toolsetDiff)) {
-              if (typeof saveConversations === 'function') saveConversations(convId);
-              if (activeConvId === convId && window.ConvView
-                  && typeof window.ConvView.upsertMessage === 'function') {
-                window.ConvView.upsertMessage(convId, _uMsg, { idx: _uIdx });
+         the LIVE toolbar at send time. Two independent drifts settle here:
+           1. The tool-schema latch held ON/OFF toggles back to keep prompt
+              cache — corrected via `toolsetDiff = {added, removed}`.
+           2. The user may have switched preset / toggled a mode in the
+              pause between send and stream-start — corrected via the
+              server-authoritative fact card
+              `actualModel / actualDepth / actualModes` on the done frame.
+         Both are handled by info-rail.js::reconcileTurnCtxCapsule. */
+      if (typeof reconcileTurnCtxCapsule === 'function') {
+        const _hasDiff = ev.toolsetDiverged && ev.toolsetDiff
+          && ((ev.toolsetDiff.added && ev.toolsetDiff.added.length)
+              || (ev.toolsetDiff.removed && ev.toolsetDiff.removed.length));
+        const _hasFact = (typeof ev.actualModel === 'string' && ev.actualModel)
+          || Object.prototype.hasOwnProperty.call(ev, 'actualDepth')
+          || Array.isArray(ev.actualModes);
+        if (_hasDiff || _hasFact) {
+          try {
+            const _rc = conversations.find((c) => c.id === convId);
+            if (_rc && Array.isArray(_rc.messages)) {
+              let _uIdx = -1;
+              for (let i = _rc.messages.length - 1; i >= 0; i--) {
+                if (_rc.messages[i] && _rc.messages[i].role === 'user') { _uIdx = i; break; }
+              }
+              const _uMsg = _uIdx >= 0 ? _rc.messages[_uIdx] : null;
+              if (_uMsg && _uMsg._ctx) {
+                const _fact = {
+                  toolsetDiff: _hasDiff ? ev.toolsetDiff : undefined,
+                  actualModel: ev.actualModel,
+                  actualDepth: ev.actualDepth,
+                  actualModes: ev.actualModes,
+                };
+                if (reconcileTurnCtxCapsule(_uMsg._ctx, _fact)) {
+                  if (typeof saveConversations === 'function') saveConversations(convId);
+                  if (activeConvId === convId && window.ConvView
+                      && typeof window.ConvView.upsertMessage === 'function') {
+                    window.ConvView.upsertMessage(convId, _uMsg, { idx: _uIdx });
+                  }
+                }
               }
             }
+          } catch (e) {
+            console.debug('[turnCtx] reconcile against done fact failed:', e);
           }
-        } catch (e) {
-          console.debug('[turnCtx] reconcile against toolsetDiff failed:', e);
         }
       }
       /* ★ Continue: merge modifiedFiles & modifiedFileList with existing */

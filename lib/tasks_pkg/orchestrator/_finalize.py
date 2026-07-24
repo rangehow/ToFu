@@ -929,6 +929,39 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
         _ts_diff = cfg.get('_toolsetDiff')
         if _ts_diff and (_ts_diff.get('added') or _ts_diff.get('removed')):
             done_evt['toolsetDiff'] = _ts_diff
+    # ── Turn-ctx capsule fact-card contract ────────────────────────────
+    # The per-turn note in the message gutter (static/js/info-rail.js) is
+    # captured from the LIVE toolbar at send time — model / depth / modes
+    # are a client-side SNAPSHOT that goes stale the moment the user
+    # switches a preset in the pause between send and stream-start (or
+    # when the dispatcher falls back to a different provider). Ship the
+    # server-authoritative FACT for this turn so the frontend can
+    # overwrite the capsule at done time and stop misleading the user.
+    #
+    # `actualModel` = the model the answer actually came from — the
+    # mid-turn fallback wins over the initial pick, mirroring the
+    # existing `fallbackModel` semantics one level up.
+    # `actualDepth` = the thinking depth actually applied.
+    # `actualModes` = the run-mode set that was live server-side
+    # (autopilot / endpoint / swarm / flow name), same shape the info-rail
+    # capsule renders ({label, tone:'mode'}). The frontend reconcile
+    # OVERWRITES `snap.model` / `snap.depth` / `snap.modes` from these
+    # — see info-rail.js::reconcileTurnCtxCapsule.
+    done_evt['actualModel'] = task.get('_fallback_model') or model
+    if thinking_depth:
+        done_evt['actualDepth'] = thinking_depth
+    _actual_modes: list[dict[str, str]] = []
+    _flow = cfg.get('activeFlow') if isinstance(cfg.get('activeFlow'), str) else ''
+    if _flow:
+        _actual_modes.append({'label': _flow, 'tone': 'mode'})
+    else:
+        if cfg.get('endpointMode'):
+            _actual_modes.append({'label': 'Endpoint', 'tone': 'mode'})
+        if cfg.get('autopilot'):
+            _actual_modes.append({'label': 'Autopilot', 'tone': 'mode'})
+    if cfg.get('swarmEnabled'):
+        _actual_modes.append({'label': 'Swarm', 'tone': 'mode'})
+    done_evt['actualModes'] = _actual_modes
     if api_rounds:
         done_evt['apiRounds'] = api_rounds
         task['apiRounds'] = api_rounds

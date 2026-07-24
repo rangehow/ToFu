@@ -1,35 +1,36 @@
 /* ═══════════════════════════════════════════════════════════════════
-   info-rail.js — Per-turn context note
+   info-rail.js — Per-turn context note (a fact card, not a UI snapshot)
 
-   Each USER turn carries a small, frozen-in-time note (rendered on the
-   right side of the turn, inside the chat column) describing the context
-   that was active AT THE MOMENT THE TURN WAS SENT:
+   Each USER turn carries a small note in the right gutter describing what
+   the turn ACTUALLY ran with. Two-phase lifecycle:
 
-     • Workspace — which project folder(s) were wired to the conversation.
-     • Tools — which capabilities were switched on for that turn.
-     • Model — the model + thinking depth the turn used.
+     • SEND (client) — `buildTurnCtxSnapshot()` captures the LIVE toolbar
+       state (workspace roots, tools, modes, model, depth) and freezes it
+       onto `userMsg._ctx`. This is a best-effort SNAPSHOT and may drift
+       from truth for up to a few seconds — the user can pause in the
+       composer and switch preset / toggle a mode between send and the
+       stream actually starting.
+     • DONE (server-authoritative) — the DONE SSE frame ships the FACT
+       card (`actualModel` / `actualDepth` / `actualModes` +
+       `toolsetDiff`). `reconcileTurnCtxCapsule()` OVERWRITES the snapshot
+       fields with those facts, so the note settles as the truth: which
+       model actually answered (after any dispatcher fallback), which
+       thinking depth actually applied, which run-mode set was live
+       server-side, and which tools actually ran (after the schema latch
+       held / restored toggles).
 
-   WHY this replaced the old live-mirroring right-gutter rail: the previous
-   rail re-rendered the CURRENT input-box/toolbar state in real time, so it
-   told you nothing about any past turn and it overlapped the turn-nav in
-   the gutter. The information is far more useful frozen per-turn: scrolling
-   back through a conversation you can see exactly which model / tools /
-   project each turn ran with.
+   Between SEND and DONE the note may briefly display the send-time
+   snapshot — that is the honest "fact-not-yet-in" state, not a bug.
 
-   ── How it works ──
-   1. `buildTurnCtxSnapshot()` reads the same in-memory state the old rail
-      read (projectState, toolbar globals, config) and returns a plain,
-      serializable snapshot. The send pipeline calls this when the user
-      message is created and stores it on `userMsg._ctx` (and in the send
-      payload, so the backend persists it → survives reload).
-   2. `renderTurnCtxNote(snapshot)` turns that snapshot into the note HTML.
-      `renderMessage()` (static/js/ui/chat_render.js) calls it for user
-      turns and splices the result under the message body.
-
-   Both are pure functions over existing state — no DOM ownership, no
-   fetches, no timers. Public API:
-     window.buildTurnCtxSnapshot()      — capture current context (or null).
-     window.renderTurnCtxNote(snapshot) — snapshot → note HTML string.
+   ── Public API ──
+     window.buildTurnCtxSnapshot()               — capture current context (or null).
+     window.renderTurnCtxNote(snapshot)          — snapshot → note HTML.
+     window.reconcileTurnCtxCapsule(snap, fact)  — overwrite snap in place
+        with facts from the done event; `fact` fields are ALL optional:
+          { added?, removed?, toolsetDiff?, actualModel?, actualDepth?,
+            actualModes? } — mixes tool/schema-latch reconciliation with
+          the model/depth/mode fact card. Returns true when anything
+          changed. Called from sse_pipeline.js on every done frame.
    ═══════════════════════════════════════════════════════════════════ */
 (function () {
   'use strict';
@@ -113,7 +114,9 @@
     if (typeof desktopEnabled !== 'undefined' && desktopEnabled) out.push({ label: 'Desktop', tone: 'net' });
     if (typeof codeExecEnabled !== 'undefined' && codeExecEnabled) out.push({ label: 'Code Exec', tone: 'code' });
     if (typeof memoryEnabled !== 'undefined' && memoryEnabled) out.push({ label: 'Memory', tone: 'ai' });
-    if (typeof schedulerEnabled !== 'undefined' && schedulerEnabled) out.push({ label: 'Scheduler', tone: 'ai' });
+    // Scheduler is a default tool (always on, no toggle) — like read_files /
+    // todo it is intentionally NOT shown as a per-turn chip (would be constant
+    // noise). The reconcile rule below still maps its fn names defensively.
     if (typeof imageGenEnabled !== 'undefined' && imageGenEnabled) out.push({ label: 'Image Gen', tone: 'ai' });
     if (typeof humanGuidanceEnabled !== 'undefined' && humanGuidanceEnabled) out.push({ label: 'Ask User', tone: 'ai' });
     if (typeof autoTranslate !== 'undefined' && autoTranslate) out.push({ label: 'Translate', tone: 'ai' });
@@ -334,18 +337,43 @@
     return { label: fnName, tone: 'mode', kind: 'tool' };
   }
 
+  /* Fact-card fields on the done frame the reconcile MAY overwrite. Kept as
+   * a named list so a test / audit can enumerate what "settles" at done. */
+  const _CTX_FACT_FIELDS = ['actualModel', 'actualDepth', 'actualModes'];
+
   /**
-   * Correct `snap` to the tools that actually ran, given a latch diff.
-   * Mutates `snap.tools` / `snap.modes` in place. Returns true if changed.
+   * Reconcile a captured/persisted turn-ctx snapshot against the done
+   * frame's authoritative fact card. Mutates `snap` in place; returns true
+   * when anything changed. Two independent reconciliations happen here:
+   *
+   *   1. TOOL-SCHEMA LATCH DIFF — `fact.added` / `fact.removed` (or a
+   *      nested `fact.toolsetDiff`) in tool FUNCTION-name space:
+   *        • added   = toggled ON  but held back → did NOT run → drop
+   *        • removed = toggled OFF but held back → still ran   → restore
+   *      Maps function names to feature-label chips via `_CTX_FAMILY_RULES`;
+   *      unknown names surface the raw name rather than get lost.
+   *
+   *   2. FACT-CARD OVERWRITE — `fact.actualModel` / `fact.actualDepth` /
+   *      `fact.actualModes` are the server-authoritative record of what
+   *      the turn actually ran with. When present they OVERWRITE
+   *      `snap.model` / `snap.depth` / `snap.modes` verbatim so the note
+   *      settles as the truth after a dispatcher fallback or a preset
+   *      switched in the pause between send and stream-start. See the
+   *      file-header contract at the top for the send-vs-done lifecycle.
    *
    * @param {object} snap — a captured/persisted turn-ctx snapshot (msg._ctx).
-   * @param {object} diff — {added:[fnName...], removed:[fnName...]}.
+   * @param {object} fact — done-event projection; ALL fields optional:
+   *   { added?, removed?, toolsetDiff?, actualModel?, actualDepth?, actualModes? }
    */
-  function reconcileTurnCtxCapsule(snap, diff) {
-    if (!snap || typeof snap !== 'object' || !diff || typeof diff !== 'object') return false;
-    const added = Array.isArray(diff.added) ? diff.added : [];
-    const removed = Array.isArray(diff.removed) ? diff.removed : [];
-    if (!added.length && !removed.length) return false;
+  function reconcileTurnCtxCapsule(snap, fact) {
+    if (!snap || typeof snap !== 'object' || !fact || typeof fact !== 'object') return false;
+    // Accept the diff either flattened onto `fact` OR nested under
+    // `fact.toolsetDiff` (call site convenience — sse_pipeline used to pass
+    // the diff object bare).
+    const diffSrc = (fact.toolsetDiff && typeof fact.toolsetDiff === 'object')
+      ? fact.toolsetDiff : fact;
+    const added = Array.isArray(diffSrc.added) ? diffSrc.added : [];
+    const removed = Array.isArray(diffSrc.removed) ? diffSrc.removed : [];
 
     // Family descriptors, deduped by label (a family spans several fn names).
     const addedFams = new Map();
@@ -389,8 +417,39 @@
       snap.tools = tools;
       snap.modes = modes;
     }
+
+    // ── Fact-card overwrite (independent of the latch diff) ──
+    if (typeof fact.actualModel === 'string' && fact.actualModel
+        && snap.model !== fact.actualModel) {
+      snap.model = fact.actualModel;
+      changed = true;
+    }
+    if (Object.prototype.hasOwnProperty.call(fact, 'actualDepth')) {
+      const _newDepth = typeof fact.actualDepth === 'string' ? fact.actualDepth : '';
+      if ((snap.depth || '') !== _newDepth) {
+        snap.depth = _newDepth;
+        changed = true;
+      }
+    }
+    if (Array.isArray(fact.actualModes)) {
+      // Full replacement so a mode that was live at send-time but not
+      // actually on the run (or vice versa) reflects truth. Preserve the
+      // {label, tone:'mode'} shape the renderer expects.
+      const _newModes = fact.actualModes
+        .filter((m) => m && typeof m.label === 'string' && m.label)
+        .map((m) => ({ label: m.label, tone: 'mode' }));
+      const _sameLen = _newModes.length === modes.length;
+      const _sameLabels = _sameLen && _newModes.every(
+        (m, i) => modes[i] && modes[i].label === m.label);
+      if (!_sameLabels) {
+        snap.modes = _newModes;
+        changed = true;
+      }
+    }
+
     return changed;
   }
+  reconcileTurnCtxCapsule._FACT_FIELDS = _CTX_FACT_FIELDS;
 
   window.buildTurnCtxSnapshot = buildTurnCtxSnapshot;
   window.renderTurnCtxNote = renderTurnCtxNote;

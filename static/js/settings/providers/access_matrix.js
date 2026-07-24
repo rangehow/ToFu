@@ -170,7 +170,10 @@ function _renderAccessMatrix(provIdx) {
     statusTxt = t('settings.matrixProbeFailed') + (probe.error ? ': ' + probe.error : '');
   } else if (hasResults) {
     statusTxt = (probe.summary.ok || 0) + ' ' + t('settings.matrixOkCount') +
-      ' · ' + recommendCount + ' ' + t('settings.matrixFlaggedCount');
+      ' · ' + recommendCount + ' ' + t('settings.matrixFlaggedCount') +
+      ((probe.summary.skipped || 0) > 0
+        ? ' · ' + probe.summary.skipped + ' ' + t('settings.matrixSkippedCount')
+        : '');
   }
 
   var html = '<div class="stg-matrix" data-prov-idx="' + provIdx + '">' +
@@ -290,6 +293,7 @@ function _probeStatusInfo(status) {
     case 'unauthorized': return { glyph: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:1em;height:1em;vertical-align:-2px"><circle cx="12" cy="12" r="10"/><path d="M4.929 4.929 19.07 19.071"/></svg>', cls: 'unauth', label: t('settings.probeUnauthorized') };
     case 'not_found':    return { glyph: '∅', cls: 'nf',     label: t('settings.probeNotFound') };
     case 'unavailable':  return { glyph: '⚠', cls: 'down',   label: t('settings.probeUnavailable') };
+    case 'skipped':      return { glyph: 'N/A', cls: 'skip', label: t('settings.probeSkipped') };
     default:             return { glyph: '✕', cls: 'err',    label: t('settings.probeError') };
   }
 }
@@ -463,6 +467,56 @@ function _rerenderMatrix(provIdx) {
 
 // ── Background probe: start / poll / resume / apply ───────────────────────
 
+/** True when the model entry has no chat surface (image_gen /
+ *  embedding / transcription). Reads the shared taxonomy helper when
+ *  available, else the same hardcoded fallback set it ships with. */
+function _matrixModelIsNonChat(m) {
+  if (!m) return false;
+  if (typeof window.isChatModel === 'function') return !window.isChatModel(m);
+  var caps = m.capabilities || [];
+  var nonChat = ['image_gen', 'embedding', 'transcription'];
+  for (var i = 0; i < caps.length; i++) if (nonChat.indexOf(caps[i]) >= 0) return true;
+  return false;
+}
+
+/** Downgrade stale probe cells for non-chat models to 'skipped'.
+ *
+ *  Snapshots persisted BEFORE the probe learned to skip non-chat models
+ *  carry false 'unavailable' verdicts (the gateway deterministically 500s
+ *  a chat-completions probe for image/embedding models) with
+ *  recommend_disable=true — applying them would disable WORKING image
+ *  models. Reconciliation runs on every ingest so old disk snapshots heal
+ *  without forcing a retest; the original verdict is kept in the tooltip. */
+function _reconcileProbeNonChat(provIdx) {
+  var probe = _stgMatrixProbe[provIdx];
+  var p = _stgProviders[provIdx];
+  if (!probe || !probe.cells || !p || !p.models) return;
+  var byRoot = {};
+  for (var mi = 0; mi < p.models.length; mi++) byRoot[p.models[mi].model_id] = p.models[mi];
+  var changed = false;
+  Object.keys(probe.cells).forEach(function(k) {
+    var c = probe.cells[k];
+    if (!c || c.status === 'ok' || c.status === 'skipped') return;
+    var m = byRoot[c.root_model_id];
+    if (!_matrixModelIsNonChat(m)) return;
+    c.detail = 'non-chat model — chat probe not applicable (was ' + c.status +
+               (c.detail ? ': ' + c.detail : '') + ')';
+    c.status = 'skipped';
+    c.recommend_disable = false;
+    changed = true;
+  });
+  if (!changed) return;
+  var ok = 0, disable = 0, skipped = 0;
+  Object.keys(probe.cells).forEach(function(k) {
+    var c = probe.cells[k];
+    if (!c) return;
+    if (c.status === 'skipped') skipped++;
+    else if (c.recommend_disable) disable++;
+    else ok++;
+  });
+  probe.summary = { ok: ok, disable: disable, skipped: skipped };
+}
+
 /** Normalise a backend snapshot into the local _stgMatrixProbe entry.
  *  Returns true when the snapshot carried real probe data. */
 function _ingestProbeSnapshot(provIdx, snap) {
@@ -478,6 +532,7 @@ function _ingestProbeSnapshot(provIdx, snap) {
   };
   // Reflect the server's attempts setting in the selector on resume.
   if (snap.attempts && !_stgMatrixAttempts[provIdx]) _stgMatrixAttempts[provIdx] = snap.attempts;
+  _reconcileProbeNonChat(provIdx);
   return true;
 }
 
@@ -502,7 +557,13 @@ function _runMatrixProbe(provIdx, force) {
     api_keys: keys,
     extra_headers: p.extra_headers || {},
     protocol: p.protocol || 'openai',
-    models: models.map(function(m) { return { model_id: m.model_id, aliases: (m.aliases || []) }; }),
+    // capabilities ride along so the server SKIPS non-chat models
+    // (image_gen / embedding / transcription) instead of chat-probing them
+    // into a guaranteed false 'unavailable' verdict.
+    models: models.map(function(m) {
+      return { model_id: m.model_id, aliases: (m.aliases || []),
+               capabilities: (m.capabilities || []) };
+    }),
     attempts: _stgMatrixAttempts[provIdx] || 3,
     force: !!force,
   };
@@ -579,6 +640,9 @@ function _applyMatrixRecommendations(provIdx) {
     var idx = byRoot[c.root_model_id];
     if (idx === undefined) return;
     var m = p.models[idx];
+    // Never disable a non-chat model on the say-so of a chat-completions
+    // probe — the verdict cannot speak for the model's real endpoint.
+    if (_matrixModelIsNonChat(m)) return;
     if (_isIdEnabled(m, c.key_idx, c.model_id)) {
       var cell = _ensureCell(m, c.key_idx);
       var dis = cell.disabled_ids || [];

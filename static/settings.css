@@ -1337,6 +1337,7 @@
 .stg-mx-probe-pip.rate   { color: #c2410c; background: rgba(251,146,60,0.20); }
 .stg-mx-probe-pip.unauth { color: #b91c1c; background: rgba(248,113,113,0.20); }
 .stg-mx-probe-pip.nf     { color: #6b7280; background: rgba(156,163,175,0.20); }
+.stg-mx-probe-pip.skip   { color: #6b7280; background: rgba(156,163,175,0.20); }
 .stg-mx-probe-pip.down   { color: #a16207; background: rgba(250,204,21,0.20); }
 .stg-mx-probe-pip.err    { color: #b91c1c; background: rgba(248,113,113,0.20); }
 /* When a cell is flagged (non-ok pip) but still enabled, nudge attention. */

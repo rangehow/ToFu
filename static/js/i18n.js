@@ -1150,6 +1150,8 @@ var _i18n = {
   'settings.probeUnauthorized': { zh: '无权限', en: 'Unauthorized' },
   'settings.probeNotFound': { zh: '模型不存在', en: 'Model not found' },
   'settings.probeUnavailable': { zh: '不可用 / 超时', en: 'Unavailable / timeout' },
+  'settings.probeSkipped': { zh: '不适用（非聊天模型）', en: 'N/A (non-chat model)' },
+  'settings.matrixSkippedCount': { zh: '不适用', en: 'N/A' },
   'settings.probeError': { zh: '错误', en: 'Error' },
   'settings.edit': { zh: '编辑', en: 'Edit' },
   'settings.delete': { zh: '删除', en: 'Delete' },

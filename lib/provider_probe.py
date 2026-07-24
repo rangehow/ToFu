@@ -29,6 +29,16 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from lib.config_dir import config_path as _config_path
 from lib.json_store import read_json, write_json_atomic  # noqa: F401  (read_json re-used by routes)
 from lib.log import get_logger
+from lib.model_info.capability_taxonomy import is_chat_model as _is_chat_model
+
+# Verdict for cells that carry no chat surface (image_gen / embedding /
+# transcription). A chat-completions probe cannot validate them — gateways
+# deterministically 500 (the Meituan gateway's Java router hits
+# ``Random.nextInt(0)`` → "bound must be positive" when the chat-binding
+# candidate list for an image/embedding model is empty) — so flagging them
+# 'unavailable' was a FALSE positive that recommended disabling working
+# image models. Skipped cells never touch the network.
+SKIPPED = 'skipped'
 
 logger = get_logger(__name__)
 
@@ -201,7 +211,18 @@ def run_cell_probe_task(task: dict, work: list, timeout: int):
                 attempts, protocol)
 
     def _run(item):
-        key_idx, api_key, root, mid = item
+        key_idx, api_key, root, mid = item[0], item[1], item[2], item[3]
+        caps = item[4] if len(item) > 4 else None
+        if caps and not _is_chat_model(caps):
+            return {
+                'key_idx': key_idx,
+                'model_id': mid,
+                'root_model_id': root,
+                'status': SKIPPED,
+                'detail': 'non-chat model (%s) — chat-completions probe not applicable'
+                          % ','.join(caps),
+                'recommend_disable': False,
+            }
         # Multi-attempt so a FALSE 429 / transient 5xx doesn't wrongly flag a
         # reachable cell. A single ok on any attempt wins.
         status, detail = probe_cell_multi(base_url, api_key, mid, extra_headers,
@@ -234,7 +255,9 @@ def run_cell_probe_task(task: dict, work: list, timeout: int):
                     task['cells'][probe_cell_key(cell['key_idx'], cell['model_id'])] = cell
                     task['done_count'] = len(task['cells'])
                     n_disable = sum(1 for c in task['cells'].values() if c['recommend_disable'])
-                    task['summary'] = {'ok': task['done_count'] - n_disable, 'disable': n_disable}
+                    n_skipped = sum(1 for c in task['cells'].values() if c['status'] == SKIPPED)
+                    task['summary'] = {'ok': task['done_count'] - n_disable - n_skipped,
+                                       'disable': n_disable, 'skipped': n_skipped}
                 # Throttle disk writes: at most every ~1.5s during the run.
                 now = _time.monotonic()
                 if now - last_persist > 1.5:
@@ -259,5 +282,5 @@ def run_cell_probe_task(task: dict, work: list, timeout: int):
 __all__ = [
     'probe_one_cell', 'probe_cell_multi', 'run_cell_probe_task',
     'probe_cache_path', 'probe_cell_key', 'persist_probe_task',
-    'public_probe_snapshot', 'CELL_PROBE_TASKS', 'CELL_PROBE_LOCK',
+    'public_probe_snapshot', 'CELL_PROBE_TASKS', 'CELL_PROBE_LOCK', 'SKIPPED',
 ]

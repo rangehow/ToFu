@@ -847,14 +847,18 @@ def probe_provider_cells_start():
 
     # Build the work list: one cell per (key_idx, concrete id). Every alias
     # is its own cell because aliases can be different upstream models.
+    # Capabilities ride along so the probe can SKIP non-chat models
+    # (image_gen / embedding / transcription) instead of chat-probing them
+    # into a guaranteed false 'unavailable' verdict.
     work = []
     for key_idx, api_key in enumerate(api_keys):
         for m in models:
             root = (m.get('model_id') or '').strip()
             if not root:
                 continue
+            caps = m.get('capabilities') or []
             for mid in [root] + [a for a in (m.get('aliases') or []) if a]:
-                work.append((key_idx, api_key, root, mid))
+                work.append((key_idx, api_key, root, mid, caps))
 
     if not work:
         return api_bad_request('no testable (key, model) pairs')

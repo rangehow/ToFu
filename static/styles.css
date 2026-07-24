@@ -3060,9 +3060,13 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .paper-qa-send-btn:activ
 .cost-popover .cp-ico{flex:none;opacity:.85}
 .cost-popover .cp-trace{color:var(--text-tertiary);opacity:.7;font-size:10px}
 .cost-popover .cp-round-break{
-  margin-top:4px;display:flex;align-items:flex-start;gap:4px;
+  margin-top:4px;display:flex;align-items:flex-start;gap:4px;flex-wrap:wrap;
   color:#e8a55d;font-size:10px;line-height:1.45
 }
+/* Long reason prose next to the state badge. flex basis 12em + parent wrap:
+   when the badge leaves < 12em on the first line, the prose drops to a
+   full-width second line instead of shrinking to its 1-CJK-char min-content. */
+.cost-popover .cp-break-text{flex:1 1 12em;min-width:0}
 .cost-popover .cp-round-break .cp-ico{margin-top:1px}
 /* Fault-state colouring (wire-fingerprint verdict, 2026-07): proven-server =
    teal (not our fault), unproven = amber (unknown), culprit = red (our fault,

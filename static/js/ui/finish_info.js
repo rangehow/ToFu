@@ -556,7 +556,11 @@ function _buildCostPopover(ctx) {
         // amber 'unproven' (unknown), red 'culprit' (our fault, actionable).
         const _stCls = cbState ? ` cp-break-${cbState}` : '';
         const _stLabel = cbState ? `<span class="cp-break-badge cp-break-badge-${cbState}">${t('finishInfo.cbState.' + cbState)}</span>` : '';
-        html += `<div class="cp-round-break${_stCls}">${_CP_WARN_SVG}${_stLabel}${t('finishInfo.cacheBreakLabel', { reason: cbReason })}</div>`;
+        // The reason prose MUST be wrapped in its own span: as a bare text
+        // node it becomes an anonymous flex item whose CJK min-content is ONE
+        // character, so a long state badge (e.g. 'upstream') squeezes it to a
+        // 1-char-per-line column (2026-07-24 overflow bug).
+        html += `<div class="cp-round-break${_stCls}">${_CP_WARN_SVG}${_stLabel}<span class="cp-break-text">${t('finishInfo.cacheBreakLabel', { reason: cbReason })}</span></div>`; 
         // The named culprit — WHICH message(s) broke cache — surfaced on its
         // own line so the user can act on it, not hunt error.log.
         if (cbCulprits) {

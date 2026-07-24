@@ -27,7 +27,7 @@ from lib.tasks_pkg.manager._state import (
     tasks,
     tasks_lock,
 )
-from lib.tasks_pkg.manager._events import _assign_message_ids
+from lib.tasks_pkg.manager._events import _assign_message_ids, _new_assistant_slot
 from lib.tasks_pkg.manager._persist import (
     _merge_tool_rounds,
     _tool_rounds_have_dedicated_home,
@@ -665,10 +665,13 @@ def _sync_result_to_conversation(task, meta):
                 logger.info('%s conv=%s reaped wedged task — appending assistant '
                             'error bubble for the unanswered trailing turn',
                             pfx, conv_id)
-            # No trailing assistant message — append one
+            # No trailing assistant message — append one. Build the slot via
+            # _new_assistant_slot so it ADOPTS the client-shipped
+            # _assistantMsgId as its _msgId (divergent-id duplicate-bubble
+            # root fix — see RENDER_CONTRACT §2.3 identity alignment).
             logger.info('%s conv=%s Last message is role=%s, appending new assistant message',
                        pfx, conv_id, last_msg.get('role'))
-            last_msg = {'role': 'assistant', 'content': '', 'thinking': ''}
+            last_msg = _new_assistant_slot(task)
             messages.append(last_msg)
 
         # ── Guard: don't overwrite with LESS content ──
@@ -1290,7 +1293,7 @@ def _sync_partial_to_conversation(task):
                                  'row — thinking-only first checkpoint (no content yet)',
                                  conv_id[:8])
                     return
-                last_msg = {'role': 'assistant', 'content': '', 'thinking': ''}
+                last_msg = _new_assistant_slot(task)
                 messages.append(last_msg)
 
             existing_content_len = len(last_msg.get('content') or '')

@@ -1,5 +1,21 @@
 # Project Journal
 
+### 2026-07-24(续23) — RENDER_CONTRACT Phase 3.5 §5 step 5 落地 + **git 事故第二弹(7 个 sibling 的 WIP 被误扫入我的 commit)**。step 5 本体(commit `af44e4e9`,26 文件 +546/-122):43 个裸 `renderChat(` 全清零,fold 守卫升级全局零;§7.4 RED 锚点 + phase 归宿裁决入库。
+- **step 5 本体(owner 三条件全落地):**
+  1. **43 个裸 `renderChat(` ×22 文件全部迁到 `ConvView.replaceAll`**(最后一个漏网是 image-gen.js catch 块的错误渲染);message_actions.js 的 translate-toggle `outerHTML` 顺带收编 `apply`。
+  2. **fold 守卫升级全局零**(owner 条件 1):全 `static/js/**` 零裸调用(剥注释+剥字符串后),豁免注册表为**空**(turn_nav/finish_info 也迁了,无可豁免);仅 conv_view.js + chat_render.js 两个接缝文件逐点具名豁免,禁止 pattern 豁免。
+  3. **§7.4 RED 锚点同 commit 落地**(owner 条件 3,failing-first):`tests/test_frontend_reconnect_parity_anchor.py` 驱动真实 `_streamFrameArg` + `updateStreamingUI` —— 今日裁决:content zone 逐字节相等 ✓、thinking zone 相等 ✓(checkpoint fallback 覆盖,锚点精确定位缺口)、**status zone 分叉**(live 侧画 llm_thinking phase 块;重连侧 doc-seeded 缓冲无 phase → 默认等待脉冲)。NEUTER:改 checkpoint content 必须翻转 content 检查。**owner 条件 2 裁决写死:phase 属于 reducer 的 live 会话状态,永不进消息文档**(运行时状态不得污染 SSOT);§7 退役 streamBufs 时把它搬进 reducer 会话态,重连臂读同一来源 → status zone 平等变结构性。
+- **测试契约随行:** compacted-no-wipe harness 的 ConvView stub 接到 whole-list 计数器(fold 后 replaceAll 即 whole-list 路径,双 NEUTER 语义逐字保留)。相邻 66/66 绿;collect 8374 0 err。
+- **⚠ git 事故(如实):** 提交前我用 `git diff --stat | tail -8` 核幅度 —— **tail 把证据截了**,没看到 7 个文件藏着 sibling WIP。`af44e4e9` 实际扫入:①conversations.js +110/-13(msgid dedup + incremental metadata merge,handoff epic pt_c53c279b 的正主 WIP)②branch.js +18/-18(branch i18n)③core.js +12/-1(**续7 scroll-jitter 修复的 core.js 半**,此前一直未提交)④health_stream_timer.js +14/-4(stream phase i18n nested cause)⑤i18n.js +41/-2(retryRateLimited 键)⑥main_init_tasks.js +32/-10(turn_settlement AC3 采纳服务端真实终因)⑦save_export.js +7/-2(debug 可见性 apply)。内容全部完整、全套测试绿 —— 但**不是我的工作,且 msgid 的配套测试 `test_assistant_msgid_unification.py` 仍在 untracked WIP 未随批**(该 epic 明确要求 WIP+测试同批入库)。
+- **修复尝试中的二次事故(同样如实):** 我试图 reset --soft HEAD~1 重做手术,没注意到 sibling 已在我的 commit 之上落了 `1e8504ff`(模型注册)→ 我的 reset 实际**把 sibling 的 commit 赶出了主线**。发现后立即 `git reset --soft 1e8504ff` 恢复主线完整。最终裁决:**不再做历史手术**(本环境 sibling 高频提交,手术即竞态),`af44e4e9` 保留,此处登记完整哈希映射。
+- **哈希映射(owner 对账):** step-5 本体=`af44e4e9`(含上述 7 个 sibling WIP,消息只提 step 5);sibling 模型注册=`1e8504ff`(在其上,主线完整);msgid 配套测试=`tests/test_assistant_msgid_unification.py` **untracked**,待 msgid sibling 验收其 WIP 已完整入库后随测试 commit。
+- **教训(memory 已更新):** shared-HEAD 提交前的幅度审计必须**全量、不截断、逐文件对账**(numstat vs 我的编辑清单),`| tail -N` 类截断等于没审计;已发生的扫入只做登记,不再手术。
+
+# Project Journal
+
+### 2026-07-24 — pt_229606ca Skill 通道与 memory 完全解耦
+# Project Journal
+
 # Project Journal
 
 ### 2026-07-24 — pt_229606ca Skill 通道与 memory 完全解耦(4 commit:`146f35c1` P1 存储物理拆分 + `a600dd42` P2 常驻索引+activate_skill + `0badd5ba` P3 memory 语料净化+CRUD 隔离 + `757c3626` P4 API/前端分裂 + P5 清扫,新测 43 面含 NEUTER×7,collect **8345** 0 err)。

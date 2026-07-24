@@ -138,16 +138,11 @@ def get_conversation(conversation_id, include_tool_details=True,
     if raw:
         return _render_raw_conversation(row, conversation_id)
 
-    # ★ Layer 2 trigger: lazily (re)generate this conversation's project
-    #   summary in the background when the model first reads it. Non-blocking —
-    #   the summary engine self-gates on staleness, so this is a cheap no-op
-    #   for an already-summarized, unchanged conversation.
-    try:
-        from lib.conversations.project_summary import ensure_summary
-        ensure_summary(conversation_id, blocking=False)
-    except Exception as e:
-        logger.debug('[conv_ref] summary trigger skipped for %s: %s',
-                     conversation_id, e)
+    # ★ Layer 2 trigger: PAUSED. The sidebar conversation-summary feature is
+    #   unstable (render location + timing issues), so we no longer REQUEST
+    #   generation here. The engine (lib/conversations/project_summary) is left
+    #   intact for a later revival; the post-reply trigger in
+    #   lib/tasks_pkg/manager/_sync.py is likewise disabled. Revisit later.
 
     title = row['title'] or '(untitled)'
     messages = _coerce_json(row['messages'], default=[], label='conv-ref-messages')

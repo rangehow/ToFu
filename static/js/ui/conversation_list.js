@@ -1056,10 +1056,11 @@ function _buildConvItemHTML(c, titleHtml, snippetHtml) {
   const eid = escapeHtml(c.id);
   const isActive = c.id === activeConvId ? " active" : "";
   const feishuBadge = c.source === 'feishu' ? `<span class="conv-feishu-badge" title="${t('sidebar.feishuConv')}">Feishu</span>` : '';
-  const _summaryText = (c.projectSummary && c.projectSummary.text) ? String(c.projectSummary.text) : '';
-  const summaryBadge = _summaryText
-    ? `<span class="conv-summary-badge" data-summary="${escapeHtml(_summaryText)}" title="${t('sidebar.summaryBadge')}" onclick="showConvSummary(this, event)">${_CONV_SUMMARY_SVG}</span>`
-    : '';
+  // Sidebar conversation-summary badge is PAUSED: the feature is unstable
+  // (render location + timing issues) and backend generation is disabled, so
+  // there is nothing to surface. Keep _CONV_SUMMARY_SVG + showConvSummary for
+  // the future revival — do not render the badge for now.
+  const summaryBadge = '';
   const _isDebug = typeof _featureFlags !== 'undefined' && _featureFlags.debug_mode;
   const copyIdBtn = _isDebug ? `<button class="conv-action-btn conv-copy-id" data-conv-id="${eid}" title="${t('sidebar.copyConvId')}">${_CONV_CP_SVG}</button>` : '';
   const folderClass = c.folderId ? ' in-folder' : '';

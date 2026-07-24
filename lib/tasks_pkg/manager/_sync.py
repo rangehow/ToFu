@@ -167,20 +167,12 @@ def _maybe_refresh_project_summary(task):
     so this just decides whether the conversation is even a project candidate
     and kicks off a background, fire-and-forget refresh.
     """
-    try:
-        if task.get('status') != 'done' or task.get('aborted'):
-            return
-        conv_id = task.get('convId')
-        if not conv_id:
-            return
-        cfg = task.get('config') or {}
-        if not cfg.get('projectEnabled') or not cfg.get('projectPath'):
-            return
-        from lib.conversations.project_summary import ensure_summary
-        ensure_summary(conv_id, blocking=False)
-    except Exception as e:
-        logger.debug('[ProjSummary] post-reply trigger skipped conv=%s: %s',
-                     task.get('convId', '?'), e)
+    # PAUSED: the sidebar conversation-summary feature is unstable (render
+    # location + timing issues), so we no longer REQUEST generation. The
+    # engine (lib/conversations/project_summary) is left intact for a later
+    # revival; this trigger and the get_conversation trigger are the only two
+    # request sites, both currently disabled. Revisit later.
+    return
 
 
 def _update_proactive_execution_status(task):

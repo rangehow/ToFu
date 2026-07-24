@@ -787,45 +787,65 @@ function renderFinishInfo(msg, isLiveTail) {
 
   // ★ Finish reason tag — separate from model
   if (msg.finishReason) {
-    const normReasons = ["stop", "end_turn", "stop_sequence"];
-    const isNorm = normReasons.includes(msg.finishReason);
-    const warnReasons = [
-      "length",
-      "tool_rounds_exhausted",
-      "max_tokens",
-      "content_filter",
-      "premature_close",
-      "abnormal_stop",
-    ];
-    if (isNorm) {
-      parts.push(`<span class="finish-tag ok">✓</span>`);
-    } else if (msg.finishReason === "error") {
-      parts.push(`<span class="finish-tag err">✕ ${escapeHtml(t('finishInfo.reasonError'))}</span>`);
-    } else if (msg.finishReason === "aborted") {
-      parts.push(`<span class="finish-tag warn">${escapeHtml(t('finishInfo.reasonStopped'))}</span>`);
-    } else if (msg.finishReason === "interrupted") {
-      // The backend stamps WHY a turn was interrupted (recover_stale_tasks_on_startup):
-      //   interruptedReason='killed' → previous exit was UNCLEAN (OS SIGKILL/OOM/crash)
-      //   interruptedReason='manual' → previous exit was CLEAN (controlled restart)
-      //   absent                    → old data / first_boot / unknown verdict
-      // Map each to its own honest label instead of always claiming a crash.
-      const _ir = msg.interruptedReason;
-      let _lblKey = 'finishInfo.reasonInterruptedUnknown';
-      let _tipKey = 'finishInfo.reasonInterruptedUnknownTip';
-      if (_ir === 'killed') {
-        _lblKey = 'finishInfo.reasonInterruptedKilled';
-        _tipKey = 'finishInfo.reasonInterruptedKilledTip';
-      } else if (_ir === 'manual') {
-        _lblKey = 'finishInfo.reasonInterruptedRestart';
-        _tipKey = 'finishInfo.reasonInterruptedRestartTip';
+    /* ★ pt_turn_settlement: the finish tag now reads the SINGLE settlement
+     *   verdict (computeTurnSettlement) instead of re-deriving a conclusion
+     *   from msg.finishReason independently. finishLabelForSettlement maps the
+     *   verdict's outcome/cause to a label kind; the switch renders the SAME
+     *   labels/styling/i18n as before (byte-identical output), so the bubble
+     *   stays consistent with the verdict by construction. The interrupted
+     *   3-way (killed/restart/unknown) reads the verdict's `cause` (which owns
+     *   the interruptedReason mapping) instead of sniffing msg.interruptedReason
+     *   here. 'fallback' = a reason the verdict deliberately does not classify
+     *   (tool_use / tool_calls / a future reason) → the legacy labels map, so
+     *   no current label regresses. model=null suffices — outcome/cause are
+     *   model-independent (only resume.mode uses the prefill-capability gate,
+     *   and the bubble never renders resume.mode). */
+    const _tsV = (typeof computeTurnSettlement === 'function') ? computeTurnSettlement(msg, null) : null;
+    let _k;
+    if (typeof finishLabelForSettlement === 'function' && _tsV) {
+      _k = finishLabelForSettlement(_tsV, msg.finishReason).kind;
+    } else {
+      /* Legacy kind-derivation fallback — used ONLY when core/turn_settlement.js
+       * is not loaded (bundle-only module: dev-mode script-tag fallback, or a
+       * JSDOM harness that loads finish_info.js alone). Derives the SAME label
+       * kind from msg.finishReason that the verdict would, so the bubble stays
+       * correct in EVERY context; in the browser the bundle always provides
+       * the verdict (it loads before finish_info.js). This is a defensive
+       * fallback, not the primary path — the verdict remains the SSOT. */
+      const _fr = msg.finishReason;
+      if (_fr === 'stop' || _fr === 'end_turn' || _fr === 'stop_sequence') _k = 'ok';
+      else if (_fr === 'error') _k = 'error';
+      else if (_fr === 'aborted') _k = 'stopped';
+      else if (_fr === 'interrupted') {
+        const _ir = msg.interruptedReason;
+        _k = (_ir === 'killed') ? 'interruptedKilled'
+           : (_ir === 'manual') ? 'interruptedRestart' : 'interruptedUnknown';
       }
-      parts.push(`<span class="finish-tag warn"><span title="${escapeHtml(t(_tipKey))}">${escapeHtml(t(_lblKey))}</span></span>`);
-    } else if (msg.finishReason === "incomplete") {
-      // An autonomous loop (endpoint / autopilot) was cut off by a safety cap
-      // (max iterations / replans / stuck / budget) — the objective is
-      // UNVERIFIED. Flag it for review instead of a silent clean ✓.
+      else if (_fr === 'incomplete') _k = 'incomplete';
+      else if (_fr === 'server_offline') _k = 'serverOffline';
+      else _k = 'fallback';
+    }
+    if (_k === 'ok') {
+      parts.push(`<span class="finish-tag ok">✓</span>`);
+    } else if (_k === 'error') {
+      parts.push(`<span class="finish-tag err">✕ ${escapeHtml(t('finishInfo.reasonError'))}</span>`);
+    } else if (_k === 'stopped') {
+      parts.push(`<span class="finish-tag warn">${escapeHtml(t('finishInfo.reasonStopped'))}</span>`);
+    } else if (_k === 'interruptedKilled' || _k === 'interruptedRestart' || _k === 'interruptedUnknown') {
+      // The verdict's cause owns the interruptedReason → honest-label mapping:
+      //   killed → unclean kill (SIGKILL/OOM/crash); restart → controlled
+      //   restart (interruptedReason='manual'); unknown → legacy/first_boot.
+      const _m = {
+        interruptedKilled: ['finishInfo.reasonInterruptedKilled', 'finishInfo.reasonInterruptedKilledTip'],
+        interruptedRestart: ['finishInfo.reasonInterruptedRestart', 'finishInfo.reasonInterruptedRestartTip'],
+        interruptedUnknown: ['finishInfo.reasonInterruptedUnknown', 'finishInfo.reasonInterruptedUnknownTip'],
+      }[_k];
+      parts.push(`<span class="finish-tag warn"><span title="${escapeHtml(t(_m[1]))}">${escapeHtml(t(_m[0]))}</span></span>`);
+    } else if (_k === 'incomplete') {
+      // An autonomous loop (endpoint / autopilot) cut off by a safety cap —
+      // the objective is UNVERIFIED. Flag it, not a silent clean ✓.
       parts.push(`<span class="finish-tag warn"><span title="${escapeHtml(t('finishInfo.reasonIncompleteTip'))}">${Icon('alertTriangle', 12)} ${escapeHtml(t('finishInfo.reasonIncomplete'))}</span></span>`);
-    } else if (msg.finishReason === "server_offline") {
+    } else if (_k === 'serverOffline') {
       parts.push(
         `<span class="finish-tag err"><span title="${escapeHtml(t('finishInfo.reasonServerOfflineTip'))}">${escapeHtml(t('finishInfo.reasonServerOffline'))}</span></span>` +
         ` <button class="finish-reconnect-btn" onclick="_recoverOfflineConversations('manual_button')" ` +
@@ -836,6 +856,9 @@ function renderFinishInfo(msg, isLiveTail) {
         `">${Icon('refresh', 12)} ${escapeHtml(t('finishInfo.reconnect'))}</button>`
       );
     } else {
+      // truncated / toolLimit / filtered / abnormal / gateway / fallback —
+      // rendered via the shared labels map (the exact current HTML + the
+      // warnReasons class for these reasons).
       const labels = {
         length: escapeHtml(t('finishInfo.reasonTruncated')),
         tool_use: escapeHtml(t('finishInfo.reasonTool')),
@@ -846,6 +869,14 @@ function renderFinishInfo(msg, isLiveTail) {
         premature_close: "<span title='" + t('msg.prematureClose') + "'>" + t('msg.gatewayInterrupt') + "</span>",
         abnormal_stop: "<span title='" + t('msg.abnormalStop') + "'>" + t('msg.abnormalInterrupt') + "</span>",
       };
+      const warnReasons = [
+        "length",
+        "tool_rounds_exhausted",
+        "max_tokens",
+        "content_filter",
+        "premature_close",
+        "abnormal_stop",
+      ];
       const label = labels[msg.finishReason] || msg.finishReason;
       const cls = warnReasons.includes(msg.finishReason) ? "warn" : "";
       parts.push(`<span class="finish-tag ${cls}">${label}</span>`);

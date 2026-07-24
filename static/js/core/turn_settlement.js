@@ -42,6 +42,7 @@ const TS_OUTCOME_FAILED = 'failed';
 const TS_CAUSE_MANUAL = 'manual';
 const TS_CAUSE_KILLED = 'killed';
 const TS_CAUSE_RESTART = 'restart';
+const TS_CAUSE_UNKNOWN = 'unknown';
 const TS_CAUSE_OFFLINE = 'offline';
 const TS_CAUSE_GATEWAY = 'gateway';
 const TS_CAUSE_MAX_TOKENS = 'max_tokens';
@@ -126,7 +127,9 @@ function _tsScanKeptRounds(rounds) {
 }
 
 function _tsCauseFromInterruptedReason(interruptedReason) {
-  return interruptedReason === 'killed' ? TS_CAUSE_KILLED : TS_CAUSE_RESTART;
+  if (interruptedReason === 'killed') return TS_CAUSE_KILLED;
+  if (interruptedReason === 'manual') return TS_CAUSE_RESTART;
+  return TS_CAUSE_UNKNOWN;
 }
 
 /* Map a raw finishReason (+ message context) to [outcome, cause]. A missing /
@@ -231,6 +234,49 @@ function continueButtonForSettlement(verdict) {
            labelKey: 'msgAction.regen', titleKey: 'msgAction.regenerateTitle' };
 }
 
+/* Decide the interrupt-bubble finish-tag for a settlement verdict — the pure
+ * fact finish_info.js renders, so the renderer stays thin and this logic is
+ * Node-testable. Returns { kind } where kind drives the label/styling/i18n in
+ * finish_info.js:
+ *   ok | stopped | interruptedKilled | interruptedRestart | interruptedUnknown
+ *   | serverOffline | gateway | incomplete | toolLimit | truncated | filtered
+ *   | error | abnormal | fallback
+ * 'fallback' = a finishReason the verdict deliberately does NOT classify
+ * (tool_use / tool_calls / a future reason) — the renderer falls back to its
+ * existing labels map so no current label regresses. The 3-way interrupted
+ * family (killed/restart/unknown) reads the verdict's `cause` — faithful to
+ * the bubble's existing killed/restart/unknown labels (CAUSE_UNKNOWN keeps an
+ * absent interruptedReason honest instead of over-committing it to restart). */
+function finishLabelForSettlement(verdict, finishReason) {
+  if (!verdict) return { kind: 'fallback' };
+  const fr = finishReason || verdict.finishReason || '';
+  const oc = verdict.outcome;
+  const cause = verdict.cause;
+  if (oc === TS_OUTCOME_COMPLETED) return { kind: 'ok' };
+  if (cause === TS_CAUSE_MANUAL) return { kind: 'stopped' };
+  if (cause === TS_CAUSE_KILLED) return { kind: 'interruptedKilled' };
+  if (cause === TS_CAUSE_RESTART) return { kind: 'interruptedRestart' };
+  if (cause === TS_CAUSE_UNKNOWN) return { kind: 'interruptedUnknown' };
+  if (cause === TS_CAUSE_OFFLINE) return { kind: 'serverOffline' };
+  if (cause === TS_CAUSE_GATEWAY) return { kind: 'gateway' };
+  if (cause === TS_CAUSE_SAFETY_CAP) return { kind: 'incomplete' };
+  if (cause === TS_CAUSE_TOOL_CAP) return { kind: 'toolLimit' };
+  if (cause === TS_CAUSE_MAX_TOKENS) return { kind: 'truncated' };
+  if (cause === TS_CAUSE_CONTENT_FILTER) return { kind: 'filtered' };
+  if (cause === TS_CAUSE_ERROR) return (fr === 'abnormal_stop') ? { kind: 'abnormal' } : { kind: 'error' };
+  return { kind: 'fallback' };
+}
+
+/* ── Publish under both bare + window scopes so the Node equivalence harness's
+ *   (0, eval)(src) and the browser's bundle both see them (conv_state_reducer
+ *   precedent). */
+if (typeof window !== 'undefined') {
+  window.computeTurnSettlement = computeTurnSettlement;
+  window.continueButtonForSettlement = continueButtonForSettlement;
+  window.finishLabelForSettlement = finishLabelForSettlement;
+  window._tsScanKeptRounds = _tsScanKeptRounds;
+  window._tsHasRealRound = _tsHasRealRound;
+}
 /* ── Publish under both bare + window scopes so the Node equivalence harness's
  *   (0, eval)(src) and the browser's bundle both see them (conv_state_reducer
  *   precedent). */

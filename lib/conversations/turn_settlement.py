@@ -46,7 +46,8 @@ OUTCOME_FAILED = 'failed'            # error / content_filter / abnormal_stop �
 # ── Closed vocabulary: WHY the turn ended (a single cause dimension) ──
 CAUSE_MANUAL = 'manual'              # user clicked Stop
 CAUSE_KILLED = 'killed'              # unclean process kill / OOM / crash
-CAUSE_RESTART = 'restart'            # controlled server restart (or unknown interrupt)
+CAUSE_RESTART = 'restart'            # controlled server restart (interruptedReason='manual')
+CAUSE_UNKNOWN = 'unknown'            # interrupted, but no reason tag (legacy / first_boot)
 CAUSE_OFFLINE = 'offline'            # server went offline mid-turn
 CAUSE_GATEWAY = 'gateway'            # gateway/proxy premature close
 CAUSE_MAX_TOKENS = 'max_tokens'
@@ -68,15 +69,17 @@ _CLEAN_FINISH_REASONS = frozenset({'stop', 'end_turn', 'stop_sequence'})
 def _cause_from_interrupted_reason(interrupted_reason: Any) -> str:
     """Map the backend's ``interruptedReason`` tag onto the cause vocabulary.
 
-    Mirrors the label branch in ``finish_info.js``: ``killed`` → unclean kill,
-    ``manual`` → controlled restart, absent/unknown → restart (the honest
-    default the UI already shows).
+    Mirrors the label branch in ``finish_info.js`` exactly: ``killed`` →
+    unclean kill, ``manual`` → controlled restart, absent/unknown → UNKNOWN
+    (NOT restart — the bubble honestly shows "原因未知" for a legacy / first_boot
+    turn, so the verdict must not over-commit it to a restart).
     """
     if interrupted_reason == 'killed':
         return CAUSE_KILLED
-    # 'manual' = controlled restart; anything else (absent / unknown) defaults
-    # to restart, matching finishInfo.reasonInterruptedUnknownTip.
-    return CAUSE_RESTART
+    if interrupted_reason == 'manual':
+        return CAUSE_RESTART
+    # Absent / unrecognised — the honest "unknown interrupt" the bubble shows.
+    return CAUSE_UNKNOWN
 
 
 def _classify_outcome(msg: dict[str, Any], finish_reason: str | None) -> tuple[str, str | None]:
@@ -233,6 +236,7 @@ __all__ = [
     'CAUSE_MANUAL',
     'CAUSE_KILLED',
     'CAUSE_RESTART',
+    'CAUSE_UNKNOWN',
     'CAUSE_OFFLINE',
     'CAUSE_GATEWAY',
     'CAUSE_MAX_TOKENS',

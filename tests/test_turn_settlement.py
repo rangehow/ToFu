@@ -23,7 +23,7 @@ import pytest
 from lib.conversations.turn_settlement import (
     compute_turn_settlement,
     OUTCOME_COMPLETED, OUTCOME_INTERRUPTED, OUTCOME_TRUNCATED, OUTCOME_FAILED,
-    CAUSE_MANUAL, CAUSE_KILLED, CAUSE_RESTART, CAUSE_OFFLINE, CAUSE_GATEWAY,
+    CAUSE_MANUAL, CAUSE_KILLED, CAUSE_RESTART, CAUSE_UNKNOWN, CAUSE_OFFLINE, CAUSE_GATEWAY,
     CAUSE_MAX_TOKENS, CAUSE_TOOL_CAP, CAUSE_SAFETY_CAP, CAUSE_CONTENT_FILTER,
     CAUSE_ERROR,
     MODE_PREFILL, MODE_CHECKPOINT, MODE_REGENERATE, MODE_NONE,
@@ -130,10 +130,12 @@ def test_interrupted_manual_maps_to_restart_cause():
     assert v['cause'] == CAUSE_RESTART
 
 
-def test_interrupted_unknown_maps_to_restart_cause():
+def test_interrupted_unknown_maps_to_unknown_cause():
+    # Absent interruptedReason (legacy / first_boot) → UNKNOWN, NOT restart —
+    # the bubble honestly shows "原因未知", so the verdict must not over-commit.
     v = compute_turn_settlement(_amsg(content='x', finish_reason='interrupted'), model=CAPABLE)
     assert v['outcome'] == OUTCOME_INTERRUPTED
-    assert v['cause'] == CAUSE_RESTART
+    assert v['cause'] == CAUSE_UNKNOWN
 
 
 def test_server_offline_is_interrupted_offline():

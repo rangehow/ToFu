@@ -62,9 +62,7 @@ from lib.tasks_pkg.system_context import (
 )
 from lib.tasks_pkg.wire_messages import apply_wire_sanitize
 from lib.tasks_pkg.server_message_store import (
-    rebuild_messages_with_history as _rebuild_messages_with_history,
     save_messages as _save_messages_to_store,
-    estimate_token_overhead as _estimate_token_overhead,
 )
 from lib.tasks_pkg.tool_dispatch import (
     emit_tool_exec_phase,
@@ -104,6 +102,7 @@ from lib.tasks_pkg.orchestrator._vu_startup import (
 )
 from lib.tasks_pkg.orchestrator._prefetch import start_prefetches
 from lib.tasks_pkg.orchestrator._context_inject import inject_context_and_emit_chips  # noqa: E501
+from lib.tasks_pkg.orchestrator._tool_history import restore_tool_history
 from lib.tasks_pkg.orchestrator._post_loop import (
     finalize_after_loop,
     handle_task_fatal,
@@ -371,40 +370,14 @@ def run_task(task: dict[str, Any]) -> None:
         tool_round_num = 0
         all_search_results_text = []
 
-        # ── Section 2.5: Server-side tool history restoration ──
-        # If keepToolHistory is enabled AND we have stored full messages
-        # from a previous turn, replace the frontend's summary-only messages
-        # with the full tool_use/tool_result history.
-        _keep_tool_history = cfg.get('keepToolHistory', True)
-        _conv_id = task.get('convId', '')
-        if _keep_tool_history and _conv_id:
-            _vu_phase('Autopilot：重建工具调用历史…')
-            rebuilt, _rebuild_stats = _rebuild_messages_with_history(_conv_id, messages)
-            if _rebuild_stats['used_store']:
-                # Log the overhead for monitoring
-                _oh = _estimate_token_overhead(messages, rebuilt)
-                logger.info(
-                    '[%s] conv=%s ★ TOOL HISTORY RESTORED: '
-                    'frontend=%d msgs → rebuilt=%d msgs '
-                    '(tool_msgs=%d, overhead=+%d est_tokens, ratio=%.1fx)',
-                    tid, _conv_id[:8],
-                    _rebuild_stats['frontend_msg_count'], len(rebuilt),
-                    _rebuild_stats['tool_msgs_restored'],
-                    _oh['overhead_est_tokens'], _oh['ratio'],
-                )
-                messages = rebuilt
-                original_messages = list(messages)
-                # Emit a diagnostic event for the debug panel
-                append_event(task, build_event(
-                    EventType.PHASE,
-                    phase='tool_history_restored',
-                    detail=f'Restored {_rebuild_stats["tool_msgs_restored"]} tool messages from server store',
-                    stats=_rebuild_stats,
-                    overhead=_oh,
-                ))
-            else:
-                logger.debug('[%s] conv=%s keepToolHistory enabled but no stored messages found',
-                             tid, _conv_id[:8])
+        # ── Section 2.5: Server-side tool history restoration ── (pt_03f4cdf1 slice 8)
+        #   Extracted to lib.tasks_pkg.orchestrator._tool_history.
+        #   Rebuilds messages with server-side tool history when
+        #   keepToolHistory=True; returns (messages, original_messages,
+        #   used_store) — caller reassigns its two locals from the tuple.
+        messages, original_messages, _tool_history_used = restore_tool_history(
+            task=task, cfg=cfg, messages=messages, tid=tid, vu_phase=_vu_phase,
+        )
 
         # ── Section 3: Context Injection ── (pt_03f4cdf1 slice 7)
         #   Extracted to lib.tasks_pkg.orchestrator._context_inject.

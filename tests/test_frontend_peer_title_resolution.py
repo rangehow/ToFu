@@ -142,6 +142,10 @@ _els['pendingQueueContainer'] = global.document.createElement('div');
 
 // pendingMessageQueue is the Map renderPendingQueueUI reads.
 var pendingMessageQueue = new Map();
+// renderPendingQueueUI now gates DOM mutations on activeConvId — declare it so
+// the queue-source-line assertions still see the paint. See
+// test_frontend_pending_queue_active_conv_gate.py for the cross-conv guard.
+var activeConvId = 'c1';
 
 {extracted}
 

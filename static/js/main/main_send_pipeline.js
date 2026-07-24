@@ -1048,17 +1048,41 @@ async function _waitForVlmParsing(userMsg, convId, userMsgIdx) {
 
 /**
  * Render the pending queue indicator above the input area.
+ *
+ * ★ CROSS-CONV BLEED GUARD — the input-bar queue is a SINGLE shared DOM node
+ * (``#pendingQueueBar`` in ``#pendingQueueContainer``) but ``pendingMessageQueue``
+ * is a per-conv Map. Every DOM mutation must therefore be gated on
+ * ``convId === activeConvId``: many callers (``_refreshServerQueue``,
+ * ``_checkForQueuedTask``'s retry loop, autopilot arm/disarm, ``loadConversationMessages``
+ * reconcile) run async, so a fetch dispatched for conv A can resolve AFTER the
+ * user switched to conv B and unconditionally paint A's queue into B's visible
+ * bar. The Map is still updated for the inactive conv (correct — switching back
+ * to A will re-paint through ``loadConversation``'s explicit call), only the
+ * paint is suppressed.
+ *
+ * The removal branch (``queue-removing``+timeout) is likewise gated so a stale
+ * empty-queue render for an inactive conv can't tear down the bar that
+ * currently belongs to the active conv.
  */
 function renderPendingQueueUI(convId) {
+  const _isActive = (typeof activeConvId !== 'undefined') && convId === activeConvId;
   let container = document.getElementById("pendingQueueBar");
   const queue = pendingMessageQueue.get(convId);
   if (!queue || queue.length === 0) {
-    if (container) {
+    if (container && _isActive) {
       container.classList.add('queue-removing');
-      setTimeout(() => { if (container && container.parentNode) container.remove(); }, 200);
+      setTimeout(() => {
+        /* Idempotent: only remove if nothing repainted since. A later
+         * ``renderPendingQueueUI(activeConvId)`` clears ``queue-removing`` when
+         * it repopulates the same container. */
+        if (container && container.parentNode && container.classList.contains('queue-removing')) {
+          container.remove();
+        }
+      }, 200);
     }
     return;
   }
+  if (!_isActive) return;
   if (!container) {
     container = document.createElement("div");
     container.id = "pendingQueueBar";

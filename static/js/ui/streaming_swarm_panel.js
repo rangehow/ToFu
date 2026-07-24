@@ -902,9 +902,8 @@ async function _reconcileStuckSwarmPanels() {
       }
       for (const conv of convsToRender) {
         try {
-          if (typeof activeConvId !== "undefined" && conv.id === activeConvId
-              && typeof renderChat === "function") {
-            renderChat(conv);
+          if (typeof activeConvId !== "undefined" && conv.id === activeConvId) {
+            window.ConvView.replaceAll(conv.id);
           }
           if (typeof saveConversations === "function") saveConversations(conv.id);
         } catch (e) {
@@ -928,9 +927,8 @@ async function _reconcileStuckSwarmPanels() {
       }
       for (const conv of convsToRender) {
         try {
-          if (typeof activeConvId !== "undefined" && conv.id === activeConvId
-              && typeof renderChat === "function") {
-            renderChat(conv);
+          if (typeof activeConvId !== "undefined" && conv.id === activeConvId) {
+            window.ConvView.replaceAll(conv.id);
           }
           if (typeof saveConversations === "function") saveConversations(conv.id);
         } catch (e) {

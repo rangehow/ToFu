@@ -280,7 +280,7 @@ async function generateImageDirect() {
     renderConversationList();
   }
 
-  renderChat(conv, true);
+  window.ConvView.replaceAll(conv.id, { forceScroll: true });
 
   // ── Clear input and pending images ──
   textarea.value = '';
@@ -382,7 +382,7 @@ async function generateImageDirect() {
       };
       _ensureMsgId(assistantMsg);
       conv.messages.push(assistantMsg);
-      if (conv.id === activeConvId) renderChat(conv, true);
+      if (conv.id === activeConvId) window.ConvView.replaceAll(conv.id, { forceScroll: true });
       saveConversations(conv.id);
       syncConversationToServer(conv);
 
@@ -403,7 +403,7 @@ async function generateImageDirect() {
                        _igError: errInfo };
       _ensureMsgId(errMsg);
       conv.messages.push(errMsg);
-      if (conv.id === activeConvId) renderChat(conv, true);
+      if (conv.id === activeConvId) window.ConvView.replaceAll(conv.id, { forceScroll: true });
       saveConversations(conv.id);
       syncConversationToServer(conv);
     }
@@ -430,7 +430,7 @@ async function generateImageDirect() {
                      _igError: { title: errTitle, text: errText, detail: '', errorType: isAbort ? 'timeout' : 'network', isTimeout: isAbort, isRateLimit: false, isContentBlocked: false } };
     _ensureMsgId(errMsg);
     conv.messages.push(errMsg);
-    if (conv.id === activeConvId) renderChat(conv, true);
+    if (conv.id === activeConvId) window.ConvView.replaceAll(conv.id, { forceScroll: true });
     saveConversations(conv.id);
     syncConversationToServer(conv);
   } finally {

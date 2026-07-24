@@ -358,10 +358,10 @@ function _handleToolCompacted(ev, c) {
             const _el = document.getElementById('msg-' + _stampedIdx);
             if (_el) _el.outerHTML = renderMessage(_stampedMsg, _stampedIdx);
           }
-        } else if (typeof renderChat === 'function') {
+        } else {
           const _conv = (typeof conversations !== 'undefined')
             ? conversations.find(c => c && c.id === convId) : null;
-          if (_conv) renderChat(_conv, false);
+          if (_conv) window.ConvView.replaceAll(convId, { forceScroll: false });
         }
       }
       /* ── Debug-panel alignment ──

@@ -90,7 +90,7 @@ function _ensureKatex() {
       if (typeof _mdCache !== 'undefined') _mdCache.clear();
       /* Trigger a re-render of current chat */
       const conv = typeof getActiveConv === 'function' && getActiveConv();
-      if (conv && typeof renderChat === 'function') renderChat(conv);
+      if (conv) window.ConvView.replaceAll(conv.id);
       /* Notify other surfaces (paper reader, artifacts, etc.) that
        * placed math-pending fallback markup so they can repaint with
        * real KaTeX output instead of staying stuck on `<code>` spans. */
@@ -338,7 +338,18 @@ function scrollToBottom(force) {
   if (_scrollRafId) return; // already scheduled
   _scrollRafId = requestAnimationFrame(() => {
     _scrollRafId = null;
+    /* ★ SCROLL-JITTER FIX: during streaming this fires once per rAF while
+     * scrollHeight is still growing. If any stylesheet sets
+     * `scroll-behavior:smooth` on the chat container (some themes did),
+     * the write becomes an animation that perpetually chases a moving
+     * target — the reader visibly drifts off the bottom then snaps back.
+     * Force instant scroll for the duration of the write. The tofu theme
+     * no longer sets smooth; this is belt-and-suspenders for future
+     * themes / user stylesheets. */
+    const _prev = c.style.scrollBehavior;
+    c.style.scrollBehavior = 'auto';
     c.scrollTop = c.scrollHeight;
+    c.style.scrollBehavior = _prev;
   });
 }
 /* ── Scroll-to-bottom button ──────────────────────────────────────────

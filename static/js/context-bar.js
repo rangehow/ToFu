@@ -644,8 +644,8 @@
             await loadConversationMessages(convId);
           }
         } catch (e) { console.warn('[compactNow] reload failed', e); }
-        if (convId === activeConvId && typeof renderChat === 'function') {
-          renderChat(c, false);                  // re-render → boundary card shows
+        if (convId === activeConvId) {
+          window.ConvView.replaceAll(c.id, { forceScroll: false }); // re-render → boundary card shows
         }
       }
       updateContextBar();                        // gauge scheme B drops the level

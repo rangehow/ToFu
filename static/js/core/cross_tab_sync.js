@@ -263,7 +263,7 @@ async function _verifyActiveConvFromServer(convId) {
       const _reconnected = (typeof _reconnectServerTaskIfIdle === "function")
         && _reconnectServerTaskIfIdle(convId);
       if (!_reconnected) {
-        renderChat(conv, false);
+        window.ConvView.replaceAll(conv.id, { forceScroll: false });
         if (typeof _restoreConvToolState === "function") _restoreConvToolState(conv);
       }
       /* Refresh the composer Send/Stop button so a still-running server task
@@ -668,7 +668,7 @@ function _reattachLiveOfflineTask(conv, task) {
   delete conv._activeTaskClearedAt;  // allow reattach (see settings restore guard)
   saveConversations(conv.id);
   try { ConvCache.put(conv); } catch (e) { console.debug(`[NetworkRecovery] ConvCache.put failed: ${e && e.message}`); }
-  if (activeConvId === conv.id) renderChat(conv);
+  if (activeConvId === conv.id) window.ConvView.replaceAll(conv.id);
   renderConversationList();
   connectToTask(conv.id, task.id);
   return true;
@@ -769,7 +769,7 @@ async function _recoverOfflineConversations(trigger) {
         delete am.error;
         saveConversations(conv.id);
         try { ConvCache.put(conv); } catch (e) { console.debug(`[NetworkRecovery] ConvCache.put failed: ${e && e.message}`); }
-        if (activeConvId === conv.id && typeof renderChat === 'function') renderChat(conv);
+        if (activeConvId === conv.id) window.ConvView.replaceAll(conv.id);
       }
       return;
     }
@@ -865,7 +865,7 @@ async function _recoverOfflineConversations(trigger) {
     if (activeConvId && !_reattachedIds.has(activeConvId)) {
       const activeConv = conversations.find(c => c.id === activeConvId);
       if (activeConv && offlineConvs.includes(activeConv)) {
-        renderChat(activeConv);
+        window.ConvView.replaceAll(activeConv.id);
       }
     }
     renderConversationList();

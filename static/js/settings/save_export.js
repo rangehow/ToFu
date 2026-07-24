@@ -118,13 +118,18 @@ function saveSettings() {
         if (data && data.ok) {
           debugLog('Debug mode ' + (newDbg ? 'enabled' : 'disabled'), 'success');
           if (typeof _featureFlags !== 'undefined') _featureFlags.debug_mode = newDbg;
+          // Show/hide unfinished orchestration surfaces (Flow submenu, Studio /
+          // Tasks topbar + mobile-sheet items). See index.html loadFeatureFlags.
+          if (typeof window._applyDebugModeVisibility === 'function') {
+            window._applyDebugModeVisibility();
+          }
           // Re-render sidebar and messages to show/hide debug elements.
           // Former renderMessages() never existed — whole-chat repaint is
           // renderChat(conv). (caught by tsc --checkJs)
           if (typeof renderConversationList === 'function') renderConversationList();
-          if (typeof renderChat === 'function' && typeof getActiveConv === 'function') {
+          if (typeof getActiveConv === 'function') {
             var _dbgConv = getActiveConv();
-            if (_dbgConv) renderChat(_dbgConv, true);
+            if (_dbgConv) window.ConvView.replaceAll(_dbgConv.id, { forceScroll: true });
           }
         }
       }).catch(function(e) { debugLog('Feature flag save failed: ' + e.message, 'error'); });

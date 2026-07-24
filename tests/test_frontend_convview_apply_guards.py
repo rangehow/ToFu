@@ -482,16 +482,10 @@ _FALLBACK_FILES = [
     'static/js/ui/streaming_render.js',
 ]
 
-_MIGRATED_FILES = [
-    'static/js/ui/translation_render.js',
-    'static/js/ui/edit_message.js',
-    'static/js/main/main_send_pipeline.js',
-    'static/js/main/main_regen_continue.js',
-    'static/js/ui/sse_pipeline.js',
-    'static/js/ui/stream_lifecycle.js',
-    'static/js/ui/streaming_render.js',
-    'static/js/main/main_conv_lifecycle.js',
-]
+_SEAM_FILES = {
+    'static/js/conv_view.js',        # the public seam (calls the engine)
+    'static/js/ui/chat_render.js',   # the seam's reconcile ENGINE
+}
 
 
 def test_no_convview_missing_raw_fallbacks():
@@ -518,23 +512,37 @@ def test_no_convview_missing_raw_fallbacks():
 
 
 def test_full_repaints_route_through_replaceAll():
-    """Migrated modules call ConvView.replaceAll, not bare renderChat (step 4 item 1).
+    """GLOBAL ZERO: no bare renderChat( anywhere outside the two seam files.
 
-    renderChat (chat_render.js) is the seam's reconcile ENGINE; the public
-    full-repaint entry is ConvView.replaceAll. The 8 migrated files must not
-    regress to calling the engine directly. `renderChat(` in comments is
-    stripped before the check; conv_view.js / chat_render.js are the seam
-    and engine themselves — out of scope.
+    Step 5 (owner condition 1) upgraded this from an 8-file allowlist to a
+    full-tree guard — an allowlist makes the fold a treadmill (a new bare
+    call in any unlisted file stays green). After the step-5 sweep migrated
+    all 43 sites, the exemption register is EMPTY: turn_nav.js /
+    finish_info.js (census-proven candidates for exemption) were migrated
+    too, so there is nothing left to exempt. `renderChat(` inside comments
+    and strings is stripped (code-only scan); the only two files allowed to
+    contain the call are the seam (conv_view.js) and its engine
+    (chat_render.js) — named individually, no pattern exemption.
     """
     offenders = []
-    for rel in _MIGRATED_FILES:
-        with open(os.path.join(ROOT, rel), encoding='utf-8') as f:
+    for path in glob.glob(os.path.join(JS_DIR, '**', '*.js'), recursive=True):
+        base = os.path.basename(path)
+        if base.endswith('.nc_copy.js') or base.startswith('bundle-'):
+            continue
+        rel = os.path.relpath(path, ROOT)
+        if rel in _SEAM_FILES:
+            continue
+        with open(path, encoding='utf-8') as f:
             code = _strip_js_comments(f.read())
+        # strings hold no CALLS — for a call-site scan, drop string contents
+        code = re.sub(r'"(?:\\.|[^"\\])*"', '""', code)
+        code = re.sub(r"'(?:\\.|[^'\\])*'", "''", code)
+        code = re.sub(r'`(?:\\.|[^`\\])*`', '``', code)
         hits = re.findall(r'(?<![\w.])renderChat\s*\(', code)
         if hits:
             offenders.append(f'{rel}: {len(hits)} bare renderChat( call(s)')
     assert not offenders, (
-        'full repaints bypassing the seam (use window.ConvView.replaceAll): '
+        'bare renderChat( outside the seam (use window.ConvView.replaceAll): '
         + '; '.join(offenders))
 
 

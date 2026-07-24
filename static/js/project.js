@@ -862,7 +862,7 @@ async function undoAllModifications() {
       saveConversations(activeConvId);
       // Re-render current chat
       const conv = getActiveConv();
-      if (conv) renderChat(conv);
+      if (conv) window.ConvView.replaceAll(conv.id);
       rescanProject();
     } else {
       debugLog("Undo all failed: " + (data.error || "unknown error"), "warn");

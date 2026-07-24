@@ -364,14 +364,18 @@ Sum(non-seam) = 157.
    `test_boot_hard_check_convview_present` (static) + the two runtime tests above.
    Ratchet: 192 → **157** (fallback deletions + scanner v3 accuracy + chat_render to
    the seam side).
-5. Sweep the remaining ~43 bare `renderChat(` call sites (conversations.js ×9,
-   cross_tab_sync.js ×4, health_stream_timer.js ×3, image-gen.js ×4, image-gen-batch ×2,
-   branch.js, context-bar.js, conv_sync_push.js, conv_window.js ×2, core.js, i18n.js,
-   main_init_tasks.js ×2, project.js, settings/save_export.js, finish_info.js,
-   message_actions.js ×2, sse_handlers_lifecycle.js, sse_handlers_tool.js,
-   sse_poll_fallback.js, streaming_swarm_panel.js ×2, swarm_push.js, turn_nav.js) onto
-   `ConvView.replaceAll`; declare the STRUCT-ONLY + PENDING-PLACEHOLDER allowlist final;
-   land the §7 streamBufs retirement against the §7.4 anchor.
+5. ✅ LANDED (this commit): all 43 bare `renderChat(` sites across 21 files swept onto
+   `ConvView.replaceAll` (the last one was image-gen.js's catch-block error render);
+   message_actions.js's translate-toggle `outerHTML` also converged onto `apply`.
+   **Fold guard upgraded to GLOBAL ZERO** (owner condition 1): no bare `renderChat(`
+   anywhere in `static/js/**` outside the two seam files (conv_view.js + chat_render.js,
+   named individually — no pattern exemption); the exemption register is EMPTY because
+   even turn_nav.js / finish_info.js were migrated. **§7.4 RED anchor landed in the
+   same commit** (owner condition 3 — failing-first evidence locked into history before
+   the §7 retirement).
+   Remaining after step 5: the §7 streamBufs retirement itself (phase → reducer live
+   session state per the §7.4 ruling; flips the anchor GREEN) + the §5-final
+   STRUCT/PENDING allowlist declaration.
 
 ## 6. Boundary
 
@@ -432,13 +436,38 @@ Nothing in this commit touches streamBufs reads/writes — the disposition above
 the retirement is scheduled as its own step so it rides the §3 anchor extension rather
 than landing unguarded.
 
-### 7.4 The reconnect byte-parity anchor (DESIGN — lands with the §7 retirement)
+### 7.4 The reconnect byte-parity anchor (RED anchor LANDED in step 5; flips GREEN with the §7 retirement)
+
+**Owner ruling on the phase home (2026-07-24, step 5 condition 2 — WRITTEN IN STONE):**
+`phase` belongs to the **reducer's live session state — NEVER the message document.**
+It is runtime state (what the model is doing right now), not turn content; writing it
+into `conv.messages` would pollute the SSOT with runtime state and contradict "no second
+fact source" from the other direction. The §7 retirement therefore moves phase OUT of
+`streamBufs` and INTO the reducer's live session state, and every reader
+(`health_stream_timer._updateStreamTimerUI` banner, `_streamFrameArg`) reads it from
+there. The reconnect arm reads the same session state — that is what makes the status
+zone byte-parity structural instead of discipline-maintained.
+
+**Anchor coverage EXTENDED to the status zone (owner condition 2):** the byte
+comparison covers content + thinking + **status zone** — the only place `phase`
+shows. A content-only anchor could never prove the phase migration correct.
+
+**Anchor status: RED, landed in step 5** (`tests/test_frontend_reconnect_parity_anchor.py`),
+JSDOM over the REAL `_streamFrameArg` (health_stream_timer.js) + `updateStreamingUI`
+(streaming_ui.js). Current verdict: content zone byte-identical ✓, thinking zone
+byte-identical ✓ (the checkpoint fallback covers both — the anchor pinpoints the gap),
+**status zone DIVERGES** (live arm paints the `llm_thinking` phase block; the
+reconnect arm's doc-seeded buffer has no phase → default waiting pulse). NEUTER:
+mutating the checkpoint content flips the content check red (comparator load-bearing).
+The §7 retirement flips the status zone GREEN by giving both arms the same phase
+source.
 
 **Claim under test:** for ONE in-flight turn, the `#chatInner` subtree produced by a
 COLD-OPEN RECONNECT (open the conv mid-stream → `connectToTask` replays the persisted
 checkpoint + `showStreamingUIForConv` paints the live bubble) MUST be byte-identical to
 the subtree produced by the LIVE-PAINT path (the tab that held the SSE stream from the
-first delta) at the SAME logical instant.
+first delta) at the SAME logical instant — **content zone, thinking zone, AND status
+zone** (see the ruling above).
 
 **Why this is the §7 acceptance anchor:** today the two paths paint from DIFFERENT
 sources — live paints from `streamBufs` (SSE deltas), reconnect paints from

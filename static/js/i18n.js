@@ -2239,6 +2239,45 @@ var _i18n = {
     zh: '⚡ 上下文超长，已自动压缩（reactive compact {attempt}/{max}）…',
     en: '⚡ Prompt too long — auto-compacted (reactive compact {attempt}/{max})…',
   },
+  'stream.phase.retryRateLimited': {
+    zh: '⏳ 模型 {model} 限流中，正在排队重试（第 {attempt} 次）…',
+    en: '⏳ Model {model} is rate-limited — queued retry (attempt {attempt})…',
+  },
+  'stream.phase.retryReason': {
+    zh: '重试中…{reason}（{model}，第 {attempt} 次）',
+    en: 'Retrying… {reason} ({model}, attempt {attempt})',
+  },
+  'stream.phase.retryGeneric': {
+    zh: '正在重试 {model}…（第 {attempt} 次）',
+    en: 'Retrying {model}… (attempt {attempt})',
+  },
+  // Typed retry CAUSES (`reasonKey`): the dispatcher passes short English log
+  // tokens as `reason`; the backend maps the known ones to these stable keys
+  // so the HUD localizes the cause instead of leaking raw jargon.
+  'stream.retryReason.endpointUnreachable': {
+    zh: '连不上模型服务器（网关/网络波动，正在自动切换通道）',
+    en: 'Model endpoint unreachable (gateway/network issue — switching channel)',
+  },
+  'stream.retryReason.requestTimedOut': {
+    zh: '请求超时',
+    en: 'Request timed out',
+  },
+  'stream.retryReason.waitingForModel': {
+    zh: '等待模型（限流排队中）',
+    en: 'Waiting for model (rate-limited)',
+  },
+  'stream.retryReason.keyBalanceExhausted': {
+    zh: '密钥余额/配额已用尽',
+    en: 'Key balance exhausted',
+  },
+  'stream.retryReason.keyAutoExhausted': {
+    zh: '密钥连续限流，已自动停用',
+    en: 'Key auto-exhausted (consecutive 429s)',
+  },
+  'stream.retryReason.rateLimited': {
+    zh: '请求被限流 (429)',
+    en: 'Rate limited (429)',
+  },
   'stream.thinking.active': { zh: '思考中...', en: 'Thinking...' },
   'stream.thinking.done': { zh: '思考过程', en: 'Thinking Process' },
   'stream.roundMessages': { zh: 'Round {round} · {n}条', en: 'Round {round} · {n} msgs' },
@@ -3160,9 +3199,9 @@ function _onLanguageChange(lang) {
   //   finish-info, timestamps) re-renders with the new language. The
   //   former call was to renderMessages(), which never existed — the
   //   whole-chat repaint is renderChat(conv). (caught by tsc --checkJs)
-  if (typeof renderChat === 'function' && typeof getActiveConv === 'function') {
+  if (typeof getActiveConv === 'function') {
     var _activeConv = getActiveConv();
-    if (_activeConv) renderChat(_activeConv, true);
+    if (_activeConv) window.ConvView.replaceAll(_activeConv.id, { forceScroll: true });
   }
   if (typeof _refreshOptimizerPanel === 'function') {
     try { _refreshOptimizerPanel(); } catch (e) { /* panel may not be open */ }

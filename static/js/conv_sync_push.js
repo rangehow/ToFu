@@ -96,7 +96,7 @@ async function _applyHistoryRewrite(convId, frameRev) {
   try { ConvCache.put(conv); } catch (e) { console.debug("[conv-sync] cache put skipped: %s", e && e.message); }
 
   if (typeof activeConvId !== "undefined" && activeConvId === convId) {
-    if (typeof renderChat === "function") renderChat(conv, false);
+    window.ConvView.replaceAll(convId, { forceScroll: false });
     if (typeof _restoreConvToolState === "function") _restoreConvToolState(conv);
   } else if (typeof renderConversationList === "function") {
     /* Not open — the shortened count / title may affect the sidebar preview. */

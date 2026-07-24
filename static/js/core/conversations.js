@@ -798,7 +798,7 @@ async function syncConversationToServer(conv, { allowTruncate = false } = {}) {
           if (freshData && typeof freshData.rev === 'number') conv._serverRev = freshData.rev;
           else if (typeof errBody.serverRev === 'number') conv._serverRev = errBody.serverRev;
           if (activeConvId === conv.id) {
-            renderChat(conv, false);
+            window.ConvView.replaceAll(conv.id, { forceScroll: false });
             if (typeof _restoreConvToolState === "function") _restoreConvToolState(conv);
           }
           conv._revRebaseDepth = (conv._revRebaseDepth || 0) + 1;
@@ -828,7 +828,7 @@ async function syncConversationToServer(conv, { allowTruncate = false } = {}) {
               conv._serverMsgCount = freshMsgs.length;
               ConvCache.put(conv);
               if (activeConvId === conv.id) {
-                renderChat(conv, false);
+                window.ConvView.replaceAll(conv.id, { forceScroll: false });
                 if (typeof _restoreConvToolState === "function") _restoreConvToolState(conv);
               }
               console.info(`[syncToServer] ✅ Recovered ${freshMsgs.length} msgs from server for conv=${conv.id.slice(0,8)}`);
@@ -1159,6 +1159,68 @@ function _serverConvCount(sc) {
   return v || 0;
 }
 
+
+/**
+ * Incrementally merge server metadata rows (from a folder-scoped or paginated
+ * list query) into the in-memory `conversations` array, keyed by id.
+ *
+ * DISCIPLINE (the "never overwrite" invariant): a row that is ALREADY in
+ * memory — because it's in the top-N sidebar window, is streaming, or has its
+ * messages loaded — must NOT have its heavy/live fields clobbered by a
+ * metadata-only row. We only FILL fields the local copy is missing:
+ *   • messages / _serverRev / activeTaskId / _needsLoad → left untouched.
+ *   • title / updatedAt / folderId → refreshed (cheap metadata, safe).
+ *
+ * A row NOT yet in memory is added as a SHELL with the same visibility-gate
+ * fields the boot loader builds (_serverMsgCount from the count, _needsLoad
+ * when the count is >0), so it passes renderConversationList's
+ * `messages.length>0 || _serverMsgCount>0 || _needsLoad` filter instead of
+ * silently hiding despite having been resolved by the folder query.
+ *
+ * Returns the number of NEW shells added (0 = every row was already known).
+ */
+function mergeServerConvShells(serverConvs) {
+  if (!Array.isArray(serverConvs) || serverConvs.length === 0) return 0;
+  const localMap = new Map(conversations.map((c) => [c.id, c]));
+  let added = 0;
+  for (const sc of serverConvs) {
+    if (!sc || !sc.id) continue;
+    const local = localMap.get(sc.id);
+    const _scCount = _serverConvCount(sc);
+    if (!local) {
+      const nc = {
+        id: sc.id,
+        title: sc.title,
+        messages: [],
+        _serverMsgCount: _scCount,
+        _needsLoad: _scCount > 0,
+        createdAt: sc.createdAt,
+        updatedAt: sc.updatedAt || sc.createdAt,
+        activeTaskId: null,
+      };
+      _applySettingsToConv(nc, sc.settings);   // adopts folderId / pinned / etc.
+      conversations.push(nc);
+      added++;
+    } else {
+      /* Existing conv — refresh ONLY cheap metadata; never touch live/heavy
+       * fields (messages, _serverRev, activeTaskId, _needsLoad). */
+      if (sc.title) local.title = sc.title;
+      const sT = sc.updatedAt || sc.createdAt || 0;
+      if (sT && sT >= (local.updatedAt || 0)) local.updatedAt = sT;
+      /* Keep _serverMsgCount at least as large as the server row reports so the
+       * visibility gate stays satisfied, but never shrink it (a lagging list
+       * snapshot mustn't rewind a count a fresher GET advanced). */
+      if (_scCount > (local._serverMsgCount || 0)) local._serverMsgCount = _scCount;
+      /* Adopt folderId from settings if the local copy doesn't have one yet
+       * (mirrors setActiveFolderId's need to see members in the folder view). */
+      if (sc.settings && sc.settings.folderId !== undefined && !local.folderId) {
+        local.folderId = sc.settings.folderId;
+      }
+    }
+  }
+  return added;
+}
+
 let _convMetaEtag = null;   // ETag for 304 Not Modified support
 /* ★ Observable-outcome signal for the boot-reconnect trigger. Because
  *   loadConversationsFromServer SWALLOWS its errors (try/catch → debugLog,
@@ -1170,6 +1232,14 @@ let _convMetaEtag = null;   // ETag for 304 Not Modified support
  *   main.js gates _bootReconnectWithBackoff on !serverLoadOk(). */
 let _lastServerLoadOk = false;
 function serverLoadOk() { return _lastServerLoadOk; }
+
+/* ★ Authoritative global conversation total reported by the server (via the
+ *   ?meta=1 X-Total-Count header, computed at cache-rebuild — NOT per poll).
+ *   The sidebar compares it against how many convs are actually in memory to
+ *   decide whether to show the "N earlier not loaded" affordance (C4). null
+ *   until the first meta load reports it. */
+let _serverTotalCount = null;
+function getServerTotalCount() { return _serverTotalCount; }
 async function loadConversationsFromServer(prefetchId) {
   _lastServerLoadOk = false;   // pessimistic — flipped true only at a genuine-success exit
   try {
@@ -1178,9 +1248,6 @@ async function loadConversationsFromServer(prefetchId) {
     const headers = {};
     /* When prefetching, skip ETag/304 — we need fresh data + the conv body */
     if (!prefetchId && _convMetaEtag) headers['If-None-Match'] = _convMetaEtag;
-    const url = prefetchId
-      ? apiUrl(`/api/v1/conversations?meta=1&prefetch=${encodeURIComponent(prefetchId)}`)
-      : apiUrl("/api/v1/conversations?meta=1");
     /* ★ Bound the fetch. Through a flaky tunnel (Android WebView over a VS Code
      *   port-forward) a raw fetch can HANG forever — never resolve, never
      *   reject. Since the outer try/catch only catches THROWS, a hung fetch
@@ -1195,7 +1262,11 @@ async function loadConversationsFromServer(prefetchId) {
       : (ms) => { const c = new AbortController(); setTimeout(() => c.abort(), ms); return c.signal; };
     let resp;
     for (let _attempt = 0; _attempt < 3; _attempt++) {
-      resp = await fetch(url, { headers, signal: _mkTimeoutSignal(_META_FETCH_TIMEOUT_MS) });
+      resp = await Api.conversations.listMeta({
+        prefetch: prefetchId || undefined,
+        headers,
+        signal: _mkTimeoutSignal(_META_FETCH_TIMEOUT_MS),
+      });
       if (resp.status === 503) {
         const delay = (parseInt(resp.headers.get('Retry-After'), 10) || (_attempt + 1)) * 1000;
         debugLog(`[loadConvs] 503 DB busy, retry ${_attempt + 1}/2 in ${delay}ms`, 'warn');
@@ -1206,6 +1277,16 @@ async function loadConversationsFromServer(prefetchId) {
     }
     if (resp.status === 304) { _lastServerLoadOk = true; return; }   // unchanged list — legitimate success
     if (!resp.ok) return;   // non-OK — leave _lastServerLoadOk=false (triggers reconnect)
+    /* Capture the authoritative global total (C4). Header absent on 304 (we
+     * already returned) and on error paths; a parse failure leaves the prior
+     * value untouched. */
+    try {
+      const _tc = resp.headers && resp.headers.get && resp.headers.get('X-Total-Count');
+      if (_tc != null && _tc !== '') {
+        const _n = parseInt(_tc, 10);
+        if (!Number.isNaN(_n)) _serverTotalCount = _n;
+      }
+    } catch (_e) { /* header read best-effort */ }
     let serverConvs, prefetchedConv = null;
     if (prefetchId) {
       /* Combo response: { conversations: [...], prefetched: {...} | null } */
@@ -1450,7 +1531,7 @@ async function loadConversationsFromServer(prefetchId) {
           if (ac._contentGrewNeedsVerify) ac._contentGrewNeedsVerify = false;
           await loadConversationMessages(activeConvId);
         } else if (acChanged && ac && !ac.activeTaskId) {
-          renderChat(ac, false);
+          window.ConvView.replaceAll(ac.id, { forceScroll: false });
           if (typeof _restoreConvToolState === "function")
             _restoreConvToolState(ac);
         }
@@ -1597,7 +1678,7 @@ async function loadConversationMessages(convId) {
         if (activeStreams.has(convId)) {
           if (typeof showStreamingUIForConv === "function") showStreamingUIForConv(convId);
         } else {
-          renderChat(conv, false);
+          window.ConvView.replaceAll(conv.id, { forceScroll: false });
           if (typeof _restoreConvToolState === "function") _restoreConvToolState(conv);
           _setCacheVerifying(convId, _cacheKnownStale);
         }
@@ -1927,7 +2008,7 @@ async function loadConversationMessages(convId) {
         `empty-assistant ghost tail.`);
       try { ConvCache.put(conv); } catch (_e) { /* best-effort */ }
       if (convId === activeConvId && typeof renderChat === 'function') {
-        renderChat(conv, false);
+        window.ConvView.replaceAll(conv.id, { forceScroll: false });
       }
       conv._needsLoad = false;
       conv._serverMsgCount = Math.max(serverMsgs.length, conv.messages.length);
@@ -2001,7 +2082,7 @@ async function loadConversationMessages(convId) {
           `(autopilot VU / queue dispatch / late persist).`);
         try { ConvCache.put(conv); } catch (_e) { /* best-effort */ }
         if (convId === activeConvId && typeof renderChat === 'function') {
-          renderChat(conv, false);
+          window.ConvView.replaceAll(conv.id, { forceScroll: false });
         }
       }
       conv._needsLoad = false;
@@ -2086,7 +2167,7 @@ async function loadConversationMessages(convId) {
           // Trigger re-render so Chinese appears now rather than on next action
           if (convId === activeConvId) {
             const _active = conversations.find(c => c.id === convId);
-            if (_active && typeof renderChat === 'function') renderChat(_active, false);
+            if (_active) window.ConvView.replaceAll(_active.id, { forceScroll: false });
           }
           ConvCache.put(conv);  // persist merged translations into cache
         } else {
@@ -2165,7 +2246,7 @@ async function loadConversationMessages(convId) {
         if (activeStreams.has(convId)) {
           if (typeof showStreamingUIForConv === "function") showStreamingUIForConv(convId);
         } else {
-          renderChat(conv, false);
+          window.ConvView.replaceAll(conv.id, { forceScroll: false });
           if (typeof _restoreConvToolState === "function") _restoreConvToolState(conv);
         }
       }
@@ -2184,6 +2265,22 @@ async function loadConversationMessages(convId) {
      *   known-stale "verifying" dim (no-op when it was never set). */
     delete conv._cacheKnownStale;
     _setCacheVerifying(convId, false);
+    /* ★ Unify the queued-message BAR with the transcript projection. Both the
+     *   chat bubbles and the queue bar are projections of the SAME server
+     *   state: dispatching a queued message MOVES it out of the message_queue
+     *   table and INTO the conversation as a real user turn. The transcript is
+     *   re-derived from the server right here — but several reconcile branches
+     *   (notably the MERGE_ACTIVE_TASK "appended trailing server msg(s)" path)
+     *   surface the dispatched bubble WITHOUT going through _checkForQueuedTask,
+     *   the only other place that refreshes the mirror. That left the drained
+     *   item lingering in the bar with a count that never dropped (the reported
+     *   "bubble appears but the queue doesn't discharge"). Re-deriving the queue
+     *   mirror from the same authority in lockstep closes the drift. Guarded so
+     *   it only fires for the OPEN conversation and never recurses into a load. */
+    if (convId === activeConvId && typeof _refreshServerQueue === 'function') {
+      try { _refreshServerQueue(convId); }
+      catch (e) { console.debug('[loadConvMsgs] queue mirror refresh failed:', e); }
+    }
     return conv;
   } catch (e) {
     debugLog(`Load conv ${convId}: ${e.message}`, "warn");
@@ -2237,7 +2334,7 @@ async function forceRecoverFromServer(convId) {
       conv.pinned = keepPinned; conv.pinnedAt = keepPinnedAt;
       saveConversations(convId);
       if (convId === activeConvId) {
-        renderChat(conv, false);
+        window.ConvView.replaceAll(conv.id, { forceScroll: false });
         if (typeof _restoreConvToolState === 'function') _restoreConvToolState(conv);
       }
       console.log(`[recover] ✅ Restored ${serverMsgs.length} messages (was ${localMsgs.length})`);

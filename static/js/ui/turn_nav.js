@@ -178,7 +178,7 @@ function scrollToTurn(idx) {
     if (activeStreams.has(conv.id) && typeof showStreamingUIForConv === 'function') {
       showStreamingUIForConv(conv.id);
     } else {
-      renderChat(conv, true);
+      window.ConvView.replaceAll(conv.id, { forceScroll: true });
     }
     el = document.getElementById("msg-" + idx);
     if (el) {

@@ -250,6 +250,6 @@ function _handleRoundCommitted(ev, c) {
       if (typeof ev.modifiedFiles === 'number') assistantMsg.modifiedFiles = ev.modifiedFiles;
       /* Re-render the message so its footer reflects the new file list /
          undo button availability. */
-      try { if (typeof renderChat === 'function') renderChat(); } catch (_) {}
+      try { window.ConvView.replaceAll(convId); } catch (_) {}
 
 }

@@ -1242,7 +1242,7 @@ function renderFileChangesBar(msg, msgIdx) {
     const conv = (typeof getActiveConv === 'function') ? getActiveConv() : null;
     if (!conv) return;
     if (typeof _bgRefreshChat === 'function') _bgRefreshChat(conv);
-    else if (typeof renderChat === 'function') renderChat(conv, false);
+    else window.ConvView.replaceAll(conv.id, { forceScroll: false });
   });
   return '';
 }

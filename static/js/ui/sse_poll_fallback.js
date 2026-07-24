@@ -235,7 +235,7 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
 
           // ★ Re-render the full conversation when new completed turns arrive
           if (newEpCount !== prevEpCount && activeConvId === convId) {
-            renderChat(conv);
+            window.ConvView.replaceAll(convId);
           }
         }
       } else {

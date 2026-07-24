@@ -107,7 +107,17 @@ function _streamPhaseLabel(buf) {
   // UI chrome). The per-phase generic fallback labels remain the last resort.
   const _resolvedDetail = (() => {
     if (p.detailKey && typeof t === 'function') {
-      try { return t(p.detailKey, p.detailArgs || undefined); }
+      try {
+        const _args = p.detailArgs ? Object.assign({}, p.detailArgs) : undefined;
+        /* ★ Nested typed cause (mirrors streaming_ui._phaseDetailText):
+         *   retry phases ship a stable `reasonKey` so the label localizes the
+         *   cause; unknown keys fall back to the raw reason. */
+        if (_args && _args.reasonKey) {
+          const _r = t(_args.reasonKey);
+          if (_r && _r !== _args.reasonKey) _args.reason = _r;
+        }
+        return t(p.detailKey, _args || undefined);
+      }
       catch (e) { console.debug('[stream-phase-label] t() failed for', p.detailKey, e); }
     }
     return p.detail ? String(p.detail) : '';
@@ -440,7 +450,7 @@ function _healStuckPlaceholder(convId, probe) {
     twStop(convId);
     if (typeof saveConversations === 'function') saveConversations(null);
     if (typeof ConvCache !== 'undefined') { try { ConvCache.put(conv); } catch (e) { /* non-fatal */ } }
-    if (activeConvId === convId && typeof renderChat === 'function') renderChat(conv);
+    if (activeConvId === convId) window.ConvView.replaceAll(convId);
     if (typeof renderConversationList === 'function') renderConversationList();
     /* ★ SELF-HEAL CONTINUATION (root-cause fix): clearing the running predicate
      *   above is NOT enough. When the swallowed terminal event belonged to a
@@ -517,7 +527,7 @@ function _healStuckPlaceholder(convId, probe) {
           if (sl.model) cur.model = sl.model;
           if (typeof saveConversations === 'function') saveConversations(null);
           if (typeof ConvCache !== 'undefined') { try { ConvCache.put(conv); } catch (e) { /* non-fatal */ } }
-          if (activeConvId === convId && typeof renderChat === 'function') renderChat(conv);
+          if (activeConvId === convId) window.ConvView.replaceAll(convId);
           if (typeof renderConversationList === 'function') renderConversationList();
         }
       }).catch((e) => console.debug(`[StreamTimer] background done-adopt fetch failed: ${e && e.message}`));
@@ -532,7 +542,7 @@ function _healStuckPlaceholder(convId, probe) {
     twStop(convId);
     if (typeof saveConversations === 'function') saveConversations(null);
     if (typeof ConvCache !== 'undefined') { try { ConvCache.put(conv); } catch (e) { /* non-fatal */ } }
-    if (activeConvId === convId && typeof renderChat === 'function') renderChat(conv);
+    if (activeConvId === convId) window.ConvView.replaceAll(convId);
     if (typeof renderConversationList === 'function') renderConversationList();
     return true;
   }

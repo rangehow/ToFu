@@ -1,5 +1,23 @@
 # Project Journal
 
+
+
+### 2026-07-24(续16) — msgid 重复气泡**全链路闭合**:前端 dedup 半外科提取入库 + 套件随批入库(`09fee050`,2 文件 +296,环 10/10 绿,collect **8301** 0 err)。Brain 自动派发我自己开的移交票 `pt_c53c279b16494657`,本回合闭环。
+- **认领即判定可自治推进(不落入 cooldown 空转):** 三个被问询的活跃 sibling(mryp5mg2/mryoxmil)均否认持有 conversations.js WIP;`mergeServerConvShells` 侧栏特征溯源到 7/16、7/18 两个**已不活跃**会话 → 属主不在场,block 成 [sibling]/[human-gated] 都只会再造一个 pt_39b79cc4 式空转票。改走**外科路径**:从混合 WIP(5 个互不相关特征:dedup / mergeServerConvShells / _serverTotalCount C4 / listMeta 迁移 / queue-mirror unify)中**只提取**与本 epic 配对的 serverAsstTaskIds dedup 三小 hunk(全部自包含于 `_rebaseUnackedTail`,与其余特征零符号耦合),其余 4 个特征原样留在 worktree 给属主。
+- **操作序列(shared-HEAD 纪律):** 备份混合 WIP(md5)→ `git checkout HEAD` 净版 → apply_diffs 重放仅 dedup 三 hunk → 环测(msgid 6 + lost_ack 2 + cross_tab_rev_guard 2 = **10/10**)+ `diff` 证 dedup 区与 WIP **逐字节相等** → commit(具名 add + cached stat 复核)→ **还原混合 WIP** 覆盖回 worktree → 验证剩余 diff 恰为其余 4 特征、零 dedup 残留 → 套件在 HEAD+parked-WIP 下仍 6/6。
+- **为何套件现在才入库(防呆点):** 套件前端层依赖这段 dedup,此前任何时刻入库都会让干净 HEAD 红 2 面(pt_39b79cc4 十一次空转的成因)。本 commit 把 dedup + 套件**原子同批**落地,干净 HEAD 下 6/6 绿,反模式闭环。套件自带 NEUTER 面(把守卫改 `if(false && …)` 证红),落地即带载荷证明。
+- **语义复核(不只看测试绿):** taskId 相等 ⇒ 同一次生成(regenerate/edit-resend 都是新 task 新 id,无误杀面);role 守卫保证 assistant 的 taskId 不会误删 user 回合;`Api.conversations.listMeta` 在 HEAD 已存在(api.js:506),故遗留 WIP 的 listMeta 特征自身连贯,非半成品。
+- **生效边界(诚实):** 前端 dedup 经 bundler(core/conversations.js 在 _BUNDLE_FILES)——**需重启服务端重建 bundle + 浏览器硬刷新**后生效;后端半(0318d10d)已随服务端重启生效。其余 4 个侧栏特征(文件夹 shell 合并 / 总数 C4 / listMeta / queue-mirror)仍是 worktree 停放状态,等属主认领——不在本 epic 范围。
+
+### 2026-07-24(续18) — pt_turn_settlement epic **收口为 DONE**(brain 自主派发,自验 60 verdict-suite 测全绿 + collect 8288 0 err 后 `project_board_complete`)+ **P2(persist+propagate)显式否决、非欠账** + P5 拆独立 gated epic `pt_c11c3a9272274848`(doc `2c606637`)。本 epic 三交付(中断气泡/继续按钮/无损续接)已落地:C1 JS 移植 `49795315`、C2 按钮读 resume.mode `814abd3c`、C3 气泡读裁决 `4d2d14d3` 标记、A+B live 链证 + content 兜底 `38d48669`、P1+P1b `4e75c586`。
+- **收口判决(非草率):** epic 标题承诺「3 独立 finishReason 推断 → 1 裁决」—— 气泡读裁决、按钮按 resume.mode 诚实标注、无损续接服务端真走 prefill —— **全部落地且端到端有证**(60 verdict-suite 测全绿),故 DONE 是诚实的。
+- **P2 为何否决(关键架构决定,写入 doc §5):** 原设计想在 settle 时算裁决并**持久化 `msg._settlement` + done/poll 传播**。否决,理由三:①**漂移** —— 持久化冻结快照,裁决逻辑一细化(如后加 `CAUSE_UNKNOWN`)旧值即陈;项目 ghost-tail 就是**读出时现算、从不持久化分类**;②**先例** —— ghost-tail / conv_state_reducer 都是「后端单一定义 + 前端行为锁定移植 + 等价测试」canonical-port,非持久化;③**风险** —— 持久化动 `_sync`(freshness-guard + CAS + 活跃 sibling WIP)和 done 事件(wire-parity),换不来更多行为收益。裁决仍后端权威:Python 定义唯一真相源,前端无法分叉。
+- **P5 拆分:** 「可 prefill 模型优先 prefill 于 checkpoint(tools 回合也无损)」是真行为变更(当前 checkpoint 优先、丢尾),拆为独立 gated epic `pt_c11c3a9272274848`(**未 block**:parity 验证 groundwork 是 agent 可做的实质进展,非空转;仅最终翻转 precedence 需 owner 拍板)。
+- **生效边界(不变):** 需 **server 重启重建 bundle + 浏览器硬刷新**;气泡视觉逐字节不变,按钮在 regenerate 场景文案有诚实变化。
+- **git 事故注:** 我此前 `续17`(C1-C3 landing + amend 碰撞修复)条目在 sibling/auto-archival 整理 JOURNAL 时被轮转丢失;实质记录散见于各 commit message、续16补(sibling 视角的同一事故)与 docs/TURN_SETTLEMENT.md。
+
+
+
 ### 2026-07-24(续16补) — git 事故记录:shared-HEAD amend 竞态把 step-3 commit 消息改写,内容零丢失,最终哈希映射(禁再做历史改写)
 - **事故:** C3 sibling 在其 `ed7dbda4`(真 C3)之上、HEAD 已被我的 step-3 commit `8142e908` 占据时执行 `git commit --amend` → 产生 `536b247a`(消息=C3,内容=我的 step-3 全部 13 文件 +670/-147),我的原 commit 孤儿化。sibling 发现后自行修补:`d45e2b0f`(消息=step-2,内容=我的续16 JOURNAL 条目)+ `4d2d14d3`(空 commit,消息=C3 content)。**最终主干内容完整、消息错位。**
 - **最终哈希映射(owner 按此对账):** 真 C3 内容=`ed7dbda4`(消息正确);step-3 内容=`536b247a`(消息误标为 C3);续16 JOURNAL=`d45e2b0f`(消息误标为 step-2);`4d2d14d3`=空 commit。我的 plumbing 修复版 `dc9419c3`(消息正确+tree 相同)保留在对象库,**不再合入** —— sibling 正在活跃编辑同一历史,再 rebase 只会扩大竞态。
@@ -57,6 +75,22 @@
 - **边界(严格遵守):** 写集仅 2 个新文件(docs plan + tests),**零生产代码变更**;不碰 CAS-baton / autopilot / conv_state_ssot / events.py / DB。plan §6 明确 VU 渲染只做 DOM 分类、baton 语义零触碰。
 - **后续(非本 commit):** §5 五步落地序 —— ①本 commit ②加 `ConvView.apply` + 收编 translation_render(锚点②转绿、ratchet −18)③收编 send/regen/edit 单消息换写 ④把 renderChat/_surgicalTruncateDOM 调用边界折进 ConvView.replaceAll、删全部 `window.ConvView` 缺失时的 raw fallback ⑤STRUCT/PENDING 定版为永久 allowlist,ratchet 触底、byte-parity 全绿。
 - **git 纪律(shared-HEAD):** worktree 大量 sibling WIP 全程未动;`git add` 精确 2 具名新文件 → `git status --short` 复核 → `git commit -- <2 paths>` 显式 pathspec → `git show HEAD --stat` 与暂存逐字节相等(2 files, +579)。
+
+### 2026-07-24(续13) — pt_turn_settlement A+B:owner 质疑「P1b 已生效」是未验证的硬伤 —— 用真集成测试**证实** live 链路(非死代码)+ 补上 segments 缺失的洞(content fallback)(commit 见下,3 文件 +242/-5,新测 7 面含 1 集成 + NEUTER 证红 + 相邻 114/114 + collect 8261 0 err)。owner 判得对:我只单元测了 verdict/prefill(segments 手造),没证明「手动 Stop→落库→点继续→真走 prefill」端到端。
+- **owner 的硬伤(精准):** `resume_prefill_from_segments` 开头 `if not segments: return None` → P1b 只在被 Stop 消息**真的持久化了带 terminal deliverable 的 segments** 时生效。而 segments 缺失/变薄的消息(旧回合、assemble 失败、abort 路径没写 segments、前端竞态)会**静默退回整段重生成** —— 正是要消灭的「按钮写继续、实际重生成」,只是藏在 P1b 给的「无损」错觉后。
+- **A(证伪/证实 live 链路,`tests/test_continue_prefill_abort_live.py::TestLiveAbortChain`):** 驱动**真实** persist 路径(真 sqlite `conversations` 行 + `create_task` + `persist_task_result`)模拟「无工具回合被手动 Stop 且仍是 latest」,落库后读回消息,再**逐字复刻** `/api/chat/continue` 分支序(`scan_continue_checkpoint` → `resume_prefill_from_segments`)。**证实**:被 Stop 消息持久化了 `finishReason='aborted'` + `content=PARTIAL` + **terminal deliverable segment(text=PARTIAL)**,continue 决策 = **prefill 而非 regenerate** → P1b 在「stopped task 是 latest」主路径上**是真生效、非死代码**。
+- **B(堵 segments 缺失的洞):** `resume_prefill_from_segments` 加 keyword-only `content` 参数,无 terminal deliverable segment 时**回退用消息的 content 频道**当 prefill —— 正是 `deliverable_text`(`_derive.py`)「segments 缺失回退 content,安全不丢」先例。门控同一套(RESUMABLE_FINISH_REASONS + model_supports_assistant_prefill),clean-stop/Claude 仍拒。安全性钉死:无工具回合 `content` 就是 terminal deliverable(`_discard_pretool_prose` 已剥离轮间旁白);带工具回合先被 `scan_continue_checkpoint` 认领,content fallback 只在无工具回合触发。`routes/chat.py` 传 `content=_orig_full_content`(本就 pre-rollback 捕获)。
+- **一个我自己的失误(诚实):** 首版 B 只改了 docstring+body 用 `content`,**忘了在签名里声明 `content` 参数** → TypeError(kwarg)+ NameError(body 引用未定义)双重报错,还一度误判为「破坏了既有 prefill 套件」。补签名后全绿 —— 教训:apply_diff 大段 replace 后要立即读回验证签名/正文一致,别只看「N lines changed」。
+- **证据链:** 7 新面(1 集成 + 6 content-fallback:resumes-via-content×2[aborted/length]、fail-closed Claude、clean-stop 不续、empty 仍 regen、pre-fix-route-still-regen 记录洞);**NEUTER 证红**(断 content fallback → 恰 2 个 resumes-via-content 翻红,fail-closed + 集成立面保持绿,证 load-bearing);相邻 `test_continue_prefill_resume`(10)+ `test_turn_settlement`(32)+ `test_segment_model`(62)+ `test_frontend_abort_toolrounds_survive`(3)= **114/114 绿**;collect **8261 tests 0 err**。
+- **sibling-WIP 边界(两条 peer message + 一处误判规避):**
+  - `test_abort_fragment_two_task_settle.py` + `test_abort_fragment_finish_reason.py` 是 **sibling 未入库 untracked WIP**,测的 `_stamp_aborted_fragment_finish_reason` 在 HEAD 根本不存在(`git grep` 无 `def`)→ 它们的 7 红**不是我的改动、非回归**,按 shared-HEAD 纪律不碰。注:那 sibling 的 superseded-fragment stamp 写 finishReason 但**不写 segments** —— 正是本 content-fallback 现在兜住的情形(互补不冲突)。
+  - peer mrytfz1w 误把 shared-worktree 里 `lib/llm/stream.py`/`llm_dispatch/api.py`/`manager/_stream.py` 的 WIP 当成我在做 on_attempt_restart plumbing → 我**一次回复纠正**(我只碰 turn_settlement 域,LLM 层 plumbing 非我;`test_interrupted_turn_metadata` 2 红也非我 P2 范围、非我 commit 造成,fair game 归它)。
+  - peer 再问 worktree `static/js/core/conversations.js` ~116 行 WIP(rescue-PUT rebase dedup)是否我的 → **否认**(我两个 commit 都没碰前端 JS;我的 C1/C2 会落在 finish_info/chat_render/main_regen_continue + 新建 core/turn_settlement.js,不是 conversations.js)。
+- **生效边界(诚实):** A+B 是**服务端**续接鲁棒性 —— 手动 Stop→继续现在在「latest-task 主路径 + segments 缺失兜底」两条路都真走 prefill(可 prefill 模型),重启服务端即生效。但**用户看得见的中断气泡 + 按钮时机仍一行未动**(前端还按旧 finishReason 推断)→ 下一相 C1(JS 移植裁决)+ C2(按钮/气泡消费)。
+- **下一相:** C1 新建 `static/js/core/turn_settlement.js`(compute_turn_settlement 的规范 JS 移植)+ `_BUNDLE_FILES` 收编 + 前后端等价测试(对齐 ghost-tail 先例,Node/jsdom 驱动双实现跑同一语料断言逐字节一致);C2 按钮按 `resume.mode` 诚实标注(无损续接/从第 N 轮恢复/重新生成)、气泡统一读 `outcome/cause`,i18n keys 复用。
+
+
+
 
 ### 2026-07-24(续14) — RENDER_CONTRACT Phase 3.5 §5 step 2 落地:`ConvView.apply` 单一公共 DOM-apply 入口 + translation_render 收编(锚点②转绿)+ 全仓普查补 ratchet(streaming_ui 49 / health_stream_timer 10)+ streamBufs 处置节 + boot 硬检查(commit `bbb220a9`,6 文件 +470/-144,锚点 2 红→6 全绿,NEUTER 回环证红,相邻 4 红 stash 证伪为 HEAD 预存在,collect 8261 0 err)。owner 验收 step 1 抓到「计划没覆盖 streaming_ui.js 这个最热写器 + streamBufs 生死没交代 + 文档三处自相矛盾」,四条件全部并入本 commit。
 - **owner 四条件 → 落地对照:**

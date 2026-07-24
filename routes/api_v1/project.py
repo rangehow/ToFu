@@ -625,7 +625,27 @@ def project_board():
         return api_bad_request('path is required', field='path')
     try:
         from lib.conversations.project_board import read_board
-        return api_ok(read_board(project_path))
+        board = read_board(project_path)
+        # ── Backend-authoritative dispatch fact (front/back contract): the
+        #    frontend must NOT re-infer "will the brain pick this up" from
+        #    client state. Stamp `dispatchable=True` on the epics the heartbeat
+        #    would genuinely pick up on its next sweep (deps done, not on a live
+        #    cooldown, not live-claimed, has a routing target). The frontend
+        #    renders "auto-starts ~30s" purely from this flag. Best-effort:
+        #    a failure here just omits the flag (frontend shows no hint). ──
+        try:
+            from lib.conversations.project_dispatch import (
+                _dispatch_target, select_dispatchable)
+            pickable = {e['id']: _dispatch_target(e)
+                        for e in select_dispatchable(project_path)}
+            for t in board.get('tasks', []):
+                tgt = pickable.get(t.get('id'))
+                if tgt:
+                    t['dispatchable'] = True
+                    t['dispatch_target'] = tgt
+        except Exception as e:
+            logger.debug('[Project.v1] board dispatch-fact enrich skipped: %s', e)
+        return api_ok(board)
     except Exception as e:
         logger.error('[Project.v1] board read failed for %s: %s',
                      project_path, e, exc_info=True)
@@ -791,6 +811,46 @@ def project_board_reopen():
         logger.error('[Project.v1] board/reopen failed for %s: %s',
                      project_path, e, exc_info=True)
         return api_internal_error(e, source='api_v1.project.board_reopen')
+
+
+@api_v1_project_bp.route('/api/v1/project/board/answer', methods=['POST'])
+@require_auth
+@rate_limit(limit=20, per=60)
+@api_meta(
+    summary='HUMAN answers a pending block question on a board epic',
+    description=(
+        'Body: ``{path, taskId, convId, answer}``. Closes the structured human '
+        'gate: stamps ``human_answer``, clears the cooldown + question, emits '
+        'an ``answered`` feed event, and triggers an IMMEDIATE re-dispatch '
+        '(``on_epic_answered``) whose kickoff carries the answer. Only valid '
+        'while a question is pending (else ``no_pending_question`` → 400). '
+        'Audit-logged.'),
+    tags=['project'],
+)
+def project_board_answer():
+    data = parse_body()
+    project_path = (data.get('path') or '').strip()
+    if not project_path:
+        return api_bad_request('path is required', field='path')
+    task_id = (data.get('taskId') or '').strip()
+    if not task_id:
+        return api_bad_request('taskId is required', field='taskId')
+    answer = (data.get('answer') or '').strip()
+    if not answer:
+        return api_bad_request('answer is required', field='answer')
+    conv_id = _board_conv_id(data)
+    try:
+        from lib.conversations.project_board import answer_task
+        result = answer_task(project_path, conv_id, task_id, answer)
+        if not result.get('ok'):
+            return jsonify(result), 400
+        logger.info('[Project.v1] board/answer proj=%.40r task=%s',
+                    project_path, task_id)
+        return api_ok(result)
+    except Exception as e:
+        logger.error('[Project.v1] board/answer failed for %s: %s',
+                     project_path, e, exc_info=True)
+        return api_internal_error(e, source='api_v1.project.board_answer')
 
 
 @api_v1_project_bp.route('/api/v1/project/charter/pending', methods=['GET'])

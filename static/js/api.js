@@ -934,6 +934,12 @@
            { path, taskId, convId: convId || '', reason: reason || '' }),
     boardReopen:   (path, taskId, convId) =>
       post('/api/v1/project/board/reopen', { path, taskId, convId: convId || '' }),
+    // HUMAN answer to a pending block question — closes the structured gate
+    // (stamps human_answer, clears the cooldown, immediate re-dispatch whose
+    // kickoff carries the answer).
+    boardAnswer:   (path, taskId, convId, answer) =>
+      post('/api/v1/project/board/answer',
+           { path, taskId, convId: convId || '', answer: answer || '' }),
     // Collaboration-bar one-shot summary (board + decisions + peer→epic join).
     // convId (optional) is excluded from activePeers/peerEpics so the count is
     // "OTHER conversations online" — matching the local push-mirror semantics.

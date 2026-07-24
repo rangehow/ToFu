@@ -182,6 +182,14 @@ def select_dispatchable(project_path: str) -> list[dict]:
         #    retried), with NO reaper and NO human un-block gate. ──
         if int(t.get('blocked_until') or 0) > now_ms:
             continue
+        # ── pending-question filter: an epic blocked WITH a structured human
+        #    question waits for the ANSWER, not for time — re-dispatching
+        #    before the human answers can only re-discover the same gate (the
+        #    billed-turn loop this redesign exists to kill). answer_task
+        #    clears the question + cooldown, so an ANSWERED epic falls through
+        #    to normal pick-up (and carries its answer into the kickoff). ──
+        if t.get('block_question') and not (t.get('human_answer') or '').strip():
+            continue
         # ── dependency filter: every dependency must be DONE. An epic with an
         #    unfinished (or unknown) dependency is NOT yet pickable. ──
         deps = t.get('depends_on') or []
@@ -296,8 +304,24 @@ def dispatch_epic(project_path: str, epic: dict, target_conv_id: str, *,
             f"this epic precisely while a sibling holds a lease on those paths "
             f"(releasing automatically when they do), instead of blind retries. "
             f"Either way the block puts the epic on a self-expiring cooldown so "
-            f"it is not pointlessly re-dispatched. Do NOT silently no-op."
+            f"it is not pointlessly re-dispatched. When the gate needs a HUMAN "
+            f"decision, also pass the question (and options when the choice is "
+            f"enumerable) to project_board_block — the human answers with one "
+            f"click on the board and the answer re-dispatches you immediately "
+            f"(a question-block does NOT auto-retry). Do NOT silently no-op."
         )
+        # An epic unblocked by a HUMAN ANSWER carries that answer into the
+        # kickoff — the assignee proceeds on it directly instead of
+        # re-discovering (or worse, re-asking) the question.
+        answer = (epic.get('human_answer') or '').strip()
+        if answer:
+            kickoff += (
+                f"\n\nThis epic was blocked waiting on a human decision — "
+                f"the human has now answered: \"{answer}\". Proceed on "
+                f"that basis; do NOT re-ask the same question or re-block "
+                f"on the same gate unless the answer genuinely does not "
+                f"resolve it."
+            )
         # Resolve a REAL config from the target conv's settings when the caller
         # passed none (the sweep/completion callers do): the kickoff is later
         # drained into create_task, which needs a model + projectPath to work.
@@ -844,7 +868,54 @@ def on_epic_completed(project_path: str, completed_conv_id: str = '') -> int:
     return dispatched
 
 
+def on_epic_answered(project_path: str, task_id: str) -> int:
+    """Trigger seam: the human just ANSWERED a board question → re-dispatch
+    that epic IMMEDIATELY (no 30 s heartbeat wait). The epic is re-read fresh
+    and sanity-gated (effectively open, answer present, dependencies done) so
+    a stale/answered-elsewhere call can't double-dispatch; then routed via the
+    normal ``_dispatch_target`` + drained if idle (same cold-start machinery
+    as the sweep). Best-effort; returns 1 when dispatched.
+    """
+    if not project_path or not task_id:
+        return 0
+    try:
+        from lib.conversations.project_board import read_board
+        board = read_board(project_path)
+        epic = next((t for t in board['tasks'] if t['id'] == task_id), None)
+        if not epic or epic.get('status') != 'open':
+            return 0
+        if not (epic.get('human_answer') or '').strip():
+            return 0  # nothing to act on — the heartbeat sweep stays the path
+        done_ids = {t['id'] for t in board['tasks'] if t['status'] == 'done'}
+        if any(d not in done_ids for d in (epic.get('depends_on') or [])):
+            logger.info('[Dispatch] answer received for %s but deps unmet; '
+                        'leaving to the heartbeat sweep', task_id)
+            return 0
+        target = _dispatch_target(epic)
+        if not target:
+            logger.info('[Dispatch] answer received for %s but no routing '
+                        'target; leaving to the heartbeat sweep', task_id)
+            return 0
+        if _conv_has_live_task(target) or _epic_already_queued(target, task_id):
+            logger.info('[Dispatch] answer received for %s; target conv=%s is '
+                        'busy/already-queued — kickoff left to the sweep',
+                        task_id, target[:8])
+            return 0
+        res = dispatch_epic(project_path, epic, target)
+        if res.get('ok'):
+            _drain_idle_target(target)
+            logger.info('[Dispatch] answer → immediate re-dispatch epic=%s '
+                        'conv=%s', task_id, target[:8])
+            return 1
+        return 0
+    except Exception as e:
+        logger.warning('[Dispatch] on_epic_answered failed proj=%.40r '
+                       'task=%s: %s', project_path, task_id, e)
+        return 0
+
+
 __all__ = [
     'select_dispatchable', 'dispatch_epic', 'on_epic_completed',
+    'on_epic_answered',
     'sweep_dispatch', 'sweep_all_active_projects', 'BRAIN_DISPATCH_MARKER',
 ]

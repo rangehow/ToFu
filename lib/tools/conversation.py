@@ -40,11 +40,19 @@ CONV_REF_GET_TOOL = {
     "function": {
         "name": "get_conversation",
         "description": (
-            "Retrieve the full content of another conversation by its ID. "
-            "Returns all messages including user prompts, assistant responses, tool calls, and tool results. "
+            "Retrieve the content of another conversation by its ID. "
             "Use this when the user asks you to reference specific information, decisions, code changes, "
             "debugging context, or tool outputs from a previous conversation. "
             "First use list_conversations to find the right conversation ID.\n\n"
+            "TWO output modes:\n"
+            "• Default (raw=false) — a READABLE prose transcript of user prompts + assistant "
+            "responses + a condensed view of tool calls/results. Best for understanding what was "
+            "discussed, but it SUMMARIZES tool rounds and drops per-message metadata.\n"
+            "• raw=true — for DEBUGGING / inspecting exact state. Returns the COMPLETE, un-summarized "
+            "DB record as structured JSON: every row column (created_at, updated_at, msg_count, rev, "
+            "settings) plus every field of every message preserved (finishReason, usage, model, "
+            "timestamp, _msgId, modifiedFileList, the full toolRounds), nothing summarized or "
+            "truncated away. Use this when you need the original metadata, not just the readable gist.\n\n"
             "IMPORTANT: Only use this when the user EXPLICITLY requests information from a past conversation. "
             "Never call this proactively or speculatively."
         ),
@@ -57,7 +65,11 @@ CONV_REF_GET_TOOL = {
                 },
                 "include_tool_details": {
                     "type": "boolean",
-                    "description": "Whether to include full tool call arguments and results (default: true). Set to false for a shorter summary."
+                    "description": "Whether to include full tool call arguments and results (default: true). Set to false for a shorter summary. Ignored when raw=true."
+                },
+                "raw": {
+                    "type": "boolean",
+                    "description": "When true, return the full raw DB record (all columns + settings + every message field preserved) as structured JSON for debugging, instead of the readable prose transcript. Default: false."
                 }
             },
             "required": ["conversation_id"]
@@ -276,13 +288,37 @@ BOARD_BLOCK_TOOL = {
             "'[sibling] path=lib/x.py,static/js/y.js …' — the epic is then HELD "
             "precisely while a sibling holds a lease on those paths (auto-released when "
             "they finish), the precise complement to the cooldown. Then state the "
-            "concrete blocker."
+            "concrete blocker.\n\n"
+            "HUMAN QUESTION: when the gate needs a HUMAN decision, also pass "
+            "`question` (and `options` when the choice is enumerable). The board "
+            "panel then renders answer controls (one-click options + free text) "
+            "and the epic waits for the ANSWER instead of auto-retrying — the "
+            "moment the human answers, the epic is re-dispatched with the answer "
+            "in its kickoff. This is the ask_human-style closure for board work; "
+            "strongly prefer it over a bare [human-gated] block (which keeps "
+            "auto-retrying into the same unanswered gate)."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "task_id": {"type": "string", "description": "The board epic id."},
                 "reason": {"type": "string", "description": "Why it's blocked. PREFIX with the block class: '[human-gated] …' or '[sibling] …'. For a sibling-commit blocker, name the files as '[sibling] path=a.py,b.py …' to auto-hold on them."},
+                "question": {
+                    "type": "string",
+                    "description": "Optional. The concrete question you need the HUMAN to answer (for a [human-gated] block). Renders on the board with answer controls; the epic auto-re-dispatches the moment it is answered."
+                },
+                "options": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "label": {"type": "string", "description": "The choice label (concise)."},
+                            "description": {"type": "string", "description": "Optional: what choosing this means."}
+                        },
+                        "required": ["label"]
+                    },
+                    "description": "Optional (max 6). Predefined choices for the human; omit for a free-text answer."
+                },
             },
             "required": ["task_id"],
         },

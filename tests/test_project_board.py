@@ -752,7 +752,7 @@ def test_NC4_reopen_owner_clear_noop_breaks(flask_app):
 
     _patch_restore(
         _BOARD_SRC,
-        "        db.execute(\n            \"UPDATE project_tasks SET status='open', owner_conv_id='', \"\n            \"lease_expires_at=0, dispatched=0, blocked_until=0, block_count=0, \"\n            \"block_reason='', wait_paths='[]', dispatch_target='', updated_at=? \"\n            'WHERE id=? AND project_path=?',\n            (_now_ms(), task_id, project_path))\n        db.commit()",
+        "        db.execute(\n            \"UPDATE project_tasks SET status='open', owner_conv_id='', \"\n            \"lease_expires_at=0, dispatched=0, blocked_until=0, block_count=0, \"\n            \"block_reason='', wait_paths='[]', dispatch_target='', \"\n            \"block_question='', human_answer='', updated_at=? \"\n            'WHERE id=? AND project_path=?',\n            (_now_ms(), task_id, project_path))\n        db.commit()",
         "        pass  # NC-4 (reopen status/owner write disabled)",
         run,
     )

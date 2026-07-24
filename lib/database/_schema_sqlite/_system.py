@@ -220,6 +220,13 @@ def _init_system_schema(conn):
     # 2026-07. See docs/PROJECT_BRAIN_WORKTREE_ISOLATION.md §4.
     if not _column_exists(conn, 'project_tasks', 'write_set'):
         cur.execute("ALTER TABLE project_tasks ADD COLUMN write_set TEXT NOT NULL DEFAULT '[]'")
+    # Migration: structured human-gate columns (Pillar #3). Pre-existing rows
+    # default to '' → no pending question → dispatchable exactly as before.
+    # Added 2026-07. See project_board.py::answer_task.
+    if not _column_exists(conn, 'project_tasks', 'block_question'):
+        cur.execute("ALTER TABLE project_tasks ADD COLUMN block_question TEXT NOT NULL DEFAULT ''")
+    if not _column_exists(conn, 'project_tasks', 'human_answer'):
+        cur.execute("ALTER TABLE project_tasks ADD COLUMN human_answer TEXT NOT NULL DEFAULT ''")
     # Migration: the shelving/park mechanism was removed (the project pushes
     # every open epic forward at full speed). Any epic left in the retired
     # 'deferred' status is revived to 'open' so it dispatches again. Idempotent.

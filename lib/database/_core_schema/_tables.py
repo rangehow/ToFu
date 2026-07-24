@@ -636,6 +636,18 @@ PROJECT_TASKS = define_table(
     # NEVER stranded. Reset to '[]' on complete/reopen. See
     # docs/PROJECT_BRAIN_WORKTREE_ISOLATION.md §4.
     sa.Column('write_set', sa.Text, nullable=False, server_default="[]"),
+    # block_question / human_answer: the STRUCTURED human gate on a block
+    # (Pillar #3). block_task may carry a question for the human (JSON
+    # {"q", "options": [{"label", "description"?}]}); an epic with a
+    # PENDING question (block_question set, human_answer empty) is EXCLUDED
+    # from select_dispatchable regardless of cooldown — re-running before
+    # the answer can only re-discover the same gate (the billed-turn loop).
+    # answer_task records the human's answer, clears the cooldown + question,
+    # and the next dispatch injects the Q&A into the kickoff. Both reset on
+    # complete/reopen; a fresh block supersedes a stale answer. See
+    # project_board.py::answer_task. Added 2026-07.
+    sa.Column('block_question', sa.Text, nullable=False, server_default=''),
+    sa.Column('human_answer', sa.Text, nullable=False, server_default=''),
     sa.Column('created_at', bigint_column(), nullable=False, server_default=sa.text('0')),
     sa.Column('updated_at', bigint_column(), nullable=False, server_default=sa.text('0')),
 )

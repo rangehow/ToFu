@@ -293,7 +293,7 @@ function loadConversation(id) {
            *   frozen placeholder. connectToTask + showStreamingUIForConv already
            *   painted; nothing more to do here. */
         } else if (c._needsLoad || c.messages.length === 0) {
-          renderChat(c);
+          window.ConvView.replaceAll(c.id);
           if (typeof _restoreConvToolState === "function") _restoreConvToolState(c);
         }
         /* ★ No-auto-scroll-on-OPEN (owner directive): the former trailing
@@ -314,7 +314,7 @@ function loadConversation(id) {
      *   connectToTask re-attaches (self-healing to poll/finishStream if the task
      *   already finished) instead of leaving a static, frozen placeholder. */
   } else {
-    renderChat(c);
+    window.ConvView.replaceAll(c.id);
     _resumePendingTranslations(id);
   }
 

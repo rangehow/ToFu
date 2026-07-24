@@ -142,7 +142,7 @@ function cancelEditMessage(idx) {
   if (msgEl && conv.messages[idx]) {
     window.ConvView.apply(conv.id, idx, conv.messages[idx]);
   } else {
-    renderChat(conv);
+    window.ConvView.replaceAll(conv.id);
   }
 }
 function saveEditOnly(idx) {
@@ -277,7 +277,7 @@ function saveEditOnly(idx) {
   if (msgEl) {
     window.ConvView.apply(conv.id, idx, msg);
   } else {
-    renderChat(conv);
+    window.ConvView.replaceAll(conv.id);
   }
 }
 async function saveEditAndResend(idx) {
@@ -326,7 +326,7 @@ async function saveEditAndResend(idx) {
     msg.timestamp = Date.now();
     conv.messages = conv.messages.slice(0, idx);
     saveConversations(conv.id);
-    if (typeof renderChat === 'function') renderChat(conv);
+    window.ConvView.replaceAll(conv.id);
     if (typeof renderConversationList === 'function') renderConversationList();
     // Seed textarea + pendingImages so generateImageDirect picks them up.
     let prompt = t || '';

@@ -101,14 +101,9 @@ async function startAssistantResponse(convId) {
       const role = _isEndpoint ? 'planner' : 'worker';
       /* ★ Route through ConvView.startStreaming so the insert is deduped at the
        *   boundary (_evictByMsgId removes any node already bound to this _msgId
-       *   + any stale #streaming-msg). A raw insertAdjacentHTML here could
-       *   coexist with a drifted static bubble / leftover streaming-msg →
-       *   multiple empty "Agent" bubbles. Fallback keeps dev-mode parity. */
-      if (window.ConvView && typeof window.ConvView.startStreaming === 'function') {
-        window.ConvView.startStreaming(convId, { role, msgId: _saMsgId });
-      } else {
-        inner.insertAdjacentHTML('beforeend', _streamingBubbleHTML(role, null, null, _saMsgId));
-      }
+       *   + any stale #streaming-msg). No raw fallback — the boot-time ConvView
+       *   hard check (main.js) turns a missing seam into a loud startup failure. */
+      window.ConvView.startStreaming(convId, { role, msgId: _saMsgId });
       const el = document.getElementById('streaming-msg');
       if (el) {
         el.classList.add('message-new');
@@ -921,7 +916,7 @@ function _attachAutopilotFollowup(convId, payload) {
      *   surgical path may keep the corrupted msg-N from finishStream's
      *   ConvView.finalizeStreaming call (which can land BEFORE we get
      *   here in some paths) instead of repainting from conv.messages. */
-    renderChat(conv, true);
+    window.ConvView.replaceAll(convId, { forceScroll: true });
   } else {
     /* ★ Background-conv autopilot: we just pushed VU + assistant
      *   placeholder into conv.messages but can't render now.  When the
@@ -1320,7 +1315,7 @@ async function _recoverTimedOutChatTask(convId, opts = {}) {
     conv.messages.push(assistantMsg);
     conv.activeTaskId = task.id;
     conv._needsLoad = false;
-    if (activeConvId === convId) renderChat(conv);
+    if (activeConvId === convId) window.ConvView.replaceAll(convId);
     renderConversationList();
     connectToTask(convId, task.id);
     return true;
@@ -1423,7 +1418,7 @@ async function _checkForQueuedTask(convId, _retryCount = 0) {
     conv._needsLoad = false;
 
     if (activeConvId === convId) {
-      renderChat(conv);
+      window.ConvView.replaceAll(convId);
     }
     renderConversationList();
 

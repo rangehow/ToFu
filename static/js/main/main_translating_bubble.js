@@ -67,12 +67,9 @@ function _renderStreamingBubble(conv, sendConfig, msgId) {
   // per-round translation partials can be routed to it while it streams.
   /* ★ Dedup at the insert boundary via ConvView.startStreaming (_evictByMsgId)
    *   so a residual #streaming-msg / drifted static twin can't leave a second
-   *   empty bubble. Fallback keeps dev-mode parity. */
-  if (window.ConvView && typeof window.ConvView.startStreaming === 'function') {
-    window.ConvView.startStreaming(conv.id, { role, msgId: msgId || null });
-  } else {
-    inner.insertAdjacentHTML('beforeend', _streamingBubbleHTML(role, null, null, msgId || null));
-  }
+   *   empty bubble. No raw fallback — the boot-time ConvView hard check
+   *   (main.js) turns a missing seam into a loud startup failure. */
+  window.ConvView.startStreaming(conv.id, { role, msgId: msgId || null });
   const el = document.getElementById('streaming-msg');
   if (el) {
     el.classList.add('message-new');

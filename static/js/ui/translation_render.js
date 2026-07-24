@@ -48,10 +48,10 @@ function _renderMsgInPlace(convId, idx, msg) {
   const el = document.getElementById(`msg-${idx}`);
   if (!el) {
     console.warn(`[Translate] _renderMsgInPlace: no #msg-${idx} node ` +
-      `(conv=${convId.slice(0,8)}) — falling back to renderChat(scroll-preserving)`);
+      `(conv=${convId.slice(0,8)}) — falling back to ConvView.replaceAll(scroll-preserving)`);
     const _conv = (typeof conversations !== 'undefined')
       ? conversations.find(c => c.id === convId) : null;
-    if (_conv && typeof renderChat === 'function') renderChat(_conv, false);
+    if (_conv) window.ConvView.replaceAll(convId, { forceScroll: false });
     return;
   }
   const ct = document.getElementById('chatContainer');
@@ -343,8 +343,8 @@ function emitMessageChanged(convId, idx, msg, detail) {
   const kind = detail.kind || 'full';
   if (kind === 'conv') {
     if (typeof activeConvId !== 'undefined' && activeConvId === convId
-        && detail.conv && typeof renderChat === 'function') {
-      renderChat(detail.conv, false);
+        && detail.conv) {
+      window.ConvView.replaceAll(convId, { forceScroll: false });
     }
     return true;
   }

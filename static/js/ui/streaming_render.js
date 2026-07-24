@@ -151,7 +151,7 @@ function _beginVuStreaming(convId, conv, vuMsgId, parentMessage) {
         const m = conv.messages[i];
         if (m && m.role === "assistant" && !m._isVirtualUser) { parentAssistant = m; break; }
       }
-      if (parentAssistant && window.ConvView) {
+      if (parentAssistant) {
         /* ★ Project the parent worker's SETTLED finish metadata NOW (delivered
          * on vu_start as `parentMessage`) so its finish bar renders COMPLETE at
          * handoff — model + tokens + cost + finishReason ✓. Without this the
@@ -360,7 +360,7 @@ function _handleAutopilotVuEvent(convId, ev) {
       /* Convert the live `#streaming-msg` into the settled static bubble,
        * then tear down the buffer + elapsed timer.  finalizeStreaming now
        * accepts _isVirtualUser (see conv_view.js). */
-      if (window.ConvView) window.ConvView.finalizeStreaming(convId, entry.msg);
+      window.ConvView.finalizeStreaming(convId, entry.msg);
       if (typeof twStop === "function") twStop(convId);
     }
     if (typeof saveConversations === "function") saveConversations(convId);
@@ -588,8 +588,8 @@ function _applyDisarmResponse(convId, resp) {
     if (typeof saveConversations === 'function') saveConversations(convId);
     try { if (typeof ConvCache !== 'undefined') ConvCache.put(conv); }
     catch (e) { /* non-fatal */ }
-    if (activeConvId === convId && typeof renderChat === 'function') {
-      renderChat(conv, true);
+    if (activeConvId === convId) {
+      window.ConvView.replaceAll(convId, { forceScroll: true });
     }
   } catch (e) {
     console.warn('[Autopilot] apply disarm response failed:', e && e.message);
@@ -619,8 +619,8 @@ function _handleAutopilotRunConcluded(convId, ev) {
   if (typeof saveConversations === "function") saveConversations(convId);
   try { if (typeof ConvCache !== "undefined") ConvCache.put(conv); }
   catch (e) { /* non-fatal */ }
-  if (activeConvId === convId && typeof renderChat === "function") {
-    renderChat(conv, true);
+  if (activeConvId === convId) {
+    window.ConvView.replaceAll(convId, { forceScroll: true });
   }
 }
 

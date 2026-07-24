@@ -425,14 +425,12 @@ async function connectToTask(convId, taskId, retries = 0, opts = {}) {
           ? 'Planning…'
           : (_hasPartial ? 'Resuming…' : 'Connecting…');
         const _reconTime = formatClockTime(assistantMsg.timestamp);
-        if (window.ConvView && typeof window.ConvView.startStreaming === 'function') {
-          window.ConvView.startStreaming(convId, {
-            role: _reconRole, status: _reconStatus,
-            timeStr: _reconTime, msgId: assistantMsg._msgId || null,
-          });
-        } else {
-          inner.insertAdjacentHTML('beforeend', _streamingBubbleHTML(_reconRole, _reconStatus, _reconTime, assistantMsg._msgId || null));
-        }
+        /* No raw fallback — the boot-time ConvView hard check (main.js)
+         * turns a missing seam into a loud startup failure. */
+        window.ConvView.startStreaming(convId, {
+          role: _reconRole, status: _reconStatus,
+          timeStr: _reconTime, msgId: assistantMsg._msgId || null,
+        });
         /* Pre-populate streaming-body with whatever content was already
          * persisted, so the user sees real progress before SSE arrives.
          * The first delta from _trySSE will replace .stream-status with
@@ -862,7 +860,7 @@ function dispatchSSEEvent(line, ctx) {
 
           // Re-render if active
           if (activeConvId === convId) {
-            renderChat(conv);
+            window.ConvView.replaceAll(convId);
             /* ★ FIX: renderChat rendered ALL messages including the in-progress
              *   one.  We need to remove that last static element before creating
              *   the streaming-msg, otherwise the in-progress message shows twice:
@@ -872,17 +870,12 @@ function dispatchSSEEvent(line, ctx) {
             if (staleRenderedEl) staleRenderedEl.remove();
 
             // Re-create streaming-msg for the in-progress turn
-            const inner = document.getElementById("chatInner");
             const _reconRole = _epCriticPhase ? 'critic'
               : (ev.endpointPhase === 'planning' ? 'planner' : 'worker');
             const _reconStatus = _epCriticPhase ? 'Reviewing…'
               : (ev.endpointPhase === 'planning' ? 'Planning…' : 'Thinking…');
             /* ★ Dedup at the boundary (ConvView.startStreaming → _evictByMsgId). */
-            if (window.ConvView && typeof window.ConvView.startStreaming === 'function') {
-              window.ConvView.startStreaming(convId, { role: _reconRole, status: _reconStatus, msgId: assistantMsg._msgId || null });
-            } else if (inner) {
-              inner.insertAdjacentHTML("beforeend", _streamingBubbleHTML(_reconRole, _reconStatus, undefined, assistantMsg._msgId || null));
-            }
+            window.ConvView.startStreaming(convId, { role: _reconRole, status: _reconStatus, msgId: assistantMsg._msgId || null });
             buildTurnNav(conv);
           }
         }
@@ -1325,13 +1318,8 @@ function dispatchSSEEvent(line, ctx) {
 
           // 3. Create a streaming element for the critic (DOM — only if active)
           if (_isActiveConv) {
-            const inner = document.getElementById("chatInner");
             /* ★ Dedup at the boundary (ConvView.startStreaming → _evictByMsgId). */
-            if (window.ConvView && typeof window.ConvView.startStreaming === 'function') {
-              window.ConvView.startStreaming(convId, { role: 'critic', msgId: _epCriticMsg._msgId || null });
-            } else if (inner) {
-              inner.insertAdjacentHTML("beforeend", _streamingBubbleHTML('critic', undefined, undefined, _epCriticMsg._msgId || null));
-            }
+            window.ConvView.startStreaming(convId, { role: 'critic', msgId: _epCriticMsg._msgId || null });
           }
 
           // 4. Create a separate stream buffer for the critic
@@ -1410,11 +1398,7 @@ function dispatchSSEEvent(line, ctx) {
             if (_isActiveConv) {
               const inner = document.getElementById("chatInner");
               /* ★ Dedup at the boundary (ConvView.startStreaming → _evictByMsgId). */
-              if (window.ConvView && typeof window.ConvView.startStreaming === 'function') {
-                window.ConvView.startStreaming(convId, { role: 'worker', status: 'Thinking…', msgId: assistantMsg._msgId || null });
-              } else if (inner) {
-                inner.insertAdjacentHTML("beforeend", _streamingBubbleHTML('worker', 'Thinking…', undefined, assistantMsg._msgId || null));
-              }
+              window.ConvView.startStreaming(convId, { role: 'worker', status: 'Thinking…', msgId: assistantMsg._msgId || null });
               buildTurnNav(conv);
               _forceScrollToBottom();
             }
@@ -1555,11 +1539,7 @@ function dispatchSSEEvent(line, ctx) {
           if (activeConvId === convId) {
             const inner = document.getElementById("chatInner");
             /* ★ Dedup at the boundary (ConvView.startStreaming → _evictByMsgId). */
-            if (window.ConvView && typeof window.ConvView.startStreaming === 'function') {
-              window.ConvView.startStreaming(convId, { role: 'planner', status: 'Replanning…', msgId: assistantMsg._msgId || null });
-            } else if (inner) {
-              inner.insertAdjacentHTML("beforeend", _streamingBubbleHTML('planner', 'Replanning…', undefined, assistantMsg._msgId || null));
-            }
+            window.ConvView.startStreaming(convId, { role: 'planner', status: 'Replanning…', msgId: assistantMsg._msgId || null });
             const banner = document.getElementById("ep-iter-banner");
             if (banner) banner.textContent = `Replanning…`;
           }
@@ -1613,11 +1593,7 @@ function dispatchSSEEvent(line, ctx) {
         if (activeConvId === convId) {
           const inner = document.getElementById("chatInner");
           /* ★ Dedup at the boundary (ConvView.startStreaming → _evictByMsgId). */
-          if (window.ConvView && typeof window.ConvView.startStreaming === 'function') {
-            window.ConvView.startStreaming(convId, { role: 'worker', status: 'Thinking…', msgId: assistantMsg._msgId || null });
-          } else if (inner) {
-            inner.insertAdjacentHTML("beforeend", _streamingBubbleHTML('worker', 'Thinking…', undefined, assistantMsg._msgId || null));
-          }
+          window.ConvView.startStreaming(convId, { role: 'worker', status: 'Thinking…', msgId: assistantMsg._msgId || null });
 
           // Update banner & turn-nav
           const banner = document.getElementById("ep-iter-banner");
@@ -1817,8 +1793,7 @@ function dispatchSSEEvent(line, ctx) {
                 };
                 if (reconcileTurnCtxCapsule(_uMsg._ctx, _fact)) {
                   if (typeof saveConversations === 'function') saveConversations(convId);
-                  if (activeConvId === convId && window.ConvView
-                      && typeof window.ConvView.upsertMessage === 'function') {
+                  if (activeConvId === convId) {
                     window.ConvView.upsertMessage(convId, _uMsg, { idx: _uIdx });
                   }
                 }
@@ -1950,9 +1925,7 @@ function dispatchSSEEvent(line, ctx) {
        *   in _beginVuStreaming, so this covers BOTH the follow-up path
        *   AND the cancel path (VU bailed → bubble already removed).
        *   (Mirrors the streaming-msg-destroyed-by-renderChat fix.) */
-      if (activeConvId === convId && assistantMsg._vuTookOverBubble
-          && window.ConvView
-          && typeof window.ConvView.upsertMessage === 'function') {
+      if (activeConvId === convId && assistantMsg._vuTookOverBubble) {
         delete assistantMsg._vuTookOverBubble;
         window.ConvView.upsertMessage(convId, assistantMsg);
       }
@@ -2030,8 +2003,7 @@ function dispatchSSEEvent(line, ctx) {
         const _eIdx = _ec ? _ec.messages.indexOf(assistantMsg) : -1;
         if (_eIdx >= 0) {
           _ec.messages.splice(_eIdx, 1);
-          if (activeConvId === convId && window.ConvView
-              && typeof window.ConvView.removeMessage === 'function') {
+          if (activeConvId === convId) {
             window.ConvView.removeMessage(convId, assistantMsg._msgId || _eIdx);
           }
           /* Drop the live streaming bubble too — finishStream would otherwise

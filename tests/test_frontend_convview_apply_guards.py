@@ -36,6 +36,20 @@ Owner-directed additions on top of the step-2 seam (docs/RENDER_CONTRACT_PHASE3_
    Guards: test_stream_seg_narration_gone_from_production_js (static),
            test_inert_css_block_removed (static).
 
+⑤ STEP 4 — SEAM-2 fold + raw-fallback deletion + boot-check RUNTIME proof:
+   (a) every whole-conversation repaint routes through ConvView.replaceAll
+   (renderChat = the seam's engine, not a second public entry);
+   (b) the `window.ConvView`-missing raw fallbacks (the twin-bubble
+   breeding ground) are gone — the boot hard check makes a missing seam a
+   loud startup failure;
+   (c) that boot check is proven to actually FIRE: JSDOM with ConvView
+   undefined → banner in DOM + console.error captured; with a ConvView stub
+   → silent (NEUTER).
+   Guards: test_no_convview_missing_raw_fallbacks (static),
+           test_full_repaints_route_through_replaceAll (static),
+           test_boot_check_fires_when_convview_missing (JSDOM),
+           test_NEUTER_boot_check_silent_when_present (JSDOM).
+
 Run: PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q \\
        tests/test_frontend_convview_apply_guards.py
 """
@@ -456,11 +470,182 @@ def test_NEUTER_token_guard_detects_injected_assignment():
         'NEUTER FAILED: the token guard is blind to a real class assignment')
 
 
+# ════════════════════════════════════════════════════════════════════
+# ⑤ Step 4 — fallback deletion (static) + fold (static) + boot RUNTIME (JSDOM)
+# ════════════════════════════════════════════════════════════════════
+
+_FALLBACK_FILES = [
+    'static/js/ui/sse_pipeline.js',
+    'static/js/main/main_translating_bubble.js',
+    'static/js/main/main_send_pipeline.js',
+    'static/js/ui/stream_lifecycle.js',
+    'static/js/ui/streaming_render.js',
+]
+
+_MIGRATED_FILES = [
+    'static/js/ui/translation_render.js',
+    'static/js/ui/edit_message.js',
+    'static/js/main/main_send_pipeline.js',
+    'static/js/main/main_regen_continue.js',
+    'static/js/ui/sse_pipeline.js',
+    'static/js/ui/stream_lifecycle.js',
+    'static/js/ui/streaming_render.js',
+    'static/js/main/main_conv_lifecycle.js',
+]
+
+
+def test_no_convview_missing_raw_fallbacks():
+    """The `window.ConvView`-missing raw fallbacks are gone (step 4 item 2).
+
+    The twin-bubble breeding ground: every ConvView call used to carry a
+    `typeof window.ConvView.x === 'function'` guard with a raw DOM-write
+    else-branch, so a bundler slip silently produced duplicate/mis-painted
+    bubbles instead of failing. With the boot hard check (main.js) the seam
+    is guaranteed — the guards + raw else-branches must NOT come back.
+    """
+    offenders = []
+    for rel in _FALLBACK_FILES:
+        with open(os.path.join(ROOT, rel), encoding='utf-8') as f:
+            code = _strip_js_comments(f.read())
+        if re.search(r'typeof\s+window\.ConvView\.', code):
+            offenders.append(f'{rel}: typeof-guard on window.ConvView')
+        if re.search(r'\}\s*else[^{]*\{[^}]*insertAdjacentHTML[^;]*_streamingBubbleHTML',
+                     code, re.DOTALL):
+            offenders.append(f'{rel}: raw _streamingBubbleHTML else-branch')
+    assert not offenders, (
+        'ConvView-missing fallbacks resurrected (the boot hard check makes '
+        'them unnecessary AND hides bundler slips): ' + '; '.join(offenders))
+
+
+def test_full_repaints_route_through_replaceAll():
+    """Migrated modules call ConvView.replaceAll, not bare renderChat (step 4 item 1).
+
+    renderChat (chat_render.js) is the seam's reconcile ENGINE; the public
+    full-repaint entry is ConvView.replaceAll. The 8 migrated files must not
+    regress to calling the engine directly. `renderChat(` in comments is
+    stripped before the check; conv_view.js / chat_render.js are the seam
+    and engine themselves — out of scope.
+    """
+    offenders = []
+    for rel in _MIGRATED_FILES:
+        with open(os.path.join(ROOT, rel), encoding='utf-8') as f:
+            code = _strip_js_comments(f.read())
+        hits = re.findall(r'(?<![\w.])renderChat\s*\(', code)
+        if hits:
+            offenders.append(f'{rel}: {len(hits)} bare renderChat( call(s)')
+    assert not offenders, (
+        'full repaints bypassing the seam (use window.ConvView.replaceAll): '
+        + '; '.join(offenders))
+
+
+_BOOT_CAPTURE = r"""
+/* Pre-target: capture console.error / console.warn BEFORE main.js evals —
+ * the boot check fires DURING main.js's init IIFE, so the wrap must already
+ * be installed (a post-eval wrap can never see it). */
+window.__bootErrors = [];
+window.__bootWarns = [];
+(function () {
+  const _e = console.error, _w = console.warn;
+  console.error = (...a) => { window.__bootErrors.push(a.join(' ')); };
+  console.warn = (...a) => { window.__bootWarns.push(a.join(' ')); _w.apply(console, a); };
+})();
+"""
+
+
+def _boot_body(checks_js: str) -> str:
+    return (
+        "const { setup } = require(process.env.JSDOM_HARNESS);\n"
+        "const { window, document, check, report } = setup({\n"
+        "  root: process.argv[3],\n"
+        "  html: '<!DOCTYPE html><html><body><div id=\"chatInner\"></div></body></html>',\n"
+        "  targets: [process.argv[2], process.argv[4]],\n"
+        "  globals: {},\n"
+        "});\n"
+        + checks_js + "\nreport();\n")
+
+
+_BOOT_ASSERT_FIRES = r"""
+const banner = Array.from(document.querySelectorAll('div')).find(
+  d => (d.textContent || '').indexOf('MISSING at boot') >= 0);
+check('banner_present_in_dom', !!banner);
+check('banner_mentions_bundle', !!banner && banner.textContent.indexOf('bundle') >= 0);
+check('console_error_fired', window.__bootErrors.some(
+  m => m.indexOf('[ConvView] MISSING at boot') >= 0));
+"""
+
+
+_BOOT_ASSERT_SILENT = r"""
+const banner = Array.from(document.querySelectorAll('div')).find(
+  d => (d.textContent || '').indexOf('MISSING at boot') >= 0);
+check('no_banner_when_convview_present', !banner);
+check('no_error_when_convview_present',
+  window.__bootErrors.filter(m => m.indexOf('[ConvView] MISSING at boot') >= 0).length === 0);
+"""
+
+
+def test_boot_check_fires_when_convview_missing():
+    """RUNTIME proof (owner step-4 item 3): the boot check actually EXECUTES.
+
+    Static presence ≠ runtime trigger. JSDOM with window.ConvView undefined:
+    main.js's init IIFE runs the check → fixed banner in the DOM +
+    console.error captured by the pre-eval wrap.
+    """
+    import tempfile
+    with tempfile.NamedTemporaryFile(
+            mode='w', suffix='.js', delete=False, encoding='utf-8') as tf:
+        tf.write(_BOOT_CAPTURE)
+        capture_path = tf.name
+    try:
+        output = run_harness(
+            target_js=capture_path,
+            body_js=_boot_body(_BOOT_ASSERT_FIRES),
+            extra_targets=[os.path.join(JS_DIR, 'main.js')],
+            min_pass=3,
+            label='boot-check-fires',
+        )
+    finally:
+        os.unlink(capture_path)
+    for needle in ('PASS banner_present_in_dom',
+                   'PASS banner_mentions_bundle',
+                   'PASS console_error_fired'):
+        assert needle in output, f'{needle}\n{output}'
+
+
+def test_NEUTER_boot_check_silent_when_present():
+    """NEUTER: with ConvView present the SAME harness sees NO banner/error —
+    proving the firing above is the check reacting to ConvView's absence,
+    not an unconditional boot artifact."""
+    import tempfile
+    with tempfile.NamedTemporaryFile(
+            mode='w', suffix='.js', delete=False, encoding='utf-8') as tf:
+        tf.write(_BOOT_CAPTURE)
+        capture_path = tf.name
+    body = _boot_body(_BOOT_ASSERT_SILENT).replace(
+        'globals: {},',
+        'globals: { ConvView: { apply: function(){}, startStreaming: function(){}, '
+        'finalizeStreaming: function(){}, replaceAll: function(){} } },')
+    try:
+        output = run_harness(
+            target_js=capture_path,
+            body_js=body,
+            extra_targets=[os.path.join(JS_DIR, 'main.js')],
+            min_pass=2,
+            label='boot-check-neuter',
+        )
+    finally:
+        os.unlink(capture_path)
+    for needle in ('PASS no_banner_when_convview_present',
+                   'PASS no_error_when_convview_present'):
+        assert needle in output, f'{needle}\n{output}'
+
+
 if __name__ == '__main__':
     for fn in (test_upsert_is_thin_alias_of_apply,
                test_stream_seg_narration_gone_from_production_js,
                test_inert_css_block_removed,
-               test_NEUTER_token_guard_detects_injected_assignment):
+               test_NEUTER_token_guard_detects_injected_assignment,
+               test_no_convview_missing_raw_fallbacks,
+               test_full_repaints_route_through_replaceAll):
         try:
             fn()
             print('  PASS', fn.__name__)
@@ -468,7 +653,9 @@ if __name__ == '__main__':
             print('  RED ', fn.__name__, '::', str(e)[:300])
     for fn in (test_upsert_alias_runtime_parity,
                test_apply_refuses_live_streaming_bubble,
-               test_dom_order_matches_messages_after_send_edit_regen):
+               test_dom_order_matches_messages_after_send_edit_regen,
+               test_boot_check_fires_when_convview_missing,
+               test_NEUTER_boot_check_silent_when_present):
         try:
             fn()
             print('  PASS', fn.__name__)

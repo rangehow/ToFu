@@ -88,7 +88,8 @@ win.renderMarkdown = global.renderMarkdown = (s) => s;
 // node process throws ReferenceError before later cases run.
 win.t = global.t = (key, params) => key;
 win.ConvView = global.ConvView = { finalizeStreaming: spy('finalizeStreaming'),
-  removeMessage: spy('removeMessage') };
+  removeMessage: spy('removeMessage'), replaceAll: spy('replaceAll'),
+  upsertMessage: spy('upsertMessage'), startStreaming: spy('startStreaming') };
 win.Artifacts = global.Artifacts = { attachToMessage: spy('attachToMessage') };
 win.flashGaugeForArchive = global.flashGaugeForArchive = spy('flashGaugeForArchive');
 win.Api = global.Api = { project: { status: () => Promise.resolve(null) } };

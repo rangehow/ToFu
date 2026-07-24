@@ -1,7 +1,9 @@
 # RENDER_CONTRACT Phase 3.5 — make the DOM-apply layer single-seamed too
 
-> **Status: §5 step 1 (design + failing-first skeleton) and step 2 (`ConvView.apply` +
-> translation_render convergence + census join + boot hard check) are LANDED.**
+> **Status: §5 steps 1–4 LANDED** (1: design + failing-first skeleton; 2: `ConvView.apply` +
+> translation_render convergence + census join + boot hard check; 3: seam hardening
+> ①collapse/②live-guard/③order-invariant/④dead-CSS + §2.5/2.6/2.8 convergence;
+> 4: SEAM-2 fold + raw-fallback deletion + boot-check RUNTIME proof).
 > Companion: [`RENDER_CONTRACT.md`](RENDER_CONTRACT.md) §1 Invariant 1 (`DOM = render(messages, rev)`),
 > [`RENDER_CONTRACT_PHASE3_PLAN.md`](RENDER_CONTRACT_PHASE3_PLAN.md) (the message-document reducer).
 > This plan closes the gap Phase 3 did NOT close: **Phase 3 unified the message-document
@@ -69,19 +71,25 @@ file's raw ops are listed below with a class + a Phase-3.5 target.
 | ~272 | `sm.outerHTML = html` (finalizeStreaming) | SEAM | keep |
 | +4 helper ops | evict / restore | SEAM | keep |
 
-### 2.2 `static/js/ui/chat_render.js` — N=10 → the reconcile engine (CONVVERGE to ConvView.apply/replaceAll)
+### 2.2 `static/js/ui/chat_render.js` — N=8 → THE SEAM'S ENGINE (SEAM-2, step 4 fold)
 
 | Line | Op | Class | Target |
 |---|---|---|---|
-| 465 | `inner.innerHTML = html` (renderChat full) | SEAM-2 | fold into `ConvView.replaceAll` |
-| 661 | `wrapper.innerHTML = renderMessage(msg, i)` (surgical) | SEAM-2 | fold into `ConvView.apply` |
-| 674 | `upd.el.outerHTML = upd.html` (surgical) | SEAM-2 | fold into `ConvView.apply` |
-| 686, 697 | `el.remove()` / `leftoverStreaming.remove()` | STRUCT-ONLY | keep — stale-node eviction |
-| 755, 759, 787 | `inner.innerHTML = …` (skeleton / welcome / placeholder) | PENDING-PLACEHOLDER | keep — no message field read |
+| 256 | `inner.innerHTML = html` (skeleton render) | SEAM-2 | engine internal |
+| 387 | `wrapper.innerHTML = renderMessage(msg, i)` (surgical insert, detached-builder) | SEAM-2 | engine internal |
+| 398 | `upd.el.outerHTML = upd.html` (surgical batch swap) | SEAM-2 | engine internal |
+| 408, 417 | `el.remove()` / `leftoverStreaming.remove()` | SEAM-2 | engine internal (stale eviction) |
+| 457, 460 | `inner.innerHTML = …` (welcome / loading skeleton) | SEAM-2 | engine internal (placeholders) |
+| 486 | `inner.innerHTML = html` (full-path wipe) | SEAM-2 | engine internal |
 
-`renderChat`/`_surgicalTruncateDOM` are the SECOND seam (the render engine ConvView already
-delegates to). Phase 3.5 does NOT rewrite them — it moves their call boundary INTO
-`ConvView.apply` / `ConvView.replaceAll` so there is ONE public DOM entry point.
+`renderChat`/`_surgicalTruncateDOM` are the seam's reconcile ENGINE: ConvView.replaceAll
+delegates here, and their raw writes are the projection IMPLEMENTATION, not a second
+public entry. **Step 4 folded the call boundary**: other modules' full repaints route
+through `ConvView.replaceAll(convId, {forceScroll})` (16 call sites migrated; the
+remaining ~43 across conversations.js / cross_tab_sync.js / health_stream_timer.js /
+image-gen*.js / branch.js / core.js / … are the §5 step-5 sweep list). chat_render.js
+moves to the SEAM SIDE of the ratchet (pinned at 8, like conv_view's 8) — the ratchet's
+job on it is no NEW raw writes beyond the engine's current set.
 
 ### 2.3 `static/js/ui/streaming_render.js` — N=21 → the live-write engine (CONVERGE to ConvView)
 
@@ -247,7 +255,7 @@ when they first gain a chatInner write is part of every future step's checklist.
 | STRUCT-ONLY | ~34 | keep, explicitly allowlisted |
 | PENDING-PLACEHOLDER | ~18 | keep, must never read `msg.*` |
 | NOT-#chatInner | ~16 | excluded from class rules, still under the ratchet |
-| **Total raw ops (tokenizer)** | **200 = 8 seam + 192 non-seam** (post-step-3) | ~69 stay (seam+struct+placeholder) + **~117 converged/converging** |
+| **Total raw ops (tokenizer v3)** | **173 = 16 seam (8 conv_view + 8 chat_render engine) + 157 non-seam** (post-step-4) | seam+struct+placeholder stay + **CONTENT-DERIVED converges** |
 
 Exact per-file numbers live in `_RATCHET_BASELINE` (the guard); the class split above is
 the §2 tables' cluster-level rollup (±3).
@@ -298,12 +306,13 @@ A second test in the same file statically audits the 15 non-seam files (tokenize
 count the 4 raw-DOM op patterns), asserting each file's count is **≤ its §2 baseline** —
 the monotonic-decrease ratchet (same pattern as `test_frontend_api_isolation.py`): the
 baseline only ever goes DOWN as sites converge; any NEW raw write fails CI.
-Baselines (2026-07-24 post-step-3, tokenizer-measured): streaming_ui 49, streaming_render 21,
-image-gen 18, sse_pipeline 17, translation_render 17, main_send_pipeline 16,
-health_stream_timer 10, main_conv_lifecycle 10, chat_render 10, conv_view 8 (seam —
-pinned, not ratcheted down), stream_lifecycle 6, main_translating_bubble 6,
-image-gen-batch 5, core/conversations 4, main_regen_continue 2, edit_message 1.
-Sum(non-seam) = 192.
+Baselines (2026-07-24 post-step-4, tokenizer **v3** — strings replaced with a non-empty
+placeholder so `classList.remove('cv-off')` no longer counts as a DOM detach):
+streaming_ui 49, streaming_render 20, translation_render 14, image-gen 13,
+main_send_pipeline 12, health_stream_timer 10, main_conv_lifecycle 10, sse_pipeline 10,
+stream_lifecycle 5, image-gen-batch 5, main_translating_bubble 3, core/conversations 3,
+main_regen_continue 2, edit_message 1. SEAM SIDE (pinned): conv_view 8, chat_render 8.
+Sum(non-seam) = 157.
 
 ## 5. Landing order (each step committable + tested; mirrors Phase 3 §7)
 
@@ -333,21 +342,36 @@ Sum(non-seam) = 192.
    from styles.css (step 2's byte-parity fix killed its class); static guards pin:
    no production JS (comments stripped) may carry the token, no CSS rule may
    reference it. Ratchet 207 → 192.
-4. Fold the `renderChat`/`_surgicalTruncateDOM` call boundary into `ConvView.replaceAll` /
-   `ConvView.apply`; delete the per-call `window.ConvView` raw fallbacks (§2.4). Ratchet
-   approaches the STRUCT/PENDING floor.
-   **Precondition (LANDED in step 2): the boot-time ConvView hard check** — before ANY
-   fallback is deleted, a missing ConvView must fail LOUDLY at startup, not degrade
-   silently per call site. `main.js` init now checks
-   `typeof window.ConvView?.apply === 'function'` and, on absence, fires
-   `console.error` + pins a fixed banner (`[ConvView] MISSING at boot — the JS bundle is
-   broken…`). This kills the twin-bubble breeding ground (the raw fallbacks) without
-   turning a bundler slip into runtime per-point crashes — the failure mode moves from
-   "silent wrong DOM" to "explicit broken boot". Guard:
-   `test_boot_hard_check_convview_present` (check exists in init + `conv_view.js`
-   precedes `main.js` in `_BUNDLE_FILES`).
-5. Declare the remaining STRUCT-ONLY + PENDING-PLACEHOLDER sites as the permanent allowlist;
-   the ratchet baseline becomes the floor and the byte-parity test is fully GREEN.
+4. SEAM-2 fold + raw-fallback deletion + boot-check RUNTIME proof. ✅ LANDED:
+   (a) `ConvView.replaceAll(convId, {forceScroll})` is THE public full-repaint entry —
+   16 call sites across 9 files migrated off bare `renderChat(...)` (translation_render
+   ×2, edit_message ×3, send_pipeline ×3, regen_continue ×3, sse_pipeline ×1,
+   stream_lifecycle ×1, streaming_render ×2, conv_lifecycle ×2); chat_render.js declared
+   the seam's ENGINE (pinned at 8 on the seam side of the ratchet).
+   (b) ALL `window.ConvView`-missing raw fallbacks deleted — 6 `_streamingBubbleHTML`
+   else-branches in sse_pipeline.js, 1 in main_send_pipeline.js, 1 in
+   main_translating_bubble.js, plus 6 presence-guard patterns (upsert/removeMessage/
+   finalizeStreaming) flattened to direct calls; 2 now-unused `inner` declarations
+   swept. Static guards pin: no `typeof window.ConvView.` guard, no
+   `_streamingBubbleHTML` else-branch, no bare `renderChat(` in migrated files.
+   (c) The boot check's RUNTIME proof (owner's evidence-gap item): JSDOM evals main.js
+   with `window.ConvView` undefined → the fixed banner is IN THE DOM + console.error
+   captured (pre-eval wrap); NEUTER: a ConvView stub → no banner, no error. Static
+   existence ≠ runtime trigger — now both halves are proven.
+   **Precondition (LANDED in step 2): the boot-time ConvView hard check** —
+   `main.js` init checks `typeof window.ConvView?.apply === 'function'` and, on
+   absence, fires `console.error` + pins a fixed banner. Guard:
+   `test_boot_hard_check_convview_present` (static) + the two runtime tests above.
+   Ratchet: 192 → **157** (fallback deletions + scanner v3 accuracy + chat_render to
+   the seam side).
+5. Sweep the remaining ~43 bare `renderChat(` call sites (conversations.js ×9,
+   cross_tab_sync.js ×4, health_stream_timer.js ×3, image-gen.js ×4, image-gen-batch ×2,
+   branch.js, context-bar.js, conv_sync_push.js, conv_window.js ×2, core.js, i18n.js,
+   main_init_tasks.js ×2, project.js, settings/save_export.js, finish_info.js,
+   message_actions.js ×2, sse_handlers_lifecycle.js, sse_handlers_tool.js,
+   sse_poll_fallback.js, streaming_swarm_panel.js ×2, swarm_push.js, turn_nav.js) onto
+   `ConvView.replaceAll`; declare the STRUCT-ONLY + PENDING-PLACEHOLDER allowlist final;
+   land the §7 streamBufs retirement against the §7.4 anchor.
 
 ## 6. Boundary
 
@@ -407,3 +431,42 @@ Nothing in this commit touches streamBufs reads/writes — the disposition above
 (`streaming_ui.js`, `health_stream_timer.js`) are now covered against NEW raw writes, and
 the retirement is scheduled as its own step so it rides the §3 anchor extension rather
 than landing unguarded.
+
+### 7.4 The reconnect byte-parity anchor (DESIGN — lands with the §7 retirement)
+
+**Claim under test:** for ONE in-flight turn, the `#chatInner` subtree produced by a
+COLD-OPEN RECONNECT (open the conv mid-stream → `connectToTask` replays the persisted
+checkpoint + `showStreamingUIForConv` paints the live bubble) MUST be byte-identical to
+the subtree produced by the LIVE-PAINT path (the tab that held the SSE stream from the
+first delta) at the SAME logical instant.
+
+**Why this is the §7 acceptance anchor:** today the two paths paint from DIFFERENT
+sources — live paints from `streamBufs` (SSE deltas), reconnect paints from
+`conv.messages` (the persisted checkpoint) with `streamBufs` re-seeded FROM it. If both
+projected from the message document alone, byte-parity would be structural; today it
+holds only by the "every delta double-writes buf + msg" discipline. The anchor is what
+proves the §7 retirement (buf deleted as a read source, `twUpdate`/`_streamFrameArg`/
+`showStreamingUIForConv` projecting from the doc) changed NOTHING observable.
+
+**Harness sketch (JSDOM, mirrors the §3 narration anchor):**
+1. Build a settled-in-progress doc state: `assistantMsg` with content/thinking/toolRounds
+   up to checkpoint K (same shape `connectToTask`'s `_trySSE` checkpoint fallback uses).
+2. LIVE arm: feed the same turn's event log (delta → tool rounds → thinking) through the
+   live paint path (`updateStreamingUI` reading the buffer as filled by deltas), snapshot
+   `#streaming-body.innerHTML` at checkpoint K.
+3. RECONNECT arm: from ONLY the message document at checkpoint K, run
+   `showStreamingUIForConv` + the frame-arg builder, snapshot the same subtree.
+4. ASSERT byte-equality of the two subtrees (with the same fixed clock / id stubs the
+   §3 anchor uses). NEUTER: mutate ONE field in the doc between arms (e.g. append a
+   thinking char) — the comparator MUST flag the diff, proving the anchor is
+   load-bearing, not vacuous.
+
+**What counts as "the same logical instant":** the checkpoint boundary — the exact
+content/thinking/toolRounds triple persisted at the last `_last_checkpoint` write. The
+live arm's buffer and the reconnect arm's doc are compared there, never mid-delta (a
+mid-delta comparison would be a race, not a contract).
+
+**Ordering:** this anchor is written FIRST (RED, proving today's two paths diverge
+somewhere — e.g. the reconnect arm's `phase`/status-zone reconstruction), then the §7
+retirement lands and flips it GREEN by making both arms read the same document. Same
+failing-first discipline as §3.

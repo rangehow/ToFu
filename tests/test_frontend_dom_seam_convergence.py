@@ -207,29 +207,30 @@ _RAW_PATS = [
     r'\.remove\s*\(\s*\)',
 ]
 
-# Baselines measured 2026-07-24 with the single-pass tokenizer in
+# Baselines measured 2026-07-24 with the single-pass tokenizer (v3) in
 # _scan_raw_dom_ops (docs/RENDER_CONTRACT_PHASE3_5_PLAN.md §4). A file's
 # count may only go DOWN as its CONTENT-DERIVED sites converge onto
-# ConvView.apply; any NEW raw write trips the ratchet. conv_view.js is
-# excluded — it IS the seam (its raw ops are the allowed writes).
+# ConvView.apply; any NEW raw write trips the ratchet.
+# SEAM SIDE (excluded, pinned — the allowed writers): conv_view.js (8, the
+# public seam) and ui/chat_render.js (8, the seam's reconcile ENGINE after
+# the step-4 SEAM-2 fold — its raw writes are the projection implementation).
 # turn_nav.js / finish_info.js are exempt per plan §2.15 (sidebar +
 # detached-builder / zero #chatInner writes — census-verified).
 _RATCHET_BASELINE = {
     'static/js/ui/streaming_ui.js': 49,
-    'static/js/main/main_send_pipeline.js': 16,
-    'static/js/ui/streaming_render.js': 21,
-    'static/js/image-gen.js': 18,
-    'static/js/ui/sse_pipeline.js': 17,
-    'static/js/ui/translation_render.js': 17,
+    'static/js/ui/streaming_render.js': 20,
+    'static/js/ui/translation_render.js': 14,
+    'static/js/image-gen.js': 13,
+    'static/js/main/main_send_pipeline.js': 12,
     'static/js/core/health_stream_timer.js': 10,
     'static/js/main/main_conv_lifecycle.js': 10,
-    'static/js/ui/chat_render.js': 10,
-    'static/js/ui/edit_message.js': 1,
-    'static/js/ui/stream_lifecycle.js': 6,
-    'static/js/main/main_translating_bubble.js': 6,
+    'static/js/ui/sse_pipeline.js': 10,
+    'static/js/ui/stream_lifecycle.js': 5,
     'static/js/image-gen-batch.js': 5,
+    'static/js/main/main_translating_bubble.js': 3,
+    'static/js/core/conversations.js': 3,
     'static/js/main/main_regen_continue.js': 2,
-    'static/js/core/conversations.js': 4,
+    'static/js/ui/edit_message.js': 1,
 }
 
 
@@ -241,10 +242,13 @@ def _scan_raw_dom_ops(src: str) -> int:
     the file (the first 2026-07-24 audit undercounted main_send_pipeline.js
     23→1 that way, leaving the ratchet blind to 22 real writes). This scanner
     walks the source once, tracking // and /* */ comments and the three
-    string delimiters with backslash escapes, so only CODE is matched. Known
+    string delimiters with backslash escapes, so only CODE is matched.
+    v3 (step 4): strings are replaced with a NON-EMPTY placeholder (`""`)
+    instead of vanishing — otherwise `classList.remove('cv-off')` collapsed
+    to `.remove()` and was counted as a DOM detach (false positive). Known
     limitation: regex literals are not tokenized (a quote inside a regex can
-    still flip state); the baselines were measured with this same scanner, so
-    the ratchet is self-consistent.
+    still flip state); the baselines were measured with this same scanner,
+    so the ratchet is self-consistent.
     """
     out = []
     i, n = 0, len(src)
@@ -267,6 +271,7 @@ def _scan_raw_dom_ops(src: str) -> int:
                     break
                 else:
                     i += 1
+            out.append('""')
         else:
             out.append(src[i])
             i += 1
@@ -293,10 +298,11 @@ def test_raw_dom_write_ratchet():
 
 
 def test_ratchet_baseline_matches_plan_total():
-    """The baselines sum to the plan's §2.14 tally (192 non-seam raw ops
-    after step 3 converged §2.5/2.6/2.8 onto ConvView.apply)."""
-    assert sum(_RATCHET_BASELINE.values()) == 192, (
-        f'baseline sum {sum(_RATCHET_BASELINE.values())} != 192 — the plan '
+    """The baselines sum to the plan's §2.14 tally (157 non-seam raw ops
+    after step 4: fallback deletions + scanner v3 accuracy + the chat_render
+    engine moved to the seam side)."""
+    assert sum(_RATCHET_BASELINE.values()) == 157, (
+        f'baseline sum {sum(_RATCHET_BASELINE.values())} != 157 — the plan '
         '§2.14 tally and this ratchet drifted apart; update both together')
 
 

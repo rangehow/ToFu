@@ -277,16 +277,19 @@
       return false;
     },
 
-    /** Wholesale re-render of the active conversation.  Equivalent
-     *  to the existing renderChat() but funnelled through this
-     *  controller so future keyed-diff implementations can be
-     *  swapped in without touching every caller. */
-    replaceAll: function (convId) {
+    /** Wholesale re-render of the active conversation — THE public
+     *  full-repaint entry (RENDER_CONTRACT Phase 3.5 §5 step 4, the SEAM-2
+     *  fold). `renderChat` (chat_render.js) is this seam's reconcile ENGINE
+     *  — its raw writes are the projection implementation, not a second
+     *  public entry — so other modules' full repaints route through this
+     *  method instead of calling renderChat directly. opts.forceScroll is
+     *  forwarded to the engine with its scroll/anchor semantics unchanged. */
+    replaceAll: function (convId, opts) {
       const conv = _findConv(convId);
       if (!conv) return false;
       if (typeof activeConvId !== 'undefined' && activeConvId !== convId) return false;
       if (typeof renderChat !== 'function') return false;
-      renderChat(conv);
+      renderChat(conv, opts && opts.forceScroll);
       return true;
     },
 

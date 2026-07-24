@@ -34,7 +34,7 @@ async function regenerateFromUser(idx) {
   if (_isIgConv || _isIgMsg) {
     conv.messages = conv.messages.slice(0, idx);
     saveConversations(conv.id);
-    renderChat(conv);
+    window.ConvView.replaceAll(conv.id);
     renderConversationList();
     let prompt = msg.content || '';
     if (prompt.startsWith('🎨 ')) prompt = prompt.slice(2).trim();
@@ -351,7 +351,7 @@ async function continueAssistant() {
     conv.messages.pop();
     conv._needsLoad = false;
     conv._serverMsgCount = conv.messages.length;
-    if (activeConvId === conv.id) renderChat(conv, false);
+    if (activeConvId === conv.id) window.ConvView.replaceAll(conv.id, { forceScroll: false });
     await syncConversationToServer(conv, { allowTruncate: true });
     await startAssistantResponse(conv.id);
     return;
@@ -394,7 +394,7 @@ async function continueAssistant() {
 
   // ── Streaming UI: reuse the existing bubble, show "Continuing…" ──
   if (activeConvId === conv.id) {
-    renderChat(conv, false);
+    window.ConvView.replaceAll(conv.id, { forceScroll: false });
     const lastIdx = conv.messages.length - 1;
     const msgEl = document.getElementById(`msg-${lastIdx}`);
     if (msgEl) {

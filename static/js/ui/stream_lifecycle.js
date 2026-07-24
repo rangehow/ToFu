@@ -245,8 +245,7 @@ function finishStream(convId) {
       const _verdict = _classifyGhostTailJS(lastMsg);
       if (_verdict === 'delete') {
         conv.messages.pop();
-        if (activeConvId === convId && window.ConvView
-            && typeof window.ConvView.removeMessage === 'function') {
+        if (activeConvId === convId) {
           window.ConvView.removeMessage(convId, lastMsg._msgId || conv.messages.length);
         }
         if (activeConvId === convId) {
@@ -397,7 +396,7 @@ function finishStream(convId) {
         // (SSE timed out, poll was used). Do a full re-render to show all turns.
         console.info(`[finishStream] Endpoint mode full re-render — ` +
           `conv=${convId.slice(0,8)} msgs=${conv.messages.length}`);
-        renderChat(conv);
+        window.ConvView.replaceAll(convId);
       }
       /* ★ FIX: Don't force-scroll-to-bottom after stream finishes.
        *   The user is already reading the content at their current scroll position.

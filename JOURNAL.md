@@ -1,6 +1,16 @@
 # Project Journal
 
 
+### 2026-07-24(续22) — 美团模型市场 6 新模型端到端注册:GPT-5.6 Sol/Terra/Luna + Gemini-3.6-flash / Gemini-3.5-flash-lite + Claude Fable 5(commit 见下,5 文件 +新守卫套件 11 测全绿含 NEUTER×3,相邻 131/131,collect 8374 0 err)。
+- **范围裁定(按先例):** 卡片全部来自美团模型市场(外采、国内/国外非美团服务器部署、默认 RPM / App ID / 申请 SOP 字段),价格是人民币网关价 → 按 gemini-3.5-flash 先例**只进** `static/provider_templates/meituan.json`(export 豁免的内部模板)+ `DEFAULT_SLOT_CONFIGS` + `MODEL_PRICING` + fable-5 别名组;**不动**公开品牌模板(provider_templates.js / bootstrap.py)——公开 API 无法验证这些 SKU,且会把内部价污染进开源分发。
+- **命名:** 三张 GPT 卡片未给「模型调用名称」,按市场惯例小写化为 `gpt-5.6-sol/-terra/-luna`;`gemini-3.5-flash-lite` / `gemini-3.6-flash` / `claude-fable-5` 为卡片明示调用名。
+- **定价与 cheap 标签:** 人民币按 7.24 折算 USD 入 `MODEL_PRICING`(¥18/¥108→$2.49/$14.92 等),缓存乘数随族(Claude 1.25/0.10、Gemini 1.00/0.25、GPT 1.00/0.10);`cheap` 不手写、由 `get_pricing_tiers` 机械推导 —— Terra($14.92<$15)恰好落入 cheap 档而 gpt-5.6($15.00)不在,属换算边界效应,已用测试钉死分类。
+- **自动命中的面(零改动):** 三个 GPT 变体被 `is_gpt_56` 命中 → ultra 思考档自动可用、build_body 走 reasoning_effort;`claude-fable-5` 双 substring('claude'+'fable')命中 `is_claude` → wire 自动走 Claude thinking adaptive、discovery 自动 vision+thinking+thinking_type;并入 fable-5 别名组后 prefer_model 与 `fable-5`/`aws.fable-5`/Bedrock ID 互通。
+- **守卫(11 测):** 新 `tests/test_meituan_marketplace_models.py` —— 模板/slots/定价三表 caps 一致 + USD 换算精确值 + 族缓存乘数 + cheap 分类 + 别名组 + wire 形状(ultra 下发 / adaptive thinking / reasoning_effort 形状)+ discovery 注册;NEUTER×3(审计谓词对合成坏载荷翻红 / cheap 阈值严格边界 $15.00 不算 cheap / ultra 档对 gpt-5.4 降级证判别力)。
+- **刻意不动:** `_VISION_PAT` 的 `gemini(?!.*lite)` 排除保持原样 —— 3.5-flash-lite 的 vision 由模板显式声明(卡片明示「图像理解」),改全局发现正则会波及 gemini-2.5-flash-lite 等存量模型,超出本批范围;discovery 不给 GPT/Gemini 名字打 thinking 是现状,模板/slot 声明为准。RPM:两张 Gemini 卡明示默认 RPM 20 已采用;claude-fable-5 卡片默认 RPM 0(=无默认配额需申请)按 Claude 块惯例取 30 作客户端限速提示。
+- **生效边界(诚实):** meituan.json 由 providers templates 端点实时读出,**无需重建 bundle**;slots/定价为 Python 表,**重启服务端生效**;已存在的 provider 实例是模板快照,需重新添加或手动补模型。
+
+
 ### 2026-07-24 — 「kimi-k3 不支持 prompt cache 吗?怎么一次都没触发」根修:多来源 usage 拼写统一进 normalize_usage 单一真相源 + 入口侧盖章(commit `146a872b`,15 文件 +311/-89,新测 14 面含 NEUTER,test_cost 33/33,相邻套件失败集合 stash 前后逐字节相同,collect **8345** 0 err)。
 - **实测钉死(非猜测):** 真网关双探针(非流式+流式各发两遍相同 3367-token 请求,间隔 3s)—— kimi-k3 **一直在自动缓存**,第二遍 `cached_tokens: 3328`(98.8% 命中)。病根是网关把命中报成 `cached_tokens`/`prompt_tokens_details.cached_tokens`/`effectiveCachedTokens` 同时把 `cache_read_tokens` **显式置 0**,而 Tofu 全栈只认 `cache_read(_input)_tokens` 两种拼写 → 命中对账本全盲,成本按全价 input 算(定价表里 kimi `cacheReadMul: 0.10` 从未生效)。
 - **修复(单一真相源,不在 JS 侧加逻辑):** ①`lib/cost.py::normalize_usage` 别名表扩到 6 种拼写(新增 cached_tokens/effectiveCachedTokens/DeepSeek prompt_cache_hit_tokens/Gemini cached_content_token_count)+ 新增 `_USAGE_NESTED_ALIASES` 处理嵌套形(prompt_tokens_details.cached_tokens 等);first-truthy-wins 保证显式 0 不遮蔽真值、扁平+嵌套同名不双计。②新增 `canonicalize_usage_cache_keys()` 在两个入口侧(SSE finalize + 非流式 chat())把规范键**就地盖进** raw usage dict → api_rounds/落库 metadata/前端 popover(直读 `cache_read_tokens || cache_read_input_tokens`)零改动自动可见。③12 个直读点迁移到 normalize_usage(计费 settle_task、paper 汇总、write_breakdown、CacheStats、detect_cache_break、FloorRetry 谓词、DONE 行、round_usage、manager 总 prompt、CacheSettle is_cold_write、SSE 日志)。④`lib/llm/cache.py` 能力矩阵注释固化:kimi 无标记自动缓存(实测),默认无标记路径本来就对。

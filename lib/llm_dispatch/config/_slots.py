@@ -22,6 +22,9 @@ DEFAULT_SLOT_CONFIGS = {
     'fable-5':                       {'caps': {'text', 'vision', 'thinking'},      'rpm': 30,  'latency': 5000, 'cost': 0.015},
     'aws.fable-5':                   {'caps': {'text', 'vision', 'thinking'},      'rpm': 30,  'latency': 5000, 'cost': 0.015},
     'us.anthropic.fable-5-v1:0':     {'caps': {'text', 'vision', 'thinking'},      'rpm': 30,  'latency': 5000, 'cost': 0.015},
+    # Meituan-gateway name for Fable 5 (Jul 2026 marketplace) — pricier tier
+    # than the public API (¥72/¥360 per 1M ≈ $9.94/$49.72).
+    'claude-fable-5':                {'caps': {'text', 'vision', 'thinking'},      'rpm': 30,  'latency': 5000, 'cost': 0.030},
     # ── Claude (Anthropic — current gen: 4.8 flagship, May 2026) ──
     'claude-opus-4-8':               {'caps': {'text', 'vision', 'thinking'},      'rpm': 30,  'latency': 5000, 'cost': 0.015},
     # ── Claude (Anthropic — 4.7 family, Apr 2026) ──
@@ -66,6 +69,12 @@ DEFAULT_SLOT_CONFIGS = {
     # flagship/pro lineup only. Adds the 'ultra' reasoning-effort tier.
     'gpt-5.6':                       {'caps': {'text', 'vision', 'thinking'},      'rpm': 30,  'latency': 3000, 'cost': 0.015},
     'gpt-5.6-pro':                   {'caps': {'text', 'vision', 'thinking'},      'rpm': 10,  'latency': 10000,'cost': 0.180},
+    # GPT-5.6 sub-SKUs on the Meituan gateway (Jul 2026 marketplace): Sol is
+    # the SOTA flagship, Terra the balanced daily driver, Luna the
+    # high-throughput lightweight tier. (Still no mini/nano this generation.)
+    'gpt-5.6-sol':                   {'caps': {'text', 'vision', 'thinking'},      'rpm': 30,  'latency': 5000, 'cost': 0.030},
+    'gpt-5.6-terra':                 {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 30,  'latency': 3000, 'cost': 0.015},
+    'gpt-5.6-luna':                  {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 60,  'latency': 2000, 'cost': 0.005},
     # NOTE: There is NO GPT-5.5. OpenAI's actual release cadence went
     # 5.2 (Nov 2025) → 5.4 (Mar 2026) → 5.6 (May 2026), skipping the odd
     # minor for the same reason iPhone 9 / Windows 9 were skipped: the
@@ -117,6 +126,9 @@ DEFAULT_SLOT_CONFIGS = {
     # /chat/completions (audio_chat), NOT the /audio/transcriptions endpoint.
     'LongCat-Flash-Omni-2603':       {'caps': {'text', 'vision', 'audio_chat'}, 'rpm': 60,  'latency': 2000, 'cost': 0.0},
     'gemini-3.5-flash':              {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 30,  'latency': 2000, 'cost': 0.005},
+    # Jul 2026 marketplace additions — marketplace default quota is 20 RPM each.
+    'gemini-3.6-flash':              {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 20,  'latency': 2000, 'cost': 0.005},
+    'gemini-3.5-flash-lite':         {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 20,  'latency': 1500, 'cost': 0.001},
 
     # ── Qwen (DashScope) ──
     'qwen3.6-plus':                  {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 60, 'latency': 2000, 'cost': 0.002},

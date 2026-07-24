@@ -33,6 +33,8 @@ MODEL_PRICING = {
     'fable-5':                   {'input': 5.0,   'output': 25.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Fable 5'},
     'aws.fable-5':               {'input': 5.0,   'output': 25.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Fable 5'},
     'us.anthropic.fable-5-v1:0': {'input': 5.0,   'output': 25.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Fable 5 (Bedrock)'},
+    # Meituan-gateway Fable 5 (Jul 2026 marketplace) — ¥72/¥360 per 1M.
+    'claude-fable-5':            {'input': 9.94,  'output': 49.72, 'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Fable 5 (Meituan)'},
     'aws.claude-opus-4.8':       {'input': 5.0,   'output': 25.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Opus 4.8'},
     'claude-opus-4-8':           {'input': 5.0,   'output': 25.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Opus 4.8'},
     'us.anthropic.claude-opus-4-8-v1:0':        {'input': 5.0,   'output': 25.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Opus 4.8 (Bedrock)'},
@@ -103,6 +105,8 @@ MODEL_PRICING = {
     'gemini-3.1-pro-preview':    {'input': 2.00, 'output': 12.0, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.25, 'name': 'Gemini 3.1 Pro'},
     'gemini-3-flash-preview':    {'input': 0.15, 'output': 0.60, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.25, 'name': 'Gemini 3 Flash'},
     'gemini-3.5-flash':          {'input': 1.49, 'output': 8.95, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.25, 'name': 'Gemini 3.5 Flash'},  # ¥10.80/¥64.80 per 1M
+    'gemini-3.6-flash':          {'input': 1.49, 'output': 7.46, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.25, 'name': 'Gemini 3.6 Flash'},  # ¥10.80/¥54.00 per 1M
+    'gemini-3.5-flash-lite':     {'input': 0.30, 'output': 2.49, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.25, 'name': 'Gemini 3.5 Flash-Lite'},  # ¥2.16/¥18 per 1M
     'gemini-3.1-flash-image-preview': {'input': 0.25, 'output': 1.50, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.25, 'name': 'Gemini 3.1 Flash Image'},
     'gemini-3-pro-image-preview':    {'input': 2.50, 'output': 12.0, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.25, 'name': 'Gemini 3 Pro Image'},
     'gemini-2.5-flash-image':        {'input': 0.15, 'output': 0.60, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.25, 'name': 'Gemini 2.5 Flash Image'},
@@ -117,6 +121,10 @@ MODEL_PRICING = {
     # Two-tier lineup: flagship + pro. No mini/nano this generation.
     'gpt-5.6':                   {'input': 2.50, 'output': 15.00, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GPT-5.6'},
     'gpt-5.6-pro':               {'input': 30.0, 'output': 180.0, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GPT-5.6 Pro'},
+    # GPT-5.6 sub-SKUs on the Meituan gateway (Jul 2026 marketplace) — converted from CNY at 7.24.
+    'gpt-5.6-sol':               {'input': 4.97, 'output': 29.83, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GPT-5.6 Sol'},    # ¥36/¥216 per 1M
+    'gpt-5.6-terra':             {'input': 2.49, 'output': 14.92, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GPT-5.6 Terra'},  # ¥18/¥108 per 1M
+    'gpt-5.6-luna':              {'input': 0.99, 'output': 5.97,  'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GPT-5.6 Luna'},   # ¥7.2/¥43.2 per 1M
     # ── OpenAI (GPT-5.4 family — March 2026; kept as the cost tier) ──
     'gpt-5.4':                   {'input': 2.50, 'output': 15.00, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GPT-5.4'},
     'gpt-5.4-pro':               {'input': 30.0, 'output': 180.0, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GPT-5.4 Pro'},

@@ -16,8 +16,8 @@ logger = get_logger(__name__)
 #  This benefits anyone routing Claude through multiple gateway prefixes.
 # ══════════════════════════════════════════════════════════════
 MODEL_ALIAS_GROUPS = [
-    # Anthropic Fable 5 — aws gateway + direct API + Bedrock-native IDs are interchangeable
-    {'aws.fable-5', 'fable-5', 'us.anthropic.fable-5-v1:0'},
+    # Anthropic Fable 5 — aws gateway + direct API + Bedrock-native + Meituan-gateway IDs are interchangeable
+    {'aws.fable-5', 'fable-5', 'us.anthropic.fable-5-v1:0', 'claude-fable-5'},
     # Claude Opus 4.8 — aws gateway + direct API + Bedrock-native IDs are interchangeable
     {'aws.claude-opus-4.8', 'claude-opus-4-8', 'us.anthropic.claude-opus-4-8-v1:0'},
     # Claude Opus 4.7 — aws gateway + direct API + Bedrock-native IDs are interchangeable

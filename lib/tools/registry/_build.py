@@ -6,8 +6,8 @@ them into the registry in the canonical, prompt-cache-stable order:
 
     search → fetch → read_files → inspect_image → project|code_exec →
     browser → desktop → image_gen → conv_ref → human_guidance →
-    ⟨base/capability boundary⟩ → memory → todo → scheduler → swarm → mcp →
-    custom (always last)
+    ⟨base/capability boundary⟩ → memory → skills → todo → scheduler →
+    swarm → mcp → custom (always last)
 
 :func:`_register_builtins` is invoked once at package import (from
 ``lib/tools/registry/__init__.py``) so ``_TOOL_SPECS`` is populated as a
@@ -193,6 +193,18 @@ def _build_memory(ctx: ToolContext) -> list[dict]:
     return list(ALL_MEMORY_TOOLS)
 
 
+def _build_skills(ctx: ToolContext) -> list[dict]:
+    # Skill activation attaches whenever ANY real tool exists — the same
+    # rule as memory (and NOT gated on memoryEnabled): the
+    # <available_skills> index in the system prompt advertises installed
+    # packages, so the model must be able to activate them. Skills have no
+    # model-side CRUD; the single tool is read-only (idempotent).
+    if ctx.lean or not ctx.has_base_tools:
+        return []
+    from lib.skills import ALL_SKILL_TOOLS
+    return list(ALL_SKILL_TOOLS)
+
+
 def _build_todo(ctx: ToolContext) -> list[dict]:
     # Structured task checklist (todo_write). Attaches whenever ANY base tool
     # exists — it's a lightweight, always-useful progress tracker that also
@@ -335,6 +347,11 @@ def _register_builtins() -> None:
                      'delete_memory', 'merge_memories',
                  }),
                  category='memory', description='Memory CRUD tools'),
+        ToolSpec('skills', _build_skills, phase='capability',
+                 provides=frozenset({'activate_skill'}),
+                 idempotent_tools=frozenset({'activate_skill'}),
+                 category='skills',
+                 description='Skill activation (progressive disclosure)'),
         ToolSpec('todo', _build_todo, phase='capability',
                  provides=frozenset({'todo_write'}),
                  category='task', description='Structured task checklist'),

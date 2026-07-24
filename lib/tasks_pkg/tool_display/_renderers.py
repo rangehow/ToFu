@@ -250,6 +250,15 @@ def _tool_display_memory(fn_name, fn_args, tc_id, tc_args_str):
     return display, {'toolName': fn_name}
 
 
+def _tool_display_skills(fn_name, fn_args, tc_id, tc_args_str):
+    """Build display info for skill activation calls.
+
+    No emoji prefix — the frontend renders a per-tool SVG icon (§3.4).
+    """
+    skill = fn_args.get('skill', '?') if isinstance(fn_args, dict) else '?'
+    return f'Activating skill: {skill}', {'toolName': fn_name}
+
+
 def _tool_display_conv_ref(fn_name, fn_args, tc_id, tc_args_str):
     """Build display info for conversation reference tool calls.
 

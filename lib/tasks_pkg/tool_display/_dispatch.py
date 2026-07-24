@@ -14,6 +14,7 @@ from lib.browser.advanced import ADVANCED_BROWSER_TOOL_NAMES
 from lib.desktop_tools import DESKTOP_TOOL_NAMES
 from lib.scheduler import SCHEDULER_TOOL_NAMES
 from lib.memory import MEMORY_TOOL_NAMES
+from lib.skills import SKILL_TOOL_NAMES
 from lib.tasks_pkg.executor import SWARM_TOOL_NAMES
 from lib.tools import (
     BOARD_TOOL_NAMES,
@@ -39,10 +40,10 @@ from lib.tasks_pkg.tool_display._renderers import (
     _tool_display_human_guidance,
     _tool_display_image_gen,
     _tool_display_inspect_image,
-    _tool_display_mcp,
     _tool_display_memory,
     _tool_display_project,
     _tool_display_scheduler,
+    _tool_display_skills,
     _tool_display_swarm,
     _tool_display_todo,
     _tool_display_web_search,
@@ -93,6 +94,10 @@ def _build_display_dispatch_table():
     # Memory tools
     for name in MEMORY_TOOL_NAMES:
         table[name] = _tool_display_memory
+
+    # Skill tools (activate_skill — read-only progressive disclosure)
+    for name in SKILL_TOOL_NAMES:
+        table[name] = _tool_display_skills
 
     # Conversation reference tools
     for name in CONV_REF_TOOL_NAMES:

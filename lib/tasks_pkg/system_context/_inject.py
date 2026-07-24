@@ -469,6 +469,32 @@ def _inject_system_contexts(messages, project_path, project_enabled,
             # wrapper included) — that is the byte delta this seam adds.
             _ctx_injected('memory_accum', len(_mem_spliced))
 
+    # ★ 3.5. Available-skills index — the always-visible skills channel.
+    #   Gated on has_real_tools ONLY: skills are USER-installed capability
+    #   packs, a different noun from memories, so they do NOT follow the
+    #   memory toggle. The block is byte-stable for a fixed install set
+    #   (sorted by id) and splices as its OWN cache block, same rule as
+    #   the memory count hint.
+    if has_real_tools:
+        if '<available_skills>' in _existing:
+            _ctx_suppressed('skills_index', 'marker_present')
+        else:
+            from lib.skills import build_skills_index
+            _skills_block = build_skills_index(
+                project_path=project_path if project_enabled else None) or ''
+            if _skills_block:
+                _skills_spliced = _wrap_system_reminder(_skills_block)
+                _append_to_system_message(
+                    messages,
+                    _skills_spliced,
+                    as_separate_block=True)
+                _existing = _system_text(messages)
+                _ctx_injected('skills_index', len(_skills_spliced))
+            else:
+                _ctx_suppressed('skills_index', 'none_installed')
+    else:
+        _ctx_suppressed('skills_index', 'no_tools')
+
     # ★ 4. Swarm system prompt injection — gated ONLY on swarm_enabled.
     #   Decoupled from project_enabled because a bare-conversation research
     #   swarm is a valid use case (mirrors the read_files decoupling done

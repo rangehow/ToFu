@@ -21,4 +21,5 @@ from lib.tasks_pkg.handlers import (  # noqa: F401
     misc,
     project,
     search,
+    skills,
 )

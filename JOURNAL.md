@@ -1,6 +1,20 @@
 # Project Journal
 
 
+### 2026-07-24(续8) — 「费用气泡里缓存失效的说明文字完全溢出、竖排一列一个字」根修:`.cp-round-break` 是 flex 容器,长原因文字是**裸文本节点=匿名 flex item**(CJK min-content=1 字符),被长徽章挤到只剩一字符宽(commit `c7047137`,3 文件 +180/-2,新测 NEUTER 双探针证红 + 相邻 10/10 绿 + collect 8183 0 err)。
+- **可见现象:** owner 截图报"这条说明是不是没在 cost 气泡里换行?完全溢出了" —— 第2轮 `upstream` 判定行:⚠图标 + 绿色长徽章「疑似上游未复用(本轮字节未变·未在真实流量验证)」+ 右侧约一字符宽的竖排长文,整段说明一字一行往下滴。
+- **病根(读代码钉死):** `.cp-round-break{display:flex}`(styles.css:3062)行内三个孩子:SVG 图标(`.cp-ico`,`flex:none`)+ 状态徽章(`.cp-break-badge`,`flex:none`,upstream 文案 ~26 字 ≈240px)+ **裸文本节点**的 `缓存失效:{reason}` 长文。裸文本在 flex 容器里是匿名 flex item,默认 `flex:0 1 auto`,而 CJK 文本的 min-content 宽度 = 1 个汉字 → 徽章吃满行宽后,文字被压到 min-content,于是一行一个字。popover `max-width:360px` 定死,徽章越长剩得越窄;upstream 恰好是所有徽章里最长的,所以只在它身上爆。
+- **修复(2 文件 +10/-2):**
+  - `static/js/ui/finish_info.js:559` 原因文字包进 `<span class="cp-break-text">…</span>`(真 flex item,不再是匿名节点),行内注释写明为何必须包。
+  - `static/styles.css:3062` `.cp-round-break` 加 `flex-wrap:wrap`,新增 `.cp-break-text{flex:1 1 12em;min-width:0}` —— 徽章后剩余 < 12em 时散文整体掉到第二行拿全宽;空间够(短徽章)时保持原行内布局,视觉零变化。
+- **守卫测试:** 新增 `tests/test_frontend_cache_break_text_wrap.py`(2 测,`pytest.mark.unit`):①node 驱动真 `_buildCostPopover` 渲染 upstream 场景,断言原因文字在 `.cp-break-text` span 内、且该 span 是 break 行最后一个孩子(无裸文本兄弟节点);②CSS 规则块解析(先剥注释防字面量误伤)断言 `.cp-round-break` 带 `flex-wrap:wrap`、`.cp-break-text` 带 `flex:1 1 <basis>` + `min-width:0`。
+- **NEUTER 双探针(本会话内已跑):** JS 半(拆 span 回裸文本)→ 渲染测翻红;CSS 半(删 `flex-wrap:wrap` + 删整条 `.cp-break-text` 规则)→ CSS 测翻红;还原 → 2/2 复绿。
+- **相邻套件:** `test_frontend_cache_verdict_render` 6/6 + `test_frontend_cost_recache_visibility` 2/2 全绿;`--collect-only` 全量集合门 **8183 tests 0 error**。
+- **git 纪律(shared-HEAD,第 5 次遵循):** styles.css 被 sibling 续7 滚动抖动修复 WIP 污染 → 备份 → `git checkout HEAD` → 重放仅本批 hunk → `git add` 精确 1 新测 → **pathspec commit**(不碰 sibling 已 staged 的 `lib/conv_ref/_detail.py` / `manager/_sync.py` / `conversation_list.js`)→ `git show HEAD --stat` 精确相等 → `cp` 还原 sibling WIP(还原后 `git diff styles.css` 只剩 sibling 的 scroll-behavior hunk,逐字节正确)。JOURNAL 同法:续7 条目 WIP 备份 → 干净版插本条目单独 commit → 还原时把续7 条目接回本条目之后,worktree diff 抵消只剩 sibling WIP。
+- **验证诚实边界:** 渲染半用 node harness 断言了 DOM 结构(span 包裹、无裸文本),CSS 半断言了规则存在;**未在真浏览器里肉眼复验**(本机无头)。布局数学可推:360px popover 内徽章 ~240px + 图标 ~15px → 剩余 < 12em → 散文掉到第二行全宽 ~33 字/行。owner 硬刷新后若仍见竖排,说明还有第二条同模式行(目前 grep 全仓只此一处 flex+裸文本)。
+- **未动:** 徽章文案本身不动(「疑似上游未复用(本轮字节未变·未在真实流量验证)」虽长但是产品措辞,布局修复已兼容任意长度);`.cp-break-badge` 保持 `flex:none`(药丸不应内部换行)。
+
+
 ### 2026-07-24(续6) — pt_conv_state_ssot P3 (task lifecycle stop broadcast) + E2E 集成测试:owner 拒收 P2 "半修完就报" 后的证据链闭合 —— `abort_running_tasks_for_conv` 尾部主动发 notify + 3 场景端到端测试证明 chat_send → registry → notify → reducer → computeConvBusy 全链路真的接通(commit,3 文件 +~360,新测 P3 6/6 + E2E 3/3 绿含 NEUTER 证红 + 相邻 46/46 + collect 8164 0 err)。**owner 明确指令:"claim without proof" 是失职,必须补 E2E 端到端集成测试再报。**
 - **owner 三条硬指令,全部照做:** ①端到端集成测试(不是又一层单元)②诚实修正 P2 "visible bug 已修" 缺失完成侧半场景 —— P3 是补漏 ③latent(build_conv_state_snapshot user_id=1 硬编码)登 board gated。
 - **P3 gap 精准诊断(读代码钉死,不猜):**

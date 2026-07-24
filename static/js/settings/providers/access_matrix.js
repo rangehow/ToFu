@@ -499,7 +499,8 @@ function _reconcileProbeNonChat(provIdx) {
     if (!c || c.status === 'ok' || c.status === 'skipped') return;
     var m = byRoot[c.root_model_id];
     if (!_matrixModelIsNonChat(m)) return;
-    c.detail = 'non-chat model — chat probe not applicable (was ' + c.status +
+    c.detail = 'stale chat-probe verdict discarded (non-chat model) — re-run ' +
+               'the probe to test it via its real endpoint (was ' + c.status +
                (c.detail ? ': ' + c.detail : '') + ')';
     c.status = 'skipped';
     c.recommend_disable = false;

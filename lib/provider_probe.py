@@ -22,6 +22,7 @@ the re-exported name) takes effect. Same for ``probe_cache_path``.
 """
 
 import hashlib
+import io
 import threading
 import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -31,14 +32,19 @@ from lib.json_store import read_json, write_json_atomic  # noqa: F401  (read_jso
 from lib.log import get_logger
 from lib.model_info.capability_taxonomy import is_chat_model as _is_chat_model
 
-# Verdict for cells that carry no chat surface (image_gen / embedding /
-# transcription). A chat-completions probe cannot validate them — gateways
-# deterministically 500 (the Meituan gateway's Java router hits
-# ``Random.nextInt(0)`` → "bound must be positive" when the chat-binding
-# candidate list for an image/embedding model is empty) — so flagging them
-# 'unavailable' was a FALSE positive that recommended disabling working
-# image models. Skipped cells never touch the network.
+# Verdict for cells whose capabilities have no probe surface we implement
+# (anything outside image_gen / embedding / transcription). Chat-probing a
+# non-chat model is a guaranteed false positive (the Meituan gateway's Java
+# router hits ``Random.nextInt(0)`` → "bound must be positive" when the
+# chat-binding candidate list is empty), so unknown non-chat cells are
+# skipped rather than chat-probed. Known non-chat modalities are probed via
+# their REAL endpoint — see nonchat_probe_fn().
 SKIPPED = 'skipped'
+
+# Image cells generate one real (tiny) billed image per probe, so they get a
+# single attempt regardless of the matrix attempts selector — multiplying a
+# billed generation to filter a rare transient 429 is a bad trade.
+_IMAGE_PROBE_MIN_TIMEOUT = 60  # generation routinely takes 10-40s
 
 logger = get_logger(__name__)
 
@@ -99,8 +105,17 @@ def probe_one_cell(base_url, api_key, model_id, extra_headers, timeout,
         logger.debug('[CellProbe] %s @ %s: could not read response body: %s',
                      model_id, base_url, e)
         body = ''
-    lower = body.lower()
+    return _classify_status(code, body)
 
+
+def _classify_status(code: int, body: str):
+    """Map an HTTP status (+body excerpt) to a (verdict, detail) pair.
+
+    A 200 OR a 400 both count as ``ok`` — a 400 means the gateway accepted
+    the (key, model) routing and only rejected the (deliberately tiny)
+    request shape, which still proves the pair is reachable.
+    """
+    lower = body.lower()
     if code == 200 or code == 400:
         return 'ok', 'HTTP %d' % code
     if code == 429 or code == 402:
@@ -114,6 +129,197 @@ def probe_one_cell(base_url, api_key, model_id, extra_headers, timeout,
     return 'error', 'HTTP %d %.120s' % (code, body)
 
 
+def _post_and_classify(url, headers, timeout, *, json_body=None, files=None,
+                       data=None, validate=None, surface=''):
+    """POST one modality probe and classify the answer.
+
+    Shared tail for every non-chat probe: same transport error handling and
+    status→verdict ladder as :func:`probe_one_cell`, plus an optional
+    ``validate(parsed_json, raw_body)`` hook that inspects a 200 response's
+    SHAPE (None = reachable). A 200 whose shape fails validation is an
+    'error' (the endpoint answered but not in the dialect the app speaks).
+    ``surface`` names the endpoint in the ok detail (e.g. '/embeddings').
+    """
+    from lib.http_client import http_post
+
+    try:
+        resp = http_post(url, json=json_body, files=files, data=data,
+                         headers=headers, timeout=timeout)
+    except Exception as e:
+        logger.warning('[CellProbe] %s network error: %s', surface or url, e)
+        return 'unavailable', 'network: %s' % str(e)[:120]
+    code = resp.status_code
+    try:
+        body = resp.text[:400]
+    except (UnicodeDecodeError, ValueError, OSError) as e:
+        logger.debug('[CellProbe] %s: could not read response body: %s',
+                     surface or url, e)
+        body = ''
+    if code == 200 and validate is not None:
+        try:
+            parsed = resp.json()
+        except Exception as e:
+            logger.debug('[CellProbe] %s: 200 but non-JSON body: %s', surface, e)
+            parsed = None
+        reason = validate(parsed, body)
+        if reason:
+            return 'error', 'HTTP 200 via %s — invalid shape (%s) %.120s' % (
+                surface, reason, body)
+    status, detail = _classify_status(code, body)
+    if status == 'ok' and surface:
+        detail = '%s via %s' % (detail, surface)
+    return status, detail
+
+
+# ── Non-chat modality probes ──────────────────────────────────────────
+
+_SILENCE_WAV: bytes | None = None
+
+
+def _silence_wav_bytes(duration_s: float = 0.3, rate: int = 16000) -> bytes:
+    """A minimal valid PCM WAV of digital silence (16-bit mono).
+
+    A transcription endpoint must accept it and answer 200 with an empty (or
+    whitespace) transcript — enough to prove the (key, model) routing works
+    without sending real speech. ~10 KB at the defaults.
+    """
+    global _SILENCE_WAV
+    if _SILENCE_WAV is None:
+        pcm = b'\x00\x00' * int(duration_s * rate)
+        hdr = (b'RIFF' + (36 + len(pcm)).to_bytes(4, 'little') + b'WAVE'
+               + b'fmt ' + (16).to_bytes(4, 'little')
+               + (1).to_bytes(2, 'little')          # PCM
+               + (1).to_bytes(2, 'little')          # mono
+               + rate.to_bytes(4, 'little')
+               + (rate * 2).to_bytes(4, 'little')   # byte rate
+               + (2).to_bytes(2, 'little')          # block align
+               + (16).to_bytes(2, 'little')         # bits/sample
+               + b'data' + len(pcm).to_bytes(4, 'little'))
+        _SILENCE_WAV = hdr + pcm
+    return _SILENCE_WAV
+
+
+def _auth_headers(api_key, extra_headers):
+    headers = {'Authorization': 'Bearer %s' % api_key} if api_key else {}
+    if extra_headers:
+        headers.update(extra_headers)
+    return headers
+
+
+def _validate_embedding(parsed, _raw):
+    try:
+        emb = (parsed or {}).get('data', [{}])[0].get('embedding')
+    except (AttributeError, IndexError, TypeError):
+        return 'no data[0].embedding'
+    return None if emb else 'empty embedding vector'
+
+
+def _validate_transcription(parsed, _raw):
+    return None if isinstance(parsed, dict) else 'non-JSON response'
+
+
+def _validate_images_api(parsed, _raw):
+    try:
+        item = (parsed or {}).get('data', [{}])[0]
+    except (AttributeError, IndexError, TypeError):
+        return 'no data[0]'
+    if item.get('b64_json') or item.get('url'):
+        return None
+    return 'no image payload (b64_json/url)'
+
+
+def _validate_image_chat(parsed, _raw):
+    try:
+        content = (parsed or {})['choices'][0]['message'].get('content')
+    except (AttributeError, IndexError, KeyError, TypeError):
+        return 'no choices[0].message.content'
+    if isinstance(content, str):
+        return None if content.strip() else 'empty text content'
+    if isinstance(content, list):
+        return None if content else 'empty content parts'
+    return 'unexpected content type %s' % type(content).__name__
+
+
+def probe_embedding_cell(base_url, api_key, model_id, extra_headers, timeout,
+                         protocol='openai'):
+    """Probe an embedding model via ``POST /embeddings`` (one short input).
+
+    Same (base_url, api_key, model_id, extra_headers, timeout, protocol)
+    signature as :func:`probe_one_cell` so ``probe_cell_multi`` can drive it;
+    ``protocol`` is accepted and ignored (embeddings are OpenAI-shaped here).
+    """
+    url = base_url.rstrip('/') + '/embeddings'
+    return _post_and_classify(
+        url, _auth_headers(api_key, extra_headers), timeout,
+        json_body={'model': model_id, 'input': 'ping'},
+        validate=_validate_embedding, surface='/embeddings')
+
+
+def probe_transcription_cell(base_url, api_key, model_id, extra_headers,
+                             timeout, protocol='openai'):
+    """Probe an ASR model via multipart ``POST /audio/transcriptions``
+    carrying a 0.3s silence WAV (no real speech leaves the box)."""
+    url = base_url.rstrip('/') + '/audio/transcriptions'
+    files = {'file': ('probe.wav', io.BytesIO(_silence_wav_bytes()), 'audio/wav')}
+    data = {'model': model_id, 'response_format': 'json'}
+    return _post_and_classify(
+        url, _auth_headers(api_key, extra_headers), timeout,
+        files=files, data=data,
+        validate=_validate_transcription, surface='/audio/transcriptions')
+
+
+def probe_image_cell(base_url, api_key, model_id, extra_headers, timeout,
+                     protocol='openai'):
+    """Probe an image_gen model by generating one tiny image — the only
+    definitive test, and it bills ~1 generation.
+
+    Surface mirrors the app's own image path (:func:`lib.image_gen._slots`):
+    ``openai_image`` slots POST ``/images/generations``; everything else
+    POSTs ``/chat/completions`` with ``modalities: ['TEXT','IMAGE']``
+    (gemini-style). Image models rejected by a plain chat probe (the
+    'bound must be positive' incident) answer here because the gateway
+    routes modalities-carrying requests to the image binding.
+    """
+    headers = _auth_headers(api_key, extra_headers)
+    if protocol == 'openai_image':
+        url = base_url.rstrip('/') + '/images/generations'
+        payload = {'model': model_id,
+                   'prompt': 'a single small red dot on a white background',
+                   'n': 1}
+        return _post_and_classify(url, headers, timeout, json_body=payload,
+                                  validate=_validate_images_api,
+                                  surface='/images/generations')
+    url = base_url.rstrip('/') + '/chat/completions'
+    payload = {
+        'model': model_id,
+        'messages': [{'role': 'user', 'content': [
+            {'type': 'text', 'text': 'Draw a single small red dot.'}]}],
+        'modalities': ['TEXT', 'IMAGE'],
+        'stream': False,
+    }
+    return _post_and_classify(url, headers, timeout, json_body=payload,
+                              validate=_validate_image_chat,
+                              surface='image chat')
+
+
+def nonchat_probe_fn(caps):
+    """Return the modality probe function for a non-chat caps list.
+
+    Priority when a model carries several non-chat caps: image_gen >
+    transcription > embedding. Returns None for capabilities with no
+    implemented surface (caller keeps the 'skipped' verdict).
+    """
+    if not caps:
+        return None
+    if 'image_gen' in caps:
+        return probe_image_cell
+    if 'transcription' in caps:
+        return probe_transcription_cell
+    if 'embedding' in caps:
+        return probe_embedding_cell
+    return None
+
+
 # Verdicts that warrant a retry (could be a transient blip), versus ones
 # that are definitive on the first attempt (no point re-asking).
 _PROBE_TRANSIENT = {'rate_limited', 'unavailable', 'error'}
@@ -121,8 +327,13 @@ _PROBE_DEFINITIVE = {'unauthorized', 'not_found'}
 
 
 def probe_cell_multi(base_url, api_key, model_id, extra_headers, timeout,
-                     attempts=3, retry_delay=0.8, protocol='openai'):
+                     attempts=3, retry_delay=0.8, protocol='openai',
+                     probe_fn=None):
     """Probe a cell up to ``attempts`` times to filter out FALSE 429s.
+
+    ``probe_fn`` defaults to :func:`probe_one_cell` (chat surface); the
+    modality probes share its signature so the same multi-attempt policy
+    drives them unchanged.
 
     Rationale: gateways routinely return a transient 429 / 5xx even for a
     (key, model) pair the key is fully entitled to. Flagging it after one
@@ -138,11 +349,12 @@ def probe_cell_multi(base_url, api_key, model_id, extra_headers, timeout,
     Returns ``(status, detail)`` like :func:`probe_one_cell`.
     """
     attempts = max(1, int(attempts))
+    fn = probe_fn or probe_one_cell
     last_status, last_detail = 'error', ''
     for i in range(attempts):
         # Call through the module global so tests can patch probe_one_cell.
-        status, detail = probe_one_cell(base_url, api_key, model_id, extra_headers,
-                                        timeout, protocol)
+        status, detail = fn(base_url, api_key, model_id, extra_headers,
+                            timeout, protocol)
         if status == 'ok':
             note = '' if i == 0 else ' (ok on attempt %d/%d)' % (i + 1, attempts)
             return 'ok', detail + note
@@ -213,21 +425,32 @@ def run_cell_probe_task(task: dict, work: list, timeout: int):
     def _run(item):
         key_idx, api_key, root, mid = item[0], item[1], item[2], item[3]
         caps = item[4] if len(item) > 4 else None
+        cell_attempts = attempts
+        cell_timeout = timeout
+        probe_fn = None
         if caps and not _is_chat_model(caps):
-            return {
-                'key_idx': key_idx,
-                'model_id': mid,
-                'root_model_id': root,
-                'status': SKIPPED,
-                'detail': 'non-chat model (%s) — chat-completions probe not applicable'
-                          % ','.join(caps),
-                'recommend_disable': False,
-            }
+            probe_fn = nonchat_probe_fn(caps)
+            if probe_fn is None:
+                return {
+                    'key_idx': key_idx,
+                    'model_id': mid,
+                    'root_model_id': root,
+                    'status': SKIPPED,
+                    'detail': 'non-chat model (%s) — no probe surface implemented'
+                              % ','.join(caps),
+                    'recommend_disable': False,
+                }
+            if 'image_gen' in caps:
+                # One real image is generated per attempt — a billed call, so
+                # don't multiply it for transient-filtering; generation also
+                # routinely outlives the chat-probe timeout.
+                cell_attempts = 1
+                cell_timeout = max(timeout, _IMAGE_PROBE_MIN_TIMEOUT)
         # Multi-attempt so a FALSE 429 / transient 5xx doesn't wrongly flag a
         # reachable cell. A single ok on any attempt wins.
         status, detail = probe_cell_multi(base_url, api_key, mid, extra_headers,
-                                          timeout, attempts=attempts,
-                                          protocol=protocol)
+                                          cell_timeout, attempts=cell_attempts,
+                                          protocol=protocol, probe_fn=probe_fn)
         return {
             'key_idx': key_idx,
             'model_id': mid,
@@ -281,6 +504,8 @@ def run_cell_probe_task(task: dict, work: list, timeout: int):
 
 __all__ = [
     'probe_one_cell', 'probe_cell_multi', 'run_cell_probe_task',
+    'probe_embedding_cell', 'probe_transcription_cell', 'probe_image_cell',
+    'nonchat_probe_fn',
     'probe_cache_path', 'probe_cell_key', 'persist_probe_task',
     'public_probe_snapshot', 'CELL_PROBE_TASKS', 'CELL_PROBE_LOCK', 'SKIPPED',
 ]

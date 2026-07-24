@@ -1126,7 +1126,7 @@ var _i18n = {
   'settings.matrixNoAlias': { zh: '无别名', en: 'no aliases' },
   // ── Access Matrix: probe & recommend ──
   'settings.matrixProbe': { zh: '探测推荐', en: 'Probe & Recommend' },
-  'settings.matrixProbeHint': { zh: '逐格发送最小请求，检测每个密钥可访问哪些模型/别名。在后台运行并持久化——关闭设置也不会中断，重开后自动恢复', en: 'Send a tiny request per cell to detect which models/aliases each key can reach. Runs in the background and is persisted — closing Settings won\'t interrupt it; it resumes on reopen' },
+  'settings.matrixProbeHint': { zh: '逐格发送最小请求，检测每个密钥可访问哪些模型/别名：聊天模型发 1-token 补全，图像模型真实生成一张小图（按 1 次生成计费，仅测 1 次），语音模型发一段空白音频，嵌入模型发一个单词。在后台运行并持久化——关闭设置也不会中断，重开后自动恢复', en: 'Send a tiny request per cell to detect which models/aliases each key can reach: chat models get a 1-token completion, image models generate one small real image (billed as one generation, single attempt), speech models get a blank audio clip, embedding models one word. Runs in the background and is persisted — closing Settings won\'t interrupt it; it resumes on reopen' },
   'settings.matrixRetest': { zh: '重新探测', en: 'Retest' },
   'settings.matrixProbing': { zh: '正在后台探测…', en: 'Probing in background…' },
   'settings.matrixProbeFailed': { zh: '探测失败', en: 'Probe failed' },

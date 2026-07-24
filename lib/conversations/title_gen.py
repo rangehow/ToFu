@@ -252,12 +252,68 @@ def generate_conversation_title(messages: list, lang: str | None = None) -> str:
         return _fallback_title(messages)
 
     elapsed = time.time() - started
+
+    # ── Root-cause diagnostic capture ──
+    # A single-character title observed in the wild (2026-07-24 "跨") could
+    # have come from at least three distinct root causes — a thinking-model
+    # burning the whole max_tokens budget on reasoning, `_clean_title`'s
+    # first-non-empty-line rule dropping the real payload, or plain
+    # small-model flakiness. Only the model's raw response can tell them
+    # apart, so record it (plus the dispatch metadata) BEFORE cleaning.
+    _usage_d = _usage if isinstance(_usage, dict) else {}
+    _dispatch = _usage_d.get('_dispatch') or {}
+    _actual_model = _dispatch.get('model') or '?'
+    _finish_reason = _usage_d.get('finish_reason') or ''
+    _prompt_tokens = _usage_d.get('prompt_tokens') or 0
+    _completion_tokens = (_usage_d.get('completion_tokens')
+                          or _usage_d.get('output_tokens') or 0)
+    _reasoning_tokens = _usage_d.get('reasoning_tokens') or 0
+    _raw = content if isinstance(content, str) else ''
+    _raw_stripped = _raw.strip()
+    _raw_lines = [ln for ln in _raw_stripped.splitlines() if ln.strip()]
+    _raw_line_count = len(_raw_lines)
+
     title = _clean_title(content or '')
+
+    # Log the full observation set at INFO — this is the record that lets
+    # next-time triage skip the "was it thinking-budget or clean-title?"
+    # guessing game. %.200r keeps the raw preview safe for arbitrary content.
+    logger.info(
+        '[TitleGen] model=%s finish=%s tokens[prompt=%d comp=%d reason=%d] '
+        'raw_chars=%d raw_lines=%d elapsed=%.1fs '
+        'raw_preview=%.200r clean_title=%.60r',
+        _actual_model, _finish_reason or '?',
+        _prompt_tokens, _completion_tokens, _reasoning_tokens,
+        len(_raw), _raw_line_count, elapsed,
+        _raw_stripped, title)
+
+    # Elevate the three known-suspicious patterns to WARNING so error.log
+    # captures them without a user having to report the bug. These are
+    # observations, not policy decisions — behaviour is unchanged.
+    _suspicious_reasons = []
+    if _finish_reason == 'length':
+        _suspicious_reasons.append(
+            f'model hit max_tokens ceiling '
+            f'(completion={_completion_tokens}, reasoning={_reasoning_tokens})')
+    if _raw_line_count >= 2 and title and len(title) < len(_raw_stripped) - 2:
+        _dropped = _raw_lines[1:]
+        _suspicious_reasons.append(
+            f'_clean_title dropped {_raw_line_count - 1} extra non-empty '
+            f'line(s): {_dropped[:3]!r}')
+    if title and len(title) <= 3 and _raw_line_count <= 1:
+        _suspicious_reasons.append(
+            f'model produced a title <=3 chars long (title={title!r})')
+    if _suspicious_reasons:
+        logger.warning(
+            '[TitleGen] suspicious result on model=%s: %s | '
+            'raw=%.200r final=%.60r',
+            _actual_model, ' | '.join(_suspicious_reasons),
+            _raw_stripped, title)
+
     if not title:
         logger.info('[TitleGen] empty/unusable model output (%.80r) after '
                     '%.1fs — using fallback', content, elapsed)
         return _fallback_title(messages)
-    logger.info('[TitleGen] generated title=%.60r in %.1fs', title, elapsed)
     return title
 
 

@@ -2,7 +2,17 @@
 
 
 
-### 2026-07-25(续) — owner 验收抓漏:mpApplyFolders 失败回退不降级档位根修(commit `5fbc40e3`,2 文件 +163,套件扩至 16 测全绿含三重 NEUTER,相邻环 67/67,collect **8475** 0 err)。
+### 2026-07-25(续) — owner 验收抓漏:mpApplyFolders 失败回退不降级档位根修
+
+
+### 2026-07-24 — 全仓 bug 扫描第三波（owner 点名补覆盖缺口）:5 agent 按风险分片扫完剩余区域,17 条候选 grounding 后 **14 条证伪、3 条实锤修复**(commit `da1b3ef`,3 文件,browser+self_update 套件 83 过 4 跳 / collect **8484 零 error**)。owner 验收前两波后实测目录,指出漏扫 `lib/project_mod`(最高危)+`lib/tools`、browser/oauth/feishu/pdf_parser、paper/optimizer/translate/compat/image_gen/error_envelope/model_info、~65 个顶层 `lib/*.py`、前端 7 漏网文件 + 26 个小保护包。
+- **打法:** 5 agent 单批并行,分区与 owner 点名的 ①–⑤ 逐一对齐;agents 只审不改,我集中 grounding + 修复。**纪律见效:17 条候选只 3 条活过核实**,证伪率 82%——agent 幻觉型报告(想象的正则、不存在的行号、数错的键数)全部被挡在代码外。
+- **3 个实锤修复:** ①`lib/browser/advanced.py` `fill_form_sequential` select 分支 open-click 不查 `send_browser_command` 错误返回(同函数其余 3 个分支全查 `_err`)——open 失败会误报「option not found」,改为捕获并报「select open failed」;②`lib/self_update/_apply.py` `_req_digest` `except Exception: return ''` 无日志 → 按 §2.2 补 debug(调用方本就视 '' 为未知并防御性装依赖);③`static/admin.html:94` h1 用 🫧 emoji 当品牌图标(§3.4)→ 内联 bubbles SVG。
+- **14 条证伪(代表性):** w3_a「write_tools.py 缺失=致命 import」→ 实为 **sibling 在途包拆分**(` D write_tools.py`+`?? write_tools/`,import 实测 OK);3 个「rm -fr/空格/sudo -u 绕过破坏性守卫」→ 守卫是**白名单设计**(非白名单一律视为破坏性),agent 审的是想象的正则,且行号指向的是 stdin 检测函数;modifications.py:739「静默 catch」→ **该文件只有 710 行**;optimizer/applier.py:35「entry 为 None 崩溃」→ 现状已是 `entry and` 短路(agent 建议的修复=现状代码);model_info `_limits.py break`→ `_MODEL_MAX_OUTPUT` 谓词互斥,agent 的 min() 修法反而会拿错家族 clamp;arxiv ParseError「静默」→ 已 warning、返回[]合规;feishu 内层 except「静默」→ 错误通知发送失败场景 debug+exc_info 合规;i18n「18 键缺 en」→ 严格扫描 zh/en **2710/2710 平衡,0 缺失**;file_history `except BaseException`→ 清理 tmp 后 **re-raise**,正确模式;key_stats/agent_inbox/tofu-pet 三处→已有守卫或合规日志。
+- **w3_d(lib 顶层 ~65 文件)全绿:** chat_dispatch/cost/proxy/rate_limiter 三件套/provider 三件套/auth 两件套/embeddings/attachments 等零实锤。
+- **git 纪律:** `reset -q HEAD .` → 仅 add 3 文件 → `commit -F- -- <3 路径>` → `git show HEAD --name-only` = 仅 3 文件,NO LEAK。`da1b3ef`。
+- **诚实残余缝(连 owner 清单也未列):** `lib/orchestration/` 包(6 文件,区别于顶层 orchestration_*.py)、`lib/tasks_pkg/` 长尾(wave1 只读 8 个指定模块/47 项)、`lib/database/` 长尾(18 项扫 7)、`lib/llm_dispatch/` 长尾(15 项扫 6)、`lib/desktop_agent/`(9 文件)。要 100% 覆盖需第四波小扫。
+(commit `5fbc40e3`,2 文件 +163,套件扩至 16 测全绿含三重 NEUTER,相邻环 67/67,collect **8475** 0 err)。
 # Project Journal
 
 

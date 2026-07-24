@@ -608,6 +608,26 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
                 api_rounds.append({'round': 'fallback', 'model': model, 'usage': dict(usg), 'tag': 'FALLBACK'})
                 from lib.tasks_pkg.llm_fallback import _emit_round_usage
                 _emit_round_usage(task, 'fallback', model, usg, tag='FALLBACK')
+                # ★ HONEST ACCOUNTING (identical seam as _call.py): the
+                #   post-loop fallback path is another consumer of the same
+                #   stream_llm_response return contract — any FloorRetry
+                #   discards it produces MUST also be billed. Without this the
+                #   post-loop fallback would re-open the very leak we just
+                #   closed in the primary/reactive/fallback branches.
+                for _bill in (usg.get('_extra_billing_rounds') or []):
+                    _bu = _bill.get('usage') or {}
+                    for k, v in _bu.items():
+                        if isinstance(v, (int, float)):
+                            accumulated_usage[k] = accumulated_usage.get(k, 0) + v
+                    api_rounds.append({
+                        'round': 'fallback',
+                        'model': _bill.get('model') or model,
+                        'usage': dict(_bu),
+                        'tag': _bill.get('tag') or 'FALLBACK-DISCARDED',
+                    })
+                    _emit_round_usage(task, 'fallback',
+                                      _bill.get('model') or model, _bu,
+                                      tag=_bill.get('tag') or 'FALLBACK-DISCARDED')
         except Exception as e:
             logger.error('[%s] ⚠️ Post-loop fallback failed: %s', tid, e, exc_info=True)
             try:

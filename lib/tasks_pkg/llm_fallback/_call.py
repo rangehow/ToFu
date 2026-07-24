@@ -383,13 +383,18 @@ def _llm_call_with_fallback(task, body, model, round_num, max_tokens,
                 _hint_cn = '过多大图。同时发送 5 张以上图片时，每张需小于 2000×2000像素。请压缩或删除部分图片。'
                 _hint_en = ('Too many large images. When sending 5+ images, each must be '
                             'under 2000×2000 pixels. Please resize or remove some images.')
+                _hint_key = 'err.k.invalid_image.hintMany'
             else:
                 _hint_cn = '会话中某张图片超过了 API 大小限制。请使用更小的图片或删除过大的图片。'
                 _hint_en = ('One or more images in this conversation exceed the API size '
                             'limit. Please use a smaller image or remove the oversized image.')
+                _hint_key = 'err.k.invalid_image.hintSize'
             envelope = _make_env(
                 'invalid_image',
+                # Legacy bilingual hint stays byte-identical for headless
+                # clients; the keyed variant lets the frontend localize.
                 hint=f'解决办法 / How to fix:\n• {_hint_cn}\n\n• {_hint_en}',
+                hint_key=_hint_key,
                 detail=err_str,
                 model=model,
                 context=f'round-{round_num}',

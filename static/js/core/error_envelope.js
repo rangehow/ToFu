@@ -97,6 +97,56 @@ function _envT(key, params) {
   return (typeof t === 'function') ? t(key, params) : key;
 }
 
+/* ── Keyed i18n resolution (2026-07-25) ──────────────────────────────
+ * Modern backends ship titleKey/hintKey on the envelope next to the legacy
+ * bilingual message/hint. Resolve keys in the CURRENT UI language; return
+ * null when the key is absent from this bundle's table (old frontend +
+ * new backend, or table drift) so every caller degrades to the legacy
+ * bilingual strings — identical to today's rendering. `_i18n` is the
+ * dictionary var from i18n.js (bundled earlier); standalone-eval harnesses
+ * lack it → null → legacy fallback, so they stay green. */
+function _envResolveI18n(key, params) {
+  if (!key) return null;
+  if (typeof _i18n === 'undefined' || !_i18n[key]) return null;
+  /* Same fallback chain as t(), but undefined-aware: an EMPTY entry (e.g.
+   * `aborted`'s hint) resolves to '' — meaningful "deliberately no text",
+   * distinct from null (= unknown key → legacy fallback). t() can't be used
+   * here because its `entry[lang] || entry.zh || key` chain key-echoes on ''. */
+  const entry = _i18n[key];
+  const lang = (typeof _i18nLang === 'string') ? _i18nLang : 'zh';
+  let text = (typeof entry[lang] === 'string') ? entry[lang]
+    : (typeof entry.zh === 'string') ? entry.zh : key;
+  if (text && params) {
+    for (const k in params) {
+      if (Object.prototype.hasOwnProperty.call(params, k)) {
+        text = text.replace(new RegExp('\\{' + k + '\\}', 'g'), params[k]);
+      }
+    }
+  }
+  return text;  // [env-i18n-resolve]
+}
+
+/* Localized title line (+ model suffix), or null when unresolvable. */
+function _envLocalizedTitle(env) {
+  const base = _envResolveI18n(env.titleKey);
+  if (base == null) return null;
+  const suffix = env.model
+    ? (_envResolveI18n('err.k._modelSuffix', { model: env.model }) || '')
+    : '';
+  return base + suffix;
+}
+
+/* Localized hint block (header + body), or null when unresolvable.
+ * A key that resolves to an EMPTY string (e.g. `aborted`) means "no hint
+ * for this kind" — return '' so the caller skips the block entirely. */
+function _envLocalizedHint(env) {
+  const body = _envResolveI18n(env.hintKey);
+  if (body == null) return null;
+  if (!body) return '';
+  const head = _envResolveI18n('err.k._howToFix') || 'How to fix:';
+  return head + '\n' + body;
+}
+
 /* Is this envelope RECOVERABLE by the offline-recovery path?
  *
  * ONLY ``server_offline`` qualifies. That kind is stamped by the frontend
@@ -126,12 +176,16 @@ function renderErrorEnvelope(err) {
    * result is likely safe on the server, don't regenerate, click Recover. */
   const kindLabel = _recoverable
     ? _envT('err.conn.title')
-    : (ERROR_KIND_LABELS[env.kind] || env.kind || 'Error');
+    : (_envResolveI18n('err.k.' + env.kind + '.chip')
+       || ERROR_KIND_LABELS[env.kind] || env.kind || 'Error');
   const detail = env.detail || env.raw || '';
   const detailBlock = detail
     ? `<div class="error-block-detail" title="${escapeHtml(detail)}">${escapeHtml(detail.length > 220 ? detail.slice(0, 220) + '…' : detail)}</div>`
     : '';
-  const hintText = _recoverable ? _envT('err.conn.hint') : env.hint;
+  const _locTitle = _envLocalizedTitle(env);
+  const _locHint = _envLocalizedHint(env);
+  const hintText = _recoverable ? _envT('err.conn.hint')
+    : (_locHint != null ? _locHint : env.hint);
   const hintBlock = hintText
     ? `<div class="error-block-hint">${escapeHtml(hintText)}</div>`
     : '';
@@ -157,7 +211,7 @@ function renderErrorEnvelope(err) {
   return (
     `<div class="error-block error-block--${escapeHtml(sev)} error-block--kind-${escapeHtml(env.kind)}" data-error-kind="${escapeHtml(env.kind)}">` +
       `<div class="error-block-title"><span class="error-block-kind">${escapeHtml(kindLabel)}</span>${ctx}</div>` +
-      `<div class="error-block-message">${escapeHtml(env.message)}</div>` +
+      `<div class="error-block-message">${escapeHtml(_locTitle != null ? _locTitle : env.message)}</div>` +
       hintBlock +
       detailBlock +
       recoverBtn +
@@ -172,7 +226,9 @@ function errorEnvelopeKind(err) {
 
 function errorEnvelopeMessage(err) {
   const env = normalizeErrorEnvelope(err);
-  return env ? env.message : '';
+  if (!env) return '';
+  const _loc = _envLocalizedTitle(env);
+  return _loc != null ? _loc : env.message;
 }
 
 window.renderErrorEnvelope = renderErrorEnvelope;

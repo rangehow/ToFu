@@ -37,7 +37,7 @@ from lib.memory.storage import (
     _make_memory_id,
     _memory_from_file,
     _parse_frontmatter,
-    resolve_target_dir,
+    resolve_skills_dir,
 )
 
 logger = get_logger(__name__)
@@ -237,7 +237,7 @@ def install_skill_package(
             or raw bytes of an uploaded zip.
         scope: ``'project'`` or ``'global'``.
         project_path: The project root (required for both scopes; see
-            :func:`lib.memory.storage.resolve_target_dir`).
+            :func:`lib.memory.storage.resolve_skills_dir`).
         overwrite: When ``True``, replace an existing package with the
             same id.  When ``False`` (default), the new package is
             installed under ``<id>_2``, ``<id>_3``, ... to avoid clobber.
@@ -318,7 +318,7 @@ def install_skill_package(
         skill_id = _make_memory_id(skill_name)
 
         # \u2500\u2500 Step 3: pick destination directory \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-        target_root = resolve_target_dir(scope, project_path)
+        target_root = resolve_skills_dir(scope, project_path)
         os.makedirs(target_root, exist_ok=True)
 
         replaced = False

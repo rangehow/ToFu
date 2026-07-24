@@ -42,19 +42,27 @@ logger = get_logger(__name__)
 from ._dirs import (
     GLOBAL_MEMORY_DIR,
     GLOBAL_MEMORY_SUBDIR,
+    LEGACY_PROJECT_MEMORY_SUBDIR,
     PROJECT_MEMORY_SUBDIR,
+    PROJECT_SKILLS_SUBDIR,
     MIN_DESCRIPTION_LENGTH,
     SERVER_GLOBAL_MEMORY_SUBPATH,
+    SERVER_GLOBAL_SKILLS_SUBPATH,
     _PROJECT_ROOT,
     _lock,
     _migrated_roots,
     _ensure_dir,
     _server_data_dir,
     _server_global_memory_dir,
+    _server_global_skills_dir,
     _get_global_memory_dir,
     resolve_target_dir,
+    resolve_skills_dir,
+    run_storage_migrations,
     _iter_roots,
     _migrate_one_root_globals,
+    _migrate_project_flat_memories,
+    _migrate_server_store_packages,
 )
 
 # ── Frontmatter parsing / building (from _frontmatter) ───────────────
@@ -72,6 +80,7 @@ from ._files import (
     _memory_from_file,
     _write_memory_file,
     _list_memories_in_dir,
+    _list_skill_packages_in_dir,
     _make_memory_id,
 )
 
@@ -94,9 +103,10 @@ from ._crud import (
 __all__ = [
     'GLOBAL_MEMORY_DIR', 'GLOBAL_MEMORY_SUBDIR', 'PROJECT_MEMORY_SUBDIR', 'MIN_DESCRIPTION_LENGTH',
     'SERVER_GLOBAL_MEMORY_SUBPATH',
+    'LEGACY_PROJECT_MEMORY_SUBDIR', 'PROJECT_SKILLS_SUBDIR', 'SERVER_GLOBAL_SKILLS_SUBPATH',
     'list_all_memories', 'list_memories', 'get_memory', 'get_enabled_memories',
     'get_eligible_memories',
     'create_memory', 'update_memory', 'delete_memory', 'merge_memories',
     'toggle_memory',
-    'resolve_target_dir',
+    'resolve_target_dir', 'resolve_skills_dir', 'run_storage_migrations',
 ]

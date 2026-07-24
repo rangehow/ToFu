@@ -11,15 +11,16 @@ from datetime import datetime, timezone
 from lib.log import get_logger
 
 from ._dirs import (
+    LEGACY_PROJECT_MEMORY_SUBDIR,
     PROJECT_MEMORY_SUBDIR,
     MIN_DESCRIPTION_LENGTH,
     _get_global_memory_dir,
     _iter_roots,
     _lock,
-    _migrate_one_root_globals,
-    _migrated_roots,
     _server_global_memory_dir,
+    _server_global_skills_dir,
     resolve_target_dir,
+    run_storage_migrations,
 )
 from ._files import (
     _list_memories_in_dir,
@@ -43,20 +44,21 @@ def list_all_memories(project_path=None, extra_paths=None):
     memories = []
     seen_ids = set()
     with _lock:
-        # One-time idempotent migration of each root's legacy global dir into
-        # the server store, so pre-existing globals become cross-project.
-        for root in roots:
-            if root in _migrated_roots:
-                continue
-            try:
-                _migrate_one_root_globals(root)
-            except Exception as e:
-                logger.warning('[Memory] legacy global migration failed for '
-                               '%s: %s', root, e)
-            _migrated_roots.add(root)
+        # One-time idempotent storage migrations (legacy globals, pre-split
+        # flat memories, server-store packages) so the scans below see the
+        # post-split layout.
+        run_storage_migrations(project_path, extra_paths)
 
-        # Server-side global store first — canonical, scanned once regardless
-        # of project, and wins on an id collision.
+        # Server-side global stores first — canonical, scanned once regardless
+        # of project, and win on an id collision. The SKILLS store precedes
+        # the memory store so a post-migration package shadows any straggler
+        # copy left behind in the memory store.
+        for mem in _list_memories_in_dir(_server_global_skills_dir(),
+                                         scope='global'):
+            if mem['id'] in seen_ids:
+                continue
+            seen_ids.add(mem['id'])
+            memories.append(mem)
         for mem in _list_memories_in_dir(_server_global_memory_dir(),
                                          scope='global'):
             if mem['id'] in seen_ids:
@@ -69,8 +71,14 @@ def list_all_memories(project_path=None, extra_paths=None):
             global_dir = _get_global_memory_dir(root)
             scanned = (_list_memories_in_dir(global_dir, scope='global')
                        if global_dir else [])
+            # Post-split project memories dir (flat *.md).
             proj_dir = os.path.join(root, PROJECT_MEMORY_SUBDIR)
             scanned += _list_memories_in_dir(proj_dir, scope='project')
+            # Pre-split legacy dir — still the permanent home of project
+            # skill packages, plus any unmigrated straggler flat files
+            # (shadowed by id; the memories dir above wins).
+            legacy_dir = os.path.join(root, LEGACY_PROJECT_MEMORY_SUBDIR)
+            scanned += _list_memories_in_dir(legacy_dir, scope='project')
             for mem in scanned:
                 if mem['id'] in seen_ids:
                     continue

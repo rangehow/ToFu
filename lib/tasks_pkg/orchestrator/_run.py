@@ -375,6 +375,8 @@ def run_task(task: dict[str, Any]) -> None:
         #   Rebuilds messages with server-side tool history when
         #   keepToolHistory=True; returns (messages, original_messages,
         #   used_store) — caller reassigns its two locals from the tuple.
+        _keep_tool_history = cfg.get('keepToolHistory', True)
+        _conv_id = task.get('convId', '')
         messages, original_messages, _tool_history_used = restore_tool_history(
             task=task, cfg=cfg, messages=messages, tid=tid, vu_phase=_vu_phase,
         )

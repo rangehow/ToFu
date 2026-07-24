@@ -46,10 +46,13 @@ CHEAP_BLENDED_THRESHOLD = 9.0
 # Caps that indicate a non-chat model — pricing tier tags never apply.
 # Must list EVERY non-chat cap: a stray managed tag (e.g. 'cheap') on a non-chat
 # slot makes {transcription, cheap} no longer a subset of the dispatcher's
-# _NON_CHAT_CAPS, so the slot leaks into the chat picker (and 404s). Keep this in
-# sync with LLMDispatcher._NON_CHAT_CAPS and the debug/reeval_pricing_tags.py
-# skip-sets.
-_NON_CHAT_CAPS = frozenset({'image_gen', 'embedding', 'transcription', 'audio_chat'})
+# _NON_CHAT_CAPS, so the slot leaks into the chat picker (and 404s). Single
+# source of truth is lib.model_info.capability_taxonomy — this alias imports
+# the dispatcher-shaped set (includes 'audio_chat', which matters for the
+# subset check above). Keep debug/reeval_pricing_tags.py skip-sets in sync.
+from lib.model_info.capability_taxonomy import (
+    DISPATCHER_NON_CHAT_CAPS as _NON_CHAT_CAPS,
+)
 
 
 def _resolve_prices(model_id: str,

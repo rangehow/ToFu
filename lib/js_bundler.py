@@ -382,6 +382,12 @@ _BUNDLE_FILES = [
     # Shared bytes->human size formatter (formatFileSize) — de-dupes
     # image-gen.js _formatFileSize + skills.js _skillsFmtSize. Load before them.
     'core/format_size.js',
+    # Capability taxonomy — window.isChatModel + CHAT_EXCLUDED_CAPS. Consumed
+    # by main_toolbar_ui.js / paper/report.js / settings/visibility_defaults.js
+    # / settings/template_actions.js so all of them load after this. Only
+    # touches window at load; server-config payload is applied at runtime.
+    # See lib/model_info/capability_taxonomy.py for the SSOT.
+    'core/model_caps.js',
     # Shared OS-file .zip drag/drop wiring (attachZipDropZone) — de-dupes the
     # memory + skills install dropzones. Load before memory_skill_install.js
     # and skills_install.js (both call it at runtime; core loads first anyway).

@@ -11,6 +11,7 @@ import threading
 import time
 
 from lib.log import get_logger
+from lib.model_info.capability_taxonomy import DISPATCHER_NON_CHAT_CAPS
 
 from .config import (
     DEFAULT_SLOT_CONFIGS,
@@ -766,12 +767,17 @@ class LLMDispatcher:
                           exclude_keys, exclude_pairs=exclude_pairs,
                           reserve=True, strict_model=strict_model)
 
-    # Capabilities that are NOT chat-compatible — never dispatch these for
-    # chat/stream/cheap/text/vision/thinking operations. 'transcription'
-    # (audio → text via /audio/transcriptions) is selected directly by
-    # lib/transcription.py scanning the slot pool, never through the chat
-    # picker, so it belongs here alongside embedding / image_gen.
-    _NON_CHAT_CAPS = frozenset({'embedding', 'image_gen', 'transcription', 'audio_chat'})
+    # Capabilities that are NOT chat-compatible — a slot is treated as
+    # non-chat when ``slot.capabilities.issubset(_NON_CHAT_CAPS)`` (used
+    # below in ``_is_chat_compatible``). 'transcription' (audio → text via
+    # /audio/transcriptions) is selected directly by lib/transcription.py
+    # scanning the slot pool, never through the chat picker; 'audio_chat'
+    # is here so a slot carrying ONLY {audio_chat} (no text) is excluded,
+    # while real omni chat slots carrying {text, audio_chat, ...} are NOT
+    # a subset and remain chat-eligible. Single source of truth lives in
+    # lib.model_info.capability_taxonomy (DISPATCHER_NON_CHAT_CAPS is
+    # CHAT_EXCLUDED_CAPS | {'audio_chat'} — the difference is intentional).
+    _NON_CHAT_CAPS = DISPATCHER_NON_CHAT_CAPS
 
     def _is_chat_compatible(self, slot) -> bool:
         """Return True if the slot is a chat-capable model (not embedding/image_gen only)."""

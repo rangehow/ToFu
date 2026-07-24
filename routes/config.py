@@ -356,6 +356,16 @@ def get_server_config():
         logger.warning('[ServerConfig] lang-detect policy unavailable: %s', e)
         lang_detect_policy = {}
 
+    # Capability classification (single source of truth) — the frontend
+    # reads this at boot to filter chat-model pickers, so ASR-only /
+    # image-gen / embedding models don't leak into the model dropdown.
+    try:
+        from lib.model_info.capability_taxonomy import taxonomy_payload
+        capability_taxonomy = taxonomy_payload()
+    except Exception as e:
+        logger.warning('[ServerConfig] capability taxonomy unavailable: %s', e)
+        capability_taxonomy = {}
+
     return jsonify({
         'providers': providers, 'presets': presets,
         'models': models, 'search': search_info,
@@ -375,6 +385,7 @@ def get_server_config():
         'context': context_policy,
         'translation': translation_policy,
         'langDetect': lang_detect_policy,
+        'capability_taxonomy': capability_taxonomy,
     })
 
 

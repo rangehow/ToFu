@@ -2149,14 +2149,12 @@ function _populatePaperReportModelDropdown(view) {
 
   dropdown.innerHTML = '';
 
-  // Filter to chat-capable visible models
+  // Filter to chat-capable visible models. isChatModel is the SSOT-backed
+  // predicate from core/model_caps.js — falls back to the hardcoded set
+  // {image_gen, embedding, transcription} when the server payload is absent.
   var chatModels = models.filter(function(m) {
     if (hiddenSet.has(m.model_id)) return false;
-    var caps = m.capabilities || [];
-    for (var i = 0; i < caps.length; i++) {
-      if (caps[i] === 'image_gen' || caps[i] === 'embedding') return false;
-    }
-    return true;
+    return (typeof isChatModel === 'function') ? isChatModel(m) : true;
   });
 
   // No "Default (auto)" option — generation should always use a specific,
@@ -2372,6 +2370,10 @@ function _syncReportToolbar(running, view) {
     if (genBtn) genBtn.style.display = (running || hasOutput) ? 'none' : '';
     if (regenBtn) regenBtn.style.display = (!running && hasOutput) ? '' : 'none';
     if (copyBtn) copyBtn.style.display = (!running && hasOutput) ? '' : 'none';
+    // Light the Rebuttal segment dot as soon as a follow-up reply exists, so
+    // the reviewer sees it without switching (idempotent; does not change the
+    // active segment).
+    if (typeof _syncReviewSegState === 'function') { try { _syncReviewSegState(); } catch (e) {} }
   }
   // Keep the EN/中 segmented control in sync on every paint (both views).
   if (typeof _syncReportLangToggle === 'function') _syncReportLangToggle(view);

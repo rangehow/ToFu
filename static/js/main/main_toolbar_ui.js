@@ -195,15 +195,13 @@ function _populateModelDropdown(models) {
   _registeredModels = models;
   dropdown.innerHTML = '';
 
-  /* Filter out hidden models and non-chat models (but keep current model visible) */
+  /* Filter out hidden models and non-chat models (but keep current model visible).
+   * isChatModel comes from core/model_caps.js — single source of truth for
+   * "is this model a chat model?", read from the server taxonomy at boot. */
   const visibleModels = models.filter(m => {
     if (m.model_id === config.model) return true;  // always keep current model
     if (_hiddenModels.has(m.model_id)) return false;
-    var caps = m.capabilities || [];
-    for (var i = 0; i < caps.length; i++) {
-      if (caps[i] === 'image_gen' || caps[i] === 'embedding') return false;
-    }
-    return true;
+    return isChatModel(m);
   });
 
   /* Group models by provider (transit endpoint) */
@@ -312,6 +310,13 @@ function _loadServerConfigAndPopulate() {
       if (data.translation && typeof data.translation === 'object') {
         window._translationPolicy = data.translation;
       }
+      /* Ingest capability taxonomy (SSOT for chat / non-chat capability
+       * classification). Applied BEFORE the model-list filters below so
+       * isChatModel(m) uses the server's shape, not the hardcoded fallback.
+       * See lib/model_info/capability_taxonomy.py + core/model_caps.js. */
+      if (data.capability_taxonomy && typeof applyCapabilityTaxonomy === 'function') {
+        applyCapabilityTaxonomy(data.capability_taxonomy);
+      }
       /* Load hidden models from server config */
       _hiddenModels = new Set(data.hidden_models || []);
       _hiddenIgModels = new Set(data.hidden_ig_models || []);
@@ -339,11 +344,7 @@ function _loadServerConfigAndPopulate() {
        * chat model — pick randomly to avoid always landing on the same one. */
       const chatModels = (models || []).filter(m => {
         if (_hiddenModels.has(m.model_id)) return false;
-        var caps = m.capabilities || [];
-        for (var i = 0; i < caps.length; i++) {
-          if (caps[i] === 'image_gen' || caps[i] === 'embedding') return false;
-        }
-        return true;
+        return isChatModel(m);
       });
       const availableIds = new Set(chatModels.map(m => m.model_id));
       const currentModel = config.model || serverModel;

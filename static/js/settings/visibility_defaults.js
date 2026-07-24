@@ -138,14 +138,11 @@ function _renderDropdownVisibility() {
   var container = document.getElementById('stgDropdownVisibility');
   if (!container) return;
 
-  // Collect all chat models from all enabled providers (exclude image_gen / embedding)
+  // Collect all chat models from all enabled providers. isChatModel comes
+  // from core/model_caps.js — SSOT for chat vs non-chat classification.
   var allModels = _getAllModels().filter(function(entry) {
     if (entry.provider.enabled === false) return false;
-    var caps = entry.model.capabilities || ['text'];
-    for (var c = 0; c < caps.length; c++) {
-      if (caps[c] === 'image_gen' || caps[c] === 'embedding') return false;
-    }
-    return true;
+    return isChatModel(entry.model);
   });
 
   if (allModels.length === 0) {
@@ -238,14 +235,10 @@ function _toggleAllDropdownModels(show) {
  * Uses all chat models from all enabled providers as options.
  */
 function _populateModelDefaults(cfg) {
-  // Collect all chat models (exclude image_gen / embedding)
+  // Collect all chat models (exclude non-chat caps via core/model_caps.js).
   var chatModels = _getAllModels().filter(function(entry) {
     if (entry.provider.enabled === false) return false;
-    var caps = entry.model.capabilities || ['text'];
-    for (var c = 0; c < caps.length; c++) {
-      if (caps[c] === 'image_gen' || caps[c] === 'embedding') return false;
-    }
-    return true;
+    return isChatModel(entry.model);
   });
 
   // Deduplicate by model_id

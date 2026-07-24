@@ -11,10 +11,45 @@
 async function _deleteProvider(provIdx) {
   var p = _stgProviders[provIdx];
   if (!p) return;
+  // A managed subscription provider (oauth marker) can't be removed by just
+  // dropping the card — the login token survives on disk and any re-login /
+  // token refresh re-creates it. Route to the real logout instead.
+  if (p.oauth) { return _logoutManagedProvider(provIdx); }
   if (!await showConfirm(t('settings.tplDeleteConfirm', { name: (p.name || p.id), n: (p.models || []).length }), { danger: true })) return;
   _stgProviders.splice(provIdx, 1);
   _renderProvidersTab();
   _renderPresetsTab(_serverConfig);
+}
+
+/**
+ * Remove a MANAGED subscription provider (Claude / ChatGPT OAuth) the right
+ * way: log out. Deleting the card alone leaves the OAuth token on disk, so a
+ * later login/refresh re-provisions it (the "why does it keep coming back?"
+ * bug). Logout clears the token AND deprovisions the server_config entry, so
+ * we splice the card locally to reflect that immediately.
+ */
+async function _logoutManagedProvider(provIdx) {
+  var p = _stgProviders[provIdx];
+  if (!p || !p.oauth) return;
+  var provider = p.oauth;                            // 'claude' | 'codex'
+  var brandLabel = (provider === 'codex') ? 'ChatGPT' : 'Claude';
+  if (!await showConfirm(t('settings.oauthLogoutConfirm', { provider: brandLabel }), { danger: true })) return;
+
+  try {
+    var r = await Api.oauth.logoutPost(provider);
+    if (r && (r.status === 404 || r.status === 405)) r = await Api.oauth.logoutGet(provider);
+  } catch (e) {
+    showAlert(t('settings.oauthLogoutFailed', { error: e.message }));
+    return;
+  }
+
+  // Reflect removal locally (server already deprovisioned) + refresh OAuth card.
+  _stgProviders.splice(provIdx, 1);
+  _renderProvidersTab();
+  _renderPresetsTab(_serverConfig);
+  if (typeof _updateOAuthCard === 'function') {
+    _updateOAuthCard(provider, { status: 'not_started', authenticated: false });
+  }
 }
 
 function addProvider() {
@@ -177,7 +212,10 @@ function _getPricingTiersJS(modelId, blendedCostPer1k) {
 function _normalizeModelPricingTags(m) {
   if (!m || !m.model_id) return;
   var caps = new Set(m.capabilities || []);
-  if (caps.has('image_gen') || caps.has('embedding')) return;
+  // Pricing-tier tags never apply to non-chat models. Delegate to the
+  // capability taxonomy SSOT (core/model_caps.js) so a new non-chat cap
+  // (e.g. 'tts') added server-side is honoured without a client rebuild.
+  if (typeof isChatModel === 'function' && !isChatModel(m)) return;
   var desired = new Set(_getPricingTiersJS(m.model_id, m.cost));
   var changed = false;
   _MANAGED_TIER_TAGS_JS.forEach(function(tag) {

@@ -613,8 +613,13 @@ function _restoreConvToolState(conv) {
    * so restoring never clobbers the just-restored flags — _applyChatModeUI is
    * idempotent with the setters above. */
   if (typeof _applyChatModeUI === 'function') {
-    const _mode = conv.chatMode
+    const _storedMode = conv.chatMode
       || (typeof _deriveChatModeFromFlags === 'function' ? _deriveChatModeFromFlags(conv) : 'chat');
+    /* ★ Studio ⟺ a project is attached. A stored 'studio' tier with NO
+     * projectPath is a poisoned state (e.g. persisted before the project was
+     * cleared — the clear path once repainted without saving) — never restore
+     * it: a project-less conversation is not Studio. */
+    const _mode = (_storedMode === 'studio' && !conv.projectPath) ? 'chat' : _storedMode;
     _applyChatModeUI(_mode);
   }
   /* ★ Restore the image gen model + batch count + aspect + resolution from conv settings */

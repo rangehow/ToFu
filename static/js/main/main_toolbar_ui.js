@@ -228,16 +228,27 @@ if (typeof window !== 'undefined') window.setChatMode = setChatMode;
 
 /* Called by mpApplyFolders after a project is successfully attached — promote
  * the dial to Studio (the tier IS "a project is attached"). Kept separate from
- * setChatMode so the project path owns the promotion. */
+ * setChatMode so the project path owns the promotion. The promotion is
+ * persisted immediately — without it conv.chatMode keeps the stale tier until
+ * the next unrelated toggle, and a reload in between restores the wrong dial. */
 function onProjectAttached() {
-  if (chatMode !== 'studio') _applyChatModeUI('studio');
+  if (chatMode !== 'studio') {
+    _applyChatModeUI('studio');
+    if (typeof _saveConvToolState === 'function') _saveConvToolState();
+  }
 }
 if (typeof window !== 'undefined') window.onProjectAttached = onProjectAttached;
 
 /* Called by clearProject — a project-less chat is never Studio; fall back to
- * the everyday Chat tier. */
+ * the everyday Chat tier AND persist the fallback. Without the persist,
+ * conv.chatMode kept 'studio' with an empty projectPath, and the restore path
+ * trusting that stored tier resurrected Studio on the next reload/conv-switch
+ * even though no project was attached. */
 function onProjectCleared() {
-  if (chatMode === 'studio') _applyChatModeUI('chat');
+  if (chatMode === 'studio') {
+    _applyChatModeUI('chat');
+    if (typeof _saveConvToolState === 'function') _saveConvToolState();
+  }
 }
 if (typeof window !== 'undefined') window.onProjectCleared = onProjectCleared;
 

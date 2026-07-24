@@ -125,13 +125,10 @@ function _ensurePdfJs() {
 }
 
 const TAB_ID = Math.random().toString(36).slice(2, 10);
-let _syncChannel = null;
-try {
-  _syncChannel = new BroadcastChannel("claude_dialogue_sync");
-  _syncChannel.onmessage = (e) => {
-    if (e.data && e.data.sourceTab !== TAB_ID) _handleCrossTabMsg(e.data);
-  };
-} catch (_) {}
+/* BroadcastChannel + listener registration RELOCATED to
+ * core/cross_tab_sync.js (pt_3879f00e Epic-E sub-part 3). See that module
+ * for the construction; TAB_ID stays here (leaf constant with multiple
+ * consumers, incl. main.js's boot log). */
 
 /* ★ DB-first: conversations start empty and are populated by
  *   loadConversationsFromServer() in initActiveTasks().

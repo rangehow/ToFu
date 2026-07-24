@@ -7,6 +7,25 @@
    core.js shell — symbols share `window` scope so no exports needed.
    ═══════════════════════════════════════════════════════════════════ */
 
+/* ── _syncChannel: BroadcastChannel construction + listener registration ──
+ *
+ * RELOCATED from core.js (pt_3879f00e Epic-E sub-part 3). Owning the
+ * listener registration in the module that ALSO defines _handleCrossTabMsg
+ * means deferring this file no longer risks ReferenceError at boot — a
+ * deferred module just means "no cross-tab sync until the module lands",
+ * not a load-time crash. See docs/EPIC_E_DEFER_AUDIT.md's "Option A".
+ *
+ * _handleCrossTabMsg is a function DECLARATION (line ~443) so it is
+ * hoisted — safe to reference here at module-top. TAB_ID stays in core.js
+ * (leaf constant; also read by main.js's boot log). */
+let _syncChannel = null;
+try {
+  _syncChannel = new BroadcastChannel("claude_dialogue_sync");
+  _syncChannel.onmessage = (e) => {
+    if (e.data && e.data.sourceTab !== TAB_ID) _handleCrossTabMsg(e.data);
+  };
+} catch (_) {}
+
 /* ★ Remove a conversation locally in response to a REMOTE delete signal —
  *   shared by the same-machine BroadcastChannel (`conv_deleted`) path and the
  *   cross-device `notify` push (`conv_deleted` frame). Aborts any live stream,

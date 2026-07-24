@@ -1,6 +1,19 @@
 # Project Journal
 
 
+### 2026-07-24(续) — pt_13862a83(dispatcher `audio_chat` issubset 潜伏面)Part A 审计 + 守卫落地(commit `b32fe6b6`,1 文件 +141,新测 3/3 绿含 NEUTER)。
+- **背景:** 上一批 commit `e0a49243` 拆出 taxonomy SSOT 后,`DISPATCHER_NON_CHAT_CAPS` 里的 `audio_chat` 走 `issubset` 语义——「只有 `{audio_chat}`、无 `text`」的假想 slot 会被静默排除。按 owner「latent 不塞进重构批次」偏好独立开票 pt_13862a83。
+- **Part A 全量审计(4 处 `audio_chat` 载体,逐一核对):**
+  - `static/provider_templates/meituan.json:22` `gemini-3-flash-preview` = `[text, vision, thinking, cheap, audio_chat]` ✓
+  - `static/provider_templates/meituan.json:23` `LongCat-Flash-Omni-2603` = `[text, vision, audio_chat]` ✓
+  - `lib/llm_dispatch/config/_slots.py:115` `gemini-3-flash-preview` = `{text, vision, thinking, cheap, audio_chat}` ✓
+  - `lib/llm_dispatch/config/_slots.py:118` `LongCat-Flash-Omni-2603` = `{text, vision, audio_chat}` ✓
+  - **零违规**:HEAD 上所有 `audio_chat` 载体都带 `text`,dispatcher 的 `issubset` 排除路径**当前不可达**。潜伏面 = 现实空集。
+- **守卫(3 测,`tests/test_audio_chat_has_text_companion.py`):** ①扫 `static/provider_templates/*.json` 全部 `audio_chat` 载体必须共载 `text`;②扫 `DEFAULT_SLOT_CONFIGS`(会在 slot-build 期**覆盖**模板 caps,必须自身满足不变量);③**NEUTER**:`{'audio_chat'}` 单独必须是 `DISPATCHER_NON_CHAT_CAPS` 子集(证明不是 tautology)。①②各带 `scanned > 0` 反悔条款,不会因 `audio_chat` 被到处删而退化到 vacuous-green。**NEUTER 实证:** 用 tempdir 复制 meituan.json 剔除 `text` → guard 找出 2 违规 → 还原绿。
+- **Part B(设计选择)不动:** 「保留 `issubset` 语义 vs 换成显式 non-chat-only 枚举」是 owner 内容/结构决策,agent 不应擅自发明。守卫落地后,即便 owner 一直不决定,任何后续 template 编辑都不可能静默重现潜伏面——epic 可以关闭为「latent bug now provably unreachable + guarded」。
+- **git 纪律:** `reset -q HEAD .` → `add -- tests/test_audio_chat_has_text_companion.py` → `commit -- <单路径>` → `show HEAD --stat` = 1 文件 +141,大量 sibling WIP 全留 worktree,NO LEAK。
+
+
 ### 2026-07-24 — 「Doubao-Seed-ASR-2.0 竟然出现在聊天预设下拉里」根修:capability taxonomy 单一真相源(commit `e0a49243`,13 文件 +568/-40,新测 7/7 绿含 NEUTER + 相邻 28/28 无回归)。
 - **可见 bug(截图):** 顶栏预设下拉出现 `Doubao-Seed-ASR-2.0`(ASR/STT 模型,`caps=['transcription']`),用户能选,一发就 404。
 - **真因(读代码钉死,非猜):** 后端 dispatcher `_NON_CHAT_CAPS = {image_gen, embedding, transcription, audio_chat}` 早已把 transcription 归为非聊天,`_is_chat_compatible` 用 `slot.capabilities.issubset(...)` 正确排除;**前端在 6 处重新造轮子**,每处只写「排除 `image_gen`/`embedding`」——漏了 `transcription`。同一个概念前端后端各写一份、还三份互不相等(dispatcher / pricing / transcription `TRANSCRIPTION_CAPS`),典型漂移风险(注释里都在互相点名「keep in sync」)。

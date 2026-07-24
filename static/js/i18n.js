@@ -2424,6 +2424,11 @@ var _i18n = {
   'queue.cancelMsg': { zh: '取消此消息', en: 'Cancel this message' },
   'queue.imagesCount': { zh: '{n} 张图片', en: '{n} images' },
   'queue.syncedToServer': { zh: '已同步到服务器', en: 'Synced to server' },
+  // Queue bar collapse toggle + brain-dispatch attribution
+  // (main/main_send_pipeline.js renderPendingQueueUI).
+  'queue.collapse': { zh: '收起队列', en: 'Collapse queue' },
+  'queue.expand': { zh: '展开队列', en: 'Expand queue' },
+  'queue.fromWorkflow': { zh: '项目大脑派发', en: 'Brain dispatch' },
   // ── Log-noise pre-send confirm dialog (main/main_send_pipeline.js) ──
   'send.logNoiseConfirm': { zh: '检测到日志噪音，可节省 {chars} 字符（{pct}%）\n\n清理项: {ops}\n\n点击「确定」清理后发送，「取消」保持原文发送。', en: 'Log noise detected — can save {chars} characters ({pct}%)\n\nCleanup: {ops}\n\nClick "OK" to clean then send, "Cancel" to send as-is.' },
   'send.logNoiseClean': { zh: '清理并发送', en: 'Clean & send' },

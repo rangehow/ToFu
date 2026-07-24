@@ -84,6 +84,21 @@ def _node() -> str:
     return node
 
 
+def _extract_queue_block(src: str) -> str:
+    """The queue source/collapse helpers + renderPendingQueueUI as ONE block.
+
+    renderPendingQueueUI now delegates to the source/collapse helpers
+    (``_queueSourceOf``, ``_queueCollapsedNow``, the ``_QUEUE_*`` icon
+    consts, …), so extracting the bare function would ReferenceError under
+    eval. The block spans from the sources marker through the end of the
+    render function (the collapse toggle is defined in between)."""
+    start = src.index('/* ── Queue item sources')
+    m = re.search(r'function\s+renderPendingQueueUI\s*\(', src)
+    assert m and m.start() > start
+    i = src.find('{', m.end())
+    return src[start:_brace_match(src, i)]
+
+
 # The conversations the harness pretends are loaded. The peer ids the backend
 # surfaces are the 8-char display form; the real rows are 14 chars — so a match
 # MUST succeed by unique prefix.
@@ -182,7 +197,7 @@ def _extracted(*, poison: bool = False) -> str:
         assert neutered != fn_title, 'NC poison did not apply to convTitleById'
         fn_title = neutered
     fn_delivery = _extract_fn(tr_src, '_renderPeerDelivery')
-    fn_queue = _extract_fn(send_src, 'renderPendingQueueUI')
+    fn_queue = _extract_queue_block(send_src)
     return '\n'.join([fn_title, fn_delivery, fn_queue])
 
 

@@ -15342,12 +15342,80 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
   background: var(--bg-secondary);
   padding-bottom: 4px;
 }
-.pending-queue-bar .queue-header svg {
+.pending-queue-bar .queue-header > svg {
   flex-shrink: 0;
   animation: queueSpin 3s linear infinite;
 }
-.pending-queue-bar .queue-header span {
-  flex: 1;
+.pending-queue-bar .queue-header .queue-header-label {
+  flex: 0 1 auto;
+  white-space: nowrap;
+}
+/* ── Collapse toggle (chevron) ── */
+.pending-queue-bar .queue-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.pending-queue-bar .queue-toggle:hover {
+  background: var(--bg-tertiary);
+  color: var(--accent);
+}
+.pending-queue-bar .queue-toggle svg {
+  display: block;
+  transition: transform 0.2s ease;
+}
+.pending-queue-bar.queue-collapsed .queue-toggle svg {
+  transform: rotate(-90deg);
+}
+/* ── Collapsed state: the item list folds away, leaving a one-line bar
+   (count + next-up preview + clear-all) so a flooded queue can never bury
+   the transcript. The next-up preview + autopilot chip are expanded-only
+   hidden. ── */
+.pending-queue-bar .queue-items {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.pending-queue-bar.queue-collapsed {
+  max-height: none;
+  overflow: visible;
+}
+.pending-queue-bar.queue-collapsed .queue-items {
+  display: none;
+}
+.pending-queue-bar .queue-next-preview,
+.pending-queue-bar .queue-header .queue-header-ap {
+  display: none;
+}
+.pending-queue-bar.queue-collapsed .queue-next-preview {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+  font-weight: 400;
+  letter-spacing: 0;
+}
+.pending-queue-bar.queue-collapsed .queue-header .queue-header-ap {
+  display: inline-flex;
+  align-items: center;
+  color: #818cf8;
+  flex-shrink: 0;
+}
+.pending-queue-bar .queue-header .queue-header-ap svg {
+  display: block;
 }
 /* ── Each queued item ── */
 .pending-queue-item {
@@ -15462,6 +15530,88 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
 .queue-clear-all:hover {
   background: rgba(239,68,68,0.1);
   color: #ef4444;
+}
+
+/* ── Item body + source attribution line ── */
+.pending-queue-item .queue-item-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.pending-queue-item .queue-item-src {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-bottom: 3px;
+  cursor: pointer;
+}
+.pending-queue-item .queue-item-src:hover {
+  text-decoration: underline;
+}
+.pending-queue-item .queue-item-src.queue-item-src-static {
+  cursor: default;
+}
+.pending-queue-item .queue-item-src.queue-item-src-static:hover {
+  text-decoration: none;
+}
+.pending-queue-item .queue-item-src svg {
+  display: block;
+  flex-shrink: 0;
+}
+/* ── Per-source tinting: each queue origin gets a left edge + number badge
+   in its own hue so a mixed queue reads at a glance ──
+   own (default, accent) / agent (violet) / operator (amber) /
+   workflow (teal) / autopilot (indigo dashed). */
+.pending-queue-item.qsrc-agent {
+  border-left: 3px solid rgba(139,92,246,0.55);
+  background: rgba(139,92,246,0.08);
+}
+.pending-queue-item.qsrc-agent .queue-item-number {
+  background: #8b5cf6;
+  box-shadow: 0 1px 4px rgba(139,92,246,0.35);
+}
+.pending-queue-item.qsrc-agent .queue-item-src {
+  color: #a78bfa;
+}
+.pending-queue-item.qsrc-operator {
+  border-left: 3px solid rgba(245,158,11,0.55);
+  background: rgba(245,158,11,0.08);
+}
+.pending-queue-item.qsrc-operator .queue-item-number {
+  background: #f59e0b;
+  box-shadow: 0 1px 4px rgba(245,158,11,0.35);
+}
+.pending-queue-item.qsrc-operator .queue-item-src {
+  color: #fbbf24;
+}
+.pending-queue-item.qsrc-workflow {
+  border-left: 3px solid rgba(45,212,191,0.55);
+  background: rgba(45,212,191,0.08);
+}
+.pending-queue-item.qsrc-workflow .queue-item-number {
+  background: #14b8a6;
+  box-shadow: 0 1px 4px rgba(45,212,191,0.35);
+}
+.pending-queue-item.qsrc-workflow .queue-item-src {
+  color: #2dd4bf;
+}
+/* Autopilot armed sentinel — indigo dashed frame, steering-wheel icon chip. */
+.pending-queue-item.pending-queue-autopilot {
+  border: 1px dashed rgba(129,140,248,0.5);
+  background: rgba(129,140,248,0.06);
+}
+.pending-queue-item .queue-item-autopilot-icon {
+  background: rgba(129,140,248,0.16);
+  color: #818cf8;
+  box-shadow: none;
+}
+/* SVG glyphs inside the cancel / synced affordances. */
+.pending-queue-item .queue-item-cancel > svg,
+.pending-queue-item .queue-item-synced > svg {
+  display: block;
 }
 
 /* ── Queue badge on stop button ── */

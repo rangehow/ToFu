@@ -85,6 +85,21 @@ def _node() -> str:
     return node
 
 
+def _extract_queue_block(src: str) -> str:
+    """The queue source/collapse helpers + renderPendingQueueUI as ONE block.
+
+    renderPendingQueueUI now delegates to the source/collapse helpers
+    (``_queueSourceOf``, ``_queueCollapsedNow``, the ``_QUEUE_*`` icon
+    consts, …), so extracting the bare function would ReferenceError under
+    eval. The block spans from the sources marker through the end of the
+    render function (the collapse toggle is defined in between)."""
+    start = src.index('/* ── Queue item sources')
+    m = re.search(r'function\s+renderPendingQueueUI\s*\(', src)
+    assert m and m.start() > start
+    i = src.find('{', m.end())
+    return src[start:_brace_match(src, i)]
+
+
 _HARNESS_PREAMBLE = r'''
 const _i18n = {
   'queue.messagesQueued': '条消息排队中',
@@ -142,7 +157,7 @@ var pendingMessageQueue = new Map();
 def _run(driver: str) -> str:
     """Extract the real renderPendingQueueUI + run the driver under node."""
     node = _node()
-    fn = _extract_fn(_read(SEND_JS), 'renderPendingQueueUI')
+    fn = _extract_queue_block(_read(SEND_JS))
     src = _HARNESS_PREAMBLE + '\n' + fn + '\n' + driver
     with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False) as f:
         f.write(src)

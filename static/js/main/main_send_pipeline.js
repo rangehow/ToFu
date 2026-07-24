@@ -1036,6 +1036,84 @@ async function _waitForVlmParsing(userMsg, convId, userMsgIdx) {
   }
 }
 
+/* ── Queue item sources + collapse state ────────────────────────────
+ * Every queued row has exactly ONE source, distinguished visually by a
+ * tinted left edge + number badge + (for non-human sources) an attribution
+ * line above the preview:
+ *   own       — typed here, queued behind the running turn (neutral accent)
+ *   agent     — project_message/intervene from a SIBLING agent conversation
+ *   operator  — a HUMAN operator nudge delivered through the peer channel
+ *   workflow  — a Project-Brain autonomous epic kickoff (KIND_WORKFLOW)
+ *   autopilot — the armed sentinel (not a message; cancel = DISARM)
+ */
+function _queueSourceOf(item) {
+  if (item.kind === 'autopilot') return 'autopilot';
+  if (item.kind === 'workflow_step') return 'workflow';
+  if (item.isPeerMessage) return item.isPeerHuman ? 'operator' : 'agent';
+  return 'own';
+}
+
+/* Per-source SVG glyphs (no emoji / unicode-glyph icons — CLAUDE.md §3.4). */
+const _QUEUE_SRC_ICONS = {
+  autopilot: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M12 3v6M12 15v6M3 12h6M15 12h6"/></svg>`,
+  agent: `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V5"/><circle cx="12" cy="3.5" r="1"/><path d="M9 13.5h.01M15 13.5h.01"/><path d="M9.5 17h5"/></svg>`,
+  operator: `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4.5 20.5c0-4 3.4-6.5 7.5-6.5s7.5 2.5 7.5 6.5"/></svg>`,
+  workflow: `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="5" r="2.2"/><circle cx="6" cy="19" r="2.2"/><circle cx="18" cy="7" r="2.2"/><path d="M6 7.2v9.6"/><path d="M18 9.4c0 4.6-6.8 3.2-10.2 6.4"/></svg>`,
+};
+const _QUEUE_ICON_CHEVRON = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>`;
+const _QUEUE_ICON_X = `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M5 5l14 14M19 5L5 19"/></svg>`;
+const _QUEUE_ICON_CLOUD = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 18.5a4.3 4.3 0 0 0 .8-8.5 5.5 5.5 0 0 0-10.8 1.4A3.8 3.8 0 0 0 7 18.5h10.5z"/></svg>`;
+
+/* Preview text for one queued item (shared by the row and the collapsed
+ * "next up" header line). */
+function _queueItemPreview(item) {
+  return item.text
+    ? item.text
+    : (item.images?.length ? t('queue.imagesCount', { n: item.images.length }) : t('queue.attachment'));
+}
+
+/* Collapse preference — persisted per-conv because renderPendingQueueUI
+ * rebuilds the bar's innerHTML on every poll, so the state cannot live in
+ * the DOM. null = the user never toggled → the auto-collapse rule decides. */
+const QUEUE_AUTO_COLLAPSE_MIN = 4;
+
+function _queueCollapseRead(convId) {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    const v = localStorage.getItem('tofu.queueCollapsed.' + convId);
+    return v === null ? null : v === '1';
+  } catch (e) {
+    console.debug('[Queue] collapse pref read failed:', e);
+    return null;
+  }
+}
+
+function _queueCollapseWrite(convId, collapsed) {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem('tofu.queueCollapsed.' + convId, collapsed ? '1' : '0');
+  } catch (e) {
+    console.debug('[Queue] collapse pref write failed:', e);
+  }
+}
+
+/* Effective collapse state: the explicit toggle wins; otherwise a queue of
+ * QUEUE_AUTO_COLLAPSE_MIN+ dispatchable messages starts collapsed so a
+ * flooded queue can never bury the transcript behind the input bar. */
+function _queueCollapsedNow(convId, realCount) {
+  const pref = _queueCollapseRead(convId);
+  return pref !== null ? pref : realCount >= QUEUE_AUTO_COLLAPSE_MIN;
+}
+
+/* Header chevron handler (inline onclick) — flips + persists the state. */
+function togglePendingQueueCollapsed(convId) {
+  const queue = pendingMessageQueue.get(convId) || [];
+  const realCount = queue.filter((it) => _queueSourceOf(it) !== 'autopilot').length;
+  _queueCollapseWrite(convId, !_queueCollapsedNow(convId, realCount));
+  renderPendingQueueUI(convId);
+}
+if (typeof window !== 'undefined') window.togglePendingQueueCollapsed = togglePendingQueueCollapsed;
+
 /**
  * Render the pending queue indicator above the input area.
  *
@@ -1081,70 +1159,86 @@ function renderPendingQueueUI(convId) {
     if (queueHost) queueHost.appendChild(container);
   }
   container.classList.remove('queue-removing');
-  /* Autopilot SVG glyph (steering-wheel-ish circle) for the sentinel item. */
-  const _apSvg = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M12 3v6M12 15v6M3 12h6M15 12h6"/></svg>`;
   let _realCount = 0;   // human/workflow items get sequential numbers
   const items = queue.map((item) => {
+    const _src = _queueSourceOf(item);
     /* ── Autopilot armed-marker sentinel — always rendered last (priority 90),
      *   distinct styling, cancel = DISARM (not just queue-remove). ── */
-    if (item.kind === 'autopilot') {
+    if (_src === 'autopilot') {
       const apLabel = (typeof t === 'function') ? t('autopilot.pendingTakeover') : 'Autopilot will take over';
       const apCancelTitle = (typeof t === 'function') ? t('autopilot.cancelTakeover') : 'Cancel autopilot';
       return `<div class="pending-queue-item pending-queue-autopilot">
-        <span class="queue-item-number queue-item-autopilot-icon">${_apSvg}</span>
+        <span class="queue-item-number queue-item-autopilot-icon">${_QUEUE_SRC_ICONS.autopilot}</span>
         <span class="queue-item-text">${escapeHtml(apLabel)}</span>
-        <button class="queue-item-cancel" onclick="cancelAutopilotMarker('${convId}')" title="${escapeHtml(apCancelTitle)}">✕</button>
+        <button class="queue-item-cancel" onclick="cancelAutopilotMarker('${convId}')" title="${escapeHtml(apCancelTitle)}">${_QUEUE_ICON_X}</button>
       </div>`;
     }
     const i = _realCount++;
-    const preview = item.text
-      ? item.text
-      : (item.images?.length ? t('queue.imagesCount', { n: item.images.length }) : t('queue.attachment'));
+    const preview = _queueItemPreview(item);
     // Attachment badges
     const badges = [];
     if (item.images?.length) badges.push(`<span>${item.images.length} img</span>`);
     if (item.pdfTexts?.length) badges.push(`<span>${item.pdfTexts.length} pdf</span>`);
     if (item.convRefs?.length) badges.push(`<span>${item.convRefs.length} ref</span>`);
     if (item.replyQuotes?.length) badges.push(`<span>↩ ${item.replyQuotes.length}</span>`);
-    // ── Peer/operator source line ──
-    // A queued turn from a sibling conversation (project_message / operator
-    // nudge) should name the SOURCE conversation by its TITLE (a raw id is
-    // meaningless), and let the user jump to it. Inline-styled because
-    // static/styles.css is under a sibling edit-hold.
+    // ── Source attribution line ──
+    // A peer turn (agent / operator) names the SOURCE conversation by its
+    // TITLE (a raw id is meaningless) and jumps to it on click. A brain
+    // workflow kickoff gets a static label (no conversation to jump to).
     let srcLine = '';
-    if (item.isPeerMessage && item.fromConv) {
+    if ((_src === 'agent' || _src === 'operator') && item.fromConv) {
       const _title = (typeof convTitleById === 'function')
         ? convTitleById(item.fromConv) : item.fromConv;
       const _lbl = (typeof t === 'function')
-        ? t(item.isPeerHuman ? 'queue.fromOperator' : 'queue.fromConv')
-        : (item.isPeerHuman ? 'from operator' : 'from');
-      const _bubbleSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`;
+        ? t(_src === 'operator' ? 'queue.fromOperator' : 'queue.fromConv')
+        : (_src === 'operator' ? 'from operator' : 'from');
       srcLine = `<div class="queue-item-src" onclick="loadConversation('${escapeHtml(item.fromConv)}')" `
-        + `style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-tertiary);margin-bottom:3px;cursor:pointer;" `
-        + `title="${escapeHtml(_title)}">${_bubbleSvg}<span>${escapeHtml(_lbl)} «${escapeHtml(_title)}»</span></div>`;
+        + `title="${escapeHtml(_title)}">${_QUEUE_SRC_ICONS[_src]}<span>${escapeHtml(_lbl)} «${escapeHtml(_title)}»</span></div>`;
+    } else if (_src === 'workflow') {
+      const _wfLbl = (typeof t === 'function') ? t('queue.fromWorkflow') : '项目大脑派发';
+      srcLine = `<div class="queue-item-src queue-item-src-static">${_QUEUE_SRC_ICONS.workflow}<span>${escapeHtml(_wfLbl)}</span></div>`;
     }
-    return `<div class="pending-queue-item">
+    return `<div class="pending-queue-item qsrc-${_src}">
       <span class="queue-item-number">${i + 1}</span>
-      <div class="queue-item-body" style="flex:1;min-width:0;display:flex;flex-direction:column;">
+      <div class="queue-item-body">
         ${srcLine}
         <span class="queue-item-text">${escapeHtml(preview)}</span>
       </div>
       ${badges.length ? `<span class="queue-item-attachments">${badges.join('')}</span>` : ''}
-      <button class="queue-item-cancel" onclick="removePendingQueueItem('${convId}', ${i})" title="${escapeHtml(t('queue.cancelMsg'))}">✕</button>
-      ${item.queueId ? `<span class="queue-item-synced" title="${escapeHtml(t('queue.syncedToServer'))}">☁</span>` : ''}
+      <button class="queue-item-cancel" onclick="removePendingQueueItem('${convId}', ${i})" title="${escapeHtml(t('queue.cancelMsg'))}">${_QUEUE_ICON_X}</button>
+      ${item.queueId ? `<span class="queue-item-synced" title="${escapeHtml(t('queue.syncedToServer'))}">${_QUEUE_ICON_CLOUD}</span>` : ''}
     </div>`;
   }).join("");
+
+  /* Collapse state — re-applied on every render (polls rebuild innerHTML),
+   * so it is read from localStorage via _queueCollapsedNow, not the DOM. */
+  const _collapsed = _queueCollapsedNow(convId, _realCount);
+  if (_collapsed) container.classList.add('queue-collapsed');
+  else container.classList.remove('queue-collapsed');
+
   const headerSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"/></svg>`;
   /* Header count reflects only real queued messages; the autopilot sentinel
    * is described by its own row, not counted as "排队消息". */
   const _headerLabel = _realCount > 0
     ? `${_realCount} ${(typeof t === 'function') ? t('queue.messagesQueued') : '条消息排队中'}`
     : ((typeof t === 'function') ? t('autopilot.armedShort') : 'Autopilot armed');
+  /* One-line "next up" preview + an autopilot chip — CSS only reveals them
+   * in the collapsed state, where they stand in for the hidden item list. */
+  const _nextItem = queue.find((it) => _queueSourceOf(it) !== 'autopilot');
+  const _nextText = _nextItem ? _queueItemPreview(_nextItem) : '';
+  const _hasAutopilot = queue.some((it) => _queueSourceOf(it) === 'autopilot');
+  const _apTitle = (typeof t === 'function') ? t('autopilot.pendingTakeover') : 'Autopilot will take over';
+  const _toggleTitle = (typeof t === 'function')
+    ? t(_collapsed ? 'queue.expand' : 'queue.collapse')
+    : (_collapsed ? 'Expand queue' : 'Collapse queue');
   container.innerHTML = `<div class="queue-header">
+    <button class="queue-toggle" onclick="togglePendingQueueCollapsed('${convId}')" title="${escapeHtml(_toggleTitle)}">${_QUEUE_ICON_CHEVRON}</button>
     ${headerSvg}
-    <span>${escapeHtml(_headerLabel)}</span>
+    <span class="queue-header-label">${escapeHtml(_headerLabel)}</span>
+    ${_hasAutopilot ? `<span class="queue-header-ap" title="${escapeHtml(_apTitle)}">${_QUEUE_SRC_ICONS.autopilot}</span>` : ''}
+    <span class="queue-next-preview" title="${escapeHtml(_nextText)}">${escapeHtml(_nextText)}</span>
     ${_realCount > 1 ? `<button class="queue-clear-all" onclick="clearPendingQueue('${convId}')">${(typeof t === 'function') ? t('queue.clearAll') : '全部清空'}</button>` : ''}
-  </div>${items}`;
+  </div><div class="queue-items">${items}</div>`;
 }
 
 /**

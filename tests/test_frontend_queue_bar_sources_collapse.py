@@ -48,6 +48,7 @@ pytestmark = pytest.mark.unit
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, '..'))
 SEND_JS = os.path.join(ROOT, 'static', 'js', 'main', 'main_send_pipeline.js')
+CSS = os.path.join(ROOT, 'static', 'styles.css')
 
 
 def _read(path: str) -> str:
@@ -367,6 +368,37 @@ renderPendingQueueUI('c1');
     )
     # The collapse toggle itself is always rendered.
     assert 'queue-toggle' in st['html']
+
+
+def test_expanded_header_label_keeps_flex_grow_static_guard():
+    """The clear-all button is pushed to the header's right edge by the
+    LABEL's flex-grow — in the EXPANDED state the only other grow candidate
+    (the next-up preview) is display:none, so dropping the grow strands
+    clear-all against the count text (owner-caught regression in d1f28583).
+    Static guard on comment-stripped styles.css: a .queue-header-label rule
+    OUTSIDE any .queue-collapsed scope must carry flex-grow >= 1, and the
+    collapsed override that hands the grow to the preview must exist."""
+    css = re.sub(r'/\*.*?\*/', '', _read(CSS), flags=re.S)   # strip comments
+    found_grow = False
+    found_collapsed_override = False
+    for m in re.finditer(r'([^{}]+)\{([^{}]*)\}', css):
+        selector, body = m.group(1), m.group(2)
+        if not re.search(r'queue-header-label(?![\w-])', selector):
+            continue
+        grow = re.search(r'(?:^|;)\s*flex\s*:\s*(\d+)', body)
+        if 'queue-collapsed' in selector:
+            found_collapsed_override = True
+        elif grow and int(grow.group(1)) >= 1:
+            found_grow = True
+    assert found_grow, (
+        'no non-collapsed .queue-header-label rule with flex-grow — the '
+        'expanded header loses its spacer and clear-all drifts off the '
+        'right edge'
+    )
+    assert found_collapsed_override, (
+        'the collapsed state must explicitly hand the grow back to the '
+        'next-up preview via a .queue-collapsed .queue-header-label override'
+    )
 
 
 # ─────────────────────── poisoned NCs (load-bearing) ───────────────────────

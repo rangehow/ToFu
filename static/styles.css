@@ -15347,8 +15347,14 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
   animation: queueSpin 3s linear infinite;
 }
 .pending-queue-bar .queue-header .queue-header-label {
-  flex: 0 1 auto;
+  /* Expanded state: the label is the header's flex-grow element, pushing
+     clear-all to the right edge (the next-up preview is display:none here).
+     The collapsed state hands the grow to the preview below. */
+  flex: 1 1 auto;
   white-space: nowrap;
+}
+.pending-queue-bar.queue-collapsed .queue-header .queue-header-label {
+  flex: 0 1 auto;
 }
 /* ── Collapse toggle (chevron) ── */
 .pending-queue-bar .queue-toggle {

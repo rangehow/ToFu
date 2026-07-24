@@ -1,6 +1,14 @@
 # Project Journal
 
 
+### 2026-07-24(续21) — 「gemini-3-pro-image-preview 探测报 bound must be positive」根修:访问矩阵探测跳过全部非聊天模型(commit `94bcceb7`,6 文件 +503/-6,新套件 7/7 绿含双 NEUTER,collect 8345 0 err)。现象:设置→访问矩阵「探测&推荐」把 image/embedding 模型标成「不可用」并**推荐禁用**。
+- **根因(用落盘快照实证,不猜):** 探测对**每个** (key×model-id) 格子发 `/chat/completions max_tokens=1`。图像/嵌入模型在网关侧没有 chat 绑定 → 美团 AIGC 网关(Java)从**空候选列表**里随机取上游:`Random.nextInt(0)` → `IllegalArgumentException: bound must be positive` → HTTP 500。`data/config/probe_cache` 快照证实:所有该 500 全落在 image_gen/embedding 模型上(gemini-3-pro-image-preview / gemini-2.5-flash-image / gemini-3.1-flash-image-preview / text-embedding-v4),聊天模型全部拿到真实判定。探测随后把格子标 `unavailable` + `recommend_disable=true` —— 用户点「应用建议」就会**禁用正常工作的图像模型**。
+- **三层修复:** ①后端 `run_cell_probe_task` 对 `is_chat_model` 失败的格子直接判 `skipped`(零网络、不推荐禁用、summary 单列 skipped 计数,旧 4 元组 work item 兼容);②路由 `probe_provider_cells_start` 把每模型 capabilities 带进 work 元组(别名继承根模型);③前端发 capabilities + 渲染 `skipped` 灰徽章(不适用/非聊天模型)+ `_reconcileProbeNonChat` 在 ingest 时把**陈旧落盘快照**的假阳性降级为 skipped(原判定留在 tooltip,免重测自愈)+ `_applyMatrixRecommendations` 硬守卫:任何快照都不得据 chat 探测禁用非聊天模型。
+- **测试(7 面,双 NEUTER):** 后端跳过+零网络+计数 / chat·audio_chat·空 caps·旧 4 元组仍探测 / skipped 永不入禁用集;NEUTER 后端(副本删守卫→假阳性回归);路由 caps 流转;前端 node harness 跑**真实** access_matrix.js(陈旧快照 ingest 自愈 + apply 守卫拒禁图像模型);NEUTER 前端(删 reconcile 调用→陈旧假阳性不自愈)。
+- **协作事件:** 验证中发现 sibling(mryp2uxv,pt_229606ca memory/skill 解耦)在 worktree 删了 `lib/memory/installer.py` 但 facade 未随行 → `import routes.config` 全项目断,25 collect err + 13 既有探测测试红。已发 peer WARN;我的路由测试先写成**诚实 skip**(facade 修复后自动激活)。sibling 修复 facade 后复跑:7/7 全绿(路由测试激活),既有 13 红全愈,collect 8345/0 err。
+- **生效边界(诚实):** 后端随服务重启生效;前端(access_matrix.js 在 _BUNDLE_FILES)需**服务端重启重建 bundle + 浏览器硬刷新**。旧探测缓存里的假阳性无需手动清:前端 ingest 时自动降级展示为「不适用」。
+
+
 
 ### 2026-07-24(续20) — RENDER_CONTRACT Phase 3.5 §5 step 4 落地:SEAM-2 折叠 + 全量删 ConvView 缺失 fallback + boot 检查运行时证明(commit `ded8b89d`,14 文件 +367/-144,新守卫 4 测全绿含 NEUTER,ratchet 192→**157**,相邻 38/38 核心 + sse_dispatch 修后 3/3,collect 8314 0 err)。owner 验收 step 3 抓「SEAM-2 调用边界仍裸露 + fallback 是孪生温床 + boot 检查只有静态存在证明」三项,全部并入本 commit。
 - **(a) SEAM-2 折叠:** `ConvView.replaceAll(convId, {forceScroll})` 升为唯一公共全屏重画入口,**16 个调用点 ×9 文件**从裸 `renderChat(...)` 迁移(translation_render×2 / edit×3 / send×3 / regen×3 / sse_pipeline×1 / stream_lifecycle×1 / streaming_render×2 / conv_lifecycle×2);`chat_render.js` 声明为**接缝引擎**(ratchet 接缝侧钉 8,与 conv_view 并列)—— 引擎的裸写是投影实现,不是第二个公共入口。剩余 ~43 个 `renderChat(`(conversations×9/cross_tab_sync×4/image-gen×6/…)列入 §5 step 5 清单。

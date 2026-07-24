@@ -1,5 +1,11 @@
 # Project Journal
 
+### 2026-07-24(续16补) — git 事故记录:shared-HEAD amend 竞态把 step-3 commit 消息改写,内容零丢失,最终哈希映射(禁再做历史改写)
+- **事故:** C3 sibling 在其 `ed7dbda4`(真 C3)之上、HEAD 已被我的 step-3 commit `8142e908` 占据时执行 `git commit --amend` → 产生 `536b247a`(消息=C3,内容=我的 step-3 全部 13 文件 +670/-147),我的原 commit 孤儿化。sibling 发现后自行修补:`d45e2b0f`(消息=step-2,内容=我的续16 JOURNAL 条目)+ `4d2d14d3`(空 commit,消息=C3 content)。**最终主干内容完整、消息错位。**
+- **最终哈希映射(owner 按此对账):** 真 C3 内容=`ed7dbda4`(消息正确);step-3 内容=`536b247a`(消息误标为 C3);续16 JOURNAL=`d45e2b0f`(消息误标为 step-2);`4d2d14d3`=空 commit。我的 plumbing 修复版 `dc9419c3`(消息正确+tree 相同)保留在对象库,**不再合入** —— sibling 正在活跃编辑同一历史,再 rebase 只会扩大竞态。
+- **教训(已建项目 memory):** shared-HEAD 环境 **禁止 `git commit --amend`** —— 你以为在 amend 自己的 commit,实际 HEAD 可能已被别人推进;amend 会把别人的 commit 连同其 tree 一起吞进你的新消息。任何消息修正用**追加 commit** 而非改写。
+- **本条以追加 commit 落地(不改写历史),sibling 未提交的 A+B 块已按惯例提取→插回保留。
+
 
 
 ### 2026-07-24(续16) — RENDER_CONTRACT Phase 3.5 §5 step 3 落地:接缝硬化四件套(塌缩/live 防护/顺序不变式/死 CSS 清扫)+ §2.5/2.6/2.8 收编(commit `8142e908`,13 文件 +670/-147,新守卫 7 测全绿含 NEUTER×3,ratchet 207→192,相邻 19/19,collect 8278 0 err)。owner 验收 step 2 抓到「接缝自己分叉(upsert vs apply)+ apply 对 live 气泡零防护 + 顺序无人看守 + :6158 死 CSS 别留给别人」,四点全部并入本 commit。

@@ -480,11 +480,13 @@ function _rebaseUnackedTail(serverMsgs, localMsgs) {
   const base = Array.isArray(serverMsgs) ? serverMsgs.slice() : [];
   const serverIds = new Set();
   const serverUserTs = new Set();       // (role=user) timestamps present on server
+  const serverAsstTaskIds = new Set();  // (role=assistant) _taskId present on server
   let serverHasTrailingRealAssistant = false;
   for (const m of base) {
     if (!m) continue;
     if (m._msgId) serverIds.add(m._msgId);
     if (m.role === 'user' && m.timestamp) serverUserTs.add(m.timestamp);
+    if (m.role === 'assistant' && m._taskId) serverAsstTaskIds.add(m._taskId);
   }
   const lastServer = base.length ? base[base.length - 1] : null;
   if (lastServer && lastServer.role === 'assistant' && !_isErrorOnlyAssistant(lastServer)) {
@@ -497,6 +499,18 @@ function _rebaseUnackedTail(serverMsgs, localMsgs) {
     // timestamp (the backend's own idempotency key) — skip even if _msgId
     // somehow diverged (old client mid-rollout).
     if (lm.role === 'user' && lm.timestamp && serverUserTs.has(lm.timestamp)) continue;
+    // Defensive dedup by _taskId: a local assistant bubble whose _taskId the
+    // server already carries on an assistant row IS that same committed turn —
+    // its _msgId diverged only because a pre-fix client minted a tmp_ id while
+    // the server minted a UUID (the duplicate-assistant-bubble bug). Skip it so
+    // the rescue PUT can't re-append the tmp_-id twin. Guarded on role so a
+    // user turn is never dropped by an assistant's taskId.
+    if (lm.role === 'assistant' && lm._taskId && serverAsstTaskIds.has(lm._taskId)) {
+      console.warn('[rebase] dropping local assistant bubble whose _taskId '
+        + `${String(lm._taskId).slice(0,8)} already has a server-committed reply `
+        + '(tmp_-id twin; duplicate-bubble guard)');
+      continue;
+    }
     // Drop a stale local error-only assistant bubble when the server already
     // answered this turn for real (lost-ACK: send succeeded, response lost).
     if (_isErrorOnlyAssistant(lm) && serverHasTrailingRealAssistant) {
@@ -507,6 +521,7 @@ function _rebaseUnackedTail(serverMsgs, localMsgs) {
     base.push(lm);                                         // append verbatim (keeps _msgId)
     if (lm._msgId) serverIds.add(lm._msgId);
     if (lm.role === 'user' && lm.timestamp) serverUserTs.add(lm.timestamp);
+    if (lm.role === 'assistant' && lm._taskId) serverAsstTaskIds.add(lm._taskId);
   }
   return base;
 }

@@ -76,19 +76,30 @@ const NEW = 1700000005000;
 global.activeConvId = 'open';
 global.activeStreams = new Map();
 global.streamBufs = new Map();
+global.streamSessions = new Map();
+global.document = { getElementById: () => null, addEventListener: () => {} };
+global.getStreamSession = global.getStreamSession = (cid) => { let s = global.streamSessions.get(cid); if (!s) { s = { phase: null }; global.streamSessions.set(cid, s); } return s; };
+global.setStreamPhase = global.setStreamPhase = (cid, p) => { if (!global.streamSessions.has(cid) && !(typeof activeStreams !== "undefined" && activeStreams.has(cid))) return; global.getStreamSession(cid).phase = p; };
+global.clearStreamSession = global.clearStreamSession = (cid) => { global.streamSessions.delete(cid); };
 global._editingMsgIdx = null;
 global.debugLog = () => {};
 global.config = {};
 
 // ── Observability: record render calls in order, tagged with what was rendered. ──
+// The render seam is ConvView.replaceAll (the RENDER_CONTRACT migration removed
+// the bare renderChat call from loadConversationMessages); resolve the conv by id.
 let renderLog = [];              // [{ when, len, contents }]
 let serverFetchResolved = false; // flips true only after the deferred server GET resolves
-global.renderChat = (conv) => {
-  renderLog.push({
-    afterServer: serverFetchResolved,
-    len: conv && conv.messages ? conv.messages.length : -1,
-    contents: conv && conv.messages ? conv.messages.map(m => m.content).join(',') : '',
-  });
+global.ConvView = {
+  replaceAll: (id) => {
+    const conv = (global.conversations || []).find(c => c.id === id);
+    renderLog.push({
+      afterServer: serverFetchResolved,
+      len: conv && conv.messages ? conv.messages.length : -1,
+      contents: conv && conv.messages ? conv.messages.map(m => m.content).join(',') : '',
+    });
+  },
+  startStreaming: () => {},
 };
 global.showStreamingUIForConv = () => {};
 global._restoreConvToolState = () => {};
@@ -229,10 +240,10 @@ def test_NC_phase1_cache_render_is_load_bearing(tmp_path):
     with open(conv_js, encoding='utf-8') as f:
         src = f.read()
 
-    # The Phase-1 active-conv render is `renderChat(conv, false);` immediately
+    # The Phase-1 active-conv render is `window.ConvView.replaceAll(...)` immediately
     # followed by the _restoreConvToolState + _setCacheVerifying lines. Neuter
     # ONLY that first (cache) render by disabling it in the cache branch.
-    needle = ('          renderChat(conv, false);\n'
+    needle = ('          window.ConvView.replaceAll(conv.id, { forceScroll: false });\n'
               '          if (typeof _restoreConvToolState === "function") _restoreConvToolState(conv);\n'
               '          _setCacheVerifying(convId, _cacheKnownStale);')
     assert src.count(needle) == 1, 'Phase-1 cache-render fragment drifted — update the neuter target'

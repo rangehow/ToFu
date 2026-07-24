@@ -1591,6 +1591,52 @@ function _openConvMayHoldOrphanGhost(conv, convId) {
     && !tail.error;
 }
 
+/* ★ Bounded self-heal for an ACTIVE conv whose Phase-2 verify never landed
+ *   (timeout / 5xx / offline). Without it, a failed background sync left the
+ *   optimistic cache paint posing as final truth — the user stared at a stale
+ *   "ended normally" for minutes and only a lucky later push fixed it (the
+ *   reported historical-conv sync bug). The retry rides the SAME
+ *   non-destructive _verifyActiveConvFromServer the notify path uses
+ *   (adopt-on-change only, no cache repaint, no scroll reset). Bounded: once
+ *   the delays are exhausted we leave _needsLoad=true + the verifying dim,
+ *   and the next manual open re-verifies. */
+const _CONV_VERIFY_RETRY_DELAYS_DEFAULT = [4000, 12000];
+const _convVerifyRetryTimers = {};
+
+function _convVerifyRetryDelays() {
+  /* Test seam: a harness may shorten the backoff via a window override. */
+  const d = (typeof window !== 'undefined') ? window._CONV_VERIFY_RETRY_DELAYS : null;
+  return (Array.isArray(d) && d.length) ? d : _CONV_VERIFY_RETRY_DELAYS_DEFAULT;
+}
+
+function _scheduleConvVerifyRetry(convId) {
+  if (convId !== activeConvId) return;   /* only the OPEN conv self-heals in place */
+  if (typeof _verifyActiveConvFromServer !== 'function') return;
+  const conv = conversations.find((c) => c.id === convId);
+  if (!conv) return;
+  const delays = _convVerifyRetryDelays();
+  const attempt = conv._verifyRetryCount || 0;
+  if (attempt >= delays.length) return;
+  clearTimeout(_convVerifyRetryTimers[convId]);
+  _convVerifyRetryTimers[convId] = setTimeout(() => {
+    delete _convVerifyRetryTimers[convId];
+    const c = conversations.find((x) => x.id === convId);
+    if (!c || convId !== activeConvId) return;
+    if (activeStreams.has(convId) || _editingMsgIdx !== null || c.activeTaskId) return;
+    c._verifyRetryCount = attempt + 1;
+    Promise.resolve(_verifyActiveConvFromServer(convId)).then((adopted) => {
+      if (adopted !== null && adopted !== undefined) {
+        /* Verify landed (with or without changes) — the paint is server-true. */
+        c._verifyRetryCount = 0;
+        delete c._cacheKnownStale;
+        _setCacheVerifying(convId, false);
+      } else {
+        _scheduleConvVerifyRetry(convId);
+      }
+    }).catch(() => _scheduleConvVerifyRetry(convId));
+  }, delays[attempt]);
+}
+
 async function loadConversationMessages(convId) {
   const conv = conversations.find((c) => c.id === convId);
   if (!conv) return null;
@@ -1736,11 +1782,21 @@ async function loadConversationMessages(convId) {
      * cache and bail out — caller decides whether to show the retry UI. */
     if (!resp) {
       debugLog(`Load conv ${convId}: fetch failed after retries (network/timeout)`, 'warn');
-      /* Verify fetch never landed — the optimistic paint is all we have; stop
-       *   dimming it (a permanent grey would be worse than a possibly-stale
-       *   but readable view). A later poll/refocus re-verifies. */
-      delete conv._cacheKnownStale;
-      _setCacheVerifying(convId, false);
+      if (cacheHit) {
+        /* ★ The cache paint was NEVER server-verified — don't let it pose as
+         *   final truth. Restore _needsLoad (Phase-1 cleared it optimistically)
+         *   so the NEXT open re-verifies instead of early-returning this
+         *   unverified copy forever; keep the "verifying" dim when we hold
+         *   server-issued evidence the cache is outdated (_cacheKnownStale);
+         *   and schedule a bounded self-heal retry while the conv stays open. */
+        conv._needsLoad = true;
+        if (!conv._cacheKnownStale) _setCacheVerifying(convId, false);
+        _scheduleConvVerifyRetry(convId);
+      } else {
+        /* No cache paint at all — nothing provisional to flag. */
+        delete conv._cacheKnownStale;
+        _setCacheVerifying(convId, false);
+      }
       if (!cacheHit && convId === activeConvId) {
         const inner = document.getElementById('chatInner');
         if (inner && conv._needsLoad && conv.messages.length === 0) {
@@ -1770,6 +1826,14 @@ async function loadConversationMessages(convId) {
         /* Remove the orphan from the in-memory array + sidebar */
         conversations = conversations.filter(c => c.id !== convId);
         if (typeof renderConversationList === 'function') renderConversationList();
+      }
+      /* ★ Same unverified-cache contract as the !resp branch above: the
+       *   server refused / was unreachable, so the cache paint was never
+       *   verified. (Skipped for the 404 ghost path — that conv is gone.) */
+      if (cacheHit && resp.status !== 404) {
+        conv._needsLoad = true;
+        if (!conv._cacheKnownStale) _setCacheVerifying(convId, false);
+        _scheduleConvVerifyRetry(convId);
       }
       /* If we had a cache hit, the user already sees content — just return */
       return conv;
@@ -2176,6 +2240,10 @@ async function loadConversationMessages(convId) {
       }
 
       conv._needsLoad = false;
+      /* ★ Verify landed — cancel any pending self-heal retry for this conv. */
+      conv._verifyRetryCount = 0;
+      clearTimeout(_convVerifyRetryTimers[convId]);
+      delete _convVerifyRetryTimers[convId];
       /* ★ Windowed-read truncation guard: when the server served only the tail
        *   window (N msgs) of a longer conversation, stamp the sync baseline
        *   from the AUTHORITATIVE full count (data.totalCount), NOT the window
@@ -2284,15 +2352,19 @@ async function loadConversationMessages(convId) {
     return conv;
   } catch (e) {
     debugLog(`Load conv ${convId}: ${e.message}`, "warn");
-    /* Fetch failed: the optimistic paint is all we have — stop dimming it so
-     *   the user isn't left staring at permanently-greyed content. */
-    delete conv._cacheKnownStale;
-    _setCacheVerifying(convId, false);
     /* If we had a cache hit, the user already sees content — just log the fetch failure */
     if (cacheHit) {
+      /* ★ Same unverified-cache contract as the !resp branch above: the cache
+       *   paint was never server-verified — restore _needsLoad so the next
+       *   open re-verifies, keep the dim when known-stale, self-heal retry. */
+      conv._needsLoad = true;
+      if (!conv._cacheKnownStale) _setCacheVerifying(convId, false);
+      _scheduleConvVerifyRetry(convId);
       console.warn(`[loadConvMsgs] ⚠️ Server fetch failed for ${convId.slice(0,8)} but cache was served: ${e.message}`);
       return conv;
     }
+    delete conv._cacheKnownStale;
+    _setCacheVerifying(convId, false);
     /* Network errors with no cache: show a retry-friendly message if this is the active conv */
     if (convId === activeConvId) {
       const inner = document.getElementById('chatInner');

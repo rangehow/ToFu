@@ -98,6 +98,10 @@ function getActiveConv(){ return conversations.find(c => c.id === activeConvId);
 function _convSorter(a,b){ return (b.updatedAt||0)-(a.updatedAt||0); }
 let _renderChatCalls = 0;
 function renderChat(){ _renderChatCalls++; }
+/* RENDER_CONTRACT migration: an adopted change now renders via
+ * window.ConvView.replaceAll (the bare renderChat seam was removed from
+ * _verifyActiveConvFromServer). The counter below is wired to the ConvView
+ * seam in the driver — the assertion is unchanged ("must re-render"). */
 function renderConversationList(){}
 function _restoreConvToolState(){}
 function _applySettingsToConv(){}
@@ -130,6 +134,7 @@ __LOAD_FN__
 (async () => {
   Date.now = () => NOW;
   window = (typeof window==='undefined') ? {} : window;
+  window.ConvView = { replaceAll: function(){ _renderChatCalls++; } };
   // Drive the REAL loadConversationsFromServer with the ?meta=1 list.
   await loadConversationsFromServer();
   const ac = getActiveConv();

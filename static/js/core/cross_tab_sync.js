@@ -185,16 +185,20 @@ function _scheduleConvListRefresh() {
  *   re-verify), and re-render ONLY when something actually changed (so scroll
  *   position is never reset on a no-op). */
 async function _verifyActiveConvFromServer(convId) {
+  /* Three-state return (the failure-reheal retry loop in
+   * loadConversationMessages consumes it): TRUE = server body adopted,
+   * FALSE = verified, no change needed, NULL = the verify GET never landed
+   * (caller may retry). All pre-existing callers ignore the return value. */
   const conv = conversations.find((c) => c.id === convId);
-  if (!conv) return;
+  if (!conv) return null;
   let data;
   try {
     data = await Api.conversations.get(convId);
   } catch (e) {
     debugLog(`[conv-notify] active verify GET failed: ${e && e.message}`, "warn");
-    return;
+    return null;
   }
-  if (!data) return;
+  if (!data) return null;
   const serverMsgs = data.messages || [];
   const localMsgs = conv.messages || [];
   let changed = false;
@@ -271,6 +275,7 @@ async function _verifyActiveConvFromServer(convId) {
       if (typeof updateSendButton === "function") updateSendButton();
     }
   }
+  return changed;
 }
 
 function _onConvNotifyPush(frame) {

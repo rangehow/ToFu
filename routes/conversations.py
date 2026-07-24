@@ -1173,14 +1173,20 @@ def _save_conv_blocking(db, conv_id, data):
     # ★ Inject lastMsgRole/lastMsgTimestamp into settings for Case E orphan detection.
     # This ensures metadata shells always have last-message info even when the
     # frontend didn't include it (e.g. server-side syncs from _sync_result_to_conversation).
+    # ★ ALSO re-derive the settled-turn sidebar facts (lastFinishReason /
+    # lastMsgError / lastMsgHasOutput) from the AUTHORITATIVE posted tail —
+    # never from the client's settings payload, whose whitelist omits them:
+    # previously every full-conv PUT silently clobbered the manager-stamped
+    # error facts, and the meta-only sidebar shell lost its error/incomplete
+    # dot until somebody re-opened the conversation.
+    from lib.chat.persistence import settled_turn_facts
     settings_dict = data.get('settings') or {}
     if msg_count > 0:
-        last_msg = raw_messages[-1]
-        settings_dict['lastMsgRole'] = last_msg.get('role')
-        settings_dict['lastMsgTimestamp'] = last_msg.get('timestamp')
+        settings_dict.update(settled_turn_facts(raw_messages[-1]))
     else:
-        settings_dict.pop('lastMsgRole', None)
-        settings_dict.pop('lastMsgTimestamp', None)
+        for _fact_k in ('lastMsgRole', 'lastMsgTimestamp', 'lastFinishReason',
+                        'lastMsgError', 'lastMsgHasOutput'):
+            settings_dict.pop(_fact_k, None)
     settings = json.dumps(settings_dict, ensure_ascii=False)
 
     # ── Guard: prevent stale syncs from overwriting newer data ──
@@ -1240,11 +1246,10 @@ def _save_conv_blocking(db, conv_id, data):
                 msg_count = len(raw_messages)
                 messages = json_dumps_pg(raw_messages)
                 # Re-derive lastMsgRole/lastMsgTimestamp (Case-E orphan detection)
-                # from the POST-sweep tail so settings don't point at a removed husk.
+                # + the settled-turn sidebar facts from the POST-sweep tail so
+                # settings don't point at a removed husk.
                 if msg_count > 0:
-                    _lm = raw_messages[-1]
-                    settings_dict['lastMsgRole'] = _lm.get('role')
-                    settings_dict['lastMsgTimestamp'] = _lm.get('timestamp')
+                    settings_dict.update(settled_turn_facts(raw_messages[-1]))
                     settings = json.dumps(settings_dict, ensure_ascii=False)
                 logger.info('[save_conv] \U0001f9f9 Swept %d ghost husk(s) from '
                             'incoming PUT conv=%s (%d\u2192%d) — write-seam symmetry '

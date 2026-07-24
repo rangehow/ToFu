@@ -950,6 +950,16 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
     done_evt['actualModel'] = task.get('_fallback_model') or model
     if thinking_depth:
         done_evt['actualDepth'] = thinking_depth
+    # Anchor for the frontend turn-ctx capsule reconcile: the stable _msgId
+    # of the user turn that TRIGGERED this task, stamped by
+    # ``_start_task_for_conv`` (send/regenerate/continue) or inherited by
+    # autopilot VU sub-tasks from their parent. Frontend prefers this over
+    # "the last user in conv" — the latter is wrong under autopilot VU,
+    # concurrent conv, or a regenerate targeting a historical user turn.
+    # Empty string when a headless / external / legacy caller never stamped
+    # it → frontend falls back to the last-user heuristic (safe default).
+    if task.get('_userMsgId'):
+        done_evt['userMsgId'] = task['_userMsgId']
     _actual_modes: list[dict[str, str]] = []
     _flow = cfg.get('activeFlow') if isinstance(cfg.get('activeFlow'), str) else ''
     if _flow:

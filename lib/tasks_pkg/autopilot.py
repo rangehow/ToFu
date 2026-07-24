@@ -825,6 +825,14 @@ def run_virtual_user(task: dict, vu_msg_id: str | None = None) -> dict | None:
     sub_task['_inline_messages'] = True
     sub_task['_vu_subtask'] = True
     sub_task['_autopilotParent'] = task.get('id', '')
+    # Turn-ctx capsule anchor: the VU sub-task's DONE frame flows through
+    # _finalize_and_emit_done and would otherwise carry an empty userMsgId
+    # (frontend fallback → "last user in conv" = the VU-synthesised user,
+    # which is WRONG — the fact card belongs to the PARENT user turn). Inherit
+    # the parent's stable _userMsgId so the reconcile lands on the parent.
+    # This is a diagnostic id only — no baton / exactly-once semantics.
+    if task.get('_userMsgId'):
+        sub_task['_userMsgId'] = task['_userMsgId']
     # ── Peer-message fast path (Pillar #6) ──
     #   The VU sub-task runs with convId='' (to stay out of the latest-task
     #   registry), so its swarm/inbox key would be the sub-task id — but a peer

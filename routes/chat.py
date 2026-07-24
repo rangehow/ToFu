@@ -359,7 +359,13 @@ def chat_send():
         _send_rev = _persist_conv_messages(db, conv_id, messages, title, settings_patch)
 
         # 5. Start task (no active task — send immediately)
-        task_id, err_resp = _start_task_for_conv(conv_id, config, data)
+        # Anchor the turn-ctx capsule reconcile: stamp the freshly-built
+        # user_msg's stable _msgId on the task so the DONE SSE frame carries
+        # userMsgId → the frontend targets THIS user message even if a
+        # concurrent VU / send has since appended a newer user row.
+        task_id, err_resp = _start_task_for_conv(
+            conv_id, config, data,
+            user_msg_id=user_msg.get('_msgId') or '')
         if err_resp is not None:
             if isinstance(err_resp, tuple):
                 return err_resp
@@ -686,7 +692,13 @@ def chat_regenerate():
                     edited_content is not None, title)
 
         # 6. Start task
-        task_id, err_resp = _start_task_for_conv(conv_id, config, data)
+        # Anchor the turn-ctx capsule reconcile: regenerate targets a
+        # SPECIFIC prior user_msg (the one at truncate_to). Ship its stable
+        # _msgId so the DONE frame's userMsgId lands the model/depth/modes
+        # correction on THAT bubble, not whatever happens to be last later.
+        task_id, err_resp = _start_task_for_conv(
+            conv_id, config, data,
+            user_msg_id=user_msg.get('_msgId') or '')
         if err_resp is not None:
             if isinstance(err_resp, tuple):
                 return err_resp
@@ -932,7 +944,17 @@ def chat_continue():
             cfg_payload['checkpointModifiedFileList'] = kept_modified_file_list
 
         # Start the task.
-        task_id, err_resp = _start_task_for_conv(conv_id, cfg_payload, data)
+        # Anchor the turn-ctx capsule reconcile: continue resumes the assistant
+        # for the last user BEFORE it. Walk back from the assistant tail to find
+        # that user's stable _msgId; ships as done_evt.userMsgId.
+        _continue_user_msg_id = ''
+        for _m in reversed(messages[:-1]):
+            if isinstance(_m, dict) and _m.get('role') == 'user':
+                _continue_user_msg_id = _m.get('_msgId') or ''
+                break
+        task_id, err_resp = _start_task_for_conv(
+            conv_id, cfg_payload, data,
+            user_msg_id=_continue_user_msg_id)
         if err_resp is not None:
             return err_resp if not isinstance(err_resp, tuple) else err_resp
 

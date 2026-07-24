@@ -1773,9 +1773,39 @@ function dispatchSSEEvent(line, ctx) {
           try {
             const _rc = conversations.find((c) => c.id === convId);
             if (_rc && Array.isArray(_rc.messages)) {
+              /* Anchor the reconcile to the user message THIS task ran on
+                 (backend ships ev.userMsgId, stamped by _start_task_for_conv
+                 → done_evt in _finalize_and_emit_done, inherited onto VU
+                 sub-tasks from their parent). Falling back to "last user in
+                 conv" is wrong under three concrete scenarios (autopilot VU
+                 appended a newer user row; a concurrent send in the same
+                 conv; a regenerate against a historical user turn) — it
+                 either overwrites the wrong bubble or (worse) targets a msg
+                 that has no _ctx and the correction never lands. Use last-user
+                 ONLY when a legacy backend didn't ship userMsgId. */
               let _uIdx = -1;
-              for (let i = _rc.messages.length - 1; i >= 0; i--) {
-                if (_rc.messages[i] && _rc.messages[i].role === 'user') { _uIdx = i; break; }
+              const _targetMsgId = (typeof ev.userMsgId === 'string' && ev.userMsgId)
+                ? ev.userMsgId : '';
+              if (_targetMsgId) {
+                for (let i = _rc.messages.length - 1; i >= 0; i--) {
+                  const _m = _rc.messages[i];
+                  if (_m && _m.role === 'user' && _m._msgId === _targetMsgId) {
+                    _uIdx = i;
+                    break;
+                  }
+                }
+                if (_uIdx < 0) {
+                  console.debug('[turnCtx] userMsgId=%s not found in conv=%s — ' +
+                    'the target user turn may have been truncated / not synced yet; ' +
+                    'skipping reconcile.', _targetMsgId, convId.slice(0, 8));
+                }
+              } else {
+                for (let i = _rc.messages.length - 1; i >= 0; i--) {
+                  if (_rc.messages[i] && _rc.messages[i].role === 'user') { _uIdx = i; break; }
+                }
+                console.debug('[turnCtx] done frame carries no userMsgId — ' +
+                  'legacy backend fallback to last-user in conv=%s (idx=%d)',
+                  convId.slice(0, 8), _uIdx);
               }
               const _uMsg = _uIdx >= 0 ? _rc.messages[_uIdx] : null;
               if (_uMsg && _uMsg._ctx) {

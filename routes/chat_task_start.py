@@ -61,12 +61,23 @@ logger = get_logger(__name__)
 
 
 def _start_task_for_conv(conv_id: str, config: dict[str, Any],
-                          data: dict[str, Any] | None = None):
+                          data: dict[str, Any] | None = None,
+                          *, user_msg_id: str = ''):
     """Build API messages from DB and start a task. Returns (taskId, error_response).
 
     Automatically routes to endpoint mode (planner → worker → critic loop)
     when ``config['endpointMode']`` is truthy, so callers (chat_send,
     chat_regenerate, etc.) don't need separate routing logic.
+
+    ``user_msg_id`` — the stable ``_msgId`` of the user message that
+    TRIGGERED this task (chat_send's newly-appended user_msg, the target of
+    chat_regenerate, the last user before the resumed assistant in
+    chat_continue). Stamped onto ``task['_userMsgId']`` so
+    ``_finalize_and_emit_done`` can ship it on the DONE SSE frame as
+    ``userMsgId`` — the frontend uses that to anchor the turn-ctx capsule
+    reconcile to the RIGHT user message (never "the last user in the conv",
+    which is wrong the moment an autopilot VU turn or a concurrent send
+    plants a newer user message).
 
     ★ CRITICAL: Before starting a new task, all existing running tasks for
     this conversation are auto-aborted. This prevents the "stale task
@@ -102,6 +113,8 @@ def _start_task_for_conv(conv_id: str, config: dict[str, Any],
 
     task = create_task(conv_id, api_messages, config)
     task['_attended'] = True
+    if user_msg_id:
+        task['_userMsgId'] = user_msg_id
     task_id = task['id']
     _cfg_model = config.get('model', '?')
 

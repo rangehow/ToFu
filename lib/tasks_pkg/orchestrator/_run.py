@@ -103,6 +103,7 @@ from lib.tasks_pkg.orchestrator._vu_startup import (
     start_external_edit_probe,  # noqa: F401  (also invoked indirectly via setup_project_context)
 )
 from lib.tasks_pkg.orchestrator._prefetch import start_prefetches
+from lib.tasks_pkg.orchestrator._context_inject import inject_context_and_emit_chips  # noqa: E501
 from lib.tasks_pkg.orchestrator._post_loop import (
     finalize_after_loop,
     handle_task_fatal,
@@ -405,76 +406,22 @@ def run_task(task: dict[str, Any]) -> None:
                 logger.debug('[%s] conv=%s keepToolHistory enabled but no stored messages found',
                              tid, _conv_id[:8])
 
-        # ── Section 3: Context Injection ──
-        _vu_phase('Autopilot：注入系统上下文（项目结构、记忆检索）…')
-        _tool_names = {
-            (t.get('function') or {}).get('name')
-            for t in (tool_list or [])
-            if isinstance(t, dict)
-        }
-        _tool_names.discard(None)
-        _inject_system_contexts(
-            messages, project_path, project_enabled,
-            memory_enabled, search_enabled, swarm_enabled,
-            has_real_tools,
-            conv_id=task.get('convId', ''),
-            task=task,
-            model=model,
-            system_prompt_mode=cfg.get('systemPromptMode', 'append'),
-            tool_names=_tool_names or None,
-            disabled_blocks=_disabled_prompt_blocks(cfg),
+        # ── Section 3: Context Injection ── (pt_03f4cdf1 slice 7)
+        #   Extracted to lib.tasks_pkg.orchestrator._context_inject.
+        #   The helper does: VU phase → _inject_system_contexts →
+        #   PREFERENCES_APPLIED chip → RELATED_CONVERSATIONS chip →
+        #   prefetch executor shutdown → _t_prep_done timing anchor →
+        #   VU phase (context ready).
+        _t_prep_done = inject_context_and_emit_chips(
+            task=task, messages=messages, cfg=cfg,
+            project_path=project_path, project_enabled=project_enabled,
+            memory_enabled=memory_enabled, search_enabled=search_enabled,
+            swarm_enabled=swarm_enabled, has_real_tools=has_real_tools,
+            model=model, tool_list=tool_list,
+            prefetch_executor=_prefetch_executor,
+            tid=tid, t_run_start=_t_run_start,
+            vu_phase=_vu_phase,
         )
-        # ★ Preferences-applied chip: if the bounded user-profile was injected
-        #   onto the cache-safe _isMeta tail by _inject_system_contexts, emit a
-        #   quiet event so the frontend can show "preferences applied" — making
-        #   the assistant's awareness of the user's stored preferences VISIBLE.
-        _applied_prefs = task.get('_appliedPreferences')
-        if _applied_prefs:
-            try:
-                append_event(task, build_event(
-                    EventType.PREFERENCES_APPLIED,
-                    chars=_applied_prefs.get('chars', 0),
-                    items=_applied_prefs.get('items', []),
-                    core=_applied_prefs.get('core', []),
-                    detail=_applied_prefs.get('detail', []),
-                ))
-                task['_preferencesApplied'] = dict(_applied_prefs)
-            except Exception as _e:
-                logger.debug('[orchestrator] preferences_applied emit failed: %s', _e)
-
-        # ★ Related-conversations chip: if the cross-conversation project
-        #   digest was injected by _inject_system_contexts (★4.4), emit a quiet
-        #   event so the frontend can show which sibling conversations the
-        #   model was made aware of — auditable ambient context.
-        _related_convs = task.get('_relatedConversations')
-        if _related_convs:
-            try:
-                append_event(task, build_event(
-                    EventType.RELATED_CONVERSATIONS,
-                    count=_related_convs.get('count', 0),
-                    items=_related_convs.get('items', []),
-                    toolsAvailable=_related_convs.get('toolsAvailable', False),
-                ))
-                task['_relatedConversations'] = dict(_related_convs)
-            except Exception as _e:
-                logger.debug('[orchestrator] related_conversations emit failed: %s', _e)
-
-        # Cleanup prefetch futures (no longer needed)
-        task.pop('_prefetch_project', None)
-        task.pop('_prefetch_memory', None)
-        _prefetch_executor.shutdown(wait=False)
-
-        # ★ Timing: context assembly complete (config/model resolution, tool
-        #   assembly, tool-history restoration, system-context injection — incl.
-        #   the FUSE-slow memory/project prefetch). This is the bulk of the
-        #   pre-LLM "waiting" window. Stash the anchor on the task so
-        #   stream_llm_response can compute time-to-first-token (TTFT).
-        _t_prep_done = time.time()
-        task['_t_prep_done'] = _t_prep_done
-        logger.info('[Timing:%s] prep=%.3fs (run_task→context-ready, '
-                    'model=%s) — about to build first LLM request',
-                    tid, _t_prep_done - _t_run_start, model)
-        _vu_phase('Autopilot：上下文就绪，正在发送请求…')
 
         # NOTE: Auto-prefetch disabled — the model can fetch URLs on demand
         # via the fetch_url tool call when it deems them relevant, rather than

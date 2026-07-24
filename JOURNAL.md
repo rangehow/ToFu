@@ -3,6 +3,18 @@
 
 
 ### 2026-07-25(续) — owner 验收抓漏:mpApplyFolders 失败回退不降级档位根修(commit `5fbc40e3`,2 文件 +163,套件扩至 16 测全绿含三重 NEUTER,相邻环 67/67,collect **8475** 0 err)。
+# Project Journal
+
+
+
+### 2026-07-25(续2) — 「历史会话同步太差:侧边栏已知出错、点进去却长期显示正常结束」三层根修(epic `pt_f49dcceb91c8432e`,commit `95e18d88`,8 文件 +743/-37,新测 8 面全绿含双 NEUTER + 顺手治好 2 张预存在红 harness,相邻 11 套件 **57/57**,collect **8484** 0 err)。owner 实证:大脑自动派发的会话回复失败后,徽标先变红,但正文要「来回点+等好久」才跳变成错误态——不等着就会完全困惑。
+- **证据链(三路并行钉死):** ①DB 直查:2 个会话尾部 assistant 带 `finishReason='error'`+typed envelope(大脑 autonomus dispatch 的模型回复失败),`conversations.messages` JSONB;②后端链:`_save_conv_blocking` 只注 lastMsgRole/Timestamp,**从不重导出结算五元组**(lastFinishReason/lastMsgError/lastMsgHasOutput),而前端 PUT 的 settings 白名单(conversations.js syncConversationToServer)**不含这三键**——每次客户端同步都静默冲掉 manager 结算章(生产行实证:出错尾巴的 settings 里三键全无);③前端链:`loadConversationMessages` Phase-1 乐观清 `_needsLoad`,Phase-2 校验**失败出口**(超时/5xx/离线)不恢复它,还顺手删 `_cacheKnownStale` + 撤校验暗化 → 后续每次打开在 conversations.js:1622 提前 return,**未验证缓存永远冒充真身**,直到某个无关推送撞运治好。
+- **修复(三层):** ①三个失败出口(cacheHit 时)恢复 `_needsLoad=true` + 有 `_cacheKnownStale` 证据时保留暗化;②新增**有界自愈重试** `_scheduleConvVerifyRetry`(4s/12s,仅活动会话,复用非破坏性 `_verifyActiveConvFromServer`——采纳才整页重渲,不重画缓存、不动滚动),该函数改为返回三态(采纳/已校验/抓取失败)供重试判停,全部旧调用方零感知;③后端从**权威尾巴**重导出五元组,新 SSOT `lib.chat.persistence.settled_turn_facts`(persist_conv_messages 与 _save_conv_blocking 共用,husk 清扫后同步重导),客户端回显的陈旧 facts 一律被权威导出压过。
+- **测试:** 新前端 harness(3 测,真驱 loadConversationMessages:needsLoad 恢复/证据保留/暗化保留/重试自愈采纳新尾/后台会话零重试;NEUTER×2 均真红)+ 新后端套件(5 测,真驱 _save_conv_blocking 真 DB:冲掉回归/出错盖章/回显判别/空尾巴清键/helper 形状;stash 验证修复前 5 全红=failing-first)。**顺手治好 2 张预存在红**(同属 RENDER_CONTRACT 迁移把裸 renderChat 接缝删了而 harness 探针没跟上,与续23 boot harness 同族):boot_early_active_paint(HEAD 红,探针迁 ConvView.replaceAll)+ poll_open_conv_grow(HEAD 红,同款;断言语义零改动)。
+- **落地拓扑(shared-HEAD):** 三个源文件 + 一个测试文件均混入 sibling hunk(文件夹分页 WIP / streamBufs 退役 WIP / listMeta shim WIP)——按 hunk 内容过滤生成 patch `git apply --cached` 只暂存我的块,提交前校验暂存文件集 == 预期 8 文件(不符即 abort),commit 不带 pathspec;提交后实测 sibling hunk 全部零损留在工作区。
+- **生效边界(诚实):** 后端(routes+persistence)随服务重启生效;前端两个 JS 在 `_BUNDLE_FILES`,需重启重建 bundle + 浏览器硬刷新;既有被冲掉 facts 的会话在下一次客户端同步或打开时由权威尾巴自愈,无需手工迁移。
+
+### 2026-07-25(续) — owner 验收抓漏:mpApplyFolders 失败回退不降级档位根修(commit `5fbc40e3`,2 文件 +163,套件扩至 16 测全绿含三重 NEUTER,相邻环 67/67,collect **8475** 0 err)。
 - **漏洞(owner 验收原话):** 乐观挂载 → `onProjectAttached()` 晋升 studio(上一批改后**立刻落盘+同步**)→ 后台 setPaths 失败 → catch 回退 projectState/conv 路径但**从不降级档位**——首次挂载即失败时停在「Studio+无项目」,且因落盘钩比以往更粘,恢复钳制要等下次刷新才救得回。
 - **修复:** catch 分支按前态分治——`_prevProjectState.path` 为空 ⇒ 调 `onProjectCleared()`(借既有落盘钩重画+持久化);前态有项目 ⇒ 档位保持 studio(仍然诚实)。两种情况均有行为钉。
 - **要求 3 全路径审计(结论:catch 分支是最后一个毒化生产者):** `_applyChatModeUI` 是全局唯一赋值者,studio 调用点仅 setChatMode(项目闸)/onProjectAttached(真实挂载)/恢复钳制三处;`conv.chatMode` 唯一写入者 `_saveConvToolState`(逐字抄受守全局);新会话不带 chatMode 字段(恢复时派生,无 projectPath ⇒ chat);main_conv_lifecycle 两处为只读解析快照;后端从不往存档写 'studio';跨端同步只能运输修复前写入的毒化对,恢复钳制每次加载自愈。

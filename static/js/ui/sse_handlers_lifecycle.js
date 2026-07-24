@@ -120,7 +120,7 @@ function _handleSwarmInboxInject(ev, c) {
         }
       }
       if (buf) buf._inboxInjects = assistantMsg._inboxInjects;
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
 
 }
 
@@ -150,7 +150,7 @@ function _handlePeerInboxInject(ev, c) {
         }, _pRound - 1);
         if (buf) buf.toolRounds = assistantMsg.toolRounds;
       }
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
 }
 
 function _handleUserSteerInject(ev, c) {
@@ -195,7 +195,7 @@ function _handleUserSteerInject(ev, c) {
         }, _steerRound - 1);
         if (buf) buf.toolRounds = assistantMsg.toolRounds;
       }
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
 }
 
 function _handleMessagesSnapshot(ev, c) {

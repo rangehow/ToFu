@@ -78,7 +78,7 @@ function _handleArtifact(ev, c) {
       if (buf) {
         buf._artifacts = (assistantMsg && assistantMsg._artifacts) || buf._artifacts || [];
       }
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
 
 }
 
@@ -136,7 +136,7 @@ function _handleCompaction(ev, c) {
       if (ev.type === 'compaction_done' && typeof window.flashGaugeForArchive === 'function') {
         window.flashGaugeForArchive(ev.archiveId);
       }
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
 
 }
 
@@ -194,7 +194,7 @@ function _handleMemoryPrefetch(ev, c) {
           renderConversationList();
         }
       }
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
 
 }
 
@@ -214,7 +214,7 @@ function _handlePreferencesApplied(ev, c) {
         detail: Array.isArray(ev.detail) ? ev.detail : undefined,
       };
       if (buf) buf._preferencesApplied = assistantMsg._preferencesApplied;
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
 
 }
 
@@ -234,7 +234,7 @@ function _handleRelatedConversations(ev, c) {
         toolsAvailable: !!ev.toolsAvailable,
       };
       if (buf) buf._relatedConversations = assistantMsg._relatedConversations;
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
 
 }
 
@@ -256,7 +256,7 @@ function _handlePreferenceLearned(ev, c) {
       });
       assistantMsg._preferencesLearned = list;
       if (buf) buf._preferencesLearned = list;
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
 
 }
 
@@ -471,7 +471,7 @@ function _handleTimerPollCheck(ev, c) {
       }
       if (buf)
         buf.toolRounds = assistantMsg.toolRounds || [];
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
 
     /* ═══ Swarm mode events ═══ */
 }

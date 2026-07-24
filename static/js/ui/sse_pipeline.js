@@ -114,7 +114,7 @@ async function _connectAutopilotKick(convId, taskId) {
   conv.activeTaskId = taskId;
   renderConversationList();
   updateSendButton();
-  twStart(convId);
+  if (typeof twStart === 'function') twStart(convId);
 
   const stream = activeStreams.get(convId);
   let sseWorked = false;
@@ -122,7 +122,7 @@ async function _connectAutopilotKick(convId, taskId) {
     sseWorked = await _trySSE(convId, taskId, stream, dummyAssistant);
   } catch (e) {
     if (e.name === 'AbortError') {
-      twStop(convId);
+      if (typeof twStop === 'function') twStop(convId);
       finishStream(convId);
       return;
     }
@@ -477,7 +477,7 @@ async function connectToTask(convId, taskId, retries = 0, opts = {}) {
         scrollToBottom();
       }
     }
-    twStart(convId);
+    if (typeof twStart === 'function') twStart(convId);
     const buf = streamBufs.get(convId);
     /* ★ FIX (stuck "等待中…" on reconnect): seed the fresh stream buffer with
      *   whatever content/thinking the server already checkpointed onto this
@@ -549,7 +549,7 @@ async function connectToTask(convId, taskId, retries = 0, opts = {}) {
           console.log(`[connectToTask] User abort — set finishReason='aborted' for conv=${convId.slice(0,8)}`);
         }
       }
-      twStop(convId);
+      if (typeof twStop === 'function') twStop(convId);
       finishStream(convId);
       return;
     }
@@ -972,7 +972,7 @@ function dispatchSSEEvent(line, ctx) {
         assistantMsg._userSteerInjects = ev.userSteerInjects;
         if (buf) buf._userSteerInjects = ev.userSteerInjects;
       }
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
       // ★ Re-trigger HG translations on state snapshot (handles page refresh / SSE reconnect)
       if (ev.toolRounds) _retriggerHgTranslations(convId);
     } else if (ev.type === "autopilot_vu_start"
@@ -1025,7 +1025,7 @@ function dispatchSSEEvent(line, ctx) {
             _epCriticBuf.content = _rawCritic.replace(/\[VERDICT:\s*(?:STOP|CONTINUE)\s*\]\s*$/i, "").trimEnd();
           }
         }
-        twUpdate(convId);
+        if (typeof twUpdate === 'function') twUpdate(convId);
       } else {
         /* ★ RENDER_CONTRACT Phase 3: route the LIVE content/thinking append
          *   through the ONE pure reducer (reduceStreamState 'delta' action)
@@ -1055,7 +1055,7 @@ function dispatchSSEEvent(line, ctx) {
             buf.phase = { phase: "thinking_active", _thinkingLen: _roundThinkingLen };
           }
         }
-        twUpdate(convId);
+        if (typeof twUpdate === 'function') twUpdate(convId);
       }
     } else if (ev.type === "retry_reset") {
       /* Turn-level auto-retry: the backend is re-running the whole turn after
@@ -1083,7 +1083,7 @@ function dispatchSSEEvent(line, ctx) {
         _rrBuf.toolRounds = _rrTarget ? _rrTarget.toolRounds : [];
         _rrBuf.phase = null;
       }
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
     } else if (ev.type === "delta_reset") {
       /* The just-ended LLM round issued TOOL CALLS, so the prose it streamed
        * before those calls was inter-round narration ("Now let me check the
@@ -1153,7 +1153,7 @@ function dispatchSSEEvent(line, ctx) {
           }
         }
       }
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
     } else if (ev.type === "round_start" || ev.type === "round_end") {
       /* ★ RENDER_CONTRACT Phase 3: explicit round boundaries. Route through the
        *   ONE pure reducer so the open-round index is tracked off a REAL
@@ -1165,7 +1165,7 @@ function dispatchSSEEvent(line, ctx) {
        *   suffices. Backend `done`/`committedMessage` stays authoritative. */
       const _rbTarget = (_epCriticPhase && _epCriticMsg) ? _epCriticMsg : assistantMsg;
       if (_rbTarget) reduceStreamState(_rbTarget, ev);
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
     } else if (ev.type === "phase") {
       _roundThinkingLen = 0; // reset thinking counter on new phase
       /* Each new LLM round starts with a 'phase' event whose phase is
@@ -1197,7 +1197,7 @@ function dispatchSSEEvent(line, ctx) {
           round: ev.roundNum || 0,
         };
       }
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
     } else if (ev.type === "tool_start") {
       _handleToolStart(ev, _hctx());
     } else if (ev.type === "human_guidance_request") {
@@ -2206,7 +2206,7 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
       stream.controller = new AbortController();
       return false;
     }
-    twStop(convId);
+    if (typeof twStop === 'function') twStop(convId);
     finishStream(convId);
     return true;
   } catch (e) {

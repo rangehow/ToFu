@@ -2804,7 +2804,7 @@ async function _recoverTimerPolls(round) {
             if (triggered) { liveRound._timerTriggered = true; liveRound.status = 'done'; }
           }
         }
-        twUpdate(activeConvId);
+        if (typeof twUpdate === 'function') twUpdate(activeConvId);
       }
       console.info(`[Timer] Recovered ${recoveredPolls.length} polls for timer ${timerId.slice(0,12)}`);
     }

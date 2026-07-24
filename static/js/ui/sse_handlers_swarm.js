@@ -129,7 +129,7 @@ function _handleSwarmPhase(ev, c) {
         }
       }
       if (buf) buf.toolRounds = assistantMsg.toolRounds || [];
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
 
 }
 
@@ -242,7 +242,7 @@ function _handleSwarmAgent(ev, c) {
         }
       }
       if (buf) buf.toolRounds = assistantMsg.toolRounds || [];
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
 
       } else if (_swarm_evtype === "swarm_agent_progress") {
       /* Agent progress: tool usage, partial results, etc. */
@@ -264,7 +264,7 @@ function _handleSwarmAgent(ev, c) {
         }
       }
       if (buf) buf.toolRounds = assistantMsg.toolRounds || [];
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
 
       } else if (_swarm_evtype === "swarm_agent_complete") {
       /* Individual agent finished */
@@ -302,7 +302,7 @@ function _handleSwarmAgent(ev, c) {
         }
       }
       if (buf) buf.toolRounds = assistantMsg.toolRounds || [];
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
 
       } else if (_swarm_evtype === "swarm_agent_error") {
       const sr = _findOwningSwarmRound();
@@ -324,7 +324,7 @@ function _handleSwarmAgent(ev, c) {
         }
       }
       if (buf) buf.toolRounds = assistantMsg.toolRounds || [];
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
 
       } else if (_swarm_evtype === "swarm_agent_tool_call") {
       /* Per-tool-call timeline entry from a sub-agent.
@@ -358,7 +358,7 @@ function _handleSwarmAgent(ev, c) {
         }
       }
       if (buf) buf.toolRounds = assistantMsg.toolRounds || [];
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
       }  /* end inner _swarm_evtype dispatch */
 
 }

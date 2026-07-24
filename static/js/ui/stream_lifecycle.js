@@ -666,7 +666,7 @@ async function _autoTranslateHumanGuidance(convId, roundNum, question, responseT
   // Mark as translating (shows spinner in the card)
   round._hgTranslating = true;
   _syncHgToBuf();
-  twUpdate(convId);
+  if (typeof twUpdate === 'function') twUpdate(convId);
 
   // ── Build a single translation batch: question + all option labels + descriptions ──
   // Concatenate all texts with a separator to make a single API call (cheaper & faster)
@@ -730,7 +730,7 @@ async function _autoTranslateHumanGuidance(convId, roundNum, question, responseT
     if (buf2 && msg2.toolRounds) {
       buf2.toolRounds = msg2.toolRounds;
     }
-    twUpdate(convId);
+    if (typeof twUpdate === 'function') twUpdate(convId);
   } catch (e) {
     console.warn(`[HG-Translate] Translation failed: ${e.message} — showing original`);
     // Clear translating flag, show original untranslated
@@ -745,7 +745,7 @@ async function _autoTranslateHumanGuidance(convId, roundNum, question, responseT
         if (buf2 && msg2.toolRounds) {
           buf2.toolRounds = msg2.toolRounds;
         }
-        twUpdate(convId);
+        if (typeof twUpdate === 'function') twUpdate(convId);
       }
     }
   }

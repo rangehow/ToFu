@@ -35,7 +35,7 @@ function _handleHumanGuidance(ev, c) {
       }
       if (buf)
         buf.toolRounds = assistantMsg.toolRounds || [];
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
       // ★ Update sidebar to show amber blinking dot for awaiting-human state
       renderConversationList();
       // ★ Auto-translate question & options (EN→CN) when autoTranslate is ON.
@@ -72,7 +72,7 @@ function _handleToolProgress(ev, c) {
       } else if (_epCriticPhase && _epCriticBuf && _epCriticMsg) {
         _epCriticBuf.toolRounds = _epCriticMsg.toolRounds || [];
       }
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
       // Auto-scroll the live terminal box(es) to the bottom so the newest
       // output is always visible — DOM was just rerendered above.
       try {
@@ -111,7 +111,7 @@ function _handleStdinRequest(ev, c) {
       }
       if (buf)
         buf.toolRounds = assistantMsg.toolRounds || [];
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
 }
 
 function _handleStdinResolved(ev, c) {
@@ -134,7 +134,7 @@ function _handleStdinResolved(ev, c) {
       }
       if (buf)
         buf.toolRounds = assistantMsg.toolRounds || [];
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
 }
 
 function _handleWriteApproval(ev, c) {
@@ -157,5 +157,5 @@ function _handleWriteApproval(ev, c) {
       }
       if (!_epCriticPhase && buf)
         buf.toolRounds = assistantMsg.toolRounds || [];
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
 }

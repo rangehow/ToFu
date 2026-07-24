@@ -179,7 +179,7 @@ function _collapseHgRoundAfterSubmit(guidanceId, responseText) {
   if (buf) {
     buf.toolRounds = assistantMsg.toolRounds.map(r => ({...r}));
   }
-  twUpdate(activeConvId);
+  if (typeof twUpdate === 'function') twUpdate(activeConvId);
 }
 
 function toggleAutoApply() {

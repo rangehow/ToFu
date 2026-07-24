@@ -87,7 +87,7 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
   while (true) {
     if (stream.controller.signal.aborted) {
       console.warn(`[_pollFallback] ABORTED at iteration ${_pollIter} — conv=${convId.slice(0,8)}`);
-      twStop(convId);
+      if (typeof twStop === 'function') twStop(convId);
       finishStream(convId);
       return;
     }
@@ -117,7 +117,7 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
             `${(assistantMsg.content || assistantMsg.thinking) ? 'PRESERVING existing accumulated data' : 'NO DATA to preserve, marking error'}`);
           if (!assistantMsg.content && !assistantMsg.thinking)
             assistantMsg.error = "Task not found";
-          twStop(convId);
+          if (typeof twStop === 'function') twStop(convId);
           finishStream(convId);
           return;
         }
@@ -143,7 +143,7 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
           const _isLastAborted = _pollConv._lastAbortedTaskId === taskId;
           if (_aborted || _superseded || _isLastAborted) {
             console.info(`[SyncFix][_pollFallback] discarding stale poll taskId=${taskId.slice(0,8)} activeTaskId=${_pollConv.activeTaskId?.slice(0,8)||'null'} aborted=${!!_aborted} superseded=${!!_superseded} isLastAborted=${!!_isLastAborted}`);
-            twStop(convId);
+            if (typeof twStop === 'function') twStop(convId);
             finishStream(convId);
             return;
           }
@@ -368,7 +368,7 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
         if (buf) buf.toolRounds = assistantMsg.toolRounds;
       }
       if (buf) buf.phase = data.phase || null;
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
       const now = Date.now();
       if (now - lastSave > 3000) {
         saveConversations(convId);
@@ -420,13 +420,13 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
             `vu="${(data.autopilotVuMessage.content||'').slice(0,80)}${(data.autopilotVuMessage.content||'').length>80?'…':''}"`
           );
         }
-        twStop(convId);
+        if (typeof twStop === 'function') twStop(convId);
         finishStream(convId);
         return;
       }
     } catch (e) {
       if (e.name === "AbortError") {
-        twStop(convId);
+        if (typeof twStop === 'function') twStop(convId);
         finishStream(convId);
         return;
       }
@@ -454,7 +454,7 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
             'Server unreachable — waiting for reconnection… Task is still running on the server.', 8000);
           while (Date.now() - _recoveryStart < _RECOVERY_WAIT_MS) {
             if (stream.controller.signal.aborted) {
-              twStop(convId);
+              if (typeof twStop === 'function') twStop(convId);
               finishStream(convId);
               return;
             }
@@ -477,7 +477,7 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
             assistantMsg.finishReason = 'server_offline';
             assistantMsg.error = '⚠️ Server offline — response may be incomplete. This notice will clear automatically when the server comes back.';
             saveConversations(convId);
-            twStop(convId);
+            if (typeof twStop === 'function') twStop(convId);
             finishStream(convId);
             _connToast('offline', '⚠️', 'Server Offline',
               'Backend server did not reconnect within 2 minutes. Your partial response has been saved. It will recover automatically when the server comes back.',

@@ -21,7 +21,7 @@ function _handleToolStart(ev, c) {
           _epCriticMsg.toolRounds.push(r);
           if (_epCriticBuf) _epCriticBuf.toolRounds = _epCriticMsg.toolRounds;
         }
-        twUpdate(convId);
+        if (typeof twUpdate === 'function') twUpdate(convId);
       } else {
         /* ★ RENDER_CONTRACT Phase 3: build + push the tool round through the ONE
          *   pure reducer (reduceStreamState 'tool_start' action) instead of an
@@ -72,7 +72,7 @@ function _handleToolStart(ev, c) {
         if (r && r._swarm) assistantMsg._swarmRoundNum = r.roundNum;
         if (buf)
           buf.toolRounds = assistantMsg.toolRounds;
-        twUpdate(convId);
+        if (typeof twUpdate === 'function') twUpdate(convId);
       }
 }
 
@@ -90,7 +90,7 @@ function _handleToolResult(ev, c) {
           if (r) { r.results = ev.results; r.status = "done"; if (ev.searchDiag) r.searchDiag = ev.searchDiag; if (ev.engineBreakdown) r.engineBreakdown = ev.engineBreakdown; if (ev.vertical) r.vertical = ev.vertical; if (ev.verticals) r.verticals = ev.verticals; }
         }
         if (_epCriticBuf) _epCriticBuf.toolRounds = _epCriticMsg.toolRounds || [];
-        twUpdate(convId);
+        if (typeof twUpdate === 'function') twUpdate(convId);
       } else if (assistantMsg.toolRounds) {
         /* ★ RENDER_CONTRACT Phase 3: settle the round through the ONE pure
          *   reducer (reduceStreamState 'tool_result' action) — it locates the
@@ -161,7 +161,7 @@ function _handleToolResult(ev, c) {
               if (assistantMsg._mcpLoginHint === buf?._mcpLoginHint) {
                 assistantMsg._mcpLoginHint = null;
                 if (buf) buf._mcpLoginHint = null;
-                twUpdate(convId);
+                if (typeof twUpdate === 'function') twUpdate(convId);
               }
             }, 4000);
           }
@@ -219,7 +219,7 @@ function _handleToolResult(ev, c) {
       }
       if (buf)
         buf.toolRounds = assistantMsg.toolRounds || [];
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
       // ★ If this was an ask_human tool_result, refresh sidebar to clear amber dot
       if (ev.results && ev.results.some(r2 => r2.toolName === 'ask_human')) {
         renderConversationList();
@@ -263,7 +263,7 @@ function _handleToolComplete(ev, c) {
       //   handle preview button rendering — no fragile direct DOM injection needed.
       if (buf)
         buf.toolRounds = assistantMsg.toolRounds || [];
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
 
 }
 
@@ -327,7 +327,7 @@ function _handleToolCompacted(ev, c) {
           ? conversations.find(c => c && c.id === convId) : null;
         if (_conv && Array.isArray(_conv.messages)) _stampedIdx = _conv.messages.indexOf(_stampedMsg);
       }
-      twUpdate(convId);
+      if (typeof twUpdate === 'function') twUpdate(convId);
       /* If we stamped a round in an OLDER message (not the in-flight bubble),
        * twUpdate alone won't re-render it — twUpdate only refreshes the
        * streaming bubble. The older row needs its COMPACTED pill materialized.

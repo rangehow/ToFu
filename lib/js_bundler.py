@@ -403,6 +403,15 @@ _BUNDLE_FILES = [
     # core/cross_tab_sync.js (notify + conv_state_snapshot frame dispatch),
     # main/main_conv_lifecycle.js (reconnect target picker). Leaf module
     # (window only); MUST load before every consumer.
+    # pt_turn_settlement C1 (2026-07-24) — canonical JS port of the
+    # turn-settlement verdict (computeTurnSettlement / _tsScanKeptRounds).
+    # Consumed by ui/chat_render.js (Continue-button affordance),
+    # ui/finish_info.js (interrupt bubble label),
+    # main/main_regen_continue.js (Continue executor). Pure leaf module
+    # (window only); MUST load before every consumer. Behaviour-locked with
+    # lib/conversations/turn_settlement.py via
+    # tests/test_frontend_turn_settlement_equivalence.py.
+    'core/turn_settlement.js',
     'core/conv_state_reducer.js',
     'core/async_pool.js',
     'core/cross_tab_sync.js',

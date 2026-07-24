@@ -26,8 +26,14 @@ CACHE_FIX_GEN = 5
 # ── Cache-marker capability matrix ──
 # Empirically probed on the sankuai gateway (2026-05-03).
 #   1. Needs markers       → claude, glm-5, qwen, deepseek
-#   2. Auto-caches         → minimax, doubao (markers harmful)
+#   2. Auto-caches         → minimax, doubao (markers harmful), kimi
 #   3. Unknown             → default NO markers
+# kimi auto-caches WITHOUT markers (probed 2026-07-24 on kimi-k3: an identical
+# re-send 3s apart read back 3328/3367 tok = 98.8% with zero cache_control
+# attached), so the default NO-markers path is CORRECT for it — but the gateway
+# reports the hit as cached_tokens / prompt_tokens_details.cached_tokens while
+# pinning cache_read_tokens=0, which is why Tofu's accounting showed 0 hits
+# until lib/cost.py::normalize_usage learned the vendor spellings (2026-07-24).
 _CACHE_MARKERS_HELP = ('glm-5', 'qwen', 'deepseek')
 
 # Anthropic's hard ceiling: at most 4 ``cache_control`` markers per request.

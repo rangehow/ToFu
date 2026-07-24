@@ -21,6 +21,7 @@ import re
 import time
 from typing import Any
 
+from lib.cost import normalize_usage
 from lib.log import get_logger
 
 logger = get_logger(__name__)
@@ -1220,11 +1221,9 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
         _rounds = done_evt.get('apiRounds') or []
         _miss_rounds = [r.get('round') for r in _rounds
                         if isinstance(r, dict) and r.get('cacheBreak')]
-        _u = done_evt.get('usage') or {}
-        _cw = (_u.get('cache_write_tokens')
-               or _u.get('cache_creation_input_tokens') or 0)
-        _cr = (_u.get('cache_read_tokens')
-               or _u.get('cache_read_input_tokens') or 0)
+        _nu = normalize_usage(done_evt.get('usage') or {})
+        _cw = _nu['cache_write']
+        _cr = _nu['cache_read']
         _cost = (done_evt.get('cost') or {}).get('costCny')
         logger.info(
             '[Task:%s] ■ DONE conv=%s model=%s rounds=%d finish=%s '

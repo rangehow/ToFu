@@ -60,6 +60,7 @@ Public API
 """
 from __future__ import annotations
 
+from lib.cost import normalize_usage
 from lib.env_compat import getenv_compat
 from lib.log import get_logger
 
@@ -108,15 +109,8 @@ def floor_retry_max() -> int:
 
 def _cache_tokens(usage) -> tuple[int, int]:
     """Return (cache_read, cache_write) from a usage dict, tolerant of aliases."""
-    u = usage or {}
-    cr = (u.get('cache_read_tokens')
-          or u.get('cache_read_input_tokens') or 0)
-    cw = (u.get('cache_creation_input_tokens')
-          or u.get('cache_write_tokens') or 0)
-    try:
-        return int(cr or 0), int(cw or 0)
-    except (ValueError, TypeError):
-        return 0, 0
+    u = normalize_usage(usage)
+    return u['cache_read'], u['cache_write']
 
 
 def is_floor_collapse(usage) -> bool:

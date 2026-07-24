@@ -13,6 +13,7 @@ import sys as _sys
 import time
 from typing import Any
 
+from lib.cost import normalize_usage
 from lib.log import audit_log as _audit_log_direct, get_logger
 from lib.tasks_pkg.cache_tracking._state import (
     _cache_lock,
@@ -226,15 +227,10 @@ def log_round_cache_stats(
     if not usage:
         return
 
-    cache_write = (usage.get('cache_write_tokens')
-                   or usage.get('cache_creation_input_tokens')
-                   or 0)
-    cache_read = (usage.get('cache_read_tokens')
-                  or usage.get('cache_read_input_tokens')
-                  or 0)
-    prompt_tokens = (usage.get('prompt_tokens')
-                     or usage.get('input_tokens')
-                     or 0)
+    _nu = normalize_usage(usage)
+    cache_write = _nu['cache_write']
+    cache_read = _nu['cache_read']
+    prompt_tokens = _nu['input']
 
     # Only log if there's meaningful cache activity
     if not cache_write and not cache_read:

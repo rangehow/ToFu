@@ -9,6 +9,7 @@ user-facing label.
 import time
 
 from lib.agent_core.events import EventType, build_event
+from lib.cost import normalize_usage
 from lib.llm_dispatch import dispatch_stream
 from lib.log import get_logger
 
@@ -487,16 +488,13 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
         # prompt_tokens is OpenAI-shape; Anthropic returns input_tokens.
         _prompt_tokens = 0
         if isinstance(usage, dict):
-            _prompt_tokens = int(
-                usage.get('prompt_tokens')
-                or usage.get('input_tokens')
-                or 0
-            )
+            _nu = normalize_usage(usage)
+            _prompt_tokens = _nu['input']
             # Anthropic excludes cache from input_tokens; add it back so
             # _total_prompt_tokens reflects the FULL prompt the provider
             # accepted (which is what we use for context-limit expansion).
-            _cw = int(usage.get('cache_creation_input_tokens') or 0)
-            _cr = int(usage.get('cache_read_input_tokens') or 0)
+            _cw = _nu['cache_write']
+            _cr = _nu['cache_read']
             if (_cw or _cr) and _prompt_tokens <= (_cw + _cr):
                 _total_prompt_tokens = _prompt_tokens + _cw + _cr
             else:

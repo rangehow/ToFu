@@ -53,6 +53,7 @@ import lib as _lib
 from lib.llm._transport import chat_url, headers
 from lib.llm.cache import add_cache_breakpoints
 from lib.llm.diagnostics import RawSSEDumper
+from lib.cost import canonicalize_usage_cache_keys, normalize_usage
 from lib.llm_errors import (
     ModelLimitError,
     PromptTooLongError,
@@ -923,13 +924,18 @@ class SSEAccumulator:
         else:
             msg['content'] = content
 
-        # Log cache info
+        # Log cache info. Stamp the canonical cache keys onto the raw usage
+        # dict FIRST so every downstream raw-dict consumer (api_rounds, the
+        # SSE usage payload, persisted metadata, the frontend popover) sees
+        # cache hits regardless of the provider's spelling (kimi reports hits
+        # as cached_tokens while pinning cache_read_tokens=0). The log line
+        # itself reads via normalize_usage so unstamped paths stay covered.
         cache_info = ''
         if usage:
-            cw = usage.get('cache_write_tokens',
-                           usage.get('cache_creation_input_tokens', 0))
-            cr = usage.get('cache_read_tokens',
-                           usage.get('cache_read_input_tokens', 0))
+            canonicalize_usage_cache_keys(usage)
+            _nu = normalize_usage(usage)
+            cw = _nu['cache_write']
+            cr = _nu['cache_read']
             if cw or cr:
                 cache_info = f' cache_w={cw} cache_r={cr}'
                 if cr > 0:

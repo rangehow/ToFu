@@ -11,6 +11,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from lib.cost import normalize_usage
 from lib.log import get_logger
 from lib.tasks_pkg.wire_fingerprint import (
     diff_canonical, markers_regressed, markers_ttl_flipped,
@@ -567,12 +568,9 @@ def detect_cache_break(
         cache_read = 0
         cache_write = 0
         if usage:
-            cache_read = (usage.get('cache_read_tokens')
-                          or usage.get('cache_read_input_tokens')
-                          or 0)
-            cache_write = (usage.get('cache_write_tokens')
-                           or usage.get('cache_creation_input_tokens')
-                           or 0)
+            _nu = normalize_usage(usage)
+            cache_read = _nu['cache_read']
+            cache_write = _nu['cache_write']
 
         prev_cache_read = prev.last_cache_read_tokens
 

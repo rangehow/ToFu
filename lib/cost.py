@@ -69,12 +69,37 @@ logger = get_logger(__name__)
 #   cache_w : cache_write_tokens         ⇄ cache_creation_input_tokens
 #   cache_r : cache_read_tokens          ⇄ cache_read_input_tokens
 #   think   : reasoning_tokens           ⇄ thinking_tokens
+#
+# Vendor cache-read spellings beyond the two canonical ones (probed live):
+#   cached_tokens                — Moonshot/Kimi top-level (also what the
+#                                  sankuai gateway emits for kimi-k3; it
+#                                  reports the auto-cache hit HERE while
+#                                  pinning cache_read_tokens=0 — probed
+#                                  2026-07-24, 3328/3367 tok = 98.8% hit)
+#   effectiveCachedTokens        — sankuai gateway camelCase variant
+#   prompt_cache_hit_tokens      — DeepSeek direct API
+#   cached_content_token_count   — Gemini (usageMetadata shape)
+# First TRUTHY value wins, so an explicit 0 on a canonical key (the gateway's
+# pinned cache_read_tokens=0) never shadows the real hit on a vendor key.
 _USAGE_KEY_ALIASES = {
     'input': ('prompt_tokens', 'input_tokens'),
     'output': ('completion_tokens', 'output_tokens'),
     'cache_write': ('cache_write_tokens', 'cache_creation_input_tokens'),
-    'cache_read': ('cache_read_tokens', 'cache_read_input_tokens'),
+    'cache_read': ('cache_read_tokens', 'cache_read_input_tokens',
+                   'cached_tokens', 'effectiveCachedTokens',
+                   'prompt_cache_hit_tokens', 'cached_content_token_count'),
     'thinking': ('reasoning_tokens', 'thinking_tokens'),
+}
+
+# NESTED vendor spellings — ``(parent_key, child_key)`` pairs consulted ONLY
+# when every flat alias above resolved to 0 (first truthy wins):
+#   prompt_tokens_details.cached_tokens        — the OpenAI-standard spelling
+#                                                (o-series, Azure, Moonshot
+#                                                direct, OpenRouter)
+#   completion_tokens_details.reasoning_tokens — o-series / kimi thinking
+_USAGE_NESTED_ALIASES = {
+    'cache_read': (('prompt_tokens_details', 'cached_tokens'),),
+    'thinking': (('completion_tokens_details', 'reasoning_tokens'),),
 }
 
 
@@ -107,7 +132,52 @@ def normalize_usage(usage: Optional[dict]) -> dict:
         except (TypeError, ValueError) as e:
             logger.debug('[Cost] non-numeric usage value for %s (->0): %s', canon, e)
             out[canon] = 0
+    # Nested vendor spellings — only when every flat alias resolved to 0.
+    for canon, paths in _USAGE_NESTED_ALIASES.items():
+        if out.get(canon):
+            continue
+        for parent_key, child_key in paths:
+            parent = usage.get(parent_key)
+            if not isinstance(parent, dict):
+                continue
+            v = parent.get(child_key)
+            if not v:
+                continue
+            try:
+                out[canon] = int(v)
+            except (TypeError, ValueError) as e:
+                logger.debug('[Cost] non-numeric nested usage value for %s (->0): %s',
+                             canon, e)
+            break
     return out
+
+
+def canonicalize_usage_cache_keys(usage: Optional[dict]) -> Optional[dict]:
+    """Stamp the canonical ``cache_read_tokens`` / ``cache_write_tokens`` keys
+    onto a raw usage dict, filled from vendor-specific spellings, IN PLACE.
+
+    Called once at each ingestion point (SSE stream finalize + non-stream
+    ``chat()``) so every downstream raw-dict consumer — the SSE ``usage``
+    payload, ``api_rounds``, persisted task metadata, and the frontend cost
+    popover / context gauge (which read ``cache_read_tokens ||
+    cache_read_input_tokens`` verbatim) — sees cache hits regardless of which
+    spelling the provider/gateway used. Compute paths should prefer
+    :func:`normalize_usage` (read-only, no mutation); this helper exists for
+    dicts that are FORWARDED raw to other consumers.
+
+    No-op when the canonical keys already carry a nonzero value (Anthropic /
+    already-canonical OpenAI traffic is untouched). Returns the same dict.
+    """
+    if not isinstance(usage, dict):
+        return usage
+    _u = normalize_usage(usage)
+    if _u['cache_read'] and not (usage.get('cache_read_tokens')
+                                 or usage.get('cache_read_input_tokens')):
+        usage['cache_read_tokens'] = _u['cache_read']
+    if _u['cache_write'] and not (usage.get('cache_write_tokens')
+                                  or usage.get('cache_creation_input_tokens')):
+        usage['cache_write_tokens'] = _u['cache_write']
+    return usage
 
 
 def _legacy_preset_to_model(model_id: str) -> str:
@@ -285,4 +355,4 @@ def compute_cost(
     }
 
 
-__all__ = ['compute_cost', 'normalize_usage']
+__all__ = ['compute_cost', 'normalize_usage', 'canonicalize_usage_cache_keys']

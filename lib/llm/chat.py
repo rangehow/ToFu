@@ -33,6 +33,7 @@ from lib.llm_errors import (
     _RETRYABLE,
     _classify_http_error,
 )
+from lib.cost import canonicalize_usage_cache_keys
 from lib.log import get_logger
 from lib.model_info import (
     _learn_model_limit,
@@ -224,6 +225,8 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
     msg = choices[0].get('message') or {}
     content = msg.get('content', '')
     usage = data.get('usage', {})
+    # Stamp canonical cache keys from vendor spellings (see _sse_core note).
+    canonicalize_usage_cache_keys(usage)
 
     _finish_reason = choices[0].get('finish_reason', '')
     if _finish_reason:

@@ -191,19 +191,15 @@ def _run_report_task(task, messages, images):
         if isinstance(msg, dict) and not msg.get('tool_calls'):
             _terminal['content'] = msg.get('content') or ''
         if isinstance(usage, dict):
-            _usage_total['prompt_tokens'] += int(
-                usage.get('prompt_tokens') or usage.get('input_tokens') or 0)
-            _usage_total['completion_tokens'] += int(
-                usage.get('completion_tokens') or usage.get('output_tokens') or 0)
-            _usage_total['cache_read_tokens'] += int(
-                usage.get('cache_read_tokens')
-                or usage.get('cache_read_input_tokens') or 0)
-            _usage_total['cache_write_tokens'] += int(
-                usage.get('cache_write_tokens')
-                or usage.get('cache_creation_input_tokens') or 0)
-            _usage_total['reasoning_tokens'] += int(
-                usage.get('reasoning_tokens')
-                or usage.get('thinking_tokens') or 0)
+            # Absolute import so the negative-control test's exec'd copy of
+            # this module resolves the real helper regardless of __package__.
+            from lib.cost import normalize_usage as _normalize_usage
+            _nu = _normalize_usage(usage)
+            _usage_total['prompt_tokens'] += _nu['input']
+            _usage_total['completion_tokens'] += _nu['output']
+            _usage_total['cache_read_tokens'] += _nu['cache_read']
+            _usage_total['cache_write_tokens'] += _nu['cache_write']
+            _usage_total['reasoning_tokens'] += _nu['thinking']
             _disp = usage.get('_dispatch') or {}
             if _disp.get('model'):
                 _resolved_model = _disp['model']

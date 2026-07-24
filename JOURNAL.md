@@ -7,6 +7,13 @@
 - **陷阱(共享 HEAD 纪律新条款):** `git rm --cached` 把删除放进索引后,`git commit -- <paths>` 的 partial-commit 语义是「取工作区状态入索引」——盘上文件仍在(被 /debug/ 忽略)→ 报 'no changes added' 退出 1,**不会**把文件重新加回(虚惊但安全)。对**已暂存的忽略路径删除**,正确姿势是先 `git diff --cached --stat` 核索引只有目标变更,再**不带 pathspec** 提交。
 - **教训:** 守卫测试(test_no_tracked_file_is_opensource_excluded)自 2026-07-20 起默默挡着这类漂移,是近两批 session(cache 验收/CSS 清扫)把脚本 `git add` 进索引才翻红;开 debug 脚本请留在盘上别入库。
 
+### 2026-07-24 — 「一次都没触发」的再发阀门关闭:usage 缓存字段 SSOT 静态守卫(commit `dd6c79be`,新套件 5/5 绿含 NEUTER,相邻 cost+floor_retry+stream **119/119**,collect **8397** 0 err)。owner 验收 146a872b 时点名:12 个直读点已清零,但没有任何守卫阻止下一个功能再写一处 `usage.get('cache_read_tokens')` 绕过 normalize_usage —— 同一盲区会静悄悄长回来。
+- **守卫(AST 级,ratchet 制):** 扫描 lib/**/*.py,禁读缓存别名全宇宙(subscript-Load + .get/.pop/.setdefault × canonical 2 + vendor 6 拼写);写入/构造/关键字参数/normalize_usage 路径合法。白名单 3 条带理由(SSOT 自身 / Anthropic 协议翻译器 / paper _meta 读自己的规范化累加器),配卫生测试:条目必须指向真实文件 + 必须仍被需要(ratchet 只缩不胀)。NEUTER:合成违规源码必抓 2 命中。
+- **FloorRetry 两处日志行(read=/write= 打印 None)修直:** OpenAI 形 usage 的 write= 与 Anthropic 形的 read= 都会印 None,已改走 normalize_usage。landing 路径记录:我 staged 的 _stream.py hunk 被 sibling `328ef338`(续25 retry-HUD i18n)飞行中扫入 HEAD,逐字节核验两处俱在、零丢失;sibling 条目已如实披露。
+- **FUSE 大坑(写遍历守卫者必读):** lib/.project_sessions/ 藏每会话 shadow.git(数万对象文件),`os.walk` 下去直接挂死数分钟;守卫 prune `__pycache__` + 全部点目录后 1.5s 跑完。ripgrep 系工具不吃这个亏(尊重 .gitignore),纯 Python 遍历必须自觉 prune。
+- **已知限制(诚实):** 变量键求和(`for k in KEYS: u.get(k)`)常量扫描天然不可见 —— _compaction_usage.py 合法这么干(下游统一 normalize 兜底);守卫防的是复制粘贴式回归,不是蓄意绕过。
+
+
 ### 2026-07-24(续25) — 「Retrying… Endpoint unreachable (kimi-k3, attempt 1)」原始英文 token 泄漏根修:dispatch 重试 HUD 全面 i18n 化 + typed reasonKey(commit 见下,本 commit 3 文件 +259/-12;另 2 文件经 sibling af44e4e9 扫入已在 HEAD;新/扩 15 测全绿含 NEUTER,相邻 32/32,collect 8374 0 err)。
 - **现象与根因(日志实证):** 22:07–22:16 又一波网关劣化窗口,kimi-k3 两个 key **同时** `('Connection aborted.', TimeoutError('The write operation timed out'))` —— 请求体上传 aigc.sankuai.com 途中写超时(高轮次 R22–R72 大 prompt 尤甚),与今日 16:42–17:33 已发报告(docs/GATEWAY_INCIDENT_2026-07-24.md,144 次写超时)同族:故障在网关/代理层,非模型本身。客户端按设计熔断 30s + 排除 slot 对 + failover 自愈,0 终败。**可见层根因** = dispatcher 内部英文 log token 经 `_on_retry` 裸拼进 PHASE `detail` 直渲 HUD。
 - **修复(wire 契约零破坏):** `_on_retry` 三分支(429 / 带 reason / 裸)全部补 `detailKey`+`detailArgs`;已知 reason token 经 `_RETRY_REASON_KEYS`(6 token)映射 typed `reasonKey`;legacy `detail` 逐字节保留给 headless;`detailArgs.model` 走 `_display_model_name`(新 wire 面,aws. 前缀不再入 UI,legacy detail 保持原样)。前端 `_phaseDetailText` 与 `_streamPhaseLabel` **双渲染器**同步解析嵌套 reasonKey(未知 key 回落裸 reason,与未知 detailKey 同裁)。

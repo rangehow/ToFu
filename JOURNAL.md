@@ -1,10 +1,6 @@
 # Project Journal
 
 
-### 2026-07-24(续23)
-# Project Journal
-
-
 ### 2026-07-24(续24) — 「不该想办法测试图像/语音这些模态吗」落地:访问矩阵探测升级为按模态真实探测(epic `pt_210ab99ffb7b48cb`,commit `be63588f`,4 文件 +491/-50,套件 16 面全绿含双 NEUTER,collect **8383** 0 err)。续21 把非聊天模型一律 skipped 是诚实但无用——本 commit 让矩阵真正测每种模态。(编号说明:落笔时「续22」已被 sibling 的美团模型市场条目占用,故用续24。)
 - **按模态走真实面(镜像 app 自身调用路径):** image_gen → `openai_image` 槽走 `/images/generations`,其余走 `/chat/completions` + `modalities:['TEXT','IMAGE']`(gemini 式,镜像 lib/image_gen/_slots.py;网关上旧探测缺的就是 modalities 字段,带上后路由到图像绑定);transcription → multipart `/audio/transcriptions` 携**程序生成的 0.3s 静音 WAV**(~10KB,RIFF 头+全零 PCM,真实语音永不出机);embedding → `/embeddings` 一个单词。
 - **成本守卫(诚实计费):** 图像每次 attempt 真实生成一张计费图 → **强制单 attempt**(不管矩阵探测次数选几)+ 超时下限 60s(生成常 10-40s);embedding/transcription 便宜,保留多 attempt 滤假 429。matrixProbeHint 文案如实披露四种模态各发什么 + 图像按 1 次生成计费。
@@ -14,8 +10,7 @@
 - **git 事故:** 提交前发现 i18n.js 被 sibling 覆盖(queue.* 新 hunk 进来、我未提交的 hint 编辑被冲掉)—— shared-worktree 竞态又一实例;重放我的 hunk → 再走「备份混合→checkout→重放→commit→还原」流程,sibling queue hunk 零损还原。
 - **生效边界(诚实):** 后端随服务重启生效;前端 hint/access_matrix 需重启重建 bundle + 硬刷新。图像探测会**真实计费**(1 张/格),用户点「探测推荐」前应知悉——hint 文案已写明。
 
-### 2026-07-24(续23)
- — RENDER_CONTRACT Phase 3.5 §5 step 5 落地 + **git 事故第二弹(7 个 sibling 的 WIP 被误扫入我的 commit)**。step 5 本体(commit `af44e4e9`,26 文件 +546/-122):43 个裸 `renderChat(` 全清零,fold 守卫升级全局零;§7.4 RED 锚点 + phase 归宿裁决入库。
+### 2026-07-24(续23) — RENDER_CONTRACT Phase 3.5 §5 step 5 落地 + **git 事故第二弹(7 个 sibling 的 WIP 被误扫入我的 commit)**。step 5 本体(commit `af44e4e9`,26 文件 +546/-122):43 个裸 `renderChat(` 全清零,fold 守卫升级全局零;§7.4 RED 锚点 + phase 归宿裁决入库。
 - **step 5 本体(owner 三条件全落地):**
   1. **43 个裸 `renderChat(` ×22 文件全部迁到 `ConvView.replaceAll`**(最后一个漏网是 image-gen.js catch 块的错误渲染);message_actions.js 的 translate-toggle `outerHTML` 顺带收编 `apply`。
   2. **fold 守卫升级全局零**(owner 条件 1):全 `static/js/**` 零裸调用(剥注释+剥字符串后),豁免注册表为**空**(turn_nav/finish_info 也迁了,无可豁免);仅 conv_view.js + chat_render.js 两个接缝文件逐点具名豁免,禁止 pattern 豁免。
@@ -25,8 +20,6 @@
 - **修复尝试中的二次事故(同样如实):** 我试图 reset --soft HEAD~1 重做手术,没注意到 sibling 已在我的 commit 之上落了 `1e8504ff`(模型注册)→ 我的 reset 实际**把 sibling 的 commit 赶出了主线**。发现后立即 `git reset --soft 1e8504ff` 恢复主线完整。最终裁决:**不再做历史手术**(本环境 sibling 高频提交,手术即竞态),`af44e4e9` 保留,此处登记完整哈希映射。
 - **哈希映射(owner 对账):** step-5 本体=`af44e4e9`(含上述 7 个 sibling WIP,消息只提 step 5);sibling 模型注册=`1e8504ff`(在其上,主线完整);msgid 配套测试=`tests/test_assistant_msgid_unification.py` **untracked**,待 msgid sibling 验收其 WIP 已完整入库后随测试 commit。
 - **教训(memory 已更新):** shared-HEAD 提交前的幅度审计必须**全量、不截断、逐文件对账**(numstat vs 我的编辑清单),`| tail -N` 类截断等于没审计;已发生的扫入只做登记,不再手术。
-
-# Project Journal
 
 ### 2026-07-24(续22) — 美团模型市场 6 新模型端到端注册:GPT-5.6 Sol/Terra/Luna + Gemini-3.6-flash / Gemini-3.5-flash-lite + Claude Fable 5(commit 见下,5 文件 +新守卫套件 11 测全绿含 NEUTER×3,相邻 131/131,collect 8374 0 err)。
 - **范围裁定(按先例):** 卡片全部来自美团模型市场(外采、国内/国外非美团服务器部署、默认 RPM / App ID / 申请 SOP 字段),价格是人民币网关价 → 按 gemini-3.5-flash 先例**只进** `static/provider_templates/meituan.json`(export 豁免的内部模板)+ `DEFAULT_SLOT_CONFIGS` + `MODEL_PRICING` + fable-5 别名组;**不动**公开品牌模板(provider_templates.js / bootstrap.py)——公开 API 无法验证这些 SKU,且会把内部价污染进开源分发。

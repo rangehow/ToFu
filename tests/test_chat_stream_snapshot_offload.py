@@ -183,18 +183,32 @@ def test_source_all_tool_rounds_parses_offloaded():
     ``json.loads`` of a multi-MB blob holds the GIL for the whole parse and
     stalls the loop regardless of which thread runs it (same class as the
     encode). This asserts NO plain ``json.loads(row[...]['tool_rounds'])``
-    survives anywhere in the file, and that ``chat_poll`` specifically calls
-    ``_loads_yielding``."""
-    src = open(_CHAT_PY, encoding='utf-8').read()
-    tree = ast.parse(src)
-    # Whole-file: neither the row nor row_local plain-parse form may survive.
-    assert "json.loads(row['tool_rounds'])" not in src, (
-        "a plain json.loads(row['tool_rounds']) survives somewhere — every "
-        "multi-MB tool_rounds parse must use _loads_yielding")
-    assert "json.loads(row_local['tool_rounds'])" not in src
-    # chat_poll specifically routes its parse through the helper.
-    poll_fn = _find_func(tree, 'chat_poll')
-    assert poll_fn is not None, 'chat_poll not found in routes/chat.py'
+    survives in either file, and that ``chat_poll`` specifically calls
+    ``_loads_yielding``.
+
+    pt_04686ac6 slice 10: ``chat_poll`` moved to
+    ``routes/chat_poll_abort.py`` — the guard now checks THAT file for the
+    handler, and both files for the forbidden plain-parse forms."""
+    _CHAT_POLL_ABORT_PY = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'routes', 'chat_poll_abort.py')
+    src_chat = open(_CHAT_PY, encoding='utf-8').read()
+    src_poll = open(_CHAT_POLL_ABORT_PY, encoding='utf-8').read()
+    tree_poll = ast.parse(src_poll)
+    # Both files: neither the row nor row_local plain-parse form may survive.
+    for label, src in (('routes/chat.py', src_chat),
+                       ('routes/chat_poll_abort.py', src_poll)):
+        assert "json.loads(row['tool_rounds'])" not in src, (
+            f"a plain json.loads(row['tool_rounds']) survives in {label} — "
+            f"every multi-MB tool_rounds parse must use _loads_yielding")
+        assert "json.loads(row_local['tool_rounds'])" not in src, (
+            f"a plain json.loads(row_local['tool_rounds']) survives in {label}")
+    # chat_poll specifically routes its parse through the helper (in its
+    # new home, routes/chat_poll_abort.py).
+    poll_fn = _find_func(tree_poll, 'chat_poll')
+    assert poll_fn is not None, (
+        'chat_poll not found in routes/chat_poll_abort.py — did slice 10 '
+        'move it?')
     assert '_loads_yielding' in _called_names(poll_fn), (
         'chat_poll tool_rounds parse must call _loads_yielding')
 

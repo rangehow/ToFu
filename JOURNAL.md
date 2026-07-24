@@ -1,7 +1,22 @@
 # Project Journal
 
 
-### 2026-07-24(续13) — RENDER_CONTRACT Phase 3.5 设计 + 收编清单 + 测试骨架落地:DOM-apply 层单接缝化(commit `d0ec8dca`,2 文件 +579/-0,2 个 RED 锚点按设计失败 + 3 个 GREEN 守卫含 NEUTER + collect 8243 0 err)。owner 明示:"先只交付设计+清单+测试骨架这一个 commit,别碰 CAS-baton / autopilot / conv_state_ssot"。
+### 2026-07-24(续13)
+### 2026-07-24(续14) — 「mrxij7q34xm070 为何戛然而止」根修:FloorRetry 首发残留三缝隙根修(2 commit:`4f15f11d` 残留根修 + `34471811` transport-retry 每轮截断,新测 14/14 绿含三重 NEUTER 矩阵,collect 8249 0 err) + 线上数据修复(备份 /tmp/mrxij7q34xm070_messages_backup.json)。认领并闭环 board epic `pt_6e12b1ffd95a453e`。
+- **现象(用户截图):** 气泡正文在「**一句话总结**:别去搞跨公」半句处截断,下方却挂着完整 finish 标签(✓ ¥7.78 / 850.2k→13.1k [7轮] / 5e6e7502)——看起来像生成突然中断,**实际完整跑完了**:R7 真实终稿 3751+442 字(finish=stop,结尾「…要我动手吗?」)完整躺在 task_results。
+- **病根链(日志+DB 钉死,不靠猜):** R3 首发尝试流了 133s 产出 ~4344+491 字草稿,5s 流式 checkpoint 把它镜像进会话行;usage 判 byte-stable cache-floor 塌陷 → FloorRetry 丢弃首发、采纳重发(以 on_content=None 流)→ task['content'] 收敛成 208 字旁白,但**会话行仍钉着 4344 字废弃稿**。R4–R7(含 3751 终稿)都没超过 4344 → ①checkpoint 的 grew-only 守卫永不写(残留钉死);②终态内容守卫读 existing=4344+491 > new=3751+442 当「前端真赢了」拒绝覆盖;③`_committedMsg` 从残留行盖章 → 客户端 committedMessage 原样投影废弃稿 + stop 标签。三处各自「正确」的守卫叠加出一个数据假象。
+- **Commit 1(`4f15f11d`,3 文件 +582):**
+  - `_stream.py`:FloorRetry 采纳收敛时把被丢弃首发(content,thinking)记录到 `task['_floor_retry_residue']`(上限 8)——守卫豁免的唯一可靠判据:真实前端写入永远不可能字节等于服务端内部丢弃的尝试。
+  - `_sync.py::_sync_partial_to_conversation`:checkpoint 镜像从「只增不写缩」改为**按差异收敛**(空值仍保护不清除);缩小一律绕过 delta 合并直接写。
+  - `_sync.py::_sync_result_to_conversation` + 终态 CAS 重读守卫:行字节匹配残留 → 豁免「前端真赢了」判定,用权威终稿覆盖(正常路径 + CAS 嫁接两条路都通)。
+  - 新测 `tests/test_floor_retry_residue.py`(8 测):采纳记录/空丢弃不记录/checkpoint 收缩收敛/合并保留/终态覆盖+committedMsg 诚实/CAS 重试嫁接/NEUTER 控制(真实前端赢仍受保护)/E2E 复刻(R3 长草稿地板塌陷→采纳短旁白→R4-R6 短轮→R7 终稿→done)。
+  - **NEUTER 矩阵:** 全还原(B+C)精准翻红 4 面(shrink/terminal/CAS/E2E);单还原守卫翻 2 面;恢复全绿。E2E 起初假绿——行里思维链未钉住草稿(双轴守卫条件不齐),补显式 checkpoint 后忠实复刻翻红。
+- **Commit 2(`34471811`,4 文件 +288):** transport-retry 半截残留类(epic 前半):`stream_chat` 新增 `on_attempt_restart(reason=)`(还有重试要跑才触发,成功/最终失败不触发);`dispatch_stream` 透传 + 自身硬丢弃点(429 轮换/配额耗尽/连续429禁用)触发,纯冷却等待不触发;`stream_llm_response` 入口捕获每轮 base,触发即 content_lock 下截断回 base。**刻意不接** FloorRetry 重发调用(重发期间首发文本仍是兜底内容,截断会丢数据);**async 变体**(adispatch_stream)与**客户端内重试的直播气泡重复**(delta_reset 语义不贴合,未发新事件)留作后续。
+  - 新测 `tests/test_attempt_restart_truncation.py`(6 测):重试触发一次/成功不触发/最终失败不触发/截断到 base/跨轮 base 保留/快乐路径追加不受影响。NEUTER:摘透传翻 2 面,stream.py 触发器失效翻 2 面。
+- **线上数据修复:** 用 task_results 权威值重写该消息 content 4344→3751 / thinking 491→442 / seg23 3427→3751(结尾「要我动手吗?」),写前备份至 /tmp。**注意:** 直连 SQL 绕过进程内 meta_cache,页面生效需 server 重启或该会话下一次写入。
+- **回归环:** floor_retry_residue 8 + attempt_restart 6 + cache_floor_retry + checkpoint_delta_coalescing + stream_first_checkpoint + parse_thinking + abort_toolonly + interrupted_turn + cross_device + assistant_msgid + partial_checkpoint_no_search + active_task_id 全绿;`test_assistant_msgid_unification`(2)+ `test_interrupted_turn_metadata`(2)+ `test_abort_fragment_finish_reason`(6)在 HEAD(stash 我的改动后)同样失败——sibling WIP 基线,非我回归。collect 8243→8249(+6 新测),0 error。
+
+ — RENDER_CONTRACT Phase 3.5 设计 + 收编清单 + 测试骨架落地:DOM-apply 层单接缝化(commit `d0ec8dca`,2 文件 +579/-0,2 个 RED 锚点按设计失败 + 3 个 GREEN 守卫含 NEUTER + collect 8243 0 err)。owner 明示:"先只交付设计+清单+测试骨架这一个 commit,别碰 CAS-baton / autopilot / conv_state_ssot"。
 - **为什么叫 3.5 而不是 3:** Phase 3(reducer)统一的是**消息文档投影**(live/warm/cold/poll → `{content,thinking,toolRounds}`,F1-F4 golden 已绿),但**没统一 DOM-apply 层** —— `conv.messages` 是 SSOT,可 ~149 处裸 DOM 写仍绕过 ConvView 直达 `#chatInner`。ConvView 只是「流式气泡生命周期」的接缝(8 处合法写),不是唯一接缝。Phase 3.5 就是把 RENDER_CONTRACT §1 Invariant 1(`DOM = render(messages, rev)`)从消息层推广到 DOM 层。
 - **三类归并法(唯一分类学,逐站点落到 file:line):**
   - **CONTENT-DERIVED(~85 处)** —— DOM 读消息字段(content/thinking/error/images/_igResult/translatedContent/_translatePartial/modifiedFiles/cost/_ctx)→ **必须走 `ConvView.apply`**(§5 step 2 新增的单一公共入口,包裹 renderMessage + _evictByMsgId + 指纹更新)。最大簇是 `translation_render.js` N=18 —— 「翻译落地但 UI 不刷新」bug 家族的老巢,因为它的 `_renderStreamingTranslatePreview`/`_applyPartialByRoundToSettled` 从 `msg._translate*` 直接写 DOM、不走 renderMessage,与冷重载投影必然分叉。

@@ -384,8 +384,20 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
         with task['content_lock']:
             _discarded_content = task['content']
             _discarded_thinking = task['thinking']
-            task['content'] = msg.get('content') or ''
-            task['thinking'] = msg.get('reasoning_content') or ''
+            # ★ Base-preserve (owner audit on pt_6e12b1f): task['content']/
+            #   ['thinking'] ACCUMULATE across ALL rounds of this turn — the
+            #   main orchestrator loop has no per-round content reset (only
+            #   the one-time contentPrefix seed at _run.py:501). The adopted
+            #   msg holds THIS round's text only, so a wholesale replace
+            #   would silently drop every prior round's prose from the
+            #   persisted answer (the R1+R2 preamble the user already read).
+            #   Keep the round base captured at stream entry and replace
+            #   only this round's tail. The residue recording below stays
+            #   the FULL pre-convergence snapshot — the checkpointed conv
+            #   row mirrors that full text and the terminal-guard exemption
+            #   byte-matches on it.
+            task['content'] = _round_base_content + (msg.get('content') or '')
+            task['thinking'] = _round_base_thinking + (msg.get('reasoning_content') or '')
         # ★ Record the DISCARDED first-attempt text verbatim (bounded). The
         #   ~5s streaming checkpoint mirrors task['content']/['thinking'] into
         #   conversations.messages DURING the attempt — so after this

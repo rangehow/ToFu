@@ -1,6 +1,21 @@
 # Project Journal
 
-### 2026-07-24(续23) — RENDER_CONTRACT Phase 3.5 §5 step 5 落地 + **git 事故第二弹(7 个 sibling 的 WIP 被误扫入我的 commit)**。step 5 本体(commit `af44e4e9`,26 文件 +546/-122):43 个裸 `renderChat(` 全清零,fold 守卫升级全局零;§7.4 RED 锚点 + phase 归宿裁决入库。
+
+### 2026-07-24(续23)
+# Project Journal
+
+
+### 2026-07-24(续24) — 「不该想办法测试图像/语音这些模态吗」落地:访问矩阵探测升级为按模态真实探测(epic `pt_210ab99ffb7b48cb`,commit `be63588f`,4 文件 +491/-50,套件 16 面全绿含双 NEUTER,collect **8383** 0 err)。续21 把非聊天模型一律 skipped 是诚实但无用——本 commit 让矩阵真正测每种模态。(编号说明:落笔时「续22」已被 sibling 的美团模型市场条目占用,故用续24。)
+- **按模态走真实面(镜像 app 自身调用路径):** image_gen → `openai_image` 槽走 `/images/generations`,其余走 `/chat/completions` + `modalities:['TEXT','IMAGE']`(gemini 式,镜像 lib/image_gen/_slots.py;网关上旧探测缺的就是 modalities 字段,带上后路由到图像绑定);transcription → multipart `/audio/transcriptions` 携**程序生成的 0.3s 静音 WAV**(~10KB,RIFF 头+全零 PCM,真实语音永不出机);embedding → `/embeddings` 一个单词。
+- **成本守卫(诚实计费):** 图像每次 attempt 真实生成一张计费图 → **强制单 attempt**(不管矩阵探测次数选几)+ 超时下限 60s(生成常 10-40s);embedding/transcription 便宜,保留多 attempt 滤假 429。matrixProbeHint 文案如实披露四种模态各发什么 + 图像按 1 次生成计费。
+- **形状校验:** 200 但响应形状不对(无 embedding 向量/无图像载荷/空 content)判 `error` 而非 ok;状态→判定阶梯与 chat 探测逐字节一致(原样提取 `_classify_status`,test_probe_cells 19/19 不动)。图像面 404 → `not_found` → **有意义的** recommend_disable(对照旧 chat 探测 500 的伪推荐)。
+- **结构:** `probe_cell_multi` 加 `probe_fn` 缝(签名同 probe_one_cell),chat/模态共用多 attempt 策略;`nonchat_probe_fn(caps)` 派发 image_gen > transcription > embedding;`skipped` 判定收缩为「taxonomy 未来新增但探测面未实现」的防御分支(现行 caps 下不可达,测试用模拟 taxonomy 扩展钉住)。
+- **测试 16 面:** 派发路由×5 / 形状×6(URL/body/modalities/WAV 头/404)/ 成本守卫 / 未知 caps 零网络 / chat·legacy 不受影响 / 路由 caps 流转 / 前端 harness 陈旧快照自愈+apply 守卫 / NEUTER×2(删非聊天守卫→图像模型被 chat 探测打标=原 bug 回归;放松单 attempt 守卫→3 张计费图扇出)。
+- **git 事故:** 提交前发现 i18n.js 被 sibling 覆盖(queue.* 新 hunk 进来、我未提交的 hint 编辑被冲掉)—— shared-worktree 竞态又一实例;重放我的 hunk → 再走「备份混合→checkout→重放→commit→还原」流程,sibling queue hunk 零损还原。
+- **生效边界(诚实):** 后端随服务重启生效;前端 hint/access_matrix 需重启重建 bundle + 硬刷新。图像探测会**真实计费**(1 张/格),用户点「探测推荐」前应知悉——hint 文案已写明。
+
+### 2026-07-24(续23)
+ — RENDER_CONTRACT Phase 3.5 §5 step 5 落地 + **git 事故第二弹(7 个 sibling 的 WIP 被误扫入我的 commit)**。step 5 本体(commit `af44e4e9`,26 文件 +546/-122):43 个裸 `renderChat(` 全清零,fold 守卫升级全局零;§7.4 RED 锚点 + phase 归宿裁决入库。
 - **step 5 本体(owner 三条件全落地):**
   1. **43 个裸 `renderChat(` ×22 文件全部迁到 `ConvView.replaceAll`**(最后一个漏网是 image-gen.js catch 块的错误渲染);message_actions.js 的 translate-toggle `outerHTML` 顺带收编 `apply`。
   2. **fold 守卫升级全局零**(owner 条件 1):全 `static/js/**` 零裸调用(剥注释+剥字符串后),豁免注册表为**空**(turn_nav/finish_info 也迁了,无可豁免);仅 conv_view.js + chat_render.js 两个接缝文件逐点具名豁免,禁止 pattern 豁免。
@@ -13,20 +28,15 @@
 
 # Project Journal
 
-### 2026-07-24 — pt_229606ca Skill 通道与 memory 完全解耦
-# Project Journal
+### 2026-07-24(续22) — 美团模型市场 6 新模型端到端注册:GPT-5.6 Sol/Terra/Luna + Gemini-3.6-flash / Gemini-3.5-flash-lite + Claude Fable 5(commit 见下,5 文件 +新守卫套件 11 测全绿含 NEUTER×3,相邻 131/131,collect 8374 0 err)。
+- **范围裁定(按先例):** 卡片全部来自美团模型市场(外采、国内/国外非美团服务器部署、默认 RPM / App ID / 申请 SOP 字段),价格是人民币网关价 → 按 gemini-3.5-flash 先例**只进** `static/provider_templates/meituan.json`(export 豁免的内部模板)+ `DEFAULT_SLOT_CONFIGS` + `MODEL_PRICING` + fable-5 别名组;**不动**公开品牌模板(provider_templates.js / bootstrap.py)——公开 API 无法验证这些 SKU,且会把内部价污染进开源分发。
+- **命名:** 三张 GPT 卡片未给「模型调用名称」,按市场惯例小写化为 `gpt-5.6-sol/-terra/-luna`;`gemini-3.5-flash-lite` / `gemini-3.6-flash` / `claude-fable-5` 为卡片明示调用名。
+- **定价与 cheap 标签:** 人民币按 7.24 折算 USD 入 `MODEL_PRICING`(¥18/¥108→$2.49/$14.92 等),缓存乘数随族(Claude 1.25/0.10、Gemini 1.00/0.25、GPT 1.00/0.10);`cheap` 不手写、由 `get_pricing_tiers` 机械推导 —— Terra($14.92<$15)恰好落入 cheap 档而 gpt-5.6($15.00)不在,属换算边界效应,已用测试钉死分类。
+- **自动命中的面(零改动):** 三个 GPT 变体被 `is_gpt_56` 命中 → ultra 思考档自动可用、build_body 走 reasoning_effort;`claude-fable-5` 双 substring('claude'+'fable')命中 `is_claude` → wire 自动走 Claude thinking adaptive、discovery 自动 vision+thinking+thinking_type;并入 fable-5 别名组后 prefer_model 与 `fable-5`/`aws.fable-5`/Bedrock ID 互通。
+- **守卫(11 测):** 新 `tests/test_meituan_marketplace_models.py` —— 模板/slots/定价三表 caps 一致 + USD 换算精确值 + 族缓存乘数 + cheap 分类 + 别名组 + wire 形状(ultra 下发 / adaptive thinking / reasoning_effort 形状)+ discovery 注册;NEUTER×3(审计谓词对合成坏载荷翻红 / cheap 阈值严格边界 $15.00 不算 cheap / ultra 档对 gpt-5.4 降级证判别力)。
+- **刻意不动:** `_VISION_PAT` 的 `gemini(?!.*lite)` 排除保持原样 —— 3.5-flash-lite 的 vision 由模板显式声明(卡片明示「图像理解」),改全局发现正则会波及 gemini-2.5-flash-lite 等存量模型,超出本批范围;discovery 不给 GPT/Gemini 名字打 thinking 是现状,模板/slot 声明为准。RPM:两张 Gemini 卡明示默认 RPM 20 已采用;claude-fable-5 卡片默认 RPM 0(=无默认配额需申请)按 Claude 块惯例取 30 作客户端限速提示。
+- **生效边界(诚实):** meituan.json 由 providers templates 端点实时读出,**无需重建 bundle**;slots/定价为 Python 表,**重启服务端生效**;已存在的 provider 实例是模板快照,需重新添加或手动补模型。
 
-# Project Journal
-
-### 2026-07-24 — pt_229606ca Skill 通道与 memory 完全解耦(4 commit:`146f35c1` P1 存储物理拆分 + `a600dd42` P2 常驻索引+activate_skill + `0badd5ba` P3 memory 语料净化+CRUD 隔离 + `757c3626` P4 API/前端分裂 + P5 清扫,新测 43 面含 NEUTER×7,collect **8345** 0 err)。
-- **痛点(用户原话「挂到 memory 上很怪」):** skill 包(用户安装的能力教材)和 memory(模型自写的经验日记)共享存储/检索/CRUD 三套通道——教材和 200+ 条 bug-pattern memory 抢 BM25 注入名额;`references/`、`scripts/` 拷进磁盘但模型不知道清单与路径(渐进式披露只接一半);模型的 `delete_memory` 能连目录删掉用户装的包;触发靠关键词运气。
-- **P1 物理拆分(`146f35c1`):** 扁平 memory 移出 `.tofu/skills/*.md` → `.tofu/memories/`;skill 包保有 `.tofu/skills/<id>/` + 新增全局 `<data>/skills/global/<id>/`。三个幂等惰性迁移(项目扁平移动/遗留 global 包改投 skills 仓/服务端仓包移动)由 `run_storage_migrations` 统一编排(per-root + 进程闩)。`_list_skill_packages_in_dir` 抽出共享;`list_all_memories` 扫描拆分后的并集保持过渡期逐字节兼容(Settings UI 不破)。新 `lib/skills/registry`(list_skills/get_skill)复用 storage 文件助手。9 测含迁移幂等/碰撞双存/安装器重定向/并集钉死/扫描集钉死;NEUTER 摘扫描根恰 6 红。
-- **P2 skills 通道(`a600dd42`):** `build_skills_index` 字节稳定索引(id 排序/单行描述/仅 enabled+eligible/隐藏计数露尾/空则整块缺席)作为**独立 cache block** 由 `_inject.py` 拼接,门控 has_real_tools ONLY(**不随 memory 开关**);`activate_skill` 返回 SKILL.md 全文+包内文件清单(绝对包路径+逐文件 kind/size),unknown 列可用项/disabled/ineligible 诚实报因且不漏禁用正文;仅 1 个工具(索引常驻故无 list_skills);ToolSpec 注册(capability 相,idempotent)+ executor handler(多根 projectPaths 透传)+ display 三件套。14 测;NEUTER×3(摘清单/摘拼接/摘过滤)各翻红对应钉死面。
-- **P3 memory 净化(`0badd5ba`):** `get_eligible_memories(include_packages=False)` 一处签名变更同时净化三条发现通道(prefetch 语料/search_memories/注入计数);`_guard_not_package` 使 update/delete/merge 拒包并报可行动错误;`toggle_memory` 改写自包含(Settings 启用开关必须继续对包工作);memory 工具 schema + 注入文本明示 skills 是另一通道。9 测;NEUTER×2(摘过滤→3 语料红;守卫失效→3 守卫红)。
-- **P4 API/前端分裂(`757c3626`):** installer/catalog git-mv 进 `lib/skills/`(rename 98%/100% 保历史);`routes/api_v1/skills.py` 全新表面(list/install/catalog/catalog-install/files/toggle/uninstall);memory.py 净化(list 只回 memories 无 skills 别名;update/delete 把守卫 ValueError 露成 400);api.js 拆 `Api.skills.*` 域;skills.js/skills_install.js 重指;memory.js 只读 memories 键+摘除死包徽标分支;memory_skill_install.js 装包后**不再**把包插进 memory 列表(技能不是日记)。11 测(双面列表纯度/生命周期/400 露出/JSON-path 安装 E2E/lib 层 uninstall 边界)。
-- **协作事故与修复:** git-mv 后 `lib/memory/__init__` 的 installer facade 重导出未随删 → worktree 期间 `import routes.config` 断 25 collect;sibling mryzj0wo peer WARN 送达时修复已在途,落门面删除后全量 collect 8345/0 err,peer 已回复确认。教训:**git mv 与门面更新必须同一批暂存**,共享 HEAD 下分相提交也要先破后立的窗口压到零。
-- **P5 清扫:** 19 处 `.tofu/skills/<x>.md` 文档指针批量改指 `.tofu/memories/`(js_bundler×4/token_counter/db×2/system_prompt_cc/system_context 包/user_profile/_truncate/memory injection/mcp health_probe×2/2 测试 docstring/CLAUDE.md/docs×3 文件);CLAUDE.md 结构更新(lib tree 新增 lib/skills 全条目/handlers+api_v1 名单/§3.6 artifacts/功能表两行改述新架构);`_inject.py:411` 一处注释指针因属 sibling WIP 文件按零触碰纪律留待其落地时随行(journal 记录)。
-- **shared-HEAD 纪律:** 4 个精确 pathspec commit + 每 commit 前逐文件 `git diff --stat` 归属审计;三个混杂 sibling-WIP 文件(_inject.py/api.js/CLAUDE.md/JOURNAL.md)全部 md5 备份→checkout→仅重放我的 hunk→commit→原样还原+md5 校验。相邻红(test_frontend_api_isolation 的 main_send_pipeline variable-URL)实证为 HEAD 预存在且非我文件,已记录未认领。
 
 ### 2026-07-24 — 「kimi-k3 不支持 prompt cache 吗?怎么一次都没触发」根修:多来源 usage 拼写统一进 normalize_usage 单一真相源 + 入口侧盖章(commit `146a872b`,15 文件 +311/-89,新测 14 面含 NEUTER,test_cost 33/33,相邻套件失败集合 stash 前后逐字节相同,collect **8345** 0 err)。
 - **实测钉死(非猜测):** 真网关双探针(非流式+流式各发两遍相同 3367-token 请求,间隔 3s)—— kimi-k3 **一直在自动缓存**,第二遍 `cached_tokens: 3328`(98.8% 命中)。病根是网关把命中报成 `cached_tokens`/`prompt_tokens_details.cached_tokens`/`effectiveCachedTokens` 同时把 `cache_read_tokens` **显式置 0**,而 Tofu 全栈只认 `cache_read(_input)_tokens` 两种拼写 → 命中对账本全盲,成本按全价 input 算(定价表里 kimi `cacheReadMul: 0.10` 从未生效)。
@@ -60,6 +70,13 @@
 - **为何套件现在才入库(防呆点):** 套件前端层依赖这段 dedup,此前任何时刻入库都会让干净 HEAD 红 2 面(pt_39b79cc4 十一次空转的成因)。本 commit 把 dedup + 套件**原子同批**落地,干净 HEAD 下 6/6 绿,反模式闭环。套件自带 NEUTER 面(把守卫改 `if(false && …)` 证红),落地即带载荷证明。
 - **语义复核(不只看测试绿):** taskId 相等 ⇒ 同一次生成(regenerate/edit-resend 都是新 task 新 id,无误杀面);role 守卫保证 assistant 的 taskId 不会误删 user 回合;`Api.conversations.listMeta` 在 HEAD 已存在(api.js:506),故遗留 WIP 的 listMeta 特征自身连贯,非半成品。
 - **生效边界(诚实):** 前端 dedup 经 bundler(core/conversations.js 在 _BUNDLE_FILES)——**需重启服务端重建 bundle + 浏览器硬刷新**后生效;后端半(0318d10d)已随服务端重启生效。其余 4 个侧栏特征(文件夹 shell 合并 / 总数 C4 / listMeta / queue-mirror)仍是 worktree 停放状态,等属主认领——不在本 epic 范围。
+### 2026-07-24(续19) — pt_turn_settlement P5 parity **验证交付**:字节级证明「prefill-over-checkpoint」对 tools 回合无损且正确(brain 自主派发,`c4c87dfa` 新测 8 断言全绿含 NEUTER + collect 8313 0 err),随后 `[human-gated]` block 等 owner 拍板翻转 precedence。
+- **验证的 gated 问题:** 「prefill 终态尾 + inject_tool_history 重放已完成工具轮,是否字节正确?」—— **答案:是,字节正确**,8 断言钉死:(A) prefill 尾**只**是终态 deliverable,绝不含 pre-tool 旁白(无双重计数);(B) inject_tool_history 的 wire splice 含旁白+工具调用/结果但**不含**尾;(C) 尾**恰好等于** checkpoint 路径丢弃的 `discarded_content_text`(prefill 精确找回 checkpoint 丢的);(D) wire 顺序合法(splice 独立于 prefill,`insert_idx=len(messages)`);(E) 组合**无损**(尾在 wire 上)vs 现 checkpoint **有损**(尾缺席);(F) 无工具回合不受影响。**NEUTER 证红**:让 resume_prefill 拼接全部文本(双重计数 bug)→ 恰 A/C/E-no-double-count 三面翻红,5 结构面保持绿。
+- **为何仍 gated(不自主翻转):** 翻转是真**权衡**非显然更优 —— prefill = 无损-ish 续写(但能力矩阵注明对非 Claude 仅 "best-effort tolerated",模型可能不理会/产生接缝);checkpoint = 干净的通用重生成(可能与截断旁白不同/更好,处处可用)。owner 是 CAS/resume 编排域 lead,此类行为变更其历来亲自拍板(pt_8dc03017 block 8×先例),故不自主翻。
+- **block 理由(owner 二选一):** (A) FLIP —— 可 prefill 模型 tools 回合优先 prefill;实现是 2 处小 precedence 改动(verdict `_compute_resume` + routes/chat.py continue 分支),parity 套件已兜底,下次派发即可落;可选 min-tail-length 门(截断尾太短仍重生成)。(B) KEEP checkpoint —— 关闭为「已验证未采纳」。激活信号:owner 回 A/B,或任何动 verdict precedence / continue 分支的 commit。
+
+
+
 
 ### 2026-07-24(续18) — pt_turn_settlement epic **收口为 DONE**(brain 自主派发,自验 60 verdict-suite 测全绿 + collect 8288 0 err 后 `project_board_complete`)+ **P2(persist+propagate)显式否决、非欠账** + P5 拆独立 gated epic `pt_c11c3a9272274848`(doc `2c606637`)。本 epic 三交付(中断气泡/继续按钮/无损续接)已落地:C1 JS 移植 `49795315`、C2 按钮读 resume.mode `814abd3c`、C3 气泡读裁决 `4d2d14d3` 标记、A+B live 链证 + content 兜底 `38d48669`、P1+P1b `4e75c586`。
 - **收口判决(非草率):** epic 标题承诺「3 独立 finishReason 推断 → 1 裁决」—— 气泡读裁决、按钮按 resume.mode 诚实标注、无损续接服务端真走 prefill —— **全部落地且端到端有证**(60 verdict-suite 测全绿),故 DONE 是诚实的。

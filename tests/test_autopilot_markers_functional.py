@@ -292,8 +292,10 @@ def test_disarm_returns_no_run_concluded_when_no_run(put_task, monkeypatch):
     from lib.message_queue import clear_autopilot_marker
     clear_autopilot_marker('conv-no-run')
     # Stub conclude_run → None (as though _resolve_recent_run_id returned '').
-    import lib.tasks_pkg.autopilot as ap
-    monkeypatch.setattr(ap, 'conclude_run', lambda cid, reason='stopped': None)
+    # Post-slice-3: patch the origin binding on autopilot_markers, not
+    # the facade — disarm reads the module-scope name.
+    monkeypatch.setattr(ap_markers, 'conclude_run',
+                        lambda cid, reason='stopped': None)
     result = ap_markers.disarm_autopilot('conv-no-run')
     assert 'runConcluded' not in result
     assert result['disarmed'] is False  # no marker, no tasks flipped
@@ -311,8 +313,11 @@ def test_disarm_returns_run_concluded_dict_when_run_exists(
     clear_autopilot_marker('conv-with-run')
     fake_record = {'runId': 'ar-x', 'status': 'concluded',
                    'reason': 'stopped', 'ts': 123456}
-    import lib.tasks_pkg.autopilot as ap
-    monkeypatch.setattr(ap, 'conclude_run',
+    # Post-slice-3: disarm_autopilot resolves ``conclude_run`` from
+    # autopilot_markers' OWN module namespace (top-level import from
+    # autopilot_run_lifecycle). Patching the facade no longer steers the
+    # call — patch the origin binding instead.
+    monkeypatch.setattr(ap_markers, 'conclude_run',
                         lambda cid, reason='stopped': fake_record)
     result = ap_markers.disarm_autopilot('conv-with-run')
     assert result['runConcluded'] == fake_record
@@ -327,10 +332,11 @@ def test_disarm_swallows_conclude_run_exception(put_task, monkeypatch):
     clear_autopilot_marker('conv-conclude-fail')
     put_task(_running_task('t-c', 'conv-conclude-fail', autopilot=True))
     arm_autopilot_marker('conv-conclude-fail', {})
-    import lib.tasks_pkg.autopilot as ap
     def _boom(_cid, reason='stopped'):
         raise RuntimeError('conclude_run raised')
-    monkeypatch.setattr(ap, 'conclude_run', _boom)
+    # Post-slice-3: patch the origin binding on autopilot_markers so the
+    # module-scope call inside disarm_autopilot resolves to _boom.
+    monkeypatch.setattr(ap_markers, 'conclude_run', _boom)
     # No raise; live-flip + marker-clear halves still landed.
     result = ap_markers.disarm_autopilot('conv-conclude-fail')
     assert result['markerCleared'] is True
@@ -409,8 +415,9 @@ def test_disarm_no_tasks_no_marker_reports_nothing(monkeypatch):
     False/empty, no runConcluded key, no raise."""
     from lib.message_queue import clear_autopilot_marker
     clear_autopilot_marker('conv-empty')
-    import lib.tasks_pkg.autopilot as ap
-    monkeypatch.setattr(ap, 'conclude_run', lambda cid, reason='stopped': None)
+    # Post-slice-3: patch the origin binding on autopilot_markers.
+    monkeypatch.setattr(ap_markers, 'conclude_run',
+                        lambda cid, reason='stopped': None)
     result = ap_markers.disarm_autopilot('conv-empty')
     assert result == {'disarmed': False, 'markerCleared': False, 'taskIds': []}
 
@@ -421,8 +428,9 @@ def test_disarm_result_shape_stable(put_task, monkeypatch):
     ALWAYS present; 'runConcluded' conditionally present."""
     from lib.message_queue import clear_autopilot_marker
     clear_autopilot_marker('conv-shape')
-    import lib.tasks_pkg.autopilot as ap
-    monkeypatch.setattr(ap, 'conclude_run', lambda cid, reason='stopped': None)
+    # Post-slice-3: patch the origin binding on autopilot_markers.
+    monkeypatch.setattr(ap_markers, 'conclude_run',
+                        lambda cid, reason='stopped': None)
     result = ap_markers.disarm_autopilot('conv-shape')
     for k in ('disarmed', 'markerCleared', 'taskIds'):
         assert k in result, f'{k} missing from disarm result'
@@ -432,23 +440,49 @@ def test_disarm_result_shape_stable(put_task, monkeypatch):
 
 
 @pytest.mark.unit
-def test_disarm_calls_conclude_run_lazy_import(put_task, monkeypatch):
-    """★ The lazy-import contract is what breaks the autopilot.py ↔
-    autopilot_markers.py circular dependency. Guard that disarm reaches
-    ``lib.tasks_pkg.autopilot.conclude_run`` (not autopilot_markers' own
-    module namespace) — a future refactor that inlines the call at module
-    top-level would reintroduce the circular import."""
+def test_disarm_calls_conclude_run_via_module_scope_binding(
+        put_task, monkeypatch):
+    """★ Post-slice-3 (pt_00459503): ``disarm_autopilot`` resolves
+    ``conclude_run`` from ``autopilot_markers``'s OWN module namespace.
+    That name is bound at module import time to
+    ``lib.tasks_pkg.autopilot_run_lifecycle.conclude_run`` (the leaf
+    module). Slice 2's lazy-import posture is gone — the cycle it
+    guarded is eliminated at the graph level (autopilot_markers has zero
+    top-level dep on autopilot.py).
+
+    Guard the wiring end-to-end: a monkeypatch of the module-scope name
+    steers the call site. Together with the AST/subprocess guards in
+    ``test_autopilot_markers_lazy_import_contract.py``, this locks the
+    cycle-free binding chain.
+    """
     from lib.message_queue import clear_autopilot_marker
     clear_autopilot_marker('conv-lazy')
     calls = []
-    import lib.tasks_pkg.autopilot as ap
     def _tracer(cid, reason='stopped'):
         calls.append((cid, reason))
         return {'runId': 'ar-lazy', 'status': 'concluded', 'reason': reason,
                 'ts': 0}
-    monkeypatch.setattr(ap, 'conclude_run', _tracer)
+    # Patch autopilot_markers.conclude_run — the module-scope binding
+    # disarm_autopilot actually reads. The facade attr on autopilot.py
+    # points at the SAME callable (identity re-export), but is a distinct
+    # binding for monkeypatch purposes; only patching the origin steers.
+    monkeypatch.setattr(ap_markers, 'conclude_run', _tracer)
     ap_markers.disarm_autopilot('conv-lazy')
     assert calls == [('conv-lazy', 'stopped')]
+
+    # Sanity: confirm the identity chain (facade attr IS leaf attr IS
+    # markers's bound name PRE-patch — asserted after patch by re-import).
+    import importlib
+    importlib.reload(ap_markers)
+    import lib.tasks_pkg.autopilot as ap
+    import lib.tasks_pkg.autopilot_run_lifecycle as leaf
+    assert ap_markers.conclude_run is leaf.conclude_run, (
+        'autopilot_markers.conclude_run must be identity-bound to the '
+        'leaf module after a fresh reload — otherwise the top-level '
+        'import wiring is wrong.')
+    assert ap.conclude_run is leaf.conclude_run, (
+        'autopilot.conclude_run facade attr must be identity-bound to '
+        'the leaf module.')
 
 
 # ══════════════════════════════════════════════════════════

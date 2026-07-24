@@ -45,6 +45,13 @@ from __future__ import annotations
 
 from lib.log import audit_log, get_logger
 
+# pt_00459503 slice 3 — ``conclude_run`` now lives in a LEAF module
+# (autopilot_run_lifecycle.py), so we can import it at MODULE TOP
+# without recreating the cycle slice 2 had to guard with a lazy
+# import.  autopilot_run_lifecycle has ZERO dependencies on
+# autopilot.py — the dependency graph is now strictly one-way.
+from lib.tasks_pkg.autopilot_run_lifecycle import conclude_run
+
 logger = get_logger(__name__)
 
 
@@ -195,16 +202,13 @@ def disarm_autopilot(conv_id: str) -> dict:
     #   case) can fold instantly without a reload. Self-guards: no run id →
     #   None (nothing was ever an autopilot run to conclude).
     #
-    # LAZY IMPORT (post-slice-2): ``conclude_run`` lives in autopilot.py and
-    # was in this file pre-extraction; a top-level import here would create a
-    # circular dependency (autopilot.py imports us for the re-export, we'd
-    # import autopilot.py for conclude_run). Deferring the import to the call
-    # site breaks the cycle and matches the lazy-import posture the rest of
-    # this cluster already uses (arm_autopilot_marker / has_autopilot_marker /
-    # clear_autopilot_marker are all lazy-imported for the same reason).
+    # pt_00459503 slice 3: ``conclude_run`` was moved into a leaf module
+    # (``autopilot_run_lifecycle``), so we import it at MODULE TOP now.
+    # The cycle slice 2 guarded via lazy-import no longer exists — the
+    # dependency graph is strictly one-way (see autopilot_run_lifecycle
+    # docstring for the full picture).
     concluded = None
     try:
-        from lib.tasks_pkg.autopilot import conclude_run
         concluded = conclude_run(conv_id, reason='stopped')
     except Exception as e:
         logger.warning('[Autopilot] disarm: conclude_run failed for conv=%s: %s',

@@ -126,8 +126,12 @@ def prepare_retryable_wait(attempt, err, abort_check, log_prefix=''):
             logger.debug('%s ✋ Abort detected before retry sleep, stopping.', log_prefix)
             raise AbortedError('User aborted before retry')
         wait = retry_wait(attempt)
+        # §2.2 retry-loop row: each attempt = WARNING *without* exc_info —
+        # error.log captures WARNING+, so a traceback here spams the error
+        # log with self-healing noise (the next attempt usually succeeds).
+        # Only the final-exhaustion ERROR below keeps exc_info.
         logger.warning('%s ⚠ Transient error (attempt %d): %s: %s — retrying in %.1fs …',
-                       log_prefix, attempt + 1, type(err).__name__, err, wait, exc_info=True)
+                       log_prefix, attempt + 1, type(err).__name__, err, wait)
         return wait
     logger.error('%s ✖ All %d attempts failed.', log_prefix,
                  1 + MAX_STREAM_RETRIES, exc_info=True)

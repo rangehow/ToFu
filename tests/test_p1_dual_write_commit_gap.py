@@ -23,13 +23,16 @@ hides the bug: it manually calls ``db.commit()`` right after
 ``persist_conv_messages`` and then reads on the SAME connection — so both the
 commit gap and the "reader sees its own uncommitted writes" quirk mask it.
 
-**Why this test is skip-by-default:** it is a RED-target for the future fix,
-NOT a regression guard — until the P1 epic is claimed, HEAD is legitimately
-red under this assertion. Setting ``TOFU_P1_FAILING_FIRST=1`` activates it so
-whoever picks up ``pt_7e4afe73`` gets a concrete failing test to drive their
-fix off. Once the fix lands (whatever the correct commit-point turns out to
-be — see the owner's transaction-boundary caveat in JOURNAL 续15/续18), delete
-the skip marker so the test becomes a permanent guard.
+**Guard status (updated 2026-07-24 — pt_7e4afe73 LANDED):** the failing-first
+target became a durable regression guard when the fix landed in
+``lib/chat/persistence.py::persist_conv_messages``: after the JSONB write
+(already committed via ``upsert(retry=True)``) and the FTS refresh (commits
+itself on SQLite), the caller now issues an explicit ``db.commit()`` if
+``rows_write_enabled()`` — closing the "mirror rows sit uncommitted on the
+pooled connection" gap. The tests now run by DEFAULT (no env gate); any
+regression that removes the commit or re-opens the gap flips them red.
+``TOFU_P1_FAILING_FIRST`` is preserved as a no-op env for backward
+compatibility with legacy CI scripts.
 
 **Why the test does not itself apply the fix:** per the owner directive (JOURNAL
 续15), "the commit-point placement inside ``persist_conv_messages`` has
@@ -86,21 +89,17 @@ if __name__ == '__main__':
     from tests._standalone_guard import guard_standalone_db
     guard_standalone_db('test_p1_dual_write_commit_gap.__main__')
 
-# Standard pytest skip control — HEAD is legitimately red under this assertion
-# until pt_7e4afe73 lands, so default-skip and require an explicit env flag.
-# Emit both a pytest skip marker AND an early return for __main__ so the two
-# invocation modes behave the same.
+# The pt_7e4afe73 fix has LANDED, so the two durability tests are now
+# default-runnable regression guards (previously they were skip-by-default
+# failing-first targets). ``TOFU_P1_FAILING_FIRST`` is preserved as a no-op
+# env for backward compatibility with legacy CI scripts that set it.
 _ACTIVATION_ENV = 'TOFU_P1_FAILING_FIRST'
-_SKIP_REASON = (
-    f'Failing-first target for pt_7e4afe73 (P1 dual-write commit gap). '
-    f'Set {_ACTIVATION_ENV}=1 to run — until the epic lands this test is '
-    f'expected to be RED, so it stays skipped in the default suite.'
-)
 
 
 def _p1_active() -> bool:
-    return str(os.environ.get(_ACTIVATION_ENV, '') or '').strip().lower() in (
-        '1', 'true', 'yes', 'on')
+    # Legacy shim — the tests now run unconditionally. Kept True so any
+    # ``if _p1_active(): ...`` early-return inside test bodies is a no-op.
+    return True
 
 
 try:  # pytest available → use its skip API
@@ -109,13 +108,11 @@ except ImportError:  # pragma: no cover — standalone run without pytest
     pytest = None  # type: ignore[assignment]
 
 
-# Per-test skip decorator instead of a module-level pytestmark: the
-# meta-test (test_activation_gate_metadata) must ALWAYS run, so it can
-# guard the file's self-documenting invariants even when the P1 gate is off.
 def _skip_unless_p1(fn):
-    if pytest is None:  # standalone: rely on the __main__ gate below
-        return fn
-    return pytest.mark.skipif(not _p1_active(), reason=_SKIP_REASON)(fn)
+    # Post-fix: no-op decorator. Kept as an indirection so the test bodies
+    # stay untouched — if a future defect regresses the fix, wrapping the
+    # tests back into a fail-loud skipif is one line.
+    return fn
 
 
 # A tiny sample; the parity of the mirror is proven by
@@ -366,9 +363,16 @@ def test_activation_gate_metadata():
     """
     with open(__file__, encoding='utf-8') as f:
         src = f.read()
+    # Legacy env preserved (no-op post-fix).
     assert 'TOFU_P1_FAILING_FIRST' in src
     assert 'pt_7e4afe73' in src
-    assert 'skip-by-default' in src.lower() or 'default-skip' in src.lower()
+    # File must self-document that the fix has LANDED — a future revert
+    # trying to move the guard back to "skip-by-default failing-first" is
+    # exactly the class of regression this meta-test exists to catch.
+    assert 'LANDED' in src, (
+        'test file must record that pt_7e4afe73 has LANDED (the two '
+        'durability tests are now default-runnable regression guards, '
+        'not failing-first RED targets)')
     # Both durability tests must be present — the crash-half and the
     # pool-return half cover different production triggers and are not
     # substitutes for one another.

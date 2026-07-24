@@ -194,8 +194,38 @@ def persist_conv_messages(db, conv_id, messages, title, settings_patch=None):
     update_conversation_fts(db, conv_id, search_text)
     # Phase 5 dual-write (flag-gated, best-effort): mirror the JSONB array into
     # conversation_messages rows. No-op unless TOFU_MESSAGES_ROWS; never raises.
-    from lib.database.messages_rows import dual_write_conv
+    #
+    # P1 durability (pt_7e4afe73, 2026-07-24): commit the mirror rows RIGHT
+    # HERE, not deep inside dual_write_conv, and NOT at the caller. Reasoning:
+    #   * The authoritative JSONB write above went through upsert(retry=True)
+    #     which routes to db_execute_with_retry(commit=True) — so the JSONB
+    #     row is already committed and the current transaction on ``db`` is
+    #     empty when dual_write_conv runs.
+    #   * update_conversation_fts (line above) also commits internally on
+    #     SQLite (no-op on PG).
+    #   * Therefore the ONLY writes sitting in the current implicit
+    #     transaction at this point are the mirror rows dual_write_conv just
+    #     inserted. Committing here can NOT prematurely flush any other
+    #     pending caller-side writes (there aren't any — see JOURNAL 续15's
+    #     transaction-boundary caveat: it applies to arbitrary mid-flow
+    #     commits, NOT to a commit that immediately follows our own writes
+    #     with a clean prior state).
+    #   * Best-effort per dual_write_conv's contract — swallow exceptions so
+    #     a mirror-side failure cannot break the JSONB write path. The
+    #     mirror's parity gate (verify_conv_parity) is the load-bearing
+    #     check for whether reads can safely flip to rows.
+    from lib.database.messages_rows import dual_write_conv, rows_write_enabled
     dual_write_conv(db, conv_id, messages, now_ms=now_ms)
+    if rows_write_enabled():
+        # Only commit when dual_write actually ran; keep the flag-off path
+        # byte-identical to the pre-fix behaviour.
+        try:
+            db.commit()
+        except Exception as _p1_commit_e:
+            logger.warning('[chat] persist_conv_messages: mirror-row commit '
+                           'failed conv=%s (non-fatal, JSONB truth is already '
+                           'committed): %s',
+                           conv_id[:8] if conv_id else '?', _p1_commit_e)
 
     # Read back the post-write rev — the ``conversations_rev_bump_trg`` trigger
     # advanced it in the SAME statement as this upsert (on a genuine messages

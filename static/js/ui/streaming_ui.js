@@ -483,7 +483,8 @@ function updateStreamingUI(msg) {
  *   inserted BEFORE the round-tag / parallel-header / first `[data-prn]` slot
  *   so prose always sits above the tools it introduced, and the English
  *   narration is skipped while auto-translate is live (the translator paints
- *   the Chinese equivalent into `.stream-seg-narration` in the same group). */
+ *   the Chinese equivalent into a settled-class `.seg-narration` twin in the
+ *   same group — Phase 3.5 step 2 byte parity; formerly `.stream-seg-narration`). */
 function _renderStreamRoundProse(groupEl, round) {
   if (!groupEl || !round) return;
   /* ★ PARITY WITH SETTLED (owner directive 2026-07-08): the per-round thinking
@@ -831,7 +832,8 @@ function _syncToolRoundsDOM(container, rounds) {
          *   gated: only (re)writes when the text grew, so it never churns the
          *   tool DOM. The English narration is HIDDEN when auto-translate is
          *   live (`data-xlate`): the translator paints the Chinese equivalent
-         *   into `.stream-seg-narration` in the same slot. */
+         *   into a settled-class `.seg-narration` twin in the same slot
+         *   (formerly `.stream-seg-narration`). */
         _renderStreamRoundProse(groupEl, round);
         let slot = body.querySelector(`[data-prn="${rn}"]`);
         /* ★ Determine if this round needs an interactive card (HG, stdin, approval).

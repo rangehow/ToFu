@@ -442,8 +442,7 @@ async function sendMessage() {
   if (activeConvId === convId) {
     const w = document.getElementById("welcome");
     if (w) w.remove();
-    const chatInnerEl = document.getElementById("chatInner");
-    if (chatInnerEl) chatInnerEl.insertAdjacentHTML("beforeend", renderMessage(userMsg, userMsgIdx));
+    window.ConvView.apply(convId, userMsgIdx, userMsg);
     const newEl = document.getElementById("msg-" + userMsgIdx);
     if (newEl) {
       newEl.classList.add("message-new");
@@ -580,7 +579,7 @@ async function sendMessage() {
       Object.assign(userMsg, result.userMessage);
       if (activeConvId === convId) {
         const msgEl = document.getElementById('msg-' + userMsgIdx);
-        if (msgEl) msgEl.outerHTML = renderMessage(userMsg, userMsgIdx);
+        if (msgEl) window.ConvView.apply(convId, userMsgIdx, userMsg);
       }
     }
     if (result.title && result.title !== conv.title) {
@@ -607,8 +606,7 @@ async function sendMessage() {
       if (conv.messages[userMsgIdx] === userMsg) {
         conv.messages.splice(userMsgIdx, 1);
         if (activeConvId === convId) {
-          const msgEl = document.getElementById('msg-' + userMsgIdx);
-          if (msgEl) msgEl.remove();
+          window.ConvView.removeMessage(convId, userMsg);
         }
       }
       saveConversations(convId);
@@ -635,8 +633,7 @@ async function sendMessage() {
       if (conv.messages[userMsgIdx] === userMsg) {
         conv.messages.splice(userMsgIdx, 1);
         if (activeConvId === convId) {
-          const msgEl = document.getElementById('msg-' + userMsgIdx);
-          if (msgEl) msgEl.remove();
+          window.ConvView.removeMessage(convId, userMsg);
         }
       }
       // Sync queue state from server for accurate UI
@@ -702,7 +699,7 @@ async function sendMessage() {
       _removeTranslatingBubble();
       if (activeConvId === convId) {
         const msgEl = document.getElementById('msg-' + userMsgIdx);
-        if (msgEl) msgEl.outerHTML = renderMessage(userMsg, userMsgIdx);
+        if (msgEl) window.ConvView.apply(convId, userMsgIdx, userMsg);
       }
       saveConversations(convId);
       /* ★ The send fetch failed/aborted, so the backend's _chat_send did NOT
@@ -751,9 +748,7 @@ async function sendMessage() {
       _ensureMsgId(errAssistant);
       conv.messages.push(errAssistant);
       if (activeConvId === convId) {
-        const chatInnerEl = document.getElementById("chatInner");
-        if (chatInnerEl)
-          chatInnerEl.insertAdjacentHTML("beforeend", renderMessage(errAssistant, conv.messages.length - 1));
+        window.ConvView.apply(convId, conv.messages.length - 1, errAssistant);
       }
       saveConversations(convId);
       /* ★ Same as the user-stop branch above: the send failed, so the backend
@@ -1037,7 +1032,7 @@ async function _waitForVlmParsing(userMsg, convId, userMsgIdx) {
     const chatC = document.getElementById('chatContainer');
     const savedTop = chatC ? chatC.scrollTop : 0;
     const msgEl = document.getElementById('msg-' + userMsgIdx);
-    if (msgEl) msgEl.outerHTML = renderMessage(userMsg, userMsgIdx);
+    if (msgEl) window.ConvView.apply(convId, userMsgIdx, userMsg);
     if (chatC) chatC.scrollTop = savedTop;
   }
   // Remove indicator

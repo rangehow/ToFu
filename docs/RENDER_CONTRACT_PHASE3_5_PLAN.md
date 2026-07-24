@@ -59,12 +59,11 @@ of every `static/js/**` file (§2.15) added `streaming_ui.js` (49) and
 ConvView itself has 10 raw ops (it IS the seam — those are the ALLOWED writes). Every other
 file's raw ops are listed below with a class + a Phase-3.5 target.
 
-### 2.1 `static/js/conv_view.js` — N=10 → THE SEAM (keep)
+### 2.1 `static/js/conv_view.js` — N=8 → THE SEAM (keep)
 
 | Line cluster | Op | Class | Target |
 |---|---|---|---|
-| ~137 | `existing.outerHTML = html` (upsert) | SEAM | keep — this IS `upsertMessage` |
-| ~195 | `existing.outerHTML = html` / `inner.insertAdjacentHTML` (**`apply`**, step 2) | SEAM | keep — this IS the single public entry every CONTENT-DERIVED site converges onto |
+| ~193 | `existing.outerHTML = html` / `inner.insertAdjacentHTML` (**`apply`** — the ONE upsert) | SEAM | keep — step 3 ① collapsed `upsertMessage` into a thin alias of `apply` (legacy append-default-false); the sweep runs on ALL paths |
 | ~164 | `el.remove()` (removeMessage) | SEAM | keep |
 | ~226 | `inner.insertAdjacentHTML` (startStreaming) | SEAM | keep |
 | ~272 | `sm.outerHTML = html` (finalizeStreaming) | SEAM | keep |
@@ -111,25 +110,25 @@ delegates to). Phase 3.5 does NOT rewrite them — it moves their call boundary 
 | 1474, 1480 | `sm.outerHTML = renderMessage(...)` (dangling planner) | CONTENT-DERIVED | `ConvView.apply` |
 | 2041 | `_sm.remove()` (ConvView fallback) | STRUCT-ONLY | delete the raw fallback |
 
-### 2.5 `static/js/main/main_send_pipeline.js` — N=23 → CONVERGE (user/error bubbles + VLM + queue bar)
+### 2.5 `static/js/main/main_send_pipeline.js` — N=16 (was 23) → CONVERGED in step 3
 
-| Line | Op | Class | Target |
-|---|---|---|---|
-| 446 | `chatInnerEl.insertAdjacentHTML(renderMessage(userMsg,…))` | CONTENT-DERIVED | `ConvView.apply` |
-| 583, 705, 1040 | `msgEl.outerHTML = renderMessage(userMsg,…)` (server-translated user msg / VLM done) | CONTENT-DERIVED | `ConvView.apply` |
-| 611, 639 | `msgEl.remove()` (steer/queue splice) | CONTENT-DERIVED | `ConvView.removeMessage` (the model-side splice already happened; DOM must follow) |
-| 756 | `insertAdjacentHTML(renderMessage(errAssistant,…))` | CONTENT-DERIVED | `ConvView.apply` |
-| 1011–1045 | VLM-wait indicator `appendChild` + `innerHTML` + `remove()` | PENDING-PLACEHOLDER | keep — fixed status string, no msg field |
-| 230, 923, 1380, 1402 | `oldSm/_ghost.remove()` | STRUCT-ONLY | keep |
+| Line | Op | Class | Target | State |
+|---|---|---|---|---|
+| 446 | `insertAdjacentHTML(renderMessage(userMsg,…))` | CONTENT-DERIVED | `ConvView.apply` | ✅ step 3 |
+| 583, 705, 1040 | `msgEl.outerHTML = renderMessage(userMsg,…)` (server-translated / abort-restore / VLM done) | CONTENT-DERIVED | `ConvView.apply` (existence-check kept) | ✅ step 3 |
+| 611, 639 | `msgEl.remove()` (steer/queue splice) | CONTENT-DERIVED | `ConvView.removeMessage` | ✅ step 3 |
+| 756 | `insertAdjacentHTML(renderMessage(errAssistant,…))` | CONTENT-DERIVED | `ConvView.apply` | ✅ step 3 |
+| 1011–1045 | VLM-wait indicator `appendChild` + `innerHTML` + `remove()` | PENDING-PLACEHOLDER | keep — fixed status string, no msg field | keep |
+| 230, 923, 1380, 1402 | `oldSm/_ghost.remove()` | STRUCT-ONLY | keep | keep |
 
-### 2.6 `static/js/main/main_regen_continue.js` — N=4 → CONVERGE
+### 2.6 `static/js/main/main_regen_continue.js` — N=2 (was 4) → CONVERGED in step 3
 
-| Line | Op | Class | Target |
-|---|---|---|---|
-| 149 | `msgEl.outerHTML = renderMessage(msg, idx)` | CONTENT-DERIVED | `ConvView.apply` |
-| 215 | `chatInnerEl.insertAdjacentHTML(renderMessage(errAssistant,…))` | CONTENT-DERIVED | `ConvView.apply` |
-| 411 | `hdr.appendChild(tmEl)` (Continue elapsed timer) | STRUCT-ONLY | keep — chrome, no msg field |
-| 417 | `bodyEl.innerHTML = …` (Continue zones) | CONTENT-DERIVED | `ConvView.apply` (the zone template is derived from the assistant msg) |
+| Line | Op | Class | Target | State |
+|---|---|---|---|---|
+| 149 | `msgEl.outerHTML = renderMessage(msg, idx)` | CONTENT-DERIVED | `ConvView.apply` | ✅ step 3 |
+| 215 | `insertAdjacentHTML(renderMessage(errAssistant,…))` | CONTENT-DERIVED | `ConvView.apply` | ✅ step 3 |
+| 411 | `hdr.appendChild(tmEl)` (Continue elapsed timer) | STREAMING-LIFECYCLE | keep — this path renames `msg-${lastIdx}` INTO `#streaming-msg` and builds the live zones; it belongs to the startStreaming/finalize family, and step-3 ② makes `apply` REFUSE the live bubble by construction | reclassified |
+| 417 | `bodyEl.innerHTML = …` (Continue zones) | STREAMING-LIFECYCLE | same as 411 | reclassified |
 
 ### 2.7 `static/js/main/main_translating_bubble.js` — N=6 → PENDING-PLACEHOLDER (keep, guarded)
 
@@ -139,13 +138,13 @@ delegates to). Phase 3.5 does NOT rewrite them — it moves their call boundary 
 | 55 | `el.remove()` | PENDING-PLACEHOLDER | keep |
 | 74 | `insertAdjacentHTML` (streaming fallback) | CONTENT-DERIVED | delete raw fallback (ConvView always present) |
 
-### 2.8 `static/js/ui/edit_message.js` — N=7 → CONVERGE
+### 2.8 `static/js/ui/edit_message.js` — N=1 (was 7) → CONVERGED in step 3
 
-| Line | Op | Class | Target |
-|---|---|---|---|
-| 52 | `bodyEl.innerHTML = …edit form…` | CONTENT-DERIVED | `ConvView.apply` — render the *editor* as a projection of `msg` (content + attachments) |
-| 143, 263, 279, 384, 484 | `msgEl.outerHTML = renderMessage(msg, idx)` | CONTENT-DERIVED | `ConvView.apply` |
-| 550 | `insertAdjacentHTML(renderMessage(errAssistant,…))` | CONTENT-DERIVED | `ConvView.apply` |
+| Line | Op | Class | Target | State |
+|---|---|---|---|---|
+| 52 | `bodyEl.innerHTML = …edit form…` | INTERACTIVE-EDITOR (named exception) | keep — the edit form (textarea + buttons + paste handlers) is an interactive widget `renderMessage` does not produce; `apply` would destroy focus/selection on every keystroke-adjacent repaint. Named here as a permanent exception | keep |
+| 143, 263, 279, 384, 484 | `msgEl.outerHTML = renderMessage(msg, idx)` | CONTENT-DERIVED | `ConvView.apply` | ✅ step 3 (manual fingerprint refreshes removed — apply does it) |
+| 550 | `insertAdjacentHTML(renderMessage(errAssistant,…))` | CONTENT-DERIVED | `ConvView.apply` | ✅ step 3 |
 
 ### 2.9 `static/js/ui/translation_render.js` — N=17 (was 18) → CONVERGED in step 2 (the "translation lands but UI doesn't refresh" bug home)
 
@@ -248,7 +247,7 @@ when they first gain a chatInner write is part of every future step's checklist.
 | STRUCT-ONLY | ~34 | keep, explicitly allowlisted |
 | PENDING-PLACEHOLDER | ~18 | keep, must never read `msg.*` |
 | NOT-#chatInner | ~16 | excluded from class rules, still under the ratchet |
-| **Total raw ops (tokenizer)** | **217 = 10 seam + 207 non-seam** | ~69 stay (seam+struct+placeholder) + **~132 converge / de-fork** |
+| **Total raw ops (tokenizer)** | **200 = 8 seam + 192 non-seam** (post-step-3) | ~69 stay (seam+struct+placeholder) + **~117 converged/converging** |
 
 Exact per-file numbers live in `_RATCHET_BASELINE` (the guard); the class split above is
 the §2 tables' cluster-level rollup (±3).
@@ -299,11 +298,12 @@ A second test in the same file statically audits the 15 non-seam files (tokenize
 count the 4 raw-DOM op patterns), asserting each file's count is **≤ its §2 baseline** —
 the monotonic-decrease ratchet (same pattern as `test_frontend_api_isolation.py`): the
 baseline only ever goes DOWN as sites converge; any NEW raw write fails CI.
-Baselines (2026-07-24, tokenizer-measured): streaming_ui 49, main_send_pipeline 23,
-streaming_render 21, image-gen 18, sse_pipeline 17, translation_render 17,
-health_stream_timer 10, main_conv_lifecycle 10, chat_render 10, conv_view 10 (seam —
-pinned, not ratcheted down), edit_message 7, stream_lifecycle 6, main_translating_bubble 6,
-image-gen-batch 5, main_regen_continue 4, core/conversations 4. Sum(non-seam) = 207.
+Baselines (2026-07-24 post-step-3, tokenizer-measured): streaming_ui 49, streaming_render 21,
+image-gen 18, sse_pipeline 17, translation_render 17, main_send_pipeline 16,
+health_stream_timer 10, main_conv_lifecycle 10, chat_render 10, conv_view 8 (seam —
+pinned, not ratcheted down), stream_lifecycle 6, main_translating_bubble 6,
+image-gen-batch 5, core/conversations 4, main_regen_continue 2, edit_message 1.
+Sum(non-seam) = 192.
 
 ## 5. Landing order (each step committable + tested; mirrors Phase 3 §7)
 
@@ -316,7 +316,23 @@ image-gen-batch 5, main_regen_continue 4, core/conversations 4. Sum(non-seam) = 
    `health_stream_timer.js` (10); **the step-4 boot-check precondition landed EARLY**
    (see below); translation_render 18→17. NEUTER round-trip verified.
 3. Route the send/regen/edit single-message swaps (§2.5/2.6/2.8) through `ConvView.apply`.
-   Ratchet drops; more parity assertions flip GREEN.
+   ✅ LANDED (this commit) — plus the four owner-directed seam-hardening items:
+   **① collapse** — `apply(convId, idx, msg, opts)` is the ONLY upsert entity;
+   `upsertMessage` is a thin alias preserving legacy append-default-false semantics;
+   the identity sweep runs on ALL paths (guards: static delegation check +
+   runtime parity incl. twin-eviction).
+   **② live-bubble guard** — `apply` REFUSES (console.warn + false) when its resolved
+   target is/inside `#streaming-msg` (per-round auto-translate completes mid-stream,
+   so this was a real footgun, not hygiene); `_evictByMsgId` never removes
+   `#streaming-msg` (NEUTER: deleting the guard lets apply destroy the live bubble).
+   **③ order invariant** — (a) apply loudly warns when appending a non-tail message
+   (index-drift surface); (b) JSDOM anchor: after a send → edit → regen → upsert
+   flow through the seam, `#chatInner .message` data-msg-id sequence ===
+   `conv.messages` `_msgId` sequence (the cheapest hard proof of traceable rendering).
+   **④ retired-class sweep** — the inert `.stream-seg-narration` CSS block deleted
+   from styles.css (step 2's byte-parity fix killed its class); static guards pin:
+   no production JS (comments stripped) may carry the token, no CSS rule may
+   reference it. Ratchet 207 → 192.
 4. Fold the `renderChat`/`_surgicalTruncateDOM` call boundary into `ConvView.replaceAll` /
    `ConvView.apply`; delete the per-call `window.ConvView` raw fallbacks (§2.4). Ratchet
    approaches the STRUCT/PENDING floor.

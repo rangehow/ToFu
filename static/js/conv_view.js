@@ -93,6 +93,11 @@
     var removed = 0;
     inner.querySelectorAll(sel).forEach(function (el) {
       if (el === exceptEl) return;
+      /* The live #streaming-msg is NEVER a stray twin — its lifecycle is
+       * owned by startStreaming/finalizeStreaming (Phase 3.5 step 3 ②).
+       * startStreaming removes a stale live bubble explicitly, so exempting
+       * it here cannot strand one. */
+      if (el.id === 'streaming-msg') return;
       try { el.remove(); removed++; } catch (e) { /* already detached */ }
     });
     return removed;
@@ -101,47 +106,6 @@
   /* ── Public API ──────────────────────────────────────────────────── */
 
   const ConvView = {
-    /** Replace or insert a single message's DOM element.
-     *
-     *  @param {string} convId
-     *  @param {Object} msg     — the message object (must have _msgId
-     *                            for stable identity; _ensureMsgId
-     *                            stamps one if missing).
-     *  @param {Object} [opts]
-     *    @param {number} [opts.idx]      - explicit idx; otherwise computed
-     *    @param {boolean} [opts.append]  - if true and no existing element
-     *                                       is found, append to chatInner
-     *  @returns {boolean} true if the DOM was mutated.
-     */
-    upsertMessage: function (convId, msg, opts) {
-      opts = opts || {};
-      if (typeof activeConvId !== 'undefined' && activeConvId !== convId) return false;
-      const conv = _findConv(convId);
-      if (!conv || !msg) return false;
-      if (typeof _ensureMsgId === 'function') _ensureMsgId(msg);
-      const inner = document.getElementById('chatInner');
-      if (!inner) return false;
-      const idx = (typeof opts.idx === 'number') ? opts.idx : _idxOf(conv, msg);
-      if (idx < 0) return false;
-      if (typeof renderMessage !== 'function') return false;
-      const html = renderMessage(msg, idx);
-      if (!html) return false;
-      const existing = _findMsgEl(inner, msg, idx);
-      if (existing) {
-        existing.outerHTML = html;
-      } else if (opts.append) {
-        inner.insertAdjacentHTML('beforeend', html);
-      } else {
-        return false;
-      }
-      if (typeof _lastRenderedFingerprint !== 'undefined' &&
-          typeof _convRenderFingerprint === 'function') {
-        try { _lastRenderedFingerprint = _convRenderFingerprint(conv); }
-        catch (e) { /* ignore — best-effort cache update */ }
-      }
-      return true;
-    },
-
     /** THE single public DOM-apply entry (RENDER_CONTRACT Phase 3.5 §5).
      *
      *  Every CONTENT-DERIVED write to #chatInner routes through here so the
@@ -153,21 +117,23 @@
      *
      *  Semantics = upsert keyed on identity: replace the existing node
      *  IN PLACE when found (position preserved — the translate/edit path),
-     *  append to the tail otherwise (the send/error-bubble path). Callers
-     *  whose target may be mid-index-drift MUST existence-check first and
-     *  fall back to renderChat (see _renderMsgInPlace) — an append lands at
-     *  the tail, which is wrong for a drifted mid-list message.
-     *
-     *  Do NOT target the live `#streaming-msg` bubble with this method —
-     *  that lifecycle belongs to startStreaming/finalizeStreaming.
+     *  append to the tail otherwise (the send/error-bubble path; suppress
+     *  with opts.append === false). Callers whose target may be
+     *  mid-index-drift MUST existence-check first and fall back to
+     *  renderChat (see _renderMsgInPlace) — an append lands at the tail,
+     *  which is wrong for a drifted mid-list message.
      *
      *  @param {string} convId
      *  @param {number} idx     — index into conv.messages (renderMessage key)
      *  @param {Object} msg     — the message object (must carry _msgId;
      *                            _ensureMsgId stamps one when missing).
+     *  @param {Object} [opts]
+     *    @param {boolean} [opts.append=true] — set false for replace-only
+     *                            (legacy upsertMessage semantics).
      *  @returns {boolean} true if the DOM was mutated.
      */
-    apply: function (convId, idx, msg) {
+    apply: function (convId, idx, msg, opts) {
+      opts = opts || {};
       if (typeof activeConvId !== 'undefined' && activeConvId !== convId) return false;
       const conv = _findConv(convId);
       if (!conv || !msg) return false;
@@ -180,14 +146,46 @@
       const html = renderMessage(msg, idx);
       if (!html) return false;
       const existing = _findMsgEl(inner, msg, idx);
+      /* ★ LIVE-BUBBLE GUARD (step 3 ②): the resolved target IS (or sits
+       * inside) the live #streaming-msg — replacing it would wipe the live
+       * zones (tailEl / tool panel) mid-stream. Per-round auto-translate
+       * completes while the turn is STILL streaming, so this is not
+       * hypothetical. The live lifecycle belongs to
+       * startStreaming/finalizeStreaming — refuse loudly. */
+      if (existing && (existing.id === 'streaming-msg' ||
+          (typeof existing.closest === 'function' &&
+           existing.closest('#streaming-msg')))) {
+        console.warn('[ConvView] apply REFUSED — target is the live ' +
+          'streaming bubble (msgId=' + (msg._msgId || '').slice(0, 12) +
+          ' idx=' + idx + '); use startStreaming/finalizeStreaming for ' +
+          'the live lifecycle.');
+        return false;
+      }
       if (existing) {
         existing.outerHTML = html;
+      } else if (opts.append === false) {
+        return false;
       } else {
+        /* ★ ORDER-INVARIANT LOUD WARN (step 3 ③a): appending a message that
+         * is NOT the tail means its DOM node could not be found at its
+         * position — index drift. The append lands at the tail and the DOM
+         * order silently diverges from conv.messages. Say so loudly; callers
+         * that expect drift must existence-check first and fall back to
+         * renderChat instead. */
+        const _total = (conv.messages && conv.messages.length) || 0;
+        if (idx < _total - 1) {
+          console.warn('[ConvView] apply appending a MID-LIST message ' +
+            '(idx=' + idx + ' of ' + _total + ', msgId=' +
+            (msg._msgId || '').slice(0, 12) + ') — DOM order may drift ' +
+            'from conv.messages; existence-check or renderChat instead.');
+        }
         inner.insertAdjacentHTML('beforeend', html);
       }
-      /* Identity sweep: the swap/insert is the SOLE node for this _msgId —
-       * evict any stranded twin (drifted static bubble, stale placeholder)
-       * so the invariant holds no matter which path created it. */
+      /* Identity sweep (ALL paths — step 3 ①): the swap/insert is the SOLE
+       * node for this _msgId — evict any stranded twin (drifted static
+       * bubble, stale placeholder) so the invariant holds no matter which
+       * path created it. The live #streaming-msg is exempt inside
+       * _evictByMsgId. */
       if (msg._msgId) {
         const keep = document.getElementById('msg-' + idx);
         _evictByMsgId(inner, msg._msgId, keep);
@@ -198,6 +196,30 @@
         catch (e) { /* best-effort cache update */ }
       }
       return true;
+    },
+
+    /** Legacy alias of apply() (step 3 ① — the collapse).
+     *
+     *  One implementation, two call shapes: this preserves the pre-collapse
+     *  upsertMessage semantics — replace-in-place when the node exists,
+     *  append ONLY when opts.append === true (default false). The identity
+     *  sweep now runs on this path too (idempotent when no twin — pure
+     *  gain). New code should call apply() directly.
+     *
+     *  @param {string} convId
+     *  @param {Object} msg     — the message object (must have _msgId).
+     *  @param {Object} [opts]
+     *    @param {number} [opts.idx]      - explicit idx; otherwise computed
+     *    @param {boolean} [opts.append=false] - append when no existing node
+     *  @returns {boolean} true if the DOM was mutated.
+     */
+    upsertMessage: function (convId, msg, opts) {
+      opts = opts || {};
+      const conv = _findConv(convId);
+      if (!conv || !msg) return false;
+      const idx = (typeof opts.idx === 'number') ? opts.idx : _idxOf(conv, msg);
+      if (idx < 0) return false;
+      return ConvView.apply(convId, idx, msg, { append: !!opts.append });
     },
 
     /** Remove a single message's DOM element by msg id or index.

@@ -133,6 +133,10 @@ win.getToolRoundsFromMsg = global.getToolRoundsFromMsg = (m) => (m && m.toolRoun
 // real concatenated bundle shares it, so showStreamingUIForConv (which reads
 // it) would throw ReferenceError. Predefine the global with the shipped value.
 global._INITIAL_RENDER = win._INITIAL_RENDER = 20;
+// `_lazyConvId` is a top-level `let` in streaming_render.js:794 — same eval
+// scoping issue: stream_lifecycle.js reads it at :39 and crashes without the
+// shared global the bundle provides. Predefine with the shipped initial value.
+global._lazyConvId = win._lazyConvId = null;
 
 // Load the REAL shipped JS in dependency order (shared window scope).
 eval(fs.readFileSync(process.argv[3], 'utf8'));  // ui/streaming_ui.js (zones + updateStreamingUI)

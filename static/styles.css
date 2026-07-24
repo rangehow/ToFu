@@ -6150,27 +6150,20 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 
 /* ★ Per-round streaming translation (interleave): the incremental translator
    routes each closed round's Chinese into a sibling block in the panel body,
-   directly BEFORE its .ptool-turn card (NOT nested inside it) — mirroring the
-   settled .seg-timeline narration so finalize is a visual no-op and the prose
-   is never boxed together with the tool. Scoped to the panel-body sibling
-   position (not .seg-timeline), so it keeps its own rhythm regardless of the
-   flag; matches the settled seg-narration values. */
-.ptool-panel-body > .stream-seg-narration {
-  margin: 2px 0 8px 0;
-  padding: 0;
-  line-height: 1.6;
-  color: var(--text-primary);
-}
-.ptool-panel-body > .stream-seg-narration > :first-child { margin-top: 0; }
-.ptool-panel-body > .stream-seg-narration > :last-child { margin-bottom: 0; }
-.ptool-panel-body > .stream-seg-narration p { margin: 6px 0; }
+   directly BEFORE its .ptool-turn card (NOT nested inside it). Since
+   RENDER_CONTRACT Phase 3.5 step 2 the live zh node carries the SETTLED class
+   list (`.seg-narration`, byte-identical to the cold render) — it is styled by
+   the `.seg-timeline .seg-narration` rules above (the panel carries
+   `seg-timeline`), and the former `.stream-seg-narration` block here was
+   deleted as inert. */
 
 /* ★ Per-round ENGLISH narration (segment-timeline streaming interleave, step
    5b): rendered inside each live .ptool-turn by _renderStreamRoundProse, above
    the tool slots — reuses the settled `.seg-narration` look verbatim (the panel
    carries `seg-timeline`). When auto-translate is LIVE, the incremental
-   translator paints the Chinese equivalent into `.stream-seg-narration` in the
-   same group, so the English copy is hidden to avoid a bilingual double.
+   translator paints the Chinese equivalent into a settled-class `.seg-narration`
+   twin (found by exclusion from this English node), so the English copy is
+   hidden to avoid a bilingual double.
    ★ The hide is gated PER ROUND on the `.xlate-hidden` class (toggled by JS
    only for a round whose Chinese twin actually exists) — NOT on a global
    `data-xlate` body flag. The old body-level rule hid EVERY round's English
@@ -12735,8 +12728,21 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
 }
 
 /* ── Smooth scroll for reading flow ── */
+/* ★ SCROLL-JITTER FIX (2026-07-24): `scroll-behavior:smooth` on the chat
+ * container turns every programmatic `scrollTop=scrollHeight` into an
+ * animation. During streaming, `updateStreamingUI` writes scrollTop once
+ * per rAF while scrollHeight is still GROWING — the smooth animator
+ * perpetually chases a moving target, and interacts badly with the
+ * `overflow-anchor` primitives above, so the reader visibly drifts off
+ * the bottom then snaps back (the reported "generation makes the page
+ * scroll up and down on its own"). User-driven wheel / touch / keyboard
+ * scroll is always instant per the CSS spec regardless of this property,
+ * so dropping the smooth-scroll rule loses nothing perceptible for
+ * reading and removes the jitter. `scrollIntoView({behavior:'smooth'})`
+ * call sites (branch panel, turn nav) still animate — that behavior is
+ * per-call, not inherited from this rule. */
 [data-theme="tofu"] .chat-container{
-  scroll-behavior:smooth
+  scroll-behavior:auto
 }
 
 /* ── Thinking block — RPG inner monologue / thought bubble ── */

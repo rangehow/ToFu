@@ -216,7 +216,7 @@ _RAW_PATS = [
 # detached-builder / zero #chatInner writes — census-verified).
 _RATCHET_BASELINE = {
     'static/js/ui/streaming_ui.js': 49,
-    'static/js/main/main_send_pipeline.js': 23,
+    'static/js/main/main_send_pipeline.js': 16,
     'static/js/ui/streaming_render.js': 21,
     'static/js/image-gen.js': 18,
     'static/js/ui/sse_pipeline.js': 17,
@@ -224,11 +224,11 @@ _RATCHET_BASELINE = {
     'static/js/core/health_stream_timer.js': 10,
     'static/js/main/main_conv_lifecycle.js': 10,
     'static/js/ui/chat_render.js': 10,
-    'static/js/ui/edit_message.js': 7,
+    'static/js/ui/edit_message.js': 1,
     'static/js/ui/stream_lifecycle.js': 6,
     'static/js/main/main_translating_bubble.js': 6,
     'static/js/image-gen-batch.js': 5,
-    'static/js/main/main_regen_continue.js': 4,
+    'static/js/main/main_regen_continue.js': 2,
     'static/js/core/conversations.js': 4,
 }
 
@@ -293,9 +293,10 @@ def test_raw_dom_write_ratchet():
 
 
 def test_ratchet_baseline_matches_plan_total():
-    """The baselines sum to the plan's §2.14 tally (207 non-seam raw ops)."""
-    assert sum(_RATCHET_BASELINE.values()) == 207, (
-        f'baseline sum {sum(_RATCHET_BASELINE.values())} != 207 — the plan '
+    """The baselines sum to the plan's §2.14 tally (192 non-seam raw ops
+    after step 3 converged §2.5/2.6/2.8 onto ConvView.apply)."""
+    assert sum(_RATCHET_BASELINE.values()) == 192, (
+        f'baseline sum {sum(_RATCHET_BASELINE.values())} != 192 — the plan '
         '§2.14 tally and this ratchet drifted apart; update both together')
 
 

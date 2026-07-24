@@ -146,7 +146,7 @@ async function regenerateFromUser(idx) {
       Object.assign(msg, result.userMessage);
       if (activeConvId === convId) {
         const msgEl = document.getElementById('msg-' + idx);
-        if (msgEl) msgEl.outerHTML = renderMessage(msg, idx);
+        if (msgEl) window.ConvView.apply(convId, idx, msg);
       }
     }
     if (result.title) conv.title = result.title;
@@ -210,11 +210,7 @@ async function regenerateFromUser(idx) {
       _ensureMsgId(errAssistant);
       conv.messages.push(errAssistant);
       if (activeConvId === convId) {
-        const chatInnerEl = document.getElementById('chatInner');
-        if (chatInnerEl) {
-          chatInnerEl.insertAdjacentHTML('beforeend',
-            renderMessage(errAssistant, conv.messages.length - 1));
-        }
+        window.ConvView.apply(convId, conv.messages.length - 1, errAssistant);
       }
       saveConversations(convId);
       syncConversationToServer(conv, { allowTruncate: true });

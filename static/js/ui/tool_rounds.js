@@ -3367,7 +3367,8 @@ function _narrationByRound(segments) {
 
 /* Render a round's narration segments as flat `.md-content.seg-narration`
  * blocks — BYTE-IDENTICAL to the settled timeline (_renderTimelineBatch) and
- * the streaming preview (.stream-seg-narration in translation.js): show the
+ * to the live streaming preview (translation_render.js paints the SAME class
+ * list since Phase 3.5 step 2; formerly `.stream-seg-narration`): show the
  * per-round Chinese (seg.translatedText, stamped by the incremental translator)
  * when present, else the English narration. This is what makes per-round
  * translation render IN PLACE in the grouped panel (toggle OFF / timeline
@@ -3381,8 +3382,9 @@ function _renderSegNarrationHTML(segs) {
     /* data-seg-round keys this narration block to its llmRound so the unified
      * per-round translate painter (_applyPartialByRoundToSettled) can update
      * just this block's Chinese in place when a retro/on-open translation
-     * streams round-by-round — no whole-bubble swap. Mirrors the streaming
-     * preview's .stream-seg-narration[data-seg-round]. */
+     * streams round-by-round — no whole-bubble swap. Mirrors the live preview's
+     * `.seg-narration[data-seg-round]` (same settled class since Phase 3.5
+     * step 2). */
     const _rk = (s.llmRound != null) ? ` data-seg-round="L${escapeHtml(String(s.llmRound))}"` : '';
     html += `<div class="md-content seg-narration"${_rk}>${renderMarkdown(_segClean)}</div>`;
   }

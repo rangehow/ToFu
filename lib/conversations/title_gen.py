@@ -199,18 +199,37 @@ def first_user_text(messages: list, max_chars: int = 280) -> str:
 
 
 def _clean_title(raw: str) -> str:
-    """Normalize the model's output into a single-line, unquoted title."""
+    """Normalize the model's output into a title.
+
+    P2 pt_title_gen_robust: policy shift from "take the first non-empty line"
+    to "merge all non-empty lines" — the old first-line rule silently dropped
+    the real payload when a small model split the topic across two lines
+    (e.g. ``"跨\\n设备协同状态同步"`` → ``"跨"``, root cause face B of the
+    「跨」 incident). Order matters:
+
+    1. Strip ``Title:`` / ``标题：`` label FIRST — otherwise merging then
+       stripping fails when the label is on its own line
+       (``"Title:\\n主题"`` merged first becomes ``"Title: 主题"`` which the
+       regex still matches, but if the label were on a mid-line the merge
+       would obscure it; leading-only strip is the safe invariant).
+    2. Collapse all non-empty lines to a single space-separated line.
+    3. Strip wrapping quotes / brackets.
+    4. Hard-cap to ``TITLE_MAX_CHARS`` with an ellipsis marker.
+    """
     title = (raw or '').strip()
-    # Collapse to the first non-empty line.
-    for line in title.splitlines():
-        if line.strip():
-            title = line.strip()
-            break
-    # Strip a leading "Title:" / "标题：" label if the model added one.
+    # (1) Strip leading label BEFORE merging lines so a label on its own
+    # opening line doesn't survive the join. The regex is anchored at
+    # start-of-string with re.MULTILINE so it handles both
+    # ``"Title: 主题"`` and ``"Title:\n主题"``.
     title = re.sub(r'^\s*(?:title|标题)\s*[:：]\s*', '', title,
-                   flags=re.IGNORECASE)
-    # Strip wrapping quotes.
+                   flags=re.IGNORECASE | re.MULTILINE)
+    # (2) Merge all non-empty lines to a single space-separated line.
+    lines = [ln.strip() for ln in title.splitlines() if ln.strip()]
+    title = ' '.join(lines) if lines else ''
+    # (3) Strip wrapping quotes / CJK brackets (repeat to catch nested
+    # e.g. ``"「x」"``).
     title = title.strip().strip('"\u201c\u201d\'`「」《》').strip()
+    # (4) Hard cap.
     if len(title) > TITLE_MAX_CHARS:
         title = title[:TITLE_MAX_CHARS].rstrip() + '…'
     return title

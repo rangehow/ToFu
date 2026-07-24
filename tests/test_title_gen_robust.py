@@ -120,3 +120,73 @@ def test_neuter_forwarding_check_would_fail_on_empty_exclude():
     assert len(tg._THINKING_MODELS_TO_EXCLUDE) >= 4, (
         'constant is expected to hold at least the 4 known offenders — '
         'if it drops below that, the NEUTER guard is weakened')
+
+
+# ─────────────────────────────────────────────────────────────
+# P2: _clean_title changed from "first non-empty line" to
+# "strip label + merge all non-empty lines with single-space
+# separator". Rationale: hypothetical "跨\n设备协同状态同步" would
+# have been silently truncated to "跨" under the old rule.
+# ─────────────────────────────────────────────────────────────
+
+
+def test_clean_title_merges_multiline_output():
+    """The reported "跨" failure mode: if a model splits topic across
+    two lines, the cleaner must MERGE them, not drop the second."""
+    tg = importlib.import_module('lib.conversations.title_gen')
+    got = tg._clean_title('跨\n设备协同状态同步')
+    # After merge: single string containing both parts.
+    assert '跨' in got, f'first line dropped: {got!r}'
+    assert '设备协同状态同步' in got, (
+        f'second line silently dropped (bug the P2 change fixes): {got!r}')
+
+
+def test_clean_title_strips_label_prefix():
+    """`Title: xxx` / `标题：xxx` label must still be stripped —
+    the merging change must not lose this existing invariant."""
+    tg = importlib.import_module('lib.conversations.title_gen')
+    for raw, expect in [
+        ('Title: 主题内容', '主题内容'),
+        ('标题：主题内容', '主题内容'),
+        ('标题: 主题内容', '主题内容'),
+        ('TITLE: X', 'X'),
+    ]:
+        got = tg._clean_title(raw)
+        assert got == expect, (
+            f'label strip failed for {raw!r}: got {got!r}, want {expect!r}')
+
+
+def test_clean_title_strips_wrapping_quotes():
+    """Quote wrapping is a separate invariant — merging must not
+    break the strip of leading/trailing quotes."""
+    tg = importlib.import_module('lib.conversations.title_gen')
+    for raw, expect in [
+        ('"quoted title"', 'quoted title'),
+        ("'single quoted'", 'single quoted'),
+        ('「书名号」', '书名号'),
+        ('《书名号》', '书名号'),
+    ]:
+        got = tg._clean_title(raw)
+        assert got == expect, (
+            f'quote strip failed for {raw!r}: got {got!r}, want {expect!r}')
+
+
+def test_clean_title_truncates_over_max_chars():
+    """Hard cap TITLE_MAX_CHARS still enforced after merge."""
+    tg = importlib.import_module('lib.conversations.title_gen')
+    long_raw = '主' * 100
+    got = tg._clean_title(long_raw)
+    assert len(got) <= tg.TITLE_MAX_CHARS + 1, (
+        f'no truncation: len={len(got)}, cap={tg.TITLE_MAX_CHARS}')
+    assert got.endswith('…') or len(got) == tg.TITLE_MAX_CHARS, (
+        f'truncation should end with ellipsis: {got!r}')
+
+
+def test_clean_title_label_before_merge():
+    """Label strip must happen BEFORE line merge, else `Title:\nX` merges
+    to `Title: X` and the strip regex fails on the merged form."""
+    tg = importlib.import_module('lib.conversations.title_gen')
+    # Label on line 1 alone, real title on line 2 — must both strip AND merge.
+    got = tg._clean_title('Title:\n主题内容')
+    assert got == '主题内容', (
+        f'label-before-merge order broken: got {got!r}')

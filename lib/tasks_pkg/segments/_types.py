@@ -54,7 +54,13 @@ def is_synthetic_inbox_round(round_dict) -> bool:
 # this tail back as an assistant prefill so a capable provider continues the
 # SAME tokens rather than regenerating from scratch. ``length`` (model hit
 # max_tokens) is the canonical Continue case; the three interrupt reasons cover
-# a dropped transport / server crash / frontend stop.
+# a dropped transport / server crash / frontend stop. ``aborted`` is the MANUAL
+# Stop case: the frontend stamps it optimistically on Stop click, and the
+# partial answer is a perfectly valid prefill prefix — excluding it made a
+# Stop→Continue on a no-tools turn fall back to a full regeneration that
+# discarded the partial prose (the manual-stop lossless gap, epic
+# pt_a4484f3ad3134ea8). An empty aborted turn is still correctly declined
+# downstream (resume_prefill_from_segments returns None on empty text).
 RESUMABLE_FINISH_REASONS = frozenset({
-    'interrupted', 'server_offline', 'premature_close', 'length',
+    'interrupted', 'server_offline', 'premature_close', 'length', 'aborted',
 })

@@ -148,6 +148,14 @@ class BackendSkipTest(_ProbeRedirect):
             self.assertEqual(cell['status'], 'ok', mid)
         self.assertEqual(task['summary']['skipped'], 0)
 
+        # Every cell is stamped with the surface that produced its verdict —
+        # the frontend's fresh-vs-stale discrimination depends on it.
+        self.assertEqual(
+            {mid: task['cells'][pp.probe_cell_key(0, mid)]['probe_surface']
+             for mid in ('chat-x', 'img-1', 'img-1-alias', 'emb-1', 'asr-1')},
+            {'chat-x': 'chat', 'img-1': 'image', 'img-1-alias': 'image',
+             'emb-1': 'embedding', 'asr-1': 'transcription'})
+
     def test_unknown_nonchat_caps_still_skipped(self):
         """A FUTURE non-chat capability with no implemented probe surface
         keeps the 'skipped' verdict with ZERO network.
@@ -170,6 +178,8 @@ class BackendSkipTest(_ProbeRedirect):
 
         cell = task['cells'][pp.probe_cell_key(0, 'holo-1')]
         self.assertEqual(cell['status'], 'skipped')
+        self.assertEqual(cell['probe_surface'], 'none',
+                         'skipped cells stamp none — never a fresh verdict')
         self.assertFalse(cell['recommend_disable'])
         self.assertIn('no probe surface', cell['detail'])
         self.assertEqual(task['summary'],
@@ -203,6 +213,10 @@ class BackendSkipTest(_ProbeRedirect):
         self.assertTrue(all(fn is None for _, fn in probed),
                         'chat cells must use the default chat probe')
         self.assertTrue(all(c['status'] == 'ok' for c in task['cells'].values()))
+        self.assertTrue(all(c['probe_surface'] == 'chat'
+                            for c in task['cells'].values()),
+                        'chat-verdict cells stamp chat — the frontend treats '
+                        'a chat stamp on a non-chat model as stale')
         self.assertEqual(task['summary']['skipped'], 0)
 
     def test_skipped_is_never_a_disable_verdict(self):
@@ -555,9 +569,99 @@ const chatDisabled = chatModel.key_access && chatModel.key_access['0'] &&
 check('apply_never_disables_nonchat', !imgDisabled);
 check('apply_still_disables_chat', !!chatDisabled);
 
+// ── (H) FRESH modality verdict (stamped probe_surface) SURVIVES reconcile
+//        and its not_found IS applied — exposing dead models is the whole
+//        point of the per-modality probe. Reset the fixture first. ──
+_stgProviders[0] = {
+  id: 'p',
+  models: [
+    { model_id: 'img-m', capabilities: ['image_gen'] },
+    { model_id: 'chat-m', capabilities: ['text'] },
+  ],
+};
+const fresh = {
+  status: 'done',
+  cells: {
+    '0::img-m':  { key_idx: 0, model_id: 'img-m',  root_model_id: 'img-m',
+                   status: 'not_found',
+                   detail: 'HTTP 404 via /images/generations',
+                   recommend_disable: true, probe_surface: 'image' },
+    '0::chat-m': { key_idx: 0, model_id: 'chat-m', root_model_id: 'chat-m',
+                   status: 'not_found', detail: 'HTTP 404',
+                   recommend_disable: true, probe_surface: 'chat' },
+  },
+  summary: { ok: 0, disable: 2 },
+  total: 2, done_count: 2,
+};
+_ingestProbeSnapshot(0, fresh);
+const fp = _stgMatrixProbe[0];
+check('fresh_modality_verdict_survives_reconcile',
+      fp.cells['0::img-m'].status === 'not_found' &&
+      fp.cells['0::img-m'].recommend_disable === true &&
+      fp.cells['0::img-m'].detail.indexOf('stale chat-probe') < 0);
+check('fresh_chat_verdict_untouched',
+      fp.cells['0::chat-m'].status === 'not_found' &&
+      fp.cells['0::chat-m'].recommend_disable === true);
+_applyMatrixRecommendations(0);
+const imgModel2 = _stgProviders[0].models[0];
+const chatModel2 = _stgProviders[0].models[1];
+const imgDisabled2 = imgModel2.key_access && imgModel2.key_access['0'] &&
+  (imgModel2.key_access['0'].disabled_ids || []).indexOf('img-m') >= 0;
+const chatDisabled2 = chatModel2.key_access && chatModel2.key_access['0'] &&
+  (chatModel2.key_access['0'].disabled_ids || []).indexOf('chat-m') >= 0;
+check('apply_executes_fresh_modality_not_found', !!imgDisabled2);
+check('apply_still_executes_chat_not_found', !!chatDisabled2);
+
 console.log(out.join('\n'));
 process.exit(0);
 """
+
+
+# Cross-stack NEUTER harness: ingest a backend-produced snapshot JSON
+# (argv[4]) through the REAL, unmodified access_matrix.js and report what
+# the image cell became. Used to prove that without the backend's
+# probe_surface stamp, a FRESH modality not_found is wrongly swallowed.
+_SURFACE_NEUTER_HARNESS = r"""
+const fs = require('fs');
+global.window = global;
+global.document = { querySelector: function () { return null; } };
+global.t = function (k) { return k; };
+global.escapeHtml = function (s) { return String(s); };
+global.showToast = function () {};
+global._renderProvidersTab = function () {};
+global._stgProviders = [];
+
+eval(fs.readFileSync(process.argv[2], 'utf8'));  // REAL core/model_caps.js
+eval(fs.readFileSync(process.argv[3], 'utf8'));  // REAL access_matrix.js
+
+const snap = JSON.parse(fs.readFileSync(process.argv[4], 'utf8'));
+_stgProviders[0] = {
+  id: 'p',
+  models: [{ model_id: 'img-m', capabilities: ['image_gen'] }],
+};
+_ingestProbeSnapshot(0, snap);
+const cell = _stgMatrixProbe[0].cells['0::img-m'];
+console.log('CELLSTATUS ' + cell.status + ' recommend_disable=' + cell.recommend_disable);
+process.exit(0);
+"""
+
+
+def _run_surface_neuter_harness(snapshot_path: str) -> str:
+    harness = os.path.join(HERE, '_probe_surface_neuter_harness.js')
+    with open(harness, 'w') as f:
+        f.write(_SURFACE_NEUTER_HARNESS)
+    try:
+        proc = subprocess.run(
+            ['node', harness, MODEL_CAPS_JS, ACCESS_MATRIX_JS, snapshot_path],
+            capture_output=True, text=True, timeout=60,
+        )
+    finally:
+        try:
+            os.remove(harness)
+        except OSError:
+            pass
+    assert proc.returncode == 0, f'node failed: {proc.stderr}\n{proc.stdout}'
+    return proc.stdout.strip()
 
 
 def _run_node_harness(matrix_js: str) -> str:
@@ -585,8 +689,65 @@ class FrontendReconcileTest(unittest.TestCase):
         output = _run_node_harness(ACCESS_MATRIX_JS)
         fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
         self.assertEqual(fails, [], 'frontend reconcile/apply-guard failures:\n' + output)
-        self.assertGreaterEqual(output.count('PASS'), 8,
-                                'expected >=8 PASS lines, got:\n' + output)
+        self.assertGreaterEqual(output.count('PASS'), 12,
+                                'expected >=12 PASS lines, got:\n' + output)
+
+    def test_surface_stamp_neuter_fresh_verdict_swallowed(self):
+        """NEUTER (cross-stack): strip the probe_surface stamp from a COPY of
+        provider_probe.py → a FRESH image-surface not_found comes off the
+        backend UNSTAMPED → the REAL, unmodified frontend reconcile swallows
+        it into 'skipped'. Proves the stamp is what lets the gates tell a
+        fresh modality verdict from a stale chat false positive."""
+        import json
+        with open(pp.__file__, encoding='utf-8') as f:
+            src = f.read()
+        anchor1 = "            'probe_surface': surface,\n"
+        anchor2 = "                    'probe_surface': 'none',\n"
+        self.assertIn(anchor1, src, 'stamp anchor drifted — update the neuter')
+        self.assertIn(anchor2, src, 'none-stamp anchor drifted — update the neuter')
+        neutered = src.replace(anchor1, '', 1).replace(anchor2, '', 1)
+        self.assertNotEqual(neutered, src)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_mod = os.path.join(tmp, 'provider_probe_nostamp.py')
+            with open(tmp_mod, 'w', encoding='utf-8') as f:
+                f.write(neutered)
+            spec = importlib.util.spec_from_file_location('provider_probe_nostamp', tmp_mod)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            mod.probe_cache_path = lambda pid: os.path.join(tmp, pid + '.json')
+
+            task = {
+                'provider_id': 't-nostamp', 'status': 'running',
+                'started_at': 0, 'finished_at': None, 'total': 1,
+                'done_count': 0, 'cells': {},
+                'summary': {'ok': 0, 'disable': 0},
+                'error': None, 'attempts': 1, '_abort': False,
+                '_base_url': 'https://gw.example.com/v1', '_extra_headers': {},
+            }
+            work = [(0, 'sk-a', 'img-m', 'img-m', ['image_gen'])]
+            with mock.patch.object(mod, 'probe_cell_multi',
+                                   return_value=('not_found', 'HTTP 404 via /images/generations')):
+                mod.run_cell_probe_task(task, work, timeout=5)
+
+            snap = mod.public_probe_snapshot(task)
+            cell = snap['cells']['0::img-m']
+            self.assertEqual(cell['status'], 'not_found',
+                             'neutered backend must still produce the fresh verdict')
+            self.assertNotIn('probe_surface', cell,
+                             'NEUTER did not bite: the stamp survived stripping')
+
+            snap_path = os.path.join(tmp, 'snap.json')
+            with open(snap_path, 'w', encoding='utf-8') as f:
+                json.dump(snap, f)
+            output = _run_surface_neuter_harness(snap_path)
+            self.assertIn('CELLSTATUS skipped recommend_disable=false', output,
+                          'NEUTER did not bite: without the stamp the fresh '
+                          'modality not_found must be swallowed by the REAL '
+                          'frontend reconcile — got: ' + output)
+
+        with open(pp.__file__, encoding='utf-8') as f:
+            self.assertEqual(f.read(), src, 'harness mutated the shipped provider_probe.py')
 
     def test_frontend_neuter_reconcile_is_load_bearing(self):
         """NEUTER: drop the _reconcileProbeNonChat call from a COPY of

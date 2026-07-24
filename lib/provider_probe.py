@@ -320,6 +320,19 @@ def nonchat_probe_fn(caps):
     return None
 
 
+# probe_fn → probe_surface stamp. Every cell records WHICH surface produced
+# its verdict so the frontend can tell a FRESH modality verdict (e.g. an
+# image-surface not_found — meaningful, must reach the user) from a STALE
+# chat-probe false positive on a non-chat model (must heal on ingest).
+# Cells without the stamp (pre-stamp snapshots) or stamped 'chat' are the
+# stale kind; 'none' marks a skipped (unprobed) cell.
+_PROBE_SURFACE_NAMES = {
+    probe_image_cell: 'image',
+    probe_transcription_cell: 'transcription',
+    probe_embedding_cell: 'embedding',
+}
+
+
 # Verdicts that warrant a retry (could be a transient blip), versus ones
 # that are definitive on the first attempt (no point re-asking).
 _PROBE_TRANSIENT = {'rate_limited', 'unavailable', 'error'}
@@ -428,6 +441,7 @@ def run_cell_probe_task(task: dict, work: list, timeout: int):
         cell_attempts = attempts
         cell_timeout = timeout
         probe_fn = None
+        surface = 'chat'
         if caps and not _is_chat_model(caps):
             probe_fn = nonchat_probe_fn(caps)
             if probe_fn is None:
@@ -439,7 +453,9 @@ def run_cell_probe_task(task: dict, work: list, timeout: int):
                     'detail': 'non-chat model (%s) — no probe surface implemented'
                               % ','.join(caps),
                     'recommend_disable': False,
+                    'probe_surface': 'none',
                 }
+            surface = _PROBE_SURFACE_NAMES[probe_fn]
             if 'image_gen' in caps:
                 # One real image is generated per attempt — a billed call, so
                 # don't multiply it for transient-filtering; generation also
@@ -458,6 +474,7 @@ def run_cell_probe_task(task: dict, work: list, timeout: int):
             'status': status,
             'detail': detail,
             'recommend_disable': status in _PROBE_DISABLE_STATUSES,
+            'probe_surface': surface,
         }
 
     last_persist = 0.0

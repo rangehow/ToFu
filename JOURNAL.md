@@ -2,6 +2,16 @@
 
 
 
+### 2026-07-25 — 「Project Brain 受阻卡片没有回答入口」端到端根修:结构化人类问答门(block→提问→一键回答→立即重派)+ 面板交互统一重做(epic `pt_e0011658aef743ae`,2 commit:后端 `6dde1918` 12 文件 +876/-20,前端 `ba77ab0e` 4 文件 +692/-34;后端新套件 20/20 + 相邻看板 100/100,前端新套件 5/5 + 相邻 24/24,collect **8491** 0 err)。
+- **病根(owner 截图实证):** `[human-gated]` 受阻卡只有「重开/完成」两个裸按钮,agent 的决定请求(「Owner decides: (A)… (B)…」)埋在长篇英文 reason 里——**人类没有任何入口回答**。点「重开」= 原样重跑 → 撞同一堵墙 → 再 block → 冷却退避 → 心跳再派发 → 再发现同一堵墙:计费轮次空转(pt_39b79cc4 11×、pt_8dc03017 8×、三张 5×)。冷却升级只是把「每小时烧一轮」拉成「每天烧一轮」,从不闭环。
+- **后端:ask_human 式结构化问答门。** `project_tasks` 加 `block_question`(JSON {q, options[]})/`human_answer` 两列(Core 定义 + SQLite/PG ALTER,旧行 '' = 无待答问题,零迁移语义变化);`block_task(question=, options=)` 持久化提问并作废旧答案;**核心行为变化:带未回答提问的 epic 无条件退出派发候选**(等答案不等时间,冷却到期也不重试——NC-1 钉死);`answer_task` + `POST /api/v1/project/board/answer` + `Api.project.boardAnswer` 盖章答案、清全部阻塞态、发 `answered` feed 事件、`on_epic_answered` **立即重派**(不等 30s 心跳),kickoff 注入「人类已回答:X,照此推进」(NC-2 钉死);`render_board_block` 给待答 epic 独立「Waiting for the human's answer」lane(不落 Open「claim me」道);complete/reopen 双列重置。工具 schema 教会 agent「human-gated 就传 question/options」。
+- **前端:面板交互统一重做。** ①「需要你的回答」lane 置顶,问题渲染为卡片主内容(问句框 + 一键选项 chips + 自由输入框,Enter 提交)——就是 ask_human 的交互模型搬上看板;②**每张卡至多一个「展开全文」**(blocked/awaiting 卡 title+reason 合并单 clamp,治「一个 epic 好几个展开」);③md-lite 渲染器(先转义后变换,`**粗体**`/`` `代码` ``/https 链接/换行)统一应用到看板全部 clamp,裸星号/javascript: 协议/XSS 全数免疫;④**window.prompt 从面板清零**(静态守卫):Block 与 New-epic 改用与回答输入同族的内联编辑器(Enter 提交 / Esc 取消);⑤待答卡不再显示假倒计时(「等待你的回答 · 已阻塞 N 次」),已回答 epic 带「你的回答:X」徽标(决定随卡走);所有新文案 zh+en 双语。
+- **测试:** 后端 20 面(持久化/答案作废/冷却后抑制/清洗器/回答全流程+feed+立即派发+kickoff 注入/渲染 lane/执行器/旧行安全/终态重置/双 NEUTER);前端 jsdom 跑真实 renderBoard+_boardMutate 26 探针(lane 分区/提问面板/选项与自由文本双提交/已答徽标/单 clamp 不变式/md-lite 渲染+XSS 惰性/内联编辑器零 prompt/徽标计数)+ NC-FE(删分区→提问 epic 漏回生命周期道)+ 3 静态守卫;两个既有 NC 锚随 reopen SQL 扩列更新;`refreshBoard` 现留存 `_state.board`(answer 动作读选项标签)。
+- **共享 HEAD 实况(如实):** 后端落地期间 `project_dispatch.py` 的 kickoff 注入 hunk 两度被 sibling 的 dbfdfa2a(wait-on-path 清理,删掉我搜索串)整文件回滚,第三次重放+验证后提交;api.js 混有 sibling 未提交 WIP(6 hunk),用「diff→拆 hunk→只 git apply --cached 我的 boardAnswer hunk」法精确入索引,sibling WIP 零损留工作区。
+- **生效边界(诚实):** 后端随服务重启生效(新 schema 列、answer 端点、派发抑制);前端需重启重建 bundle + 浏览器硬刷新。**已存在的裸 [human-gated] 卡**(board 上那 5 张)没有 block_question,维持旧「自动重试」行为;要么 agent 下次 block 时带 question,要么人类点重开让它以新机制再 block 一次。**翻译 overlay 未动**(project-brain-i18n.js 本就干净:data-pb-src 存原文、译文仅显示层)——「英文满屏」是 agent 用英文写 reason + 折叠不翻策略,新设计里问句框仍走 data-pb-src,overlay 可照常翻译。
+
+
+
 ### 2026-07-25(续) — owner 验收抓漏:mpApplyFolders 失败回退不降级档位根修
 
 

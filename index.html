@@ -192,11 +192,11 @@
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
         <span class="topbar-tool-label" data-i18n="topbar.myday">My Day</span>
       </button>
-      <button class="topbar-tool-btn" onclick="openOrchestration()" title="Orchestration Studio — design multi-agent workflows">
+      <button class="topbar-tool-btn" id="studioTopbarBtn" onclick="openOrchestration()" title="Orchestration Studio — design multi-agent workflows" style="display:none">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M6 8.5v3a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-3"/><path d="M12 13.5v2"/></svg>
         <span class="topbar-tool-label" data-i18n="topbar.studio">Studio</span>
       </button>
-      <button class="topbar-tool-btn" onclick="openTaskMode()" title="Task Mode — watch and reopen durable orchestration runs">
+      <button class="topbar-tool-btn" id="tasksTopbarBtn" onclick="openTaskMode()" title="Task Mode — watch and reopen durable orchestration runs" style="display:none">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M7 11.5l2.5 2.5L13 9l2 3h2"/><path d="M8 21h8"/></svg>
         <span class="topbar-tool-label" data-i18n="topbar.tasks">Tasks</span>
       </button>
@@ -288,6 +288,10 @@
           <button class="paper-tab-btn" data-tab="translate" onclick="_switchPaperTab('translate')">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 21h4l1-4h8l1 4h4"/><path d="M5 17l2-8h10l2 8"/><path d="M8 9l1-4h6l1 4"/></svg>
             <span data-i18n="paper.tabBabel">Babel PDF</span>
+          </button>
+          <button class="paper-tab-btn" data-tab="podcast" onclick="_switchPaperTab('podcast')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>
+            <span data-i18n="paper.tabPodcast">Podcast</span>
           </button>
         </div>
         <!-- QA Panel -->
@@ -500,6 +504,12 @@
         <div class="paper-tab-panel" data-tab="translate" style="display:none">
           <div class="paper-translate-content" id="paperTranslateContent">
             <!-- Populated by _initBabelPdfTab() -->
+          </div>
+        </div>
+        <!-- Podcast Panel -->
+        <div class="paper-tab-panel" data-tab="podcast" style="display:none">
+          <div class="paper-podcast-content" id="paperPodcastContent">
+            <!-- Populated by _initPodcastTab() -->
           </div>
         </div>
       </div>
@@ -855,7 +865,7 @@
                    mutually exclusive with the Mode toggles (the flow IS the
                    execution mode).  Uses toggleFlowMenu() (its own popup),
                    NOT toggleSubmenu(). -->
-              <div class="toolbar-submenu" id="submenuFlow">
+              <div class="toolbar-submenu" id="submenuFlow" style="display:none">
                 <div class="submenu-flow-row" id="flowMenuWrapper">
                   <button class="submenu-trigger" id="flowToggle" onclick="toggleFlowMenu(event)" title="Orchestration Flow">
                     <span class="submenu-label" data-i18n="toolbar.flow">编排流程</span>
@@ -1611,7 +1621,7 @@
       </span>
       <span class="mobile-sheet-item-check icon-box" style="opacity:0"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></span>
     </div>
-    <div class="mobile-sheet-item" id="mobileStudio" onclick="closeMobileSheet();openOrchestration()">
+    <div class="mobile-sheet-item" id="mobileStudio" onclick="closeMobileSheet();openOrchestration()" style="display:none">
       <span class="mobile-sheet-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M6 8.5v3a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-3"/><path d="M12 13.5v2"/></svg></span>
       <span class="mobile-sheet-item-text">
         <span class="mobile-sheet-item-name" data-i18n="topbar.studio">Studio</span>
@@ -1619,7 +1629,7 @@
       </span>
       <span class="mobile-sheet-item-check icon-box" style="opacity:0"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></span>
     </div>
-    <div class="mobile-sheet-item" id="mobileTasks" onclick="closeMobileSheet();openTaskMode()">
+    <div class="mobile-sheet-item" id="mobileTasks" onclick="closeMobileSheet();openTaskMode()" style="display:none">
       <span class="mobile-sheet-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M7 11.5l2.5 2.5L13 9l2 3h2"/><path d="M8 21h8"/></svg></span>
       <span class="mobile-sheet-item-text">
         <span class="mobile-sheet-item-name" data-i18n="topbar.tasks">Tasks</span>
@@ -1758,7 +1768,7 @@
   </div>
   <!-- Orchestration Flow — its own section, mirroring the standalone
        #submenuFlow box on desktop (distinct from the Mode toggles). -->
-  <div class="mobile-sheet-section">
+  <div class="mobile-sheet-section" id="mobileFlowSection" style="display:none">
     <div class="mobile-sheet-section-title" data-i18n="toolbar.flow">编排流程</div>
     <div class="mobile-sheet-item" id="mobileFlow" onclick="openMobileFlowPicker()">
       <span class="mobile-sheet-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><path d="M10 6.5h4a2 2 0 0 1 2 2V14"/></svg></span>
@@ -1854,6 +1864,7 @@
 <script defer src="static/js/ui/turn_nav.js?v=20260528a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/ui/streaming_swarm_panel.js?v=20260627a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/ui/streaming_ui.js?v=20260528a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+<script defer src="static/js/ui/stream_session.js?v=20260724a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/ui/stream_reducer.js?v=20260718a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/ui/sse_handlers_tool.js?v=20260603a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/ui/sse_handlers_swarm.js?v=20260603a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
@@ -1961,6 +1972,19 @@
 <script>
 // Feature flags — show/hide optional modules
 var _featureFlags = {};
+// Orchestration flow / Studio / Tasks are unfinished — surface them only when
+// Settings › debug_mode is on. Default HTML is display:none; this helper flips
+// them back to their stylesheet default when the flag is true. Also called from
+// settings/save_export.js on toggle so the change takes effect without reload.
+window._applyDebugModeVisibility = function() {
+  var on = !!(window._featureFlags && window._featureFlags.debug_mode);
+  var ids = ['submenuFlow', 'studioTopbarBtn', 'tasksTopbarBtn',
+             'mobileStudio', 'mobileTasks', 'mobileFlowSection'];
+  for (var i = 0; i < ids.length; i++) {
+    var el = document.getElementById(ids[i]);
+    if (el) el.style.display = on ? '' : 'none';
+  }
+};
 (async function loadFeatureFlags() {
   try {
     const resp = await fetch('api/v1/features');
@@ -1972,6 +1996,9 @@ var _featureFlags = {};
     if (optBadge) {
       const enabled = (flags.optimizer_enabled === undefined) ? true : !!flags.optimizer_enabled;
       optBadge.style.display = enabled ? 'inline-flex' : 'none';
+    }
+    if (typeof window._applyDebugModeVisibility === 'function') {
+      window._applyDebugModeVisibility();
     }
   } catch(e) { /* silent — hide trading by default */ }
 })();

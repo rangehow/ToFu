@@ -210,3 +210,44 @@ def define_table(name: str, *columns, **kw) -> sa.Table:
     one MetaData and a consistent definition site. Does NOT touch any DB.
     """
     return sa.Table(name, metadata, *columns, **kw)
+
+
+# Table names owned by OPTIONAL schema domains — created by that domain's
+# registered initializer (lib/database/schema_registry.py), NOT by the
+# always-on chat/system bootstrap. Excluded from the boot-time missing-table
+# probe, otherwise a vanilla install (trading disabled) would force a full
+# DDL pass on EVERY boot for a table it intentionally never creates.
+OPTIONAL_DOMAIN_TABLES = frozenset({'trading_config'})
+
+# Core tables the live bootstrap creates ONLY on PostgreSQL (no SQLite CREATE
+# exists by design — see the ERROR_RESOLUTIONS note in _tables.py). Excluded
+# from the SQLite boot probe for the same reason as OPTIONAL_DOMAIN_TABLES:
+# probing them on SQLite would force a full DDL pass on EVERY boot of every
+# SQLite install, permanently defeating the version fast-path.
+PG_ONLY_CORE_TABLES = frozenset({'error_resolutions'})
+
+
+def core_boot_table_names(backend: str = None) -> list:
+    """Names of always-on Core tables the chat/system bootstrap must create.
+
+    Derived from the shared MetaData minus tables the bootstrap intentionally
+    never creates on the given backend — optional-domain tables (both
+    backends) and PG-only tables (when ``backend == 'sqlite'``) — so a newly
+    added Core table is covered automatically. ``backend`` defaults to the
+    active ``lib.database._core._BACKEND``. The 2026-07-25 paper_podcasts
+    incident (table registered without bumping ``_SCHEMA_VERSION``) slipped
+    past the version fast-path on every existing deployment; the boot probe
+    consuming this list is what makes that bug class self-healing.
+    """
+    import lib.database._core_schema  # noqa: F401 — registers all tables
+    if backend is None:
+        try:
+            from lib.database import _core
+            backend = getattr(_core, '_BACKEND', 'sqlite')
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug('[CoreSchema] backend probe failed, defaulting sqlite: %s', e)
+            backend = 'sqlite'
+    excluded = set(OPTIONAL_DOMAIN_TABLES)
+    if backend != 'pg':
+        excluded |= PG_ONLY_CORE_TABLES
+    return sorted(set(metadata.tables.keys()) - excluded)

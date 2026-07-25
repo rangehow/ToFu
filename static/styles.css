@@ -1489,7 +1489,21 @@ textarea::placeholder{color:var(--text-tertiary)}
 .paper-podcast-seg.active{background:var(--accent-subtle,rgba(110,86,207,.14))}
 .paper-podcast-seg-time{flex-shrink:0;width:38px;font-size:11px;color:var(--text-tertiary);font-variant-numeric:tabular-nums;padding-top:2px}
 .paper-podcast-seg p{margin:0;font-size:13px;line-height:1.65;color:var(--text-primary)}
-.paper-podcast-empty{align-items:flex-start;text-align:left}
+/* ── Podcast hero empty-states (report_required / lookup_failed): vertically
+ *   + horizontally centered inside the flex .paper-podcast-content pane. The
+ *   old .paper-podcast-empty override (align-items:flex-start;text-align:left)
+ *   pinned the box to the left and read as broken in the big pane. */
+.paper-podcast-hero{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:48px 28px;gap:12px;min-height:320px}
+.paper-podcast-hero-icon{display:flex;align-items:center;justify-content:center;width:72px;height:72px;border-radius:50%;background:color-mix(in srgb,var(--accent) 10%,transparent);color:var(--accent)}
+.paper-podcast-hero-icon.is-warn{background:rgba(210,153,34,.12);color:#d29922}
+.paper-podcast-hero-icon svg{display:block}
+.paper-podcast-hero-title{font-size:16px;font-weight:700;color:var(--text-primary)}
+.paper-podcast-hero-sub{font-size:13px;color:var(--text-tertiary);line-height:1.7;max-width:420px}
+.paper-podcast-hero-steps{display:flex;align-items:center;gap:10px;margin-top:2px}
+.paper-podcast-hero-step{display:inline-flex;align-items:center;padding:5px 12px;border-radius:999px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-tertiary);font-size:12px}
+.paper-podcast-hero-step.is-active{border-color:color-mix(in srgb,var(--accent) 45%,transparent);color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,transparent)}
+.paper-podcast-hero-arrow{display:flex;color:var(--text-tertiary)}
+.paper-podcast-hero .paper-podcast-btn{margin-top:6px;padding:10px 22px;font-size:13px}
 .babel-pdf-module{display:flex;flex-direction:column;flex:1;overflow:hidden}
 .babel-pdf-brand{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--border);background:var(--bg-secondary)}
 .babel-pdf-icon{color:var(--accent);flex-shrink:0}

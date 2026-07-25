@@ -34,6 +34,7 @@ from lib.database._schema_sqlite._meta import (  # noqa: F401
 )
 from lib.database._schema_sqlite._selfheal import (  # noqa: F401
     _CRITICAL_COLUMNS,
+    _missing_core_tables,
     _missing_critical_columns,
     _backfill_search_fts,
 )
@@ -77,10 +78,12 @@ def init_db(_new_connection):
         want_domains = ','.join(active_domains())
         if current_version == _SCHEMA_VERSION and current_domains == want_domains:
             missing = _missing_critical_columns(conn)
-            if missing:
-                logger.warning('[DB] Schema version %d current but critical columns '
-                               'missing %s — forcing full DDL migration to converge',
-                               _SCHEMA_VERSION, missing)
+            missing_tables = _missing_core_tables(conn)
+            if missing or missing_tables:
+                logger.warning('[DB] Schema version %d current but divergence found '
+                               '(missing critical columns %s, missing core tables %s) '
+                               '— forcing full DDL migration to converge',
+                               _SCHEMA_VERSION, missing, missing_tables)
             else:
                 elapsed = time.monotonic() - t0
                 logger.info('[DB] Schema version %d + domains [%s] current — skipping '

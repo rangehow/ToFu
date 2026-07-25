@@ -21,7 +21,7 @@ var _podcast = {
   taskId: '',
   cursor: 0,
   pollTimer: null,
-  status: 'idle',          // idle|generating|done|script_only|report_required|error
+  status: 'idle',          // idle|generating|done|script_only|report_required|lookup_failed|error
   data: null,              // {script, meta, audioUrl, durationSec, scriptOnly}
   errorText: '',
   progress: { done: 0, total: 0 },
@@ -90,12 +90,25 @@ async function _initPodcastTab(force) {
       _pcRender();
       return;
     }
-    _podcast.reportAvailable = !!(look && look.report_available);
-    _podcast.status = _podcast.reportAvailable ? 'idle' : 'report_required';
+    if (look && look.ok) {
+      _podcast.reportAvailable = !!look.report_available;
+      _podcast.status = _podcast.reportAvailable ? 'idle' : 'report_required';
+    } else {
+      /* ★ FIX (2026-07-25): a FAILED lookup (server 5xx with onError:'null'
+       * → null — e.g. the missing paper_podcasts table that 500'd every call)
+       * used to fall through to report_required, telling the user "generate a
+       * report first" for a paper that HAD one — and chaining to the Report
+       * tab could never fix it. report_required is now derived ONLY from an
+       * ok response; a failed lookup gets its own honest state with a retry. */
+      _podcast.status = 'lookup_failed';
+      _podcast.errorText = _pcT('paper.podcastLookupFailed',
+        'Podcast status lookup failed — check the server log.');
+    }
     _pcRender();
   } catch (e) {
     console.warn('[Paper:Podcast] lookup failed:', e);
-    _podcast.status = 'idle';
+    _podcast.status = 'lookup_failed';
+    _podcast.errorText = String(e && e.message || e);
     _pcRender();
   }
 }
@@ -197,6 +210,15 @@ async function _podcastAbort() {
 
 // ── Rendering ──
 
+/* Hero icons — headphones (same glyph as the Podcast tab button) and the
+ * warning triangle (same as the degrade banner). SVG only, never emoji (§3.4). */
+function _pcHeroIconSvg(kind) {
+  if (kind === 'podcast') {
+    return '<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>';
+  }
+  return '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
+}
+
 function _pcRenderProgress() {
   var el = document.getElementById('podcastProgressLine');
   if (!el) return;
@@ -227,11 +249,37 @@ function _pcRender() {
 
   if (s.status === 'report_required') {
     host.innerHTML =
-      '<div class="paper-report-empty paper-podcast-empty">' +
-      '<p>' + _pcEsc(_pcT('paper.podcastNeedReport',
-        'The podcast is adapted from the analysis report — generate the report first.')) + '</p>' +
+      '<div class="paper-podcast-hero">' +
+      '<div class="paper-podcast-hero-icon">' + _pcHeroIconSvg('podcast') + '</div>' +
+      '<div class="paper-podcast-hero-title">' +
+      _pcEsc(_pcT('paper.podcastHeroTitle', 'Listen to this paper')) + '</div>' +
+      '<div class="paper-podcast-hero-sub">' +
+      _pcEsc(_pcT('paper.podcastNeedReport',
+        'The podcast is adapted from the analysis report — generate the report first.')) + '</div>' +
+      '<div class="paper-podcast-hero-steps">' +
+      '<span class="paper-podcast-hero-step is-active">' +
+      _pcEsc(_pcT('paper.podcastStepReport', '1. Generate the report')) + '</span>' +
+      '<span class="paper-podcast-hero-arrow">' +
+      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></span>' +
+      '<span class="paper-podcast-hero-step">' +
+      _pcEsc(_pcT('paper.podcastStepPodcast', '2. Adapt into a podcast')) + '</span>' +
+      '</div>' +
       '<button class="paper-podcast-btn" onclick="_switchPaperTab(\'report\')">' +
       _pcEsc(_pcT('paper.podcastGoReport', 'Go generate the report')) + '</button>' +
+      '</div>';
+    return;
+  }
+
+  /* Lookup failure (server error / unreachable) — honest state with a retry;
+   * deliberately NOT report_required: a 5xx proves nothing about the report. */
+  if (s.status === 'lookup_failed') {
+    host.innerHTML =
+      '<div class="paper-podcast-hero">' +
+      '<div class="paper-podcast-hero-icon is-warn">' + _pcHeroIconSvg('warn') + '</div>' +
+      '<div class="paper-podcast-hero-sub">' + _pcEsc(s.errorText ||
+        _pcT('paper.podcastLookupFailed', 'Podcast status lookup failed — check the server log.')) + '</div>' +
+      '<button class="paper-podcast-btn paper-podcast-btn-ghost" onclick="_initPodcastTab(true)">' +
+      _pcEsc(_pcT('paper.podcastRetry', 'Retry')) + '</button>' +
       '</div>';
     return;
   }

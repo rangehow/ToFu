@@ -67,6 +67,11 @@ const T_MAP = {
   'paper.podcastScriptPhase': 'WRITING_SCRIPT',
   'paper.podcastAudioPhase': 'SYNTH_AUDIO',
   'paper.reportNoText': 'NO_PAPER_TEXT',
+  'paper.podcastLookupFailed': 'LOOKUP_FAILED_TEXT',
+  'paper.podcastRetry': 'RETRY_TEXT',
+  'paper.podcastHeroTitle': 'HERO_TITLE',
+  'paper.podcastStepReport': 'STEP_REPORT',
+  'paper.podcastStepPodcast': 'STEP_PODCAST',
 };
 win.t = global.t = (k) => T_MAP[k] || k;
 win.escapeHtml = global.escapeHtml = (s) =>
@@ -122,6 +127,10 @@ async function settle(n) { for (let i = 0; i < n; i++) await new Promise(r => se
   _podcast.status = 'idle'; _podcast.mode = 'short'; _podcast.lang = 'zh';
   await _initPodcastTab();
   check('report_required_state', host().innerHTML.includes('NEED_REPORT_TEXT'));
+  check('report_required_hero', !!host().querySelector('.paper-podcast-hero')
+    && host().innerHTML.includes('HERO_TITLE')
+    && host().innerHTML.includes('STEP_REPORT')
+    && host().innerHTML.includes('STEP_PODCAST'));
   const goBtn = host().querySelector('button.paper-podcast-btn');
   check('go_report_button_present', !!goBtn);
   // jsdom does NOT execute inline onclick attributes — assert the wiring
@@ -130,6 +139,27 @@ async function settle(n) { for (let i = 0; i < n; i++) await new Promise(r => se
     goBtn.getAttribute('onclick') === "_switchPaperTab('report')");
   win._switchPaperTab('report');
   check('go_report_switches_tab', apiState.reportTabCalls === 1);
+
+  // ── Case A2: FAILED lookup → lookup_failed (honest), NEVER report_required ──
+  // Regression guard for 2026-07-25: a 5xx'd lookup (onError:'null' → null)
+  // used to fall through to report_required — the "generate a report first"
+  // lie for papers that HAD one, unfixable by chaining to the Report tab.
+  apiState.lookupResp = null;  // server 5xx with onError:'null'
+  await _initPodcastTab();
+  check('lookup_failed_state', _podcast.status === 'lookup_failed');
+  check('lookup_failed_not_report_required',
+    !host().innerHTML.includes('NEED_REPORT_TEXT'));
+  check('lookup_failed_hero', !!host().querySelector('.paper-podcast-hero')
+    && host().innerHTML.includes('LOOKUP_FAILED_TEXT'));
+  const retryBtn = host().querySelector('button.paper-podcast-btn-ghost');
+  check('lookup_retry_wired', !!retryBtn &&
+    retryBtn.getAttribute('onclick') === '_initPodcastTab(true)');
+  // ok:false (reachable server, explicit failure) → same honest state
+  apiState.lookupResp = { ok: false, error: 'boom' };
+  await _initPodcastTab();
+  check('lookup_ok_false_also_lookup_failed',
+    _podcast.status === 'lookup_failed'
+    && !host().innerHTML.includes('NEED_REPORT_TEXT'));
 
   // ── Case B: idle card + degrade banner (no TTS slot configured) ──
   apiState.statusResp = { ok: true, tts_available: false, default_voice: '' };
@@ -238,7 +268,7 @@ def test_podcast_tab_state_machine():
     assert proc.returncode == 0, f'node failed: {proc.stderr}\n{out}'
     fails = [ln for ln in out.splitlines() if ln.startswith('FAIL')]
     assert not fails, 'podcast tab failures:\n' + out
-    assert out.count('PASS') >= 18, f'expected >=18 PASS lines, got:\n{out}'
+    assert out.count('PASS') >= 25, f'expected >=25 PASS lines, got:\n{out}'
 
 
 @pytest.mark.skipif(not _node_deps_available(),
@@ -265,6 +295,49 @@ def test_NEUTER_degrade_banner_loadbearing():
         assert proc.returncode == 0, f'node crashed: {proc.stderr}\n{out}'
         assert 'FAIL degrade_banner_shown' in out, \
             'amputating the banner did NOT flip the probe — banner non-load-bearing:\n' + out
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+    assert open(PODCAST_JS, encoding='utf-8').read() == src, 'shipped file modified!'
+
+
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
+def test_NEUTER_lookup_gate_loadbearing():
+    """Amputate the ``look && look.ok`` gate from a COPY of the module
+    (restoring the old fall-through) and prove a null lookup flips the
+    ``lookup_failed`` probe to FAIL — the gate is what stands between a
+    server 5xx and the "generate a report first" lie (2026-07-25 incident:
+    the missing paper_podcasts table 500'd every lookup and the tab told
+    users with reports to go make one)."""
+    src = open(PODCAST_JS, encoding='utf-8').read()
+    gated = """    if (look && look.ok) {
+      _podcast.reportAvailable = !!look.report_available;
+      _podcast.status = _podcast.reportAvailable ? 'idle' : 'report_required';
+    } else {"""
+    assert gated in src, 'ok-gate marker not found — test is stale'
+    # The pre-fix shape: a failed lookup falls through to report_required.
+    ungated = """    _podcast.reportAvailable = !!(look && look.report_available);
+    _podcast.status = _podcast.reportAvailable ? 'idle' : 'report_required';
+    if (false) {"""
+    broken = src.replace(gated, ungated, 1)
+    assert broken != src
+
+    tmp = os.path.join(HERE, '_paper_podcast_no_gate.js')
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(broken)
+    try:
+        chk = subprocess.run(['node', '--check', tmp], capture_output=True,
+                             text=True, timeout=30)
+        assert chk.returncode == 0, f'patched JS invalid: {chk.stderr}'
+        proc = _run_harness(tmp)
+        out = proc.stdout.strip()
+        assert proc.returncode == 0, f'node crashed: {proc.stderr}\n{out}'
+        assert 'FAIL lookup_failed_state' in out, \
+            'amputating the ok-gate did NOT flip the probe — gate non-load-bearing:\n' + out
     finally:
         try:
             os.remove(tmp)

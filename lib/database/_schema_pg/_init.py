@@ -14,7 +14,10 @@ from lib.database._schema_pg._meta import (
     _get_schema_version, _set_schema_version,
     _get_schema_domains, _set_schema_domains,
 )
-from lib.database._schema_pg._selfheal import _missing_critical_columns
+from lib.database._schema_pg._selfheal import (
+    _missing_core_tables,
+    _missing_critical_columns,
+)
 from lib.database._schema_pg._chat import _init_chat_schema
 from lib.database._schema_pg._system import _init_system_schema
 
@@ -59,10 +62,12 @@ def init_db(_new_pg_connection, _STATEMENT_TIMEOUT_MS):
         want_domains = ','.join(active_domains())
         if current_version == _SCHEMA_VERSION and current_domains == want_domains:
             missing = _missing_critical_columns(conn)
-            if missing:
-                logger.warning('[DB] Schema version %d current but critical columns '
-                               'missing %s — forcing full DDL migration to converge',
-                               _SCHEMA_VERSION, missing)
+            missing_tables = _missing_core_tables(conn)
+            if missing or missing_tables:
+                logger.warning('[DB] Schema version %d current but divergence found '
+                               '(missing critical columns %s, missing core tables %s) '
+                               '— forcing full DDL migration to converge',
+                               _SCHEMA_VERSION, missing, missing_tables)
             else:
                 elapsed = time.monotonic() - t0
                 logger.info('[DB] Schema version %d + domains [%s] current — skipping '

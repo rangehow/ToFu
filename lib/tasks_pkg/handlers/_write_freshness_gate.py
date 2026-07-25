@@ -146,6 +146,55 @@ def _format_stale_refusal(fn_name: str, raw_paths: list) -> str:
     )
 
 
+# File-reading tools whose result is authoritative per-file content — the
+# only tools the freshness token tracks (a search/listing covers no single
+# file's bytes).
+FILE_READ_TOOLS = ('read_files', 'inspect_image')
+
+
+def _covered_read_paths(fn_args: dict) -> list[str]:
+    """Every raw path a read_files/inspect_image call will surface."""
+    raws: list[str] = []
+    reads = fn_args.get('reads')
+    if isinstance(reads, list):
+        for spec in reads:
+            if isinstance(spec, dict) and spec.get('path'):
+                raws.append(str(spec['path']).strip())
+            elif isinstance(spec, str) and spec.strip():
+                raws.append(spec.strip())
+    p = fn_args.get('path')
+    if isinstance(p, str) and p.strip():
+        raws.append(p.strip())
+    return [r for r in raws if r]
+
+
+def cached_read_is_stale(task: dict, fn_args: dict,
+                         project_path: str | None) -> bool:
+    """True when serving a dedup/prefetch-cached read result would hand the
+    model STALE bytes: a covered file changed on disk since this
+    conversation's freshness token.
+
+    The streaming pre-exec + dedup-hit path bypasses the project-tool
+    handler, so a cached read can be arbitrarily older than the disk. The
+    tool pipeline consults this before serving a cached
+    read_files/inspect_image result: True → drop the entry and re-execute
+    for real — the real read also re-stamps the token, which is what lets
+    a previously-refused write recover (pt_26c703c5, the 'stable file,
+    3× refused' loop). Fail-open everywhere, mirroring
+    ``check_write_freshness``: no token / unresolvable / vanished → False.
+    """
+    key = _conv_key(task)
+    if not key or not isinstance(fn_args, dict):
+        return False
+    for rp in _covered_read_paths(fn_args):
+        ap = _resolve_abs(project_path, task.get('convId'), rp)
+        if not ap or not os.path.isfile(ap):
+            continue
+        if write_freshness.is_stale(key, ap):
+            return True
+    return False
+
+
 def _read_result_ok(tool_content) -> bool:
     """True when a read_files/inspect_image result carries real content.
 
@@ -176,21 +225,8 @@ def record_read_paths(task: dict, fn_args: dict, project_path: str | None,
     key = _conv_key(task)
     if not key:
         return 0
-    raws: list[str] = []
-    reads = fn_args.get('reads')
-    if isinstance(reads, list):
-        for spec in reads:
-            if isinstance(spec, dict) and spec.get('path'):
-                raws.append(str(spec['path']).strip())
-            elif isinstance(spec, str) and spec.strip():
-                raws.append(spec.strip())
-    p = fn_args.get('path')
-    if isinstance(p, str) and p.strip():
-        raws.append(p.strip())
     recorded = 0
-    for rp in raws:
-        if not rp:
-            continue
+    for rp in _covered_read_paths(fn_args):
         ap = _resolve_abs(project_path, task.get('convId'), rp)
         if not ap or not os.path.isfile(ap):
             continue
@@ -201,4 +237,5 @@ def record_read_paths(task: dict, fn_args: dict, project_path: str | None,
 
 __all__ = [
     'check_write_freshness', 'partition_stale_edits', 'record_read_paths',
+    'cached_read_is_stale', 'FILE_READ_TOOLS',
 ]

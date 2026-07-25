@@ -165,6 +165,33 @@ def execute_tool_pipeline(
         if fn_name in _idempotent_tools:
             cache_key = _make_cache_key(fn_name, fn_args)
             cached = _cache.get(cache_key)
+            # ── FreshGate: never serve a STALE cached read ──
+            # The streaming pre-exec/dedup cache bypasses the project-tool
+            # handler, so a cached read_files/inspect_image result can be
+            # arbitrarily older than the disk (sibling edit, git checkout).
+            # Serving it hands the model stale bytes AND never re-stamps
+            # the write-freshness token — the 're-reads never clear the
+            # refusal' loop (pt_26c703c5). When a covered file moved since
+            # this conversation's token, drop the entry and fall through to
+            # a REAL read (which re-stamps via the handler seam).
+            if cached is not None:
+                try:
+                    from lib.tasks_pkg.handlers._write_freshness_gate import (
+                        FILE_READ_TOOLS, cached_read_is_stale,
+                    )
+                    if (fn_name in FILE_READ_TOOLS
+                            and cached_read_is_stale(task, fn_args,
+                                                     project_path)):
+                        _cache.pop(cache_key, None)
+                        cached = None
+                        logger.info(
+                            '[Task %s] conv=%s FreshGate: %s cache hit '
+                            'BYPASSED — covered file changed since cached '
+                            'read; re-executing',
+                            tid, task.get('convId', ''), fn_name)
+                except Exception as _fe:
+                    logger.debug('[FreshGate] cached-read staleness check '
+                                 'failed (non-fatal): %s', _fe)
             if cached is not None:
                 cached_content, cached_is_search, cached_source, cached_display, cached_engine_bkdn, cached_vertical = \
                     _unpack_cache_entry(cached)

@@ -1,5 +1,15 @@
 # Project Journal
 
+### 2026-07-25(续6) — 「历史会话全部只剩骨架占位符」根修:ff7176dd 把 streaming_render.js 后半截(~600 行)陈旧回放,六个公共签名倒退回古代版本(commit `9836ddd1`,2 文件 +522/-386;守卫 18/18 含新 NEUTER,相邻 24+31+5 全绿,collect **8650** 0 err)。
+- **现象(owner 截图):** 点开任何历史会话永远停在 Loading 骨架;项目面板 Recent 与侧边栏残留测试垃圾(`e2e_dbg_proj`、`please create the hello file`)。
+- **根因(共享 HEAD 事故第五弹,迄今最重):** `ff7176dd`(§7 streamBufs 退役,26 文件)在 streaming_render.js 里夹带了一份**陈旧整段拷贝**——后半截从 `_applyAutopilotRunConcluded` 到文件尾全部倒退回 `9ded44f5` 时代:①懒加载家族 `_destroyLazyObserver/_ensureLazyObserver/const _INITIAL_RENDER=20/_openScrollConvId` 被删,换成古代 `_ensureObserver/_ensureTopSentinel/_lazyLoadSentinelTop/function _INITIAL_RENDER(convId)`;而**调用方**(chat_render/stream_lifecycle/turn_nav/conv_view/main_*)全部保持现代——renderChat 在 chat_render.js:749 裸调 `_destroyLazyObserver()` → ReferenceError,整段渲染在写入 innerHTML 前中断,骨架永驻(与截图完全吻合)。②另五个静默退化:`_applyDisarmResponse` 倒回 `(conv,ev)`(调用方传 `(convId,resp)` → disarm 折叠静默失效)、`_streamingBubbleHTML` 第三参位 timeStr→detail、`_streamingBubbleRole/_surgicalTruncateDOM/_hardCancelActiveStream` 倒回 convId 形(调用方传 conv 对象)、`_handleAutopilotRunConcluded` 丢了权威 `ev.record` 读取(autopilot 收尾事实被丢)。
+- **修复:** 后半截精确拼回 `ff7176dd~1` 状态,保留同文件前半截合法的 §7 工作(VU phase 走 setStreamPhase);恢复区仅有的 2 处 `typeof streamBufs` 死兜底现代化为 `clearStreamSession`(twStop 本就先清会话)。拼完后对 ff7176dd~1 的净差恰好=§7 迁移+这 2 处兜底(diff 核对,无一多余)。
+- **守卫(convview 套件第 ⑦ 节):** 现代公共面 11 枚钉(含**精确参数名**——陈旧回放保函数名只回退签名,这正是它滑过全部既有守卫的原因)+ 6 枚陈旧专属符号禁表;NEUTER 内联陈旧样本全类命中 + 真实文件截肢 `_destroyLazyObserver` 必红;并拿**事故版本实物**(git show HEAD:)验证 checker 报 17 错、修复后 0 错。
+- **兼容性:** sibling `fe883627` 的状态框楼梯修复(zone 懒建回写)与恢复后的现代模板共存绿(其套件 5/5 + 相邻 31/31);sibling 在途的 streaming_ui.js 重写 WIP 零触碰。
+- **连带两修:** ①生产 PG `project_tasks` 缺 `block_question/human_answer` 两列(迁移代码早进 `_schema_pg/_system.py`,但生产服务器自迁移落地后未重启,boot 时 ALTER 没跑过;看板读每分钟报错)——用 `_new_pg_connection(admin=True)` 直接把 boot 同款幂等 ALTER 打上,看板读即刻恢复。②测试垃圾清理:5 个 `test-conv-dbg-*` 会话走生产服务器 DELETE 端点(完整级联+sidebar notify)删除,`/tmp/e2e_dbg_proj` 从 recent_projects 定点 DELETE(该端点只支持全清,不可用);sidebar meta 复验 0 残留。
+- **生效边界(诚实):** 修复已提交,但**运行中的服务器仍 serv 事故 bundle(bundle-4f5cbed4.js,08:33 boot 构建)**——需 owner 重启服务器 + 浏览器硬刷新后历史会话才恢复渲染;重启前占位符仍在。两列 ALTER 与垃圾清理是对活库/活端点的即时操作,已生效。
+- **教训(给 siblings):** 26 文件大 commit 的 diff 必须过一眼「整段签名 revert」——`-function f(现代形)` / `+function f(古代形)` 成对出现就是陈旧回放的指纹;§7 守卫钉的是 streamBufs 名词,钉不住签名漂移,本次第 ⑦ 节守卫补的就是这个洞。
+
 ### 2026-07-25(续5) — 「chatinner 状态框楼梯状堆叠」根修:懒建 status zone 未回写缓存,每帧 append 一个新框(commit `fe883627`,2 文件 +215;新套件 2/2 含 NEUTER,相邻 19/19,collect **8650** 0 err)。
 - **现象(owner 截图):** 同一条流式气泡里 等待中… ×4 → 正在生成回复… → 已发送给 kimi-k3… → 推理中 3/100/142/175/239/261/301/347/387 字符,逐帧堆成楼梯。
 - **根因(ff7176dd §7 引入):** HEAD 默认形态 `_streamingBubbleHTML`(默认 status + 无 detail)只种 content/thinking/tool/fc/swarmInbox 五个 zone,**不种** `[data-zone="status"]`;tool zone 的存在使 `_ensureStreamZones` 提前返回,status zone 落到 `updateStreamingUI` 的懒建分支——该分支 append 后**没写回 `_streamZoneCache`**,下一帧缓存仍报 `status:null` → 再 append 一个,逐帧叠加,每个旧框冻结在自己那一帧的相位文案上(截图与帧序列一一对应)。

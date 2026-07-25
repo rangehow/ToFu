@@ -857,6 +857,9 @@ def execute_tool_pipeline(
         snapshot = _strip_base64_for_snapshot(_wire)
         snap_evt = build_event(
             EventType.MESSAGES_SNAPSHOT,
+            # Request Inspector contract: post-tool mirror, NOT an LLM request.
+            kind='state',
+            model=model,
             roundNum=round_num + 1,
             label=f'Round {round_num + 1} 工具结果后 · {len(snapshot)}条',
             messages=snapshot,

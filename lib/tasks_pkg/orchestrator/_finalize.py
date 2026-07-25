@@ -585,7 +585,7 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
         fb.append({'role':'user','content':f'Here are fetched contents:\n\n{combined}\n\nProvide a comprehensive answer. Cite sources.'})
         try:
             snapshot = _strip_base64_for_snapshot(fb)
-            append_event(task, build_event(EventType.MESSAGES_SNAPSHOT, roundNum='fallback', label=f'Fallback · {len(fb)}条', messages=snapshot))
+            append_event(task, build_event(EventType.MESSAGES_SNAPSHOT, kind='state', model=model, roundNum='fallback', label=f'Fallback · {len(fb)}条', messages=snapshot))
         except Exception as e:
             logger.warning('[Task %s] messages_snapshot fallback failed, model=%s: %s', tid, model, e, exc_info=True)
         body = _o.build_body(

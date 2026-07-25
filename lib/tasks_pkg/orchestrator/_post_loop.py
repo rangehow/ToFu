@@ -144,6 +144,9 @@ def finalize_after_loop(
                 snap = _strip_base64_for_snapshot(_wire)
                 snap_evt = build_event(
                     EventType.MESSAGES_SNAPSHOT,
+                    # Request Inspector contract: post-reply mirror, NOT a request.
+                    kind='state',
+                    model=model,
                     roundNum='final',
                     label=f'最终回复后 · {len(snap)}条',
                     messages=snap)

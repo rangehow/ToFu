@@ -790,6 +790,22 @@ def run_task(task: dict[str, Any]) -> None:
                 snapshot = _strip_base64_for_snapshot(_wire)
                 snap_evt = build_event(
                     EventType.MESSAGES_SNAPSHOT,
+                    # Request Inspector contract (docs/DEBUG_PANEL_REDESIGN.md
+                    # §3): this is the ONLY kind='request' emission — the
+                    # payload the model is about to receive. The other three
+                    # snapshot sites (post-tool / final / fallback) are
+                    # kind='state' (NOT LLM requests).
+                    kind='request',
+                    model=model,
+                    params={
+                        'maxTokens': max_tokens,
+                        'temperature': temperature,
+                        'thinkingEnabled': thinking_enabled,
+                        'thinkingDepth': thinking_depth,
+                        'preset': preset,
+                        'responseFormat': response_format,
+                        'stream': True,
+                    },
                     roundNum=round_num + 1,
                     label=f'Round {round_num + 1} 请求前 · {len(snapshot)}条',
                     messages=snapshot,

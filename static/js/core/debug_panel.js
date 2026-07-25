@@ -67,6 +67,23 @@ window.addEventListener("unhandledrejection", (evt) => {
 });
 // Per-conversation debug message cache: { convId: { messages, label } }
 const _debugCache = {};
+/* ── Request Inspector data plane (P1, docs/DEBUG_PANEL_REDESIGN.md §4) ──
+ * Per-TASK per-round snapshot log: { taskId: { rounds, roundOrder, states } }.
+ * SSE `messages_snapshot` events APPEND here (never overwrite) — the old
+ * _debugCache keeps only the latest snapshot for the legacy panel render and
+ * is untouched. kind='state' snapshots (post-tool / final / fallback) are NOT
+ * LLM requests and land in .states; a missing kind (legacy event) is treated
+ * as 'request' for back-compat. */
+const _debugRequests = {};
+function _debugRecordSnapshot(taskId, rec) {
+  if (!taskId || !rec) return;
+  const t = (_debugRequests[taskId] = _debugRequests[taskId] ||
+    { rounds: {}, roundOrder: [], states: [] });
+  if (rec.kind === "state") { t.states.push(rec); return; }
+  const key = String(rec.roundNum);
+  if (!(key in t.rounds)) t.roundOrder.push(key);
+  t.rounds[key] = rec;
+}
 function clearDebug() {
   document.getElementById("debugContent").innerHTML = "";
   document.getElementById("debugTitle").innerHTML = Icon('inbox', 14) + ' Messages';
@@ -293,7 +310,25 @@ function restoreDebugForConv(convId) {
 //     chip so the human knows they are NOT looking at a precise capture of a
 //     specific round. The live SSE snapshot path (the real wire form) passes
 //     approx=false/undefined and must NEVER show this chip.
-function showMessagesInDebug(messages, label, isUpdate, forConvId, tools, approx) {
+function showMessagesInDebug(messages, label, isUpdate, forConvId, tools, approx, meta) {
+  /* Request Inspector (P1): when the SSE handler forwards the snapshot's
+   * envelope metadata, record the round into the per-task log (append, never
+   * overwrite). The legacy cold path (/debug-messages) passes no meta and is
+   * not recorded — it is an approximation, not a specific round. */
+  if (meta && typeof meta === "object") {
+    _debugRecordSnapshot(meta.taskId, {
+      kind: meta.kind || "request",
+      roundNum: meta.roundNum,
+      label: label,
+      model: meta.model || "",
+      params: meta.params || null,
+      messageCount: messages.length,
+      toolsCount: (tools && tools.length) || 0,
+      ts: Date.now(),
+      messages: messages,
+      tools: tools || null,
+    });
+  }
   const cid =
     forConvId || (typeof activeConvId !== "undefined" ? activeConvId : null);
   // Cache for conversation switching

@@ -204,6 +204,11 @@ function _handleMessagesSnapshot(ev, c) {
           true,
           convId,
           ev.tools || undefined,
+          /* Request Inspector data plane (P1): forward the snapshot envelope
+           * (kind / model / params / roundNum / taskId) so the per-task round
+           * log appends this round instead of overwriting the latest. */
+          { kind: ev.kind, model: ev.model, params: ev.params,
+            roundNum: ev.roundNum, taskId: taskId },
         );
 
     /* ═══ Endpoint mode events ═══ */

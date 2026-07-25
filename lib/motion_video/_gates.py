@@ -1,0 +1,278 @@
+"""lib/motion_video/_gates.py — Zero-LLM validation gates.
+
+Every gate in the motion-video pipeline that does NOT need a model lives
+here, so the agent's self-repair loop has deterministic, cheap checks to
+bounce against (the same philosophy as the paper-podcast script gates):
+
+  * :func:`check_storyboard` — scenes.json structural + timeline gates:
+    required fields, monotonic contiguity, full coverage of the SRT span,
+    duration-sum equality (±tolerance), non-empty scene text.
+  * :func:`check_composition_html` — the HyperFrames composition contract,
+    statically: root ``data-*`` attributes present, ``window.__timelines``
+    key matching ``data-composition-id``, a paused GSAP timeline, and the
+    determinism ban-list (render-time clocks / unseeded random / infinite
+    repeats / rAF / setInterval).
+  * :func:`probe_video` / :func:`verify_spec` — post-render media spec
+    verification via ffprobe (with an ``ffmpeg -i`` fallback): codec,
+    resolution, fps, duration, silence.
+
+Each function returns a list of human-readable error strings (empty = pass)
+so the agent can feed them straight back into a repair prompt.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+
+from lib.log import get_logger
+
+logger = get_logger(__name__)
+
+__all__ = ['check_storyboard', 'check_composition_html', 'probe_video',
+           'verify_spec']
+
+# ── Storyboard gates ──────────────────────────────────────
+
+_SCENE_REQUIRED = ('id', 'start', 'end', 'text')
+
+
+def _num(v) -> float | None:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def check_storyboard(scenes, span: tuple[float, float],
+                     tol: float = 0.1) -> list[str]:
+    """Validate a scenes.json list against the SRT span.
+
+    Args:
+        scenes: list of dicts with id/start/end/text (seconds, float).
+        span: ``(first_start, last_end)`` from :func:`lib.motion_video._srt.total_span`.
+        tol: coverage / contiguity tolerance in seconds (design contract: ±0.1s).
+
+    Returns a list of error strings (empty when the storyboard is valid).
+    """
+    errors: list[str] = []
+    if not isinstance(scenes, list) or not scenes:
+        return ['scenes must be a non-empty list']
+    span_start, span_end = span
+    span_dur = span_end - span_start
+
+    total = 0.0
+    prev_end: float | None = None
+    for i, sc in enumerate(scenes):
+        label = sc.get('id', f'#{i + 1}') if isinstance(sc, dict) else f'#{i + 1}'
+        if not isinstance(sc, dict):
+            errors.append(f'scene {label}: not an object')
+            continue
+        for key in _SCENE_REQUIRED:
+            if key not in sc:
+                errors.append(f'scene {label}: missing field {key!r}')
+        start, end = _num(sc.get('start')), _num(sc.get('end'))
+        if start is None or end is None:
+            errors.append(f'scene {label}: start/end must be numbers (seconds)')
+            continue
+        if end <= start:
+            errors.append(f'scene {label}: end ({end:.3f}) must be after start ({start:.3f})')
+            continue
+        if not str(sc.get('text') or '').strip():
+            errors.append(f'scene {label}: text is empty')
+        if prev_end is not None and abs(start - prev_end) > tol:
+            kind = 'gap' if start > prev_end else 'overlap'
+            errors.append(f'scene {label}: {kind} vs previous scene '
+                          f'(prev end {prev_end:.3f}, this start {start:.3f})')
+        prev_end = end
+        total += end - start
+
+    if isinstance(scenes[0], dict):
+        first_start = _num(scenes[0].get('start'))
+        if first_start is not None and abs(first_start - span_start) > tol:
+            errors.append(f'first scene starts at {first_start:.3f} but SRT starts '
+                          f'at {span_start:.3f} (tol {tol}s)')
+    if isinstance(scenes[-1], dict):
+        last_end = _num(scenes[-1].get('end'))
+        if last_end is not None and abs(last_end - span_end) > tol:
+            errors.append(f'last scene ends at {last_end:.3f} but SRT ends '
+                          f'at {span_end:.3f} (tol {tol}s)')
+    if prev_end is not None and abs(total - span_dur) > tol:
+        errors.append(f'scene durations sum to {total:.3f}s but SRT span is '
+                      f'{span_dur:.3f}s (tol {tol}s)')
+    return errors
+
+
+# ── Composition static gates ──────────────────────────────
+
+_COMP_ID_RE = re.compile(r'data-composition-id="([^"]+)"')
+_DURATION_RE = re.compile(r'data-duration="([0-9.]+)"')
+_WIDTH_RE = re.compile(r'data-width="(\d+)"')
+_HEIGHT_RE = re.compile(r'data-height="(\d+)"')
+_PAUSED_TL_RE = re.compile(r'gsap\.timeline\(\s*\{[^}]*paused\s*:\s*true')
+
+#: (pattern, label) — determinism ban-list from the HyperFrames contract.
+_BANNED = (
+    (re.compile(r'\bDate\.now\s*\('), 'Date.now() (render-time clock)'),
+    (re.compile(r'\bperformance\.now\s*\('), 'performance.now() (render-time clock)'),
+    (re.compile(r'\bMath\.random\s*\('), 'Math.random() (unseeded randomness)'),
+    (re.compile(r'repeat\s*:\s*-1'), 'repeat: -1 (infinite loop breaks seek)'),
+    (re.compile(r'\brequestAnimationFrame\s*\('), 'requestAnimationFrame (frame-chained state)'),
+    (re.compile(r'\bsetInterval\s*\('), 'setInterval (wall-clock state)'),
+)
+
+
+def check_composition_html(html: str) -> list[str]:
+    """Statically validate one HyperFrames composition HTML string."""
+    errors: list[str] = []
+    if not html or not html.strip():
+        return ['composition HTML is empty']
+
+    # Banned-pattern scan runs on CODE, not prose: strip HTML comments and
+    # JS block comments first so a contract note mentioning e.g. `repeat:-1`
+    # doesn't self-trip the gate.
+    code = re.sub(r'<!--.*?-->', '', html, flags=re.S)
+    code = re.sub(r'/\*.*?\*/', '', code, flags=re.S)
+
+    comp = _COMP_ID_RE.search(code)
+    if not comp:
+        errors.append('missing data-composition-id on the composition root')
+    if not _DURATION_RE.search(code):
+        errors.append('missing data-duration on the composition root')
+    if not _WIDTH_RE.search(code) or not _HEIGHT_RE.search(code):
+        errors.append('missing data-width / data-height on the composition root '
+                      '(the root must be explicitly sized)')
+
+    if comp:
+        key_re = re.compile(
+            r'window\.__timelines\[\s*[\'"]' + re.escape(comp.group(1)) + r'[\'"]\s*\]')
+        if '__timelines' not in code:
+            errors.append('no window.__timelines registration found')
+        elif not key_re.search(code):
+            errors.append(f'window.__timelines key must equal data-composition-id '
+                          f'({comp.group(1)!r})')
+    if 'gsap.' in code and not _PAUSED_TL_RE.search(code):
+        errors.append('GSAP timeline must be created with { paused: true }')
+
+    for rx, label in _BANNED:
+        if rx.search(code):
+            errors.append(f'determinism violation: {label}')
+    return errors
+
+
+# ── Media probing ─────────────────────────────────────────
+
+def _probe_with_ffprobe(ffprobe: str, path: str) -> dict | None:
+    try:
+        out = subprocess.run(
+            [ffprobe, '-v', 'error',
+             '-show_entries', 'stream=codec_type,codec_name,width,height,r_frame_rate,duration',
+             '-of', 'json', path],
+            capture_output=True, text=True, timeout=60)
+    except Exception as e:
+        logger.warning('[MotionVideo] ffprobe failed for %s: %s', path, e)
+        return None
+    if out.returncode != 0:
+        logger.warning('[MotionVideo] ffprobe rc=%s for %s: %.300s',
+                       out.returncode, path, out.stderr)
+        return None
+    try:
+        data = json.loads(out.stdout)
+    except json.JSONDecodeError as e:
+        logger.warning('[MotionVideo] ffprobe JSON parse failed for %s: %s', path, e)
+        return None
+    info: dict = {'has_audio': False}
+    for st in data.get('streams', []):
+        if st.get('codec_type') == 'video':
+            info['codec'] = st.get('codec_name', '')
+            info['width'] = int(st.get('width') or 0)
+            info['height'] = int(st.get('height') or 0)
+            rate = st.get('r_frame_rate', '0/1')
+            try:
+                num, den = rate.split('/')
+                info['fps'] = round(float(num) / float(den), 3) if float(den) else 0.0
+            except (ValueError, ZeroDivisionError):
+                info['fps'] = 0.0
+            if st.get('duration'):
+                try:
+                    info['duration'] = float(st['duration'])
+                except (TypeError, ValueError):
+                    pass
+        elif st.get('codec_type') == 'audio':
+            info['has_audio'] = True
+    return info if 'codec' in info else None
+
+
+_FFMPEG_I_VIDEO_RE = re.compile(
+    r'Stream .*Video: (\w+).*?(\d{2,5})x(\d{2,5}).*?([0-9.]+) fps')
+_FFMPEG_I_AUDIO_RE = re.compile(r'Stream .*Audio:')
+_FFMPEG_I_DUR_RE = re.compile(r'Duration: (\d+):(\d+):(\d+\.\d+)')
+
+
+def _probe_with_ffmpeg(ffmpeg: str, path: str) -> dict | None:
+    """Fallback probe parsing ``ffmpeg -i`` stderr (ffprobe absent)."""
+    try:
+        out = subprocess.run([ffmpeg, '-hide_banner', '-i', path],
+                             capture_output=True, text=True, timeout=60)
+    except Exception as e:
+        logger.warning('[MotionVideo] ffmpeg -i failed for %s: %s', path, e)
+        return None
+    blob = out.stderr + out.stdout
+    v = _FFMPEG_I_VIDEO_RE.search(blob)
+    if not v:
+        return None
+    info: dict = {'codec': v.group(1), 'width': int(v.group(2)),
+                  'height': int(v.group(3)), 'fps': float(v.group(4)),
+                  'has_audio': bool(_FFMPEG_I_AUDIO_RE.search(blob))}
+    d = _FFMPEG_I_DUR_RE.search(blob)
+    if d:
+        info['duration'] = int(d.group(1)) * 3600 + int(d.group(2)) * 60 + float(d.group(3))
+    return info
+
+
+def probe_video(path: str, *, ffprobe: str = '', ffmpeg: str = '') -> dict | None:
+    """Probe a media file → ``{codec,width,height,fps,duration,has_audio}``.
+
+    Uses ffprobe when resolvable, else falls back to parsing ``ffmpeg -i``.
+    Returns None on failure (logged).
+    """
+    if not os.path.isfile(path):
+        logger.warning('[MotionVideo] probe_video: not a file: %s', path)
+        return None
+    if not ffprobe or not ffmpeg:
+        from lib.motion_video._env import ffmpeg_bin, ffprobe_bin
+        ffprobe = ffprobe or ffprobe_bin()
+        ffmpeg = ffmpeg or ffmpeg_bin()
+    if ffprobe:
+        info = _probe_with_ffprobe(ffprobe, path)
+        if info is not None:
+            return info
+    if ffmpeg:
+        return _probe_with_ffmpeg(ffmpeg, path)
+    logger.warning('[MotionVideo] probe_video: neither ffprobe nor ffmpeg available')
+    return None
+
+
+def verify_spec(probe: dict, *, width: int, height: int, fps: float,
+                duration: float, tol: float = 0.15,
+                require_silent: bool = True) -> list[str]:
+    """Verify a :func:`probe_video` result against the expected scene spec."""
+    errors: list[str] = []
+    if not probe:
+        return ['probe failed (no media info)']
+    if probe.get('width') != width or probe.get('height') != height:
+        errors.append(f'resolution {probe.get("width")}x{probe.get("height")} '
+                      f'!= expected {width}x{height}')
+    got_fps = float(probe.get('fps') or 0)
+    if abs(got_fps - fps) > 0.6:  # 29.97 vs 30 style slack
+        errors.append(f'fps {got_fps} != expected {fps}')
+    got_dur = float(probe.get('duration') or 0)
+    if abs(got_dur - duration) > tol:
+        errors.append(f'duration {got_dur:.3f}s != expected {duration:.3f}s '
+                      f'(tol {tol}s)')
+    if require_silent and probe.get('has_audio'):
+        errors.append('scene MP4 has an audio track (scenes must be silent; '
+                      'narration is muxed at concat time)')
+    return errors

@@ -190,6 +190,99 @@ CATALOG: list[SkillCatalogEntry] = [
     #  TOFU_SKILL_CATALOG_URL.)
 ]
 
+# ── vibe-motion / HyperFrames video packs ────────────────────────────
+#
+# The six AgentSkills packs bundled by vibe-motion/auto-motion (the
+# workflow tofu's motion-video pipeline absorbs — see
+# docs/MOTION_VIDEO_DESIGN.md). All install from the same mono-repo zip;
+# ``subdir`` picks the pack. The render toolchain itself (node /
+# hyperframes CLI / ffmpeg / Chrome) is bootstrapped by the
+# ``motion_video_env_check`` tool — these packs are pure KNOWLEDGE
+# (composition contract, motion rules, design presets, workflow agents).
+
+_HYPERFRAMES_ZIP = 'https://codeload.github.com/vibe-motion/auto-motion/zip/refs/heads/main'
+_HYPERFRAMES_SKILLS_PREFIX = 'exampleFolder/.claude/skills'
+
+CATALOG += [
+    {
+        'id': 'hyperframes',
+        'name': 'HyperFrames (router)',
+        'description': 'HTML→video entry skill — the HyperFrames composition contract, CLI dev loop, and workflow intent router. Read-first for any video/animation task.',
+        'icon': '🎬',
+        'category': CAT_CREATIVE,
+        'download_url': _HYPERFRAMES_ZIP,
+        'homepage': 'https://github.com/vibe-motion/auto-motion',
+        'subdir': f'{_HYPERFRAMES_SKILLS_PREFIX}/hyperframes',
+        'author': 'vibe-motion',
+        'tags': ['video', 'animation', 'hyperframes', 'motion'],
+        'featured': True,
+        'requires': {'bins': ['node', 'ffmpeg']},
+        'install_note': 'Render toolchain is bootstrapped separately by the motion_video_env_check tool.',
+    },
+    {
+        'id': 'hyperframes-motion',
+        'name': 'HyperFrames Motion',
+        'description': 'The motion knowledge pack: 29 atomic motion rules, 13 multi-phase scene blueprints with runnable examples, transitions, and per-runtime adapters (GSAP / Lottie / Three.js / WAAPI).',
+        'icon': '✨',
+        'category': CAT_CREATIVE,
+        'download_url': _HYPERFRAMES_ZIP,
+        'homepage': 'https://github.com/vibe-motion/auto-motion',
+        'subdir': f'{_HYPERFRAMES_SKILLS_PREFIX}/hyperframes-motion',
+        'author': 'vibe-motion',
+        'tags': ['video', 'animation', 'motion', 'gsap', 'choreography'],
+        'featured': True,
+    },
+    {
+        'id': 'hyperframes-design',
+        'name': 'HyperFrames Design',
+        'description': 'Design direction for video scenes: 20+ frame presets, palettes, typography, beat planning and brand/style decisions.',
+        'icon': '🎨',
+        'category': CAT_CREATIVE,
+        'download_url': _HYPERFRAMES_ZIP,
+        'homepage': 'https://github.com/vibe-motion/auto-motion',
+        'subdir': f'{_HYPERFRAMES_SKILLS_PREFIX}/hyperframes-design',
+        'author': 'vibe-motion',
+        'tags': ['video', 'design', 'palette', 'typography', 'brand'],
+    },
+    {
+        'id': 'motion-graphics',
+        'name': 'Motion Graphics (workflow)',
+        'description': 'Director→Builder→Finalize subagent pipeline for short design-led motion graphics (kinetic type, stat count-ups, charts, logo stings, lower-thirds).',
+        'icon': '📊',
+        'category': CAT_CREATIVE,
+        'download_url': _HYPERFRAMES_ZIP,
+        'homepage': 'https://github.com/vibe-motion/auto-motion',
+        'subdir': f'{_HYPERFRAMES_SKILLS_PREFIX}/motion-graphics',
+        'author': 'vibe-motion',
+        'tags': ['video', 'motion-graphics', 'kinetic-type', 'workflow'],
+    },
+    {
+        'id': 'general-video',
+        'name': 'General Video (workflow)',
+        'description': 'Longer / multi-scene video workflow: design system → prompt expansion → plan → layout-before-animation → build → validate.',
+        'icon': '📹',
+        'category': CAT_CREATIVE,
+        'download_url': _HYPERFRAMES_ZIP,
+        'homepage': 'https://github.com/vibe-motion/auto-motion',
+        'subdir': f'{_HYPERFRAMES_SKILLS_PREFIX}/general-video',
+        'author': 'vibe-motion',
+        'tags': ['video', 'workflow', 'multi-scene'],
+    },
+    {
+        'id': 'vibe-image-gen',
+        'name': 'Image Gen (MiniMax)',
+        'description': 'Single-image generation from a text prompt via the MiniMax image-01 API (script + prompt-writing guide). Requires a MINIMAX_API_KEY; tofu deployments usually prefer the built-in generate_image tool.',
+        'icon': '🖼️',
+        'category': CAT_CREATIVE,
+        'download_url': _HYPERFRAMES_ZIP,
+        'homepage': 'https://github.com/vibe-motion/auto-motion',
+        'subdir': f'{_HYPERFRAMES_SKILLS_PREFIX}/image-gen',
+        'author': 'vibe-motion',
+        'tags': ['image', 'generation', 'minimax', 'assets'],
+        'install_note': 'The SKILL.md-derived install id is "image-gen" (upstream name); this catalog entry tracks it via the .catalog_id marker.',
+    },
+]
+
 
 # \u2500\u2500 Lookup helpers \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 

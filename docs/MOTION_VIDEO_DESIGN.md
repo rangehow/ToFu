@@ -1,6 +1,6 @@
 # Tofu 动画视频生成能力设计稿(auto-motion 吸收 + 超越)
 
-> 状态:**P0 环境验证已完成(2026-07-25,全链跑通,见 §5);P1 起待 owner 拍板(§8)。**
+> 状态:**P0 环境验证 ✅(全链跑通)· P1 最小链路 ✅(2026-07-25 交付,tools-first 形态);P2 音画合成待开工(对齐策略待拍板,见 §8)。**
 > 参考仓库:`/mnt/dolphinfs/ssd_pool/docker/user/hadoop-aipnlp/INS/ruanjunhao04/auto-motion`
 > (与 tofu 同级目录,2026-07-25 clone 自 https://github.com/vibe-motion/auto-motion,49MB)
 
@@ -141,19 +141,21 @@ transcription.srt
 
 **质量验证**:ffprobe 复核 h264/分辨率/帧率/时长/无音轨全部符合;抽帧目检通过;**CJK 文字渲染正常**(无豆腐块);官方蓝图示例在本环境原样跑通(唯一 lint 报错是示例自身缺 `@font-face` 的排版告警,且 lint 的 fixHint 直接给出修复方法——利好 P1 自动修复环设计)。
 
-### P1 — 最小链路:技能包 + 单命令生成(静音乐片)
+### P1 — 最小链路:技能包 + 单命令生成(静音乐片)—— ✅ 已交付(2026-07-25,owner 拍板 A 全绿推进)
 
-- 把 6 个 hyperframes 技能包做成 tofu 技能包(`.tofu/skills/motion-video-*`,走 installer 校验);
-- 新增 `lib/motion_video/`(镜像 `lib/paper/` 播客链结构):
-  - `_storyboard.py`:SRT 解析 + 语义分镜(LLM,输出 scenes.json:编号/起止/文案/时长,和校验 Σ=总时长±0.1s);
-  - `_render.py`:hyperframes CLI 子进程封装(env 注入 LD_LIBRARY_PATH/FFmpeg 路径,退出码+日志落盘,超时与中 AbortSignal);
-  - `_concat.py`:FFmpeg 规格归一 + 拼接(规格不一致先转码,原仓库同款规则);
-  - `engine.py`:任务流编排(分镜→逐镜生成 composition(模型写 HTML)→lint/inspect 闸→render→拼接),TaskRuntime 注册;
-- 聊天入口:用户贴 SRT 或给主题(主题→先写口播稿→TTS 出轴→SRT),一条消息出 `final.mp4` 进 artifacts;
-- **验收闸零 LLM**:scenes.json 结构/时长和校验 + hyperframes lint/validate/inspect + ffprobe 规格复核(分辨率/帧率/时长/无音轨)。
+**形态修正(与原设计稿的差异,已交付验证):** 原设计写「engine.py + TaskRuntime 注册」。落地采用 **tools-first**:分镜与 composition 创作由**聊天主 agent** 承担(严格强于 engine 内的一次性 LLM 调用——主 agent 有 write_file/web_search/读 guide 的全套能力,且进度天然以工具卡片呈现在对话里),后端只提供确定性机械层。专用 TaskRuntime/engine 推到 P2(TTS 音画合成本来就需要服务端编排)或 P3(UI 面板),届时复用同一套 `lib/motion_video` 原语。
+
+已交付:
+
+- **`lib/motion_video/`**:`_env.py`(hyperframes 托管自举安装钉版 0.7.71 + ffmpeg/ffprobe/Chrome 解析 + LD_LIBRARY_PATH 注入)、`_srt.py`(毫秒精度 SRT 解析)、`_gates.py`(零 LLM 闸:分镜时间轴/契约静态扫描含注释剥离/ffprobe 规格复核)、`_render.py`(CLI 子进程封装:env 注入、超时、AbortSignal、失败分类 env_missing/lint/chrome/timeout/aborted)、`_concat.py`(规格归一 + 原子拼接 + 时长复核);
+- **`lib/motion_video/guide/`**:WORKFLOW.md(tofu 原生编排指南,替代 PROMPT.md)+ COMPOSITION_CONTRACT.md(契约蒸馏)+ skeleton.html(1080x1440 骨架);
+- **6 个聊天工具**(`lib/tools/motion_video.py` + handler + registry,project 门):env_check(自举)/storyboard_check(分镜闸)/check(lint+validate+inspect)/render/probe/concat;
+- **技能商店**:6 个 vibe-motion 知识包进 catalog(codeload zip + subdir,installer 校验,用户一键安装,不改用户数据);
+- **测试**:`tests/test_motion_video.py` 33 测全绿(含双 NEUTER:剥时长和闸/连续性闸各自放行坏分镜;渲染 env 注入/中止/缺 bin;concat 双模式;注册门正反两向),相邻 skills/registry 套件 43+63 绿,collect 8756 0 err。
 
 ### P2 — 音画合成
 
+- **专用 TaskRuntime + engine 在此落地**(P1 形态修正推迟至此):TTS 配音本身是服务端编排(逐镜合成/停顿/重试/Abort),走播客 `podcast_runtime` 镜像——`motion_runtime` + `engine.py`(分镜→逐镜[作者回调=P1 的 agent 或 engine 内 LLM]→渲染→拼接→混流),dedup 四元组索引,api_v1 端面;
 - TTS 逐镜头配音(复用 `lib/tts` 分块/拼接/停顿逻辑),镜头音频长度 vs 镜头时长对齐策略(音频短→补静音尾;音频长→自动微调镜头时长重渲或拉伸留白,二选一,拍板时定);
 - FFmpeg mux 音轨;可选字幕烧录(burn-in)或侧车 .srt;
 - 降噪:loudnorm 归一(播客链已有同款)。
@@ -192,9 +194,10 @@ transcription.srt
 
 ## 8. 拍板请求
 
-请 owner 定夺:
+~~1. 总体方向~~ ✅ A 全绿推进(2026-07-25 owner 拍板)
+~~3. 技能包落地形式~~ ✅ 随 A:6 包进技能商店 catalog(用户一键安装),引擎读 in-tree guide
+~~4. 入口形态~~ ✅ 随 A:P1 聊天命令式(6 个 motion_video_* 工具,project 门)
 
-1. **总体方向**:按 P0→P3 推进?(P0 纯验证零风险,可先跑)
-2. **P2 音画对齐策略**:严格对轴 vs 宽松对轴(§6 第 4 行)
-3. **技能包落地形式**:6 包原样装进 tofu skills(推荐,改动最小) vs 合并成 1 个「motion-video」大包
-4. **入口形态**:P1 先做聊天命令式(贴 SRT 出片),UI 面板 P3 再做 —— 同意?
+剩余待拍:
+
+2. **P2 音画对齐策略**:严格对轴(调语速/停顿迁就字幕轴) vs 宽松对轴(镜头时长随配音微调)——P2 开工前回答即可

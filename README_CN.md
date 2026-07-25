@@ -417,6 +417,25 @@ pip install docling --extra-index-url https://download.pytorch.org/whl/cpu
 多模型调度在 Gemini 和 GPT 图片模型之间轮转，遇到限速自动重试。
 
 ---
+多模型调度在 Gemini 和 GPT 图片模型之间轮转，遇到限速自动重试。
+
+---
+
+### 🎬 动画视频（MG 动效）
+
+把字幕稿（SRT）变成竖屏 MG 动画视频 —— Tofu 会把字幕按语义分镜、为每个镜头编写 HyperFrames HTML 动画、用无头 Chrome 逐镜头渲染，最后拼接出 `final.mp4`。不依赖任何外部 agent 命令行，也不需要视频剪辑软件。
+
+**使用方法：** 挂载项目（Studio），贴一段 SRT（或给一个口播主题），然后说生成视频 —— 例如“把这份字幕做成竖屏短视频”。助手会在项目的 `.tofu/motion_video/<slug>/` 下工作，并报告成品 MP4 路径。
+
+- **确定性渲染** —— 每一帧都由时间戳独立计算（可寻址的 GSAP 时间轴）；某个镜头不满意时，只重渲该镜头再重新拼接即可
+- **零 LLM 质量闸** —— 分镜时间轴校验（完整覆盖、时长和 ±0.1s）、每次渲染前的 HyperFrames lint/validate/inspect、渲染后的 ffprobe 规格复核（分辨率/帧率/时长/静音）
+- **工具链自举** —— `motion_video_env_check` 首次使用自动安装钉版 HyperFrames CLI；ffmpeg 来自 `imageio-ffmpeg`（免 root）；Chrome 复用 Playwright 缓存
+- **失败分类** —— 渲染错误按类返回（`env_missing` / `lint` / `chrome` / `timeout` / `aborted`）并附带上游修复提示，不用啃原始日志
+- **深度知识包** —— 来自 vibe-motion/auto-motion 的 29 条动效规则、13 个镜头蓝图、20+ 设计帧预设，在 设置 → 技能 里搜 “hyperframes” 一键安装
+
+配音（TTS 音画合成）、并行渲染与逐镜头预览面板在路线图上（见 `docs/MOTION_VIDEO_DESIGN.md`）。
+
+---
 
 ### 🎨 Artifacts（实时画布）
 

@@ -128,6 +128,18 @@ def _build_image_gen(ctx: ToolContext) -> list[dict]:
     return [GENERATE_IMAGE_TOOL]
 
 
+def _build_motion_video(ctx: ToolContext) -> list[dict]:
+    # Motion-video (MG animation) pipeline — gated on a project being
+    # attached (the workdir convention lives under the project's .tofu/),
+    # same gate as the project tool family.
+    if not ctx.project_ready:
+        return []
+    from lib.tools.motion_video import MOTION_VIDEO_TOOLS
+    logger.debug('[Task %s] Motion-video tools enabled (%d)',
+                 ctx.tid, len(MOTION_VIDEO_TOOLS))
+    return list(MOTION_VIDEO_TOOLS)
+
+
 def _build_conv_ref(ctx: ToolContext) -> list[dict]:
     # CONV_REF_TOOLS = [list_conversations, get_conversation] — BOTH are
     # read-only (discover siblings + open one). Register them in two cases:
@@ -325,6 +337,21 @@ def _register_builtins() -> None:
         ToolSpec('image_gen', _build_image_gen, phase='base',
                  provides=frozenset({'generate_image'}),
                  category='image', description='Image generation'),
+        ToolSpec('motion_video', _build_motion_video, phase='base',
+                 provides=frozenset({
+                     'motion_video_env_check', 'motion_video_storyboard_check',
+                     'motion_video_check', 'motion_video_render',
+                     'motion_video_probe', 'motion_video_concat',
+                 }),
+                 write_tools=frozenset({
+                     'motion_video_render', 'motion_video_concat',
+                 }),
+                 idempotent_tools=frozenset({
+                     'motion_video_env_check', 'motion_video_storyboard_check',
+                     'motion_video_check', 'motion_video_probe',
+                 }),
+                 category='video',
+                 description='Motion video (MG animation) generation'),
         ToolSpec('conv_ref', _build_conv_ref, phase='base',
                  provides=frozenset({'list_conversations', 'get_conversation',
                                      'project_charter_read', 'project_charter_propose',

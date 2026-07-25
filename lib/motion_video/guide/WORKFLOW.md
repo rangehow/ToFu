@@ -1,0 +1,89 @@
+# Tofu Motion Video — Agent Workflow Guide
+
+> Read this BEFORE generating any motion video. It is the tofu-native
+> replacement for auto-motion's Codex/Claude-Code two-agent relay: YOU are
+> both the storyboarder and the scene author; the `motion_video_*` tools are
+> the deterministic render/verify/concat machinery around you.
+> For the composition HTML contract read `COMPOSITION_CONTRACT.md` next;
+> copy `skeleton.html` as the starting point of every scene.
+
+## Pipeline
+
+1. **Get the transcript** — an SRT the user pasted (write it to a file) or
+   one produced upstream (e.g. a podcast/TTS pass). If the user gives a bare
+   topic instead of an SRT, write a spoken-style narration script first,
+   confirm length/tone with the user, and use that as the scene text source
+   (a true SRT with timestamps comes from the TTS pass — P2; for now you may
+   estimate timings by narration length and TELL the user they are estimates).
+2. **Storyboard** — split the SRT into scenes. Coarse-grained: merge
+   consecutive cues that express one topic / one causal chain / one visual
+   concept. Rules:
+   - Scenes are contiguous and cover the FULL SRT span (first cue start →
+     last cue end). Silence gaps between cues fold into the PREVIOUS scene
+     as hold/outro; a long gap may become its own transition scene.
+   - Write `scenes.json`: a list of
+     `{"id": "scene-001", "start": <sec>, "end": <sec>, "text": "<cue text>",
+       "visual": "<one-line visual concept for yourself>"}`
+     Times are float seconds with millisecond precision (e.g. `2.833`) —
+     never round to integers.
+   - **Gate (mandatory)**: call `motion_video_storyboard_check` with the SRT
+     path + scenes.json path. Fix and re-check until it passes (contiguity,
+     full coverage, duration sum ±0.1s).
+3. **Per scene, sequentially** (parallel rendering is a later phase):
+   a. Create the scene workdir `scenes/<id>/` and write `index.html` —
+      start from `skeleton.html`, set `data-duration` to the EXACT scene
+      duration (`end - start`), and author the animation per
+      `COMPOSITION_CONTRACT.md`. The scene must fill its FULL duration —
+      trailing time after the text's point is made stays as hold/outro;
+      never cut early. Visual complexity serves the copy; do not gold-plate.
+      If the text names a real product/brand you don't know, web-search it
+      and download the official SVG/logo (professional logos beat generic
+      icons); save assets into the scene dir.
+   b. **Static gate (mandatory)**: `motion_video_check` on the scene dir.
+      On errors, repair IN PLACE and re-check (each finding comes with a
+      fix hint). Max 2 repair rounds; if still failing, tell the user which
+      scene and why, and stop — do NOT render a broken scene.
+   c. **Render**: `motion_video_render` (quality `standard`; use `draft`
+      while iterating on timing/layout, `high` only for the final take).
+      Then `motion_video_probe` the output MP4: it must match
+      width/height/fps and the scene duration within ±0.15s, and be silent.
+4. **Assemble**: `motion_video_concat` with all scene MP4s in order →
+   `final.mp4`. It normalizes mismatched specs automatically and verifies
+   the total duration.
+5. **Deliver**: report the final path (+ per-scene directory). If anything
+   failed, report the failing scene id, the failure category from the tool
+   result, and the suggested fix.
+
+## Workdir convention
+
+Put everything under `.tofu/motion_video/<slug>/` in the CURRENT PROJECT
+(it is the per-project tofu data dir — hidden, gitignored, survives
+re-renders):
+
+```
+.tofu/motion_video/<slug>/
+  transcription.srt
+  scenes.json
+  scenes/scene-001/index.html (+ assets) → scene-001.mp4
+  scenes/scene-002/...
+  final.mp4
+```
+
+## Environment
+
+- First time only (or when a tool reports `env_missing`): call
+  `motion_video_env_check` with `install=true` — it auto-installs the pinned
+  HyperFrames CLI into the tofu data dir and reports node/ffmpeg/Chrome.
+- Rendering is ~3.5× realtime on this class of host (a 10s scene ≈ 35s);
+  warn the user that a multi-minute video takes minutes, not seconds.
+- Renders are deterministic: same composition → same pixels. If a scene
+  looks wrong, fix the HTML and re-render JUST that scene, then re-concat.
+
+## Going deeper (optional)
+
+The full upstream knowledge packs — 29 atomic motion rules, 13 multi-phase
+blueprints with runnable examples, 20+ design frame presets — are
+installable from Settings → Skills (search "hyperframes"). Activate
+`hyperframes-motion` / `hyperframes-design` when a scene needs real
+choreography or brand-level design; this guide's contract is enough for
+clean kinetic-type / stat / icon scenes.

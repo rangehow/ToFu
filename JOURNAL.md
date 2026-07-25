@@ -29,6 +29,14 @@
 - **Object.assign / 解构 / spread 显式处置(不留白):** 守卫 docstring 里**具名豁免** —— 点号外的写/读形态别名扫描看不到;理由:点号赋值是本库唯一实践(grep 证),且 reader-surface 守卫钉死了任何能碰 session 的文件,这些形态的作者必须先出现在 allowlist 才会被本守卫扫到。
 - **git 纪律:** 单文件 numstat 全量不截断;暂存 stray 为空;sibling WIP 零损留在 worktree。
 
+### 2026-07-25(续2) — Plan-B 收口2:阈值漏网(styles.css 1MB)根修 + 漂移守卫 + 潜伏票(epic `pt_c51ed52926764156`,commit `f4a40fd0`,3 文件 +100/-10;新套件 17/17 含漂移守卫,相邻 157/157,collect **8617** 0 err)。
+- **洞(owner 实测,比前两个都实在):** `static/styles.css` = **1,026,466 B**,全项目被 agent 争用最狠的文件(CSS 抽取批/死样式清扫),却压过 256KiB 阈值落在 `('m', mtime_ns, size)` 盲快路径上——.py/.js 覆盖没问题(最大 conversations.js 140KB、index.html 194KB),唯独最激烈的那个没在保护内。
+- **根修:** `_CONTENT_HASH_MAX_BYTES` 256 KiB→**4 MiB**。阈值的真正用途是排除多 MB 数据/二进制负载(模型/数据集/归档),不是排除源码文本;blake2b 对 4MiB 仅个位数毫秒。docstring 以 styles.css 实测为定尺寸依据。
+- **连带①(主人预言精确):** `test_large_file_fast_path_keeps_mtime_semantics` 的 300KB 文件在 4MiB 阈值下会翻进内容路径——尺寸改为按常量 +1MiB 动态取,未来再提阈值也不静默翻面;边界测试 docstring 同步泛化(尺寸本就走常量)。
+- **连带② 漂移守卫:** 新 `test_tracked_text_files_stay_under_hash_threshold`——全部 tracked 可编辑文本文件(二进制/Office-zip 扩展排除,期内补 `.docx/.xlsx/.pptx` 精确化)必须 < 阈值,被增长甩开**立即转红**;styles.css/index.html 具名钉 + styles.css 体量下限 sanity。**牙齿 NEUTER 式带外验证**:阈值假装回 256KiB,守卫真抓 9 个文件含 styles.css。
+- **潜伏票(不入批,按惯例):** `pt_1bbd3cc82eb44ddc`——freshness 令牌纯内存,auto-restart watcher 每次 HEAD 移动 re-exec 即清空全部令牌,重启后窗口期 freshness 门 fail-open(read-gate 靠持久化 task['messages'] 满足集能活过重启,freshness 不能);窗口有界但高频提交日反复出现,方向=关停序列化小型 LRU 到 `.tofu/`、boot 回放。
+- **生效边界(诚实):** 同前——随 owner 安排的重启生效。
+
 ### 2026-07-25(续) — Plan-B 收口:owner 验收抓出的 mtime 盲区根修 + handler 级真驱(epic `pt_c01aecb8623140b0`,2 commit:`109461cf` 指纹加固 / `6b556aba` 真驱套件;新测 21 面全绿含双 NEUTER,相邻 148/148,collect **8616** 0 err)。
 - **盲区(owner 实测,根假设级):** 本部署 dolphinfs FUSE **mtime 粒度恰为 1 秒**(`st_mtime_ns % 1e9 == 0`),ctime 同粗、ino 重写不变;同秒同尺寸连写 10 次指纹零变化——`(mtime_ns, size)` 指纹对「同 1 秒 tick 内等长修改」全盲,sibling 快编辑(或同 tick 内原子 replace)可穿透门禁。
 - **根修(非注释搪塞):** ≤256 KiB(覆盖全部源码;blake2b 亚毫秒)改**内容寻址指纹** `('c', size, blake2b-128)`;大文件保留 `('m', mtime_ns, size)` 快路径(数据/资产负载,非源码编辑场景,残余盲区注释钉明)。语义变化一处(有意):小文件同内容 touch 不再判陈旧(内容相同=无可覆盖)。实测事实钉进模块 docstring。

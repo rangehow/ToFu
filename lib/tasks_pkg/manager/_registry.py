@@ -155,13 +155,25 @@ def create_task(conv_id, messages, config, *, supersede=True):
     #   tenant's user_id (populated only by login); open/private mode leave it
     #   empty → the single global profile (personal-install semantic, no
     #   migration). Best-effort: any failure (no request ctx) → '' = global.
+    #
+    # pt_ab42421158214591 (2026-07-25): also stash ``_userId`` for the
+    # SSOT conv-state channel. Same source (current_auth()), same
+    # request-thread capture rationale — the task registry's
+    # snapshot_running_by_conv uses this to scope by owner so a sibling
+    # device on a different tenant doesn't receive the wrong busy dot.
+    # Empty string is the pre-auth / single-user default and is treated
+    # as "unscoped" by every reader (back-compat with the personal
+    # install).
     try:
         from lib.memory.user_profile import resolve_profile_scope
         from routes.api_v1.auth import current_auth
-        task['_profileScope'] = resolve_profile_scope(current_auth())
+        _ctx = current_auth()
+        task['_profileScope'] = resolve_profile_scope(_ctx)
+        task['_userId'] = getattr(_ctx, 'user_id', '') or '' if _ctx else ''
     except Exception as e:
-        logger.debug('[Task %s] profile scope resolve failed: %s', task_id[:8], e)
+        logger.debug('[Task %s] identity resolve failed: %s', task_id[:8], e)
         task['_profileScope'] = ''
+        task['_userId'] = ''
 
     # ★ Project-brain Activity Feed: a 'started' pulse, EXCEPT for autopilot
     #   follow-up turns (config.autopilotRunId set) — a deep autopilot run is
@@ -319,7 +331,7 @@ def list_running_tasks(exclude_conv_id: str | None = None) -> list[dict]:
     return [entry for _created, entry in by_key.values()]
 
 
-def snapshot_running_by_conv() -> dict[str, list[str]]:
+def snapshot_running_by_conv(user_id: str = '') -> dict[str, list[str]]:
     """Return ``{conv_id: [task_id, ...]}`` for every non-carrier running task.
 
     P1 of pt_conv_state_ssot: the single read the ``notify_conv_changed`` seam
@@ -327,6 +339,15 @@ def snapshot_running_by_conv() -> dict[str, list[str]]:
     for "which conversations have live tasks", replacing the settings-derived
     ``activeTaskId`` (single value) heuristic that made cross-device sidebars
     disagree.
+
+    Multi-tenant scoping (pt_ab42421158214591, 2026-07-25): when ``user_id``
+    is set to a non-empty string, only tasks whose ``task['_userId']`` matches
+    are included — closes the multi-tenant leak where user B's tab would
+    otherwise receive a snapshot built from user A's registry. Empty string
+    (default) returns EVERY non-carrier running task regardless of owner —
+    this is the single-user / personal-install / pre-auth default, and also
+    the fallback for write-path callers that have no request context to
+    resolve a user from.
 
     Semantics — deliberately DIFFERENT from ``list_running_tasks``:
 
@@ -358,6 +379,7 @@ def snapshot_running_by_conv() -> dict[str, list[str]]:
     (approximately creation order) — deterministic per-process but not
     guaranteed across replicas. Clients treat the list as a SET.
     """
+    scope_user = str(user_id or '')
     out: dict[str, list[str]] = {}
     with tasks_lock:
         for tid, t in tasks.items():
@@ -368,6 +390,13 @@ def snapshot_running_by_conv() -> dict[str, list[str]]:
             conv = t.get('convId') or ''
             if not conv:
                 continue
+            if scope_user:
+                # Explicit scope: include ONLY tasks owned by this user.
+                # Pre-auth tasks with empty ``_userId`` do NOT surface into a
+                # scoped snapshot — a scoped caller is asking "what does
+                # user X see?" and X does not own a legacy-null task.
+                if str(t.get('_userId') or '') != scope_user:
+                    continue
             out.setdefault(conv, []).append(tid)
     return out
 

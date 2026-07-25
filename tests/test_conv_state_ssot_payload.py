@@ -74,7 +74,8 @@ def empty_registry(monkeypatch):
     orchestrator round.
     """
     import lib.tasks_pkg.manager._registry as reg_mod
-    monkeypatch.setattr(reg_mod, 'snapshot_running_by_conv', lambda: {})
+    monkeypatch.setattr(reg_mod, 'snapshot_running_by_conv',
+                        lambda user_id='': {})
     return reg_mod
 
 
@@ -84,7 +85,7 @@ def one_running_task(monkeypatch):
     should carry that taskId; frames for OTHER convs still see ``[]``."""
     import lib.tasks_pkg.manager._registry as reg_mod
     monkeypatch.setattr(reg_mod, 'snapshot_running_by_conv',
-                        lambda: {'conv-A': ['task-alpha']})
+                        lambda user_id='': {'conv-A': ['task-alpha']})
     return reg_mod
 
 
@@ -281,7 +282,7 @@ def test_registry_lookup_failure_does_not_raise(monkeypatch, captured):
     contract for push failures."""
     import lib.tasks_pkg.manager._registry as reg_mod
 
-    def _boom():
+    def _boom(user_id=''):
         raise RuntimeError('registry snapshot exploded')
 
     monkeypatch.setattr(reg_mod, 'snapshot_running_by_conv', _boom)

@@ -58,7 +58,7 @@ def stub_registry(monkeypatch):
 
     def _factory(mapping):
         monkeypatch.setattr(reg_mod, 'snapshot_running_by_conv',
-                            lambda: dict(mapping))
+                            lambda user_id='': dict(mapping))
     return _factory
 
 
@@ -178,7 +178,7 @@ def test_snapshot_delegates_to_registry_snapshot_helper(clean_hub, monkeypatch):
     canary = {'conv-canary': ['tid-canary'],
               'conv-normal': ['tid-normal']}
     monkeypatch.setattr(reg_mod, 'snapshot_running_by_conv',
-                        lambda: dict(canary))
+                        lambda user_id='': dict(canary))
     from lib.agent_core.push import PushClient
     from routes.push import _handle_client_frame
 
@@ -275,7 +275,7 @@ def test_build_conv_state_snapshot_payload_contract(monkeypatch):
     ready dict with per-conv rev tuples. This is the seam P2 will reuse."""
     import lib.tasks_pkg.manager._registry as reg_mod
     monkeypatch.setattr(reg_mod, 'snapshot_running_by_conv',
-                        lambda: {'conv-A': ['tid-1', 'tid-2']})
+                        lambda user_id='': {'conv-A': ['tid-1', 'tid-2']})
     from lib.agent_core.push import build_conv_state_snapshot
     payload = build_conv_state_snapshot(user_id=42)
     assert payload['type'] == 'conv_state_snapshot'

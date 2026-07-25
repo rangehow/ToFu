@@ -277,11 +277,23 @@ class PushHub:
 
 
 class PushClient:
-    """Represents a single WebSocket connection to the push channel."""
+    """Represents a single WebSocket connection to the push channel.
 
-    def __init__(self):
+    ``user_id`` is the resolved owner of the WebSocket (from
+    ``AuthContext.user_id`` at handshake — see routes/push.py::push_ws).
+    Stashed for the connection lifetime so every subsequent frame handler
+    can consult it without re-doing auth. Empty string means "no
+    resolved user" — the single-user / personal-install / pre-auth
+    default, and also what open-mode requests without a bearer token
+    produce (see :func:`lib.api_keys.local_admin_context`). Downstream
+    readers (``build_conv_state_snapshot``, ``snapshot_running_by_conv``)
+    treat empty as "unscoped, all-registry".
+    """
+
+    def __init__(self, user_id: str = ''):
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
         self._connected = True
+        self.user_id: str = str(user_id or '')
 
     def enqueue(self, frame: dict):
         if not self._connected:
@@ -316,15 +328,24 @@ class PushClient:
 hub = PushHub()
 
 
-def build_conv_state_snapshot(user_id: int = 1) -> dict:
+def build_conv_state_snapshot(user_id='') -> dict:
     """Build the ``conv_state_snapshot`` frame for a client that just
     subscribed to ``notify:*``.
+
+    ``user_id`` is required (empty string = pre-auth / single-user
+    default) and is BOTH the scope key for the registry projection AND
+    the value stamped into the outbound frame's ``userId`` field so the
+    client's cross-user gate (``_frameIsOurs``) accepts it. Historically
+    this was hardcoded to ``1`` — that latent multi-tenant leak is what
+    pt_ab42421158214591 filed and this commit closes.
 
     Content sourced from ONE call to
     ``lib.tasks_pkg.manager._registry.snapshot_running_by_conv`` — the SSOT
     for "which convs have live tasks" (carrier / aborted / empty-convId
     filter shared with the notify_conv_changed seam so client sidebar and
-    connect-snapshot cannot disagree by construction).
+    connect-snapshot cannot disagree by construction). The registry read is
+    scoped by ``user_id`` so a snapshot built for user B never leaks user
+    A's tasks (multi-tenant SSOT invariant).
 
     Each conv's entry independently carries a fresh
     ``[monotonic_ns, replica_id]`` rev tuple (owner mandate: per-conv rev,
@@ -340,7 +361,13 @@ def build_conv_state_snapshot(user_id: int = 1) -> dict:
         # Late import — the manager package is not always importable at
         # push module load time (e.g. tests that only exercise the hub).
         from lib.tasks_pkg.manager._registry import snapshot_running_by_conv
-        raw = snapshot_running_by_conv()
+        # pt_ab42421158214591: pass user_id through so the projection is
+        # scoped to this connection's owner. Cast to str: the registry
+        # stores AuthContext.user_id (a str), while some legacy callers
+        # still pass DEFAULT_USER_ID=1 (int) — str() coerces both to a
+        # comparable form; empty string ('' == '' == unscoped) is the
+        # explicit "no filter" signal.
+        raw = snapshot_running_by_conv(user_id=str(user_id or ''))
     except Exception as _e:
         logger.debug('[Push] snapshot_running_by_conv failed (%s); '
                      'sending empty snapshot', _e)

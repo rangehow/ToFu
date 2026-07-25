@@ -68,14 +68,29 @@ function _revStrictlyGreater(next, prior) {
 
 /* Multi-user gate: drop a frame whose ``userId`` is not ours. When our
  * identity is unset (single-user default) every frame is ours. Shared
- * with cross_tab_sync.js's _onConvNotifyPush semantics. */
+ * with cross_tab_sync.js's _onConvNotifyPush semantics.
+ *
+ * pt_ab42421158214591: normalize BOTH sides to string. The server-side
+ * AuthContext.user_id is a str (see lib/api_keys/_context.py); the
+ * legacy write-path notify frames still pass DEFAULT_USER_ID=1 (int)
+ * while snapshots from a real tenant now carry the str user_id.
+ * String coercion makes ``1 == '1'`` behave as identity, so a client
+ * whose _currentUserId is '1' still accepts frames carrying userId=1,
+ * and vice versa — otherwise, when auth lands and _currentUserId
+ * gets set, single-user tabs would silently reject their own
+ * server's DEFAULT_USER_ID=1 frames. Empty string / null / undefined
+ * on EITHER side means "unscoped" and everything passes (matching
+ * the pre-auth default). */
 function _frameIsOurs(userId) {
-  const my = (typeof window !== 'undefined' &&
-              typeof window._currentUserId !== 'undefined' &&
-              window._currentUserId !== null) ? window._currentUserId : null;
-  if (my === null) return true;
-  if (userId === undefined) return true;
-  return userId === my;
+  const myRaw = (typeof window !== 'undefined' &&
+                 typeof window._currentUserId !== 'undefined' &&
+                 window._currentUserId !== null) ? window._currentUserId : null;
+  if (myRaw === null) return true;
+  if (userId === undefined || userId === null) return true;
+  const my = String(myRaw);
+  const theirs = String(userId);
+  if (my === '' || theirs === '') return true;
+  return theirs === my;
 }
 
 /* Consume a per-conv notify frame's server-authoritative half:

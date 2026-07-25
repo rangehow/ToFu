@@ -232,7 +232,22 @@ def notify_conv_changed(conv_id, *, rev=None, deleted: bool = False,
         if not deleted:
             try:
                 from lib.tasks_pkg.manager._registry import snapshot_running_by_conv
-                snap = snapshot_running_by_conv()
+                # pt_ab42421158214591: pass user_id through so a mutation
+                # in user A's namespace does not surface user B's running
+                # tasks in the projection. Only scope when the caller
+                # passed a NON-DEFAULT user_id — DEFAULT_USER_ID=1
+                # (single-user personal-install today) is coerced to
+                # empty-string = unscoped, preserving the current
+                # all-registry behaviour verbatim until auth is landed
+                # and callers start passing real per-request user_ids.
+                # A caller passing a string (AuthContext.user_id shape)
+                # or any int != DEFAULT_USER_ID is treated as a real
+                # tenant scope.
+                if isinstance(user_id, int) and user_id == DEFAULT_USER_ID:
+                    _snap_scope = ''
+                else:
+                    _snap_scope = str(user_id or '')
+                snap = snapshot_running_by_conv(user_id=_snap_scope)
             except Exception as _re:
                 logger.debug('[meta_cache] conv=%s registry snapshot failed: %s',
                              conv_id, _re)

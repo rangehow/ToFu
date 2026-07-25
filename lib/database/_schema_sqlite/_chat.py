@@ -237,6 +237,10 @@ def _init_chat_schema(conn):
     for col, sql in {
         'kind':     "ALTER TABLE message_queue ADD COLUMN kind TEXT NOT NULL DEFAULT 'real'",
         'priority': "ALTER TABLE message_queue ADD COLUMN priority INTEGER NOT NULL DEFAULT 100",
+        # Dispatch lease columns (pt_4ab943fa) — dequeue leases, the delete
+        # lands only after spawn succeeds; reaper reclaims dead leases.
+        'leased_until':  "ALTER TABLE message_queue ADD COLUMN leased_until INTEGER",
+        'lease_task_id': "ALTER TABLE message_queue ADD COLUMN lease_task_id TEXT NOT NULL DEFAULT ''",
     }.items():
         if not _column_exists(conn, 'message_queue', col):
             cur.execute(sql)

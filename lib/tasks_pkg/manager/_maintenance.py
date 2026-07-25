@@ -65,6 +65,14 @@ def cleanup_old_tasks():
         reap_stuck_running_tasks()
     except Exception as e:
         logger.warning('[Manager] reap_stuck_running_tasks failed: %s', e, exc_info=True)
+    # ★ Queue-lease reaper (rides the same tick, pt_4ab943fa): reclaim leases
+    #   orphaned by a crash/exception mid-dispatch and re-dispatch them, so a
+    #   queued human message is retried automatically instead of silently lost.
+    try:
+        from lib.message_queue import reap_expired_queue_leases
+        reap_expired_queue_leases()
+    except Exception as e:
+        logger.warning('[Manager] reap_expired_queue_leases failed: %s', e, exc_info=True)
 
 
 def _malloc_trim() -> bool:

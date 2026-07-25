@@ -884,7 +884,9 @@ LIVE_PG_MESSAGE_QUEUE = """
         position INTEGER NOT NULL DEFAULT 1,
         kind TEXT NOT NULL DEFAULT 'real',
         priority INTEGER NOT NULL DEFAULT 100,
-        created_at BIGINT NOT NULL
+        created_at BIGINT NOT NULL,
+        leased_until BIGINT,
+        lease_task_id TEXT NOT NULL DEFAULT ''
     )
 """
 LIVE_SQLITE_MESSAGE_QUEUE = """
@@ -896,7 +898,9 @@ LIVE_SQLITE_MESSAGE_QUEUE = """
         position INTEGER NOT NULL DEFAULT 1,
         kind TEXT NOT NULL DEFAULT 'real',
         priority INTEGER NOT NULL DEFAULT 100,
-        created_at INTEGER NOT NULL
+        created_at INTEGER NOT NULL,
+        leased_until INTEGER,
+        lease_task_id TEXT NOT NULL DEFAULT ''
     )
 """
 

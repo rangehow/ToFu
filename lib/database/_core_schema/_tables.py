@@ -355,6 +355,11 @@ MESSAGE_QUEUE = define_table(
     sa.Column('kind', sa.Text, nullable=False, server_default="real"),
     sa.Column('priority', sa.Integer, nullable=False, server_default=sa.text('100')),
     sa.Column('created_at', bigint_column(), nullable=False),
+    # Dispatch lease (pt_4ab943fa): dequeue LEASES the row instead of deleting
+    # it; the delete lands only after spawn_task succeeds. NULL leased_until =
+    # not leased; '' lease_task_id = dispatch in flight, task not yet created.
+    sa.Column('leased_until', bigint_column(), nullable=True),
+    sa.Column('lease_task_id', sa.Text, nullable=False, server_default=''),
 )
 
 # scheduled_tasks — cron/agent task registry. Single TEXT PK. Mixes NOT-NULL

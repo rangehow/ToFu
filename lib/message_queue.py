@@ -22,6 +22,14 @@ autopilot only resumes once no dispatchable row remains.
 
 This replaces the frontend-only ``pendingMessageQueue`` Map that was lost
 on page refresh.
+
+Dispatch durability (pt_4ab943fa): dequeue LEASES a row
+(``leased_until``/``lease_task_id``) instead of deleting it. The delete lands
+only after ``spawn_task`` succeeds; every failure path releases the lease; a
+reaper (:func:`reap_expired_queue_leases`, riding the manager maintenance
+tick) reclaims rows whose lease expired without a live task in the registry
+and re-dispatches them. A crash or exception mid-dispatch therefore triggers
+an automatic retry instead of silently losing the queued message.
 """
 
 import json
@@ -57,6 +65,15 @@ _PRIORITY_FOR_KIND = {
 
 def _priority_for_kind(kind: str) -> int:
     return _PRIORITY_FOR_KIND.get(kind, 100)
+
+
+# ── Dispatch lease (pt_4ab943fa) ──
+# How long a dequeued-but-not-yet-spawned row stays invisible to other drains.
+# Must comfortably exceed the slowest in-dispatch step (auto-translate of a
+# long queued message is an LLM call). Only a true process crash mid-dispatch
+# ever waits out the full TTL — every failure path releases the lease
+# immediately, and the success path deletes the row outright.
+_QUEUE_LEASE_MS = 120 * 1000
 
 
 def _ensure_table():
@@ -312,6 +329,151 @@ def list_orphaned_dispatchable_convs() -> list[str]:
         return []
 
 
+def reap_expired_queue_leases(force_reclaim: bool = False) -> list[str]:
+    """Reclaim stranded dispatch leases and re-dispatch them (maintenance tick).
+
+    The dispatch lease (pt_4ab943fa) makes a queued row survive its dispatch;
+    this reaper is the backstop that turns that durability into an automatic
+    retry. Per leased row:
+
+      • LIVE TASK — the lease's task is running in the registry: renew an
+        expiring lease and leave the row alone (never a double-dispatch).
+      • LOST-FINALIZE — the lease's task is TERMINAL (registry, or the durable
+        ``task_results`` floor after registry eviction): the spawn succeeded
+        but the deferred delete was lost. Finish the delete here — the row
+        must never come back as a duplicate turn.
+      • DEAD LEASE — expired lease whose task is missing/not running (crash
+        or exception mid-dispatch): release the lease so the row drains again.
+
+    Then, for every conv left with a dispatchable row and NO live task in the
+    registry (the same per-conv guard the startup orphan scan uses), dispatch
+    ONE row — the completion hook drains the rest in priority order. This is
+    the steady-state safety net that converts "silent message loss" into
+    "automatic retry on the next tick".
+
+    ``force_reclaim=True`` (startup only): treat EVERY lease as dead. Correct
+    on a fresh boot in the single-process topology — the registry is empty,
+    so every lease's owner process is definitionally gone.
+
+    Returns the list of task_ids spawned from reclaimed rows.
+    """
+    spawned: list[str] = []
+    try:
+        _maybe_ensure_table()
+        db = get_thread_db(DOMAIN_CHAT)
+        now_ms = int(time.time() * 1000)
+        rows = db.execute(
+            'SELECT id, conv_id, leased_until, lease_task_id FROM message_queue '
+            'WHERE kind!=? AND leased_until IS NOT NULL',
+            (KIND_AUTOPILOT,),
+        ).fetchall()
+    except Exception as e:
+        logger.warning('[Queue] lease-reaper scan failed: %s', e)
+        return spawned
+
+    for row in rows:
+        qid = row['id']
+        conv_id = row['conv_id']
+        lease_tid = (row['lease_task_id'] or '')
+        expired = force_reclaim or (row['leased_until'] or 0) < now_ms
+
+        if lease_tid and not force_reclaim:
+            status = None
+            try:
+                from lib.tasks_pkg.manager import tasks, tasks_lock
+                with tasks_lock:
+                    _t = tasks.get(lease_tid)
+                if _t is not None:
+                    status = 'aborted' if _t.get('aborted') else _t.get('status')
+            except Exception as e:
+                logger.debug('[Queue] lease-reaper registry probe failed for %s: %s',
+                             qid[:8], e)
+            if status is None:
+                # Registry miss — check the durable floor before calling the
+                # lease dead: a task that finished and was later evicted from
+                # the registry still proves the spawn happened, so finishing
+                # the delete (not a re-dispatch) is the correct repair.
+                try:
+                    _tr = db.execute(
+                        'SELECT status FROM task_results WHERE task_id=?',
+                        (lease_tid,),
+                    ).fetchone()
+                    if _tr is not None:
+                        status = _tr['status'] or 'done'
+                except Exception as e:
+                    logger.debug('[Queue] lease-reaper task_results probe failed: %s', e)
+            if status == 'running':
+                if expired:
+                    try:
+                        db_execute_with_retry(
+                            db,
+                            'UPDATE message_queue SET leased_until=? WHERE id=?',
+                            (now_ms + _QUEUE_LEASE_MS, qid))
+                    except Exception as e:
+                        logger.warning('[Queue] lease renew failed for %s: %s', qid[:8], e)
+                continue
+            if status in ('done', 'error', 'aborted'):
+                try:
+                    _finalize_queue_dispatch(db, conv_id, qid)
+                    logger.warning('[Queue] lease-reaper finished lost delete for %s '
+                                   '(task %s terminal=%s)', qid[:8], lease_tid[:8], status)
+                except Exception as e:
+                    logger.warning('[Queue] lease-reaper finalize failed for %s: %s',
+                                   qid[:8], e)
+                continue
+
+        if not expired:
+            # Fresh lease with no task id yet — an in-flight dispatch owns it.
+            continue
+        try:
+            db_execute_with_retry(
+                db,
+                "UPDATE message_queue SET leased_until=NULL, lease_task_id='' WHERE id=?",
+                (qid,))
+            logger.warning('[Queue] lease-reaper reclaimed dead lease %s conv=%s '
+                           '(lease_task=%s)', qid[:8], conv_id[:8],
+                           lease_tid[:8] or '—')
+        except Exception as e:
+            logger.warning('[Queue] lease-reaper release failed for %s: %s', qid[:8], e)
+
+    # Stranded drain: one dispatch per conv that has a dispatchable row and no
+    # live task. Bounded lock wait — a wedged in-flight dispatch must never
+    # wedge the maintenance tick that drives this reaper.
+    try:
+        stranded = db.execute(
+            'SELECT DISTINCT conv_id FROM message_queue WHERE kind!=? AND '
+            '(leased_until IS NULL OR leased_until < ?)',
+            (KIND_AUTOPILOT, now_ms),
+        ).fetchall()
+    except Exception as e:
+        logger.warning('[Queue] lease-reaper stranded scan failed: %s', e)
+        return spawned
+
+    for srow in stranded:
+        conv_id = srow['conv_id']
+        if not conv_id or _conv_has_live_task(conv_id):
+            continue
+        try:
+            tid = dispatch_next_queued(conv_id, _wait=5)
+        except Exception as e:
+            logger.warning('[Queue] lease-reaper dispatch failed for conv=%s: %s',
+                           conv_id[:8], e, exc_info=True)
+            continue
+        if tid:
+            spawned.append(tid)
+            try:
+                from lib.log import audit_log
+                audit_log('queue_lease_reclaim', conv_id=conv_id, task_id=tid)
+            except Exception as e:
+                logger.debug('[Queue] audit_log failed: %s', e)
+            logger.info('[Queue] lease-reaper: conv=%s → task %s', conv_id[:8], tid[:8])
+
+    if spawned:
+        logger.info('[Queue] lease-reaper spawned %d task(s) from reclaimed rows',
+                    len(spawned))
+    return spawned
+
+
 def redispatch_orphaned_queue_on_startup() -> list[str]:
     """Re-dispatch every queued turn stranded by a server restart.
 
@@ -346,6 +508,13 @@ def redispatch_orphaned_queue_on_startup() -> list[str]:
     Returns the list of task_ids spawned (one per conv that had a queued turn).
     """
     spawned: list[str] = []
+    # Crash-durable leases (pt_4ab943fa): on a fresh boot the registry is
+    # empty, so EVERY surviving lease is a dead-process artifact — reclaim
+    # them all up front (this also re-dispatches one row per affected conv).
+    try:
+        spawned.extend(reap_expired_queue_leases(force_reclaim=True))
+    except Exception as e:
+        logger.warning('[Queue] startup lease reclaim failed: %s', e, exc_info=True)
     try:
         convs = list_orphaned_dispatchable_convs()
     except Exception as e:
@@ -363,25 +532,13 @@ def redispatch_orphaned_queue_on_startup() -> list[str]:
         if not conv_id:
             continue
         # Defensive: never drain a conv that already has a live task (a task
-        # spawned earlier in the same boot, or a racing send). Mirrors
-        # project_dispatch._conv_has_live_task's intent without importing it.
-        try:
-            from lib.tasks_pkg.manager import tasks, tasks_lock
-            with tasks_lock:
-                _live = any(
-                    t.get('convId') == conv_id
-                    and t.get('status') == 'running'
-                    and not t.get('aborted')
-                    for t in tasks.values()
-                )
-            if _live:
-                logger.info('[Queue] redispatch-on-startup: conv=%s already has a '
-                            'live task — leaving its queue for the completion hook',
-                            conv_id[:8])
-                continue
-        except Exception as e:
-            logger.debug('[Queue] redispatch-on-startup live-task probe failed '
-                         'for conv=%s: %s', conv_id[:8], e)
+        # spawned earlier in the same boot — e.g. by the lease reclaim above —
+        # or a racing send).
+        if _conv_has_live_task(conv_id):
+            logger.info('[Queue] redispatch-on-startup: conv=%s already has a '
+                        'live task — leaving its queue for the completion hook',
+                        conv_id[:8])
+            continue
 
         # Dispatch ONE task for this conv; its completion hook drains the rest
         # of the queue (single-task-per-conv, as in steady state).
@@ -705,10 +862,17 @@ def dequeue_next(conv_id: str) -> dict | None:
     # Only dispatchable sources (real / workflow_step) are popped as tasks.
     # The autopilot sentinel is consulted by the end-of-turn hook, never
     # dequeued here.
+    # Lease-aware: a row carrying an UNEXPIRED lease belongs to an in-flight
+    # dispatch — never hand it to a second drainer. An EXPIRED lease is a
+    # crash/failure artifact and the row is fair game again (self-heal even
+    # before the reaper runs).
+    now_ms = int(time.time() * 1000)
     row = db.execute(
         'SELECT id, payload, config FROM message_queue '
-        'WHERE conv_id=? AND kind!=? ORDER BY priority ASC, position ASC LIMIT 1',
-        (conv_id, KIND_AUTOPILOT)
+        'WHERE conv_id=? AND kind!=? '
+        'AND (leased_until IS NULL OR leased_until < ?) '
+        'ORDER BY priority ASC, position ASC LIMIT 1',
+        (conv_id, KIND_AUTOPILOT, now_ms)
     ).fetchone()
 
     if not row:
@@ -727,11 +891,18 @@ def dequeue_next(conv_id: str) -> dict | None:
         logger.warning('[Queue] Failed to parse config for dequeue queue_id=%s: %s', queue_id[:8], e)
         config = {}
 
-    # Remove from queue
-    db_execute_with_retry(db, 'DELETE FROM message_queue WHERE id=?', (queue_id,))
-    _renumber_positions(db, conv_id)
+    # LEASE, don't delete (pt_4ab943fa). The row stays durable until
+    # spawn_task succeeds (the delete moved to _finalize_queue_dispatch), so
+    # any failure/crash between here and the spawn leaves the message
+    # reclaimable instead of silently lost. lease_task_id='' means "dispatch
+    # in flight, task not yet created".
+    db_execute_with_retry(
+        db,
+        "UPDATE message_queue SET leased_until=?, lease_task_id='' WHERE id=?",
+        (now_ms + _QUEUE_LEASE_MS, queue_id),
+    )
 
-    logger.info('[Queue] Dequeued message %s from conv=%s, text=%d chars',
+    logger.info('[Queue] Leased queued message %s for dispatch conv=%s, text=%d chars',
                 queue_id[:8], conv_id[:8], len(payload.get('text', '')))
 
     return {
@@ -739,6 +910,51 @@ def dequeue_next(conv_id: str) -> dict | None:
         'payload': payload,
         'config': config,
     }
+
+
+def _release_queue_lease(db, queue_id: str) -> None:
+    """Release a dispatch lease immediately (used by every failure path).
+
+    Best-effort — a failure here only delays re-dispatch until lease expiry;
+    it can never lose the row (the row is only deleted on spawn success).
+    """
+    try:
+        db_execute_with_retry(
+            db,
+            "UPDATE message_queue SET leased_until=NULL, lease_task_id='' WHERE id=?",
+            (queue_id,),
+        )
+    except Exception as e:
+        logger.warning('[Queue] lease release failed for %s: %s', queue_id[:8], e)
+
+
+def _finalize_queue_dispatch(db, conv_id: str, queue_id: str) -> None:
+    """Delete a successfully-dispatched row + renumber (the deferred delete).
+
+    This is the ONLY delete on the dispatch path now — it runs AFTER
+    spawn_task succeeded, so the durable copy outlives every failure window.
+    """
+    db_execute_with_retry(db, 'DELETE FROM message_queue WHERE id=?', (queue_id,))
+    _renumber_positions(db, conv_id)
+
+
+def _conv_has_live_task(conv_id: str) -> bool:
+    """True if the in-memory registry holds a running, non-aborted task for
+    the conv. Shared by the startup orphan scan and the lease reaper (the
+    per-conv guard that prevents double-dispatch). Best-effort False on error.
+    """
+    try:
+        from lib.tasks_pkg.manager import tasks, tasks_lock
+        with tasks_lock:
+            return any(
+                t.get('convId') == conv_id
+                and t.get('status') == 'running'
+                and not t.get('aborted')
+                for t in tasks.values()
+            )
+    except Exception as e:
+        logger.debug('[Queue] live-task probe failed for conv=%s: %s', conv_id[:8], e)
+        return False
 
 
 def _append_user_msg_with_cas(db, conv_id: str, user_msg: dict) -> bool:
@@ -817,17 +1033,27 @@ def _append_user_msg_with_cas(db, conv_id: str, user_msg: dict) -> bool:
     return True
 
 
-def dispatch_next_queued(conv_id: str) -> str | None:
+def dispatch_next_queued(conv_id: str, *, _wait: float | None = None) -> str | None:
     """Dispatch the next queued message for a conversation as a new task.
 
     Called after a task completes.  If there are queued messages, the first
     one is dequeued, its user message is appended to the conversation in the
     DB, and a new task is started.
 
+    ``_wait`` bounds the dispatch-lock wait in seconds; None (default) waits
+    forever — every steady-state caller. The lease reaper passes a small bound
+    so a wedged in-flight dispatch can never wedge the maintenance tick.
+
     Returns:
         The new task_id if dispatched, None if queue was empty.
     """
-    with _dispatch_lock:
+    if _wait is None:
+        _dispatch_lock.acquire()
+    elif not _dispatch_lock.acquire(timeout=_wait):
+        logger.info('[Queue] dispatch lock busy (>%ss) conv=%s — tick skips',
+                    _wait, conv_id[:8])
+        return None
+    try:
         item = dequeue_next(conv_id)
         if not item:
             return None
@@ -866,6 +1092,7 @@ def dispatch_next_queued(conv_id: str) -> str | None:
             #   Append it to the conversation DB under an optimistic lock so a
             #   concurrent writer can't clobber the append (see helper).
             if not _append_user_msg_with_cas(db, conv_id, pre_built_user_msg):
+                _release_queue_lease(db, item['queueId'])
                 return None
             remaining = _get_queue_depth(db, conv_id)
             logger.info('[Queue] Appended pre-built user msg to conv=%s (CAS)', conv_id[:8])
@@ -990,6 +1217,7 @@ def dispatch_next_queued(conv_id: str) -> str | None:
             # Append user message to the conversation under an optimistic lock
             # (see _append_user_msg_with_cas — re-reads + CAS internally).
             if not _append_user_msg_with_cas(db, conv_id, user_msg):
+                _release_queue_lease(db, item['queueId'])
                 return None
             remaining = _get_queue_depth(db, conv_id)
         # (Legacy _msg_persisted path removed — no longer used)
@@ -999,12 +1227,27 @@ def dispatch_next_queued(conv_id: str) -> str | None:
         api_messages = build_api_messages_from_db(conv_id, config)
         if not api_messages:
             logger.warning('[Queue] No API messages after building for conv=%s', conv_id[:8])
+            _release_queue_lease(db, item['queueId'])
             return None
 
         from lib.tasks_pkg import create_task
 
         task = create_task(conv_id, api_messages, config)
         task_id = task['id']
+
+        # Stamp the lease with the real task id (and renew it) so the reaper's
+        # registry-liveness check can tell "spawned, delete pending" from
+        # "died before create_task". Renewing also covers the reaper having
+        # cleared this row's lease a moment ago during a slow dispatch.
+        try:
+            db_execute_with_retry(
+                db,
+                'UPDATE message_queue SET lease_task_id=?, leased_until=? WHERE id=?',
+                (task_id, int(time.time() * 1000) + _QUEUE_LEASE_MS, item['queueId']),
+            )
+        except Exception as e:
+            logger.debug('[Queue] lease task-stamp failed for %s: %s',
+                         item['queueId'][:8], e)
 
         # Update conversation settings with the new activeTaskId. Serialized
         # read-merge-write (settings_store) so it doesn't clobber a concurrent
@@ -1039,7 +1282,19 @@ def dispatch_next_queued(conv_id: str) -> str | None:
                 source='message-queue',
                 raw=str(_spawn_err),
             )
+            _release_queue_lease(db, item['queueId'])
             return None
+
+        # Spawn succeeded — NOW the durable row goes away (the deferred delete,
+        # moved here from dequeue time for crash durability, pt_4ab943fa).
+        try:
+            _finalize_queue_dispatch(db, conv_id, item['queueId'])
+        except Exception as e:
+            # Non-fatal: the reaper finishes the delete once the task goes
+            # terminal (and extends the lease while it runs) — the message can
+            # never be re-dispatched as a duplicate by this path.
+            logger.warning('[Queue] deferred delete failed for %s: %s',
+                           item['queueId'][:8], e)
 
         # Notify clients so the sidebar reflects the newly-dispatched task
         # without a manual refresh (metadata-scope: rev unchanged by dispatch).
@@ -1050,6 +1305,8 @@ def dispatch_next_queued(conv_id: str) -> str | None:
             logger.debug('[Queue] conv-changed notify failed: %s', e)
 
         return task_id
+    finally:
+        _dispatch_lock.release()
 
 
 def _get_queue_depth(db, conv_id: str) -> int:

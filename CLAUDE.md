@@ -230,6 +230,21 @@ lib/                   — Core business logic
                          via job.json + the stage checkpoint; already-rendered scenes
                          and already-authored compositions are never redone.
     runtime.py         — TaskRuntime + dedup index for motion jobs
+  longform/            — Long-form research report capability (Production
+                         Substrate P7 — the THIRD recipe, written to MEASURE the
+                         substrate rather than to refactor it):
+    recipe.py          — research → outline → sections(×N) → assemble. The stage
+                         list is DATA-DEPENDENT (one stage per outline section),
+                         which the static video stage list never exercised; it
+                         rides the existing checkpoint contract unchanged by
+                         running the graph twice against ONE state file.
+    engine.py          — worker; publishes the report as a markdown artifact.
+    runtime.py         — TaskRuntime + dedup index. NOTE: ~67% byte-identical to
+                         motion_video/runtime.py after renaming — this, plus the
+                         manifest/rescan pair, is the measured evidence for what
+                         P6's ProductionRuntime should absorb.
+                         Ships ZERO bespoke poll/abort routes: the generic
+                         /api/v1/tasks/* endpoints serve it.
   production/          — Production Substrate (docs/PRODUCTION_PIPELINE_DESIGN.md).
                          The horizontal layer under every "one sentence → finished
                          product" capability; each capability keeps its own thin recipe.

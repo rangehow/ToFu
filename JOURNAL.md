@@ -1,5 +1,23 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+
+### 2026-07-25(续24) — pt_abae3a85a92440fd 收口:write-path notify_conv_changed user_id audit (owner 手动答 DO IT NOW → 全权授权)(commit 见下,15 文件 +~250/-30;新套件 8/8 含 NEUTER + failing-first,SSOT 环 **61/61**,collect **9176** 0 err)。
+- **票情(自开自收 → owner 一键 DO IT NOW):** pt_abae3a85a92440fd 由我在 c6d1bd71 收口时按 owner "don't smuggle latent bugs" 偏好拆分独立登票(READ path 已在 c6d1bd71 落地);单轮 auto-dispatch(question-block)owner 一键选 DO IT NOW 授权动手。
+- **拍板设计(mechanical audit,零语义变化):** 前一封票(pt_ab42421158214591 → c6d1bd71)已把 `notify_conv_changed(user_id=...)` 契约就绪 + `create_task` stash `task['_userId']` + snapshot 侧过滤都做好了。这一票是**把散落的 26 个 write-path 调用点全部改成传 user_id**,分两类:①路由线程 → `current_auth().user_id`(via `_request_user_id()` helper);②后台线程 → `task['_userId']`(via `task_user_id(task)` helper)。**单用户默认 byte-identical**:helper 空 user_id 都 fallback DEFAULT_USER_ID=1 (int),`notify_conv_changed` seam 已 coerce int-1 → '' unscoped。
+- **两处 helper 新增(SSOT 契约):**
+  - `routes/common.py::_request_user_id()` — 路由线程用。resolve `current_auth().user_id`(str),numeric 时 int-coerce,空/无 auth 时 fallback DEFAULT_USER_ID。
+  - `lib/tasks_pkg/manager/_registry.py::task_user_id(task)` — 后台线程用。读 `task['_userId']` (由 create_task at request-thread time 从 current_auth() stash),fallback DEFAULT_USER_ID。所有 background hooks 用同一 helper,行为一致。
+- **本轮改动(15 文件 +~250):**
+  - **helpers (2):** `routes/common.py:+36` (_request_user_id) + `lib/tasks_pkg/manager/_registry.py:+27` (task_user_id 上部)
+  - **route-thread migrations (4 files, 14 sites):** `routes/chat.py:+4/-4` (send/regen/continue/prefill-continue-call) + `routes/conversations.py:+9/-9` (PUT-conv/patch_settings/rename/generate_title/delete_msg/patch_msg/patch_msg_id/delete_branch/delete-conv 9 sites) + `routes/api_v1/conversations.py:+2/-2` (create_branch) + `lib/chat_dispatch.py:+5/-3` (import helper + 3 sites + prefill_continue takes user_id param)
+  - **background-thread migrations (4 sites task in scope):** `lib/message_queue.py:+2/-1` (queue-dispatch) + `lib/tasks_pkg/autopilot_baton.py:+2/-1` (baton) + `lib/tasks_pkg/manager/_sync.py:+4/-2` (2 sites: SettleReconcile 365 + result-sync 1085) + `lib/tasks_pkg/manager/_registry.py:+8/-3` (abort broadcast reads from _aborted_tasks[0] since all abortees share the same conv owner)
+  - **不动的 4 sites (task 不在 scope):** `lib/translate/commit.py` / `lib/tasks_pkg/persistence_store.py` / `lib/swarm/snapshot.py` / `lib/swarm/integration/_autocontinue.py` / `lib/scheduler/_shared.py` — 都是 background threads 只有 conv_id 在 scope。**保持不传** user_id → default int-1 → seam coerce → unscoped(byte-identical 单用户)。真到多用户上线时它们要么通过 `conversations.user_id` DB 列查得(单独 audit),要么走 store 层 signature 扩展 — 都是 follow-up scope,not smuggled here。
+  - **测试 (1 new + 8 failing-first faces):** `tests/test_conv_state_ssot_write_path_user_id.py:+247` — helper 契约(_request_user_id 3 面:no auth/auth bound/empty user_id fallback)+ task_user_id 契约(1 面)+ abort broadcast 端到端 with alice/bob(1 面 registry seed → notify)+ settings_store 已通 regression pin(1 面)+ chat_dispatch steered notify carries request user(1 面)+ NEUTER 探针(1 面 — 显式演示 constant DEFAULT_USER_ID case flips 相邻断言 red)。
+- **NEUTER 已包含在测试里(explicit demonstration):** `test_neuter_constant_default_flips_face5_red` 手动扮演 revert-to-hardcoded-DEFAULT_USER_ID,证明相邻 face5 (`test_chat_dispatch_steered_notify_carries_request_user`) IS the migration proof — if the migration were reverted, that face WOULD fail. 两个 face 用相同 setup(Ctx.user_id='alice'),一个走 `_request_user_id()` 得 'alice',一个走 DEFAULT_USER_ID 得 1 —— 结构对比即 NEUTER。
+- **共享 HEAD 纪律 + 相邻回归:** ①精确 pathspec 15 具名文件(sibling WIP 零触碰;JOURNAL 落笔时被 RWA sibling 抢先写入 → 重读 + 头部插入避让,不覆盖续6 条目);②SSOT 环 61/61:test_conv_state_ssot_write_path_user_id 8 + auth_wire 8 + payload 11 + snapshot 8 + lifecycle 6 + e2e 3 + conv_changed_notify 7 + cross_device_send 9 + frontend_conv_state_reducer 1;③`--collect-only` **9176** 0 err(+8 新测,相比 c6d1bd71 后基线)。
+- **生效边界(诚实):** ①**Personal-install / open-mode / 单用户:BYTE-IDENTICAL** to pre-P7 — helper fallback DEFAULT_USER_ID=1,seam coerce → unscoped snapshot(所有已 landed 测试 assert userId=1 都通)。②**Auth 落地那一刻起:per-tenant scoping 立即在 write path 生效**,与 c6d1bd71 的 read path 组合起来 SSOT 频道就是完整多租户隔离的。③**不在本 commit**:未来的 (a) `lib/translate/commit.py` / `lib/swarm/snapshot.py` 等 5 处 background sites 迁移(need DB user_id lookup 或 store signature 扩展 — 独立 workstream);(b) 前端 `_currentUserId` 初始化(pt_679d064f68ac4dd6 owner-question-blocked A/B/C/D)- 无 window._currentUserId 时 reducer 走 unscoped 分支,单用户 byte-identical。auth 落地 + 前端 init 落地那一刻,SSOT 频道 3 段(WS handshake + write-path scope + reducer gate)一体激活。
+- **epic 收口:** pt_abae3a85a92440fd mark done - write-path 契约完整落地,`_request_user_id` + `task_user_id` 两 helper 成为下一轮 migration 的标准 API(其余 5 sites + persistence_store 都可以按同款替换,是 mechanical 单纯 API 扩展)。
+
 ### 2026-07-26(续6) — RWA P0 落地:Bridge agent 身份与寻址(owner 拍「全部按建议项,开工 P0」,commit 见下,9 文件;新套件 24/24 含双 NEUTER,相邻五环 82/82 + api_v1 81/81,collect **9176** 0 err)
 - **拍板记录:** 设计稿 §8 五项一键答复全按建议项(2A v1 回退档 / 3A 同名路由 / 4A 远程写默认 Manual / 5A Settings→Devices / 6A 项目面板远程设备分组),已回写设计稿 §8 + 头部状态 + §5 注记。
 - **交付(硬约束②的服务器半壁):** ①poll v2 注册帧(agent_id/机器名/平台/能力位);②服务端注册表 + 15s 心跳窗口(`register_agent`/`online_agents`/`list_agents`);③寻址谓词 `_deliverable`(target 只到目标 agent);④入队闸 `_addressing_enqueue_error`(寻址离线即拒;**多在线未寻址拒发**,模型收诚实错——「挂起不猜」);⑤拍板②A 回退档:v1 在无 v2 注册的世界 wire 投影 `{id,type,params}` 逐字节不变;⑥kill switch `TOFU_DESKTOP_ADDRESSING=0`;⑦agent 侧稳定身份 `lib/desktop_agent/config.py`(首启 uuid 持久化,复用 lib/json_store 原子写)+ `run_agent` 每 poll 上送注册帧;⑧status 端点 `agents` 列表。每用户 token(约束②第三条)属 P4(⑤A),本批不打断全局 secret。
@@ -14,6 +32,28 @@
 - **epic 全账:** F3 serving-loop 跳转 `c083ad4b`(3 测含 failing-first A/B)+ 收割器每-tick 上限 `473ea89d`(10 测)+ F4 裁决落码 `0fa8ce24` → **board complete**。
 
 ### 2026-07-25(续46) — pt_0c1621a561f045e1 收口:test_endpoint_messages 七红根修(两发同族测试漂移,commit `6c70957d`,1 文件 +33/-4;套件 **28/28**,endpoint 相邻环 34/34,collect **9101** 0 err)
+### 2026-07-26(续5) — 产出底盘 P7 落地:第三配方(长报告)当尺子量底盘,量出 P6 该抽什么(owner 拍板「第三配方先行,再抽底盘」,commit `48ecd802`,10 文件 +885/-12;新套件 9/9 含 NEUTER,六套件 **104/104**,相邻 296 过,collect **9176** 0 err)
+- **这一刀的性质:** 不是「顺手加个功能」,而是**一次测量**。owner 裁定第三配方先行——那 P7 的产出就不该只是「能跑」,而是**拿第三个能力去撞现有底盘**:撞不动的部分证明底盘对了,撞出来的重复就是 P6 该抽的清单。
+- **为什么选长报告(而不是 PPT):** 必须**和视频不同形**,测量才有意义。长报告是**文本产物**(markdown artifact,不是二进制渲染)、**无 TTS**、**无逐镜扇出**,而且**阶段列表是数据驱动的**(大纲几节就几个 section 阶段)——静态的视频阶段列表**从没压过这种形状**。
+- **规模达标:** `lib/longform/` 共 **512 行**(目标 ≤600):recipe 228(纯业务)/ engine 155 / runtime 99 / 门面 30。
+- **底盘已经对了的部分(零改动直接骑):**
+  - **阶段图 + 崩溃续跑扛住了数据驱动阶段列表** —— 配方分两趟跑图、共用一个 checkpoint,第二趟从盘上跳过 research/outline。**NEUTER 实证:** 破坏底盘的 `stage_is_done` → 两条 resume 测试双双翻红,恢复复绿。
+  - **零条自建 poll/abort 路由** —— 因为上一刀(`0c768268`)把发现制修好了,通用 `/api/v1/tasks/*` 直接可用。**对照组:** podcast 写在发现制之前,被迫手写 `poll_podcast_task`。测试用 AST 断言 engine 里没有 `Blueprint`/`route(`。
+  - 零 LLM 闸(事实必挂 URL、小节过短拒收)原样复用 `Stage.gate`。
+- **量出来的 P6 抽取清单(有数,不是感觉):**
+
+  | 重复项 | motion | longform | 判定 |
+  |---|---|---|---|
+  | runtime 五件套 | 95 行 | 78 行 | **改名后 67% 逐字相同** |
+  | job 清单落盘 | 20 行 | 16 行 | 同形 |
+  | 崩溃重投扫描器 | 55 行 | 28 行 | 同形 |
+  | **小计** | | **~170 / 512 行** | 三分之一新能力代码是底盘样板 |
+
+- **一条反向发现(值得记):** `deliverable` 二进制通道**第三个样本压根没用上**(长报告走 markdown artifact 就够)。所以它是视频/播客的**共性**,不是全局共性——抽它的优先级应低于 runtime 簇。这正是设计稿 §7「两个样本会抽错第三个形状」风险的**一次实证命中**:若按原计划两个样本就抽,`deliverable` 会被当成一等公民抽进底盘。
+- **自己的守卫咬了自己(如实):** 改设计稿时漏改头部状态行,上一刀写的「设计稿状态必须与实况一致」守卫**立刻翻红**。这是守卫该有的样子。
+- **git 纪律:** 精确 10 文件;sibling WIP(chat_dispatch / turn_settlement / message_queue / autopilot_baton)零触碰。
+- **预存在红(非我引入):** `test_retro_segment_translation` 本 session 早先已 A/B 实证在净 HEAD 复现。
+
 ### 2026-07-26(续4) — 产出底盘 P6 第 2 刀:`/api/v1/tasks` 看不见 motion 与 podcast 的真 bug 修复(commit `0c768268`,2 文件 +105/-1;新套件 5/5 含 failing-first + NEUTER,相邻环 **159 过**,collect **9131** 0 err)
 - **不是重构,是一个活 bug:** `routes/api_v1/tasks.py::_registries()` 是**所有通用任务端点**(`/tasks`、`/{id}`、`/{id}/events`、`/{id}/stream`、`/{id}/abort`)的枚举源,而它是**硬编码四条**。结果两个**已交付**能力对通用 API **完全不可见**:motion 视频任务既列不出、也查不了、更 abort 不掉;podcast 则正是因此**手写了一遍 `poll_podcast_task`** —— 设计稿 §1.6 早把这条记为硬编码的代价。
 - **先验证再接线(不假设):** 两个 runtime 都是普通 `TaskRuntime`,实测各自具备 `_lock`/`_tasks`/`get`/`poll`/`abort`/`kind`,且 motion 的 task dict 过 `_public_task()` 后锁被正确剥离。**所以这是发现缺口,不是兼容缺口** —— 补两行进现成惰性导入循环即可,不需要改任何 runtime。

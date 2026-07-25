@@ -1,3 +1,5 @@
+<!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
+
 ### 2026-07-25(续44) — 请求检视器 P3 落地,epic pt_906545f4e8d140d5 全期收口(commit `05426ba1`,7 文件 +434/-19;新 jsdom 13 探针 + NEUTER + 静态钉,P2/P3 合计 5/5,回归 17 套件 **105/105**,collect **9077** 0 err)
 - **气泡 `</>` 锚点(消灭人肉对账的最后一刀):** finish_info.js debug_mode 门内,每条带 `_taskId` 的 assistant 气泡渲染 ri-anchor(fileCode SVG);`openRequestInspectorForMessage(msgId)` = msg._taskId → 任务 fold → 末 apiRound.round(与 snapshot roundNum 同 1-based)→ 抽屉定位 + ri-flash + 详情。**VU 子任务不进 by-conv 列表也直达**——设计稿 §4 承诺兑现。
 - **前缀折叠增量高亮:** 第 N 轮详情自动 diff N-1 轮(canonical JSON 位置对齐求最长共享前缀,分歧降级 K=0);`showMessagesInDebug` 第 8 参 opts{foldPrefix,diffBase} 仅 full-render 路径生效,前缀折叠进可展开行、增量块 accent 高亮,旧调用点零影响。

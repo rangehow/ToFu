@@ -1,6 +1,14 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
 ### 2026-07-25(续46) — pt_0c1621a561f045e1 收口:test_endpoint_messages 七红根修(两发同族测试漂移,commit `6c70957d`,1 文件 +33/-4;套件 **28/28**,endpoint 相邻环 34/34,collect **9101** 0 err)
+### 2026-07-26(续4) — 产出底盘 P6 第 2 刀:`/api/v1/tasks` 看不见 motion 与 podcast 的真 bug 修复(commit `0c768268`,2 文件 +105/-1;新套件 5/5 含 failing-first + NEUTER,相邻环 **159 过**,collect **9131** 0 err)
+- **不是重构,是一个活 bug:** `routes/api_v1/tasks.py::_registries()` 是**所有通用任务端点**(`/tasks`、`/{id}`、`/{id}/events`、`/{id}/stream`、`/{id}/abort`)的枚举源,而它是**硬编码四条**。结果两个**已交付**能力对通用 API **完全不可见**:motion 视频任务既列不出、也查不了、更 abort 不掉;podcast 则正是因此**手写了一遍 `poll_podcast_task`** —— 设计稿 §1.6 早把这条记为硬编码的代价。
+- **先验证再接线(不假设):** 两个 runtime 都是普通 `TaskRuntime`,实测各自具备 `_lock`/`_tasks`/`get`/`poll`/`abort`/`kind`,且 motion 的 task dict 过 `_public_task()` 后锁被正确剥离。**所以这是发现缺口,不是兼容缺口** —— 补两行进现成惰性导入循环即可,不需要改任何 runtime。
+- **保住原有两条性质:** 键永远取 runtime **自己的 `.kind`**(不写字面量,否则改名就会和 `?kind=` 过滤器悄悄脱钩);模块导入失败**跳过而非致命**(缺一个可选能力不该拖垮其余全部端点)。
+- **测试 5 面,failing-first 实证:** 发现测试**改前红、改后绿**;另有核心 kind 不回退、键必须等于 runtime 自身 kind、**每个被发现的 runtime 必须满足端点真正调用的接口**(半成品条目在 `/events` 上 500 比缺席更糟)、不可导入的能力降级为缺席而其余仍解析。**NEUTER:** 摘掉两条发现项 → 发现测试复红。
+- **为什么这刀能独立落:** P6 epic 正文自己列了 `_registries()` 改发现制;它与仍卡在 owner 判断题上的那半(ProductionRuntime / deliverable / 进度双投影 / artifacts binary)**正交** —— 那半是「从几个样本抽形状」的设计题,这半是「已交付能力对 API 不可见」的事实缺陷。
+- **git 纪律:** 精确 2 文件,`git diff --cached` 逐 hunk 核实两块都是我的;sibling WIP(server.py / test_autopilot_startup)零触碰。
+
 ### 2026-07-26(续3) — 产出底盘文档同步:CLAUDE.md 目录树 + 设计稿状态与实况对齐(commit `071330bf`,3 文件 +91/-9;守卫 7→9 含 NEUTER,四套件 **90/90**,collect **9126** 0 err)
 - **为什么做这个:** CLAUDE.md 自己的规矩写着「新增子包时必须重扫目录树」,而 P4/P5/P6 一共新增了 `lib/motion_video/` 与 `lib/production/` **两个包,一个都没进图**。设计稿更离谱 —— 仍写着「设计稿,待 owner 拍板」,而三期已经在 HEAD 里了。**零生产代码改动**,纯把地图和实况对齐。
 - **CLAUDE.md:** 补两个包条目。刻意不写平淡一句话,而是**记住承重不变式**:配方的 SRT 用**真实 TTS 时长**排(不是字/秒估算)、scene author **窄工具集拿不到渲染**且任何失败降级模板(一镜不毁全片)、阶段 checkpoint 是**正确性契约**;`production/` 条目**明写哪些还没搬**。

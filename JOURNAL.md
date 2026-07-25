@@ -1,6 +1,12 @@
 # Project Journal
 
 
+### 2026-07-25(续21) — Motion video P2b 无头引擎+api_v1 落地(commit `d06d7374`,11 文件 +1213/-3;engine 套件 15/15 含 NEUTER,合计 **63/63**,相邻 api_v1_integration+registry+skills 112/112,collect **8821** 0 err,真端到端引擎实证 20.3s 出片)。
+- **交付(P2b 全项 + P3 并行项顺带落地):** ①`_storyboard.py` 零 LLM 贪心分镜(min/target/max 三档,句号边界优先,**runt 归并不破 max 契约**——首版归并后超 max 被测试抓出当场修);②`_template.py` 零 LLM composition 兜底(字号五档阶梯/四色渐变轮换/HTML 转义防注入,构造即过静态闸);③`engine.py` 无头 worker(parse→storyboard→narrate→compose→**ThreadPoolExecutor 有界并行渲染**(默认 2 上限 4)→concat→loose 调轴侧车 SRT→mux),全程 AbortSignal,单镜失败带 scene_id+category 结构化诊断,重活全走 facade 缝;④`runtime.py` 播客镜像 dedup 六元组,**先建任务再注册键**消竞态(测试先抓出注册先于创建的空窗);⑤`routes/api_v1/motion.py` status/start(校验+dedup join)/poll/abort/Range 文件(只服务 result 记录路径)。
+- **测试(15 测):** 分镜构造即过闸/max 契约/runt/边界 clamp;模板全尺寸过闸+XSS 转义;**真 engine 全链**(假 provider 缝但真分镜/真模板/真 verify_spec——假 probe 从真写出的 index.html 读 data-duration,闸全真跑)+降级续静音/Abort/单镜失败诊断/**NEUTER**(剥 verify_spec→坏规格镜头放行,证闸承重)+dedup 生命周期+HTTP 层(400 三连/start/poll/dedup join/abort/Range 双格式,flask_client 真 app)。
+- **真端到端(非假件):** 2 条中文字幕 → 零 LLM 分镜 1 镜 → 模板 composition → 真 hyperframes 渲染 → 拼接,20.3s 出 final.mp4,探针 h264/1080x1440/30fps/4.000s/无音轨。
+- **收口:** epic `pt_235da273` 的 P2b+并行项交付;剩余 P3(逐镜预览/重生成面板 + 论文 video abstract + 可选字幕烧录开关)开新票,本票 done。
+
 ### 2026-07-25(续20) — Motion video P2 音画合成落地 + epic 收口(commit `aa07bc8d`,10 文件 +656/-8;套件 48/48 含 NEUTER,相邻 31,collect **8797** 0 err;后续票 `pt_235da273` 已开)。
 - **拍板解读(诚实):** brain 二次派发带来的答案仍是「A 全绿推进(推荐)」(P1 问的原话)。按「全绿=按推荐的宽松对轴推进且**参数化**」执行:`alignment='loose'|'strict'` 默认 loose,owner 日后切换是配置翻转——**不再需要为对齐策略重挂问题**(设计稿 §8 已记此解读)。
 - **交付(`lib/motion_video/_audio.py` + 2 工具):** ①`synthesize_scene_narrations`——句号边界分块(本地 20 行版,不跨 feature import)、逐块重试×2、AbortSignal 块间检查、**两段式静音**(无文本镜头先占位,待首个合成镜头拿到 provider WAV 参数后再补静音,防 24k/44.1k 混排脱轨)、无 TTS 槽位降级不死;②对齐数学:loose 下 `target=max(srt, audio+0.35s tail)`——短音补静音尾、长音由清单告诉 agent 改 data-duration 重渲;strict 报 overflow 总量;③`concat_narrations`(250ms 镜间停顿);④`mux_audio_video`(视频流 copy 零重编码+AAC+loudnorm 单遍+原子写+后验音轨存在/时长漂移)。工具 `motion_video_narrate`/`motion_video_mux` 全接线(registry provides/write 集同步)。

@@ -1,8 +1,11 @@
 # EPIC: Autopilot VU as an Independent Stream
 
 Board epic: `pt_8dc030176bad450b`
-Status: **PARTIAL — increment-1 (the `_autopilot_deciding` latch) landed; the core
-VU-independence is blocked on concrete traced issues (see §9).**
+Status: **DONE — full cutover landed in 3 increments (see §9):**
+- `3e2ec0c3` incr-1: drop `_autopilot_deciding` withhold latch
+- `aa6f7ea6` incr-2: retire the withheld-done baton + delete `test_autopilot_poll_handoff.py`
+- `6286913d` incr-3: HB-1 — VU sub-task registers under real convId, supersede index advances to VU before parent done
+
 Related, already-shipped: the *visible* "parent finish bar incomplete" bug is
 root-fixed independently of this epic by projecting `parentMessage` on
 `autopilot_vu_start` + a task-settled-fields fallback (commits `589cfaa` /

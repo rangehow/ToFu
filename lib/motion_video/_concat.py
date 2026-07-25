@@ -25,7 +25,7 @@ from lib.log import get_logger
 
 logger = get_logger(__name__)
 
-__all__ = ['concat_mp4s']
+__all__ = ['concat_mp4s', 'burn_in_subtitles']
 
 
 def _uniform_spec(probes: list[dict]) -> bool:
@@ -190,3 +190,70 @@ def concat_mp4s(inputs: list[str], output: str, *, timeout: int = 1800,
     logger.info('[MotionVideo] concat done: %s (%.2fs)', output, got)
     return {'ok': True, 'output': output, 'duration': round(got, 3),
             'mode': mode, 'elapsed': round(res['elapsed'], 2)}
+
+
+def _escape_filter_path(path: str) -> str:
+    """Escape a filesystem path for use inside an ffmpeg filtergraph."""
+    return (path.replace('\\', '\\\\')
+                .replace(':', '\\:')
+                .replace("'", "\\'"))
+
+
+def burn_in_subtitles(video_path: str, srt_path: str, output: str, *,
+                      fontsdir: str = '', force_style: str = '',
+                      timeout: int = 1800, abort_event=None) -> dict:
+    """Burn a sidecar SRT into the video (hard subtitles), atomic + verified.
+
+    Re-encodes (libx264) — there is no lossless way to hard-sub. ``fontsdir``
+    should point at a directory containing a CJK-capable font when the
+    subtitles contain non-Latin text (fontconfig picks the best match; use
+    ``force_style`` e.g. ``FontName=Noto Serif CJK SC,FontSize=22`` to pin).
+    Post-verified: output exists and duration is preserved (±0.5s).
+    """
+    from lib.motion_video._env import ffmpeg_bin
+    from lib.motion_video._gates import probe_video
+
+    for p, label in ((video_path, 'video'), (srt_path, 'srt')):
+        if not os.path.isfile(p):
+            return {'ok': False, 'category': 'io',
+                    'detail': f'missing {label} file: {p}'}
+    ffmpeg = ffmpeg_bin()
+    if not ffmpeg:
+        return {'ok': False, 'category': 'env_missing',
+                'detail': 'ffmpeg not found (pip install imageio-ffmpeg)'}
+
+    filt = f"subtitles='{_escape_filter_path(os.path.abspath(srt_path))}'"
+    if fontsdir:
+        filt += f":fontsdir='{_escape_filter_path(os.path.abspath(fontsdir))}'"
+    if force_style:
+        filt += f":force_style='{force_style}'"
+
+    tmp_out = output + '.tmp.mp4'
+    args = [ffmpeg, '-y', '-i', video_path, '-vf', filt,
+            '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '18',
+            '-preset', 'medium', '-an', '-movflags', '+faststart', tmp_out]
+    logger.info('[MotionVideo] burn-in %s → %s', srt_path, output)
+    res = _run_ffmpeg(args, timeout=timeout, abort_event=abort_event)
+    if res['category'] or res['rc'] != 0:
+        return {'ok': False, 'category': res['category'] or 'unknown',
+                'detail': res['err'][-1500:]}
+    if not os.path.isfile(tmp_out) or os.path.getsize(tmp_out) == 0:
+        return {'ok': False, 'category': 'io',
+                'detail': 'ffmpeg produced no output'}
+    os.replace(tmp_out, output)
+
+    v_probe = probe_video(video_path)
+    f_probe = probe_video(output)
+    if f_probe is None:
+        return {'ok': False, 'category': 'io',
+                'detail': 'post-burn probe failed'}
+    if v_probe:
+        dv = abs(float(f_probe.get('duration') or 0)
+                 - float(v_probe.get('duration') or 0))
+        if dv > 0.5:
+            return {'ok': False, 'category': 'io',
+                    'detail': f'burned duration drifted {dv:.3f}s'}
+    logger.info('[MotionVideo] burn-in done: %s', output)
+    return {'ok': True, 'output': output,
+            'duration': round(float(f_probe.get('duration') or 0), 3),
+            'elapsed': round(res['elapsed'], 2)}

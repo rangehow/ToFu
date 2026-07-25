@@ -30,7 +30,7 @@ from lib.motion_video._audio import (
     mux_audio_video,
     synthesize_scene_narrations,
 )
-from lib.motion_video._concat import concat_mp4s
+from lib.motion_video._concat import burn_in_subtitles, concat_mp4s
 from lib.motion_video._env import (
     PINNED_HYPERFRAMES,
     build_render_env,
@@ -94,6 +94,7 @@ __all__ = [
     'check_project',
     'render_project',
     'concat_mp4s',
+    'burn_in_subtitles',
     'NarrationAborted',
     'synthesize_scene_narrations',
     'concat_narrations',

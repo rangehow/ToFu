@@ -2820,6 +2820,54 @@ async def start_podcast_task():
     return jsonify({'ok': True, 'task_id': task_id})
 
 
+@api_v1_paper_bp.route('/api/v1/paper/video/start', methods=['POST'])
+async def start_video_abstract_task():
+    """Start a paper video abstract (report → narrated MG video).
+
+    Request: {paper_hash, lang?, voice?, speed?, alignment?, narration?,
+              burn_in?, quality?, parallel?, max_scenes?}
+    Responses:
+      - {ok, task_id, scenes, source_kind}  — motion task started; poll via
+        GET /api/v1/motion/videos/poll/<task_id>, download via
+        /api/v1/motion/videos/<task_id>/file
+      - {ok: false, report_required}        — chain a report first
+    """
+    from lib.paper.video_abstract import start_video_abstract
+
+    data = await async_parse_body()
+    phash = (data.get('paper_hash') or '').strip()
+    if not phash:
+        return api_bad_request('paper_hash is required', field='paper_hash')
+    lang = (data.get('lang') or 'zh').strip()
+    if lang not in ('zh', 'en'):
+        return api_bad_request('lang must be zh|en', field='lang')
+    quality = (data.get('quality') or 'standard').strip()
+    if quality not in ('draft', 'standard', 'high'):
+        return api_bad_request('quality must be draft|standard|high',
+                               field='quality')
+    alignment = (data.get('alignment') or 'loose').strip()
+    if alignment not in ('loose', 'strict'):
+        return api_bad_request('alignment must be loose|strict',
+                               field='alignment')
+    try:
+        parallel = max(1, min(int(data.get('parallel') or 2), 4))
+        max_scenes = max(1, min(int(data.get('max_scenes') or 8), 16))
+    except (TypeError, ValueError):
+        return api_bad_request('parallel/max_scenes must be ints',
+                               field='parallel')
+    res = start_video_abstract(
+        phash, lang=lang, voice=(data.get('voice') or '').strip(),
+        speed=data.get('speed'), alignment=alignment,
+        narration=bool(data.get('narration', True)),
+        burn_in=bool(data.get('burn_in', False)), quality=quality,
+        parallel=parallel, max_scenes=max_scenes)
+    if not res.get('ok'):
+        return jsonify({'ok': False, 'report_required':
+                        res.get('reason') == 'report_required',
+                        'error': res.get('reason')})
+    return jsonify(res)
+
+
 @api_v1_paper_bp.route('/api/v1/paper/podcast/poll', methods=['GET'])
 def poll_podcast_task():
     """Poll podcast events. Same cursor protocol as the report poll; on done

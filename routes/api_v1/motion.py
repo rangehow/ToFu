@@ -95,8 +95,10 @@ async def start_motion_task():
     body = await async_parse_body()
     srt_text = (body.get('srt') or '').strip()
     srt_path_in = (body.get('srt_path') or '').strip()
-    if not srt_text and not srt_path_in:
-        return api_bad_request('srt or srt_path is required', field='srt')
+    scenes_path = (body.get('scenes_path') or '').strip()
+    if not srt_text and not srt_path_in and not scenes_path:
+        return api_bad_request('srt, srt_path or scenes_path is required',
+                               field='srt')
     if len(srt_text.encode('utf-8')) > _MAX_SRT_BYTES:
         return api_bad_request('srt too large (2 MB max)', field='srt')
 
@@ -127,16 +129,17 @@ async def start_motion_task():
     except (TypeError, ValueError):
         return api_bad_request('parallel must be an int', field='parallel')
     parallel = max(1, min(parallel, 4))
-    scenes_path = (body.get('scenes_path') or '').strip()
     if scenes_path and not os.path.isfile(scenes_path):
         return api_bad_request('scenes_path is not a file',
                                field='scenes_path')
+    burn_in = bool(body.get('burn_in', False))
+    burn_in_fontsdir = (body.get('burn_in_fontsdir') or '').strip()
 
     # ── Dedup ──
     _cleanup_stale_motion_tasks()
-    srt_material = srt_text or srt_path_in
+    srt_material = srt_text or srt_path_in or scenes_path
     srt_sha = hashlib.sha256(srt_material.encode('utf-8')).hexdigest()[:16]
-    key = (srt_sha, voice, alignment, aspect, narration, quality)
+    key = (srt_sha, voice, alignment, aspect, narration, quality, burn_in)
     existing = _motion_index_get(key)
     if existing:
         logger.info('[Motion.v1] dedup join: %s', existing)
@@ -150,16 +153,20 @@ async def start_motion_task():
         srt_path = os.path.join(workdir, 'transcription.srt')
         with open(srt_path, 'w', encoding='utf-8') as f:
             f.write(srt_text)
-    else:
+    elif srt_path_in:
         srt_path = srt_path_in
         if not os.path.isfile(srt_path):
             return api_bad_request('srt_path is not a file', field='srt_path')
+    else:
+        srt_path = ''  # scenes-only run — the storyboard is the source of truth
 
     task = _new_motion_task(
         task_id, srt_path=srt_path, workdir=workdir, voice=voice,
         speed=speed, alignment=alignment, narration=narration,
         quality=quality, parallel=parallel, width=width, height=height,
         scenes_path=scenes_path)
+    task['burn_in'] = burn_in
+    task['burn_in_fontsdir'] = burn_in_fontsdir
     _motion_index_register(key, task_id)
     _motion_runtime.spawn(task_id, run_motion_task, task)
     logger.info('[Motion.v1] started %s (aspect=%s narration=%s parallel=%d)',
@@ -192,6 +199,119 @@ def serve_motion_file(task_id):
         return api_not_found('file_not_ready')
     mimetype = 'application/x-subrip' if part == 'srt' else 'video/mp4'
     return send_file(path, mimetype=mimetype, conditional=True)
+
+
+def _job_workdir(task) -> str:
+    """The job workdir for a task (from its result or its own field)."""
+    result = task.get('result') or {}
+    return result.get('workdir') or task.get('workdir') or ''
+
+
+@api_v1_motion_bp.route('/api/v1/motion/videos/<task_id>/scenes',
+                        methods=['GET'])
+@require_auth
+@api_meta(summary='List a video job\'s scenes',
+          description='Per-scene status from the job workdir: composition, '
+                      'rendered mp4, narration wav presence.',
+          tags=['motion'])
+async def list_motion_scenes(task_id):
+    import json as _json
+
+    task = _motion_runtime.get(task_id)
+    if not task:
+        return api_not_found('not_found')
+    workdir = _job_workdir(task)
+    scenes_file = os.path.join(workdir, 'scenes.json') if workdir else ''
+    if not scenes_file or not os.path.isfile(scenes_file):
+        return api_not_found('scenes_not_ready')
+    with open(scenes_file, encoding='utf-8') as f:
+        scenes = _json.load(f)
+    out = []
+    for sc in scenes:
+        sid = sc.get('id')
+        scene_dir = os.path.join(workdir, 'scenes', sid)
+        out.append({
+            'scene_id': sid,
+            'start': sc.get('start'),
+            'end': sc.get('end'),
+            'text': sc.get('text'),
+            'has_composition': os.path.isfile(
+                os.path.join(scene_dir, 'index.html')),
+            'has_video': os.path.isfile(
+                os.path.join(scene_dir, f'{sid}.mp4')),
+            'has_narration': os.path.isfile(
+                os.path.join(workdir, 'audio', f'{sid}.wav')),
+        })
+    return jsonify({'ok': True, 'task_id': task_id,
+                    'status': task['status'], 'scenes': out})
+
+
+@api_v1_motion_bp.route('/api/v1/motion/videos/<task_id>/scenes/<scene_id>/file',
+                        methods=['GET'])
+@require_auth
+def serve_scene_file(task_id, scene_id):
+    """Serve one scene's rendered MP4 (Range). SYNC — see serve_motion_file."""
+    import re as _re
+
+    if not _re.fullmatch(r'[A-Za-z0-9_-]{1,64}', scene_id or ''):
+        return api_not_found('not_found')
+    task = _motion_runtime.get(task_id)
+    if not task:
+        return api_not_found('not_found')
+    workdir = _job_workdir(task)
+    path = os.path.join(workdir, 'scenes', scene_id, f'{scene_id}.mp4')
+    if not workdir or not os.path.isfile(path):
+        return api_not_found('file_not_ready')
+    return send_file(path, mimetype='video/mp4', conditional=True)
+
+
+@api_v1_motion_bp.route('/api/v1/motion/videos/<task_id>/scenes/<scene_id>/regen',
+                        methods=['POST'])
+@require_auth
+@api_meta(summary='Re-render one scene and re-assemble the final video',
+          description='Spawns a regen task on the finished job: re-renders '
+                      'the scene from its EXISTING composition, re-concats, '
+                      're-burns / re-muxes, atomically replaces final.mp4.',
+          tags=['motion'])
+async def regen_scene(task_id, scene_id):
+    import re as _re
+
+    if not _re.fullmatch(r'[A-Za-z0-9_-]{1,64}', scene_id or ''):
+        return api_not_found('not_found')
+    from lib.motion_video.runtime import (
+        _motion_runtime as rt,
+        _motion_task_id,
+        _new_motion_task,
+    )
+    from lib.motion_video.engine import run_scene_regen_task
+
+    task = _motion_runtime.get(task_id)
+    if not task:
+        return api_not_found('not_found')
+    if task['status'] not in ('done',):
+        return api_bad_request('job must be done before re-rendering a scene',
+                               field='task_id')
+    workdir = _job_workdir(task)
+    if not workdir or not os.path.isdir(workdir):
+        return api_not_found('workdir_gone')
+
+    regen_id = _motion_task_id()
+    sub = _new_motion_task(
+        regen_id, srt_path='', workdir=workdir,
+        voice=task.get('voice') or '', speed=task.get('speed'),
+        alignment=task.get('alignment') or 'loose',
+        narration=bool(task.get('narration')),
+        quality=task.get('quality') or 'standard',
+        parallel=1, width=task['width'], height=task['height'])
+    sub['scene_id'] = scene_id
+    sub['regen_of'] = task_id
+    sub['burn_in'] = bool(task.get('burn_in'))
+    sub['burn_in_fontsdir'] = task.get('burn_in_fontsdir') or ''
+    rt.spawn(regen_id, run_scene_regen_task, sub)
+    logger.info('[Motion.v1] regen %s of job %s → task %s',
+                scene_id, task_id, regen_id)
+    return jsonify({'ok': True, 'task_id': regen_id, 'regen_of': task_id,
+                    'scene_id': scene_id})
 
 
 __all__ = ['api_v1_motion_bp']

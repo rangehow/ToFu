@@ -26,7 +26,7 @@ from lib.log import get_logger
 
 logger = get_logger(__name__)
 
-__all__ = ['run_motion_task']
+__all__ = ['run_motion_task', 'run_scene_regen_task']
 
 
 def _emit(task: dict, event: dict) -> None:
@@ -77,24 +77,36 @@ def run_motion_task(task: dict) -> None:
     try:
         os.makedirs(workdir, exist_ok=True)
 
-        # ── 1. parse ──
-        with open(task['srt_path'], encoding='utf-8') as f:
-            entries = mv.parse_srt(f.read())
-        if not entries:
-            raise ValueError('SRT parsed to zero cues')
-        span = mv.total_span(entries)
-        _emit(task, {'type': 'phase', 'phase': 'parse',
-                     'cues': len(entries), 'span_s': [round(s, 3) for s in span]})
+        # ── 1. parse (optional when scenes are supplied directly) ──
+        entries = []
+        span = (0.0, 0.0)
+        scenes_path = task.get('scenes_path') or ''
+        if task.get('srt_path') and os.path.isfile(task['srt_path']):
+            with open(task['srt_path'], encoding='utf-8') as f:
+                entries = mv.parse_srt(f.read())
+            if not entries:
+                raise ValueError('SRT parsed to zero cues')
+            span = mv.total_span(entries)
+            _emit(task, {'type': 'phase', 'phase': 'parse',
+                         'cues': len(entries),
+                         'span_s': [round(s, 3) for s in span]})
+        elif not (scenes_path and os.path.isfile(scenes_path)):
+            raise ValueError('neither srt_path nor scenes_path available')
         if _aborted(task):
             _motion_runtime.finish(task_id)
             return
 
         # ── 2. storyboard (agent-supplied scenes.json wins; else zero-LLM) ──
         scenes = None
-        scenes_path = task.get('scenes_path') or ''
         if scenes_path and os.path.isfile(scenes_path):
             with open(scenes_path, encoding='utf-8') as f:
                 scenes = json.load(f)
+            if not entries:
+                # Scenes-only input: the storyboard is the source of truth —
+                # validate internal consistency (contiguity/overlap/sum)
+                # against its OWN span.
+                if scenes:
+                    span = (float(scenes[0]['start']), float(scenes[-1]['end']))
             errors = mv.check_storyboard(scenes, span)
             if errors:
                 raise ValueError('scenes.json failed the storyboard gate: '
@@ -238,6 +250,20 @@ def run_motion_task(task: dict) -> None:
             cursor += dur
         _write(sidecar, '\n'.join(lines))
 
+        # ── 7b. optional subtitle burn-in (re-encode) ──
+        video_final = silent_final
+        if task.get('burn_in'):
+            burned = os.path.join(workdir, 'final_burned.mp4')
+            br = mv.burn_in_subtitles(
+                silent_final, sidecar, burned,
+                fontsdir=task.get('burn_in_fontsdir') or '',
+                abort_event=task.get('abort_event'))
+            if not br.get('ok'):
+                raise RuntimeError('burn-in failed: ' + br.get('detail', ''))
+            video_final = burned
+            _emit(task, {'type': 'phase', 'phase': 'burn_in',
+                         'duration_s': br.get('duration')})
+
         # ── 8. mux (optional) ──
         final_path = os.path.join(workdir, 'final.mp4')
         if narration:
@@ -247,14 +273,14 @@ def run_motion_task(task: dict) -> None:
             if not cn.get('ok'):
                 raise RuntimeError('narration concat failed: '
                                    + cn.get('detail', ''))
-            mx = mv.mux_audio_video(silent_final, narration_wav, final_path,
+            mx = mv.mux_audio_video(video_final, narration_wav, final_path,
                                     abort_event=task.get('abort_event'))
             if not mx.get('ok'):
                 raise RuntimeError('mux failed: ' + mx.get('detail', ''))
             _emit(task, {'type': 'phase', 'phase': 'mux',
                          'duration_s': mx.get('duration')})
         else:
-            os.replace(silent_final, final_path)
+            os.replace(video_final, final_path)
 
         probe = mv.probe_video(final_path)
         result = {
@@ -278,3 +304,114 @@ def run_motion_task(task: dict) -> None:
         logger.error('[MotionVideo] task %s failed: %s', task_id, e, exc_info=True)
         _motion_runtime.finish(task_id, error=e,
                                error_context='motion-video:engine')
+    except Exception as e:
+        logger.error('[MotionVideo] task %s failed: %s', task_id, e, exc_info=True)
+        _motion_runtime.finish(task_id, error=e,
+                               error_context='motion-video:engine')
+
+
+def run_scene_regen_task(task: dict) -> None:
+    """Worker entry — re-render ONE scene of a finished job, then re-assemble.
+
+    Task shape: ``workdir`` (the finished job's dir), ``scene_id``,
+    ``regen_of`` (the original task id, echoed into the result), plus the
+    usual width/height/quality/narration/burn_in fields. The scene's
+    EXISTING composition (index.html — agent- or template-authored) is
+    re-rendered as-is; durations, narration and storyboard are untouched,
+    so re-concat / re-burn / re-mux produce a drop-in replacement
+    ``final.mp4`` at the original job's stable URL.
+    """
+    from lib import motion_video as mv
+    from lib.motion_video.runtime import _motion_runtime
+
+    task_id = task['task_id']
+    workdir = task['workdir']
+    scene_id = task['scene_id']
+    try:
+        scenes_file = os.path.join(workdir, 'scenes.json')
+        with open(scenes_file, encoding='utf-8') as f:
+            scenes = json.load(f)
+        target = next((sc for sc in scenes if sc.get('id') == scene_id), None)
+        if target is None:
+            raise ValueError(f'scene {scene_id!r} not in scenes.json')
+        scene_dir = os.path.join(workdir, 'scenes', scene_id)
+        index_html = os.path.join(scene_dir, 'index.html')
+        if not os.path.isfile(index_html):
+            raise ValueError(f'scene {scene_id!r} has no composition to re-render')
+        import re as _re
+        m = _re.search(r'data-duration="([0-9.]+)"',
+                       open(index_html, encoding='utf-8').read())
+        expect_dur = float(m.group(1)) if m else (
+            float(target['end']) - float(target['start']))
+        _emit(task, {'type': 'phase', 'phase': 'regen',
+                     'scene_id': scene_id, 'regen_of': task.get('regen_of')})
+        if _aborted(task):
+            _motion_runtime.finish(task_id)
+            return
+
+        mp4_path = os.path.join(scene_dir, f'{scene_id}.mp4')
+        r = _render_one(mv, scene_dir, mp4_path,
+                        quality=task.get('quality') or 'standard',
+                        width=task['width'], height=task['height'], fps=30,
+                        expect_dur=expect_dur,
+                        abort_event=task.get('abort_event'))
+        if not r.get('ok'):
+            raise RuntimeError(f"scene {scene_id} re-render failed "
+                               f"({r.get('category')}): {r.get('detail', '')[:300]}")
+        _emit(task, {'type': 'scene_done', 'scene_id': scene_id, 'ok': True,
+                     'elapsed': r.get('elapsed')})
+        if _aborted(task):
+            _motion_runtime.finish(task_id)
+            return
+
+        # Re-assemble with the unchanged siblings.
+        ordered = []
+        for sc in scenes:
+            p = os.path.join(workdir, 'scenes', sc['id'], f"{sc['id']}.mp4")
+            if not os.path.isfile(p):
+                raise ValueError(f"sibling scene {sc['id']!r} mp4 missing — "
+                                 'cannot re-assemble')
+            ordered.append(p)
+        silent_final = os.path.join(workdir, 'final_silent.mp4')
+        res = mv.concat_mp4s(ordered, silent_final,
+                             abort_event=task.get('abort_event'))
+        if not res.get('ok'):
+            raise RuntimeError('re-concat failed: ' + res.get('detail', ''))
+
+        video_final = silent_final
+        if task.get('burn_in'):
+            sidecar = os.path.join(workdir, 'final.srt')
+            burned = os.path.join(workdir, 'final_burned.mp4')
+            br = mv.burn_in_subtitles(
+                silent_final, sidecar, burned,
+                fontsdir=task.get('burn_in_fontsdir') or '',
+                abort_event=task.get('abort_event'))
+            if not br.get('ok'):
+                raise RuntimeError('re-burn failed: ' + br.get('detail', ''))
+            video_final = burned
+
+        final_path = os.path.join(workdir, 'final.mp4')
+        if task.get('narration'):
+            narration_wav = os.path.join(workdir, 'audio', 'narration.wav')
+            mx = mv.mux_audio_video(video_final, narration_wav, final_path,
+                                    abort_event=task.get('abort_event'))
+            if not mx.get('ok'):
+                raise RuntimeError('re-mux failed: ' + mx.get('detail', ''))
+        else:
+            os.replace(video_final, final_path)
+
+        probe = mv.probe_video(final_path)
+        result = {'final_path': final_path,
+                  'regen_of': task.get('regen_of'),
+                  'scene_id': scene_id,
+                  'duration': round(float((probe or {}).get('duration') or 0), 3)}
+        _emit(task, {'type': 'final', 'final_path': final_path,
+                     'scene_id': scene_id, 'regen_of': task.get('regen_of')})
+        _motion_runtime.finish(task_id, result=result)
+        logger.info('[MotionVideo] regen %s of job %s done', scene_id,
+                    task.get('regen_of'))
+    except Exception as e:
+        logger.error('[MotionVideo] regen task %s failed: %s', task_id, e,
+                     exc_info=True)
+        _motion_runtime.finish(task_id, error=e,
+                               error_context='motion-video:regen')

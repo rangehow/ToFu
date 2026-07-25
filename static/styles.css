@@ -10014,11 +10014,36 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   background:var(--bg-active);
   box-shadow:none
 }
+/* ── TOFU wordmark — 软豆腐抖动(侧栏与欢迎页共用);--brand-tilt 让每个字母回弹到自己的静置倾角 ── */
+@keyframes tofuWobble{
+  0%,100%{transform:rotate(var(--brand-tilt,0deg)) translateY(0) scale(1,1)}
+  28%{transform:rotate(calc(var(--brand-tilt,0deg) - 1.6deg)) translateY(-1.5px) scale(1.03,.94)}
+  58%{transform:rotate(calc(var(--brand-tilt,0deg) + 1.1deg)) translateY(.5px) scale(.97,1.04)}
+  82%{transform:rotate(calc(var(--brand-tilt,0deg) - .5deg)) translateY(0) scale(1.01,.99)}
+}
+@media (prefers-reduced-motion:reduce){
+  [data-theme="tofu"] .sidebar-header h1:hover .sidebar-brand>span,
+  [data-theme="tofu"] .tofu-brand:hover>span{animation:none}
+}
+
+/* ── Sidebar wordmark — editorial serif, warm clay gradient, jiggle on hover ── */
+[data-theme="tofu"] .sidebar-header h1{font-family:var(--serif-display);font-size:18px;font-weight:700;letter-spacing:.01em}
+[data-theme="tofu"] .sidebar-brand{letter-spacing:.02em}
 [data-theme="tofu"] .sidebar-brand-t,
 [data-theme="tofu"] .sidebar-brand-o,
 [data-theme="tofu"] .sidebar-brand-f,
-[data-theme="tofu"] .sidebar-brand-u{background-image:none;-webkit-text-fill-color:currentColor;color:var(--text-primary)}
-[data-theme="tofu"] .sidebar-tofu-icon{opacity:0.9}
+[data-theme="tofu"] .sidebar-brand-u{
+  background-image:linear-gradient(150deg,#A96536 5%,var(--accent) 55%,#DCA464);
+  -webkit-background-clip:text;background-clip:text;
+  -webkit-text-fill-color:transparent;color:transparent;
+  display:inline-block;transform-origin:50% 85%
+}
+[data-theme="tofu"] .sidebar-header h1:hover .sidebar-brand-t{animation:tofuWobble .6s cubic-bezier(.34,1.56,.64,1)}
+[data-theme="tofu"] .sidebar-header h1:hover .sidebar-brand-o{animation:tofuWobble .6s cubic-bezier(.34,1.56,.64,1);animation-delay:.06s}
+[data-theme="tofu"] .sidebar-header h1:hover .sidebar-brand-f{animation:tofuWobble .6s cubic-bezier(.34,1.56,.64,1);animation-delay:.12s}
+[data-theme="tofu"] .sidebar-header h1:hover .sidebar-brand-u{animation:tofuWobble .6s cubic-bezier(.34,1.56,.64,1);animation-delay:.18s}
+[data-theme="tofu"] .sidebar-tofu-icon{opacity:.92;transition:transform .3s cubic-bezier(.34,1.56,.64,1)}
+[data-theme="tofu"] .sidebar-header h1:hover .sidebar-tofu-icon{transform:rotate(-8deg) scale(1.1)}
 
 /* ── Conversation items: quiet rows ── */
 [data-theme="tofu"] .conv-item{
@@ -10581,15 +10606,40 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   border-color:var(--accent-subtle)
 }
 
-/* ── TOFU brand wordmark — editorial serif, warm clay ── */
+/* ── TOFU brand wordmark — 暖棕衬线主标:字母像豆腐块微微歪着,悬停时挨个弹抖;「豆腐」盖成一枚红印章 ── */
 [data-theme="tofu"] .tofu-brand{
   font-family:var(--serif-display);
-  font-weight:600;letter-spacing:0;text-transform:none
+  font-size:34px;font-weight:600;letter-spacing:-0.01em;text-transform:none;
+  display:inline-flex;align-items:baseline;margin-bottom:10px;cursor:default
 }
 [data-theme="tofu"] .tofu-brand .tofu-brand-t,
 [data-theme="tofu"] .tofu-brand .tofu-brand-o1,
 [data-theme="tofu"] .tofu-brand .tofu-brand-f,
-[data-theme="tofu"] .tofu-brand .tofu-brand-u{background:none;-webkit-background-clip:border-box;-webkit-text-fill-color:var(--accent);color:var(--accent)}
+[data-theme="tofu"] .tofu-brand .tofu-brand-u{
+  background:linear-gradient(165deg,#A96536 8%,var(--accent) 52%,#DCA464 96%);
+  -webkit-background-clip:text;background-clip:text;
+  -webkit-text-fill-color:transparent;color:transparent;
+  display:inline-block;transform:rotate(var(--brand-tilt,0deg));transform-origin:50% 88%
+}
+[data-theme="tofu"] .tofu-brand .tofu-brand-t{--brand-tilt:-1.6deg}
+[data-theme="tofu"] .tofu-brand .tofu-brand-o1{--brand-tilt:1deg}
+[data-theme="tofu"] .tofu-brand .tofu-brand-f{--brand-tilt:-.6deg}
+[data-theme="tofu"] .tofu-brand .tofu-brand-u{--brand-tilt:1.8deg}
+[data-theme="tofu"] .tofu-brand:hover .tofu-brand-t{animation:tofuWobble .72s cubic-bezier(.34,1.56,.64,1)}
+[data-theme="tofu"] .tofu-brand:hover .tofu-brand-o1{animation:tofuWobble .72s cubic-bezier(.34,1.56,.64,1);animation-delay:.07s}
+[data-theme="tofu"] .tofu-brand:hover .tofu-brand-f{animation:tofuWobble .72s cubic-bezier(.34,1.56,.64,1);animation-delay:.14s}
+[data-theme="tofu"] .tofu-brand:hover .tofu-brand-u{animation:tofuWobble .72s cubic-bezier(.34,1.56,.64,1);animation-delay:.21s}
+[data-theme="tofu"] .welcome h2.tofu-brand small{
+  font-family:var(--serif-display);font-size:12px;font-weight:600;
+  color:#FBF7EE;background:#B05B48;
+  letter-spacing:.18em;line-height:1;
+  padding:5px 7px 5px 9px;margin-left:12px;
+  border-radius:5px;vertical-align:middle;opacity:1;
+  transform:rotate(-4deg) translateY(-3px);
+  box-shadow:inset 0 0 0 1px rgba(251,247,238,.45),0 1px 3px rgba(176,91,72,.35);
+  transition:transform .25s cubic-bezier(.34,1.56,.64,1)
+}
+[data-theme="tofu"] .tofu-brand:hover small{transform:rotate(0deg) translateY(-3px)}
 
 /* ── Turn nav — pixel bar ── */
 [data-theme="tofu"] .turn-nav{

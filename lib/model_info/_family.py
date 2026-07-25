@@ -49,10 +49,13 @@ def is_claude_opus_47(model: str) -> bool:
         return False
     # Extract (major, minor) from "opus-X-Y" or "opus-X.Y" — returns True iff
     # (major, minor) >= (4, 7).  Handles opus-4-7, opus-4.8, opus-5-0, etc.
-    match = re.search(r'opus[-_.]?(\d+)[-_.](\d+)', m)
+    # The minor digit is OPTIONAL: bare-major gateway aliases
+    # (yuju-claude-opus-5-evaDaily, claude-opus-5) parse as (major, 0).
+    match = re.search(r'opus[-_.]?(\d+)(?:[-_.](\d+))?', m)
     if not match:
         return False
-    major, minor = int(match.group(1)), int(match.group(2))
+    major = int(match.group(1))
+    minor = int(match.group(2)) if match.group(2) else 0
     return (major, minor) >= (4, 7)
 
 

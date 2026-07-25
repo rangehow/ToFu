@@ -1,5 +1,10 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续5) — pt_1acd0bcdb2174566 全收口:F4 owner 拍 A(人类等待无上限,现状)+ 决策落码防「好心修复」(commit `0fa8ce24`,1 文件 +10/-1,零行为变化;heartbeat 套件 4/4)
+- **F4 裁决:** 收割器被串行阻塞工具心跳喂饱——owner 拍 A:ask_human 等人类**永不收割是设计语义**(人类可能隔天答复,不设上限);连带成本照单全收——挂死的非人串行工具(await_task/timer_create 死 socket)同样免收割,只能靠 abort/重启清。
+- **防「好心修复」:** 决策写进 `_SERIAL_BLOCKING_TOOLS` 表头注释(`_heartbeat.py:46`)——后人看到「永不收割」不会再当成 bug 修。
+- **epic 全账:** F3 serving-loop 跳转 `c083ad4b`(3 测含 failing-first A/B)+ 收割器每-tick 上限 `473ea89d`(10 测)+ F4 裁决落码 `0fa8ce24` → **board complete**。
+
 ### 2026-07-25(续46) — pt_0c1621a561f045e1 收口:test_endpoint_messages 七红根修(两发同族测试漂移,commit `6c70957d`,1 文件 +33/-4;套件 **28/28**,endpoint 相邻环 34/34,collect **9101** 0 err)
 ### 2026-07-26(续4) — 产出底盘 P6 第 2 刀:`/api/v1/tasks` 看不见 motion 与 podcast 的真 bug 修复(commit `0c768268`,2 文件 +105/-1;新套件 5/5 含 failing-first + NEUTER,相邻环 **159 过**,collect **9131** 0 err)
 - **不是重构,是一个活 bug:** `routes/api_v1/tasks.py::_registries()` 是**所有通用任务端点**(`/tasks`、`/{id}`、`/{id}/events`、`/{id}/stream`、`/{id}/abort`)的枚举源,而它是**硬编码四条**。结果两个**已交付**能力对通用 API **完全不可见**:motion 视频任务既列不出、也查不了、更 abort 不掉;podcast 则正是因此**手写了一遍 `poll_podcast_task`** —— 设计稿 §1.6 早把这条记为硬编码的代价。

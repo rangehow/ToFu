@@ -215,6 +215,18 @@ async function _verifyActiveConvFromServer(convId) {
     const serverLast = serverMsgs[serverMsgs.length - 1];
     const am = localMsgs[localMsgs.length - 1];
     if (serverLast && am && serverLast.role === "assistant" && am.role === "assistant") {
+      /* ★ Terminal turn fields land INDEPENDENT of the growth gate below.
+       *   A settled turn's content usually no longer grows, so gating the
+       *   merge on "server longer" stranded apiRounds/_taskId/cost on the
+       *   viewing tab forever — the degraded cost-bar class (aggregate
+       *   rows only, no per-round table, no Task ID row). Single source
+       *   of the field list: core/conv_reducers.js. Fill-if-missing, so
+       *   the growth-gated server-wins lines below still own their
+       *   fields when they do fire. */
+      if (_mergeTerminalTurnFields(am, serverLast) > 0) {
+        conv.updatedAt = data.updatedAt || data.updated_at || conv.updatedAt;
+        changed = true;
+      }
       const sc = serverLast.content?.length || 0, lc = am.content?.length || 0;
       const st = serverLast.thinking?.length || 0, lt = am.thinking?.length || 0;
       const sr = Array.isArray(serverLast.toolRounds) ? serverLast.toolRounds.length : 0;

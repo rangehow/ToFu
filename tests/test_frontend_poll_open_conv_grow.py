@@ -173,13 +173,19 @@ def _run(neuter=False):
     load_fn = _extract_fn(src, "loadConversationsFromServer")
     verify_fn = _extract_fn((REPO / "static" / "js" / "core" / "cross_tab_sync.js").read_text(),
                             "_verifyActiveConvFromServer")
+    # The Case-2 terminal-field fill was centralised into ONE shared reducer
+    # (core/conv_reducers.js::_mergeTerminalTurnFields, 2026-07-25) which the
+    # real _verifyActiveConvFromServer now CALLS — splice it too, else the
+    # standalone extraction crashes with ReferenceError before the growth gate.
+    helper_fn = _extract_fn((REPO / "static" / "js" / "core" / "conv_reducers.js").read_text(),
+                            "_mergeTerminalTurnFields")
     if neuter:
         # NEUTER: strip the routing flag the fix sets, so the tail can never
         # take the keep-longer verify branch and falls back to the
         # count-plus-clock loadConversationMessages path (which drops the grow).
         load_fn = load_fn.replace("local._contentGrewNeedsVerify = true;",
                                   "local._contentGrewNeedsVerify = false;")
-    script = (_fetch_stub() + _HARNESS
+    script = (_fetch_stub() + helper_fn + "\n" + _HARNESS
               .replace("__VERIFY_FN__", verify_fn)
               .replace("__LOAD_FN__", load_fn))
     out = subprocess.run(["node", "-e", script], capture_output=True, text=True, cwd=str(REPO))

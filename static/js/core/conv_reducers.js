@@ -15,6 +15,9 @@
      pollWriteWouldClobberSettledTail(msg, taskId, data)
                                         — poll-fold monotonic-writer guard
      convTitleById(cid)                 — id → human title lookup
+     _mergeTerminalTurnFields(lm, sm)   — terminal turn-metadata field list
+                                        — single source of truth (apiRounds
+                                          upgrade-if-longer, rest fill-if-missing)
 
    This file is concatenated into the core bundle BEFORE
    core/conversations.js (guarded by _BUNDLE_FILES ordering +
@@ -181,3 +184,62 @@ function convAutoTranslateEffective(conv) {
   return convAutoTranslate(conv);
 }
 if (typeof window !== 'undefined') window.convAutoTranslateEffective = convAutoTranslateEffective;
+
+/* ═══════════════════════════════════════════════════════════════════
+   _mergeTerminalTurnFields(localMsg, serverMsg) — THE single source of
+   truth for the terminal turn-metadata field list.
+
+   The bug class this kills (conv mrzutwddkeuw0n, 2026-07-25): every
+   keep-local merge site used to hand-enumerate the fields it copied from
+   the server's settled message, and every hand-written list predated the
+   terminal cost-accounting fields. A locally-cached mid-stream message
+   then half-upgraded on a merge — usage showed, cost lazily computed —
+   while the finish bar's per-round table (needs apiRounds), the popover
+   Task ID row (needs _taskId) and the key-tail route tag (needs
+   apiRounds[-1].usage._dispatch) NEVER rendered. Hand-copying the list a
+   third/fourth time is exactly how it kept drifting; it lives HERE once.
+
+   Semantics (identical at every call site):
+     • apiRounds — upgrade-if-longer: adopt the server's list ONLY when
+       the local copy is missing or SHORTER (a mid-stream local may hold
+       a partial round list; never downgrade it).
+     • everything else — fill-if-missing: adopt only fields the local
+       message lacks (never clobber a value already present).
+
+   Call-site notes:
+     • core/conversations.js (loadConversationMessages MERGE_ACTIVE_TASK)
+       routes its whole per-index merge loop through this.
+     • core/cross_tab_sync.js (_verifyActiveConvFromServer Case 2) calls
+       it OUTSIDE the content-growth gate — a settled turn's fields must
+       land even when nothing grew — and keeps its deliberate server-wins
+       lines for content/thinking/toolRounds inside the gate.
+     • main/main_init_tasks.js (initActiveTasks Case B / Case F) calls it
+       AFTER its deliberate server-wins lines (the poll payload is
+       terminal-authoritative), so those no-op here and only the
+       previously-missing fields land. Case B adapts the poll payload's
+       task id onto the source's `_taskId` first (the wire carries it as
+       `taskId`/`id`, not `_taskId`).
+
+   Pure reducer over two message dicts; reads nothing else, so it is
+   load-order-safe for all consumers (every call is at runtime, never at
+   module-load time). Returns the number of fields filled/upgraded so
+   callers can gate their changed/repaint flag.
+   ═══════════════════════════════════════════════════════════════════ */
+function _mergeTerminalTurnFields(lm, sm) {
+  if (!lm || !sm || typeof lm !== 'object' || typeof sm !== 'object') return 0;
+  let n = 0;
+  if (Array.isArray(sm.apiRounds)
+      && (!Array.isArray(lm.apiRounds) || sm.apiRounds.length > lm.apiRounds.length)) {
+    lm.apiRounds = sm.apiRounds;
+    n++;
+  }
+  const _TERMINAL_FILL = (
+    'finishReason usage model _taskId cost provider_id preset thinkingDepth ' +
+    'modifiedFiles modifiedFileList fallbackModel fallbackFrom fallbackReason fallbackKind'
+  ).split(' ');
+  for (const f of _TERMINAL_FILL) {
+    if (sm[f] != null && lm[f] == null) { lm[f] = sm[f]; n++; }
+  }
+  return n;
+}
+if (typeof window !== 'undefined') window._mergeTerminalTurnFields = _mergeTerminalTurnFields;

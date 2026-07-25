@@ -339,6 +339,21 @@ async function initActiveTasks() {
                 if (td.fallbackReason) am.fallbackReason = td.fallbackReason;
                 if (td.fallbackKind) am.fallbackKind = td.fallbackKind;
                 if (td.modifiedFiles) am.modifiedFiles = td.modifiedFiles;
+                /* ★ Terminal turn fields the hand-written list above never
+                 *   covered — apiRounds / _taskId / cost / provider_id /
+                 *   thinkingDepth / modifiedFileList / model. A refresh
+                 *   landing just after the task finished rendered the
+                 *   degraded cost bar (aggregate rows only, no per-round
+                 *   table, no Task ID) until the next full reload. Single
+                 *   source of the field list: core/conv_reducers.js. Runs
+                 *   AFTER the deliberate server-wins lines above (the poll
+                 *   is terminal-authoritative), so those no-op here and
+                 *   only the missing fields land. The poll payload carries
+                 *   the task id as taskId/id (not _taskId) — adapt it onto
+                 *   the merge source so _taskId fills too. */
+                _mergeTerminalTurnFields(am, Object.assign({}, td, {
+                  _taskId: td.taskId || td.id || conv.activeTaskId,
+                }));
               }
               /* ★ If server returned status='interrupted', the task was checkpointed
                  but the server crashed before completing. Mark it as interrupted
@@ -458,6 +473,14 @@ async function initActiveTasks() {
               if (serverMsgs.length > 0) {
                 const serverLast = serverMsgs[serverMsgs.length - 1];
                 if (serverLast && serverLast.role === 'assistant') {
+                  /* ★ Same single-source terminal-field fill (core/
+                   *   conv_reducers.js) — independent of the growth gate
+                   *   below: a settled turn's apiRounds/_taskId/cost must
+                   *   land even when its content no longer grows. Local
+                   *   'server_offline' finishReason is already present so
+                   *   the helper can't clobber it — the AC3 verdict below
+                   *   still owns replacing the badge. */
+                  if (_mergeTerminalTurnFields(am, serverLast) > 0) _cleared = true;
                   const serverContentLen = serverLast.content?.length || 0;
                   // If server has more content, adopt it (task completed after frontend gave up)
                   if (serverContentLen > localContentLen) {

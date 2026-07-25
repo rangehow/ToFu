@@ -324,6 +324,13 @@ def _init_chat_schema(conn):
     from lib.database._core_schema import PAPER_TRANSLATIONS, create_if_absent
     create_if_absent(conn, PAPER_TRANSLATIONS, table_exists=_table_exists)
 
+    # ── Paper podcasts: spoken-script + audio cache (paper podcast feature,
+    # docs/PAPER_PODCAST_DESIGN.md). Core-defined; guarded create is a no-op
+    # on existing DBs. Audio binaries live on disk; this table holds the
+    # script JSON + metadata (same text-in-DB / binary-on-disk convention).
+    from lib.database._core_schema import PAPER_PODCASTS, create_if_absent
+    create_if_absent(conn, PAPER_PODCASTS, table_exists=_table_exists)
+
     # Seed default user
     cur.execute("""
         INSERT INTO users (id, username, display_name, password_hash)

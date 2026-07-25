@@ -225,6 +225,31 @@ PAPER_TRANSLATIONS = define_table(
     sa.PrimaryKeyConstraint('paper_hash', 'lang'),
 )
 
+# paper_podcasts — generated paper-podcast cache; composite PK
+# (paper_hash, mode, lang, voice). script_json is the segmented spoken
+# script (JSON); file_path points at the on-disk audio under
+# uploads/papers/podcast/ (DB holds text/metadata, disk holds binaries —
+# same convention as paper PDFs/images). status: running | done |
+# script_only (no TTS slot configured — script+transcript only) | error.
+# duration_sec is REAL (0 when unknown/estimated-only).
+PAPER_PODCASTS = define_table(
+    'paper_podcasts',
+    sa.Column('paper_hash', sa.Text, nullable=False),
+    sa.Column('mode', sa.Text, nullable=False, server_default='short'),
+    sa.Column('lang', sa.Text, nullable=False, server_default='zh'),
+    sa.Column('voice', sa.Text, nullable=False, server_default=''),
+    sa.Column('status', sa.Text, nullable=False, server_default=''),
+    sa.Column('script_json', sa.Text, nullable=False, server_default=''),
+    sa.Column('file_path', sa.Text, nullable=False, server_default=''),
+    sa.Column('duration_sec', sa.Float, nullable=False, server_default=sa.text('0')),
+    sa.Column('model', sa.Text, nullable=False, server_default=''),
+    sa.Column('tts_model', sa.Text, nullable=False, server_default=''),
+    sa.Column('meta', sa.Text, nullable=False, server_default=''),
+    sa.Column('created_at', bigint_column(), nullable=False),
+    sa.Column('updated_at', bigint_column(), nullable=False),
+    sa.PrimaryKeyConstraint('paper_hash', 'mode', 'lang', 'voice'),
+)
+
 # task_results — persisted chat/task output. Single-col PK; several nullable
 # TEXT columns (no default) and a nullable completed_at timestamp.
 TASK_RESULTS = define_table(

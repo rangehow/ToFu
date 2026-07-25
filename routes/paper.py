@@ -2691,6 +2691,255 @@ async def prune_broken_library_rows():
 
 
 
+# ═══ Podcast (paper podcast: report → spoken script → TTS audio) ═══
+#
+# The paper-podcast surface (docs/PAPER_PODCAST_DESIGN.md, epic
+# pt_80943e765e9444ca). Report-first UX: the start route GATES on a report
+# existing in either language (report_required → the frontend chains the
+# report flow first, then retries). Without any configured TTS slot the
+# worker degrades to script_only (script + transcript, honest reason) —
+# owner directive 2026-07-25: no hard failure, no hardcoded model/voice.
+
+from lib.paper.podcast_prompts import PODCAST_MODES
+from lib.paper.podcast_runtime import (
+    _podcast_index_get,
+    _podcast_index_register,
+    _podcast_runtime,
+    _podcast_tasks,
+    _podcast_tasks_lock,
+    _cleanup_stale_podcast_tasks,
+    _new_podcast_task,
+    _podcast_task_id,
+)
+from lib.paper.podcast_engine import (
+    has_report,
+    load_cached_podcast,
+    podcast_audio_url,
+    _run_podcast_task,
+)
+
+
+@api_v1_paper_bp.route('/api/v1/paper/podcast/status', methods=['GET'])
+def podcast_status():
+    """Feature status: is a TTS slot configured, which models, mode bands."""
+    from lib import tts as _tts
+    available = _tts.tts_available()
+    return jsonify({
+        'ok': True,
+        'tts_available': available,
+        'models': _tts.list_tts_models() if available else [],
+        'default_voice': _tts.default_voice() if available else '',
+        'modes': {m: {'target': band[0], 'min': band[1], 'max': band[2]}
+                  for m, band in PODCAST_MODES.items()},
+    })
+
+
+def _resolve_podcast_request(data):
+    """Shared request parsing for start/lookup; returns (phash, mode, lang,
+    voice, model, force, error_response)."""
+    phash = (data.get('paper_hash') or '').strip()
+    paper_text = (data.get('paper_text') or '').strip()
+    if phash and not _safe_hash_dir(phash):
+        phash = ''
+    if not phash and paper_text:
+        phash = _paper_hash(paper_text)
+    if not phash:
+        return None, None, None, None, None, None, (
+            jsonify({'ok': False, 'error': 'paper_hash or paper_text required'}), 400)
+    mode = (data.get('mode') or 'short').strip() or 'short'
+    lang = (data.get('lang') or 'zh').strip() or 'zh'
+    if mode not in PODCAST_MODES:
+        return None, None, None, None, None, None, (
+            jsonify({'ok': False, 'error': f'unknown mode: {mode}'}), 400)
+    if lang not in ('zh', 'en'):
+        return None, None, None, None, None, None, (
+            jsonify({'ok': False, 'error': f'unsupported lang: {lang}'}), 400)
+    voice = (data.get('voice') or '').strip()
+    model = (data.get('model') or '').strip() or None
+    force = bool(data.get('force'))
+    return phash, mode, lang, voice, model, force, None
+
+
+@api_v1_paper_bp.route('/api/v1/paper/podcast/start', methods=['POST'])
+async def start_podcast_task():
+    """Start (or join) a podcast task; report-gated; cache-aware.
+
+    Request: {paper_hash?, paper_text?, mode?, lang?, voice?, force?, model?}
+    Responses:
+      - {ok, task_id, reused?}           — live task (new or joined)
+      - {ok, cached: true, ...}          — finished/script_only cache hit
+      - {ok: false, report_required}     — no report yet; chain report first
+    """
+    data = await async_parse_body()
+    _cleanup_stale_podcast_tasks()
+    phash, mode, lang, voice, model, force, err = _resolve_podcast_request(data)
+    if err:
+        return err
+    if not has_report(phash):
+        return jsonify({'ok': False, 'report_required': True,
+                        'report_lang': lang,
+                        'error': 'a report is required before a podcast can '
+                                 'be generated'})
+    from lib import tts as _tts
+    eff_voice = voice or _tts.default_voice()
+
+    tid = _podcast_index_get(phash, mode, lang, eff_voice)
+    if tid:
+        return jsonify({'ok': True, 'task_id': tid, 'reused': True})
+
+    cached = load_cached_podcast(phash, mode, lang, eff_voice)
+    if cached and not force:
+        status = cached.get('status') or ''
+        return jsonify({
+            'ok': True, 'cached': True, 'status': status,
+            'script': cached.get('script_json') or {},
+            'meta': cached.get('meta') or {},
+            'scriptOnly': status == 'script_only',
+            'audioUrl': (podcast_audio_url(phash, mode, lang, eff_voice)
+                         if status == 'done' else ''),
+            'durationSec': cached.get('duration_sec') or 0,
+        })
+
+    task_id = _podcast_task_id()
+    _podcast_index_register(phash, mode, lang, eff_voice, task_id)
+    task = _new_podcast_task(task_id, phash, mode, lang, eff_voice, model)
+    _podcast_runtime.spawn(task_id, _run_podcast_task, task)
+    return jsonify({'ok': True, 'task_id': task_id})
+
+
+@api_v1_paper_bp.route('/api/v1/paper/podcast/poll', methods=['GET'])
+def poll_podcast_task():
+    """Poll podcast events. Same cursor protocol as the report poll; on done
+    the response flattens script / audioUrl / durationSec / scriptOnly."""
+    task_id = request.args.get('task_id', '')
+    try:
+        cursor = int(request.args.get('cursor', '0') or 0)
+    except (ValueError, TypeError):
+        cursor = 0
+    with _podcast_tasks_lock:
+        t = _podcast_tasks.get(task_id)
+    if not t:
+        return jsonify({'ok': False, 'error': 'Task not found'}), 404
+    events = t['events']
+    new_events = events[cursor:]
+    status = t.get('status')
+    resp = {
+        'ok': True,
+        'status': status,
+        'done': status in ('done', 'error', 'aborted'),
+        'events': new_events,
+        'cursor': len(events),
+        'progress': t.get('progress') or {'done': 0, 'total': 0},
+    }
+    if status == 'done':
+        resp['script'] = t.get('script')
+        resp['meta'] = t.get('script_meta') or {}
+        resp['scriptOnly'] = bool(t.get('script_only'))
+        resp['audioUrl'] = t.get('audio_url') or ''
+        resp['durationSec'] = t.get('duration_sec') or 0
+    elif status == 'error':
+        for ev in reversed(events):
+            if ev.get('type') == 'error':
+                resp['error'] = ev.get('error', 'unknown error')
+                if ev.get('reason'):
+                    resp['reason'] = ev['reason']
+                break
+    return jsonify(resp)
+
+
+@api_v1_paper_bp.route('/api/v1/paper/podcast/lookup', methods=['POST'])
+async def lookup_podcast():
+    """Find a live task or cached podcast for (paper_hash, mode, lang, voice)."""
+    data = await async_parse_body()
+    phash, mode, lang, voice, _model, _force, err = _resolve_podcast_request(data)
+    if err:
+        return err
+    from lib import tts as _tts
+    eff_voice = voice or _tts.default_voice()
+    tid = _podcast_index_get(phash, mode, lang, eff_voice)
+    if tid:
+        return jsonify({'ok': True, 'found': True, 'running': True,
+                        'task_id': tid})
+    cached = load_cached_podcast(phash, mode, lang, eff_voice)
+    if cached:
+        status = cached.get('status') or ''
+        return jsonify({
+            'ok': True, 'found': True, 'cached': True, 'status': status,
+            'script': cached.get('script_json') or {},
+            'meta': cached.get('meta') or {},
+            'scriptOnly': status == 'script_only',
+            'audioUrl': (podcast_audio_url(phash, mode, lang, eff_voice)
+                         if status == 'done' else ''),
+            'durationSec': cached.get('duration_sec') or 0,
+        })
+    return jsonify({'ok': True, 'found': False,
+                    'tts_available': _tts.tts_available(),
+                    'report_available': has_report(phash)})
+
+
+@api_v1_paper_bp.route('/api/v1/paper/podcast/script', methods=['GET'])
+def get_podcast_script():
+    """Return the cached spoken script + meta (transcript tab, md export)."""
+    phash = (request.args.get('paper_hash') or '').strip()
+    mode = (request.args.get('mode') or 'short').strip() or 'short'
+    lang = (request.args.get('lang') or 'zh').strip() or 'zh'
+    voice = (request.args.get('voice') or '').strip()
+    if not phash or not _safe_hash_dir(phash):
+        return jsonify({'ok': False, 'error': 'paper_hash required'}), 400
+    from lib import tts as _tts
+    eff_voice = voice or _tts.default_voice()
+    cached = load_cached_podcast(phash, mode, lang, eff_voice)
+    if not cached:
+        return jsonify({'ok': False, 'error': 'Podcast not found'}), 404
+    return jsonify({
+        'ok': True,
+        'script': cached.get('script_json') or {},
+        'meta': cached.get('meta') or {},
+        'scriptOnly': (cached.get('status') or '') == 'script_only',
+        'audioUrl': (podcast_audio_url(phash, mode, lang, eff_voice)
+                     if (cached.get('status') or '') == 'done' else ''),
+        'durationSec': cached.get('duration_sec') or 0,
+    })
+
+
+@api_v1_paper_bp.route('/api/v1/paper/podcast/audio/<paper_hash>/<mode>/<lang>/<voice>',
+                       methods=['GET'])
+def serve_podcast_audio(paper_hash, mode, lang, voice):
+    """Stream the podcast audio with HTTP Range support (seekable player).
+
+    Path containment mirrors _safe_paper_file: the persisted file_path must
+    resolve under PAPER_DIR/podcast/<paper_hash>/ — a row pointing anywhere
+    else is treated as tampered and 404s (logged).
+    """
+    import os as _os
+    from urllib.parse import unquote
+
+    from lib.paper.hashing import PAPER_DIR as _PAPER_DIR
+
+    if not _safe_hash_dir(paper_hash):
+        return jsonify({'ok': False, 'error': 'invalid paper_hash'}), 400
+    voice = unquote(voice or '')
+    if voice == '-':
+        voice = ''
+    cached = load_cached_podcast(paper_hash, mode, lang, voice)
+    fpath = (cached or {}).get('file_path') or ''
+    if not cached or not fpath:
+        return jsonify({'ok': False, 'error': 'Podcast audio not found'}), 404
+    root = _os.path.abspath(_os.path.join(_PAPER_DIR, 'podcast', paper_hash))
+    real = _os.path.abspath(fpath)
+    if not real.startswith(root + _os.sep):
+        logger.warning('[Paper:Podcast] audio path escapes podcast dir: %s', fpath)
+        return jsonify({'ok': False, 'error': 'Podcast audio not found'}), 404
+    if not _os.path.exists(real):
+        logger.warning('[Paper:Podcast] audio file missing on disk (stale row): '
+                       '%s', real)
+        return jsonify({'ok': False, 'error': 'Podcast audio file missing'}), 404
+    ext = real.rsplit('.', 1)[-1].lower() if '.' in real else ''
+    mime = {'mp3': 'audio/mpeg', 'wav': 'audio/wav',
+            'bin': 'application/octet-stream'}.get(ext, 'application/octet-stream')
+    return _stream_file_response(real, mime)
+
+
 # ── Abort routes (factory-minted) ───────────────────────────────────
 #
 # The report / Q&A / translate ABORT endpoints are uniform — set the task's
@@ -2721,3 +2970,5 @@ register_task_routes(api_v1_paper_bp, _qa_runtime,
                      url_prefix='/api/v1/paper/qa', enable_poll=False)
 register_task_routes(api_v1_paper_bp, _translate_runtime,
                      url_prefix='/api/v1/paper/translate', enable_poll=False)
+register_task_routes(api_v1_paper_bp, _podcast_runtime,
+                     url_prefix='/api/v1/paper/podcast', enable_poll=False)

@@ -288,6 +288,12 @@ def _init_chat_schema(conn):
     from lib.database._core_schema import PAPER_TRANSLATIONS, create_if_absent
     create_if_absent(conn, PAPER_TRANSLATIONS, table_exists=_table_exists)
 
+    # ── Paper podcasts: spoken-script + audio cache (paper podcast feature,
+    # docs/PAPER_PODCAST_DESIGN.md). Core-defined; _table_exists guard
+    # REQUIRED on SQLite (bare execute, Core DDL has no IF NOT EXISTS).
+    from lib.database._core_schema import PAPER_PODCASTS, create_if_absent
+    create_if_absent(conn, PAPER_PODCASTS, table_exists=_table_exists)
+
     # Seed default user
     cur.execute("""
         INSERT OR IGNORE INTO users (id, username, display_name, password_hash)

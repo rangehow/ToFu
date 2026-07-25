@@ -112,3 +112,37 @@ def _latest_task_for_conv(conv_id: str):
                      conv_id[:8], e)
     with _conv_latest_task_lock:
         return _conv_latest_task.get(conv_id)
+
+
+def _live_successor_task_id(conv_id: str, exclude_task_id: str = '') -> str:
+    """The conv's supersede-index successor, iff it is a DIFFERENT live task.
+
+    Ships the conv→latest-task index onto terminal SSE frames (the LATE-done
+    synthesis in ``lib.chat_dispatch`` and the real ``done`` in
+    ``orchestrator/_finalize.py``) as ``latestLiveTaskId``, so the client's
+    terminal-continuation attach reducer can hop to the successor the
+    autopilot hook already spawned — the VU sub-task is a carrier, invisible
+    to ``/api/v1/chat/active``, so without this stamp the client has NO way
+    to discover it (production 2026-07-25: parent stream closed at turn end,
+    the VU ran invisibly for minutes, a queued send sat silent until manual
+    refresh).
+
+    Returns '' when the index is absent, points at the dying task itself
+    (the normal no-successor case), or names a task that is no longer live
+    (terminal / aborted / evicted from the registry). Best-effort: any
+    probe failure yields '' (no stamp), never raises into a stream tick.
+    """
+    if not conv_id:
+        return ''
+    try:
+        succ = _latest_task_for_conv(conv_id)
+        if not succ or succ == exclude_task_id:
+            return ''
+        t = _chat_runtime.get(succ)
+        if not t or t.get('status') not in ('pending', 'running') or t.get('aborted'):
+            return ''
+        return succ
+    except Exception as e:
+        logger.debug('[Task] live-successor probe failed conv=%s: %s',
+                     conv_id[:8], e)
+        return ''

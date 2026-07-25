@@ -325,6 +325,23 @@ function _onConvNotifyPush(frame) {
           updateSendButton();
         }
       }
+      /* ★ Queued-dispatch discovery (streamless tab): when THIS tab queued
+       *   a message behind a busy turn, the backend's post-completion
+       *   auto-dispatch announces itself via THIS notify frame — without
+       *   the probe, a tab holding no live stream for the conv never
+       *   notices the queued turn started (the 2026-07-25 "queued message,
+       *   six minutes of silence until F5" incident). Narrow gate: the
+       *   local queue mirror holds dispatchable items AND this tab isn't
+       *   already driving the conv. _checkForQueuedTask is in-flight-
+       *   latched, so bursty frames collapse to cheap no-ops. */
+      const _qdConv = conversations.find((c) => c && c.id === frame.convId);
+      if (_qdConv && !_qdConv.activeTaskId
+          && typeof activeStreams !== "undefined" && !activeStreams.has(frame.convId)
+          && typeof _dispatchableQueueCount === "function"
+          && _dispatchableQueueCount(frame.convId) > 0
+          && typeof _checkForQueuedTask === "function") {
+        _checkForQueuedTask(frame.convId);
+      }
     }
     /* Multi-user gate (forward-safe): drop a frame for another user. When no
      *   user identity is established (single-user today) every frame is ours. */

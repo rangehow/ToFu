@@ -1219,6 +1219,21 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
     if task.get('_committedMsg'):
         done_evt['committedMessage'] = task['_committedMsg']
 
+    # ── Supersede-successor stamp (pt_8dc03017 wire completion) ──
+    # Same contract as the LATE-done synthesis (lib/chat_dispatch.py): when
+    # the autopilot hook already spawned the successor (VU / follow-up), the
+    # conv→latest-task index names it HERE, before append_event — ship it so
+    # the client's attach reducer can hop transport-agnostically. Absent on
+    # the normal no-successor path (index points at this task → '').
+    try:
+        from lib.tasks_pkg.manager import _live_successor_task_id
+        _succ_tid = _live_successor_task_id(
+            task.get('convId') or '', exclude_task_id=task.get('id', ''))
+        if _succ_tid:
+            done_evt['latestLiveTaskId'] = _succ_tid
+    except Exception as _succ_err:
+        logger.debug('[Task:%s] successor stamp failed: %s', tid, _succ_err)
+
     append_event(task, done_evt)
     persist_task_result(task)
 

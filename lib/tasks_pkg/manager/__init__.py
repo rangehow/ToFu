@@ -55,6 +55,7 @@ from lib.tasks_pkg.manager._state import (  # noqa: E402,F401
     CHECKPOINT_MIN_DELTA_CHARS,
     _record_latest_task,
     _latest_task_for_conv,
+    _live_successor_task_id,
 )
 
 

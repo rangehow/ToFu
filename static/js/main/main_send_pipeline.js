@@ -632,6 +632,15 @@ async function sendMessage() {
       }
       // Sync queue state from server for accurate UI
       _refreshServerQueue(convId);
+      /* ★ Start the dispatch watcher: the backend auto-starts this message
+       *   when the current task settles — but NOTHING on this tab discovers
+       *   that while no local stream is live (the busy turn's stream may
+       *   already have closed, e.g. the invisible autopilot-VU window, or
+       *   belong to another device). Bounded backoff; the notify-push hook
+       *   (cross_tab_sync.js) is the event-driven complement that usually
+       *   fires first. Without this, the queued turn starts INVISIBLY and
+       *   the bar sits silent until a manual refresh (2026-07-25 incident). */
+      _watchQueuedDispatch(convId);
       saveConversations(convId);
       if (activeConvId === convId) {
         _removeTranslatingBubble();
@@ -1416,7 +1425,22 @@ async function _recoverTimedOutChatTask(convId, opts = {}) {
   return false;
 }
 
+/* ★ Re-entry latch: at most ONE check chain per conv at a time. Callers
+ *   now include finishStream, the queued-dispatch watcher, and the
+ *   notify-push hook (cross_tab_sync.js) — without the latch, overlapping
+ *   frames/ticks stack duplicate /api/v1/chat/active probes (and double
+ *   attach attempts). Retries carry _retryCount > 0 — they ARE the same
+ *   chain and pass through. */
+const _queuedCheckInFlight = new Set();
+
 async function _checkForQueuedTask(convId, _retryCount = 0) {
+  if (_retryCount === 0) {
+    if (_queuedCheckInFlight.has(convId)) return;
+    _queuedCheckInFlight.add(convId);
+  }
+  /* Released at every chain end (skip / give-up / attach / error) — the ONLY
+   *   non-release path is a retry reschedule (the chain continues there). */
+  const _release = () => { _queuedCheckInFlight.delete(convId); };
   try {
     // ★ Skip if the conversation already has an active task (user may have
     //   already started a new send/regenerate since finishStream scheduled us)
@@ -1424,10 +1448,11 @@ async function _checkForQueuedTask(convId, _retryCount = 0) {
     if (_conv && (_conv.activeTaskId || activeStreams.has(convId))) {
       console.log(`%c[Queue] Skipping _checkForQueuedTask — conv=${convId.slice(0,8)} already has active task/stream`, 'color:#a78bfa');
       _refreshServerQueue(convId);
+      _release();
       return;
     }
     const activeTasks = await Api.chat.active();
-    if (!Array.isArray(activeTasks)) return;
+    if (!Array.isArray(activeTasks)) { _release(); return; }
     // ★ Only connect to non-aborted running tasks — an aborted task
     //   is winding down and should not be reconnected to.
     const newTask = activeTasks.find(t => t.convId === convId && t.status === 'running' && !t.aborted);
@@ -1463,6 +1488,7 @@ async function _checkForQueuedTask(convId, _retryCount = 0) {
           if (_ghost) _ghost.remove();
         } catch (e) { /* ignore */ }
       }
+      _release();
       return;
     }
     console.log(
@@ -1471,7 +1497,7 @@ async function _checkForQueuedTask(convId, _retryCount = 0) {
     );
 
     const conv = conversations.find(c => c.id === convId);
-    if (!conv) return;
+    if (!conv) { _release(); return; }
 
     // ★ Remove the optimistic "Dispatching queued message…" placeholder
     //   inserted by finishStream().  renderChat will re-render everything
@@ -1521,10 +1547,50 @@ async function _checkForQueuedTask(convId, _retryCount = 0) {
 
     // Refresh queue UI
     _refreshServerQueue(convId);
+    _release();
   } catch (err) {
     console.warn('[Queue] _checkForQueuedTask error:', err);
+    _release();
   }
 }
+if (typeof window !== 'undefined') window._checkForQueuedTask = _checkForQueuedTask;
+
+/* Bounded backoff for the queued-dispatch watcher (9 ticks, ~90s total).
+ * Longer horizons are covered event-driven (the notify-push hook in
+ * cross_tab_sync.js) and by the push-reconnect snapshot. */
+const _QUEUED_WATCH_DELAYS = [800, 1500, 3000, 5000, 8000, 12000, 15000, 20000, 30000];
+
+/**
+ * Watch a just-queued message until the backend's auto-dispatch becomes
+ * visible locally. Started by the {queued:true} send branch: the backend
+ * WILL start this message when the current task settles, but nothing on
+ * this tab discovers that while no local stream is live — the busy turn's
+ * stream may already have closed (e.g. the invisible autopilot-VU window)
+ * or belong to another device entirely. Without this watcher the queued
+ * turn starts INVISIBLY and the queue bar sits silent until a manual
+ * refresh (production 2026-07-25: six minutes of dead air).
+ *
+ * Stop conditions: attached (a stream/task is bound locally), the local
+ * queue mirror drained (dispatched elsewhere / cancelled), or the budget
+ * is exhausted. Each tick reuses the SAME _checkForQueuedTask seam every
+ * other caller uses (in-flight-latched, so overlapping ticks are cheap).
+ */
+function _watchQueuedDispatch(convId, _n = 0) {
+  const conv = conversations.find((c) => c.id === convId);
+  if (!conv) return;
+  // Attached — this tab now drives the dispatched task. Done.
+  if (conv.activeTaskId || activeStreams.has(convId)) return;
+  // After the first tick, an empty local mirror means the queue was drained
+  // elsewhere (dispatched + picked up, or cancelled by the user). Stop.
+  // (Tick 0 skips this check: the branch's _refreshServerQueue may not have
+  // landed yet, so the mirror can legitimately still be empty.)
+  if (_n > 0 && _dispatchableQueueCount(convId) === 0) return;
+  _checkForQueuedTask(convId);
+  if (_n < _QUEUED_WATCH_DELAYS.length) {
+    setTimeout(() => _watchQueuedDispatch(convId, _n + 1), _QUEUED_WATCH_DELAYS[_n]);
+  }
+}
+if (typeof window !== 'undefined') window._watchQueuedDispatch = _watchQueuedDispatch;
 
 async function _refreshServerQueue(convId) {
   try {

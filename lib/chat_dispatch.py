@@ -913,6 +913,23 @@ def next_live_tick(
                 task_id_short, _late_fr,
                 late_meta.get('model', '?'), _err_summary)
         apply_autopilot_baton(task, late_done)
+        # ── Supersede-successor stamp (pt_8dc03017 wire completion) ──
+        # The cutover made the parent close PROMPTLY at status-flip, with the
+        # client discovering any successor (autopilot VU / follow-up) via the
+        # conv→latest-task index. But that index never reached the wire: the
+        # LATE done carried no baton (the VU was still deciding) and no
+        # successor id, and the VU is a carrier hidden from /api/chat/active
+        # — the client went deaf for the whole VU window, so an auto-
+        # dispatched queued turn started invisibly (production 2026-07-25:
+        # six minutes of silence until a manual refresh). Ship the index.
+        try:
+            from lib.tasks_pkg.manager import _live_successor_task_id
+            _succ_tid = _live_successor_task_id(
+                task.get('convId') or '', exclude_task_id=task.get('id', ''))
+            if _succ_tid:
+                late_done['latestLiveTaskId'] = _succ_tid
+        except Exception as _stamp_err:
+            logger.debug('[Chat] LATE done successor stamp failed: %s', _stamp_err)
         return LiveTickAction(kind='late_done', late_done_evt=late_done,
                               next_cursor=_new_cursor)
 

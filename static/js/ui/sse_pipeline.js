@@ -1696,6 +1696,13 @@ function dispatchSSEEvent(line, ctx) {
         }
       }
       if (ev.taskId) assistantMsg._taskId = ev.taskId;
+      /* ★ latestLiveTaskId wire (pt_8dc03017 completion): the backend ships
+       *   the supersede successor (autopilot VU / follow-up / queued-dispatch
+       *   task) on terminal frames — record it so _runTerminalContinuation's
+       *   attach reducer can hop to it. Without this stamp the reducer is
+       *   dead code and a queued turn starts invisibly (the 2026-07-25
+       *   silent-queue incident). LATE done rides this same branch. */
+      if (typeof _stampLatestLiveTask === 'function') _stampLatestLiveTask(_dConv, ev);
       /* ★ git-shim: round commit sha for redo/diff references */
       if (ev.gitSha) assistantMsg._gitSha = ev.gitSha;
       /* ★ Phase 1 (parity-gap closure): when the backend shipped the EXACT

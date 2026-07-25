@@ -487,6 +487,24 @@ function finishStream(convId) {
 }
 
 /**
+ * Stamp the supersede successor from a terminal frame (done / LATE done)
+ * onto the conv — the WRITER half of the latestLiveTaskId wire
+ * (pt_8dc03017 cutover completion). The backend ships the conv→latest-task
+ * index on terminal frames (lib/chat_dispatch.py LATE-done synthesis +
+ * orchestrator/_finalize.py real done) so the attach reducer in
+ * _runTerminalContinuation can hop to the autopilot VU / follow-up task
+ * WITHOUT a hand-carried baton. Called from the SSE done branch
+ * (sse_pipeline.js). A later frame simply overwrites — the reducer
+ * consumes the stamp on attach, so it can never re-fire stale.
+ */
+function _stampLatestLiveTask(conv, ev) {
+  if (!conv || !ev) return;
+  const tid = ev.latestLiveTaskId;
+  if (typeof tid === 'string' && tid) conv._latestLiveTaskId = tid;
+}
+if (typeof window !== 'undefined') window._stampLatestLiveTask = _stampLatestLiveTask;
+
+/**
  * The terminal continuation funnel: after a conversation's running predicate
  * has been cleared (task done / aborted / reclaimed), resolve and attach any
  * follow-up work the backend may already have spawned — an autopilot next
@@ -542,7 +560,29 @@ function _runTerminalContinuation(convId) {
       `latestLiveTask=${_liveTaskId.slice(0,8)} (index-driven, no baton)`,
       'color:#a78bfa;font-weight:bold'
     );
-    connectToTask(convId, _liveTaskId);
+    /* ★ Consume the stamp FIRST so a later continuation can never re-attach
+     *   to this (now-aging) successor — the stamp is single-use. */
+    conv._latestLiveTaskId = null;
+    /* ★ Reload messages BEFORE opening the successor's stream: when the
+     *   successor is an autopilot follow-up, the VU-synthesized user turn
+     *   was already persisted by the backend hook — it must land in
+     *   conv.messages before connectToTask appends its streaming bubble
+     *   (mirrors _checkForQueuedTask's attach). On the VU-hop itself the
+     *   reload is a cheap no-op (the VU runs on _inline_messages). */
+    (async () => {
+      try {
+        conv._needsLoad = true;
+        if (typeof loadConversationMessages === 'function') {
+          await loadConversationMessages(convId);
+        }
+      } catch (e) {
+        console.warn('[Autopilot] supersede reload failed (attaching anyway):', e);
+      }
+      /* Re-check after the await: a send/stream may have started meanwhile
+       * (connectToTask re-guards on activeStreams internally too). */
+      if (activeStreams.has(convId)) return;
+      connectToTask(convId, _liveTaskId);
+    })();
     return;
   }
   // ── ★ Autopilot in-band follow-up (FAST PATH): when the done/poll event

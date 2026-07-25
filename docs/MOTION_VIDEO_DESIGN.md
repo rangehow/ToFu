@@ -1,6 +1,6 @@
 # Tofu 动画视频生成能力设计稿(auto-motion 吸收 + 超越)
 
-> 状态:**P0 ✅ · P1 ✅ · P2 音画链 ✅ · P2b 无头引擎+api_v1 ✅ · P3 后端片 ✅(烧录/scenes-only/单镜重生成/论文 video abstract);P3 仅剩前端面板与论文「视频」tab。**
+> 状态:**全部交付 ✅(P0/P1/P2/P2b/P3,2026-07-25 同日收口)。** 遗留:BGM 轨/ducking 出路线图;风格预设由技能商店 hyperframes-design 包承接。
 > 参考仓库:`/mnt/dolphinfs/ssd_pool/docker/user/hadoop-aipnlp/INS/ruanjunhao04/auto-motion`
 > (与 tofu 同级目录,2026-07-25 clone 自 https://github.com/vibe-motion/auto-motion,49MB)
 
@@ -183,7 +183,7 @@ transcription.srt
 - **scenes-only 引擎**:无 SRT 也可跑(scenes.json 即真相,自参照 span 过闸)——LLM/上层直接给分镜的通道;
 - **单镜重生成**:`run_scene_regen_task`(复用既有 composition 重渲→重拼→重烧/重混→原子替换 final.mp4,**URL 稳定**)+ `GET /videos/<id>/scenes`(逐镜状态)+ `GET .../scenes/<sid>/file`(Range)+ `POST .../scenes/<sid>/regen`;
 - **论文 video abstract**:`lib/paper/video_abstract.py`(播客链延伸:has_report 门 + `_load_source_text` 复用 + 零 LLM beats:markdown 剥离/段落预算分组/字数估时长 250字/分/钳 [3,15]s/连续 from 0)+ `POST /api/v1/paper/video/start`(进度与下载直接骑 motion poll/file 端点);
-- **前端面板(本 P3 唯一剩余)**:逐镜九宫格预览 + 重生成按钮 + 进度条——后端已备齐(scenes 列表/场景文件/regen/motion push 频道),纯前端片(index.html + 新 JS 模块 + bundle 注册 + i18n + JSDOM),下一 dispatch 落地;论文「视频」tab 同期。
+- **前端面板 ✅(commit `f6f4d4bf`,9 文件 +949/-1)**:论文阅读器「视频」tab(`static/js/paper/video.js`,播客 tab 同款状态机:idle/generating/done/report_required/lookup_failed)+ 生成卡(语言/画质/音色/配音/烧录开关)+ 相位进度行 + 原生播放器与下载(MP4/SRT)+ **逐镜网格**(每镜自己的 mp4 预览缩略图+单镜重渲按钮,重渲轮询后网格自动刷新+成品 URL 稳定)+ `Api.motion` 域(status/poll/abort/scenes/regenScene/fileUrl)+ `GET /api/v1/paper/video/lookup`(重开页 re-attach);JSDOM 状态机 17 探针 + **NEUTER**(剥重渲按钮→探针转红)+ 5 静态钉(Api 面/bundle 注册/tab 接线/i18n 双语/语法);motion+frontend 合计 **93/93**,bundle parity 15/15,collect **8868** 0 err。
 
 原 P3 计划备查:并行 worker 池(✅ 已随 P2b 落地)/BGM+ducking(未做,出路线图)/画幅预设(✅ API aspect 四档)。
 

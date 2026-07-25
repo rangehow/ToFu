@@ -435,9 +435,8 @@ pip install docling --extra-index-url https://download.pytorch.org/whl/cpu
 - **无头 API + 并行渲染** —— `POST /api/v1/motion/videos` 在服务端跑完整条流水线（零 LLM 分镜 + 模板镜头、有界并行渲染、重复请求自动合并入队），成品经支持 Range 的 `/api/v1/motion/videos/<id>/file` 下载，并附对齐后的侧车 SRT
 - **单镜重生成 + 字幕烧录** —— 只重渲某一个镜头并自动重组装（`POST …/scenes/<id>/regen`，成品 URL 不变），逐镜状态可查（`GET …/scenes`），可选硬烧字幕（`burn_in: true`，libass，支持中文字体）
 - **论文视频摘要** —— 一次调用把论文报告变成一条配音 MG 短视频（`POST /api/v1/paper/video/start`，与播客链同款报告门）
+- **论文「视频」页签** —— 论文阅读器第五个页签：生成卡（语言/画质/音色/配音/烧录）、实时相位进度、内嵌播放器，以及逐镜网格——每个镜头都有自己的预览和重渲按钮
 - **深度知识包** —— 来自 vibe-motion/auto-motion 的 29 条动效规则、13 个镜头蓝图、20+ 设计帧预设，在 设置 → 技能 里搜 “hyperframes” 一键安装
-
-逐镜头预览/重生成面板与论文视频摘要在路线图上（见 `docs/MOTION_VIDEO_DESIGN.md`）。
 
 ---
 

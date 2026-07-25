@@ -450,9 +450,8 @@ Turn a subtitle transcript (SRT) into a vertical MG-animated video — Tofu stor
 - **Headless API + parallel rendering** — `POST /api/v1/motion/videos` runs the whole pipeline server-side (zero-LLM storyboard + template compositions, bounded-parallel scene renders, dedup-join on repeat requests) and serves the result over Range-enabled `/api/v1/motion/videos/<id>/file` with an aligned sidecar SRT
 - **Single-scene regen + burn-in** — re-render just one shot and re-assemble (`POST …/scenes/<id>/regen`, stable final URL), list per-scene status (`GET …/scenes`), and optionally hard-burn subtitles (`burn_in: true`, libass, CJK fonts supported)
 - **Paper video abstract** — one call turns a paper report into a short narrated MG video (`POST /api/v1/paper/video/start`, report-gated like the podcast chain)
+- **Paper "Video" tab** — the paper reader's fifth tab: generate card (lang/quality/voice/narration/burn-in), live phase progress, an inline player, and a per-scene grid where every shot has its own preview and a re-render button
 - **Deep knowledge packs** — the 29 motion rules, 13 scene blueprints, and 20+ design frame presets from vibe-motion/auto-motion are one click away in Settings → Skills (search "hyperframes")
-
-A per-scene preview/regenerate panel and paper video abstracts are on the roadmap (see `docs/MOTION_VIDEO_DESIGN.md`).
 
 ---
 

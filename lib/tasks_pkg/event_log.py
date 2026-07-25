@@ -209,7 +209,12 @@ def read_events(task_id, since_event_id=None, limit=10000):
             try:
                 payload = json.loads(payload_raw or '{}')
             except (TypeError, ValueError, json.JSONDecodeError) as _e_audit:
-                logger.debug('[event_log] read_events caught %s: %s', type(_e_audit).__name__, _e_audit)
+                # WARNING (was DEBUG): an unparseable payload row means cold
+                # replay silently degrades this event to {'type': ...} — a
+                # data-integrity degradation, same severity as the persist-side
+                # 'persist event failed' warning above.
+                logger.warning('[EventLog] read_events: unparseable payload row for task=%s, '
+                               'degrading to type-only: %s', task_id[:8], _e_audit)
                 payload = {'type': r['type'] if 'type' in r.keys() else r[1]}
         try:
             eid = int(r['event_id'] if 'event_id' in r.keys() else r[0])

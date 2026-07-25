@@ -800,6 +800,7 @@ _DEFERRED_FILES = [
     # the panel was never opened). Ordering: peers/status/i18n read
     # window.ProjectBrain._state at RUNTIME → MUST come after project-brain.js.
     'project-brain.js',
+    'project-brain-attention.js',
     'project-brain-peers.js',
     'project-brain-status.js',
     'project-brain-i18n.js',

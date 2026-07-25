@@ -3085,6 +3085,11 @@ var _i18n = {
   'collab.project': { zh: '项目', en: 'Project' },
   'collab.openBrain': { zh: '打开项目大脑', en: 'Open Project Brain' },
   'collab.decisionsAwaiting': { zh: '{n} 项决策待你审批', en: '{n} decisions awaiting you' },
+  // The attention SSOT segment. Two wordings so the bar can distinguish "work
+  // is STOPPED until you act" from "you could weigh in" — the same
+  // blocking/advisory split the Needs-you tab renders.
+  'collab.needsYouBlocking': { zh: '{n} 项需你处理', en: '{n} need you' },
+  'collab.needsYou': { zh: '{n} 项待你确认', en: '{n} awaiting you' },
   'collab.epicsInProgress': { zh: '{n} 个任务推进中', en: '{n} epics in progress' },
   'collab.epicsOpen': { zh: '{n} 个待认领', en: '{n} open' },
   'collab.peersOnline': { zh: '{n} 个会话在线', en: '{n} conversations online' },
@@ -3113,6 +3118,20 @@ var _i18n = {
   'projectBrain.previewUntitled': { zh: '未命名对话', en: 'Untitled' },
   'projectBrain.previewLoading': { zh: '加载中…', en: 'Loading…' },
   'projectBrain.charter': { zh: '章程', en: 'Charter' },
+  // ── Needs you (the attention tab) ──
+  'projectBrain.attention': { zh: '待你处理', en: 'Needs you' },
+  'projectBrain.attnBlocking': { zh: '已停摆', en: 'Stopped' },
+  'projectBrain.attnAdvisory': { zh: '可选', en: 'Advisory' },
+  'projectBrain.attnKindEpic': { zh: '任务停摆', en: 'Epic halted' },
+  'projectBrain.attnKindProposal': { zh: '提议中的决策', en: 'Proposed decision' },
+  'projectBrain.attnKindConflict': { zh: '文件冲突', en: 'File conflict' },
+  'projectBrain.attnLeadBlocking': { zh: '{n} 项停摆', en: '{n} stopped' },
+  'projectBrain.attnLeadAdvisory': { zh: '{n} 项可选', en: '{n} advisory' },
+  'projectBrain.attnOpenTeam': { zh: '去看团队', en: 'Open Team' },
+  'projectBrain.attnEmpty': { zh: '没有需要你处理的事', en: 'Nothing needs you' },
+  'projectBrain.attnEmptySub': { zh: '所有工作流都在自行推进。', en: 'Every workstream is moving on its own.' },
+  'projectBrain.attnEmptyWaiting': { zh: '{n} 项在等待自己的门禁 — 无需你动手', en: '{n} waiting on their own gates — no action needed' },
+  'projectBrain.attnWaiting': { zh: '{n} 项在等待自己的门禁 — 无需你动手', en: '{n} waiting on their own gates — no action needed' },
   'projectBrain.board': { zh: '任务板', en: 'Board' },
   'projectBrain.activity': { zh: '动态', en: 'Activity' },
   'projectBrain.team': { zh: '团队', en: 'Team' },

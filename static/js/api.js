@@ -1039,6 +1039,13 @@
     brainSummary:  (path, convId) =>
       get('/api/v1/project/brain/summary',
           { query: { path, convId: convId || '' }, onError: 'null' }),
+    // The "needs you" SSOT — everything genuinely waiting on the human,
+    // priority-ordered server-side (blocking first). One payload backs both
+    // the Needs-you tab and the collab bar's count, so they cannot drift.
+    // convId is optional and only marks `mine`; it never filters.
+    brainAttention: (path, convId) =>
+      get('/api/v1/project/brain/attention',
+          { query: { path, convId: convId || '' }, onError: 'null' }),
     // LIVE peer/team roster (presence ⋈ task ⋈ claimed-epic). convId optional
     // — when present it's excluded so a conv never lists itself as a peer.
     brainPeers:    (path, convId) =>

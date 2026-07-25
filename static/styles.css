@@ -20523,6 +20523,67 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
 /* collab-bar conflict styling (shares this block's ownership). */
 .collab-seg-conflict{color:var(--pb-red);font-weight:600}
 .collab-bar-inner.collab-has-conflicts{border-color:color-mix(in srgb,var(--pb-red) 40%,transparent)}
+
+/* ── "Needs you" tab (the attention surface) ──
+   ONE card grammar shared by every item type: severity rail · head (severity
+   pill + kind) · title/body · inline resolving control · meta. The eye learns
+   one shape instead of the four it used to meet across Charter/Board/Team.
+   Colour carries severity, NOT source: red rail = work is STOPPED until a
+   human acts; accent rail = advisory, progress continues. */
+.pb-attn-lead{display:flex;align-items:center;gap:8px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-tertiary);margin-bottom:12px}
+.pb-attn-lead-blocking{color:var(--pb-red)}
+.pb-attn-card{background:var(--pb-card-bg);border:1px solid var(--border);border-radius:var(--pb-radius);padding:12px 13px;margin-bottom:10px;transition:border-color var(--transition),background var(--transition),transform 0.12s ease;animation:pbRowIn 0.24s cubic-bezier(0.16,1,0.3,1)}
+.pb-attn-card:hover{border-color:var(--border-light);background:var(--pb-card-hover);--pb-fade-to:var(--pb-card-hover);transform:translateY(-1px)}
+.pb-attn-card.pb-attn-blocking{border-left:3px solid var(--pb-red)}
+.pb-attn-card.pb-attn-advisory{border-left:3px solid color-mix(in srgb,var(--accent) 55%,var(--border))}
+.pb-attn-head{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.pb-attn-sev{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;padding:2px 8px;border-radius:var(--pb-radius-chip);line-height:1.6}
+.pb-attn-sev svg{display:block}
+.pb-attn-sev-blocking{color:var(--pb-red);background:color-mix(in srgb,var(--pb-red) 12%,transparent);border:1px solid color-mix(in srgb,var(--pb-red) 32%,transparent)}
+.pb-attn-sev-advisory{color:var(--accent);background:var(--accent-subtle);border:1px solid color-mix(in srgb,var(--accent) 30%,transparent)}
+.pb-attn-kind{font-size:10.5px;font-weight:600;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:0.05em}
+/* Type scale with actual hierarchy: title leads, body recedes, meta whispers.
+   (The old surface sat every level within ~1.5px, so nothing receded.) */
+.pb-attn-title{font-size:13.5px;font-weight:600;line-height:1.5;color:var(--text-primary);overflow-wrap:anywhere;word-break:break-word}
+.pb-attn-body{font-size:12.5px;line-height:1.6;color:var(--text-secondary);overflow-wrap:anywhere;word-break:break-word}
+.pb-attn-meta{font-size:11.5px;color:var(--text-tertiary);margin-top:8px;overflow-wrap:anywhere}
+/* The question IS the content on a halted epic — same treatment as the Board's
+   .pb-question so answering feels identical in both places. */
+.pb-attn-q{margin-top:9px;padding:10px 12px;border:1px solid color-mix(in srgb,var(--pb-red) 26%,transparent);border-radius:var(--pb-radius-sm);background:color-mix(in srgb,var(--pb-red) 6%,transparent);font-size:12.5px;line-height:1.6;color:var(--text-primary);overflow-wrap:anywhere;word-break:break-word}
+.pb-attn-input-row{display:flex;gap:7px;margin-top:9px}
+.pb-attn-answer{flex:1;min-width:0;background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--pb-radius-sm);padding:6px 10px;font-size:12px;color:var(--text-primary);font-family:inherit}
+.pb-attn-answer:focus{outline:none;border-color:var(--accent)}
+.pb-attn-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--border)}
+/* Action buttons reuse the board's button family verbatim (one button
+   vocabulary panel-wide, not a second look-alike set). */
+.pb-attn-act{display:inline-flex;align-items:center;gap:4px;background:var(--bg-secondary);color:var(--text-secondary);border:1px solid var(--border);border-radius:var(--pb-radius-sm);padding:5px 10px;font-size:11.5px;font-weight:600;font-family:inherit;cursor:pointer;transition:color var(--transition),border-color var(--transition),background var(--transition)}
+.pb-attn-act:hover{color:var(--text-primary);border-color:var(--border-light)}
+.pb-attn-act:disabled{opacity:0.55;cursor:default}
+.pb-attn-act.pb-btn-primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.pb-attn-act.pb-btn-primary:hover{background:var(--accent-hover);color:#fff;border-color:var(--accent-hover)}
+.pb-attn-goto{display:inline-flex;align-items:center;gap:5px;background:transparent;color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 30%,transparent);border-radius:var(--pb-radius-sm);padding:5px 10px;font-size:11.5px;font-weight:600;font-family:inherit;cursor:pointer;transition:background var(--transition)}
+.pb-attn-goto:hover{background:var(--accent-subtle)}
+.pb-attn-goto svg{display:block}
+/* The reassurance line: epics on a self-expiring cooldown need NOTHING from
+   the human, so they are deliberately not cards — a muted footnote instead. */
+.pb-attn-waiting{display:flex;align-items:center;gap:6px;margin-top:6px;padding:9px 11px;font-size:11.5px;color:var(--text-tertiary);border:1px dashed var(--border);border-radius:var(--pb-radius-sm);background:color-mix(in srgb,var(--bg-tertiary) 25%,transparent)}
+.pb-attn-waiting svg{display:block;flex-shrink:0}
+/* Empty state is a POSITIVE statement, not a "no data" box — the operator
+   asked "is anything waiting on me?" and "no" is a real, useful answer. */
+.pb-attn-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;min-height:200px;padding:24px;margin:2px;color:var(--text-tertiary);text-align:center;border:1px dashed var(--border);border-radius:var(--pb-radius);background:color-mix(in srgb,var(--bg-tertiary) 30%,transparent)}
+.pb-attn-empty svg{display:block;color:var(--pb-green);opacity:0.75}
+.pb-attn-empty-title{font-size:14px;font-weight:600;color:var(--text-secondary)}
+.pb-attn-empty-sub{font-size:12px;color:var(--text-tertiary)}
+/* Tab dot + badge. The badge turns red ONLY when something is genuinely
+   stopped, so an advisory-only project reads calm at a glance. */
+.pb-tab[data-pb-tab="attention"].pb-tab-active{color:var(--pb-red)}
+.pb-tab-count.pb-tab-count-blocking{color:#fff;background:var(--pb-red);border-color:var(--pb-red)}
+
+/* collab-bar attention styling: the count is always visible, but only
+   `blocking` (work actually stopped) escalates the bar's own border. */
+.collab-seg-needsyou{font-weight:600}
+.collab-seg-blocking{color:var(--pb-red)}
+.collab-bar-inner.collab-has-blocking{border-color:color-mix(in srgb,var(--pb-red) 40%,transparent)}
 .collab-conflicts{display:inline-flex;flex-wrap:wrap;gap:6px;margin-left:8px}
 .collab-conflict-line{font-size:11px;color:var(--pb-red);opacity:0.9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px}
 

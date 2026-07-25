@@ -593,6 +593,10 @@
              viewport. Tabs are wired by project-brain.js (_initTabs); the count
              badges are refreshed after each render. -->
         <div class="project-brain-tabs" id="projectBrainTabs" role="tablist">
+          <button type="button" class="pb-tab" data-pb-tab="attention" role="tab" aria-selected="false">
+            <span class="pb-tab-label" data-i18n="projectBrain.attention">Needs you</span>
+            <span class="pb-tab-count" id="pbTabCountAttention" hidden></span>
+          </button>
           <button type="button" class="pb-tab pb-tab-active" data-pb-tab="charter" role="tab" aria-selected="true">
             <span class="pb-tab-label" data-i18n="projectBrain.charter">Charter</span>
             <span class="pb-tab-count" id="pbTabCountCharter" hidden></span>
@@ -613,6 +617,19 @@
           </button>
         </div>
         <div class="project-brain-columns">
+          <!-- ═══ Needs you ═══
+               The ONE place everything genuinely waiting on the human is
+               collected: epics halted on a structured question (the only
+               thing that stops a workstream indefinitely), pending charter
+               proposals, and live file-conflict advisories. Rendered from the
+               backend attention SSOT (/api/v1/project/brain/attention) by
+               project-brain-attention.js — priority-ordered server-side, so
+               this tab and the collab-bar count are the same judgment. -->
+          <div class="project-brain-col project-brain-col-attention pb-tab-panel" data-pb-panel="attention">
+            <div class="project-brain-col-body" id="projectBrainAttentionBody">
+              <div class="pb-attn-empty" data-i18n="projectBrain.attnEmpty">Nothing needs you</div>
+            </div>
+          </div>
           <div class="project-brain-col project-brain-col-charter pb-tab-panel pb-tab-panel-active" data-pb-panel="charter">
             <div class="project-brain-col-body" id="projectBrainCharterBody">
               <div class="pb-charter-empty" data-i18n="projectBrain.charterEmpty">No charter yet</div>
@@ -2016,6 +2033,8 @@
 <script defer src="static/js/presence.js?v=20260630a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <!-- project-brain.js — Pillar #1 cross-conversation Activity Feed tab (registered in lib/js_bundler.py:_BUNDLE_FILES). -->
 <script defer src="static/js/project-brain.js?v=20260630a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+<!-- project-brain-attention.js — the "Needs you" tab (registered in lib/js_bundler.py:_DEFERRED_FILES). MUST load after project-brain.js (reuses its clamp/markdown/tab-switch primitives at runtime). -->
+<script defer src="static/js/project-brain-attention.js?v=20260726a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <!-- project-brain-peers.js — Team/Peers column (registered in lib/js_bundler.py:_BUNDLE_FILES). MUST load after project-brain.js. -->
 <script defer src="static/js/project-brain-peers.js?v=20260703a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <!-- project-brain-status.js — Pillar #7 human↔brain status lane tab (registered in lib/js_bundler.py:_BUNDLE_FILES). MUST load after project-brain.js. -->

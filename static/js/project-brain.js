@@ -98,6 +98,11 @@
     if (name === 'status' && prev !== 'status') {
       _refreshStatus(_state.path || _displayedProjectPath());
     }
+    // Same fresh-on-tab-open rule for Needs-you: switching tabs only toggles
+    // CSS, so a stale list could still show an epic a sibling just answered.
+    if (name === 'attention' && prev !== 'attention') {
+      _refreshAttention(_state.path || _displayedProjectPath());
+    }
   }
 
   /** Wire the tab bar once (click delegation). Idempotent. */
@@ -1677,6 +1682,7 @@
         refreshCharter(path);
         refreshBoard(path);
         refreshInfluence(path);
+        _refreshAttention(path);
         _refreshPeers(path);
         _refreshStatus(path);
       }, 300);
@@ -1693,7 +1699,14 @@
     _state.panelUnsub = null;
   }
 
-  function openProjectBrain() {
+  /**
+   * Open the panel. `opts.needsYou` (optional) is the attention count the
+   * CALLER already holds — the collaboration bar gets it free in its
+   * brainSummary payload — and, when non-zero, lands the operator directly on
+   * the Needs-you tab. Omitting it keeps the last-used tab (see _selectTab
+   * below), so an ordinary open never disturbs where the operator was.
+   */
+  function openProjectBrain(opts) {
     var overlay = document.getElementById('projectBrainOverlay');
     if (!overlay) return;
     // Head glyph (SVG, no emoji).
@@ -1711,16 +1724,34 @@
         typeof ProjectBrainI18n.initToggle === 'function') {
       try { ProjectBrainI18n.initToggle(); } catch (_e) { /* best-effort */ }
     }
-    _selectTab(_state.tab || 'charter');
+    // Landing tab. The panel opens on Needs-you ONLY when something is
+    // actually waiting on the human — otherwise it would greet the operator
+    // with an empty state every time, which trains them to skip past it. The
+    // caller passes the count it already has (the collab bar knows it from
+    // brainSummary); absent that we keep the last-used tab and let the
+    // attention refresh set the badge.
+    var landing = _state.tab || 'charter';
+    if (opts && opts.needsYou > 0) landing = 'attention';
+    _selectTab(landing);
     var path = _displayedProjectPath();
     if (path) {
       openFeed(path);
       refreshCharter(path);
       refreshBoard(path);
       refreshInfluence(path);
+      _refreshAttention(path);
       _refreshPeers(path);
       _refreshStatus(path);
       _subscribePanelLive(path);
+    }
+  }
+
+  /** Drive the Needs-you tab (project-brain-attention.js) if it's loaded. */
+  function _refreshAttention(path) {
+    if (typeof window.ProjectBrainAttention !== 'undefined' &&
+        window.ProjectBrainAttention &&
+        typeof window.ProjectBrainAttention.refreshAttention === 'function') {
+      window.ProjectBrainAttention.refreshAttention(path);
     }
   }
 
@@ -1797,6 +1828,7 @@
       refreshCharter(path);
       refreshBoard(path);
       refreshInfluence(path);
+      _refreshAttention(path);
       _refreshStatus(path);
       _refreshPeers(path);
       _subscribePanelLive(path);
@@ -1807,6 +1839,7 @@
       // The peer roster also excludes the active conv server-side, so refresh
       // it too (a conv switch changes who counts as a "peer").
       refreshInfluence(path);
+      _refreshAttention(path);
       _refreshPeers(path);
     } else {
       closeFeed();
@@ -1839,6 +1872,12 @@
     _onPush: _onPush,
     _state: _state,
     _boardConvId: _boardConvId,
+    // Shared primitives the Needs-you tab (project-brain-attention.js) reuses
+    // so the panel has ONE clamp/markdown/tab-switch grammar, not two.
+    _clampBlock: _clampBlock,
+    _mdLite: _mdLite,
+    _wireClampToggles: _wireClampToggles,
+    _selectTab: _selectTab,
   };
   window.toggleProjectBrain = toggleProjectBrain;
   window.openProjectBrain = openProjectBrain;

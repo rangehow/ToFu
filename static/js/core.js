@@ -395,7 +395,7 @@ function getToolRoundsFromMsg(msg) {
         status: "done",
       },
     ];
-  else base = [];
+  const base = [];
   return _rehydrateInjectRows(msg, base);
 }
 

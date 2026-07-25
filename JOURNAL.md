@@ -1,6 +1,14 @@
 # Project Journal
 
 
+### 2026-07-25(续20) — Motion video P2 音画合成落地 + epic 收口(commit `aa07bc8d`,10 文件 +656/-8;套件 48/48 含 NEUTER,相邻 31,collect **8797** 0 err;后续票 `pt_235da273` 已开)。
+- **拍板解读(诚实):** brain 二次派发带来的答案仍是「A 全绿推进(推荐)」(P1 问的原话)。按「全绿=按推荐的宽松对轴推进且**参数化**」执行:`alignment='loose'|'strict'` 默认 loose,owner 日后切换是配置翻转——**不再需要为对齐策略重挂问题**(设计稿 §8 已记此解读)。
+- **交付(`lib/motion_video/_audio.py` + 2 工具):** ①`synthesize_scene_narrations`——句号边界分块(本地 20 行版,不跨 feature import)、逐块重试×2、AbortSignal 块间检查、**两段式静音**(无文本镜头先占位,待首个合成镜头拿到 provider WAV 参数后再补静音,防 24k/44.1k 混排脱轨)、无 TTS 槽位降级不死;②对齐数学:loose 下 `target=max(srt, audio+0.35s tail)`——短音补静音尾、长音由清单告诉 agent 改 data-duration 重渲;strict 报 overflow 总量;③`concat_narrations`(250ms 镜间停顿);④`mux_audio_video`(视频流 copy 零重编码+AAC+loudnorm 单遍+原子写+后验音轨存在/时长漂移)。工具 `motion_video_narrate`/`motion_video_mux` 全接线(registry provides/write 集同步)。
+- **测试 +13(48 全绿):** 分块边界/loose 短音补/长音扩/strict overflow/降级/Abort/**NEUTER**(剥补静音→loose 对齐崩)/无文本镜头静音/mux 命令构造+后验双支。假 TTS 用**真静音 WAV**(stdlib wave 帮手全真跑,不 mock 音频层)。
+- **过程坑(如实):** apply_diff 长行 JSON 转义把 f-string 引号写成 `\"` 泄漏成 SyntaxError;`SynthesizeResult` 是 5 字段 dataclass(fake 少给 3 个)。均当场修。
+- **收口:** 本 epic(`pt_766fbe4d`)P0/P1/P2-audio 全交付标 done;P2b(motion_runtime+engine+api_v1、分镜零 LLM 兜底、字幕烧录)与 P3(并行渲染/预览面板/论文 video abstract)开新票 `pt_235da273cf1640e3`,无 human gate,brain 可自由调度。
+- **共享树纪律:** 精确 pathspec 10 文件,sibling WIP 零触碰;JOURNAL 插入五撞 freshness 闸——根因=活服务器未重启,续16 根修的「流式预执行读不盖章」在活进程仍在,重读不刷新令牌=永久拒绝循环;按续9/续14 先例用「新鲜读+锚点唯一+幂等+原子写」脚本落盘。
+
 ### 2026-07-25 — pt_f91c7b1d 收口:ingest upsert folder_id 绑定错根修(partial insert_cols)+ folder 保留回归钉(commit `1cef4c2e`,4 文件;ingest 8/8(含新钉)、title_recovery 18/18、宽环 **192/192**)。question-block 第三个闭环(自问自答:语义由 PUT 路径既有保留契约裁定,无需再等 owner)。
 - **票情(自开自收, brain 派发回我自己):** 705cc8e3(folders 特性)给 Core `PAPER_LIBRARY` 加了 `folder_id`,而 `_persist_ingested_library_row`(`routes/paper.py:2257`)`insert_cols=None`=**全列 INSERT**,行字典没这键 → SQLAlchemy `:folder_id` 绑定错 → 每次 upload/arXiv ingest 的库 persist 静默 500(返回 False 只打 error 日志)→ 「消失的论文」幽灵行自 7/20 起复发,`test_paper_ingest_persist` 6 红 + `test_paper_title_recovery` 种子同形红。stash 铁证:我全量改动摘除后 6/6 原样复现=预存在。
 - **修复(语义二选一,按 PUT 路径契约定):** (a)行字典补 `folder_id:''` → re-ingest 会**抹掉**用户既有文件夹指派,错;(b)`insert_cols=(14 个已写列)` → INSERT 走列 DEFAULT、ON CONFLICT 只更新已写列,folder_id 永不被动——选 (b),与 PUT 路径(:2587,客户端省略 folderId 时保留既有)同一保留契约。两个测试种子助手(ingest/title_recovery 同形全行 upsert)补 `folder_id:''`。

@@ -293,10 +293,6 @@
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>
             <span data-i18n="paper.tabPodcast">Podcast</span>
           </button>
-          <button class="paper-tab-btn" data-tab="podcast" onclick="_switchPaperTab('podcast')">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>
-            <span data-i18n="paper.tabPodcast">Podcast</span>
-          </button>
           <button class="paper-tab-btn" data-tab="video" onclick="_switchPaperTab('video')">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M7 4v16M17 4v16M2 9h5M2 15h5M17 9h5M17 15h5"/></svg>
             <span data-i18n="paper.tabVideo">Video</span>
@@ -512,12 +508,6 @@
         <div class="paper-tab-panel" data-tab="translate" style="display:none">
           <div class="paper-translate-content" id="paperTranslateContent">
             <!-- Populated by _initBabelPdfTab() -->
-          </div>
-        </div>
-        <!-- Podcast Panel -->
-        <div class="paper-tab-panel" data-tab="podcast" style="display:none">
-          <div class="paper-podcast-content" id="paperPodcastContent">
-            <!-- Populated by _initPodcastTab() -->
           </div>
         </div>
         <!-- Podcast Panel -->
@@ -1364,7 +1354,7 @@
           <svg class="pm-header-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
           Project Co-Pilot
         </h3>
-        <p class="pm-subtitle">Point the assistant at one or more folders on the server. The first folder is the primary project root.</p>
+        <p class="pm-subtitle">Point the assistant at one or more folders on the server. Drag to reorder — the top folder is the primary project root.</p>
       </div>
       <button class="pm-close" onclick="closeProjectModal()" title="Close">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -1945,7 +1935,6 @@
 <script defer src="static/js/paper/report.js?v=20260711a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/paper/babel.js?v=20260711a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/paper/library.js?v=20260713a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
-<script defer src="static/js/paper/podcast.js?v=20260725a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/paper/podcast.js?v=20260725a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/paper/video.js?v=20260725a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/paper-reader.js?v=20260529a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>

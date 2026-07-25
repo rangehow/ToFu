@@ -1611,6 +1611,7 @@ var _i18n = {
   'pm.recentClearSearch': { zh: '清除搜索', en: 'Clear search' },
   'pm.recentNoMatch': { zh: '无匹配项目', en: 'No matching projects' },
   'pm.recentEmpty': { zh: '暂无最近项目', en: 'No recent projects' },
+  'pm.dragReorder': { zh: '拖动排序 — 最上方为主根目录', en: 'Drag to reorder — the top folder is the root' },
   'settings.accessControl': { zh: '访问控制', en: 'Access Control' },
   'settings.allowedUsers': { zh: '允许的用户', en: 'Allowed Users' },
   'settings.allowedUsersHint': { zh: '飞书 open_id，每行一个 — 留空表示允许所有人', en: 'Feishu open_id, one per line — leave empty to allow everyone' },

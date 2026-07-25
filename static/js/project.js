@@ -327,7 +327,12 @@ let _mpReadOnly = new Set(); // subset of _mpFolders the user marked read-only
 let _projectBarFolders = [];
 
 function _syncFoldersFromState() {
-  // Build _mpFolders from projectState (single source of truth)
+  /* Build _mpFolders from projectState (single source of truth).
+   * ORDER IS SEMANTIC: index 0 IS the primary root (star + `root` badge, sent
+   * to the backend as the primary in setPaths). The primary is pushed FIRST
+   * here so the root always lands at the very top of the Workspace list —
+   * extra roots follow in server order. The drag-to-reorder gesture
+   * (_mpReorder) is the ONLY thing allowed to change which path is index 0. */
   _mpFolders = [];
   _mpReadOnly = new Set();
   if (projectState.path) {
@@ -370,6 +375,7 @@ function openProjectModal() {
   // Docked browser: populate it from the primary folder (or home) on open.
   browseDirectory(_mpFolders.length ? _mpFolders[0] : "~");
   _attachFolderDropZone();
+  _attachMpReorder();
   setTimeout(() => document.getElementById("mpPathInput").focus(), 100);
 }
 
@@ -402,6 +408,8 @@ function _mpRenderTags() {
     container.innerHTML = '<div class="mp-empty-hint">No folders yet — type a path or pick one from the browser.</div>';
     return;
   }
+  const _t = (typeof t === "function") ? t : (k) => k;
+  const _gripTip = escapeHtml(_t("pm.dragReorder"));
   container.innerHTML = _mpFolders.map((p, i) => {
     const parts = p.split('/').filter(Boolean);
     const name = parts[parts.length - 1] || p;
@@ -413,7 +421,11 @@ function _mpRenderTags() {
     const lockIcon = isRO
       ? '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>'
       : '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
-    return `<div class="mp-row${isPrimary ? ' mp-row-primary' : ''}${isRO ? ' mp-row-readonly' : ''}" title="${escapeHtml(p)}">
+    // 6-dot grip: the drag affordance. The WHOLE row is draggable (the grip is
+    // the visual hint), except its buttons — see _attachMpReorder's dragstart.
+    const grip = '<span class="mp-row-grip icon-box" title="' + _gripTip + '" aria-hidden="true"><svg width="11" height="15" viewBox="0 0 10 16" fill="currentColor"><circle cx="3" cy="3" r="1.35"/><circle cx="8" cy="3" r="1.35"/><circle cx="3" cy="8" r="1.35"/><circle cx="8" cy="8" r="1.35"/><circle cx="3" cy="13" r="1.35"/><circle cx="8" cy="13" r="1.35"/></svg></span>';
+    return `<div class="mp-row${isPrimary ? ' mp-row-primary' : ''}${isRO ? ' mp-row-readonly' : ''}" draggable="true" data-mp-idx="${i}" title="${escapeHtml(p)}">
+      ${grip}
       <span class="mp-row-icon">${isPrimary
         ? '<svg width="15" height="15" viewBox="0 0 24 24" fill="#f59e0b" stroke="#f59e0b" stroke-width="1.5" stroke-linejoin="round"><polygon points="12 2 15 9 22 9 16.5 13.5 18.5 21 12 16.5 5.5 21 7.5 13.5 2 9 9 9"/></svg>'
         : '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" opacity="0.55"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>'}</span>
@@ -423,13 +435,162 @@ function _mpRenderTags() {
       </span>
       ${isPrimary ? '<span class="mp-row-badge">root</span>' : ''}
       ${isRO ? '<span class="mp-row-badge mp-row-badge-ro">read-only</span>' : ''}
-      <button class="mp-row-lock${isRO ? ' active' : ''}" onclick="_mpToggleReadOnly(${i})" title="${isRO ? 'Read-only — click to allow edits' : 'Writable — click to make read-only'}">${lockIcon}</button>
-      <button class="mp-row-remove" onclick="_mpRemove(${i})" title="Remove">
+      <button class="mp-row-lock${isRO ? ' active' : ''}" draggable="false" onclick="_mpToggleReadOnly(${i})" title="${isRO ? 'Read-only — click to allow edits' : 'Writable — click to make read-only'}">${lockIcon}</button>
+      <button class="mp-row-remove" draggable="false" onclick="_mpRemove(${i})" title="Remove">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>
     </div>`;
   }).join('');
 }
+
+/* ── Drag-to-reorder the Workspace list ──────────────────────────────────
+ * ORDER IS SEMANTIC: `_mpFolders[0]` is the PRIMARY root (star + `root`
+ * badge; sent to the backend as the primary in setPaths, the rest as extra
+ * roots). So dragging a folder to the top IS the "promote to root" gesture —
+ * there is no separate control, and the root is always the top row.
+ *
+ * The rows are rebuilt wholesale by _mpRenderTags (innerHTML), so the
+ * listeners are DELEGATED onto the stable #mpFolderTags container and wired
+ * exactly once (_mpReorderAttached), mirroring the image-chip reorder in
+ * upload.js. */
+var _mpReorderAttached = false;
+var _mpDragFrom = null;
+
+/** Move `from` → `to` within _mpFolders and repaint. `to` is the final index
+ *  the entry should occupy. No-ops on out-of-range or same-position moves.
+ *  Returns true when the array actually changed (drives the tests). */
+function _mpReorder(from, to) {
+  const n = _mpFolders.length;
+  if (!Number.isInteger(from) || !Number.isInteger(to)) return false;
+  if (from < 0 || from >= n) return false;
+  const dest = Math.max(0, Math.min(n - 1, to));
+  if (dest === from) return false;
+  const moved = _mpFolders.splice(from, 1)[0];
+  _mpFolders.splice(dest, 0, moved);
+  _mpRenderTags();
+  return true;
+}
+
+/** Row element under the pointer, plus whether the pointer sits in its TOP
+ *  half (insert before) or bottom half (insert after). */
+function _mpRowAt(target, clientY) {
+  const row = target && target.closest ? target.closest('.mp-row[data-mp-idx]') : null;
+  if (!row) return null;
+  const idx = parseInt(row.dataset.mpIdx, 10);
+  if (!Number.isInteger(idx)) return null;
+  const rect = row.getBoundingClientRect();
+  const before = rect.height ? (clientY - rect.top) < rect.height / 2 : true;
+  return { row, idx, before };
+}
+
+/** Translate a hover position into the destination index for _mpReorder. */
+function _mpDropIndex(from, hit) {
+  let to = hit.before ? hit.idx : hit.idx + 1;
+  if (from < to) to -= 1;   // removing `from` first shifts everything after it
+  return to;
+}
+
+function _mpClearDropMarks() {
+  document.querySelectorAll('.mp-row.mp-drop-before, .mp-row.mp-drop-after')
+    .forEach((el) => el.classList.remove('mp-drop-before', 'mp-drop-after'));
+}
+
+function _mpMarkDrop(hit) {
+  _mpClearDropMarks();
+  if (!hit) return;
+  hit.row.classList.add(hit.before ? 'mp-drop-before' : 'mp-drop-after');
+}
+
+function _mpEndDrag() {
+  _mpClearDropMarks();
+  document.querySelectorAll('.mp-row.mp-row-dragging')
+    .forEach((el) => el.classList.remove('mp-row-dragging'));
+  _mpDragFrom = null;
+}
+
+function _attachMpReorder() {
+  if (_mpReorderAttached) return;
+  const list = document.getElementById('mpFolderTags');
+  if (!list) return;
+  _mpReorderAttached = true;
+
+  // ── Desktop: HTML5 drag-and-drop ──
+  list.addEventListener('dragstart', (e) => {
+    // Buttons keep their click semantics — never start a drag from one.
+    if (e.target.closest && e.target.closest('button')) { e.preventDefault(); return; }
+    const hit = _mpRowAt(e.target, e.clientY);
+    if (!hit) return;
+    _mpDragFrom = hit.idx;
+    hit.row.classList.add('mp-row-dragging');
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'move';
+      // Firefox refuses to start a drag without payload.
+      try { e.dataTransfer.setData('text/plain', String(hit.idx)); } catch (_e) { /* ignore */ }
+    }
+  });
+
+  list.addEventListener('dragover', (e) => {
+    if (_mpDragFrom === null) return;   // a file drag — not ours, let it pass
+    e.preventDefault();                  // accept → the OS shows the move cursor
+    e.stopPropagation();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    _mpMarkDrop(_mpRowAt(e.target, e.clientY));
+  });
+
+  list.addEventListener('dragleave', (e) => {
+    if (_mpDragFrom === null) return;
+    if (e.target === list && !list.contains(/** @type {Node} */(e.relatedTarget))) _mpClearDropMarks();
+  });
+
+  list.addEventListener('drop', (e) => {
+    if (_mpDragFrom === null) return;
+    // Swallow it: releasing over the modal must never reach the page-level
+    // file-drop handler nor paste the text/plain index anywhere.
+    e.preventDefault();
+    e.stopPropagation();
+    const from = _mpDragFrom;
+    const hit = _mpRowAt(e.target, e.clientY);
+    _mpEndDrag();
+    if (hit) _mpReorder(from, _mpDropIndex(from, hit));
+  });
+
+  list.addEventListener('dragend', () => { _mpEndDrag(); });
+
+  /* ── Touch: HTML5 DnD does not fire on touch devices, and the modal has a
+   * dedicated mobile Workspace pane. Dragging starts from the GRIP only so a
+   * finger anywhere else still scrolls the list. touchmove is non-passive
+   * because it must preventDefault to stop the page scrolling mid-drag. */
+  list.addEventListener('touchstart', (e) => {
+    const touch = e.touches && e.touches[0];
+    if (!touch || !e.target.closest || !e.target.closest('.mp-row-grip')) return;
+    const hit = _mpRowAt(e.target, touch.clientY);
+    if (!hit) return;
+    _mpDragFrom = hit.idx;
+    hit.row.classList.add('mp-row-dragging');
+  }, { passive: true });
+
+  list.addEventListener('touchmove', (e) => {
+    if (_mpDragFrom === null) return;
+    const touch = e.touches && e.touches[0];
+    if (!touch) return;
+    e.preventDefault();   // hold the page still while repositioning
+    const under = document.elementFromPoint(touch.clientX, touch.clientY);
+    _mpMarkDrop(under ? _mpRowAt(under, touch.clientY) : null);
+  }, { passive: false });
+
+  const _touchEnd = (e) => {
+    if (_mpDragFrom === null) return;
+    const touch = (e.changedTouches && e.changedTouches[0]) || null;
+    const from = _mpDragFrom;
+    const under = touch ? document.elementFromPoint(touch.clientX, touch.clientY) : null;
+    const hit = under ? _mpRowAt(under, touch.clientY) : null;
+    _mpEndDrag();
+    if (hit) _mpReorder(from, _mpDropIndex(from, hit));
+  };
+  list.addEventListener('touchend', _touchEnd);
+  list.addEventListener('touchcancel', () => { _mpEndDrag(); });
+}
+
 
 function mpAddFolder() {
   const input = document.getElementById("mpPathInput");

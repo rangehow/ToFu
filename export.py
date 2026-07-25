@@ -2304,7 +2304,7 @@ def _print_export_summary(dest: Path, mode: str, stats: dict,
 def export_project(mode: str, dest: Path, dry_run: bool = False,
                    push: bool = False, commit_msg: str | None = None,
                    is_release: bool = False, branch_override: str | None = None,
-                   progress: bool = False):
+                   progress: bool = False, force: bool = False):
     """Main export function.
 
     Args:
@@ -2465,7 +2465,7 @@ def export_project(mode: str, dest: Path, dry_run: bool = False,
             _verify_exported_py_integrity(dest)
         if push:
             _git_push(dest, mode, commit_msg, is_release=is_release,
-                      branch_override=branch_override)
+                      branch_override=branch_override, force=force)
         return
 
     # ── Dry-run: walk-based preview (no files written) ──
@@ -2956,8 +2956,120 @@ def _is_nonff_push_rejection(err_text: str) -> bool:
     return True
 
 
+def _tag_push_action(ls_remote_out: str, local_sha: str, force: bool) -> str:
+    """Decide what to do about a release tag on a remote (pure, testable).
+
+    Returns one of: 'push' (not on remote), 'skip-same' (already on remote at
+    the same commit), 'force' (on remote at a DIFFERENT commit and --force was
+    given — the only case where a published tag may move), 'keep' (different
+    commit, no --force — keep the published tag, warn loudly).
+    """
+    if not ls_remote_out.strip():
+        return 'push'
+    remote_sha = ls_remote_out.split()[0]
+    if remote_sha == local_sha:
+        return 'skip-same'
+    return 'force' if force else 'keep'
+
+
+def _push_branch(git_run, rname: str, branch: str, force: bool = False) -> None:
+    """Push ``branch`` to ``rname`` — the default path NEVER destroys remote history.
+
+    Policy (owner-ratified 2026-07-25, epic pt_6598ae21 — \"most long-term
+    robust\"): when the remote rejects the push as non-fast-forward (the
+    normal case for a freshly re-``git init``'d export tree, which shares no
+    ancestry with the mirror), the default resolution PRESERVES the remote
+    history: fetch the diverged tip and merge it with ``-s ours
+    --allow-unrelated-histories`` — the merge result tree is byte-identical
+    to the export snapshot (the mirror's content is always the latest
+    export), while the remote's own commits stay reachable in the DAG,
+    turning the retry into a fast-forward. This also works on remotes whose
+    branch is PROTECTED against force-push (GitHub protected branches reject
+    ``--force`` outright; the preserve-merge pushes fine).
+
+    ``force=True`` (explicit ``--force``) restores the old overwrite behavior
+    for a deliberate mirror reset. Any failure that is NOT a divergence
+    (auth / network / permission / missing repo) re-raises unchanged —
+    forcing or merging there would be useless-or-destructive.
+
+    Args:
+        git_run: callable running a git argv list in the export repo,
+            raising RuntimeError on non-zero exit (the ``_run`` closure of
+            ``_git_push``, or a test harness equivalent).
+        rname: remote name. branch: branch name.
+        force: explicit overwrite opt-in.
+    """
+    try:
+        git_run(['git', 'push', rname, branch])
+        return
+    except RuntimeError:
+        # First push to a new branch — try setting upstream.
+        try:
+            git_run(['git', 'push', '-u', rname, branch])
+            return
+        except RuntimeError as upstream_err:
+            if not _is_nonff_push_rejection(str(upstream_err)):
+                raise
+    if force:
+        print(f"  {C_YELLOW}\u26a0 History diverged on {rname}/{branch}. "
+              f"--force given: force-pushing (previous remote commits will be lost).{C_END}")
+        logger.warning('Force-pushing %s/%s after non-ff rejection (--force).',
+                       rname, branch)
+        git_run(['git', 'push', '--force', rname, branch])
+        return
+    # Preserve remote history: graft the diverged tip into our DAG with an
+    # empty-content merge (-s ours keeps OUR tree byte-identical; their
+    # commits stay reachable), making the retry a plain fast-forward.
+    print(f"  {C_CYAN}\u2139 Remote {rname}/{branch} diverged — preserving remote "
+          f"history via ours-merge (content = this export; use --force to overwrite).{C_END}")
+    logger.info('Non-ff divergence on %s/%s — preserving remote history via '
+                'ours-merge (no force).', rname, branch)
+    git_run(['git', 'fetch', rname, branch])
+    git_run(['git', 'merge', '-s', 'ours', '--allow-unrelated-histories',
+             'FETCH_HEAD', '-m',
+             f'Preserve {rname}/{branch} history before export (content unchanged)'])
+    git_run(['git', 'push', rname, branch])
+
+
+def _push_tag(git_run, rname: str, tag_name: str, force: bool = False) -> None:
+    """Push a release tag — never silently MOVES a published tag.
+
+    A tag that already exists on the remote at a DIFFERENT commit is only
+    re-tagged with explicit ``--force`` (moving a published tag breaks every
+    downstream pin); without it we keep the remote tag and warn loudly.
+    Best-effort: tag-push failures never fail the export (branch already
+    pushed), but every skip/failure is logged.
+    """
+    try:
+        out = git_run(['git', 'ls-remote', '--tags', rname, tag_name])
+        local = git_run(['git', 'rev-list', '-n', '1', tag_name])
+    except RuntimeError as e:
+        logger.warning('Tag probe for %s on %s failed: %s — skipping tag push',
+                       tag_name, rname, e)
+        return
+    action = _tag_push_action(out, local, force)
+    try:
+        if action == 'push':
+            git_run(['git', 'push', rname, tag_name])
+        elif action == 'skip-same':
+            logger.info('Tag %s already on %s at the same commit — nothing to do',
+                        tag_name, rname)
+        elif action == 'force':
+            logger.warning('Remote tag %s on %s moved by --force (local %s)',
+                           tag_name, rname, local[:8])
+            git_run(['git', 'push', '--force', rname, tag_name])
+        else:  # keep
+            print(f"  {C_YELLOW}\u26a0 Tag {tag_name} already exists on {rname} at a "
+                  f"different commit — keeping the published tag (use --force to move it).{C_END}")
+            logger.warning('Tag %s exists on %s at a different commit (local %s) — '
+                           'NOT moving it without --force', tag_name, rname, local[:8])
+    except RuntimeError as e:
+        logger.warning('Tag push to %s failed: %s', rname, e)
+
+
 def _git_push(dest: Path, mode: str, commit_msg: str | None = None,
-              is_release: bool = False, branch_override: str | None = None):
+              is_release: bool = False, branch_override: str | None = None,
+              force: bool = False):
     """Initialize git (if needed), commit all files, and push to upstream(s).
 
     Supports pushing to multiple remotes (e.g. opensource pushes to both
@@ -3073,34 +3185,11 @@ def _git_push(dest: Path, mode: str, commit_msg: str | None = None,
         for remote_cfg in remotes:
             rname = remote_cfg['name']
             display_url = re.sub(r'https://[^@]+@', 'https://***@', remote_cfg['url'])
-            try:
-                _run(['git', 'push', rname, branch])
-            except RuntimeError as push_err:
-                # First push to a new branch — try setting upstream
-                try:
-                    _run(['git', 'push', '-u', rname, branch])
-                except RuntimeError as upstream_err:
-                    # Only force-push when the remote REJECTED us for a
-                    # non-fast-forward divergence (the normal case for a
-                    # freshly re-init'd export tree). For any other failure
-                    # (auth, network, permission, missing repo) forcing is
-                    # useless-or-destructive, so re-raise and let the outer
-                    # handler report it instead of clobbering the remote.
-                    if not _is_nonff_push_rejection(str(upstream_err)):
-                        raise
-                    # History diverged — force push, but warn loudly
-                    print(f"  {C_YELLOW}\u26a0 History diverged on {rname}/{branch}. "
-                          f"Force-pushing (previous remote commits will be lost).{C_END}")
-                    logger.warning('Normal push failed for %s/%s, force-pushing. '
-                                 'Error: %s', rname, branch, push_err)
-                    _run(['git', 'push', '--force', rname, branch])
+            _push_branch(_run, rname, branch, force=force)
 
-            # Push tag to this remote
+            # Push tag to this remote (never silently moves a published tag)
             if tag_name:
-                try:
-                    _run(['git', 'push', rname, tag_name, '--force'])
-                except RuntimeError as e:
-                    logger.warning('Tag push to %s failed: %s', rname, e)
+                _push_tag(_run, rname, tag_name, force=force)
 
             print(f"  {C_GREEN}\u2705 Pushed to {display_url} ({branch}){C_END}")
 
@@ -3164,6 +3253,12 @@ def main():
         help='Stream a live per-file view during the copy (shows each '
              'top-level dir entered + a running transferred-files counter) '
              'so you can watch the transfer and catch files that should be excluded',
+    )
+    parser.add_argument(
+        '--force', action='store_true',
+        help='With --push: on a non-fast-forward rejection, OVERWRITE the remote '
+             '(force-push branch + move existing release tags). Default preserves '
+             'remote history via an ours-merge fast-forward instead',
     )
 
     args = parser.parse_args()
@@ -3229,7 +3324,7 @@ def main():
     export_project(args.mode, dest, dry_run=args.dry_run,
                    push=args.push, commit_msg=commit_msg,
                    is_release=is_release, branch_override=args.branch,
-                   progress=args.progress)
+                   progress=args.progress, force=args.force)
 
 
 if __name__ == '__main__':

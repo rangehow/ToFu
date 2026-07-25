@@ -1,3 +1,14 @@
+### 2026-07-25(续37) — Debug 面板重设计启动:请求检视器设计稿(owner 拍板形态 A)+ P1 数据面落地(2 commit:`15922112` 设计稿 1 文件 / `e93efaa2` P1 8 文件 +502/-2;新守卫 3/3 + jsdom 2/2 含三 NEUTER,相邻 12 套件 78/80 两红 stash A/B 实证预存在,collect **9039** 0 err)
+- **起因:** owner 点名旧 debug 面板「内容是会话级、容器却是全局悬浮窗」,长会话里看到问题气泡要去面板一条条人肉对账;要求重思考位置/形态/内容准确性,目标=完整暴露后端真实 LLM 请求。
+- **诊断(全部对码核实):** 五错位——归属错位(`_debugCache[convId]` vs 全局盒 `index.html:681`)/ 粒度错位(最新一轮整包平铺)/ 时间维丢失(每轮 snapshot 都 SSE 推达却只存最新一份,`task_events` 6h 内明明都在)/ 请求要素不全(只有 messages+tools,无 model/params/response 侧)/ 无锚点。地基保留:wire SSOT `wire_messages.py` 冷热字节一致、`msg._taskId`+`apiRounds[].round` 锚点链、`round_usage` 响应侧元数据。
+- **owner 拍板(5 项):** 形态 A(右侧抽屉+Network 式请求列表)/ 历史=task_events 6h(列表元数据-only,payload 按需)/ 气泡 `</>` 入口(debug_mode)/ snapshot 扩展一次加全 / B(气泡内联)二期。外加三条边界:**发射点分型**(四个发射点只有「请求前」是请求)、**task 轴**(conv 有 N 个 task,真人+VU)、**覆盖诚实**(endpoint/swarm 零 snapshot,grep 实证 → uncovered chip + 独立 epic `pt_e3dc7198e7e34bb1`)。主 epic `pt_906545f4e8d140d5` 已 claim。
+- **P1 落地(数据面,旧面板渲染不变):** 后端四发射点分型——`_run.py` 请求前 `kind='request'`+model+params 冻结 schema(maxTokens/temperature/thinkingEnabled/thinkingDepth/preset/responseFormat/stream),`_pipeline.py`/`_post_loop.py`/`_finalize.py` 三处 `kind='state'`;additive,EVENT_CONTRACT_VERSION 不 bump。前端 `_debugRequests[taskId]={rounds,roundOrder,states}` 按轮追加不覆盖,kind 路由 + legacy 兼容 + cold 路径不记录(近似不是某轮)。
+- **设计期新发现(已写进稿子):** 一轮可以有多次真实 HTTP 调用(primary→fallback、FloorRetry 丢弃尝试也计费)→ 检视器最小单位是 **attempt**(round_usage join),不是 round;`roundNum` 类型本来就不一致(int vs 'final'/'fallback')→ 必须显式 kind 而不是解析 label。
+- **守卫:** AST 静态守卫(恰好 4 发射点带 kind、request 点带 model+冻结 params、无裸 dict 发射;双 NEUTER 剥 kind/params key 均咬)+ jsdom 真驱(同 task 两轮追加保留、state 路由、legacy 兼容、NEUTER 禁记录块转红)。
+- **预存在红(未代修,已开票 `pt_412bf68586f44655`):** `test_wire_messages_fidelity::test_carrier_transforms_fire`(array-content 空白块不再被 `_fix_empty_user_messages` 替换)+ `test_persist_vertical_block_relocate::test_neuter_relocation_is_load_bearing`(neuter harness 引用已包化的 `compaction/_persist.py`)——净 HEAD stash A/B 同形复现,与本批无关。
+- **共享 HEAD 纪律:** 两 commit 均精确 pathspec(1 文件 / 8 文件),`git show --name-only` 核验零 sibling 裹入;期间暂存区曾被 sibling 预置 3 文件,pathspec 提交未带出。
+- **生效边界:** 后端随提交+重启生效;前端走内容哈希 bundle,需重启+硬刷。P2(抽屉+/requests 元数据端点)、P3(气泡锚点+前缀折叠增量高亮)待开工。
+
 ### 2026-07-25(续36) — toio 400 补刀:live 网关双向实证 + CACHE_FIX_GEN 升代(commit `58f29ab5`,1 文件;事故两套件 29/29,collect **9038** 0 err)
 - **本会话(owner 直接点名「读在线文档、自己测、再修」)定位路径:** 读 logs/error.log 拿到未掩码 vendor 原话(`D:sankuai_key_0:yuju-claude-opus-5-evaDaily`,R2 带工具调用必挂,fallback 也救不回)→ 查 server_config 确认该模型走 **OpenAI 协议**(protocol=null,`/v1/openai/native`),不经过自家 `openai_body_to_anthropic`(那条路的 hoist 本就正确)→ 结论:滚动尾锚打在 tool 消息 content 块上,网关 OpenAI→Anthropic 翻译把标记原样塞进 `tool_result.content[*]`,vendor 硬拒。
 - **文档核实(两手独立来源):** Anthropic 规则——`cache_control` 必须直接放在 `tool_result` 块上,不得在其 content 子块内(vendor 400 原话即规则);langchain-ai/langchain#34920 同款事故(Translator 透传 → `invalid_cache`,修法 Option A = 提升到 tool_result 层级),与我们的网关行为逐字吻合。

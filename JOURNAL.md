@@ -1,5 +1,14 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-25(续45) — 请求检视器 P4 落地:endpoint 相位标记 + swarm 子代理发射,uncovered chip 摘除(commit `5b1aff8a`,15 文件 +633/-42;后端 14/14 + 前端 P2/P3/P4 合计 7/7,回归 18 套件 179/186 七红 stash A/B 实证预存在,collect **9084** 0 err)
+- **勘察证伪票面(epic 标题说「零发射」,实证不是):** `_run_planner_turn`/`_run_critic_turn` 都经 `_run_single_turn` → 完整 `run_task`——endpoint 三个相位的快照**一直在发射**。真缺陷是三个相位各自从 1 重编号,fold 里 planner R1/worker R1/critic R1 同名歧义;swarm 子代理才是唯一真零覆盖(自跑 `_build_body`+dispatch,`_suppressEvents` 代理连持久化都抑制)。
+- **endpoint(零新状态):** snapshot + round_usage 加 `turn` 字段,直接复用驱动已有 `_endpoint_phase`(planning/working/reviewing,:95/:241/:420 早就在打)。fold 按 (turn,roundNum) 分行、attempts 同相位 join;coverage 语义修正为「无标记=partial(`endpoint-untagged`,歧义) / 有标记=full」;payload `?turn=` 消歧;锚点吃相位提示(planner/review 标记,其余优先 working)。**uncovered chip 就此摘除**;旧 endpoint 任务挂 ambiguous 诚实标注。
+- **swarm(绕开抑制契约的最优解):** 子代理快照以复合 id `{parent}#agent:{agentId}` 直接 `append_persistent_event` 落 `task_events`——无 SSE 扇出、父流零污染、抑制契约不动,检视器服务端 fold 天然可见;by-conv 列表挂子代理行。
+- **前端:** turn 徽标(Planner/Worker/Critic 双语,agent 显角色)、取数/缓存/diff 全链 turn 化、内存轮次键 `turn|roundNum` 防跨相位覆盖、coverage 文案按 reason。
+- **测试:** 守卫 EXPECTED_SITES 刻意扩表(4→5);后端 +6(含 agent 发射 e2e:复合 id 持久化 + **父流零污染实证**);前端 +11 探针。7 红全在 `test_endpoint_messages.py`(NoneType iterable),stash A/B 净 HEAD 同形复现=预存在,开票 `pt_0c1621a561f045e1` 未代修。
+- **过程(如实):** 三连 search==replace 空操作 + 一次锚尾复制(第七发 `function _riEsc` 双行)均被写后复核抓获——纪律再次救场。
+- **请求检视器全账:** 设计稿 `15922112` → P1 `e93efaa2` → P2 `71966a8c` → P3 `05426ba1` → P4 `5b1aff8a`,五 commit 全链收口。生效需重启+硬刷。
+
 ### 2026-07-25(续44) — 请求检视器 P3 落地,epic pt_906545f4e8d140d5 全期收口(commit `05426ba1`,7 文件 +434/-19;新 jsdom 13 探针 + NEUTER + 静态钉,P2/P3 合计 5/5,回归 17 套件 **105/105**,collect **9077** 0 err)
 - **气泡 `</>` 锚点(消灭人肉对账的最后一刀):** finish_info.js debug_mode 门内,每条带 `_taskId` 的 assistant 气泡渲染 ri-anchor(fileCode SVG);`openRequestInspectorForMessage(msgId)` = msg._taskId → 任务 fold → 末 apiRound.round(与 snapshot roundNum 同 1-based)→ 抽屉定位 + ri-flash + 详情。**VU 子任务不进 by-conv 列表也直达**——设计稿 §4 承诺兑现。
 - **前缀折叠增量高亮:** 第 N 轮详情自动 diff N-1 轮(canonical JSON 位置对齐求最长共享前缀,分歧降级 K=0);`showMessagesInDebug` 第 8 参 opts{foldPrefix,diffBase} 仅 full-render 路径生效,前缀折叠进可展开行、增量块 accent 高亮,旧调用点零影响。

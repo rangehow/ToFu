@@ -166,21 +166,20 @@ function showStreamingUIForConv(convId) {
     setTimeout(() => {
       if (activeConvId !== _deferConvId) return;           // user switched away
       if (!activeStreams.has(_deferConvId)) return;         // stream finished
-      /* ★ FIX (stuck "等待中…" wipe): fall back to the persisted message when
-       *   the buffer field is empty, exactly like the initial render above.
-       *   A raw `dBuf.content` here re-paints updateStreamingUI({content:''})
-       *   on a freshly-seeded/empty buffer, snapping the bubble from the real
-       *   (checkpointed) English back to the "wait" branch 300ms after load.
-       *   The buffer is authoritative only once it has data; until then the
-       *   message's checkpoint content is the truth. */
+      /* §7: project straight from the message document — the single live
+       *   fact-source. Any SSE frame that landed during the connection-setup
+       *   window has already been applied to the message by the pipeline, so
+       *   re-reading it here paints that state without a second buffer. Phase
+       *   still comes from the live session slice. */
+      const _deferSess = (typeof streamSessions !== 'undefined')
+        ? streamSessions.get(_deferConvId) : null;
       updateStreamingUI({
-        thinking: dBuf.thinking || _deferLastMsg.thinking || "",
-        content: dBuf.content || _deferLastMsg.content || "",
-        toolRounds: (dBuf.toolRounds?.length ? dBuf.toolRounds : null)
-                    || getToolRoundsFromMsg(_deferLastMsg),
-        phase: dBuf.phase,
-        _memoryPrefetch: dBuf._memoryPrefetch || _deferLastMsg._memoryPrefetch,
-        _mcpLoginHint: dBuf._mcpLoginHint,
+        thinking: _deferLastMsg.thinking || "",
+        content: _deferLastMsg.content || "",
+        toolRounds: getToolRoundsFromMsg(_deferLastMsg),
+        phase: (_deferSess && _deferSess.phase) || null,
+        _memoryPrefetch: _deferLastMsg._memoryPrefetch,
+        _mcpLoginHint: _deferLastMsg._mcpLoginHint,
       });
     }, 300);
   }

@@ -10668,6 +10668,19 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 }
 [data-theme="tofu"] .welcome h2.tofu-brand:hover small{transform:rotate(0deg) translateY(-3px)}
 
+/* ── Mobile breakpoints: tofu 主标恢复全局移动意图 — 38px 是桌面值(上方 0,2,1
+   规则),全局 .welcome h2 移动规则(0,1,1) specificity 不够被压死;以下三条与
+   全局断点一一对应并特异化到 (0,3,1)。新数字不发明:20/18px 即全局断点原值 ── */
+@media(max-width:768px){
+  [data-theme="tofu"] .welcome h2.tofu-brand{font-size:20px}
+}
+@media(max-width:380px){
+  [data-theme="tofu"] .welcome h2.tofu-brand{font-size:18px}
+}
+@media(orientation:landscape) and (max-height:600px) and (max-width:900px){
+  [data-theme="tofu"] .welcome h2.tofu-brand{font-size:18px}
+}
+
 /* ── Turn nav — pixel bar ── */
 [data-theme="tofu"] .turn-nav{
   background:rgba(245,243,237,0.97);

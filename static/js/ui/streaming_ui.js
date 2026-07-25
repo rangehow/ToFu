@@ -104,6 +104,15 @@ function updateStreamingUI(msg) {
     statusZone.setAttribute('data-zone', 'status');
     statusZone.className = 'stream-status';
     body.appendChild(statusZone);
+    /* ★ FIX (status-box stacking, 2026-07-25): WRITE BACK into the zone cache
+     *   (zones IS _streamZoneCache). The default-shape bubble from
+     *   _streamingBubbleHTML (no status/detail ⇒ no status zone, but a tool
+     *   zone — so _ensureStreamZones early-returns) left zones.status null
+     *   FOREVER: every rAF frame re-entered this branch and appended ANOTHER
+     *   status div painted with that frame's phase — the "等待中… ×4 /
+     *   正在生成回复… / 推理中 N 字符 ×9" staircase. Cache the created zone so
+     *   later frames reuse it and the phase paint updates it in place. */
+    zones.status = statusZone;
   }
   const rounds = msg.toolRounds || [];
   const hasActiveSearch = rounds.some((r) => r.status === "searching");

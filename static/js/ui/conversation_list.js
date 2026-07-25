@@ -622,6 +622,81 @@ function _renderConvWindow(listEl, filtered) {
   _convVirtual.observer = obs;
 }
 
+
+/* ── C3/C4 — global keyset pagination of the sidebar window ─────────────
+ * The top-N sidebar window (Epic D4) is a performance floor, not a ceiling:
+ * conversations that sort past it must stay REACHABLE. While the server
+ * total exceeds what is loaded, a "N earlier · Load more" affordance hangs
+ * below the windowed list (CSS at styles.css .conv-load-more); clicking it —
+ * or scrolling it into view — fetches the next keyset page
+ * (Api.conversations.listPage) and merges it via mergeServerConvShells. */
+let _loadingMoreGlobalConvs = false;
+
+/* True only for the GLOBAL list (not a folder view, not search) when the
+ * server reports more conversations than are currently in memory. */
+function _hasMoreGlobalConvs() {
+  if (typeof getActiveFolderId === 'function' && getActiveFolderId()) return false;
+  const total = typeof getServerTotalCount === 'function' ? getServerTotalCount() : null;
+  if (!Number.isFinite(total)) return false;
+  return total > conversations.length;
+}
+
+function _unloadedGlobalConvCount() {
+  const total = typeof getServerTotalCount === 'function' ? getServerTotalCount() : null;
+  if (!Number.isFinite(total)) return 0;
+  return Math.max(0, total - conversations.length);
+}
+
+/* Append the load-more affordance to `listEl` (no-op when caught up). */
+function _appendLoadMoreAffordance(listEl) {
+  if (!listEl || !_hasMoreGlobalConvs()) return;
+  const n = _unloadedGlobalConvCount();
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'conv-load-more';
+  btn.textContent = (typeof t === 'function'
+    ? t('sidebar.loadMoreEarlier')
+    : '{n} earlier conversations not loaded · Load more').replace('{n}', String(n));
+  btn.addEventListener('click', () => { loadMoreGlobalConvs(); });
+  listEl.appendChild(btn);
+  /* C3: scrolling the affordance into view auto-loads (same handler as the
+   * click). The window sentinel pages IN-MEMORY rows; this pages the SERVER
+   * once the in-memory rows run out. */
+  if (typeof IntersectionObserver === 'function') {
+    const obs = new IntersectionObserver((entries) => {
+      if (!entries.some(e => e.isIntersecting)) return;
+      obs.disconnect();
+      loadMoreGlobalConvs();
+    }, { root: listEl, rootMargin: '0px 0px 200px 0px' });
+    obs.observe(btn);
+  }
+}
+
+/* Fetch the next keyset page (cursor = oldest in-memory conv) and merge it. */
+async function loadMoreGlobalConvs() {
+  if (_loadingMoreGlobalConvs || !_hasMoreGlobalConvs()) return;
+  _loadingMoreGlobalConvs = true;
+  try {
+    let oldestTs = Infinity, oldestId = null;
+    for (const c of conversations) {
+      if (!c) continue;
+      const ts = c.updatedAt || c.createdAt || 0;
+      if (ts < oldestTs) { oldestTs = ts; oldestId = c.id; }
+    }
+    if (oldestId == null) return;
+    const data = await Api.conversations.listPage(oldestTs, oldestId, 200);
+    const rows = (data && (data.conversations || data.items)) || [];
+    if (rows.length && typeof mergeServerConvShells === 'function') {
+      const added = mergeServerConvShells(rows);
+      if (added > 0) renderConversationList();
+    }
+  } catch (e) {
+    console.warn('[sidebar] loadMoreGlobalConvs failed:', e && e.message);
+  } finally {
+    _loadingMoreGlobalConvs = false;
+  }
+}
+
 function renderConversationList() {
   const listEl = document.getElementById("convList"),
     statsEl = document.getElementById("sidebarSearchStats");
@@ -732,6 +807,10 @@ function renderConversationList() {
       listEl.innerHTML = listHtml;
     } else {
       _renderConvWindow(listEl, filtered);
+      /* C3/C4: global list only — hang the keyset "load earlier" affordance
+       * below the windowed rows (folder views filter a client-side subset,
+       * so a global page count would mislead there). */
+      if (!_activeFolderId) _appendLoadMoreAffordance(listEl);
     }
     /* ★ Keep _lastActiveConvId in sync after a full rebuild so
      * _swapActiveConvItem can do O(1) swaps on subsequent switches. */

@@ -43,7 +43,13 @@ api_v1_tasks_bp = Blueprint('api_v1_tasks', __name__)
 def _registries() -> dict:
     """Return ``{kind: runtime}`` for every TaskRuntime we know about.
 
-    Imported lazily to avoid a circular import on package init.
+    Imported lazily to avoid a circular import on package init. The key is
+    always the runtime's OWN ``.kind``, never a literal here, so renaming a
+    kind can't desync it from what ``/api/v1/tasks?kind=…`` filters on.
+
+    An entry whose module fails to import is SKIPPED (logged at debug), so a
+    missing/optional capability degrades to "absent" rather than taking down
+    the generic endpoints for every other runtime.
     """
     out = {}
     try:
@@ -56,6 +62,13 @@ def _registries() -> dict:
         ('routes.paper', '_translate_runtime'),
         ('routes.translate', '_translate_runtime'),
         ('routes.api_v1.agents', '_search_runtime'),
+        # Production-substrate capabilities. Both are ordinary TaskRuntime
+        # instances with the standard task shape, but were absent from this
+        # list — so /api/v1/tasks could not see a motion job at all, and
+        # podcast had to hand-write its own poll route
+        # (docs/PRODUCTION_PIPELINE_DESIGN.md §1.6).
+        ('lib.motion_video.runtime', '_motion_runtime'),
+        ('lib.paper.podcast_runtime', '_podcast_runtime'),
     ):
         try:
             mod = __import__(mod_path, fromlist=[attr])

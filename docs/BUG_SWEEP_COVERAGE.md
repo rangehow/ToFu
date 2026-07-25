@@ -1,4 +1,6 @@
-# Bug-Sweep Coverage Ledger (waves 1–4)
+# Bug-Sweep Coverage Ledger (waves 1–5)
+
+Reconciled at commit `c732e6194c9c9cdacdba9cc52ca1efea37c39bfb` — inventory regenerated from the live tree at closeout.
 
 Machine-checkable per-file ledger for the full-repo bug sweep. Regenerate inventory with `os.walk` (prune dot-dirs to dodge the `lib/.project_sessions` FUSE trap; `find(1)` times out on this mount).
 
@@ -6,9 +8,10 @@ Machine-checkable per-file ledger for the full-repo bug sweep. Regenerate invent
 
 | scope | files |
 |---|---|
+| root_assets | 1 |
 | root_py | 5 |
 | routes_py | 71 |
-| lib_py | 833 |
+| lib_py | 832 |
 | static_js | 141 |
 | static_html | 3 |
 | static_css | 4 |
@@ -18,16 +21,18 @@ Machine-checkable per-file ledger for the full-repo bug sweep. Regenerate invent
 
 | verdict bucket | files |
 |---|---|
-| EXEMPT | 11 |
+| EXEMPT | 7 |
 | wave-1 | 372 |
-| wave-2 | 134 |
-| wave-3 | 391 |
+| wave-2 | 135 |
+| wave-3 | 390 |
 | wave-4 | 149 |
+| wave-5 | 4 |
 
 ## Per-file ledger
 
-| file | swept | 
+| file | swept |
 |---|---|
+| index.html | wave-2 (fe_e structural) + wave-2/wave-3 §3.4 batches |
 | bootstrap.py | wave-4 (self: §2.2 grep-level pass — launcher script, stdout is the designed channel pre-logging) |
 | export.py | wave-1 (be_a) |
 | healthcheck.py | wave-4 (self: §2.2 grep-level pass — launcher script, stdout is the designed channel pre-logging) |
@@ -593,7 +598,6 @@ Machine-checkable per-file ledger for the full-repo bug sweep. Regenerate invent
 | lib/project_mod/run_command.py | wave-3 |
 | lib/project_mod/scanner.py | wave-3 |
 | lib/project_mod/tools.py | wave-3 |
-| lib/project_mod/write_tools.py | wave-3 |
 | lib/project_mod/write_tools/__init__.py | wave-3 |
 | lib/project_mod/write_tools/_ops.py | wave-3 |
 | lib/project_mod/write_tools/_paths.py | wave-3 |
@@ -675,10 +679,10 @@ Machine-checkable per-file ledger for the full-repo bug sweep. Regenerate invent
 | lib/tasks_pkg/auto_translate/__init__.py | wave-4 (w4_c subpackages) |
 | lib/tasks_pkg/auto_translate/_assistant.py | wave-4 (w4_c subpackages) |
 | lib/tasks_pkg/auto_translate/_critic.py | wave-4 (w4_c subpackages) |
-| lib/tasks_pkg/autopilot.py | EXEMPT — sibling-owned (epics pt_00459503 decomposition + pt_8dc03017 VU-stream); untouched by all waves |
-| lib/tasks_pkg/autopilot_markers.py | EXEMPT — sibling-owned (epics pt_00459503 decomposition + pt_8dc03017 VU-stream); untouched by all waves |
-| lib/tasks_pkg/autopilot_run_lifecycle.py | EXEMPT — sibling-owned (epics pt_00459503 decomposition + pt_8dc03017 VU-stream); untouched by all waves |
-| lib/tasks_pkg/autopilot_state.py | EXEMPT — sibling-owned (epics pt_00459503 decomposition + pt_8dc03017 VU-stream); untouched by all waves |
+| lib/tasks_pkg/autopilot.py | wave-5 read-only audit (orchestrator personally read 2506L, CLEAN; sibling epic owns edits) |
+| lib/tasks_pkg/autopilot_markers.py | wave-5 read-only audit (orchestrator personally read 2506L, CLEAN; sibling epic owns edits) |
+| lib/tasks_pkg/autopilot_run_lifecycle.py | wave-5 read-only audit (orchestrator personally read 2506L, CLEAN; sibling epic owns edits) |
+| lib/tasks_pkg/autopilot_state.py | wave-5 read-only audit (orchestrator personally read 2506L, CLEAN; sibling epic owns edits) |
 | lib/tasks_pkg/cache_tracking/__init__.py | wave-4 (w4_c subpackages) |
 | lib/tasks_pkg/cache_tracking/_detect.py | wave-4 (w4_c subpackages) |
 | lib/tasks_pkg/cache_tracking/_hashing.py | wave-4 (w4_c subpackages) |

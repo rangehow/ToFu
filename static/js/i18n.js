@@ -340,6 +340,8 @@ var _i18n = {
   'mobile.modeStudioDesc': { zh: '绑定项目，最强', en: 'Attach a project' },
   'mobile.compactUsage': { zh: '已用 {pct}%', en: '{pct}% used' },
   'mobile.compactDesc': { zh: '压缩此对话以释放上下文空间', en: 'Compact this conversation to free context' },
+  'mobile.context': { zh: '上下文', en: 'Context' },
+  'mobile.compactHistoryDesc': { zh: '浏览此对话的压缩快照', en: 'Browse compaction snapshots for this conversation' },
   'compactCard.rounds': { zh: '已折叠 {n} 个工具轮', en: 'folded {n} tool rounds' },
   'toolbar.aiEnhance': { zh: 'AI 增强', en: 'AI Enhance' },
   'toolbar.tools': { zh: '工具', en: 'Tools' },

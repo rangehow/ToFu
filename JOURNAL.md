@@ -1,6 +1,14 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
 ### 2026-07-25(续46) — pt_0c1621a561f045e1 收口:test_endpoint_messages 七红根修(两发同族测试漂移,commit `6c70957d`,1 文件 +33/-4;套件 **28/28**,endpoint 相邻环 34/34,collect **9101** 0 err)
+### 2026-07-26(续2) — 产出底盘 P6 第 1 刀:阶段图契约平移进 `lib/production/`(commit `8578dcb5`,6 文件 +404/-196;新守卫 7/7 含 NEUTER,四套件 **88/88**,collect **9124** 0 err)
+- **只做无判断的那一半(刻意):** P4 提交里我写死过一句承诺 —— 「P6 是**平移**不是重写」。这一刀就兑现这半:`git mv lib/motion_video/_stages.py → lib/production/stages.py`,**`diff` 对 `git show HEAD:` 原文件字节相同**,零改写。
+- **交付:** ①`lib/production/stages.py`(纯平移);②`lib/production/__init__.py` 门面,docstring **明说哪些还没搬**(ProductionRuntime / deliverable / 进度双投影 / `_registries()` 发现制 / artifacts binary)——免得后来人以为已经有了;③`lib/motion_video/_stages.py` 变再导出 shim(与 `lib/task_runtime.py` 同款),历史导入路径**逐字节照旧可用**;④**活调用方 `_recipe.py` 改指真家**,shim 只留兼容、不当承重指向。
+- **一个容易踩空的细节(值得记):** P4 那条 resume NEUTER 打的是 `st.stage_is_done`。`run_stages` 解析 `stage_is_done` 用的是**它自己模块的全局**,所以平移后 NEUTER 必须打在 `lib.production.stages` 上 —— 继续打 shim 会**静默 no-op、neuter 不再咬**(实测先翻红才发现)。测试已改指真家。
+- **刻意没做:** ProductionRuntime / deliverable / 进度双投影 / `_registries()` 发现制 / artifacts binary format 一概没抽。设计稿 §7 自己写着「两个样本抽底盘会抽错第三个的形状」,这是 owner 的判断题,已挂 question-block;先落无风险的一半,底盘变成真东西,又不替 owner 预定后半。
+- **守卫 7 测(`test_production_substrate.py`):** 三条导入路径**对象 identity 相同**(若是重新实现而非平移,对象必然分裂 → 红)、legacy 路径仍可导、**AST 断言底盘不导入 motion_video/tts/llm/paper/audio**(否则「横向层」是假的,下一个配方会继承视频包袱)、经新路径的崩溃→续跑→跳过行为对等、活调用方改指钉、包 docstring 诚实性钉。**NEUTER:** 破坏 shim 再导出 → 2 测翻红,恢复复绿。
+- **git 纪律:** 精确 6 文件;sibling WIP(server.py brotli hunk、test_autopilot_startup)零触碰。
+
 ### 2026-07-26 — 产出底盘 P4 落地:「一句话新闻主题 → 成片」前半段(owner 拍板 5 项 + 追加 3 条硬约束,commit `a6f45f0c`,9 文件 +1319/-31;新套件 17/17 含 NEUTER,motion 既有 48/48,collect **9101** 0 err)
 - **owner 诉求闭环:** 输入框说一句话就出科普视频、用户零编排;5 项待拍板一次给全(①A 先能力后底盘 ②放开 project_ready ③镜数+单镜 token 上限、不做金额上限 ④强制事实纪律 ⑤`produce_video(topic=)` 先行);并追加 3 条硬约束进 P4 验收:**①崩溃续跑是正确性契约不是成本项 ②事实审阅「可介入不阻塞」 ③阶段图契约现在定形,P6 是平移不是重写**。
 - **交付(前半段补齐,证据全在盘上核实的 file:line):** 

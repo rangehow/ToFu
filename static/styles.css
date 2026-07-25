@@ -8774,7 +8774,14 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   display: flex; align-items: center;
   margin-bottom: 10px; flex-shrink: 0;
 }
-.recent-search-input {
+/* Selector is chained (.recent-search .recent-search-input → (0,2,0)) because the
+   base `.modal input` bleed (styles.css .modal mega-line, (0,1,1)) out-specifies a
+   bare .recent-search-input (0,1,0): its margin-bottom:16px inflated .recent-search
+   to 48px and dropped the absolute clear button ~8px below the input's true middle
+   (and its padding:10px 12px killed the 30px right padding that clears the button).
+   Mirrors the .mp-add-row .mp-path-input pattern. Guarded by
+   tests/test_recent_search_tofu_specificity.py. */
+.recent-search .recent-search-input {
   flex: 1; min-width: 0;
   padding: 6px 30px 6px 12px;
   height: 32px; box-sizing: border-box;
@@ -8786,12 +8793,12 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   font-family: 'JetBrains Mono', monospace;
   margin: 0;
 }
-.recent-search-input:focus {
+.recent-search .recent-search-input:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-subtle);
 }
-.recent-search-input::placeholder { color: var(--text-tertiary); font-family: inherit; }
+.recent-search .recent-search-input::placeholder { color: var(--text-tertiary); font-family: inherit; }
 .recent-search-clear {
   position: absolute; right: 6px;
   top: 50%; transform: translateY(-50%);

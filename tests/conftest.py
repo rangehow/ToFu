@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import tempfile
 
 import pytest
@@ -329,6 +330,14 @@ _NC_GUARDED_SOURCES = (
 )
 _ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _nc_source_snapshots: dict = {}
+_ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_nc_source_snapshots: dict = {}
+
+# NC poison signature: every on-disk NC patch embeds an ``NC-WORD`` marker in
+# its replacement text (project convention — ``# NC-STORM``,
+# ``pass  # NC-OBSERVE``, ``'nc-deny-forced'``, ``# NC-DISPATCH-HUMAN`` …).
+# The belt heals ONLY when this matches (see restore_drifted_nc_sources).
+_NC_POISON_RE = re.compile(r'(?i)\bNC-[A-Z0-9][A-Z0-9_-]{2,}')
 
 
 def _snapshot_nc_sources():
@@ -347,13 +356,33 @@ def restore_drifted_nc_sources() -> list:
 
     Plain callable (not the fixture) so it can be driven directly by the belt's
     own regression test — the fixture body just delegates here in its finally.
+
+    ★ MARKER GATE (2026-07-25, the "phantom reverter" incident): heal ONLY
+    when the drifted bytes carry the NC poison signature (``NC-WORD`` — every
+    on-disk NC patch embeds it in the replacement text by convention:
+    ``# NC-STORM`` / ``pass  # NC-OBSERVE`` / ``'nc-deny-forced'`` …). A file
+    that merely differs from the session-start baseline WITHOUT a marker is
+    LEGITIMATE work — a commit landed mid-run, or sibling WIP — and must be
+    left alone. Before this gate, a long suite on the shared tree silently
+    un-wrote a real mid-run commit (lib/message_queue.py, 83c7f1ed) every
+    per-test cadence for over an hour (strace: O_WRONLY|O_TRUNC from the
+    pytest pid). A leftover neuter from a crashed patch ALWAYS carries the
+    marker, so the crash-heal behaviour is unchanged.
     """
     healed = []
     for p, original in _nc_source_snapshots.items():
         try:
             with open(p, encoding='utf-8') as f:
-                if f.read() == original:
-                    continue
+                current = f.read()
+            if current == original:
+                continue
+            if not _NC_POISON_RE.search(current):
+                # Legit mid-run work (a commit / sibling WIP), not NC poison —
+                # the belt has no mandate to touch it.
+                _conftest_logger.debug(
+                    '[nc-guard] drift without NC marker, leaving as-is '
+                    '(legit mid-run work): %s', p)
+                continue
             with open(p, 'w', encoding='utf-8') as f:
                 f.write(original)
             rel = os.path.relpath(p, _ROOT_DIR)

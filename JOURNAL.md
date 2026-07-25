@@ -1,3 +1,8 @@
+### 2026-07-25(续43) — pt_412bf68586f44655 收口:两个预存在 HEAD 红根修(均为测试漂移非产品回归,commit `b67a3320`,2 文件 +9/-1;两套件 10/10,相邻 60/60,collect **9074** 0 err)
+- **①fidelity::test_carrier_transforms_fire:** 真相与票面猜测不同——`_fix_empty_user_messages` **本来就有** all-empty-text-blocks 数组分支;真正机制是 fixture 的空白 user 轮骑在消息尾,而 `_inject_system_contexts` 的 Current-date reminder 恰好拼进 TRUE tail(`_inject.py:772`),把它变成非空 block 数组,修复按设计不重写。cold==hot 字节断言一直绿 = 产品无回归,纯 fixture 与注入特性的漂移。修法:fixture 补尾部 assistant+user 两轮让空白轮退到中段,注释钉住「空白轮不得骑尾」。**负控完好:** `TOFU_WIRE_REVERT=inject/sort` 两模式仍咬(正确翻红)。
+- **②vertical_block_relocate NEUTER:** `compaction/_persist.py` 已包化为 `_persist/` 包,neuter 路径 404 → 改指真锚点 `_persist/_splitters.py`(函数 :33、锚句 :53 逐字未变;facade re-export 不动,其余 8 测零改动)。
+- **教训:** 「函数不再替换」类红先读函数本身再下结论——这次函数能力完整,是调用场景被另一个特性(date 注入骑尾)合法改写。
+
 ### 2026-07-25(续42) — 请求检视器 P2 落地:/requests 服务端折叠 + 右侧抽屉 Network 式请求列表(commit `71966a8c`,10 文件 +1309/-10;后端 9/9 + 抽屉 jsdom 17 探针含双 NEUTER,回归 17 套件 108/111 三红全预存在,collect **9074** 0 err)
 - **owner 两条硬约束落地:** ①**服务端为准**——核实 `sse_poll_fallback.js` 从不处理 `messages_snapshot`(断线轮询窗口客户端必缺轮,`task_events` durable-before-visible 一轮不缺)→ 抽屉任务/轮次列表全部从 `/api/v1/tasks/*` 折叠,内存 `_debugRequests` 仅作在飞任务加速器;②**内存封顶**——他任务降级元数据-only(messages/tools 剥掉、计数保留、`_stripped` 章)+ 20 任务上限,payload 按需 `/requests/<round>` 取。
 - **后端(`lib/tasks_pkg/request_inspector.py` + 三端点):** `fold_request_log` = 元数据-only Request 行(冻结 schema §3.3)+ attempts(`round_usage` join——一轮多次真实调用 R1/R1-FALLBACK/REACTIVE/DISCARDED 全成行,这是设计期就发现的关键细化)+ states 分离 + `coverage='partial'`(endpoint 驱动任务的 Planner/Critic 调用未纳入,诚实 chip)+ `eventsAvailable` 空态;`list_conv_tasks` 用一条 `json_extract` GROUP BY 出精确 kind 计数(双库可译,不拉 payload 整包);legacy 无 kind 行走 roundNum/label 迁移 shim(**全仓唯一解析 label 的地方**,契约本身不解析)。

@@ -175,6 +175,20 @@ def is_stale(conv_key: str, abs_path: str) -> bool:
     return cur != entry[0]
 
 
+def has_token(conv_key: str, abs_path: str) -> bool:
+    """True iff a (conv_key, abs_path) token exists, regardless of freshness.
+
+    Existence alone proves this conversation successfully read/wrote the
+    file at some point (tokens are only written after successful ops) —
+    the read-before-edit gate uses ``has_token(...) and not is_stale(...)``
+    as its compaction/restart-proof evidence path. Never raises.
+    """
+    if not conv_key or not abs_path:
+        return False
+    with _lock:
+        return (conv_key, abs_path) in _tokens
+
+
 def drop(conv_key: str, abs_path: str) -> None:
     """Forget one token (e.g. after an intentional delete). Never raises."""
     with _lock:
@@ -272,6 +286,6 @@ def _reset_for_tests() -> None:
         _tokens.clear()
 
 
-__all__ = ['record', 'is_stale', 'drop', '_reset_for_tests', '_fingerprint',
+__all__ = ['record', 'is_stale', 'has_token', 'drop', '_reset_for_tests', '_fingerprint',
            '_CONTENT_HASH_MAX_BYTES', 'save_snapshot', 'load_snapshot',
            '_snapshot_path']

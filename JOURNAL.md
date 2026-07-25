@@ -1,4 +1,39 @@
+### 2026-07-25(续29) — 「一句话 → 成品」形态之问:产出底盘设计稿落地(纯设计,commit `8ca42393`,1 文件 +298;board epic `pt_17a41dba5dec476e`,5 项待拍板)
+- **owner 诉求:** 输入框说一句话就出科普视频、用户不需要感知;并明确问「该做成视频增强还是别的模块形态,我不确定现在这个技能形态是否合适」。
+- **回答(三层分工,比方:底盘/车型/驾驶手册):** ①**产出底盘** `lib/production/`(横向一次性:job 生命周期 + 阶段图契约 + 二进制产物 + 进度双投影);②**每能力配方**(纵向 300–600 行纯业务:video/podcast/ppt 各自的阶段序列);③**技能商店知识包**(零代码编导手册,由阶段内子 agent 按需 activate_skill)。**不做成视频增强**(这是一整类能力),**不做成技能包**(规范承载不了长任务)。
+- **盘上核实的核心发现(P0–P3 交付属实,但只是渲染机械层):** 入口硬校验 `routes/api_v1/motion.py:100-103` 三者至少一个 SRT/srt_path/scenes_path,`engine.py:94` 无输入直接 raise → **主题→调研→文案→真时间轴全空缺**;唯一无-SRT 通道是论文摘要且前置 `video_abstract.py:126 has_report()` 门。画面**两极化**:主 agent 逐镜手写(高质,可下载官方 SVG,但 `_build.py:135` project_ready 硬门 + 烧 context + 无法无人值守)vs `_template.py:34-118` 零 LLM 模板(**四色渐变 + 居中一行白字 + 左上角序号,动画仅两处淡入 = 幻灯片**)。时间轴用 `video_abstract.py:35` 的 4.2 字/秒**硬估**,而 `_audio.py` 早就能给 TTS 真实时长(P4 把 TTS 前移即天生对齐)。
+- **另三条实证:** ①**进度只有一行递增秒数** —— `handlers/motion_video.py:92-103` 同步阻塞 1800s,期间只有 `_heartbeat.py:125` 每 15s 心跳;而 `handlers/code_exec.py:77-88` 的流式 `tool_progress` + `_partialOutput` 断线重放模式**现成没骑**。②**swarm 不能当流水线执行器** —— `swarm/tools.py:460 SUB_AGENT_DENYLIST` 禁二级 spawn,只有一层扇出 ⇒ 编排必须在 TaskRuntime 内,swarm 只适合阶段内并行。③**无意图路由** —— `chat_dispatch.py:93 classify_send_intent` 只是并发调度分类器,`chat_mode.py:137 is_lean_mode` 永远 False;真正决定工具的是声明式注册表 ⇒ 不必新造意图层,需要的是一个语义明确的高层入口工具 + 放开 project_ready 门。
+- **样板成本(为什么值得抽底盘):** ~1500–2000 行/能力,真业务只有 300–600 行。`lib/motion_video/runtime.py` 的 docstring 自己写着「Mirrors `lib.paper.podcast_runtime` exactly」;`routes/api_v1/tasks.py:40 _registries()` 是**硬编码**列表,motion 与 podcast 都不在内,于是各自手写 poll;通用 `/tasks/<id>/{events,stream,abort}` **已通用化却没人骑**;`tofu.task_runtimes` 入口组只服务通用查询、不生成路由面板。artifacts **今天承载不了 mp4** —— `artifacts/core.py:37 ALLOWED_FORMATS=('markdown','html','svg')` + content 强制 str + 8 MiB 上限,于是 podcast/motion 各造一套 Range 下发。**现成反证**:`video_abstract.py` 复用 motion runtime,全部业务只用 152 行 ⇒ 抽象方向可行。
+- **一处对 owner 原话的反对意见(已写入设计稿 §4):** 「用户不需要感知」应读作**零编排负担,不是零可见性**。后者会踩 owner 自己在 `ms0aaxituzcl0y` 会话点名过的同一个坑(「尤其要让用户感知到在做什么」),且 §1.4 已证明该坑存在(5 分钟只有一行递增秒数)。
+- **外部证据(三条,均真开页):** `agentskills.io/specification` —— 技能=目录+SKILL.md,可选 scripts/,但**规范完全不涉及任务生命周期/产物交付/重试并发**;OpenAI Background mode(background=true → 轮询 → 幂等 cancel → sequence_number 续接)**正是底盘该对齐的语义层**;Remotion 官方 9+ 个 Agent Skills **全是 guidance**,真执行在 CLI/Lambda/Player ⇒「技能=知识层,执行=一等公民」是同类产品既有切法。
+- **分期(顺序有意):** **P4** 视频前半段(research→script→timeline 三阶段 + 入口接受 topic + 放开 project_ready)→ **P5** 每镜子 agent(`run_agent_loop` 窄工具集,只给 write_file/web_search/fetch_url/check/render/probe + 现成静态闸 + 失败降级模板,**任一镜失败不整片翻车**)→ **P6** strangler 抽 `lib/production/`(motion 先骑,podcast 并存后迁;`_registries()` 改发现制;artifacts 扩 binary)→ **P7** 第三配方(PPT/长报告)验证「新能力 ≤600 行」。**P6 刻意排在能力之后** —— 拿两个样本抽底盘会抽错第三个的形状。
+- **5 项待拍板(设计稿 §6):** ①实施顺序 A(先能力)/B(先底盘) —— 建议 A;②`project_ready` 门放开与否 —— 建议放开(没挂项目连工具都看不见,与「输入框说一句话」矛盾);③阶段 5 成本硬上限(镜数/token/金额)—— 建议镜数+单镜 token 双限,超限降级模板并告知;④调研阶段是否强制「每条要点挂 ≥1 真实 URL」+ 片尾来源卡 —— 建议强制(零 LLM 闸可查);⑤入口工具形态 `produce_video(topic=)` vs 通用 `produce(kind=,brief=)` —— 建议 A 先行。
+- **边界(诚实):** 本轮**零生产代码改动**,只有设计稿 + board epic。`docs/MOTION_VIDEO_DESIGN.md` 保留不动(它是渲染层权威记录),本稿是其上位抽象 + 前半段补全,不推翻其结论。共享 HEAD 纪律:精确 pathspec,提交恰好 1 文件,sibling WIP 零触碰。**另记:** 盘上 JOURNAL 首行的 `# Project Journal` 头**又被刷掉了**(刷头事故第六弹,sibling 续28 落地时),本轮**只锥定插入、不去动那处损伤**,登记待清理。
+
+### 2026-07-25(续28) — 项目大脑面板样式审计:6 个缺陷根修(2 个真渲染 bug + 2 个可达性洞 + 1 条死规则 + 1 个溢出无提示)(commit `6a705553`,2 文件;新套件 19/19 含 6 发 NEUTER 全咬,相邻环 45/45 + 宽环 85/85,collect **8950** 0 err)
+- **方法(不是肉眼看图):** 把 styles.css 里 `.project-brain-* / .pb-*` 整块(~50KB)拿去和它**实际服务的标记**(index.html + project-brain.js)做交叉核对——脚本枚举「声明了 `cursor:pointer` 的选择器 vs 有 `:focus-visible` 的选择器」「`animation:...infinite` vs reduced-motion 覆盖面」「CSS 里的类 vs JS 真正吐出的类」,让缺口自己浮出来,而不是猜。
+- **① 真渲染 bug — clamp 渐隐在 hover 时褪错色:** `.pb-clamp::after` 的渐变硬编码 `--pb-card-bg`,但**四个** clamp 宿主(activity row / board card / decision li / influence epic)`:hover` 全部换成 `--pb-card-hover`。指针一进卡片,渐变仍朝旧色收敛 → 末行上方浮出一块可见矩形(三主题实测色差 6–10/255,dark `#18181f`→`#202028`)。**修法用间接层**:渐变读 `var(--pb-fade-to,var(--pb-card-bg))`,四条 hover 规则各自把 `--pb-fade-to` 重指;非 hover 宿主走 fallback 原样不动。
+- **② reduced-motion 只盖了一半:** 块内 4 个 `infinite` 动画,只有 `.pb-status-updating-dot/.pb-status-skeleton-line` 被停;`.pb-peer-dot[data-state=active]`(同事在线)和 `.pb-board-badge-pending`(待办脉冲)照转。二者是**状态提示**,故停在静态可见帧(`animation:none;opacity:1`)而非任其卡在半途关键帧。
+- **③ 死规则(tab 化改造遗留):** `@media(max-width:720px)` 里给 `.project-brain-columns` 设 `grid-template-columns:1fr` —— 但该元素自 tab 改造后是 `display:block` 的**页签宿主**(一次只显一屏),grid 属性完全惰性;它还多设一层 `overflow-y:auto`,与真正的滚动容器 `.project-brain-col-body` 抢滚动。换成收紧正文侧边距(手机上真正换来阅读宽度的那一项)。
+- **④ 触屏够不到章程编辑/删除:** `.pb-charter-row-actions` 是 `opacity:0;pointer-events:none`,只靠 `:hover` / `:focus-within` 揭示。触屏两者都发不出——**`:focus-within` 无法自举**(要先能点到才能聚焦,而它 `pointer-events:none`)。按项目既有 `(pointer:coarse)` 惯例补常显分支。
+- **⑤ 键盘焦点全不可见:** ~20 个真 `<button>`(页签/看板动作/章程增删/peer nudge/clamp 展开/关闭)**零** `:focus-visible`,且全局没有 button 焦点兜底(只有输入框有,还有几处 `outline:none`)。一条共享 outline 规则收口;`:focus-visible` 天然不在鼠标点击时触发,不影响鼠标手感。
+- **⑥ 5 个页签溢出却无提示:** 页签栏 EN 固有宽 ~505px,而 360px 视口下面板仅 ~338px;叠加 macOS 自动隐藏滚动条 → 末尾页签看起来「根本不存在」。上 Lea-Verou 滚动阴影(仅在**还能滚的那一侧**显示边缘阴影),与 settings.css 的 `.stg-matrix-scroll` 同一手法,滚动条本身仍隐藏。
+- **守卫(19 测)+ NEUTER 6 发全咬:** 逐条回退任一修复即翻红(剥焦点块红 9 条),恢复复绿——证明不是空过。
+- **共享树纠缠(第九弹,如实):** ⓐ tab 滚动阴影那一笔 `apply_diff` **报成功但内容未落盘**(sibling 并发写 styles.css 覆盖),普查 6 项修复时发现只剩 5 项 → 重读重放补上;ⓑ 提交时 sibling commit `a50983dd` 抢先落地并清了我的暂存区,新测试文件未跟踪导致 pathspec 不匹配、首次提交失败 → 重新 `git add` 后成功。**教训:每次 apply_diff 后仍须独立复核落盘,不能信返回值。**
+- **预存在红(诚实区分,未代修):** `test_mobile_fullscreen_overlay_vh_guard::test_sweep_base_overlays_use_vh100_guard` 在**净 HEAD 上 stash A/B 同形复现**(报 `.mcp-install-modal` 选择器已陈旧),与本轮改动无关。
+- **生效边界:** 纯 CSS,走内容哈希 bundle —— **需重启服务器 + 浏览器硬刷新**。
+
 # Project Journal
+
+### 2026-07-25 — epic pt_a4c9d33e CAS-half 落地(owner 拍 "B — Go"):wallet debit/credit 改原子条件 UPDATE(commit `fbda6d98`,2 文件 +198/-7,billing 全套 50/50,NEUTER 已证)
+- **owner 答复 B** 后实现:`_apply_signed` 原本 read-modify-write(Python 读余额→算绝对新值→upsert,仅靠 in-process `threading.Lock`),跨 worker 进程锁无效 → 两笔 debit 同读同写可透支(与 board-lease 同类 TOCTOU)。
+- **修法:** 新增 `_conditional_apply`,单条原子 `UPDATE billing_wallets SET balance_micro = balance_micro + ?, updated_at = ? WHERE user_id = ? AND balance_micro + ? >= 0`。资金检查即 WHERE 子句(行锁下对当前值求值)、余额相对移动 → debit 既不能透支也不能覆盖并发写,跨进程成立,不依赖 in-process 锁(降为 belt-and-braces)。rowcount==0 → 资金不足 → InsufficientFunds;0 行且无 wallet 行 → 'absent' → INSERT 开户余额(仍做资金检查)。deposit/allow_negative 跳过 >=0 守卫。幂等(find_existing)与 ledger append 不变。
+- **测试(`test_billing_wallet_cas.py`,5 测):** 拒透支不动行 / 相对移动 / absent 开户 / 30 路并发 debit 恰好落 10 且余额永不为负 / 资金不足保留余额。**NEUTER:** 去掉 WHERE `>=0` → 30 笔全"成功"、余额 -200、3 测变红;恢复复绿。billing 全套(billing + phase2 + wallet_cas + janitor)50/50。
+- **收集门:** 8906 collected(此前一直红的 `test_run_command_pty_streaming.py` pty flake 已被 sibling 修掉,现全绿)。
+- **git 纪律(共享 HEAD、大量 sibling WIP:motion_video/paper 等):** `reset -q HEAD .` → 仅 add 2 文件 → `--cached --name-only` 确认恰好 2 文件 → `commit -F- -- <路径>` → `git show HEAD --name-only` = 仅 2 文件,NO LEAK。`fbda6d98`。
+- **epic 两半均闭环:** settle-half `d12cd17`(deposit-before-flip 防丢充值)+ CAS-half `fbda6d98`。**注:本轮 board MCP 工具不在工具集内,project_board_complete 未能调用——下轮或 owner 侧需把 pt_a4c9d33e 标 done。**
+- **本会话累计:** 12 笔提交,修 15 个真 bug(含 2 SECURITY + wallet CAS)。
+
 
 ### 2026-07-25(续27) — 「幻影回滚者」根修:NC 腰带标记门——conftest 崩溃治愈机制把中期提交当中毒回写(owner 复核续25 时抓获,commit `0910e72e`,2 文件;腰带语义 3/3 含 failing-first,NC 用户套件 37/37,我的四套件 32/32,60s 哈希盯梢稳定)。
 - **事故链(共享树纠缠第八弹,最诡异的一发):** owner 复核 `83c7f1ed` 时发现工作区 lib/message_queue.py 被「sibling 回滚」(-61 行恰是抢占块)。`git checkout HEAD --` 恢复后**分钟内再次被回滚**,且只在 message_queue.py(其它 13 个文件签名全存活)。30s sha256 盯梢抓到恢复后 ~10s 内被重写;**strace 挂到长跑 pytest 进程(pid 1499235,17:42 启动,1h17m)实锤 O_WRONLY|O_TRUNC 写源文件**。

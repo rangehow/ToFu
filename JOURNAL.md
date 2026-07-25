@@ -1,3 +1,11 @@
+### 2026-07-25(续38) — 队列「吞消息」根修:出队改租约制(owner 拍 A 批 schema,commit `97fabcd7`,9 文件 +602/-32;新套件 9/9,schema 环 74/74,相邻 126 过 3 红 stash A/B 实证预存在,collect **9039** 0 err)
+- **根因(审计实证):** `dequeue_next` 先 DELETE 持久行(`message_queue.py:731`),之后 `dispatch_next_queued` 有 4 个静默 `return None`(CAS append ×2 / 空 api_messages / spawn 失败)——行没了、任务没建、无重试 = 排队真人消息硬丢失。同审计另证:派发链挂前驱线程、daemon 分支绕执行器、收割器被自己的 15s 心跳喂饱(F4 永不收割)、执行器饱和误收割(F5)。
+- **owner 拍 A 后的落地(五项要求全编进):** ①message_queue 加 `leased_until`/`lease_task_id`(schema v42→43,Core 表 + PG/SQLite ALTER + parity 串);出队改 120s 租约,删除推迟到 spawn_task 成功后;②判活看注册表不看钟——LIVE 续租不重派,TERMINAL(注册表或 task_results 地板)补完丢失的删除(绝不做成重复回合),DEAD 过期租约才释放;③哨兵零影响,`:546/:621` 两处有意 DELETE 原样;④删除后重排语义不变(三连按序派发 + renumber 钉);⑤failing-first 先行。
+- **回收器 `reap_expired_queue_leases`:** 挂 `cleanup_old_tasks` 同一节拍 + 启动时 force_reclaim(开机注册表空 ⇒ 一切租约皆死);搁浅排水每条 conv 一派(共享 `_conv_has_live_task` 守卫),5s 有界锁等待防卡死节拍。spawn 失败 → 下一 tick 自动重派(旧码=全丢)。崩溃后重复追加安全:`append_user_msg_idempotent` 按 timestamp  reconcile。
+- **意外发现:** epic `pt_e1c4693341b24730`(conv-state SSOT)板上文字**严重过期**——P1 载荷(meta_cache)、P2 客户端 reducer(`88d3d600`)、P3 生命周期钩子、P4 连接快照、P7 auth wire 全部已落盘;七套件 42/42 实测绿。**真剩余=P5 漂移探针 + P6 冗余分支清扫**,下棒接 P5。
+- **预存在红(未代修):** chat_flow_dispatch autopilot E2E / db_guard(convview 文件)/ peer_coordination(system_context 块)——净 HEAD stash A/B 同形复现,均不碰队列。
+- **共享 HEAD 纪律:** 精确 pathspec 恰好 9 文件;sibling WIP(llm_dispatch/server.py)零裹入。§10 schema 门:owner 会话内明示拍板 + audit_log(config_change, approved_by=user)。
+
 ### 2026-07-25(续37) — Debug 面板重设计启动:请求检视器设计稿(owner 拍板形态 A)+ P1 数据面落地(2 commit:`15922112` 设计稿 1 文件 / `e93efaa2` P1 8 文件 +502/-2;新守卫 3/3 + jsdom 2/2 含三 NEUTER,相邻 12 套件 78/80 两红 stash A/B 实证预存在,collect **9039** 0 err)
 - **起因:** owner 点名旧 debug 面板「内容是会话级、容器却是全局悬浮窗」,长会话里看到问题气泡要去面板一条条人肉对账;要求重思考位置/形态/内容准确性,目标=完整暴露后端真实 LLM 请求。
 - **诊断(全部对码核实):** 五错位——归属错位(`_debugCache[convId]` vs 全局盒 `index.html:681`)/ 粒度错位(最新一轮整包平铺)/ 时间维丢失(每轮 snapshot 都 SSE 推达却只存最新一份,`task_events` 6h 内明明都在)/ 请求要素不全(只有 messages+tools,无 model/params/response 侧)/ 无锚点。地基保留:wire SSOT `wire_messages.py` 冷热字节一致、`msg._taskId`+`apiRounds[].round` 锚点链、`round_usage` 响应侧元数据。

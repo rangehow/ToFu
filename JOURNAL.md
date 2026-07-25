@@ -1,5 +1,13 @@
 # Project Journal
 
+### 2026-07-25 — RENDER_CONTRACT Phase 3.5 §5-final 落地:session 键契约 + 读面钉死 + allowlist 冻结(streamBufs-v2 门关闭)(commit `de927bb2`,3 文件 +173/-22,16/16 守卫绿含 NEUTER,83/83 全量扫,collect 8551 0 err)。owner §7-验收抓到:phase 家和退役的 streamBufs 是同一建筑学家族(全局可变 Map、游离文档外),守卫只钉符号存在没钉「这个对象允许有哪些键」——明年任何人加 `session.content`,守卫一个都不红,streamBufs v2 借尸还魂。
+- **(1) 键契约钉死(owner 条件 1):** `test_stream_session_keys_are_phase_only` —— 扫全部生产代码,任何 `streamSessions.get(...)/getStreamSession(...)/_sess/session/sess/Sess.<非phase>` 读写即红(禁键:content/thinking/toolRounds/text/markdown/html/message/body/rounds/segments),外加模块自身创建形状(getStreamSession 必须恰建 `{ phase: null }`)。**NEUTER:`session.content = "x"` 注入必须翻转红**。stream_session.js 文档头写入 KEY CONTRACT:扩键集是架构决定,必须与守卫更新同 commit。
+- **(2) 读面钉死 + 文档对齐现实:** `test_stream_session_reader_surface_pinned` —— 读面恰为 3 文件 5 处(health_stream_timer ×3 + sse_pipeline ×1 + stream_lifecycle ×1);stream_session.js 文档头过时的「只有 2 个 paint 读者」改成真实 5 处。文档和现实不再各说各话。
+- **(3) §5-final allowlist 冻结(plan):** 状态行 → Phase 3.5 **COMPLETE**(steps 1–5 + §7 + §5-final);ratchet 基线冻结为**永久地板**(剩余 STRUCT-ONLY + PENDING-PLACEHOLDER 即声明的 allowlist,任何新裸写超地板即红);streaming_ui.js 是唯一的受许 CONTENT-DERIVED 例外(其第二数据源已在 §7 退役,现只读文档 + streamSessions)。
+- **(4) 顺手根修守卫自己的盲区(落地时抓到):** `_strip_js_comments` 是两段式剥除(先注释后 regex 剥字符串)**不处理 backtick 模板字面量** —— 模板体里的撇号(如 `'assistant'`)让 squote regex 错位配对,把 `streamSessions.get` 吞进假字符串,守卫对它全盲。换成**一遍式 tokenizer**:注释剥除、backtick 体剥成 ````、单/双引号字符串**保留原样**(④ token 守卫 + NEUTER 需要字符串内容)。16/16 守卫绿。
+- **git 纪律:** 3 文件 numstat 全量不截断对账;暂存 stray 检查为空;sibling WIP 零损留在 worktree。
+- **边界(诚实):** 键契约是静态守卫,运行时若有代码用 `Object.assign(session, {content:...})` 绕过点号赋值则静态扫描看不到 —— 但点号赋值是这个代码库唯一实践,且 reader-surface 守卫钉死了任何新读者;VU +404 hunk 已由 owner 接受,不再单审。
+
 ### 2026-07-25(续) — e2e Layer 2 升级为 Studio 变体
 # Project Journal
 

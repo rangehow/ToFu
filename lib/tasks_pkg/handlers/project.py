@@ -17,6 +17,7 @@ from lib.tasks_pkg.handlers.code_exec import (
     _make_stdin_callback,
 )
 from lib.tasks_pkg.handlers._read_gate import (
+    _collect_target_paths,
     check_read_before_edit,
     partition_batch_edits,
 )
@@ -205,6 +206,7 @@ def _handle_project_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg
                            ref, task.get('id', '?')[:8])
             meta = build_project_tool_meta(fn_name, fn_args, error_msg)
             meta['badge'] = 'ref failed'
+            meta['refusal'] = {'kind': 'content_ref'}
             _finalize_tool_round(task, rn, round_entry, [meta])
             return tc_id, error_msg, False
         fn_args['content'] = resolved
@@ -234,6 +236,8 @@ def _handle_project_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg
         if _gate_err:
             meta = build_project_tool_meta(fn_name, fn_args, _gate_err)
             meta['badge'] = 'read first'
+            meta['refusal'] = {'kind': 'read_first',
+                               'paths': _collect_target_paths(fn_name, fn_args)}
             _finalize_tool_round(task, rn, round_entry, [meta])
             return tc_id, _gate_err, False
     elif fn_name in ('apply_diffs', 'insert_contents') and project_path:
@@ -252,6 +256,7 @@ def _handle_project_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg
                 _gate_err = _format_refusal(fn_name, _unread_raw)
                 meta = build_project_tool_meta(fn_name, fn_args, _gate_err)
                 meta['badge'] = 'read first'
+                meta['refusal'] = {'kind': 'read_first', 'paths': list(_unread_raw)}
                 _finalize_tool_round(task, rn, round_entry, [meta])
                 logger.info('[ReadGate] Refused all %d edit(s) of %s for unread file(s) %s (task=%s)',
                             len(edits), fn_name, ', '.join(_unread_raw), task.get('id', '?')[:8])
@@ -287,6 +292,8 @@ def _handle_project_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg
         if _fresh_err:
             meta = build_project_tool_meta(fn_name, fn_args, _fresh_err)
             meta['badge'] = 'stale'
+            meta['refusal'] = {'kind': 'stale',
+                               'paths': _collect_target_paths(fn_name, fn_args)}
             _finalize_tool_round(task, rn, round_entry, [meta])
             return tc_id, _fresh_err, False
     elif fn_name in ('apply_diffs', 'insert_contents') and project_path:
@@ -307,6 +314,7 @@ def _handle_project_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg
                 _fresh_err = _format_stale_refusal(fn_name, _stale_raw)
                 meta = build_project_tool_meta(fn_name, fn_args, _fresh_err)
                 meta['badge'] = 'stale'
+                meta['refusal'] = {'kind': 'stale', 'paths': list(_stale_raw)}
                 _finalize_tool_round(task, rn, round_entry, [meta])
                 logger.info('[FreshGate] Refused all %d edit(s) of %s for stale file(s) %s (task=%s)',
                             len(edits), fn_name, ', '.join(_stale_raw), task.get('id', '?')[:8])
@@ -482,8 +490,16 @@ def _handle_project_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg
 
     if _gate_skip_note:
         meta['badge'] = 'partial: read first'
+        meta['refusal'] = {'kind': 'partial_read_first',
+                           'paths': list(_unread_raw),
+                           'skipped': len(_skip_set),
+                           'proceeded': len(fn_args.get('edits') or [])}
     if _fresh_skip_note:
         meta['badge'] = 'partial: stale'
+        meta['refusal'] = {'kind': 'partial_stale',
+                           'paths': list(_stale_raw),
+                           'skipped': len(_stale_set),
+                           'proceeded': len(fn_args.get('edits') or [])}
 
     # ── Attach SVG inline-render descriptors (text read path) ──
     # SVG source rides the model stream as text; these data URIs let the

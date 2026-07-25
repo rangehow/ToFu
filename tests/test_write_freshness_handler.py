@@ -183,6 +183,90 @@ def test_neuter_amputated_handler_check_clobbers(workspace, _isolate, monkeypatc
 
 
 @pytest.mark.unit
+def test_streaming_preexec_read_stamps_and_recovers(workspace, _isolate):
+    """The PRODUCTION read path: streaming pre-exec bypasses _handle_project_tool
+    (its result is cached as authoritative, serial dispatch skips re-execution),
+    so the handler's record_read_paths never runs for streamed reads. The
+    streaming executor must stamp the freshness token itself — otherwise the
+    recovery loop (refused → re-read → re-issue) can NEVER succeed, the exact
+    2026-07-25 production refusal loop (repeated 'stale' after every re-read).
+
+    Drives the REAL StreamingToolAccumulator._execute_one for the read and the
+    REAL _handle_project_tool for the writes (B's sibling write + A's attempts).
+    """
+    from lib.tasks_pkg.streaming_tool_executor import StreamingToolAccumulator
+    a, b = _task('convA'), _task('convB')
+    # A reads via the STREAMING pre-exec path (production's dominant read path).
+    acc = StreamingToolAccumulator(a, workspace, project_enabled=True)
+    try:
+        content = acc._execute_one('read_files', {'reads': [{'path': 'a.py'}]})
+    finally:
+        acc._pool.shutdown(wait=False)
+    assert 'def foo()' in content
+    # B writes via the serial handler → allowed; disk changed.
+    tc_id, content, _ = _drive(
+        'write_file', {'path': 'a.py', 'content': 'def foo():\n    return 2  # B\n'},
+        b, workspace)
+    assert not content.startswith('Error:'), content
+    # A writes → REFUSED (its streaming-read token went stale).
+    tc_id, content, _ = _drive(
+        'write_file', {'path': 'a.py', 'content': 'def foo():\n    return 3  # A\n'},
+        a, workspace)
+    assert content.startswith('Error: write_file refused'), content
+    # A re-reads via the STREAMING path → token refreshed…
+    acc2 = StreamingToolAccumulator(a, workspace, project_enabled=True)
+    try:
+        content = acc2._execute_one('read_files', {'reads': [{'path': 'a.py'}]})
+    finally:
+        acc2._pool.shutdown(wait=False)
+    assert 'return 2  # B' in content
+    # …and the re-issued write now SUCCEEDS — the recovery loop closes.
+    tc_id, content, _ = _drive(
+        'write_file', {'path': 'a.py', 'content': 'def foo():\n    return 3  # A\n'},
+        a, workspace)
+    assert not content.startswith('Error:'), content
+    assert _read(workspace, 'a.py') == 'def foo():\n    return 3  # A\n'
+
+
+@pytest.mark.unit
+def test_neuter_streaming_preexec_record_never_recovers(workspace, _isolate, monkeypatch):
+    """NEUTER: no-op the record seam the streaming pre-exec calls → a task
+    holding a (write-side) token is refused after a sibling's change, its
+    streaming re-read refreshes NOTHING, and the re-issued write is refused
+    AGAIN — the recovery loop never closes. Proves the streaming-side stamp
+    is load-bearing, not decoration."""
+    import lib.tasks_pkg.handlers._write_freshness_gate as wfg
+    monkeypatch.setattr(wfg, 'record_read_paths', lambda *a, **k: 0)
+    from lib.tasks_pkg.streaming_tool_executor import StreamingToolAccumulator
+    a, b = _task('convA'), _task('convB')
+    # A writes first via the handler → write-side recording stamps a token.
+    tc_id, content, _ = _drive(
+        'write_file', {'path': 'a.py', 'content': 'def foo():\n    return 10  # A\n'},
+        a, workspace)
+    assert not content.startswith('Error:'), content
+    # B changes the file → A's token is now stale.
+    _drive('write_file', {'path': 'a.py', 'content': 'def foo():\n    return 2  # B\n'},
+           b, workspace)
+    tc_id, content, _ = _drive(
+        'write_file', {'path': 'a.py', 'content': 'def foo():\n    return 3  # A\n'},
+        a, workspace)
+    assert content.startswith('Error: write_file refused'), content
+    # A heeds the message: re-read via the STREAMING path — but with the
+    # record seam amputated, the re-read refreshes nothing…
+    acc = StreamingToolAccumulator(a, workspace, project_enabled=True)
+    try:
+        acc._execute_one('read_files', {'reads': [{'path': 'a.py'}]})
+    finally:
+        acc._pool.shutdown(wait=False)
+    # …so the re-issued write is refused AGAIN — the loop never closes.
+    tc_id, content, _ = _drive(
+        'write_file', {'path': 'a.py', 'content': 'def foo():\n    return 3  # A\n'},
+        a, workspace)
+    assert content.startswith('Error: write_file refused'), content
+    assert _read(workspace, 'a.py') == 'def foo():\n    return 2  # B\n'
+
+
+@pytest.mark.unit
 def test_neuter_amputated_read_record_leaves_A_blind(workspace, _isolate, monkeypatch):
     """NEUTER #2: amputate the post-read recording seam → A never gets a
     token → the same stale write passes silently. Proves the read-side

@@ -2644,12 +2644,120 @@ function _renderImageGenBlock(round, ctx) {
        </div>`;
 }
 
+/* ── Write-gate refusal presentation ─────────────────────────────────
+ * The shared-worktree guards (read-before-edit + write-freshness,
+ * lib/tasks_pkg/handlers/project.py) REFUSE a write tool call: nothing
+ * executed, the model re-reads and re-issues. The raw badge tokens
+ * ('stale', 'read first', 'partial: …', 'ref failed') are developer
+ * jargon — meaningless on a user-facing card. New rounds carry
+ * structured meta.refusal {kind, paths, skipped, proceeded}; older
+ * persisted rounds only have the badge string, still recognized below.
+ * Rendering: a localized amber badge (an interception, not a crash)
+ * with the reason as tooltip, plus an explanation card naming the
+ * file(s) and the automatic next step. */
+const _GATE_REFUSAL_BADGE_KINDS = {
+  "stale": "stale",
+  "read first": "read_first",
+  "partial: stale": "partial_stale",
+  "partial: read first": "partial_read_first",
+  "ref failed": "content_ref",
+};
+const _GATE_REFUSAL_TOOLS = ["write_file", "apply_diff", "apply_diffs", "insert_content", "insert_contents"];
+
+function _refusalInfo(round, meta) {
+  if (!round || !meta || _GATE_REFUSAL_TOOLS.indexOf(round.toolName) === -1) return null;
+  const r = meta.refusal;
+  if (r && typeof r === "object" && typeof r.kind === "string" && r.kind) {
+    return {
+      kind: r.kind,
+      paths: Array.isArray(r.paths) ? r.paths.filter(function (p) { return !!p; }) : [],
+      skipped: r.skipped | 0,
+      proceeded: r.proceeded | 0,
+    };
+  }
+  const kind = _GATE_REFUSAL_BADGE_KINDS[meta.badge];
+  return kind ? { kind: kind, paths: [], skipped: 0, proceeded: 0 } : null;
+}
+
+function _gateRefusalBadgeLabel(kind) {
+  const _t = (typeof t === "function") ? t : (k, d) => d;
+  const M = {
+    stale: ["tool.gateStaleBadge", "changed on disk"],
+    read_first: ["tool.gateReadFirstBadge", "must read first"],
+    partial_stale: ["tool.gatePartialStaleBadge", "partial · changed"],
+    partial_read_first: ["tool.gatePartialReadFirstBadge", "partial · unread"],
+    content_ref: ["tool.gateContentRefBadge", "content ref failed"],
+  };
+  const e = M[kind];
+  return e ? _t(e[0], e[1]) : kind;
+}
+
+function _gateRefusalTitle(kind, info) {
+  const _t = (typeof t === "function") ? t : (k, d) => d;
+  const M = {
+    stale: ["tool.gateStaleTitle", "Write blocked — file changed on disk"],
+    read_first: ["tool.gateReadFirstTitle", "Edit blocked — file not read in this conversation yet"],
+    partial_stale: ["tool.gatePartialStaleTitle", "{skipped} edit(s) blocked — target file(s) changed on disk"],
+    partial_read_first: ["tool.gatePartialReadFirstTitle", "{skipped} edit(s) blocked — must read first"],
+    content_ref: ["tool.gateContentRefTitle", "Write not executed — content reference failed"],
+  };
+  const e = M[kind];
+  if (!e) return "";
+  return _t(e[0], e[1]).split("{skipped}").join(String((info && info.skipped) || 0));
+}
+
+function _renderGateNotice(info) {
+  if (!info) return "";
+  const _t = (typeof t === "function") ? t : (k, d) => d;
+  const TEXT = {
+    stale: ["tool.gateStaleText",
+      "{paths} was modified by another conversation or process after this conversation last read/wrote it. To avoid silently overwriting their change, this write was NOT executed — the assistant will re-read the file and re-issue the edit; no action needed from you."],
+    read_first: ["tool.gateReadFirstText",
+      "The read-before-edit guard requires reading {paths} with read_files in this conversation before patching it, so patches are never built from guessed or remembered content. This edit was NOT executed — the assistant will read the file first and re-issue."],
+    partial_stale: ["tool.gatePartialStaleText",
+      "{paths} changed on disk after this conversation last read/wrote it, so {skipped} edit(s) targeting it were NOT executed; the other {proceeded} edit(s) ran normally. The blocked edits will be re-issued after a fresh read."],
+    partial_read_first: ["tool.gatePartialReadFirstText",
+      "{paths} has not been read in this conversation, so {skipped} edit(s) targeting it were NOT executed; the other {proceeded} edit(s) ran normally. The assistant will read the file and re-issue the blocked edits."],
+    content_ref: ["tool.gateContentRefText",
+      "The content_ref used by write_file points to a previous tool result that does not exist or has no content. The assistant will retry with explicit content instead."],
+  };
+  const e = TEXT[info.kind];
+  const title = _gateRefusalTitle(info.kind, info);
+  if (!e || !title) return "";
+  const pathsHtml = (info.paths || []).map(function (p) {
+    const base = p.split("/").filter(Boolean).pop() || p;
+    return `<code class="ptool-gate-note-path" title="${escapeHtml(p)}">${escapeHtml(base)}</code>`;
+  }).join(", ");
+  const targetFallback = escapeHtml(_t("tool.gateTargetGeneric", "The target file"));
+  const raw = _t(e[0], e[1])
+    .split("{paths}").join("\x00P\x00")
+    .split("{skipped}").join(String(info.skipped || 0))
+    .split("{proceeded}").join(String(info.proceeded || 0));
+  const textHtml = escapeHtml(raw).split("\x00P\x00").join(pathsHtml || targetFallback);
+  const shieldSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>';
+  /* The leading \n lives INSIDE the return value so a "" (non-refusal)
+   * splice at the call site is byte-identical to not having the call at
+   * all — the tool-rounds wire-parity baseline freezes non-refusal markup. */
+  return `\n             <div class="ptool-gate-note">
+      <span class="ptool-gate-note-icon icon-box">${shieldSvg}</span>
+      <div class="ptool-gate-note-body">
+        <div class="ptool-gate-note-title">${escapeHtml(title)}</div>
+        <div class="ptool-gate-note-text">${textHtml}</div>
+      </div>
+    </div>`;
+}
+
 // Determine the trailing badge (explicit meta.badge → token count → fetched
 // chars → generic ✓ done).
 function _computeToolBadgeHtml(round, ctx) {
   const { meta, results } = ctx;
   let badgeHtml = "";
   if (meta.badge) {
+    const refusal = _refusalInfo(round, meta);
+    if (refusal) {
+      const tip = _gateRefusalTitle(refusal.kind, refusal);
+      badgeHtml = `<span class="ptool-badge ptool-badge-warn ptool-badge-gate"${tip ? ` title="${escapeHtml(tip)}"` : ""}>${escapeHtml(_gateRefusalBadgeLabel(refusal.kind))}</span>`;
+    } else {
     const isWrite =
       round.toolName === "write_file" || round.toolName === "apply_diff" ||
       round.toolName === "apply_diffs" || round.toolName === "insert_content" ||
@@ -2672,6 +2780,7 @@ function _computeToolBadgeHtml(round, ctx) {
       ? "ptool-badge-ok"
       : "ptool-badge-info";
     badgeHtml = `<span class="ptool-badge ${cls}">${escapeHtml(meta.badge)}</span>`;
+    }
   } else if (round.toolTokens) {
     /* ★ Per-tool token count — emitted by lib/tasks_pkg/tool_dispatch.py
      * tool_complete event. Falls back to fetchedChars on older rounds. */
@@ -2753,13 +2862,14 @@ function _renderCompactionLabel(round) {
 //   lives in round.toolArgs.content; render it as added lines so the
 //   user can review what was written instead of an opaque "Preview".
 function _renderWriteFileBlock(round, ctx, badgeHtml, compactionLabelHtml) {
-  const { svg, q, rootPill } = ctx;
+  const { svg, q, rootPill, meta } = ctx;
   if (!(round.toolName === "write_file" && round.toolArgs)) return "";
   let pe = null;
   try { pe = typeof round.toolArgs === 'string' ? JSON.parse(round.toolArgs) : round.toolArgs; } catch (_) {}
   if (!(pe && typeof pe.content === 'string' && pe.content.length)) return "";
   const diffHtml = _renderLineDiff("", pe.content);
   if (!diffHtml) return "";
+  const gateNoticeHtml = _renderGateNotice(_refusalInfo(round, meta));
   return `<details class="ptool-batch-done-block" data-rn="${round.roundNum}">
              <summary class="ptool-line ptool-batch-done-header">
                <span class="ptool-icon">${svg}</span>
@@ -2767,7 +2877,7 @@ function _renderWriteFileBlock(round, ctx, badgeHtml, compactionLabelHtml) {
                ${rootPill}
                <span class="ptool-text">${q}</span>
                ${badgeHtml}
-             </summary>
+             </summary>${gateNoticeHtml}
              <div class="ptool-batch-done-list">
                <div class="ptool-batch-done-single">${diffHtml}</div>
              </div>
@@ -2788,6 +2898,7 @@ function _renderSingleDiffBlock(round, ctx, badgeHtml, compactionLabelHtml) {
     : (pe.replace || "");
   const diffHtml = _renderLineDiff(oldText, newText);
   if (!diffHtml) return "";
+  const gateNoticeHtml = _renderGateNotice(_refusalInfo(round, meta));
   return `<details class="ptool-batch-done-block" data-rn="${round.roundNum}">
              <summary class="ptool-line ptool-batch-done-header">
                <span class="ptool-icon">${svg}</span>
@@ -2795,7 +2906,7 @@ function _renderSingleDiffBlock(round, ctx, badgeHtml, compactionLabelHtml) {
                ${rootPill}
                <span class="ptool-text">${q}</span>
                ${badgeHtml}
-             </summary>
+             </summary>${gateNoticeHtml}
              <div class="ptool-batch-done-list">
                <div class="ptool-batch-done-single">${diffHtml}</div>
              </div>
@@ -2858,6 +2969,7 @@ function _renderBatchEditsBlock(round, ctx, badgeHtml, compactionLabelHtml) {
         ${diffHtml}
       </details>`;
   });
+  const gateNoticeHtml = _renderGateNotice(_refusalInfo(round, meta));
   return `<details class="ptool-batch-done-block" open data-rn="${round.roundNum}">
          <summary class="ptool-line ptool-batch-done-header">
            <span class="ptool-icon">${svg}</span>
@@ -2865,7 +2977,7 @@ function _renderBatchEditsBlock(round, ctx, badgeHtml, compactionLabelHtml) {
            ${rootPill}
            <span class="ptool-text">${q}</span>
            ${badgeHtml}
-         </summary>
+         </summary>${gateNoticeHtml}
          <div class="ptool-batch-done-list">${itemsHtml}</div>
        </details>`;
 }

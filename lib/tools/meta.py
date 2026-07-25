@@ -157,7 +157,11 @@ def _build_apply_diff(meta, fn_name, fn_args, tool_content, path):
         desc = fn_args.get('description', '')
         meta['snippet'] = (f'{len(paths)} file{"s" if len(paths) > 1 else ""}, '
                            f'{ok_n}/{total_n} edits' + (f'  {desc}' if desc else ''))
-        meta['badge'] = f'{ok_n}/{total_n} edits'
+        # No "Applied X/Y" header → the batch never produced a real result
+        # (gate refusal / hard error). "?/N edits" reads as gibberish on a
+        # red badge; say what it is. (Gate refusals override this badge
+        # downstream in handlers/project.py.)
+        meta['badge'] = f'{ok_n}/{total_n} edits' if m else 'failed'
         meta['writeOk'] = ok_n == total_n
         # Per-edit summaries for collapsible frontend display.
         # When the output is NOT a real batch result (no "Applied X/Y"
@@ -286,7 +290,7 @@ def _build_insert_content(meta, fn_name, fn_args, tool_content, path):
         else:
             label = f'{len(paths)} files ({ok_n}/{total_n} insertions)'
         meta['snippet'] = label + (f'  {desc}' if desc else '')
-        meta['badge'] = f'{ok_n}/{total_n} inserted'
+        meta['badge'] = f'{ok_n}/{total_n} inserted' if m else 'failed'
         meta['writeOk'] = ok_n == total_n
         # Per-edit summaries for collapsible frontend display.
         # See _build_apply_diff: default to 'fail' when the output is not a

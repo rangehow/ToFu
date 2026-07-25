@@ -83,4 +83,46 @@ PRODUCE_VIDEO_TOOL = {
     },
 }
 
-__all__ = ['PRODUCE_VIDEO_TOOL', 'PRODUCE_VIDEO_TOOL_NAME']
+__all__ = ['PRODUCE_VIDEO_TOOL', 'PRODUCE_VIDEO_TOOL_NAME',
+           'PRODUCE_REPORT_TOOL', 'PRODUCE_REPORT_TOOL_NAME']
+
+PRODUCE_REPORT_TOOL_NAME = 'produce_report'
+
+PRODUCE_REPORT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "produce_report",
+        "description": (
+            "Produce a long-form RESEARCH REPORT from a single topic — "
+            "fully automatic. The pipeline researches the topic on the web "
+            "(every claim grounded in a real source URL), drafts an outline, "
+            "writes each section, and assembles a cited markdown report "
+            "published as an artifact. Returns immediately with a task_id; "
+            "the report generates in the background. Use this when the user "
+            "wants a written deep-dive / report / briefing on a subject "
+            "rather than a quick chat answer. Does NOT require an attached "
+            "project."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "topic": {
+                    "type": "string",
+                    "description": "The subject to research and report on."
+                },
+                "lang": {
+                    "type": "string",
+                    "enum": ["zh", "en"],
+                    "description": "Report language (default zh)."
+                },
+                "depth": {
+                    "type": "string",
+                    "enum": ["brief", "standard", "deep"],
+                    "description": "brief ≈3 sections, standard ≈5, deep ≈8. "
+                                   "Deeper costs more and takes longer."
+                }
+            },
+            "required": ["topic"],
+        },
+    },
+}

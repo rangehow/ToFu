@@ -18,7 +18,7 @@ logger = get_logger(__name__)
 from lib.tasks_pkg.executor import _build_simple_meta, _finalize_tool_round
 from lib.tasks_pkg.executor import tool_registry
 from lib.tools.motion_video import MOTION_VIDEO_TOOL_NAMES
-from lib.tools.produce import PRODUCE_VIDEO_TOOL_NAME
+from lib.tools.produce import PRODUCE_REPORT_TOOL_NAME, PRODUCE_VIDEO_TOOL_NAME
 
 
 def _resolve(path: str, project_path: str | None) -> str:
@@ -247,6 +247,60 @@ def _handle_produce_video(task, tc, fn_name, tc_id, fn_args, rn,
     tool_content = _fmt(result)
     meta = _build_simple_meta(
         fn_name, tool_content, source='Produce', title='video',
+        snippet=tool_content.split('\n', 1)[0][:120] if tool_content else '',
+        badge=badge)
+    _finalize_tool_round(task, rn, round_entry, [meta])
+    return tc_id, tool_content, False
+
+
+@tool_registry.tool_set(
+    {PRODUCE_REPORT_TOOL_NAME},
+    category='video',
+    description='High-level topic → long-form research report')
+def _handle_produce_report(task, tc, fn_name, tc_id, fn_args, rn,
+                           round_entry, cfg, project_path,
+                           project_enabled, all_tools=None):
+    """Handle produce_report: kick off a background topic→report job.
+
+    The whole capability rides the substrate: the recipe owns research →
+    outline → sections → assemble, ``lib.production.stages`` owns the
+    checkpointed resume, and the generic ``/api/v1/tasks/*`` endpoints own
+    poll / stream / abort (no bespoke routes were needed for this capability).
+    """
+    topic = str(fn_args.get('topic') or '').strip()
+    if not topic:
+        result = {'ok': False, 'detail': 'topic is required'}
+        badge = 'failed'
+    else:
+        try:
+            from lib.longform.engine import start_report_job
+
+            lang = 'en' if str(fn_args.get('lang') or 'zh').strip() == 'en' else 'zh'
+            depth = str(fn_args.get('depth') or 'standard').strip()
+            if depth not in ('brief', 'standard', 'deep'):
+                depth = 'standard'
+            conv_id = ''
+            if isinstance(task, dict):
+                conv_id = task.get('conv_id') or task.get('convId') or ''
+            started = start_report_job(topic, lang=lang, depth=depth,
+                                       conv_id=conv_id)
+            tid = started['task_id']
+            result = {'ok': True, 'task_id': tid, 'topic': topic,
+                      'lang': lang, 'depth': depth,
+                      'deduped': started.get('deduped', False),
+                      'poll': f'/api/v1/tasks/{tid}',
+                      'note': 'Report is generating in the background; it will '
+                              'be published as a markdown artifact.'}
+            badge = 'joined' if started.get('deduped') else 'started'
+        except Exception as e:
+            logger.error('[Produce] failed to start report job: %s', e,
+                         exc_info=True)
+            result = {'ok': False, 'detail': str(e)}
+            badge = 'failed'
+
+    tool_content = _fmt(result)
+    meta = _build_simple_meta(
+        fn_name, tool_content, source='Produce', title='report',
         snippet=tool_content.split('\n', 1)[0][:120] if tool_content else '',
         badge=badge)
     _finalize_tool_round(task, rn, round_entry, [meta])

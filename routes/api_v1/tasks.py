@@ -69,6 +69,7 @@ def _registries() -> dict:
         # (docs/PRODUCTION_PIPELINE_DESIGN.md §1.6).
         ('lib.motion_video.runtime', '_motion_runtime'),
         ('lib.paper.podcast_runtime', '_podcast_runtime'),
+        ('lib.longform.runtime', '_longform_runtime'),
     ):
         try:
             mod = __import__(mod_path, fromlist=[attr])

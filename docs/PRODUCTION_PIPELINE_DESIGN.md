@@ -1,15 +1,16 @@
 # Tofu 产出底盘设计稿(Production Substrate)——「一句话 → 成品」的通用承载形态
 
-> 状态:**P4 / P5 / P6-slice-1 已落地**;P6 剩余 + P7 待 owner 拍板。
-> (2026-07-25 落笔;2026-07-26 更新实施状态)
+> 状态:**P4 / P5 / P6-slice-1 / P6-`_registries()` / P7 已落地**;P6 剩余(ProductionRuntime 簇)待拍板。
+> (2026-07-25 落笔;2026-07-26 更新实施状态 —— P7 实测结论见 §9)
 >
 > | 期 | 状态 | 证据 |
 > |---|---|---|
 > | P4 视频前半段(主题→调研→文案→真时间轴) | ✅ 已落地 | `a6f45f0c` — `lib/motion_video/_recipe.py` + `produce_video` + 崩溃续跑;套件 17/17 |
 > | P5 每镜子 agent 画面 | ✅ 已落地 | `a98f3c12` — `lib/motion_video/_scene_author.py`;套件 16/16(双 NEUTER) |
 > | P6 阶段图契约平移 | ✅ 已落地 | `8578dcb5` — `lib/production/stages.py`(`git mv`,字节相同);守卫 7/7 |
-> | P6 剩余(ProductionRuntime / deliverable / 进度双投影 / `_registries()` 发现制 / artifacts binary) | ⏸ 待拍板 | §7 风险表:两个样本抽底盘会抽错第三个的形状 |
-> | P7 第三配方验证 | ⏸ 待拍板 | 同上 |
+> | P6 剩余(ProductionRuntime / deliverable / 进度双投影 / artifacts binary) | ⏸ 待实施 | 现已有 P7 实测数据作依据（见 §9） |
+> | P6 `_registries()` 发现制 | ✅ 已落地 | `0c768268` — motion / podcast 对通用任务 API 从此可见;套件 5/5（failing-first） |
+> | P7 第三配方验证 | ✅ 已落地 | `lib/longform/` — 512 行（目标 ≤600）;套件 9/9 含 NEUTER;实测结论见 §9 |
 >
 > 触发诉求(owner 原话):「我希望有一天,我只要在输入框里说我想要一个关于某新闻话题的
 > 科普知识视频,视频就被创作出来了,用户甚至不需要感知」+「我不确定现在这个技能形态是否合适」。
@@ -296,7 +297,7 @@ artifacts 扩 `binary` format + 文件引用 + 面板 `<video>/<audio>` 分支�
 | 2 | **事实审阅「可介入不阻塞」** | script 产物落盘可审,job 默认继续跑;拦截走现成 message-queue 抢占 + human_guidance,**不新造机械** |
 | 3 | **阶段图契约现在定形,P6 是平移不是重写** | `stages.py` 写成能力无关;P6 slice 1 用 `git mv` 字节相同平移,守卫测试用**跨路径对象 identity**证明不是重实现 |
 
-**尚未拍板(P6 剩余 / P7):** 从几个样本抽剩余底盘。§7 风险表的论据仍然成立;已在看板挂 question-block。
+**owner 2026-07-26 裁定「第三配方先行，再抽底盘」** —— 已执行完毕。P7 不再是一个「试试看」，而是一次**测量**：拿第三个能力去撞现有底盘，撞不动的部分就是底盘已经对了，撞出来的重复就是 P6 该抽的东西。实测数据见 §9。
 
 ---
 
@@ -309,6 +310,49 @@ artifacts 扩 `binary` format + 文件引用 + 面板 `<video>/<audio>` 分支�
 | 事实错误 | 全自动科普视频说错话,比不出片更糟 | 拍板项 #4;片尾来源卡;`research` 阶段产物可审 |
 | 渲染耗时 | 实测 ~3.1–3.6× 实时(60s 片 ≈ 3.5 分钟串行) | 已有有界并行;生产卡明确告知预计时长 |
 | 共享树并发 | 本项目多 sibling 并行改同一 HEAD | 每期一个 commit、精确 pathspec、失败先行 + NEUTER(项目既有纪律) |
+
+---
+
+## 9. P7 实测结论 —— 第三配方对底盘的验收(2026-07-26)
+
+owner 裁定「第三配方先行,再抽底盘」。第三个能力选**长报告**
+(`lib/longform/`,主题 → 带引用的研究报告 markdown),**刻意与视频不同形**:
+文本产物而非二进制渲染、无 TTS、无逐镜扇出,而且**阶段列表是数据驱动的**
+(大纲有几节就有几个 section 阶段)——静态的视频阶段列表从没压过这种形状。
+
+### 9.1 规模:512 行,达标
+
+| 文件 | 行数 | 性质 |
+|---|---|---|
+| `recipe.py` | 228 | **纯业务**(research → outline → sections×N → assemble) |
+| `engine.py` | 155 | worker + artifact 发布 + 崩溃续跑 |
+| `runtime.py` | 99 | TaskRuntime 五件套 |
+| `__init__.py` | 30 | 门面 |
+| **合计** | **512** | 目标 ≤600 ✅ |
+
+### 9.2 底盘**已经对了**的部分(直接骑,零改动)
+
+| 能力 | 证据 |
+|---|---|
+| **阶段图 + 崩溃续跑** | 数据驱动的阶段列表**无需改底盘**就跑通:配方分两趟跑图、共用一个 checkpoint,第二趟从盘上跳过 research/outline。测试 `test_data_dependent_stage_list_rides_the_existing_resume_contract` 钉死;NEUTER 破坏 `stage_is_done` → 该测试与「崩溃后不重写已完成小节」双双翻红 |
+| **零 LLM 闸** | 事实纪律(每条要点挂真实 URL)、小节过短拒收,全部复用 `Stage.gate` 契约 |
+| **通用任务端点** | **本能力零条自建 poll/abort 路由** —— slice 2 的发现制让 `/api/v1/tasks/*` 直接可用。测试 AST 断言 `engine.py` 里没有 `Blueprint`/`route(`。对照:podcast 写在发现制之前,被迫手写 `poll_podcast_task` |
+| **底盘纯净度** | AST 断言 `lib/production/stages.py` 不导入 longform/motion_video/paper/tts —— 「横向层」是真的 |
+
+### 9.3 底盘**还缺**的部分(这就是 P6 该抽的清单,有实测支撑)
+
+| 重复项 | motion | longform | 判定 |
+|---|---|---|---|
+| `runtime.py` 五件套 | 95 行 | 78 行 | **改名后 67% 逐字相同** → `ProductionRuntime` 确认该抽 |
+| job 清单落盘 | 20 行 | 16 行 | 同形 → 该进底盘 |
+| 崩溃重投扫描器 | 55 行 | 28 行 | 同形(扫 `jobs/*/job.json` 找 `state=running`) → 该进底盘 |
+| **小计** | | **~170 / 512 行** | 三分之一的新能力代码是底盘形状的样板 |
+
+**结论:P6 剩余部分的抽取目标,现在有三个样本而不是两个,且形状已被实测收敛为
+「ProductionRuntime(含 dedup)+ 清单/重投」这一簇。** 相反,`deliverable` 二进制通道
+**第三个样本没有用到**(长报告走 markdown artifact 就够了),说明它是视频/播客的
+共性而非全局共性——抽它的优先级应低于 runtime 簇,这正是「两个样本会抽错形状」
+风险的一次实证命中。
 
 ---
 

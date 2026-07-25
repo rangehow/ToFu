@@ -148,9 +148,9 @@ def _build_produce(ctx: ToolContext) -> list[dict]:
     # real source URL; without search the fact-discipline gate can't be met.
     if not (ctx.search_mode in ('single', 'multi') or ctx.search_enabled):
         return []
-    from lib.tools.produce import PRODUCE_VIDEO_TOOL
-    logger.debug('[Task %s] produce_video tool enabled', ctx.tid)
-    return [PRODUCE_VIDEO_TOOL]
+    from lib.tools.produce import PRODUCE_REPORT_TOOL, PRODUCE_VIDEO_TOOL
+    logger.debug('[Task %s] produce_video/produce_report tools enabled', ctx.tid)
+    return [PRODUCE_VIDEO_TOOL, PRODUCE_REPORT_TOOL]
 
 
 def _build_conv_ref(ctx: ToolContext) -> list[dict]:
@@ -368,9 +368,9 @@ def _register_builtins() -> None:
                  category='video',
                  description='Motion video (MG animation) generation'),
         ToolSpec('produce', _build_produce, phase='base',
-                 provides=frozenset({'produce_video'}),
+                 provides=frozenset({'produce_video', 'produce_report'}),
                  category='video',
-                 description='High-level topic → finished video'),
+                 description='High-level topic → finished video / report'),
         ToolSpec('conv_ref', _build_conv_ref, phase='base',
                  provides=frozenset({'list_conversations', 'get_conversation',
                                      'project_charter_read', 'project_charter_propose',

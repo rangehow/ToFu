@@ -269,8 +269,14 @@ def _handle_fetch_url(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, p
 
     page_content = item['page_content']
     filtered_chars = item['filtered_chars']
+    # A failure MUST carry its typed reason (soft_blocked / irrelevant / …).
+    # A bare "Failed to fetch" tells the model nothing, so it retries sibling
+    # hosts of the same dead origin — the exact loop this reason text kills.
+    error_msg = item.get('error_msg')
     tool_content = (f"Content from {target_url} ({filtered_chars:,} chars):\n\n{page_content}"
-                    if page_content else f"Failed to fetch {target_url}.")
+                    if page_content
+                    else f"Failed to fetch {target_url}."
+                         + (f' ({error_msg})' if error_msg else ''))
     return tc_id, tool_content, True
 
 

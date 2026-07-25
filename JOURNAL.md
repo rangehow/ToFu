@@ -1,3 +1,14 @@
+### 2026-07-25(续40) — 本地部署重构落地:引擎预设卡 + 端点↔模型绑定路由 + 失焦自动单探 + 健康检查异构抖动修复(owner 拍板+五条补充,commit `bb20b90e`,12 文件 +1334/-114;三新套件 14+5+4 全绿含 failing-first + NEUTER×4 全咬,相邻环 70/70,collect **9068** 0 err;board epic `pt_588a5725606b4da0`)
+- **owner 复核设计后拍板:** ①B(加 endpoint_models 映射表,端点列表不动)②每引擎一卡 ③不做引擎自动识别 ④探测成功才收紧;另补五条硬要求:失焦行内自动单探(非换个位置的手动按钮)/ollama 裸 URL `host:11434` 必须兜住/绑定按根模型而非别名/删端点必清绑定/异构机队回归为验收硬门。
+- **改前实证(三处全中):** ①dispatcher.py:435 每模型×每端点全排列建槽位——vLLM/SGLang 一 URL 一模型,异构机队(A 机 qwen、B 机 llama)被主动误路由进上游 404;②前端 `_discoverLocalModels` 把 probe-bulk 逐端点结果并集合并,关联当场扔;③health_local.py:422 重同步只从 live_endpoints[0] 发现再按并集过滤——非首端点模型每轮周期重同步被删又加回(选择器横跳),宕机端点私有模型直接消失。
+- **数据模型:** `provider.endpoint_models = {归一化URL: [根模型id…]}`;dispatcher 按根 id 查绑定扇出(别名随根——/v1/models 不列别名);无绑定信息维持旧并集——**老配置零迁移,探测成功才收紧**;绑定为空表=无信息=兜底并集(owner 拍板语义)。
+- **健康检查重写:** 逐端点发现(元数据来自实际服务它的端点)/绑定漂移(模型挪机,并集看不见)触发重绑定/宕机端点保留旧绑定与模型/零漂移不重写(防槽池抖动)/持久化 models+endpoint_models+归一化 endpoints 三件套。
+- **ollama 裸 URL 兜底:** discover_models 与 _check_endpoint 对「空路径 + 干净 404」自动补 /v1 重试一次(超时不重试——机死了重试只是双倍等待),生效 URL 经 `return_effective` 回传,probe_provider 采用为存储 base_url(否则聊天请求全 404)。
+- **前端:** 「本地部署模型」按钮 → 四卡预设选择器(vLLM/SGLang/Ollama/自定义垫底;官方 SVG:vllm chevron 双色/sglang 官方 52KB logo 提取 10 path 成 3.4KB/ollama llama 改 currentColor);每引擎一卡(重选聚焦不复制);**端点行失焦自动单探**(单探接口现成)+行内模型芯片(前三+N);编辑/删行/清空/批量编辑全路径清绑定;模型卡 `via <endpoint>` 位置芯片;红框散文砍掉进 ⓘ(文案改写为绑定语义)。
+- **测试:** binding 9 测(落位/别名随根/空表兜底/无绑定不建槽/多钥/并集保护/v1×3)+ health 5 测(周期重同步不删非首模型+两轮不抖/宕机保留/挪机重绑定/v1 兜底/超时不重试)+ 前端 jsdom 31 探针+3 静态(预设顺序/自动单探/绑定生命周期/via 芯片/ⓘ)。**NEUTER 四发全咬**(or True 绑定检查/宕机保留/三发 v1 兜底)。**视觉实证:** 预设弹窗+芯片+ⓘ hyperframes chrome-headless-shell 截图三枚图标全对。
+- **过程坑(如实):** ①jsdom harness 新教训——V8 的 eval(含间接 eval)**不漏 `let/const`** 出该次 eval 的作用域,`let _stgProviders` 困在文件域;解法=把多源文件+同域访问器(window.__providers)**拼成单个目标文件**(已入项目记忆);②共享 harness 阉了 setTimeout,异步 flush 必须走**微任务**(`await Promise.resolve()` ×N);③JOURNAL.md.lock 是 07-23 的 0 字节陈尸(非活锁),今天 sibling 也绕过它写——登记待清理。
+- **生效边界:** 后端需重启服务器;前端走内容哈希 bundle,需重启+硬刷。
+
 ### 2026-07-25(续39) — 「引用了却从未定义」静态闸落地:TypeScript 编译器 API 作用域分析 + 顺手擒获一个真 bug(2 commit:修复 `74c8098d` + 闸门 `e4a10a0a`;新套件 10/10 含 8 NEUTER,failing-first 实证,bundle 环 56/56,collect **9049** 0 err;board epic `pt_fb854394c1f34eea` 已闭环)
 - **epic 背景:** dBuf 类 bug——`ff7176dd` 退役 streamBufs 却留 7 处 `dBuf` 裸读藏在 300ms setTimeout 回调里,浏览器未捕获 ReferenceError,8800 测试全绿却每个用户秒撞。两个系统性洞:jsdom harness 预注入 mock 全局 + eval-harness 永不执行回调体;`node --check` 只查语法。
 - **parser 选型(盘的现成,零新增依赖):** 无 acorn/eslint,但 node_modules 有 **typescript**(tsc)——用其编译器 API 做真作用域分析。正则原型死于正则字面量(~60 误报),真 parser 免疫。

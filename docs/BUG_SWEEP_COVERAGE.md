@@ -1,6 +1,6 @@
 # Bug-Sweep Coverage Ledger (waves 1–5)
 
-Reconciled at commit `c732e6194c9c9cdacdba9cc52ca1efea37c39bfb` — inventory regenerated from the live tree at closeout.
+Reconciled at commit `6c7d17a65933e66a026ab11a185ba5dbd5ac3860` — inventory regenerated from the live tree at closeout.
 
 Machine-checkable per-file ledger for the full-repo bug sweep. Regenerate inventory with `os.walk` (prune dot-dirs to dodge the `lib/.project_sessions` FUSE trap; `find(1)` times out on this mount).
 
@@ -27,6 +27,18 @@ Machine-checkable per-file ledger for the full-repo bug sweep. Regenerate invent
 | wave-3 | 390 |
 | wave-4 | 149 |
 | wave-5 | 4 |
+
+## Out-of-scope declaration
+
+These directories are deliberately OUTSIDE the sweep surface. Each row states the directory, its file count, and the reason — so "scanned clean" vs "explicitly exempt" vs "forgotten" is never ambiguous.
+
+| dir | files | .py | reason |
+|---|---|---|---|
+| debug/ | 192 | 141 | EXEMPT — standalone dev/benchmark/audit scripts. .gitignore:66 `/debug/` + export.py:406 explicitly strip the whole dir from opensource exports ("never imported by the app"). Quality gate: run manually by a developer, never imported by server code — a bug here cannot corrupt production. The 5 historically git-tracked scripts were moved to index-only per pt_229606ca. |
+| tests/ | 1010 | 980 | EXEMPT — the pytest suite itself. Quality gate: it IS the gate (8500+ tests, collect-only + per-suite runs in CI/make test-unit); test bugs surface as red bars, not production failures. Sweeps of test-code correctness happen via the gate, not this ledger. |
+| docs/ | 91 | 0 | EXEMPT — documentation assets (markdown/html diagrams). Not executable code. |
+| logs/ | 76 | 0 | EXEMPT — runtime log output (app/access/error/audit/vendor). Not source code. |
+| data/ | 168841 | 41680 | EXEMPT — runtime data (DB files, conversations, memory, swarm logs, codelab workspaces, file-history snapshots). Count excludes the heavy runtime subtrees: data/file-history, data/pg_backups, data/pgdata, data/swarm, data/wal_archive. Not source code. |
 
 ## Per-file ledger
 

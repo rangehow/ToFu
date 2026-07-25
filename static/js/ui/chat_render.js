@@ -234,11 +234,26 @@ function _msgFingerprint(msg) {
              + (c.tokensAfter || 0) + ';';
     }
   }
+  /* ── Terminal cost-accounting fold (RENDER_CONTRACT Invariant 3) ────────
+   * apiRounds / _taskId / usage land AFTER a message is first painted — the
+   * done event, or the MERGE_ACTIVE_TASK keep-local top-up in
+   * loadConversationMessages (a continuously-busy conv never takes the
+   * OVERWRITE branch, so that merge is the only way they arrive). The finish
+   * bar's per-round cost table (numRounds>1), the popover Task ID row, the
+   * key-tail route tag and the token tag ALL render only from these fields —
+   * a row painted before they arrived stayed rounds-less forever because
+   * nothing in this fingerprint saw them land. Cheap O(1) tokens only
+   * (count + presence — hashing the full round list would be wasted work). */
+  const _arFp = (Array.isArray(msg.apiRounds) && msg.apiRounds.length)
+    ? 'ar' + msg.apiRounds.length : '';
+  const _tidFp = msg._taskId ? 'T' : '';
+  const _usFp = msg.usage ? 'U' : '';
   return (msg.role || "") + ":" +
     _hashStr(msg.content || "") + ":" +
     _hashStr(msg.thinking || "") + ":" +
     _errFp + ":" +
     (msg.finishReason || "") + ":" +
+    (_arFp || _tidFp || _usFp ? "term:" + _arFp + _tidFp + _usFp : "") + ":" +
     translationFingerprint(msg) + ":" +
     (sr ? sr.length : 0) + ":" +
     (msg._igResult ? "IG" : "") + ":" +

@@ -1625,6 +1625,36 @@ async function loadConversationMessages(convId) {
         if (sm.finishReason && !lm.finishReason) lm.finishReason = sm.finishReason;
         if (sm.usage && !lm.usage) lm.usage = sm.usage;
         if (sm.model && !lm.model) lm.model = sm.model;
+        /* ★ Terminal cost-accounting fields. A local message cached BEFORE the
+         *   turn's terminal sync (a long turn + a tab/device reopen mid-run)
+         *   lacks apiRounds / _taskId / cost, and this keep-local branch is the
+         *   ONLY top-up a continuously-busy conv ever gets (the OVERWRITE
+         *   branch never fires while a task stays active). Without them the
+         *   finish bar settled into a permanently degraded shape — aggregate
+         *   rows only (usage merged above, cost lazily computed), NO per-round
+         *   breakdown (needs apiRounds), NO Task ID row (needs _taskId), NO
+         *   key-tail route tag (needs apiRounds[-1].usage._dispatch) — all
+         *   read by finish_info.js renderFinishInfo/_buildCostPopover. Fill
+         *   what the local copy lacks; apiRounds upgrades only when the
+         *   server's list is LONGER (a mid-stream local can hold a partial
+         *   round list — never downgrade it). The surgical repaint trigger
+         *   for these late arrivals is the apiRounds/_taskId/usage fold in
+         *   _msgFingerprint (chat_render.js). */
+        if (Array.isArray(sm.apiRounds)
+            && (!Array.isArray(lm.apiRounds) || sm.apiRounds.length > lm.apiRounds.length)) {
+          lm.apiRounds = sm.apiRounds;
+        }
+        if (sm._taskId && !lm._taskId) lm._taskId = sm._taskId;
+        if (sm.cost && !lm.cost) lm.cost = sm.cost;
+        if (sm.provider_id && !lm.provider_id) lm.provider_id = sm.provider_id;
+        if (sm.preset && !lm.preset) lm.preset = sm.preset;
+        if (sm.thinkingDepth && !lm.thinkingDepth) lm.thinkingDepth = sm.thinkingDepth;
+        if (sm.modifiedFiles != null && lm.modifiedFiles == null) lm.modifiedFiles = sm.modifiedFiles;
+        if (sm.modifiedFileList && !lm.modifiedFileList) lm.modifiedFileList = sm.modifiedFileList;
+        if (sm.fallbackModel && !lm.fallbackModel) lm.fallbackModel = sm.fallbackModel;
+        if (sm.fallbackFrom && !lm.fallbackFrom) lm.fallbackFrom = sm.fallbackFrom;
+        if (sm.fallbackReason && !lm.fallbackReason) lm.fallbackReason = sm.fallbackReason;
+        if (sm.fallbackKind && !lm.fallbackKind) lm.fallbackKind = sm.fallbackKind;
       }
       /* ★ FIX (autopilot VU + post-finish messages invisible after reload):
        *   When the IDB cache predates a finished autopilot follow-up, conv

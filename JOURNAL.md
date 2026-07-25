@@ -1,7 +1,12 @@
 # Project Journal
 
-### 2026-07-25(续7) — pt_39b79cc4 收口
-# Project Journal
+### 2026-07-25(续9) — pt_eb07aa98 收口:两个预存在红套件根修(均为「测试漂移/缺口」非产品 bug,commit `d7e8cfb3`,2 文件 +35/-5;两套件 6/6,相邻 18 文件环 **38/38**,turn_settlement 等价 2/2,collect **8665** 0 err)。
+- **票源:** 续7 相邻环复跑抓出的 3 红中剩余 2 个(git stash 退回 HEAD 指示器后原样复现 = 预存在铁证),自开票自收。
+- **红① translate_preview_survives_rebuild = 测试漂移(zone 换代):** 2026-07-07 自动翻译统一化(streaming_ui.js `_ensureStreamZones` 每个重建 body 都种 `data-zone="translatedPrimary"`,注释明写「retires the old bottom-pinned translatePreview dump」)后,`_renderStreamingTranslatePreview` **优先**画进 translatedPrimary,只在无 zone 的裸 body 上才懒建 translatePreview 兜底;套件却还在断言旧槽位 → 4 红(rebuild_partial_paints×3 + rebuild_repaints_stashed_partial)。产品行为(重建后译文照画、stash 即时重画)从未坏,只是搬了家。修:harness 加 `_previewZone()` canonical-first 助手(translatedPrimary 优先、translatePreview 兜底)贯通全部画断言;baseline 显式留在旧兜底路径(它钉的恰是「裸 body 懒建」契约);新增 3 枚 `rebuild_paints_into_translatedPrimary_<role>` 钉锁死现代路由,防助手掩盖未来改道;PASS 地板 12→15。(d) 重连路径此前绿正是因为它手工抹了 body innerHTML(zone 全毁)→ 落到兜底路径,与理论互证。
+- **红② failed_turn_actions_reveal = harness 缺口(verdict 缝未加载):** chat_render.js:1596 的 Continue 闸门已委托 `computeTurnSettlement` + `continueButtonForSettlement`(core/turn_settlement.js,pt_turn_settlement 的单事实源裁决),harness 没加载该模块 → typeof 守卫落 `{show:false}` → 永不出按钮 → err_continue_* 双红(而 err_turn_failed_class 一直绿,因 turn-failed 盖章不走 verdict)。修:harness 补 eval turn_settlement.js(照 translation_model 同法)。加载后「error 无 finishReason」形状得诚实裁决 interrupted/regenerate → `show:true, kind:'regenerate'`,按钮仍挂 `.msg-continue-btn` 且在 `.message-actions` 里,套件原断言原样通过——**顺带证实产品侧的诚实化重构(label 从 Continue 变 Regenerate)与 DOM 契约无损**。
+- **顺见不修(出界纪律):** turn_settlement.js 尾部 window 导出块重复了 3 遍(274-293 行,无害但脏)——非本票范围,留给下个动该文件的人。
+- **连带根修(JOURNAL 结构):** 修掉两起刊头事故:①我续7 插入用「标题行前缀」作 anchor,position=before 把续6 标题劈成孤儿头 + 重复 `# Project Journal`(随 16905df2 提交);②sibling 续8 插入同样以前缀锚把我续7 标题劈出孤儿头。本条按时间序重排为 续9→续8→续7→续6 并清除全部重复刊头——**教训:JOURNAL 插入 anchor 必须含上一 entry 标题行全文至行尾(或改锚其首个 bullet),绝不许用前缀锚**。过程注:freshness 门三连拒(两个 sibling 会话突发式提交 JOURNAL 撞窗;worktree 与 HEAD 逐字节一致、peer 全离线仍拒),改用「执行时新鲜读 + 锚点唯一性校验 + tmp+os.replace 原子写」的一次性脚本完成本条与结构修复——与门同安全性质,锚点失配即中止不写。
+- **生效边界(诚实):** 纯测试改动,零生产代码触碰;两红修复的是「测试跟不上已落地的合法契约变更」,不是产品回归。
 
 ### 2026-07-25(续8) — pt_d7b54569 收口:schema 版本漂移 bump 落地(commit `cacfa08d`,2 文件 +2/-2,版本奇偶套件 6/6,collect **8664** 0 err)。
 - **票情(自开自收):** 日志体检(前序分析会话)实测活库 tofu@15439:40 张代码定义表独缺 `paper_podcasts`,`project_tasks.block_question` 报错到 12:34。根因=两个特性提交(podcast L3 `97f6d06c`、human-answer 闸 `6dde1918`)加了 DDL 却都没递增 `_SCHEMA_VERSION`(停在 41),活库已盖章 41 → boot 快路径「version current — skipping DDL」永久跳过 → podcast lookup 500 UndefinedTable、board read UndefinedColumn。fresh 测试库永远走全量 DDL,所以 CI 从未看见——典型的「只有存量部署才发病」漂移类。
@@ -18,9 +23,6 @@
 - **相邻 3 红的无罪证明与处置:** 17 套件复跑出现 3 红,**git stash 把指示器退回 HEAD 后 3 红原样复现** → 全部预存在,与本票无关:①`segtranslation_fingerprint` = harness 缺口(chat_render 的 `_msgFingerprint` 已委托 `translationFingerprint`,harness 却只 eval chat_render.js 裸奔)→ 顺手根修(`ad6f46aa`,extra_targets 加载 translation_model.js,照 test_frontend_streaming_interleave 先例);②`translate_preview_survives_rebuild`(rebuild 后 partial 不重绘 ×4)与 ③`failed_turn_actions_reveal`(err_continue ×2)疑涉 streaming/turn-terminal 区域与在途 sibling WIP 纠缠 → 开新票 `pt_eb07aa98a68c404b` 留给专项,不驾车路过修。
 - **共享 HEAD 纪律:** 会话期间 worktree 被在途 sibling(schema 票 mrzutwddkeuw0n + 另一路)持续写入(_selfheal 系列/i18n.js/podcast.js/styles.css 新 M);两次 commit 全部精确 pathspec(各 2/1 文件),sibling WIP 零触碰;stash 实验仅含指示器单文件且秒级 pop,已核对 diff --stat 复原。collect 期间撞上 sibling 半写窗口(test_core_table_selfheal ImportError),30s 后自愈,复跑 8663 全绿 0 err(sibling 顺带落了 13 个 selfheal 新测)。
 - **生效边界(诚实):** 纯前端 markup + 测试改动,随提交生效;bundle 无热重载,**浏览器端需 owner 重启服务器 + 硬刷新**后才能看到新的重试行样式。zh 文案「翻译失败,点击重试」走既有 i18n 键,无新键。
-
-### 2026-07-25(续6) — 「历史会话全部只剩骨架占位符」根修
-# Project Journal
 
 ### 2026-07-25(续6) — 「历史会话全部只剩骨架占位符」根修:ff7176dd 把 streaming_render.js 后半截(~600 行)陈旧回放,六个公共签名倒退回古代版本(commit `9836ddd1`,2 文件 +522/-386;守卫 18/18 含新 NEUTER,相邻 24+31+5 全绿,collect **8650** 0 err)。
 - **现象(owner 截图):** 点开任何历史会话永远停在 Loading 骨架;项目面板 Recent 与侧边栏残留测试垃圾(`e2e_dbg_proj`、`please create the hello file`)。

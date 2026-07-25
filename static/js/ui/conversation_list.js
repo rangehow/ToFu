@@ -746,7 +746,11 @@ function renderConversationList() {
      *    status tag IN PLACE — no innerHTML rebuild, no full reparse/relayout
      *    of the sidebar (the dominant long-task cost during a send's
      *    translate→stream→done lifecycle). Mirrors the folder-tab fast path. ── */
-    const _structHash = `AF${_activeFolderId||''}|FL${foldersReady?1:0}|CG${[..._collapsedConvGroups].sort().join('.')}|F${folderHash}|` +
+    /* DBG: per-row action buttons (copy-conv-ID) are baked into the row HTML
+     * by _buildConvItemHTML under the debug flag — include it in the struct
+     * hash or toggling debug mode in Settings early-returns here and the
+     * buttons only appear on the next full page load. */
+    const _structHash = `AF${_activeFolderId||''}|FL${foldersReady?1:0}|DBG${(typeof _featureFlags !== 'undefined' && _featureFlags.debug_mode)?1:0}|CG${[..._collapsedConvGroups].sort().join('.')}|F${folderHash}|` +
       filtered.map(c => `${c.id}|${c.title}|${c.updatedAt||""}|${c.folderId||""}|${(c.projectSummary && c.projectSummary.text) ? "S" : ""}`).join("\n");
     const _statusHash = filtered.map(c => {
       const f = _convStatusFlags(c);

@@ -1,3 +1,9 @@
+### 2026-07-25(续41) — F3 根修:spawn_task 跨线程跳 serving loop(commit `c083ad4b`,3 文件 +179/-20;新套件 3/3 含 failing-first A/B,spawn 环 59/59,collect **9074** 0 err;epic `pt_1acd0bcdb2174566` F4 半挂板待拍)
+- **根因(审计 F3):** 队列派发/收割器回调跑在前驱任务的 worker 线程上,`get_running_loop()` 必失败 → 继任任务静默走 `threading.Thread(daemon=True)`:绕过 `_agent_executor` 并发上限、对 loop 不可见、解释器退出时 finally 半途被杀 → 无 terminal floor → poll 404。
+- **修法:** `set_serving_loop()` 注册 + 共享 `_executor_runner`;无本地 loop 时经 `run_coroutine_threadsafe` 跳上注册的 serving loop(进 capped executor、loop 可追踪);loop 关闭中 RuntimeError → warn + 线程兜底;无 loop 环境(tests/Feishu/CLI)daemon 路径原样保留。server.py 在 `set_agent_executor` 旁注册。
+- **共享 HEAD 手术(如实):** server.py 工作区混着 sibling 的 brotli WIP(+72/-8)——备份混合版 → checkout HEAD → 只重放我的 hunk → 提交 → 恢复 sibling WIP → 再把残留的注释措辞差(我第一版 vs 提交版)对齐 HEAD,终态 `git diff HEAD` 上 server.py 只剩 sibling 的块。
+- **F4 挂板待拍(question-block):** 收割器被 15s 工具心跳喂饱——ask_human 等人类期间心跳是**正确**的(人类可能隔天答复),但挂死的非人等待工具也同样永不收割。三选项:A 人类等待无上限(现状)/ B 人类等待单独长上限(如 72h env 可调)/ C 只让人类等待刷心跳、非人等待可收割。F3 半已验收,epic 留 open。另记:本轮早些时候还落了收割器每-tick 上限 `473ea89d`(最旧优先 K=4)+ SSOT P5 漂移探针 `3b56c5cd`。
+
 ### 2026-07-25(续40) — 本地部署重构落地:引擎预设卡 + 端点↔模型绑定路由 + 失焦自动单探 + 健康检查异构抖动修复(owner 拍板+五条补充,commit `bb20b90e`,12 文件 +1334/-114;三新套件 14+5+4 全绿含 failing-first + NEUTER×4 全咬,相邻环 70/70,collect **9068** 0 err;board epic `pt_588a5725606b4da0`)
 - **owner 复核设计后拍板:** ①B(加 endpoint_models 映射表,端点列表不动)②每引擎一卡 ③不做引擎自动识别 ④探测成功才收紧;另补五条硬要求:失焦行内自动单探(非换个位置的手动按钮)/ollama 裸 URL `host:11434` 必须兜住/绑定按根模型而非别名/删端点必清绑定/异构机队回归为验收硬门。
 - **改前实证(三处全中):** ①dispatcher.py:435 每模型×每端点全排列建槽位——vLLM/SGLang 一 URL 一模型,异构机队(A 机 qwen、B 机 llama)被主动误路由进上游 404;②前端 `_discoverLocalModels` 把 probe-bulk 逐端点结果并集合并,关联当场扔;③health_local.py:422 重同步只从 live_endpoints[0] 发现再按并集过滤——非首端点模型每轮周期重同步被删又加回(选择器横跳),宕机端点私有模型直接消失。

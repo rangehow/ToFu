@@ -1,6 +1,16 @@
 # Project Journal
 
-### 2026-07-25(续7) — pt_39b79cc4 收口:翻译错误指示器 retry-line 重设计落地 + 解耦守卫对齐 + 指纹 harness 缺口根修(2 commit:`fdc67870` 主修 2 文件 +57/-10 / `ad6f46aa` harness 1 文件 +4/-1;主套件 3/3、指纹 1/1,相邻 17 个前端翻译套件 29 过,collect **8663** 0 err)。
+### 2026-07-25(续7) — pt_39b79cc4 收口
+# Project Journal
+
+### 2026-07-25(续8) — pt_d7b54569 收口:schema 版本漂移 bump 落地(commit `cacfa08d`,2 文件 +2/-2,版本奇偶套件 6/6,collect **8664** 0 err)。
+- **票情(自开自收):** 日志体检(前序分析会话)实测活库 tofu@15439:40 张代码定义表独缺 `paper_podcasts`,`project_tasks.block_question` 报错到 12:34。根因=两个特性提交(podcast L3 `97f6d06c`、human-answer 闸 `6dde1918`)加了 DDL 却都没递增 `_SCHEMA_VERSION`(停在 41),活库已盖章 41 → boot 快路径「version current — skipping DDL」永久跳过 → podcast lookup 500 UndefinedTable、board read UndefinedColumn。fresh 测试库永远走全量 DDL,所以 CI 从未看见——典型的「只有存量部署才发病」漂移类。
+- **处置分工(共享树纪律):** 到场时 sibling(mrzutwdd)已在 worktree 备好完整机制包(版本 bump + `_missing_core_tables` 快路径探针 + 14 测新套件,docstring 直接引用本次事故)。按「不扫 sibling 文件」纪律只提 `_meta.py` ×2 的纯 bump(显式 pathspec、提交前 git status 复核、两行全文一致故零冲突),机制包留 sibling 自己提交——peer 确认时强调 `_helpers.py` 的后端感知表清单是承重件(初版探针会让每次 SQLite boot 都强制全量 DDL,因 error_resolutions 是 PG-only 设计)。边界经 project_message 双向确认。
+- **活库现状(诚实):** `paper_podcasts` 表与 `block_question` 列在分诊期间已被手工补齐(探针实证),运行中服务器不再报错;版本章仍为 41,下次重启走幂等全量 DDL 后盖章 42 收口。**生效边界:** bump 随下次重启对其它部署生效;运行中进程无需动作。
+- **守卫缺口(未认领):** 「_tables.py/_system.py 变更必须同批递增版本号」仍无提交期静态守卫——sibling 的运行时探针是兜底网,提交期防线(如 drift 测试比对 DDL 产物指纹与版本号)尚未有人认领。
+
+### 2026-07-25(续7) — pt_39b79cc4 收口
+:翻译错误指示器 retry-line 重设计落地 + 解耦守卫对齐 + 指纹 harness 缺口根修(2 commit:`fdc67870` 主修 2 文件 +57/-10 / `ad6f46aa` harness 1 文件 +4/-1;主套件 3/3、指纹 1/1,相邻 17 个前端翻译套件 29 过,collect **8663** 0 err)。
 - **票情:** `test_frontend_render_translation_decoupled.py::pending_error` 字节级红——translate-indicator sibling 的重设计(`.translate-loading` 琥珀 pill → `.translate-retry-line` 无边框重试行)已进 worktree 但测试的 OLD 重建基线没跟上;sibling 已不在场,样式(CSS styles.css:442-447)与 i18n 键(`translate.failed`,HEAD:2129)早已提交,只剩 JS 与守卫不对齐。
 - **重设计本身(随 commit 落地,sibling 遗作):** 终态错误渲染改为安静的 `translate-retry-line`(弱化刷新 glyph + 三级文字,hover 提到 accent 并旋转 glyph,完整上游错误进 title tooltip);**错误检查提到 `_translateDone===false` 闸门之前**——引擎终态错误路径(`_applyTranslationError`)会盖 done=true,旧闸门把终态错误整个藏没,这是顺带修掉的真洞。readTranslation 字段映射核实:`tr.error ≡ msg._translateError`(translation_model.js 逐字段镜像)。
 - **守卫对齐(三处+一钉,诚实标注):** ①`_OLD_IND` 错误分支换成重设计后 markup 的**黄金串钉**(docstring 新增 EXCEPTION 段如实声明:该分支从此不再是「重构惰性」证明,而是后设计契约钉;其余分支仍是真·重构前重建);②`slice()` 选择器扩 `.translate-loading, .translate-retry-line`——否则错误形状两边都抽不到指示器,字节一致退化成 `''==''` 空比对(非空才非空洞);③新增 NEW-only 钉 `new_shows_terminal_error_after_done`:done=true + error 必须仍渲染重试行(锁闸门顺序修复,OLD 重建表达不了这个形状,故只钉 NEW);nc_body/nc_ind 双控仍绿。

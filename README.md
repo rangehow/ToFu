@@ -392,6 +392,7 @@ When you're reading research papers — arXiv PDFs, conference proceedings, inte
 - **Paper library** — the left sidebar shows all papers you've read, grouped by date; switch between them without losing conversation context
 - **Side-by-side reading** — scroll the PDF while chatting; the assistant sees the page you're on
 - **Notes tab** — drop your own notes alongside the paper; they persist across sessions
+- **Podcast tab** — turn the paper's analysis report into a listenable solo podcast (~5-min short or ~15-min full). Formulas are told as intuition (never read as symbols), the top figures get a three-beat walkthrough, and every number in the script is machine-traced back to the report before synthesis. Play it in the tab (click-to-seek transcript, sleep timer), download the MP3, or export the script. Requires a report first; without a configured TTS voice slot (`capabilities: ["tts"]` on an OpenAI-compatible `/audio/speech` provider) it degrades gracefully to script + transcript only. See `docs/PAPER_PODCAST_DESIGN.md`.
 
 > ⚠️ **Beta:** Paper Reader is actively being iterated on. Feedback welcome on [GitHub Issues](https://github.com/rangehow/ToFu/issues).
 

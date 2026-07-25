@@ -1,6 +1,6 @@
 # Paper Podcast — 论文播客功能设计
 
-> 状态:**设计稿**(2026-07-25),尚未实施。
+> 状态:**P1 已交付**(2026-07-25)。四层全链落地:L1 剧本+校验闸 `43c89859` / L2 lib/tts+能力注册 `22ae8b94` / L3 表+runtime+路由 `97f6d06c` / L4 Podcast tab `283ec600`+`dea2da21`。owner 四条修订(§3.2 符号、§3.4 缩写、§3.5 派生数字、睡眠定时提 P1)与 TTS 配置化拍板(§4.1)均已实施;测试 4 套件 60 测全绿含 5 个 NEUTER,collect 8646 0 err。本文档以下章节已同步为**建成后**的现实。
 > 一句话:把论文阅读模式的「报告」变成一档**单人有声精读课** —— 通勤路上、睡前听一两遍,
 > 听完能复述出这篇论文解决了什么、怎么做的、凭什么可信。
 
@@ -78,6 +78,12 @@
 报告的 `## 📝 Technical Reference`(公式+复现清单)整节**不进口播稿** —— 那是查阅材料,
 不是收听材料;它在逐字稿 tab 里以文字形式保留给想查的人。
 
+**Unicode 数学符号同样禁念(owner 修订 1):** LaTeX 正则拦不住 Unicode 数学符号 ——
+`α β ² × ≤ ≈ →` 这类字符在报告里是合法排版,但 TTS 会念成乱码或跳过。剧本规则:
+希腊字母一律写口播名(α→"阿尔法",β→"贝塔"),上下标/比较符/箭头一律改写成文字
+(²→"平方",×→"乘以/倍",≤→"不超过",→→"推出/变成")。校验器含独立的
+Unicode 数学符号扫描闸(§3.5 闸 1b),与 LaTeX 残留检测并列,命中即打回。
+
 ### 3.3 图表处理(红线二)
 
 - **只讲 Top-K (K≤5) 图**:按报告正文中对图编号(Figure N)的讨论篇幅排序,讨论最多的优先
@@ -90,6 +96,12 @@
 
 - **术语**:首次出现用「中文(English term)」格式,之后沿用中文;直接复用报告的
   `## 🔑 Core Terminology` 表 + terminology_audit 的结果保证全文一致。
+- **中英混读(owner 修订 2)**:中文稿里裸英文缩写会被多数中文音色念得很难听
+  (`LLM`、`KV cache` 这类)。剧本规则:缩写一律展开为中文口播形(`LLM`→"大语言模型",
+  `KV cache`→"键值缓存",`SFT`→"监督微调",`MoE`→"混合专家");仅极个别全民皆知读法
+  固定的(如 `AI`)允许保留。校验器持一张常见缩写 watchlist(token→要求口播形),
+  中文稿命中即打回(§3.5 闸 1c)。英文稿无此闸(英文音色读缩写正常),但 prompt 仍要求
+  首次使用展开。
 - **数字**:只保留有判断力的精度("86.3%,比上一代高 3.2 个百分点",不写 "86.34 vs 83.12");
   每个关键数字必须能溯源到报告/翻译原文(§3.5 校验器强制执行)。
 - **语言**:跟随报告语言(中文论文→中文播客,英文论文默认中文播客、可选英文)。
@@ -102,8 +114,13 @@
 剧本落库前过四道闸,任何一道不过则自动重修一次,再不过则标 `low_confidence` 并告知用户:
 
 1. **残留公式检测**(正则):`$...$`、`\frac`、`\sum`、`^{`、_{` 等 LaTeX 痕迹 → 打回。
-2. **数字溯源**:抽取剧本中全部数字,每个必须能在报告/翻译原文中找到(容差:允许四舍五入
-   到 1 位小数);溯源失败 → 打回。(借鉴 `lib/paper/citation_audit.py` 的思路)
+2. **数字溯源(含派生,owner 修订 4)**:抽取剧本中的**数据型数字**(带小数的、≥11 的整数、
+   或紧跟 %/百分点/倍 的任何数字;结构性小整数 0–10 与年份豁免)。每个数字 N 必须满足
+   其一:(a) **字面命中** —— 在报告/翻译原文中出现(按 N 的小数精度容差);(b) **派生命名** ——
+   存在源数字对 (a, b) 使 `a−b ≈ N`(百分点差)、`(a−b)/b×100 ≈ N`(相对变化)、
+   `a/b 或 b/a ≈ N`(倍数),容差取 N 末位半个单位。只做字面匹配会把"比上一代高 3.2 个
+   百分点"(86.3−83.1 口算)这类合法剧本误杀 —— 派生通道是硬性要求,不是放宽。
+   溯源失败 → 打回。(借鉴 `lib/paper/citation_audit.py` 的思路)
 3. **结构要件**:cold_open 含具体问题+至少一个数字;每个正文 section 至少含一个具体锚点
    (数字/机制名/对比);结尾 recap 恰为 3 条。
 4. **时长估算**:按 §4.3 的语速模型估算总时长,超出目标 ±20% → 压缩或扩写。
@@ -135,9 +152,15 @@
 | 计费 | TTS 按字符计价,pricing 表加模型条目 | `lib/pricing/_tables.py` |
 | 前端排除 | `model_caps.js` 硬编码 fallback 集合加 `'tts'`(服务器 taxonomy 自动下发) | `static/js/core/model_caps.js:23` |
 
-> ⚠️ **需要 owner 决策**:目前没有任何 TTS 模型注册。上线前必须在网关/服务商处确认一个
-> 可用 TTS 模型(如 OpenAI tts-1-hd / 豆包语音合成等)并配槽位,否则功能无法真正发声。
-> 这是本设计唯一的外部依赖。
+> ✅ **owner 已拍板(2026-07-25)**:不再等待指定模型。**模型名与音色一律不许硬编码** ——
+> 部署方通过服务器配置(Settings UI / server_config.json)注册一个 OpenAI 兼容 provider,
+> 在其 model entry 上声明 `capabilities: ["tts"]`(显式 per-cell caps 优先级最高,
+> dispatcher.py 已有此机制);`POST {base}/audio/speech` 的 `{model, voice}` 都从槽位与
+> 配置读取,代码对任何兼容端点成立。知名公开 TTS 模型名(tts-1 / tts-1-hd /
+> gpt-4o-mini-tts)仅作 DEFAULT_SLOT_CONFIGS 参考表预置(与 whisper-1 同模式)。
+> **降级契约:没有任何 `tts` 槽位时功能不报错死** —— 播客任务照常走完剧本+校验闸,
+> 以 `script_only` 状态完成,UI 明示「未配置 TTS 槽位,仅生成剧本与逐字稿」,
+> 下载按钮退化为导出剧本 Markdown。
 
 ### 4.2 合成与拼接
 
@@ -177,14 +200,15 @@
 
 ### 6.2 API(挂在 `/api/v1/paper/`,全部走 `Api.paper.*`)
 
-| 端点 | 作用 |
+| 端点(均已落地) | 作用 |
 |---|---|
-| `POST /api/v1/paper/podcast/start` | 启动/去重;无报告时自动链式先生成报告 |
-| `POST /api/v1/paper/podcast/poll` | 轮询进度(事件数组,同 report/poll) |
-| `POST /api/v1/paper/podcast/abort` | 中止 |
-| `GET  /api/v1/paper/podcast/lookup` | 查已有播客(命中缓存直接返回) |
-| `GET  /api/v1/paper/podcast/audio/<paper_hash>/<mode>` | 音频流,**支持 HTTP Range**(仿 `routes/paper.py:2033` 的 PDF Range 服务),可拖进度条 |
-| `GET  /api/v1/paper/podcast/script` | 剧本导出(Markdown),也可注册成 artifact 进 artifacts 面板 |
+| `GET  /api/v1/paper/podcast/status` | 功能状态:TTS 是否可用/模型列表/默认音色/档位时长带 |
+| `POST /api/v1/paper/podcast/start` | 启动/去重;**报告门**(无报告返回 `report_required`,前端引导链到报告 tab);命中缓存直接返回 |
+| `GET  /api/v1/paper/podcast/poll` | 轮询进度(cursor 协议同 report/poll;done 时扁平化 script/audioUrl/durationSec/scriptOnly) |
+| `POST /api/v1/paper/podcast/abort/<task_id>` | 中止(register_task_routes 工厂) |
+| `POST /api/v1/paper/podcast/lookup` | 查活任务或缓存(命中缓存直接返回;未命中附 tts_available/report_available) |
+| `GET  /api/v1/paper/podcast/audio/<paper_hash>/<mode>/<lang>/<voice>` | 音频流,**HTTP Range**(复用 `_stream_file_response`,与 PDF 同路),可拖进度条;路径含 podcast 目录包限检查 |
+| `GET  /api/v1/paper/podcast/script` | 取剧本 JSON+meta(逐字稿渲染/导出);导出 Markdown 由前端客户端侧生成 |
 
 ### 6.3 前端:paper-reader 右侧新增 "Podcast" tab
 
@@ -204,8 +228,8 @@
 
 | 期 | 内容 | 理由 |
 |---|---|---|
-| **P1 (MVP)** | 单人旁白;short/full 两档;中英双语;四条校验闸;MP3 导出;Podcast tab + 播放器 + 逐字稿跳转 | 闭环「路上/睡前听一遍」的核心价值 |
-| **P2** | 双人对话模式(speaker 字段已预留;prompt 改为 A/B 轮流,两个音色);配图联动(figure_ref 已预留,播放时屏幕同步显示当前图);睡眠定时(停止于 N 分钟);ffmpeg 缺失时的响度补偿 | 提升听感,不挡主链路 |
+| **P1 (MVP) ✅ 已交付** | 单人旁白;short/full 两档;中英双语;四条校验闸;MP3 导出(有 ffmpeg 时;否则 WAV 降级);Podcast tab + 播放器 + 逐字稿跳转;**睡眠定时(owner 修订 3)**;低置信诚实徽标;report_required 引导链 | 闭环「路上/睡前听一遍」的核心价值 |
+| **P2** | 双人对话模式(speaker 字段已预留;prompt 改为 A/B 轮流,两个音色);配图联动(figure_ref 已预留,播放时屏幕同步显示当前图);ffmpeg 缺失时的响度补偿 | 提升听感,不挡主链路 |
 | **P3** | 个人 RSS feed(每篇播客=一集,手机播客 App 订阅,真正的"路上听"终极形态);论文 playlist(多篇连播,接 recommend_engine 做「本周论文速递」日更播客) | 订阅化,把功能变成习惯 |
 
 ## 8. 测试计划(实施时的门禁)
@@ -221,8 +245,10 @@
 
 ## 9. 待 owner 拍板的开放问题
 
-1. **TTS 模型从哪来**(唯一硬阻塞):网关现有哪个语音合成模型可用?音色清单?
-   没有可用槽位则功能只能交付到「剧本」层。
+1. ~~TTS 模型从哪来~~(**已解**,owner 拍板 2026-07-25):不绑定具体模型——部署方在
+   服务器配置注册 OpenAI 兼容 provider 并在模型上声明 `capabilities:["tts"]`;
+   音色走请求参数 → `data/config/tts.json:default_voice` → 文档化 fallback。
+   未配置时功能自动降级为「剧本+逐字稿」并明示原因。
 2. **双人对话是否提前到 P1**?听感更好但 prompt/校验/音色配置复杂度翻倍,本设计默认 P2。
 3. **计费**:TTS 按字符计费(如 tts-1-hd ≈ $0.15/万字),是否需要每篇播客的成本气泡
    (复用现有 cost 体系)?

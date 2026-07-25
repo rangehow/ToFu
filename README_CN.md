@@ -383,6 +383,7 @@ python lib/desktop_agent.py --server http://your-server:15000 --allow-write --al
 - **论文库** —— 左侧侧边栏展示你读过的所有论文，按时间分组；切换论文不丢失上下文
 - **并排阅读** —— 滚动 PDF 的同时聊天；助手可感知你当前所在页面
 - **笔记面板** —— 在论文旁边记录你自己的笔记，跨会话持久保存
+- **播客面板** —— 把论文的分析报告变成一档可收听的单人播客（约 5 分钟短版 / 约 15 分钟完整版）。公式只讲直觉（绝不念符号），最关键的图用三段式口播讲解，剧本里的每个数字都经机器溯源校验后才合成语音。可在面板内直接播放（逐字稿点击跳转、睡眠定时），也可下载 MP3 或导出剧本。需先生成报告；未配置 TTS 语音合成槽位时（OpenAI 兼容 `/audio/speech` 服务商、模型声明 `capabilities: ["tts"]`）自动降级为仅生成剧本与逐字稿。详见 `docs/PAPER_PODCAST_DESIGN.md`。
 
 > ⚠️ **Beta：** 论文阅读模式正在持续迭代中，欢迎在 [GitHub Issues](https://github.com/rangehow/ToFu/issues) 反馈。
 

@@ -129,17 +129,19 @@ class TestCoreBootTableNames:
             names = core_boot_table_names(backend)
             assert names == sorted(set(names))
 
-    def test_covers_every_core_metadata_table(self):
+    def test_covers_every_registered_core_table(self):
         """A newly registered Core table lands in the probe automatically —
         the exact gap (registered but never created on existing deployments)
         this mechanism closes. Per-backend intentional exclusions are the
-        ONLY tolerated gaps."""
-        from lib.database._core_schema import _helpers
+        ONLY tolerated gaps. Iterates the package-init SNAPSHOT (what
+        _core_schema itself registered), not the live shared MetaData —
+        test-defined tables are out of scope by design."""
+        import lib.database._core_schema as _cs
         from lib.database._core_schema._helpers import (
             OPTIONAL_DOMAIN_TABLES, PG_ONLY_CORE_TABLES, core_boot_table_names)
         sqlite_names = set(core_boot_table_names('sqlite'))
         pg_names = set(core_boot_table_names('pg'))
-        for table_name in _helpers.metadata.tables:
+        for table_name in _cs._CORE_REGISTERED_TABLES:
             if table_name in OPTIONAL_DOMAIN_TABLES:
                 continue
             assert table_name in pg_names, \
@@ -148,6 +150,32 @@ class TestCoreBootTableNames:
                 continue
             assert table_name in sqlite_names, \
                 f'Core table {table_name} missing from the SQLite boot probe list'
+
+    def test_define_table_pollution_does_not_leak_into_probe(self):
+        """Regression pin for the groundwork-suite pollution incident:
+        define_table() registers on the SHARED MetaData (its documented
+        purpose — compile-only DDL fixtures), and without the snapshot
+        guard every such table becomes a phantom 'missing' table that
+        forces a full DDL pass on EVERY boot (caught live when
+        test_core_schema_groundwork ran before this suite)."""
+        import sqlalchemy as sa
+        from lib.database._core_schema import define_table
+        from lib.database._core_schema._helpers import (
+            core_boot_table_names, metadata)
+        define_table('zz_probe_pollution_demo',
+                     sa.Column('id', sa.Text, primary_key=True))
+        assert 'zz_probe_pollution_demo' in metadata.tables  # registered…
+        for backend in ('sqlite', 'pg'):
+            assert 'zz_probe_pollution_demo' not in core_boot_table_names(backend), \
+                'test-defined table leaked into the boot probe list'
+
+    def test_snapshot_is_frozen_at_package_init(self):
+        """The snapshot covers exactly the tables _core_schema registers —
+        a table added to _tables.py must appear (auto-coverage), and the
+        snapshot itself must not grow with later define_table() calls."""
+        import lib.database._core_schema as _cs
+        assert 'paper_podcasts' in _cs._CORE_REGISTERED_TABLES
+        assert 'zz_probe_pollution_demo' not in _cs._CORE_REGISTERED_TABLES
 
 
 # ═══ 3+4. SQLite end-to-end + NEUTER negative control ═══

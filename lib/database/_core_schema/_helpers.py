@@ -239,7 +239,7 @@ def core_boot_table_names(backend: str = None) -> list:
     past the version fast-path on every existing deployment; the boot probe
     consuming this list is what makes that bug class self-healing.
     """
-    import lib.database._core_schema  # noqa: F401 — registers all tables
+    import lib.database._core_schema as _cs  # noqa: F401 — registers all tables
     if backend is None:
         try:
             from lib.database import _core
@@ -250,4 +250,12 @@ def core_boot_table_names(backend: str = None) -> list:
     excluded = set(OPTIONAL_DOMAIN_TABLES)
     if backend != 'pg':
         excluded |= PG_ONLY_CORE_TABLES
-    return sorted(set(metadata.tables.keys()) - excluded)
+    # Derive from the package-init snapshot (tables _core_schema itself
+    # registered), NEVER the live shared MetaData: later define_table() calls
+    # (compile-only test fixtures, domain plugins) must not leak into the
+    # boot probe — otherwise each one becomes a phantom "missing" table that
+    # forces a full DDL pass on EVERY boot.
+    names = getattr(_cs, '_CORE_REGISTERED_TABLES', None)
+    if names is None:  # pragma: no cover - defensive (partial import)
+        names = frozenset(metadata.tables.keys())
+    return sorted(set(names) - excluded)

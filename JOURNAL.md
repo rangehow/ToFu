@@ -1,5 +1,14 @@
 # Project Journal
 
+### 2026-07-25(续12) — pt_019ce97d 收口:project_tasks parity 补列 + 顺带根修「探针被共享 MetaData 污染」真 bug(1 commit,5 文件;parity 52/52,全 schema 环 101/101 含污染序)。
+- **本票(秒级):** `test_project_tasks_parity` HEAD 红——block_question sibling(`6dde1918`)把 `block_question`/`human_answer` 加进 Core `_tables.py` + 双端 live ALTER,唯独漏更 parity 测试的 LIVE_PG/LIVE_SQLITE 字符串。补上两列(位置与 Core 一致:write_set 之后、created_at 之前,双端 `TEXT NOT NULL DEFAULT ''`),52/52 复绿。
+- **顺带捉到更大的虫(自己的探针包,101 环复跑现形):** 五文件连跑时我自己的 `test_reinit_with_all_tables_present_is_fast_path` 转红——WARNING 实锤:`missing core tables ['c1','cs_demo_*','ev','kv','part1',…]`。**根因:** `test_core_schema_groundwork.py` 用公开 `define_table()` 在**共享 MetaData** 上注册了 13 张 compile-only 演示表(该函数的合法用途),我的 `core_boot_table_names()` 从活 MetaData 推导清单 → 每张演示表都变成幻影「缺失表」→ 每次 boot 被骗跑全量 DDL、快路径永久失效(与 error_resolutions 同类、更隐蔽:只在测试序/插件序下发病)。单跑本套件不可见,连跑才现形——这正是环跑的价值。
+- **根修(快照隔离):** `_core_schema/__init__.py` 在 `_tables` 导入完成后冻结 `_CORE_REGISTERED_TABLES` 快照(40 表);`core_boot_table_names()` 改从快照推导——包自己注册的表才进探针,事后 `define_table()`(测试夹具/域插件)永不漏入。回退路径(部分导入防御)保留。
+- **新钉 3 枚:** ①coverage 测试改迭代快照(语义不变:_tables.py 新增表自动入探针);②`test_define_table_pollution_does_not_leak_into_probe`——真注册 `zz_probe_pollution_demo`,断言它进了活 MetaData 但**不在**两端探针清单(直接钉死本次事故形状);③`test_snapshot_is_frozen_at_package_init`。
+- **过程坑(如实):** insert_content 把 anchor 三行也拼进 content → `__all__ = [` 重复头、列表未闭合,conftest 收集期就炸(`'[' was never closed`,groundwork+parity 两文件 collect error)——一眼定位删掉重复段。教训:insert_content 的 content 不应再含 anchor 文本。
+- **验证:** parity 52/52;全 schema 环(groundwork→registry→selfheal→双 critical→parity,污染序)**101/101**;`_orphan_heal` 核实走静态 `_ORPHANS` 注册表、不枚举 MetaData,无同类面。
+- **边界:** `_tables.py`/`_system.py`(block_question sibling 的)一行未碰——它缺的只是 parity 字符串,本票补齐即闭环,无衍生票。
+
 ### 2026-07-25(续11) — 「debug 开关:编排流程按钮秒出、复制 ID 按钮要刷新才出」根修:侧边栏渲染哈希吞掉 debug 标志(commit `ef21d856`,2 文件 +114/-1;新守卫 4/4 含 NEUTER,相邻 conversation_list 套件 17/17)。
 - **现象(owner):** 设置里开 debug,「编排流程」入口立刻出现;但侧边栏会话的「复制 ID」按钮必须强制刷新才出现。
 - **根因(两套生效机制,一条死路):** ①编排流程按钮走 `index.html:2002` `_applyDebugModeVisibility()`——直接对 6 个硬编码 ID 拨 `el.style.display`,纯 DOM 显隐、不经过任何渲染缓存,save_export.js:124 一调即生效。②复制 ID 按钮是 `_buildConvItemHTML`(conversation_list.js:1144)按行烤进 HTML 字符串的,要更新必须整表重建;`saveSettings()` 也确实调了 `renderConversationList()`,但该函数的拆分哈希短路(struct=文件夹状态+每行 id|title|updatedAt|folderId|projectSummary / status=6 个状态位,750-756 行)**两个哈希都不含 debug_mode** → 开关翻转后 `_fullHash` 不变 → 直接 return,空调用。即便状态哈希碰巧变了,快速通道 `_applyConvItemStatus` 也只补圆点/状态标签,从不碰 action 按钮区。于是按钮只能等无关结构变化或整页刷新才被动出现。

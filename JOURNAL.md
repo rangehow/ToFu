@@ -1,5 +1,19 @@
 # Project Journal
 
+### 2026-07-25(续26) — 生产活 bug 根修：延迟重绘引用已退役的 `dBuf`，浏览器未捕获 ReferenceError（commit `90ddbb96`，2 文件；新套件 2/2 含 failing-first 实证 + 静态回退铉，`stream_lifecycle` 相邻环 67/68）。
+- **线索来源（读生产日志，非代码审读）：** 先挖 `logs/error.log` 的 `[CLIENT-ERROR] [uncaught]` 上报通道——那里才是真实用户正在撞的错。共挖出 7 个客户端 ReferenceError 符号。
+- **分流判定（关键，滤掉 6 个假阳性）：** 把「首次/末次报错时间」与「定义该符号的文件落地 commit 时间」交叉：`_destroyLazyObserver`/`_openScrollConvId`（11:58–12:31）均在 `9836ddd1`@12:43 **之前**就停了，`convHasPendingSync`/`convAutoTranslate`/`streamSessions` 同形；且三对 definer/user 在 `_BUNDLE_FILES` 里顺序均正确（def 先于 use）→ 均为**部署窗口旧缓存 bundle** 瞬态，已由 `resolve_stale_bundle` 自愈，**不是活 bug、不追**。唯一异数：`dBuf` 全仓 **7 处引用 / 0 处定义**，且 13:09→17:39 **持续到排查当时** → 真活 bug。
+- **根因：** `ff7176dd`（RENDER_CONTRACT Phase 3.5 §7 streamBufs 退役）删了 `const dBuf = streamBufs.get(...)` 绑定，却遗留 `showStreamingUIForConv` 内 `setTimeout(...,300)` 延迟重绘体里的 7 处 `dBuf.*` 读取。浏览器里即：每次刷新/切入一个正在生成的会话后 300ms 抛未捕获 ReferenceError。
+- **影响属同步及时性而非外观：** 该回调存在的意义就是补画「连接建立窗口期间到达的 SSE 帧」；一抛异常，气泡就停在陈旧/「等待中」，直到下一个 push 帧——工具密集回合下是 20–40s 后。正命中 owner 本轮点名的「前后端同步及时性」。
+- **修法（不重引第二个事实源）：** 延迟重绘改从 **message 文档**（§7 单一活事实源）投影，phase 取自 `streamSessions` 会话切片——与上方 20 行的首次渲染用**同一套投影**；而非简单删块（删块会默默丢掉补画能力）。
+- **套件为何漏掉（真正的教训）：** 两个盲区叠加——① 16+ 个 jsdom harness **主动注入已退役的 mock 全局** `win.streamBufs = new Map()`，符号在测试里仍能解析；② 没有任何测试**驱动过那个 300ms 回调**，`eval` 文件永远执行不到那几行。而 `ff7176dd` 随带的退役铉只 grep `streamBufs` token，`dBuf` 是**局部别名的另一个 token**，直接溢出。
+- **新套件反其道而行：** （a）**不**定义 `streamBufs`（对齐真浏览器）；（b）stub `setTimeout` 捕获 300ms 回调后主动 invoke，try/catch 断言不抛 **且** content/thinking/toolRounds 均存活（防「删块式假修」）；（c）静态铉剥注释后双 token 不得回流（历史行文仍合法）。**failing-first 实证：** 修前 2/2 皆红，jsdom 那枚报的就是生产同款 ReferenceError。
+- **预存在红诚实区分：** `test_frontend_finalize_effective_translate` 在相邻环里红——经 **stash A/B 在净 HEAD 上同形复现** + 它在我动手**之前**启动的后台全量跑里已是 `F`，双重证据定为预存在，未代修。
+- **共享 HEAD 纪律：** 精确 pathspec 仅 2 文件；sibling WIP（wallet/motion_video/api_v1/paper 等）**零触碰**；顺手清掉自己跑 bundler 探针落的 `static/js/probe-*.js`（否则会把 manifest parity 套件弄红），parity 复绿 15/15。
+- **生效边界（诚实）：** 纯前端改动，bundle 无热重载——**需重启服务器 + 浏览器硬刷**后生效。
+- **另记（诊断结论，未改代码）：** `database is locked` 今日 201 次中 **163 次出自本轮我自己跑的测试套件**（18 时窗口），生产时段（00–17）共仅 38 条 DB 错——**不是当前矶颈**，不团灭。
+- **另记（JOURNAL 刷头事故第五弹，未代修）：** 盘上 `JOURNAL.md` 第 49 行有一个**孤儿重复 `# Project Journal` 头**（继承自继 21 那次事故），我的插入脚本的锚点唯一性断言当场报警才发现。本次**只锥定首行插入、不去动那处损伤**（避免与 sibling 写入撞车），登记待后续清理。
+
 
 ### 2026-07-25(续25) — 「应该立即生成」收口:真人消息抢占在飞 VU 调用 + finalize 窗口 LATE-done 闩(owner 拍板授权的 VU-决策变更,commit `83c7f1ed`,6 文件;新套件 7 测 + 闩 3 测全绿含 failing-first + NEUTER,相邻 14 套件 171 过 2 红 stash 实证预存在,collect **8885** 0 err)。
 - **owner 复核续24 后点名:** 让位检查 `_has_pending_real_message` 只在 `run_virtual_user` **完整跑完后**才执行(autopilot.py:775)——事故里 94s+74s 两轮全跑完才让位;「可见且最终必达」≠「立即」。owner(CAS/VU autopilot Lead)明示拍板,不再挂 pt_00459503 等拍。

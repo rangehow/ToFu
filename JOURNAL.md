@@ -1,5 +1,14 @@
 # Project Journal
 
+### 2026-07-25 — Plan-B 共享树并发守卫三件套 + 生效契约自动化(epic `pt_e8314a7528f644e5`,5 commit:`6c7d17a6` 原子写 / `a526c664` 拆分收养 / `79f42221` 新鲜度门 / `b4ed9028` write_set advisory / `68c08fc0` 自动重启 watcher;新测 **46 面全绿**(含 NEUTER),终跑 **226/226**,collect **8565** 0 err)。
+- **背景(owner 命题):** worktree 隔离实验失败根因=合并工作没有属主(1 人类整合者)+「完成」定义脱节(分支 commit≠运行中服务器生效);药方=共享树打底+机械守卫治「切会话覆盖」+生效契约自动化。
+- **件1 原子写:** `write_file`/`apply_diff`/`insert_content`/upload 四处落盘统一 `_atomic_write_bytes`(tmp 同目录+fsync+`os.replace`),并发读者/importer 永远只见完整旧文件或完整新文件——sibling 写一半造成 ~160s IndentationError 窗口的那类事故根除;保权限位/符号链接写穿/失败留旧内容零临时泄漏。9 测。
+- **途中收养(`a526c664`):** write_tools 包拆分(磁盘包+未暂存删单体)裸奔 24h+——运行中服务器已在用包布局,HEAD 里只有我刚提交的 `_ops.py`,任何 `git stash/clean` 即炸生产导入且我的测试跟着死。把 `__init__/_paths/_text` 补跟踪 + stage 单体删除,HEAD==运行树。**这就是「修改不生效」陷阱的现实样本**,顺手闭环。
+- **件2 新鲜度令牌:** `lib/write_freshness.py`(leaf:(conv,path)→(mtime_ns,size) 有界 LRU)+ `handlers/_write_freshness_gate.py`(task 感知,镜像 read-gate 双形状:单目标拒绝/批量逐路径跳过 badge 'partial: stale')。读成功+写成功都盖章;写前指纹失配=别人动过→拒绝并教重读。**fail-open 三方向**:无令牌/文件当前不存在/检查出错全放行;但「消失后重生」判陈旧拒绝(期内自纠:初版消失即丢令牌会让重生穿透,测试先钉错语义被抓后反转钉正确语义)。NEUTER:常量指纹比较器→撞击检测消失,证明拒绝由指纹比较驱动。12 测。
+- **件3 write_set advisory(observe 不拦):** 写成功后对照本 conv 认领 epic 的 write_set 并集,越界→WARNING+audit+feed note(面板可见);无认领/纯标签条目/看板故障/跨根绝对路径全静默;(conv,path) 每进程警一次,board 读 TTL 10s。11 测。
+- **件4 生效契约自动化:** `lib/auto_restart.py`(**`TOFU_AUTO_RESTART=1` 默认关**)——HEAD 比对 boot 基线,前置束(git checkout + HEAD 动 + 无关停 + **零在跑任务**=手动重启端点同款守卫,检查出错 fail-closed),忙时延迟不丢(排空后下一拍触发),触发后线程退出;`_perform_server_reexec(reason)` 从 `_deferred_reexec` 提取,端点与 watcher 共享执行约。14 测。
+- **生效边界(诚实,自我指涉的活样本):** 守卫代码已 committed 但 running server **未重启**——本会话自己的写仍走旧 handler(logs 里 WriteSetAdvisory/FreshGate 条目全部来自 pytest 进程,零来自本会话真实写)。watcher 基线在 boot 时抓取,boot 前的 commit 不触发;**首次启用仍需一次手动重启**。dirty-tree 检测为 v1 有意非目标(重启会撞飞在跑的编辑者;committed work 才是单位)。
+
 ### 2026-07-25 — 论文播客功能设计落地(纯设计,零生产代码改动):`docs/PAPER_PODCAST_DESIGN.md` + 看板 epic `pt_80943e765e9444ca`。
 - **需求(owner):** 论文阅读模式加播客;公式/图等难口播元素必须妥善处理;听完要有真收获不要空话;路上/睡前听一两遍;可导出音频。owner 直觉「用报告生成」经三路代码勘察证实**正确**。
 - **勘察(3 侦察 agent):** ①后端——报告已是最强素材库(10 节结构/已插图/术语审计,`paper_reports` 表 8–25K 字符),翻译引擎的段落感知分块(2400 字符)可复用,任务/事件流模式直接套 report_engine;②前端——paper-reader 右侧 tab 即插点(`_switchPaperTab`),PDF 已有 Range 流式服务可仿,全项目无音频先例;③TTS——**全项目零 TTS**(只有 ASR),但 OpenAI 兼容 `POST /audio/speech` 接入路径清晰(照抄 lib/transcription 全链:能力标签/槽位/探测/计费/前端排除)。

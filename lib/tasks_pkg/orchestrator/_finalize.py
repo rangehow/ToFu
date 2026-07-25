@@ -1142,16 +1142,7 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
                            tid, _pre_emit_err, exc_info=True)
     try:
         from lib.tasks_pkg.autopilot import maybe_run_autopilot
-        ap_result = maybe_run_autopilot(task)
-        if ap_result:
-            done_evt['autopilotNextTaskId'] = ap_result['next_task_id']
-            done_evt['autopilotVuMessage'] = ap_result['vu_msg']
-            # Stash on the task dict too so the baton is transport-agnostic:
-            # the poll route surfaces the SAME handoff, so a client that fell
-            # back to /api/chat/poll (SSE stripped / timed out) still attaches
-            # to the follow-up instead of stranding it (sidebar dot / pause
-            # button / translation desync until manual refresh).
-            task['_autopilot_followup'] = ap_result
+        maybe_run_autopilot(task)
     except Exception as _ap_err:
         logger.warning('[Autopilot] hook raised: %s — continuing without '
                        'follow-up (this turn will still be persisted)',

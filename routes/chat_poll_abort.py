@@ -200,13 +200,10 @@ def chat_poll(task_id):
             r['peerInjects'] = task['_peerInjects']
         if task.get('_userSteerInjects'):
             r['userSteerInjects'] = task['_userSteerInjects']
-        # ★ Autopilot follow-up baton — mirror the SSE done event so a client
-        #   on the poll fallback path attaches to the spawned follow-up task
-        #   instead of stranding it (see lib/tasks_pkg/orchestrator.py).
-        _ap_followup = task.get('_autopilot_followup')
-        if _ap_followup:
-            r['autopilotNextTaskId'] = _ap_followup['next_task_id']
-            r['autopilotVuMessage'] = _ap_followup['vu_msg']
+        # pt_8dc03017 cutover: the autopilot baton no longer rides the done /
+        # poll. The successor is discovered via the conv→latest-task supersede
+        # index (the follow-up registers under the real convId), so there is no
+        # `autopilotNextTaskId`/`autopilotVuMessage` to mirror here.
         # ★ Include endpoint turns for endpoint mode tasks so _pollFallback
         #   can reconstruct the full multi-turn conversation.  Also surface
         #   the same authoritative terminal signals the SSE state snapshot

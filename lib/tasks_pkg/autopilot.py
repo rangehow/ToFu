@@ -1226,11 +1226,6 @@ def _run_autopilot_kick(task: dict) -> None:
     try:
         ap_result = maybe_run_autopilot(task)
         if ap_result:
-            done_evt['autopilotNextTaskId'] = ap_result['next_task_id']
-            done_evt['autopilotVuMessage'] = ap_result['vu_msg']
-            # Same transport-agnostic stash as the natural-stop path so a
-            # client that fell back to /api/chat/poll still gets the baton.
-            task['_autopilot_followup'] = ap_result
             logger.info('[Autopilot kick %s] VU took over conv=%s → follow-up %s',
                         tid, task.get('convId', '')[:8],
                         ap_result['next_task_id'][:8])

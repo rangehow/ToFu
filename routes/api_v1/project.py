@@ -35,6 +35,7 @@ Routes (legacy snake_case path → new hyphen-case path):
   POST   /api/v1/project/board/block        — Project Brain: human flags epic blocked
   POST   /api/v1/project/board/reopen       — Project Brain: human reopens an epic
   GET    /api/v1/project/brain/summary      — Project Brain: collab-bar summary
+  GET    /api/v1/project/brain/attention    — Project Brain: everything awaiting the human
   GET    /api/v1/project/brain/peers        — Project Brain: LIVE peer/team roster
   GET    /api/v1/project/brain/influence    — Project Brain: per-conversation influence
   POST   /api/v1/project/brain/peer-message — Project Brain: human nudges a sibling conversation
@@ -1073,6 +1074,38 @@ def project_brain_summary():
                      project_path, e, exc_info=True)
 
         return api_internal_error(e, source='api_v1.project.brain_summary')
+
+
+@api_v1_project_bp.route('/api/v1/project/brain/attention', methods=['GET'])
+@require_auth
+@api_meta(
+    summary='Everything genuinely waiting on the human, priority-ordered',
+    description=(
+        'The "needs you" SINGLE SOURCE OF TRUTH. Read-only aggregation across '
+        'the Board (epics halted on a structured question), the Charter '
+        '(pending proposals) and presence (live file-overlap advisories), '
+        'keyed strictly on the explicit ``path``. Returns ``{items, blocking, '
+        'advisory, needsYou, waiting}`` where ``items`` is priority-ordered '
+        '(``blocking`` first) and each item carries its own resolving context '
+        '+ a ``tab`` deep-link target. ``waiting`` counts epics on a '
+        'SELF-EXPIRING cooldown — reported for reassurance, deliberately NOT '
+        'listed as items, because they need no human action. ``convId`` is '
+        'optional and only marks ``mine`` on items; it never filters, because '
+        'attention is project-scoped.'),
+    tags=['project'],
+)
+def project_brain_attention():
+    project_path = _decoded_path_arg()
+    if not project_path:
+        return api_bad_request('path is required', field='path')
+    conv_id = _decoded_path_arg('convId')
+    try:
+        from lib.conversations.project_attention import build_attention_items
+        return api_ok(build_attention_items(project_path, conv_id or ''))
+    except Exception as e:
+        logger.error('[Project.v1] brain attention failed for %s: %s',
+                     project_path, e, exc_info=True)
+        return api_internal_error(e, source='api_v1.project.brain_attention')
 
 
 

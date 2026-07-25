@@ -6,6 +6,16 @@
  *
  *   { phase: {phase, detail, detailKey, detailArgs, tools, toolContext, round} | null }
  *
+ * ★ KEY CONTRACT (guarded by tests/test_frontend_convview_apply_guards.py):
+ *   a session object may carry ONLY the `phase` key — forever. Adding
+ *   `content`/`thinking`/`toolRounds` (or any new key) re-opens the exact
+ *   "second fact source beside the message document" door the §7 retirement
+ *   closed: a global mutable Map off-document is streamBufs v2 the moment it
+ *   holds anything but runtime phase. Turn content/thinking/rounds project
+ *   from the message document; the session is the ONE exception because
+ *   phase has no document home. Extending the key set is an architectural
+ *   decision — it must land with the guard updated in the same commit.
+ *
  * WRITERS (the only allowed ones):
  *   - the SSE PHASE event handler (sse_pipeline.js) — live events AND
  *     warm-reconnect replayed events share that one dispatch path, so a
@@ -14,9 +24,13 @@
  *     which includes PHASE events — docs/RENDER_CONTRACT_PHASE3_5_PLAN.md §7.4).
  *   - the poll fallback (sse_poll_fallback.js) — server truth for phase.
  *   - VU streaming deltas (streaming_render.js) — phase clear/set mirror.
- * READERS:
- *   - health_stream_timer._streamFrameArg (the updateStreamingUI frame) and
- *     _updateStreamTimerUI (the liveness banner) — the ONLY paint readers.
+ * READERS (the full pinned surface — pinned by the read-surface guard):
+ *   - health_stream_timer.js :824  _updateStreamTimerUI (the liveness banner)
+ *   - health_stream_timer.js :943  _streamFrameArg (the updateStreamingUI frame)
+ *   - health_stream_timer.js :997  _streamFrameArg checkpoint fallback
+ *   - sse_pipeline.js        :1034 delta_reset frame phase
+ *   - stream_lifecycle.js    :140  reconnect re-render
+ *   (2 paint readers in health_stream_timer + 3 frame-projection reads)
  *
  * Presence semantics: an entry EXISTS only while its stream is live —
  * clearStreamSession() is called by every stop/teardown path (twStop,

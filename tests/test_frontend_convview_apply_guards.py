@@ -391,14 +391,17 @@ _RETIRED_TOKEN = 'stream-seg-narration'
 
 
 def _strip_js_comments(src: str) -> str:
-    """Remove // and /* */ comments ONLY — string CONTENTS are preserved.
+    """Remove // and /* */ comments in ONE tokenizer pass.
 
-    The ④ token guard looks for class ASSIGNMENTS, which live inside string
-    literals (`narr.className = '… stream-seg-narration'`). A stripper that
-    also drops string contents is blind to exactly what it must catch (the
-    NEUTER caught this). String tracking is still needed so an apostrophe
-    inside a string can't fake a comment opener — but the string's bytes are
-    kept verbatim.
+    '…' and "…" strings are kept VERBATIM (the ④ token guard needs class
+    assignments, and the NEUTER asserts the token is visible). Only
+    BACKTICK template-literal bodies are replaced with an empty `` —
+    their contents often contain apostrophes and ${…} expressions that
+    would otherwise leave a stray quote in "code" for a later scan to
+    mispair and swallow everything after it (the cascade that hid
+    `streamSessions.get` in sse_pipeline.js). One pass = no two-stage
+    mispairing; single/double-quoted strings stay intact so assignments
+    like `x.className = '… stream-seg-narration'` remain visible.
     """
     out = []
     i, n = 0, len(src)
@@ -410,7 +413,20 @@ def _strip_js_comments(src: str) -> str:
         elif two == '/*':
             j = src.find('*/', i + 2)
             i = n if j < 0 else j + 2
-        elif src[i] in ('"', "'", '`'):
+        elif src[i] == '`':
+            # template literal: strip its body to `` (kills inner apostrophes)
+            i += 1
+            while i < n:
+                if src[i] == '\\':
+                    i += 2
+                elif src[i] == '`':
+                    i += 1
+                    break
+                else:
+                    i += 1
+            out.append('``')
+        elif src[i] in ('"', "'"):
+            # single/double-quoted string: keep VERBATIM (contents matter)
             q = src[i]
             out.append(src[i])
             i += 1
@@ -684,15 +700,110 @@ def test_streambufs_fully_retired():
             continue
         with open(path, encoding='utf-8') as f:
             code = _strip_js_comments(f.read())
-        code = re.sub(r'"(?:\\.|[^"\\])*"', '""', code)
-        code = re.sub(r"'(?:\\.|[^'\\])*'", "''", code)
-        code = re.sub(r'`(?:\\.|[^`\\])*`', '``', code)
         if re.search(r'\bstreamBufs\b', code):
             offenders.append(os.path.relpath(path, ROOT))
     assert not offenders, (
         'streamBufs resurrected in production JS code: ' + ', '.join(offenders)
         + ' — the §7 retirement deleted it (content/thinking/rounds → the '
         'message document; phase → streamSessions)')
+
+
+_SESSION_READER_ALLOWLIST = {
+    'static/js/core/health_stream_timer.js',  # :824/:943/:997 banner + frame + fallback
+    'static/js/ui/sse_pipeline.js',           # :1034 delta_reset frame phase
+    'static/js/ui/stream_lifecycle.js',       # :140 reconnect re-render
+}
+
+# Keys a session object may NEVER carry (the streamBufs-v2 door: any of these
+# beside the document re-opens the second-fact-source treadmill).
+_FORBIDDEN_SESSION_KEYS = (
+    'content', 'thinking', 'toolRounds', 'text', 'markdown', 'html',
+    'message', 'body', 'rounds', 'segments',
+)
+
+
+def test_stream_session_keys_are_phase_only():
+    """A streamSessions entry may carry ONLY the `phase` key — forever.
+
+    Owner §7-验收 cond 1: the phase home and the retired streamBufs are the
+    same architectural family (a global mutable Map off the document). The
+    writer-surface guard alone does NOT stop a future `session.content = x`
+    — that re-opens the second-fact-source door behind a different key.
+    This guard scans ALL production code for a forbidden key being READ or
+    WRITTEN on any session-shaped expression (streamSessions.get(...),
+    getStreamSession(...), _sess / session / sess / Sess locals), plus the
+    module's own creation shape.
+    """
+    offenders = []
+    # 1) Production readers/writers: forbidden key on a session expression.
+    sess_exprs = (
+        r'streamSessions\.get\([^)]*\)', r'getStreamSession\([^)]*\)',
+        r'\b_sess\b', r'\bsess\b', r'\bsession\b', r'\bSess\b',
+    )
+    for path in glob.glob(os.path.join(JS_DIR, '**', '*.js'), recursive=True):
+        base = os.path.basename(path)
+        if base.endswith('.nc_copy.js') or base.startswith('bundle-'):
+            continue
+        rel = os.path.relpath(path, ROOT)
+        with open(path, encoding='utf-8') as f:
+            code = _strip_js_comments(f.read())
+        for key in _FORBIDDEN_SESSION_KEYS:
+            for expr in sess_exprs:
+                if re.search(expr + r'\s*\??\.\s*' + key + r'\b', code):
+                    offenders.append(f'{rel}: session.{key}')
+    # 2) The module itself must create the exact { phase } shape only.
+    with open(_STREAM_SESSION, encoding='utf-8') as f:
+        mod = _strip_js_comments(f.read())
+    if not re.search(r's\s*=\s*\{\s*phase\s*:\s*null\s*\}', mod):
+        offenders.append(
+            'stream_session.js: getStreamSession no longer creates the exact '
+            '{ phase: null } shape — the key contract was loosened at the source')
+    for key in _FORBIDDEN_SESSION_KEYS:
+        if re.search(r's\s*\??\.\s*' + key + r'\s*=', mod) or \
+           re.search(r'getStreamSession\([^)]*\)\s*\??\.\s*' + key + r'\s*=', mod):
+            offenders.append(f'stream_session.js: writes session.{key}')
+    assert not offenders, (
+        'streamSession key contract violated (only `phase` is allowed): '
+        + '; '.join(sorted(set(offenders))))
+
+
+def test_stream_session_reader_surface_pinned():
+    """The read surface is exactly the 3-file / 5-site allowlist (owner cond 1).
+
+    The doc header now names every reader; this guard is what keeps doc and
+    reality from diverging again (a NEW reader anywhere else must be added
+    to the allowlist AND the doc header in the same commit).
+    """
+    readers = set()
+    for path in glob.glob(os.path.join(JS_DIR, '**', '*.js'), recursive=True):
+        base = os.path.basename(path)
+        if base.endswith('.nc_copy.js') or base.startswith('bundle-'):
+            continue
+        rel = os.path.relpath(path, ROOT)
+        if rel == 'static/js/ui/stream_session.js':
+            continue
+        with open(path, encoding='utf-8') as f:
+            code = _strip_js_comments(f.read())
+        if re.search(r'\bstreamSessions\.get\s*\(|\bgetStreamSession\s*\(', code):
+            readers.add(rel)
+    assert readers == _SESSION_READER_ALLOWLIST, (
+        f'streamSession read surface changed: {sorted(readers)} != '
+        f'{sorted(_SESSION_READER_ALLOWLIST)} — update the allowlist AND the '
+        'stream_session.js doc header in the same commit')
+
+
+def test_NEUTER_session_key_guard_detects_injected_content():
+    """NEUTER (owner §7-验收): an injected `session.content = x` MUST trip the
+    key guard — proves the guard watches the key set, not just the symbols."""
+    poisoned = (
+        'var s = streamSessions.get(cid);\n'
+        's.content = "stale draft";\n'
+        'getStreamSession(cid).thinking = "x";\n')
+    for key in ('content', 'thinking'):
+        assert re.search(
+            r'(?:streamSessions\.get\([^)]*\)|getStreamSession\([^)]*\)|\bs\b)'
+            r'\s*\??\.\s*' + key + r'\b', poisoned), (
+                f'NEUTER FAILED: key guard blind to injected session.{key}')
 
 
 def test_stream_session_module_contract():
@@ -740,6 +851,9 @@ if __name__ == '__main__':
                test_no_convview_missing_raw_fallbacks,
                test_full_repaints_route_through_replaceAll,
                test_streambufs_fully_retired,
+               test_stream_session_keys_are_phase_only,
+               test_stream_session_reader_surface_pinned,
+               test_NEUTER_session_key_guard_detects_injected_content,
                test_stream_session_module_contract):
         try:
             fn()

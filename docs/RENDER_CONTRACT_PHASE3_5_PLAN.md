@@ -1,9 +1,15 @@
 # RENDER_CONTRACT Phase 3.5 — make the DOM-apply layer single-seamed too
 
-> **Status: §5 steps 1–4 LANDED** (1: design + failing-first skeleton; 2: `ConvView.apply` +
-> translation_render convergence + census join + boot hard check; 3: seam hardening
-> ①collapse/②live-guard/③order-invariant/④dead-CSS + §2.5/2.6/2.8 convergence;
-> 4: SEAM-2 fold + raw-fallback deletion + boot-check RUNTIME proof).
+> **Status: Phase 3.5 COMPLETE** — §5 steps 1–5 + §7 (streamBufs retirement) + §5-final
+> (the allowlist freeze) all LANDED. Steps: 1 design + failing-first skeleton; 2
+> `ConvView.apply` + translation_render convergence + census join + boot hard check;
+> 3 seam hardening ①collapse/②live-guard/③order-invariant/④dead-CSS + §2.5/2.6/2.8
+> convergence; 4 SEAM-2 fold + raw-fallback deletion + boot-check RUNTIME proof;
+> 5 zero bare `renderChat(` + §7.4 RED anchor; §7 streamBufs fully retired
+> (phase → streamSessions entity, live-only writes); §5-final: the ratchet is
+> FROZEN as the floor and the session key contract (`{phase}` only) is guarded
+> (streamBufs-v2 door closed). Byte-parity: narration anchor GREEN (step 2),
+> reconnect anchor GREEN (§7).
 > Companion: [`RENDER_CONTRACT.md`](RENDER_CONTRACT.md) §1 Invariant 1 (`DOM = render(messages, rev)`),
 > [`RENDER_CONTRACT_PHASE3_PLAN.md`](RENDER_CONTRACT_PHASE3_PLAN.md) (the message-document reducer).
 > This plan closes the gap Phase 3 did NOT close: **Phase 3 unified the message-document
@@ -373,9 +379,26 @@ Sum(non-seam) = 157.
    even turn_nav.js / finish_info.js were migrated. **§7.4 RED anchor landed in the
    same commit** (owner condition 3 — failing-first evidence locked into history before
    the §7 retirement).
-   Remaining after step 5: the §7 streamBufs retirement itself (phase → reducer live
-   session state per the §7.4 ruling; flips the anchor GREEN) + the §5-final
-   STRUCT/PENDING allowlist declaration.
+   §7 (the streamBufs retirement) and §5-final (the allowlist freeze) both LANDED
+   after this step — see §7 + the §5-final note below.
+
+### §5-final — the allowlist freeze (LANDED)
+
+The ratchet baseline is now the PERMANENT FLOOR: the remaining STRUCT-ONLY +
+PENDING-PLACEHOLDER sites (§2 tables, `keep`/`sanctioned exception` rows) are the
+declared allowlist — no further convergence is planned, and any NEW raw write above
+the floor fails the ratchet. The live projection engine (streaming_ui.js) is the one
+sanctioned CONTENT-DERIVED exception: its per-frame writes project the SAME
+assistantMsg the reducer mutates (a full `renderMessage` per rAF is a perf regression
+the lazy-window machinery exists to avoid), and its second data source (streamBufs)
+was retired in §7, so it now reads the document + streamSessions only.
+
+**streamBufs-v2 door closed (owner §7-验收 cond 1):** the session key contract is
+guarded — a `streamSessions` entry may carry ONLY `{phase}` (any `content`/`thinking`/
+`toolRounds` key beside the document re-opens the second-fact-source treadmill). Guards:
+`test_stream_session_keys_are_phase_only` (static, NEUTER: injected `session.content`
+flips red) + `test_stream_session_reader_surface_pinned` (read surface = exactly the
+3-file / 5-site allowlist, matching the stream_session.js doc header).
 
 ## 6. Boundary
 

@@ -55,6 +55,21 @@ Note: the instance-A "kill" leaves one zombie orchestrator thread parked on
 the hung mock stream; it is released only AFTER all assertions (mock.close())
 so it can never clobber the state under test, and it writes only to the
 unique test-conv (session-purged, ``test-conv%`` LIKE pattern).
+
+Auto-heal is OPT-IN — the default is display-only + MANUAL resume
+------------------------------------------------------------------
+``TOFU_BOOT_AUTO_DISPATCH`` is DEFAULT OFF (owner-mandated, see
+lib/tasks_pkg/manager/_recovery.py): an out-of-the-box restart only marks
+the corpse interrupted + tags the tail ``killed`` for the sidebar — it
+does NOT re-dispatch anything. The real user's repair path on a default
+deploy is the MANUAL Continue button. Layer 2 pins the OPT-IN auto path;
+Layer 2b (``test_restart_default_mode_manual_resume``) pins the DEFAULT
+path: display-only boot facts, then the frontend's REAL manual-resume
+wire sequence (POST /api/v1/chat/continue → taskId, or fallback → pop +
+allowTruncate PUT + resend) completing the Studio turn with the tool
+surface intact. Read "it repairs itself after a restart" honestly: AUTO
+only when explicitly enabled; by DEFAULT it repairs itself WHEN THE USER
+CLICKS CONTINUE — and neither path may degrade Studio to plain chat.
 """
 from __future__ import annotations
 
@@ -153,6 +168,16 @@ class _MockLLM:
         outer = self
 
         class _Handler(BaseHTTPRequestHandler):
+            def setup(self):
+                super().setup()
+                # Kill Nagle on the mock socket: heartbeat bytes must leave
+                # the instant they are written (see _HEARTBEAT's comment).
+                try:
+                    self.connection.setsockopt(
+                        socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                except OSError:
+                    pass
+
             def log_message(self, *a):  # silence per-request noise
                 pass
 
@@ -278,27 +303,58 @@ class _MockLLM:
                    'slowly enough that the 5s crash-checkpoint throttle ',
                    'fires between drips, leaving a durable running row ')
     _DRIP_GAP_S = 6.0
+    # Heartbeat: an SSE COMMENT (parser-invisible — no content, no
+    # checkpoint side effects) padded to ~4 KiB. The padding is load-
+    # bearing: tiny writes get Nagle-coalesced and arrive in ~6s bursts,
+    # so the dispatcher's ~5s urllib3 read_timeout fires mid-drip →
+    # "premature close" → the zombie's turn auto-retry EATS the scripted
+    # tool_call stream slot (the full-suite flake, proven via the RawSSE
+    # anomaly ring + a raw-requests repro). 4 KiB forces an immediate
+    # segment on every heartbeat, so the client's read timeout always
+    # resets while the zombie stays deterministically inert.
+    _HEARTBEAT = ': ' + ('hb' * 2048) + '\n\n'
 
     def _drip_stream(self, model):
-        # Each drip is real activity (no stall detector fires) and lands
-        # >5s after the previous one, so the orchestrator's delta-driven
+        # Content drips land >5s apart so the orchestrator's delta-driven
         # ``checkpoint_task_partial`` throttle writes a status='running'
-        # task_results row mid-stream — the SIGKILL corpse.
+        # task_results row mid-stream — the SIGKILL corpse. SSE comment
+        # heartbeats every ~2s fill the gaps (and the post-drip park) so
+        # the client READ-TIMEOUT never fires: without them the parked
+        # zombie's stream dies "premature close" ~5s after the last drip,
+        # the production TURN AUTO-RETRY (correctly) re-fires, and the
+        # zombie's retry EATS the scripted stream-#2 tool_call slot before
+        # instance B's resume gets there (the full-suite flake — order-
+        # dependent, invisible in isolation).
         for i, w in enumerate(self._DRIP_WORDS):
             delta = {'content': w}
             if i == 0:
                 delta['role'] = 'assistant'
             yield _sse(_chunk(model, delta))
-            # Interruptible gap: teardown (hang_event.set) wakes instantly.
-            if self.hang_event.wait(self._DRIP_GAP_S):
-                return
-        # The "kill": parked mid-stream — connection open, no more bytes,
-        # until the test releases it during teardown (post-assertions).
-        self.hang_event.wait(timeout=900)
+            if i < len(self._DRIP_WORDS) - 1:
+                # ~6s to the next content drip, heartbeat every ~2s.
+                for _ in range(3):
+                    if self.hang_event.wait(2.0):
+                        return
+                    yield self._HEARTBEAT
+        # The "kill": parked mid-stream — heartbeats keep the socket alive
+        # and the zombie deterministically inert (it NEVER makes a second
+        # request, so stream #2 always belongs to the recovery under test)
+        # until teardown releases it.
+        while not self.hang_event.wait(2.0):
+            yield self._HEARTBEAT
         yield 'data: [DONE]\n\n'
 
     def close(self):
         self.hang_event.set()
+        try:
+            self._server.shutdown()
+        except Exception:
+            pass
+        try:
+            self._server.server_close()
+        except Exception:
+            pass
+        self._thread.join(timeout=5)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -664,12 +720,22 @@ result_path, conv_id = sys.argv[1], sys.argv[2]
 sys.path.insert(0, os.getcwd())
 out = {'ok': False, 'conv_id': conv_id}
 
+_SKIP = os.environ.get('TOFU_E2E_SKIP_RECOVERY') == '1'
+_MANUAL = os.environ.get('TOFU_E2E_MANUAL') == '1'
+_NEUTER_WRITE = os.environ.get('TOFU_E2E_NEUTER_WRITE') == '1'
+_PROJECT_PATH = os.environ.get('TOFU_E2E_PROJECT_PATH') or ''
+
 try:
     import server
     from server import app
     from lib.database import DOMAIN_CHAT, get_thread_db, init_db
 
-    if os.environ.get('TOFU_E2E_SKIP_RECOVERY') == '1':
+    def _conv_row(db):
+        return db.execute(
+            'SELECT messages, settings, title FROM conversations'
+            ' WHERE id=? AND user_id=1', (conv_id,)).fetchone()
+
+    if _SKIP:
         # ── NEUTER MODE: amputate the recovery path entirely ──
         # Only bring the DB up (init_db is the non-recovery part of
         # _init_database). No shutdown classification, no stale-task sweep,
@@ -689,48 +755,128 @@ try:
         out['descriptor'] = server._DEFERRED_BOOT_DISPATCH
         from lib.tasks_pkg import run_deferred_boot_dispatch
         run_deferred_boot_dispatch(server._DEFERRED_BOOT_DISPATCH)
-
-        # Wait for the re-dispatched killed-recovery carrier to finish.
         from lib.tasks_pkg.manager import tasks, tasks_lock
-        carrier = None
-        deadline = time.time() + 240
-        while time.time() < deadline:
+
+        if _MANUAL:
+            # ══ DEFAULT-DEPLOY MODE (TOFU_BOOT_AUTO_DISPATCH unset) ══
+            # The boot did its display-only half; NOTHING may auto-dispatch.
             with tasks_lock:
-                cands = [t for t in tasks.values()
-                         if t.get('convId') == conv_id
-                         and t.get('_killed_recovery')]
-            if cands:
-                carrier = cands[0]
-                if carrier.get('status') in ('done', 'error', 'aborted'):
-                    break
-            time.sleep(0.25)
-        if carrier is not None:
-            out['carrier_id'] = carrier['id']
-            out['carrier_status'] = carrier.get('status')
-            out['carrier_finish'] = carrier.get('finishReason')
-            _cfg = carrier.get('config') or {}
-            out['carrier_chatMode'] = _cfg.get('chatMode')
-            out['carrier_projectPath'] = _cfg.get('projectPath')
+                out['auto_carrier_found'] = any(
+                    t.get('convId') == conv_id for t in tasks.values())
+            db0 = get_thread_db(DOMAIN_CHAT)
+            row0 = _conv_row(db0)
+            if row0:
+                out['conv_messages_before'] = row0['messages']
+                out['conv_settings_before'] = row0['settings']
+            if _NEUTER_WRITE:
+                import lib.project_mod.tools as pmt
+                pmt._EXEC_HANDLERS['write_file'] = (
+                    lambda fn_args, base_path, cid, tid2, kwargs:
+                        'NEUTERED: write_file handler removed by mutation test')
+                out['write_neutered'] = True
 
-        # Reconnect to the stream the way a frontend does after a restart:
-        # Last-Event-ID warm replay — this replays the REAL done event (the
-        # synthesized late-done would carry meta only, no committedMessage).
-        if carrier is not None:
-            async def _grab(tid):
+            # ── The frontend's REAL manual-resume wire sequence ──
+            # continueAssistant(): POST /api/v1/chat/continue → taskId, or
+            # {fallback:'regenerate'} → pop tail + allowTruncate PUT + resend.
+            _cfg = {'chatMode': 'studio', 'model': 'mock-studio-1',
+                    'projectPath': _PROJECT_PATH, 'autoApply': True,
+                    'searchMode': 'off', 'fetchEnabled': False,
+                    'memoryEnabled': False}
+            _settings = {'model': 'mock-studio-1', 'chatMode': 'studio',
+                         'projectPath': _PROJECT_PATH, 'autoApply': True,
+                         'searchMode': 'off', 'fetchEnabled': False,
+                         'memoryEnabled': False}
+
+            async def _manual_resume():
                 async with app.test_client() as c:
-                    resp = await c.get('/api/chat/stream/' + tid,
-                                       headers={'Last-Event-ID': '0'})
-                    return await resp.get_data(as_text=True)
-            try:
-                out['sse_raw'] = asyncio.run(_grab(carrier['id']))
-            except Exception as e:
-                out['sse_error'] = repr(e)
+                    resp = await c.post('/api/v1/chat/continue',
+                                        json={'convId': conv_id,
+                                              'config': _cfg})
+                    data = await resp.get_json()
+                    out['continue_http'] = resp.status_code
+                    out['continue_data'] = data
+                    if data.get('fallback') == 'regenerate':
+                        out['resume_via'] = 'regenerate-resend'
+                        msgs = json.loads(row0['messages'] or '[]')
+                        last_user = next(
+                            (m for m in reversed(msgs)
+                             if m.get('role') == 'user'), {})
+                        put = await c.put(
+                            '/api/v1/conversations/' + conv_id,
+                            json={'title': row0['title'],
+                                  'messages': msgs[:-1],
+                                  'settings': json.loads(
+                                      row0['settings'] or '{}'),
+                                  'allowTruncate': True})
+                        out['pop_put_http'] = put.status_code
+                        resp2 = await c.post('/api/v1/chat/send', json={
+                            'convId': conv_id,
+                            'message': {'text': last_user.get('content') or ''},
+                            'config': _cfg, 'settings': _settings})
+                        d2 = await resp2.get_json()
+                        out['resend_http'] = resp2.status_code
+                        out['resend_data'] = d2
+                        return d2.get('taskId')
+                    out['resume_via'] = 'continue'
+                    return data.get('taskId')
 
-    # ── DB report (both modes) ──
+            tid = asyncio.run(_manual_resume())
+            out['resume_task_id'] = tid
+            if tid:
+                async def _grab(t):
+                    async with app.test_client() as c:
+                        r = await c.get('/api/chat/stream/' + t)
+                        return await r.get_data(as_text=True)
+                try:
+                    out['sse_raw'] = asyncio.run(_grab(tid))
+                except Exception as e:
+                    out['sse_error'] = repr(e)
+                with tasks_lock:
+                    rt = tasks.get(tid)
+                if rt is not None:
+                    _rc = rt.get('config') or {}
+                    out['resume_chatMode'] = _rc.get('chatMode')
+                    out['resume_projectPath'] = _rc.get('projectPath')
+        else:
+            # ══ OPT-IN AUTO MODE (TOFU_BOOT_AUTO_DISPATCH=1) ══
+            # Wait for the re-dispatched killed-recovery carrier to finish.
+            carrier = None
+            deadline = time.time() + 240
+            while time.time() < deadline:
+                with tasks_lock:
+                    cands = [t for t in tasks.values()
+                             if t.get('convId') == conv_id
+                             and t.get('_killed_recovery')]
+                if cands:
+                    carrier = cands[0]
+                    if carrier.get('status') in ('done', 'error', 'aborted'):
+                        break
+                time.sleep(0.25)
+            if carrier is not None:
+                out['carrier_id'] = carrier['id']
+                out['carrier_status'] = carrier.get('status')
+                out['carrier_finish'] = carrier.get('finishReason')
+                _cfg = carrier.get('config') or {}
+                out['carrier_chatMode'] = _cfg.get('chatMode')
+                out['carrier_projectPath'] = _cfg.get('projectPath')
+
+            # Reconnect to the stream the way a frontend does after a
+            # restart: Last-Event-ID warm replay — this replays the REAL
+            # done event (the synthesized late-done carries meta only).
+            if carrier is not None:
+                async def _grab(tid):
+                    async with app.test_client() as c:
+                        resp = await c.get('/api/chat/stream/' + tid,
+                                           headers={'Last-Event-ID': '0'})
+                        return await resp.get_data(as_text=True)
+                try:
+                    out['sse_raw'] = asyncio.run(_grab(carrier['id']))
+                except Exception as e:
+                    out['sse_error'] = repr(e)
+
+    # ── DB report (all modes) ──
     db = get_thread_db(DOMAIN_CHAT)
-    row = db.execute(
-        'SELECT messages, settings FROM conversations WHERE id=? AND user_id=1',
-        (conv_id,)).fetchone()
+    row = _conv_row(db)
     if row:
         out['conv_messages'] = row['messages']
         out['conv_settings'] = row['settings']
@@ -752,11 +898,24 @@ print('INSTANCE-B-DONE ok=%s' % out['ok'])
 
 
 def _launch_instance_b(tmp_path, conv_id: str, *, mock_url: str,
-                       skip_recovery: bool) -> dict:
-    """Launch instance B as a separate OS process sharing the session DB."""
+                       mode: str = 'auto', neuter_write: bool = False,
+                       project_path: str = '') -> dict:
+    """Launch instance B as a separate OS process sharing the session DB.
+
+    mode='auto'   → TOFU_BOOT_AUTO_DISPATCH=1 (opt-in auto self-repair)
+    mode='manual' → DEFAULT deploy (no dispatch env): display-only boot,
+                    then the boot script drives the frontend's REAL
+                    manual-resume wire sequence (continue → fallback-resend)
+    mode='skip'   → NEUTER: the recovery path is amputated entirely
+    """
     import lib.database._core as dbc
 
-    data_dir = tmp_path / ('instanceB-nc' if skip_recovery else 'instanceB')
+    assert mode in ('auto', 'manual', 'skip'), mode
+    tag = {'auto': 'instanceB', 'manual': 'instanceB-manual',
+           'skip': 'instanceB-nc'}[mode]
+    if neuter_write:
+        tag += '-nw'
+    data_dir = tmp_path / tag
     cfg_dir = data_dir / 'data' / 'config'
     cfg_dir.mkdir(parents=True)
     _write_provider_config(str(cfg_dir), mock_url)
@@ -768,8 +927,7 @@ def _launch_instance_b(tmp_path, conv_id: str, *, mock_url: str,
         json.dump({'state': 'running', 'pid': 999999, 'host': 'instance-A',
                    'boot_ts': time.time(), 'reason': 'boot'}, f)
 
-    result_path = tmp_path / ('b_result_nc.json' if skip_recovery
-                              else 'b_result.json')
+    result_path = tmp_path / (tag + '_result.json')
     env = os.environ.copy()
     env.update({
         'TOFU_DB_BACKEND': 'sqlite',
@@ -779,13 +937,24 @@ def _launch_instance_b(tmp_path, conv_id: str, *, mock_url: str,
         'TOFU_MLOCK': '0',
         'TRADING_ENABLED': '0',
         'PPTX_TRANSLATE_ENABLED': '0',
-        'TOFU_BOOT_AUTO_DISPATCH': '1',
         'LLM_API_KEYS': 'test-key',
         'LLM_API_KEY': 'test-key',
         'NO_PROXY': '127.0.0.1,localhost',
         'no_proxy': '127.0.0.1,localhost',
     })
-    if skip_recovery:
+    # conftest sets TOFU_BOOT_AUTO_DISPATCH=1 SESSION-WIDE in this process —
+    # os.environ.copy() would leak the opt-in switch into every mode. Strip
+    # it first; only 'auto' re-adds it. (First-run failure of Layer 2b was
+    # exactly this leak: default mode booted with auto-dispatch ON.)
+    env.pop('TOFU_BOOT_AUTO_DISPATCH', None)
+    if mode == 'auto':
+        env['TOFU_BOOT_AUTO_DISPATCH'] = '1'   # the OPT-IN switch
+    elif mode == 'manual':
+        env['TOFU_E2E_MANUAL'] = '1'           # default deploy: NO auto
+        env['TOFU_E2E_PROJECT_PATH'] = project_path
+        if neuter_write:
+            env['TOFU_E2E_NEUTER_WRITE'] = '1'
+    else:
         env['TOFU_E2E_SKIP_RECOVERY'] = '1'
     proc = subprocess.run(
         [sys.executable, '-c', _BOOT_SCRIPT, str(result_path), conv_id],
@@ -799,6 +968,45 @@ def _launch_instance_b(tmp_path, conv_id: str, *, mock_url: str,
         f'{result.get("traceback", "")[-2000:]}\n'
         f'stderr:\n{proc.stderr[-2000:]}')
     return result
+
+
+def _send_and_kill_studio_turn(client, conv_id: str, project_dir,
+                               cfg_dir: str, mock_url: str) -> str:
+    """Instance A: run a Studio turn until its running checkpoint is
+    durable, then SIGKILL it (registry drop, DB corpse untouched).
+
+    The KILLED turn is itself a Studio turn bound to the project — the
+    SETTINGS carry the tier so whatever resumes it later (auto carrier OR
+    manual continue) resolves chatMode/projectPath/autoApply from
+    conv_settings (both spawn paths pass config=None / minimal overrides).
+    Returns the killed task_id.
+    """
+    with _point_app_at_mock(cfg_dir, mock_url):
+        body = _send_message(
+            client, conv_id, 'answer me please',
+            config={'chatMode': 'studio', 'model': 'mock-studio-1',
+                    'projectPath': str(project_dir), 'autoApply': True,
+                    'searchMode': 'off', 'fetchEnabled': False,
+                    'memoryEnabled': False},
+            settings={'model': 'mock-studio-1', 'chatMode': 'studio',
+                      'projectPath': str(project_dir), 'autoApply': True,
+                      'searchMode': 'off', 'fetchEnabled': False,
+                      'memoryEnabled': False})
+        task_id = body['taskId']
+        # Wait until the mid-stream checkpoint is durable, then SIGKILL
+        # instance A: drop the in-memory task, DB corpse untouched.
+        _wait_running_checkpoint(conv_id)
+        from lib.tasks_pkg.manager import tasks, tasks_lock
+        with tasks_lock:
+            assert task_id in tasks, 'task vanished before the kill'
+            tasks.pop(task_id, None)
+        # Sanity: the corpse is exactly what an OS kill leaves behind.
+        from lib.database import DOMAIN_CHAT, get_thread_db
+        corpse = get_thread_db(DOMAIN_CHAT).execute(
+            'SELECT status FROM task_results WHERE task_id=?',
+            (task_id,)).fetchone()
+        assert corpse['status'] == 'running', corpse['status']
+    return task_id
 
 
 @pytest.mark.unit
@@ -823,38 +1031,13 @@ def test_restart_self_repair_two_app_instances(flask_client, tmp_path):
     mock = _MockLLM(scenario='studio_recover_write')
     conv_id = 'test-conv-kill-' + uuid.uuid4().hex[:12]
     try:
-        with _point_app_at_mock(str(tmp_path / 'cfg'), mock.base_url):
-            # The KILLED turn is itself a Studio turn bound to the project —
-            # settings carry the tier so the re-dispatched carrier resolves
-            # them from conv_settings (spawn_task passes config=None).
-            body = _send_message(
-                flask_client, conv_id, 'answer me please',
-                config={'chatMode': 'studio', 'model': 'mock-studio-1',
-                        'projectPath': str(project), 'autoApply': True,
-                        'searchMode': 'off', 'fetchEnabled': False,
-                        'memoryEnabled': False},
-                settings={'model': 'mock-studio-1', 'chatMode': 'studio',
-                          'projectPath': str(project), 'autoApply': True,
-                          'searchMode': 'off', 'fetchEnabled': False,
-                          'memoryEnabled': False})
-            task_id = body['taskId']
-            # Wait until the mid-stream checkpoint is durable, then SIGKILL
-            # instance A: drop the in-memory task, DB corpse untouched.
-            _wait_running_checkpoint(conv_id)
-            from lib.tasks_pkg.manager import tasks, tasks_lock
-            with tasks_lock:
-                assert task_id in tasks, 'task vanished before the kill'
-                tasks.pop(task_id, None)
-            # Sanity: the corpse is exactly what an OS kill leaves behind.
-            from lib.database import DOMAIN_CHAT, get_thread_db
-            corpse = get_thread_db(DOMAIN_CHAT).execute(
-                'SELECT status FROM task_results WHERE task_id=?',
-                (task_id,)).fetchone()
-            assert corpse['status'] == 'running', corpse['status']
+        task_id = _send_and_kill_studio_turn(
+            flask_client, conv_id, project, str(tmp_path / 'cfg'),
+            mock.base_url)
 
         result = _launch_instance_b(tmp_path, conv_id,
                                     mock_url=mock.base_url,
-                                    skip_recovery=False)
+                                    mode='auto')
 
         # ── B's real startup path found + re-dispatched the killed turn ──
         descriptor = result.get('descriptor') or {}
@@ -952,26 +1135,13 @@ def test_NEUTER_restart_without_recovery_leaves_corpse(flask_client, tmp_path):
     mock = _MockLLM(scenario='studio_recover_write')
     conv_id = 'test-conv-kill-nc-' + uuid.uuid4().hex[:12]
     try:
-        with _point_app_at_mock(str(tmp_path / 'cfg'), mock.base_url):
-            body = _send_message(
-                flask_client, conv_id, 'answer me please',
-                config={'chatMode': 'studio', 'model': 'mock-studio-1',
-                        'projectPath': str(project), 'autoApply': True,
-                        'searchMode': 'off', 'fetchEnabled': False,
-                        'memoryEnabled': False},
-                settings={'model': 'mock-studio-1', 'chatMode': 'studio',
-                          'projectPath': str(project), 'autoApply': True,
-                          'searchMode': 'off', 'fetchEnabled': False,
-                          'memoryEnabled': False})
-            task_id = body['taskId']
-            _wait_running_checkpoint(conv_id)
-            from lib.tasks_pkg.manager import tasks, tasks_lock
-            with tasks_lock:
-                tasks.pop(task_id, None)
+        task_id = _send_and_kill_studio_turn(
+            flask_client, conv_id, project, str(tmp_path / 'cfg'),
+            mock.base_url)
 
         result = _launch_instance_b(tmp_path, conv_id,
                                     mock_url=mock.base_url,
-                                    skip_recovery=True)
+                                    mode='skip')
 
         # ── The mutation held: nothing was recovered, nothing re-dispatched ──
         assert result.get('neutered') is True
@@ -1000,6 +1170,173 @@ def test_NEUTER_restart_without_recovery_leaves_corpse(flask_client, tmp_path):
             'NEUTER failed: carrier config present without the recovery path'
         assert not (project / _RECOVER_WRITE_PATH).exists(), \
             'NEUTER failed: recovered marker written without the recovery path'
+    finally:
+        mock.close()
+
+
+@pytest.mark.unit
+def test_restart_default_mode_manual_resume(flask_client, tmp_path):
+    """Layer 2b — DEFAULT deploy: display-only boot + MANUAL resume.
+
+    ``TOFU_BOOT_AUTO_DISPATCH`` is DEFAULT OFF (owner-mandated). Out of the
+    box a restart does NOT heal anything by itself: the boot marks the
+    corpse interrupted + tags the tail ``killed`` for the sidebar, and the
+    actual repair happens when the user clicks Continue. This pins the
+    default path end-to-end (owner's gap callout — the opt-in auto path
+    proved nothing about it):
+
+      1. DISPLAY-ONLY CONTRACT: no auto carrier, corpse ``interrupted``,
+         tail tagged ``killed``, no recovery attempts consumed.
+      2. The frontend's REAL manual-resume wire sequence —
+         ``POST /api/v1/chat/continue`` → ``taskId``, or
+         ``{fallback:'regenerate'}`` → pop tail + ``allowTruncate`` PUT +
+         resend — completes the Studio turn: resume task keeps
+         chatMode='studio' + projectPath, REALLY executes write_file
+         (recovered_marker.txt on disk), and the done-frame
+         committedMessage is byte-identical to the DB tail.
+    """
+    project = tmp_path / 'proj'
+    project.mkdir()
+    (project / 'seed.py').write_text('# seed file\n')
+    mock = _MockLLM(scenario='studio_recover_write')
+    conv_id = 'test-conv-manual-' + uuid.uuid4().hex[:12]
+    try:
+        task_id = _send_and_kill_studio_turn(
+            flask_client, conv_id, project, str(tmp_path / 'cfg'),
+            mock.base_url)
+
+        result = _launch_instance_b(tmp_path, conv_id,
+                                    mock_url=mock.base_url,
+                                    mode='manual',
+                                    project_path=str(project))
+
+        # ── 1. DISPLAY-ONLY CONTRACT (the default boot annotated +
+        #       SURFACED the corpse but did NOT dispatch) ──
+        # The descriptor is the deferred-dispatch PLAN — recover() returns
+        # it whenever the sweep found work, regardless of the gate. The
+        # GATE lives in run_deferred_boot_dispatch
+        # (_boot_auto_dispatch_enabled, default OFF): display-only = the
+        # conv shows up in the plan yet NOTHING was spawned.
+        descriptor = result.get('descriptor') or {}
+        assert conv_id in (descriptor.get('killed_conv_ids') or []), \
+            f'default boot must still SURFACE the killed conv for manual ' \
+            f'resume: {descriptor}'
+        assert result.get('auto_carrier_found') is False, \
+            'default boot auto-dispatched a task — opt-in behaviour leaked'
+        rows = {r[0]: r[1] for r in result['task_rows']}
+        assert rows.get(task_id) == 'interrupted', rows
+        before = json.loads(result['conv_messages_before'])
+        killed_msg = before[-1]
+        assert killed_msg.get('role') == 'assistant'
+        assert killed_msg.get('interruptedReason') == 'killed', \
+            f"default boot must tag the corpse tail 'killed': " \
+            f'{killed_msg.get("interruptedReason")!r}'
+        assert (killed_msg.get('content') or '').startswith('Partial answer')
+        before_settings = json.loads(result['conv_settings_before'] or '{}')
+        assert before_settings.get('activeTaskId') in (None, ''), \
+            before_settings.get('activeTaskId')
+        kr = before_settings.get('_killedRecovery') or {}
+        assert not kr.get('attempts'), \
+            f'auto path consumed attempts in default mode: {kr}'
+
+        # ── 2. MANUAL RESUME (the frontend's real wire sequence) ──
+        assert result.get('continue_http') == 200, result.get('continue_data')
+        assert result.get('resume_via') in ('continue', 'regenerate-resend')
+        if result['resume_via'] == 'regenerate-resend':
+            assert result.get('pop_put_http') == 200
+            assert result.get('resend_http') == 200, result.get('resend_data')
+        resume_tid = result.get('resume_task_id')
+        assert resume_tid, \
+            f'manual resume produced no task: {result.get("continue_data")}'
+        # Studio tier survived the manual resume (not degraded to chat).
+        assert result.get('resume_chatMode') == 'studio', \
+            f'manual resume lost chatMode: {result.get("resume_chatMode")!r}'
+        assert result.get('resume_projectPath') == str(project), \
+            f'manual resume lost projectPath: {result.get("resume_projectPath")!r}'
+
+        assert result.get('sse_raw'), result.get('sse_error')
+        frames = _parse_sse_frames(result['sse_raw'])
+        done = [e for e in frames if isinstance(e, dict) and e.get('type') == 'done']
+        assert done, f'no done frame: {[e.get("type") for e in frames]}'
+        done = done[-1]
+        assert not done.get('error'), done.get('error')
+        assert done.get('finishReason') == 'stop', done.get('finishReason')
+
+        # ── THE DECISIVE ASSERTION: the manually-resumed turn REALLY
+        # executed a project tool — Studio manual repair is not a text blob.
+        marker = project / _RECOVER_WRITE_PATH
+        assert marker.is_file(), \
+            'manual resume never executed write_file — Studio manual ' \
+            'self-repair degraded to plain text'
+        assert marker.read_text() == _RECOVER_WRITE_CONTENT
+
+        # ── BYTE-IDENTITY: done.committedMessage == post-resume DB tail ──
+        committed = done.get('committedMessage')
+        assert committed, 'done carries no committedMessage'
+        after = json.loads(result['conv_messages'])
+        tail = after[-1]
+        assert tail.get('role') == 'assistant'
+        _assert_tail_matches_committed(tail, committed)
+        assert tail.get('finishReason') == 'stop'
+        assert _RECOVERED_TEXT in (tail.get('content') or '')
+
+        # ── The corpse stayed marked interrupted; the resume row is
+        # done; and NO third task row exists — anything the default boot
+        # had auto-dispatched would have left one ──
+        assert rows.get(task_id) == 'interrupted', rows
+        assert rows.get(resume_tid) == 'done', rows
+        extra_rows = set(rows) - {task_id, resume_tid}
+        assert not extra_rows, \
+            f'unexpected extra task row(s) — something auto-dispatched: {extra_rows}'
+
+        # ── Independent parent-side re-read ──
+        messages_p, _settings_p = _conv_tail(conv_id)
+        _assert_tail_matches_committed(messages_p[-1], committed)
+    finally:
+        mock.close()
+
+
+@pytest.mark.unit
+def test_NEUTER_default_mode_resume_neutered_write(flask_client, tmp_path):
+    """NEUTER proof for Layer 2b (owner gate #3).
+
+    Instance B's write_file EXECUTION handler is amputated BEFORE the
+    manual resume (env switch in the boot script — monkeypatch cannot
+    cross the process boundary). The resume still runs to completion (the
+    tool result is the neuter string), but NO file may land on disk —
+    Layer 2b's decisive disk assertion goes red under this mutation.
+    """
+    project = tmp_path / 'proj'
+    project.mkdir()
+    mock = _MockLLM(scenario='studio_recover_write')
+    conv_id = 'test-conv-manual-nc-' + uuid.uuid4().hex[:12]
+    try:
+        _send_and_kill_studio_turn(
+            flask_client, conv_id, project, str(tmp_path / 'cfg'),
+            mock.base_url)
+
+        result = _launch_instance_b(tmp_path, conv_id,
+                                    mock_url=mock.base_url,
+                                    mode='manual', neuter_write=True,
+                                    project_path=str(project))
+
+        assert result.get('write_neutered') is True
+        # The resume REALLY ran (the mutation does not block the turn):
+        assert result.get('resume_task_id'), result.get('continue_data')
+        frames = _parse_sse_frames(result.get('sse_raw') or '')
+        done = [e for e in frames if isinstance(e, dict) and e.get('type') == 'done']
+        assert done and done[-1].get('finishReason') == 'stop', \
+            f'neutered resume did not complete: {[e.get("type") for e in frames]}'
+        # Sanity: the model DID request the write and the round closed.
+        streams = [h for h in mock.history if h.get('stream')]
+        assert any(m.get('role') == 'tool'
+                   and m.get('tool_call_id') == 'call_e2e_recover'
+                   for h in streams[1:] for m in (h.get('messages') or [])), \
+            'neutered run: the write_file round did not even happen'
+
+        # THE NEUTERED OUTCOME: Layer 2b's decisive assertion is red here.
+        assert not (project / _RECOVER_WRITE_PATH).exists(), \
+            'NEUTER failed: marker written despite the amputated handler'
     finally:
         mock.close()
 

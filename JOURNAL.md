@@ -1,5 +1,13 @@
 # Project Journal
 
+### 2026-07-25(续2) — e2e Layer 2b 落地:默认路径(display-only + 手动 resume)双实例测试 + 全套 flake 根修(commit 见下,1 文件 +289/-71,套件 **6/6 ×3 复跑稳定**(41.9/42.1/41.5s),相邻 76/76,collect **8568** 0 err)。
+- **口径修正(owner 点名):** `TOFU_BOOT_AUTO_DISPATCH` 是 DEFAULT OFF(owner-mandated)——开箱重启只标 interrupted + 打 killed 章,**不会自己修复**;真实用户的修复路径是「手动点继续」。Layer 2 验的是 opt-in 自动自愈,默认路径此前零覆盖。测试文件 docstring 与汇报口径已写明:自动自愈是 opt-in,默认是 display-only + 手动 resume。
+- **Layer 2b(默认路径):** 实例 B **不设** env 启动(注意:conftest 会话级设了 TOFU_BOOT_AUTO_DISPATCH=1,os.environ.copy() 会泄漏——manual/skip 模式显式 pop,首红即此坑)→ 断言「浮现但不派发」:descriptor 含本 conv(计划存在≠派发,门控在 run_deferred_boot_dispatch 消费侧,我最初的 descriptor-is-None 断言把两者混了,修正)+ 零 auto carrier + 残尸 interrupted + killed 章 + attempts=0 + **零第三任务行**。然后走前端真实手动恢复线序(main_regen_continue.js:continueAssistant):`POST /api/v1/chat/continue` → 本例命中 checkpoint 分支(无工具轮但 content 前缀可续)→ taskId → SSE 到 done;断言 resume config 保住 chatMode='studio' + projectPath、**recovered_marker.txt 真实落盘字节精确**(决定性:手动修复没退化成纯文本)、done.committedMessage 与 DB 尾部逐字节一致、父进程独立重读。
+- **NEUTER-2b:** 实例 B 手动 resume 前 amputate write_file handler(env 开关,boot 脚本内执行——monkeypatch 跨不了进程界),resume 照跑完成但磁盘无文件,决定性断言真转红。
+- **全套 flake 根修(三层证据链):** 全套运行时 2b 偶发红(marker 未写)。①RawSSE anomaly ring:僵尸流在 word2 后 ~5.1s 死,期间心跳已收——排除「5s 读超时」与「服务端主动断」;②裸 requests 复现:mock 流 54s+ 存活,但**小包被 Nagle 合并成 ~6s 突发**到达;③结论:dispatcher ~5s urllib3 read_timeout 在突发间隙触发 → premature close → 生产 turn auto-retry(正确行为)让僵尸重试**吃掉脚本化的流#2 tool_call 槽位**,实例 B 的 resume 只能拿 #3 纯文本。修:心跳换成 **4KB SSE 注释**(大包强制即时发出,解析器不可见=零内容零检查点副作用)+ mock socket **TCP_NODELAY**。此后僵尸确定性惰性,永不发第二请求,流#2 恒属被测恢复路径。
+- **顺手:** `_MockLLM.close()` 补 `server.shutdown()+server_close()+join`(owner 点名长会话资源泄漏,原来靠 daemon 线程兜底)。
+- **生产代码零改动**:两次首红均为测试自身问题(env 泄漏 / 断言混淆计划与派发 / Nagle 合并),未发现手动 resume 丢档位的现行 bug——本测试此后是该行为的永久守卫。
+
 ### 2026-07-25 — Phase 3.5 键契约别名数据流闭合(streamBufs-v2 钥匙孔关死)(commit `9b80b715`,1 文件 +88/-13,16/16 守卫绿,30/30 相邻,collect 8565 0 err)。owner 真实文件回环抓到:键守卫只认直调形态 + 4 个固定局部名,`const _s = streamSessions.get(cid); _s.content = 'v2'` **绿着放行** —— 而别名恰是写 streamBufs v2 最自然的写法,上一轮关的门钥匙孔还在。
 - **闭合:** `_collect_session_aliases(code)` —— 每文件先收集所有被直接赋值 session 表达式的局部名(`const|let|var X = ...` + 裸重赋值 `X = ...` 两形态;解构不收集——`{phase}` 只取允许键);键守卫现对 直调表达式 + 4 个具名局部 + **每个收集到的别名** 一起扫禁键。
 - **NEUTER 回环(owner 验收形态,真实 pytest 双证):** 守卫内嵌 NEUTER 扩到别名形态(直调红 + 别名红 + 删别名收集器后别名注入**恢复绿**,证别名闭合承重非冗余);另在真实 `health_stream_timer.js` 上跑完整回环:别名注入 → pytest RED → 恢复 → GREEN;直接注入 → RED → 恢复 → GREEN。

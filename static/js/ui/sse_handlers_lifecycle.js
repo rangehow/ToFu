@@ -208,7 +208,7 @@ function _handleMessagesSnapshot(ev, c) {
            * (kind / model / params / roundNum / taskId) so the per-task round
            * log appends this round instead of overwriting the latest. */
           { kind: ev.kind, model: ev.model, params: ev.params,
-            roundNum: ev.roundNum, taskId: taskId },
+            roundNum: ev.roundNum, taskId: taskId, turn: ev.turn || '' },
         );
 
     /* ═══ Endpoint mode events ═══ */

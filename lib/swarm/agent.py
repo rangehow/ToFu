@@ -47,6 +47,66 @@ from lib.swarm.tools import ARTIFACT_TOOLS
 from lib.tool_input_repair import ingest_tool_call
 
 logger = get_logger(__name__)
+def _emit_request_snapshot(agent, round_num: int) -> str:
+    """Persist a Request Inspector snapshot for ONE sub-agent LLM round.
+
+    Epic pt_e3dc7198e7e34bb1 (P4): sub-agent LLM calls bypass ``run_task``
+    (no ``messages_snapshot``) and their proxy tasks set ``_suppressEvents``
+    — so the parent stream must stay clean. We persist DIRECTLY to the
+    durable ``task_events`` log under the agent's own inspector id
+    ``{parent_task_id}#agent:{agent_id}``: no SSE fan-out, no parent-round
+    pollution, the suppression contract untouched. The Request Inspector
+    folds ``task_events`` server-side, so the row is retrievable per task
+    id without any live emission.
+
+    ``kind='request'`` + the frozen params schema
+    (docs/DEBUG_PANEL_REDESIGN.md §3.3) + ``turn='swarm-agent'``.
+    Returns the inspector id ('' on failure — NEVER raises:
+    observability must not break the agent loop).
+    """
+    parent_id = (agent.parent_task or {}).get('id', '') or ''
+    if not parent_id:
+        return ''
+    inspector_id = f'{parent_id}#agent:{agent.agent_id}'
+    try:
+        from lib.agent_core.events import EventType, build_event
+        from lib.tasks_pkg.event_log import append_persistent_event
+        from lib.tasks_pkg.manager import _strip_base64_for_snapshot
+        from lib.tasks_pkg.wire_messages import apply_wire_sanitize
+        _wire = apply_wire_sanitize(
+            [dict(m) for m in agent.messages],
+            conv_id=(agent.parent_task or {}).get('convId', '') or '',
+            provider_id=(agent.parent_task or {}).get('provider_id') or '')
+        snap = _strip_base64_for_snapshot(_wire)
+        role = getattr(agent.spec, 'role', '') or ''
+        append_persistent_event(
+            inspector_id,
+            round_num - 1,  # one row per round; PK (task_id, event_id)
+            build_event(
+                EventType.MESSAGES_SNAPSHOT,
+                kind='request',
+                model=agent.model,
+                turn='swarm-agent',
+                agentId=agent.agent_id,
+                agentRole=role,
+                params={
+                    'maxTokens': 64000,
+                    'temperature': 1.0,
+                    'thinkingEnabled': agent.thinking_enabled,
+                    'thinkingDepth': None,
+                    'preset': '',
+                    'responseFormat': None,
+                    'stream': True,
+                },
+                roundNum=round_num,
+                label=f'[{role}] Round {round_num} 请求前 · {len(snap)}条',
+                messages=snap,
+            ))
+        return inspector_id
+    except Exception as e:
+        logger.debug('[Agent:%s] request-inspector snapshot failed '
+                     '(non-fatal): %s', agent.agent_id, e)
+        return ''
 
 
 def _build_dispatch_retry_phase(attempt: int, reason: str,
@@ -644,6 +704,10 @@ class SubAgent:
             #   agent_id is constant across rounds, so the prefix cache key
             #   never shifts mid-session. Released in _cleanup().
             body['_task_id'] = self.agent_id
+            # ★ Request Inspector (P4): persist THIS round's LLM request
+            #   under the agent's own inspector id — makes sub-agent calls
+            #   visible without touching the parent stream (see helper).
+            _emit_request_snapshot(self, round_num)
 
             content_parts = []
             thinking_parts = []

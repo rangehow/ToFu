@@ -346,9 +346,9 @@
     getRequests: (taskId) =>
       get(`/api/v1/tasks/${encodeURIComponent(taskId)}/requests`,
           { onError: 'null' }),
-    getRequestPayload: (taskId, roundNum) =>
+    getRequestPayload: (taskId, roundNum, turn) =>
       get(`/api/v1/tasks/${encodeURIComponent(taskId)}/requests/${encodeURIComponent(roundNum)}`,
-          { onError: 'null' }),
+          { query: turn ? { turn } : {}, onError: 'null' }),
   };
 
   // optimizer -------------------------------------------------------

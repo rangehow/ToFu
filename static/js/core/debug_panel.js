@@ -82,7 +82,9 @@ function _debugRecordSnapshot(taskId, rec) {
   if (rec.kind === "state") {
     t.states.push(rec);
   } else {
-    const key = String(rec.roundNum);
+    /* Endpoint phases re-number rounds from 1 — key by turn|roundNum so a
+     * planner R1 and a worker R1 never overwrite each other (P4). */
+    const key = rec.turn ? rec.turn + '|' + rec.roundNum : String(rec.roundNum);
     if (!(key in t.rounds)) t.roundOrder.push(key);
     t.rounds[key] = rec;
   }
@@ -354,6 +356,7 @@ function showMessagesInDebug(messages, label, isUpdate, forConvId, tools, approx
     _debugRecordSnapshot(meta.taskId, {
       kind: meta.kind || "request",
       roundNum: meta.roundNum,
+      turn: meta.turn || "",
       label: label,
       model: meta.model || "",
       params: meta.params || null,

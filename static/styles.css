@@ -579,6 +579,9 @@ html[data-rail] .folder-quickadd{display:none}
 .debug-prefix-fold svg{transition:transform .2s}
 .debug-prefix-fold.open svg{transform:rotate(90deg)}
 .debug-msg-new{border-left:2px solid var(--accent)}
+.ri-turn-badge{padding:0 5px;font-size:9px;font-weight:600;color:#a78bfa;background:rgba(139,110,246,0.12);border:1px solid rgba(139,110,246,0.35);border-radius:3px;flex-shrink:0}
+.ri-task-agent{padding-left:20px}
+.ri-agent-badge{color:#60a5fa;font-size:9.5px;font-weight:600}
 body.ri-open .chat-container{margin-right:min(780px,94vw);transition:margin-right .22s ease}
 @media (max-width:900px){
   body.ri-open .chat-container{margin-right:0}

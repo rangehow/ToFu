@@ -226,7 +226,8 @@ def task_request_payload(task_id, round_num):
     snapshot (expired, state-only, or unknown)."""
     from lib.tasks_pkg.request_inspector import get_request_payload
     try:
-        payload = get_request_payload(task_id, round_num)
+        payload = get_request_payload(
+            task_id, round_num, turn=request.args.get('turn', ''))
     except Exception as e:
         logger.error('[api_v1.tasks] request payload failed for task=%s '
                      'round=%s: %s', task_id[:8], round_num, e, exc_info=True)

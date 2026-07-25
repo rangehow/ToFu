@@ -56,6 +56,9 @@ def _emit_round_usage(task, round_num, model, usage, *, tag=''):
             'roundNum': round_num,
             'model': model,
             'tag': tag,
+            # Same endpoint-phase tag as the messages_snapshot (P4) — the
+            # Request Inspector joins attempts per (turn, roundNum).
+            'turn': task.get('_endpoint_phase') or '',
             'tokensIn': int(tokens_in or 0),
             'tokensOut': int(out or 0),
             'usage': dict(usage),

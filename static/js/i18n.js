@@ -898,6 +898,11 @@ var _i18n = {
   'ri.live': { zh: '在飞', en: 'live' },
   'ri.openTip': { zh: '在请求检视器中定位产生此回复的 LLM 请求', en: 'Locate the LLM request(s) that produced this reply in the Request Inspector' },
   'ri.prefixFold': { zh: '与 {base} 相同的前 {k} 条已折叠 — 点击展开', en: 'Prefix of {k} message(s) identical to {base} collapsed — click to expand' },
+  'ri.turnPlanning': { zh: '规划', en: 'Planner' },
+  'ri.turnWorking': { zh: '执行', en: 'Worker' },
+  'ri.turnReviewing': { zh: '评审', en: 'Critic' },
+  'ri.coverageAmbiguous': { zh: '旧 endpoint 任务：轮次未标相位（planner/worker/critic 同号不可区分）', en: 'Legacy endpoint task: rounds carry no phase tag (planner/worker/critic rounds share numbers)' },
+  'ri.turnSwarmAgent': { zh: '子代理', en: 'sub-agent' },
 
   // ══════════════════════════════════════
   //  Settings — Tabs

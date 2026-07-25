@@ -15,7 +15,7 @@ The guard is AST-based (regexes would choke on the multi-line call sites):
   1. Scans ``lib/`` for every ``build_event(EventType.MESSAGES_SNAPSHOT, …)``
      call AND for raw ``{'type': 'messages_snapshot', …}`` dict literals
      (which would bypass the contract — none may exist).
-  2. Asserts the site count stays exactly 4 (a NEW snapshot site must make a
+  2. Asserts the site count stays exactly 5 (a NEW snapshot site must make a
      conscious kind decision here; a removed site must update this guard).
   3. Asserts each site's kind value and the request site's frozen params
      schema.
@@ -44,6 +44,9 @@ EXPECTED_SITES = {
     os.path.join('lib', 'tasks_pkg', 'tool_dispatch', '_pipeline.py'): 'state',
     os.path.join('lib', 'tasks_pkg', 'orchestrator', '_post_loop.py'): 'state',
     os.path.join('lib', 'tasks_pkg', 'orchestrator', '_finalize.py'): 'state',
+    # P4 (epic pt_e3dc7198e7e34bb1): swarm sub-agent per-round LLM request
+    # (persisted directly under '{parent}#agent:{id}' — see agent.py).
+    os.path.join('lib', 'swarm', 'agent.py'): 'request',
 }
 REQUEST_SITE = os.path.join('lib', 'tasks_pkg', 'orchestrator', '_run.py')
 
@@ -193,8 +196,8 @@ def _validate(sites: list) -> list:
 
 def test_snapshot_sites_all_stamped_with_kind():
     sites = _scan_lib(LIB)
-    assert len(sites) == 4, (
-        f'expected exactly 4 messages_snapshot emission sites, found '
+    assert len(sites) == 5, (
+        f'expected exactly 5 messages_snapshot emission sites, found '
         f'{len(sites)}: {[(r, ln) for r, ln, _ in sites]}')
     problems = _validate(sites)
     assert not problems, 'snapshot contract violations:\n' + '\n'.join(problems)

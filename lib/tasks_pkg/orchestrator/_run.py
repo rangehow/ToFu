@@ -797,6 +797,12 @@ def run_task(task: dict[str, Any]) -> None:
                     # kind='state' (NOT LLM requests).
                     kind='request',
                     model=model,
+                    # Endpoint turns (Planner/Worker/Critic) each re-run
+                    # run_task with their OWN round numbering — tag the
+                    # driver's phase so the Request Inspector can tell
+                    # same-numbered rounds apart (epic pt_e3dc7198e7e34bb1).
+                    # '' for normal (non-endpoint) tasks.
+                    turn=task.get('_endpoint_phase') or '',
                     params={
                         'maxTokens': max_tokens,
                         'temperature': temperature,

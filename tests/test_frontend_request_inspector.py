@@ -270,7 +270,7 @@ def test_neuter_detail_delegation_flips_red():
     shipped = os.path.join(JS_DIR, 'core', 'request_inspector.js')
     with open(shipped, encoding='utf-8') as f:
         src = f.read()
-    anchor = 'async function _riSelectRound(taskId, roundNum, el) {'
+    anchor = 'async function _riSelectRound(taskId, roundNum, el, turn) {'
     assert anchor in src, 'delegation anchor drifted — update the neuter'
     neutered = src.replace(anchor, anchor + '\n  if (true) return;', 1)
     assert neutered != src

@@ -248,6 +248,154 @@ def test_routes_registered_on_v1_blueprint():
     assert '/api/v1/tasks/<task_id>/requests/<round_num>' in rules
 
 
+# ─────────────────────────────────────────────────────────────────────────
+#  P4 (epic pt_e3dc7198e7e34bb1): turn tags + swarm sub-agent rows
+# ─────────────────────────────────────────────────────────────────────────
+
+def _snap_turn(turn, round_num=1, n_msgs=3, content='x' * 100, **extra):
+    p = _snap('request', round_num, n_msgs=n_msgs, tools=0)
+    p['turn'] = turn
+    p['messages'] = [{'role': 'user', 'content': content}] * n_msgs
+    p.update(extra)
+    return p
+
+
+@pytest.fixture()
+def task_turns():
+    """Endpoint-shaped task: same-numbered rounds across two phases."""
+    tid = f'ri-t-{uuid.uuid4().hex[:8]}'
+    _seed(tid, [
+        ('endpoint_iteration', {'iteration': 0, 'phase': 'planning'}),
+        ('messages_snapshot', _snap_turn('working', 1, content='worker-body')),
+        ('round_usage', {'roundNum': 1, 'model': 'm-w', 'tag': 'R1',
+                         'turn': 'working', 'tokensIn': 100, 'tokensOut': 10,
+                         'usage': {'trace_id': 'tr-w',
+                                   'stream_elapsed_ms': 500}}),
+        ('messages_snapshot', _snap_turn('reviewing', 1, content='critic-body')),
+        ('round_usage', {'roundNum': 1, 'model': 'm-c', 'tag': 'R1',
+                         'turn': 'reviewing', 'tokensIn': 200, 'tokensOut': 20,
+                         'usage': {'trace_id': 'tr-c',
+                                   'stream_elapsed_ms': 700}}),
+    ])
+    yield tid
+    _cleanup(tid)
+
+
+def test_turn_tagged_rounds_stay_distinct(task_turns):
+    from lib.tasks_pkg.request_inspector import fold_request_log
+    fold = fold_request_log(task_turns)
+    assert fold['requestCount'] == 2
+    turns = sorted(r['turn'] for r in fold['requests'])
+    assert turns == ['reviewing', 'working']
+    # attempts join per (turn, roundNum) — no cross-phase leakage
+    by_turn = {r['turn']: r for r in fold['requests']}
+    assert [a['traceId'] for a in by_turn['working']['attempts']] == ['tr-w']
+    assert [a['traceId'] for a in by_turn['reviewing']['attempts']] == ['tr-c']
+    # endpoint + turn tags → fully covered, chip removed
+    assert fold['coverage'] == 'full'
+    assert 'coverageReason' not in fold
+
+
+def test_endpoint_untagged_is_ambiguous_not_uncovered(task_endpoint):
+    from lib.tasks_pkg.request_inspector import fold_request_log
+    fold = fold_request_log(task_endpoint)
+    assert fold['coverage'] == 'partial'
+    assert fold['coverageReason'] == 'endpoint-untagged'
+
+
+def test_payload_turn_disambiguation(task_turns):
+    from lib.tasks_pkg.request_inspector import get_request_payload
+    critic = get_request_payload(task_turns, 1, turn='reviewing')
+    assert critic is not None and critic['turn'] == 'reviewing'
+    assert critic['messages'][0]['content'] == 'critic-body'
+    worker = get_request_payload(task_turns, 1, turn='working')
+    assert worker is not None and worker['messages'][0]['content'] == 'worker-body'
+    # no turn → last-wins (the critic snapshot, emitted second)
+    last = get_request_payload(task_turns, 1)
+    assert last is not None and last['messages'][0]['content'] == 'critic-body'
+    # unknown turn → None
+    assert get_request_payload(task_turns, 1, turn='planning') is None
+
+
+def test_swarm_agent_emission_end_to_end():
+    """The agent.py helper persists under '{parent}#agent:{id}' with
+    kind='request' + turn='swarm-agent' — and the PARENT's own log stays
+    clean (suppression contract intact)."""
+    from types import SimpleNamespace
+
+    from lib.swarm.agent import _emit_request_snapshot
+    parent_id = f'ri-p-{uuid.uuid4().hex[:8]}'
+    agent = SimpleNamespace(
+        parent_task={'id': parent_id, 'convId': 'c1', 'provider_id': ''},
+        spec=SimpleNamespace(role='research', id='x1'),
+        agent_id='agent-research-x1',
+        model='m-agent',
+        thinking_enabled=True,
+        messages=[
+            {'role': 'system', 'content': 'sys'},
+            {'role': 'user', 'content': 'objective'},
+        ],
+    )
+    iid = _emit_request_snapshot(agent, 1)
+    assert iid == f'{parent_id}#agent:agent-research-x1'
+    try:
+        from lib.tasks_pkg.request_inspector import fold_request_log
+        fold = fold_request_log(iid)
+        assert fold['requestCount'] == 1
+        row = fold['requests'][0]
+        assert row['turn'] == 'swarm-agent'
+        assert row['agentId'] == 'agent-research-x1'
+        assert row['agentRole'] == 'research'
+        assert row['model'] == 'm-agent'
+        assert row['params']['maxTokens'] == 64000
+        # parent log untouched — no snapshot leaked to the parent stream
+        from lib.tasks_pkg.event_log import read_events
+        assert read_events(parent_id) == []
+        # no parent id → helper no-ops cleanly
+        agent2 = SimpleNamespace(**{**agent.__dict__,
+                                    'parent_task': {'id': ''}})
+        assert _emit_request_snapshot(agent2, 1) == ''
+    finally:
+        _cleanup(iid, parent_id)
+
+
+def test_list_conv_tasks_includes_swarm_agents():
+    from lib.database import DOMAIN_CHAT, get_thread_db
+    from lib.database._core_schema import TASK_RESULTS, upsert
+    conv = f'ri-sc-{uuid.uuid4().hex[:8]}'
+    parent = f'ri-sp-{uuid.uuid4().hex[:8]}'
+    db = get_thread_db(DOMAIN_CHAT)
+    now = int(time.time() * 1000)
+    upsert(db, TASK_RESULTS,
+           {'task_id': parent, 'conv_id': conv, 'content': '',
+            'status': 'done', 'created_at': now, 'completed_at': now},
+           conflict_cols=['task_id'],
+           insert_cols=['task_id', 'conv_id', 'content', 'status',
+                        'created_at', 'completed_at'],
+           update_cols=[], commit=True, retry=False)
+    agent_tid = f'{parent}#agent:agent-research-x1'
+    _seed(parent, [('messages_snapshot', _snap('request', 1, n_msgs=2))])
+    _seed(agent_tid, [
+        ('messages_snapshot',
+         _snap_turn('swarm-agent', 1, n_msgs=2,
+                    agentId='agent-research-x1', agentRole='research')),
+    ])
+    try:
+        from lib.tasks_pkg.request_inspector import list_conv_tasks
+        out = list_conv_tasks(conv)
+        rows = {t['taskId']: t for t in out['tasks']}
+        assert agent_tid in rows, f'swarm agent row missing: {list(rows)}'
+        arow = rows[agent_tid]
+        assert arow['isSwarmAgent'] is True
+        assert arow['agentId'] == 'agent-research-x1'
+        assert arow['parentTaskId'] == parent
+        assert arow['requestCount'] == 1 and arow['hasEvents'] is True
+        # parent row still present with its own tally
+        assert rows[parent]['requestCount'] == 1
+    finally:
+        _cleanup(parent, agent_tid)
+
+
 def test_neuter_state_split_is_load_bearing(task_a):
     """NC: classify EVERYTHING as 'request' → the states bucket empties and
     the request list gets polluted — proving the split is load-bearing."""

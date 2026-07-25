@@ -173,17 +173,24 @@ def fold_request_log(task_id: str) -> dict:
                     'legacy': 'kind' not in p,
                 })
             else:
-                requests.append({
+                row = {
                     'roundNum': p.get('roundNum'),
                     'ts': e['ts_ms'],
                     'model': p.get('model') or '',
+                    # Endpoint turns tag their phase (P4) so same-numbered
+                    # planner/worker/critic rounds stay distinct rows.
+                    'turn': p.get('turn') or '',
                     'params': p.get('params') or {},
                     'messageCount': len(msgs),
                     'toolsCount': len(p.get('tools') or []),
                     'approxTokens': _est_tokens(msgs),
                     'label': p.get('label') or '',
                     'legacy': 'kind' not in p,
-                })
+                }
+                if p.get('agentId'):
+                    row['agentId'] = p['agentId']
+                    row['agentRole'] = p.get('agentRole') or ''
+                requests.append(row)
         elif et == _ROUND_USAGE:
             u = p.get('usage') or {}
             try:
@@ -192,7 +199,8 @@ def fold_request_log(task_id: str) -> dict:
             except Exception as _e:
                 logger.debug('[RequestInspector] normalize_usage failed: %s', _e)
                 nu = {}
-            attempts.setdefault(str(p.get('roundNum')), []).append({
+            attempts.setdefault(
+                (p.get('turn') or '', str(p.get('roundNum'))), []).append({
                 'tag': p.get('tag') or '',
                 'model': p.get('model') or '',
                 'tokensIn': int(p.get('tokensIn') or 0),
@@ -204,23 +212,39 @@ def fold_request_log(task_id: str) -> dict:
                 'ts': e['ts_ms'],
             })
         elif et.startswith('endpoint_'):
-            # Endpoint-driven task: worker rounds run run_task (covered),
-            # Planner/Critic turns call the LLM directly (NOT covered).
+            # Endpoint-driven task. Planner/Worker/Critic turns all run
+            # run_task (snapshots fire) — but each re-numbers rounds from
+            # 1, so a task whose snapshots carry NO turn tag (pre-P4 log)
+            # is genuinely ambiguous, not uncovered.
             endpoint_seen = True
     for row in requests:
-        row['attempts'] = attempts.get(str(row['roundNum']), [])
-    return {
+        row['attempts'] = attempts.get(
+            (row['turn'], str(row['roundNum'])), [])
+    has_turn_tags = any(r['turn'] for r in requests)
+    out = {
         'taskId': task_id,
         'requests': requests,
         'states': states,
-        'coverage': 'partial' if endpoint_seen else 'full',
         'eventsAvailable': bool(events),
         'requestCount': len(requests),
     }
+    if endpoint_seen and not has_turn_tags:
+        # Legacy endpoint log: planner/worker/critic rounds share numbers
+        # with no phase tag — rows exist but cannot be told apart.
+        out['coverage'] = 'partial'
+        out['coverageReason'] = 'endpoint-untagged'
+    else:
+        out['coverage'] = 'full'
+    return out
 
 
-def get_request_payload(task_id: str, round_num) -> dict | None:
+def get_request_payload(task_id: str, round_num, turn: str = '') -> dict | None:
     """Full payload for ONE request round (the on-demand detail fetch).
+
+    ``turn`` (optional): endpoint phase tag ('planning'|'working'|
+    'reviewing') or 'swarm-agent' — disambiguates same-numbered rounds.
+    When given, only snapshots with a matching turn qualify; when empty,
+    the last matching snapshot wins (legacy / untagged behavior).
 
     Returns None when no request-kind snapshot exists for that round
     (expired log, state-only round, or unknown task).
@@ -232,6 +256,8 @@ def get_request_payload(task_id: str, round_num) -> dict | None:
             continue
         if str(p.get('roundNum')) != str(round_num):
             continue
+        if turn and (p.get('turn') or '') != turn:
+            continue
         best = (e, p)  # last wins (a re-emitted round supersedes)
     if best is None:
         return None
@@ -241,6 +267,7 @@ def get_request_payload(task_id: str, round_num) -> dict | None:
         'roundNum': p.get('roundNum'),
         'ts': e['ts_ms'],
         'model': p.get('model') or '',
+        'turn': p.get('turn') or '',
         'params': p.get('params') or {},
         'label': p.get('label') or '',
         'messages': p.get('messages') or [],
@@ -296,6 +323,38 @@ def list_conv_tasks(conv_id: str, limit: int = 15) -> dict:
                        'conv=%s: %s', (conv_id or '')[:8], e)
     tasks = sorted(rows.values(), key=lambda x: x['createdAt'] or 0,
                    reverse=True)[:limit]
+    ids = [t['taskId'] for t in tasks]
+    tasks = sorted(rows.values(), key=lambda x: x['createdAt'] or 0,
+                   reverse=True)[:limit]
+    # Swarm sub-agent rows (P4): sub-agents persist their LLM-request
+    # snapshots under '{parent_task_id}#agent:{agent_id}' (see
+    # lib/swarm/agent.py::_emit_request_snapshot). Surface them as child
+    # rows of their parent so the drawer can drill into agent calls.
+    parent_ids = {t['taskId'] for t in tasks}
+    if parent_ids:
+        try:
+            db = get_thread_db(DOMAIN_CHAT)
+            like_rows = db.execute(
+                "SELECT DISTINCT task_id FROM task_events "
+                "WHERE task_id LIKE '%#agent:%'").fetchall()
+            by_parent = {t['taskId']: t for t in tasks}
+            for r in like_rows:
+                cid = _row_get(r, 'task_id', 0)
+                parent, _, agent_id = cid.partition('#agent:')
+                if parent not in parent_ids or not agent_id:
+                    continue
+                tasks.append({
+                    'taskId': cid,
+                    'parentTaskId': parent,
+                    'agentId': agent_id,
+                    'isSwarmAgent': True,
+                    'status': 'swarm-agent',
+                    'createdAt': by_parent[parent]['createdAt'],
+                    'completedAt': None,
+                    'live': False,
+                })
+        except Exception as e:
+            logger.debug('[RequestInspector] swarm-agent discovery failed: %s', e)
     ids = [t['taskId'] for t in tasks]
     if ids:
         try:

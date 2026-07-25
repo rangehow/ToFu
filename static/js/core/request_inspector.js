@@ -54,6 +54,17 @@ function _riOnConvSwitch(convId) {
   _riLoadTasks(convId);
 }
 
+/* Turn badge label for a request row (P4): endpoint phases read through
+ * i18n; swarm agents show their role; anything else falls back to the raw
+ * tag so a future turn value still renders. */
+function _riTurnLabel(row) {
+  if (row.turn === 'swarm-agent') return row.agentRole || 'agent';
+  const key = 'ri.turn' + String(row.turn || '').charAt(0).toUpperCase() +
+    String(row.turn || '').slice(1);
+  const v = t(key);
+  return v === key ? String(row.turn) : v;
+}
+
 function _riEsc(s) {
   return (typeof escapeHtml === 'function')
     ? escapeHtml(s == null ? '' : String(s)) : String(s == null ? '' : s);
@@ -92,7 +103,8 @@ async function _riLoadTasks(convId) {
   list.innerHTML = '';
   for (const row of tasks) {
     const el = document.createElement('div');
-    el.className = 'ri-task' + (_riSel.taskId === row.taskId ? ' ri-sel' : '');
+    el.className = 'ri-task' + (_riSel.taskId === row.taskId ? ' ri-sel' : '') +
+      (row.isSwarmAgent ? ' ri-task-agent' : '');
     const liveBadge = row.live
       ? `<span class="ri-live-badge">${_riEsc(t('ri.live'))}</span>` : '';
     const reqN = row.requestCount || 0;
@@ -101,6 +113,8 @@ async function _riLoadTasks(convId) {
       ? `≈${reqN + row.legacyCount}`
       : `${reqN}`;
     const expired = !row.hasEvents && !row.live;
+    const agentBadge = row.isSwarmAgent
+      ? `<span class="ri-agent-badge">${_riEsc(row.agentId || 'agent')}</span> · ` : '';
     el.innerHTML =
       `<div class="ri-task-top">` +
       `<span class="ri-task-id">${_riEsc(String(row.taskId).slice(0, 8))}</span>` +
@@ -108,6 +122,7 @@ async function _riLoadTasks(convId) {
       `<span class="ri-task-time">${_riEsc(_riTimeLabel(row.createdAt))}</span>` +
       `</div>` +
       `<div class="ri-task-sub">` +
+      agentBadge +
       (expired
         ? `<span class="ri-expired">${_riEsc(t('ri.expired'))}</span>`
         : `<span title="${_riEsc(t('ri.requests'))}">${countLabel} ${_riEsc(t('ri.requests'))}</span>`) +
@@ -143,14 +158,17 @@ async function _riSelectTask(taskId) {
     rounds.innerHTML = `<div class="ri-empty">${_riEsc(t('ri.expired'))}</div>`;
     return;
   }
-  /* Coverage chip — honest disclosure for endpoint-driven tasks (Planner /
-   * Critic calls are NOT captured; see design §7). */
+  /* Coverage chip — honest disclosure (design §7). 'endpoint-untagged':
+   * a pre-P4 endpoint log whose planner/worker/critic rounds exist but
+   * share numbers with no phase tag (ambiguous, NOT uncovered). */
   if (fold.coverage === 'partial') {
+    const reasonKey = fold.coverageReason === 'endpoint-untagged'
+      ? 'ri.coverageAmbiguous' : 'ri.coveragePartial';
     const chip = document.createElement('div');
     chip.className = 'ri-coverage-chip';
     chip.innerHTML =
       (typeof Icon === 'function' ? Icon('alertTriangle', 12) : '') +
-      ` <span>${_riEsc(t('ri.coveragePartial'))}</span>`;
+      ` <span>${_riEsc(t(reasonKey))}</span>`;
     rounds.appendChild(chip);
   }
   const reqs = Array.isArray(fold.requests) ? fold.requests : [];
@@ -164,6 +182,7 @@ async function _riSelectTask(taskId) {
     const el = document.createElement('div');
     el.className = 'ri-round';
     el.dataset.round = String(row.roundNum);
+    el.dataset.turn = row.turn || '';
     const attempts = Array.isArray(row.attempts) ? row.attempts : [];
     const tok = row.approxTokens >= 1000
       ? (row.approxTokens / 1000).toFixed(1) + 'K' : String(row.approxTokens || 0);
@@ -173,15 +192,18 @@ async function _riSelectTask(taskId) {
       return `<span class="ri-attempt" title="${_riEsc(a.traceId || '')}">` +
         `${_riEsc(a.tag || a.model)} ${a.tokensIn}→${a.tokensOut} · ${el2}${fb}</span>`;
     }).join('');
+    const turnBadge = row.turn
+      ? `<span class="ri-turn-badge">${_riEsc(_riTurnLabel(row))}</span>` : '';
     el.innerHTML =
       `<div class="ri-round-top">` +
+      turnBadge +
       `<span class="ri-round-n">R${_riEsc(row.roundNum)}</span>` +
       `<span class="ri-round-model">${_riEsc(row.model || '?')}</span>` +
       `<span class="ri-round-meta">${row.messageCount} msgs · ~${tok}tok` +
       (row.toolsCount ? ` · ${row.toolsCount} tools` : '') + `</span>` +
       `</div>` +
       (attemptBits ? `<div class="ri-round-attempts">${attemptBits}</div>` : '');
-    el.onclick = () => _riSelectRound(taskId, row.roundNum, el);
+    el.onclick = () => _riSelectRound(taskId, row.roundNum, el, row.turn || '');
     rounds.appendChild(el);
   }
   /* State mirrors (NOT requests) — collapsed at the bottom, clearly labeled. */
@@ -208,22 +230,26 @@ async function _riSelectTask(taskId) {
  * FIFO-capped; entries are never mutated after insert. */
 const _riPayloadCache = {};
 const _RI_PAYLOAD_CACHE_MAX = 40;
-async function _riFetchPayload(taskId, roundNum) {
-  const key = taskId + ':' + roundNum;
+async function _riFetchPayload(taskId, roundNum, turn) {
+  turn = turn || '';
+  const key = taskId + ':' + turn + ':' + roundNum;
   /* Live accelerator FIRST — an SSE-fed entry is fresher than anything we
    * previously cached from the network (a new round may have re-emitted
-   * the payload since the cache entry was stored). */
+   * the payload since the cache entry was stored). Turn-tagged rounds key
+   * as 'turn|roundNum' in the P1 log (endpoint phases re-number from 1). */
+  const _accKey = turn ? turn + '|' + roundNum : String(roundNum);
   const acc = (typeof _debugRequests !== 'undefined') &&
-    _debugRequests[taskId] && _debugRequests[taskId].rounds[String(roundNum)];
+    _debugRequests[taskId] && _debugRequests[taskId].rounds[_accKey];
   if (acc && acc.messages) {
     const payload = { messages: acc.messages, tools: acc.tools,
-      label: acc.label, model: acc.model, params: acc.params };
+      label: acc.label, model: acc.model, params: acc.params,
+      turn: acc.turn || turn };
     _riPayloadCache[key] = payload;
     return payload;
   }
   if (_riPayloadCache[key]) return _riPayloadCache[key];
   const data = (typeof Api !== 'undefined' && Api.tasks)
-    ? await Api.tasks.getRequestPayload(taskId, roundNum) : null;
+    ? await Api.tasks.getRequestPayload(taskId, roundNum, turn || undefined) : null;
   if (data && data.messages) {
     const ids = Object.keys(_riPayloadCache);
     if (ids.length >= _RI_PAYLOAD_CACHE_MAX) delete _riPayloadCache[ids[0]];
@@ -245,21 +271,23 @@ function _riSharedPrefix(prevMsgs, curMsgs) {
   return k;
 }
 
-async function _riSelectRound(taskId, roundNum, el) {
+async function _riSelectRound(taskId, roundNum, el, turn) {
+  turn = turn || '';
   const rounds = _riEl('riRoundList');
   if (rounds) {
     rounds.querySelectorAll('.ri-round').forEach((r) =>
       r.classList.toggle('ri-sel', r === el));
   }
-  const payload = await _riFetchPayload(taskId, roundNum);
+  const payload = await _riFetchPayload(taskId, roundNum, turn);
   if (!_riOpen || _riSel.taskId !== taskId) return;  // stale
   if (!payload || !payload.messages) return;
-  /* P3 prefix-fold: diff this round's payload against round N-1's so the
-   * shared prefix collapses and the increment highlights. */
+  /* P3 prefix-fold: diff this round's payload against the SAME phase's
+   * round N-1 (endpoint phases each re-number from 1), so the shared
+   * prefix collapses and the increment highlights. */
   let opts = null;
   const num = parseInt(roundNum, 10);
   if (Number.isFinite(num) && num > 1) {
-    const prev = await _riFetchPayload(taskId, num - 1);
+    const prev = await _riFetchPayload(taskId, num - 1, turn);
     if (!_riOpen || _riSel.taskId !== taskId) return;  // stale
     if (prev && prev.messages) {
       const k = _riSharedPrefix(prev.messages, payload.messages);
@@ -289,19 +317,33 @@ async function openRequestInspectorForMessage(msgId) {
   const apiRounds = Array.isArray(msg.apiRounds) ? msg.apiRounds : [];
   const lastApiRound = apiRounds.length
     ? apiRounds[apiRounds.length - 1].round : null;
+  /* Turn hint (P4): endpoint bubbles carry phase markers — planner turns
+   * (_isEndpointPlanner), critic/review turns (_isEndpointReview); a plain
+   * assistant bubble in an endpoint task is a WORKER turn. */
+  const turnHint = msg._isEndpointPlanner ? 'planning'
+    : (msg._isEndpointReview ? 'reviewing' : '');
   await _riSelectTask(taskId);
   const fold = _riSel.fold;
   const reqs = (fold && Array.isArray(fold.requests)) ? fold.requests : [];
-  let target = null;
-  if (lastApiRound != null &&
-      reqs.some((r) => String(r.roundNum) === String(lastApiRound))) {
-    target = lastApiRound;
-  } else if (reqs.length) {
-    target = reqs[reqs.length - 1].roundNum;
+  let target = null, targetTurn = '';
+  if (lastApiRound != null) {
+    const pick = reqs.find((r) => String(r.roundNum) === String(lastApiRound) &&
+      (turnHint ? r.turn === turnHint : true)) ||
+      reqs.find((r) => String(r.roundNum) === String(lastApiRound));
+    if (pick) { target = pick.roundNum; targetTurn = pick.turn || ''; }
+  }
+  if (target == null && reqs.length) {
+    const w = [...reqs].reverse().find((r) => r.turn === 'working') ||
+      reqs[reqs.length - 1];
+    target = w.roundNum;
+    targetTurn = w.turn || '';
   }
   if (target == null) return;
   const el = document.querySelector(
-    '#riRoundList .ri-round[data-round="' + String(target) + '"]');
+    '#riRoundList .ri-round[data-round="' + String(target) +
+    '"][data-turn="' + targetTurn + '"]') ||
+    document.querySelector(
+      '#riRoundList .ri-round[data-round="' + String(target) + '"]');
   if (el) {
     /* scrollIntoView is absent in some environments (jsdom) — guard. */
     if (typeof el.scrollIntoView === 'function')
@@ -309,5 +351,5 @@ async function openRequestInspectorForMessage(msgId) {
     el.classList.add('ri-flash');
     setTimeout(() => el.classList.remove('ri-flash'), 1600);
   }
-  await _riSelectRound(taskId, target, el);
+  await _riSelectRound(taskId, target, el, targetTurn);
 }

@@ -32,6 +32,33 @@ from lib.tasks_pkg.manager._persist import (
 logger = get_logger(__name__)
 
 
+def task_user_id(task):
+    """Resolve the owning ``user_id`` from a task dict for the SSOT channel.
+
+    pt_abae3a85a92440fd (2026-07-25): background-thread callers of
+    ``notify_conv_changed`` (autopilot / swarm / message_queue / sync /
+    persistence_store) use this to thread request-scoped identity into the
+    outbound busy signal. c6d1bd71 already stashed ``task['_userId']`` at
+    ``create_task`` time; this helper is the canonical read.
+
+    Falls back to ``DEFAULT_USER_ID = 1`` when the task dict is missing,
+    empty, or lacks a bound user (personal-install / pre-auth / open-mode
+    default). c6d1bd71's ``notify_conv_changed`` seam then coerces that
+    default to unscoped for byte-identical single-user behaviour, so this
+    helper is safe to call unconditionally at every write-path site.
+    """
+    from routes.common import DEFAULT_USER_ID
+    if not task:
+        return DEFAULT_USER_ID
+    uid = task.get('_userId') if isinstance(task, dict) else None
+    if not uid:
+        return DEFAULT_USER_ID
+    try:
+        return int(uid) if str(uid).isdigit() else uid
+    except (TypeError, ValueError):
+        return uid
+
+
 def is_carrier_task(task: dict) -> bool:
     """True if ``task`` is a non-streaming CARRIER/HOLDER, not user-visible work.
 
@@ -471,14 +498,19 @@ def abort_running_tasks_for_conv(conv_id: str, exclude_task_id: str | None = Non
         # push transport error must never break the abort path.
         try:
             from lib.conversations.meta_cache import notify_conv_changed
-            notify_conv_changed(conv_id, rev=None)
+            # pt_abae3a85a92440fd: derive user_id from an aborted task —
+            # they all belong to the same conv → same owner. Falls back
+            # to DEFAULT_USER_ID (via task_user_id) when the task pre-dates
+            # the _userId stash (pre-c6d1bd71 legacy).
+            _abort_uid = task_user_id(_aborted_tasks[0]) if _aborted_tasks else None
+            notify_conv_changed(conv_id, rev=None,
+                                user_id=_abort_uid) if _abort_uid is not None \
+                else notify_conv_changed(conv_id, rev=None)
         except Exception as _ne:
             logger.warning(
                 '[Manager] conv=%s supersede-abort notify skipped: %s',
                 conv_id[:8], _ne)
     return aborted
-
-
 def quiesce_running_tasks(reason: str = 'server_shutdown') -> int:
     """Signal EVERY running task to abort — called at server shutdown.
 

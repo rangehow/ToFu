@@ -347,7 +347,8 @@ def _start_followup_task(task: dict, conv_id: str) -> str | None:
 
     try:
         from lib.conversations import notify_conv_changed
-        notify_conv_changed(conv_id, rev=None)
+        from lib.tasks_pkg.manager._registry import task_user_id
+        notify_conv_changed(conv_id, rev=None, user_id=task_user_id(task))
     except Exception as e:
         logger.debug('[Autopilot] conv-changed notify skipped: %s', e)
 

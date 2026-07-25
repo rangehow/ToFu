@@ -119,6 +119,41 @@ from lib.conversations.meta_cache import (  # noqa: E402,F401  — re-exported f
 )
 
 
+def _request_user_id():
+    """Resolve the effective user_id for the current request thread.
+
+    Returns the authenticated ``AuthContext.user_id`` when a login-bound
+    session is present, else falls back to ``DEFAULT_USER_ID = 1``. Callable
+    from any route handler; safe outside a request context (returns the
+    default without raising).
+
+    pt_abae3a85a92440fd (2026-07-25): the standard helper for threading
+    request-thread user_id into ``notify_conv_changed`` and adjacent
+    seams. Owner-approved wire (DO IT NOW): route callers use this, and
+    background threads read ``task['_userId']`` via ``task_user_id`` (from
+    lib.tasks_pkg.manager._registry), both landing at the same
+    notify_conv_changed signature already accepting ``user_id=``.
+
+    NOTE: single-user default (empty AuthContext.user_id) is preserved
+    byte-identically — c6d1bd71 already coerces ``user_id == DEFAULT_USER_ID``
+    to unscoped for the snapshot projection.
+    """
+    try:
+        from routes.api_v1.auth import current_auth
+        ctx = current_auth()
+    except Exception:  # noqa: BLE001 — outside request context / test env
+        return DEFAULT_USER_ID
+    uid = getattr(ctx, 'user_id', '') if ctx is not None else ''
+    if not uid:
+        return DEFAULT_USER_ID
+    # If it looks like a numeric string, coerce so downstream str/int
+    # comparisons behave uniformly with existing DEFAULT_USER_ID=1 semantics.
+    try:
+        return int(uid) if str(uid).isdigit() else uid
+    except (TypeError, ValueError):
+        return uid
+
+
 # ══════════════════════════════════════════════════════
 #  Auth Stubs (single-user)
 # ══════════════════════════════════════════════════════

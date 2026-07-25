@@ -31,7 +31,7 @@ from lib.database._core_schema import CONVERSATIONS, upsert
 # search_text) — so the partial insert lets the trigger own that column.
 _CONV_INSERT_COLS = ['id', 'user_id', 'title', 'messages', 'created_at',
                      'updated_at', 'settings', 'msg_count', 'search_text']
-from routes.common import DEFAULT_USER_ID, _db_safe, _invalidate_meta_cache, _notify_conv_changed, _refresh_meta_cache_if_stale
+from routes.common import DEFAULT_USER_ID, _db_safe, _invalidate_meta_cache, _notify_conv_changed, _refresh_meta_cache_if_stale, _request_user_id
 
 # Whitelisted keys for PATCH /messages/<idx> — only these fields can be mutated
 # in-place on a single message without writing the whole conversation.
@@ -1724,7 +1724,7 @@ def _save_conv_blocking(db, conv_id, data):
     # Event-driven cross-device sync: push the change (carrying the new rev) so
     # a sibling device reconciles this conv without a manual refresh. Rev-gated
     # on the client → self-echo is a cheap no-op.
-    _notify_conv_changed(conv_id, rev=new_rev)
+    _notify_conv_changed(conv_id, rev=new_rev, user_id=_request_user_id())
     return _Defer(api_ok, rev=new_rev)
 
 
@@ -1791,7 +1791,7 @@ async def patch_conv_settings(conv_id):
             (_touch_ms, conv_id, DEFAULT_USER_ID), domain=DOMAIN_CHAT)
     # Metadata-only change (folder move / pin / activeTaskId): rev unchanged →
     # client does a debounced sidebar refresh, not a body refetch.
-    _notify_conv_changed(conv_id, rev=None)
+    _notify_conv_changed(conv_id, rev=None, user_id=_request_user_id())
     logger.info('[patch_settings] Conv %s — patched keys: %s', conv_id[:12], list(data.keys()))
     return api_ok()
 
@@ -1825,7 +1825,7 @@ async def rename_conv(conv_id):
     # Metadata-only change (rev=None): the DB rev trigger only bumps on a
     # messages change, so a rename doesn't move rev — the client falls back to
     # a debounced sidebar refresh (title/folder) rather than a body refetch.
-    _notify_conv_changed(conv_id, rev=None)
+    _notify_conv_changed(conv_id, rev=None, user_id=_request_user_id())
     logger.info('[rename_conv] Conv %s — title=%.50s', conv_id[:12], title)
     audit_log('conversation_renamed', conv_id=conv_id, title=title[:60])
     return api_ok(title=title)
@@ -1863,7 +1863,7 @@ async def generate_conv_title(conv_id):
     await async_execute(
         'UPDATE conversations SET title=? WHERE id=? AND user_id=?',
         (title, conv_id, DEFAULT_USER_ID), domain=DOMAIN_CHAT)
-    _notify_conv_changed(conv_id, rev=None)
+    _notify_conv_changed(conv_id, rev=None, user_id=_request_user_id())
     logger.info('[generate_title] Conv %s — title=%.50s', conv_id[:12], title)
     audit_log('conversation_title_generated', conv_id=conv_id, title=title[:60])
     return api_ok(title=title)
@@ -1982,7 +1982,7 @@ def _delete_message_blocking(db, conv_id, msg_idx, mode, msg_id=None):
 
     _dm_rev_row = db.execute('SELECT rev FROM conversations WHERE id=? AND user_id=?',
                              (conv_id, DEFAULT_USER_ID)).fetchone()
-    _notify_conv_changed(conv_id, rev=(_row_rev(_dm_rev_row) if _dm_rev_row else None))
+    _notify_conv_changed(conv_id, rev=(_row_rev(_dm_rev_row) if _dm_rev_row else None), user_id=_request_user_id())
     # Invalidate persisted per-day cost cache — but ONLY for the day(s) the
     # deleted messages actually contributed cost to.  A whole-table wipe
     # would force the next calendar open to live-rescan the entire month.
@@ -2139,7 +2139,7 @@ def _patch_message_blocking(db, conv_id, msg_idx, data):
 
     _pm_rev_row = db.execute('SELECT rev FROM conversations WHERE id=? AND user_id=?',
                              (conv_id, DEFAULT_USER_ID)).fetchone()
-    _notify_conv_changed(conv_id, rev=(_row_rev(_pm_rev_row) if _pm_rev_row else None))
+    _notify_conv_changed(conv_id, rev=(_row_rev(_pm_rev_row) if _pm_rev_row else None), user_id=_request_user_id())
     logger.info('[patch_msg] conv=%s idx=%d keys=%s preview=%.50s',
                 conv_id[:8], msg_idx, applied_keys, _preview)
     try:
@@ -2252,7 +2252,7 @@ def _patch_message_by_id_blocking(db, conv_id, msg_id, data):
 
     _pmi_rev_row = db.execute('SELECT rev FROM conversations WHERE id=? AND user_id=?',
                               (conv_id, DEFAULT_USER_ID)).fetchone()
-    _notify_conv_changed(conv_id, rev=(_row_rev(_pmi_rev_row) if _pmi_rev_row else None))
+    _notify_conv_changed(conv_id, rev=(_row_rev(_pmi_rev_row) if _pmi_rev_row else None), user_id=_request_user_id())
     logger.info('[patch_msg_id] conv=%s id=%s idx=%d keys=%s preview=%.50s',
                 conv_id[:8], msg_id[:8], target_idx, applied_keys, _preview)
     try:
@@ -2376,7 +2376,7 @@ def _delete_branch_blocking(db, conv_id, msg_idx, branch_idx, msg_id=None):
     # the sidebar meta cache, so it replaces the bare _invalidate_meta_cache().
     _db_rev_row = db.execute('SELECT rev FROM conversations WHERE id=? AND user_id=?',
                              (conv_id, DEFAULT_USER_ID)).fetchone()
-    _notify_conv_changed(conv_id, rev=(_row_rev(_db_rev_row) if _db_rev_row else None))
+    _notify_conv_changed(conv_id, rev=(_row_rev(_db_rev_row) if _db_rev_row else None), user_id=_request_user_id())
     logger.info('[delete_branch] conv=%s msg_idx=%d branch_idx=%d remaining=%d',
                 conv_id[:8], msg_idx, branch_idx, branch_count)
     try:
@@ -2495,7 +2495,7 @@ def _delete_conv_blocking(db, conv_id):
     # Event-driven cross-device sync: tell siblings this conv is gone so they
     # drop it from the sidebar (+ IDB cache) without a manual refresh.
     if _deleted_committed:
-        _notify_conv_changed(conv_id, deleted=True)
+        _notify_conv_changed(conv_id, deleted=True, user_id=_request_user_id())
     else:
         _invalidate_meta_cache()
     # Invalidate persisted per-day cost cache — but ONLY for the day(s) this

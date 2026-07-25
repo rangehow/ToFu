@@ -365,7 +365,7 @@ async def create_branch(conv_id, msg_idx):
     # refetches without a manual refresh. notify_conv_changed also invalidates
     # the sidebar meta cache, so it replaces the bare _invalidate_meta_cache().
     try:
-        from routes.common import _notify_conv_changed
+        from routes.common import _notify_conv_changed, _request_user_id
         _rev_row = await async_fetchone(
             'SELECT rev FROM conversations WHERE id=? AND user_id=?',
             (conv_id, DEFAULT_USER_ID), domain=DOMAIN_CHAT)
@@ -375,7 +375,7 @@ async def create_branch(conv_id, msg_idx):
                 _branch_rev = _rev_row['rev']
             except (KeyError, TypeError, IndexError):
                 _branch_rev = _rev_row[0]
-        _notify_conv_changed(conv_id, rev=_branch_rev)
+        _notify_conv_changed(conv_id, rev=_branch_rev, user_id=_request_user_id())
     except Exception as e:
         logger.debug('[api_v1.branches] conv-changed notify: %s', e)
 

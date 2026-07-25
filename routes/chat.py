@@ -38,7 +38,7 @@ from lib.chat import (  # noqa: F401
     scan_continue_checkpoint as _scan_continue_checkpoint,
 )
 from lib.idempotency import idempotent_post
-from routes.common import DEFAULT_USER_ID, _notify_conv_changed
+from routes.common import DEFAULT_USER_ID, _notify_conv_changed, _request_user_id
 
 logger = get_logger(__name__)
 
@@ -396,7 +396,7 @@ def chat_send():
         #   just-sent user message appears on the other device immediately,
         #   instead of a rev=None frame that only nudges the sidebar and leaves
         #   the message invisible until the assistant reply lands.
-        _notify_conv_changed(conv_id, rev=_send_rev)
+        _notify_conv_changed(conv_id, rev=_send_rev, user_id=_request_user_id())
 
         return jsonify({
             'taskId': task_id,
@@ -716,7 +716,7 @@ def chat_regenerate():
         except Exception as e:
             logger.warning('[Regen] Failed to update activeTaskId: %s', e)
 
-        _notify_conv_changed(conv_id, rev=None)
+        _notify_conv_changed(conv_id, rev=None, user_id=_request_user_id())
 
         return jsonify({
             'taskId': task_id,
@@ -855,6 +855,7 @@ def chat_continue():
                     _set_conversation_settings=_scs,
                     _notify_conv_changed=_notify_conv_changed,
                     _audit_log=_al,
+                    user_id=_request_user_id(),
                 )
                 if _res.kind == 'passthrough':
                     return _res.err_resp
@@ -979,7 +980,7 @@ def chat_continue():
         except Exception as e:
             logger.warning('[Continue] Failed to update activeTaskId: %s', e)
 
-        _notify_conv_changed(conv_id, rev=None)
+        _notify_conv_changed(conv_id, rev=None, user_id=_request_user_id())
         try:
             from lib.log import audit_log as _audit_log
             _audit_log(

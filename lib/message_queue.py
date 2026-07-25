@@ -1339,7 +1339,8 @@ def dispatch_next_queued(conv_id: str, *, _wait: float | None = None) -> str | N
         # without a manual refresh (metadata-scope: rev unchanged by dispatch).
         try:
             from lib.conversations import notify_conv_changed
-            notify_conv_changed(conv_id, rev=None)
+            from lib.tasks_pkg.manager._registry import task_user_id
+            notify_conv_changed(conv_id, rev=None, user_id=task_user_id(task))
         except Exception as e:
             logger.debug('[Queue] conv-changed notify failed: %s', e)
 

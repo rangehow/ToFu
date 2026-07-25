@@ -121,11 +121,12 @@ def classify_send_intent(
     # notify_conv_changed lives in routes.common; wrap in a try-broken
     # local so the extraction remains testable without a Flask app ctx.
     try:
-        from routes.common import _notify_conv_changed
+        from routes.common import _notify_conv_changed, _request_user_id
     except Exception as _e:
         logger.debug('[chat_dispatch] routes.common._notify_conv_changed '
                      'unavailable: %s (test path)', _e)
         _notify_conv_changed = lambda *a, **kw: None  # noqa: E731
+        _request_user_id = lambda: 1  # noqa: E731
 
     # 2a. If the user clicked Stop while we were inside the auto-
     #     translate call, drop this message entirely — do NOT persist,
@@ -229,7 +230,7 @@ def classify_send_intent(
                         'text=%d chars', conv_id[:8], len(_steer_text))
             if is_new:
                 _persist_conv_messages(db, conv_id, messages, title, settings_patch)
-            _notify_conv_changed(conv_id, rev=None)
+            _notify_conv_changed(conv_id, rev=None, user_id=_request_user_id())
             return SendIntent(kind='steered', response={
                 'steered': True,
                 'convId': conv_id,
@@ -287,7 +288,7 @@ def classify_send_intent(
                            'queue-only fallback): %s', conv_id[:8], e)
             _pending_rev = None
 
-        _notify_conv_changed(conv_id, rev=_pending_rev)
+        _notify_conv_changed(conv_id, rev=_pending_rev, user_id=_request_user_id())
 
         return SendIntent(kind='queued', response={
             'queued': True,
@@ -1016,6 +1017,7 @@ def dispatch_prefill_continue(
     _set_conversation_settings,
     _notify_conv_changed,
     _audit_log,
+    user_id: Any = 1,
 ) -> PrefillContinueResult:
     """Case 3 continue: resume a NO-TOOL mid-answer turn via assistant prefill.
 
@@ -1056,7 +1058,7 @@ def dispatch_prefill_continue(
     except Exception as e:
         logger.warning('[Continue] Failed to update activeTaskId (prefill-only): %s', e)
 
-    _notify_conv_changed(conv_id, rev=None)
+    _notify_conv_changed(conv_id, rev=None, user_id=user_id)
     try:
         _audit_log('continue_prefill_only', conv_id=conv_id,
                    prefillChars=len(resume_prefill),

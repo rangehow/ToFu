@@ -361,9 +361,11 @@ def _reconcile_orphan_placeholder_on_settle(task):
                     conv_id[:8], len(messages), len(cleaned))
         try:
             from lib.conversations import notify_conv_changed
+            from lib.tasks_pkg.manager._registry import task_user_id
             _rev_row = db.execute('SELECT rev FROM conversations WHERE id=? AND user_id=1',
                                   (conv_id,)).fetchone()
-            notify_conv_changed(conv_id, rev=(_rev_row[0] if _rev_row else None))
+            notify_conv_changed(conv_id, rev=(_rev_row[0] if _rev_row else None),
+                                user_id=task_user_id(task))
         except Exception as e:
             logger.debug('[SettleReconcile] conv=%s notify skipped: %s', conv_id[:8], e)
     except Exception as e:
@@ -1078,11 +1080,12 @@ def _sync_result_to_conversation(task, meta):
         #    so the client rev-gate refetches this conv's body exactly once. ──
         try:
             from lib.conversations import notify_conv_changed
+            from lib.tasks_pkg.manager._registry import task_user_id
             _mgr_rev_row = db.execute(
                 'SELECT rev FROM conversations WHERE id=? AND user_id=1',
                 (conv_id,)).fetchone()
             _mgr_rev = _mgr_rev_row[0] if _mgr_rev_row else None
-            notify_conv_changed(conv_id, rev=_mgr_rev)
+            notify_conv_changed(conv_id, rev=_mgr_rev, user_id=task_user_id(task))
         except Exception as e:
             logger.debug('[Manager] conv-changed notify skipped: %s', e)
 

@@ -1,5 +1,11 @@
 # Project Journal
 
+### 2026-07-25 — Phase 3.5 键契约别名数据流闭合(streamBufs-v2 钥匙孔关死)(commit `9b80b715`,1 文件 +88/-13,16/16 守卫绿,30/30 相邻,collect 8565 0 err)。owner 真实文件回环抓到:键守卫只认直调形态 + 4 个固定局部名,`const _s = streamSessions.get(cid); _s.content = 'v2'` **绿着放行** —— 而别名恰是写 streamBufs v2 最自然的写法,上一轮关的门钥匙孔还在。
+- **闭合:** `_collect_session_aliases(code)` —— 每文件先收集所有被直接赋值 session 表达式的局部名(`const|let|var X = ...` + 裸重赋值 `X = ...` 两形态;解构不收集——`{phase}` 只取允许键);键守卫现对 直调表达式 + 4 个具名局部 + **每个收集到的别名** 一起扫禁键。
+- **NEUTER 回环(owner 验收形态,真实 pytest 双证):** 守卫内嵌 NEUTER 扩到别名形态(直调红 + 别名红 + 删别名收集器后别名注入**恢复绿**,证别名闭合承重非冗余);另在真实 `health_stream_timer.js` 上跑完整回环:别名注入 → pytest RED → 恢复 → GREEN;直接注入 → RED → 恢复 → GREEN。
+- **Object.assign / 解构 / spread 显式处置(不留白):** 守卫 docstring 里**具名豁免** —— 点号外的写/读形态别名扫描看不到;理由:点号赋值是本库唯一实践(grep 证),且 reader-surface 守卫钉死了任何能碰 session 的文件,这些形态的作者必须先出现在 allowlist 才会被本守卫扫到。
+- **git 纪律:** 单文件 numstat 全量不截断;暂存 stray 为空;sibling WIP 零损留在 worktree。
+
 ### 2026-07-25 — Plan-B 共享树并发守卫三件套 + 生效契约自动化(epic `pt_e8314a7528f644e5`,5 commit:`6c7d17a6` 原子写 / `a526c664` 拆分收养 / `79f42221` 新鲜度门 / `b4ed9028` write_set advisory / `68c08fc0` 自动重启 watcher;新测 **46 面全绿**(含 NEUTER),终跑 **226/226**,collect **8565** 0 err)。
 - **背景(owner 命题):** worktree 隔离实验失败根因=合并工作没有属主(1 人类整合者)+「完成」定义脱节(分支 commit≠运行中服务器生效);药方=共享树打底+机械守卫治「切会话覆盖」+生效契约自动化。
 - **件1 原子写:** `write_file`/`apply_diff`/`insert_content`/upload 四处落盘统一 `_atomic_write_bytes`(tmp 同目录+fsync+`os.replace`),并发读者/importer 永远只见完整旧文件或完整新文件——sibling 写一半造成 ~160s IndentationError 窗口的那类事故根除;保权限位/符号链接写穿/失败留旧内容零临时泄漏。9 测。

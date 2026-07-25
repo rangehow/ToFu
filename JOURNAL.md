@@ -1,5 +1,16 @@
 # Project Journal
 
+### 2026-07-25(续5) — 「chatinner 状态框楼梯状堆叠」根修:懒建 status zone 未回写缓存,每帧 append 一个新框(commit `fe883627`,2 文件 +215;新套件 2/2 含 NEUTER,相邻 19/19,collect **8650** 0 err)。
+- **现象(owner 截图):** 同一条流式气泡里 等待中… ×4 → 正在生成回复… → 已发送给 kimi-k3… → 推理中 3/100/142/175/239/261/301/347/387 字符,逐帧堆成楼梯。
+- **根因(ff7176dd §7 引入):** HEAD 默认形态 `_streamingBubbleHTML`(默认 status + 无 detail)只种 content/thinking/tool/fc/swarmInbox 五个 zone,**不种** `[data-zone="status"]`;tool zone 的存在使 `_ensureStreamZones` 提前返回,status zone 落到 `updateStreamingUI` 的懒建分支——该分支 append 后**没写回 `_streamZoneCache`**,下一帧缓存仍报 `status:null` → 再 append 一个,逐帧叠加,每个旧框冻结在自己那一帧的相位文案上(截图与帧序列一一对应)。
+- **修复(1 行):** `zones.status = statusZone;`(zones 即 `_streamZoneCache`)→ 后续帧复用同一 zone,相位原地更新。对 sibling 的模板重写 WIP 同样安全(其模板无 zone,`_ensureStreamZones` 全量播种,根本不进懒建分支)。
+- **守卫:** `test_frontend_stream_status_zone_singleton.py`——硬编码懒建前置条件夹具(tool zone 有/status zone 无;**刻意不驱动真实模板**——模板正被 sibling 391+/385- 重写中,钉的契约是分支前置条件而非模板形状),驱动真实 `updateStreamingUI` 跑 3 帧 + 新气泡缓存重导臂:zone 单例 + 计数器为最新帧;**NEUTER** 剥回写行 → 楼梯回归(两条单例检查转红),证回写承重。
+- **过程坑(如实):** 首版测试驱动真实 `_streamingBubbleHTML` 时抓到 sibling 未提交 WIP 把模板改成 status-pulse-only 形态(+391/-385,无 zone)——与 HEAD 模板形态不同但同触发「缺 status zone」族;peer_status 确认无活跃 sibling 后改用硬编码夹具,`git diff` 核 streaming_ui.js 仅含我的 hunk,精确 pathspec 提交,sibling 四个改动文件零触碰。
+- **生效边界(诚实):** 修复已提交,但 bundler 无热重载——**需 owner 重启服务器 + 浏览器硬刷新**(bundle 内容哈希变化)后楼梯才消失;重启前旧 bundle 仍会堆。
+
+### 2026-07-25(续3) — pt_687b87ac 收口
+# Project Journal
+
 ### 2026-07-25(续3) — pt_687b87ac 收口
 # Project Journal
 

@@ -174,11 +174,8 @@ function _collapseHgRoundAfterSubmit(guidanceId, responseText) {
   console.log(`[HG] ✓ Card collapsed: round=${round.roundNum}, response="${responseText.slice(0, 60)}"`);
   // Update sidebar: conversation no longer awaiting human (amber dot → streaming dot)
   renderConversationList();
-  // Force-refresh streaming UI to show collapsed state
-  const buf = typeof streamBufs !== 'undefined' ? streamBufs.get(activeConvId) : null;
-  if (buf) {
-    buf.toolRounds = assistantMsg.toolRounds.map(r => ({...r}));
-  }
+  // Force-refresh streaming UI to show collapsed state (§7: the pipeline
+  // reads the document directly — the stamp above is already visible).
   if (typeof twUpdate === 'function') twUpdate(activeConvId);
 }
 

@@ -590,7 +590,7 @@ document.addEventListener("visibilitychange", () => {
      *   the setTimeout fallback keeps rendering in background tabs, the
      *   browser throttles it to ~1s intervals.  This ensures the UI is
      *   fully caught up the instant the user sees the tab. */
-    if (activeStreams.size > 0 && activeConvId && streamBufs.has(activeConvId)) {
+    if (activeStreams.size > 0 && activeConvId && activeStreams.has(activeConvId)) {
       /* ★ Message-checkpoint fallback (see _streamFrameArg in
        *   health_stream_timer.js): switching a background tab back into a
        *   mid-stream conv whose buffer hasn't been seeded yet must render the

@@ -6,8 +6,8 @@
 
 function _handleHumanGuidance(ev, c) {
   const convId = c.convId, taskId = c.taskId;
-  const assistantMsg = c.assistantMsg, buf = c.buf;
-  const _epCriticPhase = c.epCriticPhase, _epCriticMsg = c.epCriticMsg, _epCriticBuf = c.epCriticBuf;
+  const assistantMsg = c.assistantMsg;
+  const _epCriticPhase = c.epCriticPhase, _epCriticMsg = c.epCriticMsg;
       /* ── Human Guidance: LLM is asking the user a question ── */
       if (assistantMsg.toolRounds) {
         const r = (ev.toolCallId
@@ -33,8 +33,6 @@ function _handleHumanGuidance(ev, c) {
           r.guidanceOptions = _ev_opts.map(o => ({...(o || {})}));
         }
       }
-      if (buf)
-        buf.toolRounds = assistantMsg.toolRounds || [];
       if (typeof twUpdate === 'function') twUpdate(convId);
       // ★ Update sidebar to show amber blinking dot for awaiting-human state
       renderConversationList();
@@ -50,8 +48,8 @@ function _handleHumanGuidance(ev, c) {
 
 function _handleToolProgress(ev, c) {
   const convId = c.convId, taskId = c.taskId;
-  const assistantMsg = c.assistantMsg, buf = c.buf;
-  const _epCriticPhase = c.epCriticPhase, _epCriticMsg = c.epCriticMsg, _epCriticBuf = c.epCriticBuf;
+  const assistantMsg = c.assistantMsg;
+  const _epCriticPhase = c.epCriticPhase, _epCriticMsg = c.epCriticMsg;
       /* ── Streaming run_command output: append chunk to the round's
        *    partial output buffer and re-render so the user sees it live. */
       const _trMsg = _epCriticPhase ? _epCriticMsg : assistantMsg;
@@ -66,11 +64,6 @@ function _handleToolProgress(ev, c) {
           if (typeof r._partialOutput !== "string") r._partialOutput = "";
           r._partialOutput += (ev.chunk || "");
         }
-      }
-      if (!_epCriticPhase && buf) {
-        buf.toolRounds = assistantMsg.toolRounds || [];
-      } else if (_epCriticPhase && _epCriticBuf && _epCriticMsg) {
-        _epCriticBuf.toolRounds = _epCriticMsg.toolRounds || [];
       }
       if (typeof twUpdate === 'function') twUpdate(convId);
       // Auto-scroll the live terminal box(es) to the bottom so the newest
@@ -92,8 +85,8 @@ function _handleToolProgress(ev, c) {
 
 function _handleStdinRequest(ev, c) {
   const convId = c.convId, taskId = c.taskId;
-  const assistantMsg = c.assistantMsg, buf = c.buf;
-  const _epCriticPhase = c.epCriticPhase, _epCriticMsg = c.epCriticMsg, _epCriticBuf = c.epCriticBuf;
+  const assistantMsg = c.assistantMsg;
+  const _epCriticPhase = c.epCriticPhase, _epCriticMsg = c.epCriticMsg;
       /* ── Stdin Request: subprocess is waiting for user keyboard input ── */
       if (assistantMsg.toolRounds) {
         const r = (ev.toolCallId
@@ -109,15 +102,13 @@ function _handleStdinRequest(ev, c) {
           r.stdinCommand = ev.command;
         }
       }
-      if (buf)
-        buf.toolRounds = assistantMsg.toolRounds || [];
       if (typeof twUpdate === 'function') twUpdate(convId);
 }
 
 function _handleStdinResolved(ev, c) {
   const convId = c.convId, taskId = c.taskId;
-  const assistantMsg = c.assistantMsg, buf = c.buf;
-  const _epCriticPhase = c.epCriticPhase, _epCriticMsg = c.epCriticMsg, _epCriticBuf = c.epCriticBuf;
+  const assistantMsg = c.assistantMsg;
+  const _epCriticPhase = c.epCriticPhase, _epCriticMsg = c.epCriticMsg;
       /* ── Stdin Resolved: user input was sent, command continues ── */
       if (assistantMsg.toolRounds) {
         const r = (ev.toolCallId
@@ -132,15 +123,13 @@ function _handleStdinResolved(ev, c) {
           r.stdinPrompt = null;
         }
       }
-      if (buf)
-        buf.toolRounds = assistantMsg.toolRounds || [];
       if (typeof twUpdate === 'function') twUpdate(convId);
 }
 
 function _handleWriteApproval(ev, c) {
   const convId = c.convId, taskId = c.taskId;
-  const assistantMsg = c.assistantMsg, buf = c.buf;
-  const _epCriticPhase = c.epCriticPhase, _epCriticMsg = c.epCriticMsg, _epCriticBuf = c.epCriticBuf;
+  const assistantMsg = c.assistantMsg;
+  const _epCriticPhase = c.epCriticPhase, _epCriticMsg = c.epCriticMsg;
       if (_epCriticPhase) { /* skip approval during critic phase */ }
       else if (assistantMsg.toolRounds) {
         const r = (ev.toolCallId
@@ -155,7 +144,5 @@ function _handleWriteApproval(ev, c) {
           r.approvalMeta = ev.meta;
         }
       }
-      if (!_epCriticPhase && buf)
-        buf.toolRounds = assistantMsg.toolRounds || [];
       if (typeof twUpdate === 'function') twUpdate(convId);
 }

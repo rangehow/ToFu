@@ -2096,14 +2096,7 @@ async function loadConversationMessages(convId) {
           if (lastServer.toolRounds?.length && !lastLocal.toolRounds?.length) {
             lastLocal.toolRounds = lastServer.toolRounds;
           }
-          /* Also update the stream buffer if one exists (for showStreamingUIForConv) */
-          const buf = streamBufs.get(convId);
-          if (buf) {
-            if (!buf.content && lastLocal.content) buf.content = lastLocal.content;
-            if (!buf.thinking && lastLocal.thinking) buf.thinking = lastLocal.thinking;
-            if (!buf.toolRounds?.length && lastLocal.toolRounds?.length)
-              buf.toolRounds = lastLocal.toolRounds.map(r => ({...r}));
-          }
+          /* §7: no stream buffer — showStreamingUIForConv reads the document. */
         }
       }
       /* ★ FIX: Merge translatedContent from server messages into local messages.

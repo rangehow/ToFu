@@ -2985,8 +2985,12 @@ if __name__ == '__main__':
         _agent_executor = ThreadPoolExecutor(
             max_workers=_agent_workers, thread_name_prefix='tofu-agent')
         try:
-            from lib.tasks_pkg import set_agent_executor
+            from lib.tasks_pkg import set_agent_executor, set_serving_loop
             set_agent_executor(_agent_executor)
+            # F3 (pt_1acd0bcdb2174566): let spawn_task hop onto THIS loop from
+            # loop-less worker threads (queue dispatch / reaper successors)
+            # instead of degrading to untracked daemon threads.
+            set_serving_loop(loop)
             _server_log.info('[Server] Agent-worker executor sized to %d threads',
                              _agent_workers)
         except Exception as _ae_err:

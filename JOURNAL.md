@@ -1,5 +1,11 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-25(续46) — pt_0c1621a561f045e1 收口:test_endpoint_messages 七红根修(两发同族测试漂移,commit `6c70957d`,1 文件 +33/-4;套件 **28/28**,endpoint 相邻环 34/34,collect **9101** 0 err)
+- **主因(5/7 红):重状态释放。** `persist_task_result` 末尾 `_release_heavy_task_state`(`_persist.py::_HEAVY_TERMINAL_FIELDS`,2026-07-11 RSS-at-source 修复)在终态把 `task['_endpoint_turns']` 置 None——契约是「终态后一律从 DB 重建」,而本套件从不建 conversations 行(日志里 "Conversation not found" 贯穿始终),内存表是唯一副本 → `task.get(...)` 返回 None → NoneType iterable。**修法:** recorder fixture stub `_release_heavy_task_state`——该特性与被测主题(endpoint 轮次累积与消息形状)正交且有专测,测试隔离非阉割;注释钉住出处与理由。
+- **余波(2/7 红):date 注入骑尾(与续43 fidelity 红同一机制,第二例)。** date `<system-reminder>` 拼进 TRUE tail(`_inject.py:772`),把 planner/critic 的 last-user-msg 与 worker2 的 critic-feedback user msg 从字符串变 block 数组 → `'list' object has no attribute 'lower'`。**修法:** `_content_text` 展平助手(string|array→纯文本),三处断言改用。
+- **机制教训(已二见,值得记):** 「date 注入骑尾」会把**任何骑在最后一条 user 消息上的旧断言**从字符串世界拖进 block 数组世界——排查「'list' object has no attribute X」类测试红时先想它。
+- **过程:** 7→2 递减诊断(先治主因再收余波),零生产代码改动,精确 pathspec 恰好 1 文件。
+
 ### 2026-07-25(续45) — 请求检视器 P4 落地:endpoint 相位标记 + swarm 子代理发射,uncovered chip 摘除(commit `5b1aff8a`,15 文件 +633/-42;后端 14/14 + 前端 P2/P3/P4 合计 7/7,回归 18 套件 179/186 七红 stash A/B 实证预存在,collect **9084** 0 err)
 - **勘察证伪票面(epic 标题说「零发射」,实证不是):** `_run_planner_turn`/`_run_critic_turn` 都经 `_run_single_turn` → 完整 `run_task`——endpoint 三个相位的快照**一直在发射**。真缺陷是三个相位各自从 1 重编号,fold 里 planner R1/worker R1/critic R1 同名歧义;swarm 子代理才是唯一真零覆盖(自跑 `_build_body`+dispatch,`_suppressEvents` 代理连持久化都抑制)。
 - **endpoint(零新状态):** snapshot + round_usage 加 `turn` 字段,直接复用驱动已有 `_endpoint_phase`(planning/working/reviewing,:95/:241/:420 早就在打)。fold 按 (turn,roundNum) 分行、attempts 同相位 join;coverage 语义修正为「无标记=partial(`endpoint-untagged`,歧义) / 有标记=full」;payload `?turn=` 消歧;锚点吃相位提示(planner/review 标记,其余优先 working)。**uncovered chip 就此摘除**;旧 endpoint 任务挂 ambiguous 诚实标注。

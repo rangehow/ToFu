@@ -918,6 +918,134 @@ def test_stream_session_module_contract():
         'no-op in production')
 
 
+# ════════════════════════════════════════════════════════════════════
+# ⑦ §7-followup — streaming_render.js PUBLIC SURFACE pinned (2026-07-25)
+#
+# ff7176dd (the §7 streamBufs retirement, 26 files) accidentally replayed a
+# STALE copy of streaming_render.js's entire second half (~600 lines): six
+# public signatures reverted to ancient revisions while their callers in
+# OTHER files (chat_render / stream_lifecycle / conv_view /
+# main_send_pipeline / main_toolbar_ui / main_translating_bubble /
+# main_regen_continue / edit_message) stayed modern. The lazy-render family
+# mismatch was fatal in production (`_destroyLazyObserver is not defined`
+# aborted renderChat → every historical conversation stuck on the loading
+# skeleton); the other five mismatches were silent degradations (disarm fold
+# never applied, streaming bubble status/time wrong, surgical truncate +
+# hard-cancel no-ops, autopilot `ev.record` concluded-facts dropped). These
+# static pins make a same-class stale replay fail CI instantly.
+# ════════════════════════════════════════════════════════════════════
+
+_STREAMING_RENDER = os.path.join(JS_DIR, 'ui', 'streaming_render.js')
+
+# The MODERN public surface other files call into (exact parameter names —
+# a stale replay keeps the function NAME but reverts the signature, which is
+# precisely how ff7176dd slipped past every existing guard).
+_SR_REQUIRED = {
+    'lazy const _INITIAL_RENDER': r'const\s+_INITIAL_RENDER\s*=\s*20\s*;',
+    'lazy _destroyLazyObserver': r'function\s+_destroyLazyObserver\s*\(\s*\)',
+    'lazy _ensureLazyObserver': r'function\s+_ensureLazyObserver\s*\(\s*\)',
+    'lazy _openScrollConvId decl': r'let\s+_openScrollConvId\s*=\s*null\s*;',
+    '_applyAutopilotRunConcluded(conv, rec, runId)':
+        r'function\s+_applyAutopilotRunConcluded\s*\(\s*conv\s*,\s*rec\s*,\s*runId\s*\)',
+    '_applyDisarmResponse(convId, resp)':
+        r'function\s+_applyDisarmResponse\s*\(\s*convId\s*,\s*resp\s*\)',
+    '_streamingBubbleHTML(role, status, timeStr, msgId)':
+        r'function\s+_streamingBubbleHTML\s*\(\s*role\s*,\s*status\s*,\s*timeStr\s*,\s*msgId\s*\)',
+    '_streamingBubbleRole(conv, cfg)':
+        r'function\s+_streamingBubbleRole\s*\(\s*conv\s*,\s*cfg\s*\)',
+    '_surgicalTruncateDOM(conv, cutoffIdx)':
+        r'function\s+_surgicalTruncateDOM\s*\(\s*conv\s*,\s*cutoffIdx\s*\)',
+    '_hardCancelActiveStream(conv)':
+        r'function\s+_hardCancelActiveStream\s*\(\s*conv\s*\)',
+    'run-concluded reads ev.record':
+        r'ev\.record\s*\|\|',
+}
+
+# Symbols that exist ONLY in the pre-modern (stale) revision — their mere
+# presence proves a replay. `_destroyBottomObserver` / `_ensureBottomObserver`
+# / `_loadNewerMessages` / `_ensureBottomSentinel` exist in BOTH families and
+# are deliberately NOT discriminators.
+_SR_FORBIDDEN = {
+    'stale _INITIAL_RENDER(convId) fn': r'function\s+_INITIAL_RENDER\s*\(',
+    'stale _ensureObserver': r'\b_ensureObserver\s*\(',
+    'stale _ensureTopSentinel': r'\b_ensureTopSentinel\s*\(',
+    'stale _destroyObserver': r'(?<![\w$])_destroyObserver\s*\(',
+    'stale top sentinel id': r'_lazyLoadSentinelTop',
+    'stale window cap 100': r'const\s+_MAX_RENDER_WINDOW\s*=\s*100\s*;',
+}
+
+
+def _streaming_render_surface_errors(src: str) -> list:
+    """Pure checker: required-modern pins missing + forbidden-stale pins
+    present. Factored out so the NEUTER can run the SAME checker on inline
+    stale/modern samples without depending on git history."""
+    code = _strip_js_comments(src)
+    errors = []
+    for name, pat in _SR_REQUIRED.items():
+        if not re.search(pat, code):
+            errors.append(f'missing modern surface: {name}')
+    for name, pat in _SR_FORBIDDEN.items():
+        if re.search(pat, code):
+            errors.append(f'stale symbol present: {name}')
+    return errors
+
+
+def test_streaming_render_public_surface_pinned():
+    """streaming_render.js's public surface is the MODERN one — the
+    ff7176dd-class stale second-half replay fails CI."""
+    with open(_STREAMING_RENDER, encoding='utf-8') as f:
+        errors = _streaming_render_surface_errors(f.read())
+    assert not errors, (
+        'streaming_render.js public-surface drift (ff7176dd-class stale '
+        'replay): ' + '; '.join(errors))
+
+
+def test_NEUTER_streaming_render_surface_guard_fires_on_stale_replay():
+    """NEUTER: the checker MUST turn red on the exact stale shape ff7176dd
+    shipped, and each scan arm is proven load-bearing by removal."""
+    stale_sample = (
+        'const _MAX_RENDER_WINDOW = 100;\n'
+        'function _INITIAL_RENDER(convId) { return 0; }\n'
+        'function _ensureObserver() {}\n'
+        'function _ensureTopSentinel(inner, hiddenAbove) {}\n'
+        'function _destroyObserver() {}\n'
+        'const sid = "_lazyLoadSentinelTop";\n'
+        'function _applyAutopilotRunConcluded(conv, ev) {}\n'
+        'function _applyDisarmResponse(conv, ev) {}\n'
+        'function _streamingBubbleHTML(role, status, detail, msgId) {}\n'
+        'function _streamingBubbleRole(convId) {}\n'
+        'function _surgicalTruncateDOM(convId, newLength) {}\n'
+        'function _hardCancelActiveStream(convId) {}\n'
+    )
+    errors = _streaming_render_surface_errors(stale_sample)
+    # Every forbidden class must fire (6 stale symbols)…
+    for cls in ('_INITIAL_RENDER(convId) fn', '_ensureObserver',
+                '_ensureTopSentinel', '_destroyObserver', 'top sentinel id',
+                'window cap 100'):
+        assert any(cls in e for e in errors), (
+            f'NEUTER FAILED: forbidden-scan blind to stale {cls}')
+    # …and every required pin must report missing (11 modern symbols).
+    assert sum(1 for e in errors if e.startswith('missing modern')) \
+        == len(_SR_REQUIRED), (
+            f'NEUTER FAILED: expected {len(_SR_REQUIRED)} missing-modern '
+            f'reports on the stale shape, got: {errors}')
+    # Round-trip 1: without the forbidden arm the stale sample keeps only
+    # missing-modern reports (proves the forbidden arm is what NAMES the
+    # stale symbols, not a side-effect of the required arm).
+    assert any(e.startswith('stale symbol') for e in errors), (
+        'NEUTER round-trip FAILED: forbidden arm produced no reports')
+    # Round-trip 2: the REAL file flipped to red if its modern surface is
+    # amputated — simulate by deleting one required symbol's text.
+    with open(_STREAMING_RENDER, encoding='utf-8') as f:
+        real = f.read()
+    amputated = re.sub(r'function\s+_destroyLazyObserver\s*\(\s*\)',
+                       'function _destroyLazyObserver_REMOVED()', real)
+    assert any('lazy _destroyLazyObserver' in e
+               for e in _streaming_render_surface_errors(amputated)), (
+                   'NEUTER FAILED: amputating _destroyLazyObserver on the '
+                   'real file did not trip the required arm')
+
+
 if __name__ == '__main__':
     for fn in (test_upsert_is_thin_alias_of_apply,
                test_stream_seg_narration_gone_from_production_js,
@@ -929,7 +1057,9 @@ if __name__ == '__main__':
                test_stream_session_keys_are_phase_only,
                test_stream_session_reader_surface_pinned,
                test_NEUTER_session_key_guard_detects_injected_content,
-               test_stream_session_module_contract):
+               test_stream_session_module_contract,
+               test_streaming_render_public_surface_pinned,
+               test_NEUTER_streaming_render_surface_guard_fires_on_stale_replay):
         try:
             fn()
             print('  PASS', fn.__name__)

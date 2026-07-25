@@ -1,5 +1,13 @@
 # Project Journal
 
+### 2026-07-25 — pt_c9a103fe 收口:owner 拍板「你决定,要最长期最优雅」→ paper 身份哈希**规范身份 + 一次性回填**根修(1 commit,8 文件;新套件 13/13 含 NEUTER,schema+podcast 环 101/101,活库实测门禁 1/11→7/11)。question-block 第二个被回答的 epic。
+- **决策(A+B 合体,弃 C):** C(查询侧多候选兜底)让分叉永存,不优雅。最长期解 = ①`_paper_hash` 函数内部 strip 规范化(空白永不改变身份,strip 幂等 → raw/strip 输入天然收敛,`lib/paper/hashing.py`);②下游 prefer-显式身份——report-start 不再无视客户端 hash 自行重算,改走新助手 `resolve_paper_hash`(优先客户端呈递的 ingest 铸造 hash,`_safe_hash_dir` 校验,回退规范化重算;`routes/paper.py:502`);③一次性幂等回填 `lib/paper/hash_backfill.py`(重算每行库 hash → CAS UPDATE 库行 + 依赖表 paper_reports/translations/podcasts 重键(碰撞取 created_at 新者)+ 盘上图目录/播客目录非破坏性改名),`schema_meta` 旗标门控,双端 init_db 快路径**之前**接线(收敛库也要能自愈)。活库证据直接支持 A:报告本来就全部躺在 strip 哈希下,规范化即对齐、数据移动最小。
+- **活库实测(force=True 直跑):** 11 篇分叉论文重键,dependents_moved=4,dirs_renamed=0(canonical 目录报告期已建,旧目录按设计留作无害孤儿);门禁 has_report(库哈希) 由 1/11 → **7/11**(其余 4 篇是真无报告)。第二趟全零(幂等实证)。:15000 对愈后论文(第三变体 1079e115→4c3dc427)lookup → `report_available:true`——**运行中的旧码服务器因数据愈合也答对了**。
+- **测试(13/13):** 规范化单测(strip 不敏感/幂等/空值/手工 sha 对拍)+ resolver 单测(prefer/回退/拒绝穿越形 hash)+ SQLite e2e(种子真分叉形状;**NEUTER 臂:愈前 has_report(stored)=False 即用户症状原样**,愈后翻 True、依赖表零残留、目录改名、二次运行全零;碰撞双方向 newer-wins;旗标门控;缺表优雅跳过)+ 静态钉(report-start 必须走 resolve_paper_hash)。
+- **环跑顺带捉出一张预存在红(owner 偏好,单独票 pt_f91c7b1d,已 human-gated 附修复配方):** `test_paper_ingest_persist` 6 红自 705cc8e3——folders 特性给 Core PAPER_LIBRARY 加了 folder_id,而 ingest upsert(:2256) `insert_cols=None`=全列 INSERT,行字典没这键 → 每次 upload/arXiv ingest 的库 persist 绑定错(「消失的论文」幽灵行复发)。stash 我全部改动后 6/6 原样复现=预存在铁证;修复=传 insert_cols(14 个现有键),INSERT 走 DEFAULT、CONFLICT 只更新已插列,保住既有文件夹指派。
+- **过程坑(如实):** 直跑活库时撞上 sibling 半写 `lib/skills/catalog.py`(unmatched ']'),按既有纪律等 50s 自愈后重跑成功;insert_content anchor 尾行重复的老坑又犯一次(双 init 文件 fast-path 注释行重复),当场 diff 修掉。
+- **生效边界(诚实):** 数据面已愈合(活库即刻);代码面(规范化函数 + prefer-显式 + boot 回填)随下次重启生效——重启后 boot 回填发现旗标已立直接跳过,零重复劳动。无前端改动。
+
 ### 2026-07-25 — pt_6598ae21 收口:owner 拍板「你决定,要最长期最 robust」→ **preserve-history 推送策略**落地(commit `ce2e232f`,2 文件,守卫套件 4→7 全绿含 2 个真 git e2e,相邻 export 套件 25/25)。question-block 首个被回答的 epic。
 - **决策(三选之外的第四解):** A 保持 force 默认=静默丢远端历史;C 默认 abort=每次重导出都要 `--force`、把 force 日常化(最差)。最 robust = **让默认路径既安全又可用**:分叉时 `fetch` + `merge -s ours --allow-unrelated-histories`——合并树与导出快照**逐字节相同**(镜像内容恒为最新导出),远端提交保留在 DAG,重试变快进。还白赚一个 force 天生打不赢的场景:**GitHub 受保护分支直接拒 force**,旧默认在那里根本发布不出去。
 - **tag 侧同族闭合:** 原代码 tag 推送**无条件 `--force`**(移动已发布 tag 会打断所有下游 pin)——新 `_tag_push_action` 真值表:不在远端→推/同 commit→跳过/不同 commit 无 `--force`→**保留已发布 tag + 大声 warning**;仅显式 `--force` 才移动。

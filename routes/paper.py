@@ -123,6 +123,7 @@ from lib.paper import (  # noqa: F401  — back-compat re-exports
     _run_qa_task,
     build_qa_messages,
     _paper_hash,
+    resolve_paper_hash,
     _report_dedup_index,
     fetch_arxiv_title,
     search_arxiv,
@@ -498,7 +499,7 @@ async def start_report_task():
     if client_title.lower().endswith('.pdf'):
         client_title = client_title[:-4].strip()
 
-    phash = _paper_hash(paper_text)
+    phash = resolve_paper_hash(data.get('paper_hash'), paper_text)
     # Server is the source of truth for figure manifests. The client never
     # forwards the images list any more — we load (or extract) it here.
     images = _load_image_manifest(phash)

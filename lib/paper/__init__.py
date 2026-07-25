@@ -13,7 +13,7 @@ layout is implementation detail.
 """
 
 # Hashing / paths
-from .hashing import BASE_DIR, PAPER_DIR, PAPER_IMG_DIR, _paper_hash, _safe_hash_dir
+from .hashing import BASE_DIR, PAPER_DIR, PAPER_IMG_DIR, _paper_hash, _safe_hash_dir, resolve_paper_hash
 
 # Prompts + tool list
 from .prompts import (
@@ -165,6 +165,7 @@ from .translate_engine import _run_translate_task
 __all__ = [
     # hashing
     'BASE_DIR', 'PAPER_DIR', 'PAPER_IMG_DIR', '_paper_hash', '_safe_hash_dir',
+    'resolve_paper_hash',
     # prompts
     '_REPORT_PROMPT_EN', '_REPORT_PROMPT_ZH', '_REPORT_TOOLS', '_MAX_REPORT_TOOL_ROUNDS',
     'date_anchor_clause',

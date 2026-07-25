@@ -68,6 +68,13 @@ def init_db(_new_connection):
         from lib.database._orphan_heal import heal_orphan_tables
         heal_orphan_tables(conn, table_exists=_table_exists, count_rows=_count_rows)
 
+        # ── Data backfill (flag-gated one-shot, runs BEFORE the version
+        #    fast-path so a converged DB still heals): re-key the paper
+        #    identity fork — reports saved under hash(strip(text)) vs library
+        #    hash(raw) (epic pt_c9a103fe). No-op once flagged in schema_meta.
+        from lib.paper.hash_backfill import backfill_paper_hash_canonical
+        backfill_paper_hash_canonical(conn)
+
         # ── Fast path: version AND optional-domain set both unchanged.
         #    The domain set is part of the cache key so enabling a new domain
         #    (e.g. trading) re-triggers its DDL instead of being skipped.

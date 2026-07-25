@@ -1,9 +1,5 @@
 # Project Journal
 
-
-
-
-
 ### 2026-07-24(续24) — RENDER_CONTRACT Phase 3.5 §7 落地:**streamBufs 整体退役,第二个活事实源消失**(commit `ff7176dd`,26 文件 +1135/-996,§7.4 锚点 RED→**GREEN**,2 个退役守卫入库,72/72 全绿,collect 8513 0 err)。owner 四条件全落地,过程中还抓到 2 个真实生产 ReferenceError。
 - **退役本体:** core.js 的全局 `streamBufs` Map 声明**删除**(step-5 后它已是只写镜像);内容/思考/工具轮从**消息文档**投影(trailing assistant msg)。**phase 的家落成实体**(owner 条件 2,不许停在 plan 措辞):新 `ui/stream_session.js` —— `streamSessions` Map 按 convId 键控 + `getStreamSession`(惰性 {phase:null})+ **`setStreamPhase` 带 live-only 写守卫**(无活跃流即 no-op,post-stop 相位写不能复活会话)+ `clearStreamSession`。裁决写死:phase 属 reducer live 会话态,**永不进消息文档**(运行时态不污染 SSOT)。
 - **owner 条件 4 — 锚点验收语义写死:** plan §7.4 补「字节相等只承诺 **checkpoint 边界**;两 checkpoint 之间 doc 允许滞后(那是持久化契约,不是分叉)」。§7.4 锚点(`test_frontend_reconnect_parity_anchor.py`)翻转 RED→**GREEN**:content/thinking/status 三 zone 在 checkpoint 边界逐字节相等,且重连后活气泡的 id/data-msg-id 与 live 侧一致(孪生家族最后一口气)。NEUTER:改 checkpoint content 翻转 content 检查。
@@ -14,20 +10,12 @@
 - **git 纪律(全量不截断审计执行):** 提交前对 26 文件跑**无截断** numstat 逐文件对账,确认无外部 sibling hunk(streaming_render 的 +404/-416 大头 = VU 会话迁移本体,非外来);`git add` 精确 pathspec + 暂存 stray 检查为空;sibling WIP(translation_indicator、provider_render、paper、upload 等)全部零损留在 worktree。
 - **交付验证边界(诚实):** 锚点 GREEN 是 JSDOM 双臂对拍证明,真实浏览器行为验证待 owner 实测;streaming_render 的 VU-concluded/summary 领域(+404)是 harness 代理完成的会话迁移,已全测绿但我未逐行人工复核其业务语义 —— owner 若质疑 VU 报告落库路径可单独审该 hunk。
 
-### 2026-07-25 — 「Studio 模式一次完整任务迭代 + 重启自愈」e2e 收口
-# Project Journal
-
-
-
 ### 2026-07-24 — 全仓 bug 扫描第四波收口(达成「所有文件」):17 agent(6 大片 + 11 个 ≤90KB 小片)扫完 tasks_pkg 长尾/database 全量/llm_dispatch 长尾/orchestration/desktop_agent/widgets + 前端兜底审计,修 4 处(3 commit),并交付**机器可核对的总账** `docs/BUG_SWEEP_COVERAGE.md`(**1057 行、0 UNMAPPED**:wave-1 372 / wave-2 134 / wave-3 391 / wave-4 149 / EXEMPT 11;lib 833 + routes 71 + root 5 + js 141 + html 3 + css 4,与活树逐一对齐)。owner 验收第三波后点名 tasks_pkg 197 文件长尾、database 47、llm_dispatch 13、orchestration 6、desktop_agent 9、**widgets/**(三波从未扫的第 6 个前端子目录,我自己也漏报)。
 - **教训①(agent 上下文预算):** 首波 6 个 agent 里 2 个(w4_b/b2/b3)撞 97k input token 上限死掉——compaction/cache 区单 agent 分片 >150KB。按 ≤90KB/片重切 11 个 agent 后全部成活。教训②(浅扫幻觉):w4_b1 用 33 秒 2 轮「扫」25 文件,报的 2 个 `except:pass` 全是幻觉(`_budget.py` 整个文件无 except、`_layer1.py` 的 catch 有日志)——证伪后重派精读。
 - **修复(4 处,3 commit):** ①`3e0b738` event_log.py read_events 的 payload 损坏 catch debug→**warning**(与写侧同级,冷重放数据完整性降级)+ chip_input.js 的 `×`(U+00D7)chip 删除按钮 → 内联 SVG(widgets/ 目录唯一文件,三波漏网);②`5ca08e4` relay 两页(dashboard.html 🫧 h1 + ✓/✗ 状态 glyph ×3、login.html 🫧 h1,与 wave-3 修的 admin.html 同族)→ 内联 SVG;③`36cf996` 总账文档。
 - **证伪(grounding 又立功):** w4_a 两个「unawaited coroutine」→ `_spawn_async_*` 全是**同步** daemon 线程包装;w4_c 霰弹枪 ~40 文件「catch+logged 不 re-raise」→ §2.2 只禁**无日志**,抽查 4 处全合规;b11 `_detect.py:897`「prev_prefix 应只用 cache_read」→ 求和是**刻意**的(279k-write/zero-read motivating case 靠它检出,agent 的修法会让该检测失效);b9 `_compact.py:169` 死守卫 → **真实但无害**(危险情形已被上游 153 行拒绝),而 agent 建议的修法会把「boundary 落 system 块内=全量保留」的正常小对话误拒 → TICKET 不修。
 - **共享 HEAD 事故(新形态):** 我的 5 处 html 编辑在 apply→commit 间隔几分钟(中间跑总账生成)被 **sibling 的 `git checkout --` 冲掉**(worktree 归零、status clean)。零信息损失——内容全在对话里,重放后**当场提交**落 `5ca08e4`。**新纪律:共享 HEAD 下,编辑完成到 commit 之间不许插任何其他工作。**
 - **总账(交付物):** `docs/BUG_SWEEP_COVERAGE.md` 每文件一行 verdict。EXEMPT 11:4 个 `autopilot*.py`(sibling epic pt_00459503 + pt_8dc03017 持有,全波次回避)、4 个构建产物(bundle/feature-*.js + hashed css)、lib/tests(测试脚手架)、其余均有 wave-N 标注。w3_d 的 lib 顶层 ~65 文件结论「零实锤」已取全文入账。
-
-### 2026-07-25 — 「Studio 模式一次完整任务迭代 + 重启自愈」e2e 收口
-# Project Journal
 
 ### 2026-07-25 — 「三个会话用 kimi-k3 重试全部失败」根修:纯幽灵 assistant 行从 LLM wire 剔除(commit `ec077229`,7 文件 +355/-9,新套件 22 测全绿含双 NEUTER,相邻 153+101 全绿,collect **8513** 0 err)。
 - **现象与根因(DB+日志双实证,与模型无关、与网关事故也不同层):** mrwu8ml12rdpuc / mrnem0a0jatj95 / mrnejm4zdfe5ba 每次重试都在**第 1 轮**确定性死于 HTTP 400 `the message at position N with role 'assistant' must not be empty`(N=12/32/30)。三会话的 messages blob 里各埋着 4/2/2 个**错误幽灵**——失败任务落库的 `content=''` + error envelope assistant 行(给 UI 错误气泡占位用);`_build_assistant_messages` 把它们原样搬上 wire,Kimi 报错的 position 与幽灵逐一对上。幽灵由 2026-07-24/25 网关写超时事故的失败任务制造,但「重试必死」是独立的第二层 bug:HTTP 400 不可重试,重试=复读同一份带毒历史=同位置同错。Anthropic 对非末尾空 assistant 同样硬拒;OpenAI 静默容忍(隐性负债)。
@@ -37,8 +25,7 @@
 - **git 事故第三弹(共享 HEAD 纪律新条款,如实记录):** 第一次**全量** `git stash push` 后,一个 sibling 在 pytest 运行的 ~55s 窗口内向 JOURNAL.md/message_queue.py/routes/conversations.py 写了新 WIP → `git stash pop` 整体拒施(「local changes would be overwritten」),stash 保留、工作区只剩 sibling 新写的 3 文件——**我的 6 文件 + 全部 sibling WIP 都封在 stash@{0} 里**。恢复:备份 3 个新文件 → checkout 清障 → pop 成功(138 文件全回)→ 对 3 文件做 `git merge-file` 三方合并(HEAD 基线 vs stash 版 vs 新写版)装回。**条款:共享树上全量 stash 窗口必须压到秒级;一旦 pop 拒施,禁止 force/checkout 覆盖,按「备份→清障→pop→三方合并」走。**
 - **生效边界(诚实):** 纯后端(`conv_message_builder`/`llm_sanitize`/`build_body`/`wire_messages`)——随服务重启生效;**已落库的幽灵行不删**(UI 错误气泡需要它们,修复发生在 wire 投影层,无需任何数据迁移);重启后这三个会话重试即正常。
 
-### 2026-07-25 — 「Studio 模式一次完整任务迭代 + 重启自愈」e2e 收口
-:前后端真实线序双层测试落地(commit 见下,1 文件 +921,新套件 4/4 绿含双 NEUTER、×2 复跑稳定(46.5s/46.1s),相邻恢复/检查点/路由 76/76,collect **8513** 0 err)。
+### 2026-07-25 — 「Studio 模式一次完整任务迭代 + 重启自愈」e2e 收口:前后端真实线序双层测试落地(commit 见下,1 文件 +921,新套件 4/4 绿含双 NEUTER、×2 复跑稳定(46.5s/46.1s),相邻恢复/检查点/路由 76/76,collect **8513** 0 err)。
 - **缺口(owner 点名):** 此前没有任何测试覆盖「HTTP 入口→SSE→工具轮→落库」全链路,更没有「重启后自我修复」的端到端验证——测试体系的关键空白。
 - **Layer 1(Studio 全迭代):** 按前端逐字节线序走 `POST /api/v1/chat/send`(chatMode='studio' + tmp 项目)→ `GET /api/chat/stream/<id>`;mock LLM(stdlib http.server,绕开 conftest 的 flask→quart shim)第一轮发 write_file 工具调用 → 编排器真实执行 → **磁盘副作用断言**:tmp 项目里文件真实存在且字节精确(只测 SSE 帧等于没测 Studio)。断言链:done 帧 finishReason='stop' / Studio 工具面下发 / 工具结果回填闭合 / task_results done / **done.committedMessage 与 conversations.messages 尾部逐字节一致**。
 - **Layer 2(重启自愈,双真实实例):** 实例 A(本进程 test_client)慢滴流(~6s/drip,每次 drip 是健康活动所以停滞检测不发作,而 >5s 间隔让 delta 驱动的 5s 检查点节流写出 status='running' 行)→ 拿到检查点后模拟 SIGKILL(注册表弹出,DB 残尸原样)→ 实例 B(**独立 OS 进程**,新 TOFU_DATA_DIR、同一 TOFU_DB_PATH 文件)走真实启动路径(`server._init_database()` 字面调用 + `run_deferred_boot_dispatch` 消费,TOFU_BOOT_AUTO_DISPATCH=1)→ 残尸标 interrupted + 尾部打 killed 章 → 自动重派发 → 恢复回合完成。断言链:暖重连(Last-Event-ID: 0)回放的真实 done 帧 committedMessage 与 DB 尾部逐字节一致(恢复回合与活完回合落地完全等价)、attempts=1、activeTaskId 死指针被清、残尸行永不被覆写、父进程独立重读 DB。

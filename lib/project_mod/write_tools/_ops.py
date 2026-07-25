@@ -100,6 +100,20 @@ def _atomic_write_text(target, text):
     _atomic_write_bytes(target, text.encode('utf-8'))
 
 
+def _record_write_freshness(conv_id, target):
+    """Record the post-write freshness token for this conversation.
+
+    Shared-HEAD overwrite guard (lib/write_freshness.py): after this write,
+    ANY conversation holding an older token for the path is refused until it
+    re-reads. Best-effort — must never break a successful write.
+    """
+    try:
+        from lib.write_freshness import record as _wf_record
+        _wf_record(conv_id or '', target)
+    except Exception as e:
+        logger.debug('[WriteFreshness] record failed for %s: %s', target, e)
+
+
 # ═══════════════════════════════════════════════════════
 #  write_file
 # ═══════════════════════════════════════════════════════
@@ -143,6 +157,7 @@ def tool_write_file(base, rel_path, content, description='', conv_id=None, task_
     try:
         _atomic_write_text(target, content)
         _touch_for_vscode(target)
+        _record_write_freshness(conv_id, target)
         new_lines = content.count('\n') + 1
         sz = len(content.encode('utf-8'))
 
@@ -282,6 +297,7 @@ def save_uploaded_file(base, rel_path, data, description='', conv_id=None,
     try:
         _atomic_write_bytes(target, bytes(data))
         _touch_for_vscode(target)
+        _record_write_freshness(conv_id, target)
         sz = len(data)
 
         if _should_record_modification(target, conv_id=conv_id):
@@ -458,6 +474,7 @@ def _apply_one_diff(base, rel_path, search, replace, description='', conv_id=Non
     try:
         _atomic_write_text(target, new_content)
         _touch_for_vscode(target)
+        _record_write_freshness(conv_id, target)
         old_lines = _orig_line_count
         new_lines = new_content.count('\n') + 1
         diff_lines = len(search.split('\n'))
@@ -767,6 +784,7 @@ def _insert_one(base, rel_path, anchor, content, position='after', description='
     try:
         _atomic_write_text(target, new_content)
         _touch_for_vscode(target)
+        _record_write_freshness(conv_id, target)
         old_lines = file_content.count('\n') + 1
         new_lines = new_content.count('\n') + 1
         inserted_lines = content.count('\n') + 1

@@ -20,6 +20,11 @@ from lib.tasks_pkg.handlers._read_gate import (
     check_read_before_edit,
     partition_batch_edits,
 )
+from lib.tasks_pkg.handlers._write_freshness_gate import (
+    check_write_freshness,
+    partition_stale_edits,
+    record_read_paths,
+)
 from lib.tools import PROJECT_TOOL_NAMES, build_project_tool_meta
 
 logger = get_logger(__name__)
@@ -264,6 +269,62 @@ def _handle_project_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg
                         fn_name, len(_skip_set), len(edits), ', '.join(_unread_raw),
                         task.get('id', '?')[:8])
 
+    # ── Write-freshness guard (shared-HEAD overwrite protection) ──
+    # The read gate above proves "you read this file at SOME point in this
+    # conversation"; this guard proves "it has not changed SINCE". A recorded
+    # read/write fingerprint that no longer matches the disk means ANOTHER
+    # conversation or process touched the file — refuse the write instead of
+    # silently clobbering their change. Same single-refusal / per-path
+    # partition shape as the read gate. See handlers/_write_freshness_gate.py.
+    _fresh_skip_note = None
+    if fn_name in ('write_file', 'apply_diff', 'insert_content') and project_path:
+        try:
+            _fresh_err = check_write_freshness(task, fn_name, fn_args, project_path)
+        except Exception as _fe:
+            logger.warning('[FreshGate] check failed for %s (allowing through): %s',
+                           fn_name, _fe, exc_info=True)
+            _fresh_err = None
+        if _fresh_err:
+            meta = build_project_tool_meta(fn_name, fn_args, _fresh_err)
+            meta['badge'] = 'stale'
+            _finalize_tool_round(task, rn, round_entry, [meta])
+            return tc_id, _fresh_err, False
+    elif fn_name in ('apply_diffs', 'insert_contents') and project_path:
+        try:
+            _stale_idx, _stale_raw = partition_stale_edits(task, fn_args, project_path)
+        except Exception as _fe:
+            logger.warning('[FreshGate] partition failed for %s (allowing through): %s',
+                           fn_name, _fe, exc_info=True)
+            _stale_idx, _stale_raw = [], []
+        if _stale_idx:
+            edits = fn_args.get('edits') or []
+            _stale_set = set(_stale_idx)
+            # All edits target stale files → full refusal (nothing to run).
+            if len(_stale_set) >= len(edits):
+                from lib.tasks_pkg.handlers._write_freshness_gate import (
+                    _format_stale_refusal,
+                )
+                _fresh_err = _format_stale_refusal(fn_name, _stale_raw)
+                meta = build_project_tool_meta(fn_name, fn_args, _fresh_err)
+                meta['badge'] = 'stale'
+                _finalize_tool_round(task, rn, round_entry, [meta])
+                logger.info('[FreshGate] Refused all %d edit(s) of %s for stale file(s) %s (task=%s)',
+                            len(edits), fn_name, ', '.join(_stale_raw), task.get('id', '?')[:8])
+                return tc_id, _fresh_err, False
+            # Partial: drop the stale-target edits, keep the rest.
+            fn_args['edits'] = [e for i, e in enumerate(edits) if i not in _stale_set]
+            _fresh_skip_note = (
+                f'Write-freshness guard: skipped {len(_stale_set)} edit(s) targeting '
+                f'file(s) changed on disk since this conversation last read/wrote '
+                f'them: {", ".join(_stale_raw)}. The remaining '
+                f'{len(fn_args["edits"])} edit(s) were applied. read_files the '
+                f'skipped path(s), reconcile against the current content, then '
+                f're-issue the skipped edit(s).'
+            )
+            logger.info('[FreshGate] Partial %s: skipped %d/%d stale-target edit(s) %s (task=%s)',
+                        fn_name, len(_stale_set), len(edits), ', '.join(_stale_raw),
+                        task.get('id', '?')[:8])
+
     from lib.project_mod import execute_tool
     from lib.project_mod.abs_path_guard import (
         reset_restricted, set_restricted, task_is_remote,
@@ -290,10 +351,16 @@ def _handle_project_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg
         # absolute paths still work (routed inside tool_read_files via
         # lib.file_reader); project-relative paths error out helpfully.
         if fn_name in ('read_files', 'inspect_image') and not project_path:
-            tool_content = execute_tool(fn_name, fn_args, '.', conv_id=_root_conv_id, task_id=task['id'])
+            # inspect_image needs the task so an /api/images/ or att_txt_ ref can
+            # be resolved (text refs scan task['messages']).
+            _no_proj_kw = {'task': task} if fn_name == 'inspect_image' else {}
+            tool_content = execute_tool(fn_name, fn_args, '.', conv_id=_root_conv_id,
+                                        task_id=task['id'], **_no_proj_kw)
         else:
             _progress_cb = None
             _extra_kw = {}
+            if fn_name == 'inspect_image':
+                _extra_kw = {'task': task}
             if fn_name == 'run_command':
                 _cmd = fn_args.get('command', '') or ''
                 _stdin_cb = _make_stdin_callback(task, rn, round_entry, _cmd)
@@ -330,6 +397,15 @@ def _handle_project_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg
             _svg_renders = drain_svg_render_signals()
         except Exception as e:
             logger.debug('[Project] drain_svg_render_signals failed (non-fatal): %s', e)
+
+    # ── Record write-freshness tokens for successful reads ──
+    # A read is authoritative content for THIS conversation: token it so a
+    # later write by us is refused if someone else touches the file first.
+    if fn_name in ('read_files', 'inspect_image'):
+        try:
+            record_read_paths(task, fn_args, project_path, tool_content)
+        except Exception as _fe:
+            logger.debug('[FreshGate] read-token record failed (non-fatal): %s', _fe)
 
     # read_files with absolute image paths returns a batch dict with __batch_images__
     _img_descriptors = None  # frontend-render image list (all images in a batch)
@@ -406,6 +482,8 @@ def _handle_project_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg
 
     if _gate_skip_note:
         meta['badge'] = 'partial: read first'
+    if _fresh_skip_note:
+        meta['badge'] = 'partial: stale'
 
     # ── Attach SVG inline-render descriptors (text read path) ──
     # SVG source rides the model stream as text; these data URIs let the
@@ -469,6 +547,8 @@ def _handle_project_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg
     # Prepend the read-gate skip note so the model sees which path(s) were
     # dropped. Done AFTER meta is built so the per-edit summaries parse the
     # unmodified batch header ("Applied N/M edits").
+    if _fresh_skip_note and isinstance(tool_content, str):
+        tool_content = f'{_fresh_skip_note}\n\n{tool_content}'
     if _gate_skip_note and isinstance(tool_content, str):
         tool_content = f'{_gate_skip_note}\n\n{tool_content}'
 

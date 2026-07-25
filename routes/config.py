@@ -823,6 +823,19 @@ def probe_provider_cells_start():
     protocol = (data.get('protocol') or 'openai').strip() or 'openai'
     force = bool(data.get('force'))
 
+    # Optional scope for row / column / single-cell probes. When present the
+    # work list is restricted to the requested (key_idx × model_id) cells and
+    # the fresh results are MERGED into the persisted snapshot (the rest of
+    # the grid keeps its previous verdicts) instead of replacing it.
+    only = data.get('only') if isinstance(data.get('only'), dict) else {}
+    _ok = only.get('key_idxs')
+    _om = only.get('model_ids')
+    only_key_idxs = ({i for i in _ok if isinstance(i, int) and not isinstance(i, bool)}
+                     if isinstance(_ok, list) else None)
+    only_model_ids = ({x.strip() for x in _om if isinstance(x, str) and x.strip()}
+                      if isinstance(_om, list) else None)
+    scoped = bool(only_key_idxs) or bool(only_model_ids)
+
     if not provider_id:
         return api_bad_request('provider_id is required')
     if not base_url:
@@ -838,7 +851,7 @@ def probe_provider_cells_start():
             logger.info('[CellProbe] %s already running — returning live snapshot', provider_id)
             return api_ok(_public_probe_snapshot(existing))
 
-    if not force:
+    if not force and not scoped:
         cached = read_json(_probe_cache_path(provider_id), default=None)
         if isinstance(cached, dict) and cached.get('cells'):
             logger.info('[CellProbe] %s resumed from disk (%d cells, status=%s)',
@@ -865,6 +878,28 @@ def probe_provider_cells_start():
     if len(work) > 400:
         return api_bad_request('too many cells to probe (%d > 400)' % len(work))
 
+    # Scoped probe: restrict the run to the requested cells and seed the task
+    # with the persisted snapshot's OTHER cells so the result merges into the
+    # full grid. Seeds are pruned to the provider's current (key × id) space —
+    # a model/key deleted since the cache was written must not come back as a
+    # ghost pip. done_count tracks only this run's completions, so seeded
+    # cells never inflate the progress counter.
+    seed_cells = {}
+    if scoped:
+        full_work = work
+        work = [w for w in full_work
+                if (not only_key_idxs or w[0] in only_key_idxs)
+                and (not only_model_ids or w[3] in only_model_ids)]
+        if not work:
+            return api_bad_request('no cells match the requested scope')
+        probed_keys = {_probe_cell_key(w[0], w[3]) for w in work}
+        valid_keys = {_probe_cell_key(w[0], w[3]) for w in full_work}
+        cached = read_json(_probe_cache_path(provider_id), default=None)
+        if isinstance(cached, dict) and isinstance(cached.get('cells'), dict):
+            for k, v in cached['cells'].items():
+                if k in valid_keys and k not in probed_keys and isinstance(v, dict):
+                    seed_cells[k] = v
+
     task = {
         'provider_id': provider_id,
         'status': 'running',
@@ -872,7 +907,7 @@ def probe_provider_cells_start():
         'finished_at': None,
         'total': len(work),
         'done_count': 0,
-        'cells': {},
+        'cells': dict(seed_cells),
         'summary': {'ok': 0, 'disable': 0},
         'error': None,
         'attempts': attempts,
@@ -889,8 +924,8 @@ def probe_provider_cells_start():
                           name='cell-probe-%s' % provider_id[:24], daemon=True)
     th.start()
 
-    logger.info('[CellProbe] Launched background probe for %s (%d cells, force=%s)',
-                provider_id, len(work), force)
+    logger.info('[CellProbe] Launched background probe for %s (%d cells, force=%s, scoped=%s, seeded=%d)',
+                provider_id, len(work), force, scoped, len(seed_cells))
     return api_ok(_public_probe_snapshot(task))
 
 

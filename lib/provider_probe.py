@@ -442,6 +442,20 @@ def persist_probe_task(task: dict):
                        task.get('provider_id'), e)
 
 
+def _recount_summary(task: dict):
+    """Recompute task['summary'] over ALL current cells.
+
+    Scoped probes (only=key/model) seed the task with the persisted snapshot's
+    other cells so their result MERGES into the full grid; the summary must
+    therefore reflect the merged set from the very first poll, not just the
+    cells completed in this run."""
+    cells = task['cells']
+    n_disable = sum(1 for c in cells.values() if c['recommend_disable'])
+    n_skipped = sum(1 for c in cells.values() if c['status'] == SKIPPED)
+    task['summary'] = {'ok': len(cells) - n_disable - n_skipped,
+                       'disable': n_disable, 'skipped': n_skipped}
+
+
 def public_probe_snapshot(task: dict) -> dict:
     """The serialisable, secret-free view of a probe task (for poll + disk)."""
     return {
@@ -465,9 +479,11 @@ def run_cell_probe_task(task: dict, work: list, timeout: int):
     extra_headers = task['_extra_headers']
     protocol = task.get('_protocol', 'openai')
     attempts = task.get('attempts', 3)
-    logger.info('[CellProbe] Started background probe for %s — %d cell(s), '
-                'up to %d attempt(s) each (protocol=%s)', provider_id, len(work),
-                attempts, protocol)
+    if task['cells']:
+        _recount_summary(task)
+    logger.info('[CellProbe] Started background probe for %s — %d cell(s) this run, '
+                '%d seeded, up to %d attempt(s) each (protocol=%s)', provider_id,
+                len(work), len(task['cells']), attempts, protocol)
 
     def _run(item):
         key_idx, api_key, root, mid = item[0], item[1], item[2], item[3]
@@ -527,11 +543,11 @@ def run_cell_probe_task(task: dict, work: list, timeout: int):
                     continue
                 with CELL_PROBE_LOCK:
                     task['cells'][probe_cell_key(cell['key_idx'], cell['model_id'])] = cell
-                    task['done_count'] = len(task['cells'])
-                    n_disable = sum(1 for c in task['cells'].values() if c['recommend_disable'])
-                    n_skipped = sum(1 for c in task['cells'].values() if c['status'] == SKIPPED)
-                    task['summary'] = {'ok': task['done_count'] - n_disable - n_skipped,
-                                       'disable': n_disable, 'skipped': n_skipped}
+                    # Progress counts only THIS RUN's completions — cells
+                    # seeded from the disk snapshot (scoped probe) are already
+                    # done and must not inflate done/total.
+                    task['done_count'] = task.get('done_count', 0) + 1
+                    _recount_summary(task)
                 # Throttle disk writes: at most every ~1.5s during the run.
                 now = _time.monotonic()
                 if now - last_persist > 1.5:

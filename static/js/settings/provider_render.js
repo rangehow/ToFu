@@ -201,6 +201,9 @@ function _renderProvidersTab() {
     html += '</div>'; // /stg-provider-card
   }
   list.innerHTML = html;
+  // An open access matrix can overflow the 860px panel (3+ keys) — widen the
+  // panel when it does, shrink back when it doesn't (no-op without a matrix).
+  if (typeof _fitMatrixPanelWidth === 'function') _fitMatrixPanelWidth();
 }
 
 /** Format a $/1M-tokens price for compact display */

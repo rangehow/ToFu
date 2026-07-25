@@ -55,6 +55,15 @@ var _stgMatrixProbeAttached = {};
 /** Per-provider "attempts per cell" setting (filters false 429s). Default 3. */
 var _stgMatrixAttempts = {};
 
+/** The scope of the currently-running probe, keyed by provider index.
+ *  Shape: ``{key_idxs?: [int], model_ids?: [string]}`` — null/absent means a
+ *  full-grid probe. Drives the per-scope spinner on the row/column/cell
+ *  probe buttons. Cleared when the probe reaches a terminal state. */
+var _stgMatrixProbeScope = {};
+
+/** Shared lightning-bolt glyph for every probe trigger (toolbar + scopes). */
+var _MX_BOLT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg>';
+
 /** Update the attempts setting for a provider from the toolbar selector. */
 function _setMatrixAttempts(provIdx, val) {
   _stgMatrixAttempts[provIdx] = Math.max(1, Math.min(5, parseInt(val, 10) || 3));
@@ -68,6 +77,62 @@ function _providerId(provIdx) {
   var p = _stgProviders[provIdx];
   return (p && p.id) ? p.id : ('idx_' + provIdx);
 }
+
+/** True while the running probe's scope IS exactly this row / column / cell
+ *  (used to paint the spinner on the trigger the user clicked). */
+function _scopeCovers(provIdx, kind, keyIdx, modelId) {
+  var s = _stgMatrixProbeScope[provIdx];
+  var probe = _stgMatrixProbe[provIdx];
+  if (!s || !probe || probe.status !== 'running') return false;
+  var ks = s.key_idxs, ms = s.model_ids;
+  if (kind === 'cell') {
+    return !!(ks && ms && ks.length === 1 && ks[0] === keyIdx &&
+              ms.length === 1 && ms[0] === modelId);
+  }
+  if (kind === 'col') return !!(ks && !ms && ks.length === 1 && ks[0] === keyIdx);
+  if (kind === 'row') return !!(ms && !ks && ms.length === 1 && ms[0] === modelId);
+  return false;
+}
+
+/** Start a row / column / single-cell probe (merged into the saved snapshot
+ *  server-side; the rest of the grid keeps its verdicts). */
+function _probeMatrixScope(provIdx, only) {
+  var probe = _stgMatrixProbe[provIdx];
+  if (probe && probe.status === 'running') return; // one probe per provider at a time
+  _runMatrixProbe(provIdx, false, only);
+}
+
+/** Widen the settings panel when an open matrix overflows it, so 3+ keys
+ *  don't force horizontal scrolling on wide-enough screens. The class is
+ *  removed as soon as no matrix overflows (matrix closed / panel wide enough). */
+function _fitMatrixPanelWidth() {
+  var panel = document.querySelector('.modal.settings-panel');
+  if (!panel) return;
+  var wide = false;
+  var scrolls = document.querySelectorAll('.stg-matrix-scroll');
+  for (var i = 0; i < scrolls.length; i++) {
+    // Hidden matrices (inactive settings tab / collapsed provider card) have
+    // a zero layout box — they must not widen the panel for something the
+    // user can't see.
+    if (scrolls[i].clientWidth === 0) continue;
+    if (scrolls[i].scrollWidth > scrolls[i].clientWidth + 4) { wide = true; break; }
+  }
+  panel.classList.toggle('stg-matrix-wide', wide);
+}
+
+// Re-fit on window resize (debounced) — a wider viewport may make the wide
+// panel unnecessary; a narrower one may need it even for 2 keys. Guarded for
+// node harnesses that eval this file without DOM event APIs.
+(function() {
+  if (typeof window.addEventListener !== 'function') return;
+  var _mxResizeT = null;
+  window.addEventListener('resize', function() {
+    if (_mxResizeT) clearTimeout(_mxResizeT);
+    _mxResizeT = setTimeout(function() {
+      if (document.querySelector('.modal.settings-panel .stg-matrix-scroll')) _fitMatrixPanelWidth();
+    }, 180);
+  });
+})();
 
 /** Flip between the card view and the access-matrix view for a provider. */
 function _toggleMatrixView(provIdx) {
@@ -213,6 +278,10 @@ function _renderAccessMatrix(provIdx) {
         'spellcheck="false" autocomplete="off" ' +
         'onchange="_onKeyLabelEdit(' + provIdx + ',' + ki + ',this.value)">' +
       '<span class="stg-mx-keytail">' + escapeHtml(tail) + '</span>' +
+      '<button type="button" class="stg-mx-zap col' + (_scopeCovers(provIdx, 'col', ki) ? ' probing' : '') + '"' +
+        (running ? ' disabled' : '') +
+        ' onclick="_probeMatrixScope(' + provIdx + ',{key_idxs:[' + ki + ']})" ' +
+        'title="' + escapeHtml(t('settings.matrixProbeColHint')) + '">' + _MX_BOLT + '</button>' +
     '</th>';
   }
   html += '</tr></thead><tbody>';
@@ -243,6 +312,16 @@ function _renderMatrixRow(provIdx, modelIdx, m, id, rowPos, rowCount, keys, grou
   var brand = (typeof _detectBrand === 'function') ? _detectBrand(id) : '';
   var brandSvg = (typeof _brandSvg === 'function') ? _brandSvg(brand, 14) : '';
 
+  // Row-scope probe button: probes exactly this concrete id across every key.
+  var _rowProbe = _stgMatrixProbe[provIdx] || {};
+  var _rowRunning = (_rowProbe.status === 'running');
+  var rowProbeBtn = '<button type="button" class="stg-mx-zap row' +
+      (_scopeCovers(provIdx, 'row', null, id) ? ' probing' : '') + '"' +
+    (_rowRunning ? ' disabled' : '') +
+    ' onclick="event.stopPropagation();_probeMatrixScope(' + provIdx +
+      ',{model_ids:[' + JSON.stringify(id).replace(/"/g, '&quot;') + ']})" ' +
+    'title="' + escapeHtml(t('settings.matrixProbeRowHint')) + '">' + _MX_BOLT + '</button>';
+
   var labelCell;
   if (isAlias) {
     var connector = isLastInGroup ? '└' : '├';
@@ -255,6 +334,7 @@ function _renderMatrixRow(provIdx, modelIdx, m, id, rowPos, rowCount, keys, grou
       '<span class="stg-mx-aliasidx">A' + rowPos + '</span>' +
       '<span class="stg-mx-brand">' + brandSvg + '</span>' +
       '<span class="stg-mx-mid alias-id" title="' + escapeHtml(id) + '">' + escapeHtml(id) + '</span>' +
+      rowProbeBtn +
     '</td>';
   } else {
     var aliasCount = rowCount - 1;
@@ -271,6 +351,7 @@ function _renderMatrixRow(provIdx, modelIdx, m, id, rowPos, rowCount, keys, grou
       '<span class="stg-mx-brand">' + brandSvg + '</span>' +
       '<span class="stg-mx-mid" title="' + escapeHtml(id || '') + '">' + escapeHtml(id || '(unnamed)') + '</span>' +
       countBadge +
+      rowProbeBtn +
     '</td>';
   }
 
@@ -317,11 +398,29 @@ function _renderMatrixCell(provIdx, modelIdx, keyIdx, m, id, isAlias) {
   // Probe-status pip: exact (key, id) result — each alias is its own cell now.
   var probe = _stgMatrixProbe[provIdx] || {};
   var pcells = probe.cells || {};
+  var running = (probe.status === 'running');
   var pip = '';
+  var cellProbe = '';
+  var cellOnly = '{key_idxs:[' + keyIdx + '],model_ids:[' +
+    JSON.stringify(id).replace(/"/g, '&quot;') + ']}';
   var r = pcells[_probeCellKey(keyIdx, id)];
-  if (r) {
+  if (_scopeCovers(provIdx, 'cell', keyIdx, id)) {
+    // This cell is being probed right now — spin a bolt in place of the pip.
+    cellProbe = '<span class="stg-mx-zap cell probing" title="' +
+      escapeHtml(t('settings.matrixProbing')) + '">' + _MX_BOLT + '</span>';
+  } else if (r) {
     var info = _probeStatusInfo(r.status);
-    pip = '<span class="stg-mx-probe-pip ' + info.cls + '" title="' + escapeHtml(info.label + (r.detail ? ' — ' + r.detail : '')) + '">' + info.glyph + '</span>';
+    // The pip doubles as the re-probe trigger for its own cell.
+    pip = '<span class="stg-mx-probe-pip ' + info.cls + ' clickable" role="button" ' +
+      'title="' + escapeHtml(info.label + (r.detail ? ' — ' + r.detail : '') +
+        '\n' + t('settings.matrixProbeCellHint')) + '" ' +
+      'onclick="event.stopPropagation();_probeMatrixScope(' + provIdx + ',' + cellOnly + ')">' +
+      info.glyph + '</span>';
+  } else {
+    // Never probed — hover reveals a single-cell probe button (bottom-left).
+    cellProbe = '<button type="button" class="stg-mx-zap cell"' + (running ? ' disabled' : '') +
+      ' onclick="event.stopPropagation();_probeMatrixScope(' + provIdx + ',' + cellOnly + ')" ' +
+      'title="' + escapeHtml(t('settings.matrixProbeCellHint')) + '">' + _MX_BOLT + '</button>';
   }
 
   return '<td class="stg-mx-cell' + (on ? ' on' : ' off') + (overridden ? ' overridden' : '') +
@@ -332,6 +431,7 @@ function _renderMatrixCell(provIdx, modelIdx, keyIdx, m, id, isAlias) {
       '<span class="stg-mx-dot"></span>' +
     '</button>' +
     pip +
+    cellProbe +
     '<div class="stg-mx-badges">' + badges + '</div>' +
     (isAlias ? '' :
       '<button type="button" class="stg-mx-edit" ' +
@@ -546,14 +646,20 @@ function _ingestProbeSnapshot(provIdx, snap) {
   };
   // Reflect the server's attempts setting in the selector on resume.
   if (snap.attempts && !_stgMatrixAttempts[provIdx]) _stgMatrixAttempts[provIdx] = snap.attempts;
+  if (_stgMatrixProbe[provIdx].status !== 'running') delete _stgMatrixProbeScope[provIdx];
   _reconcileProbeNonChat(provIdx);
   return true;
 }
 
-/** Start (or, when not forcing, resume) a background probe for a provider. */
-function _runMatrixProbe(provIdx, force) {
+/** Start (or, when not forcing, resume) a background probe for a provider.
+ *  ``only`` (optional) scopes the run to rows/columns/cells:
+ *  ``{key_idxs?: [int], model_ids?: [string]}`` — the backend probes exactly
+ *  those cells and MERGES the verdicts into the persisted snapshot. */
+function _runMatrixProbe(provIdx, force, only) {
   var p = _stgProviders[provIdx];
   if (!p) return;
+  var existing = _stgMatrixProbe[provIdx];
+  if (existing && existing.status === 'running') return; // one probe per provider at a time
   var keys = _matrixKeys(p);
   var models = (p.models || []).filter(function(m) { return (m.model_id || '').trim(); });
   if (!keys.length || !models.length) {
@@ -561,6 +667,7 @@ function _runMatrixProbe(provIdx, force) {
     return;
   }
 
+  _stgMatrixProbeScope[provIdx] = only || null;
   _stgMatrixProbe[provIdx] = { status: 'running', cells: (force ? {} : ((_stgMatrixProbe[provIdx] || {}).cells || {})),
     summary: { ok: 0, disable: 0 }, total: 0, done_count: 0, error: null };
   _rerenderMatrix(provIdx);
@@ -579,8 +686,11 @@ function _runMatrixProbe(provIdx, force) {
                capabilities: (m.capabilities || []) };
     }),
     attempts: _stgMatrixAttempts[provIdx] || 3,
-    force: !!force,
+    // A scoped probe always refreshes its cells server-side (the cache-return
+    // shortcut is skipped for it), so force stays a FULL-GRID-only flag.
+    force: !!force && !only,
   };
+  if (only) body.only = only;
 
   Api.providers.probeCellsStart(body).then(function(snap) {
     if (!_ingestProbeSnapshot(provIdx, snap)) {
@@ -685,6 +795,7 @@ function _clearMatrixProbe(provIdx) {
     delete _stgMatrixProbeTimers[provIdx];
   }
   delete _stgMatrixProbe[provIdx];
+  delete _stgMatrixProbeScope[provIdx];
   _stgMatrixProbeAttached[provIdx] = true; // don't auto-reattach until reopen
   _rerenderMatrix(provIdx);
 }

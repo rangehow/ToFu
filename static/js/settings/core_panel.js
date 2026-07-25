@@ -94,6 +94,9 @@ function switchSettingsTab(tabId) {
   document.querySelectorAll('.settings-tab-panel').forEach(function(p) {
     p.classList.toggle('active', p.id === 'settingsTab_' + tabId);
   });
+  // The matrix-wide panel class only makes sense on the providers tab —
+  // re-fit so switching away shrinks the panel back to 860px.
+  if (typeof _fitMatrixPanelWidth === 'function') _fitMatrixPanelWidth();
   if (tabId === 'preferences' && typeof _populatePreferencesTab === 'function') {
     _populatePreferencesTab();
   }

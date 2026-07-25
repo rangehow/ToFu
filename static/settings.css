@@ -1142,7 +1142,45 @@
   border: 1.5px solid var(--s-ink);
   border-radius: var(--s-radius);
   box-shadow: var(--s-shadow-xs);
-  background: var(--s-white);
+  /* Scroll shadows (Lea-Verou technique): an edge shadow appears ONLY on
+     sides that can still scroll — the 'local' cover gradients hide the
+     'scroll' shadow gradients at the extremes. Cues that more key columns
+     exist off-screen even where the OS hides scrollbars. */
+  background:
+    linear-gradient(to right, var(--s-white) 30%, rgba(250, 248, 243, 0)),
+    linear-gradient(to right, rgba(250, 248, 243, 0), var(--s-white) 70%) 0 100%,
+    radial-gradient(farthest-side at 0 50%, rgba(26, 24, 20, 0.22), rgba(26, 24, 20, 0)),
+    radial-gradient(farthest-side at 100% 50%, rgba(26, 24, 20, 0.22), rgba(26, 24, 20, 0)) 0 100%;
+  background-repeat: no-repeat;
+  background-color: var(--s-white);
+  background-size: 40px 100%, 40px 100%, 12px 100%, 12px 100%;
+  background-attachment: local, local, scroll, scroll;
+  /* Always-visible horizontal scrollbar (custom scrollbars are exempt from
+     macOS 'show only while scrolling' auto-hiding) — the primary cue that
+     the grid scrolls horizontally. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--s-ink) var(--s-cream);
+}
+.stg-matrix-scroll::-webkit-scrollbar { height: 10px; }
+.stg-matrix-scroll::-webkit-scrollbar-track {
+  background: var(--s-cream);
+  border-top: 1.5px solid var(--s-ink);
+  border-radius: 0 0 4px 4px;
+}
+.stg-matrix-scroll::-webkit-scrollbar-thumb {
+  background: var(--s-ink);
+  border: 2px solid var(--s-cream);
+  border-radius: 6px;
+}
+.stg-matrix-scroll::-webkit-scrollbar-thumb:hover { background: var(--s-gold); }
+
+/* Panel auto-widen: JS (_fitMatrixPanelWidth) adds .stg-matrix-wide when an
+   open matrix overflows the default 860px panel, giving 3–4 key columns a
+   chance to fit without scrolling. Desktop only — mobile keeps its own
+   full-width rule in styles.css. Guard: tests/test_frontend_matrix_scoped_probe.py */
+.settings-panel { transition: width 0.18s ease; }
+@media (min-width: 769px) {
+  .settings-panel.stg-matrix-wide { width: min(1240px, 96vw); }
 }
 .stg-matrix-table { border-collapse: collapse; width: 100%; }
 .stg-matrix-table th,
@@ -1166,6 +1204,7 @@
   padding: 6px 8px !important;
   min-width: 92px;
   vertical-align: bottom;
+  position: relative;
 }
 .stg-mx-keyname {
   width: 100%;
@@ -1192,7 +1231,8 @@
 }
 .stg-mx-model {
   background: var(--s-white);
-  padding: 6px 10px !important;
+  /* right padding reserves room for the row-scope probe button */
+  padding: 6px 28px 6px 10px !important;
   position: sticky; left: 0; z-index: 2;
   white-space: nowrap;
 }
@@ -1207,7 +1247,16 @@
   font-weight: 700;
   color: var(--s-ink);
   vertical-align: middle;
+  /* Long gateway ids (yuju-claude-opus-4.7-evaDaily…) would otherwise eat
+     the width the key columns need. Cap + ellipsis; the full id remains one
+     hover away via the title tooltip. */
+  display: inline-block;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+.stg-mx-mid.alias-id { max-width: 220px; }
 .stg-mx-row.model-off { opacity: 0.5; }
 .stg-mx-row.model-off .stg-mx-mid { text-decoration: line-through; }
 /* ── Model groups: a root model + its aliases (each a distinct upstream) ──
@@ -1353,6 +1402,38 @@
 }
 .stg-mx-cell:hover .stg-mx-edit { opacity: 0.85; }
 .stg-mx-edit:hover { opacity: 1 !important; color: var(--s-ink); transform: scale(1.15); }
+
+/* ── Scoped probe triggers (row / column / cell) — one shared mini bolt
+   button in the matrix's hover-reveal language (mirrors .stg-mx-edit) ── */
+.stg-mx-zap {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; padding: 0;
+  border: 1.5px solid var(--s-ink); border-radius: 4px;
+  background: var(--s-white); color: var(--s-ink);
+  cursor: pointer;
+  transition: opacity 0.12s, transform 0.1s, background 0.12s;
+  box-sizing: border-box;
+}
+.stg-mx-zap svg { width: 10px; height: 10px; display: block; }
+.stg-mx-zap:hover { background: var(--s-gold); transform: scale(1.12); }
+.stg-mx-zap:disabled { opacity: 0.3; cursor: default; transform: none; background: var(--s-cream); }
+.stg-mx-zap.probing { pointer-events: none; opacity: 1; background: var(--s-gold); }
+.stg-mx-zap.probing svg { animation: stg-mx-spin 0.7s linear infinite; }
+/* Column scope: top-right of the key header, subtle until hovered. */
+.stg-mx-zap.col { position: absolute; top: 3px; right: 3px; opacity: 0.4; }
+.stg-mx-keyhead:hover .stg-mx-zap.col { opacity: 1; }
+/* Row scope: right edge of the (sticky) model label cell, hover-revealed. */
+.stg-mx-zap.row { position: absolute; top: 50%; right: 4px; margin-top: -9px; opacity: 0; }
+.stg-mx-model:hover .stg-mx-zap.row { opacity: 0.9; }
+.stg-mx-zap.row.probing { opacity: 1; }
+/* Cell scope: bottom-left corner, hover-revealed (only when no pip yet —
+   once a verdict exists the pip itself is the re-probe trigger). */
+.stg-mx-zap.cell { position: absolute; bottom: 2px; left: 3px; opacity: 0; }
+.stg-mx-cell:hover .stg-mx-zap.cell { opacity: 0.9; }
+.stg-mx-zap.cell.probing { opacity: 1; }
+/* The verdict pip doubles as the re-probe trigger for its own cell. */
+.stg-mx-probe-pip.clickable { cursor: pointer; transition: transform 0.1s; }
+.stg-mx-probe-pip.clickable:hover { transform: scale(1.2); }
 .stg-matrix-empty {
   padding: 16px;
   text-align: center;

@@ -1,6 +1,6 @@
 # Tofu 动画视频生成能力设计稿(auto-motion 吸收 + 超越)
 
-> 状态:**P0 ✅ · P1 ✅ · P2 音画链 ✅ · P2b 无头引擎+api_v1 ✅(2026-07-25);P3 仅剩逐镜预览/重生成面板 + 论文 video abstract。**
+> 状态:**P0 ✅ · P1 ✅ · P2 音画链 ✅ · P2b 无头引擎+api_v1 ✅ · P3 后端片 ✅(烧录/scenes-only/单镜重生成/论文 video abstract);P3 仅剩前端面板与论文「视频」tab。**
 > 参考仓库:`/mnt/dolphinfs/ssd_pool/docker/user/hadoop-aipnlp/INS/ruanjunhao04/auto-motion`
 > (与 tofu 同级目录,2026-07-25 clone 自 https://github.com/vibe-motion/auto-motion,49MB)
 
@@ -175,11 +175,17 @@ transcription.srt
 - **测试**:`tests/test_motion_video_engine.py` 15 测(与 P1/P2 合计 **63 全绿**)——分镜构造即过闸/max 契约/runt 归并;模板全尺寸过闸+XSS 转义;**真 engine 全链**(假 provider 缝,真分镜/真模板/真 verify_spec:假 probe 从真写出的 index.html 读 data-duration,闸全真跑)+降级/Abort/单镜失败诊断/**NEUTER**(剥 verify_spec → 坏规格镜头放行)+dedup 生命周期+HTTP 层(400 三连/start/poll/dedup join/abort/Range 双格式);collect **8821** 0 err;
 - **字幕烧录**(burn-in)未做:侧车 .srt 已交付,烧录等 P3 面板给开关。
 
-### P3 — 交互与并行
+### P3 — 交互与并行 ——— 后端片 ✅(2026-07-25);前端面板待开工
 
-- 前端视频面板(或 artifacts 增强):逐镜头卡片、snapshot 抽帧九宫格预览、单镜头重生成按钮、进度条;
-- 并行渲染 worker 池(限流默认 2);BGM 轨 + ducking;画幅/帧率/风格预设(直接消费 hyperframes-design 帧预设);
-- 论文 video abstract(播客链延伸)。
+**已交付(后端,commit `ef56bd5e`,7 文件 +940/-20;P3 套件 14 测,合计 **77 全绿**,相邻 podcast_api+api_v1_integration 95/95,collect **8838** 0 err):**
+
+- **字幕烧录**:`burn_in_subtitles`(libass subtitles filter,filtergraph 路径转义,fontsdir/force_style 可选,重编码+原子写+时长复核;**真 libass 渲染实测**:黑底 1s + 「测试字幕」→ 烧录帧与纯黑帧字节不同);`POST /videos` 与 paper video 均带 `burn_in` 开关;
+- **scenes-only 引擎**:无 SRT 也可跑(scenes.json 即真相,自参照 span 过闸)——LLM/上层直接给分镜的通道;
+- **单镜重生成**:`run_scene_regen_task`(复用既有 composition 重渲→重拼→重烧/重混→原子替换 final.mp4,**URL 稳定**)+ `GET /videos/<id>/scenes`(逐镜状态)+ `GET .../scenes/<sid>/file`(Range)+ `POST .../scenes/<sid>/regen`;
+- **论文 video abstract**:`lib/paper/video_abstract.py`(播客链延伸:has_report 门 + `_load_source_text` 复用 + 零 LLM beats:markdown 剥离/段落预算分组/字数估时长 250字/分/钳 [3,15]s/连续 from 0)+ `POST /api/v1/paper/video/start`(进度与下载直接骑 motion poll/file 端点);
+- **前端面板(本 P3 唯一剩余)**:逐镜九宫格预览 + 重生成按钮 + 进度条——后端已备齐(scenes 列表/场景文件/regen/motion push 频道),纯前端片(index.html + 新 JS 模块 + bundle 注册 + i18n + JSDOM),下一 dispatch 落地;论文「视频」tab 同期。
+
+原 P3 计划备查:并行 worker 池(✅ 已随 P2b 落地)/BGM+ducking(未做,出路线图)/画幅预设(✅ API aspect 四档)。
 
 ---
 

@@ -175,16 +175,20 @@ def _close_inheritable_listen_sockets():
                     '(prevents leaked listen socket holding the port)', closed)
 
 
-def _deferred_reexec(delay: float = 0.6):
-    """Re-exec the current process after a short delay.
+def _perform_server_reexec(reason: str) -> bool:
+    """Re-exec the current process (unconditional).
 
-    Runs in a daemon thread so the HTTP response flushes first. Mirrors
-    server.py's launch contract: same interpreter, same argv. The instance
-    lock fd is close-on-exec, so it releases before the new image re-acquires.
+    The caller must have verified there is no in-flight work — see
+    update_restart's list_running_tasks guard and lib/auto_restart.py's
+    precondition bundle. Extracted from _deferred_reexec so the HEAD-moved
+    auto-restart watcher shares the exact same exec contract: clean
+    dirty-bit, env-reexec guard reset, listen-socket close-on-exec, port
+    reclaim hint, same interpreter + argv. Returns False when execv fails
+    (the process keeps running); on success it never returns at all (the
+    process image is replaced).
     """
-    time.sleep(delay)
-    logger.info('[Update] Re-execing server: %s %s',
-                sys.executable, ' '.join(sys.argv))
+    logger.info('[Update] Re-execing server (%s): %s %s',
+                reason, sys.executable, ' '.join(sys.argv))
     # Flip the clean-shutdown dirty-bit: an in-place re-exec is a controlled
     # exit, so the fresh image must NOT flag the previous PID as an OS kill.
     try:
@@ -210,6 +214,19 @@ def _deferred_reexec(delay: float = 0.6):
         # execv only returns on failure — log loudly; the process keeps running.
         logger.critical('[Update] Re-exec failed, server NOT restarted: %s',
                         e, exc_info=True)
+        return False
+    return True
+
+
+def _deferred_reexec(delay: float = 0.6):
+    """Re-exec the current process after a short delay.
+
+    Runs in a daemon thread so the HTTP response flushes first. Mirrors
+    server.py's launch contract: same interpreter, same argv. The instance
+    lock fd is close-on-exec, so it releases before the new image re-acquires.
+    """
+    time.sleep(delay)
+    _perform_server_reexec('update')
 
 
 @api_v1_update_bp.route('/api/v1/update/restart', methods=['POST'])

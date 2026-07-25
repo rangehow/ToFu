@@ -2427,7 +2427,32 @@ if __name__ == '__main__':
     _shutdown_requested = _threading.Event()
     from lib.compat import safe_signal
     def _signal_shutdown(signum, frame):
+        # A SECOND signal while we're already draining = the user is impatient
+        # (or a task is wedged). Honour it as an immediate force-quit escape
+        # hatch instead of forcing them to wait out the drain window. os._exit
+        # skips the atexit PG-stop hook, but mark_clean already ran on the first
+        # signal so the next boot still classifies this as a clean exit.
+        if _shutdown_requested.is_set():
+            try:
+                sys.stderr.write(
+                    '\n\033[31m[Server] Force-quit — terminating now.\033[0m\n')
+                sys.stderr.flush()
+            except Exception:
+                pass
+            os._exit(130)
         _server_log.info('[Server] Received signal %s — shutting down…', signum)
+        # The logger line above lands in logs/app.log, NOT the terminal — so
+        # from the user's seat Ctrl+C looked like a silent freeze. Echo a
+        # visible notice to stderr (the terminal) that we're draining, and how
+        # to bail out immediately.
+        try:
+            sys.stderr.write(
+                '\n\033[33m[Server] Shutting down gracefully — draining in-flight '
+                'requests…\n'
+                '  Press Ctrl+C again to force-quit immediately.\033[0m\n')
+            sys.stderr.flush()
+        except Exception:
+            pass
         # Flip the clean-shutdown dirty-bit so the next boot classifies this as
         # a controlled exit, NOT an OS kill. One atomic write; never raises.
         try:
@@ -2781,7 +2806,14 @@ if __name__ == '__main__':
     # but we increase it to avoid edge cases where a proxy holds a
     # connection just past the threshold. Graceful timeout for shutdown.
     hconfig.keep_alive_timeout = 600
-    hconfig.graceful_timeout = 10
+    # Shutdown drain window for in-flight connections. Kept short so Ctrl+C
+    # feels responsive on a local dev server (a second Ctrl+C force-quits —
+    # see _signal_shutdown). Override via TOFU_GRACEFUL_TIMEOUT.
+    try:
+        hconfig.graceful_timeout = float(
+            os.environ.get('TOFU_GRACEFUL_TIMEOUT', '') or '3')
+    except (ValueError, TypeError):
+        hconfig.graceful_timeout = 3.0
 
     # ── Listen backlog ──
     # Hypercorn's default (100) is small: if the event loop briefly stalls
@@ -3115,6 +3147,19 @@ if __name__ == '__main__':
         else:
             _server_log.info('[Server] Loop-stall watchdog disabled (TOFU_LOOP_STALL_SECS=0)')
 
+        # ── HEAD-moved auto-restart watcher (opt-in) ──
+        # The "effective" contract for agent work on a shared checkout: a
+        # commit only counts once the RUNNING process serves it. With
+        # TOFU_AUTO_RESTART=1 this daemon re-execs the server when the
+        # checked-out HEAD moves while idle (no in-flight tasks, shutdown
+        # not requested) — the same guard the manual restart endpoint uses.
+        try:
+            from lib.auto_restart import maybe_start_auto_restart_watch
+            if maybe_start_auto_restart_watch(shutdown_requested=_shutdown_requested):
+                _server_log.info('[Server] Auto-restart watcher armed (TOFU_AUTO_RESTART=1)')
+        except Exception as _ar_err:
+            _server_log.warning('[Server] Auto-restart watcher setup failed: %s', _ar_err)
+
         # ── Deferred BILLED boot dispatch ──
         # killed-recovery + autopilot-resume were split out of the startup path
         # (they SPAWN carriers). Run them HERE, on the SERVING loop, so a
@@ -3183,12 +3228,22 @@ if __name__ == '__main__':
             _server_log.warning('[Server] task quiesce failed: %s', _q_err)
             _n_quiesced = 0
         try:
-            _drain_secs = float(os.environ.get('TOFU_SHUTDOWN_DRAIN_SECS', '') or '8')
+            _drain_secs = float(os.environ.get('TOFU_SHUTDOWN_DRAIN_SECS', '') or '3')
         except (ValueError, TypeError):
-            _drain_secs = 8.0
+            _drain_secs = 3.0
         if _n_quiesced and _drain_secs > 0:
             _server_log.info('[Server] Draining %d aborted task(s) up to %.0fs '
                              'before PG stop…', _n_quiesced, _drain_secs)
+            # Terminal feedback so the post-HTTP drain isn't a silent wait; a
+            # Ctrl+C here hits _signal_shutdown (flag already set) → force-quit.
+            try:
+                sys.stderr.write(
+                    '\033[33m[Server] Waiting up to %.0fs for %d running task(s) '
+                    'to stop (Ctrl+C to skip)…\033[0m\n'
+                    % (_drain_secs, _n_quiesced))
+                sys.stderr.flush()
+            except Exception:
+                pass
             _deadline = time.monotonic() + _drain_secs
             try:
                 from lib.tasks_pkg import tasks as _tasks, tasks_lock as _tasks_lock

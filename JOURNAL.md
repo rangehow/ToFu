@@ -1,3 +1,11 @@
+### 2026-07-25(续44) — 请求检视器 P3 落地,epic pt_906545f4e8d140d5 全期收口(commit `05426ba1`,7 文件 +434/-19;新 jsdom 13 探针 + NEUTER + 静态钉,P2/P3 合计 5/5,回归 17 套件 **105/105**,collect **9077** 0 err)
+- **气泡 `</>` 锚点(消灭人肉对账的最后一刀):** finish_info.js debug_mode 门内,每条带 `_taskId` 的 assistant 气泡渲染 ri-anchor(fileCode SVG);`openRequestInspectorForMessage(msgId)` = msg._taskId → 任务 fold → 末 apiRound.round(与 snapshot roundNum 同 1-based)→ 抽屉定位 + ri-flash + 详情。**VU 子任务不进 by-conv 列表也直达**——设计稿 §4 承诺兑现。
+- **前缀折叠增量高亮:** 第 N 轮详情自动 diff N-1 轮(canonical JSON 位置对齐求最长共享前缀,分歧降级 K=0);`showMessagesInDebug` 第 8 参 opts{foldPrefix,diffBase} 仅 full-render 路径生效,前缀折叠进可展开行、增量块 accent 高亮,旧调用点零影响。
+- **本批抓到的两个真 bug:** ①payload 三层取数初版缓存压过 SSE 加速器——在飞任务的新轮会被自己缓存的旧 payload 影子遮蔽,改加速器最优;②jsdom 无 `scrollIntoView`(真浏览器有),加存在性守卫。
+- **过程事故(如实):** 三连 apply_diff 写成 search==replace 空操作,复核时发现改了个寂寞,改 insert_content 重落——「每次写后独立复核」纪律再次救场。
+- **回归:** 17 套件 105/105(含本 session 修复的两原预存在红);finalize 环 42/46——3 红=sibling 未跟踪 WIP 套件 no_jump(驱 ConvView+core.js,与本批零接触),1 红=续26 已录预存在 effective_translate,均诚实区分未代修。
+- **epic 全期账:** P1 `e93efaa2`(kind 分型 + 数据面)/ P2 `71966a8c`(服务端 fold + 抽屉)/ P3 `05426ba1`(锚点 + diff)+ 设计稿 `15922112`。遗留:P4 endpoint/swarm 补发射(独立 epic `pt_e3dc7198e7e34bb1`,uncovered chip 已在挂)。生效需重启+硬刷。
+
 ### 2026-07-25(续43) — pt_412bf68586f44655 收口:两个预存在 HEAD 红根修(均为测试漂移非产品回归,commit `b67a3320`,2 文件 +9/-1;两套件 10/10,相邻 60/60,collect **9074** 0 err)
 - **①fidelity::test_carrier_transforms_fire:** 真相与票面猜测不同——`_fix_empty_user_messages` **本来就有** all-empty-text-blocks 数组分支;真正机制是 fixture 的空白 user 轮骑在消息尾,而 `_inject_system_contexts` 的 Current-date reminder 恰好拼进 TRUE tail(`_inject.py:772`),把它变成非空 block 数组,修复按设计不重写。cold==hot 字节断言一直绿 = 产品无回归,纯 fixture 与注入特性的漂移。修法:fixture 补尾部 assistant+user 两轮让空白轮退到中段,注释钉住「空白轮不得骑尾」。**负控完好:** `TOFU_WIRE_REVERT=inject/sort` 两模式仍咬(正确翻红)。
 - **②vertical_block_relocate NEUTER:** `compaction/_persist.py` 已包化为 `_persist/` 包,neuter 路径 404 → 改指真锚点 `_persist/_splitters.py`(函数 :33、锚句 :53 逐字未变;facade re-export 不动,其余 8 测零改动)。

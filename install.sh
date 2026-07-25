@@ -2213,6 +2213,7 @@ echo ""
 
 if [[ "$NO_LAUNCH" -eq 1 ]]; then
     info "Install-only mode — not launching server."
+    info "After starting, verify the install any time with: python healthcheck.py --runtime"
     exit 0
 fi
 
@@ -2225,4 +2226,15 @@ echo "  Press Ctrl+C to stop the server"
 echo ""
 
 cd "$INSTALL_DIR"
+
+# Post-install runtime self-check: server boot (imports + DB init + first
+# bundle build) takes a few seconds, so `healthcheck.py --runtime --wait`
+# polls /api/health until the server answers, then prints a green "you're
+# good" table — or a precise diagnosis (DB down, no LLM key, browser engine
+# missing) — instead of leaving a fresh user to guess from raw startup logs.
+# Backgrounded: the subshell survives the exec below as an orphan and its
+# output interleaves with the server logs. A probe FAILURE never fails the
+# install — the server itself is already starting.
+( python healthcheck.py --runtime --port "${PORT}" --wait 90 || true ) &
+
 exec python server.py

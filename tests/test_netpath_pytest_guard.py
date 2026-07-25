@@ -11,11 +11,15 @@ autouse fixture forces the switch back on to exercise the mechanism itself.
 """
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 
 import pytest
 
 import lib.netpath as netpath
+
+_PROD_STORE = Path(__file__).resolve().parents[1] / 'data' / 'config' / 'netpath.json'
 
 
 @pytest.mark.unit
@@ -39,3 +43,20 @@ def test_start_prober_refuses_in_pinned_env():
     assert netpath.start_prober(interval=60) is False
     t = netpath._prober_thread
     assert t is None or not t.is_alive()
+
+
+@pytest.mark.unit
+def test_production_store_has_no_test_hosts():
+    # report_outcome() persists learned state with no throttle on the first
+    # call; if a test module ever lets _STORE_PATH point at the real file,
+    # its fictional *.example.com hosts land in the store the live server
+    # loads at boot. Absent file = nothing has leaked (yet).
+    if not _PROD_STORE.exists():
+        return
+    hosts = [h.get('host', '')
+             for h in json.loads(_PROD_STORE.read_text()).get('hosts', [])]
+    leaked = [h for h in hosts if h.endswith('.example.com')]
+    assert not leaked, (
+        'test hosts leaked into the production netpath store: %s — '
+        'redirect _STORE_PATH to tmp_path in the test fixture' % leaked
+    )

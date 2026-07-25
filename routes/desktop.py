@@ -7,7 +7,6 @@ Mirrors the architecture of routes/browser.py:
 """
 
 import hmac
-import json
 import threading
 
 from flask import Blueprint, jsonify, request
@@ -133,77 +132,9 @@ async def desktop_poll():
 # Status endpoint moved to routes/api_v1/desktop.py — read state via the
 # lib.desktop helpers (last_poll_time / pending_commands_count /
 # is_desktop_agent_connected).
-
-
-# ══════════════════════════════════════════════════════════
-#  Tool Execution — Called by LLM orchestrator
-# ══════════════════════════════════════════════════════════
-
-def execute_desktop_tool(fn_name, fn_args):
-    """Execute a desktop tool call. Returns string result for LLM."""
-
-    if not is_desktop_agent_connected():
-        logger.warning('[Desktop] tool %s called but agent not connected', fn_name)
-        return ('Error: Desktop Agent not connected. In the Tofu desktop app, '
-                'enable "Computer Control" from the tray menu — or run the agent '
-                'manually: python -m lib.desktop_agent --server http://your-server:5000 '
-                '--allow-gui')
-
-    # Map LLM tool names to agent command types
-    cmd_type = fn_name  # e.g. "desktop_list_files"
-    timeout = fn_args.pop('_timeout', 30)
-
-    logger.info('[Desktop] executing tool %s (timeout=%ds)', fn_name, timeout)
-    result, error = send_desktop_command(cmd_type, fn_args, timeout=timeout)
-
-    if error:
-        logger.error('[Desktop] tool %s error: %s', fn_name, error)
-        return f'Error: Desktop Agent error: {error}'
-
-    if result is None:
-        return 'Error: Desktop Agent returned empty result'
-
-    if isinstance(result, dict):
-        if result.get('error'):
-            return f'Error: {result["error"]}'
-
-        # Special formatting for common results
-        if 'entries' in result:
-            # File listing
-            lines = [f'{result.get("path", "")} ({result.get("total", 0)} items):\n']
-            for e in result['entries'][:100]:
-                tag = '[DIR]' if e['type'] == 'dir' else '[FILE]'
-                size = f' ({e["size"]:,}B)' if e.get('size') is not None else ''
-                lines.append(f'  {tag} {e["name"]}{size}  {e.get("modified", "")}')
-            return '\n'.join(lines)
-
-        if 'content' in result and 'path' in result:
-            # File content
-            return f'{result["path"]} ({result.get("size", 0):,} bytes):\n\n{result["content"]}'
-
-        if 'base64' in result:
-            # Screenshot — return metadata, actual image handled separately
-            return f'Desktop screenshot: {result.get("width")}x{result.get("height")} ({result.get("size_bytes", 0):,} bytes JPEG)'
-
-        if 'stdout' in result:
-            # Command output
-            out = result['stdout']
-            err = result.get('stderr', '')
-            code = result.get('exit_code', 0)
-            parts = []
-            if out:
-                parts.append(out)
-            if err:
-                parts.append(f'\n[stderr]\n{err}')
-            if code != 0:
-                parts.append(f'\n[exit code: {code}]')
-            return ''.join(parts) if parts else '(no output)'
-
-        if 'processes' in result:
-            # Process list
-            lines = ['PID     CPU%   MEM(MB)  STATUS    NAME']
-            for p in result['processes']:
-                lines.append(f'{p["pid"]:<8}{p["cpu"]:<7}{p["memory_mb"]:<9}{p["status"]:<10}{p["name"]}')
-            return '\n'.join(lines)
-
-    return json.dumps(result, ensure_ascii=False, indent=2)
+#
+# Tool execution lives with the other task-loop handlers:
+# lib/tasks_pkg/handlers/misc/_agents.py::_handle_desktop_tool (registered
+# against DESKTOP_TOOL_NAMES via tool_registry). The wire contract is that
+# the command ``type`` IS the full tool name — see
+# tests/test_desktop_cmdtype_parity.py.

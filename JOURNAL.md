@@ -1,3 +1,11 @@
+### 2026-07-25(续35) — pt_08a6d1afe79c4dfd 收口:desktop wire 前缀错配根修 + 死代码清除 + 契约守卫转正式(commit 见下,3 文件 +21/-101;NEUTER 实证剥修复即红,五环 82/82 + misc 环 40/40,collect **9036** 0 err)
+- **brain 自主派发**我自己开的潜伏票(续31 设计批时按 owner 纪律单独立票,不进设计批)。修复方向早已被 owner 拍板的硬约束①覆盖(docs/REMOTE_WORKTREE_DESIGN.md §3.1:wire type=完整工具名,禁剥/加前缀),无需再问。
+- **根修(一行级):** `_run_desktop`(lib/tasks_pkg/handlers/misc/_agents.py)不再 `replace('desktop_', '', 1)`,wire cmd_type=完整工具名逐字入队,与 agent 侧 COMMANDS 键、以及既有钉 `test_browser_async_poll.py:216`(桥按全名投递)三方对齐。docstring 固化跨进程不变式(不引用票号,只写契约)。
+- **死代码清除:** `routes/desktop.py:execute_desktop_tool`(70 行,零调用方,全仓 grep 实证)连带孤儿 `import json` 一并删除,原位留指引注释指向活路径与契约守卫。
+- **契约守卫转正式:** `tests/test_desktop_cmdtype_parity.py` 摘 xfail(strict),文档串改为永久契约说明。**NEUTER 实证:** `git stash push` 仅修复文件 → 守卫精准红(wire-mismatch 那一枚)→ pop 恢复 → 2 绿。
+- **验证:** ①号五环(parity/desktop_agent/bridge_auth/install_paths/browser_async_poll)**82/82**;handlers/misc 相邻环(conv_ref_raw/feed_read/board_post_transition)**40/40**;collect **9036** 0 err;AST+导入冒烟干净(裸 `import routes` 的 push_bp.websocket AttributeError 为已知环境 flake,与本批无关)。
+- **git 纪律:** 盘上大量 sibling WIP(database schema/llm_dispatch/orchestrator/debug_panel 等)零触碰;提交前 diff 核实三文件只含本批改动;精确 pathspec。**过程坑(如实):** JOURNAL 首次插入被 freshness 门拦(sibling 续34 先落地),重读改锚续35 后成功——共享树常态,门工作正常。
+
 ### 2026-07-25(续34) — toio 400 三连根修:错误体乱码解码 + HUD 净文提取 + tool 消息缓存标记协议感知(commit `6fe3f9ca`,7 文件;新套件 29 测全绿含 failing-first + NEUTER×3,相邻 cache 12 套件 145 过 2 预存在红、llm/stream 12 套件 111 过 1 预存在红,collect **9036** 0 err)
 - **owner 诉求:** 前端看到「重试中…API HTTP 400: {"error":{"message":"è¯·æ±å¤±è´¥…"」(yuju-claude-opus-5-evaDaily,第 1 次)——这是什么问题?修掉;显示的内容也看不懂。
 - **事故定性(读生产日志实锤,非猜):** 13:13 logs/app.log 同一 request id `toio20260725131310115086679KWLlduaj`,`ext.source=UPSTREAM_VENDOR / upstreamStatus=400` —— 是 vendor(Anthropic claude-opus-5)拒了 400,toio 网关把真实原因**掩码**成通用「请求失败,请稍后再尝试」。13:48 同模型**未掩码变体**给出 vendor 原话:`cache_control may not be specified within tool_result.content. Instead, place it directly on tool_result` —— 两个时间点同一病根。

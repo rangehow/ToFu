@@ -41,13 +41,17 @@ def _handle_scheduler_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, c
 
 
 def _run_desktop(fn_name, fn_args):
-    """Desktop tool executor — wraps send_desktop_command + format_desktop_result."""
+    """Desktop tool executor — wraps send_desktop_command + format_desktop_result.
+
+    The wire cmd_type is the full tool name verbatim: the agent's dispatch
+    table (lib/desktop_agent/_dispatch.COMMANDS) is keyed by it, prefix and
+    all — never strip or rewrite it here.
+    """
     from lib.desktop import format_desktop_result, send_desktop_command
-    cmd_type = fn_name.replace('desktop_', '', 1)
-    result, error = send_desktop_command(cmd_type, fn_args, timeout=30)
+    result, error = send_desktop_command(fn_name, fn_args, timeout=30)
     if error:
         return f'Desktop Agent Error: {error}'
-    return format_desktop_result(cmd_type, result)
+    return format_desktop_result(fn_name, result)
 
 
 @tool_registry.tool_set(DESKTOP_TOOL_NAMES, category='desktop',

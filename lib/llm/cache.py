@@ -21,7 +21,9 @@ logger = get_logger(__name__)
 # Bump this by 1 for each new cache-fix that must be confirmed deployed.
 #   gen 5 = ab161bf str↔block + 1274cee raw↔stripped + 0a9f6af prefill-skip
 #           + 8ecbbcf reasoning_content parity + 1920827 single-source builder.
-CACHE_FIX_GEN = 5
+#   gen 6 = 6fe3f9ca tool-msg marker protocol gate (OpenAI wire vendor-400:
+#           tool message unmarkable off the Anthropic protocol).
+CACHE_FIX_GEN = 6
 
 # ── Cache-marker capability matrix ──
 # Empirically probed on the sankuai gateway (2026-05-03).

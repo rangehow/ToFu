@@ -1,6 +1,13 @@
 # Project Journal
 
 
+### 2026-07-25(续17) — pt_26e934aa 收口:bundle parity 红根修——8 个 manifest 文件缺 index.html dev fallback 标签(commit `fe028ebb`,1 文件 +8;bundle 四环 42/42,collect **8756** 0 err)。
+- **票情(我自开自收):** 续15 跑 bundle 环时抓到 `test_every_manifest_file_has_dev_fallback_tag` HEAD 红——`core/model_caps.js` 在 `_BUNDLE_FILES` 但 index.html 无 `<script>` fallback 标签(打包一旦失败,dev 回退路径会静默丢文件)。开票后 brain 派回给我。
+- **盘点(比票面大):** 测试对全 manifest 逐一断言、首缺即红——全量盘点实缺 **8** 个:core/model_caps(能力矩阵桥)、core/turn_settlement、core/conv_state_reducer、core/async_pool、core/conv_reducers、core/pending_sync、core/conv_persist_helpers(Epic E 切分三件套)、paper/podcast.js(播客 P1)。全是「文件进 manifest 时忘加 fallback 标签」的同类遗漏,分散在五个特性提交里,各自验收时相邻环都没含 parity 套件——典型的「每步都绿、合起来红」。
+- **修复:** 8 个标签按 manifest 顺序镜像插入(model_caps 在 format_size 与 zip_drop_zone 之间;turn_settlement/conv_state_reducer/async_pool 在 cross_tab_sync 前;切分三件套在 conversations 前;podcast 在 paper/library 与 paper-reader 之间),格式照既有行(`defer` + `?v=20260725a` + onload/onerror 探针)。
+- **验证:** 四环(manifest_parity 15 + corruption_guard + nonblocking_serve + artifacts_bundle_registration)**42/42**;diff 纯净度逐行核对(8 行全是我的);collect **8756** 0 err;`git show --stat` 与提交前暂存一致(1 文件 +8,吸取续15 pathspec 教训)。
+- **生效边界(诚实):** 纯 fallback 标签,生产环境走 bundle 时这些标签会被 strip 正则剥掉、行为零变化;只在 bundling 失败的 dev 回退下才有意义。无需重启即生效(下次 GET / 重写 HTML 时带入)。
+
 ### 2026-07-25(续16) — 「stale 徽标看不懂」收口:写守卫拦截卡片重设计 + 永久拒绝循环根修(流式预执行读不盖章)(commit 见下,9 文件;后端 6 测 + 前端 JSDOM 27 探针含双 NEUTER + 流式 2 测含 NEUTER,wire-parity 字节零漂移,与 sibling Fix B 联合 36/36,collect **8756** 0 err)。
 - **票情(owner 截图):** apply_diffs 卡片右上角一枚孤零零的「stale」pill、两条编辑各一个 ×——没人看得出这是「文件被别的会话改了、写入被守卫拦截」;且该会话(task 4204f7fa,JOURNAL.md)重读→重发→再被拒,连转三轮。owner 要求:这种错误必须说人话,并排查其它同类含糊报错。
 - **根因(两条独立):** ①展示层:badge 是开发者黑话原样直出('stale'/'read first'/'partial: …'/'ref failed'),无本地化、无解释、无路径。②机制层(更重,production 实证):**流式预执行读路径不盖 freshness 令牌**——streaming_tool_executor 的 read_files 预执行直调 `execute_tool` 绕过 `_handle_project_tool`(其结果进 `_tool_result_cache` 为权威,串行管线跳过重执行,文件内注释自承 "bypasses handlers"),`record_read_paths` 永不运行。双重后果:读过再写的会话零保护(fail-open 盲覆盖 sibling);已持令牌(写侧记录)的会话一旦被拒,**按门的指示重读也刷不新令牌 → 永久拒绝循环**。活体验证:本会话 styles.css 三连拒 + 截图会话 JOURNAL.md 三连拒;探针实验证明「streaming 读→外部改→写放行=无令牌、写侧创建的令牌外部改后被拒、重读后仍被拒」。

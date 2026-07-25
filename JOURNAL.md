@@ -3,9 +3,6 @@
 ### 2026-07-25(续) — e2e Layer 2 升级为 Studio 变体
 # Project Journal
 
-### 2026-07-25 — 总账验收三缺口闭合
-# Project Journal
-
 ### 2026-07-25 — 总账 v3:补 Out-of-scope 声明段(debug/tests/docs/logs/data),最后一个「以为覆盖」变体闭合(commit `a50d187`,reconciled-at `6c7d17a`,per-file 1057 行不变)。owner 验收 v2 后自己抓到:总账对 `debug/`(141 py)、`tests/`(980 py)等目录**零判定零豁免**——读者无法区分「扫过」「豁免」「压根没想到」。
 - **做法(文档级,不派 agent):** 实测五目录文件数(debug 192 总/141 py、tests 1010 总/980 py——与 owner 实测一致;docs 91、logs 76、data 168841 剪重后),声明段逐目录一行:路径、文件数、豁免理由(debug=gitignore+export 明示「never imported」、tests=测试门禁即质保、docs/logs/data=非代码资产/运行时数据)。**段已写进生成器**(`/tmp/gen_ledger2.py`),未来任何重生成自动保留。
 - **过程坑:** apply_diff 把多行字符串的字面换行写进生成器 → SyntaxError;文档未被写坏(失败发生在写文件前),修一行后重生成成功。

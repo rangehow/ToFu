@@ -1,14 +1,15 @@
 # Tofu 产出底盘设计稿(Production Substrate)——「一句话 → 成品」的通用承载形态
 
-> 状态:**P4 / P5 / P6-slice-1 / P6-`_registries()` / P7 已落地**;P6 剩余(ProductionRuntime 簇)待拍板。
-> (2026-07-25 落笔;2026-07-26 更新实施状态 —— P7 实测结论见 §9)
+> 状态:**P4 / P5 / P6 / P7 全部落地**。分期完成。
+> (2026-07-25 落笔;2026-07-26 更新实施状态 —— P7 实测结论见 §9,P6 抑取范围由它决定)
 >
 > | 期 | 状态 | 证据 |
 > |---|---|---|
 > | P4 视频前半段(主题→调研→文案→真时间轴) | ✅ 已落地 | `a6f45f0c` — `lib/motion_video/_recipe.py` + `produce_video` + 崩溃续跑;套件 17/17 |
 > | P5 每镜子 agent 画面 | ✅ 已落地 | `a98f3c12` — `lib/motion_video/_scene_author.py`;套件 16/16(双 NEUTER) |
 > | P6 阶段图契约平移 | ✅ 已落地 | `8578dcb5` — `lib/production/stages.py`(`git mv`,字节相同);守卫 7/7 |
-> | P6 剩余(ProductionRuntime / deliverable / 进度双投影 / artifacts binary) | ⏸ 待实施 | 现已有 P7 实测数据作依据（见 §9） |
+> | P6 剩余(ProductionRuntime + 清单/重投) | ✅ 已落地 | `424d9c28` — `lib/production/runtime.py` + `jobs.py`;三个能力全部骑上,门面名不变;套件 22/22 |
+> | P6 `deliverable` / 进度双投影 / artifacts binary | ⏸ **刻意不抽** | §9.3:第三个样本没用上 → 是视频/播客共性而非全局共性 |
 > | P6 `_registries()` 发现制 | ✅ 已落地 | `0c768268` — motion / podcast 对通用任务 API 从此可见;套件 5/5（failing-first） |
 > | P7 第三配方验证 | ✅ 已落地 | `lib/longform/` — 512 行（目标 ≤600）;套件 9/9 含 NEUTER;实测结论见 §9 |
 >
@@ -353,6 +354,45 @@ owner 裁定「第三配方先行,再抽底盘」。第三个能力选**长报�
 **第三个样本没有用到**(长报告走 markdown artifact 就够了),说明它是视频/播客的
 共性而非全局共性——抽它的优先级应低于 runtime 簇,这正是「两个样本会抽错形状」
 风险的一次实证命中。
+
+---
+
+## 10. P6 抽取落地(2026-07-26,commit `424d9c28`)
+
+owner 裁定「Go P6」。**抽什么由 §9 的实测决定,不由感觉决定** —— 这正是先跑第三配方的意义。
+
+### 10.1 抽了什么(两簇,各有实测依据)
+
+| 模块 | 内容 | 依据 |
+|---|---|---|
+| `lib/production/runtime.py` | `ProductionRuntime`:dedup 索引(带活性检查+自清理)、create+字段形状、append+touch、按 `updated_at` 的 stale 清扫、id 铸造。是 `TaskRuntime` **之上的薄层**,不是替代 | §9:三个样本的 `runtime.py` 改名后 **67% 逐字相同** |
+| `lib/production/jobs.py` | job 清单读写 + 崩溃重投扫描 | §9:motion(20/55 行)与 longform(16/28 行)**同形**。崩溃续跑是正确性契约,扫描器不该每个能力各写一份 |
+
+### 10.2 三个能力全部迁移,门面名一字未改
+
+motion-video / paper-podcast / longform-report 三家的 `_X_runtime` / `_X_tasks` /
+`_X_tasks_lock` / `_X_dedup_index` / `_new_X_task` … **全部照旧可用**,且 `_X_runtime`
+仍是发现制找到的**同一个 `TaskRuntime` 对象**。
+
+**最强证据:七个相关套件 126 测全绿,迁移本身没要求改任何一行测试。**
+
+### 10.3 刻意没抽的(以及为什么这条比抽了什么更重要)
+
+`deliverable` 二进制通道**没抽**。第三个样本(markdown 报告)压根没用上它 ——
+它是视频/播客的共性,不是全局共性。抽它就会正中 §7 风险表预言的
+「样本太少导致形状抽错」。包 docstring **明写**这一点,并有测试钉住它确实没被抽,
+**免得后来人把「刻意划界」误读成「疏漏」**。同理暂缓:进度双投影、artifacts binary。
+
+### 10.4 账要老实算
+
+| | 抽取前 | 抽取后 | 差 |
+|---|---|---|---|
+| 三家能力代码合计 | 1161 行 | 1033 行 | **−128** |
+| 底盘(三家共享) | — | 297 行 | +297 |
+
+**净行数是增加的。** 收益不在当下的行数,而在**边际成本**:实测第 4 个能力的 runtime 层
+现在是 **8 行**(用一次性探针验过),而不是 ~100 行。三个样本摊薄不了 297 行的固定成本,
+第四、第五个才会。这是诚实的账,不是「减少了 128 行」的漂亮话。
 
 ---
 

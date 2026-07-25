@@ -124,15 +124,21 @@ def test_claude_md_documents_the_new_packages():
 
 
 def test_design_note_status_matches_reality():
-    """The design note must not still read as a pure proposal now that P4/P5/
-    P6-slice-1 are in HEAD — and must keep saying which pieces are NOT built,
-    so nobody assumes ProductionRuntime exists."""
+    """The design note must reflect what is actually in HEAD — it must not
+    read as an un-started proposal, and it must keep naming the pieces that
+    were deliberately NOT built so nobody assumes they exist.
+
+    (Originally this also required an open 待拍板 item; that premise expired
+    when P4–P7 all landed. What still matters is the honesty half: the note
+    says what shipped AND what was deliberately scoped out.)"""
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     src = open(os.path.join(root, 'docs', 'PRODUCTION_PIPELINE_DESIGN.md'),
                encoding='utf-8').read()
     assert '已落地' in src, 'design note still reads as an un-started proposal'
-    assert 'ProductionRuntime' in src
-    assert '待拍板' in src, 'the still-open decision must stay visible'
+    assert 'deliverable' in src, 'the deliberately-unextracted piece must stay named'
+    assert '刻意不抽' in src or '刻意没抽' in src, (
+        'the note must mark deliberate scoping, so a reader can tell it from '
+        'an oversight')
 
 
 def test_production_package_docstring_records_partial_scope():

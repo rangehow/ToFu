@@ -248,6 +248,18 @@ lib/                   — Core business logic
   production/          — Production Substrate (docs/PRODUCTION_PIPELINE_DESIGN.md).
                          The horizontal layer under every "one sentence → finished
                          product" capability; each capability keeps its own thin recipe.
+    runtime.py         — ProductionRuntime: a thin layer OVER TaskRuntime holding
+                         what every capability hand-rolled on top of it — dedup index
+                         (liveness-checked + self-pruning), create-with-field-shape,
+                         append+touch, stale sweep keyed on updated_at, id minting.
+                         Extracted because the per-capability runtime.py measured
+                         67% byte-identical across THREE samples. All three
+                         (motion-video / paper-podcast / longform-report) ride it;
+                         their legacy _X_runtime names still resolve to the same
+                         TaskRuntime the /api/v1/tasks discovery finds.
+    jobs.py            — job manifest write/read + crash-resume rescan. One
+                         implementation of the scan that re-spawns every job whose
+                         manifest still says `running` after a process death.
     stages.py          — stage-graph contract: Stage(name, run, gate, retry, resumable)
                          + a checkpointed runner. A stage's artifact is committed to the
                          state file as soon as its gate passes, so a killed process
@@ -257,10 +269,11 @@ lib/                   — Core business logic
                          lib/motion_video/_stages.py (which remains a re-export shim).
                          Deliberately capability-agnostic — a guard test AST-asserts it
                          imports no motion_video/tts/llm/paper/audio module.
-                         NOT here yet: ProductionRuntime / deliverable / progress
-                         double-projection / _registries() discovery / artifacts binary
-                         (owner-gated: abstracting them from two samples risks the
-                         wrong shape — see the design note's risk table).
+                         NOT here (deliberate, evidence-based): the binary
+                         `deliverable` channel, progress double-projection and the
+                         artifacts binary format. The third recipe never needed
+                         them, so they are video/podcast commonalities rather than
+                         global ones — extracting them would fit the wrong shape.
   # NOTE: the trading subsystem was EXTRACTED to a standalone `tofu-trading`
   # package (2026-06) and is no longer in-tree. It mounts via the
   # `tofu.blueprints` / `tofu.startup` entry-point groups (see routes/plugin_registry.py).

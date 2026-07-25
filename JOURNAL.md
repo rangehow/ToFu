@@ -44,6 +44,18 @@
 - **epic 全账:** F3 serving-loop 跳转 `c083ad4b`(3 测含 failing-first A/B)+ 收割器每-tick 上限 `473ea89d`(10 测)+ F4 裁决落码 `0fa8ce24` → **board complete**。
 
 ### 2026-07-25(续46) — pt_0c1621a561f045e1 收口:test_endpoint_messages 七红根修(两发同族测试漂移,commit `6c70957d`,1 文件 +33/-4;套件 **28/28**,endpoint 相邻环 34/34,collect **9101** 0 err)
+### 2026-07-26(续6) — 产出底盘 P6 收官:按实测抽 `ProductionRuntime` + 清单/重投,三个能力全部骑上(owner 拍板「Go P6」,commit `424d9c28`,10 文件 +763/-313;新套件 22/22,七套件 **126/126 且迁移零改测试**,相邻 565 过,collect **9269** 0 err)
+- **抽什么由数据定,不由感觉定:** 这正是先跑 P7 的意义。§9 量出两簇同形代码,就抽这两簇,一行不多抽。
+  - `lib/production/runtime.py` — `ProductionRuntime`:dedup 索引(活性检查+自清理)、create+字段形状、append+touch、按 `updated_at` 的 stale 清扫、id 铸造。**是 `TaskRuntime` 之上的薄层,不是替代**(TaskRuntime 早管好了注册表/事件/推送/poll/spawn,能力们手搓的是它上面那一层)。
+  - `lib/production/jobs.py` — job 清单读写 + 崩溃重投扫描。崩溃续跑是**正确性契约**,这扫描器不该每个能力各写一份。
+- **三家全迁,门面名一字未改:** motion-video / paper-podcast / longform-report 的 `_X_runtime` / `_X_tasks` / `_X_tasks_lock` / `_X_dedup_index` / `_new_X_task` 全部照旧,且 `_X_runtime` 仍是发现制找到的**同一个 TaskRuntime 对象**。**最强证据:七套件 126 测全绿,迁移本身没要求改任何一行测试。**
+- **刻意没抽 `deliverable`(这条比抽了什么更重要):** 第三个样本(markdown 报告)压根没用上二进制通道 —— 它是视频/播客共性,不是全局共性。抽它就会正中 §7 预言的「样本太少抽错形状」。包 docstring 明写此事,并有测试**钉住它确实没被抽**,免得后来人把「刻意划界」误读成「疏漏」。
+- **账老实算(不说漂亮话):** 三家能力代码 1161 → 1033 行(**−128**),底盘新增 **+297** 行 —— **净行数是增加的**。收益不在当下行数,在**边际成本**:实测第 4 个能力的 runtime 层现在是 **8 行**(一次性探针验过)而非 ~100 行。三个样本摊不平 297 行固定成本,第四第五个才会。
+- **两次自己的守卫咬自己(都修根因,没绕过):** ①包 docstring 诚实性守卫钉的是旧措辞「NOT here yet」,抽取后措辞变了 → 改断言为「必须点名 deliverable + 必须有 NOT here」;②设计稿守卫要求「必须仍带待拍板项」,而 P4–P7 全完 → **该断言的前提已失效**,改为钉「必须写明刻意划界」,并补 NEUTER 验证新断言真会咬。**守卫过期要修守卫,不是删守卫、更不是往文档里塞假的待办。**
+- **测试 22 面:** dedup 活性/剪枝、stale 清扫用 `updated_at` 而非 `finished_at`、清单往返含 None 跳过、重投只认 `running` / 经 `is_live` 幂等 / 单个坏 job 不拖垮其余;**参数化三家**断言都骑 `ProductionRuntime` 且共享**同一个**注册表(若是拷贝字典,dedup 与清扫会静默失效);AST 断言底盘不导入任何能力。
+- **git 纪律:** 精确 10 文件;盘上 sibling WIP(index.html / lib/cost.py / js_bundler / cache_tracking 等)零触碰。
+- **预存在红(A/B 实证):** `test_log_pytest_sink_isolation` 3 红,stash 后净 HEAD 同形复现,与本轮无关(该文件里的 "production" 指「production logs」,非本包)。
+
 ### 2026-07-26(续5) — 产出底盘 P7 落地:第三配方(长报告)当尺子量底盘,量出 P6 该抽什么(owner 拍板「第三配方先行,再抽底盘」,commit `48ecd802`,10 文件 +885/-12;新套件 9/9 含 NEUTER,六套件 **104/104**,相邻 296 过,collect **9176** 0 err)
 - **这一刀的性质:** 不是「顺手加个功能」,而是**一次测量**。owner 裁定第三配方先行——那 P7 的产出就不该只是「能跑」,而是**拿第三个能力去撞现有底盘**:撞不动的部分证明底盘对了,撞出来的重复就是 P6 该抽的清单。
 - **为什么选长报告(而不是 PPT):** 必须**和视频不同形**,测量才有意义。长报告是**文本产物**(markdown artifact,不是二进制渲染)、**无 TTS**、**无逐镜扇出**,而且**阶段列表是数据驱动的**(大纲几节就几个 section 阶段)——静态的视频阶段列表**从没压过这种形状**。

@@ -32,6 +32,7 @@ from lib.llm_errors import (
     StreamOnlyError,
     _RETRYABLE,
     _classify_http_error,
+    decode_error_body,
 )
 from lib.cost import canonicalize_usage_cache_keys
 from lib.log import get_logger
@@ -99,7 +100,7 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
 
     # Cache breakpoints + extended-TTL beta header
     _task_id_for_latch = body.get('_task_id', '')
-    add_cache_breakpoints(body, log_prefix)
+    add_cache_breakpoints(body, log_prefix, api_protocol=api_protocol)
     body.pop('_task_id', None)
 
     if is_claude(body.get('model', '')):
@@ -165,7 +166,7 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
             if resp_trace and resp_trace != trace_id:
                 logger.debug('%s resp M-TraceId=%s', log_prefix, resp_trace)
             if resp.status_code != 200:
-                err_msg = f'API HTTP {resp.status_code}: {resp.text[:500]}'
+                err_msg = f'API HTTP {resp.status_code}: {decode_error_body(resp)[:500]}'
                 if resp.status_code == 400 and not _limit_retry:
                     _detected_limit = _parse_token_limit_from_error(err_msg, model)
                     if _detected_limit:
@@ -212,7 +213,7 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
     except (ValueError, json.JSONDecodeError) as e:
         raise Exception(
             f'API returned invalid JSON (HTTP {resp.status_code}): '
-            f'{resp.text[:500]}'
+            f'{decode_error_body(resp)[:500]}'
         ) from e
     if _anthropic:
         from lib.llm.anthropic_outbound import anthropic_response_to_openai

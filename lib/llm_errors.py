@@ -26,6 +26,7 @@ Predicates
   :func:`is_stream_only_error`
 """
 
+import json
 import re
 
 from requests.exceptions import ChunkedEncodingError, ConnectionError
@@ -252,6 +253,73 @@ _RETRYABLE = (ConnectionError, ChunkedEncodingError, BrokenPipeError,
 
 
 # ══════════════════════════════════════════════════════════
+#  Error-body decoding / display
+# ══════════════════════════════════════════════════════════
+
+def decode_error_body(resp) -> str:
+    """Decode a non-200 HTTP response body for error reporting.
+
+    ``requests`` falls back to ISO-8859-1 for ``text/*`` responses without an
+    explicit charset (the RFC 2616 default), which garbles UTF-8 CJK payloads
+    from gateways that omit the charset header — observed on the sankuai toio
+    gateway (2026-07-25): its Chinese 400 body surfaced as ``è¯·æ±...``
+    mojibake in both logs and the frontend retry HUD. API error bodies are
+    JSON per OpenAI/Anthropic convention and thus virtually always UTF-8, so
+    decode UTF-8 first and fall back to the declared/apparent encoding on
+    failure. Pure-ASCII bodies decode identically under both, so UTF-8-first
+    is safe.
+    """
+    content = getattr(resp, 'content', b'') or b''
+    if not content:
+        return ''
+    encoding = (getattr(resp, 'encoding', None) or '').lower().replace('_', '-')
+    if encoding and encoding not in ('iso-8859-1', 'latin-1', 'latin1', 'ascii', 'utf-8'):
+        try:
+            return content.decode(encoding)
+        except (LookupError, UnicodeDecodeError):
+            pass  # declared charset unusable — fall through to UTF-8
+    try:
+        return content.decode('utf-8')
+    except UnicodeDecodeError:
+        apparent = getattr(resp, 'apparent_encoding', None) or 'utf-8'
+        try:
+            return content.decode(apparent, errors='replace')
+        except (LookupError, UnicodeDecodeError):
+            return content.decode('utf-8', errors='replace')
+
+
+_API_HTTP_PREFIX_RE = re.compile(r'^(API HTTP \d+:\s*)')
+
+
+def summarize_error_body(text: str) -> str:
+    """Extract the human-readable message from a JSON API error envelope.
+
+    OpenAI and Anthropic share the ``{"error": {"message": ...}}`` envelope;
+    surfacing the raw JSON in the retry HUD / error bubble is unreadable
+    (nested quotes, provider boilerplate, mojibake amplification). Returns the
+    ``error.message`` string with any leading ``API HTTP <code>:`` prefix
+    preserved when the envelope parses; returns *text* unchanged otherwise —
+    the raw form carries signal for the wrapped-overload / quota matchers.
+    """
+    if not text:
+        return text or ''
+    m = _API_HTTP_PREFIX_RE.match(text)
+    prefix = m.group(1) if m else ''
+    s = text[m.end():].strip() if m else text.strip()
+    if not s.startswith('{'):
+        return text
+    try:
+        data = json.loads(s)
+    except ValueError:
+        return text
+    err = data.get('error') if isinstance(data, dict) else None
+    msg = err.get('message') if isinstance(err, dict) else None
+    if isinstance(msg, str) and msg.strip():
+        return prefix + msg
+    return text
+
+
+# ══════════════════════════════════════════════════════════
 #  Predicates
 # ══════════════════════════════════════════════════════════
 
@@ -328,6 +396,11 @@ def _classify_http_error(status_code: int, err_msg: str, model: str,
     # whole client.
     from lib.model_info import _learn_model_limit, _parse_token_limit_from_error
 
+    # User-facing raise messages carry the extracted envelope message (clean,
+    # readable in the retry HUD); err_msg stays RAW for the pattern matchers
+    # below and for logs, which want the full provider context.
+    display_msg = summarize_error_body(err_msg)
+
     if status_code == 429:
         # ★ Distinguish fatal billing 429s from transient rate-limit 429s.
         #   OpenAI returns HTTP 429 with code="insufficient_quota" for
@@ -335,42 +408,42 @@ def _classify_http_error(status_code: int, err_msg: str, model: str,
         if _is_quota_exhausted(err_msg):
             logger.warning('%s Quota exhausted (HTTP 429, persistent billing): %s',
                            log_prefix, err_msg[:300])
-            raise RateLimitError(err_msg, is_quota=True, reason=err_msg[:200])
-        raise RateLimitError(err_msg)
+            raise RateLimitError(display_msg, is_quota=True, reason=display_msg[:200])
+        raise RateLimitError(display_msg)
     if status_code == 402:
         # ★ HTTP 402 Payment Required — DeepSeek and some providers return
         #   this for exhausted-balance keys. Treat identically to a quota-
         #   exhausted 429 so it hard-disables the key for the day.
         logger.warning('%s Payment required (HTTP 402): %s',
                        log_prefix, err_msg[:300])
-        raise RateLimitError(err_msg, is_quota=True, reason=err_msg[:200])
+        raise RateLimitError(display_msg, is_quota=True, reason=display_msg[:200])
     if status_code == 450:
         logger.warning('%s Content filter triggered (HTTP 450)', log_prefix)
-        raise ContentFilterError(err_msg)
+        raise ContentFilterError(display_msg)
     if status_code in _PERMISSION_STATUS_CODES:
         logger.warning('%s Permission error (HTTP %d)', log_prefix, status_code)
-        raise PermissionError_(err_msg)
+        raise PermissionError_(display_msg)
     if status_code == 413:
         logger.warning('%s Request entity too large (HTTP 413) — '
                        'treating as prompt-too-long: %s', log_prefix, err_msg[:300])
-        raise PromptTooLongError(err_msg)
+        raise PromptTooLongError(display_msg)
     if status_code == 400:
         _detected_limit = _parse_token_limit_from_error(err_msg, model)
         if _detected_limit:
             _learn_model_limit(model, _detected_limit)
-            raise ModelLimitError(err_msg, model, _detected_limit, max_tokens)
+            raise ModelLimitError(display_msg, model, _detected_limit, max_tokens)
         if _is_image_error(err_msg):
             logger.warning('%s Image content error (HTTP 400): %s',
                            log_prefix, err_msg[:300])
-            raise InvalidImageError(err_msg)
+            raise InvalidImageError(display_msg)
         if _is_prompt_too_long(err_msg):
             logger.warning('%s Prompt too long detected (HTTP 400): %s',
                            log_prefix, err_msg[:300])
-            raise PromptTooLongError(err_msg)
+            raise PromptTooLongError(display_msg)
         if _is_stream_only_error(err_msg):
             logger.warning('%s Model %s only supports stream mode — '
                            'non-streaming request rejected', log_prefix, model)
-            raise StreamOnlyError(err_msg, model)
+            raise StreamOnlyError(display_msg, model)
     if status_code in _GATEWAY_THROTTLE_STATUS:
         # ★ 502/503/504 from the gateway = upstream overload or transient
         #   backend failure. Treat identically to 429: bubble to dispatch
@@ -381,8 +454,8 @@ def _classify_http_error(status_code: int, err_msg: str, model: str,
         logger.warning('%s Gateway throttle (HTTP %d) — escalating to dispatch '
                        'layer for slot rotation: %.200s',
                        log_prefix, status_code, err_msg)
-        raise RateLimitError(err_msg, is_gateway=True,
-                             reason=f'HTTP {status_code}: {err_msg[:180]}')
+        raise RateLimitError(display_msg, is_gateway=True,
+                             reason=f'HTTP {status_code}: {display_msg[:180]}')
     if status_code in _RETRYABLE_STATUS_CODES:
         # ★ Detect wrapped overload / rate-limit inside a generic 500.
         #   Some gateways receive 429 or 529 from the model server but
@@ -393,8 +466,8 @@ def _classify_http_error(status_code: int, err_msg: str, model: str,
             logger.warning('%s Gateway wrapped overload/rate-limit in HTTP 500 '
                            '— escalating to dispatch layer: %.200s',
                            log_prefix, err_msg)
-            raise RateLimitError(err_msg)
-        raise RetryableAPIError(err_msg, status_code=status_code)
+            raise RateLimitError(display_msg)
+        raise RetryableAPIError(display_msg, status_code=status_code)
     logger.error('%s Non-retryable API error (HTTP %d): %s',
                  log_prefix, status_code, err_msg[:300])
-    raise Exception(err_msg)
+    raise Exception(display_msg)

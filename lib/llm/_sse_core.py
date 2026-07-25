@@ -230,7 +230,7 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
     # is stripped at that serialization boundary instead (see below). The
     # Anthropic path rebuilds the body from an allowlist, so it never leaks.
     _task_id_for_latch = body.get('_task_id', '')
-    add_cache_breakpoints(body, log_prefix)
+    add_cache_breakpoints(body, log_prefix, api_protocol=api_protocol)
 
     # Auto-inject extended cache TTL beta header for Claude
     if is_claude(body.get('model', '')):

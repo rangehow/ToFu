@@ -38,6 +38,7 @@ from lib.llm_errors import (
     PromptTooLongError,
     RateLimitError,
     _RETRYABLE,
+    decode_error_body,
 )
 from lib.log import get_logger
 from lib.proxy import proxies_for, report_outcome as _proxy_report_outcome
@@ -154,7 +155,11 @@ def _stream_chat_once(body, *, on_thinking=None, on_content=None,
             logger.debug('%s resp M-TraceId=%s', log_prefix, resp_trace)
 
         if resp.status_code != 200:
-            classify_status_error(resp.status_code, resp.text, body=plan.body,
+            # decode_error_body, NOT resp.text: requests falls back to
+            # ISO-8859-1 for text/* without charset, garbling UTF-8 CJK
+            # gateway error pages into mojibake (toio 400 incident 2026-07-25).
+            classify_status_error(resp.status_code, decode_error_body(resp),
+                                  body=plan.body,
                                   log_prefix=log_prefix, raw_dumper=plan.raw_dumper)
 
         resp.encoding = 'utf-8'

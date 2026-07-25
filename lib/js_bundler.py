@@ -415,6 +415,14 @@ _BUNDLE_FILES = [
     'core/conv_state_reducer.js',
     'core/async_pool.js',
     'core/cross_tab_sync.js',
+    # Pure conversation reducers extracted 2026-07-25 from
+    # core/conversations.js (pt_3879f00e sub-part 2, slice 1):
+    # convAutoTranslate / assistantTailIsPriorTurn /
+    # pollWriteWouldClobberSettledTail / convTitleById /
+    # convAutoTranslateEffective. Leaf module (window only, no runtime
+    # state); load BEFORE core/conversations.js so downstream reads
+    # inside its heavier functions still resolve the bare names.
+    'core/conv_reducers.js',
     'core/conversations.js',
     # Shared SSE fetch-response read/decode/buffer loop (readSSEStream) —
     # extracted 2026-07-11 from branch.js / paper-reader.js / ui/sse_pipeline.js.

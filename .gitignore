@@ -58,7 +58,6 @@ data/
 #   static/provider_templates/meituan.json (functional internal template).
 /benchmarks/
 /promo/
-/propaganda/
 /scripts/*
 !/scripts/gen_desktop_icons.py
 # debug/ = standalone scratch/benchmark scripts (never imported by the app);

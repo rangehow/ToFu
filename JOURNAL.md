@@ -4,6 +4,16 @@
 
 
 
+### 2026-07-24(续24) — RENDER_CONTRACT Phase 3.5 §7 落地:**streamBufs 整体退役,第二个活事实源消失**(commit `ff7176dd`,26 文件 +1135/-996,§7.4 锚点 RED→**GREEN**,2 个退役守卫入库,72/72 全绿,collect 8513 0 err)。owner 四条件全落地,过程中还抓到 2 个真实生产 ReferenceError。
+- **退役本体:** core.js 的全局 `streamBufs` Map 声明**删除**(step-5 后它已是只写镜像);内容/思考/工具轮从**消息文档**投影(trailing assistant msg)。**phase 的家落成实体**(owner 条件 2,不许停在 plan 措辞):新 `ui/stream_session.js` —— `streamSessions` Map 按 convId 键控 + `getStreamSession`(惰性 {phase:null})+ **`setStreamPhase` 带 live-only 写守卫**(无活跃流即 no-op,post-stop 相位写不能复活会话)+ `clearStreamSession`。裁决写死:phase 属 reducer live 会话态,**永不进消息文档**(运行时态不污染 SSOT)。
+- **owner 条件 4 — 锚点验收语义写死:** plan §7.4 补「字节相等只承诺 **checkpoint 边界**;两 checkpoint 之间 doc 允许滞后(那是持久化契约,不是分叉)」。§7.4 锚点(`test_frontend_reconnect_parity_anchor.py`)翻转 RED→**GREEN**:content/thinking/status 三 zone 在 checkpoint 边界逐字节相等,且重连后活气泡的 id/data-msg-id 与 live 侧一致(孪生家族最后一口气)。NEUTER:改 checkpoint content 翻转 content 检查。
+- **owner 条件 3 — 退役守卫是交付物:** `test_streambufs_fully_retired`(生产 JS 代码剥注释+剥字符串后零 `streamBufs` 引用,反跑步机——任何新 buffer 访问即红)+ `test_stream_session_module_contract`(phase 家是实体、live-only 守卫承重、setStreamPhase 写入面恰为 {sse_pipeline, sse_poll_fallback, streaming_render}、stream_session.js 在 _BUNDLE_FILES)。
+- **2 个真实生产 bug(harness agent 抓到,本 commit 修):** ①sse_pipeline delta_reset 的孤儿 `_drBuf` 引用(声明已删、镜像+帧相位残留 → stamped reset 时 ReferenceError)→ 删镜像、帧相位读 session;②sse_handlers_tool 的孤儿 `_epCriticBuf.toolRounds` 镜像(声明早已删 → critic tool_complete 活 ReferenceError)→ 删。
+- **harness 对齐(§7 前提变了——没有 buffer 可播种):** 20 个 harness 统一补 streamSessions/getStreamPhase/setStreamPhase/clearStreamSession stub,断言从 buffer-seeded 改为 doc-driven。预热标签现居 updateStreamingUI 画的 status zone(bubble 骨架里 defaultStatus 被抑制)——vu_start_eager + autopilot_warmup 改为先走真实帧管线再断言预热存在。
+- **ratchet:** streaming_ui 49→50(live 投影引擎里新增的 status-zone appendChild,受许 STRUCT 创建);plan total 157→158。
+- **git 纪律(全量不截断审计执行):** 提交前对 26 文件跑**无截断** numstat 逐文件对账,确认无外部 sibling hunk(streaming_render 的 +404/-416 大头 = VU 会话迁移本体,非外来);`git add` 精确 pathspec + 暂存 stray 检查为空;sibling WIP(translation_indicator、provider_render、paper、upload 等)全部零损留在 worktree。
+- **交付验证边界(诚实):** 锚点 GREEN 是 JSDOM 双臂对拍证明,真实浏览器行为验证待 owner 实测;streaming_render 的 VU-concluded/summary 领域(+404)是 harness 代理完成的会话迁移,已全测绿但我未逐行人工复核其业务语义 —— owner 若质疑 VU 报告落库路径可单独审该 hunk。
+
 ### 2026-07-25 — 「Studio 模式一次完整任务迭代 + 重启自愈」e2e 收口
 # Project Journal
 

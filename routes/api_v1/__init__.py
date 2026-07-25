@@ -55,6 +55,7 @@ from .translate import api_v1_translate_bp
 from .artifacts import api_v1_artifacts_bp
 from .paper import api_v1_paper_bp
 from .paper_folders import api_v1_paper_folders_bp
+from .motion import api_v1_motion_bp
 from .uploads import api_v1_uploads_bp
 from .audio import api_v1_audio_bp
 from .common import api_v1_common_bp
@@ -97,6 +98,7 @@ ALL_V1_BLUEPRINTS = [
     api_v1_artifacts_bp,
     api_v1_paper_bp,
     api_v1_paper_folders_bp,
+    api_v1_motion_bp,
     api_v1_uploads_bp,
     api_v1_audio_bp,
     api_v1_common_bp,

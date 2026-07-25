@@ -1,6 +1,6 @@
 # Tofu 动画视频生成能力设计稿(auto-motion 吸收 + 超越)
 
-> 状态:**P0 环境验证 ✅ · P1 最小链路 ✅ · P2 音画链 ✅(2026-07-25,宽松对轴默认+参数化);P2b(专用 runtime/headless API)与 P3(并行/面板)未开工。**
+> 状态:**P0 ✅ · P1 ✅ · P2 音画链 ✅ · P2b 无头引擎+api_v1 ✅(2026-07-25);P3 仅剩逐镜预览/重生成面板 + 论文 video abstract。**
 > 参考仓库:`/mnt/dolphinfs/ssd_pool/docker/user/hadoop-aipnlp/INS/ruanjunhao04/auto-motion`
 > (与 tofu 同级目录,2026-07-25 clone 自 https://github.com/vibe-motion/auto-motion,49MB)
 
@@ -164,6 +164,16 @@ transcription.srt
 - **2 个新工具**:`motion_video_narrate`(对齐清单:逐镜 audio/target/overflow)、`motion_video_mux`;
 - **测试 +13**(48 全绿):分块边界、loose 短音补静音/长音扩镜、strict overflow、无槽位降级、Abort、**NEUTER**(剥补静音→loose 对齐崩)、无文本镜头静音、mux 命令构造+后验双支;
 - **剩余 P2b**:专用 `motion_runtime` + engine + api_v1(headless 编排/分镜零 LLM 兜底),与 P3 UI 面板同期落地更经济(面板的进度推送本来就要走 runtime 事件流);字幕烧录/侧车 .srt 也留 P2b。
+
+### P2b — 无头引擎 + api_v1 —— ✅ 已交付(2026-07-25,brain 自主派发)
+
+- **`lib/motion_video/_storyboard.py`**:零 LLM 贪心分镜(min/target/max 三档,句号边界优先,runt 归并但**不破 max 契约**,构造即过 check_storyboard);
+- **`lib/motion_video/_template.py`**:零 LLM composition 兜底(kinetic-type 卡片:字号按文本长度五档阶梯、四色渐变轮换、HTML 转义防注入,构造即过 composition 静态闸);
+- **`lib/motion_video/engine.py`**:无头 worker(parse→storyboard→narrate→compose→**有界并行渲染**(ThreadPoolExecutor,默认 2 上限 4,P3 并行项一并落地)→concat→侧车 SRT(loose 调轴后时间轴)→mux);全程 AbortSignal;每镜失败带 scene_id+category 结构化诊断;重活全走 facade 缝(测试可 monkeypatch,同 lib.tts 契约);
+- **`lib/motion_video/runtime.py`**:podcast_runtime 镜像(dedup 六元组=(srt_sha,voice,alignment,aspect,narration,quality),**先建任务再注册键**消竞态);
+- **`routes/api_v1/motion.py`**:`GET /status`(env+TTS 探针)/`POST /videos`(校验+dedup join)/poll/abort(工厂)/`GET /<id>/file`(Range+`?part=srt`,只服务 result 记录路径);
+- **测试**:`tests/test_motion_video_engine.py` 15 测(与 P1/P2 合计 **63 全绿**)——分镜构造即过闸/max 契约/runt 归并;模板全尺寸过闸+XSS 转义;**真 engine 全链**(假 provider 缝,真分镜/真模板/真 verify_spec:假 probe 从真写出的 index.html 读 data-duration,闸全真跑)+降级/Abort/单镜失败诊断/**NEUTER**(剥 verify_spec → 坏规格镜头放行)+dedup 生命周期+HTTP 层(400 三连/start/poll/dedup join/abort/Range 双格式);collect **8821** 0 err;
+- **字幕烧录**(burn-in)未做:侧车 .srt 已交付,烧录等 P3 面板给开关。
 
 ### P3 — 交互与并行
 

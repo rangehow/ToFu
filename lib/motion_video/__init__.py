@@ -64,6 +64,8 @@ from lib.motion_video._srt import (
     parse_timestamp,
     total_span,
 )
+from lib.motion_video._storyboard import build_storyboard
+from lib.motion_video._template import render_scene_html
 
 __all__ = [
     'PINNED_HYPERFRAMES',
@@ -96,4 +98,6 @@ __all__ = [
     'synthesize_scene_narrations',
     'concat_narrations',
     'mux_audio_video',
+    'build_storyboard',
+    'render_scene_html',
 ]

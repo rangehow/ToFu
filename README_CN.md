@@ -432,9 +432,10 @@ pip install docling --extra-index-url https://download.pytorch.org/whl/cpu
 - **工具链自举** —— `motion_video_env_check` 首次使用自动安装钉版 HyperFrames CLI；ffmpeg 来自 `imageio-ffmpeg`、ffprobe 来自静态构建（均免 root）；Chrome 复用 Playwright 缓存
 - **失败分类** —— 渲染错误按类返回（`env_missing` / `lint` / `chrome` / `timeout` / `aborted`）并附带上游修复提示，不用啃原始日志
 - **TTS 配音（音画合成）** —— `motion_video_narrate` 用字幕文本为每个镜头配音（复用播客链的 TTS 槽位），音频偏长的镜头自动延长对齐，`motion_video_mux` 以响度归一的 AAC 收尾；没有配置 TTS 槽位时自动降级为静音视频而不是报错
+- **无头 API + 并行渲染** —— `POST /api/v1/motion/videos` 在服务端跑完整条流水线（零 LLM 分镜 + 模板镜头、有界并行渲染、重复请求自动合并入队），成品经支持 Range 的 `/api/v1/motion/videos/<id>/file` 下载，并附对齐后的侧车 SRT
 - **深度知识包** —— 来自 vibe-motion/auto-motion 的 29 条动效规则、13 个镜头蓝图、20+ 设计帧预设，在 设置 → 技能 里搜 “hyperframes” 一键安装
 
-并行渲染、逐镜头预览面板与无头 API 在路线图上（见 `docs/MOTION_VIDEO_DESIGN.md`）。
+逐镜头预览/重生成面板与论文视频摘要在路线图上（见 `docs/MOTION_VIDEO_DESIGN.md`）。
 
 ---
 

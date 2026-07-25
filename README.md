@@ -447,9 +447,10 @@ Turn a subtitle transcript (SRT) into a vertical MG-animated video — Tofu stor
 - **Self-bootstrapping toolchain** — `motion_video_env_check` installs the pinned HyperFrames CLI on first use; ffmpeg comes from `imageio-ffmpeg` and ffprobe from a static build (both no-root); Chrome reuses the Playwright cache
 - **Failure classification** — render errors come back categorized (`env_missing` / `lint` / `chrome` / `timeout` / `aborted`) with upstream fix hints instead of raw logs
 - **TTS narration (音画合成)** — `motion_video_narrate` voices each scene from its subtitle text (reusing the podcast chain's TTS slots), audio-led timing extends scenes that need more room, and `motion_video_mux` finishes with loudness-normalized AAC; without a TTS slot the pipeline degrades to silent video instead of failing
+- **Headless API + parallel rendering** — `POST /api/v1/motion/videos` runs the whole pipeline server-side (zero-LLM storyboard + template compositions, bounded-parallel scene renders, dedup-join on repeat requests) and serves the result over Range-enabled `/api/v1/motion/videos/<id>/file` with an aligned sidecar SRT
 - **Deep knowledge packs** — the 29 motion rules, 13 scene blueprints, and 20+ design frame presets from vibe-motion/auto-motion are one click away in Settings → Skills (search "hyperframes")
 
-Parallel scene rendering, a per-scene preview panel, and a headless API are on the roadmap (see `docs/MOTION_VIDEO_DESIGN.md`).
+A per-scene preview/regenerate panel and paper video abstracts are on the roadmap (see `docs/MOTION_VIDEO_DESIGN.md`).
 
 ---
 

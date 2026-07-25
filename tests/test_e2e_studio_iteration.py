@@ -19,22 +19,28 @@ this environment is repaired. What IS proven here:
     alone would not prove Studio's project-tool substitution works).
 
   Layer 2 (``test_restart_self_repair_two_app_instances``)
-    Instance A (this pytest process, real app via test_client) starts a turn
-    whose mock stream HANGS mid-generation; once a ``status='running'``
-    checkpoint with content is durably in task_results, instance A is
-    "SIGKILLed" — the in-memory task is dropped from the registry with the DB
-    corpse left behind, exactly what an OS kill leaves. Instance B is then
-    launched as a SEPARATE OS PROCESS (fresh ``TOFU_DATA_DIR``, same
-    ``TOFU_DB_PATH`` file) that runs the REAL startup path —
-    ``server._init_database()`` (the very call ``_startup`` makes) plus the
-    same ``run_deferred_boot_dispatch`` consumption ``_serve`` performs —
-    with ``TOFU_BOOT_AUTO_DISPATCH=1``. It must: mark the corpse interrupted,
-    tag the tail ``killed``, re-dispatch the turn, and complete it. Finally,
-    instance B reconnects to the SSE the way a frontend does after a restart
-    (``Last-Event-ID: 0`` warm replay) and the replayed ``done`` frame's
-    ``committedMessage`` must be BYTE-IDENTICAL to the conversations.messages
-    tail — "it repaired itself" means the recovered turn lands exactly like a
-    live-completed one.
+    Instance A (this pytest process, real app via test_client) starts a
+    STUDIO turn (chatMode='studio' + tmp projectPath) whose mock stream
+    DRIPS mid-generation (deltas >5s apart — real activity that defeats
+    stall detection while tripping the delta-driven 5s checkpoint
+    throttle); once a ``status='running'`` checkpoint with content is
+    durably in task_results, instance A is "SIGKILLed" — the in-memory
+    task is dropped from the registry with the DB corpse left behind,
+    exactly what an OS kill leaves. Instance B is then launched as a
+    SEPARATE OS PROCESS (fresh ``TOFU_DATA_DIR``, same ``TOFU_DB_PATH``
+    file) that runs the REAL startup path — ``server._init_database()``
+    (the very call ``_startup`` makes) plus the same
+    ``run_deferred_boot_dispatch`` consumption ``_serve`` performs — with
+    ``TOFU_BOOT_AUTO_DISPATCH=1``. It must: mark the corpse interrupted,
+    tag the tail ``killed``, re-dispatch the turn WITH THE STUDIO TOOL
+    SURFACE INTACT (carrier config keeps chatMode='studio' + projectPath),
+    and the recovered turn must REALLY execute write_file against the tmp
+    project (recovered_marker.txt on disk) — 'Studio repaired itself',
+    not 'a blob of text came back'. Finally, instance B reconnects to the
+    SSE the way a frontend does after a restart (``Last-Event-ID: 0``
+    warm replay) and the replayed ``done`` frame's ``committedMessage``
+    must be BYTE-IDENTICAL to the conversations.messages tail — the
+    recovered turn lands exactly like a live-completed one.
 
   NEUTER proofs (owner gate — every assertion must have causal bite):
     * ``test_NEUTER_studio_iteration_neutered_tool_execution`` — strip the
@@ -73,6 +79,8 @@ _WRITE_PATH = 'hello_studio.txt'
 _WRITE_CONTENT = 'hello from studio e2e\nwritten by the real write_file handler\n'
 _FINAL_TEXT = 'Studio iteration complete — the file is on disk.'
 _RECOVERED_TEXT = 'Recovered answer after restart — the killed turn healed.'
+_RECOVER_WRITE_PATH = 'recovered_marker.txt'
+_RECOVER_WRITE_CONTENT = 'written by the RECOVERED studio turn — project tools survived\n'
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -120,6 +128,15 @@ class _MockLLM:
                                        status='running' row), then PARK on
                                        ``hang_event`` (the mid-stream kill)
       stream request #2+             → stream the recovered answer
+
+    scenario='studio_recover_write'
+      stream request #1              → same drip-then-park (the KILLED studio
+                                       turn)
+      stream request #2              → a REAL ``write_file`` tool call for
+                                       recovered_marker.txt (the re-dispatched
+                                       carrier — proves the Studio tool
+                                       surface survived the restart)
+      stream request #3+             → stream the recovered answer
 
     Non-stream requests (the memory-relevance filter and other helpers use
     the non-streaming chat() path) get an instant, well-formed JSON
@@ -184,6 +201,16 @@ class _MockLLM:
                     stream = (outer._text_stream(model, _FINAL_TEXT)
                               if has_tool_result
                               else outer._tool_call_stream(model))
+                elif outer.scenario == 'studio_recover_write':
+                    if n == 1:
+                        stream = outer._drip_stream(model)
+                    elif n == 2:
+                        stream = outer._tool_call_stream(
+                            model, path=_RECOVER_WRITE_PATH,
+                            content=_RECOVER_WRITE_CONTENT,
+                            call_id='call_e2e_recover')
+                    else:
+                        stream = outer._text_stream(model, _RECOVERED_TEXT)
                 elif n == 1:
                     stream = outer._drip_stream(model)
                 else:
@@ -221,10 +248,11 @@ class _MockLLM:
                 time.sleep(0.1)
 
     # ── stream builders ──
-    def _tool_call_stream(self, model):
-        args = json.dumps({'path': _WRITE_PATH, 'content': _WRITE_CONTENT})
+    def _tool_call_stream(self, model, path=_WRITE_PATH,
+                          content=_WRITE_CONTENT, call_id='call_e2e_write'):
+        args = json.dumps({'path': path, 'content': content})
         msg = {'role': 'assistant', 'content': None,
-               'tool_calls': [{'id': 'call_e2e_write', 'index': 0,
+               'tool_calls': [{'id': call_id, 'index': 0,
                                'type': 'function',
                                'function': {'name': 'write_file',
                                             'arguments': args}}]}
@@ -680,6 +708,9 @@ try:
             out['carrier_id'] = carrier['id']
             out['carrier_status'] = carrier.get('status')
             out['carrier_finish'] = carrier.get('finishReason')
+            _cfg = carrier.get('config') or {}
+            out['carrier_chatMode'] = _cfg.get('chatMode')
+            out['carrier_projectPath'] = _cfg.get('projectPath')
 
         # Reconnect to the stream the way a frontend does after a restart:
         # Last-Event-ID warm replay — this replays the REAL done event (the
@@ -772,24 +803,38 @@ def _launch_instance_b(tmp_path, conv_id: str, *, mock_url: str,
 
 @pytest.mark.unit
 def test_restart_self_repair_two_app_instances(flask_client, tmp_path):
-    """Instance A killed mid-stream → instance B's real boot repairs the turn.
+    """Instance A killed mid-Studio-stream → B's real boot repairs the turn.
 
     Assertion chain (owner gate #2): two real app instances share one
     TOFU_DB_PATH file; A leaves a status='running' corpse (no graceful
-    close); B walks the real startup path; the recovered turn's done-frame
-    committedMessage must be BYTE-IDENTICAL to the conversations.messages
-    tail — a recovered turn lands exactly like a live-completed one.
+    close); B walks the real startup path. The KILLED turn is itself a
+    Studio turn bound to a tmp project, so the chain also pins STUDIO
+    SURVIVAL (owner's gap callout — a chat-mode recovery can never catch
+    'healed but degraded to plain chat'): the re-dispatched carrier's
+    resolved config must keep chatMode='studio' + projectPath, and the
+    recovered turn must REALLY execute a project tool (write_file →
+    recovered_marker.txt on disk). Finally the done-frame committedMessage
+    must be BYTE-IDENTICAL to the conversations.messages tail — a recovered
+    turn lands exactly like a live-completed one.
     """
-    mock = _MockLLM(scenario='drip_then_freeze')
+    project = tmp_path / 'proj'
+    project.mkdir()
+    (project / 'seed.py').write_text('# seed file\n')
+    mock = _MockLLM(scenario='studio_recover_write')
     conv_id = 'test-conv-kill-' + uuid.uuid4().hex[:12]
     try:
         with _point_app_at_mock(str(tmp_path / 'cfg'), mock.base_url):
+            # The KILLED turn is itself a Studio turn bound to the project —
+            # settings carry the tier so the re-dispatched carrier resolves
+            # them from conv_settings (spawn_task passes config=None).
             body = _send_message(
                 flask_client, conv_id, 'answer me please',
-                config={'chatMode': 'chat', 'model': 'mock-studio-1',
+                config={'chatMode': 'studio', 'model': 'mock-studio-1',
+                        'projectPath': str(project), 'autoApply': True,
                         'searchMode': 'off', 'fetchEnabled': False,
                         'memoryEnabled': False},
-                settings={'model': 'mock-studio-1', 'chatMode': 'chat',
+                settings={'model': 'mock-studio-1', 'chatMode': 'studio',
+                          'projectPath': str(project), 'autoApply': True,
                           'searchMode': 'off', 'fetchEnabled': False,
                           'memoryEnabled': False})
             task_id = body['taskId']
@@ -818,6 +863,38 @@ def test_restart_self_repair_two_app_instances(flask_client, tmp_path):
         assert result.get('carrier_id'), 'no killed-recovery carrier was spawned'
         assert result.get('carrier_status') == 'done', \
             f"carrier ended as {result.get('carrier_status')}"
+
+        # ── STUDIO SURVIVAL (owner gate): the recovery did NOT degrade the
+        # turn to plain chat — the carrier's resolved config kept the tier ──
+        assert result.get('carrier_chatMode') == 'studio', \
+            f"carrier lost chatMode='studio': {result.get('carrier_chatMode')!r}"
+        assert result.get('carrier_projectPath') == str(project), \
+            f'carrier lost projectPath: {result.get("carrier_projectPath")!r}'
+
+        # ── THE DECISIVE ASSERTION: the recovered turn really executed a
+        # project tool — the marker file exists ON DISK with exact bytes.
+        # "It repaired itself in Studio mode" = the project-tool family came
+        # back, not just a blob of text.
+        marker = project / _RECOVER_WRITE_PATH
+        assert marker.is_file(), \
+            'recovered turn never executed write_file — Studio self-repair ' \
+            'degraded to plain text (project-tool family lost across restart)'
+        assert marker.read_text() == _RECOVER_WRITE_CONTENT
+
+        # ── The carrier's LLM requests prove the tool surface end-to-end:
+        # write_file was OFFERED on the recovery request and its result came
+        # back (the tool round actually closed).
+        streams = [h for h in mock.history if h.get('stream')]
+        assert len(streams) >= 3, \
+            f'expected drip + tool_call + final streams, got {len(streams)}'
+        rec_tools = [t.get('function', {}).get('name')
+                     for t in (streams[1].get('tools') or [])]
+        assert 'write_file' in rec_tools, \
+            f'recovered turn lost the Studio tool surface: {rec_tools}'
+        assert any(m.get('role') == 'tool'
+                   and m.get('tool_call_id') == 'call_e2e_recover'
+                   for h in streams[2:] for m in (h.get('messages') or [])), \
+            'recovered turn: the write_file tool result never came back'
 
         # ── The warm-replayed done frame (frontend-reconnect path) ──
         assert result.get('sse_raw'), \
@@ -870,16 +947,20 @@ def test_NEUTER_restart_without_recovery_leaves_corpse(flask_client, tmp_path):
     corpse stays status='running' forever. Proves Layer 2's green is caused
     by the real recovery path, not by some incidental mechanism.
     """
-    mock = _MockLLM(scenario='drip_then_freeze')
+    project = tmp_path / 'proj'
+    project.mkdir()
+    mock = _MockLLM(scenario='studio_recover_write')
     conv_id = 'test-conv-kill-nc-' + uuid.uuid4().hex[:12]
     try:
         with _point_app_at_mock(str(tmp_path / 'cfg'), mock.base_url):
             body = _send_message(
                 flask_client, conv_id, 'answer me please',
-                config={'chatMode': 'chat', 'model': 'mock-studio-1',
+                config={'chatMode': 'studio', 'model': 'mock-studio-1',
+                        'projectPath': str(project), 'autoApply': True,
                         'searchMode': 'off', 'fetchEnabled': False,
                         'memoryEnabled': False},
-                settings={'model': 'mock-studio-1', 'chatMode': 'chat',
+                settings={'model': 'mock-studio-1', 'chatMode': 'studio',
+                          'projectPath': str(project), 'autoApply': True,
                           'searchMode': 'off', 'fetchEnabled': False,
                           'memoryEnabled': False})
             task_id = body['taskId']
@@ -912,6 +993,13 @@ def test_NEUTER_restart_without_recovery_leaves_corpse(flask_client, tmp_path):
         assert _RECOVERED_TEXT not in (tail.get('content') or '')
         assert not tail.get('interruptedReason'), \
             'NEUTER failed: tail was tagged killed without the recovery sweep'
+
+        # The two STUDIO-SURVIVAL assertions are red too (owner gate #3):
+        # no carrier config survives, and no recovered tool side effect lands.
+        assert not result.get('carrier_projectPath'), \
+            'NEUTER failed: carrier config present without the recovery path'
+        assert not (project / _RECOVER_WRITE_PATH).exists(), \
+            'NEUTER failed: recovered marker written without the recovery path'
     finally:
         mock.close()
 

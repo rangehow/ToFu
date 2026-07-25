@@ -1,5 +1,10 @@
 # Project Journal
 
+### 2026-07-25(续) — e2e Layer 2 升级为 Studio 变体:owner 验收抓出「chat 模式恢复永远证不了 Studio 工具面存活」缺口(commit 见下,1 文件 +97/-21,套件 4/4 ×2 复跑稳定(46.6s),相邻 57/57,collect **8513** 0 err)。
+- **缺口(owner 原话):** 「恢复成一个丢掉项目工具面的降级回合」正是 Studio 用户最痛的静默劣化,chatMode='chat' 的 Layer 2 永远抓不到。
+- **升级:** 被杀回合本身就是 studio + tmp projectPath(**settings 承载档位**——carrier spawn_task 传 config=None,从 conv_settings 解析,autoApply 同理必须进 settings);mock 新场景 studio_recover_write:流#1 慢滴造尸、流#2(恢复 carrier)发真 write_file(recovered_marker.txt)、流#3 收尾。断言链补:①carrier 解析 config 的 chatMode='studio' + projectPath 原样存活;②**决定性**:marker 文件真实落盘且字节精确;③恢复请求工具面含 write_file + 工具结果回填闭合。NEUTER 同步:剥恢复路径后 marker 不存在 + 无 carrier config,两条新断言同样真转红。
+- **结果(诚实):** 首跑即绿(19.3s)——恢复路径**没有**丢 projectPath/chatMode 的真实 bug:killed-recovery carrier 从 conv_settings 解析档位/项目/autoApply 的链路是健全的。本测试此后是该行为的永久守卫,任何把恢复降级为纯文本回合的回归都会当场红。
+
 ### 2026-07-24(续24) — RENDER_CONTRACT Phase 3.5 §7 落地:**streamBufs 整体退役,第二个活事实源消失**(commit `ff7176dd`,26 文件 +1135/-996,§7.4 锚点 RED→**GREEN**,2 个退役守卫入库,72/72 全绿,collect 8513 0 err)。owner 四条件全落地,过程中还抓到 2 个真实生产 ReferenceError。
 - **退役本体:** core.js 的全局 `streamBufs` Map 声明**删除**(step-5 后它已是只写镜像);内容/思考/工具轮从**消息文档**投影(trailing assistant msg)。**phase 的家落成实体**(owner 条件 2,不许停在 plan 措辞):新 `ui/stream_session.js` —— `streamSessions` Map 按 convId 键控 + `getStreamSession`(惰性 {phase:null})+ **`setStreamPhase` 带 live-only 写守卫**(无活跃流即 no-op,post-stop 相位写不能复活会话)+ `clearStreamSession`。裁决写死:phase 属 reducer live 会话态,**永不进消息文档**(运行时态不污染 SSOT)。
 - **owner 条件 4 — 锚点验收语义写死:** plan §7.4 补「字节相等只承诺 **checkpoint 边界**;两 checkpoint 之间 doc 允许滞后(那是持久化契约,不是分叉)」。§7.4 锚点(`test_frontend_reconnect_parity_anchor.py`)翻转 RED→**GREEN**:content/thinking/status 三 zone 在 checkpoint 边界逐字节相等,且重连后活气泡的 id/data-msg-id 与 live 侧一致(孪生家族最后一口气)。NEUTER:改 checkpoint content 翻转 content 检查。

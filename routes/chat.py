@@ -866,7 +866,15 @@ def chat_continue():
         # ── Apply rollback in place on the assistant message ──
         preserved_content = scan['preserved_content']
         assistant_msg['toolRounds'] = scan['kept_rounds']
-        assistant_msg['content'] = preserved_content
+        if _resume_prefill:
+            # ★ case-2 prefill (P5, LOSSLESS): the trailing prose is CONTINUED
+            #   (shipped as resumePrefill below), NOT discarded. Keep the FULL
+            #   deliverable content and drop nothing into priorContent — the
+            #   checkpoint-regenerate branch (else) discards the tail instead.
+            assistant_msg['content'] = _orig_full_content
+            assistant_msg.pop('priorContent', None)
+        else:
+            assistant_msg['content'] = preserved_content
         # Strip live thinking — any replay-worthy thinking already lives on
         # keptRounds[i].thinking and is carried forward via toolHistory.
         # If there was trailing message-level thinking (reasoning emitted
@@ -888,7 +896,7 @@ def chat_continue():
         # so a post-Continue page refresh (DB reload) doesn't lose the visible
         # record of what was rolled back — keeping the content area honest
         # rather than silently empty beside an unchanged tool panel.
-        if scan.get('discarded_content_text'):
+        if scan.get('discarded_content_text') and not _resume_prefill:
             assistant_msg['priorContent'] = scan['discarded_content_text']
         for stale_key in ('finishReason', 'toolSummary', 'error'):
             assistant_msg.pop(stale_key, None)
@@ -1004,9 +1012,9 @@ def chat_continue():
                 # rounds to `keptRounds` and adopts these strings verbatim,
                 # rather than re-deriving the checkpoint by scanning
                 # status==='done' (which duplicated this exact logic).
-                'resumeMode': 'checkpoint',
-                'contentPrefix': preserved_content,
-                'priorContent': scan.get('discarded_content_text') or '',
+                'resumeMode': 'prefill' if _resume_prefill else 'checkpoint',
+                'contentPrefix': _orig_full_content if _resume_prefill else preserved_content,
+                'priorContent': '' if _resume_prefill else (scan.get('discarded_content_text') or ''),
                 'priorThinking': scan.get('discarded_thinking_text') or '',
             },
         })

@@ -123,9 +123,12 @@ def test_prefill_shows_lossless_continue():
 
 @pytest.mark.skipif(not _node_available(), reason='node not installed')
 def test_checkpoint_shows_lossy_continue_with_kept_rounds():
+    """The checkpoint face is now the FALLBACK: a tools turn the provider can't
+    prefill (Claude) → Continue from round N (lossy). A CAPABLE tools turn now
+    yields prefill (see test_capable_tools_turn_prefers_lossless_prefill)."""
     cases = [{'msg': _amsg(content='partial', finish_reason='interrupted',
                            tool_rounds=[_done_round('c1', 0), _done_round('c2', 1)]),
-              'model': CAPABLE}]
+              'model': INCAPABLE}]
     out = _run(cases)
     o = out[0]
     assert o['show'] is True
@@ -133,6 +136,25 @@ def test_checkpoint_shows_lossy_continue_with_kept_rounds():
     assert o['lossless'] is False
     assert o['keptRounds'] == 2
     assert o['titleKey'] == 'msgAction.continueFromRoundTitle'
+
+
+@pytest.mark.skipif(not _node_available(), reason='node not installed')
+def test_capable_tools_turn_prefers_lossless_prefill():
+    """THE P5 FLIP (owner-approved): a capable model with a resumable tail on a
+    TOOLS turn shows the LOSSLESS 'Continue' affordance (prefill), matching the
+    case-2 wire the route already ships — the button is now honest that the
+    resume is lossless (keptRounds is surfaced for the tool replay, but the
+    mode is prefill)."""
+    cases = [{'msg': _amsg(content='partial', finish_reason='interrupted',
+                           tool_rounds=[_done_round('c1', 0), _done_round('c2', 1)]),
+              'model': CAPABLE}]
+    out = _run(cases)
+    o = out[0]
+    assert o['show'] is True
+    assert o['kind'] == 'continue'
+    assert o['lossless'] is True
+    assert o['keptRounds'] == 2
+    assert o['titleKey'] == 'msgAction.continueLosslessTitle'
 
 
 @pytest.mark.skipif(not _node_available(), reason='node not installed')

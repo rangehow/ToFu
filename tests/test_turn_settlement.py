@@ -190,11 +190,29 @@ def test_completed_short_circuits_before_checkpoint():
     assert v['resume']['mode'] == MODE_NONE
 
 
-def test_tool_checkpoint_is_lossy_and_reports_kept_rounds():
+def test_capable_tools_turn_prefers_prefill_over_checkpoint():
+    """THE P5 FLIP (owner-approved): a capable model with a resumable tail on a
+    TOOLS turn reports prefill (lossless) — matching the case-2 wire the route
+    ALREADY ships (replay the tool batch + prefill the tail). keptRounds is
+    still surfaced (the route replays those rounds alongside the prefill)."""
     rounds = [_done_round('c1', llm_round=0), _done_round('c2', name='grep_search', llm_round=1)]
     v = compute_turn_settlement(
         _amsg(content='partial answer', finish_reason='interrupted', tool_rounds=rounds),
         model=CAPABLE)
+    assert v['resume']['mode'] == MODE_PREFILL
+    assert v['resume']['lossless'] is True
+    assert v['resume']['keptRounds'] == 2   # surfaced, but the mode is prefill
+    assert v['resume']['reason'] == 'prefill_continue'
+
+
+def test_claude_tools_turn_falls_back_to_checkpoint():
+    """The honest checkpoint fallback: a tools turn the provider can't prefill
+    (Claude rejects a trailing assistant prefill) still resumes via checkpoint
+    (replay the rounds, REGENERATE the tail — lossy, the only safe option)."""
+    rounds = [_done_round('c1', llm_round=0), _done_round('c2', name='grep_search', llm_round=1)]
+    v = compute_turn_settlement(
+        _amsg(content='partial answer', finish_reason='interrupted', tool_rounds=rounds),
+        model=INCAPABLE)
     assert v['resume']['mode'] == MODE_CHECKPOINT
     assert v['resume']['lossless'] is False
     assert v['resume']['keptRounds'] == 2
@@ -202,11 +220,14 @@ def test_tool_checkpoint_is_lossy_and_reports_kept_rounds():
 
 
 def test_failed_turn_with_checkpoint_still_resumes_via_checkpoint():
-    # Faithful to today: /api/chat/continue scans toolRounds unconditionally,
-    # so an errored turn that completed tool rounds resumes from the checkpoint.
+    # 'error' is NOT in RESUMABLE_FINISH_REASONS, so even a tools turn WITH a
+    # tail cannot prefill — the honest fallback is checkpoint (replay the
+    # completed rounds, regenerate). Faithful to the route (resume_prefill
+    # returns None for a non-resumable finish reason).
     rounds = [_done_round('c1', llm_round=0)]
     v = compute_turn_settlement(
-        _amsg(content='', thinking='', finish_reason='error', tool_rounds=rounds),
+        _amsg(content='the partial answer', thinking='', finish_reason='error',
+              tool_rounds=rounds),
         model=CAPABLE)
     assert v['resume']['mode'] == MODE_CHECKPOINT
     assert v['resume']['lossless'] is False

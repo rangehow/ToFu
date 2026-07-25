@@ -169,18 +169,19 @@ function _tsResume(mode, lossless, reason, keptRounds, prefillChars) {
 }
 
 /* Decide HOW the turn can be resumed — once, here, not per consumer.
- * Precedence preserves the backend (checkpoint before prefill); fail-closed
- * (any uncertainty → regenerate). */
+ * P5 precedence (owner-approved flip): prefill BEFORE checkpoint for a capable
+ * model with a resumable tail (mirrors the backend verdict + the already-
+ * lossless case-2 continue route); checkpoint is the fallback for a tools turn
+ * the provider can't prefill. Fail-closed (any uncertainty → regenerate). */
 function _tsComputeResume(msg, outcome, finishReason, model) {
   if (outcome === TS_OUTCOME_COMPLETED) return _tsResume(TS_MODE_NONE, false, 'turn_completed');
   if (_tsIsEmptyTurn(msg)) return _tsResume(TS_MODE_REGENERATE, false, 'empty_turn');
   const keptRounds = _tsScanKeptRounds(msg.toolRounds);
-  if (keptRounds > 0) return _tsResume(TS_MODE_CHECKPOINT, false, 'tool_checkpoint', keptRounds, 0);
   const content = (msg.content || '') + '';
   const resumable = _TS_RESUMABLE_FINISH_REASONS.has(finishReason || '');
-  if (resumable && content.trim() && model && _tsSupportsPrefill(model)) {
-    return _tsResume(TS_MODE_PREFILL, true, 'prefill_continue', 0, content.length);
-  }
+  const prefillOk = resumable && content.trim() && model && _tsSupportsPrefill(model);
+  if (prefillOk) return _tsResume(TS_MODE_PREFILL, true, 'prefill_continue', keptRounds, content.length);
+  if (keptRounds > 0) return _tsResume(TS_MODE_CHECKPOINT, false, 'tool_checkpoint', keptRounds, 0);
   return _tsResume(TS_MODE_REGENERATE, false, 'no_checkpoint_no_prefill');
 }
 
@@ -223,6 +224,7 @@ function continueButtonForSettlement(verdict) {
   if (mode === TS_MODE_NONE) return { show: false };
   if (mode === TS_MODE_PREFILL) {
     return { show: true, kind: 'continue', lossless: true,
+             keptRounds: verdict.resume.keptRounds || 0,
              labelKey: 'msgAction.continue', titleKey: 'msgAction.continueLosslessTitle' };
   }
   if (mode === TS_MODE_CHECKPOINT) {
@@ -274,23 +276,6 @@ if (typeof window !== 'undefined') {
   window.computeTurnSettlement = computeTurnSettlement;
   window.continueButtonForSettlement = continueButtonForSettlement;
   window.finishLabelForSettlement = finishLabelForSettlement;
-  window._tsScanKeptRounds = _tsScanKeptRounds;
-  window._tsHasRealRound = _tsHasRealRound;
-}
-/* ── Publish under both bare + window scopes so the Node equivalence harness's
- *   (0, eval)(src) and the browser's bundle both see them (conv_state_reducer
- *   precedent). */
-if (typeof window !== 'undefined') {
-  window.computeTurnSettlement = computeTurnSettlement;
-  window.continueButtonForSettlement = continueButtonForSettlement;
-  window._tsScanKeptRounds = _tsScanKeptRounds;
-  window._tsHasRealRound = _tsHasRealRound;
-}
-/* ── Publish under both bare + window scopes so the Node equivalence harness's
- *   (0, eval)(src) and the browser's bundle both see them (conv_state_reducer
- *   precedent). */
-if (typeof window !== 'undefined') {
-  window.computeTurnSettlement = computeTurnSettlement;
   window._tsScanKeptRounds = _tsScanKeptRounds;
   window._tsHasRealRound = _tsHasRealRound;
 }

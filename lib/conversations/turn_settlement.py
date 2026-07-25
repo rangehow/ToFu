@@ -22,10 +22,14 @@ full contract. It is a PURE function (no DB, no network, no Flask, no LLM) so
 it is trivially unit-testable and recomputable on a cold reopen from the
 persisted message fields.
 
-The verdict is a faithful SSOT of the EXISTING resume algorithm — it does not
-change the resume precedence (checkpoint before prefill, per
-``lib/chat_dispatch.py``). Its job is to make the decision visible and
-consistent, not to re-litigate it.
+The verdict is the SSOT for the resume-mode decision. P5 (owner-approved,
+epic ``pt_c11c3a9272274848``): for a prefill-capable model with a resumable
+terminal tail it reports ``prefill`` (lossless) — matching the case-2 wire the
+continue route ALREADY ships (replay the tool batch + prefill the tail,
+``contentPrefix`` = the full prior content). ``checkpoint`` is the honest
+fallback for a tools turn the provider cannot prefill (Claude / no resumable
+tail). Its job is to make the decision visible and consistent, so the Continue
+button is honest about whether a resume is actually lossless.
 """
 
 from __future__ import annotations
@@ -145,21 +149,21 @@ def _compute_resume(msg: dict[str, Any], *, outcome: str, finish_reason: str | N
                     model: str | None, segments: Any) -> dict[str, Any]:
     """Decide HOW the turn can be resumed — once, here, not per consumer.
 
-    Precedence preserves today's behaviour (``lib/chat_dispatch.py``):
-    checkpoint before prefill, prefill gated on the canonical
-    ``RESUMABLE_FINISH_REASONS`` + a prefill-capable model. Fail-closed: any
-    uncertainty degrades to ``regenerate`` (the current fallback), never to a
-    riskier resume.
+    P5 precedence (owner-approved flip): prefill BEFORE checkpoint for a
+    capable model with a resumable tail (the route's case-2 wire is already
+    lossless there); checkpoint is the fallback for a tools turn the provider
+    can't prefill. Fail-closed: any uncertainty degrades to ``regenerate``
+    (the current fallback), never to a riskier resume.
     """
     if outcome == OUTCOME_COMPLETED:
         return _resume(mode=MODE_NONE, lossless=False, reason='turn_completed')
     if _is_empty_turn(msg):
         return _resume(mode=MODE_REGENERATE, lossless=False, reason='empty_turn')
 
-    # ── Checkpoint mode: completed tool rounds are the recoverable anchor. ──
-    # Reuse the authoritative scanner (the same one /api/chat/continue calls)
-    # so the keptRounds the verdict reports is EXACTLY what Continue would use —
-    # client and server can never disagree about the resume point.
+    # ── Compute BOTH resume anchors. ──
+    # kept_rounds (checkpoint scan) — the completed tool rounds (replayed either
+    # way; reused from the authoritative scanner /api/chat/continue calls so the
+    # keptRounds the verdict reports is EXACTLY what Continue uses).
     kept_rounds = 0
     try:
         from lib.chat.turn_builder import scan_continue_checkpoint
@@ -167,27 +171,43 @@ def _compute_resume(msg: dict[str, Any], *, outcome: str, finish_reason: str | N
         if scan:
             kept_rounds = len(scan.get('kept_rounds') or [])
     except Exception as e:  # fail-closed — never let verdict computing break settle
-        logger.debug('[Settlement] checkpoint scan failed (fall through to prefill/regenerate): %s', e)
-    if kept_rounds > 0:
-        return _resume(mode=MODE_CHECKPOINT, lossless=False,
-                       reason='tool_checkpoint', kept_rounds=kept_rounds)
+        logger.debug('[Settlement] checkpoint scan failed: %s', e)
 
-    # ── Prefill mode: a capable model can continue the SAME terminal string. ──
+    # prefill gate — a prefill-capable model + a resumable finish + a terminal
+    # deliverable tail to continue.
     content = (msg.get('content') or '')
+    prefill_ok = False
     try:
         from lib.tasks_pkg.segments._types import RESUMABLE_FINISH_REASONS
         resumable = (finish_reason or '') in RESUMABLE_FINISH_REASONS
     except Exception as e:
         logger.debug('[Settlement] RESUMABLE_FINISH_REASONS import failed: %s', e)
         resumable = False
-    if resumable and content.strip():
+    if resumable and content.strip() and model:
         try:
             from lib.model_info import model_supports_assistant_prefill
-            if model and model_supports_assistant_prefill(model):
-                return _resume(mode=MODE_PREFILL, lossless=True,
-                               reason='prefill_continue', prefill_chars=len(content))
+            prefill_ok = bool(model_supports_assistant_prefill(model))
         except Exception as e:
             logger.debug('[Settlement] prefill capability probe failed (fail-closed): %s', e)
+
+    # ── P5 flip (owner-approved): prefer prefill over checkpoint for a capable
+    # model with a resumable tail. The continue route ALREADY ships this
+    # lossless case-2 wire (replay the tool batch + prefill the tail,
+    # contentPrefix = the full prior content) whenever _resume_prefill is set —
+    # so reporting prefill makes the verdict (and the Continue button) HONEST
+    # about the losslessness the route already delivers. keptRounds is still
+    # surfaced (the route replays those rounds alongside the prefill).
+    if prefill_ok:
+        return _resume(mode=MODE_PREFILL, lossless=True,
+                       reason='prefill_continue', kept_rounds=kept_rounds,
+                       prefill_chars=len(content))
+
+    # ── Checkpoint fallback: a tools turn the provider can't prefill (Claude /
+    # no resumable tail) — replay the completed rounds and REGENERATE the tail
+    # (lossy, the only safe option there).
+    if kept_rounds > 0:
+        return _resume(mode=MODE_CHECKPOINT, lossless=False,
+                       reason='tool_checkpoint', kept_rounds=kept_rounds)
 
     return _resume(mode=MODE_REGENERATE, lossless=False,
                    reason='no_checkpoint_no_prefill')

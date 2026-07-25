@@ -1,6 +1,6 @@
 # Project Journal
 
-### 2026-07-25(续10) — podcast「已有报告却提示生成报告」根治:缺表探针机制包 + 前端诚实态 + hero 重设计(1 commit,11 文件;后端 14/14、前端 8/8(25 PASS 含双 NEUTER)、相邻 6 套件 98 过)。
+### 2026-07-25(续10) — podcast「已有报告却提示生成报告」根治:缺表探针机制包 + 前端诚实态 + hero 重设计(commit `96ff323e`,12 文件;后端 14/14、前端 8/8(25 PASS 含双 NEUTER)、相邻 6 套件 98 过)。
 - **用户报告的症状双根因:** ①活库缺 `paper_podcasts` → podcast lookup 每个调用都 500(onError:'null' → null)→ 前端**无条件 fall-through 到 report_required**,对已有报告的论文撒谎,且「去生成报告」永远修不好;②report_required 空态左对齐小盒子,大面板里像坏掉。
 - **后端机制包(对 sibling cacfa08d 纯 bump 的兜底网):** `_missing_core_tables`(PG+SQLite 双 backend `_selfheal.py`)在版本快路径**之前**探测——表加进 `_core_schema` 却忘 bump `_SCHEMA_VERSION` 这类漂移不再永久漏过,强制全量 DDL 自愈。清单来自 `core_boot_table_names()`(共享 MetaData − 有意不建的表),新 Core 表自动纳入。**自捉一虫:** 初版清单把 `error_resolutions`(PG-only 设计,见 `_tables.py:781` 注释)也探进去 → SQLite 每次 boot 都会被骗着跑全量 DDL、快路径永久失效;`_helpers.py` 加 `PG_ONLY_CORE_TABLES` + `core_boot_table_names(backend)` 后端感知修复,由 `test_reinit_with_all_tables_present_is_fast_path`(全量入口打炸,收敛库必须静默快路径)钉死。PG facade `__init__.py` 补 `_missing_core_tables` 再导出(初版漏了,测试即红)。
 - **前端(podcast.js):** `report_required` 现在**只**从 `look.ok===true` 的真实 `report_available:false` 得出;lookup 失败(5xx/异常)进新 `lookup_failed` 诚实态(警告图标+错误文案+重试按钮 wired `_initPodcastTab(true)`)。空态重设计为垂直+水平居中 hero(耳机 SVG/标题/副文/两步胶囊 ①生成报告→②改编播客/CTA),新增 `.paper-podcast-hero*` CSS 11 规则、i18n 键 ×5(zh+en)。
@@ -51,12 +51,6 @@
 - **守卫:** `test_frontend_stream_status_zone_singleton.py`——硬编码懒建前置条件夹具(tool zone 有/status zone 无;**刻意不驱动真实模板**——模板正被 sibling 391+/385- 重写中,钉的契约是分支前置条件而非模板形状),驱动真实 `updateStreamingUI` 跑 3 帧 + 新气泡缓存重导臂:zone 单例 + 计数器为最新帧;**NEUTER** 剥回写行 → 楼梯回归(两条单例检查转红),证回写承重。
 - **过程坑(如实):** 首版测试驱动真实 `_streamingBubbleHTML` 时抓到 sibling 未提交 WIP 把模板改成 status-pulse-only 形态(+391/-385,无 zone)——与 HEAD 模板形态不同但同触发「缺 status zone」族;peer_status 确认无活跃 sibling 后改用硬编码夹具,`git diff` 核 streaming_ui.js 仅含我的 hunk,精确 pathspec 提交,sibling 四个改动文件零触碰。
 - **生效边界(诚实):** 修复已提交,但 bundler 无热重载——**需 owner 重启服务器 + 浏览器硬刷新**(bundle 内容哈希变化)后楼梯才消失;重启前旧 bundle 仍会堆。
-
-### 2026-07-25(续3) — pt_687b87ac 收口
-# Project Journal
-
-### 2026-07-25(续3) — pt_687b87ac 收口
-# Project Journal
 
 ### 2026-07-25(续4) — 论文播客 P1 全链交付(epic `pt_80943e765e9444ca`,owner 拍板后实施,5 commit:L1 `43c89859` / L2 `22ae8b94` / L3 `97f6d06c` / L4 `283ec600`+`dea2da21`;4 套件 60 测全绿含 5 NEUTER,相邻 paper/前端守卫 97+9,collect **8646** 0 err)。
 - **需求与拍板(owner):** 报告→播客;四洞必修(Unicode 数学符号/中英混读缩写/睡眠定时提 P1/数字溯源支持派生);TTS 不等具体模型——服务器配置注册 `capabilities:["tts"]` 的 OpenAI 兼容 `/audio/speech` 槽位,模型名与音色零硬编码,无槽位降级为「剧本+逐字稿」且 UI 明示,不许报错死。
@@ -143,12 +137,6 @@
 - **git 纪律:** 3 文件 numstat 全量不截断对账;暂存 stray 检查为空;sibling WIP 零损留在 worktree。
 - **边界(诚实):** 键契约是静态守卫,运行时若有代码用 `Object.assign(session, {content:...})` 绕过点号赋值则静态扫描看不到 —— 但点号赋值是这个代码库唯一实践,且 reader-surface 守卫钉死了任何新读者;VU +404 hunk 已由 owner 接受,不再单审。
 
-### 2026-07-25(续) — e2e Layer 2 升级为 Studio 变体
-# Project Journal
-
-### 2026-07-25 — 总账 v3:
-# Project Journal
-
 ### 2026-07-25 — pt_6598ae21(export force-push)第 2 次派发:零判断半复核仍在(sibling 两次触碰 export.py 均保留守卫)+ **首次用 question-block** 把残余策略决策变成 owner 一键选择。单趟核实:`4795d5f` 在祖先链、守卫在位(export.py:3089)、4/4 守卫测绿;sibling `06d4f58a`/`290e47f0` 碰过 export.py 但**保留了守卫**。残余=分叉时默认 force 与否的策略决策(我lean A:镜像工作流 load-bearing)。三选项挂看板:A 保持现状即关闭 / B 加 `--no-force` 开关 / C 默认翻转为 abort(会破坏重导出流)。**不再自动重试,owner 点答即重新派发**——比裸 block 每小时空烧一个 turn 强。
 
 ### 2026-07-25 — 总账 v3:
@@ -226,9 +214,6 @@
 - **git 纪律:** `reset -q HEAD .` → 仅 add 3 文件 → `commit -F- -- <3 路径>` → `git show HEAD --name-only` = 仅 3 文件,NO LEAK。`da1b3ef`。
 - **诚实残余缝(连 owner 清单也未列):** `lib/orchestration/` 包(6 文件,区别于顶层 orchestration_*.py)、`lib/tasks_pkg/` 长尾(wave1 只读 8 个指定模块/47 项)、`lib/database/` 长尾(18 项扫 7)、`lib/llm_dispatch/` 长尾(15 项扫 6)、`lib/desktop_agent/`(9 文件)。要 100% 覆盖需第四波小扫。
 (commit `5fbc40e3`,2 文件 +163,套件扩至 16 测全绿含三重 NEUTER,相邻环 67/67,collect **8475** 0 err)。
-# Project Journal
-
-
 
 ### 2026-07-25(续2) — 「历史会话同步太差:侧边栏已知出错、点进去却长期显示正常结束」三层根修(epic `pt_f49dcceb91c8432e`,commit `95e18d88`,8 文件 +743/-37,新测 8 面全绿含双 NEUTER + 顺手治好 2 张预存在红 harness,相邻 11 套件 **57/57**,collect **8484** 0 err)。owner 实证:大脑自动派发的会话回复失败后,徽标先变红,但正文要「来回点+等好久」才跳变成错误态——不等着就会完全困惑。
 - **证据链(三路并行钉死):** ①DB 直查:2 个会话尾部 assistant 带 `finishReason='error'`+typed envelope(大脑 autonomus dispatch 的模型回复失败),`conversations.messages` JSONB;②后端链:`_save_conv_blocking` 只注 lastMsgRole/Timestamp,**从不重导出结算五元组**(lastFinishReason/lastMsgError/lastMsgHasOutput),而前端 PUT 的 settings 白名单(conversations.js syncConversationToServer)**不含这三键**——每次客户端同步都静默冲掉 manager 结算章(生产行实证:出错尾巴的 settings 里三键全无);③前端链:`loadConversationMessages` Phase-1 乐观清 `_needsLoad`,Phase-2 校验**失败出口**(超时/5xx/离线)不恢复它,还顺手删 `_cacheKnownStale` + 撤校验暗化 → 后续每次打开在 conversations.js:1622 提前 return,**未验证缓存永远冒充真身**,直到某个无关推送撞运治好。

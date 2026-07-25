@@ -15,6 +15,12 @@
 - **验证(failing-first):** 修复前恰好 4 红(模板缺失 / 族检测 / display 缺失 / xhigh 降级)→ 修复后 8/8;相邻环(marketplace / access_matrix / probe_cells / audio_chat / backend_unit / billing / agent_options / anthropic_outbound / transcription)**179/179**;collect 8756 0 err。双 NEUTER(bare-4 判别力 + 模板审计判别力——防谓词退化为恒真)。
 - **生效边界(诚实):** 模板→设置面板立即可选;**已保存的 provider 配置不被模板回溯**——owner 既有 sankuai(Claude Code)provider 需在设置里给它加上此模型(或重新套用模板);family 检测是请求时读的 lib 代码,随服务器下次重启生效。
 
+### 2026-07-25 — pt_26c703c5 收口:freshness 门「稳定文件三连拒」根修——生产读路径从不盖章(commit `a205b759`,3 文件 +240/−14;新套件 4/4 含 NEUTER,freshness 四环 36/36,相邻环 52/54 两红 stash 退回 HEAD 复现=预存在)。
+- **根因(生产日志取证,非推测):** app.log 实锤四个会话同症状(db77d231/95c11cfa/62c63e55/4204f7fa 在 styles.css+JOURNAL.md 上各连拒 3 次)。机制:streaming pre-exec(直调 project_mod.execute_tool)与 dedup HIT(命中即 continue)双双绕过 `_handle_project_tool` → handler 的 record_read_paths 缝对生产读永不执行 → 令牌只剩自己写时盖的 → 任何外部改动后:拒 → 按提示重读(命中缓存:陈字节+不盖章)→ 再拒,死循环;模型还拿着陈字节写,永远过不了门。
+- **修复(Fix B,pipeline 半):** gate 模块新增 `cached_read_is_stale`(+`FILE_READ_TOOLS`+`_covered_read_paths` 共享拆出);pipeline serve 读缓存前校验覆盖文件指纹,陈→丢缓存落真实重读(经 handler 缝重盖章)→ 重发即过;鲜缓存照吃(性能路径钉死)。**Fix A(executor pre-exec 盖章)= sibling mrzyh2g7zqg5iu 未提交 WIP,边界确认不扫入;仅 Fix B 已足够闭环**(陈缓存被强制走真实读,handler 缝盖章)。
+- **sibling 交接(project_message):** 其 neuter 测试犯我草稿同款错——经被截肢 wrapper 盖 v1 章→无令牌 fail-open 而非拒绝;修法=write_freshness.record 直盖 store 层,已转告。
+- **生效边界(诚实):** 纯后端,提交即生效;运行中服务器需下次重启/重 exec 后生产才带新逻辑——重启前旧码仍会误拒,规避=换参数重读(不同 args 绕过 dedup 键)。
+
 ### 2026-07-25 — pt_c9a103fe 收口:owner 拍板「你决定,要最长期最优雅」→ paper 身份哈希**规范身份 + 一次性回填**根修(commit `dbeae694`,8 文件;新套件 13/13 含 NEUTER,schema+podcast 环 101/101,活库实测门禁 1/11→7/11)。question-block 第二个被回答的 epic。
 - **决策(A+B 合体,弃 C):** C(查询侧多候选兜底)让分叉永存,不优雅。最长期解 = ①`_paper_hash` 函数内部 strip 规范化(空白永不改变身份,strip 幂等 → raw/strip 输入天然收敛,`lib/paper/hashing.py`);②下游 prefer-显式身份——report-start 不再无视客户端 hash 自行重算,改走新助手 `resolve_paper_hash`(优先客户端呈递的 ingest 铸造 hash,`_safe_hash_dir` 校验,回退规范化重算;`routes/paper.py:502`);③一次性幂等回填 `lib/paper/hash_backfill.py`(重算每行库 hash → CAS UPDATE 库行 + 依赖表 paper_reports/translations/podcasts 重键(碰撞取 created_at 新者)+ 盘上图目录/播客目录非破坏性改名),`schema_meta` 旗标门控,双端 init_db 快路径**之前**接线(收敛库也要能自愈)。活库证据直接支持 A:报告本来就全部躺在 strip 哈希下,规范化即对齐、数据移动最小。
 - **活库实测(force=True 直跑):** 11 篇分叉论文重键,dependents_moved=4,dirs_renamed=0(canonical 目录报告期已建,旧目录按设计留作无害孤儿);门禁 has_report(库哈希) 由 1/11 → **7/11**(其余 4 篇是真无报告)。第二趟全零(幂等实证)。:15000 对愈后论文(第三变体 1079e115→4c3dc427)lookup → `report_available:true`——**运行中的旧码服务器因数据愈合也答对了**。

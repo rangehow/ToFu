@@ -722,17 +722,62 @@ _FORBIDDEN_SESSION_KEYS = (
 )
 
 
+_SESSION_SRC = (
+    r'(?:streamSessions\.get\s*\([^)]*\)|getStreamSession\s*\([^)]*\))')
+
+
+def _collect_session_aliases(code: str) -> set:
+    """Every local name directly assigned a session expression is a session
+    ALIAS. Two assignment shapes count (the streamBufs-v2 author's natural
+    writing style):
+      const|let|var X = streamSessions.get(...) | getStreamSession(...)
+      X = streamSessions.get(...) | getStreamSession(...)   (reassignment)
+    Destructuring is NOT collected (see the named exemption in the guard's
+    docstring): `const {phase} = getStreamSession(...)` only extracts the
+    one allowed key, so it cannot smuggle a forbidden field reference.
+    """
+    aliases = set()
+    for m in re.finditer(
+            r'(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*' + _SESSION_SRC,
+            code):
+        aliases.add(m.group(1))
+    for m in re.finditer(
+            r'(?<![\w$.])([A-Za-z_$][\w$]*)\s*=\s*' + _SESSION_SRC +
+            r'\s*;', code):
+        aliases.add(m.group(1))
+    return aliases
+
+
 def test_stream_session_keys_are_phase_only():
     """A streamSessions entry may carry ONLY the `phase` key — forever.
 
-    Owner §7-验收 cond 1: the phase home and the retired streamBufs are the
-    same architectural family (a global mutable Map off the document). The
-    writer-surface guard alone does NOT stop a future `session.content = x`
-    — that re-opens the second-fact-source door behind a different key.
-    This guard scans ALL production code for a forbidden key being READ or
-    WRITTEN on any session-shaped expression (streamSessions.get(...),
-    getStreamSession(...), _sess / session / sess / Sess locals), plus the
-    module's own creation shape.
+    Owner §7-验收 cond 1 + alias data-flow closure: the phase home and the
+    retired streamBufs are the same architectural family (a global mutable
+    Map off the document). The writer-surface guard alone does NOT stop a
+    future `session.content = x` — and a dev writing streamBufs v2 will
+    most naturally alias first (`const _s = streamSessions.get(cid);
+    _s.content = ...`). So this guard scans ALL production code for a
+    forbidden key being READ or WRITTEN on:
+      1. a direct session expression (streamSessions.get/getStreamSession)
+      2. the four named session locals (_sess/session/sess/Sess)
+      3. ANY local collected as a session ALIAS (direct assignment from a
+         session expression — the key-hole the owner caught).
+
+    KNOWN EXEMPTIONS (named, not silent — owner required an explicit call):
+      • Object.assign(session, {content: ...}) — a dot-less write the alias
+        scan can't see. Exempted because (a) the codebase's only practice is
+        dot assignment (grep-verified), and (b) the READER-surface guard
+        (test_stream_session_reader_surface_pinned) pins every file allowed
+        to touch a session at all, so an Object.assign writer must first
+        appear in the allowlist — where this guard then scans it.
+      • Destructuring `const {phase} = getStreamSession(...)` — only
+        extracts the allowed key; forbidden fields aren't referenced.
+      • Spread `{...session}` — copies the whole {phase}-only object; any
+        forbidden key added to the COPY is caught on the copy's own name
+        only if that name is also a session alias (it isn't — it's a plain
+        object literal), so this is a genuine blind spot accepted for the
+        same reason as Object.assign: the writer must first be in the
+        reader allowlist.
     """
     offenders = []
     # 1) Production readers/writers: forbidden key on a session expression.
@@ -747,8 +792,12 @@ def test_stream_session_keys_are_phase_only():
         rel = os.path.relpath(path, ROOT)
         with open(path, encoding='utf-8') as f:
             code = _strip_js_comments(f.read())
+        # (3) alias data-flow closure: collect session aliases first.
+        aliases = _collect_session_aliases(code)
+        all_exprs = list(sess_exprs) + [r'\b' + re.escape(a) + r'\b'
+                                        for a in aliases]
         for key in _FORBIDDEN_SESSION_KEYS:
-            for expr in sess_exprs:
+            for expr in all_exprs:
                 if re.search(expr + r'\s*\??\.\s*' + key + r'\b', code):
                     offenders.append(f'{rel}: session.{key}')
     # 2) The module itself must create the exact { phase } shape only.
@@ -794,16 +843,42 @@ def test_stream_session_reader_surface_pinned():
 
 def test_NEUTER_session_key_guard_detects_injected_content():
     """NEUTER (owner §7-验收): an injected `session.content = x` MUST trip the
-    key guard — proves the guard watches the key set, not just the symbols."""
-    poisoned = (
+    key guard — proves the guard watches the key set, not just the symbols.
+    Round-trip on BOTH forms: the direct form AND the alias form (the
+    key-hole the owner caught) must each trip; and deleting the alias
+    collector must make ONLY the alias injection recover green (proving the
+    alias closure is what catches the alias form)."""
+    direct = (
         'var s = streamSessions.get(cid);\n'
         's.content = "stale draft";\n'
         'getStreamSession(cid).thinking = "x";\n')
     for key in ('content', 'thinking'):
         assert re.search(
             r'(?:streamSessions\.get\([^)]*\)|getStreamSession\([^)]*\)|\bs\b)'
-            r'\s*\??\.\s*' + key + r'\b', poisoned), (
-                f'NEUTER FAILED: key guard blind to injected session.{key}')
+            r'\s*\??\.\s*' + key + r'\b', direct), (
+                f'NEUTER FAILED: key guard blind to direct session.{key}')
+
+    # Alias form: `const _s = streamSessions.get(cid); _s.content = 'x'`.
+    alias = (
+        'const _s = streamSessions.get(cid);\n'
+        '_s.content = "stale draft";\n')
+    aliases = _collect_session_aliases(alias)
+    assert '_s' in aliases, 'alias collector missed the _s assignment'
+    assert re.search(r'\b_s\b\s*\??\.\s*content\b', alias), (
+        'NEUTER FAILED: alias scan blind to _s.content')
+
+    # Round-trip: with the alias collector REMOVED, the alias injection
+    # must RECOVER GREEN (only the direct locals would be scanned) — this
+    # proves the alias closure is load-bearing for the alias form.
+    legacy_exprs = (
+        r'streamSessions\.get\([^)]*\)', r'getStreamSession\([^)]*\)',
+        r'\b_sess\b', r'\bsess\b', r'\bsession\b', r'\bSess\b',
+    )
+    alias_recover = all(
+        not re.search(e + r'\s*\??\.\s*content\b', alias) for e in legacy_exprs)
+    assert alias_recover, (
+        'NEUTER round-trip FAILED: the legacy (no-alias) scan already '
+        'catches _s.content — the alias closure would be redundant')
 
 
 def test_stream_session_module_contract():

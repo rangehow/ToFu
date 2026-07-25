@@ -3,7 +3,16 @@
 ### 2026-07-25(续) — e2e Layer 2 升级为 Studio 变体
 # Project Journal
 
-### 2026-07-25 — 总账验收三缺口闭合:wave-5 只读审 autopilot 2506L + index.html 入账 + reconciled-at 重生成(commit `33f4e02`,总账 v2,双向计数 1057≡1057)。owner 验收 wave-4 总账后抓出三个真缺口。
+### 2026-07-25 — 总账验收三缺口闭合
+# Project Journal
+
+### 2026-07-25 — 总账 v3:补 Out-of-scope 声明段(debug/tests/docs/logs/data),最后一个「以为覆盖」变体闭合(commit `a50d187`,reconciled-at `6c7d17a`,per-file 1057 行不变)。owner 验收 v2 后自己抓到:总账对 `debug/`(141 py)、`tests/`(980 py)等目录**零判定零豁免**——读者无法区分「扫过」「豁免」「压根没想到」。
+- **做法(文档级,不派 agent):** 实测五目录文件数(debug 192 总/141 py、tests 1010 总/980 py——与 owner 实测一致;docs 91、logs 76、data 168841 剪重后),声明段逐目录一行:路径、文件数、豁免理由(debug=gitignore+export 明示「never imported」、tests=测试门禁即质保、docs/logs/data=非代码资产/运行时数据)。**段已写进生成器**(`/tmp/gen_ledger2.py`),未来任何重生成自动保留。
+- **过程坑:** apply_diff 把多行字符串的字面换行写进生成器 → SyntaxError;文档未被写坏(失败发生在写文件前),修一行后重生成成功。
+- **reconciled-at 更新:** HEAD 从 c732e61 前进到 `6c7d17a`(含我的 33f4e02/399ca7b + sibling),文档头同步;per-file 数据行仍 1057(源码文件未动),三方计数再对齐。
+
+### 2026-07-25 — 总账验收三缺口闭合
+:wave-5 只读审 autopilot 2506L + index.html 入账 + reconciled-at 重生成(commit `33f4e02`,总账 v2,双向计数 1057≡1057)。owner 验收 wave-4 总账后抓出三个真缺口。
 - **①index.html 漏账:** 生成器库存只走 root `*.py`,全项目被编辑次数最多的前端文件没有 verdict 行——正是本行动反复抓的「以为覆盖」。修:新增 root_assets 类别,index.html → wave-2(fe_e + §3.4 批次)。
 - **②EXEMPT≠已查 + 又抓到假审查:** 派 reviewer 只读审 4 个 `autopilot*.py`(2506L,sibling 拆分中)——它 **16.4 秒、0 次工具调用、2 轮** 就报「全绿」,**根本没读文件**(w4_b1 幻觉同类,拒收)。**我亲自逐行读完 2506 行**:每个 catch 都有日志、exactly-once baton/supersede 复查/conclude 幂等/预算守卫 fail-open/carrier finally-discard 全部在位 → **真·CLEAN(有引证)**。4 行从 EXEMPT 翻转 wave-5 read-only audit。owner 是对的:sibling 所有权挡的是**编辑**,挡不住**只读**。
 - **③总账漂移:** v1 生成时 lib=833、活树已变(sibling 删/改文件)。收口时以最终状态重生成,文档头写 `Reconciled at commit c732e61…`(完整 hash),并做**双向计数**:文档数据行 1057 ≡ 脚本重数 1057 ≡ 生成器总数 1057(`grep -c '^| '`=1074=1057 数据+17 表头)。tallies:wave-1 372 / wave-2 135 / wave-3 390 / wave-4 149 / wave-5 4 / EXEMPT 7。

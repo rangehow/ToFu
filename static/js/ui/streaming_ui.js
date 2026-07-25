@@ -92,7 +92,19 @@ function _getStreamZones() {
 function updateStreamingUI(msg) {
   const zones = _getStreamZones();
   if (!zones) return;
-  const { body, memprefetch: memprefetchZone, tool: toolZone, think: thinkZone, content: contentZone, fc: fcZone, status: statusZone } = zones;
+  const { body, memprefetch: memprefetchZone, tool: toolZone, think: thinkZone, content: contentZone, fc: fcZone } = zones;
+  let statusZone = zones.status;
+  if (!statusZone) {
+    /* ★ Lazy-create the status zone: a bubble template may omit it (the
+     *   autopilot warmup bubble seeds no status when status===defaultStatus),
+     *   and _ensureStreamZones early-returns once data-zone="tool" exists —
+     *   so the phase-paint below would otherwise dereference null and kill
+     *   the whole frame update. */
+    statusZone = document.createElement('div');
+    statusZone.setAttribute('data-zone', 'status');
+    statusZone.className = 'stream-status';
+    body.appendChild(statusZone);
+  }
   const rounds = msg.toolRounds || [];
   const hasActiveSearch = rounds.some((r) => r.status === "searching");
   _syncToolRoundsDOM(toolZone, rounds);

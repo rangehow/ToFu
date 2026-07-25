@@ -476,51 +476,12 @@ async function connectToTask(convId, taskId, retries = 0, opts = {}) {
       }
     }
     if (typeof twStart === 'function') twStart(convId);
-    const buf = streamBufs.get(convId);
-    /* ★ FIX (stuck "等待中…" on reconnect): seed the fresh stream buffer with
-     *   whatever content/thinking the server already checkpointed onto this
-     *   assistant turn.  twStart() creates an EMPTY buffer; without this the
-     *   buffer stays empty until the first NEW SSE delta arrives, so any
-     *   buffer-driven render (the 300ms deferred re-render in
-     *   showStreamingUIForConv, or a twUpdate triggered by an unrelated field)
-     *   paints updateStreamingUI({content:''}) → the "wait" branch → the bubble
-     *   snaps back to "等待中…" even though the task is mid-generation and the
-     *   English is already persisted.  Mirror assistantMsg → buf exactly like
-     *   the SSE `state`/`delta` handlers do. */
-    if (assistantMsg.content) buf.content = assistantMsg.content;
-    if (assistantMsg.thinking) buf.thinking = assistantMsg.thinking;
-    if (assistantMsg.toolRounds)
-      buf.toolRounds = [...assistantMsg.toolRounds];
-    else if (assistantMsg.searchResults)
-      buf.toolRounds = [
-        {
-          roundNum: 1,
-          query: assistantMsg.searchQuery || "search",
-          results: assistantMsg.searchResults,
-          status: "done",
-        },
-      ];
+    /* §7 streamBufs fully RETIRED (the Map no longer exists): NO buffer
+     * seeding — content/thinking/rounds
+     * project straight from the message document (assistantMsg), which the
+     * checkpoint already carries; phase lives in streamSessions. */
   }
   const stream = activeStreams.get(convId);
-  /* ★ Defensive re-entry seed (strictly additive, decouples the twUpdate path):
-   *   the twStart+seed block above only runs on the FRESH-connection branch
-   *   (`!activeStreams.has(convId)`).  A re-entry that finds an existing stream
-   *   (e.g. an overlapping reconnect race, or a caller that re-invokes
-   *   connectToTask for a conv that already has a live entry) SKIPS twStart and
-   *   its seed — leaving whatever buffer existed.  `_twFlush` (health_stream_timer)
-   *   reads `buf.content` RAW with no message fallback, so an empty buffer there
-   *   would still paint the "等待中…" wait branch over already-checkpointed
-   *   content.  Fill any GAP from the persisted assistant turn — guarded on the
-   *   field being empty so this can NEVER clobber deltas the live `_trySSE`
-   *   closure has been accumulating (that buffer is authoritative once it has
-   *   data). No-op on the fresh path (the block above already seeded it). */
-  const _reentryBuf = streamBufs.get(convId);
-  if (_reentryBuf) {
-    if (!_reentryBuf.content && assistantMsg.content) _reentryBuf.content = assistantMsg.content;
-    if (!_reentryBuf.thinking && assistantMsg.thinking) _reentryBuf.thinking = assistantMsg.thinking;
-    if (!(_reentryBuf.toolRounds && _reentryBuf.toolRounds.length) && assistantMsg.toolRounds && assistantMsg.toolRounds.length)
-      _reentryBuf.toolRounds = [...assistantMsg.toolRounds];
-  }
   let sseWorked = false;
   try {
     sseWorked = await _trySSE(convId, taskId, stream, assistantMsg);
@@ -580,15 +541,14 @@ async function connectToTask(convId, taskId, retries = 0, opts = {}) {
    logic; only the 7 reassigned locals were lifted to `ctx` (destructured
    on entry, written back in `finally` so every early `return` propagates).
 
-   ctx = { convId, taskId, stream, assistantMsg, buf, epCriticPhase,
-           epCriticMsg, epCriticBuf, roundThinkingLen, lastEventId,
+   ctx = { convId, taskId, stream, assistantMsg, epCriticPhase,
+           epCriticMsg, roundThinkingLen, lastEventId,
            pinnedMsgId }
    Returns truthy only for the `done` event (signals stream end). */
 function dispatchSSEEvent(line, ctx) {
-  let { assistantMsg, buf, pinnedMsgId: _pinnedMsgId } = ctx;
+  let { assistantMsg, pinnedMsgId: _pinnedMsgId } = ctx;
   let _epCriticPhase = ctx.epCriticPhase;
   let _epCriticMsg = ctx.epCriticMsg;
-  let _epCriticBuf = ctx.epCriticBuf;
   let _roundThinkingLen = ctx.roundThinkingLen;
   let _lastEventId = ctx.lastEventId;
   let _pendingEventId = ctx.pendingEventId;
@@ -618,12 +578,11 @@ function dispatchSSEEvent(line, ctx) {
   }
   /* Snapshot of the live dispatch state passed to the extracted
    * property-only handlers (ui/sse_handlers_tool.js / _swarm.js). They
-   * mutate object PROPERTIES of assistantMsg/buf/_epCritic* (same refs we
+   * mutate object PROPERTIES of assistantMsg/_epCriticMsg (same refs we
    * hold here) and never reassign the locals, so no write-back is needed. */
   function _hctx() {
-    return { convId, taskId, stream, assistantMsg, buf,
-             epCriticPhase: _epCriticPhase, epCriticMsg: _epCriticMsg,
-             epCriticBuf: _epCriticBuf };
+    return { convId, taskId, stream, assistantMsg,
+             epCriticPhase: _epCriticPhase, epCriticMsg: _epCriticMsg };
   }
     // ★ Capture id: field for Last-Event-ID reconnection.
     //   The id line PRECEDES its paired data line on the wire, so we only
@@ -718,11 +677,6 @@ function dispatchSSEEvent(line, ctx) {
               plannerMsg.thinking = ev.thinking || "";
               plannerMsg.toolRounds = _snapshotLongerRounds(plannerMsg.toolRounds, ev.toolRounds);
               assistantMsg = plannerMsg;
-              if (buf) {
-                buf.thinking = assistantMsg.thinking;
-                buf.content = assistantMsg.content;
-                buf.toolRounds = assistantMsg.toolRounds;
-              }
             }
             /* ★ FIX: Update the streaming-msg DOM to show Planner role/avatar
              *   in case connectToTask created it with Agent styling */
@@ -772,11 +726,6 @@ function dispatchSSEEvent(line, ctx) {
             plannerMsg.thinking = ev.thinking || "";
             plannerMsg.toolRounds = _snapshotLongerRounds(plannerMsg.toolRounds, ev.toolRounds);
             assistantMsg = plannerMsg;
-            if (buf) {
-              buf.thinking = assistantMsg.thinking;
-              buf.content = assistantMsg.content;
-              buf.toolRounds = assistantMsg.toolRounds;
-            }
           } else if (ev.endpointPhase === 'reviewing') {
             // Critic is in progress — create a critic msg and set phase
             _epCriticPhase = true;
@@ -789,12 +738,6 @@ function dispatchSSEEvent(line, ctx) {
             };
             _ensureMsgId(_epCriticMsg);
             conv.messages.push(_epCriticMsg);
-            _epCriticBuf = {
-              content: (_epCriticMsg.content || "").replace(/\[VERDICT:\s*(?:STOP|CONTINUE)\s*\]\s*$/i, "").trimEnd(),
-              thinking: _epCriticMsg.thinking, toolRounds: [],
-            };
-            streamBufs.set(convId, _epCriticBuf);
-            buf = _epCriticBuf;
             // Point assistantMsg to the last completed worker turn
             const lastWorker = [...conv.messages].reverse().find(m => m.role === "assistant");
             if (lastWorker) assistantMsg = lastWorker;
@@ -846,11 +789,6 @@ function dispatchSSEEvent(line, ctx) {
               workerMsg.thinking = ev.thinking || "";
               workerMsg.toolRounds = _snapshotLongerRounds(workerMsg.toolRounds, ev.toolRounds);
               assistantMsg = workerMsg;
-              if (buf) {
-                buf.thinking = assistantMsg.thinking;
-                buf.content = assistantMsg.content;
-                buf.toolRounds = assistantMsg.toolRounds;
-              }
             }
           }
 
@@ -884,10 +822,6 @@ function dispatchSSEEvent(line, ctx) {
         /* State snapshot during critic phase → update critic msg */
         _epCriticMsg.content = ev.content || "";  // verbatim (server fold authoritative for text)
         _epCriticMsg.thinking = ev.thinking || "";
-        if (_epCriticBuf) {
-          _epCriticBuf.content = (_epCriticMsg.content || "").replace(/\[VERDICT:\s*(?:STOP|CONTINUE)\s*\]\s*$/i, "").trimEnd();
-          _epCriticBuf.thinking = _epCriticMsg.thinking;
-        }
       } else {
         /* ★ RENDER_CONTRACT Phase 3: route the COLD state snapshot through the
          *   ONE pure reducer (projectColdSnapshot). Only the reducer-OWNED
@@ -911,8 +845,6 @@ function dispatchSSEEvent(line, ctx) {
         if (ev.error) assistantMsg.error = ev.error;
         if (ev.toolRounds) {
           assistantMsg.toolRounds = _proj.toolRounds;
-          if (buf)
-            buf.toolRounds = assistantMsg.toolRounds;
         }
         if (ev.finishReason) assistantMsg.finishReason = ev.finishReason;
         if (ev.usage) assistantMsg.usage = ev.usage;
@@ -920,16 +852,11 @@ function dispatchSSEEvent(line, ctx) {
         else if (ev.preset) assistantMsg.model = ev.preset;
         else if (ev.effort) assistantMsg.model = ev.effort;
         if (ev.thinkingDepth) assistantMsg.thinkingDepth = ev.thinkingDepth;
-        if (buf) {
-          buf.thinking = assistantMsg.thinking;
-          buf.content = assistantMsg.content;
-        }
         if (ev.usage && typeof updateContextBar === 'function') updateContextBar();
       }
       // ★ Restore memory prefetch state from snapshot (WS/SSE connect mid-prefetch)
       if (ev.memoryPrefetch) {
         assistantMsg._memoryPrefetch = ev.memoryPrefetch;
-        if (buf) buf._memoryPrefetch = ev.memoryPrefetch;
         const _mpConv = conversations.find(c => c.id === convId);
         if (_mpConv) {
           const _mpPhase = ev.memoryPrefetch.phase;
@@ -940,30 +867,24 @@ function dispatchSSEEvent(line, ctx) {
       // ★ Restore preferences-applied chip from snapshot (mid-stream reconnect)
       if (ev.preferencesApplied) {
         assistantMsg._preferencesApplied = ev.preferencesApplied;
-        if (buf) buf._preferencesApplied = ev.preferencesApplied;
       }
       if (ev.relatedConversations) {
         assistantMsg._relatedConversations = ev.relatedConversations;
-        if (buf) buf._relatedConversations = ev.relatedConversations;
       }
       if (ev.preferencesLearned) {
         assistantMsg._preferencesLearned = ev.preferencesLearned;
-        if (buf) buf._preferencesLearned = ev.preferencesLearned;
       }
       /* Inbox-inject sidecars (swarm/peer/user-steer) — restore from the
        * reconnect snapshot so the in-timeline inject chips repaint. Display
        * only; getToolRoundsFromMsg rebuilds the synthetic rows from these. */
       if (ev.inboxInjects) {
         assistantMsg._inboxInjects = ev.inboxInjects;
-        if (buf) buf._inboxInjects = ev.inboxInjects;
       }
       if (ev.peerInjects) {
         assistantMsg._peerInjects = ev.peerInjects;
-        if (buf) buf._peerInjects = ev.peerInjects;
       }
       if (ev.userSteerInjects) {
         assistantMsg._userSteerInjects = ev.userSteerInjects;
-        if (buf) buf._userSteerInjects = ev.userSteerInjects;
       }
       if (typeof twUpdate === 'function') twUpdate(convId);
       // ★ Re-trigger HG translations on state snapshot (handles page refresh / SSE reconnect)
@@ -1008,15 +929,6 @@ function dispatchSSEEvent(line, ctx) {
         if (_epCriticMsg) {
           if (ev.thinking) _epCriticMsg.thinking = (_epCriticMsg.thinking || "") + ev.thinking;
           if (ev.content)  _epCriticMsg.content  = (_epCriticMsg.content  || "") + ev.content;
-          if (_epCriticBuf) {
-            _epCriticBuf.thinking = _epCriticMsg.thinking || "";
-            /* Strip [VERDICT: STOP/CONTINUE] tag during live streaming so
-               the user never sees the raw structured marker.  The backend
-               sends the fully-stripped content in endpoint_critic_msg later,
-               but stripping here avoids a flash of the raw tag. */
-            const _rawCritic = _epCriticMsg.content || "";
-            _epCriticBuf.content = _rawCritic.replace(/\[VERDICT:\s*(?:STOP|CONTINUE)\s*\]\s*$/i, "").trimEnd();
-          }
         }
         if (typeof twUpdate === 'function') twUpdate(convId);
       } else {
@@ -1030,23 +942,18 @@ function dispatchSSEEvent(line, ctx) {
          *   unchanged render-buffer concerns. */
         reduceStreamState(assistantMsg, { type: 'delta', content: ev.content, thinking: ev.thinking });
         if (ev.thinking) {
-          if (buf) buf.thinking = assistantMsg.thinking;
           _roundThinkingLen += ev.thinking.length;
-        }
-        if (ev.content) {
-          if (buf) buf.content = assistantMsg.content;
         }
         /* ★ Phase management during deltas:
          *   - Content delta arrived → model is producing visible output, clear phase
          *   - Thinking-only delta → model is reasoning, show thinking indicator
          *     This works on ALL rounds (even when msg.content is already non-empty
-         *     from previous tool rounds) */
-        if (buf) {
-          if (ev.content) {
-            buf.phase = null;
-          } else if (ev.thinking && !ev.content) {
-            buf.phase = { phase: "thinking_active", _thinkingLen: _roundThinkingLen };
-          }
+         *     from previous tool rounds). §7: phase lives in the live session
+         *     slice (streamSessions), never a render buffer. */
+        if (ev.content) {
+          setStreamPhase(convId, null);
+        } else if (ev.thinking && !ev.content) {
+          setStreamPhase(convId, { phase: "thinking_active", _thinkingLen: _roundThinkingLen });
         }
         if (typeof twUpdate === 'function') twUpdate(convId);
       }
@@ -1061,7 +968,6 @@ function dispatchSSEEvent(line, ctx) {
        * Non-terminal: the task stays running; a phase:retrying frame follows. */
       _roundThinkingLen = 0;
       const _rrTarget = (_epCriticPhase && _epCriticMsg) ? _epCriticMsg : assistantMsg;
-      const _rrBuf = (_epCriticPhase && _epCriticBuf) ? _epCriticBuf : buf;
       if (_rrTarget) {
         _rrTarget.content = "";
         _rrTarget.thinking = "";
@@ -1070,12 +976,7 @@ function dispatchSSEEvent(line, ctx) {
         _rrTarget.toolRounds = _rrTarget._continueToolRounds
           ? _rrTarget._continueToolRounds.slice() : [];
       }
-      if (_rrBuf) {
-        _rrBuf.content = "";
-        _rrBuf.thinking = "";
-        _rrBuf.toolRounds = _rrTarget ? _rrTarget.toolRounds : [];
-        _rrBuf.phase = null;
-      }
+      setStreamPhase(convId, null);
       if (typeof twUpdate === 'function') twUpdate(convId);
     } else if (ev.type === "delta_reset") {
       /* The just-ended LLM round issued TOOL CALLS, so the prose it streamed
@@ -1088,7 +989,6 @@ function dispatchSSEEvent(line, ctx) {
        * the tool calls from this turn are legitimate and keep rendering. */
       _roundThinkingLen = 0;
       const _drTarget = (_epCriticPhase && _epCriticMsg) ? _epCriticMsg : assistantMsg;
-      const _drBuf = (_epCriticPhase && _epCriticBuf) ? _epCriticBuf : buf;
       if (_drTarget) {
         /* ★ RENDER_CONTRACT Phase 3: the prose-capture + freeze-guarded clear is
          * now owned by the ONE pure reducer's delta_reset case
@@ -1105,24 +1005,17 @@ function dispatchSSEEvent(line, ctx) {
         const _hadProse = !!(_drTarget.content || _drTarget.thinking);
         reduceStreamState(_drTarget, ev);
         /* _stamped = the reducer actually captured+cleared this round's prose.
-         * Derived from the accumulators being cleared, so the buf mirror + the
+         * Derived from the accumulators being cleared, so the
          * atomic clear-and-repaint below (DOM concerns the pure reducer must NOT
-         * own) fire exactly when a stamp happened. When there was no prose to
+         * own) fires exactly when a stamp happened. When there was no prose to
          * begin with, there is nothing to wipe — the atomic repaint's whole job
          * is to wipe the content zone AS the prose moves into the panel — so
          * skipping it is correct; the trailing twUpdate still refreshes. */
         const _stamped = _hadProse && !_drTarget.content && !_drTarget.thinking;
         if (_stamped) {
-          if (_drBuf) {
-            _drBuf.content = "";
-            _drBuf.thinking = "";
-            /* Keep the buffer's toolRounds pointed at the (now prose-stamped)
-             * live list so the reactive render picks up the captured prose. The
-             * per-round prose (assistantContent/thinking length) is in the
-             * _syncToolRoundsDOM fingerprint, so the render below re-renders the
-             * group and _renderStreamRoundProse paints the captured narration. */
-            if (_drTarget && Array.isArray(_drTarget.toolRounds)) _drBuf.toolRounds = _drTarget.toolRounds;
-          }
+          /* §7: no buffer mirror — the reducer already cleared the document
+           * (_drTarget), and the reactive render reads the document's
+           * prose-stamped toolRounds directly. */
           /* ★ ATOMIC CLEAR + REPAINT (root cause of the mid-stream content
            * freeze). twUpdate is COALESCED — the empty-content frame this reset
            * produces is routinely dropped when a long-running tool (or the next
@@ -1137,10 +1030,12 @@ function dispatchSSEEvent(line, ctx) {
            * #streaming-body); background convs still coalesce via twUpdate. */
           if (typeof activeConvId !== 'undefined' && activeConvId === convId
               && typeof updateStreamingUI === 'function') {
+            const _drSess = (typeof streamSessions !== 'undefined')
+              ? streamSessions.get(convId) : null;
             updateStreamingUI({
               content: '', thinking: '',
               toolRounds: (_drTarget && _drTarget.toolRounds) || [],
-              phase: (_drBuf && _drBuf.phase) || null,
+              phase: (_drSess && _drSess.phase) || null,
               _memoryPrefetch: (_drTarget && _drTarget._memoryPrefetch),
             });
           }
@@ -1171,25 +1066,21 @@ function dispatchSSEEvent(line, ctx) {
       if (ev.phase === 'llm_thinking' && typeof updateContextBar === 'function') {
         updateContextBar();
       }
-      if (_epCriticPhase) {
-        /* Phase events during critic review — update critic buf instead */
-        if (_epCriticBuf)
-          _epCriticBuf.phase = { phase: ev.phase, detail: ev.detail || "",
-            detailKey: ev.detailKey || "", detailArgs: ev.detailArgs || null,
-            tools: ev.tools || [], toolContext: ev.toolContext || "", round: ev.roundNum || 0 };
-      } else if (buf) {
-        buf.phase = {
-          phase: ev.phase,
-          detail: ev.detail || "",
-          /* ★ i18n plumb: renderers prefer detailKey→t() over `detail`, which
-           * remains the English fallback for headless / non-i18n clients. */
-          detailKey: ev.detailKey || "",
-          detailArgs: ev.detailArgs || null,
-          tools: ev.tools || [],
-          toolContext: ev.toolContext || "",
-          round: ev.roundNum || 0,
-        };
-      }
+      /* §7: phase lives in the live session slice — one home for worker and
+       * critic phases alike (critic phase used to swap the whole buf object;
+       * the session slice just carries the current phase). Warm reconnects
+       * re-seed it via this same handler from the replayed event log. */
+      setStreamPhase(convId, {
+        phase: ev.phase,
+        detail: ev.detail || "",
+        /* ★ i18n plumb: renderers prefer detailKey→t() over `detail`, which
+         * remains the English fallback for headless / non-i18n clients. */
+        detailKey: ev.detailKey || "",
+        detailArgs: ev.detailArgs || null,
+        tools: ev.tools || [],
+        toolContext: ev.toolContext || "",
+        round: ev.roundNum || 0,
+      });
       if (typeof twUpdate === 'function') twUpdate(convId);
     } else if (ev.type === "tool_start") {
       _handleToolStart(ev, _hctx());
@@ -1322,11 +1213,6 @@ function dispatchSSEEvent(line, ctx) {
             window.ConvView.startStreaming(convId, { role: 'critic', msgId: _epCriticMsg._msgId || null });
           }
 
-          // 4. Create a separate stream buffer for the critic
-          _epCriticBuf = { content: "", thinking: "", toolRounds: [] };
-          streamBufs.set(convId, _epCriticBuf);
-          buf = _epCriticBuf;
-
           if (_isActiveConv) {
             buildTurnNav(conv);
             _forceScrollToBottom();
@@ -1388,11 +1274,6 @@ function dispatchSSEEvent(line, ctx) {
             _ensureMsgId(newAssistant);
             conv.messages.push(newAssistant);
             assistantMsg = newAssistant;
-
-            // Reset stream buffer for the new worker turn
-            const newBuf = { content: "", thinking: "", toolRounds: [] };
-            streamBufs.set(convId, newBuf);
-            buf = newBuf;
 
             // Create streaming element — only if this conv is active
             if (_isActiveConv) {
@@ -1510,7 +1391,6 @@ function dispatchSSEEvent(line, ctx) {
 
         // Clean up critic state
         _epCriticMsg = null;
-        _epCriticBuf = null;
 
         /* ── Replan branch: Critic requested CONTINUE_PLANNER ──
          * Create a new planner placeholder message so the subsequent
@@ -1530,11 +1410,6 @@ function dispatchSSEEvent(line, ctx) {
           _ensureMsgId(plannerPlaceholder);
           conv.messages.push(plannerPlaceholder);
           assistantMsg = plannerPlaceholder;
-
-          // Reset stream buffer for the planner turn
-          const newBuf = { content: "", thinking: "", toolRounds: [] };
-          streamBufs.set(convId, newBuf);
-          buf = newBuf;
 
           if (activeConvId === convId) {
             const inner = document.getElementById("chatInner");
@@ -1583,11 +1458,6 @@ function dispatchSSEEvent(line, ctx) {
         _ensureMsgId(newAssistant);
         conv.messages.push(newAssistant);
         assistantMsg = newAssistant;
-
-        // Reset stream buffer for the new worker turn
-        const newBuf = { content: "", thinking: "", toolRounds: [] };
-        streamBufs.set(convId, newBuf);
-        buf = newBuf;
 
         // DOM operations — only if this conv is currently viewed
         if (activeConvId === convId) {
@@ -2025,10 +1895,8 @@ function dispatchSSEEvent(line, ctx) {
     return false;
   } finally {
     ctx.assistantMsg = assistantMsg;
-    ctx.buf = buf;
     ctx.epCriticPhase = _epCriticPhase;
     ctx.epCriticMsg = _epCriticMsg;
-    ctx.epCriticBuf = _epCriticBuf;
     ctx.roundThinkingLen = _roundThinkingLen;
     ctx.lastEventId = _lastEventId;
     ctx.pendingEventId = _pendingEventId;
@@ -2041,7 +1909,6 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
   let sseTimeout = setTimeout(() => {
     if (!gotData) stream.controller.abort();
   }, 30000);
-  let buf = streamBufs.get(convId);
   /* ── Stable identity capture ──
    * Pin the assistantMsg reference by its `_msgId` (minted by
    * `_ensureMsgId` / server's `_assign_message_ids`).  Phase-2
@@ -2063,10 +1930,8 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
   const ctx = {
     convId, taskId, stream,
     assistantMsg,
-    buf,
     epCriticPhase: false,
     epCriticMsg: null,
-    epCriticBuf: null,
     roundThinkingLen: 0,
     lastEventId: null,
     pendingEventId: null,
@@ -2077,7 +1942,6 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
   function _processSSELine(line) {
     const _done = dispatchSSEEvent(line, ctx);
     assistantMsg = ctx.assistantMsg;
-    buf = ctx.buf;
     _lastEventId = ctx.lastEventId;
     return _done;
   }
@@ -2221,8 +2085,7 @@ if (typeof window !== 'undefined') {
       return {
         convId: o.convId, taskId: o.taskId, stream: o.stream,
         assistantMsg: o.assistantMsg || null,
-        buf: o.buf || null,
-        epCriticPhase: false, epCriticMsg: null, epCriticBuf: null,
+        epCriticPhase: false, epCriticMsg: null,
         roundThinkingLen: 0, lastEventId: null, pendingEventId: null,
         pinnedMsgId: (o.assistantMsg && o.assistantMsg._msgId) || null,
       };

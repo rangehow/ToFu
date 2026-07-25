@@ -135,18 +135,16 @@ function showStreamingUIForConv(convId) {
   }
   updateSendButton();
   if (_lastIsStreamingBubble) {
-    const buf = streamBufs.get(convId);
-    /* ★ FIX: buf?.toolRounds is [] (truthy) even when empty, preventing
-     *   fallback to getToolRoundsFromMsg(lastMsg).  Use .length check. */
-    const rounds = (buf?.toolRounds?.length ? buf.toolRounds : null)
-                   || getToolRoundsFromMsg(lastMsg);
+    /* §7: project straight from the message document; phase from the live
+     * session slice. */
+    const _sess = (typeof streamSessions !== 'undefined') ? streamSessions.get(convId) : null;
     updateStreamingUI({
-      thinking: buf?.thinking || lastMsg.thinking || "",
-      content: buf?.content || lastMsg.content || "",
-      toolRounds: rounds,
-      phase: buf?.phase || null,
-      _memoryPrefetch: buf?._memoryPrefetch || lastMsg._memoryPrefetch,
-      _mcpLoginHint: buf?._mcpLoginHint,
+      thinking: lastMsg.thinking || "",
+      content: lastMsg.content || "",
+      toolRounds: getToolRoundsFromMsg(lastMsg),
+      phase: (_sess && _sess.phase) || null,
+      _memoryPrefetch: lastMsg._memoryPrefetch,
+      _mcpLoginHint: lastMsg._mcpLoginHint,
     });
     /* ★ Repaint the live translation preview immediately after the bubble is
      *   rebuilt. The body's innerHTML was just replaced, destroying any
@@ -168,8 +166,6 @@ function showStreamingUIForConv(convId) {
     setTimeout(() => {
       if (activeConvId !== _deferConvId) return;           // user switched away
       if (!activeStreams.has(_deferConvId)) return;         // stream finished
-      const dBuf = streamBufs.get(_deferConvId);
-      if (!dBuf) return;
       /* ★ FIX (stuck "等待中…" wipe): fall back to the persisted message when
        *   the buffer field is empty, exactly like the initial render above.
        *   A raw `dBuf.content` here re-paints updateStreamingUI({content:''})
@@ -650,17 +646,11 @@ async function _autoTranslateHumanGuidance(convId, roundNum, question, responseT
   const round = assistantMsg.toolRounds.find(r => r.roundNum === roundNum);
   if (!round || round.status !== 'awaiting_human') return;
 
-  // ★ Helper: sync assistantMsg.toolRounds → buf.toolRounds so that the
-  //   reactive rendering pipeline (twUpdate → updateStreamingUI → _syncToolRoundsDOM)
-  //   sees translation-related flags (_hgTranslating, _translatedQuestion, etc.).
-  //   Without this, buf.toolRounds is a stale shallow copy from the
-  //   human_guidance_request handler and never gets updated.
-  function _syncHgToBuf() {
-    const buf = streamBufs.get(convId);
-    if (buf && assistantMsg.toolRounds) {
-      buf.toolRounds = assistantMsg.toolRounds;
-    }
-  }
+  // §7: no buffer to sync — the reactive pipeline (twUpdate →
+  // updateStreamingUI → _syncToolRoundsDOM) reads the message document
+  // directly, so translation flags (_hgTranslating, _translatedQuestion)
+  // are visible the moment they are stamped on assistantMsg.toolRounds.
+  function _syncHgToBuf() { /* retired mirror — kept as a no-op for the 3 call sites below */ }
 
   // Mark as translating (shows spinner in the card)
   round._hgTranslating = true;
@@ -724,11 +714,7 @@ async function _autoTranslateHumanGuidance(convId, roundNum, question, responseT
 
     console.log(`[HG-Translate] ✓ Translation done for guidance=${round2.guidanceId}, ` +
       `question: ${question.length}→${round2._translatedQuestion.length} chars`);
-    // ★ Sync translated properties to buf before re-render
-    const buf2 = streamBufs.get(convId);
-    if (buf2 && msg2.toolRounds) {
-      buf2.toolRounds = msg2.toolRounds;
-    }
+    // §7: translated properties already live on the document (msg2.toolRounds)
     if (typeof twUpdate === 'function') twUpdate(convId);
   } catch (e) {
     console.warn(`[HG-Translate] Translation failed: ${e.message} — showing original`);
@@ -739,11 +725,6 @@ async function _autoTranslateHumanGuidance(convId, roundNum, question, responseT
       const round2 = msg2?.toolRounds?.find(r => r.roundNum === roundNum);
       if (round2) {
         round2._hgTranslating = false;
-        // ★ Sync cleared flag to buf before re-render
-        const buf2 = streamBufs.get(convId);
-        if (buf2 && msg2.toolRounds) {
-          buf2.toolRounds = msg2.toolRounds;
-        }
         if (typeof twUpdate === 'function') twUpdate(convId);
       }
     }

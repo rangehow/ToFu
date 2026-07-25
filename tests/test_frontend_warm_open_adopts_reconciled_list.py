@@ -72,6 +72,10 @@ global.window = global;
 global.activeConvId = 'c1';
 global.activeStreams = new Map();
 global.streamBufs = new Map();
+global.streamSessions = new Map();
+global.getStreamSession = global.getStreamSession = (cid) => { let s = global.streamSessions.get(cid); if (!s) { s = { phase: null }; global.streamSessions.set(cid, s); } return s; };
+global.setStreamPhase = global.setStreamPhase = (cid, p) => { if (!global.streamSessions.has(cid) && !(typeof activeStreams !== "undefined" && activeStreams.has(cid))) return; global.getStreamSession(cid).phase = p; };
+global.clearStreamSession = global.clearStreamSession = (cid) => { global.streamSessions.delete(cid); };
 global._editingMsgIdx = null;
 global.debugLog = () => {};
 global.console = console;
@@ -79,6 +83,13 @@ global.config = {};
 global.serverModel = 'm';
 global.renderConversationList = () => {};
 global.renderChat = () => {};
+/* Post-SEAM-2-fold (Phase 3.5 step 5): loadConversationMessages routes
+ * repaints through ConvView.replaceAll — stub the seam. `document` is also
+ * needed for the latent fetch-fail branch's getElementById('chatInner')
+ * (previously unreached — the ConvView ReferenceError used to be caught by
+ * loadConversationMessages' own try/catch and then crashed there). */
+global.ConvView = { replaceAll: () => {}, apply: () => true };
+global.document = { getElementById: () => null };
 global.showStreamingUIForConv = () => {};
 global._restoreConvToolState = () => {};
 global._bgRefreshChat = () => {};

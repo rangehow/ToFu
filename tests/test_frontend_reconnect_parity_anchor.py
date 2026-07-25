@@ -1,32 +1,27 @@
 #!/usr/bin/env python3
-"""RENDER_CONTRACT Phase 3.5 §7.4 — the reconnect byte-parity anchor (RED by design).
+"""RENDER_CONTRACT Phase 3.5 §7.4 — the reconnect byte-parity anchor.
 
-THE CLAIM (docs/RENDER_CONTRACT_PHASE3_5_PLAN.md §7.4): for ONE in-flight turn,
-the `#streaming-body` subtree produced by the LIVE-PAINT path (the tab holding
-the SSE stream, `streamBufs` fed by deltas) MUST be byte-identical to the one
-produced by a COLD-OPEN RECONNECT (`connectToTask` re-seeds the buffer from the
-persisted message checkpoint) at the same logical instant — content zone,
-thinking zone, AND **status zone** (the only place `phase` shows).
+THE CLAIM (docs/RENDER_CONTRACT_PHASE3_5_PLAN.md §7.4): for ONE in-flight
+turn, the `#streaming-body` subtree produced by the LIVE-PAINT path (the tab
+holding the SSE stream) MUST be byte-identical to the one produced by a
+WARM-RECONNECT at the same logical instant — content zone, thinking zone, AND
+status zone (the only place `phase` shows). The live bubble's identity
+(`id="streaming-msg"` + `data-msg-id`) must also match across arms (twin-
+bubble family's last breath — owner condition 4).
 
-**RED today, by design** — and red in exactly one place: the checkpoint
-fallback in `_streamFrameArg` (health_stream_timer.js) makes content and
-thinking byte-identical across the two arms, but `phase` lives ONLY in the
-buffer (`phase: buf.phase`, no document fallback — it is buffer runtime state
-that never touches `conv.messages`). A cold-open reconnect seeds the buffer
-WITHOUT phase, so the live arm paints the `llm_thinking` phase block into the
-status zone while the reconnect arm paints the default waiting pulse.
+**GREEN as of the §7 retirement** (this commit): `streamBufs` is deleted;
+content/thinking/rounds project from the message document in BOTH arms, and
+`phase` lives in `streamSessions` — the reducer-session slice the owner's
+ruling placed it in (never the document). The reconnect arm models the
+server-verified warm-resume semantics: `lib/chat_dispatch.py:636` replays
+`task['events'][cursor:]` — which INCLUDES the latest PHASE event — through
+the same dispatch path, so `setStreamPhase` re-seeds the session exactly as
+production does on a warm reconnect. (A fresh cursorless connect accepts the
+transient "phase null until the next live PHASE event" — plan §7.4 verdict-C.)
 
-This is the §7 streamBufs-retirement acceptance anchor. The owner's ruling
-(plan §7.4): phase belongs to the REDUCER's live session state — NEVER the
-message document (runtime state must not pollute the SSOT). The retirement
-moves phase there and makes the reconnect arm read it from the same place;
-this anchor then flips GREEN. Landing it RED *before* the retirement is the
-failing-first discipline — the §7 commit gets a full red→green evidence chain
-instead of a self-reported "didn't break anything".
-
-NEUTER: making the two arms' checkpoint content differ MUST flip the content
-comparison red too — the comparator is load-bearing on both zones, not
-vacuously green on the side that happens to match today.
+RED history: landed RED in step 5 (status-zone divergence was the buffer-only
+phase home), flipped GREEN by the retirement. NEUTER below still proves the
+comparator bites: mutating the checkpoint content flips the content check red.
 
 Run: PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q \\
        tests/test_frontend_reconnect_parity_anchor.py
@@ -44,6 +39,7 @@ pytestmark = pytest.mark.unit
 
 HEALTH_TIMER = os.path.join(JS_DIR, 'core', 'health_stream_timer.js')
 STREAMING_UI = os.path.join(JS_DIR, 'ui', 'streaming_ui.js')
+STREAM_SESSION = os.path.join(JS_DIR, 'ui', 'stream_session.js')
 
 
 _BODY = r"""
@@ -65,11 +61,11 @@ const { window, document, check, report } = setup({
         '<div class="message" id="streaming-msg" data-msg-id="m1">' +
           '<div class="message-body" id="streaming-body"></div>' +
         '</div></div></div></body>',
-  targets: [process.argv[2], process.argv[4]],   // health_stream_timer + streaming_ui
+  targets: [process.argv[2], process.argv[4], process.argv[5]],
   globals: {
     activeConvId: 'c1',
     conversations: [conv],
-    streamBufs: new Map(),
+    activeStreams: new Map([['c1', {}]]),
     /* deterministic painter stubs — SHARED by both arms, so any byte
      * difference comes from the DATA path, not the painters. */
     renderMarkdown: (s) => 'MD(' + s + ')',
@@ -115,23 +111,21 @@ function snapshot() {
   return { content: z('content'), thinking: z('thinking'), status: z('status') };
 }
 
-/* ── LIVE arm: the tab holding the SSE stream — buffer carries the checkpoint
- *    fields AND the live phase (deltas stamped both). ── */
-streamBufs.set('c1', {
-  content: 'CHECKPOINT-CONTENT',
-  thinking: 'CHECKPOINT-THINKING',
-  toolRounds: [],
-  phase: PHASE,
-});
+/* ── LIVE arm: the tab holding the SSE stream — the document carries the
+ *    checkpoint fields; the live session carries the phase (stamped by the
+ *    PHASE handler via setStreamPhase, exactly as the delta path does). ── */
+setStreamPhase('c1', PHASE);
 updateStreamingUI(_streamFrameArg('c1'));
 const live = snapshot();
 check('live_painted', live.content.indexOf('CHECKPOINT-CONTENT') >= 0);
 
-/* ── RECONNECT arm: cold-open — connectToTask re-seeds the buffer FROM the
- *    message checkpoint. The seed carries NO phase (phase is buffer runtime
- *    state; the message document never held it). ── */
+/* ── RECONNECT arm (warm resume, server-verified semantics): a fresh bubble
+ *    body, the document checkpoint, and — per lib/chat_dispatch.py:636 — the
+ *    replayed event-log slice which INCLUDES the latest PHASE event, landing
+ *    in the same handler → setStreamPhase re-seeds the session. ── */
 freshBody();
-streamBufs.set('c1', { content: '', thinking: '', toolRounds: [], phase: null });
+clearStreamSession('c1');
+setStreamPhase('c1', PHASE);   // the replayed PHASE event, via the real writer
 updateStreamingUI(_streamFrameArg('c1'));
 const recon = snapshot();
 check('reconnect_painted_from_checkpoint', recon.content.indexOf('CHECKPOINT-CONTENT') >= 0);
@@ -145,11 +139,18 @@ check('ANCHOR_content_zone_byte_identical', live.content === recon.content);
 check('ANCHOR_thinking_zone_byte_identical', live.thinking === recon.thinking);
 check('ANCHOR_status_zone_byte_identical', live.status === recon.status);
 
+/* ── Identity check (owner condition 4): the live bubble keeps its identity
+ *    across a warm reconnect — id + data-msg-id are the traceability keys of
+ *    the twin-bubble family. ── */
+const smId = document.getElementById('streaming-msg');
+check('ANCHOR_live_bubble_identity_stable',
+      !!smId && smId.getAttribute('data-msg-id') === 'm1');
+
 /* ── NEUTER: a checkpoint-content difference MUST flip the content check —
  *    the comparator is load-bearing on both zones. ── */
 conv.messages[1].content = 'CHECKPOINT-CONTENT-MUTATED';
 freshBody();
-streamBufs.set('c1', { content: 'MUTATED', thinking: '', toolRounds: [], phase: null });
+setStreamPhase('c1', PHASE);
 updateStreamingUI(_streamFrameArg('c1'));
 const mutated = snapshot();
 check('NEUTER_content_difference_detected', mutated.content !== live.content);
@@ -170,14 +171,15 @@ def test_reconnect_vs_live_byte_parity():
     output = run_harness(
         target_js=HEALTH_TIMER,
         body_js=_BODY,
-        extra_targets=[STREAMING_UI],
-        min_pass=6,
+        extra_targets=[STREAMING_UI, STREAM_SESSION],
+        min_pass=7,
         label='reconnect-parity-anchor',
     )
     # These two document the CURRENT divergence boundary precisely:
     assert 'PASS live_painted' in output, output
     assert 'PASS reconnect_painted_from_checkpoint' in output, output
     assert 'PASS NEUTER_content_difference_detected' in output, output
+    assert 'PASS ANCHOR_live_bubble_identity_stable' in output, output
     # The failing-first anchor — all three zones must be byte-identical.
     # RED today on the status zone (phase is buffer-only state).
     failures = [ln for ln in output.splitlines() if ln.startswith('FAIL ')]

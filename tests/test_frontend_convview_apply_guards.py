@@ -36,6 +36,16 @@ Owner-directed additions on top of the step-2 seam (docs/RENDER_CONTRACT_PHASE3_
    Guards: test_stream_seg_narration_gone_from_production_js (static),
            test_inert_css_block_removed (static).
 
+⑥ STEP §7 — streamBufs RETIREMENT (the second live fact-source):
+   streamBufs is deleted (core.js declaration gone); content/thinking/rounds
+   project from the message document; phase lives in streamSessions
+   (ui/stream_session.js, live-only writes via setStreamPhase). The static
+   guard pins zero streamBufs references in production JS CODE (comments/
+   strings stripped — historical mentions in comments are fine), the
+   session-module API, the writer allowlist, and bundle membership.
+   Guards: test_streambufs_fully_retired (static),
+           test_stream_session_module_contract (static).
+
 ⑤ STEP 4 — SEAM-2 fold + raw-fallback deletion + boot-check RUNTIME proof:
    (a) every whole-conversation repaint routes through ConvView.replaceAll
    (renderChat = the seam's engine, not a second public entry);
@@ -647,13 +657,90 @@ def test_NEUTER_boot_check_silent_when_present():
         assert needle in output, f'{needle}\n{output}'
 
 
+# ════════════════════════════════════════════════════════════════════
+# ⑥ §7 — streamBufs retirement (static guards)
+# ════════════════════════════════════════════════════════════════════
+
+_STREAM_SESSION = os.path.join(JS_DIR, 'ui', 'stream_session.js')
+_SESSION_WRITER_ALLOWLIST = {
+    'static/js/ui/sse_pipeline.js',       # PHASE handler + delta phase mgmt
+    'static/js/ui/sse_poll_fallback.js',  # poll truth for phase
+    'static/js/ui/streaming_render.js',   # VU delta phase mirror
+}
+
+
+def test_streambufs_fully_retired():
+    """ZERO `streamBufs` references in production JS code (owner §7 cond 3).
+
+    Code-only scan (comments + strings stripped — the retirement's own
+    historical mentions in comments are documentation, not references).
+    nc_copy/bundle artifacts excluded. This is the retirement's
+    anti-treadmill: any new buffer access anywhere fails CI.
+    """
+    offenders = []
+    for path in glob.glob(os.path.join(JS_DIR, '**', '*.js'), recursive=True):
+        base = os.path.basename(path)
+        if base.endswith('.nc_copy.js') or base.startswith('bundle-'):
+            continue
+        with open(path, encoding='utf-8') as f:
+            code = _strip_js_comments(f.read())
+        code = re.sub(r'"(?:\\.|[^"\\])*"', '""', code)
+        code = re.sub(r"'(?:\\.|[^'\\])*'", "''", code)
+        code = re.sub(r'`(?:\\.|[^`\\])*`', '``', code)
+        if re.search(r'\bstreamBufs\b', code):
+            offenders.append(os.path.relpath(path, ROOT))
+    assert not offenders, (
+        'streamBufs resurrected in production JS code: ' + ', '.join(offenders)
+        + ' — the §7 retirement deleted it (content/thinking/rounds → the '
+        'message document; phase → streamSessions)')
+
+
+def test_stream_session_module_contract():
+    """The phase home is a real entity with a guarded writer surface."""
+    with open(_STREAM_SESSION, encoding='utf-8') as f:
+        src = f.read()
+    for sym in ('streamSessions', 'getStreamSession', 'setStreamPhase',
+                'clearStreamSession'):
+        assert re.search(r'\b' + sym + r'\b', src), (
+            f'stream_session.js no longer defines {sym} — the §7 phase home '
+            'must be an entity, not plan wording')
+    # The live-only write guard is load-bearing (no post-stop resurrection).
+    assert 'activeStreams' in src and 'setStreamPhase' in src, (
+        'setStreamPhase lost its live-only guard — a post-stop phase write '
+        'would resurrect a session the paint readers treat as "stream exists"')
+    # Writer allowlist: setStreamPhase called only from the three writers.
+    writers = []
+    for path in glob.glob(os.path.join(JS_DIR, '**', '*.js'), recursive=True):
+        base = os.path.basename(path)
+        if base.endswith('.nc_copy.js') or base.startswith('bundle-'):
+            continue
+        with open(path, encoding='utf-8') as f:
+            code = _strip_js_comments(f.read())
+        if re.search(r'\bsetStreamPhase\s*\(', code):
+            rel = os.path.relpath(path, ROOT)
+            if rel != 'static/js/ui/stream_session.js':
+                writers.append(rel)
+    assert sorted(writers) == sorted(_SESSION_WRITER_ALLOWLIST), (
+        f'setStreamPhase writer surface changed: {sorted(writers)} != '
+        f'{sorted(_SESSION_WRITER_ALLOWLIST)} — the session is written only '
+        'by the PHASE handler, the poll fallback, and the VU delta path')
+    # Bundle membership (the §3.2.1 silent-no-op trap).
+    with open(os.path.join(ROOT, 'lib', 'js_bundler.py'), encoding='utf-8') as f:
+        bundler = f.read()
+    assert 'ui/stream_session.js' in bundler, (
+        'ui/stream_session.js missing from _BUNDLE_FILES — it would silently '
+        'no-op in production')
+
+
 if __name__ == '__main__':
     for fn in (test_upsert_is_thin_alias_of_apply,
                test_stream_seg_narration_gone_from_production_js,
                test_inert_css_block_removed,
                test_NEUTER_token_guard_detects_injected_assignment,
                test_no_convview_missing_raw_fallbacks,
-               test_full_repaints_route_through_replaceAll):
+               test_full_repaints_route_through_replaceAll,
+               test_streambufs_fully_retired,
+               test_stream_session_module_contract):
         try:
             fn()
             print('  PASS', fn.__name__)

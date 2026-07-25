@@ -147,7 +147,6 @@ let _foldersLoaded = false;  // true after first loadFolders() completes
 
 let activeConvId = sessionStorage.getItem('tofu_activeConvId') || null,
   activeStreams = new Map(),
-  streamBufs = new Map(),
   pendingImages = [],
   pdfProcessing = 0;  // counter: # of in-flight PDF text-parses (see upload.js)
 /** Message-queue MIRROR of server state (read-only on the client).

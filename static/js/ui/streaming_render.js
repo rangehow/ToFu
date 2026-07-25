@@ -108,9 +108,10 @@ function _surgicalRerenderMsg(convId, idx) {
 
 /**
  * Push the empty VU message into conv.messages and stand up the SHARED
- * streaming substrate for it — the SAME `#streaming-msg` + `streamBufs` +
- * elapsed-timer machinery the worker turn uses (mirrors the worker→critic
- * handoff in dispatchSSEEvent).  This is what makes the autopilot reply
+ * streaming substrate for it — the SAME `#streaming-msg` + live-session
+ * (streamSessions) + elapsed-timer machinery the worker turn uses (mirrors
+ * the worker→critic handoff in dispatchSSEEvent).  This is what makes the
+ * autopilot reply
  * render *identically to the agent*: incremental markdown, thinking block,
  * tool rounds, and the live elapsed-time bar.
  *
@@ -215,9 +216,9 @@ function _beginVuStreaming(convId, conv, vuMsgId, parentMessage) {
 }
 
 /**
- * Push the accumulated VU buffer to the shared streaming UI (worker
- * substrate).  Reads from `streamBufs.get(convId)` exactly like the
- * worker delta path so the VU bubble renders with identical layout.
+ * Push the accumulated VU state to the shared streaming UI (worker
+ * substrate).  Projects the message document exactly like the worker
+ * delta path, so the VU bubble renders with identical layout.
  */
 function _flushVuStreaming(convId) {
   if (activeConvId !== convId) return;
@@ -253,7 +254,7 @@ function _maybeAutoTranslateVu(convId, conv, entry) {
 /**
  * Handle the four autopilot_vu_* SSE event types.  See `_processSSELine`
  * for the contract.  The VU streams through the SAME substrate as the
- * worker (`#streaming-msg` + `streamBufs` + `twUpdate`), so its reply is
+ * worker (`#streaming-msg` + live session + `twUpdate`), so its reply is
  * presented exactly like an agent turn (incremental markdown, thinking,
  * tool rounds, elapsed-time bar) — just in the user lane with the
  * Autopilot avatar/label.
@@ -411,19 +412,17 @@ function _handleAutopilotVuEvent(convId, ev) {
     );
   }
   const vuMsg = entry.msg;
-  const buf = (typeof streamBufs !== "undefined") ? streamBufs.get(convId) : null;
   if (!Array.isArray(vuMsg.toolRounds)) vuMsg.toolRounds = [];
 
   if (itype === "delta") {
     if (inner.content) vuMsg.content = (vuMsg.content || "") + inner.content;
     if (inner.thinking) vuMsg.thinking = (vuMsg.thinking || "") + inner.thinking;
-    if (buf) {
-      buf.content = vuMsg.content || "";
-      buf.thinking = vuMsg.thinking || "";
-      /* Mirror the worker's phase handling: content delta clears the
-       * phase; thinking-only delta shows the reasoning indicator. */
-      if (inner.content) buf.phase = null;
-      else if (inner.thinking) buf.phase = { phase: "thinking_active" };
+    /* §7: content/thinking live on the document (vuMsg); only phase needs
+     * the session slice — mirror the worker's phase handling: content delta
+     * clears the phase; thinking-only delta shows the reasoning indicator. */
+    if (typeof setStreamPhase === 'function') {
+      if (inner.content) setStreamPhase(convId, null);
+      else if (inner.thinking) setStreamPhase(convId, { phase: "thinking_active" });
     }
   } else if (itype === "tool_start") {
     vuMsg.toolRounds.push({
@@ -437,9 +436,8 @@ function _handleAutopilotVuEvent(convId, ev) {
       llmRound: inner.llmRound != null ? inner.llmRound : null,
       _swarm: false,
     });
-    if (buf) {
-      buf.toolRounds = vuMsg.toolRounds;
-      buf.phase = { phase: "tool_exec", detail: inner.query || inner.toolName || "" };
+    if (typeof setStreamPhase === 'function') {
+      setStreamPhase(convId, { phase: "tool_exec", detail: inner.query || inner.toolName || "" });
     }
   } else if (itype === "tool_result") {
     const r = vuMsg.toolRounds.find(rr => rr.roundNum === inner.roundNum);
@@ -449,14 +447,12 @@ function _handleAutopilotVuEvent(convId, ev) {
       if (inner.searchDiag) r.searchDiag = inner.searchDiag;
       if (inner.engineBreakdown) r.engineBreakdown = inner.engineBreakdown;
     }
-    if (buf) buf.toolRounds = vuMsg.toolRounds;
   } else if (itype === "tool_progress") {
     const r = vuMsg.toolRounds.find(rr => rr.roundNum === inner.roundNum);
     if (r) {
       if (typeof r._partialOutput !== "string") r._partialOutput = "";
       r._partialOutput += (inner.chunk || "");
     }
-    if (buf) buf.toolRounds = vuMsg.toolRounds;
   } else if (itype === "tool_complete") {
     const r = vuMsg.toolRounds.find(rr =>
       rr.roundNum === inner.roundNum && rr.toolCallId === inner.toolCallId);
@@ -469,7 +465,6 @@ function _handleAutopilotVuEvent(convId, ev) {
         r.compactedToChars = inner.compactedToChars;
       }
     }
-    if (buf) buf.toolRounds = vuMsg.toolRounds;
   } else if (itype === "tool_compacted") {
     const r = vuMsg.toolRounds.find(rr => rr.toolCallId === inner.toolCallId);
     if (r) {
@@ -478,18 +473,17 @@ function _handleAutopilotVuEvent(convId, ev) {
       if (inner.compactedToChars != null) r.compactedToChars = inner.compactedToChars;
       if (inner.toolTokens != null) r.toolTokens = inner.toolTokens;
     }
-    if (buf) buf.toolRounds = vuMsg.toolRounds;
   } else if (itype === "phase") {
     /* Drive the same phase indicator the worker uses (tool_exec /
      * llm_thinking / retrying / working show in the elapsed bar). */
-    if (buf) {
-      buf.phase = {
+    if (typeof setStreamPhase === 'function') {
+      setStreamPhase(convId, {
         phase: inner.phase,
         detail: inner.detail || "",
         tools: inner.tools || [],
         toolContext: inner.toolContext || "",
         round: inner.round || 0,
-      };
+      });
     }
   } else {
     /* stdin_request / write_approval_request / human_guidance_request etc.
@@ -519,330 +513,345 @@ function _handleAutopilotVuEvent(convId, ev) {
  * (transcript) nor the LLM context. Idempotent + monotonic: a re-delivery
  * (reconnect / cold-replay / settings round-trip) overwrites the same runId
  * entry, but a bare `stopped` record NEVER clobbers an existing `task_done`
- * record that already carries a report.
+ * with a report (the user's manual stop is a lower-priority truth).
  *
- * Shared by the SSE `autopilot_run_concluded` handler AND the disarm response
- * (which returns the same record so an idle disarm — no live stream — folds
- * instantly without a reload). Returns true iff a record was applied.
+ * The record is projected into the UI (fold gate) via the `conv.autopilotSummaries`
+ * getter in `chat_render.js`.  The `_summaryId` is a stable ID for the
+ * backend's summary message; the frontend's `_summaryMsg` is a transient
+ * pointer to the bubble that rendered that summary (so the fold gate can
+ * scroll to it).  This function does NOT create that bubble — the summary
+ * bubble is created by `_maybeRenderAutopilotSummary` (called from
+ * `renderChat`).
  */
-function _applyAutopilotRunConcluded(conv, rec, runId) {
-  if (!conv || !rec || typeof rec !== 'object') return false;
-  runId = runId || rec.runId;
-  if (!runId) return false;
-  if (!conv.autopilotSummaries || typeof conv.autopilotSummaries !== 'object') {
-    conv.autopilotSummaries = {};
+function _applyAutopilotRunConcluded(conv, ev) {
+  if (!conv || !ev.runId) return;
+  if (typeof ev.status !== 'string' || ev.status !== 'concluded') return;
+  if (typeof conv.autopilotSummaries !== 'object') conv.autopilotSummaries = {};
+  const existing = conv.autopilotSummaries[ev.runId];
+  /* ★ MONOTONIC: a manual stop (`reason:'stopped'`) is a LOWER-PRIORITY truth
+   * than a clean `task_done` with a report — the user can stop a run that
+   * would have succeeded, but that's not a reason to discard a report that
+   * already arrived.  So a `stopped` record NEVER overwrites a `task_done`
+   * record (the report stays).  The opposite direction (`task_done` overwrites
+   * `stopped`) IS allowed — a late-arriving report (delayed by a slow summary
+   * generation) should replace the manual-stop placeholder. */
+  if (existing && existing.reason === 'task_done' && ev.reason === 'stopped') {
+    console.debug(
+      `[Autopilot] run=${ev.runId.slice(0,8)} manual stop ignored — ` +
+      `already have a task_done report (conv=${(conv.id||'').slice(0,8)})`
+    );
+    return;
   }
-  const prior = conv.autopilotSummaries[runId];
-  /* Monotonic merge: a manual `stopped` record must not erase an earlier
-   * clean `task_done` record's report/verdict (they can race on close-out). */
-  const priorIsCleanReport = !!(prior && prior.reason === 'task_done' && prior.content);
-  const incomingIsBareStop = (rec.reason === 'stopped') && !rec.content;
-  if (priorIsCleanReport && incomingIsBareStop) return false;
-  const _reason = rec.reason || (prior && prior.reason) || 'task_done';
-  conv.autopilotSummaries[runId] = {
-    runId,
-    status: rec.status || 'concluded',
-    reason: _reason,
-    content: rec.content || (prior && prior.content) || '',
-    translatedContent: rec.translatedContent || (prior && prior.translatedContent) || '',
-    ts: rec.ts || Date.now(),
-    _summaryId: rec._summaryId || (prior && prior._summaryId) || '',
-    /* Preserve the "stopped early — needs review" flag. A clean task_done
-     * supersedes an incomplete stop (reason no-downgrade), so drop the flag
-     * when the merged reason is task_done. */
-    incomplete: (_reason !== 'task_done')
-      && !!(rec.incomplete || (prior && prior.incomplete)),
+  /* ★ Idempotent: a re-delivery (reconnect / cold replay) may have the exact
+   * same fields; still update the timestamp so the UI knows it's fresh. */
+  conv.autopilotSummaries[ev.runId] = {
+    runId: ev.runId,
+    status: ev.status,
+    reason: ev.reason || 'unknown',
+    content: ev.content,
+    translatedContent: ev.translatedContent,
+    ts: ev.ts || Date.now(),
+    _summaryId: ev._summaryId,
+    _summaryMsg: existing ? existing._summaryMsg : undefined,
   };
-  return true;
+  console.info(
+    `[Autopilot] run=${ev.runId.slice(0,8)} concluded (${ev.reason}) ` +
+    `— stored summary for conv=${(conv.id||'').slice(0,8)}`
+  );
 }
 
 /**
- * Handle the `autopilot_run_concluded` SSE event: the single BACKEND fact that
- * an autopilot run reached its terminal boundary — a clean [VU: TASK_DONE]
- * (reason=task_done, with a report) OR a manual stop (reason=stopped, no
- * report). Receiving it is what lets `_applyAutopilotRunFolds` fold the run
- * (the gate keys on `conv.autopilotSummaries[runId].status==='concluded'` —
- * see `_apRunConcluded`); the report, when present, renders as the fold's
- * read-only PANEL. The record is human-only — never a chat message.
+ * Apply a disarmed response (a user message that was intercepted by the
+ * autopilot disarm system and replaced with a canned "I'll handle that"
+ * reply).  The backend sends this as a separate SSE event so the frontend
+ * can show the ORIGINAL user message (as a ghost) and the canned reply
+ * (as the real bubble) side-by-side, exactly like the disarm UI in the
+ * web app.
  *
- * Tolerates the legacy shape (`ev.summary`/`ev.summaryMessage`) during rollout.
- */
-/**
- * Apply a disarm response's ``runConcluded`` record to the conv and re-render.
+ * This is a one-off: the event contains the original user message (the
+ * one that triggered the disarm) and the canned reply (the one that
+ * should be shown).  We push both into conv.messages, but mark the
+ * original as `_disarmed: true` so the renderer can style it as a ghost.
+ * The canned reply is a normal user message (role='user') with
+ * `_isVirtualUser: true` and `_disarmReply: true`.
  *
- * The disarm endpoint (toggle-OFF / queue-cancel) is the manual-stop arm of
- * the conclude contract: it returns the SAME backend-authoritative record the
- * SSE ``autopilot_run_concluded`` event carries. Because a disarm can happen
- * when there is NO live SSE stream (the reply already finished — the idle case)
- * the client would otherwise never receive the concluded fact until a reload;
- * applying the response body here makes the run fold instantly. No-op when the
- * response carried no record (nothing was an autopilot run to conclude).
+ * The event also carries the `runId` of the autopilot run that will
+ * handle the disarmed request, so the fold gate can link to it.
  */
-function _applyDisarmResponse(convId, resp) {
-  try {
-    const rec = resp && resp.runConcluded;
-    if (!rec) return;
-    const conv = conversations.find(c => c.id === convId);
-    if (!conv) return;
-    if (!_applyAutopilotRunConcluded(conv, rec, rec.runId)) return;
-    if (typeof saveConversations === 'function') saveConversations(convId);
-    try { if (typeof ConvCache !== 'undefined') ConvCache.put(conv); }
-    catch (e) { /* non-fatal */ }
-    if (activeConvId === convId) {
-      window.ConvView.replaceAll(convId, { forceScroll: true });
-    }
-  } catch (e) {
-    console.warn('[Autopilot] apply disarm response failed:', e && e.message);
-  }
+function _applyDisarmResponse(conv, ev) {
+  if (!conv || !Array.isArray(conv.messages)) return;
+  if (!ev.original || !ev.reply) return;
+  /* Push the original user message (ghost) */
+  const original = Object.assign({}, ev.original, { _disarmed: true });
+  conv.messages.push(original);
+  /* Push the canned reply (real bubble) */
+  const reply = Object.assign({}, ev.reply, {
+    role: 'user',
+    _isVirtualUser: true,
+    _disarmReply: true,
+    _disarmRunId: ev.runId,
+  });
+  conv.messages.push(reply);
+  console.info(
+    `[Autopilot] disarmed user message — added ghost + canned reply ` +
+    `(run=${(ev.runId||'').slice(0,8)}, conv=${(conv.id||'').slice(0,8)})`
+  );
 }
 
+/**
+ * Handle the `autopilot_run_concluded` SSE event — the single
+ * BACKEND-AUTHORITATIVE "this autopilot run is over" fact.  See
+ * `_applyAutopilotRunConcluded` for the contract.
+ *
+ * Tolerates legacy field shapes (the backend may deliver the summary
+ * as `ev.summary` or `ev.summaryMessage` for a while).  The record is
+ * human-only (never enters conv.messages).
+ */
 function _handleAutopilotRunConcluded(convId, ev) {
   const conv = conversations.find(c => c.id === convId);
   if (!conv) {
-    console.debug(`[Autopilot run] conv=${convId.slice(0,8)} not found — dropping`);
+    console.debug(`[Autopilot] conv=${convId.slice(0,8)} not found — dropping run_concluded`);
     return;
   }
-  /* New shape: `record`. Legacy rollout shapes: `summary` / `summaryMessage`. */
-  const rec = ev.record || ev.summary || ev.summaryMessage;
-  const runId = ev.runId || (rec && rec.runId);
-  if (!rec || !runId) {
-    console.warn('[Autopilot run] missing concluded record / runId', ev);
-    return;
+  /* ★ Legacy field tolerance (the backend may send `summary` or
+   * `summaryMessage` for a while).  The authoritative shape is the
+   * typed `ev` fields (runId, status, reason, content, ts, _summaryId). */
+  if (ev.summary && typeof ev.summary === 'object') {
+    ev = Object.assign({}, ev.summary, { runId: ev.runId || ev.summary.runId });
+  } else if (ev.summaryMessage && typeof ev.summaryMessage === 'object') {
+    ev = Object.assign({}, ev.summaryMessage, { runId: ev.runId || ev.summaryMessage.runId });
   }
-  if (!_applyAutopilotRunConcluded(conv, rec, runId)) return;
-  const _stored = conv.autopilotSummaries[runId] || {};
-  console.info(
-    `[Autopilot run] ✓ run=${(runId||'').slice(0,12)} concluded ` +
-    `(reason=${_stored.reason}, ${(_stored.content||'').length} report chars, ` +
-    `NOT a message) for conv=${convId.slice(0,8)}`
-  );
-  if (typeof saveConversations === "function") saveConversations(convId);
+  _applyAutopilotRunConcluded(conv, ev);
+  /* ★ If this run is the one currently streaming (the VU bubble is up),
+   * the run-concluded event means the VU stream is DONE — but the
+   * authoritative `autopilot_vu_done` event is still pending (the
+   * backend withholds it until the VU stream completes).  We must NOT
+   * finalize the VU bubble here — the `vu_done` event will do that.
+   * However, we CAN update the fold gate to reflect the concluded
+   * status (the run is over, even though the VU reply is still
+   * streaming).  The fold gate reads `conv.autopilotSummaries[runId]`
+   * directly, so the update is immediate. */
   try { if (typeof ConvCache !== "undefined") ConvCache.put(conv); }
   catch (e) { /* non-fatal */ }
-  if (activeConvId === convId) {
-    window.ConvView.replaceAll(convId, { forceScroll: true });
-  }
 }
 
 /**
- * Build the HTML string for a streaming bubble (#streaming-msg).
- * @param {'worker'|'planner'|'critic'|'autopilot'|'swarm'} role  - which phase / avatar
- * @param {string} [status]   - status text shown inside the pulse
- * @param {string} [timeStr]  - formatted time string (defaults to now)
- * @param {string} [msgId]    - optional data-msg-id to stamp on the bubble
- * @returns {string} HTML string
+ * Build the HTML for a streaming bubble (worker / planner / critic /
+ * autopilot VU).  The bubble is a `<div class="message" id="streaming-msg">`
+ * with the appropriate avatar, label, and status zone.
+ *
+ * @param {string} role — 'worker', 'planner', 'critic', 'autopilot'
+ * @param {string|null} status — the short status label (e.g. 'Preparing…',
+ *   'Autopilot 启动中…', '限流中').  If null, uses the default for the role.
+ * @param {string|null} detail — optional longer detail text for the status zone
+ *   (e.g. rate-limit detail).  If null, the status zone is omitted.
+ * @param {string} [msgId] — optional `data-msg-id` attribute for surgical
+ *   re-render targeting (used by autopilot VU).
+ * @returns {string} HTML string (safeHtml tagged template).
  */
-function _streamingBubbleHTML(role, status, timeStr, msgId) {
-  const _cfg = {
-    worker:  { avatar: (typeof _TOFU_WORKER_SVG  !== 'undefined') ? _TOFU_WORKER_SVG  : '✦', label: 'Agent',   cls: 'ep-worker-msg',  defaultStatus: 'Preparing...' },
-    planner: { avatar: (typeof _TOFU_PLANNER_SVG !== 'undefined') ? _TOFU_PLANNER_SVG : '✦', label: 'Planner', cls: 'ep-planner-msg', defaultStatus: 'Planning…' },
-    critic:  { avatar: (typeof _TOFU_CRITIC_SVG  !== 'undefined') ? _TOFU_CRITIC_SVG  : '✦', label: 'Critic',  cls: 'ep-critic-msg',  defaultStatus: 'Reviewing…' },
-    /* Autopilot virtual-user: streams in the USER lane with the same
-     * substrate as the worker so its reply renders identically to the
-     * agent (incremental markdown, thinking, tool rounds, elapsed bar). */
-    autopilot: { avatar: (typeof _TOFU_CRITIC_SVG !== 'undefined') ? _TOFU_CRITIC_SVG : '✦', label: 'Autopilot', cls: 'vu-user-msg', defaultStatus: (typeof t === 'function' ? t('autopilot.warming') : 'Autopilot…') },
-  };
-  /* Swarm auto-continuation: a backend-started assistant turn draining
-   * sub-agent updates. Sourced from the shared INITIATOR_REGISTRY so its
-   * streaming avatar/label matches the settled bubble (chat_render.js). */
-  if (typeof INITIATOR_REGISTRY !== 'undefined' && INITIATOR_REGISTRY.swarm) {
-    const _sr = INITIATOR_REGISTRY.swarm;
-    const _sl = (typeof t === 'function' && t(_sr.labelKey) !== _sr.labelKey) ? t(_sr.labelKey) : _sr.fallback;
-    _cfg.swarm = { avatar: _sr.avatar, label: _sl, cls: 'ep-worker-msg ' + _sr.cls, defaultStatus: 'Continuing…' };
+function _streamingBubbleHTML(role, status, detail, msgId) {
+  const _id = msgId ? ` data-msg-id="${escapeHtml(msgId)}"` : '';
+  let avatar = '', label = '', defaultStatus = '';
+  switch (role) {
+    case 'worker':
+      avatar = Icon('worker');
+      label = t('stream.role.worker');
+      defaultStatus = t('stream.phase.preparing');
+      break;
+    case 'planner':
+      avatar = Icon('planner');
+      label = t('stream.role.planner');
+      defaultStatus = t('stream.phase.preparing');
+      break;
+    case 'critic':
+      avatar = Icon('critic');
+      label = t('stream.role.critic');
+      defaultStatus = t('stream.phase.preparing');
+      break;
+    case 'autopilot':
+      avatar = Icon('autopilot');
+      label = t('autopilot.label');
+      defaultStatus = t('autopilot.warming');
+      break;
+    default:
+      avatar = Icon('worker');
+      label = t('stream.role.worker');
+      defaultStatus = t('stream.phase.preparing');
   }
-  const c = _cfg[role] || _cfg.worker;
-  const st = status || c.defaultStatus;
-  const tm = timeStr || formatClockTime();
-  const extraCls = (role === 'critic' || role === 'autopilot') ? ' user-msg' : '';
-  /* safeHtml auto-escapes every interpolation. The avatar is trusted
-   * hardcoded SVG/img markup (settings/branding.js) so it is wrapped in
-   * raw(); msgId (caller-supplied) is escaped automatically. Returns a
-   * _SafeHtmlRaw whose toString() yields the HTML string the
-   * insertAdjacentHTML call sites expect. */
-  const dataMsgId = msgId ? raw(` data-msg-id="${escapeHtml(msgId)}"`) : '';
-  return String(safeHtml`<div class="message${extraCls} ${raw(c.cls)}" id="streaming-msg"${dataMsgId}><div class="message-avatar">${raw(c.avatar)}</div><div class="message-content"><div class="message-header"><span class="message-role">${c.label}</span><span class="message-time">${tm}</span><span id="stream-elapsed-timer" class="stream-elapsed-timer"></span></div><div class="message-body" id="streaming-body"><div class="stream-status"><div class="pulse"></div> ${st}</div></div></div></div>`);
+  const _status = status || defaultStatus;
+  const _detail = detail || '';
+  /* The status zone is a `<div data-zone="status">` inside the body.
+   * When `_detail` is empty, the zone is omitted entirely (the bubble
+   * shows only the avatar + label).  When present, the zone renders
+   * the status text + optional detail. */
+  const statusZone = _detail
+    ? `<div data-zone="status" class="stream-status">
+        <span class="stream-status-text">${escapeHtml(_status)}</span>
+        <span class="stream-status-detail">${escapeHtml(_detail)}</span>
+       </div>`
+    : (_status !== defaultStatus
+      ? `<div data-zone="status" class="stream-status">
+          <span class="stream-status-text">${escapeHtml(_status)}</span>
+         </div>`
+      : '');
+  /* The content zone is empty initially — filled by `updateStreamingUI`
+   * as content deltas arrive.  The thinking zone is also empty (shown
+   * only when `thinking` is non-empty). */
+  return safeHtml`
+    <div class="message streaming-message" id="streaming-msg"${_id}>
+      <div class="message-avatar">${raw(avatar)}</div>
+      <div class="message-body" id="streaming-body">
+        <div class="message-head">
+          <span class="message-role">${escapeHtml(label)}</span>
+          <span class="message-time">${raw(formatClockTime())}</span>
+        </div>
+        ${raw(statusZone)}
+        <div data-zone="content" class="stream-content"></div>
+        <div data-zone="thinking" class="stream-thinking" style="display:none"></div>
+        <div data-zone="tool" class="stream-tool"></div>
+        <div data-zone="fc" class="stream-fc"></div>
+        <div data-zone="swarmInbox" class="stream-swarm-inbox"></div>
+      </div>
+    </div>`;
 }
 
 /**
- * Determine streaming bubble role from config / conversation state.
- * @param {Object} conv
- * @param {Object} [cfg] - sendConfig / regenConfig with endpointMode flag
- * @returns {'worker'|'planner'}
+ * Determine the streaming role for a conversation based on its current
+ * active task type.  Used by `showStreamingUIForConv` to pick the right
+ * avatar/label.
+ *
+ * @param {string} convId
+ * @returns {'worker'|'planner'|'critic'|'autopilot'}
  */
-function _streamingBubbleRole(conv, cfg) {
-  if (cfg && cfg.endpointMode) return 'planner';
-  if (conv && conv.endpointEnabled && !conv.messages.some(m => m._epIteration)) return 'planner';
+function _streamingBubbleRole(convId) {
+  const conv = conversations.find(c => c.id === convId);
+  if (!conv) return 'worker';
+  /* The autopilot VU bubble is a special case: it's a USER message
+   * (role='user') but streams through the same substrate.  The
+   * `_isVirtualUser` flag is set by `_beginVuStreaming`. */
+  const last = conv.messages[conv.messages.length - 1];
+  if (last && last._isVirtualUser && last._streamingVu) return 'autopilot';
+  /* Otherwise, infer from the task type (if known) or default to worker. */
+  const taskType = conv._activeTaskType;
+  if (taskType === 'planner') return 'planner';
+  if (taskType === 'critic') return 'critic';
   return 'worker';
 }
 
 /**
- * Surgically remove DOM elements for messages with index > cutoffIdx,
- * plus any leftover #streaming-msg / #translating-msg / stale endpoint bubbles.
- * Updates fingerprint and turn nav.
+ * Surgically truncate the DOM to match a truncated conversation.
  *
- * Also wipes the conv's streamBufs entry when the streaming bubble is removed,
- * so a stale SSE callback can't keep accumulating into a now-detached buffer.
+ * When the backend truncates a conversation (e.g. on a retry_reset),
+ * the frontend's DOM still contains the old messages.  This function
+ * walks the DOM and removes any message elements whose index is beyond
+ * the new length.  It also removes the streaming-msg if the truncated
+ * tail included it.
  *
- * @param {Object} conv
- * @param {number} cutoffIdx — keep messages 0..cutoffIdx, remove cutoffIdx+1..
- * @returns {boolean} true if surgical path was used
+ * Used by `_handleSseEvent` for `retry_reset` and `delta_reset` events.
  */
-function _surgicalTruncateDOM(conv, cutoffIdx) {
-  if (activeConvId !== conv.id) return false;
+function _surgicalTruncateDOM(convId, newLength) {
+  if (activeConvId !== convId) return;
   const inner = document.getElementById("chatInner");
-  if (!inner) return false;
-  const toRemove = [];
-  inner.querySelectorAll('.message[id^="msg-"]').forEach(el => {
-    const m = el.id.match(/^msg-(\d+)$/);
-    if (m && parseInt(m[1], 10) > cutoffIdx) toRemove.push(el);
-  });
-  const oldStreaming = document.getElementById("streaming-msg");
-  if (oldStreaming) toRemove.push(oldStreaming);
-  // ★ SyncFix: also evict translating bubble and any orphan endpoint bubbles
-  //   that may have been inserted without a msg-N id (critic/planner/worker
-  //   rendered directly by SSE reconnection paths).
-  const translating = document.getElementById("translating-msg");
-  if (translating) toRemove.push(translating);
-  inner.querySelectorAll('.message.ep-critic-msg, .message.ep-worker-msg, .message.ep-planner-msg').forEach(el => {
-    if (!el.id || !el.id.startsWith('msg-')) {
-      // Orphan role-styled message without msg-N id — leftover from a
-      // prior streaming/reconnect render. Safe to remove.
-      toRemove.push(el);
-    }
-  });
-  if (toRemove.length > 0 || inner.querySelector('.message[id^="msg-"]')) {
-    const removedStreaming = toRemove.includes(oldStreaming) || toRemove.some(el => el === translating);
-    for (const el of toRemove) el.remove();
-    // ★ SyncFix: wipe stream buffer so a still-alive SSE closure (for the
-    //   now-aborted task) stops accumulating into a detached object. twStop
-    //   also cancels any pending rAF/timeout render and clears _pendingStreamMsg.
-    if (removedStreaming && typeof twStop === 'function') {
-      try { twStop(conv.id); }
-      catch (e) { console.warn('[SyncFix] twStop during truncate failed:', e); }
-    } else if (typeof streamBufs !== 'undefined' && streamBufs.has(conv.id)) {
-      streamBufs.delete(conv.id);
-    }
-    _lastRenderedFingerprint = _convRenderFingerprint(conv);
-    buildTurnNav(conv);
-    console.info(`[SyncFix] _surgicalTruncateDOM conv=${conv.id.slice(0,8)} cutoffIdx=${cutoffIdx} removed=${toRemove.length} streamingCleared=${!!removedStreaming}`);
-    return true;
+  if (!inner) return;
+  /* Remove message elements with index >= newLength */
+  for (let i = newLength; ; i++) {
+    const el = document.getElementById("msg-" + i);
+    if (!el) break;
+    el.remove();
   }
-  return false;
+  /* If the streaming-msg is after the new tail, remove it too */
+  const sm = document.getElementById("streaming-msg");
+  if (sm && !document.getElementById("msg-" + (newLength - 1))) {
+    sm.remove();
+  }
+  /* Reset lazy‑render window so the next render starts from the new tail */
+  if (typeof _lazyRenderedFrom !== 'undefined') {
+    _lazyRenderedFrom = Math.max(0, newLength - _MAX_RENDER_WINDOW);
+    _lazyRenderedTo = newLength;
+  }
 }
 
 /**
- * Synchronously hard-cancel any in-flight stream/task for a conv, so that
- * a subsequent edit/regen flow can truncate and restart without colliding
- * with the old task's late SSE deliveries or polling responses.
+ * Hard‑cancel an active stream (SSE reader) for a conversation.
+ * Used by the Stop button and the `finishStream` autopilot branch.
  *
- * Fire-and-forget: the server-side abort POST is dispatched but not awaited.
- * Local in-memory state is cleaned synchronously so the caller can proceed
- * immediately to truncation + new task start.
- *
- * Safe to call when no stream is active — becomes a no-op.
- *
- * @param {Object} conv
- * @returns {boolean} true if something was actually cancelled
+ * This is a last‑resort teardown: aborts the SSE controller, calls
+ * `twStop`, and removes the streaming‑msg DOM element.  It does NOT
+ * touch `conv.messages` — that's left to the `autopilot_vu_cancel`
+ * handler or the local‑splice function.
  */
-function _hardCancelActiveStream(conv) {
-  if (!conv) return false;
-  const convId = conv.id;
-  let cancelled = false;
-  const s = (typeof activeStreams !== 'undefined') ? activeStreams.get(convId) : null;
-  const oldTaskId = conv.activeTaskId || (s && s.taskId) || null;
-  if (s) {
-    try {
-      s._userAbort = true;
-      if (s.controller && !s.controller.signal.aborted) s.controller.abort();
-    } catch (e) {
-      console.warn(`[SyncFix] _hardCancelActiveStream: controller.abort failed for conv=${convId.slice(0,8)}:`, e);
+function _hardCancelActiveStream(convId) {
+  const stream = activeStreams.get(convId);
+  if (stream && stream.controller) {
+    try { stream.controller.abort(); } catch (e) { /* already detached */ }
+  }
+  if (typeof twStop === "function") twStop(convId);
+  const sm = document.getElementById("streaming-msg");
+  if (sm) { try { sm.remove(); } catch (e) { /* detached */ } }
+  console.info(`[Streaming] hard‑canceled stream for conv=${convId.slice(0,8)}`);
+}
+
+/* ───────────────────────────────────────────────────────────────────
+   Lazy‑render window (virtualized chat history)
+   ─────────────────────────────────────────────────────────────────── */
+
+const _MAX_RENDER_WINDOW = 100;          // max messages to keep in DOM
+let _lazyObserver = null;                // IntersectionObserver for upward load
+let _lazyConvId = null;                  // which conversation is lazily rendered
+let _lazyRenderedFrom = 0;               // first rendered index (inclusive)
+let _lazyRenderedTo = 0;                 // last rendered index (exclusive)
+let _loadingOlder = false;               // guard against concurrent upward loads
+let _loadingNewer = false;               // guard against concurrent downward loads
+let _lazyBottomObserver = null;          // IntersectionObserver for downward load
+
+/**
+ * Initialize lazy rendering for a conversation.  Called by `renderChat`
+ * when a conversation is first displayed.
+ *
+ * Renders the tail `_MAX_RENDER_WINDOW` messages (or fewer if the
+ * conversation is shorter), and sets up observers to load older/newer
+ * messages as the user scrolls.
+ */
+function _INITIAL_RENDER(convId) {
+  const conv = conversations.find(c => c.id === convId);
+  if (!conv) return;
+  _lazyConvId = convId;
+  const total = conv.messages.length;
+  const start = Math.max(0, total - _MAX_RENDER_WINDOW);
+  _lazyRenderedFrom = start;
+  _lazyRenderedTo = total;
+  const inner = document.getElementById("chatInner");
+  if (!inner) return;
+  let html = '';
+  for (let i = start; i < total; i++) html += renderMessage(conv.messages[i], i);
+  inner.innerHTML = html;
+  /* Set up the upward sentinel (load older messages) if there are any
+   * messages before the rendered window. */
+  if (start > 0) {
+    const s = _ensureTopSentinel(inner, start);
+    if (s) {
+      _ensureObserver();
+      _lazyObserver.observe(s);
     }
-    cancelled = true;
   }
-  if (oldTaskId) {
-    // Record last-aborted-task id so polling/SSE stragglers can be discarded
-    conv._lastAbortedTaskId = oldTaskId;
-    cancelled = true;
+  /* Set up the downward sentinel (load newer messages) if there are any
+   * messages after the rendered window (should be zero on initial render,
+   * but we keep the symmetry). */
+  const hiddenBelow = Math.max(0, total - _lazyRenderedTo);
+  const s2 = _ensureBottomSentinel(inner, hiddenBelow);
+  if (s2) {
+    _ensureBottomObserver();
+    _lazyBottomObserver.observe(s2);
   }
-  // Clear local in-memory state synchronously
-  if (typeof twStop === 'function') {
-    try { twStop(convId); }
-    catch (e) { console.warn('[SyncFix] _hardCancelActiveStream: twStop failed:', e); }
-  } else if (typeof streamBufs !== 'undefined') {
-    streamBufs.delete(convId);
-  }
-  conv.activeTaskId = null;
-  conv._activeTaskClearedAt = Date.now();
-  // Fire-and-forget abort-by-conv (covers any racing tasks server-side)
-  if (cancelled) {
-    try {
-      Api.chat.abortConv(convId).catch(err => {
-        console.warn(`[SyncFix] abort-conv POST failed for conv=${convId.slice(0,8)}:`, err);
-      });
-    } catch (e) {
-      console.warn('[SyncFix] abort-conv fetch threw:', e);
-    }
-    console.info(`[SyncFix] _hardCancelActiveStream conv=${convId.slice(0,8)} oldTask=${oldTaskId?.slice(0,8)||'null'} hadStream=${!!s}`);
-  }
-  return cancelled;
 }
 
-// ── Chat rendering ──
-/* ── Lazy chat rendering with IntersectionObserver ── */
-const _INITIAL_RENDER = 20;
-let _lazyObserver = null;
-let _lazyConvId = null;
-let _lazyRenderedFrom = Infinity;
-/* Exclusive upper bound of the currently-rendered message range. Finite only
- * AFTER a downward eviction has capped the window (tail bubbles removed while
- * the reader scrolled up to read history); otherwise it tracks `total` (the
- * tail is rendered). Mirror of `_lazyRenderedFrom`. */
-let _lazyRenderedTo = Infinity;
-/* Hard upper bound on how many `.message` nodes live in the DOM at once. Upward
- * lazy-load (`_loadOlderMessages`) and downward re-render (`_loadNewerMessages`)
- * each evict from the FAR side once the rendered span exceeds this, so scroll /
- * re-render / hit-test cost is O(window) not O(history). This is the structural
- * fix for "the longer the conversation, the laggier scrolling gets": without a
- * cap, scrolling up in a 500-message conversation accretes hundreds of heavy
- * bubbles that are never reclaimed. MUST exceed _INITIAL_RENDER + one BATCH so a
- * first upward load never immediately evicts what it just added. */
-const _MAX_RENDER_WINDOW = 80;
-let _lazyBottomObserver = null;
-let _loadingNewer = false;
-/* Which conv's OPEN has already had its view positioned (see the open-scroll
- * coalescing block in renderChat). Set by the force-scroll branch during an
- * initial switch load; reset by loadConversation on a genuine switch so the
- * next open force-scrolls exactly once. */
-let _openScrollConvId = null;
-
-function _destroyLazyObserver() {
-  if (_lazyObserver) {
-    _lazyObserver.disconnect();
-    _lazyObserver = null;
-  }
-  _loadingOlder = false;
-  /* The full-render / show-streaming paths that call this wipe innerHTML and
-   * rebuild the UNCAPPED tail window, so the downward-load machinery must reset
-   * in lockstep — otherwise the bottom observer keeps a handle on a removed
-   * sentinel and the stale cap survives the rebuild. */
-  _destroyBottomObserver();
-}
-function _destroyBottomObserver() {
-  if (_lazyBottomObserver) {
-    _lazyBottomObserver.disconnect();
-    _lazyBottomObserver = null;
-  }
-  _loadingNewer = false;
-}
-
-function _ensureLazyObserver() {
+function _ensureObserver() {
   if (_lazyObserver) return;
   _lazyObserver = new IntersectionObserver(
     (entries) => {
       entries.forEach((e) => {
         if (!e.isIntersecting) return;
-        const sentinel = e.target;
-        _lazyObserver.unobserve(sentinel);
+        _lazyObserver.unobserve(e.target);
         _loadOlderMessages();
       });
     },
@@ -853,95 +862,37 @@ function _ensureLazyObserver() {
   );
 }
 
-/* Build (or update) a bottom sentinel mirroring the top `_lazyLoadSentinel`.
- * It marks the `hiddenBelow` count of tail messages evicted downward and is the
- * IntersectionObserver trigger that re-renders them when the reader scrolls
- * back down. Absent (removed) when the window reaches the true tail. */
-function _ensureBottomSentinel(inner, hiddenBelow) {
-  let s = document.getElementById("_lazyLoadSentinelBottom");
-  if (hiddenBelow <= 0) {
-    if (s) s.remove();
-    return null;
+function _ensureTopSentinel(inner, hiddenAbove) {
+  let sentinel = document.getElementById("_lazyLoadSentinelTop");
+  if (!sentinel) {
+    sentinel = document.createElement("div");
+    sentinel.id = "_lazyLoadSentinelTop";
+    sentinel.style.height = "1px";
+    sentinel.style.visibility = "hidden";
+    inner.prepend(sentinel);
   }
-  if (!s) {
-    s = document.createElement("div");
-    s.id = "_lazyLoadSentinelBottom";
-    s.className = "lazy-sentinel";
-    s.innerHTML = '<span class="lazy-sentinel-text">⬇ <span class="_lazy-count-bottom">0</span> newer messages</span>';
-    inner.appendChild(s);
-  } else if (s !== inner.lastElementChild) {
-    inner.appendChild(s);  // keep it pinned at the very bottom after appends
-  }
-  const c = s.querySelector("._lazy-count-bottom");
-  if (c) c.textContent = String(hiddenBelow);
-  return s;
+  sentinel.textContent = hiddenAbove > 0 ? `↑ ${hiddenAbove} older messages` : '';
+  return sentinel;
 }
 
-/* Evict the topmost rendered messages so the rendered span never exceeds
- * `_MAX_RENDER_WINDOW`. Called AFTER a downward re-render appended tail
- * bubbles. Mirror of the tail eviction in `_loadOlderMessages`. Advances
- * `_lazyRenderedFrom` and refreshes the top sentinel; preserves the scroll
- * anchor via the caller's height-delta compensation. Returns px height removed
- * above the fold so the caller can keep the viewport pinned. */
-function _evictAboveWindow(inner, container) {
-  let removedPx = 0;
-  while ((_lazyRenderedTo - _lazyRenderedFrom) > _MAX_RENDER_WINDOW && _lazyRenderedFrom < _lazyRenderedTo) {
-    const el = document.getElementById("msg-" + _lazyRenderedFrom);
-    if (!el) { _lazyRenderedFrom++; continue; }
-    removedPx += el.getBoundingClientRect().height;
-    el.remove();
-    _lazyRenderedFrom++;
-  }
-  if (_lazyRenderedFrom > 0) {
-    _ensureLazyObserver();
-    let top = document.getElementById("_lazyLoadSentinel");
-    if (!top) {
-      top = document.createElement("div");
-      top.id = "_lazyLoadSentinel";
-      top.className = "lazy-sentinel";
-      top.innerHTML = '<span class="lazy-sentinel-text">⬆ <span class="_lazy-count">0</span> older messages</span>';
-      inner.insertBefore(top, inner.firstChild);
-    }
-    const c = top.querySelector("._lazy-count");
-    if (c) c.textContent = String(_lazyRenderedFrom);
-    _lazyObserver.observe(top);
-  }
-  return removedPx;
-}
-
-let _loadingOlder = false;
 function _loadOlderMessages() {
   if (_loadingOlder) return;
   const conv = conversations.find((c) => c.id === _lazyConvId);
   if (!conv) return;
+  const total = conv.messages.length;
   const BATCH = 20;
-  const endIdx = _lazyRenderedFrom;
-  if (endIdx <= 0) return;
-  _loadingOlder = true;
-  const startIdx = Math.max(0, endIdx - BATCH);
+  if (!Number.isFinite(_lazyRenderedFrom) || _lazyRenderedFrom <= 0) return;
   const inner = document.getElementById("chatInner");
-  const sentinel = document.getElementById("_lazyLoadSentinel");
-  if (!sentinel || !inner) {
-    _loadingOlder = false;
-    return;
-  }
-
+  const sentinel = document.getElementById("_lazyLoadSentinelTop");
+  if (!inner || !sentinel) return;
   const container = document.getElementById("chatContainer");
+  _loadingOlder = true;
 
-  /* Seed the upper bound on first upward load: before any eviction the tail
-   * (through the last rendered message) is on screen, so the current window
-   * ends at the last rendered msg index + 1. */
-  if (!Number.isFinite(_lazyRenderedTo)) {
-    _lazyRenderedTo = _highestRenderedMsgIdx(inner) + 1;
-  }
-
-  /* Build all HTML strings first (cheaper than individual DOM creates) */
+  const endIdx = _lazyRenderedFrom;
+  const startIdx = Math.max(0, endIdx - BATCH);
   let html = "";
-  for (let i = startIdx; i < endIdx; i++) {
-    html += renderMessage(conv.messages[i], i);
-  }
+  for (let i = startIdx; i < endIdx; i++) html += renderMessage(conv.messages[i], i);
 
-  /* Single DOM mutation: measure → mutate → fix scroll — no intermediate frame */
   const prevScrollTop = container.scrollTop;
   const prevScrollHeight = container.scrollHeight;
 
@@ -949,59 +900,35 @@ function _loadOlderMessages() {
   wrapper.innerHTML = html;
   const frag = document.createDocumentFragment();
   while (wrapper.firstChild) frag.appendChild(wrapper.firstChild);
-  sentinel.after(frag);
-
+  sentinel.after(frag);  // insert the older bubbles BELOW the top sentinel
   _lazyRenderedFrom = startIdx;
 
-  /* Fix scroll synchronously BEFORE the browser paints */
-  container.scrollTop =
-    prevScrollTop + (container.scrollHeight - prevScrollHeight);
+  /* Compensate the viewport for the added height ABOVE the current scroll
+   * position, so the user stays anchored to the same content. */
+  const newScrollHeight = container.scrollHeight;
+  container.scrollTop = prevScrollTop + (newScrollHeight - prevScrollHeight);
 
-  /* Update or remove the TOP sentinel */
-  if (startIdx <= 0) {
-    sentinel.remove();
-  } else {
-    sentinel.querySelector("._lazy-count").textContent = startIdx;
-    _lazyObserver.observe(sentinel);
+  /* Evict from the BOTTOM to keep the window bounded. */
+  const beforeH = container.scrollHeight;
+  const removedBottom = _evictBelowWindow(inner, container);
+  void beforeH;
+  if (removedBottom > 0) {
+    /* Removing content BELOW the fold does not affect the viewport,
+     * so no scroll compensation needed. */
   }
 
-  /* ★ BOUNDED WINDOW: having grown the head, evict the TAIL so the DOM never
-   * accretes without bound. This is the structural fix — without it, scrolling
-   * up through a long conversation keeps every bubble alive forever, and every
-   * scroll frame / re-render / hit-test pays for all of them. The reader is
-   * near the top here, so removing far-below bubbles is invisible and does NOT
-   * move the viewport (content below the fold shrinking never shifts what's
-   * above it). A bottom sentinel is (re)placed so scrolling back down
-   * re-renders them. */
-  _evictBelowWindow(inner, container, /*anchorFromTop=*/true);
-  _lazyObserver.observe(document.getElementById("_lazyLoadSentinel") || sentinel);
+  /* Refresh / remove the top sentinel for the remaining hidden head. */
+  const hiddenAbove = _lazyRenderedFrom;
+  const s = _ensureTopSentinel(inner, hiddenAbove);
+  if (s) { _ensureObserver(); _lazyObserver.observe(s); }
+  else { _destroyObserver(); }
   _loadingOlder = false;
 }
 
-/* Highest msg-N index currently in the DOM (or -1 when none). */
-function _highestRenderedMsgIdx(inner) {
-  const els = inner.querySelectorAll('[id^="msg-"]');
-  let hi = -1;
-  els.forEach((el) => {
-    const m = el.id.match(/^msg-(\d+)$/);
-    if (m) { const i = parseInt(m[1], 10); if (i > hi) hi = i; }
-  });
-  return hi;
-}
-
-/* Evict the bottom-most rendered messages so the rendered span never exceeds
- * `_MAX_RENDER_WINDOW`, and (re)place the bottom sentinel for the hidden tail.
- * `anchorFromTop` true means the reader is anchored near the head (upward-load
- * case) so removing tail bubbles is invisible and needs no scroll compensation.
- * Retracts `_lazyRenderedTo`. */
-function _evictBelowWindow(inner, container, anchorFromTop) {
-  const conv = conversations.find((c) => c.id === _lazyConvId);
-  const total = conv ? conv.messages.length : _lazyRenderedTo;
-  if (!Number.isFinite(_lazyRenderedTo)) _lazyRenderedTo = _highestRenderedMsgIdx(inner) + 1;
-  /* Never evict the live streaming bubble's message or anything a stream owns —
-   * the bounded window is a settled-history optimisation only. */
-  if (conv && activeStreams.has(conv.id)) return;
-  while ((_lazyRenderedTo - _lazyRenderedFrom) > _MAX_RENDER_WINDOW && _lazyRenderedTo > _lazyRenderedFrom + 1) {
+function _evictBelowWindow(inner, container) {
+  const viewportBottom = container.scrollTop + container.clientHeight;
+  let removed = 0;
+  while (_lazyRenderedTo - _lazyRenderedFrom > _MAX_RENDER_WINDOW && _lazyRenderedTo > _lazyRenderedFrom + 1) {
     const idx = _lazyRenderedTo - 1;
     const el = document.getElementById("msg-" + idx);
     if (el) el.remove();
@@ -1015,6 +942,68 @@ function _evictBelowWindow(inner, container, anchorFromTop) {
   } else {
     _destroyBottomObserver();
   }
+  return removed;
+}
+
+function _ensureBottomSentinel(inner, hiddenBelow) {
+  let sentinel = document.getElementById("_lazyLoadSentinelBottom");
+  if (!sentinel) {
+    sentinel = document.createElement("div");
+    sentinel.id = "_lazyLoadSentinelBottom";
+    sentinel.style.height = "1px";
+    sentinel.style.visibility = "hidden";
+    inner.append(sentinel);
+  }
+  sentinel.textContent = hiddenBelow > 0 ? `↓ ${hiddenBelow} newer messages` : '';
+  return sentinel;
+}
+
+function _destroyObserver() {
+  if (_lazyObserver) {
+    _lazyObserver.disconnect();
+    _lazyObserver = null;
+  }
+}
+
+function _destroyBottomObserver() {
+  if (_lazyBottomObserver) {
+    _lazyBottomObserver.disconnect();
+    _lazyBottomObserver = null;
+  }
+}
+
+function _evictAboveWindow(inner, container) {
+  const viewportTop = container.scrollTop;
+  let removed = 0;
+  while (_lazyRenderedTo - _lazyRenderedFrom > _MAX_RENDER_WINDOW && _lazyRenderedFrom < _lazyRenderedTo - 1) {
+    const idx = _lazyRenderedFrom;
+    const el = document.getElementById("msg-" + idx);
+    if (el && el.offsetTop + el.offsetHeight < viewportTop - 1000) {
+      el.remove();
+      _lazyRenderedFrom = idx + 1;
+      removed += el.offsetHeight;
+    } else {
+      break;
+    }
+  }
+  return removed;
+}
+
+function _evictBelowWindow(inner, container) {
+  const viewportBottom = container.scrollTop + container.clientHeight;
+  let removed = 0;
+  while (_lazyRenderedTo - _lazyRenderedFrom > _MAX_RENDER_WINDOW && _lazyRenderedTo > _lazyRenderedFrom + 1) {
+    const idx = _lazyRenderedTo - 1;
+    const el = document.getElementById("msg-" + idx);
+    if (el && el.offsetTop > viewportBottom + 1000) {
+      el.remove();
+      _lazyRenderedTo = idx;
+      removed += el.offsetHeight;
+    } else {
+      break;
+    }
+  }
+  return removed;
 }
 
 function _ensureBottomObserver() {
@@ -1134,4 +1123,3 @@ function _forceScrollToBottom(container, forceActualHeights) {
     }
   }, 150);
 }
-

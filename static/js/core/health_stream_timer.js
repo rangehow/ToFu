@@ -821,7 +821,7 @@ async function _updateStreamTimerUI(convId) {
   // Show elapsed time always (subtle)
   let elapsedHtml = `<span class="stream-elapsed">${_fmtElapsed(now - info.startTime)}</span>`;
 
-  const buf = streamBufs.get(convId);
+  const _sess = streamSessions.get(convId);
 
   // Short silence — just show elapsed.  NOTE: we no longer suppress detection
   // by phase (tool_exec / llm_thinking / retrying / working).  The server
@@ -842,7 +842,7 @@ async function _updateStreamTimerUI(convId) {
   const _recentlyConfirmedAlive =
     info._taskStillRunning &&
     (now - (info._taskProbedAt || 0)) < (_HEALTH_CHECK_INTERVAL * 2);
-  const _activityLbl = _streamPhaseLabel(buf);
+  const _activityLbl = _streamPhaseLabel(_sess ? { phase: _sess.phase } : null);
 
   // Build warning display.  Mirror the verdict into BOTH the small header
   // timer AND the in-bubble status line (_setBubbleLiveness) — the in-bubble
@@ -937,12 +937,10 @@ function _streamTimerTouch(convId) {
 }
 
 function twStart(convId) {
-  streamBufs.set(convId, {
-    content: "",
-    thinking: "",
-    toolRounds: [],
-    phase: null,
-  });
+  /* §7: no render buffer — content/thinking/rounds project from the message
+   * document; phase lives in the live session slice (lazy-created by the
+   * PHASE handler / poll fallback). */
+  getStreamSession(convId);
   // Start elapsed timer
   const now = Date.now();
   const existing = _streamTimers.get(convId);
@@ -986,25 +984,18 @@ function _seedStreamTimerStart(convId, serverStartMs) {
   }
 }
 if (typeof window !== 'undefined') window._seedStreamTimerStart = _seedStreamTimerStart;
-/* ★ Build the updateStreamingUI payload for a streaming conv, applying the
- *   message-checkpoint fallback that EVERY render site must honour: the live
- *   `streamBufs` buffer is authoritative ONLY once it holds data; before that
- *   (a fresh `twStart`, a re-entry that skipped the seed, a field-only
- *   `twUpdate` — e.g. an HG-translation flag flip — or a tab-switch flush) the
- *   trailing STREAMING message is the source of truth.  Reading `buf.content`
- *   RAW here is precisely what snapped the bubble back to "等待中…" over
- *   already-checkpointed content (see the band-aid seeds in
- *   sse_pipeline.js connectToTask, which this makes correct-by-construction).
- *
- *   Safe against the reset events: `retry_reset` / `delta_reset` clear the
- *   MESSAGE and the buffer together (sse_pipeline.js), so the fallback reads
- *   "" in that case and never resurrects erased inter-round narration; a
- *   worker/planner turn rotation pushes a FRESH empty assistant message, so
- *   the checkpoint is empty there too.  Mirrors showStreamingUIForConv exactly.
- *   Returns null when there is no buffer for `convId`. */
+/* ★ Build the updateStreamingUI payload for a streaming conv (§7 shape):
+ *   content / thinking / toolRounds project straight from the message
+ *   document — the trailing STREAMING assistant message is the single
+ *   source; `phase` comes from the live session slice (streamSessions),
+ *   the one runtime fact that must never enter the document.
+ *   A worker/planner turn rotation pushes a FRESH empty assistant message,
+ *   so the projection is empty there too (same behaviour the old
+ *   buffer-mirror produced). Returns null when there is no live session
+ *   for `convId`. */
 function _streamFrameArg(convId) {
-  const buf = streamBufs.get(convId);
-  if (!buf) return null;
+  const _sess = streamSessions.get(convId);
+  if (!_sess) return null;
   let ckpt = null;
   const conv = (typeof conversations !== 'undefined')
     ? conversations.find(c => c && c.id === convId) : null;
@@ -1012,20 +1003,15 @@ function _streamFrameArg(convId) {
     const last = conv.messages[conv.messages.length - 1];
     if (last && (last.role === 'assistant' || last._isEndpointReview)) ckpt = last;
   }
-  /* buf.toolRounds is [] (truthy) even when empty → guard on .length so an
-   * un-seeded buffer falls back to the checkpoint's rounds instead of blanking
-   * the tool panel the message still holds. */
-  const rounds = (buf.toolRounds && buf.toolRounds.length)
-    ? buf.toolRounds
-    : (ckpt && typeof getToolRoundsFromMsg === 'function'
-        ? getToolRoundsFromMsg(ckpt) : (buf.toolRounds || []));
+  const rounds = (ckpt && typeof getToolRoundsFromMsg === 'function')
+    ? getToolRoundsFromMsg(ckpt) : [];
   return {
-    thinking: buf.thinking || (ckpt && ckpt.thinking) || "",
-    content: buf.content || (ckpt && ckpt.content) || "",
+    thinking: (ckpt && ckpt.thinking) || "",
+    content: (ckpt && ckpt.content) || "",
     toolRounds: rounds,
-    phase: buf.phase,
-    _memoryPrefetch: buf._memoryPrefetch || (ckpt && ckpt._memoryPrefetch),
-    _mcpLoginHint: buf._mcpLoginHint,
+    phase: _sess.phase,
+    _memoryPrefetch: ckpt && ckpt._memoryPrefetch,
+    _mcpLoginHint: ckpt && ckpt._mcpLoginHint,
   };
 }
 
@@ -1086,7 +1072,7 @@ function _twFlush() {
    *
    *   Fix: prefer activeConvId as the render target (if it has a streamBuf),
    *   falling back to cid only during init (activeConvId not yet set). */
-  const renderCid = (activeConvId && streamBufs.has(activeConvId)) ? activeConvId : cid;
+  const renderCid = (activeConvId && activeStreams.has(activeConvId)) ? activeConvId : cid;
   if (renderCid === activeConvId || (!activeConvId && document.getElementById('streaming-body'))) {
     /* ★ Message-checkpoint fallback (see _streamFrameArg): an empty buffer
      *   must render the persisted message, NOT blank the bubble to "等待中…". */
@@ -1099,13 +1085,13 @@ function _twFlush() {
      * once per drop so a repro session yields one warn per missed
      * frame.  If this fires during autopilot streaming, the renderCid
      * gating logic needs an autopilot fallback. */
-    const _hasBuf = streamBufs.has(cid) || (activeConvId && streamBufs.has(activeConvId));
+    const _hasBuf = activeStreams.has(cid) || (activeConvId && activeStreams.has(activeConvId));
     if (_hasBuf) {
       console.warn(
         `[twFlush-skip] renderCid=${(renderCid||'').slice(0,8)} ` +
         `activeConvId=${(activeConvId||'null').slice(0,8)} ` +
         `cid=${(cid||'null').slice(0,8)} ` +
-        `streamBufs.has(active)=${activeConvId && streamBufs.has(activeConvId)} ` +
+        `activeStreams.has(active)=${activeConvId && activeStreams.has(activeConvId)} ` +
         `streaming-body=${!!document.getElementById('streaming-body')} — render dropped`
       );
     }
@@ -1144,7 +1130,7 @@ function twUpdate(convId) {
   }
 }
 function twStop(convId) {
-  streamBufs.delete(convId);
+  clearStreamSession(convId);
   if (typeof _pendingStreamTimer !== "undefined" && _pendingStreamTimer) {
     clearInterval(_pendingStreamTimer);
     _pendingStreamTimer = null;

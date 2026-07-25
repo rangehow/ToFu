@@ -217,7 +217,7 @@ _RAW_PATS = [
 # turn_nav.js / finish_info.js are exempt per plan §2.15 (sidebar +
 # detached-builder / zero #chatInner writes — census-verified).
 _RATCHET_BASELINE = {
-    'static/js/ui/streaming_ui.js': 49,
+    'static/js/ui/streaming_ui.js': 50,
     'static/js/ui/streaming_render.js': 20,
     'static/js/ui/translation_render.js': 14,
     'static/js/image-gen.js': 13,
@@ -298,11 +298,11 @@ def test_raw_dom_write_ratchet():
 
 
 def test_ratchet_baseline_matches_plan_total():
-    """The baselines sum to the plan's §2.14 tally (157 non-seam raw ops
-    after step 4: fallback deletions + scanner v3 accuracy + the chat_render
-    engine moved to the seam side)."""
-    assert sum(_RATCHET_BASELINE.values()) == 157, (
-        f'baseline sum {sum(_RATCHET_BASELINE.values())} != 157 — the plan '
+    """The baselines sum to the plan's §2.14 tally (158 non-seam raw ops
+    after step 4's sweep + §7's sanctioned status-zone appendChild in the
+    live projection engine)."""
+    assert sum(_RATCHET_BASELINE.values()) == 158, (
+        f'baseline sum {sum(_RATCHET_BASELINE.values())} != 158 — the plan '
         '§2.14 tally and this ratchet drifted apart; update both together')
 
 

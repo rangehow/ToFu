@@ -390,24 +390,33 @@ Sum(non-seam) = 157.
 
 ## 7. streamBufs disposition — the second live fact-source, enumerated and judged
 
+**STATUS: RETIRED (this commit).** `streamBufs` is deleted (the core.js declaration is
+gone); a fresh re-census at retirement time found 21 references across 10 files — every
+one is migrated per the dispositions below, and the static guard
+(`test_streambufs_fully_retired`) pins zero references in production JS code forever.
+**Acceptance semantics (owner, written in stone): the §7.4 anchor promises byte parity
+at the CHECKPOINT BOUNDARY only — between two checkpoints the document is allowed to
+lag the live accumulation, because checkpointing cadence is a persistence contract,
+not a render-source divergence.**
+
 `conv.messages` is the SSOT, but `streamBufs` (declared `core.js:150`) is a **parallel
 live content source**: SSE deltas write it, and several readers paint from it OUTSIDE the
 SSE-delta path. Hard rule (owner, 2026-07-24): **anything read outside the SSE-delta path
 to mutate the DOM is a second fact source** — it must get a retirement path or an explicit
 exemption argument. Full census (every `streamBufs` access, read vs write, outcome):
 
-### 7.1 PAINT-SOURCE — must retire (8 readers)
+### 7.1 PAINT-SOURCE — ALL RETIRED ✓ (8 readers)
 
-| Site | What it paints | Retirement path |
+| Site | What it paints | How it retired |
 |---|---|---|
-| `health_stream_timer.js:814` `_updateStreamTimerUI` reads `buf.phase` → liveness banner in bubble | banner | read `phase` from the reducer/message doc (phase is already a reducer field) |
-| `health_stream_timer.js:996` `_streamFrameArg` reads `buf.content/thinking/toolRounds/phase` → `updateStreamingUI` | whole live bubble | build the frame arg from the message-doc projection (the checkpoint fallback already does `buf?.content \|\| lastMsg.content` — make the doc the ONLY source) |
-| `sse_pipeline.js:2072` `_trySSE` closure — deltas write buf → `twUpdate` → paint | whole live bubble | deltas write the reducer/message doc directly (they ALREADY mutate `assistantMsg` in the same handler — buf is a pure mirror); `twUpdate` reads from the doc |
-| `sse_poll_fallback.js:59` poll writes buf → `twUpdate` → paint | whole live bubble | poll writes the message doc; `twUpdate` reads from the doc |
-| `stream_lifecycle.js:138` + `:171` `showStreamingUIForConv` / deferred re-render read buf → `updateStreamingUI` | reconnect repaint | read from the message doc (checkpoint fallback already does) |
-| `stream_lifecycle.js:660,729,744` HG-translate sync reads buf → `twUpdate` | tool rounds | `twUpdate` reads `toolRounds` from the message doc directly |
-| `streaming_render.js:414` VU event reads buf → `twUpdate` | VU bubble | VU events write the message doc; `twUpdate` reads from there |
-| `project.js:178` `_collapseHgRoundAfterSubmit` reads buf → `twUpdate` | tool rounds | same — doc direct |
+| `health_stream_timer.js:814` `_updateStreamTimerUI` banner | banner | reads `streamSessions.get(cid).phase` |
+| `health_stream_timer.js:996` `_streamFrameArg` | whole live bubble | frame built from the DOCUMENT + `sess.phase` (no buffer at all) |
+| `sse_pipeline.js` `_trySSE` closure — deltas wrote buf → `twUpdate` | whole live bubble | mirror deleted; deltas mutate the doc only; phase → `setStreamPhase` |
+| `sse_poll_fallback.js:59` poll wrote buf | whole live bubble | poll mutates the doc only; `data.phase` → `setStreamPhase` |
+| `stream_lifecycle.js:138` + `:171` `showStreamingUIForConv` / deferred re-render | reconnect repaint | reads the document + `sess.phase` |
+| `stream_lifecycle.js:660,729,744` HG-translate sync | tool rounds | mirror deleted — pipeline reads the doc directly |
+| `streaming_render.js:414` VU event | VU bubble | VU deltas mutate `vuMsg` (doc); phase mirror → `setStreamPhase` |
+| `project.js:178` `_collapseHgRoundAfterSubmit` | tool rounds | mirror deleted — stamp on the doc is visible to the pipeline |
 
 **Unified retirement sketch (one mechanism, 8 sites):** `streamBufs` fields are mirrors of
 `assistantMsg` fields (every delta writes BOTH in the same handler). Delete the buffer as a
@@ -418,23 +427,37 @@ role — an existence flag for "a stream is live on this conv" — is already se
 the §3 byte-parity anchor extended to the reconnect path (cold-open vs live-paint of an
 in-flight turn).
 
-### 7.2 BUFFER-ONLY — allowed, with justification (5 readers)
+### 7.2 BUFFER-ONLY — ALL RETIRED ✓ (5 readers)
 
-| Site | Why it can never diverge |
+| Site | Retired as |
 |---|---|
-| `health_stream_timer.js:1079,1092,1098` `streamBufs.has()` presence checks + console.warn diagnostics | presence flag only — no DOM mutation from buffer CONTENT (the `_twFlush` paint itself is driven by SSE/poll data) |
-| `sse_pipeline.js:481,519` `connectToTask` seeds buf FROM `assistantMsg` checkpoint | write direction is doc → buf (never buf → DOM) |
-| `cross_tab_sync.js:588` `_revalidateOnResume` presence check → triggers `_twFlush` | presence flag only |
-| `conversations.js:2036` `_rebaseUnackedTail` seeds buf FROM `lastLocal` | doc → buf seed, never an independent paint |
-| `main_send_pipeline.js:964` `console.info` diagnostic | log-only |
+| `health_stream_timer.js` presence checks ×3 | `activeStreams.has(cid)` (the liveness registry — the session's own live-only guard also consults it) |
+| `sse_pipeline.js:481,519` `connectToTask` buf seed | deleted entirely — the document IS the checkpoint; nothing to seed |
+| `cross_tab_sync.js:588` `_revalidateOnResume` presence check | `activeStreams.has(cid)` |
+| `conversations.js:2036` `_rebaseUnackedTail` buf seed | deleted — `showStreamingUIForConv` reads the document |
+| `main_send_pipeline.js:964` `console.info` diagnostic | reports `streamSessions.has(cid)` instead |
 
-### 7.3 What changes TODAY (step 2)
+### 7.3 The retirement itself (LANDED — this commit)
 
-Nothing in this commit touches streamBufs reads/writes — the disposition above is the
-*judgment* the owner asked for, not a refactor. The two ratchet-joined files
-(`streaming_ui.js`, `health_stream_timer.js`) are now covered against NEW raw writes, and
-the retirement is scheduled as its own step so it rides the §3 anchor extension rather
-than landing unguarded.
+- **Entity home for phase** (owner §7 cond 2): `static/js/ui/stream_session.js` —
+  `var streamSessions = new Map()` + `getStreamSession` (lazy `{phase:null}`) +
+  `setStreamPhase` (**live-only guard**: no-op unless the session exists or
+  `activeStreams.has(cid)` — a post-stop phase event cannot resurrect a session) +
+  `clearStreamSession` (called by `twStop` and every bubble-teardown path).
+- **Re-seed evidence** (owner §7 cond 2, verdict A for warm resume):
+  `lib/chat_dispatch.py:636` — a warm reconnect with `Last-Event-ID` replays
+  `task['events'][cursor:]`, which INCLUDES the latest PHASE event, through the same
+  `dispatchSSEEvent` path → `setStreamPhase` re-seeds the session exactly as production.
+  A fresh cursorless connect accepts the transient "phase null until the next live
+  PHASE event" (verdict C) — the default waiting pulse, which is truthful (the client
+  genuinely does not know what the model is doing yet).
+- **Static guards** (owner §7 cond 3): `test_streambufs_fully_retired` (zero references
+  in production JS code — anti-treadmill) + `test_stream_session_module_contract`
+  (the entity exists, the live-only guard exists, the writer allowlist = sse_pipeline
+  / sse_poll_fallback / streaming_render, `_BUNDLE_FILES` membership).
+- **Anchor flipped** (owner §7 cond 4): the §7.4 anchor is GREEN — content/thinking/
+  status zones byte-identical across live vs warm-reconnect, PLUS the live-bubble
+  identity check (`id="streaming-msg"` + `data-msg-id` stable across arms).
 
 ### 7.4 The reconnect byte-parity anchor (RED anchor LANDED in step 5; flips GREEN with the §7 retirement)
 

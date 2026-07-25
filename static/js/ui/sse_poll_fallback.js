@@ -10,7 +10,7 @@
    recovery.
 
    Pure window-scope: takes all live state via parameters and reads only
-   globals (streamBufs, conversations, activeConvId, Api, twUpdate/twStop,
+   globals (conversations, activeConvId, Api, twUpdate/twStop,
    finishStream, saveConversations, renderChat, showToast,
    _checkServerHealth, _startOfflineRecoveryPolling, debugLog, …). No
    closure capture from _trySSE. Concatenated by lib/js_bundler.py AFTER
@@ -56,7 +56,6 @@ if (typeof window !== 'undefined') window._connToast = _connToast;
 
 async function _pollFallback(convId, taskId, stream, assistantMsg) {
   let lastSave = Date.now();
-  const buf = streamBufs.get(convId);
   const _preExistingContent = assistantMsg.content?.length || 0;
   const _preExistingThinking = assistantMsg.thinking?.length || 0;
   /* ★ Reset the endpoint poll-turn counter at the start of every poll
@@ -265,7 +264,6 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
               `oldLen=${oldLen} newLen=${newLen} msgTask=${assistantMsg._taskId?.slice(0,8)||'none'} polled=${taskId.slice(0,8)}`);
           } else if (newLen >= oldLen) {
             assistantMsg.content = data.content;
-            if (buf) buf.content = assistantMsg.content;
           } else if (oldLen > 0 && newLen < oldLen * 0.5) {
             console.warn(`[_pollFallback] CONTENT REGRESSION ignored — conv=${convId.slice(0,8)} ` +
               `oldContentLen=${oldLen} newContentLen=${newLen} — keeping longer accumulated content (delta cycle vs poll cycle race).`);
@@ -276,7 +274,6 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
           const newThinkLen = data.thinking.length;
           if (newThinkLen >= oldThinkLen) {
             assistantMsg.thinking = data.thinking;
-            if (buf) buf.thinking = assistantMsg.thinking;
           } else if (oldThinkLen > 0 && newThinkLen < oldThinkLen * 0.5) {
             console.warn(`[_pollFallback] THINKING REGRESSION ignored — conv=${convId.slice(0,8)} ` +
               `oldThinkingLen=${oldThinkLen} newThinkingLen=${newThinkLen} — keeping longer accumulated thinking.`);
@@ -365,9 +362,8 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
           toolRounds: existingRounds.concat(data.toolRounds),
         });
         assistantMsg.toolRounds = _pproj.toolRounds;
-        if (buf) buf.toolRounds = assistantMsg.toolRounds;
       }
-      if (buf) buf.phase = data.phase || null;
+      if (typeof setStreamPhase === 'function') setStreamPhase(convId, data.phase || null);
       if (typeof twUpdate === 'function') twUpdate(convId);
       const now = Date.now();
       if (now - lastSave > 3000) {

@@ -488,6 +488,10 @@ _BUNDLE_FILES = [
     # window scope. Load BEFORE streaming_ui.js for clear intent.
     'ui/streaming_swarm_panel.js',
     'ui/streaming_ui.js',
+    # RENDER_CONTRACT Phase 3.5 §7 live stream session — the phase home
+    # (convId-keyed runtime slice; replaces streamBufs). Zero deps; load
+    # BEFORE the reducer/handlers/pipeline that read+write it.
+    'ui/stream_session.js',
     # RENDER_CONTRACT Phase 3 pure stream reducer — the single {content,
     # thinking,toolRounds} projection all four apply paths fold through. Pure
     # (no DOM/globals); load BEFORE the handlers + pipeline that consume it.

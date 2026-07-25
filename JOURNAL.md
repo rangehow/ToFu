@@ -1,5 +1,12 @@
 # Project Journal
 
+### 2026-07-25(续27) — 「幻影回滚者」根修:NC 腰带标记门——conftest 崩溃治愈机制把中期提交当中毒回写(owner 复核续25 时抓获,commit `0910e72e`,2 文件;腰带语义 3/3 含 failing-first,NC 用户套件 37/37,我的四套件 32/32,60s 哈希盯梢稳定)。
+- **事故链(共享树纠缠第八弹,最诡异的一发):** owner 复核 `83c7f1ed` 时发现工作区 lib/message_queue.py 被「sibling 回滚」(-61 行恰是抢占块)。`git checkout HEAD --` 恢复后**分钟内再次被回滚**,且只在 message_queue.py(其它 13 个文件签名全存活)。30s sha256 盯梢抓到恢复后 ~10s 内被重写;**strace 挂到长跑 pytest 进程(pid 1499235,17:42 启动,1h17m)实锤 O_WRONLY|O_TRUNC 写源文件**。
+- **真凶(不是 sibling):** `tests/conftest.py` 的 NC 崩溃治愈腰带 `_restore_nc_patched_sources`(autouse,每个测试后跑)——会话开始(17:42,抢占提交落地前)快照基线,之后**任何**与基线不同的守卫文件一律回写基线。它分不清「崩溃 NC 残留」与「中期落地的合法提交」,把 83c7f1ed 的 +61 行当毒治了,节奏=套件每测试完成节拍(~4-6 分钟)。我的测试绿红反复横跳、stash A/B 结果不一致,全是它的签名。
+- **修复(标记门,crash-heal 不变):** 治愈判据从「与基线不同」改为「内容带 NC 中毒签名」——`_NC_POISON_RE = /(?i)\bNC-[A-Z0-9][A-Z0-9_-]{2,}/`(项目惯例:盘上 NC 补丁的替换文本必带 `NC-WORD` 标记,如 `# NC-STORM`/`pass  # NC-OBSERVE`/`nc-deny-forced`)。无标记漂移=合法工作(中期提交/sibling WIP),一律不动。
+- **守卫:** 新套件 test_nc_guard_belt_semantics.py 3 测(合法中期工作绝不回写——修复前红/NC 标记残留必须治愈/字节相同不动)+ meta-guard test_nc_guard_registry 绿 + NC 用户套件(test_project_peer{,_human_nudge})37/37。**已存项目记忆 `nc-guard_belt_phantom_reverter`:** 新盘上 NC 补丁必须带 NC-WORD 标记(优先用 `_nc_harness.py` 内存版);共享树验收前先 `git status`+`sha256sum` 普查写集;长跑后台 pytest 的 conftest 状态早于你的提交,stash A/B 前先查。
+- **owner 三点指令的诚实回收:** ①恢复+复验=完成(40/40 + 37/37 + 60s 稳定);②「每批测试前 drift 普查」已采纳并入记忆;③「sibling 纪律通告」**前提不成立**——没有任何 sibling 违规 git checkout,真凶是测试基建 bug,根修已落地,通告不必发。
+
 ### 2026-07-25(续26) — 生产活 bug 根修：延迟重绘引用已退役的 `dBuf`，浏览器未捕获 ReferenceError（commit `90ddbb96`，2 文件；新套件 2/2 含 failing-first 实证 + 静态回退铉，`stream_lifecycle` 相邻环 67/68）。
 - **线索来源（读生产日志，非代码审读）：** 先挖 `logs/error.log` 的 `[CLIENT-ERROR] [uncaught]` 上报通道——那里才是真实用户正在撞的错。共挖出 7 个客户端 ReferenceError 符号。
 - **分流判定（关键，滤掉 6 个假阳性）：** 把「首次/末次报错时间」与「定义该符号的文件落地 commit 时间」交叉：`_destroyLazyObserver`/`_openScrollConvId`（11:58–12:31）均在 `9836ddd1`@12:43 **之前**就停了，`convHasPendingSync`/`convAutoTranslate`/`streamSessions` 同形；且三对 definer/user 在 `_BUNDLE_FILES` 里顺序均正确（def 先于 use）→ 均为**部署窗口旧缓存 bundle** 瞬态，已由 `resolve_stale_bundle` 自愈，**不是活 bug、不追**。唯一异数：`dBuf` 全仓 **7 处引用 / 0 处定义**，且 13:09→17:39 **持续到排查当时** → 真活 bug。

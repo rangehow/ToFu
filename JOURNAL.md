@@ -1,5 +1,12 @@
 # Project Journal
 
+### 2026-07-25(续13) — tofu 主题字标重设计:衬线暖棕渐变 + 豆腐抖动 + 豆腐红印章(2 commit:`70663857` 主设计 / `8d1a258b` 特异性双修复,1 文件 styles.css;Playwright 运行时矩阵实证,非肉眼)。
+- **动机(owner 点单):** 欢迎页与侧栏的 Tofu 字标「不够有意思」,要求重新设计。
+- **设计(全部限定 [data-theme="tofu"],其它主题零影响):** 侧栏+欢迎页字标统一为 Newsreader 衬线 + 暖棕渐变(#A96536→--accent→#DCA464),四个字母静置各带微倾(--brand-tilt,像切好的豆腐块没摆齐),悬停逐个 tofuWobble 抖动(错峰 delay,挤豆腐回弹曲线),侧栏小豆腐块图标跟着歪头;欢迎页「豆腐」二字改为 -4° 红色印章(内描边+投影),悬停「盖正」。prefers-reduced-motion 自动关动画;零 JS/HTML/i18n 改动。
+- **验证(运行时,非截图目测):** `document.fonts` 证实 Newsreader 200–800 可变字重在本地 google-fonts-local.css 外包中真实加载;getComputedStyle transform 矩阵实证动画中帧(scaleY≈.93 挤压 + 旋转)与静置回弹到各自倾角;印章角度静置 -4.0° → hover 0.0°。
+- **修掉的两个特异性事故(`8d1a258b`,运行时矩阵抓出,截图看不出来):** ①印章 hover 选择器 `[data-theme=tofu] .tofu-brand:hover small`(0,3,1)输给静置态 `[data-theme=tofu] .welcome h2.tofu-brand small`(0,4,2),rotate(0) 永不生效 → 提为 `.welcome h2.tofu-brand:hover small`(0,5,2);②`font-size:34px` 出生即死——既有 `[data-theme=tofu] .welcome h2`(0,2,1)的 38px 特异性更高,实测渲染值一直是 38px → 删声明并注释来源。**教训:在 tofu 主题段给已有元素的同属性写值前,先普查该元素全部既有选择器特异性,否则声明静默失效,截图看着对但生效的是别人的值。**
+- **生效边界(诚实):** 纯 CSS,不走 JS bundle,无需重启服务器,浏览器硬刷新(Ctrl+Shift+R)生效;无测试引用这些类名,无守卫受影响;移动端 38px 压住 20px 媒体查询属预存在现象(既有 (0,2,1) 规则所致),非本次引入,未动。
+
 ### 2026-07-25(续12) — pt_019ce97d 收口:project_tasks parity 补列 + 顺带根修「探针被共享 MetaData 污染」真 bug(commit `8c8cfde3`,5 文件;parity 52/52,全 schema 环 101/101 含污染序)。
 - **本票(秒级):** `test_project_tasks_parity` HEAD 红——block_question sibling(`6dde1918`)把 `block_question`/`human_answer` 加进 Core `_tables.py` + 双端 live ALTER,唯独漏更 parity 测试的 LIVE_PG/LIVE_SQLITE 字符串。补上两列(位置与 Core 一致:write_set 之后、created_at 之前,双端 `TEXT NOT NULL DEFAULT ''`),52/52 复绿。
 - **顺带捉到更大的虫(自己的探针包,101 环复跑现形):** 五文件连跑时我自己的 `test_reinit_with_all_tables_present_is_fast_path` 转红——WARNING 实锤:`missing core tables ['c1','cs_demo_*','ev','kv','part1',…]`。**根因:** `test_core_schema_groundwork.py` 用公开 `define_table()` 在**共享 MetaData** 上注册了 13 张 compile-only 演示表(该函数的合法用途),我的 `core_boot_table_names()` 从活 MetaData 推导清单 → 每张演示表都变成幻影「缺失表」→ 每次 boot 被骗跑全量 DDL、快路径永久失效(与 error_resolutions 同类、更隐蔽:只在测试序/插件序下发病)。单跑本套件不可见,连跑才现形——这正是环跑的价值。

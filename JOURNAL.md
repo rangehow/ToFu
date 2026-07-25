@@ -1,6 +1,6 @@
 # Project Journal
 
-### 2026-07-25 — pt_c9a103fe 收口:owner 拍板「你决定,要最长期最优雅」→ paper 身份哈希**规范身份 + 一次性回填**根修(1 commit,8 文件;新套件 13/13 含 NEUTER,schema+podcast 环 101/101,活库实测门禁 1/11→7/11)。question-block 第二个被回答的 epic。
+### 2026-07-25 — pt_c9a103fe 收口:owner 拍板「你决定,要最长期最优雅」→ paper 身份哈希**规范身份 + 一次性回填**根修(commit `dbeae694`,8 文件;新套件 13/13 含 NEUTER,schema+podcast 环 101/101,活库实测门禁 1/11→7/11)。question-block 第二个被回答的 epic。
 - **决策(A+B 合体,弃 C):** C(查询侧多候选兜底)让分叉永存,不优雅。最长期解 = ①`_paper_hash` 函数内部 strip 规范化(空白永不改变身份,strip 幂等 → raw/strip 输入天然收敛,`lib/paper/hashing.py`);②下游 prefer-显式身份——report-start 不再无视客户端 hash 自行重算,改走新助手 `resolve_paper_hash`(优先客户端呈递的 ingest 铸造 hash,`_safe_hash_dir` 校验,回退规范化重算;`routes/paper.py:502`);③一次性幂等回填 `lib/paper/hash_backfill.py`(重算每行库 hash → CAS UPDATE 库行 + 依赖表 paper_reports/translations/podcasts 重键(碰撞取 created_at 新者)+ 盘上图目录/播客目录非破坏性改名),`schema_meta` 旗标门控,双端 init_db 快路径**之前**接线(收敛库也要能自愈)。活库证据直接支持 A:报告本来就全部躺在 strip 哈希下,规范化即对齐、数据移动最小。
 - **活库实测(force=True 直跑):** 11 篇分叉论文重键,dependents_moved=4,dirs_renamed=0(canonical 目录报告期已建,旧目录按设计留作无害孤儿);门禁 has_report(库哈希) 由 1/11 → **7/11**(其余 4 篇是真无报告)。第二趟全零(幂等实证)。:15000 对愈后论文(第三变体 1079e115→4c3dc427)lookup → `report_available:true`——**运行中的旧码服务器因数据愈合也答对了**。
 - **测试(13/13):** 规范化单测(strip 不敏感/幂等/空值/手工 sha 对拍)+ resolver 单测(prefer/回退/拒绝穿越形 hash)+ SQLite e2e(种子真分叉形状;**NEUTER 臂:愈前 has_report(stored)=False 即用户症状原样**,愈后翻 True、依赖表零残留、目录改名、二次运行全零;碰撞双方向 newer-wins;旗标门控;缺表优雅跳过)+ 静态钉(report-start 必须走 resolve_paper_hash)。

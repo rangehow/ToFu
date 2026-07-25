@@ -1,7 +1,7 @@
 # Project Journal
 
 
-### 2026-07-25 — pt_f91c7b1d 收口:ingest upsert folder_id 绑定错根修(partial insert_cols)+ folder 保留回归钉(commit 待填,3 文件;ingest 8/8(含新钉)、title_recovery 18/18、宽环 **192/192**)。question-block 第三个闭环(自问自答:语义由 PUT 路径既有保留契约裁定,无需再等 owner)。
+### 2026-07-25 — pt_f91c7b1d 收口:ingest upsert folder_id 绑定错根修(partial insert_cols)+ folder 保留回归钉(commit `1cef4c2e`,4 文件;ingest 8/8(含新钉)、title_recovery 18/18、宽环 **192/192**)。question-block 第三个闭环(自问自答:语义由 PUT 路径既有保留契约裁定,无需再等 owner)。
 - **票情(自开自收, brain 派发回我自己):** 705cc8e3(folders 特性)给 Core `PAPER_LIBRARY` 加了 `folder_id`,而 `_persist_ingested_library_row`(`routes/paper.py:2257`)`insert_cols=None`=**全列 INSERT**,行字典没这键 → SQLAlchemy `:folder_id` 绑定错 → 每次 upload/arXiv ingest 的库 persist 静默 500(返回 False 只打 error 日志)→ 「消失的论文」幽灵行自 7/20 起复发,`test_paper_ingest_persist` 6 红 + `test_paper_title_recovery` 种子同形红。stash 铁证:我全量改动摘除后 6/6 原样复现=预存在。
 - **修复(语义二选一,按 PUT 路径契约定):** (a)行字典补 `folder_id:''` → re-ingest 会**抹掉**用户既有文件夹指派,错;(b)`insert_cols=(14 个已写列)` → INSERT 走列 DEFAULT、ON CONFLICT 只更新已写列,folder_id 永不被动——选 (b),与 PUT 路径(:2587,客户端省略 folderId 时保留既有)同一保留契约。两个测试种子助手(ingest/title_recovery 同形全行 upsert)补 `folder_id:''`。
 - **新回归钉 `test_reingest_preserves_existing_folder_assignment`:** 真驱 `_persist_ingested_library_row` 两次——首摄 → 手工把行塞进 folder-x → 重摄;断言 folder_id 存活 **且** title/page_count 被刷新(部分更新语义双方向都钉)。既有 6 红天然是 failing-first(修前全红、修后全绿),故只加这一枚。

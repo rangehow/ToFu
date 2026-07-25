@@ -1,7 +1,22 @@
 # Project Journal
 
 
-### 2026-07-25(续17) — pt_26e934aa 收口:bundle parity 红根修——8 个 manifest 文件缺 index.html dev fallback 标签(commit `fe028ebb`,1 文件 +8;bundle 四环 42/42,collect **8756** 0 err)。
+### 2026-07-25(续17) — pt_26e934aa 收口
+# Project Journal
+
+
+### 2026-07-25(续18) — Motion video P1 全链交付(epic `pt_766fbe4d`,owner 拍板「A 全绿推进」,2 commit:P1 主体 `1960ee37` 19 文件 +2441/-16 + env 自举加固 `8ccc158a` 8 文件 +224/-21;新套件 **35/35** 含双 NEUTER,相邻 skills+registry 74 绿,collect **8756** 0 err,真端到端渲染实证)。
+- **源头:** owner 要求吸收 vibe-motion/auto-motion(SRT→MG 动画视频)并超越。仓库已 clone 至同级目录;前序会话已落设计稿 `docs/MOTION_VIDEO_DESIGN.md`(a0c2c984)+ P0 环境全链验证(51bdd540:~3.5× 实时基线);owner 在看板一键拍板 A 后 brain 派回给我。
+- **形态修正(诚实标注与原设计稿的差异):** 原 P1 写「engine.py + TaskRuntime 注册」。落地改 **tools-first**——分镜与 composition 创作由聊天主 agent 承担(严格强于 engine 内一次性 LLM 调用:有 write_file/web_search/读 guide 全套能力,进度天然以工具卡片呈现),后端只做确定性机械层;专用 TaskRuntime/engine 推迟到 P2(TTS 音画合成本来就需要服务端编排)。设计稿 §5/§8 已同步改写。
+- **交付物:** ①`lib/motion_video/` 五件套(`_env` 托管自举:hyperframes 钉版 0.7.71 npm 安装 + imageio-ffmpeg pip 安装 + **ffprobe 静态下载**(johnvansickle tar.xz 单成员抽取,imageio 不带 ffprobe)+ 规范名 shim 链接;`_srt` 毫秒解析;`_gates` 零 LLM 闸:分镜时间轴/composition 静态扫描含**注释剥离**/ffprobe 规格复核;`_render` CLI 封装:env 注入/超时/AbortSignal/失败五分类;`_concat` 规格归一+原子拼接+时长复核);②in-tree guide 三件套(WORKFLOW/COMPOSITION_CONTRACT/skeleton,替代 PROMPT.md);③6 个聊天工具(env_check/storyboard_check/check/render/probe/concat,project 门,registry+handler 全接线);④6 个 vibe-motion 知识包进技能商店 catalog(codeload+subdir,用户一键,零用户数据突变);⑤README 双语。
+- **测试:** 35 测全绿——分镜闸双 NEUTER(剥时长和闸/连续性闸各自放行坏分镜)、determinism 六禁全命中+**注释免疫**(骨架自身注释提 `repeat:-1` 不自爆,闸先剥注释再扫)、渲染 env 注入实证(假 CLI 读 env)、Abort 杀进程组、concat 双模式(copy/reencode)、注册门正反两向、shim 生命周期。
+- **踩坑(全进了代码/测试):** ①进程内 pip 安装后必须 `importlib.invalidate_caches()`,否则 `import imageio_ffmpeg` 持续不可见;②hyperframes CLI 按**字面名**找 ffmpeg/ffprobe,imageio 二进制带版本号后缀 → shim 规范名链接是唯一解;③`static-ffmpeg` pip 包在内部镜像会拖入 twine/keyring 意外依赖链,已全量卸载,改走 johnvansickle 直取;④「FFmpeg not found」曾被失败分类器误判为 chrome 类,已加 env_missing 前置分支。
+- **真端到端实证(非假件):** ensure_hyperframes→ensure_ffmpeg→ensure_ffprobe 全自举 → check_project(lint+validate+inspect 全绿)→ render_project(12.65s/4s 片)→ probe(h264/1080x1440/30fps/4.000s/无音轨)→ verify_spec 零错误。
+- **生效边界(诚实):** 代码随提交生效;**本部署工具链已自举就绪**(data/motion_video/{node,bin} + tofu env 的 imageio-ffmpeg),其它部署首次 env_check 自动重复该过程;聊天里贴 SRT 即可驱动全链(需挂项目/Studio + 服务器重启以加载新工具注册)。P2(音画合成+专用 runtime)对齐策略已挂看板待拍;P3(并行/面板)未开工。
+- **共享树纪律:** 两次提交全精确 pathspec(19+8 文件),sibling WIP(wallet/meta/tool_rounds/freshness 等)零触碰;collect 期间撞 sibling 半写(test_write_freshness_handler.py IndentationError),45s 后自愈复跑全绿。
+
+### 2026-07-25(续17) — pt_26e934aa 收口
+:bundle parity 红根修——8 个 manifest 文件缺 index.html dev fallback 标签(commit `fe028ebb`,1 文件 +8;bundle 四环 42/42,collect **8756** 0 err)。
 - **票情(我自开自收):** 续15 跑 bundle 环时抓到 `test_every_manifest_file_has_dev_fallback_tag` HEAD 红——`core/model_caps.js` 在 `_BUNDLE_FILES` 但 index.html 无 `<script>` fallback 标签(打包一旦失败,dev 回退路径会静默丢文件)。开票后 brain 派回给我。
 - **盘点(比票面大):** 测试对全 manifest 逐一断言、首缺即红——全量盘点实缺 **8** 个:core/model_caps(能力矩阵桥)、core/turn_settlement、core/conv_state_reducer、core/async_pool、core/conv_reducers、core/pending_sync、core/conv_persist_helpers(Epic E 切分三件套)、paper/podcast.js(播客 P1)。全是「文件进 manifest 时忘加 fallback 标签」的同类遗漏,分散在五个特性提交里,各自验收时相邻环都没含 parity 套件——典型的「每步都绿、合起来红」。
 - **修复:** 8 个标签按 manifest 顺序镜像插入(model_caps 在 format_size 与 zip_drop_zone 之间;turn_settlement/conv_state_reducer/async_pool 在 cross_tab_sync 前;切分三件套在 conversations 前;podcast 在 paper/library 与 paper-reader 之间),格式照既有行(`defer` + `?v=20260725a` + onload/onerror 探针)。

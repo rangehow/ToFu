@@ -1,6 +1,6 @@
 # Project Journal
 
-### 2026-07-25(续12) — pt_019ce97d 收口:project_tasks parity 补列 + 顺带根修「探针被共享 MetaData 污染」真 bug(1 commit,5 文件;parity 52/52,全 schema 环 101/101 含污染序)。
+### 2026-07-25(续12) — pt_019ce97d 收口:project_tasks parity 补列 + 顺带根修「探针被共享 MetaData 污染」真 bug(commit `8c8cfde3`,5 文件;parity 52/52,全 schema 环 101/101 含污染序)。
 - **本票(秒级):** `test_project_tasks_parity` HEAD 红——block_question sibling(`6dde1918`)把 `block_question`/`human_answer` 加进 Core `_tables.py` + 双端 live ALTER,唯独漏更 parity 测试的 LIVE_PG/LIVE_SQLITE 字符串。补上两列(位置与 Core 一致:write_set 之后、created_at 之前,双端 `TEXT NOT NULL DEFAULT ''`),52/52 复绿。
 - **顺带捉到更大的虫(自己的探针包,101 环复跑现形):** 五文件连跑时我自己的 `test_reinit_with_all_tables_present_is_fast_path` 转红——WARNING 实锤:`missing core tables ['c1','cs_demo_*','ev','kv','part1',…]`。**根因:** `test_core_schema_groundwork.py` 用公开 `define_table()` 在**共享 MetaData** 上注册了 13 张 compile-only 演示表(该函数的合法用途),我的 `core_boot_table_names()` 从活 MetaData 推导清单 → 每张演示表都变成幻影「缺失表」→ 每次 boot 被骗跑全量 DDL、快路径永久失效(与 error_resolutions 同类、更隐蔽:只在测试序/插件序下发病)。单跑本套件不可见,连跑才现形——这正是环跑的价值。
 - **根修(快照隔离):** `_core_schema/__init__.py` 在 `_tables` 导入完成后冻结 `_CORE_REGISTERED_TABLES` 快照(40 表);`core_boot_table_names()` 改从快照推导——包自己注册的表才进探针,事后 `define_table()`(测试夹具/域插件)永不漏入。回退路径(部分导入防御)保留。

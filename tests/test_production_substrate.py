@@ -110,6 +110,31 @@ def test_recipe_uses_the_new_home_not_the_shim():
     assert 'from lib.motion_video._stages import' not in src
 
 
+def test_claude_md_documents_the_new_packages():
+    """CLAUDE.md's directory map is the agent-facing source of truth and its
+    own rule says to re-scan it when a sub-package is added. Both packages
+    this epic created must appear there, or the next agent works from a map
+    that omits them (exactly the drift this test exists to stop)."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(root, 'CLAUDE.md'), encoding='utf-8').read()
+    assert 'production/' in src, 'lib/production/ missing from the CLAUDE.md map'
+    assert 'motion_video/' in src, 'lib/motion_video/ missing from the CLAUDE.md map'
+    assert '_scene_author.py' in src
+    assert 'stages.py' in src
+
+
+def test_design_note_status_matches_reality():
+    """The design note must not still read as a pure proposal now that P4/P5/
+    P6-slice-1 are in HEAD — and must keep saying which pieces are NOT built,
+    so nobody assumes ProductionRuntime exists."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(root, 'docs', 'PRODUCTION_PIPELINE_DESIGN.md'),
+               encoding='utf-8').read()
+    assert '已落地' in src, 'design note still reads as an un-started proposal'
+    assert 'ProductionRuntime' in src
+    assert '待拍板' in src, 'the still-open decision must stay visible'
+
+
 def test_production_package_docstring_records_partial_scope():
     """P6 is deliberately partial (stages only). The package must SAY so, so a
     later reader doesn't assume ProductionRuntime/deliverable already exist."""

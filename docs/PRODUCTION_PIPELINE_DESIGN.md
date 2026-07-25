@@ -1,6 +1,16 @@
 # Tofu 产出底盘设计稿(Production Substrate)——「一句话 → 成品」的通用承载形态
 
-> 状态:**设计稿,待 owner 拍板**(2026-07-25 落笔)。
+> 状态:**P4 / P5 / P6-slice-1 已落地**;P6 剩余 + P7 待 owner 拍板。
+> (2026-07-25 落笔;2026-07-26 更新实施状态)
+>
+> | 期 | 状态 | 证据 |
+> |---|---|---|
+> | P4 视频前半段(主题→调研→文案→真时间轴) | ✅ 已落地 | `a6f45f0c` — `lib/motion_video/_recipe.py` + `produce_video` + 崩溃续跑;套件 17/17 |
+> | P5 每镜子 agent 画面 | ✅ 已落地 | `a98f3c12` — `lib/motion_video/_scene_author.py`;套件 16/16(双 NEUTER) |
+> | P6 阶段图契约平移 | ✅ 已落地 | `8578dcb5` — `lib/production/stages.py`(`git mv`,字节相同);守卫 7/7 |
+> | P6 剩余(ProductionRuntime / deliverable / 进度双投影 / `_registries()` 发现制 / artifacts binary) | ⏸ 待拍板 | §7 风险表:两个样本抽底盘会抽错第三个的形状 |
+> | P7 第三配方验证 | ⏸ 待拍板 | 同上 |
+>
 > 触发诉求(owner 原话):「我希望有一天,我只要在输入框里说我想要一个关于某新闻话题的
 > 科普知识视频,视频就被创作出来了,用户甚至不需要感知」+「我不确定现在这个技能形态是否合适」。
 > 前置:`docs/MOTION_VIDEO_DESIGN.md`(渲染机械层,P0–P3 已交付)。
@@ -266,15 +276,27 @@ artifacts 扩 `binary` format + 文件引用 + 面板 `<video>/<audio>` 分支�
 
 ---
 
-## 6. 待拍板
+## 6. 拍板记录
 
-| # | 问题 | 选项 | 建议 |
+**已拍板(2026-07-25,owner)—— 5 项全部敲定并已在 P4/P5 实现:**
+
+| # | 问题 | 裁定 | 落地位置 |
 |---|---|---|---|
-| 1 | **实施顺序** | (A) P4→P5→P6→P7 先能力后底盘 / (B) P6 先抽底盘再补能力 | **A**:owner 的诉求在 P4/P5;底盘用两个样本抽会抽错 |
-| 2 | **`project_ready` 门** | (A) 放开:无项目落 `data/production/` / (B) 保持:必须挂项目 | **A**:「输入框说一句话」的前提是没挂项目也看得见工具 |
-| 3 | **阶段 5 的成本上限** | 每镜一次子 agent × N 镜 = N 次 LLM 调用。要不要硬性上限(镜数 / token / 金额)? | 建议**镜数上限 + 单镜 token 上限**,超限自动降级模板并告知用户 |
-| 4 | **调研阶段的事实纪律** | 科普视频会说错话。要不要强制「每条要点挂 ≥1 真实 URL」+ 片尾来源卡? | 建议**强制**——这是零 LLM 闸可以查的 |
-| 5 | **入口工具形态** | (A) 一个 `produce_video(topic=…)` 高层工具 / (B) 一个通用 `produce(kind=…, brief=…)` | 建议 **A 先行**(语义明确、模型好选),第三个配方落地时再看是否收敛成 B |
+| 1 | 实施顺序 | **A:先能力后底盘** | P4 → P5 → P6 |
+| 2 | `project_ready` 门 | **放开**——`produce_video` 不挂项目门 | `lib/tools/registry/_build.py` `_build_produce` |
+| 3 | 阶段 5 成本上限 | **镜数 + 单镜 token 双限;不做金额上限**(金额归钱包层) | `_recipe.max_scenes` / `_scene_author.token_budget` |
+| 4 | 调研事实纪律 | **强制**——每条要点 ≥1 真实 URL + 片尾来源卡 | `_recipe._gate_research` / `_sources_line` |
+| 5 | 入口工具形态 | **A:`produce_video(topic=)` 先行** | `lib/tools/produce.py` |
+
+**owner 追加的 3 条硬约束(已全部兑现):**
+
+| # | 约束 | 兑现 |
+|---|---|---|
+| 1 | **崩溃续跑是正确性契约,不是成本项** | 阶段产物落盘即 checkpoint;`job.json` + 启动 `resume_interrupted_jobs`;已渲染镜头 / 已作 composition / 已合成 TTS 均不重做 |
+| 2 | **事实审阅「可介入不阻塞」** | script 产物落盘可审,job 默认继续跑;拦截走现成 message-queue 抢占 + human_guidance,**不新造机械** |
+| 3 | **阶段图契约现在定形,P6 是平移不是重写** | `stages.py` 写成能力无关;P6 slice 1 用 `git mv` 字节相同平移,守卫测试用**跨路径对象 identity**证明不是重实现 |
+
+**尚未拍板(P6 剩余 / P7):** 从几个样本抽剩余底盘。§7 风险表的论据仍然成立;已在看板挂 question-block。
 
 ---
 
@@ -295,4 +317,5 @@ artifacts 扩 `binary` format + 文件引用 + 面板 `<video>/<audio>` 分支�
 - `docs/MOTION_VIDEO_DESIGN.md`:**保留不动**,它是渲染机械层的权威记录(P0–P3)。
   本稿是它的**上位抽象 + 前半段补全**,不推翻其任何结论。
 - `docs/PAPER_PODCAST_DESIGN.md`:播客链是第二个「配方」样本;P6 迁移时对齐。
-- `docs/ARCHITECTURE.md` / `CLAUDE.md`:P6 落地时新增 `lib/production/` 目录条目。
+- `docs/ARCHITECTURE.md` / `CLAUDE.md`:P6 slice 1 落地时已在 `CLAUDE.md` 目录树新增
+  `motion_video/` 与 `production/` 条目(含「哪些还没搬」的诚实边界)。

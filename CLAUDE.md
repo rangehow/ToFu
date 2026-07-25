@@ -212,6 +212,40 @@ lib/                   — Core business logic
   billing/             — Wallet / ledger / pricing / per-user cost accounting (payments/ sub-pkg)
   paper/               — Reading-Mode engine extracted from routes/paper.py:
                          report_engine, translate_engine, prompts, images, arxiv, tools
+  motion_video/        — Motion-graphics video pipeline (docs/MOTION_VIDEO_DESIGN.md
+                         renders; docs/PRODUCTION_PIPELINE_DESIGN.md P4/P5 front half):
+    _recipe.py         — topic → scenes.json recipe: research → script → timeline
+                         (fact cards must carry a real source URL; the SRT is timed
+                         from REAL TTS audio, never a chars/second estimate)
+    _scene_author.py   — per-scene composition author (P5): a bounded run_agent_loop
+                         with a NARROW toolset (write_composition / composition_check /
+                         web_search / fetch_url — no render reachable). Every failure
+                         degrades that ONE scene to _template.py, so a bad scene can
+                         never fail the film. Caps: max_rounds + per-scene token budget.
+                         Default OFF (TOFU_MOTION_SCENE_AUTHOR / per-job scene_author).
+    _template.py       — zero-LLM composition floor (always-valid fallback)
+    _storyboard.py, _srt.py, _gates.py, _render.py, _concat.py, _audio.py, _env.py
+    engine.py          — headless worker: recipe → storyboard → narrate → compose →
+                         render (bounded pool) → concat → sidecar → mux. Crash-resume
+                         via job.json + the stage checkpoint; already-rendered scenes
+                         and already-authored compositions are never redone.
+    runtime.py         — TaskRuntime + dedup index for motion jobs
+  production/          — Production Substrate (docs/PRODUCTION_PIPELINE_DESIGN.md).
+                         The horizontal layer under every "one sentence → finished
+                         product" capability; each capability keeps its own thin recipe.
+    stages.py          — stage-graph contract: Stage(name, run, gate, retry, resumable)
+                         + a checkpointed runner. A stage's artifact is committed to the
+                         state file as soon as its gate passes, so a killed process
+                         resumes at the first UNFINISHED stage — crash-resume is a
+                         CORRECTNESS contract here, not a cost optimization.
+                         P6 slice 1 relocated this VERBATIM from
+                         lib/motion_video/_stages.py (which remains a re-export shim).
+                         Deliberately capability-agnostic — a guard test AST-asserts it
+                         imports no motion_video/tts/llm/paper/audio module.
+                         NOT here yet: ProductionRuntime / deliverable / progress
+                         double-projection / _registries() discovery / artifacts binary
+                         (owner-gated: abstracting them from two samples risks the
+                         wrong shape — see the design note's risk table).
   # NOTE: the trading subsystem was EXTRACTED to a standalone `tofu-trading`
   # package (2026-06) and is no longer in-tree. It mounts via the
   # `tofu.blueprints` / `tofu.startup` entry-point groups (see routes/plugin_registry.py).

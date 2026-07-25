@@ -423,6 +423,17 @@ _BUNDLE_FILES = [
     # state); load BEFORE core/conversations.js so downstream reads
     # inside its heavier functions still resolve the bare names.
     'core/conv_reducers.js',
+    # Pending-sync retry cluster extracted 2026-07-25 from
+    # core/conversations.js (pt_3879f00e sub-part 2, slice 2):
+    # markConvPendingSync / _clearPendingSyncMarkers / convHasPendingSync
+    # / _startPendingSyncPolling / _flushPendingSyncs plus the two
+    # state variables (_pendingSyncInterval, _PENDING_SYNC_POLL_MS).
+    # Reads ConvCache / Api.health / activeStreams / conversations /
+    # loadConversationMessages / syncConversationToServer at CALL time
+    # via bundle-level window scope. Load BEFORE core/conversations.js
+    # so its still-in-file writer (_clearPendingSyncMarkers call inside
+    # syncConversationToServer's success branch) resolves.
+    'core/pending_sync.js',
     'core/conversations.js',
     # Shared SSE fetch-response read/decode/buffer loop (readSSEStream) —
     # extracted 2026-07-11 from branch.js / paper-reader.js / ui/sse_pipeline.js.

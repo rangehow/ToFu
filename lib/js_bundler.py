@@ -434,6 +434,18 @@ _BUNDLE_FILES = [
     # so its still-in-file writer (_clearPendingSyncMarkers call inside
     # syncConversationToServer's success branch) resolves.
     'core/pending_sync.js',
+    # Persist / freshness / rebase helpers extracted 2026-07-25 from
+    # core/conversations.js (pt_3879f00e sub-part 2, slice 3):
+    # _stripUsageTransient / _trimMsgForPersist /
+    # _serverHasSegmentsLocalLacks / _serverHasTranslationLocalLacks /
+    # _isErrorOnlyAssistant / _rebaseUnackedTail + the
+    # _USAGE_TRANSIENT_KEYS module-level constant. Pure helpers — every
+    # dependency is read at CALL time via bundle-level window scope.
+    # Load BEFORE core/conversations.js so syncConversationToServer
+    # (which calls _trimMsgForPersist and _rebaseUnackedTail) and
+    # loadConversationMessages (which calls both freshness signals)
+    # still resolve the bare names at runtime.
+    'core/conv_persist_helpers.js',
     'core/conversations.js',
     # Shared SSE fetch-response read/decode/buffer loop (readSSEStream) —
     # extracted 2026-07-11 from branch.js / paper-reader.js / ui/sse_pipeline.js.

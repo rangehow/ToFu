@@ -29,6 +29,14 @@
 - **Object.assign / 解构 / spread 显式处置(不留白):** 守卫 docstring 里**具名豁免** —— 点号外的写/读形态别名扫描看不到;理由:点号赋值是本库唯一实践(grep 证),且 reader-surface 守卫钉死了任何能碰 session 的文件,这些形态的作者必须先出现在 allowlist 才会被本守卫扫到。
 - **git 纪律:** 单文件 numstat 全量不截断;暂存 stray 为空;sibling WIP 零损留在 worktree。
 
+### 2026-07-25(续3) — Plan-B 收尾:freshness 令牌跨重启持久化,重启后 fail-open 窗口关闭(brain 自动派发我自开的潜伏票 `pt_1bbd3cc82eb44ddc`,commit `066687a7`,4 文件 +304/-3;新套件 8/8 含 NEUTER,九套件相邻 107/107,collect **8625** 0 err)。
+- **洞(票内自述):** 令牌纯内存,任何重启清空全部令牌,freshness 门在重启后窗口期 fail-open;auto-restart watcher 让窗口在高频提交日反复出现。read-gate 靠持久化 task['messages'] 满足集活过重启,freshness 没有对等物——现在有了。
+- **根修:** `save_snapshot()`/`load_snapshot()`——小型 LRU(上限 4096)经 `write_json_atomic` 落 `data/write_freshness_tokens.json`;`data_root()` 尊重 TOFU_DATA_DIR,e2e 双实例快照天然隔离。**回放语义(刻意):** 回放只保「存在性」(此会话确实读过/写过此文件),不保跨关停的新鲜度——回放后首次 is_stale 重新取指纹比对,停机期间被改的文件仍判陈旧(拒绝→重读,安全方向;代价=每次重启后每文件每会话多一次读)。conv 命名空间保留,恰是跨重启继续的会话所需的语义。
+- **接线(两条存缝,因为 atexit 在 execv 时不跑):** `_perform_server_reexec` 在 execv 前显式存(手动重启+auto-restart watcher 同一漏斗);atexit 钩子兜 SIGTERM/SIGINT/SIGHUP 排水路径。boot 在 **deferred boot dispatch 之前**回放(它会派生写任务)。全缝 best-effort,存/取失败永不阻塞重启。gate 禁用则持久化同步禁用。
+- **测试:** 8 面——roundtrip+命名空间;**票的钱测试**(重启+回放仍捉住 1 秒粒度 FUSE 上同 tick 等长的停机期编辑:回放的 blake2b 看见 mtime 看不见的);缺失/损坏/错版本/畸形快照→noop fail-open;**NEUTER 因果**(剥 load_snapshot→重启后陈旧写静默通过=本票关闭的窗口;回放→拒绝);禁用跳过;超限快照保留最新 4096;存失败不抛;`_perform_server_reexec` 存先于 execv 的接线钉。
+- **过程中的坑(如实):** 首跑撞上周期性 shared-HEAD sibling 半写窗口(podcast sibling 在途写未跟踪的 `lib/paper/podcast_runtime.py`→restart_smoke 20 个 ImportError+collect 5 err;git 证实 `??` 未跟踪+`routes/paper.py` 未提交 M),按惯例轮询不碰其文件,30s 自愈后全门禁绿。注:这正是件1原子写要根除的事故类——但 sibling 的服务端在重启前仍走旧非原子 handler。
+- **生效边界(诚实):** 随 owner 安排的重启生效;**首次**启用前的历史令牌无快照可回(自然,窗口只在持久化上线后的第一次重启才开始被关闭)。
+
 ### 2026-07-25(续2) — Plan-B 收口2:阈值漏网(styles.css 1MB)根修 + 漂移守卫 + 潜伏票(epic `pt_c51ed52926764156`,commit `f4a40fd0`,3 文件 +100/-10;新套件 17/17 含漂移守卫,相邻 157/157,collect **8617** 0 err)。
 - **洞(owner 实测,比前两个都实在):** `static/styles.css` = **1,026,466 B**,全项目被 agent 争用最狠的文件(CSS 抽取批/死样式清扫),却压过 256KiB 阈值落在 `('m', mtime_ns, size)` 盲快路径上——.py/.js 覆盖没问题(最大 conversations.js 140KB、index.html 194KB),唯独最激烈的那个没在保护内。
 - **根修:** `_CONTENT_HASH_MAX_BYTES` 256 KiB→**4 MiB**。阈值的真正用途是排除多 MB 数据/二进制负载(模型/数据集/归档),不是排除源码文本;blake2b 对 4MiB 仅个位数毫秒。docstring 以 styles.css 实测为定尺寸依据。

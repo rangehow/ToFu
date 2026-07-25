@@ -1,6 +1,13 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
 ### 2026-07-25(续46) — pt_0c1621a561f045e1 收口:test_endpoint_messages 七红根修(两发同族测试漂移,commit `6c70957d`,1 文件 +33/-4;套件 **28/28**,endpoint 相邻环 34/34,collect **9101** 0 err)
+### 2026-07-26(续3) — 产出底盘文档同步:CLAUDE.md 目录树 + 设计稿状态与实况对齐(commit `071330bf`,3 文件 +91/-9;守卫 7→9 含 NEUTER,四套件 **90/90**,collect **9126** 0 err)
+- **为什么做这个:** CLAUDE.md 自己的规矩写着「新增子包时必须重扫目录树」,而 P4/P5/P6 一共新增了 `lib/motion_video/` 与 `lib/production/` **两个包,一个都没进图**。设计稿更离谱 —— 仍写着「设计稿,待 owner 拍板」,而三期已经在 HEAD 里了。**零生产代码改动**,纯把地图和实况对齐。
+- **CLAUDE.md:** 补两个包条目。刻意不写平淡一句话,而是**记住承重不变式**:配方的 SRT 用**真实 TTS 时长**排(不是字/秒估算)、scene author **窄工具集拿不到渲染**且任何失败降级模板(一镜不毁全片)、阶段 checkpoint 是**正确性契约**;`production/` 条目**明写哪些还没搬**。
+- **设计稿:** 头部换成「已落地 vs 待拍板」表(每期挂 commit);§6「待拍板」改成**拍板记录** —— 5 项裁定 + owner 追加的 3 条硬约束,每条挂上**实现它的文件**;仍开着的 P6 剩余/P7 问题保留可见,免得文档过度声称。
+- **两条新漂移守卫:** ①CLAUDE.md 目录树必须点名两个包;②设计稿必须读起来是「已落地」且仍带着未决项。**NEUTER:** 抹掉 CLAUDE.md 条目 → 地图守卫翻红,恢复复绿。
+- **一处自己踩的坑(如实):** `insert_content` 的锚点落在 `def` 行之后,把函数签名和函数体劈开,`IndentationError` 收集直接爆。修法是把重复签名去掉;**教训:锚点选在函数体末尾或空行,别选 `def` 行**。
+
 ### 2026-07-26(续2) — 产出底盘 P6 第 1 刀:阶段图契约平移进 `lib/production/`(commit `8578dcb5`,6 文件 +404/-196;新守卫 7/7 含 NEUTER,四套件 **88/88**,collect **9124** 0 err)
 - **只做无判断的那一半(刻意):** P4 提交里我写死过一句承诺 —— 「P6 是**平移**不是重写」。这一刀就兑现这半:`git mv lib/motion_video/_stages.py → lib/production/stages.py`,**`diff` 对 `git show HEAD:` 原文件字节相同**,零改写。
 - **交付:** ①`lib/production/stages.py`(纯平移);②`lib/production/__init__.py` 门面,docstring **明说哪些还没搬**(ProductionRuntime / deliverable / 进度双投影 / `_registries()` 发现制 / artifacts binary)——免得后来人以为已经有了;③`lib/motion_video/_stages.py` 变再导出 shim(与 `lib/task_runtime.py` 同款),历史导入路径**逐字节照旧可用**;④**活调用方 `_recipe.py` 改指真家**,shim 只留兼容、不当承重指向。

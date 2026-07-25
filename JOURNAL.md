@@ -1,6 +1,13 @@
 # Project Journal
 
 
+### 2026-07-25(续25) — 「应该立即生成」收口:真人消息抢占在飞 VU 调用 + finalize 窗口 LATE-done 闩(owner 拍板授权的 VU-决策变更,commit `83c7f1ed`,6 文件;新套件 7 测 + 闩 3 测全绿含 failing-first + NEUTER,相邻 14 套件 171 过 2 红 stash 实证预存在,collect **8885** 0 err)。
+- **owner 复核续24 后点名:** 让位检查 `_has_pending_real_message` 只在 `run_virtual_user` **完整跑完后**才执行(autopilot.py:775)——事故里 94s+74s 两轮全跑完才让位;「可见且最终必达」≠「立即」。owner(CAS/VU autopilot Lead)明示拍板,不再挂 pt_00459503 等拍。
+- **三件套:** ①抢占(message_queue.py):KIND_REAL 入队即中止该 conv 的在飞 VU 子任务(`aborted`+`_abort_reason='real_message_preempts_vu'`+audit;**peer/workflow 刻意不抢**——它们的等待不可见,杀掉付费 VU 调用是浪费);②路由(autopilot.py):被抢占子任务在 run_virtual_user 直接返回 None(半成品绝不进 verdict/segments 管线造「尸体回合」),maybe_run_autopilot 既有 None 分支补发 AUTOPILOT_VU_CANCEL + 完成钩子派发;另加创建后预检,关掉「资格检查→create_task」之间的创建竞态;③finalize 窗口闩(_finalize.py + chat_dispatch.py):`_finalize_started_at` 在状态翻终态**前**盖章、append_event(done) 后清除,LATE-done 分支在闩新鲜期按住不合成(30s 上限防崩溃卡死)——关掉「翻终态→索引推进」窗口内合成无章 LATE done 的残留竞态。
+- **诚实延迟上界(已写入 commit):** abort 缝隙在 SSE 循环是**逐 chunk**(lib/llm/stream.py:163-166)+ 编排器逐 round——流中抢次子秒内解开;最坏情况=抢占恰好落在挂起的首 token 等待上,仍要等那次 TTFT(实测 ~15-25s)。消息到达→排队回合开跑:典型 ~1-3s,此前最坏=整个 VU 调用(实测 168s)。
+- **过程坑(共享树纠缠第七弹,如实):** message_queue.py 的未提交改动在 stash A/B 复核环期间被 sibling  revert——测试从 19/19 绿翻成 1 红是报警信号,freshness 闸在重放时再次确认盘上已变;重读→重放→**立即提交**收窗。教训记牢:A/B 复核要 stash 时,未提交改动先提交或缩短 stash 窗口。
+- **生效边界:** 纯后端,随提交生效但**需重启服务器**;前端无改动(续24 的前端三件套已在 aaa465d5)。
+
 ### 2026-07-25(续23) — Motion video P3 前端片落地,全特性收口(commit `f6f4d4bf` 9 文件 +949/-1 + 文档 `见下`;前端套件 7/7(JSDOM 状态机 17 探针+NEUTER),motion+frontend 合计 **93/93**,bundle parity 15/15,collect **8868** 0 err)。
 - **交付(P3 最后一块):** 论文阅读器第五个页签「视频」(`static/js/paper/video.js`,播客 tab 同款状态机 idle/generating/done/report_required/lookup_failed,lookup 失败诚实态不撒谎「去生成报告」);生成卡(语言/画质/音色/配音/烧录五控件)+ 相位进度行(phase 中文化);done 态原生播放器+MP4/SRT 下载+**逐镜网格**(每镜自己的 mp4 缩略预览,点击播停;单镜重渲按钮 → regen 轮询 → 网格自动刷新,成品 URL 稳定);`Api.motion` 域 8 方法(status/poll/abort/scenes/regenScene/fileUrl/sceneFileUrl/start)+ `Api.paper.videoStart/videoLookup`;后端补 `GET /api/v1/paper/video/lookup`(重开页 re-attach,扫描 motion 任务表按 paper_hash 取最新)。
 - **接线面(五处全钉静态守卫):** index.html 按钮+面板+script 标签、`_BUNDLE_FILES`(podcast.js 后)、`_switchPaperTab` 分支、i18n 28 键双语、CSS 15 规则(复用 paper-podcast 卡面语言,新增 .paper-video-* 网格/缩略图/重渲按钮)。

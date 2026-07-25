@@ -76,6 +76,7 @@ from lib.model_info import (  # noqa: F401
 
 # Re-export sanitization from lib.llm_sanitize
 from lib.llm_sanitize import (  # noqa: F401
+    _drop_empty_assistant_messages,
     _fix_empty_user_messages,
     _fix_orphaned_tool_calls,
     _fix_tool_call_adjacency,
@@ -132,6 +133,7 @@ __all__ = [
     'kimi_k3_reasoning_effort',
     '_clamp_max_tokens',
     # sanitization (re-exported)
+    '_drop_empty_assistant_messages',
     '_fix_empty_user_messages',
     '_fix_orphaned_tool_calls', '_fix_tool_call_adjacency',
     '_merge_consecutive_same_role', '_sanitize_gateway_content',

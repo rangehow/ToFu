@@ -8,6 +8,7 @@ context-window clamp (``_clamp``).
 
 import lib as _lib
 from lib.llm_sanitize import (
+    _drop_empty_assistant_messages,
     _fix_empty_user_messages,
     _fix_orphaned_tool_calls,
     _merge_consecutive_same_role,
@@ -103,6 +104,7 @@ def build_body(model, messages, *, max_tokens=128000, temperature=1.0,
         _sanitize_messages(clean_messages)
 
     clean_messages = _fix_orphaned_tool_calls(clean_messages)
+    clean_messages = _drop_empty_assistant_messages(clean_messages)
     clean_messages = _merge_consecutive_same_role(clean_messages)
 
     _validate_image_blocks(clean_messages)

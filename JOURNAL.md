@@ -1,3 +1,13 @@
+### 2026-07-25(续33) — 「apply_diff 爱出错、是不是哈希机制有问题」根修:ReadGate 证据统一——历史参数别名归一 + 新鲜度令牌双通道(commit `daff62a0`,3 文件 +106/-2;新套件 14 测 failing-first 实证 11 红→14 绿,相邻环 134/134,collect **9014** 0 err;board epic `pt_f6b9e2c5f8944aae` 已闭环)
+- **owner 诉求:** apply_diff 工具感觉爱出错,怀疑哈希机制;优先修。
+- **量化(今日 app.log):** apply_diff 家族 471 次派发,ReadGate 拒绝 **77 + insert 23 + 批量全拒 20 ≈ 25%**;ToolRepair 对 apply_diff 家族做了 24 次 param_alias 修复、read_files 26 次。
+- **法医实锤(活库 conv `mrymx02ceap8l5`):** 同一文件 12 分钟被拒 **8 次**,其间 read_files 成功多次;一次 write_file 成功**之后** apply_diff 仍被拒——模型被逼放弃补丁改全量重写。另:该会话 DB 消息已被压实到 19 条、**零 tool_calls**,task_results.tool_rounds 也已清空。
+- **双根因:** ①**历史参数按原文存** —— messages 里 tool_call arguments 是模型原样发射(file_path/paths/MultiEdit 形),repair 层只修执行副本;ReadGate 收集器只认规范键 ⇒ 别名读过的文件对闸门隐形。②**闸门证据全是易失品** —— 只扫 messages+toolRounds,压缩中途重写/跨任务清空 ⇒ 「读过」被忘记。而 write_freshness 令牌库按 (conv,path) 键、只在成功读写后落、跨压缩跨重启存活,**却没人问它**。
+- **修法(两闸门共享同一证据库):** 收集器在取路径前先跑 repair 包自家 `_apply_structural_transform` + `_apply_param_aliases`(合成 `_GATE_ARG_KEYS` 当 expected);新增 `_freshness_token_covers` —— **非陈旧**令牌(存在 + `is_stale` False)同样算「已读」,严格强于消息扫描(读过且字节未变);**陈旧令牌绝不放行**(fail-closed,FreshGate 仍握「changed on disk」精确拒绝)。`write_freshness.has_token()` 新API(is_stale 区分不了「无令牌」与「令牌新鲜」)。`_conv_key` 在 _read_gate 内联重复是有意(反向 import 会成环)。
+- **守卫:** 14 测(别名读/写/插入/MultiEdit 满足;压缩后令牌满足;陈旧拒(钉)/他会话拒(钉)/无证据仍拒(钉);子任务 task-id 命名空间;批量只跳未覆盖;has_token 生命周期;NEUTER×2:阉掉归一化→别名证据红、强制全陈旧→令牌证据红)。**failing-first:** 预修复码 11 红,3 枚回归钉双侧绿。相邻环(read-gate+freshness+refusal-meta+repair+write-tools)134/134。预存在红 `test_async_handler_integrity[paper.py]` stash A/B 实证无关,未代修。
+- **生效边界:** 纯后端,**需重启服务器**;旧拒绝循环当场消失,无需前端配合。
+- **遗留(未动):** apply_diff 匹配算法本体(精确→CRLF→行尾空白→unicode 转义四层)日志未见主导失败,不动;`Refused all` 批量形态已有部分放行;param_alias 频发本身(模型 Claude-Code 习惯)由 repair 层消化,非 bug。
+
 ### 2026-07-25(续32) — 论文阅读器「两个播客页签」根修 + 播客/视频进度感知与防卡死设计稿落地(3 commit:守卫 `74718bce` / 死代码 `a88b24ed` / 设计稿 `bf6efc37`;board epic `pt_7e4cc2c898984bde`,3 项待拍板)
 - **owner 双诉求:** ①截图里阅读器页签栏出现**两个「播客」**;②「仔细设计播客和视频的生成方式以及前端呈现,尤其要让用户感知到在做什么、不要一直卡住」。
 - **双页签根因(锚点复制类第六/七弹):** index.html 里 podcast 页签按钮、面板(含重复 id `paperPodcastContent`)、`<script>` 标签**各被贴了两份**(视频页签接线时的 insert 锚点复制),f6f4d4bf 起就在 HEAD。去重后被 sibling `d8f1a6c4` 扫入 HEAD(反向泄漏,我的修复被它的 commit 顺走);守卫 `tests/test_paper_tabs_unique.py`(5 测:按钮/面板/按钮⇄面板一致/script 唯一/区域 id 唯一)单独提交——**failing-first 实证 4/5 红→5/5 绿**,相邻环(podcast 前端+video 前端+bundle parity)35/35。同类死代码顺手清:`engine.py` 尾部死重复 except(第二个永不达),motion 78/78。**生效边界:页签去重纯前端,需重启+硬刷。**

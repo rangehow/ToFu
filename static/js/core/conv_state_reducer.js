@@ -222,6 +222,80 @@ function pickAuthoritativeTaskIdForReconnect(conv) {
   return null;
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   P5 — sync-drift probe (owner constraint #4)
+
+   The two SSOT halves above (busy Set + rev) converge ONLY if every notify
+   frame lands. A dropped frame is invisible locally — the dot looks right
+   but ``_serverRev`` never catches up. The probe closes that hole by
+   REPORTING a compact digest every 60s; the server compares it against the
+   registry + ``conversations.rev`` and WARN-logs any divergence.
+
+   Digest per conv covers BOTH (constraint #4):
+     taskIds — sorted array from ``_authoritativeActiveTaskIds``
+     rev     — ``_serverRev`` (the last rev this tab converged to)
+   A conv with neither authoritative marker contributes nothing.
+   ══════════════════════════════════════════════════════════════════════════ */
+function buildSyncDigest(conversations) {
+  const out = [];
+  try {
+    if (!Array.isArray(conversations)) return out;
+    for (const conv of conversations) {
+      if (!conv || !conv.id) continue;
+      const hasAuth = Array.isArray(conv._authoritativeActiveTaskIdsRev);
+      const rev = (typeof conv._serverRev === 'number') ? conv._serverRev : null;
+      if (!hasAuth && rev === null) continue;
+      const set = conv._authoritativeActiveTaskIds;
+      const taskIds = (set && set.size) ? Array.from(set).sort() : [];
+      out.push({ convId: conv.id, taskIds: taskIds, rev: rev });
+    }
+  } catch (e) {
+    if (typeof debugLog === 'function') {
+      debugLog(`[conv-state-reducer] buildSyncDigest failed: ${e && e.message}`, 'warn');
+    }
+  }
+  return out;
+}
+
+/* POST the digest. Returns the parsed {ok, checked, divergences} or null.
+ * A non-empty divergences list is logged client-side too so a developer
+ * watching the browser console sees the same drift the server WARNs about. */
+async function reportSyncDigest(conversations) {
+  const digests = buildSyncDigest(conversations);
+  if (!digests.length) return null;
+  try {
+    if (typeof Api === 'undefined' || !Api.conversations ||
+        typeof Api.conversations.reportSyncDigest !== 'function') return null;
+    const resp = await Api.conversations.reportSyncDigest(digests);
+    const divs = resp && resp.divergences;
+    if (Array.isArray(divs) && divs.length && typeof console !== 'undefined') {
+      console.warn('[conv-state] sync drift: server reports %d divergence(s): %o',
+                   divs.length, divs);
+    }
+    return resp;
+  } catch (e) {
+    if (typeof debugLog === 'function') {
+      debugLog(`[conv-state-reducer] digest report failed: ${e && e.message}`, 'warn');
+    }
+    return null;
+  }
+}
+
+/* Start the 60s probe. Idempotent; resolves the conversations array lazily
+ * each tick (a caller may pass a getter, or the ambient global is used). */
+let _syncDriftProbeTimer = null;
+function startSyncDriftProbe(conversationsRef, intervalMs) {
+  if (_syncDriftProbeTimer || typeof setInterval !== 'function') return;
+  const iv = (typeof intervalMs === 'number' && intervalMs > 0) ? intervalMs : 60000;
+  _syncDriftProbeTimer = setInterval(() => {
+    try {
+      const convs = (typeof conversationsRef === 'function') ? conversationsRef()
+        : (typeof conversations !== 'undefined' ? conversations : null);
+      reportSyncDigest(convs);
+    } catch (e) { /* probe must never throw into the timer queue */ }
+  }, iv);
+}
+
 /* ── Publish under both bare + window scopes so the JSDOM harness's
  *   eval() and the browser's script tag both see them. */
 if (typeof window !== 'undefined') {
@@ -229,4 +303,7 @@ if (typeof window !== 'undefined') {
   window.applyConvStateSnapshot = applyConvStateSnapshot;
   window.computeConvBusy = computeConvBusy;
   window.pickAuthoritativeTaskIdForReconnect = pickAuthoritativeTaskIdForReconnect;
+  window.buildSyncDigest = buildSyncDigest;
+  window.reportSyncDigest = reportSyncDigest;
+  window.startSyncDriftProbe = startSyncDriftProbe;
 }

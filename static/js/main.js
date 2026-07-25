@@ -1219,6 +1219,12 @@ function _installViewportHeightGuard() {
    *   fix. Same late-wire reason as above (pushSubscribe defined by push.js). */
   if (typeof _wireConvHistoryRewritePush === 'function') _wireConvHistoryRewritePush();
 
+  /* ★ pt_conv_state_ssot P5: 60s sync-drift probe — reports the per-conv
+   *   digest (authoritative busy set + last-converged rev) so the server can
+   *   WARN on divergence (covers a dropped notify frame, which is otherwise
+   *   invisible locally). Idempotent; inert when the reducer isn't bundled. */
+  if (typeof startSyncDriftProbe === 'function') startSyncDriftProbe();
+
   /* ★ Windowed-read scroll-up loader: when a long conversation is opened with
    *   only its tail window, scrolling to the top fetches + prepends earlier
    *   messages. Inert unless the server served a windowed response. */

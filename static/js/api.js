@@ -335,6 +335,22 @@
     pollLog:         (taskId, limit) => get(`/api/v1/scheduler/tasks/${encodeURIComponent(taskId)}/poll-log`, { query: { limit: limit || 20 } }),
   };
 
+  // tasks (Request Inspector) ----------------------------------------
+  // Server-authoritative per-task request fold (docs/DEBUG_PANEL_REDESIGN.md
+  // P2). byConv: task rows for a conversation; getRequests: metadata-only
+  // request rows + attempts; getRequestPayload: full payload for one round.
+  const tasks = {
+    byConv: (convId) =>
+      get(`/api/v1/tasks/by-conv/${encodeURIComponent(convId)}`,
+          { onError: 'null' }),
+    getRequests: (taskId) =>
+      get(`/api/v1/tasks/${encodeURIComponent(taskId)}/requests`,
+          { onError: 'null' }),
+    getRequestPayload: (taskId, roundNum) =>
+      get(`/api/v1/tasks/${encodeURIComponent(taskId)}/requests/${encodeURIComponent(roundNum)}`,
+          { onError: 'null' }),
+  };
+
   // optimizer -------------------------------------------------------
   const optimizer = {
     proposals: (limit)        => get('/api/v1/optimizer/proposals', { query: { limit: limit || 60 } }),
@@ -405,6 +421,11 @@
     setTitle: (convId, title) =>
       patch(`/api/v1/conversations/${encodeURIComponent(convId)}/title`,
             { title }, { onError: 'null' }),
+    // pt_conv_state_ssot P5: report the client's per-conv state digest
+    // (authoritative busy set + last-converged rev) for the server-side
+    // drift comparison. Returns parsed {ok, checked, divergences} or null.
+    reportSyncDigest: (digests) =>
+      post('/api/v1/conversations/sync-digest', { digests }, { onError: 'null' }),
     // LLM-generated title. Returns parsed {ok, title} or null on failure.
     // `lang` ('zh'|'en') forces the title language to match the UI; defaults
     // to the current interface language.
@@ -1361,7 +1382,7 @@
     conversations, text, translate, chat, images, pdf, doc, audio, artifacts,
     health, pricing, clientError, serverConfig, browser, project, daily, paper,
     features, providers, dispatch, oauth, mcp, update, trading, authSources,
-    swarm, endpoint, logs, motion,
+    swarm, endpoint, logs, motion, tasks,
   };
 
   global.Api = Api;

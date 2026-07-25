@@ -427,4 +427,119 @@ async def apply_toolset(conv_id):
     return api_ok(conv_id=conv_id)
 
 
+# ── pt_conv_state_ssot P5: sync-drift probe ────────────────────────────
+#
+# The client reports a compact digest of what IT believes (per conv: the
+# authoritative busy set + the rev it last converged to); the server compares
+# it against the two server-side SSOTs — the in-memory task registry and the
+# conversations.rev column — and WARN-logs + returns every divergence.
+# Owner constraint #4: the digest covers BOTH activeTaskIds AND conv rev; the
+# rev half closes the "notify frame dropped, _serverRev never converges" hole.
+# Probe only: this endpoint NEVER mutates either side's state.
+
+_SYNC_DIGEST_MAX = 500
+
+
+@api_v1_conversations_bp.route('/api/v1/conversations/sync-digest',
+                                methods=['POST'])
+@require_scope('conversations')
+@api_meta(
+    summary='Compare client conv-state digests against the server SSOTs',
+    description=(
+        'pt_conv_state_ssot P5 (drift probe). Body: ``{digests: [{convId, '
+        'taskIds: [...], rev: <number|null>}]}``. For each entry the server '
+        'compares the client busy set against the task-registry snapshot and '
+        'the client rev against ``conversations.rev``; divergences are '
+        'WARN-logged and returned. Read-only probe — no state is mutated.'),
+    tags=['conversations'], scope='conversations',
+    request_body={'required': True, 'content': {'application/json': {
+        'schema': {
+            'type': 'object',
+            'required': ['digests'],
+            'properties': {
+                'digests': {
+                    'type': 'array',
+                    'items': {
+                        'type': 'object',
+                        'properties': {
+                            'convId': {'type': 'string'},
+                            'taskIds': {'type': 'array',
+                                        'items': {'type': 'string'}},
+                            'rev': {'type': ['number', 'null']},
+                        },
+                    },
+                },
+            },
+        },
+    }}},
+)
+async def sync_digest():
+    body = await async_parse_body()
+    digests = body.get('digests')
+    if not isinstance(digests, list):
+        return api_bad_request('digests must be a list', field='digests')
+    if len(digests) > _SYNC_DIGEST_MAX:
+        return api_bad_request(
+            f'too many digests (max {_SYNC_DIGEST_MAX})', field='digests')
+
+    # Registry snapshot — the ONLY physical SSOT for "who is running".
+    # Scope by the caller's tenant when auth carries a real user_id;
+    # single-user default stays unscoped (byte-identical to P1's notify).
+    try:
+        from lib.tasks_pkg.manager._registry import snapshot_running_by_conv
+        _auth = current_auth()
+        _uid = getattr(_auth, 'user_id', None) if _auth else None
+        _scope = '' if _uid in (None, '', 1, '1') else str(_uid)
+        snap = snapshot_running_by_conv(user_id=_scope)
+    except Exception as e:
+        logger.warning('[SyncDrift] registry snapshot failed: %s', e)
+        snap = {}
+
+    from lib.database import DOMAIN_CHAT, async_fetchone
+    from routes.common import DEFAULT_USER_ID
+
+    divergences = []
+    checked = 0
+    for d in digests:
+        if not isinstance(d, dict):
+            continue
+        conv_id = str(d.get('convId') or '')[:64]
+        if not conv_id:
+            continue
+        checked += 1
+
+        client_tids = d.get('taskIds')
+        client_tids = sorted({str(t) for t in client_tids
+                              if t}) if isinstance(client_tids, list) else []
+        server_tids = sorted(snap.get(conv_id, []))
+        if client_tids != server_tids:
+            divergences.append({'convId': conv_id, 'kind': 'task_ids',
+                                'client': client_tids, 'server': server_tids})
+            logger.warning('[SyncDrift] conv=%s kind=task_ids client=%s server=%s',
+                           conv_id[:8], client_tids, server_tids)
+
+        client_rev = d.get('rev')
+        if isinstance(client_rev, (int, float)) and not isinstance(client_rev, bool):
+            row = await async_fetchone(
+                'SELECT rev FROM conversations WHERE id=? AND user_id=?',
+                (conv_id, DEFAULT_USER_ID), domain=DOMAIN_CHAT)
+            if row is None:
+                divergences.append({'convId': conv_id, 'kind': 'unknown_conv',
+                                    'client': client_rev, 'server': None})
+                logger.warning('[SyncDrift] conv=%s kind=unknown_conv client_rev=%s',
+                               conv_id[:8], client_rev)
+                continue
+            try:
+                server_rev = row['rev']
+            except (KeyError, TypeError, IndexError):
+                server_rev = row[0]
+            if server_rev != client_rev:
+                divergences.append({'convId': conv_id, 'kind': 'rev',
+                                    'client': client_rev, 'server': server_rev})
+                logger.warning('[SyncDrift] conv=%s kind=rev client=%s server=%s',
+                               conv_id[:8], client_rev, server_rev)
+
+    return api_ok(checked=checked, divergences=divergences)
+
+
 __all__ = ['api_v1_conversations_bp']

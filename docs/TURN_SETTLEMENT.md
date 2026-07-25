@@ -108,21 +108,28 @@ _settlement = {
 The *missing / unknown* row deliberately keeps the recovery path open — it
 mirrors today's "a legacy turn with no finishReason still shows Continue".
 
-### 2.2 `resume.mode` precedence
+### 2.2 `resume.mode` precedence (P5 flip, owner-approved `d4811ff1`)
 
 1. `outcome == 'completed'` → `none`
-2. `outcome == 'failed'` → `regenerate` (`reason='not_resumable_<cause>'`)
-3. empty turn (no content / thinking / real tool round) → `regenerate` (`'empty_turn'`)
-4. completed tool rounds exist (`toolCallId`s) → **`checkpoint`** (`lossless=False`)
-5. prefill-capable model + resumable outcome + terminal deliverable text →
-   **`prefill`** (`lossless=True`)
-6. else → `regenerate` (`'no_checkpoint_no_prefill'`)
+2. empty turn (no content / thinking / real tool round) → `regenerate` (`'empty_turn'`)
+3. prefill-capable model + resumable finishReason + terminal deliverable text →
+   **`prefill`** (`lossless=True`). The continue route ALREADY ships this
+   lossless case-2 wire for a capable tools turn (replay the tool batch +
+   prefill the tail), so the verdict now reports it honestly. `keptRounds` is
+   still surfaced (the route replays those rounds alongside the prefill).
+4. completed tool rounds exist (`toolCallId`s) but prefill is unavailable
+   (Claude / no resumable tail / a non-resumable finishReason like `error`) →
+   **`checkpoint`** (`lossless=False`) — replay the rounds, regenerate the tail.
+5. else → `regenerate` (`'no_checkpoint_no_prefill'`)
 
-Precedence **preserves today's behaviour** (checkpoint before prefill, per
-`lib/chat_dispatch.py:946`). The verdict is a faithful SSOT of the existing
-resume algorithm — it does not re-litigate it. *Preferring prefill over
-checkpoint for capable models (true losslessness on tool turns) is a separate,
-gated follow-up (§5 P5), not smuggled into this SSOT.*
+**prefill is now preferred over checkpoint** for a prefill-capable model with a
+resumable terminal tail. The parity validation
+(`tests/test_continue_prefill_over_checkpoint_parity.py`) proved the
+prefill+toolHistory combination byte-correct, and the route probe
+(`tests/test_continue_tools_turn_route_behavior.py`) established that the
+continue route was ALREADY shipping the lossless case-2 wire — the flip makes
+the verdict + the route response (`resumeMode='prefill'`, `priorContent=''`)
+honest about it. Checkpoint remains the honest fallback.
 
 ## 3. The three consumers stop re-inferring
 
@@ -203,8 +210,15 @@ gated follow-up (§5 P5), not smuggled into this SSOT.*
   loads `finish_info.js` without `turn_settlement.js`) — removing it would regress
   the bubble in those contexts, so it is an intentional safety net, not the
   re-inference the epic set out to kill.
-- **P5** *(separate gated epic `pt_turn_settlement_prefill_over_checkpoint`)* —
-  prefer prefill over checkpoint for capable models so tool-turn resumes are also
-  lossless. A genuine behaviour change (checkpoint currently wins, dropping the
-  trailing prose); gated on owner validation of prefill+toolHistory parity. Not
-  part of this epic's "3 inferences → 1 verdict" scope.
+- **P5** *(landed, `d4811ff1`, epic `pt_c11c3a9272274848`)* — prefer prefill
+  over checkpoint for capable models on tool turns, owner-approved via
+  question-block ("A — FLIP"). Parity validation (`c4c87dfa`) proved the
+  prefill+toolHistory combination byte-correct; the route probe
+  (`tests/test_continue_tools_turn_route_behavior.py`) then established the
+  continue route was ALREADY shipping the lossless case-2 wire (the tail is NOT
+  dropped on the wire) — the actual dishonesty was in the REPORTING (verdict
+  said checkpoint/lossy, response said `resumeMode='checkpoint'` +
+  `priorContent=<tail>`). The flip makes the verdict report prefill (lossless)
+  and the route report `resumeMode='prefill'` + `priorContent=''`, with
+  checkpoint as the honest fallback (Claude / no resumable tail / non-resumable
+  finishReason like `error`).

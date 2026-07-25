@@ -1,5 +1,12 @@
 # Project Journal
 
+### 2026-07-25 — pt_6598ae21 收口:owner 拍板「你决定,要最长期最 robust」→ **preserve-history 推送策略**落地(commit `ce2e232f`,2 文件,守卫套件 4→7 全绿含 2 个真 git e2e,相邻 export 套件 25/25)。question-block 首个被回答的 epic。
+- **决策(三选之外的第四解):** A 保持 force 默认=静默丢远端历史;C 默认 abort=每次重导出都要 `--force`、把 force 日常化(最差)。最 robust = **让默认路径既安全又可用**:分叉时 `fetch` + `merge -s ours --allow-unrelated-histories`——合并树与导出快照**逐字节相同**(镜像内容恒为最新导出),远端提交保留在 DAG,重试变快进。还白赚一个 force 天生打不赢的场景:**GitHub 受保护分支直接拒 force**,旧默认在那里根本发布不出去。
+- **tag 侧同族闭合:** 原代码 tag 推送**无条件 `--force`**(移动已发布 tag 会打断所有下游 pin)——新 `_tag_push_action` 真值表:不在远端→推/同 commit→跳过/不同 commit 无 `--force`→**保留已发布 tag + 大声 warning**;仅显式 `--force` 才移动。
+- **CLI:** `--force` 旗标=刻意重置镜像的旧行为,`main → export_project → _git_push` 全线穿通。
+- **测试:** `_tag_push_action` 纯真值表 + **2 个真 git e2e**(分叉 bare remote + 无共同祖先新导出树):默认推送后远端 R1 仍在 DAG(force-by-default 回归必红)/显式 force 后 R1 消失(记录重置语义)。
+- **边界(诚实):** export 是 owner 的发布工具、非服务代码;新默认从下次 `--push` 起生效,远端将开始累积导出历史链(每次导出=1 导出 commit + 1 preserve merge commit——审计轨迹完整,正是 robust 的代价与收益)。
+
 ### 2026-07-25(续14) — 移动端主标字号被桌面 38px 规则压死根修(续13 遗留票,commit `e0260338`,1 文件 styles.css +13;四断点运行时实测全中)。
 - **票源(owner 批示「另开一票」):** 续13 验收时确认的预存在现象——`[data-theme=tofu] .welcome h2{font-size:38px}`(特异性 0,2,1)压死全部三条全局移动 `.welcome h2` 规则(0,1,1:768px→20px / 380px→18px / landscape→18px),移动端主标恒渲染 38px。
 - **修复:** 三条 tofu 特异化媒体规则与全局断点一一对应,提至 (0,3,1) 恢复 20/18px——字号复用全局原值、不发明新数字;选择器 `[data-theme="tofu"]` 限定,其它主题构造性免影响。

@@ -293,6 +293,11 @@ def get_server_config():
         'proxy_bypass_domains': saved.get('proxy_bypass_domains', []),
         'env_proxy_bypass': os.environ.get('PROXY_BYPASS_DOMAINS', ''),
     }
+    try:
+        from lib.netpath import status_summary as _np_status
+        network_info['netpath'] = _np_status()
+    except Exception:
+        pass
 
     # Machine translation provider config
     mt_provider_cfg = getattr(_lib, 'MT_PROVIDER_CONFIG', {})

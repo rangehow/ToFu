@@ -11,6 +11,8 @@ shell: it opens the stream, feeds lines to the core, and keeps the
 retry/backoff wrapper.
 """
 
+import time
+
 import requests
 
 from lib.llm._sse_core import (
@@ -38,7 +40,7 @@ from lib.llm_errors import (
     _RETRYABLE,
 )
 from lib.log import get_logger
-from lib.proxy import proxies_for
+from lib.proxy import proxies_for, report_outcome as _proxy_report_outcome
 
 logger = get_logger(__name__)
 
@@ -127,12 +129,16 @@ def _stream_chat_once(body, *, on_thinking=None, on_content=None,
     # closed and leaked the fd once per retry against a down endpoint.
     resp = None
     try:
+        _conn_t0 = time.monotonic()
         try:
             resp = get_sync_session().post(
                 plan.url, headers=plan.hdrs, json=plan.body,
                 stream=True, timeout=(CONNECT_TIMEOUT, 300),
                 proxies=proxies_for(plan.url))
+            _proxy_report_outcome(
+                plan.url, True, (time.monotonic() - _conn_t0) * 1000.0)
         except requests.exceptions.ConnectionError as e:
+            _proxy_report_outcome(plan.url, False)
             # Connect-phase failure (ConnectTimeout / connection refused /
             # SYN dropped) = the endpoint is down. Convert to
             # EndpointUnreachableError so it escapes the same-key retry loop

@@ -1861,6 +1861,14 @@ except Exception as _e:
     _lifecycle_log.warning('Failed to load proxy config: %s', _e)
 
 
+# ── Adaptive direct-vs-proxy path prober ──
+try:
+    from lib.netpath import start_prober as _start_netpath_prober
+    _start_netpath_prober()
+except Exception as _e:
+    _lifecycle_log.warning('Failed to start netpath prober: %s', _e)
+
+
 # ── Global error handlers ──
 from lib.api_response import (
     api_internal_error,

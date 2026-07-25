@@ -34,11 +34,44 @@ from lib.log import get_logger
 logger = get_logger(__name__)
 
 __all__ = [
-    'proxies_for',
+    'proxies_for', 'report_outcome',
     'get_bypass_domains', 'set_bypass_domains',
     'get_proxy_config', 'set_proxy_config',
     'register_no_proxy_host', 'register_no_proxy_url',
 ]
+
+
+# ── Adaptive path selection (lib.netpath), lazily wired ──
+# Kept behind a lazy import so lib.proxy stays importable in minimal
+# contexts; a missing/broken netpath module degrades to env behaviour.
+_netpath_mod = None
+
+
+def _np():
+    global _netpath_mod
+    if _netpath_mod is None:
+        try:
+            from lib import netpath as _m
+            _netpath_mod = _m
+        except Exception:
+            _netpath_mod = False
+    return _netpath_mod or None
+
+
+def report_outcome(url: str, ok: bool, latency_ms=None) -> None:
+    """Forward a real request outcome to the netpath scorer.
+
+    Called by the LLM transports and lib.http_client on success/failure.
+    Never raises; a no-op when netpath is disabled or the host is not
+    managed (explicit bypass rules win over learned decisions).
+    """
+    np = _np()
+    if np is None:
+        return
+    try:
+        np.report_outcome(url, ok, latency_ms)
+    except Exception:
+        pass
 
 # ── The "real" bypass dict that makes requests skip env proxies ──
 # NOTE: ``{'http': None, 'https': None}`` does NOT reliably bypass in all
@@ -104,6 +137,10 @@ def set_proxy_config(http_proxy: str = '', https_proxy: str = ''):
     """
     global _proxy_config
     with _lock:
+        prev_effective = (
+            _proxy_config.get('http_proxy', '') or _ENV_HTTP_PROXY,
+            _proxy_config.get('https_proxy', '') or _ENV_HTTPS_PROXY,
+        )
         _proxy_config = {
             'http_proxy':  http_proxy.strip(),
             'https_proxy': https_proxy.strip(),
@@ -113,6 +150,18 @@ def set_proxy_config(http_proxy: str = '', https_proxy: str = ''):
         _apply_to_env('https_proxy', https_proxy.strip() or _ENV_HTTPS_PROXY)
         # no_proxy is auto-managed — sync it so state is consistent
         _sync_no_proxy()
+        new_effective = (
+            _proxy_config.get('http_proxy', '') or _ENV_HTTP_PROXY,
+            _proxy_config.get('https_proxy', '') or _ENV_HTTPS_PROXY,
+        )
+    # A changed proxy address invalidates every proxy-path measurement.
+    if new_effective != prev_effective:
+        np = _np()
+        if np is not None:
+            try:
+                np.reset_proxy_stats()
+            except Exception:
+                pass
 
     logger.info('[Proxy] Config updated: http=%s https=%s',
                 http_proxy.strip() or '(env)', https_proxy.strip() or '(env)')
@@ -214,6 +263,17 @@ def proxies_for(url: str) -> dict:
         return _NO_PROXY
     if _bypass_domains and host.endswith(_bypass_domains):
         return _NO_PROXY
+    # ── Learned decision (direct vs proxy) from lib.netpath ──
+    # Explicit rules above always win; below here the host is registered
+    # for probing and a measured 'direct' pin bypasses the proxy.
+    np = _np()
+    if np is not None:
+        try:
+            np.note_url(url)
+            if np.decide(host) == 'direct':
+                return _NO_PROXY
+        except Exception:
+            pass
     return {}
 
 

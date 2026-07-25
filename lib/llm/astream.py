@@ -11,6 +11,7 @@ Public API:
 """
 
 import os
+import time
 
 import httpx
 
@@ -39,7 +40,7 @@ from lib.llm_errors import (
     _RETRYABLE,
 )
 from lib.log import get_logger
-from lib.proxy import proxies_for
+from lib.proxy import proxies_for, report_outcome as _proxy_report_outcome
 
 logger = get_logger(__name__)
 
@@ -117,10 +118,13 @@ async def _async_stream_chat_once(body, *, on_thinking=None, on_content=None,
     # client is NOT closed here — only ``client.stream`` releases its
     # connection back to the pool on exit.
     client = get_async_client(proxy_url)
+    _conn_t0 = time.monotonic()
     try:
         async with client.stream(
             'POST', plan.url, headers=plan.hdrs, json=plan.body,
         ) as resp:
+            _proxy_report_outcome(
+                plan.url, True, (time.monotonic() - _conn_t0) * 1000.0)
             resp_trace = resp.headers.get('M-TraceId', '')
             if resp_trace and resp_trace != plan.trace_id:
                 logger.debug('%s resp M-TraceId=%s', log_prefix, resp_trace)
@@ -159,12 +163,14 @@ async def _async_stream_chat_once(body, *, on_thinking=None, on_content=None,
 
     except httpx.ConnectTimeout as e:
         # Connect-phase timeout = endpoint down → fail over (dispatch).
+        _proxy_report_outcome(plan.url, False)
         logger.warning('%s ✖ Endpoint unreachable (connect timeout) %s: %s',
                        log_prefix, plan.url, e)
         raise EndpointUnreachableError(
             'endpoint unreachable: %s' % e, base_url=plan.url) from e
     except httpx.ConnectError as e:
         # Connection refused / SYN dropped = endpoint down → fail over.
+        _proxy_report_outcome(plan.url, False)
         logger.warning('%s ✖ Endpoint unreachable (connect error) %s: %s',
                        log_prefix, plan.url, e)
         raise EndpointUnreachableError(

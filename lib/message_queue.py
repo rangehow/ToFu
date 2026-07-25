@@ -138,7 +138,68 @@ def enqueue_message(conv_id: str, message_data: dict, config: dict,
                 kind, queue_id[:8], conv_id[:8], position, priority,
                 len(message_data.get('text', '')))
 
+    # Owner-ratified preemption (2026-07-25): a human's REAL message must not
+    # wait out an in-flight autopilot VU call — the deferral used to fire
+    # only AFTER run_virtual_user completed (production incident: two full
+    # VU rounds, 94s + 74s, of dead time). Abort the VU sub-task NOW; it
+    # unwinds at the next abort checkpoint (the SSE loop checks per-chunk)
+    # and the completion hook dispatches THIS row seconds later, not minutes.
+    # KIND_REAL only: a peer/workflow row keeps the cheap wait-for-completion
+    # deferral — its latency is not user-visible, so killing a paid VU call
+    # for it would be waste.
+    if kind == KIND_REAL:
+        try:
+            _preempt_vu_subtask_for_real_message(conv_id)
+        except Exception as e:
+            logger.warning('[Queue] VU preempt on real enqueue failed conv=%s: %s',
+                           conv_id[:8], e)
+
     return {'queueId': queue_id, 'position': position, 'kind': kind}
+
+
+def _preempt_vu_subtask_for_real_message(conv_id: str) -> bool:
+    """Abort the conv's live autopilot VU sub-task so a just-enqueued REAL
+    message starts generating at the next abort checkpoint instead of
+    waiting out the whole VU LLM call.
+
+    Mirrors the parent→sub-task abort-mirror pattern in
+    ``lib/tasks_pkg/autopilot.run_virtual_user``: the orchestrator polls
+    ``task['aborted']`` per round and the SSE stream loop checks its
+    abort_check PER CHUNK (lib/llm/stream.py:163-166), so the VU unwinds
+    within seconds. ``run_virtual_user`` then routes the deferral
+    (AUTOPILOT_VU_CANCEL + completion-hook dispatch of the queued row).
+
+    Best-effort: any probe failure logs and returns False (the row is
+    already enqueued — the post-call deferral still applies, so the
+    worst case is the OLD wait-for-completion behaviour, never a loss).
+
+    Returns True iff a VU sub-task was preempted.
+    """
+    try:
+        from lib.tasks_pkg.manager import tasks, tasks_lock
+        with tasks_lock:
+            vus = [t for t in tasks.values()
+                   if t.get('convId') == conv_id
+                   and t.get('_vu_subtask')
+                   and t.get('status') in ('pending', 'running')
+                   and not t.get('aborted')]
+        if not vus:
+            return False
+        from lib.log import audit_log
+        for t in vus:
+            t['aborted'] = True
+            t['_abort_timestamp'] = time.time()
+            t['_abort_reason'] = 'real_message_preempts_vu'
+            audit_log('vu_preempted_by_real_message', conv_id=conv_id,
+                      vu_task_id=t.get('id', ''))
+            logger.info('[Queue] Real message preempts autopilot VU sub-task %s '
+                        'for conv=%s — the queued turn starts at the next abort '
+                        'checkpoint instead of after the full VU call',
+                        t.get('id', '?')[:8], conv_id[:8])
+        return True
+    except Exception as e:
+        logger.warning('[Queue] VU preempt probe failed conv=%s: %s', conv_id[:8], e)
+        return False
 
 
 def arm_autopilot_marker(conv_id: str, config: dict) -> dict:

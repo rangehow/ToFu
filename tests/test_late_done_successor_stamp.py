@@ -209,6 +209,70 @@ def test_helper_exposed_via_manager_facade():
 
 
 # ────────────────────────── the real done event ──────────────────────────
+# ────────────────────── the finalize-window latch ──────────────────────
+
+@_unit
+def test_late_done_held_during_finalize_window():
+    """The status flips to terminal BEFORE the real done is appended (the
+    autopilot hook + pre-emit sync run in between). A tick landing in that
+    ms-scale window must NOT synthesize a LATE done — the successor stamp
+    would be missing (the index isn't advanced yet) and the stream closes
+    prematurely. Hold while ``_finalize_started_at`` is fresh."""
+    import threading as _th
+    from lib.chat_dispatch import next_live_tick
+    task = {
+        'events': [], 'events_lock': _th.Lock(),
+        'status': 'done', 'error': None,
+        'convId': 'cv-fin', '_finalize_started_at': 1.0,
+    }
+    v = next_live_tick(
+        task=task, cursor=0, sse_gen=1,
+        stream_start=0.0, sse_max_duration=7200,
+        last_t=0.0, now=1.0, task_id_short='t-fin',
+    )
+    assert v.kind == 'sleep', (
+        f'a terminal task mid-finalize must hold the LATE done; got {v.kind}'
+    )
+
+
+@_unit
+def test_late_done_fires_after_finalize_window_expires():
+    """The latch self-expires (a crashed finalize can never wedge the
+    stream): a terminal task whose ``_finalize_started_at`` is older than
+    the ceiling gets the LATE done as before."""
+    import threading as _th
+    from lib.chat_dispatch import next_live_tick
+    task = {
+        'events': [], 'events_lock': _th.Lock(),
+        'status': 'done', 'error': None,
+        'convId': 'cv-fin2', '_finalize_started_at': 1.0 - 31.0,
+    }
+    v = next_live_tick(
+        task=task, cursor=0, sse_gen=1,
+        stream_start=0.0, sse_max_duration=7200,
+        last_t=0.0, now=1.0, task_id_short='t-fin2',
+    )
+    assert v.kind == 'late_done', (
+        f'an expired finalize latch must not hold the LATE done; got {v.kind}'
+    )
+
+
+@_unit
+def test_finalize_stamps_and_clears_the_latch():
+    """Static pin: _finalize.py must reference ``_finalize_started_at``
+    (set before the terminal flip, cleared after append_event(done))."""
+    import os
+    src_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), '..',
+        'lib', 'tasks_pkg', 'orchestrator', '_finalize.py')
+    with open(src_path, encoding='utf-8') as f:
+        src = f.read()
+    assert '_finalize_started_at' in src, (
+        '_finalize.py must stamp the finalize-window latch'
+    )
+
+
+# ────────────────────────── the real done event ──────────────────────────
 
 @_unit
 def test_real_done_event_also_stamps_successor():

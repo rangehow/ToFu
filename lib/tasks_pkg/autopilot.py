@@ -474,6 +474,21 @@ def run_virtual_user(task: dict, vu_msg_id: str | None = None) -> dict | None:
     )
     _mirror_thread.start()
 
+    # Close the creation race: a REAL message that landed BETWEEN
+    # maybe_run_autopilot's eligibility check and create_task would
+    # otherwise run the WHOLE VU call before the post-call deferral fires
+    # (enqueue_message's preemption only sees registered sub-tasks — a row
+    # that arrived before create_task is invisible to it). Abort the
+    # not-yet-started sub-task; the preemption branch below routes the
+    # deferral, so the queued turn starts at the first abort checkpoint.
+    if _has_pending_real_message(_vu_conv_id):
+        logger.info('[Autopilot %s] Real message landed during VU setup — '
+                    'aborting sub-task %s before round 1',
+                    tid, sub_task['id'][:8])
+        sub_task['aborted'] = True
+        sub_task['_abort_timestamp'] = time.time()
+        sub_task['_abort_reason'] = 'real_message_preempts_vu'
+
     try:
         result = _run_single_turn(sub_task)
     except Exception as e:
@@ -499,6 +514,25 @@ def run_virtual_user(task: dict, vu_msg_id: str | None = None) -> dict | None:
         except Exception as _disc_err:
             logger.debug('[Autopilot %s] VU carrier discard failed: %s',
                          tid, _disc_err)
+
+    # ── Real-message preemption (owner-ratified 2026-07-25) ──
+    # A REAL queued message aborted this VU mid-call (enqueue_message stamps
+    # _abort_reason='real_message_preempts_vu'; the pre-flight above stamps
+    # the same for the creation race). Return None IMMEDIATELY — never feed
+    # the partial reply through the verdict/segment pipeline below, which
+    # would manufacture a synthetic user turn out of a corpse.
+    # maybe_run_autopilot's None branch emits AUTOPILOT_VU_CANCEL and the
+    # completion hook dispatches the queued turn — the whole point of the
+    # preemption is that dispatch happens NOW, not after the full VU call.
+    # (Second leg is belt-and-braces: any sub-task abort landing while a
+    # real message is pending routes the same way.)
+    if sub_task.get('_abort_reason') == 'real_message_preempts_vu' or (
+            sub_task.get('aborted')
+            and _has_pending_real_message(task.get('convId') or '')):
+        logger.info('[Autopilot %s] VU sub-task %s preempted by a real queued '
+                    'message — deferring immediately (queue dispatch takes over)',
+                    tid, sub_task.get('id', '?')[:8])
+        return None
 
     if task.get('aborted'):
         logger.info('[Autopilot %s] Aborted during VU sub-task — stopping', tid)

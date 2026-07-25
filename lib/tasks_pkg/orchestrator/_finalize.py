@@ -744,6 +744,12 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
             logger.warning('[Task %s] Tool summary generation failed model=%s (non-fatal): %s', task['id'][:8], model, e, exc_info=True)
 
     if not task.get('_endpoint_managed'):
+        # Finalize-window latch: stamp BEFORE the terminal flip. From here
+        # until append_event(done) (autopilot hook + pre-emit sync in
+        # between), a LATE-done tick must hold — the successor stamp is not
+        # on the index yet, so a premature LATE done would close the stream
+        # with no successor on the wire (see lib/chat_dispatch.py branch 3).
+        task['_finalize_started_at'] = time.time()
         task['status'] = 'done'
 
     # ── Project-brain Activity Feed: 'completed' / 'aborted' pulse ──
@@ -1235,6 +1241,11 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
         logger.debug('[Task:%s] successor stamp failed: %s', tid, _succ_err)
 
     append_event(task, done_evt)
+    # Finalize-window closed — the real done is now in the event queue, so a
+    # tick drains it as a normal event instead of needing the LATE-done
+    # synthesis. Clearing is safe even if a reader missed every event (the
+    # task is terminal and the latch is gone → LATE done resumes its role).
+    task.pop('_finalize_started_at', None)
     persist_task_result(task)
 
     _spawn_async_commit_round(task, project_enabled, project_path)

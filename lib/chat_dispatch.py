@@ -886,6 +886,17 @@ def next_live_tick(
 
     # 3. Task terminal + no new events → synthesize LATE done.
     if is_task_terminal(task):
+        # Finalize-window latch: the orchestrator flips status to terminal
+        # BEFORE the real done is appended (the autopilot hook + pre-emit
+        # sync run in between). A tick landing in that window would emit a
+        # LATE done MISSING the latestLiveTaskId stamp (the supersede index
+        # is advanced only inside the hook) and close the stream with the
+        # client deaf for the whole VU window. Hold while the latch is
+        # fresh; the 30s ceiling self-expires a crashed finalize so the
+        # stream can never wedge on a stuck flag.
+        _fin_started = task.get('_finalize_started_at') or 0
+        if _fin_started and (now - _fin_started) < 30:
+            return LiveTickAction(kind='sleep')
         late_done = build_event(EventType.DONE)
         late_meta = _extract_task_meta(task)
         late_done.update(late_meta)

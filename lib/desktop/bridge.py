@@ -112,6 +112,9 @@ def register_agent(agent_id, meta=None) -> None:
             'platform': str(meta.get('platform') or prev.get('platform') or ''),
             'capabilities': (dict(caps) if isinstance(caps, dict)
                              else prev.get('capabilities') or {}),
+            'share_roots': (list(meta['share_roots'])
+                            if isinstance(meta.get('share_roots'), list)
+                            else prev.get('share_roots') or []),
             'registered_at': prev.get('registered_at') or time.time(),
             'last_seen': time.time(),
         }

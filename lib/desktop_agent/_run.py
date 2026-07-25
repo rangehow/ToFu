@@ -46,7 +46,7 @@ def _ensure_agent_id():
     return agent_id
 
 
-def _build_agent_frame(agent_id, permissions):
+def _build_agent_frame(agent_id, permissions, share_roots=None):
     """Build the v2 registration frame sent with every poll."""
     return {
         'agent_id': agent_id,
@@ -58,6 +58,7 @@ def _build_agent_frame(agent_id, permissions):
             'gui': bool(permissions.get('allow_gui')),
             'notification': bool(permissions.get('allow_notification')),
         },
+        'share_roots': list(share_roots or []),
     }
 
 
@@ -88,7 +89,8 @@ def run_agent(server_url, permissions, poll_interval=1.0, bridge_secret='',
         headers['X-Bridge-Secret'] = bridge_secret
 
     agent_id = _ensure_agent_id()
-    agent_frame = _build_agent_frame(agent_id, permissions)
+    agent_frame = _build_agent_frame(
+        agent_id, permissions, load_config().get('share_roots'))
 
     logger.info('Desktop Agent starting...')
     logger.info('   Server: %s', server_url)

@@ -12,7 +12,7 @@ logger = get_logger(__name__)
 # ═══════════════════════════════════════════════════════
 
 IGNORE_DIRS = {
-    '.git', 'node_modules', '__pycache__', '.venv', 'venv', 'env',
+    '.git', '.tofu', 'node_modules', '__pycache__', '.venv', 'venv', 'env',
     '.idea', '.vscode', '.next', 'dist', 'build', '.cache',
     '.tox', '.mypy_cache', '.pytest_cache', 'target', 'vendor',
     '.bundle', 'coverage', '.nyc_output', '.eggs', '.sass-cache',

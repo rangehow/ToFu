@@ -15,6 +15,9 @@ logger = get_logger(__name__)
 
 _DEFAULT_CONFIG = {
     'agent_id': '',  # generated on first start by _run._ensure_agent_id
+    # RWA P1: [{name, path}] — the agent's declared project worktrees;
+    # project_* commands are confined to these roots (constraint ⑤).
+    'share_roots': [],
 }
 
 

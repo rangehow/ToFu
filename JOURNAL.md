@@ -1,6 +1,15 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
 
+### 2026-07-26(续7) — RWA P1 落地:agent 项目命令集 + 本地写入安全网(commit 见下,9 文件;新套件 36/36 含双 NEUTER,desktop 六环 106/106,project_tools 环 94/94,宽环 126/126,collect **9317** 0 err)
+- **brain 按「全部按建议项」连续派发,P0(`8234d7b2`)之后自然推进 P1。** 交付 `lib/desktop_agent/_project.py`(333 行):`project_*` 七命令(list/read/write/apply_diff/grep/find/run_command),wire type=完整命令名(约束①)。
+- **约束⑤(路径校验下沉 agent 侧):** 严格 root-relative + realpath containment——`..`、绝对路径、兄弟前缀(`/app` vs `/app2`)、符号链接逃逸全拒;`_is_within` 参数化大小写模式(Win/mac 形态)+ commonpath ValueError(跨盘符)→ False。
+- **约束③(安全网平价):** snapshot-before-write(`<root>/.tofu/file-history/<md5>/<epoch_ns>`,既有文件才快照);freshness 门 = mtime_ns+size 双因子令牌,已存在文件无令牌拒写(read-before-edit)、外部改动拒写、**重读刷新令牌放行**、agent 自己写后自动重盖;新文件创建免令牌(与服务器语义对齐)。
+- **复用不重写:** grep/find 走 `lib/project_mod/read_tools`(ignore 规则 import 级共享);`IGNORE_DIRS` 补 `.tofu`(快照目录对项目工具不可见,设计稿原断言补上地面);`project_run_command` 复用 `command_analysis`(dangerous + catastrophic-delete 守卫)+ `cmd_run_local`,cwd 锁根、timeout 默认 300s——流式/进程树 kill 是 P2 的事,不越期。
+- **权限分层不变:** 写族归 allow_write、run_command 归 allow_exec、读族无门;注册帧新增 `share_roots` 上送,服务端注册表存根(P4 选择器的地面)。
+- **验证:** failing-first(collection error)→ 36/36;**NEUTER×2 全咬**(剥 `_check_write_allowed` → 外部改动后陈旧写放过;剥 `_resolve` → `..` 逃逸写出根外);desktop 六环 106/106;IGNORE_DIRS 变更回归 project_tools+write_tools 94/94。
+- **边界(诚实):** agent 需更新才生效;服务器端零行为变化(IGNORE_DIRS 加 `.tofu` 只让 list/grep/find 不再扫快照目录,系设计稿原意);P2(run_command 平价)待下一派发。
+
 ### 2026-07-25 — pt_871a26c7(gateway sanitizer)第 7 次派发:改挂 **question-block**(与 export epic 同款机制,后者一问即收)——不再 ~24h 空转重试。单趟核实:诚实修复 `7bc0542` 在祖先链、`_gateway.py` 零变更、5 个恒等占位原样、6/6 测绿。残余=替换策略本身(内容/政策判断,不擅自发明)。四选项挂看板:**A 隐形分隔符插入(零宽空格,机械保义、我立即实现,我 lean A——网关若归一化分隔符则退化为现状 no-op,下行地板为零)** / B owner 给 5 个真实替换值 / C 删除该特性 / D 接受现状 inert 关票。owner 点答即重新派发执行。顺手闭环:CLOSURE-PENDING 挂账的 pt_a4c9d33e(billing CAS)两 commit 已在祖先链,代点 board complete。
 
 ### 2026-07-25(续25) — pt_turn_settlement P5 落地:owner 一键拍「A — FLIP」后,prefer prefill over checkpoint 全链翻转(commit `d4811ff1`,6 文件 +275/-55;翻转套件 60/60 绿,collect **9254** 0 err,epic `pt_c11c3a9272274848` 已 `project_board_complete`)。核心发现:**路由本就无损,dishonesty 只在报告层**。

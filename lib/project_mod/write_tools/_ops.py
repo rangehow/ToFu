@@ -114,6 +114,20 @@ def _record_write_freshness(conv_id, target):
         logger.debug('[WriteFreshness] record failed for %s: %s', target, e)
 
 
+def _note_write_set_advisory(conv_id, base, target):
+    """Advisory: flag writes landing outside the conv's claimed write_set.
+
+    Observe-only counterpart to the freshness guard (lib/write_set_advisory.py)
+    — never blocks, never breaks a successful write. base ≈ the written
+    project's root; absolute targets outside it are skipped inside.
+    """
+    try:
+        from lib.write_set_advisory import note_project_write
+        note_project_write(conv_id or '', base or '', target)
+    except Exception as e:
+        logger.debug('[WriteSetAdvisory] note failed for %s: %s', target, e)
+
+
 # ═══════════════════════════════════════════════════════
 #  write_file
 # ═══════════════════════════════════════════════════════
@@ -158,6 +172,7 @@ def tool_write_file(base, rel_path, content, description='', conv_id=None, task_
         _atomic_write_text(target, content)
         _touch_for_vscode(target)
         _record_write_freshness(conv_id, target)
+        _note_write_set_advisory(conv_id, base, target)
         new_lines = content.count('\n') + 1
         sz = len(content.encode('utf-8'))
 
@@ -298,6 +313,7 @@ def save_uploaded_file(base, rel_path, data, description='', conv_id=None,
         _atomic_write_bytes(target, bytes(data))
         _touch_for_vscode(target)
         _record_write_freshness(conv_id, target)
+        _note_write_set_advisory(conv_id, base, target)
         sz = len(data)
 
         if _should_record_modification(target, conv_id=conv_id):
@@ -475,6 +491,7 @@ def _apply_one_diff(base, rel_path, search, replace, description='', conv_id=Non
         _atomic_write_text(target, new_content)
         _touch_for_vscode(target)
         _record_write_freshness(conv_id, target)
+        _note_write_set_advisory(conv_id, base, target)
         old_lines = _orig_line_count
         new_lines = new_content.count('\n') + 1
         diff_lines = len(search.split('\n'))
@@ -785,6 +802,7 @@ def _insert_one(base, rel_path, anchor, content, position='after', description='
         _atomic_write_text(target, new_content)
         _touch_for_vscode(target)
         _record_write_freshness(conv_id, target)
+        _note_write_set_advisory(conv_id, base, target)
         old_lines = file_content.count('\n') + 1
         new_lines = new_content.count('\n') + 1
         inserted_lines = content.count('\n') + 1

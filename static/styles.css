@@ -571,6 +571,14 @@ html[data-rail] .folder-quickadd{display:none}
 .ri-coverage-chip{margin:8px 10px;padding:6px 9px;background:rgba(255,183,77,0.10);border:1px solid rgba(255,183,77,0.35);border-radius:5px;font-size:10px;color:#ffb74d;display:flex;align-items:center;gap:5px}
 .ri-states-head{padding:8px 10px 4px;color:var(--text-muted);font-size:10px;border-top:1px dashed var(--border);margin-top:6px}
 .ri-state-row{padding:4px 10px;color:var(--text-muted);font-size:10px;font-style:italic}
+.ri-anchor svg{display:block}
+.ri-round.ri-flash{animation:riFlash 1.6s ease}
+@keyframes riFlash{0%,60%{background:rgba(110,86,207,0.35)}100%{background:rgba(110,86,207,0.12)}}
+.debug-prefix-fold{display:flex;align-items:center;gap:5px;margin:0 0 6px;padding:5px 8px;font-size:10px;color:var(--text-tertiary);border:1px dashed var(--border);border-radius:4px;cursor:pointer;user-select:none}
+.debug-prefix-fold:hover{filter:brightness(1.25)}
+.debug-prefix-fold svg{transition:transform .2s}
+.debug-prefix-fold.open svg{transform:rotate(90deg)}
+.debug-msg-new{border-left:2px solid var(--accent)}
 body.ri-open .chat-container{margin-right:min(780px,94vw);transition:margin-right .22s ease}
 @media (max-width:900px){
   body.ri-open .chat-container{margin-right:0}

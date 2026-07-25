@@ -345,7 +345,7 @@ function restoreDebugForConv(convId) {
 //     chip so the human knows they are NOT looking at a precise capture of a
 //     specific round. The live SSE snapshot path (the real wire form) passes
 //     approx=false/undefined and must NEVER show this chip.
-function showMessagesInDebug(messages, label, isUpdate, forConvId, tools, approx, meta) {
+function showMessagesInDebug(messages, label, isUpdate, forConvId, tools, approx, meta, opts) {
   /* Request Inspector (P1): when the SSE handler forwards the snapshot's
    * envelope metadata, record the round into the per-task log (append, never
    * overwrite). The legacy cold path (/debug-messages) passes no meta and is
@@ -757,8 +757,36 @@ function showMessagesInDebug(messages, label, isUpdate, forConvId, tools, approx
   } else {
     // --- Full render path (initial) ---
     p.innerHTML = "";
+    /* Request Inspector P3: prefix-fold diff view. When the caller passes
+     * opts.foldPrefix (K leading messages byte-identical to the PREVIOUS
+     * round's payload), collapse them behind a fold row and mark the
+     * increment with .debug-msg-new — the diff is the whole point of the
+     * per-round view (what did THIS request add to the context). */
+    const _foldK = (opts && opts.foldPrefix > 0)
+      ? Math.min(opts.foldPrefix, messages.length) : 0;
+    if (_foldK > 0) {
+      const foldRow = document.createElement('div');
+      foldRow.className = 'debug-prefix-fold';
+      foldRow.innerHTML = Icon('chevronDown', 11) + ' ' +
+        escapeHtml(t('ri.prefixFold', { k: _foldK, base: opts.diffBase || '' }));
+      foldRow.onclick = () => {
+        const open = foldRow.classList.toggle('open');
+        p.querySelectorAll('.debug-msg-prefix').forEach((b) => {
+          b.style.display = open ? '' : 'none';
+        });
+      };
+      p.appendChild(foldRow);
+    }
     messages.forEach((msg, i) => {
       const block = createBlock(msg, i);
+      if (_foldK > 0) {
+        if (i < _foldK) {
+          block.classList.add('debug-msg-prefix');
+          block.style.display = 'none';
+        } else {
+          block.classList.add('debug-msg-new');
+        }
+      }
       block.dataset.fp = msgFingerprint(msg);
       block._msgRef = msg;
       // Rebind lazy render to use _msgRef

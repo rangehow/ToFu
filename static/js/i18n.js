@@ -896,6 +896,8 @@ var _i18n = {
   'ri.expired': { zh: '事件日志已过期（>6h）或不存在', en: 'Event log expired (>6h) or missing' },
   'ri.coveragePartial': { zh: '此任务为 endpoint 驱动：Planner/Critic 调用未纳入检视', en: 'Endpoint-driven task: Planner/Critic calls are not captured' },
   'ri.live': { zh: '在飞', en: 'live' },
+  'ri.openTip': { zh: '在请求检视器中定位产生此回复的 LLM 请求', en: 'Locate the LLM request(s) that produced this reply in the Request Inspector' },
+  'ri.prefixFold': { zh: '与 {base} 相同的前 {k} 条已折叠 — 点击展开', en: 'Prefix of {k} message(s) identical to {base} collapsed — click to expand' },
 
   // ══════════════════════════════════════
   //  Settings — Tabs

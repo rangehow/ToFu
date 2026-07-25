@@ -182,7 +182,9 @@ function check(name, cond) { out.push((cond ? 'PASS ' : 'FAIL ') + name); }
   /* ── 4. Select round → detail via the ONE renderer, server payload ── */
   roundEls[1].onclick();
   await new Promise(r => setTimeout(r, 10));
-  check('payload_fetched_for_round2', CALLS.getRequestPayload === 1);
+  /* P3 note: selecting round 2 ALSO fetches round 1 for the prefix-fold
+   * diff, so the counter is >= 1 (r2 + r1), not exactly 1. */
+  check('payload_fetched_for_round2', CALLS.getRequestPayload >= 1);
   const hdr1 = document.querySelector('#debugContent .debug-msg-header');
   check('detail_rendered',
     document.getElementById('debugTitle').innerHTML.indexOf('Messages') !== -1 &&

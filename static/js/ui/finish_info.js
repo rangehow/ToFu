@@ -958,6 +958,15 @@ function renderFinishInfo(msg, isLiveTail) {
       );
     }
   }
+  // ★ Request Inspector anchor (debug mode only) — jump from this bubble
+  //   to the exact LLM request(s) that produced it: opens the drawer at
+  //   msg._taskId + the bubble's last apiRound.round (docs/DEBUG_PANEL_REDESIGN.md P3).
+  if (typeof _featureFlags !== 'undefined' && _featureFlags.debug_mode && msg._taskId) {
+    const _riMid = String(msg._msgId || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    parts.push(
+      `<span class="finish-tag ri-anchor" style="cursor:pointer;opacity:0.75" title="${escapeHtml(t('ri.openTip'))}" onclick="openRequestInspectorForMessage('${_riMid}')">${Icon('fileCode', 12)}</span>`
+    );
+  }
   if (msg.fallbackModel) {
     const _fbReason = msg.fallbackReason || msg.fallbackKind || "";
     const _reasonLine = _fbReason

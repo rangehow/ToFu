@@ -201,30 +201,113 @@ async function _riSelectTask(taskId) {
 }
 
 /* ── Level 3: detail — REUSES showMessagesInDebug (no second renderer) ── */
+
+/* Payload cache (P3): payloads are re-fetched on demand from the server,
+ * so repeated round clicks + the diff's N-1 lookup stay cheap. Live
+ * accelerator entries (SSE-fed _debugRequests) win over the network.
+ * FIFO-capped; entries are never mutated after insert. */
+const _riPayloadCache = {};
+const _RI_PAYLOAD_CACHE_MAX = 40;
+async function _riFetchPayload(taskId, roundNum) {
+  const key = taskId + ':' + roundNum;
+  /* Live accelerator FIRST — an SSE-fed entry is fresher than anything we
+   * previously cached from the network (a new round may have re-emitted
+   * the payload since the cache entry was stored). */
+  const acc = (typeof _debugRequests !== 'undefined') &&
+    _debugRequests[taskId] && _debugRequests[taskId].rounds[String(roundNum)];
+  if (acc && acc.messages) {
+    const payload = { messages: acc.messages, tools: acc.tools,
+      label: acc.label, model: acc.model, params: acc.params };
+    _riPayloadCache[key] = payload;
+    return payload;
+  }
+  if (_riPayloadCache[key]) return _riPayloadCache[key];
+  const data = (typeof Api !== 'undefined' && Api.tasks)
+    ? await Api.tasks.getRequestPayload(taskId, roundNum) : null;
+  if (data && data.messages) {
+    const ids = Object.keys(_riPayloadCache);
+    if (ids.length >= _RI_PAYLOAD_CACHE_MAX) delete _riPayloadCache[ids[0]];
+    _riPayloadCache[key] = data;
+    return data;
+  }
+  return null;
+}
+
+/* Longest shared leading prefix between two message arrays, compared by
+ * canonical JSON. Round N's payload is round N-1's payload + the new
+ * assistant/tool/user messages appended by that round, so a positional
+ * prefix compare is exact in the normal case; any divergence degrades
+ * safely to K=0 (no fold). */
+function _riSharedPrefix(prevMsgs, curMsgs) {
+  const n = Math.min(prevMsgs.length, curMsgs.length);
+  let k = 0;
+  while (k < n && JSON.stringify(prevMsgs[k]) === JSON.stringify(curMsgs[k])) k++;
+  return k;
+}
+
 async function _riSelectRound(taskId, roundNum, el) {
   const rounds = _riEl('riRoundList');
   if (rounds) {
     rounds.querySelectorAll('.ri-round').forEach((r) =>
       r.classList.toggle('ri-sel', r === el));
   }
-  /* Live accelerator: the in-memory P1 log may already hold this round's
-   * payload (in-flight task, SSE-fed). Metadata-only (stripped) entries
-   * fall through to the server fetch. */
-  const acc = (typeof _debugRequests !== 'undefined') &&
-    _debugRequests[taskId] && _debugRequests[taskId].rounds[String(roundNum)];
-  if (acc && acc.messages) {
-    if (typeof showMessagesInDebug === 'function')
-      showMessagesInDebug(acc.messages, acc.label, false,
-        typeof activeConvId !== 'undefined' ? activeConvId : null,
-        acc.tools || undefined, false);
-    return;
-  }
-  const data = (typeof Api !== 'undefined' && Api.tasks)
-    ? await Api.tasks.getRequestPayload(taskId, roundNum) : null;
+  const payload = await _riFetchPayload(taskId, roundNum);
   if (!_riOpen || _riSel.taskId !== taskId) return;  // stale
-  if (data && data.messages && typeof showMessagesInDebug === 'function') {
-    showMessagesInDebug(data.messages, data.label || '', false,
-      typeof activeConvId !== 'undefined' ? activeConvId : null,
-      data.tools || undefined, false);
+  if (!payload || !payload.messages) return;
+  /* P3 prefix-fold: diff this round's payload against round N-1's so the
+   * shared prefix collapses and the increment highlights. */
+  let opts = null;
+  const num = parseInt(roundNum, 10);
+  if (Number.isFinite(num) && num > 1) {
+    const prev = await _riFetchPayload(taskId, num - 1);
+    if (!_riOpen || _riSel.taskId !== taskId) return;  // stale
+    if (prev && prev.messages) {
+      const k = _riSharedPrefix(prev.messages, payload.messages);
+      if (k > 0) opts = { foldPrefix: k, diffBase: 'R' + (num - 1) };
+    }
   }
+  if (typeof showMessagesInDebug === 'function')
+    showMessagesInDebug(payload.messages, payload.label || '', false,
+      typeof activeConvId !== 'undefined' ? activeConvId : null,
+      payload.tools || undefined, false, undefined, opts);
+}
+
+/* ── Bubble anchor (P3): jump from an assistant bubble to the exact
+ * request(s) that produced it. msgId → msg._taskId → task fold → round
+ * (the bubble's last apiRound.round, 1-based == snapshot roundNum; falls
+ * back to the task's last request round). Works for ANY task id —
+ * including VU sub-tasks that never appear in the by-conv task list. */
+async function openRequestInspectorForMessage(msgId) {
+  const conv = (typeof conversations !== 'undefined') &&
+    conversations.find((c) => c && c.id ===
+      (typeof activeConvId !== 'undefined' ? activeConvId : null));
+  const msg = conv && Array.isArray(conv.messages) &&
+    conv.messages.find((m) => m && m._msgId === msgId);
+  if (!_riOpen) openRequestInspector();
+  if (!msg || !msg._taskId) return;  // conv-level view is already loading
+  const taskId = msg._taskId;
+  const apiRounds = Array.isArray(msg.apiRounds) ? msg.apiRounds : [];
+  const lastApiRound = apiRounds.length
+    ? apiRounds[apiRounds.length - 1].round : null;
+  await _riSelectTask(taskId);
+  const fold = _riSel.fold;
+  const reqs = (fold && Array.isArray(fold.requests)) ? fold.requests : [];
+  let target = null;
+  if (lastApiRound != null &&
+      reqs.some((r) => String(r.roundNum) === String(lastApiRound))) {
+    target = lastApiRound;
+  } else if (reqs.length) {
+    target = reqs[reqs.length - 1].roundNum;
+  }
+  if (target == null) return;
+  const el = document.querySelector(
+    '#riRoundList .ri-round[data-round="' + String(target) + '"]');
+  if (el) {
+    /* scrollIntoView is absent in some environments (jsdom) — guard. */
+    if (typeof el.scrollIntoView === 'function')
+      el.scrollIntoView({ block: 'nearest' });
+    el.classList.add('ri-flash');
+    setTimeout(() => el.classList.remove('ri-flash'), 1600);
+  }
+  await _riSelectRound(taskId, target, el);
 }

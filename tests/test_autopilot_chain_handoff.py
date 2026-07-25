@@ -53,12 +53,9 @@ suddenly disappears" symptom.
 
 import pytest
 
-# Inert until the cutover. Removing this skip is part of the HUMAN-GATED cutover
-# commit (step 3 in the design doc's build order).
-pytestmark = pytest.mark.skip(
-    reason='epic pt_8dc030176bad450b (autopilot independent stream) not yet cut '
-           'over — target-contract suite, activated in the cutover commit'
-)
+# Active — the epic pt_8dc030176bad450b cutover has landed. This suite is the
+# acceptance gate for the independent-stream mechanism (supersede-index handoff,
+# no withheld baton, no _VUEventForwarder, no _autopilot_deciding latch).
 
 
 _VU_MSG = {

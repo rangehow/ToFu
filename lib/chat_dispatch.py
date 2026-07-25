@@ -730,20 +730,13 @@ def is_task_terminal(task: dict[str, Any]) -> bool:
     """Predicate: is the task truly finished from the SSE stream's POV?
     (pt_04686ac6 slice 8; moved from a chat_stream local closure).
 
-    True iff ``task['status'] != 'running'`` AND NOT
-    ``task.get('_autopilot_deciding')``.
-
-    ``task['status']`` flips to 'done' (orchestrator _run_loop tail)
-    BEFORE the autopilot end-of-turn hook runs its multi-second VU
-    LLM call; the baton-carrying ``done`` event is only appended
-    AFTER.  Synthesizing a late ``done`` during that window closes
-    the SSE stream without the ``autopilotNextTaskId`` /
-    ``autopilotVuMessage`` handoff, stranding the already-spawned
-    follow-up — the conv goes idle until a manual refresh.  Treat
-    the decision window as still-running so the loop keeps the
-    stream open until the real done event arrives.
+    True iff ``task['status'] != 'running'``.  (pt_8dc03017 cutover removed
+    the ``_autopilot_deciding`` withhold — the VU now runs as an independent
+    task on its own stream, so a done parent is genuinely terminal and the
+    SSE stream closes promptly; the client discovers the successor via the
+    conv→latest-task supersede index, not via a withheld baton.)
     """
-    return task['status'] != 'running' and not task.get('_autopilot_deciding')
+    return task['status'] != 'running'
 
 
 def apply_autopilot_baton(task: dict[str, Any], evt: dict[str, Any]) -> dict[str, Any]:

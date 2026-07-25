@@ -744,19 +744,6 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
             logger.warning('[Task %s] Tool summary generation failed model=%s (non-fatal): %s', task['id'][:8], model, e, exc_info=True)
 
     if not task.get('_endpoint_managed'):
-        # Latch the autopilot decision window BEFORE flipping status to 'done'.
-        # The status flip makes _task_terminal() true for the SSE generator and
-        # chat_poll; setting the marker first closes the gap where they'd
-        # observe 'done' before the autopilot hook (which can take several
-        # seconds for the VU LLM call) has a chance to set it — otherwise a
-        # late synthetic done closes the stream without the follow-up baton.
-        try:
-            from lib.tasks_pkg.autopilot import is_autopilot_enabled
-            if is_autopilot_enabled(task):
-                task['_autopilot_deciding'] = True
-        except Exception as _ap_latch_err:
-            logger.debug('[Autopilot] pre-flip decision latch skipped: %s',
-                         _ap_latch_err)
         task['status'] = 'done'
 
     # ── Project-brain Activity Feed: 'completed' / 'aborted' pulse ──
@@ -1153,7 +1140,6 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
             logger.warning('[Task %s] pre-emit conv sync failed: %s — '
                            'terminal event will fall back to transient buffer',
                            tid, _pre_emit_err, exc_info=True)
-    task['_autopilot_deciding'] = True
     try:
         from lib.tasks_pkg.autopilot import maybe_run_autopilot
         ap_result = maybe_run_autopilot(task)
@@ -1167,12 +1153,6 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
             # button / translation desync until manual refresh).
             task['_autopilot_followup'] = ap_result
     except Exception as _ap_err:
-        # On failure the deciding window is over and no baton will arrive —
-        # clear the latch so _task_terminal() can finalize the stream.  The
-        # SUCCESS path deliberately keeps the latch set until AFTER
-        # append_event(done_evt) below, so the SSE generator never sees a
-        # terminal task before the baton-carrying done event is buffered.
-        task['_autopilot_deciding'] = False
         logger.warning('[Autopilot] hook raised: %s — continuing without '
                        'follow-up (this turn will still be persisted)',
                        _ap_err, exc_info=True)
@@ -1249,14 +1229,6 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
         done_evt['committedMessage'] = task['_committedMsg']
 
     append_event(task, done_evt)
-    # The baton-carrying done event is now in task['events'] — only NOW is it
-    # safe to let _task_terminal() (routes/chat.py) report the task finished.
-    # Clearing this latch earlier (the old `finally`) opened a window where
-    # status=='done' + _autopilot_deciding==False but the real done event was
-    # not yet buffered, so the SSE generator synthesized a baton-LESS done from
-    # extract_task_meta() and closed the stream → the spawned autopilot
-    # follow-up was stranded and the conversation went idle until manual regen.
-    task['_autopilot_deciding'] = False
     persist_task_result(task)
 
     _spawn_async_commit_round(task, project_enabled, project_path)

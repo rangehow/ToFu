@@ -149,13 +149,9 @@ def chat_poll(task_id):
             logger.warning('[Chat] Poll %s ⚠️ RETURNING EMPTY RESULT — task is done but has no content or thinking! '
                           'finishReason=%s model=%s',
                           task_id[:8], finish_reason, model)
-        # ★ While the autopilot end-of-turn hook is deciding (running the
-        #   multi-second VU LLM call), the task is already status='done' but
-        #   the follow-up baton isn't stamped yet.  Report 'running' so a poll
-        #   in this window doesn't finalize the stream without the handoff.
+        # pt_8dc03017 cutover: the `_autopilot_deciding` withhold is gone —
+        # a done task is terminal; the VU runs as an independent task.
         _reported_status = task['status']
-        if task.get('_autopilot_deciding') and _reported_status == 'done':
-            _reported_status = 'running'
         r = {
             'id': task['id'], 'status': _reported_status,
             'content': task['content'], 'thinking': task['thinking'],

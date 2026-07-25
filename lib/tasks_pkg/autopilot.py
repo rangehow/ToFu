@@ -1215,15 +1215,14 @@ def _run_autopilot_kick(task: dict) -> None:
 
     tid = task['id'][:8]
     # The carrier produces no assistant content of its own; flip to 'done'
-    # immediately so the SSE generator / poll treat the (in-flight) autopilot
-    # decision window correctly via the _autopilot_deciding latch below.
+    # immediately (the VU runs as its own task on its own stream — no
+    # decision-window withhold is needed on this carrier).
     task['status'] = 'done'
 
     done_evt = build_event(EventType.DONE)
     if task.get('model'):
         done_evt['model'] = task['model']
 
-    task['_autopilot_deciding'] = True
     try:
         ap_result = maybe_run_autopilot(task)
         if ap_result:
@@ -1240,17 +1239,9 @@ def _run_autopilot_kick(task: dict) -> None:
                         '(TASK_DONE / no eligible context)', tid,
                         task.get('convId', '')[:8])
     except Exception as e:
-        # Failure → no baton will arrive; clear the latch so the stream can
-        # finalize.  The success path keeps it set until AFTER append_event
-        # (below) so the SSE generator never sees a terminal task before the
-        # baton-carrying done event is buffered (same window as the
-        # natural-stop path in orchestrator._finalize_and_emit_done).
-        task['_autopilot_deciding'] = False
         logger.error('[Autopilot kick %s] hook raised: %s', tid, e, exc_info=True)
 
     append_event(task, done_evt)
-    # Baton is now buffered — safe to let _task_terminal() report finished.
-    task['_autopilot_deciding'] = False
     persist_task_result(task)
 
 

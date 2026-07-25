@@ -1,6 +1,20 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
 ### 2026-07-25(续46) — pt_0c1621a561f045e1 收口:test_endpoint_messages 七红根修(两发同族测试漂移,commit `6c70957d`,1 文件 +33/-4;套件 **28/28**,endpoint 相邻环 34/34,collect **9101** 0 err)
+### 2026-07-26 — 产出底盘 P4 落地:「一句话新闻主题 → 成片」前半段(owner 拍板 5 项 + 追加 3 条硬约束,commit `a6f45f0c`,9 文件 +1319/-31;新套件 17/17 含 NEUTER,motion 既有 48/48,collect **9101** 0 err)
+- **owner 诉求闭环:** 输入框说一句话就出科普视频、用户零编排;5 项待拍板一次给全(①A 先能力后底盘 ②放开 project_ready ③镜数+单镜 token 上限、不做金额上限 ④强制事实纪律 ⑤`produce_video(topic=)` 先行);并追加 3 条硬约束进 P4 验收:**①崩溃续跑是正确性契约不是成本项 ②事实审阅「可介入不阻塞」 ③阶段图契约现在定形,P6 是平移不是重写**。
+- **交付(前半段补齐,证据全在盘上核实的 file:line):** 
+  - **`_stages.py`(阶段图契约,196 行):** `Stage(name/run/gate/retry/resumable)` + checkpointed runner。**阶段产物落盘即 checkpoint**(`write_json_atomic` 到 `pipeline_state.json`),进程被杀后从第一个未完成阶段续跑,已完成阶段跳过 —— 兑现 owner 硬约束①。刻意住在 `lib/motion_video/` 里,P6 **原样搬**到 `lib/production/`(strangler-fig,硬约束③)。
+  - **`_recipe.py`(视频配方,383 行):** `research → script → timeline`。research 每条要点必挂真实 URL,**零 LLM 事实闸**拒绝无来源 run + script 恒追加**片尾来源卡**(拍板④);timeline **前置合成 TTS、用真实音频时长排 SRT** —— 删掉 `video_abstract.py:35` 的 4.2 字/秒硬估(owner 原始诉求),无 TTS 槽位降级字数估算 + 静音成片;`max_scenes` 卡镜数/成本,不做金额上限(拍板③)。
+  - **`engine.py`:** topic 入口 → 跑配方产 scenes.json;`job.json` 清单 + `resume_interrupted_jobs()` 重启后重投 `state=running` 的作业,**已渲染镜头 + 可复用 TTS manifest 跳过不重做**(硬约束①);`run_topic_motion_task` 别名。
+  - **`produce.py` + registry:** 高层 `produce_video` 工具。**不挂 project 门**(拍板②——「说一句话」的前提是没挂项目也看得见工具),**挂 search 门**(接地要联网);单一 `produce_video(topic=)`(拍板⑤)。handler 在 `handlers/motion_video.py` 后台起 job 立即返回 task_id。
+  - **`routes/api_v1/motion.py`:** `POST /videos` 接受 `topic`/`lang`/`max_scenes`;dedup 键纳入 topic material。**`server.py`:** 启动时 `resume_interrupted_jobs`(单 hunk)。
+- **硬约束②(可介入不阻塞)不新造机械:** script 阶段产物落盘可审,job 默认继续跑;要拦就用现成 message-queue 抢占 + human_guidance —— 与 owner 在 `ms0aaxituzcl0y` 的「让用户感知」诉求一致。
+- **验证:** 新套件 17 测(阶段续跑/重试/中止 + **NEUTER 证明 resume-skip 承重**;配方事实闸拒无源 run/来源卡/真 TTS 时间轴/字数降级/成本上限;produce_video project×search 四象限门;job.json 往返 + 重启重投 running-only + manifest 复用匹配)。既有 motion 48/48 绿,registry/api_v1 相邻环全绿。
+- **预存在红(A/B 实证非我引入):** `test_retro_segment_translation::test_neuter_without_segment_map_reproduces_bottom_cluster` 在净 HEAD stash 复现,与本轮无关。
+- **git 纪律(共享树,大量 sibling WIP):** 首次提交误扫入 server.py 的 3 个 sibling brotli/压缩 hunk —— `git show` 逐块核出后 `reset --soft` + 精确 apply 单块 resume hook 重提;终态 server.py **+12(仅我的块)**,3 个 sibling hunk 完整留在工作树。恰好 9 文件,零泄漏(`a6f45f0c`)。
+- **待续:** P5(每镜子 agent,`run_agent_loop` 窄工具集 + 失败降级模板)、P6(strangler 抽 `lib/production/`)、P7(第三配方验证)—— 均见设计稿 §5,不在本轮范围。
+
 - **主因(5/7 红):重状态释放。** `persist_task_result` 末尾 `_release_heavy_task_state`(`_persist.py::_HEAVY_TERMINAL_FIELDS`,2026-07-11 RSS-at-source 修复)在终态把 `task['_endpoint_turns']` 置 None——契约是「终态后一律从 DB 重建」,而本套件从不建 conversations 行(日志里 "Conversation not found" 贯穿始终),内存表是唯一副本 → `task.get(...)` 返回 None → NoneType iterable。**修法:** recorder fixture stub `_release_heavy_task_state`——该特性与被测主题(endpoint 轮次累积与消息形状)正交且有专测,测试隔离非阉割;注释钉住出处与理由。
 - **余波(2/7 红):date 注入骑尾(与续43 fidelity 红同一机制,第二例)。** date `<system-reminder>` 拼进 TRUE tail(`_inject.py:772`),把 planner/critic 的 last-user-msg 与 worker2 的 critic-feedback user msg 从字符串变 block 数组 → `'list' object has no attribute 'lower'`。**修法:** `_content_text` 展平助手(string|array→纯文本),三处断言改用。
 - **机制教训(已二见,值得记):** 「date 注入骑尾」会把**任何骑在最后一条 user 消息上的旧断言**从字符串世界拖进 block 数组世界——排查「'list' object has no attribute X」类测试红时先想它。

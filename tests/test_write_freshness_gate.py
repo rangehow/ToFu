@@ -198,14 +198,19 @@ def test_large_file_fast_path_keeps_mtime_semantics(workspace):
     invisible), pinned honestly so nobody 'discovers' it as a bug later."""
     from lib import write_freshness
     big = os.path.join(workspace['project_path'], 'big.bin')
-    payload = bytearray(b'x' * (300 * 1024))
+    # 1 MiB above the content-hash threshold → the ('m', mtime_ns, size)
+    # fast path. Sized off the constant so a future threshold raise keeps
+    # this test on the fast path instead of silently flipping into the
+    # content path (the original 300 KiB file did exactly that at 4 MiB).
+    size = write_freshness._CONTENT_HASH_MAX_BYTES + 1024 * 1024
+    payload = bytearray(b'x' * size)
     with open(big, 'wb') as f:
         f.write(payload)
     aligned = 1_700_000_000_000_000_000
     os.utime(big, ns=(aligned, aligned))  # sit ON a tick BEFORE recording
     write_freshness.record('convA', big)
     # Same-size, same-mtime, different content → fast path is blind (documented).
-    payload[150 * 1024] = ord('y')
+    payload[size // 2] = ord('y')
     with open(big, 'wb') as f:
         f.write(payload)
     os.utime(big, ns=(aligned, aligned))
@@ -217,7 +222,9 @@ def test_large_file_fast_path_keeps_mtime_semantics(workspace):
 
 @pytest.mark.unit
 def test_hash_threshold_boundary(workspace):
-    """≤ 256 KiB → content fingerprint; above → mtime fast path."""
+    """At/below the threshold → content fingerprint; above → mtime fast
+    path. Sizes computed from the constant so a threshold change re-pins
+    the boundary instead of drifting."""
     from lib import write_freshness
     at = os.path.join(workspace['project_path'], 'at.bin')
     over = os.path.join(workspace['project_path'], 'over.bin')
@@ -227,6 +234,78 @@ def test_hash_threshold_boundary(workspace):
         f.write(b'z' * (write_freshness._CONTENT_HASH_MAX_BYTES + 1))
     assert write_freshness._fingerprint(at)[0] == 'c'
     assert write_freshness._fingerprint(over)[0] == 'm'
+
+
+# Extensions treated as BINARY payloads — never edited through the write
+# tools, so their size is irrelevant to the coverage guard below. Every
+# other tracked file is presumed agent-editable text and MUST stay under
+# the content-hash threshold.
+_BINARY_EXT = {
+    '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico', '.icns',
+    '.woff', '.woff2', '.ttf', '.otf', '.eot',
+    '.mp3', '.mp4', '.m4a', '.wav', '.ogg', '.webm', '.mov',
+    '.pdf', '.zip', '.gz', '.tgz', '.bz2', '.xz', '.7z', '.rar', '.tar',
+    '.whl', '.so', '.dll', '.dylib', '.a', '.o', '.class', '.jar',
+    '.bin', '.dat', '.db', '.sqlite', '.sqlite3', '.onnx', '.pt', '.pth',
+    '.pkl', '.pickle', '.npy', '.npz', '.arrow', '.parquet', '.wasm',
+    '.exe', '.dmg', '.iso',
+    '.docx', '.xlsx', '.pptx',  # Office zip containers — not write-tool text
+}
+
+
+@pytest.mark.unit
+def test_tracked_text_files_stay_under_hash_threshold():
+    """DRIFT GUARD — the reason the threshold is 4 MiB, kept honest forever.
+
+    The content-hash fingerprint only protects files BELOW
+    ``_CONTENT_HASH_MAX_BYTES``; anything above falls back to the
+    ``(mtime_ns, size)`` fast path, which is blind to same-second
+    same-size edits on this deployment's 1-second-granularity FUSE mount.
+    Owner measured ``static/styles.css`` at 1,026,466 bytes — the project's
+    most sibling-contested file — sitting ABOVE an earlier 256 KiB
+    threshold, i.e. exactly on the blind path while CSS-extraction and
+    dead-style-sweep batches collided over it.
+
+    This guard flips red the day ANY tracked agent-editable text file
+    grows to/past the threshold — raise the constant (and say why in the
+    commit) instead of letting coverage silently lag file growth.
+    """
+    import pathlib
+    import subprocess
+    from lib import write_freshness
+    root = pathlib.Path(__file__).resolve().parents[1]
+    cp = subprocess.run(
+        ['git', 'ls-files', '-z'], cwd=root, capture_output=True, check=True)
+    names = [n for n in cp.stdout.decode('utf-8', 'replace').split('\0') if n]
+    limit = write_freshness._CONTENT_HASH_MAX_BYTES
+    offenders = []
+    largest = (0, '')
+    for n in names:
+        if os.path.splitext(n)[1].lower() in _BINARY_EXT:
+            continue
+        try:
+            sz = os.path.getsize(root / n)
+        except OSError:
+            continue
+        if sz > largest[0]:
+            largest = (sz, n)
+        if sz >= limit:
+            offenders.append((n, sz))
+    assert not offenders, (
+        f'Tracked text file(s) at/above the freshness hash threshold '
+        f'({limit} B) — they sit on the mtime fast path, blind to '
+        f'same-second same-size edits on FUSE: {offenders}. Raise '
+        f'_CONTENT_HASH_MAX_BYTES (and say why in the commit).')
+    # Named pins: the two most contested files must stay covered, called
+    # out explicitly so a failure names them without scrolling.
+    for pin in ('static/styles.css', 'index.html'):
+        sz = os.path.getsize(root / pin)
+        assert sz < limit, (
+            f'{pin} is {sz} B ≥ threshold {limit} B — raise '
+            f'_CONTENT_HASH_MAX_BYTES, it is on the blind fast path')
+    # Sanity the guard itself reads the real tree (styles.css really is
+    # the kind of file that bit us: it must be sizeable, not trivial).
+    assert os.path.getsize(root / 'static/styles.css') > 512 * 1024
 
 
 @pytest.mark.unit

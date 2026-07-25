@@ -36,14 +36,23 @@ Fingerprint — why content, not mtime (MEASURED, do not "simplify" back):
   produces. Verified live: 10 same-size writes within one second changed
   the fingerprint ZERO times.
 
-  So for files ≤ ``_CONTENT_HASH_MAX_BYTES`` (256 KiB — covers every source
-  file in the tree; blake2b at GB/s costs <0.1 ms) the fingerprint is
+  So for files ≤ ``_CONTENT_HASH_MAX_BYTES`` the fingerprint is
   CONTENT-addressed: ``('c', size, blake2b-128)``. Same-second same-size
   edits with different content are caught; a content-preserving touch is
   NOT stale (nothing to clobber). Files ABOVE the threshold keep the
   ``('m', mtime_ns, size)`` fast path — they are data/asset payloads, not
   the source-edit scenario, and the residual same-second blind spot there
   is documented rather than paid for with a full read on a FUSE mount.
+
+  The threshold's job is to exclude multi-MB DATA/BINARY payloads
+  (models, datasets, archives) — NOT source text. It is 4 MiB because the
+  project's most sibling-contested tracked file, ``static/styles.css``,
+  measured 1,026,466 bytes (owner-verified 2026-07-25) and sat ABOVE an
+  earlier 256 KiB value — on the blind fast path, exactly where the CSS
+  extraction/dead-style-sweep batches collide. blake2b at GB/s hashes
+  4 MiB in single-digit milliseconds. Coverage is drift-guarded:
+  tests/test_write_freshness_gate.py::test_tracked_text_files_stay_under_hash_threshold
+  flips red the day any tracked text file outgrows it.
 
 Env: ``TOFU_WRITE_FRESHNESS_GATE=0`` disables recording AND checks.
 This module is a leaf: stdlib + lib.log only, so both ``lib/project_mod``
@@ -78,16 +87,18 @@ def _gate_enabled() -> bool:
 
 
 # Files at or below this size get a CONTENT fingerprint (see the module
-# docstring for the measured 1-second-mtime-granularity reason). 256 KiB
-# covers every source file in the tree; the hash cost is sub-millisecond.
-_CONTENT_HASH_MAX_BYTES = 256 * 1024
+# docstring for the measured 1-second-mtime-granularity reason, and for
+# why 4 MiB: it must cover every tracked TEXT file — styles.css alone is
+# ~1 MB — while excluding multi-MB data/binary payloads. Hashing 4 MiB
+# with blake2b costs single-digit milliseconds.
+_CONTENT_HASH_MAX_BYTES = 4 * 1024 * 1024
 
 
 def _fingerprint(abs_path: str) -> tuple | None:
     """Fingerprint of *abs_path*, or None when it can't be read.
 
     Two shapes (see module docstring):
-      * ``('c', size, blake2b_hex)`` — content-addressed, files ≤ 256 KiB;
+      * ``('c', size, blake2b_hex)`` — content-addressed, files ≤ 4 MiB;
       * ``('m', mtime_ns, size)``  — fast path, larger files.
     """
     try:

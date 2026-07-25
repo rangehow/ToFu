@@ -1,6 +1,17 @@
 # Project Journal
 
 
+### 2026-07-25(续22) — Opus 5 preset 报错根修:干净名当主 id、网关 id 被贬进别名(事故形态)(commit 见下,3 文件:模板+新守卫套件+本条目;新套件 2/2 含 NEUTER + failing-first,九套件相邻环 **144/144**,collect **8823** 0 err,活网关双探针 + 活服务器 e2e 三连实证)。
+- **事故形态(owner 手工加模型踩的坑,正是上一轮命名讨论的实证):** 已保存配置里 opus-5 条目为 `model_id: "claude-opus-5"` + `aliases: ["yuju-claude-opus-5-evaDaily"]` + `cost: 15`。而 `body['model']=slot.model` 只发主 id,别名永不替换上线——活网关探针实证:`claude-opus-5` → **HTTP 400「不支持的模型类型」**(dispatcher 跨 key 重试循环=用户看到的"卡住"),`yuju-claude-opus-5-evaDaily` → **HTTP 200**(响应 echo `claude-opus-5`,网关上游真名但校验层只认 yuju 形)。cost 15 vs 兄弟 0.045 是 333× 虚高,会顺带污染调度排序与费用估算。
+- **修复(三层,全部实证):** ①已保存配置走服务器自有 API 热修(`POST /api/v1/server-config` 只发 providers 键,热重载+槽池重建,`needs_restart:false`)——条目改为 `model_id: yuju-claude-opus-5-evaDaily`/`aliases: []`/`cost: 0.045`/`thinking_default: true`(对齐 4.8 兄弟字段形);②`static/provider_templates/meituan.json` 补 opus-5 条目(yuju id 作主 id,最新在前),前端模板加载器本就运行时读该文件,零 JS 改动;③新守卫 `tests/test_meituan_opus5_gateway_template.py`——主 id 注册+兄弟字段 parity+**NEUTER 钉事故形态**(干净主 id+yuju 别名必须被审计 predicate 双flag),failing-first 先行(修前主测试红、NEUTER 绿)。
+- **e2e 实证(非假件):** 活服务器 `/api/v1/chat/completions` 用 yuju id 跑通完整编排链 **3 连 200**(9~11s,finish=stop);首次 500 实为与 dispatcher 槽池重建竞态的一次 120s 超时(error.log 有据),复跑稳定。**另探明**:网关对 opus-5 **容忍** temperature/top_p(双探针 200)——故旧进程(Jul24 启动,早于 c32e5fc6 family 修复)下基础对话即可用,重启非阻塞项。
+- **生效边界(诚实):** 运行中服务器加载的仍是 c32e5fc6 前的 `_family.py`——`is_claude_opus_47` 对 bare-major `opus-5-…` 判 False,thinking 契约降级(无 `display=summarized` 推理轨迹隐藏、xhigh 静默降 high);**下次重启**后全量契约生效。picker 显示名为原始 yuju id(无 MODEL_PRICING 行,沿用续22 前例不发明价格卡;干净显示名属 display_name 方案那摊事)。模板修复+守卫随提交生效;已保存配置修复**已即时生效**(API 热写)。
+- **共享树纪律:** 精确 pathspec 3 文件;sibling WIP(wallet/motion_video/api_v1 等)零触碰。
+
+### 2026-07-25(续21)
+# Project Journal
+
+
 ### 2026-07-25(续21) — Motion video P2b 无头引擎+api_v1 落地(commit `d06d7374`,11 文件 +1213/-3;engine 套件 15/15 含 NEUTER,合计 **63/63**,相邻 api_v1_integration+registry+skills 112/112,collect **8821** 0 err,真端到端引擎实证 20.3s 出片)。
 - **交付(P2b 全项 + P3 并行项顺带落地):** ①`_storyboard.py` 零 LLM 贪心分镜(min/target/max 三档,句号边界优先,**runt 归并不破 max 契约**——首版归并后超 max 被测试抓出当场修);②`_template.py` 零 LLM composition 兜底(字号五档阶梯/四色渐变轮换/HTML 转义防注入,构造即过静态闸);③`engine.py` 无头 worker(parse→storyboard→narrate→compose→**ThreadPoolExecutor 有界并行渲染**(默认 2 上限 4)→concat→loose 调轴侧车 SRT→mux),全程 AbortSignal,单镜失败带 scene_id+category 结构化诊断,重活全走 facade 缝;④`runtime.py` 播客镜像 dedup 六元组,**先建任务再注册键**消竞态(测试先抓出注册先于创建的空窗);⑤`routes/api_v1/motion.py` status/start(校验+dedup join)/poll/abort/Range 文件(只服务 result 记录路径)。
 - **测试(15 测):** 分镜构造即过闸/max 契约/runt/边界 clamp;模板全尺寸过闸+XSS 转义;**真 engine 全链**(假 provider 缝但真分镜/真模板/真 verify_spec——假 probe 从真写出的 index.html 读 data-duration,闸全真跑)+降级续静音/Abort/单镜失败诊断/**NEUTER**(剥 verify_spec→坏规格镜头放行,证闸承重)+dedup 生命周期+HTTP 层(400 三连/start/poll/dedup join/abort/Range 双格式,flask_client 真 app)。

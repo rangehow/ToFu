@@ -9,6 +9,7 @@
   },
   "thinking_format": "enable_thinking",
   "models": [
+    { "model_id": "yuju-claude-opus-5-evaDaily", "capabilities": ["text", "vision", "thinking"], "rpm": 30,  "cost": 0.045 },
     { "model_id": "aws.claude-opus-4.8",     "capabilities": ["text", "vision", "thinking"], "rpm": 30,  "cost": 0.045 },
     { "model_id": "aws.claude-opus-4.7",     "capabilities": ["text", "vision", "thinking"], "rpm": 30,  "cost": 0.045 },
     { "model_id": "aws.claude-opus-4.6",     "aliases": ["aws.claude-opus-4.6-b", "vertex.claude-opus-4.6"], "capabilities": ["text", "vision", "thinking"], "rpm": 30,  "cost": 0.045 },

@@ -29,6 +29,13 @@
 - **Object.assign / 解构 / spread 显式处置(不留白):** 守卫 docstring 里**具名豁免** —— 点号外的写/读形态别名扫描看不到;理由:点号赋值是本库唯一实践(grep 证),且 reader-surface 守卫钉死了任何能碰 session 的文件,这些形态的作者必须先出现在 allowlist 才会被本守卫扫到。
 - **git 纪律:** 单文件 numstat 全量不截断;暂存 stray 为空;sibling WIP 零损留在 worktree。
 
+### 2026-07-25(续) — Plan-B 收口:owner 验收抓出的 mtime 盲区根修 + handler 级真驱(epic `pt_c01aecb8623140b0`,2 commit:`109461cf` 指纹加固 / `6b556aba` 真驱套件;新测 21 面全绿含双 NEUTER,相邻 148/148,collect **8616** 0 err)。
+- **盲区(owner 实测,根假设级):** 本部署 dolphinfs FUSE **mtime 粒度恰为 1 秒**(`st_mtime_ns % 1e9 == 0`),ctime 同粗、ino 重写不变;同秒同尺寸连写 10 次指纹零变化——`(mtime_ns, size)` 指纹对「同 1 秒 tick 内等长修改」全盲,sibling 快编辑(或同 tick 内原子 replace)可穿透门禁。
+- **根修(非注释搪塞):** ≤256 KiB(覆盖全部源码;blake2b 亚毫秒)改**内容寻址指纹** `('c', size, blake2b-128)`;大文件保留 `('m', mtime_ns, size)` 快路径(数据/资产负载,非源码编辑场景,残余盲区注释钉明)。语义变化一处(有意):小文件同内容 touch 不再判陈旧(内容相同=无可覆盖)。实测事实钉进模块 docstring。
+- **测试:** 盲区回归测试在**任何文件系统**上忠实仿真同 tick 攻击(utime 先把文件钉到 1 秒整边界→盖章→等长异内容重写→utime 回同一边界:(mtime,size) 严格零变化,内容 hash 仍判陈旧);大文件快路径双向钉(同 tick 同尺寸盲、mtime 动则捉);阈值边界('c'@256KiB/'m'@+1)。期内自纠 2 处测试仿真失真(盖章前没钉 mtime,被红抓出)。
+- **真驱套件(第二指令):** 此前 12 测全直调 gate 函数,接线坏死不可见。新套件走**真实 `_handle_project_tool`** 完整闭环:A read(盖章)→B 同 handler 写(无令牌放行)→A 写**被拒**(stale 徽标上 wire,B 字节原样)→A 重读→同写成功;批量 apply_diffs 只跳陈旧 edit('partial: stale');**双 NEUTER**:剥 handler 的 check 缝→同写真的覆盖 B;剥 record 缝→A 变盲静默通过——两条接线都证明承重。`_finalize_tool_round` 按文档指定的 monkeypatch 点替换;drive 助手按真实编排器补记 toolRounds(顺带喂饱 read-gate 满足集——批量测试真实穿过两道门)。
+- **生效边界(诚实):** 同前——全部守卫随 owner 安排的重启生效;重启前本会话写仍走旧 handler。
+
 ### 2026-07-25 — Plan-B 共享树并发守卫三件套 + 生效契约自动化(epic `pt_e8314a7528f644e5`,5 commit:`6c7d17a6` 原子写 / `a526c664` 拆分收养 / `79f42221` 新鲜度门 / `b4ed9028` write_set advisory / `68c08fc0` 自动重启 watcher;新测 **46 面全绿**(含 NEUTER),终跑 **226/226**,collect **8565** 0 err)。
 - **背景(owner 命题):** worktree 隔离实验失败根因=合并工作没有属主(1 人类整合者)+「完成」定义脱节(分支 commit≠运行中服务器生效);药方=共享树打底+机械守卫治「切会话覆盖」+生效契约自动化。
 - **件1 原子写:** `write_file`/`apply_diff`/`insert_content`/upload 四处落盘统一 `_atomic_write_bytes`(tmp 同目录+fsync+`os.replace`),并发读者/importer 永远只见完整旧文件或完整新文件——sibling 写一半造成 ~160s IndentationError 窗口的那类事故根除;保权限位/符号链接写穿/失败留旧内容零临时泄漏。9 测。

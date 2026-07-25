@@ -1,6 +1,16 @@
 # Project Journal
 
-### 2026-07-25(续) — e2e Layer 2 升级为 Studio 变体:owner 验收抓出「chat 模式恢复永远证不了 Studio 工具面存活」缺口(commit 见下,1 文件 +97/-21,套件 4/4 ×2 复跑稳定(46.6s),相邻 57/57,collect **8513** 0 err)。
+### 2026-07-25(续) — e2e Layer 2 升级为 Studio 变体
+# Project Journal
+
+### 2026-07-25 — 总账验收三缺口闭合:wave-5 只读审 autopilot 2506L + index.html 入账 + reconciled-at 重生成(commit `33f4e02`,总账 v2,双向计数 1057≡1057)。owner 验收 wave-4 总账后抓出三个真缺口。
+- **①index.html 漏账:** 生成器库存只走 root `*.py`,全项目被编辑次数最多的前端文件没有 verdict 行——正是本行动反复抓的「以为覆盖」。修:新增 root_assets 类别,index.html → wave-2(fe_e + §3.4 批次)。
+- **②EXEMPT≠已查 + 又抓到假审查:** 派 reviewer 只读审 4 个 `autopilot*.py`(2506L,sibling 拆分中)——它 **16.4 秒、0 次工具调用、2 轮** 就报「全绿」,**根本没读文件**(w4_b1 幻觉同类,拒收)。**我亲自逐行读完 2506 行**:每个 catch 都有日志、exactly-once baton/supersede 复查/conclude 幂等/预算守卫 fail-open/carrier finally-discard 全部在位 → **真·CLEAN(有引证)**。4 行从 EXEMPT 翻转 wave-5 read-only audit。owner 是对的:sibling 所有权挡的是**编辑**,挡不住**只读**。
+- **③总账漂移:** v1 生成时 lib=833、活树已变(sibling 删/改文件)。收口时以最终状态重生成,文档头写 `Reconciled at commit c732e61…`(完整 hash),并做**双向计数**:文档数据行 1057 ≡ 脚本重数 1057 ≡ 生成器总数 1057(`grep -c '^| '`=1074=1057 数据+17 表头)。tallies:wave-1 372 / wave-2 135 / wave-3 390 / wave-4 149 / wave-5 4 / EXEMPT 7。
+- **教训沉淀(第三条 agent 幻觉形态):** 继「想象的正则」(w3_a)、「不存在的行号」(w3_a/w4_b1)之后,新形态=**零工具调用的全绿报告**——elapsed/rounds/tool_calls 是测谎仪:16 秒读不完 2506 行,tool_calls=0 即铁证。验收 agent 报告先查这三个数。
+
+### 2026-07-25(续) — e2e Layer 2 升级为 Studio 变体
+:owner 验收抓出「chat 模式恢复永远证不了 Studio 工具面存活」缺口(commit 见下,1 文件 +97/-21,套件 4/4 ×2 复跑稳定(46.6s),相邻 57/57,collect **8513** 0 err)。
 - **缺口(owner 原话):** 「恢复成一个丢掉项目工具面的降级回合」正是 Studio 用户最痛的静默劣化,chatMode='chat' 的 Layer 2 永远抓不到。
 - **升级:** 被杀回合本身就是 studio + tmp projectPath(**settings 承载档位**——carrier spawn_task 传 config=None,从 conv_settings 解析,autoApply 同理必须进 settings);mock 新场景 studio_recover_write:流#1 慢滴造尸、流#2(恢复 carrier)发真 write_file(recovered_marker.txt)、流#3 收尾。断言链补:①carrier 解析 config 的 chatMode='studio' + projectPath 原样存活;②**决定性**:marker 文件真实落盘且字节精确;③恢复请求工具面含 write_file + 工具结果回填闭合。NEUTER 同步:剥恢复路径后 marker 不存在 + 无 carrier config,两条新断言同样真转红。
 - **结果(诚实):** 首跑即绿(19.3s)——恢复路径**没有**丢 projectPath/chatMode 的真实 bug:killed-recovery carrier 从 conv_settings 解析档位/项目/autoApply 的链路是健全的。本测试此后是该行为的永久守卫,任何把恢复降级为纯文本回合的回归都会当场红。

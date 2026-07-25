@@ -521,24 +521,22 @@ def _assert_tail_matches_committed(tail: dict, committed: dict):
 
 
 def _assert_segments_equivalent(tail_segs, committed_segs):
-    """Segments: committed may only ever be a not-yet-finalized PREFIX of the
-    tail's timeline — never a different one."""
+    """Segments: STRICT byte-identity.
+
+    Post-pt_687b87ac the terminal sync re-assembles the timeline before
+    stamping, so the done frame's committed segments must equal the DB
+    tail's VERBATIM — the historical prefix tolerance was the race this
+    epic root-fixed. Kept as a named helper so the failure message stays
+    precise.
+    """
     assert isinstance(tail_segs, list) and isinstance(committed_segs, list), \
         f'segments missing on one side: tail={type(tail_segs)} committed={type(committed_segs)}'
-    assert len(tail_segs) == len(committed_segs), \
-        f'segment count drift: tail={len(tail_segs)} committed={len(committed_segs)}'
-    for i, (ts, cs) in enumerate(zip(tail_segs, committed_segs)):
-        assert set(ts) == set(cs), \
-            f'segments[{i}] key drift: tail={sorted(ts)} committed={sorted(cs)}'
-        for key in ts:
-            if key == 'text':
-                tv, cv = ts.get('text') or '', cs.get('text') or ''
-                assert tv.startswith(cv), \
-                    (f'segments[{i}].text diverged (not prefix-finalization):\n'
-                     f'  tail     = {tv[:200]!r}\n  committed= {cv[:200]!r}')
-            else:
-                assert ts[key] == cs[key], \
-                    f'segments[{i}].{key}: tail={ts[key]!r:.200} committed={cs[key]!r:.200}'
+    leaf = _first_diff(tail_segs, committed_segs, '$.segments')
+    assert leaf is None, (
+        'segment timeline drift between done.committedMessage and DB tail '
+        f'(pt_687b87ac regression) — first diff at {leaf[0]}:\n'
+        f'  tail     = {leaf[1]!r:.300}\n'
+        f'  committed= {leaf[2]!r:.300}')
 
 
 def _first_diff(a, b, path='$'):

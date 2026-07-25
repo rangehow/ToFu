@@ -770,6 +770,28 @@ def _sync_result_to_conversation(task, meta):
         #   conversations.messages JSON column). Co-persisted with toolRounds
         #   above, so rehydrate_segments can rebuild _round on read. Dark:
         #   nothing reads msg['segments'] yet.
+        #
+        # ★ pt_687b87ac root fix: RE-ASSEMBLE the timeline here, at the exact
+        #   point it is consumed — never persist whatever mid-stream
+        #   checkpoint assembly happens to sit on ``task['segments']``. The
+        #   pre-emit sync (orchestrator/_finalize.py) otherwise stamps
+        #   ``_committedMsg`` with a timeline whose terminal text segment
+        #   holds only the first streamed word, while persist_task_result's
+        #   later re-assembly completes the DB tail — the done frame has
+        #   already left with the stale prefix. ``assemble_segments`` is a
+        #   pure projection of (toolRounds, content, thinking); its only
+        #   writers are the checkpoint/persist assemblies, so refreshing can
+        #   never clobber hand-authored state. Best-effort: on assembly
+        #   failure fall back to the task's existing list (today's behaviour).
+        try:
+            from lib.tasks_pkg.segments import assemble_segments
+            _fresh_segs = assemble_segments(task, merged=_merge_tool_rounds(task))
+            if _fresh_segs:
+                task['segments'] = _fresh_segs
+        except Exception as _sa_e:
+            logger.warning('%s conv=%s terminal segment re-assembly failed '
+                           '(non-fatal, using existing timeline): %s',
+                           pfx, conv_id, _sa_e, exc_info=True)
         try:
             _segs = task.get('segments')
             if _segs:

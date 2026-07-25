@@ -1,5 +1,12 @@
 # Project Journal
 
+### 2026-07-25(续3) — pt_687b87ac 收口:done.committedMessage segments 竞态根修(brain 自主派发我自己的票,commit 见下,5 文件 +97/-35,parity 4/4、e2e 6/6 ×2 严格比较器、相邻 36+43 全绿,collect **8593** 0 err)。
+- **机制(读穿后的完整因果):** `_finalize.py:1151` 的 pre-emit sync 在 done 帧发出前盖 `_committedMsg`,segments 直接读 `task['segments']`——上一次 5s 节流检查点的组装快照(round-2 首词 'Studio ' 触发检查点时定格);`persist_task_result` 随后在干净终局态**重组装**并二次 sync → DB 尾部全文。done 帧已带旧快照出门 → 与 DB 永久分叉。
+- **根修(票的处方,最小缝):** `_sync_result_to_conversation` 消费时间线的精确位置(line ~790)`assemble_segments` 重组装再写 `last_msg`——单一收口点,自动覆盖全部四个调用者(pre-emit / persist / autopilot pre-sync / reaped-stuck);组装是纯投影,生产里 task['segments'] 只有两个组装器写,重组装永不踩手设状态;组装失败回落原列表(与今日行为一致)。
+- **failing-first 双证:** ①parity 套件新测(手设陈旧 segments + 终局 content → sync → committed/DB 双通道必须全文)修复前红(0.98s)、修复后绿;②e2e 比较器从「前缀终局化」**升级为严格全字节**——修复前 Layer-1 当场红(first diff `$.segments[1].text`,竞态每跑必现),修复后 ×2 复跑稳定绿。此前吸收的「前缀容忍」删除。
+- **连带:** test_rev_cas_migration 主测手工种 `(llmRound=0, deliverable=False)` 段,重组装后键位不匹配 → fixture 改为组装真实形状(终端段,键 `(None,'text',True)`),测试意图(regraft 嵌套 merge 保翻译)不变;同文件 NEUTER 不种段不受影响;drift 守卫(AST 扫 last_msg 字面写入)不受影响(未新增 last_msg 字面写)。
+- **生效边界:** 生产改动仅 _sync.py 一处(重组装+回落);活回合与恢复回合的 done.committedMessage 自此与 DB 尾部在 segments 通道也逐字节一致。
+
 ### 2026-07-25 — 项目面板「最近搜索 × 按钮不居中」根修:base `.modal input` 出血干掉输入框专属规则(commit `75bc677b`,2 文件 +116/-3,特异性 14/14 + 行为 6/6 绿含 NC 双中和)。
 - **现象(owner 截图):** 项目 Co-Pilot 面板 Recent 搜索框的清除 × 明显掉在输入框中轴线下方(~8px),快贴底边。
 - **根因(特异性数学,非渲染玄学):** styles.css:2959 的 base `.modal input` 巨规则((0,1,1):margin-bottom:16px / padding:10px 12px / font-size:13px)压过裸 `.recent-search-input`(0,1,0)。16px 下边距把 `.recent-search` 容器撑到 48px,输入框(32px)顶对齐,而 × 按钮锚在容器 top:50% → 比输入框真中线低 8px;padding 出血顺带打死为 × 留位的 30px 右内边距。同模态的 `.mp-add-row .mp-path-input`(0,2,0)早就用链式选择器躲过同一出血,搜索框漏了。

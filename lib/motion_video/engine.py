@@ -304,10 +304,6 @@ def run_motion_task(task: dict) -> None:
         logger.error('[MotionVideo] task %s failed: %s', task_id, e, exc_info=True)
         _motion_runtime.finish(task_id, error=e,
                                error_context='motion-video:engine')
-    except Exception as e:
-        logger.error('[MotionVideo] task %s failed: %s', task_id, e, exc_info=True)
-        _motion_runtime.finish(task_id, error=e,
-                               error_context='motion-video:engine')
 
 
 def run_scene_regen_task(task: dict) -> None:

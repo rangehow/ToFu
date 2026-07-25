@@ -42,6 +42,13 @@ function _renderProvidersTab() {
     var keyCount = (p.api_keys || []).length;
     // Use explicit brand if stored (from template), else detect from hints
     var brand = p.brand || _detectBrand(p.name + ' ' + (p.base_url || ''));
+    // Managed subscription provider (auto-created from a Claude/ChatGPT OAuth
+    // login — see lib/oauth/outbound.provision_oauth_provider). It carries an
+    // `oauth` marker + a sentinel api_key; render it with the REAL underlying
+    // brand logo (Claude / OpenAI) rather than the unbranded 'oauth' box.
+    var oauthKind = p.oauth || '';               // 'claude' | 'codex' | ''
+    var isManagedOAuth = !!oauthKind;
+    if (isManagedOAuth) brand = (oauthKind === 'codex') ? 'openai' : 'claude';
     var isLocal = (brand === 'local');
     var endpointList = (p.endpoints && p.endpoints.length)
       ? p.endpoints
@@ -66,8 +73,10 @@ function _renderProvidersTab() {
         '<div class="stg-provider-url">' + escapeHtml(headerSubtitle) + '</div>' +
       '</div>' +
       '<div class="stg-provider-badges">' +
-        (isLocal ? _localEndpointBadge(nonEmptyEndpoints)
-                 : '<span class="stg-badge">' + keyCount + ' ' + t('settings.keys') + '</span>') +
+        (isManagedOAuth
+          ? '<span class="stg-badge stg-badge-oauth" title="' + escapeHtml(t('settings.oauthManagedTitle')) + '">' + Icon('plug', 10) + ' ' + escapeHtml(t('settings.oauthManagedBadge')) + '</span>'
+          : (isLocal ? _localEndpointBadge(nonEmptyEndpoints)
+                     : '<span class="stg-badge">' + keyCount + ' ' + t('settings.keys') + '</span>')) +
         '<span class="stg-badge">' + models.length + ' ' + t('settings.models') + '</span>' +
         (p.enabled === false ? '<span class="stg-badge off">' + t('settings.disabled') + '</span>' : '') +
       '</div>' +
@@ -76,6 +85,21 @@ function _renderProvidersTab() {
 
     // ── Expanded body ──
     html += '<div class="stg-provider-body">';
+
+    if (isManagedOAuth) {
+      // Explain WHAT this card is and how to remove it — the #1 confusion is
+      // "why does it reappear after I delete it?". The token lives on disk
+      // (data/config/oauth/<provider>.json); a re-login/refresh re-creates the
+      // card. Deleting HERE routes to logout so the token is cleared too.
+      var _brandLabel = (oauthKind === 'codex') ? 'ChatGPT' : 'Claude';
+      html += '<div class="stg-oauth-note">' +
+        '<div class="stg-oauth-note-icon">' + Icon('plug', 16) + '</div>' +
+        '<div class="stg-oauth-note-body">' +
+          '<div class="stg-oauth-note-title">' + escapeHtml(t('settings.oauthManagedNoteTitle', { name: _brandLabel })) + '</div>' +
+          '<div class="stg-oauth-note-desc">' + escapeHtml(t('settings.oauthManagedNoteDesc', { name: _brandLabel })) + '</div>' +
+        '</div>' +
+      '</div>';
+    }
 
     if (isLocal) {
       // ── Local provider: name + structured endpoint rows + optional shared key ──
@@ -139,7 +163,9 @@ function _renderProvidersTab() {
         '<label class="stg-toggle"><input type="checkbox"' + (p.enabled !== false ? ' checked' : '') + ' onchange="_onProvField(' + pi + ',\'enabled\',this.checked)">' +
         '<span class="stg-toggle-track"><span class="stg-toggle-thumb"></span></span></label>' +
       '</div>' +
-      '<button class="stg-btn-danger" onclick="_deleteProvider(' + pi + ')">' + escapeHtml(t('settings.deleteProvider')) + '</button>' +
+      (isManagedOAuth
+        ? '<button class="stg-btn-danger" onclick="_logoutManagedProvider(' + pi + ')">' + escapeHtml(t('settings.oauthLogoutRemove')) + '</button>'
+        : '<button class="stg-btn-danger" onclick="_deleteProvider(' + pi + ')">' + escapeHtml(t('settings.deleteProvider')) + '</button>') +
     '</div>';
 
     // ── Nested Model List ──

@@ -1,0 +1,298 @@
+# Tofu 产出底盘设计稿(Production Substrate)——「一句话 → 成品」的通用承载形态
+
+> 状态:**设计稿,待 owner 拍板**(2026-07-25 落笔)。
+> 触发诉求(owner 原话):「我希望有一天,我只要在输入框里说我想要一个关于某新闻话题的
+> 科普知识视频,视频就被创作出来了,用户甚至不需要感知」+「我不确定现在这个技能形态是否合适」。
+> 前置:`docs/MOTION_VIDEO_DESIGN.md`(渲染机械层,P0–P3 已交付)。
+> 本稿**不是** motion video 的续集,而是它的上位抽象 + 它缺失的前半段。
+
+---
+
+## 0. 结论先行
+
+1. **不该做成「视频增强」**——「一句话 → 成品」是一整类能力(视频/播客/PPT/长报告/海报),
+   不是视频的一个补丁。
+2. **不该做成技能包**——技能包规范没有生命周期/依赖/产物契约(§3 外部证据),
+   承载不了长任务。技能包应退为**编导手册**(风格、动效规则、分镜策略)。
+3. **应该做成三层**:**① 产出底盘(横向复用) + ② 配方(每能力纵向) + ③ 知识包(技能商店)**。
+   比方:**底盘 / 车型 / 驾驶手册**。
+4. **当前最大的缺口不是形态,是「前半段」**:主题→调研→文案→时间轴 **完全空缺**;
+   画面创作**两个极端中间是空的**(主 agent 手写 = 高质但不可无人值守;零 LLM 模板 = 幻灯片)。
+5. **「用户无感知」应理解为「零编排负担」,不是「零可见性」**——底盘必须双投影进度
+   (气泡内联生产卡 + 面板),否则回到「一行递增秒数」的老坑。
+
+---
+
+## 1. 现状体检(全部盘上核实)
+
+### 1.1 已交付的是渲染机械层,不是主题驱动生产
+
+`docs/MOTION_VIDEO_DESIGN.md` 声明 P0/P1/P2/P2b/P3 全交付,属实——但交付范围是
+**「已有 SRT / scenes.json」之后**的那一半。
+
+| 阶段 | 今天的状态 | 证据 |
+|---|---|---|
+| 意图 → 选题澄清 / 时长规格 | ❌ 无 | 无任何 intent 层(§1.3) |
+| 主题 → 联网调研聚合 | ❌ 无 | engine 内零 web_search 缝 |
+| 调研 → 口播文案 | ❌ 无 | `guide/WORKFLOW.md:12-17` 把这件事推给主 agent 即兴生成 |
+| 文案 → 时间轴 | ⚠️ 硬估 | `lib/paper/video_abstract.py:88-99` 用 4.2 字/秒估算,**不复用 TTS 真实时长** |
+| 分镜 → 画面 | ⚠️ 两极 | §1.2 |
+| 配图 / 素材 | ❌ 无 | `lib/tools/image_gen.py` 与 motion_video 零连接;契约本身禁止渲染期联网取素材 |
+| 渲染 / 拼接 / 配音 / 烧字幕 / 单镜重渲 | ✅ 完整 | `lib/motion_video/_render.py` `_concat.py` `_audio.py` |
+
+**入口把门关死了**:`routes/api_v1/motion.py:100-103` 要求 `srt` / `srt_path` /
+`scenes_path` 三者至少一个,否则 400;`lib/motion_video/engine.py:83-98`
+`raise ValueError('neither srt_path nor scenes_path available')`。
+唯一的无-SRT 通道是论文视频摘要,但前置是 `video_abstract.py:126` 的 `has_report()` 门。
+
+### 1.2 画面质量:两个极端,中间是空的
+
+| 路径 | composition 由谁产出 | 质量 | 代价 |
+|---|---|---|---|
+| P1 聊天工具路(8 个 `motion_video_*`) | **主 agent 逐镜手写 index.html** | 高:可 web_search 下载官方 SVG/logo,可用 13 个多相位蓝图 | 8 步手工编排;**必须挂项目**(`lib/tools/registry/_build.py:131-140` `project_ready` 门);烧主对话 context;**无法无人值守** |
+| P3 engine 路 | 零 LLM 模板 `lib/motion_video/_template.py:34-118` | **幻灯片**:四色渐变背景 + 居中一行白字 + 左上角「01 / 08」;动画仅 headline y+56 淡入、tag 淡入(`_template.py:110-116`) | 全自动 |
+
+模板还有两个已知边界:SRT 整段 cue 直灌 headline(`_template.py:99-101`),
+长文本降到 46px(`_FONT_STEPS`,`_template.py:25`)会溢版。
+
+**这是本设计稿要补的第一块:engine 内缺一个「每镜一个子 agent」的创作阶段。**
+auto-motion 当年就是每镜起一次 Claude Code;我们有 `lib/agent_loop.run_agent_loop`
+(多轮工具循环 + 三点中止检查)现成,完全可以在进程内做同一件事,且更强
+(无外部 CLI 依赖 / 可并行 / 可单镜重跑)。
+
+### 1.3 聊天侧:无意图路由,纯模型自选
+
+- **没有任何 LLM 预分类 / intent router**。`lib/chat_dispatch.py:93`
+  `classify_send_intent` 名字像路由,实际只是并发调度分类器(aborted/steered/queued)。
+- 真正决定「有哪些工具」的是声明式注册表 `lib/tools/registry/_build.py:301`
+  `_register_builtins()`,按 `ToolContext` 布尔开关静态拼 schema。
+- `lib/tasks_pkg/chat_mode.py:74-79`:Air 已删,只剩 `chat`/`studio`,只做原子 flag 展开,
+  **不做语义分流**;`is_lean_mode()` 永远 False(`:138-150`),是给未来「简单轮次自动收缩工具」留的缝。
+
+**推论**:「说一句话就出片」不需要新造意图层——需要的是**一个语义足够明确、门槛足够低的
+入口工具**,让模型在完整 schema 上自然选中它。反过来说,今天 `project_ready` 硬门意味着
+**没挂项目的用户连工具都看不见**。
+
+### 1.4 长任务在气泡里的呈现:同步阻塞 + 一行递增秒数
+
+- `lib/tasks_pkg/handlers/motion_video.py:92-103`:`motion_video_render` **同步阻塞**
+  (默认 `timeout=1800`),整段跑完才 `_finalize_tool_round` 一次性返回。
+- 期间只有心跳保活:`lib/tasks_pkg/tool_dispatch/_heartbeat.py:125` 每 15s
+  (`TOOL_HEARTBEAT_INTERVAL`)发一条 `tool_progress`,内容只有「渲染中…(N s)」。
+  **没有阶段、没有第几镜、没有百分比。**
+- **能流式的先例已存在**:`lib/tasks_pkg/handlers/code_exec.py:29-110` 把 stdout 按
+  200ms/4KB 合批发 `tool_progress`,并镜像到 `round_entry['_partialOutput']` 供断线重放;
+  前端 `static/js/ui/sse_handlers_io.js:49` `_handleToolProgress` 已接收。
+  **motion_video 没接这条路。**
+- 另有独立通道:`TaskRuntime(push_channel=…)`(`lib/agent_core/task_runtime.py:93`)
+  → `push_event`,paper/translate 用它驱动独立面板,不走气泡。
+
+### 1.5 swarm 不能当流水线执行器(硬约束)
+
+`lib/swarm/tools.py:460` `SUB_AGENT_DENYLIST` 禁止子代理再 spawn ⇒ 只有**一层扇出**,
+做不了「分镜→渲染→配音→合成」的有序多阶段编排;阶段串联若交给主模型每轮决策,
+既不可靠又烧 context。**编排必须在 TaskRuntime 内,不在 swarm 内。**
+(swarm 仍是**阶段内并行**的合适工具,例如「10 个镜头各自创作」。)
+
+### 1.6 样板成本:1500–2000 行/能力,真业务只有 300–600 行
+
+| 层 | 文件 | 真实量级 |
+|---|---|---|
+| runtime | `lib/<feat>/runtime.py` | **~118 行,近乎逐字复制**。`lib/motion_video/runtime.py` 的 docstring 自己写着「Mirrors `lib.paper.podcast_runtime` exactly」 |
+| engine | `lib/<feat>/engine.py` | 300–600 行,**纯业务** |
+| api_v1 路由 | `routes/api_v1/<feat>.py` | 300–400 行(`motion.py` 318);poll/abort 已被 `routes/_task_routes.py:36` 吃掉,剩 start 校验 + dedup + 文件下发是手写 |
+| push 频道 | 一个构造参数 | ≈0 |
+| 前端 API | `static/js/api.js` | ~8 行/能力 |
+| 前端面板 | `static/js/paper/podcast.js` 493 行 / `paper/video.js` 467 行 | **~500 行/能力** |
+| i18n | `static/js/i18n.js` | podcast 26 条 / video 30 条 × 语种 |
+| bundle + tab 接线 | `lib/js_bundler.py` + `index.html` 4 处 | 逐条静态钉 |
+| artifacts | **完全没接** | §1.7 |
+| 测试 | | ~1200 行/能力 |
+
+**已存在但没用起来的三个缝**:
+- `routes/plugin_registry.py:57` `tofu.task_runtimes` 入口组——「注册一个后台能力」的雏形,
+  只服务 `routes/api_v1/tasks.py` 的通用查询,**不生成路由不生成面板**;
+- `routes/api_v1/tasks.py:40` `_registries()` 是**硬编码列表**(chat/paper/translate/agents),
+  **motion 与 podcast 都不在其中**——于是 podcast 又手写了一遍 `poll_podcast_task`;
+- 通用 `GET /api/v1/tasks/<id>/{events,stream}` + `/abort` 其实**已经通用化了**,没人骑。
+
+**现成反证(证明抽象可行)**:`lib/paper/video_abstract.py` 复用 motion runtime,
+全部业务只用 **152 行**,零新增路由、零新增面板。
+
+### 1.7 artifacts today 承载不了 mp4/音频
+
+- `lib/artifacts/core.py:37` `ALLOWED_FORMATS = ('markdown','html','svg')`,非白名单直接 `ValueError`;
+- `content` 强制 `isinstance(content, str)`(`core.py:250`),**无二进制通道**,上限 8 MiB(`core.py:34`);
+- 前端 `static/js/artifacts.js:428` 只分派 md/html/svg,无 `<video>`/`<audio>`;
+- 于是 podcast 走 `serve_podcast_audio`(`routes/paper.py:3001`)、motion 走
+  `serve_motion_file`(`routes/api_v1/motion.py:180`),**各造一套 Range 下发**。
+
+---
+
+## 2. 三层分工模型
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ ③ 知识包(技能商店,Markdown)  「怎么做得好看」                 │
+│    hyperframes-motion / -design / 分镜策略 / 品牌规范          │
+│    ── 零代码。模型按需 activate_skill 渐进披露。               │
+├─────────────────────────────────────────────────────────────┤
+│ ② 配方(每能力 300–600 行纯业务)  「这件产品由哪些阶段组成」    │
+│    video   = research → script → timeline → storyboard        │
+│              → scene_author → render → assemble               │
+│    podcast = research → script → tts → assemble               │
+│    ppt     = research → outline → slides → export             │
+├─────────────────────────────────────────────────────────────┤
+│ ① 产出底盘(横向复用,一次性)  「长任务怎么跑、产物怎么存、       │
+│    进度怎么让人看见」                                          │
+│    job 生命周期 + 阶段图契约 + 二进制产物 + 进度双投影          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 2.1 ① 产出底盘 `lib/production/` —— 职责清单
+
+| 组件 | 职责 | 消灭的重复 |
+|---|---|---|
+| `job.py`(`ProductionRuntime`) | `TaskRuntime` 之上的薄层:dedup key 声明式、阶段事件、stale 清理 | runtime 五件套 ~118 行/能力 |
+| `stages.py` | **阶段图契约**:每阶段 = `(name, run, gate, retry, resumable)`;上游产物落盘即 checkpoint;单阶段可重跑 | 每个 engine 手写的 try/except + 阶段 emit |
+| `progress.py` | **双投影**:同一份阶段事件同时 → 气泡 `tool_progress`(抄 `code_exec.py:81` 合批模式)+ 面板 `push_event` | 「一行递增秒数」 |
+| `deliverable.py` | 二进制产物登记 + 统一 Range 下发(路径引用而非 content) | 每能力一份 `serve_*_file` |
+| `entry.py` | start 路由骨架:enum 白名单校验 → dedup join → 返回 job | `motion.py` / podcast start 的重复骨架 |
+| 注册 | 挂 `tofu.task_runtimes`,并把 `routes/api_v1/tasks.py:40` `_registries()` 从硬编码改为发现制 | 每能力手写 poll |
+
+**不抽象的东西(刻意)**:
+- **前端面板不统一**——podcast 的转录/睡眠定时 与 motion 的逐镜网格/单镜重渲是**真实领域差异**,
+  强行统一会造出配置驱动的怪物。只统一**一张通用「生产卡」**(阶段进度 + 产物播放/下载 + 中止),
+  领域面板作为它的可选展开区。
+- **engine 业务不抽象**——那 300–600 行本来就该各写各的。
+
+### 2.2 ② 配方 —— 视频配方的完整阶段(补齐前半段)
+
+| # | 阶段 | 输入 → 输出 | 用 LLM? | 闸(零 LLM) |
+|---|---|---|---|---|
+| 1 | `research` | 主题 → 事实卡片集(来源 URL + 要点) | 是(web_search 多轮) | 每条要点必须挂 ≥1 个真实 URL |
+| 2 | `script` | 事实卡片 → 口播稿(分段、口语化、时长预算) | 是 | 字数-时长预算 ±10%;禁空段 |
+| 3 | `timeline` | 口播稿 → **真 SRT**(用 TTS 实测时长,不再 4.2 字/秒硬估) | 否 | 首尾相接、全覆盖、单调 |
+| 4 | `storyboard` | SRT → scenes.json | 否(贪心)/是(可选升级) | 现成 `check_storyboard` |
+| 5 | `scene_author` | 每镜 → index.html | **是(每镜一个子 agent)** | 现成 `check_composition_html` + `motion_video_check`,失败带反馈自修 1 次 |
+| 6 | `render` | 每镜 HTML → mp4 | 否 | 现成 `verify_spec`(ffprobe 复核) |
+| 7 | `assemble` | 逐镜 mp4 + 配音 → final.mp4 + 侧车 SRT | 否 | 现成时长复核 |
+
+**阶段 3 的关键修正**:今天 `video_abstract.py:88-99` 用 4.2 字/秒估时间轴,
+而 `lib/motion_video/_audio.py` 的 `synthesize_scene_narrations` 早就能给出**真实音频时长**。
+把 TTS 前移到时间轴阶段,SRT 就不再是估算——**音画天生对齐,loose 对轴的补偿也变小**。
+
+**阶段 5 的关键新增(本设计稿的技术核心)**:
+- 每镜起一个 `run_agent_loop`(`lib/agent_loop.py`),工具集**窄到只有**:
+  `write_file`(限定该镜目录)/ `web_search` / `fetch_url` / `motion_video_check` /
+  `motion_video_render` / `motion_video_probe`;
+- 上下文只带:该镜文案 + 时长 + `guide/COMPOSITION_CONTRACT.md` + `skeleton.html`
+  + 可选激活的 `hyperframes-motion` 蓝图 —— **不带全片上下文**(与 auto-motion 每镜独立
+  Claude Code 调用同构,但省掉外部 CLI);
+- 失败分类已有(`_render.py` 的 env_missing/lint/chrome/timeout/aborted),
+  带反馈自修最多 2 轮,再失败降级到 `_template.py`(**不整片翻车**);
+- 阶段内并行用有界线程池(已有,`engine.py` 默认 2 上限 4)。
+
+这一步同时解决三件事:**质量**(不再是幻灯片)、**可无人值守**(不依赖主对话)、
+**主 agent 只需调一个工具**(不烧 context)。
+
+### 2.3 ③ 知识包 —— 退为编导手册
+
+技能商店里已有的 6 个 hyperframes 包**位置正确,只是角色要说清**:它们是
+「怎么做得好看」的手册,由**阶段 5 的子 agent** 按需 `activate_skill`,
+而不是由主对话激活后手工照做。再加一个 tofu 自己的 `video-director` 包承载
+风格偏好/品牌规范/何时该用哪种品类。
+
+---
+
+## 3. 外部证据(为什么执行层必须是一等公民)
+
+| # | 证据 | 结论 |
+|---|---|---|
+| 1 | [agentskills.io/specification](https://agentskills.io/specification):技能 = 目录 + `SKILL.md`,可选 `scripts/`;frontmatter 必填仅 `name`/`description`,`compatibility` 是 1–500 字符**自由文本**,`metadata` 是任意 string→string。**规范完全不涉及任务生命周期、产物交付、重试与并发** | 技能包放得下脚本,承载不了「一句话→成品」的工程契约 |
+| 2 | [OpenAI Background mode](https://platform.openai.com/docs/guides/background):`background=true` 创建异步任务 → 轮询 status → cancel 幂等 → `sequence_number` 断点续接,产物按 id 检索、不依赖连接存活 | 这正是底盘该对齐的语义层;Markdown 表达不了 |
+| 3 | [remotion.dev/docs/ai/skills](https://www.remotion.dev/docs/ai/skills):官方 9+ 个 Agent Skills **全部是 guidance**,连 `/remotion-render` 也只讲「如何发起渲染」;真执行在 CLI / Lambda / Player,另有可 fork 的 [prompt-to-video 模板](https://www.remotion.dev/templates/prompt-to-video) | 「技能=知识层,执行=一等公民」是同类产品的既有切法 |
+
+旁证:Anthropic 自己也承认 skill 可含代码但安全模型仅靠「可信来源 + 人工审计」
+([工程博客](https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills))
+——不宜把长任务与外部 API 密钥路径压进只读技能包。
+
+---
+
+## 4. 「用户无感知」的正确读法(一处对 owner 原话的反对意见)
+
+「不需要感知」若指**不需要编排**(不用自己切分镜、不用点八个按钮),完全对,是目标。
+若指**看不到发生了什么**,会踩到 owner 在另一会话(`ms0aaxituzcl0y`)刚点名过的同一个坑
+(「尤其要让用户感知到在做什么」),而且今天的呈现已经证明了这个坑
+(§1.4:5 分钟只有一行递增秒数)。
+
+**底盘的呈现契约**:
+
+| 面 | 内容 |
+|---|---|
+| 气泡内联生产卡 | 当前阶段名(中文化)/ 第几镜 / 已完成镜头缩略图 / 预计剩余 / 中止按钮 |
+| 断线重放 | 抄 `code_exec.py` 的 `_partialOutput` 镜像 —— 刷新后进度不丢 |
+| 面板 | 可展开的领域面板(逐镜网格 / 单镜重渲 / 下载),即现成 `paper/video.js` |
+| 完成 | 产物直接在气泡里可播 + 落 deliverable 库 |
+
+**一句话**:零编排负担 ≠ 零可见性。
+
+---
+
+## 5. 分期实施
+
+### P4 — 视频前半段(最高价值,不依赖底盘)
+把 `research → script → timeline` 三个阶段做进 `lib/motion_video/`,并放开入口:
+`POST /api/v1/motion/videos` 接受 `topic` 字段;`_build_motion_video` 的 `project_ready`
+硬门改为「有项目用项目目录,无项目用 data 目录」。
+**验收**:给一个新闻主题,零人工干预出片(画面仍可是模板)。
+
+### P5 — 阶段 5 每镜子 agent(质量跃迁)
+`run_agent_loop` + 窄工具集 + 现成静态闸 + 失败降级模板。
+**验收**:同一主题,P5 产物与 P4 模板产物并排目检,且**任一镜失败不影响整片交付**。
+
+### P6 — 抽出产出底盘 `lib/production/`
+用 **strangler-fig**:先让 motion 骑上底盘(它最完整),podcast 保持原样;
+两者并存跑绿后再迁 podcast。同期把 `_registries()` 改为发现制、
+artifacts 扩 `binary` format + 文件引用 + 面板 `<video>/<audio>` 分支。
+**验收**:motion 的 runtime 五件套删除、poll 走通用端点、行为逐字节等价。
+
+### P7 — 第三个配方验证抽象
+用 PPT 或长报告做第三个配方,目标:**新能力 ≤ 600 行落地**。
+若做不到,说明底盘抽错了,回头修底盘而不是加配置项。
+
+**顺序理由**:P4/P5 是 owner 真正要的东西且**不依赖**底盘;P6 的收益要等到第三个能力
+才真正兑现,过早抽象会拿着两个样本猜第三个的形状。
+
+---
+
+## 6. 待拍板
+
+| # | 问题 | 选项 | 建议 |
+|---|---|---|---|
+| 1 | **实施顺序** | (A) P4→P5→P6→P7 先能力后底盘 / (B) P6 先抽底盘再补能力 | **A**:owner 的诉求在 P4/P5;底盘用两个样本抽会抽错 |
+| 2 | **`project_ready` 门** | (A) 放开:无项目落 `data/production/` / (B) 保持:必须挂项目 | **A**:「输入框说一句话」的前提是没挂项目也看得见工具 |
+| 3 | **阶段 5 的成本上限** | 每镜一次子 agent × N 镜 = N 次 LLM 调用。要不要硬性上限(镜数 / token / 金额)? | 建议**镜数上限 + 单镜 token 上限**,超限自动降级模板并告知用户 |
+| 4 | **调研阶段的事实纪律** | 科普视频会说错话。要不要强制「每条要点挂 ≥1 真实 URL」+ 片尾来源卡? | 建议**强制**——这是零 LLM 闸可以查的 |
+| 5 | **入口工具形态** | (A) 一个 `produce_video(topic=…)` 高层工具 / (B) 一个通用 `produce(kind=…, brief=…)` | 建议 **A 先行**(语义明确、模型好选),第三个配方落地时再看是否收敛成 B |
+
+---
+
+## 7. 风险
+
+| 风险 | 说明 | 缓解 |
+|---|---|---|
+| 抽象过早 | 两个样本(podcast/motion)抽底盘,第三个不吻合 | P6 排在 P4/P5 之后;P7 用第三个配方**验证**而非事后适配;前端面板刻意不统一 |
+| 成本失控 | 阶段 1 多轮调研 + 阶段 5 每镜一次 = 单条视频可能几十次 LLM 调用 | 拍板项 #3 的硬上限 + 阶段级 checkpoint(重跑不从头) |
+| 事实错误 | 全自动科普视频说错话,比不出片更糟 | 拍板项 #4;片尾来源卡;`research` 阶段产物可审 |
+| 渲染耗时 | 实测 ~3.1–3.6× 实时(60s 片 ≈ 3.5 分钟串行) | 已有有界并行;生产卡明确告知预计时长 |
+| 共享树并发 | 本项目多 sibling 并行改同一 HEAD | 每期一个 commit、精确 pathspec、失败先行 + NEUTER(项目既有纪律) |
+
+---
+
+## 8. 与既有设计稿的关系
+
+- `docs/MOTION_VIDEO_DESIGN.md`:**保留不动**,它是渲染机械层的权威记录(P0–P3)。
+  本稿是它的**上位抽象 + 前半段补全**,不推翻其任何结论。
+- `docs/PAPER_PODCAST_DESIGN.md`:播客链是第二个「配方」样本;P6 迁移时对齐。
+- `docs/ARCHITECTURE.md` / `CLAUDE.md`:P6 落地时新增 `lib/production/` 目录条目。

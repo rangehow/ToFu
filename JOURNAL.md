@@ -20,6 +20,19 @@
 - **机制教训(已二见,值得记):** 「date 注入骑尾」会把**任何骑在最后一条 user 消息上的旧断言**从字符串世界拖进 block 数组世界——排查「'list' object has no attribute X」类测试红时先想它。
 - **过程:** 7→2 递减诊断(先治主因再收余波),零生产代码改动,精确 pathspec 恰好 1 文件。
 
+### 2026-07-26(续) — 产出底盘 P5 落地:每镜子 agent 画面创作,模板降级为地板(commit `a98f3c12`,6 文件 +686/-9;新套件 16/16 含双 NEUTER,motion 三套件 **81/81**,agent_loop 16/16,collect **9117** 0 err)
+- **要解决的病:** P4 打通了「主题 → 成片」,但画面还是 `_template.py` 的**四色渐变 + 居中一行白字**(设计稿 §1.2 的「两个极端中间是空的」)。P5 把中间那格补上:每镜起一个**受限 agent loop** 自己写 composition。
+- **交付 `lib/motion_video/_scene_author.py`(336 行):**
+  - **窄工具集(刻意):** 只有 `write_composition`(限定该镜)/ `composition_check`(现成零 LLM 静态闸)/ `web_search` / `fetch_url`。**作者拿不到渲染** —— 渲染留在 engine 的 render 阶段,所以一次作者迭代绝不可能烧掉 35s 渲染;也拿不到 `write_file`/`run_command`(有测试钉死)。
+  - **每镜隔离:** 上下文只有该镜文案 + 时长 + composition 契约,不带全片 —— 成本线性、失败局部。
+  - **绝不整片翻车:** 没写出 composition / 闸始终不过 / LLM 抛异常 / 已 abort / 预算耗尽,**五条路径全部降级** `_template.py`,调用方永远拿到过闸的 HTML。
+  - **硬成本上限(拍板③):** `max_rounds` 卡轮数;`token_budget` 累计超限后**经 loop 自己的 abort 缝**退出(不新造返回路径)。不做金额上限——那是钱包层的事。
+- **engine 接线:** compose 阶段按开关调作者,逐镜发 `scene_authored` 事件(mode/rounds/tokens),compose phase 汇报 authored/templated 计数;新增 `_existing_composition()` —— 盘上已有且 `data-duration` 仍匹配的 composition **直接复用**,重启后**不会把已作过的镜头再作一遍**(把 P4 的崩溃续跑契约延伸到 compose 阶段)。作者旋钮进 `job.json` 随续跑恢复。
+- **对外开关:** `produce_video` 加 `visual_quality: template(默认) | authored`;`POST /videos` 加 `scene_author` / `author_rounds` / `author_token_budget`。**默认 OFF** —— 每镜一次 agent loop 是真金白银,开它必须是显式选择(或 `TOFU_MOTION_SCENE_AUTHOR=1`)。
+- **验证(16 测,双 NEUTER 都咬):** ①作者产出 authored + 首版失闸后可修复;②四条降级路径;③**NEUTER 证明事后闸承重** —— 把 `check_composition_html` 打成恒过,垃圾 HTML 立刻以 authored 出货;④**NEUTER 证明预算闸承重** —— 摘掉 `budget_exhausted` 赋值,上限测试翻红,恢复复绿;⑤窄工具集断言(render/concat/mux/run_command 均不可达);⑥开关优先级(per-job False 压过 env=1);⑦compose 阶段续跑三态。
+- **git 纪律:** 精确 6 文件 pathspec;盘上 sibling WIP(server.py 的 brotli hunk、test_autopilot_startup 等)零触碰,`git show --stat` 逐笔核实。
+- **待续:** P6(strangler 抽 `lib/production/`,把 `_stages.py` **原样平移**)= `pt_a22189455f754206`;P7 第三配方验证。
+
 ### 2026-07-25(续45) — 请求检视器 P4 落地:endpoint 相位标记 + swarm 子代理发射,uncovered chip 摘除(commit `5b1aff8a`,15 文件 +633/-42;后端 14/14 + 前端 P2/P3/P4 合计 7/7,回归 18 套件 179/186 七红 stash A/B 实证预存在,collect **9084** 0 err)
 - **勘察证伪票面(epic 标题说「零发射」,实证不是):** `_run_planner_turn`/`_run_critic_turn` 都经 `_run_single_turn` → 完整 `run_task`——endpoint 三个相位的快照**一直在发射**。真缺陷是三个相位各自从 1 重编号,fold 里 planner R1/worker R1/critic R1 同名歧义;swarm 子代理才是唯一真零覆盖(自跑 `_build_body`+dispatch,`_suppressEvents` 代理连持久化都抑制)。
 - **endpoint(零新状态):** snapshot + round_usage 加 `turn` 字段,直接复用驱动已有 `_endpoint_phase`(planning/working/reviewing,:95/:241/:420 早就在打)。fold 按 (turn,roundNum) 分行、attempts 同相位 join;coverage 语义修正为「无标记=partial(`endpoint-untagged`,歧义) / 有标记=full」;payload `?turn=` 消歧;锚点吃相位提示(planner/review 标记,其余优先 working)。**uncovered chip 就此摘除**;旧 endpoint 任务挂 ambiguous 诚实标注。

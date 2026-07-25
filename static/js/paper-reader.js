@@ -970,6 +970,7 @@ function _switchPaperTab(tab) {
   if (tab === 'qa') _renderPaperQA();
   if (tab === 'translate') _initBabelPdfTab();
   if (tab === 'podcast') _initPodcastTab();
+  if (tab === 'video') _initVideoTab();
 }
 
 /** Mobile-only: toggle which full-screen pane is shown — the PDF ('pdf') or

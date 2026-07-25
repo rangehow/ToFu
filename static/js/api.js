@@ -1185,6 +1185,39 @@
     podcastScript:  (paperHash, mode, lang) =>
       request('/api/v1/paper/podcast/script',
               { method: 'GET', query: { paper_hash: paperHash, mode, lang }, onError: 'null' }),
+    // Paper video abstract — server-owned motion-engine task (report →
+    // narrated MG video). Progress/results ride the motion endpoints below.
+    videoStart:   (body)               => post('/api/v1/paper/video/start', body, { timeout: 0 }),
+    videoLookup:  (body)               =>
+      request('/api/v1/paper/video/lookup',
+              { method: 'GET', query: { paper_hash: body.paper_hash }, onError: 'null' }),
+  };
+
+  // motion (video generation pipeline) -------------------------------
+  // Server-owned TaskRuntime (SRT/scenes → narrated MG video). The paper
+  // video-abstract tab polls these directly; the chat agent drives the
+  // motion_video_* tools instead.
+  const motion = {
+    status:    ()                     =>
+      request('/api/v1/motion/status', { method: 'GET', onError: 'null' }),
+    start:     (body)                 => post('/api/v1/motion/videos', body, { timeout: 0 }),
+    poll:      (taskId, cursor)       =>
+      request(`/api/v1/motion/videos/poll/${encodeURIComponent(taskId)}`,
+              { method: 'GET', query: { cursor }, parse: 'response', onError: 'null' }),
+    abort:     (taskId)               =>
+      post(`/api/v1/motion/videos/abort/${encodeURIComponent(taskId)}`, {}, { onError: 'null', parse: 'none' }),
+    scenes:    (taskId)               =>
+      request(`/api/v1/motion/videos/${encodeURIComponent(taskId)}/scenes`,
+              { method: 'GET', onError: 'null' }),
+    regenScene: (taskId, sceneId)     =>
+      post(`/api/v1/motion/videos/${encodeURIComponent(taskId)}/scenes/${encodeURIComponent(sceneId)}/regen`,
+           {}, { onError: 'null' }),
+    // URL builders for <video> src / download anchors (no fetch involved).
+    fileUrl:   (taskId, part)         =>
+      _resolve(`/api/v1/motion/videos/${encodeURIComponent(taskId)}/file` +
+               (part ? '?part=' + encodeURIComponent(part) : '')),
+    sceneFileUrl: (taskId, sceneId)   =>
+      _resolve(`/api/v1/motion/videos/${encodeURIComponent(taskId)}/scenes/${encodeURIComponent(sceneId)}/file`),
   };
 
   // daily-report (MyDay panel) -------------------------------------
@@ -1328,7 +1361,7 @@
     conversations, text, translate, chat, images, pdf, doc, audio, artifacts,
     health, pricing, clientError, serverConfig, browser, project, daily, paper,
     features, providers, dispatch, oauth, mcp, update, trading, authSources,
-    swarm, endpoint, logs,
+    swarm, endpoint, logs, motion,
   };
 
   global.Api = Api;

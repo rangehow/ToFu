@@ -2868,6 +2868,41 @@ async def start_video_abstract_task():
     return jsonify(res)
 
 
+@api_v1_paper_bp.route('/api/v1/paper/video/lookup', methods=['GET'])
+def lookup_video_abstract():
+    """Re-attach a paper's video-abstract task on tab open.
+
+    Scans the motion runtime for the newest task tagged with this
+    paper_hash (tasks live for the runtime TTL, 1h). Returns
+    {ok, found, running, task_id, result, report_available}.
+    """
+    from lib.motion_video.runtime import _motion_tasks, _motion_tasks_lock
+    from lib.paper.podcast_engine import has_report
+
+    phash = (request.args.get('paper_hash') or '').strip()
+    if not phash:
+        return api_bad_request('paper_hash is required', field='paper_hash')
+    best = None
+    with _motion_tasks_lock:
+        for t in _motion_tasks.values():
+            if t.get('paper_hash') == phash:
+                if best is None or t.get('created_at', 0) > best.get('created_at', 0):
+                    best = t
+    resp = {'ok': True, 'report_available': has_report(phash)}
+    if best:
+        resp.update({
+            'found': True,
+            'task_id': best['task_id'],
+            'running': best['status'] in ('pending', 'running'),
+            'status': best['status'],
+        })
+        if best['status'] == 'done' and best.get('result'):
+            resp['result'] = best['result']
+    else:
+        resp['found'] = False
+    return jsonify(resp)
+
+
 @api_v1_paper_bp.route('/api/v1/paper/podcast/poll', methods=['GET'])
 def poll_podcast_task():
     """Poll podcast events. Same cursor protocol as the report poll; on done

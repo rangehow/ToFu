@@ -777,6 +777,7 @@ _DEFERRED_FILES = [
     'paper/babel.js',     # Babel PDF-translation tab; owns _babelTranslatedPages (read by core library-persist at runtime) → load before paper-reader.js
     'paper/library.js',   # Paper Library (bookshelf) cache+CRUD+render; owns _paperLibrary state (extracted from paper-reader.js 2026-07) → runtime cross-refs, order free; before paper-reader.js
     'paper/podcast.js',   # Paper Podcast tab (player + transcript + sleep timer); reads _paperHash/Api.paper.podcast* at RUNTIME only → before paper-reader.js
+    'paper/video.js',     # Paper Video Abstract tab (player + scene grid + per-scene regen); reads _paperHash/Api.motion* at RUNTIME only → before paper-reader.js
     'paper-reader.js',    # Paper Reader (togglePaperMode) — ~54KB gz; init via _onReady (feature-loader.js)
     # Image-Gen mode (enterImageGenMode + panel controls) — ~11KB gz. No
     # load-time side effect; only load-time core read is `escapeHtml` (present,

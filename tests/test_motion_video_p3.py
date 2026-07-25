@@ -394,3 +394,32 @@ def test_paper_video_start_flow(flask_client, monkeypatch, tmp_path):
 
     r = flask_client.post('/api/v1/paper/video/start', json={})
     assert r.status_code == 400
+    r = flask_client.post('/api/v1/paper/video/start', json={})
+    assert r.status_code == 400
+
+
+def test_paper_video_lookup(flask_client):
+    import uuid
+    from lib.motion_video.runtime import _new_motion_task, _motion_runtime
+    phash = uuid.uuid4().hex[:16]
+    # nothing yet → found False, report_available False
+    r = flask_client.get(f'/api/v1/paper/video/lookup?paper_hash={phash}')
+    body = r.get_json()
+    assert body['ok'] and body['found'] is False
+    # seed a finished motion task tagged with this paper
+    task = _new_motion_task('motion_lookup1', srt_path='', workdir='/x',
+                            voice='', speed=None, alignment='loose',
+                            narration=False, quality='draft', parallel=1,
+                            width=1080, height=1440)
+    task['paper_hash'] = phash
+    _motion_runtime.finish('motion_lookup1',
+                           result={'final_path': '/x/final.mp4',
+                                   'srt_path': '/x/final.srt', 'duration': 6.0})
+    r = flask_client.get(f'/api/v1/paper/video/lookup?paper_hash={phash}')
+    body = r.get_json()
+    assert body['found'] is True
+    assert body['running'] is False
+    assert body['task_id'] == 'motion_lookup1'
+    assert body['result']['final_path'] == '/x/final.mp4'
+    r = flask_client.get('/api/v1/paper/video/lookup')
+    assert r.status_code == 400

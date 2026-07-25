@@ -52,10 +52,12 @@ from typing import Iterable
 #   image_gen     — dall-e-3, gemini-3-pro-image-preview (POST /images/*)
 #   embedding     — text-embedding-3-large            (POST /embeddings)
 #   transcription — Doubao-Seed-ASR-2.0, whisper-1    (POST /audio/transcriptions)
+#   tts           — tts-1-hd, gpt-4o-mini-tts         (POST /audio/speech)
 CHAT_EXCLUDED_CAPS: frozenset[str] = frozenset({
     'image_gen',
     'embedding',
     'transcription',
+    'tts',
 })
 
 # ══════════════════════════════════════════════════════════════
@@ -110,6 +112,9 @@ CAPABILITY_SEMANTICS: dict[str, dict[str, object]] = {
         'in_chat_picker': False, 'is_dispatch_chat': False},
     'transcription': {
         'role': 'non-chat', 'endpoint': 'audio_transcriptions',
+        'in_chat_picker': False, 'is_dispatch_chat': False},
+    'tts': {
+        'role': 'non-chat', 'endpoint': 'audio_speech',
         'in_chat_picker': False, 'is_dispatch_chat': False},
 }
 

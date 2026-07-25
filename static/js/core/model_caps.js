@@ -26,7 +26,7 @@
   // Hardcoded fallback — MUST match lib.model_info.capability_taxonomy
   // CHAT_EXCLUDED_CAPS exactly. The Python-side parity test
   // (test_capability_taxonomy_parity.py) enforces byte-equivalence.
-  var _FALLBACK_CHAT_EXCLUDED_CAPS = ['image_gen', 'embedding', 'transcription'];
+  var _FALLBACK_CHAT_EXCLUDED_CAPS = ['image_gen', 'embedding', 'transcription', 'tts'];
 
   // The live set (may be overwritten by the server payload).
   var _chatExcludedCaps = new Set(_FALLBACK_CHAT_EXCLUDED_CAPS);

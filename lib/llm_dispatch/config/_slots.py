@@ -246,6 +246,18 @@ DEFAULT_SLOT_CONFIGS = {
     # gateway's OpenAI-native multipart /audio/transcriptions surface.
     'Doubao-Seed-ASR-2.0':           {'caps': {'transcription'},                   'rpm': 60,  'latency': 3000, 'cost': 0.001},
 
+    # ── Text-to-speech (tts) ──
+    # Reference targets for spoken-audio output (paper podcast, read-aloud).
+    # Any provider exposing the OpenAI-compatible POST /v1/audio/speech
+    # endpoint works once a slot carries the 'tts' capability — these are
+    # pre-seeded metadata for well-known PUBLIC model names only (same
+    # pattern as the whisper-1 transcription block above). A deployment's
+    # actual TTS model is registered via server config with
+    # capabilities: ['tts']; the podcast code never hardcodes a model/voice.
+    'tts-1':                         {'caps': {'tts'},                            'rpm': 60,  'latency': 3000, 'cost': 0.015},
+    'tts-1-hd':                      {'caps': {'tts'},                            'rpm': 60,  'latency': 5000, 'cost': 0.030},
+    'gpt-4o-mini-tts':               {'caps': {'tts'},                            'rpm': 60,  'latency': 3000, 'cost': 0.012},
+
     # ── Embeddings ──
     'text-embedding-v4':             {'caps': {'embedding'},                       'rpm': 100, 'latency': 500,  'cost': 0.001},
     'text-embedding-3-small':        {'caps': {'embedding'},                       'rpm': 60,  'latency': 500,  'cost': 0.001},

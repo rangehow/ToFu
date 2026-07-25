@@ -302,6 +302,37 @@ def probe_image_cell(base_url, api_key, model_id, extra_headers, timeout,
                               surface='image chat')
 
 
+def _validate_tts(_parsed, raw):
+    # /audio/speech answers with raw audio bytes (no JSON envelope). The
+    # _post_and_classify harness hands us resp.text (decoded, best-effort)
+    # — the container magic survives as ASCII/latin-1 chars.
+    if not raw:
+        return 'empty body'
+    if raw[:4] == 'RIFF' or raw[:3] == 'ID3' or raw[:4] in ('fLaC', 'OggS'):
+        return None
+    if raw[0] == '\xff':  # MP3 frame sync (decoded as latin-1)
+        return None
+    return 'non-audio payload'
+
+
+def probe_tts_cell(base_url, api_key, model_id, extra_headers, timeout,
+                   protocol='openai'):
+    """Probe a TTS model via ``POST /audio/speech`` (one word of input).
+
+    Voice resolution mirrors the app's own path (lib.tts.default_voice):
+    a configured deployment voice wins, otherwise the documented fallback
+    is used — a provider that rejects the voice answers 400, which the
+    classifier still counts as reachable (routing proven).
+    """
+    from lib.tts import default_voice
+    url = base_url.rstrip('/') + '/audio/speech'
+    payload = {'model': model_id, 'input': 'ping',
+               'voice': default_voice(), 'response_format': 'wav'}
+    return _post_and_classify(
+        url, _auth_headers(api_key, extra_headers), timeout,
+        json_body=payload, validate=_validate_tts, surface='/audio/speech')
+
+
 def nonchat_probe_fn(caps):
     """Return the modality probe function for a non-chat caps list.
 
@@ -315,6 +346,8 @@ def nonchat_probe_fn(caps):
         return probe_image_cell
     if 'transcription' in caps:
         return probe_transcription_cell
+    if 'tts' in caps:
+        return probe_tts_cell
     if 'embedding' in caps:
         return probe_embedding_cell
     return None
@@ -329,6 +362,7 @@ def nonchat_probe_fn(caps):
 _PROBE_SURFACE_NAMES = {
     probe_image_cell: 'image',
     probe_transcription_cell: 'transcription',
+    probe_tts_cell: 'tts',
     probe_embedding_cell: 'embedding',
 }
 
@@ -522,7 +556,7 @@ def run_cell_probe_task(task: dict, work: list, timeout: int):
 __all__ = [
     'probe_one_cell', 'probe_cell_multi', 'run_cell_probe_task',
     'probe_embedding_cell', 'probe_transcription_cell', 'probe_image_cell',
-    'nonchat_probe_fn',
+    'probe_tts_cell', 'nonchat_probe_fn',
     'probe_cache_path', 'probe_cell_key', 'persist_probe_task',
     'public_probe_snapshot', 'CELL_PROBE_TASKS', 'CELL_PROBE_LOCK', 'SKIPPED',
 ]

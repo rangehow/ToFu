@@ -272,6 +272,56 @@ def test_delete_renumbers_positions_like_before(monkeypatch):
     assert remaining[0]['position'] == 1, 'renumber must close the gap'
 
 
+# ── 8. per-tick dispatch cap: 20 stranded convs → K per tick, oldest first ──
+
+def test_stranded_drain_capped_per_tick_oldest_first(monkeypatch):
+    """A mass-stranding (restart) must not slam the LLM rate limit: oldest-
+    enqueued first, K dispatches per tick, the rest defer to the next tick."""
+    db = _db()
+    # Determinism: created_at is the CLIENT payload timestamp, so leftover
+    # rows from other tests in the shared session DB can carry arbitrary tiny
+    # values (1, 2, 1000…) and would out-age our convs in the oldest-first
+    # scan. Wipe the table — every earlier test is finished with its rows.
+    db.execute('DELETE FROM message_queue')
+    # Age anchor ~4 months back so the per-conv ordering comes only from us.
+    base = int(time.time() * 1000) - 10**10
+    convs = []
+    for i in range(20):
+        cid = _cid()
+        convs.append(cid)
+        mq.enqueue_message(cid, {'text': f'm{i}', 'timestamp': 1000 + i},
+                           {'model': 'm'})
+        # Deterministic age: convs[0] oldest … convs[-1] newest.
+        db.execute('UPDATE message_queue SET created_at=? WHERE conv_id=?',
+                   (base + i * 1000, cid))
+    db.commit()
+
+    dispatched = []
+    monkeypatch.setattr(mq, '_append_user_msg_with_cas', lambda db, c, m: True)
+    monkeypatch.setattr(
+        'lib.tasks_pkg.conv_message_builder.build_api_messages_from_db',
+        lambda c, cfg: [{'role': 'user', 'content': 'x'}])
+
+    def _create_task(conv_id, api_messages, config):
+        dispatched.append(conv_id)
+        return {'id': f't-{conv_id}', 'convId': conv_id, 'status': 'running',
+                'config': config, 'created_at': time.time()}
+
+    monkeypatch.setattr('lib.tasks_pkg.create_task', _create_task)
+    monkeypatch.setattr('lib.tasks_pkg.spawn_task', lambda task: None)
+
+    spawned = mq.reap_expired_queue_leases()
+    assert len(spawned) == 4, f'default cap is 4 per tick, got {len(spawned)}'
+    assert dispatched == convs[:4], 'oldest-enqueued convs must drain first'
+
+    # Next tick drains the next batch — and the env knob is honored.
+    monkeypatch.setenv('TOFU_QUEUE_REAPER_MAX_DISPATCH_PER_TICK', '2')
+    dispatched.clear()
+    spawned = mq.reap_expired_queue_leases()
+    assert len(spawned) == 2
+    assert dispatched == convs[4:6]
+
+
 # ── 7. intentional deletes keep their semantics ──
 
 def test_remove_message_and_clear_marker_still_delete():

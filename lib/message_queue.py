@@ -33,6 +33,7 @@ an automatic retry instead of silently losing the queued message.
 """
 
 import json
+import os
 import threading
 import time
 import uuid
@@ -74,6 +75,22 @@ def _priority_for_kind(kind: str) -> int:
 # ever waits out the full TTL — every failure path releases the lease
 # immediately, and the success path deletes the row outright.
 _QUEUE_LEASE_MS = 120 * 1000
+
+
+def _reaper_max_dispatch_per_tick() -> int:
+    """Max stranded-drain dispatches per reaper tick (default 4).
+
+    A crash/restart can strand MANY conversations at once (each holding a
+    queued human message). Draining them all in a single tick would spawn N
+    tasks simultaneously and slam the LLM rate limit — the steady-state tick
+    drains oldest-first, K per tick; the rest retry on the next tick.
+    """
+    try:
+        return max(1, int(os.environ.get(
+            'TOFU_QUEUE_REAPER_MAX_DISPATCH_PER_TICK', '') or '4'))
+    except (ValueError, TypeError) as e:
+        logger.debug('[Queue] TOFU_QUEUE_REAPER_MAX_DISPATCH_PER_TICK parse failed: %s', e)
+        return 4
 
 
 def _ensure_table():
@@ -438,21 +455,32 @@ def reap_expired_queue_leases(force_reclaim: bool = False) -> list[str]:
 
     # Stranded drain: one dispatch per conv that has a dispatchable row and no
     # live task. Bounded lock wait — a wedged in-flight dispatch must never
-    # wedge the maintenance tick that drives this reaper.
+    # wedge the maintenance tick that drives this reaper. OLDEST-ENQUEUED
+    # first, capped per tick — a mass-stranding event (restart) must not slam
+    # the LLM rate limit with N simultaneous spawns.
     try:
         stranded = db.execute(
-            'SELECT DISTINCT conv_id FROM message_queue WHERE kind!=? AND '
-            '(leased_until IS NULL OR leased_until < ?)',
+            'SELECT conv_id, MIN(created_at) AS oldest FROM message_queue '
+            'WHERE kind!=? AND (leased_until IS NULL OR leased_until < ?) '
+            'GROUP BY conv_id ORDER BY oldest ASC',
             (KIND_AUTOPILOT, now_ms),
         ).fetchall()
     except Exception as e:
         logger.warning('[Queue] lease-reaper stranded scan failed: %s', e)
         return spawned
 
+    max_dispatch = _reaper_max_dispatch_per_tick()
+    attempts = 0
     for srow in stranded:
+        if attempts >= max_dispatch:
+            logger.info('[Queue] lease-reaper: per-tick dispatch cap %d reached — '
+                        'remaining %d stranded conv(s) defer to the next tick',
+                        max_dispatch, len(stranded) - attempts)
+            break
         conv_id = srow['conv_id']
         if not conv_id or _conv_has_live_task(conv_id):
             continue
+        attempts += 1
         try:
             tid = dispatch_next_queued(conv_id, _wait=5)
         except Exception as e:
@@ -528,7 +556,17 @@ def redispatch_orphaned_queue_on_startup() -> list[str]:
     logger.info('[Queue] redispatch-on-startup: %d conv(s) have orphaned queued '
                 'turn(s): %s', len(convs), [c[:8] for c in convs])
 
+    # Same herd guard as the steady-state reaper: a mass-stranding restart
+    # dispatches oldest-first, K per boot — the maintenance tick drains the
+    # rest, so recovery is throttled instead of an LLM rate-limit storm.
+    max_boot = _reaper_max_dispatch_per_tick()
+    boot_attempts = len(spawned)  # the lease reclaim above already spent some
     for conv_id in convs:
+        if boot_attempts >= max_boot:
+            logger.info('[Queue] redispatch-on-startup: dispatch cap %d reached — '
+                        'remaining %d conv(s) drain on the maintenance tick',
+                        max_boot, len(convs) - boot_attempts)
+            break
         if not conv_id:
             continue
         # Defensive: never drain a conv that already has a live task (a task
@@ -542,6 +580,7 @@ def redispatch_orphaned_queue_on_startup() -> list[str]:
 
         # Dispatch ONE task for this conv; its completion hook drains the rest
         # of the queue (single-task-per-conv, as in steady state).
+        boot_attempts += 1
         try:
             tid = dispatch_next_queued(conv_id)
         except Exception as e:

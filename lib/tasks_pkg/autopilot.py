@@ -369,10 +369,18 @@ def run_virtual_user(task: dict, vu_msg_id: str | None = None) -> dict | None:
 
     # Build a fresh sub-task that inherits the parent's config so
     # _assemble_tool_list constructs the same tool list the worker had.
-    # ``_inline_messages=True`` keeps it out of the conv DB sync path,
-    # ``convId=''`` keeps it out of the latest-task registry, and
-    # ``_endpoint_managed=True`` suppresses the orchestrator's done
-    # event + autopilot recursion.
+    # pt_8dc03017 cutover — the VU sub-task now registers under the REAL
+    # convId (dropping the historical convId='' opt-out). This satisfies
+    # the HB-1 happens-before (design §4.1): _record_latest_task advances
+    # to the VU BEFORE the parent's done event is emitted, so a client
+    # reacting to end-of-turn observes the successor already in the
+    # supersede index and can attach transport-agnostically. ``_vu_subtask``
+    # still marks it as a CARRIER (invisible to /api/chat/active, the
+    # restart guard, and the sidebar's snapshot_running_by_conv — same
+    # is_carrier_task predicate), so no phantom sidebar dot lights up.
+    # ``_inline_messages=True`` keeps it out of the conv DB sync path;
+    # ``_endpoint_managed=True`` suppresses the orchestrator's done event
+    # + autopilot recursion.
     _emit_vu_setup_phase(task, vu_msg_id, 'Autopilot：整理对话上下文，准备生成回复…')
     from lib.tasks_pkg import create_task
     from lib.tasks_pkg.orchestrator import _run_single_turn
@@ -396,10 +404,25 @@ def run_virtual_user(task: dict, vu_msg_id: str | None = None) -> dict | None:
     # just turned off above).
     sub_cfg['humanGuidanceEnabled'] = False
 
-    sub_task = create_task('', vu_messages, sub_cfg)
+    # pt_8dc03017 HB-1: register under real convId with supersede=False so
+    # create_task does NOT run abort_running_tasks_for_conv (the parent is
+    # already status='done' at this point per _finalize.py:747, so it would
+    # not be swept anyway, but a concurrent conv-scoped operation could
+    # be — being explicit is safer). We then advance the supersede index
+    # ourselves so _latest_task_for_conv(convId) == the VU task by the time
+    # the parent's `done` event is appended (§4.1 HB-1). The client's
+    # transport-agnostic attach reducer discovers the VU here.
+    _vu_conv_id = task.get('convId') or ''
+    sub_task = create_task(_vu_conv_id, vu_messages, sub_cfg, supersede=False)
     sub_task['_inline_messages'] = True
     sub_task['_vu_subtask'] = True
     sub_task['_autopilotParent'] = task.get('id', '')
+    if _vu_conv_id:
+        # HB-1: advance the conv→latest-task index to the VU BEFORE returning
+        # to _finalize.py (which then emits the parent's done event). This is
+        # the exactly-once ordering that replaces the withheld baton.
+        from lib.tasks_pkg.manager import _record_latest_task as _rlt
+        _rlt(_vu_conv_id, sub_task['id'])
     # Turn-ctx capsule anchor: the VU sub-task's DONE frame flows through
     # _finalize_and_emit_done and would otherwise carry an empty userMsgId
     # (frontend fallback → "last user in conv" = the VU-synthesised user,
@@ -409,14 +432,10 @@ def run_virtual_user(task: dict, vu_msg_id: str | None = None) -> dict | None:
     if task.get('_userMsgId'):
         sub_task['_userMsgId'] = task['_userMsgId']
     # ── Peer-message fast path (Pillar #6) ──
-    #   The VU sub-task runs with convId='' (to stay out of the latest-task
-    #   registry), so its swarm/inbox key would be the sub-task id — but a peer
-    #   twin for this conversation is enqueued under the PARENT conv id. Carry
-    #   the parent conv as the peer-drain key so the sub-task's nested run_task
-    #   round loop drains + flushes peer messages under the SAME key the twin
-    #   was enqueued under (otherwise a peer message arriving mid-VU-turn would
-    #   strand). This is what makes an endpoint/VU "big task" deliver a sibling's
-    #   message at its next round boundary instead of the input-box queue.
+    #   The VU sub-task now runs under the parent convId (pt_8dc03017 HB-1),
+    #   so its natural swarm/inbox key IS the parent conv id. Keep the
+    #   explicit drain-key stamp for clarity — matches the endpoint 'big task'
+    #   contract (delivers a peer's message at the next round boundary).
     sub_task['_peer_drain_key'] = task.get('convId') or ''
 
     # Swap in a forwarding event list so the VU sub-task's events
@@ -464,20 +483,19 @@ def run_virtual_user(task: dict, vu_msg_id: str | None = None) -> dict | None:
         return None
     finally:
         _stop_mirror.set()
-        # ★ Lifecycle owner: the VU carrier is created with create_task('') and
-        #   runs synchronously under _endpoint_managed=True, which SUPPRESSES the
-        #   orchestrator's terminal-status flip + persist_task_result — so it
-        #   NEVER reaches a terminal status on its own and would linger in the
-        #   registry as status='running' until the 30-min stuck-task reaper.
-        #   That immortal carrier is what the restart guard counted as an
-        #   invisible "running conversation". The synchronous turn is finished
-        #   the moment _run_single_turn returns, so discard the carrier NOW —
-        #   the local sub_task dict stays valid for the toolRounds / segment
-        #   reads below (discard only unregisters it). Mirrors the reporter
-        #   carrier's discard_task-in-finally contract.
+        # ★ Lifecycle owner: the VU sub-task runs synchronously under
+        #   _endpoint_managed=True, which SUPPRESSES the orchestrator's
+        #   terminal-status flip + persist_task_result — so it NEVER reaches
+        #   a terminal status on its own. Discard it NOW so it doesn't linger
+        #   in the registry (or hold the conv→latest-task index it just
+        #   claimed for HB-1) past its synchronous run. discard_task also
+        #   clears the _conv_latest_task entry if it still points at us —
+        #   the follow-up's create_task will re-advance the index to the
+        #   real successor. The local sub_task dict stays valid for the
+        #   toolRounds / segment reads below (discard only unregisters it).
         try:
             from lib.tasks_pkg.manager import discard_task
-            discard_task(sub_task['id'])
+            discard_task(sub_task['id'], conv_id=sub_task.get('convId') or None)
         except Exception as _disc_err:
             logger.debug('[Autopilot %s] VU carrier discard failed: %s',
                          tid, _disc_err)

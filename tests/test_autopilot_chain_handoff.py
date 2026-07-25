@@ -53,17 +53,12 @@ suddenly disappears" symptom.
 
 import pytest
 
-# Skipped: epic pt_8dc030176bad450b cutover is PARTIAL. Increment-1 (the
-# `_autopilot_deciding` latch removal) landed and several of these contract
-# tests pass, but the core VU-independence (VU as a real registered task on its
-# own stream, HB-1 index-advance, baton removal) is NOT landed — it requires
-# resolving the create_task supersede-invariant (aborts the parent mid-finalize)
-# and the carrier semantics that deliberately hide the VU. Un-skip when the full
-# cutover ships; see docs/EPIC_AUTOPILOT_INDEPENDENT_STREAM_DESIGN.md §8.
-pytestmark = pytest.mark.skip(
-    reason='epic pt_8dc030176bad450b cutover is partial (incr-1 latch only) — '
-           'core VU-independence not landed'
-)
+# Active — pt_8dc030176bad450b step-3 cutover landed. Increments 1-3:
+#   incr-1 (3e2ec0c3): drop _autopilot_deciding withhold latch
+#   incr-2 (aa6f7ea6): retire the withheld-done baton + delete poll-handoff suite
+#   incr-3 (this): HB-1 — VU sub-task registers under REAL convId, supersede
+#     index advances to VU BEFORE parent done is emitted. Client discovers the
+#     successor via the transport-agnostic index read (design §4/§4.1).
 
 
 _VU_MSG = {

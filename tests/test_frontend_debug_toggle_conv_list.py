@@ -131,8 +131,11 @@ def test_debug_toggle_and_boot_flags_refresh_conv_list_immediately():
 
 
 def test_boot_load_feature_flags_rerenders_conv_list_wiring():
-    """Static wire guard: index.html's loadFeatureFlags must re-render the
-    sidebar after _featureFlags arrives (boot-race half of the fix). The jsdom
+    """Static wire guard: index.html's loadFeatureFlags must re-render BOTH
+    debug-mode consumers after _featureFlags arrives (boot-race half of the
+    fix): the sidebar (renderConversationList) AND the message area
+    (ConvView.replaceAll — trace_id / cost-popover debug rows are baked into
+    message HTML under _featureFlags.debug_mode by finish_info.js). The jsdom
     harness cannot execute index.html's inline script, so pin the wiring here.
     """
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -152,4 +155,16 @@ def test_boot_load_feature_flags_rerenders_conv_list_wiring():
         'loadFeatureFlags assigns _featureFlags but never calls '
         'renderConversationList() — boot-time debug users lose the '
         'copy-ID button again (race: list rendered before flags arrived)'
+    )
+    repaint = body.find('ConvView.replaceAll', assign)
+    assert repaint != -1, (
+        'loadFeatureFlags re-renders the sidebar but never repaints the '
+        'message area (ConvView.replaceAll) — boot-time debug users lose '
+        'trace_id / cost-debug rows baked by finish_info.js (same race)'
+    )
+    # Boot repaint must not yank the user to the bottom of the conversation.
+    scroll_opt = body.find('forceScroll', repaint - 400)
+    assert scroll_opt != -1 and 'forceScroll: false' in body[repaint - 400:repaint + 200], (
+        'ConvView.replaceAll in loadFeatureFlags must pass forceScroll: false '
+        '(boot-time repaint must preserve scroll position)'
     )

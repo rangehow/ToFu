@@ -2029,6 +2029,14 @@ window._applyDebugModeVisibility = function() {
     if (typeof renderConversationList === 'function') {
       renderConversationList();
     }
+    // Same race for the message area: trace_id / cost-popover debug rows are
+    // baked into message HTML by finish_info.js under _featureFlags.debug_mode.
+    // Mirrors save_export.js's toggle path (renderConversationList + ConvView),
+    // but forceScroll:false — boot must not yank the user to the bottom.
+    if (typeof getActiveConv === 'function' && window.ConvView) {
+      var _fc = getActiveConv();
+      if (_fc) window.ConvView.replaceAll(_fc.id, { forceScroll: false });
+    }
   } catch(e) { /* silent — hide trading by default */ }
 })();
 // ── Script load failure detection ──

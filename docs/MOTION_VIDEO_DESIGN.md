@@ -1,6 +1,6 @@
 # Tofu 动画视频生成能力设计稿(auto-motion 吸收 + 超越)
 
-> 状态:**待 owner 拍板**。本文档为纯设计,零生产代码改动。
+> 状态:**P0 环境验证已完成(2026-07-25,全链跑通,见 §5);P1 起待 owner 拍板(§8)。**
 > 参考仓库:`/mnt/dolphinfs/ssd_pool/docker/user/hadoop-aipnlp/INS/ruanjunhao04/auto-motion`
 > (与 tofu 同级目录,2026-07-25 clone 自 https://github.com/vibe-motion/auto-motion,49MB)
 
@@ -112,12 +112,34 @@ transcription.srt
 
 ## 5. 分层实施计划
 
-### P0 — 环境验证(纯验证,不碰 tofu 代码)
+### P0 — 环境验证(纯验证,不碰 tofu 代码)—— ✅ 已完成(2026-07-25,brain 自主派发)
 
-- `pip install imageio-ffmpeg`(或 conda ffmpeg),验证 x264 编码;
-- `npx hyperframes init` 脚手架 + 手工最小 composition,跑通 `lint → validate → snapshot → render` 全环;
-- 用 auto-motion 自带示例 HTML(hyperframes-motion/examples/)渲染一个蓝图成片,确认画质与耗时基线;
-- **产出**:环境清单 + 基线数据(单镜头 10s/1080x1440/30fps 渲染耗时),写回本文档。
+**结论:全链跑通,环境可行。** 工作区 `/mnt/dolphinfs/ssd_pool/docker/user/hadoop-aipnlp/INS/ruanjunhao04/motion_p0/`(临时,不入库)。
+
+**环境配方(全部实测)**:
+
+| 组件 | 解法 | 验证结果 |
+|---|---|---|
+| hyperframes | `npm init -y` 后 `npm install hyperframes@0.7.71 --ignore-scripts` 本地安装 | doctor 必需项全绿 |
+| ffmpeg | `pip install --target=<scratch> imageio-ffmpeg`(静态 7.0.2,含 libx264/aac/libmp3lame/png) | ✅ 渲染/拼接/混流全够用 |
+| ffprobe | 复用 `miniforge3/envs/sglang/bin/ffprobe`(7.1.1),包 wrapper 注入 `LD_LIBRARY_PATH=<tofu>/lib:<sglang>/lib` | ✅ |
+| Chrome | `HYPERFRAMES_BROWSER_PATH=~/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome` + `LD_LIBRARY_PATH=<tofu>/lib` | ✅ Chrome for Testing 148 |
+| GSAP CDN | jsdelivr 直连可达 | ✅(离线部署时可 npm 本地化) |
+
+**踩坑记录(P1 集成时必须绕开)**:
+
+1. `npx hyperframes` 在本机每次都重装(cache 不持久)→ 必须本地 `npm install` 后用 `node_modules/.bin/hyperframes`;
+2. 无 `package.json` 的目录里 `npm install` 会**向上冒泡**到 `ruanjunhao04/package.json`,触发 `onnxruntime-node` postinstall 访问 `api.nuget.org`(DNS 被封)→ 必须先 `npm init -y` + `--ignore-scripts`(onnxruntime 只影响 transcribe/remove-background,渲染主链不需要);
+3. conda env 自带的 ffprobe 被其 env 里 stray libopenvino 的 RPATH 拖死(`GLIBCXX_3.4.26` 缺失)→ wrapper 前置 tofu env 的 `libstdc++.so.6.0.34`(含 3.4.26)解决。
+
+**耗时基线(58 核 / 200GB,渲染器自适应 4 workers,采集为瓶颈,质量档只影响码率)**:
+
+| 用例 | 规格 | 渲染耗时 | 倍速 |
+|---|---|---|---|
+| 最小 composition(自写 2 clips) | 4s / 1080x1440 / 30fps | draft 15.2s · standard 15.5s · high 14.3s | ~3.6× 实时 |
+| 官方蓝图 brand-reveal(5 相位编排) | 5s / 1920x1080 / 30fps | standard 15.3s | ~3.1× 实时 |
+
+**质量验证**:ffprobe 复核 h264/分辨率/帧率/时长/无音轨全部符合;抽帧目检通过;**CJK 文字渲染正常**(无豆腐块);官方蓝图示例在本环境原样跑通(唯一 lint 报错是示例自身缺 `@font-face` 的排版告警,且 lint 的 fixHint 直接给出修复方法——利好 P1 自动修复环设计)。
 
 ### P1 — 最小链路:技能包 + 单命令生成(静音乐片)
 
@@ -148,12 +170,12 @@ transcription.srt
 
 | 风险/问题 | 说明 | 缓解 |
 |---|---|---|
-| 渲染耗时 | 无头 Chrome 逐帧 seek,10s/30fps=300 帧;单镜估计 1–5 分钟 | P0 先测基线;draft 质量迭代、high 出片;并行池 |
+| 渲染耗时 | ~~无头 Chrome 逐帧 seek,10s/30fps=300 帧;单镜估计 1–5 分钟~~ **P0 实测:~3.1–3.6× 实时**(4s 镜 ~15s,10s 镜 ~35s,60s 片 ~3.5 分钟串行) | 实测已可接受;`--workers` 可调(58 核只自适应用了 4);P3 并行池进一步压缩 |
 | 长视频上下文 | 10+ 镜头时每镜头都要写一份 composition HTML,模型逐镜生成 token 量大 | 每镜独立子任务(只带该镜文案+蓝图),与 auto-motion 每镜独立 Claude Code 调用同构 |
 | 模型写 composition 的稳定性 | 契约细节多(template 包裹/id 唯一/根尺寸),新手 composition 易踩静默坑 | 技能包内置 minimal skeleton + 常见坑清单;lint/inspect 闸 + 带反馈自动修复一次 |
 | 音画对齐策略(P2) | 配音自然语速 ≠ 字幕轴严格时长 | 拍板时定:严格对轴(调语速/停顿) vs 宽松对轴(镜头随音频长短微调) |
 | HyperFrames 许可证 | npm 包与技能包内容的再分发条款待确认 | P1 前查 LICENSE;技能包只内部使用则风险低 |
-| ffmpeg 选型 | imageio-ffmpeg 静态版 vs conda 版 | P0 验证 x264/aac 后定 |
+| ffmpeg 选型 | ~~imageio-ffmpeg 静态版 vs conda 版~~ **P0 已定:imageio-ffmpeg(静态 7.0.2,x264/aac/mp3/png 全有)**;ffprobe 用 sglang env + wrapper | 无残留风险 |
 
 ---
 

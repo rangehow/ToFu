@@ -189,6 +189,15 @@ def _perform_server_reexec(reason: str) -> bool:
     """
     logger.info('[Update] Re-execing server (%s): %s %s',
                 reason, sys.executable, ' '.join(sys.argv))
+    # Carry write-freshness tokens across the restart — os.execv replaces
+    # the process image WITHOUT running atexit handlers, so the snapshot
+    # must be written explicitly here (the signal path is covered by the
+    # atexit hook in server.py). Best-effort: never blocks a restart.
+    try:
+        from lib import write_freshness as _wf
+        _wf.save_snapshot()
+    except Exception as _wf_e:
+        logger.warning('[Update] write-freshness snapshot save failed: %s', _wf_e)
     # Flip the clean-shutdown dirty-bit: an in-place re-exec is a controlled
     # exit, so the fresh image must NOT flag the previous PID as an OS kill.
     try:

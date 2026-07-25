@@ -2477,6 +2477,17 @@ if __name__ == '__main__':
     except Exception as _e:
         _server_log.warning('[Server] PG shutdown hook failed: %s', _e)
 
+    # ── Write-freshness snapshot on clean exit ──
+    # Signal-path restarts (SIGTERM/SIGINT/SIGHUP drain → normal exit) run
+    # atexit; the re-exec path does NOT (execv) and saves explicitly in
+    # routes/api_v1/update.py::_perform_server_reexec instead.
+    try:
+        import atexit as _atexit2
+        from lib import write_freshness as _wf_mod
+        _atexit2.register(_wf_mod.save_snapshot)
+    except Exception as _e:
+        _server_log.warning('[Server] write-freshness snapshot hook failed: %s', _e)
+
     # On an in-place restart (re-exec), the previous image's listener may
     # still be draining on the original port for a fraction of a second.
     # _deferred_reexec stamps the port it was serving into _TOFU_REEXEC_PORT;
@@ -3146,6 +3157,18 @@ if __name__ == '__main__':
                 'on' if _arm_ctimer else 'off', _ctimer_timeout)
         else:
             _server_log.info('[Server] Loop-stall watchdog disabled (TOFU_LOOP_STALL_SECS=0)')
+
+        # ── Write-freshness token replay ──
+        # Restore the read/write fingerprints saved by the previous image
+        # (re-exec or clean exit) so the shared-tree overwrite guard is NOT
+        # fail-open in the post-restart window. Must run BEFORE the
+        # deferred boot dispatch below (which spawns tasks that write).
+        try:
+            from lib import write_freshness as _wf
+            _wf.load_snapshot()
+        except Exception as _wf_err:
+            _server_log.warning('[Server] write-freshness snapshot replay failed: %s',
+                                _wf_err)
 
         # ── HEAD-moved auto-restart watcher (opt-in) ──
         # The "effective" contract for agent work on a shared checkout: a

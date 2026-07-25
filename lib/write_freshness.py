@@ -54,10 +54,29 @@ Fingerprint — why content, not mtime (MEASURED, do not "simplify" back):
   tests/test_write_freshness_gate.py::test_tracked_text_files_stay_under_hash_threshold
   flips red the day any tracked text file outgrows it.
 
-Env: ``TOFU_WRITE_FRESHNESS_GATE=0`` disables recording AND checks.
+Restart persistence (pt_1bbd3cc82eb44ddc): the store is in-memory, so
+any restart used to wipe every token and leave the gate fail-open until
+each conversation's next read — the auto-restart watcher made that window
+recur on every HEAD move. ``save_snapshot()`` (called before the re-exec
+in ``routes/api_v1/update.py::_perform_server_reexec`` and via an atexit
+hook for the signal path — atexit does NOT run on execv, hence both) and
+``load_snapshot()`` (called once from server.py boot) carry the small LRU
+across a restart via ``data/write_freshness_tokens.json``.
+
+Replay semantics, deliberate: a replayed token preserves EXISTENCE ("this
+conversation demonstrably read/wrote this file") — it does NOT vouch for
+freshness across the downtime. The first ``is_stale`` after replay
+re-fingerprints the file and compares against the replayed content hash,
+so a file changed while the server was down is still judged stale
+(refuse → re-read). That is the safe direction; the cost is one extra
+read per file per conversation after a restart.
+
+Env: ``TOFU_WRITE_FRESHNESS_GATE=0`` disables recording AND checks AND
+persistence.
 This module is a leaf: stdlib + lib.log only, so both ``lib/project_mod``
 (write-side recording) and ``lib/tasks_pkg`` (the gate) can import it
-without cycles.
+without cycles (runtime_paths / json_store are imported lazily inside the
+snapshot functions).
 """
 
 from __future__ import annotations
@@ -162,6 +181,91 @@ def drop(conv_key: str, abs_path: str) -> None:
         _tokens.pop((conv_key, abs_path), None)
 
 
+# ── Restart persistence ──────────────────────────────────────────────
+_SNAPSHOT_VERSION = 1
+
+
+def _snapshot_path() -> str:
+    """Snapshot file under the resolved writable data root.
+
+    ``data_root()`` honours ``$TOFU_DATA_DIR``, so co-booted instances with
+    separate data dirs (e.g. the e2e harness's instance A/B) get isolated
+    snapshots and cannot leak tokens into each other.
+    """
+    from lib.runtime_paths import data_root
+    return os.path.join(data_root(), 'write_freshness_tokens.json')
+
+
+def save_snapshot() -> bool:
+    """Persist the token LRU to disk. Returns True on success.
+
+    Called before the server re-execs (atexit does NOT run on execv) and
+    from an atexit hook for the signal path. Never raises — a failed save
+    must never block or break a restart.
+    """
+    if not _gate_enabled():
+        return False
+    try:
+        with _lock:
+            items = [
+                {'conv': ck, 'path': ap, 'fp': list(fp), 'ts': ts}
+                for (ck, ap), (fp, ts) in _tokens.items()
+            ]
+        payload = {'version': _SNAPSHOT_VERSION, 'saved_at': time.time(),
+                   'tokens': items}
+        from lib.json_store import write_json_atomic
+        write_json_atomic(_snapshot_path(), payload)
+        logger.info('[WriteFreshness] snapshot saved (%d token(s))', len(items))
+        return True
+    except Exception as e:
+        logger.warning('[WriteFreshness] snapshot save failed (non-fatal): %s', e)
+        return False
+
+
+def load_snapshot() -> int:
+    """Replay a saved snapshot into the store. Returns tokens loaded.
+
+    Called once from server boot. Missing / corrupt / wrong-version file
+    → 0, store untouched (fail-open). Malformed entries are skipped
+    individually; an oversized snapshot keeps the NEWEST ``_MAX_ENTRIES``.
+    Replayed tokens keep their ORIGINAL fingerprint — the first is_stale
+    after replay re-fingerprints the file, so downtime edits are caught
+    (see module docstring).
+    """
+    if not _gate_enabled():
+        return 0
+    try:
+        from lib.json_store import read_json
+        data = read_json(_snapshot_path(), default=None)
+        if not isinstance(data, dict) or data.get('version') != _SNAPSHOT_VERSION:
+            return 0
+        items = data.get('tokens')
+        if not isinstance(items, list):
+            return 0
+        loaded = 0
+        with _lock:
+            for it in items[-_MAX_ENTRIES:]:
+                try:
+                    ck = str(it['conv'])
+                    ap = str(it['path'])
+                    fp = tuple(it['fp'])
+                    ts = float(it.get('ts') or 0)
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if not ck or not ap:
+                    continue
+                _tokens[(ck, ap)] = (fp, ts)
+                loaded += 1
+            while len(_tokens) > _MAX_ENTRIES:
+                _tokens.popitem(last=False)
+        if loaded:
+            logger.info('[WriteFreshness] snapshot replayed (%d token(s))', loaded)
+        return loaded
+    except Exception as e:
+        logger.warning('[WriteFreshness] snapshot load failed (fail-open): %s', e)
+        return 0
+
+
 def _reset_for_tests() -> None:
     """Clear ALL tokens — test isolation helper (the store is process-global)."""
     with _lock:
@@ -169,4 +273,5 @@ def _reset_for_tests() -> None:
 
 
 __all__ = ['record', 'is_stale', 'drop', '_reset_for_tests', '_fingerprint',
-           '_CONTENT_HASH_MAX_BYTES']
+           '_CONTENT_HASH_MAX_BYTES', 'save_snapshot', 'load_snapshot',
+           '_snapshot_path']

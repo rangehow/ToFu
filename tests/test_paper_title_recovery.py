@@ -245,7 +245,7 @@ def _seed_library_row(phash, title, row_id='p1'):
         'id': row_id, 'user_id': 1, 'title': title,
         'pdf_url': '', 'pdf_filename': '', 'arxiv_id': '1706.03762',
         'paper_hash': phash, 'parsed_text': '', 'qa_history': '[]',
-        'images': '[]', 'babel_cache': '{}', 'page_count': 0,
+        'images': '[]', 'babel_cache': '{}', 'page_count': 0, 'folder_id': '',
         'created_at': int(_t.time()), 'updated_at': int(_t.time()),
     })
     db.commit()

@@ -1,6 +1,14 @@
 # Project Journal
 
 
+### 2026-07-25 — pt_f91c7b1d 收口:ingest upsert folder_id 绑定错根修(partial insert_cols)+ folder 保留回归钉(commit 待填,3 文件;ingest 8/8(含新钉)、title_recovery 18/18、宽环 **192/192**)。question-block 第三个闭环(自问自答:语义由 PUT 路径既有保留契约裁定,无需再等 owner)。
+- **票情(自开自收, brain 派发回我自己):** 705cc8e3(folders 特性)给 Core `PAPER_LIBRARY` 加了 `folder_id`,而 `_persist_ingested_library_row`(`routes/paper.py:2257`)`insert_cols=None`=**全列 INSERT**,行字典没这键 → SQLAlchemy `:folder_id` 绑定错 → 每次 upload/arXiv ingest 的库 persist 静默 500(返回 False 只打 error 日志)→ 「消失的论文」幽灵行自 7/20 起复发,`test_paper_ingest_persist` 6 红 + `test_paper_title_recovery` 种子同形红。stash 铁证:我全量改动摘除后 6/6 原样复现=预存在。
+- **修复(语义二选一,按 PUT 路径契约定):** (a)行字典补 `folder_id:''` → re-ingest 会**抹掉**用户既有文件夹指派,错;(b)`insert_cols=(14 个已写列)` → INSERT 走列 DEFAULT、ON CONFLICT 只更新已写列,folder_id 永不被动——选 (b),与 PUT 路径(:2587,客户端省略 folderId 时保留既有)同一保留契约。两个测试种子助手(ingest/title_recovery 同形全行 upsert)补 `folder_id:''`。
+- **新回归钉 `test_reingest_preserves_existing_folder_assignment`:** 真驱 `_persist_ingested_library_row` 两次——首摄 → 手工把行塞进 folder-x → 重摄;断言 folder_id 存活 **且** title/page_count 被刷新(部分更新语义双方向都钉)。既有 6 红天然是 failing-first(修前全红、修后全绿),故只加这一枚。
+- **排查面(完整):** 全仓 `upsert(.*PAPER_LIBRARY` 共 4 处——PUT 路径(15 键全含,本来就对)、ingest(本票)、两个测试种子;`_backfill_library_title` 走裸 UPDATE 无此面。**bug 类已记入 memory:** 给 Core 表加列=所有 full-row upsert 调用方的行字典必须同批补键,否则绑定错;部分写者一律传 insert_cols。
+- **过程坑(如实):** apply_diff 以「同文替换」空转了一次(def 行自我复制),insert_content 又叠了一份 def → 连续双 def 语法炸,read 后一眼修掉;同坑本月第三次(insert_content/apply_diff 的 anchor 重复族),已麻木但仍在记。
+- **验证:** ingest 8/8(含新钉)、title_recovery 18/18、hash_canonical 13/13、宽环(review/migration/dedup/abort/insight/qa/podcast_api/podcast_script/termfill/前端 podcast/lang_toggle/selfheal/parity)**192/192**。
+
 ### 2026-07-25(续19) — 设置矩阵两连:弹窗裁列无滚动提示根修 + 行/列/格局部探测(commit `20dde235`,9 文件 +859/-19;新套件后端 11/11 + 前端 7/7(27 探针含 NEUTER),矩阵环 55/55,settings/provider/bundler 环 128 过 4 跳,collect **8776** 0 err)。
 - **现象(owner 截图):** ①服务商矩阵 3 个密钥时 #3 列被弹窗右缘拦腰裁断,且 macOS 覆盖式滚动条不滚不见,用户无从得知右侧还有列;②探测只能全网格一把梭,想重测一行/一列/一格只能整盘重跑。
 - **遮挡根修(四件套):** ①`.stg-matrix-scroll` 自定义横向滚动条**常驻可见**(自定义滚动条豁免 macOS 自动隐藏)+ Lea-Verou 纯 CSS 滚动阴影(可滚方向才出阴影);②弹窗自适应加宽:`_fitMatrixPanelWidth()` 在渲染后测量可见矩阵容器溢出 → `.settings-panel.stg-matrix-wide` 860→min(1240px,96vw)(仅桌面媒体查询内,移动端不动),切 tab/防抖 resize 重估,**隐藏矩阵(非活动 tab/折叠卡片,clientWidth=0)不参与加宽**;③长模型 id 省略号收敛(200/220px,tooltip 兜底全文),把宽度还给密钥列。

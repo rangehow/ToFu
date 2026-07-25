@@ -2254,6 +2254,13 @@ def _persist_ingested_library_row(paper_id, *, title, pdf_url, pdf_filename,
             qa_history = (existing['qa_history'] if existing else '[]') or '[]'
             babel_cache = (existing['babel_cache'] if existing else '{}') or '{}'
             imgs = images[:_LIB_IMAGES_CAP] if isinstance(images, list) else []
+            # insert_cols: PARTIAL insert — folder_id is deliberately NOT
+            # written. A full-row upsert (insert_cols=None lists ALL columns)
+            # both breaks on any Core column the row-dict doesn't supply (the
+            # folder_id binding break, 705cc8e3) and would CLOBBER an existing
+            # folder assignment on re-ingest; the partial form lets the INSERT
+            # take the column DEFAULT ('') and ON CONFLICT updates only the
+            # columns actually written — the PUT path's own preserve contract.
             upsert(db, PAPER_LIBRARY, {
                 'id': paper_id, 'user_id': DEFAULT_USER_ID,
                 'title': (title or '')[:_LIB_TITLE_CAP],
@@ -2267,7 +2274,12 @@ def _persist_ingested_library_row(paper_id, *, title, pdf_url, pdf_filename,
                 'babel_cache': babel_cache,
                 'page_count': int(page_count or 0),
                 'created_at': created_at, 'updated_at': now_ms,
-            }, retry=True)
+            }, insert_cols=(
+                'id', 'user_id', 'title', 'pdf_url', 'pdf_filename',
+                'arxiv_id', 'paper_hash', 'parsed_text', 'qa_history',
+                'images', 'babel_cache', 'page_count',
+                'created_at', 'updated_at',
+            ), retry=True)
             logger.info('[Paper:Ingest] Persisted library row %s — hash=%s imgs=%d',
                         paper_id[:16], (paper_hash or '')[:12], len(imgs))
             return True

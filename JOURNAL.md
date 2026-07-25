@@ -1,5 +1,12 @@
 # Project Journal
 
+### 2026-07-25(续11) — 「debug 开关:编排流程按钮秒出、复制 ID 按钮要刷新才出」根修:侧边栏渲染哈希吞掉 debug 标志(commit `ef21d856`,2 文件 +114/-1;新守卫 4/4 含 NEUTER,相邻 conversation_list 套件 17/17)。
+- **现象(owner):** 设置里开 debug,「编排流程」入口立刻出现;但侧边栏会话的「复制 ID」按钮必须强制刷新才出现。
+- **根因(两套生效机制,一条死路):** ①编排流程按钮走 `index.html:2002` `_applyDebugModeVisibility()`——直接对 6 个硬编码 ID 拨 `el.style.display`,纯 DOM 显隐、不经过任何渲染缓存,save_export.js:124 一调即生效。②复制 ID 按钮是 `_buildConvItemHTML`(conversation_list.js:1144)按行烤进 HTML 字符串的,要更新必须整表重建;`saveSettings()` 也确实调了 `renderConversationList()`,但该函数的拆分哈希短路(struct=文件夹状态+每行 id|title|updatedAt|folderId|projectSummary / status=6 个状态位,750-756 行)**两个哈希都不含 debug_mode** → 开关翻转后 `_fullHash` 不变 → 直接 return,空调用。即便状态哈希碰巧变了,快速通道 `_applyConvItemStatus` 也只补圆点/状态标签,从不碰 action 按钮区。于是按钮只能等无关结构变化或整页刷新才被动出现。
+- **修复(1 行):** `_structHash` 前缀加 `DBG<0|1>` → 开关翻转即结构变化,走正常全量重建路径;status-only 快速通道不受影响。消息区 trace_id 本就无此问题(saveSettings 另有 `ConvView.replaceAll(forceScroll)` 全量重画)。
+- **守卫:** `test_frontend_debug_toggle_conv_list.py` jsdom 驱动真实 conversation_list.js:debug off→0 按钮 → 置 flag 后**不碰哈希缓存**(照 saveSettings 原样)调 render → 按钮出现 → 关回立即消失;NC 控:无关 struct 变化(改名)也照常重建,证断言非「恒重画」假象。**NEUTER:** 摘掉 DBG token 测试即红,恢复即绿。
+- **生效边界(诚实):** 纯前端 1 行,随提交生效;bundle 无热重载,**浏览器端需 owner 重启服务器 + 硬刷新**后开关才即时生效。共享 HEAD 有 sibling 脏文件(project.py/meta.py/两个测试),精确 pathspec 提交零触碰。
+
 ### 2026-07-25(续10) — podcast「已有报告却提示生成报告」根治:缺表探针机制包 + 前端诚实态 + hero 重设计(commit `96ff323e`,12 文件;后端 14/14、前端 8/8(25 PASS 含双 NEUTER)、相邻 6 套件 98 过)。
 - **用户报告的症状双根因:** ①活库缺 `paper_podcasts` → podcast lookup 每个调用都 500(onError:'null' → null)→ 前端**无条件 fall-through 到 report_required**,对已有报告的论文撒谎,且「去生成报告」永远修不好;②report_required 空态左对齐小盒子,大面板里像坏掉。
 - **后端机制包(对 sibling cacfa08d 纯 bump 的兜底网):** `_missing_core_tables`(PG+SQLite 双 backend `_selfheal.py`)在版本快路径**之前**探测——表加进 `_core_schema` 却忘 bump `_SCHEMA_VERSION` 这类漂移不再永久漏过,强制全量 DDL 自愈。清单来自 `core_boot_table_names()`(共享 MetaData − 有意不建的表),新 Core 表自动纳入。**自捉一虫:** 初版清单把 `error_resolutions`(PG-only 设计,见 `_tables.py:781` 注释)也探进去 → SQLite 每次 boot 都会被骗着跑全量 DDL、快路径永久失效;`_helpers.py` 加 `PG_ONLY_CORE_TABLES` + `core_boot_table_names(backend)` 后端感知修复,由 `test_reinit_with_all_tables_present_is_fast_path`(全量入口打炸,收敛库必须静默快路径)钉死。PG facade `__init__.py` 补 `_missing_core_tables` 再导出(初版漏了,测试即红)。

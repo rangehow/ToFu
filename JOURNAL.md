@@ -1,5 +1,11 @@
 # Project Journal
 
+### 2026-07-25 — 论文播客功能设计落地(纯设计,零生产代码改动):`docs/PAPER_PODCAST_DESIGN.md` + 看板 epic `pt_80943e765e9444ca`。
+- **需求(owner):** 论文阅读模式加播客;公式/图等难口播元素必须妥善处理;听完要有真收获不要空话;路上/睡前听一两遍;可导出音频。owner 直觉「用报告生成」经三路代码勘察证实**正确**。
+- **勘察(3 侦察 agent):** ①后端——报告已是最强素材库(10 节结构/已插图/术语审计,`paper_reports` 表 8–25K 字符),翻译引擎的段落感知分块(2400 字符)可复用,任务/事件流模式直接套 report_engine;②前端——paper-reader 右侧 tab 即插点(`_switchPaperTab`),PDF 已有 Range 流式服务可仿,全项目无音频先例;③TTS——**全项目零 TTS**(只有 ASR),但 OpenAI 兼容 `POST /audio/speech` 接入路径清晰(照抄 lib/transcription 全链:能力标签/槽位/探测/计费/前端排除)。
+- **设计核心(三条红线 → 机制):** 公式三级处理(L1≤3 个讲直觉/L2 只讲作用/L3 推导跳过,Technical Reference 整节不进口播稿)、图 Top-K≤5 三段式口播(是什么→看到什么→为什么重要,表格一律转趋势)、反空话四道闸(残留 LaTeX 正则/数字溯源/结构要件/时长 ±20%)+ Critic 一轮复审。剧本落 **JSON 分段**(speaker/figure_ref 字段预留 → P2 双人对话与配图联动零迁移)。
+- **硬阻塞(唯一):** 无任何 TTS 模型槽位注册,owner 需确认网关可用语音合成模型,否则功能只能交付到「剧本」层。分期:P1 单人 short(~5min)/full(~15min) 两档 + MP3 导出;P2 双人/配图联动/睡眠定时;P3 个人 RSS 订阅(「路上听」终极形态)。
+
 ### 2026-07-25 — RENDER_CONTRACT Phase 3.5 §5-final 落地:session 键契约 + 读面钉死 + allowlist 冻结(streamBufs-v2 门关闭)(commit `de927bb2`,3 文件 +173/-22,16/16 守卫绿含 NEUTER,83/83 全量扫,collect 8551 0 err)。owner §7-验收抓到:phase 家和退役的 streamBufs 是同一建筑学家族(全局可变 Map、游离文档外),守卫只钉符号存在没钉「这个对象允许有哪些键」——明年任何人加 `session.content`,守卫一个都不红,streamBufs v2 借尸还魂。
 - **(1) 键契约钉死(owner 条件 1):** `test_stream_session_keys_are_phase_only` —— 扫全部生产代码,任何 `streamSessions.get(...)/getStreamSession(...)/_sess/session/sess/Sess.<非phase>` 读写即红(禁键:content/thinking/toolRounds/text/markdown/html/message/body/rounds/segments),外加模块自身创建形状(getStreamSession 必须恰建 `{ phase: null }`)。**NEUTER:`session.content = "x"` 注入必须翻转红**。stream_session.js 文档头写入 KEY CONTRACT:扩键集是架构决定,必须与守卫更新同 commit。
 - **(2) 读面钉死 + 文档对齐现实:** `test_stream_session_reader_surface_pinned` —— 读面恰为 3 文件 5 处(health_stream_timer ×3 + sse_pipeline ×1 + stream_lifecycle ×1);stream_session.js 文档头过时的「只有 2 个 paint 读者」改成真实 5 处。文档和现实不再各说各话。

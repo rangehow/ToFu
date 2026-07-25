@@ -24,6 +24,12 @@ presets) are installable from the Settings → Skills catalog.
 
 from __future__ import annotations
 
+from lib.motion_video._audio import (
+    NarrationAborted,
+    concat_narrations,
+    mux_audio_video,
+    synthesize_scene_narrations,
+)
 from lib.motion_video._concat import concat_mp4s
 from lib.motion_video._env import (
     PINNED_HYPERFRAMES,
@@ -86,4 +92,8 @@ __all__ = [
     'check_project',
     'render_project',
     'concat_mp4s',
+    'NarrationAborted',
+    'synthesize_scene_narrations',
+    'concat_narrations',
+    'mux_audio_video',
 ]

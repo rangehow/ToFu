@@ -54,6 +54,27 @@
    failed, report the failing scene id, the failure category from the tool
    result, and the suggested fix.
 
+## Narration (P2 音画合成 — when the user wants sound)
+
+Do this BETWEEN storyboard (step 2) and scene authoring (step 3):
+
+1. `motion_video_narrate` with the checked scenes.json → per-scene WAVs +
+   an alignment manifest. Default `loose` mode: each scene's
+   `target_duration = max(srt, audio + tail_pad)` — when a scene's
+   `target_duration` EXCEEDS its SRT duration, set that scene's
+   `data-duration` to the target before rendering (the extra time renders
+   as hold/outro; never trim the audio). `strict` mode keeps the SRT span
+   and reports `overflow` instead — shorten the scene text (or raise the
+   TTS `speed`) and re-narrate that scene until overflow is ~0.
+2. If the tool reports `degraded` (no TTS slot configured), tell the user
+   and continue with the SILENT pipeline — never error out.
+3. After `motion_video_concat` produced the silent `final_silent.mp4`,
+   concatenate the scene WAVs in order (a plain `motion_video_concat` of
+   WAVs is NOT supported — use run_command ffmpeg concat or just pass the
+   per-scene WAVs to your concat step) and call `motion_video_mux`
+   (video + narration → `final.mp4`, loudnorm on). Probe the result: it
+   must HAVE an audio track now.
+
 ## Workdir convention
 
 Put everything under `.tofu/motion_video/<slug>/` in the CURRENT PROJECT

@@ -117,6 +117,45 @@ def _handle_motion_video_tool(task, tc, fn_name, tc_id, fn_args, rn,
             badge = ('concatenated' if result.get('ok')
                      else (result.get('category') or 'failed'))
 
+        elif fn_name == 'motion_video_narrate':
+            scenes_path = _resolve(fn_args.get('scenes_path', ''), proj)
+            out_dir = _resolve(fn_args.get('out_dir', ''), proj)
+            try:
+                with open(scenes_path, encoding='utf-8') as f:
+                    scenes = json.load(f)
+            except (OSError, json.JSONDecodeError) as e:
+                result = {'ok': False, 'detail': f'cannot read scenes: {e}'}
+                badge = 'failed'
+            else:
+                try:
+                    result = mv.synthesize_scene_narrations(
+                        scenes, out_dir,
+                        voice=fn_args.get('voice') or None,
+                        speed=fn_args.get('speed'),
+                        alignment=fn_args.get('alignment') or 'loose',
+                        abort_event=abort_event)
+                    if result.get('ok'):
+                        badge = ('degraded' if result.get('degraded')
+                                 else f"{len(result.get('scenes', []))} scenes")
+                    else:
+                        badge = ('degraded' if result.get('degraded')
+                                 else 'failed')
+                except mv.NarrationAborted:
+                    result = {'ok': False, 'category': 'aborted',
+                              'detail': 'narration aborted by user'}
+                    badge = 'aborted'
+
+        elif fn_name == 'motion_video_mux':
+            video = _resolve(fn_args.get('video', ''), proj)
+            audio = _resolve(fn_args.get('audio', ''), proj)
+            output = _resolve(fn_args.get('output', ''), proj)
+            loudnorm = fn_args.get('loudnorm', True)
+            result = mv.mux_audio_video(video, audio, output,
+                                        loudnorm=bool(loudnorm),
+                                        abort_event=abort_event)
+            badge = ('muxed' if result.get('ok')
+                     else (result.get('category') or 'failed'))
+
         else:
             result = {'ok': False, 'errors': [f'unknown tool {fn_name}']}
             badge = 'failed'

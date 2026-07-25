@@ -534,3 +534,181 @@ def test_probe_env_reports_issues(monkeypatch):
     result = menv.probe_env()
     assert result['ok'] is False
     assert len(result['issues']) >= 4  # node / hyperframes / ffmpeg / chrome
+    result = menv.probe_env()
+    assert result['ok'] is False
+    assert len(result['issues']) >= 4  # node / hyperframes / ffmpeg / chrome
+
+
+# ══════════════════════════════════════════════════════════
+#  P2: narration (TTS) + mux
+# ══════════════════════════════════════════════════════════
+
+import lib.tts as _tts_mod
+from lib.motion_video import _audio as maudio
+
+
+def _fake_tts(monkeypatch, chunk_seconds=1.0):
+    """Fake the lib.tts facade: every synthesize call returns a REAL silence
+    WAV of ``chunk_seconds`` so the stdlib wav helpers work for real."""
+    calls = []
+    def fake_synthesize(text, *, voice=None, fmt=None, speed=None):
+        calls.append(text)
+        return _tts_mod.SynthesizeResult(
+            audio_bytes=_tts_mod.silence_wav_bytes(chunk_seconds),
+            mime='audio/wav', model='fake-tts', provider_id='fake',
+            voice=voice or 'fake-voice')
+    monkeypatch.setattr('lib.tts.synthesize', fake_synthesize)
+    monkeypatch.setattr('lib.tts.tts_available', lambda: True)
+    monkeypatch.setattr('lib.tts.max_input_chars', lambda: 4000)
+    return calls
+
+
+def _scene(sid, start, end, text):
+    return {'id': sid, 'start': float(start), 'end': float(end), 'text': text}
+
+
+def test_chunk_text_sentence_boundaries():
+    text = '第一句。第二句！第三句？' + '长' * 50 + '。'
+    chunks = maudio._chunk_text(text, 20)
+    assert all(len(c) <= 20 for c in chunks)
+    assert ''.join(chunks).replace(' ', '') == text.replace(' ', '')
+    assert maudio._chunk_text('', 10) == []
+    hard = maudio._chunk_text('无标点' * 100, 30)
+    assert all(len(c) <= 30 for c in hard)
+
+
+def test_narrate_loose_pads_short_audio(monkeypatch, tmp_path):
+    _fake_tts(monkeypatch, chunk_seconds=1.0)  # audio 1s << srt 3s
+    scenes = [_scene('scene-001', 0, 3, '你好世界。')]
+    res = mv.synthesize_scene_narrations(scenes, str(tmp_path))
+    assert res['ok'] and not res['degraded']
+    e = res['scenes'][0]
+    assert e['target_duration'] == pytest.approx(3.0)  # stays at srt span
+    assert e['audio_duration'] == pytest.approx(1.0)
+    # WAV is silence-padded to the target duration.
+    with open(e['wav'], 'rb') as f:
+        assert _tts_mod.wav_duration(f.read()) == pytest.approx(3.0, abs=0.02)
+
+
+def test_narrate_loose_extends_scene_for_long_audio(monkeypatch, tmp_path):
+    _fake_tts(monkeypatch, chunk_seconds=5.0)  # audio 5s > srt 3s
+    scenes = [_scene('scene-001', 0, 3, '你好世界。')]
+    res = mv.synthesize_scene_narrations(scenes, str(tmp_path))
+    e = res['scenes'][0]
+    # loose: target = audio + tail_pad → caller must extend data-duration
+    assert e['target_duration'] == pytest.approx(5.0 + 0.35)
+    with open(e['wav'], 'rb') as f:
+        assert _tts_mod.wav_duration(f.read()) == pytest.approx(5.35, abs=0.02)
+
+
+def test_narrate_strict_reports_overflow(monkeypatch, tmp_path):
+    _fake_tts(monkeypatch, chunk_seconds=5.0)
+    scenes = [_scene('scene-001', 0, 3, '你好世界。')]
+    res = mv.synthesize_scene_narrations(scenes, str(tmp_path),
+                                         alignment='strict')
+    e = res['scenes'][0]
+    assert e['target_duration'] == pytest.approx(3.0)  # srt-led, unchanged
+    assert e['overflow'] == pytest.approx(2.0)
+    assert res['overflow_total'] == pytest.approx(2.0)
+
+
+def test_narrate_degrades_without_tts_slot(monkeypatch, tmp_path):
+    monkeypatch.setattr('lib.tts.tts_available', lambda: False)
+    res = mv.synthesize_scene_narrations(
+        [_scene('s', 0, 3, 'x')], str(tmp_path))
+    assert res['ok'] is False and res['degraded'] is True
+
+
+def test_narrate_abort_between_chunks(monkeypatch, tmp_path):
+    _fake_tts(monkeypatch)
+    monkeypatch.setattr('lib.tts.max_input_chars', lambda: 4)  # force chunks
+    abort = threading.Event()
+    abort.set()  # already aborted → raises before/at first scene
+    with pytest.raises(mv.NarrationAborted):
+        mv.synthesize_scene_narrations([_scene('s', 0, 3, '一二三四五六七八')],
+                                       str(tmp_path), abort_event=abort)
+
+
+def test_narrate_neuter_padding_proves_loadbearing(monkeypatch, tmp_path):
+    """NEUTER: amputate the silence-padding → a short-audio scene's WAV no
+    longer reaches the target duration (loose-mode alignment breaks)."""
+    _fake_tts(monkeypatch, chunk_seconds=1.0)
+    monkeypatch.setattr('lib.tts.concat_wavs', lambda parts, pause_ms=None: parts[0])
+    scenes = [_scene('scene-001', 0, 3, '你好世界。')]
+    res = mv.synthesize_scene_narrations(scenes, str(tmp_path))
+    e = res['scenes'][0]
+    with open(e['wav'], 'rb') as f:
+        got = _tts_mod.wav_duration(f.read())
+    assert got == pytest.approx(1.0, abs=0.02)  # unpadded — alignment broken
+
+
+def test_narrate_textless_scene_gets_silence(monkeypatch, tmp_path):
+    _fake_tts(monkeypatch, chunk_seconds=2.0)
+    scenes = [_scene('scene-001', 0, 2, '你好。'),
+              _scene('scene-002', 2, 5, '')]  # transition scene, no text
+    res = mv.synthesize_scene_narrations(scenes, str(tmp_path))
+    silent = res['scenes'][1]
+    assert silent['wav']
+    with open(silent['wav'], 'rb') as f:
+        assert _tts_mod.wav_duration(f.read()) == pytest.approx(3.0, abs=0.02)
+
+
+def test_concat_narrations_merges_with_pause(monkeypatch, tmp_path):
+    w1 = tmp_path / 'a.wav'
+    w1.write_bytes(_tts_mod.silence_wav_bytes(1.0))
+    w2 = tmp_path / 'b.wav'
+    w2.write_bytes(_tts_mod.silence_wav_bytes(2.0))
+    out = tmp_path / 'narration.wav'
+    res = mv.concat_narrations([str(w1), str(w2)], str(out), pause_ms=250)
+    assert res['ok']
+    assert res['duration'] == pytest.approx(1.0 + 2.0 + 0.25, abs=0.03)
+
+
+def test_mux_happy_path(monkeypatch, tmp_path):
+    video = tmp_path / 'v.mp4'
+    video.write_bytes(b'vv')
+    audio = tmp_path / 'a.wav'
+    audio.write_bytes(b'aa')
+    out = tmp_path / 'final.mp4'
+    ffmpeg, marker = _fake_ffmpeg(tmp_path)
+    monkeypatch.setattr('lib.motion_video._env.ffmpeg_bin', lambda: ffmpeg)
+
+    def fake_probe(path, **kw):
+        base = {'codec': 'h264', 'width': 1080, 'height': 1440, 'fps': 30.0,
+                'duration': 8.0, 'has_audio': 'final' in path}
+        return base
+    monkeypatch.setattr('lib.motion_video._gates.probe_video', fake_probe)
+    res = mv.mux_audio_video(str(video), str(audio), str(out))
+    assert res['ok'] is True, res
+    args = marker.read_text()
+    assert '-c:v copy' in args and 'aac' in args and 'loudnorm' in args
+
+
+def test_mux_missing_inputs(monkeypatch, tmp_path):
+    res = mv.mux_audio_video('/nonexistent/v.mp4', '/nonexistent/a.wav',
+                             str(tmp_path / 'o.mp4'))
+    assert res['ok'] is False
+    assert 'missing video file' in res['detail']
+
+
+def test_mux_requires_audio_track_post_check(monkeypatch, tmp_path):
+    video = tmp_path / 'v.mp4'
+    video.write_bytes(b'vv')
+    audio = tmp_path / 'a.wav'
+    audio.write_bytes(b'aa')
+    ffmpeg, _marker = _fake_ffmpeg(tmp_path)
+    monkeypatch.setattr('lib.motion_video._env.ffmpeg_bin', lambda: ffmpeg)
+    monkeypatch.setattr('lib.motion_video._gates.probe_video',
+                        lambda path, **kw: {'codec': 'h264', 'width': 1080,
+                                            'height': 1440, 'fps': 30.0,
+                                            'duration': 8.0, 'has_audio': False})
+    res = mv.mux_audio_video(str(video), str(audio), str(tmp_path / 'o.mp4'))
+    assert res['ok'] is False
+    assert 'no audio track' in res['detail']
+
+
+def test_motion_tools_include_p2_tools_with_project():
+    from lib.tools.registry import assemble_tool_list
+    tools, _ = assemble_tool_list(_ctx(True))
+    names = {t['function']['name'] for t in tools}
+    assert {'motion_video_narrate', 'motion_video_mux'} <= names

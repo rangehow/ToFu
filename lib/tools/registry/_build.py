@@ -342,9 +342,11 @@ def _register_builtins() -> None:
                      'motion_video_env_check', 'motion_video_storyboard_check',
                      'motion_video_check', 'motion_video_render',
                      'motion_video_probe', 'motion_video_concat',
+                     'motion_video_narrate', 'motion_video_mux',
                  }),
                  write_tools=frozenset({
                      'motion_video_render', 'motion_video_concat',
+                     'motion_video_narrate', 'motion_video_mux',
                  }),
                  idempotent_tools=frozenset({
                      'motion_video_env_check', 'motion_video_storyboard_check',

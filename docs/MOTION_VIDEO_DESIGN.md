@@ -1,6 +1,6 @@
 # Tofu 动画视频生成能力设计稿(auto-motion 吸收 + 超越)
 
-> 状态:**P0 环境验证 ✅(全链跑通)· P1 最小链路 ✅(2026-07-25 交付,tools-first 形态);P2 音画合成待开工(对齐策略待拍板,见 §8)。**
+> 状态:**P0 环境验证 ✅ · P1 最小链路 ✅ · P2 音画链 ✅(2026-07-25,宽松对轴默认+参数化);P2b(专用 runtime/headless API)与 P3(并行/面板)未开工。**
 > 参考仓库:`/mnt/dolphinfs/ssd_pool/docker/user/hadoop-aipnlp/INS/ruanjunhao04/auto-motion`
 > (与 tofu 同级目录,2026-07-25 clone 自 https://github.com/vibe-motion/auto-motion,49MB)
 
@@ -154,12 +154,16 @@ transcription.srt
 - **技能商店**:6 个 vibe-motion 知识包进 catalog(codeload zip + subdir,installer 校验,用户一键安装,不改用户数据);
 - **测试**:`tests/test_motion_video.py` 33 测全绿(含双 NEUTER:剥时长和闸/连续性闸各自放行坏分镜;渲染 env 注入/中止/缺 bin;concat 双模式;注册门正反两向),相邻 skills/registry 套件 43+63 绿,collect 8756 0 err。
 
-### P2 — 音画合成
+### P2 — 音画合成 ——— ✅ 音频链已交付(2026-07-25);专用 runtime 归为 P2b 未开工
 
-- **专用 TaskRuntime + engine 在此落地**(P1 形态修正推迟至此):TTS 配音本身是服务端编排(逐镜合成/停顿/重试/Abort),走播客 `podcast_runtime` 镜像——`motion_runtime` + `engine.py`(分镜→逐镜[作者回调=P1 的 agent 或 engine 内 LLM]→渲染→拼接→混流),dedup 四元组索引,api_v1 端面;
-- TTS 逐镜头配音(复用 `lib/tts` 分块/拼接/停顿逻辑),镜头音频长度 vs 镜头时长对齐策略(音频短→补静音尾;音频长→自动微调镜头时长重渲或拉伸留白,二选一,拍板时定);
-- FFmpeg mux 音轨;可选字幕烧录(burn-in)或侧车 .srt;
-- 降噪:loudnorm 归一(播客链已有同款)。
+**对齐策略(拍板记录):** owner 答「全绿推进」——按推荐的**宽松对轴**落地,且实现为**参数化**(`alignment='loose'|'strict'`,默认 loose):loose=镜头时长随配音微调(`target=max(srt, audio+0.35s tail)`,超长镜头改 data-duration 重渲,动画自然 hold);strict=SRT 轴固定,配音超长报 overflow 由 agent 改文案/调速。owner 日后切换只是配置翻转,无需再问。
+
+已交付:
+
+- **`lib/motion_video/_audio.py`**:`synthesize_scene_narrations`(句号边界分块/逐块重试×2/AbortSignal/无文本镜头两段式补静音且**继承 provider WAV 参数**防脱轨/无槽位降级不死)、`concat_narrations`(镜头间 250ms 停顿)、`mux_audio_video`(视频流 copy+AAC+loudnorm 单遍+原子写+后验音轨存在与时长漂移);
+- **2 个新工具**:`motion_video_narrate`(对齐清单:逐镜 audio/target/overflow)、`motion_video_mux`;
+- **测试 +13**(48 全绿):分块边界、loose 短音补静音/长音扩镜、strict overflow、无槽位降级、Abort、**NEUTER**(剥补静音→loose 对齐崩)、无文本镜头静音、mux 命令构造+后验双支;
+- **剩余 P2b**:专用 `motion_runtime` + engine + api_v1(headless 编排/分镜零 LLM 兜底),与 P3 UI 面板同期落地更经济(面板的进度推送本来就要走 runtime 事件流);字幕烧录/侧车 .srt 也留 P2b。
 
 ### P3 — 交互与并行
 

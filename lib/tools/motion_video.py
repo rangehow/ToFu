@@ -22,6 +22,8 @@ MOTION_VIDEO_TOOL_NAMES = {
     'motion_video_render',
     'motion_video_probe',
     'motion_video_concat',
+    'motion_video_narrate',
+    'motion_video_mux',
 }
 
 _GUIDE_HINT = (
@@ -200,6 +202,85 @@ MOTION_VIDEO_TOOLS = [
                     }
                 },
                 "required": ["inputs", "output"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "motion_video_narrate",
+            "description": (
+                "P2 音画合成 step 1: synthesize per-scene TTS narration WAVs from a "
+                "storyboard scenes.json. Returns an alignment manifest — in the default "
+                "'loose' mode each scene's target_duration = max(srt, audio + tail_pad); "
+                "when target_duration exceeds the SRT duration you MUST update that scene's "
+                "data-duration before rendering. Degrades gracefully (ok=false, "
+                "degraded=true) when no TTS slot is configured — deliver the silent video."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "scenes_path": {
+                        "type": "string",
+                        "description": "Path to scenes.json (the storyboard-checked list)."
+                    },
+                    "out_dir": {
+                        "type": "string",
+                        "description": "Directory for per-scene narration WAVs "
+                                       "(e.g. .tofu/motion_video/<slug>/audio)."
+                    },
+                    "voice": {
+                        "type": "string",
+                        "description": "Optional TTS voice override (default: data/config/tts.json)."
+                    },
+                    "speed": {
+                        "type": "number",
+                        "description": "Optional TTS speed override (e.g. 1.1)."
+                    },
+                    "alignment": {
+                        "type": "string",
+                        "enum": ["loose", "strict"],
+                        "description": "'loose' (default): scene duration follows the audio. "
+                                       "'strict': SRT span is fixed; over-long narration is "
+                                       "reported as overflow for you to shorten the text."
+                    }
+                },
+                "required": ["scenes_path", "out_dir"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "motion_video_mux",
+            "description": (
+                "P2 音画合成 final step: mux the silent final MP4 with the narration track "
+                "(video stream copied, audio → AAC with loudnorm). Run motion_video_concat "
+                "for the scene WAVs first (or pass any single audio file). Post-verified: "
+                "audio track present, duration preserved."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "video": {
+                        "type": "string",
+                        "description": "Silent final MP4 (from motion_video_concat)."
+                    },
+                    "audio": {
+                        "type": "string",
+                        "description": "Narration track (WAV/MP3/AAC), e.g. the concatenated "
+                                       "scene narrations."
+                    },
+                    "output": {
+                        "type": "string",
+                        "description": "Deliverable MP4 path (e.g. .tofu/motion_video/<slug>/final.mp4)."
+                    },
+                    "loudnorm": {
+                        "type": "boolean",
+                        "description": "Apply EBU R128 loudness normalization (default true)."
+                    }
+                },
+                "required": ["video", "audio", "output"],
             },
         },
     },

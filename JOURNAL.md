@@ -1,3 +1,11 @@
+### 2026-07-25(续30) — Project Co-Pilot 工作区列表拖拽排序落地:顺序即主根(commit `d8f1a6c4`,4 文件 +464/-5;新套件 5 测 29 探针全绿含 3 发 NC,bundle parity 15/15,相邻 9/9)
+- **owner 诉求(截图红框 WORKSPACE 区):** 该区域必须支持拖拽排序,且 root 默认在最顶。
+- **盘上状态:** 该功能已是**未提交 WIP**(疑似早前会话中断遗留):project.js 的 `_syncFoldersFromState` 主根置顶 + `_mpReorder`/`_attachMpReorder` 委托拖拽机、index.html 副标题、i18n `pm.dragReorder` 键、未跟踪的 JSDOM 套件;grip/caret 样式 CSS 已被 sibling 折进 `6a705553` 先落地。本轮核实无 sibling 正在推进(peer_status 9 活会话无一涉及 project.js),验证后收口提交。
+- **设计(顺序即语义):** `_mpFolders[0]` 本来就是主根(星标 + root 徽标 + setPaths 主参),所以「拖到顶 = 升为主根」无需独立控件;`_syncFoldersFromState` 永远把 primary 塞到 index 0,默认 root 在最顶。桌面 HTML5 DnD 委托到稳定容器(扛 innerHTML 重建),悬停显示 2px 插入指示线;触屏只能从握把起拖(其余位置保留滚动);按钮拖拽被拒(保住点击);文件拖入不被劫持。
+- **验证:** 新套件 5 测全绿(根置顶种子/徽标唯一/上拖升级/下拖索引补偿(顶/中/尾)/同槽 no-op/指示线/按钮拒拖/文件拖拽放行/触屏重排)+ 3 发 NC 全咬(splice 移动/补偿位移/顶行主根各承重)+ 静态钉(openProjectModal 必须挂监听);bundle parity 15/15、folder-drop-gate + api-isolation 9/9、node --check 干净、bundler 构建通过。
+- **生效边界(诚实):** 纯前端,走内容哈希 bundle —— **需重启服务器 + 浏览器硬刷新**后截图里的握把与拖拽才出现。
+- **git 纪律:** reset → 精确 4 文件 pathspec → `--cached --name-only` 核实 → 提交恰好 4 文件,sibling WIP(server.py / test_autopilot_startup 等)零触碰。
+
 ### 2026-07-25(续29) — 「一句话 → 成品」形态之问:产出底盘设计稿落地(纯设计,commit `8ca42393`,1 文件 +298;board epic `pt_17a41dba5dec476e`,5 项待拍板)
 - **owner 诉求:** 输入框说一句话就出科普视频、用户不需要感知;并明确问「该做成视频增强还是别的模块形态,我不确定现在这个技能形态是否合适」。
 - **回答(三层分工,比方:底盘/车型/驾驶手册):** ①**产出底盘** `lib/production/`(横向一次性:job 生命周期 + 阶段图契约 + 二进制产物 + 进度双投影);②**每能力配方**(纵向 300–600 行纯业务:video/podcast/ppt 各自的阶段序列);③**技能商店知识包**(零代码编导手册,由阶段内子 agent 按需 activate_skill)。**不做成视频增强**(这是一整类能力),**不做成技能包**(规范承载不了长任务)。

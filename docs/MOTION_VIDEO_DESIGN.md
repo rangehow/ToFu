@@ -121,8 +121,9 @@ transcription.srt
 | 组件 | 解法 | 验证结果 |
 |---|---|---|
 | hyperframes | `npm init -y` 后 `npm install hyperframes@0.7.71 --ignore-scripts` 本地安装 | doctor 必需项全绿 |
-| ffmpeg | `pip install --target=<scratch> imageio-ffmpeg`(静态 7.0.2,含 libx264/aac/libmp3lame/png) | ✅ 渲染/拼接/混流全够用 |
-| ffprobe | 复用 `miniforge3/envs/sglang/bin/ffprobe`(7.1.1),包 wrapper 注入 `LD_LIBRARY_PATH=<tofu>/lib:<sglang>/lib` | ✅ |
+| ffmpeg | `ensure_ffmpeg()`:pip 安装 `imageio-ffmpeg`(静态 7.0.2,含 libx264/aac/libmp3lame/png;进程内安装后必须 `importlib.invalidate_caches()` 才可见) | ✅ 渲染/拼接/混流全够用 |
+| ffprobe | `ensure_ffprobe()`:johnvansickle 静态 tar.xz 仅抽取 ffprobe 成员 → `data/motion_video/bin/`(imageio 不带 ffprobe,CLI 硬需要) | ✅ 7.1.1 实测 |
+| shim | `data/motion_video/bin/{ffmpeg,ffprobe}` 规范名符号链接 → 真实二进制;`build_render_env` 只把 shim 目录前置进 PATH(CLI 按字面名查找) | ✅ |
 | Chrome | `HYPERFRAMES_BROWSER_PATH=~/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome` + `LD_LIBRARY_PATH=<tofu>/lib` | ✅ Chrome for Testing 148 |
 | GSAP CDN | jsdelivr 直连可达 | ✅(离线部署时可 npm 本地化) |
 

@@ -429,7 +429,7 @@ pip install docling --extra-index-url https://download.pytorch.org/whl/cpu
 
 - **确定性渲染** —— 每一帧都由时间戳独立计算（可寻址的 GSAP 时间轴）；某个镜头不满意时，只重渲该镜头再重新拼接即可
 - **零 LLM 质量闸** —— 分镜时间轴校验（完整覆盖、时长和 ±0.1s）、每次渲染前的 HyperFrames lint/validate/inspect、渲染后的 ffprobe 规格复核（分辨率/帧率/时长/静音）
-- **工具链自举** —— `motion_video_env_check` 首次使用自动安装钉版 HyperFrames CLI；ffmpeg 来自 `imageio-ffmpeg`（免 root）；Chrome 复用 Playwright 缓存
+- **工具链自举** —— `motion_video_env_check` 首次使用自动安装钉版 HyperFrames CLI；ffmpeg 来自 `imageio-ffmpeg`、ffprobe 来自静态构建（均免 root）；Chrome 复用 Playwright 缓存
 - **失败分类** —— 渲染错误按类返回（`env_missing` / `lint` / `chrome` / `timeout` / `aborted`）并附带上游修复提示，不用啃原始日志
 - **深度知识包** —— 来自 vibe-motion/auto-motion 的 29 条动效规则、13 个镜头蓝图、20+ 设计帧预设，在 设置 → 技能 里搜 “hyperframes” 一键安装
 

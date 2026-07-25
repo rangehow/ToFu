@@ -49,7 +49,10 @@ __all__ = [
     'hyperframes_bin',
     'ensure_hyperframes',
     'ffmpeg_bin',
+    'ensure_ffmpeg',
     'ffprobe_bin',
+    'ensure_ffprobe',
+    'media_shim_dir',
     'chrome_bin',
     'build_render_env',
     'probe_env',
@@ -116,11 +119,15 @@ def ffmpeg_bin() -> str:
 
 
 def ffprobe_bin() -> str:
-    """Locate ffprobe (env → PATH). Optional — probe has an ffmpeg fallback."""
+    """Locate ffprobe (env → PATH → shim dir from a previous bootstrap)."""
     override = os.environ.get('TOFU_FFPROBE', '').strip()
     if override and os.path.isfile(override):
         return override
-    return shutil.which('ffprobe') or ''
+    found = shutil.which('ffprobe')
+    if found:
+        return found
+    shim = os.path.join(media_shim_dir(), 'ffprobe')
+    return shim if os.path.isfile(shim) else ''
 
 
 def _playwright_chrome_candidates() -> list[str]:
@@ -213,6 +220,139 @@ def ensure_hyperframes(*, install: bool = True, timeout: int = 900) -> str:
     return path
 
 
+#: Static ffprobe source (same build family imageio-ffmpeg's ffmpeg comes
+#: from). Downloaded once on demand — the pip package ships ffmpeg only.
+_FFPROBE_TARBALL_URL = ('https://johnvansickle.com/ffmpeg/releases/'
+                        'ffmpeg-release-amd64-static.tar.xz')
+
+
+def media_shim_dir() -> str:
+    """Directory holding ``ffmpeg`` / ``ffprobe`` shims (created on demand).
+
+    The HyperFrames CLI searches PATH for executables literally NAMED
+    ``ffmpeg`` / ``ffprobe``, but the resolved binaries carry versioned
+    names (``ffmpeg-linux-x86_64-v7.0.2``) — so we symlink them under
+    canonical names here and prepend THIS dir to PATH in
+    :func:`build_render_env`.
+    """
+    path = os.path.join(motion_root(), 'bin')
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _refresh_shim(name: str, target: str) -> str:
+    """(Re)point shim ``name`` at ``target`` inside the shim dir; return path."""
+    if not target or not os.path.isfile(target):
+        return ''
+    if os.path.basename(target) == name:
+        return target  # already canonically named — no shim needed
+    link = os.path.join(media_shim_dir(), name)
+    try:
+        if os.path.islink(link) or os.path.exists(link):
+            if os.path.realpath(link) == os.path.realpath(target):
+                return link
+            os.unlink(link)
+        os.symlink(target, link)
+    except OSError as e:
+        logger.warning('[MotionVideo] shim %s → %s failed: %s', name, target, e)
+        return ''
+    return link
+
+
+def ensure_ffprobe(*, install: bool = True, timeout: int = 600) -> str:
+    """Return an ffprobe path, downloading a static build when absent.
+
+    ``imageio-ffmpeg`` ships ffmpeg only, and the HyperFrames CLI hard-
+    requires ffprobe to probe media assets — so we fetch the matching
+    static build (johnvansickle, same family as the imageio binary) once
+    and extract just the ``ffprobe`` member into the shim dir.
+    Never raises; failures are logged + reported as ''.
+    """
+    existing = ffprobe_bin()
+    if existing:
+        return existing
+    if not install:
+        return ''
+    dest = os.path.join(media_shim_dir(), 'ffprobe')
+    logger.info('[MotionVideo] downloading static ffprobe (one-time bootstrap)')
+    import tarfile
+    import tempfile
+    import urllib.request
+    try:
+        with tempfile.TemporaryDirectory(prefix='mv-ffprobe-') as tmp:
+            tar_path = os.path.join(tmp, 'ff.tar.xz')
+            urllib.request.urlretrieve(_FFPROBE_TARBALL_URL, tar_path)
+            with tarfile.open(tar_path) as tf:
+                member = next((m for m in tf.getmembers()
+                               if m.name.endswith('/ffprobe')), None)
+                if member is None:
+                    logger.warning('[MotionVideo] ffprobe member not found in tarball')
+                    return ''
+                src = tf.extractfile(member)
+                if src is None:
+                    return ''
+                with open(dest, 'wb') as out:
+                    out.write(src.read())
+        os.chmod(dest, 0o755)
+    except Exception as e:
+        logger.warning('[MotionVideo] ffprobe download failed: %s', e, exc_info=True)
+        return ''
+    try:
+        out = subprocess.run([dest, '-version'], capture_output=True,
+                             text=True, timeout=30)
+        if out.returncode != 0:
+            logger.warning('[MotionVideo] downloaded ffprobe failed to run: %.300s',
+                           out.stderr)
+            return ''
+    except Exception as e:
+        logger.warning('[MotionVideo] downloaded ffprobe verify failed: %s', e)
+        return ''
+    logger.info('[MotionVideo] ffprobe available at %s', dest)
+    return dest
+
+
+def ensure_ffmpeg(*, install: bool = True, timeout: int = 300) -> str:
+    """Return an ffmpeg path, pip-installing ``imageio-ffmpeg`` if absent.
+
+    ``imageio-ffmpeg`` is a zero-dependency wheel bundling a full static
+    ffmpeg (libx264/aac/mp3/png) — no root needed, ``pip uninstall``
+    reverses it. Never raises; failures are logged + reported as ''.
+    """
+    existing = ffmpeg_bin()
+    if existing:
+        return existing
+    if not install:
+        return ''
+    logger.info('[MotionVideo] installing imageio-ffmpeg into %s '
+                '(one-time ffmpeg bootstrap)', sys.prefix)
+    try:
+        proc = subprocess.run(
+            [sys.executable, '-m', 'pip', 'install', 'imageio-ffmpeg'],
+            capture_output=True, text=True, timeout=timeout,
+            env={**os.environ, 'PIP_REQUIRE_VIRTUALENV': 'false'})
+        if proc.returncode != 0:
+            logger.warning('[MotionVideo] imageio-ffmpeg install failed rc=%s: %.500s',
+                           proc.returncode, proc.stderr)
+            return ''
+    except subprocess.TimeoutExpired:
+        logger.warning('[MotionVideo] imageio-ffmpeg install timed out after %ss', timeout)
+        return ''
+    except Exception as e:
+        logger.warning('[MotionVideo] imageio-ffmpeg install error: %s', e, exc_info=True)
+        return ''
+    # The install landed in site-packages WHILE this process is running —
+    # the import system's directory caches must be invalidated or the new
+    # package stays invisible to ``import imageio_ffmpeg``.
+    import importlib
+    importlib.invalidate_caches()
+    path = ffmpeg_bin()
+    if path:
+        logger.info('[MotionVideo] ffmpeg available at %s', path)
+    else:
+        logger.warning('[MotionVideo] imageio-ffmpeg installed but no ffmpeg resolved')
+    return path
+
+
 # ── Render environment ────────────────────────────────────
 
 def _conda_gui_lib_dir() -> str:
@@ -238,14 +378,18 @@ def build_render_env(base: dict | None = None) -> dict:
     """
     env = dict(base if base is not None else os.environ)
     ff = ffmpeg_bin()
-    if ff:
-        ff_dir = os.path.dirname(ff)
-        env['PATH'] = ff_dir + os.pathsep + env.get('PATH', '')
-        probe = ffprobe_bin()
-        if probe:
-            probe_dir = os.path.dirname(probe)
-            if probe_dir != ff_dir:
-                env['PATH'] = probe_dir + os.pathsep + env['PATH']
+    probe = ffprobe_bin()
+    if ff or probe:
+        # Canonical-name shims: the CLI looks for executables literally
+        # named ``ffmpeg`` / ``ffprobe`` on PATH.
+        ff_shim = _refresh_shim('ffmpeg', ff)
+        probe_shim = _refresh_shim('ffprobe', probe)
+        dirs: list[str] = []
+        for p in (ff_shim, probe_shim):
+            if p and os.path.dirname(p) not in dirs:
+                dirs.append(os.path.dirname(p))
+        if dirs:
+            env['PATH'] = os.pathsep.join(dirs) + os.pathsep + env.get('PATH', '')
     chrome = chrome_bin()
     if chrome:
         env['HYPERFRAMES_BROWSER_PATH'] = chrome

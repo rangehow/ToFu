@@ -55,6 +55,8 @@ def _handle_motion_video_tool(task, tc, fn_name, tc_id, fn_args, rn,
             install = fn_args.get('install', True)
             if install:
                 mv.ensure_hyperframes(install=True)
+                mv.ensure_ffmpeg(install=True)
+                mv.ensure_ffprobe(install=True)
             result = mv.probe_env()
             badge = 'ready' if result.get('ok') else 'env-missing'
 

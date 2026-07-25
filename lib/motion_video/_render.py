@@ -98,6 +98,8 @@ def _classify_failure(res: dict) -> str:
     if res['category']:
         return res['category']
     blob = (res['err'] + '\n' + res['out']).lower()
+    if 'ffmpeg not found' in blob or 'ffprobe not found' in blob:
+        return 'env_missing'
     if 'chrome' in blob or 'browser' in blob or 'puppeteer' in blob:
         return 'chrome'
     return 'unknown'

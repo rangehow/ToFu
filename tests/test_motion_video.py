@@ -292,17 +292,23 @@ printf 'x' > "{out}"
 exit 0
 """)
     monkeypatch.setattr(mrender, '_cli_or_env_error', lambda: cli)
-    monkeypatch.setattr(menv, 'ffmpeg_bin', lambda: '/opt/fakebin/ffmpeg')
-    monkeypatch.setattr(menv, 'ffprobe_bin', lambda: '/opt/fakebin/ffprobe')
+    fake_ff = tmp_path / 'ffmpeg-v7'
+    fake_ff.write_text('#!/bin/sh\n')
+    fake_fp = tmp_path / 'ffprobe-v7'
+    fake_fp.write_text('#!/bin/sh\n')
+    monkeypatch.setattr(menv, 'ffmpeg_bin', lambda: str(fake_ff))
+    monkeypatch.setattr(menv, 'ffprobe_bin', lambda: str(fake_fp))
     monkeypatch.setattr(menv, 'chrome_bin', lambda: '/opt/chrome/chrome')
     monkeypatch.setattr(menv, '_conda_gui_lib_dir', lambda: '/opt/conda/lib')
+    monkeypatch.setattr(menv, 'media_shim_dir',
+                        _creating_shim_dir(str(tmp_path / 'shim')))
     res = mv.render_project(str(tmp_path), str(out), quality='standard')
     assert res['ok'] is True, res
     assert res['render_time_s'] == 1.5
     injected = json.loads(env_log.read_text())
     assert injected['HYPERFRAMES_BROWSER_PATH'] == '/opt/chrome/chrome'
     assert injected['LD_LIBRARY_PATH'].startswith('/opt/conda/lib')
-    assert injected['PATH'].startswith('/opt/fakebin')
+    assert 'shim' in injected['PATH'].split(os.pathsep)[0]
 
 
 def test_render_missing_output_is_failure(monkeypatch, tmp_path):
@@ -463,15 +469,59 @@ def test_catalog_has_six_vibe_motion_packs():
 #  env manager
 # ══════════════════════════════════════════════════════════
 
-def test_build_render_env_injects(monkeypatch):
-    monkeypatch.setattr(menv, 'ffmpeg_bin', lambda: '/opt/fakebin/ffmpeg')
-    monkeypatch.setattr(menv, 'ffprobe_bin', lambda: '/opt/fakebin/ffprobe')
+def _creating_shim_dir(path: str):
+    """media_shim_dir replacement that also creates the dir (like the real one)."""
+    def f():
+        os.makedirs(path, exist_ok=True)
+        return path
+    return f
+
+
+def test_build_render_env_injects(monkeypatch, tmp_path):
+    fake_ff = tmp_path / 'ffmpeg-linux-x86_64-v7.0.2'
+    fake_ff.write_text('#!/bin/sh\n')
+    monkeypatch.setattr(menv, 'ffmpeg_bin', lambda: str(fake_ff))
+    monkeypatch.setattr(menv, 'ffprobe_bin', lambda: '')
     monkeypatch.setattr(menv, 'chrome_bin', lambda: '/opt/chrome/chrome')
     monkeypatch.setattr(menv, '_conda_gui_lib_dir', lambda: '/opt/conda/lib')
+    monkeypatch.setattr(menv, 'media_shim_dir',
+                        _creating_shim_dir(str(tmp_path / 'shim')))
     env = menv.build_render_env(base={'PATH': '/usr/bin', 'LD_LIBRARY_PATH': ''})
-    assert env['PATH'].startswith('/opt/fakebin')
+    # PATH gains the SHIM dir (canonical-name symlink), not the raw bin dir.
+    shim_dir = os.path.join(str(tmp_path), 'shim')
+    assert env['PATH'].split(os.pathsep)[0] == shim_dir
+    assert os.path.islink(os.path.join(shim_dir, 'ffmpeg'))
     assert env['HYPERFRAMES_BROWSER_PATH'] == '/opt/chrome/chrome'
     assert env['LD_LIBRARY_PATH'].startswith('/opt/conda/lib')
+
+
+def test_refresh_shim_lifecycle(monkeypatch, tmp_path):
+    monkeypatch.setattr(menv, 'media_shim_dir',
+                        _creating_shim_dir(str(tmp_path / 'shim')))
+    target = tmp_path / 'ffmpeg-linux-x86_64-v7.0.2'
+    target.write_text('#!/bin/sh\n')
+    shim = menv._refresh_shim('ffmpeg', str(target))
+    assert shim and os.path.islink(shim)
+    assert menv._refresh_shim('ffmpeg', str(target)) == shim  # reuse
+    newer = tmp_path / 'ffmpeg-v8'
+    newer.write_text('#!/bin/sh\n')
+    repointed = menv._refresh_shim('ffmpeg', str(newer))
+    assert os.path.realpath(repointed) == os.path.realpath(str(newer))
+    # Canonically-named binaries need no shim.
+    canonical = tmp_path / 'ffmpeg'
+    canonical.write_text('#!/bin/sh\n')
+    assert menv._refresh_shim('ffmpeg', str(canonical)) == str(canonical)
+    assert menv._refresh_shim('ffmpeg', '/nonexistent') == ''
+
+
+def test_classify_ffmpeg_missing_is_env_category():
+    res = {'category': '', 'out': '\u2717  FFmpeg not found\n',
+           'err': 'FFprobe not found'}
+    assert mrender._classify_failure(res) == 'env_missing'
+    res2 = {'category': '', 'out': '', 'err': 'puppeteer launch crash'}
+    assert mrender._classify_failure(res2) == 'chrome'
+    res3 = {'category': '', 'out': '', 'err': 'something else'}
+    assert mrender._classify_failure(res3) == 'unknown'
 
 
 def test_probe_env_reports_issues(monkeypatch):

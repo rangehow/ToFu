@@ -444,7 +444,7 @@ Turn a subtitle transcript (SRT) into a vertical MG-animated video — Tofu stor
 
 - **Deterministic renders** — every frame is computed from its timestamp (seekable GSAP timeline); re-render just one scene and re-concat when a single shot looks off
 - **Zero-LLM quality gates** — storyboard timeline validation (full coverage, duration sum ±0.1s), HyperFrames lint/validate/inspect before every render, and ffprobe spec checks (resolution / fps / duration / silence) after
-- **Self-bootstrapping toolchain** — `motion_video_env_check` installs the pinned HyperFrames CLI on first use; ffmpeg comes from `imageio-ffmpeg` (no root); Chrome reuses the Playwright cache
+- **Self-bootstrapping toolchain** — `motion_video_env_check` installs the pinned HyperFrames CLI on first use; ffmpeg comes from `imageio-ffmpeg` and ffprobe from a static build (both no-root); Chrome reuses the Playwright cache
 - **Failure classification** — render errors come back categorized (`env_missing` / `lint` / `chrome` / `timeout` / `aborted`) with upstream fix hints instead of raw logs
 - **Deep knowledge packs** — the 29 motion rules, 13 scene blueprints, and 20+ design frame presets from vibe-motion/auto-motion are one click away in Settings → Skills (search "hyperframes")
 

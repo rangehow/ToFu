@@ -8,9 +8,13 @@ is: conversation A reads a file at T0, thinks for many rounds, and at T2
 writes from its stale memory — silently discarding sibling B's T1 change.
 
 The check is an optimistic-concurrency token (``lib/write_freshness.py``):
-successful reads AND writes record an ``(mtime_ns, size)`` fingerprint per
-``(conv_key, abs_path)``; a write whose recorded fingerprint no longer
-matches the disk is refused with a re-read instruction.
+successful reads AND writes record a fingerprint per
+``(conv_key, abs_path)`` — content-addressed (blake2b) for files ≤ 256 KiB,
+``(mtime_ns, size)`` above — and a write whose recorded fingerprint no
+longer matches the disk is refused with a re-read instruction. The content
+signal matters because this deployment's FUSE mount has 1-SECOND mtime
+granularity: ``(mtime_ns, size)`` alone is blind to same-second same-size
+edits (measured; see lib/write_freshness.py).
 
 Deliberate scope (fail-open everywhere else):
 

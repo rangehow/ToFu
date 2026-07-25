@@ -153,14 +153,80 @@ def test_vanished_file_allows_creation_but_reborn_is_stale(workspace):
 
 
 @pytest.mark.unit
-def test_mtime_only_touch_is_stale(workspace):
-    """Fingerprint semantics pin: mtime_ns alone moving (same content/size)
-    still reads as stale — the safe direction for shared-tree writes."""
+def test_mtime_only_touch_same_content_not_stale(workspace):
+    """Content-addressed semantics pin (post-hardening): a touch that leaves
+    the CONTENT identical is NOT stale — identical bytes mean nothing to
+    clobber. (On this deployment's 1s-granularity FUSE mtime, an mtime-only
+    signal is noise anyway.)"""
     from lib import write_freshness
     write_freshness.record('convA', workspace['target_abs'])
     st = os.stat(workspace['target_abs'])
-    os.utime(workspace['target_abs'], ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
-    assert write_freshness.is_stale('convA', workspace['target_abs']) is True
+    os.utime(workspace['target_abs'], ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    assert write_freshness.is_stale('convA', workspace['target_abs']) is False
+
+
+@pytest.mark.unit
+def test_same_second_same_size_different_content_IS_stale(workspace):
+    """THE blind-spot regression test (owner-verified deployment fact):
+    dolphinfs FUSE mtime granularity is exactly 1 SECOND
+    (st_mtime_ns % 1e9 == 0), ctime equally coarse, inode unchanged on
+    rewrite — so a (mtime_ns, size) fingerprint cannot see a same-tick,
+    same-length edit. We simulate it deterministically on ANY filesystem:
+    rewrite with the SAME byte count but different content, then restore
+    the EXACT same mtime via os.utime. The content hash must still catch it.
+    """
+    from lib import write_freshness
+    target = workspace['target_abs']
+    assert os.path.getsize(target) == len('def foo():\n    return 2\n')  # same size
+    aligned = 1_700_000_000_000_000_000  # an exact 1-second boundary (ns)
+    os.utime(target, ns=(aligned, aligned))  # file sits ON a tick, like FUSE
+    write_freshness.record('convA', target)
+    with open(target, 'w', encoding='utf-8') as f:
+        f.write('def foo():\n    return 2\n')  # same length, different content
+    os.utime(target, ns=(aligned, aligned))  # same-tick edit: mtime unchanged
+    # The simulation is faithful: a (mtime_ns, size) fingerprint sees ZERO
+    # change between record and now — yet the content hash must catch it.
+    st = os.stat(target)
+    assert (st.st_mtime_ns, st.st_size) == (aligned, len('def foo():\n    return 1\n'))
+    assert write_freshness.is_stale('convA', target) is True
+
+
+@pytest.mark.unit
+def test_large_file_fast_path_keeps_mtime_semantics(workspace):
+    """Files ABOVE the hash threshold keep the (mtime_ns, size) fast path —
+    with its documented residual blind spot (same-tick same-size edit
+    invisible), pinned honestly so nobody 'discovers' it as a bug later."""
+    from lib import write_freshness
+    big = os.path.join(workspace['project_path'], 'big.bin')
+    payload = bytearray(b'x' * (300 * 1024))
+    with open(big, 'wb') as f:
+        f.write(payload)
+    aligned = 1_700_000_000_000_000_000
+    os.utime(big, ns=(aligned, aligned))  # sit ON a tick BEFORE recording
+    write_freshness.record('convA', big)
+    # Same-size, same-mtime, different content → fast path is blind (documented).
+    payload[150 * 1024] = ord('y')
+    with open(big, 'wb') as f:
+        f.write(payload)
+    os.utime(big, ns=(aligned, aligned))
+    assert write_freshness.is_stale('convA', big) is False
+    # Any mtime movement still catches it (fast path retains its semantics).
+    os.utime(big, ns=(aligned, aligned + 1_000_000_000))
+    assert write_freshness.is_stale('convA', big) is True
+
+
+@pytest.mark.unit
+def test_hash_threshold_boundary(workspace):
+    """≤ 256 KiB → content fingerprint; above → mtime fast path."""
+    from lib import write_freshness
+    at = os.path.join(workspace['project_path'], 'at.bin')
+    over = os.path.join(workspace['project_path'], 'over.bin')
+    with open(at, 'wb') as f:
+        f.write(b'z' * write_freshness._CONTENT_HASH_MAX_BYTES)
+    with open(over, 'wb') as f:
+        f.write(b'z' * (write_freshness._CONTENT_HASH_MAX_BYTES + 1))
+    assert write_freshness._fingerprint(at)[0] == 'c'
+    assert write_freshness._fingerprint(over)[0] == 'm'
 
 
 @pytest.mark.unit

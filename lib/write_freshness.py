@@ -24,10 +24,26 @@ Deliberate failure directions:
   • A VANISHED file drops the token and allows the write (creation
     semantics); the read gate surfaces the cleaner "File not found" path
     for the edit tools.
-  • Fingerprint = ``(st_mtime_ns, st_size)``, O(1) — no content hashing
-    (writes already cost O(size); hashing would add a full read on a
-    possibly-FUSE path). Cost of a false bounce (external touch without a
-    content change): the model re-reads once. That is the safe direction.
+
+Fingerprint — why content, not mtime (MEASURED, do not "simplify" back):
+
+  This deployment's filesystem (dolphinfs, FUSE) has **1-SECOND mtime
+  granularity**: ``st_mtime_ns % 1_000_000_000 == 0`` for every file,
+  ctime is equally coarse, and inode does not change on rewrite. A
+  ``(mtime_ns, size)`` fingerprint is therefore BLIND to the edit class
+  "same 1-second tick, same byte count, different content" — exactly what a
+  fast sibling edit (or an atomic tmp+os.replace inside the same tick)
+  produces. Verified live: 10 same-size writes within one second changed
+  the fingerprint ZERO times.
+
+  So for files ≤ ``_CONTENT_HASH_MAX_BYTES`` (256 KiB — covers every source
+  file in the tree; blake2b at GB/s costs <0.1 ms) the fingerprint is
+  CONTENT-addressed: ``('c', size, blake2b-128)``. Same-second same-size
+  edits with different content are caught; a content-preserving touch is
+  NOT stale (nothing to clobber). Files ABOVE the threshold keep the
+  ``('m', mtime_ns, size)`` fast path — they are data/asset payloads, not
+  the source-edit scenario, and the residual same-second blind spot there
+  is documented rather than paid for with a full read on a FUSE mount.
 
 Env: ``TOFU_WRITE_FRESHNESS_GATE=0`` disables recording AND checks.
 This module is a leaf: stdlib + lib.log only, so both ``lib/project_mod``
@@ -37,6 +53,7 @@ without cycles.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import threading
 import time
@@ -60,13 +77,32 @@ def _gate_enabled() -> bool:
     return val not in ('0', 'false', 'no', 'off', '')
 
 
+# Files at or below this size get a CONTENT fingerprint (see the module
+# docstring for the measured 1-second-mtime-granularity reason). 256 KiB
+# covers every source file in the tree; the hash cost is sub-millisecond.
+_CONTENT_HASH_MAX_BYTES = 256 * 1024
+
+
 def _fingerprint(abs_path: str) -> tuple | None:
-    """(mtime_ns, size) of *abs_path*, or None when it can't be stat'd."""
+    """Fingerprint of *abs_path*, or None when it can't be read.
+
+    Two shapes (see module docstring):
+      * ``('c', size, blake2b_hex)`` — content-addressed, files ≤ 256 KiB;
+      * ``('m', mtime_ns, size)``  — fast path, larger files.
+    """
     try:
         st = os.stat(abs_path)
     except OSError:
         return None
-    return (st.st_mtime_ns, st.st_size)
+    if st.st_size <= _CONTENT_HASH_MAX_BYTES:
+        try:
+            with open(abs_path, 'rb') as f:
+                data = f.read()
+        except OSError:
+            return None
+        return ('c', st.st_size,
+                hashlib.blake2b(data, digest_size=16).hexdigest())
+    return ('m', st.st_mtime_ns, st.st_size)
 
 
 def record(conv_key: str, abs_path: str) -> None:
@@ -83,7 +119,7 @@ def record(conv_key: str, abs_path: str) -> None:
     key = (conv_key, abs_path)
     with _lock:
         _tokens.pop(key, None)  # refresh recency on re-record
-        _tokens[key] = (fp[0], fp[1], time.time())
+        _tokens[key] = (fp, time.time())
         while len(_tokens) > _MAX_ENTRIES:
             _tokens.popitem(last=False)
 
@@ -106,7 +142,7 @@ def is_stale(conv_key: str, abs_path: str) -> bool:
         with _lock:
             _tokens.pop(key, None)
         return False
-    return (cur[0], cur[1]) != (entry[0], entry[1])
+    return cur != entry[0]
 
 
 def drop(conv_key: str, abs_path: str) -> None:
@@ -121,4 +157,5 @@ def _reset_for_tests() -> None:
         _tokens.clear()
 
 
-__all__ = ['record', 'is_stale', 'drop', '_reset_for_tests', '_fingerprint']
+__all__ = ['record', 'is_stale', 'drop', '_reset_for_tests', '_fingerprint',
+           '_CONTENT_HASH_MAX_BYTES']

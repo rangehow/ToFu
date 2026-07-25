@@ -2,7 +2,19 @@
 
 
 
-### 2026-07-25 — 「Project Brain 受阻卡片没有回答入口」端到端根修:结构化人类问答门(block→提问→一键回答→立即重派)+ 面板交互统一重做(epic `pt_e0011658aef743ae`,2 commit:后端 `6dde1918` 12 文件 +876/-20,前端 `ba77ab0e` 4 文件 +692/-34;后端新套件 20/20 + 相邻看板 100/100,前端新套件 5/5 + 相邻 24/24,collect **8491** 0 err)。
+
+
+### 2026-07-25 — 「Studio 模式一次完整任务迭代 + 重启自愈」e2e 收口:前后端真实线序双层测试落地(commit 见下,1 文件 +921,新套件 4/4 绿含双 NEUTER、×2 复跑稳定(46.5s/46.1s),相邻恢复/检查点/路由 76/76,collect **8513** 0 err)。
+- **缺口(owner 点名):** 此前没有任何测试覆盖「HTTP 入口→SSE→工具轮→落库」全链路,更没有「重启后自我修复」的端到端验证——测试体系的关键空白。
+- **Layer 1(Studio 全迭代):** 按前端逐字节线序走 `POST /api/v1/chat/send`(chatMode='studio' + tmp 项目)→ `GET /api/chat/stream/<id>`;mock LLM(stdlib http.server,绕开 conftest 的 flask→quart shim)第一轮发 write_file 工具调用 → 编排器真实执行 → **磁盘副作用断言**:tmp 项目里文件真实存在且字节精确(只测 SSE 帧等于没测 Studio)。断言链:done 帧 finishReason='stop' / Studio 工具面下发 / 工具结果回填闭合 / task_results done / **done.committedMessage 与 conversations.messages 尾部逐字节一致**。
+- **Layer 2(重启自愈,双真实实例):** 实例 A(本进程 test_client)慢滴流(~6s/drip,每次 drip 是健康活动所以停滞检测不发作,而 >5s 间隔让 delta 驱动的 5s 检查点节流写出 status='running' 行)→ 拿到检查点后模拟 SIGKILL(注册表弹出,DB 残尸原样)→ 实例 B(**独立 OS 进程**,新 TOFU_DATA_DIR、同一 TOFU_DB_PATH 文件)走真实启动路径(`server._init_database()` 字面调用 + `run_deferred_boot_dispatch` 消费,TOFU_BOOT_AUTO_DISPATCH=1)→ 残尸标 interrupted + 尾部打 killed 章 → 自动重派发 → 恢复回合完成。断言链:暖重连(Last-Event-ID: 0)回放的真实 done 帧 committedMessage 与 DB 尾部逐字节一致(恢复回合与活完回合落地完全等价)、attempts=1、activeTaskId 死指针被清、残尸行永不被覆写、父进程独立重读 DB。
+- **NEUTER ×2(owner 门禁):** ①剥 write_file 执行 handler(工具轮照发、执行器截肢)→ 同流程磁盘无文件,主断言真转红;②实例 B 启动脚本 amputate 恢复路径(env 开关,只 init_db,无 sweep 无 deferred dispatch)→ 无重派发、残尸永远 'running',Layer 2 全部完成断言转红。
+- **字节一致断言的诚实分层(实测发现):** committedMsg 与 DB 尾部存在两条**异步终局化通道**(活回合同样命中,非恢复特有,故不掩盖恢复特缺):①commit_round/file-history 守护事后补 `_gitSha`/`_snapshotId`;②**segments 段时间线终局化与 _committedMsg 盖章之间存在竞态**——committed 可能只持终段文本前缀(实测 'Studio ' vs 全文 48 字符)。比较器分层:语义载荷(content/thinking/toolRounds/finishReason/usage/ids/时间戳)严格逐字节 + segments 结构等价(同数/非 text 字段全同/committed 文本只许是 tail 前缀=单调终局化,不许分叉)。**segments 竞态为潜伏缺陷候选,已开票 `pt_687b87ac86a847f7`**(根修=finalize 先完成 segments 再盖章,或 done 帧延迟到 timeline 终局)。
+- **过程中的坑(如实):** ①mock 不能用 Flask(conftest 的 import shim 会把它解析进 quart 命名空间)——stdlib http.server;②memory 相关性过滤走非流式 chat() 通道会混进 mock history 且读死挂起流——按 stream 字段分流,非流式即时 JSON,流式独立计数;③运行检查点是 **delta 驱动**(每 delta 查 5s 节流)不是定时器——硬挂起的流永远拿不到检查点,必须慢滴造尸;④sibling(mrt1zlag bug-sweep)飞行中编辑 lib/llm_sanitize/_messages.py 造成 ~160s IndentationError 窗口,按惯例轮询等其写完自愈,未碰其文件。
+- **生效边界(诚实):** 纯测试文件,生产代码零改动;Layer 1/2 钉死的是后端契约,前端 JS 接线不在覆盖范围(Layer 3 真浏览器待 Playwright 环境修复后补一个冒烟)。
+
+### 2026-07-25 — 「Project Brain 受阻卡片没有回答入口」端到端根修
+:结构化人类问答门(block→提问→一键回答→立即重派)+ 面板交互统一重做(epic `pt_e0011658aef743ae`,2 commit:后端 `6dde1918` 12 文件 +876/-20,前端 `ba77ab0e` 4 文件 +692/-34;后端新套件 20/20 + 相邻看板 100/100,前端新套件 5/5 + 相邻 24/24,collect **8491** 0 err)。
 - **病根(owner 截图实证):** `[human-gated]` 受阻卡只有「重开/完成」两个裸按钮,agent 的决定请求(「Owner decides: (A)… (B)…」)埋在长篇英文 reason 里——**人类没有任何入口回答**。点「重开」= 原样重跑 → 撞同一堵墙 → 再 block → 冷却退避 → 心跳再派发 → 再发现同一堵墙:计费轮次空转(pt_39b79cc4 11×、pt_8dc03017 8×、三张 5×)。冷却升级只是把「每小时烧一轮」拉成「每天烧一轮」,从不闭环。
 - **后端:ask_human 式结构化问答门。** `project_tasks` 加 `block_question`(JSON {q, options[]})/`human_answer` 两列(Core 定义 + SQLite/PG ALTER,旧行 '' = 无待答问题,零迁移语义变化);`block_task(question=, options=)` 持久化提问并作废旧答案;**核心行为变化:带未回答提问的 epic 无条件退出派发候选**(等答案不等时间,冷却到期也不重试——NC-1 钉死);`answer_task` + `POST /api/v1/project/board/answer` + `Api.project.boardAnswer` 盖章答案、清全部阻塞态、发 `answered` feed 事件、`on_epic_answered` **立即重派**(不等 30s 心跳),kickoff 注入「人类已回答:X,照此推进」(NC-2 钉死);`render_board_block` 给待答 epic 独立「Waiting for the human's answer」lane(不落 Open「claim me」道);complete/reopen 双列重置。工具 schema 教会 agent「human-gated 就传 question/options」。
 - **前端:面板交互统一重做。** ①「需要你的回答」lane 置顶,问题渲染为卡片主内容(问句框 + 一键选项 chips + 自由输入框,Enter 提交)——就是 ask_human 的交互模型搬上看板;②**每张卡至多一个「展开全文」**(blocked/awaiting 卡 title+reason 合并单 clamp,治「一个 epic 好几个展开」);③md-lite 渲染器(先转义后变换,`**粗体**`/`` `代码` ``/https 链接/换行)统一应用到看板全部 clamp,裸星号/javascript: 协议/XSS 全数免疫;④**window.prompt 从面板清零**(静态守卫):Block 与 New-epic 改用与回答输入同族的内联编辑器(Enter 提交 / Esc 取消);⑤待答卡不再显示假倒计时(「等待你的回答 · 已阻塞 N 次」),已回答 epic 带「你的回答:X」徽标(决定随卡走);所有新文案 zh+en 双语。

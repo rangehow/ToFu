@@ -186,16 +186,16 @@ class TestProxyIntegration:
             'no_proxy': '*'}
 
     def test_registered_no_proxy_host_wins_over_learned_proxy(self):
-        _note('203.0.113.9')
-        _feed('203.0.113.9', 'direct', lat=300, n=2)
-        _feed('203.0.113.9', 'proxy', lat=100, n=2)
-        assert _decision('203.0.113.9') == 'proxy'
-        lib_proxy.register_no_proxy_host('203.0.113.9')
+        _note('registered.example.com')
+        _feed('registered.example.com', 'direct', lat=300, n=2)
+        _feed('registered.example.com', 'proxy', lat=100, n=2)
+        assert _decision('registered.example.com') == 'proxy'
+        lib_proxy.register_no_proxy_host('registered.example.com')
         try:
-            assert lib_proxy.proxies_for('https://203.0.113.9/') == {
+            assert lib_proxy.proxies_for('https://registered.example.com/') == {
                 'no_proxy': '*'}
         finally:
-            lib_proxy._registered_hosts.discard('203.0.113.9')
+            lib_proxy._registered_hosts.discard('registered.example.com')
 
     def test_passive_report_attributes_to_effective_path(self):
         # A real request routed by proxies_for (undecided → env default =
@@ -241,6 +241,62 @@ class TestPersistence:
 
 
 # ═══════════════════════════════════════════════════════════
+#  Exempt hosts: localhost & IP literals are never tracked
+# ═══════════════════════════════════════════════════════════
+
+@pytest.mark.unit
+class TestExemptHosts:
+    def test_is_ip_literal(self):
+        assert netpath._is_ip_literal('127.0.0.1')
+        assert netpath._is_ip_literal('0.0.0.0')
+        assert netpath._is_ip_literal('::1')
+        assert netpath._is_ip_literal('203.0.113.9')
+        assert not netpath._is_ip_literal('localhost')
+        assert not netpath._is_ip_literal('aigc.sankuai.com')
+
+    def test_note_url_ignores_ip_literals(self, tmp_path):
+        for url in ('http://127.0.0.1:8000/v1', 'https://10.0.0.9/',
+                    'http://[::1]:11434/v1', 'https://203.0.113.9/'):
+            netpath.note_url(url)
+        assert netpath._states == {}
+        # Nothing registered → nothing to persist.
+        assert not (tmp_path / 'netpath.json').exists()
+
+    def test_note_url_ignores_localhost(self):
+        netpath.note_url('http://localhost:11434/v1')
+        assert 'localhost' not in netpath._states
+
+    def test_decide_returns_none_for_exempt(self):
+        assert netpath.decide('127.0.0.1') is None
+        assert netpath.decide('::1') is None
+        assert netpath.decide('localhost') is None
+
+    def test_report_outcome_noop_for_exempt(self):
+        netpath.note_url('http://127.0.0.1:8000/')
+        netpath.report_outcome('http://127.0.0.1:8000/', True, 12.0,
+                               path='direct')
+        assert netpath._states == {}
+
+    def test_load_skips_exempt_hosts(self, tmp_path, monkeypatch):
+        import json
+        store = tmp_path / 'netpath.json'
+        store.write_text(json.dumps({'version': netpath._STORE_VERSION,
+                                     'hosts': [
+                                         {'host': '127.0.0.1',
+                                          'decision': 'proxy'},
+                                         {'host': 'localhost',
+                                          'decision': 'direct'},
+                                         {'host': 'real.example.com',
+                                          'decision': 'direct'},
+                                     ]}))
+        monkeypatch.setattr(netpath, '_STORE_PATH', str(store))
+        netpath._load()
+        assert '127.0.0.1' not in netpath._states
+        assert 'localhost' not in netpath._states
+        assert 'real.example.com' in netpath._states
+
+
+# ═══════════════════════════════════════════════════════════
 #  Active prober (real local HTTP server)
 # ═══════════════════════════════════════════════════════════
 
@@ -266,31 +322,48 @@ def local_server():
     srv.server_close()
 
 
+# netpath refuses to track IP literals by design, so the prober tests
+# register a reserved-suffix host; this fixture rewrites the probe URL right
+# before the real _probe_once performs the fetch, keeping the actual
+# direct-vs-proxy network behaviour genuine.
+_FAKE_HOST = 'probe-fake.test'
+
+
+@pytest.fixture()
+def fake_dns(monkeypatch):
+    real_probe = netpath._probe_once
+
+    def _swapped(url, use_proxy):
+        return real_probe(url.replace(_FAKE_HOST, '127.0.0.1'), use_proxy)
+
+    monkeypatch.setattr(netpath, '_probe_once', _swapped)
+
+
 @pytest.mark.unit
 class TestProber:
     def test_probe_host_dead_proxy_marks_proxy_bad(
-            self, local_server, monkeypatch):
+            self, local_server, monkeypatch, fake_dns):
         # Proxy points at a closed port → only the direct path can work.
         monkeypatch.setenv('http_proxy', 'http://127.0.0.1:1')
         monkeypatch.setenv('https_proxy', 'http://127.0.0.1:1')
-        url = 'http://127.0.0.1:%d/' % local_server.server_port
+        url = 'http://%s:%d/' % (_FAKE_HOST, local_server.server_port)
         netpath.note_url(url)
-        netpath.probe_host('127.0.0.1')
-        summary = netpath.status_summary()['hosts']['127.0.0.1']
+        netpath.probe_host(_FAKE_HOST)
+        summary = netpath.status_summary()['hosts'][_FAKE_HOST]
         assert summary['direct_ms'] is not None
         assert summary['proxy_fails'] == 1
         assert summary['decision'] == 'direct'
 
     def test_probe_host_working_proxy_measures_both(
-            self, local_server, monkeypatch):
+            self, local_server, monkeypatch, fake_dns):
         # A "proxy" that answers (any HTTP response = path works).
         proxy = 'http://127.0.0.1:%d' % local_server.server_port
         monkeypatch.setenv('http_proxy', proxy)
         monkeypatch.setenv('https_proxy', proxy)
-        url = 'http://127.0.0.1:%d/' % local_server.server_port
+        url = 'http://%s:%d/' % (_FAKE_HOST, local_server.server_port)
         netpath.note_url(url)
-        netpath.probe_host('127.0.0.1')
-        summary = netpath.status_summary()['hosts']['127.0.0.1']
+        netpath.probe_host(_FAKE_HOST)
+        summary = netpath.status_summary()['hosts'][_FAKE_HOST]
         assert summary['direct_ms'] is not None
         assert summary['proxy_ms'] is not None
         assert summary['decision'] in ('direct', 'proxy')

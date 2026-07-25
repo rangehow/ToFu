@@ -42,6 +42,7 @@ Env knobs:
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import random
@@ -90,6 +91,29 @@ _STORE_VERSION = 1
 def _enabled() -> bool:
     return os.environ.get('TOFU_NETPATH', 'on').strip().lower() not in (
         '0', 'off', 'false', 'no')
+
+
+# Hosts netpath must never track or probe: loopback-style names and ANY IP
+# literal (v4/v6). Self-hosted endpoints are commonly addressed by raw IP or
+# localhost; probing them over the corporate proxy is meaningless (the proxy
+# cannot reach them), and one jittery direct probe could pin them onto the
+# proxy path and black-hole the local model server.
+_EXEMPT_HOSTNAMES = frozenset({'localhost', 'localhost.localdomain'})
+
+
+def _is_ip_literal(host: str) -> bool:
+    """True when *host* is an IPv4/IPv6 literal rather than a DNS name."""
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
+
+
+def _is_exempt_host(host: str) -> bool:
+    """True for hosts netpath must leave alone: localhost & IP literals."""
+    h = (host or '').lower()
+    return h in _EXEMPT_HOSTNAMES or _is_ip_literal(h)
 
 
 def _proxy_url() -> 'str | None':
@@ -143,7 +167,7 @@ def note_url(url: str) -> None:
     try:
         parsed = urlparse(url)
         host = (parsed.hostname or '').lower()
-        if not host:
+        if not host or _is_exempt_host(host):
             return
         origin = '%s://%s/' % (parsed.scheme or 'https',
                                parsed.netloc.split('@')[-1])
@@ -172,6 +196,8 @@ def decide(host: str) -> 'str | None':
     if not _enabled():
         return None
     host = (host or '').lower()
+    if _is_exempt_host(host):
+        return None
     with _lock:
         st = _states.get(host)
         if st is None:
@@ -430,7 +456,7 @@ def _load() -> None:
         with _lock:
             for st in payload.get('hosts', []):
                 host = (st.get('host') or '').lower()
-                if not host or host in _states:
+                if not host or host in _states or _is_exempt_host(host):
                     continue
                 # Restore only measurement data + decision; timestamps that
                 # drive TTL/LRU are refreshed so stale hosts age out.

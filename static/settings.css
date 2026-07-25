@@ -1201,7 +1201,10 @@
 }
 .stg-mx-keyhead {
   background: var(--s-cream);
-  padding: 6px 8px !important;
+  /* right padding reserves a dedicated lane for the column probe button so
+     it never overlaps the full-width key-name input (mirrors the 28px lane
+     .stg-mx-model reserves for the row probe button) */
+  padding: 6px 26px 6px 8px !important;
   min-width: 92px;
   vertical-align: bottom;
   position: relative;
@@ -1419,8 +1422,9 @@
 .stg-mx-zap:disabled { opacity: 0.3; cursor: default; transform: none; background: var(--s-cream); }
 .stg-mx-zap.probing { pointer-events: none; opacity: 1; background: var(--s-gold); }
 .stg-mx-zap.probing svg { animation: stg-mx-spin 0.7s linear infinite; }
-/* Column scope: top-right of the key header, subtle until hovered. */
-.stg-mx-zap.col { position: absolute; top: 3px; right: 3px; opacity: 0.4; }
+/* Column scope: vertically centered in the key header's reserved right
+   lane (same centering recipe as .stg-mx-zap.row), subtle until hovered. */
+.stg-mx-zap.col { position: absolute; top: 50%; right: 4px; margin-top: -9px; opacity: 0.4; }
 .stg-mx-keyhead:hover .stg-mx-zap.col { opacity: 1; }
 /* Row scope: right edge of the (sticky) model label cell, hover-revealed. */
 .stg-mx-zap.row { position: absolute; top: 50%; right: 4px; margin-top: -9px; opacity: 0; }

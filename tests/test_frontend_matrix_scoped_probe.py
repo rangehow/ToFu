@@ -284,6 +284,30 @@ class ScopedProbeCssTest(unittest.TestCase):
     def test_model_id_ellipsis_cap(self):
         self.assertIn('.stg-mx-mid.alias-id', self.css)
 
+    def _rule_body(self, selector):
+        """Extract the declaration block of one exact selector."""
+        import re
+        m = re.search(re.escape(selector) + r'\s*\{([^{}]*)\}', self.css)
+        self.assertIsNotNone(m, selector + ' rule missing from settings.css')
+        return m.group(1)
+
+    def test_col_zap_has_own_lane(self):
+        """The column zap must sit in a RESERVED lane, never on top of the
+        full-width key-name input: the keyhead pads ~26px on the right
+        (mirroring the model cell's 28px row-zap lane) and the zap is
+        vertically centered there with the same recipe as .stg-mx-zap.row.
+        Regression pin for the owner-reported overlap (zap covered the
+        input's right half → mis-clicks launched a whole-column probe)."""
+        keyhead = self._rule_body('.stg-mx-keyhead')
+        self.assertIn('padding: 6px 26px 6px 8px !important', keyhead,
+                      'keyhead lost its reserved right lane for the col zap')
+        col = self._rule_body('.stg-mx-zap.col')
+        self.assertIn('top: 50%', col)
+        self.assertIn('margin-top: -9px', col)
+        self.assertIn('right: 4px', col)
+        row = self._rule_body('.stg-mx-zap.row')
+        self.assertIn('top: 50%', row, 'row/col zap centering recipes drifted apart')
+
 
 if __name__ == '__main__':
     unittest.main()

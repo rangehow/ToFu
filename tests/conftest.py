@@ -132,6 +132,12 @@ def _install_shim_for_collection():
     # test process — they run live LLM polls + web searches against the
     # shared DB, stealing CPU/IO and making timing-sensitive tests flaky.
     _os.environ.setdefault('TOFU_DISABLE_SCHEDULER', '1')
+    # Never start the netpath prober thread in test processes either:
+    # server.py calls start_prober() at import, and the daemon would fire
+    # real network probes (through the env proxy) 10s later and write into
+    # the production logs/app.log. netpath's own tests opt back in via
+    # monkeypatch (tests/test_netpath.py).
+    _os.environ.setdefault('TOFU_NETPATH', 'off')
     try:
         import server  # noqa: F401 — side-effect: installs Flask→Quart shim
     except Exception as _e:  # never block collection on the shim probe

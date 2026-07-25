@@ -26,8 +26,12 @@ PROXY_ENV_VARS = ('http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY')
 
 
 @pytest.fixture(autouse=True)
-def _clean_netpath():
+def _clean_netpath(monkeypatch):
     """Isolate every test from learned state and the prober thread."""
+    # conftest pins TOFU_NETPATH=off suite-wide so importing server never
+    # spawns the prober in test processes; these tests exercise netpath
+    # itself, so turn the switch back on for this module only.
+    monkeypatch.setenv('TOFU_NETPATH', 'on')
     netpath.reset_for_test()
     yield
     netpath.reset_for_test()

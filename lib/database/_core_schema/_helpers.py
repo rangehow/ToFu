@@ -21,7 +21,6 @@ from __future__ import annotations
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.ext.compiler import compiles
-from sqlalchemy.schema import CreateIndex, CreateTable
 from sqlalchemy.sql.expression import FunctionElement
 
 from lib.log import get_logger

@@ -139,22 +139,21 @@ async function startAssistantResponse(convId) {
   baseConfig.assistantMsgId = _saMsgId;
   const _ep = !!baseConfig.endpointMode;
   const _pp = baseConfig.projectPath;
-  /* Decide API route: endpoint mode uses /api/v1/endpoint/start */
-  const startUrl = _ep
-    ? apiUrl("/api/v1/endpoint/start")
-    : apiUrl("/api/v1/chat/start");
+  /* Route through the unified Api client (CLAUDE.md §3.2.0) — endpoint mode
+   * uses Api.endpoint.start, normal mode Api.chat.start. Both return the raw
+   * Response (parse:'response') with the client's own timeout disabled, so
+   * the 30s AbortSignal below stays the only startup timeout, and the
+   * caller's resp.ok/resp.json() handling is byte-identical to the old raw
+   * fetch. Abort/Timeout DOMExceptions are rethrown verbatim by the client
+   * so the e.name branches in the catch keep working. */
+  const _startBody = { convId, config: baseConfig };
+  const _startSignal = typeof AbortSignal.timeout === 'function'
+    ? AbortSignal.timeout(30000)    // 30s timeout to prevent infinite hang
+    : undefined;
   try {
-    const resp = await fetch(startUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        convId,
-        config: baseConfig,
-      }),
-      signal: typeof AbortSignal.timeout === 'function'
-        ? AbortSignal.timeout(30000)    // 30s timeout to prevent infinite hang
-        : undefined,
-    });
+    const resp = _ep
+      ? await Api.endpoint.start(_startBody, { signal: _startSignal })
+      : await Api.chat.start(_startBody, { signal: _startSignal });
     if (!resp.ok) {
       const err = await resp
         .json()
@@ -951,7 +950,7 @@ function _attachAutopilotFollowup(convId, payload) {
     const _zc = (typeof _streamZoneCache !== 'undefined') ? _streamZoneCache : null;
     console.info(
       `[Autopilot][post-connect] conv=${convId.slice(0,8)} ` +
-      `streamBufs=${typeof streamBufs !== 'undefined' && streamBufs.has(convId)} ` +
+      `streamSessions=${typeof streamSessions !== 'undefined' && streamSessions.has(convId)} ` +
       `activeStreams=${activeStreams.has(convId)} ` +
       `streaming-msg=${!!_smEl} streaming-body=${!!_sbEl} ` +
       `zoneCacheBodyMatches=${!!(_zc && _zc.body && _zc.body === _sbEl)} ` +

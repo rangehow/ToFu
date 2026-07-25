@@ -142,7 +142,11 @@
         console.warn('[Api] %s %s failed: %s', method, url, e && e.message);
         return null;
       }
-      if (e && e.name === 'AbortError') throw e;
+      // Rethrow abort AND timeout DOMExceptions verbatim so callers that
+      // branch on e.name ('AbortError' / 'TimeoutError' — e.g. the chat-start
+      // 30s AbortSignal.timeout in main_send_pipeline.js) keep working exactly
+      // as they did with a raw fetch.
+      if (e && (e.name === 'AbortError' || e.name === 'TimeoutError')) throw e;
       throw new ApiError(e && e.message || 'network error', { url, code: 'network' });
     }
     if (timeoutId) clearTimeout(timeoutId);
@@ -378,6 +382,22 @@
     patchSettings: (convId, patch) =>
       request(`/api/v1/conversations/${encodeURIComponent(convId)}/settings`,
               { method: 'PATCH', json: patch, parse: 'response', onError: 'null' }),
+    // Server-side folder-scoped member query — resolves a folder's members by
+    // their real folderId, INDEPENDENT of the top-N sidebar window (so members
+    // that sort past the cap are still returned). Envelope:
+    //   { conversations:[metaRow], hasMore, nextBefore, nextBeforeId, totalCount }
+    listByFolder: (folderId, opts) =>
+      get('/api/v1/conversations',
+          { query: Object.assign({ folderId }, (opts && opts.before)
+              ? { before: opts.before, before_id: opts.beforeId || '', limit: opts.limit || '' }
+              : {}), onError: 'null' }),
+    // Keyset-paginated global list page (older than the given cursor). Used by
+    // the sidebar "load more" affordance so conversations past the first window
+    // stay reachable. Same envelope shape as listByFolder (minus totalCount).
+    listPage: (before, beforeId, limit) =>
+      get('/api/v1/conversations',
+          { query: { before: before || '', before_id: beforeId || '', limit: limit || '' },
+            onError: 'null' }),
     put: (convId, body) =>
       request(`/api/v1/conversations/${encodeURIComponent(convId)}`,
               { method: 'PUT', json: body, parse: 'response', onError: 'null' }),
@@ -482,12 +502,36 @@
     // response `costs` array aligns by index. Returns parsed body or null.
     costBatch: (items) =>
       post('/api/v1/messages/cost/batch', { items }, { onError: 'null' }),
+    // Server-authoritative config/settings resolution. JS ships only the
+    // inputs; the server merges (lib/conv_config.py) and returns the canonical
+    // dict. Both throw ApiError on non-OK so the caller keeps its error text.
+    resolveConfig:   (payload) => post('/api/v1/conversations/config/resolve', payload),
+    resolveSettings: (payload) => post('/api/v1/conversations/settings/resolve', payload),
+    // Sidebar metadata list (no message bodies). Returns the raw Response so
+    // the caller can inspect 304 / 503 + Retry-After and pass If-None-Match /
+    // an AbortSignal. opts: { prefetch, headers, signal }.
+    listMeta: (opts) => {
+      opts = opts || {};
+      const q = { meta: 1 };
+      if (opts.prefetch) q.prefetch = opts.prefetch;
+      // No onError:'null' — parse:'response' already returns the Response for
+      // any HTTP status (incl. 304/503) without throwing; only a network drop
+      // / abort throws, exactly like the raw fetch this replaced, so the
+      // caller's retry loop + outer try/catch behave identically.
+      return request('/api/v1/conversations', {
+        method: 'GET', query: q, parse: 'response',
+        headers: opts.headers || {}, signal: opts.signal,
+      });
+    },
   };
 
   // text utilities --------------------------------------------------
   // Server-side language detection (mirrors lib/text_lang.is_predominantly_chinese).
   const text = {
-    detectLanguage: (textBody) => post('/api/v1/text/detect-language', { text: textBody }, { onError: 'null' }),
+    // opts.forceFasttext: force the statistical detector (skip-gate callers
+    // that must distinguish kanji-heavy Japanese from Chinese pass true).
+    detectLanguage: (textBody, opts = {}) => post('/api/v1/text/detect-language',
+      { text: textBody, forceFasttext: !!opts.forceFasttext }, { onError: 'null' }),
   };
 
   // translate -------------------------------------------------------
@@ -534,6 +578,12 @@
     // is route-defined; we don't pre-parse it. For convenience, errors of
     // the network/abort kind reject so the caller's try/catch handles them
     // (matches the legacy fetch shape these were lifted from).
+    // start() kicks off a fresh assistant turn (normal, non-endpoint mode).
+    // Returns the raw Response so the caller reads .ok/.status + parses
+    // {taskId} itself. Pass {signal} for the 30s startup timeout.
+    start:       (body, opts)   => request('/api/v1/chat/start',
+                                           Object.assign({ method: 'POST', json: body, parse: 'response', timeout: 0 },
+                                                         opts || {})),
     send:        (body, opts)   => request('/api/v1/chat/send',
                                            Object.assign({ method: 'POST', json: body, parse: 'response', timeout: 0 },
                                                          opts || {})),
@@ -591,6 +641,28 @@
            { stdinId, input: input || '', ...(eof ? { eof: true } : {}) }),
     humanResponse:  (guidanceId, response) =>
       post('/api/v1/chat/human-response', { guidanceId, response }),
+  };
+
+  // endpoint (Planner→Worker→Critic mode) --------------------------
+  // start() mirrors chat.start() for endpoint mode. Returns the raw Response.
+  const endpoint = {
+    start: (body, opts) => request('/api/v1/endpoint/start',
+                                   Object.assign({ method: 'POST', json: body, parse: 'response', timeout: 0 },
+                                                 opts || {})),
+  };
+
+  // logs (server-side log-noise cleaning / compression) -------------
+  // clean() best-effort (null on any failure) so the banner just doesn't show.
+  // compress() throws ApiError on non-OK so the caller's catch shows retry.
+  const logs = {
+    clean:    (text) => post('/api/v1/logs/clean', { text }, { onError: 'null' }),
+    compress: async (text) => {
+      const resp = await request('/api/v1/logs/compress',
+                                 { method: 'POST', json: { text }, parse: 'response' });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(data.error || 'API error');
+      return data;
+    },
   };
 
   // update (self-update via git pull) -------------------------------
@@ -1098,6 +1170,21 @@
       _resolve('/api/v1/paper/report/export?paper_hash=' + encodeURIComponent(paperHash) +
                '&lang=' + encodeURIComponent(lang || 'en') +
                '&format=' + encodeURIComponent(format || 'md')),
+    // Paper podcast — server-owned task (report → spoken script → TTS audio),
+    // polled exactly like the report task beside it. timeout:0 on start: the
+    // route does report-gate + cache checks before spawning; the task itself
+    // is then polled with no client-side deadline (same reason as reportStart).
+    podcastStatus:  ()                   =>
+      request('/api/v1/paper/podcast/status', { method: 'GET', onError: 'null' }),
+    podcastStart:   (body)               => post('/api/v1/paper/podcast/start', body, { timeout: 0 }),
+    podcastPoll:    (taskId, cursor)     =>
+      request('/api/v1/paper/podcast/poll',
+              { method: 'GET', query: { task_id: taskId, cursor }, parse: 'response', onError: 'null' }),
+    podcastLookup:  (body)               => post('/api/v1/paper/podcast/lookup', body, { onError: 'null' }),
+    podcastAbort:   (taskId)             => post(`/api/v1/paper/podcast/abort/${encodeURIComponent(taskId)}`, {}, { onError: 'null', parse: 'none' }),
+    podcastScript:  (paperHash, mode, lang) =>
+      request('/api/v1/paper/podcast/script',
+              { method: 'GET', query: { paper_hash: paperHash, mode, lang }, onError: 'null' }),
   };
 
   // daily-report (MyDay panel) -------------------------------------
@@ -1241,7 +1328,7 @@
     conversations, text, translate, chat, images, pdf, doc, audio, artifacts,
     health, pricing, clientError, serverConfig, browser, project, daily, paper,
     features, providers, dispatch, oauth, mcp, update, trading, authSources,
-    swarm,
+    swarm, endpoint, logs,
   };
 
   global.Api = Api;

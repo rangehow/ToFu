@@ -2150,6 +2150,18 @@ def _start_background_workers():
     ``routes.register_all`` after blueprints are mounted. Core no longer
     imports any optional feature here.
     """
+    # Crash-resume: re-spawn motion-video jobs left ``running`` on disk by a
+    # process that died mid-render. The stage-graph checkpoint + per-scene mp4
+    # skip make the re-run resume rather than restart (owner correctness
+    # contract, docs/PRODUCTION_PIPELINE_DESIGN.md). Best-effort — never blocks
+    # startup.
+    try:
+        from lib.motion_video.engine import resume_interrupted_jobs
+        n = resume_interrupted_jobs()
+        if n:
+            _server_log.info('[Server] resumed %d interrupted motion job(s)', n)
+    except Exception as e:
+        _server_log.warning('[Server] motion job resume failed: %s', e)
     return
 
 

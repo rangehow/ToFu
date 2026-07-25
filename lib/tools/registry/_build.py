@@ -140,6 +140,19 @@ def _build_motion_video(ctx: ToolContext) -> list[dict]:
     return list(MOTION_VIDEO_TOOLS)
 
 
+def _build_produce(ctx: ToolContext) -> list[dict]:
+    # High-level "topic → finished video" tool. Deliberately NOT project-gated
+    # (owner 拍板 #2: "say one sentence and get a film" cannot require an
+    # attached project) — topic jobs render under the server data dir. Gated on
+    # web research being available, since the recipe grounds every claim in a
+    # real source URL; without search the fact-discipline gate can't be met.
+    if not (ctx.search_mode in ('single', 'multi') or ctx.search_enabled):
+        return []
+    from lib.tools.produce import PRODUCE_VIDEO_TOOL
+    logger.debug('[Task %s] produce_video tool enabled', ctx.tid)
+    return [PRODUCE_VIDEO_TOOL]
+
+
 def _build_conv_ref(ctx: ToolContext) -> list[dict]:
     # CONV_REF_TOOLS = [list_conversations, get_conversation] — BOTH are
     # read-only (discover siblings + open one). Register them in two cases:
@@ -354,6 +367,10 @@ def _register_builtins() -> None:
                  }),
                  category='video',
                  description='Motion video (MG animation) generation'),
+        ToolSpec('produce', _build_produce, phase='base',
+                 provides=frozenset({'produce_video'}),
+                 category='video',
+                 description='High-level topic → finished video'),
         ToolSpec('conv_ref', _build_conv_ref, phase='base',
                  provides=frozenset({'list_conversations', 'get_conversation',
                                      'project_charter_read', 'project_charter_propose',

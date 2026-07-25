@@ -26,7 +26,8 @@ from lib.log import get_logger
 
 logger = get_logger(__name__)
 
-__all__ = ['run_motion_task', 'run_scene_regen_task']
+__all__ = ['run_motion_task', 'run_scene_regen_task', 'run_topic_motion_task',
+           'write_job_manifest', 'resume_interrupted_jobs']
 
 
 def _emit(task: dict, event: dict) -> None:
@@ -65,6 +66,80 @@ def _render_one(mv, scene_dir: str, mp4_path: str, *, quality: str,
     return {'ok': True, 'elapsed': res.get('elapsed')}
 
 
+#: Task fields persisted to job.json so an interrupted job can be re-spawned
+#: verbatim after a server restart (crash-resume is a correctness contract).
+_MANIFEST_FIELDS = (
+    'task_id', 'kind', 'srt_path', 'scenes_path', 'workdir', 'voice', 'speed',
+    'alignment', 'narration', 'quality', 'parallel', 'width', 'height',
+    'burn_in', 'burn_in_fontsdir', 'topic', 'lang', 'max_scenes', 'paper_hash',
+)
+
+
+def write_job_manifest(task: dict, *, kind: str, state: str) -> None:
+    """Persist the job's params + lifecycle state to ``<workdir>/job.json``.
+
+    This is the disk anchor :func:`resume_interrupted_jobs` scans on startup:
+    a job whose manifest says ``running`` when the process died is re-spawned
+    (the stage-graph checkpoint + per-scene mp4 skip make the re-run resume
+    rather than restart).
+    """
+    from lib.json_store import write_json_atomic
+    workdir = task.get('workdir') or ''
+    if not workdir:
+        return
+    payload = {k: task.get(k) for k in _MANIFEST_FIELDS if task.get(k) is not None}
+    payload['kind'] = kind
+    payload['state'] = state
+    try:
+        os.makedirs(workdir, exist_ok=True)
+        write_json_atomic(os.path.join(workdir, 'job.json'), payload)
+    except Exception as e:
+        logger.warning('[MotionVideo] job manifest write failed (%s): %s',
+                       task_id_of(task), e)
+
+
+def task_id_of(task: dict) -> str:
+    return task.get('task_id') or '?'
+
+
+def _reusable_manifest(audio_dir: str, scenes: list) -> dict | None:
+    """Return a persisted narration manifest iff it still matches the scenes.
+
+    The recipe's timeline stage writes ``<audio_dir>/manifest.json`` after it
+    synthesized narration to MEASURE durations. Reuse it here so the engine's
+    narrate phase doesn't re-run TTS (and a resumed job doesn't either) — but
+    ONLY when every scene id is covered and its wav still exists on disk.
+    """
+    from lib.json_store import read_json
+    m = read_json(os.path.join(audio_dir, 'manifest.json'), default=None)
+    if not isinstance(m, dict) or not m.get('ok'):
+        return None
+    by_id = {e.get('scene_id'): e for e in m.get('scenes') or []}
+    for sc in scenes:
+        entry = by_id.get(sc.get('id'))
+        if not entry or not entry.get('wav') or not os.path.isfile(entry['wav']):
+            return None
+    return m
+
+
+def _scene_already_rendered(mv, mp4_path: str, *, width: int, height: int,
+                            fps: int, expect_dur: float) -> bool:
+    """True when a scene's mp4 already exists on disk and passes verify_spec.
+
+    Lets a re-spawned job skip scenes that were fully rendered before the
+    crash — the owner's 'already-rendered shots are not re-rendered' contract.
+    """
+    if not os.path.isfile(mp4_path) or os.path.getsize(mp4_path) == 0:
+        return False
+    try:
+        probe = mv.probe_video(mp4_path)
+        return not mv.verify_spec(probe, width=width, height=height, fps=fps,
+                                  duration=expect_dur)
+    except Exception as e:
+        logger.debug('[MotionVideo] resume probe of %s failed: %s', mp4_path, e)
+        return False
+
+
 def run_motion_task(task: dict) -> None:
     """Worker entry — drives the full pipeline for one motion task."""
     from lib import motion_video as mv
@@ -76,6 +151,35 @@ def run_motion_task(task: dict) -> None:
     fps = 30
     try:
         os.makedirs(workdir, exist_ok=True)
+        write_job_manifest(task, kind=task.get('kind') or 'scenes',
+                           state='running')
+
+        # ── 0. topic front-half (research → script → timeline) ──
+        # When the job carries a bare TOPIC (no SRT / scenes), run the recipe
+        # to synthesize scenes.json first. The recipe is itself checkpointed
+        # (pipeline_state.json), so a crash mid-research resumes there.
+        scenes_path = task.get('scenes_path') or ''
+        topic = (task.get('topic') or '').strip()
+        if topic and not (scenes_path and os.path.isfile(scenes_path)) \
+                and not (task.get('srt_path') and os.path.isfile(task['srt_path'])):
+            from lib.motion_video._recipe import build_scenes_from_topic
+            _emit(task, {'type': 'phase', 'phase': 'research', 'topic': topic})
+            tl = build_scenes_from_topic(
+                topic, workdir, lang=task.get('lang') or 'zh',
+                max_scenes=int(task.get('max_scenes') or 8),
+                narration=bool(task.get('narration')),
+                voice=task.get('voice') or '', speed=task.get('speed'),
+                alignment=task.get('alignment') or 'loose',
+                abort_event=task.get('abort_event'),
+                emit=lambda ev: _emit(task, {'type': 'recipe', **ev}))
+            scenes_path = tl['scenes_path']
+            task['scenes_path'] = scenes_path
+            _emit(task, {'type': 'phase', 'phase': 'script_done',
+                         'scenes': tl['scenes'],
+                         'timed_from_audio': tl['timed_from_audio']})
+        if _aborted(task):
+            _motion_runtime.finish(task_id)
+            return
 
         # ── 1. parse (optional when scenes are supplied directly) ──
         entries = []
@@ -124,31 +228,44 @@ def run_motion_task(task: dict) -> None:
         manifest: dict = {}
         if narration:
             audio_dir = os.path.join(workdir, 'audio')
-            try:
-                manifest = mv.synthesize_scene_narrations(
-                    scenes, audio_dir, voice=task.get('voice') or None,
-                    speed=task.get('speed'),
-                    alignment=task.get('alignment') or 'loose',
-                    abort_event=task.get('abort_event'))
-            except mv.NarrationAborted:
-                _motion_runtime.finish(task_id)
-                return
-            if not manifest.get('ok'):
-                narration = False
+            # Reuse a manifest already produced by the recipe timeline stage
+            # (topic jobs synthesize TTS up-front to measure durations) so we
+            # never double-synthesize, and a resumed job skips narration too.
+            manifest = _reusable_manifest(audio_dir, scenes) or {}
+            if manifest.get('ok'):
                 _emit(task, {'type': 'phase', 'phase': 'narrate',
-                             'degraded': True,
-                             'detail': manifest.get('detail', '')})
-                logger.warning('[MotionVideo] narration degraded: %s',
-                               manifest.get('detail'))
+                             'degraded': False, 'reused': True,
+                             'scenes': [{'scene_id': e['scene_id'],
+                                         'audio_s': e['audio_duration'],
+                                         'target_s': e['target_duration'],
+                                         'overflow_s': e['overflow']}
+                                        for e in manifest['scenes']]})
             else:
-                _emit(task, {'type': 'phase', 'phase': 'narrate',
-                             'degraded': False,
-                             'scenes': [
-                                 {'scene_id': e['scene_id'],
-                                  'audio_s': e['audio_duration'],
-                                  'target_s': e['target_duration'],
-                                  'overflow_s': e['overflow']}
-                                 for e in manifest['scenes']]})
+                try:
+                    manifest = mv.synthesize_scene_narrations(
+                        scenes, audio_dir, voice=task.get('voice') or None,
+                        speed=task.get('speed'),
+                        alignment=task.get('alignment') or 'loose',
+                        abort_event=task.get('abort_event'))
+                except mv.NarrationAborted:
+                    _motion_runtime.finish(task_id)
+                    return
+                if not manifest.get('ok'):
+                    narration = False
+                    _emit(task, {'type': 'phase', 'phase': 'narrate',
+                                 'degraded': True,
+                                 'detail': manifest.get('detail', '')})
+                    logger.warning('[MotionVideo] narration degraded: %s',
+                                   manifest.get('detail'))
+                else:
+                    _emit(task, {'type': 'phase', 'phase': 'narrate',
+                                 'degraded': False,
+                                 'scenes': [
+                                     {'scene_id': e['scene_id'],
+                                      'audio_s': e['audio_duration'],
+                                      'target_s': e['target_duration'],
+                                      'overflow_s': e['overflow']}
+                                     for e in manifest['scenes']]})
         if _aborted(task):
             _motion_runtime.finish(task_id)
             return
@@ -191,6 +308,14 @@ def run_motion_task(task: dict) -> None:
                 if _aborted(task):
                     break
                 mp4_path = os.path.join(scene_dir, f"{sc['id']}.mp4")
+                if _scene_already_rendered(mv, mp4_path, width=width,
+                                           height=height, fps=fps,
+                                           expect_dur=sc['_duration']):
+                    mp4s[sc['id']] = mp4_path
+                    _emit(task, {'type': 'scene_done', 'scene_id': sc['id'],
+                                 'ok': True, 'resumed': True,
+                                 'done': len(mp4s), 'total': total})
+                    continue
                 fut = pool.submit(
                     _render_one, mv, scene_dir, mp4_path,
                     quality=quality, width=width, height=height, fps=fps,
@@ -293,6 +418,8 @@ def run_motion_task(task: dict) -> None:
             'mode': 'engine',
         }
         task['result'] = result
+        write_job_manifest(task, kind=task.get('kind') or 'scenes',
+                           state='done')
         _emit(task, {'type': 'final', 'final_path': final_path,
                      'duration': result['duration'], 'narrated': narration})
         _motion_runtime.finish(task_id, result=result)
@@ -302,8 +429,80 @@ def run_motion_task(task: dict) -> None:
 
     except Exception as e:
         logger.error('[MotionVideo] task %s failed: %s', task_id, e, exc_info=True)
+        try:
+            write_job_manifest(task, kind=task.get('kind') or 'scenes',
+                               state='error')
+        except Exception as _me:
+            logger.debug('[MotionVideo] manifest error-state write failed: %s', _me)
         _motion_runtime.finish(task_id, error=e,
                                error_context='motion-video:engine')
+
+
+def run_topic_motion_task(task: dict) -> None:
+    """Worker entry alias — a topic-driven job is just a motion task whose
+    front half is the recipe. Kept as a named symbol so callers/log lines and
+    the resume scanner can distinguish topic jobs from scenes/SRT jobs."""
+    task.setdefault('kind', 'topic')
+    run_motion_task(task)
+
+
+def resume_interrupted_jobs() -> int:
+    """Re-spawn motion jobs left ``running`` on disk by a crashed process.
+
+    Scans ``<motion_root>/jobs/*/job.json``; any manifest in the ``running``
+    state whose task is not live in the runtime is re-spawned with its
+    persisted params. The stage-graph checkpoint (pipeline_state.json) and the
+    per-scene mp4 skip make the re-run resume rather than restart — the
+    owner's crash-resume correctness contract. Returns the count re-spawned.
+
+    Best-effort and idempotent: called once at startup. Never raises.
+    """
+    from lib.json_store import read_json
+    from lib.motion_video._env import motion_root
+    from lib.motion_video.runtime import (_motion_runtime, _new_motion_task,
+                                          _motion_index_get)  # noqa: F401
+
+    jobs_dir = os.path.join(motion_root(), 'jobs')
+    if not os.path.isdir(jobs_dir):
+        return 0
+    resumed = 0
+    for name in sorted(os.listdir(jobs_dir)):
+        workdir = os.path.join(jobs_dir, name)
+        manifest_path = os.path.join(workdir, 'job.json')
+        if not os.path.isfile(manifest_path):
+            continue
+        m = read_json(manifest_path, default=None)
+        if not isinstance(m, dict) or m.get('state') != 'running':
+            continue
+        task_id = m.get('task_id') or name
+        if _motion_runtime.get(task_id) is not None:
+            continue  # already live (e.g. re-scan) — don't double-spawn
+        try:
+            task = _new_motion_task(
+                task_id, srt_path=m.get('srt_path') or '', workdir=workdir,
+                voice=m.get('voice') or '', speed=m.get('speed'),
+                alignment=m.get('alignment') or 'loose',
+                narration=bool(m.get('narration', True)),
+                quality=m.get('quality') or 'standard',
+                parallel=int(m.get('parallel') or 2),
+                width=int(m.get('width') or 1080),
+                height=int(m.get('height') or 1440),
+                scenes_path=m.get('scenes_path') or '')
+            for k in ('burn_in', 'burn_in_fontsdir', 'topic', 'lang',
+                      'max_scenes', 'paper_hash', 'kind'):
+                if m.get(k) is not None:
+                    task[k] = m[k]
+            _motion_runtime.spawn(task_id, run_motion_task, task)
+            resumed += 1
+            logger.info('[MotionVideo] resumed interrupted job %s (kind=%s)',
+                        task_id, m.get('kind'))
+        except Exception as e:
+            logger.warning('[MotionVideo] failed to resume job %s: %s',
+                           task_id, e, exc_info=True)
+    if resumed:
+        logger.info('[MotionVideo] resumed %d interrupted job(s) on startup',
+                    resumed)
+    return resumed
 
 
 def run_scene_regen_task(task: dict) -> None:

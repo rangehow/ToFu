@@ -18,6 +18,7 @@ logger = get_logger(__name__)
 from lib.tasks_pkg.executor import _build_simple_meta, _finalize_tool_round
 from lib.tasks_pkg.executor import tool_registry
 from lib.tools.motion_video import MOTION_VIDEO_TOOL_NAMES
+from lib.tools.produce import PRODUCE_VIDEO_TOOL_NAME
 
 
 def _resolve(path: str, project_path: str | None) -> str:
@@ -173,5 +174,77 @@ def _handle_motion_video_tool(task, tc, fn_name, tc_id, fn_args, rn,
         snippet=tool_content.split('\n', 1)[0][:120] if tool_content else '',
         badge=badge,
     )
+    _finalize_tool_round(task, rn, round_entry, [meta])
+    return tc_id, tool_content, False
+
+
+@tool_registry.tool_set(
+    {PRODUCE_VIDEO_TOOL_NAME},
+    category='video',
+    description='High-level topic → finished video')
+def _handle_produce_video(task, tc, fn_name, tc_id, fn_args, rn,
+                          round_entry, cfg, project_path,
+                          project_enabled, all_tools=None):
+    """Handle produce_video: kick off a background topic→video job.
+
+    Not project-gated (owner 拍板 #2). Spawns a motion task whose front half is
+    the research→script→timeline recipe, then returns a task_id immediately —
+    the render runs in the background and the user watches the video panel.
+    """
+    import os as _os
+
+    topic = str(fn_args.get('topic') or '').strip()
+    if not topic:
+        result = {'ok': False, 'detail': 'topic is required'}
+        badge = 'failed'
+    else:
+        try:
+            from lib.motion_video._env import motion_root
+            from lib.motion_video.engine import run_topic_motion_task
+            from lib.motion_video.runtime import (
+                _motion_task_id, _new_motion_task, _motion_runtime)
+
+            _ASPECTS = {'1080x1440': (1080, 1440), '1080x1920': (1080, 1920),
+                        '1920x1080': (1920, 1080), '1080x1080': (1080, 1080)}
+            aspect = str(fn_args.get('aspect') or '1080x1440').strip()
+            width, height = _ASPECTS.get(aspect, (1080, 1440))
+            lang = 'en' if str(fn_args.get('lang') or 'zh').strip() == 'en' else 'zh'
+            try:
+                max_scenes = int(fn_args.get('max_scenes') or 8)
+            except (TypeError, ValueError):
+                max_scenes = 8
+            max_scenes = max(3, min(max_scenes, 12))
+            narration = bool(fn_args.get('narration', True))
+
+            job_id = _motion_task_id()
+            workdir = _os.path.join(motion_root(), 'jobs', job_id)
+            _os.makedirs(workdir, exist_ok=True)
+            job = _new_motion_task(
+                job_id, srt_path='', workdir=workdir, voice='', speed=None,
+                alignment='loose', narration=narration, quality='standard',
+                parallel=2, width=width, height=height, scenes_path='')
+            job['topic'] = topic
+            job['lang'] = lang
+            job['max_scenes'] = max_scenes
+            job['kind'] = 'topic'
+            _motion_runtime.spawn(job_id, run_topic_motion_task, job)
+            logger.info('[Produce] video job %s started topic=%r lang=%s',
+                        job_id, topic[:60], lang)
+            result = {'ok': True, 'task_id': job_id, 'topic': topic,
+                      'lang': lang, 'aspect': aspect,
+                      'poll': f'/api/v1/motion/videos/poll/{job_id}',
+                      'note': 'Video is generating in the background; watch the '
+                              'video panel for progress.'}
+            badge = 'started'
+        except Exception as e:
+            logger.error('[Produce] failed to start video job: %s', e, exc_info=True)
+            result = {'ok': False, 'detail': str(e)}
+            badge = 'failed'
+
+    tool_content = _fmt(result)
+    meta = _build_simple_meta(
+        fn_name, tool_content, source='Produce', title='video',
+        snippet=tool_content.split('\n', 1)[0][:120] if tool_content else '',
+        badge=badge)
     _finalize_tool_round(task, rn, round_entry, [meta])
     return tc_id, tool_content, False

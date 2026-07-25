@@ -96,11 +96,22 @@ async def start_motion_task():
     srt_text = (body.get('srt') or '').strip()
     srt_path_in = (body.get('srt_path') or '').strip()
     scenes_path = (body.get('scenes_path') or '').strip()
-    if not srt_text and not srt_path_in and not scenes_path:
-        return api_bad_request('srt, srt_path or scenes_path is required',
-                               field='srt')
+    topic = (body.get('topic') or '').strip()
+    if not srt_text and not srt_path_in and not scenes_path and not topic:
+        return api_bad_request('srt, srt_path, scenes_path or topic is required',
+                               field='topic')
+    if len(topic) > 500:
+        return api_bad_request('topic too long (500 chars max)', field='topic')
     if len(srt_text.encode('utf-8')) > _MAX_SRT_BYTES:
         return api_bad_request('srt too large (2 MB max)', field='srt')
+    lang = (body.get('lang') or 'zh').strip()
+    if lang not in ('zh', 'en'):
+        return api_bad_request('lang must be zh|en', field='lang')
+    try:
+        max_scenes = int(body.get('max_scenes') or 8)
+    except (TypeError, ValueError):
+        return api_bad_request('max_scenes must be an int', field='max_scenes')
+    max_scenes = max(3, min(max_scenes, 12))
 
     aspect = (body.get('aspect') or '1080x1440').strip()
     if aspect not in _ASPECTS:
@@ -137,7 +148,7 @@ async def start_motion_task():
 
     # ── Dedup ──
     _cleanup_stale_motion_tasks()
-    srt_material = srt_text or srt_path_in or scenes_path
+    srt_material = srt_text or srt_path_in or scenes_path or (f'topic:{lang}:{topic}')
     srt_sha = hashlib.sha256(srt_material.encode('utf-8')).hexdigest()[:16]
     key = (srt_sha, voice, alignment, aspect, narration, quality, burn_in)
     existing = _motion_index_get(key)
@@ -158,7 +169,7 @@ async def start_motion_task():
         if not os.path.isfile(srt_path):
             return api_bad_request('srt_path is not a file', field='srt_path')
     else:
-        srt_path = ''  # scenes-only run — the storyboard is the source of truth
+        srt_path = ''  # scenes-only / topic run — the recipe/storyboard is the source
 
     task = _new_motion_task(
         task_id, srt_path=srt_path, workdir=workdir, voice=voice,
@@ -167,10 +178,15 @@ async def start_motion_task():
         scenes_path=scenes_path)
     task['burn_in'] = burn_in
     task['burn_in_fontsdir'] = burn_in_fontsdir
+    if topic:
+        task['topic'] = topic
+        task['lang'] = lang
+        task['max_scenes'] = max_scenes
+        task['kind'] = 'topic'
     _motion_index_register(key, task_id)
     _motion_runtime.spawn(task_id, run_motion_task, task)
-    logger.info('[Motion.v1] started %s (aspect=%s narration=%s parallel=%d)',
-                task_id, aspect, narration, parallel)
+    logger.info('[Motion.v1] started %s (aspect=%s narration=%s parallel=%d '
+                'topic=%s)', task_id, aspect, narration, parallel, bool(topic))
     return jsonify({'ok': True, 'task_id': task_id, 'deduped': False})
 
 

@@ -8485,7 +8485,7 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 }
 .mp-row {
   display: flex; align-items: center; gap: 10px;
-  padding: 8px 8px 8px 11px;
+  padding: 8px 8px 8px 5px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-secondary);
@@ -8495,6 +8495,23 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   background: rgba(245, 158, 11, 0.07);
   border-color: rgba(245, 158, 11, 0.28);
 }
+
+/* ── Drag-to-reorder ── the list ORDER *is* the primary-root choice:
+   index 0 carries the star + `root` badge and is sent to the backend as the
+   primary project, so dragging a folder to the top IS "promote to root". */
+.mp-row[draggable="true"] { cursor: grab; }
+.mp-row-grip {
+  flex-shrink: 0; width: 14px; height: 18px;
+  color: var(--text-tertiary); opacity: 0.45;
+  transition: opacity 0.15s, color 0.15s;
+}
+.mp-row-grip > svg { display: block; }
+.mp-row:hover .mp-row-grip { opacity: 0.9; color: var(--text-secondary); }
+.mp-row-dragging { opacity: 0.45; cursor: grabbing; border-style: dashed; }
+/* Insertion caret: a 2px accent rule on the edge the row would land against. */
+.mp-row.mp-drop-before { box-shadow: 0 -2px 0 0 var(--accent); }
+.mp-row.mp-drop-after  { box-shadow: 0 2px 0 0 var(--accent); }
+
 .mp-row-icon { flex-shrink: 0; display: flex; align-items: center; }
 .mp-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .mp-row-name {
@@ -20044,7 +20061,19 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
    (width:min(960px,94vw)) — so we tab between them and give the ACTIVE surface
    the full width. Each tab carries a colour-coded dot matching its old column
    accent + an optional count badge. */
-.project-brain-tabs{display:flex;align-items:stretch;gap:2px;padding:0 12px;background:var(--bg-secondary);border-bottom:1px solid var(--border);overflow-x:auto;flex-shrink:0}
+/* Five tabs overflow the bar on a phone-width panel (~505px intrinsic EN vs
+   ~338px of panel at a 360px viewport), and macOS auto-hides overlay
+   scrollbars — so the trailing tabs looked like they simply weren't there.
+   Lea-Verou scroll shadows: an edge shadow shows ONLY on a side that can
+   still scroll (the `local` cover gradients mask the `scroll` shadow
+   gradients at the extremes). Same technique as .stg-matrix-scroll in
+   settings.css; the scrollbar itself stays hidden, as tab bars should. */
+.project-brain-tabs{display:flex;align-items:stretch;gap:2px;padding:0 12px;background-color:var(--bg-secondary);border-bottom:1px solid var(--border);overflow-x:auto;flex-shrink:0;scrollbar-width:none;
+  background-image:linear-gradient(to right,var(--bg-secondary) 30%,transparent),linear-gradient(to right,transparent,var(--bg-secondary) 70%),radial-gradient(farthest-side at 0 50%,rgba(0,0,0,0.22),rgba(0,0,0,0)),radial-gradient(farthest-side at 100% 50%,rgba(0,0,0,0.22),rgba(0,0,0,0));
+  background-position:0 0,100% 0,0 0,100% 0;background-repeat:no-repeat;
+  background-size:32px 100%,32px 100%,10px 100%,10px 100%;
+  background-attachment:local,local,scroll,scroll}
+.project-brain-tabs::-webkit-scrollbar{height:0}
 .pb-tab{position:relative;display:inline-flex;align-items:center;gap:7px;padding:12px 15px;background:transparent;border:none;border-bottom:2px solid transparent;color:var(--text-tertiary);font-family:inherit;font-size:12.5px;font-weight:600;letter-spacing:0.01em;cursor:pointer;white-space:nowrap;transition:color var(--transition),border-color var(--transition)}
 .pb-tab::before{content:'';width:7px;height:7px;border-radius:50%;background:currentColor;opacity:0.45;flex-shrink:0}
 .pb-tab:hover{color:var(--text-secondary)}
@@ -20056,6 +20085,42 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
 .pb-tab[data-pb-tab="peers"].pb-tab-active{color:var(--accent)}
 .pb-tab-count{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;font-size:10.5px;font-weight:700;line-height:1;border-radius:999px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-secondary)}
 .pb-tab-count[hidden]{display:none}
+
+/* ── Keyboard focus rings ──
+   Every control below is a real <button> reachable by Tab, but the surface
+   painted focus for text inputs ONLY (and several of those do `outline:none`,
+   trading the ring for a border tint). That left ~20 buttons — tabs, board
+   actions, charter edit/delete, peer nudge, clamp toggles — with no visible
+   focus at all, so keyboard navigation was invisible. One shared rule keeps
+   the ring consistent and out-specifies nothing (`:focus-visible` only fires
+   for keyboard/AT focus, never on mouse click). Matches the accent-outline
+   idiom already used by .pb-board-act / .app-dialog-* elsewhere. */
+.project-brain-overlay .pb-tab:focus-visible,
+.project-brain-overlay .pb-chip:focus-visible,
+.project-brain-overlay .pb-clamp-toggle:focus-visible,
+.project-brain-overlay .pb-conv-chip:focus-visible,
+.project-brain-overlay .pb-tr-toggle:focus-visible,
+.project-brain-overlay .pb-charter-act:focus-visible,
+.project-brain-overlay .pb-charter-delete-all:focus-visible,
+.project-brain-overlay .pb-inline-save:focus-visible,
+.project-brain-overlay .pb-inline-cancel:focus-visible,
+.project-brain-overlay .pb-proposal-commit:focus-visible,
+.project-brain-overlay .pb-proposal-reject:focus-visible,
+.project-brain-overlay .pb-board-new:focus-visible,
+.project-brain-overlay .pb-peer-nudge-toggle:focus-visible,
+.project-brain-overlay .pb-peer-nudge-send:focus-visible,
+.project-brain-overlay .pb-peer-nudge-cancel:focus-visible,
+.project-brain-overlay .pb-peer-stop-btn:focus-visible,
+.project-brain-overlay .pb-peer-clickable:focus-visible,
+.project-brain-overlay .pb-status-refresh:focus-visible,
+.project-brain-overlay .pb-status-ask-btn:focus-visible,
+.project-brain-overlay .pb-watch-btn:focus-visible,
+.project-brain-overlay .pb-watch-add-btn:focus-visible,
+.project-brain-overlay .project-brain-close:focus-visible{
+  outline:2px solid color-mix(in srgb,var(--accent) 60%,transparent);
+  outline-offset:2px;
+  border-radius:var(--pb-radius-sm,4px);
+}
 
 /* Tab-panel host: the active panel fills the panel; the rest are hidden.
    NOTE: the panels carry BOTH .project-brain-col AND .pb-tab-panel, so the
@@ -20078,7 +20143,7 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
 /* ── Activity column ── */
 .pb-activity-list{display:flex;flex-direction:column;gap:9px;min-height:100%}
 .pb-activity-row{display:flex;gap:11px;align-items:flex-start;padding:11px 12px;background:var(--pb-card-bg);border:1px solid var(--border);border-radius:var(--pb-radius);transition:border-color var(--transition),background var(--transition),transform 0.12s ease;animation:pbRowIn 0.24s cubic-bezier(0.16,1,0.3,1)}
-.pb-activity-row:hover{border-color:var(--border-light);background:var(--pb-card-hover);transform:translateY(-1px)}
+.pb-activity-row:hover{border-color:var(--border-light);background:var(--pb-card-hover);--pb-fade-to:var(--pb-card-hover);transform:translateY(-1px)}
 @keyframes pbRowIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
 .pb-activity-icon{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;flex-shrink:0;border-radius:8px;background:var(--bg-secondary);border:1px solid var(--border);color:var(--text-secondary)}
 .pb-activity-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px}
@@ -20169,7 +20234,13 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
 .pb-status-skeleton-line:nth-child(2){width:92%}
 .pb-status-skeleton-line:nth-child(3){width:64%}
 @keyframes pbStatusShimmer{0%{background-position:100% 0}100%{background-position:-100% 0}}
-@media (prefers-reduced-motion:reduce){.pb-status-updating-dot,.pb-status-skeleton-line{animation:none}}
+/* Reduced-motion: park EVERY infinite loop on this surface. The peer-presence
+   dot and the board pending badge are state cues, so they hold a static
+   visible frame (opacity reset) rather than being left mid-keyframe. */
+@media (prefers-reduced-motion:reduce){
+  .pb-status-updating-dot,.pb-status-skeleton-line{animation:none}
+  .pb-peer-dot[data-state="active"],.pb-board-badge-pending{animation:none;opacity:1}
+}
 .pb-status-latest{display:flex;flex-direction:column;gap:8px}
 .pb-status-narrative{font-size:13.5px;line-height:1.6;color:var(--text-primary);white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;padding:12px 14px;background:var(--pb-card-bg);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:var(--pb-radius)}
 .pb-status-latest-meta{font-size:11px;color:var(--text-tertiary)}
@@ -20237,7 +20308,7 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
 .pb-charter-section{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-tertiary);margin:18px 0 8px}
 .pb-charter-decisions{list-style:none;display:flex;flex-direction:column;gap:6px;margin:0;padding:0}
 .pb-charter-decisions li{position:relative;font-size:13px;line-height:1.45;color:var(--text-primary);padding:9px 11px;background:var(--pb-card-bg);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:var(--pb-radius-sm);white-space:normal;overflow-wrap:anywhere;word-break:break-word;transition:border-color var(--transition),background var(--transition)}
-.pb-charter-decisions li:hover{background:var(--pb-card-hover)}
+.pb-charter-decisions li:hover{background:var(--pb-card-hover);--pb-fade-to:var(--pb-card-hover)}
 
 /* ── Charter HUMAN edit/delete affordances ──
    The north star and each committed decision carry small icon buttons that
@@ -20249,6 +20320,14 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
 .pb-charter-northstar-row:hover .pb-charter-row-actions,
 .pb-charter-decisions li:hover .pb-charter-row-actions,
 .pb-charter-row-actions:focus-within{opacity:1;pointer-events:auto}
+/* Touch devices have no hover, so the edit/delete affordances were completely
+   unreachable there (`opacity:0;pointer-events:none` was never lifted — a
+   :focus-within on a control you cannot tap can't bootstrap itself). Reveal
+   them permanently on coarse pointers, matching the project's existing
+   `(pointer:coarse)` convention. */
+@media (hover:none),(pointer:coarse){
+  .pb-charter-row-actions{opacity:1;pointer-events:auto}
+}
 .pb-decision-text{padding-right:2px}
 .pb-charter-act{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--pb-radius-sm);color:var(--text-tertiary);cursor:pointer;transition:color var(--transition),border-color var(--transition),background var(--transition)}
 .pb-charter-act:hover{color:var(--text-primary);border-color:var(--border-light);background:var(--bg-hover)}
@@ -20279,7 +20358,13 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
    default; `.pb-clamp-open` shows all. A gradient fade hints there's more. */
 .pb-clamp{position:relative;overflow:hidden;max-height:7.8em;transition:max-height 0.18s ease}
 .pb-clamp.pb-clamp-open{max-height:none}
-.pb-clamp:not(.pb-clamp-open)::after{content:'';position:absolute;left:0;right:0;bottom:0;height:1.15em;background:linear-gradient(180deg,transparent,var(--pb-card-bg));pointer-events:none}
+/* The fade must resolve to whatever the HOST CARD is currently painted, not a
+   fixed token: every clamp container (activity row / board card / decision li /
+   influence epic) swaps to --pb-card-hover on :hover, so a hard-coded
+   --pb-card-bg fade left a visible ~9/255 rectangle floating over the last
+   line the moment the pointer entered the card. --pb-fade-to is re-pointed by
+   each :hover rule; the fallback keeps every non-hover host correct. */
+.pb-clamp:not(.pb-clamp-open)::after{content:'';position:absolute;left:0;right:0;bottom:0;height:1.15em;background:linear-gradient(180deg,transparent,var(--pb-fade-to,var(--pb-card-bg)));pointer-events:none}
 .pb-clamp-toggle{display:inline-flex;align-items:center;gap:4px;margin-top:7px;padding:2px 0;background:transparent;border:none;color:var(--accent);font-family:inherit;font-size:11.5px;font-weight:600;cursor:pointer}
 .pb-clamp-toggle:hover{text-decoration:underline}
 .pb-clamp-toggle svg{width:12px;height:12px;transition:transform 0.18s ease}
@@ -20318,7 +20403,7 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
 .pb-board-lane-head{display:flex;align-items:center;gap:7px;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-tertiary);margin-bottom:9px}
 .pb-board-count{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 6px;font-size:10.5px;font-weight:700;color:var(--text-secondary);background:var(--bg-tertiary);border:1px solid var(--border);border-radius:var(--pb-radius-chip)}
 .pb-board-card{background:var(--pb-card-bg);border:1px solid var(--border);border-radius:var(--pb-radius);padding:11px 12px;margin-bottom:8px;transition:border-color var(--transition),background var(--transition),transform 0.12s ease}
-.pb-board-card:hover{border-color:var(--border-light);background:var(--pb-card-hover);transform:translateY(-1px)}
+.pb-board-card:hover{border-color:var(--border-light);background:var(--pb-card-hover);--pb-fade-to:var(--pb-card-hover);transform:translateY(-1px)}
 /* Lane colour-coding on the card's leading edge — held (amber) and awaiting
    (accent) already carry one; extend the same scan-by-colour language to the
    other statuses so the board reads at a glance. */
@@ -20420,7 +20505,7 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
 .pb-inf-decisions{list-style:none;display:flex;flex-direction:column;gap:5px;margin:0;padding:0}
 .pb-inf-decisions li{font-size:12.5px;line-height:1.45;color:var(--text-primary);padding:7px 10px;background:var(--pb-card-bg);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:var(--pb-radius-sm);white-space:normal;overflow-wrap:anywhere;word-break:break-word}
 .pb-inf-epic{display:flex;align-items:center;gap:9px;font-size:12.5px;line-height:1.45;color:var(--text-primary);padding:9px 11px;background:var(--pb-card-bg);border:1px solid var(--border);border-radius:var(--pb-radius-sm);margin-bottom:5px;transition:border-color var(--transition),background var(--transition)}
-.pb-inf-epic:hover{background:var(--pb-card-hover)}
+.pb-inf-epic:hover{background:var(--pb-card-hover);--pb-fade-to:var(--pb-card-hover)}
 .pb-inf-epic-title{flex:1;min-width:0;white-space:normal;overflow-wrap:anywhere;word-break:break-word}
 .pb-inf-epic.pb-inf-mine{border-left:3px solid var(--pb-green)}
 .pb-inf-epic.pb-inf-avoid{border-left:3px solid var(--pb-red)}
@@ -20433,10 +20518,15 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
    Project Brain panel, not on this always-visible line. */
 .collab-cluster{display:inline-flex;align-items:center;gap:8px;min-width:0;flex:1 1 auto}
 
-/* ── Responsive: stack the three columns on a narrow panel ── */
+/* ── Responsive: narrow panel ──
+   NOTE: .project-brain-columns is a display:block tab host (one panel visible
+   at a time), NOT a grid — the old `grid-template-columns:1fr` here was inert
+   left over from the pre-tab 4-column layout, and `overflow-y:auto` on it
+   fought the real scroller (.project-brain-col-body). Tighten the body gutter
+   instead, which is what actually buys reading width on a phone. */
 @media (max-width:720px){
-  .project-brain-columns{grid-template-columns:1fr;gap:1px;overflow-y:auto}
-  .project-brain-col{min-height:240px}
+  .project-brain-col-body{padding:12px 12px}
+  .project-brain-tabs{padding:0 6px}
 }
 
 /* ── Frontend-stability hardening: native scroll anchoring + reserved media ──

@@ -2,9 +2,10 @@
 
 Covers docs/PRODUCTION_PIPELINE_DESIGN.md P4 (owner-ratified 2026-07-25):
 
-  * stage-graph contract (:mod:`lib.motion_video._stages`): checkpointed
-    resume, retry, gate rejection, abort — the crash-resume correctness
-    contract owner made a hard requirement.
+  * stage-graph contract (:mod:`lib.production.stages`, relocated there from
+    ``lib.motion_video._stages`` in P6): checkpointed resume, retry, gate
+    rejection, abort — the crash-resume correctness contract owner made a
+    hard requirement.
   * video recipe (:mod:`lib.motion_video._recipe`): research→script→timeline
     with fakes; the fact-discipline gate (拍板 #4); real-TTS-duration timeline
     vs char-estimate fallback; scene-count cost cap (拍板 #3).
@@ -25,10 +26,14 @@ pytestmark = pytest.mark.unit
 
 
 # ══════════════════════════════════════════════════════════
-#  Stage-graph contract (_stages)
+#  Stage-graph contract (relocated to lib.production.stages in P6)
 # ══════════════════════════════════════════════════════════
 
-from lib.motion_video import _stages as st
+# NOTE: import the REAL home, not the lib.motion_video._stages back-compat
+# shim. run_stages resolves stage_is_done as a module global of its OWN
+# module, so the NEUTER below must patch it there — patching the shim would
+# silently no-op and the neuter would stop biting.
+from lib.production import stages as st
 
 
 def _stage(name, run, **kw):

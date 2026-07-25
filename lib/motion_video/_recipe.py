@@ -3,7 +3,8 @@
 The missing first half of the motion-video pipeline
 (docs/PRODUCTION_PIPELINE_DESIGN.md §2.2): turn a bare NEWS TOPIC into a
 validated ``scenes.json`` the existing engine can render. Three stages,
-built on the reusable stage-graph contract (:mod:`._stages`) so every stage
+built on the reusable stage-graph contract (:mod:`lib.production.stages`) so
+every stage
 is checkpointed and the whole graph is crash-resumable:
 
     research  → fact cards (each with ≥1 real source URL)   [web_search]
@@ -36,7 +37,7 @@ import re
 
 from lib.log import get_logger
 
-from lib.motion_video._stages import Stage, run_stages
+from lib.production.stages import Stage, run_stages
 
 logger = get_logger(__name__)
 

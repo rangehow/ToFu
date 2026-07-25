@@ -51,7 +51,10 @@ lib/                   — Core business logic
                          .aborted predicate) + run_agent_loop() owning the round
                          loop and the 3 abort checks (before-round / post-stream /
                          between-tools). Adopters: paper report_engine + qa_engine
-                         (2026-07; orchestrator/endpoint/swarm/timer adopt later)
+                         (2026-07; orchestrator/endpoint/swarm/timer adopt later).
+                         The main orchestrator still owns its own loop in
+                         lib/tasks_pkg/orchestrator/_run.py — cutover blocked on
+                         the run_task locals inventory (~30 fields, see pt_03f4cdf1).
   ttl_cache.py         — Generic in-memory TTL cache with LRU eviction +
                          get_or_compute serialization (TTLCache class)
   task_runtime.py      — Compatibility shim → re-exports TaskRuntime from
@@ -86,7 +89,11 @@ lib/                   — Core business logic
     dispatcher.py      — Core dispatch loop, fallback chains
     factory.py         — Client/provider factory
     slot.py            — Slot / key-pool state management
-  model_info/          — Per-model capabilities + _clamp_max_tokens (see §12)
+  model_info/          — Per-model capabilities + _clamp_max_tokens (see §12):
+                         _capabilities.py / _family.py / _limits.py / _max_output.py +
+                         capability_taxonomy.py (single source of truth for
+                         CHAT_EXCLUDED_CAPS + DISPATCHER_NON_CHAT_CAPS — see §3.7-adjacent
+                         note; frontend consumes it via static/js/core/model_caps.js)
   tools/               — Tool definitions (package)
     project.py         — list_dir, read_files, grep_search, find_files, write_file, apply_diff, …
     search.py          — web_search
@@ -99,7 +106,10 @@ lib/                   — Core business logic
   tasks_pkg/           — Task orchestration, compaction, execution. Most large
                          modules are now facade-preserving PACKAGES (dir/ with a
                          re-exporting __init__.py), not single files:
-    orchestrator/      — Main run_task loop, SSE event emission (_run / _finalize / _turn)
+    orchestrator/      — Main run_task loop (facade __init__.py + _run.py) +
+                         extracted slices (pt_03f4cdf1): _vu_startup / _prefetch /
+                         _context_inject / _tool_history / _post_loop / _teardown /
+                         _finalize (SSE emission + autopilot baton) / _turn
     manager/           — Task registry + lifecycle (_registry / _persist / _recovery /
                          _stream / _sync / _events / _maintenance / _state)
     commit_round/      — Per-round file-history snapshot (daemon-thread
@@ -127,7 +137,21 @@ lib/                   — Core business logic
     model_config.py, attachments.py — Per-model config, attachment handling (single files)
     approval.py, human_guidance.py, stdin_handler.py — Write-approval,
                          ask_user, blocking stdin requests (single files)
-    handlers/          — Per-tool execution handlers (misc, project, search, browser, mcp, memory, skills, code_exec, _adapter)
+    handlers/          — Per-tool execution handlers (misc, project, search, browser, mcp, memory, code_exec, _adapter)
+    segments/          — Per-turn message segments (thinking / assistant / tool)
+                         used by the wire-fingerprint and killed-recovery paths
+    system_prompt_cc/  — System-prompt cache-control (Anthropic breakpoint) helpers
+    autopilot.py, autopilot_markers.py, autopilot_state.py — VU autopilot loop,
+                         baton handoff markers, CAS state store (pt_00459503 target)
+    wire_fingerprint.py, wire_messages.py — On-wire message identity + fingerprints
+                         (drives resume / recovery / stream-retry adoption)
+    killed_recovery.py — Rebuild task['segments'] + toolRounds after hard-kill
+    entry.py           — build_chat_config + spawn_task entry points
+    floor_retry.py, turn_retry.py — Cache-floor collapse retry + turn-level retry policy
+    event_fold.py, event_log.py — SSE fold / dedup + event log persistence
+    persist_registry.py, persistence_store.py — Task-result persistence adapters
+    chat_mode.py       — Air/Studio 2-tier capability profile (see §3.7)
+    write_breakdown.py — Per-round file-write attribution
   project_mod/         — Project file tools (list/read/write/grep/run)
     tools.py           — Tool dispatch facade: execute_tool registry
                          (_EXEC_HANDLERS name→handler) + re-exports
@@ -209,11 +233,13 @@ lib/                   — Core business logic
                          for migrated tables; in-tree _PK_MAP entries are gone,
                          leaving only external tofu-trading tables.
     _wrappers.py       — Uniform execute() / fetchone() / fetchall() API
-routes/                — Quart Blueprints. Top-level: chat (+ chat_queue / chat_human_io /
-                         chat_tool_state side-effect modules), conversations (+ _search /
-                         _compaction), common, desktop, oauth, translate, upload, artifacts,
-                         paper, push, compat_openai, compat_anthropic, api_docs, metrics,
-                         legacy_redirects.
+routes/                — Quart Blueprints. Top-level: chat (+ chat_helpers /
+                         chat_queue / chat_human_io / chat_tool_state / chat_state /
+                         chat_side_effects / chat_task_start / chat_poll_abort —
+                         the chat_send/chat_stream fat-handler seams), conversations
+                         (+ _search / _compaction), common, desktop, oauth, translate,
+                         upload, artifacts, browser, paper, push, compat_openai,
+                         compat_anthropic, api_docs, metrics, legacy_redirects.
   api_v1/              — Headless `/api/v1/*` surface (the canonical API — see §15):
                          agents, agent_run, auth, billing, capabilities, chat,
                          conversations, daily_report, folders, keys, logs, mcp, memory,
@@ -225,7 +251,9 @@ routes/                — Quart Blueprints. Top-level: chat (+ chat_queue / cha
   _task_routes.py      — register_task_routes() factory: auto-generates /poll + /abort
 static/js/             — Frontend (vanilla JS). Unified API client api.js (§3.2.0); large
                          monoliths decomposed (2026-05-28) into subpackages:
-                         core/ (folders, conversations, markdown, safe_html, …),
+                         core/ (folders, conversations, markdown, safe_html,
+                         model_caps — capability-taxonomy bridge, health_stream_timer,
+                         cross_tab_sync, icons, …),
                          ui/ (chat_render, streaming_render, sse_* handlers + pipeline, …),
                          main/ (send pipeline, conv lifecycle, init, …),
                          settings/ (provider_render, key_stats, mcp, oauth, …).
@@ -400,7 +428,7 @@ This is the single seam between frontend and backend. It exists so:
 - migrating an endpoint from legacy → `/api/v1` touches one file;
 - cross-cutting concerns (timeout, error shape, auth) live in one place;
 - the frontend stays a thin renderer, never re-implementing backend logic
-  (see `.tofu/memories/separation-of-concerns-directive.md`).
+  (see `.tofu/skills/separation-of-concerns-directive.md`).
 
 The rule is enforced by `tests/test_frontend_api_isolation.py`, which
 maintains a per-file ratchet (`BASELINE`) of remaining legacy calls.
@@ -905,9 +933,9 @@ Before submitting any code change, verify:
 | Debug endpoint (Planner/Worker/Critic) | `lib/tasks_pkg/endpoint/`, `endpoint_prompts/`, `endpoint_review.py` |
 | Change project file tools | `lib/project_mod/tools.py`, `lib/project_mod/read_tools.py`, `lib/project_mod/write_tools.py` |
 | Read local files (images/PDF/Office) | `lib/file_reader/` (core) → `lib/project_mod/read_tools.py` (`_read_absolute_file`) |
-| Manage memory / stored notes | `lib/memory/storage/`, `lib/memory/tools.py`, `routes/api_v1/memory.py`, on-disk `<project>/.tofu/memories/` (project scope); global memories live in the server store `<data>/memories/global/` |
-| Install Anthropic / OpenClaw / AgentSkills `.zip` packages (drag-and-drop) | `lib/skills/installer.py` → `POST /api/v1/skills/install` (multipart). Packages live as `<project>/.tofu/skills/<name>/SKILL.md` + references/ + scripts/. They are a DIFFERENT NOUN from memories: advertised via the always-visible `<available_skills>` index and loaded on demand with `activate_skill` (progressive disclosure) — NOT mixed into the BM25 / search_memories memory corpus. `install.sh` is **never auto-executed**; surfaced as `install_hints`. |
-| Skills store / curated catalog / file browser | `lib/skills/catalog.py` (curated `SkillCatalogEntry` list), `routes/api_v1/skills.py` (`/api/v1/skills/catalog`, `/api/v1/skills/catalog/install`, `/api/v1/skills/<id>/files`), `static/js/skills.js`, Settings → **Skills** tab. App-Store layout mirrors the MCP tab: search + scope tabs (Catalog / Installed) + category pills + grid + drag-drop zone. Catalog one-click installs download a `.zip` over HTTPS (capped at 50 MB) and feed it to `install_skill_package`. |
+| Manage memory / stored notes (legacy "skills") | `lib/memory/storage.py`, `lib/memory/tools.py`, `routes/memory.py`, on-disk `<project>/.tofu/skills/` (project scope); global memories moved to the server store `<data>/memories/global/` (2026-06) |
+| Install Anthropic / OpenClaw / AgentSkills `.zip` packages (drag-and-drop) | `lib/memory/installer.py` → `POST /api/v1/memory/install` (multipart). Packages live as `<.tofu/skills>/<name>/SKILL.md` + references/ + scripts/. Treated identically to flat `.md` memories by BM25 / search_memories — frontend marks them with a `SKILL` badge. `install.sh` is **never auto-executed**; surfaced as `install_hints`. |
+| Skills store / curated catalog / file browser | `lib/memory/catalog.py` (curated `SkillCatalogEntry` list), `routes/api_v1/memory.py` (`/api/v1/memory/catalog`, `/api/v1/memory/catalog/install`, `/api/v1/memory/<id>/files`), `static/js/skills.js`, Settings → **Skills** tab. App-Store layout mirrors the MCP tab: search + scope tabs (Catalog / Installed) + category pills + grid + drag-drop zone. Catalog one-click installs download a `.zip` over HTTPS (capped at 50 MB) and feed it to `install_skill_package`. |
 | Modify trading features | External `tofu-trading` package (extracted 2026-06) — mounts via `tofu.blueprints` entry point; not in this repo |
 | Reusable agent base (run loop, dispatch, TaskRuntime, push, profiles) | `lib/agent_core/` (facade `__init__.py`; `task_runtime.py`, `push.py`, `events.py`, `profiles.py`) |
 | Per-user billing / wallet / cost ledger | `lib/billing/` (wallet, ledger, pricing, users, payments/), `routes/api_v1/billing.py` |
@@ -1034,8 +1062,7 @@ conversation itself — that's always the DB query above.
   `data/config/` within the project directory — NOT in `~/.chatui/` (legacy global). This means
   multiple copies on the same machine have fully independent configs, databases, and API keys.
   Config files: `data/config/server_config.json`, `data/config/features.json`, `data/config/daily_reports/`.
-  Project-scoped memories are stored under `<project>/.tofu/memories/` and project skill
-  packages under `<project>/.tofu/skills/<id>/` (split 2026-07);
+  Project-scoped memory / skill notes are stored under `<project>/.tofu/skills/`;
   global memories moved (2026-06) to the server-side store `<data>/memories/global/`
   so they are shared across projects and reachable in a project-less chat (the legacy
   `<project>/.tofu/skills/global/` dir is still read and migrated once, idempotently).
@@ -1555,4 +1582,19 @@ in `lib/js_bundler.py` (see §3.2.1) — that hasn't changed.
 
 ---
 
-*Last updated: 2026-07-01 — Same-interface consolidation arc: (1) all six `server_config.json` read-modify-write sites unified onto `json_store.update_json_atomic` (locked RMW, fixes a lost-update race); (2) new shared agent-loop seam `lib/agent_loop.py` (`AbortSignal` + `run_agent_loop`), first adopters paper `report_engine`/`qa_engine`; (3) paper's 3 abort endpoints migrated to `register_task_routes` (poll deferred — see JOURNAL). Prior: 2026-06-11 — Directory-map refresh after the agent-base relocation + trading extraction. `lib/agent_core/` is now the browsable home of the reusable base (run loop, dispatch, endpoint loop, compaction, push hub, `TaskRuntime`, profiles, streaming-event contract); `lib/task_runtime.py` and `lib/push.py` are compatibility shims re-exporting from it. The trading subsystem was extracted to a standalone `tofu-trading` package and now mounts via the `tofu.blueprints` / `tofu.startup` / `tofu.task_runtimes` entry-point groups (`routes/plugin_registry.py`) — no longer in-tree. New in-tree packages: `lib/paper/` (Reading-Mode engine), `lib/billing/` (per-user wallet/ledger/pricing), `lib/orchestration*.py` (declarative multi-agent Studio). Routes reorganized under `routes/api_v1/` as the canonical surface. Frontend monoliths (core.js / ui.js / main.js / settings.js) decomposed into `core/` `ui/` `main/` `settings/` subpackages, with unified `static/js/api.js` as the single backend seam. Prior wave (2026-05-22): Flask→Quart+Hypercorn ASGI migration; `/api/push` WebSocket multiplexer; six shared infrastructure modules; 5 task registries unified onto `TaskRuntime`. Test workflow is now Makefile-driven (`make lint` / `test-unit` / `test-api` / `ci`).*
+*Last updated: 2026-07-24 — Continued strangler-fig decomposition:
+(1) orchestrator/ run_task loop sliced into 7 seam modules (_vu_startup, _prefetch,
+_context_inject, _tool_history, _post_loop, _teardown, _finalize) under pt_03f4cdf1;
+(2) routes/chat.py fat-handlers seam-split into chat_helpers / chat_task_start /
+chat_poll_abort / chat_state / chat_side_effects (+ existing chat_queue /
+chat_human_io / chat_tool_state); (3) new lib/model_info/capability_taxonomy.py is
+the single source of truth for CHAT_EXCLUDED_CAPS + DISPATCHER_NON_CHAT_CAPS, exposed
+via /api/v1/capabilities + /api/v1/server-config and consumed by frontend
+static/js/core/model_caps.js (`isChatModel`); the 6 legacy hardcoded chat filters
+are gone. (4) Frontend tool_rounds.js `_renderUnifiedToolLine` decomposed into 16
+branch-owned helpers under a byte-identity wire-parity harness
+(tests/test_frontend_tool_rounds_wire_parity.py) — a permanent regression guard
+for tool-panel UI. (5) CSS dead-selector sweep pass-2 uses branch-reachability
+judgement (not "rule-internal all-dead") — 323 rules / 32.6 KB removed with
+zero dead-rule bytes remaining per audit script debug/css_style_audit.py.
+Prior: 2026-07-01 — Same-interface consolidation arc: (1) all six `server_config.json` read-modify-write sites unified onto `json_store.update_json_atomic` (locked RMW, fixes a lost-update race); (2) new shared agent-loop seam `lib/agent_loop.py` (`AbortSignal` + `run_agent_loop`), first adopters paper `report_engine`/`qa_engine`; (3) paper's 3 abort endpoints migrated to `register_task_routes` (poll deferred — see JOURNAL). Prior: 2026-06-11 — Directory-map refresh after the agent-base relocation + trading extraction. `lib/agent_core/` is now the browsable home of the reusable base (run loop, dispatch, endpoint loop, compaction, push hub, `TaskRuntime`, profiles, streaming-event contract); `lib/task_runtime.py` and `lib/push.py` are compatibility shims re-exporting from it. The trading subsystem was extracted to a standalone `tofu-trading` package and now mounts via the `tofu.blueprints` / `tofu.startup` / `tofu.task_runtimes` entry-point groups (`routes/plugin_registry.py`) — no longer in-tree. New in-tree packages: `lib/paper/` (Reading-Mode engine), `lib/billing/` (per-user wallet/ledger/pricing), `lib/orchestration*.py` (declarative multi-agent Studio). Routes reorganized under `routes/api_v1/` as the canonical surface. Frontend monoliths (core.js / ui.js / main.js / settings.js) decomposed into `core/` `ui/` `main/` `settings/` subpackages, with unified `static/js/api.js` as the single backend seam. Prior wave (2026-05-22): Flask→Quart+Hypercorn ASGI migration; `/api/push` WebSocket multiplexer; six shared infrastructure modules; 5 task registries unified onto `TaskRuntime`. Test workflow is now Makefile-driven (`make lint` / `test-unit` / `test-api` / `ci`).*

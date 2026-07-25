@@ -20864,3 +20864,67 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
 
   .orch-tpl-menu,.orch-load-menu{position:fixed;left:8px;right:8px;top:auto;min-width:0;max-height:60vh;max-height:calc(var(--vh100,100vh)*0.6)}
 }
+
+
+/* ══════════════════════════════════════
+   Local Engine Preset chooser + per-endpoint model chips
+   (local-deployment rework 2026-07-25)
+   ══════════════════════════════════════ */
+.stg-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  margin-top: 10px;
+}
+.stg-preset-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 14px;
+  background: var(--s-white, #fff);
+  border: 1.5px dashed var(--s-ink, #2a2a2a);
+  border-radius: var(--s-radius, 10px);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  transition: transform .12s ease, box-shadow .12s ease, background .12s ease;
+}
+.stg-preset-tile:hover {
+  background: var(--s-cream, #faf6ee);
+  transform: translateY(-1px);
+  box-shadow: 0 3px 0 var(--s-ink, #2a2a2a);
+}
+.stg-preset-tile:focus-visible {
+  outline: 2px solid var(--s-gold, #b98a2f);
+  outline-offset: 2px;
+}
+.stg-preset-tile .stg-preset-icon { display: inline-flex; }
+.stg-preset-tile .stg-preset-icon svg { display: block; }
+.stg-preset-name { font-weight: 800; font-size: 14px; color: var(--s-ink, #2a2a2a); }
+.stg-preset-desc { font-size: 11.5px; line-height: 1.45; color: var(--s-ink-soft, #6b6250); }
+@media (max-width: 520px) {
+  .stg-preset-grid { grid-template-columns: 1fr; }
+}
+
+/* Per-endpoint served-model chips (auto-detected on blur / probe) */
+.stg-ep-models {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.stg-ep-model-chip {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--s-cream, #faf6ee);
+  border: 1px solid var(--s-line, #d8d0bd);
+  color: var(--s-ink-soft, #6b6250);
+  font-family: ui-monospace, monospace;
+}
+.stg-ep-model-chip.more { font-weight: 800; }
+
+/* Model card — "via <endpoint>" placement chip */
+.stg-mcard-via { font-family: ui-monospace, monospace; }

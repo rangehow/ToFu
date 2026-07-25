@@ -299,6 +299,25 @@ class LLMDispatcher:
             else:
                 endpoint_urls = [base_url] if base_url else []
 
+            # ── Per-endpoint served-model binding ──
+            # ``endpoint_models: {url: [root_model_id, ...]}`` is written by
+            # the Settings probe and by the local health checker. Self-hosted
+            # engines (vLLM / SGLang) serve exactly ONE model per URL, so
+            # fanning every model out to every endpoint misroutes requests
+            # into upstream 404s. An endpoint ABSENT from the map (or mapped
+            # to a falsy list) has no probe data → legacy union fan-out; a
+            # non-empty entry NARROWS that endpoint to the listed root ids.
+            endpoint_binding = {}
+            raw_binding = provider.get('endpoint_models')
+            if isinstance(raw_binding, dict):
+                for bk, bv in raw_binding.items():
+                    if not isinstance(bk, str) or not isinstance(bv, list):
+                        continue
+                    bn = normalize_base_url(bk.strip())
+                    if bn:
+                        endpoint_binding[bn] = {x for x in bv
+                                                if isinstance(x, str) and x}
+
             # Self-hosted endpoints sit on private (or pseudo-private) IPs
             # that corp HTTP proxies can't reach. Pre-register them for
             # proxy bypass so the very first request out of the gate goes
@@ -332,6 +351,23 @@ class LLMDispatcher:
                 if model_entry.get('enabled') is False:
                     logger.debug('[Dispatch] Skipping disabled model %s in provider %s',
                                  model_id, prov_id)
+                    continue
+
+                # ── Endpoint pool for THIS model (root-id binding check) ──
+                # /v1/models never lists aliases, so the binding is keyed by
+                # the ROOT model_id and every alias follows its root's
+                # endpoints. Computed once per entry, before the key/fan-out
+                # loops; an empty pool means no probed endpoint serves this
+                # model → honest absence (no slots) beats guaranteed 404s.
+                if endpoint_binding:
+                    ep_pool = [u for u in (endpoint_urls or [base_url])
+                               if not endpoint_binding.get(u)
+                               or model_id in endpoint_binding[u]]
+                else:
+                    ep_pool = endpoint_urls or [base_url]
+                if not ep_pool:
+                    logger.info('[Dispatch] Model %s skipped: no bound endpoint '
+                                'serves it in provider %s', model_id, prov_id)
                     continue
 
                 self._direct_models.add(model_id)
@@ -430,9 +466,9 @@ class LLMDispatcher:
                         slot_stream_only = alias_cfg.get('stream_only', default_cfg.get('stream_only', False))
 
                         # ★ One slot per (endpoint × key). For non-local providers
-                        #   endpoint_urls collapses to a single entry, preserving
+                        #   ep_pool collapses to a single entry, preserving
                         #   the historical N-key-only behavior.
-                        slot_endpoints = endpoint_urls or [base_url]
+                        slot_endpoints = ep_pool
                         for ep_idx, ep_url in enumerate(slot_endpoints):
                             # Distinguish key_names per endpoint so the slot pool
                             # has stable identifiers and per-key cooldowns don't

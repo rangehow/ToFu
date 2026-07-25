@@ -50,6 +50,9 @@ function _renderProvidersTab() {
     var isManagedOAuth = !!oauthKind;
     if (isManagedOAuth) brand = (oauthKind === 'codex') ? 'openai' : 'claude';
     var isLocal = (brand === 'local');
+    // Local cards created from an engine preset (vLLM / SGLang / Ollama)
+    // show the ENGINE's official mark instead of the generic server stack.
+    var iconBrand = (isLocal && p.engine) ? p.engine : brand;
     var endpointList = (p.endpoints && p.endpoints.length)
       ? p.endpoints
       : (p.base_url ? [p.base_url] : []);
@@ -67,12 +70,15 @@ function _renderProvidersTab() {
 
     // ── Header ──
     html += '<div class="stg-provider-head" onclick="_toggleProviderExpand(this.parentElement)">' +
-      '<div class="stg-provider-icon">' + _brandSvg(brand, 22) + '</div>' +
+      '<div class="stg-provider-icon">' + _brandSvg(iconBrand, 22) + '</div>' +
       '<div class="stg-provider-info">' +
         '<div class="stg-provider-name">' + escapeHtml(p.name || 'Unnamed') + '</div>' +
         '<div class="stg-provider-url">' + escapeHtml(headerSubtitle) + '</div>' +
       '</div>' +
       '<div class="stg-provider-badges">' +
+        (isLocal && p.engine
+          ? '<span class="stg-badge">' + escapeHtml(((typeof _localPresetByEngine === 'function' ? _localPresetByEngine(p.engine) : null) || {}).name || p.engine) + '</span>'
+          : '') +
         (isManagedOAuth
           ? '<span class="stg-badge stg-badge-oauth" title="' + escapeHtml(t('settings.oauthManagedTitle')) + '">' + Icon('plug', 10) + ' ' + escapeHtml(t('settings.oauthManagedBadge')) + '</span>'
           : (isLocal ? _localEndpointBadge(nonEmptyEndpoints)
@@ -267,6 +273,22 @@ function _renderModelCard(provIdx, modelIdx, m) {
       'title="' + escapeHtml(t('settings.disableThinkingHint')) + '">thinking</button>';
   }
   if (m.rpm) html += '<span class="stg-mcard-stat">' + Icon('timer', 11) + ' ' + m.rpm + ' rpm</span>';
+  // Local provider with probe binding → show WHICH endpoint(s) serve this
+  // model. One URL = one model is the whole point of the binding; this chip
+  // makes the placement visible.
+  var _prov = _stgProviders[provIdx] || {};
+  if (_prov.brand === 'local' && _prov.endpoint_models) {
+    var _viaEps = [];
+    Object.keys(_prov.endpoint_models).forEach(function(u) {
+      var l = _prov.endpoint_models[u];
+      if (Array.isArray(l) && l.indexOf(m.model_id) >= 0) _viaEps.push(u);
+    });
+    if (_viaEps.length) {
+      html += '<span class="stg-mcard-stat stg-mcard-via" title="' + escapeHtml(_viaEps.join('\n')) + '">' +
+        'via ' + escapeHtml(_endpointShort(_viaEps[0])) +
+        (_viaEps.length > 1 ? ' +' + (_viaEps.length - 1) : '') + '</span>';
+    }
+  }
   html += '</div>';
 
   // Pricing row — look up real input/output from pricing cache

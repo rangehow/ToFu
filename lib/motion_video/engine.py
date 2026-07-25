@@ -84,19 +84,9 @@ def write_job_manifest(task: dict, *, kind: str, state: str) -> None:
     (the stage-graph checkpoint + per-scene mp4 skip make the re-run resume
     rather than restart).
     """
-    from lib.json_store import write_json_atomic
-    workdir = task.get('workdir') or ''
-    if not workdir:
-        return
-    payload = {k: task.get(k) for k in _MANIFEST_FIELDS if task.get(k) is not None}
-    payload['kind'] = kind
-    payload['state'] = state
-    try:
-        os.makedirs(workdir, exist_ok=True)
-        write_json_atomic(os.path.join(workdir, 'job.json'), payload)
-    except Exception as e:
-        logger.warning('[MotionVideo] job manifest write failed (%s): %s',
-                       task_id_of(task), e)
+    from lib.production.jobs import write_manifest
+    write_manifest(task.get('workdir') or '', task, fields=_MANIFEST_FIELDS,
+                   kind=kind, state=state, log_label='MotionVideo')
 
 
 def task_id_of(task: dict) -> str:
@@ -518,53 +508,32 @@ def resume_interrupted_jobs() -> int:
 
     Best-effort and idempotent: called once at startup. Never raises.
     """
-    from lib.json_store import read_json
     from lib.motion_video._env import motion_root
-    from lib.motion_video.runtime import (_motion_runtime, _new_motion_task,
-                                          _motion_index_get)  # noqa: F401
+    from lib.motion_video.runtime import _motion_runtime, _new_motion_task
+    from lib.production.jobs import resume_running_jobs
 
-    jobs_dir = os.path.join(motion_root(), 'jobs')
-    if not os.path.isdir(jobs_dir):
-        return 0
-    resumed = 0
-    for name in sorted(os.listdir(jobs_dir)):
-        workdir = os.path.join(jobs_dir, name)
-        manifest_path = os.path.join(workdir, 'job.json')
-        if not os.path.isfile(manifest_path):
-            continue
-        m = read_json(manifest_path, default=None)
-        if not isinstance(m, dict) or m.get('state') != 'running':
-            continue
-        task_id = m.get('task_id') or name
-        if _motion_runtime.get(task_id) is not None:
-            continue  # already live (e.g. re-scan) — don't double-spawn
-        try:
-            task = _new_motion_task(
-                task_id, srt_path=m.get('srt_path') or '', workdir=workdir,
-                voice=m.get('voice') or '', speed=m.get('speed'),
-                alignment=m.get('alignment') or 'loose',
-                narration=bool(m.get('narration', True)),
-                quality=m.get('quality') or 'standard',
-                parallel=int(m.get('parallel') or 2),
-                width=int(m.get('width') or 1080),
-                height=int(m.get('height') or 1440),
-                scenes_path=m.get('scenes_path') or '')
-            for k in ('burn_in', 'burn_in_fontsdir', 'topic', 'lang',
-                      'max_scenes', 'paper_hash', 'kind', 'scene_author',
-                      'author_rounds', 'author_token_budget'):
-                if m.get(k) is not None:
-                    task[k] = m[k]
-            _motion_runtime.spawn(task_id, run_motion_task, task)
-            resumed += 1
-            logger.info('[MotionVideo] resumed interrupted job %s (kind=%s)',
-                        task_id, m.get('kind'))
-        except Exception as e:
-            logger.warning('[MotionVideo] failed to resume job %s: %s',
-                           task_id, e, exc_info=True)
-    if resumed:
-        logger.info('[MotionVideo] resumed %d interrupted job(s) on startup',
-                    resumed)
-    return resumed
+    def _respawn(task_id: str, workdir: str, m: dict) -> None:
+        task = _new_motion_task(
+            task_id, srt_path=m.get('srt_path') or '', workdir=workdir,
+            voice=m.get('voice') or '', speed=m.get('speed'),
+            alignment=m.get('alignment') or 'loose',
+            narration=bool(m.get('narration', True)),
+            quality=m.get('quality') or 'standard',
+            parallel=int(m.get('parallel') or 2),
+            width=int(m.get('width') or 1080),
+            height=int(m.get('height') or 1440),
+            scenes_path=m.get('scenes_path') or '')
+        for k in ('burn_in', 'burn_in_fontsdir', 'topic', 'lang',
+                  'max_scenes', 'paper_hash', 'kind', 'scene_author',
+                  'author_rounds', 'author_token_budget'):
+            if m.get(k) is not None:
+                task[k] = m[k]
+        _motion_runtime.spawn(task_id, run_motion_task, task)
+
+    return resume_running_jobs(
+        os.path.join(motion_root(), 'jobs'),
+        is_live=lambda tid: _motion_runtime.get(tid) is not None,
+        respawn=_respawn, log_label='MotionVideo')
 
 
 def run_scene_regen_task(task: dict) -> None:

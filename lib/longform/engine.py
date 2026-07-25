@@ -33,22 +33,15 @@ def _emit(task: dict, event: dict) -> None:
         logger.debug('[Longform] emit failed: %s', e)
 
 
+#: Task fields persisted so a crashed process can re-spawn this job.
+_MANIFEST_FIELDS = ('task_id', 'topic', 'lang', 'depth', 'conv_id', 'workdir')
+
+
 def _write_manifest(task: dict, state: str) -> None:
     """Persist job params so a crashed process can re-spawn this job."""
-    from lib.json_store import write_json_atomic
-    wd = task.get('workdir') or ''
-    if not wd:
-        return
-    try:
-        os.makedirs(wd, exist_ok=True)
-        write_json_atomic(os.path.join(wd, 'job.json'), {
-            'task_id': task.get('task_id'), 'topic': task.get('topic'),
-            'lang': task.get('lang'), 'depth': task.get('depth'),
-            'conv_id': task.get('conv_id') or '', 'workdir': wd,
-            'kind': 'longform-report', 'state': state,
-        })
-    except Exception as e:
-        logger.warning('[Longform] manifest write failed: %s', e)
+    from lib.production.jobs import write_manifest
+    write_manifest(task.get('workdir') or '', task, fields=_MANIFEST_FIELDS,
+                   kind='longform-report', state=state, log_label='Longform')
 
 
 def run_longform_task(task: dict) -> None:
@@ -101,33 +94,20 @@ def run_longform_task(task: dict) -> None:
 
 def resume_interrupted_reports() -> int:
     """Re-spawn report jobs left ``running`` on disk by a crashed process."""
-    from lib.json_store import read_json
-    from lib.longform.runtime import (_longform_runtime, _new_longform_task,
-                                      _longform_task_id)  # noqa: F401
+    from lib.longform.runtime import _longform_runtime, _new_longform_task
+    from lib.production.jobs import resume_running_jobs
 
-    jobs_dir = os.path.join(longform_root(), 'jobs')
-    if not os.path.isdir(jobs_dir):
-        return 0
-    resumed = 0
-    for name in sorted(os.listdir(jobs_dir)):
-        wd = os.path.join(jobs_dir, name)
-        m = read_json(os.path.join(wd, 'job.json'), default=None)
-        if not isinstance(m, dict) or m.get('state') != 'running':
-            continue
-        tid = m.get('task_id') or name
-        if _longform_runtime.get(tid) is not None:
-            continue
-        try:
-            task = _new_longform_task(
-                tid, topic=m.get('topic') or '', workdir=wd,
-                lang=m.get('lang') or 'zh', depth=m.get('depth') or 'standard',
-                conv_id=m.get('conv_id') or '')
-            _longform_runtime.spawn(tid, run_longform_task, task)
-            resumed += 1
-            logger.info('[Longform] resumed interrupted report %s', tid)
-        except Exception as e:
-            logger.warning('[Longform] resume of %s failed: %s', tid, e)
-    return resumed
+    def _respawn(task_id: str, workdir: str, m: dict) -> None:
+        task = _new_longform_task(
+            task_id, topic=m.get('topic') or '', workdir=workdir,
+            lang=m.get('lang') or 'zh', depth=m.get('depth') or 'standard',
+            conv_id=m.get('conv_id') or '')
+        _longform_runtime.spawn(task_id, run_longform_task, task)
+
+    return resume_running_jobs(
+        os.path.join(longform_root(), 'jobs'),
+        is_live=lambda tid: _longform_runtime.get(tid) is not None,
+        respawn=_respawn, log_label='Longform')
 
 
 def start_report_job(topic: str, *, lang: str = 'zh', depth: str = 'standard',

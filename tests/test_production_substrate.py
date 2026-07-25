@@ -136,9 +136,14 @@ def test_design_note_status_matches_reality():
 
 
 def test_production_package_docstring_records_partial_scope():
-    """P6 is deliberately partial (stages only). The package must SAY so, so a
-    later reader doesn't assume ProductionRuntime/deliverable already exist."""
+    """The substrate is deliberately PARTIAL. The package must SAY which
+    pieces are absent, so a later reader doesn't assume they exist or think
+    their absence was an oversight.
+
+    P6 extracted the two clusters the P7 measurement justified
+    (ProductionRuntime + job manifest/resume); `deliverable` stayed out
+    because the third sample didn't need it."""
     import lib.production as prod
     doc = prod.__doc__ or ''
-    assert 'ProductionRuntime' in doc
-    assert 'NOT here yet' in doc
+    assert 'deliverable' in doc
+    assert 'NOT here' in doc

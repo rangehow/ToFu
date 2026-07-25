@@ -1,5 +1,13 @@
 # Project Journal
 
+### 2026-07-25 — 项目面板「最近搜索 × 按钮不居中」根修:base `.modal input` 出血干掉输入框专属规则(commit `75bc677b`,2 文件 +116/-3,特异性 14/14 + 行为 6/6 绿含 NC 双中和)。
+- **现象(owner 截图):** 项目 Co-Pilot 面板 Recent 搜索框的清除 × 明显掉在输入框中轴线下方(~8px),快贴底边。
+- **根因(特异性数学,非渲染玄学):** styles.css:2959 的 base `.modal input` 巨规则((0,1,1):margin-bottom:16px / padding:10px 12px / font-size:13px)压过裸 `.recent-search-input`(0,1,0)。16px 下边距把 `.recent-search` 容器撑到 48px,输入框(32px)顶对齐,而 × 按钮锚在容器 top:50% → 比输入框真中线低 8px;padding 出血顺带打死为 × 留位的 30px 右内边距。同模态的 `.mp-add-row .mp-path-input`(0,2,0)早就用链式选择器躲过同一出血,搜索框漏了。
+- **修复:** 三个选择器链化为 `.recent-search .recent-search-input`(0,2,0 > 0,1,1),正常级联赢回,零 !important——与 memory-modal/recent-tofu 两次先例同源。
+- **守卫:** test_recent_search_tofu_specificity.py 扩 3 测——padding/font-size 对出血的解析胜诉、(0,2,0)>(0,1,1) 数学编码、NC 双中和(盘上退链 → padding 翻回 10px 12px → 字节级还原)。margin-bottom 本身不可解析(引擎不展开 `margin: 0` 简写),以 padding/font-size 作同场战役证人。
+- **共享 HEAD 事故第四弹(按既有纪律处理):** 首轮 CSS 编辑落地后、commit 前,sibling 提交 `ba77ab0e`(brain-panel)把我的 worktree 编辑冲掉(status clean、文件回旧文)。零信息损失,内容全在对话里;确认活跃 sibling(podcast 设计)不碰 styles.css 后原样重放,**测试跑完立即 commit**,无任何插入工作。
+- **生效边界(诚实):** 纯 CSS 级联修复,静态解析证胜诉;真实浏览器视觉确认待 owner 硬刷新后过目。暗/亮主题下同规则现在也真正生效(font-size 12.5px、背景、30px 右 padding),皆为该规则的设计意图。
+
 ### 2026-07-25(续2) — e2e Layer 2b 落地:默认路径(display-only + 手动 resume)双实例测试 + 全套 flake 根修(commit 见下,1 文件 +289/-71,套件 **6/6 ×3 复跑稳定**(41.9/42.1/41.5s),相邻 76/76,collect **8568** 0 err)。
 - **口径修正(owner 点名):** `TOFU_BOOT_AUTO_DISPATCH` 是 DEFAULT OFF(owner-mandated)——开箱重启只标 interrupted + 打 killed 章,**不会自己修复**;真实用户的修复路径是「手动点继续」。Layer 2 验的是 opt-in 自动自愈,默认路径此前零覆盖。测试文件 docstring 与汇报口径已写明:自动自愈是 opt-in,默认是 display-only + 手动 resume。
 - **Layer 2b(默认路径):** 实例 B **不设** env 启动(注意:conftest 会话级设了 TOFU_BOOT_AUTO_DISPATCH=1,os.environ.copy() 会泄漏——manual/skip 模式显式 pop,首红即此坑)→ 断言「浮现但不派发」:descriptor 含本 conv(计划存在≠派发,门控在 run_deferred_boot_dispatch 消费侧,我最初的 descriptor-is-None 断言把两者混了,修正)+ 零 auto carrier + 残尸 interrupted + killed 章 + attempts=0 + **零第三任务行**。然后走前端真实手动恢复线序(main_regen_continue.js:continueAssistant):`POST /api/v1/chat/continue` → 本例命中 checkpoint 分支(无工具轮但 content 前缀可续)→ taskId → SSE 到 done;断言 resume config 保住 chatMode='studio' + projectPath、**recovered_marker.txt 真实落盘字节精确**(决定性:手动修复没退化成纯文本)、done.committedMessage 与 DB 尾部逐字节一致、父进程独立重读。

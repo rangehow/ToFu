@@ -79,10 +79,31 @@ function _debugRecordSnapshot(taskId, rec) {
   if (!taskId || !rec) return;
   const t = (_debugRequests[taskId] = _debugRequests[taskId] ||
     { rounds: {}, roundOrder: [], states: [] });
-  if (rec.kind === "state") { t.states.push(rec); return; }
-  const key = String(rec.roundNum);
-  if (!(key in t.rounds)) t.roundOrder.push(key);
-  t.rounds[key] = rec;
+  if (rec.kind === "state") {
+    t.states.push(rec);
+  } else {
+    const key = String(rec.roundNum);
+    if (!(key in t.rounds)) t.roundOrder.push(key);
+    t.rounds[key] = rec;
+  }
+  /* Memory cap (owner P2 constraint): full payloads only for the CURRENT
+   * task — every OTHER task degrades to metadata-only (messages/tools
+   * stripped, counts kept, `_stripped` flag set), and the log is capped at
+   * 20 tasks. Request payloads stay re-fetchable on demand from
+   * /api/v1/tasks/<id>/requests/<round> (the server-authoritative source). */
+  for (const id of Object.keys(_debugRequests)) {
+    if (id === taskId) continue;
+    const o = _debugRequests[id];
+    for (const k of Object.keys(o.rounds)) {
+      const r = o.rounds[k];
+      if (r.messages) { r.messages = null; r.tools = null; r._stripped = true; }
+    }
+    for (const s of o.states) {
+      if (s.messages) { s.messages = null; s.tools = null; s._stripped = true; }
+    }
+  }
+  const ids = Object.keys(_debugRequests);
+  if (ids.length > 20) delete _debugRequests[ids[0]];
 }
 function clearDebug() {
   document.getElementById("debugContent").innerHTML = "";
@@ -219,6 +240,13 @@ function _debugMsgIdentity(msg) {
   return "r:" + role + ":" + text.length + ":" + (h >>> 0).toString(36);
 }
 function toggleDebug() {
+  /* P2: the global floating box is retired — the debug entry now opens the
+   * Request Inspector drawer (right-side, conversation-scoped). Falls back
+   * to the legacy floating panel only if the inspector failed to load. */
+  if (typeof toggleRequestInspector === "function") {
+    toggleRequestInspector();
+    return;
+  }
   debugVisible = !debugVisible;
   document
     .getElementById("debugPanel")
@@ -237,6 +265,10 @@ function toggleDebug() {
 // Close the debug panel (top-right ✕). Distinct from clearDebug(), which only
 // wipes content — the ✕ must actually hide the panel.
 function closeDebug() {
+  if (typeof closeRequestInspector === "function") {
+    closeRequestInspector();
+    return;
+  }
   debugVisible = false;
   const panel = document.getElementById("debugPanel");
   if (panel) panel.classList.remove("visible");
@@ -255,6 +287,9 @@ function closeDebug() {
 // — newly switched-to old conversations showed an empty debug panel until
 // the user sent a message and the streaming pipeline emitted a snapshot.
 function restoreDebugForConv(convId) {
+  /* P2 hook: refresh the Request Inspector's task list on conv switch
+   * (no-op while the drawer is closed). */
+  if (typeof _riOnConvSwitch === "function") _riOnConvSwitch(convId);
   const cached = _debugCache[convId];
   if (cached && cached.messages && cached.messages.length > 0) {
     showMessagesInDebug(cached.messages, cached.label, false, undefined, cached.tools, cached.approx);

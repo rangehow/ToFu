@@ -376,6 +376,7 @@ _BUNDLE_FILES = [
     'core/folders.js',
     'core/cost.js',
     'core/debug_panel.js',
+    'core/request_inspector.js',  # after debug_panel.js (calls showMessagesInDebug at runtime)
     'core/escape_html.js',
     'core/safe_html.js',   # after escape_html.js (uses escapeHtml), before ui/ consumers
     'core/error_envelope.js',

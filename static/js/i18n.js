@@ -885,6 +885,19 @@ var _i18n = {
   'debug.brainSummaryTitle': { zh: '本次任务向模型注入的项目大脑上下文块', en: 'Project Brain context blocks injected into the model this task' },
 
   // ══════════════════════════════════════
+  //  Request Inspector (P2 drawer)
+  // ══════════════════════════════════════
+  'ri.title': { zh: '请求检视器', en: 'Request Inspector' },
+  'ri.requests': { zh: '请求', en: 'requests' },
+  'ri.states': { zh: '状态镜像', en: 'State mirrors' },
+  'ri.stateNote': { zh: '非 LLM 请求', en: 'not LLM requests' },
+  'ri.empty': { zh: '该会话暂无任务记录', en: 'No tasks recorded for this conversation' },
+  'ri.loading': { zh: '加载中…', en: 'Loading…' },
+  'ri.expired': { zh: '事件日志已过期（>6h）或不存在', en: 'Event log expired (>6h) or missing' },
+  'ri.coveragePartial': { zh: '此任务为 endpoint 驱动：Planner/Critic 调用未纳入检视', en: 'Endpoint-driven task: Planner/Critic calls are not captured' },
+  'ri.live': { zh: '在飞', en: 'live' },
+
+  // ══════════════════════════════════════
   //  Settings — Tabs
   // ══════════════════════════════════════
   'settings.title': { zh: '设置', en: 'Settings' },

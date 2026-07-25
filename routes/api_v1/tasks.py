@@ -26,6 +26,9 @@ from flask import Blueprint, request
 from lib.api_response import (
     api_bad_request, api_not_found, api_ok, sse_response,
 )
+from lib.api_response import (
+    api_bad_request, api_internal_error, api_not_found, api_ok, sse_response,
+)
 from lib.log import audit_log, get_logger
 from lib.openapi import api_meta
 from lib.request_parser import optional_bool, parse_body, require_str
@@ -176,6 +179,64 @@ def task_events(task_id):
     return api_ok(rt.poll(task_id, cursor=cursor))
 
 
+@api_v1_tasks_bp.route('/api/v1/tasks/by-conv/<conv_id>', methods=['GET'])
+@require_scope('tasks')
+@api_meta(summary='Request Inspector: task rows for a conversation',
+          tags=['tasks'], scope='tasks')
+def tasks_by_conv(conv_id):
+    """Task rows for the Request Inspector drawer (live registry +
+    task_results + exact kind-counted snapshot tallies)."""
+    from lib.tasks_pkg.request_inspector import list_conv_tasks
+    try:
+        return api_ok(list_conv_tasks(conv_id))
+    except Exception as e:
+        logger.error('[api_v1.tasks] by-conv failed for conv=%s: %s',
+                     conv_id[:8], e, exc_info=True)
+        return api_internal_error('internal_error')
+
+
+@api_v1_tasks_bp.route('/api/v1/tasks/<task_id>/requests', methods=['GET'])
+@require_scope('tasks')
+@api_meta(summary='Request Inspector: metadata-only request rows',
+          tags=['tasks'], scope='tasks')
+def task_requests(task_id):
+    """Fold the task's persisted event log into request/attempt/state rows.
+
+    METADATA-ONLY (design doc §3.3, frozen): request rows never carry the
+    message payload — fetch it per round via ``/requests/<round_num>``.
+    Returns 200 with ``eventsAvailable:false`` for expired (>6h) or
+    unknown tasks so the UI can show an honest empty state."""
+    from lib.tasks_pkg.request_inspector import fold_request_log
+    try:
+        return api_ok(fold_request_log(task_id))
+    except Exception as e:
+        logger.error('[api_v1.tasks] requests fold failed for task=%s: %s',
+                     task_id[:8], e, exc_info=True)
+        return api_internal_error('internal_error')
+
+
+@api_v1_tasks_bp.route('/api/v1/tasks/<task_id>/requests/<round_num>',
+                       methods=['GET'])
+@require_scope('tasks')
+@api_meta(summary='Request Inspector: full payload for one round',
+          tags=['tasks'], scope='tasks')
+def task_request_payload(task_id, round_num):
+    """On-demand full payload (messages + tools + params) for one
+    request-kind snapshot round. 404 when the round has no request-kind
+    snapshot (expired, state-only, or unknown)."""
+    from lib.tasks_pkg.request_inspector import get_request_payload
+    try:
+        payload = get_request_payload(task_id, round_num)
+    except Exception as e:
+        logger.error('[api_v1.tasks] request payload failed for task=%s '
+                     'round=%s: %s', task_id[:8], round_num, e, exc_info=True)
+        return api_internal_error('internal_error')
+    if payload is None:
+        return api_not_found('Round snapshot not found')
+    return api_ok(payload)
+
+
+@api_v1_tasks_bp.route('/api/v1/tasks/<task_id>/stream', methods=['GET'])
 @api_v1_tasks_bp.route('/api/v1/tasks/<task_id>/stream', methods=['GET'])
 @require_scope('tasks')
 @api_meta(summary='Server-Sent Events stream of task events',

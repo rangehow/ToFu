@@ -668,15 +668,27 @@
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
     </button>
     <div class="turn-nav" id="turnNav"></div>
-    <div class="debug-panel" id="debugPanel">
-      <div class="debug-header">
-        <span id="debugTitle">Messages</span>
-        <div style="display:flex;gap:4px;align-items:center;">
-          <button class="debug-clear" id="debugCopyBtn" onclick="copyDebugContent()" data-i18n-title="debug.copyAllTooltip" title="复制全部">Copy</button>
+    <div class="ri-drawer" id="riDrawer" style="display:none">
+      <div class="ri-side">
+        <div class="ri-side-header">
+          <span class="ri-title" data-i18n="ri.title">请求检视器</span>
           <button class="debug-clear icon-box" onclick="closeDebug()" title="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></button>
         </div>
+        <div class="ri-task-list" id="riTaskList"></div>
+        <div class="ri-round-list" id="riRoundList"></div>
       </div>
-      <div id="debugContent"></div>
+      <div class="ri-main">
+        <div class="debug-panel" id="debugPanel">
+          <div class="debug-header">
+            <span id="debugTitle">Messages</span>
+            <div style="display:flex;gap:4px;align-items:center;">
+              <button class="debug-clear" id="debugCopyBtn" onclick="copyDebugContent()" data-i18n-title="debug.copyAllTooltip" title="复制全部">Copy</button>
+              <button class="debug-clear icon-box" onclick="closeDebug()" title="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></button>
+            </div>
+          </div>
+          <div id="debugContent"></div>
+        </div>
+      </div>
     </div>
     <div class="input-area">
       <div class="input-inner">
@@ -1854,6 +1866,7 @@
 <script defer src="static/js/core/folders.js?v=20260528a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/core/cost.js?v=20260528a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/core/debug_panel.js?v=20260528a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+<script defer src="static/js/core/request_inspector.js?v=20260725a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/core/escape_html.js?v=20260528a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/core/safe_html.js?v=20260601a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/core/error_envelope.js?v=20260528a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>

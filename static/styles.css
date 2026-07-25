@@ -536,6 +536,47 @@ html[data-rail] .folder-quickadd{display:none}
 [data-theme="light"] .debug-msg-block.debug-msg-compacted{border-left-color:#b45309}
 [data-theme="tofu"] .debug-compact-badge{color:#B8884A;background:rgba(184,136,74,0.14);border-color:rgba(184,136,74,0.45)}
 [data-theme="tofu"] .debug-msg-block.debug-msg-compacted{border-left-color:#B8884A}
+
+/* ── Request Inspector drawer (P2, docs/DEBUG_PANEL_REDESIGN.md) ──
+   Right-side drawer: squeezes chatinner (never covers it on desktop),
+   full-screen overlay on mobile. The legacy .debug-panel lives INSIDE
+   the drawer's right pane and is re-posed static here. */
+.ri-drawer{position:fixed;top:0;right:0;bottom:0;width:min(780px,94vw);z-index:60;display:flex;background:var(--bg-secondary,#17171d);border-left:1px solid var(--border);box-shadow:-10px 0 28px rgba(0,0,0,0.4);font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-secondary)}
+.ri-side{width:264px;flex-shrink:0;display:flex;flex-direction:column;border-right:1px solid var(--border);min-height:0}
+.ri-side-header{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:1px solid var(--border)}
+.ri-title{color:var(--text-primary);font-weight:600;font-size:12px}
+.ri-task-list{overflow-y:auto;max-height:38%;border-bottom:1px solid var(--border);flex-shrink:0}
+.ri-round-list{overflow-y:auto;flex:1;min-height:0}
+.ri-main{flex:1;min-width:0;overflow-y:auto}
+.ri-drawer .debug-panel{position:static;width:auto;max-width:none;max-height:none;overflow:visible;background:transparent;border:none;border-radius:0;display:block;padding:10px;z-index:auto;color:var(--text-secondary)}
+.ri-empty{padding:14px 10px;color:var(--text-tertiary);font-style:italic;text-align:center;opacity:.8}
+.ri-task{padding:7px 10px;border-bottom:1px solid var(--border);cursor:pointer;border-left:2px solid transparent}
+.ri-task:hover{background:rgba(128,128,160,0.07)}
+.ri-task.ri-sel{background:rgba(110,86,207,0.12);border-left-color:var(--accent)}
+.ri-task-top{display:flex;align-items:center;gap:6px}
+.ri-task-id{color:var(--text-primary);font-weight:600}
+.ri-task-time{margin-left:auto;color:var(--text-muted);font-size:10px}
+.ri-task-sub{margin-top:2px;color:var(--text-tertiary);font-size:10px}
+.ri-live-badge{padding:0 5px;font-size:9px;font-weight:600;color:#34d399;background:rgba(52,211,153,0.12);border:1px solid rgba(52,211,153,0.35);border-radius:3px}
+.ri-expired{color:var(--text-muted);font-style:italic}
+.ri-round{padding:7px 10px;border-bottom:1px solid var(--border);cursor:pointer;border-left:2px solid transparent}
+.ri-round:hover{background:rgba(128,128,160,0.07)}
+.ri-round.ri-sel{background:rgba(110,86,207,0.12);border-left-color:var(--accent)}
+.ri-round-top{display:flex;align-items:center;gap:6px}
+.ri-round-n{color:var(--accent);font-weight:700}
+.ri-round-model{color:var(--text-primary)}
+.ri-round-meta{margin-left:auto;color:var(--text-tertiary);font-size:10px}
+.ri-round-attempts{margin-top:3px;display:flex;flex-wrap:wrap;gap:4px}
+.ri-attempt{padding:1px 6px;font-size:9.5px;color:var(--text-tertiary);background:rgba(128,128,160,0.10);border:1px solid var(--border);border-radius:3px}
+.ri-coverage-chip{margin:8px 10px;padding:6px 9px;background:rgba(255,183,77,0.10);border:1px solid rgba(255,183,77,0.35);border-radius:5px;font-size:10px;color:#ffb74d;display:flex;align-items:center;gap:5px}
+.ri-states-head{padding:8px 10px 4px;color:var(--text-muted);font-size:10px;border-top:1px dashed var(--border);margin-top:6px}
+.ri-state-row{padding:4px 10px;color:var(--text-muted);font-size:10px;font-style:italic}
+body.ri-open .chat-container{margin-right:min(780px,94vw);transition:margin-right .22s ease}
+@media (max-width:900px){
+  body.ri-open .chat-container{margin-right:0}
+  .ri-drawer{width:100vw;border-left:none}
+  .ri-side{width:208px}
+}
 .input-area{flex-shrink:0;background:var(--bg-primary);padding:12px 24px 20px;border-top:1px solid var(--border)}.input-inner{max-width:var(--toolbar-w,820px);margin:0 auto;transition:max-width .4s ease}.image-previews{display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap}.img-preview{position:relative;width:64px;height:64px;border-radius:var(--radius-sm);overflow:hidden;border:1px solid var(--border);cursor:pointer;transition:border-color .2s,box-shadow .2s,transform .12s}.img-preview:hover{border-color:var(--accent)}.img-preview[data-img-idx]{cursor:pointer}.img-preview[data-img-idx]:active{cursor:pointer}.img-preview img{width:100%;height:100%;object-fit:cover}.img-preview .remove-img{position:absolute;top:2px;right:2px;width:18px;height:18px;background:rgba(0,0,0,0.7);color:white;border:none;border-radius:50%;font-size:10px;cursor:pointer;display:flex;align-items:center;justify-content:center}.img-preview .img-size{position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,0.7);color:#aaa;font-size:9px;text-align:center;padding:1px 0;font-family:'JetBrains Mono',monospace}.img-preview.pdf-page{border-color:rgba(207,167,56,0.35)}.img-preview .pdf-badge{position:absolute;top:2px;left:2px;background:rgba(207,167,56,0.9);color:#fff;font-size:7px;font-weight:700;padding:1px 4px;border-radius:3px;font-family:'JetBrains Mono',monospace}.img-preview.img-dragging{opacity:.4;cursor:move}.img-preview[data-img-idx].img-drop-target{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent);transform:translateY(-2px) scale(1.04)}
 .img-preview.img-processing{cursor:default}.img-preview .img-processing-overlay{position:absolute;inset:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(1px)}.img-preview .img-processing-spinner{width:20px;height:20px;border:2px solid rgba(255,255,255,0.35);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite}
 

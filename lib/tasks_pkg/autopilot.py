@@ -994,6 +994,12 @@ def maybe_run_autopilot(task: dict) -> dict | None:
             logger.debug('[Autopilot %s] vu_start using task-field fallback '
                          'parentMessage (no _committedMsg; finishReason=%s)',
                          tid, _fr)
+    # EAGERLY emit VU_START *before* run_virtual_user below: the VU LLM call
+    # can stall for tens of seconds on a rate-limited first token, and the
+    # client must lazily stand up the VU bubble (warm-up placeholder / retry
+    # chip) from this frame alone. Emitting it after the call would leave the
+    # user staring at nothing during exactly the window where the chip is the
+    # only liveness signal.
     _start_evt = build_event(EventType.AUTOPILOT_VU_START, vuMsgId=vu_msg_id)
     if _parent_msg:
         _start_evt['parentMessage'] = _parent_msg

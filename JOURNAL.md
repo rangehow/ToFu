@@ -1,3 +1,10 @@
+### 2026-07-25(续36) — toio 400 补刀:live 网关双向实证 + CACHE_FIX_GEN 升代(commit `58f29ab5`,1 文件;事故两套件 29/29,collect **9038** 0 err)
+- **本会话(owner 直接点名「读在线文档、自己测、再修」)定位路径:** 读 logs/error.log 拿到未掩码 vendor 原话(`D:sankuai_key_0:yuju-claude-opus-5-evaDaily`,R2 带工具调用必挂,fallback 也救不回)→ 查 server_config 确认该模型走 **OpenAI 协议**(protocol=null,`/v1/openai/native`),不经过自家 `openai_body_to_anthropic`(那条路的 hoist 本就正确)→ 结论:滚动尾锚打在 tool 消息 content 块上,网关 OpenAI→Anthropic 翻译把标记原样塞进 `tool_result.content[*]`,vendor 硬拒。
+- **文档核实(两手独立来源):** Anthropic 规则——`cache_control` 必须直接放在 `tool_result` 块上,不得在其 content 子块内(vendor 400 原话即规则);langchain-ai/langchain#34920 同款事故(Translator 透传 → `invalid_cache`,修法 Option A = 提升到 tool_result 层级),与我们的网关行为逐字吻合。
+- **增量证据(live 网关探测,此前只有离线证):** 用配置 key 直打 `aigc.sankuai.com/v1/openai/native/chat/completions`:①**修复前形状**(tool 消息 content 块带 `cache_control`)→ 逐字节复现生产 400 `tool_result.content.0.cache_control: cache_control may not be specified...`;②**修复后形状**(tool 干净 + 尾锚落 assistant 文本块)→ **HTTP 200**。第一次探测撞网关反测试消息守卫(403,「no need to send test messages」),换真实感对话后通过——记一笔:该网关有反探针启发式。
+- **过程(共享树常态):** 验证中途 sibling(ms0e5jwqbdzsi5,续34)落地 `6fe3f9ca` 完整三连修,与本会话独立得出的诊断+修法逐点一致;我曾 save-aside 覆盖 chat.py 准备部分暂存,diff 证实内容与 sibling 提交逐字节相同 = 零损耗。
+- **升代:** `CACHE_FIX_GEN 5→6`(6fe3f9ca 漏升,boot banner 部署自报用)。**生效边界:** 纯后端,需重启服务器生效。**预存在红(未代修):** TestMidHistoryAnchor×2(续34 已 stash A/B 实证= _MID_TRAIL 变更后的测试漂移)。
+
 ### 2026-07-25(续35) — pt_08a6d1afe79c4dfd 收口:desktop wire 前缀错配根修 + 死代码清除 + 契约守卫转正式(commit 见下,3 文件 +21/-101;NEUTER 实证剥修复即红,五环 82/82 + misc 环 40/40,collect **9036** 0 err)
 - **brain 自主派发**我自己开的潜伏票(续31 设计批时按 owner 纪律单独立票,不进设计批)。修复方向早已被 owner 拍板的硬约束①覆盖(docs/REMOTE_WORKTREE_DESIGN.md §3.1:wire type=完整工具名,禁剥/加前缀),无需再问。
 - **根修(一行级):** `_run_desktop`(lib/tasks_pkg/handlers/misc/_agents.py)不再 `replace('desktop_', '', 1)`,wire cmd_type=完整工具名逐字入队,与 agent 侧 COMMANDS 键、以及既有钉 `test_browser_async_poll.py:216`(桥按全名投递)三方对齐。docstring 固化跨进程不变式(不引用票号,只写契约)。

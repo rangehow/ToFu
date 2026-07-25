@@ -165,6 +165,11 @@ check('nc_pattern_applied', _applied);
 (0, eval)(fs.readFileSync(process.argv[4], 'utf8'));  // safe_html.js
 (0, eval)(fs.readFileSync(process.argv[3].replace('escape_html.js', 'translation_model.js'), 'utf8'));
 (0, eval)(fs.readFileSync(process.argv[3].replace('core/escape_html.js', 'ui/translation_indicator.js'), 'utf8'));
+// core/turn_settlement.js — chat_render's Continue-button gate delegates to
+// computeTurnSettlement + continueButtonForSettlement (chat_render.js:~1596);
+// without this module the typeof-guard falls back to {show:false} and NO
+// continue/regenerate button is ever emitted.
+(0, eval)(fs.readFileSync(process.argv[3].replace('escape_html.js', 'turn_settlement.js'), 'utf8'));
 (0, eval)(chatSrc);
 
 if (typeof renderMessage !== 'function') {

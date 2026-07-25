@@ -1,9 +1,13 @@
 # Project Journal
 
 
-### 2026-07-25(续17) — pt_26e934aa 收口
-# Project Journal
-
+### 2026-07-25(续19) — 设置矩阵两连:弹窗裁列无滚动提示根修 + 行/列/格局部探测(commit `20dde235`,9 文件 +859/-19;新套件后端 11/11 + 前端 7/7(27 探针含 NEUTER),矩阵环 55/55,settings/provider/bundler 环 128 过 4 跳,collect **8776** 0 err)。
+- **现象(owner 截图):** ①服务商矩阵 3 个密钥时 #3 列被弹窗右缘拦腰裁断,且 macOS 覆盖式滚动条不滚不见,用户无从得知右侧还有列;②探测只能全网格一把梭,想重测一行/一列/一格只能整盘重跑。
+- **遮挡根修(四件套):** ①`.stg-matrix-scroll` 自定义横向滚动条**常驻可见**(自定义滚动条豁免 macOS 自动隐藏)+ Lea-Verou 纯 CSS 滚动阴影(可滚方向才出阴影);②弹窗自适应加宽:`_fitMatrixPanelWidth()` 在渲染后测量可见矩阵容器溢出 → `.settings-panel.stg-matrix-wide` 860→min(1240px,96vw)(仅桌面媒体查询内,移动端不动),切 tab/防抖 resize 重估,**隐藏矩阵(非活动 tab/折叠卡片,clientWidth=0)不参与加宽**;③长模型 id 省略号收敛(200/220px,tooltip 兜底全文),把宽度还给密钥列。
+- **局部探测(与 ✎ 编辑按钮同一 hover-reveal 语言,不乱):** 列头 ⚡(常驻淡显)/行首 ⚡(hover 显现,root+alias 各行独立)/格内=已有判定 pip 本身可点重探、无 pip 时 hover 显现左下 ⚡;探测中目标位转圈、其余触发器禁用(后端单任务约束)。
+- **后端合并语义(关键设计):** `probe-cells/start` 加 `only={key_idxs?,model_ids?}`——过滤 work 清单;**跳过缓存直返**(局部探测本意就是刷新这些格);从磁盘快照**种子合并**(裁剪到当前 key×id 空间,防已删模型/密钥变幽灵 pip);`done_count` 改为按本次完成递增(种子不充进度),summary 按合并集从首帧即计入。
+- **守卫:** 后端 11 测(行/列/格过滤/空交集 400/空 only=全网格/种子合并/幽灵裁剪/有缓存也起新跑/无 only 直返回归钉/force 全网格回归钉/进度与摘要引擎级双钉);前端 node harness 驱真 access_matrix.js 27 探针(三入口渲染与 dispatch 参数/探测中转圈与禁用/terminal ingest 清 scope/合并保留本地格/full-retest 回归钉/运行中拒第二次/面板加宽双向)+ **NEUTER**(剥 `if (only) body.only = only;` → dispatch 探针转红)+ CSS 静态钉(滚动条/阴影层/加宽媒体查询/zap 三位/省略号)。过程坑:我新加的 resize IIFE 在旧 nonchat harness(node 无 DOM 事件 API)eval 即炸 → 照文件既有 `typeof` 守卫风格修复,非改别人测试。
+- **生效边界(诚实):** 浏览器级像素验证本环境做不了(两个 chromium 二进制都缺 libatk 系统库、无系统 chrome),滚动条/阴影效果由 CSS 静态钉 + 标准技术背书,非运行时实测;后端语义与前端行为由 18 个自动化测试覆盖。JS 走 bundle、无热重载——**需重启服务器 + 浏览器硬刷新**生效。顺带修复 JOURNAL 刊头事故第四弹(孤儿续17标题行 + 重复 `# Project Journal`,续17 正文原样保留在续18 之后)。
 
 ### 2026-07-25(续18) — Motion video P1 全链交付(epic `pt_766fbe4d`,owner 拍板「A 全绿推进」,2 commit:P1 主体 `1960ee37` 19 文件 +2441/-16 + env 自举加固 `8ccc158a` 8 文件 +224/-21;新套件 **35/35** 含双 NEUTER,相邻 skills+registry 74 绿,collect **8756** 0 err,真端到端渲染实证)。
 - **源头:** owner 要求吸收 vibe-motion/auto-motion(SRT→MG 动画视频)并超越。仓库已 clone 至同级目录;前序会话已落设计稿 `docs/MOTION_VIDEO_DESIGN.md`(a0c2c984)+ P0 环境全链验证(51bdd540:~3.5× 实时基线);owner 在看板一键拍板 A 后 brain 派回给我。

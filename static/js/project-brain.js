@@ -175,8 +175,9 @@
         if (lbl) lbl.textContent = open
           ? (btn.getAttribute('data-less') || 'Show less')
           : (btn.getAttribute('data-more') || 'Show more');
-        // Lazy-on-expand: translate the now-visible long text (no-op when the
-        // content-translation overlay is off / already-target / cached).
+        // Clamps are translated eagerly on render; this expand-time re-apply
+        // is just a safety net (compare-before-swap makes it a no-op when the
+        // overlay already painted the translation).
         if (open && typeof ProjectBrainI18n !== 'undefined' &&
             ProjectBrainI18n && typeof ProjectBrainI18n.apply === 'function') {
           ProjectBrainI18n.apply(clamp);

@@ -19992,6 +19992,14 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
   --pb-card-hover:color-mix(in srgb,var(--bg-hover) 70%,var(--bg-tertiary));
   --pb-green:#22c55e; --pb-red:#ef4444; --pb-amber:#eab308;
 }
+/* Light surfaces: the dark-theme status hues above wash out on paper (amber
+   #eab308 text on cream is ~1.6:1 — the "auto-starts ~30s" badge was nearly
+   unreadable). Deepen the same hues so badges, lane accents, tab colour and
+   presence dots keep ≥ ~4.4:1 on the light card ground. */
+[data-theme="light"] .project-brain-overlay,
+[data-theme="tofu"] .project-brain-overlay{
+  --pb-green:#15803d; --pb-red:#dc2626; --pb-amber:#854d0e;
+}
 
 /* Trigger button in the project bar. */
 
@@ -20267,7 +20275,7 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
    default; `.pb-clamp-open` shows all. A gradient fade hints there's more. */
 .pb-clamp{position:relative;overflow:hidden;max-height:7.8em;transition:max-height 0.18s ease}
 .pb-clamp.pb-clamp-open{max-height:none}
-.pb-clamp:not(.pb-clamp-open)::after{content:'';position:absolute;left:0;right:0;bottom:0;height:2.4em;background:linear-gradient(180deg,transparent,var(--pb-card-bg));pointer-events:none}
+.pb-clamp:not(.pb-clamp-open)::after{content:'';position:absolute;left:0;right:0;bottom:0;height:1.15em;background:linear-gradient(180deg,transparent,var(--pb-card-bg));pointer-events:none}
 .pb-clamp-toggle{display:inline-flex;align-items:center;gap:4px;margin-top:7px;padding:2px 0;background:transparent;border:none;color:var(--accent);font-family:inherit;font-size:11.5px;font-weight:600;cursor:pointer}
 .pb-clamp-toggle:hover{text-decoration:underline}
 .pb-clamp-toggle svg{width:12px;height:12px;transition:transform 0.18s ease}
@@ -20307,6 +20315,13 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
 .pb-board-count{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 6px;font-size:10.5px;font-weight:700;color:var(--text-secondary);background:var(--bg-tertiary);border:1px solid var(--border);border-radius:var(--pb-radius-chip)}
 .pb-board-card{background:var(--pb-card-bg);border:1px solid var(--border);border-radius:var(--pb-radius);padding:11px 12px;margin-bottom:8px;transition:border-color var(--transition),background var(--transition),transform 0.12s ease}
 .pb-board-card:hover{border-color:var(--border-light);background:var(--pb-card-hover);transform:translateY(-1px)}
+/* Lane colour-coding on the card's leading edge — held (amber) and awaiting
+   (accent) already carry one; extend the same scan-by-colour language to the
+   other statuses so the board reads at a glance. */
+.pb-board-card.pb-board-open{border-left:3px solid color-mix(in srgb,var(--pb-green) 65%,var(--border))}
+.pb-board-card.pb-board-claimed{border-left:3px solid color-mix(in srgb,var(--accent) 55%,var(--border))}
+.pb-board-card.pb-board-blocked{border-left:3px solid color-mix(in srgb,var(--pb-red) 45%,var(--border))}
+.pb-board-card.pb-board-done{border-left:3px solid color-mix(in srgb,var(--pb-green) 38%,var(--border));opacity:0.78}
 .pb-board-card.pb-board-held{border-left:3px solid var(--pb-amber)}
 .pb-board-lane-held .pb-board-count{color:var(--pb-amber);border-color:color-mix(in srgb,var(--pb-amber) 34%,transparent);background:color-mix(in srgb,var(--pb-amber) 12%,transparent)}
 .pb-board-held-by{font-size:10.5px;color:var(--text-tertiary)}

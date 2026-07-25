@@ -103,6 +103,7 @@ from lib.tasks_pkg.orchestrator._vu_startup import (
 from lib.tasks_pkg.orchestrator._prefetch import start_prefetches
 from lib.tasks_pkg.orchestrator._context_inject import inject_context_and_emit_chips  # noqa: E501
 from lib.tasks_pkg.orchestrator._tool_history import restore_tool_history
+from lib.tasks_pkg.orchestrator._memory_prefetch import maybe_run_memory_prefetch
 from lib.tasks_pkg.orchestrator._post_loop import (
     finalize_after_loop,
     handle_task_fatal,
@@ -423,62 +424,18 @@ def run_task(task: dict[str, Any]) -> None:
             tool_call_happened = True
             tool_round_num = _injected_tool_calls  # offset so new roundNums don't conflict
 
-        # ★ Memory Prefetch (proactive, per-user-turn, round 0 only):
-        #   BM25 coarse → cheap-LLM precision → inject <relevant_memories>.
-        #   This surfaces past lessons even when the model wouldn't have
-        #   thought to call search_memories on its own. Emits SSE
-        #   `memory_prefetch` events so the frontend can show an indicator.
-        #   Skipped if:
-        #     • Memory toggle disabled (memory_enabled=false)
-        #     • feature flag disabled
-        #     • continue/resume (tool_history was replayed → not a fresh turn)
-        #     • no real tools (memory tools unavailable anyway)
-        # Stash the consolidation gate for the post-done async spawner
-        #   (_spawn_async_profile_consolidation reads this; memory_enabled +
-        #   has_real_tools are run_task locals not in _finalize's scope).
-        task['_profileConsolidateEligible'] = bool(memory_enabled and has_real_tools)
-
-        if memory_enabled and has_real_tools and not _injected_tool_calls:
-            try:
-                from lib.memory.prefetch import run_memory_prefetch
-                # Active-tools list lets the cheap-LLM filter drop memories
-                # about subsystems the user can't currently use (e.g.
-                # browser memories when browser is off).
-                _active_tools = []
-                for _t in (tool_list or []):
-                    try:
-                        _active_tools.append(_t['function']['name'])
-                    except (KeyError, TypeError) as _e_audit:
-                        logger.debug('[orchestrator] run_task caught %s: %s', type(_e_audit).__name__, _e_audit)
-                        continue
-                # ★ Extra workspace roots for memory scoping — recomputed
-                #   locally at the (single) call site since pt_03f4cdf1
-                #   slice 3 moved the prefetch pool init out of run_task.
-                #   The same derivation is done inside start_prefetches
-                #   for the background memory prefetch; they're
-                #   deliberately independent so a future consumer can be
-                #   added without threading a shared list through the
-                #   call stack. Same rule: extras are projectPaths[1:]
-                #   minus the primary, empty when disabled.
-                _mem_extra_paths: list[str] = []
-                if project_enabled and _pp:
-                    _all_mem_paths = cfg.get('projectPaths') or []
-                    _mem_extra_paths = (
-                        [p for p in _all_mem_paths[1:]
-                         if p and p != _pp]
-                        if len(_all_mem_paths) > 1 else [])
-                run_memory_prefetch(
-                    messages,
-                    project_path=project_path if project_enabled else None,
-                    task=task,
-                    emit_event=lambda ev: append_event(task, ev),
-                    active_tools=_active_tools,
-                    extra_paths=_mem_extra_paths,
-                )
-            except Exception as _e:
-                # Advisory path — never block the task on prefetch failure.
-                logger.warning('[Task %s] memory prefetch failed: %s',
-                               task['id'][:8], _e, exc_info=True)
+        # ── Section 3.5: Memory Prefetch ── (pt_03f4cdf1 slice 9)
+        #   Extracted to lib.tasks_pkg.orchestrator._memory_prefetch.
+        #   Proactive, per-user-turn, round-0-only BM25 → cheap-LLM
+        #   precision → inject <relevant_memories>. Always stashes
+        #   the profile-consolidation eligibility flag for the post-done
+        #   spawner in _finalize.py. Never raises.
+        maybe_run_memory_prefetch(
+            task=task, cfg=cfg, messages=messages, tool_list=tool_list,
+            project_path=project_path, project_enabled=project_enabled,
+            memory_enabled=memory_enabled, has_real_tools=has_real_tools,
+            injected_tool_calls=_injected_tool_calls,
+        )
 
         # ★ Apply preserved content prefix from Continue — ensures backend checkpoints
         #   include text the LLM generated alongside completed tool rounds in the prior

@@ -1,29 +1,38 @@
-"""Regression guard: the debug-mode toggle must refresh the sidebar IMMEDIATELY.
+"""Regression guard: the debug-mode toggle must refresh the sidebar IMMEDIATELY —
+both on Settings toggle AND on boot-time flags arrival.
 
 WHY
 ---
 The copy-conv-ID button is baked per-row into ``_buildConvItemHTML``
 (``static/js/ui/conversation_list.js``) under ``_featureFlags.debug_mode`` at
-HTML-build time. ``settings/save_export.js`` calls
-``renderConversationList()`` right after flipping the flag so no reload is
-needed — but ``renderConversationList`` early-returns when its split hash
-(struct + status) is unchanged, and neither hash included the debug flag.
-Result: toggling debug mode was a silent no-op for the sidebar; the copy-ID
-button only appeared on the next full page load (or an unrelated struct
-change).
+HTML-build time. Two refresh triggers existed, and both were silently eaten by
+``renderConversationList()``'s split-hash early-return (struct + status hashes
+did not include the debug flag):
 
-Fix: fold ``DBG<0|1>`` into ``_structHash`` so flipping the flag forces a
-full rebuild through the normal path.
+1. Settings toggle — ``settings/save_export.js`` calls
+   ``renderConversationList()`` right after flipping the flag → no-op.
+2. BOOT RACE — ``index.html``'s async ``loadFeatureFlags`` assigns
+   ``_featureFlags`` AFTER the conv list may already have rendered (rows baked
+   with debug=false) and previously never re-rendered the sidebar at all, so
+   an always-debug user could STILL miss the button until an unrelated struct
+   change or a full page load.
 
-This harness loads the REAL shipped JS under jsdom:
-  1. render with debug OFF  → zero ``.conv-copy-id`` buttons
-  2. flip ``_featureFlags.debug_mode = true`` and call
-     ``renderConversationList()`` WITHOUT touching the hash caches → buttons
-     must appear (this is the call saveSettings makes)
-  3. flip back OFF → buttons must disappear again
-  4. NC (neuter control): rename a row's title without changing the flag —
-     struct change via the normal path must ALSO rebuild buttons (guards
-     against the test passing because rendering is somehow always-on).
+Fix: (a) fold ``DBG<0|1>`` into ``_structHash`` so any flag flip forces a full
+rebuild through the normal path; (b) ``loadFeatureFlags`` now calls
+``renderConversationList()`` once flags arrive (index.html).
+
+Coverage:
+  • jsdom (real conversation_list.js):
+      1. boot with flags NOT yet arrived (``_featureFlags = {}``) → no buttons
+      2. flags arrive (``debug_mode: true``) + the loadFeatureFlags-style
+         re-render, WITHOUT touching hash caches → buttons appear
+      3. Settings-toggle OFF → buttons disappear immediately
+      4. NC: unrelated struct change (rename) rebuilds through the normal
+         path — proves the assertions aren't an always-rerender artifact
+  • static wire guard (index.html): the boot-time re-render line must exist
+    inside loadFeatureFlags after ``_featureFlags = flags;`` — the jsdom
+    harness cannot load index.html's inline script, so this pins the wiring
+    against silent removal.
 
 Skips cleanly when node + jsdom aren't installed.
 """
@@ -31,6 +40,7 @@ Skips cleanly when node + jsdom aren't installed.
 from __future__ import annotations
 
 import os
+import re
 
 import pytest
 
@@ -57,7 +67,7 @@ const { document, check, report } = setup({
     activeStreams: new Map(),
     pendingMessageQueue: new Map(),
     streamBufs: new Map(),
-    _featureFlags: { debug_mode: false },
+    _featureFlags: {},
   },
 });
 
@@ -72,26 +82,37 @@ function copyIdCount() {
   return document.getElementById('convList').querySelectorAll('.conv-copy-id').length;
 }
 
-// 1. Debug OFF at boot → no copy-id buttons.
+// ── Boot scenario: the conv list renders BEFORE the async /api/v1/features
+//    response arrives (rows baked with debug=false). ──
+// NOTE: the harness evals targets in Node GLOBAL scope and mirrors each
+// injected global onto both `global` and `win` — so a REASSIGNMENT must hit
+// both (mutating the shared object works with window-only assignment, but a
+// fresh object literal does not). Mirrors index.html's `_featureFlags = flags`.
+global._featureFlags = window._featureFlags = {};   // flags not yet arrived
 renderConversationList();
-check('debug_off_no_buttons', copyIdCount() === 0);
+check('boot_flags_pending_no_buttons', copyIdCount() === 0);
 
-// 2. Flip the flag ON and re-render EXACTLY like saveSettings does — no hash
-//    cache reset. The struct hash must now differ (DBG token) so the rows
-//    rebuild with the button baked in.
-window._featureFlags.debug_mode = true;
+// Flags arrive. loadFeatureFlags assigns _featureFlags and then calls
+// renderConversationList() (index.html) — simulated here with NO hash-cache
+// reset, exactly like the real call. The DBG token flip must force a rebuild.
+global._featureFlags = window._featureFlags = { debug_mode: true };
 renderConversationList();
-check('debug_on_buttons_appear_immediately', copyIdCount() === 2);
+check('boot_flags_arrival_rebuilds_sidebar', copyIdCount() === 2);
 
-// 3. Flip back OFF — must disappear again without a reload.
+// ── Settings-toggle scenario: flip OFF mid-session → buttons disappear
+//    immediately (same renderConversationList path saveSettings uses). ──
 window._featureFlags.debug_mode = false;
 renderConversationList();
-check('debug_off_buttons_removed_immediately', copyIdCount() === 0);
+check('toggle_off_buttons_removed_immediately', copyIdCount() === 0);
 
-// 4. NC: an unrelated struct change (rename) must still rebuild rows through
-//    the normal path — proves the harness exercises real rebuilds, not some
-//    always-rerender artifact that would make checks 2/3 vacuous.
+// Flip back ON — re-appears, still no reload / no hash reset.
 window._featureFlags.debug_mode = true;
+renderConversationList();
+check('toggle_on_buttons_appear_immediately', copyIdCount() === 2);
+
+// ── NC: an unrelated struct change (rename) must still rebuild rows through
+//    the normal path — proves the harness exercises real rebuilds, not some
+//    always-rerender artifact that would make the checks above vacuous. ──
 conversations[0].title = 'Conv 1 renamed';
 renderConversationList();
 check('nc_struct_change_rebuilds_with_flag', copyIdCount() === 2);
@@ -100,10 +121,35 @@ report();
 """
 
 
-def test_debug_toggle_refreshes_conv_list_immediately():
+def test_debug_toggle_and_boot_flags_refresh_conv_list_immediately():
     run_harness(
         target_js=os.path.join(JS_DIR, 'ui', 'conversation_list.js'),
         body_js=_BODY,
-        min_pass=4,
-        label='debug toggle → conv list immediate refresh',
+        min_pass=5,
+        label='debug toggle + boot flags → conv list immediate refresh',
+    )
+
+
+def test_boot_load_feature_flags_rerenders_conv_list_wiring():
+    """Static wire guard: index.html's loadFeatureFlags must re-render the
+    sidebar after _featureFlags arrives (boot-race half of the fix). The jsdom
+    harness cannot execute index.html's inline script, so pin the wiring here.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, 'index.html'), encoding='utf-8') as fh:
+        html = fh.read()
+    m = re.search(
+        r'loadFeatureFlags\(\)\s*\{(?P<body>.*?)\}\s*\)\(\);',
+        html,
+        re.DOTALL,
+    )
+    assert m, 'loadFeatureFlags IIFE not found in index.html'
+    body = m.group('body')
+    assign = body.find('_featureFlags = flags;')
+    assert assign != -1, 'loadFeatureFlags no longer assigns _featureFlags'
+    rerender = body.find('renderConversationList()', assign)
+    assert rerender != -1, (
+        'loadFeatureFlags assigns _featureFlags but never calls '
+        'renderConversationList() — boot-time debug users lose the '
+        'copy-ID button again (race: list rendered before flags arrived)'
     )

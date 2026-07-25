@@ -2023,6 +2023,12 @@ window._applyDebugModeVisibility = function() {
     if (typeof window._applyDebugModeVisibility === 'function') {
       window._applyDebugModeVisibility();
     }
+    // Boot race: the conv list may have rendered BEFORE these flags arrived
+    // (rows baked with debug=false). The DBG token in renderConversationList's
+    // struct hash makes this a natural full rebuild when the flag differs.
+    if (typeof renderConversationList === 'function') {
+      renderConversationList();
+    }
   } catch(e) { /* silent — hide trading by default */ }
 })();
 // ── Script load failure detection ──

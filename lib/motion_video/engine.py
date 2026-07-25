@@ -72,6 +72,7 @@ _MANIFEST_FIELDS = (
     'task_id', 'kind', 'srt_path', 'scenes_path', 'workdir', 'voice', 'speed',
     'alignment', 'narration', 'quality', 'parallel', 'width', 'height',
     'burn_in', 'burn_in_fontsdir', 'topic', 'lang', 'max_scenes', 'paper_hash',
+    'scene_author', 'author_rounds', 'author_token_budget',
 )
 
 
@@ -120,6 +121,34 @@ def _reusable_manifest(audio_dir: str, scenes: list) -> dict | None:
         if not entry or not entry.get('wav') or not os.path.isfile(entry['wav']):
             return None
     return m
+
+
+def _existing_composition(index_path: str, duration: float) -> str | None:
+    """Return an on-disk composition iff it matches this scene's duration.
+
+    Resume path for the compose stage: a scene authored before a crash must
+    NOT be re-authored (that would re-spend an agent loop per restart). The
+    duration check guards against a stale composition from a run whose
+    timeline changed — that one is discarded and re-made.
+    """
+    if not os.path.isfile(index_path):
+        return None
+    try:
+        with open(index_path, encoding='utf-8') as f:
+            html = f.read()
+    except OSError as e:
+        logger.debug('[MotionVideo] cannot read %s: %s', index_path, e)
+        return None
+    import re as _re
+    m = _re.search(r'data-duration="([0-9.]+)"', html)
+    if not m:
+        return None
+    try:
+        if abs(float(m.group(1)) - float(duration)) > 0.01:
+            return None
+    except ValueError:
+        return None
+    return html
 
 
 def _scene_already_rendered(mv, mp4_path: str, *, width: int, height: int,
@@ -273,25 +302,57 @@ def run_motion_task(task: dict) -> None:
         target_by_id = {e['scene_id']: e['target_duration']
                         for e in manifest.get('scenes', [])} if manifest.get('ok') else {}
 
-        # ── 4. compose (zero-LLM template) ──
+        # ── 4. compose (per-scene author when enabled, else zero-LLM template) ──
+        from lib.motion_video._scene_author import (author_scene,
+                                                    scene_author_enabled)
         from lib.motion_video._template import render_scene_html
+        authoring = scene_author_enabled(task)
         scene_dirs: list[str] = []
+        authored = 0
         total = len(scenes)
         for i, sc in enumerate(scenes, 1):
             dur = target_by_id.get(sc['id'], round(sc['end'] - sc['start'], 3))
             scene_dir = os.path.join(workdir, 'scenes', sc['id'])
             os.makedirs(scene_dir, exist_ok=True)
-            html = render_scene_html(sc, width=width, height=height,
-                                     duration=dur, scene_index=i,
-                                     total_scenes=total)
+            index_path = os.path.join(scene_dir, 'index.html')
+            # Resume: a composition already on disk for this scene is kept —
+            # never re-author (that would re-spend an agent loop per restart).
+            existing = _existing_composition(index_path, dur)
+            if existing is not None:
+                html = existing
+            elif authoring:
+                res = author_scene(sc, scene_dir, width=width, height=height,
+                                   duration=dur, scene_index=i,
+                                   total_scenes=total,
+                                   max_rounds=int(task.get('author_rounds') or 4),
+                                   token_budget=int(task.get('author_token_budget')
+                                                    or 60000),
+                                   abort_event=task.get('abort_event'))
+                html = res['html']
+                if res['mode'] == 'authored':
+                    authored += 1
+                _emit(task, {'type': 'scene_authored', 'scene_id': sc['id'],
+                             'mode': res['mode'], 'rounds': res.get('rounds', 0),
+                             'tokens': res.get('tokens', 0),
+                             'detail': res.get('detail', '')[:200],
+                             'done': i, 'total': total})
+            else:
+                html = render_scene_html(sc, width=width, height=height,
+                                         duration=dur, scene_index=i,
+                                         total_scenes=total)
             errs = mv.check_composition_html(html)
             if errs:
                 raise ValueError(f"template composition failed its own gate "
                                  f"for {sc['id']}: {' | '.join(errs)}")
-            _write(os.path.join(scene_dir, 'index.html'), html)
+            _write(index_path, html)
             sc['_duration'] = dur
             scene_dirs.append(scene_dir)
-        _emit(task, {'type': 'phase', 'phase': 'compose', 'scenes': total})
+            if _aborted(task):
+                _motion_runtime.finish(task_id)
+                return
+        _emit(task, {'type': 'phase', 'phase': 'compose', 'scenes': total,
+                     'authored': authored,
+                     'templated': total - authored})
         if _aborted(task):
             _motion_runtime.finish(task_id)
             return
@@ -489,7 +550,8 @@ def resume_interrupted_jobs() -> int:
                 height=int(m.get('height') or 1440),
                 scenes_path=m.get('scenes_path') or '')
             for k in ('burn_in', 'burn_in_fontsdir', 'topic', 'lang',
-                      'max_scenes', 'paper_hash', 'kind'):
+                      'max_scenes', 'paper_hash', 'kind', 'scene_author',
+                      'author_rounds', 'author_token_budget'):
                 if m.get(k) is not None:
                     task[k] = m[k]
             _motion_runtime.spawn(task_id, run_motion_task, task)

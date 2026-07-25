@@ -145,6 +145,19 @@ async def start_motion_task():
                                field='scenes_path')
     burn_in = bool(body.get('burn_in', False))
     burn_in_fontsdir = (body.get('burn_in_fontsdir') or '').strip()
+    # Per-scene composition author (P5). None = follow the server default
+    # (env TOFU_MOTION_SCENE_AUTHOR); an explicit bool overrides per job.
+    scene_author = body.get('scene_author')
+    if scene_author is not None:
+        scene_author = bool(scene_author)
+    try:
+        author_rounds = int(body.get('author_rounds') or 4)
+        author_token_budget = int(body.get('author_token_budget') or 60000)
+    except (TypeError, ValueError):
+        return api_bad_request('author_rounds / author_token_budget must be ints',
+                               field='author_rounds')
+    author_rounds = max(1, min(author_rounds, 8))
+    author_token_budget = max(5000, min(author_token_budget, 400000))
 
     # ── Dedup ──
     _cleanup_stale_motion_tasks()
@@ -178,6 +191,10 @@ async def start_motion_task():
         scenes_path=scenes_path)
     task['burn_in'] = burn_in
     task['burn_in_fontsdir'] = burn_in_fontsdir
+    if scene_author is not None:
+        task['scene_author'] = scene_author
+    task['author_rounds'] = author_rounds
+    task['author_token_budget'] = author_token_budget
     if topic:
         task['topic'] = topic
         task['lang'] = lang

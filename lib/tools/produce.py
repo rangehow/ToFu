@@ -64,6 +64,18 @@ PRODUCE_VIDEO_TOOL = {
                     "type": "boolean",
                     "description": "TTS voice-over (default true; degrades to a "
                                    "silent video when no TTS slot is configured)."
+                },
+                "visual_quality": {
+                    "type": "string",
+                    "enum": ["template", "authored"],
+                    "description": "'template' (default) renders each scene with "
+                                   "the fast zero-LLM kinetic-type card. "
+                                   "'authored' gives every scene its own small "
+                                   "agent that writes a bespoke composition — "
+                                   "much better looking, but costs one agent "
+                                   "loop per scene and takes longer. A scene "
+                                   "whose authoring fails falls back to the "
+                                   "template, so the film always completes."
                 }
             },
             "required": ["topic"],

@@ -227,11 +227,14 @@ def _handle_produce_video(task, tc, fn_name, tc_id, fn_args, rn,
             job['lang'] = lang
             job['max_scenes'] = max_scenes
             job['kind'] = 'topic'
+            visual = str(fn_args.get('visual_quality') or 'template').strip()
+            job['scene_author'] = (visual == 'authored')
             _motion_runtime.spawn(job_id, run_topic_motion_task, job)
-            logger.info('[Produce] video job %s started topic=%r lang=%s',
-                        job_id, topic[:60], lang)
+            logger.info('[Produce] video job %s started topic=%r lang=%s '
+                        'visual=%s', job_id, topic[:60], lang, visual)
             result = {'ok': True, 'task_id': job_id, 'topic': topic,
                       'lang': lang, 'aspect': aspect,
+                      'visual_quality': visual,
                       'poll': f'/api/v1/motion/videos/poll/{job_id}',
                       'note': 'Video is generating in the background; watch the '
                               'video panel for progress.'}

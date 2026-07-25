@@ -1,5 +1,13 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续6) — RWA P0 落地:Bridge agent 身份与寻址(owner 拍「全部按建议项,开工 P0」,commit 见下,9 文件;新套件 24/24 含双 NEUTER,相邻五环 82/82 + api_v1 81/81,collect **9176** 0 err)
+- **拍板记录:** 设计稿 §8 五项一键答复全按建议项(2A v1 回退档 / 3A 同名路由 / 4A 远程写默认 Manual / 5A Settings→Devices / 6A 项目面板远程设备分组),已回写设计稿 §8 + 头部状态 + §5 注记。
+- **交付(硬约束②的服务器半壁):** ①poll v2 注册帧(agent_id/机器名/平台/能力位);②服务端注册表 + 15s 心跳窗口(`register_agent`/`online_agents`/`list_agents`);③寻址谓词 `_deliverable`(target 只到目标 agent);④入队闸 `_addressing_enqueue_error`(寻址离线即拒;**多在线未寻址拒发**,模型收诚实错——「挂起不猜」);⑤拍板②A 回退档:v1 在无 v2 注册的世界 wire 投影 `{id,type,params}` 逐字节不变;⑥kill switch `TOFU_DESKTOP_ADDRESSING=0`;⑦agent 侧稳定身份 `lib/desktop_agent/config.py`(首启 uuid 持久化,复用 lib/json_store 原子写)+ `run_agent` 每 poll 上送注册帧;⑧status 端点 `agents` 列表。每用户 token(约束②第三条)属 P4(⑤A),本批不打断全局 secret。
+- **两起盘中漂移(如实):** ㈠`lib/desktop/bridge.py` 在我勘察(续30)与动工之间被 sibling **整体重写**(deque+`_results` → dict+per-cmd Event+TTL),按记忆写的 4 块 apply_diff 全 MISS——重读真实文件后按当前机制重设计(过滤而非弹出、`_plant` 绕过生产者阻塞生命周期);㈡记忆里的 `lib/desktop_agent/config.py` **根本不存在**(幻觉面),临时新建 43 行,复用 `lib/json_store` 原子写。**教训:共享 HEAD 上「读到」与「改到」之间隔了多个派发轮,写前必须重读承重文件。**
+- **验证:** failing-first(实现前 23 error)→ 24/24;**NEUTER×2 全咬**(剥 `_deliverable` → B 偷走 A 的地址命令;剥 `_addressing_enqueue_error` → 多在线未寻址命令入队等幸运儿);相邻五环(browser_async_poll/bridge_auth/desktop_agent/cmdtype_parity/install_paths)82/82;api_v1 集成 81/81(status 新键 `agents` 兼容既有 assertIn)。
+- **顺手闭环:** JOURNAL 头 CLOSURE-PENDING 挂账 `pt_a4c9d33ec50c484a`(billing wallet CAS)两 commit(fbda6d98+d12cd17f)核实均在 HEAD 祖先链,代点 board complete——不重实现、不重阻塞。
+- **边界(诚实):** 纯后端+agent 侧,服务器需重启、agent 需更新后 v2 帧才上线;旧 agent 不升级则一切照旧(回退档);P1(agent 项目命令集+安全网)待下一派发。
+
 ### 2026-07-26(续5) — pt_1acd0bcdb2174566 全收口:F4 owner 拍 A(人类等待无上限,现状)+ 决策落码防「好心修复」(commit `0fa8ce24`,1 文件 +10/-1,零行为变化;heartbeat 套件 4/4)
 - **F4 裁决:** 收割器被串行阻塞工具心跳喂饱——owner 拍 A:ask_human 等人类**永不收割是设计语义**(人类可能隔天答复,不设上限);连带成本照单全收——挂死的非人串行工具(await_task/timer_create 死 socket)同样免收割,只能靠 abort/重启清。
 - **防「好心修复」:** 决策写进 `_SERIAL_BLOCKING_TOOLS` 表头注释(`_heartbeat.py:46`)——后人看到「永不收割」不会再当成 bug 修。

@@ -1,7 +1,7 @@
 # Tofu 远程工作树代理(Remote Worktree Agent, RWA)设计稿
 —— Studio 无缝改本地代码(Windows / macOS),不共享文件系统
 
-> **状态:DESIGN — 方向已拍(2026-07-25 owner 拍板「意图共享,非文件系统共享」),5 项实施拍板待 §8。**
+> **状态:IN PROGRESS — 方向已拍(2026-07-25「意图共享,非文件系统共享」);§8 五项实施拍板已落(2026-07-26,全部按建议项:2A+3A+4A+5A+6A);P0 已落地;① 号先行票已闭环(`c1579401`)。**
 > Board epic:`pt_7977b1e823454e5b`。
 > 关联潜伏 bug(先行票,不进本设计批):`pt_08a6d1afe79c4dfd`(desktop wire 前缀错配,§2.3)。
 > 本稿全部事实性结论均于 2026-07-25 在盘上逐文件核实(§2 标注文件:行号)。
@@ -261,12 +261,19 @@ Body: {
 
 | 期 | 内容 | 主要文件 | 验收 |
 |---|---|---|---|
-| **P0** | **Bridge 身份与寻址**:poll v2 注册帧、agent 注册表、寻址投递、多 agent 未寻址挂起报错、单 agent 回退档 | `lib/desktop/bridge.py`、`routes/desktop.py`、`lib/desktop_agent/_run.py` | 双假 agent 并发 poll,命令各归其主;未寻址命令挂起且模型收到诚实错;单 agent 回退档字节不变 |
+| **P0** ✅ | **Bridge 身份与寻址**(已落地 2026-07-26):poll v2 注册帧、agent 注册表、寻址投递、多 agent 未寻址拒发报错、单 agent 回退档 | `lib/desktop/bridge.py`、`routes/desktop.py`、`lib/desktop_agent/_run.py` | 双假 agent 并发 poll,命令各归其主;未寻址命令拒发且模型收到诚实错;单 agent 回退档字节不变 |
 | **P1** | **Agent 项目命令集 + 安全网**:`project_*` 七命令、share_roots 路径校验、snapshot-before-write、freshness 门(重读刷新令牌) | `lib/desktop_agent/_project.py`(新)、`_dispatch.py`、`_permissions.py` | 越界路径全拒(Win/mac 路径形态参数化);快照可回滚;外部改动后写入被拒、重读后放行;契约守卫绿 |
 | **P2** | **run_command 平价**:流式分片、进程树 kill、command_analysis 复用、超时放宽 | `lib/desktop_agent/_exec.py`、`bridge.py`(流帧) | 长命令分片按序到达;kill 后子进程全灭;`rm -rf ~` 类被守卫拦下;30s+ 命令不再误杀 |
 | **P3** | **工具投影 + 执行路由**:`ToolContext.project_remote`、`_handle_project_tool` 路由、`ToolSpec('desktop')` 补 `write_tools` 声明(关批准门洞) | `_spec.py`、`_build.py`、`handlers/project.py`、`_flags.py` | 远程会话的 `write_file` 落到本地磁盘且串行派发 + Manual 门拦下;服务器项目路径字节不变;latch-clear 一次性 |
 | **P4** | **入口与前端**:`agent_run` `project: remote:<agent>:<root>` 语法、每用户 bridge token 颁发(Settings → Devices)、项目选择器列出在线 agent 与共享根 | `routes/api_v1/agent_run.py`、`routes/api_v1/desktop.py`、前端 | 远程项目挂载后全工具集可用;token 吊销后 agent 立即 401;离线 agent 在选择器灰显 |
 | **P5** | **Project Brain 集成**:远程根纳入 write_set 声明,多会话并发写同一本地项目时 dispatch 串行化 | `lib/conversations/`、board | 两会话同根 write_set 重叠 → 不同时 dispatch;不同根不互斥 |
+
+- **P0 落地注记(2026-07-26):** 注册帧/注册表/心跳/寻址谓词(`_deliverable`)/入队闸
+  (`_addressing_enqueue_error`)/kill switch(`TOFU_DESKTOP_ADDRESSING=0`)+ agent 侧稳定身份
+  (`lib/desktop_agent/config.py`,首启生成持久化)+ status 端点 `agents` 列表;
+  套件 `tests/test_desktop_bridge_addressing.py` **24 测**(含双 NEUTER)。拍板②A 兑现:
+  v1 轮询者在无 v2 注册的世界里 wire 投影键逐字节不变(`{id,type,params}`)。
+  每用户 token(§3.2 第三条)属 P4(⑤A),P0 不打断现有全局 secret。
 
 工作量估算:P0 ~250 行 / P1 ~400 行 / P2 ~200 行 / P3 ~150 行 / P4 ~300 行+前端 / P5 ~80 行,
 全部为薄接缝改动,无新框架。
@@ -303,6 +310,11 @@ Body: {
 ---
 
 ## 8. 拍板请求
+
+> **拍板结果(2026-07-26,board question-block 一键答复):全部按建议项 ——
+> 2A(v1 单 agent 回退档)+ 3A(同名路由)+ 4A(远程写默认 Manual)+
+> 5A(Settings → Devices 设备管理页)+ 6A(项目面板加「远程设备」分组)。
+> P0 当即开工并已落地。**
 
 1. ~~总体方向~~ ✅ **已拍(2026-07-25):意图共享,不共享文件系统。**
 2. **Poll v2 兼容策略**:旧 v1 agent(无注册帧)——(A) 单 agent 回退档继续服务

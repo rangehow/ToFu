@@ -94,8 +94,10 @@ from lib.desktop import (  # noqa: F401,E402
     command_queue as _commands,
     format_desktop_result,
     is_desktop_agent_connected,
+    note_v1_poll,
     pending_commands_count,
     record_poll,
+    register_agent,
     resolve_results,
     send_desktop_command,
     take_pending_commands,
@@ -119,13 +121,27 @@ async def desktop_poll():
     if resolved:
         logger.info('[Desktop] resolved %d command results', resolved)
 
+    # 1b) v2 registration frame (RWA P0): the agent announces its stable
+    #     agent_id + machine meta; v1 agents send no frame and stay on the
+    #     anonymous legacy fallback.
+    agent_frame = body.get('agent')
+    agent_id = None
+    v1 = True
+    if isinstance(agent_frame, dict) and agent_frame.get('agent_id'):
+        agent_id = str(agent_frame['agent_id'])
+        register_agent(agent_id, agent_frame)
+        v1 = False
+    else:
+        note_v1_poll()
+
     # 2) Long-poll for pending commands. Async-native wait releases the worker
     #    thread for the window (see lib.desktop.bridge.take_pending_commands_async)
     #    and hands the agent a command the instant it is queued.
-    pending = await take_pending_commands_async()
+    pending = await take_pending_commands_async(agent_id=agent_id, v1=v1)
     if pending:
-        logger.info('[Desktop] sending %d commands to agent: %s',
-                    len(pending), [c['type'] for c in pending])
+        logger.info('[Desktop] sending %d commands to agent %s: %s',
+                    len(pending), agent_id or 'v1(legacy)',
+                    [c['type'] for c in pending])
     return jsonify({'commands': pending})
 
 

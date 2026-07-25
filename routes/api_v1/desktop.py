@@ -38,12 +38,14 @@ async def desktop_status():
     from lib.desktop import (
         is_desktop_agent_connected,
         last_poll_time,
+        list_agents,
         pending_commands_count,
     )
     return jsonify({
         'connected': is_desktop_agent_connected(),
         'last_poll': last_poll_time(),
         'pending_commands': pending_commands_count(),
+        'agents': list_agents(),
     })
 
 

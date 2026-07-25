@@ -10,14 +10,55 @@ this module (or the package) never triggers the CLI.
 import argparse
 import json
 import os
+import socket
+import sys
 import time
+import uuid
 
 import requests
 
 from lib.desktop_agent._dispatch import COMMANDS, dispatch_command
+from lib.desktop_agent.config import load_config, save_config
 from lib.log import get_logger
 
 logger = get_logger(__name__)
+
+
+def _ensure_agent_id():
+    """Return this machine's stable agent_id, generating + persisting it
+    on first run.
+
+    The id lives in the agent config file (TOFU_DESKTOP_CONFIG or
+    ~/.tofu/desktop_agent.json) so restarts keep the same identity — the
+    server-side registry and command addressing key on it (RWA P0).
+    """
+    cfg = load_config()
+    agent_id = (cfg.get('agent_id') or '').strip()
+    if agent_id:
+        return agent_id
+    agent_id = uuid.uuid4().hex
+    cfg['agent_id'] = agent_id
+    try:
+        save_config(cfg)
+    except Exception as e:
+        logger.warning('[Agent] could not persist agent_id (a new one will '
+                       'be generated on next start): %s', e)
+    return agent_id
+
+
+def _build_agent_frame(agent_id, permissions):
+    """Build the v2 registration frame sent with every poll."""
+    return {
+        'agent_id': agent_id,
+        'name': socket.gethostname(),
+        'platform': sys.platform,
+        'capabilities': {
+            'write': bool(permissions.get('allow_write')),
+            'exec': bool(permissions.get('allow_exec')),
+            'gui': bool(permissions.get('allow_gui')),
+            'notification': bool(permissions.get('allow_notification')),
+        },
+    }
 
 
 # ══════════════════════════════════════════════════════════
@@ -46,8 +87,13 @@ def run_agent(server_url, permissions, poll_interval=1.0, bridge_secret='',
     if bridge_secret:
         headers['X-Bridge-Secret'] = bridge_secret
 
+    agent_id = _ensure_agent_id()
+    agent_frame = _build_agent_frame(agent_id, permissions)
+
     logger.info('Desktop Agent starting...')
     logger.info('   Server: %s', server_url)
+    logger.info('   Agent: %s (%s, %s)', agent_frame['name'],
+                agent_id[:8], agent_frame['platform'])
     logger.info('   Permissions: %s', json.dumps(permissions))
     logger.info('   Bridge secret: %s', 'configured' if bridge_secret else 'none (LAN-only)')
     available_cmds = ', '.join(sorted(COMMANDS.keys()))
@@ -65,7 +111,7 @@ def run_agent(server_url, permissions, poll_interval=1.0, bridge_secret='',
             # Send results + get new commands (single endpoint, like browser extension)
             resp = requests.post(
                 endpoint,
-                json={'results': result_queue},
+                json={'results': result_queue, 'agent': agent_frame},
                 headers=headers,
                 timeout=15,
                 proxies={'no_proxy': '*'}  # localhost — always bypass env proxy

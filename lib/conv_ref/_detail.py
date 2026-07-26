@@ -25,6 +25,56 @@ TRANSCRIPT_HEAD = 3
 TRANSCRIPT_TAIL = 60
 
 
+def row_window_usable(db, conversation_id, blob_count):
+    """Whether the ``conversation_messages`` row store can serve this conv.
+
+    Guard for the row-store read cutover recorded in the project charter. The
+    charter calls the cutover a "pure swap" of :func:`_select_message_window`
+    for ``lib.database.messages_rows.load_message_window`` — true on the same
+    data, but NOT true across the whole table:
+
+    the row store's backfill is incomplete (measured 2026-07-26: 3,696 of
+    4,160 convs). For the remainder it answers ``totalCount=0``, which is
+    indistinguishable from "this conversation is empty" — so a naive swap
+    would silently render a 6-message conversation as empty and look correct
+    doing it. A PARTIAL backfill is worse still: the window looks plausible
+    while quietly dropping the oldest history.
+
+    ``routes/conversations.py`` already keeps a migration-flag-independent
+    blob tail-slice for exactly this reason. This helper gives conv_ref the
+    same posture — comparing the row count against the authoritative blob's
+    and refusing the row store unless it is at least as complete.
+
+    Fails CLOSED toward the blob: any error returns False, because the blob is
+    always complete and always authoritative.
+
+    Args:
+        db: DB wrapper.
+        conversation_id: conv to check.
+        blob_count: number of messages in the authoritative ``messages`` array.
+
+    Returns:
+        True iff the row store holds at least ``blob_count`` rows for this
+        conversation (equal, or ahead because a dual-write landed first).
+    """
+    try:
+        row = db.execute(
+            'SELECT COUNT(*) AS n FROM conversation_messages WHERE conv_id=?',
+            (conversation_id,)).fetchone()
+        n = int(row['n'] if hasattr(row, 'keys') else row[0]) if row else 0
+    except Exception as e:
+        logger.debug('[conv_ref] row-store coverage probe failed conv=%s: %s '
+                     '— falling back to the authoritative blob',
+                     (conversation_id or '')[:12], e)
+        return False
+    if n < int(blob_count or 0):
+        logger.debug('[conv_ref] row store has %d rows for conv=%s but the '
+                     'blob has %d — NOT backfilled, using the blob',
+                     n, (conversation_id or '')[:12], blob_count)
+        return False
+    return True
+
+
 def _select_message_window(messages, head, tail, before=None):
     """Pick a HEAD+TAIL window of messages, preserving original indices.
 
@@ -207,8 +257,46 @@ def get_conversation(conversation_id, include_tool_details=True,
 
     _tail = TRANSCRIPT_TAIL if limit is None else max(1, int(limit))
     _before = None if before is None else max(0, int(before) - 1)
-    kept, omitted, total = _select_message_window(
-        messages, TRANSCRIPT_HEAD, _tail, before=_before)
+
+    # ── Row-store cutover seam (charter 2026-07-26) ──
+    # Windowing happens in memory today. When TOFU_MESSAGES_ROWS_READ flips,
+    # the charter's "pure swap" is only safe on a conversation the row store
+    # has actually backfilled — otherwise it answers totalCount=0 and a real
+    # conversation renders as empty. The guard is consulted HERE, while it is
+    # still inert, so the protection predates the migration instead of being
+    # remembered during it. rows_read_enabled() is False today, so this whole
+    # branch is skipped and the in-memory path below is byte-identical.
+    kept = None
+    try:
+        from lib.database.messages_rows import (
+            load_message_window,
+            rows_read_enabled,
+        )
+        if rows_read_enabled() and row_window_usable(
+                db, conversation_id, len(messages)):
+            # The charter's pure swap: same limit/before semantics, served off
+            # the (conv_id, seq) index instead of the already-parsed blob.
+            w = load_message_window(db, conversation_id, _tail,
+                                    before_seq=_before)
+            first = w.get('firstLoadedSeq')
+            if w.get('messages') and first is not None:
+                head_block = list(enumerate(messages[:TRANSCRIPT_HEAD]))
+                tail_block = [(first + i, m)
+                              for i, m in enumerate(w['messages'])]
+                seen = {i for i, _ in head_block}
+                kept = head_block + [(i, m) for i, m in tail_block
+                                     if i not in seen]
+                omitted = w.get('totalCount', 0) - len(kept)
+                total = w.get('totalCount', 0)
+    except Exception as e:
+        logger.debug('[conv_ref] row-store window failed conv=%s: %s — '
+                     'falling back to the in-memory window',
+                     (conversation_id or '')[:12], e)
+        kept = None
+
+    if kept is None:
+        kept, omitted, total = _select_message_window(
+            messages, TRANSCRIPT_HEAD, _tail, before=_before)
 
     # Build formatted output
     parts = []

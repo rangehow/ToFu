@@ -59,6 +59,14 @@ STRUCTURAL_TTL_MS = 30 * 24 * 3600 * 1000
 # Sample-based pruning: every ~Nth call runs a TTL sweep
 _PRUNE_PROBABILITY = 1 / 1024
 
+# Sample-based delta compaction of LEFTOVER full snapshot rows. Rarer than
+# the prune sweep because each pass rewrites rows (the prune only deletes),
+# but frequent enough that a busy server converges within an hour or two.
+_COMPACT_PROBABILITY = 1 / 4096
+# How many tasks one compaction pass may rewrite. Kept small: this runs on
+# an SSE delta's thread, so a pass must stay far below any request budget.
+_COMPACT_MAX_TASKS = 2
+
 # Batched-delete tuning. Each prune pass deletes at most
 # ``_PRUNE_BATCH_TASKS`` distinct task_ids per batch and runs at most
 # ``_PRUNE_MAX_BATCHES`` batches per invocation, COMMITTING after each batch.
@@ -191,6 +199,22 @@ def append_persistent_event(task_id, event_id, event):
         invalidate_task_cache(task_id)
     except Exception as e:
         logger.debug('[EventLog] inspector cache invalidation skipped: %s', e)
+
+    # ── Self-healing delta compaction (docs/DEBUG_PANEL_REDESIGN.md §10) ──
+    # The projection above only applies to rows THIS process writes. A
+    # deployment where an older process is still serving (no restart yet)
+    # keeps appending FULL rows, and the one-shot migration only covers the
+    # backlog that existed when it ran — measured: +519 MB accumulated
+    # between two checks. Piggy-backing on the same sampled hook means any
+    # process running this code compacts leftovers, so the table converges
+    # WITHOUT requiring a coordinated restart.
+    if random.random() < _COMPACT_PROBABILITY:
+        try:
+            _opportunistic_compact(db)
+        except Exception as e:
+            logger.debug('[EventLog] compaction failed (non-fatal): %s', e)
+
+
 def flush_pending(task_id):
     """No-op kept for API compatibility.
 
@@ -279,6 +303,66 @@ def has_terminal_event(task_id):
     except Exception as e:
         logger.debug('[EventLog] has_terminal_event failed for task=%s: %s', task_id[:8], e)
         return False
+
+
+def _opportunistic_compact(db):
+    """Compact a few tasks' leftover FULL snapshot rows into delta form.
+
+    Why this exists (and is not just the one-shot migration): the write-path
+    projection in :func:`append_persistent_event` only shrinks rows that THIS
+    process writes. Until every serving process runs that code, full rows keep
+    arriving — and the offline migration is a point-in-time sweep, so the gap
+    re-opens the moment it finishes (measured: +519 MB between two checks).
+    This hook lets any process running this build heal the backlog
+    continuously, so the table converges WITHOUT a coordinated restart.
+
+    Reuses ``_migrate_snapshot_deltas.migrate_task`` VERBATIM so there is ONE
+    implementation of the verify-then-write contract (§11): project → rebuild
+    → compare byte-for-byte → write only on an exact match, else leave that
+    task untouched. Never raises.
+    """
+    try:
+        import importlib.util
+        import os
+        script = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__)))),
+            'tests', '_migrate_snapshot_deltas.py')
+        if not os.path.exists(script):
+            return
+        spec = importlib.util.spec_from_file_location('_snap_migrate', script)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    except Exception as e:
+        logger.debug('[EventLog] compaction helper unavailable: %s', e)
+        return
+
+    try:
+        tasks = mod._tasks_with_full_rows(db, limit=_COMPACT_MAX_TASKS)
+    except Exception as e:
+        logger.debug('[EventLog] compaction scan failed: %s', e)
+        return
+    if not tasks:
+        return
+
+    healed = failed = 0
+    for tid in tasks:
+        try:
+            rep = mod.migrate_task(db, tid)
+        except Exception as e:
+            logger.debug('[EventLog] compaction of task=%s raised: %s',
+                         str(tid)[:8], e)
+            failed += 1
+            continue
+        if rep.get('status') == 'ok':
+            healed += 1
+        elif rep.get('status') == 'FAILED':
+            failed += 1
+            logger.warning('[EventLog] compaction REFUSED task=%s (rows left '
+                           'untouched): %s', str(tid)[:8], rep.get('reason'))
+    if healed or failed:
+        logger.info('[EventLog] Delta-compacted %d task(s) of leftover full '
+                    'snapshot rows (%d refused)', healed, failed)
 
 
 def _opportunistic_prune(db):

@@ -1,6 +1,32 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续22) — Opus 5 适配收官:入站方向同族缺陷根修——`disabled` 不是被丢弃,是被**反转成开启**(commit `43dd1ecd`,5 文件 +444/-21;新套件 52/52 含 **NEUTER×6 全咬**,相邻环 **330/330**,collect **9616** 0 err)
+- **owner 复核上一刀时点破的:** 8d7b6911 只修了**出站**(我们发给上游的);**入站**——别人按 Opus 5 规范打进我们 `/v1/messages` 兼容端点的——是同一个病根,而且更彻底。
+- **根因一行:** `lib/compat/anthropic.py` 只认 `{'type': 'enabled'}` 一种形态。而 `enabled` 恰恰是 **4.7+ 已删除、现在会回 400** 的旧写法。于是 Opus 5 时代客户端的四种形态**全部**掉进 else:
+
+  | 客户端发来 | 我们解析成 |
+  |---|---|
+  | `adaptive` + `output_config.effort` | `thinkingEnabled=None` |
+  | `adaptive` | `None` |
+  | `disabled` | `None` |
+  | 不带 thinking 字段(O5 默认开) | `None` |
+
+  `output_config.effort`(adaptive 世代 effort 旋钮的**官方位置**)**全仓无一处读取**。
+- **最严重的那条不是「丢弃」,是「反转」(用真解析器实测,非推演):** `_resolve_model_config` 在直连模型路径上把 `thinkingEnabled` 默认成 True,所以 `thinking={'type':'disabled'}` → `cfg{En=None}` → **`thinking_enabled=True`**。客户端明确要求关,我们给他开。与出站同一个思维错误:**把「没识别出来的值」当成「没提要求」,而它其实是一个明确表态**。
+- **修法(一个共享 helper,两个面共用一套词汇):** `lib/compat/_common.apply_thinking_cfg`,两个翻译器都调它,避免两套面各自漂移。
+  - `adaptive` → 开启(4.7+ 唯一的开启写法);
+  - `disabled` → **显式 False**,绝不与「没说」混同;
+  - **「没说」→ 照模型的真实厂商默认**(这个面本就在模拟 Anthropic Messages API):`is_claude_opus_47` → True、4.7 之前 Claude → False、**非 Claude → 保持 unset**;
+  - effort 五档 **恒等直通**(low/medium/high/xhigh/max 本就都是合法 `thinkingDepth`,明确档位不需要近似),读取优先级 `output_config.effort`(官方)> 顶层 `effort`(我们出站在用、网关实测认)> `reasoning_effort`(OpenAI 拼法);**不认识的档位丢弃而非透传**(下游是闭合枚举);
+  - `enabled`+`budget_tokens` 老分档原样保留,老客户端逐字节不变;
+  - **disabled 路径刻意不带 effort**:没有思考时 effort 无意义,且 Anthropic 对 `disabled`+`xhigh/max` 直接 400。
+- **第三条分支是刻意的,已被 NEUTER 钉死:** 非 Claude 模型「没说」时**保持 unset** —— 我们没有在模拟别家厂商的默认,现成的下游默认必须继续生效。把它「简化」成 False 会**悄悄关掉所有 GLM/Qwen/Kimi 调用方的思考**。N4 专测这条。
+- **顺手修 owner 点名的有损梯位:** `lib/compat/openai.py` 的 depth_map 把整条梯位**上移一档**(low→medium、medium→high、high→max)且**没有 xhigh**。两条梯位是同样的五档,压缩纯属超额消费:要 `low` 的调用方被按 `medium` 计费。`minimal` 改为**向下**映射到 `low`(绝不向上)。既有 `test_compat_openai.py` 的断言**恰恰编码了这个缺陷**(断言 high→max),已改为恒等并注明原因——属测试漂移,非产品回归。
+- **端到端串联实测(入站 body → `_resolve_model_config` → `build_body` 出站 wire):** `disabled` → `en=False` → wire `{'type':'disabled'}` 且无 effort(**修前这里到达的是 thinking-ON**);`adaptive`+`output_config.effort=max` → wire `{'type':'adaptive',...}` + `effort=max`;`absent` → adaptive。两刀首尾接上了。
+- **证据:** 52 测 failing-first(修前 **38 红**;老 budget 分档与非-Claude-unset 两组对照一开始就绿)。**NEUTER×6 全咬**:①adaptive 不识别 ②disabled 掉回 absent(端到端反转测试红)③absent 默认分支整段删 ④非 Claude 折成 False(「简化」陷阱)⑤丢掉 `output_config` 位置 ⑥openai 梯位改回上移。相邻环 330/330。
+- **两个 beta 已按 owner 要求开票**(`pt_aa9583af0e124322`),不再只躺在 JOURNAL 里:`mid-conversation-tool-changes-2026-07-01` 与 `server-side-fallback-2026-07-01` 都需 `anthropic-beta` 头且只在原生协议有意义,`oauth_claude` 当前无 token 无法实测。票里写明**优先看 mid-conversation-tool-changes**——Tofu 每轮按 profile/项目态增删工具集,而工具 schema 实测单轮 201898 字节且占满一个 cache 断点,轮间工具变动当前会废掉整个缓存前缀,这是真金白银的收益;触发条件是原生线一旦有真实流量。
+
 ### 2026-07-26(续19) — RWA P4a 落地:每用户 bridge token + 命令用户作用域 + agent_run remote 绑定(commit 见下,16 文件;新套件 29/29,十环 **280/280**,宽环 98/98,collect **9698** 0 err)
 - **约束②第三条(防 relay 跨用户投递)全链:** ①bridge token 复用 api_keys 生命周期(新 scope `agents:bridge`,零新表);②poll 认证顺序:全局 secret(legacy 超户,user_id='')→ per-user token(validate_token + scope)→ 401,user_id/key_id 打进注册表;③命令作用域 fail-closed:`_deliverable` 首闸用户匹配、入队闸按 caller 过滤在线集、单 agent 回退档只数自己的 agent、user_id 永不上 wire(legacy 投影 `{id,type,params}` 逐字节不变,有钉);④执行链 user 传递:`_handle_desktop_tool`(simple_call 闭包,swarm 同款)+ 远程项目路由均传 `task['_userId']`。
 - **agent_run 入口:** config 别名 `remote='<agent_id>:<root>'` → `validate_remote_binding`(在线/root 已声明/用户匹配三重校验,拒则诚实 400)+ audit_log;远程绑定隐含 project_enabled(`model_config._resolve_model_config` 派生,总闸 off 字节不变);status 端点按 caller user 过滤。

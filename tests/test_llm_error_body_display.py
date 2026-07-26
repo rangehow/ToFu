@@ -378,6 +378,15 @@ class TestCallSitePins:
                    encoding='utf-8').read()
         assert 'decode_error_body(resp)' in src
 
+    def test_fallback_call_py_uses_err_body_limit(self):
+        """The 17:10:37 'LLM call failed at round 3' line was amputated at
+        the ext.error tail by err_str[:200] — the fallback path must cap
+        with _ERR_BODY_LIMIT like every other error log."""
+        src = open(os.path.join(_ROOT, 'lib', 'tasks_pkg', 'llm_fallback',
+                                '_call.py'), encoding='utf-8').read()
+        assert '_ERR_BODY_LIMIT' in src
+        assert 'err_str = str(e)[:200]' not in src
+
 
 if __name__ == '__main__':
     sys.exit(pytest.main([__file__, '-v']))

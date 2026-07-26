@@ -26,11 +26,27 @@ Covers FOUR defects found by auditing real gateway payloads pulled from
    line at all. Two 20+ round Opus-5 sessions burned a full context each with
    zero ``[CacheStats]`` evidence.
 
-4. **Write-gated logic is inert on this gateway (DEAD CODE).** The sankuai
-   AIGC gateway reports ``cache_write_tokens`` but pins it to 0 on every model
-   (231/231 rounds). Every predicate gated on a large ``cache_write`` therefore
-   can never fire here. These tests PIN that fact so nobody tunes a threshold
-   on a branch that is structurally unreachable in this deployment.
+4. **Write-gated logic is inert ON THE OPENAI-COMPAT WIRE (SCOPED 2026-07-26).**
+   The gateway's OpenAI-compat usage carries ``cache_write_tokens`` but always
+   0, so write-gated predicates cannot fire on that line. The tests below pin
+   THAT — and nothing broader.
+
+   ★ SCOPE CORRECTION: this was originally written as "pins it to 0 on every
+   model (231/231 rounds)" and concluded the branches were dead **in this
+   deployment**. That over-generalised a biased sample. The 231/231 came from
+   ``round_usage`` events, which are **3052/3052 openai-convention** and never
+   sampled aws.claude-opus-4.6/4.8 at all. On the CURRENT full ``task_results``
+   (23,980 rows carrying usage) the anthropic-convention line reports
+   ``cache_write > 0`` on **10,938 of 10,961** rows, and the real
+   ``is_floor_collapse`` predicate fires **1732** times. Those branches are
+   LIVE — just not on this wire.
+
+   Reachability on the anthropic wire is pinned separately in
+   ``tests/test_cache_write_reachability_by_convention.py``. Do NOT restore the
+   "every model" wording, and do NOT infer reachability from the write
+   threshold alone — ``is_floor_collapse`` is a CONJUNCTION
+   (``cw > 20000 AND cr <= 90000``); counting only the write half overstates
+   it (4697 vs the true 1732).
 
 Run:
     PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests/test_cache_accounting_convention.py -v
@@ -324,15 +340,22 @@ def test_hybrid_payload_with_impossible_cache_reads_as_residual():
     assert round(15000 / total * 100) <= 100, 'hit rate exceeded 100%'
 
 
-# ── Defect 4: write-gated logic is structurally inert on this gateway ───
+# ── Defect 4: write-gated logic is inert ON THE OPENAI-COMPAT WIRE ─────
 
 def test_gateway_never_reports_cache_write_so_floor_collapse_cannot_fire():
-    """PIN: ``is_floor_collapse`` is unreachable on the sankuai gateway.
+    """PIN: ``is_floor_collapse`` cannot fire ON THE OPENAI-COMPAT WIRE.
 
-    It requires ``cache_write > 20000``, but the gateway pins
-    ``cache_write_tokens`` to 0 on every model (231/231 observed rounds).
-    Do NOT tune _FLOOR_WRITE_LO against this deployment — the branch is dead
-    here, and a "fix" that makes it fire would be fitting noise.
+    It requires ``cache_write > 20000``, and the gateway's openai-compat usage
+    always reports ``cache_write_tokens = 0``. So on THIS wire the branch is
+    unreachable and tuning ``_FLOOR_WRITE_LO`` against it would be fitting
+    noise.
+
+    ★ NOT a statement about the deployment as a whole. The anthropic-convention
+    line DOES meter writes (10,938 of 10,961 rows) and the predicate fires 1732
+    times in production — see
+    ``tests/test_cache_write_reachability_by_convention.py``. The earlier
+    "every model / 231-of-231" claim came from ``round_usage`` events that are
+    100% openai-convention and never sampled 4.6/4.8.
     """
     from lib.tasks_pkg import floor_retry as fr
     # A round that WOULD be a textbook floor collapse if writes were metered.
@@ -342,9 +365,14 @@ def test_gateway_never_reports_cache_write_so_floor_collapse_cannot_fire():
 
 
 def test_no_reuse_classifiers_cannot_fire_without_metered_writes():
-    """PIN: ``_classify_break``'s no_reuse / partial_no_reuse are dead here.
+    """PIN: ``_classify_break``'s no_reuse / partial_no_reuse stay quiet when
+    the wire does not meter writes (i.e. on the openai-compat line).
 
     Both require ``cache_write >= _MIN_NO_REUSE_TOKENS``.
+
+    ★ They are NOT dead code deployment-wide — on the anthropic-convention wire
+    a metered write makes ``no_reuse`` fire correctly. That direction is pinned
+    in ``tests/test_cache_write_reachability_by_convention.py``.
     """
     from lib.tasks_pkg.cache_tracking._detect import _classify_break
     api_break, no_reuse, partial = _classify_break(

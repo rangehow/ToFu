@@ -2735,6 +2735,13 @@ if __name__ == '__main__':
             except Exception as e:
                 _server_log.warning('[HealthLocal] Failed: %s', e)
 
+            # ── Local engine auto-discovery (well-known loopback ports) ──
+            try:
+                from lib.llm_dispatch.autodiscover_local import start_local_autodiscovery
+                start_local_autodiscovery()
+            except Exception as e:
+                _server_log.warning('[AutoDiscover] Failed: %s', e)
+
             # ── FS keepalive ──
             try:
                 from lib.fs_keepalive import start_fs_keepalive

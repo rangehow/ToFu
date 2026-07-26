@@ -80,10 +80,12 @@ Click **⚙️ Settings → 🔗 Providers** and add your API keys. Tofu works w
 | Provider | Setup |
 |---|---|
 | OpenAI, Anthropic, Amazon Bedrock, Google Gemini, DeepSeek, Qwen, MiniMax, GLM, Doubao, Mistral, Grok, Baidu Qianfan, OpenRouter | Click **⚡ Add from template** — one click |
-| Ollama, vLLM, or any local model server | Add as custom provider with your local endpoint |
+| Ollama, vLLM, or any local model server | **Auto-discovered** on startup when serving on its default port (Ollama `11434`, vLLM `8000`, SGLang `30000`) — or add as custom provider with your local endpoint |
 | Azure OpenAI | Template available with deployment-specific base URL |
 
 **Multiple keys per provider** — add several API keys and Tofu automatically rotates between them when one hits rate limits. Across providers, the smart dispatcher routes requests based on real-time latency scoring and error-rate tracking.
+
+**Local engine auto-discovery** — Tofu probes the canonical loopback ports (Ollama `:11434`, vLLM `:8000`, SGLang `:30000`, plus `$OLLAMA_HOST`) shortly after startup and every 2 minutes. When an engine answers with a non-empty model list it is registered as a normal local provider automatically — health checks and the Settings card work exactly like a manually added one. Deleting an auto-added provider dismisses its port permanently (no zombie re-adding). Set `TOFU_LOCAL_AUTODISCOVER=0` to opt out.
 
 Or set environment variables for headless/Docker setups:
 ```bash

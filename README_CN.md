@@ -71,10 +71,12 @@ Tofu 是一个**完全自托管的 AI 助手**，一条命令即可启动。它�
 | 服务商 | 配置方式 |
 |---|---|
 | OpenAI、Anthropic、Amazon Bedrock、Google Gemini、DeepSeek、Qwen、MiniMax、GLM、Doubao、Mistral、Grok、百度千帆、OpenRouter | 点击 **⚡ 从模板添加** —— 一键完成 |
-| Ollama、vLLM 或任何本地模型服务 | 添加为自定义服务商，填入你的本地端点 |
+| Ollama、vLLM 或任何本地模型服务 | 使用默认端口（Ollama `11434`、vLLM `8000`、SGLang `30000`）时启动即**自动发现** —— 或添加为自定义服务商，填入你的本地端点 |
 | Azure OpenAI | 模板可用，填入部署专属的 Base URL |
 
 **同一服务商多个密钥** —— 添加多个 API 密钥，当某个密钥触发限速时自动轮换到下一个。跨服务商的智能调度器会根据实时延迟评分和错误率追踪来路由请求。
+
+**本地引擎自动发现** —— Tofu 启动后约 5 秒、之后每 2 分钟探测一次本机规范端口（Ollama `:11434`、vLLM `:8000`、SGLang `:30000`，另加 `$OLLAMA_HOST`）。引擎返回非空模型列表时会自动注册为普通本地服务商——健康检查和设置卡片与手动添加完全一致。删除自动添加的服务商后其端口会被永久忽略（不会复活）。设 `TOFU_LOCAL_AUTODISCOVER=0` 可关闭。
 
 或者通过环境变量配置（适用于无界面/Docker 部署）：
 ```bash

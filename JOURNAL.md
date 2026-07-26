@@ -1,6 +1,26 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续) — 项目栏画面第三/四刀:DPR 上限 + 时段调色 + 活动天气(owner 逐项拍板,3 commit:`181fe24c` / `62e7dbc5` + 修 `e132d080` / `57480790`;perf 23/23、时段 13/13、天气 14/14,八套件 **171/171**)
+- **owner 先否掉了我自己的方案(记录教训):** 我提「把静态画面搬进 CSS 背景、活体只留一条窄 strip canvas」,声称能省 50%。owner 用实测打回 —— 我只量了前景面(y 34–58,~29%),而**背景活体层**(摆动草/漂移反光/滑行云/尾迹)画得高得多:meadow 60% / pool 74% / **sky 82%**。strip 得占 82% 才正确,收益塌到 ~18%;更致命的是太阳光晕自身半径 `h*1.6 = 77px`,瓦片 153px 高**天然跨满 48px 栏**,根本装不进窄 strip。**教训:结构性优化的前提也要先量,别拿一个层的测量去泛化整幅画。**
+- **①DPR 上限(最便宜的一刀,一行):** 每个像素成本都 ∝ dpr²,而这画风是**莫奈碎色**——上千枚柔边半透明椭圆,零硬边、零文字,**没有任何高频细节供额外采样解析**;唯一的近边(撕纸毛边)**柔采样反而更像纸纤维**。落地前实证「scene-scoped」:模块内零 `fillText/strokeText`、宠物是 DOM `<img>`、栏内文案是 DOM span,**没有任何可读物在这些 canvas 上**。
+  | 宽度 | renderDpr | 单帧总计 | blit | clear | dab | glow |
+  |---|---|---|---|---|---|---|
+  | 360 | 1.50 | 141,788 | 38,880 | 26,730 | 22,908 | 53,270 |
+  | 900 | 1.50 | **275,410** | 97,200 | 66,825 | 57,814 | 53,571 |
+  | 2400 | 1.50 | 631,898 | 259,200 | 178,200 | 140,227 | 54,270 |
+  900px **489,618 → 275,410(-44%)**;三刀累计 **855,524 → 275,410(-68%)**。光晕在 6.7× 宽度跨度上**平**在 ~53.5k。
+- **行为守卫当场救场(值得记):** 我加了两条闸——常量闸 + **行为闸**(从模块真正 size 的 backing store 反推 render ratio)。行为闸立刻抓到:**perf harness 一直在用自己硬编码的 DPR=2 乘 CSS 面积**,报 dpr²=4.00,会把「省下的」白记在这刀账上。harness 已改为读真实比值。**只验常量不验行为,等于让被测方自证。**
+- **②时段调色(病是真的):** 宠物早有 `_timeBucket()`(3am 睡觉),而 `grep getHours` 在 tofu-scene.js **命中 0** —— 猫在午夜打呼,身下却是正午草地。改成**按桶做 wash**(不是每场景手写六套):暗桶同时**降饱和**(夜间色觉本就褪色,只压暗只像调光器)。边界**刻意镜像宠物**(0/5/8/12/17/21),并有测试**同时解析两个模块**、任一漂移即红。实测 luma/chroma:deepNight 114/20 → afternoon 188/63(中性基准)→ evening 182/**73**(最暖)→ night 136/18。
+- **owner 两条硬要求都落进机制而非补丁:** 跨桶**交叉淡出** 2.6s(硬切会被读成渲染 bug)、边界**每分钟轮询**(一天只动六次);`setHour()` 可注入且**走同一条淡出路径**,两条路不会漂。
+- **暴露出一个真·测试不确定性:** 若干既有测试按**硬编码色值**筛笔触,调色板一跟时钟走,它们就**随 CI 运行的钟点忽红忽绿**——本地 10:00 立刻红了两条。没有逐条改断言,而是**四个 harness 统一把场景时钟钉在 14:00**(中性桶),从构造上消除。
+- **③owner 抓到的 cross-fade 竞态(commit `e132d080`,failing-first 实证):** `_paintBuffer` 无条件置 `_needFullClear`,而 `_paintFrame` 在**帧首**消费该标志、时段切换在**帧尾**触发 → 第 N 帧置标志、第 N+1 帧才清屏,**把第一帧淡出合成擦掉**,标志晚一帧落地。实测 2 次多余满屏清屏。**根因不是顺序而是必要性**:撕边由 `rng(pal.seed ^ w*131+h)` 播种、tint **保留 seed**,时段重烘焙的轮廓**逐字节不变**,压根不需要清屏;`_beginTimeShift` 改为跨重烘焙**保留原标志值**(真几何变化仍照清)。轮廓稳定性单独立测——**它在修复前就是绿的**,这正是「清屏多余」而非「只是错时」的证据。
+- **④活动天气(owner 拍板 + 一条硬约束):** loading→云影压暗太阳(唯一持有态)、success→短暴亮、error→**一次短雨**。owner 明令**error 不许下成持续态**(错误自有聊天区呈现,持续风暴=环境焦虑)。做法是**根本没有「模式」**:只有朝目标 ramp、向 0 衰减的标量;impulse 只减不增,任何非 loading 信号(含未知/空)释放持有。
+- **对抗性试探抓到唯一真洞(这条最有价值):** 不靠读代码而是灌交错/重复/**被遗弃**序列 —— `loading` 之后静默,`overcast` **永久停在 0.55**。持有态由**我们不控制的事件**释放,任务崩溃/流断开/标签页中途关闭都会把栏子永久压在云下,正是这套模型要防的那种失败。补**看门狗**:持有 2 分钟自动过期(够长不打扰真慢请求,够短一个 session 内自愈)。双向实证:10s 工作中仍持有、遗弃后回中性。
+- **成本零回归:** overcast/burst **骑在本就每帧发生的光晕 blit 的 alpha 上**,零额外像素;雨受既有 `LIVE_CAP_SPARK` 约束(非按面积播种,宽栏不会下更大雨)且由衰减标量门控,**静置场景一笔不画**——实测 900px 仍是 **275,410**,与加天气前逐字节相同。两条性质都有测试钉住。
+- **共享树纪律:** 每刀都是先 `git add` 再 **`git commit` 不带 pathspec**(上一轮泄漏的教训),提交后 `git show --stat` 核实。其中一次 `git add` 前发现 sibling 已预暂存 `test_conv_ref_identity_scoping.py`,用 `git restore --staged` 弹出并核实其 132 行/5555 字节内容完好。
+- **诚实边界:** 全仓 collect 闸当前**不可信**——sibling 未提交的 `lib/llm_sanitize/_gateway.py` 有 IndentationError(48 errors,已挂 `pt_d42e7028`),非本批引入、未代修。生效需重启 + 硬刷。
+
 ### 2026-07-26 — pt_a67b3713f8914dd6 收口:字幕烧录静默 no-op 根修(commit `ac785d77`,3 文件 +171/-15;motion 全环+ P-UX 套件 **138 过 1 诚实 skip**,预存在红转 honest-skip,epic 已 board complete)
 - **根因(三连实验锤死,非猜):** ①静态 imageio-ffmpeg 的 fontconfig 在 `/etc/fonts/fonts.conf` 缺失的容器里「Cannot load default config file → Failed to load fontconfig fonts」→ libass **任何文字**(不只 CJK)都画不出,进程却 rc=0——烧录帧与纯黑逐字节一致,这就是那张红;②`FONTCONFIG_FILE` 指向 conda env 的 `etc/fonts/fonts.conf` 后 fontselect 立即解析到 Inconsolata,Latin 烧录帧真实变化(根修实证);③该 box 无任何 CJK 字体,`Glyph 0x6D4B not found` → CJK 行画不出(部署缺口,非代码 bug)。
 - **三层修复:** A. `build_render_env` 注入 `FONTCONFIG_FILE`(系统配置缺失 + conda 配置在 + 操作员未自设,三面测全)→ libass 从全灭变可用;B. `burn_in_subtitles` 扫 libass stderr `failed to find any fallback` → `font_missing` 诚实失败(指引:装 CJK 字体或传 burn_in_fontsdir),**no-op 输出绝不晋级成品**;C. CJK 真渲染改 env-诚实(font_missing 即 skip,有字体机器全量跑)+ 新增 Latin 真渲染(本机端到端证根修)+ 检测单元测 + NEUTER(剥扫描 → 同一失败放行)+ env 注入三面。

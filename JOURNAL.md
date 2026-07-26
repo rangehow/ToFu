@@ -832,6 +832,13 @@
 - **测试:** ★走完全部轮次只发**一次** `task_events` 读(计数 DB 包装器钉死,O(n²) 复发即红)、缓存前后 payload 冷/热/再冷三轮逐字节一致、在飞任务新轮可见、缓存有界、按 task_id 隔离、NEUTER(TTL 设无穷 → 新轮不可见)。
 
 
+### 2026-07-26(续70) — 播客剧本阶段流式化:「正在撰写口播稿…」从 1-3 分钟黑盒变为实测进度(commit `305a8088`,4 文件 +196/-22;script 22/22、frontend 两套件全绿、api 14 + media_ux 24 全绿、i18n 三守卫全绿)
+- **用户可见缺陷(第二刀,第一刀是 f4f158ce 的活性指示器修复):** 剧本阶段的卡片整段 1-3 分钟只有一行静态标签——不是「卡死感」,是**真黑盒**:`dispatch_chat` 全程阻塞,期间不存在任何可上报的中间量,前端想显示真进度也没有原料。
+- **修法(实测数字,不发明百分比):** `_script.py` 的剧本遍改走 `dispatch_stream`,从 `on_content` 增量计数——`chars`=已产出文本长度、`segments`=文本中 `"section"` 键出现次数(即已开写的小节数),每 2s 一节拍发 `progress` 事件(节拍常数 `_STREAM_EVENT_MIN_INTERVAL`,把游标回放的事件日志控制在每遍 ~90 行)。`char_target` 直接取 prompt **实际指示**的长度目标(`MODE_LENGTH_ZH/EN[mode][1]`,en 按 ~6 字符/词换算成同一量纲)——分子分母都是真实存在的数,比例自然诚实。attempt 重试时 `on_attempt_restart` 清零重报,前端**赋值不累计**,杜绝重发文本把计数翻倍。
+- **三处修订遍同路径覆盖:** validator 反馈修订、critic 反馈修订、JSON 修复重试都带 `step='revise'` 走同一流式上报;前端在修订遍追加「修订中」前缀标签。解析刻意从 `buf` 拼接而非返回值(`dispatch_stream` 返回的是 message dict),保证解析文本与计数文本逐字节同一。
+- **测试:** mock 从 `dispatch_chat` 换 `dispatch_stream`(两瓣 chunk 回放,生产同路径);新增流式进度用例 monkeypatch `_STREAM_EVENT_MIN_INTERVAL=0`,断言节拍事件的 measured chars/segments 递增、restart 清零、终值与产出一致。既有 22 项 script 层守卫(注入围栏/数字溯源/时长带/critic 闭环)逐字未动全绿。
+- **共享树纪律:** sibling ms1krgol 的续30 条目当时悬而未提交,本条先以其字节备份落库、提交后原样还回工作树(其未提交 diff 逐字节不变),规避续24 式卷入。
+
 ### 2026-07-26(续30) — 测试污染收口第二刀:棘轮签名补 `append_event`,3 个真实裸跑污染源上闸(ratchet 14/14,pytest 回归 34 绿)
 - **缺口(实测定位,非推测):** `tests/test_db_guard.py` 的 `_DB_WRITE_SIGNATURES` 漏了 `tasks_pkg.manager.append_event`——它经 `_persist_before_push`(manager/_events.py → database/event_log.py)真写 `task_events`。于是「stub 掉 spawn_task 但在桩里调**真** append_event」的测试文件能逃过自发现棘轮:pytest 下有 conftest 兜底无事,**裸跑 `python tests/x.py` 且 PG 不可达回落 SQLite `data/tofu.db`(或 ambient postgres 直写 PG)时,固定 task_id 永久累积**——与 task_events 里 usagetas/task-cause 等固定 ID 污染同族。
 - **真实污染源 3 个(全部 `unittest.main()` 直跑测试体,桩内调真 append_event):** `test_api_v1_chat_route.py`、`test_api_v1_agent_run.py`(07-23 新增,晚于 guard 约定)、`test_stream_phase_i18n.py`。修法=`__main__` 首行接 `guard_standalone_db`(既有约定模式),pytest 路径零影响(改动只在 `__main__` 块内)。
@@ -840,9 +847,8 @@
 - **证据:** ratchet 14/14;行为探针 `TOFU_DB_BACKEND=postgres + guard_standalone_db` → 解析为 `sqlite @ /tmp/tofu-standalone-*/tofu-test.db`(与套件内 double-neuter 子进程探针互为因果两端);`test_stream_phase_i18n.py` 裸跑(ambient postgres 被强制转 sqlite)13/13;pytest 回归 stream_phase_i18n 15/15、api_v1 两套件 19/19。
 - **边界(诚实记录):** 棘轮只管「有 `__main__` 的裸跑者」;纯 pytest 收集的测试由 conftest 强制 sqlite + `_assert_test_database` 兜底,不在本刀范围。SQLite 回落路径(PG 不可达→`data/tofu.db`)的污染由同一道闸覆盖——guard 在 DB 解析**之前**强制后端+路径,与走哪条回落无关。
 
-### 2026-07-26(续70) — 播客剧本阶段流式化:「正在撰写口播稿…」从 1-3 分钟黑盒变为实测进度(commit `305a8088`,4 文件 +196/-22;script 22/22、frontend 两套件全绿、api 14 + media_ux 24 全绿、i18n 三守卫全绿)
-- **用户可见缺陷(第二刀,第一刀是 f4f158ce 的活性指示器修复):** 剧本阶段的卡片整段 1-3 分钟只有一行静态标签——不是「卡死感」,是**真黑盒**:`dispatch_chat` 全程阻塞,期间不存在任何可上报的中间量,前端想显示真进度也没有原料。
-- **修法(实测数字,不发明百分比):** `_script.py` 的剧本遍改走 `dispatch_stream`,从 `on_content` 增量计数——`chars`=已产出文本长度、`segments`=文本中 `"section"` 键出现次数(即已开写的小节数),每 2s 一节拍发 `progress` 事件(节拍常数 `_STREAM_EVENT_MIN_INTERVAL`,把游标回放的事件日志控制在每遍 ~90 行)。`char_target` 直接取 prompt **实际指示**的长度目标(`MODE_LENGTH_ZH/EN[mode][1]`,en 按 ~6 字符/词换算成同一量纲)——分子分母都是真实存在的数,比例自然诚实。attempt 重试时 `on_attempt_restart` 清零重报,前端**赋值不累计**,杜绝重发文本把计数翻倍。
-- **三处修订遍同路径覆盖:** validator 反馈修订、critic 反馈修订、JSON 修复重试都带 `step='revise'` 走同一流式上报;前端在修订遍追加「修订中」前缀标签。解析刻意从 `buf` 拼接而非返回值(`dispatch_stream` 返回的是 message dict),保证解析文本与计数文本逐字节同一。
-- **测试:** mock 从 `dispatch_chat` 换 `dispatch_stream`(两瓣 chunk 回放,生产同路径);新增流式进度用例 monkeypatch `_STREAM_EVENT_MIN_INTERVAL=0`,断言节拍事件的 measured chars/segments 递增、restart 清零、终值与产出一致。既有 22 项 script 层守卫(注入围栏/数字溯源/时长带/critic 闭环)逐字未动全绿。
-- **共享树纪律:** sibling ms1krgol 的续30 条目当时悬而未提交,本条先以其字节备份落库、提交后原样还回工作树(其未提交 diff 逐字节不变),规避续24 式卷入。
+### 2026-07-26(续31) — 测试污染收口第三刀:枚举闭环 + 间接驱动签名入库 + 双库存量清零(实测 0 行,无需删除)
+- **枚举(epic 要求的「哪些写 task_events/conversations 的测试当前命中共享库」):** 严格复放棘轮 AST 逻辑扫全部 `test_*.py`——原始子串嫌疑 17 个文件全部排除:已有闸(guard_standalone_db/reset_sqlite_for_tests/conftest import/pytest.main 委托)、已审豁免、纯字符串夹具(被 AST 层滤掉)、或无 `__main__` 纯 pytest 收集(conftest 兜底)。`test_turn_auto_retry.py` 单独核实:所有 seamtask01 用例都带 `monkeypatch` 形参,其 `__main__` 按签名跳过这些用例,裸跑只执行纯退避数学——seamtask01 只可能经 pytest 路径写,已被 conftest 强制 sqlite 覆盖。**结论:0 个未上闸的真实写向量。**
+- **棘轮补间接驱动签名(防患,非修现患):** `_DB_WRITE_SIGNATURES` 增加 `_sync_result_to_conversation` / `_sync_partial_to_conversation` / `append_persistent_event`。严格预扫证实**零新咬**(全部已被现有签名或闸覆盖,被监管总体仅 +1 个已带闸文件 test_event_fold_cold_replay.py)——堵住「未来某文件只调 sync 接缝、不经 create_task/persist_task_result」的逃逸路径。ratchet 复测 14/14。
+- **存量清理 dry-run(两个库都实测):** 共享 sqlite `data/tofu.db`(6GB,PG 不可达时的回落库)与生产 PG(`127.0.0.1:15439/tofu`,只读事务)按 8 个 task_id 模式(usagetas/task-cause/seamtask/task-freeze/task-parallel/task-artifact/tfeedpb/aaaaaaaa)× task_events+task_results、6 个 conv id 模式(含 test-dri/requeue-test)、4 个 timer 模式全量计数——**全部 0 行**。历史污染行已被此前清理除掉,本次无需任何 DELETE。
+- **环境地雷(已存 memory `pytest_napari_plugin_crash_workaround`):** conda env 里新装的 napari 注册了坏 pytest11 entrypoint,任何 `pytest` 调用在插件加载期即崩(vispy→GL ES 2.0 not found);规避 `python -m pytest -p no:napari ...`。与本次改动无关,但会咬所有跑测试的会话。

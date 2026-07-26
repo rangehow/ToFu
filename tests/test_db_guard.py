@@ -172,6 +172,14 @@ _DB_WRITE_SIGNATURES = (
     # Tests that stub spawn_task call the REAL append_event on synthetic
     # tasks; outside pytest (no conftest shim) that lands on the shared DB.
     'append_event',
+    # Indirect drivers: tests may call the terminal/partial sync seams or the
+    # event-log writer DIRECTLY (bypassing persist_task_result/append_event).
+    # Today every such file is already caught by another signature or guarded
+    # (strict AST re-scan 2026-07-26: 0 unguarded, population +1); these pin
+    # the door against a FUTURE file that calls only the seam.
+    '_sync_result_to_conversation',
+    '_sync_partial_to_conversation',
+    'append_persistent_event',
 )
 
 # A file is considered SAFE if it does any one of these BEFORE it can write:

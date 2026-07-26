@@ -336,6 +336,36 @@ def synthesize_usage(*, input_tokens: int = 0, output_tokens: int = 0,
     return base
 
 
+def merge_usage_totals(base: Optional[dict], extra: Optional[dict]) -> dict:
+    """Add ``extra``'s token counts onto ``base``, returning a NEW dict.
+
+    The one place "two billed requests become one line on the bill" is
+    expressed. Used wherever a request that the gateway charged for has to be
+    folded into a total it is not naturally part of:
+
+      * a whole-turn auto-retry's discarded attempt
+        (``orchestrator/_finalize._maybe_auto_retry_turn``);
+      * the per-turn memory-prefetch rerank, including the call the deadline
+        ABANDONED — abandoning stops us waiting, not the gateway billing
+        (``orchestrator/_memory_prefetch.make_prefetch_usage_sink``).
+
+    Only genuinely numeric fields are summed. Usage dicts also carry
+    ``trace_id`` (str), ``_dispatch`` (dict) and assorted nested detail
+    objects; adding those is meaningless, so they are skipped rather than
+    crashing the caller. ``bool`` is excluded explicitly — it is an ``int``
+    subclass in Python and ``stream=True`` must not become ``2``.
+
+    Neither input is mutated.
+    """
+    out = dict(base or {})
+    for k, v in (extra or {}).items():
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            continue
+        prev = out.get(k)
+        out[k] = (prev + v) if isinstance(prev, (int, float)) and not isinstance(prev, bool) else v
+    return out
+
+
 def _legacy_preset_to_model(model_id: str) -> str:
     """Resolve a legacy preset id (e.g. 'opus') to its canonical model_id.
 
@@ -509,4 +539,5 @@ def compute_cost(
 
 
 __all__ = ['compute_cost', 'normalize_usage', 'canonicalize_usage_cache_keys',
-           'split_input_tokens', 'usage_cache_convention', 'synthesize_usage']
+           'split_input_tokens', 'usage_cache_convention', 'synthesize_usage',
+           'merge_usage_totals']

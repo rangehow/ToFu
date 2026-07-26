@@ -1,6 +1,16 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续19) — 成本审计第 3 刀收官:记忆预取 rerank 的每轮计费入账(含**被死线放弃的那次**),三条元凶全收口(commit 见下,5 文件;新套件 15/15 含 NEUTER×3,相邻 153/153,collect **9450** 0 err)
+- **审计 Top-3 的最后一条。** `run_memory_prefetch` 每个用户轮打一次 cheap 模型 rerank(**默认开启**),usage 只落 `diag['usage']`,**全仓无任何调用方**把它折进 `task['usage']` —— 对费用气泡、钱包、日报全部隐形。
+- **最恶劣的是超时路径(本刀的核心):** `_run_with_deadline` 用 800ms 死线「限时」,但它 `t.join(timeout)` 后**只是不再等待**,daemon worker 仍在跑、网关仍在算钱、结果直接丢弃。也就是说——**花了钱且零收益的那些轮,恰好是一个字都没记的那些轮**。与 FloorRetry、整轮重试抹账**同一族**:真实计费请求对成本报表不可见。
+- **修法(分层不破坏):** 给 rerank 加可选 `usage_sink`,**在 worker 线程内部、return 之前**回调 —— 所以调用方等不等得到都会上报。`lib/memory/prefetch` 只管调它拿到的回调,**不认识 task dict**;编排层 `make_prefetch_usage_sink(task)` 负责把账折进 `_checkpointUsage`(与续14 重试 carry-forward 同一个槽,`_finalize_task` 本就会并进终态 usage)。
+- **两条被测试逼出来的边界(不是想出来的):** ①**并发** —— sink 会从被放弃的 worker 线程触发,可能与本轮自己的记账并发,故 `_usage_lock` 护住 read-modify-write(4 线程 ×50 次断言 200)。②**迟到** —— 若 worker 在 finalize **之后**才落地,此时钱包已结算,再折进去等于**背着 finalizer 偷偷补扣**;改为落 `audit_log('memory_prefetch_usage_orphaned')`,**该花的钱仍然可查,但不静默重扣**。
+- **顺手收敛单一事实源:** 加法本身抽成 `lib/cost.merge_usage_totals`(跳过 `trace_id`/`_dispatch`/`bool`,不改入参),续14 的重试 carry-forward **改调它** —— 「两笔已计费请求并成一行账」全仓只此一处。
+- **证据:** 15 测 failing-first;**NEUTER×3 全咬**——①把上报从 worker 内挪到 join 之后 → **超时用例立刻翻红**(正是本刀要修的那条);②摘掉 settled 守卫 → 迟到用例红(会静默重扣);③加法改覆盖 → 6 红(横跨本套件与续14 套件,证明两处共用同一事实源)。相邻 153/153。
+- **刻意没做、已单独开票 `pt_e92d3be4f0b546ab`:** rerank **仍同步阻塞在首 token 之前**(死线 800ms,典型 200–600ms)。挪进现成后台预取池要先解时序耦合——它依赖 Section 3 context-inject **之后**的 messages 形态,而池启动更早;要么拆「候选预热 + 晚精排」两段,要么让池收延迟提交的 future。按「不在记账批次里夹带行为变更」的规矩单独走。
+- **本轮成本审计总账:** `5261150c`(缓存约定 10× 计价悬崖 + 计费适配器 40% 多收 + hit% 减半 + 冷轮隐身)/ `aa37795d`(整轮重试抹掉已计费 usage)/ 本刀(预取 rerank 未入账)。**三条「偷偷花钱」路径全部收口。** Opus 5 缓存本身仍是开放问题(见续14),定位到「OpenAI 线尾部断点丢失」为止,两条出路一条被 schema 封死、一条需网关团队内部可观测性。
+
 ### 2026-07-26(续18) — 身份闸门 fail-open 从「只有浏览器控制台知道」变成服务端可见(owner 指路搭车现成通道,commit `2ffcfa92`,4 文件 +343/-6;新套件 6/6 含 NEUTER,SSOT+api-isolation+sibling pending-busy 环 **100/100**,collect **9451** 0 err)
 - **owner 的观察(一句话点中要害):** 续16 给 fail-open 加了绊线,但它落在 `console.warn` / `debugLog` —— **两者都是浏览器本地**。运维侧永远不知道某个页面正在无作用域接收所有帧。而这个子系统里**别的不变量都会回报**:P5 sync-drift 探针每 60s POST 一次 digest,服务端 WARN 记录分歧。**唯一安全相关的降级,恰恰是唯一不走这条路的信号。**
 - **owner 明确不要新通道:** 不加端点、不改探针节律、不让 flag 影响任何 accept/reject —— 就是**搭现成的车**。照做。

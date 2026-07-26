@@ -418,12 +418,8 @@ def _maybe_auto_retry_turn(task: dict[str, Any], cfg: dict[str, Any]) -> bool:
     #   auto-retried keeps both bills, and repeated retries accumulate.
     _spent = task.get('usage') or {}
     if _spent:
-        _carry = dict(task.get('_checkpointUsage') or {})
-        for _k, _v in _spent.items():
-            if not isinstance(_v, (int, float)) or isinstance(_v, bool):
-                continue  # trace_id / _dispatch / nested detail dicts
-            _prev = _carry.get(_k)
-            _carry[_k] = (_prev + _v) if isinstance(_prev, (int, float)) else _v
+        from lib.cost import merge_usage_totals as _merge_usage
+        _carry = _merge_usage(task.get('_checkpointUsage'), _spent)
         if _carry:
             task['_checkpointUsage'] = _carry
         _spent_rounds = task.get('apiRounds') or []

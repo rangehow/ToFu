@@ -915,6 +915,28 @@ var _i18n = {
   'settings.tabDisplay': { zh: '显示', en: 'Display' },
   'settings.tabSearch': { zh: '搜索', en: 'Search' },
   'settings.tabNetwork': { zh: '网络', en: 'Network' },
+  'settings.tabDevices': { zh: '设备', en: 'Devices' },
+  'devices.agentsTitle': { zh: '在线代理', en: 'Agents' },
+  'devices.agentsDesc': { zh: '运行了 desktop agent 的机器会出现在这里;项目面板可把远程共享根挂为工作树。', en: 'Machines running the desktop agent appear here; the project panel can mount a remote share root as a worktree.' },
+  'devices.tokensTitle': { zh: 'Bridge 令牌', en: 'Bridge tokens' },
+  'devices.tokensDesc': { zh: 'agent 用令牌连接本服务器(请求头 X-Bridge-Secret)。令牌只颁发给你自己,命令只投递给你的设备。', en: 'Agents connect with a token (X-Bridge-Secret header). Tokens are minted for you only; commands are delivered to your devices only.' },
+  'devices.mintNamePh': { zh: '设备备注(如 my-mac)', en: 'Device label (e.g. my-mac)' },
+  'devices.mint': { zh: '颁发新令牌', en: 'Mint token' },
+  'devices.mintedHint': { zh: '令牌只显示这一次,请立即复制保存:', en: 'The token is shown only once — copy it now:' },
+  'devices.copy': { zh: '复制', en: 'Copy' },
+  'devices.copied': { zh: '已复制', en: 'Copied' },
+  'devices.empty': { zh: '暂无设备连接。在本机运行 desktop agent 后会出现在这里。', en: 'No devices yet. Run the desktop agent on a machine and it will appear here.' },
+  'devices.noTokens': { zh: '还没有 bridge 令牌。', en: 'No bridge tokens yet.' },
+  'devices.colDevice': { zh: '设备', en: 'Device' },
+  'devices.colPlatform': { zh: '平台', en: 'Platform' },
+  'devices.colRoots': { zh: '共享根', en: 'Share roots' },
+  'devices.colStatus': { zh: '状态', en: 'Status' },
+  'devices.online': { zh: '在线', en: 'online' },
+  'devices.offline': { zh: '离线', en: 'offline' },
+  'devices.revoke': { zh: '吊销', en: 'Revoke' },
+  'devices.revoked': { zh: '已吊销', en: 'Revoked' },
+  'devices.revokeFailed': { zh: '吊销失败', en: 'Revoke failed' },
+  'devices.mintFailed': { zh: '颁发失败', en: 'Mint failed' },
   'settings.tabFeishu': { zh: '飞书', en: 'Feishu' },
   'settings.tabOAuth': { zh: '订阅登录', en: 'OAuth Login' },
   'settings.tabMCP': { zh: 'MCP', en: 'MCP' },
@@ -3385,6 +3407,43 @@ var _i18n = {
   'projectBrain.infOpenHead': { zh: '待认领 —— 你可以接手', en: 'Open — you could claim' },
 };
 
+/* ── Missing-translation tripwire ──────────────────────────────────────
+ * Records keys that had to fall back out of the active language. One-shot
+ * per (key, lang) so a render loop cannot flood the console.
+ *
+ * Why this exists: see the comment inside t(). A language pack that omits
+ * keys currently degrades SILENTLY to Chinese. This makes the degrade
+ * audible without changing what the user sees.
+ *
+ * Exposed as window.i18nMissingKeys() so a test — or a developer switching
+ * to English — can assert the set is empty instead of eyeballing the UI.
+ */
+var _i18nMissing = Object.create(null);
+
+function _reportMissingTranslation(key, lang) {
+  var mark = lang + '\u0000' + key;
+  if (_i18nMissing[mark]) return;
+  _i18nMissing[mark] = true;
+  try {
+    if (typeof console !== 'undefined' && console.warn) {
+      console.warn('[i18n] missing "' + lang + '" for key "' + key +
+                   '" — fell back to zh. A language pack that omits this key ' +
+                   'would render Chinese in a ' + lang + ' UI.');
+    }
+  } catch (e) { /* console unavailable — the record below still stands */ }
+}
+
+/* Snapshot of every key that fell back, as ['lang:key', …]. Test seam. */
+function i18nMissingKeys() {
+  return Object.keys(_i18nMissing).map(function (m) {
+    return m.replace('\u0000', ':');
+  });
+}
+
+function resetI18nMissingKeysForTests() {
+  _i18nMissing = Object.create(null);
+}
+
 /**
  * Get translated text for a key. Falls back to the key itself if not found.
  * Supports interpolation: t('key', { count: 5 }) replaces {count} in the string.
@@ -3395,7 +3454,31 @@ var _i18n = {
  */
 function t(key, params) {
   var entry = _i18n[key];
-  var text = entry ? (entry[_i18nLang] || entry.zh || key) : key;
+  /* Missing-translation resolution — MUST stay observable.
+   *
+   * The old expression was `entry[_i18nLang] || entry.zh || key`. That silently
+   * renders Chinese whenever the active language lacks a key, with no error and
+   * no console trace. Today every key carries both languages so the branch is
+   * unreachable; the moment a single-language pack ships (Epic-E sub-part 1,
+   * measured worth 7.6% of the compressed first paint) it becomes reachable for
+   * EVERY key the pack omits — and an English UI would quietly fill with
+   * Chinese. A defect with no failure signal cannot be caught by any test or by
+   * a user who does not read the other language.
+   *
+   * So the fallback still HAPPENS (never regress the UI to a raw key), but it
+   * is now REPORTED once per key. That converts "silently wrong" into "wrong
+   * and traceable", which is the precondition for shipping language packs at
+   * all. Reporting is one-shot per key so a hot render loop cannot flood.
+   */
+  var text;
+  if (!entry) {
+    text = key;
+  } else if (entry[_i18nLang] != null) {
+    text = entry[_i18nLang];
+  } else {
+    _reportMissingTranslation(key, _i18nLang);
+    text = entry.zh != null ? entry.zh : key;
+  }
   if (params) {
     for (var k in params) {
       if (params.hasOwnProperty(k)) {

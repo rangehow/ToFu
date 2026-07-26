@@ -75,6 +75,14 @@ def _init_chat_schema(conn):
     # replay. event_id is monotonic per task, mirrored in the SSE 'id:' field.
     create_if_absent(conn, TASK_EVENTS, table_exists=_table_exists)
     cur.execute('CREATE INDEX IF NOT EXISTS idx_task_events_ts ON task_events(ts_ms)')
+    # (task_id, type) — the Request Inspector's access pattern. Every read it
+    # makes is "this task's rows, optionally of one type":
+    # request_inspector._read_events (WHERE task_id=?), the per-conv kind tally
+    # (WHERE task_id IN (…) AND type='messages_snapshot'), and the tiered prune
+    # (WHERE ts_ms<? AND type [NOT] IN (…)). Without this, those degrade to a
+    # seq scan that DETOASTS every snapshot payload — measured 5.9s on a ~900MB
+    # table, which would show up as a multi-second stall when opening the drawer.
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_task_events_task_type ON task_events(task_id, type)')
 
     # ── conversation_messages: Phase 5 messages-as-rows (migrator-first) ──
     # Empty on existing installs until the TOFU_MESSAGES_ROWS-gated backfill /

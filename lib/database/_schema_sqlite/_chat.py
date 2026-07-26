@@ -53,6 +53,10 @@ def _init_chat_schema(conn):
     # replay. event_id is monotonic per task, mirrored in the SSE 'id:' field.
     create_if_absent(conn, TASK_EVENTS, table_exists=_table_exists)
     cur.execute('CREATE INDEX IF NOT EXISTS idx_task_events_ts ON task_events(ts_ms)')
+    # (task_id, type) — mirrors the PG index; see _schema_pg/_chat.py for the
+    # measured rationale (Request Inspector reads are always task-scoped and
+    # usually type-scoped).
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_task_events_task_type ON task_events(task_id, type)')
 
     # ── conversation_messages: Phase 5 messages-as-rows (migrator-first) ──
     # Empty on existing installs until the TOFU_MESSAGES_ROWS-gated backfill /

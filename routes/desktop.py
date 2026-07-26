@@ -99,6 +99,7 @@ from lib.desktop import (  # noqa: F401,E402
     record_poll,
     register_agent,
     resolve_results,
+    resolve_streams,
     send_desktop_command,
     take_pending_commands,
     take_pending_commands_async,
@@ -120,6 +121,10 @@ async def desktop_poll():
     resolved = resolve_results(body.get('results', []))
     if resolved:
         logger.info('[Desktop] resolved %d command results', resolved)
+    # 1a) RWA P2: streamed-command output frames (reassembly dedupes by seq)
+    stream_frames = resolve_streams(body.get('streams', []))
+    if stream_frames:
+        logger.debug('[Desktop] ingested %d stream chunks', stream_frames)
 
     # 1b) v2 registration frame (RWA P0): the agent announces its stable
     #     agent_id + machine meta; v1 agents send no frame and stay on the

@@ -1,7 +1,7 @@
 # Tofu 远程工作树代理(Remote Worktree Agent, RWA)设计稿
 —— Studio 无缝改本地代码(Windows / macOS),不共享文件系统
 
-> **状态:IN PROGRESS — 方向已拍(2026-07-25「意图共享,非文件系统共享」);§8 五项实施拍板已落(2026-07-26,全部按建议项:2A+3A+4A+5A+6A);P0/P1 已落地;① 号先行票已闭环(`c1579401`)。**
+> **状态:IN PROGRESS — 方向已拍(2026-07-25「意图共享,非文件系统共享」);§8 五项实施拍板已落(2026-07-26,全部按建议项:2A+3A+4A+5A+6A);P0–P2 已落地;① 号先行票已闭环(`c1579401`)。**
 > Board epic:`pt_7977b1e823454e5b`。
 > 关联潜伏 bug(先行票,不进本设计批):`pt_08a6d1afe79c4dfd`(desktop wire 前缀错配,§2.3)。
 > 本稿全部事实性结论均于 2026-07-25 在盘上逐文件核实(§2 标注文件:行号)。
@@ -263,7 +263,7 @@ Body: {
 |---|---|---|---|
 | **P0** ✅ | **Bridge 身份与寻址**(已落地 2026-07-26):poll v2 注册帧、agent 注册表、寻址投递、多 agent 未寻址拒发报错、单 agent 回退档 | `lib/desktop/bridge.py`、`routes/desktop.py`、`lib/desktop_agent/_run.py` | 双假 agent 并发 poll,命令各归其主;未寻址命令拒发且模型收到诚实错;单 agent 回退档字节不变 |
 | **P1** ✅ | **Agent 项目命令集 + 安全网**(已落地 2026-07-26):`project_*` 七命令、share_roots 路径校验、snapshot-before-write、freshness 门(重读刷新令牌) | `lib/desktop_agent/_project.py`(新)、`_dispatch.py`、`config.py` | 越界路径全拒(含符号链接/兄弟前缀/绝对路径);快照可回滚;外部改动后写入被拒、重读后放行;`.tofu` 对项目工具不可见 |
-| **P2** | **run_command 平价**:流式分片、进程树 kill、command_analysis 复用、超时放宽 | `lib/desktop_agent/_exec.py`、`bridge.py`(流帧) | 长命令分片按序到达;kill 后子进程全灭;`rm -rf ~` 类被守卫拦下;30s+ 命令不再误杀 |
+| **P2** ✅ | **run_command 平价**(已落地 2026-07-26):流式分片、进程树 kill、删除目标锁根、超时放宽 | `lib/desktop_agent/_exec.py`、`_project.py`、`_run.py`、`bridge.py`(流帧) | 长命令分片按 seq 稠密上行;kill 后子进程全灭;`rm -rf ~` 类被拦;30s+ 命令不再误杀 |
 | **P3** | **工具投影 + 执行路由**:`ToolContext.project_remote`、`_handle_project_tool` 路由、`ToolSpec('desktop')` 补 `write_tools` 声明(关批准门洞) | `_spec.py`、`_build.py`、`handlers/project.py`、`_flags.py` | 远程会话的 `write_file` 落到本地磁盘且串行派发 + Manual 门拦下;服务器项目路径字节不变;latch-clear 一次性 |
 | **P4** | **入口与前端**:`agent_run` `project: remote:<agent>:<root>` 语法、每用户 bridge token 颁发(Settings → Devices)、项目选择器列出在线 agent 与共享根 | `routes/api_v1/agent_run.py`、`routes/api_v1/desktop.py`、前端 | 远程项目挂载后全工具集可用;token 吊销后 agent 立即 401;离线 agent 在选择器灰显 |
 | **P5** | **Project Brain 集成**:远程根纳入 write_set 声明,多会话并发写同一本地项目时 dispatch 串行化 | `lib/conversations/`、board | 两会话同根 write_set 重叠 → 不同时 dispatch;不同根不互斥 |
@@ -282,6 +282,17 @@ Body: {
   (dangerous + catastrophic-delete 守卫 import 复用、cwd 锁根、timeout 放宽至 300s)——
   流式/进程树 kill 属 P2。套件 `tests/test_desktop_agent_project.py` **36 测**(含双 NEUTER:
   剥 freshness 门 → 陈旧写放过;剥路径校验 → 逃逸写出根外)。
+
+- **P2 落地注记(2026-07-26):** ①agent 执行离开 poll 循环(`_run.py` 拦截 `project_run_command`
+  → `start_project_run` 后台线程,心跳不再被长命令卡过 15s 窗口);②流帧契约
+  `{cmd_id, seq, stream, data, done}`,seq 稠密唯一、done 居尾,outbox 断线重发
+  由服务器 `resolve_streams` **按 seq 去重**拼帧(`get_command_stream` 增量读,
+  TTL 90s 清扫);③`os.read` 原始 fd 分片(不等管道满/进程退出);④超时进程树 kill
+  (psutil.children(recursive),软依赖降级 proc.kill);⑤**删除目标锁根守卫**:
+  `command_analysis._is_catastrophic_delete` 的锁根规则只对服务器 restricted 主体生效,
+  agent 侧自建 `_check_delete_targets_within`——`rm -rf ~` 类拦下;⑥平价实证:
+  `rm -rf /abs` 连根内也拒(DANGEROUS_PATTERNS[0] 与服务器同一条)。
+  套件 `tests/test_desktop_exec_streaming.py` **18 测**(含 NEUTER:剥锁根守卫 → 越界删除放过)。
 
 工作量估算:P0 ~250 行 / P1 ~400 行 / P2 ~200 行 / P3 ~150 行 / P4 ~300 行+前端 / P5 ~80 行,
 全部为薄接缝改动,无新框架。

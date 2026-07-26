@@ -1,6 +1,14 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续13) — RWA P2 落地:run_command 平价——流式分片 + 进程树 kill + 删除目标锁根(commit 见下,9 文件;新套件 18/18 含 NEUTER,相邻七环 **142/142**,宽环 162/162,collect **9384** 0 err)
+- **核心结构变化:agent 执行离开 poll 循环。** P1 的 `project_run_command` 在循环内同步阻塞——300s 长命令会把心跳卡过 15s connected 窗口,服务器判 agent 离线。`_run.py` 现拦截该命令 → `start_project_run` 后台线程执行;`io_lock` 护双 outbox,poll body 快照 + **前缀删除**(在飞期间追加的帧不丢),断线重发由服务器 `resolve_streams` **按 seq 去重**。
+- **流帧契约:** `{cmd_id, seq, stream, data, done}`,seq 稠密唯一、done 居尾;`os.read` 原始 fd 分片(不等管道满/EOF);服务器 `get_command_stream` 拼帧 + 增量读 + TTL 90s 清扫(P3/P4 的 UI 进度面在此消费)。
+- **进程树 kill:** 超时 `psutil.children(recursive=True)` 连子带孙全灭(测试实证:sleep 300 子孙零孤儿),psutil 软依赖降级 `proc.kill`;Windows Job Object 注记。
+- **`rm -rf ~` 类拦下(设计验收,勘察抓获的空档):** `command_analysis._is_catastrophic_delete` 的锁根规则只对服务器 restricted 主体生效,`~` 深度=2 过深度闸——agent 侧裸奔。自建 `_check_delete_targets_within`:删除命令的绝对/~/env 目标必须 realpath 落根内,相对目标留在已锁根的 cwd。
+- **过程(如实):** 两处初版错误被测试抓回——①`_exec.py` 漏 `import threading`(8 红);②测试期望写反:`rm -rf /abs` 连**根内**也拒是服务器平价(`DANGEROUS_PATTERNS[0]=\brm\s+-rf\s+/`),改期望;NEUTER 改用 `rm -r` 绕开恒拒专测锁根守卫(剥守卫 → 越界删除放过,咬)。
+- **边界:** agent 需更新;sync 兜底 `cmd_project_run_command`(dispatch 表内)共享同一 `_validate_project_run`;P3(工具投影+执行路由+desktop write_tools 补声明)待下一派发。
+
 ### 2026-07-26(续12) — 项目栏画面「极致动画优化」:每帧成本从 O(宽度) 压成 O(1),省下的预算全花在厚涂与撕纸边(2 commit:`c83513f7` 场景 6 文件 +794/-74 / `5721093c` 宠物 2 文件 +58/-1;新套件 16/16 含 **NEUTER×5 全咬 + 宠物闸 A/B 实证**,五套件 **152/152**,collect **9380** 0 err;顺手关掉看板 `pt_5f4f2466`)
 - **owner 诉求:** 「宠物和背景做极致动画优化,要非常好看精致的艺术风格但不吃性能,喜欢有创意的设计,比如这个 bar 的边框甚至可以不规则。」
 - **先量再改(不猜):** 写了一个把**每个 canvas 调用都计数**的探针跑真模块 —— 每个笔触要 9 次 canvas 调用 + **一次独立光栅化 flush**;1400px 宽时**每帧 2025 个笔触 = 2025 次 flush**,而且随窗口变宽**无上限增长**,还是按显示器满刷新率画、栏子滚出视口也照画。

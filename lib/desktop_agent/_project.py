@@ -28,6 +28,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
+import re
 import shutil
 import time
 from datetime import datetime
@@ -300,33 +301,104 @@ def cmd_project_find_files(params):
     return _guarded(_go, params)
 
 
+def _check_delete_targets_within(command, root_real):
+    """Refuse delete commands whose absolute/~/env target escapes the root.
+
+    ``command_analysis._is_catastrophic_delete``'s workspace-containment
+    rule only engages for server-side restricted principals; on the agent
+    EVERY delete of an absolute/~ target must stay inside the share root —
+    this is what stops the ``rm -rf ~`` class (constraint ④, P2).
+    Relative targets stay inside the already-confined cwd and pass.
+    """
+    from lib.project_mod.command_analysis import (
+        _DELETE_COMMANDS,
+        _split_pipeline,
+    )
+    for seg in _split_pipeline(command):
+        seg = seg.strip()
+        if not seg:
+            continue
+        while re.match(r'^\w+=\S*\s', seg):
+            seg = re.sub(r'^\w+=\S*\s+', '', seg, count=1)
+        parts = seg.split()
+        if not parts:
+            continue
+        if parts[0].split('/')[-1] not in _DELETE_COMMANDS:
+            continue
+        for arg in parts[1:]:
+            if arg.startswith('-'):
+                continue
+            if not (arg.startswith('/') or arg.startswith('~')
+                    or arg.startswith('$')):
+                continue  # relative → stays inside the confined cwd
+            cleaned = arg.rstrip('/*')
+            expanded = os.path.expanduser(os.path.expandvars(cleaned))
+            if expanded.startswith('$') or not expanded:
+                raise ProjectError(
+                    f'command blocked: unresolvable delete target {arg!r}')
+            if not expanded.startswith('/') \
+                    and not (len(expanded) > 1 and expanded[1] == ':'):
+                continue
+            tgt_real = os.path.realpath(expanded)
+            if not _is_within(root_real, tgt_real):
+                raise ProjectError(
+                    f'command blocked: delete target outside share root: {arg!r}')
+
+
+def _validate_project_run(params):
+    """Shared validation for sync + streamed project_run_command.
+
+    Returns ``{'command', 'cwd', 'timeout'}`` confined to the share root;
+    raises ProjectError on any refusal.
+    """
+    root_real, target = _resolve(params.get('root', ''),
+                                 params.get('workdir') or '.')
+    if not os.path.isdir(target):
+        raise ProjectError(
+            f'workdir is not a directory: {params.get("workdir")!r}')
+    command = params.get('command', '')
+    if not isinstance(command, str) or not command.strip():
+        raise ProjectError('command must be a non-empty string')
+    from lib.project_mod.command_analysis import (
+        _is_catastrophic_delete,
+        _is_dangerous_command,
+    )
+    if _is_dangerous_command(command):
+        raise ProjectError('command blocked by dangerous-pattern guard')
+    bad = _is_catastrophic_delete(command, cwd=target)
+    if bad:
+        raise ProjectError(
+            f'command blocked: catastrophic delete target {bad!r}')
+    _check_delete_targets_within(command, root_real)
+    try:
+        timeout = float(params.get('timeout', 300))
+    except (TypeError, ValueError):
+        timeout = 300.0
+    timeout = min(max(timeout, 1.0), 3600.0)
+    return {'command': command, 'cwd': target, 'timeout': timeout}
+
+
 def cmd_project_run_command(params):
+    """Sync (blocking) fallback — the poll loop uses start_project_run."""
     def _go(p):
-        _, target = _resolve(p.get('root', ''), p.get('workdir') or '.')
-        if not os.path.isdir(target):
-            raise ProjectError(f'workdir is not a directory: {p.get("workdir")!r}')
-        command = p.get('command', '')
-        if not isinstance(command, str) or not command.strip():
-            raise ProjectError('command must be a non-empty string')
-        from lib.project_mod.command_analysis import (
-            _is_catastrophic_delete,
-            _is_dangerous_command,
-        )
-        if _is_dangerous_command(command):
-            raise ProjectError('command blocked by dangerous-pattern guard')
-        bad = _is_catastrophic_delete(command, cwd=target)
-        if bad:
-            raise ProjectError(
-                f'command blocked: catastrophic delete target {bad!r}')
-        try:
-            timeout = float(p.get('timeout', 300))
-        except (TypeError, ValueError):
-            timeout = 300.0
-        timeout = min(max(timeout, 1.0), 3600.0)
+        spec = _validate_project_run(p)
         from lib.desktop_agent._exec import cmd_run_local
-        return cmd_run_local({
-            'command': command,
-            'cwd': target,
-            'timeout': timeout,
-        })
+        return cmd_run_local(spec)
     return _guarded(_go, params)
+
+
+def start_project_run(cmd_id, params, on_chunk, on_exit):
+    """Validate + start a STREAMED project_run_command (RWA P2).
+
+    Returns an error string on validation refusal, else None — the
+    process runs on background threads; ``on_chunk(stream, data)`` streams
+    output and ``on_exit(outcome)`` delivers the final capped result.
+    """
+    try:
+        spec = _validate_project_run(params)
+    except ProjectError as e:
+        return str(e)
+    from lib.desktop_agent._exec import start_streamed_command
+    start_streamed_command(spec['command'], spec['cwd'], spec['timeout'],
+                           on_chunk, on_exit)
+    return None

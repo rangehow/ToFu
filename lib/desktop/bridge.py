@@ -57,6 +57,12 @@ _last_poll = [0.0]
 _agents: dict = {}
 _v1_last_poll = 0.0
 
+# Stream frame store (RWA P2 §3.4): cmd_id -> {'chunks': {seq: (stream,
+# data)}, 'done': bool, 'updated_at': float}. The agent may re-send frames
+# after a connection error (outbox prefix redeliver), so reassembly
+# DEDUPES by seq; entries expire with the command TTL.
+_streams: dict = {}
+
 # Connection window: the agent is "connected" if it polled within this many
 # seconds.
 _CONNECTED_WINDOW_S = 15
@@ -91,6 +97,70 @@ def is_desktop_agent_connected() -> bool:
 def _addressing_enabled() -> bool:
     """Kill switch: TOFU_DESKTOP_ADDRESSING=0 restores legacy no-filtering."""
     return (_os.environ.get('TOFU_DESKTOP_ADDRESSING', '1') or '1').strip() != '0'
+
+
+def _sweep_streams_locked(now):
+    stale = [cid for cid, e in _streams.items()
+             if now - e['updated_at'] > _COMMAND_TTL_S]
+    for cid in stale:
+        del _streams[cid]
+
+
+def resolve_streams(frames) -> int:
+    """Ingest stream frames from a poll body. Returns new-chunk count.
+
+    Frames are ``{cmd_id, seq, stream, data, done}``; re-sent frames are
+    deduped by seq so an agent reconnect never double-counts output.
+    """
+    count = 0
+    now = time.time()
+    with command_queue_lock:
+        _sweep_streams_locked(now)
+        for f in frames or []:
+            if not isinstance(f, dict):
+                continue
+            cmd_id = f.get('cmd_id', '')
+            seq = f.get('seq')
+            if not cmd_id or not isinstance(seq, int):
+                continue
+            entry = _streams.setdefault(
+                cmd_id, {'chunks': {}, 'done': False, 'updated_at': now})
+            entry['updated_at'] = now
+            if seq not in entry['chunks']:
+                entry['chunks'][seq] = (
+                    str(f.get('stream') or 'stdout'),
+                    str(f.get('data') or ''),
+                )
+                count += 1
+            if f.get('done'):
+                entry['done'] = True
+    return count
+
+
+def get_command_stream(cmd_id, since_seq=0):
+    """Reassembled stream for one command, or None when unknown/expired.
+
+    Returns ``{'stdout', 'stderr', 'done', 'last_seq'}`` — pass
+    ``since_seq=last_seq`` for an incremental read.
+    """
+    now = time.time()
+    with command_queue_lock:
+        _sweep_streams_locked(now)
+        entry = _streams.get(cmd_id)
+        if entry is None:
+            return None
+        ordered = sorted((s, v) for s, v in entry['chunks'].items()
+                         if s > since_seq)
+        text = {'stdout': [], 'stderr': []}
+        for _seq, (stream, data) in ordered:
+            if stream in text:
+                text[stream].append(data)
+        return {
+            'stdout': ''.join(text['stdout']),
+            'stderr': ''.join(text['stderr']),
+            'done': entry['done'],
+            'last_seq': ordered[-1][0] if ordered else 0,
+        }
 
 
 def register_agent(agent_id, meta=None) -> None:
@@ -402,6 +472,7 @@ __all__ = [
     'format_desktop_result',
     'is_desktop_agent_connected',
     'last_poll_time',
+    'get_command_stream',
     'list_agents',
     'note_v1_poll',
     'online_agents',
@@ -409,6 +480,7 @@ __all__ = [
     'record_poll',
     'register_agent',
     'resolve_results',
+    'resolve_streams',
     'send_desktop_command',
     'take_pending_commands',
     'take_pending_commands_async',

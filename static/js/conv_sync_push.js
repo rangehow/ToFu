@@ -111,11 +111,15 @@ function _onConvSyncPush(frame) {
     if (!frame || frame.kind !== "history_rewrite") return;
     /* Multi-user gate (forward-safe): DELEGATES to the single implementation
      *   in core/conv_state_reducer.js::_frameIsOurs — never re-implement the
-     *   normalization rules here. Fail-OPEN when unavailable: accepting the
+     *   normalization rules here. Fail-OPEN when unavailable (accepting the
      *   frame matches today's pre-identity behaviour; fail-closed would
-     *   silently kill history_rewrite alignment. */
-    if (typeof window._frameIsOurs === "function"
-        && !window._frameIsOurs(frame.userId)) return;
+     *   silently kill history_rewrite alignment), but REPORT the miss so the
+     *   degraded state is not indistinguishable from a working gate. */
+    if (typeof window._frameIsOurs === "function") {
+      if (!window._frameIsOurs(frame.userId)) return;
+    } else if (typeof window.reportIdentityGateUnavailable === "function") {
+      window.reportIdentityGateUnavailable("_onConvSyncPush");
+    }
     const convId = frame.convId || frame.taskId;   // push_event uses taskId as the conv id
     if (!convId) return;
     _applyHistoryRewrite(convId, (typeof frame.rev === "number") ? frame.rev : null);

@@ -346,12 +346,18 @@ function _onConvNotifyPush(frame) {
     /* Multi-user gate (forward-safe): DELEGATES to the single implementation
      *   in core/conv_state_reducer.js::_frameIsOurs — never re-implement the
      *   normalization rules here (int/str skew, unscoped-either-side). That
-     *   file loads earlier in _BUNDLE_FILES and this runs at frame-arrival,
-     *   so the call always resolves. Fail-OPEN if it somehow does not:
-     *   accepting a frame matches today's pre-identity behaviour, whereas
-     *   fail-closed would silently brick cross-device sync. */
-    if (typeof window._frameIsOurs === "function"
-        && !window._frameIsOurs(frame.userId)) return;
+     *   file loads earlier in _BUNDLE_FILES, and this runs at frame-arrival,
+     *   so the call resolves under any correct build.
+     *   Fail-OPEN if it does not: accepting a frame matches today's
+     *   pre-identity behaviour, whereas fail-closed would silently brick
+     *   cross-device sync. But REPORT the miss — a silent fail-open is
+     *   indistinguishable from a working gate, which is how this class of
+     *   bug stays dormant. It can only happen via a build-order regression. */
+    if (typeof window._frameIsOurs === "function") {
+      if (!window._frameIsOurs(frame.userId)) return;
+    } else if (typeof window.reportIdentityGateUnavailable === "function") {
+      window.reportIdentityGateUnavailable("_onConvNotifyPush");
+    }
 
     const convId = frame.convId;
     if (!convId) return;
@@ -478,9 +484,12 @@ function _onFoldersChangedPush(frame) {
   try {
     if (!frame || frame.type !== "folders_changed") return;
     /* Multi-user gate (forward-safe): DELEGATES to _frameIsOurs — see
-     *   _onConvNotifyPush above. Fail-open when unavailable. */
-    if (typeof window._frameIsOurs === "function"
-        && !window._frameIsOurs(frame.userId)) return;
+     *   _onConvNotifyPush above. Fail-open, but REPORT the miss. */
+    if (typeof window._frameIsOurs === "function") {
+      if (!window._frameIsOurs(frame.userId)) return;
+    } else if (typeof window.reportIdentityGateUnavailable === "function") {
+      window.reportIdentityGateUnavailable("_onFoldersChangedPush");
+    }
 
     const deletedId = frame.deletedFolderId;
     if (deletedId) {

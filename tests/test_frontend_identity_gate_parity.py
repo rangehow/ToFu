@@ -180,18 +180,48 @@ def test_all_three_consumer_gates_delegate():
         f'{csp.count(_DELEGATION)}')
 
 
-def test_delegation_is_fail_open_not_fail_closed():
-    """If the predicate is somehow unavailable the gate must ACCEPT the frame
-    (today's pre-identity behaviour). Fail-closed would silently brick
-    cross-device sync — strictly worse than briefly accepting a frame."""
+def test_delegation_is_fail_open_AND_reports():
+    """If the predicate is unavailable the gate must ACCEPT the frame (today's
+    pre-identity behaviour) — fail-closed would silently brick cross-device
+    sync, strictly worse than briefly accepting a frame.
+
+    BUT it must not be silent. A fail-open that leaves no trace is
+    indistinguishable from a working gate, which is the property that let the
+    original int/str skew sit dormant for months. Every delegation therefore
+    pairs its ``typeof`` guard with an ``else`` branch that reports.
+    """
     for path in (_XTS, _CSP):
         rel = os.path.relpath(path, PROJECT_ROOT)
         src = _read(path)
+        n_deleg = src.count(_DELEGATION)
+        assert n_deleg >= 1, f'{rel}: no delegation found'
         for m in re.finditer(re.escape(_DELEGATION), src):
-            window = src[max(0, m.start() - 260):m.start()]
-            assert 'typeof window._frameIsOurs === "function"' in window, (
+            before = src[max(0, m.start() - 320):m.start()]
+            assert 'typeof window._frameIsOurs === "function"' in before, (
                 f'{rel}: delegation is not guarded by a typeof check — an '
-                'unavailable predicate must fail OPEN, not throw or reject')
+                'unavailable predicate must fail OPEN, not throw')
+        # Each delegation must be paired with a report on the else branch.
+        n_report = src.count('reportIdentityGateUnavailable(')
+        assert n_report == n_deleg, (
+            f'{rel}: {n_deleg} delegation(s) but {n_report} '
+            'reportIdentityGateUnavailable() call(s) — a silent fail-open is '
+            'indistinguishable from a working gate; every fallback must leave '
+            'a trace')
+
+
+def test_reporter_exists_and_is_one_shot():
+    """The tripwire must exist, be exported, and be latched — a missing
+    predicate fires on EVERY inbound frame, so an unlatched warn would flood
+    the console and bury the signal it exists to surface."""
+    src = _read(_REDUCER)
+    assert 'function reportIdentityGateUnavailable(' in src, (
+        'the fail-open tripwire is missing from the single-implementation file')
+    assert 'window.reportIdentityGateUnavailable = ' in src, (
+        'the tripwire must be exported for the consumer gates to call')
+    body = src.split('function reportIdentityGateUnavailable(', 1)[1] \
+              .split('\n}', 1)[0]
+    assert '_identityGateWarned' in body, (
+        'the tripwire must be one-shot latched, else it floods on every frame')
 
 
 def test_single_implementation_keeps_all_four_rules():
@@ -208,6 +238,87 @@ def test_single_implementation_keeps_all_four_rules():
         "unscoped-either-side rule ('' means accept-all) missing")
     assert 'window._frameIsOurs = _frameIsOurs' in src, (
         'the single implementation must be exported for the gates to delegate to')
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  1b. BUILD-ORDER INVARIANT — the delegation's hidden dependency
+# ══════════════════════════════════════════════════════════════════════
+
+def _bundler_list(name):
+    """Parse a top-level list literal out of lib/js_bundler.py.
+
+    Reads the REAL source (not a hand-copied mirror) so the invariant below
+    can never drift from what the bundler actually ships.
+    """
+    src = _read(os.path.join(PROJECT_ROOT, 'lib', 'js_bundler.py'))
+    m = re.search(name + r'\s*=\s*[\[(]', src)
+    if not m:
+        return None
+    start, depth, i = m.end(), 1, m.end()
+    while depth > 0 and i < len(src):
+        if src[i] in '[(':
+            depth += 1
+        elif src[i] in '])':
+            depth -= 1
+        i += 1
+    return re.findall(r"'([^']+\.js)'", src[start:i])
+
+
+def test_predicate_loads_before_every_delegating_consumer():
+    """BUILD-ORDER INVARIANT — the delegation's silent failure mode.
+
+    ``window._frameIsOurs`` is a cross-file runtime lookup and the consumer
+    gates fail OPEN when it is absent. So if ``core/conv_state_reducer.js``
+    is moved into ``_DEFERRED_FILES``, or ordered AFTER a consumer whose
+    subscriber can fire before the deferred chunk lands, every gate silently
+    reverts to accept-all: no error, no failing test, cross-tenant frames
+    flow. That is the same invisible-failure shape as the original int/str
+    skew, relocated from "wrong comparator" to "missing comparator".
+
+    This is not hypothetical: Epic-E (pt_3879f00e2d2f4bc4) sub-part 3
+    explicitly proposes moving ``core/cross_tab_sync.js`` into
+    ``_DEFERRED_FILES``.
+
+    THE RULE, for whoever trips this test:
+        core/conv_state_reducer.js defines the ONE identity predicate every
+        gate delegates to. It must ship in the SAME eagerly-loaded bundle as
+        its consumers and be ordered BEFORE them. If you defer a consumer,
+        the predicate must move with it (or stay ahead of it) — otherwise the
+        multi-user gate degrades to accept-all in production, and the only
+        runtime signal is a single console warning.
+    """
+    bundle = _bundler_list('_BUNDLE_FILES')
+    deferred = _bundler_list('_DEFERRED_FILES') or []
+    assert bundle, 'could not parse _BUNDLE_FILES from lib/js_bundler.py'
+
+    predicate = 'core/conv_state_reducer.js'
+    consumers = ['core/cross_tab_sync.js', 'conv_sync_push.js']
+
+    assert predicate in bundle, (
+        f'{predicate} must be in _BUNDLE_FILES — it defines _frameIsOurs, '
+        'which every multi-user gate delegates to. See the rule in this '
+        "test's docstring.")
+    assert predicate not in deferred, (
+        f'{predicate} was moved into _DEFERRED_FILES. Its consumers fail OPEN '
+        'when the predicate is missing, so deferring it silently disables the '
+        'multi-user gate for every frame that arrives before the chunk loads.')
+
+    p_idx = bundle.index(predicate)
+    for consumer in consumers:
+        if consumer in deferred:
+            pytest.fail(
+                f'{consumer} was deferred while {predicate} stayed eager. '
+                'A deferred consumer can receive a frame before the predicate '
+                'is reachable → gate degrades to accept-all. Move the '
+                'predicate with it, or keep both eager.')
+        assert consumer in bundle, (
+            f'{consumer} is neither in _BUNDLE_FILES nor _DEFERRED_FILES — '
+            'the build-order invariant can no longer be verified')
+        c_idx = bundle.index(consumer)
+        assert p_idx < c_idx, (
+            f'ORDER VIOLATION: {predicate} (idx {p_idx}) must load BEFORE '
+            f'{consumer} (idx {c_idx}). The consumer delegates to '
+            '_frameIsOurs and fails OPEN when it is undefined.')
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -368,22 +479,169 @@ def test_all_four_entry_points_honour_the_gate():
 # (label, file, exact text to strip, which gate group must then fail)
 _NEUTER_CASES = [
     ('notify', _XTS,
-     '''if (typeof window._frameIsOurs === "function"
-        && !window._frameIsOurs(frame.userId)) return;
+     '''if (typeof window._frameIsOurs === "function") {
+      if (!window._frameIsOurs(frame.userId)) return;
+    } else if (typeof window.reportIdentityGateUnavailable === "function") {
+      window.reportIdentityGateUnavailable("_onConvNotifyPush");
+    }
 
     const convId = frame.convId;''',
      '''const convId = frame.convId;'''),
     ('folders', _XTS,
-     '''if (typeof window._frameIsOurs === "function"
-        && !window._frameIsOurs(frame.userId)) return;
+     '''if (typeof window._frameIsOurs === "function") {
+      if (!window._frameIsOurs(frame.userId)) return;
+    } else if (typeof window.reportIdentityGateUnavailable === "function") {
+      window.reportIdentityGateUnavailable("_onFoldersChangedPush");
+    }
 
     const deletedId = frame.deletedFolderId;''',
      '''const deletedId = frame.deletedFolderId;'''),
     ('rewrite', _CSP,
-     '''if (typeof window._frameIsOurs === "function"
-        && !window._frameIsOurs(frame.userId)) return;''',
+     '''if (typeof window._frameIsOurs === "function") {
+      if (!window._frameIsOurs(frame.userId)) return;
+    } else if (typeof window.reportIdentityGateUnavailable === "function") {
+      window.reportIdentityGateUnavailable("_onConvSyncPush");
+    }''',
      ''''''),
 ]
+
+
+_FAILOPEN_BODY = r"""
+const { setup } = require(process.env.JSDOM_HARNESS);
+
+const _timers = [];
+const { check, report } = setup({
+  root: process.argv[3],
+  html: '<!DOCTYPE html><body><div id="convList"></div></body>',
+  targets: [process.argv[2], process.argv[4]],   // consumers ONLY — no reducer
+  globals: {
+    setTimeout: (fn) => { _timers.push(fn); return _timers.length; },
+    clearTimeout: () => {},
+    setInterval: () => 0,
+    clearInterval: () => {},
+    _editingMsgIdx: null,
+    activeStreams: new Map(),
+    activeConvId: null,
+    conversations: [],
+    debugLog: () => {},
+    saveConversations: () => {},
+    renderConversationList: () => {},
+    ConvCache: { put: () => {}, remove: () => {}, get: async () => null },
+    _applySettingsToConv: () => {},
+    _restoreConvToolState: () => {},
+    _reconnectServerTaskIfIdle: () => false,
+    updateSendButton: () => {},
+    loadConversationMessages: async () => {},
+    pushIsConnected: () => true,
+    pushSubscribe: () => {},
+  },
+});
+/* DRAIN TO A FIXED POINT: the debounced list-refresh re-schedules itself
+ * (the first timer enqueues the one that actually calls
+ * loadConversationsFromServer), so a single drain pass leaves the real
+ * refresh pending. Bounded so a self-perpetuating timer cannot hang node. */
+function fireTimers() {
+  for (let round = 0; round < 10 && _timers.length; round++) {
+    const t = _timers.splice(0);
+    for (const fn of t) { try { fn(); } catch (e) {} }
+  }
+}
+
+/* jsdom defaults visibilityState to 'prerender'; the debounced list-refresh
+ * has an idle guard requiring 'visible', so without this the refresh never
+ * runs and the fail-open assertion below would fail for an unrelated reason. */
+Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+
+/* Simulate the BUILD-ORDER REGRESSION: the reducer never loaded, so the
+ * predicate is absent. This is what deferring conv_state_reducer.js (or
+ * ordering it after a consumer) produces in a real browser. */
+check('precondition_predicate_absent', typeof window._frameIsOurs !== 'function');
+
+let warned = [];
+window.reportIdentityGateUnavailable = (site) => { warned.push(site); };
+
+let listRefreshCalls = 0;
+global.loadConversationsFromServer = window.loadConversationsFromServer =
+  async () => { listRefreshCalls++; };
+
+/* A frame from a DIFFERENT tenant. With the predicate gone the gate cannot
+ * evaluate identity, so it must still ACCEPT (fail-open — refusing would
+ * brick sync) …but it must REPORT that it did so. */
+window._currentUserId = 'alice';
+window.conversations.push({ id: 'c1', _serverRev: 6, messages: [{}] });
+window.activeConvId = 'c1';
+_onConvNotifyPush({ type: 'conv_changed', convId: 'cNEW', rev: 1, userId: 'bob' });
+fireTimers();
+
+check('failopen_frame_still_accepted', listRefreshCalls > 0);
+check('failopen_was_reported', warned.length >= 1);
+check('failopen_names_the_site', warned[0] === '_onConvNotifyPush');
+
+report();
+process.exit(0);
+"""
+
+
+def test_fail_open_is_observable_not_silent():
+    """Load the consumers WITHOUT the reducer — the exact shape of a
+    build-order regression. The frame must still be accepted (fail-open),
+    and the miss must be REPORTED. A silent degrade is indistinguishable
+    from a working gate."""
+    run_harness(
+        target_js=_XTS,
+        body_js=_FAILOPEN_BODY,
+        extra_targets=[_CSP],
+        min_pass=4,
+        label='observable fail-open',
+    )
+
+
+def test_NEUTER_silent_fail_open_is_caught():
+    """NEUTER: strip the report call from the fallback → the fail-open goes
+    silent again. Proves the tripwire (not the assertion) is what makes the
+    degraded state visible."""
+    if not node_deps_available():
+        pytest.skip('node + jsdom dev-deps not installed')
+
+    src = _read(_XTS)
+    report_call = ('} else if (typeof window.reportIdentityGateUnavailable === "function") {\n'
+                   '      window.reportIdentityGateUnavailable("_onConvNotifyPush");\n'
+                   '    }')
+    assert report_call in src, 'reporter anchor not found in _onConvNotifyPush'
+    neutered_src = src.replace(report_call, '}', 1)
+    assert neutered_src != src
+
+    tmp = []
+    try:
+        with tempfile.NamedTemporaryFile(
+            'w', suffix='.js', dir=os.path.dirname(_XTS), delete=False,
+            encoding='utf-8',
+        ) as fh:
+            npath = fh.name
+            fh.write(neutered_src)
+        tmp.append(npath)
+        with tempfile.NamedTemporaryFile(
+            'w', suffix='.js', dir=os.path.dirname(os.path.abspath(__file__)),
+            delete=False, encoding='utf-8',
+        ) as hf:
+            harness = hf.name
+            hf.write(_FAILOPEN_BODY)
+        tmp.append(harness)
+        proc = subprocess.run(
+            ['node', harness, npath, ROOT, _CSP],
+            capture_output=True, text=True, timeout=60,
+            env={**os.environ, 'JSDOM_HARNESS': _HARNESS_JS},
+        )
+        out = (proc.stdout or '').strip()
+        assert 'FAIL failopen_was_reported' in out, (
+            'NEUTER did not bite — with the report call stripped the '
+            f'fail-open should go silent:\n{out}')
+    finally:
+        for p in tmp:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
 
 
 @pytest.mark.parametrize('label,path,strip_text,replacement', _NEUTER_CASES,

@@ -120,6 +120,21 @@ function _frameIsOurs(userId) {
  * guard is mandatory rather than belt-and-braces. */
 
 
+let _identityGateWarned = false;
+function reportIdentityGateUnavailable(site) {
+  if (_identityGateWarned) return;
+  _identityGateWarned = true;
+  const msg = '[conv-state] multi-user identity gate UNAVAILABLE at ' + site +
+    ' — window._frameIsOurs is undefined, so frames are being accepted ' +
+    'UNSCOPED. This is a build-order regression: core/conv_state_reducer.js ' +
+    'must load before its consumers in lib/js_bundler.py _BUNDLE_FILES.';
+  if (typeof console !== 'undefined' && console.warn) console.warn(msg);
+  if (typeof debugLog === 'function') debugLog(msg, 'warn');
+}
+
+/* Test seam only — never called by production code. */
+function resetIdentityGateWarnedForTests() { _identityGateWarned = false; }
+
 /* ═══════════════════════════════════════════════════════════════════════════
    PENDING BUSY STATE — a frame for a conv this client has not loaded yet
 
@@ -425,6 +440,8 @@ if (typeof window !== 'undefined') {
   window.applyRunningTaskIdsFrame = applyRunningTaskIdsFrame;
   window.applyConvStateSnapshot = applyConvStateSnapshot;
   window.replayPendingBusyState = replayPendingBusyState;
+  window.reportIdentityGateUnavailable = reportIdentityGateUnavailable;
+  window.resetIdentityGateWarnedForTests = resetIdentityGateWarnedForTests;
   window.pendingBusyStateSize = pendingBusyStateSize;
   window.resetPendingBusyStateForTests = resetPendingBusyStateForTests;
   window.computeConvBusy = computeConvBusy;

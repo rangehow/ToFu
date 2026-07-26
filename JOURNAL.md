@@ -1,6 +1,14 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续17) — 检视器读路径 O(轮数²) 根修:126 轮 206.8s → 0.02s(commit `e51a0540`,3 文件 +315/-2;新套件 6/6 含 NEUTER,回归 13 套件 **75/75**)
+- **怎么发现的(不是猜的):** P6 落地后我做端到端真实数据核验,顺手量了「逐轮取 payload」的耗时 —— 真实任务 `e1699c69` 126 轮**用了 206.8 秒**,单轮 ~1.6s。这正是用户在抽屉里挨个点开轮次的动作。
+- **根因:** `get_request_payload` 每次调用都重跑完整 `_read_events`(读该任务全部事件 + 重建全部快照)。线性的 UI 动作被做成 **O(轮数²)**;P5 的增量存储让「重建」这一步变实,**反而把这个既有缺陷放大了**。
+- **修法(两半缺一不可):** `_read_events` 进程内短 TTL 缓存(3s / 8 任务 / 最旧先逐出)+ `append_persistent_event` **写入侧失效**。只有 TTL → 在飞任务追加一轮后立刻被轮询会看到陈旧列表(而最新那轮恰恰是用户最想看的);只有写入失效 → 跨进程写入不通知本进程。最终语义:**读己之写强一致 + 他进程写入 3s 内收敛**。
+- **先犯错再修对(如实):** 第一版只加缓存不加失效,**22 个既有测试翻红**;stash A/B 实证是**我引入的**(剔除后 22/22 绿),不是预存在。**没有放宽任何测试**,而是补写入侧失效把根因修掉——那 22 红本身就是「读己之写」被破坏的正确信号。
+- **顺带否掉一个自己的误判:** 上一轮我以为 `json_extract` 慢查询(9214ms)会拖慢抽屉列表。这轮 `EXPLAIN ANALYZE` 实测:检视器真实读路径 `read_events` **11.6ms**、kind tally **6.3ms**,索引都用上了;9秒那条是**我自己诊断用的全表扫描**(无 task_id 限定),不是产品路径。**教训:把诊断查询的耗时当成产品耗时,会导致优化错的地方。**
+- **测试:** ★走完全部轮次只发**一次** `task_events` 读(计数 DB 包装器钉死,O(n²) 复发即红)、缓存前后 payload 冷/热/再冷三轮逐字节一致、在飞任务新轮可见、缓存有界、按 task_id 隔离、NEUTER(TTL 设无穷 → 新轮不可见)。
+
 ### 2026-07-26(续) — 项目栏画面第三/四刀:DPR 上限 + 时段调色 + 活动天气(owner 逐项拍板,3 commit:`181fe24c` / `62e7dbc5` + 修 `e132d080` / `57480790`;perf 23/23、时段 13/13、天气 14/14,八套件 **171/171**)
 - **owner 先否掉了我自己的方案(记录教训):** 我提「把静态画面搬进 CSS 背景、活体只留一条窄 strip canvas」,声称能省 50%。owner 用实测打回 —— 我只量了前景面(y 34–58,~29%),而**背景活体层**(摆动草/漂移反光/滑行云/尾迹)画得高得多:meadow 60% / pool 74% / **sky 82%**。strip 得占 82% 才正确,收益塌到 ~18%;更致命的是太阳光晕自身半径 `h*1.6 = 77px`,瓦片 153px 高**天然跨满 48px 栏**,根本装不进窄 strip。**教训:结构性优化的前提也要先量,别拿一个层的测量去泛化整幅画。**
 - **①DPR 上限(最便宜的一刀,一行):** 每个像素成本都 ∝ dpr²,而这画风是**莫奈碎色**——上千枚柔边半透明椭圆,零硬边、零文字,**没有任何高频细节供额外采样解析**;唯一的近边(撕纸毛边)**柔采样反而更像纸纤维**。落地前实证「scene-scoped」:模块内零 `fillText/strokeText`、宠物是 DOM `<img>`、栏内文案是 DOM span,**没有任何可读物在这些 canvas 上**。

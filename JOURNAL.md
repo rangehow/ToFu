@@ -1,6 +1,12 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26 — brand wordmark 二次重设计:「字里藏豆腐」(owner 拍板「现在的好丑,颜色字体都没意思」;commit `404cb1da`,1 文件 +59/-35;headless Chromium 前后对照截图实证)
+- **取代续33 的「墨字+陶土 o+朱砂印章」。** owner 评语:衬线 Newsreader 书斋气与圆胖吉祥物气质脱节,印章是第三个色相、显杂。新方案:字身换 `--sans-body` 800 粗几何无衬线(收紧字距 -0.03em);**「o」字形留在 DOM(可选中/可复制)但视觉由 ::after 画成一块奶油→琥珀渐变、圆角 28%、微歪 -7° 的小豆腐块**,与吉祥物互为呼应;朱砂印章撤掉,「豆腐」改 text-tertiary 疏排灰字。侧栏 18px 同款。悬停「软豆腐抖动」保留,豆腐块额外 rotate(9°) scale(1.07)。
+- **尺寸迭代(截图驱动的自我修正):** 豆腐块首版 .64em 溢出「o」字身框、挤压相邻字母,收窄到 .56em(侧栏 .58em)才落回字身框内。改动全在 `[data-theme="tofu"]` 作用域,像素风基础 `.tofu-brand`(styles.css:338)与其他主题未碰;两处 JS 模板(main_conv_lifecycle.js / chat_render.js)只产 class 不产样式,零改动自动生效。移动断点 20/18px 未动。
+- **环境经验(截图工作流,复用续33 的方法):** 本机 playwright chromium_headless_shell 缺库且**无 fontconfig 配置会静默渲染零宽字形**(截图里文字全部消失但不报错)——需 `LD_LIBRARY_PATH=<conda env>/lib` + `FONTCONFIG_FILE=<conda env>/etc/fonts/fonts.conf` 双变量才出字。预览用 file:// 单页直链真实 styles.css,改前/改后同页对照。
+- **验证:** tests 无 brand 相关断言(grep 0 命中);`git show --stat HEAD` 核实恰好 1 文件;sibling 在飞 WIP(core.js、若干 tests)未卷入。
+
 ### 2026-07-26(续42) — 「三指示器全绿但气泡永久空白」根因不在前端,而是 **VU 载体把 agent 的助手槽覆盖了**;顺带落地结果级对账(commit `95fa8513`,3 文件;新套件 12/12 含 **NEUTER×3 全咬**,相邻 8 套件 151 过 1 红 A/B 实证预存在,净 worktree collect **9973** 0 err)
 - **起点是 owner 截图**:发送按钮呈暂停态、侧边栏「回答中」、右上角信号 42ms 正常,但气泡里**一个流式阶段字都没有**,永久卡住。会话 `ms14u2lfihv8kj`。
 - **我第一轮的方向是错的,owner 纠正了它。** 我并行派了三个 agent 查前端指示器/日志/落库,得出「前端 A/B/C 三条不一致路径」——`_streamFrameArg` 的 `if (!_sess) return null` 与 `_updateStreamTimerUI` 的 `if (!info) return` 让**兜底机制与它要兜底的对象共享同一个前置条件**。这个分析本身没错,但**全是下游表现**。owner 自己把 `task_results` 与 `conversations.messages` 逐条对了一遍,指出每一轮都被同样污染:

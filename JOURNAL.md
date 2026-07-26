@@ -1,6 +1,8 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26 — pt_871a26c7 收尾确认:ZWSP 激活内容**已在 HEAD 生效**,但承载 commit 不是 `f4c3051f`(被 rebase/squash 进了 sibling 的 memory-prefetch commit `fd885a7e`——`git merge-base --is-ancestor f4c3051f HEAD` 为否,而 `HEAD:_gateway.py` 含 `_invisible_break` ×3、`HEAD:test_gateway_sanitize.py` 含 ZWSP 断言 ×7、套件 **9/9 绿**、worktree 干净)。**给未来考古的人:别按 `f4c3051f` 找,按内容找。** 本次派发为陈旧触发(板面已 done),未重做、未重挂——按「答案已解决闸门」原则仅复核确认。
+
 ### 2026-07-26(续24) — chatInner 顺序 bug 的**尾部镜像**根修:抽出唯一有序插入原语 + 运行时不变式 + 静态闸(commit 见下,12 文件 +867/-26;新套件 2→**8/8** 含 NEUTER×3,相邻环 **57/57**,collect **9756** 0 err)
 - **owner 复核续20 后当场打脸,而且是对的:** 我只修了头、把尾巴原样留着。owner 用**真实 shipped ConvView** 跑 jsdom 复现,不是推测:
   ```
@@ -167,6 +169,7 @@
 - **诚实标注:** 全仓 `--collect-only` 首跑 **48 err**,根因是 sibling 正在改 `lib/llm_sanitize/_gateway.py` 留下的半成品 dict(`IndentationError`),**与本刀无关**;把该文件临时换成 HEAD 版后 collect **9560 / 0 err**,随即**逐字节校验恢复** sibling 的工作树改动(md5 核对),未提交它。我的提交精确 2 文件。
 - **生效边界:** 纯前端,走内容哈希 bundle —— **需重启服务器 + 浏览器硬刷新**后顺序才恢复正常。
 - **⚠️ 本条的覆盖面声称有误，已由续24 更正：**上面写「把该合同的一个漏洞补上」，实际上它**只关了头部那一半**。尾部存在**同形镜像 bug**（`_ensureBottomSentinel` 用 `appendChild` 把自己钉在最后，而 `ConvView.apply` / `startStreaming` 的 `beforeend` 落在它**后面**），直到续24 才修。根因：本刀的 `_headAnchor()` 是 `renderChat` 里的**闭包**，ConvView 够不到，所以规则无法共享。
+- **⚠️ 本条的覆盖面声称有误，已由续24 更正：**上面写「把该合同的一个漏洞补上」，实际上它**只关了头部那一半**。尾部存在**同形镜像 bug**（`_ensureBottomSentinel` 用 `appendChild` 把自己钉成最后一个子节点，而 `ConvView.apply` / `startStreaming` 的 `beforeend` 落在它**后面**），直到续24 才修。根因：本刀的 `_headAnchor()` 是 `renderChat` 里的**闭包**，ConvView 够不到，所以规则无法共享。
 
 ### 2026-07-26(续16) — 请求检视器 P6 落地:每个工具行一枚 `</>` 锚点,owner 最初诉求正式闭环(commit `0d2a8fee`,5 文件 +432/-1;新套件 3/3(13 探针)含 NEUTER,前端环 7 套件 38/38)
 - **P3 的粒度错了(这次才对准 owner 原话):** owner 要的是「在 chatinner 看到有问题的工具调用 → 直接找到是哪次请求」。P3 一枚气泡锚点只能跳「该气泡最后一轮」,而一个气泡有 **N 轮 × M 个工具调用**。P6 把锚点下沉到**每一个工具行**。

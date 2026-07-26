@@ -1,6 +1,12 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26 — pt_a67b3713f8914dd6 收口:字幕烧录静默 no-op 根修(commit `ac785d77`,3 文件 +171/-15;motion 全环+ P-UX 套件 **138 过 1 诚实 skip**,预存在红转 honest-skip,epic 已 board complete)
+- **根因(三连实验锤死,非猜):** ①静态 imageio-ffmpeg 的 fontconfig 在 `/etc/fonts/fonts.conf` 缺失的容器里「Cannot load default config file → Failed to load fontconfig fonts」→ libass **任何文字**(不只 CJK)都画不出,进程却 rc=0——烧录帧与纯黑逐字节一致,这就是那张红;②`FONTCONFIG_FILE` 指向 conda env 的 `etc/fonts/fonts.conf` 后 fontselect 立即解析到 Inconsolata,Latin 烧录帧真实变化(根修实证);③该 box 无任何 CJK 字体,`Glyph 0x6D4B not found` → CJK 行画不出(部署缺口,非代码 bug)。
+- **三层修复:** A. `build_render_env` 注入 `FONTCONFIG_FILE`(系统配置缺失 + conda 配置在 + 操作员未自设,三面测全)→ libass 从全灭变可用;B. `burn_in_subtitles` 扫 libass stderr `failed to find any fallback` → `font_missing` 诚实失败(指引:装 CJK 字体或传 burn_in_fontsdir),**no-op 输出绝不晋级成品**;C. CJK 真渲染改 env-诚实(font_missing 即 skip,有字体机器全量跑)+ 新增 Latin 真渲染(本机端到端证根修)+ 检测单元测 + NEUTER(剥扫描 → 同一失败放行)+ env 注入三面。
+- **sibling 级联处置(同上一票):** gateway WIP 仍语法损坏,跑门禁照旧 patch-保存 → checkout → 跑 → 原样放回。
+- **生效边界(诚实):** 随 commit 生效,无需重启之外动作;**本机烧中文字幕仍需装一个 CJK 字体**(或 burn_in_fontsdir 指向),否则现在会拿到诚实的 font_missing 错误而非静默无字幕视频。
+
 ### 2026-07-26(续21) — Opus 5 适配核查:「思考关闭」必须说出口——省略 `thinking` 字段在 Opus 5 上不再等于关闭(commit `8d7b6911`,3 文件 +255/-1;新套件 29/29 含 **NEUTER×3 全咬**,相邻环 **160/160**,collect **9434** 0 err)
 - **起因(owner 提问):** 「我们在用 Opus 5,查一下官方文档,有没有新特性没吃到。」于是逐条对官方发布说明核对仓内实现。
 - **先说没问题的(避免虚报工作量):** `is_claude_opus_47` 的 bare-major 正则把 `yuju-claude-opus-5-evaDaily` 正确解析成 (5,0),所以 **xhigh/max 梯位、`display:'summarized'`、采样参数剥离、1M 上下文、128k 出参**全都早已适配到位——之前那次 Opus 5 注册已经把地基打好了。

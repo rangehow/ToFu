@@ -512,6 +512,11 @@ _BUNDLE_FILES = [
     # apiUrl() from core.js, consumed by every feature module below.
     'api.js',
     'push.js',         # after core.js (uses apiUrl), before ui.js (uses pushSubscribe)
+    # Global backend-liveness watch + prominent offline banner. Subscribes
+    # pushOnLatency (push.js) + probes via Api.health (api.js) — both loaded
+    # directly above; every other app symbol (showToast / recovery fns) is
+    # referenced only inside function bodies and typeof-guarded.
+    'core/backend_offline_monitor.js',
     # On-demand loader for the DEFERRED feature bundle (_DEFERRED_FILES). Must
     # be in the CORE bundle (installs the lazy stubs for the deferred entry
     # points before main.js boots). Only references document/debugLog/toast/t

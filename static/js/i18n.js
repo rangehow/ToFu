@@ -90,6 +90,21 @@ var _i18n = {
   'conn.dbUnavailableTitle': { zh: '数据库不可用', en: 'Database Unavailable' },
   'conn.dbUnavailableDesc': { zh: '未运行 PostgreSQL，对话与历史将无法使用。请安装 PostgreSQL（{cmd}）后重启服务器。', en: 'PostgreSQL is not running. Conversations and history will not work. Install PostgreSQL ({cmd}) and restart the server.' },
   'conn.dismiss': { zh: '关闭', en: 'Dismiss' },
+  // ── Backend-offline GLOBAL monitor (core/backend_offline_monitor.js): the
+  //    prominent fixed banner + tab-title prefix raised when the backend is
+  //    unreachable (push socket dropped + 2 consecutive /api/health probe
+  //    failures). {t}=elapsed duration, {n}=retry interval seconds. ──
+  'conn.backendOfflineTitle': { zh: '后端服务器已离线', en: 'Backend server is offline' },
+  'conn.backendOfflineDesc': { zh: '所有进行中的回复已暂停。每 {n} 秒自动重试，恢复后会自动重连并同步结果。', en: 'All in-flight replies are paused. Retrying every {n}s — the page reconnects and resyncs automatically when the server is back.' },
+  'conn.networkOfflineTitle': { zh: '本机网络已断开', en: 'Network disconnected' },
+  'conn.networkOfflineDesc': { zh: '浏览器报告网络已断开。检查网络连接；恢复后页面会自动重连。', en: 'The browser reports no network. Check your connection — the page reconnects automatically when it is back.' },
+  'conn.backendOfflineElapsed': { zh: '已离线 {t}', en: 'offline for {t}' },
+  'conn.backendRetryNow': { zh: '立即重试', en: 'Retry now' },
+  'conn.backendSnooze': { zh: '暂时隐藏', en: 'Hide for 1 min' },
+  'conn.backendRestored': { zh: '后端已恢复', en: 'Backend is back' },
+  'conn.backendRestoredDesc': { zh: '正在重新连接并同步进行中的对话…', en: 'Reconnecting and resyncing in-flight conversations…' },
+  'conn.backendOfflineTitlePrefix': { zh: '【后端离线】', en: '[Backend offline]' },
+  'conn.networkOfflineTitlePrefix': { zh: '【网络断开】', en: '[No network]' },
   'conn.streamOfflineMsg': { zh: '服务器离线，回复可能不完整。服务器恢复后会自动重连。', en: 'Server offline — response may be incomplete. This notice will clear automatically when the server comes back.' },
   'conn.offlineToastDetail': { zh: '后端服务器无响应。已保存部分回复，连接恢复后会自动恢复。', en: 'Backend server is not responding. Your partial response has been saved. It will recover automatically when connectivity is restored.' },
   'conn.restoredTitle': { zh: '连接已恢复', en: 'Connection Restored' },

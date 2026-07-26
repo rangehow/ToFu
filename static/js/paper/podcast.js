@@ -69,8 +69,21 @@ function _pcEsc(s) {
     : String(s == null ? '' : s);
 }
 
+/* Stop the poll timer ONLY.
+ *
+ * The 1s activity ticker is deliberately NOT stopped here: _pcSchedulePoll()
+ * calls this before arming the next poll, so folding the ticker in would kill
+ * the elapsed/last-activity stopwatch on the FIRST poll and freeze the line
+ * at 0:00 for the rest of the run — exactly the "looks stuck" symptom the
+ * liveness line exists to prevent. Terminal states call _pcStopPolling()
+ * instead, which stops both. */
 function _pcStopPoll() {
   if (_podcast.pollTimer) { clearTimeout(_podcast.pollTimer); _podcast.pollTimer = null; }
+}
+
+/** Terminal teardown: stop polling AND the ticker (run is over). */
+function _pcStopPolling() {
+  _pcStopPoll();
   _pcStopTick();
 }
 
@@ -89,7 +102,7 @@ function _pcStopTick() {
 async function _initPodcastTab(force) {
   var host = _pcEl();
   if (!host) return;
-  _pcStopPoll();
+  _pcStopPolling();
   _podcast.paperHash = (typeof _paperHash !== 'undefined') ? (_paperHash || '') : '';
   if (!_podcast.paperHash) {
     _podcast.status = 'idle';
@@ -189,7 +202,7 @@ function _pcConsumeEvent(ev) {
 function _pcPollFail() {
   _podcast.pollFails++;
   if (_podcast.pollFails >= _PC_POLL_FAIL_LIMIT) {
-    _pcStopPoll();
+    _pcStopPolling();
     _podcast.taskId = '';
     _podcast.status = 'lost';
     _pcRender();
@@ -204,7 +217,12 @@ async function _pcPollOnce() {
     var resp = await Api.paper.podcastPoll(_podcast.taskId, _podcast.cursor);
     if (!resp || !resp.ok) { _pcPollFail(); return; }
     _podcast.pollFails = 0;
-    _podcast.lastEventAt = Date.now();
+    /* Liveness is about the WORKER, not the HTTP round-trip: a successful poll
+       that carries zero events proves only that the server answers. Bumping
+       lastEventAt here pinned "last activity" at 0:00 forever and made the
+       >30s stale tint unreachable — a silent worker looked identical to a busy
+       one. Only real events (incl. the 10s worker heartbeat) reset the clock. */
+    if ((resp.events || []).length) _podcast.lastEventAt = Date.now();
     _podcast.cursor = resp.cursor || _podcast.cursor;
     var phaseChanged = false;
     (resp.events || []).forEach(function(ev) {
@@ -227,7 +245,7 @@ async function _pcPollOnce() {
           _pcT('paper.podcastFailed', 'Podcast generation failed');
       }
       _podcast.taskId = '';
-      _pcStopPoll();   // also stops the 1s activity ticker
+      _pcStopPolling();   // stops the poll timer AND the 1s activity ticker
       _pcRender();
       return;
     }
@@ -290,7 +308,7 @@ async function _podcastGenerate(force) {
 
 async function _podcastAbort() {
   if (_podcast.taskId) { try { await Api.paper.podcastAbort(_podcast.taskId); } catch (e) { console.warn('[Paper:Podcast] abort failed:', e); } }
-  _pcStopPoll();
+  _pcStopPolling();
   _podcast.taskId = '';
   _podcast.status = 'idle';
   _pcRender();

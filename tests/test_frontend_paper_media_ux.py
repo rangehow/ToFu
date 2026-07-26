@@ -187,6 +187,43 @@ async function settle(n) { for (let i = 0; i < n; i++) await new Promise(r => se
   check('interrupted_render', host().innerHTML.includes('INTERRUPTED_TEXT')
     && host().innerHTML.includes('REGEN_BTN'));
 
+  /* ── Case L: liveness survives polling (the "looks stuck" regression) ──
+   * A SILENT worker (polls succeed, zero events) is the normal shape of a
+   * long LLM/TTS phase. Two independent things must hold, or the card looks
+   * frozen for minutes:
+   *   (1) the 1s ticker must survive _pcSchedulePoll()'s stop/re-arm, else
+   *       elapsed freezes at 0:00 on the very first poll;
+   *   (2) an empty-but-successful poll must NOT reset lastEventAt, else
+   *       "last activity" reads 0:00 forever and the >30s stale tint (which
+   *       tells the user "quiet, not dead") can never fire. */
+  apiState.lookupResp = { ok: true, found: false, report_available: true };
+  await _initPodcastTab(true);
+  apiState.pollQueue = [];          // silent worker: polls succeed, no events
+  await _podcastGenerate(true);
+  await new Promise(r => setTimeout(r, 1200));   // real time: 1s tick must fire
+  check('liveness_ticker_survives_polling',
+    _podcast.tickTimer !== null && _podcast.tickTimer !== 0);
+  const liveLine = document.getElementById('podcastActivityLine');
+  check('liveness_elapsed_advances',
+    !!liveLine && /0:0[1-9]|0:[1-9]\d/.test(liveLine.textContent));
+  // Empty polls must not masquerade as worker activity.
+  _podcast.lastEventAt = Date.now() - 31000;
+  await _pcPollOnce();
+  check('liveness_empty_poll_keeps_quiet_clock',
+    Date.now() - _podcast.lastEventAt > 30000);
+  _pcRenderActivity();
+  check('liveness_stale_tint_reachable_while_polling',
+    liveLine.classList.contains('is-stale'));
+  // A real event DOES reset it.
+  _pcConsumeEvent({ type: 'heartbeat', phase: 'script', elapsed_s: 10 });
+  apiState.pollQueue = [{ ok: true, done: false, cursor: 7,
+    events: [{ type: 'heartbeat', phase: 'script', elapsed_s: 20 }] }];
+  await _pcPollOnce();
+  check('liveness_real_event_resets_clock',
+    Date.now() - _podcast.lastEventAt < 5000);
+  _pcStopPolling();
+  check('liveness_terminal_stops_ticker', _podcast.tickTimer === null);
+
   console.log(out.join('\n'));
   process.exit(0);
 })().catch((e) => { console.error(e); process.exit(1); });
@@ -355,6 +392,33 @@ async function settle(n) { for (let i = 0; i < n; i++) await new Promise(r => se
   await _videoGenerate(true);
   check('regenerate_sends_force', !!startBody && startBody.force === true);
 
+  /* ── Case L: liveness survives polling (see podcast harness for why) ── */
+  apiState.lookupResp = { ok: true, found: false, report_available: true };
+  Api.paper.videoStart = async () => ({ ok: true, task_id: 'motion_live' });
+  await _initVideoTab(true);
+  apiState.pollQueue = [];          // silent worker: polls succeed, no events
+  await _videoGenerate(true);
+  await new Promise(r => setTimeout(r, 1200));   // real time: 1s tick must fire
+  check('liveness_ticker_survives_polling',
+    _pvideo.tickTimer !== null && _pvideo.tickTimer !== 0);
+  const liveLine = document.getElementById('videoActivityLine');
+  check('liveness_elapsed_advances',
+    !!liveLine && /0:0[1-9]|0:[1-9]\d/.test(liveLine.textContent));
+  _pvideo.lastEventAt = Date.now() - 31000;
+  await _pvPollOnce();
+  check('liveness_empty_poll_keeps_quiet_clock',
+    Date.now() - _pvideo.lastEventAt > 30000);
+  _pvRenderActivity();
+  check('liveness_stale_tint_reachable_while_polling',
+    liveLine.classList.contains('is-stale'));
+  apiState.pollQueue = [{ ok: true, done: false, next_cursor: 7,
+    events: [{ type: 'heartbeat', phase: 'render', elapsed_s: 20 }] }];
+  await _pvPollOnce();
+  check('liveness_real_event_resets_clock',
+    Date.now() - _pvideo.lastEventAt < 5000);
+  _pvStopPolling();
+  check('liveness_terminal_stops_ticker', _pvideo.tickTimer === null);
+
   console.log(out.join('\n'));
   process.exit(0);
 })().catch((e) => { console.error(e); process.exit(1); });
@@ -384,7 +448,7 @@ def test_podcast_ux_state_machine():
     out = _run_harness(_PODCAST_HARNESS, PODCAST_JS, 'pux_podcast')
     fails = [ln for ln in out.splitlines() if ln.startswith('FAIL')]
     assert not fails, 'podcast P-UX failures:\n' + out
-    assert out.count('PASS') >= 15, f'expected >=15 PASS lines, got:\n{out}'
+    assert out.count('PASS') >= 21, f'expected >=21 PASS lines, got:\n{out}'
 
 
 @pytest.mark.skipif(not _node_deps_available(),
@@ -393,7 +457,7 @@ def test_video_ux_state_machine():
     out = _run_harness(_VIDEO_HARNESS, VIDEO_JS, 'pux_video')
     fails = [ln for ln in out.splitlines() if ln.startswith('FAIL')]
     assert not fails, 'video P-UX failures:\n' + out
-    assert out.count('PASS') >= 15, f'expected >=15 PASS lines, got:\n{out}'
+    assert out.count('PASS') >= 22, f'expected >=22 PASS lines, got:\n{out}'
 
 
 @pytest.mark.skipif(not _node_deps_available(),
@@ -454,7 +518,90 @@ def test_NEUTER_video_fail_limit_loadbearing():
     assert open(VIDEO_JS, encoding='utf-8').read() == src, 'shipped file modified!'
 
 
+@pytest.mark.parametrize('module,harness,name,state,stop_call', [
+    ('podcast', 'PODCAST', 'pux_pc_tickneuter', '_podcast', '_pcStopTick();'),
+    ('video', 'VIDEO', 'pux_pv_tickneuter', '_pvideo', '_pvStopTick();'),
+])
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
+def test_NEUTER_liveness_ticker_survives_polling(module, harness, name, state,
+                                                 stop_call):
+    """NEUTER: fold the ticker teardown back into the POLL-path stop (the
+    pre-fix shape) → the 1s stopwatch dies on the first poll and the elapsed
+    probe flips FAIL. Proves the stop/stop-polling split is load-bearing and
+    not cosmetic: without it a silent-but-healthy worker renders as a frozen
+    0:00 card, which is precisely the reported "stuck" symptom."""
+    js_path = PODCAST_JS if module == 'podcast' else VIDEO_JS
+    harness_src = _PODCAST_HARNESS if module == 'podcast' else _VIDEO_HARNESS
+    src = open(js_path, encoding='utf-8').read()
+    anchor = (f"  if ({state}.pollTimer) "
+              f"{{ clearTimeout({state}.pollTimer); {state}.pollTimer = null; }}\n}}")
+    assert anchor in src, 'poll-stop marker not found — test is stale'
+    broken = src.replace(
+        anchor,
+        f"  if ({state}.pollTimer) "
+        f"{{ clearTimeout({state}.pollTimer); {state}.pollTimer = null; }}\n"
+        f"  {stop_call}\n}}", 1)
+    assert broken != src
+
+    tmp = os.path.join(HERE, f'_{name}_broken.js')
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(broken)
+    try:
+        chk = subprocess.run(['node', '--check', tmp], capture_output=True,
+                             text=True, timeout=30)
+        assert chk.returncode == 0, f'patched JS invalid: {chk.stderr}'
+        out = _run_harness(harness_src, tmp, name)
+        assert 'FAIL liveness_elapsed_advances' in out, \
+            'restoring the ticker-in-poll-stop did NOT flip the probe:\n' + out
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    assert open(js_path, encoding='utf-8').read() == src, 'shipped file modified!'
+
+
+@pytest.mark.parametrize('module,name,state', [
+    ('podcast', 'pux_pc_clockneuter', '_podcast'),
+    ('video', 'pux_pv_clockneuter', '_pvideo'),
+])
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
+def test_NEUTER_empty_poll_must_not_fake_activity(module, name, state):
+    """NEUTER: let an empty-but-successful poll bump lastEventAt again (the
+    pre-fix shape) → "last activity" resets every poll, the >30s stale tint
+    becomes unreachable, and the quiet-clock probe flips FAIL. Proves the
+    event-gated reset is what distinguishes "server answers" from "worker is
+    actually doing something"."""
+    js_path = PODCAST_JS if module == 'podcast' else VIDEO_JS
+    harness_src = _PODCAST_HARNESS if module == 'podcast' else _VIDEO_HARNESS
+    src = open(js_path, encoding='utf-8').read()
+    anchor = f"if ((resp.events || []).length) {state}.lastEventAt = Date.now();"
+    assert anchor in src, 'event-gated liveness marker not found — test is stale'
+    broken = src.replace(anchor, f'{state}.lastEventAt = Date.now();', 1)
+    assert broken != src
+
+    tmp = os.path.join(HERE, f'_{name}_broken.js')
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(broken)
+    try:
+        chk = subprocess.run(['node', '--check', tmp], capture_output=True,
+                             text=True, timeout=30)
+        assert chk.returncode == 0, f'patched JS invalid: {chk.stderr}'
+        out = _run_harness(harness_src, tmp, name)
+        assert 'FAIL liveness_empty_poll_keeps_quiet_clock' in out, \
+            'un-gating the liveness clock did NOT flip the probe:\n' + out
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    assert open(js_path, encoding='utf-8').read() == src, 'shipped file modified!'
+
+
 # ═══ Static guards (no node required) ═══
+
 
 def test_static_i18n_keys():
     src = open(os.path.join(ROOT, 'static', 'js', 'i18n.js'), encoding='utf-8').read()

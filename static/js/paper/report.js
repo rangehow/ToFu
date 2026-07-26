@@ -2214,6 +2214,21 @@ function _selectPaperReportModel(modelId, view) {
   if (label) {
     if (modelId) {
       label.textContent = (typeof _modelShortName === 'function') ? _modelShortName(modelId) : modelId;
+      /* The markup ships data-i18n="paper.reportSelectModel" for the initial
+       * placeholder. Once a real model is chosen that attribute must go: the
+       * next _applyI18n() (language toggle, and it also runs on boot) walks
+       * every [data-i18n] and would overwrite the model name with "Select
+       * model" — losing the one piece of state this button exists to show. */
+      label.removeAttribute('data-i18n');
+      /* Long ids are ellipsized by CSS; the button's tooltip carries the full
+       * id so it stays recoverable. Set it on the BUTTON (the label span is
+       * the clipped box) and drop the static data-i18n-title for the same
+       * clobber reason as above. */
+      var btn = label.closest('.paper-report-model-btn');
+      if (btn) {
+        btn.removeAttribute('data-i18n-title');
+        btn.title = modelId;
+      }
     } else {
       // No model available (empty model list) — keep the button usable.
       label.textContent = (typeof t === 'function') ? t('paper.reportSelectModel') : 'Select model';

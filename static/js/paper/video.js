@@ -72,8 +72,16 @@ function _pvEsc(s) {
     : String(s == null ? '' : s);
 }
 
+/* Stop the poll timer ONLY — see the note in podcast.js:_pcStopPoll: the 1s
+ * activity ticker must survive _pvSchedulePoll()'s re-arm, or the elapsed /
+ * last-activity stopwatch freezes at 0:00 on the first poll. */
 function _pvStopPoll() {
   if (_pvideo.pollTimer) { clearTimeout(_pvideo.pollTimer); _pvideo.pollTimer = null; }
+}
+
+/** Terminal teardown: stop polling AND the ticker (run is over). */
+function _pvStopPolling() {
+  _pvStopPoll();
   _pvStopTick();
 }
 
@@ -90,7 +98,7 @@ function _pvStopTick() {
 async function _initVideoTab(force) {
   var host = _pvEl();
   if (!host) return;
-  _pvStopPoll();
+  _pvStopPolling();
   _pvideo.paperHash = (typeof _paperHash !== 'undefined') ? (_paperHash || '') : '';
   if (!_pvideo.paperHash) {
     _pvideo.status = 'idle';
@@ -203,7 +211,7 @@ function _pvConsumeEvent(ev) {
 function _pvPollFail() {
   _pvideo.pollFails++;
   if (_pvideo.pollFails >= _PV_POLL_FAIL_LIMIT) {
-    _pvStopPoll();
+    _pvStopPolling();
     _pvideo.taskId = '';
     _pvideo.regenTaskId = '';
     _pvideo.status = 'lost';
@@ -220,7 +228,9 @@ async function _pvPollOnce() {
     var resp = await Api.motion.poll(tid, _pvideo.cursor);
     if (!resp || !resp.ok) { _pvPollFail(); return; }
     _pvideo.pollFails = 0;
-    _pvideo.lastEventAt = Date.now();
+    /* Only real events reset the liveness clock — see podcast.js for why an
+       empty-but-successful poll must NOT count as worker activity. */
+    if ((resp.events || []).length) _pvideo.lastEventAt = Date.now();
     _pvideo.cursor = resp.next_cursor != null ? resp.next_cursor : _pvideo.cursor;
     var phaseChanged = false;
     (resp.events || []).forEach(function(ev) {
@@ -239,18 +249,18 @@ async function _pvPollOnce() {
         _pvideo._doneTaskId = _pvideo.taskId;
         _pvideo.status = 'done';
         _pvideo.taskId = '';
-        _pvStopPoll();
+        _pvStopPolling();
         _pvRender();
         _pvLoadScenes();
       } else if (resp.status === 'aborted') {
         _pvideo.status = 'idle';
         _pvideo.taskId = '';
-        _pvStopPoll();
+        _pvStopPolling();
         _pvRender();
       } else if (resp.error && resp.error.kind === 'worker_lost') {
         _pvideo.status = 'lost';
         _pvideo.taskId = '';
-        _pvStopPoll();
+        _pvStopPolling();
         _pvRender();
       } else {
         _pvideo.status = 'error';
@@ -258,7 +268,7 @@ async function _pvPollOnce() {
           (typeof resp.error === 'string' ? resp.error : '') ||
           _pvT('paper.videoFailed', 'Video generation failed');
         _pvideo.taskId = '';
-        _pvStopPoll();
+        _pvStopPolling();
         _pvRender();
       }
       return;
@@ -324,7 +334,7 @@ async function _videoAbort() {
     try { await Api.motion.abort(_pvideo.taskId); }
     catch (e) { console.warn('[Paper:Video] abort failed:', e); }
   }
-  _pvStopPoll();
+  _pvStopPolling();
   _pvideo.taskId = '';
   _pvideo.status = 'idle';
   _pvRender();

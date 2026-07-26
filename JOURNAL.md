@@ -1,6 +1,19 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续28) — Opus 5 适配收官第 3 刀:effort 梯位全档显式 + 两条出站路径钉在一起;**并对自己前一轮的实测结论做了否证**(commit `b3a2b2c9`,3 文件 +216/-2;89 测 14 failing-first 含 NEUTER×3 全咬,相邻环 **347/347**,collect **9820** 0 err)
+- **owner 抓的最后一个洞,而且在默认档上。** `_build.py` 有 `if _effort and _effort != 'medium'` —— **medium 被显式排除,永不落 wire**。这行在写下时是**对的**:当年 medium 就是 Claude 默认值,不发等于发,省字节。Opus 5 把默认改成 `high`,于是它的含义一夜之间从「省流量」变成「**把用户选的 Med 悄悄升级成 High**」。而 `index.html` 桌面(:795)与移动(:1708)的 `active` 都钉在 `data-depth="medium"` —— 这是绝大多数用户每轮都在走的路。
+- **与前两刀同一个病根(至此三处收齐):** `8d7b6911` 出站 thinking-off、`43dd1ecd` 入站 thinking 语义、本刀 effort 默认档 —— 全是「**省略即默认**」这个被 Opus 5 作废的假设。
+- **真正耐久的那一半是「路径一致性」:** Tofu 有**两处**组装 Claude body(`build_body` 主路径 / `_readjust_thinking_params` 模型交换路径),它们**在这一档上是矛盾的**:前者丢弃 medium,后者保留。同样的 (model, enabled, depth) 进去,两种 wire 出来 —— 这本身就是 bug,不是风格差异。现在共用一条规则,并加了 **rungs × models 全交叉**的一致性测试(不是抽查:上一次分叉恰恰只藏在一档上)。
+- **pre-4.7 Claude 保持逐字节不变的 omit-medium wire** —— 那些模型的默认确实还是 medium,发不发同义。**一个档位只有在「省略会意味着别的东西」时才值得显式说出来。**
+- **⚠️ 本轮最重要的一条,是我否证了自己上一轮的数据。** owner 要求「修完复验 Med 落回 1855 那一档」。我做了,**没有落回去**,于是没有硬凑结论:
+  - **交错配对 A/B(n=10/臂,让网关漂移平等地打在两臂上):** dropped 中位 **2870.5**、effort=medium 中位 **2872.0**,配对中「修后更省」只有 **6/10** —— 基本持平。
+  - **三臂交错(n=6):** low 3162.0 / medium 3062.5 / max 2754.5 —— 互相重叠,且**顺序与预期相反**。
+  - **结论:上一轮那个 1.52× 极可能是噪声。** 单样本离散度约 **4×**(930–3834),远宽于所要宣称的效应;前一轮两臂是**顺序跑**的,漂移没有被抵消。
+- **所以这一刀只站在「正确性」上,不站在「省钱」上:** wire 必须说出用户所选,两个 builder 不许分歧 —— 这两条独立成立。**测试只断言 body 形状,零 token 断言、不拿网关当 oracle。** 想真正测准 effort 旋钮需要低方差 harness(固定 seed 或确定性 prompt),**如实记为未解决,而不是粉饰过去**。
+- **给后人的教训(比这个 bug 本身值钱):** 在这个网关上用**顺序**跑的两臂对照来判断 token 效应是不可靠的;要么交错配对,要么换确定性任务。前一轮的 1.93×(thinking-off)因为效应量远大于噪声所以结论仍站得住,但同样的方法用在效应更小的 effort 梯位上就翻车了。
+- **epic `pt_aa9583af0e124322`(两个 Anthropic beta)复核后仍挂着:** `data/config/oauth/` **实测 0 个 token 文件**,`oauth_claude` 虽 enabled 但原生线发不出请求 —— 验收条件「A/B 对照 cache_read_tokens」无法执行。已按 human-gated 挂回,不写投机代码。
+
 ### 2026-07-26(续27) — 行存储切换守卫:charter 说的「纯替换」在**部分 backfill** 上是静默丢数据(commit `28b5e520`,2 文件;13 测 9 failing-first,NEUTER 咬 3,全环 **199/199**,collect **9814** 0 err;charter v2)
 - **收 epic `pt_5583b7f5cbad4ce0` 的最后一项。** 前四刀(`0cc0aee1` 写分区 / `7ff7ef8d` conv_ref 身份 / `d48f74ce` get_conversation 选取 / `96d24277` 覆盖棘轮+窗口语义)已在 HEAD,本轮先逐条复验仍成立(gap=`['__code_exec__']`、9 个状态变更工具全在写分区、三个会话 raw JSON 全 VALID),再补这一刀。
 - **parity 看不见的那一面:** 续20 的 `test_conv_ref_window_parity` 证明了两个 windower 在**同一份数据**上语义一致。但行存储 backfill **不完整** —— 实测全库 **3,696 / 4,160(88.8%)**,其余 464 个查出 `totalCount=0`,**与「这个会话是空的」完全无法区分**。真实样本 `mrlmtudriuexuo`(msg_count=6)、`mrnao32x86gnlw`(6)、`mrk2dmaeybj5vd`(4)。所以 charter 的「纯替换」只在 backfill 落到的地方成立,其余是**看起来正确的静默丢数据**。

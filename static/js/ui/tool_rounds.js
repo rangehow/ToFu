@@ -1792,6 +1792,29 @@ function _linkifyMcpLabels(text, round) {
   return out;
 }
 
+/* Recovery-rebuilt rounds can carry NO `query` at all: boot crash recovery
+ * rebuilds toolRounds from the persisted segments (a wire-replay view — only
+ * toolCallId/toolName/toolArgs/toolContent/status/llmRound) and, for history
+ * written before the display projection landed, persisted them as-is. The
+ * generic line below interpolates `q` as the whole title, so a query-less
+ * round rendered as an EMPTY card (icon + 模型原文 button, nothing else —
+ * the ms1auj3n restart symptom). Never render blank: fall back to the tool
+ * label plus a short first-string-arg summary so the row still says what ran. */
+function _recoveryRoundFallbackTitle(round, td) {
+  const base = (td && td.label) || round.toolName || 'tool';
+  let summary = '';
+  try {
+    const args = typeof round.toolArgs === 'string' ? JSON.parse(round.toolArgs) : round.toolArgs;
+    if (args && typeof args === 'object') {
+      for (const k of Object.keys(args)) {
+        const v = args[k];
+        if (typeof v === 'string' && v.trim()) { summary = v.trim().split('\n')[0].slice(0, 80); break; }
+      }
+    }
+  } catch (e) { /* malformed toolArgs — the label alone still beats a blank row */ }
+  return escapeHtml(summary ? base + ' — ' + summary : base);
+}
+
 function _renderUnifiedToolLine(round, isSearching) {
   const svg = _getToolSvg(round);
   const td = _getToolDisplay(round);
@@ -1799,7 +1822,9 @@ function _renderUnifiedToolLine(round, isSearching) {
    * displays render one item per line so users can see every candidate
    * without elision. escapeHtml first (HTML-safe), THEN substitute
    * \n → <br> so the browser actually breaks the line. */
-  const q = _linkifyMcpLabels(escapeHtml(round.query || "").replace(/\n/g, '<br>'), round);
+  const q = round.query
+    ? _linkifyMcpLabels(escapeHtml(round.query).replace(/\n/g, '<br>'), round)
+    : _recoveryRoundFallbackTitle(round, td);
   const results = round.results || [];
   const meta = results[0] || {};
   const rootPill = _renderToolRootPill(round);

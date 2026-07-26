@@ -376,6 +376,15 @@ TOOL_RESULT_MAX_CHARS: dict[str, int] = {
     'browser_get_interactive_elements': 30_000,
     'browser_execute_js': 30_000,
     'browser_get_app_state': 30_000,
+    # conv_ref bounds its OWN output at lib/conv_ref/_detail.MAX_CHARS (80k) by
+    # selecting whole messages. Its budget here must sit ABOVE that so L0 never
+    # fires on a normal read: previously the default 60k clipped conv_ref's
+    # already-80k-truncated text and persisted THAT to disk while telling the
+    # model "Full output saved to: …" — measured 0.54% of the real record on a
+    # 15.7 MB row. One layer owns the cap; L0 stays a backstop for the
+    # pathological single-huge-message case, where what it writes IS what the
+    # tool produced.
+    'get_conversation': 100_000,
 
 }
 _DEFAULT_TOOL_RESULT_MAX = 60_000

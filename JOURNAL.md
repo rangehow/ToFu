@@ -1,6 +1,25 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续76) — 「autopilot 没接管」取证:接管**发生了两次**,两次都被 OOM Killed 打断在 VU 调查半途;崩溃恢复链路两个洞让它看起来「从没接管」(owner 问 conv `ms1rz4b2es7oiz`;零代码变更,纯日志+DB 取证)
+
+- **完整时间线(本地 UTC+8,证据全在 logs/app.log.2026-07-26 + task_results + audit.log):**
+  | 时刻 | 事件 |
+  |---|---|
+  | 21:04 | 用户带 autopilot 开关发送,task 44e043f4(config 驱动,**无持久 marker**) |
+  | 21:06:51 | VU 第 1 轮成功 → follow-up 78093677(R1 harvest 工作,31 轮) |
+  | 21:59:13 | 78093677 stop;end-of-turn hook 正常触发,**VU 子任务 ee34f862 21:59:14 开跑**(R1 于 22:00:40 完成) |
+  | ~22:02:2x | **进程被 OOM SIGKILL**(cgroup 94.7%/220GiB,error.log CRITICAL)— VU 死于半途(content=571chars 未落盘) |
+  | 22:02:52 | 重启恢复标 3 任务 interrupted;**但 run 无 marker → `resume_armed_autopilot_after_crash` 扫不到**;且 `TOFU_BOOT_AUTO_DISPATCH` 默认关 |
+  | 22:04:15 | 用户手动 arm(marker 首次落盘)+ kick d7cca9d2 → **VU 子任务 79f824e8 开跑**,3 个工具轮(22:05:40/22:06:49/22:07:51) |
+  | ~22:09:5x | **进程再次被 OOM SIGKILL**(app.log.2026-07-26 22:09:56 戛然而止)— VU 又死于半途(content=1407chars) |
+  | 04:56:58(+1) | 重启;「Boot auto-dispatch DISABLED — 10 recovered left for MANUAL resume」— 这次有 marker,但**恢复 lane 被 env 闸关掉** |
+  | 04:58:38 | 用户 disarm(点 ✕)→ `conclude_run(reason='stopped')` —— 这就是 settings 里 ar-1dab92d70584 那条空 concluded 记录的出处 |
+  | 04:58:56 | 用户重新 arm → kick f8223159 → VU f08b9f62 → **这次真接管了**(run ar-760a094173f0) |
+- **为什么界面上「从没接管」的观感是错的但合理:** ①VU 只在成功时落盘(`_append_vu_message_to_conv`,防幽灵气泡设计),被杀的 VU 零痕迹;②done 接力棒被扣到 VU 跑完才发,父回复看着已完结、loop 其实死了;③「待接管」条由持久 marker 渲染,marker 还在 → UI 说「就绪」,后端 loop 已死。
+- **三个真实缺陷洞(待 owner 拍板修不修):** ①**发送时 toggle 驱动的 run 全程无持久 marker**(marker 只在显式 arm 手势时写)→ 崩溃恢复对 config 驱动 run 结构性失明;②`resume_armed_autopilot_after_crash` 挂在 `TOFU_BOOT_AUTO_DISPATCH`(默认 OFF)总闸后面,armed run 在启动时永远 parked;③可观察性洞:启动恢复扫到 interrupted `_vu_subtask` 时没有任何「autopilot 接管被崩溃打断」的提示,只能靠人肉翻日志。
+- **崩溃根因归环境不归 tofu:** cgroup_guard 两次 CRITICAL(22:02:58 94.7% / 04:57:10 99.8%,共享 220GiB swap=0),与会话 ms2a6hdfaowgfk 的「无理由 Killed」同源。
+
 ### 2026-07-26(续75) — 本地引擎端口自动发现落地:启动即扫 Ollama 11434 / vLLM 8000 / SGLang 30000,发现模型直接配好 provider(owner「templates 可以更主动检查用户的端口」;epic `pt_88d0b481feef47fd`;commit `30f0129f`,5 文件 +553/-2;新套件 **11/11**,相邻四环 **29/29**,collect **10227** 0 err)
 
 - **形态:** 新模块 `lib/llm_dispatch/autodiscover_local.py` + server.py 启动挂点(紧随 health_local)。启动后 5s 首扫、之后每 120s 周期扫(后启动的引擎/后 pull 的模型也能捡到)。
@@ -15,6 +34,14 @@
 - **关键边界实测:** 引擎活着但零模型(没 pull)→ 不加也**不** dismiss(下轮重探,pull 后自动出现);单个候选炸异常不掩盖其他引擎;`TOFU_LOCAL_AUTODISCOVER=0` 一键关闭;前后端端口表有 parity 测试钉死(`WELL_KNOWN_ENGINES` ↔ `_LOCAL_ENGINE_PRESETS`)。
 - **给后人:** 自动写 `server_config.json` 必须「查重+落锁」双保险——sweep 外查一遍覆盖集,`update_json_atomic` mutator 内在锁下再查一遍(并发 Settings 保存不丢)。provider id 用确定性 `auto_<engine>_<port>`,状态文件丢失后重加撞 id 而非重复行。
 - **生效条件:** 代码改动,**需重启服务**;纯新增路径,不重启用旧行为无任何影响。
+
+### 2026-07-26(续75) — pt_c03fae11 收口:_sendInFlight 永卡根修(自主派单;commit `26995d84`,2 文件 +198/-35;新套件 failing-first **3 红→3 绿**,双 NEUTER 全咬,相邻环 4 套件绿)
+
+- **票面只报了一条泄漏路径,根修时挖出两条:** ①注入弹窗期间切会话的裸 return(票面);②`_waitForVlmParsing`/`_buildConvConfig`/`_promptInjectMode` 三个 await 任一抛异常——**gap 里根本没有 catch**,同样永卡。只补 return 是补丁,把整个 pre-POST await 区包进自己的 try/catch 才是根修。
+- **修复形状:** gap 内任意出口(return 或 throw)→ 清 flag + rescue sync + `markConvPendingSync` 兜底——与主 catch 失败分支**同一份耐久契约**(后端在此刻可证未持久化)。切会话 abort 的消息保留可编辑(与 user-stop-during-translate 同语义)且现在真的会落库。
+- **守卫:** `test_frontend_send_inflight_guard.py` 结构扫描——gap 内禁止「无前置清零的 return」+ gap 必须含清 flag 的 catch;NEUTER×2 字节回退(摘 abort 清零/摘 catch 清零)均精确触发。
+- **归因纪律(又一次):** 相邻环 2 个红被证实**非我方**——ratchet 红是 streaming_ui.js 51>50(兄弟未提交 WIP),lost_ack 红是 `_rebaseUnackedTail` 搬家后 harness 过期(Epic-E slice 3 `b33d9d21` 已提交)。本文件 ratchet 恰好 12/12 钉死自证清白。后者已开尾巴票 `pt_b5b0a00d6ad74953` 给 Epic-E owner。
+- **给后人:** 「标志在 try 外设置、在 finally 清零」的模式必须审计 **set 与 try 之间的每一行**——await 会抛、guard 会 return,任何一条都是永卡。审计法:数清 gap 内所有出口,而不是只修被目击的那一个。
 
 ### 2026-07-26(续74) — 全项目 bug 审计(前端可感知优先):5 路并行 + 主线复核,8 张新票上板(纯审计+开票,零产品代码变更)
 

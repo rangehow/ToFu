@@ -21,6 +21,12 @@
 let _syncChannel = null;
 try {
   _syncChannel = new BroadcastChannel("claude_dialogue_sync");
+  /* Node's BroadcastChannel is an ACTIVE handle that keeps the event loop
+   * alive — any headless consumer that evals this module (jsdom harnesses,
+   * scripts) would hang forever at exit. unref() exists only on Node's
+   * implementation (browsers lack it), so guard with typeof: in the browser
+   * this is a no-op and the page never exits anyway (pt_791bda84). */
+  if (typeof _syncChannel.unref === 'function') _syncChannel.unref();
   _syncChannel.onmessage = (e) => {
     if (e.data && e.data.sourceTab !== TAB_ID) _handleCrossTabMsg(e.data);
   };

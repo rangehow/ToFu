@@ -132,6 +132,7 @@ def test_served_bundle_excludes_dictionary_and_pack_carries_it(flask_client):
 def test_each_pack_is_single_language(flask_client):
     """The zh pack must not contain en text and vice versa (sampled)."""
     import lib.js_bundler as B
+    B.get_bundle_filename_nonblocking()  # ensure built state — never rely on test order
     for lang, other in (('zh', 'en'), ('en', 'zh')):
         name = B._pack_filenames.get(lang)
         assert name, f'no {lang} pack in bundler state'
@@ -286,7 +287,13 @@ def test_served_split_is_materially_smaller_than_dual():
         return
     import lib.js_bundler as B
 
+    # Ensure built state — this test must pass standalone, not only after a
+    # sibling test happened to populate the module globals.
+    if not B.get_bundle_filename_nonblocking():
+        B.build_bundle()
     bundle_name = B._bundle_filename
+    assert bundle_name and B._pack_filenames, (
+        'no split bundle/pack state — cannot measure the served saving')
     split_bundle = open(os.path.join(JS_DIR, bundle_name), 'rb').read()
     zh_pack = open(os.path.join(JS_DIR, B._pack_filenames['zh']), 'rb').read()
     dual_i18n = open(os.path.join(JS_DIR, 'i18n.js'), 'rb').read()

@@ -1,6 +1,13 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续18) — pt_d42e7028869e492b 收口:gateway 阻塞已由 sibling 解除,全仓 collect 从 48 err 恢复到 **9698 收集 0 错误**(零代码改动,纯核实 + 交接)
+- **票的范围就是「阻塞」本身,不是 gateway 功能。** 我在 P6 批次里发现 `lib/llm_sanitize/_gateway.py` 处于未提交的破损状态(IndentationError),导致全仓 `--collect-only` 报 48 errors、`test_request_inspector.py` 13 红;当时 stash A/B 实证与我的改动无关,遂开票交由持有 gateway epic 的会话处置。
+- **本轮核实(三条全过):** ①`py_compile` 通过;②`git status` 该文件干净(sibling 已提交 `7bc05422`);③全仓 collect **9698 收集 0 错误**。当初被带红的检视器 6 套件复跑 **45/45**。
+- **顺带查清一件容易误判的事:** `tests/test_gateway_sanitize.py` 现在有 4 红,但**不是新缺陷、也不归我**——它们是 sibling 那张票**尚未实现的那一半**的 failing-first 基线:测试已按「ZWSP 不可见断字」方案写好(`test_no_identity_entries` / 替换值不得逐字包含原词 / **`ImportError: cannot import name _invisible_break`**),而 `_gateway.py` 里仍是恒等占位符。**验收条件已被测试钉死,缺的只是实现。**
+- **刻意不做:** 不碰 `_gateway.py`。替换值是内容/政策决策(owner 已明确要人来定),且效力只能对着 live 网关验证——agent 自行发明替换词既越权也无法验真。已把「红在哪 / 为什么红 / 验收条件已就位」精确交接给 `mrt1zlag2zepdx`。
+- **教训(值得记):** 共享 HEAD 上遇到全仓 collect 崩,**先查是不是 sibling 的未提交 WIP**——`git status` + 单文件 `py_compile` 两条命令就能定位,比逐个套件排查快一个数量级;定位后开票交接而不是代修,避免两个会话在同一文件上对冲。
+
 ### 2026-07-26(续17) — 检视器读路径 O(轮数²) 根修:126 轮 206.8s → 0.02s(commit `e51a0540`,3 文件 +315/-2;新套件 6/6 含 NEUTER,回归 13 套件 **75/75**)
 - **怎么发现的(不是猜的):** P6 落地后我做端到端真实数据核验,顺手量了「逐轮取 payload」的耗时 —— 真实任务 `e1699c69` 126 轮**用了 206.8 秒**,单轮 ~1.6s。这正是用户在抽屉里挨个点开轮次的动作。
 - **根因:** `get_request_payload` 每次调用都重跑完整 `_read_events`(读该任务全部事件 + 重建全部快照)。线性的 UI 动作被做成 **O(轮数²)**;P5 的增量存储让「重建」这一步变实,**反而把这个既有缺陷放大了**。

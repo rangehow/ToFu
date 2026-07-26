@@ -1,6 +1,29 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续72) — 自动科研系统 R1 落地:harvest 批量爬 + parse-once 入库原语(owner 拍板 R1–R3 优先 + 「phash 逐字节一致」为最高验收)。commit 见下,3 新文件 + facade;新套件 **7/7 含 NEUTER×2 + failing-first 实证**,相邻 paper 三套件 **28/28**,collect **10209** 0 err
+
+- **owner 的隐藏假设已钉死并实证:** harvest 入库路径产出的 `phash` **必须与阅读模式 ingest 逐字节一致**,否则「已读过→命中缓存」静默失效、parse-once 成本故事当场崩。
+- **结构性保证(非重实现):** harvest 通过**与阅读模式完全相同的两个函数**算 phash —— `parse_pdf(bytes)['text']`(同 parser、同 `text_mode='rich'`)→ `lib.paper.hashing._paper_hash(text)`(唯一 canonicalization 点,已 strip-canonical + 有 `test_paper_hash_canonical.py` 兜底)。harvest **自己零文本归一化**;加任何一步都是设计稿警告的那个 bug。
+- **两级去重:** ①下载前按 `arxiv_id` 探库(有非空 `parsed_text` 的行 → 跳过下载+解析,「已在书架」快路径);②解析后按 `phash` upsert(内容哈希是库真身,别名/无 id 也 coalesce 到一行)。
+- **与阅读模式共用书架(owner 要的「降低开销」):** 同一张 `paper_library`、同一套 `phash`、同一 `_persist_ingested_library_row` 部分 upsert 契约(保 created_at/qa_history/babel_cache);harvest 额外写 `folder_id`(科研任务专属文件夹)。跨模式双向命中:阅读模式读过的论文 harvest 时零解析,反之亦然。
+- **测试(failing-first 实证,非仅绿):** 手动把 harvest 改成 hash `text+'X'` → 身份测试精确翻红(`5970… != 44126…`),改回即绿。**NEUTER×2:** ①往 hashing seam 注入 whitespace 归一化 → 身份断言红;②空 `parsed_text` 行**不算**命中(仍解析填充)。另测:cache-hit 不重解析(解析调用计数硬断言)、batch 二次运行 `reparse_count==0` 全命中、输入 id 去重、跨模式命中。
+- **best-effort 纪律:** 每篇下载/解析失败记入 result 不抛,40 篇不因第 7 篇死;`validate_pdf_bytes` 闸拒截断 PDF(否则铸出垃圾 phash)。
+- **facade 安全:** harvest 重依赖全部函数内惰性 import,加进 eager barrel `lib/paper/__init__.py` **零 import-time 成本**(不重蹈 P0 hash_backfill 级联)。
+- **shared-HEAD 纪律:** 精确 4-file pathspec 提交(harvest.py / __init__.py / test / 设计稿),`__init__.py` diff 核实仅我的 2 处 harvest 增行,大量 sibling WIP(error_envelope / streaming / i18n split)未 stage。
+- **给 R2:** survey 阶段直接吃 harvest 建好的库;`harvest_arxiv_batch` 的 `on_progress`/`abort_check` 缝已留给 R4 上底盘时接 `Stage` 进度双投影。
+
+### 2026-07-26(续71) — 自动科研系统设计稿落笔:`docs/AUTO_RESEARCH_SYSTEM_DESIGN.md`(纯设计,零代码;owner「设计一个极强的 paper mode 自动科研系统」)
+
+- **核心裁定:这不是新子系统,是产出底盘上的「第四个配方」。** 盘上核实后,七块地基全在:①`lib/production/`(ProductionRuntime + stages.py 阶段图 + jobs.py 崩溃续跑)②`lib/longform/recipe.py`(数据驱动阶段列表范本)③report_engine 的 `run_agent_loop`+`_REPORT_TOOLS`(相关工作调研引擎原样可用)④recommend_engine 的 grounding(防幻觉引用现成闸)⑤`paper_library`+`phash`(parse-once 缓存,`sha256(text)[:32]` 唯一寻址)⑥insight_engine 的四轴 rubric+transfer moat(创新点发现直接范本)⑦citation_audit/terminology_audit(零 LLM 审计闸)。
+- **七阶段配方:** discover(趋势/机构选题)→ harvest(批量爬+逐篇 parse_pdf 入库,与阅读模式共用 `paper_library`,parse-once 越用越省)→ survey(多篇 fan-in 综述+空白地图)→ **ideate(创新点+反 A+B 新颖性闸,智识核心)**→ plan_study(实验/分析设计)→ figures(matplotlib 矢量数据图 + HTML/SVG→Playwright 示意图)→ typeset(LaTeX 装配 + Overleaf MCP `compile_project` 读日志自修回环)。
+- **反「A+B 缝合」= 可度量的闸,非 prompt 口号:** 照抄 insight `_rubric` 做四轴 LLM-judge(新颖性/可证伪性/机理深度/价值)+ 零 LLM 结构闸(`prior_art`/`why_not_AB`/`novelty_claim` 引用具体 arxiv_id 必填)+ recommend grounding(接不上的 prior_art 剥 null → idea 判无效)+ headroom 阈值淘汰。
+- **实测约束(动手前 probe):** 本机有 matplotlib 3.6(直出 SVG/PDF/**PGF** 矢量)+ graphviz + Playwright(HTML/SVG→矢量 PDF);**无 pdflatex/tectonic/chromium 在 PATH** → **TeX 编译一律走 Overleaf 服务器(MCP),本机不装 texlive**;plotly 未装。
+- **零新增 schema:** 综述/创新点/方案走 `paper_reports` 复合 lang 键(照抄 insight `insight:<lang>` / review `review:<venue>:<lang>` 两先例),复用 upsert 写路径+PG/SQLite 桥。
+- **分期 R1–R7:** R1 harvest 原语(建库,最独立)→ R2 survey → **R3 反 A+B 闸(价值最高,早验证)**→ R4 上底盘 → R5 figures → R6 typeset/Overleaf → R7 discover+生产卡+知识包。倾向先交付 R1–R3。
+- **诚实边界:** 产出是「资深博士生第一稿 + 证据链」,不是「已验证的科学发现」;闸保下限(不出缝合怪),不保上限(不承诺拿奖);判断权始终在人。5 个待拍板问题见设计稿 §8。
+- **取证方式:** 3 路并行子代理(figs/lib/report)map 了图表原语、论文库 parse-once 机制、report 引擎复用缝;主线读 production/longform/insight/recommend/citation_audit/terminology_audit 源码 + probe 依赖。
+
 ### 2026-07-26(续69) — kimi-k3 1M 上下文解锁:expand 学习条目是**地板不是天花板**,expand 侧饥饿死锁根修(owner「kimi-k3 has a 1M context!」;commit `4d369a75`,4 文件 +116/-13;6 failing-first 先红后绿,NEUTER 精确咬 2,相邻环 **233 过**,collect **10199** 0 err)
 
 - **症状(实测,非票面):** kimi-k3 真实窗口 1M(owner 确认,`_max_output.py:122` 与 `pricing/_tables.py:186` 自 07-17 就记着 1000K),但 Tofu 在 **~242k tokens 就强制压缩**,浪费了 75% 的窗口。
@@ -852,3 +875,16 @@
 - **棘轮补间接驱动签名(防患,非修现患):** `_DB_WRITE_SIGNATURES` 增加 `_sync_result_to_conversation` / `_sync_partial_to_conversation` / `append_persistent_event`。严格预扫证实**零新咬**(全部已被现有签名或闸覆盖,被监管总体仅 +1 个已带闸文件 test_event_fold_cold_replay.py)——堵住「未来某文件只调 sync 接缝、不经 create_task/persist_task_result」的逃逸路径。ratchet 复测 14/14。
 - **存量清理 dry-run(两个库都实测):** 共享 sqlite `data/tofu.db`(6GB,PG 不可达时的回落库)与生产 PG(`127.0.0.1:15439/tofu`,只读事务)按 8 个 task_id 模式(usagetas/task-cause/seamtask/task-freeze/task-parallel/task-artifact/tfeedpb/aaaaaaaa)× task_events+task_results、6 个 conv id 模式(含 test-dri/requeue-test)、4 个 timer 模式全量计数——**全部 0 行**。历史污染行已被此前清理除掉,本次无需任何 DELETE。
 - **环境地雷(已存 memory `pytest_napari_plugin_crash_workaround`):** conda env 里新装的 napari 注册了坏 pytest11 entrypoint,任何 `pytest` 调用在插件加载期即崩(vispy→GL ES 2.0 not found);规避 `python -m pytest -p no:napari ...`。与本次改动无关,但会咬所有跑测试的会话。
+
+## 续32 — 日志覆盖扫描的三项收尾交付(owner 逐行核对后指出未落地)
+
+扫描(pt logging-coverage)只出了清单没落码,owner 核对后拍板补齐。三项均已落地并实测。
+
+- **前端发送管线 3 处静默 catch → `debugLog(..., 'error')`**(`main_send_pipeline.js:923 / 1505 / 1530`)。理由:静默丢用户消息是**数据丢失级**故障,必须进服务端 `logs/app.log`。每条带 convId 截断 + 错误 message + **分支名**(autopilot / queued-dispatch / cleanup)——三处 `_ghost.remove()` 代码形状完全相同,不带分支名则日志到了服务端也分不清是哪条路径炸的。
+- **`ConvCache.put` 与 header-read 3 处 → `debugLog(..., 'warn')`**(`conversations.js:745 / 1543 / 1622`)。持久化失败会让同步问题不可见;warn 级足够且不刷屏。两处 put 分别标注 MERGE_ACTIVE_TASK 的 adopt / append 分支。
+- **`api.js` 2 处 body-parse catch → `console.warn` + url/status**(`163 / 936`)。**刻意只到本地**:api 层错误由 `ApiError` 携带 body 上抛,调用方看得见,不算完全静默,不值得占用服务端上送配额。第 2 处(trading `call()`)是扫描清单外、本轮 grep 顺带扫出的同形状点,一并补上。
+- **`_resume_state.py:37` 裸 `logging.getLogger('tofu.orchestrator')` → `from lib.log import get_logger; logger = get_logger(__name__)`**。这是本次架构整改扫出的**唯一** infra 偏差(其余 get_logger 合规率 99.4%),补齐后 100%。实测 logger.name 由手写的 `tofu.orchestrator` 变为 `lib.tasks_pkg.orchestrator._resume_state`,与全项目命名空间一致。
+
+**决策:info/log 级不上送(明确否决,不是遗漏)。** `debugLog` 每轮任务信息量巨大(任务启动、排队、steer 注入、autopilot 取消……),全量上送会淹没 `app.log`,让真正的 error/warn 更难被发现。**`debug_panel.js:23` 的 `if (type === "error" || type === "warn")` 保持不动。** 扫描把「info 不上送」写成结构性缺口是**误判**:真正的缺口不是过滤器太窄,而是**静默 catch 根本不调用 debugLog**——一个 `catch (e) { /* ignore */ }` 无论过滤器放多宽都永远不会产生日志。把上述 6 处接进 debugLog 后这条即闭环;放宽等级只会在闭环之外额外付出噪音代价。
+
+**验证:** `node --check` 四个 JS 文件全过;`tests/test_bundle_manifest_parity.py` 15/15;收集门 10,201 tests / 0 collection error;`-k "resume_state or resume_prefill"` 4 passed。残留扫描确认三个文件里原始静默形状(`catch (e) { /* ignore */ }`、`ignore body parse error`、`/* best-effort */ }`)**均已归零**。

@@ -1,6 +1,21 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续) — 项目栏画面优化第二刀:按**设备像素**砍掉 4 个全画布开销 pass(commit `b8250f24`,5 文件 +369/-86;perf 套件 **21/21**,相邻五环 **142/142**,collect **9451** 0 err) — 以及一起 git 泄漏的自首
+- **owner 复盘上一刀(`c83513f7` + `5721093c`)抓到两个真问题,全部实锤。**
+- **㈠ git 泄漏(紧急,我先自首):** owner 用 `git show c83513f7 -- static/styles.css` 当场核实 —— 我在上一刀报告「只暂存我那 8 行 / sibling 的暂存原样留在盘上」,**是错的**。commit 实际吞进了**全部 3 个 hunk**,包括 sibling 的 `.pb-board-title{font-size:13.5px;font-weight:600}` 和整块 49 行「Project Brain P4 readability pass」。stat 是 59 行不是我说的 8 行。**根因:** 我用 `git apply --cached` 精心只暂存了自己的 hunk,然后 `git commit -- <pathspec>` —— **pathspec 会绕过索引、直接提交工作树状态**,把部分暂存整个作废。`git diff --cached` 提交前显示正确的 8 行,**看似通过**,只有提交后 `git show --stat` 才暴露真相。**已写入记忆库防再犯:共享 HEAD 上,先 `git add` 再 `git commit`(不带 pathspec),提交后必须 `git show --stat` 核实真正落了什么,而不是提交前看 `git diff --cached`。**
+- **泄漏的实际影响(逐条核实,不是猜):** sibling 的 P4 CSS **字节完好地留在 HEAD**(全仓仅 1 份拷贝,未丢未重);其工作树干净(无被顶掉的未提交工作);该 CSS **语法自洽**(大括号配平)且 sibling 自己的级联守卫 test_project_brain_tab_css_cascade **3/3 通过**。**唯一损害是归属错误,不是内容丢失**,故**不重写共享历史**(owner 明令不要单方面改写)。在此如实记录,供 P4 owner(看板 pt_ce6a8d10a2e647c9 / 会话 ms0yyd3xvqxlj0)看到:你们的 P4 readability CSS 已在 HEAD、在 commit `c83513f7` 内,请**不要**再重建它。
+- **㈡ 测错了量纲(更重要):** 上一刀数的是 **canvas 调用次数**,而光栅器按**设备像素面积**收费。owner 用面积加权实测:900px 一帧里 **clear 40% / blit 20% / 太阳光晕满屏 fill 20% / 撕边重切 7%,笔触只占 12%**。四个固定全画布 pass = 一帧的 81%,且都随宽度线性涨。我的「平台化」只在数调用,而它们各自只算一次调用 —— **平台是假的**。
+- **本刀修复(全部按设备像素验证):**
+  | 修 | 旧 | 新 |
+  |---|---|---|
+  | 太阳光晕 | 每帧重建径向渐变 + 满屏 additive fill(为挪 0.6px) | 烘焙成 2R×2R 瓦片按太阳位置 blit;光晕像素成本 O(h²) **与宽度无关**(900px 95238 → 2400px 96480,漂 1.3%) |
+  | 清屏 | bg + fg 每帧全画布 clearRect | bg 稳态**不再清**(烘焙缓冲在轮廓内不透明,blit 本就覆盖上一帧;仅重烘焙后那一帧清一次);fg **只清它真正画的 band**(实测只占 48px 的 ~29%,按种子几何算,永不会裁到笔画) |
+  | 撕边 | 每帧 `destination-out` 满屏 even-odd 切 | 活体画布每帧 **clip()** 到轮廓(毛边区**根本不画**);只有 buffer 在烘焙时切一次 |
+- **单帧总成本(设备像素,DPR=2):** 900px **855,524 → 489,618(-43%)**;2400px **1,694,685 → 1,123,373(-34%)**。剩下的是**本真成本**:blit(画本身)+ 内容笔触(刻意用加宽幸存者预算保住面积)+ band 清屏 + 小光晕瓦片。
+- **测试层面(同样是测错量纲的教训):** 重写 perf harness —— **隔离单帧**并按设备像素面积加权、按成本类别分桶(blit/clear/dab/glow)。新/改守卫:光晕宽度无关性;每帧无全画布开销 pass;NEUTER-uncapped 改断**笔触数量**(预算真正约束的量),不再断面积(预算**故意**保住面积)。三条录制器给第 4 个(光晕瓦片)canvas 单独槽位;wake harness 从所有录制器收集光晕 stops。**两个一度失败的测试是因为我的测试前提错了** —— 我原以为「dab+glow 面积应与宽度无关」,但预算**故意**让 dab 面积随宽度涨(更宽的栏子草更多,那是内容不是开销),真正必须与宽度无关的是固定全画布 pass。改断到真实的量后转绿。
+- **共享树纪律(这次的):** 先 `git add` 恰好 5 个我自己的文件,`git diff --cached --stat` 核实无 sibling 预暂存,然后 **`git commit` 不带 pathspec**;提交后 `git show --stat` 核实恰好 5 文件。
+
 ### 2026-07-26(续19) — 成本审计第 3 刀收官:记忆预取 rerank 的每轮计费入账(含**被死线放弃的那次**),三条元凶全收口(commit 见下,5 文件;新套件 15/15 含 NEUTER×3,相邻 153/153,collect **9450** 0 err)
 - **审计 Top-3 的最后一条。** `run_memory_prefetch` 每个用户轮打一次 cheap 模型 rerank(**默认开启**),usage 只落 `diag['usage']`,**全仓无任何调用方**把它折进 `task['usage']` —— 对费用气泡、钱包、日报全部隐形。
 - **最恶劣的是超时路径(本刀的核心):** `_run_with_deadline` 用 800ms 死线「限时」,但它 `t.join(timeout)` 后**只是不再等待**,daemon worker 仍在跑、网关仍在算钱、结果直接丢弃。也就是说——**花了钱且零收益的那些轮,恰好是一个字都没记的那些轮**。与 FloorRetry、整轮重试抹账**同一族**:真实计费请求对成本报表不可见。

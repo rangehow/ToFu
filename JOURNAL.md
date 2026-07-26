@@ -1,6 +1,13 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续78) — pt_6dfc8bcb 收口:conversations.user_id NOT NULL ×15 **实测否决——测试污染家族第 4 咬,非生产丢数据**(零代码变更;纯取证;与「测试噪音当真生产信号」epic 同根)
+
+- **票面:** 15 条 IntegrityError 疑似生产写入路径丢数据。取证后全部推翻。
+- **证据链:** ①生产全部写入路径(chat/persistence、5× routes/conversations upsert、feishu、api_v1 branch)绑常量 DEFAULT_USER_ID=1,三轮静态扫描(列缺失 + lib/routes/tests 全库)**零**缺列 INSERT;②dev DB 双库 **0 行** NULL user_id;③错误窗口 14:13:05–14:15:31 全 MainThread 紧跟 SQLite init,且该窗口**唯一** pytest 调用 = `test_remote_brain_writeset.py` ×4(agent_4 开发 RWA P5 中途);④该套件首提交版本(`dabfd7a9`,**14:20:48** 落地,末次错误后 5 分钟)种子已是 user_id=1,今天亲跑 14/14 零复现;⑤30+ 小时无数测试流量**零复发**(今日那条 05:15 是我自己的 board_post 文本回显——又是自引用污染)。
+- **定性:** 兄弟**提交前 WIP** 的种子缺 user_id 留下的噪音,落地前已修。生产侧无此缺陷。
+- **方法论增量(给后人):** 归因 DB 完整性错误时,先做**三件事再开票**:①查错误线程名(MainThread+紧跟 schema init ≈ pytest,不是请求线程);②把错误时间窗与 `run_command: $ …pytest…` 日志对齐找嫌疑套件;③看嫌疑套件**首提交时间**是否晚于末次错误——晚于即「落地前已修」,零复发即实锤。三步都满足 = 测试污染,直接收口不动码。
+
 ### 2026-07-27 — 后端离线全局显著指示器落地:后端被杀后前端不再「装活」(owner「backend killed 后一堆挂着的前端以为还活着,没有 prominent indicator」;epic `pt_dba815e8bf144b56`;commit `6ea2ded5`,5 文件 +763;新套件 **8/8 含 NEUTER**,相邻环 bundle parity+corruption+api-isolation+net-latency+artifacts **45/45**,i18n 环 **45/45**,collect **10295** 0 err)
 
 - **缺口拼图(先取证再动手):** 前端已有三条碎片但都有盲区——①`health_stream_timer.js` 的健康探测**只在有活跃流且静默 20s 后**才跑,完全空闲的页面零看门狗;②push.js 断连只把顶栏信号小徽章变灰(易被忽视);③DB 红色横幅只在「后端活着但 PG 挂」时出现,「后端进程死」反而无任何横幅。owner 的痛点正是 OOM SIGKILL 后整页挂着的会话看起来还在跑。

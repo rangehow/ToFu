@@ -134,7 +134,7 @@ def routed(monkeypatch):
     box = {'send': [], 'meta': []}
 
     def fake_send(cmd_type, params=None, timeout=30, target_agent_id=None,
-                  user_id=''):
+                  user_id='', cmd_id=None):
         box['send'].append({'cmd_type': cmd_type, 'params': params,
                             'timeout': timeout,
                             'target_agent_id': target_agent_id})

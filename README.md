@@ -731,6 +731,7 @@ Tofu has a tri-state auth model, persisted at `data/config/auth.json` and switch
 - No secrets in source — all credentials loaded from environment variables or Settings UI.
 - Tool execution — the assistant can run shell commands and edit files; dangerous patterns are blocked, but use with appropriate caution.
 - Desktop agent — requires explicit `--allow-write` / `--allow-exec` flags.
+- Remote worktrees — Studio can edit project code **on your own machine** (Windows/macOS) without sharing a filesystem: intents are routed to a local desktop agent over the bridge. Start the agent with `share_roots` declared, mint a bridge token under **Settings → Devices** (shown once, scoped to your account), then add a remote root from the “Remote devices” group in the project picker. From then on `write_file` / `apply_diff` / `run_command` land on your local disk — snapshot-before-write under `<project>/.tofu/file-history/`, freshness-gated against external edits, streamed command output, root-confined paths and delete-target guards, and per-user command isolation on relay deployments. Disabled by default via the `TOFU_REMOTE_WORKTREE` master switch. See `docs/REMOTE_WORKTREE_DESIGN.md`.
 - `TUNNEL_TOKEN` is a deprecated back-compat shim and prints a warning at boot — migrate to the API-keys system.
 
 ---

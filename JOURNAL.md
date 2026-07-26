@@ -1,6 +1,40 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续32) — RWA P4b-2b 落地:远程 run_command 流帧 UI(前端零改动)+ e2e/演练/README(commit 见下,9 文件;新套件 6 测含真桥 e2e,十二环回归,collect **9958** 0 err)
+- **最省一刀的设计胜利:** 服务器 run_command 的实时输出通道(`_make_run_command_progress_cb` → `tool_progress` SSE → tool_rounds 终端块)本就存在且按 roundNum+toolCallId 关联——远程路径只起一个 watcher(0.25s 轮询桥内流帧,按偏移去重)把增量喂进**同一个** progress cb,终端块实时渲染**零前端代码**。`send_desktop_command` 接受预置 `cmd_id`;终态 meta 按终端块契约成型;`GET /api/v1/desktop/streams/<id>` 调试端点。
+- **真 e2e(无 mock):** handler 线程 ↔ 假 agent poll 线程经 command_queue/streams 真互通——命令在飞(sleep 1.0 未醒)时 `tool_progress` 事件已含前半输出。抓获真时序 bug:假 agent 初版把流帧攒到退出才批量回传(桥内 mid-flight 无数据),改 on_chunk 即时上行仿真真 agent outbox。
+- **P5 勘误(诚实):** 设计稿 §5 的 P5 行不是「e2e+文档」而是 **Project Brain write_set 集成**(远程根纳入 dispatch 互斥)。本批 e2e/演练/README 记为「E2E/文档补强,先行于 P5」;跨会话同根写的串行语义已由 P1 freshness 门天然保证(后写者被拒需重读),P5 补的是脑内 dispatch 层的声明。P0–P4 至此全落地。
+- **kill-switch 演练:** 双总闸全关 → 伪路径不翻译 + 桥 drain-all,与 RWA 之前逐字节一致(套件第 6 测)。
+- **过程:** mock 签名第三次跟进(`cmd_id` 新参);watcher 首 tick 0.8s 错过 mid-flight 窗口(改 0.25s 对齐 200ms 合并节奏)。
+
+### 2026-07-26(续31) — 交易模块重做 P0 落地:多租户隔离 + K 线多源健康回落 + 6 个坏端点(2 commit:`45ee3d7` / `752ca4d`;新套件 18 测全绿含 NEUTER×3,54 预存在测 A/B 实证零回归)
+- **起点是 owner 的一句话**:「交易模块荒废已久、功能很差,彻底重做 —— 后端、前端、样式、收益、交互便利性;用户只能手动操作,我们每天给建议,但**他今天没照做 / 漏了几天怎么办**?」
+- **审计先行(4 个并行 agent + 本机实测),三条实证结论:**
+  | 缺陷 | 证据 |
+  |---|---|
+  | **采纳闭环是假的** —— 正是 owner 问题的核心 | `trading_recommendations.adopted` 列在 `_schema_impl.py:92/:456` 定义,Python+JS **零读零写** |
+  | 自我进化循环**数学上不可能学习** | `strategy_evolution.py:156` 的 `record_decision_outcome` 是唯一写入口,**零调用者**;`evaluate_strategy_history` 恒返回 `'No lessons yet.'` |
+  | **单租户** | `user_id` 全包**零出现**;`DELETE FROM trading_holdings` 无 WHERE |
+  - 一处**自我更正**:审计初稿称 `trading_strategy_performance` 从无写入,实测另有两个写入方(`llm_simulator.py:409`、`strategy_data.py:297`)。死的是 `strategy_evolution` 那一条路径,不是整张表。
+- **★ 设计层面的真正结论:旧模块不是「功能差」,是「建模建错」。** 它建成「每天发命令的机器人」,而真实用户是「手动、按自己节奏、经常不照做的人」。`trading_daily_briefing` 以 `date` 为主键 —— **schema 本身就假设了每天一条且当天有效**。对策是把「命令」翻成「对账」:存目标组合,每次打开**现算差额**,于是漏几天自动无害(清单从「你现在实际在哪」算出,且用今天的价格)。owner 拍板采纳,并追加三道闸:**免交易带 / 最小下单单位(整手) / 在途未确认份额**(T+1、基金确认),否则会产出不可执行且吃手续费的建议。设计稿 `docs/REDESIGN.md`。
+- **P0 slice 1(`45ee3d7`)——数据源与坏端点:**
+  - **K 线多源**(新 `trading/kline.py`):旧代码在 3 个文件硬编码东财 `push2his` 且无回落。本机实测(企业代理):东财 HTTPS 走代理 `ProxyError` 4/4、直连 `ConnectionError` 4/4、HTTP 走代理首次 200 其余 **502**;腾讯 `web.ifzq.gtimg.cn` **200 4/4 稳定**。新模块按**运行时健康探测**排序(不硬编码主源,换网络自动纠正)、瞬时错误重试、**0 bar 视为源失败**(那正是东财 `rc:102` 的形状,否则会静默当成「这标的没有历史」)。
+  - **★ 开发过程中自己制造并抓到的 bug(最值得记的一条)**:我在调用层 `.replace('-','')` 统一了日期格式,而**腾讯只认带横杠的日期**,收到紧凑格式返回 **HTTP 200 + 0 bars**。回落到东财后**公开 API 照常返回正确数据** —— 主源其实每次都在失败,而外部完全看不出来。这是典型的**「无失败信号」缺陷**。修法:**每个源自己格式化日期**。NEUTER:把 strip 放回去 → 3 条 live 测试翻红。
+  - **教训**:回落机制会**掩盖**主源永久损坏。因此加了「每个源单独跑」的隔离测试;但实测发现东财在本机**根本不通**,于是把它写成**如实记录 + 至少一个源可用**的契约(而不是假装 all-green),环境事实与代码缺陷分开。
+  - **6 个坏端点**:`asyncio.to_thread(<async def>)` 在工作线程里**只构造协程、从不 await**,`state/toggle/run/stream/cycles/cycles-detail` 全部返回协程对象。改为直接 await。剩余 3 处 `to_thread(_run)` 传的是**同步闭包**,是对的 —— 所以守卫用 **AST 而非 grep** 区分。NEUTER:还原一个端点 → 精确报出 `trading_autopilot.py:51 to_thread(brain_state) — brain_state is async def in trading_brain.py`。
+- **P0 slice 2(`752ca4d`)——多租户:**
+  - `_ensure_user_scoping()` 给 8 张表加 `user_id` + 覆盖索引,**幂等、双方言**。刻意用**受控 ALTER** 而不是把列写进 8×2 个 CREATE TABLE —— 一份实现 vs 16 份会漂移的手改拷贝,且**顺带升级已有库**。失败**抛异常**(未隔离的表是泄漏面,不是警告)。
+  - 新建 `trading_user_config` 键 `(user_id, key)`:宿主的 `trading_config` 是 `PRIMARY KEY (key)`,**两个用户无法同时持有 `available_cash`**;从插件去加宽宿主表会**反转依赖方向**,所以插件自己拥有这张表。
+  - 13 个端点全部收口。**行 id 不再是授权凭据**:UPDATE/DELETE 带 user_id 谓词,未命中返回 **404 而不区分「不是你的」与「不存在」**(区分会泄漏别人的行 id)。行情类端点(search/nav/nav_history)**刻意不隔离并写明理由** —— 价格是全局的。
+  - **验证用真 schema 不用 mock**:8 张表全带 `user_id`、8 个索引、重跑幂等;端到端「user1 一键清仓 → user2 的行存活」。棘轮 `test_no_unscoped_query_on_user_tables` 用 AST 扫每条 SQL 字面量;NEUTER → `line 169: DELETE FROM trading_holdings`。
+  - **跑起来才抓到的 bug**:`_table_exists/_column_exists` 收的是**连接包装器**(内部取 `conn._conn`)而非游标。因为异常处理**记录并重抛**而不是吞掉,所以一次就定位。
+- **两个流程教训(方法论,值得复用):**
+  1. **「54 个测试失败」先做 A/B 再下结论** —— stash 掉我的全部改动后在净 HEAD **同形复现 54 红**,根因是 `ModuleNotFoundError: No module named 'lib'`(套件需要宿主在 `PYTHONPATH`)。加上宿主路径后 **54/54 全绿**。差点把环境问题误报成回归。
+  2. **commit message 里的反引号会被 shell 展开** —— 第一次提交因反引号包裹的 SQL 片段被当成命令替换而失败(`/bin/sh: AND: command not found`)。改用 `git commit -F <file>`。
+- **验收(owner 四条,逐条实测):** ①`pip install -e` + `import tofu_trading` 成功、**8 blueprint / 69 路由**挂载(注:本机 conda 环境需 `PIP_REQUIRE_VIRTUALENV=0`)②隔离 7 测绿 ③K 线 8 测绿(含健康探测与回落)④async 守卫 3 测绿。**预存在 54 测零回归。**
+- **未做(如实):** 前端(样式/移动端/亮色主题)、对账引擎本体(P1)、删除约 4400 行死代码(P3,owner 已授权但未执行)。P0 只是把地基修正 —— 数据源可信、数据不串户、端点不坏。
+
 ### 2026-07-26(续30) — RWA P4b-2a 落地:项目选择器「远程设备」分组 + 伪路径 bar 短路(commit 见下,6 文件;新套件 5 测含 NEUTER + jsdom 13 探针,project 前端族八环 **62/62**,collect **9952** 0 err,bundle 冒烟过)
 - **拍板 6A 兑现:** 目录浏览弹窗顶部「远程设备」分组——在线 agent 的每个共享根一行,点 + 经 `mpAddBrowsedPath('remote:…')` 进入**与本地文件夹同一套**工作区/保存/持久化机制;离线 agent 灰显不可加;无 agent 整段隐藏(本地使用零干扰)。用户旅程就此闭环:装 agent → Devices 页颁 token → 弹窗挂远程根 → Studio 直改本地代码。
 - **伪路径 bar 短路(本批的承重安全闸):** `_restoreConvProject` 遇 `remote:` 会话**绝不调 `Api.project.setPaths`**——服务器 fs 上没有这个路径,调了就是 400 + 误清 conv.projectPath 的真实 bug 形态;改渲染合成 bar 态(徽章显示 `agent:root`,title 保留完整伪路径身份)。**NEUTER 实证:** 摘掉短路 → setPaths 拿着伪路径直奔服务器(咬)。

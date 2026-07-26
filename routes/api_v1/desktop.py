@@ -53,6 +53,23 @@ async def desktop_status():
     })
 
 
+@api_v1_desktop_bp.route('/api/v1/desktop/streams/<cmd_id>', methods=['GET'])
+@require_auth
+async def desktop_stream(cmd_id):
+    """Reassembled live output of one streamed command (RWA P2/P4b-2b).
+
+    Debug / inspector surface — the chat UI consumes the same frames via
+    the ``tool_progress`` SSE channel instead. ``cmd_id`` is an unguessable
+    uuid minted per command; entries expire with the command TTL.
+    """
+    from lib.desktop import get_command_stream
+    stream = get_command_stream(cmd_id)
+    if stream is None:
+        return jsonify({'error': 'not_found',
+                        'message': 'unknown or expired command stream'}), 404
+    return jsonify(stream)
+
+
 # ── RWA P4b:Devices 页(拍板 5A)—— agents + bridge tokens 一屏 ──
 
 _BRIDGE_SCOPE = 'agents:bridge'

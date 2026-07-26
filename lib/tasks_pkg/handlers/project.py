@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import os
+import threading
+import time
 
 from lib.log import get_logger
 from lib.tasks_pkg.executor import (
@@ -47,6 +49,105 @@ _REMOTE_CMD_MAP = {
 }
 
 
+def _execute_remote_run_command(task, tc_id, fn_args, rn, round_entry,
+                                remote):
+    """Remote run_command with LIVE output (RWA P4b-2b).
+
+    The bridge stream frames (agent → poll → :func:`lib.desktop.resolve_streams`)
+    are fanned into the SAME ``tool_progress`` channel the server-side
+    run_command uses (:func:`_make_run_command_progress_cb`), so the chat's
+    terminal block renders remote output incrementally with ZERO frontend
+    changes. ``cmd_id`` is minted up front so the watcher can follow the
+    command's stream while the blocking RPC wait runs.
+    """
+    import uuid as _uuid
+
+    from lib.desktop import (
+        format_desktop_result, get_command_stream, send_desktop_command)
+    from lib.tasks_pkg.handlers.code_exec import _make_run_command_progress_cb
+
+    command = fn_args.get('command', '')
+    round_entry.setdefault('toolCallId', tc_id)
+    round_entry.setdefault('toolName', 'run_command')
+    cmd_id = _uuid.uuid4().hex
+    try:
+        bridge_timeout = min(
+            max(float(fn_args.get('timeout', 300)) + 30.0, 60.0), 3660.0)
+    except (TypeError, ValueError):
+        bridge_timeout = 330.0
+
+    progress_cb = _make_run_command_progress_cb(task, rn, round_entry, command)
+    seen = {'stdout': 0, 'stderr': 0}
+    stop = threading.Event()
+
+    def _drain_once():
+        stream = get_command_stream(cmd_id)
+        if not stream:
+            return False
+        for name in ('stdout', 'stderr'):
+            text = stream.get(name) or ''
+            if len(text) > seen[name]:
+                progress_cb(name, text[seen[name]:])
+                seen[name] = len(text)
+        return bool(stream.get('done'))
+
+    def _watch():
+        deadline = time.time() + bridge_timeout + 30
+        while not stop.is_set() and time.time() < deadline:
+            if _drain_once():
+                return
+            stop.wait(0.25)  # 与 tool_progress 200ms 合并节奏同量级
+
+    params = {k: v for k, v in fn_args.items() if k != 'content_ref'}
+    params['root'] = remote['root']
+    logger.info('[Remote] run_command streaming @%s:%s cmd=%s (task=%s)',
+                remote['agent_id'][:8], remote['root'], cmd_id[:8],
+                task.get('id', '?')[:8])
+    watcher = threading.Thread(target=_watch, daemon=True)
+    watcher.start()
+    result, error = send_desktop_command(
+        'project_run_command', params, timeout=bridge_timeout,
+        target_agent_id=remote['agent_id'],
+        user_id=task.get('_userId', '') or '', cmd_id=cmd_id)
+    stop.set()
+    watcher.join(timeout=5)
+    _drain_once()          # 尾帧:wait 返回后可能还有最后一批
+    progress_cb.flush()
+
+    def _finish(text, extra=None, badge=''):
+        meta = {
+            'toolName': 'run_command',
+            'command': command,
+            'output': (text or ''),
+            'source': f'Remote:{remote["agent_id"][:8]}',
+            'remoteRoot': remote['root'],
+        }
+        if badge:
+            meta['badge'] = badge
+        meta.update(extra or {})
+        _finalize_tool_round(task, rn, round_entry, [meta])
+        return tc_id, text, False
+
+    if error:
+        return _finish(f'Error: remote worktree {remote["root"]}: {error}',
+                       {'exitCode': 'error'}, badge='remote error')
+    result = result if isinstance(result, dict) else {}
+    text = format_desktop_result('project_run_command', result)
+    output = (result.get('stdout') or '')
+    if result.get('stderr'):
+        output += ('\n[stderr]\n' if output else '[stderr]\n') + result['stderr']
+    timed_out = bool(result.get('timed_out'))
+    exit_code = result.get('exit_code')
+    text_out = output.strip()
+    meta_extra = {
+        'output': text_out,
+        'exitCode': 'timeout' if timed_out
+                    else (exit_code if exit_code is not None else '?'),
+        'timedOut': timed_out,
+    }
+    return _finish(text, meta_extra)
+
+
 def _execute_remote_project_tool(task, fn_name, tc_id, fn_args, rn,
                                  round_entry, remote):
     """Route a project tool call to the bound agent's local root (RWA P3).
@@ -65,6 +166,10 @@ def _execute_remote_project_tool(task, fn_name, tc_id, fn_args, rn,
             meta['badge'] = badge
         _finalize_tool_round(task, rn, round_entry, [meta])
         return tc_id, text, False
+
+    if fn_name == 'run_command':
+        return _execute_remote_run_command(
+            task, tc_id, fn_args, rn, round_entry, remote)
 
     cmd_type = _REMOTE_CMD_MAP.get(fn_name)
     if cmd_type is None:

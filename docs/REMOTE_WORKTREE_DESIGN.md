@@ -1,7 +1,7 @@
 # Tofu 远程工作树代理(Remote Worktree Agent, RWA)设计稿
 —— Studio 无缝改本地代码(Windows / macOS),不共享文件系统
 
-> **状态:IN PROGRESS — 方向已拍(2026-07-25「意图共享,非文件系统共享」);§8 五项实施拍板已落(2026-07-26,全部按建议项:2A+3A+4A+5A+6A);P0–P3 + P4a(后端半)已落地;① 号先行票已闭环(`c1579401`)。**
+> **状态:IN PROGRESS — 方向已拍(2026-07-25「意图共享,非文件系统共享」);§8 五项实施拍板已落(2026-07-26,全部按建议项:2A+3A+4A+5A+6A);**P0–P4 全部落地**(2026-07-26);① 号先行票已闭环(`c1579401`);P5(Project Brain 集成)待。**
 > Board epic:`pt_7977b1e823454e5b`。
 > 关联潜伏 bug(先行票,不进本设计批):`pt_08a6d1afe79c4dfd`(desktop wire 前缀错配,§2.3)。
 > 本稿全部事实性结论均于 2026-07-25 在盘上逐文件核实(§2 标注文件:行号)。
@@ -265,7 +265,7 @@ Body: {
 | **P1** ✅ | **Agent 项目命令集 + 安全网**(已落地 2026-07-26):`project_*` 七命令、share_roots 路径校验、snapshot-before-write、freshness 门(重读刷新令牌) | `lib/desktop_agent/_project.py`(新)、`_dispatch.py`、`config.py` | 越界路径全拒(含符号链接/兄弟前缀/绝对路径);快照可回滚;外部改动后写入被拒、重读后放行;`.tofu` 对项目工具不可见 |
 | **P2** ✅ | **run_command 平价**(已落地 2026-07-26):流式分片、进程树 kill、删除目标锁根、超时放宽 | `lib/desktop_agent/_exec.py`、`_project.py`、`_run.py`、`bridge.py`(流帧) | 长命令分片按 seq 稠密上行;kill 后子进程全灭;`rm -rf ~` 类被拦;30s+ 命令不再误杀 |
 | **P3** ✅ | **工具投影 + 执行路由**(已落地 2026-07-26):`ToolContext.project_remote`、`_handle_project_tool` 路由、`ToolSpec('desktop')` 补 `write_tools` 声明(关批准门洞) | `_spec.py`、`_build.py`、`handlers/project.py`、`lib/desktop/remote.py`(新) | 同名 schema 不变仅描述提示;远程 `write_file` 按 agent_id 寻址;总闸 off 字节不变;latch-clear 一次性;批准门洞闭合 |
-| **P4**(P4a ✅ + P4b-1 ✅ + P4b-2a ✅ 选择器远程分组 2026-07-26 / P4b-2b 流帧 UI 待) | **入口与前端**:每用户 bridge token ✅、poll 认证+用户作用域 ✅、`agent_run remote:` 绑定 ✅、Settings→Devices 页 ✅(agents 表 + 颁发/吊销,scope 化 DELETE 不借 admin)、**伪路径 `remote:<agent>:<root>` 复用 projectPath 持久化** ✅ / 项目选择器远程分组(P4b-2)、流帧 UI(P4b-2) | `agent_run.py`、`routes/desktop.py`、`bridge.py`、`remote.py`、`api_v1/desktop.py`、`settings/devices.js` ✅ / `project.js`、流渲染(P4b-2) | 后端链+Devices 页全绿;token 错/无 scope 即 401;跨用户 fail-closed;离线灰显(P4b-2) |
+| **P4**(P4a ✅ + P4b-1 ✅ + P4b-2a ✅ + P4b-2b ✅ 流帧 UI 2026-07-26) | **入口与前端**:每用户 bridge token ✅、poll 认证+用户作用域 ✅、`agent_run remote:` 绑定 ✅、Settings→Devices 页 ✅(agents 表 + 颁发/吊销,scope 化 DELETE 不借 admin)、**伪路径 `remote:<agent>:<root>` 复用 projectPath 持久化** ✅ / 项目选择器远程分组(P4b-2)、流帧 UI(P4b-2) | `agent_run.py`、`routes/desktop.py`、`bridge.py`、`remote.py`、`api_v1/desktop.py`、`settings/devices.js` ✅ / `project.js`、流渲染(P4b-2) | 后端链+Devices 页全绿;token 错/无 scope 即 401;跨用户 fail-closed;离线灰显(P4b-2) |
 | **P5** | **Project Brain 集成**:远程根纳入 write_set 声明,多会话并发写同一本地项目时 dispatch 串行化 | `lib/conversations/`、board | 两会话同根 write_set 重叠 → 不同时 dispatch;不同根不互斥 |
 
 - **P0 落地注记(2026-07-26):** 注册帧/注册表/心跳/寻址谓词(`_deliverable`)/入队闸
@@ -341,6 +341,19 @@ Body: {
   离线 agent 灰显不可加,无 agent 整段隐藏;③套件
   `tests/test_frontend_remote_picker.py` 5 测(装配 3 钉 + jsdom 13 探针 + NEUTER)。
   流帧 UI(远程 run_command 实时输出)属 P4b-2b。
+
+- **P4b-2b 落地注记(2026-07-26,流帧 UI,前端零改动):** 远程 run_command 的桥内流帧
+  由 watcher(0.25s 轮询)按偏移增量喂进服务器 run_command 既有的
+  `_make_run_command_progress_cb` → `tool_progress` SSE 通道,终端块增量渲染**无需任何
+  前端改动**;`send_desktop_command` 接受预置 `cmd_id`;终态 meta 按终端块契约成型
+  (toolName/command/output/exitCode);`GET /api/v1/desktop/streams/<id>` 调试端点。
+  套件 `tests/test_remote_stream_ui.py` 6 测,含**真桥+真 agent 执行器 e2e**:
+  命令在飞(sleep 未醒)时 `tool_progress` 已含前半输出。
+- **E2E/文档补强(2026-07-26,先行于 P5):** kill-switch 演练(双总闸全关 → 伪路径
+  不翻译 + 桥 drain-all,与 RWA 之前逐字节一致,流帧套件第 6 测);README/README_CN
+  用户文档(Remote Worktree 小节:旅程 + 安全边界 + 总闸)。P5 行(Project Brain
+  write_set 集成)仍待——注意跨会话同根写的串行语义已由 P1 freshness 门天然保证
+  (后写者被拒需重读),P5 要补的是脑内 dispatch 层的声明与互斥。
 
 工作量估算:P0 ~250 行 / P1 ~400 行 / P2 ~200 行 / P3 ~150 行 / P4 ~300 行+前端 / P5 ~80 行,
 全部为薄接缝改动,无新框架。

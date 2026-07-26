@@ -307,7 +307,7 @@ def _addressing_enqueue_error(target_agent_id, user_id=''):
 
 
 def send_desktop_command(cmd_type, params=None, timeout=30, target_agent_id=None,
-                         user_id=''):
+                         user_id='', cmd_id=None):
     """Queue a command for the desktop agent. Blocks until result or timeout.
 
     ``target_agent_id`` (RWA P0) routes the command to one registered
@@ -325,7 +325,7 @@ def send_desktop_command(cmd_type, params=None, timeout=30, target_agent_id=None
     elif target_agent_id:
         return None, ('desktop addressing disabled '
                       '(TOFU_DESKTOP_ADDRESSING=0) — cannot target an agent')
-    cmd_id = str(uuid.uuid4())
+    cmd_id = cmd_id or str(uuid.uuid4())
     event = threading.Event()
     cmd = {
         'id': cmd_id,

@@ -370,6 +370,18 @@ python lib/desktop_agent.py --server http://your-server:15000 --allow-write --al
 
 代理连接到你的 Tofu 服务器，提供文件操作、剪贴板、截图、GUI 自动化（pyautogui）和系统信息等工具。所有危险操作需要显式启用 `--allow-write` / `--allow-exec` 标志。
 
+#### 远程工作树（Remote Worktree）
+
+让 Studio **直接修改你本地机器上的项目代码**（Windows / macOS 均可）——不共享文件系统，只把「文件意图」安全地路由到本机执行。
+
+**使用旅程：**
+1. 在本机启动 agent（同上），并在其配置文件声明共享根 `share_roots`（哪些项目目录允许被访问）；
+2. 打开 **设置 → 设备**，颁发一个 bridge 令牌（只显示一次），填进 agent 配置——令牌绑定你的账号，命令只投递给你自己的设备；
+3. 在项目选择器顶部的「远程设备」分组里，把某个共享根加进工作区（离线设备灰显不可选）；
+4. 之后 Studio 的 `write_file` / `apply_diff` / `run_command` 等全部落在**你的本地磁盘**——写前自动快照（`<项目>/.tofu/file-history/` 可回滚），外部改动会拒写并要求先重读，`run_command` 输出像服务器端一样**实时流式**显示在终端块里。
+
+**安全边界：** 路径只允许根内相对路径（符号链接/`..`/绝对路径逃逸全拒）；删除类命令目标必须落在根内；远程写入默认走 Manual 批准门；每用户令牌在 relay 部署下隔离命令投递。总开关 `TOFU_REMOTE_WORKTREE`（服务端）默认关闭，开启后以上才生效。详见 `docs/REMOTE_WORKTREE_DESIGN.md`。
+
 ---
 
 ### 📄 论文阅读模式（Beta）

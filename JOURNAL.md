@@ -1,6 +1,13 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续67) — 「播客/视频进度卡死感」根修:**后端一直在干活,是前端把唯一的活性指示器杀了**(commit `f4f158ce`,5 文件 +472/-15;新套件 6/6 + P-UX 11 项全绿含 **NEUTER×6 全咬**,相邻 4 环 72 绿,collect 10185 0 err)
+
+- **owner 报告:** 播客/视频生成「就像卡住一样」,界面全程「已用 0:00 · 最后活动 0:00」,不知道在干什么。**后端实测健康**(logs/app.log:同一时段 8 个镜头逐个渲完、剧本 2 次修订 2 分钟跑完)——**问题全在前端可见性**。
+- **根因 1(探针实证,勿重跑):「已用 0:00」永久冻结 = 轮询调度器把 1 秒表杀了。** `podcast.js::_pcStopPoll()`(video.js 同构)把「停秒表」折进了「停轮询」,而 `_pcSchedulePoll()` 每次重新武装轮询都调它 → 秒表在第一轮轮询就死,只在 phase 切换时短暂复活。jsdom 探针:79 轮成功轮询后活动行仍 `0:00` 且 `tickTimer=null`。**修法:拆分 `_pcStopPoll`(仅停轮询,供调度器)与 `_pcStopPolling`(终态,停轮询+停表),15 个终态调用点全部改走后者。** 类比:医生每次换药都顺手把病人的心跳监护仪关了。
+- **根因 2:「最后活动」永远 0:00 = 空轮询伪造活性。** 轮询成功(服务器活着)但零事件时也刷新 `lastEventAt` → 「最后活动 Xs 前」永远 0:00,>30s 陈旧提示(设计意图「安静≠死亡」)变成不可达。**修法:只有真事件(含 worker 10s 心跳)才校零。** 这把该提示从装饰变回它本来的用途:LLM 阶段沉默 90s 时用户能看到「仍在运行」。
+- **根因 3(Reader 模型名截断,两处):** ①`max-width:180px` 实测放不下最长 30 字符模型短名(gemini-3.1-flash-image-preview),提到 300px(工具栏可换行,代价一行不是裁邻居);②label 带 `data-i18n=paper.reportSelectModel`,`_applyI18n()` **启动时和每次语言切换都走全量覆盖** → 选好的模型名被刷成「Select model」。修法:选中时 `removeAttribute('data-i18n')`,按钮 title 带全量 model_id(截断时悬停见全名)。
+- **教训(同续53 家族,第 3 次实证):** 这张票表面是「卡死」,实质是**唯一会动的元素被自己人杀了**。后端心跳(`lib/production/heartbeat.py`)、事件流、收割器全是好的——先查「显示层最后 10 厘米」再怀疑后端。另:styles.css 一行被 sibling `fc9b1083` 扫入 HEAD(共享 HEAD 已知),内容无损。
 ### 2026-07-26(续66) — 来源卡静默化 + 新闻时效性修复(commit `8ea2701a`,5 文件;新套件 5/5 failing-first,九套件 **134/134**)+ **真实 authored 验收跑通**:同主题双版对照,authored 质量跃迁实证
 - **owner 抓出的硬伤:** 片尾来源卡原来是 narration segment,**TTS 会把域名逐字念出来**。修:script 产物改挂 `sources_line` 字段(不进 segments),timeline 追加为**最后一镜 `spoken: False`、固定 3.5s** 的静默视觉卡,TTS 只发给 spoken 镜;engine 的 manifest 复用与新建同步过滤(mux 不用 `-shortest`,静默尾卡不会被配音轨截掉——修前已核实)。**顺手查清的疑点:** `lib/production/heartbeat.py` 是 sibling 的合法活(P-UX2 进度感知,`ed247760`),给长阶段发心跳防停滞收割器误杀,正好该躺横向底盘,**不是入侵,不动它**。
 - **新闻时效性:** research 主查询带 `freshness='week'`(背景查询保持不滤——常青内容不该被时间滤掉);script prompt 带当天日期。

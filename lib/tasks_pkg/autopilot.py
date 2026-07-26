@@ -84,6 +84,7 @@ logger = get_logger(__name__)
 from lib.agent_verdict import VU_DONE_SENTINEL as _VU_DONE_SENTINEL
 from lib.agent_verdict import VU_ROLE_PROMPT as _VU_ROLE_PROMPT
 from lib.agent_verdict import classify_verdict as _classify_verdict
+from lib.agent_verdict import strip_machine_tokens as _strip_machine_tokens
 
 
 # ``_VU_ROLE_PROMPT`` is the SINGLE-SOURCE virtual-user persona, defined once
@@ -566,9 +567,13 @@ def run_virtual_user(task: dict, vu_msg_id: str | None = None) -> dict | None:
     # The verdict downgraded a premature TASK_DONE to "keep going": the reply
     # may still literally carry the sentinel token.  Strip it so the
     # synthetic user message we feed back is clean instructional text, not a
-    # stray sentinel the next turn would mis-read.
+    # stray sentinel the next turn would mis-read.  PROGRESS lines are KEPT
+    # here on purpose: the budget guard (_record_vu_turn_and_check_budget)
+    # parses them for the diminishing-returns ledger — the persistence path
+    # in maybe_run_autopilot strips them (same predicate) before the text
+    # reaches conversation history.
     if _VU_DONE_SENTINEL in text:
-        text = text.replace(_VU_DONE_SENTINEL, '').strip()
+        text = _strip_machine_tokens(text, keep=('progress_line',))
 
     # ── Segment timeline (epic pt_cb8f98b0cb9b47fb) ──
     # The VU turn must render with the IDENTICAL agent inline per-tool timeline.
@@ -802,6 +807,17 @@ def maybe_run_autopilot(task: dict) -> dict | None:
     vu_text = vu_result['text']
     vu_rounds = vu_result.get('rounds') or []
     vu_segments = vu_result.get('segments') or []
+    # Machine-control tokens ([PROGRESS: resolved=X remaining=Y] lines, plus
+    # any stray [VU: TASK_DONE] remnant) must NEVER reach conversation
+    # history: the next turn re-reads persisted VU rows as ordinary user
+    # text and the model starts authoring the signal itself (pt_0ae59e94 —
+    # 90 leaked lines across 52 convs).  Strip HERE — before
+    # _append_vu_message_to_conv persists — via the single agent_verdict
+    # predicate.  The budget guard below still receives vu_text VERBATIM
+    # (it parses the PROGRESS line for the diminishing-returns ledger), so
+    # only the persisted / translated copy is cleaned, never the guard's
+    # signal.
+    vu_text_clean = _strip_machine_tokens(vu_text)
 
     # Race-close: a real user may have submitted a message while the VU
     # LLM call was running.  If so, defer to that real message instead
@@ -831,7 +847,7 @@ def maybe_run_autopilot(task: dict) -> dict | None:
     # evaluated a few lines earlier), so do it here too — idempotent.
     _presync_parent_reply(task)
     vu_msg = _append_vu_message_to_conv(
-        conv_id, vu_msg_id, vu_text, rounds=vu_rounds, run_id=run_id,
+        conv_id, vu_msg_id, vu_text_clean, rounds=vu_rounds, run_id=run_id,
         segments=vu_segments,
     )
     if vu_msg is None:
@@ -842,7 +858,7 @@ def maybe_run_autopilot(task: dict) -> dict | None:
     # the assistant/critic safety net), so without this a VU turn is left
     # untranslated unless a viewer fires a manual translate. Row index resolved
     # from the persisted _msgId (not guessed); best-effort, never blocks.
-    _maybe_auto_translate_vu(conv_id, vu_msg_id, vu_text)
+    _maybe_auto_translate_vu(conv_id, vu_msg_id, vu_text_clean)
 
     # Tell the frontend the VU bubble is fully baked.  Carries the
     # final content + rounds so a client that lazily built the bubble

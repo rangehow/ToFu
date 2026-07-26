@@ -130,7 +130,7 @@ def test_call_site_wired_after_vu_append(monkeypatch):
     VU append succeeds — the wiring, not just the helper, is load-bearing."""
     src = open(_AUTOPILOT_SRC, encoding='utf-8').read()
     i_append = src.index('vu_msg = _append_vu_message_to_conv(')
-    i_call = src.index('_maybe_auto_translate_vu(conv_id, vu_msg_id, vu_text)')
+    i_call = src.index('_maybe_auto_translate_vu(conv_id, vu_msg_id, vu_text_clean)')
     assert i_call > i_append, 'translate call must follow the VU append site'
 
 

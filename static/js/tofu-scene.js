@@ -345,7 +345,85 @@
     return out;
   }
 
+  // ── ACTIVITY WEATHER ────────────────────────────────────────────────────
+  // The pet already reacts to what the app is doing (TofuPet.setActivity via the
+  // 'tofu:activity' event); the scene ignored it. Letting the weather carry that
+  // signal turns ambient decoration into PERIPHERAL STATUS — something you can
+  // read out of the corner of your eye without looking at it.
+  //
+  // ⚠️ THE ONE INVARIANT: every effect DECAYS TO NEUTRAL ON ITS OWN.
+  // No code path may leave the bar permanently stormy. This is not a style
+  // preference — a weather state pinned to an error becomes ambient anxiety, and
+  // errors already surface in the chat where they belong. So the entire model is
+  // ONE SCALAR PER EFFECT that only ever ramps toward a target and decays to
+  // zero; there is no "error mode" the bar can get stuck in, because there is no
+  // mode at all. `success` and `error` are one-shot IMPULSES (set to 1, decay
+  // out); only `loading` holds, and it holds a GENTLE value and is released the
+  // moment the app says anything else.
+  //
+  // The scene listens to the DOM event directly rather than having the pet
+  // forward it: the two stay decoupled, and a scene re-bake cannot lose the
+  // current weather (the scalars live outside the bake).
+  var WEATHER_ENABLED = true;        // instantly killable; see setWeather()
+  var _wx = {
+    overcast: 0,   // 0..1 — cloud shadow dims the sun while work is in flight
+    burst: 0,      // 0..1 — one-shot light-break on success
+    rain: 0        // 0..1 — one-shot rain pass on error (NEVER a held state)
+  };
+  var _wxTarget = 0;                 // overcast target (the only holding value)
+  var OVERCAST_MAX = 0.55;           // how far the sun can be dimmed (subtle)
+  var OVERCAST_RAMP = 0.6;           // per second, toward target
+  var IMPULSE_DECAY = 0.55;          // per second — a burst/rain pass self-clears
+  // WATCHDOG. `loading` is the only holding state, and it is held by an event
+  // we do not control: if the terminal signal never arrives — a crashed task, a
+  // dropped stream, a tab closed mid-request — the hold would never release and
+  // the bar would sit under cloud forever. That is precisely the "permanently
+  // stormy" failure the whole model exists to prevent, so the hold ALSO expires
+  // on its own. Long enough not to fight a genuinely slow request; short enough
+  // that a stranded bar heals itself well inside a working session.
+  var OVERCAST_MAX_HOLD_MS = 120000;   // 2 minutes
+  var _overcastSince = -1;             // ms timestamp the hold began (-1 = not held)
+
+  /** Drive the weather scalars. `dt` seconds. Pure decay: with no further
+   *  events every scalar returns to 0, which is the neutral scene. */
+  function _stepWeather(dt, ms) {
+    if (!WEATHER_ENABLED) { _wx.overcast = _wx.burst = _wx.rain = 0; return; }
+    // Watchdog: an abandoned `loading` (terminal event never arrived) must not
+    // hold the cloud forever — release it after OVERCAST_MAX_HOLD_MS.
+    if (_overcastSince >= 0 && (ms - _overcastSince) > OVERCAST_MAX_HOLD_MS) {
+      _wxTarget = 0;
+      _overcastSince = -1;
+    }
+    var d = _wxTarget - _wx.overcast;
+    var step = OVERCAST_RAMP * dt;
+    _wx.overcast += (Math.abs(d) <= step) ? d : (d > 0 ? step : -step);
+    // Impulses ONLY decay — nothing can hold them up.
+    _wx.burst = Math.max(0, _wx.burst - IMPULSE_DECAY * dt);
+    _wx.rain = Math.max(0, _wx.rain - IMPULSE_DECAY * dt);
+  }
+
+  /** Map an app activity to weather. Every branch either sets a decaying
+   *  impulse or RELEASES the hold — none of them can pin the bar. */
+  function _onActivity(kind, ms) {
+    if (!WEATHER_ENABLED) return;
+    if (kind === 'loading') {
+      _wxTarget = OVERCAST_MAX;
+      // Stamp the hold so the watchdog can expire it if no terminal signal
+      // comes. -1 means "not held": a genuine timestamp of 0 is possible (the
+      // very first frame), so 0 cannot be used as the sentinel.
+      if (_overcastSince < 0) _overcastSince = (typeof ms === 'number') ? ms : _lastMs;
+      return;
+    }
+    // Anything that is not 'loading' releases the overcast hold, so a missed or
+    // unknown terminal event can never strand the bar under cloud.
+    _wxTarget = 0;
+    _overcastSince = -1;
+    if (kind === 'success') _wx.burst = 1;
+    else if (kind === 'error') _wx.rain = 1;
+  }
+
   // ── PER-FRAME LIVE BUDGET ───────────────────────────────────────────────
+
   // Every element of a LIVE population (near band, flow overlay, foreground
   // occluders) is re-resolved and re-queued EVERY frame, so its count is the
   // per-frame cost. Seeding them by AREA — as the baked planes rightly are —
@@ -982,6 +1060,8 @@
     _trackPet(dt, w);
     // advance the ground-disturbance field (the pet presses it, it springs back)
     _updateDisturb(dt, w);
+    // advance the activity weather (pure decay — see _stepWeather)
+    _stepWeather(dt, ms);
     // (The old bright additive "pet-attention" halo that pooled warm light
     // under the cat was REMOVED — owner: the pet reads as floating and the
     // moving light is fake. An additive glow ring under a sprite is exactly the
@@ -1001,7 +1081,15 @@
     _light.warm = SCENE_WARMTH[_scene] != null ? SCENE_WARMTH[_scene] : 0.7;
     c.save();
     c.globalCompositeOperation = 'lighter';
+    // ACTIVITY WEATHER, carried by the LIGHT — the cheapest possible channel:
+    // it modulates the alpha of a blit that already happens, so cloud shadow and
+    // the success light-break cost literally zero extra pixels. Overcast dims
+    // the sun while work is in flight; a success burst briefly over-brightens it.
+    var wxGlow = 1 - _wx.overcast * 0.7 + _wx.burst * 0.6;
+    if (wxGlow < 0) wxGlow = 0;
+    if (wxGlow !== 1) c.globalAlpha = wxGlow;
     if (_glowTile) c.drawImage(_glowTile, sx - _glowR, sy - _glowR, 2 * _glowR, 2 * _glowR);
+    c.globalAlpha = 1;
     // twinkling specular dabs (the shimmer): additive so they read as glints
     for (var i = 0; i < _sparks.length; i++) {
       var s = _sparks[i];
@@ -1012,6 +1100,23 @@
     }
     flushDabs();          // MUST land while 'lighter' is still active
     c.restore();
+    // RAIN IMPULSE — a single brief pass, never a held state. It exists only
+    // while _wx.rain is decaying (see _stepWeather), so it self-clears within
+    // ~2s and no code path can leave the bar stormy. Bounded by the same live
+    // budget as everything else: a fixed small count, not area-seeded.
+    if (_wx.rain > 0.01) {
+      var rn = Math.round(LIVE_CAP_SPARK * 0.8 * _wx.rain);
+      var rcol = _mixHex(pal.spark, '#8FA6C8', 0.75);
+      for (var ri = 0; ri < rn; ri++) {
+        // deterministic streak positions from the index, drifting downward with
+        // the impulse so the pass reads as falling rather than flickering
+        var rx0 = ((ri * 137.5) % 100) / 100 * w;
+        var ry0 = (((ri * 61.8) % 100) / 100 + (1 - _wx.rain) * 0.8) * h;
+        if (ry0 > h) continue;
+        dab(c, rx0, ry0, 3.2, 0.5, 1.28, rcol, 0.34 * _wx.rain);
+      }
+      flushDabs();
+    }
     // the LIVE near layer — swaying/flattening grass · rippling/splashing water ·
     // drifting/shoved clouds — the near band of EVERY scene, rendered live (not
     // baked) so it moves and reacts to the pet. Drawn before the thin flow
@@ -1674,6 +1779,17 @@
     // Park the whole loop while the bar is scrolled/collapsed out of view — an
     // invisible painting is pure waste. Guarded + optional: without
     // IntersectionObserver the scene simply keeps its old always-on behaviour.
+    // ACTIVITY WEATHER: listen to the app's activity signal DIRECTLY rather than
+    // having the pet forward it. The two stay decoupled (neither needs to know
+    // the other exists), and the weather scalars live outside the baked buffer,
+    // so a re-bake — a resize, a scene switch, a time-of-day shift — cannot lose
+    // the current weather. Guarded: no addEventListener → the scene simply never
+    // reacts, which is the neutral behaviour it had before.
+    try {
+      document.addEventListener('tofu:activity', function (e) {
+        _onActivity(e && e.detail, _lastMs);
+      });
+    } catch (err) { /* harmless — weather just stays neutral */ }
     if (window.IntersectionObserver && _bar) {
       try {
         new IntersectionObserver(function (entries) {
@@ -1723,6 +1839,18 @@
       return _sceneBucket(_hourOverride);
     },
     getBucket: function () { return _sceneBucket(_hourOverride); },
+    // Activity-weather seam. setWeather(false) is the instant kill switch: it
+    // zeroes every scalar, so the bar returns to neutral on the next frame and
+    // stays there. weatherInfo() exposes the scalars for tests and diagnostics.
+    setWeather: function (on) {
+      WEATHER_ENABLED = (on !== false);
+      if (!WEATHER_ENABLED) { _wxTarget = 0; _overcastSince = -1; _wx.overcast = _wx.burst = _wx.rain = 0; }
+      return WEATHER_ENABLED;
+    },
+    weatherInfo: function () {
+      return { enabled: WEATHER_ENABLED, overcast: _wx.overcast,
+               burst: _wx.burst, rain: _wx.rain, target: _wxTarget };
+    },
     TIME_BUCKETS: ['deepNight', 'earlyMorning', 'morning', 'afternoon', 'evening', 'night']
   };
 

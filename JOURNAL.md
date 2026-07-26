@@ -1,6 +1,29 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续24) — chatInner 顺序 bug 的**尾部镜像**根修:抽出唯一有序插入原语 + 运行时不变式 + 静态闸(commit 见下,12 文件 +867/-26;新套件 2→**8/8** 含 NEUTER×3,相邻环 **57/57**,collect **9756** 0 err)
+- **owner 复核续20 后当场打脸,而且是对的:** 我只修了头、把尾巴原样留着。owner 用**真实 shipped ConvView** 跑 jsdom 复现,不是推测:
+  ```
+  seed:                       a, b, SENT_BOT
+  after ConvView.apply(NEW):  a, b, SENT_BOT, NEW
+  after startStreaming():     a, b, SENT_BOT, NEW, LIVE
+  ```
+- **尾部镜像 bug:** `_ensureBottomSentinel` 用 `inner.appendChild(s)` 把自己钉成**最后一个子节点**;而 `conv_view.js:182`(apply)与 `:329`(startStreaming)都用 `insertAdjacentHTML('beforeend', …)` —— **落在它后面**。与刚修好的头部**同形**:把布局家具当成消息。
+- **生产可达(不是合成角落):** `_evictBelowWindow` 只在**流活着**时 bail;一个 settled 会话超过 `_MAX_RENDER_WINDOW=80`、读者往上滚,就会长出底部哨兵 —— 而输入框就在那儿。发一条消息,自己的气泡渲染在「⬇ N newer messages」条**下面**,流式回复再下面。更糟:`_loadNewerMessages` 用 `sentinel.before(frag)` 插入,于是**找回来的旧尾巴落在你刚发的消息上面** —— 和头部倒置一模一样。
+- **为什么头部的修复没能防住尾部(这才是真正的教训):** 我的 `_headAnchor()` 是 `renderChat` surgical 块里的一个**闭包**,ConvView **够不到**,所以规则无法共享。owner 原话:「我不想再看到第三个同形补丁」。
+- **三道防线(owner 指定,逐条落地):**
+  | # | 交付 | 要点 |
+  |---|---|---|
+  | ① | `core/chatinner_dom.js` 唯一原语 | `chatInnerHeadAnchor` / `chatInnerTailAnchor` / `chatInnerInsert`;#chatInner 的子节点混着 **MESSAGES** 与 **FURNITURE**(两条懒加载哨兵),原语是唯一知道家具存在的地方。**9 个写入方**全部改道 |
+  | ② | `assertChatInnerOrder` 运行时不变式 | 走一遍子节点,断言 (a) 渲染出的 `data-msg-id` 序列是 conv.messages 的**子序列** (b) **没有家具夹在数组相邻的两条消息之间** —— 后者能在哨兵漂移到足以倒置**之前**就抓住它。debug 门控、一次性 latch、点名 site,镜像 `identity_gate_tripwire.js`;**绝不抛异常、绝不改 DOM**(诊断不能弄坏它诊断的东西) |
+  | ③ | 静态闸 | 任何文件用无锚点位置 API 写 #chatInner 即翻红。**接收者感知**(解析绑定到 #chatInner 的局部名),所以 `document.body.appendChild` 不会误伤;只豁免原语本身与**家具所有者** `streaming_render.js` |
+- **静态闸当场揪出另外 6 个同族写入方**(都不在 owner 报的症状里,是我没找的):最扎眼的是 `ui/turn_nav.js:141` 的 `inner.prepend(frag)` —— **头部插入,与原 bug 同形**;另有 translating bubble / queued-dispatch 占位气泡 / VLM 等待指示器 / image-gen 单图与批量两张卡。全部改道。**这就是「静态闸比场景测试值钱」的实证** —— 场景测试只抓你想到的那个场景。
+- **failing-first 纪律:** 尾部两测**先写先红**(`primitive_missing`,原语还不存在),再动源码。**NEUTER×3 逐一验证承重**:①还原 `inner.firstChild` 头锚点 → 头部两断言红;②把 `chatInnerTailAnchor` 退化成 `return null`(等价 pre-fix `beforeend`)→ 尾部断言红;③把不变式短路成 `return true` → 两个检测面全瞎。静态闸另做 **A/B 实证**:把 turn_nav 退回裸 `prepend` → 咬,且**报出正确行号 141**。
+- **自己踩的两个坑(如实):** ①首版 harness 断言 `indexOf('streaming-msg')`,但 `layout()` 优先映射 `data-msg-id`,活体气泡显示为 `LIVE` —— **测试自己的 bug**,排序其实是对的;②首版静态闸把注释整段删掉再扫,**行号全错**,会把人指到错误位置 —— 改成「注释行内置空、保留换行」。
+- **验证:** 新套件 **8/8**;相邻环 **57/57**(bundle-manifest parity / id-keyed reconcile / bounded window / ConvView guards / scroll anchor / identity-gate parity);**实际产出的 1.8MB bundle 里四个符号全在,且原语排在两个消费方之前**(位置 450660 < 721638 renderChat < 1118132 ConvView);collect **9756** 0 err(sibling 的 `_gateway.py` 已自行修好,本次闸门可信)。
+- **对续20 的更正(owner 明确要求):** 上一条写「把该合同的一个漏洞补上」,**措辞过宽** —— 它只关了**头部**那一半,尾部同形洞原样留着,直到本刀。头部修复本身没错,但「顺序漏洞已闭合」的说法当时不成立。
+- **边界:** 纯前端,走内容哈希 bundle —— **需重启服务器 + 浏览器硬刷新**。运行时不变式只在 debug_mode 下走,常态零开销。
+
 ### 2026-07-26 — pt_871a26c7 收口(7 次派发后):owner 一键选 **A 隐形分隔符** → gateway sanitizer **首次真正生效**(commit `f4c3051f`,2 文件;套件 4 红 → **9/9 绿**,NEUTER 咬 3,collect **9756** 0 err,相邻 sanitize/body 54 过)。
 - **落地机制:** `_invisible_break()` 在每个屏蔽词首字符后插入 **U+200B 零宽空格**,`_GATEWAY_BLOCKED_TERMS` 由它**派生**(绝不手打不可见字符字面量——那对代码审查同样不可见)。破坏精确子串匹配、渲染层不可见、对 LLM 语义同一;网关若归一化该分隔符则退回原 inert no-op,**下行地板为零**——这正是它不需要发明任何委婉词、从而能解开 owner-gate 的原因。
 - **failing-first 是真的:** 之前诚实修复批次写的测试已把验收条件钉死(ZWSP 插入 + 非恒等 + `_invisible_break` 助手),sibling ms0edz36 独立确认那 4 红是「实现缺失,非新缺陷」。本次实现落地后自动转绿,**一行测试期望都没改**。NEUTER:把派生映射改回 `term: term` → 3 个 shipped-map 测试立刻红。
@@ -143,6 +166,7 @@
 - **对 owner「都放到后端」那一问的回答(结论:不建议整体搬,但方向里有一半是对的):** 本 bug 的病根**不是**「渲染在前端」,而是**同一份 DOM 有多个增量写入者**(全量渲染 / 外科重绘 / 懒加载窗口 / 流式气泡),各自持有一份对「头部在哪」的隐含假设。`docs/RENDER_CONTRACT.md` 早把这条写成不变式①(DOM = 消息文档的纯投影)。服务端渲染 HTML 不会消灭增量写入者 —— 流式仍要逐 token 落地、懒加载仍要按窗口拼接,只是把同样的锚点算术搬到另一侧,还会丢掉 tool `<details>` 展开态、翻译预览等**活 DOM 状态**(现在的 id-keyed reconcile 正是为保住它们才存在的)。**真正对的那一半是:让「哪些消息该出现、以什么顺序」成为服务端权威事实**,前端只做投影 —— 这正是 RENDER_CONTRACT 不变式②③与 Phase 3/4 已经在走的路。本刀是把该合同的一个漏洞补上,不是绕开它。
 - **诚实标注:** 全仓 `--collect-only` 首跑 **48 err**,根因是 sibling 正在改 `lib/llm_sanitize/_gateway.py` 留下的半成品 dict(`IndentationError`),**与本刀无关**;把该文件临时换成 HEAD 版后 collect **9560 / 0 err**,随即**逐字节校验恢复** sibling 的工作树改动(md5 核对),未提交它。我的提交精确 2 文件。
 - **生效边界:** 纯前端,走内容哈希 bundle —— **需重启服务器 + 浏览器硬刷新**后顺序才恢复正常。
+- **⚠️ 本条的覆盖面声称有误，已由续24 更正：**上面写「把该合同的一个漏洞补上」，实际上它**只关了头部那一半**。尾部存在**同形镜像 bug**（`_ensureBottomSentinel` 用 `appendChild` 把自己钉在最后，而 `ConvView.apply` / `startStreaming` 的 `beforeend` 落在它**后面**），直到续24 才修。根因：本刀的 `_headAnchor()` 是 `renderChat` 里的**闭包**，ConvView 够不到，所以规则无法共享。
 
 ### 2026-07-26(续16) — 请求检视器 P6 落地:每个工具行一枚 `</>` 锚点,owner 最初诉求正式闭环(commit `0d2a8fee`,5 文件 +432/-1;新套件 3/3(13 探针)含 NEUTER,前端环 7 套件 38/38)
 - **P3 的粒度错了(这次才对准 owner 原话):** owner 要的是「在 chatinner 看到有问题的工具调用 → 直接找到是哪次请求」。P3 一枚气泡锚点只能跳「该气泡最后一轮」,而一个气泡有 **N 轮 × M 个工具调用**。P6 把锚点下沉到**每一个工具行**。

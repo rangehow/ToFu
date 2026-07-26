@@ -1,6 +1,12 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续79) — pt_b5b0a00d 收口:lost_ack harness 重指向 conv_persist_helpers.js(守卫过期家族第 2 例;commit `02c989f9`,1 文件 +13/-6;2 红→**2/2 绿**,NEUTER 仍咬,相邻环 **38/38**)
+
+- **同族第二例(继 pt_124edf83):** Epic-E slice 3(`b33d9d21`)把 `_rebaseUnackedTail`/`_isErrorOnlyAssistant` 抽到 `conv_persist_helpers.js`,harness 仍只 eval conversations.js。修:harness 先 eval helpers(argv[3]),NEUTER 在新家变异(`helpers_override`)。**抽取重构的收尾清单必须含「引用该函数的测试 harness」一项**——这是该家族今天的第 2 次,值得写进 Epic-E slice checklist。
+- **不碰的另一半:** streaming_ui.js ratchet 红(51>50)是兄弟**已 stage 未提交**的在飞 WIP(RENDER_CONTRACT 线),按票面纪律留给他们;绿色恢复会随其提交自然到来。
+- **边界:** ms1rww8g 已确认其 worker_lost/budget_exceeded hunk 完好并提交,`content_refused` 与其增量在 HEAD 共存,三文件纠缠风险解除。
+
 ### 2026-07-26(续78) — pt_6dfc8bcb 收口:conversations.user_id NOT NULL ×15 **实测否决——测试污染家族第 4 咬,非生产丢数据**(零代码变更;纯取证;与「测试噪音当真生产信号」epic 同根)
 
 - **票面:** 15 条 IntegrityError 疑似生产写入路径丢数据。取证后全部推翻。

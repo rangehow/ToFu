@@ -26,6 +26,23 @@
 - **刻意没做、已单独开票 `pt_e92d3be4f0b546ab`:** rerank **仍同步阻塞在首 token 之前**(死线 800ms,典型 200–600ms)。挪进现成后台预取池要先解时序耦合——它依赖 Section 3 context-inject **之后**的 messages 形态,而池启动更早;要么拆「候选预热 + 晚精排」两段,要么让池收延迟提交的 future。按「不在记账批次里夹带行为变更」的规矩单独走。
 - **本轮成本审计总账:** `5261150c`(缓存约定 10× 计价悬崖 + 计费适配器 40% 多收 + hit% 减半 + 冷轮隐身)/ `aa37795d`(整轮重试抹掉已计费 usage)/ 本刀(预取 rerank 未入账)。**三条「偷偷花钱」路径全部收口。** Opus 5 缓存本身仍是开放问题(见续14),定位到「OpenAI 线尾部断点丢失」为止,两条出路一条被 schema 封死、一条需网关团队内部可观测性。
 
+### 2026-07-26(续19) — 把看门狗从它监视的模块里拆出来(owner 抓出自指盲区,拍板 (a);commit `55c2435d`,6 文件 +490/-64;两套件 23/23,全环 **122/122**,collect **9509** 0 err)
+- **owner 抓的自指盲区(比上一刀的问题更根本):** 续18 让降级搭上 drift 探针发到服务端。但**绊线仍住在 `conv_state_reducer.js` 里**,而它上报的降级恰恰是「这个文件没加载」。owner 顺着 `main.js:1247` 的接线一路查下去,指出四样东西**会一起消失**:
+  | 组件 | 定义位置 |
+  |---|---|
+  | 闩 `_identityGateWarned` | reducer |
+  | 读取器 `identityGateDegraded()` | reducer |
+  | 发送它的 60s 探针 `startSyncDriftProbe` | reducer(且 `main.js` 用 `typeof` 守卫) |
+  | 谓词本身 `_frameIsOurs` | reducer |
+  → **真发生 build-order 回归时:没人上闩、没人读、探针根本不启动、POST 永不离开页面。** 那个 flag **覆盖了除唯一真实成因之外的所有成因**。这跟整条链一直在消灭的「与正常工作无法区分」是同一种失败,只是藏得更深。
+- **owner 给了 (a) 拆出去 / (b) 接受局限但停止过度声称 两条路,倾向 (a)。同意并执行 (a)** —— 一个在自己主触发条件上打不响的守卫,不值得为省一个小模块而留着。
+- **交付:** 新叶子模块 `core/identity_gate_tripwire.js`(149 行),自持闩+上报器+读取器+**自有 flush**,**不依赖任何它监视的东西**(只碰 window/console/setTimeout,以及存在时的 Api/debugLog)。注册进 `_BUNDLE_FILES` **排在 reducer 之前**,并补了 `index.html` dev-fallback 标签。
+- **双通道、单闩、不重复上报:** ①reducer 在 → 探针照旧搭车,随后调 `markIdentityGateReported()` 让 flush 让位;②**reducer 不在 → 没有探针可搭**,绊线自己的一次性 `setTimeout` 向**同一端点**发空 digest(服务端本来就先读 flag 再校验 digests,正为这个形状)。**一页一次**:build-order 回归是页面的永久属性,重复报就是噪声,而噪声会被无视——信号就是这么死的。
+- **决定性测试(唯一能区分拆前拆后的那一条):** `test_reducer_missing_still_reports_to_server` —— 只加载绊线+消费者闸门,**真的不加载 reducer**(`_frameIsOurs`/`reportSyncDigest`/`startSyncDriftProbe` 全部真实缺席),断言帧仍被接受、绊线上闩并记录 site、**flush 确实把 flag+site+空 digest 送达服务端**,且二次 flush 不重复投递。配 NEUTER:剥掉 flush 调度 → 该面翻红。
+- **新增三道结构守卫:** ①绊线必须 eager 且**先于 reducer 与全部消费者**(A/B 实证:排到 reducer 之后 → 报 `ORDER VIOLATION: idx 17 must load BEFORE idx 16`;整条摘掉 → 报 `must be in _BUNDLE_FILES`;还原转绿);②**绊线不得引用任何它监视的符号** —— 剔除注释**与字符串字面量**后再扫(模块 docstring 和面向运维的告警文案都**故意**点名那些符号,那是它们的用处),只抓真实引用;③自有投递通道存在且两侧都有 claim 接缝。
+- **一个既有守卫替我把关(值得记):** bundle-manifest parity 测试**当场咬住**新文件缺 `index.html` dev-fallback 标签(CLAUDE.md §3.2.1)——这正是它该干的事,在落地前抓到。
+- **共享 HEAD 纪律 + 一个如实说明:** collect 首次跑出 48 个 error,根因是 **sibling 正在改 `lib/llm_sanitize/_gateway.py`**(看板 gateway 脱敏 epic)留下的半成品 dict,`IndentationError`,**与我无关**;把该文件 stash 后 collect **9509 / 0 error**,随即原样恢复 sibling 的改动、未提交它。我的提交精确 6 文件。
+
 ### 2026-07-26(续18) — 身份闸门 fail-open 从「只有浏览器控制台知道」变成服务端可见(owner 指路搭车现成通道,commit `2ffcfa92`,4 文件 +343/-6;新套件 6/6 含 NEUTER,SSOT+api-isolation+sibling pending-busy 环 **100/100**,collect **9451** 0 err)
 - **owner 的观察(一句话点中要害):** 续16 给 fail-open 加了绊线,但它落在 `console.warn` / `debugLog` —— **两者都是浏览器本地**。运维侧永远不知道某个页面正在无作用域接收所有帧。而这个子系统里**别的不变量都会回报**:P5 sync-drift 探针每 60s POST 一次 digest,服务端 WARN 记录分歧。**唯一安全相关的降级,恰恰是唯一不走这条路的信号。**
 - **owner 明确不要新通道:** 不加端点、不改探针节律、不让 flag 影响任何 accept/reject —— 就是**搭现成的车**。照做。
@@ -34,6 +51,7 @@
 - **纯遥测(已钉死):** flag 不参与任何 accept/reject(设置它的时候 fail-open 早已决定),也不改探针的分歧计算 —— 有一测**同一 digest 带/不带 flag 各 POST 一次,断言 `checked` 与 `divergences` 完全相同**。
 - **测试 6:** 12 探针 jsdom 驱动**真实 shipped `reportSyncDigest`**(健康不带 flag / 空闲页保持静默 / 降级+有状态两者都带 / **降级+空 digest 仍上报**——关键面);**NEUTER 复原空 digest 短路 → 关键面翻红**;服务端三面(带 flag 记录 / 空 digest body 也记录 / **不带 flag 保持静默**——健康时也报的信号就是噪声,会被无视);flag 对分歧判定惰性。
 - **共享 HEAD 纪律:** 提交前逐符号核对 reducer 未提交改动只含我的 3 个符号(sibling 的 pending-busy 簇已自行提交),精确 4 文件;顺带跑了 sibling 的 `test_frontend_pending_busy_state` 与 `test_frontend_api_isolation` 棘轮(改了 `api.js` 必须过)—— 全绿。
+- **⚠️ 本条目的覆盖面声称有误,已由续19(`55c2435d`)更正:** 当时绊线仍住在 `conv_state_reducer.js` 里,而它上报的降级正是「这个文件没加载」。reducer 缺席时,闩、读取器、以及**发送它的 60s 探针**(`startSyncDriftProbe` 也在 reducer 里,`main.js:1247` 用 `typeof` 守卫)**一起消失** —— 所以那时的服务端信号**覆盖除唯一真实成因之外的所有成因**。上面「服务端可见」的说法对 build-order 这一类**当时并不成立**,详见续19。
 
 ### 2026-07-26(续17) — RWA P3 落地:工具投影 + 执行路由 + desktop 批准门洞闭合(2 commit:P3 见下 9 文件 / 潜伏 bug `c1685520` 2 文件;新套件 19/19 含 NEUTER,九环 **251/251**,registry 环 22/22,collect **9451** 0 err)
 - **拍板 3A 全链:** ①绑定契约单一事实源 `lib/desktop/remote.py`(总闸 `TOFU_REMOTE_WORKTREE` + `cfg['project_remote']`,投影与路由共用);②投影 `with_remote_hint`——名称+参数 schema 逐字节不变,仅描述追加本地执行提示,OFF→ON 一次性 latch-clear(第三个 sticky latch,镜像 project_ready);③路由 `_handle_project_tool` 在 content_ref 解析后分流,七命令映射,远程 run_command 桥超时=命令超时+30s。

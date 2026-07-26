@@ -92,33 +92,150 @@ def test_escape_filter_path():
     assert '\\:' in esc and "\\'" in esc
 
 
-@pytest.mark.skipif(not mv.ffmpeg_bin(), reason='ffmpeg unavailable')
-def test_burn_in_real_render(tmp_path):
-    """REAL libass render: 1s black clip + one CJK subtitle → non-black pixels."""
-    ffmpeg = mv.ffmpeg_bin()
+def _black_clip(tmp_path, ffmpeg):
     import subprocess as sp
     video = tmp_path / 'black.mp4'
     sp.run([ffmpeg, '-y', '-f', 'lavfi', '-i', 'color=black:s=320x240:d=1',
             '-pix_fmt', 'yuv420p', str(video)], check=True,
            capture_output=True, timeout=60)
+    return video
+
+
+def _first_frame_png(tmp_path, ffmpeg, src, name):
+    import subprocess as sp
+    png = tmp_path / name
+    sp.run([ffmpeg, '-y', '-i', str(src), '-frames:v', '1', str(png)],
+           check=True, capture_output=True, timeout=60)
+    return png
+
+
+@pytest.mark.skipif(not mv.ffmpeg_bin(), reason='ffmpeg unavailable')
+def test_burn_in_real_render(tmp_path):
+    """REAL libass render: 1s black clip + one CJK subtitle → non-black pixels.
+
+    Env-honest (2026-07-26): a box with no CJK-covering font now gets an
+    explicit ``font_missing`` from burn_in_subtitles (the silent no-op is
+    dead) — skip there, run fully where CJK glyphs exist.
+    """
+    ffmpeg = mv.ffmpeg_bin()
+    video = _black_clip(tmp_path, ffmpeg)
     srt = tmp_path / 't.srt'
     srt.write_text('1\n00:00:00,000 --> 00:00:01,000\n测试字幕\n',
                    encoding='utf-8')
     out = tmp_path / 'burned.mp4'
-    fontsdir = os.path.expanduser(
-        '/mnt/dolphinfs/ssd_pool/docker/user/hadoop-aipnlp/INS/ruanjunhao04/fonts')
-    res = mv.burn_in_subtitles(str(video), str(srt), str(out),
-                               fontsdir=fontsdir if os.path.isdir(fontsdir) else '')
+    res = mv.burn_in_subtitles(str(video), str(srt), str(out))
+    if res.get('category') == 'font_missing':
+        pytest.skip('no font with CJK coverage on this box '
+                    '(font_missing is the honest answer here)')
     assert res['ok'] is True, res
     assert res['duration'] == pytest.approx(1.0, abs=0.5)
-    # Burned frame must differ from the pure-black source.
-    before = tmp_path / 'b.png'
-    after = tmp_path / 'a.png'
-    sp.run([ffmpeg, '-y', '-i', str(video), '-frames:v', '1', str(before)],
-           check=True, capture_output=True, timeout=60)
-    sp.run([ffmpeg, '-y', '-i', str(out), '-frames:v', '1', str(after)],
-           check=True, capture_output=True, timeout=60)
+    before = _first_frame_png(tmp_path, ffmpeg, video, 'b.png')
+    after = _first_frame_png(tmp_path, ffmpeg, out, 'a.png')
     assert before.read_bytes() != after.read_bytes()
+
+
+@pytest.mark.skipif(not mv.ffmpeg_bin(), reason='ffmpeg unavailable')
+def test_burn_in_latin_real_render(tmp_path):
+    """REAL libass render of Latin text — proves the FONTCONFIG_FILE root
+    fix end-to-end on boxes whose fontconfig config was previously missing
+    (before the fix this burned NOTHING and still exited 0). Skips only on
+    boxes with literally zero resolvable fonts."""
+    ffmpeg = mv.ffmpeg_bin()
+    video = _black_clip(tmp_path, ffmpeg)
+    srt = tmp_path / 'en.srt'
+    srt.write_text('1\n00:00:00,000 --> 00:00:01,000\nHello world\n',
+                   encoding='utf-8')
+    out = tmp_path / 'burned.mp4'
+    res = mv.burn_in_subtitles(str(video), str(srt), str(out))
+    if res.get('category') == 'font_missing':
+        pytest.skip('zero fonts resolvable on this box')
+    assert res['ok'] is True, res
+    before = _first_frame_png(tmp_path, ffmpeg, video, 'b.png')
+    after = _first_frame_png(tmp_path, ffmpeg, out, 'a.png')
+    assert before.read_bytes() != after.read_bytes()
+
+
+def test_burn_in_font_failure_detected(tmp_path, monkeypatch):
+    """Unit: rc=0 + libass 'failed to find any fallback' in stderr →
+    category font_missing (the silent no-op is promoted to a loud,
+    actionable failure). No real ffmpeg involved."""
+    import lib.motion_video._concat as MC
+
+    video = tmp_path / 'v.mp4'
+    video.write_bytes(b'mp4')
+    srt = tmp_path / 't.srt'
+    srt.write_text('1\n00:00:00,000 --> 00:00:01,000\n测试\n', encoding='utf-8')
+
+    def fake_run(args, **kw):
+        # libass draws nothing but exits 0 and still writes the video
+        with open(args[-1], 'wb') as f:
+            f.write(b'mp4')
+        return {'rc': 0, 'category': '', 'elapsed': 0.1,
+                'err': ('[Parsed_subtitles_0] fontselect: failed to find any '
+                        'fallback with glyph 0x6D4B for font: (Arial, 400, 0)')}
+
+    monkeypatch.setattr(MC, '_run_ffmpeg', fake_run)
+    res = mv.burn_in_subtitles(str(video), str(srt), str(tmp_path / 'o.mp4'))
+    assert res['ok'] is False
+    assert res['category'] == 'font_missing', res
+    assert 'font' in res['detail']
+    # the no-op output must NOT be promoted to the final path
+    assert not (tmp_path / 'o.mp4').exists()
+
+
+def test_burn_in_font_detection_NEUTER(tmp_path, monkeypatch):
+    """NEUTER: amputate the stderr scan → the SAME libass failure sails
+    through as ok — the scan is what kills the silent no-op."""
+    import lib.motion_video._concat as MC
+
+    video = tmp_path / 'v.mp4'
+    video.write_bytes(b'mp4')
+    srt = tmp_path / 't.srt'
+    srt.write_text('1\n00:00:00,000 --> 00:00:01,000\n测试\n', encoding='utf-8')
+
+    def fake_run(args, **kw):
+        with open(args[-1], 'wb') as f:
+            f.write(b'mp4')
+        return {'rc': 0, 'category': '', 'elapsed': 0.1,
+                'err': 'fontselect: failed to find any fallback with glyph 0x0'}
+
+    monkeypatch.setattr(MC, '_run_ffmpeg', fake_run)
+    monkeypatch.setattr(MC, '_font_burn_failed', lambda err: False)
+    monkeypatch.setattr('lib.motion_video._gates.probe_video',
+                        lambda p, **kw: {'duration': 1.0, 'has_audio': False})
+    res = mv.burn_in_subtitles(str(video), str(srt), str(tmp_path / 'o.mp4'))
+    assert res['ok'] is True, res
+
+
+def test_build_render_env_fontconfig_fallback(monkeypatch):
+    """Fix A: no system fonts.conf + conda one present → FONTCONFIG_FILE
+    injected; system config present → no injection; the operator's own
+    FONTCONFIG_FILE always wins."""
+    import sys as _sys
+    from lib.motion_video import _env as EN
+
+    conda_conf = os.path.join(_sys.prefix, 'etc', 'fonts', 'fonts.conf')
+    monkeypatch.setattr(EN, 'ffmpeg_bin', lambda: '')
+    monkeypatch.setattr(EN, 'ffprobe_bin', lambda: '')
+    monkeypatch.setattr(EN, 'chrome_bin', lambda: '')
+    monkeypatch.setattr(EN, '_conda_gui_lib_dir', lambda: '')
+    monkeypatch.delenv('FONTCONFIG_FILE', raising=False)
+
+    # case 1: only the conda config exists → injected
+    monkeypatch.setattr(os.path, 'isfile', lambda p: p == conda_conf)
+    env = EN.build_render_env(base={})
+    assert env.get('FONTCONFIG_FILE') == conda_conf
+
+    # case 2: system config exists → no injection
+    monkeypatch.setattr(os.path, 'isfile',
+                        lambda p: p == '/etc/fonts/fonts.conf')
+    env = EN.build_render_env(base={})
+    assert 'FONTCONFIG_FILE' not in env
+
+    # case 3: operator override wins even when the fallback would apply
+    monkeypatch.setattr(os.path, 'isfile', lambda p: p == conda_conf)
+    env = EN.build_render_env(base={'FONTCONFIG_FILE': '/custom/fonts.conf'})
+    assert env['FONTCONFIG_FILE'] == '/custom/fonts.conf'
 
 
 # ══════════════════════════════════════════════════════════

@@ -199,6 +199,19 @@ def _escape_filter_path(path: str) -> str:
                 .replace("'", "\\'"))
 
 
+def _font_burn_failed(stderr: str) -> bool:
+    """True when libass told us (stderr only) it could not draw the text.
+
+    libass NEVER fails the ffmpeg run on font problems — the process exits
+    0 with a perfectly valid video that simply has no subtitles rendered
+    (2026-07-26: broken fontconfig → ``failed to find any fallback with
+    glyph 0x0``; font found but missing CJK coverage → ``... glyph
+    0x6D4B``). The only honest signal is this log line, so we promote it
+    to a real failure category instead of shipping a silent no-op burn.
+    """
+    return 'failed to find any fallback' in (stderr or '')
+
+
 def burn_in_subtitles(video_path: str, srt_path: str, output: str, *,
                       fontsdir: str = '', force_style: str = '',
                       timeout: int = 1800, abort_event=None) -> dict:
@@ -237,6 +250,20 @@ def burn_in_subtitles(video_path: str, srt_path: str, output: str, *,
     if res['category'] or res['rc'] != 0:
         return {'ok': False, 'category': res['category'] or 'unknown',
                 'detail': res['err'][-1500:]}
+    if _font_burn_failed(res['err']):
+        logger.warning('[MotionVideo] burn-in refused: libass resolved no '
+                       'font for the subtitle glyphs — the burn would be a '
+                       'silent no-op')
+        try:
+            os.unlink(tmp_out)
+        except OSError:
+            pass  # tmp output may not exist yet — nothing to clean
+        return {'ok': False, 'category': 'font_missing',
+                'detail': 'libass resolved no usable font for the subtitle '
+                          'text (fontconfig config missing, or no installed '
+                          'font covers the glyphs — install a CJK-capable '
+                          'font or pass burn_in_fontsdir); refusing to ship '
+                          'a silent no-op burn'}
     if not os.path.isfile(tmp_out) or os.path.getsize(tmp_out) == 0:
         return {'ok': False, 'category': 'io',
                 'detail': 'ffmpeg produced no output'}

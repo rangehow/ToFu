@@ -375,6 +375,12 @@ def build_render_env(base: dict | None = None) -> dict:
     * ``LD_LIBRARY_PATH`` is prepended with ``sys.prefix/lib`` when that dir
       carries the GUI libs headless Chrome needs (libatk & friends) — the
       rootless-conda recipe.
+    * ``FONTCONFIG_FILE`` points at ``sys.prefix/etc/fonts/fonts.conf`` when
+      the system config (``/etc/fonts/fonts.conf``) is absent — without ANY
+      fontconfig config the static ffmpeg's libass resolves zero fonts and
+      every subtitles burn **silently renders nothing** (2026-07-26 root
+      cause of test_burn_in_real_render: the burn exited 0 with a
+      byte-identical frame). An operator-set FONTCONFIG_FILE always wins.
     """
     env = dict(base if base is not None else os.environ)
     ff = ffmpeg_bin()
@@ -397,6 +403,12 @@ def build_render_env(base: dict | None = None) -> dict:
     if gui_lib:
         existing = env.get('LD_LIBRARY_PATH', '')
         env['LD_LIBRARY_PATH'] = (gui_lib + os.pathsep + existing) if existing else gui_lib
+    # libass font bootstrap: no system fontconfig config → libass finds zero
+    # fonts → subtitle burns no-op SILENTLY (rc=0, identical frames).
+    if 'FONTCONFIG_FILE' not in env and not os.path.isfile('/etc/fonts/fonts.conf'):
+        conda_conf = os.path.join(sys.prefix, 'etc', 'fonts', 'fonts.conf')
+        if os.path.isfile(conda_conf):
+            env['FONTCONFIG_FILE'] = conda_conf
     return env
 
 

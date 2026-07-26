@@ -659,6 +659,7 @@ _BUNDLE_FILES = [
     'settings/system_prompt_editor.js',
     'settings/oauth.js',
     'settings/mcp.js',
+    'settings/devices.js',
     # relay-admin.js intentionally NOT bundled — it loads only on the
     # standalone /admin page (static/admin.html), not in index.html.
     # ── main/ subpackage (split 2026-05-28 from monolithic main.js) ──

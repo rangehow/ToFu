@@ -103,6 +103,9 @@ function switchSettingsTab(tabId) {
   if (tabId === 'speech' && typeof _refreshSttStatus === 'function') {
     _refreshSttStatus();
   }
+  if (tabId === 'devices' && typeof _populateDevicesTab === 'function') {
+    _populateDevicesTab();
+  }
 }
 
 async function _loadServerConfig() {

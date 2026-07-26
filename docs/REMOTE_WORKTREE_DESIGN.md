@@ -265,7 +265,7 @@ Body: {
 | **P1** ✅ | **Agent 项目命令集 + 安全网**(已落地 2026-07-26):`project_*` 七命令、share_roots 路径校验、snapshot-before-write、freshness 门(重读刷新令牌) | `lib/desktop_agent/_project.py`(新)、`_dispatch.py`、`config.py` | 越界路径全拒(含符号链接/兄弟前缀/绝对路径);快照可回滚;外部改动后写入被拒、重读后放行;`.tofu` 对项目工具不可见 |
 | **P2** ✅ | **run_command 平价**(已落地 2026-07-26):流式分片、进程树 kill、删除目标锁根、超时放宽 | `lib/desktop_agent/_exec.py`、`_project.py`、`_run.py`、`bridge.py`(流帧) | 长命令分片按 seq 稠密上行;kill 后子进程全灭;`rm -rf ~` 类被拦;30s+ 命令不再误杀 |
 | **P3** ✅ | **工具投影 + 执行路由**(已落地 2026-07-26):`ToolContext.project_remote`、`_handle_project_tool` 路由、`ToolSpec('desktop')` 补 `write_tools` 声明(关批准门洞) | `_spec.py`、`_build.py`、`handlers/project.py`、`lib/desktop/remote.py`(新) | 同名 schema 不变仅描述提示;远程 `write_file` 按 agent_id 寻址;总闸 off 字节不变;latch-clear 一次性;批准门洞闭合 |
-| **P4**(P4a ✅ 后端半 2026-07-26 / P4b 前端待) | **入口与前端**:每用户 bridge token ✅(api_keys scope `agents:bridge`)、poll 认证+用户作用域投递 ✅、`agent_run` `remote:<agent>:<root>` 绑定 ✅、status 按用户过滤 ✅ / token 颁发 UI(Settings → Devices,P4b)、项目选择器列出在线 agent 与共享根(P4b) | `routes/api_v1/agent_run.py`、`routes/desktop.py`、`bridge.py`、`remote.py` ✅ / `routes/api_v1/desktop.py`、前端(P4b) | 远程项目挂载后全工具集可用 ✅(后端链);token 错/无 scope 即 401 ✅;跨用户投递 fail-closed ✅;离线 agent 在选择器灰显(P4b) |
+| **P4**(P4a ✅ 后端半 + P4b-1 ✅ Devices 页 2026-07-26 / P4b-2 选择器+流 UI 待) | **入口与前端**:每用户 bridge token ✅、poll 认证+用户作用域 ✅、`agent_run remote:` 绑定 ✅、Settings→Devices 页 ✅(agents 表 + 颁发/吊销,scope 化 DELETE 不借 admin)、**伪路径 `remote:<agent>:<root>` 复用 projectPath 持久化** ✅ / 项目选择器远程分组(P4b-2)、流帧 UI(P4b-2) | `agent_run.py`、`routes/desktop.py`、`bridge.py`、`remote.py`、`api_v1/desktop.py`、`settings/devices.js` ✅ / `project.js`、流渲染(P4b-2) | 后端链+Devices 页全绿;token 错/无 scope 即 401;跨用户 fail-closed;离线灰显(P4b-2) |
 | **P5** | **Project Brain 集成**:远程根纳入 write_set 声明,多会话并发写同一本地项目时 dispatch 串行化 | `lib/conversations/`、board | 两会话同根 write_set 重叠 → 不同时 dispatch;不同根不互斥 |
 
 - **P0 落地注记(2026-07-26):** 注册帧/注册表/心跳/寻址谓词(`_deliverable`)/入队闸
@@ -321,6 +321,17 @@ Body: {
   **过程事故(共享树):** sibling 的 `lib/llm_sanitize/_gateway.py` 破窗 WIP
   (IndentationError)两度翻转阻断全仓 import;无 live peer,已 `git stash` 保管
   (stash@{0},恢复 `git stash pop`),树恢复后全绿。
+
+- **P4b-1 落地注记(2026-07-26,Devices 页):** ①**伪路径**:conv.projectPath =
+  `remote:<agent>:<root>` 复用全部既有持久化机制,`resolve_conv_config` 翻译为
+  `cfg['project_remote']` 并清掉 projectPath(总闸 off 逐字节不翻译)——P4b-2 的
+  选择器远程分组因此只是「产出一个伪路径」,零新持久化管道;②Devices 三端点:
+  `GET /devices`(agents+tokens 元数据按 caller 过滤)、`POST /token`(原文只回一次,
+  201)、`DELETE /token/<id>`(属主+scope 双校验,**不借 admin 宽权**);
+  ③面板机制:tab 按钮 + `SETTINGS_PANEL:devices` 标记 + 片段自动注入 +
+  `settings/devices.js` 入 `_BUNDLE_FILES` + core_panel 填充钩子;
+  ④套件:后端 12 测(`test_remote_worktree_devices.py`)+ 前端 8 测
+  (`test_frontend_devices_tab.py`,含 NEUTER 钩子承重 + jsdom 11 探针)。
 
 工作量估算:P0 ~250 行 / P1 ~400 行 / P2 ~200 行 / P3 ~150 行 / P4 ~300 行+前端 / P5 ~80 行,
 全部为薄接缝改动,无新框架。

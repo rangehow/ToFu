@@ -1,6 +1,13 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续29) — RWA P4b-1 落地:Settings→Devices 页 + 伪路径绑定约定(commit 见下,16 文件;后端 12 测 + 前端 8 测含 NEUTER,四环 **38/38**,bundle 冒烟过,collect **9923** 0 err)
+- **拍板 5A 交付:** Settings 新页签「设备」——agents 表(名/平台/共享根/在线态)+ bridge token 颁发(原文只回一次,复制即隐)+ 吊销。三端点:`GET /devices`(caller 过滤)、`POST /token`(scope agents:bridge,201)、`DELETE /token/<id>`(**属主+scope 双校验,刻意不借 admin 宽权的 `/api/v1/keys` DELETE**)。装配链全钉:tab 按钮→SETTINGS_PANEL 标记→片段注入→`_BUNDLE_FILES`→core_panel 钩子→Api.desktop 域→i18n 双语。
+- **伪路径(本批最关键的设计收敛):** conv.projectPath = `remote:<agent>:<root>` —— 远程根**复用全部既有 per-conv 持久化机制**,`resolve_conv_config` 在总闸内翻译成 `cfg['project_remote']` 并清掉 projectPath。P4b-2 的选择器远程分组因此只剩「产出一个伪路径」,零新管道;settings 解析器原样持久化(有钉)。
+- **过程(如实):** ①`audit_log` 忘导入 + `parse_body` 非 async——mint 500,测试供出;②jsdom harness 两个坑:setTimeout 被 harness 中性化(`await setTimeout` 永不返回,静默挂死 IIFE,rc=0 零输出——改微任务冲洗)与 indirect eval 把被测函数挂 node global 不挂 window(桩须双挂);③两个白名单套件按其自身提示更新(conv_config expected-keys + panels parity expected-tabs)——**套件工作正常,正是它们拦的漂移类**。
+- **git 纪律(续24 记忆执行):** 提交前读 `git diff --cached --name-only` 全表核实恰好 16 文件,无 sibling staged 混入。
+- **边界:** Devices 页上线需重启+硬刷;项目选择器远程分组(灰显离线)+ 流帧 UI 属 **P4b-2**,下一派发。
+
 ### 2026-07-26(续28) — Opus 5 适配收官第 3 刀:effort 梯位全档显式 + 两条出站路径钉在一起;**并对自己前一轮的实测结论做了否证**(commit `b3a2b2c9`,3 文件 +216/-2;89 测 14 failing-first 含 NEUTER×3 全咬,相邻环 **347/347**,collect **9820** 0 err)
 - **owner 抓的最后一个洞,而且在默认档上。** `_build.py` 有 `if _effort and _effort != 'medium'` —— **medium 被显式排除,永不落 wire**。这行在写下时是**对的**:当年 medium 就是 Claude 默认值,不发等于发,省字节。Opus 5 把默认改成 `high`,于是它的含义一夜之间从「省流量」变成「**把用户选的 Med 悄悄升级成 High**」。而 `index.html` 桌面(:795)与移动(:1708)的 `active` 都钉在 `data-depth="medium"` —— 这是绝大多数用户每轮都在走的路。
 - **与前两刀同一个病根(至此三处收齐):** `8d7b6911` 出站 thinking-off、`43dd1ecd` 入站 thinking 语义、本刀 effort 默认档 —— 全是「**省略即默认**」这个被 Opus 5 作废的假设。
@@ -1090,3 +1097,12 @@
 - **唯一真实阻塞不是收益,是正确性**:`t()` 返回 `entry[_i18nLang] || entry.zh || key`(i18n.js:3398)。只发英文包时,每个缺失键**静默渲染中文且不报错**——「无失败信号」的缺陷类,与本会话早先诊断出的 `_serverRev` 测不准是**同一族病**。必须先让缺失可观测,再谈分包。守卫已钉住该回退,它一旦改变测试即失败。
 - **看板处置**:作废 `pt_543d6f0bb4584230`(误判前提不成立)与 `pt_ce50a30a295a4ca1`(误判噪声级),新开 `pt_0745f8c13f864dc8` 载明实测数字 + 三步下一步(①改 t() 回退使缺失可观测 ②运行时 pack fetcher ③用该测试复测兑现)。
 - **本会话的元教训(已更新进项目记忆)**:任何「占比 X%」的提案,必须 ①把 X 拆到不能再拆并**逐项直接测量**,②在**生产实际编解码的压缩字节**上讨论,③**先验证测量仪器本身**(这张表写 WAL 吗?这个进程在服务流量吗?这个 grep 真的匹配到该匹配的东西吗?),④数字一改就说明**方法错了而非「近似」**,⑤**把测量落成测试**——散文里的数字会腐烂,测试会自己重新推导。
+
+### 2026-07-26(续23) — i18n:清掉单语分包的**唯一真实阻塞**(t() 静默回退变可观测),commit 见下 2 文件 +330;守卫 7/7 含 NEUTER,相邻环 20/20
+- **被派到的票(`pt_ce50a30a295a4ca1`)自己的结论是「sub-part 1 判定 WONTFIX / 收益噪声级」——而那是我上一轮亲手证伪的。** 实测收益是**压缩后 7.6%**(30.6KB / 402.3KB,brotli q9 即生产实际编解码),已由 `tests/test_i18n_split_sizing.py` 钉成可复现测量。**所以本轮不照着过期结论收口,而是去清那张票自己写明的真阻塞。**
+- **真阻塞是正确性,不是收益**:`t()` 原本解析为 `entry[_i18nLang] || entry.zh || key`(i18n.js:3420)。当前每个键都带双语,所以 `|| entry.zh` 那一臂**不可达**,表达式看起来人畜无害。**但单语包一上线,它对包里省略的每个键都变成可达**,英文界面会**静默填满中文**——不抛错、不打日志、任何测试都看不见、不读中文的用户也报不出来。**这是「无失败信号」的缺陷类,和本会话早先诊断的 `_serverRev` 测不准同族**:一个混了两个写入方的信号,无法区分「正常」与「坏了」。
+- **修法:回退照旧发生,但被记录。** 把 UI 降级成裸 key 会用一个可见回归换一行日志,不可接受。改为 `_reportMissingTranslation(key, lang)` **按 (键,语言) 一次性**上报,并新增 `i18nMissingKeys()` 机器可读种子——将来任何语言包改动可以「在 en 下跑一遍 UI,断言该集合为空」。**这个断言在没有这个种子之前根本写不出来,所以种子必须先于分包落地。**
+- **三条刻意的边界(每条都有专测钉住)**:①**键完全不存在**(打错的 key)**不报**——那是调用方 bug,混进来会让信号被 typo 淹没;②**zh 界面永不报**——zh 就是回退语言,默认吵的信号会被无视;③**一次性闩**:100 次调用 2 个缺口键 = 恰好 2 条告警,热渲染循环淹不掉控制台。
+- **证据**:7 测**驱动真实 shipped `t()`**(node 下 eval 真文件,非复刻)。**NEUTER**(剥掉上报调用)复现静默降级——neutered warns=0 而 shipped warns=1,两者一旦相等即说明绊线被删。相邻:`i18n_split_sizing` 5/5、`identity_gate_parity` 15/15;`node --check` 通过;bundler manifest 127。
+- **一个过程失误(已修,记下防再犯)**:`insert_content` 的锚点选在 `t()` 的 JSDoc 中间,把整块注释劈开导致 `node --check` 报 `Unexpected token '*'`。**教训:往函数上方插块时,锚点要选注释块的起始行之前或函数签名行,不要选注释内部的某一行。** 已用一次 apply_diff 复原并把新块整体移到 JSDoc 之上。
+- **Epic-E sub-part 1 现在在正确性上已解锁**,剩余工作是运行时 pack fetcher 本身——技术上现成可行:`_i18n` 是 `var` 可变对象(i18n.js:18),`setLanguage` 仅 5 行且 `_applyI18n()` 前有干净插入点(3413-3417),**无需契约变更**,语言可继续留 localStorage。

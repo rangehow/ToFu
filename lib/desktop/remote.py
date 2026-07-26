@@ -39,6 +39,26 @@ def remote_worktree_binding(cfg):
     return None
 
 
+def parse_remote_path(project_path):
+    """``remote:<agent_id>:<root>`` pseudo-path → ``(agent_id, root)`` or None.
+
+    The UI-side binding convention (RWA P4b): a remote root rides the
+    EXISTING per-conv projectPath persistence as a pseudo-path, and
+    ``resolve_conv_config`` translates it into ``cfg['project_remote']``.
+    The root part may itself contain ':' (Windows-y names stay intact).
+    """
+    text = str(project_path or '')
+    if not text.startswith('remote:'):
+        return None
+    rest = text[len('remote:'):]
+    if ':' not in rest:
+        return None
+    agent_id, root = (p.strip() for p in rest.split(':', 1))
+    if not agent_id or not root:
+        return None
+    return agent_id, root
+
+
 def validate_remote_binding(agent_id, root, user_id=''):
     """Validate + mint a ``project_remote`` binding (RWA P4 entry points).
 

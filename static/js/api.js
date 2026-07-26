@@ -738,6 +738,14 @@
       post(`/api/v1/swarm/abort/${encodeURIComponent(taskId)}`, {}, { onError: 'null' }),
   };
 
+  // desktop bridge (RWA Devices page) ----------------------------------
+  const desktop = {
+    status:      () => get('/api/v1/desktop/status', { onError: 'null' }),
+    devices:     () => get('/api/v1/desktop/devices', { onError: 'null' }),
+    mintToken:   (name) => post('/api/v1/desktop/token', { name: name || '' }),
+    revokeToken: (keyId) => del(`/api/v1/desktop/token/${encodeURIComponent(keyId)}`),
+  };
+
   // health / status -------------------------------------------------
   const health = {
     // Returns Response so callers can inspect resp.ok cheaply.
@@ -1405,6 +1413,7 @@
     folders, paperFolders, orchestrations, memory, skills, profile, timer, scheduler, optimizer, compactions,
     conversations, text, translate, chat, images, pdf, doc, audio, artifacts,
     health, pricing, clientError, serverConfig, browser, project, daily, paper,
+    desktop,
     features, providers, dispatch, oauth, mcp, update, trading, authSources,
     swarm, endpoint, logs, motion, tasks, users,
   };

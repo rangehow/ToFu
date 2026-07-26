@@ -31,7 +31,7 @@ PANELS_DIR = os.path.join(PROJECT_ROOT, 'static', 'settings_panels')
 # new tab can't be added without appearing here.
 _EXPECTED_TABS = frozenset({
     'general', 'api', 'preset', 'search', 'translate', 'speech', 'network',
-    'feishu', 'oauth', 'mcp', 'skills', 'preferences', 'advanced',
+    'devices', 'feishu', 'oauth', 'mcp', 'skills', 'preferences', 'advanced',
 })
 
 

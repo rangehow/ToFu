@@ -306,10 +306,15 @@ if (typeof window !== 'undefined') {
   window.buildSyncDigest = buildSyncDigest;
   window.reportSyncDigest = reportSyncDigest;
   window.startSyncDriftProbe = startSyncDriftProbe;
-  /* The REFERENCE multi-user gate. cross_tab_sync.js (_onConvNotifyPush,
-   * _onFoldersChangedPush) and conv_sync_push.js (_onConvSyncPush) implement
-   * the same normalization inline (they run before this file in bundle order
-   * for two of the three, so they can't call it); exported so a test can
-   * drive the canonical semantics directly and pin all four in agreement. */
+  /* THE SINGLE IMPLEMENTATION of the multi-user gate. cross_tab_sync.js
+   * (_onConvNotifyPush, _onFoldersChangedPush) and conv_sync_push.js
+   * (_onConvSyncPush) DELEGATE here rather than re-implementing the rules —
+   * this file loads first in _BUNDLE_FILES (idx 16 vs 18 and 113) and the
+   * predicate is called at FRAME-ARRIVAL time, long after every module is
+   * loaded, so there is no ordering constraint that would force a copy.
+   * Four rules live in exactly one place: no-window → unscoped, either side
+   * null/undefined/'' → unscoped accept, otherwise String()-normalized
+   * equality. tests/test_frontend_identity_gate_parity.py enforces that no
+   * gate anywhere under static/js/ re-implements them. */
   window._frameIsOurs = _frameIsOurs;
 }

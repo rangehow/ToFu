@@ -343,17 +343,15 @@ function _onConvNotifyPush(frame) {
         _checkForQueuedTask(frame.convId);
       }
     }
-    /* Multi-user gate (forward-safe): drop a frame for another user. When no
-     *   user identity is established every frame is ours.
-     *   BOTH sides are String()-normalized: the server stamps int 1 for the
-     *   personal-install default but a str user_id for a real tenant, so a
-     *   strict compare would make a tab silently reject its OWN frames.
-     *   Mirrors core/conv_state_reducer.js::_frameIsOurs. */
-    const myUser = (typeof window._currentUserId !== "undefined" && window._currentUserId !== null)
-      ? String(window._currentUserId) : null;
-    if (myUser !== null && myUser !== "" && frame.userId !== undefined
-        && frame.userId !== null && String(frame.userId) !== ""
-        && String(frame.userId) !== myUser) return;
+    /* Multi-user gate (forward-safe): DELEGATES to the single implementation
+     *   in core/conv_state_reducer.js::_frameIsOurs — never re-implement the
+     *   normalization rules here (int/str skew, unscoped-either-side). That
+     *   file loads earlier in _BUNDLE_FILES and this runs at frame-arrival,
+     *   so the call always resolves. Fail-OPEN if it somehow does not:
+     *   accepting a frame matches today's pre-identity behaviour, whereas
+     *   fail-closed would silently brick cross-device sync. */
+    if (typeof window._frameIsOurs === "function"
+        && !window._frameIsOurs(frame.userId)) return;
 
     const convId = frame.convId;
     if (!convId) return;
@@ -479,14 +477,10 @@ function _scheduleFoldersRefresh() {
 function _onFoldersChangedPush(frame) {
   try {
     if (!frame || frame.type !== "folders_changed") return;
-    /* Multi-user gate (forward-safe): drop a frame for another user. When no
-     *   user identity is established every frame is ours. BOTH sides are
-     *   String()-normalized — see _onConvNotifyPush above. */
-    const myUser = (typeof window._currentUserId !== "undefined" && window._currentUserId !== null)
-      ? String(window._currentUserId) : null;
-    if (myUser !== null && myUser !== "" && frame.userId !== undefined
-        && frame.userId !== null && String(frame.userId) !== ""
-        && String(frame.userId) !== myUser) return;
+    /* Multi-user gate (forward-safe): DELEGATES to _frameIsOurs — see
+     *   _onConvNotifyPush above. Fail-open when unavailable. */
+    if (typeof window._frameIsOurs === "function"
+        && !window._frameIsOurs(frame.userId)) return;
 
     const deletedId = frame.deletedFolderId;
     if (deletedId) {

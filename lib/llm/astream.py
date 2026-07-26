@@ -38,6 +38,7 @@ from lib.llm_errors import (
     RateLimitError,
     RetryableAPIError,
     _RETRYABLE,
+    repair_mojibake,
 )
 from lib.log import get_logger
 from lib.proxy import proxies_for, report_outcome as _proxy_report_outcome
@@ -130,7 +131,11 @@ async def _async_stream_chat_once(body, *, on_thinking=None, on_content=None,
                 logger.debug('%s resp M-TraceId=%s', log_prefix, resp_trace)
 
             if resp.status_code != 200:
-                err_body = (await resp.aread()).decode('utf-8', errors='replace')
+                # repair_mojibake: the toio UPSTREAM_VENDOR wrap layer double-
+                # encodes CJK error text (latin-1 misdecode re-encoded as
+                # UTF-8), so a correct UTF-8 decode still yields mojibake.
+                err_body = repair_mojibake(
+                    (await resp.aread()).decode('utf-8', errors='replace'))
                 classify_status_error(resp.status_code, err_body, body=plan.body,
                                       log_prefix=log_prefix, raw_dumper=plan.raw_dumper)
 

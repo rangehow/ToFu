@@ -59,17 +59,24 @@ class RateLimitError(Exception):
             again after a brief cooldown.
         reason: Short human-readable reason (first ~200 chars of the error body).
     """
-    def __init__(self, msg='', *, is_quota=False, is_gateway=False, reason=''):
+    def __init__(self, msg='', *, is_quota=False, is_gateway=False, reason='',
+                 status_code=0):
         super().__init__(msg)
         self.is_quota = bool(is_quota)
         # True when this is NOT a real per-key 429 but a gateway 5xx
-        # (502/503/504) mapped onto the slot-rotation path. Real 429s reflect
+        # (502/503/504) — or an upstream-vendor transient wrapped in a 4xx —
+        # mapped onto the slot-rotation path. Real 429s reflect
         # per-key contention and rotate forever (a sibling key will free up);
-        # a gateway 5xx storm means the WHOLE upstream is down, so the caller's
+        # a gateway/upstream storm means the WHOLE upstream is down, so the caller's
         # retry loop uses this to bound the outage instead of spinning forever
         # (see lib/llm_dispatch/api.py::_StreamRetryState gateway-outage cap).
         self.is_gateway = bool(is_gateway)
         self.reason = (reason or (str(msg) if msg else ''))[:200]
+        # The real HTTP status that triggered this (429/402/502/…, or the
+        # wrapped 4xx status for upstream-vendor transients). 0 = unknown.
+        # The dispatch layer uses it for honest retry-HUD labels instead of
+        # reporting everything as "Rate limited (429)".
+        self.status_code = int(status_code or 0)
 
 
 class PermissionError_(Exception):
@@ -126,6 +133,23 @@ class StreamOnlyError(Exception):
     def __init__(self, message, model):
         super().__init__(message)
         self.model = model
+
+
+class BadRequestError(Exception):
+    """HTTP 400 deterministic payload rejection (not any specific shape).
+
+    Raised after every specific 400 matcher (token limit / image / prompt-
+    too-long / stream-only / upstream-transient) fails — e.g. a vendor
+    ``invalid_request_error``. The SAME payload fails identically on every
+    key, so this says something about the PAYLOAD, not slot health: the
+    dispatch layer releases the slot (no consecutive_errors → no 300s
+    lockout, no key_stats feed — the ContentFilterError/InvalidImageError
+    precedent) and pair-excludes so the remaining keys each get one try
+    (a 400 CAN be key-specific — observed: an aliyun quota body that only
+    one key rejects). Not raised for 401/403 (those have their own
+    auth-vs-transient discrimination) or 5xx (retryable).
+    """
+    pass
 
 
 class EndpointUnreachableError(Exception):
@@ -214,6 +238,36 @@ _QUOTA_EXHAUSTED_PATTERNS = [
     '欠费',                           # Chinese: in arrears
 ]
 
+# Phrases in a 4xx body that mean the failure is an UPSTREAM-VENDOR TRANSIENT,
+# not a client/auth error — the gateway itself is telling us to retry later.
+# Observed on the toio/sankuai gateway (2026-07-26): the claude-opus-5 vendor
+# outage surfaced as HTTP 400 AND 403 with message
+# "请求失败,请稍后(再)尝试" + ext.error.source=UPSTREAM_VENDOR, and our
+# classifier treated the 403 as an auth failure (pair exclusion) and the 400
+# as a non-retryable round-killer feeding the 300s consecutive-error lockout.
+# Keep the list conservative: only phrases that unambiguously mean "wait and
+# retry" — deterministic request-shape rejections ("Field required",
+# "invalid …") must NEVER match, so bare 'try again' is deliberately absent.
+_UPSTREAM_TRANSIENT_PATTERNS = [
+    '请稍后', '请稍候', '稍后重试', '稍后再试', '稍后再尝试',
+    'try again later',
+    'temporarily unavailable',
+    'overloaded',
+    '负载较高', '负载高',
+]
+
+
+def _is_upstream_vendor_transient(err_msg: str) -> bool:
+    """True if a 4xx error body is an upstream-vendor TRANSIENT failure.
+
+    Such errors must rotate slots (gateway-class retry), never exclude a
+    (key, model) pair as auth, and never feed the consecutive-error lockout.
+    """
+    if not err_msg:
+        return False
+    lower = err_msg.lower()
+    return any(p in lower for p in _UPSTREAM_TRANSIENT_PATTERNS)
+
 
 # ══════════════════════════════════════════════════════════
 #  Status code sets
@@ -256,6 +310,59 @@ _RETRYABLE = (ConnectionError, ChunkedEncodingError, BrokenPipeError,
 #  Error-body decoding / display
 # ══════════════════════════════════════════════════════════
 
+# Single cap for API error bodies in logs and in-memory error messages.
+# Gateway error envelopes carry their diagnostic payload in the tail
+# (``ext.error.source/service/stage`` + the request id the gateway needs for
+# coordination), so the old 200/300/800-char caps amputated exactly the part
+# worth reading — and the 800-char cap in classify_status_error cut the JSON
+# mid-envelope, which also broke summarize_error_body's parse and leaked the
+# raw envelope into the retry HUD. 4000 chars covers every realistic gateway
+# envelope while still bounding a pathological body.
+_ERR_BODY_LIMIT = 4000
+
+
+def repair_mojibake(text: str) -> str:
+    """Reverse a latin-1-misdecoded-UTF-8 string back to its intended text.
+
+    The toio gateway's UPSTREAM_VENDOR wrap layer emits Chinese error text
+    that was decoded as latin-1 somewhere upstream and then re-encoded as
+    UTF-8 (verified from raw log bytes 2026-07-26: ``求失败，请稍后再尝试``
+    arrived as ``æ±å¤±è´¥â¦`` — each real UTF-8 byte itself
+    UTF-8-encoded). Our own decode is already UTF-8-correct, so the mojibake
+    sails through verbatim into logs / the retry HUD. Repair it here, at the
+    last boundary before display, CONSERVATIVELY: the repair is applied only
+    when (1) the text encodes cleanly to latin-1/cp1252 (mojibake chars all
+    live in U+0080–U+00FF + the cp1252 printable remaps), (2) those bytes
+    decode cleanly as UTF-8, and (3) the result GAINS CJK the original did
+    not have — proof the bytes were UTF-8 CJK all along. A legitimate
+    "café" fails step 2 (0xE9 alone is invalid UTF-8) and is returned
+    unchanged; proper Chinese already passes step 3's "no CJK before" gate.
+    """
+    if not text:
+        return text
+    # Fast gate: mojibake chars all live in U+0080–U+00FF (or the cp1252
+    # printable remaps like U+201A). Without any of those, nothing to do.
+    if not any('\u0080' <= ch <= '\u00ff' or ch == '\u201a' for ch in text):
+        return text
+    try:
+        raw = text.encode('latin-1')
+    except UnicodeEncodeError:
+        # A cp1252 print layer upstream remaps control bytes to printable
+        # chars (0x82 → U+201A); try that codec before giving up.
+        try:
+            raw = text.encode('cp1252')
+        except UnicodeEncodeError:
+            return text
+    try:
+        repaired = raw.decode('utf-8')
+    except UnicodeDecodeError:
+        return text
+    _has_cjk = lambda s: any('\u4e00' <= ch <= '\u9fff' for ch in s)
+    if _has_cjk(repaired) and not _has_cjk(text):
+        return repaired
+    return text
+
+
 def decode_error_body(resp) -> str:
     """Decode a non-200 HTTP response body for error reporting.
 
@@ -275,17 +382,17 @@ def decode_error_body(resp) -> str:
     encoding = (getattr(resp, 'encoding', None) or '').lower().replace('_', '-')
     if encoding and encoding not in ('iso-8859-1', 'latin-1', 'latin1', 'ascii', 'utf-8'):
         try:
-            return content.decode(encoding)
+            return repair_mojibake(content.decode(encoding))
         except (LookupError, UnicodeDecodeError):
             pass  # declared charset unusable — fall through to UTF-8
     try:
-        return content.decode('utf-8')
+        return repair_mojibake(content.decode('utf-8'))
     except UnicodeDecodeError:
         apparent = getattr(resp, 'apparent_encoding', None) or 'utf-8'
         try:
-            return content.decode(apparent, errors='replace')
+            return repair_mojibake(content.decode(apparent, errors='replace'))
         except (LookupError, UnicodeDecodeError):
-            return content.decode('utf-8', errors='replace')
+            return repair_mojibake(content.decode('utf-8', errors='replace'))
 
 
 _API_HTTP_PREFIX_RE = re.compile(r'^(API HTTP \d+:\s*)')
@@ -388,7 +495,8 @@ def _classify_http_error(status_code: int, err_msg: str, model: str,
     Raises:
         RateLimitError, ContentFilterError, PermissionError_,
         PromptTooLongError, ModelLimitError, InvalidImageError,
-        StreamOnlyError, RetryableAPIError, or generic Exception.
+        StreamOnlyError, BadRequestError, RetryableAPIError,
+        or generic Exception.
     """
     # Lazy import to avoid a top-level cycle: lib.model_info is its own
     # module but lives in the same import graph and importing it here
@@ -407,25 +515,41 @@ def _classify_http_error(status_code: int, err_msg: str, model: str,
         #   expired-balance keys — retrying on the same key is futile.
         if _is_quota_exhausted(err_msg):
             logger.warning('%s Quota exhausted (HTTP 429, persistent billing): %s',
-                           log_prefix, err_msg[:300])
-            raise RateLimitError(display_msg, is_quota=True, reason=display_msg[:200])
-        raise RateLimitError(display_msg)
+                           log_prefix, err_msg[:_ERR_BODY_LIMIT])
+            raise RateLimitError(display_msg, is_quota=True, reason=display_msg[:200],
+                                 status_code=429)
+        raise RateLimitError(display_msg, status_code=429)
     if status_code == 402:
         # ★ HTTP 402 Payment Required — DeepSeek and some providers return
         #   this for exhausted-balance keys. Treat identically to a quota-
         #   exhausted 429 so it hard-disables the key for the day.
         logger.warning('%s Payment required (HTTP 402): %s',
-                       log_prefix, err_msg[:300])
-        raise RateLimitError(display_msg, is_quota=True, reason=display_msg[:200])
+                       log_prefix, err_msg[:_ERR_BODY_LIMIT])
+        raise RateLimitError(display_msg, is_quota=True, reason=display_msg[:200],
+                             status_code=402)
     if status_code == 450:
         logger.warning('%s Content filter triggered (HTTP 450)', log_prefix)
         raise ContentFilterError(display_msg)
     if status_code in _PERMISSION_STATUS_CODES:
+        # ★ A 401/403 whose body is an upstream-vendor TRANSIENT is NOT an
+        #   auth failure (toio UPSTREAM_VENDOR wrap, 2026-07-26: the
+        #   claude-opus-5 vendor outage returned HTTP 403 "请求失败,请稍后再
+        #   尝试"). Treating it as one excluded the (key, model) pair and fed
+        #   record_error(is_rate_limit=False) → the 300s consecutive-error
+        #   lockout — while the truth was a sick vendor. Escalate as
+        #   gateway-class so dispatch rotates slots (0.5s cooldown) instead.
+        if _is_upstream_vendor_transient(err_msg):
+            logger.warning('%s Upstream-vendor transient wrapped in HTTP %d '
+                           '(NOT auth) — escalating to dispatch for rotation: %s',
+                           log_prefix, status_code, err_msg[:_ERR_BODY_LIMIT])
+            raise RateLimitError(display_msg, is_gateway=True,
+                                 reason=f'HTTP {status_code}: {display_msg[:180]}',
+                                 status_code=status_code)
         logger.warning('%s Permission error (HTTP %d)', log_prefix, status_code)
         raise PermissionError_(display_msg)
     if status_code == 413:
         logger.warning('%s Request entity too large (HTTP 413) — '
-                       'treating as prompt-too-long: %s', log_prefix, err_msg[:300])
+                       'treating as prompt-too-long: %s', log_prefix, err_msg[:_ERR_BODY_LIMIT])
         raise PromptTooLongError(display_msg)
     if status_code == 400:
         _detected_limit = _parse_token_limit_from_error(err_msg, model)
@@ -434,16 +558,39 @@ def _classify_http_error(status_code: int, err_msg: str, model: str,
             raise ModelLimitError(display_msg, model, _detected_limit, max_tokens)
         if _is_image_error(err_msg):
             logger.warning('%s Image content error (HTTP 400): %s',
-                           log_prefix, err_msg[:300])
+                           log_prefix, err_msg[:_ERR_BODY_LIMIT])
             raise InvalidImageError(display_msg)
         if _is_prompt_too_long(err_msg):
             logger.warning('%s Prompt too long detected (HTTP 400): %s',
-                           log_prefix, err_msg[:300])
+                           log_prefix, err_msg[:_ERR_BODY_LIMIT])
             raise PromptTooLongError(display_msg)
         if _is_stream_only_error(err_msg):
             logger.warning('%s Model %s only supports stream mode — '
                            'non-streaming request rejected', log_prefix, model)
             raise StreamOnlyError(display_msg, model)
+        # ★ Upstream-vendor transient wrapped as HTTP 400 (toio 2026-07-26:
+        #   "请求失败,请稍后重试", ext.error.source=UPSTREAM_VENDOR). The
+        #   specific matchers above (token limit / image / prompt / stream-
+        #   only) already claimed the deterministic shapes; what remains here
+        #   was a NON-RETRYABLE round-killer feeding the 300s consecutive-
+        #   error slot lockout. It is transient by its own text — rotate.
+        if _is_upstream_vendor_transient(err_msg):
+            logger.warning('%s Upstream-vendor transient wrapped in HTTP 400 '
+                           '— escalating to dispatch for rotation: %s',
+                           log_prefix, err_msg[:_ERR_BODY_LIMIT])
+            raise RateLimitError(display_msg, is_gateway=True,
+                                 reason=f'HTTP 400: {display_msg[:180]}',
+                                 status_code=400)
+        # Every specific 400 shape claimed above failed → deterministic
+        # payload rejection. Log the FULL envelope (the ext.error tail is
+        # the diagnostic payload), then raise the typed error the dispatch
+        # layer releases the slot for — this is the branch that used to
+        # fall through to the generic non-retryable Exception and feed the
+        # 300s consecutive-error slot lockout (43 locks in one yuju
+        # claude-opus-5 incident, 2026-07-26).
+        logger.error('%s Non-retryable API error (HTTP 400, deterministic): %s',
+                     log_prefix, err_msg[:_ERR_BODY_LIMIT])
+        raise BadRequestError(display_msg)
     if status_code in _GATEWAY_THROTTLE_STATUS:
         # ★ 502/503/504 from the gateway = upstream overload or transient
         #   backend failure. Treat identically to 429: bubble to dispatch
@@ -452,10 +599,11 @@ def _classify_http_error(status_code: int, err_msg: str, model: str,
         #   slot (different key/model/backend pool) is far more likely to
         #   succeed. See CLAUDE.md §10.1 for the approved change history.
         logger.warning('%s Gateway throttle (HTTP %d) — escalating to dispatch '
-                       'layer for slot rotation: %.200s',
-                       log_prefix, status_code, err_msg)
+                       'layer for slot rotation: %s',
+                       log_prefix, status_code, err_msg[:_ERR_BODY_LIMIT])
         raise RateLimitError(display_msg, is_gateway=True,
-                             reason=f'HTTP {status_code}: {display_msg[:180]}')
+                             reason=f'HTTP {status_code}: {display_msg[:180]}',
+                             status_code=status_code)
     if status_code in _RETRYABLE_STATUS_CODES:
         # ★ Detect wrapped overload / rate-limit inside a generic 500.
         #   Some gateways receive 429 or 529 from the model server but
@@ -464,10 +612,10 @@ def _classify_http_error(status_code: int, err_msg: str, model: str,
         #   Retrying on the same key is futile — escalate to dispatch.
         if status_code == 500 and _is_wrapped_overload(err_msg):
             logger.warning('%s Gateway wrapped overload/rate-limit in HTTP 500 '
-                           '— escalating to dispatch layer: %.200s',
-                           log_prefix, err_msg)
-            raise RateLimitError(display_msg)
+                           '— escalating to dispatch layer: %s',
+                           log_prefix, err_msg[:_ERR_BODY_LIMIT])
+            raise RateLimitError(display_msg, status_code=500)
         raise RetryableAPIError(display_msg, status_code=status_code)
     logger.error('%s Non-retryable API error (HTTP %d): %s',
-                 log_prefix, status_code, err_msg[:300])
+                 log_prefix, status_code, err_msg[:_ERR_BODY_LIMIT])
     raise Exception(display_msg)

@@ -88,9 +88,11 @@ class TestSharedRetryPhaseFields(unittest.TestCase):
             'Endpoint unreachable',
             'Request timed out',
             'Waiting for model (rate-limited)',
+            'Waiting for model (retry backoff)',
             'Key balance exhausted',
             'Key auto-exhausted (consecutive 429s)',
             'Rate limited (429)',
+            'Upstream error',
         }
         self.assertEqual(set(RETRY_REASON_KEYS), expected)
         for key in RETRY_REASON_KEYS.values():

@@ -1161,6 +1161,50 @@ class LLMDispatcher:
         return False
 
 
+    def cooling_cause_summary(self, capability: str = 'text',
+                              exclude_models=None, exclude_keys=None,
+                              exclude_pairs=None) -> set:
+        """Set of ``Slot.cooldown_reason`` values among capable slots that are
+        currently IN cooldown (``cooldown_until > now``).
+
+        Mirrors :meth:`has_capable_slots` filtering (capability, durable
+        exclusions, chat-compatibility, provider pin) and answers the ONE
+        question the dispatch wait-loop needs for an honest HUD label: is
+        this wait rate-limit contention, or error/upstream backoff? The old
+        wait loop hardcoded the "rate-limited" label for EVERY cooldown —
+        so a hard-error 300s backoff masqueraded as 限流排队 (yuju opus-5
+        vendor-4xx storm, 2026-07-26). Reading guide: empty set → nothing
+        is cooling (caller falls back to the legacy rate-limit label, the
+        common contention case); 'rate_limit' present → per-key contention;
+        anything else → error/upstream backoff.
+        """
+        self.initialize()
+        ex_models = exclude_models or set()
+        ex_keys = exclude_keys or set()
+        ex_pairs = exclude_pairs or set()
+        from lib.llm_dispatch.provider_pin import get_pinned_provider
+        _pinned_provider = get_pinned_provider()
+        now = time.time()
+        causes = set()
+        with self._lock:
+            for s in self.slots:
+                if capability not in s.capabilities:
+                    continue
+                if s.model in ex_models or s.key_name in ex_keys:
+                    continue
+                if (s.key_name, s.model) in ex_pairs:
+                    continue
+                if not self._is_chat_compatible(s):
+                    continue
+                if _pinned_provider and s.provider_id != _pinned_provider:
+                    continue
+                if s.cooldown_until > now:
+                    # A cooldown stamped before cooldown_reason existed
+                    # ('') is bucketed 'error' — it self-heals within one
+                    # cooldown lifetime and never mislabels as rate-limit.
+                    causes.add(s.cooldown_reason or 'error')
+        return causes
+
     def sticky_cooldown_remaining_s(self, conv_id: str, prefer_model=None,
                                     *, exclude_keys=None, exclude_pairs=None):
         """Seconds until ``conv_id``'s warm sticky key becomes pickable again.

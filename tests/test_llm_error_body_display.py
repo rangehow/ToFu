@@ -28,13 +28,18 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from lib.llm_errors import (  # noqa: E402
+    BadRequestError,
     PermissionError_,
     PromptTooLongError,
     RateLimitError,
+    _ERR_BODY_LIMIT,
     _classify_http_error,
+    _is_upstream_vendor_transient,
     decode_error_body,
+    repair_mojibake,
     summarize_error_body,
 )
+import lib.llm_errors as _llm_errors  # noqa: E402
 
 pytestmark = [pytest.mark.auth_mode('open'), pytest.mark.unit]
 
@@ -142,9 +147,15 @@ class TestSummarizeErrorBody:
 @pytest.mark.unit
 class TestClassifyDisplayIntegration:
 
-    def test_generic_400_raises_clean_chinese(self):
-        with pytest.raises(Exception) as ei:
+    def test_vendor_transient_400_escalates_as_gateway_retry(self):
+        """The 2026-07-26 yuju opus-5 shape: HTTP 400 with "请稍后再尝试" is
+        an UPSTREAM-VENDOR transient, not a client error — it must escalate
+        to dispatch as gateway-class rotation, never the non-retryable
+        round-killer that fed the 300s consecutive-error slot lockout."""
+        with pytest.raises(RateLimitError) as ei:
             _classify_http_error(400, f'API HTTP 400: {_ENVELOPE}', 'm', '[t]')
+        assert ei.value.is_gateway is True
+        assert ei.value.status_code == 400
         msg = str(ei.value)
         assert _ZH_MESSAGE in msg
         assert '{"error"' not in msg, f'raw JSON leaked into exception: {msg[:120]}'
@@ -178,16 +189,174 @@ class TestClassifyDisplayIntegration:
         assert str(ei.value) == 'API HTTP 403: key 无权限访问该模型'
 
     def test_classify_status_error_end_to_end(self):
-        """The streaming entry point raises the clean message too."""
+        """The streaming entry point raises the clean message too — and the
+        vendor-transient envelope escalates as gateway-class rotation."""
         from lib.llm._sse_core import classify_status_error
 
         class _Dumper:
             enabled = False
 
-        with pytest.raises(Exception) as ei:
+        with pytest.raises(RateLimitError) as ei:
             classify_status_error(400, _ENVELOPE, body={'model': 'm'},
                                   log_prefix='[t]', raw_dumper=_Dumper())
+        assert ei.value.is_gateway is True
         assert str(ei.value) == f'API HTTP 400: {_ZH_MESSAGE}'
+
+
+# ══════════════════════════════════════════════════════════
+#  repair_mojibake — upstream DOUBLE-encoding (2026-07-26 incident)
+# ══════════════════════════════════════════════════════════
+
+@pytest.mark.unit
+class TestRepairMojibake:
+    """The toio UPSTREAM_VENDOR wrap layer decodes the vendor's UTF-8 error
+    text as latin-1 and re-encodes it as UTF-8, so a CORRECT UTF-8 decode on
+    our side still yields mojibake (verified from raw log bytes: each real
+    UTF-8 byte itself UTF-8-encoded). repair_mojibake reverses exactly one
+    layer, conservatively."""
+
+    def test_double_encoded_chinese_repaired(self):
+        mojibake = _ZH_MESSAGE.encode('utf-8').decode('latin-1')
+        assert '请求失败' not in mojibake  # sanity: it IS garbled
+        assert repair_mojibake(mojibake) == _ZH_MESSAGE
+
+    def test_decode_error_body_end_to_end_on_double_encoded_bytes(self):
+        """The exact wire shape from the 17:10 error.log lines."""
+        wire = _ENVELOPE.encode('utf-8').decode('latin-1').encode('utf-8')
+        out = decode_error_body(_FakeResp(wire, encoding=None))
+        assert _ZH_MESSAGE in out
+        assert 'è¯' not in out
+
+    def test_mojibake_with_ascii_suffix_repaired_suffix_intact(self):
+        raw = '请求失败，请稍后重试 (request id: toio123)'
+        mojibake = raw.encode('utf-8').decode('latin-1')
+        out = repair_mojibake(mojibake)
+        assert out == raw
+        assert out.endswith('toio123)')
+
+    def test_legit_latin1_text_never_repaired(self):
+        # 'café' → latin-1 bytes are NOT valid UTF-8 → must pass through.
+        assert repair_mojibake('café au lait') == 'café au lait'
+
+    def test_proper_chinese_and_ascii_unchanged(self):
+        assert repair_mojibake(_ZH_MESSAGE) == _ZH_MESSAGE
+        assert repair_mojibake('plain ascii 500 Overloaded') == 'plain ascii 500 Overloaded'
+        assert repair_mojibake('') == ''
+        assert repair_mojibake(None) is None
+
+    def test_repair_is_idempotent(self):
+        once = repair_mojibake(_ZH_MESSAGE.encode('utf-8').decode('latin-1'))
+        assert repair_mojibake(once) == once
+
+
+# ══════════════════════════════════════════════════════════
+#  Upstream-vendor transient 4xx classification + BadRequestError
+# ══════════════════════════════════════════════════════════
+
+@pytest.mark.unit
+class TestUpstreamTransientClassification:
+
+    def test_predicate_matches_transient_phrases_only(self):
+        assert _is_upstream_vendor_transient('API HTTP 403: 请求失败，请稍后再尝试')
+        assert _is_upstream_vendor_transient('overloaded')
+        assert not _is_upstream_vendor_transient('signature: Field required')
+        assert not _is_upstream_vendor_transient('invalid api key')
+        assert not _is_upstream_vendor_transient('')
+        assert not _is_upstream_vendor_transient(None)
+
+    def test_403_transient_is_gateway_retry_not_auth(self):
+        """THE 17:10:37 incident line: HTTP 403 + 请稍后再尝试 must NOT be a
+        PermissionError_ (which excluded the pair and poisoned slot health)."""
+        with pytest.raises(RateLimitError) as ei:
+            _classify_http_error(403, f'API HTTP 403: {_ENVELOPE}', 'm', '[t]')
+        assert ei.value.is_gateway is True
+        assert ei.value.status_code == 403
+
+    def test_401_transient_also_escalates(self):
+        raw = 'API HTTP 401: {"error":{"message":"请稍后重试"}}'
+        with pytest.raises(RateLimitError) as ei:
+            _classify_http_error(401, raw, 'm', '[t]')
+        assert ei.value.is_gateway is True
+        assert ei.value.status_code == 401
+
+    def test_403_real_auth_error_stays_permission(self):
+        """Dead keys are a real shape (pt_8f6cbc75) — an auth-phrased 403
+        must keep the PermissionError_ path unchanged."""
+        raw = 'API HTTP 403: {"error":{"message":"invalid api key"}}'
+        with pytest.raises(PermissionError_):
+            _classify_http_error(403, raw, 'm', '[t]')
+
+    def test_400_deterministic_rejection_raises_bad_request(self):
+        """signature: Field required — deterministic payload rejection. NOT
+        a transient (no retry-later phrasing), NOT slot poison: typed
+        BadRequestError so dispatch releases the slot instead of feeding
+        consecutive_errors."""
+        raw = ('API HTTP 400: {"error":{"message":"Invalid request: '
+               'signature: Field required","type":"invalid_request_error"}}')
+        with pytest.raises(BadRequestError) as ei:
+            _classify_http_error(400, raw, 'm', '[t]')
+        assert 'signature: Field required' in str(ei.value)
+        assert '{"error"' not in str(ei.value)
+
+    def test_400_specific_matchers_still_win(self):
+        """prompt-too-long / image / stream-only must keep their typed paths —
+        the transient check runs AFTER them."""
+        raw = 'API HTTP 400: {"error":{"message":"prompt is too long: 500k tokens"}}'
+        with pytest.raises(PromptTooLongError):
+            _classify_http_error(400, raw, 'm', '[t]')
+
+    def test_status_code_carried_on_429_and_throttle(self):
+        with pytest.raises(RateLimitError) as e429:
+            _classify_http_error(429, 'API HTTP 429: slow down', 'm', '[t]')
+        assert e429.value.status_code == 429
+        assert e429.value.is_gateway is False
+        with pytest.raises(RateLimitError) as e503:
+            _classify_http_error(503, 'API HTTP 503: upstream', 'm', '[t]')
+        assert e503.value.status_code == 503
+        assert e503.value.is_gateway is True
+
+
+# ══════════════════════════════════════════════════════════
+#  _ERR_BODY_LIMIT — logs keep the diagnostic tail
+# ══════════════════════════════════════════════════════════
+
+@pytest.mark.unit
+class TestErrBodyLimit:
+
+    class _RecLogger:
+        def __init__(self):
+            self.records = []
+        def warning(self, fmt, *a, **k):
+            self.records.append(fmt % a if a else fmt)
+        def error(self, fmt, *a, **k):
+            self.records.append(fmt % a if a else fmt)
+        def debug(self, *a, **k):
+            pass
+
+    def test_log_keeps_beyond_the_old_300_cut(self, monkeypatch):
+        """The pasted 17:10 line died at `\"stage\":\"downstr` — the 300-char
+        cap amputated the ext.error tail that carries the diagnosis. Pin the
+        tail's survival."""
+        rec = self._RecLogger()
+        monkeypatch.setattr(_llm_errors, 'logger', rec)
+        tail_marker = 'UPSTREAM_VENDOR/service=claude-opus-5/stage=downstream_http'
+        body = ('{"error":{"message":"' + 'x' * 600 + '","type":"t"},'
+                '"ext":{"error":{"note":"' + tail_marker + '"}}}')
+        with pytest.raises(BadRequestError):
+            _classify_http_error(400, f'API HTTP 400: {body}', 'm', '[t]')
+        joined = '\n'.join(rec.records)
+        assert tail_marker in joined, (
+            f'log amputated the diagnostic tail: ...{joined[-160:]}')
+
+    def test_summarize_parses_beyond_the_old_800_cap(self):
+        """classify_status_error's 800-char cap cut the envelope mid-JSON,
+        breaking summarize_error_body → raw envelope leaked to the HUD."""
+        long_envelope = ('{"error":{"message":"' + _ZH_MESSAGE + ' '
+                         + 'pad' * 400 + '","type":"toio_api_error"}}')
+        assert len(long_envelope) > 800
+        out = summarize_error_body(long_envelope)
+        assert out.startswith('请求失败')
+        assert '{' not in out
 
 
 # ══════════════════════════════════════════════════════════

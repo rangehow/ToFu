@@ -2556,6 +2556,14 @@ var _i18n = {
     zh: '请求被限流 (429)',
     en: 'Rate limited (429)',
   },
+  'stream.retryReason.upstreamError': {
+    zh: '上游服务错误，正在换线重试',
+    en: 'Upstream error — rotating channel',
+  },
+  'stream.retryReason.waitingBackoff': {
+    zh: '等待模型（错误退避中，非限流）',
+    en: 'Waiting for model (error backoff, not rate-limit)',
+  },
   'stream.thinking.active': { zh: '思考中...', en: 'Thinking...' },
   'stream.thinking.done': { zh: '思考过程', en: 'Thinking Process' },
   'stream.roundMessages': { zh: 'Round {round} · {n}条', en: 'Round {round} · {n} msgs' },

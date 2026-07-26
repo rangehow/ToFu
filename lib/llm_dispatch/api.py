@@ -236,7 +236,7 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
     Returns:
         (content_text: str, usage_dict: dict)
     """
-    from lib.llm import ContentFilterError, InvalidImageError, PermissionError_, PromptTooLongError, RateLimitError, StreamOnlyError, chat
+    from lib.llm import BadRequestError, ContentFilterError, InvalidImageError, PermissionError_, PromptTooLongError, RateLimitError, StreamOnlyError, chat
     from lib.llm_errors import EndpointUnreachableError
 
     # 2026-05-05 config-surface change (CLAUDE.md §10): per-cycle 429
@@ -393,9 +393,11 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
 
         except RateLimitError as e:
             _is_quota = bool(getattr(e, 'is_quota', False))
+            _is_gateway = bool(getattr(e, 'is_gateway', False))
             _err_str = str(e)[:200]
             slot.record_error(is_rate_limit=True,
                               is_quota_exhausted=_is_quota,
+                              is_gateway=_is_gateway,
                               error=_err_str if _is_quota else '')
             last_err = e
             if _is_quota:
@@ -478,6 +480,7 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
             #   slot — same handling as dispatch_stream.
             slot.record_error(is_rate_limit=False, error=str(e)[:200])
             slot.cooldown_until = time.time() + _UNREACHABLE_COOLDOWN
+            slot.cooldown_reason = 'upstream'
             last_err = e
             exclude_pairs.add((slot.key_name, slot.model))
             hard_attempts += 1
@@ -519,6 +522,21 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
             logger.warning('%s Model %s only supports streaming — excluding '
                           'from non-streaming dispatch, trying next model',
                           log_prefix, slot.model)
+
+        except BadRequestError as e:
+            # Deterministic HTTP 400 — a PAYLOAD-level rejection, not slot
+            # health. Release the slot (no consecutive_errors → no 300s
+            # lockout, no key_stats feed — the ContentFilterError /
+            # InvalidImageError precedent) and exclude only the PAIR: a 400
+            # CAN be key-specific, so the remaining keys each get one try;
+            # exhaustion falls through to the turn-level model fallback.
+            slot.release()
+            last_err = e
+            exclude_pairs.add((slot.key_name, slot.model))
+            hard_attempts += 1
+            logger.warning('%s Bad request (HTTP 400, deterministic) on %s:%s '
+                           '— released slot, excluded pair, trying next: %.500s',
+                           log_prefix, slot.key_name, slot.model, str(e))
 
         except Exception as e:
             latency = (time.time() - t0) * 1000
@@ -1098,6 +1116,7 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
     """
     from lib.llm import (
         AbortedError,
+        BadRequestError,
         ContentFilterError,
         InvalidImageError,
         PermissionError_,
@@ -1296,9 +1315,24 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
                 #   caller surface a transient "waiting for model…" phase.
                 if on_retry and (state._429_count == 1 or state._429_count % 20 == 0):
                     try:
-                        on_retry(attempt=state._429_count,
-                                 reason='Waiting for model (rate-limited)',
-                                 status_code=429)
+                        # ★ Honest label: a cooldown wait is 限流 ONLY when a
+                        #   cooling slot actually says rate_limit. Error /
+                        #   upstream backoffs (the yuju opus-5 vendor 4xx
+                        #   storm, 2026-07-26) used to be hardcoded
+                        #   "rate-limited" here — the fake 限流排队.
+                        _causes = dispatcher.cooling_cause_summary(
+                            capability,
+                            exclude_models=state.exclude,
+                            exclude_keys=state.exclude_keys,
+                            exclude_pairs=state.exclude_pairs)
+                        if _causes and 'rate_limit' not in _causes:
+                            on_retry(attempt=state._429_count,
+                                     reason='Waiting for model (retry backoff)',
+                                     status_code=0)
+                        else:
+                            on_retry(attempt=state._429_count,
+                                     reason='Waiting for model (rate-limited)',
+                                     status_code=429)
                     except Exception as _ore:
                         logger.debug('%s on_retry (cooldown) raised: %s',
                                      log_prefix, _ore)
@@ -1425,9 +1459,11 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
 
         except RateLimitError as e:
             _is_quota = bool(getattr(e, 'is_quota', False))
+            _is_gateway = bool(getattr(e, 'is_gateway', False))
             _err_str = str(e)[:200]
             slot.record_error(is_rate_limit=True,
                               is_quota_exhausted=_is_quota,
+                              is_gateway=_is_gateway,
                               error=_err_str if _is_quota else '')
             state.last_err = e
             if _is_quota:
@@ -1487,7 +1523,15 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
             except Exception as e:
                 logger.debug('%s is_key_enabled probe failed (stream): %s', log_prefix, e)
             if on_retry:
-                on_retry(attempt=state._429_count, reason='Rate limited (429)', status_code=429)
+                if _is_gateway:
+                    # Upstream-outage class (gateway 5xx / vendor transient
+                    # wrapped in 4xx) — NOT 限流; the cause is a sick
+                    # upstream, not per-key contention.
+                    on_retry(attempt=state._429_count,
+                             reason='Upstream error',
+                             status_code=int(getattr(e, 'status_code', 0) or 0))
+                else:
+                    on_retry(attempt=state._429_count, reason='Rate limited (429)', status_code=429)
             _fire_attempt_restart('rate limited (429) — rotating slot')
             time.sleep(0.3)
             # ★ Don't increment hard_attempts — 429 retries are free
@@ -1515,6 +1559,7 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
             #   health checker clears the cooldown when the box recovers.
             slot.record_error(is_rate_limit=False, error=str(e)[:200])
             slot.cooldown_until = time.time() + _UNREACHABLE_COOLDOWN
+            slot.cooldown_reason = 'upstream'
             state.last_err = e
             state.note_unreachable_pair(slot)
             logger.warning(
@@ -1548,6 +1593,20 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
             logger.warning('%s Image content error — not retrying on other slots '
                            '(same image = same rejection)', tag)
             raise   # ★ Same payload = same rejection on all keys
+
+        except BadRequestError as e:
+            # Deterministic HTTP 400 — PAYLOAD-level, not slot health (see
+            # the sync dispatch_chat branch). Release + pair-exclude only.
+            slot.release()
+            state.last_err = e
+            state.exclude_pairs.add((slot.key_name, slot.model))
+            state.hard_attempts += 1
+            logger.warning('%s Bad request (HTTP 400, deterministic) on %s:%s '
+                           '— released slot, excluded pair, trying next: %.500s',
+                           log_prefix, slot.key_name, slot.model, str(e))
+            if on_retry:
+                on_retry(attempt=state.hard_attempts,
+                         reason='Upstream error', status_code=400)
 
         except Exception as e:
             latency = (time.time() - t0) * 1000
@@ -1630,6 +1689,7 @@ async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
     """
     from lib.llm import (
         AbortedError,
+        BadRequestError,
         ContentFilterError,
         InvalidImageError,
         PermissionError_,
@@ -1736,7 +1796,9 @@ async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
 
         except RateLimitError as e:
             _is_quota = bool(getattr(e, 'is_quota', False))
+            _is_gateway = bool(getattr(e, 'is_gateway', False))
             slot.record_error(is_rate_limit=True, is_quota_exhausted=_is_quota,
+                              is_gateway=_is_gateway,
                               error=str(e)[:200] if _is_quota else '')
             state.last_err = e
             if _is_quota:
@@ -1747,7 +1809,12 @@ async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
                 continue
             state.note_free_429(is_gateway=bool(getattr(e, 'is_gateway', False)))
             if on_retry:
-                on_retry(attempt=state._429_count, reason='Rate limited (429)', status_code=429)
+                if _is_gateway:
+                    on_retry(attempt=state._429_count,
+                             reason='Upstream error',
+                             status_code=int(getattr(e, 'status_code', 0) or 0))
+                else:
+                    on_retry(attempt=state._429_count, reason='Rate limited (429)', status_code=429)
             await async_abortable_sleep(0.3, abort_check)
             continue
 
@@ -1763,6 +1830,7 @@ async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
             #   over. Mirrors the sync dispatch_stream handler.
             slot.record_error(is_rate_limit=False, error=str(e)[:200])
             slot.cooldown_until = time.time() + _UNREACHABLE_COOLDOWN
+            slot.cooldown_reason = 'upstream'
             state.last_err = e
             state.note_unreachable_pair(slot)
             logger.warning(
@@ -1793,6 +1861,20 @@ async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
             slot.release()
             logger.warning('%s Image content error — not retrying', tag)
             raise
+
+        except BadRequestError as e:
+            # Deterministic HTTP 400 — PAYLOAD-level, not slot health (see
+            # the sync dispatch_chat branch). Release + pair-exclude only.
+            slot.release()
+            state.last_err = e
+            state.exclude_pairs.add((slot.key_name, slot.model))
+            state.hard_attempts += 1
+            logger.warning('%s Bad request (HTTP 400, deterministic) on %s:%s '
+                           '— released slot, excluded pair, trying next: %.500s',
+                           log_prefix, slot.key_name, slot.model, str(e))
+            if on_retry:
+                on_retry(attempt=state.hard_attempts,
+                         reason='Upstream error', status_code=400)
 
         except Exception as e:
             slot.record_error(is_rate_limit=False)

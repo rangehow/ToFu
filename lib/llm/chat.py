@@ -23,6 +23,7 @@ from lib.llm._transport import (
 from lib.llm.body import build_body
 from lib.llm.cache import add_cache_breakpoints
 from lib.llm_errors import (
+    _ERR_BODY_LIMIT,
     ContentFilterError,
     EndpointUnreachableError,
     InvalidImageError,
@@ -166,7 +167,7 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
             if resp_trace and resp_trace != trace_id:
                 logger.debug('%s resp M-TraceId=%s', log_prefix, resp_trace)
             if resp.status_code != 200:
-                err_msg = f'API HTTP {resp.status_code}: {decode_error_body(resp)[:500]}'
+                err_msg = f'API HTTP {resp.status_code}: {decode_error_body(resp)[:_ERR_BODY_LIMIT]}'
                 if resp.status_code == 400 and not _limit_retry:
                     _detected_limit = _parse_token_limit_from_error(err_msg, model)
                     if _detected_limit:
@@ -213,7 +214,7 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
     except (ValueError, json.JSONDecodeError) as e:
         raise Exception(
             f'API returned invalid JSON (HTTP {resp.status_code}): '
-            f'{decode_error_body(resp)[:500]}'
+            f'{decode_error_body(resp)[:_ERR_BODY_LIMIT]}'
         ) from e
     if _anthropic:
         from lib.llm.anthropic_outbound import anthropic_response_to_openai

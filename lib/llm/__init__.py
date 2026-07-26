@@ -39,6 +39,7 @@ from lib.llm.astream import async_stream_chat
 # Re-export errors
 from lib.llm_errors import (  # noqa: F401
     AbortedError,
+    BadRequestError,
     ContentFilterError,
     EndpointUnreachableError,
     InvalidImageError,
@@ -115,6 +116,7 @@ __all__ = [
     '_RawSSEDumper',
     # errors (re-exported)
     'AbortedError',
+    'BadRequestError',
     'ContentFilterError',
     'EndpointUnreachableError',
     'InvalidImageError',

@@ -143,6 +143,13 @@ class Slot:
     # ── Availability ──
     is_available: bool = True
     cooldown_until: float = 0.0     # timestamp — slot is cooled down until
+    # WHY the current cooldown was imposed — single source of truth for the
+    # dispatch wait-loop's HUD label (the old code hardcoded "rate-limited"
+    # for EVERY cooldown wait, so a hard-error 300s backoff masqueraded as
+    # 限流排队). One of: '' (none) / 'rate_limit' (per-key 429, 0.5s) /
+    # 'upstream' (gateway 5xx, upstream-vendor transient, endpoint
+    # unreachable) / 'error' (consecutive-error backoff) / 'quota' (billing).
+    cooldown_reason: str = ''
 
     # ── Cost ──
     cost_per_1k_tokens: float = 0.01  # USD — used as a tiebreaker
@@ -300,13 +307,14 @@ class Slot:
             if self.consecutive_errors >= 3:
                 cooldown = min(300, 5 * (2 ** (self.consecutive_errors - 3)))
                 self.cooldown_until = time.time() + cooldown
+                self.cooldown_reason = 'error'
                 logger.warning('  ⚠️ Slot %s:%s cooled down %ds '
                                'after %d consecutive truncations/empty outputs',
                                self.key_name, self.model, cooldown,
                                self.consecutive_errors)
 
     def record_error(self, is_rate_limit=False, error: str = '',
-                     is_quota_exhausted: bool = False):
+                     is_quota_exhausted: bool = False, is_gateway: bool = False):
         """Call after a failed request.
 
         Args:
@@ -319,6 +327,14 @@ class Slot:
                 billing/quota problem (insufficient balance, credits too low).
                 Such keys should be marked as exhausted for the rest of the day,
                 not briefly cooled down and retried.
+            is_gateway: True when the failure is an UPSTREAM outage class
+                (gateway 502/503/504, or an upstream-vendor transient wrapped
+                in a 4xx) rather than per-key contention. Such errors must
+                NOT feed the consecutive-429 auto-exhaust streak in key_stats
+                (a sick upstream would auto-disable HEALTHY keys for the day);
+                they are still recorded as ordinary failures via
+                record_outcome so the dead-key safety net (daily failure
+                stats) keeps working.
         """
         with self._lock:
             self.inflight = max(0, self.inflight - 1)
@@ -333,17 +349,20 @@ class Slot:
                 # process stops cycling to the dead key for at least an hour
                 # (the daily key-stats tracker also disables it).
                 self.cooldown_until = time.time() + 3600
+                self.cooldown_reason = 'quota'
             elif is_rate_limit:
                 # Reduce effective RPM estimate
                 self.rpm_limit = max(5, self.rpm_limit * 0.8)
                 # Very brief cooldown — just enough to steer picker to
                 # another slot; the caller will keep cycling rapidly.
                 self.cooldown_until = time.time() + 0.5
+                self.cooldown_reason = 'upstream' if is_gateway else 'rate_limit'
             elif self.consecutive_errors >= 3:
                 # Exponential backoff cooldown after repeated failures.
                 # Cap at 300s (5min) for sustained failures (e.g. DNS unreachable).
                 cooldown = min(300, 5 * (2 ** (self.consecutive_errors - 3)))
                 self.cooldown_until = time.time() + cooldown
+                self.cooldown_reason = 'error'
                 logger.warning('  ⚠️ Slot %s:%s cooled down %ds '
                       'after %d consecutive errors', self.key_name, self.model, cooldown, self.consecutive_errors)
 
@@ -363,7 +382,7 @@ class Slot:
                                    reason=error or 'quota exhausted (HTTP 402/429)')
             except Exception as e:
                 logger.debug('[Slot] key_stats mark_key_exhausted failed: %s', e)
-        elif is_rate_limit:
+        elif is_rate_limit and not is_gateway:
             try:
                 from lib.key_stats import record_rate_limit
                 just_exhausted = record_rate_limit(
@@ -373,9 +392,15 @@ class Slot:
                     # Streak threshold tripped — stop hammering this key for
                     # an hour (the UI toggle / day rollover will revive it).
                     self.cooldown_until = time.time() + 3600
+                    self.cooldown_reason = 'quota'
             except Exception as e:
                 logger.debug('[Slot] key_stats record_rate_limit failed: %s', e)
         else:
+            # Generic failure — and, since is_gateway=True also lands here,
+            # UPSTREAM outages too. record_outcome feeds the daily success-rate
+            # column (no auto-exhaust threshold), so the dead-key safety net
+            # keeps working while the consecutive-429 auto-exhaust streak is
+            # reserved for genuine per-key contention.
             try:
                 from lib.key_stats import record_outcome
                 record_outcome(self.provider_id, self.key_name,

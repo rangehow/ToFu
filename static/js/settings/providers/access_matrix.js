@@ -108,6 +108,16 @@ function _probeMatrixScope(provIdx, only) {
 function _fitMatrixPanelWidth() {
   var panel = document.querySelector('.modal.settings-panel');
   if (!panel) return;
+  var wasWide = panel.classList.contains('stg-matrix-wide');
+  // The overflow verdict MUST be measured at the panel's DEFAULT width, never
+  // at the width the class itself produces: a re-fit while the panel is wide
+  // (probe-resume re-render, 1.5s probe poll, tab switch) would otherwise read
+  // "no overflow" at the widened width and shrink the panel right back —
+  // the expand→narrow flicker. transition:none makes the class removal take
+  // effect at the forced reflow below, and everything runs in one synchronous
+  // task, so no intermediate state ever paints.
+  panel.style.transition = 'none';
+  panel.classList.remove('stg-matrix-wide');
   var wide = false;
   var scrolls = document.querySelectorAll('.stg-matrix-scroll');
   for (var i = 0; i < scrolls.length; i++) {
@@ -117,7 +127,16 @@ function _fitMatrixPanelWidth() {
     if (scrolls[i].clientWidth === 0) continue;
     if (scrolls[i].scrollWidth > scrolls[i].clientWidth + 4) { wide = true; break; }
   }
-  panel.classList.toggle('stg-matrix-wide', wide);
+  if (wide && !wasWide) {
+    // Narrow→wide edge: restore the transition BEFORE the class change so the
+    // single widen still animates. Every other edge applies with the
+    // transition suspended — a change that never animates cannot flicker.
+    panel.style.transition = '';
+    panel.classList.toggle('stg-matrix-wide', true);
+  } else {
+    panel.classList.toggle('stg-matrix-wide', wide);
+    panel.style.transition = '';
+  }
 }
 
 // Re-fit on window resize (debounced) — a wider viewport may make the wide

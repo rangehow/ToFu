@@ -18,11 +18,17 @@ pins the scoped-probe contract (2026-07-25):
     refresh, not a reset), and KEEPS the locally-known verdict cells so the
     grid merges instead of blanking.
   * PANEL FIT — ``_fitMatrixPanelWidth`` toggles .stg-matrix-wide on the
-    settings panel iff an open matrix's scroll container overflows.
+    settings panel iff an open matrix's scroll container overflows AT THE
+    PANEL'S DEFAULT WIDTH. A re-fit while the panel is already wide (the
+    probe-resume re-render after ``_toggleMatrixView``, the 1.5s probe
+    poll, a tab switch) must KEEP the panel wide — measuring at the
+    widened width used to read "no overflow" and shrink the panel right
+    back (the owner-reported expand→narrow flicker, 2026-07-26).
 
-NEUTER proof: deleting ``if (only) body.only = only;`` from a COPY of the
+NEUTER proofs: deleting ``if (only) body.only = only;`` from a COPY of the
 file flips the dispatch assertions red (the scope buttons would silently
-launch full-grid probes).
+launch full-grid probes); deleting the ``classList.remove`` that forces
+default-width measurement revives the flicker assertion.
 
 Also pins the CSS affordances this feature relies on (settings.css):
 always-visible matrix scrollbar, scroll-shadow layers, panel-wide rule.
@@ -181,24 +187,71 @@ _postedBodies.length = 0;
 _probeMatrixScope(0, { model_ids: ['m2'] });
 check('concurrent_scope_refused', _postedBodies.length === 0);
 
-// ── PANEL FIT: widen only while a matrix overflows ─────────────────────
+// ── PANEL FIT: verdict measured at the DEFAULT width (anti-flicker) ────
 _stgMatrixProbe[0].status = 'done';
-const toggles = [];
-const fakePanel = { classList: { toggle: function (cls, on) { toggles.push([cls, on]); } } };
-let fakeScrolls = [{ scrollWidth: 900, clientWidth: 400 }];
+// Coupled fake: the scroll container's clientWidth tracks the panel class
+// (narrow 400 / wide 1180) and scrollWidth = max(content, clientWidth) —
+// the coupling a real browser has. CONTENT_W=1000 fits the wide panel but
+// overflows the narrow one: exactly the 3-column flicker shape.
+const NARROW_W = 400, WIDE_W = 1180;
+let CONTENT_W = 1000;
+const ops = [];
+const fakePanel = { _wide: false, style: {} };
+Object.defineProperty(fakePanel.style, 'transition', {
+  get: function () { return this._t || ''; },
+  set: function (v) { this._t = v; ops.push(v === 'none' ? 't:suspend' : 't:restore'); },
+});
+fakePanel.classList = {
+  contains: function (cls) { return cls === 'stg-matrix-wide' && fakePanel._wide; },
+  remove: function (cls) { if (cls === 'stg-matrix-wide') { fakePanel._wide = false; ops.push('remove'); } },
+  toggle: function (cls, on) { if (cls === 'stg-matrix-wide') { fakePanel._wide = !!on; ops.push('toggle:' + !!on); } },
+};
+const fakeScroll = {};
+Object.defineProperty(fakeScroll, 'clientWidth', {
+  get: function () { return fakePanel._wide ? WIDE_W : NARROW_W; },
+});
+Object.defineProperty(fakeScroll, 'scrollWidth', {
+  get: function () { return Math.max(CONTENT_W, fakePanel._wide ? WIDE_W : NARROW_W); },
+});
+let fakeScrolls = [fakeScroll];
 global.document.querySelector = function (sel) {
   return sel === '.modal.settings-panel' ? fakePanel : null;
 };
 global.document.querySelectorAll = function (sel) {
   return sel === '.stg-matrix-scroll' ? fakeScrolls : [];
 };
+
+// 1) First open (panel narrow, content overflows) → widen. The transition
+//    is restored BEFORE the class change so the single widen still animates.
+ops.length = 0;
 _fitMatrixPanelWidth();
-check('overflowing_matrix_widens_panel',
-      toggles.length === 1 && toggles[0][0] === 'stg-matrix-wide' && toggles[0][1] === true);
-fakeScrolls = [{ scrollWidth: 300, clientWidth: 400 }];
+check('overflowing_matrix_widens_panel', fakePanel._wide === true);
+check('widen_edge_ops',
+      ops.join('|') === 't:suspend|remove|t:restore|toggle:true');
+
+// 2) Re-fit with the panel ALREADY wide (probe-resume re-render / 1.5s
+//    poll / tab switch): at the wide width the content FITS — the old code
+//    measured there and shrank the panel right back (expand→narrow
+//    flicker). The verdict must come from the DEFAULT width → stays wide,
+//    applied with the transition suspended so nothing re-animates.
+ops.length = 0;
 _fitMatrixPanelWidth();
-check('fitting_matrix_unwidens_panel',
-      toggles.length === 2 && toggles[1][1] === false);
+check('refit_while_wide_stays_wide', fakePanel._wide === true);
+check('stay_wide_ops',
+      ops.join('|') === 't:suspend|remove|toggle:true|t:restore');
+
+// 3) Content shrinks to fit the narrow panel → panel unwidens.
+CONTENT_W = 300;
+ops.length = 0;
+_fitMatrixPanelWidth();
+check('fitting_matrix_unwidens_panel', fakePanel._wide === false);
+check('unwiden_ops',
+      ops.join('|') === 't:suspend|remove|toggle:false|t:restore');
+
+// 4) A hidden matrix (zero layout box) never widens the panel.
+fakeScrolls = [{ clientWidth: 0, scrollWidth: 2000 }];
+_fitMatrixPanelWidth();
+check('hidden_matrix_never_widens', fakePanel._wide === false);
 
 console.log(out.join('\n'));
 process.exit(0);
@@ -230,8 +283,8 @@ class ScopedProbeFrontendTest(unittest.TestCase):
         output = _run_harness(ACCESS_MATRIX_JS)
         fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
         self.assertEqual(fails, [], 'scoped-probe frontend failures:\n' + output)
-        self.assertGreaterEqual(output.count('PASS'), 20,
-                                'expected >=20 PASS lines, got:\n' + output)
+        self.assertGreaterEqual(output.count('PASS'), 30,
+                                'expected >=30 PASS lines, got:\n' + output)
 
     def test_neuter_scope_dispatch_is_load_bearing(self):
         """NEUTER: drop `if (only) body.only = only;` from a COPY → the scope
@@ -250,6 +303,31 @@ class ScopedProbeFrontendTest(unittest.TestCase):
             output = _run_harness(copy)
         self.assertIn('FAIL scoped_dispatch_posts_only', output,
                       'NEUTER did not bite: scope still posted without the only line.\n'
+                      + output)
+
+        with open(ACCESS_MATRIX_JS, encoding='utf-8') as f:
+            self.assertEqual(f.read(), src, 'harness mutated the shipped access_matrix.js')
+
+    def test_neuter_default_width_measurement_is_load_bearing(self):
+        """NEUTER: drop the ``classList.remove('stg-matrix-wide')`` that forces
+        the overflow verdict to be measured at the panel's DEFAULT width from
+        a COPY → a re-fit with the panel already wide reads "no overflow" at
+        the widened width and shrinks the panel back — the owner-reported
+        expand→narrow flicker returns."""
+        with open(ACCESS_MATRIX_JS, encoding='utf-8') as f:
+            src = f.read()
+        anchor = "  panel.classList.remove('stg-matrix-wide');\n"
+        self.assertIn(anchor, src, 'default-width measurement anchor drifted — update the neuter')
+        neutered = src.replace(anchor, '', 1)
+        self.assertNotEqual(neutered, src)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            copy = os.path.join(tmp, 'access_matrix_neutered.js')
+            with open(copy, 'w', encoding='utf-8') as f:
+                f.write(neutered)
+            output = _run_harness(copy)
+        self.assertIn('FAIL refit_while_wide_stays_wide', output,
+                      'NEUTER did not bite: panel stayed wide without the default-width measurement.\n'
                       + output)
 
         with open(ACCESS_MATRIX_JS, encoding='utf-8') as f:

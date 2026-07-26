@@ -1,6 +1,14 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续77) — pt_75d8f8c7 收口:translate 裸 500(73×/天)根修,新 kind `content_refused` 全垂直落地(commit `f64c3c41`,8 文件 +293/-17;新套件 **12/12** 含 failing-first A/B + NEUTER×3,相邻环七套件全绿)
+
+- **根因:** 引擎三道内容闸(错语言翻转/回声 no-op/失控 overgen)重试耗尽时**明知拒绝原因**,却走 `c=''; break` 汇入尾部通用 ValueError → 路由 generic catch → 500「INTERNAL SERVER ERROR」。拒绝原因死在通用异常文本里。
+- **修法(全垂直,非补丁):** ①引擎三个放弃分支改抛 `TranslationContentRefused`(ValueError 子类,带 verdict,旧 `except ValueError` 调用方零影响);②信封新 kind `content_refused`(warning/retryable——新调用排除表清零,重试真可能命中好模型);③v1 路由在 generic 之前接住,502 + typed envelope;④前端 i18n 三键 + ERROR_KIND_LABELS(chip.en 逐字对齐 parity 闸)。
+- **测试:** 12/12(含预存 flip 套件 4);failing-first A/B(stash 产品码→套件 collection 即红);NEUTER×3(摘路由 catch/摘 i18n 键/kind 注册针);parity 闸一度红(chip 'Quality check' vs label 'Quality check failed' 差一词——**新增 kind 时 chip.en 必须与 ERROR_KIND_LABELS 逐字一致**,这是第一次踩到这条 parity)。
+- **★ shared-HEAD 新题型:兄弟 WIP 与我同文件同行纠缠。** 兄弟的 worker_lost/budget_exceeded(HEAD 里不存在)和我改的 _constants/i18n/labels 三文件同处。解法:**combined 版存 /tmp → 三文件 git show HEAD 回底 → 以 HEAD 为锚重打我的编辑 → git add(暂存区=纯我的 19 行,零兄弟键)→ 恢复 combined 工作树(MM 态)→ 裸 commit(不带 pathspec,因为 pathspec 提交的是工作树版会扫入兄弟)**。已私信兄弟:直接 add+commit 残余即可,无需 rebase。**口诀:pathspec 防「多文件」扫入,防不了「同文件纠缠」;同文件纠缠要 HEAD-relative 暂存。**
+- **归因:** test_api_v1_integration 81 error = 兄弟 chat_dispatch.py 在飞 IndentationError(已私信提醒,服务此时重启会死);与本次修复无关,我 5 个 py 文件 py_compile 干净。
+
 ### 2026-07-27 — 夜间 SIGKILL 连环案根因坐实+防御落地:共享 cgroup 被页缓存+slab 顶满,9 杀全在 20:51–23:42 重负载段(commit `3b254b26`,9 文件 +851;新测 31/31 含 NEUTER×4,相邻环 122+17 全绿,collect 10254 0 err)
 
 - **owner 的直觉对了一半:** 「200GB 内存还被杀,8/16GB 笔记本怎么活」——真相是 **tofu 只需要 ~2–4GB**;被杀不是因为应用吃了 200GB,而是**容器的 cgroup 上限(220GiB=整机)被三类东西顶到 99.8–99.9%**:①页缓存 ~110GiB(FUSE IO + agent 反复 grep 的 100MB+ 轮转日志)②内核 slab ~70GiB(IDE fileWatcher 扫几百万文件的 dentry)③兄弟进程 RSS ~39GiB(fileWatcher 27.75G + pylance 4.5G + extensionHost 3.9G)。**零 swap** → 内核只能 OOM-SIGKILL 最肥的可杀进程,留一句「Killed」。8GB 笔记本永远遇不到:全局压力可全局回收、有 swap、没有胖 IDE 同居。

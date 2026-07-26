@@ -68,6 +68,7 @@ function _hasSelectionInStreaming() {
 }
 let _pendingStreamMsg = null;
 let _pendingStreamTimer = null;
+let _pendingStreamArmTs = 0;  // arm time of the current pending update (30s dwell cap)
 /* ★ Cached zone references — avoid querySelector on every frame */
 let _streamZoneCache = { body: null, tool: null, think: null, content: null, fc: null, status: null, swarmInbox: null };
 function _getStreamZones() {
@@ -224,8 +225,22 @@ function updateStreamingUI(msg) {
   /* ★ FIX: Skip content DOM update while user has active selection to prevent flicker/deselect */
   if (_hasSelectionInStreaming()) {
     _pendingStreamMsg = msg;
+    /* Backstop for the 300ms self-clear below: if the selection NEVER releases
+     * (user switches conversation mid-selection — the new conv owns the view
+     * and this pending update is moot — or the stream simply ends while text
+     * is selected), the interval would otherwise tick empty forever
+     * (pt_3cd6cd48 ⑧). 30s per pending update is comfortably longer than any
+     * real "hold selection while watching" moment; on expiry we DROP the
+     * stale pending update instead of force-rendering over the selection. */
+    _pendingStreamArmTs = Date.now();
     if (!_pendingStreamTimer) {
       _pendingStreamTimer = setInterval(() => {
+        if (_pendingStreamMsg && Date.now() - (_pendingStreamArmTs || 0) > 30000) {
+          _pendingStreamMsg = null;
+          clearInterval(_pendingStreamTimer);
+          _pendingStreamTimer = null;
+          return;
+        }
         if (!_hasSelectionInStreaming() && _pendingStreamMsg) {
           const m = _pendingStreamMsg;
           _pendingStreamMsg = null;

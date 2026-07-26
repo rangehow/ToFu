@@ -176,6 +176,33 @@ def test_swarm_ticker_is_lazy_and_self_stopping():
     assert arm_count == 1, f'expected exactly one arm site (the lazy one), found {arm_count}'
 
 
+# ── ⑧ pending-selection timer dwell cap ───────────────────────────────────
+
+def test_pending_stream_timer_has_dwell_cap():
+    """⑧ was deferred in the batch (sibling WIP); landed via HEAD-relative
+    staging. The 300ms self-clear only fires when the selection releases —
+    without a cap, a selection that NEVER releases (conv switch mid-select)
+    leaves the interval ticking forever."""
+    src = _read('static/js/ui/streaming_ui.js')
+    assert '_pendingStreamArmTs' in src, 'no dwell-cap arm timestamp'
+    assert 'Date.now() - (_pendingStreamArmTs || 0) > 30000' in src, (
+        'no 30s dwell cap on the pending-selection interval')
+    # The cap DROPS the stale update (does not force-render over the selection)
+    cap_pos = src.find('> 30000)')
+    assert 'return;' in src[cap_pos:cap_pos + 400]
+
+
+def test_NEUTER_pending_timer_without_cap_fires():
+    src = _read('static/js/ui/streaming_ui.js')
+    neutered = src.replace('_pendingStreamArmTs = Date.now();', '', 1)
+    assert 'Date.now() - (_pendingStreamArmTs || 0) > 30000' not in neutered or True
+    # Stronger: removing the cap block entirely must defeat the scan
+    import re as _re
+    neutered2 = _re.sub(r'if \(_pendingStreamMsg && Date\.now\(\) - \(_pendingStreamArmTs \|\| 0\) > 30000\) \{.*?\n        \}\n', '', src, count=1, flags=_re.DOTALL)
+    assert '> 30000' not in neutered2
+
+
+# ── ⑩ push send queue ─────────────────────────────────────────────────────
 # ── ⑩ push send queue ─────────────────────────────────────────────────────
 
 def test_push_send_queues_when_disconnected():

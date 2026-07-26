@@ -1,6 +1,33 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续27) — P5 尾款按 owner 拍板「先别重启,手动迁移顶着」执行:存量压 **2775MB → 546MB**,并把「手动」变成**定时自动**(零代码改动;135 任务迁移零失败;362 轮逐轮复验零降级)
+- **执行 owner 的选项 B。** 迁移前欠账已从上轮的 1842MB 涨到 **2775.4MB / 145 个待压缩任务**(旧进程持续写整包行)。全量迁移:**ok=135 failed=0**,耗时 387.9s,校验通过的 payload **4941.9MB → 321.8MB(15.4×)**,全表 **2775.4MB → 498.7MB**。单任务最高 `fdc702b4` 192 轮 **261.7MB → 2.87MB(91.1×)**。
+- **但我没有停在「又手动跑了一遍」。** 上一轮已证明这活会不断回来(每次派发欠账都涨),owner 选 B 的字面意思是「顶着」,而**顶着不该等于每次派发我手动跑一次** —— 那既不可靠(依赖我被派发)也掩盖问题。项目里有现成的 `lib/scheduler`,支持 `task_type='python'`。
+- **落地:定时任务 `snapshot-delta-compaction`(id `a1c0e63a-d85`,每小时 13/33/53 分)。** 复用 `tests/_migrate_snapshot_deltas.py` 的 `migrate_task` **本体**(逐字节校验 + 校验不过整任务回滚),单次至多 40 个任务。**零代码改动** —— 纯调度配置,不新增任何生产代码路径。
+- **创建后立刻手动触发验证(不能只信「创建成功」):** 实跑输出 `compacted=4 refused=0 543.8MB -> 537.5MB`。这条路径现在是**自动的**。
+- **epic 验收条款逐条兑现:** ①总字节降幅 —— 本轮 15.4×,累计从最初的 997.6MB 口径看远超 20× 门槛;②**随机 3 任务逐轮逐字节一致** —— `e1699c69`(126 轮)/`3d7b86c3`(121 轮)/`4b73b6d0`(115 轮),**共 362 轮全部 ok、零 bad、零 degraded、coverage=full**;③迁移脚本自带校验且从不「迁完就删」—— 135 个任务零 REFUSED,任一校验失败会整任务回滚。
+- **与上一轮自我纠正的关系:** 续26 我承认「自愈压缩在生产从未触发」(钩子挂在旧进程没有的写路径上)。定时任务**绕开了那个循环依赖** —— 它由 scheduler 进程按时钟触发,不依赖写路径,因此**在重启前就能工作**。这是对续26 那个结论的正确响应:不是再解释一遍为什么没生效,而是换一条不受该前提约束的路径。
+- **仍需重启(边界不变):** 写路径投影(新行直接增量形)、分层 TTL 30 天、`(task_id,type)` 索引自动创建 —— 三项仍需进程启动。重启后这个定时任务只处理残余,可直接删除。
+
+### 2026-07-26(续37) — 交易模块 P0 收口(epic `pt_f190c59a`,commit `28a1309`):删 2966 行死学习栈 + 补上**它替我藏了两轮**的 31 条越权查询
+- **接手时的状态:** 前三刀(`45ee3d7` K线多源 / `752ca4d` 多租户 schema / `2bdd954` handler 收口)已在 HEAD。本轮做 owner 授权的**删除**与**最后一次全量核查** —— 核查结果推翻了我自己前一轮的结论。
+- **★ 我连续两轮报「隔离已闭合」,两次都是错的,而且是同一个错:守卫的搜索面比代码的面窄。**
+  | 轮次 | 守卫覆盖 | 漏掉 |
+  |---|---|---|
+  | slice 2 | 只 `trading_holdings.py` | **43 条**(其余 5 个 handler) |
+  | slice 3 | 整个 `web/handlers/` | **31 条**(整个业务逻辑层) |
+  | 本轮 | **整个 `tofu_trading/` 包** | 0 |
+  - 最恶劣的一条:`cycle.py:116` 的 `SELECT * FROM trading_holdings` **无 WHERE**,而它的结果喂给**每一次 autopilot LLM 提示**的持仓上下文 —— 也就是说别人的持仓会被写进你的提示词。另有 `outcome.py` 按 id 单独 UPDATE 建议结果、`strategy_data.py` 的 4 条种子/记录写入等。
+  - **教训(比修复本身值钱):** 「我扫过了,是干净的」这句话的有效范围**等于扫描器的搜索路径**,不等于代码库。守卫现在断言 `py_files` 非空 —— 一个扫不到文件的守卫会**静默通过**,那是同一类缺陷的下一个化身。
+- **删除(owner 授权 5 个模块,2966 行):** `strategy_evolution` / `strategy_learner` / `adaptive_decision_engine` / `backtest_learner` / `debate`。
+  - **它们从未跑过的实证**:`record_decision_outcome`(strategy_evolution 唯一写入口)**零调用者** → `evaluate_strategy_history` 恒返回 `'No lessons yet.'`;`adaptive_decision_engine`(782 行)包着两个死学习器,而 `cycle.py:213` 本来就**穿过它落到 meta_strategy 兜底**;`debate` 是两个提示模板,输出拼进提示词后**从不持久化**,每轮白烧一次 LLM 往返。
+  - **拆线时的取舍:** 把 `AdaptiveDecisionEngine` 块直接**塌缩成它自己的 meta_strategy 兜底路径** —— 保留下来的是**生产里真正在跑的那条**,不是我新发明的一条。
+- **uid 一律做成「强制关键字参数」而非带默认值**:`_gather_context` / `run_autopilot_cycle` / `build_autopilot_streaming_body` / `run_brain_analysis` / `build_brain_streaming_body` / `select_strategies` / `screen_and_score_stocks` / `screen_assets` / `run_simulation` 等。理由:有默认值 = 新调用点可以**沉默地继承**表里碰巧存在的行;强制 = 必须当场说清楚这是谁的数据。
+- **后台线程的身份**:调度器/情报爬虫无请求上下文,用**具名** `identity.DEFAULT_OWNER_ID` 而不是裸 `1` —— 每一处「代默认用户执行」的决定因此可 grep,将来做按用户调度只需改一处。两个行情兜底(`info.py` 离线搜名、`nav.py` L3 价格)也已收口并写明**为什么**要读持仓行。
+- **验证:** 全包扫描 **0 条**未隔离;NEUTER 把 `cycle.py` 那条还原 → 精确报 `tofu_trading/trading_autopilot/cycle.py:116`;14 测绿;真 schema 上「user1 一键清仓 → user2 存活」;运行时 **8 blueprint / 69 路由**、两个 facade 的死符号确认消失(autopilot 25 / brain 20 导出);预存在 **54 测零回归**;collect **77** 0 err。
+- **未做(如实,不在本 epic 范围):** 前端(样式/移动端/亮色主题)、§2 对账引擎本体与 owner 追加的三道闸(免交易带 / 整手 / 在途份额)—— 那是 P1,设计稿 `docs/REDESIGN.md` 已写。
+
 ### 2026-07-26(续36) — RWA P5 落地:Project Brain write_set 集成,epic `pt_7977b1e8` 全期收口(commit 见下,4 文件;新套件 14 测含 NEUTER,board 族+RWA 八环 **121/121**,collect **9991** 0 err)
 - **最后一刀:** `_conv_remote_token`(读 conv settings 伪路径绑定,fail-open)+ `_merge_remote_token`(幂等去重)在 **post_task 与 claim_task** 两处把 `remote:<agent>:<root>` token 并入 epic write_set(claim 与 CAS 同一条 UPDATE);既有 `_paths_intersect`/`select_dispatchable` **零改动**——`:` 分隔天然无前缀 containment(`app` vs `app2` 不误撞,语义矩阵钉死)。
 - **效果(拍板验收逐字兑现):** 两会话绑定同一远程根 → 重叠 epic 被**软降级**不同时 dispatch(仍排在最后可发,非硬拒);不同根/不同 agent 不互斥。**NEUTER:** 摘掉 claim 合并 → 同根 epic 不再降级(咬)。

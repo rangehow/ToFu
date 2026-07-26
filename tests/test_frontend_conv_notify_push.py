@@ -105,6 +105,10 @@ global.loadConversation = () => {};
 global.newChat = () => {};
 global.renderConversationList = () => {};
 global.renderChat = (conv) => { renderChatCalls.push(conv && conv.id); };
+/* The shipped repaint seam moved from renderChat(conv) to
+ * window.ConvView.replaceAll(convId) — stub it into the SAME counter so the
+ * '*_rendered' assertions keep their original meaning. */
+global.ConvView = { replaceAll: (id) => renderChatCalls.push(id) };
 global.saveConversations = (id) => { saveCalls.push(id); };
 global._applySettingsToConv = (conv, settings) => { if (settings && settings.activeTaskId && conv && !conv.activeTaskId && !conv._activeTaskClearedAt) conv.activeTaskId = settings.activeTaskId; };
 global._restoreConvToolState = () => {};
@@ -117,7 +121,17 @@ global.pushSubscribe = () => {};
 global.Api = { conversations: { get: async (id) => { getCalls.push(id); return serverResponse; } } };
 
 const SRC = fs.readFileSync(process.argv[2], 'utf8');
+// Epic-E slices: _verifyActiveConvFromServer now calls _mergeTerminalTurnFields
+// (conv_reducers.js) — load the REAL reducer first (same pattern as the
+// conv_persist_helpers harness), so the verify path executes for real.
+const REDUCERS = fs.readFileSync(process.argv[3], 'utf8');
+// _onConvNotifyPush's multi-user gate delegates to window._frameIsOurs, whose
+// real implementation lives in conv_state_reducer.js — load it too, else the
+// gate fails OPEN in the harness and other_user_dropped can't be exercised.
+const STATE_REDUCER = fs.readFileSync(process.argv[4], 'utf8');
 function loadModule(src) { (0, eval)(src); }
+loadModule(REDUCERS);
+loadModule(STATE_REDUCER);
 
 function reset() {
   getCalls = []; renderChatCalls = []; saveCalls = [];
@@ -452,7 +466,9 @@ def test_conv_notify_push_handler():
         f.write(_HARNESS)
     try:
         proc = subprocess.run(
-            ['node', harness, os.path.join(JS_DIR, 'core', 'cross_tab_sync.js')],
+            ['node', harness, os.path.join(JS_DIR, 'core', 'cross_tab_sync.js'),
+             os.path.join(JS_DIR, 'core', 'conv_reducers.js'),
+             os.path.join(JS_DIR, 'core', 'conv_state_reducer.js')],
             capture_output=True, text=True, timeout=60,
         )
     finally:

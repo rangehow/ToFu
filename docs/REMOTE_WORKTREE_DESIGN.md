@@ -1,7 +1,7 @@
 # Tofu 远程工作树代理(Remote Worktree Agent, RWA)设计稿
 —— Studio 无缝改本地代码(Windows / macOS),不共享文件系统
 
-> **状态:IN PROGRESS — 方向已拍(2026-07-25「意图共享,非文件系统共享」);§8 五项实施拍板已落(2026-07-26,全部按建议项:2A+3A+4A+5A+6A);**P0–P4 全部落地**(2026-07-26);① 号先行票已闭环(`c1579401`);P5(Project Brain 集成)待。**
+> **状态:IN PROGRESS — 方向已拍(2026-07-25「意图共享,非文件系统共享」);§8 五项实施拍板已落(2026-07-26,全部按建议项:2A+3A+4A+5A+6A);**P0–P5 全部落地**(2026-07-26);① 号先行票已闭环(`c1579401`)。**
 > Board epic:`pt_7977b1e823454e5b`。
 > 关联潜伏 bug(先行票,不进本设计批):`pt_08a6d1afe79c4dfd`(desktop wire 前缀错配,§2.3)。
 > 本稿全部事实性结论均于 2026-07-25 在盘上逐文件核实(§2 标注文件:行号)。
@@ -266,7 +266,7 @@ Body: {
 | **P2** ✅ | **run_command 平价**(已落地 2026-07-26):流式分片、进程树 kill、删除目标锁根、超时放宽 | `lib/desktop_agent/_exec.py`、`_project.py`、`_run.py`、`bridge.py`(流帧) | 长命令分片按 seq 稠密上行;kill 后子进程全灭;`rm -rf ~` 类被拦;30s+ 命令不再误杀 |
 | **P3** ✅ | **工具投影 + 执行路由**(已落地 2026-07-26):`ToolContext.project_remote`、`_handle_project_tool` 路由、`ToolSpec('desktop')` 补 `write_tools` 声明(关批准门洞) | `_spec.py`、`_build.py`、`handlers/project.py`、`lib/desktop/remote.py`(新) | 同名 schema 不变仅描述提示;远程 `write_file` 按 agent_id 寻址;总闸 off 字节不变;latch-clear 一次性;批准门洞闭合 |
 | **P4**(P4a ✅ + P4b-1 ✅ + P4b-2a ✅ + P4b-2b ✅ 流帧 UI 2026-07-26) | **入口与前端**:每用户 bridge token ✅、poll 认证+用户作用域 ✅、`agent_run remote:` 绑定 ✅、Settings→Devices 页 ✅(agents 表 + 颁发/吊销,scope 化 DELETE 不借 admin)、**伪路径 `remote:<agent>:<root>` 复用 projectPath 持久化** ✅ / 项目选择器远程分组(P4b-2)、流帧 UI(P4b-2) | `agent_run.py`、`routes/desktop.py`、`bridge.py`、`remote.py`、`api_v1/desktop.py`、`settings/devices.js` ✅ / `project.js`、流渲染(P4b-2) | 后端链+Devices 页全绿;token 错/无 scope 即 401;跨用户 fail-closed;离线灰显(P4b-2) |
-| **P5** | **Project Brain 集成**:远程根纳入 write_set 声明,多会话并发写同一本地项目时 dispatch 串行化 | `lib/conversations/`、board | 两会话同根 write_set 重叠 → 不同时 dispatch;不同根不互斥 |
+| **P5** ✅ | **Project Brain 集成**(已落地 2026-07-26):post/claim 时远程绑定 token 自动并入 write_set,dispatch 降级串行化 | `lib/conversations/project_board.py` | 两会话同根 write_set 重叠 → 软降级不同时 dispatch;不同根不互斥;NEUTER 实证合并承重 |
 
 - **P0 落地注记(2026-07-26):** 注册帧/注册表/心跳/寻址谓词(`_deliverable`)/入队闸
   (`_addressing_enqueue_error`)/kill switch(`TOFU_DESKTOP_ADDRESSING=0`)+ agent 侧稳定身份
@@ -354,6 +354,16 @@ Body: {
   用户文档(Remote Worktree 小节:旅程 + 安全边界 + 总闸)。P5 行(Project Brain
   write_set 集成)仍待——注意跨会话同根写的串行语义已由 P1 freshness 门天然保证
   (后写者被拒需重读),P5 要补的是脑内 dispatch 层的声明与互斥。
+
+- **P5 落地注记(2026-07-26):** `_conv_remote_token`(读 conv settings 的伪路径绑定)
+  + `_merge_remote_token`(幂等去重)在 **post_task 与 claim_task 两处**把
+  `remote:<agent>:<root>` token 并入 epic write_set(claim 与 CAS 同事务);
+  既有 `_paths_intersect`/`select_dispatchable` 零改动——`:` 分隔天然无前缀
+  containment(`app` vs `app2` 不误撞)。效果:同根 epic 被软降级不同时 dispatch,
+  不同根不互斥。套件 `tests/test_remote_brain_writeset.py` **14 测**
+  (post/claim 合并、去重、语义矩阵、dispatch 集成、NEUTER 合并承重)。
+  跨会话同根写的**数据层**串行仍由 P1 freshness 门兜底(后写者被拒需重读);
+  本层是脑内 dispatch 的**调度层**互斥,两道防线语义互补。
 
 工作量估算:P0 ~250 行 / P1 ~400 行 / P2 ~200 行 / P3 ~150 行 / P4 ~300 行+前端 / P5 ~80 行,
 全部为薄接缝改动,无新框架。

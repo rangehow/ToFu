@@ -355,6 +355,43 @@ def read_board(project_path: str) -> dict:
     return out
 
 
+def _conv_remote_token(db, conv_id: str) -> str:
+    """The conv's remote-worktree binding as a write_set TOKEN.
+
+    RWA P5 (docs/REMOTE_WORKTREE_DESIGN.md §5 P5): a conversation whose
+    project is the pseudo-path ``remote:<agent>:<root>`` writes on that
+    remote root, so its board epics must carry the token in write_set —
+    the dispatcher's overlap check then serialises two conversations bound
+    to the SAME remote root (different roots/agents never intersect: the
+    ':' separator has no prefix-containment semantics). Returns '' for a
+    server-local / missing / unreadable binding (fail-open, logged).
+    """
+    if not conv_id:
+        return ''
+    try:
+        row = db.execute('SELECT settings FROM conversations WHERE id=?',
+                         (conv_id,)).fetchone()
+        if not row:
+            return ''
+        raw = row['settings'] if 'settings' in row.keys() else row[0]
+        settings = json.loads(raw or '{}')
+        path = (settings.get('projectPath') or '') \
+            if isinstance(settings, dict) else ''
+        return path if path.startswith('remote:') else ''
+    except Exception as e:
+        logger.debug('[Board] remote binding read failed conv=%s: %s',
+                     (conv_id or '')[:8], e)
+        return ''
+
+
+def _merge_remote_token(write_set: list, token: str) -> list:
+    """Append the remote token to a write_set list (idempotent dedup)."""
+    out = [str(w) for w in (write_set or [])]
+    if token and token not in out:
+        out.append(token)
+    return out
+
+
 def post_task(project_path: str, conv_id: str, title: str, *,
               depends_on: list | None = None,
               write_set: list | None = None) -> dict:
@@ -408,7 +445,10 @@ def post_task(project_path: str, conv_id: str, title: str, *,
         task_id = short_id('pt_', 16)
         ts = _now_ms()
         deps = json.dumps([str(d) for d in (depends_on or [])], ensure_ascii=False)
-        wset = json.dumps([str(w) for w in (write_set or [])], ensure_ascii=False)
+        # RWA P5:远程绑定的会话发的 epic 自动携带远程根 token。
+        merged_ws = _merge_remote_token(
+            write_set, _conv_remote_token(db, conv_id))
+        wset = json.dumps(merged_ws, ensure_ascii=False)
         db.execute(
             'INSERT INTO project_tasks '
             '(id, project_path, title, status, owner_conv_id, lease_expires_at, '
@@ -441,7 +481,8 @@ def claim_task(project_path: str, conv_id: str, task_id: str, *,
     try:
         db = get_thread_db(DOMAIN_CHAT)
         row = db.execute(
-            'SELECT status, owner_conv_id, lease_expires_at FROM project_tasks '
+            'SELECT status, owner_conv_id, lease_expires_at, write_set '
+            'FROM project_tasks '
             'WHERE id=? AND project_path=?', (task_id, project_path)).fetchone()
         if not row:
             return {'ok': False, 'error': 'task not found'}
@@ -469,13 +510,23 @@ def claim_task(project_path: str, conv_id: str, task_id: str, *,
         # (lease<=now) — via the OR below.
         prev_owner = owner
         prev_lease = int(row['lease_expires_at'] or 0)
+        # RWA P5:认领会话的远程绑定并入 write_set(与认领同事务)——
+        # claimed write_set 是 select_dispatchable 降级排序的输入。
+        try:
+            cur_ws = json.loads(row['write_set'] or '[]')
+        except Exception:
+            cur_ws = []
+        merged_ws = _merge_remote_token(
+            cur_ws if isinstance(cur_ws, list) else [],
+            _conv_remote_token(db, conv_id))
         res = db.execute(
             "UPDATE project_tasks SET status='claimed', owner_conv_id=?, "
-            'lease_expires_at=?, dispatched=?, updated_at=? '
+            'lease_expires_at=?, dispatched=?, updated_at=?, write_set=? '
             'WHERE id=? AND project_path=? '
             '  AND COALESCE(owner_conv_id,?)=? '
             '  AND COALESCE(lease_expires_at,0)=?',
             (conv_id or '', lease, 1 if dispatched else 0, now,
+             json.dumps(merged_ws, ensure_ascii=False),
              task_id, project_path, prev_owner, prev_owner, prev_lease))
         db.commit()
         if getattr(res, 'rowcount', 1) == 0:

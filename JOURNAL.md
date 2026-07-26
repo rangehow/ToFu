@@ -1,6 +1,13 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续36) — RWA P5 落地:Project Brain write_set 集成,epic `pt_7977b1e8` 全期收口(commit 见下,4 文件;新套件 14 测含 NEUTER,board 族+RWA 八环 **121/121**,collect **9991** 0 err)
+- **最后一刀:** `_conv_remote_token`(读 conv settings 伪路径绑定,fail-open)+ `_merge_remote_token`(幂等去重)在 **post_task 与 claim_task** 两处把 `remote:<agent>:<root>` token 并入 epic write_set(claim 与 CAS 同一条 UPDATE);既有 `_paths_intersect`/`select_dispatchable` **零改动**——`:` 分隔天然无前缀 containment(`app` vs `app2` 不误撞,语义矩阵钉死)。
+- **效果(拍板验收逐字兑现):** 两会话绑定同一远程根 → 重叠 epic 被**软降级**不同时 dispatch(仍排在最后可发,非硬拒);不同根/不同 agent 不互斥。**NEUTER:** 摘掉 claim 合并 → 同根 epic 不再降级(咬)。
+- **两道防线语义互补(设计稿注记):** 数据层串行由 P1 freshness 门兜底(后写者被拒需重读,跨进程硬保证);本层是脑内 dispatch 的**调度层**互斥(避免并发开工)。
+- **过程:** 一处测试基建(`conversations.user_id` NOT NULL 约束,INSERT 补列)。
+- **epic 全账:** 续30 设计(5 硬约束+六期)→ P0 `8234d7b2`(桥身份寻址)→ P1 `8e40e27a`(项目命令集+安全网)→ P2 `bd041ca4`(run_command 平价)→ P3 `e89dc2d4`(投影+路由+批准门)→ P4a `f2a3529d`(每用户 token+作用域)→ P4b-1 `f8fa9373`(Devices 页,裹卷事故已闭环)→ P4b-2a `aff37696`(选择器分组)→ P4b-2b `25b9b192`(流帧 UI 前端零改动)→ P5 本批。套件累计 **~200 测**(6 新套件全含 NEUTER)。
+
 ### 2026-07-26(续35) — Opus 5 收口订正:owner 连续两轮打脸,charter 改对(v4)+ 抓出一条**已过期的 PIN 前提**(零代码变更;新票 `pt_efcc3d01ca554544`)
 - **本轮没有写一行产品代码,产出是把三个错误结论纠正掉,并发现一个真问题。**
 - **错误 1(我的,owner 抓出):** 上一版 charter 写了「工具块已被现有断点完整缓存住」—— **这句从未测量过**,是从「工具逐轮不变」推导的。新版已用实测数据取代它。WONTFIX 的成立**只依赖前提不发生**,不依赖任何缓存效率数字。

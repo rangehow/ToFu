@@ -1,6 +1,27 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续21) — Opus 5 适配核查:「思考关闭」必须说出口——省略 `thinking` 字段在 Opus 5 上不再等于关闭(commit `8d7b6911`,3 文件 +255/-1;新套件 29/29 含 **NEUTER×3 全咬**,相邻环 **160/160**,collect **9434** 0 err)
+- **起因(owner 提问):** 「我们在用 Opus 5,查一下官方文档,有没有新特性没吃到。」于是逐条对官方发布说明核对仓内实现。
+- **先说没问题的(避免虚报工作量):** `is_claude_opus_47` 的 bare-major 正则把 `yuju-claude-opus-5-evaDaily` 正确解析成 (5,0),所以 **xhigh/max 梯位、`display:'summarized'`、采样参数剥离、1M 上下文、128k 出参**全都早已适配到位——之前那次 Opus 5 注册已经把地基打好了。
+- **唯一真缺陷,而且是花钱的那种:** Opus 5 是**首个默认开启 adaptive thinking** 的 Claude —— 不带 `thinking` 字段 = 照样思考。而此前每一代 Claude 都默认关闭,所以 Tofu 表达「关闭」的方式一直是**把这个键省掉**。对 4.6/4.7/4.8 完全正确,**对 5 静默失效**:用户点了 `depth=off`(index.html `data-depth="off"`),我们什么都不发,Opus 5 照思考照收钱。**用户明确拒绝的推理,还是被计费了。**
+- **不是推测,是网关实测**(sankuai / `yuju-claude-opus-5-evaDaily`,同一道 3×n 多米诺计数题,max_tokens=8000,各 4 次):
+
+  | body 形态 | completion tokens | 中位数 |
+  |---|---|---|
+  | 省略 thinking(修前) | [2271, 3916, 1487, 3580] | 2925.5 |
+  | `{"type":"disabled"}` | [2043, 1003, 1369, 1667] | **1518.0** |
+
+  同题延迟 36.3s/24.8s(省略)vs 19.4s/19.6s(显式)。**≈1.93×**。
+- **端到端复验(用修好的生产 builder 真打网关,不是只看单测):** `build_body(thinking_depth='off')` → 发出 `{'type':'disabled'}` 且不带 effort,实测 [1311, 1659, 1406, 1651] 中位 **1528.5**,较修前基线降 **1.91×**,与裸探针预测吻合。
+- **两处同源缺陷(第二处更隐蔽):** ①`_build.py` 主请求路径;②`llm_dispatch/api.py::_readjust_thinking_params` **模型交换路径**(回退链/负载均衡)——它先 pop 掉所有 thinking 键再重设,于是「关闭」同样是靠**保持 pop 状态**来表达的,一个 thinking-off 的 body 被换到 Opus 5 上会**静默重新开启思考**。
+- **为什么闸在 `is_claude_opus_47` 而不是全 Claude(这条被 NEUTER 钉死):** `{"type":"disabled"}` 是 4.7+ adaptive 世代的**官方关闭写法**;并且**实测在 4.7 上是 no-op**——省略 [562,536,628] vs 显式 [462,535,601],统计上无差别、不报错。所以只纠正 5+,不动 4.7/4.8 结果。**4.7 之前的 Claude 保持逐字节不变的省略 wire**:它们本就默认关闭,且那些 API 版本从未验证过接受该键,贸然加键是白白引入 400 风险。
+- **一条承重的「没做什么」:** 两个分支都**不设 `effort`**。Anthropic 对 `thinking=disabled` + effort `xhigh`/`max` 直接返回 **HTTP 400**。`test_disabled_never_ships_effort` 走完整条梯位,把「未来某次重构顺手改成总是转发 effort」这条路提前封死——否则「最高档位下关思考」会从「浪费 token」升级成「硬 400」。
+- **证据:** 29 测 failing-first(修前 8 红,正好覆盖三个缺陷面:build_body / 模型交换 / Anthropic wire;而 thinking-ON 与 legacy-Claude 两组对照**一开始就是绿的**,证明测试不是照着新行为空写的)。**NEUTER×3 全部精确咬中**:①撤 build_body 分支 → 6 红(含 Anthropic wire);②撤交换分支 → 正好那 2 条交换测试;③把闸放宽成 `is_claude()` → 正好那 2 条 legacy 对照,**证明这个闸是承重的而非装饰**。相邻环 160/160。
+- **过程中如实记录的一件事(非我的改动):** 共享工作树里 sibling 的未提交 WIP 让 `lib/llm_sanitize/_gateway.py` **语法不合法**(epic `pt_871a26c7`,`_GATEWAY_BLOCKED_TERMS = {` 开头行丢失),`import lib.llm` 全进程崩。**没碰它**;本刀全程在 `git worktree` 隔离到 HEAD 上验证,提交用显式 3 文件 pathspec。
+- **顺带核实、确认无需适配的两个新 beta:** `mid-conversation-tool-changes-2026-07-01`(轮间增删工具不废提示缓存)与 `server-side-fallback-2026-07-01`(安全分类器命中时服务端自动改路由)。两者都需 `anthropic-beta` 头且**只在 Anthropic 原生协议上有意义**;我们生产走的是 sankuai 的 **OpenAI 兼容线**(`/v1/openai/native`),`oauth_claude` 原生线目前无已登录 token(`data/config/oauth/` 为空),**无法实测即不落码**——按「不在未验证的路径上写投机代码」的规矩留待将来有原生线流量时再评估。
+- **一个待验证的发现(已单独留票,未改码):** 官方迁移示例与 Anthropic 原生 API 参考都把 effort 放在 **`output_config.effort`**,而 `openai_body_to_anthropic` 目前把 `effort` 拷到 body **顶层**。OpenAI 兼容线上顶层 effort **实测有效**(max 出现 rc_len=1465、low 为 0),所以生产路径没问题;但原生线无 token 无法实测,**不做盲改**。
+
 ### 2026-07-26 — pt_7e4cc2c898984bde 全收口:论文播客/视频进度感知与防卡死 P-UX1~4(owner 一键拍「全按建议 A,四期一次做完」,commit `ed247760`,20 文件 +2199/-112;后端 24 面 + 前端 JSDOM 31 探针全绿含 NEUTER×5,相邻环 360+ 过,collect **9613** 0 err,epic 已 board complete)
 - **拍板 → 直接全落地:** 设计稿 §5 三项(轮询连败上限 5 / 心跳落事件表 / ETA 仅 render+TTS)全按建议 A;四期一次做完。生成链阶段划分零推翻,只补进度语义。
 - **P-UX1 防卡死(最高性价比):** ①`TaskRuntime` 读侧 stall 收割——`stall_timeout` 选择性开启(默认 0 绝不误杀,chat 长工具调用不受影响),podcast/motion 两 runtime 接 120s;`poll()` 内 `reap_if_stalled` → `worker_lost` 诚实终态(kind 可机读),一次实现全 runtime 受益;播客手写 poll 同样接。②前端两 tab 轮询**连败计数**:5 连败(404/断网)→ 停轮询进 `lost` 态(「任务丢失或连接已断开」+ 重查/重新生成),**spinner 永有寿命上限**;server 收割的 worker_lost 也映射同态。

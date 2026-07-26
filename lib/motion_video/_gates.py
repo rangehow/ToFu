@@ -198,8 +198,10 @@ def _probe_with_ffprobe(ffprobe: str, path: str) -> dict | None:
             if st.get('duration'):
                 try:
                     info['duration'] = float(st['duration'])
-                except (TypeError, ValueError):
-                    pass
+                except (TypeError, ValueError) as e:
+                    # Dropped duration surfaces downstream only as a generic
+                    # 'duration 0 != expected' — log the root cause here.
+                    logger.debug('[MotionVideo] ffprobe duration parse failed for %s (%r): %s', path, st['duration'], e)
         elif st.get('codec_type') == 'audio':
             info['has_audio'] = True
     return info if 'codec' in info else None

@@ -45,6 +45,9 @@ __all__ = [
 # Kept behind a lazy import so lib.proxy stays importable in minimal
 # contexts; a missing/broken netpath module degrades to env behaviour.
 _netpath_mod = None
+# One-shot guard so a broken netpath on the per-request hot path (proxies_for)
+# logs a single warning instead of one line per request.
+_np_decide_warned = False
 
 
 def _np():
@@ -53,7 +56,10 @@ def _np():
         try:
             from lib import netpath as _m
             _netpath_mod = _m
-        except Exception:
+        except Exception as e:
+            # Runs once (the result is cached). Without this trace a broken /
+            # missing netpath silently degrades to env behaviour with no signal.
+            logger.debug('[Proxy] netpath unavailable — adaptive path selection off: %s', e)
             _netpath_mod = False
     return _netpath_mod or None
 
@@ -70,8 +76,10 @@ def report_outcome(url: str, ok: bool, latency_ms=None) -> None:
         return
     try:
         np.report_outcome(url, ok, latency_ms)
-    except Exception:
-        pass
+    except Exception as e:
+        # If this keeps firing the netpath scorer freezes on stale scores and
+        # adaptive routing silently stops learning — surface it.
+        logger.debug('[Proxy] netpath.report_outcome failed for %s: %s', url, e)
 
 # ── The "real" bypass dict that makes requests skip env proxies ──
 # NOTE: ``{'http': None, 'https': None}`` does NOT reliably bypass in all
@@ -160,8 +168,10 @@ def set_proxy_config(http_proxy: str = '', https_proxy: str = ''):
         if np is not None:
             try:
                 np.reset_proxy_stats()
-            except Exception:
-                pass
+            except Exception as e:
+                # Failure means routing keeps deciding on stats measured for
+                # the OLD proxy address.
+                logger.warning('[Proxy] netpath.reset_proxy_stats failed after proxy change: %s', e)
 
     logger.info('[Proxy] Config updated: http=%s https=%s',
                 http_proxy.strip() or '(env)', https_proxy.strip() or '(env)')
@@ -272,8 +282,15 @@ def proxies_for(url: str) -> dict:
             np.note_url(url)
             if np.decide(host) == 'direct':
                 return _NO_PROXY
-        except Exception:
-            pass
+        except Exception as e:
+            # Hot path (every request). A persistent netpath failure here means
+            # every request silently falls back to the proxy — an LLM dispatch
+            # latency regression with no signal. Warn ONCE, not per request.
+            global _np_decide_warned
+            if not _np_decide_warned:
+                _np_decide_warned = True
+                logger.warning('[Proxy] netpath decide/note_url failing; requests '
+                               'fall back to proxy without learned direct-pin (first: %s)', e)
     return {}
 
 

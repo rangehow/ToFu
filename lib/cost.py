@@ -258,14 +258,18 @@ def _nested_cached(usage: dict) -> int:
         if v:
             try:
                 return int(v)
-            except (TypeError, ValueError):
-                pass
+            except (TypeError, ValueError) as e:
+                # A vendor cache-spelling that won't int() falls through to the
+                # next spelling and ultimately 0 — undercounting the cache hit
+                # and overstating the price. Surface it (mirrors the debug
+                # logging normalize_usage already does for the flat aliases).
+                logger.debug('[Cost] non-numeric cached value for %s (->skip): %s', k, e)
     details = usage.get('prompt_tokens_details')
     if isinstance(details, dict):
         try:
             return int(details.get('cached_tokens') or 0)
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as e:
+            logger.debug('[Cost] non-numeric nested cached_tokens (->0): %s', e)
     return 0
 
 

@@ -422,6 +422,15 @@ _BUNDLE_FILES = [
     # lib/conversations/turn_settlement.py via
     # tests/test_frontend_turn_settlement_equivalence.py.
     'core/turn_settlement.js',
+    # pt_679d064f68ac4dd6 follow-up — the multi-user identity gate's WATCHDOG.
+    # Owns the fail-open latch + reporter + a self-owned flush, and depends on
+    # NOTHING it watches. MUST load BEFORE core/conv_state_reducer.js: the
+    # degrade it reports is "the reducer failed to load", so hosting it inside
+    # the reducer (as it was until 2026-07-26) made it structurally unable to
+    # fire on its own trigger — latch, reader and the probe timer that ships it
+    # all vanished with the predicate. Leaf module (window + Api at CALL time).
+    # Order pinned by tests/test_frontend_identity_gate_parity.py.
+    'core/identity_gate_tripwire.js',
     'core/conv_state_reducer.js',
     'core/async_pool.js',
     'core/cross_tab_sync.js',

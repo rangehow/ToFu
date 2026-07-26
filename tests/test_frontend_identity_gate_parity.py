@@ -212,16 +212,25 @@ def test_delegation_is_fail_open_AND_reports():
 def test_reporter_exists_and_is_one_shot():
     """The tripwire must exist, be exported, and be latched — a missing
     predicate fires on EVERY inbound frame, so an unlatched warn would flood
-    the console and bury the signal it exists to surface."""
-    src = _read(_REDUCER)
+    the console and bury the signal it exists to surface.
+
+    Lives in core/identity_gate_tripwire.js, NOT the reducer: the degrade it
+    reports is "the reducer failed to load"."""
+    src = _read(os.path.join(JS_DIR, 'core', 'identity_gate_tripwire.js'))
     assert 'function reportIdentityGateUnavailable(' in src, (
-        'the fail-open tripwire is missing from the single-implementation file')
+        'the fail-open tripwire is missing from its module')
     assert 'window.reportIdentityGateUnavailable = ' in src, (
         'the tripwire must be exported for the consumer gates to call')
     body = src.split('function reportIdentityGateUnavailable(', 1)[1] \
               .split('\n}', 1)[0]
     assert '_identityGateWarned' in body, (
         'the tripwire must be one-shot latched, else it floods on every frame')
+    # And it must NOT have been left behind in the reducer (a copy would
+    # resurrect the self-referential blind spot).
+    reducer = _read(_REDUCER)
+    assert 'function reportIdentityGateUnavailable(' not in reducer, (
+        'the tripwire is still implemented inside the reducer — it would then '
+        'vanish exactly when the degrade it reports occurs')
 
 
 def test_single_implementation_keeps_all_four_rules():
@@ -319,6 +328,93 @@ def test_predicate_loads_before_every_delegating_consumer():
             f'ORDER VIOLATION: {predicate} (idx {p_idx}) must load BEFORE '
             f'{consumer} (idx {c_idx}). The consumer delegates to '
             '_frameIsOurs and fails OPEN when it is undefined.')
+
+
+def test_tripwire_loads_before_everything_it_watches():
+    """The WATCHDOG's own build order.
+
+    core/identity_gate_tripwire.js owns the fail-open latch, the reporter and
+    the standalone flush. It exists as a separate file precisely so it does
+    NOT share a fate with the reducer it watches — the degrade it reports is
+    "the reducer failed to load". If it were deferred, or ordered after the
+    reducer or a consumer, it would inherit the very blind spot splitting it
+    out removed: nothing would be left to notice or ship the signal.
+
+    THE RULE: the tripwire is eager and loads FIRST — before the predicate it
+    watches and before every gate that reports to it.
+    """
+    bundle = _bundler_list('_BUNDLE_FILES')
+    deferred = _bundler_list('_DEFERRED_FILES') or []
+    assert bundle, 'could not parse _BUNDLE_FILES from lib/js_bundler.py'
+
+    tripwire = 'core/identity_gate_tripwire.js'
+    watched = ['core/conv_state_reducer.js', 'core/cross_tab_sync.js',
+               'conv_sync_push.js']
+
+    assert tripwire in bundle, (
+        f'{tripwire} must be in _BUNDLE_FILES — it is the watchdog for the '
+        'multi-user gate and cannot report anything if it never loads')
+    assert tripwire not in deferred, (
+        f'{tripwire} was deferred. A watchdog that arrives after the failure '
+        'it watches for is not a watchdog.')
+    t_idx = bundle.index(tripwire)
+    for w in watched:
+        if w not in bundle:
+            continue
+        assert t_idx < bundle.index(w), (
+            f'ORDER VIOLATION: {tripwire} (idx {t_idx}) must load BEFORE '
+            f'{w} (idx {bundle.index(w)}) — it must already exist when the '
+            'thing it watches loads or fails to load.')
+
+
+def test_tripwire_does_not_depend_on_what_it_watches():
+    """Structural: the watchdog must not reference the reducer's symbols.
+
+    The entire reason this module is separate is fate-independence. A single
+    ``_frameIsOurs`` / ``buildSyncDigest`` / ``startSyncDriftProbe`` reference
+    would re-couple it to the module whose absence it reports, silently
+    restoring the blind spot.
+    """
+    src = _read(os.path.join(JS_DIR, 'core', 'identity_gate_tripwire.js'))
+    # Strip comments AND string literals: both the module docstring and the
+    # human-readable warning text NAME the symbols it deliberately avoids
+    # (the warning tells an operator which file to fix — that is the point).
+    # Only a real SYMBOL REFERENCE couples the watchdog to what it watches.
+    code = re.sub(r'/\*.*?\*/', '', src, flags=re.S)
+    code = '\n'.join(ln.split('//', 1)[0] for ln in code.splitlines())
+    code = re.sub(r"'(?:[^'\\]|\\.)*'", "''", code)
+    code = re.sub(r'"(?:[^"\\]|\\.)*"', '""', code)
+    code = re.sub(r'`(?:[^`\\]|\\.)*`', '``', code)
+    for forbidden in ('_frameIsOurs', 'buildSyncDigest', 'startSyncDriftProbe',
+                      '_authoritativeActiveTaskIds', 'applyRunningTaskIdsFrame'):
+        assert forbidden not in code, (
+            f'the tripwire REFERENCES {forbidden!r} in executable code — it '
+            'must depend on NOTHING it watches, else it shares the reducer\'s '
+            'fate and the self-referential blind spot is back')
+
+
+def test_tripwire_has_its_own_delivery_path():
+    """The watchdog must be able to ship the signal WITHOUT the drift probe.
+
+    When the reducer is missing there is no probe to piggyback on (main.js
+    guards it on ``typeof startSyncDriftProbe``, a reducer symbol). So the
+    tripwire needs its own POST, and a claim flag so the two paths never
+    double-report.
+    """
+    src = _read(os.path.join(JS_DIR, 'core', 'identity_gate_tripwire.js'))
+    assert 'function flushIdentityGateDegraded' in src, (
+        'no standalone flush — the reducer-missing case would still be '
+        'unreportable, which is the whole reason this module exists')
+    assert 'Api.conversations.reportSyncDigest' in src, (
+        'the flush must reach the same endpoint the drift probe uses (no new '
+        'endpoint, per the existing-channel constraint)')
+    assert 'function markIdentityGateReported' in src, (
+        'no claim seam — the probe path and the flush path would double-report')
+    # The reducer's piggyback path must actually claim it.
+    reducer = _read(_REDUCER)
+    assert 'markIdentityGateReported' in reducer, (
+        'the drift probe does not claim the report, so the standalone flush '
+        'will fire a duplicate')
 
 
 # ══════════════════════════════════════════════════════════════════════

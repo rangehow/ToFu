@@ -93,53 +93,20 @@ function _frameIsOurs(userId) {
   return theirs === my;
 }
 
-/* ── Fail-open tripwire ────────────────────────────────────────────────
- * The three consumer gates (cross_tab_sync ×2, conv_sync_push) call
- * ``window._frameIsOurs`` and DELIBERATELY fail OPEN when it is absent:
- * accepting a frame matches the pre-identity default, whereas fail-closed
- * would silently brick cross-device sync — a far worse outcome than briefly
- * accepting a frame on a deployment that usually has one tenant.
+/* ── Fail-open tripwire — MOVED OUT ────────────────────────────────────
+ * The latch + reporter + flag reader now live in
+ * ``core/identity_gate_tripwire.js`` and load BEFORE this file.
  *
- * But a SILENT fail-open is indistinguishable from correct operation, and
- * that indistinguishability is exactly the property that let the original
- * int/str skew sit dormant. The predicate can only go missing via a
- * BUILD-ORDER regression — this file moved out of ``_BUNDLE_FILES`` into
- * ``_DEFERRED_FILES``, or reordered after a consumer. Epic-E
- * (pt_3879f00e2d2f4bc4 sub-part 3) proposes deferring cross_tab_sync.js,
- * which is precisely the change that can break it. So the fallback MUST
- * leave a trace rather than degrade in silence.
+ * They cannot live here: the degrade they report is "this file failed to
+ * load". Hosting the watchdog inside the watched module made it
+ * structurally unable to fire on its own trigger — the latch, the reader
+ * and the probe timer that ships it all vanished together with the
+ * predicate. The tripwire module depends on nothing it watches, so a
+ * missing reducer genuinely reports.
  *
- * One-shot per page: a missing predicate would otherwise fire on EVERY
- * inbound frame and flood the console, burying the signal it exists to
- * surface.
- *
- * Published on ``window`` (not module-local) so a consumer can call it
- * defensively via ``typeof``. Note the honest limit: if THIS file fails to
- * load the reporter is gone too — that case is caught by the STATIC bundle
- * guard in tests/test_frontend_identity_gate_parity.py, which is why that
- * guard is mandatory rather than belt-and-braces. */
-
-
-let _identityGateWarned = false;
-function reportIdentityGateUnavailable(site) {
-  if (_identityGateWarned) return;
-  _identityGateWarned = true;
-  const msg = '[conv-state] multi-user identity gate UNAVAILABLE at ' + site +
-    ' — window._frameIsOurs is undefined, so frames are being accepted ' +
-    'UNSCOPED. This is a build-order regression: core/conv_state_reducer.js ' +
-    'must load before its consumers in lib/js_bundler.py _BUNDLE_FILES.';
-  if (typeof console !== 'undefined' && console.warn) console.warn(msg);
-  if (typeof debugLog === 'function') debugLog(msg, 'warn');
-}
-
-/* Test seam only — never called by production code. */
-function resetIdentityGateWarnedForTests() { _identityGateWarned = false; }
-
-/* Has the gate degraded to accept-all on this page? Read by the sync-drift
- * probe so the degrade is REPORTED TO THE SERVER, not just to a browser
- * console nobody is watching. Telemetry only — this never influences any
- * accept/reject decision (the fail-open is already decided by then). */
-function identityGateDegraded() { return _identityGateWarned; }
+ * The consumers call ``window.reportIdentityGateUnavailable``; the drift
+ * probe below reads ``window.identityGateDegraded()``. Both resolve from
+ * that module. */
 
 /* ═══════════════════════════════════════════════════════════════════════════
    PENDING BUSY STATE — a frame for a conv this client has not loaded yet
@@ -418,16 +385,27 @@ function buildSyncDigest(conversations) {
  * broke can easily have zero authoritative markers (that is arguably the
  * LIKELIEST shape of the bug, since the reducer never ran), and the old
  * ``if (!digests.length) return null`` would have suppressed the signal on
- * exactly the page it exists to catch. */
+ * exactly the page it exists to catch.
+ *
+ * This is the PIGGYBACK path, live only when THIS file loaded. When the
+ * reducer is missing there is no probe to ride, and
+ * core/identity_gate_tripwire.js flushes the flag on its own. */
 async function reportSyncDigest(conversations) {
   const digests = buildSyncDigest(conversations);
-  const degraded = identityGateDegraded();
+  const degraded = (typeof window !== 'undefined' &&
+                    typeof window.identityGateDegraded === 'function')
+    ? window.identityGateDegraded() : false;
   if (!digests.length && !degraded) return null;
   try {
     if (typeof Api === 'undefined' || !Api.conversations ||
         typeof Api.conversations.reportSyncDigest !== 'function') return null;
     const resp = await Api.conversations.reportSyncDigest(
       digests, degraded ? { identityGateDegraded: true } : null);
+    /* Tell the tripwire its standalone flush is unnecessary — we carried it. */
+    if (degraded && typeof window !== 'undefined' &&
+        typeof window.markIdentityGateReported === 'function') {
+      window.markIdentityGateReported();
+    }
     const divs = resp && resp.divergences;
     if (Array.isArray(divs) && divs.length && typeof console !== 'undefined') {
       console.warn('[conv-state] sync drift: server reports %d divergence(s): %o',
@@ -463,9 +441,6 @@ if (typeof window !== 'undefined') {
   window.applyRunningTaskIdsFrame = applyRunningTaskIdsFrame;
   window.applyConvStateSnapshot = applyConvStateSnapshot;
   window.replayPendingBusyState = replayPendingBusyState;
-  window.reportIdentityGateUnavailable = reportIdentityGateUnavailable;
-  window.resetIdentityGateWarnedForTests = resetIdentityGateWarnedForTests;
-  window.identityGateDegraded = identityGateDegraded;
   window.pendingBusyStateSize = pendingBusyStateSize;
   window.resetPendingBusyStateForTests = resetPendingBusyStateForTests;
   window.computeConvBusy = computeConvBusy;
@@ -484,6 +459,4 @@ if (typeof window !== 'undefined') {
    * equality. tests/test_frontend_identity_gate_parity.py enforces that no
    * gate anywhere under static/js/ re-implements them. */
   window._frameIsOurs = _frameIsOurs;
-  /* Tripwire for the consumers' fail-open branch (see above). Exported so
-   * a gate can report a missing predicate instead of degrading silently. */
 }

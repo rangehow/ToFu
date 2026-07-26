@@ -1,6 +1,22 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续20) — 「第一轮的用户消息渲染到了 chatInner 最底下」根修:surgical reconcile 把懒加载哨兵挤到底部(commit `f1691021`,2 文件 +303/-2;新套件 2/2 含 NEUTER,相邻渲染环 **31/31**,collect **9560** 0 err)
+- **owner 截图 + 诉求:** 第一轮的用户消息出现在 chatInner 最下面;并提出「是不是该彻底研究下前端渲染机制,看能不能都放到后端」。
+- **先复现再动手(拿真代码跑,不是读代码猜):** jsdom 里驱动**两个真实 shipped 函数**跑全链,DOM 顺序实测是 `m4…m23, m0, m1, m2, m3` —— 会话开头那几轮确确实实排在最新一轮下面,与截图同形。
+- **两步链条,单看每一步都不像错:**
+  | 步 | 位置 | 事实 |
+  |---|---|---|
+  | ① | `chat_render.js` surgical reconcile | 窗口第一条消息(`_prevEl`/`_cursor` 皆 null)的插入锚点 fallback 到 `inner.firstChild`。但懒加载窗口开着时,`firstChild` 是 **`#_lazyLoadSentinel` 而不是消息** —— 于是消息 #1 被插到哨兵**上面**,等价于把哨兵往下推一格。**每次后台重绘都推一格**,而成本/文件变更/压实数据在每次打开会话时都以后台重绘落地,几次之后哨兵已漂到 `#chatInner` 最底部 |
+  | ② | `streaming_render.js::_loadOlderMessages` | 老消息用 `sentinel.after(frag)` 插入。哨兵此时在最底 ⇒ **最老的消息被插到最新消息下面** |
+- **①单独看是隐形的**(哨兵是一条细长条),只有读者往上滚触发②时才暴露成用户可见的错乱 —— 这正是它能长期潜伏的原因。
+- **修法:** `_headAnchor()` 解析**第一个消息节点**、跨过哨兵。两个插入点一起修:重定位分支(原 `inner.firstChild`)与新增分支(原 `null` —— `insertBefore(node, null)` 会退化成尾部 append,是同一个坑的另一面)。哨兵是懒加载代码自己的布局家具(`_loadOlderMessages`/`_evictAboveWindow` 负责把它钉在头部),reconcile 应当**跨过它,而不是越过它**。
+- **守卫(`test_frontend_lazy_sentinel_anchor.py`):** 端到端驱两个真函数,断言 ㈠后台重绘后哨兵仍是 firstChild ㈡真跑一次 `_loadOlderMessages` 后 DOM 顺序 == conv.messages 顺序;外加一条直述症状的「最老必须在最新之上」探针,失败信息直接点名 bug 而不是干巴巴一句顺序不等。**NEUTER 还原 `inner.firstChild` fallback → 两条断言双双翻红**,证明锚点承重。
+- **一个 harness 坑(值得记):** `streaming_render.js` 与 `chat_render.js` 必须**拼成一个脚本再 eval** —— 它们的顶层 `let`(`_lazyConvId`/`_lazyRenderedFrom`/`_lazyRenderedTo`/`_INITIAL_RENDER`)在真实 bundle 里共享同一 script 作用域;分开 eval 会让每个文件的 `let` 各进各的作用域,`renderChat` 直接 `ReferenceError`,测试会以完全无关的理由翻红。
+- **对 owner「都放到后端」那一问的回答(结论:不建议整体搬,但方向里有一半是对的):** 本 bug 的病根**不是**「渲染在前端」,而是**同一份 DOM 有多个增量写入者**(全量渲染 / 外科重绘 / 懒加载窗口 / 流式气泡),各自持有一份对「头部在哪」的隐含假设。`docs/RENDER_CONTRACT.md` 早把这条写成不变式①(DOM = 消息文档的纯投影)。服务端渲染 HTML 不会消灭增量写入者 —— 流式仍要逐 token 落地、懒加载仍要按窗口拼接,只是把同样的锚点算术搬到另一侧,还会丢掉 tool `<details>` 展开态、翻译预览等**活 DOM 状态**(现在的 id-keyed reconcile 正是为保住它们才存在的)。**真正对的那一半是:让「哪些消息该出现、以什么顺序」成为服务端权威事实**,前端只做投影 —— 这正是 RENDER_CONTRACT 不变式②③与 Phase 3/4 已经在走的路。本刀是把该合同的一个漏洞补上,不是绕开它。
+- **诚实标注:** 全仓 `--collect-only` 首跑 **48 err**,根因是 sibling 正在改 `lib/llm_sanitize/_gateway.py` 留下的半成品 dict(`IndentationError`),**与本刀无关**;把该文件临时换成 HEAD 版后 collect **9560 / 0 err**,随即**逐字节校验恢复** sibling 的工作树改动(md5 核对),未提交它。我的提交精确 2 文件。
+- **生效边界:** 纯前端,走内容哈希 bundle —— **需重启服务器 + 浏览器硬刷新**后顺序才恢复正常。
+
 ### 2026-07-26(续16) — 请求检视器 P6 落地:每个工具行一枚 `</>` 锚点,owner 最初诉求正式闭环(commit `0d2a8fee`,5 文件 +432/-1;新套件 3/3(13 探针)含 NEUTER,前端环 7 套件 38/38)
 - **P3 的粒度错了(这次才对准 owner 原话):** owner 要的是「在 chatinner 看到有问题的工具调用 → 直接找到是哪次请求」。P3 一枚气泡锚点只能跳「该气泡最后一轮」,而一个气泡有 **N 轮 × M 个工具调用**。P6 把锚点下沉到**每一个工具行**。
 - **映射零新字段(勘察的关键收获):** 后端早给每个工具轮打了 `llmRound`(0-based 编排循环序号),请求快照的 `roundNum` 是 1-based ⇒ **产生该调用的请求 = llmRound + 1**。这与 `roundNum` **不是一回事**(后者是工具调用序号)——测试刻意用 `llmRound=2 而 roundNum=2` 的行钉死这个 off-by-one,NEUTER 换成 `roundNum` 精确翻红。

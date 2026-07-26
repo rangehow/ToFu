@@ -44,6 +44,8 @@ const ERROR_KIND_LABELS = {
   bad_request:           'Bad request',
   content_refused:       'Quality check failed',
   upstream_error:        'Upstream error',
+  worker_lost:           'Worker lost',
+  budget_exceeded:       'Budget exceeded',
 };
 
 function isErrorEnvelope(obj) {

@@ -23,7 +23,7 @@ KINDS = frozenset({
     'tool_rounds_exhausted', 'tool_timeout',
     'premature_close', 'abnormal_stop', 'aborted', 'server_offline',
     'internal', 'generic',
-    'bad_request', 'upstream_error',
+    'bad_request', 'upstream_error', 'worker_lost', 'budget_exceeded',
     'content_refused',
 })
 
@@ -34,7 +34,7 @@ _WARNING_KINDS = frozenset({
     'tool_rounds_exhausted', 'tool_timeout',
     'premature_close', 'abnormal_stop',
     'aborted', 'server_offline',
-    'upstream_error', 'content_refused',
+    'upstream_error', 'worker_lost', 'budget_exceeded', 'content_refused',
 })
 
 # Kinds where retrying THE SAME REQUEST is genuinely likely to help
@@ -42,7 +42,7 @@ _WARNING_KINDS = frozenset({
 _RETRYABLE_KINDS = frozenset({
     'ratelimit', 'no_slot', 'timeout', 'network', 'endpoint_unreachable',
     'premature_close', 'abnormal_stop', 'server_offline',
-    'tool_timeout', 'upstream_error', 'content_refused',
+    'tool_timeout', 'upstream_error', 'worker_lost', 'content_refused',
 })
 
 
@@ -212,6 +212,17 @@ _TITLES: dict[str, tuple[str, str, str, str]] = {
                             'retrying shortly usually recovers.\n'
                             '• If it keeps failing for several minutes, temporarily switch to another '
                             'available model in "Settings → Model defaults".'),
+    # Deliberate stop at the conversation's cost budget cap (orchestrator
+    # budget gate). NOT retryable — the same request hits the same cap;
+    # recovery is a config change (raise cap / cheaper model), not a retry.
+    'budget_exceeded':    ('⚠️ 任务费用已达预算上限，已主动停止',
+                            'Task stopped at the cost budget cap',
+                            '• 本次任务的花费达到会话设置的预算上限（maxBudgetUsd）而主动停止，已生成的内容已保留。\n'
+                            '• 如需继续：提高该会话的预算上限后点击 Continue，或换用更低成本的模型。',
+                            '• The task stopped itself when its spend reached the conversation\'s budget cap '
+                            '(maxBudgetUsd); generated content is preserved.\n'
+                            '• To continue: raise the cap for this conversation and click Continue, '
+                            'or switch to a cheaper model.'),
     # Translation engine content-quality guards refused every candidate
     # output after the retry budget (wrong-language flip / no-op echo /
     # over-generated contamination). NOT a server crash — the distinction
@@ -224,4 +235,14 @@ _TITLES: dict[str, tuple[str, str, str, str]] = {
                             '• The models repeatedly produced wrong-language / empty / runaway output; '
                             'it was rejected and retried automatically. Retrying shortly usually lands a healthy model.\n'
                             '• If it recurs, switch the translation model in "Settings → Model defaults".'),
+    # Stall-reaped background task (TaskRuntime.reap_if_stalled). Retryable
+    # by construction: the worker is presumed dead, so re-running the task
+    # is the designed recovery — the hint says so explicitly.
+    'worker_lost':        ('⚠️ 任务工作进程丢失（长时间无进展）',
+                            'Task worker lost (no progress)',
+                            '• 后台工作进程长时间没有产出任何进展，已被判定死亡——重新发起任务是安全的，已生成的部分内容可能丢失。\n'
+                            '• 若反复出现，请查看服务器日志（logs/error.log）确认进程是否被异常终止。',
+                            '• The background worker produced no progress for too long and was declared dead — '
+                            'retrying the task is safe; partial output may have been lost.\n'
+                            '• If it recurs, check the server logs (logs/error.log) to see whether the process was killed.'),
 }

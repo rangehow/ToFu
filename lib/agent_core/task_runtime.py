@@ -46,19 +46,40 @@ logger = get_logger(__name__)
 
 
 def _make_envelope(error, *, context: str, source: str) -> Optional[dict]:
-    """Normalize error to an envelope dict (or None)."""
+    """Normalize error to an envelope dict (or None).
+
+    Every shape becomes a COMPLETE envelope (``kind`` + string ``message``)
+    because the frontend's ``isErrorEnvelope`` requires both — an incomplete
+    dict (e.g. ``{'kind': 'worker_lost', 'detail': …}``) used to fall through
+    to the renderer's unknown-shape branch and display as 'Unknown error'
+    plus a JSON blob.
+    """
     if error is None:
         return None
     if isinstance(error, dict):
-        return error
+        if isinstance(error.get('kind'), str) and isinstance(error.get('message'), str):
+            return error  # complete envelope — pass through verbatim
+        from lib.error_envelope import make_envelope as _make_env
+        return _make_env(error.get('kind') or 'generic',
+                         detail=str(error.get('detail') or '')[:300],
+                         context=context,
+                         source=error.get('source') or source,
+                         raw=str(error)[:300])
     if isinstance(error, BaseException):
         from lib.error_envelope import from_exception as _err_from_exc
         return _err_from_exc(error, context=context, source=source)
     if isinstance(error, str):
-        from lib.error_envelope import make_envelope as _make_env
+        # A string naming a REGISTERED kind (e.g. finish(error='worker_lost')
+        # — the documented stall-reap contract) builds that kind's envelope;
+        # anything else is a raw reason string shown verbatim under 'generic'.
+        from lib.error_envelope import KINDS as _KINDS, make_envelope as _make_env
+        if error in _KINDS:
+            return _make_env(error, context=context, source=source)
         return _make_env('generic', detail=error, context=context,
                          source=source, raw=error)
-    return {'kind': 'generic', 'detail': str(error), 'source': source}
+    from lib.error_envelope import make_envelope as _make_env
+    return _make_env('generic', detail=str(error)[:300], context=context,
+                     source=source, raw=str(error)[:300])
 
 
 class TaskRuntime:

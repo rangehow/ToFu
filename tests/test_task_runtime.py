@@ -127,10 +127,25 @@ def test_finish_error_exception():
 def test_finish_error_dict():
     rt = TaskRuntime('test')
     task = rt.create()
-    envelope = {'kind': 'rate_limit', 'detail': 'too many requests'}
+    # A COMPLETE envelope (kind + string message) passes through verbatim —
+    # that is what make_envelope/from_exception produced upstream.
+    envelope = {'kind': 'ratelimit', 'message': '⚠️ API 请求已达限频（429）',
+                'detail': 'too many requests'}
     rt.finish(task['id'], error=envelope)
     assert task['error'] is envelope
-    _ok('finish(error=dict) preserves existing envelope')
+    _ok('finish(error=dict) preserves a complete envelope')
+
+    # An INCOMPLETE dict (kind but no message) is COMPLETED via
+    # make_envelope — the frontend's isErrorEnvelope requires a string
+    # message, so the old verbatim passthrough rendered these as
+    # 'Unknown error' + a JSON blob (the worker_lost stall-reap defect).
+    task2 = rt.create()
+    rt.finish(task2['id'], error={'kind': 'worker_lost', 'detail': 'stalled'})
+    env2 = task2['error']
+    assert env2['kind'] == 'worker_lost'
+    assert env2['detail'] == 'stalled'
+    assert isinstance(env2.get('message'), str) and env2['message']
+    _ok('finish(error=incomplete dict) completes it into a full envelope')
 
 
 def test_finish_idempotent():

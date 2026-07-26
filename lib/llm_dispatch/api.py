@@ -676,13 +676,13 @@ def _readjust_thinking_params(body: dict, new_model: str, thinking_format: str):
         if is_enabled:
             body['reasoning_split'] = True
     elif not _tf and is_claude(new_model):
+        from lib.llm import is_claude_opus_47
         if is_enabled:
             # Keep this in sync with the Claude branch in build_body().
             #   • 4.6 and earlier: adaptive + temperature=1.0
             #   • 4.7+: adaptive + display='summarized' (required to see
             #           reasoning trace), and NO temperature (ignored today,
             #           may be rejected in a future revision).
-            from lib.llm import is_claude_opus_47
             body['thinking'] = {'type': 'adaptive'}
             if is_claude_opus_47(new_model):
                 body['thinking']['display'] = 'summarized'
@@ -696,6 +696,13 @@ def _readjust_thinking_params(body: dict, new_model: str, thinking_format: str):
                     # 'ultra' is a GPT-5.6 tier; map to Claude's top rung.
                     effort = 'max'
                 body['effort'] = effort
+        elif is_claude_opus_47(new_model):
+            # Thinking OFF must be STATED on the adaptive generation — Opus 5
+            # defaults adaptive thinking ON, so the popped-key state above
+            # would silently re-enable it after a swap (live-measured ~1.93x
+            # completion tokens; see the build_body branch for the numbers).
+            # No effort is set: disabled + xhigh/max is HTTP 400.
+            body['thinking'] = {'type': 'disabled'}
     # else: standard OpenAI-compatible — no thinking params needed
 
     # ── Claude Opus 4.7+ rejects sampling params (HTTP 400) ──

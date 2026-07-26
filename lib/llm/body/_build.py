@@ -274,6 +274,30 @@ def build_body(model, messages, *, max_tokens=128000, temperature=1.0,
                             '%s — mapping to max', model)
                 _effort = 'max'
             body['effort'] = _effort
+    elif not _tf and is_claude_opus_47(model):
+        # ── Thinking OFF on the ADAPTIVE-thinking generation (Opus 4.7+) ──
+        # Claude Opus 5 runs adaptive thinking ON BY DEFAULT: a body with NO
+        # ``thinking`` key thinks anyway. Every earlier Claude defaulted OFF,
+        # so "disabled" used to be expressible by omitting the key — correct
+        # then, silently wrong now. The user picks depth=off, we send nothing,
+        # and Opus 5 bills them for reasoning they declined.
+        #
+        # Live-measured on the sankuai gateway (yuju-claude-opus-5-evaDaily,
+        # identical prompt, 4 samples, 2026-07-26):
+        #   omit thinking       → median 2925 completion tokens (36.3s, 24.8s)
+        #   {"type":"disabled"} → median 1518 completion tokens (19.4s, 19.6s)
+        #
+        # Gated on is_claude_opus_47 (the adaptive generation) rather than all
+        # Claude: this is the documented disable form for 4.7+, and it was
+        # verified a live no-op on 4.7 (omit [562,536,628] vs disabled
+        # [462,535,601]), so it corrects 5+ without changing 4.7/4.8 outcomes.
+        # Pre-4.7 Claude keeps the byte-identical omit wire — it already
+        # defaults off, and those revisions were never verified to accept the
+        # key, so adding one would be an unforced 400 risk.
+        #
+        # No ``effort`` is set here, and that is load-bearing: Anthropic
+        # returns HTTP 400 for thinking=disabled combined with xhigh/max.
+        body['thinking'] = {'type': 'disabled'}
     else:
         body['temperature'] = temperature
 

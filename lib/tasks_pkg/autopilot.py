@@ -194,110 +194,24 @@ def is_autopilot_enabled(task: dict) -> bool:
         return False
 
 
-_VU_FORWARD_TYPES = frozenset({
-    'delta', 'phase',
-    'tool_start', 'tool_result', 'tool_progress', 'tool_complete',
-    'tool_compacted',
-    'stdin_request', 'stdin_resolved',
-    'write_approval_request',
-    'human_guidance_request', 'human_guidance_response',
-})
-
-
-class _VUEventForwarder(list):
-    """List subclass that forwards the VU sub-task's events to the parent.
-
-    The orchestrator drives all SSE updates by calling
-    ``manager.append_event(task, ev)`` which does
-    ``task['events'].append(ev)`` under the task's events_lock.  By
-    swapping ``sub_task['events']`` with this subclass we get a hook on
-    every event the VU sub-task emits, without monkey-patching
-    ``append_event`` globally.
-
-    For each VU event we still append it to the underlying list (so the
-    sub-task's own SSE stream stays intact for any reader that ever
-    connects to it), and additionally forward two flavours of derived
-    events onto the PARENT task's stream:
-
-      1. ``autopilot_vu_event`` — wraps the original VU sub-task event
-         (delta / tool_start / tool_result / tool_progress / tool_complete /
-         tool_compacted / stdin_* / write_approval_request /
-         human_guidance_*) so the frontend can render the VU's reply +
-         tool calls into the synthetic-user bubble *as they happen*,
-         instead of materializing the whole bubble after the VU
-         finishes.  The wrapper carries ``vuMsgId`` so the frontend can
-         target the right message.
-
-    The synthetic-user bubble itself is created eagerly by the
-    ``autopilot_vu_start`` event (emitted from ``maybe_run_autopilot``
-    BEFORE the VU sub-task runs), so the user sees an "Autopilot ·
-    composing…" bubble in the USER lane the moment the worker stops —
-    NOT a phase chip glued to the worker bubble.  All VU thinking, tool
-    calls, and reply text then stream into that bubble via the wrapped
-    events above.
-    """
-
-    def __init__(self, parent_task, vu_msg_id):
-        super().__init__()
-        self._parent = parent_task
-        self._vu_msg_id = vu_msg_id
-
-    def append(self, ev):
-        super().append(ev)
-        try:
-            self._forward_to_parent(ev)
-        except Exception as e:
-            logger.debug('[Autopilot] event forward failed (non-fatal): %s', e)
-
-    def _forward_to_parent(self, ev):
-        from lib.tasks_pkg.manager import append_event as _ap_event
-        et = (ev or {}).get('type')
-
-        # Forward the inner event verbatim, wrapped so the frontend
-        # routes it into the VU bubble (by vuMsgId) instead of the
-        # parent's worker bubble.  We re-emit the parent-stream phase
-        # chip below as well; the two are not mutually exclusive (one
-        # paints the VU bubble, the other annotates the parent's chip).
-        if et in _VU_FORWARD_TYPES:
-            _ap_event(self._parent, build_event(
-                EventType.AUTOPILOT_VU_EVENT,
-                vuMsgId=self._vu_msg_id,
-                inner=ev,
-            ))
-
-
-def _emit_vu_setup_phase(task: dict, vu_msg_id: str | None, detail: str) -> None:
-    """Surface a pre-stream Autopilot setup step in the VU bubble.
-
-    Diagnosis (task_events probe, debug/autopilot_warmup_window_probe.py):
-    between ``autopilot_vu_start`` and the VU sub-task's first orchestrator
-    phase (``llm_thinking`` / ``waiting_model``) there is a genuinely SILENT
-    window — measured 2.5–26.7s across 12 real runs — during which
-    ``run_virtual_user`` resolves the objective (DB read), assembles the
-    message list and builds the sub-task. Nothing was emitted, so the bubble
-    sat on the bare "Autopilot…" placeholder with no attribution of what was
-    blocking.
-
-    This emits a ``working`` phase wrapped as ``autopilot_vu_event`` — the
-    SAME envelope ``_VUEventForwarder`` uses for the sub-task's own events —
-    so it routes into the VU bubble by ``vuMsgId`` and renders through the
-    existing ``updateStreamingUI`` ``working`` branch (``phase.detail`` shown
-    verbatim). No new event type; the frontend already handles it.
-
-    Emitted directly on the PARENT task because the sub-task (and its
-    forwarding event list) does not exist yet at these steps.
-    """
-    if not vu_msg_id:
-        return
-    try:
-        from lib.tasks_pkg.manager import append_event
-        append_event(task, build_event(
-            EventType.AUTOPILOT_VU_EVENT,
-            vuMsgId=vu_msg_id,
-            inner={'type': 'phase', 'phase': 'working', 'detail': detail},
-        ))
-    except Exception as e:
-        logger.debug('[Autopilot] vu setup-phase emit failed (non-fatal): %s', e)
+# ── pt_00459503 slice 5 — extracted VU event-forwarding cluster ─────
+#
+# ``_VU_FORWARD_TYPES``, ``_VUEventForwarder``, ``_emit_vu_setup_phase``
+# moved to the LEAF ``lib.tasks_pkg.autopilot_event_forwarding`` (zero
+# back-imports from this file).  Re-exported here as module-level
+# attributes so every existing ``from lib.tasks_pkg.autopilot import
+# _emit_vu_setup_phase`` (and the sibling tests that
+# ``monkeypatch.setattr(ap, '_emit_vu_setup_phase', ...)`` —
+# tests/test_autopilot_warmup_setup_phase.py) keeps working
+# byte-identically.  Symbol IDENTITY is preserved (facade attr IS the
+# leaf-module attr) — the load-bearing invariant for monkeypatch
+# steering, verified by
+# tests/test_autopilot_event_forwarding_wire_parity.py.
+from lib.tasks_pkg.autopilot_event_forwarding import (  # noqa: E402
+    _VU_FORWARD_TYPES,
+    _VUEventForwarder,
+    _emit_vu_setup_phase,
+)
 
 
 def run_virtual_user(task: dict, vu_msg_id: str | None = None) -> dict | None:

@@ -1,6 +1,36 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续48) — 缓存成本审计取证包,epic `pt_3616d93d519c49b4`(零代码变更,纯实测 + 开票;owner 已复核计数并纠正一处归因,**接手者勿改回推导版**)
+- **审计结论(前后端计量/显示/检测三层均健康,不必再查):** `lib/cost.py` 单一算术核(normalize_usage 覆盖 6 种厂商拼写 + 结构性约定判定)、入口 canonicalize 盖戳、前端三处显示(context-bar/finish_info/cost popover)全读 canonical 键、显示价与钱包共用 compute_cost。近 7 天真实命中(按模型聚合 task_results):aws 4.7 **89.0%** / aws 4.8 **87.1%** / kimi-k3 **86.3%** / yuju-opus-5-evaDaily **46.3%**。
+- **票内三件事(全部以 2026-07-26 logs/app.log 的 wire 指纹终判为据,勿用诊断哈希重数——它会误报):**
+  1. **同模型 API key 轮换打飞缓存命名空间**:今日 **87 次 / 25 会话**(grep 'CACHE NAMESPACE SWITCH' 限 conv=ms|mr)。网关缓存按 key 隔离,粘性路由(conv_affinity,软粘性)被并发冷却打穿,三把 key `c344…/457c…/a4547…` 间 flap。**先给每次切换按重写 token 量估成本(用当轮 cache_write),再谈粘性/冷却怎么调——不许拍脑袋。**
+  2. **★ 模型回退链混线(真凶,owner 归因):** `data/config/server_config.json` `/models/fallback_model = "kimi-k3"` —— 全局回退目标是非 claude、无 cache_control 标记、auto-cache 独立命名空间的模型。主模型(claude 系)短暂冷却 → 整个会话前缀送给缓存全冷的 kimi,回来再冷一次。实证:conv ms14r5vp 模型序列 opus-5×40 → kimi-k3×20 → opus-5×90;**R61 kimi-k3(11:56:11)→ 新 task R1 opus-5(11:58:00)的瞬间**,同 key `c344…` 出现纯 beta 翻转(`'' ↔ extended-cache-ttl-2025-04-11`)—— 8 次 beta flap 是混线的**症状**,不是 latch 按 task 不稳定(原假设已被 owner 实测否决;kimi 轮 `use_extended_ttl` 被 `lib/llm/cache.py` 强制 False)。**正面挑战的假设:回退链该不该混缓存不兼容的模型?** 系统已肯为缓存写入沉降等 0.41s(`lib/llm_dispatch/cache_settle` holding before big prefix ~340k tok),短冷却下「等同 key 同模型恢复」的期望成本很可能低于「冷前缀 1.25× 重计费 ×2(去+回)」。**必须用 task_results 里 opus-5↔kimi 混线会话的真实 usage 算清这笔账再定方案。** opus-5-evaDaily 46.3% 偏低很大程度是本条下游,不单独开方。
+  3. **64 次前缀内内容改写(wire 证实 inside_prior_cached_prefix=True):** 字段分布 reasoning_content/tool_result/assistant.content,深埋位置(如 ms1apkcg idx 134/615)。**L1 压缩已排除**:边界保护 msg_count−2(EDITABLE_TAIL_COUNT=2),涉事会话 L1 日志 compacted=0。现存嫌疑:L1-persist CAS 落库后 DB 重建字节 ≠ 内存直播字节;thinking 重放路径(conv_message_builder/_toolcalls.py:37 只在 `model_requires_reasoning_content_replay` 时保留 reasoning_content——模型回退切换时同一历史消息的 thinking 重放策略会变,**这可能与 #2 同族**)。按字段×路径归因后再定修。
+- **breakpoint-lost 188 次——明确不动:** 先把这批事件与当轮 cache_read 实际下跌做相关(charter 方法论:生产数据验证模式真实存在),确认 sankuai openai 兼容线真把 cache_control 标记字节计入缓存键再谈修。87% 的任务内命中率说明同任务内滚动尾部断点无害。
+- **背景决策(已核,勿翻):** floor_retry 默认 OFF(重发是期望成本净亏,`floor_retry.py` docstring 有账)、mid-anchor 默认 drop(真网关 A/B:塌陷率 34%→8%)。CACHE_EXTENDED_TTL 全局默认 True(lib/__init__.py:195 feature flag)。
+
+### 2026-07-26(续47) — 交易模块 P2 落地,epic `pt_94e94d3e` 全期收口:每日对账页 + 宿主设计系统桥 + 移动端(commit `017ef31`,10 文件;新 jsdom 套件 **11/11 含 NEUTER×2 全咬**,与宿主同进程 **105 过 5 skip**,独立模式 30 过 5 skip,collect **114** 0 err)
+- **接手时 P2 的六项交付,逐项兑现:**
+  | 票面 | 落点 |
+  |---|---|
+  | ① 对账清单页 + 空清单解释 | `reconcile.js`:actions 卡片 + **skipped 的 gate/note**;空态显示「今天无需操作」**并列出每个标的被哪道闸拦下**(免交易带/在途/无价格) |
+  | ② 采纳按钮带 actual_price/shares | 已执行**弹两次 prompt 问成交价/份数** —— 滑点是衡量建议质量的唯一原料,记布尔值就永远算不出;取消=什么都不记,留空=回落到建议值 |
+  | ③ 目标组合审批 UI | 未批准行**虚线 + 警告色 + 「待批准」徽章**,且只有它有 approve 按钮 —— 它不驱动计划,就不能长得像驱动 |
+  | ④ 估算标注 | `is_estimate` 时渲染估算横幅(本部署恒为真);静态守卫钉住**不存在 realtime 声明** |
+  | ⑤ 并入宿主设计系统 | `theme-bridge.css` 在 trading.css **之后**加载,把私有 token(`--bg1..4`/`--t1..4`/`--accent`)重定义为宿主 token 的 var() 别名 —— 2547 行旧规则**零改动**跟随宿主主题,亮色因此能工作(不是因为手写第二套调色板,那会漂移) |
+  | ⑥ 移动端 | 持仓表 ≤720px 转**堆叠卡片**(每格带 `data-label` 标签);brain 四卡 4→2 列(≤420px 1 列)——实测 375px 屏上四张约 90px 的卡,其中一张装着 SVG 环 |
+- **data-label 是契约,不是细节:** 移动卡片布局用 `td::before { content: attr(data-label) }` 命名每一格,所以 `dashboard.js` 的 10 个 `<td>` 全部带上了它。守卫**双侧钉死**(JS 全格带 label + CSS 消费 attr),NEUTER 摘掉一个即红。
+- **★ 写 jsdom harness 时连续栽的四个坑(都如实记下,都是同一类教训):**
+  1. `node -e` 的 argv 布局:**`process.argv[2]` 不是第一个用户参数**(没有 script 名占位),读到 undefined 拼出 `path.join(undefined)`。
+  2. jsdom 的 window/document **不会自动变成 node 全局** —— eval 的前端代码里裸 `document`/`fetch` 全部 ReferenceError,必须手工 `global.document = window.document`。
+  3. Node ≥21 的 `global.navigator` **只读**,赋值即抛 —— 而这条路根本用不到它。
+  4. **F.api 委托给 `window.Api.trading.call`,stub fetch 什么都拦不到。** 报错「Api client not loaded」时才真正去读 `state.js:33`。
+  - **教训同族(第 n 次):先读委托链,再写拦截桩。** 四次失败全是「我以为它调的是 X」。
+- **★ 顺带修掉一个潜在的跨套件污染(本轮最有价值的捕获):** 三个后端套件(reconcile/reconcile_api/kline)在**模块导入时无条件**安装 `lib` 桩,而 **pytest 在 collection 阶段就导入全部测试模块** —— 于是一旦与 parity 套件同进程,桩就遮蔽宿主真包(`ModuleNotFoundError: No module named 'lib.database'`)。此前「五套件 40 绿」与「预存在 54 绿」都是**分开跑**才没撞上。修法:加载器先 `import lib.log` 试真包,**只在 ImportError 时才落桩**。同进程 105 过、独立 30 过双模式实证。
+- **过程中两处自我纠正(如实):** ①`min_pass` 又数错(6 个断言写 7)—— 与续24 同错,第二次;②一次 apply_diffs 参数串行化损坏,把 stub 的 `calls.push` 行吃掉,靠「5 过 6 红但错因全是 0 记录」反向定位。
+- **验证:** jsdom 11/11(动作卡片 / **空态解释 3 闸全出** / 未批准视觉区分 / 采纳记实际值 / 取消零记录 / 留空回落 / approve 发请求 / NEUTER×2 / 级联顺序 / data-label 契约);与宿主同进程 105 过 5 skip;collect 114 0 err。
+- **诚实边界(不标 done 的部分):** theme-bridge 只是**映射 token**,没有重做旧页面视觉 —— simulator/brain/dashboard 仍是「自己的产品」观感,只是不再与宿主冲突、亮色/移动端不再坏。全面视觉重做是 P3。P2 票面的六项验收项**全部交付**。
 ### 2026-07-26(续46) — pt_5355329b 收口:ask_human 的 autopilot 分支把整个 vu_reply dict 喂回模型(epic `pt_5355329b2838404f`,commit `d9f15211`,2 文件 +149/-1;新套件 5/5(4 failing-first)含 **NEUTER×2 全咬**,相邻环 **63 过 1 红 A/B 实证预存在**,collect **10063** 0 err)
 - **这是续44 开票时就写明形状的同族第二路径,取证零重跑。** `run_virtual_user` 返回 `{'text','rounds','segments'}`,而 `_human.py:137` 把**整个 dict** 当用户回答:`f'Human response: {user_response}'` 把 dict repr——rounds/segments 元数据 + text 里刻意保留的 `[PROGRESS:]` 行——直接写进 tool_content 喂模型;同一个 dict 还进了 `human_guidance_response` SSE 事件的 `response` 字段(前端也渲染)。两重危害:模型看到的「用户回答」不是自然语言;PROGRESS 机器信号经**工具结果路径**二次泄漏(续44 修的是落库路径,两者独立)。
 - **修法即票面:** `user_response = strip_machine_tokens(vu_reply.get('text') or '') or '(no further input)'` —— 复用续44 落地的单一谓词(此路径**没有**需要 PROGRESS 原文的消费者,与预算护栏不同,故全剥)。边界行为逐条钉住:VU 返回 None 仍走 aborted;剥离后为空仍回落 `(no further input)`;resolve_human_guidance 与 SSE 事件拿到的是同一份干净文本。
@@ -35,6 +65,21 @@
 - **⚠️ 排查时踩过的假信号(给后人):** 构建后 grep bundle 查 `_stbConv` = 0,一度以为改动没进 bundle —— 实际 esbuild 会 **mangle 函数内局部变量名**,本地常量名在压缩产物里根本不存在;要在压缩产物里找证据,得查**属性名/字符串字面量**(如 `forceScroll:!0`)。
 - **未做(诚实边界):** owner 还提到「同步太慢」—— 打开会话的 Phase-2 服务端对账在慢盘上要数秒,期间多次全量重绘各带锚点重钉,理论上也 contributes 跳动感;本轮只修了确定性可复现的滴灌顶推,慢同步本身(存储层)未动。
 
+### 2026-07-26(续46) — 「Opus 5 假限流」最后一层根因坐实:签名**在采集侧就不存在**(网关 yuju OpenAI 兼容线从不发签名块),下游丢弃安全网**只在 Anthropic 协议线存在**(epic `pt_48f29db9dd5d47c6`,已 claimed;纯取证零代码;owner 复核机制链条后要求补齐最后一层)
+- **起点是 owner 的「为什么密钥 99% 好看、会话却全是 Opus 5 限流排队」。** 机制层(前两轮已答,owner 已认):①卡片成功率按设计**排除 429**(i18n.js:1255 提示语原文;`_record.py` 429 单独计数);②限流徽标按 (provider,key) 聚合**不分模型**;③`key_stats.json` 里 key_0 今日 `exhausted:true` 被 override 手动拉回,**「手动开启」绿标 = 出过事被人按回去**;④排队相位(api.py:1297)在 slot=None 时**硬编码** `reason='Waiting for model (rate-limited)'`,不问冷却原因。实测:Opus 5 槽位今日 **43 次 300s 顶格退避 vs 仅 17 次真 429**,`still cycling` 484 行、单次 2400 轮 ≈ **12 分钟**(Task fcfd7fc7,strict=True)。
+- **owner 把最后一层打了回来:400 不是「未知载荷 bug」。** 本条把它钉死到字节级:
+  1. **400 体**:`invalid_request_error: ***.***.***.***.***.signature: Field required` + `ext.source=UPSTREAM_VENDOR, service=claude-opus-5` —— 五段掩码路径即 `messages.N.content.M.signature`,**供应商要求重放思考块必须带 opaque signature**(我们自己 `_to_anthropic.py:154` 与 `anthropic_outbound/_sse.py:86` 的注释早就写过这句话)。
+  2. **丢失环节 = 采集侧,不是落库/重放。** 近 3 天全库 tool_rounds:yuju-claude-opus-5 **112 轮 thinking / 0 签名**,kimi-k3 295/0,而 **aws.claude-opus-4.7 51/51、4.8 30/30 全有签名**。落库写入方 `_parse.py:81,247` 是「有才写」的忠实通道——aws 线同一条路径 81/81 证明它不丢字段;结论是 **yuju OpenAI 兼容线这条网关根本不发 `reasoning_details[].signature` 块**,`_sse_core.py:725-738` 的采集永远等不到。被毒会话 `ms1asjtxqwc6sk` 的 msg[1](task 433a675a)71 轮 toolRounds:14 轮有 thinking、**0 轮有 thinkingSignature 键(键都不存在)**。
+  3. **重放按设计带无签名思考**(DeepSeek parity + live↔replay 字节 parity,tests 钉死),对被毒会话实测重放:**14 条无签名 reasoning_content 上 wire**。
+  4. **「下游会丢弃无签名思考」的承诺在这条线上是假的。** `_toolcalls.py:39` 注释说 `_assistant_blocks` / `_inject_claude_reasoning_details` 会 identically drop——但 `_assistant_blocks` 的丢弃**只在 `api_protocol=='anthropic'` 时运行**(OpenAI 线 body 逐字透传,test_cache_tail_breakpoint_openai_wire.py 钉死),而 `_inject_claude_reasoning_details` **只增强(双全才合成 reasoning_details)、从不丢弃**。OpenAI 兼容线上**没有任何丢弃点** → 无签名思考直达网关 → 供应商 400。
+- **一个必须诚实记录的边界:** 供应商的**精确触发形状**(哪个消息下标/邻接)在掩码路径下本侧不可判定——对照组 task 433a675a 的 kind=request 快照显示 Round 1/2 同样带无签名 reasoning_content 却 71 轮零 400(grep 命中的 1 条是我自己探针命令的日志回显,已排除);而被毒会话的 R1 每轮必 400(29-30 连击)。差异疑似与**被埋工具轮的位置/数量**有关(Anthropic 文档的 tool-use 连续性校验),但这不影响修法——**对一切形状都安全的做法就是 Anthropic 线已有的那个:无签名即丢弃**。
+- **放大器(票面另两条,不变):** 载荷级确定性 400 与瞬态超时共用 `consecutive_errors` → 连击 29-30 → 3 个 Opus 5 槽位轮流 300s 禁闭 → 其它 strict 钉死会话空转显示「限流中」。
+- **修法(三刀,待实施):**
+  1. **主修复(单一 seam)**:`_inject_claude_reasoning_details` 扩展为「Claude 族且 reasoning_content 无签名 → 丢弃该 reasoning_content 并记日志」,与 `_assistant_blocks` 的 Anthropic 线行为对齐成同一条不变式。DeepSeek 的 `model_requires_reasoning_content_replay` 不受影响(非 Claude 族门控);live tail 与 replay **同时**被丢 → live↔replay parity 不失反保。**不要**试图「找回」签名——网关这条线不发,无签名可找回。
+  2. **放大器**:载荷级 400(invalid_request,非 quota)不喂 `consecutive_errors`,改走 (key,model) 对排除(PermissionError 已有同款先例),停止用健康计数把全部槽位打进 300s。
+  3. **标签**:`Slot` 增加冷却原因字段,slot=None 等待相位按「429 冷却」vs「错误退避」发不同 reasonKey,不再一律写「限流」。
+- **回退可见性(owner 顺带一问)——已存在,不进票:** `model_fallback` SSE 事件在**决策时刻**发出(`llm_fallback/_call.py` → sse_pipeline.js:1119 → `_handleModelFallback` 盖章 fallbackModel/From/Reason/Kind),气泡内**早期 banner**(`stream.fallback.banner`「主模型请求失败,已自动切换」,i18n.js:2498,**不是 toast**,正是 ms1hc404206gms 会话里 owner 要的那个形态),完成后还有 finish-tag「回退 → kimi-k3」带原因 tooltip(finish_info.js:970);checkpoint/重连/轮询三条路径都转发这四个字段(health_stream_timer.js:1015、sse_poll_fallback.js:302、conv_reducers.js:238)。
+- **方法论(同族教训,第 N 次):** 「下游会兜住」这类跨模块承诺,必须逐线验证——`_toolcalls.py:39` 那句注释把两条协议线写成 identical,而丢弃点只在其中一条存在。**注释里的对称性不是证据,线上的字节才是。**
 ### 2026-07-26 — brand wordmark 二次重设计:「字里藏豆腐」(owner 拍板「现在的好丑,颜色字体都没意思」;commit `404cb1da`,1 文件 +59/-35;headless Chromium 前后对照截图实证)
 - **取代续33 的「墨字+陶土 o+朱砂印章」。** owner 评语:衬线 Newsreader 书斋气与圆胖吉祥物气质脱节,印章是第三个色相、显杂。新方案:字身换 `--sans-body` 800 粗几何无衬线(收紧字距 -0.03em);**「o」字形留在 DOM(可选中/可复制)但视觉由 ::after 画成一块奶油→琥珀渐变、圆角 28%、微歪 -7° 的小豆腐块**,与吉祥物互为呼应;朱砂印章撤掉,「豆腐」改 text-tertiary 疏排灰字。侧栏 18px 同款。悬停「软豆腐抖动」保留,豆腐块额外 rotate(9°) scale(1.07)。
 - **尺寸迭代(截图驱动的自我修正):** 豆腐块首版 .64em 溢出「o」字身框、挤压相邻字母,收窄到 .56em(侧栏 .58em)才落回字身框内。改动全在 `[data-theme="tofu"]` 作用域,像素风基础 `.tofu-brand`(styles.css:338)与其他主题未碰;两处 JS 模板(main_conv_lifecycle.js / chat_render.js)只产 class 不产样式,零改动自动生效。移动断点 20/18px 未动。
@@ -1479,3 +1524,11 @@
   2. 所以真正的问题是:**哪条重放路径造出了「有 reasoning_content、无 thinking_signature」的 assistant 消息**。已排除:`lib/llm_sanitize` 明确保留三个字段(`_fields.py:24-29`);正常 replay 构建器 `conv_message_builder/_toolcalls.py:227-238` 会从 toolRounds 取 `thinkingSignature`。**重点嫌疑**:①**compaction**(摘要重建上下文时丢签名)②**killed_recovery**(硬杀后重建 segments)③**turn_retry/floor_retry** 的整轮重放 ④签名捕获(`_sse_core.py:497/737-749/918`)落地之前就已存下的旧轮次。与「R2–R30 长任务中招」吻合。
   3. 修法判据:重放侧任何带 thinking 的 assistant 消息**必须有签名,否则剥掉 thinking 只留正文**(丢思考总比整轮 400 强);签名捕获侧补齐遗漏路径。改完用 21cdc1fb / 4743fe2e 的 messages_snapshot 做回归。
 - **运维附票 `pt_8f6cbc753855415e`**:claude-opus-5 OAuth 槽 token 已吊销,07-25 21:42 起 401 至今(实测 07-26 15:35 仍「OAuth access token has been revoked」),DB 40 条 401 error 行;修复=重新登录该 OAuth 槽。顺带:这批 error 行 `metadata->>'model'` 为 NULL(dispatch 层失败不记 model),按模型统计失败率会漏,建议顺手修。
+
+### 2026-07-26 — signature-400 根修落地 + error 落库补 model(两 epic 同批;新套件 9/9 含 failing-first+NEUTER、2/2 含 failing-first,四环 23/23,collect **10076** 0 err)
+- **`pt_8ffba515096142af`(signature-400)根因,与开票时的四个嫌疑全部不同——比它们更上游:** 取证三连击:①生产库 15 个近期成功 opus-5 任务的 **92 个 thinking segments 签名数 = 0**;②live state 快照里 assistant 消息就是 `reasoning_content` 无 `thinking_signature`;③`app.log.2026-07-25` 的 400 错文。**sankuai OpenAI 兼容线对 Opus 5 从不回传签名**——不是某条重放路径丢了它,是采集侧根本收不到。因此每个带 thinking 的 opus-5 轮,重放时都把无签名 thinking 送上 wire;网关大约 07-25 18:57 起强制校验(与 Opus 5 放量同步),400 判 non-retryable 整轮死。开票时猜的 compaction/killed_recovery/turn_retry/存量旧轮**都不是根因**(它们只是同样受害的重放方)。
+- **与既有 parity 套件的对账(关键设计约束):** `test_cache_reasoning_content_replay_parity.py` 的 docstring 曾断言「无签名 thinking 被下游一致丢弃,so no HTTP 400」——**生产证伪**。但 parity 修复保护的缓存字节对称不能破:修法必须在 build_body 对 live/replay **同形生效**。
+- **修法(单咽喉,内容确定性):** `lib/llm/body/_model_tweaks.py::_inject_claude_reasoning_details` 扩展——有签名照旧合成 `reasoning_details`;**无签名则 `del reasoning_content`**(Anthropic 契约允许整个省略旧 thinking 块,只有被重放的块必须签名;丢思考总比整轮 400 强)。is_claude 门控,DeepSeek 反向规则(必须重放 reasoning_content)不受影响。live tail/conv replay/compaction/重试全过这一个咽喉,缓存字节对称天然保持。
+- **证据:** 新套件 `test_claude_unsigned_thinking_strip.py` 9/9(2 failing-first:剥离缺失时红;NEUTER=模拟修复前行为,致命形状上 wire 即红);parity 套件 NC 改为打**非 Claude 模型**(strip 之后 Claude wire 两形同被剥,NC 前提已变——这是预期修复不是 parity 回归),docstring 证伪断言已更正;`test_cache_content_freeze_non_claude` 7/7 无泄漏。
+- **`pt_8f6cbc753855415e` 代码部分(error 落库补 model):** 根因=`task['model']` 只在**首轮成功后**(_run.py 循环尾部)或 finalize 才盖戳,而 401/端点不可达等 dispatch 层失败在任何成功轮之前抛出 → `build_result_meta` 拿不到 model → metadata 只剩 `['finishReason','taskId']`。修法=`_run.py` Section 1 模型解析后立即 seed `task['model']`(回退换模型仍由 968 行原戳跟踪)。新套件 `test_error_result_model_metadata.py` 2/2:failing-first 驱动真 run_task + stub 首调即抛,复现生产形状(model=?);修后 metadata.model 正确落库;happy path 回归钉住。**归属粒度说明:** seed 记的是「请求的模型」;回退链末棒失败时(实测 yuju→kimi 双死)envelope 里有真凶,metadata 记请求模型——严格好于 NULL,更细的末棒归因留待需要时。
+- **ops 部分(重新登录 OAuth 槽)非代码可解,已挂 question-block 等 owner。**

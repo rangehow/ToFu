@@ -258,6 +258,16 @@ def run_task(task: dict[str, Any]) -> None:
         # ── Section 1: Config & Model Resolution ──
         mcfg = _resolve_model_config(cfg, task['id'])
         model           = mcfg['model']
+        # ★ Seed the resolved model on the task IMMEDIATELY (epic
+        #   pt_8f6cbc753855415e). The loop tail stamps it again after each
+        #   successful round, but a first-call DISPATCH failure (revoked-OAuth
+        #   401, all keys cooling, endpoint-unreachable exhaustion) raises
+        #   BEFORE any round succeeds — the error row then persisted with
+        #   metadata.model NULL (40 such rows in 14 days), invisible to
+        #   per-model failure stats. The post-round stamp still tracks
+        #   fallback swaps; this seed is the floor.
+        if model:
+            task['model'] = model
         thinking_enabled = mcfg['thinking_enabled']
         thinking_depth  = mcfg['thinking_depth']
         preset          = mcfg['preset']

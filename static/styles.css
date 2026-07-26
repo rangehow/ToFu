@@ -11167,14 +11167,11 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
      (no 4-colour SNES bevel, no concentric inner ring — per the aesthetic:
      "no concentric borders"). */
   border:1.5px solid rgba(140,116,80,0.34);
-  /* An IRREGULAR, hand-drawn frame — each corner a different elliptical radius
-     (the classic "sketched border" trick: unequal h/v radii bend the 1.5px
-     stroke into a subtly wobbly, drawn-by-hand line instead of a machine-perfect
-     rounded rectangle). Held in a var so every scene clip-path (canvas / fg /
-     ground) follows the SAME wonky outline — the painting is cropped to the
-     frame, not to a separate neat rect. Morphs to a second irregular shape on
-     hover for a living, gallery-hung feel. */
-  --bar-frame-radius:15px 23px 16px 22px / 22px 16px 24px 15px;
+  /* An EVEN, single-value frame radius (owner, 2026-07-26: the earlier
+     per-corner irregular radii read as a wobbly, unappealing outline). Held in
+     a var so every scene clip-path (canvas / fg / ground) follows the SAME
+     outline — the painting is cropped to the frame, not to a separate rect. */
+  --bar-frame-radius:16px;
   border-radius:var(--bar-frame-radius);
   color:#6B5A40;
   /* Soft, realistic elevation — a tight contact shadow + a wide, feathered
@@ -11187,7 +11184,7 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   position:relative;
   z-index:1;
   padding:8px 16px;
-  transition:transform 0.2s cubic-bezier(0.22,0.9,0.3,1.1), box-shadow 0.2s ease, border-radius 0.35s ease;
+  transition:transform 0.2s cubic-bezier(0.22,0.9,0.3,1.1), box-shadow 0.2s ease;
   /* overflow VISIBLE so the organic top-edge overlay (grass/waves/clouds) can
      poke ABOVE the rim; the ground scene is instead kept inside via clip-path. */
   overflow:visible
@@ -11423,14 +11420,13 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   z-index:0;
   pointer-events:none;
   border-radius:inherit;
-  /* This clip stays as a SAFETY net (a canvas must never square off the frame's
-     corners), but the VISIBLE silhouette is now cut in JS: tofu-scene.js tears a
-     DECKLE edge — the irregular feathered rim of handmade paper — out of the
-     painting itself, and the bar's cream body shows through that torn margin.
-     The tear is applied to the PAINTING rather than to .project-bar because a
-     clip-path on the bar would also crop the pet's speech bubble (which
-     deliberately pokes above the rim) and the frame's drop shadow. The deckle
-     always bites INSIDE this rounded rect, so the two never fight. */
+  /* This clip is the ONLY crop the painting gets: tofu-scene.js paints
+     FULL-BLEED to the canvas edges (the torn deckle edge + white margin were
+     removed per owner, 2026-07-26), and this rule cuts it to the rounded shell
+     — free, per-frame, no canvas-side cut/clip. It lives on the canvas rather
+     than on .project-bar because a clip-path on the bar would also crop the
+     pet's speech bubble (which deliberately pokes above the rim) and the
+     frame's drop shadow. */
   clip-path:inset(0 round var(--bar-frame-radius, var(--radius)));
   display:block;
 }
@@ -11554,7 +11550,7 @@ html:not([data-theme="tofu"]) .project-bar .tofu-scene-fg-canvas{display:none}
   /* full-body scene: painterly, resolution-independent, rasterizes once */
   background-size:120px 100%;
   /* clip to the WHOLE rounded shell (all four corners) now that it fills the
-     body, not just the bottom two — the same irregular frame outline. */
+     body, not just the bottom two — the same frame outline. */
   clip-path:inset(0 round var(--bar-frame-radius, var(--radius)));
 }
 /* the meadow crest reaches higher over the rim than the gentle shared poke */
@@ -11595,9 +11591,6 @@ html:not([data-theme="tofu"]) .project-bar .tofu-scene-fg-canvas{display:none}
 html:not([data-theme="tofu"]) .tofu-pet{display:none}
 [data-theme="tofu"] .project-bar:hover{
   transform:translateY(-2px);
-  /* a DIFFERENT irregular radius on hover — the frame subtly "re-draws" itself,
-     reinforcing the hand-made, non-rigid character. */
-  --bar-frame-radius:22px 15px 24px 16px / 16px 24px 15px 22px;
   border-color:rgba(140,116,80,0.45);
   box-shadow:
     0 2px 4px rgba(74,58,36,0.12),

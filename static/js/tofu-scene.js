@@ -262,9 +262,7 @@
   // full ratio (2 on a Retina panel, 3 on some phones) therefore costs 4–9×,
   // and buys NOTHING here: this scene is Monet broken colour — thousands of
   // soft, overlapping, translucent ellipses with no hard edges and no text.
-  // There is no high-frequency detail for the extra samples to resolve. The one
-  // near-edge — the torn deckle rim — actually reads BETTER softly resolved,
-  // because a hand-torn paper edge is fibrous, not crisp.
+  // There is no high-frequency detail for the extra samples to resolve.
   //
   // Nothing legible lives on these canvases (verified: zero fillText/strokeText
   // in this module). The pet is a DOM <img> with its own transforms and the
@@ -457,107 +455,17 @@
     return { n: cap, scale: Math.sqrt(wanted / cap) };
   }
 
-  // ── DECKLE EDGE (the irregular border) ──────────────────────────────────
-  // The bar's frame was a rounded rectangle — machine-perfect, however wonky
-  // its four radii were. A real painting on handmade paper has a DECKLE edge:
-  // the torn/feathered rim left by the mould, which wanders a few millimetres
-  // in and out and is never twice the same. That is the shape we cut here.
-  //
-  // It is cut on the CANVAS, not on the bar element, and that is deliberate:
-  // `clip-path` on .project-bar would also clip the pet's speech bubble (which
-  // deliberately pokes above the rim) and would clip away the frame's drop
-  // shadow. Cutting the PAINTING instead leaves the bar's own cream body
-  // showing through the torn margin — so the bar reads as a deckle-edged
-  // painting laid on a cream mount board, which is a truer object than a
-  // painting-shaped div, and costs one composite op per frame.
-  //
-  // The outline is seeded from the same PRNG as the scene, so it is stable
-  // across repaints and unique per (scene, size) — every bar is torn once, and
-  // torn differently.
-  var DECKLE_STEP = 13;               // px between torn-edge samples
-  var DECKLE_BITE = 3.4;              // max inward bite (px)
-  var _deckle = [];                   // [x,y] outline points, CSS px
-
-  function _seedDeckle(R, w, h) {
-    _deckle = [];
-    var m = 1.5;                              // nominal inset before the bite
-    // Walk the four sides, biting inward by a jittered amount. Two octaves of
-    // jitter (a slow wander + a fine fray) is what separates "torn fibre" from
-    // "zigzag": one octave alone reads as a saw blade.
-    function side(x0, y0, x1, y1, nx, ny) {
-      var len = Math.hypot(x1 - x0, y1 - y0);
-      var steps = Math.max(3, Math.round(len / DECKLE_STEP));
-      for (var i = 0; i < steps; i++) {
-        var t = i / steps;
-        var slow = Math.sin(t * 6.1 + R() * 0.4) * 0.5 + 0.5;
-        var bite = m + (slow * 0.55 + R() * 0.45) * DECKLE_BITE;
-        _deckle.push([x0 + (x1 - x0) * t + nx * bite, y0 + (y1 - y0) * t + ny * bite]);
-      }
-    }
-    // Corners are pulled in harder (a torn sheet loses most at its corners),
-    // which also keeps the cut clear of the frame's rounded corner radius.
-    var c = 7;
-    side(c, 0, w - c, 0, 0, 1);               // top    → bite down
-    side(w, c, w, h - c, -1, 0);              // right  → bite left
-    side(w - c, h, c, h, 0, -1);              // bottom → bite up
-    side(0, h - c, 0, c, 1, 0);               // left   → bite right
-  }
-
-  /** Erase everything OUTSIDE the deckle outline on `ctx` (even-odd fill of
-   *  [full rect] + [outline] under destination-out), leaving the painting with
-   *  a torn silhouette. No-ops when the outline has not been seeded. */
-  function _cutDeckle(ctx, w, h) {
-    if (!_deckle.length || !ctx.rect) return;
-    flushDabs();
-    ctx.save();
-    ctx.globalCompositeOperation = 'destination-out';
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = '#000';
-    ctx.beginPath();
-    ctx.rect(0, 0, w, h);
-    ctx.moveTo(_deckle[0][0], _deckle[0][1]);
-    for (var i = 1; i < _deckle.length; i++) ctx.lineTo(_deckle[i][0], _deckle[i][1]);
-    ctx.closePath();
-    ctx.fill('evenodd');
-    ctx.restore();
-  }
-
-  /** Paint the torn rim itself: a fibrous lip of small dabs hugging the inside
-   *  of the deckle outline, so the cut edge looks like paper fibre catching the
-   *  light rather than a clean scissor line. Baked once → free per frame. */
-  function _paintDeckleRim(ctx, R, pal) {
-    if (!_deckle.length) return;
-    for (var i = 0; i < _deckle.length; i++) {
-      var p = _deckle[i];
-      var q = _deckle[(i + 1) % _deckle.length];
-      var ang = Math.atan2(q[1] - p[1], q[0] - p[0]);
-      dab(ctx, p[0], p[1], lerp(1.6, 3.2, R()), lerp(0.5, 1.1, R()), ang,
-          _mixHex(pal.spark, '#FFFFFF', 0.5), lerp(0.18, 0.42, R()));
-    }
-    flushDabs();
-  }
-
-  /** CONSTRAIN a context to the torn outline for the rest of the frame.
-   *
-   *  This replaces a per-frame `destination-out` cut. The cut had to fill the
-   *  WHOLE canvas bounding box (the even-odd rect ⊖ outline), so the rasterizer
-   *  scanned w×h device pixels every frame just to erase a ~5px rim — and it
-   *  had to run AFTER every layer, meaning the layers first PAINTED the margin
-   *  and then had it erased. Clipping instead means the margin is never painted
-   *  in the first place, which is both cheaper and strictly more correct (an
-   *  additive 'lighter' wash into a region that is about to be erased still
-   *  costs full blend bandwidth).
-   *
-   *  Caller owns the save/restore pairing. Degrades to no clip on a context
-   *  without clip() (the scene then keeps its plain rounded silhouette). */
-  function _clipDeckle(ctx) {
-    if (!_deckle.length || typeof ctx.clip !== 'function') return;
-    ctx.beginPath();
-    ctx.moveTo(_deckle[0][0], _deckle[0][1]);
-    for (var i = 1; i < _deckle.length; i++) ctx.lineTo(_deckle[i][0], _deckle[i][1]);
-    ctx.closePath();
-    ctx.clip();
-  }
+  // ── FULL-BLEED PAINTING (owner, 2026-07-26) ─────────────────────────────
+  // The painting fills the WHOLE bar, edge to edge. An earlier iteration tore
+  // the canvas to a deckle (handmade-paper) outline and let the bar's cream
+  // body show through as a torn margin — the owner rejected the result ("the
+  // irregular outer border with a white background behind it is not
+  // appealing"), so the torn edge + white mount are GONE. Cropping to the
+  // rounded shell is done ONCE, in CSS, by the clip-path on the canvas
+  // elements (styles.css) — zero per-frame canvas cost, no margin, no white
+  // halo. Do not reintroduce a canvas-side cut/clip: the even-odd
+  // destination-out cut and the per-frame deckle clip were both pure overhead
+  // here, and the full-bleed look is the requirement.
 
   // ── SUN-GLOW TILE ────────────────────────────────────────────────────────
   // The drifting sun was a `createRadialGradient` rebuilt EVERY frame and then
@@ -984,13 +892,9 @@
     _fgTop = Math.max(0, Math.floor(fgTop));
     // The sun glow is baked to a tile once here, not rebuilt per frame.
     _bakeGlowTile(pal, h);
-    // The outline just moved → retire any pixels left outside the new one.
+    // Size/scene changed → one full clear on the next frame retires any
+    // stale pixels from the previous geometry.
     _needFullClear = true;
-    // Finally: tear the sheet. Seeded from the SAME PRNG as everything above, so
-    // the torn outline is stable across repaints and unique per (scene, size).
-    _seedDeckle(R, w, h);
-    _cutDeckle(b, w, h);
-    _paintDeckleRim(b, R, pal);
   }
 
   // (Re)seed the scene critter for the current scene, off-screen on a random
@@ -1024,17 +928,14 @@
     var dt = Math.max(0, Math.min(0.08, (ms - _lastMs) / 1000));
     _lastMs = ms;
     c.setTransform(_dpr, 0, 0, _dpr, 0, 0);
-    // NO full-canvas clear. The baked buffer is OPAQUE everywhere inside the
-    // torn outline, so blitting it already overwrites the whole of last frame's
-    // overlay; and the margin OUTSIDE the outline is never painted, because
-    // every layer below runs inside _clipDeckle. Clearing w×h was ~20% of the
-    // frame's pixel budget spent erasing pixels that were about to be
-    // overwritten anyway. A full clear is still done ONCE after any re-bake
-    // (size/scene change), where the outline itself moves and stale margin
-    // pixels from the previous outline really can survive.
+    // NO full-canvas clear. The baked buffer is OPAQUE over the whole
+    // canvas (full-bleed), so blitting it already overwrites the whole of last
+    // frame's overlay. Clearing w×h was ~20% of the frame's pixel budget spent
+    // erasing pixels that were about to be overwritten anyway. A full clear is
+    // still done ONCE after any re-bake (size/scene change), where stale pixels
+    // from the previous geometry really can survive.
     if (_needFullClear) { c.clearRect(0, 0, w, h); _needFullClear = false; }
     c.save();
-    _clipDeckle(c);                 // margin is never painted, so never needs erasing
     if (_buf) c.drawImage(_buf, 0, 0, w, h);
     // TIME OF DAY: has the clock moved into a new bucket since this buffer was
     // baked? Checked once a minute (not per frame — the boundary moves at most
@@ -1133,9 +1034,6 @@
     flushDabs();
     // the critter (drawn last, above the scene but below the pet at z1)
     _paintCritter(c, ms, dt, w, h);
-    // Close the deckle clip opened at the top of the frame. Every layer above
-    // painted INSIDE the torn outline, so there is no margin to erase — the old
-    // full-canvas `destination-out` re-cut is gone.
     c.restore();
     // FINALLY, on the SEPARATE foreground canvas (z2, IN FRONT of the pet):
     // paint the near occluder band so the cat is partly hidden by it and reads
@@ -1163,7 +1061,6 @@
     // step with what is drawn.
     c.clearRect(0, _fgTop, w, h - _fgTop + 2);
     c.save();
-    _clipDeckle(c);            // torn by the same edge; no post-hoc cut needed
     var pal = _livePal || PALETTES[_scene] || PALETTES.meadow;
     var px = _petGroundX();
     var gust = 1 + 0.6 * Math.sin(ms * 0.00022 + 1.3);
@@ -1250,8 +1147,7 @@
       }
     }
     flushDabs();
-    c.restore();              // close the deckle clip — the near plane is torn
-                              // by the same edge, by CLIPPING not post-cutting
+    c.restore();
   }
 
   /** The clock crossed a time-of-day boundary: snapshot the painting we are
@@ -1267,16 +1163,15 @@
         if (sc && sc.drawImage) sc.drawImage(_buf, 0, 0); else snap = null;
       }
     } catch (e) { snap = null; }     // harmless — we just re-bake without a fade
-    // A time shift re-bakes COLOUR ONLY. The torn outline is seeded from
-    // rng(pal.seed ^ w*131+h) and the tint preserves `seed`, so the geometry is
-    // byte-identical — there are no stale pixels outside a moved outline to
-    // retire, and the full-canvas clear _paintBuffer unconditionally requests is
-    // both unnecessary and actively harmful here: _paintFrame consumes that flag
-    // at the TOP of the frame while this runs BELOW it, so the clear would land
-    // a frame LATE and wipe the first cross-fade composite before re-blitting.
-    // Preserve whatever the flag was, so a genuine geometry change still gets
-    // its clear. (Pinned by test_time_rebake_issues_no_full_canvas_clear +
-    // test_time_rebake_keeps_the_identical_deckle_outline.)
+    // A time shift re-bakes COLOUR ONLY — the tint preserves `seed`, so every
+    // dab lands byte-identically and no stale pixels survive to retire. The
+    // full-canvas clear _paintBuffer unconditionally requests is therefore both
+    // unnecessary and actively harmful here: _paintFrame consumes that flag at
+    // the TOP of the frame while this runs BELOW it, so the clear would land a
+    // frame LATE and wipe the first cross-fade composite before re-blitting.
+    // Preserve whatever the flag was, so a genuine geometry change (resize,
+    // scene switch) still gets its clear. (Pinned by
+    // test_time_rebake_issues_no_full_canvas_clear.)
     var _keepClear = _needFullClear;
     _paintBuffer();                  // re-bakes with the NEW bucket's tint
     _needFullClear = _keepClear;

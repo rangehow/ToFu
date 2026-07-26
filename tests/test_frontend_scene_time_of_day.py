@@ -405,21 +405,6 @@ def test_NEUTER_snapping_palette_change_is_caught():
     assert "_xfadeT = 1" not in neut, "neutered build still arms the fade — wrong neuter"
 
 
-def test_time_rebake_keeps_the_identical_deckle_outline():
-    """A time-of-day re-bake changes only COLOUR. The torn outline is seeded from
-    rng(pal.seed ^ w*131+h) and the tint preserves `seed`, so the outline is
-    provably unchanged across a bucket shift. This is the premise that makes the
-    full-canvas clear unnecessary on a palette-only re-bake — pin it, because if
-    a future tint ever perturbed `seed` the clear would become genuinely
-    required and its absence would leave stale rim pixels."""
-    r = _run_outline([14, 2, 22])
-    a, b, c = r["outlines"]["14"], r["outlines"]["2"], r["outlines"]["22"]
-    assert a and len(a) >= 16, "no deckle outline captured"
-    assert a == b == c, (
-        "the deckle outline MOVED across a time-of-day re-bake — the tint is "
-        "perturbing the geometry seed, so the no-clear optimisation is unsafe")
-
-
 def test_time_rebake_issues_no_full_canvas_clear():
     """A palette-only re-bake must NOT request a full-canvas clear.
 
@@ -430,10 +415,11 @@ def test_time_rebake_issues_no_full_canvas_clear():
     composite before re-blitting. The two mechanisms raced and the flag landed a
     frame late.
 
-    The clear exists for when the outline genuinely MOVES (resize / scene
-    change). The outline is byte-identical across a time re-bake (see the test
-    above), so the correct fix is for the time-shift not to request one at all —
-    which also protects the pixel-cost property the DPR/clear work bought."""
+    The clear exists for when the geometry genuinely MOVES (resize / scene
+    change). A time re-bake changes COLOUR ONLY (the tint preserves `seed`, so
+    every dab lands byte-identically), so the correct fix is for the time-shift
+    not to request a clear at all — which also protects the pixel-cost property
+    the DPR/clear work bought."""
     r = _run_outline([14, 2])
     assert r["clearsOnTimeShift"] == 0, (
         f"a time-of-day re-bake requested {r['clearsOnTimeShift']} full-canvas "

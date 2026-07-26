@@ -206,7 +206,7 @@ def test_NEUTER_flat_fill_is_caught():
 
     This neuters the ENQUEUE step rather than one call site, because the baked
     scene legitimately paints dabs from several places (depth planes, the impasto
-    ridge/furrow pass, the deckle rim). Cutting one call site would leave the
+    ridge/furrow pass). Cutting one call site would leave the
     others painting and the guard would silently stop biting."""
     src = SCENE_JS.read_text()
     neut = src.replace("    arr.push(x, y, len, wid, ang);",
@@ -1164,53 +1164,54 @@ def test_NEUTER_missing_fg_canvas_css_is_caught():
         "fg-canvas rule survived the neuter — test would not bite"
 
 
-def test_bar_frame_is_irregular_hand_drawn_not_a_neat_rectangle():
-    """The tofu project bar's frame must be an IRREGULAR hand-drawn outline, not
-    a uniform rounded rectangle (owner: 'the border is too neat and rigid').
-    We assert the base .project-bar rule defines --bar-frame-radius with the
-    elliptical `h / v` form AND at least 3 distinct radius tokens (a uniform
-    `14px` or a single value would read as machine-perfect)."""
+def test_bar_frame_is_even_and_clean_not_a_wobbly_hand_drawn_outline():
+    """OWNER, 2026-07-26: the irregular hand-drawn border read as a wobbly,
+    unappealing outline. The frame must be an EVEN, single-value rounded
+    rectangle (no per-corner `h / v` elliptical form, no 3+ distinct radii).
+    We assert the base .project-bar rule defines --bar-frame-radius with NO `/`
+    and exactly ONE radius token, consumed as border-radius."""
     css = CSS.read_text()
     m = re.search(r'\[data-theme="tofu"\]\s*\.project-bar\{([^}]*)\}', css)
     assert m, "base tofu .project-bar rule not found"
     body = m.group(1)
     rm = re.search(r'--bar-frame-radius\s*:\s*([^;]+)', body)
-    assert rm, "the irregular --bar-frame-radius token is missing — frame is rigid again"
+    assert rm, "the --bar-frame-radius token is missing — the frame lost its var"
     val = rm.group(1)
-    assert '/' in val, (
-        "--bar-frame-radius must use the elliptical `h-radii / v-radii` form "
-        "(unequal horizontal/vertical radii are what bend the stroke into a "
-        f"hand-drawn wobble).\nvalue={val}")
+    assert '/' not in val, (
+        "--bar-frame-radius must be a single uniform radius — the per-corner "
+        f"`h / v` elliptical form is the wobbly hand-drawn outline the owner "
+        f"rejected.\nvalue={val}")
     tokens = set(re.findall(r'\d+px', val))
-    assert len(tokens) >= 3, (
-        f"--bar-frame-radius has too few distinct radii ({tokens}) — a uniform "
-        "corner reads as a neat rectangle, not a sketched frame.")
+    assert len(tokens) == 1, (
+        f"--bar-frame-radius must be one radius ({tokens}) — multiple distinct "
+        "radii are the wobbly hand-drawn outline the owner rejected.")
     assert 'border-radius:var(--bar-frame-radius)' in body.replace(' ', ''), \
         "the frame must consume --bar-frame-radius as its border-radius"
 
 
-def test_scene_clips_follow_the_irregular_frame():
-    """The painting must be cropped to the SAME wonky outline as the frame (not
-    a separate neat rect): the scene/fg canvases + full-body ground clips must
+def test_scene_clips_follow_the_even_frame():
+    """The painting must be cropped to the SAME rounded outline as the frame
+    (not a separate rect): the scene/fg canvases + full-body ground clips must
     reference --bar-frame-radius in their clip-path."""
     css = CSS.read_text()
     assert css.count('clip-path:inset(0 round var(--bar-frame-radius') >= 3, (
         "scene clip-paths no longer follow --bar-frame-radius — the painting "
-        "would be cropped to a neat rectangle inside the wonky frame.")
+        "would be cropped to a different outline than the frame.")
 
 
-def test_NEUTER_uniform_frame_radius_is_caught():
-    """NEUTER: collapse --bar-frame-radius to a single uniform value on a COPY →
-    the irregular-frame guard must fire, proving it is load-bearing."""
+def test_NEUTER_wobbly_frame_radius_is_caught():
+    """NEUTER: restore the wobbly per-corner `h / v` form on a COPY → the
+    even-frame guard must fire, proving it is load-bearing."""
     css = CSS.read_text()
-    poisoned = re.sub(r'(--bar-frame-radius\s*:\s*)[^;]+', r'\g<1>14px', css, count=1)
+    poisoned = re.sub(r'(--bar-frame-radius\s*:\s*)[^;]+',
+                      r'\g<1>15px 23px 16px 22px / 22px 16px 24px 15px', css, count=1)
     assert poisoned != css, "neuter did not rewrite --bar-frame-radius"
     m = re.search(r'\[data-theme="tofu"\]\s*\.project-bar\{([^}]*)\}', poisoned)
     rm = re.search(r'--bar-frame-radius\s*:\s*([^;]+)', m.group(1))
     val = rm.group(1)
-    # the guard's two irregularity checks must both fail on the uniform value
-    assert not ('/' in val and len(set(re.findall(r'\d+px', val))) >= 3), \
-        "neuter left the value still irregular — test would not bite"
+    # the guard's two evenness checks must both fail on the wobbly value
+    assert '/' in val and len(set(re.findall(r'\d+px', val))) >= 3, \
+        "neuter left the value still even — test would not bite"
 
 
 _LIGHT_HARNESS = r"""

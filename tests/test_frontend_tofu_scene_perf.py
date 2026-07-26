@@ -27,13 +27,14 @@ innocent-looking edit. So each is pinned here with a biting NEUTER:
      the quantity the rasterizer bills, not call count): the sun glow is a baked
      tile (O(h²), width-independent) instead of a full-canvas gradient fill; the
      fg clear is confined to its painted band; the bg full-canvas clear is gone
-     (the opaque blit covers it); the deckle margin is enforced by clip() instead
-     of a per-frame destination-out cut. These four were ~80% of the frame's
-     pixel budget yet only ONE call each, so a call-count test can never see them.
+     (the opaque blit covers it); the painting is FULL-BLEED (no canvas-side
+     margin cut/clip at all — the rounded-shell crop is a single CSS clip-path).
+     These were ~80% of the frame's pixel budget yet only ONE call each, so a
+     call-count test can never see them.
 
-Plus the DECKLE edge (the torn-paper silhouette), which is an art requirement
-the owner asked for explicitly ("the border could even be irregular") and which
-must not decay back into a plain rectangle.
+The painting used to be torn to a deckle (handmade-paper) edge; the owner
+rejected that look (2026-07-26: "the irregular outer border with a white
+background behind it is not appealing"), so the canvas is now full-bleed.
 
 Everything runs the REAL shipped module under node against a counting mock 2d
 context — no re-implementation.
@@ -390,14 +391,16 @@ def test_sun_glow_cost_is_width_independent():
 
 
 def test_no_full_canvas_overhead_pass_per_frame():
-    """The three removed overheads were all FULL-CANVAS passes that scaled with
-    width while adding nothing per pixel: a bg clear (the blit already covers),
-    a full-canvas additive glow fill (now a tile), and a full-canvas deckle cut
-    (now a clip). Assert none is present in a steady frame:
+    """The removed overheads were all FULL-CANVAS passes that scaled with width
+    while adding nothing per pixel: a bg clear (the blit already covers), a
+    full-canvas additive glow fill (now a tile), and a deckle cut/clip (now
+    GONE entirely — the painting is full-bleed). Assert none is present in a
+    steady frame:
       * the bg does NOT clear at all (its areaClear is 0);
       * the fg clears only its painted BAND, so its clear area is strictly less
         than one full canvas (w*h), never a full-canvas wipe;
-      * no even-odd destination-out cut on either live canvas.
+      * no even-odd destination-out cut and no deckle clip ANYWHERE (buffer or
+        live) — the margin-cutting machinery was removed with the torn edge.
     The dab pixel AREA is intentionally NOT asserted to plateau — the live-
     population budget widens surviving strokes to preserve painted area, so the
     grass on a wider bar is content, not overhead. What must NOT scale is the
@@ -414,9 +417,15 @@ def test_no_full_canvas_overhead_pass_per_frame():
     assert clear_css < full_css, (
         f"the clear area {clear_css:.0f} CSS px² is a FULL canvas wipe "
         f"({full_css}) — the band-confined clear regressed")
-    # no per-frame destination-out cut on the live canvases
-    assert r["bg"].get("deckleCuts", 0) == 0 and r["fg"].get("deckleCuts", 0) == 0, (
-        "a live canvas is still paying a full-canvas deckle cut every frame")
+    # no destination-out cut ANYWHERE (the deckle cut was removed, not moved)
+    for plane in ("bg", "fg", "buf"):
+        assert r[plane].get("deckleCuts", 0) == 0, (
+            f"{plane} is still paying a full-canvas destination-out cut — the "
+            f"torn deckle edge was removed; the painting must be full-bleed")
+    # and no deckle clip on the live canvases either (that machinery is gone)
+    assert r["bg"].get("clip", 0) == 0 and r["fg"].get("clip", 0) == 0, (
+        "a live canvas is still clipping to the removed deckle outline every "
+        "frame — the full-bleed painting must not clip at all in JS")
 
 
 def test_narrow_bar_is_not_thinned_by_the_caps():
@@ -529,30 +538,12 @@ def test_foreground_clear_is_confined_to_its_painted_band():
         "reverted to full-height) — the largest single pixel cost is back")
 
 
-def test_no_per_frame_fullcanvas_deckle_cut():
-    """The torn margin is enforced by CLIPPING (the margin is never painted),
-    not by re-cutting the composited frame. A per-frame `destination-out`
-    even-odd cut cost a w×h scan to erase a ~5px rim. The live canvases must
-    clip every frame and must NOT pay a full-canvas cut; only the buffer is cut,
-    once, at bake."""
-    r = _run_perf()
-    assert r["bg"].get("clip", 0) >= 1, "bg not clipped per frame"
-    assert r["fg"].get("clip", 0) >= 1, "fg not clipped per frame"
-    # No even-odd destination-out cut on either live canvas per frame:
-    assert r["bg"].get("deckleCuts", 0) == 0, \
-        "the bg frame is still paying a full-canvas destination-out cut every frame"
-    assert r["fg"].get("deckleCuts", 0) == 0, \
-        "the fg plane is still paying a full-canvas destination-out cut every frame"
-    # the one legitimate cut survives on the buffer at bake time
-    assert r["buf"].get("deckleCuts", 0) >= 1, "the buffer lost its one-time bake cut"
-
-
 def test_no_fullcanvas_clear_in_steady_state():
-    """The baked buffer is opaque inside the torn outline, so blitting it each
-    frame already overwrites the previous overlay — a full-canvas clearRect in
-    steady state is pure waste. One full clear is allowed ONLY on the first
-    frame after a re-bake (the outline moved); subsequent frames must not
-    clear the whole canvas."""
+    """The baked buffer is opaque over the whole canvas (full-bleed), so
+    blitting it each frame already overwrites the previous overlay — a
+    full-canvas clearRect in steady state is pure waste. One full clear is
+    allowed ONLY on the first frame after a re-bake (the geometry changed);
+    subsequent frames must not clear the whole canvas."""
     r = _run_perf()
     # steady state (after the t0 frame which absorbs the one-shot clear):
     # bg must not issue a full-canvas clearRect
@@ -579,69 +570,28 @@ def test_NEUTER_no_offscreen_park_is_caught():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-#  4. THE DECKLE EDGE — an irregular, torn silhouette, not a rectangle
+#  4. FULL-BLEED PAINTING — the torn deckle edge was removed (owner, 2026-07-26)
 # ══════════════════════════════════════════════════════════════════════════
 
-def test_painting_is_torn_to_an_irregular_outline():
-    """OWNER ASK — 'the border could even be irregular'. The painting is torn to
-    a DECKLE edge (the feathered rim of handmade paper). Per frame the live
-    canvases are CLIPPED to the seeded outline (the margin is never painted, so
-    never needs erasing); the buffer is cut once at bake. Assert the clip
-    happens, that the outline is a real polygon, and — the part that matters —
-    that its inward bite VARIES, because a constant bite is just a smaller
-    rectangle."""
-    r = _run_perf()
-    bg = r["bg"]
-    assert bg.get("clip", 0) >= 1, \
-        "the live frame is not clipped to the deckle outline — margin would refill"
-    pts = bg.get("clipOutline") or []
-    assert len(pts) >= 16, f"deckle outline is too coarse to read as torn: {len(pts)} points"
-    W, H = 900, 48
-    bites = [min(x, y, W - x, H - y) for x, y in pts]
-    variation = max(bites) - min(bites)
-    assert variation > 1.0, (
-        f"the outline's inward bite is nearly constant ({variation:.2f}px of "
-        f"variation) — that is a rounded rectangle, not a torn edge")
-    assert min(bites) >= 0, "the outline escaped the canvas box"
-
-
-def test_deckle_constrains_every_live_layer():
-    """Both live canvases must be torn by the SAME edge — by CLIPPING, so the
-    margin is never painted in the first place. The old mechanism re-cut the
-    composited frame with a full-canvas destination-out each frame; that cost a
-    w×h scan to erase a ~5px rim and was replaced by a clip. The buffer itself
-    is still cut ONCE at bake (where the outline is born)."""
-    r = _run_perf()
-    assert r["bg"].get("clip", 0) >= 1, "the composited frame is not clipped to the torn edge"
-    assert r["fg"].get("clip", 0) >= 1, "the foreground plane is not clipped to the torn edge"
-    # and the buffer must still be CUT once at bake, so the blit carries the torn silhouette
-    assert r["buf"].get("deckleCuts", 0) >= 1, \
-        "the baked buffer is no longer cut — the blit would paint a rectangle"
-
-
-def test_NEUTER_untorn_rectangle_is_caught():
-    """NEUTER: zero the bite amplitude → the outline collapses onto a uniform
-    inset (a rectangle), and the irregularity assertion must fail."""
+def test_painting_is_full_bleed_no_torn_edge():
+    """OWNER, 2026-07-26: 'the irregular outer border shape with a white
+    background behind it is not very appealing.' The deckle edge (a torn
+    silhouette + the bar's cream body showing through as a white margin) is
+    REMOVED — the painting must fill the canvas edge to edge, with the rounded
+    crop done once in CSS. So the source must carry NONE of the torn-edge
+    machinery, and the steady frame must do no deckle clip/cut at all."""
     src = SCENE_JS.read_text()
-    neut = src.replace("var DECKLE_BITE = 3.4;", "var DECKLE_BITE = 0;  /* NEUTER */", 1)
-    assert neut != src, "neuter did not match the deckle bite constant"
-    r = _run_perf(src=neut)
-    pts = r["bg"].get("clipOutline") or []
-    assert pts, "neutered build clipped nothing at all — wrong neuter"
-    W, H = 900, 48
-    bites = [min(x, y, W - x, H - y) for x, y in pts]
-    assert (max(bites) - min(bites)) <= 1.0, \
-        "neutered build still produced an irregular outline — the guard would not bite"
-
-
-def test_deckle_degrades_when_the_context_cannot_cut():
-    """The cut needs ctx.rect + fill('evenodd'). A context without them (an old
-    engine, or a reduced mock) must simply keep the plain rounded silhouette
-    rather than throwing — the scene degrades, it never breaks."""
-    src = SCENE_JS.read_text()
-    assert "if (!_deckle.length || !ctx.rect) return;" in src, (
-        "_cutDeckle lost its capability guard — a context without rect() would "
-        "throw on every frame")
+    for gone in ("_seedDeckle", "_cutDeckle", "_paintDeckleRim", "_clipDeckle",
+                 "DECKLE_BITE", "_deckle"):
+        assert gone not in src, (
+            f"the torn deckle edge is partially back ({gone}) — the painting "
+            f"must be full-bleed, cropped only by the CSS rounded-shell clip")
+    r = _run_perf(width=900)
+    assert r["bg"].get("clip", 0) == 0, "bg still clips to the removed deckle outline"
+    assert r["fg"].get("clip", 0) == 0, "fg still clips to the removed deckle outline"
+    for plane in ("bg", "fg", "buf"):
+        assert r[plane].get("deckleCuts", 0) == 0, \
+            f"{plane} still pays a deckle destination-out cut — the edge was removed"
 
 
 # ══════════════════════════════════════════════════════════════════════════

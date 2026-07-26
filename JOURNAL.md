@@ -1,6 +1,22 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续73) — 本地引擎端口自动发现落地:启动即扫 Ollama 11434 / vLLM 8000 / SGLang 30000,发现模型直接配好 provider(owner「templates 可以更主动检查用户的端口」;epic `pt_88d0b481feef47fd`;commit `30f0129f`,5 文件 +553/-2;新套件 **11/11**,相邻四环 **29/29**,collect **10227** 0 err)
+
+- **形态:** 新模块 `lib/llm_dispatch/autodiscover_local.py` + server.py 启动挂点(紧随 health_local)。启动后 5s 首扫、之后每 120s 周期扫(后启动的引擎/后 pull 的模型也能捡到)。
+- **复用而非重造:** 注册的就是**普通** `brand:'local'` provider(带 `engine` 标签)——从此 health_local 管漂移、dispatcher 管槽位、Settings 卡片原样渲染(官方引擎图标),零前端改动。发现走现成的 `discover_models`(自带 bare-origin `/v1` 兜底与 egress 闸)。
+- **四条护栏(全是实测语义):**
+  | 护栏 | 语义 |
+  |---|---|
+  | 只扫 loopback 三个固定端口 + `$OLLAMA_HOST` | 永不扫子网 |
+  | 关闭端口 ~1ms ECONNREFUSED,只记 DEBUG | 无引擎时零噪音零成本 |
+  | 幂等:端口已被**任一** provider 覆盖(含 localhost 各种拼写)即跳过 | 不与用户配置打架 |
+  | **删除不复活:** 删掉自动 provider → 端口进 `local_autodiscover.json` 的 dismissed 名单 | 消灭自动配置最经典的僵尸 bug |
+- **关键边界实测:** 引擎活着但零模型(没 pull)→ 不加也**不** dismiss(下轮重探,pull 后自动出现);单个候选炸异常不掩盖其他引擎;`TOFU_LOCAL_AUTODISCOVER=0` 一键关闭;前后端端口表有 parity 测试钉死(`WELL_KNOWN_ENGINES` ↔ `_LOCAL_ENGINE_PRESETS`)。
+- **给后人:** 自动写 `server_config.json` 必须「查重+落锁」双保险——sweep 外查一遍覆盖集,`update_json_atomic` mutator 内在锁下再查一遍(并发 Settings 保存不丢)。provider id 用确定性 `auto_<engine>_<port>`,状态文件丢失后重加撞 id 而非重复行。
+- **生效条件:** 代码改动,**需重启服务**;纯新增路径,不重启用旧行为无任何影响。
+
+### 2026-07-26(续64) — cache-cost A 收口:
 ### 2026-07-26(续64) — cache-cost A 收口:**owner 拍板「接受现状」,不问网关、不改客户端**(epic `pt_a475804a661042dd` 关票;零代码变更;charter v9)。owner 对 4 选 1 的答复 = **C**,并明确「只做 C+E 两票」——而 C(实测否决)、E(检测器槽键碰撞已修 `6f010b93`)均已收口,故 A 票按 owner 决策直接关闭。
 - **关闭即终局的含义:** opus-5 evaDaily 体缓存几乎不命中(主体轮仅 24.9% 命中到体,170 轮 wire 指纹实证字节+标记全同仍不读回,判归上游/网关翻译层)的问题**保持不修**,¥3.4k+/周 可省成本不追回。客户端断点策略维持现状,不做「缓存目标折进 system 尾部块」的改法。
 - **两条联动条款随本决策固化:** ①回退链(`fallback_model=kimi-k3` 不改)的前提「opus-5 回跳时无暖前缀可失」现在**固化成立**,回退链决策维持;②B 票(key 轮换粘性,已实测不做)的 opus-5 部分随之**彻底消解**。

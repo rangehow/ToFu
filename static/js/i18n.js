@@ -917,6 +917,7 @@ var _i18n = {
   'settings.tabNetwork': { zh: '网络', en: 'Network' },
   'settings.tabDevices': { zh: '设备', en: 'Devices' },
   'devices.agentsTitle': { zh: '在线代理', en: 'Agents' },
+  'devices.remoteGroup': { zh: '远程设备', en: 'Remote devices' },
   'devices.agentsDesc': { zh: '运行了 desktop agent 的机器会出现在这里;项目面板可把远程共享根挂为工作树。', en: 'Machines running the desktop agent appear here; the project panel can mount a remote share root as a worktree.' },
   'devices.tokensTitle': { zh: 'Bridge 令牌', en: 'Bridge tokens' },
   'devices.tokensDesc': { zh: 'agent 用令牌连接本服务器(请求头 X-Bridge-Secret)。令牌只颁发给你自己,命令只投递给你的设备。', en: 'Agents connect with a token (X-Bridge-Secret header). Tokens are minted for you only; commands are delivered to your devices only.' },

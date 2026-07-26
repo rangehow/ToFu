@@ -265,7 +265,7 @@ Body: {
 | **P1** ✅ | **Agent 项目命令集 + 安全网**(已落地 2026-07-26):`project_*` 七命令、share_roots 路径校验、snapshot-before-write、freshness 门(重读刷新令牌) | `lib/desktop_agent/_project.py`(新)、`_dispatch.py`、`config.py` | 越界路径全拒(含符号链接/兄弟前缀/绝对路径);快照可回滚;外部改动后写入被拒、重读后放行;`.tofu` 对项目工具不可见 |
 | **P2** ✅ | **run_command 平价**(已落地 2026-07-26):流式分片、进程树 kill、删除目标锁根、超时放宽 | `lib/desktop_agent/_exec.py`、`_project.py`、`_run.py`、`bridge.py`(流帧) | 长命令分片按 seq 稠密上行;kill 后子进程全灭;`rm -rf ~` 类被拦;30s+ 命令不再误杀 |
 | **P3** ✅ | **工具投影 + 执行路由**(已落地 2026-07-26):`ToolContext.project_remote`、`_handle_project_tool` 路由、`ToolSpec('desktop')` 补 `write_tools` 声明(关批准门洞) | `_spec.py`、`_build.py`、`handlers/project.py`、`lib/desktop/remote.py`(新) | 同名 schema 不变仅描述提示;远程 `write_file` 按 agent_id 寻址;总闸 off 字节不变;latch-clear 一次性;批准门洞闭合 |
-| **P4**(P4a ✅ 后端半 + P4b-1 ✅ Devices 页 2026-07-26 / P4b-2 选择器+流 UI 待) | **入口与前端**:每用户 bridge token ✅、poll 认证+用户作用域 ✅、`agent_run remote:` 绑定 ✅、Settings→Devices 页 ✅(agents 表 + 颁发/吊销,scope 化 DELETE 不借 admin)、**伪路径 `remote:<agent>:<root>` 复用 projectPath 持久化** ✅ / 项目选择器远程分组(P4b-2)、流帧 UI(P4b-2) | `agent_run.py`、`routes/desktop.py`、`bridge.py`、`remote.py`、`api_v1/desktop.py`、`settings/devices.js` ✅ / `project.js`、流渲染(P4b-2) | 后端链+Devices 页全绿;token 错/无 scope 即 401;跨用户 fail-closed;离线灰显(P4b-2) |
+| **P4**(P4a ✅ + P4b-1 ✅ + P4b-2a ✅ 选择器远程分组 2026-07-26 / P4b-2b 流帧 UI 待) | **入口与前端**:每用户 bridge token ✅、poll 认证+用户作用域 ✅、`agent_run remote:` 绑定 ✅、Settings→Devices 页 ✅(agents 表 + 颁发/吊销,scope 化 DELETE 不借 admin)、**伪路径 `remote:<agent>:<root>` 复用 projectPath 持久化** ✅ / 项目选择器远程分组(P4b-2)、流帧 UI(P4b-2) | `agent_run.py`、`routes/desktop.py`、`bridge.py`、`remote.py`、`api_v1/desktop.py`、`settings/devices.js` ✅ / `project.js`、流渲染(P4b-2) | 后端链+Devices 页全绿;token 错/无 scope 即 401;跨用户 fail-closed;离线灰显(P4b-2) |
 | **P5** | **Project Brain 集成**:远程根纳入 write_set 声明,多会话并发写同一本地项目时 dispatch 串行化 | `lib/conversations/`、board | 两会话同根 write_set 重叠 → 不同时 dispatch;不同根不互斥 |
 
 - **P0 落地注记(2026-07-26):** 注册帧/注册表/心跳/寻址谓词(`_deliverable`)/入队闸
@@ -332,6 +332,15 @@ Body: {
   `settings/devices.js` 入 `_BUNDLE_FILES` + core_panel 填充钩子;
   ④套件:后端 12 测(`test_remote_worktree_devices.py`)+ 前端 8 测
   (`test_frontend_devices_tab.py`,含 NEUTER 钩子承重 + jsdom 11 探针)。
+
+- **P4b-2a 落地注记(2026-07-26,选择器远程分组,拍板 6A 兑现):** ①伪路径短路:
+  `_restoreConvProject` 遇 `remote:` 会话**绝不调 setPaths**(服务器无法扫描,
+  调了即 400/误清——NEUTER 实证),渲染合成 bar 态,徽章显示 `agent:root`;
+  ②目录浏览弹窗顶部「远程设备」分组:在线 agent 共享根一键
+  `mpAddBrowsedPath('remote:…')`(与本地文件夹同一套工作区/保存/持久化机制),
+  离线 agent 灰显不可加,无 agent 整段隐藏;③套件
+  `tests/test_frontend_remote_picker.py` 5 测(装配 3 钉 + jsdom 13 探针 + NEUTER)。
+  流帧 UI(远程 run_command 实时输出)属 P4b-2b。
 
 工作量估算:P0 ~250 行 / P1 ~400 行 / P2 ~200 行 / P3 ~150 行 / P4 ~300 行+前端 / P5 ~80 行,
 全部为薄接缝改动,无新框架。

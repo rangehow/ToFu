@@ -231,6 +231,36 @@ function _getConvProjectPath(conv) {
   return (conv && conv.projectPath) || "";
 }
 
+/* RWA P4b-2a:伪路径约定 — conv.projectPath = 'remote:<agent_id>:<root>'
+   表示项目是一棵远程工作树(docs/REMOTE_WORKTREE_DESIGN.md §5 P4)。
+   服务器 fs 上没有这个路径:任何服务器侧项目机制(setPaths/scan)都
+   不得碰它,工具执行走 desktop bridge 路由(cfg['project_remote'])。 */
+function _isRemotePath(p) {
+  return typeof p === 'string' && p.indexOf('remote:') === 0
+    && p.slice(7).indexOf(':') > 0;
+}
+
+/* 伪路径会话的项目栏合成态:不调 setPaths(服务器无法扫描),
+   只渲染 active bar + 徽章,身份仍保留完整伪路径。 */
+function _applyRemoteProjectState(conv, pseudo) {
+  _stopScanPoll();
+  projectState = {
+    active: true,
+    path: pseudo,
+    fileCount: 0,
+    dirCount: 0,
+    totalSize: 0,
+    languages: {},
+    scanning: false,
+    scanProgress: "",
+    scanDetail: "",
+    scannedAt: Date.now(),
+    extraRoots: [],
+  };
+  debugLog("Remote worktree active for conversation: " + pseudo, "info");
+  _updateProjectUI();
+}
+
 function _clearProjectStateLocal() {
   // Reset local projectState without touching server — used when switching to a conv with no project
   // ★ BUG FIX: Stop background polls BEFORE clearing state.
@@ -259,6 +289,12 @@ async function _restoreConvProject(conv) {
   if (!savedPath) {
     // This conversation has no project — clear UI
     _clearProjectStateLocal();
+    return;
+  }
+  // RWA: remote worktree pseudo-path — server-side project machinery
+  // (setPaths/scan) must never touch it; render the synthetic bar state.
+  if (_isRemotePath(savedPath)) {
+    _applyRemoteProjectState(conv, savedPath);
     return;
   }
   // ★ Gather all saved paths (primary + extras) from the conversation
@@ -1170,7 +1206,9 @@ function _updateProjectUI() {
   _projectBarFolders = _barFolders;
   const _lockGlyph = '<svg class="folder-badge-lock" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
   const badges = _barFolders.map(({ path: p, readOnly }, i) => {
-    const short = p.split('/').filter(Boolean).pop() || p;
+    const short = _isRemotePath(p)
+      ? p.slice('remote:'.length)
+      : (p.split('/').filter(Boolean).pop() || p);
     const cls = 'folder-badge' + (readOnly ? ' folder-badge-ro' : '');
     const tip = escapeHtml(p) + (readOnly ? ' (read-only — click to allow edits)' : ' (writable — click to make read-only)');
     return `<span class="${cls}" title="${tip}" onclick="toggleProjectBarReadOnly(${i}, event)">${readOnly ? _lockGlyph : ''}${escapeHtml(short)}</span>`;
@@ -1395,6 +1433,7 @@ async function browseDirectory(path) {
   const listEl = document.getElementById("browseList");
   listEl.innerHTML =
     '<div class="fb-state"><div class="fb-state-spinner"></div><span>Loading…</span></div>';
+  _renderRemoteDevicesSection();
   try {
     const data = await Api.project.browse(path, _browseState.showHidden);
     if (!data) {
@@ -1519,6 +1558,58 @@ function mpAddBrowsedPath(path) {
     _mpRenderTags();
     browseDirectory(_browseState.path);
   }
+}
+
+/* RWA P4b-2a(拍板 6A):目录浏览弹窗顶部「远程设备」分组。
+   在线 agent 的每个共享根一行,点 + 把伪路径加入工作区
+   (与本地文件夹同一套 _mpFolders/保存/持久化机制);离线 agent 灰显、
+   不可加。无 agent 时整段隐藏(本地使用零干扰)。 */
+async function _renderRemoteDevicesSection() {
+  const sec = document.getElementById('remoteDevicesSection');
+  if (!sec || typeof Api === 'undefined' || !Api.desktop) return;
+  let data = null;
+  try {
+    data = await Api.desktop.devices();
+  } catch (e) {
+    data = null;
+  }
+  const agents = (data && data.agents) || [];
+  if (!agents.length) {
+    sec.innerHTML = '';
+    sec.style.display = 'none';
+    return;
+  }
+  let html = '<div class="remote-devices-title">' +
+    escapeHtml(t('devices.remoteGroup')) + '</div>';
+  agents.forEach(function (a) {
+    const roots = a.share_roots || [];
+    const online = !!a.online;
+    html += '<div class="remote-agent-row' +
+      (online ? '' : ' remote-agent-offline') + '">' +
+      '<span class="remote-agent-name">' +
+      (online ? '● ' : '○ ') + escapeHtml(a.name || a.agent_id) +
+      ' <span class="stg-dim">' + escapeHtml(a.platform || '') + '</span></span>';
+    roots.forEach(function (r) {
+      const pseudo = 'remote:' + a.agent_id + ':' + (r.name || r.path);
+      html += '<span class="remote-root-row">' +
+        '<span class="remote-root-name">' +
+        escapeHtml(r.name || r.path) + '</span>';
+      if (online) {
+        html += '<button class="remote-root-add" data-pseudo="' +
+          escapeHtml(pseudo) + '" title="' + escapeHtml(pseudo) + '">+</button>';
+      }
+      html += '</span>';
+    });
+    html += '</div>';
+  });
+  sec.innerHTML = html;
+  sec.style.display = '';
+  sec.querySelectorAll('.remote-root-add').forEach(function (btn) {
+    btn.onclick = function (ev) {
+      ev.stopPropagation();
+      mpAddBrowsedPath(btn.getAttribute('data-pseudo'));
+    };
+  });
 }
 
 function browseParent() {

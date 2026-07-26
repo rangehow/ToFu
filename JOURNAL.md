@@ -1,6 +1,12 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续30) — RWA P4b-2a 落地:项目选择器「远程设备」分组 + 伪路径 bar 短路(commit 见下,6 文件;新套件 5 测含 NEUTER + jsdom 13 探针,project 前端族八环 **62/62**,collect **9952** 0 err,bundle 冒烟过)
+- **拍板 6A 兑现:** 目录浏览弹窗顶部「远程设备」分组——在线 agent 的每个共享根一行,点 + 经 `mpAddBrowsedPath('remote:…')` 进入**与本地文件夹同一套**工作区/保存/持久化机制;离线 agent 灰显不可加;无 agent 整段隐藏(本地使用零干扰)。用户旅程就此闭环:装 agent → Devices 页颁 token → 弹窗挂远程根 → Studio 直改本地代码。
+- **伪路径 bar 短路(本批的承重安全闸):** `_restoreConvProject` 遇 `remote:` 会话**绝不调 `Api.project.setPaths`**——服务器 fs 上没有这个路径,调了就是 400 + 误清 conv.projectPath 的真实 bug 形态;改渲染合成 bar 态(徽章显示 `agent:root`,title 保留完整伪路径身份)。**NEUTER 实证:** 摘掉短路 → setPaths 拿着伪路径直奔服务器(咬)。
+- **过程(如实):** ①jsdom harness 第三个坑——eval'd 文件的顶层绑定(indirect eval)挂在 **node global** 而非 jsdom window,我的 `window.projectState=` 播种一直是空操作,真路径一读就 ReferenceError;改经 setup `globals`(双挂)播种;②又双叒 min_pass 数错(13 写成 14);③NEUTER 测试把 harness 体写进了已关闭的句柄(`fh`/`hf` 笔误)。
+- **git 纪律(升级版首次执行):** 全部验证(62 环 + collect + bundle)**先于** `git add` 完成,staged 全表核实恰好 6 文件后立即提交,窗口归零。
+
 ### 2026-07-26(续29) — Opus 5 收尾:两个 beta 用**生产数据**判决,`mid-conversation-tool-changes` 判定 **WONTFIX**(零代码变更;charter v3;epic `pt_aa9583af0e124322` 收口)
 - **本轮是自主派发接的票,任务是「原生线有流量后再评估」。先复核闸门:`data/config/oauth/` 实测仍是 0 个 token 文件**,`oauth_claude` 虽 enabled 但发不出请求。按老路子这里应该再挂一次 human-gated 然后收工 —— 但那样就白跑一轮。于是换了个问法:**这两个 beta 到底值不值得等?**
 - **`mid-conversation-tool-changes` 的前提被实测推翻(本轮唯一有价值的产出):** 票里写「Tofu 每轮按 profile/项目态增删工具集,轮间工具变动会废掉整个提示缓存前缀」。这条听起来很可信,而且代码里**确实有**按 profile 装配工具的逻辑。但它是**推导**出来的,不是测出来的。

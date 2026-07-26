@@ -72,8 +72,27 @@ def init_db(_new_connection):
         #    fast-path so a converged DB still heals): re-key the paper
         #    identity fork — reports saved under hash(strip(text)) vs library
         #    hash(raw) (epic pt_c9a103fe). No-op once flagged in schema_meta.
-        from lib.paper.hash_backfill import backfill_paper_hash_canonical
-        backfill_paper_hash_canonical(conn)
+        #
+        # ★ ISOLATED from DDL (pt_2a8aed4d). This import is the ONLY edge from
+        #    schema init into the lib.paper → LLM/swarm chain: importing
+        #    lib.paper.hash_backfill runs lib/paper/__init__.py (an eager
+        #    barrel) which transitively loads the entire LLM-dispatch + swarm
+        #    stack. On 2026-07-26 a single merge-conflict marker in
+        #    lib/llm_sanitize/_gateway.py therefore made init_db raise a
+        #    SyntaxError and abort ALL DDL — crashing boot and leaving a serving
+        #    process answering requests against a schema-less DB for 22 min.
+        #    A DATA-heal step must never be able to abort schema initialisation:
+        #    it is idempotent and re-runs on the next boot, so on ANY failure
+        #    (import error / a syntax error in the paper chain / a backfill
+        #    runtime error) we log at ERROR and CONTINUE with DDL. Schema init
+        #    is a correctness contract; data heal is not.
+        try:
+            from lib.paper.hash_backfill import backfill_paper_hash_canonical
+            backfill_paper_hash_canonical(conn)
+        except Exception as e:
+            logger.error('[DB] paper hash backfill failed — schema init continues '
+                         '(the idempotent heal re-runs on next boot): %s', e,
+                         exc_info=True)
 
         # ── Fast path: version AND optional-domain set both unchanged.
         #    The domain set is part of the cache key so enabling a new domain

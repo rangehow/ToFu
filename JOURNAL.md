@@ -1,6 +1,13 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续83) — pt_a182d5bd 收口:SyncDrift STALLED ×716/天 = **busy-lag 设计内误报**,rev 比对加忙碌判别(commit `9e2757ee`,2 文件 +65;新测试 8/8 含 failing-first A/B + NEUTER,conv_state 全族 **113+53**)
+
+- **票面预置的判定门(先做再修)答案是:是误报。** 三证据:①`_serverRev` 全部 15 个写入点(sync PUT/拉取/notify 采纳)**没有一条在 SSE 流内**——流式期间客户端 rev 冻结是刻意的,流末 sync PUT 才收敛;②服务端每 5s checkpoint 推 rev,于是「client 冻结 + server 爬升 ≥180s」精确等于一条健康的生成中会话;③STALLED 样本(ms1ulrcz/ms1rz4b2/ms1utt84 + 高频榜 ms1krgol/ms1uojtu/ms1h9u91)**当时全部有 running task**。
+- **tracker 的「moving vs frozen」判别为什么失效:** 它只看两侧值动不动,无法区分「故意冻结(忙碌)」和「故障冻结(丢帧)」——但**服务端注册表知道谁忙**。修法:sync_digest 在 `server_tids` 非空时跳过 rev 比对(task_ids 维度已覆盖忙碌通道的收敛),rev 维度只留给 IDLE 会话(真·丢帧洞在那里仍有信号)。副产品:每个忙碌会话每轮省一次 SELECT。
+- **「STALLED 时主动拉取」补偿暂不落码:** 判别上线后若 IDLE STALLED 仍现身日志,才证明需要补偿通道——先让生产数据说话(charter:不为未验证的模式造机器)。重启后观察 logs/error.log。
+- **方法论增量(给后人):** 「客户端 frozen」类告警的归因第一步是查**该值按设计该不该动**——digest 作者早已为 `_needsLoad` 背景会话排过同样的雷(bodyIsStale→rev=null),忙碌会话是同一形状的另一半。
+
 ### 2026-07-26(续82) — pt_3cd6cd48 主体收口:P2/P3 批 9/10 落地(commit `3214a2da`,10 文件 +325/-21;新套件 **15/15 含 NEUTER×4**,直接命中环 6 套件 **48+23 全绿**;⑧ 挂 sibling path-hold)
 
 - **竞态五连的共同形状——「await 之后必须重验世界」:** ①conv_sync_push 的 live 守卫只在 GET 前查一次(补 await 后重查);②podcast/video 切论文无 stale 检查(initHash/genHash 双闸);③podcast/video Abort 瞬间 in-flight poll 复活状态(tid 捕获+await 后比对)。**教训:JS 单线程不等于无竞态——await 就是抢占点,守卫写在 await 前等于没写。**

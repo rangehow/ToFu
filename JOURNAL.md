@@ -1,6 +1,23 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续12) — 项目栏画面「极致动画优化」:每帧成本从 O(宽度) 压成 O(1),省下的预算全花在厚涂与撕纸边(2 commit:`c83513f7` 场景 6 文件 +794/-74 / `5721093c` 宠物 2 文件 +58/-1;新套件 16/16 含 **NEUTER×5 全咬 + 宠物闸 A/B 实证**,五套件 **152/152**,collect **9380** 0 err;顺手关掉看板 `pt_5f4f2466`)
+- **owner 诉求:** 「宠物和背景做极致动画优化,要非常好看精致的艺术风格但不吃性能,喜欢有创意的设计,比如这个 bar 的边框甚至可以不规则。」
+- **先量再改(不猜):** 写了一个把**每个 canvas 调用都计数**的探针跑真模块 —— 每个笔触要 9 次 canvas 调用 + **一次独立光栅化 flush**;1400px 宽时**每帧 2025 个笔触 = 2025 次 flush**,而且随窗口变宽**无上限增长**,还是按显示器满刷新率画、栏子滚出视口也照画。
+- **四刀,画面一个像素不改:**
+  | 刀 | 病根 | 实测 |
+  |---|---|---|
+  | ①笔触批处理 | `ellipse()` **本来就带旋转参数**,那套 save/translate/rotate/restore 纯属浪费;按 (颜色,透明度桶) 归并成一路径一填充 | 1400px 下 `fill()` **2025 → 180**,少 11 倍 flush |
+  | ②活体population 封顶 | 活体图元**每帧重算**,却按**面积**播种 → 越宽永久越贵;封顶 + 幸存者按 √(想要/封顶) 加宽以守住**painted area** | 每帧调用 900→1400px 由 3348→4790 变成 **3108→3380(平台化)** |
+  | ③帧率节流 + 离屏停摆 | 慢天气动画没必要跟满 vsync;`IntersectionObserver` 一出视口**整条 rAF 链停掉** | 60Hz 下只在一部分 tick 落笔 |
+  | ④预算再投资 | 省下的钱花在**烘焙缓冲**(每帧零成本):密度 ×1.85 + **厚涂 pass**(少数笔触配一对垂直于笔向的高光/暗部薄片) | 场地从「印刷的椭圆」变成「侧光下的真颜料」 |
+- **排序契约(这刀最容易翻车的地方):** 批处理会重排绘制顺序,而**深度平面顺序正是大气透视的命根**。做法:key 表保持**首次出现顺序** + **每个图层缝都 flush**,于是平面间顺序逐字节不变,只有**同图层内同色同透明度**的笔触可能互换 —— 在一片互相叠压的半透明同色笔触里不可见。另外队列不持有 save/restore,**flush 完必须把 globalAlpha 交还 1**,否则下一次 blit 会被上一个桶的透明度染淡。
+- **不规则边框 = 真·撕纸边(deckle):** 原来的「不规则」只是四角半径不同的**圆角矩形**,再歪也是机器画的。现在把画面**裁成手工纸的毛边**:与场景同一 PRNG 播种(每个场景/尺寸稳定,但每条 bar 撕得都不一样),两个八度抖动(慢波 + 细毛刺,单八度会变成锯齿),再沿内缘补一圈纤维状高光。**实测 60 个轮廓点、咬入量变化 3.2px**。刻意裁在 **canvas 上而不是 `.project-bar` 上** —— 后者会连宠物那个**故意探出栏沿**的气泡和外框投影一起裁掉;裁画面则让 bar 自己的奶油底色从毛边透出来,读作「毛边纸裱在卡纸上」。
+- **顺手根修看板红票 `pt_5f4f2466`(sky 近景面),不是调阈值:** 探针把它变成可测事实 —— 近景面画的是 `#F2CAA1`,而天空渐变底色**就是 `#F2CFB4`**,**它和身后那面墙同色**,所以根本无物可看;而历次「调暗一点」的修法必然撞回 owner 否掉的「脏边框」。明亮晨空**唯一有余量的方向是更亮**,于是给它一片**被太阳照亮的云堤**让猫趟过去:colorΔ **0.87 → 6.9**(闸 3.5),且该带是**变亮**(-9.1 luma)—— 一个由光构成的面,物理上不可能退化成暗边。
+- **宠物侧一个真浪费:** `_place()` 每帧无条件写 `--bar-scene-x`,但**唯一读它的**是 SVG 地面 `::after` 的 background-position,而 canvas 一活该 `::after` 就是 `display:none`(常态)。等于每帧作废一次整条 bar 的自定义属性继承,去滚一个**根本不渲染**的盒子。已按 `data-scene-canvas` 门控;属性仍为无 JS/无 canvas 兜底保留。
+- **验证:** 新套件 `test_frontend_tofu_scene_perf.py` 16 测,**5 个 NEUTER 逐一实证会咬**(取消批处理 / 拆掉封顶 / 关掉节流 / 摘掉离屏停摆 / 把撕边咬入量归零);宠物那条**用 A/B 实证**(把 `_place()` 改回无条件写 → 翻红,改回 → 转绿)。三个 canvas 录制器改到批处理约定(几何改由 ellipse 参数携带);`test_NEUTER_flat_fill` 改为**neuter 入队而非某一个调用点** —— 烘焙场景现在合法地从多处画笔触(深度平面/厚涂/毛边),只砍一处会让守卫**静默失效**。
+- **共享树纪律:** styles.css 里混着 sibling 的 project-brain 改动,按 hunk 切分**只暂存我那 8 行**;第二刀 `git add` 时发现 sibling 已先暂存了 3 个文件,靠 commit pathspec 隔离,`git show --stat` 逐笔核实 —— 我的两个 commit 分别恰好 6 / 2 文件,sibling 的暂存原样留在盘上。
+
 ### 2026-07-26(续11) — 身份闸门收敛成单一谓词:owner 打脸「三份拷贝」的理由是假的(commit `3470255a`,4 文件 +386/-193;套件 8/8 含**逐委托点 NEUTER×3**,SSOT 全环 **90/90**,collect **9373** 0 err)
 - **owner 当场证伪了我给拷贝找的理由。** 上一刀(`40bc2992`)我把 4 条规则的身份谓词**逐处归一了三遍**,理由写的是「它们在 bundle 里跑在 reducer 之前,调不到」。owner 实测 `_BUNDLE_FILES` 次序:`current_user` 13 → **`conv_state_reducer` 16** → `cross_tab_sync` 18 → `conv_sync_push` 113 —— **reducer 在最前面**;而且这谓词是**帧到达时**才调用,那时所有模块早加载完了。**根本不存在任何次序约束**。三份拷贝一分钱没买到,只买来三处漂移机会。
 - **收敛:** `_frameIsOurs` 成为唯一实现,三处改成 `typeof window._frameIsOurs === "function" && !window._frameIsOurs(frame.userId)` 委托。**fail-open**(取不到谓词就接受)——与今天 pre-identity 语义一致;fail-closed 会静默锁死跨设备同步,比不设闸更糟。附带收益:三份拷贝都缺 reducer 的 `typeof window` 守卫,委托后**自动继承**,不用各自再写一遍。

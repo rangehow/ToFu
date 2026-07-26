@@ -839,3 +839,10 @@
 - **顺手收口:** 后两个文件是兄弟会话落地后留下的棘轮红(`13 passed 1 failed` 基线),豁免后 ratchet **14/14 全绿**——棘轮恢复「新增无闸裸跑者自动咬人」的单调功能。
 - **证据:** ratchet 14/14;行为探针 `TOFU_DB_BACKEND=postgres + guard_standalone_db` → 解析为 `sqlite @ /tmp/tofu-standalone-*/tofu-test.db`(与套件内 double-neuter 子进程探针互为因果两端);`test_stream_phase_i18n.py` 裸跑(ambient postgres 被强制转 sqlite)13/13;pytest 回归 stream_phase_i18n 15/15、api_v1 两套件 19/19。
 - **边界(诚实记录):** 棘轮只管「有 `__main__` 的裸跑者」;纯 pytest 收集的测试由 conftest 强制 sqlite + `_assert_test_database` 兜底,不在本刀范围。SQLite 回落路径(PG 不可达→`data/tofu.db`)的污染由同一道闸覆盖——guard 在 DB 解析**之前**强制后端+路径,与走哪条回落无关。
+
+### 2026-07-26(续70) — 播客剧本阶段流式化:「正在撰写口播稿…」从 1-3 分钟黑盒变为实测进度(commit `305a8088`,4 文件 +196/-22;script 22/22、frontend 两套件全绿、api 14 + media_ux 24 全绿、i18n 三守卫全绿)
+- **用户可见缺陷(第二刀,第一刀是 f4f158ce 的活性指示器修复):** 剧本阶段的卡片整段 1-3 分钟只有一行静态标签——不是「卡死感」,是**真黑盒**:`dispatch_chat` 全程阻塞,期间不存在任何可上报的中间量,前端想显示真进度也没有原料。
+- **修法(实测数字,不发明百分比):** `_script.py` 的剧本遍改走 `dispatch_stream`,从 `on_content` 增量计数——`chars`=已产出文本长度、`segments`=文本中 `"section"` 键出现次数(即已开写的小节数),每 2s 一节拍发 `progress` 事件(节拍常数 `_STREAM_EVENT_MIN_INTERVAL`,把游标回放的事件日志控制在每遍 ~90 行)。`char_target` 直接取 prompt **实际指示**的长度目标(`MODE_LENGTH_ZH/EN[mode][1]`,en 按 ~6 字符/词换算成同一量纲)——分子分母都是真实存在的数,比例自然诚实。attempt 重试时 `on_attempt_restart` 清零重报,前端**赋值不累计**,杜绝重发文本把计数翻倍。
+- **三处修订遍同路径覆盖:** validator 反馈修订、critic 反馈修订、JSON 修复重试都带 `step='revise'` 走同一流式上报;前端在修订遍追加「修订中」前缀标签。解析刻意从 `buf` 拼接而非返回值(`dispatch_stream` 返回的是 message dict),保证解析文本与计数文本逐字节同一。
+- **测试:** mock 从 `dispatch_chat` 换 `dispatch_stream`(两瓣 chunk 回放,生产同路径);新增流式进度用例 monkeypatch `_STREAM_EVENT_MIN_INTERVAL=0`,断言节拍事件的 measured chars/segments 递增、restart 清零、终值与产出一致。既有 22 项 script 层守卫(注入围栏/数字溯源/时长带/critic 闭环)逐字未动全绿。
+- **共享树纪律:** sibling ms1krgol 的续30 条目当时悬而未提交,本条先以其字节备份落库、提交后原样还回工作树(其未提交 diff 逐字节不变),规避续24 式卷入。

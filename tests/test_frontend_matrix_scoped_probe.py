@@ -59,10 +59,16 @@ def _node_available() -> bool:
 _HARNESS = r"""
 const fs = require('fs');
 global.window = global;
-global.addEventListener = function () {};           // resize hook registered at eval
+var _resizeHandlers = [];
+global.addEventListener = function (ev, fn) {       // resize hook registered at eval
+  if (ev === 'resize') _resizeHandlers.push(fn);
+};
 global.document = {
   querySelector: function () { return null; },
   querySelectorAll: function () { return []; },
+  // The 1.5s probe-poll tick probes for an open settings page; null =
+  // 'closed' makes it delete its own timer instead of crashing the tail.
+  getElementById: function () { return null; },
 };
 global.t = function (k) { return k; };
 global.escapeHtml = function (s) {
@@ -191,10 +197,9 @@ check('concurrent_scope_refused', _postedBodies.length === 0);
 _stgMatrixProbe[0].status = 'done';
 // Coupled fake: the scroll container's clientWidth tracks the panel class
 // (narrow 400 / wide 1180) and scrollWidth = max(content, clientWidth) —
-// the coupling a real browser has. CONTENT_W=1000 fits the wide panel but
+// the coupling a real browser has. Content 1000 fits the wide panel but
 // overflows the narrow one: exactly the 3-column flicker shape.
 const NARROW_W = 400, WIDE_W = 1180;
-let CONTENT_W = 1000;
 const ops = [];
 const fakePanel = { _wide: false, style: {} };
 Object.defineProperty(fakePanel.style, 'transition', {
@@ -209,16 +214,28 @@ fakePanel.classList = {
 Object.defineProperty(fakePanel, 'offsetWidth', {
   get: function () { ops.push('reflow'); return fakePanel._wide ? WIDE_W : NARROW_W; },
 });
-const fakeScroll = {};
-Object.defineProperty(fakeScroll, 'clientWidth', {
-  get: function () { return fakePanel._wide ? WIDE_W : NARROW_W; },
-});
-Object.defineProperty(fakeScroll, 'scrollWidth', {
-  get: function () { return Math.max(CONTENT_W, fakePanel._wide ? WIDE_W : NARROW_W); },
-});
-let fakeScrolls = [fakeScroll];
+// Element factory. In the real browser matrix content ONLY changes through a
+// full `_renderProvidersTab` rebuild, which returns a brand-new scroll element
+// — so a content change is modelled here as a NEW element, and a settled
+// re-fit (no re-render) keeps the SAME one. That identity is the fit's only
+// truthful content signal: scrollWidth saturates to the panel width once wide.
+function makeScroll(contentW) {
+  const el = { _contentW: contentW };
+  Object.defineProperty(el, 'clientWidth', {
+    get: function () { return fakePanel._wide ? WIDE_W : NARROW_W; },
+  });
+  Object.defineProperty(el, 'scrollWidth', {
+    get: function () { return Math.max(el._contentW, fakePanel._wide ? WIDE_W : NARROW_W); },
+  });
+  return el;
+}
+let fakeScrolls = [];
 global.document.querySelector = function (sel) {
-  return sel === '.modal.settings-panel' ? fakePanel : null;
+  if (sel === '.modal.settings-panel') return fakePanel;
+  // The resize handler's deferred re-fit gates on this compound selector —
+  // truthy exactly when a matrix is open. Mirror it from the scroll list.
+  if (sel === '.modal.settings-panel .stg-matrix-scroll') return fakeScrolls[0] || null;
+  return null;
 };
 global.document.querySelectorAll = function (sel) {
   return sel === '.stg-matrix-scroll' ? fakeScrolls : [];
@@ -226,17 +243,33 @@ global.document.querySelectorAll = function (sel) {
 
 // 1) First open (panel narrow, content overflows) → widen. The transition
 //    is restored BEFORE the class change so the single widen still animates.
+fakeScrolls = [makeScroll(1000)];
 ops.length = 0;
 _fitMatrixPanelWidth();
 check('overflowing_matrix_widens_panel', fakePanel._wide === true);
 check('widen_edge_ops',
       ops.join('|') === 't:suspend|remove|t:restore|toggle:true');
 
-// 2) Re-fit with the panel ALREADY wide (probe-resume re-render / 1.5s
-//    poll / tab switch): at the wide width the content FITS — the old code
-//    measured there and shrank the panel right back (expand→narrow
-//    flicker). The verdict must come from the DEFAULT width → stays wide,
-//    applied with the transition suspended so nothing re-animates.
+// 2) Settled re-fit (SAME element, no re-render) — a true no-op. The owner's
+//    screenshot shows a SETTLED grid with no probe in flight, yet the panel
+//    still oscillates: the driver is re-entry, not the probe poll. The fit
+//    must become a fixpoint that costs ZERO DOM writes once settled, so EVERY
+//    periodic caller (probe poll, tab switch, the resize echo) goes quiet.
+ops.length = 0;
+_fitMatrixPanelWidth();
+check('settled_refit_writes_nothing', ops.length === 0);
+check('settled_refit_keeps_wide', fakePanel._wide === true);
+const fitBefore = window.__fitCount, workBefore = window.__fitWork;
+_fitMatrixPanelWidth();
+check('settled_refit_counted_but_no_work',
+      window.__fitCount === fitBefore + 1 && window.__fitWork === workBefore);
+
+// 2b) Content re-render while ALREADY wide (NEW element, still overflowing):
+//     the full path runs and must KEEP the panel wide — measuring at the
+//     widened width used to read "no overflow" and shrink the panel right
+//     back (the expand→narrow flicker). Verdict comes from the DEFAULT width,
+//     applied with the transition suspended so nothing re-animates.
+fakeScrolls = [makeScroll(1000)];
 ops.length = 0;
 _fitMatrixPanelWidth();
 check('refit_while_wide_stays_wide', fakePanel._wide === true);
@@ -251,8 +284,9 @@ check('stay_wide_commits_before_transition_restored',
       ops.indexOf('reflow') >= 0 &&
       ops.indexOf('reflow') < ops.indexOf('t:restore'));
 
-// 3) Content shrinks to fit the narrow panel → panel unwidens.
-CONTENT_W = 300;
+// 3) Content shrinks to fit the narrow panel (NEW element) → panel unwidens.
+//    Proves the memo does NOT freeze the panel at a stale wide verdict.
+fakeScrolls = [makeScroll(300)];
 ops.length = 0;
 _fitMatrixPanelWidth();
 check('fitting_matrix_unwidens_panel', fakePanel._wide === false);
@@ -264,8 +298,67 @@ fakeScrolls = [{ clientWidth: 0, scrollWidth: 2000 }];
 _fitMatrixPanelWidth();
 check('hidden_matrix_never_widens', fakePanel._wide === false);
 
-console.log(out.join('\n'));
-process.exit(0);
+// ── RESIZE SELF-FEED: our own width change must not bounce back ───────
+check('resize_handler_registered', _resizeHandlers.length === 1);
+fakeScrolls = [makeScroll(1000)];
+_fitMatrixPanelWidth();                       // widen; guard now held
+check('selffeed_precondition_wide', fakePanel._wide === true);
+const echoBefore = window.__resizeEchoDropped || 0;
+_resizeHandlers[0]();                         // the scrollbar-toggle echo
+check('resize_echo_dropped_while_applying',
+      (window.__resizeEchoDropped || 0) === echoBefore + 1);
+check('resize_events_counted', window.__resizeCount >= 1);
+
+// ── LATE RESIZE ECHO: the 250ms applying-flag only guards echoes delivered
+//    promptly. Event-loop jank (this project logs 5-10s LoopWatch stalls)
+//    can deliver our own scrollbar-toggle echo AFTER the flag expires —
+//    then the idempotence memo is the ONLY thing between the echo and
+//    another mutation cycle. Pin that terminator with real timers. ──
+function _sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+(async function() {
+  // A) Late echo, unchanged inputs (same elements, same vw): the debounced
+  //    re-fit MUST actually run (proves the flag is no longer doing the
+  //    work) and MUST be absorbed by the memo — zero DOM writes, fitWork
+  //    flat.
+  await _sleep(350);                             // guard from the widen above expired
+  const fitA = window.__fitCount, workA = window.__fitWork;
+  ops.length = 0;
+  _resizeHandlers[0]();                          // late echo, inputs unchanged
+  await _sleep(250);                             // 180ms debounce has fired
+  check('late_echo_reroutes_into_fit',
+        window.__fitCount === fitA + 1);
+  check('late_echo_absorbed_by_memo',
+        window.__fitWork === workA && ops.length === 0);
+  check('late_echo_keeps_wide', fakePanel._wide === true);
+
+  // B) Late echo carrying a CHANGED innerWidth (a root-scrollbar toggle
+  //    shifts the viewport ~15px, so the memo's vw leg misses): exactly ONE
+  //    full fit runs, it MUST take the suspended path (never animate), and
+  //    the layout settles — the NEXT echo at the same vw is a memo no-op.
+  //    A vw-miss that re-animated would re-open the loop this test kills.
+  global.innerWidth = 1300;
+  const workB = window.__fitWork;
+  ops.length = 0;
+  _resizeHandlers[0]();                          // late echo, vw changed
+  await _sleep(250);
+  check('late_echo_vw_miss_runs_one_fit',
+        window.__fitWork === workB + 1);
+  check('late_echo_vw_miss_takes_suspended_path',
+        ops.join('|') === 't:suspend|remove|toggle:true|reflow|t:restore');
+  check('late_echo_vw_miss_keeps_wide', fakePanel._wide === true);
+
+  await _sleep(350);                             // guard from the vw-miss fit expired
+  const workC = window.__fitWork;
+  ops.length = 0;
+  _resizeHandlers[0]();                          // second late echo, same vw
+  await _sleep(250);
+  check('late_echo_terminates',
+        window.__fitWork === workC && ops.length === 0);
+  check('late_echo_terminates_keeps_wide', fakePanel._wide === true);
+
+  console.log(out.join('\n'));
+  process.exit(0);
+})();
 """
 
 
@@ -364,6 +457,31 @@ class ScopedProbeFrontendTest(unittest.TestCase):
             output = _run_harness(copy)
         self.assertIn('FAIL refit_while_wide_stays_wide', output,
                       'NEUTER did not bite: panel stayed wide without the default-width measurement.\n'
+                      + output)
+
+        with open(ACCESS_MATRIX_JS, encoding='utf-8') as f:
+            self.assertEqual(f.read(), src, 'harness mutated the shipped access_matrix.js')
+
+
+    def test_neuter_idempotence_gate_is_load_bearing(self):
+        """NEUTER: drop the ``if (_mxFitUnchanged(...)) return;`` gate from a
+        COPY → a settled re-fit and every late resize echo re-run the full
+        mutation path (DOM writes on each poll/echo), so the memo-absorption
+        checks go red."""
+        with open(ACCESS_MATRIX_JS, encoding='utf-8') as f:
+            src = f.read()
+        anchor = '  if (_mxFitUnchanged(scrolls, vw, wasWide)) return;\n'
+        self.assertIn(anchor, src, 'idempotence-gate anchor drifted — update the neuter')
+        neutered = src.replace(anchor, '', 1)
+        self.assertNotEqual(neutered, src)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            copy = os.path.join(tmp, 'access_matrix_neutered.js')
+            with open(copy, 'w', encoding='utf-8') as f:
+                f.write(neutered)
+            output = _run_harness(copy)
+        self.assertIn('FAIL late_echo_absorbed_by_memo', output,
+                      'NEUTER did not bite: late echo still absorbed without the gate.\n'
                       + output)
 
         with open(ACCESS_MATRIX_JS, encoding='utf-8') as f:

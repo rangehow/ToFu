@@ -102,13 +102,68 @@ function _probeMatrixScope(provIdx, only) {
   _runMatrixProbe(provIdx, false, only);
 }
 
+/** Memo of the last fit: the inputs the verdict was computed from, plus the
+ *  verdict itself. Keyed on things our own width change can NOT alter:
+ *   - the scroll ELEMENT references. Matrix content only ever changes through
+ *     a full `_renderProvidersTab` rebuild, which returns a brand-new element
+ *     — so the same element reference across two fits means the content (and
+ *     its intrinsic width) is byte-identical. This is the ONLY truthful
+ *     content signal: scrollWidth saturates to the panel width once wide, so
+ *     no width reading can see a content change from inside the wide state.
+ *   - the viewport width, which a real window resize changes.
+ *   - the class state we last produced, so an external toggle re-fits.
+ *  Never keyed on scrollWidth — the class we toggle feeds back into it. */
+var _mxFitMemo = null;
+
+/** Set while _fitMatrixPanelWidth mutates the panel, so the `resize` event our
+ *  own 380px width change provokes (the overlay's scrollbar appearing or
+ *  disappearing) is not treated as user intent and bounced straight back. */
+var _mxFitApplying = false;
+var _mxFitApplyT = null;
+
+/** The current matrix scroll elements as a plain array (NodeList in the
+ *  browser, array in the node harness). */
+function _mxFitScrolls() {
+  var list = document.querySelectorAll('.stg-matrix-scroll');
+  var out = [];
+  for (var i = 0; i < list.length; i++) out.push(list[i]);
+  return out;
+}
+
+/** True when nothing the verdict depends on has changed since the last fit. */
+function _mxFitUnchanged(els, vw, wasWide) {
+  var m = _mxFitMemo;
+  if (!m || m.vw !== vw || m.wide !== wasWide || m.els.length !== els.length) return false;
+  for (var i = 0; i < els.length; i++) {
+    if (m.els[i] !== els[i]) return false;
+  }
+  return true;
+}
+
 /** Widen the settings panel when an open matrix overflows it, so 3+ keys
  *  don't force horizontal scrolling on wide-enough screens. The class is
  *  removed as soon as no matrix overflows (matrix closed / panel wide enough). */
 function _fitMatrixPanelWidth() {
+  if (typeof window !== 'undefined') {
+    window.__fitCount = (window.__fitCount || 0) + 1;
+  }
   var panel = document.querySelector('.modal.settings-panel');
   if (!panel) return;
   var wasWide = panel.classList.contains('stg-matrix-wide');
+
+  // Idempotence gate. A re-fit whose inputs are unchanged must cost ZERO DOM
+  // writes — no class toggle, no forced reflow, no transition edit. Every
+  // periodic caller (probe poll, tab switch, the resize our own width change
+  // echoes back) therefore becomes a no-op once the layout has settled, which
+  // closes ALL re-entry paths at once rather than the one we enumerated.
+  var scrolls = _mxFitScrolls();
+  var vw = (typeof window !== 'undefined' && window.innerWidth) || 0;
+  if (_mxFitUnchanged(scrolls, vw, wasWide)) return;
+
+  if (typeof window !== 'undefined') {
+    window.__fitWork = (window.__fitWork || 0) + 1;
+  }
+  _mxFitApplying = true;
   // The overflow verdict MUST be measured at the panel's DEFAULT width, never
   // at the width the class itself produces: a re-fit while the panel is wide
   // (probe-resume re-render, 1.5s probe poll, tab switch) would otherwise read
@@ -119,7 +174,6 @@ function _fitMatrixPanelWidth() {
   panel.style.transition = 'none';
   panel.classList.remove('stg-matrix-wide');
   var wide = false;
-  var scrolls = document.querySelectorAll('.stg-matrix-scroll');
   for (var i = 0; i < scrolls.length; i++) {
     // Hidden matrices (inactive settings tab / collapsed provider card) have
     // a zero layout box — they must not widen the panel for something the
@@ -144,6 +198,20 @@ function _fitMatrixPanelWidth() {
     void panel.offsetWidth;
     panel.style.transition = '';
   }
+  // The elements are the same objects before and after our class toggle (the
+  // toggle never recreates them), so the refs captured at entry describe the
+  // settled state a later no-op re-fit will observe — making the memo hit.
+  _mxFitMemo = { els: scrolls, vw: vw, wide: wide };
+  // The flag must OUTLIVE this function. A scrollbar toggle caused by the
+  // width change is delivered as an async `resize` on a later task, so
+  // clearing synchronously here would leave the guard permanently false by
+  // the time the echo lands. Hold it past the resize handler's own debounce.
+  if (typeof setTimeout === 'function') {
+    if (_mxFitApplyT) clearTimeout(_mxFitApplyT);
+    _mxFitApplyT = setTimeout(function() { _mxFitApplying = false; }, 250);
+  } else {
+    _mxFitApplying = false;
+  }
 }
 
 // Re-fit on window resize (debounced) — a wider viewport may make the wide
@@ -153,6 +221,14 @@ function _fitMatrixPanelWidth() {
   if (typeof window.addEventListener !== 'function') return;
   var _mxResizeT = null;
   window.addEventListener('resize', function() {
+    window.__resizeCount = (window.__resizeCount || 0) + 1;
+    // Our own widen/narrow reflows the overlay and can toggle the modal's
+    // vertical scrollbar, which fires `resize`. Bouncing that back into a
+    // re-fit is a closed loop with no user input in it, so drop the echo.
+    if (_mxFitApplying) {
+      window.__resizeEchoDropped = (window.__resizeEchoDropped || 0) + 1;
+      return;
+    }
     if (_mxResizeT) clearTimeout(_mxResizeT);
     _mxResizeT = setTimeout(function() {
       if (document.querySelector('.modal.settings-panel .stg-matrix-scroll')) _fitMatrixPanelWidth();

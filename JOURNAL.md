@@ -2,6 +2,22 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
 ### 2026-07-26(续50) — 缓存成本三笔账算清,epic `pt_3616d93d519c49b4` 收口:量化完成,两个假设被实测反转(零代码变更;数据源 = 7 天 task_results.apiRounds **17,602 轮全量**,非抽样;中间产物 /tmp/cache_audit/*.json)
+### 2026-07-26(续51) — SyncDrift「爆炸 555 倍」是**我自己开票时的误读**,epic `pt_d6bd611e584a4645` 收口:那不是回归,是**当天上线的探针本身**(零代码变更;纯取证 + 自我否证)
+
+- **票面主张(我昨天开的票)已被实测推翻,后人不要再按它排查。** 票里写「3,329 条 vs 昨日 6 条 = 555 倍新回归」,把日志条数当成了缺陷体量。真相是:**昨天那 6 条根本不是基线** —— P5 探针 commit `3b56c5cd` 在 **07-25 23:10** 才落地,昨天的日志只覆盖了它上线后的 50 分钟,而且那 6 条全是 `conv=test-dri` 的**自测数据**(`client=['ghost-task']`、`kind=unknown_conv`)。拿「上线后 50 分钟的自测」当「一整天的生产基线」去比,555 倍这个数字是我自己造出来的。
+- **3,396 条按形状拆开后,故事完全不同(这是关键,别只看总数):**
+  | 形状 | 条数 | 含义 |
+  |---|---|---|
+  | **裸行**(有 `client=` 但**无** `age=`) | **3,066** | 06:00–15:23,**只出现在这一段** |
+  | STALLED(带 age/observations/direction) | 271 | 15:31 之后,**只出现在这一段** |
+  | CONVERGED | 11 | 15:40 之后 |
+  | unknown_conv / IDENTITY GATE | 7 / 30 | 另有其事 |
+- **15:00 前后是一刀切的换代,不是渐进飙升。** 裸行最后一条 15:23:17,STALLED 第一条 15:31:47,**两种形状零重叠**。原因:收敛跟踪器 `lib/conversations/drift_tracker.py` 是今天 **11:14 commit `fa61e9b1`** 才写的,服务器 15:00 那次重启才把它加载进来。在那之前 `_log_divergence` 走 `except` 兜底分支(`routes/api_v1/conversations.py:461`)——**每一次不相等都 WARNING**,包括「客户端 60s 前的快照 vs 服务端实时读」这种正在流式生成时**物理上不可能相等**的情形。3,066 条裸行 = 探针还没学会分辨「采样延迟」和「真卡住」时的噪音。
+- **跟踪器上线后,信号密度立刻正常:271 条 STALLED 只覆盖 13 个会话**,且 **8/13 后来自己 CONVERGED 了**(其中 7 条明确 `was_stalled=True` —— 即跟踪器自己升级过的警告后来自行解除)。剩下 5 个从没 CONVERGED 的(ms1apkcg/ms1asjtx/ms1hc404/ms1hl5ep/ms1kuekm)最后一条都停在 16:16–17:27,**正是当时还开着的兄弟会话**——会话没关自然没有收敛事件,不等于丢写。
+- **票面两个待办的答案:** ①「rev 推进逻辑变更导致合法落后被误判」→ **是这个**,但误判方不是 rev 逻辑,是**探针的严重度策略**,且已由 `fa61e9b1` 修好;②「真有写丢失」→ **无证据**。`blocked_rev_conflict` 那条(票里的「独立验证②」)是**乐观并发控制正常工作**(拒绝陈旧 rev 的写),不是丢写;它和行存储 dual-write 无关——charter 明确 `rows_write_enabled()` 为 False。
+- **唯一确认的真缺陷(小,但值得记):`routes/api_v1/conversations.py:457-462` 的 except 兜底把失败原因记在 `logger.debug`,而 debug 不进 app.log。** 于是「跟踪器为什么没工作」这个信息在生产**永远不可见**——我今天正是靠「日志行缺 `age=` 字段」这个间接特征反推出来的,而不是靠日志告诉我。同族于本项目 §2.2 的精神:兜底可以降级,但降级的**原因**不能比它替代的信号更暗。建议改 `logger.warning` 并带 `exc_info`。**注意:这段代码当前不触发**(跟踪器已正常),所以这是防御性改进,不是止血。
+- **给后人的教训(比这个 bug 本身重要):** **日志条数不是缺陷体量。** 一个新上线的探针必然在自己的第一天制造历史最高噪音,而「昨天很少」恰恰因为它昨天还不存在。开票前必须先 `git log` 问一句「这个日志行是什么时候开始存在的」——我漏了这一步,代价是一张误导性的 P0 票。同样地,**比对前先按形状分层**(有没有 `age=` 字段),混在一起数就会把「探针进化」读成「系统崩坏」——与续49 记的「比对 snapshot 必须先按 `kind` 分层」是同一个错误家族,今天犯了第二次。
+
 - **方法论:** 逐轮 `usage._dispatch.key`(槽位)+ `cache_read/write_tokens` + `cost` 分解 + 每轮 `cacheBreak` 运行时判决标签;单价从账单自推导(opus-5 input ¥108.6/read ¥10.86,aws 4.7/4.8 ¥36.2/¥3.5,kimi ¥19.98/¥1.38 per Mtok)。约定陷阱已处理:aws 系 pt 是残差(anthropic 约定),opus-5/kimi 的 pt 含缓存(openai 约定)——两次重算都栽在这,最终版按模型分约定。
 - **成本排行榜(7 天实测,按危害排序):**
   | # | 项 | 实测成本/周 | 判决 |

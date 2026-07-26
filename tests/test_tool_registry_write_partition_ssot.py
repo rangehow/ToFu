@@ -139,6 +139,61 @@ class TestProvidesCoverage:
                 seen.add(n)
         assert not dupes, f'tool names declared by 2+ specs: {sorted(dupes)}'
 
+    def test_artifact_tools_are_declared(self):
+        """Sub-agent-only tools still need declaring.
+
+        store/read/list_artifact(s) never enter the MASTER schema (they are
+        injected per-sub-agent by SubAgent._inject_artifact_tools), but they DO
+        have handlers on the main dispatch registry via SWARM_TOOL_NAMES — so
+        an undeclared name is invisible to the partition tables and to the
+        custom-tool collision check.
+        """
+        d = _declared_provides()
+        for n in ('store_artifact', 'read_artifact', 'list_artifacts'):
+            assert n in d
+
+
+class TestFullCoverageRatchet:
+    """Every registered handler must be declared by some spec.
+
+    This is the invariant the individual per-family tests generalize: the
+    registry is the single source of truth for "what tools exist". Measured
+    at 90 handlers vs 55 declared (gap 35) before this epic.
+    """
+
+    #: Names allowed to have a handler with no ``provides`` entry, each for a
+    #: STRUCTURAL reason — not "we didn't get to it yet".
+    EXEMPT = {
+        # Dispatched by round metadata via handler_special, never by fn_name,
+        # so it is not a tool name the model can call. See
+        # ToolSpec.handler_special / @tool_registry.special.
+        '__code_exec__',
+    }
+
+    def test_every_handler_is_declared(self):
+        import lib.tasks_pkg.handlers  # noqa: F401 — registers the handlers
+        from lib.tasks_pkg.executor import tool_registry
+        handlers = {n for n, _c, _d in tool_registry.list_tools()}
+        undeclared = handlers - _declared_provides() - self.EXEMPT
+        assert not undeclared, (
+            f'{len(undeclared)} handler(s) have no ToolSpec.provides entry: '
+            f'{sorted(undeclared)}. Declare them on the owning spec (and add '
+            f'to write_tools if they mutate state) — an undeclared handler is '
+            f'invisible to the write/idempotent partitions AND to the '
+            f'custom-tool collision check in lib/tools/tool_env.py. If a name '
+            f'is structurally exempt (special dispatch key), add it to EXEMPT '
+            f'with the reason.'
+        )
+
+    def test_exemptions_still_apply(self):
+        """An exemption that stopped being real is a silent coverage hole."""
+        import lib.tasks_pkg.handlers  # noqa: F401
+        from lib.tasks_pkg.executor import tool_registry
+        handlers = {n for n, _c, _d in tool_registry.list_tools()}
+        stale = self.EXEMPT - handlers
+        assert not stale, (
+            f'EXEMPT names no longer registered: {sorted(stale)} — drop them')
+
 
 class TestWritePartitionCompleteness:
     @pytest.mark.parametrize('tool,why', sorted(STATE_CHANGING_EXPECTATIONS.items()))

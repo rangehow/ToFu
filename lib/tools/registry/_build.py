@@ -490,9 +490,32 @@ def _register_builtins() -> None:
                  idempotent_tools=frozenset({'schedule_list'}),
                  category='scheduler', description='Scheduler / proactive agent tools'),
         ToolSpec('swarm', _build_swarm, phase='capability',
+                 # provides lists every name this family has a handler for on
+                 # the MAIN dispatch registry (@tool_registry.tool_set over
+                 # SWARM_TOOL_NAMES), which is wider than what build() puts in
+                 # the master schema:
+                 #   * spawn/await/get_agent_result — in the master schema
+                 #   * store/read/list_artifact(s)  — NOT in the master schema;
+                 #     they are injected into SUB-AGENTS only
+                 #     (SubAgent._inject_artifact_tools) and executed inside the
+                 #     sub-agent's own loop. Declared anyway because the handler
+                 #     IS reachable on the main registry, so an undeclared name
+                 #     would be invisible to the partition tables and to the
+                 #     custom-tool collision check in lib/tools/tool_env.py.
                  provides=frozenset({
                      'spawn_agents', 'await_agents', 'get_agent_result',
+                     'store_artifact', 'read_artifact', 'list_artifacts',
                  }),
+                 # store_artifact is deliberately NOT in write_tools. It writes
+                 # to an in-process, per-run ArtifactStore (thread-safe under
+                 # its own lock, TTL-expiring, lost on process exit) — it
+                 # touches no filesystem, no network, and nothing that outlives
+                 # the run. Approval-prompting it would be pure noise, and the
+                 # serial-dispatch half of the partition buys nothing over the
+                 # store's own lock. This is a deliberate departure from the
+                 # "every state-changing tool is partitioned" rule, recorded
+                 # here so it reads as a decision rather than an omission.
+                 idempotent_tools=frozenset({'list_artifacts'}),
                  category='swarm', description='Async multi-agent swarm'),
         ToolSpec('mcp', _build_mcp, phase='capability',
                  category='mcp', description='External MCP-server tools'),

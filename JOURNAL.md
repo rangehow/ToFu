@@ -1,6 +1,15 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续25) — TTFT 自我纠正:上一刀的 offload **结构对但没省时间**——spawn 位置错了(commit `dd24adfe`,2 文件 +95/-12;新增 2 测共 16/16,NEUTER 咬,相邻 **80/80**,collect **9710** 0 err)
+- **被派发回来复查,查出自己的问题。** 上一刀(续23)把 rerank 挪离调用线程、在 stream loop 前 join,**16 测全绿**——但它**没有真正降低 TTFT**。
+- **根因是 spawn 的位置:** spawn 落在 Section 3.5,也就是 `inject_context_and_emit_chips` **之后**。于是与 800ms rerank 重叠的只有它俩之间那段 checkpoint 记账(contentPrefix / resumePrefill / 四个 cfg 拷贝)——**实测 ~0.001 ms/轮,占 rerank 的 0.0001%**。`await_memory_prefetch()` 随后照样阻塞整个时长。**等待没有消失,只是往下挪了 90 行。**
+- **为什么我自己的测试没抓到(值得记):** 那批测试断言的是「调用方不阻塞」(真——函数立即返回)和「join 有上限」(真)。**没有任何一条能看见 spawn 与 join 之间那段区间是空的。**「离开调用线程」与「离开关键路径」是**两个不同的性质**,而我只钉了第一个。
+- **修法:** spawn 提到工具装配之后、Section 3 **之前**。context injection 才是 FUSE/DB 密集段(它消费 `start_prefetches` 的 project + memory future),rerank 现在有**真实 I/O 可以藏**。join 点与上限一字未动。
+- **早启动的输入齐备性(逐项核实):** `tool_list`/`has_real_tools` 来自紧邻上方的 `_assemble_tool_list`;`messages` 对查询而言字节等价(续23 已钉的不变量:context-inject 对 true tail 的每一处改动都裹 `<system-reminder>`,而查询构造器恰好剥它)。唯一还没算出的是 `inject_tool_history()` 的返回值,但它只当**零/非零**的资格信号用,且完全由 `cfg['toolHistory']` 驱动——故早 spawn 直接读该键,**新增测试钉住两者在空/非空两种情况下一致**,运行时若漂移则打 WARNING。
+- **NEUTER:** 把 spawn 移回旧位置 → 新的顺序守卫翻红(22816 < 21058);**其余 15 测在该 neuter 下全绿**——这正是被关闭的盲区本身。
+- **教训(比这次修复更值钱):** 异步化的验收不能只测「调用方是否立即返回」,必须测**被并行掉的到底是什么**。空窗口的并行等于没并行,而它在测试里长得和真并行一模一样。
+
 ### 2026-07-26(续20) — 工具统一管理收口(epic `pt_5583b7f5cbad4ce0`,4 commit:`0cc0aee1` 写分区 / `7ff7ef8d` conv_ref 身份 / `d48f74ce` get_conversation 选取 / `96d24277` 覆盖棘轮+窗口契约;NEUTER 共 8 发全咬,collect **9782** 0 err)
 - **起点是 owner 的一个问题**:「工具能不能统一管理?`get_conversation` 真的替我省掉查表了吗,返回的信息会不会有劣化?」—— 审计后答案是:统一管理**已经有了**(`lib/tools/registry/ToolSpec`),缺的不是框架而是**覆盖率**;而 `get_conversation` 确实省掉了 SQL,但**返回信息在三个维度上劣化,且是静默的**。
 - **①写分区绕过(P0,活洞).** `_pipeline.py:281` 的 Manual 批准门直接由 `_write_tools` 派生,而 attended 任务默认 `auto_apply=False`。实测 90 handler vs 55 provides(gap 35),其中 **14 个状态变更工具不在写分区** → 既不弹批准、又进并行池:`browser_execute_js`(在用户真实页面跑任意 JS)、`browser_navigate/click/fill_form/keyboard/hover_and_click/right_click_menu/create_tab/close_tab`、`schedule_create/manage`、`timer_create/manage`、`project_charter_commit`(写全项目共享意图)。

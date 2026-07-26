@@ -640,6 +640,23 @@ function renderChat(conv, forceScroll) {
     /* Anchor for insertion: the node the reconciled sequence must sit BEFORE.
      * We walk forward, placing each node right after the previous one. */
     let _prevEl = null;
+    /* HEAD anchor for the FIRST reconciled message (both _prevEl and _cursor
+     * still null). It must be the first MESSAGE node, NOT `inner.firstChild` —
+     * when a lazy window is active `firstChild` is `#_lazyLoadSentinel`, and
+     * anchoring on it inserts message #1 ABOVE the sentinel, i.e. pushes the
+     * sentinel down one slot on EVERY background repaint. After a handful of
+     * repaints (cost / file-change / compaction all land as background
+     * repaints on a conversation open) the sentinel has migrated to the very
+     * BOTTOM of #chatInner — and `_loadOlderMessages`, which splices the older
+     * batch in with `sentinel.after(frag)`, then renders the OLDEST messages
+     * BELOW the newest one. That is the "first-round user message shows up at
+     * the bottom of chatInner" bug. The sentinel is layout furniture owned by
+     * the lazy-window code (_loadOlderMessages / _evictAboveWindow keep it
+     * pinned at the head); the reconcile must step OVER it, never past it. */
+    const _headAnchor = () => {
+      const f = inner.firstChild;
+      return (f && f.id === '_lazyLoadSentinel') ? f.nextSibling : f;
+    };
     for (let i = startIdx; i < _surgTo; i++) {
       if (i === _skipIdx) continue;  // streaming message — leave #streaming-msg alone
       const msg = conv.messages[i];
@@ -661,7 +678,7 @@ function renderChat(conv, forceScroll) {
           anyChange = true;
         }
         /* Re-position into array order if it drifted out of place. */
-        const _want = _prevEl ? _prevEl.nextSibling : (_cursor ? _cursor.nextSibling : inner.firstChild);
+        const _want = _prevEl ? _prevEl.nextSibling : (_cursor ? _cursor.nextSibling : _headAnchor());
         if (el !== _want && el.parentNode === inner) {
           inner.insertBefore(el, _want);
           anyChange = true;
@@ -676,7 +693,7 @@ function renderChat(conv, forceScroll) {
         wrapper.innerHTML = renderMessage(msg, i);
         const newEl = wrapper.firstElementChild;
         if (newEl) {
-          inner.insertBefore(newEl, _prevEl ? _prevEl.nextSibling : (_cursor ? _cursor.nextSibling : null));
+          inner.insertBefore(newEl, _prevEl ? _prevEl.nextSibling : (_cursor ? _cursor.nextSibling : _headAnchor()));
           _prevEl = newEl;
         }
         anyChange = true;

@@ -1,6 +1,16 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续16) — 请求检视器 P6 落地:每个工具行一枚 `</>` 锚点,owner 最初诉求正式闭环(commit `0d2a8fee`,5 文件 +432/-1;新套件 3/3(13 探针)含 NEUTER,前端环 7 套件 38/38)
+- **P3 的粒度错了(这次才对准 owner 原话):** owner 要的是「在 chatinner 看到有问题的工具调用 → 直接找到是哪次请求」。P3 一枚气泡锚点只能跳「该气泡最后一轮」,而一个气泡有 **N 轮 × M 个工具调用**。P6 把锚点下沉到**每一个工具行**。
+- **映射零新字段(勘察的关键收获):** 后端早给每个工具轮打了 `llmRound`(0-based 编排循环序号),请求快照的 `roundNum` 是 1-based ⇒ **产生该调用的请求 = llmRound + 1**。这与 `roundNum` **不是一回事**(后者是工具调用序号)——测试刻意用 `llmRound=2 而 roundNum=2` 的行钉死这个 off-by-one,NEUTER 换成 `roundNum` 精确翻红。
+- **接在唯一咽喉:** 锚点挂 `_renderToolSlot`(tool_rounds.js:3451)——每个工具行含 swarm 面板渲染的唯一出口,一处接线覆盖全部分支;静态钉守住「不许出现第二条渲染路径」。
+- **两个刻意的「不做」:** ①`_riTaskIdForRound` 解析不到 taskId 就**不渲染锚点**——跳不到地方的锚点比没有更糟;②合成注入行(inbox/peer/user-steer)不挂锚点——它们不是 LLM 工具调用。
+- **上下文球让位(owner 拍板③):** 抽屉打开时 `.ctx-health-bar` 从 `left:18px` 滑到右下角,左侧整条让给阅读列,关闭即回位(纯 CSS + 过渡,不删 owner 喜欢的功能)。
+- **过程事故(第八发,已被复核抓获):** `insert_content` 锚尾复制把 `def test_anchor_is_wired_at_the_single_render_chokepoint():` 写重一行 → `IndentationError`。**教训仍是那条:锚点别选 `def` 行**。
+- **诚实标注(stash A/B 实证):** 工作区当前有大量 sibling 未提交改动,其中 `lib/llm_sanitize/_gateway.py` 有缩进错误,导致全仓 `--collect-only` 报 **48 err** + `test_request_inspector.py` **13 红**。剔除我这 4 个文件后两者**同形复现**,与本批无关;已开票 `pt_d42e7028869e492b` 交由持有 gateway epic 的会话处置。
+- **请求检视器全账:** 设计稿 `15922112` → P1 `e93efaa2` → P2 `71966a8c` → P3 `05426ba1` → P4 `5b1aff8a` → P5 `1a8d4cc8`+`fe2f220f` → **P6 `0d2a8fee`**。P5 仍挂 human-gated 等重启(写路径投影/分层 TTL/新索引均需进程启动生效)。
+
 ### 2026-07-26(续) — 项目栏画面优化第二刀:按**设备像素**砍掉 4 个全画布开销 pass(commit `b8250f24`,5 文件 +369/-86;perf 套件 **21/21**,相邻五环 **142/142**,collect **9451** 0 err) — 以及一起 git 泄漏的自首
 - **owner 复盘上一刀(`c83513f7` + `5721093c`)抓到两个真问题,全部实锤。**
 - **㈠ git 泄漏(紧急,我先自首):** owner 用 `git show c83513f7 -- static/styles.css` 当场核实 —— 我在上一刀报告「只暂存我那 8 行 / sibling 的暂存原样留在盘上」,**是错的**。commit 实际吞进了**全部 3 个 hunk**,包括 sibling 的 `.pb-board-title{font-size:13.5px;font-weight:600}` 和整块 49 行「Project Brain P4 readability pass」。stat 是 59 行不是我说的 8 行。**根因:** 我用 `git apply --cached` 精心只暂存了自己的 hunk,然后 `git commit -- <pathspec>` —— **pathspec 会绕过索引、直接提交工作树状态**,把部分暂存整个作废。`git diff --cached` 提交前显示正确的 8 行,**看似通过**,只有提交后 `git show --stat` 才暴露真相。**已写入记忆库防再犯:共享 HEAD 上,先 `git add` 再 `git commit`(不带 pathspec),提交后必须 `git show --stat` 核实真正落了什么,而不是提交前看 `git diff --cached`。**

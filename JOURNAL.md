@@ -1,6 +1,26 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续74) — 全项目 bug 审计(前端可感知优先):5 路并行 + 主线复核,8 张新票上板(纯审计+开票,零产品代码变更)
+
+- **取证面:** 生产日志 48h(含轮转文件)、近 3 天 ~15 风险提交逐 diff、collect 门 **10209/0 err**、前端 JS 全量逻辑审计(swarm 两路合并)、API 契约主线定点核查。
+- **日志计数纪律(第三次实证,与「测试污染」同族的新变体):** 子代理初报的日志计数须过**两道过滤**才可信——①`run_command` 会把 grep 命令行本身写进 app.log,审计自己的搜索词造成**自引用污染**(SyncDrift 裸 grep 3732 → 过滤后真实 717);②**日志按日轮转**,只扫当天文件会漏掉昨天的大头(NOT NULL 当天 0 / 含轮转 15)。复核命令模板:`cat logs/X.log logs/X.log.YYYY-MM-DD | grep -a PATTERN | grep -avE 'run_command: \$|lastUserQuery|VU reply'`。另一变体:用户消息含搜索词时,task 创建行和 Autopilot VU reply 行也会回显污染。
+- **更正后的真实量级:** SyncDrift STALLED 717(kind=rev, client_behind, 样本 client=1 server=43 冻结 360s)、translate 500 ×73/天、NOT NULL user_id ×15、orphaned 236、Schema init ~110(全是 07-26 合并冲突事故指纹,根修 1c72c42c 已收口)、SQLite locked 6691(归 FUSE epic pt_c05602538 同根)、reasoning_content 6(子代理报 587 为污染)、example.com webhook 0(报 170 为污染)。
+- **新票(全部 OPEN 未认领):**
+  | 票 | 内容 |
+  |---|---|
+  | `pt_c03fae11ec134bb6` | P0 丢数据:注入弹窗期间切会话 `_sendInFlight` 永卡 → 会话永久停止同步(main_send_pipeline.js:411 在 try 前设标志,:~495 提前 return 跳过 finally;主线逐行复核确认) |
+  | `pt_12fbc45b2c2b441e` | P0 死功能:branch.js:~983 approveBranchTool 只有 console.warn,Approve/Deny 死按钮 |
+  | `pt_26a427d3917d4905` | P0 小修批:localStorage 裸 parse 白屏(core.js:243/cost.js:46,64) + image-gen 取消显示超时 + scheduler.js 整面板死代码 |
+  | `pt_75d8f8c74e4c4ae1` | P1 translate 500 ×73/天:MiniMax-M3 错语言翻转重试耗尽无降级(_engine.py:655/645/726) |
+  | `pt_6dfc8bcbf1ca48c3` | P1 丢数据:conversations.user_id NOT NULL ×15,写入路径待定位 |
+  | `pt_a182d5bd0f2b490a` | P1 SyncDrift STALLED 收敛兜底缺口(修前先判定流式期间是否误报;与 ms1uiy40 的 VU 流契约票注意边界) |
+  | `pt_3cd6cd48537d45bd` | P2/P3 批:前端竞态五项 + 泄漏五项(明细在票面) |
+  | `pt_124edf8363a24461` | 尾巴:test_frontend_api_isolation 白名单漂移(Epic-E slice 4 遗留,key 改 conv_image_hydrate.js 即绿,亲跑验证)——**已修已提交** `7198c66d`(5 passed),票已关 |
+- **API 契约核查结论(主线代做,swarm 两路均被基础设施丢弃):** 抽查 8 个可疑端点后端全存在;无启动级重复路由;信封混用(api_ok {ok:true} vs 裸 jsonify)有约定兜住——前端需要 `.ok`/`.status`/`.headers` 的消费点一律走 `parse:'response'` 拿原始 Response(conversations.js:734 listMeta、memory.js:312 toggle 均核实),读裸字段的走默认解析(memory.js:97 d.memories 核实),未发现契约破裂。残留盲区:参数化路径 envelope 未逐一核对(覆盖率 ~15/346 路由)。
+- **近期提交回归审查:** 深度核过 6 个前端可感知提交(i18n pack 切片/播客视频进度根修/矩阵振荡两刀/剧本流式化/toio 4xx 三修)全部干净;唯一流程风险 `39b81c09` 批发落地提交(低危,建议一轮全量回归兜底)。
+- **教训(给后人):** swarm 子代理会被基础设施**静默丢弃**(返回明确写 'never produced a result … will NOT complete')——await 超时后必须看 note 字段,被丢的路要重 spawn 或主线代做,不能等一个永远不会来的通知。本次 api-contract 路连丢两次,最终主线定点核查替代。
+
 ### 2026-07-26(续73) — 本地引擎端口自动发现落地:启动即扫 Ollama 11434 / vLLM 8000 / SGLang 30000,发现模型直接配好 provider(owner「templates 可以更主动检查用户的端口」;epic `pt_88d0b481feef47fd`;commit `30f0129f`,5 文件 +553/-2;新套件 **11/11**,相邻四环 **29/29**,collect **10227** 0 err)
 
 - **形态:** 新模块 `lib/llm_dispatch/autodiscover_local.py` + server.py 启动挂点(紧随 health_local)。启动后 5s 首扫、之后每 120s 周期扫(后启动的引擎/后 pull 的模型也能捡到)。

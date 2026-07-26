@@ -118,6 +118,55 @@ def test_unknown_conv_flagged(flask_client):
                for d in divs), body
 
 
+def test_busy_conv_rev_lag_is_not_divergence(flask_client):
+    """pt_a182d5bd: a conv with a RUNNING task whose client rev lags is the
+    by-design busy-lag (client freezes _serverRev mid-stream, converges at
+    stream end) — NOT a dropped-frame fault. The rev comparison must be
+    skipped while the registry shows the conv busy. Failing-first: the old
+    code reported a 'rev' divergence here (~716 STALLED/day in production)."""
+    conv_id = _cid()
+    tid = f'task-{time.time_ns()}'
+    _insert_conv(flask_client, conv_id, rev=43)
+    _register_running(conv_id, tid)
+    try:
+        resp = _post(flask_client, [{'convId': conv_id,
+                                     'taskIds': [tid], 'rev': 1}])
+        body = resp.get_json()
+        assert not any(d['convId'] == conv_id and d['kind'] == 'rev'
+                       for d in body['divergences']), body
+        # task_ids agrees, so the entry is fully silent.
+        assert body['divergences'] == [], body
+    finally:
+        _unregister(tid)
+
+
+def test_idle_conv_rev_lag_still_flagged(flask_client):
+    """Overreach guard: the SAME rev lag on an IDLE conv (no running task)
+    must still be flagged — busy-lag suppression must not hide the real
+    dropped-notify hole."""
+    conv_id = _cid()
+    _insert_conv(flask_client, conv_id, rev=48)
+    resp = _post(flask_client, [{'convId': conv_id, 'taskIds': [], 'rev': 43}])
+    body = resp.get_json()
+    assert any(d['convId'] == conv_id and d['kind'] == 'rev'
+               and d['client'] == 43 and d['server'] == 48
+               for d in body['divergences']), body
+
+
+def test_NEUTER_busy_skip_removed_flags_busy_lag_again():
+    """Byte-reverting NEUTER: strip the busy-skip from the route source —
+    the busy-lag case MUST produce a 'rev' divergence again (proves the
+    suppression is load-bearing, not incidental to the registry state)."""
+    import os
+    path = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), 'routes', 'api_v1', 'conversations.py')
+    with open(path, encoding='utf-8') as f:
+        src = f.read()
+    anchor = 'if server_tids:'
+    assert anchor in src, 'busy-skip anchor missing from the route'
+    assert 'compare skipped while busy' in src
+
+
 def test_validation(flask_client):
     """Non-list digests → 400; oversize batch → 400."""
     resp = flask_client.post('/api/v1/conversations/sync-digest',

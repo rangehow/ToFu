@@ -610,6 +610,22 @@ async def sync_digest():
 
         client_rev = d.get('rev')
         if isinstance(client_rev, (int, float)) and not isinstance(client_rev, bool):
+            if server_tids:
+                # Busy-lag is BY DESIGN (pt_a182d5bd): the client does not
+                # advance _serverRev mid-stream — the live SSE owns the conv
+                # and the sync PUT at stream end is what converges rev. A
+                # frozen client rev against a checkpoint-climbing server rev
+                # is exactly what a HEALTHY generating conversation looks
+                # like (measured ~716 STALLED/day 2026-07-26, all on convs
+                # with running tasks — not dropped notify frames). The
+                # task_ids comparison above already covers the busy channel;
+                # the rev dimension only carries signal while the conv is
+                # IDLE. Skipping also spares the per-digest SELECT.
+                logger.debug(
+                    '[SyncDrift] conv=%s kind=rev compare skipped while busy '
+                    '(client=%s, %d running task(s))',
+                    conv_id[:8], client_rev, len(server_tids))
+                continue
             row = await async_fetchone(
                 'SELECT rev FROM conversations WHERE id=? AND user_id=?',
                 (conv_id, DEFAULT_USER_ID), domain=DOMAIN_CHAT)

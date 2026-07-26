@@ -138,7 +138,8 @@ _FAKE_RESULTS = [
 
 
 def _patch_research(monkeypatch, results=_FAKE_RESULTS):
-    monkeypatch.setattr(rec, '_web_search', lambda q, user_question='': list(results))
+    monkeypatch.setattr(rec, '_web_search', lambda q, user_question='',
+                        freshness='': list(results))
 
 
 def _patch_script(monkeypatch, segments=None):
@@ -174,17 +175,24 @@ def test_script_appends_sources_card(monkeypatch):
     # normalize research cards to fact-card shape first
     ctx['artifacts']['research']['cards'] = rec._cards_from_results(_FAKE_RESULTS)
     art = rec._run_script(ctx)
-    assert art['segments'][-1].startswith('资料来源')  # 片尾来源卡 (拍板 #4)
+    # 拍板 #4 unchanged: the run always carries a sources credit — but since
+    # the owner (2026-07-26) ruled it a SILENT visual card, it rides the
+    # artifact as sources_line, NOT as a narration segment (which TTS would
+    # voice). The timeline stage turns it into the final spoken=False scene.
+    assert art['sources_line'].startswith('资料来源')
+    assert not any('资料来源' in s for s in art['segments'])
     assert rec._gate_script({}, art) == []
 
 
 def test_script_respects_max_scenes_cap(monkeypatch):
-    # LLM returns 20 segments; max_scenes=5 → clamp to 4 + 1 sources card = 5.
+    # LLM returns 20 segments; max_scenes=5 → clamp to 4 narration segments.
+    # (The sources end card is added by the TIMELINE stage as spoken=False,
+    # no longer counted in segments — owner 2026-07-26 silent-card contract.)
     _patch_script(monkeypatch, segments=[f'第{i}段' for i in range(20)])
     ctx = {'topic': 't', 'lang': 'zh', 'max_scenes': 5,
            'artifacts': {'research': {'cards': rec._cards_from_results(_FAKE_RESULTS)}}}
     art = rec._run_script(ctx)
-    assert len(art['segments']) == 5  # 4 script + 1 sources (cost cap, 拍板 #3)
+    assert len(art['segments']) == 4  # cost cap, 拍板 #3
 
 
 def test_timeline_uses_real_tts_durations(monkeypatch, tmp_path):

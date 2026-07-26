@@ -36,7 +36,7 @@ _FAKE_RESULTS = [
 def wired(monkeypatch):
     """Fake ONLY the three external seams; everything else runs for real."""
     monkeypatch.setattr(rec, '_web_search',
-                        lambda q, user_question='': list(_FAKE_RESULTS))
+                        lambda q, user_question='', freshness='': list(_FAKE_RESULTS))
     monkeypatch.setattr(rec, '_llm_chat', lambda m, **k: (json.dumps(
         {'title': '天空为什么是蓝色',
          'segments': ['阳光进入大气层。', '蓝光波长短,被散射得更多。']},

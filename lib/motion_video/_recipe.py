@@ -56,10 +56,11 @@ _RESEARCH_MAX_RESULTS = 6
 
 # ── Seams (monkeypatchable) ───────────────────────────────
 
-def _web_search(query: str, *, user_question: str = ''):
+def _web_search(query: str, *, user_question: str = '', freshness: str = ''):
     """Run one web search through the tofu-search facade. Returns results."""
     from lib.tasks_pkg.handlers import search as _facade
-    return _facade.perform_web_search(query, user_question=user_question)
+    return _facade.perform_web_search(query, user_question=user_question,
+                                      freshness=freshness)
 
 
 def _llm_chat(messages, **kwargs):
@@ -118,14 +119,18 @@ def _cards_from_results(results) -> list[dict]:
 def _run_research(ctx: dict) -> dict:
     topic = ctx['topic']
     lang = ctx.get('lang', 'zh')
-    queries = [topic]
-    # A light second angle improves grounding without unbounded fan-out.
-    queries.append(f'{topic} 原理 背景' if lang == 'zh' else f'{topic} explained background')
+    # (query, freshness). The PRIMARY angle is freshness-gated to the last
+    # week — the recipe is built for NEWS topics, and without it research
+    # returns encyclopedia background instead of the news. The background
+    # angle stays ungated: evergreen grounding should not be time-filtered.
+    queries = [(topic, 'week')]
+    queries.append((f'{topic} 原理 背景' if lang == 'zh'
+                    else f'{topic} explained background', ''))
     cards: list[dict] = []
     seen: set[str] = set()
-    for q in queries:
+    for q, freshness in queries:
         try:
-            results = _web_search(q, user_question=topic)
+            results = _web_search(q, user_question=topic, freshness=freshness)
         except Exception as e:
             logger.warning('[Recipe:research] query %r failed: %s', q, e)
             continue
@@ -160,9 +165,11 @@ def _build_script_prompt(topic: str, cards: list[dict], *, lang: str,
     numbered = '\n'.join(
         f'[{i}] {c["point"]}  (来源: {c["url"]})'
         for i, c in enumerate(cards, 1))
+    import datetime
+    today = datetime.date.today().isoformat()
     if lang == 'zh':
         return (
-            '你是一名科普短视频编导。请把下面这些带来源的事实卡片,改写成一段'
+            f'今天是 {today}。你是一名科普短视频编导。请把下面这些带来源的事实卡片,改写成一段'
             f'口语化、准确、适合配音的科普短视频口播稿,主题是《{topic}》。\n\n'
             '严格要求:\n'
             f'1. 输出 JSON:{{"title": "...", "segments": ["第1段口播", "第2段", ...]}}。\n'
@@ -172,7 +179,7 @@ def _build_script_prompt(topic: str, cards: list[dict], *, lang: str,
             '5. 只输出 JSON 本身,不要解释、不要代码围栏。\n\n'
             f'事实卡片:\n{numbered}')
     return (
-        'You are a science-explainer video writer. Rewrite the sourced fact '
+        f'Today is {today}. You are a science-explainer video writer. Rewrite the sourced fact '
         f'cards below into a spoken, accurate, voice-over-ready short-video '
         f'script about "{topic}".\n\n'
         'Strict requirements:\n'
@@ -237,11 +244,16 @@ def _run_script(ctx: dict) -> dict:
                 for s in raw.get('segments') or [] if str(s).strip()]
     segments = segments[:max_scenes - 1]  # leave room for the sources card
     title = (raw.get('title') or topic).strip()
-    # 拍板 #4: always credit the sources at the end (片尾来源卡).
-    segments.append(_sources_line(cards, lang))
-    logger.info('[Recipe:script] topic=%r → %d segment(s) (+sources), title=%r',
-                topic[:60], len(segments), title[:60])
+    # 拍板 #4: credit the sources at the end — but as a SILENT VISUAL end
+    # card (owner 2026-07-26), never a narration segment. The timeline stage
+    # turns this line into the final spoken=False scene; if it stayed here,
+    # the TTS pass would read domain names aloud.
+    sources_line = _sources_line(cards, lang)
+    logger.info('[Recipe:script] topic=%r → %d segment(s), sources card %r, '
+                'title=%r', topic[:60], len(segments), sources_line[:40],
+                title[:60])
     return {'title': title, 'segments': segments,
+            'sources_line': sources_line,
             'usage': usage if isinstance(usage, dict) else {}}
 
 
@@ -259,11 +271,18 @@ SCRIPT = Stage('script', _run_script, gate=_gate_script, retry=1)
 
 # ── Stage: timeline ───────────────────────────────────────
 
-def _provisional_scenes(segments: list[str]) -> list[dict]:
+#: Fixed on-screen duration of the SILENT sources end card.
+_SOURCES_CARD_S = 3.5
+
+
+def _provisional_scenes(segments: list[str],
+                        sources_line: str = '') -> list[dict]:
     """A first-cut storyboard (contiguous from 0) used only to drive TTS.
 
     Durations here are placeholders; the real durations come from the TTS
     manifest and are written back before this becomes the final scenes.json.
+    ``sources_line`` becomes the final scene — a SILENT visual end card
+    (spoken=False, fixed duration, never sent to TTS).
     """
     scenes: list[dict] = []
     cursor = 0.0
@@ -275,6 +294,12 @@ def _provisional_scenes(segments: list[str]) -> list[dict]:
                        'end': round(cursor + est, 3),
                        'text': seg, 'visual': ''})
         cursor += est
+    if sources_line:
+        scenes.append({'id': f'scene-{len(scenes) + 1:03d}',
+                       'start': round(cursor, 3),
+                       'end': round(cursor + _SOURCES_CARD_S, 3),
+                       'text': sources_line, 'visual': 'sources',
+                       'spoken': False})
     return scenes
 
 
@@ -294,14 +319,18 @@ def _rescore_from_manifest(scenes: list[dict], manifest: dict) -> list[dict]:
 
 
 def _run_timeline(ctx: dict) -> dict:
-    segments = ctx['artifacts']['script']['segments']
-    scenes = _provisional_scenes(segments)
+    script = ctx['artifacts']['script']
+    scenes = _provisional_scenes(script['segments'],
+                                 script.get('sources_line') or '')
     audio_dir = os.path.join(ctx['workdir'], 'audio')
     manifest = {'ok': False, 'degraded': True}
     if ctx.get('narration', True):
+        # TTS only ever sees SPOKEN scenes — the silent sources card keeps its
+        # fixed duration and is voiced by nothing (owner: no robot reading URLs).
+        spoken = [s for s in scenes if s.get('spoken', True)]
         try:
             manifest = _tts_durations(
-                scenes, audio_dir, voice=ctx.get('voice') or None,
+                spoken, audio_dir, voice=ctx.get('voice') or None,
                 speed=ctx.get('speed'), alignment=ctx.get('alignment', 'loose'),
                 abort_event=ctx.get('abort_event'))
         except Exception as e:

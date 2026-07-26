@@ -146,6 +146,8 @@ def _reusable_manifest(audio_dir: str, scenes: list) -> dict | None:
         return None
     by_id = {e.get('scene_id'): e for e in m.get('scenes') or []}
     for sc in scenes:
+        if sc.get('spoken', True) is False:
+            continue  # silent scenes (e.g. the sources card) need no wav
         entry = by_id.get(sc.get('id'))
         if not entry or not entry.get('wav') or not os.path.isfile(entry['wav']):
             return None
@@ -308,7 +310,8 @@ def run_motion_task(task: dict) -> None:
                 try:
                     with heartbeat(task, lambda t, ev: _emit(t, ev), 'narrate'):
                         manifest = mv.synthesize_scene_narrations(
-                            scenes, audio_dir, voice=task.get('voice') or None,
+                            [s for s in scenes if s.get('spoken', True)],
+                            audio_dir, voice=task.get('voice') or None,
                             speed=task.get('speed'),
                             alignment=task.get('alignment') or 'loose',
                             abort_event=task.get('abort_event'),

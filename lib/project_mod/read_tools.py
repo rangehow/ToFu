@@ -689,8 +689,11 @@ def _build_rg_cmd(base, target, pattern, include, ctx_n, cap=MAX_GREP_RESULTS, c
         cmd = ['rg', '-ci', '--color=never', '--no-heading']
     else:
         cmd = ['rg', '-ni', '--color=never', '--no-heading']
-    # Skip ignored dirs
-    for d in list(IGNORE_DIRS)[:30]:
+    # Skip ignored dirs — ALL of them, in a deterministic order.
+    # (Was list(IGNORE_DIRS)[:30]: once the set grew past 30 entries the
+    # per-process hash order silently dropped arbitrary exclusions, so
+    # node_modules & co. leaked back into grep results ~nondeterministically.)
+    for d in sorted(IGNORE_DIRS):
         cmd.extend(['-g', f'!{d}/'])
     # ★ rg auto-respects .gitignore only inside a git repo (.git/ present).
     #   When there's no .git/ (e.g. exported projects, workdir copies),
@@ -720,7 +723,8 @@ def _build_grep_cmd(base, target, pattern, include, ctx_n, cap=MAX_GREP_RESULTS,
         cmd = ['grep', '-rci', '--color=never', '-I']
     else:
         cmd = ['grep', '-rni', '--color=never', '-I']
-    for d in list(IGNORE_DIRS)[:30]:
+    # See _build_rg_cmd: complete, deterministic exclusions (no [:30] cap).
+    for d in sorted(IGNORE_DIRS):
         cmd.extend(['--exclude-dir', d])
     # ★ GNU grep doesn't have --ignore-file, so parse .gitignore manually
     #   and add --exclude-dir for directory patterns found there.

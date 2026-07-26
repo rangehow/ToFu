@@ -2087,6 +2087,8 @@ var _i18n = {
   'paper.podcastStepValidate': { zh: '质检中', en: 'checking quality' },
   'paper.podcastStepRevise': { zh: '修订中', en: 'revising' },
   'paper.podcastStepCritic': { zh: '审听编辑中', en: 'editor review' },
+  'paper.podcastStreamSegments': { zh: '小节', en: 'segment' },
+  'paper.podcastStreamChars': { zh: '字', en: 'chars' },
   'paper.podcastLost': { zh: '任务丢失或连接已断开——生成任务的状态已无法查询。', en: 'Task lost or connection dropped — the generation task can no longer be reached.' },
   'paper.podcastInterrupted': { zh: '上次生成被服务器重启打断。', en: 'The last generation was cut short by a server restart.' },
   'paper.podcastRecheck': { zh: '重新查询状态', en: 'Re-check status' },

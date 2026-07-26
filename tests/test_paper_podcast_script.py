@@ -288,23 +288,42 @@ def test_render_figure_list():
 
 
 def _install_dispatch_mock(replies):
-    """Patch _script.dispatch_chat with a reply sequence; return calls list."""
+    """Patch _script.dispatch_chat + dispatch_stream with reply sequences.
+
+    The critic still goes through dispatch_chat; every script pass goes
+    through dispatch_stream (3-tuple return). The stream fake replays the
+    reply through on_content in two chunks so the accumulation path in
+    _stream_call is exercised exactly as in production."""
     import lib.paper.podcast_engine._script as S
     calls = []
 
-    def _fake(messages, **kwargs):
-        calls.append(messages)
-        # critic call: single user message carrying the critic prompt
-        content = messages[-1]['content'] if messages else ''
-        if len(messages) == 1 and ('审听编辑' in content or 'review editor' in content):
-            return replies['critic'], {'prompt_tokens': 1, 'completion_tokens': 1}
+    def _next_script():
         script = replies['script'][min(replies['script_idx'][0], len(replies['script']) - 1)]
         replies['script_idx'][0] += 1
-        return script, {'prompt_tokens': 10, 'completion_tokens': 100}
+        return script
 
-    orig = S.dispatch_chat
-    S.dispatch_chat = _fake
-    return calls, lambda: setattr(S, 'dispatch_chat', orig)
+    def _fake_chat(messages, **kwargs):
+        calls.append(messages)
+        return replies['critic'], {'prompt_tokens': 1, 'completion_tokens': 1}
+
+    def _fake_stream(messages, **kwargs):
+        calls.append(messages)
+        script = _next_script()
+        on_content = kwargs.get('on_content')
+        if on_content:
+            half = len(script) // 2
+            on_content(script[:half])
+            on_content(script[half:])
+        return {}, 'stop', {'prompt_tokens': 10, 'completion_tokens': 100}
+
+    orig_chat, orig_stream = S.dispatch_chat, S.dispatch_stream
+    S.dispatch_chat = _fake_chat
+    S.dispatch_stream = _fake_stream
+
+    def _restore():
+        S.dispatch_chat = orig_chat
+        S.dispatch_stream = orig_stream
+    return calls, _restore
 
 
 def test_generate_script_happy_path():
@@ -381,6 +400,54 @@ def test_generate_script_critic_revision():
     _ok('pipeline: critic flags → one revision → clean, critic_issues recorded')
 
 
+def test_generate_script_streams_progress():
+    """The draft pass must emit MEASURED progress events as content streams
+    in: chars monotonically increasing, segments counted from "section" keys,
+    and a restart resetting both to 0. Throttle is zeroed for the test."""
+    import lib.paper.podcast_engine._script as S
+    from lib.paper.podcast_engine._script import generate_script
+    good = json.dumps(_good_script(), ensure_ascii=False)
+    events = []
+
+    def _fake_stream(messages, **kwargs):
+        on_content = kwargs.get('on_content')
+        on_restart = kwargs.get('on_attempt_restart')
+        third = len(good) // 3
+        on_content(good[:third])
+        on_content(good[third:2 * third])
+        if on_restart:
+            on_restart(reason='test_restart')
+        on_content(good[:third])
+        on_content(good[third:])
+        return {}, 'stop', {'prompt_tokens': 10, 'completion_tokens': 100}
+
+    def _fake_chat(messages, **kwargs):
+        return '{"issues": []}', {'prompt_tokens': 1, 'completion_tokens': 1}
+
+    orig_chat, orig_stream = S.dispatch_chat, S.dispatch_stream
+    orig_interval = S._STREAM_EVENT_MIN_INTERVAL
+    S.dispatch_chat = _fake_chat
+    S.dispatch_stream = _fake_stream
+    S._STREAM_EVENT_MIN_INTERVAL = 0.0
+    try:
+        generate_script(source_text=SRC, lang='zh', mode='short', title='t',
+                        images=[], model=None, on_event=events.append)
+    finally:
+        S.dispatch_chat = orig_chat
+        S.dispatch_stream = orig_stream
+        S._STREAM_EVENT_MIN_INTERVAL = orig_interval
+
+    beats = [e for e in events if e.get('step') == 'draft' and 'chars' in e]
+    assert beats, f'no streamed draft beats in {events}'
+    seq = [e['chars'] for e in beats]
+    assert seq[0] > 0 and seq[1] > seq[0], f'chars not increasing: {seq}'
+    assert 0 in seq[2:], f'restart must reset chars to 0: {seq}'
+    assert seq[-1] == len(good), f'final chars {seq[-1]} != full length {len(good)}'
+    assert all(e['char_target'] == 1500 for e in beats), 'zh/short target is 1500'
+    assert beats[-1]['segments'] == good.count('"section"'), beats[-1]
+    _ok('pipeline: streamed draft emits measured chars/segments, restart resets')
+
+
 def test_critic_disabled_by_env():
     from lib.paper.podcast_engine._script import generate_script
     good = json.dumps(_good_script(), ensure_ascii=False)
@@ -426,6 +493,7 @@ def main():
         test_generate_script_gate_revision,
         test_generate_script_low_confidence,
         test_generate_script_critic_revision,
+        test_generate_script_streams_progress,
         test_critic_disabled_by_env,
     ]
     for fn in tests:

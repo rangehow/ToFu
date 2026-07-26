@@ -35,6 +35,9 @@ var _podcast = {
   phaseIndex: 0,           // 1-based index of the current phase
   currentPhase: '',
   scriptStep: '',          // draft|validate|revise|critic (script sub-step)
+  scriptChars: 0,          // chars streamed so far in the current draft pass
+  scriptSegments: 0,       // segments started so far (counted from the stream)
+  scriptCharTarget: 0,     // the char target the prompt actually instructed
   genStartedAt: 0,         // local stopwatch start
   lastEventAt: 0,          // last event/poll-success time (liveness)
   tickTimer: null,         // 1s UI ticker for elapsed/last-active
@@ -52,6 +55,9 @@ function _pcResetRun() {
   _podcast.phaseIndex = 0;
   _podcast.currentPhase = '';
   _podcast.scriptStep = '';
+  _podcast.scriptChars = 0;
+  _podcast.scriptSegments = 0;
+  _podcast.scriptCharTarget = 0;
   _podcast.genStartedAt = Date.now();
   _podcast.lastEventAt = Date.now();
   _podcast._segFirstTick = 0;
@@ -182,6 +188,13 @@ function _pcConsumeEvent(ev) {
     return true;   // phase changed → the stepper needs a full re-render
   } else if (ev.type === 'progress' && ev.phase === 'script') {
     _podcast.scriptStep = ev.step || '';
+    /* The draft pass streams: these counters are MEASURED (chars emitted,
+       segments started), so they advance during the 1-3 min LLM call that
+       otherwise shows a frozen label. A restarted attempt re-sends from
+       scratch and reports 0 — assign, never accumulate. */
+    if (typeof ev.chars === 'number') _podcast.scriptChars = ev.chars;
+    if (typeof ev.segments === 'number') _podcast.scriptSegments = ev.segments;
+    if (typeof ev.char_target === 'number') _podcast.scriptCharTarget = ev.char_target;
   } else if (ev.type === 'segment_done') {
     _podcast.progress = { done: ev.done, total: ev.total };
     // Honest ETA (拍板 A): wall-clock rate of the segments done so far.
@@ -342,7 +355,24 @@ function _pcRenderProgress() {
                     revise: 'paper.podcastStepRevise', critic: 'paper.podcastStepCritic' };
     var fallback = { draft: 'draft done', validate: 'checking quality',
                      revise: 'revising', critic: 'editor review' };
-    if (_podcast.scriptStep) {
+    /* During the draft pass the counters stream in, so show what has really
+     * been written instead of a label that cannot change for 1-3 minutes.
+     * Only measured numbers: segments started, and chars against the target
+     * the prompt instructed. No invented percentage or segment denominator —
+     * the prompt bounds total LENGTH, never a segment count. */
+    if (_podcast.scriptChars > 0 &&
+        (_podcast.scriptStep === 'draft' || _podcast.scriptStep === 'revise')) {
+      if (_podcast.scriptStep === 'revise') {
+        line += ' · ' + _pcT(stepMap.revise, fallback.revise);
+      }
+      if (_podcast.scriptSegments > 0) {
+        line += ' · ' + _pcT('paper.podcastStreamSegments', 'segment') + ' ' +
+          _podcast.scriptSegments;
+      }
+      line += ' · ' + _podcast.scriptChars +
+        (_podcast.scriptCharTarget > 0 ? '/~' + _podcast.scriptCharTarget : '') +
+        ' ' + _pcT('paper.podcastStreamChars', 'chars');
+    } else if (_podcast.scriptStep) {
       line += ' · ' + _pcT(stepMap[_podcast.scriptStep] || '',
                           fallback[_podcast.scriptStep] || _podcast.scriptStep);
     }

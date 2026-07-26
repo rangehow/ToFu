@@ -3,7 +3,7 @@
 Turns a persisted paper report into a validated podcast script:
 
   build messages (report fenced as untrusted + figure list as trusted)
-    → dispatch_chat (non-streaming — we need a COMPLETE JSON document)
+    → dispatch_stream (streamed — intra-call char/segment progress events)
     → parse + normalize
     → validate_script gates
     → ONE validator-feedback revision on failure
@@ -22,11 +22,17 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 
-from lib.llm_dispatch import dispatch_chat
+from lib.llm_dispatch import dispatch_chat, dispatch_stream
 from lib.log import get_logger
 from lib.paper.injection_guard import wrap_untrusted
-from lib.paper.podcast_prompts import build_critic_prompt, build_script_prompt
+from lib.paper.podcast_prompts import (
+    MODE_LENGTH_EN,
+    MODE_LENGTH_ZH,
+    build_critic_prompt,
+    build_script_prompt,
+)
 
 from lib.paper.podcast_engine._validate import estimate_seconds, validate_script
 
@@ -180,6 +186,60 @@ def _critic_review(*, lang: str, script: dict, figure_list_text: str,
     return []
 
 
+# ── Streamed draft (intra-call progress) ─────────────────────────────────
+
+#: Minimum seconds between two streamed `progress` events. The draft is a
+#: 1–3 minute call; a beat every 2s is visibly live while keeping the event
+#: log the cursor protocol replays to ~90 rows per pass rather than ~180.
+_STREAM_EVENT_MIN_INTERVAL = 2.0
+
+#: Counting `"section"` keys counts segments STARTED, which is what the user
+#: is watching happen. Tolerates the whitespace the model may put around `:`.
+_SECTION_KEY_RE = re.compile(r'"section"\s*:')
+
+
+def _stream_call(messages: list[dict], *, model: str | None,
+                 emit) -> tuple[str, dict]:
+    """Run the draft as a STREAM, reporting real progress as bytes arrive.
+
+    ``dispatch_chat`` blocks for the whole 1–3 minute generation, which is
+    precisely why the script phase looks frozen. Streaming lets us count
+    what has actually been written so far. Both reported numbers are
+    MEASURED, never estimated: ``chars`` is the length of the text the model
+    has emitted, ``segments`` is the number of ``"section"`` keys in it.
+
+    ``emit(chars, segments)`` is called at most once per
+    ``_STREAM_EVENT_MIN_INTERVAL`` seconds.
+    """
+    buf: list[str] = []
+    last_beat = [time.monotonic()]
+
+    def _on_content(delta: str) -> None:
+        buf.append(delta)
+        now = time.monotonic()
+        if now - last_beat[0] < _STREAM_EVENT_MIN_INTERVAL:
+            return
+        last_beat[0] = now
+        text = ''.join(buf)
+        emit(len(text), len(_SECTION_KEY_RE.findall(text)))
+
+    def _on_attempt_restart(reason: str = '') -> None:
+        # The transport is re-sending this attempt from scratch; anything
+        # already counted will arrive again. Keeping it would inflate the
+        # char count into a number that never matches the finished script.
+        buf.clear()
+        emit(0, 0)
+
+    # dispatch_stream returns the assistant MESSAGE dict, not text; the other
+    # paper stream callers all accumulate from on_content instead. Doing the
+    # same also guarantees the text we parse is byte-identical to the text we
+    # counted progress from.
+    _msg, _finish, usage = dispatch_stream(
+        messages, max_tokens=16384, temperature=0.2, prefer_model=model,
+        on_content=_on_content, on_attempt_restart=_on_attempt_restart,
+        log_prefix='[Paper:Podcast:Script]')
+    return ''.join(buf), usage
+
 # ── Main entry ───────────────────────────────────────────────────────────
 
 
@@ -232,10 +292,24 @@ def generate_script(*, source_text: str, lang: str, mode: str, title: str,
         'usage': {'input': 0, 'output': 0},
     }
 
-    def _call(messages: list[dict]) -> dict:
-        content, usage = dispatch_chat(
-            messages, max_tokens=16384, temperature=0.2,
-            prefer_model=model, log_prefix='[Paper:Podcast:Script]')
+    #: The character target we actually INSTRUCTED the model to hit — a real
+    #: number the prompt owns, so `chars/target` is a measured ratio, not a
+    #: guessed percentage. English guidance is in WORDS, so the target is
+    #: converted to characters at the conventional ~6 chars/word to keep the
+    #: two languages on one comparable scale.
+    char_target = (MODE_LENGTH_ZH if lang == 'zh' else MODE_LENGTH_EN)[mode][1]
+    if lang == 'en':
+        char_target *= 6
+
+    def _emit_stream_progress(step: str):
+        def _emit(chars: int, segments: int) -> None:
+            _progress(step, chars=chars, segments=segments,
+                      char_target=char_target)
+        return _emit
+
+    def _call(messages: list[dict], *, step: str = 'draft') -> dict:
+        content, usage = _stream_call(messages, model=model,
+                                      emit=_emit_stream_progress(step))
         if isinstance(usage, dict):
             meta['usage']['input'] += int(usage.get('prompt_tokens') or 0)
             meta['usage']['output'] += int(usage.get('completion_tokens') or 0)
@@ -258,7 +332,7 @@ def generate_script(*, source_text: str, lang: str, mode: str, title: str,
                 '不要任何解释、不要代码围栏。' if lang == 'zh' else
                 'The previous reply was not valid script JSON. Re-output ONLY '
                 'the JSON object — no commentary, no fences.'},
-        ])
+        ], step='revise')
     _progress('draft')
 
     # ── Round 2: validator feedback revision (one shot) ──
@@ -279,7 +353,7 @@ def generate_script(*, source_text: str, lang: str, mode: str, title: str,
                 '(只输出 JSON):\n' + issue_list) if lang == 'zh' else (
                 'The previous script failed QA. Fix every issue below and '
                 're-output the COMPLETE JSON (JSON only):\n' + issue_list)},
-        ])
+        ], step='revise')
         issues = validate_script(script, mode=mode, lang=lang,
                                  source_text=source_text or '',
                                  manifest_files=manifest_files)
@@ -306,7 +380,7 @@ def generate_script(*, source_text: str, lang: str, mode: str, title: str,
                     'The review editor raised the points below. Apply every '
                     'one and re-output the COMPLETE JSON (JSON only; the '
                     'revision must still pass all QA gates):\n' + issue_list)},
-            ])
+            ], step='revise')
             # A critic revision must STILL pass the hard gates — re-validate.
             issues = validate_script(script, mode=mode, lang=lang,
                                      source_text=source_text or '',

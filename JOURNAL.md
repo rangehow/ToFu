@@ -1,6 +1,17 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续15) — 请求检视器 P5 数据面重构:snapshot 增量存储 + 分层保留 + 存量迁移(2 commit:`1a8d4cc8` 6 文件 +999/-18 / `fe2f220f` 4 文件 +474;新套件 12+5+5=22 测含 3 发 NEUTER,回归 11 套件 106/106,collect **9384** 0 err;epic `pt_9ab6f6b2c93f4653` 挂 human-gated 等重启)
+- **owner 实证的病根(不是推测):** 检视器打开全是「事件日志已过期」而任务只有 2 小时。两层:①6h TTL 一刀切把结构事件连同流式噪声一起删;②不敢延长保留期——每轮整包重存全量 messages+tools,snapshot 占 `task_events` 总字节 **92.4%**,单任务 `efb479f6` 167 轮 = **123.2MB**,`tools` 数组每轮固定 **201898 字节重存 167 遍**(≈33MB 纯冗余)。**顺序硬约束:先增量化、再延长保留**,反了会把 FUSE 上的 pg 拖垮。
+- **增量格式(设计稿 §10 冻结,owner 逐条拍板):** tools 按内容哈希去重 + messages 增量(`prefixLen`/`prefixHash`/`newMessages`/`messageCount`)+ 重复轮次只落空记录 + **回放 API 形状不变**(服务端重建,前端零感知)。
+- **一处对 owner 方案的偏离(已说明并被接受):** 没造 `tools_dict` 独立事件行,改为「首个携带该 hash 的行内联存一份、后续行只带 `toolsHash`」。因为 `event_id` 既是 SSE 回放游标又是 `(task_id,event_id)` 主键的一半,**注入合成行会同时扰动两者**,「一行一事件」不变式必须守住。去重效果等价。
+- **最容易被后人破坏的不变量(已钉死):** 投影只发生在**持久化边界**,推给前端的 event 对象逐字节不动 —— 专测 `test_persist_does_not_mutate_the_sse_event`。
+- **诚实降级:** 基线被 prune / 哈希对不上 / tools 载体丢失 → `degraded` + `degradedReason` 透传到行与 payload,绝不静默返回残缺报文。
+- **存量迁移(§11,`tests/_migrate_snapshot_deltas.py`):** 逐任务单事务「投影 → 重建 → **与原文逐字节比对** → 全轮通过才写」,任一轮不一致整任务回滚、旧行分毫不动。两次实跑共 **66 任务零失败**,全表 `SUM(pg_column_size)` **997.6MB → 171.7MB**;单任务最高 `e1699c69` 252 轮 199.3MB → 2.24MB(**89.1×**)。
+- **顺手修 owner 抓到的慢查询:** `json_extract` 在 PG 上翻译成 `payload::jsonb->>'…'`,实测单次 **5878ms**。补 `task_events(task_id, type)` 复合索引(两库对称)。**真正的主因是 seq scan 会 detoast 每条快照 payload** —— 所以压下去靠「增量化让 payload 变小」+「索引避免全表扫」两件事叠加,单靠索引不够。
+- **诚实结论(epic 未收):** 代码+迁移全部完成,但**写路径投影 / 分层 TTL / 新索引创建都在进程启动时生效**,旧进程仍在写整包行(每次核查都新增数百条)且最老 snapshot 仍停在 6.1h。已挂 `[human-gated]` question-block 等 owner 重启,复测两条即收口:①新任务行带 `prefixLen` ②>6h 任务不再显示「已过期」。
+- **待续:** P6(工具行就地展开入口 + 上下文球内联 + 抽屉降为全文查看器)—— 这才是直接解决 owner 最初诉求(chatinner 看到可疑工具调用 → 一键定位产生它的那次请求)的一刀。
+
 ### 2026-07-26(续14) — 成本审计第 2 刀:整轮自动重试不再抹掉已计费 usage + Opus 5 缓存定位到「OpenAI 线尾部断点丢失」并**如实挂为开放问题**(commit 见下,3 文件;新套件 9/9 含 NEUTER×2 + 5/5 缺陷钉,相邻 105/105)
 - **修的是什么(仓内可证、收益确定):** `_finalize.py` 的 `_maybe_auto_retry_turn` 在重跑前 `task['usage'] = {}`。而整轮结算成 `abnormal_stop`/`premature_close` 时,内层 stream 异常循环**最多已烧 16 次尝试**的 thinking token,且都已正确折进 `accumulated_usage → task['usage']`。外层重试把这笔账整个丢掉,重跑从空的 `accumulated_usage` 重新开始(`_run.py:418`),而钱包从**最终** `task['usage']` 结算(`request_flow.settle_task`)——用户被扣最多 4 轮的钱、账上只记最后一轮。与 FloorRetry 记账 bug 同一形态:真实计费请求对成本报表不可见。`abnormal_stop` 在 `_AUTO_RETRY_KINDS` 里,是长任务的常见结局,不是罕见边角。
 - **修法(复用现成语义,不新造机制):** 把被丢弃那次的 usage/apiRounds 折进 continue-checkpoint 已有的 `_checkpointUsage` / `_checkpointApiRounds` 槽——`_finalize_task:1018` 本来就会把它们并进终态 usage。语义精确对齐(「本次 run_task 之前已计费」),且**累加而非覆盖**,所以「从 checkpoint 恢复 + 又被自动重试」两笔账都在,多次重试也逐次累积。重跑本身仍看到空 usage(否则会自我重复计数)。

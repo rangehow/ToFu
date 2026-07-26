@@ -135,6 +135,13 @@ function _fitMatrixPanelWidth() {
     panel.classList.toggle('stg-matrix-wide', true);
   } else {
     panel.classList.toggle('stg-matrix-wide', wide);
+    // Commit the final width WHILE the transition is still suspended. The
+    // measurement reflow above committed the panel at its DEFAULT width, so
+    // that is the value the transition engine would animate FROM: clearing
+    // the transition before this commit makes every re-fit of an
+    // already-wide panel animate default→wide. The 1.5s probe poll re-fits
+    // forever, which turned that into a continuous narrow↔wide sweep.
+    void panel.offsetWidth;
     panel.style.transition = '';
   }
 }

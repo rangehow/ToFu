@@ -206,6 +206,9 @@ fakePanel.classList = {
   remove: function (cls) { if (cls === 'stg-matrix-wide') { fakePanel._wide = false; ops.push('remove'); } },
   toggle: function (cls, on) { if (cls === 'stg-matrix-wide') { fakePanel._wide = !!on; ops.push('toggle:' + !!on); } },
 };
+Object.defineProperty(fakePanel, 'offsetWidth', {
+  get: function () { ops.push('reflow'); return fakePanel._wide ? WIDE_W : NARROW_W; },
+});
 const fakeScroll = {};
 Object.defineProperty(fakeScroll, 'clientWidth', {
   get: function () { return fakePanel._wide ? WIDE_W : NARROW_W; },
@@ -238,7 +241,15 @@ ops.length = 0;
 _fitMatrixPanelWidth();
 check('refit_while_wide_stays_wide', fakePanel._wide === true);
 check('stay_wide_ops',
-      ops.join('|') === 't:suspend|remove|toggle:true|t:restore');
+      ops.join('|') === 't:suspend|remove|toggle:true|reflow|t:restore');
+// The re-added class must be COMMITTED (forced reflow) while the transition
+// is still suspended. Restoring the transition first makes the engine animate
+// from the DEFAULT width the measurement reflow just committed — and since the
+// 1.5s probe poll re-fits forever, that became a continuous narrow<->wide
+// sweep (owner-reported "keeps narrowing and widening in a loop", 2026-07-26).
+check('stay_wide_commits_before_transition_restored',
+      ops.indexOf('reflow') >= 0 &&
+      ops.indexOf('reflow') < ops.indexOf('t:restore'));
 
 // 3) Content shrinks to fit the narrow panel → panel unwidens.
 CONTENT_W = 300;
@@ -246,7 +257,7 @@ ops.length = 0;
 _fitMatrixPanelWidth();
 check('fitting_matrix_unwidens_panel', fakePanel._wide === false);
 check('unwiden_ops',
-      ops.join('|') === 't:suspend|remove|toggle:false|t:restore');
+      ops.join('|') === 't:suspend|remove|toggle:false|reflow|t:restore');
 
 // 4) A hidden matrix (zero layout box) never widens the panel.
 fakeScrolls = [{ clientWidth: 0, scrollWidth: 2000 }];
@@ -303,6 +314,31 @@ class ScopedProbeFrontendTest(unittest.TestCase):
             output = _run_harness(copy)
         self.assertIn('FAIL scoped_dispatch_posts_only', output,
                       'NEUTER did not bite: scope still posted without the only line.\n'
+                      + output)
+
+        with open(ACCESS_MATRIX_JS, encoding='utf-8') as f:
+            self.assertEqual(f.read(), src, 'harness mutated the shipped access_matrix.js')
+
+    def test_neuter_width_commit_before_transition_restore_is_load_bearing(self):
+        """NEUTER: drop the ``void panel.offsetWidth`` that commits the final
+        width while the transition is still suspended → the engine animates
+        from the DEFAULT width the measurement reflow committed, and because
+        the 1.5s probe poll re-fits forever the panel sweeps narrow↔wide
+        continuously (owner-reported oscillation, 2026-07-26)."""
+        with open(ACCESS_MATRIX_JS, encoding='utf-8') as f:
+            src = f.read()
+        anchor = '    void panel.offsetWidth;\n'
+        self.assertIn(anchor, src, 'width-commit anchor drifted — update the neuter')
+        neutered = src.replace(anchor, '', 1)
+        self.assertNotEqual(neutered, src)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            copy = os.path.join(tmp, 'access_matrix_neutered.js')
+            with open(copy, 'w', encoding='utf-8') as f:
+                f.write(neutered)
+            output = _run_harness(copy)
+        self.assertIn('FAIL stay_wide_commits_before_transition_restored', output,
+                      'NEUTER did not bite: width still committed without the reflow.\n'
                       + output)
 
         with open(ACCESS_MATRIX_JS, encoding='utf-8') as f:

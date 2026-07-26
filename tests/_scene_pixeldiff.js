@@ -79,6 +79,7 @@ let canvasN = 0;
 const visRec = recorder();
 const bufRec = recorder();
 const fgRec = recorder();
+const glowRec = recorder();     // the baked sun-glow tile (4th canvas created)
 
 let rafCb = null;
 global.requestAnimationFrame = function (cb) { rafCb = cb; return 1; };
@@ -111,8 +112,9 @@ global.document = {
   createElement(t) {
     if (t === 'canvas') {
       canvasN++;
-      // #1 visible bg, #2 offscreen buffer, #3 foreground occlusion canvas
-      const rec = canvasN === 1 ? visRec : (canvasN === 2 ? bufRec : fgRec);
+      // #1 visible bg, #2 offscreen buffer, #3 foreground occlusion canvas,
+      // #4 the baked sun-glow tile (_bakeGlowTile — not a painted scene plane)
+      const rec = canvasN === 1 ? visRec : (canvasN === 2 ? bufRec : (canvasN === 3 ? fgRec : glowRec));
       const e = mkEl();
       e.getContext = function () { return rec.ctx; };
       return e;

@@ -367,6 +367,68 @@
     flushDabs();
   }
 
+  /** CONSTRAIN a context to the torn outline for the rest of the frame.
+   *
+   *  This replaces a per-frame `destination-out` cut. The cut had to fill the
+   *  WHOLE canvas bounding box (the even-odd rect ⊖ outline), so the rasterizer
+   *  scanned w×h device pixels every frame just to erase a ~5px rim — and it
+   *  had to run AFTER every layer, meaning the layers first PAINTED the margin
+   *  and then had it erased. Clipping instead means the margin is never painted
+   *  in the first place, which is both cheaper and strictly more correct (an
+   *  additive 'lighter' wash into a region that is about to be erased still
+   *  costs full blend bandwidth).
+   *
+   *  Caller owns the save/restore pairing. Degrades to no clip on a context
+   *  without clip() (the scene then keeps its plain rounded silhouette). */
+  function _clipDeckle(ctx) {
+    if (!_deckle.length || typeof ctx.clip !== 'function') return;
+    ctx.beginPath();
+    ctx.moveTo(_deckle[0][0], _deckle[0][1]);
+    for (var i = 1; i < _deckle.length; i++) ctx.lineTo(_deckle[i][0], _deckle[i][1]);
+    ctx.closePath();
+    ctx.clip();
+  }
+
+  // ── SUN-GLOW TILE ────────────────────────────────────────────────────────
+  // The drifting sun was a `createRadialGradient` rebuilt EVERY frame and then
+  // `fillRect`-ed across the WHOLE canvas under 'lighter'. Two separate costs
+  // hid in that one line:
+  //   * the fill touched w×h device pixels with an additive blend, ~20% of the
+  //     frame's entire pixel budget and growing linearly with the bar's width;
+  //   * yet the gradient is fully TRANSPARENT beyond its radius (h*1.6), so the
+  //     overwhelming majority of those pixels were blending a no-op.
+  // And it was all to move the sun 0.6px — the sweep travels ~18px/second.
+  //
+  // So the glow is baked ONCE into a small square tile (2R×2R) at bake time and
+  // blitted at the sun's position each frame. A blit of a ~154px tile replaces a
+  // full-width gradient fill: the per-frame glow cost becomes O(h²), constant in
+  // the bar's width.
+  var _glowTile = null, _glowR = 0;
+
+  function _bakeGlowTile(pal, h) {
+    _glowTile = null;
+    if (!(h > 0) || !pal || !pal.glow) return;
+    var R = h * 1.6;
+    var side = Math.max(2, Math.ceil(2 * R * _dpr));
+    var t, tc;
+    try {
+      t = document.createElement('canvas');
+      t.width = side; t.height = side;
+      tc = t.getContext('2d');
+    } catch (e) { return; }                    // no second context — glow degrades off
+    if (!tc) return;
+    tc.setTransform(_dpr, 0, 0, _dpr, 0, 0);
+    var g = tc.createRadialGradient(R, R, 0, R, R, R);
+    g.addColorStop(0, pal.glow + SUN_GLOW_PEAK + ')');
+    g.addColorStop(0.4, pal.glow + SUN_GLOW_MID + ')');
+    g.addColorStop(1, pal.glow + '0)');
+    tc.fillStyle = g;
+    tc.fillRect(0, 0, 2 * R, 2 * R);
+    _glowTile = t;
+    _glowR = R;
+  }
+
+
   // ── module state ──
   var _bar = null;
   // ── module state ──
@@ -415,6 +477,16 @@
   var _fgCanvas = null, _fgctx = null;
   var _fgBlades = [];                 // near-foreground occluders (in front of the pet)
   var _understory = [];               // irregular dark mounds anchoring the fg base (not a solid strip)
+  // Top of the band the fg plane actually paints (CSS px). The plane is rooted
+  // at the bottom, so everything above this is permanently transparent — the
+  // per-frame clear is confined to [_fgTop, h] instead of the whole canvas.
+  // Recomputed from the seeded geometry at bake time, so it can never drift out
+  // of step with what is drawn.
+  var _fgTop = 0;
+  // Set after a re-bake (size/scene change): the torn outline itself has moved,
+  // so stale pixels can survive OUTSIDE the new clip. One full clear retires
+  // them; steady-state frames need none.
+  var _needFullClear = true;
 
   // ── Pet ⋈ scene WAKE: the pet's foot disturbs the PAINTED scene (owner ask —
   // "stepping on grass presses it down / stepping on the pool splashes"). Each
@@ -704,6 +776,21 @@
       ux += uw * lerp(0.55, 0.9, R());                   // overlap + occasional gap
     }
     _spawnCritter(R);
+    // Compute the top of the band the fg plane paints, from the SEEDED geometry
+    // (blade root minus its length/sway headroom, and the highest airy puff), so
+    // the per-frame clear can be confined to it without ever clipping a stroke.
+    // Generous headroom: blades sway, and the disturbance shove lengthens them.
+    var fgTop = h;
+    for (var ti = 0; ti < _fgBlades.length; ti++) {
+      var tb = _fgBlades[ti];
+      var anchor = (tb.hy != null ? tb.hy : tb.rootY);
+      fgTop = Math.min(fgTop, anchor - tb.len * 1.6 - 6);
+    }
+    _fgTop = Math.max(0, Math.floor(fgTop));
+    // The sun glow is baked to a tile once here, not rebuilt per frame.
+    _bakeGlowTile(pal, h);
+    // The outline just moved → retire any pixels left outside the new one.
+    _needFullClear = true;
     // Finally: tear the sheet. Seeded from the SAME PRNG as everything above, so
     // the torn outline is stable across repaints and unique per (scene, size).
     _seedDeckle(R, w, h);
@@ -742,7 +829,17 @@
     var dt = Math.max(0, Math.min(0.08, (ms - _lastMs) / 1000));
     _lastMs = ms;
     c.setTransform(_dpr, 0, 0, _dpr, 0, 0);
-    c.clearRect(0, 0, w, h);
+    // NO full-canvas clear. The baked buffer is OPAQUE everywhere inside the
+    // torn outline, so blitting it already overwrites the whole of last frame's
+    // overlay; and the margin OUTSIDE the outline is never painted, because
+    // every layer below runs inside _clipDeckle. Clearing w×h was ~20% of the
+    // frame's pixel budget spent erasing pixels that were about to be
+    // overwritten anyway. A full clear is still done ONCE after any re-bake
+    // (size/scene change), where the outline itself moves and stale margin
+    // pixels from the previous outline really can survive.
+    if (_needFullClear) { c.clearRect(0, 0, w, h); _needFullClear = false; }
+    c.save();
+    _clipDeckle(c);                 // margin is never painted, so never needs erasing
     if (_buf) c.drawImage(_buf, 0, 0, w, h);
     // Track the pet's foot motion (guarded) so the flow-deform + wake marks can
     // react to WHERE and HOW FAST the cat is moving. Runs before the layers so
@@ -758,21 +855,18 @@
     // that draws the near scene IN FRONT of it. See _paintForeground below.)
     // drifting sun glow — a soft warm radial that sweeps horizontally (DIMMED:
     // owner found the moving light too glaring; peak/mid/sweep are tuned-down
-    // named constants).
+    // named constants). Blitted from the baked tile (see _bakeGlowTile): the
+    // gradient is no longer rebuilt per frame, and the additive blend now
+    // touches only the tile's 2R×2R footprint instead of the whole bar.
     var sx = _sunX(ms, w);
     var sy = h * 0.14;
     // publish the live light direction for the pet (normalized, scene-warmth)
     _light.nx = w > 0 ? sx / w : 0.5;
     _light.ny = 0.14;
     _light.warm = SCENE_WARMTH[_scene] != null ? SCENE_WARMTH[_scene] : 0.7;
-    var rg = c.createRadialGradient(sx, sy, 0, sx, sy, h * 1.6);
-    rg.addColorStop(0, pal.glow + SUN_GLOW_PEAK + ')');
-    rg.addColorStop(0.4, pal.glow + SUN_GLOW_MID + ')');
-    rg.addColorStop(1, pal.glow + '0)');
     c.save();
     c.globalCompositeOperation = 'lighter';
-    c.fillStyle = rg;
-    c.fillRect(0, 0, w, h);
+    if (_glowTile) c.drawImage(_glowTile, sx - _glowR, sy - _glowR, 2 * _glowR, 2 * _glowR);
     // twinkling specular dabs (the shimmer): additive so they read as glints
     for (var i = 0; i < _sparks.length; i++) {
       var s = _sparks[i];
@@ -799,11 +893,10 @@
     flushDabs();
     // the critter (drawn last, above the scene but below the pet at z1)
     _paintCritter(c, ms, dt, w, h);
-    // Re-tear the sheet. The baked buffer is already cut, but every per-frame
-    // layer above (the full-rect sun wash, flow, wake) paints across the whole
-    // canvas and would refill the torn margin — so the cut is re-applied to the
-    // composited frame. One composite op; the outline itself is precomputed.
-    _cutDeckle(c, w, h);
+    // Close the deckle clip opened at the top of the frame. Every layer above
+    // painted INSIDE the torn outline, so there is no margin to erase — the old
+    // full-canvas `destination-out` re-cut is gone.
+    c.restore();
     // FINALLY, on the SEPARATE foreground canvas (z2, IN FRONT of the pet):
     // paint the near occluder band so the cat is partly hidden by it and reads
     // as standing AMONG the scene, not on top of it (the 2.5D depth fix).
@@ -822,7 +915,15 @@
     if (!_fgctx || !_fgBlades.length) return;
     var c = _fgctx;
     c.setTransform(_dpr, 0, 0, _dpr, 0, 0);
-    c.clearRect(0, 0, w, h);
+    // Clear only the BAND this plane actually paints. The near plane is rooted
+    // at the bottom and reaches up into the pet's ankles — measured, that is
+    // ~29% of a 48px bar — but the clear was full-height, making it (with the bg
+    // clear) the single largest line in the frame's pixel budget. The band is
+    // computed from the seeded geometry (see _fgTop), so it cannot drift out of
+    // step with what is drawn.
+    c.clearRect(0, _fgTop, w, h - _fgTop + 2);
+    c.save();
+    _clipDeckle(c);            // torn by the same edge; no post-hoc cut needed
     var pal = PALETTES[_scene] || PALETTES.meadow;
     var px = _petGroundX();
     var gust = 1 + 0.6 * Math.sin(ms * 0.00022 + 1.3);
@@ -909,7 +1010,8 @@
       }
     }
     flushDabs();
-    _cutDeckle(c, w, h);      // the near plane is torn by the same edge
+    c.restore();              // close the deckle clip — the near plane is torn
+                              // by the same edge, by CLIPPING not post-cutting
   }
 
   // Advance the ground-disturbance field: PRESS a bump under the pet's ground

@@ -74,6 +74,7 @@ let canvasN = 0;
 const visRec = recorder();
 const bufRec = recorder();
 const fgRec = recorder();
+const glowRec = recorder();     // the baked sun-glow tile (4th canvas created)
 
 let rafCb = null;
 global.requestAnimationFrame = function (cb) { rafCb = cb; return 1; };
@@ -111,7 +112,7 @@ global.document = {
   createElement(t) {
     if (t === 'canvas') {
       canvasN++;
-      const rec = canvasN === 1 ? visRec : (canvasN === 2 ? bufRec : fgRec);
+      const rec = canvasN === 1 ? visRec : (canvasN === 2 ? bufRec : (canvasN === 3 ? fgRec : glowRec));
       const e = mkEl();
       e.getContext = function () { return rec.ctx; };
       return e;

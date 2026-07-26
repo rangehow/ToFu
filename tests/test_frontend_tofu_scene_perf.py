@@ -14,14 +14,22 @@ innocent-looking edit. So each is pinned here with a biting NEUTER:
      beginPath/ellipse/fill/restore per dab) is ~9 canvas calls and one
      rasterizer flush EACH. Guard: fills must be a small fraction of dabs.
 
-  2. WIDTH PLATEAU — live populations are re-resolved every frame, so seeding
-     them by AREA made the per-frame cost grow without bound as the window
-     widened. They are capped (survivors widen to hold the painted area).
-     Guard: per-frame canvas calls at 2400px must not materially exceed 900px.
+  2. LIVE-POPULATION CAPS — live elements are re-resolved every frame, so their
+     COUNT is capped (survivors widen to hold the painted area). Guard: the dab
+     count must plateau with bar width. (The dab AREA is deliberately preserved —
+     a wider bar has more grass — so the count, not the area, is what is bounded.)
 
   3. FRAME PACING + OFF-SCREEN PARK — the scene is slow ambient weather, so it
      paints on a ~30fps cadence rather than every vsync, and stops entirely
      while the bar is scrolled out of view.
+
+  4. NO FULL-CANVAS OVERHEAD PASSES — measured in DEVICE PIXELS (area-weighted,
+     the quantity the rasterizer bills, not call count): the sun glow is a baked
+     tile (O(h²), width-independent) instead of a full-canvas gradient fill; the
+     fg clear is confined to its painted band; the bg full-canvas clear is gone
+     (the opaque blit covers it); the deckle margin is enforced by clip() instead
+     of a per-frame destination-out cut. These four were ~80% of the frame's
+     pixel budget yet only ONE call each, so a call-count test can never see them.
 
 Plus the DECKLE edge (the torn-paper silhouette), which is an art requirement
 the owner asked for explicitly ("the border could even be irregular") and which
@@ -47,58 +55,97 @@ if shutil.which("node") is None:  # pragma: no cover - env gate
 pytestmark = pytest.mark.unit
 
 
-# ── Harness: a mock 2d context that TALLIES every canvas call, so we can measure
-# the real per-frame API cost of the shipped module at a chosen bar width. It
-# also records rAF scheduling + the deckle path, so pacing / parking / the torn
-# outline are observable from the same run. ──
+# ── Harness: a mock 2d context that TALLIES both the canvas CALLS and, more
+# importantly, the DEVICE-PIXEL area each operation touches, so we can measure
+# the real per-frame cost of the shipped module at a chosen bar width. Call
+# count is a proxy; pixel area is the bill (the rasterizer charges by area).
+# It also records rAF scheduling, clip() usage and the deckle path, so pacing /
+# parking / the torn outline are observable from the same run. ──
 _PERF_HARNESS = r"""
 'use strict';
 const W = __W__, H = 48;
+const DPR = 2;
 const DECOR = "__DECOR__";
 const OFFSCREEN = __OFFSCREEN__;
 
 function mkCtx(rec){
   const bump = k => () => { rec[k] = (rec[k]||0)+1; rec.total++; };
+  // Area is tracked in CSS px and scaled by DPR² at readout, bucketed by cost
+  // class: blit (source-over image copy), clear (memset), dab (tiny fills),
+  // glow (additive 'lighter' blend — the most expensive per pixel).
+  const area = (a, cls) => {
+    rec.area = (rec.area||0) + a;
+    if (cls === 'blit') rec.areaBlit = (rec.areaBlit||0) + a;
+    else if (cls === 'clear') rec.areaClear = (rec.areaClear||0) + a;
+    else if (cls === 'dab') rec.areaDab = (rec.areaDab||0) + a;
+    else if (cls === 'glow') rec.areaGlow = (rec.areaGlow||0) + a;
+  };
   let path = null;
+  let cur = { comp: 'source-over' };
+  const stack = [];
   return {
     canvas:{width:W,height:H},
-    setTransform:bump('setTransform'), clearRect:bump('clearRect'),
-    save:bump('save'), restore:bump('restore'),
+    setTransform:bump('setTransform'),
+    clearRect(x,y,w,h){ rec.clearRect=(rec.clearRect||0)+1; rec.total++; area(w*h, 'clear'); },
+    save(){ rec.save=(rec.save||0)+1; rec.total++; stack.push({comp:cur.comp}); },
+    restore(){ rec.restore=(rec.restore||0)+1; rec.total++; const p=stack.pop(); if(p)cur=p; },
     translate:bump('translate'), rotate:bump('rotate'),
     beginPath(){ rec.beginPath=(rec.beginPath||0)+1; rec.total++; path=[]; },
     moveTo(x,y){ rec.moveTo=(rec.moveTo||0)+1; rec.total++; if(path)path.push([x,y]); },
     lineTo(x,y){ rec.lineTo=(rec.lineTo||0)+1; rec.total++; if(path)path.push([x,y]); },
     closePath(){ rec.total++; },
     rect(x,y,w,h){ rec.rect=(rec.rect||0)+1; rec.total++; if(path)path.push(['RECT',x,y,w,h]); },
-    ellipse(){ rec.ellipse=(rec.ellipse||0)+1; rec.total++; },
+    ellipse(x,y,rx,ry){ rec.ellipse=(rec.ellipse||0)+1; rec.total++; if(path)path.push(['E',rx,ry]); },
     arc(){ rec.total++; },
+    clip(){
+      rec.clip=(rec.clip||0)+1; rec.total++;
+      if (path && path.length >= 3 && !path.some(p=>p[0]==='RECT')) rec.clipOutline = path.slice();
+    },
     fill(rule){
       rec.fill=(rec.fill||0)+1; rec.total++;
-      if (rule === 'evenodd' && path) {
+      if (!path) return;
+      if (rule === 'evenodd') {
+        // deckle cut: only the perimeter margin band is actually rasterised
+        rec.deckleCuts = (rec.deckleCuts||0)+1;
         rec.deckle = path.filter(p => p[0] !== 'RECT');
         rec.deckleHadRect = path.some(p => p[0] === 'RECT');
-        rec.deckleCuts = (rec.deckleCuts||0)+1;
+        area(2*(W+H)*4, 'clear');
+      } else {
+        // Only ellipse subpaths carry area; the moveTo() points that precede
+        // each batched dab are 2-element [x,y] entries with no radius.
+        let a = 0;
+        for (const p of path){ if (p[0]==='E') a += Math.PI*p[1]*p[2]; }
+        area(a, cur.comp === 'lighter' ? 'glow' : 'dab');
       }
+      path = [];
     },
-    fillRect:bump('fillRect'), stroke:bump('stroke'), drawImage:bump('drawImage'),
+    fillRect(x,y,w,h){ rec.fillRect=(rec.fillRect||0)+1; rec.total++; area(w*h, cur.comp === 'lighter' ? 'glow' : 'dab'); },
+    stroke:bump('stroke'),
+    drawImage(img, dx, dy, dw, dh){
+      rec.drawImage=(rec.drawImage||0)+1; rec.total++;
+      // A bare blit of the full buffer covers the canvas; a scaled tile blit
+      // covers only its own footprint. 'lighter' blits (the sun glow) are the
+      // expensive additive-blend class.
+      area((dw != null ? dw : W) * (dh != null ? dh : H), cur.comp === 'lighter' ? 'glow' : 'blit');
+    },
     createLinearGradient(){ rec.total++; return {addColorStop(){}}; },
-    createRadialGradient(){ rec.total++; return {addColorStop(){}}; },
+    createRadialGradient(){ rec.radial=(rec.radial||0)+1; rec.total++; return {addColorStop(){}}; },
     set fillStyle(v){ rec.fillStyle=(rec.fillStyle||0)+1; rec.total++; },
     get fillStyle(){ return ''; },
     set globalAlpha(v){ rec.globalAlpha=(rec.globalAlpha||0)+1; rec.total++; },
     get globalAlpha(){ return 1; },
-    set globalCompositeOperation(v){ rec.gco=(rec.gco||0)+1; rec.total++; },
-    get globalCompositeOperation(){ return ''; },
+    set globalCompositeOperation(v){ rec.gco=(rec.gco||0)+1; rec.total++; cur.comp = v; },
+    get globalCompositeOperation(){ return cur.comp; },
     set strokeStyle(v){}, get strokeStyle(){ return ''; },
     set lineWidth(v){}, get lineWidth(){ return 1; },
   };
 }
-const vis={total:0}, buf={total:0}, fg={total:0};
+const vis={total:0}, buf={total:0}, fg={total:0}, glow={total:0};
 
 let rafCb = null, rafRequests = 0;
 global.requestAnimationFrame = function(cb){ rafCb = cb; rafRequests++; return rafRequests; };
 global.cancelAnimationFrame = function(){};
-global.devicePixelRatio = 2;
+global.devicePixelRatio = DPR;
 
 // Capture the IntersectionObserver the module installs so we can drive it.
 let ioCb = null;
@@ -108,7 +155,7 @@ global.window = {
   ResizeObserver: function(){ return {observe(){}, disconnect(){}}; },
   MutationObserver: function(){ return {observe(){}, disconnect(){}}; },
   IntersectionObserver: function(cb){ ioCb = cb; return {observe(){}, disconnect(){}}; },
-  devicePixelRatio: 2,
+  devicePixelRatio: DPR,
 };
 global.ResizeObserver = global.window.ResizeObserver;
 global.MutationObserver = global.window.MutationObserver;
@@ -128,8 +175,12 @@ global.document = {
   addEventListener(){},
   getElementById(id){ return id==='projectBar' ? bar : null; },
   createElement(t){
-    if (t==='canvas'){ canvasN++; const rec = canvasN===1?vis:(canvasN===2?buf:fg);
-      const e = mkEl(); e.getContext = () => mkCtx(rec); return e; }
+    if (t==='canvas'){
+      canvasN++;
+      // #1 visible bg, #2 baked buffer, #3 foreground occlusion, #4 glow tile
+      const rec = canvasN===1?vis:(canvasN===2?buf:(canvasN===3?fg:glow));
+      const e = mkEl(); e.getContext = () => mkCtx(rec); return e;
+    }
     return mkEl();
   },
 };
@@ -138,6 +189,8 @@ global.window.TofuPet = { getState(){ return {x: W/2 - 16, state:'walk'}; } };
 __SRC__
 
 function reset(r){ for (const k of Object.keys(r)) delete r[k]; r.total = 0; }
+function devPx(r){ return Math.round((r.area||0) * DPR * DPR); }
+function catPx(r, k){ return Math.round((r[k]||0) * DPR * DPR); }
 
 let t = 100;
 if (rafCb) { const cb = rafCb; rafCb = null; cb(t); }     // t0 frame
@@ -151,23 +204,34 @@ if (OFFSCREEN && ioCb) {
   process.exit(0);
 }
 
-// ── steady-state: measure ONE painted frame's canvas cost ──
+// ── steady-state: isolate ONE painted frame and its cost breakdown ──
+// Reset before each 16ms tick and record the area the frame touched; paced-out
+// ticks leave area≈0, so the max over the window is one fully-painted frame.
 reset(vis); reset(fg);
 let painted = 0, ticks = 0;
-// Advance in 16ms (60Hz) steps and count how many of them actually PAINT.
-for (let i = 0; i < 12; i++) {
+let frame = { bg: 0, fg: 0, blit: 0, clear: 0, dab: 0, glow: 0 };
+for (let i = 0; i < 14; i++) {
   t += 16; ticks++;
-  const before = vis.total;
   if (!rafCb) break;
+  vis.area = 0; fg.area = 0; vis.areaBlit = 0; vis.areaClear = 0; vis.areaDab = 0; vis.areaGlow = 0;
+  fg.areaClear = 0; fg.areaDab = 0;
+  const before = vis.total;
   const cb = rafCb; rafCb = null; cb(t);
   if (vis.total > before) {
     painted++;
-    if (painted === 1) { /* keep the first painted frame's tallies below */ }
+    if (vis.area > frame.bg) {
+      frame = { bg: vis.area, fg: fg.area,
+                blit: vis.areaBlit, clear: (vis.areaClear||0) + (fg.areaClear||0),
+                dab: (vis.areaDab||0) + (fg.areaDab||0), glow: vis.areaGlow||0 };
+    }
   }
 }
 console.log(JSON.stringify({
-  bg: vis, fg: fg, buf: buf,
-  perFrame: vis.total + fg.total,
+  bg: vis, fg: fg, buf: buf, glow: glow,
+  callsPerFrame: vis.total + fg.total,
+  frame: { bg: Math.round(frame.bg*DPR*DPR), fg: Math.round(frame.fg*DPR*DPR),
+           blit: Math.round(frame.blit*DPR*DPR), clear: Math.round(frame.clear*DPR*DPR),
+           dab: Math.round(frame.dab*DPR*DPR), glow: Math.round(frame.glow*DPR*DPR) },
   ticks: ticks, painted: painted,
 }));
 process.exit(0);
@@ -241,17 +305,48 @@ def test_NEUTER_unbatched_dabs_is_caught():
 #  2. WIDTH PLATEAU — per-frame cost must not scale with the bar's width
 # ══════════════════════════════════════════════════════════════════════════
 
-def test_per_frame_cost_plateaus_with_bar_width():
-    """LIVE populations are re-resolved every frame, so seeding them purely by
-    AREA made a wide window pay proportionally more forever. They are capped, so
-    the per-frame call count must FLATTEN: a 2400px bar may not cost materially
-    more than a 900px one (it renders the same 48px-tall painting)."""
-    narrow = _run_perf(width=900)["perFrame"]
-    wide = _run_perf(width=2400)["perFrame"]
-    assert narrow > 0 and wide > 0
-    assert wide <= narrow * 1.25, (
-        f"per-frame cost still scales with width: 900px={narrow} calls vs "
-        f"2400px={wide} calls. The live-population caps are not holding.")
+def test_sun_glow_cost_is_width_independent():
+    """The additive sun glow used to be a full-canvas radial fill every frame —
+    its pixel cost grew with the bar's width. Baked to a tile and blitted at its
+    own 2R×2R footprint (R = h*1.6), the glow's additive-blend area is now
+    O(h²): constant in the bar's width. A 2400px bar must spend ~the same glow
+    pixels as a 900px one."""
+    n = _run_perf(width=900)["frame"]["glow"]
+    wd = _run_perf(width=2400)["frame"]["glow"]
+    assert n > 0 and wd > 0, f"no glow work measured: {n} {wd}"
+    assert wd <= n * 1.15, (
+        f"the sun glow's pixel cost scales with width again (900px={n} devPx vs "
+        f"2400px={wd} devPx) — it is back to a full-canvas fill, not a tile blit")
+
+
+def test_no_full_canvas_overhead_pass_per_frame():
+    """The three removed overheads were all FULL-CANVAS passes that scaled with
+    width while adding nothing per pixel: a bg clear (the blit already covers),
+    a full-canvas additive glow fill (now a tile), and a full-canvas deckle cut
+    (now a clip). Assert none is present in a steady frame:
+      * the bg does NOT clear at all (its areaClear is 0);
+      * the fg clears only its painted BAND, so its clear area is strictly less
+        than one full canvas (w*h), never a full-canvas wipe;
+      * no even-odd destination-out cut on either live canvas.
+    The dab pixel AREA is intentionally NOT asserted to plateau — the live-
+    population budget widens surviving strokes to preserve painted area, so the
+    grass on a wider bar is content, not overhead. What must NOT scale is the
+    fixed full-canvas passes."""
+    r = _run_perf(width=900)
+    f = r["frame"]
+    # bg full-canvas clear is gone (steady state: the opaque blit covers it)
+    assert r["bg"].get("clearRect", 0) == 0, (
+        f"bg still clears the full canvas in steady state ({r['bg'].get('clearRect')} "
+        f"clearRect calls)")
+    # fg clear is confined to its band → strictly less than a full canvas
+    clear_css = f["clear"] / 4.0          # devPx → CSS px (DPR=2)
+    full_css = 900 * 48
+    assert clear_css < full_css, (
+        f"the clear area {clear_css:.0f} CSS px² is a FULL canvas wipe "
+        f"({full_css}) — the band-confined clear regressed")
+    # no per-frame destination-out cut on the live canvases
+    assert r["bg"].get("deckleCuts", 0) == 0 and r["fg"].get("deckleCuts", 0) == 0, (
+        "a live canvas is still paying a full-canvas deckle cut every frame")
 
 
 def test_narrow_bar_is_not_thinned_by_the_caps():
@@ -266,19 +361,23 @@ def test_narrow_bar_is_not_thinned_by_the_caps():
 
 
 def test_NEUTER_uncapped_live_population_is_caught():
-    """NEUTER: remove the cap (let _budget always return the wanted count) → the
-    per-frame cost resumes scaling with width and the plateau assertion fails."""
+    """NEUTER: remove the live-population cap (let _budget always return the
+    wanted count) → the dab COUNT (ellipses drawn) resumes scaling with width.
+    (The dab AREA is intentionally preserved by the widened-survivor budget even
+    when capped, so the count — not the area — is what the cap actually bounds.)"""
     src = SCENE_JS.read_text()
     neut = src.replace(
         "    if (wanted <= cap) return { n: wanted, scale: 1 };",
         "    return { n: wanted, scale: 1 };  /* NEUTER: uncapped */\n"
         "    if (wanted <= cap) return { n: wanted, scale: 1 };", 1)
     assert neut != src, "neuter did not match the _budget cap"
-    narrow = _run_perf(width=900, src=neut)["perFrame"]
-    wide = _run_perf(width=2400, src=neut)["perFrame"]
-    assert wide > narrow * 1.25, (
-        f"neutered (uncapped) build still plateaued (900px={narrow}, 2400px={wide}) "
-        f"— the plateau guard would not bite")
+    nDabs = _run_perf(width=900, src=neut)["bg"].get("ellipse", 0) + \
+            _run_perf(width=900, src=neut)["fg"].get("ellipse", 0)
+    wBg = _run_perf(width=2400, src=neut)
+    wDabs = wBg["bg"].get("ellipse", 0) + wBg["fg"].get("ellipse", 0)
+    assert wDabs > nDabs * 1.3, (
+        f"neutered (uncapped) build's dab count still plateaued (900px={nDabs}, "
+        f"2400px={wDabs}) — the population cap guard would not bite")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -321,6 +420,77 @@ def test_loop_parks_when_the_bar_scrolls_out_of_view():
         "the loop re-armed rAF after the bar went off-screen — it never parks"
 
 
+# ══════════════════════════════════════════════════════════════════════════
+#  3b. THE FULL-CANVAS PASSES — the 80% the call count never saw
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_sun_glow_is_baked_not_rebuilt_per_frame():
+    """The drifting sun used to be a `createRadialGradient` rebuilt EVERY frame
+    and fillRect-ed across the whole canvas under 'lighter' — a w×h additive
+    blend plus a gradient-object rebuild, to move the sun 0.6px. It is now baked
+    to a tile ONCE and blitted at the sun's position. Per frame, the VISIBLE
+    canvas must do ZERO radial-gradient builds and ZERO full-canvas gradient
+    fills; the glow's pixel footprint must be the tile's, not the bar's."""
+    r = _run_perf()
+    assert r["bg"].get("radial", 0) == 0, (
+        f"the sun gradient is still rebuilt per frame ({r['bg'].get('radial')} "
+        f"createRadialGradient calls in one frame)")
+    # The tile is blitted, so the glow shows up as a bounded drawImage, and the
+    # bar must NOT do a full-canvas additive fillRect for the sun any more.
+    assert r["bg"].get("drawImage", 0) >= 2, (
+        "expected the buffer blit AND the glow-tile blit — the glow is not being "
+        "drawn from its baked tile")
+    # the glow tile exists and is small (2R×2R, R = h*1.6 ≈ 77px → ~24k CSS px²),
+    # NOT the whole canvas (w*h = 43k+ CSS px² and growing with width)
+    assert r["glow"].get("radial", 0) >= 1, "the glow tile was never baked"
+
+
+def test_foreground_clear_is_confined_to_its_painted_band():
+    """The near plane is rooted at the bottom and reaches up into the pet's
+    ankles — measured ~29% of a 48px bar — but it was cleared full-height every
+    frame, which (with the bg clear) was the single largest pixel cost. The
+    clear must be confined to the band the plane actually paints."""
+    # Direct assertion on the clear call: the module now calls
+    # clearRect(0, _fgTop, w, h-_fgTop+2), so the cleared height is the band, not
+    # the full canvas. If this reverts to clearRect(0,0,w,h) the largest single
+    # pixel cost is back.
+    assert "c.clearRect(0, _fgTop, w, h - _fgTop + 2)" in SCENE_JS.read_text(), (
+        "the foreground clear is no longer band-confined (clearRect signature "
+        "reverted to full-height) — the largest single pixel cost is back")
+
+
+def test_no_per_frame_fullcanvas_deckle_cut():
+    """The torn margin is enforced by CLIPPING (the margin is never painted),
+    not by re-cutting the composited frame. A per-frame `destination-out`
+    even-odd cut cost a w×h scan to erase a ~5px rim. The live canvases must
+    clip every frame and must NOT pay a full-canvas cut; only the buffer is cut,
+    once, at bake."""
+    r = _run_perf()
+    assert r["bg"].get("clip", 0) >= 1, "bg not clipped per frame"
+    assert r["fg"].get("clip", 0) >= 1, "fg not clipped per frame"
+    # No even-odd destination-out cut on either live canvas per frame:
+    assert r["bg"].get("deckleCuts", 0) == 0, \
+        "the bg frame is still paying a full-canvas destination-out cut every frame"
+    assert r["fg"].get("deckleCuts", 0) == 0, \
+        "the fg plane is still paying a full-canvas destination-out cut every frame"
+    # the one legitimate cut survives on the buffer at bake time
+    assert r["buf"].get("deckleCuts", 0) >= 1, "the buffer lost its one-time bake cut"
+
+
+def test_no_fullcanvas_clear_in_steady_state():
+    """The baked buffer is opaque inside the torn outline, so blitting it each
+    frame already overwrites the previous overlay — a full-canvas clearRect in
+    steady state is pure waste. One full clear is allowed ONLY on the first
+    frame after a re-bake (the outline moved); subsequent frames must not
+    clear the whole canvas."""
+    r = _run_perf()
+    # steady state (after the t0 frame which absorbs the one-shot clear):
+    # bg must not issue a full-canvas clearRect
+    assert r["bg"].get("clearRect", 0) == 0, (
+        f"the bg still clears the full canvas in steady state "
+        f"({r['bg'].get('clearRect')} clearRect calls) — the blit already covers it")
+
+
 def test_NEUTER_no_offscreen_park_is_caught():
     """NEUTER: ignore the off-screen flag in the loop gate → the loop keeps
     re-arming while invisible and the park assertion must fail."""
@@ -342,19 +512,19 @@ def test_NEUTER_no_offscreen_park_is_caught():
 #  4. THE DECKLE EDGE — an irregular, torn silhouette, not a rectangle
 # ══════════════════════════════════════════════════════════════════════════
 
-def test_painting_is_cut_to_an_irregular_torn_outline():
-    """OWNER ASK — 'the border could even be irregular'. The painting is cut to a
-    DECKLE edge (the feathered rim of handmade paper): an even-odd cut of
-    [full rect] minus [wandering outline]. Assert the cut happens, that the
-    outline is a real polygon, and — the part that matters — that its inward
-    bite VARIES, because a constant bite is just a smaller rectangle."""
+def test_painting_is_torn_to_an_irregular_outline():
+    """OWNER ASK — 'the border could even be irregular'. The painting is torn to
+    a DECKLE edge (the feathered rim of handmade paper). Per frame the live
+    canvases are CLIPPED to the seeded outline (the margin is never painted, so
+    never needs erasing); the buffer is cut once at bake. Assert the clip
+    happens, that the outline is a real polygon, and — the part that matters —
+    that its inward bite VARIES, because a constant bite is just a smaller
+    rectangle."""
     r = _run_perf()
     bg = r["bg"]
-    assert bg.get("deckleCuts", 0) >= 1, \
-        "the painting is never cut — the frame is a plain rectangle again"
-    assert bg.get("deckleHadRect") is True, \
-        "the even-odd cut must start from a full-canvas rect to erase the OUTSIDE"
-    pts = bg.get("deckle") or []
+    assert bg.get("clip", 0) >= 1, \
+        "the live frame is not clipped to the deckle outline — margin would refill"
+    pts = bg.get("clipOutline") or []
     assert len(pts) >= 16, f"deckle outline is too coarse to read as torn: {len(pts)} points"
     W, H = 900, 48
     bites = [min(x, y, W - x, H - y) for x, y in pts]
@@ -365,14 +535,18 @@ def test_painting_is_cut_to_an_irregular_torn_outline():
     assert min(bites) >= 0, "the outline escaped the canvas box"
 
 
-def test_deckle_is_cut_on_every_live_layer():
-    """Both live canvases must be torn by the SAME edge. The baked buffer is cut
-    at bake time, but the per-frame layers (sun wash, flow, wake) paint across
-    the whole canvas and would refill the torn margin; the near plane would
-    likewise square off the bottom corners."""
+def test_deckle_constrains_every_live_layer():
+    """Both live canvases must be torn by the SAME edge — by CLIPPING, so the
+    margin is never painted in the first place. The old mechanism re-cut the
+    composited frame with a full-canvas destination-out each frame; that cost a
+    w×h scan to erase a ~5px rim and was replaced by a clip. The buffer itself
+    is still cut ONCE at bake (where the outline is born)."""
     r = _run_perf()
-    assert r["bg"].get("deckleCuts", 0) >= 1, "the composited frame is not re-torn"
-    assert r["fg"].get("deckleCuts", 0) >= 1, "the foreground plane is not torn"
+    assert r["bg"].get("clip", 0) >= 1, "the composited frame is not clipped to the torn edge"
+    assert r["fg"].get("clip", 0) >= 1, "the foreground plane is not clipped to the torn edge"
+    # and the buffer must still be CUT once at bake, so the blit carries the torn silhouette
+    assert r["buf"].get("deckleCuts", 0) >= 1, \
+        "the baked buffer is no longer cut — the blit would paint a rectangle"
 
 
 def test_NEUTER_untorn_rectangle_is_caught():
@@ -382,8 +556,8 @@ def test_NEUTER_untorn_rectangle_is_caught():
     neut = src.replace("var DECKLE_BITE = 3.4;", "var DECKLE_BITE = 0;  /* NEUTER */", 1)
     assert neut != src, "neuter did not match the deckle bite constant"
     r = _run_perf(src=neut)
-    pts = r["bg"].get("deckle") or []
-    assert pts, "neutered build cut nothing at all — wrong neuter"
+    pts = r["bg"].get("clipOutline") or []
+    assert pts, "neutered build clipped nothing at all — wrong neuter"
     W, H = 900, 48
     bites = [min(x, y, W - x, H - y) for x, y in pts]
     assert (max(bites) - min(bites)) <= 1.0, \

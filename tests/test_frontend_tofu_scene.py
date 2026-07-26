@@ -407,7 +407,11 @@ console.log(JSON.stringify({
   scene: window.TofuScene.getScene(),
   visEllipse: visRec.ellipse,
   visStroke: visRec.stroke,
-  glowStops: visRec.radialStops,
+  // The sun glow is baked to a tile at bake time (see tofu-scene.js
+  // _bakeGlowTile), so its radial stops land on the glow-tile recorder (the 4th
+  // canvas, routed to fgRec) rather than the visible frame. Collect from all
+  // recorders so the dim assertion follows the glow wherever it is built.
+  glowStops: visRec.radialStops.concat(bufRec.radialStops, fgRec.radialStops),
   fgEllipse: fgRec.ellipse,
   fgStroke: fgRec.stroke,
 }));

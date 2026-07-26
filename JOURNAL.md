@@ -1,6 +1,20 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-27 — 后端离线全局显著指示器落地:后端被杀后前端不再「装活」(owner「backend killed 后一堆挂着的前端以为还活着,没有 prominent indicator」;epic `pt_dba815e8bf144b56`;commit `6ea2ded5`,5 文件 +763;新套件 **8/8 含 NEUTER**,相邻环 bundle parity+corruption+api-isolation+net-latency+artifacts **45/45**,i18n 环 **45/45**,collect **10295** 0 err)
+
+- **缺口拼图(先取证再动手):** 前端已有三条碎片但都有盲区——①`health_stream_timer.js` 的健康探测**只在有活跃流且静默 20s 后**才跑,完全空闲的页面零看门狗;②push.js 断连只把顶栏信号小徽章变灰(易被忽视);③DB 红色横幅只在「后端活着但 PG 挂」时出现,「后端进程死」反而无任何横幅。owner 的痛点正是 OOM SIGKILL 后整页挂着的会话看起来还在跑。
+- **形态(新模块 `static/js/core/backend_offline_monitor.js`,bundle 中紧随 push.js):** 双被动信号(push `pushOnLatency` 的 connected=false——**零活跃流也触发**,这是补齐空闲盲区的那条;+ 浏览器 online/offline 事件)+ 主动仲裁(`Api.health.check` 探测)。**横幅需要连续 2 次探测失败(间隔 4s)才升起**——VS Code 端口转发下 WS 掉线但后端健康的假离线是本项目实测过的坑(net-latency 徽章 flap 同源),2-fail 门与 `_checkServerHealth` 同规则。
+- **OFFLINE 态:** 置顶红色横幅(标题 + 实时已离线计时 + 每 5s 自动重试说明 + 「立即重试」+ 「暂时隐藏」60s 后自动重升)+ `document.title` 前缀【后端离线】——**后台标签页在标签栏就能看到**(全仓 grep 确认无任何代码写 document.title,无竞争);浏览器报离线时换「本机网络已断开」变体文案。恢复轮询只在标签可见时跑。
+- **RECOVERY(首个成功探测):** 摘横幅、还标题、toast、`pushConnect()` 推一把 WS,并复用**与 visibilitychange/online 钩子完全相同**的恢复机器(`_probeAllStuckStreamsOnWake` + `_recoverOfflineConversations` + `_revalidateOnResume`)——不发明第二套恢复路径,恢复后的会话重挂并采纳服务端权威结果。
+- **测试(node harness 驱动真实发布文件,4 场景各一进程):** A 离线→横幅→恢复全链路(15 断言含恢复钩子各 1 次);B 代理抖动容忍(1 败 1 成 → 零横幅);C 浏览器 offline 事件→网络变体;D snooze→60s 后自动重升。**NEUTER:** 把 2-fail 门换成首败即报警 → B 场景精确翻红,证明门是承重的。另三条注册守卫(manifest 顺序/index.html fallback 标签/i18n 键)。
+- **注册闭系统纪律(第五次实战):** 新 JS 文件的落点不止「写文件」——`_BUNDLE_FILES`(顺序承重:必须在 push.js 后)+ index.html dev-fallback `<script>` 标签(parity 测试 Edge 3 强制)+ i18n.js 键,三处缺任何一处都有对应棘轮会红。
+- **shared-HEAD:** 编辑 i18n.js 时带着 sibling 未提交的 err.k.* hunk;提交前 sibling 已自行落地(2f4e6056),i18n.js 只剩我的 hunk,精确 5 文件提交,32 个兄弟 WIP 文件原样未动。
+- **生效条件:** 纯前端改动,**强制刷新(Ctrl+Shift+R)即可**,无需重启服务(后端只注入 bundle 标签;文件 mtime 变化触发 bundle 自动重建)。
+
+### 2026-07-27(续78)
+<!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
+
 ### 2026-07-27(续78) — 错误透明传递担保落地:两个真实 kind 缺口根修 + TaskRuntime 归一化咽喉硬化 + AST 棘轮(owner「保证后端错误真实、精确、良好呈现地传到前端」;commit `2f4e6056`,6 文件 +336/-11;新套件 **10/10**,全族回归 **155+53+58 全绿**,NEUTER×2 全咬;charter v10)
 
 - **审计结论(先核实再动手):** 透明传递主链路(classifier → envelope → SSE/poll → 前端渲染)在续73-77 三批后已基本闭环——分类器 22 kind、envelope 双语+i18n key、api.js 保留 envelope+requestId、展示层 mojibake 修复、81 测全绿。**真正的缺口是两个未注册 kind + 无棘轮防回潮。**

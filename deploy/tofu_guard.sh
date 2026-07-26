@@ -49,6 +49,13 @@
 
 set -u
 
+# PATH hardening (2026-07-27, verified live): cron's default PATH is
+# /usr/bin:/bin — /usr/sbin is NOT in it, and `ss` lives at /usr/sbin/ss.
+# A cron-launched guard without this line can never run `ss`, so
+# listener_pids() is always empty and the guard relaunches against a LIVE
+# server until the storm brake kills it. Pin a complete PATH for cron.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH:-}"
+
 SCRIPT="$(readlink -f "$0" 2>/dev/null || echo "$0")"
 PROJ="$(cd "$(dirname "${SCRIPT}")/.." && pwd)"
 PORT="${PORT:-15000}"
@@ -60,6 +67,7 @@ WLOG="${PROJ}/logs/watchdog.log"
 SLOG="${PROJ}/server_${PORT}.log"
 MAX_CONSECUTIVE_DEATHS=5
 STORM_WINDOW=600
+BOOT_GRACE=180          # seconds a young server.py may boot before we judge it dead
 
 cd "${PROJ}" || { echo "FATAL: cannot cd ${PROJ}"; exit 1; }
 mkdir -p "${PROJ}/data" "${PROJ}/logs"
@@ -147,6 +155,9 @@ relaunch() {
   PORT="${PORT}" BIND_HOST="${BIND_HOST:-127.0.0.1}" \
     setsid nohup "${PY}" server.py >> "${SLOG}" 2>&1 &
   local newpid=$!
+  # persist launch epoch (state line 3) for check_once's boot grace
+  { sed -n '1,2p' "${STATE}" 2>/dev/null; echo "$(date +%s)"; } > "${STATE}.tmp" \
+    && mv "${STATE}.tmp" "${STATE}"
   local i
   for i in $(seq 1 60); do
     if healthy; then
@@ -165,16 +176,51 @@ relaunch() {
 
 check_once() {
   # Single guard pass. Exit 0 when the world is fine (or intentionally down).
+  # Order: cheapest/safest stand-downs first; declaring death is LAST.
   if [ -f "${DISABLED_FLAG}" ]; then
     return 0
   fi
+  # (a) restart_15000.sh holds an flock on data/.restart.lock for its whole
+  # kill→relaunch span. Stand down while a manual restart is in flight, or
+  # we would relaunch in the middle of it and win the port race.
+  local rlock="${PROJ}/data/.restart.lock"
+  if [ -e "${rlock}" ] && command -v flock >/dev/null 2>&1 \
+     && ! flock -n "${rlock}" -c true 2>/dev/null; then
+    log "[guard] manual restart in progress (${rlock} held) — standing down"
+    return 0
+  fi
+  # (b) boot grace: we (or a human) launched a server moments ago; boot does
+  # PG bootstrap + blueprint registration before binding — don't judge yet.
+  if [ -f "${STATE}" ]; then
+    local last_launch
+    last_launch="$(sed -n '3p' "${STATE}" 2>/dev/null)"
+    if [ -n "${last_launch}" ] && [ $(( $(date +%s) - last_launch )) -lt 90 ]; then
+      return 0
+    fi
+  fi
+  # (c) the positive proofs of life. TWO independent signals, because the
+  # first alone once lied: cron's minimal PATH has no `ss`, so an empty
+  # listener_pids meant "ss missing", NOT "server dead" (2026-07-27).
   if [ -n "$(listener_pids)" ]; then
     return 0
+  fi
+  if healthy; then
+    return 0   # no socket visible, but HTTP answers — alive; never phantom-relaunch
+  fi
+  # (d) mid-boot: a young server.py process exists but has not bound yet.
+  local spid etimes
+  spid="$(pgrep -f 'python server\.py' | head -n1)"
+  if [ -n "${spid}" ]; then
+    etimes="$(ps -o etimes= -p "${spid}" 2>/dev/null | tr -d ' ')"
+    if [ -n "${etimes}" ] && [ "${etimes}" -lt "${BOOT_GRACE}" ]; then
+      return 0
+    fi
   fi
   if supervisord_owns; then
     log "[guard] :${PORT} owned by root supervisord — standing down"
     return 0
   fi
+  # Only NOW is death credible: no socket, no HTTP, no young process.
   record_death_evidence
   if ! storm_check "$(date +%s)"; then
     log "[guard] CRASH STORM: >${MAX_CONSECUTIVE_DEATHS} deaths in ${STORM_WINDOW}s —" \

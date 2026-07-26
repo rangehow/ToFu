@@ -1,6 +1,40 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续42) — 「三指示器全绿但气泡永久空白」根因不在前端,而是 **VU 载体把 agent 的助手槽覆盖了**;顺带落地结果级对账(commit `95fa8513`,3 文件;新套件 12/12 含 **NEUTER×3 全咬**,相邻 8 套件 151 过 1 红 A/B 实证预存在,净 worktree collect **9973** 0 err)
+- **起点是 owner 截图**:发送按钮呈暂停态、侧边栏「回答中」、右上角信号 42ms 正常,但气泡里**一个流式阶段字都没有**,永久卡住。会话 `ms14u2lfihv8kj`。
+- **我第一轮的方向是错的,owner 纠正了它。** 我并行派了三个 agent 查前端指示器/日志/落库,得出「前端 A/B/C 三条不一致路径」——`_streamFrameArg` 的 `if (!_sess) return null` 与 `_updateStreamTimerUI` 的 `if (!info) return` 让**兜底机制与它要兜底的对象共享同一个前置条件**。这个分析本身没错,但**全是下游表现**。owner 自己把 `task_results` 与 `conversations.messages` 逐条对了一遍,指出每一轮都被同样污染:
+  | conv 槽位 | 盖的 `_taskId` | 实际内容来自 | 该 task 的真实回复 |
+  |---|---|---|---|
+  | [3] 1478 | a39ea84f(done) | **7e2c5c66(running)** | a39ea84f 的 1782 字全丢 |
+  | [9] 1124 | 19bf8995(done) | **e9949e67(running)** | 19bf8995 的 3073 字全丢 |
+  | [11] 1598 | dae9709d(done) | **64100968(running)** | dae9709d 的 1543 字全丢 |
+  | [15] 783 | 2cdce062(done) | **090a9e6d(running)** | 2cdce062 的 1608 字全丢 |
+  | [17] **2**("An") | 无 | **4b04932c** | **截图里那个空气泡** |
+  我实测复核:那些 `status=running`、metadata 只有 `{model}` 的 task 内容全是 VU 口吻,且 a39ea84f/19bf8995/dae9709d 的权威原文在会话里**逐字节查无此文**。**前端三指示器没说谎,是数据层根本没有内容可渲染。**
+- **教训(方法论):** 症状出现在渲染层时,先问「**数据层有没有内容**」,再去查渲染路径。我用三个 agent 把下游查得很细,却没先做「task_results ↔ messages 逐条对齐」这一个查询。
+- **部署结论 —— 已修未部署,不是回归:** carrier 闸 `c0d10272`(续26 那一刀)在 HEAD 里**是对的且覆盖这个形状**(`is_carrier_task` = `_inline_messages or _vu_subtask`,VU 两个标记都带;`_sync.py:1269` 的注释精确写明「VU 把自己记为 latest,**按构造通过新鲜度闸**」)。但线上进程启动于 **Jul 24 16:38:37**,而修复提交于 **Jul 26 12:44:21** —— 进程比修复早 **44 小时**,且 `server.py`/`bootstrap.py` **无热重载**,`_sync.py` 在进程启动后共 **6 个提交未加载**。时间相关性佐证:4 个污染 carrier 里 **3 个创建于 12:44 之后**。**重启即止血;存量 5 条不会自愈。**
+- **★ owner 给的对账谓词我实测后否掉了(本条最值得记):** owner 提「`status='running'` 且 `completed_at` 非空即非法态」。实测:**69 条 running 行全部 `completed_at` 非空,其中 6 条是健康活任务**。根因在 `_persist.py:387` —— `_upsert_task_row` 对**每次** upsert 都无条件写 `completed_at`,**终态写和 5 秒 running 检查点共用同一个函数**(注释自己写着 "derived here identically for both")。所以这个列的真实语义是**「最后一次写入时刻」**,列名在骗人。按原谓词做闸会把**每个在飞任务**都报成非法态。改用**陈旧(默认 1h)+ 不在活注册表**双条件。已在 `_TASK_RESULTS_COLS` 旁把这个 misnomer 写进注释,防止后人重建这个坏谓词。
+- **为什么必须是结果级(DB)而不是内存级:** `reap_stuck_running_tasks`(`_maintenance.py:159`)扫的是**内存注册表**,而 carrier **一跑完就被 discard 出注册表**、且 `_endpoint_managed=True` 使它**从不进 `persist_task_result`` —— 这类 wedge 在内存里**结构性不可见**,只有 DB 能看到。这是新增 `find_orphan_running_results` 的理由,不是重复造轮子。
+- **刻意只读(设计决策,不是偷懒):** finished carrier **合法地**停在 `running`(它成功了,只是没有终态写入方),翻成 `error` 会**记录一次没发生过的失败**。给 finished carrier 选一个终态状态是**契约变更**,不是对账,单独做。
+- **证据:** 新套件 12/12;**NEUTER×3 全咬**(摘掉陈旧界 → 2 红含否证测试;摘掉注册表过滤 → 1 红;从 tick 解绑 → 1 红);相邻 8 套件 151 过 1 红。
+- **⚠️ 共享 HEAD 事故(非我,但差点误判):** 首轮相邻套件跑出 **21 红**,A/B 后定位 **18 红全部来自 `lib/llm_sanitize/_gateway.py` 里 sibling 未提交的合并冲突标记**(line 23/71/77,`import` 直接 SyntaxError)。三态对照:我的工作区 21 红 / 净 HEAD worktree **1 红** / 我的工作区+临时还原该文件 **1 红 151 过**。唯一那条 `test_append_event_phase_tracking` 在净 HEAD 同形复现。**该文件已逐字节还原回 sibling 原样(md5 两侧一致)——别人的未提交工作不替他丢弃。** 另有 `lib/conversations/title_gen.py.neuter` 残留。**给后人:共享 HEAD 上任何一批红,先在净 worktree 做 A/B,再谈归因。**
+- **日志系统的答案是「不能暴露」(owner 原始问题的第二问):** 4 个任务 LLM 已 `finish=stop` 吐完 1379–1719 字符却无 `■ DONE`/persist/sync;唯一信号是 `chat_dispatch.py:864` 在 **7200 秒**后打的一行 WARNING,**且它报的 `status=running` 是错的**(LLM 105 分钟前就停了)——它读的是**正在卡住的那个状态机**,所以结构上不可能当探测器。另有 4 条 `never aborted (N chars discarded)` 累计 **8264 字符**生成完、计费完、被静默丢弃。**所以对账闸用的是状态机自洽性,而不是继续加日志。**
+- **另开票(按不夹带的规矩):** `pt_0ae59e94b7de4851` —— VU 专属信号 `[PROGRESS:]` 泄漏,模型跨 **52 会话自撰 90 次**。根因是**剥离不对称**:`autopilot.py:570-571` 剥了 `[VU: TASK_DONE]` 并注释写明理由(「not a stray sentinel the next turn would mis-read」),**这句话逐字适用于 PROGRESS 行但它没有对应代码**。判据已写进票面(`task_results` 四键 metadata 认定非 VU 子任务 + 逐字节排除 680 条 VU 文本 + 非空 conv_id),**后人不必重跑取证**。
+
+### 2026-07-26(续41) — 交易模块 P1 第二刀:对账 REST 接线 + 采纳闭环真的写(commit `d7e7eb6`,4 文件;新 API 套件 8/8 含 **NEUTER×2**,五套件合计 **40 绿**,预存在 54 绿,collect **103**,9 blueprint / 80 路由)
+- **上一刀交付了引擎和表,但没有任何东西能被访问到。** 本刀把计划变成真端点(11 条 reconcile 路由),并把采纳闭环真正接上。
+- **★ 批准闸是真闸,不是标签(owner 决策③):** 写入目标**不等于批准**,而规划器读的是 `WHERE approved=1`。所以 AI 的提议**没有人点头就动不了钱**。**NEUTER 实测**:去掉 `approved=1` 过滤 → 一条未批准的 90% 提议立刻变成真实买单(买单数 **0 → 1**)。这证明它承重,而不是装饰。
+- **无状态计划,但有一个例外 —— 它不是状态机:** `/reconcile/plan` 每次调用都从「目标 vs 实际」重算,**没有「今日命令表」可读**。`persist=1` 只是把建议**记录**下来给采纳闭环用 —— 是**档案,不是待重放的队列**。
+  - **`_persist_plan` 刻意跳过 status 已非 pending 的行**:盲目重插会把「已完成」翻回 pending,**销毁的正是这张 epic 存在的目的 —— 采纳证据**。这条已被 `test_replan_does_not_resurrect_a_completed_action` 钉住。
+- **采纳闭环真的写了:** 旧 `trading_recommendations.adopted` 列全仓零写(P0 审计),所以「建议有没有被照做」根本无法回答。现在 status 端点写 `status + acted_at + actual_price + actual_shares`。
+  - **记录「实际值」而非布尔值**是有理由的:**建议价与成交价之间的差(滑点)**才是将来衡量建议质量的原料;只记 true/false 就永远算不出来。
+  - `/reconcile/adoption` **只报计数,刻意不算「质量分」** —— 那需要跨时间的价格结果,现在没有,**不能假装有**。
+- **价格诚实(docs/REDESIGN.md §5):** 盘中净值拿不到(两个 fundgz 域名本机实测全死),所以每个价格带 `price_basis`(close / missing),载荷带 `is_estimate: True` + 中文说明。测试**既钉住这个标记、也钉住「不存在 realtime 声明」** —— 防止将来某次编辑悄悄开始断言实时数据。**NEUTER**:把 `is_estimate` 翻成 False 即红。
+- **一个自己的测试 bug:** follow-through 夹具在同一 `(user, date)` 下重用了 symbol,撞了复合主键。**约束是对的,夹具是错的** —— 改成不同 symbol。
+- **验证:** 8 条端点契约测试**打真 DDL 不用 mock**(批准闸 / 采纳持久化 / skipped 记录而非删除 / 重算幂等 / **三张新表上的**跨用户隔离 / 估算诚实);五套件 40 绿;预存在 54 绿;collect 103;9 blueprint / 80 路由挂载;含新 handler 的全包越权扫描仍 **0**。
+- **未做(诚实,也是我不标 epic done 的原因):** **前端一行未写**。计划现在 API 可达,但**用户点不到** —— 而 P1 的价值主张是「用户每天打开就能看到今天该做什么」。后端 100%、前端 0%,epic 保持 claimed。
+
 ### 2026-07-26(续40) — 「侧栏 turnnav 点不动 + 删除按钮行为诡异」根修:三个缺陷同一形状——**渲染读了它、指纹没采它**(epic `pt_6c6d34f7739c4b00`;代码在 HEAD,但**承载 commit 是 sibling 的 `1a9cc92d`**,见下「归属事故」;3 文件 +657/-11;新套件 5/5 含 **NEUTER×3 全咬**,相邻 8 套件 **49 过**,bundle 重建 `bundle-13170778.js`)
 - **owner 报的两个症状其实是三个缺陷,且是同一族:某个缓存守卫的指纹没有采样渲染真正依赖的输入 → 跳过重绘 → UI 留着**陈旧且点不动**的控件。**
 - **缺陷 1:turn-nav 指纹漏采会话身份(`ui/turn_nav.js`)。** 旧指纹 = `用户消息数 + 最后一条用户消息前 40 字 + 总长度`,**不含 conv.id**,且**只采尾部**。而 `_turnNavFp` 是**跨会话共用的一个模块级槽位** —— 切到形状相同的另一个会话(等长、等用户数、尾部文本相同)就是**指纹命中 → 直接 return**,侧栏留着**上一个会话的圆点**,而它们的 `scrollToTurn(idx)` 索引的是另一个数组。同理,编辑/删除**任何非最后一条**用户消息也不触发重建。改为 `conv.id` 打底 + 折入每轮的**下标 + 预览**(哈希压短)。仍是 O(消息数) 且不做 JSON.parse,**该守卫存在的理由(流式期跳过重建)完全保留**。

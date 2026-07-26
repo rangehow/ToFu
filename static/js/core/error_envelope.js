@@ -41,6 +41,8 @@ const ERROR_KIND_LABELS = {
   server_offline:        'Server offline',
   internal:              'Internal error',
   generic:               'Error',
+  bad_request:           'Bad request',
+  upstream_error:        'Upstream error',
 };
 
 function isErrorEnvelope(obj) {
@@ -166,6 +168,39 @@ function _envIsRecoverable(env) {
   return !!env && env.kind === 'server_offline';
 }
 
+/* Conservative mojibake repair (2026-07-26) — display layer ONLY.
+ * Envelopes persisted before the backend wire-sanitize fix keep garbled
+ * detail strings ('è¯·æ±‚å¤±è´¥' for '请求失败'). Fires ONLY when the text
+ * smells of UTF-8-decoded-as-latin1 damage AND a strict UTF-8 round-trip
+ * gains CJK — otherwise returns the input untouched, so clean text (incl.
+ * real accented Latin) is never rewritten. Applied at render time; the
+ * stored envelope stays verbatim. */
+function _envRepairMojibake(text) {
+  if (!text || typeof text !== 'string') return text;
+  let suspect = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if ((c >= 0x80 && c <= 0xff) || c === 0x201a) { suspect = true; break; }
+  }
+  if (!suspect) return text;
+  const bytes = [];
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c <= 0xff) { bytes.push(c); continue; }
+    if (c === 0x201a) { bytes.push(0x82); continue; }
+    return text;  // not latin-1/cp1252 encodable → not this damage shape
+  }
+  let repaired;
+  try {
+    repaired = new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(bytes));
+  } catch (_e) {
+    return text;
+  }
+  const hasCJK = (s) => /[\u4e00-\u9fff]/.test(s);
+  if (hasCJK(repaired) && !hasCJK(text)) return repaired;  // [env-mojibake-repair]
+  return text;
+}
+
 function renderErrorEnvelope(err) {
   const env = normalizeErrorEnvelope(err);
   if (!env) return '';
@@ -178,7 +213,7 @@ function renderErrorEnvelope(err) {
     ? _envT('err.conn.title')
     : (_envResolveI18n('err.k.' + env.kind + '.chip')
        || ERROR_KIND_LABELS[env.kind] || env.kind || 'Error');
-  const detail = env.detail || env.raw || '';
+  const detail = _envRepairMojibake(env.detail || env.raw || '');
   const detailBlock = detail
     ? `<div class="error-block-detail" title="${escapeHtml(detail)}">${escapeHtml(detail.length > 220 ? detail.slice(0, 220) + '…' : detail)}</div>`
     : '';
@@ -211,7 +246,7 @@ function renderErrorEnvelope(err) {
   return (
     `<div class="error-block error-block--${escapeHtml(sev)} error-block--kind-${escapeHtml(env.kind)}" data-error-kind="${escapeHtml(env.kind)}">` +
       `<div class="error-block-title"><span class="error-block-kind">${escapeHtml(kindLabel)}</span>${ctx}</div>` +
-      `<div class="error-block-message">${escapeHtml(_locTitle != null ? _locTitle : env.message)}</div>` +
+      `<div class="error-block-message">${escapeHtml(_locTitle != null ? _locTitle : _envRepairMojibake(env.message))}</div>` +
       hintBlock +
       detailBlock +
       recoverBtn +
@@ -228,7 +263,7 @@ function errorEnvelopeMessage(err) {
   const env = normalizeErrorEnvelope(err);
   if (!env) return '';
   const _loc = _envLocalizedTitle(env);
-  return _loc != null ? _loc : env.message;
+  return _loc != null ? _loc : _envRepairMojibake(env.message);
 }
 
 window.renderErrorEnvelope = renderErrorEnvelope;

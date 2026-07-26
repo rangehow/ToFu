@@ -112,7 +112,7 @@ def _render(*, kind: str, lang: str = 'en', poison: str = '') -> str:
     labels = _extract_const_obj(src, 'ERROR_KIND_LABELS')
     fns = [
         '_envT', '_envResolveI18n', '_envLocalizedTitle', '_envLocalizedHint',
-        '_envIsRecoverable', 'isErrorEnvelope',
+        '_envIsRecoverable', '_envRepairMojibake', 'isErrorEnvelope',
         'normalizeErrorEnvelope', 'renderErrorEnvelope',
     ]
     extracted = labels + '\n' + '\n'.join(_extract_fn(src, f) for f in fns)

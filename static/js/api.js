@@ -159,12 +159,30 @@
       try {
         const ct = resp.headers.get('content-type') || '';
         bodyData = ct.includes('application/json') ? await resp.json() : await resp.text();
-      } catch (_) { /* ignore body parse error */ }
+      } catch (e) {
+        console.warn('[Api] failed to parse error body for %s %s (HTTP %s): %s',
+                     method, url, resp.status, e && e.message);
+      }
       const code = (bodyData && typeof bodyData === 'object' && bodyData.error) || null;
+      /* Duck-typed envelope detection (api.js must stay load-order
+       * independent of core/error_envelope.js). When the backend shipped a
+       * typed envelope, err.message must BE the backend's real message —
+       * every caller that toasts e.message would otherwise show only the
+       * opaque 'HTTP 500 on …' status line. The full envelope rides along
+       * for callers that render it properly. */
+      const isEnvelope = !!code && typeof code === 'object'
+        && typeof code.kind === 'string' && typeof code.message === 'string';
       const err = new ApiError(
-        'HTTP ' + resp.status + ' on ' + method + ' ' + url,
+        isEnvelope && code.message
+          ? code.message
+          : 'HTTP ' + resp.status + ' on ' + method + ' ' + url,
         { status: resp.status, code, body: bodyData, url }
       );
+      if (isEnvelope) err.envelope = code;
+      if (bodyData && typeof bodyData === 'object'
+          && typeof bodyData.request_id === 'string' && bodyData.request_id) {
+        err.requestId = bodyData.request_id;
+      }
       if (opts.onError === 'null') {
         console.warn('[Api] %s', err.message);
         return null;
@@ -929,7 +947,10 @@
       }, {}));
       if (!resp.ok) {
         let err = {};
-        try { err = await resp.json(); } catch (_) { /* non-JSON error body */ }
+        try { err = await resp.json(); } catch (e) {
+          console.warn('[Api][trading] non-JSON error body for %s (HTTP %s): %s',
+                       _TRADING_BASE + path, resp.status, e && e.message);
+        }
         throw new Error((err && err.error) || ('HTTP ' + resp.status));
       }
       return await resp.json();

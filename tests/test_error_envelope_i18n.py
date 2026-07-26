@@ -278,11 +278,17 @@ global.escapeHtml = (s) => String(s == null ? '' : s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 const _NEUTER = process.argv[4] === 'neuter-resolve';
+const _NEUTER_MOJI = process.argv[4] === 'neuter-mojibake';
 let _envSrc = fs.readFileSync(process.argv[3], 'utf8');
 if (_NEUTER) {
   const _target = 'return text;  // [env-i18n-resolve]';
   if (!_envSrc.includes(_target)) throw new Error('neuter target missing');
   _envSrc = _envSrc.replace(_target, 'return null;  // NEUTERED');
+}
+if (_NEUTER_MOJI) {
+  const _target = 'if (hasCJK(repaired) && !hasCJK(text)) return repaired;  // [env-mojibake-repair]';
+  if (!_envSrc.includes(_target)) throw new Error('neuter target missing');
+  _envSrc = _envSrc.replace(_target, '/* NEUTERED: mojibake repair disabled */');
 }
 eval(fs.readFileSync(process.argv[2], 'utf8'));   // i18n.js (zh default)
 eval(_envSrc);                                    // error_envelope.js
@@ -297,11 +303,11 @@ function _keyedEnv() {
   // model='kimi-k3', context='no-fallback') post-fix.
   return {
     kind: 'endpoint_unreachable', severity: 'warning', retryable: true,
-    message: '⚠️ 模型服务端点无法连接（服务可能已宕机）（模型：kimi-k3）\n'
-           + 'Model endpoint unreachable (server may be down) (model: kimi-k3)',
-    hint: '解决办法 / How to fix:\n• 模型服务端点无法连接（连接被拒绝或超时），通常说明该自建/BYO 服务已宕机、端口未监听，或网络/防火墙不通。\n• 确认模型服务正在运行且可达后重试；或在 「设置 → 模型默认」 切换到其他可用模型。\n\n'
-        + '• The model endpoint refused the connection or timed out — the self-hosted / BYO server is likely down, the port is not listening, or a firewall is blocking it.\n'
-        + '• Verify the model server is running and reachable, then retry; or switch to another available model in "Settings → Model defaults".',
+    message: '⚠️ 模型服务端点无法连接（模型：kimi-k3）\n'
+           + 'Model endpoint unreachable (model: kimi-k3)',
+    hint: '解决办法 / How to fix:\n• 无法连接到模型服务端点（连接被拒绝或超时）——可能是本机代理/网络中断，也可能是自建/BYO 服务已宕机、端口未监听或防火墙不通。\n• 先检查本机网络/代理后重试；若确认服务可达仍失败，可在 「设置 → 模型默认」 切换到其他可用模型。\n\n'
+        + '• The model endpoint could not be reached (connection refused or timed out) — this can be a local proxy/network outage OR the self-hosted / BYO server being down, the port not listening, or a firewall blocking it.\n'
+        + '• Check your network / proxy and retry; if the server is confirmed reachable, switch to another available model in "Settings → Model defaults".',
     detail: "All endpoints for model 'kimi-k3' are unreachable",
     model: 'kimi-k3', context: 'no-fallback', source: 'llm-stream',
     raw: '', titleKey: 'err.k.endpoint_unreachable.title',
@@ -315,13 +321,13 @@ function _keyedEnv() {
 if (!_NEUTER) {
   const html = renderErrorEnvelope(_keyedEnv());
   check('zh_title_localized',
-    html.includes('⚠️ 模型服务端点无法连接（服务可能已宕机）（模型：kimi-k3）'), html);
+    html.includes('⚠️ 模型服务端点无法连接（模型：kimi-k3）'), html);
   check('zh_english_title_not_shown',
-    !html.includes('Model endpoint unreachable (server may be down)'), html);
+    !html.includes('Model endpoint unreachable'), html);
   check('zh_hint_header_localized',
     html.includes('解决办法：') && !html.includes('How to fix'), html);
   check('zh_english_hint_not_shown',
-    !html.includes('The model endpoint refused the connection'), html);
+    !html.includes('local proxy/network outage'), html);
   check('zh_chip_localized',
     html.includes('端点不可达'), html);
   check('zh_context_tag_preserved', html.includes('[no-fallback]'), html);
@@ -332,8 +338,8 @@ if (!_NEUTER) {
   _i18nLang = 'en';
   const html = renderErrorEnvelope(_keyedEnv());
   check('en_title_localized',
-    html.includes('Model endpoint unreachable (server may be down) (model: kimi-k3)'), html);
-  check('en_zh_title_not_shown', !html.includes('模型服务端点无法连接（服务可能已宕机）'), html);
+    html.includes('Model endpoint unreachable (model: kimi-k3)'), html);
+  check('en_zh_title_not_shown', !html.includes('模型服务端点无法连接'), html);
   check('en_hint_header_localized',
     html.includes('How to fix:') && !html.includes('解决办法'), html);
   check('en_chip_english', html.includes('Endpoint unreachable'), html);
@@ -348,11 +354,11 @@ if (!_NEUTER) {
   delete legacy.hintKey;
   const html = renderErrorEnvelope(legacy);
   check('legacy_bilingual_title_shown',
-    html.includes('模型服务端点无法连接（服务可能已宕机）')
-      && html.includes('Model endpoint unreachable (server may be down)'), html);
+    html.includes('⚠️ 模型服务端点无法连接（模型：kimi-k3）')
+      && html.includes('Model endpoint unreachable (model: kimi-k3)'), html);
   check('legacy_bilingual_hint_shown',
     html.includes('解决办法 / How to fix:')
-      && html.includes('The model endpoint refused the connection'), html);
+      && html.includes('local proxy/network outage'), html);
   // Chip still localizes (it comes from the i18n table, not the envelope).
   check('legacy_chip_still_localized', html.includes('端点不可达'), html);
 }
@@ -365,7 +371,7 @@ if (!_NEUTER) {
   const html = renderErrorEnvelope(drift);
   check('unknown_key_falls_back_to_bilingual',
     html.includes('解决办法 / How to fix:')
-      && html.includes('Model endpoint unreachable (server may be down)'), html);
+      && html.includes('Model endpoint unreachable'), html);
 }
 
 // ── E. aborted kind: hint key resolves to EMPTY → no hint block at all ──
@@ -387,18 +393,88 @@ if (!_NEUTER) {
 if (!_NEUTER) {
   const msg = errorEnvelopeMessage(_keyedEnv());
   check('message_helper_localized',
-    msg === '⚠️ 模型服务端点无法连接（服务可能已宕机）（模型：kimi-k3）', msg);
+    msg === '⚠️ 模型服务端点无法连接（模型：kimi-k3）', msg);
   const legacy = _keyedEnv();
   delete legacy.titleKey;
   check('message_helper_legacy_fallback',
     errorEnvelopeMessage(legacy).includes('\n'), errorEnvelopeMessage(legacy));
 }
 
+// ── G. Mojibake repair at the display layer (persisted pre-fix envelopes) ──
+if (!_NEUTER && !_NEUTER_MOJI) {
+  // '请求失败' as UTF-8-decoded-as-latin1 — the lossless damage shape seen
+  // in production ('API HTTP 403: {"error":{"message":"è¯·æ±‚…"}}').
+  const garbled403 = 'API HTTP 403: {"error":{"message":"'
+    + String.fromCharCode(0xe8,0xaf,0xb7, 0xe6,0xb1,0x82, 0xe5,0xa4,0xb1, 0xe8,0xb4,0xa5)
+    + ' (request id: 20260725191055)"}}';
+  const legacy = {
+    kind: 'permission', severity: 'error', retryable: false,
+    message: '⚠️ API Key 被拒绝（401/403，无权限或已失效）\nAPI key rejected (401/403, invalid or lacking permission)',
+    hint: '', detail: garbled403, model: 'kimi-k3', context: '', source: 'llm', raw: '',
+  };
+  const html = renderErrorEnvelope(legacy);
+  check('mojibake_detail_repaired', html.includes('请求失败'), html);
+  // Clean text is never rewritten.
+  const cleanHtml = renderErrorEnvelope(_keyedEnv());
+  check('clean_detail_untouched',
+    cleanHtml.includes("All endpoints for model 'kimi-k3' are unreachable"), cleanHtml);
+  // LOSSY mojibake (contains U+FFFD — bytes already destroyed) must be left
+  // untouched: repair is impossible, guessing would corrupt further.
+  const lossy = {
+    kind: 'permission', severity: 'error', retryable: false,
+    message: 'x', hint: '',
+    detail: String.fromCharCode(0xe7, 0xa8, 0xfffd),
+    model: '', context: '', source: 'llm', raw: '',
+  };
+  check('lossy_mojibake_left_untouched',
+    renderErrorEnvelope(lossy).includes(String.fromCharCode(0xe7, 0xa8, 0xfffd)), 'lossy rewritten');
+}
+
+// ── H. New kinds: truthful copy, no Keys/quota misdirection ──
+if (!_NEUTER && !_NEUTER_MOJI) {
+  const up = {
+    kind: 'upstream_error', severity: 'warning', retryable: true,
+    message: 'x', hint: 'x', detail: '', model: '', context: '', source: '', raw: '',
+    titleKey: 'err.k.upstream_error.title', hintKey: 'err.k.upstream_error.hint',
+  };
+  const htmlUp = renderErrorEnvelope(up);
+  check('upstream_error_zh_title', htmlUp.includes('⚠️ 上游模型服务暂时不可用'), htmlUp);
+  check('upstream_error_zh_chip', htmlUp.includes('上游故障'), htmlUp);
+  check('upstream_error_no_keys_misdirection', !htmlUp.includes('Keys / Providers'), htmlUp);
+  _i18nLang = 'en';
+  const htmlUpEn = renderErrorEnvelope(up);
+  check('upstream_error_en_title',
+    htmlUpEn.includes('Upstream model service temporarily unavailable'), htmlUpEn);
+  _i18nLang = 'zh';
+  const br = {
+    kind: 'bad_request', severity: 'error', retryable: false,
+    message: 'x', hint: 'x', detail: '', model: '', context: '', source: '', raw: '',
+    titleKey: 'err.k.bad_request.title', hintKey: 'err.k.bad_request.hint',
+  };
+  const htmlBr = renderErrorEnvelope(br);
+  check('bad_request_says_not_keys',
+    htmlBr.includes('这不是 Key / 配额 / 429 问题'), htmlBr);
+}
+
+// ── NEUTER (mojibake): repair stripped → garbled detail leaks ──
+if (_NEUTER_MOJI) {
+  const garbled403 = 'API HTTP 403: {"error":{"message":"'
+    + String.fromCharCode(0xe8,0xaf,0xb7, 0xe6,0xb1,0x82, 0xe5,0xa4,0xb1, 0xe8,0xb4,0xa5)
+    + '"}}';
+  const legacy = {
+    kind: 'permission', severity: 'error', retryable: false,
+    message: 'x', hint: '', detail: garbled403, model: '', context: '', source: 'llm', raw: '',
+  };
+  const html = renderErrorEnvelope(legacy);
+  check('NEUTER_mojibake_leaks',
+    !html.includes('请求失败') && html.includes('API HTTP 403'), html);
+}
+
 // ── NEUTER: resolution stripped → bilingual text leaks back ──
 if (_NEUTER) {
   const html = renderErrorEnvelope(_keyedEnv());
   check('NEUTER_bilingual_leaks_back',
-    html.includes('Model endpoint unreachable (server may be down)')
+    html.includes('Model endpoint unreachable')
       && html.includes('解决办法 / How to fix:'), html);
 }
 
@@ -406,7 +482,7 @@ console.log(out.join('\n'));
 """
 
 
-def _run_harness(neuter: bool = False) -> str:
+def _run_harness(mode: str = '') -> str:
     harness = os.path.join(HERE, '_err_env_i18n_harness.js')
     with open(harness, 'w') as f:
         f.write(_HARNESS)
@@ -415,7 +491,7 @@ def _run_harness(neuter: bool = False) -> str:
             ['node', harness,
              os.path.join(JS_DIR, 'i18n.js'),
              os.path.join(JS_DIR, 'core', 'error_envelope.js'),
-             'neuter-resolve' if neuter else ''],
+             mode],
             capture_output=True, text=True, timeout=60)
     finally:
         try:
@@ -432,7 +508,7 @@ def _run_harness(neuter: bool = False) -> str:
 @pytest.mark.skipif(not _node_available(), reason='node not installed')
 def test_error_envelope_frontend_localizes():
     output = _run_harness()
-    assert output.count('PASS') >= 19, f'expected >=19 PASS lines, got:\n{output}'
+    assert output.count('PASS') >= 27, f'expected >=27 PASS lines, got:\n{output}'
 
 
 @pytest.mark.skipif(not _node_available(), reason='node not installed')
@@ -440,8 +516,17 @@ def test_error_envelope_neuter_resolution():
     """NEUTER proof: stripping the keyed-resolution line makes the legacy
     bilingual text leak back into the block — the helpers under test are
     what localize the envelope."""
-    output = _run_harness(neuter=True)
+    output = _run_harness('neuter-resolve')
     assert 'PASS NEUTER_bilingual_leaks_back' in output, output
+
+
+@pytest.mark.skipif(not _node_available(), reason='node not installed')
+def test_error_envelope_neuter_mojibake_repair():
+    """NEUTER proof: disabling the conservative repair makes persisted
+    mojibake detail text reach the UI garbled — the repair line is what
+    restores the original Chinese for pre-fix envelopes."""
+    output = _run_harness('neuter-mojibake')
+    assert 'PASS NEUTER_mojibake_leaks' in output, output
 
 
 # ═════════════════════════════════════════════════════════════════════

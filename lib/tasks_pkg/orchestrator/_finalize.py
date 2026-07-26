@@ -400,7 +400,45 @@ def _maybe_auto_retry_turn(task: dict[str, Any], cfg: dict[str, Any]) -> bool:
     with task['content_lock']:
         task['content'] = ''
         task['thinking'] = ''
+    # ★ HONEST ACCOUNTING — the discarded attempt was BILLED.
+    #   By the time a turn settles into abnormal_stop / premature_close, the
+    #   inner stream-anomaly loop may already have burned up to 16 attempts'
+    #   worth of tokens, all correctly folded into task['usage'] / apiRounds.
+    #   Wiping them here made the gateway's charge invisible: the re-run starts
+    #   a fresh accumulated_usage (_run.py) and the wallet settles from the
+    #   FINAL task['usage'] (lib/billing/request_flow.settle_task), so the user
+    #   paid for up to 4 attempts and was charged for one. Same failure mode as
+    #   the FloorRetry accounting bug — a real billed request hidden from the
+    #   cost report.
+    #
+    #   Fold it into the SAME carry-forward slots the continue-checkpoint path
+    #   uses; _finalize_task merges them into the terminal usage / apiRounds.
+    #   Semantically exact ("billed before this run_task invocation") and
+    #   ADDITIVE, so a task that is both resumed-from-checkpoint and
+    #   auto-retried keeps both bills, and repeated retries accumulate.
+    _spent = task.get('usage') or {}
+    if _spent:
+        _carry = dict(task.get('_checkpointUsage') or {})
+        for _k, _v in _spent.items():
+            if not isinstance(_v, (int, float)) or isinstance(_v, bool):
+                continue  # trace_id / _dispatch / nested detail dicts
+            _prev = _carry.get(_k)
+            _carry[_k] = (_prev + _v) if isinstance(_prev, (int, float)) else _v
+        if _carry:
+            task['_checkpointUsage'] = _carry
+        _spent_rounds = task.get('apiRounds') or []
+        if _spent_rounds:
+            task['_checkpointApiRounds'] = (
+                list(task.get('_checkpointApiRounds') or []) + list(_spent_rounds))
+        logger.warning(
+            '[%s] auto-retry: carrying forward the discarded attempt\'s billed '
+            'usage (%s) so the wallet and cost popover see every request the '
+            'gateway charged for', tid,
+            {k: v for k, v in _spent.items() if isinstance(v, (int, float))})
+    # The re-run must still START clean — it accumulates its own usage from
+    # zero; the carry-forward above is merged back only at finalize.
     task['usage'] = {}
+    task['apiRounds'] = []
     task['status'] = 'running'
     task['error'] = None
     task['finishReason'] = None

@@ -1,6 +1,15 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续19) — 快照增量压缩**自愈**:把「等重启」从阻塞变成优化(commit `fc0b2214`,2 文件 +317;新套件 5/5 含安全性质,回归 10 套件 **70/70**;生产实跑一次 pass 回收 4.5MB)
+- **发现的真问题(不是等出来的,是量出来的):** P5 的写路径投影只对「运行本版代码的进程」生效。本轮核查:`task_events` 从 1077MB 涨到 **1596MB(+519MB)**,近 30 分钟新写 566 条快照、带 `prefixLen` 的 **0 条**。一次性迁移是**时间点扫描**,跑完那一刻缺口就重新打开 —— 我每次被派发就手动迁一遍,**那不是解法,是人肉补漏**。
+- **修法(复用而非新造):** 挂进现成的 opportunistic 采样钩子(TTL prune 已在用),新增 `_opportunistic_compact` —— **任何**运行本版代码的进程都会顺带把落后的整包行压成增量,**不需要协调重启**,表自行收敛。
+- **安全性靠「同一份契约」保证:** 直接调用 `_migrate_snapshot_deltas.migrate_task` **本体**,不复制第二份实现 —— 「投影 → 重建 → 与原文逐字节比对 → 全轮通过才写;任一轮不一致整任务回滚、旧行分毫不动」。这是在改**线上数据**,契约有两份就迟早会漂。
+- **有界:** 采样率 1/4096(比 prune 的 1/1024 更稀 —— 压缩要**重写**行而 prune 只删)、单次至多 2 个任务;实测一次 pass **1.2s / 回收 4.5MB**,远低于任何请求预算。
+- **顺带修一个自己上一批留下的结构缺陷:** `invalidate_task_cache` 之后缺空行,`flush_pending` 被粘进了 `append_persistent_event` 函数体 —— 语法合法所以测试全绿,但模块结构已错乱。**教训:`insert_content` 之后要看结构,不能只看测试绿。**
+- **测试 5 面:** 收敛(旧进程遗留整包行被压且读回逐字节一致)、幂等、有界(backlog 再大也不超上限)、**★安全(注入丢消息的投影 → 拒写,行保持逐字节不变)**、静态钉(append 钩子必须真的采样压缩器 —— 未接线的压缩器收敛不了任何东西)。
+- **诚实边界:** 这**不替代重启**。重启后写路径投影生效、新行直接是增量形,压缩器只处理残余;分层 TTL 30 天与新索引的自动创建**仍需进程启动**。但「库无限膨胀」这条已经止血。
+
 ### 2026-07-26 — pt_871a26c7 收尾确认:ZWSP 激活内容**已在 HEAD 生效**,但承载 commit 不是 `f4c3051f`(被 rebase/squash 进了 sibling 的 memory-prefetch commit `fd885a7e`——`git merge-base --is-ancestor f4c3051f HEAD` 为否,而 `HEAD:_gateway.py` 含 `_invisible_break` ×3、`HEAD:test_gateway_sanitize.py` 含 ZWSP 断言 ×7、套件 **9/9 绿**、worktree 干净)。**给未来考古的人:别按 `f4c3051f` 找,按内容找。** 本次派发为陈旧触发(板面已 done),未重做、未重挂——按「答案已解决闸门」原则仅复核确认。
 
 ### 2026-07-26(续24) — chatInner 顺序 bug 的**尾部镜像**根修:抽出唯一有序插入原语 + 运行时不变式 + 静态闸(commit 见下,12 文件 +867/-26;新套件 2→**8/8** 含 NEUTER×3,相邻环 **57/57**,collect **9756** 0 err)

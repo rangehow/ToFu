@@ -919,7 +919,9 @@ function _attachAutopilotFollowup(convId, payload) {
     try {
       const _ghost = document.getElementById('streaming-msg');
       if (_ghost) _ghost.remove();
-    } catch (e) { /* ignore */ }
+    } catch (e) {
+      debugLog(`[send-pipeline][autopilot] ghost placeholder cleanup failed conv=${convId.slice(0,8)}: ${e && e.message}`, 'error');
+    }
     /* ★ Force-bypass the fingerprint guard.  Without `true`, renderChat's
      *   surgical path may keep the corrupted msg-N from finishStream's
      *   ConvView.finalizeStreaming call (which can land BEFORE we get
@@ -1499,7 +1501,9 @@ async function _checkForQueuedTask(convId, _retryCount = 0) {
         try {
           const _ghost = document.getElementById('streaming-msg');
           if (_ghost) _ghost.remove();
-        } catch (e) { /* ignore */ }
+        } catch (e) {
+          debugLog(`[send-pipeline][queued-dispatch] ghost placeholder cleanup failed conv=${convId.slice(0,8)}: ${e && e.message}`, 'error');
+        }
       }
       _release();
       return;
@@ -1522,7 +1526,9 @@ async function _checkForQueuedTask(convId, _retryCount = 0) {
       try {
         const _ghost = document.getElementById('streaming-msg');
         if (_ghost) _ghost.remove();
-      } catch (e) { /* ignore */ }
+      } catch (e) {
+        debugLog(`[send-pipeline][cleanup] ghost placeholder cleanup failed conv=${convId.slice(0,8)}: ${e && e.message}`, 'error');
+      }
     }
 
     // Reload messages from server to pick up the queued user message.

@@ -741,7 +741,9 @@ async function loadConversationsFromServer(prefetchId) {
         const _n = parseInt(_tc, 10);
         if (!Number.isNaN(_n)) _serverTotalCount = _n;
       }
-    } catch (_e) { /* header read best-effort */ }
+    } catch (_e) {
+      debugLog(`[conversations] X-Total-Count header read failed: ${_e && _e.message}`, 'warn');
+    }
     let serverConvs, prefetchedConv = null;
     if (prefetchId) {
       /* Combo response: { conversations: [...], prefetched: {...} | null } */
@@ -1537,7 +1539,9 @@ async function loadConversationMessages(convId) {
       console.info(`[loadConvMsgs] 🧹 MERGE_ACTIVE_TASK adopted reconciled server list ` +
         `(${serverMsgs.length} msgs) for conv=${convId.slice(0,8)} — swept an orphaned ` +
         `empty-assistant ghost tail.`);
-      try { ConvCache.put(conv); } catch (_e) { /* best-effort */ }
+      try { ConvCache.put(conv); } catch (_e) {
+        debugLog(`[conversations] ConvCache.put failed (MERGE_ACTIVE_TASK adopt) conv=${convId.slice(0,8)}: ${_e && _e.message}`, 'warn');
+      }
       if (convId === activeConvId && typeof renderChat === 'function') {
         window.ConvView.replaceAll(conv.id, { forceScroll: false });
       }
@@ -1614,7 +1618,9 @@ async function loadConversationMessages(convId) {
           `trailing server msg(s) (idx ${_appendStart}..${serverMsgs.length - 1}) into ` +
           `conv=${convId.slice(0,8)} — cache predated post-finish writes ` +
           `(autopilot VU / queue dispatch / late persist).`);
-        try { ConvCache.put(conv); } catch (_e) { /* best-effort */ }
+        try { ConvCache.put(conv); } catch (_e) {
+          debugLog(`[conversations] ConvCache.put failed (MERGE_ACTIVE_TASK append) conv=${convId.slice(0,8)}: ${_e && _e.message}`, 'warn');
+        }
         if (convId === activeConvId && typeof renderChat === 'function') {
           window.ConvView.replaceAll(conv.id, { forceScroll: false });
         }

@@ -1,6 +1,23 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-27 — 夜间 SIGKILL 连环案根因坐实+防御落地:共享 cgroup 被页缓存+slab 顶满,9 杀全在 20:51–23:42 重负载段(commit `3b254b26`,9 文件 +851;新测 31/31 含 NEUTER×4,相邻环 122+17 全绿,collect 10254 0 err)
+
+- **owner 的直觉对了一半:** 「200GB 内存还被杀,8/16GB 笔记本怎么活」——真相是 **tofu 只需要 ~2–4GB**;被杀不是因为应用吃了 200GB,而是**容器的 cgroup 上限(220GiB=整机)被三类东西顶到 99.8–99.9%**:①页缓存 ~110GiB(FUSE IO + agent 反复 grep 的 100MB+ 轮转日志)②内核 slab ~70GiB(IDE fileWatcher 扫几百万文件的 dentry)③兄弟进程 RSS ~39GiB(fileWatcher 27.75G + pylance 4.5G + extensionHost 3.9G)。**零 swap** → 内核只能 OOM-SIGKILL 最肥的可杀进程,留一句「Killed」。8GB 笔记本永远遇不到:全局压力可全局回收、有 swap、没有胖 IDE 同居。
+- **死亡规律(15 天全量日志间隙取证):** 9 次死亡全在 **20:51–23:42 重负载段**,次日 02:00–09:00 人工重启,停机 3h45m–9h27m。死前最后一分钟都是多任务并发(16 agent 线程、13 万 token 上下文、29 路并发 fetch)。audit.log: `cgroup_near_full` 17 次 + `cgroup_request_refused` 7 次,07-25 02:22 已 99.7%。**续76 的 22:02 OOM(94.7%)是本案第 10 个独立佐证。**
+- **旧防御为何无效(07-20 建的 cgroup_guard):** relief 只清 tofu 自己的 ~2GB 堆缓存——实测 97.8%→97.6%,对着 180GB 的 cache+slab 是杯水车薪。
+- **落地防御(全在我们权力内):**
+  | 层 | 改动 | 实测 |
+  |---|---|---|
+  | 页缓存 relief | monitor 现在 fadvise-DONTNEED `logs/*.log*`(beegfs-fuse 实测提示生效) | **一次释放 1.17GB** |
+  | IO 接缝止付 | json_store 大写、file_history blob、read_tools ≥8MiB 整读、motion_video 产物完成后 fadvise | 不再单向记账 |
+  | 证据 | 滚动压力日志 `logs/cgroup_pressure.log`(含高压时 top-3 RSS 进程)+ oom_kill 计数器见证(下次击杀从猜测变 CRITICAL) | 已出首行 |
+  | 不死 | `deploy/tofu_guard.sh` 用户态看门狗(无 sudo;setsid 脱离终端;flock 单例;supervisord 互斥;崩溃风暴刹车 >5/10min 停拉)+ crontab `@reboot`+每分钟 | **死亡→~15s 复活**,替代 7h 停机 |
+  | bootstrap | exit -9/137 识别为外部击杀:记日志+退避自动重启,**不再拿空 stderr 喂 LLM 修依赖** | 3 测 |
+- **给 owner 的结构修复清单(我们无权做的):** ①PG 数据目录搬离 FUSE 到本地盘 `/dev/md0p1`(5.8T)——同时根修 pt_c0560253 的 LoopWatch STALL;②给 tofu 独立小 cgroup 或 swap;③IDE 瘦身(27.75G fileWatcher 是最大的被杀候选兼缓存充电机);④有 sudo 后装 `deploy/supervisor/tofu.conf` 替代用户态看门狗。
+- **生效条件:** cgroup_guard/bootstrap 代码改动**需重启服务**生效;看门狗循环+crontab **已激活**(下次死亡即由新代码拉起)。插入时引擎 IndentationError 两处(锚文本自带重复)→ AST 闸外测试环当场抓住并修复。
+- **诚实边界:** fadvise 释放的是干净页;FUSE 脏页须等写回,真正的结构解在清单 ①–④。看门狗消灭的是**停机时长**,不是死亡本身——死亡本身靠清单与缓解层持续压低。
+
 ### 2026-07-26(续76) — 「autopilot 没接管」取证:接管**发生了两次**,两次都被 OOM Killed 打断在 VU 调查半途;崩溃恢复链路两个洞让它看起来「从没接管」(owner 问 conv `ms1rz4b2es7oiz`;零代码变更,纯日志+DB 取证)
 
 - **完整时间线(本地 UTC+8,证据全在 logs/app.log.2026-07-26 + task_results + audit.log):**

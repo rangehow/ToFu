@@ -475,6 +475,15 @@ _BUNDLE_FILES = [
     # loadConversationMessages (which calls both freshness signals)
     # still resolve the bare names at runtime.
     'core/conv_persist_helpers.js',
+    # Per-conv image base64 hydrator extracted 2026-07-26 from
+    # core/conversations.js (pt_3879f00e sub-part 2, slice 4):
+    # _hydrateImageBase64. Pure helper — fetches base64 for images
+    # arriving from DB with base64 stripped (post-restart), stashes a
+    # promise on conv._hydratePromise for downstream awaits. Reads
+    # apiUrl() at CALL time via bundle-level window scope. Load BEFORE
+    # core/conversations.js so its two call sites inside
+    # loadConversationMessages still resolve the bare name at runtime.
+    'core/conv_image_hydrate.js',
     'core/conversations.js',
     # Shared SSE fetch-response read/decode/buffer loop (readSSEStream) —
     # extracted 2026-07-11 from branch.js / paper-reader.js / ui/sse_pipeline.js.

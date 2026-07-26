@@ -1,6 +1,12 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续64) — cache-cost A 收口:**owner 拍板「接受现状」,不问网关、不改客户端**(epic `pt_a475804a661042dd` 关票;零代码变更;charter v9)。owner 对 4 选 1 的答复 = **C**,并明确「只做 C+E 两票」——而 C(实测否决)、E(检测器槽键碰撞已修 `6f010b93`)均已收口,故 A 票按 owner 决策直接关闭。
+- **关闭即终局的含义:** opus-5 evaDaily 体缓存几乎不命中(主体轮仅 24.9% 命中到体,170 轮 wire 指纹实证字节+标记全同仍不读回,判归上游/网关翻译层)的问题**保持不修**,¥3.4k+/周 可省成本不追回。客户端断点策略维持现状,不做「缓存目标折进 system 尾部块」的改法。
+- **两条联动条款随本决策固化:** ①回退链(`fallback_model=kimi-k3` 不改)的前提「opus-5 回跳时无暖前缀可失」现在**固化成立**,回退链决策维持;②B 票(key 轮换粘性,已实测不做)的 opus-5 部分随之**彻底消解**。
+- **复活条件(写进 charter,防遗忘):** 若将来网关侧行为变化(换线/升级)使体缓存恢复命中,用生产 apiRounds 数据重评——届时 B/D 两票的重评条款自动激活。
+- **本批五票最终格局(A/B/C/D/E 全部闭环):** A=owner 接受现状;B=实测不做(kimi 自动缓存全局是伪影 + aws 不换 key + opus-5 与 A 同源);C=实测否决(beta flap 全是模型切换);D=charter 否决(回退链维持);E=检测器伪影已修。**唯一真实代码变更 = E 票的检测器修复;唯一真成本大头(A 票)经 owner 知情决策后接受。**
+
 ### 2026-07-26(续72) — 自动科研系统 R1 落地:harvest 批量爬 + parse-once 入库原语(owner 拍板 R1–R3 优先 + 「phash 逐字节一致」为最高验收)。commit 见下,3 新文件 + facade;新套件 **7/7 含 NEUTER×2 + failing-first 实证**,相邻 paper 三套件 **28/28**,collect **10209** 0 err
 
 - **owner 的隐藏假设已钉死并实证:** harvest 入库路径产出的 `phash` **必须与阅读模式 ingest 逐字节一致**,否则「已读过→命中缓存」静默失效、parse-once 成本故事当场崩。
@@ -888,3 +894,16 @@
 **决策:info/log 级不上送(明确否决,不是遗漏)。** `debugLog` 每轮任务信息量巨大(任务启动、排队、steer 注入、autopilot 取消……),全量上送会淹没 `app.log`,让真正的 error/warn 更难被发现。**`debug_panel.js:23` 的 `if (type === "error" || type === "warn")` 保持不动。** 扫描把「info 不上送」写成结构性缺口是**误判**:真正的缺口不是过滤器太窄,而是**静默 catch 根本不调用 debugLog**——一个 `catch (e) { /* ignore */ }` 无论过滤器放多宽都永远不会产生日志。把上述 6 处接进 debugLog 后这条即闭环;放宽等级只会在闭环之外额外付出噪音代价。
 
 **验证:** `node --check` 四个 JS 文件全过;`tests/test_bundle_manifest_parity.py` 15/15;收集门 10,201 tests / 0 collection error;`-k "resume_state or resume_prefill"` 4 passed。残留扫描确认三个文件里原始静默形状(`catch (e) { /* ignore */ }`、`ignore body parse error`、`/* best-effort */ }`)**均已归零**。
+
+## 续33 — 后端错误透明传递前端:vendor 故障不再伪装成「你的 Key 坏了」(error-transparency epic 收口)
+
+生产实证(error.log 07-26):toio 网关把厂商故障裹进 4xx(`ext.error.source=UPSTREAM_VENDOR`),展示层把 `RateLimitError(is_gateway=True)` 映射成 `ratelimit`(hint 指向 设置→Keys)、5xx-after-retries 落进 keys-first 的 `generic`、HTTP 400 确定性拒绝同样落 `generic`——三类都让用户为**厂商侧故障**去翻自己的 Key。
+
+- **分类器(_classify.py):** gateway 形 `RateLimitError` → `upstream_error`;`RetryableAPIError`(5xx 重试耗尽)→ `upstream_error`;`BadRequestError` → 新 kind `bad_request`。抛出层(llm_errors.py)的 UPSTREAM_VENDOR 检测**此前已提交**,本次是展示半边的配对收口。
+- **常量(_constants.py):** KINDS/warning/retryable 三表登记两个新 kind;`generic` hint 与「设置→Keys」**解耦**(改为「先展开详情/查日志,确认是 Key 问题才去设置」——07-25 generic 误指 46 次);`endpoint_unreachable` hint 区分本机代理/网络中断 vs BYO 服务宕机;`bad_request` hint 明写「这不是 Key/配额/429 问题」。
+- **api.js:** 后端 typed envelope 到达时 `ApiError.message` 取后端真实文案(不再是 `HTTP 500 on …` 状态行),完整 envelope 挂 `err.envelope`,`request_id` 挂 `err.requestId`;鸭式检测保持加载顺序无关。同 hunk 含续32 已入账未落码的 2 处 body-parse `console.warn`(163/936),一并落码使已提交 journal 成真。
+- **error_envelope.js:** `ERROR_KIND_LABELS` 同步两个新 kind;新增 `_envRepairMojibake` 展示层修复——latin-1/cp1252 疑形 + 严格 UTF-8 往返 + CJK 净增三重门,**只修历史脏行**(修复前持久化的 envelope detail/message 乱码),干净文本与有损(U+FFFD)文本原样不动;存储层字节不碰。
+- **i18n.js:** 6 个新 key(bad_request/upstream_error × chip/title/hint × zh/en)+ generic/endpoint_unreachable hint 文案与后端对齐。
+- **测试:** `test_error_envelope_internal_classification.py` 新增 TestVendorOutageClassification 7 例——**failing-first 实测 6/7 在 HEAD 上红**(唯一在 HEAD 也绿的是 NEUTER 例:真 429/quota/permission 不被新分支吞);`test_error_envelope_i18n.py` 前端 harness 增 mojibake G 段(修复/干净不动/有损不动)+ 新 kind H 段(zh/en 标题、chip、无 Keys 误指)+ `neuter-mojibake` 变异模式;`test_frontend_conn_error_recover.py` JSDOM 提取表补 `_envRepairMojibake`。
+- **顺带(独立提交):** 三处源码扫描守卫随合法重构过期的修复——94035a12 按钮 onclick 改 `_msgElIndex(this)` 后 6 处断言更新;757c3626 memory→skills 迁移、chat_task_start 提取、turn-settlement 删 gen_persisted/gen_done 后 route-conversion manifest 重指;chat.py SSE 守卫**泛化负断言**(任何原始 `mimetype='text/event-stream'` 即咬,与端点专名解耦)。
+- **验证:** 129 tests 全绿(分类 18 + 前端信封 i18n + key 覆盖 + conn-recover + bundle manifest parity 15 + api_response 三环 + 按钮 harness 9);failing-first 6/6 红于 HEAD、双 NEUTER harness 均咬;node --check 两 JS 文件过。

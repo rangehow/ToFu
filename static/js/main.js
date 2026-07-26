@@ -1206,24 +1206,46 @@ function _installViewportHeightGuard() {
     if (document.visibilityState === 'hidden') _persistLastActiveConv();
   });
 
-  /* ★ Event-driven cross-device sync: subscribe to the server's `notify`
-   *   push so a sibling device's change (new turn / rename / delete / folder)
-   *   reconciles in real time — no manual refresh, no waiting for the poll.
-   *   Wired HERE (not at cross_tab_sync.js load) because that file is bundled
-   *   before push.js, so pushSubscribe isn't defined yet at its IIFE time. */
-  if (typeof _wireConvSyncPush === 'function') _wireConvSyncPush();
+  /* ★ pt_679d064f68ac4dd6: resolve THIS tab's tenant identity BEFORE any
+   *   push subscriber is wired. The four multi-user gates
+   *   (conv_state_reducer::_frameIsOurs, cross_tab_sync::_onConvNotifyPush /
+   *   _onFoldersChangedPush, conv_sync_push::_onConvSyncPush) compare
+   *   frame.userId against window._currentUserId; a frame that arrives
+   *   before this resolves would be evaluated with no identity and accepted
+   *   unscoped. Ordering here is the contract — do NOT move the wire calls
+   *   above it. Fail-open: a probe failure resolves to '' (accept-all),
+   *   which is the personal-install default and byte-identical to the
+   *   pre-commit behaviour.
+   *
+   *   The enclosing boot scope is NOT async, so the ordering is expressed
+   *   as a promise chain rather than `await`: the subscribers are wired in
+   *   the .then(), i.e. strictly after the identity settles. initCurrentUserId
+   *   never rejects (it swallows its own errors), but .catch() is kept so a
+   *   future change there can never strand the subscribers unwired. */
+  const _identityReady = (typeof initCurrentUserId === 'function')
+    ? initCurrentUserId().catch(() => {})
+    : Promise.resolve();
 
-  /* ★ Server→client history_rewrite alignment: subscribe to the `conv` push
-   *   channel so a backend reconcile (ghost-tail delete / husk collapse) is
-   *   applied in place the instant it lands — the "must refresh to sync state"
-   *   fix. Same late-wire reason as above (pushSubscribe defined by push.js). */
-  if (typeof _wireConvHistoryRewritePush === 'function') _wireConvHistoryRewritePush();
+  _identityReady.then(() => {
+    /* ★ Event-driven cross-device sync: subscribe to the server's `notify`
+     *   push so a sibling device's change (new turn / rename / delete / folder)
+     *   reconciles in real time — no manual refresh, no waiting for the poll.
+     *   Wired HERE (not at cross_tab_sync.js load) because that file is bundled
+     *   before push.js, so pushSubscribe isn't defined yet at its IIFE time. */
+    if (typeof _wireConvSyncPush === 'function') _wireConvSyncPush();
 
-  /* ★ pt_conv_state_ssot P5: 60s sync-drift probe — reports the per-conv
-   *   digest (authoritative busy set + last-converged rev) so the server can
-   *   WARN on divergence (covers a dropped notify frame, which is otherwise
-   *   invisible locally). Idempotent; inert when the reducer isn't bundled. */
-  if (typeof startSyncDriftProbe === 'function') startSyncDriftProbe();
+    /* ★ Server→client history_rewrite alignment: subscribe to the `conv` push
+     *   channel so a backend reconcile (ghost-tail delete / husk collapse) is
+     *   applied in place the instant it lands — the "must refresh to sync state"
+     *   fix. Same late-wire reason as above (pushSubscribe defined by push.js). */
+    if (typeof _wireConvHistoryRewritePush === 'function') _wireConvHistoryRewritePush();
+
+    /* ★ pt_conv_state_ssot P5: 60s sync-drift probe — reports the per-conv
+     *   digest (authoritative busy set + last-converged rev) so the server can
+     *   WARN on divergence (covers a dropped notify frame, which is otherwise
+     *   invisible locally). Idempotent; inert when the reducer isn't bundled. */
+    if (typeof startSyncDriftProbe === 'function') startSyncDriftProbe();
+  });
 
   /* ★ Windowed-read scroll-up loader: when a long conversation is opened with
    *   only its tail window, scrolling to the top fetches + prepends earlier

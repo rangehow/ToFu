@@ -226,6 +226,18 @@
     },
   };
 
+  // users -----------------------------------------------------------
+  //  `me` is PUBLIC (routes/api_v1/users.py:266) and is the boot-time
+  //  identity probe for core/current_user.js. Three response shapes:
+  //    multi-tenant login → {authenticated:true,  user:{id, email, …}}
+  //    personal install   → {authenticated:true,  user:null, principal:{…}}
+  //    unauthenticated    → {authenticated:false, user:null}
+  //  onError:'null' so a boot hiccup degrades to "no identity" (gates stay
+  //  accept-all) instead of rejecting the whole boot chain.
+  const users = {
+    me: () => get('/api/v1/users/me', { onError: 'null' }),
+  };
+
   // paper-folders (Reading-mode library folders — same shape as `folders`) ---
   const paperFolders = {
     list:   async ()           => (await get('/api/v1/paper-folders', { onError: 'null' })) || [],
@@ -1389,7 +1401,7 @@
     conversations, text, translate, chat, images, pdf, doc, audio, artifacts,
     health, pricing, clientError, serverConfig, browser, project, daily, paper,
     features, providers, dispatch, oauth, mcp, update, trading, authSources,
-    swarm, endpoint, logs, motion, tasks,
+    swarm, endpoint, logs, motion, tasks, users,
   };
 
   global.Api = Api;

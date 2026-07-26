@@ -389,6 +389,15 @@ _BUNDLE_FILES = [
     # touches window at load; server-config payload is applied at runtime.
     # See lib/model_info/capability_taxonomy.py for the SSOT.
     'core/model_caps.js',
+    # pt_679d064f68ac4dd6 (2026-07-25) — boot-time tenant identity probe.
+    # Defines initCurrentUserId(), which main.js awaits (as a promise chain)
+    # BEFORE wiring the push subscribers so the four multi-user gates
+    # (conv_state_reducer::_frameIsOurs, cross_tab_sync::_onConvNotifyPush /
+    # _onFoldersChangedPush, conv_sync_push::_onConvSyncPush) have an
+    # identity to compare frame.userId against. Leaf module (touches only
+    # window + Api at CALL time, never at load), so its only ordering
+    # requirement is "before main.js" — which every entry here satisfies.
+    'core/current_user.js',
     # Shared OS-file .zip drag/drop wiring (attachZipDropZone) — de-dupes the
     # memory + skills install dropzones. Load before memory_skill_install.js
     # and skills_install.js (both call it at runtime; core loads first anyway).

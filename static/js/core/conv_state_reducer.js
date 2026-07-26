@@ -354,7 +354,28 @@ function buildSyncDigest(conversations) {
     for (const conv of conversations) {
       if (!conv || !conv.id) continue;
       const hasAuth = Array.isArray(conv._authoritativeActiveTaskIdsRev);
-      const rev = (typeof conv._serverRev === 'number') ? conv._serverRev : null;
+      /* ``_serverRev`` means "the rev this tab last FETCHED THE BODY at",
+       * NOT "the newest rev this tab knows about". A background conv is
+       * deliberately not refetched on notify — cross_tab_sync.js parks it
+       * with ``_needsLoad = true`` and repaints only the sidebar ("Never
+       * repaints the viewport"). Its _serverRev then stays frozen BY
+       * DESIGN while the server's climbs on every checkpoint.
+       *
+       * Reporting that frozen value made the probe compare a number the
+       * client has no obligation to advance, so every background conv
+       * looked like a dropped frame — 8 consecutive reports of an
+       * unchanging client rev against a climbing server one, which is
+       * exactly the shape a REAL dropped frame has. The rev dimension
+       * was structurally incapable of telling the two apart.
+       *
+       * So a conv that knows its body is stale reports rev=null ("don't
+       * compare me"), which the server already treats as skip. taskIds is
+       * unaffected — it is written ONLY by server frames, so it stays a
+       * valid convergence signal for background convs and is what the P6
+       * branch-sweep evidence should rest on. */
+      const bodyIsStale = conv._needsLoad === true;
+      const rev = (!bodyIsStale && typeof conv._serverRev === 'number')
+        ? conv._serverRev : null;
       if (!hasAuth && rev === null) continue;
       const set = conv._authoritativeActiveTaskIds;
       const taskIds = (set && set.size) ? Array.from(set).sort() : [];

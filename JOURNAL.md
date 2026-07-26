@@ -1,6 +1,14 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续82) — pt_3cd6cd48 主体收口:P2/P3 批 9/10 落地(commit `3214a2da`,10 文件 +325/-21;新套件 **15/15 含 NEUTER×4**,直接命中环 6 套件 **48+23 全绿**;⑧ 挂 sibling path-hold)
+
+- **竞态五连的共同形状——「await 之后必须重验世界」:** ①conv_sync_push 的 live 守卫只在 GET 前查一次(补 await 后重查);②podcast/video 切论文无 stale 检查(initHash/genHash 双闸);③podcast/video Abort 瞬间 in-flight poll 复活状态(tid 捕获+await 后比对)。**教训:JS 单线程不等于无竞态——await 就是抢占点,守卫写在 await 前等于没写。**
+- **④ deleteBranch 网抖不回滚:** 乐观 splice 只在 HTTP !ok 恢复,catch 只 console.warn——本地删了服务器没删,索引错位。共享 `_revertAndResync` 两路同走;**网抖时服务器可能已删也可能没删,恢复+重拉取齐是唯一安全姿态。**
+- **⑤ myday spinner 永转 + 每日期漏 1.5s interval:** 加 FAIL_LIMIT=8 连败闸(停轮询+清 spinning)。⑥oauth 弹窗 interval 只在 popup.closed 清除 → 卡片离开 pending 即自灭。⑦podcast 睡眠定时器随 run state 清(_pcResetRun + _initPodcastTab 双点)。⑨swarm 1Hz ticker 改懒启停(渲染时 arm,60s 空转自灭)。⑩push.send() 断线排队 50 条上限,onopen 冲刷——「重连窗口点停止没反应」根修。
+- **顺手修一张预存在红(验证我自己的改动所必需):** test_frontend_conv_history_rewrite_push 的 harness 期望 renderChat,线上早已是 ConvView.replaceAll(HEAD 复现,守卫过期家族第 3 例),ConvView stub 进同一计数器,2/2 含 NC 绿。**notify 套件(test_frontend_conv_notify_push)6 红更深(keep-longer 采纳语义漂移),非本票范围,已开 pt_5036b050。**
+- **⑧ _pendingStreamTimer(streaming_ui.js)挂起:** 该文件是兄弟**已 stage 超 1 小时**的 WIP,按纪律不撞——epic 挂 `[sibling] path=static/js/ui/streaming_ui.js` 精确 path-hold,兄弟提交后自动重派。
+
 ### 2026-07-26(续81) — pt_26a427d3 收口:P0 小修批三连(commit `f2008c11`,9 文件 +251/-192 含删 scheduler.js;新套件 **7/7 含 NEUTER×3**,bundle 环 6 套件 + 相邻 5 套件全绿)
 
 - **① 启动裸 JSON.parse ×3:** core.js(claude_client_config) + cost.js×2 是**模块顶层**裸 parse——一个坏键杀整个 bundle 求值=全站白屏。项目里其他读取点都有 try,这三处漏网。统一走新 `_safeJsonParse`(corrupt→fallback)。**模式教训:模块顶层 = 无保护执行区,任何可失败操作都要有兜底。**

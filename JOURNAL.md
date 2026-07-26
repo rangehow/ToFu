@@ -1,6 +1,14 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续26) — 自我纠正:上一轮说自愈压缩「已止血」是**错的**——它在生产**从未触发过**(零代码改动,纯实证 + 挂 question-block)
+- **我上一轮的断言:**「自愈压缩已在任何运行本版代码的进程里持续收敛存量,库不会再无限膨胀」。**本轮实证推翻了它。**
+- **怎么翻的(两步,第一步我自己的推断也被证伪):** ①先看库——1596MB → **1842MB**,还在涨,与「已止血」矛盾;②我推断「压缩从未跑过」,去 grep 日志想确认——结果**有 9 条 `Delta-compacted`**,推断被证伪;③再看时间戳——**9 条全是 `11:41:50`,正是我跑测试那一刻**,其中还有一条 `compaction REFUSED task=cmp-bad-`(我的测试夹具)。**生产零触发。**
+- **根因(显而易见但我上一轮漏了):** 压缩钩子挂在**写路径** `append_persistent_event` 上,而写路径跑在**没有这段代码的旧进程**里。自愈机制本身要靠重启才能开始自愈 —— 这是个循环依赖,我当时没想到。
+- **顺带算清速率账(结论:速率不是瓶颈):** 全部事件 **176840 条/小时**,采样 1/4096 → 期望触发 **43 次/小时** × 单次至多 2 任务 = **86 任务/小时**;当前 89 个任务仍有整包行 → 重启后约 **1 小时**自行清完。**参数不需要调,唯一缺的就是重启。**
+- **处置:** 把备忘票升级为 question-block,给 owner 三个一键选项(已重启 / 先手动迁移顶着 / 关掉这张票)。**不再自称已止血**,也不再每次派发手动迁一遍 —— 那只是把同一个洞反复堵一遍,并且会掩盖「必须重启」这个真结论。
+- **教训(值得记):** 「自愈」机制如果挂在**新代码才有的钩子**上,它对**尚未加载新代码的进程**是完全无效的。声称某个机制「已在保护系统」之前,**必须拿运行时证据(日志/计数器)证明它真的被触发过**,而不是从「代码已提交」推断。
+
 ### 2026-07-26(续25) — TTFT 自我纠正:上一刀的 offload **结构对但没省时间**——spawn 位置错了(commit `dd24adfe`,2 文件 +95/-12;新增 2 测共 16/16,NEUTER 咬,相邻 **80/80**,collect **9710** 0 err)
 - **被派发回来复查,查出自己的问题。** 上一刀(续23)把 rerank 挪离调用线程、在 stream loop 前 join,**16 测全绿**——但它**没有真正降低 TTFT**。
 - **根因是 spawn 的位置:** spawn 落在 Section 3.5,也就是 `inject_context_and_emit_chips` **之后**。于是与 800ms rerank 重叠的只有它俩之间那段 checkpoint 记账(contentPrefix / resumePrefill / 四个 cfg 拷贝)——**实测 ~0.001 ms/轮,占 rerank 的 0.0001%**。`await_memory_prefetch()` 随后照样阻塞整个时长。**等待没有消失,只是往下挪了 90 行。**

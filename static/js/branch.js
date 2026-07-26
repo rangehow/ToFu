@@ -308,17 +308,6 @@ function _renderBranchPanel(msg, msgIdx, bi) {
       </div></div>`;
   }
 
-  // Approval buttons
-  const stream = _branchStreams.get(bk);
-  const lastAssistant = msgs[msgs.length - 1];
-  let approvalHtml = "";
-  if (lastAssistant?.approvalRequired) {
-    approvalHtml = `<div class="branch-approval">
-      <span>Tool needs approval</span>
-      <button class="branch-approve-btn" onclick="approveBranchTool(${msgIdx},${bi},'approve')">Approve</button>
-      <button class="branch-reject-btn" onclick="approveBranchTool(${msgIdx},${bi},'deny')">Deny</button></div>`;
-  }
-
   let emptyMsg = "";
   if (!msgs.length && !isStreaming) {
     const selCtx = branch.parentSelection
@@ -338,7 +327,7 @@ function _renderBranchPanel(msg, msgIdx, bi) {
       <button class="branch-panel-delete" onclick="deleteBranch(${msgIdx},${bi})" title="${escapeHtml(t('branch.deleteBranch'))}"></button>
     </div>
     <div class="branch-messages" id="branch-messages-${msgIdx}-${bi}">
-      ${emptyMsg}${msgsHtml}${streamingHtml}${approvalHtml}
+      ${emptyMsg}${msgsHtml}${streamingHtml}
     </div>
     <div class="branch-input-hint">${escapeHtml(t('branch.inputHint'))}</div>
   </div>`;
@@ -801,17 +790,4 @@ function _scrollBranchToBottom(msgIdx, branchIdx) {
   if (container) container.scrollTop = container.scrollHeight;
 }
 
-// ── Approve branch tool ──
-function approveBranchTool(msgIdx, branchIdx, action) {
-  const conv = getActiveConv();
-  if (!conv) return;
-  const bk = _branchKey(conv.id, msgIdx, branchIdx);
-  const stream = _branchStreams.get(bk);
-  if (!stream?.taskId) return;
-
-  // External backend approval_required events are informational —
-  // the CLI backend manages its own approval flow via subprocess stdin.
-  // This is a best-effort attempt: won't work for external backends.
-  console.warn("[Branch] approveBranchTool: external backend approvals are not fully supported in branch mode");
-}
 

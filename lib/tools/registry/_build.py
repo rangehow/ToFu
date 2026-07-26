@@ -81,6 +81,13 @@ def _build_project_or_code_exec(ctx: ToolContext) -> list[dict]:
     # write tools even after a project is attached. See ToolContext.project_ready.
     from lib.tools import CODE_EXEC_TOOL, PROJECT_TOOLS
     if ctx.project_ready:
+        if ctx.project_remote:
+            # RWA 拍板 3A:同名 schema + 本地执行提示;远程绑定是单一根,
+            # multiroot 提示不适用(远程侧永远 root-relative)。
+            from lib.tools.project import with_remote_hint
+            logger.debug('[Task %s] 🌐 remote worktree bound — project tools '
+                         'carry the local-execution hint', ctx.tid)
+            return with_remote_hint(PROJECT_TOOLS)
         if ctx.multiroot_active:
             from lib.tools.project import with_multiroot_hint
             return with_multiroot_hint(PROJECT_TOOLS)
@@ -346,6 +353,25 @@ def _register_builtins() -> None:
         ToolSpec('browser', _build_browser, phase='base',
                  category='browser', description='Browser automation tools'),
         ToolSpec('desktop', _build_desktop, phase='base',
+                 # provides = LLM 可见的 10 个(desktop_move_file 刻意不
+                 # 暴露,见 lib/desktop_tools.py;它仍列在 write_tools 里)。
+                 provides=frozenset({
+                     'desktop_list_files', 'desktop_read_file',
+                     'desktop_write_file',
+                     'desktop_open_file', 'desktop_open_app',
+                     'desktop_run_command', 'desktop_screenshot',
+                     'desktop_gui_action', 'desktop_clipboard',
+                     'desktop_system_info',
+                 }),
+                 # 约束③:desktop 写/执行工具进串行写分区 + Manual 批准门 ——
+                 # 此前未声明,既进并行派发池(竞态)又绕过批准门。
+                 # desktop_system_info 豁免(其 kill 分支由 agent 侧参数级
+                 # exec 门把守);GUI/screenshot 走 allow_gui 层,不进写分区。
+                 write_tools=frozenset({
+                     'desktop_write_file', 'desktop_move_file',
+                     'desktop_run_command', 'desktop_open_app',
+                     'desktop_open_file',
+                 }),
                  category='desktop', description='Desktop agent tools'),
         ToolSpec('image_gen', _build_image_gen, phase='base',
                  provides=frozenset({'generate_image'}),

@@ -1,6 +1,13 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续17) — RWA P3 落地:工具投影 + 执行路由 + desktop 批准门洞闭合(2 commit:P3 见下 9 文件 / 潜伏 bug `c1685520` 2 文件;新套件 19/19 含 NEUTER,九环 **251/251**,registry 环 22/22,collect **9451** 0 err)
+- **拍板 3A 全链:** ①绑定契约单一事实源 `lib/desktop/remote.py`(总闸 `TOFU_REMOTE_WORKTREE` + `cfg['project_remote']`,投影与路由共用);②投影 `with_remote_hint`——名称+参数 schema 逐字节不变,仅描述追加本地执行提示,OFF→ON 一次性 latch-clear(第三个 sticky latch,镜像 project_ready);③路由 `_handle_project_tool` 在 content_ref 解析后分流,七命令映射,远程 run_command 桥超时=命令超时+30s。
+- **约束③第三条(批准门洞):** `ToolSpec('desktop')` 补 provides(10 个 LLM 可见名,move_file 刻意除外)+ write_tools(5 个)——desktop 写/执行工具从此进串行写分区 + Manual 批准门;此前既进并行池又绕批准门,是 HEAD 上的活洞。
+- **未映射工具诚实报错:** apply_diffs/insert_content(s)/create_project/read_files 批量/inspect_image——绝不静默落服务器路径。
+- **过程(两起如实):** ①初版 provides 多列 move_file(与 LLM 暴露面不符)、hint 断言大小写、`remote_worktree_binding` 函数级导入不可 patch——三红一次修齐;②**批跑 flake 追到一个大鱼:** 非污染、非 P3 引入——`_build_rg_cmd/_build_grep_cmd` 的 `list(IGNORE_DIRS)[:30]`,IGNORE_DIRS 是无序 set,超 30 条(已 34+)后**每进程按哈希种子随机丢排除项**,node_modules 以 ~40% 概率泄回 grep 结果。P1 套件首个「排除行为」断言把它打成明 flake(裸跑 2/5)。按 owner 纪律**独立批修复**(`c1685520`:sorted 全量排除 + 3 条确定性守卫,修复后 flake 10/10 稳定)。
+- **边界:** 远程执行需总闸显式开启 + P4 入口产出绑定;远程 run_command 流帧在桥内可查,UI 渲染属 P4;`ToolSpec('desktop')` 声明在进程启动生效(重启后 desktop 写工具过批准门)。
+
 ### 2026-07-26(续16) — 身份委托的 build-order 不变量 + fail-open 变可观测(owner 抓出「同族新洞」,commit `25dd7b19`,4 文件 +314/-26;套件 8→**12/12**,SSOT 环 **84/84**,collect **9403** 0 err)
 - **owner 抓的洞(比上一刀的问题更隐蔽):** 续11 把四处身份闸门收敛成单一谓词 `_frameIsOurs`,三处委托。但 `window._frameIsOurs` 是**跨文件运行时查找**,而委托刻意 **fail-open**(fail-closed 会锁死跨设备同步,比误收一帧更糟)。于是:**只要 `core/conv_state_reducer.js` 被移进 `_DEFERRED_FILES`、或被排到消费者之后,谓词就不存在,所有闸门静默退回全放行** —— 无报错、无红测、跨租户帧照流。这正是 int/str 偏斜那个洞**换了个位置**:从「比较写错」变成「比较器不在」。而续11 的套件**一行 bundler 状态都不读**,看不见它。
 - **不是假设:** Epic-E(`pt_3879f00e2d2f4bc4`)sub-part 3 明写着要把 `core/cross_tab_sync.js` 挪进 `_DEFERRED_FILES`。谁去做那一刀,就会踩中。

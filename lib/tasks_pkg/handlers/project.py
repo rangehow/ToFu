@@ -26,9 +26,78 @@ from lib.tasks_pkg.handlers._write_freshness_gate import (
     partition_stale_edits,
     record_read_paths,
 )
+from lib.desktop.remote import remote_worktree_binding
 from lib.tools import PROJECT_TOOL_NAMES, build_project_tool_meta
 
 logger = get_logger(__name__)
+
+
+# ── RWA P3:远程工作树路由(拍板 3A 同名策略) ──
+# 会话绑定 cfg['project_remote'] = {agent_id, root}(总闸
+# TOFU_REMOTE_WORKTREE)时,同名项目工具翻译为 project_<fn> 命令按
+# agent_id 寻址入队,在用户的本地机器上执行。
+_REMOTE_CMD_MAP = {
+    'list_dir': 'project_list_dir',
+    'read_files': 'project_read_files',
+    'write_file': 'project_write_file',
+    'apply_diff': 'project_apply_diff',
+    'grep_search': 'project_grep_search',
+    'find_files': 'project_find_files',
+    'run_command': 'project_run_command',
+}
+
+
+def _execute_remote_project_tool(task, fn_name, tc_id, fn_args, rn,
+                                 round_entry, remote):
+    """Route a project tool call to the bound agent's local root (RWA P3).
+
+    服务器侧 FS 门(read-before-edit / freshness / abs_path_guard)刻意不
+    适用 —— agent 对着自己声明的 share_roots 自守同款门(P1 约束⑤)。
+    工具名不变(拍板 3A),串行写分区 + Manual 批准门原样继承。
+    """
+    from lib.desktop import format_desktop_result, send_desktop_command
+
+    def _finish(text, badge=''):
+        meta = build_project_tool_meta(fn_name, fn_args, text)
+        meta['source'] = f'Remote:{remote["agent_id"][:8]}'
+        meta['remoteRoot'] = remote['root']
+        if badge:
+            meta['badge'] = badge
+        _finalize_tool_round(task, rn, round_entry, [meta])
+        return tc_id, text, False
+
+    cmd_type = _REMOTE_CMD_MAP.get(fn_name)
+    if cmd_type is None:
+        supported = ' / '.join(sorted(_REMOTE_CMD_MAP))
+        return _finish(
+            f'Error: {fn_name} is not supported on the remote worktree '
+            f'({remote["root"]}) yet. Supported: {supported}.',
+            badge='remote unsupported')
+    if fn_name == 'read_files' and fn_args.get('reads'):
+        return _finish(
+            'Error: batch read_files (reads=[...]) is not supported on the '
+            'remote worktree yet — read one path per call.',
+            badge='remote unsupported')
+
+    params = {k: v for k, v in fn_args.items() if k != 'content_ref'}
+    params['root'] = remote['root']
+    if fn_name == 'run_command':
+        try:
+            bridge_timeout = min(
+                max(float(fn_args.get('timeout', 300)) + 30.0, 60.0), 3660.0)
+        except (TypeError, ValueError):
+            bridge_timeout = 330.0
+    else:
+        bridge_timeout = 60
+    logger.info('[Remote] routing %s → %s @%s:%s (task=%s)', fn_name, cmd_type,
+                remote['agent_id'][:8], remote['root'], task.get('id', '?')[:8])
+    result, error = send_desktop_command(
+        cmd_type, params, timeout=bridge_timeout,
+        target_agent_id=remote['agent_id'])
+    if error:
+        return _finish(f'Error: remote worktree {remote["root"]}: {error}',
+                       badge='remote error')
+    return _finish(format_desktop_result(cmd_type, result))
 
 
 # ── Per-feature size cap for write_file artifacts ─────────────────────
@@ -214,6 +283,14 @@ def _handle_project_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg
                     'path=%s task=%s',
                     ref.get('tool_round'), len(resolved),
                     fn_args.get('path', '?'), task.get('id', '?')[:8])
+
+    # ── RWA remote-worktree routing (P3) ──
+    # 远程绑定的会话在此分流:同名工具 → 桥命令寻址入队。服务器 FS 门
+    # (下方 ReadGate/FreshGate/abs_path_guard)不适用 —— agent 自守。
+    _remote = remote_worktree_binding(cfg)
+    if _remote:
+        return _execute_remote_project_tool(
+            task, fn_name, tc_id, fn_args, rn, round_entry, _remote)
 
     # ── Read-before-edit gate ──
     # apply_diff / insert_content built from guessed content are the dominant

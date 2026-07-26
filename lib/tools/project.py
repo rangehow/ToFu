@@ -589,6 +589,34 @@ def with_multiroot_hint(tools):
     return out
 
 
+_REMOTE_EXEC_HINT = (
+    " Executes on the user's LOCAL machine via the desktop agent — the "
+    "project is a REMOTE worktree bound to that machine, so paths are "
+    "relative to the bound remote root and file changes happen on the "
+    "user's own disk (with a local snapshot before every write)."
+)
+
+
+def with_remote_hint(tools):
+    """Return a deep copy of *tools* carrying the remote-execution hint.
+
+    RWA 拍板 3A (same-name routing): names + parameter schemas stay
+    byte-identical; ONLY each tool's top-level description gains
+    :data:`_REMOTE_EXEC_HINT`. Called by the tool-assembly registry only
+    when the conversation is bound to a remote worktree (总闸
+    TOFU_REMOTE_WORKTREE + cfg['project_remote']).
+    """
+    out = []
+    for tool in tools:
+        t = copy.deepcopy(tool)
+        fn = t.get('function', {})
+        desc = fn.get('description', '') or ''
+        if _REMOTE_EXEC_HINT.strip() not in desc:
+            fn['description'] = desc + _REMOTE_EXEC_HINT
+        out.append(t)
+    return out
+
+
 PROJECT_TOOLS = [
     PROJECT_TOOL_LIST_DIR,
     PROJECT_TOOL_GREP, PROJECT_TOOL_FIND,
@@ -610,4 +638,5 @@ __all__ = [
     'PROJECT_TOOL_INSERT_CONTENT', 'PROJECT_TOOL_INSERT_CONTENTS',
     'PROJECT_TOOL_CREATE_PROJECT', 'PROJECT_TOOL_RUN_COMMAND',
     'PROJECT_TOOLS', 'PROJECT_TOOL_NAMES', 'with_multiroot_hint',
+    'with_remote_hint',
 ]

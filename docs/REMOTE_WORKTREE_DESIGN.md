@@ -1,7 +1,7 @@
 # Tofu 远程工作树代理(Remote Worktree Agent, RWA)设计稿
 —— Studio 无缝改本地代码(Windows / macOS),不共享文件系统
 
-> **状态:IN PROGRESS — 方向已拍(2026-07-25「意图共享,非文件系统共享」);§8 五项实施拍板已落(2026-07-26,全部按建议项:2A+3A+4A+5A+6A);P0–P2 已落地;① 号先行票已闭环(`c1579401`)。**
+> **状态:IN PROGRESS — 方向已拍(2026-07-25「意图共享,非文件系统共享」);§8 五项实施拍板已落(2026-07-26,全部按建议项:2A+3A+4A+5A+6A);P0–P3 已落地;① 号先行票已闭环(`c1579401`)。**
 > Board epic:`pt_7977b1e823454e5b`。
 > 关联潜伏 bug(先行票,不进本设计批):`pt_08a6d1afe79c4dfd`(desktop wire 前缀错配,§2.3)。
 > 本稿全部事实性结论均于 2026-07-25 在盘上逐文件核实(§2 标注文件:行号)。
@@ -264,7 +264,7 @@ Body: {
 | **P0** ✅ | **Bridge 身份与寻址**(已落地 2026-07-26):poll v2 注册帧、agent 注册表、寻址投递、多 agent 未寻址拒发报错、单 agent 回退档 | `lib/desktop/bridge.py`、`routes/desktop.py`、`lib/desktop_agent/_run.py` | 双假 agent 并发 poll,命令各归其主;未寻址命令拒发且模型收到诚实错;单 agent 回退档字节不变 |
 | **P1** ✅ | **Agent 项目命令集 + 安全网**(已落地 2026-07-26):`project_*` 七命令、share_roots 路径校验、snapshot-before-write、freshness 门(重读刷新令牌) | `lib/desktop_agent/_project.py`(新)、`_dispatch.py`、`config.py` | 越界路径全拒(含符号链接/兄弟前缀/绝对路径);快照可回滚;外部改动后写入被拒、重读后放行;`.tofu` 对项目工具不可见 |
 | **P2** ✅ | **run_command 平价**(已落地 2026-07-26):流式分片、进程树 kill、删除目标锁根、超时放宽 | `lib/desktop_agent/_exec.py`、`_project.py`、`_run.py`、`bridge.py`(流帧) | 长命令分片按 seq 稠密上行;kill 后子进程全灭;`rm -rf ~` 类被拦;30s+ 命令不再误杀 |
-| **P3** | **工具投影 + 执行路由**:`ToolContext.project_remote`、`_handle_project_tool` 路由、`ToolSpec('desktop')` 补 `write_tools` 声明(关批准门洞) | `_spec.py`、`_build.py`、`handlers/project.py`、`_flags.py` | 远程会话的 `write_file` 落到本地磁盘且串行派发 + Manual 门拦下;服务器项目路径字节不变;latch-clear 一次性 |
+| **P3** ✅ | **工具投影 + 执行路由**(已落地 2026-07-26):`ToolContext.project_remote`、`_handle_project_tool` 路由、`ToolSpec('desktop')` 补 `write_tools` 声明(关批准门洞) | `_spec.py`、`_build.py`、`handlers/project.py`、`lib/desktop/remote.py`(新) | 同名 schema 不变仅描述提示;远程 `write_file` 按 agent_id 寻址;总闸 off 字节不变;latch-clear 一次性;批准门洞闭合 |
 | **P4** | **入口与前端**:`agent_run` `project: remote:<agent>:<root>` 语法、每用户 bridge token 颁发(Settings → Devices)、项目选择器列出在线 agent 与共享根 | `routes/api_v1/agent_run.py`、`routes/api_v1/desktop.py`、前端 | 远程项目挂载后全工具集可用;token 吊销后 agent 立即 401;离线 agent 在选择器灰显 |
 | **P5** | **Project Brain 集成**:远程根纳入 write_set 声明,多会话并发写同一本地项目时 dispatch 串行化 | `lib/conversations/`、board | 两会话同根 write_set 重叠 → 不同时 dispatch;不同根不互斥 |
 
@@ -293,6 +293,21 @@ Body: {
   agent 侧自建 `_check_delete_targets_within`——`rm -rf ~` 类拦下;⑥平价实证:
   `rm -rf /abs` 连根内也拒(DANGEROUS_PATTERNS[0] 与服务器同一条)。
   套件 `tests/test_desktop_exec_streaming.py` **18 测**(含 NEUTER:剥锁根守卫 → 越界删除放过)。
+
+- **P3 落地注记(2026-07-26):** ①绑定契约单一事实源 `lib/desktop/remote.py`
+  (总闸 `TOFU_REMOTE_WORKTREE` + `cfg['project_remote']={agent_id,root}`,
+  投影与路由共用,防两面漂移);②投影:`with_remote_hint` 只改描述、名称+参数
+  schema 逐字节不变(拍板 3A),OFF→ON 一次性 latch-clear(第三个 sticky,
+  镜像 project_ready);③路由:`_handle_project_tool` 在 content_ref 解析后分流,
+  服务器 FS 门刻意不适用(agent 自守,有测试钉死);未映射工具(apply_diffs/
+  insert_content(s)/create_project/read_files 批量/inspect_image)诚实报错;
+  远程 run_command 桥超时=命令超时+30s(流帧已在桥内,UI 渲染属 P4);
+  ④`ToolSpec('desktop')` 补 provides(10 个 LLM 可见名)+ write_tools(5 个)——
+  desktop 写/执行工具进串行写分区,批准门洞闭合。
+  套件 `tests/test_remote_worktree_routing.py` **19 测**(含 NEUTER:剥路由 → 落回服务器路径)。
+  **顺带抓获潜伏 bug(独立批 `c1685520`):** `_build_rg_cmd/_build_grep_cmd` 的
+  `list(IGNORE_DIRS)[:30]` —— set 超 30 条后按进程哈希种子随机丢排除项,
+  node_modules 以 ~40% 概率泄回 grep 结果(P1 套件首个行为断言暴露)。
 
 工作量估算:P0 ~250 行 / P1 ~400 行 / P2 ~200 行 / P3 ~150 行 / P4 ~300 行+前端 / P5 ~80 行,
 全部为薄接缝改动,无新框架。

@@ -61,13 +61,13 @@
   var PALETTES = {
     meadow: {
       seed: 1337,
-      grad: [[0, '#EEF3E2'], [0.42, '#E4EDD0'], [0.72, '#CFE0AE'], [1, '#A8C77E']],
+      grad: [[0, '#BFD9C9'], [0.42, '#DFEBCB'], [0.72, '#CFE0AE'], [1, '#A8C77E']],
       spark: '#F2F6C8',
       glow: 'rgba(255,244,196,',   // warm sun
       flow: 'sway',                 // grass sways
       layers: [
         // far hazy field — pale, low contrast, flatter strokes
-        { density: 3.4, yTop: 0.28, yBot: 0.64, ang: -1.15, jit: 0.5, lo: 1.6, hi: 3.4,
+        { density: 3.6, yTop: 0.06, yBot: 0.64, ang: -1.15, jit: 0.5, lo: 1.6, hi: 3.4,
           colors: ['#C6D8A6', '#B9CE92', '#CDDCAE', '#D7C9D8', '#BFD59E'], alpha: [0.3, 0.55] },
         // poppy + buttercup flecks (the Impressionist complementary vibration)
         { density: 0.7, yTop: 0.4, yBot: 0.82, ang: -1.4, jit: 0.95, lo: 1.1, hi: 2.4,
@@ -90,13 +90,13 @@
     },
     pool: {
       seed: 4201,
-      grad: [[0, '#EAF3F1'], [0.4, '#DDECE8'], [0.72, '#AFD2CC'], [1, '#5E948E']],
+      grad: [[0, '#BBDCD6'], [0.4, '#D6E8E3'], [0.72, '#AFD2CC'], [1, '#5E948E']],
       spark: '#EAF7F4',
       glow: 'rgba(220,246,255,',
       flow: 'drift',                // water glints drift
       layers: [
         // far shimmering surface — pale horizontal strokes
-        { density: 3.6, yTop: 0.28, yBot: 0.6, ang: 0.0, jit: 0.24, lo: 2.2, hi: 5.0,
+        { density: 3.8, yTop: 0.08, yBot: 0.6, ang: 0.0, jit: 0.24, lo: 2.2, hi: 5.0,
           colors: ['#C6E0DB', '#B4D6D0', '#D2E7E3', '#CDBFD8', '#D8EBE6'], alpha: [0.28, 0.52] },
         // lily-pad + lavender reflection flecks
         { density: 1.1, yTop: 0.44, yBot: 0.9, ang: 0.05, jit: 0.5, lo: 1.6, hi: 3.6,
@@ -118,7 +118,7 @@
     },
     sky: {
       seed: 90210,
-      grad: [[0, '#F3F0F8'], [0.4, '#F1ECF3'], [0.72, '#F6E7DA'], [1, '#F2CFB4']],
+      grad: [[0, '#C3CFE8'], [0.4, '#E6E0EE'], [0.72, '#F6E7DA'], [1, '#F2CFB4']],
       spark: '#FFF7E6',
       glow: 'rgba(255,232,196,',
       flow: 'clouds',               // clouds drift slowly
@@ -293,12 +293,12 @@
   // toward grey for the low-light buckets, since colour vision genuinely
   // desaturates at night — that reads as dusk far more than darkening alone.
   var TIME_TINTS = {
-    deepNight:    { wash: '#1E2A4A', amt: 0.62, sat: 0.45, glow: 'rgba(150,175,235,', spark: '#C3D4F5' },
+    deepNight:    { wash: '#26345B', amt: 0.50, sat: 0.62, glow: 'rgba(150,175,235,', spark: '#C3D4F5' },
     earlyMorning: { wash: '#6E5A7A', amt: 0.34, sat: 0.78, glow: 'rgba(255,206,190,', spark: '#F3D9DF' },
     morning:      { wash: '#FFF6DE', amt: 0.12, sat: 1.0,  glow: null, spark: null },
     afternoon:    { wash: null,      amt: 0,    sat: 1.0,  glow: null, spark: null },
     evening:      { wash: '#F0A25E', amt: 0.30, sat: 0.95, glow: 'rgba(255,196,130,', spark: '#FFE0B0' },
-    night:        { wash: '#2B3B63', amt: 0.50, sat: 0.58, glow: 'rgba(170,192,240,', spark: '#D2DFF8' }
+    night:        { wash: '#34456F', amt: 0.42, sat: 0.68, glow: 'rgba(170,192,240,', spark: '#D2DFF8' }
   };
 
   /** Time bucket for an hour. MUST match tofu-pet.js::_timeBucket boundaries.

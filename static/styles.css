@@ -1381,7 +1381,11 @@ textarea::placeholder{color:var(--text-tertiary)}
 .paper-report-stopped-banner svg{flex-shrink:0}
 /* Model picker */
 .paper-report-model-picker{position:relative}
-.paper-report-model-btn{display:flex;align-items:center;gap:4px;padding:5px 10px;border:1px solid var(--border);border-radius:6px;background:none;color:var(--text-secondary);font-size:11px;font-weight:600;cursor:pointer;transition:all .15s;font-family:inherit;white-space:nowrap;max-width:180px}
+/* max-width holds the longest real model short-name (measured: 30 chars,
+ * e.g. gemini-3.1-flash-image-preview) without ellipsis; the toolbar wraps,
+ * so a wider button costs a row, never a clipped neighbour. */
+.paper-report-model-btn{display:flex;align-items:center;gap:4px;padding:5px 10px;border:1px solid var(--border);border-radius:6px;background:none;color:var(--text-secondary);font-size:11px;font-weight:600;cursor:pointer;transition:all .15s;font-family:inherit;white-space:nowrap;max-width:300px;min-width:0}
+.paper-report-model-btn svg{flex-shrink:0}
 .paper-report-model-btn:hover{background:var(--bg-hover);color:var(--text-primary);border-color:var(--border-light)}
 .paper-report-model-btn span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .paper-report-model-dropdown{display:none;position:absolute;top:100%;left:0;margin-top:4px;min-width:200px;max-width:300px;max-height:340px;overflow-y:auto;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.3);z-index:100;padding:4px}
@@ -5891,6 +5895,13 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 .proactive-banner{background:linear-gradient(135deg,rgba(168,85,247,0.08),rgba(139,92,246,0.04));border:1px solid rgba(168,85,247,0.2);border-radius:8px;padding:8px 12px;margin-bottom:8px;font-size:12px;display:flex;align-items:center;gap:8px}
 .proactive-banner .pb-text{color:var(--text-secondary);font-size:11px}
 .proactive-banner .pb-name{color:#a855f7;font-weight:700}
+/* Model-fallback banner inside the streaming bubble — painted the moment the
+   backend switches models (llm_fallback model_fallback SSE event). Amber warn
+   variant of .proactive-banner; NOT a toast. */
+.fallback-banner{background:linear-gradient(135deg,rgba(245,158,11,0.10),rgba(245,158,11,0.04));border:1px solid rgba(245,158,11,0.35);border-radius:8px;padding:8px 12px;margin-bottom:8px;font-size:12px;display:flex;align-items:center;gap:8px}
+.fallback-banner .fb-icon{color:#f59e0b;display:inline-flex;align-items:center;flex:none}
+.fallback-banner .fb-text{color:var(--text-secondary);font-size:11px}
+.fallback-banner .fb-models{color:#f59e0b;font-weight:700}
 /* ── Network-latency signal indicator ──
    Lives INSIDE .topbar-tools, so it mirrors the .topbar-tool-btn shell
    (height/radius/border/typography) for a consistent control group; only the
@@ -10165,7 +10176,7 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 [data-theme="tofu"] .sidebar-brand-f,
 [data-theme="tofu"] .sidebar-brand-u{
   background:none;
-  color:var(--text-primary);-webkit-text-fill-color:currentColor
+  color:#A96536;-webkit-text-fill-color:currentColor
 }
 /* 「o」字形留在 DOM(可选中/可复制),视觉由 ::after 的豆腐块接管 */
 [data-theme="tofu"] .sidebar-brand-o{
@@ -10772,11 +10783,13 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 [data-theme="tofu"] .tofu-brand .tofu-brand-u{
   display:inline-block;transform:rotate(var(--brand-tilt,0deg));transform-origin:50% 88%
 }
+/* 字身深陶土 #A96536 — 比墨黑暖一度,与吉祥物奶油-琥珀豆腐块同族;
+   不用主题 accent #C1794B(会与链接/按钮撞色,显不出品牌) */
 [data-theme="tofu"] .tofu-brand .tofu-brand-t,
 [data-theme="tofu"] .tofu-brand .tofu-brand-f,
 [data-theme="tofu"] .tofu-brand .tofu-brand-u{
   background:none;
-  color:var(--text-primary);-webkit-text-fill-color:currentColor
+  color:#A96536;-webkit-text-fill-color:currentColor
 }
 [data-theme="tofu"] .tofu-brand .tofu-brand-o1{
   position:relative;background:none;

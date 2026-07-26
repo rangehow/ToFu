@@ -218,6 +218,13 @@ def test_engine_narration_degraded_continues_silent(monkeypatch, tmp_path):
                         lambda *a, **kw: {'ok': False, 'degraded': True,
                                           'detail': 'no tts slot'})
     _fake_media(monkeypatch)
+    # Degraded narration auto-burns subtitles (owner 2026-07-26) — fake the
+    # ffmpeg burn so this offline test stays offline.
+    monkeypatch.setattr('lib.motion_video.burn_in_subtitles',
+                        lambda video, srt, output, **kw: (
+                            open(output, 'wb').write(b'mp4'),
+                            {'ok': True, 'output': output, 'duration': 8.0,
+                             'elapsed': 0.1})[1])
     task = _engine_task(tmp_path)
     run_motion_task(task)
     assert task['status'] == 'done', task.get('error')
@@ -226,6 +233,55 @@ def test_engine_narration_degraded_continues_silent(monkeypatch, tmp_path):
                if e['type'] == 'phase' and e.get('phase') == 'narrate'][0]
     assert narrate['degraded'] is True
     assert task['result']['narrated'] is False
+
+
+def test_engine_narration_degraded_auto_burns_subtitles(monkeypatch, tmp_path):
+    """Narration was REQUESTED but degraded to silent → the text is the only
+    information carrier, so the engine auto-burns the sidecar subtitles
+    (owner 2026-07-26). The burned text must be the REAL sidecar timeline,
+    never a re-estimate."""
+    from lib.motion_video.engine import run_motion_task
+    monkeypatch.setattr('lib.motion_video.synthesize_scene_narrations',
+                        lambda *a, **kw: {'ok': False, 'degraded': True,
+                                          'detail': 'no tts slot'})
+    _fake_media(monkeypatch)
+    burn_calls = []
+
+    def fake_burn(video, srt, output, **kw):
+        burn_calls.append((video, srt))
+        with open(output, 'wb') as f:
+            f.write(b'mp4-burned')
+        return {'ok': True, 'output': output, 'duration': 8.0, 'elapsed': 0.1}
+    monkeypatch.setattr('lib.motion_video.burn_in_subtitles', fake_burn)
+
+    task = _engine_task(tmp_path)  # narration=True — requested by the user
+    run_motion_task(task)
+    assert task['status'] == 'done', task.get('error')
+    assert task['result']['narrated'] is False
+    assert task['result']['burn_in'] is True
+    assert task['result']['burn_in_auto'] is True
+    assert burn_calls, 'degraded narration did not auto-burn the subtitles'
+    _, srt_arg = burn_calls[0]
+    assert srt_arg == task['result']['srt_path'], (
+        'burn-in must consume the real sidecar timeline, not a re-estimate')
+    assert os.path.isfile(srt_arg)
+    assert '第一句话' in open(srt_arg, encoding='utf-8').read()
+
+
+def test_engine_explicit_silent_does_not_auto_burn(monkeypatch, tmp_path):
+    """The user ACTIVELY chose narration=False — that is a deliberate silent
+    run, not a degrade; the engine must not burn subtitles on it."""
+    from lib.motion_video.engine import run_motion_task
+    _fake_media(monkeypatch)
+    called = []
+    monkeypatch.setattr('lib.motion_video.burn_in_subtitles',
+                        lambda *a, **k: (called.append(1), {'ok': True})[1])
+    task = _engine_task(tmp_path, narration=False)
+    run_motion_task(task)
+    assert task['status'] == 'done', task.get('error')
+    assert task['result']['burn_in'] is False
+    assert task['result'].get('burn_in_auto') is False
+    assert not called
 
 
 def test_engine_scene_failure_diagnosed(monkeypatch, tmp_path):

@@ -290,6 +290,7 @@ def run_motion_task(task: dict) -> None:
 
         # ── 3. narration (optional) ──
         narration = bool(task.get('narration'))
+        degraded_narration = False
         manifest: dict = {}
         if narration:
             audio_dir = os.path.join(workdir, 'audio')
@@ -324,6 +325,7 @@ def run_motion_task(task: dict) -> None:
                     return
                 if not manifest.get('ok'):
                     narration = False
+                    degraded_narration = True
                     _emit(task, {'type': 'phase', 'phase': 'narrate',
                                  'degraded': True,
                                  'detail': manifest.get('detail', '')})
@@ -489,8 +491,16 @@ def run_motion_task(task: dict) -> None:
         _write(sidecar, '\n'.join(lines))
 
         # ── 7b. optional subtitle burn-in (re-encode) ──
+        # When narration was REQUESTED but degraded to silent, the text is
+        # the video's only information carrier (owner 2026-07-26) — burn the
+        # sidecar subtitles in automatically. An explicit narration=False
+        # never reaches here, so a deliberate silent run stays unburned.
+        burn_in_eff = bool(task.get('burn_in')) or degraded_narration
+        if degraded_narration and 'burn_in' not in phases:
+            phases.insert(phases.index('mux') if 'mux' in phases
+                          else len(phases), 'burn_in')
         video_final = silent_final
-        if task.get('burn_in'):
+        if burn_in_eff:
             _phase_started(task, phases, 'burn_in')
             burned = os.path.join(workdir, 'final_burned.mp4')
             with heartbeat(task, lambda t, ev: _emit(t, ev), 'burn_in'):
@@ -502,7 +512,8 @@ def run_motion_task(task: dict) -> None:
                 raise RuntimeError('burn-in failed: ' + br.get('detail', ''))
             video_final = burned
             _emit(task, {'type': 'phase', 'phase': 'burn_in',
-                         'duration_s': br.get('duration')})
+                         'duration_s': br.get('duration'),
+                         'auto': bool(degraded_narration)})
 
         # ── 8. mux (optional) ──
         final_path = os.path.join(workdir, 'final.mp4')
@@ -531,6 +542,8 @@ def run_motion_task(task: dict) -> None:
             'duration': round(float((probe or {}).get('duration') or 0), 3),
             'scenes': total,
             'narrated': narration,
+            'burn_in': burn_in_eff,
+            'burn_in_auto': bool(degraded_narration),
             'workdir': workdir,
             'mode': 'engine',
         }

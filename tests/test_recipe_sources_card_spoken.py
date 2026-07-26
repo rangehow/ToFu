@@ -24,6 +24,46 @@ import pytest
 
 pytestmark = pytest.mark.unit
 
+
+def test_produce_video_result_carries_quality_hint(monkeypatch):
+    """画质选择面 (owner 2026-07-26): the produce_video result must tell the
+    user which quality tier ran, its cost shape, and how to switch — the
+    tool description is model-visible, but this note is user-visible."""
+    from lib.tasks_pkg.handlers import motion_video as hdl
+    captured = {}
+
+    def fake_spawn(job_id, fn, job):
+        captured['job'] = job
+
+    import lib.motion_video.runtime as rt
+    monkeypatch.setattr(rt._motion_runtime, 'spawn', fake_spawn)
+    monkeypatch.setattr(hdl, '_finalize_tool_round', lambda *a, **k: None)
+
+    task = {'events': []}
+    rn = 0
+    round_entry = {'tool_calls': [], 'query': ''}
+    tc = {'id': 'tc1', 'function': {'name': 'produce_video'}}
+    _, content, _ = hdl._handle_produce_video(
+        task, tc, 'produce_video', 'tc1',
+        {'topic': '核聚变净能量增益'}, rn, round_entry, cfg=None,
+        project_path='', project_enabled=False)
+    result = json.loads(content)
+    assert result['ok'], result
+    assert result['visual_quality'] == 'template'
+    hint = result['note']
+    assert '标准画质' in hint and '精品' in hint, hint
+    assert '耗时' in hint, 'the cost trade-off must be stated'
+
+    # boutique tier states itself plainly, with no switch offer
+    _, content2, _ = hdl._handle_produce_video(
+        task, tc, 'produce_video', 'tc1',
+        {'topic': 't', 'visual_quality': 'authored'}, rn, round_entry,
+        cfg=None, project_path='', project_enabled=False)
+    result2 = json.loads(content2)
+    assert result2['visual_quality'] == 'authored'
+    assert '精品画质' in result2['note']
+    assert '重制' not in result2['note']
+
 from lib.motion_video import _recipe as rec
 
 _CARDS = [
@@ -127,6 +167,45 @@ def test_primary_research_query_carries_week_freshness(monkeypatch):
         f'primary query freshness is {calls[0][1]!r}, not week')
     # The background angle stays un-freshness-gated (evergreen grounding).
     assert len(calls) >= 2 and calls[1][1] == ''
+
+
+def test_week_starved_primary_retries_without_freshness(monkeypatch):
+    """Evergreen topics must not starve (owner 2026-07-26): when the
+    week-fresh primary returns <3 cards, the SAME query is retried without
+    freshness and the artifact records freshness_used='none'."""
+    calls = []
+
+    def fake_search(q, user_question='', freshness=''):
+        calls.append((q, freshness))
+        if freshness == 'week':
+            return []  # nothing fresh on this evergreen topic
+        return list(_CARDS)
+
+    monkeypatch.setattr(rec, '_web_search', fake_search)
+    art = rec._run_research({'topic': '为什么天空是蓝色的', 'lang': 'zh'})
+    assert art['freshness_used'] == 'none'
+    assert art['cards'], 'fallback retry returned no cards'
+    assert calls[0][1] == 'week'
+    assert calls[1] == (calls[0][0], ''), (
+        'the unfiltered retry must re-run the SAME primary query')
+
+
+def test_week_rich_primary_does_not_retry(monkeypatch):
+    """News topics keep the week gate: >=3 fresh cards → no unfiltered
+    retry of the primary query, freshness_used='week'."""
+    calls = []
+
+    def fake_search(q, user_question='', freshness=''):
+        calls.append((q, freshness))
+        return [{'title': f'c{i}', 'url': f'https://ex{i}.org/a',
+                 'snippet': f'fact {i}'} for i in range(4)]
+
+    monkeypatch.setattr(rec, '_web_search', fake_search)
+    art = rec._run_research({'topic': '核聚变净能量增益', 'lang': 'zh'})
+    assert art['freshness_used'] == 'week'
+    # primary ran exactly once (week), then only the background query follows
+    primaries = [c for c in calls if c[0] == '核聚变净能量增益']
+    assert len(primaries) == 1 and primaries[0][1] == 'week'
 
 
 def test_script_prompt_carries_current_date(monkeypatch):

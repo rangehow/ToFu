@@ -119,29 +119,40 @@ def _cards_from_results(results) -> list[dict]:
 def _run_research(ctx: dict) -> dict:
     topic = ctx['topic']
     lang = ctx.get('lang', 'zh')
-    # (query, freshness). The PRIMARY angle is freshness-gated to the last
-    # week — the recipe is built for NEWS topics, and without it research
-    # returns encyclopedia background instead of the news. The background
-    # angle stays ungated: evergreen grounding should not be time-filtered.
-    queries = [(topic, 'week')]
-    queries.append((f'{topic} 原理 背景' if lang == 'zh'
-                    else f'{topic} explained background', ''))
-    cards: list[dict] = []
-    seen: set[str] = set()
-    for q, freshness in queries:
+
+    def _search(q: str, freshness: str) -> list[dict]:
         try:
-            results = _web_search(q, user_question=topic, freshness=freshness)
+            return _cards_from_results(
+                _web_search(q, user_question=topic, freshness=freshness))
         except Exception as e:
-            logger.warning('[Recipe:research] query %r failed: %s', q, e)
-            continue
-        for card in _cards_from_results(results):
-            if card['url'] in seen:
-                continue
+            logger.warning('[Recipe:research] query %r (freshness=%r) failed: %s',
+                           q, freshness, e)
+            return []
+
+    # The PRIMARY angle is freshness-gated to the last week — the recipe is
+    # built for NEWS topics. But produce_video also serves EVERGREEN science
+    # topics (owner 2026-07-26): if the week gate starves the run (<3 cards),
+    # retry the SAME query unfiltered instead of failing the fact gate. The
+    # background angle stays ungated in all cases.
+    cards = _search(topic, 'week')
+    freshness_used = 'week'
+    if len(cards) < 3:
+        logger.info('[Recipe:research] week-fresh primary gave %d card(s) — '
+                    'retrying without freshness (evergreen topic?)',
+                    len(cards))
+        cards = _search(topic, '')
+        freshness_used = 'none'
+    seen = {c['url'] for c in cards}
+    bg_query = (f'{topic} 原理 背景' if lang == 'zh'
+                else f'{topic} explained background')
+    for card in _search(bg_query, ''):
+        if card['url'] not in seen:
             seen.add(card['url'])
             cards.append(card)
-    logger.info('[Recipe:research] topic=%r → %d fact card(s) from %d queries',
-                topic[:60], len(cards), len(queries))
-    return {'topic': topic, 'cards': cards[:24]}
+    logger.info('[Recipe:research] topic=%r → %d fact card(s) '
+                '(freshness_used=%s)', topic[:60], len(cards), freshness_used)
+    return {'topic': topic, 'cards': cards[:24],
+            'freshness_used': freshness_used}
 
 
 def _gate_research(ctx: dict, artifact: dict) -> list:

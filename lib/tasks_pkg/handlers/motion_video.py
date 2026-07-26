@@ -232,12 +232,30 @@ def _handle_produce_video(task, tc, fn_name, tc_id, fn_args, rn,
             _motion_runtime.spawn(job_id, run_topic_motion_task, job)
             logger.info('[Produce] video job %s started topic=%r lang=%s '
                         'visual=%s', job_id, topic[:60], lang, visual)
+            # 画质选择面 (owner 2026-07-26): the user cannot perceive the
+            # orchestration, but they MUST be able to perceive which quality
+            # tier was used and how to switch. Measured cost: authored ≈ 2×
+            # time + ~40k extra tokens for an 8-scene film.
+            if lang == 'zh':
+                quality_hint = (
+                    '本次为精品画质(每镜定制构图,约 2× 耗时)。'
+                    if visual == 'authored' else
+                    '本次为标准画质(模板构图)。回复「精品重制」可切换精品模式'
+                    '(每镜定制构图,约 2× 耗时)。')
+            else:
+                quality_hint = (
+                    'This run uses boutique quality (per-scene bespoke '
+                    'composition, ~2× time).' if visual == 'authored' else
+                    'This run uses standard quality (template composition). '
+                    'Reply "remake in boutique quality" for per-scene bespoke '
+                    'composition (~2× time).')
             result = {'ok': True, 'task_id': job_id, 'topic': topic,
                       'lang': lang, 'aspect': aspect,
                       'visual_quality': visual,
+                      'quality_hint': quality_hint,
                       'poll': f'/api/v1/motion/videos/poll/{job_id}',
                       'note': 'Video is generating in the background; watch the '
-                              'video panel for progress.'}
+                              'video panel for progress. ' + quality_hint}
             badge = 'started'
         except Exception as e:
             logger.error('[Produce] failed to start video job: %s', e, exc_info=True)

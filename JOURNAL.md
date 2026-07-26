@@ -1,6 +1,36 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续54) — cache-cost C 收口:**修前确认闸判定为「否」,票面修法前提不成立,不修**(epic `pt_2cd7a29cf66f4f81`;零代码变更;这是同一批票里我自己开的假设第 3 次被自己的闸挡下)
+### 2026-07-26(续55) — 事件日志「event_id collision 冷重放缺口」epic `pt_b5783d74cd4a4395` 收口:**99% 是测试污染共享 DB,非生产数据完整性 bug**——同一批票里第 3 张被我自己推翻,但这次的根比前两次更值得记(零代码变更)
+
+- **票面主张(我开的):「~340 条 collision = 调用方铸造重复 seq,行被静默丢弃,冷重放缺事件」属数据完整性。** 三问纪律一查,全塌:
+  | 三问 | 实测 |
+  |---|---|
+  | ①这行日志何时存在? | **慢性**:352(昨)/342/318(三日)/307(今)——非新回归 |
+  | ②代码有没有现成护栏? | **有且设计良好**:`event_log.py:171` 的 `ON CONFLICT DO NOTHING` 幂等去重 + rowcount 金丝雀,注释明说「无法便宜地区分重试 vs 真重复,非零率即金丝雀」——它**本来就是为了模糊报警而设计** |
+  | ③条数对基线真异常吗? | 不异常,且**按 task_id 分层后真相大白** |
+- **决定性拆账:307 条里 304 条(99%)的 task_id 是测试夹具,不是生产任务。** `usagetas`(168)/`task`(114)/`seamtask`(12)/`aaaaaaaa`(6),加上被 `task_id[:8]` 截断的 `task-fr-`/`task-cau`/`task-par`/`task-ar-`——逐个 grep 到测试文件:`tfeedpb`←`test_project_feed_read_tool.py:282`、`task-cause`←`test_cache_floor_retry.py:361`、`usagetask1`←`test_turn_retry_usage_preserved.py:54`、`seamtask01`←`test_turn_auto_retry.py:118`。机制:这些测试**铸死固定的 task_id 反复跑**,与上一次 pytest 残留在共享 `data/tofu.db` 里的行撞 (task_id,event_id) 主键 → DO NOTHING 正确去重 → 金丝雀对**测试自己的重跑**报警。**丢弃的是上一次测试跑留下的同一事件,本就该丢,冷重放毫无缺口。**
+- **真生产碰撞只有 3 条**,全在**一个** swarm autocontinue 任务 `d9b63145`(conv=cv-snap-…):event_id=0、type=messages_snapshot、`swarm-stream_0` 线程。是 autocontinue 驱动把首张快照重持化 3 次,去重留了第一张、丢了两张**重复**——经典「重试首事件」形状,良性。
+- **判决:零生产冷重放缺口,零代码变更。** 金丝雀没坏——它按设计对模糊开火,而模糊解出来是测试污染。
+- **★ 真正的根(值得单独立项,已是第三次):测试把固定 id 写进共享 `data/tofu.db`,污染生产日志,反复诱发假警报。** 同一只怪兽今天已经咬了三次:①fastpath 的「1094 次 init_db 重启循环」= pytest worker;②SyncDrift 的「昨日 6 条基线」= `conv=test-dri` 自测行;③这次的 304 条 collision。三张 P0 级误导票,同一个源头。**这不是 event_log 的 bug,是测试基建的 bug**——事件/persist 类测试该走 `reset_sqlite_for_tests` 隔离库,不该共享 dev DB。已单独立项 pt_test_db_pollution(见看板),**没在本批顺手修**(遵循「重跑期发现的潜伏 bug 走独立工单」)。
+- **教训(第三次,已刻进去):** 凡是「日志里很多 X 且措辞吓人」的票,**先把 task_id/conv_id/形状分层再下结论**。一个 `task=usagetas` 出现在生产日志里,第一反应就该是「这是测试」,而不是「系统坏了」。前两次我学到「按 kind/形状分层」,这次补一条:**按 id 的命名形状分层——uuid 是生产,可读单词是测试。**
+
+- **票面写死了一道闸:「修前确认 markers_regressed 的 8 次 `<ns>beta` flap 与模型混线无关的样本独立成立」。执行闸门 → 三比三全否,于是停手。**
+- **闸门怎么跑的(可复现,勿重跑):** 20 条 `<ns>beta` 事件里,17 条同时带 `<ns>key`(key 换了,beta 只是搭车,本就属 B 票)。**纯 beta flap(key 不变)只有 3 条**,逐条对时间戳查模型序列:
+  | conv | flap 时刻 | 模型序列 | 判定 |
+  |---|---|---|---|
+  | ms0zuc59 | 09:50:39 | kimi-k3 ×N → **09:50:39 opus-5** | 模型切换 |
+  | ms14r5vp | 11:58:00 | kimi-k3 ×N → **11:58:00 opus-5** | 模型切换 |
+  | ms1hfkfb | 16:20:47 | opus-5 → **16:20:47 kimi-k3** | 模型切换 |
+  **三条纯 beta flap 全部精确落在模型切换的那一秒。** 「与混线无关的独立样本」= **0 个**。这正是 owner 在续48 已经给出的归因(kimi 强制 `use_extended_ttl=False` 不带 beta 头,claude 带),我开 C 票时把它当成了「另一个独立缺陷」——**是同一件事的重复计数**。
+- **★ 成本重算(A 票的新证据把 C 的账也改了):** 24 个 breakpoint-lost 轮按模型拆——**20 轮是 opus-5,丢 4,357,010 tok ≈ ¥425.85,占总额 ¥435.46 的 98%**。而续52 已实证 opus-5 的缓存失效**归因于上游模型线**(同 key 对照:kimi 3-5% vs opus-5 40-52% 归零率)。剥离 opus-5 后,**纯 C 样本只剩 4 轮**(aws 线),其中 2 轮 `lost=0`(标记丢了但 read 反而涨,cr 74k→254k / 581k→583k),**真丢只有 2 例 294,174 tok ≈ ¥9.6/7天**。
+- **结论:不修,理由是两条独立的否定,不是「懒得修」:**
+  1. **归因错**:唯一的机制(纯 beta flap)100% 由模型切换驱动,而模型切换本身**换命名空间是物理必然**(charter v6 已实测否决为其重构回退链)。把 latch 从 per-task 提为 per-conv **一分钱也省不下**——beta 头随模型走,不随 task 走。
+  2. **值不回票价**:剥离误归因后 ¥9.6/7天,而改动落在 `lib/llm/cache.py` 的标记布局这条**全模型共用的热路径**上。charter 的目标是「不记成本选最完美方案」,但前提是**修的是真问题**;为 ¥1.4/天 去动所有模型的缓存标记生成,风险收益比不成立。
+- **票面另一句也须更正(给后人):** C 票标题写「该网关确实把 cache_control 标记计入缓存键」—— 这句**仍然成立**(22/24 轮 read 真塌),但它**不能推出「所以我方标记布局不稳」**。塌的原因是模型换了→beta 头换了→命名空间换了,标记布局本身在同模型内是稳的(续52 实测:opus-5 与 aws 布局同构 count=4,体断点索引移动 949 次而 median cr 完全相同 83,277 —— **断点位置抖动对命中率无影响**)。
+- **同批仍然成立、可开工的:** E 票 `pt_6ac5febf`(thinking 96×/日 + tool_result ~80×/日 前缀内突变)是**唯一**未被证伪的纯客户端缓存缺陷;B 票 `pt_4c41eeb8`(¥662/周,95 次任务内 429 换槽)成本最大且归因未被推翻。
+
 ### 2026-07-26(续52) — cache-cost A 判决:opus-5 体缓存失效**归因于上游模型线,非我方标记也非 key** —— 靠一组零歧义的同 key 对照实验坐实,epic `pt_a475804a661042dd` 挂 question-block(零代码变更;数据源 7 天 **17,644 轮**含 `_wire_markers` 全量)
 ### 2026-07-26(续53) — SSE「早断家族」epic `pt_b00945098403477c` 收口:票面三条主张**三条全部实测否决**,零数据丢失、零代码变更——续51 教训的第二次实证(我昨天开的票,又被我自己推翻)
 

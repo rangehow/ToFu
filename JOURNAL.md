@@ -1,6 +1,24 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续29) — Opus 5 收尾:两个 beta 用**生产数据**判决,`mid-conversation-tool-changes` 判定 **WONTFIX**(零代码变更;charter v3;epic `pt_aa9583af0e124322` 收口)
+- **本轮是自主派发接的票,任务是「原生线有流量后再评估」。先复核闸门:`data/config/oauth/` 实测仍是 0 个 token 文件**,`oauth_claude` 虽 enabled 但发不出请求。按老路子这里应该再挂一次 human-gated 然后收工 —— 但那样就白跑一轮。于是换了个问法:**这两个 beta 到底值不值得等?**
+- **`mid-conversation-tool-changes` 的前提被实测推翻(本轮唯一有价值的产出):** 票里写「Tofu 每轮按 profile/项目态增删工具集,轮间工具变动会废掉整个提示缓存前缀」。这条听起来很可信,而且代码里**确实有**按 profile 装配工具的逻辑。但它是**推导**出来的,不是测出来的。
+- **全库扫描(task_events 6013 条 messages_snapshot / 163 任务,不是抽样):**
+
+  | 度量 | 结果 |
+  |---|---|
+  | 携带工具的任务 | 156 |
+  | 剥离我方 `cache_control` 后,**工具集轮间变动**的任务 | **0** |
+  | 只比 `kind=request`(真上wire形态)的多轮任务 | 104,其中变动 **0** |
+  | 全库不同的工具集形状 | **4 种**(227×154 / 193×1 / 196×1) |
+
+  差异全在**任务之间**(不同 profile/项目态),**不在任务之内**。单个工具集序列化 **203,748 字节**(与票中 201898 吻合,体量确实大),但它**逐轮不变** —— 现有的「工具数组末尾打一个 extended-TTL 断点」(`lib/llm/cache.py:383-389`)已经把这块完整缓存住了。**beta 要解决的是「工具变了还想复用前缀」,而我们根本不变。零收益。**
+- **一个差点被我写成缺陷的假象(值得记):** 初测发现 `cache_control` 标记在 round-1 的两条快照之间「翻转」(False→True),134/155 任务都有,看着像断点不稳的真 bug。追下去是**快照种类差异** —— `kind=request` 在 `add_cache_breakpoints` **之前**捕获,`kind=state` 在**之后**,是同一轮的两张照片而非两次请求。**教训:比对 snapshot 必须先按 `kind` 分层,混比会造出不存在的缺陷。** 差一点就去「修」一个本来就对的东西。
+- **`server-side-fallback` 不落码,但理由不同(别混):** 不是无收益,是**无法验证** —— 只在 Anthropic 原生协议有意义,而生产走 sankuai OpenAI 兼容线(不消费 `anthropic-beta` 头),原生线无 token。按「无法实测即不落投机代码」保持不动。
+- **已 commit 成 charter decision(v3)而不是只写日志**,因为它含一条通用推论:**采纳任何上游特性之前,先用生产数据验证它所针对的模式在本项目真实存在。** 将来原生线真有流量时,只需重新评估**这一个** beta。
+- **Opus 5 适配至此完整闭合:** 出站 thinking-off(`8d7b6911`,1.93× 实测)/ 入站 thinking 四态(`43dd1ecd`,含 disabled 被**反转**成开启的严重缺陷)/ effort 梯位默认档 + 两条出站路径一致性(`b3a2b2c9`,并**否证了自己前一轮的 1.52× 实测**)/ 两个 beta 判决(本轮,零代码)。四刀里有两刀的结论是**推翻前面自己的结论**得到的。
+
 ### 2026-07-26(续26) — 「无头无尾的 Agent 卡片」根修:两条会话写入路径的守卫不对称,VU 载体把停止哨兵写成了真消息(owner 自己复现并定性,commit `c0d10272`,2 文件 +418/-2;新套件 13/13 含 NEUTER×2,相邻两环 95/95 + 71/74(3 红 stash A/B 实证预存在),collect **9936** 0 err)
 - **病象(截图 + 活库对齐):** conv `ms0z3wedmvs5l9` 的 `msgs[19]` —— `role=assistant`、`content='['`(**一个字符**)、前面是一条 VU 用户行所以**不回答任何真实提问**(无头)、finish 条只有模型名(无尾)。
 - **溯源(不是猜,是对表):** `'['` 是 autopilot 虚拟用户 `[VU: TASK_DONE]` 哨兵的**第一个流式分片**;该 `_taskId=bb5d457f` 在 `task_results` 里的权威内容正是 `'[VU: TASK_DONE]'`、`_vu_subtask` 载体、`status=done`。**VU 载体把自己的停止哨兵写成了一条真正的助手消息。**

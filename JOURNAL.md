@@ -1,6 +1,17 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续27) — 行存储切换守卫:charter 说的「纯替换」在**部分 backfill** 上是静默丢数据(commit `28b5e520`,2 文件;13 测 9 failing-first,NEUTER 咬 3,全环 **199/199**,collect **9814** 0 err;charter v2)
+- **收 epic `pt_5583b7f5cbad4ce0` 的最后一项。** 前四刀(`0cc0aee1` 写分区 / `7ff7ef8d` conv_ref 身份 / `d48f74ce` get_conversation 选取 / `96d24277` 覆盖棘轮+窗口语义)已在 HEAD,本轮先逐条复验仍成立(gap=`['__code_exec__']`、9 个状态变更工具全在写分区、三个会话 raw JSON 全 VALID),再补这一刀。
+- **parity 看不见的那一面:** 续20 的 `test_conv_ref_window_parity` 证明了两个 windower 在**同一份数据**上语义一致。但行存储 backfill **不完整** —— 实测全库 **3,696 / 4,160(88.8%)**,其余 464 个查出 `totalCount=0`,**与「这个会话是空的」完全无法区分**。真实样本 `mrlmtudriuexuo`(msg_count=6)、`mrnao32x86gnlw`(6)、`mrk2dmaeybj5vd`(4)。所以 charter 的「纯替换」只在 backfill 落到的地方成立,其余是**看起来正确的静默丢数据**。
+- **`routes/conversations.py` 早就踩过这个坑**(它的 blob tail-slice 刻意**不受迁移开关影响**,注释明写「对未 backfill 的会话才正确,否则行存储会给空窗口、PUT 还可能截断历史」)。conv_ref 现在继承同一姿态,而不是等翻开关之后再重新发现一遍。
+- **★本轮最该记的是「第一发 NEUTER 没咬」以及追下去的结果(这才是真正找到病灶的过程):** 我剥掉守卫、重跑三个真实未 backfill 会话 —— **全都照常渲染**。说明救它们的**不是我的守卫**,而是分支内那句 `if w['messages'] and first is not None` 的空值检查。**空行存储是安全形状,它很吵。**
+  - 真正危险的是**部分 backfill**,只有一道防线。端到端实测(blob=20 行=5):`present=[0..4]`,**`MISSING=[5..19]` 含结论** —— 正是 `d48f74ce` 在渲染层修掉的「丢结论」,从存储层底下重新钻出来。补上守卫后 20 条全在。
+  - **我先写的 9 个单测全绿却漏掉了它** —— 它们只断言谓词返回值,没有一个端到端驱动 `get_conversation`。补 `TestPartialBackfillEndToEnd` 后,修正后的 NEUTER **咬 3 条**(含两条丢数据断言)。教训与续16 同族:**守卫要按「真实故障形状」设计,而不是按「谓词接口」设计**;NEUTER 不咬不代表代码对,可能是**测试瞄错了靶**。
+- **实现:** `row_window_usable(db, conv_id, blob_count)` —— 行数 ≥ blob 数才放行(相等,或 dual-write 领先);任何异常**朝 blob 失败关闭**。**现在就接进** `get_conversation`,而 `rows_read_enabled()` 为 False 故完全惰性、输出逐字节不变 —— 保护先于迁移存在,而不是迁移时才想起来。
+- **实证(不是断言):** `TOFU_MESSAGES_ROWS_READ=1` 模拟切换跑三个真实未 backfill 会话 → 6/6、6/6、4/4 消息块照常渲染,无「空会话」误报。
+- **已落 charter v2**:任何新的行存储读路径都必须照抄这个前置条件,**不要只判空**。翻开关前仍须过 `verify_conv_parity`(原决策不变),翻完**不需要**回头改 conv_ref —— 落后的会话自动走 blob,backfill 补齐后自然切过去。
+
 ### 2026-07-26(续26) — 自我纠正:上一轮说自愈压缩「已止血」是**错的**——它在生产**从未触发过**(零代码改动,纯实证 + 挂 question-block)
 - **我上一轮的断言:**「自愈压缩已在任何运行本版代码的进程里持续收敛存量,库不会再无限膨胀」。**本轮实证推翻了它。**
 - **怎么翻的(两步,第一步我自己的推断也被证伪):** ①先看库——1596MB → **1842MB**,还在涨,与「已止血」矛盾;②我推断「压缩从未跑过」,去 grep 日志想确认——结果**有 9 条 `Delta-compacted`**,推断被证伪;③再看时间戳——**9 条全是 `11:41:50`,正是我跑测试那一刻**,其中还有一条 `compaction REFUSED task=cmp-bad-`(我的测试夹具)。**生产零触发。**

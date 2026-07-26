@@ -112,6 +112,26 @@ function _hashStr(s) {
   return h.toString(36);
 }
 
+/* ── Conversation-level action gate (RENDER_CONTRACT Invariant 3) ─────────
+ * `renderMessage` decides the bottom action bar from CONVERSATION state, not
+ * message state: `canDelete = conv && !activeStreams.has(conv.id) &&
+ * !conv.activeTaskId`. That state is invisible to a purely message-derived
+ * fingerprint, so when a task started or finished the surgical diff read an
+ * UNCHANGED `data-mfp` and skipped every row — both directions broken:
+ *   • busy → idle: a settled turn kept NO Delete button, so a finished turn
+ *     could not be deleted at all until some unrelated full re-render.
+ *   • idle → busy: the turn kept a VISIBLE Delete button, but `deleteTurn()`
+ *     re-reads the live gate and returns immediately — a button that silently
+ *     does nothing (the reported "delete behaves very strangely").
+ * Folding the gate into the version makes the ONE surgical trigger repaint the
+ * action bar when it flips. O(1) and CONSTANT while a stream runs, so it adds
+ * no per-round churn — it moves only at the two edges of a turn. */
+function _convActionGate() {
+  const conv = (typeof getActiveConv === 'function') ? getActiveConv() : null;
+  if (!conv) return '';
+  return (activeStreams.has(conv.id) || conv.activeTaskId) ? 'B' : 'I';
+}
+
 function _msgFingerprint(msg) {
   const sr = msg.toolRounds || msg.searchResults;
   /* Count compacted rounds so a tool_compacted SSE landing on an
@@ -249,6 +269,7 @@ function _msgFingerprint(msg) {
   const _tidFp = msg._taskId ? 'T' : '';
   const _usFp = msg.usage ? 'U' : '';
   return (msg.role || "") + ":" +
+    _convActionGate() + ":" +
     _hashStr(msg.content || "") + ":" +
     _hashStr(msg.thinking || "") + ":" +
     _errFp + ":" +

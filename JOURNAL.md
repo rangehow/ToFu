@@ -1362,3 +1362,9 @@
 - **一个诚实边界**:新套件里有一面用 node 驱动真实 `i18n.js`,证明**cookie 被禁用时 i18n boot 仍然正常**(写 cookie 包在 try 里,隐私模式浏览器照常渲染)。
 - **两起共享树事故(都已妥善处理,记下防再犯)**:①`apply_diffs` 被新鲜度闸拒绝两次——sibling 在我读取后改过 `i18n.js`;**必须用 `read_files` 重读(shell 的 grep/sed 不算)** 才能解闸,重读后确认我的 tripwire 完好、目标区域未被动过再改。②`git add` 时发现 sibling 那个**带 IndentationError 的 `_gateway.py` 已被预暂存在共享索引里**,用 `git reset HEAD` 弹出后才提交;post-commit `git show --stat` 核实**恰好 4 文件**。
 - **一个 A/B 实证归属他人的红**:`test_bundle_manifest_parity` 报 `settings/devices.js` 在 manifest 里但 index.html 无标签。**不是我的**——`git log -S` 指向 `f8fa9373`(即 14 个 RWA 文件误随我 JOURNAL 提交泄漏那次),我本轮**从未碰过 js_bundler.py 或 index.html**。已开票 `pt_d81a44c38a734958` 交给 RWA epic 收尾,并写明**真实危害是 dev fallback 会静默丢掉该文件**,不只是测试红。
+
+### 2026-07-26(续27) — 清掉我自己造成的 parity 阻塞:`settings/devices.js` 补 index.html 标签(commit 见下,1 文件 +1;parity 15/15)
+- **为什么由我修**:这一条本来开票给 RWA epic(`pt_d81a44c38a734958`),但**造成它的泄漏是我的**——`f8fa9373` 那次 14 个 RWA 文件误随我 JOURNAL 提交进来时,`settings/devices.js` 的 **manifest 条目跟进来了、index.html 标签没有**。且它**挡着我自己的下一刀**(i18n slice 2 要改 bundle 产物形态,我不在一个已知 parity 红的 manifest 上叠加改动)。一行的事,不该让别人替我收。
+- **真实危害不是「测试红」**:`routes/common.py` 的 dev fallback 在 bundling 失败时会**退回逐个 `<script>` 标签**,而没有标签的文件**无处可退**——降级路径上「远程设备」那块 JS 直接不存在,**不报错、功能静默消失**。那个 parity 测试存在的意义正是抓这个,它抓到了。
+- **放置位置照抄 manifest**:`devices.js` 在 `_BUNDLE_FILES` 里紧跟 `mcp.js`,所以标签也放在 `mcp.js` 标签之后。
+- **slice 2 的前置现在干净了**:i18n 步骤③ slice 1(语言变服务端可见)已落地,parity 已绿,下一刀可以安全改 bundler 产物形态。

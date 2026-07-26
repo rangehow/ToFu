@@ -167,8 +167,10 @@ function mkEl(){
     appendChild(){}, insertBefore(){}, querySelector(){return null;}, firstChild:null,
     getBoundingClientRect(){return {left:0,right:W,top:0,bottom:H,width:W,height:H};}};
 }
+let canvasW = 0;
 const bar = mkEl(); bar._attrs['data-decor'] = DECOR;
 let canvasN = 0;
+let canvas1 = null;
 global.document = {
   readyState:'complete', hidden:false,
   documentElement:{getAttribute(k){return k==='data-theme'?'tofu':null;}},
@@ -179,7 +181,9 @@ global.document = {
       canvasN++;
       // #1 visible bg, #2 baked buffer, #3 foreground occlusion, #4 glow tile
       const rec = canvasN===1?vis:(canvasN===2?buf:(canvasN===3?fg:glow));
-      const e = mkEl(); e.getContext = () => mkCtx(rec); return e;
+      const e = mkEl(); e.getContext = () => mkCtx(rec);
+      if (canvasN===1) canvas1 = e;
+      return e;
     }
     return mkEl();
   },
@@ -194,6 +198,9 @@ function catPx(r, k){ return Math.round((r[k]||0) * DPR * DPR); }
 
 let t = 100;
 if (rafCb) { const cb = rafCb; rafCb = null; cb(t); }     // t0 frame
+// The visible canvas' backing-store width / CSS width IS the module's render
+// ratio, whatever it clamped to.
+if (canvas1) canvasW = canvas1.width;
 
 if (OFFSCREEN && ioCb) {
   ioCb([{isIntersecting:false}]);                          // bar scrolls away
@@ -229,9 +236,14 @@ for (let i = 0; i < 14; i++) {
 console.log(JSON.stringify({
   bg: vis, fg: fg, buf: buf, glow: glow,
   callsPerFrame: vis.total + fg.total,
-  frame: { bg: Math.round(frame.bg*DPR*DPR), fg: Math.round(frame.fg*DPR*DPR),
-           blit: Math.round(frame.blit*DPR*DPR), clear: Math.round(frame.clear*DPR*DPR),
-           dab: Math.round(frame.dab*DPR*DPR), glow: Math.round(frame.glow*DPR*DPR) },
+  // The module CLAMPS its render ratio (SCENE_DPR_CAP) below the device ratio,
+  // so the real pixel bill uses the clamped value — read it off the canvas the
+  // module actually sized rather than assuming DPR.
+  renderDpr: (canvasW > 0 ? canvasW / W : DPR),
+  frame: (function(){ var d = (canvasW > 0 ? canvasW / W : DPR), s = d*d;
+    return { bg: Math.round(frame.bg*s), fg: Math.round(frame.fg*s),
+             blit: Math.round(frame.blit*s), clear: Math.round(frame.clear*s),
+             dab: Math.round(frame.dab*s), glow: Math.round(frame.glow*s) }; })(),
   ticks: ticks, painted: painted,
 }));
 process.exit(0);
@@ -304,6 +316,58 @@ def test_NEUTER_unbatched_dabs_is_caught():
 # ══════════════════════════════════════════════════════════════════════════
 #  2. WIDTH PLATEAU — per-frame cost must not scale with the bar's width
 # ══════════════════════════════════════════════════════════════════════════
+
+def test_scene_render_dpr_is_capped():
+    """The scene renders at a CAPPED device-pixel ratio, not the panel's full
+    ratio. Every pixel cost in the renderer scales with dpr², so a Retina panel
+    would otherwise cost 4× (and some phones 9×) for detail this art style
+    cannot use: Monet broken colour is thousands of soft translucent ellipses
+    with no hard edges and no text — there is no high-frequency detail for the
+    extra samples to resolve, and the torn deckle rim reads BETTER soft.
+
+    This is the single cheapest win in the renderer and the most likely thing a
+    future 'the canvas looks blurry, bump it to 2' commit will innocently
+    revert, so it is pinned here. It is also asserted to be SCENE-SCOPED: the
+    pet sprite and the bar's labels are DOM (not canvas), so nothing legible is
+    softened by it."""
+    src = SCENE_JS.read_text()
+    m = re.search(r"var SCENE_DPR_CAP = ([0-9.]+);", src)
+    assert m, "SCENE_DPR_CAP is gone — the scene renders at full device ratio again"
+    cap = float(m.group(1))
+    assert cap <= 1.5, (
+        f"the scene DPR cap was raised to {cap} — that multiplies EVERY pixel "
+        f"cost in the renderer by (cap/1.5)². If a real visual defect motivated "
+        f"this, fix the defect, don't buy resolution the art style cannot use.")
+    # it must actually be WIRED to the resize path, not just declared
+    assert "Math.min(SCENE_DPR_CAP, window.devicePixelRatio" in src, (
+        "SCENE_DPR_CAP is declared but no longer clamps _dpr in _resize()")
+    # and it must be scene-scoped: nothing legible is drawn on these canvases.
+    # Strip comments first — this file DISCUSSES fillText in the rationale above.
+    code = re.sub(r"//[^\n]*", "", src)
+    code = re.sub(r"/\*.*?\*/", "", code, flags=re.S)
+    assert "fillText" not in code and "strokeText" not in code, (
+        "the scene canvas now draws TEXT — a capped DPR would make it fuzzy; "
+        "either move the text to DOM or reconsider the cap")
+
+
+def test_capped_dpr_actually_lowers_the_pixel_bill():
+    """Behavioural proof, not just a constant check: with the harness reporting
+    devicePixelRatio=2, the frame's measured device-pixel cost must reflect the
+    1.5 cap (2.25× a CSS pixel), not 2's 4×. Guards against the cap being
+    declared, wired, and then defeated by something else re-reading
+    window.devicePixelRatio directly."""
+    r = _run_perf(width=900)
+    dpr = r["renderDpr"]
+    assert dpr <= 1.5 + 1e-6, (
+        f"the scene sized its canvas at dpr {dpr} despite the 1.5 cap — something "
+        f"on the real render path re-reads window.devicePixelRatio directly")
+    blit = r["frame"]["blit"]
+    css_area = 900 * 48
+    ratio = blit / float(css_area)
+    assert ratio < 3.0, (
+        f"the frame is rendering at dpr²≈{ratio:.2f} (≈dpr {ratio ** 0.5:.2f}) — "
+        f"the 1.5 cap (dpr²=2.25) is not taking effect on the real render path")
+
 
 def test_sun_glow_cost_is_width_independent():
     """The additive sun glow used to be a full-canvas radial fill every frame —

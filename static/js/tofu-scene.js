@@ -253,6 +253,30 @@
     _bqKeys = null;
   }
 
+  // ── SCENE RENDER RESOLUTION ─────────────────────────────────────────────
+  // ⚠️ DO NOT "FIX" THIS TO 2 OR 3 BECAUSE THE CANVAS "LOOKS SOFT". It is
+  // deliberate, it is the single cheapest win in the whole renderer, and the
+  // softness is the art style rather than a defect.
+  //
+  // Every pixel cost in this file scales with dpr². Rendering at the device's
+  // full ratio (2 on a Retina panel, 3 on some phones) therefore costs 4–9×,
+  // and buys NOTHING here: this scene is Monet broken colour — thousands of
+  // soft, overlapping, translucent ellipses with no hard edges and no text.
+  // There is no high-frequency detail for the extra samples to resolve. The one
+  // near-edge — the torn deckle rim — actually reads BETTER softly resolved,
+  // because a hand-torn paper edge is fibrous, not crisp.
+  //
+  // Nothing legible lives on these canvases (verified: zero fillText/strokeText
+  // in this module). The pet is a DOM <img> with its own transforms and the
+  // bar's folder/stat labels are DOM spans — all of them keep full device
+  // resolution, because this cap is scoped to the scene canvases ONLY and never
+  // touches a global.
+  //
+  // 1.5 keeps a little supersampling for the dab edges while cutting the bill
+  // ~44% against dpr=2. Pinned by
+  // tests/test_frontend_tofu_scene_perf.py::test_scene_render_dpr_is_capped.
+  var SCENE_DPR_CAP = 1.5;
+
   // ── PER-FRAME LIVE BUDGET ───────────────────────────────────────────────
   // Every element of a LIVE population (near band, flow overlay, foreground
   // occluders) is re-resolved and re-queued EVERY frame, so its count is the
@@ -1384,7 +1408,7 @@
     var r = _bar.getBoundingClientRect();
     var w = Math.round(r.width), h = Math.round(r.height);
     if (w <= 0 || h <= 0) return;                 // bar hidden — wait for a real box
-    _dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+    _dpr = Math.max(1, Math.min(SCENE_DPR_CAP, window.devicePixelRatio || 1));
     _w = w; _h = h;
     _canvas.width = Math.round(w * _dpr);
     _canvas.height = Math.round(h * _dpr);

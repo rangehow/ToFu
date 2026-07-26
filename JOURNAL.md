@@ -1,6 +1,12 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续84) — pt_5036b050 收口:notify harness 修复——守卫过期家族第 4 例,这次是「缺模块」型(commit `4a023352`,1 文件 +17/-1;6 红→**1/1 全绿含三个内建 NEUTER**,相邻环全绿)
+
+- **三处漂移两种类型:** ①`_verifyActiveConvFromServer` 现在调 `_mergeTerminalTurnFields`(conv_reducers.js,Epic-E 抽出)——harness 没加载 → verify 在采纳前就抛 → equalcount_content/thinking_adopted + noop_rev_still_advanced 全红;②渲染缝 renderChat→ConvView.replaceAll(与 history_rewrite 同型)→ *_rendered 三红;③多用户门委托 `window._frameIsOurs`(conv_state_reducer.js)——缺载时 fail-open → other_user_dropped 无法被检验。
+- **修法原则:加载真模块,不复制实现。** 与 lost_ack 的 conv_persist_helpers 同模式——harness argv 串模块链(reducers → state_reducer → cross_tab_sync),ConvView stub 进同一计数器。**教训:extract 重构的收尾清单现在有两项实证必须查——「引用被抽函数的测试 harness」+「harness 是否 eval 了被委托的模块」。缺模块型红比锚文本过期型更隐蔽:断言全挂在流程早夭,FAIL 名字离根因很远。**
+- **顺手挂票:** `test_frontend_folders_notify_push` 双红(jsdom 子进程超时,零共享文件,预存在)→ `pt_791bda84`;同进程抓到 tofu_trading 插件 Intel Worker 后台线程崩 `No module named lib.search`(lib.search 已抽去 tofu_search,插件侧陈旧 import),一并写进票面。
+
 ### 2026-07-26(续83) — pt_a182d5bd 收口:SyncDrift STALLED ×716/天 = **busy-lag 设计内误报**,rev 比对加忙碌判别(commit `9e2757ee`,2 文件 +65;新测试 8/8 含 failing-first A/B + NEUTER,conv_state 全族 **113+53**)
 
 - **票面预置的判定门(先做再修)答案是:是误报。** 三证据:①`_serverRev` 全部 15 个写入点(sync PUT/拉取/notify 采纳)**没有一条在 SSE 流内**——流式期间客户端 rev 冻结是刻意的,流末 sync PUT 才收敛;②服务端每 5s checkpoint 推 rev,于是「client 冻结 + server 爬升 ≥180s」精确等于一条健康的生成中会话;③STALLED 样本(ms1ulrcz/ms1rz4b2/ms1utt84 + 高频榜 ms1krgol/ms1uojtu/ms1h9u91)**当时全部有 running task**。

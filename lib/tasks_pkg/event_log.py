@@ -182,7 +182,15 @@ def append_persistent_event(task_id, event_id, event):
         except Exception as e:
             logger.debug('[EventLog] prune failed (non-fatal): %s', e)
 
-
+    # Read-your-writes for the Request Inspector's read cache: this task's
+    # cached event rows are now stale. The cache's TTL bounds staleness in
+    # wall-clock terms, but a live task that appends a round and is polled
+    # immediately after must see it — so drop the entry at the write.
+    try:
+        from lib.tasks_pkg.request_inspector import invalidate_task_cache
+        invalidate_task_cache(task_id)
+    except Exception as e:
+        logger.debug('[EventLog] inspector cache invalidation skipped: %s', e)
 def flush_pending(task_id):
     """No-op kept for API compatibility.
 

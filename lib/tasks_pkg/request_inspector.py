@@ -65,9 +65,61 @@ def _read_events(task_id: str) -> list:
 
     Separate from ``event_log.read_events`` (which omits ``ts_ms`` — the
     request-row schema carries ``ts``). Read-only; never throws.
+
+    CACHED (short TTL): the drawer's natural usage is "fold the task, then
+    open round after round", and every ``get_request_payload`` call used to
+    re-read AND re-rebuild the task's whole event log — O(rounds^2) work for
+    a linear UI action. Measured on a real 126-round task: 206s to walk every
+    round, ~1.6s per click. With the cache the same walk is one read.
+
+    The TTL is deliberately short: a LIVE task appends rounds while the user
+    watches, and a stale list would hide the newest request. 3s is long
+    enough to collapse a burst of per-round fetches, short enough that the
+    next poll sees new rounds.
     """
     if not task_id:
         return []
+    import time as _time
+    now = _time.time()
+    hit = _EVENTS_CACHE.get(task_id)
+    if hit is not None and (now - hit[0]) < _EVENTS_CACHE_TTL_S:
+        return hit[1]
+    rows = _read_events_uncached(task_id)
+    # Bound the cache: drop the oldest entry when full (a browsing session
+    # touches a handful of tasks; this is not a hot-path structure).
+    if len(_EVENTS_CACHE) >= _EVENTS_CACHE_MAX:
+        try:
+            oldest = min(_EVENTS_CACHE.items(), key=lambda kv: kv[1][0])[0]
+            _EVENTS_CACHE.pop(oldest, None)
+        except ValueError:
+            _EVENTS_CACHE.clear()
+    _EVENTS_CACHE[task_id] = (now, rows)
+    return rows
+
+
+# task_id → (cached_at_epoch, rebuilt_event_rows)
+_EVENTS_CACHE: dict[str, tuple] = {}
+_EVENTS_CACHE_TTL_S = 3.0
+_EVENTS_CACHE_MAX = 8
+
+
+def invalidate_task_cache(task_id: str) -> None:
+    """Drop the cached event rows for ONE task.
+
+    Called from ``event_log.append_persistent_event`` right after a row is
+    written. The TTL alone is not enough: it bounds staleness in wall-clock
+    time, but a writer that appends a round and immediately reads it back
+    (the live-task path, and every test that seeds rows under a fixed task
+    id) must see its own write. Write-side invalidation makes the cache
+    read-your-writes correct; the TTL then only covers writes made by a
+    DIFFERENT process.
+    """
+    if task_id:
+        _EVENTS_CACHE.pop(task_id, None)
+
+
+def _read_events_uncached(task_id: str) -> list:
+    """Uncached read + rebuild (see :func:`_read_events`)."""
     try:
         db = get_thread_db(DOMAIN_CHAT)
     except Exception as e:
@@ -424,4 +476,5 @@ def list_conv_tasks(conv_id: str, limit: int = 15) -> dict:
     return {'convId': conv_id, 'tasks': tasks}
 
 
-__all__ = ['fold_request_log', 'get_request_payload', 'list_conv_tasks']
+__all__ = ['fold_request_log', 'get_request_payload', 'list_conv_tasks',
+           'invalidate_task_cache']

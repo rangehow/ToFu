@@ -157,26 +157,85 @@
 
 ### 阶段 3 — `survey`:多篇 fan-in 综述 + 空白地图(防重复的核心)
 
-**目标**:把 `harvest` 的库合成一份**结构化综述**,并输出**空白地图**(谁做了什么、用了什么假设、
-留了什么没做)—— 这张图是阶段 4 造 idea 的原料,也是「不与已有工作重复」的**证据**。
+**目标**:把 `harvest` 的库合成一份**结构化综述**,并输出**空白地图 `open_gaps.json`**(谁做了什么、
+用了什么假设、留了什么没做)—— 这张图是阶段 4 造 idea 的原料,也是「不与已有工作重复」的**证据**。
+**它是可机读的 R3 输入契约,不是只给人看的综述附庸。**
 
 **做法(复用 report_engine 的 loop,做多篇版)**:
 - `messages` 里塞 N 篇的**已有报告/摘要/方法卡**(不是全文,控 token);仍给 web 工具做交叉核对;
 - 产物两份:①人读的综述 markdown;②机器读的**空白地图 JSON**:
-  ```
-  {
-    "clusters": [{"theme": "...", "papers": ["arxiv_id", ...], "shared_assumption": "...",
-                  "limitation": "...", "unexplored": ["..."]}],
-    "method_matrix": {行=论文, 列=[任务, 假设, 数据规模, 度量, 是否开源]},
-    "open_gaps": [{"gap": "...", "why_open": "...", "evidence": ["arxiv_id/url"]}]
-  }
-  ```
+**输入纪律(降开销的落点,R2 pin #2)**:survey 喂给模型的每篇论文,**优先用 `paper_reports`
+里已生成的报告**(有则零成本引用),其次用 `paper_library.parsed_text` 的截断摘要;**绝不**对已入库
+论文重新 `parse_pdf` 或重新生成单篇报告。每篇输入按篇数硬上限截断(`_SURVEY_PER_PAPER_CHARS`),
+避免 N 篇全文塞爆 token。
 
-**闸(零 LLM,复用 citation_audit)**:综述里每个 `arXiv:<id>` 经 `build_citation_audit` 核验,
-出现可疑(不可解析)引用即标红 —— **综述不许引用不存在的论文**。
+**做法(复用 report_engine 的 loop,做多篇版)**:
+- `messages` 里塞 N 篇的**已有报告/parsed_text 摘要**(不是全文,控 token);仍给 web 工具做交叉核对;
+- 产物两份:①人读的综述 markdown;②机器读的**`open_gaps.json`**(下方 schema **已定稿**,是 R3 的输入契约)。
+
+#### `open_gaps.json` — 冻结 schema(R3 反 A+B 闸的输入契约,R2 pin #1)
+
+> 这个 JSON 是 R3 的**唯一**结构化输入。R3 的新颖性闸拿 `open_gaps[].id` 当「这个 idea 是否解决一个
+> 真实空白」的判据,所以字段名和形状在此**定死**,R3 不得再改。schema 版本用 `schema_version` 显式标注,
+> 将来演进走版本号而非静默改形。
+
+```jsonc
+{
+  "schema_version": 1,
+  "direction": "长上下文 KV-cache 压缩",          // 本次 survey 的方向(原样回填)
+  "lang": "zh",
+  "surveyed_count": 18,                            // 实际纳入综述的库内论文数(诚实覆盖面)
+  "library_folder_id": "research_<task>",          // 这批论文所在的库文件夹(可回查)
+
+  "clusters": [                                    // 把相关工作按主题聚类
+    {
+      "id": "cluster_1",
+      "theme": "训练时 KV 低秩投影",
+      "papers": ["2305.xxxxx", "2401.xxxxx"],      // ★ 每个 id 必须在 paper_library 查得到(结构闸)
+      "shared_assumption": "注意力矩阵低秩",         // 这簇共同的前提假设
+      "limitation": "推理时才压、无法端到端学",       // 这簇的共同局限
+      "unexplored": ["把压缩率做成可学习的每层变量"]   // 这簇没碰的方向
+    }
+  ],
+
+  "method_matrix": [                               // 论文×维度矩阵(每行一篇库内论文)
+    {
+      "paper": "2305.xxxxx",                       // ★ 必须在 paper_library 查得到(结构闸)
+      "task": "长文摘要",
+      "assumption": "低秩",
+      "data_scale": "16k ctx",
+      "metric": "ROUGE / 显存占用",
+      "open_source": true
+    }
+  ],
+
+  "open_gaps": [                                   // ★★ R3 的直接原料:真实空白清单
+    {
+      "id": "gap_1",
+      "gap": "没有方法在压缩时保住 needle-in-haystack 的精确检索",
+      "why_open": "现有工作只测困惑度,不测长程精确召回",
+      "evidence": ["2305.xxxxx", "2401.xxxxx"],    // ★ 每个 id 必须在 paper_library 查得到(结构闸)
+      "kind_hint": "methodology"                   // methodology|analysis — 给 R3 分流的软提示
+    }
+  ]
+}
+```
+
+**闸(两道,都零 LLM):**
+
+1. **库内可查证结构闸(R2 pin #1 的核心,新写 `_verify_against_library`)**:`clusters[].papers`、
+   `method_matrix[].paper`、`open_gaps[].evidence` 里的**每个 arxiv_id**,都必须能在本次 harvest 建的
+   `paper_library`(按 `library_folder_id` 或全库)里按 `arxiv_id` 查到。**查不到 → 该 id 从该条目里
+   剥掉**(recommend grounding 反着用:不是接地新引用,是校验「综述声称覆盖的论文」确实已入库);
+   若一个 `open_gap` 的 `evidence` 被剥空 → **整条 gap 判为无据、丢弃**(默认按「模型编的」处理,而非
+   「真漏爬」—— 漏爬走一条独立的补 harvest 信号,不混进这里)。剥离动作记 `stripped_ids` 到产物 meta,
+   可复盘。
+2. **引用真伪闸(复用 `build_citation_audit`)**:综述 markdown 里每个 `arXiv:<id>` 过
+   `build_citation_audit` 核验;出现可疑(不可解析)引用 → 产物 meta 带 citation-integrity 卡标红。
 
 **类比**:不只写「别人做了啥」的流水账,而是画一张**战场地图**:标出每支队伍的阵地和补给线,
-最重要的是标出**没人占的高地**。
+最重要的是标出**没人占的高地**。而那道库内可查证闸,就是**核对地图上标的每支队伍确实在你的情报库里
+有档案** —— 地图上凭空多出一支查无此人的队伍,直接抹掉,免得 R3 拿它当真去规划。
 
 ---
 

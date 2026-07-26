@@ -88,6 +88,7 @@ from .images import (
 # arXiv + library
 from .arxiv import _extract_arxiv_id, fetch_arxiv_title, search_arxiv
 from .harvest import HarvestResult, harvest_arxiv_batch, harvest_arxiv_id
+from .survey import OPEN_GAPS_SCHEMA_VERSION, build_survey, survey_lang_key
 from .recommend_engine import iter_recommend_events, recommend_papers
 from .recommend_runtime import (
     _RECOMMEND_TASK_TTL,
@@ -199,6 +200,8 @@ __all__ = [
     'iter_recommend_events',
     # harvest (auto-research R1 — batch crawl + parse-once ingest)
     'harvest_arxiv_id', 'harvest_arxiv_batch', 'HarvestResult',
+    # survey (auto-research R2 — fan-in survey + library-verified open-gap map)
+    'build_survey', 'survey_lang_key', 'OPEN_GAPS_SCHEMA_VERSION',
     '_recommend_runtime', '_recommend_tasks', '_recommend_tasks_lock',
     '_RECOMMEND_TASK_TTL', '_recommend_key', '_recommend_index_lock',
     '_recommend_latest_index', '_recommend_latest_for', '_recommend_register_latest',

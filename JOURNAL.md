@@ -148,6 +148,22 @@
 - **复活条件(写进 charter,防遗忘):** 若将来网关侧行为变化(换线/升级)使体缓存恢复命中,用生产 apiRounds 数据重评——届时 B/D 两票的重评条款自动激活。
 - **本批五票最终格局(A/B/C/D/E 全部闭环):** A=owner 接受现状;B=实测不做(kimi 自动缓存全局是伪影 + aws 不换 key + opus-5 与 A 同源);C=实测否决(beta flap 全是模型切换);D=charter 否决(回退链维持);E=检测器伪影已修。**唯一真实代码变更 = E 票的检测器修复;唯一真成本大头(A 票)经 owner 知情决策后接受。**
 
+### 2026-07-26(续73) — 自动科研系统 R2 落地:多篇 fan-in 综述 + 库内可查证空白地图(owner 三 pin:open_gaps 机读契约 / 报告优先输入零重解析 / 引用审计复用)。commit 见下,4 文件 + facade + 设计稿冻结 schema;新套件 **7/7 含 NEUTER×2 + failing-first 实证**,相邻 paper 四套件 **25/25**,collect **10298** 0 err
+
+- **owner 三 pin 逐条落地并实证:**
+  | pin | 落点 | 实证 |
+  |---|---|---|
+  | ①空白地图必须机读且被 R3 消费 | `open_gaps.json` schema **冻结进设计稿 §3 阶段3**(schema_version=1,clusters/method_matrix/open_gaps 三部分),作为 R3 输入契约 | schema 版本号显式,演进走版本号不静默改形 |
+  | ②库内可查证结构闸(零 LLM) | 新写 `_verify_against_library`:`clusters[].papers`/`method_matrix[].paper`/`open_gaps[].evidence` 里每个 arxiv_id 必须在 `paper_library` 查到,查不到即剥;gap 证据被剥空 → **整条丢弃**(默认按「模型编的」处理,漏爬走独立 `missing_ids` 信号不混入) | NEUTER:塞库外 id → 剥离 + 记 stripped/missing;真 id 存活;failing-first:把 `_filter_ids` 改成 passthrough → NEUTER 翻红 |
+  | ③报告优先输入,绝不重解析 | `_load_paper_inputs`:优先 `paper_reports` 已有报告(零成本)→ 退回 `paper_library.parsed_text`,每篇 `_SURVEY_PER_PAPER_CHARS` 截断;**永不 `parse_pdf`** | parse_pdf 间谍断言 0 调用;source 断言 report 优先于 parsed_text |
+  | ③引用真伪闸复用现成 | `build_citation_audit(survey_md)` 原样接,可疑引用出卡 | NEUTER:综述引用不存在论文 → citation_audit 出卡;干净综述 → None |
+- **grounding 反着用(概念澄清):** recommend/insight 的 grounding 是「接地**新**引用」,survey 的库内闸是「校验综述**声称覆盖**的论文确实已入库」—— 同一套 `_norm_id`(版本号无关比较),反方向使用。
+- **LLM 缝照抄 insight:** `_synthesize_survey` 复用 `run_agent_loop`+`_REPORT_TOOLS`,`dispatch_stream`/`_execute_report_tool` 走本模块 facade 缝,测试 monkeypatch 一处咬全链,零网络零真模型即可测两道闸。
+- **零新增 schema:** 综述走 `paper_reports` 复合 lang 键 `survey:<lang>`(照抄 insight `insight:<lang>` / review `review:<venue>:<lang>`)。
+- **facade 安全:** survey 重依赖全部函数内惰性 import,加进 eager barrel 零 import-time 成本(collect 10298 0 err 实证)。
+- **shared-HEAD 纪律:** 精确 5-file pathspec,`__init__.py` diff 核实仅我 2 处 survey 增行。
+- **给 R3:** 直接吃 `build_survey` 产物的 `open_gaps`(已库内校验、schema v1);反 A+B 闸拿 `open_gaps[].id` 当「idea 是否解决真实空白」判据,`kind_hint` 给 methodology/analysis 分流。
+
 ### 2026-07-26(续72) — 自动科研系统 R1 落地:harvest 批量爬 + parse-once 入库原语(owner 拍板 R1–R3 优先 + 「phash 逐字节一致」为最高验收)。commit 见下,3 新文件 + facade;新套件 **7/7 含 NEUTER×2 + failing-first 实证**,相邻 paper 三套件 **28/28**,collect **10209** 0 err
 
 - **owner 的隐藏假设已钉死并实证:** harvest 入库路径产出的 `phash` **必须与阅读模式 ingest 逐字节一致**,否则「已读过→命中缓存」静默失效、parse-once 成本故事当场崩。

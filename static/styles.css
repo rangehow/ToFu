@@ -10769,8 +10769,8 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 
 /* ── TOFU brand wordmark — 粗几何无衬线字身(--sans-body 800),与圆胖吉祥物同族;
    「o」字形留在 DOM 但视觉由一块奶油→琥珀渐变、微歪 -7° 的小豆腐块接管,全标只有
-   这一个暖色口音;悬停字母挨个弹抖、豆腐块再转一下。色彩纪律:字身 --text-primary
-   保纸面对比度,暖色只落在豆腐块上 ── */
+   这一个暖色口音;悬停字母挨个弹抖、豆腐块再转一下。色彩纪律:字身深陶土 #A96536,
+   比墨黑暖一度、与豆腐块同族;不用主题 accent #C1794B(会与链接/按钮撞色,显不出品牌) ── */
 [data-theme="tofu"] .tofu-brand{
   font-family:var(--sans-body);
   /* font-size 由上方 [data-theme="tofu"] .welcome h2(42px,特异性 0,2,1)决定,此处不再重复声明 */

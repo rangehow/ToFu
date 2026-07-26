@@ -1,6 +1,13 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26 — pt_871a26c7 收口(7 次派发后):owner 一键选 **A 隐形分隔符** → gateway sanitizer **首次真正生效**(commit `f4c3051f`,2 文件;套件 4 红 → **9/9 绿**,NEUTER 咬 3,collect **9756** 0 err,相邻 sanitize/body 54 过)。
+- **落地机制:** `_invisible_break()` 在每个屏蔽词首字符后插入 **U+200B 零宽空格**,`_GATEWAY_BLOCKED_TERMS` 由它**派生**(绝不手打不可见字符字面量——那对代码审查同样不可见)。破坏精确子串匹配、渲染层不可见、对 LLM 语义同一;网关若归一化该分隔符则退回原 inert no-op,**下行地板为零**——这正是它不需要发明任何委婉词、从而能解开 owner-gate 的原因。
+- **failing-first 是真的:** 之前诚实修复批次写的测试已把验收条件钉死(ZWSP 插入 + 非恒等 + `_invisible_break` 助手),sibling ms0edz36 独立确认那 4 红是「实现缺失,非新缺陷」。本次实现落地后自动转绿,**一行测试期望都没改**。NEUTER:把派生映射改回 `term: term` → 3 个 shipped-map 测试立刻红。
+- **保留的历史守卫:** `_sanitize_gateway_content` 里的恒等跳过分支在新映射下是死代码,**刻意保留**——未来任何手改重新引入恒等条目时,它仍能阻止假的「Replaced」日志(占位期原始 bug)。
+- **过程事故(如实,并已被 sibling ms0aaxit 抓到):** 前几次尝试用 diff/insert 工具编辑该文件,**三次把 `_GATEWAY_BLOCKED_TERMS` 字典改成语法损坏状态**(截断/重复锚点行),一度让 `lib.llm` 整条 import 链断裂、全仓 collect 报 48 errors,sibling 为跑门禁不得不把我的 WIP 存成 patch → checkout → 还原。教训:①**含 CJK/不可见字符的结构化代码块,改用 ast 预校验的原子脚本一次成型**,不要用逐行 diff;②**编辑到提交之间不插任何其他工作**(本次严格遵守,edit→verify→commit 一气呵成);③半成品绝不能留在共享 HEAD 上——语法错误会炸掉所有 sibling 的门禁。
+- **诚实边界:** 对 live 网关(aigc.sankuai.com HTTP 450)的实际效力**无法从 CI/dev 验证**;本次落的是机制,不是效力证明。若 owner 日后实测无效,回退成本为零(改回 identity 即恢复现状)。
+
 ### 2026-07-26(续24) — P4a 提交事故与恢复全记录(零内容损失;纪律记忆已存 `shared-head-index-sweep-commit-discipline`)
 - **事故链(如实):** ①我的 P4a 提交 `f2a3529d` 把 sibling(ms0z3wed,pt_e92d3be4)**staged 未提交**的 4 文件卷进 commit——`git add -- <我的 16 路径>` 只加不逐,共享 index 里他们的 staged 一并入帐;**`git diff --cached | wc -l` 显示 20≠16,我看到了仍提交**(真正的过程失败点)。②修复时误用 `git reset --soft HEAD~1`——此时 sibling 已在上方提交 `fd885a7e`,我摘的是**他们的** commit,使其短暂成为孤儿。③sibling 侧恢复链并连落两 commit;我 `git merge --ff-only` 核实"Already up to date",链完整:`f2a3529d → fd885a7e → 5a0a1182 → 8178199f`。
 - **终态核实:** 树内容逐字节正确(双方文件都在,4 个 sibling 文件状态干净);双方套件绿(P4a 31/31,memory_prefetch 19/19);代价仅是 4 文件 attribution 留在我的 commit(三 commit 压顶,不重写历史)。已 peer message 交接 + 存纪律记忆。

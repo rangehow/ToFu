@@ -28,6 +28,13 @@ from lib.tasks_pkg.manager._state import (
     tasks_lock,
 )
 from lib.tasks_pkg.manager._events import _assign_message_ids, _new_assistant_slot
+# The SINGLE SOURCE OF TRUTH for "carrier task, not user-visible work" — shared
+# with /api/chat/active, the restart guard and the sidebar. BOTH conv-sync paths
+# below consult it so they can never drift apart (they once did: the terminal
+# path matched only `_inline_messages` while the partial path matched nothing,
+# which let the autopilot VU carrier write its stop-sentinel into a conversation
+# as a real assistant message). Acyclic: _registry imports only _state/_persist.
+from lib.tasks_pkg.manager._registry import is_carrier_task
 from lib.tasks_pkg.manager._persist import (
     _merge_tool_rounds,
     _tool_rounds_have_dedicated_home,
@@ -495,8 +502,8 @@ def _sync_result_to_conversation(task, meta):
     # corresponding row in the `conversations` table — results are read by
     # the caller from `task_results` directly. Skip the write-back path so
     # we don't flood error.log with "Conversation not found" warnings.
-    if task.get('_inline_messages'):
-        logger.debug('%s conv=%s Inline-message task — skipping conv sync by design', pfx, conv_id)
+    if is_carrier_task(task):
+        logger.debug('%s conv=%s Carrier task — skipping conv sync by design', pfx, conv_id)
         return
 
     db = None
@@ -1248,6 +1255,20 @@ def _sync_partial_to_conversation(task):
     content = task.get('content') or ''
     thinking = task.get('thinking') or ''
     if not content and not thinking:
+        return
+
+    # ── CARRIER GUARD (must mirror the terminal sync exactly) ──
+    # A carrier runs no user-visible turn, so it must never materialise a row
+    # in conversations.messages. The freshness guard below cannot substitute
+    # for this: the autopilot VU sub-task records ITSELF as the conversation's
+    # latest task (pt_8dc03017 HB-1), so it passes freshness by construction.
+    # Without this, its first streaming delta was appended as a headless
+    # assistant message that could never be settled — the terminal sync
+    # (correctly) rejects carriers, so the row stayed frozen at that delta with
+    # a finish bar that could never complete.
+    if is_carrier_task(task):
+        logger.debug('[Checkpoint] conv=%s Carrier task %s — skipping partial '
+                     'conv sync by design', conv_id[:8], task['id'][:8])
         return
 
     # ── FRESHNESS GUARD: reject checkpoint writes from stale tasks ──

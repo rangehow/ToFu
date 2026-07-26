@@ -1,6 +1,17 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-27(续78) — 错误透明传递担保落地:两个真实 kind 缺口根修 + TaskRuntime 归一化咽喉硬化 + AST 棘轮(owner「保证后端错误真实、精确、良好呈现地传到前端」;commit `2f4e6056`,6 文件 +336/-11;新套件 **10/10**,全族回归 **155+53+58 全绿**,NEUTER×2 全咬;charter v10)
+
+- **审计结论(先核实再动手):** 透明传递主链路(classifier → envelope → SSE/poll → 前端渲染)在续73-77 三批后已基本闭环——分类器 22 kind、envelope 双语+i18n key、api.js 保留 envelope+requestId、展示层 mojibake 修复、81 测全绿。**真正的缺口是两个未注册 kind + 无棘轮防回潮。**
+- **缺口 1(worker_lost):** `TaskRuntime.reap_if_stalled` 手搓 `{'kind':'worker_lost','detail':…}` 裸 dict——kind 不在 KINDS 封闭枚举、dict 无 `message` 字段,前端 `isErrorEnvelope` 判失败 → 掉进 unknown-shape 分支 → 用户看 **'Unknown error' + 一段 JSON**。播客/视频轮询 UI 虽有专用分支兜住,但其它一切渲染路径全灭。
+- **缺口 2(budget_exceeded):** `orchestrator/_run.py:1120` 预算闸调 `_make_env('budget_exceeded',…)`,而该 kind **从未注册** → make_envelope 静默降级 generic「⚠️ 模型调用失败」——用户花了钱到上限,看到的却是「调用失败」,truthful 直接破功。**教训:make_envelope 的「未知 kind 降级 generic」设计意味着每新增一个 `_make_env('x')` 调用点都必须同步注册,否则静默失真——这正是棘轮该守的。**
+- **根修而非补丁(TaskRuntime `_make_envelope` 咽喉硬化):** 五种输入形状全部归一为**完整** envelope——完整 dict(kind+message)按 identity 原样透传;不完整 dict 经 make_envelope 补全(kind 保留);**字符串恰为已注册 kind 名 → 建该 kind 的 envelope**(`finish(error='worker_lost')` 是 PAPER_MEDIA_UX_DESIGN.md 记载的契约,此前落 generic);其余裸字符串 generic 但完整。`test_task_runtime.py::test_finish_error_dict` 从旧契约(任意 dict 透传)改钉新契约——旧测试是「新行为让旧假件过期」的正确信号,不是回归。
+- **棘轮(tests/test_error_transparency_guard.py):** AST 扫描 lib/+routes/ 全部 `['error']` 赋值,双重判定——task/new_task 目标必须 envelope(零豁免)+ 任何目标禁裸异常(`str(e)`/`str(exc)`/裸 `e`);8 处已逐个人工核实的专用面遗留点(oauth×2/file_history×2/vlm/probe/_rerank/paper 线程盒)进祖父豁免,**精确计数匹配,只减不增**(修了一处必须同步缩清单,否则红——与本仓 BASELINE 棘轮同哲学)。**FUSE 教训:全仓扫描枚举用 `git ls-files`(0.04s)不用 os.walk(>60s 超时);NEUTER 探针需 `git add -N` 才进索引。** 已存记忆 `fuse-ratchet-use-git-ls-files`。
+- **NEUTER×2 全咬:** ①`git add -N` 探针文件 `task['error']=str(e)` → 棘轮红并精确报 file:line(注意:第一次未 add -N 时探针**漏检**——git 索引语义,已记入测试 docstring);②摘除 dict 补全分支 → 恰好两个补全行为钉红,其余 3 钉绿(分支正交性)。
+- **★ shared-HEAD 事故与和解(双方视角闭环):** 05:45 三文件(constants/i18n/labels)被 sibling ms1uojtu 的 HEAD-relative 暂存流程重置到 HEAD,我未提交的 hunk 一度全灭;他们有 /tmp combined 备份,提交 f64c3c41 后原样恢复(续77 有其侧记载)。我独立 `git diff HEAD` 核实增行全在、无重复键后**未重做**,仅修一处注释错位即提交。互发边界消息:该三路径此后不用 checkout/restore。**口诀(补续77):被重置方先 `git diff HEAD` 核实再动——「丢了」是观测态,「恢复中」是过程态,别急着重做造成重复键。**
+- **生效条件:** 纯注册+归一化改动,向后兼容(完整 envelope 透传路径逐字节不变);运行中服务**需重启**加载新 constants;i18n pack 随下次 bundle/启动自动重生成。
+
 ### 2026-07-26(续77) — pt_75d8f8c7 收口:translate 裸 500(73×/天)根修,新 kind `content_refused` 全垂直落地(commit `f64c3c41`,8 文件 +293/-17;新套件 **12/12** 含 failing-first A/B + NEUTER×3,相邻环七套件全绿)
 
 - **根因:** 引擎三道内容闸(错语言翻转/回声 no-op/失控 overgen)重试耗尽时**明知拒绝原因**,却走 `c=''; break` 汇入尾部通用 ValueError → 路由 generic catch → 500「INTERNAL SERVER ERROR」。拒绝原因死在通用异常文本里。

@@ -1162,7 +1162,19 @@
         if (sc && sc.drawImage) sc.drawImage(_buf, 0, 0); else snap = null;
       }
     } catch (e) { snap = null; }     // harmless — we just re-bake without a fade
+    // A time shift re-bakes COLOUR ONLY. The torn outline is seeded from
+    // rng(pal.seed ^ w*131+h) and the tint preserves `seed`, so the geometry is
+    // byte-identical — there are no stale pixels outside a moved outline to
+    // retire, and the full-canvas clear _paintBuffer unconditionally requests is
+    // both unnecessary and actively harmful here: _paintFrame consumes that flag
+    // at the TOP of the frame while this runs BELOW it, so the clear would land
+    // a frame LATE and wipe the first cross-fade composite before re-blitting.
+    // Preserve whatever the flag was, so a genuine geometry change still gets
+    // its clear. (Pinned by test_time_rebake_issues_no_full_canvas_clear +
+    // test_time_rebake_keeps_the_identical_deckle_outline.)
+    var _keepClear = _needFullClear;
     _paintBuffer();                  // re-bakes with the NEW bucket's tint
+    _needFullClear = _keepClear;
     if (snap) { _xfadeBuf = snap; _xfadeT = 1; }
   }
 

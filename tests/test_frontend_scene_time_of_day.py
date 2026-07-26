@@ -145,6 +145,99 @@ def _run_tod(hours, src=None):
     return json.loads(line)
 
 
+# ── Outline / clear harness: drives the module through a REAL bucket crossing
+# (via setHour, the same path a natural crossing takes) and records both the
+# deckle outline it clipped to and every full-canvas clearRect on the visible
+# canvas, so the tests can prove the outline is stable and the clear is absent.
+_OUTLINE_HARNESS = r"""
+'use strict';
+const W = 900, H = 48;
+const HOURS = __HOURS__;
+
+let phase = 'boot';                 // 'boot' | 'shift'
+let clearsOnTimeShift = 0;
+const outlines = {};
+let lastOutline = null;
+
+function mkCtx(isVisible){
+  let path = null;
+  return {
+    canvas:{width:W,height:H},
+    setTransform(){},
+    clearRect(x,y,w,h){
+      // a FULL-canvas clear during the time-shift phase is the thing under test
+      if (isVisible && phase === 'shift' && x === 0 && y === 0 && w >= W && h >= H) clearsOnTimeShift++;
+    },
+    save(){}, restore(){}, translate(){}, rotate(){},
+    beginPath(){ path=[]; }, moveTo(x,y){ if(path)path.push([x,y]); },
+    lineTo(x,y){ if(path)path.push([x,y]); }, closePath(){},
+    rect(){ if(path)path.push(['RECT']); },
+    ellipse(){}, arc(){},
+    clip(){ if (isVisible && path && path.length >= 3 && !path.some(p=>p[0]==='RECT')) lastOutline = path.slice(); },
+    fill(){ path=[]; }, fillRect(){}, stroke(){}, drawImage(){},
+    createLinearGradient(){ return {addColorStop(){}}; },
+    createRadialGradient(){ return {addColorStop(){}}; },
+    set fillStyle(v){}, get fillStyle(){ return ''; },
+    set globalAlpha(v){}, get globalAlpha(){ return 1; },
+    set globalCompositeOperation(v){}, get globalCompositeOperation(){ return ''; },
+    set strokeStyle(v){}, get strokeStyle(){ return ''; },
+    set lineWidth(v){}, get lineWidth(){ return 1; },
+  };
+}
+
+let rafCb=null;
+global.requestAnimationFrame=cb=>{rafCb=cb;return 1;};
+global.cancelAnimationFrame=()=>{};
+global.devicePixelRatio=1;
+global.window={matchMedia(){return{matches:false,addEventListener(){},addListener(){}};},addEventListener(){},
+ ResizeObserver:function(){return{observe(){},disconnect(){}};},MutationObserver:function(){return{observe(){},disconnect(){}};},
+ IntersectionObserver:function(){return{observe(){},disconnect(){}};},devicePixelRatio:1};
+global.ResizeObserver=global.window.ResizeObserver;
+global.MutationObserver=global.window.MutationObserver;
+global.IntersectionObserver=global.window.IntersectionObserver;
+function mkEl(){return{_attrs:{},className:'',style:{},width:0,height:0,setAttribute(k,v){this._attrs[k]=v;},
+ getAttribute(k){return this._attrs[k];},appendChild(){},insertBefore(){},querySelector(){return null;},firstChild:null,
+ getBoundingClientRect(){return{left:0,right:W,top:0,bottom:H,width:W,height:H};}};}
+const bar=mkEl(); bar._attrs['data-decor']='meadow';
+let canvasN=0;
+global.document={readyState:'complete',hidden:false,
+ documentElement:{getAttribute(k){return k==='data-theme'?'tofu':null;}},addEventListener(){},
+ getElementById(id){return id==='projectBar'?bar:null;},
+ createElement(t){ if(t==='canvas'){ canvasN++; const vis = (canvasN===1);
+   const e=mkEl(); e.getContext=()=>mkCtx(vis); return e; } return mkEl(); }};
+global.window.TofuPet={getState(){return{x:W/2-16,state:'walk'};}};
+
+__SRC__
+
+const S = window.TofuScene;
+let t = 100;
+function frame(){ t += 40; if (rafCb) { const cb = rafCb; rafCb = null; cb(t); } }
+
+frame();                            // boot frame — consumes the mount clear
+phase = 'shift';                    // from here on, any full clear is the bug
+for (const h of HOURS) {
+  S.setHour(h);                     // real bucket crossing, real _beginTimeShift
+  frame();                          // the frame that composites the shift
+  frame();                          // and the NEXT frame (where a late flag lands)
+  outlines[h] = lastOutline ? lastOutline.map(p => [Math.round(p[0]*1000)/1000,
+                                                   Math.round(p[1]*1000)/1000]) : null;
+}
+console.log(JSON.stringify({ outlines, clearsOnTimeShift }));
+process.exit(0);
+"""
+
+
+def _run_outline(hours, src=None):
+    src = src if src is not None else SCENE_JS.read_text()
+    script = (_OUTLINE_HARNESS.replace("__SRC__", src)
+              .replace("__HOURS__", json.dumps(hours)))
+    out = subprocess.run(["node", "-e", script], capture_output=True, text=True,
+                         cwd=str(REPO), timeout=30)
+    assert out.returncode == 0, f"node failed: {out.stderr}\n{out.stdout}"
+    line = [ln for ln in out.stdout.strip().splitlines() if ln.strip().startswith("{")][-1]
+    return json.loads(line)
+
+
 def _luma(hexs):
     """Mean luma of a list of #rrggbb strings."""
     tot = 0.0
@@ -310,6 +403,54 @@ def test_NEUTER_snapping_palette_change_is_caught():
                        "/* NEUTER: no fade */", 1)
     assert neut != src, "neuter did not match the fade arming"
     assert "_xfadeT = 1" not in neut, "neutered build still arms the fade — wrong neuter"
+
+
+def test_time_rebake_keeps_the_identical_deckle_outline():
+    """A time-of-day re-bake changes only COLOUR. The torn outline is seeded from
+    rng(pal.seed ^ w*131+h) and the tint preserves `seed`, so the outline is
+    provably unchanged across a bucket shift. This is the premise that makes the
+    full-canvas clear unnecessary on a palette-only re-bake — pin it, because if
+    a future tint ever perturbed `seed` the clear would become genuinely
+    required and its absence would leave stale rim pixels."""
+    r = _run_outline([14, 2, 22])
+    a, b, c = r["outlines"]["14"], r["outlines"]["2"], r["outlines"]["22"]
+    assert a and len(a) >= 16, "no deckle outline captured"
+    assert a == b == c, (
+        "the deckle outline MOVED across a time-of-day re-bake — the tint is "
+        "perturbing the geometry seed, so the no-clear optimisation is unsafe")
+
+
+def test_time_rebake_issues_no_full_canvas_clear():
+    """A palette-only re-bake must NOT request a full-canvas clear.
+
+    _paintBuffer() unconditionally sets _needFullClear, but _paintFrame consumes
+    that flag at the TOP of the frame while the time-shift fires BELOW it. So a
+    boundary crossing used to: (frame N) blit → re-bake → set the flag → blit the
+    fade; (frame N+1) finally honour the clear, wiping the first fade frame's
+    composite before re-blitting. The two mechanisms raced and the flag landed a
+    frame late.
+
+    The clear exists for when the outline genuinely MOVES (resize / scene
+    change). The outline is byte-identical across a time re-bake (see the test
+    above), so the correct fix is for the time-shift not to request one at all —
+    which also protects the pixel-cost property the DPR/clear work bought."""
+    r = _run_outline([14, 2])
+    assert r["clearsOnTimeShift"] == 0, (
+        f"a time-of-day re-bake requested {r['clearsOnTimeShift']} full-canvas "
+        f"clear(s) — it races the cross-fade and costs a w×h wipe the unchanged "
+        f"outline does not need")
+
+
+def test_NEUTER_unguarded_rebake_clear_is_caught():
+    """NEUTER: let the time-shift leave _needFullClear set → the no-clear
+    assertion must fail, proving it is the guard being measured."""
+    src = SCENE_JS.read_text()
+    neut = src.replace("    _needFullClear = _keepClear;",
+                       "    _needFullClear = true;  /* NEUTER */", 1)
+    assert neut != src, "neuter did not match the clear-restore in _beginTimeShift"
+    r = _run_outline([14, 2], src=neut)
+    assert r["clearsOnTimeShift"] > 0, \
+        "neutered build still issued no clear — the guard would not bite"
 
 
 def test_boundary_is_polled_not_checked_every_frame():

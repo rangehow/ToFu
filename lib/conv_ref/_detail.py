@@ -108,7 +108,7 @@ def _coerce_json(value, default, label=''):
 
 
 def get_conversation(conversation_id, include_tool_details=True,
-                     current_conv_id=None, raw=False):
+                     current_conv_id=None, raw=False, user_id=None):
     """Retrieve and format the full content of a conversation.
 
     Args:
@@ -119,6 +119,10 @@ def get_conversation(conversation_id, include_tool_details=True,
             the complete messages array with every field preserved) as a
             structured JSON dump for debugging, instead of the readable prose
             transcript.
+        user_id: the OWNING principal. ``None`` falls back to
+            :data:`DEFAULT_USER_ID` (single-user install behaves identically).
+            The SELECT is scoped by it, so a conversation belonging to another
+            tenant is not reachable by guessing its id.
 
     Returns a formatted string with all messages, tool calls, and results.
     """
@@ -129,7 +133,7 @@ def get_conversation(conversation_id, include_tool_details=True,
     row = db.execute(
         'SELECT id, user_id, title, messages, created_at, updated_at, '
         'settings, msg_count, rev FROM conversations WHERE id=? AND user_id=?',
-        (conversation_id, DEFAULT_USER_ID)
+        (conversation_id, DEFAULT_USER_ID if user_id is None else user_id)
     ).fetchone()
 
     if not row:
@@ -220,7 +224,8 @@ def get_conversation(conversation_id, include_tool_details=True,
 
 
 def build_conversation_digest(conversation_id, current_conv_id=None,
-                              head=DIGEST_HEAD, tail=DIGEST_TAIL, raw=False):
+                              head=DIGEST_HEAD, tail=DIGEST_TAIL, raw=False,
+                              user_id=None):
     """Build a STRUCTURED digest of a conversation for the human-view card.
 
     This is the display sibling of :func:`get_conversation` (which returns the
@@ -266,7 +271,7 @@ def build_conversation_digest(conversation_id, current_conv_id=None,
         row = db.execute(
             'SELECT id, title, messages, settings, created_at, updated_at, rev '
             'FROM conversations WHERE id=? AND user_id=?',
-            (conversation_id, DEFAULT_USER_ID)
+            (conversation_id, DEFAULT_USER_ID if user_id is None else user_id)
         ).fetchone()
     except Exception as e:
         logger.debug('[conv_ref] digest DB read failed for %s: %s',

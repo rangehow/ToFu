@@ -3453,8 +3453,45 @@ function _renderToolSlot(r, allRounds) {
     ? _buildSwarmPanelHTML(r, allRounds)
     : _renderUnifiedToolLine(r, r.status === "searching");
   const swarmAttr = _isRoundSwarm(r) ? ' data-prn-kind="swarm"' : '';
-  return `<div data-prn="${r.roundNum}"${swarmAttr}>${inner}</div>`;
+  return `<div data-prn="${r.roundNum}"${swarmAttr}>${inner}${_renderToolRequestAnchor(r)}</div>`;
 }
+
+/* ── Request Inspector anchor per TOOL ROW (P6) ──────────────────────────
+ * The owner's actual complaint: "I see a suspicious tool call in chatinner
+ * and there is no way to find WHICH request produced it." A single per-bubble
+ * anchor (P3) is the wrong granularity — one bubble holds N rounds x M tool
+ * calls. This puts an anchor on EVERY tool row.
+ *
+ * The mapping needs no new backend data: the backend tags each round with
+ * `llmRound` (0-based orchestrator loop index, see _computeToolBatches), and
+ * the request snapshot's `roundNum` is 1-based — so this row was PRODUCED by
+ * request R(llmRound+1), and its result was carried INTO R(llmRound+2).
+ * We anchor on the producing request (that is the payload that contains the
+ * tool definitions + context the model saw when it decided to make this call).
+ *
+ * Rendered ONLY in debug mode, and only when we can name a task + round —
+ * an anchor that cannot resolve is worse than no anchor. */
+function _renderToolRequestAnchor(r) {
+  if (typeof _featureFlags === 'undefined' || !_featureFlags.debug_mode) return '';
+  if (!r || r._inboxInject || r._peerInject || r._userSteerInject) return '';
+  const taskId = r._taskId || (typeof _riTaskIdForRound === 'function'
+    ? _riTaskIdForRound(r) : '');
+  const lr = r.llmRound;
+  if (!taskId || lr == null) return '';
+  const round = Number(lr) + 1;          // llmRound 0-based → roundNum 1-based
+  const tip = (typeof t === 'function') ? t('ri.toolAnchorTip', { round }) : '';
+  return `<div class="ri-tool-anchor-row">` +
+    `<span class="ri-tool-anchor" role="button" tabindex="0" ` +
+    `title="${escapeHtml(tip)}" ` +
+    `onclick="openRequestInspectorForToolRound('${escapeHtml(String(taskId))}',${round})">` +
+    `${_RI_TOOL_ANCHOR_SVG}<span class="ri-tool-anchor-label">R${round}</span></span></div>`;
+}
+
+/* Code-glyph SVG (§3.4: SVG only, never a unicode glyph as a control). */
+const _RI_TOOL_ANCHOR_SVG =
+  '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+  'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="m8 6-6 6 6 6"/><path d="m16 6 6 6-6 6"/></svg>';
 
 /* Build a llmRound-key → [narration text segments] map from a message's
  * `segments`. Mirrors the timeline's narration selection EXACTLY (non-

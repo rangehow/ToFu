@@ -582,6 +582,24 @@ html[data-rail] .folder-quickadd{display:none}
 .ri-turn-badge{padding:0 5px;font-size:9px;font-weight:600;color:#a78bfa;background:rgba(139,110,246,0.12);border:1px solid rgba(139,110,246,0.35);border-radius:3px;flex-shrink:0}
 .ri-task-agent{padding-left:20px}
 .ri-agent-badge{color:#60a5fa;font-size:9.5px;font-weight:600}
+
+/* ── Tool-row request anchor (P6) ──────────────────────────────────
+   One anchor per TOOL ROW — the fix for "which request produced this
+   call?". Stays nearly invisible until the row is hovered so it never
+   competes with the tool content itself. */
+.ri-tool-anchor-row{display:flex;justify-content:flex-end;margin:-2px 0 2px;height:0;overflow:visible}
+.ri-tool-anchor{display:inline-flex;align-items:center;gap:3px;padding:1px 6px;margin-top:-14px;font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:600;line-height:1.5;color:var(--text-tertiary);background:var(--bg-secondary,rgba(30,30,40,0.9));border:1px solid var(--border);border-radius:3px;cursor:pointer;opacity:0;transition:opacity .15s ease,color .15s ease,border-color .15s ease}
+[data-prn]:hover .ri-tool-anchor,.ri-tool-anchor:focus-visible{opacity:.85}
+.ri-tool-anchor:hover{opacity:1;color:var(--accent);border-color:var(--accent)}
+.ri-tool-anchor svg{display:block}
+.ri-tool-anchor-label{letter-spacing:.02em}
+
+/* ── Context ball yields the left flank while the drawer is open (P6) ──
+   The liquid bubble sits at left:18px — exactly the room the inspector's
+   reading column needs. Rather than delete a feature the owner likes, it
+   slides to the bottom-right for the duration. */
+body.ri-open .ctx-health-bar{left:auto;right:16px;top:auto;bottom:12px;transform:none}
+.ctx-health-bar{transition:left .2s ease,right .2s ease,bottom .2s ease}
 body.ri-open .chat-container{margin-right:min(780px,94vw);transition:margin-right .22s ease}
 @media (max-width:900px){
   body.ri-open .chat-container{margin-right:0}

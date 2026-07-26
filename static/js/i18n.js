@@ -903,6 +903,7 @@ var _i18n = {
   'ri.turnReviewing': { zh: '评审', en: 'Critic' },
   'ri.coverageAmbiguous': { zh: '旧 endpoint 任务：轮次未标相位（planner/worker/critic 同号不可区分）', en: 'Legacy endpoint task: rounds carry no phase tag (planner/worker/critic rounds share numbers)' },
   'ri.turnSwarmAgent': { zh: '子代理', en: 'sub-agent' },
+  'ri.toolAnchorTip': { zh: '查看产生这次工具调用的请求（第 {round} 轮）', en: 'Inspect the request that produced this tool call (round {round})' },
 
   // ══════════════════════════════════════
   //  Settings — Tabs

@@ -300,6 +300,71 @@ async function _riSelectRound(taskId, roundNum, el, turn) {
       payload.tools || undefined, false, undefined, opts);
 }
 
+/* ── Tool-row anchor (P6): the owner's core ask ──────────────────────────
+ * "I see a suspicious tool call in chatinner — which request produced it?"
+ * Every tool row carries `llmRound`; request snapshots carry a 1-based
+ * `roundNum`; so row.llmRound + 1 IS the producing request. These two
+ * helpers are what tool_rounds.js::_renderToolRequestAnchor calls.
+ *
+ * _riTaskIdForRound: a tool round does not carry _taskId itself — it lives on
+ * the OWNING assistant message. Resolve by scanning the active conversation
+ * tail-up for the message whose toolRounds contains this round object (identity
+ * first, then roundNum), because tail-up finds the live turn first. Returns ''
+ * when unresolvable, and the caller then renders NO anchor (an anchor that
+ * cannot resolve is worse than none). */
+function _riTaskIdForRound(round) {
+  try {
+    const conv = (typeof conversations !== 'undefined') &&
+      conversations.find((c) => c && c.id ===
+        (typeof activeConvId !== 'undefined' ? activeConvId : null));
+    const msgs = (conv && Array.isArray(conv.messages)) ? conv.messages : [];
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (!m || m.role !== 'assistant' || !Array.isArray(m.toolRounds)) continue;
+      if (m.toolRounds.indexOf(round) !== -1) return m._taskId || '';
+      if (round && round.roundNum != null &&
+          m.toolRounds.some((r) => r && r.roundNum === round.roundNum &&
+                                   r.llmRound === round.llmRound)) {
+        return m._taskId || '';
+      }
+    }
+  } catch (e) {
+    console.warn('[ri] taskId-for-round resolve failed:', e);
+  }
+  return '';
+}
+
+/* Open the inspector directly at the request that PRODUCED a tool call.
+ * Same positioning/flash treatment as the bubble anchor, but addressed by
+ * (taskId, roundNum) instead of a message id — so it works for any row in
+ * any turn, including endpoint phases and VU sub-tasks. */
+async function openRequestInspectorForToolRound(taskId, roundNum) {
+  if (!taskId || roundNum == null) return;
+  if (!_riOpen) openRequestInspector();
+  await _riSelectTask(taskId);
+  const fold = _riSel.fold;
+  const reqs = (fold && Array.isArray(fold.requests)) ? fold.requests : [];
+  /* Prefer an exact roundNum match; endpoint tasks re-number per phase, so
+   * a worker-phase row wins over planner/critic when several share a number. */
+  const exact = reqs.filter((r) => String(r.roundNum) === String(roundNum));
+  const pick = exact.find((r) => r.turn === 'working') || exact[0] ||
+    reqs[reqs.length - 1];
+  if (!pick) return;
+  const targetTurn = pick.turn || '';
+  const el = document.querySelector(
+    '#riRoundList .ri-round[data-round="' + String(pick.roundNum) +
+    '"][data-turn="' + targetTurn + '"]') ||
+    document.querySelector(
+      '#riRoundList .ri-round[data-round="' + String(pick.roundNum) + '"]');
+  if (el) {
+    if (typeof el.scrollIntoView === 'function')
+      el.scrollIntoView({ block: 'nearest' });
+    el.classList.add('ri-flash');
+    setTimeout(() => el.classList.remove('ri-flash'), 1600);
+  }
+  await _riSelectRound(taskId, pick.roundNum, el, targetTurn);
+}
+
 /* ── Bubble anchor (P3): jump from an assistant bubble to the exact
  * request(s) that produced it. msgId → msg._taskId → task fold → round
  * (the bubble's last apiRound.round, 1-based == snapshot roundNum; falls

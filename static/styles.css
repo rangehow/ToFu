@@ -10159,10 +10159,18 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 [data-theme="tofu"] .sidebar-brand-o,
 [data-theme="tofu"] .sidebar-brand-f,
 [data-theme="tofu"] .sidebar-brand-u{
-  background-image:linear-gradient(150deg,#A96536 5%,var(--accent) 55%,#DCA464);
-  -webkit-background-clip:text;background-clip:text;
-  -webkit-text-fill-color:transparent;color:transparent;
   display:inline-block;transform-origin:50% 85%
+}
+[data-theme="tofu"] .sidebar-brand-t,
+[data-theme="tofu"] .sidebar-brand-f,
+[data-theme="tofu"] .sidebar-brand-u{
+  background:none;
+  color:var(--text-primary);-webkit-text-fill-color:currentColor
+}
+[data-theme="tofu"] .sidebar-brand-o{
+  background-image:linear-gradient(150deg,#CE8350 10%,#B05E30 90%);
+  -webkit-background-clip:text;background-clip:text;
+  -webkit-text-fill-color:transparent;color:transparent
 }
 [data-theme="tofu"] .sidebar-header h1:hover .sidebar-brand-t{animation:tofuWobble .6s cubic-bezier(.34,1.56,.64,1)}
 [data-theme="tofu"] .sidebar-header h1:hover .sidebar-brand-o{animation:tofuWobble .6s cubic-bezier(.34,1.56,.64,1);animation-delay:.06s}
@@ -10699,7 +10707,7 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   color:var(--text-primary);background:none;
   -webkit-text-fill-color:var(--text-primary);
   font-family:var(--serif-display);
-  font-size:38px;font-weight:600;letter-spacing:-0.01em;text-transform:none
+  font-size:42px;font-weight:600;letter-spacing:-0.015em;text-transform:none
 }
 [data-theme="tofu"] .welcome h2 small{
   -webkit-text-fill-color:#9C9178;
@@ -10732,21 +10740,31 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   border-color:var(--accent-subtle)
 }
 
-/* ── TOFU brand wordmark — 暖棕衬线主标:字母像豆腐块微微歪着,悬停时挨个弹抖;「豆腐」盖成一枚红印章 ── */
+/* ── TOFU brand wordmark — 编辑排版主标:暖墨衬线字身(纸面 ~12:1 对比),陶土渐变只落在
+   「o」上呼应吉祥物豆腐块;「豆腐」是一枚微歪的朱砂印章;悬停时字母挨个弹抖。
+   色彩纪律:全标只有 clay 与朱砂两个暖色口音,字身用 --text-primary 保纸面对比度 ── */
 [data-theme="tofu"] .tofu-brand{
   font-family:var(--serif-display);
-  /* font-size 由上方 [data-theme="tofu"] .welcome h2(38px,特异性 0,2,1)决定,此处不再重复声明 */
-  font-weight:600;letter-spacing:-0.01em;text-transform:none;
+  /* font-size 由上方 [data-theme="tofu"] .welcome h2(42px,特异性 0,2,1)决定,此处不再重复声明 */
+  font-weight:600;letter-spacing:-0.015em;text-transform:none;
   display:inline-flex;align-items:baseline;margin-bottom:10px;cursor:default
 }
 [data-theme="tofu"] .tofu-brand .tofu-brand-t,
 [data-theme="tofu"] .tofu-brand .tofu-brand-o1,
 [data-theme="tofu"] .tofu-brand .tofu-brand-f,
 [data-theme="tofu"] .tofu-brand .tofu-brand-u{
-  background:linear-gradient(165deg,#A96536 8%,var(--accent) 52%,#DCA464 96%);
-  -webkit-background-clip:text;background-clip:text;
-  -webkit-text-fill-color:transparent;color:transparent;
   display:inline-block;transform:rotate(var(--brand-tilt,0deg));transform-origin:50% 88%
+}
+[data-theme="tofu"] .tofu-brand .tofu-brand-t,
+[data-theme="tofu"] .tofu-brand .tofu-brand-f,
+[data-theme="tofu"] .tofu-brand .tofu-brand-u{
+  background:none;
+  color:var(--text-primary);-webkit-text-fill-color:currentColor
+}
+[data-theme="tofu"] .tofu-brand .tofu-brand-o1{
+  background:linear-gradient(165deg,#CE8350 10%,#B05E30 90%);
+  -webkit-background-clip:text;background-clip:text;
+  -webkit-text-fill-color:transparent;color:transparent
 }
 [data-theme="tofu"] .tofu-brand .tofu-brand-t{--brand-tilt:-1.6deg}
 [data-theme="tofu"] .tofu-brand .tofu-brand-o1{--brand-tilt:1deg}
@@ -10758,17 +10776,21 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 [data-theme="tofu"] .tofu-brand:hover .tofu-brand-u{animation:tofuWobble .72s cubic-bezier(.34,1.56,.64,1);animation-delay:.21s}
 [data-theme="tofu"] .welcome h2.tofu-brand small{
   font-family:var(--serif-display);font-size:12px;font-weight:600;
-  color:#FBF7EE;background:#B05B48;
+  /* 印文必须显式声明 fill —— 低优先级的 .welcome h2 small(0,2,2)把
+     -webkit-text-fill-color 设成 #9C9178 且该属性可继承,不显式压掉它,
+     印文就会渲成灰米色,在朱砂底上糊成一团 */
+  color:#FBF7EE;-webkit-text-fill-color:#FBF7EE;
+  background:linear-gradient(160deg,#C0452B 15%,#A8381F 90%);
   letter-spacing:.18em;line-height:1;
   padding:5px 7px 5px 9px;margin-left:12px;
   border-radius:5px;vertical-align:middle;opacity:1;
   transform:rotate(-4deg) translateY(-3px);
-  box-shadow:inset 0 0 0 1px rgba(251,247,238,.45),0 1px 3px rgba(176,91,72,.35);
+  box-shadow:inset 0 0 0 1px rgba(251,247,238,.45),0 1px 3px rgba(168,56,31,.35);
   transition:transform .25s cubic-bezier(.34,1.56,.64,1)
 }
 [data-theme="tofu"] .welcome h2.tofu-brand:hover small{transform:rotate(0deg) translateY(-3px)}
 
-/* ── Mobile breakpoints: tofu 主标恢复全局移动意图 — 38px 是桌面值(上方 0,2,1
+/* ── Mobile breakpoints: tofu 主标恢复全局移动意图 — 42px 是桌面值(上方 0,2,1
    规则),全局 .welcome h2 移动规则(0,1,1) specificity 不够被压死;以下三条与
    全局断点一一对应并特异化到 (0,3,1)。新数字不发明:20/18px 即全局断点原值 ── */
 @media(max-width:768px){

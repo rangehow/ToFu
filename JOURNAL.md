@@ -1,6 +1,14 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续33) — 欢迎页 Tofu 主标重设计:墨字 + 陶土 o + 朱砂印章,顺手根修一个真实的 CSS fill 缺陷(commit 见下,2 文件;headless Chromium 前后对照截图实证)
+- **起点是 owner 截图圈出主标**:「颜色不太好看、对比度有点低」。
+- **先找到缺陷再谈审美 —— 「豆腐」印章的字色其实一直是错的:** 高优先级规则 `[data-theme="tofu"] .welcome h2.tofu-brand small`(0,3,2)只声明了 `color:#FBF7EE`,而低优先级的 `.welcome h2 small`(0,2,2)声明的 `-webkit-text-fill-color:#9C9178` 因该属性可继承、且高优先级规则未覆盖它,**实际生效** —— 印文渲成灰米色(#9C9178)糊在灰玫瑰底(#B05B48)上。这是「对比度低」观感的一半成因,截图里印文确实苍白。CSS 级联按**单属性**比拼,不是按规则整体 —— 又一处「无失败信号」。
+- **另一半成因:** 字母渐变 `#A96536 → #C1794B → #DCA464` 的亮端 #DCA464 在米色纸面(#FAF7F0)上对比仅 ~2:1,字母右缘融进背景。
+- **新设计(编辑排版向,与主题宣言「一个自信的 clay 口音」对齐):** 字身改暖墨 `var(--text-primary)`(纸面 ~12:1),陶土渐变 `#CE8350→#B05E30` 只落在「o」上呼应吉祥物豆腐块;印章改朱砂渐变 `#C0452B→#A8381F` 并**显式声明** `-webkit-text-fill-color:#FBF7EE`(附注释说明为何必须显式);桌面 38→42px。侧栏 wordmark 同步同一语言,防两处漂移。悬停弹抖/字母倾角/印章 -4° 全部保留。
+- **验证(本机零浏览器,装了一条最小链):** `playwright install chromium-headless-shell` + `~/.fonts` 装 Newsreader(真实品牌字体)与 Noto Serif CJK(顺带给 motion-video 字幕烧录补了 CJK 字,正是此前 burn_in 静默 no-op 的缺件) → headless 截图前后对照:旧版棕渐变+印文糊 vs 新版墨字清晰、印文饱满。**两个环境坑(给后人):** ①headless-shell 缺 libatk,需 `LD_LIBRARY_PATH=sys.prefix/lib`(conda 配方,lib/motion_video/_env.py 同款);②字体不可见时必须同时设 `FONTCONFIG_FILE`,两次失败截图逐字节相同就是因为第二次漏了它。
+- **生效方式:** 纯 CSS,styles.css 走内容哈希 —— 重启服务器 + 浏览器硬刷新后可见。
+
 ### 2026-07-26(续32) — RWA P4b-2b 落地:远程 run_command 流帧 UI(前端零改动)+ e2e/演练/README(commit 见下,9 文件;新套件 6 测含真桥 e2e,十二环回归,collect **9958** 0 err)
 - **最省一刀的设计胜利:** 服务器 run_command 的实时输出通道(`_make_run_command_progress_cb` → `tool_progress` SSE → tool_rounds 终端块)本就存在且按 roundNum+toolCallId 关联——远程路径只起一个 watcher(0.25s 轮询桥内流帧,按偏移去重)把增量喂进**同一个** progress cb,终端块实时渲染**零前端代码**。`send_desktop_command` 接受预置 `cmd_id`;终态 meta 按终端块契约成型;`GET /api/v1/desktop/streams/<id>` 调试端点。
 - **真 e2e(无 mock):** handler 线程 ↔ 假 agent poll 线程经 command_queue/streams 真互通——命令在飞(sleep 1.0 未醒)时 `tool_progress` 事件已含前半输出。抓获真时序 bug:假 agent 初版把流帧攒到退出才批量回传(桥内 mid-flight 无数据),改 on_chunk 即时上行仿真真 agent outbox。

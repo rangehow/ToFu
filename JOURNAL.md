@@ -1,6 +1,15 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续18) — 身份闸门 fail-open 从「只有浏览器控制台知道」变成服务端可见(owner 指路搭车现成通道,commit `2ffcfa92`,4 文件 +343/-6;新套件 6/6 含 NEUTER,SSOT+api-isolation+sibling pending-busy 环 **100/100**,collect **9451** 0 err)
+- **owner 的观察(一句话点中要害):** 续16 给 fail-open 加了绊线,但它落在 `console.warn` / `debugLog` —— **两者都是浏览器本地**。运维侧永远不知道某个页面正在无作用域接收所有帧。而这个子系统里**别的不变量都会回报**:P5 sync-drift 探针每 60s POST 一次 digest,服务端 WARN 记录分歧。**唯一安全相关的降级,恰恰是唯一不走这条路的信号。**
+- **owner 明确不要新通道:** 不加端点、不改探针节律、不让 flag 影响任何 accept/reject —— 就是**搭现成的车**。照做。
+- **接线(极小):** client `identityGateDegraded()` 读现成闩 → `reportSyncDigest()` 挂 `{identityGateDegraded:true}` → `api.js` 把 extra 并进 body → 服务端 `sync_digest` WARN 记录,带 key_id / user_id / digest 数,**`[SyncDrift]` 前缀**让它和同行的分歧告警一起 grep。
+- **必须避开的那个坑(owner 提前点出,实测确实存在):** `reportSyncDigest` 原本 `if (!digests.length) return null`。而**bundle 顺序坏掉的页面极可能一条 authoritative 标记都没有**——因为 reducer 没加载,压根没人写过 `_authoritativeActiveTaskIds`。这是这个 bug **最可能的形状**。所以旧的空 digest 短路会**恰好在这个信号唯一该出现的页面上把它吞掉**。两处同步改:①client 发送条件改 `digests.length || degraded`;②**服务端在校验 `digests` 之前先读 flag** —— 空列表不能吞掉唯一要紧的信号。
+- **纯遥测(已钉死):** flag 不参与任何 accept/reject(设置它的时候 fail-open 早已决定),也不改探针的分歧计算 —— 有一测**同一 digest 带/不带 flag 各 POST 一次,断言 `checked` 与 `divergences` 完全相同**。
+- **测试 6:** 12 探针 jsdom 驱动**真实 shipped `reportSyncDigest`**(健康不带 flag / 空闲页保持静默 / 降级+有状态两者都带 / **降级+空 digest 仍上报**——关键面);**NEUTER 复原空 digest 短路 → 关键面翻红**;服务端三面(带 flag 记录 / 空 digest body 也记录 / **不带 flag 保持静默**——健康时也报的信号就是噪声,会被无视);flag 对分歧判定惰性。
+- **共享 HEAD 纪律:** 提交前逐符号核对 reducer 未提交改动只含我的 3 个符号(sibling 的 pending-busy 簇已自行提交),精确 4 文件;顺带跑了 sibling 的 `test_frontend_pending_busy_state` 与 `test_frontend_api_isolation` 棘轮(改了 `api.js` 必须过)—— 全绿。
+
 ### 2026-07-26(续17) — RWA P3 落地:工具投影 + 执行路由 + desktop 批准门洞闭合(2 commit:P3 见下 9 文件 / 潜伏 bug `c1685520` 2 文件;新套件 19/19 含 NEUTER,九环 **251/251**,registry 环 22/22,collect **9451** 0 err)
 - **拍板 3A 全链:** ①绑定契约单一事实源 `lib/desktop/remote.py`(总闸 `TOFU_REMOTE_WORKTREE` + `cfg['project_remote']`,投影与路由共用);②投影 `with_remote_hint`——名称+参数 schema 逐字节不变,仅描述追加本地执行提示,OFF→ON 一次性 latch-clear(第三个 sticky latch,镜像 project_ready);③路由 `_handle_project_tool` 在 content_ref 解析后分流,七命令映射,远程 run_command 桥超时=命令超时+30s。
 - **约束③第三条(批准门洞):** `ToolSpec('desktop')` 补 provides(10 个 LLM 可见名,move_file 刻意除外)+ write_tools(5 个)——desktop 写/执行工具从此进串行写分区 + Manual 批准门;此前既进并行池又绕批准门,是 HEAD 上的活洞。

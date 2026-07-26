@@ -10152,9 +10152,9 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   [data-theme="tofu"] .tofu-brand:hover>span{animation:none}
 }
 
-/* ── Sidebar wordmark — editorial serif, warm clay gradient, jiggle on hover ── */
-[data-theme="tofu"] .sidebar-header h1{font-family:var(--serif-display);font-size:18px;font-weight:700;letter-spacing:.01em}
-[data-theme="tofu"] .sidebar-brand{letter-spacing:.02em}
+/* ── Sidebar wordmark — 粗几何无衬线;「o」是一块微歪的小豆腐,与吉祥物呼应;悬停挨个弹抖 ── */
+[data-theme="tofu"] .sidebar-header h1{font-family:var(--sans-body);font-size:18px;font-weight:800;letter-spacing:-0.015em}
+[data-theme="tofu"] .sidebar-brand{letter-spacing:-0.01em}
 [data-theme="tofu"] .sidebar-brand-t,
 [data-theme="tofu"] .sidebar-brand-o,
 [data-theme="tofu"] .sidebar-brand-f,
@@ -10167,10 +10167,26 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   background:none;
   color:var(--text-primary);-webkit-text-fill-color:currentColor
 }
+/* 「o」字形留在 DOM(可选中/可复制),视觉由 ::after 的豆腐块接管 */
 [data-theme="tofu"] .sidebar-brand-o{
-  background-image:linear-gradient(150deg,#CE8350 10%,#B05E30 90%);
-  -webkit-background-clip:text;background-clip:text;
-  -webkit-text-fill-color:transparent;color:transparent
+  position:relative;background:none;
+  color:transparent;-webkit-text-fill-color:transparent
+}
+[data-theme="tofu"] .sidebar-brand-o::after{
+  content:"";position:absolute;left:50%;top:50%;
+  width:.58em;height:.58em;
+  transform:translate(-50%,-58%) rotate(-7deg);
+  border-radius:28%;
+  background:linear-gradient(148deg,#F9EDD6 10%,#EED3A5 52%,#E0AE6C 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(146,104,52,.32),
+    inset 1px 1px 2px rgba(255,252,244,.75),
+    inset -1px -2px 3px rgba(178,124,62,.38),
+    0 1px 2px rgba(92,72,44,.22);
+  transition:transform .3s cubic-bezier(.34,1.56,.64,1)
+}
+[data-theme="tofu"] .sidebar-header h1:hover .sidebar-brand-o::after{
+  transform:translate(-50%,-58%) rotate(9deg) scale(1.08)
 }
 [data-theme="tofu"] .sidebar-header h1:hover .sidebar-brand-t{animation:tofuWobble .6s cubic-bezier(.34,1.56,.64,1)}
 [data-theme="tofu"] .sidebar-header h1:hover .sidebar-brand-o{animation:tofuWobble .6s cubic-bezier(.34,1.56,.64,1);animation-delay:.06s}
@@ -10706,8 +10722,8 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 [data-theme="tofu"] .welcome h2{
   color:var(--text-primary);background:none;
   -webkit-text-fill-color:var(--text-primary);
-  font-family:var(--serif-display);
-  font-size:42px;font-weight:600;letter-spacing:-0.015em;text-transform:none
+  font-family:var(--sans-body);
+  font-size:42px;font-weight:800;letter-spacing:-0.03em;text-transform:none
 }
 [data-theme="tofu"] .welcome h2 small{
   -webkit-text-fill-color:#9C9178;
@@ -10740,13 +10756,14 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   border-color:var(--accent-subtle)
 }
 
-/* ── TOFU brand wordmark — 编辑排版主标:暖墨衬线字身(纸面 ~12:1 对比),陶土渐变只落在
-   「o」上呼应吉祥物豆腐块;「豆腐」是一枚微歪的朱砂印章;悬停时字母挨个弹抖。
-   色彩纪律:全标只有 clay 与朱砂两个暖色口音,字身用 --text-primary 保纸面对比度 ── */
+/* ── TOFU brand wordmark — 粗几何无衬线字身(--sans-body 800),与圆胖吉祥物同族;
+   「o」字形留在 DOM 但视觉由一块奶油→琥珀渐变、微歪 -7° 的小豆腐块接管,全标只有
+   这一个暖色口音;悬停字母挨个弹抖、豆腐块再转一下。色彩纪律:字身 --text-primary
+   保纸面对比度,暖色只落在豆腐块上 ── */
 [data-theme="tofu"] .tofu-brand{
-  font-family:var(--serif-display);
+  font-family:var(--sans-body);
   /* font-size 由上方 [data-theme="tofu"] .welcome h2(42px,特异性 0,2,1)决定,此处不再重复声明 */
-  font-weight:600;letter-spacing:-0.015em;text-transform:none;
+  font-weight:800;letter-spacing:-0.03em;text-transform:none;
   display:inline-flex;align-items:baseline;margin-bottom:10px;cursor:default
 }
 [data-theme="tofu"] .tofu-brand .tofu-brand-t,
@@ -10762,33 +10779,40 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   color:var(--text-primary);-webkit-text-fill-color:currentColor
 }
 [data-theme="tofu"] .tofu-brand .tofu-brand-o1{
-  background:linear-gradient(165deg,#CE8350 10%,#B05E30 90%);
-  -webkit-background-clip:text;background-clip:text;
-  -webkit-text-fill-color:transparent;color:transparent
+  position:relative;background:none;
+  color:transparent;-webkit-text-fill-color:transparent
 }
-[data-theme="tofu"] .tofu-brand .tofu-brand-t{--brand-tilt:-1.6deg}
-[data-theme="tofu"] .tofu-brand .tofu-brand-o1{--brand-tilt:1deg}
-[data-theme="tofu"] .tofu-brand .tofu-brand-f{--brand-tilt:-.6deg}
-[data-theme="tofu"] .tofu-brand .tofu-brand-u{--brand-tilt:1.8deg}
+[data-theme="tofu"] .tofu-brand .tofu-brand-o1::after{
+  content:"";position:absolute;left:50%;top:50%;
+  width:.56em;height:.56em;
+  transform:translate(-50%,-58%) rotate(-7deg);
+  border-radius:28%;
+  background:linear-gradient(148deg,#F9EDD6 10%,#EED3A5 52%,#E0AE6C 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(146,104,52,.32),
+    inset 2px 2px 3px rgba(255,252,244,.75),
+    inset -2px -3px 5px rgba(178,124,62,.38),
+    0 1px 2px rgba(92,72,44,.22);
+  transition:transform .3s cubic-bezier(.34,1.56,.64,1)
+}
+[data-theme="tofu"] .tofu-brand:hover .tofu-brand-o1::after{
+  transform:translate(-50%,-58%) rotate(9deg) scale(1.07)
+}
 [data-theme="tofu"] .tofu-brand:hover .tofu-brand-t{animation:tofuWobble .72s cubic-bezier(.34,1.56,.64,1)}
 [data-theme="tofu"] .tofu-brand:hover .tofu-brand-o1{animation:tofuWobble .72s cubic-bezier(.34,1.56,.64,1);animation-delay:.07s}
 [data-theme="tofu"] .tofu-brand:hover .tofu-brand-f{animation:tofuWobble .72s cubic-bezier(.34,1.56,.64,1);animation-delay:.14s}
 [data-theme="tofu"] .tofu-brand:hover .tofu-brand-u{animation:tofuWobble .72s cubic-bezier(.34,1.56,.64,1);animation-delay:.21s}
 [data-theme="tofu"] .welcome h2.tofu-brand small{
-  font-family:var(--serif-display);font-size:12px;font-weight:600;
-  /* 印文必须显式声明 fill —— 低优先级的 .welcome h2 small(0,2,2)把
-     -webkit-text-fill-color 设成 #9C9178 且该属性可继承,不显式压掉它,
-     印文就会渲成灰米色,在朱砂底上糊成一团 */
-  color:#FBF7EE;-webkit-text-fill-color:#FBF7EE;
-  background:linear-gradient(160deg,#C0452B 15%,#A8381F 90%);
-  letter-spacing:.18em;line-height:1;
-  padding:5px 7px 5px 9px;margin-left:12px;
-  border-radius:5px;vertical-align:middle;opacity:1;
-  transform:rotate(-4deg) translateY(-3px);
-  box-shadow:inset 0 0 0 1px rgba(251,247,238,.45),0 1px 3px rgba(168,56,31,.35);
-  transition:transform .25s cubic-bezier(.34,1.56,.64,1)
+  font-family:var(--sans-body);font-size:12px;font-weight:600;
+  /* 必须显式声明 fill —— 低优先级的 .welcome h2 small(0,2,2)把
+     -webkit-text-fill-color 设成 #9C9178 且该属性可继承,不显式声明会被它穿透 */
+  color:var(--text-tertiary);-webkit-text-fill-color:var(--text-tertiary);
+  background:none;box-shadow:none;
+  letter-spacing:.34em;line-height:1;
+  padding:0;margin-left:14px;
+  border-radius:0;vertical-align:middle;opacity:.9;
+  transform:translateY(-1px)
 }
-[data-theme="tofu"] .welcome h2.tofu-brand:hover small{transform:rotate(0deg) translateY(-3px)}
 
 /* ── Mobile breakpoints: tofu 主标恢复全局移动意图 — 42px 是桌面值(上方 0,2,1
    规则),全局 .welcome h2 移动规则(0,1,1) specificity 不够被压死;以下三条与

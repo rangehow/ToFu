@@ -51,6 +51,7 @@ _TOD_HARNESS = r"""
 'use strict';
 const W = 900, H = 48;
 const HOURS = __HOURS__;
+const DECOR = "__DECOR__";
 
 function mkCtx(rec){
   let path = null, fill = '';
@@ -93,7 +94,7 @@ global.IntersectionObserver=global.window.IntersectionObserver;
 function mkEl(){return{_attrs:{},className:'',style:{},width:0,height:0,setAttribute(k,v){this._attrs[k]=v;},
  getAttribute(k){return this._attrs[k];},appendChild(){},insertBefore(){},querySelector(){return null;},firstChild:null,
  getBoundingClientRect(){return{left:0,right:W,top:0,bottom:H,width:W,height:H};}};}
-const bar=mkEl(); bar._attrs['data-decor']='meadow';
+const bar=mkEl(); bar._attrs['data-decor']=DECOR;
 let canvasN=0;
 global.document={readyState:'complete',hidden:false,
  documentElement:{getAttribute(k){return k==='data-theme'?'tofu':null;}},addEventListener(){},
@@ -134,9 +135,10 @@ process.exit(0);
 """
 
 
-def _run_tod(hours, src=None):
+def _run_tod(hours, src=None, decor="meadow"):
     src = src if src is not None else SCENE_JS.read_text()
     script = (_TOD_HARNESS.replace("__SRC__", src)
+              .replace("__DECOR__", decor)
               .replace("__HOURS__", json.dumps(hours)))
     out = subprocess.run(["node", "-e", script], capture_output=True, text=True,
                          cwd=str(REPO), timeout=30)
@@ -326,6 +328,75 @@ def test_night_is_darker_and_less_saturated_than_afternoon():
         f"deep night is not desaturated relative to afternoon "
         f"(chroma {_sat(night):.1f} vs {_sat(noon):.1f}) — colour vision fades at "
         f"night, and desaturation is what reads as darkness rather than a dimmer")
+
+
+def _hue_spread(hexs):
+    """Std-dev of the palette's hue angles (0..1). A scene with a real identity
+    has VARIED colour (meadow greens + poppy pink + buttercup yellow), so its
+    hue spread is wide; a scene crushed toward a single uniform wash has every
+    dab pulled to the same hue → spread → 0. This is the discriminating metric
+    for \"the three scenes look identical at 3am\": chroma can survive a
+    crush (the indigo wash is itself colourful), but hue variety cannot."""
+    import colorsys, statistics
+    hs = []
+    for h in hexs:
+        v = int(h[1:], 16)
+        r, g, b = ((v >> 16) & 255) / 255, ((v >> 8) & 255) / 255, (v & 255) / 255
+        hs.append(colorsys.rgb_to_hsv(r, g, b)[0])
+    return statistics.pstdev(hs) if len(hs) > 1 else 0.0
+
+
+def test_night_darkens_but_keeps_each_scenes_identity():
+    """OWNER follow-up (2026-07-26): the deep-night tint must DARKEN each scene,
+    not ERASE it. Two facts, measured on the real baked palettes:
+
+      * It IS night → every scene's LUMA must drop from its own afternoon value.
+        (A low-chroma scene like pool barely changes chroma when it darkens —
+        its night is carried by luma, so chroma alone must NOT be the gate.)
+      * Identity survives → a scene that HAS colour to lose must KEEP a healthy
+        fraction of its afternoon chroma at night. The "all three scenes look
+        identical at 3am" failure is meadow's greens crushed to grey; pin its
+        chroma retention so the tint's `sat` can never grey it out again.
+    """
+    for s in ("meadow", "pool", "sky"):
+        noon = _run_tod([14], decor=s)["palettes"]["14"]
+        night = _run_tod([2], decor=s)["palettes"]["2"]
+        assert _luma(night) < _luma(noon) - 12, (
+            f"{s}: night is not meaningfully darker than afternoon "
+            f"(luma {_luma(night):.1f} vs {_luma(noon):.1f}) — the tint must "
+            f"darken the scene, not just shift its hue")
+    # Identity survives → the scene must keep a healthy share of its palette's
+    # HUE VARIETY at night. Calibrated on the real bake: the current tint holds
+    # ~0.74; a crush (sat 0 / high amt) collapses it to <0.1. Pin the floor so
+    # the tint's `sat`/`amt` can never pull every dab to one hue again.
+    for s in ("meadow", "pool", "sky"):
+        noon = _run_tod([14], decor=s)["palettes"]["14"]
+        night = _run_tod([2], decor=s)["palettes"]["2"]
+        hn, ht = _hue_spread(noon), _hue_spread(night)
+        assert hn > 0.05, f"{s} afternoon palette is unexpectedly flat (hue spread {hn:.3f})"
+        ratio = ht / hn
+        assert ratio > 0.3, (
+            f"{s}: night hue-variety ratio {ratio:.2f} (night {ht:.3f} / "
+            f"afternoon {hn:.3f}) — the scene's colours are collapsing to one "
+            f"hue, which is exactly the \"all scenes look identical at 3am\" "
+            f"failure. Keep the night tint from over-washing the palette.")
+
+
+def test_NEUTER_crushing_night_tint_is_caught():
+    """NEUTER: re-crush the deep-night tint (sat→0.30, amt→0.78) so all scenes
+    collapse toward the wash → the identity guard must fire."""
+    src = SCENE_JS.read_text()
+    neut = src.replace("deepNight:    { wash: '#26345B', amt: 0.50, sat: 0.62,",
+                       "deepNight:    { wash: '#26345B', amt: 0.92, sat: 0.00,  /* NEUTER */", 1)
+    assert neut != src, "neuter did not match the deepNight tint"
+    noon = _run_tod([14], src=neut, decor="meadow")["palettes"]["14"]
+    night = _run_tod([2], src=neut, decor="meadow")["palettes"]["2"]
+    ratio = _hue_spread(night) / _hue_spread(noon)
+    assert ratio <= 0.3, (
+        f"neutered (sat→0, amt→0.92) build still kept meadow's night hue "
+        f"variety alive (ratio {ratio:.2f} > 0.3) — the identity guard would "
+        f"not bite. The NEUTER must crush `sat` hard enough to collapse the "
+        f"palette to one hue.")
 
 
 def test_afternoon_is_the_untinted_reference():

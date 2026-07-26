@@ -303,6 +303,7 @@ function _recoverSwarmAgents(round, allRounds) {
 
 /* ★ Build the live swarm panel HTML (used during streaming) */
 function _buildSwarmPanelHTML(round, allRounds) {
+  _swEnsureTicker();
   /* Live path: `_swarmAgents` is populated from swarm_* SSE events.
      Reload path: that field is gone, so recover agents from the persisted
      handle JSON + sibling result rounds — otherwise the completed panel
@@ -961,7 +962,16 @@ if (typeof window !== 'undefined' && !window._swReconcileTicker) {
  * place: zero re-render, single timer, ~O(N agents) per tick. */
 function _tickSwarmTimers() {
   const els = document.querySelectorAll('.sw-panel [data-sw-start]');
-  if (!els.length) return;
+  if (!els.length) {
+    /* Idle-stop: no live timers for 60s → stop the 1Hz ticker. Re-armed by
+     *   _buildSwarmPanelHTML the next time a swarm panel renders. */
+    if (++_swTickerIdleTicks >= 60 && window._swTimerTicker) {
+      clearInterval(window._swTimerTicker);
+      window._swTimerTicker = null;
+    }
+    return;
+  }
+  _swTickerIdleTicks = 0;
   const now = Date.now();
   for (const el of els) {
     const start = +el.getAttribute('data-sw-start');
@@ -976,6 +986,13 @@ function _tickSwarmTimers() {
     if (el.textContent !== txt) el.textContent = txt;
   }
 }
-if (typeof window !== 'undefined' && !window._swTimerTicker) {
-  window._swTimerTicker = setInterval(_tickSwarmTimers, 1000);
+/* Lazy 1Hz ticker: armed by _buildSwarmPanelHTML when a swarm panel exists,
+ *   self-stops after 60 idle seconds. A booted page with no swarm activity
+ *   no longer spins 1Hz forever (pt_3cd6cd48). */
+let _swTickerIdleTicks = 0;
+function _swEnsureTicker() {
+  if (typeof window !== 'undefined' && !window._swTimerTicker) {
+    _swTickerIdleTicks = 0;
+    window._swTimerTicker = setInterval(_tickSwarmTimers, 1000);
+  }
 }

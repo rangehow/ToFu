@@ -31,6 +31,7 @@ const _push = (() => {
   let _everConnected = false;      // true once the FIRST onopen fired — distinguishes a genuine RECONNECT from the initial connect
   let _reconnectListeners = new Set();  // fn() called after a genuine reconnect (not the first connect)
   let _pendingSubscriptions = [];  // queued before connection established
+  let _pendingSends = [];          // control messages queued while disconnected (pt_3cd6cd48)
   // Connection must hold this long before we trust it as "healthy" and
   // reset the reconnect attempt counter. See onclose.
   const MIN_UPTIME_MS = 5000;
@@ -178,6 +179,11 @@ const _push = (() => {
         _ws.send(JSON.stringify(sub));
       }
       _pendingSubscriptions = [];
+      // Flush control messages queued while the socket was down.
+      for (const m of _pendingSends) {
+        _ws.send(JSON.stringify(m));
+      }
+      _pendingSends = [];
 
       // Re-subscribe all active handlers
       for (const [key] of _handlers) {
@@ -312,6 +318,16 @@ const _push = (() => {
   function send(msg) {
     if (_connected && _ws) {
       _ws.send(JSON.stringify(msg));
+    } else {
+      /* Queue instead of silently dropping: a control command (e.g. abort)
+       *   clicked inside a reconnect gap used to vanish with zero feedback —
+       *   the user saw "stop does nothing". Cap the queue; drop oldest. */
+      if (_pendingSends.length >= 50) {
+        _pendingSends.shift();
+        console.warn('[Push] send queue full — dropped oldest queued message');
+      }
+      _pendingSends.push(msg);
+      connect();   // ensure a reconnect is in flight so the queue drains
     }
   }
 

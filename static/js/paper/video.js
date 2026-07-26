@@ -100,6 +100,7 @@ async function _initVideoTab(force) {
   if (!host) return;
   _pvStopPolling();
   _pvideo.paperHash = (typeof _paperHash !== 'undefined') ? (_paperHash || '') : '';
+  var initHash = _pvideo.paperHash;
   if (!_pvideo.paperHash) {
     _pvideo.status = 'idle';
     host.innerHTML = '<div class="paper-report-empty"><p>' +
@@ -111,10 +112,13 @@ async function _initVideoTab(force) {
   _pvRender();
   try {
     var st = await Api.motion.status();
+    /* Paper switched mid-lookup — drop the stale continuation (pt_3cd6cd48). */
+    if (_pvideo.paperHash !== initHash) return;
     if (st && st.ok) {
       _pvideo.ttsAvailable = !!st.tts_available;
     }
     var look = await Api.paper.videoLookup({ paper_hash: _pvideo.paperHash });
+    if (_pvideo.paperHash !== initHash) return;
     if (look && look.ok && look.found) {
       _pvideo._doneTaskId = look.task_id;
       if (look.running) {
@@ -226,6 +230,9 @@ async function _pvPollOnce() {
   if (!tid) return;
   try {
     var resp = await Api.motion.poll(tid, _pvideo.cursor);
+    /* Abort raced this in-flight poll (see podcast.js): state was already
+     *   reset by the abort path — never flip status back (pt_3cd6cd48). */
+    if (_pvideo.regenTaskId ? (_pvideo.regenTaskId !== tid) : (_pvideo.taskId !== tid)) return;
     if (!resp || !resp.ok) { _pvPollFail(); return; }
     _pvideo.pollFails = 0;
     /* Only real events reset the liveness clock — see podcast.js for why an
@@ -298,6 +305,7 @@ async function _videoGenerate(force) {
   _pvideo.progress = { done: 0, total: 0, phase: '' };
   _pvResetRun();
   _pvRender();
+  var genHash = _pvideo.paperHash;
   try {
     var resp = await Api.paper.videoStart({
       paper_hash: _pvideo.paperHash,
@@ -305,6 +313,8 @@ async function _videoGenerate(force) {
       narration: _pvideo.narration, burn_in: _pvideo.burnIn,
       quality: _pvideo.quality, force: !!force,
     });
+    /* Paper switched mid-start — the OLD paper's task must not attach here (pt_3cd6cd48). */
+    if (_pvideo.paperHash !== genHash) return;
     if (resp && resp.report_required) {
       _pvideo.status = 'report_required';
       _pvRender();

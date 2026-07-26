@@ -421,27 +421,33 @@ async function deleteBranch(msgIdx, branchIdx) {
   //   anchor text stay intact on the server. On error we restore the
   //   in-memory branches array and force a re-render from server state.
   (async () => {
+    /* Shared rollback: server rejection AND network failure both restore the
+     *   splice and resync from the server — a network failure may or may not
+     *   have landed the delete, and only the server state is the truth
+     *   (pt_3cd6cd48: the old catch left local/server diverged). */
+    const _revertAndResync = async (why, extra) => {
+      console.warn('[branch.delete]', why, extra || '');
+      msg.branches = _prevBranches;
+      saveConversations(conv.id);
+      try {
+        const data = await Api.conversations.get(conv.id);
+        if (data && Array.isArray(data.messages)) {
+          conv.messages = data.messages;
+          saveConversations(conv.id);
+          if (activeConvId === conv.id) window.ConvView.replaceAll(conv.id);
+        }
+      } catch (e2) { console.warn('[branch.delete] reload failed', e2); }
+      if (typeof showToast === 'function') showToast('Branch delete failed — restored', 'error');
+    };
     try {
       const res = await Api.conversations.deleteBranch(conv.id, msgIdx, branchIdx, { msgId: msg._msgId });
       if (!res || !res.ok) {
         let body = null;
         try { body = res ? await res.json() : null; } catch (_e) { /* ignore */ }
-        console.warn('[branch.delete] server rejected branch delete', res && res.status, body);
-        // Revert the local splice and reload from server to resync.
-        msg.branches = _prevBranches;
-        saveConversations(conv.id);
-        try {
-          const data = await Api.conversations.get(conv.id);
-          if (data && Array.isArray(data.messages)) {
-            conv.messages = data.messages;
-            saveConversations(conv.id);
-            if (activeConvId === conv.id) window.ConvView.replaceAll(conv.id);
-          }
-        } catch (e2) { console.warn('[branch.delete] reload failed', e2); }
-        if (typeof showToast === 'function') showToast('Branch delete failed — restored', 'error');
+        await _revertAndResync('server rejected branch delete', [res && res.status, body]);
       }
     } catch (e) {
-      console.warn('[branch.delete] network error', e);
+      await _revertAndResync('network error', e && e.message);
     }
   })();
 

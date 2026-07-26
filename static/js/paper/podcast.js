@@ -51,6 +51,9 @@ var _PC_POLL_FAIL_LIMIT = 5;
 
 function _pcResetRun() {
   _podcast.pollFails = 0;
+  /* A sleep timer armed by a previous player must not pause the new run. */
+  if (_podcast.sleepTimerId) { clearTimeout(_podcast.sleepTimerId); _podcast.sleepTimerId = 0; }
+  _podcast.sleepDeadline = 0;
   _podcast.phases = [];
   _podcast.phaseIndex = 0;
   _podcast.currentPhase = '';
@@ -110,6 +113,11 @@ async function _initPodcastTab(force) {
   if (!host) return;
   _pcStopPolling();
   _podcast.paperHash = (typeof _paperHash !== 'undefined') ? (_paperHash || '') : '';
+  var initHash = _podcast.paperHash;
+  /* A sleep timer armed by a PREVIOUS player must not pause this paper's
+   *   new audio — clear it with the rest of the run state (pt_3cd6cd48). */
+  if (_podcast.sleepTimerId) { clearTimeout(_podcast.sleepTimerId); _podcast.sleepTimerId = 0; }
+  _podcast.sleepDeadline = 0;
   if (!_podcast.paperHash) {
     _podcast.status = 'idle';
     host.innerHTML = '<div class="paper-report-empty"><p>' +
@@ -122,6 +130,9 @@ async function _initPodcastTab(force) {
   try {
     // Feature status (TTS availability) + per-paper lookup ride together.
     var st = await Api.paper.podcastStatus();
+    /* Paper switched while the lookup was in flight — drop this stale
+     *   continuation instead of painting the OLD paper's task (pt_3cd6cd48). */
+    if (_podcast.paperHash !== initHash) return;
     if (st && st.ok) {
       _podcast.ttsAvailable = !!st.tts_available;
       _podcast.defaultVoice = st.default_voice || '';
@@ -130,6 +141,7 @@ async function _initPodcastTab(force) {
       paper_hash: _podcast.paperHash,
       mode: _podcast.mode, lang: _podcast.lang,
     });
+    if (_podcast.paperHash !== initHash) return;
     if (look && look.ok && look.found && look.running) {
       _podcast.taskId = look.task_id;
       _podcast.cursor = 0;
@@ -225,9 +237,13 @@ function _pcPollFail() {
 }
 
 async function _pcPollOnce() {
-  if (!_podcast.taskId) return;
+  var tid = _podcast.taskId;
+  if (!tid) return;
   try {
-    var resp = await Api.paper.podcastPoll(_podcast.taskId, _podcast.cursor);
+    var resp = await Api.paper.podcastPoll(tid, _podcast.cursor);
+    /* Abort raced this in-flight poll: the abort path already reset state —
+     *   do not resurrect status/progress or re-arm the poll (pt_3cd6cd48). */
+    if (_podcast.taskId !== tid) return;
     if (!resp || !resp.ok) { _pcPollFail(); return; }
     _podcast.pollFails = 0;
     /* Liveness is about the WORKER, not the HTTP round-trip: a successful poll
@@ -283,12 +299,15 @@ async function _podcastGenerate(force) {
   _podcast.progress = { done: 0, total: 0 };
   _pcResetRun();
   _pcRender();
+  var genHash = _podcast.paperHash;
   try {
     var resp = await Api.paper.podcastStart({
       paper_hash: _podcast.paperHash,
       mode: _podcast.mode, lang: _podcast.lang,
       voice: _podcast.voice, force: !!force,
     });
+    /* Paper switched mid-start — the OLD paper's task must not attach here (pt_3cd6cd48). */
+    if (_podcast.paperHash !== genHash) return;
     if (resp && resp.report_required) {
       _podcast.status = 'report_required';
       _pcRender();

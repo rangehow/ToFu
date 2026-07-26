@@ -72,6 +72,13 @@ async function _applyHistoryRewrite(convId, frameRev) {
   }
   if (!data) return;
 
+  /* Re-check the live-task guard AFTER the round-trip: a send that started
+   *   while the GET was in flight would be wiped by the wholesale replace
+   *   below (pt_3cd6cd48). The rewrite is re-offered on the next frame. */
+  if (conv.activeTaskId || (typeof activeStreams !== "undefined" && activeStreams.has(convId))) {
+    return;
+  }
+
   const serverMsgs = data.messages || [];
   const localLen = (conv.messages || []).length;
 

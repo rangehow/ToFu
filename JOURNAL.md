@@ -1,6 +1,24 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续34) — 一条回复被提交两次:同 `_taskId` 两条 assistant 行,收敛进共享 reconcile 谓词(epic `pt_97f32163837b42ac`,commit `c1e1ff84`,2 文件 +514;新套件 19/19 含 NEUTER,相邻两环 49/49 + 65/66(1 红 A/B 实证预存在),collect **9977** 0 err)
+- **全库实测(不是抽样):** 4163 个会话里 **87 个**携带 **138 条多余 assistant 行** —— 同一 `_taskId` 下两条(或更多)行,content 逐字节相同,只在身份(服务端 UUID vs 客户端 `tmp_` id)与「哪些字段活下来」上不同。旗舰样本 `ms0z3wedmvs5l9` msgs[17]/[20];最坏的 `mrx1eknh7k8t63` **同一条回复存了 8 遍**。
+- **危害不止「看到两遍」:** 副本经常**丢掉 thinking**(旗舰对里丢了 5075 字符推理);若它排在后面,就成了该轮的「最终态」来源。
+- **溯源靠 `tmp_` 前缀(这是决定性证据):** 服务端提交**永远造不出** `tmp_` id(它写 UUID 或采纳客户端 `_assistantMsgId`),所以多余行是**客户端孪生行经普通全量 PUT 落库**。现成的 `_rebaseUnackedTail`(`conv_persist_helpers.js`)**已经有**一条专治此症的 `_taskId` 去重分支 —— 但它**只在 409-CAS rescue-PUT 上跑**,普通全量 PUT 永远遇不到它。
+- **修法(与上午 carrier 守卫同一手法):** 判定下沉进 `reconcile_conversation_messages` —— **两条 conv 缝本来就都在调它**:`_save_conv_blocking` 用它扫入站 PUT(新孪生行再也落不了库),`get_conv` 用它自愈存量行(磁盘上那 138 条自然收敛)。**一个谓词同时关掉写缝、治好存量**,而不是在某个入口单独焊一个去重。
+- **安全边界:每条守卫都有活样本背书(盲目按 `_taskId` 去重会毁数据):**
+
+  | 守卫 | 活样本证据 |
+  |---|---|
+  | 不跨用户轮 | 121 个重复组里 **34 个跨用户轮** —— 那是两次独立问答,合并会让一轮用户提问没有回复 |
+  | 不碰特殊轮 | endpoint planner/worker **共用一个 task dict**;VU 根本不是回复 |
+  | 不碰缓存前缀内 | 删前缀内消息会移位后续全部字节、打爆提示缓存(与既有 ghost sweep 同规则) |
+  | 必须**无损包含** | 被删行的每个 payload/终态字段都要与保留行逐字节相同 |
+- **瞬态归一化是必需项而非美化:** `apiRounds[].usage._wire_routing` **只出现在其中一份**上,导致旗舰对的 **23 个 round 全部**比对不等 —— 朴素字节比对会在「用户报告的那个案例」上恰好不触发。
+- **刻意只做一半(诚实):** 生产 dry-run 收敛 **44 行 / 26 个会话**;**64 个重复组被明确留下** —— 它们的 toolRounds/thinking/segments **真的发散**(实测 78 处真冲突字段),删任何一边都会丢真内容。**诚实的部分覆盖胜过静默丢数据。** 保留行**向后搜索**,所以第一条(最丰富、通常是服务端提交的那条)永远胜出,该 pass 幂等。
+- **证据:** 19 测 failing-first(修前 6 红);NEUTER 咬(绕过谓词 → 重复行复现);**附带损害守卫是断言出来的、不是推断的** —— endpoint 共享 taskId / VU 行 / 无 taskId 行 / 前缀内行 / 携带未匹配终态事实的孪生 / 跨用户轮,全部原样保留;反向对照:**真实 usage 差异仍然阻止合并**;幂等 + 不干扰既有 ghost-tail pass 都已钉住;缝检查确认两条路径仍走共享 reconcile。
+- **两条留给后人的事实(本轮扫描顺带得到,可直接引用):** ①全库 514 条 endpoint 标记行里**只有 9 条带 `_taskId`,且 0 个 endpoint 组共享 taskId**;②VU 行**完全不带 `_taskId`**。所以当前 endpoint/VU 其实不在射程内 —— 但守卫仍然写死断言,因为将来的改动可能让它们带上。
+
 ### 2026-07-26(续33) — 欢迎页 Tofu 主标重设计:墨字 + 陶土 o + 朱砂印章,顺手根修一个真实的 CSS fill 缺陷(commit 见下,2 文件;headless Chromium 前后对照截图实证)
 - **起点是 owner 截图圈出主标**:「颜色不太好看、对比度有点低」。
 - **先找到缺陷再谈审美 —— 「豆腐」印章的字色其实一直是错的:** 高优先级规则 `[data-theme="tofu"] .welcome h2.tofu-brand small`(0,3,2)只声明了 `color:#FBF7EE`,而低优先级的 `.welcome h2 small`(0,2,2)声明的 `-webkit-text-fill-color:#9C9178` 因该属性可继承、且高优先级规则未覆盖它,**实际生效** —— 印文渲成灰米色(#9C9178)糊在灰玫瑰底(#B05B48)上。这是「对比度低」观感的一半成因,截图里印文确实苍白。CSS 级联按**单属性**比拼,不是按规则整体 —— 又一处「无失败信号」。

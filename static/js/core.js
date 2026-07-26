@@ -354,10 +354,48 @@ function scrollToBottom(force) {
 /* ── Scroll-to-bottom button ──────────────────────────────────────────
  * A simple, always-available fallback affordance: when the reader scrolls
  * up away from the latest message, a floating pill appears; clicking it jumps
- * to the bottom via the real-height force-scroll path. This does NOT fix the
- * underlying "chat jumps to the middle" bug — it just gives the user a
- * reliable one-click way back to the newest content. */
+ * to the bottom via the real-height force-scroll path. */
 function scrollChatToBottom() {
+  /* ★ Hidden-tail restore (bounded-window fix). When the reader scrolled up
+   * through history, `_loadOlderMessages` evicted the TAIL bubbles and
+   * `_lazyRenderedTo` caps the window BELOW the newest message. A bare
+   * `_forceScrollToBottom` then only reaches the bottom SENTINEL — the
+   * IntersectionObserver drip-feeds one 20-message batch at a time INTO the
+   * fold, and each insert strands the reader further above the real bottom
+   * (the reported "scroll-to-bottom keeps bouncing me back to the middle").
+   * Restore the tail FIRST, then scroll:
+   *   • few hidden: walk the existing downward loader — continuous DOM, no
+   *     repaint side effects (the same guarded pump scrollToTurn uses);
+   *   • many hidden: cheaper to repaint just the tail window via
+   *     ConvView.replaceAll. Pre-scroll to the old DOM's bottom first so
+   *     renderChat's reader-parked-up anchor heuristic (meant for
+   *     UNSOLICITED background repaints) does not override this EXPLICIT
+   *     jump-to-bottom command. */
+  const _stbConv = getActiveConv();
+  if (_stbConv && !activeStreams.has(_stbConv.id)
+      && typeof _loadNewerMessages === "function"
+      && _lazyConvId === _stbConv.id
+      && Number.isFinite(_lazyRenderedTo)
+      && _lazyRenderedTo < _stbConv.messages.length) {
+    const _hidden = _stbConv.messages.length - _lazyRenderedTo;
+    const _PUMP_MAX = 60;  // 3 batches — beyond this a tail repaint is cheaper
+    if (_hidden <= _PUMP_MAX) {
+      let _guard = Math.ceil(_hidden / 20) + 2;
+      while (_guard-- > 0 && Number.isFinite(_lazyRenderedTo)
+             && _lazyRenderedTo < _stbConv.messages.length) {
+        const _before = _lazyRenderedTo;
+        _loadingNewer = false;
+        _loadNewerMessages();
+        if (_lazyRenderedTo === _before) break;  // stalled — never spin
+      }
+    } else if (window.ConvView && typeof window.ConvView.replaceAll === "function") {
+      const _c = _getChatContainer();
+      if (_c) _c.scrollTop = _c.scrollHeight;  // pre-pin: see comment above
+      window.ConvView.replaceAll(_stbConv.id, { forceScroll: true });
+      _updateScrollToBottomBtn();
+      return;
+    }
+  }
   if (typeof _forceScrollToBottom === "function") {
     _forceScrollToBottom(null, true);
   } else {

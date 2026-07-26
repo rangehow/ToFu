@@ -2,6 +2,14 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
 ### 2026-07-26 — brand wordmark 字身改色:墨黑 → 深陶土 #A96536(owner「黑色也不好看」;commit `fc9b1083`,1 文件 +16/-3;6 候选 headless 对照截图实证)
+### 2026-07-26(续65) — P0 import 级联根修,epic `pt_2a8aed4dea5542d5` 收口(commit `1c72c42c`,2 文件 +~50;failing-first A/B 实证 **旧码 2 红 / 新码 3 绿**,schema 环 **107 过**,collect **10188** 0 err)——同批 6 张票里**唯一全真的 P0**,也是唯一一张我不用推翻的
+
+- **根因(schema agent 取证 + 我独立核实):** `init_db` 在 DDL 前 inline import `lib.paper.hash_backfill`,而这一下触发 `lib/paper/__init__.py` 的 eager barrel,把整条 LLM/swarm 链(12 跳)拽进数据库启动。于是 07-26 `_gateway.py` 一枚合并冲突标记 → init_db 抛 SyntaxError → 全部 DDL 中止 → 崩 2 次 → 旧进程对**没建过表**的库服务 22 分钟(700 条 no-such-table)。
+- **关键验证(动手前先做,不盲信票面):** init_db 的 lazy import 里,`orphan_heal`/`schema_registry`/`audit_log` 都只拉 `lib.log`,**唯独 `hash_backfill` 是进 LLM 链的唯一一条边**。所以「隔离它」就是在根上拆级联,不是补丁。
+- **修法 = 票面 ①,但只落 ①:** 把 backfill 包进自己的 try/except,失败记 ERROR 继续 DDL(它是幂等数据修复,下次启动会重跑;**数据修复 ≠ 建表**)。票面 ②③④ 刻意不落,理由写进了 commit:②是给别处也用的 barrel 做大手术(①之后 init_db 已不再碰它);③碰请求路径 503 且治的是「陈旧兄弟进程」另一种场景;④在 ①让 init_db 不再因 backfill 而死之后就无关紧要。**最完美的方案 = 用最小风险拆掉根因果边的那一刀,不是把 4 件都做了。**
+- **测试(failing-first + NEUTER 式 A/B):** 模拟「`from lib.paper.hash_backfill import …` 因链条里某处语法错而抛 SyntaxError」——`git stash` 暂存修复跑旧码 **2 红**(级联真实复现,init_db 中止、schema_meta 不存在),恢复修复后 **3 绿**;另设一条回归闸证明「健康时 backfill 仍被调用」,防止隔离做过头把修复变成禁用。
+- **给后人:** 这条和今天前 5 张票是镜像——那些是我凭表面(日志条数/catch 形状/栈帧)开的假票,这张是 schema agent 凭**完整因果链取证**开的真票。**差别就在「有没有先追到底再定性」。** 级联类 bug 的修法通用原则:**找到那条唯一跨边界的 import 边,在它和关键路径之间加隔离**,而不是去加固链条上的每一环。
+
 - 候选对比(同一预览页并排):#2E2822 墨黑 / #C1794B accent / **#A96536 深陶土(选中)** / #8A5A32 焦糖 / #5C4A38 暖褐墨 / #5E9E8C 豆青。排除逻辑:豆青冷色与暖纸面气质不符;焦糖偏浑;暖褐墨太接近黑=没解决;accent 会与链接/按钮撞色、显不出品牌。深陶土比墨黑暖一度、与吉祥物奶油-琥珀豆腐块同族,42px 与 18px 两个尺寸对比度都更足。欢迎页与侧栏字身同步改。
 - **过程守卫(共享工作树改写闸触发):** apply_diffs 一度被拒「file changed on disk」—— sibling 在飞改动了 styles.css 别处(行数 21184→21188)。重读目标两区域确认未被波及后再改,显式 pathspec 提交 + `git show --stat HEAD` 核实恰好 1 文件。
 

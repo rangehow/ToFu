@@ -2493,6 +2493,10 @@ var _i18n = {
   'stream.phase.chars': { zh: '{n} 字符', en: '{n} chars' },
   'stream.phase.waitingModel': { zh: '已发送给模型，等待开始回复…', en: 'Sent to the model, waiting for it to start replying…' },
   'stream.phase.retrying': { zh: '正在重试…', en: 'Retrying…' },
+  // Model-fallback EARLY in-bubble banner (see llm_fallback model_fallback
+  // SSE event + streaming_ui.js data-zone="fallback"). NOT a toast.
+  'stream.fallback.banner': { zh: '主模型请求失败，已自动切换', en: 'Primary model failed — auto-switched' },
+  'stream.fallback.bannerTip': { zh: '原模型 {from} 失败，已回退到 {to}\n原因：{reason}', en: 'Original model {from} failed, fell back to {to}\nReason: {reason}' },
   'stream.phase.waiting': { zh: '等待中…', en: 'Waiting…' },
   // Backend-emitted phase.detail localizations. Each corresponds to a
   // `detailKey` shipped alongside a legacy English `detail` fallback so
@@ -3524,11 +3528,73 @@ function t(key, params) {
 }
 
 /**
+ * Does the in-memory dictionary already carry `lang`? Checks entries until
+ * one is found (a single-language pack answers on the first entry; a dual
+ * dictionary — dev fallback / pre-split bundle — also answers immediately).
+ */
+function _i18nHasLang(lang) {
+  for (var k in _i18n) {
+    if (!_i18n.hasOwnProperty(k)) continue;
+    var e = _i18n[k];
+    if (e && typeof e === 'object') return e[lang] != null;
+  }
+  return false;
+}
+
+/* Merge a fetched pack's dictionary into _i18n. Entry shape is {key:{lang:…}}
+ * so merging is a per-entry union: the boot language's entries stay, the
+ * fetched language's entries join them. Idempotent by construction. */
+function _i18nMergeDict(packDict) {
+  for (var k in packDict) {
+    if (!packDict.hasOwnProperty(k)) continue;
+    var cur = _i18n[k];
+    if (cur && typeof cur === 'object' && typeof packDict[k] === 'object') {
+      for (var l in packDict[k]) { cur[l] = packDict[k][l]; }
+    } else {
+      _i18n[k] = packDict[k];
+    }
+  }
+}
+
+/* Fetch a language pack and merge its dictionary. Resolves true on success.
+ * The pack is a FULL per-language i18n.js: loading it re-executes module
+ * init (idempotent — same localStorage value, same cookie) and REASSIGNS the
+ * global _i18n to its single-language dict, so we save ours first and merge
+ * the pack's dict back over it. */
+function _i18nFetchPack(lang) {
+  return new Promise(function (resolve) {
+    var urls = (typeof window !== 'undefined') && window.__I18N_PACK_URLS__;
+    var url = urls && urls[lang];
+    if (!url) { resolve(false); return; }
+    var prevDict = _i18n;
+    var s = document.createElement('script');
+    s.src = url;
+    s.onload = function () {
+      var packDict = _i18n;
+      _i18n = prevDict;
+      _i18nMergeDict(packDict);
+      resolve(true);
+    };
+    s.onerror = function () { resolve(false); };
+    (document.head || document.documentElement).appendChild(s);
+  });
+}
+
+/**
  * Set the UI language and re-apply all translations.
+ * Async: when the target language is not in memory (single-language pack
+ * boot), its pack is fetched and merged first. On fetch failure the switch
+ * still proceeds — t() falls back per key to zh and the tripwire
+ * (_reportMissingTranslation) makes every miss observable. That is the
+ * designed degrade: visibly wrong-language where uncovered, never broken,
+ * never silent.
  * @param {'zh'|'en'} lang
  */
-function setLanguage(lang) {
+async function setLanguage(lang) {
   if (lang !== 'zh' && lang !== 'en') return;
+  if (!_i18nHasLang(lang)) {
+    await _i18nFetchPack(lang);
+  }
   _i18nLang = lang;
   localStorage.setItem('tofu_ui_lang', lang);
   /* Mirror immediately so the NEXT page load is served the matching bundle.
@@ -3576,7 +3642,10 @@ function _applyI18n() {
  * @param {'zh'|'en'} lang
  */
 function _onLanguageChange(lang) {
-  setLanguage(lang);
+  /* setLanguage is now async (may fetch the other language's pack). Everything
+   * below reads t() at REPAINT time, so it must run after the merge — chain
+   * it, or the conversation list / open chat would render one language behind. */
+  Promise.resolve(setLanguage(lang)).then(function () {
   _syncLangPicker(lang);
   // Re-render dynamic content that uses t()
   if (typeof renderConversationList === 'function') renderConversationList();
@@ -3689,6 +3758,7 @@ function _onLanguageChange(lang) {
   if (typeof _renderPresetsTab === 'function' && typeof _serverConfig !== 'undefined' && _serverConfig) {
     try { _renderPresetsTab(_serverConfig); } catch (e) { /* tab may not be initialised */ }
   }
+  });
 }
 
 /** Sync visual language picker cards to the given lang */

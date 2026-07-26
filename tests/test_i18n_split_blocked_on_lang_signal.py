@@ -87,21 +87,22 @@ def _read(p):
 
 
 @_unit
-def test_core_bundle_is_still_one_artifact_for_all_clients():
-    """The remaining half of the work: slice 2 has NOT landed yet.
+def test_bundle_excludes_i18n_only_when_packs_exist():
+    """The atomic-fact rule, now that slice 2 HAS landed.
 
-    Slice 1 established the signal only. Until build_bundle() emits per-language
-    artifacts, every client still receives the same dual-language bundle — which
-    is exactly why slice 1 cannot regress first paint. When this face fails,
-    slice 2 has shipped and the 7.6% should be re-measured with
-    tests/test_i18n_split_sizing.py.
+    The core bundle may exclude i18n.js ONLY when the pack set exists in the
+    same build — otherwise t() is undefined for every module. Assert the
+    bundler's source keeps that coupling: the conditional file list, and the
+    state that is set from the SAME pack_map in the SAME place.
     """
     src = _read(BUNDLER)
-    m = re.search(r"_assemble_bundle\(_BUNDLE_FILES,\s*'bundle-'", src)
-    assert m, (
-        'the core bundle assembly changed shape — if it now emits a variant '
-        'per language, slice 2 has landed: re-measure the saving and update '
-        'this docstring')
+    assert "if f != 'i18n.js'" in src and 'if pack_map else' in src, (
+        'the conditional core-file list is gone — the bundle can now exclude '
+        'i18n.js WITHOUT packs existing, which blanks t() app-wide')
+    assert '_bundle_includes_i18n = not pack_map' in src, (
+        '_bundle_includes_i18n no longer derives from the same pack_map — the '
+        'bundle and the pack set can drift apart (the split-without-pack '
+        'failure this epic exists to prevent)')
 
 
 @_unit

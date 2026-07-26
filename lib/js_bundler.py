@@ -357,7 +357,12 @@ JS_DIR = os.path.join(BASE_DIR, 'static', 'js')
 # with 'feature-' (e.g. feature-loader.js) is NOT matched by the stale-bundle
 # cleaner. Cf. the corruption-guard skill: a runtime-assembled artifact must
 # never delete its own source.
-_BUILT_BUNDLE_RE = re.compile(r'^(?:bundle|feature)-[0-9a-f]{8}\.js$')
+# Built artifacts: core/deferred bundles AND the single-language i18n packs
+# emitted by lib/i18n_packs.py (Epic-E sub-part 1 slice 2). Kept in lockstep
+# with tests/test_bundle_manifest_parity.py::_BUILT_BUNDLE_RE — the parity
+# test's disk-orphan edge treats anything NOT matching this as a source file.
+_BUILT_BUNDLE_RE = re.compile(
+    r'^(?:(?:bundle|feature)-[0-9a-f]{8}|i18n-(?:zh|en)-[0-9a-f]{8})\.js$')
 
 # ── Load order MUST match index.html (dependencies flow top → bottom) ──
 _BUNDLE_FILES = [
@@ -870,6 +875,11 @@ _DEFERRED_ENTRY_POINTS = (
 _bundle_filename = None    # e.g. 'bundle-a3f8b2c1.js'  (core)
 _feature_filename = None   # e.g. 'feature-b7c1d2e3.js' (deferred; None if empty/failed)
 _bundle_mtime = 0          # max mtime of source files when bundle was built
+_pack_filenames = {}       # {'zh': 'i18n-zh-<hash>.js', 'en': ...} — EMPTY when the
+                           # current bundle CONTAINS i18n.js (dual fallback), set when
+                           # it excludes it. The two are ONE atomic fact: a bundle
+                           # without i18n.js must NEVER be served without its pack.
+_bundle_includes_i18n = True
 
 
 def _source_max_mtime():
@@ -901,17 +911,20 @@ def _source_max_mtime():
     return max_mt
 
 
-def _clean_old_bundles(keep_core, keep_feature):
-    """Remove stale built bundles (keep the current pair).
+def _clean_old_bundles(keep_core, keep_feature, keep_packs=()):
+    """Remove stale built bundles (keep the current set).
 
     Matches ONLY the content-hashed output filenames — ``bundle-<hash>.js`` /
-    ``feature-<hash>.js`` where <hash> is 8 hex chars — so a SOURCE file like
+    ``feature-<hash>.js`` / ``i18n-<lang>-<hash>.js`` — so a SOURCE file like
     ``feature-loader.js`` (which also starts with ``feature-``) is never
     deleted. (Deleting feature-loader.js would silently break the lazy loader.)
+    ``keep_packs`` is the CURRENT i18n pack filenames; any other pack-shaped
+    artifact is stale.
     """
+    keep = {keep_core, keep_feature, *keep_packs}
     try:
         for f in os.listdir(JS_DIR):
-            if f in {keep_core, keep_feature}:
+            if f in keep:
                 continue
             if _BUILT_BUNDLE_RE.match(f):
                 try:
@@ -1159,20 +1172,52 @@ def build_bundle():
         ``_feature_filename`` (read via ``get_feature_bundle_filename``).
     """
     global _bundle_filename, _feature_filename, _bundle_mtime
+    global _pack_filenames, _bundle_includes_i18n
 
     t0 = time.time()
 
     with _build_lock():
-        core_name, core_size = _assemble_bundle(_BUNDLE_FILES, 'bundle-', critical=True)
+        # i18n single-language packs (Epic-E sub-part 1 slice 2) — emit FIRST,
+        # before assembling the core bundle, so the bundle's shape (with vs
+        # without i18n.js) can be decided by whether packs exist. FAIL-OPEN:
+        # emission needs node (extraction + the roundtrip gate); when it fails
+        # we assemble the bundle WITH i18n.js exactly as before and serve no
+        # packs — the status quo. A pack failure must never take the bundle
+        # down, because a served broken pack is invisible in production (t()
+        # silently falls back), whereas a missing pack just means "no split".
+        pack_names = ()
+        pack_map = {}
+        try:
+            from lib.i18n_packs import emit_pack_files
+            # Extract from THIS tree's i18n.js, never the global default —
+            # the pack and the bundle must always derive from the same
+            # sources (and tests monkeypatch JS_DIR to a temp tree).
+            pack_map = emit_pack_files(
+                JS_DIR, source_path=os.path.join(JS_DIR, 'i18n.js'))
+            pack_names = tuple(pack_map.values())
+        except Exception as e:  # noqa: BLE001 — fail-open by design (see above)
+            logger.warning('[Bundle] i18n pack emission failed; serving '
+                           'dual-language i18n.js as before: %s', e)
+
+        # Only exclude i18n.js from the core bundle when its replacement packs
+        # actually exist. The bundle content and _pack_filenames are ONE
+        # atomic fact (set together below): a bundle without i18n.js must
+        # never be served alongside an empty pack set.
+        core_files = ([f for f in _BUNDLE_FILES if f != 'i18n.js']
+                      if pack_map else list(_BUNDLE_FILES))
+
+        core_name, core_size = _assemble_bundle(core_files, 'bundle-', critical=True)
         if not core_name:
             return None
 
         # Deferred bundle — non-fatal. If it fails to build, ship core alone.
         feature_name, feature_size = _assemble_bundle(_DEFERRED_FILES, 'feature-', critical=False)
 
-        _clean_old_bundles(core_name, feature_name)
+        _clean_old_bundles(core_name, feature_name, keep_packs=pack_names)
         _bundle_filename = core_name
         _feature_filename = feature_name
+        _pack_filenames = pack_map
+        _bundle_includes_i18n = not pack_map
         _bundle_mtime = _source_max_mtime()
 
     elapsed = time.time() - t0
@@ -1274,6 +1319,39 @@ def get_bundle_script_tag_nonblocking():
         return None
     return (f'<script defer src="static/js/{filename}"'
             f' onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>')
+def get_i18n_pack_tag(lang):
+    """Script tag for the single-language i18n pack, or None.
+
+    Returns a tag ONLY when the currently-served core bundle EXCLUDES i18n.js
+    (i.e. packs were emitted in the same build). When the bundle contains
+    i18n.js (dual fallback after a failed emission), returns None so the
+    caller injects nothing — the dictionary is already in the bundle.
+
+    The ``_bundle_includes_i18n`` / ``_pack_filenames`` pair is updated
+    atomically with ``_bundle_filename`` inside build_bundle(), so a tag can
+    never be handed out for a bundle that already carries the dictionary.
+    """
+    filename = get_bundle_filename_nonblocking()
+    if not filename or _bundle_includes_i18n:
+        return None
+    pack = _pack_filenames.get(lang) or _pack_filenames.get('zh')
+    if not pack:
+        return None
+    return (f'<script defer src="static/js/{pack}"'
+            f' onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>')
+
+
+def get_i18n_pack_urls():
+    """{lang: 'static/js/<pack>'} for setLanguage()'s on-demand fetch, or None.
+
+    Injected into the page by routes/common.py as ``window.__I18N_PACK_URLS__``.
+    None when packs are inactive (dual bundle) — setLanguage then needs no
+    fetch because the dictionary already carries both languages.
+    """
+    filename = get_bundle_filename_nonblocking()
+    if not filename or _bundle_includes_i18n or not _pack_filenames:
+        return None
+    return {lang: f'static/js/{name}' for lang, name in _pack_filenames.items()}
 
 
 def get_bundle_filename():

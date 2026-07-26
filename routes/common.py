@@ -7,6 +7,7 @@ Split from the original monolithic common.py:
   routes/translate.py      — Translation (sync + async)
 """
 
+import json
 import os
 import re
 import time
@@ -24,6 +25,8 @@ from lib.settings_panels import inject_panels as _inject_settings_panels, panels
 from lib.js_bundler import (
     get_bundle_script_tag_nonblocking as _get_bundle_tag,
     get_feature_bundle_filename_nonblocking as _get_feature_bundle_filename,
+    get_i18n_pack_tag as _get_i18n_pack_tag,
+    get_i18n_pack_urls as _get_i18n_pack_urls,
 )
 from lib.log import get_logger
 from lib.api_response import api_bad_request, api_internal_error, api_ok
@@ -543,6 +546,19 @@ def index_page():
     else:
         feature_tag = ''
 
+    # i18n single-language pack (Epic-E sub-part 1 slice 2). When the core
+    # bundle excludes i18n.js, its per-language replacement MUST be injected
+    # BEFORE the bundle tag (both are defer; document order decides), or t()
+    # is undefined for every module. The pack URLs let setLanguage() fetch
+    # the other language on demand. Both are None in the dual-bundle
+    # fallback — inject nothing then, the dictionary is already in the bundle.
+    pack_tag = _get_i18n_pack_tag(ui_lang) or ''
+    pack_urls = _get_i18n_pack_urls()
+    i18n_tag = (pack_tag + '\n') if pack_tag else ''
+    if pack_urls:
+        i18n_tag += ('<script>window.__I18N_PACK_URLS__='
+                     + json.dumps(pack_urls) + ';</script>\n')
+
     # Use cached version if bundle tag, styles tag, AND index.html mtime
     # are all unchanged. Any of those changing → rebuild the served HTML.
     html_path = os.path.join(BASE_DIR, 'index.html')
@@ -558,6 +574,7 @@ def index_page():
             and _bundled_index_cache['mtime'] == html_mtime
             and _bundled_index_cache['panels'] == panels_sig
             and _bundled_index_cache['lang'] == ui_lang
+            and _bundled_index_cache.get('i18n') == i18n_tag
             and _bundled_index_cache['html']):
         resp = make_response(_bundled_index_cache['html'])
         resp.content_type = 'text/html; charset=utf-8'
@@ -573,9 +590,10 @@ def index_page():
         with open(html_path, 'r', encoding='utf-8') as f:
             html = f.read()
 
+        # Pack tag FIRST (t() must be defined before the bundle executes),
         # feature_tag prepended so window.__FEATURE_BUNDLE_SRC__ is defined
         # BEFORE the core bundle (which contains feature-loader.js) executes.
-        html = _APP_SCRIPTS_RE.sub(feature_tag + bundle_tag + '\n', html)
+        html = _APP_SCRIPTS_RE.sub(i18n_tag + feature_tag + bundle_tag + '\n', html)
         html = _APP_STYLES_RE.sub(styles_tag, html)
         html = _SETTINGS_STYLES_RE.sub(_get_settings_link_tag(), html)
         # Splice decoupled settings-panel fragments back in at their markers
@@ -589,6 +607,7 @@ def index_page():
         _bundled_index_cache['feature'] = feature_tag
         _bundled_index_cache['panels'] = panels_sig
         _bundled_index_cache['lang'] = ui_lang
+        _bundled_index_cache['i18n'] = i18n_tag
         _bundled_index_cache['html'] = html
         _bundled_index_cache['mtime'] = html_mtime
 

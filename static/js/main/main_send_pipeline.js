@@ -456,31 +456,18 @@ async function sendMessage() {
     _forceScrollToBottom(null, true);
   }
 
-  // ── Wait for VLM parsing before sending (after user bubble is visible) ──
-  await _waitForVlmParsing(userMsg, convId, userMsgIdx);
-  msgPayload.pdfTexts = userMsg.pdfTexts;
-
-  // ── Atomic backend call: message creation + translate + task start ──
-  const _sendConfig = await _buildConvConfig(conv);
-
-  // ★ Mint the assistant message's stable id BEFORE the POST and ship it to
-  //   the backend (config.assistantMsgId). The server stamps it on the task
-  //   (task['_assistantMsgId']) so live per-round translation frames route to
-  //   THIS message while it's still streaming (it has no DB index yet), and
-  //   the streaming bubble is stamped with the same data-msg-id below. Reused
-  //   verbatim for the assistantMsg object so the in-stream preview and the
-  //   final committed translation address the same message.
-  const _assistantMsgId = (typeof _newClientMsgId === 'function')
-    ? _newClientMsgId()
-    : ('tmp_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
-  _sendConfig.assistantMsgId = _assistantMsgId;
-
-  // ★ If autoTranslate is on and text has Chinese, show stop button immediately
-  //   so the user can abort during server-side translation.
-  // ★ Safety timer must comfortably exceed the backend translate cap
-  //   (_TRANSLATE_SEND_TIMEOUT in routes/chat.py — 45 s) so the request gets
-  //   a chance to fail cleanly with a concrete reason instead of being
-  //   killed locally by an opaque AbortError.
+  /* ★ pt_c03fae11 — the region between `_sendInFlight = true` (above) and
+   *   the POST's try/finally (below) must NEVER leak the flag. A throw from
+   *   any of these awaits (VLM parse / config build / inject prompt) or the
+   *   conv-switch early return would otherwise wedge `_sendInFlight` forever,
+   *   and syncConversationToServer's guard would silently skip every future
+   *   PUT for this conversation — the user's later edits vanish on refresh.
+   *   On ANY exit before the POST the backend provably did not persist this
+   *   turn, so the recovery mirrors the main catch's failed-send branch:
+   *   clear the flag, rescue-sync, fall back to the pending-sync poller. */
+  let _sendConfig;
+  let _assistantMsgId;
+  let _injectMode = 'queue';
   // ★ Inject-mode decision — the optimistic user bubble is ALREADY in the
   //   timeline (inserted above). If a turn is CURRENTLY generating for this
   //   conversation, ask the human HOW to deliver this message: steer it into
@@ -489,19 +476,76 @@ async function sendMessage() {
   //   prompt, no extra UI — and injectMode stays 'queue' (a server-side no-op
   //   with no running task). See routes/chat.py's has_running_task branch.
   const _turnRunning = () => !!(conv.activeTaskId || activeStreams.has(convId));
-  let _injectMode = 'queue';
-  if (_turnRunning()) {
-    _injectMode = await _promptInjectMode(convId);
-    // Race: the running turn may have ENDED while the prompt was open. If so,
-    // this is now a plain send (the backend's drainable check would fall a
-    // 'steer' back to the queue anyway) — _promptInjectMode already auto-closed
-    // via liveCheck and resolved to the safe default, so nothing to fix here.
-    if (_sendGeneration !== sendGen) {
-      console.log('[sendMessage] aborted — conv switched during inject-mode prompt');
-      return;
+  try {
+    // ── Wait for VLM parsing before sending (after user bubble is visible) ──
+    await _waitForVlmParsing(userMsg, convId, userMsgIdx);
+    msgPayload.pdfTexts = userMsg.pdfTexts;
+
+    // ── Atomic backend call: message creation + translate + task start ──
+    _sendConfig = await _buildConvConfig(conv);
+
+    // ★ Mint the assistant message's stable id BEFORE the POST and ship it to
+    //   the backend (config.assistantMsgId). The server stamps it on the task
+    //   (task['_assistantMsgId']) so live per-round translation frames route to
+    //   THIS message while it's still streaming (it has no DB index yet), and
+    //   the streaming bubble is stamped with the same data-msg-id below. Reused
+    //   verbatim for the assistantMsg object so the in-stream preview and the
+    //   final committed translation address the same message.
+    _assistantMsgId = (typeof _newClientMsgId === 'function')
+      ? _newClientMsgId()
+      : ('tmp_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+    _sendConfig.assistantMsgId = _assistantMsgId;
+
+    if (_turnRunning()) {
+      _injectMode = await _promptInjectMode(convId);
+      // Race: the running turn may have ENDED while the prompt was open. If so,
+      // this is now a plain send (the backend's drainable check would fall a
+      // 'steer' back to the queue anyway) — _promptInjectMode already auto-closed
+      // via liveCheck and resolved to the safe default, so nothing to fix here.
+      if (_sendGeneration !== sendGen) {
+        console.log('[sendMessage] aborted — conv switched during inject-mode prompt');
+        /* The bubble stays for editing (same semantics as the user-stop-
+         * during-translate branch), but the backend never saw this send —
+         * clear the in-flight marker and rescue-sync now, or the message
+         * survives only in memory and vanishes on the next refresh. */
+        conv._sendInFlight = false;
+        const _syncedAbort = await syncConversationToServer(conv);
+        if (!_syncedAbort) markConvPendingSync(conv);
+        return;
+      }
     }
+  } catch (preSendErr) {
+    /* Pre-POST failure (VLM parse / config build / inject prompt threw) — the
+     * backend provably did not persist this turn. Same durability contract as
+     * the main catch's generic branch: visible error bubble + clear the flag
+     * BEFORE the rescue sync so its guard does not skip the PUT + pending-
+     * sync fallback when the network itself is the problem. */
+    console.error('[sendMessage] pre-send stage failed:', preSendErr);
+    debugLog('Failed: ' + ((preSendErr && preSendErr.message) || preSendErr), 'error');
+    conv._sendInFlight = false;
+    const errAssistant = {
+      role: "assistant", content: "", thinking: "",
+      error: (preSendErr && preSendErr.message) || String(preSendErr),
+      timestamp: Date.now(), toolRounds: [],
+    };
+    _ensureMsgId(errAssistant);
+    conv.messages.push(errAssistant);
+    if (activeConvId === convId) {
+      window.ConvView.apply(convId, conv.messages.length - 1, errAssistant);
+    }
+    saveConversations(convId);
+    const _syncedPre = await syncConversationToServer(conv);
+    if (!_syncedPre) markConvPendingSync(conv);
+    buildTurnNav(conv);
+    return;
   }
 
+  // ★ If autoTranslate is on and text has Chinese, show stop button immediately
+  //   so the user can abort during server-side translation.
+  // ★ Safety timer must comfortably exceed the backend translate cap
+  //   (_TRANSLATE_SEND_TIMEOUT in routes/chat.py — 45 s) so the request gets
+  //   a chance to fail cleanly with a concrete reason instead of being
+  //   killed locally by an opaque AbortError.
   const _sendAbortCtrl = new AbortController();
   let _sendAbortReason = '';  // '' | 'timeout' | 'user-stop' | 'unmount'
   const _sendTimeout = setTimeout(() => {

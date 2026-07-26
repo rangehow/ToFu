@@ -74,15 +74,28 @@ class TestStageBinaryAssetRefusesText(unittest.TestCase):
                     f'content type {ct!r} must be refused as an asset')
 
     def test_nothing_is_written_to_disk_when_refused(self):
+        """The refusal must happen BEFORE the write — no 476 KB leak per retry.
+
+        Asserts the observable outcome (no new file in the staging dir) rather
+        than patching ``builtins.open``: that patch also captures logging's own
+        file writes, which makes the test pass alone but fail once another
+        suite has initialized log handlers first.
+        """
+        from lib.config_dir import fetched_path
+        staging_dir = os.path.dirname(fetched_path('probe'))
+        before = set(os.listdir(staging_dir)) if os.path.isdir(staging_dir) else set()
+
         html = b'<html>' + b'y' * 5000
         with patch.object(_core, 'fetch_url_bytes',
                           return_value=(html, 'text/html')):
-            with patch('builtins.open') as m_open:
-                got = _core._stage_binary_asset(GEO_URL)
+            got = _core._stage_binary_asset(GEO_URL)
+
+        after = set(os.listdir(staging_dir)) if os.path.isdir(staging_dir) else set()
         self.assertIsNone(got)
-        self.assertEqual(m_open.call_count, 0,
-                         'refusal must happen BEFORE the write — no 476 KB '
-                         'disk leak per retry')
+        self.assertEqual(
+            after - before, set(),
+            'a refused textual body must leave NOTHING on disk — this is the '
+            '476 KB-per-retry leak')
 
     def test_real_binary_asset_still_staged(self):
         png = b'\x89PNG\r\n\x1a\n' + b'\x00' * 2048

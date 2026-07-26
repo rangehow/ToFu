@@ -306,4 +306,10 @@ if (typeof window !== 'undefined') {
   window.buildSyncDigest = buildSyncDigest;
   window.reportSyncDigest = reportSyncDigest;
   window.startSyncDriftProbe = startSyncDriftProbe;
+  /* The REFERENCE multi-user gate. cross_tab_sync.js (_onConvNotifyPush,
+   * _onFoldersChangedPush) and conv_sync_push.js (_onConvSyncPush) implement
+   * the same normalization inline (they run before this file in bundle order
+   * for two of the three, so they can't call it); exported so a test can
+   * drive the canonical semantics directly and pin all four in agreement. */
+  window._frameIsOurs = _frameIsOurs;
 }

@@ -344,10 +344,16 @@ function _onConvNotifyPush(frame) {
       }
     }
     /* Multi-user gate (forward-safe): drop a frame for another user. When no
-     *   user identity is established (single-user today) every frame is ours. */
+     *   user identity is established every frame is ours.
+     *   BOTH sides are String()-normalized: the server stamps int 1 for the
+     *   personal-install default but a str user_id for a real tenant, so a
+     *   strict compare would make a tab silently reject its OWN frames.
+     *   Mirrors core/conv_state_reducer.js::_frameIsOurs. */
     const myUser = (typeof window._currentUserId !== "undefined" && window._currentUserId !== null)
-      ? window._currentUserId : null;
-    if (myUser !== null && frame.userId !== undefined && frame.userId !== myUser) return;
+      ? String(window._currentUserId) : null;
+    if (myUser !== null && myUser !== "" && frame.userId !== undefined
+        && frame.userId !== null && String(frame.userId) !== ""
+        && String(frame.userId) !== myUser) return;
 
     const convId = frame.convId;
     if (!convId) return;
@@ -474,10 +480,13 @@ function _onFoldersChangedPush(frame) {
   try {
     if (!frame || frame.type !== "folders_changed") return;
     /* Multi-user gate (forward-safe): drop a frame for another user. When no
-     *   user identity is established (single-user today) every frame is ours. */
+     *   user identity is established every frame is ours. BOTH sides are
+     *   String()-normalized — see _onConvNotifyPush above. */
     const myUser = (typeof window._currentUserId !== "undefined" && window._currentUserId !== null)
-      ? window._currentUserId : null;
-    if (myUser !== null && frame.userId !== undefined && frame.userId !== myUser) return;
+      ? String(window._currentUserId) : null;
+    if (myUser !== null && myUser !== "" && frame.userId !== undefined
+        && frame.userId !== null && String(frame.userId) !== ""
+        && String(frame.userId) !== myUser) return;
 
     const deletedId = frame.deletedFolderId;
     if (deletedId) {

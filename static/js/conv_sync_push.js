@@ -110,10 +110,16 @@ function _onConvSyncPush(frame) {
   try {
     if (!frame || frame.kind !== "history_rewrite") return;
     /* Multi-user gate (forward-safe): drop a frame for another user. When no
-     *   user identity is established (single-user today) every frame is ours. */
+     *   user identity is established every frame is ours. BOTH sides are
+     *   String()-normalized: the server stamps int 1 for the personal-install
+     *   default but a str user_id for a real tenant, so a strict compare would
+     *   make a tab silently reject its OWN frames. Mirrors
+     *   core/conv_state_reducer.js::_frameIsOurs. */
     const myUser = (typeof window._currentUserId !== "undefined" && window._currentUserId !== null)
-      ? window._currentUserId : null;
-    if (myUser !== null && frame.userId !== undefined && frame.userId !== myUser) return;
+      ? String(window._currentUserId) : null;
+    if (myUser !== null && myUser !== "" && frame.userId !== undefined
+        && frame.userId !== null && String(frame.userId) !== ""
+        && String(frame.userId) !== myUser) return;
     const convId = frame.convId || frame.taskId;   // push_event uses taskId as the conv id
     if (!convId) return;
     _applyHistoryRewrite(convId, (typeof frame.rev === "number") ? frame.rev : null);

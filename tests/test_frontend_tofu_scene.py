@@ -44,7 +44,7 @@ function mkCtx(rec){
   return {
     canvas: { width: 400, height: 48 },
     setTransform(){}, clearRect(){}, save(){}, restore(){}, translate(){},
-    rotate(){}, beginPath(){}, fill(){}, fillRect(){ rec.fillRect++; },
+    rotate(){}, beginPath(){}, moveTo(){}, fill(){}, fillRect(){ rec.fillRect++; },
     ellipse(){ rec.ellipse++; }, drawImage(){ rec.drawImage++; },
     createLinearGradient(){ return { addColorStop(){} }; },
     createRadialGradient(){ return { addColorStop(){} }; },
@@ -194,13 +194,18 @@ def test_every_scene_paints_dabs():
 
 
 def test_NEUTER_flat_fill_is_caught():
-    """NEUTER: remove the dab-drawing call inside the layer loop → the buffer is
-    a flat gradient fill with NO brush-dabs. The 'is painterly' assertion must
-    then fail (proving it bites)."""
+    """NEUTER: make the dab emitter a no-op → the buffer is a flat gradient fill
+    with NO brush-dabs. The 'is painterly' assertion must then fail (proving it
+    bites).
+
+    This neuters the ENQUEUE step rather than one call site, because the baked
+    scene legitimately paints dabs from several places (depth planes, the impasto
+    ridge/furrow pass, the deckle rim). Cutting one call site would leave the
+    others painting and the guard would silently stop biting."""
     src = SCENE_JS.read_text()
-    neut = src.replace("dab(b, x, y, len, wid, ang, color, alpha);",
-                       "/* neutered dab */", 1)
-    assert neut != src, "neuter did not match the buffer dab call"
+    neut = src.replace("    arr.push(x, y, len, wid, ang);",
+                       "    return;  /* neutered dab enqueue */", 1)
+    assert neut != src, "neuter did not match the dab enqueue"
     r = _run(theme="tofu", decor="meadow", src=neut)
     assert r["bufFillRect"] >= 1, "base wash should still paint"
     assert r["bufEllipse"] == 0, \
@@ -327,7 +332,7 @@ function mkCtx(rec){
   return {
     canvas: { width: 400, height: 48 },
     setTransform(){}, clearRect(){}, save(){}, restore(){}, translate(){},
-    rotate(){}, beginPath(){}, fill(){}, fillRect(){ rec.fillRect++; },
+    rotate(){}, beginPath(){}, moveTo(){}, fill(){}, fillRect(){ rec.fillRect++; },
     ellipse(){ rec.ellipse++; }, stroke(){ rec.stroke++; }, drawImage(){ rec.drawImage++; },
     createLinearGradient(){ return { addColorStop(){} }; },
     createRadialGradient(){ return { addColorStop(s,col){ rec.radialStops.push(col); } }; },
@@ -529,8 +534,14 @@ function mkCtx(rec){
   return {
     canvas:{width:400,height:48},
     setTransform(){}, clearRect(){}, save(){}, restore(){},
-    translate(x,y){ rec.tr.push([Math.round(x*100)/100, Math.round(y*100)/100]); },
-    rotate(){}, beginPath(){}, fill(){}, fillRect(){}, ellipse(){}, stroke(){}, drawImage(){},
+    translate(){},
+    /* Dabs are BATCHED: geometry now lives in the ellipse() args (the module no
+       longer emits a translate/rotate per dab — that quartet was the per-frame
+       cost that was removed). Record the ellipse centre, which is the same
+       (x,y) the old translate() carried, so this harness measures exactly what
+       it always did: where each dab landed. */
+    ellipse(x,y){ rec.tr.push([Math.round(x*100)/100, Math.round(y*100)/100]); },
+    rotate(){}, beginPath(){}, moveTo(){}, fill(){}, fillRect(){}, stroke(){}, drawImage(){},
     createLinearGradient(){ return {addColorStop(){}}; },
     createRadialGradient(){ return {addColorStop(){}}; },
     set fillStyle(v){}, get fillStyle(){return '';},
@@ -688,9 +699,13 @@ function mkCtx(rec){
   return {
     canvas:{width:400,height:48},
     setTransform(){}, clearRect(){}, save(){}, restore(){},
-    translate(x,y){ rec.dabs.push([rec._fill, Math.round(x*100)/100, Math.round(y*100)/100, null]); },
-    rotate(a){ const d=rec.dabs[rec.dabs.length-1]; if(d) d[3]=Math.round(a*1000)/1000; },
-    beginPath(){}, fill(){}, fillRect(){}, ellipse(){}, stroke(){}, drawImage(){},
+    translate(){},
+    rotate(){},
+    /* Batched dabs: fillStyle is set once per colour bucket, then each dab is
+       an ellipse(x,y,rx,ry,ang) subpath — so the (colour,x,y,angle) tuple this
+       harness measures now comes off the ellipse args. */
+    ellipse(x,y,rx,ry,a){ rec.dabs.push([rec._fill, Math.round(x*100)/100, Math.round(y*100)/100, Math.round((a||0)*1000)/1000]); },
+    beginPath(){}, moveTo(){}, fill(){}, fillRect(){}, stroke(){}, drawImage(){},
     createLinearGradient(){ return {addColorStop(){}}; },
     createRadialGradient(){ return {addColorStop(){}}; },
     set fillStyle(v){ rec._fill = v; }, get fillStyle(){ return rec._fill||''; },
@@ -870,9 +885,11 @@ function mkCtx(rec){
   return {
     canvas:{width:400,height:48},
     setTransform(){}, clearRect(){}, save(){}, restore(){},
-    translate(x,y){ rec.dabs.push([rec._fill, Math.round(x*100)/100, Math.round(y*100)/100, 0]); },
-    rotate(a){ const d = rec.dabs[rec.dabs.length-1]; if (d) d[3] = a; },
-    beginPath(){}, fill(){}, fillRect(){}, ellipse(){}, stroke(){}, drawImage(){},
+    translate(){},
+    rotate(){},
+    /* Batched dabs — see the motion harness: geometry rides the ellipse args. */
+    ellipse(x,y,rx,ry,a){ rec.dabs.push([rec._fill, Math.round(x*100)/100, Math.round(y*100)/100, a||0]); },
+    beginPath(){}, moveTo(){}, fill(){}, fillRect(){}, stroke(){}, drawImage(){},
     createLinearGradient(){ return {addColorStop(){}}; },
     createRadialGradient(){ return {addColorStop(){}}; },
     set fillStyle(v){ rec._fill = v; }, get fillStyle(){ return rec._fill||''; },
@@ -1169,7 +1186,7 @@ let _rafCbs=[];
 global.requestAnimationFrame=function(cb){_rafCbs.push(cb);return _rafCbs.length;};
 global.cancelAnimationFrame=function(){};
 global.devicePixelRatio=1;
-function mkCtx(){return{canvas:{width:400,height:48},setTransform(){},clearRect(){},save(){},restore(){},translate(){},rotate(){},beginPath(){},fill(){},fillRect(){},ellipse(){},drawImage(){},createLinearGradient(){return{addColorStop(){}};},createRadialGradient(){return{addColorStop(){}};},set fillStyle(v){},get fillStyle(){return'';},set globalAlpha(v){},get globalAlpha(){return 1;},set globalCompositeOperation(v){},get globalCompositeOperation(){return'';}};}
+function mkCtx(){return{canvas:{width:400,height:48},setTransform(){},clearRect(){},save(){},restore(){},translate(){},rotate(){},beginPath(){},moveTo(){},fill(){},fillRect(){},ellipse(){},drawImage(){},createLinearGradient(){return{addColorStop(){}};},createRadialGradient(){return{addColorStop(){}};},set fillStyle(v){},get fillStyle(){return'';},set globalAlpha(v){},get globalAlpha(){return 1;},set globalCompositeOperation(v){},get globalCompositeOperation(){return'';}};}
 global.window={matchMedia(){return{matches:false,addEventListener(){},addListener(){}};},addEventListener(){},ResizeObserver:function(){return{observe(){},disconnect(){}};},MutationObserver:function(){return{observe(){},disconnect(){}};},devicePixelRatio:1};
 global.ResizeObserver=global.window.ResizeObserver;global.MutationObserver=global.window.MutationObserver;
 function mkEl(){return{_attrs:{},className:'',style:{},width:0,height:0,setAttribute(k,v){this._attrs[k]=v;},getAttribute(k){return this._attrs[k];},appendChild(){},insertBefore(){},querySelector(){return null;},firstChild:null,getBoundingClientRect(){return{left:0,right:400,top:0,bottom:48,width:400,height:48};}};}

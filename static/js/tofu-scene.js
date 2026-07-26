@@ -175,20 +175,200 @@
     return '#' + (((1 << 24) + (r << 16) + (g << 8) + bl).toString(16).slice(1));
   }
 
-  // One oriented brush-dab: a rotated, filled ellipse. Layering many of these
-  // with jittered colour + alpha is what reads as painterly broken colour.
+  // ── BATCHED DAB RENDERER ────────────────────────────────────────────────
+  // One oriented brush-dab is a rotated filled ellipse. Layering many of them
+  // with jittered colour + alpha is what reads as painterly broken colour — but
+  // the NAIVE way to draw one costs NINE canvas calls (save / globalAlpha /
+  // fillStyle / translate / rotate / beginPath / ellipse / fill / restore) AND
+  // its own rasterizer flush. At ~2000 dabs on a wide bar that was ~18k calls +
+  // 2000 separate fills every frame — the single dominant cost of the scene.
+  //
+  // Two changes delete almost all of it, with no change to what is painted:
+  //   1. `ellipse()` takes a ROTATION argument natively, so the
+  //      save/translate/rotate/restore quartet was pure waste — the dab is
+  //      placed and rotated by its own arguments.
+  //   2. Dabs are QUEUED into (colour, alpha-bucket) buckets and flushed as ONE
+  //      path + ONE fill per bucket, so a few thousand fills collapse into a
+  //      few dozen. Each ellipse is preceded by a moveTo to its own start point,
+  //      because arc/ellipse otherwise draws a connecting LINE from the current
+  //      point into the new subpath (a spec detail that would web the whole
+  //      field together with hairlines).
+  //
+  // ORDERING CONTRACT (why this is safe): `_bqKeys` preserves FIRST-TOUCH
+  // order, so buckets flush in the order their colour first appeared, and
+  // callers flush at every LAYER seam (see flushDabs call sites). Depth-plane
+  // order — the thing atmospheric perspective depends on — is therefore exactly
+  // preserved; only the order of same-colour, same-alpha dabs WITHIN one layer
+  // can change, which is invisible in a field of overlapping translucent dabs
+  // of the same tone.
+  var TAU = 6.283185307179586;
+  var ALPHA_STEPS = 12;         // alpha quantisation for bucketing (~0.083 apart)
+  var _bqCtx = null;            // context the queue belongs to
+  var _bq = null;               // key → flat [x,y,rx,ry,ang, ...]
+  var _bqKeys = null;           // keys in first-touch order
+
   function dab(ctx, x, y, len, wid, ang, color, alpha) {
+    if (ctx !== _bqCtx) { flushDabs(); _bqCtx = ctx; }
+    if (!(alpha > 0)) return;                       // fully transparent → free
+    var step = alpha >= 1 ? ALPHA_STEPS : ((alpha * ALPHA_STEPS + 0.5) | 0);
+    if (step <= 0) return;
+    if (!_bq) { _bq = {}; _bqKeys = []; }
+    var k = color + '|' + step;
+    var arr = _bq[k];
+    if (!arr) { arr = _bq[k] = []; _bqKeys.push(k); }
+    arr.push(x, y, len, wid, ang);
+  }
+
+  // Emit everything queued so far. MUST be called before any state change the
+  // queue does not own (composite op, a gradient fillRect, a blit, restore()),
+  // and at every layer seam so depth order is preserved.
+  function flushDabs() {
+    var ctx = _bqCtx;
+    if (!ctx || !_bqKeys || !_bqKeys.length) { _bq = null; _bqKeys = null; return; }
+    for (var i = 0; i < _bqKeys.length; i++) {
+      var k = _bqKeys[i], arr = _bq[k];
+      if (!arr || !arr.length) continue;
+      var cut = k.lastIndexOf('|');
+      ctx.fillStyle = k.slice(0, cut);
+      ctx.globalAlpha = (+k.slice(cut + 1)) / ALPHA_STEPS;
+      ctx.beginPath();
+      for (var j = 0; j < arr.length; j += 5) {
+        var x = arr[j], y = arr[j + 1];
+        var rx = arr[j + 2] > 0.01 ? arr[j + 2] : 0.01;
+        var ry = arr[j + 3] > 0.01 ? arr[j + 3] : 0.01;
+        var ang = arr[j + 4];
+        // start the subpath at the ellipse's own 0-angle point, else the path
+        // draws a line here from wherever the previous ellipse ended.
+        ctx.moveTo(x + rx * Math.cos(ang), y + rx * Math.sin(ang));
+        ctx.ellipse(x, y, rx, ry, ang, 0, TAU);
+      }
+      ctx.fill();
+    }
+    // The queue owns no save/restore, so it must hand the context back at the
+    // neutral alpha it borrowed. Without this the NEXT unrelated draw on this
+    // context — the base wash on a re-bake, or the per-frame `drawImage` blit of
+    // the baked buffer — would inherit the last bucket's alpha and paint faded.
+    ctx.globalAlpha = 1;
+    _bq = null;
+    _bqKeys = null;
+  }
+
+  // ── PER-FRAME LIVE BUDGET ───────────────────────────────────────────────
+  // Every element of a LIVE population (near band, flow overlay, foreground
+  // occluders) is re-resolved and re-queued EVERY frame, so its count is the
+  // per-frame cost. Seeding them by AREA — as the baked planes rightly are —
+  // made that cost grow without limit with the bar's width: a 1400px bar paid
+  // ~4x a 360px one for a painting that is only ever 48px tall.
+  //
+  // So the live populations are CAPPED, and when a cap bites, each surviving
+  // element is scaled up by sqrt(wanted/capped) — the same total painted AREA
+  // spread over fewer, slightly broader strokes. That is why a wide bar still
+  // looks like a full painting instead of a thinning one: Impressionist dabs
+  // carry the field by coverage, not by count. Detail that WOULD have gone into
+  // more live strokes is instead spent in the BAKED buffer (see BAKE_BOOST),
+  // which costs nothing per frame.
+  //
+  // The caps are set ABOVE a normal bar's natural count, so at the widths the
+  // project bar actually takes (~360–900px) nothing is thinned at all; they
+  // only engage on very wide windows.
+  var LIVE_CAP_NEAR = 300;            // live near-band elements (grass/water/cloud)
+  var LIVE_CAP_FLOW = 200;            // breathing flow-overlay dabs
+  var LIVE_CAP_FG = 190;              // foreground occluders (each = up to 4 dabs)
+  var LIVE_CAP_UNDERSTORY = 90;       // base mounds on the fg plane
+  var LIVE_CAP_SPARK = 40;            // twinkling specular dabs
+  // Baked planes are painted ONCE per resize/scene-change, so extra density
+  // there is free at runtime — this is where the "intricate" budget goes.
+  var BAKE_BOOST = 1.85;
+
+  /** Clamp a wanted live count to `cap`, returning the count plus the linear
+   *  size scale that preserves total painted area. */
+  function _budget(wanted, cap) {
+    if (wanted <= cap) return { n: wanted, scale: 1 };
+    return { n: cap, scale: Math.sqrt(wanted / cap) };
+  }
+
+  // ── DECKLE EDGE (the irregular border) ──────────────────────────────────
+  // The bar's frame was a rounded rectangle — machine-perfect, however wonky
+  // its four radii were. A real painting on handmade paper has a DECKLE edge:
+  // the torn/feathered rim left by the mould, which wanders a few millimetres
+  // in and out and is never twice the same. That is the shape we cut here.
+  //
+  // It is cut on the CANVAS, not on the bar element, and that is deliberate:
+  // `clip-path` on .project-bar would also clip the pet's speech bubble (which
+  // deliberately pokes above the rim) and would clip away the frame's drop
+  // shadow. Cutting the PAINTING instead leaves the bar's own cream body
+  // showing through the torn margin — so the bar reads as a deckle-edged
+  // painting laid on a cream mount board, which is a truer object than a
+  // painting-shaped div, and costs one composite op per frame.
+  //
+  // The outline is seeded from the same PRNG as the scene, so it is stable
+  // across repaints and unique per (scene, size) — every bar is torn once, and
+  // torn differently.
+  var DECKLE_STEP = 13;               // px between torn-edge samples
+  var DECKLE_BITE = 3.4;              // max inward bite (px)
+  var _deckle = [];                   // [x,y] outline points, CSS px
+
+  function _seedDeckle(R, w, h) {
+    _deckle = [];
+    var m = 1.5;                              // nominal inset before the bite
+    // Walk the four sides, biting inward by a jittered amount. Two octaves of
+    // jitter (a slow wander + a fine fray) is what separates "torn fibre" from
+    // "zigzag": one octave alone reads as a saw blade.
+    function side(x0, y0, x1, y1, nx, ny) {
+      var len = Math.hypot(x1 - x0, y1 - y0);
+      var steps = Math.max(3, Math.round(len / DECKLE_STEP));
+      for (var i = 0; i < steps; i++) {
+        var t = i / steps;
+        var slow = Math.sin(t * 6.1 + R() * 0.4) * 0.5 + 0.5;
+        var bite = m + (slow * 0.55 + R() * 0.45) * DECKLE_BITE;
+        _deckle.push([x0 + (x1 - x0) * t + nx * bite, y0 + (y1 - y0) * t + ny * bite]);
+      }
+    }
+    // Corners are pulled in harder (a torn sheet loses most at its corners),
+    // which also keeps the cut clear of the frame's rounded corner radius.
+    var c = 7;
+    side(c, 0, w - c, 0, 0, 1);               // top    → bite down
+    side(w, c, w, h - c, -1, 0);              // right  → bite left
+    side(w - c, h, c, h, 0, -1);              // bottom → bite up
+    side(0, h - c, 0, c, 1, 0);               // left   → bite right
+  }
+
+  /** Erase everything OUTSIDE the deckle outline on `ctx` (even-odd fill of
+   *  [full rect] + [outline] under destination-out), leaving the painting with
+   *  a torn silhouette. No-ops when the outline has not been seeded. */
+  function _cutDeckle(ctx, w, h) {
+    if (!_deckle.length || !ctx.rect) return;
+    flushDabs();
     ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.fillStyle = color;
-    ctx.translate(x, y);
-    ctx.rotate(ang);
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#000';
     ctx.beginPath();
-    ctx.ellipse(0, 0, len, wid, 0, 0, 6.283185);
-    ctx.fill();
+    ctx.rect(0, 0, w, h);
+    ctx.moveTo(_deckle[0][0], _deckle[0][1]);
+    for (var i = 1; i < _deckle.length; i++) ctx.lineTo(_deckle[i][0], _deckle[i][1]);
+    ctx.closePath();
+    ctx.fill('evenodd');
     ctx.restore();
   }
 
+  /** Paint the torn rim itself: a fibrous lip of small dabs hugging the inside
+   *  of the deckle outline, so the cut edge looks like paper fibre catching the
+   *  light rather than a clean scissor line. Baked once → free per frame. */
+  function _paintDeckleRim(ctx, R, pal) {
+    if (!_deckle.length) return;
+    for (var i = 0; i < _deckle.length; i++) {
+      var p = _deckle[i];
+      var q = _deckle[(i + 1) % _deckle.length];
+      var ang = Math.atan2(q[1] - p[1], q[0] - p[0]);
+      dab(ctx, p[0], p[1], lerp(1.6, 3.2, R()), lerp(0.5, 1.1, R()), ang,
+          _mixHex(pal.spark, '#FFFFFF', 0.5), lerp(0.18, 0.42, R()));
+    }
+    flushDabs();
+  }
+
+  // ── module state ──
+  var _bar = null;
   // ── module state ──
   var _bar = null;
   var _canvas = null, _ctx = null;
@@ -198,6 +378,15 @@
   var _scene = 'meadow';
   var _raf = 0, _t0 = 0, _lastMs = 0;
   var _reduced = false, _paused = false;
+  // Frame pacing (see _loop): the scene is slow ambient weather, so it is
+  // painted on a fixed cadence rather than every vsync. rAF still drives the
+  // clock — we just skip the paint on the in-between ticks.
+  var SCENE_FPS = 30;
+  var SCENE_FRAME_MS = 1000 / SCENE_FPS - 1;   // -1 so a 30Hz-aligned tick never slips a frame
+  var _lastPaint = -1e9;
+  // True while the bar is scrolled/collapsed out of view (IntersectionObserver).
+  // An off-screen painting is invisible work, so the loop skips it entirely.
+  var _offscreen = false;
   var _sparks = [];                   // living shimmer dabs (positions seeded)
   var _flow = [];                     // living FLOW dabs (sway / drift overlay)
   var _blades = [];                   // LIVE base-anchored near-grass blades (not baked)
@@ -299,11 +488,16 @@
     _blades = [];
     for (var li = 0; li < pal.layers.length; li++) {
       var L = pal.layers[li];
-      var n = Math.max(4, Math.round(L.density * area / 1000));
+      // A BAKED plane is painted once → spend the intricacy budget here. A LIVE
+      // plane is re-queued every frame → cap it and widen the survivors so the
+      // painted area (hence the look) holds. See LIVE_CAP_* / BAKE_BOOST.
+      var want = Math.max(4, Math.round(L.density * area / 1000 * (L.live ? 1 : BAKE_BOOST)));
+      var bud = L.live ? _budget(want, LIVE_CAP_NEAR) : { n: want, scale: 1 };
+      var n = bud.n, gsc = bud.scale;
       for (var i = 0; i < n; i++) {
         var x = R() * w;
         var y = lerp(L.yTop, L.yBot, R()) * h;
-        var len = lerp(L.lo, L.hi, R());
+        var len = lerp(L.lo, L.hi, R()) * gsc;
         var wid = len * lerp(0.32, 0.6, R());
         var ang = L.ang + (R() - 0.5) * 2 * L.jit;
         var color = L.colors[(R() * L.colors.length) | 0];
@@ -321,19 +515,38 @@
                          alpha: alpha, ph: R() * 6.283185, sp: lerp(0.7, 1.5, R()) });
         } else {
           dab(b, x, y, len, wid, ang, color, alpha);
+          // IMPASTO. Real broken-colour painting is THICK — a loaded brush
+          // leaves a ridge along one side of the stroke, and that ridge catches
+          // the light while the furrow beside it holds shadow. Flat ellipses
+          // alone read as printed, not painted. So a minority of baked strokes
+          // get a paired highlight + shadow sliver offset PERPENDICULAR to the
+          // stroke (±90°), which is what makes the field read as physical paint
+          // under raking light. Baked-only and deliberately so: it triples the
+          // detail of the static planes at exactly ZERO per-frame cost, which
+          // is the whole trade this optimization bought.
+          if (R() < 0.26) {
+            var pnx = -Math.sin(ang), pny = Math.cos(ang);
+            var off = wid * 0.85;
+            dab(b, x + pnx * off, y + pny * off, len * 0.82, wid * 0.4, ang,
+                _mixHex(color, pal.spark, 0.45), alpha * 0.55);
+            dab(b, x - pnx * off, y - pny * off, len * 0.7, wid * 0.34, ang,
+                _mixHex(color, '#4A4230', 0.3), alpha * 0.3);
+          }
         }
       }
+      flushDabs();   // layer seam — keep depth-plane order exact
     }
     // pre-seed the living shimmer dabs (their positions are stable; only their
     // alpha/offset oscillate per frame in the overlay).
     _sparks = [];
-    var sn = Math.max(3, Math.round(w / 46));
+    var sbud = _budget(Math.max(3, Math.round(w / 46)), LIVE_CAP_SPARK);
+    var sn = sbud.n;
     var sang = (pal.layers[0] && pal.layers[0].ang) || 0;
     for (var si = 0; si < sn; si++) {
       _sparks.push({
         x: R() * w,
         y: lerp(0.5, 0.92, R()) * h,
-        len: lerp(1.6, 3.4, R()),
+        len: lerp(1.6, 3.4, R()) * sbud.scale,
         ph: R() * 6.283185,          // phase offset
         sp: lerp(0.6, 1.6, R()),     // twinkle speed
         ang: sang + (R() - 0.5) * 0.5
@@ -343,14 +556,15 @@
     // ride on top of the baked scene each frame, swaying (grass), drifting
     // (water glints), or gliding (clouds) per the palette's `flow` mode.
     _flow = [];
-    var fn = Math.max(12, Math.round(w / 5));
+    var fbud = _budget(Math.max(12, Math.round(w / 5)), LIVE_CAP_FLOW);
+    var fn = fbud.n;
     var nearColors = (pal.layers[pal.layers.length - 1] || {}).colors || ['#FFFFFF'];
     for (var fi = 0; fi < fn; fi++) {
       var isCloud = pal.flow === 'clouds';
       _flow.push({
         x: R() * w,
         y: (pal.flow === 'sway' ? lerp(0.5, 0.99, R()) : lerp(0.3, 0.9, R())) * h,
-        len: lerp(isCloud ? 5 : 2.2, isCloud ? 11 : 5.5, R()),
+        len: lerp(isCloud ? 5 : 2.2, isCloud ? 11 : 5.5, R()) * fbud.scale,
         wid: lerp(0.34, 0.6, R()),
         ang: (pal.flow === 'sway' ? -1.5 : 0) + (R() - 0.5) * 0.5,
         color: nearColors[(R() * nearColors.length) | 0],
@@ -374,21 +588,30 @@
     _fgBlades = [];
     var fgKind = pal.flow || 'sway';
     var fgColors = (pal.layers[pal.layers.length - 1] || {}).colors || ['#FFFFFF'];
-    // SKY (clouds): the near plane is bright WISPY HAZE, not a dense band. A
-    // packed row of occluder puffs jammed at the clipped rim pools into the
-    // owner's "large black border" no matter how warm the seed, because ~65
-    // stacked translucent ellipses SUBTRACT brightness from the luminous sky.
-    // So on clouds we seed FAR FEWER blades, scattered HIGHER (not clamped to
-    // the rim). Meadow/pool keep the dense near band.
+    // SKY (clouds): the near plane is a SUNLIT CLOUD BANK the cat wades through
+    // — broad, rounded, BRIGHT puffs whose tops arc over the rim, not a row of
+    // thin stalks. Two earlier passes tried to make it out of the scene's own
+    // warm sand tones and it was invisible for a measurable reason: mixing the
+    // near colour toward #F4C594 landed on ~#F2CAA1, and the base of the sky
+    // gradient IS #F2CFB4 — the plane was painted the same colour as the wall
+    // behind it, so there was nothing to see (and every attempt to fix it by
+    // DARKENING produced the "dirty border" the owner rejected). A near plane
+    // needs a VALUE gap, and on a luminous dawn sky the only direction with
+    // headroom is BRIGHTER: cloud tops catch the sun, so they read as a plane
+    // in front while making the band lighter, never dirtier.
     var fgAiry = (fgKind === 'clouds');
-    var fgN = fgAiry ? Math.max(10, Math.round(w / 16)) : Math.max(18, Math.round(w / 5.5));
+    var fgBud = _budget(fgAiry ? Math.max(12, Math.round(w / 13)) : Math.max(18, Math.round(w / 5.5)),
+                        LIVE_CAP_FG);
+    var fgN = fgBud.n;
     var fgBase = h + 1;                                  // rooted at the very bottom
     for (var gi2 = 0; gi2 < fgN; gi2++) {
       var gx = R() * w;
       // tall enough to reach up into the pet's paw/ankle band (pet box ~30px in
       // a ~48px bar sits with its feet ~1px off the bottom): 9–16px blades.
-      var glen = lerp(9, 16, R());
-      var gwid = lerp(1.4, 2.6, R());
+      // Cloud puffs are instead BROAD and rounded (the fg 'clouds' branch draws
+      // rx=len/2, ry=wid), so they overlap into one continuous bank.
+      var glen = fgAiry ? lerp(22, 42, R()) : lerp(9, 16, R());
+      var gwid = (fgAiry ? lerp(4.5, 8.5, R()) : lerp(1.4, 2.6, R())) * fgBud.scale;
       var gang = (fgKind === 'sway' ? -1.5 : (fgKind === 'clouds' ? 0.06 : 0.0)) + (R() - 0.5) * 0.5;
       // ATMOSPHERIC PERSPECTIVE — the near plane must read as CLOSER than the
       // hazy background: mix the source colour HARD toward a deep saturated
@@ -408,24 +631,24 @@
       // mix toward a bright warm-white so a near puff READS AS HAZE and can
       // never pool into a dark border on the luminous sky. Pool: a faint deeper
       // teal. Meadow: dark grass.
-      // Sky near haze reads by CHROMA, not luminance: the base bg is already
-      // near-white, so a brighter bloom is invisible and a darker one becomes
-      // the border. A saturated warm-peach tint (more chroma than the pale bg)
-      // gives a measurable near-plane presence while staying LIGHT.
-      var fgShade = fgDark ? '#182A0C' : (fgKind === 'drift' ? '#3E7E80' : '#F4C594');
-      var fgMix = fgDark ? 0.55 : (fgKind === 'drift' ? 0.26 : 0.5);
-      // airy (clouds) puffs sit LOW in the base band as a bright warm HAZE
-      // bloom — a near plane that reads by BRIGHTENING (lighter than the bg),
-      // never a dark row. Kept in the bottom ~10px so it registers as a base
-      // presence, not scattered mid-air specks. Meadow/pool stay rooted at rim.
-      var ghy = fgAiry ? (h - lerp(1, 9, R())) : fgBase;
+      // Sky near CLOUD BANK reads by LUMINANCE, upward: mix toward a near-white
+      // sunlit cloud top (#FFFDF6), well above the #F2CFB4 base of the sky
+      // gradient, so the bottom band measurably BRIGHTENS. That is both the
+      // depth cue and the guarantee it can never become the rejected dark
+      // border — a plane made of light cannot pool into dirt.
+      var fgShade = fgDark ? '#182A0C' : (fgKind === 'drift' ? '#3E7E80' : '#FFFDF6');
+      var fgMix = fgDark ? 0.55 : (fgKind === 'drift' ? 0.26 : 0.72);
+      // Cloud puffs sit LOW so they bank around the cat's legs, their crowns
+      // arcing over the rim; their broad radii overlap into one continuous
+      // sunlit bank rather than scattered mid-air specks.
+      var ghy = fgAiry ? (h - lerp(-1, 7, R())) : fgBase;
       _fgBlades.push({ kind: fgKind, x: gx, hy: ghy,
                        base: { x: gx - glen * Math.cos(gang), y: fgBase - glen * Math.sin(gang) },
                        rootY: fgBase, len: glen, wid: gwid, ang: gang,
                        color: _mixHex(fgColors[(R() * fgColors.length) | 0], fgShade, fgMix),
                        shade: fgShade,
                        alpha: fgDark ? lerp(0.92, 1.0, R())
-                                     : (fgAiry ? lerp(0.30, 0.48, R()) : lerp(0.42, 0.6, R())),
+                                     : (fgAiry ? lerp(0.52, 0.74, R()) : lerp(0.42, 0.6, R())),
                        ph: R() * 6.283185, sp: lerp(0.7, 1.5, R()) });
     }
     // Seed the IRREGULAR understory mounds (the base anchor, NOT a solid strip).
@@ -460,8 +683,18 @@
     var uShadeSeed = uDark ? '#28401A' : (fgKind === 'drift' ? '#3E7E80' : '#E9D9C2');
     var uMix = uDark ? 0.55 : (fgKind === 'drift' ? 0.28 : 0.18);
     var ux = -6;
+    // Like the other LIVE populations (§ LIVE_CAP_*), the mounds are re-queued
+    // every frame, so on a very wide bar we widen each mound instead of adding
+    // more: the broken, gapped SILHOUETTE that keeps this from reading as a
+    // ruled border comes from the jittered width/height/sink, which survives
+    // the widening — only the stride grows.
+    var uStride = 1;
+    if (!uSkip) {
+      var uWant = Math.round((w + 12) / 12.5);        // ~mounds at the natural stride
+      if (uWant > LIVE_CAP_UNDERSTORY) uStride = uWant / LIVE_CAP_UNDERSTORY;
+    }
     while (!uSkip && ux < w + 6) {
-      var uw = lerp(10, 22, R());                       // wide, overlapping
+      var uw = lerp(10, 22, R()) * uStride;             // wide, overlapping
       var uh = lerp(2.5, uDark ? 5.0 : 2.6, R());        // low (much lower on airy scenes)
       var uc = _mixHex(fgColors[(R() * fgColors.length) | 0], uShadeSeed, uMix);
       _understory.push({ x: ux + uw * 0.5, rx: uw * 0.6, ry: uh,
@@ -471,6 +704,11 @@
       ux += uw * lerp(0.55, 0.9, R());                   // overlap + occasional gap
     }
     _spawnCritter(R);
+    // Finally: tear the sheet. Seeded from the SAME PRNG as everything above, so
+    // the torn outline is stable across repaints and unique per (scene, size).
+    _seedDeckle(R, w, h);
+    _cutDeckle(b, w, h);
+    _paintDeckleRim(b, R, pal);
   }
 
   // (Re)seed the scene critter for the current scene, off-screen on a random
@@ -543,20 +781,29 @@
       var dx = Math.sin(ms * 0.0007 * s.sp + s.ph) * 0.8;   // micro sway
       dab(c, s.x + dx, s.y, s.len * (0.7 + 0.5 * tw), s.len * 0.5, s.ang, pal.spark, a);
     }
+    flushDabs();          // MUST land while 'lighter' is still active
     c.restore();
     // the LIVE near layer — swaying/flattening grass · rippling/splashing water ·
     // drifting/shoved clouds — the near band of EVERY scene, rendered live (not
     // baked) so it moves and reacts to the pet. Drawn before the thin flow
     // overlay so the fine breathing sits on top of the live bank.
     _paintLiveLayer(c, pal, ms, w, h);
+    flushDabs();
     // the FLOW layer — swaying grass / drifting glints / gliding clouds. It now
     // also PRESSES/PARTS around the pet's foot (see _paintFlow's deform).
     _paintFlow(c, pal, ms, w, h);
+    flushDabs();
     // the PET-WAKE marks — grass kicked up / a splash ripple / a cloud puff at
     // the foot, painted ON the canvas so pet & scene read as one layer.
     _paintWake(c, pal, ms, w, h);
+    flushDabs();
     // the critter (drawn last, above the scene but below the pet at z1)
     _paintCritter(c, ms, dt, w, h);
+    // Re-tear the sheet. The baked buffer is already cut, but every per-frame
+    // layer above (the full-rect sun wash, flow, wake) paints across the whole
+    // canvas and would refill the torn margin — so the cut is re-applied to the
+    // composited frame. One composite op; the outline itself is precomputed.
+    _cutDeckle(c, w, h);
     // FINALLY, on the SEPARATE foreground canvas (z2, IN FRONT of the pet):
     // paint the near occluder band so the cat is partly hidden by it and reads
     // as standing AMONG the scene, not on top of it (the 2.5D depth fix).
@@ -593,6 +840,7 @@
       // no dab edge ever aligns with the clip line to look like a stroke.
       dab(c, uxc, h + um.sink, um.rx, um.ry, 0, um.color, um.alpha);
     }
+    flushDabs();          // the mounds sit UNDER the blades — keep that order
     for (var i = 0; i < _fgBlades.length; i++) {
       var bl = _fgBlades[i];
       var kind = bl.kind || 'sway';
@@ -660,6 +908,8 @@
         dab(c, cxp, cyp, clen * 0.5, bl.wid, bl.ang, ccolor, calpha);
       }
     }
+    flushDabs();
+    _cutDeckle(c, w, h);      // the near plane is torn by the same edge
   }
 
   // Advance the ground-disturbance field: PRESS a bump under the pet's ground
@@ -974,14 +1224,28 @@
       dab(c, cr.x + 2.4, y - wb * 1.4, 3.0, 0.7, 0.5 - wb * 0.4, col[1], 0.8);
       dab(c, cr.x, y, 1.2, 0.9, 0, col[2], 0.85);
     }
+    flushDabs();
     c.restore();
   }
 
   function _loop(ts) {
     _raf = 0;
     if (_paused || _reduced || !_isTofu() || _scene === 'off') return;   // loop parks
+    if (_offscreen) return;                       // bar not on screen → nothing to paint
     if (!_t0) { _t0 = ts; _lastMs = 0; }
-    _paintFrame(ts - _t0);
+    // FRAME PACING. The scene is ambient weather — grass sway, drifting glints,
+    // gliding cloud, a slow sun. None of it moves more than a fraction of a
+    // pixel per 60Hz tick, so painting it every display refresh spent half the
+    // work on frames the eye cannot separate. We paint on a ~SCENE_FPS cadence
+    // and let rAF keep supplying the vsync clock (cheap: an early return), which
+    // halves the scene's cost on a 60Hz panel and thirds it on a 120Hz one.
+    // Nothing else has to change, because every animated quantity here is a
+    // function of absolute `ms`, and `dt` is measured between PAINTED frames —
+    // so the disturbance spring-back stays frame-rate independent.
+    if (ts - _lastPaint >= SCENE_FRAME_MS) {
+      _lastPaint = ts;
+      _paintFrame(ts - _t0);
+    }
     _raf = requestAnimationFrame(_loop);
   }
 
@@ -997,15 +1261,20 @@
     if (!_ctx) return;
     var active = _isTofu() && _scene !== 'off';
     if (!active) { if (_raf) { cancelAnimationFrame(_raf); _raf = 0; } _clearForeground(); return; }
+    // Scrolled/collapsed out of view: stop the rAF chain outright. This is the
+    // one park that costs literally nothing (no ticking callback at all),
+    // unlike the paced loop which still wakes per vsync to decide.
+    if (_offscreen) { if (_raf) { cancelAnimationFrame(_raf); _raf = 0; } return; }
     if (_reduced || _paused) {
       if (_raf) { cancelAnimationFrame(_raf); _raf = 0; }
       _lastMs = 0;
       _paintFrame(0);              // one static, fully-painted frame
       return;
     }
-    if (!_raf) _raf = requestAnimationFrame(_loop);
+    // Re-arm the pace clock so a loop resumed after a park paints immediately
+    // instead of waiting out a stale interval.
+    if (!_raf) { _lastPaint = -1e9; _raf = requestAnimationFrame(_loop); }
   }
-
   // (Re)size the canvas + buffer to the bar's box at the current DPR, then
   // re-bake the static scene. Cheap-guards a zero-size (bar still display:none).
   function _resize() {
@@ -1135,6 +1404,21 @@
     // app theme, all without coupling to the pet: attribute/resize observers.
     if (window.ResizeObserver && _bar) {
       try { new ResizeObserver(function () { _resize(); }).observe(_bar); } catch (e) { /* harmless */ }
+    }
+    // Park the whole loop while the bar is scrolled/collapsed out of view — an
+    // invisible painting is pure waste. Guarded + optional: without
+    // IntersectionObserver the scene simply keeps its old always-on behaviour.
+    if (window.IntersectionObserver && _bar) {
+      try {
+        new IntersectionObserver(function (entries) {
+          for (var i = 0; i < entries.length; i++) {
+            var vis = !!entries[i].isIntersecting;
+            if (vis === !_offscreen) continue;
+            _offscreen = !vis;
+            _ensureLoop();
+          }
+        }, { threshold: 0 }).observe(_bar);
+      } catch (e) { /* harmless — scene just never parks on scroll */ }
     }
     window.addEventListener('resize', _resize);
     if (window.MutationObserver) {

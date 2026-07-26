@@ -28,22 +28,29 @@ function recorder() {
   const ops = [];
   const st = { fill: '#000000', alpha: 1, comp: 'source-over', grad: null };
   const stack = [];
-  let cur = null;
+  // The module BATCHES dabs: many ellipse(x,y,rx,ry,ang,...) subpaths are
+  // queued into one path and emitted by a single fill(), with the geometry in
+  // the ellipse ARGS (no translate/rotate per dab any more — that quartet was
+  // the per-frame cost we removed). So the recorder collects pending ellipses
+  // and flushes them as individual dab ops when fill() lands.
+  let pending = [];
   const ctx = {
     canvas: { width: W, height: H },
     setTransform() {}, clearRect() {},
     save() { stack.push({ fill: st.fill, alpha: st.alpha, comp: st.comp, grad: st.grad }); },
-    restore() { const p = stack.pop(); if (p) { st.fill = p.fill; st.alpha = p.alpha; st.comp = p.comp; st.grad = p.grad; } cur = null; },
-    translate(x, y) { cur = { x, y, ang: 0 }; },
-    rotate(a) { if (cur) cur.ang = a; },
-    beginPath() {},
-    ellipse(cx, cy, rx, ry) { if (cur) { cur.rx = rx; cur.ry = ry; } },
+    restore() { const p = stack.pop(); if (p) { st.fill = p.fill; st.alpha = p.alpha; st.comp = p.comp; st.grad = p.grad; } },
+    translate() {},
+    rotate() {},
+    beginPath() { pending = []; },
+    moveTo() {},
+    ellipse(cx, cy, rx, ry, ang) { pending.push({ x: cx, y: cy, rx, ry, ang: ang || 0 }); },
     arc() {},
     fill() {
-      if (cur && cur.rx != null) {
-        ops.push({ t: 'dab', x: cur.x, y: cur.y, rx: cur.rx, ry: cur.ry,
-                   ang: cur.ang, color: st.fill, alpha: st.alpha, comp: st.comp });
+      for (const e of pending) {
+        ops.push({ t: 'dab', x: e.x, y: e.y, rx: e.rx, ry: e.ry,
+                   ang: e.ang, color: st.fill, alpha: st.alpha, comp: st.comp });
       }
+      pending = [];
     },
     fillRect(x, y, w, h) {
       ops.push({ t: 'rect', x, y, w, h, color: st.fill, grad: st.grad,

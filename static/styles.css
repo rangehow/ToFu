@@ -11331,6 +11331,14 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   z-index:0;
   pointer-events:none;
   border-radius:inherit;
+  /* This clip stays as a SAFETY net (a canvas must never square off the frame's
+     corners), but the VISIBLE silhouette is now cut in JS: tofu-scene.js tears a
+     DECKLE edge — the irregular feathered rim of handmade paper — out of the
+     painting itself, and the bar's cream body shows through that torn margin.
+     The tear is applied to the PAINTING rather than to .project-bar because a
+     clip-path on the bar would also crop the pet's speech bubble (which
+     deliberately pokes above the rim) and the frame's drop shadow. The deckle
+     always bites INSIDE this rounded rect, so the two never fight. */
   clip-path:inset(0 round var(--bar-frame-radius, var(--radius)));
   display:block;
 }
@@ -20466,7 +20474,7 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
 .pb-board-card.pb-board-held{border-left:3px solid var(--pb-amber)}
 .pb-board-lane-held .pb-board-count{color:var(--pb-amber);border-color:color-mix(in srgb,var(--pb-amber) 34%,transparent);background:color-mix(in srgb,var(--pb-amber) 12%,transparent)}
 .pb-board-held-by{font-size:10.5px;color:var(--text-tertiary)}
-.pb-board-title{font-size:13px;line-height:1.5;color:var(--text-primary);white-space:normal;overflow-wrap:anywhere;word-break:break-word}
+.pb-board-title{font-size:13.5px;font-weight:600;line-height:1.5;color:var(--text-primary);white-space:normal;overflow-wrap:anywhere;word-break:break-word}
 .pb-board-card-meta{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:9px}
 .pb-board-badge{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:600;padding:2px 8px;border-radius:var(--pb-radius-chip);line-height:1.5}
 .pb-board-badge-dispatched{background:var(--accent-subtle);color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 30%,transparent)}
@@ -20630,6 +20638,55 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
    coordination counts. The per-conversation influence lens lives inside the
    Project Brain panel, not on this always-visible line. */
 .collab-cluster{display:inline-flex;align-items:center;gap:8px;min-width:0;flex:1 1 auto}
+
+/* ═══ Readability pass (P4 of the attention redesign) ═══
+   docs/PROJECT_BRAIN_ATTENTION_REDESIGN.md §3.3. Three complaints, three
+   fixes — all additive overrides of rules defined earlier in this block. */
+
+/* 1. TYPE HIERARCHY. Title / body / meta previously sat within ~1.5px of each
+   other, so nothing receded and every card read as a uniform grey wall. Give
+   the levels real separation: the title carries weight, the meta genuinely
+   whispers. (The .pb-attn-* family already ships this scale; these rules
+   retrofit the older surfaces so the whole panel reads the same.)
+   NOTE: the .pb-board-title size/weight lives in its ORIGINAL rule above, not
+   here — an override at this point in the file has equal specificity and would
+   depend on source order, which is exactly the cascade trap
+   test_project_brain_tab_css_cascade exists to catch. */
+.pb-board-card-meta,.pb-board-block-meta{font-size:11.5px;color:var(--text-tertiary)}
+.pb-peer-who{font-weight:600}
+.pb-peer-doing{font-size:11.5px;color:var(--text-tertiary)}
+.pb-status-hist-narrative{font-size:12.5px;line-height:1.6;color:var(--text-secondary)}
+
+/* 2. STICKY LANE HEADS. A long board scrolls its lane label out of view, so
+   the operator loses track of which lane a card belongs to. Pin the heads to
+   the top of the scroller (.project-brain-col-body). Needs an opaque
+   background — the cards scroll UNDER them. */
+.pb-board-lane-head,.pb-peers-roster-head,.pb-peers-thread-head{position:sticky;top:-16px;z-index:2;background:var(--bg-secondary);padding-top:8px;padding-bottom:8px;margin-top:-8px}
+
+/* 3. QUIET CHROME. Per-card lifecycle buttons (complete / block / reopen) were
+   always at full strength, so every board card shouted three actions before
+   the operator had even read its title. Recede them until the card is hovered
+   or something inside it has keyboard focus — the same idiom
+   .pb-charter-row-actions already uses. Actions stay FOCUSABLE at all times
+   (opacity only), so keyboard and AT users are unaffected. */
+@media (hover:hover) and (pointer:fine){
+  .pb-board-card-actions{opacity:0.45;transition:opacity var(--transition)}
+  .pb-board-card:hover .pb-board-card-actions,
+  .pb-board-card:focus-within .pb-board-card-actions{opacity:1}
+  /* An awaiting-answer or blocked card is the ONE place the operator must act
+     — its controls never recede. */
+  .pb-board-card.pb-board-awaiting .pb-board-card-actions,
+  .pb-board-card.pb-board-blocked .pb-board-card-actions{opacity:1}
+}
+
+/* 4. DE-DUPLICATION. The same numbers rendered up to 4× (tab badge + lane head
+   + Status evidence chip + collab bar). The tab badges are the canonical
+   at-a-glance counts, so the Status tab's echo of them recedes to supporting
+   evidence rather than competing as a second dashboard. */
+.pb-status-evidence{opacity:0.72}
+.pb-status-hist-row .pb-status-evidence{display:none}
+.pb-status-hist-row:hover .pb-status-evidence,
+.pb-status-hist-row:focus-within .pb-status-evidence{display:flex;opacity:0.72}
 
 /* ── Responsive: narrow panel ──
    NOTE: .project-brain-columns is a display:block tab host (one panel visible

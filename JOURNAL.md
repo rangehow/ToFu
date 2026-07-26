@@ -1,6 +1,14 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续68) — 产出底盘三处收口:静音自动烧字幕 + 时效性回退 + 画质选择面(owner 三件拍板;commit `768cef58` + 断言钉续作,6 文件 +~210;两套件 **25/25**,双 **NEUTER 全咬**,P4/P5/底盘/E2E 回归 **67/67**)
+
+- **① 静音降级自动 burn_in(owner 批准的行为变更,精确形状):** narration **请求了但降级**(TTS 无槽/失败)→ 引擎自动烧字幕——静音片里文字是唯一信息载体(续66 真实验收抓出的「authored 纯视觉镜在静音下信息量归零」)。**显式 narration=False 永不到达此分支**(用户主动选的静音不烧)。烧的是**真实侧车 SRT**(行为测试断言 burn 的 srt 参数 === `result['srt_path']` 且含真实台词),不是重估。结果新增 `burn_in`/`burn_in_auto`,stepper 阶段列表补 `burn_in` 相。**NEUTER:** 摘掉 `or degraded_narration` → 行为测试精确翻红。
+- **② 时效性从一刀切改回退(owner 收回一半自己上轮的话):** `produce_video` 合法主题含常青科普(「为什么天空是蓝色的」),无条件 `freshness='week'` 会把最好的解释页滤掉、事实闸凑不够卡。形状:week 主查询 **<3 张事实卡** → 同一查询无过滤重试,产物记 `freshness_used: 'week'|'none'`。新闻路径不变(≥3 卡不重试)。**NEUTER:** 摘掉重试条件 → 翻红。
+- **③ 画质选择面暴露到用户可摸(owner:「用户不需要感知编排,但需要感知存在」):** `produce_video` 结果新增 `quality_hint`(并入 note):标准档明示「本次为标准画质(模板构图)。回复『精品重制』可切换(约 2× 耗时)」;精品档自述、不推销。**owner 追钉的闭环:** 测试不只看文案,还断言 `captured['job']['scene_author']` 随档位真翻转——否则 hint 还在承诺、切换已死而测试照样绿。
+- **★ 测试盲区教训(给后人):** `_cards_from_results` **按 URL 去重**。第一版假搜索 `list(_CARDS) * 2` 以为给了 4 张卡,实际去重后只有 2 张,永远跨不过 <3 阈值、误触发重试——**假数据形状撞上真实去重逻辑**。写假搜索数据时必须给不同 URL。
+- **过程:** engine 套件新增 2 行为测试时,预存在的 `test_engine_narration_degraded_continues_silent` 翻红——它没 fake `burn_in_subtitles`,新契约下真实 ffmpeg 去打假 mp4。这正是「新行为让旧假件过期」的正确信号,补 fake 后转绿,不是回归。
+
 ### 2026-07-26 — brand wordmark 字身改色:墨黑 → 深陶土 #A96536(owner「黑色也不好看」;commit `fc9b1083`,1 文件 +16/-3;6 候选 headless 对照截图实证)
 ### 2026-07-26(续65) — P0 import 级联根修,epic `pt_2a8aed4dea5542d5` 收口(commit `1c72c42c`,2 文件 +~50;failing-first A/B 实证 **旧码 2 红 / 新码 3 绿**,schema 环 **107 过**,collect **10188** 0 err)——同批 6 张票里**唯一全真的 P0**,也是唯一一张我不用推翻的
 

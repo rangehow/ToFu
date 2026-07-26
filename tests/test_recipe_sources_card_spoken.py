@@ -53,6 +53,10 @@ def test_produce_video_result_carries_quality_hint(monkeypatch):
     hint = result['note']
     assert '标准画质' in hint and '精品' in hint, hint
     assert '耗时' in hint, 'the cost trade-off must be stated'
+    # The hint PROMISES a switch path — pin that the job actually wires it:
+    # if scene_author stops following visual_quality, the hint keeps
+    # promising while the switch silently dies and this test stays green.
+    assert captured['job']['scene_author'] is False
 
     # boutique tier states itself plainly, with no switch offer
     _, content2, _ = hdl._handle_produce_video(
@@ -63,6 +67,7 @@ def test_produce_video_result_carries_quality_hint(monkeypatch):
     assert result2['visual_quality'] == 'authored'
     assert '精品画质' in result2['note']
     assert '重制' not in result2['note']
+    assert captured['job']['scene_author'] is True
 
 from lib.motion_video import _recipe as rec
 

@@ -1,0 +1,247 @@
+#!/usr/bin/env bash
+#
+# tofu_guard.sh — userspace watchdog for the Tofu server on :15000.
+#
+# WHY THIS EXISTS (2026-07-27)
+# ----------------------------
+# The server is repeatedly SIGKILLed by the container's OOM killer (shared
+# cgroup: 220 GiB limit filled by page cache + kernel slab + fat IDE
+# siblings, zero swap). SIGKILL is untrappable, so NOTHING inside the
+# process can react — the only correct layer is an OUTSIDE parent that
+# notices the death and relaunches. The durable fix was meant to be the
+# root supervisord program (deploy/supervisor/tofu.conf), but installing
+# it needs sudo, which this container does not grant the tofu user.
+#
+# This watchdog is the no-root equivalent: a tiny detached loop that
+# checks the :15000 listener every INTERVAL seconds and relaunches the
+# server when it is gone. It is kept alive by two crontab lines
+# (--install writes them): `@reboot` and `* * * * *` (each run is an
+# idempotent --ensure; a flock makes sure at most one loop exists).
+#
+# WHAT IT DOES ON A DEATH
+# -----------------------
+#   1. Appends an evidence block to logs/watchdog.log: death timestamp,
+#      cgroup usage/limit + oom_kill counter at that instant, and the
+#      tail of logs/cgroup_pressure.log (the pressure curve leading up
+#      to the kill, written by lib/cgroup_guard's monitor).
+#   2. Relaunches exactly like restart_15000.sh does (setsid nohup +
+#      env python from .tofu_env.json), output APPENDED to
+#      server_15000.log so consecutive lives keep their history.
+#   3. Backs off on crash storms: >MAX_CONSECUTIVE_DEATHS relaunches
+#      inside STORM_WINDOW seconds → the guard stops relaunching and
+#      logs loudly (a broken build must not hammer the box forever).
+#
+# MUTEX
+# -----
+# Stands down when the root supervisord already owns tofu (same rule as
+# restart_15000.sh) — two lifecycle owners must never fight. Also stands
+# down when data/.tofu_guard_disabled exists (manual off switch).
+#
+# USAGE
+# -----
+#   deploy/tofu_guard.sh --install     # write the 2 crontab lines (idempotent)
+#   deploy/tofu_guard.sh --uninstall   # remove them
+#   deploy/tofu_guard.sh --ensure      # start the loop iff absent (cron calls this)
+#   deploy/tofu_guard.sh --once        # single check+relaunch-if-dead, then exit
+#   deploy/tofu_guard.sh --status      # is the loop alive? is the server alive?
+#   deploy/tofu_guard.sh --stop        # disable relaunching (touch the off switch)
+#   deploy/tofu_guard.sh --start       # re-enable
+
+set -u
+
+SCRIPT="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+PROJ="$(cd "$(dirname "${SCRIPT}")/.." && pwd)"
+PORT="${PORT:-15000}"
+INTERVAL="${TOFU_GUARD_INTERVAL:-15}"
+LOCK="${PROJ}/data/.tofu_guard.lock"
+DISABLED_FLAG="${PROJ}/data/.tofu_guard_disabled"
+STATE="${PROJ}/data/.tofu_guard_state"
+WLOG="${PROJ}/logs/watchdog.log"
+SLOG="${PROJ}/server_${PORT}.log"
+MAX_CONSECUTIVE_DEATHS=5
+STORM_WINDOW=600
+
+cd "${PROJ}" || { echo "FATAL: cannot cd ${PROJ}"; exit 1; }
+mkdir -p "${PROJ}/data" "${PROJ}/logs"
+
+# ── env python, mirroring restart_15000.sh / bootstrap.py (.tofu_env.json) ──
+detect_python() {
+  local marker="${PROJ}/.tofu_env.json"
+  if [ -f "${marker}" ]; then
+    local py
+    py="$(sed -n 's/.*"python"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${marker}" | head -n1)"
+    if [ -n "${py}" ] && [ -x "${py}" ]; then printf '%s' "${py}"; return 0; fi
+  fi
+  command -v python3 || command -v python
+}
+PY="$(detect_python)"
+
+listener_pids() {
+  ss -ltnp 2>/dev/null \
+    | awk -v pat=":${PORT}\$" '$4 ~ pat {print}' \
+    | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u
+}
+
+healthy() {
+  curl -s --max-time 2 "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1
+}
+
+log() {
+  echo "$(date '+%F %T') $*" | tee -a "${WLOG}" >&2
+}
+
+supervisord_owns() {
+  # Stand down iff the root supervisord manages tofu AND the live listener
+  # traces back to it (conf present is not enough — it may be stale).
+  [ -f /etc/supervisor/conf.d/tofu.conf ] || return 1
+  local pids p comm hops
+  pids="$(listener_pids)"
+  [ -z "${pids}" ] && return 1
+  for p in ${pids}; do
+    hops=0
+    while [ -n "${p}" ] && [ "${p}" != "1" ] && [ "${hops}" -lt 12 ]; do
+      comm="$(ps -o comm= -p "${p}" 2>/dev/null | tr -d ' ')"
+      case "${comm}" in *supervisord*) return 0 ;; esac
+      p="$(ps -o ppid= -p "${p}" 2>/dev/null | tr -d ' ')"
+      hops=$((hops + 1))
+    done
+  done
+  return 1
+}
+
+record_death_evidence() {
+  {
+    echo "──────────────── $(date '+%F %T') — :${PORT} listener GONE"
+    echo "  cgroup usage/limit : $(cat /sys/fs/cgroup/memory/memory.usage_in_bytes 2>/dev/null) / $(cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null) bytes"
+    echo "  cgroup oom_kill    : $(grep '^oom_kill' /sys/fs/cgroup/memory/memory.oom_control 2>/dev/null | awk '{print $2}')"
+    echo "  pressure tail      :"
+    tail -n 4 "${PROJ}/logs/cgroup_pressure.log" 2>/dev/null | sed 's/^/    /'
+    echo "  server log tail    :"
+    tail -n 5 "${SLOG}" 2>/dev/null | sed 's/^/    /'
+  } >> "${WLOG}" 2>/dev/null
+}
+
+storm_check() {
+  # $1 = now epoch. Returns 0 OK to relaunch, 1 = storm, stop relaunching.
+  local now="$1" first deaths
+  if [ -f "${STATE}" ]; then
+    first="$(sed -n '1p' "${STATE}")"
+    deaths="$(sed -n '2p' "${STATE}")"
+  else
+    first=0; deaths=0
+  fi
+  if [ $((now - first)) -gt "${STORM_WINDOW}" ]; then
+    first="${now}"; deaths=0
+  fi
+  deaths=$((deaths + 1))
+  printf '%s\n%s\n' "${first}" "${deaths}" > "${STATE}"
+  [ "${deaths}" -le "${MAX_CONSECUTIVE_DEATHS}" ]
+}
+
+relaunch() {
+  log "[guard] relaunching: PORT=${PORT} setsid nohup ${PY} server.py >> ${SLOG}"
+  {
+    echo ""
+    echo "════════════════ $(date '+%F %T') — launched by tofu_guard ════════════════"
+  } >> "${SLOG}" 2>/dev/null
+  PORT="${PORT}" BIND_HOST="${BIND_HOST:-127.0.0.1}" \
+    setsid nohup "${PY}" server.py >> "${SLOG}" 2>&1 &
+  local newpid=$!
+  local i
+  for i in $(seq 1 60); do
+    if healthy; then
+      log "[guard] server up (pid ${newpid}, healthy after ~${i}s)"
+      return 0
+    fi
+    kill -0 "${newpid}" 2>/dev/null || {
+      log "[guard] launched pid ${newpid} DIED during startup — see ${SLOG} tail"
+      return 1
+    }
+    sleep 1
+  done
+  log "[guard] server did not answer /api/health within 60s (pid ${newpid})"
+  return 1
+}
+
+check_once() {
+  # Single guard pass. Exit 0 when the world is fine (or intentionally down).
+  if [ -f "${DISABLED_FLAG}" ]; then
+    return 0
+  fi
+  if [ -n "$(listener_pids)" ]; then
+    return 0
+  fi
+  if supervisord_owns; then
+    log "[guard] :${PORT} owned by root supervisord — standing down"
+    return 0
+  fi
+  record_death_evidence
+  if ! storm_check "$(date +%s)"; then
+    log "[guard] CRASH STORM: >${MAX_CONSECUTIVE_DEATHS} deaths in ${STORM_WINDOW}s —" \
+        "NOT relaunching. Fix the build, then: rm ${STATE}"
+    return 1
+  fi
+  relaunch
+}
+
+loop() {
+  # Hold the singleton flock for the loop's whole life.
+  exec 9>"${LOCK}"
+  if ! flock -n 9; then
+    exit 0  # another loop already owns it
+  fi
+  log "[guard] watchdog loop started (interval=${INTERVAL}s, pid $$)"
+  while true; do
+    check_once
+    sleep "${INTERVAL}"
+  done
+}
+
+ensure() {
+  # Idempotent: start the detached loop iff none holds the lock.
+  if command -v flock >/dev/null 2>&1; then
+    if flock -n "${LOCK}" -c 'true' 2>/dev/null; then
+      : # lock free — no loop alive; start one below
+    else
+      exit 0  # a loop is alive
+    fi
+  fi
+  setsid nohup "${SCRIPT}" --loop >/dev/null 2>&1 &
+  echo "[guard] watchdog loop launched (pid $!)"
+}
+
+CRON_TAG="# tofu_guard"
+install_cron() {
+  local current
+  current="$(crontab -l 2>/dev/null | grep -v "${CRON_TAG}")"
+  {
+    [ -n "${current}" ] && printf '%s\n' "${current}"
+    printf '@reboot %s --ensure >/dev/null 2>&1 %s\n' "${SCRIPT}" "${CRON_TAG}"
+    printf '* * * * * %s --ensure >/dev/null 2>&1 %s\n' "${SCRIPT}" "${CRON_TAG}"
+  } | crontab -
+  echo "[guard] crontab installed:"
+  crontab -l | grep "${CRON_TAG}"
+}
+
+uninstall_cron() {
+  crontab -l 2>/dev/null | grep -v "${CRON_TAG}" | crontab -
+  echo "[guard] crontab lines removed (the running loop, if any, keeps running;"
+  echo "        kill it with: pkill -f 'tofu_guard.sh --loop')"
+}
+
+case "${1:---ensure}" in
+  --install)   install_cron ;;
+  --uninstall) uninstall_cron ;;
+  --ensure)    ensure ;;
+  --loop)      loop ;;
+  --once)      check_once ;;
+  --stop)      touch "${DISABLED_FLAG}"; echo "[guard] relaunching DISABLED (${DISABLED_FLAG})" ;;
+  --start)     rm -f "${DISABLED_FLAG}"; echo "[guard] relaunching enabled" ;;
+  --status)
+    echo "guard loop : $(flock -n "${LOCK}" -c 'echo not-running' 2>/dev/null || echo running)"
+    echo "server     : $([ -n "$(listener_pids)" ] && echo "listening on :${PORT}" || echo DOWN)"
+    echo "disabled   : $([ -f "${DISABLED_FLAG}" ] && echo yes || echo no)"
+    echo "storm state: $(paste -sd/ "${STATE}" 2>/dev/null || echo none)"
+    ;;
+  *) echo "usage: $0 [--install|--uninstall|--ensure|--once|--stop|--start|--status]" >&2; exit 2 ;;
+esac

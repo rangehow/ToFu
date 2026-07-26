@@ -1690,6 +1690,69 @@ def _try_start_server(first_attempt: bool = False) -> tuple[bool, str, int]:
     return False, stderr_text, rc
 
 
+def _is_external_kill(rc: int) -> bool:
+    """True when server.py died from SIGKILL (rc -9, or shell-style 137).
+
+    SIGKILL is untrappable and leaves no traceback: feeding the empty stderr
+    into the LLM dependency-repair loop would 'diagnose' nothing. The cause
+    is almost always the container OOM killer (shared cgroup — see
+    lib/cgroup_guard.py) or an external reaper. The right response is to
+    record evidence and RESTART, not to repair dependencies.
+    """
+    return rc in (-9, 137)
+
+
+def _log_external_kill(rc: int) -> None:
+    """Durable evidence of a SIGKILL death — stderr + logs/watchdog.log."""
+    import datetime
+    line = ('%s [bootstrap] server.py SIGKILLed (exit %s) — almost always the '
+            'container OOM killer (shared cgroup, zero swap). See '
+            'logs/cgroup_pressure.log for the pressure curve; restarting.'
+            % (datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), rc))
+    print(line, file=sys.stderr)
+    try:
+        os.makedirs(os.path.join(BASE_DIR, 'logs'), exist_ok=True)
+        with open(os.path.join(BASE_DIR, 'logs', 'watchdog.log'), 'a',
+                  encoding='utf-8') as f:
+            f.write(line + '\n')
+    except OSError as e:
+        print(f'[bootstrap] could not write watchdog.log: {e}', file=sys.stderr)
+
+
+def _restart_after_external_kill(first_rc: int, max_relaunches: int = 5) -> None:
+    """Relaunch server.py after SIGKILL deaths, with linear backoff.
+
+    A SIGKILLed server is healthy code killed by the environment — restarting
+    is the whole fix (same contract as supervisord autorestart=true, for
+    users who launch via bootstrap). Gives up after max_relaunches
+    consecutive kills so a pathological kill-loop cannot spin forever.
+    Never returns on success (server runs forever / clean exit sys.exit()s
+    inside _try_start_server). When the relaunched server dies of something
+    OTHER than SIGKILL, RETURNS that death's ``(stderr_text, rc)`` so the
+    caller can enter the repair flow with the real error.
+    """
+    rc = first_rc
+    for attempt in range(1, max_relaunches + 1):
+        _log_external_kill(rc)
+        backoff = min(5 * attempt, 30)
+        print(f'[bootstrap] 🔄 relaunching after SIGKILL '
+              f'(attempt {attempt}/{max_relaunches}, backoff {backoff}s)…',
+              file=sys.stderr)
+        time.sleep(backoff)
+        _, stderr_text, rc = _try_start_server()
+        # On success / clean exit _try_start_server never returns.
+        if _is_external_kill(rc):
+            continue
+        print(f'[bootstrap] ⚠ relaunched server crashed differently '
+              f'(exit {rc}) — entering repair mode.', file=sys.stderr)
+        return stderr_text, rc
+    print(f'[bootstrap] ❌ server.py SIGKILLed {max_relaunches}× in a row — '
+          f'giving up. The container is under sustained memory pressure; '
+          f'see logs/cgroup_pressure.log and lib/cgroup_guard.py.',
+          file=sys.stderr)
+    sys.exit(137)
+
+
 def _is_import_or_package_error(stderr_text: str) -> bool:
     """Heuristic: does the traceback look like a missing-package error?"""
     indicators = [
@@ -1866,6 +1929,14 @@ def main():
     # returns at all, the process crashed.  On clean shutdown (rc=0, e.g.
     # Ctrl+C) it calls sys.exit(0) internally — so reaching here means crash.
     _, stderr_text, rc = _try_start_server(first_attempt=True)
+
+    # ── SIGKILL (OOM killer / external reaper): record + auto-relaunch ──
+    # The server ran fine and was killed by the environment — dependencies
+    # are not the problem, so skip the LLM repair flow entirely. If the
+    # relaunched server then crashes with a REAL error, the function hands
+    # us its (stderr, rc) and we enter repair mode with the real data.
+    if _is_external_kill(rc):
+        stderr_text, rc = _restart_after_external_kill(rc)
 
     # ── Enter repair mode ──
     print(f'[bootstrap] ⚠ server.py crashed (exit code {rc}). '

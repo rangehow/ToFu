@@ -381,6 +381,14 @@ def _read_project_file(base, rel_path, start_line=None, end_line=None):
             else:
                 text = f.read()
                 total = text.count('\n') + 1
+                # One-shot big read: hint its pages out of the page cache so
+                # they stop counting against a shared cgroup limit (no-op
+                # off-Linux). Ranged reads stay cached — likely re-read soon.
+                if sz >= 8 << 20:
+                    try:
+                        os.posix_fadvise(f.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
+                    except (OSError, AttributeError) as e:
+                        logger.debug('[Tools] fadvise skipped for %s: %s', rel_path, e)
 
                 if is_data or (sz > 20_000 and _is_likely_data_content(text)):
                     preview = text[:MAX_DATA_FILE_PREVIEW]

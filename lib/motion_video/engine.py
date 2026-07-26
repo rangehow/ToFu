@@ -128,6 +128,28 @@ def write_job_manifest(task: dict, *, kind: str, state: str) -> None:
                    kind=kind, state=state, log_label='MotionVideo')
 
 
+def _drop_page_cache(workdir: str) -> None:
+    """fadvise-DONTNEED this job's media outputs (scene mp4s, finals, wavs).
+
+    Render intermediates are write-once GB-scale payloads; left in the page
+    cache they charge the shared cgroup long after the job finished (OOM
+    context in lib/cgroup_guard). Best-effort — never raises.
+    """
+    try:
+        import glob as _glob
+        from lib.cgroup_guard import drop_files_cache
+        paths = []
+        for pat in ('*.mp4', 'scenes/*/*.mp4', 'audio/*.wav', '*.srt'):
+            paths.extend(_glob.glob(os.path.join(workdir, pat)))
+        stats = drop_files_cache(paths, min_bytes=1 << 20)
+        if stats['files']:
+            logger.info('[MotionVideo] page-cache relief for %s: %d files/%.1fMB',
+                        workdir, stats['files'], stats['bytes'] / 1e6)
+    except Exception as e:
+        logger.debug('[MotionVideo] page-cache relief failed for %s: %s',
+                     workdir, e)
+
+
 def task_id_of(task: dict) -> str:
     return task.get('task_id') or '?'
 
@@ -550,6 +572,7 @@ def run_motion_task(task: dict) -> None:
         task['result'] = result
         write_job_manifest(task, kind=task.get('kind') or 'scenes',
                            state='done')
+        _drop_page_cache(workdir)
         _emit(task, {'type': 'final', 'final_path': final_path,
                      'duration': result['duration'], 'narrated': narration})
         _motion_runtime.finish(task_id, result=result)
@@ -714,6 +737,7 @@ def run_scene_regen_task(task: dict) -> None:
                   'regen_of': task.get('regen_of'),
                   'scene_id': scene_id,
                   'duration': round(float((probe or {}).get('duration') or 0), 3)}
+        _drop_page_cache(workdir)
         _emit(task, {'type': 'final', 'final_path': final_path,
                      'scene_id': scene_id, 'regen_of': task.get('regen_of')})
         _motion_runtime.finish(task_id, result=result)

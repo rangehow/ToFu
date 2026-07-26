@@ -450,13 +450,18 @@ _SYNC_DIGEST_MAX = 500
         'taskIds: [...], rev: <number|null>}]}``. For each entry the server '
         'compares the client busy set against the task-registry snapshot and '
         'the client rev against ``conversations.rev``; divergences are '
-        'WARN-logged and returned. Read-only probe — no state is mutated.'),
+        'WARN-logged and returned. Read-only probe — no state is mutated.\n\n'
+        'Optional top-level ``identityGateDegraded: true`` reports that the '
+        'client\'s multi-user identity gate fell back to accept-all (a JS '
+        'build-order regression); it is WARN-logged and may arrive with an '
+        'empty ``digests`` list.'),
     tags=['conversations'], scope='conversations',
     request_body={'required': True, 'content': {'application/json': {
         'schema': {
             'type': 'object',
             'required': ['digests'],
             'properties': {
+                'identityGateDegraded': {'type': 'boolean'},
                 'digests': {
                     'type': 'array',
                     'items': {
@@ -475,6 +480,30 @@ _SYNC_DIGEST_MAX = 500
 )
 async def sync_digest():
     body = await async_parse_body()
+
+    # ── Identity-gate fail-open telemetry ──────────────────────────────
+    # The client's multi-user identity gate (conv_state_reducer::_frameIsOurs)
+    # fails OPEN when the predicate is missing — a build-order regression makes
+    # every notify frame accepted UNSCOPED. That degrade is security-relevant
+    # and was previously visible ONLY in a browser console. It rides this
+    # existing probe so it lands in logs/app.log next to every other drift
+    # signal. Read BEFORE the digests validation: a broken-bundle page can
+    # legitimately have zero digests, and rejecting the body first would
+    # suppress the signal on exactly the page it exists to catch.
+    if body.get('identityGateDegraded'):
+        _auth_ig = current_auth()
+        logger.warning(
+            '[SyncDrift] IDENTITY GATE DEGRADED — client reports '
+            'window._frameIsOurs was unavailable, so notify frames are being '
+            'accepted UNSCOPED (multi-user isolation is off on that page). '
+            'Cause is a JS build-order regression: core/conv_state_reducer.js '
+            'must load before its consumers in lib/js_bundler.py. '
+            'key_id=%s user_id=%s digests=%s',
+            (_auth_ig.key_id if _auth_ig else ''),
+            (getattr(_auth_ig, 'user_id', '') if _auth_ig else ''),
+            (len(body.get('digests')) if isinstance(body.get('digests'), list)
+             else 0))
+
     digests = body.get('digests')
     if not isinstance(digests, list):
         return api_bad_request('digests must be a list', field='digests')

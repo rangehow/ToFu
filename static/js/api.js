@@ -436,8 +436,13 @@
     // pt_conv_state_ssot P5: report the client's per-conv state digest
     // (authoritative busy set + last-converged rev) for the server-side
     // drift comparison. Returns parsed {ok, checked, divergences} or null.
-    reportSyncDigest: (digests) =>
-      post('/api/v1/conversations/sync-digest', { digests }, { onError: 'null' }),
+    // `extra` carries optional top-level telemetry alongside the digests
+    // (currently {identityGateDegraded:true} — the multi-user identity
+    // gate's fail-open tripwire, so the degrade reaches logs/app.log
+    // instead of only a browser console).
+    reportSyncDigest: (digests, extra) =>
+      post('/api/v1/conversations/sync-digest',
+           Object.assign({ digests }, extra || {}), { onError: 'null' }),
     // LLM-generated title. Returns parsed {ok, title} or null on failure.
     // `lang` ('zh'|'en') forces the title language to match the UI; defaults
     // to the current interface language.

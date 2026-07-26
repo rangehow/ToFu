@@ -135,6 +135,12 @@ function reportIdentityGateUnavailable(site) {
 /* Test seam only — never called by production code. */
 function resetIdentityGateWarnedForTests() { _identityGateWarned = false; }
 
+/* Has the gate degraded to accept-all on this page? Read by the sync-drift
+ * probe so the degrade is REPORTED TO THE SERVER, not just to a browser
+ * console nobody is watching. Telemetry only — this never influences any
+ * accept/reject decision (the fail-open is already decided by then). */
+function identityGateDegraded() { return _identityGateWarned; }
+
 /* ═══════════════════════════════════════════════════════════════════════════
    PENDING BUSY STATE — a frame for a conv this client has not loaded yet
 
@@ -397,14 +403,31 @@ function buildSyncDigest(conversations) {
 
 /* POST the digest. Returns the parsed {ok, checked, divergences} or null.
  * A non-empty divergences list is logged client-side too so a developer
- * watching the browser console sees the same drift the server WARNs about. */
+ * watching the browser console sees the same drift the server WARNs about.
+ *
+ * Also carries ``identityGateDegraded`` — the multi-user identity gate's
+ * fail-open tripwire. It rides THIS existing round-trip rather than opening
+ * a second channel: the drift probe already reports client-vs-server
+ * disagreement every 60s and the server already WARN-logs it, so a degraded
+ * gate lands in logs/app.log next to every other drift signal instead of
+ * dying in a browser console nobody reads. Telemetry only — the flag never
+ * changes an accept/reject decision.
+ *
+ * NOTE the send condition: a degraded gate MUST report even when the conv
+ * digest list is empty. The two are independent — a page whose bundle order
+ * broke can easily have zero authoritative markers (that is arguably the
+ * LIKELIEST shape of the bug, since the reducer never ran), and the old
+ * ``if (!digests.length) return null`` would have suppressed the signal on
+ * exactly the page it exists to catch. */
 async function reportSyncDigest(conversations) {
   const digests = buildSyncDigest(conversations);
-  if (!digests.length) return null;
+  const degraded = identityGateDegraded();
+  if (!digests.length && !degraded) return null;
   try {
     if (typeof Api === 'undefined' || !Api.conversations ||
         typeof Api.conversations.reportSyncDigest !== 'function') return null;
-    const resp = await Api.conversations.reportSyncDigest(digests);
+    const resp = await Api.conversations.reportSyncDigest(
+      digests, degraded ? { identityGateDegraded: true } : null);
     const divs = resp && resp.divergences;
     if (Array.isArray(divs) && divs.length && typeof console !== 'undefined') {
       console.warn('[conv-state] sync drift: server reports %d divergence(s): %o',
@@ -442,6 +465,7 @@ if (typeof window !== 'undefined') {
   window.replayPendingBusyState = replayPendingBusyState;
   window.reportIdentityGateUnavailable = reportIdentityGateUnavailable;
   window.resetIdentityGateWarnedForTests = resetIdentityGateWarnedForTests;
+  window.identityGateDegraded = identityGateDegraded;
   window.pendingBusyStateSize = pendingBusyStateSize;
   window.resetPendingBusyStateForTests = resetPendingBusyStateForTests;
   window.computeConvBusy = computeConvBusy;

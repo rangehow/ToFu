@@ -169,7 +169,6 @@
 - **诚实标注:** 全仓 `--collect-only` 首跑 **48 err**,根因是 sibling 正在改 `lib/llm_sanitize/_gateway.py` 留下的半成品 dict(`IndentationError`),**与本刀无关**;把该文件临时换成 HEAD 版后 collect **9560 / 0 err**,随即**逐字节校验恢复** sibling 的工作树改动(md5 核对),未提交它。我的提交精确 2 文件。
 - **生效边界:** 纯前端,走内容哈希 bundle —— **需重启服务器 + 浏览器硬刷新**后顺序才恢复正常。
 - **⚠️ 本条的覆盖面声称有误，已由续24 更正：**上面写「把该合同的一个漏洞补上」，实际上它**只关了头部那一半**。尾部存在**同形镜像 bug**（`_ensureBottomSentinel` 用 `appendChild` 把自己钉在最后，而 `ConvView.apply` / `startStreaming` 的 `beforeend` 落在它**后面**），直到续24 才修。根因：本刀的 `_headAnchor()` 是 `renderChat` 里的**闭包**，ConvView 够不到，所以规则无法共享。
-- **⚠️ 本条的覆盖面声称有误，已由续24 更正：**上面写「把该合同的一个漏洞补上」，实际上它**只关了头部那一半**。尾部存在**同形镜像 bug**（`_ensureBottomSentinel` 用 `appendChild` 把自己钉成最后一个子节点，而 `ConvView.apply` / `startStreaming` 的 `beforeend` 落在它**后面**），直到续24 才修。根因：本刀的 `_headAnchor()` 是 `renderChat` 里的**闭包**，ConvView 够不到，所以规则无法共享。
 
 ### 2026-07-26(续16) — 请求检视器 P6 落地:每个工具行一枚 `</>` 锚点,owner 最初诉求正式闭环(commit `0d2a8fee`,5 文件 +432/-1;新套件 3/3(13 探针)含 NEUTER,前端环 7 套件 38/38)
 - **P3 的粒度错了(这次才对准 owner 原话):** owner 要的是「在 chatinner 看到有问题的工具调用 → 直接找到是哪次请求」。P3 一枚气泡锚点只能跳「该气泡最后一轮」,而一个气泡有 **N 轮 × M 个工具调用**。P6 把锚点下沉到**每一个工具行**。

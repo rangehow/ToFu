@@ -1306,3 +1306,16 @@
 - **已落地、与本闸门无关、不需回滚的三件**:①`4fbab4fa` t() 静默回退变可观测(7/7 含 NEUTER)——**这条有独立价值:缺失翻译从此有失败信号**,和本会话早先诊断的 `_serverRev`「无失败信号」同族病,修的是同一类根;②boot-sync 形状守卫 5/5;③矛盾守卫 6/6。**三者都不依赖 owner 的选择。**
 - **守卫的设计意图**:每个面都在「它守的那条事实不再成立时」翻红——也就是**步骤③变得可实现的那一刻**。所以这不是「永久否决」,是「条件明确的暂缓」。其中一面刻意去断言**另一个文件仍存在且仍在断言 eager 顺序**,防止有人删掉 (A) 那半后,这份分析悄悄失去前提。
 - **question-block 三选项**:A 加 lang cookie(唯一能完整兑现 7.6%,代价是新服务端输入 + 缓存基数翻倍)/ B 只做非首帧键的按需包(部分收益、零契约变更)/ C 判 WONTFIX 保留①②成果。**已挂板等 owner 一键。**
+
+### 2026-07-26(续26) — i18n 步骤③ slice 1:语言变成**服务端可见**(owner 拍 A — lang cookie;commit 见下,4 文件 +378/-96;新套件 8/8,五守卫合计 28/28)
+- **owner 对上一轮 question-block 答「A — 加 lang cookie」**,于是本轮落地那个闸门缺的信号。**刻意只做信号,不拆包**——拆包是 slice 2。
+- **闸门复述**:eager 单语包必须在**下发时**选定(boot 字典要在 `_applyI18n()` 之前就位,否则 309 个 data-i18n 绑定会闪错语言),而语言只存在 `localStorage['tofu_ui_lang']`,服务端读不到。
+- **本刀三件**:①`i18n.js` 新增 `_syncLangCookie()`,把语言**写穿**成 `tofu_ui_lang` cookie(localStorage 仍是客户端权威,服务端只读);②`routes/common.py` 新增 `request_ui_lang()`,**经白名单**解析该 cookie;③`index_page()` 的 HTML 缓存**加语言维度**(命中判定与写回两处都改)。
+- **两个值得单独写一行的决定**:
+  - **镜像在每次 boot 都写,不只在 setLanguage 里写。** 在本刀之前就设过语言的用户有 localStorage 但没 cookie;只在切换时写的话,他们**永远被发默认语言包且无从察觉**。boot 写入给他们回填——**这也正是 slice 1 必须先于 slice 2 落地的原因**:等 slice 2 开始按语言发包时,cookie 已经铺好了。
+  - **白名单是安全边界,不是整洁。** slice 2 里这个值会**选中一个 bundle 文件名**,而 cookie 是攻击者可控的。已断言:`../../etc/passwd`、`zh/../../secret`、`zh\x00en`、500 字符垃圾、未知 locale **全部塌回默认**;大小写/空白归一;**cookie 缺失与请求上下文缺失都默认且不抛**(后台调用方存在)。
+- **本刀逐字节不改任何客户端收到的东西**——所有人仍收到同一个双语 bundle,**所以它证明性地不可能回归首屏**。
+- **退役了两个守卫面**(`test_language_lives_only_in_localStorage` / `test_server_never_reads_the_language_key` / `test_served_html_is_not_cached_per_language`):它们断言「语言不是服务端可见的」,而 owner **刻意**让这条变假了。**是删除不是弱化**——前提被有意识推翻的守卫已经完成使命,留一个软化版等于留一个什么都不断言的测试。正向替代是新套件。该文件保留三个仍承重的面(核心 bundle 仍是单一产物 ⇒ slice 2 证明性地尚未落地 / (A) 半仍被别处钉住 / 非 boot 语言接缝仍可行),docstring 改记「闸门已解」而非「闸门存在」。
+- **一个诚实边界**:新套件里有一面用 node 驱动真实 `i18n.js`,证明**cookie 被禁用时 i18n boot 仍然正常**(写 cookie 包在 try 里,隐私模式浏览器照常渲染)。
+- **两起共享树事故(都已妥善处理,记下防再犯)**:①`apply_diffs` 被新鲜度闸拒绝两次——sibling 在我读取后改过 `i18n.js`;**必须用 `read_files` 重读(shell 的 grep/sed 不算)** 才能解闸,重读后确认我的 tripwire 完好、目标区域未被动过再改。②`git add` 时发现 sibling 那个**带 IndentationError 的 `_gateway.py` 已被预暂存在共享索引里**,用 `git reset HEAD` 弹出后才提交;post-commit `git show --stat` 核实**恰好 4 文件**。
+- **一个 A/B 实证归属他人的红**:`test_bundle_manifest_parity` 报 `settings/devices.js` 在 manifest 里但 index.html 无标签。**不是我的**——`git log -S` 指向 `f8fa9373`(即 14 个 RWA 文件误随我 JOURNAL 提交泄漏那次),我本轮**从未碰过 js_bundler.py 或 index.html**。已开票 `pt_d81a44c38a734958` 交给 RWA epic 收尾,并写明**真实危害是 dev fallback 会静默丢掉该文件**,不只是测试红。

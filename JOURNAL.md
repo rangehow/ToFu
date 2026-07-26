@@ -1,6 +1,38 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续50) — 缓存成本三笔账算清,epic `pt_3616d93d519c49b4` 收口:量化完成,两个假设被实测反转(零代码变更;数据源 = 7 天 task_results.apiRounds **17,602 轮全量**,非抽样;中间产物 /tmp/cache_audit/*.json)
+- **方法论:** 逐轮 `usage._dispatch.key`(槽位)+ `cache_read/write_tokens` + `cost` 分解 + 每轮 `cacheBreak` 运行时判决标签;单价从账单自推导(opus-5 input ¥108.6/read ¥10.86,aws 4.7/4.8 ¥36.2/¥3.5,kimi ¥19.98/¥1.38 per Mtok)。约定陷阱已处理:aws 系 pt 是残差(anthropic 约定),opus-5/kimi 的 pt 含缓存(openai 约定)——两次重算都栽在这,最终版按模型分约定。
+- **成本排行榜(7 天实测,按危害排序):**
+  | # | 项 | 实测成本/周 | 判决 |
+  |---|---|---|---|
+  | A | **opus-5 体缓存几乎不命中** | 已标注 ¥3,419(170 轮 wire 字节+标记**全同**仍不读回,丢 35M tok);对照 aws 87% 的缺口潜力 **~¥17.7k** | **网关侧为主**(wire 指纹实证非我方突变);「46.3% 命中率」大头是静态地板 83,277(system+tools,跨 key 也中),主体轮 1536 中仅 24.9% 命中到体。客户端可测假设:openai 兼容线只认 system/tools 标记、不认消息体尾部断点——体断点在该线形同虚设 |
+  | B | **key 轮换**(同模型) | **¥662**(95 次 gap<300s 丢 13.8M tok;其中 **95 次是任务内 429 重试换槽**,33 次跨轮;gap>300s 的 33 次已按 TTL 反正到期剔除) | 客户端可调,但有 UX 权衡(见下) |
+  | C | **breakpoint-lost** | 22/24 轮 read **真塌**(丢 4.65M tok,~¥100-450) | **owner 要求的相关性已闭环:该网关确实把 cache_control 标记计入缓存键**,从「明确不动」升级为「可修」 |
+  | D | **模型混线**(claude↔kimi) | **仅 ¥38**(跳入 ¥14.6 + 回跳 ¥23.4) | **实测否决,回退链不改**(charter 已落决策) |
+  | E | **前缀内突变**(64 次/日) | 字段归因:`assistant/tool_call.thinking` **96×/日**、`tool_result` ~80×/日,深埋(idx 134/615 级) | 客户端根因待查,单独开票 |
+- **两个被实测反转的假设(诚实记录):**
+  1. **「回跳重计费 ×2」不成立:** opus-5 全部 7 次回跳的「暖前缀」= 0 —— 体缓存早被 A 杀死,回落时**根本没有暖缓存可失**。混线看着便宜,只是因为 opus-5 的缓存本来就没工作。aws 线上(缓存健康)回跳是真付钱的(mrxinirv 丢 314k ¥13.41 / mrnejm4zdfe5 丢 212k ¥10.04)。**推论:若 A 修复,D 的成本会升,届时必须重评回退链。**
+  2. **「混线段冷前缀全价烧钱」算错第一版:** kimi input 价(¥19.98/M)只有 opus-5 的 1/5、read 价(¥1.38)比 claude read 还低——长混线段(mrymx02ceap8 479 轮)在 kimi 上稳态反而**省钱**,真正付的只有进/出两次过渡。第一版反事实公式约定盲(把合法新增 token 计入超额 + 残差约定下 pt−cr 为负),作废。
+- **B 的后续方向(开票,不本票修):** 95 次任务内换槽全是 429 冷却 > sticky hold(8s) 所致。两个方向:①dispatcher 已知前缀大小,**hold 预算按「重计费成本 vs 等待成本」动态算**(340k 前缀换一次 ¥33,值得等;8k 前缀不值得);②记住会话的**暖 key 历史**(不只最后一把),429 换槽时优先回到仍持前缀的旧 key。
+- **A 的后续方向(开票):** ①问网关侧:/v1/openai/native 是否只把 system/tools 的 cache_control 传入上游、消息体块上的标记是否被翻译层丢弃(human-gated);②客户端若证实,可把该线的体断点策略改为「把缓存目标折进 system 尾部块」——**不许拍脑袋改,先拿到网关答复**(charter:合成 A/B 测不准缓存,用生产数据)。
+- **E 的后续方向(开票):** `thinking` 字段突变指向重建/重放路径(`conv_message_builder/_toolcalls.py` 的 reasoning_content 门控、segments 重建);`tool_result` 突变指向 L1-persist CAS 落库后 DB 重建字节 ≠ 直播字节。
+
+### 2026-07-26(续49) — 「重启后会话整排空卡」根因取证:启动恢复把旧 task 的 toolRounds 缝进活任务气泡(零代码变更,纯实测 + 开两票 `pt_311cbd7a31ad4391` / `pt_9409bf7133c049cb`;**msg#9 是活任务唯一落点,禁止删除**)
+- **owner 报告:** 服务器重启回来,conv `ms1auj3n2cxs87` 末轮 tool 卡片整排只剩图标 +「模型原文」,正文全空(轮次 8–14)。
+- **结论(三层全部实测,勿改回推导版):** 末条消息 msg#9 **不是重复品,是缝合体**,两批来源逐字段归属:
+  | 字段 | 归属 | 证据 |
+  |---|---|---|
+  | `segments`(35 段) | **活任务 ea441582** | tool_use id 与活任务 segments **17/17 全等**,且随活任务同步增长(27→35,两次采样) |
+  | `content`/`thinking`/`model`/`_memoryPrefetch` | **活任务 ea441582** | 同上批次写入;conv.updated_at 17:20→17:23→17:31 持续前进 |
+  | `toolRounds`(41 条) | **旧任务 9b38f0ec** 的 segments 重建 | 与 `_rounds_view_from_segments(9b38f0ec.segments)` **逐字节相等**,重建格式只有 `toolCallId/toolName/toolArgs/toolContent/status/llmRound`(+批首 assistantContent/thinking),**没有 query/results/roundNum** |
+  | `_taskId` | **旧任务 9b38f0ec** | 恢复贴的 |
+- **时间线(证据:logs/app.log + task_results.created_at,勿重跑):** 15:33:40 旧 task 9b38f0ec 开跑 → 15:40:06 掉线落成 msg#7(server_offline,43 轮 42 带 results,**真身完好**) → **17:05:22** 兄弟会话 peer 消息插为 msg#8(user) → 17:05:23 peer 触发**活任务 ea441582** → 17:05:25 启动恢复扫到 18 个 stale task → **17:05:28** 恢复「尾部是 user → 新建 assistant」分支(`lib/tasks_pkg/manager/_recovery.py` elif,无 _taskId 去重、无活任务检查)追加 msg#9 壳(旧 task 重建 toolRounds) → 已在跑的 ea441582 把这条壳**认领成自己的助手槽**写入真实产出,toolRounds 从未被活任务覆盖 → 前端渲染 41 条缺 query/results 的旧轮次 = 空卡。
+- **空卡渲染机制(B 票判据,勿重跑):** `_rounds_view_from_segments`(segments/_derive.py:63)产 6+2 键;渲染端 `static/js/ui/tool_rounds.js:1803` 读 `round.query`(标题)与 `round.results[0]`(徽章/摘要)——两者皆无,只剩序号(llmRound 在,故「2 个并行调用」分组仍对)+ 默认图标 + 模型原文按钮。msg#7 字段覆盖对照:query:43/results:43/roundNum:43/toolTokens:42;msg#9 全 0。
+- **⚠️ 接手者红线(17:35 已收口,保留作历史警示):** 取证期间 msg#9 挂着的 ea441582 仍在 running,它是活任务的唯一落点——**「删重复品/清幽灵消息」会把正在跑的那轮直接抹掉,幸亏没删。** 17:35 实测 ea441582 已 done,msg#9 **已自愈**:`_TERMINAL_OWNED_FIELDS`(manager/_sync.py:92)在任务终结时整值覆盖 `toolRounds`/`_taskId`,41 条残缺旧轮次被活任务自己的 24 条**全带 results** 覆盖,`_taskId` 改回 ea441582,finishReason=stop,content 1165 字。**缝合是暂态不是永久,窗口期≈26 分钟**(17:05:28 造壳 → 17:35:10 覆盖);本例恰好有活任务认领。**若恢复造壳后活任务失败/被中止,壳将带旧 taskId+残缺 toolRounds 永久残留,无任何覆盖者——这是 A 票真正永久的损伤路径,已写进票面。**
+- **两张票:** A=`pt_311cbd7a31ad4391`(根因:恢复「新建」分支缺 (a) _taskId 已在 messages 的检查 (b) 活任务让路——`killed_recovery.py::_conv_has_live_task()` 存在而恢复路径从未调用;真正要答的问题:恢复凭什么能在有活任务的会话尾部凭空造消息槽)。B=`pt_9409bf7133c049cb`(wire 重放格式禁止当显示数据落库:重建补 query/results 投影,或渲染端对无 results 轮次降级至少打出 toolName,不许整片空白)。
+- **segments 无显示原料(17:35 实测终判,接手者勿再撞墙):** 活任务落定后的 `tool_use` 段逐键清点只有 `type/id/name/input/llmRound/result`,`result` 只有 `content`/`status`——**query/results 在持久层不存在**,「等任务跑完从 segments 重投影出带 results 的 toolRounds」原料根本不存在,不是难做。旁证:历史消息 msg#1/#3/#5 的 segments 数(16/8/3)远小于 toolRounds 数(22/70/17)——segments 在已完成消息里本就稀疏,**显示真相是 toolRounds**。结构性根因(owner 定性):segments 被「wire 重放真相」与「崩溃恢复真相」两用,却只按前者设计,恢复路径拿它当唯一数据源必然丢光显示字段。B 票因此是**两件都做,不是二选一**:①渲染端降级(救存量,唯一可行)②持久层补投影(防将来)。
+
 ### 2026-07-26(续48) — 缓存成本审计取证包,epic `pt_3616d93d519c49b4`(零代码变更,纯实测 + 开票;owner 已复核计数并纠正一处归因,**接手者勿改回推导版**)
 - **审计结论(前后端计量/显示/检测三层均健康,不必再查):** `lib/cost.py` 单一算术核(normalize_usage 覆盖 6 种厂商拼写 + 结构性约定判定)、入口 canonicalize 盖戳、前端三处显示(context-bar/finish_info/cost popover)全读 canonical 键、显示价与钱包共用 compute_cost。近 7 天真实命中(按模型聚合 task_results):aws 4.7 **89.0%** / aws 4.8 **87.1%** / kimi-k3 **86.3%** / yuju-opus-5-evaDaily **46.3%**。
 - **票内三件事(全部以 2026-07-26 logs/app.log 的 wire 指纹终判为据,勿用诊断哈希重数——它会误报):**

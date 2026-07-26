@@ -440,6 +440,66 @@ async def apply_toolset(conv_id):
 _SYNC_DIGEST_MAX = 500
 
 
+def _log_divergence(conv_id: str, kind: str, client, server) -> None:
+    """Log a divergence at a severity that reflects whether it is a FAULT.
+
+    P5 logged every inequality at WARNING. On a streaming conversation the
+    client's 60s-old digest can never match a live server read, so the warning
+    fired constantly and buried the real signal. The tracker distinguishes a
+    client that is merely sampling late (moving) from one that is frozen while
+    the server advances — only the latter is the "notify frame dropped, never
+    converges" hole. Severity is the ONLY thing that changes here; the
+    divergence is still recorded and still returned to the caller.
+    """
+    try:
+        from lib.conversations.drift_tracker import observe_divergence
+        v = observe_divergence(conv_id, kind, client, server)
+    except Exception as e:
+        # Never let the tracker suppress the underlying signal.
+        logger.debug('[SyncDrift] tracker failed conv=%s kind=%s: %s',
+                     conv_id[:8], kind, e)
+        logger.warning('[SyncDrift] conv=%s kind=%s client=%s server=%s',
+                       conv_id[:8], kind, client, server)
+        return
+
+    if v['severity'] == 'warning':
+        logger.warning(
+            '[SyncDrift] STALLED conv=%s kind=%s client=%s server=%s '
+            'age=%.0fs observations=%d direction=%s — client value has NOT '
+            'moved while the server advanced; this conversation is not '
+            'converging on its own',
+            conv_id[:8], kind, client, server, v['age'], v['observations'],
+            v['direction'])
+    else:
+        logger.debug(
+            '[SyncDrift] conv=%s kind=%s client=%s server=%s age=%.0fs '
+            'observations=%d stalled=%s direction=%s',
+            conv_id[:8], kind, client, server, v['age'], v['observations'],
+            v['stalled'], v['direction'])
+
+
+def _log_agreement(conv_id: str, kind: str) -> None:
+    """Record that a previously-diverged pair converged.
+
+    This is the positive evidence P6 needs: proof the channel self-heals
+    without the fallback branch. Silent in steady state — only a divergence
+    that actually closes produces a line.
+    """
+    try:
+        from lib.conversations.drift_tracker import observe_agreement
+        res = observe_agreement(conv_id, kind)
+    except Exception as e:
+        logger.debug('[SyncDrift] agreement record failed conv=%s: %s',
+                     conv_id[:8], e)
+        return
+    if res is None:
+        return
+    logger.info(
+        '[SyncDrift] CONVERGED conv=%s kind=%s after %.0fs '
+        '(%d diverged observations, was_stalled=%s)',
+        conv_id[:8], kind, res['age'], res['observations'], res['was_stalled'])
+
+
 @api_v1_conversations_bp.route('/api/v1/conversations/sync-digest',
                                 methods=['POST'])
 @require_scope('conversations')
@@ -544,8 +604,9 @@ async def sync_digest():
         if client_tids != server_tids:
             divergences.append({'convId': conv_id, 'kind': 'task_ids',
                                 'client': client_tids, 'server': server_tids})
-            logger.warning('[SyncDrift] conv=%s kind=task_ids client=%s server=%s',
-                           conv_id[:8], client_tids, server_tids)
+            _log_divergence(conv_id, 'task_ids', client_tids, server_tids)
+        else:
+            _log_agreement(conv_id, 'task_ids')
 
         client_rev = d.get('rev')
         if isinstance(client_rev, (int, float)) and not isinstance(client_rev, bool):
@@ -565,8 +626,9 @@ async def sync_digest():
             if server_rev != client_rev:
                 divergences.append({'convId': conv_id, 'kind': 'rev',
                                     'client': client_rev, 'server': server_rev})
-                logger.warning('[SyncDrift] conv=%s kind=rev client=%s server=%s',
-                               conv_id[:8], client_rev, server_rev)
+                _log_divergence(conv_id, 'rev', client_rev, server_rev)
+            else:
+                _log_agreement(conv_id, 'rev')
 
     return api_ok(checked=checked, divergences=divergences)
 

@@ -48,7 +48,11 @@ function _renderTranslatingBubble(label) {
    * lands BELOW `#_lazyLoadSentinelBottom` when a lazy window has evicted the
    * tail, putting this placeholder under the "⬇ N newer messages" strip. */
   if (typeof chatInnerInsert === 'function') {
-    chatInnerInsert(inner, el, { position: 'tail' });
+    chatInnerInsert(inner, el, {
+      position: 'tail',
+      conv: (typeof getActiveConv === 'function') ? getActiveConv() : null,
+      site: '_renderTranslatingBubble',
+    });
   } else {
     inner.appendChild(el);
   }

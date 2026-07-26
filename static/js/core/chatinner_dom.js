@@ -95,6 +95,15 @@ function chatInnerTailAnchor(inner) {
  *                                  Callers that already computed a precise
  *                                  sibling (the surgical reconcile walking
  *                                  the list) pass it here.
+ *    @param {Object} [opts.conv] — the conversation this DOM is projecting.
+ *                                  Passed EXPLICITLY by every writer (the
+ *                                  primitive never reaches for a global) so
+ *                                  the order invariant below can run at the
+ *                                  chokepoint. Omit ⇒ the check is skipped.
+ *    @param {string} [opts.site] — caller name for the violation report
+ *                                  (e.g. 'ConvView.apply'). Without it a
+ *                                  report would only ever name renderChat,
+ *                                  which is how the tail path stayed dark.
  *  @returns {Element|null} the inserted element, when resolvable.
  */
 function chatInnerInsert(inner, content, opts) {
@@ -116,6 +125,12 @@ function chatInnerInsert(inner, content, opts) {
     if (!node) return null;
   }
   inner.insertBefore(node, anchor || null);
+  /* ★ The invariant runs HERE — at the one chokepoint every writer passes
+   * through. Putting it only on renderChat's exits (as it was first shipped)
+   * meant it watched exactly the paths that were already fixed and already
+   * covered by scenario tests, and was structurally blind to the tail bug
+   * that came through ConvView. */
+  if (opts.conv) assertChatInnerOrder(inner, opts.conv, opts.site || 'chatInnerInsert');
   return node;
 }
 
@@ -135,25 +150,30 @@ function chatInnerInsert(inner, content, opts) {
  *      neighbours is a misplaced sentinel — exactly the head bug, caught
  *      before it can migrate far enough to invert anything).
  *
- * Latched one-shot with a named site, mirroring
- * core/identity_gate_tripwire.js: a violation recurs on EVERY repaint, and an
- * unlatched report would bury its own signal. Debug-mode only — this walks
- * the child list, and it is a diagnostic, not a correctness dependency.
+ * ── PRODUCTION VISIBILITY: deliberate decision, not a flag default ────────
+ * This check is NOT debug-gated. It was, and that made it inert on every real
+ * deployment (`debug_mode` resolves to False by default in lib/__init__.py),
+ * so the only people it could ever inform were developers who already knew.
+ * BOTH ordering bugs reached real users and produced no signal — which is the
+ * exact failure mode this exists to end.
+ *
+ * Cost is bounded and small: one pass over `inner.children`, and the rendered
+ * span is capped by `_MAX_RENDER_WINDOW` (80). Inserts are per-turn events,
+ * not per-token. A violation LATCHES, so a broken page reports ONCE — the
+ * same discipline as core/identity_gate_tripwire.js, because a condition that
+ * recurs on every repaint would otherwise bury its own signal.
+ *
+ * Delivery rides the EXISTING production beacon (`Api.clientError.report` →
+ * POST /api/client-error → server log), the same channel the global
+ * window.onerror handler already uses. No new endpoint, no new node.
+ *
  * NEVER throws and NEVER mutates: reporting a broken projection must not also
  * break the render. */
 let _chatInnerOrderViolated = false;
 let _chatInnerOrderSite = '';
 
-function _chatInnerDebugEnabled() {
-  try {
-    return !!(typeof window !== 'undefined' && window._featureFlags &&
-              window._featureFlags.debug_mode);
-  } catch (e) { return false; }
-}
-
 function assertChatInnerOrder(inner, conv, site) {
   if (_chatInnerOrderViolated) return true;        // latched — already reported
-  if (!_chatInnerDebugEnabled()) return true;
   if (!inner || !conv || !Array.isArray(conv.messages)) return true;
   try {
     const order = [];
@@ -204,10 +224,30 @@ function assertChatInnerOrder(inner, conv, site) {
       'furniture is stepped over.';
     if (typeof console !== 'undefined' && console.warn) console.warn(msg);
     if (typeof debugLog === 'function') debugLog(msg, 'warn');
+    _beaconChatInnerOrderViolation(msg, problem);
     return false;
   } catch (e) {
     /* A diagnostic must never break the render it is diagnosing. */
     return true;
+  }
+}
+
+/* Ship the violation to the server over the EXISTING client-error beacon, so
+ * a real user hitting a real inversion leaves a trace in the server log rather
+ * than only in a console nobody is watching. Fire-and-forget; a transport
+ * failure leaves the console line as the last resort. Never throws. */
+function _beaconChatInnerOrderViolation(msg, problem) {
+  try {
+    if (typeof Api === 'undefined' || !Api.clientError ||
+        typeof Api.clientError.report !== 'function') return false;
+    Api.clientError.report({
+      message: msg.slice(0, 2000),
+      url: (typeof location !== 'undefined' && location.href) || '',
+      extra: { site: _chatInnerOrderSite, problem: String(problem).slice(0, 300) },
+    });
+    return true;
+  } catch (e) {
+    return false;
   }
 }
 

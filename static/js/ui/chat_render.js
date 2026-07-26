@@ -701,7 +701,9 @@ function renderChat(conv, forceScroll) {
         let newEl;
         if (typeof chatInnerInsert === 'function') {
           newEl = chatInnerInsert(inner, renderMessage(msg, i),
-                                  _newAnchor ? { before: _newAnchor } : { position: 'tail' });
+                                  Object.assign(
+                                    _newAnchor ? { before: _newAnchor } : { position: 'tail' },
+                                    { conv: conv, site: 'renderChat:surgical-insert' }));
         } else {
           const wrapper = document.createElement("div");
           wrapper.innerHTML = renderMessage(msg, i);

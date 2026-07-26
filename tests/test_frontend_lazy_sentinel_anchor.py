@@ -342,6 +342,10 @@ win.CSS = global.CSS = { escape: (s) => String(s).replace(/[^a-zA-Z0-9_-]/g, '\\
 const out = [];
 function check(n, c, e) { out.push((c ? 'PASS ' : 'FAIL ') + n + (e ? ' ' + e : '')); }
 
+/* Capture the production beacon so the invariant's reach can be asserted. */
+let beacons = [];
+win.Api = global.Api = { clientError: { report: (p) => { beacons.push(p); } } };
+
 global.activeConvId = win.activeConvId = 'c1';
 const conv = { id: 'c1', messages: [] };
 global.conversations = win.conversations = [conv];
@@ -422,6 +426,27 @@ check('streaming_bubble_above_bottom_sentinel',
 check('bottom_sentinel_still_last',
   layout()[layout().length - 1] === 'SENT_BOT', 'layout=' + layout().join(','));
 
+/* ── ★ Does the runtime invariant COVER this tail path? ──────────────────
+ * Under the tail_anchor NEUTER the primitive degrades to a plain append, so
+ * ConvView.apply reproduces the original bug. The invariant must then REPORT
+ * — naming ConvView.apply, not renderChat. That is the whole point of moving
+ * the check to the chatInnerInsert chokepoint: proving the tail writers are
+ * watched, not only the two renderChat exits that were already fixed. */
+if (NC === 'tail_anchor') {
+  check('neutered_tail_reported_by_invariant',
+    win.chatInnerOrderViolated() === true,
+    'violated=' + win.chatInnerOrderViolated());
+  check('neutered_tail_names_convview',
+    String(win.chatInnerOrderViolationSite()).indexOf('ConvView') !== -1,
+    'site=' + win.chatInnerOrderViolationSite());
+  check('neutered_tail_beaconed', beacons.length >= 1, 'beacons=' + beacons.length);
+} else {
+  /* Healthy primitive: the same writes must leave the invariant SILENT. */
+  check('healthy_tail_no_violation',
+    win.chatInnerOrderViolated() === false && beacons.length === 0,
+    'violated=' + win.chatInnerOrderViolated() + ' beacons=' + beacons.length);
+}
+
 console.log(out.join('\n'));
 process.exit(0);
 """
@@ -458,7 +483,7 @@ def test_send_and_stream_land_above_the_bottom_sentinel():
     lines = _lines(output)
     for key in ('seed_bottom_sentinel_is_last', 'sent_msg_above_bottom_sentinel',
                 'streaming_bubble_above_bottom_sentinel',
-                'bottom_sentinel_still_last'):
+                'bottom_sentinel_still_last', 'healthy_tail_no_violation'):
         assert lines.get(key) == 'PASS', f'{key} not PASS:\n{output}'
 
 
@@ -477,6 +502,13 @@ def test_NC_tail_anchor_lets_sends_fall_below_the_sentinel():
             or lines.get('streaming_bubble_above_bottom_sentinel') == 'FAIL'), (
         'a degenerate tail anchor did NOT break ordering — the guard no longer '
         f'reproduces the bug it protects against:\n{output}')
+    # ★ And the RUNTIME invariant must have caught it on the ConvView path —
+    # the coverage that did not exist when the check lived only on renderChat.
+    for key in ('neutered_tail_reported_by_invariant',
+                'neutered_tail_names_convview', 'neutered_tail_beaconed'):
+        assert lines.get(key) == 'PASS', (
+            f'{key} not PASS — the invariant does not cover the tail writers, '
+            f'so it is still blind to the shape it exists to catch:\n{output}')
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -665,7 +697,11 @@ const out = [];
 function check(n, c, e) { out.push((c ? 'PASS ' : 'FAIL ') + n + (e ? ' ' + e : '')); }
 
 let warned = [];
+let beacons = [];
 global.console = { warn: (m) => warned.push(String(m)), log: console.log, error: console.error };
+/* The production beacon the invariant rides (Api.clientError.report →
+ * POST /api/client-error). Capturing it proves the signal LEAVES the page. */
+win.Api = global.Api = { clientError: { report: (p) => { beacons.push(p); } } };
 
 let src = fs.readFileSync(path.join(ROOT, 'static/js/core/chatinner_dom.js'), 'utf8');
 if (NC === 'invariant') {
@@ -676,9 +712,8 @@ if (NC === 'invariant') {
 }
 (0, eval)(src);
 
-win._featureFlags = { debug_mode: true };   // the invariant is debug-gated
 const inner = document.getElementById('chatInner');
-function seed(html) { inner.innerHTML = html; win.resetChatInnerOrderForTests(); warned = []; }
+function seed(html) { inner.innerHTML = html; win.resetChatInnerOrderForTests(); warned = []; beacons = []; }
 const msg = (id) => `<div class="message" data-msg-id="${id}"></div>`;
 const HEAD = '<div id="_lazyLoadSentinel"></div>';
 const conv = { id: 'c1', messages: [{_msgId:'a'},{_msgId:'b'},{_msgId:'c'},{_msgId:'d'}] };
@@ -686,7 +721,8 @@ const conv = { id: 'c1', messages: [{_msgId:'a'},{_msgId:'b'},{_msgId:'c'},{_msg
 // 1) Healthy: sentinel at head standing in for elided 'a', then b,c,d in order.
 seed(HEAD + msg('b') + msg('c') + msg('d'));
 check('healthy_passes', win.assertChatInnerOrder(inner, conv, 't1') === true);
-check('healthy_is_silent', warned.length === 0, 'warned=' + warned.length);
+check('healthy_is_silent', warned.length === 0 && beacons.length === 0,
+  'warned=' + warned.length + ' beacons=' + beacons.length);
 
 // 2) Out of order — the user-visible symptom (oldest below newest).
 seed(msg('c') + msg('d') + msg('a') + msg('b'));
@@ -708,15 +744,21 @@ seed(msg('c') + msg('a'));
 win.assertChatInnerOrder(inner, conv, 't4');
 win.assertChatInnerOrder(inner, conv, 't4');
 win.assertChatInnerOrder(inner, conv, 't4');
-check('violation_is_latched', warned.length === 1, 'warned=' + warned.length);
+check('violation_is_latched', warned.length === 1 && beacons.length === 1,
+  'warned=' + warned.length + ' beacons=' + beacons.length);
 
-// 5) Debug OFF -> silent (it is a diagnostic, not a correctness dependency).
+// 5) ★ PRODUCTION VISIBILITY (the owner-ratified decision). debug_mode is
+//    False on every real deployment; a debug-gated invariant is therefore
+//    inert exactly where both real bugs happened. It must detect and BEACON
+//    regardless of the flag.
 seed(msg('c') + msg('a'));
 win._featureFlags = { debug_mode: false };
-check('silent_when_debug_off',
-  win.assertChatInnerOrder(inner, conv, 't5') === true && warned.length === 0,
-  'warned=' + warned.length);
-win._featureFlags = { debug_mode: true };
+check('detects_with_debug_off', win.assertChatInnerOrder(inner, conv, 't5') === false);
+check('beacons_with_debug_off', beacons.length === 1 &&
+  String(beacons[0].message).indexOf('RENDER ORDER VIOLATION') !== -1,
+  'beacons=' + beacons.length);
+check('beacon_carries_site', beacons.length === 1 && beacons[0].extra &&
+  beacons[0].extra.site === 't5', 'site=' + (beacons[0] && beacons[0].extra && beacons[0].extra.site));
 
 // 6) A legal lazy WINDOW (contiguous subset, furniture at both ends) passes —
 //    otherwise the invariant would cry wolf on normal operation.
@@ -725,6 +767,31 @@ seed('<div id="_lazyLoadSentinel"></div>' + msg('b') + msg('c') +
 check('lazy_window_subset_passes',
   win.assertChatInnerOrder(inner, conv, 't6') === true && warned.length === 0,
   'warned=' + warned.length);
+
+// 7) ★ THE CHOKEPOINT: chatInnerInsert itself must run the invariant when the
+//    caller passes conv. This is what makes the TAIL path covered — the shape
+//    that was dark when the check lived only on renderChat's exits.
+seed(msg('a') + msg('b') + '<div id="_lazyLoadSentinelBottom"></div>');
+const convT = { id: 'c1', messages: [{_msgId:'a'},{_msgId:'b'},{_msgId:'NEW'}] };
+/* Force the PRE-FIX tail behaviour by handing the primitive an explicit
+ * `before: null` anchor — i.e. a plain append, which lands BELOW the bottom
+ * sentinel exactly as the old raw `beforeend` did. */
+win.chatInnerInsert(inner, msg('NEW'),
+  { before: null, conv: convT, site: 'probe.tailAppend' });
+check('chokepoint_detects_tail_violation', win.chatInnerOrderViolated() === true);
+check('chokepoint_names_caller',
+  win.chatInnerOrderViolationSite() === 'probe.tailAppend',
+  'site=' + win.chatInnerOrderViolationSite());
+check('chokepoint_beacons', beacons.length === 1, 'beacons=' + beacons.length);
+
+// 8) ...and a CORRECT furniture-aware tail insert through the same chokepoint
+//    stays silent (the invariant is not just "always fires on insert").
+seed(msg('a') + msg('b') + '<div id="_lazyLoadSentinelBottom"></div>');
+win.chatInnerInsert(inner, msg('NEW'),
+  { position: 'tail', conv: convT, site: 'probe.tailCorrect' });
+check('chokepoint_silent_when_correct',
+  win.chatInnerOrderViolated() === false && beacons.length === 0,
+  'violated=' + win.chatInnerOrderViolated() + ' beacons=' + beacons.length);
 
 console.log(out.join('\n'));
 process.exit(0);
@@ -753,7 +820,12 @@ def _run_invariant(nc: str = '') -> str:
 def test_runtime_order_invariant_detects_both_bug_shapes():
     """The invariant must catch BOTH shapes — an out-of-order projection and a
     sentinel misplaced between array-adjacent messages — while staying silent
-    on a healthy render and on a legal lazy window."""
+    on a healthy render and on a legal lazy window.
+
+    It must ALSO fire with ``debug_mode`` OFF (the production default) and
+    reach the server over the existing client-error beacon, and it must run
+    from inside ``chatInnerInsert`` so the TAIL writers are covered — not just
+    renderChat's exits, which is where it was structurally blind."""
     output = _run_invariant('')
     fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
     assert not fails, 'runtime order-invariant failures:\n' + output
@@ -761,8 +833,12 @@ def test_runtime_order_invariant_detects_both_bug_shapes():
     for key in ('healthy_passes', 'healthy_is_silent', 'out_of_order_detected',
                 'out_of_order_named_site', 'out_of_order_reported',
                 'misplaced_sentinel_detected', 'misplaced_sentinel_message',
-                'violation_is_latched', 'silent_when_debug_off',
-                'lazy_window_subset_passes'):
+                'violation_is_latched',
+                'detects_with_debug_off', 'beacons_with_debug_off',
+                'beacon_carries_site',
+                'lazy_window_subset_passes',
+                'chokepoint_detects_tail_violation', 'chokepoint_names_caller',
+                'chokepoint_beacons', 'chokepoint_silent_when_correct'):
         assert lines.get(key) == 'PASS', f'{key} not PASS:\n{output}'
 
 

@@ -1012,7 +1012,11 @@ async function _waitForVlmParsing(userMsg, convId, userMsgIdx) {
     const _vlmInner = document.getElementById('chatInner');
     if (_vlmInner) {
       if (typeof chatInnerInsert === 'function') {
-        chatInnerInsert(_vlmInner, _vlmIndicator, { position: 'tail' });
+        chatInnerInsert(_vlmInner, _vlmIndicator, {
+          position: 'tail',
+          conv: conversations.find((c) => c.id === convId) || null,
+          site: '_waitForVlmParsing',
+        });
       } else {
         _vlmInner.appendChild(_vlmIndicator);
       }

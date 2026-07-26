@@ -311,7 +311,9 @@ async function generateImageDirect() {
   /* Tail insert via the shared furniture-aware primitive — a raw `beforeend`
    * lands BELOW a bottom lazy-window sentinel. */
   if (typeof chatInnerInsert === 'function') {
-    chatInnerInsert(chatDiv, loadingHtml, { position: 'tail' });
+    chatInnerInsert(chatDiv, loadingHtml, {
+      position: 'tail', conv: conv, site: 'generateImageDirect:loading',
+    });
   } else {
     chatDiv.insertAdjacentHTML('beforeend', loadingHtml);
   }

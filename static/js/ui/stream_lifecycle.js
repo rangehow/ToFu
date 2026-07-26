@@ -643,7 +643,11 @@ function _runTerminalContinuation(convId) {
         /* Tail insert via the shared furniture-aware primitive — a raw
          * `beforeend` lands below a bottom lazy-window sentinel. */
         if (typeof chatInnerInsert === 'function') {
-          chatInnerInsert(inner, _qHtml, { position: 'tail' });
+          chatInnerInsert(inner, _qHtml, {
+            position: 'tail',
+            conv: conversations.find((c) => c.id === convId) || null,
+            site: '_runTerminalContinuation:queued-placeholder',
+          });
         } else {
           inner.insertAdjacentHTML('beforeend', _qHtml);
         }

@@ -127,7 +127,9 @@ async function _igGenerateBatch(prompt, count) {
     /* Tail insert via the shared furniture-aware primitive — a raw `beforeend`
      * lands BELOW a bottom lazy-window sentinel. */
     if (typeof chatInnerInsert === 'function') {
-      chatInnerInsert(chatDiv, gridHtml, { position: 'tail' });
+      chatInnerInsert(chatDiv, gridHtml, {
+        position: 'tail', conv: conv, site: '_igGenerateBatch:grid',
+      });
     } else {
       chatDiv.insertAdjacentHTML('beforeend', gridHtml);
     }

@@ -113,9 +113,16 @@
    *  tests/test_frontend_lazy_sentinel_anchor.py), so the fallback is a
    *  build-order canary, not an expected path. */
   let _cvInsertWarned = false;
-  function _cvInsert(inner, html, position) {
+  function _cvInsert(inner, html, position, conv, site) {
     if (typeof chatInnerInsert === 'function') {
-      return chatInnerInsert(inner, html, { position: position || 'tail' });
+      return chatInnerInsert(inner, html, {
+        position: position || 'tail',
+        /* conv is passed EXPLICITLY (never resolved from a global inside the
+         * primitive) so the order invariant can run at the chokepoint and
+         * name THIS call site rather than only renderChat. */
+        conv: conv || null,
+        site: site || 'ConvView',
+      });
     }
     if (!_cvInsertWarned) {
       _cvInsertWarned = true;
@@ -210,7 +217,7 @@
          * the recovered messages ABOVE this one. `chatInnerInsert` steps over
          * that furniture. With no bottom sentinel it is a plain append —
          * byte-identical to the old behaviour. */
-        _cvInsert(inner, html, 'tail');
+        _cvInsert(inner, html, 'tail', conv, 'ConvView.apply');
       }
       /* Identity sweep (ALL paths — step 3 ①): the swap/insert is the SOLE
        * node for this _msgId — evict any stranded twin (drifted static
@@ -362,7 +369,7 @@
       _cvInsert(inner,
         _streamingBubbleHTML(opts.role || 'worker', opts.status || null,
                              opts.timeStr || null, opts.msgId || null),
-        'tail');
+        'tail', _findConv(convId), 'ConvView.startStreaming');
       return true;
     },
 

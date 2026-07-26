@@ -149,7 +149,7 @@ function scrollToTurn(idx) {
        * sibling set correctly today, but it also ignores any leading
        * furniture — the same class of bug as the head/tail anchors. */
       if (typeof chatInnerInsert === 'function') {
-        chatInnerInsert(inner, frag, { position: 'head' });
+        chatInnerInsert(inner, frag, { position: 'head', conv: conv, site: 'turn_nav.scrollToTurn' });
       } else {
         inner.prepend(frag);
       }

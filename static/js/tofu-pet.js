@@ -492,7 +492,17 @@
     // Subtle ground parallax: the scene drifts a fraction of the pet's travel
     // (opposite direction) for depth. The ground ::after reads --bar-scene-x.
     // Static under reduced-motion (the pet doesn't move → this never updates).
-    if (_bar) _bar.style.setProperty('--bar-scene-x', (-(W.x) * 0.12).toFixed(1) + 'px');
+    //
+    // ONLY written while the SVG ground is the thing on screen. When
+    // tofu-scene.js has a live canvas it stamps data-scene-canvas="on" and the
+    // CSS sets that ::after to display:none — so this write was invalidating the
+    // whole bar's custom-property inheritance every single frame to move the
+    // background-position of a box that is not rendered. The canvas paints its
+    // own parallax; the property is still maintained for the no-JS/no-canvas
+    // fallback, which is the only reader that exists.
+    if (_bar && _bar.getAttribute('data-scene-canvas') !== 'on') {
+      _bar.style.setProperty('--bar-scene-x', (-(W.x) * 0.12).toFixed(1) + 'px');
+    }
   }
 
   // ── LIGHTING: read the scene's live sun (TofuScene.lightInfo) and shade the

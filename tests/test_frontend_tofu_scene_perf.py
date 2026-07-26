@@ -398,3 +398,50 @@ def test_deckle_degrades_when_the_context_cannot_cut():
     assert "if (!_deckle.length || !ctx.rect) return;" in src, (
         "_cutDeckle lost its capability guard — a context without rect() would "
         "throw on every frame")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  5. THE PET's per-frame cost (static/js/tofu-pet.js)
+# ══════════════════════════════════════════════════════════════════════════
+
+PET_JS = REPO / "static" / "js" / "tofu-pet.js"
+
+
+def test_pet_does_not_write_a_dead_parallax_property_every_frame():
+    """The pet's _place() runs on every rAF tick. It used to write
+    `--bar-scene-x` on .project-bar unconditionally — but the ONLY rule reading
+    that property is the SVG ground (::after) `background-position`, and that
+    ::after is set to display:none whenever the canvas is live (the normal case,
+    gated on data-scene-canvas="on").
+
+    So the write was invalidating the bar's custom-property inheritance every
+    frame to scroll the background of a box that is not rendered. It must be
+    gated on the SVG ground actually being the thing on screen. The property is
+    still maintained for the no-JS / no-canvas fallback, which is its only real
+    reader."""
+    src = PET_JS.read_text()
+    m = re.search(r"function _place\(\)\s*\{(.*?)\n  \}", src, re.S)
+    assert m, "could not isolate _place()"
+    body = m.group(1)
+    assert "--bar-scene-x" in body, "the parallax property write vanished entirely"
+    assert "data-scene-canvas" in body, (
+        "_place() writes --bar-scene-x unconditionally again — that is a per-frame "
+        "style invalidation feeding a display:none rule whenever the canvas is live")
+    # and the CSS half must still be the thing that makes it dead
+    css = (REPO / "static" / "styles.css").read_text()
+    assert 'data-scene-canvas="on"]::after{display:none}' in css.replace(" ", ""), (
+        "the canvas-wins gate that makes the SVG ground (and thus --bar-scene-x) "
+        "dead is gone — re-check whether the _place() gate is still correct")
+
+
+def test_pet_light_writes_are_deduped():
+    """_applyLight() runs every rAF tick (deliberately — it must keep working
+    during a drag). It must only touch the DOM when a ROUNDED light value
+    actually changed, else it writes four custom properties per frame forever."""
+    src = PET_JS.read_text()
+    m = re.search(r"function _applyLight\(\)\s*\{(.*?)\n  \}", src, re.S)
+    assert m, "could not isolate _applyLight()"
+    body = m.group(1)
+    assert "_lastLightK" in body and "if (k === _lastLightK) return;" in body, (
+        "_applyLight lost its change-detection guard — it now writes 4 custom "
+        "properties on every animation frame")

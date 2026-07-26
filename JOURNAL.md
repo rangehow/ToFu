@@ -1,6 +1,10 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26 — brand wordmark 字身改色:墨黑 → 深陶土 #A96536(owner「黑色也不好看」;commit `fc9b1083`,1 文件 +16/-3;6 候选 headless 对照截图实证)
+- 候选对比(同一预览页并排):#2E2822 墨黑 / #C1794B accent / **#A96536 深陶土(选中)** / #8A5A32 焦糖 / #5C4A38 暖褐墨 / #5E9E8C 豆青。排除逻辑:豆青冷色与暖纸面气质不符;焦糖偏浑;暖褐墨太接近黑=没解决;accent 会与链接/按钮撞色、显不出品牌。深陶土比墨黑暖一度、与吉祥物奶油-琥珀豆腐块同族,42px 与 18px 两个尺寸对比度都更足。欢迎页与侧栏字身同步改。
+- **过程守卫(共享工作树改写闸触发):** apply_diffs 一度被拒「file changed on disk」—— sibling 在飞改动了 styles.css 别处(行数 21184→21188)。重读目标两区域确认未被波及后再改,显式 pathspec 提交 + `git show --stat HEAD` 核实恰好 1 文件。
+
 ### 2026-07-26(续67) — 「播客/视频进度卡死感」根修:**后端一直在干活,是前端把唯一的活性指示器杀了**(commit `f4f158ce`,5 文件 +472/-15;新套件 6/6 + P-UX 11 项全绿含 **NEUTER×6 全咬**,相邻 4 环 72 绿,collect 10185 0 err)
 
 - **owner 报告:** 播客/视频生成「就像卡住一样」,界面全程「已用 0:00 · 最后活动 0:00」,不知道在干什么。**后端实测健康**(logs/app.log:同一时段 8 个镜头逐个渲完、剧本 2 次修订 2 分钟跑完)——**问题全在前端可见性**。

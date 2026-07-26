@@ -1,6 +1,11 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续24) — P4a 提交事故与恢复全记录(零内容损失;纪律记忆已存 `shared-head-index-sweep-commit-discipline`)
+- **事故链(如实):** ①我的 P4a 提交 `f2a3529d` 把 sibling(ms0z3wed,pt_e92d3be4)**staged 未提交**的 4 文件卷进 commit——`git add -- <我的 16 路径>` 只加不逐,共享 index 里他们的 staged 一并入帐;**`git diff --cached | wc -l` 显示 20≠16,我看到了仍提交**(真正的过程失败点)。②修复时误用 `git reset --soft HEAD~1`——此时 sibling 已在上方提交 `fd885a7e`,我摘的是**他们的** commit,使其短暂成为孤儿。③sibling 侧恢复链并连落两 commit;我 `git merge --ff-only` 核实"Already up to date",链完整:`f2a3529d → fd885a7e → 5a0a1182 → 8178199f`。
+- **终态核实:** 树内容逐字节正确(双方文件都在,4 个 sibling 文件状态干净);双方套件绿(P4a 31/31,memory_prefetch 19/19);代价仅是 4 文件 attribution 留在我的 commit(三 commit 压顶,不重写历史)。已 peer message 交接 + 存纪律记忆。
+- **新规矩(进记忆):** 提交前必须读 `git diff --cached --name-only` 全表,外国文件一律 `git restore --staged` 逐出;数量不符=硬中止,不是警告。
+
 ### 2026-07-26(续23) — TTFT:记忆预取 rerank 挪出关键路径,epic pt_e92d3be4 收口(4 文件;新套件 14/14 含 **NEUTER×3 全咬**,相邻环 **94/94**,collect **9578** 0 err;顺带修好 4 个预存在红)
 - **修的延迟:** `maybe_run_memory_prefetch` 同步卡在 run_task Section 3.5 —— context-inject 之后、首个 `dispatch_stream` 之前。默认开启、每轮一次、rerank 带 800ms 硬死线,于是**每一轮用户都先干等 200-600ms 才看见第一个 token**。计费那一半 `c9452836` 已修,这一刀是延迟那一半。
 - **票面说的时序耦合,实测不成立(本刀最重要的发现):** epic 担心 rerank 依赖 context-inject **之后**的 messages 形态,判断需要「拆两段」或「延迟提交 future」。**都不需要。** `_msg_plain_text`(`_query.py`)会 **剥掉 `<system-reminder>` 块**,而 `_inject_system_contexts` 往 true tail 写的每一处**恰好都裹在这个标记里**。所以 rerank 的查询文本在 inject 前后**逐字节相同**。已钉成 `test_query_inputs_are_invariant_across_context_inject`,并配**负控**(裸文本追加确实会改变查询)——不变量不会悄悄烂掉。

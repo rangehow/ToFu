@@ -190,6 +190,12 @@ global.document = {
 };
 global.window.TofuPet = { getState(){ return {x: W/2 - 16, state:'walk'}; } };
 
+// Pin the scene clock to 14:00 ('afternoon' = the neutral bucket, zero tint
+// wash) so colour-keyed assertions are deterministic whatever hour CI runs at.
+{ const _RealDate = Date;
+  global.Date = function(...a){ return a.length ? new _RealDate(...a) : new _RealDate(2026, 0, 1, 14, 0, 0); };
+  global.Date.now = _RealDate.now; global.Date.parse = _RealDate.parse; global.Date.UTC = _RealDate.UTC;
+  global.Date.prototype = _RealDate.prototype; }
 __SRC__
 
 function reset(r){ for (const k of Object.keys(r)) delete r[k]; r.total = 0; }

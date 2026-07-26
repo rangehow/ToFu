@@ -107,6 +107,12 @@ global.document = {
 };
 global.cancelAnimationFrame = global.cancelAnimationFrame;
 
+// Pin the scene clock to 14:00 ('afternoon' = the neutral bucket, zero tint
+// wash) so colour-keyed assertions are deterministic whatever hour CI runs at.
+{ const _RealDate = Date;
+  global.Date = function(...a){ return a.length ? new _RealDate(...a) : new _RealDate(2026, 0, 1, 14, 0, 0); };
+  global.Date.now = _RealDate.now; global.Date.parse = _RealDate.parse; global.Date.UTC = _RealDate.UTC;
+  global.Date.prototype = _RealDate.prototype; }
 __SRC__
 const TS = window.TofuScene;
 // pump one animation frame if the loop scheduled one
@@ -389,6 +395,12 @@ global.document = {
   },
 };
 
+// Pin the scene clock to 14:00 ('afternoon' = the neutral bucket, zero tint
+// wash) so colour-keyed assertions are deterministic whatever hour CI runs at.
+{ const _RealDate = Date;
+  global.Date = function(...a){ return a.length ? new _RealDate(...a) : new _RealDate(2026, 0, 1, 14, 0, 0); };
+  global.Date.now = _RealDate.now; global.Date.parse = _RealDate.parse; global.Date.UTC = _RealDate.UTC;
+  global.Date.prototype = _RealDate.prototype; }
 __SRC__
 
 // install a movable pet AFTER the module loaded (it reads window.TofuPet lazily)
@@ -575,6 +587,12 @@ global.document={ readyState:'complete', hidden:false,
   documentElement:{getAttribute(k){return k==='data-theme'?'tofu':null;}},
   addEventListener(){}, getElementById(id){return id==='projectBar'?_bar:null;},
   createElement(t){ if(t==='canvas'){_canvasN++;const rec=_canvasN===1?visRec:(_canvasN===2?bufRec:fgRec);const e=mkEl();e.getContext=function(){return mkCtx(rec);};return e;} return mkEl(); } };
+// Pin the scene clock to 14:00 ('afternoon' = the neutral bucket, zero tint
+// wash) so colour-keyed assertions are deterministic whatever hour CI runs at.
+{ const _RealDate = Date;
+  global.Date = function(...a){ return a.length ? new _RealDate(...a) : new _RealDate(2026, 0, 1, 14, 0, 0); };
+  global.Date.now = _RealDate.now; global.Date.parse = _RealDate.parse; global.Date.UTC = _RealDate.UTC;
+  global.Date.prototype = _RealDate.prototype; }
 __SRC__
 if (PET_MODE !== 'none'){
   global.window.TofuPet = { getState(){ return { x: PET_X, state: (PET_MODE==='drag'?'drag':'walk') }; } };
@@ -739,6 +757,12 @@ global.document={ readyState:'complete', hidden:false,
   documentElement:{getAttribute(k){return k==='data-theme'?'tofu':null;}},
   addEventListener(){}, getElementById(id){return id==='projectBar'?_bar:null;},
   createElement(t){ if(t==='canvas'){_canvasN++;const rec=_canvasN===1?visRec:(_canvasN===2?bufRec:fgRec);const e=mkEl();e.getContext=function(){return mkCtx(rec);};return e;} return mkEl(); } };
+// Pin the scene clock to 14:00 ('afternoon' = the neutral bucket, zero tint
+// wash) so colour-keyed assertions are deterministic whatever hour CI runs at.
+{ const _RealDate = Date;
+  global.Date = function(...a){ return a.length ? new _RealDate(...a) : new _RealDate(2026, 0, 1, 14, 0, 0); };
+  global.Date.now = _RealDate.now; global.Date.parse = _RealDate.parse; global.Date.UTC = _RealDate.UTC;
+  global.Date.prototype = _RealDate.prototype; }
 __SRC__
 // NO pet — this is about the field moving on its own, not a pet interaction.
 function pump(ms){
@@ -923,6 +947,12 @@ global.document={ readyState:'complete', hidden:false,
   documentElement:{getAttribute(k){return k==='data-theme'?'tofu':null;}},
   addEventListener(){}, getElementById(id){return id==='projectBar'?_bar:null;},
   createElement(t){ if(t==='canvas'){_canvasN++;const rec=_canvasN===1?visRec:(_canvasN===2?bufRec:fgRec);const e=mkEl();e.getContext=function(){return mkCtx(rec);};return e;} return mkEl(); } };
+// Pin the scene clock to 14:00 ('afternoon' = the neutral bucket, zero tint
+// wash) so colour-keyed assertions are deterministic whatever hour CI runs at.
+{ const _RealDate = Date;
+  global.Date = function(...a){ return a.length ? new _RealDate(...a) : new _RealDate(2026, 0, 1, 14, 0, 0); };
+  global.Date.now = _RealDate.now; global.Date.parse = _RealDate.parse; global.Date.UTC = _RealDate.UTC;
+  global.Date.prototype = _RealDate.prototype; }
 __SRC__
 // Park a pet at a fixed x (its foot centre = PET_X+16). We track the sink in
 // the near-ground field dabs in the x-window around the foot.
@@ -1196,6 +1226,12 @@ global.ResizeObserver=global.window.ResizeObserver;global.MutationObserver=globa
 function mkEl(){return{_attrs:{},className:'',style:{},width:0,height:0,setAttribute(k,v){this._attrs[k]=v;},getAttribute(k){return this._attrs[k];},appendChild(){},insertBefore(){},querySelector(){return null;},firstChild:null,getBoundingClientRect(){return{left:0,right:400,top:0,bottom:48,width:400,height:48};}};}
 const _bar=mkEl();_bar._attrs['data-decor']=DECOR;
 global.document={readyState:'complete',hidden:false,documentElement:{getAttribute(k){return k==='data-theme'?THEME:null;}},addEventListener(){},getElementById(id){return id==='projectBar'?_bar:null;},createElement(t){const e=mkEl();if(t==='canvas')e.getContext=function(){return mkCtx();};return e;}};
+// Pin the scene clock to 14:00 ('afternoon' = the neutral bucket, zero tint
+// wash) so colour-keyed assertions are deterministic whatever hour CI runs at.
+{ const _RealDate = Date;
+  global.Date = function(...a){ return a.length ? new _RealDate(...a) : new _RealDate(2026, 0, 1, 14, 0, 0); };
+  global.Date.now = _RealDate.now; global.Date.parse = _RealDate.parse; global.Date.UTC = _RealDate.UTC;
+  global.Date.prototype = _RealDate.prototype; }
 __SRC__
 const TS=window.TofuScene;
 // pump two frames FAR apart in time so the slow sun sweep produces a different x

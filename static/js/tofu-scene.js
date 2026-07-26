@@ -277,6 +277,74 @@
   // tests/test_frontend_tofu_scene_perf.py::test_scene_render_dpr_is_capped.
   var SCENE_DPR_CAP = 1.5;
 
+  // ── TIME OF DAY ─────────────────────────────────────────────────────────
+  // The pet already lives on a clock: tofu-pet.js::_timeBucket() sends it to
+  // sleep at 3am and makes it sleepy in the evening. The SCENE did not, so the
+  // cat could doze off at midnight while standing in a bright noon meadow —
+  // the pet and its world disagreed about what time it was.
+  //
+  // These bucket boundaries are a DELIBERATE MIRROR of tofu-pet.js::_timeBucket
+  // (0/5/8/12/17/21). Keep them identical: the whole point is that the light on
+  // the cat and the light in the field come from one sun. A guard test asserts
+  // both modules still agree.
+  //
+  // The tint is applied as a WASH over the scene's own palette rather than as
+  // six hand-authored palettes per scene: a wash preserves each scene's
+  // identity (a meadow at dusk is still recognisably that meadow) and it costs
+  // nothing at runtime, because it happens once at BAKE time. `sat` pulls
+  // toward grey for the low-light buckets, since colour vision genuinely
+  // desaturates at night — that reads as dusk far more than darkening alone.
+  var TIME_TINTS = {
+    deepNight:    { wash: '#1E2A4A', amt: 0.62, sat: 0.45, glow: 'rgba(150,175,235,', spark: '#C3D4F5' },
+    earlyMorning: { wash: '#6E5A7A', amt: 0.34, sat: 0.78, glow: 'rgba(255,206,190,', spark: '#F3D9DF' },
+    morning:      { wash: '#FFF6DE', amt: 0.12, sat: 1.0,  glow: null, spark: null },
+    afternoon:    { wash: null,      amt: 0,    sat: 1.0,  glow: null, spark: null },
+    evening:      { wash: '#F0A25E', amt: 0.30, sat: 0.95, glow: 'rgba(255,196,130,', spark: '#FFE0B0' },
+    night:        { wash: '#2B3B63', amt: 0.50, sat: 0.58, glow: 'rgba(170,192,240,', spark: '#D2DFF8' }
+  };
+
+  /** Time bucket for an hour. MUST match tofu-pet.js::_timeBucket boundaries.
+   *  `hour` is injectable so tests never have to mock the system clock. */
+  function _sceneBucket(hour) {
+    var h = (hour == null) ? new Date().getHours() : hour;
+    if (h >= 0 && h < 5) return 'deepNight';
+    if (h < 8) return 'earlyMorning';
+    if (h < 12) return 'morning';
+    if (h < 17) return 'afternoon';
+    if (h < 21) return 'evening';
+    return 'night';
+  }
+
+  /** Desaturate toward this colour's own luma. */
+  function _desat(hex, keep) {
+    if (keep >= 1) return hex;
+    var p = parseInt(hex.slice(1), 16);
+    var r = (p >> 16) & 255, g = (p >> 8) & 255, b = p & 255;
+    var y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    var rr = Math.round(lerp(y, r, keep)), gg = Math.round(lerp(y, g, keep)), bb = Math.round(lerp(y, b, keep));
+    return '#' + (((1 << 24) + (rr << 16) + (gg << 8) + bb).toString(16).slice(1));
+  }
+
+  /** Return `pal` washed toward the given time-of-day tint. Pure: never mutates
+   *  the PALETTES entry (which is module-level and shared across re-bakes). */
+  function _tintPalette(pal, bucket) {
+    var t = TIME_TINTS[bucket];
+    if (!t || !t.wash || t.amt <= 0) return pal;
+    function c(hex) { return _mixHex(_desat(hex, t.sat), t.wash, t.amt); }
+    var out = {
+      seed: pal.seed, flow: pal.flow,
+      grad: pal.grad.map(function (s) { return [s[0], c(s[1])]; }),
+      spark: t.spark || c(pal.spark),
+      glow: t.glow || pal.glow,
+      layers: pal.layers.map(function (L) {
+        var o = {}; for (var k in L) if (Object.prototype.hasOwnProperty.call(L, k)) o[k] = L[k];
+        o.colors = L.colors.map(c);
+        return o;
+      })
+    };
+    return out;
+  }
+
   // ── PER-FRAME LIVE BUDGET ───────────────────────────────────────────────
   // Every element of a LIVE population (near band, flow overlay, foreground
   // occluders) is re-resolved and re-queued EVERY frame, so its count is the
@@ -507,6 +575,25 @@
   // Recomputed from the seeded geometry at bake time, so it can never drift out
   // of step with what is drawn.
   var _fgTop = 0;
+  // Time-of-day state. `_hourOverride` is the test seam (null = read the real
+  // clock). `_bakedBucket` records which bucket the CURRENT buffer was baked
+  // in, so the boundary watcher can tell when the world needs to move on.
+  // `_livePal` is the tinted palette the baked buffer was painted with — the
+  // per-frame layers MUST read it rather than the raw PALETTES entry, or the
+  // live grass would stay noon-green on top of a dusk-washed field.
+  var _hourOverride = null;
+  var _bakedBucket = null;
+  var _livePal = null;
+  // Cross-fade state for a time-of-day change. A bucket boundary crossed while
+  // someone is looking at the bar must NOT snap the palette — a hard colour
+  // jump mid-session reads as a rendering bug, not as dusk falling. So the
+  // PREVIOUS baked buffer is kept and blended out over the new one.
+  // `_xfadeBuf` holds the outgoing painting; `_xfadeT` runs 1 → 0.
+  var _xfadeBuf = null;
+  var _xfadeT = 0;
+  var XFADE_MS = 2600;              // slow enough to read as light changing
+  var BUCKET_POLL_MS = 60000;       // check the clock once a minute; not per frame
+  var _lastBucketCheck = -1e9;
   // Set after a re-bake (size/scene change): the torn outline itself has moved,
   // so stale pixels can survive OUTSIDE the new clip. One full clear retires
   // them; steady-state frames need none.
@@ -570,6 +657,12 @@
     if (_scene === 'off') { _sparks = []; _flow = []; _blades = []; _fgBlades = []; _understory = []; _critter = null; _wake = []; _petPrevX = null; _wakeAccum = 0; _disturb = []; return; }
     _wake = []; _petPrevX = null; _wakeAccum = 0;
     var pal = PALETTES[_scene] || PALETTES.meadow;
+    // Wash the scene's palette toward the current time of day, so the light on
+    // the field agrees with the light on the cat. Free at runtime: this is the
+    // bake, not the frame.
+    _bakedBucket = _sceneBucket(_hourOverride);
+    pal = _tintPalette(pal, _bakedBucket);
+    _livePal = pal;
     var b = _bctx, w = _w, h = _h;
     b.setTransform(_dpr, 0, 0, _dpr, 0, 0);
     b.clearRect(0, 0, w, h);
@@ -848,7 +941,7 @@
   // elapsed time; when static (reduced motion) it's a fixed 0.
   function _paintFrame(ms) {
     if (!_ctx || _w <= 0 || _h <= 0 || _scene === 'off') return;
-    var pal = PALETTES[_scene] || PALETTES.meadow;
+    var pal = _livePal || PALETTES[_scene] || PALETTES.meadow;
     var c = _ctx, w = _w, h = _h;
     var dt = Math.max(0, Math.min(0.08, (ms - _lastMs) / 1000));
     _lastMs = ms;
@@ -865,6 +958,24 @@
     c.save();
     _clipDeckle(c);                 // margin is never painted, so never needs erasing
     if (_buf) c.drawImage(_buf, 0, 0, w, h);
+    // TIME OF DAY: has the clock moved into a new bucket since this buffer was
+    // baked? Checked once a minute (not per frame — the boundary moves at most
+    // six times a day). Re-baking mid-session would SNAP the palette, so the
+    // outgoing painting is kept and faded out over the incoming one.
+    if (ms - _lastBucketCheck > BUCKET_POLL_MS) {
+      _lastBucketCheck = ms;
+      if (_bakedBucket && _sceneBucket(_hourOverride) !== _bakedBucket) _beginTimeShift();
+    }
+    if (_xfadeT > 0 && _xfadeBuf) {
+      _xfadeT -= dt * (1000 / XFADE_MS);
+      if (_xfadeT <= 0) { _xfadeT = 0; _xfadeBuf = null; }
+      else {
+        c.save();
+        c.globalAlpha = _xfadeT;
+        c.drawImage(_xfadeBuf, 0, 0, w, h);
+        c.restore();
+      }
+    }
     // Track the pet's foot motion (guarded) so the flow-deform + wake marks can
     // react to WHERE and HOW FAST the cat is moving. Runs before the layers so
     // _paintFlow can press the grass under the current foot position.
@@ -948,7 +1059,7 @@
     c.clearRect(0, _fgTop, w, h - _fgTop + 2);
     c.save();
     _clipDeckle(c);            // torn by the same edge; no post-hoc cut needed
-    var pal = PALETTES[_scene] || PALETTES.meadow;
+    var pal = _livePal || PALETTES[_scene] || PALETTES.meadow;
     var px = _petGroundX();
     var gust = 1 + 0.6 * Math.sin(ms * 0.00022 + 1.3);
     // A DARK UNDERSTORY at the base — the near plane's closest, darkest mass
@@ -1036,6 +1147,23 @@
     flushDabs();
     c.restore();              // close the deckle clip — the near plane is torn
                               // by the same edge, by CLIPPING not post-cutting
+  }
+
+  /** The clock crossed a time-of-day boundary: snapshot the painting we are
+   *  leaving, re-bake in the new light, and fade the old one out over it.
+   *  Degrades to a plain re-bake if a snapshot canvas is unavailable. */
+  function _beginTimeShift() {
+    var snap = null;
+    try {
+      if (_buf && _buf.width > 0) {
+        snap = document.createElement('canvas');
+        snap.width = _buf.width; snap.height = _buf.height;
+        var sc = snap.getContext('2d');
+        if (sc && sc.drawImage) sc.drawImage(_buf, 0, 0); else snap = null;
+      }
+    } catch (e) { snap = null; }     // harmless — we just re-bake without a fade
+    _paintBuffer();                  // re-bakes with the NEW bucket's tint
+    if (snap) { _xfadeBuf = snap; _xfadeT = 1; }
   }
 
   // Advance the ground-disturbance field: PRESS a bump under the pet's ground
@@ -1572,7 +1700,18 @@
     critterX: critterX,
     critterInfo: critterInfo,
     lightInfo: lightInfo,
-    spook: spook
+    spook: spook,
+    // Time-of-day seam. `setHour(h)` pins the scene's clock (null = follow the
+    // real one) so tests — and a future manual override — never have to mock
+    // Date. Setting it re-bakes through the same cross-fade a natural boundary
+    // crossing uses, so the two paths cannot drift apart.
+    setHour: function (h) {
+      _hourOverride = (typeof h === 'number') ? h : null;
+      if (_bakedBucket && _sceneBucket(_hourOverride) !== _bakedBucket) _beginTimeShift();
+      return _sceneBucket(_hourOverride);
+    },
+    getBucket: function () { return _sceneBucket(_hourOverride); },
+    TIME_BUCKETS: ['deepNight', 'earlyMorning', 'morning', 'afternoon', 'evening', 'night']
   };
 
   if (document.readyState === 'loading') {

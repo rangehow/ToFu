@@ -121,6 +121,13 @@ global.document = {
   },
 };
 
+// Pin the scene clock to 14:00 (the neutral 'afternoon' bucket, zero tint wash)
+// so colour-keyed assertions are deterministic no matter what hour CI runs at.
+// Without this, the time-of-day palette shifts every hardcoded hex in this file.
+{ const _RealDate = Date;
+  global.Date = function(...a){ return a.length ? new _RealDate(...a) : new _RealDate(2026, 0, 1, 14, 0, 0); };
+  global.Date.now = _RealDate.now; global.Date.parse = _RealDate.parse; global.Date.UTC = _RealDate.UTC;
+  global.Date.prototype = _RealDate.prototype; }
 const src = fs.readFileSync(path.join(__dirname, '..', 'static', 'js', 'tofu-scene.js'), 'utf8');
 eval(src);   // IIFE mounts + bakes buffer + registers _loop via rAF
 

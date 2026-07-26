@@ -145,6 +145,10 @@ function showStreamingUIForConv(convId) {
       phase: (_sess && _sess.phase) || null,
       _memoryPrefetch: lastMsg._memoryPrefetch,
       _mcpLoginHint: lastMsg._mcpLoginHint,
+      fallbackModel: lastMsg.fallbackModel,
+      fallbackFrom: lastMsg.fallbackFrom,
+      fallbackReason: lastMsg.fallbackReason,
+      fallbackKind: lastMsg.fallbackKind,
     });
     /* ★ Repaint the live translation preview immediately after the bubble is
      *   rebuilt. The body's innerHTML was just replaced, destroying any
@@ -180,6 +184,10 @@ function showStreamingUIForConv(convId) {
         phase: (_deferSess && _deferSess.phase) || null,
         _memoryPrefetch: _deferLastMsg._memoryPrefetch,
         _mcpLoginHint: _deferLastMsg._mcpLoginHint,
+        fallbackModel: _deferLastMsg.fallbackModel,
+        fallbackFrom: _deferLastMsg.fallbackFrom,
+        fallbackReason: _deferLastMsg.fallbackReason,
+        fallbackKind: _deferLastMsg.fallbackKind,
       });
     }, 300);
   }
@@ -500,6 +508,11 @@ function _stampLatestLiveTask(conv, ev) {
   if (!conv || !ev) return;
   const tid = ev.latestLiveTaskId;
   if (typeof tid === 'string' && tid) conv._latestLiveTaskId = tid;
+  /* ★ VU-carrier flag rides the same terminal frame (2026-07-26 contract):
+   *   when the successor is a VU sub-task the attach must delegate to the
+   *   VU connector (detached dummy, no Agent placeholder) instead of the
+   *   normal connectToTask path.  Stored alongside the id (single-use). */
+  conv._latestLiveTaskIsVu = !!ev.latestLiveTaskIsVu;
 }
 if (typeof window !== 'undefined') window._stampLatestLiveTask = _stampLatestLiveTask;
 
@@ -562,6 +575,8 @@ function _runTerminalContinuation(convId) {
     /* ★ Consume the stamp FIRST so a later continuation can never re-attach
      *   to this (now-aging) successor — the stamp is single-use. */
     conv._latestLiveTaskId = null;
+    const _liveTaskIsVu = !!conv._latestLiveTaskIsVu;
+    conv._latestLiveTaskIsVu = false;
     /* ★ Reload messages BEFORE opening the successor's stream: when the
      *   successor is an autopilot follow-up, the VU-synthesized user turn
      *   was already persisted by the backend hook — it must land in
@@ -580,7 +595,9 @@ function _runTerminalContinuation(convId) {
       /* Re-check after the await: a send/stream may have started meanwhile
        * (connectToTask re-guards on activeStreams internally too). */
       if (activeStreams.has(convId)) return;
-      connectToTask(convId, _liveTaskId);
+      /* ★ VU successor → the VU connector (detached dummy assistant, no
+       *   Agent placeholder); worker successor → the normal path. */
+      connectToTask(convId, _liveTaskId, 0, _liveTaskIsVu ? { vuCarrier: true } : {});
     })();
     return;
   }

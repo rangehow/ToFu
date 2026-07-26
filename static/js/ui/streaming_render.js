@@ -252,6 +252,38 @@ function _maybeAutoTranslateVu(convId, conv, entry) {
 }
 
 /**
+ * Mask the VU's machine-control sentinel lines from LIVE display.
+ *
+ * The VU's streamed reply can literally contain `[VU: TASK_DONE]` and
+ * `[PROGRESS: resolved=X remaining=Y]` — backend machine signals that
+ * decide the loop.  Persistence is already clean (the backend strips
+ * them before `_append_vu_message_to_conv`, and `autopilot_vu_done`
+ * projects the stripped copy verbatim), but the LIVE deltas would let
+ * them flicker in the bubble for seconds (conv ms1rrjchpa5pqw showed
+ * both lines sitting in the settled-looking bubble).  Owner's ruling:
+ * the sentinels are NEVER visible.  Applied to the WHOLE accumulated
+ * content on every delta (line-anchored + idempotent), so a sentinel
+ * split across delta chunks is masked the moment it completes; a
+ * partial trailing fragment survives until then (sub-second, and the
+ * vu_done projection replaces everything anyway).
+ *
+ * Mirrors the backend canonicals: `lib/agent_verdict/_handoff.py`
+ * (``VU_DONE_SENTINEL`` + ``_PROGRESS_RE``).
+ */
+function _maskVuMachineTokens(text) {
+  if (!text) return text;
+  return text
+    .split('\n')
+    .filter((line) =>
+      !/^\s*\[VU:\s*TASK_DONE\]\s*$/.test(line) &&
+      !/^\s*\[PROGRESS:\s*resolved\s*=\s*\d+\s*(?:,|;|\s)\s*remaining\s*=\s*\d+\s*\]\s*$/.test(line))
+    .join('\n');
+}
+if (typeof window !== 'undefined') window._maskVuMachineTokens = _maskVuMachineTokens;
+
+/**
+ * Handle the four autopilot_vu_* SSE event types.  See `_processSSELine`
+/**
  * Handle the four autopilot_vu_* SSE event types.  See `_processSSELine`
  * for the contract.  The VU streams through the SAME substrate as the
  * worker (`#streaming-msg` + live session + `twUpdate`), so its reply is
@@ -277,12 +309,33 @@ function _handleAutopilotVuEvent(convId, ev) {
      * that then streams the reply live — identical to a worker turn.
      * In-memory ONLY: nothing is persisted until autopilot_vu_done.  If
      * the bubble already exists (reconnect / duplicate start) reuse it. */
-    if (_findVuMsgById(conv, vuMsgId)) return;
-    const entry = _beginVuStreaming(convId, conv, vuMsgId, ev.parentMessage);
-    console.info(
-      `[Autopilot VU] ▶ began VU streaming bubble vuMsgId=${vuMsgId.slice(0,12)} ` +
-      `at idx=${entry.idx} for conv=${convId.slice(0,8)}`
-    );
+    let entry = _findVuMsgById(conv, vuMsgId);
+    if (!entry) {
+      entry = _beginVuStreaming(convId, conv, vuMsgId, ev.parentMessage);
+      console.info(
+        `[Autopilot VU] ▶ began VU streaming bubble vuMsgId=${vuMsgId.slice(0,12)} ` +
+        `at idx=${entry.idx} for conv=${convId.slice(0,8)}`
+      );
+    }
+    /* ★ replaySnapshot (2026-07-26 carrier contract): a fresh connect to
+     * the VU carrier's own stream opens with vu_start carrying the VU's
+     * CURRENT content/thinking/toolRounds.  Apply with RESET semantics —
+     * the client that hopped from the parent stream already saw the early
+     * frames there, and the snapshot is the complete-up-to-now truth, so
+     * assignment (NOT append) dedupes the pre-hop window exactly.  The
+     * live tail then appends only NEW frames (cursor=len(events)). */
+    if (ev.replaySnapshot && typeof ev.replaySnapshot === 'object') {
+      const _rs = ev.replaySnapshot;
+      entry.msg.content = (_rs.content != null) ? _rs.content : (entry.msg.content || '');
+      entry.msg.thinking = (_rs.thinking != null) ? _rs.thinking : (entry.msg.thinking || '');
+      if (Array.isArray(_rs.toolRounds)) entry.msg.toolRounds = _rs.toolRounds;
+      _flushVuStreaming(convId);
+      console.info(
+        `[Autopilot VU] ⟳ replaySnapshot applied vuMsgId=${vuMsgId.slice(0,12)} ` +
+        `(content=${(entry.msg.content || '').length}c thinking=${(entry.msg.thinking || '').length}c ` +
+        `rounds=${(entry.msg.toolRounds || []).length}) for conv=${convId.slice(0,8)}`
+      );
+    }
     try { if (typeof ConvCache !== "undefined") ConvCache.put(conv); }
     catch (e) { /* non-fatal */ }
     return;
@@ -415,7 +468,7 @@ function _handleAutopilotVuEvent(convId, ev) {
   if (!Array.isArray(vuMsg.toolRounds)) vuMsg.toolRounds = [];
 
   if (itype === "delta") {
-    if (inner.content) vuMsg.content = (vuMsg.content || "") + inner.content;
+    if (inner.content) vuMsg.content = _maskVuMachineTokens((vuMsg.content || "") + inner.content);
     if (inner.thinking) vuMsg.thinking = (vuMsg.thinking || "") + inner.thinking;
     /* §7: content/thinking live on the document (vuMsg); only phase needs
      * the session slice — mirror the worker's phase handling: content delta
@@ -808,6 +861,20 @@ let _loadingNewer = false;
  * initial switch load; reset by loadConversation on a genuine switch so the
  * next open force-scrolls exactly once. */
 let _openScrollConvId = null;
+/* Explicit jump-to-bottom intent latch (set ONLY by scrollChatToBottom — the
+ * button's explicit user command). While it names the active conv, EVERY
+ * render — including the Phase-2 reconcile and background repaints landing
+ * mid-open — must re-pin to the TRUE bottom instead of the anchor-preserve /
+ * no-scroll-on-open heuristics: those exist for UNSOLICITED paints and must
+ * never outrank an explicit command. Slow sync is exactly when this bites:
+ * the user clicks during the multi-second open window, then a landing
+ * Phase-2 re-render would otherwise anchor them away from the bottom again
+ * ("pushed back to the middle by newly loaded content", second door).
+ * Cleared on: manual scroll-up input (wheel-up / touch drag-down), an
+ * explicit scrollToTurn navigation, conversation switch, and open end.
+ * Deliberately NOT cleared on reaching the bottom: mid-open that position is
+ * transient — later same-open renders must keep following the command. */
+let _explicitBottomLatch = null;
 
 function _destroyLazyObserver() {
   if (_lazyObserver) {

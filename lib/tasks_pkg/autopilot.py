@@ -196,22 +196,125 @@ def is_autopilot_enabled(task: dict) -> bool:
 
 # ── pt_00459503 slice 5 — extracted VU event-forwarding cluster ─────
 #
-# ``_VU_FORWARD_TYPES``, ``_VUEventForwarder``, ``_emit_vu_setup_phase``
-# moved to the LEAF ``lib.tasks_pkg.autopilot_event_forwarding`` (zero
-# back-imports from this file).  Re-exported here as module-level
-# attributes so every existing ``from lib.tasks_pkg.autopilot import
-# _emit_vu_setup_phase`` (and the sibling tests that
+# ``_VU_FORWARD_TYPES`` / ``make_vu_event_transform`` /
+# ``_VU_LIFECYCLE_TYPES`` / ``_emit_vu_setup_phase`` live in the LEAF
+# ``lib.tasks_pkg.autopilot_event_forwarding`` (zero back-imports from
+# this file).  Re-exported here as module-level attributes so every
+# existing ``from lib.tasks_pkg.autopilot import _emit_vu_setup_phase``
+# (and the sibling tests that
 # ``monkeypatch.setattr(ap, '_emit_vu_setup_phase', ...)`` —
 # tests/test_autopilot_warmup_setup_phase.py) keeps working
 # byte-identically.  Symbol IDENTITY is preserved (facade attr IS the
 # leaf-module attr) — the load-bearing invariant for monkeypatch
 # steering, verified by
 # tests/test_autopilot_event_forwarding_wire_parity.py.
+# (2026-07-26: the list-subclass ``_VUEventForwarder`` was replaced by
+# ``make_vu_event_transform`` — the carrier's own stream now carries the
+# full VU contract, see the leaf docstring.)
 from lib.tasks_pkg.autopilot_event_forwarding import (  # noqa: E402
     _VU_FORWARD_TYPES,
-    _VUEventForwarder,
+    _VU_LIFECYCLE_TYPES,
+    make_vu_event_transform,
     _emit_vu_setup_phase,
 )
+
+
+# ── VU carrier stream contract (2026-07-26, conv ms1rrjchpa5pqw) ────
+#
+# After the pt_8dc03017 cutover the client HOPS from the parent's closed
+# stream to the VU carrier's own stream (``latestLiveTaskId``).  These
+# three helpers are the carrier-side wiring that makes the carrier's own
+# stream carry the SAME VU contract the parent stream always did —
+# fixing the second-"Agent"-bubble / visible machine sentinels /
+# never-ending-回答中 triad the raw sub-task stream produced.
+
+
+def _install_vu_carrier_contract(parent_task: dict, sub_task: dict,
+                                 vu_msg_id: str) -> None:
+    """Wire the VU carrier sub-task's own stream to the full VU contract.
+
+    Called right after ``create_task`` in ``run_virtual_user``.  Three
+    facts the rest of the machine relies on:
+
+      * ``_vu_event_transform`` — the ``append_event`` facade seam shapes
+        every frame the carrier emits (wrapped ``autopilot_vu_event``,
+        verbatim lifecycle frames, everything else dropped) so the
+        carrier's own stream / push channel / persisted event log all
+        carry the SAME envelope the parent stream does.
+      * ``_vu_msg_id`` — pinned on the task so the connect-snapshot
+        builder (``chat_dispatch.build_connect_snapshot``) can name the
+        VU bubble without re-deriving it.
+      * ``_vu_carrier`` on the PARENT — lets ``_emit_vu_lifecycle_frame``
+        find the carrier for the dual-emit, and lets
+        ``_close_vu_carrier_stream`` flip it terminal at run end.
+
+    Also seeds ``autopilot_vu_start`` onto the carrier's own stream —
+    the spine its persisted event log replays for any late/cold reader.
+    """
+    from lib.tasks_pkg.manager import append_event as _append_evt
+    sub_task['_vu_event_transform'] = make_vu_event_transform(
+        parent_task, vu_msg_id or '')
+    sub_task['_vu_msg_id'] = vu_msg_id or ''
+    parent_task['_vu_carrier'] = sub_task
+    try:
+        _append_evt(sub_task, build_event(
+            EventType.AUTOPILOT_VU_START, vuMsgId=vu_msg_id or ''))
+    except Exception as e:
+        logger.debug('[Autopilot %s] carrier vu_start seed failed: %s',
+                     parent_task.get('id', '?')[:8], e)
+
+
+def _emit_vu_lifecycle_frame(task: dict, event: dict) -> None:
+    """Dual-emit a VU lifecycle frame onto parent stream + carrier stream.
+
+    Post-cutover the client may be attached to EITHER stream (the
+    parent's, during the pre-hop window; the carrier's, after the
+    supersede hop).  Both must carry the identical lifecycle fact — a
+    missed ``autopilot_vu_cancel`` leaves a live ghost bubble, a missed
+    ``autopilot_vu_done`` leaves the VU turn unfinalized.  The carrier
+    copy lands via the transform's lifecycle passthrough (verbatim,
+    never double-wrapped).  Best-effort: either leg failing leaves the
+    other intact.
+    """
+    from lib.tasks_pkg.manager import append_event as _append_evt
+    tid = task.get('id', '?')[:8]
+    try:
+        _append_evt(task, event)
+    except Exception as e:
+        logger.debug('[Autopilot %s] lifecycle emit to parent failed: %s',
+                     tid, e)
+    carrier = task.get('_vu_carrier')
+    if carrier is not None and carrier is not task:
+        try:
+            _append_evt(carrier, event)
+        except Exception as e:
+            logger.debug('[Autopilot %s] lifecycle emit to carrier failed: %s',
+                         tid, e)
+
+
+def _close_vu_carrier_stream(task: dict) -> None:
+    """Flip the VU carrier terminal so its SSE stream closes.
+
+    Carrier-scoped backstop (owner's ruling 2026-07-26): the
+    endpoint-managed finalize neither flips ``status`` nor emits
+    ``done``, so without this the carrier's stream keepalives forever
+    and the sidebar shows 回答中 indefinitely.  The flip runs ONLY here
+    — at ``maybe_run_autopilot``'s exit, AFTER the terminal lifecycle
+    frame was appended — never inside ``_run_single_turn`` (endpoint
+    shares that helper across worker/critic turns on ONE task dict; a
+    mid-loop terminal flip would synthesize a premature late_done on
+    endpoint streams).  The tick's carrier branch then synthesizes the
+    minimal closing done, stamping any already-registered successor
+    (the autopilot follow-up worker) so the client hops on.
+    """
+    carrier = task.pop('_vu_carrier', None)
+    if carrier is None:
+        return
+    try:
+        carrier['status'] = 'done'
+    except Exception as e:
+        logger.debug('[Autopilot %s] carrier terminal flip failed: %s',
+                     task.get('id', '?')[:8], e)
 
 
 def run_virtual_user(task: dict, vu_msg_id: str | None = None) -> dict | None:
@@ -353,17 +456,16 @@ def run_virtual_user(task: dict, vu_msg_id: str | None = None) -> dict | None:
     #   contract (delivers a peer's message at the next round boundary).
     sub_task['_peer_drain_key'] = task.get('convId') or ''
 
-    # Swap in a forwarding event list so the VU sub-task's events
-    # surface live on the parent stream:
-    #   • inner events (delta / tool_start / tool_result / tool_progress
-    #     / tool_complete / tool_compacted / stdin_* /
-    #     write_approval_request / human_guidance_*) are wrapped as
-    #     `autopilot_vu_event` and routed by the frontend into the VU
-    #     bubble (created eagerly by the `autopilot_vu_start` event
-    #     above) identified by `vuMsgId` — so the user sees the VU's
-    #     tool calls and reply STREAM in, not "pop in" once the VU
-    #     finishes.
-    sub_task['events'] = _VUEventForwarder(task, vu_msg_id or '')
+    # Swap the carrier's event channel onto the full VU contract: the
+    # transform (consumed by the append_event facade) wraps every
+    # forwardable frame as ``autopilot_vu_event`` on BOTH the carrier's
+    # own stream AND the parent's stream, passes lifecycle frames
+    # verbatim, and drops everything else — so the client that hops onto
+    # the carrier stream after the parent's done sees the identical VU
+    # bubble contract (labeled "Autopilot", user lane), never a raw
+    # agent turn.  Also pins ``_vu_msg_id`` + seeds ``autopilot_vu_start``
+    # on the carrier stream.
+    _install_vu_carrier_contract(task, sub_task, vu_msg_id)
 
     # Mirror parent abort onto the sub-task so user-clicked Stop while
     # the VU is mid-tool-loop tears the sub-task down too.  Single
@@ -537,6 +639,22 @@ from lib.tasks_pkg.autopilot_baton import (  # noqa: E402
 
 
 def maybe_run_autopilot(task: dict) -> dict | None:
+    """End-of-turn autopilot hook + the VU-carrier close-on-exit guarantee.
+
+    Thin wrapper around :func:`_maybe_run_autopilot_inner`: whatever the
+    inner decides (TASK_DONE / preemption / abort / budget stop /
+    superseded / follow-up spawned / raise), the VU carrier sub-task is
+    flipped terminal on the way out so its SSE stream synthesizes the
+    minimal closing done (stamping the just-spawned follow-up when one
+    registered) instead of keepaliving forever.
+    """
+    try:
+        return _maybe_run_autopilot_inner(task)
+    finally:
+        _close_vu_carrier_stream(task)
+
+
+def _maybe_run_autopilot_inner(task: dict) -> dict | None:
     """End-of-turn hook: run the VU and spawn a follow-up task if eligible.
 
     Called from ``_finalize_and_emit_done`` BEFORE ``append_event(done_evt)``
@@ -600,7 +718,7 @@ def maybe_run_autopilot(task: dict) -> dict | None:
     # the moment the worker stops — showing "Autopilot · composing…" with
     # the Autopilot avatar, exactly like a real pending user turn.  The
     # VU's thinking / tool calls / reply then stream INTO that bubble via
-    # the wrapped `autopilot_vu_event` frames (see _VUEventForwarder).
+    # the wrapped `autopilot_vu_event` frames (see make_vu_event_transform).
     #
     # IMPORTANT — the start event is IN-MEMORY ONLY: it does NOT write
     # anything to the conv DB.  Persistence happens exactly once, on
@@ -709,14 +827,13 @@ def maybe_run_autopilot(task: dict) -> dict | None:
             _clear_run_id(conv_id)
         # Tell the frontend to discard any in-memory bubble it may
         # have lazily created from inner stream events; nothing was
-        # ever persisted.
-        try:
-            append_event(task, build_event(
-                EventType.AUTOPILOT_VU_CANCEL,
-                vuMsgId=vu_msg_id,
-            ))
-        except Exception as e:
-            logger.debug('[Autopilot %s] vu_cancel emit failed: %s', tid, e)
+        # ever persisted.  Dual-emitted: the pre-hop client (parent
+        # stream) AND the post-hop client (carrier stream) both tear
+        # the bubble down.
+        _emit_vu_lifecycle_frame(task, build_event(
+            EventType.AUTOPILOT_VU_CANCEL,
+            vuMsgId=vu_msg_id,
+        ))
         return None
     vu_text = vu_result['text']
     vu_rounds = vu_result.get('rounds') or []
@@ -739,19 +856,13 @@ def maybe_run_autopilot(task: dict) -> dict | None:
     if _has_pending_real_message(conv_id):
         logger.info('[Autopilot %s] Real user message arrived during VU '
                     'call — deferring to queue', tid)
-        try:
-            append_event(task, build_event(EventType.AUTOPILOT_VU_CANCEL,
-                                 vuMsgId=vu_msg_id))
-        except Exception as e:
-            logger.debug('[Autopilot %s] vu_cancel emit failed: %s', tid, e)
+        _emit_vu_lifecycle_frame(task, build_event(
+            EventType.AUTOPILOT_VU_CANCEL, vuMsgId=vu_msg_id))
         return None
     if task.get('aborted'):
         logger.info('[Autopilot %s] Aborted while VU was running — stopping', tid)
-        try:
-            append_event(task, build_event(EventType.AUTOPILOT_VU_CANCEL,
-                                 vuMsgId=vu_msg_id))
-        except Exception as e:
-            logger.debug('[Autopilot %s] vu_cancel emit failed: %s', tid, e)
+        _emit_vu_lifecycle_frame(task, build_event(
+            EventType.AUTOPILOT_VU_CANCEL, vuMsgId=vu_msg_id))
         return None
 
     # VU produced a reply — NOW commit it to the conv DB.  But FIRST make
@@ -777,15 +888,13 @@ def maybe_run_autopilot(task: dict) -> dict | None:
     # Tell the frontend the VU bubble is fully baked.  Carries the
     # final content + rounds so a client that lazily built the bubble
     # from streaming deltas — or one that missed them entirely (cold
-    # replay, late connect) — can reconcile in one shot.
-    try:
-        append_event(task, build_event(
-            EventType.AUTOPILOT_VU_DONE,
-            vuMsgId=vu_msg_id,
-            vuMessage=vu_msg,
-        ))
-    except Exception as e:
-        logger.debug('[Autopilot %s] vu_done emit failed: %s', tid, e)
+    # replay, late connect) — can reconcile in one shot.  Dual-emitted
+    # onto parent + carrier streams.
+    _emit_vu_lifecycle_frame(task, build_event(
+        EventType.AUTOPILOT_VU_DONE,
+        vuMsgId=vu_msg_id,
+        vuMessage=vu_msg,
+    ))
 
     # ★ BUDGET / STUCK GUARD — the mechanical backstop the loop historically
     #   lacked ("No turn cap, no state-change watchdog").  The VU turn is now

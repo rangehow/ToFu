@@ -146,3 +146,29 @@ def _live_successor_task_id(conv_id: str, exclude_task_id: str = '') -> str:
         logger.debug('[Task] live-successor probe failed conv=%s: %s',
                      conv_id[:8], e)
         return ''
+
+
+def _live_successor_info(conv_id: str, exclude_task_id: str = '') -> tuple[str, bool]:
+    """``_live_successor_task_id`` + the successor's VU-carrier flag.
+
+    The frontend needs to know WHETHER the hop target named by
+    ``latestLiveTaskId`` is a VU carrier: a VU successor must be attached
+    through the VU connector (detached dummy assistant, no "Agent"
+    placeholder bubble — the carrier emits only the ``autopilot_vu_*``
+    contract), while a worker successor goes through the normal path.
+    Terminal SSE frames therefore also stamp ``latestLiveTaskIsVu`` when
+    this returns ``(task_id, True)``.
+
+    Returns ``(task_id, is_vu_carrier)``; ``('', False)`` exactly when
+    ``_live_successor_task_id`` would return ``''``.
+    """
+    succ = _live_successor_task_id(conv_id, exclude_task_id)
+    if not succ:
+        return '', False
+    try:
+        t = _chat_runtime.get(succ)
+        return succ, bool(t and t.get('_vu_subtask'))
+    except Exception as e:
+        logger.debug('[Task] live-successor is-vu probe failed conv=%s: %s',
+                     conv_id[:8], e)
+        return succ, False

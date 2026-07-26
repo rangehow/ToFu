@@ -67,7 +67,11 @@ def test_backend_emits_vu_start_before_running_virtual_user():
     src_path = os.path.join(ROOT, 'lib', 'tasks_pkg', 'autopilot.py')
     src = open(src_path, encoding='utf-8').read()
 
-    emit_marker = 'EventType.AUTOPILOT_VU_START'
+    # Anchor on the maybe_run_autopilot emit STATEMENT specifically —
+    # ``_install_vu_carrier_contract`` (added 2026-07-26) also emits
+    # EventType.AUTOPILOT_VU_START (the carrier-stream seed) and sits EARLIER
+    # in the file; keying on the bare enum name would measure the wrong site.
+    emit_marker = '_start_evt = build_event(EventType.AUTOPILOT_VU_START'
     call_marker = 'vu_result = run_virtual_user(task, vu_msg_id=vu_msg_id)'
     assert emit_marker in src, 'AUTOPILOT_VU_START emit not found'
     assert call_marker in src, 'run_virtual_user call not found'

@@ -1266,11 +1266,13 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
     # the client's attach reducer can hop transport-agnostically. Absent on
     # the normal no-successor path (index points at this task → '').
     try:
-        from lib.tasks_pkg.manager import _live_successor_task_id
-        _succ_tid = _live_successor_task_id(
+        from lib.tasks_pkg.manager import _live_successor_info
+        _succ_tid, _succ_is_vu = _live_successor_info(
             task.get('convId') or '', exclude_task_id=task.get('id', ''))
         if _succ_tid:
             done_evt['latestLiveTaskId'] = _succ_tid
+            if _succ_is_vu:
+                done_evt['latestLiveTaskIsVu'] = True
     except Exception as _succ_err:
         logger.debug('[Task:%s] successor stamp failed: %s', tid, _succ_err)
 

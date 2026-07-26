@@ -656,19 +656,24 @@ def test_chat_stream_delegates_warm_resume_to_dispatch():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     with open(os.path.join(root, 'routes/chat.py'), encoding='utf-8') as f:
         src = f.read()
-    # Slice 7 imports plan_warm_resume AND build_fresh_state_snapshot
-    # together (they are the two halves of the warm/fresh split), so the
-    # import line must name BOTH — a slice-6-only cold-path import does
+    # Slice 7 imports plan_warm_resume AND the fresh-path snapshot builder
+    # together (they are the two halves of the warm/fresh split). Since the
+    # 2026-07-26 VU-carrier contract the fresh half is
+    # ``build_connect_snapshot`` — the flavor-aware selector that gives a
+    # ``_vu_subtask`` carrier the VU contract (autopilot_vu_start +
+    # replaySnapshot) and defers EVERY other task to
+    # ``build_fresh_state_snapshot``. A slice-6-only cold-path import does
     # not satisfy this.
     assert ('from lib.chat_dispatch import plan_warm_resume, '
-            'build_fresh_state_snapshot') in src, (
+            'build_connect_snapshot') in src, (
         'routes/chat.py must import plan_warm_resume + '
-        'build_fresh_state_snapshot from lib.chat_dispatch '
-        '(slice 7 pt_04686ac6)')
+        'build_connect_snapshot from lib.chat_dispatch '
+        '(slice 7 pt_04686ac6 + VU-carrier selector)')
     assert 'plan_warm_resume(' in src, (
         'routes/chat.py must CALL plan_warm_resume in chat_stream')
-    assert 'build_fresh_state_snapshot(' in src, (
-        'routes/chat.py must CALL build_fresh_state_snapshot in chat_stream')
+    assert 'build_connect_snapshot(' in src, (
+        'routes/chat.py must CALL build_connect_snapshot in chat_stream '
+        '(the carrier-aware fresh-path selector)')
     # Specific inline call-site marker strings that USED to live inside
     # chat_stream's warm-path are GONE.
     assert 'full-snapshot resync' not in src, (

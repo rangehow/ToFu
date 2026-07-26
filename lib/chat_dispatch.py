@@ -623,6 +623,20 @@ def plan_warm_resume(
             return None
         _resume_from = _cursor + 1
         _replay = task['events'][_resume_from:]
+        # ★ VU carrier (2026-07-26 contract): a warm resume keeps the
+        #   client's JS state, so the VU bubble still holds every frame up
+        #   to the cursor — replaying the MISSED frames is the whole job.
+        #   Echoing the agent `state` (content/thinking) would paint a
+        #   phantom Agent bubble; echoing a vu replaySnapshot would
+        #   reset-then-reappend (duplication). resume_state=None → the
+        #   caller yields nothing before the replay.
+        if task.get('_vu_subtask'):
+            return WarmResumePlan(
+                resume_from=_resume_from,
+                replay_events=_replay,
+                resume_state=None,
+                serviceable=True,
+            )
         # ★ Build the resume state under the SAME lock that sliced the
         #   replay list, so the state and the deltas are internally
         #   consistent (a mid-lock append to task['content'] on the
@@ -713,6 +727,15 @@ def build_fresh_state_snapshot(task: dict[str, Any]):
             state['peerInjects'] = task['_peerInjects']
         if task.get('_userSteerInjects'):
             state['userSteerInjects'] = task['_userSteerInjects']
+        # ★ Model-fallback early-notification sidecar: llm_fallback/_call.py
+        #   stamps these AT THE DECISION MOMENT (before the fallback stream
+        #   starts), so a cold reload DURING the (long) fallback round still
+        #   repaints the in-bubble banner instead of waiting for done.
+        if task.get('_fallback_model'):
+            state['fallbackModel'] = task['_fallback_model']
+            state['fallbackFrom'] = task.get('_fallback_from', '')
+            state['fallbackReason'] = task.get('_fallback_reason', '')
+            state['fallbackKind'] = task.get('_fallback_kind', '')
         if task.get('endpoint_mode'):
             state['endpointMode'] = True
             state['endpointPhase'] = task.get('_endpoint_phase', 'planning')
@@ -725,6 +748,80 @@ def build_fresh_state_snapshot(task: dict[str, Any]):
         cursor = len(task['events'])
 
     return state, meta, cursor
+
+
+def build_connect_snapshot(task: dict[str, Any]):
+    """Fresh-connection snapshot selector (2026-07-26, VU-carrier contract).
+
+    A ``_vu_subtask`` carrier must NOT greet the client with the agent
+    ``state`` frame that :func:`build_fresh_state_snapshot` composes —
+    that frame renders the VU's in-flight reply as a second "Agent"
+    bubble (conv ms1rrjchpa5pqw: "user agent agent" instead of
+    "user agent Autopilot").  The carrier instead opens with an
+    ``autopilot_vu_start`` frame carrying a ``replaySnapshot`` of the
+    VU's current content/thinking/toolRounds; the frontend applies it
+    with RESET semantics (dedupes the frames already seen on the parent
+    stream before the hop), then continues from the live tail
+    (``cursor == len(events)`` — replaying history would double-append).
+
+    Everything else defers to :func:`build_fresh_state_snapshot`
+    byte-identically.
+
+    Returns:
+        ``(state, meta, cursor)`` — same triple shape as
+        :func:`build_fresh_state_snapshot` so the caller's yield /
+        terminal-synth plumbing is flavor-agnostic.
+    """
+    if task.get('_vu_subtask'):
+        from lib.agent_core.events import EventType, build_event
+        from lib.chat.persistence import extract_task_meta as _extract_task_meta
+        with task['events_lock']:
+            state = build_event(
+                EventType.AUTOPILOT_VU_START,
+                vuMsgId=task.get('_vu_msg_id') or '',
+            )
+            state['replaySnapshot'] = {
+                'content': task.get('content') or '',
+                'thinking': task.get('thinking') or '',
+                'toolRounds': list(task.get('toolRounds') or []),
+            }
+            meta = _extract_task_meta(task)
+            cursor = len(task['events'])
+        return state, meta, cursor
+    return build_fresh_state_snapshot(task)
+
+
+def build_carrier_terminal_done(task: dict[str, Any]) -> dict[str, Any]:
+    """The MINIMAL done frame that closes a ``_vu_subtask`` carrier stream.
+
+    The VU bubble is settled by ``autopilot_vu_done`` / removed by
+    ``autopilot_vu_cancel`` — the closing frame's only jobs are (a) flip
+    the frontend's ``streamDone`` latch so the stream ends cleanly (no
+    resume-retry / poll-fallback dance), and (b) ship the supersede
+    successor when one is already registered (the autopilot follow-up
+    worker), so the client hops VU → follow-up without polling.  It
+    deliberately carries NO agent meta (usage / finishReason / …): the
+    frontend binds a detached dummy assistant on this stream, and meta
+    would paint a phantom agent finish bar.
+
+    ``latestLiveTaskIsVu`` is stamped when the successor is itself a VU
+    carrier (kick → VU → VU chains), so the frontend routes the next hop
+    through the VU connector too.
+    """
+    from lib.agent_core.events import EventType, build_event
+    evt = build_event(EventType.DONE)
+    try:
+        from lib.tasks_pkg.manager import _live_successor_info
+        _succ_tid, _succ_is_vu = _live_successor_info(
+            task.get('convId') or '', exclude_task_id=task.get('id', ''))
+        if _succ_tid:
+            evt['latestLiveTaskId'] = _succ_tid
+            if _succ_is_vu:
+                evt['latestLiveTaskIsVu'] = True
+    except Exception as _stamp_err:
+        logger.debug('[Chat] carrier-done successor stamp failed: %s',
+                     _stamp_err)
+    return evt
 
 
 def is_task_terminal(task: dict[str, Any]) -> bool:
@@ -887,6 +984,22 @@ def next_live_tick(
 
     # 3. Task terminal + no new events → synthesize LATE done.
     if is_task_terminal(task):
+        # ★ VU carrier (2026-07-26 contract): the endpoint-managed
+        #   finalize never emits a done for the carrier, so its stream
+        #   closes HERE — with a MINIMAL done (no agent meta; the VU
+        #   bubble was already settled/removed by the lifecycle frame)
+        #   carrying any registered successor for the next hop.  The
+        #   lifecycle frame is ALWAYS appended before the terminal flip
+        #   (autopilot._close_vu_carrier_stream runs after the dual-emit),
+        #   so the drain above already delivered it.
+        if task.get('_vu_subtask'):
+            logger.info('[Chat] SSE stream %s emitting carrier done '
+                        '(VU sub-task terminal) — closing stream',
+                        task_id_short)
+            return LiveTickAction(
+                kind='late_done',
+                late_done_evt=build_carrier_terminal_done(task),
+                next_cursor=_new_cursor)
         # Finalize-window latch: the orchestrator flips status to terminal
         # BEFORE the real done is appended (the autopilot hook + pre-emit
         # sync run in between). A tick landing in that window would emit a
@@ -935,11 +1048,13 @@ def next_live_tick(
         # dispatched queued turn started invisibly (production 2026-07-25:
         # six minutes of silence until a manual refresh). Ship the index.
         try:
-            from lib.tasks_pkg.manager import _live_successor_task_id
-            _succ_tid = _live_successor_task_id(
+            from lib.tasks_pkg.manager import _live_successor_info
+            _succ_tid, _succ_is_vu = _live_successor_info(
                 task.get('convId') or '', exclude_task_id=task.get('id', ''))
             if _succ_tid:
                 late_done['latestLiveTaskId'] = _succ_tid
+                if _succ_is_vu:
+                    late_done['latestLiveTaskIsVu'] = True
         except Exception as _stamp_err:
             logger.debug('[Chat] LATE done successor stamp failed: %s', _stamp_err)
         return LiveTickAction(kind='late_done', late_done_evt=late_done,

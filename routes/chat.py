@@ -1114,16 +1114,20 @@ async def chat_stream(task_id):
         # plan_warm_resume. Returns None when the client sent no cursor
         # OR the cursor is ahead of the buffer (trimmed / stale) → fall
         # through to build_fresh_state_snapshot.
-        from lib.chat_dispatch import plan_warm_resume, build_fresh_state_snapshot
+        from lib.chat_dispatch import plan_warm_resume, build_connect_snapshot
         _warm_plan = plan_warm_resume(task, _last_event_id_hdr, task_id[:8])
 
         if _warm_plan is not None:
             resume_from = _warm_plan.resume_from
             missed_evts = _warm_plan.replay_events
             cursor = resume_from
-            _resume_state_payload = json.dumps(_warm_plan.resume_state, ensure_ascii=False)
-            yield f'data: {_resume_state_payload}\n\n'
-            _events_sent += 1
+            # ★ VU carrier: resume_state is None by design (chat_dispatch
+            #   plan_warm_resume) — yield nothing before the replay; the
+            #   client's intact VU bubble only needs the missed frames.
+            if _warm_plan.resume_state is not None:
+                _resume_state_payload = json.dumps(_warm_plan.resume_state, ensure_ascii=False)
+                yield f'data: {_resume_state_payload}\n\n'
+                _events_sent += 1
             for idx, ev in enumerate(missed_evts):
                 eid = resume_from + idx
                 yield f'id: {eid}\ndata: {json.dumps(ev, ensure_ascii=False)}\n\n'
@@ -1132,6 +1136,13 @@ async def chat_stream(task_id):
                     return
             cursor = resume_from + len(missed_evts)
             if _task_terminal() and not missed_evts:
+                # ★ VU carrier: close with the MINIMAL carrier done (no
+                #   agent meta), mirroring the live-tick carrier branch.
+                if task.get('_vu_subtask'):
+                    from lib.chat_dispatch import build_carrier_terminal_done
+                    yield (f'id: {cursor}\n'
+                           f'data: {json.dumps(build_carrier_terminal_done(task), ensure_ascii=False)}\n\n')
+                    return
                 late_done = build_event(EventType.DONE)
                 late_meta = _extract_task_meta(task)
                 late_done.update(late_meta)
@@ -1145,7 +1156,11 @@ async def chat_stream(task_id):
             # the extracted helper. ``state`` is the event dict, ``meta``
             # is reused for the terminal-done synth below, ``cursor`` is
             # where the live-stream loop starts reading from.
-            state, meta, cursor = build_fresh_state_snapshot(task)
+            # ★ build_connect_snapshot is flavor-aware: a _vu_subtask
+            #   carrier gets an autopilot_vu_start + replaySnapshot frame
+            #   (never an agent state — the Agent-mislabel fix); every
+            #   other task gets the classic build_fresh_state_snapshot.
+            state, meta, cursor = build_connect_snapshot(task)
             # ★ State snapshot gets NO id: field — it's synthetic, not a real
             #   event from the events array. Only real events (deltas, phases,
             #   done) get id: fields. This prevents an id collision between

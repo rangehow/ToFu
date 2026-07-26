@@ -3,23 +3,44 @@
 Extracted from ``lib.tasks_pkg.autopilot`` under pt_00459503 slice 5 —
 the epic-named "event-forwarding" module.  Kept as a LEAF (imports only
 the shared event builder + logger, plus a lazy ``manager.append_event``
-inside the forwarder to avoid a cycle with the task manager) so
+inside the transform to avoid a cycle with the task manager) so
 ``autopilot.py`` can re-export these symbols BY IDENTITY without any
 back-import from this file.
 
 Contents:
   * ``_VU_FORWARD_TYPES`` — the frozenset of sub-task event types that
-    get wrapped and forwarded onto the parent task's SSE stream.
-  * ``_VUEventForwarder`` — the ``list`` subclass we swap into
-    ``sub_task['events']`` so every ``append_event`` on the sub-task
-    also lands a wrapped ``autopilot_vu_event`` on the parent's stream
-    (routed to the synthetic-user bubble by ``vuMsgId``).
+    are part of the VU stream contract (wrapped + dual-emitted).
+  * ``_VU_LIFECYCLE_TYPES`` — the VU lifecycle frames
+    (``autopilot_vu_start`` / ``autopilot_vu_done`` /
+    ``autopilot_vu_cancel``) that pass through to the carrier's own
+    stream VERBATIM (they are never double-wrapped, and the transform
+    never forwards them — ``_emit_vu_lifecycle_frame`` owns the
+    parent-side copy so they can't be doubled).
+  * ``make_vu_event_transform`` — the per-task event transform installed
+    on the VU carrier sub-task as ``sub_task['_vu_event_transform']``
+    (consumed by the ``append_event`` facade seam).
   * ``_emit_vu_setup_phase`` — the pre-stream "working" phase emitter
     used to attribute the 2.5–26.7 s silent warmup window between
     ``autopilot_vu_start`` and the sub-task's first orchestrator phase.
 
-Byte-identical bodies to the pre-extraction inline forms in
-``autopilot.py`` (verified by ``tests/test_autopilot_event_forwarding_wire_parity.py``).
+★ THE 2026-07-26 CONTRACT CHANGE (conv ms1rrjchpa5pqw incident)
+--------------------------------------------------------------
+Pre-fix, ``_VUEventForwarder`` (a list subclass) kept the carrier's own
+event list RAW and only forwarded WRAPPED frames to the parent — sound in
+the pre-cutover world where nobody ever attached to the carrier's stream.
+After the pt_8dc03017 cutover the client HOPS from the parent's closed
+stream to the carrier's own stream (``latestLiveTaskId``), so the raw
+list + the agent ``state`` snapshot rendered the VU as a second "Agent"
+bubble, the machine sentinels stayed visible, and the (endpoint-managed,
+never-terminal) carrier stream kept the sidebar pulsing forever.
+
+The transform replaces the list subclass: the carrier's own stream, push
+channel AND persisted event log now all carry the SAME VU envelope the
+parent stream always did (one transform applied at the single
+``append_event`` seam → no three-way divergence), while the parent
+forward is preserved verbatim for the pre-hop window.  Frames that are
+not part of the VU contract (``done``, ``round_committed``, …) are
+dropped from the carrier stream entirely.
 """
 
 from __future__ import annotations
@@ -40,66 +61,70 @@ _VU_FORWARD_TYPES = frozenset({
 })
 
 
-class _VUEventForwarder(list):
-    """List subclass that forwards the VU sub-task's events to the parent.
+_VU_LIFECYCLE_TYPES = frozenset({
+    'autopilot_vu_start', 'autopilot_vu_done', 'autopilot_vu_cancel',
+})
 
-    The orchestrator drives all SSE updates by calling
-    ``manager.append_event(task, ev)`` which does
-    ``task['events'].append(ev)`` under the task's events_lock.  By
-    swapping ``sub_task['events']`` with this subclass we get a hook on
-    every event the VU sub-task emits, without monkey-patching
-    ``append_event`` globally.
 
-    For each VU event we still append it to the underlying list (so the
-    sub-task's own SSE stream stays intact for any reader that ever
-    connects to it), and additionally forward two flavours of derived
-    events onto the PARENT task's stream:
+def _forward_to_parent(parent_task: dict, vu_msg_id: str, ev: dict) -> None:
+    """Forward ONE wrapped VU frame onto the PARENT task's stream.
 
-      1. ``autopilot_vu_event`` — wraps the original VU sub-task event
-         (delta / tool_start / tool_result / tool_progress / tool_complete /
-         tool_compacted / stdin_* / write_approval_request /
-         human_guidance_*) so the frontend can render the VU's reply +
-         tool calls into the synthetic-user bubble *as they happen*,
-         instead of materializing the whole bubble after the VU
-         finishes.  The wrapper carries ``vuMsgId`` so the frontend can
-         target the right message.
-
-    The synthetic-user bubble itself is created eagerly by the
-    ``autopilot_vu_start`` event (emitted from ``maybe_run_autopilot``
-    BEFORE the VU sub-task runs), so the user sees an "Autopilot ·
-    composing…" bubble in the USER lane the moment the worker stops —
-    NOT a phase chip glued to the worker bubble.  All VU thinking, tool
-    calls, and reply text then stream into that bubble via the wrapped
-    events above.
+    The pre-hop window: the client is still attached to the parent's
+    stream (its LATE/real done has not fired yet), so the parent's stream
+    is the only channel — the VU bubble there must see the same frames.
     """
+    from lib.tasks_pkg.manager import append_event as _ap_event
+    _ap_event(parent_task, build_event(
+        EventType.AUTOPILOT_VU_EVENT,
+        vuMsgId=vu_msg_id,
+        inner=ev,
+    ))
 
-    def __init__(self, parent_task, vu_msg_id):
-        super().__init__()
-        self._parent = parent_task
-        self._vu_msg_id = vu_msg_id
 
-    def append(self, ev):
-        super().append(ev)
-        try:
-            self._forward_to_parent(ev)
-        except Exception as e:
-            logger.debug('[Autopilot] event forward failed (non-fatal): %s', e)
+def make_vu_event_transform(parent_task: dict, vu_msg_id: str):
+    """Build the per-task event transform for a VU carrier sub-task.
 
-    def _forward_to_parent(self, ev):
-        from lib.tasks_pkg.manager import append_event as _ap_event
+    Installed as ``sub_task['_vu_event_transform']`` and consumed by the
+    ``append_event`` facade (``lib.tasks_pkg.manager._events``), which
+    applies it to the frame BEFORE append / persist / push — so the
+    carrier's own SSE stream, its push channel and its persisted event
+    log all carry the identical VU contract:
+
+      * forward types (``_VU_FORWARD_TYPES``) → wrapped as
+        ``autopilot_vu_event`` (with ``vuMsgId`` + ``inner``) on the
+        carrier's own stream, AND forwarded to the parent stream (the
+        pre-hop window) — dual emission, both wrapped;
+      * lifecycle frames (``_VU_LIFECYCLE_TYPES``) → VERBATIM on the
+        carrier's own stream, NOT forwarded (the explicit dual-emit in
+        ``autopilot._emit_vu_lifecycle_frame`` owns the parent copy);
+      * anything else → dropped from the carrier stream entirely.
+
+    Args:
+        parent_task: The parent worker task whose stream receives the
+            forwarded copy (pre-hop window).
+        vu_msg_id: The stable VU message id the frontend routes by.
+
+    Returns:
+        ``(task, event) -> event | None`` — the frame to emit on the
+        carrier's own stream, or ``None`` to drop it from the stream
+        (facade bookkeeping still reads the raw frame).
+    """
+    def _vu_transform(task: dict, ev: dict):
         et = (ev or {}).get('type')
-
-        # Forward the inner event verbatim, wrapped so the frontend
-        # routes it into the VU bubble (by vuMsgId) instead of the
-        # parent's worker bubble.  We re-emit the parent-stream phase
-        # chip below as well; the two are not mutually exclusive (one
-        # paints the VU bubble, the other annotates the parent's chip).
         if et in _VU_FORWARD_TYPES:
-            _ap_event(self._parent, build_event(
+            try:
+                _forward_to_parent(parent_task, vu_msg_id, ev)
+            except Exception as e:
+                logger.debug('[Autopilot] event forward failed (non-fatal): %s', e)
+            return build_event(
                 EventType.AUTOPILOT_VU_EVENT,
-                vuMsgId=self._vu_msg_id,
+                vuMsgId=vu_msg_id,
                 inner=ev,
-            ))
+            )
+        if et in _VU_LIFECYCLE_TYPES:
+            return ev
+        return None
+    return _vu_transform
 
 
 def _emit_vu_setup_phase(task: dict, vu_msg_id: str | None, detail: str) -> None:
@@ -115,13 +140,13 @@ def _emit_vu_setup_phase(task: dict, vu_msg_id: str | None, detail: str) -> None
     blocking.
 
     This emits a ``working`` phase wrapped as ``autopilot_vu_event`` — the
-    SAME envelope ``_VUEventForwarder`` uses for the sub-task's own events —
-    so it routes into the VU bubble by ``vuMsgId`` and renders through the
-    existing ``updateStreamingUI`` ``working`` branch (``phase.detail`` shown
+    SAME envelope the carrier's own stream carries — so it routes into the
+    VU bubble by ``vuMsgId`` and renders through the existing
+    ``updateStreamingUI`` ``working`` branch (``phase.detail`` shown
     verbatim). No new event type; the frontend already handles it.
 
     Emitted directly on the PARENT task because the sub-task (and its
-    forwarding event list) does not exist yet at these steps.
+    transform) does not exist yet at these steps.
     """
     if not vu_msg_id:
         return

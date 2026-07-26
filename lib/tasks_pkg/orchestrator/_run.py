@@ -175,8 +175,10 @@ def run_task(task: dict[str, Any]) -> None:
         cfg = task['config']
 
         # ── Autopilot VU startup attribution ──
-        #   The VU sub-task's ``events`` is a _VUEventForwarder, so any PHASE
-        #   emitted here auto-forwards into the synthetic-user bubble. The
+        #   The VU sub-task carries ``_vu_event_transform`` (the append_event
+        #   facade seam), so any PHASE emitted here is wrapped as
+        #   ``autopilot_vu_event`` and lands in the synthetic-user bubble on
+        #   BOTH the carrier's own stream and the parent's. The
         #   pre-stream prep window (tool assembly → tool-history rebuild →
         #   system-context injection → FUSE memory/project prefetch) is
         #   otherwise SILENT for up to tens of seconds on a large conversation

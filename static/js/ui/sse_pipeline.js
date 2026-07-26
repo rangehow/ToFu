@@ -216,8 +216,15 @@ async function connectToTask(convId, taskId, retries = 0, opts = {}) {
    *   ghost "Agent" bubble before the VU bubble, and the carrier's empty
    *   `done` event could overwrite the prior real reply).  Delegate to a
    *   dedicated connector that uses a DETACHED dummy assistantMsg; the VU
-   *   bubble itself is created by the `autopilot_vu_start` event. */
-  if (opts && opts.autopilotKick) {
+   *   bubble itself is created by the `autopilot_vu_start` event.
+   * ★ vuCarrier (2026-07-26, conv ms1rrjchpa5pqw): the SAME constraint
+   *   applies when hopping from the parent's closed stream onto the VU
+   *   sub-task's own stream (`latestLiveTaskId` + `latestLiveTaskIsVu`) —
+   *   the carrier emits ONLY the autopilot_vu_* contract, so binding the
+   *   parent assistant (or a fresh placeholder) as the stream target would
+   *   render the VU's frames as a second "Agent" bubble. Same connector,
+   *   same detached-dummy discipline. */
+  if (opts && (opts.autopilotKick || opts.vuCarrier)) {
     return _connectAutopilotKick(convId, taskId);
   }
   /* ★ CROSS-TALK DETECTION: log full stream context at connection time */

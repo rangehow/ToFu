@@ -1012,6 +1012,18 @@ async function loadConversationsFromServer(prefetchId) {
 
     console.log(`[loadConversationsFromServer] merged=${merged}, total conversations now: ${conversations.length}, ` +
       `visible: ${conversations.filter(c => c.messages.length > 0 || (c._serverMsgCount||0) > 0 || c._needsLoad).length}`);
+    /* ★ pt_e1c4693341b24730 follow-up: a conv created on ANOTHER device is
+     *   unknown here when its first notify frame lands, so the reducer PARKS
+     *   that frame's authoritative busy state instead of discarding it. The
+     *   list we just merged is exactly what makes those convs known — replay
+     *   now, BEFORE the sort/render below, so the busy dot paints in the same
+     *   frame the conv first appears rather than staying dark until the next
+     *   notify frame or an F5. Deliberately NOT solved by teaching the list
+     *   endpoint to return runningTaskIds: that would be a SECOND busy-state
+     *   source and breaks hard constraint #3 (task registry is the only SSOT). */
+    if (typeof replayPendingBusyState === 'function') {
+      replayPendingBusyState(conversations);
+    }
     if (merged) {
       conversations.sort(_convSorter);
       renderConversationList();

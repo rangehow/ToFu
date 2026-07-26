@@ -213,8 +213,21 @@ check('exposes_initCurrentUserId', typeof initCurrentUserId === 'function');
   check('idempotent_keeps_resolved_id', window._currentUserId === 'bob');
   check('idempotent_skips_second_fetch', meCalls === callsAfterFirst);
 
-  console.log(out.join('\n'));
-})();
+  // ── Face 9: a TRANSIENT failure must stay retryable, never latch '' ──
+  //    Setting the latch before the await would pin the failure's '' for
+  //    the life of the page — every gate accept-all forever, which is the
+  //    exact cross-tenant window this module exists to close.
+  window._currentUserId = undefined;
+  resetCurrentUserIdForTests();
+  meImpl = async () => { throw new Error('transient'); };
+  await initCurrentUserId();
+  check('transient_failure_yields_empty', window._currentUserId === '');
+  meImpl = async () => ({ authenticated: true, user: { id: 'carol' } });
+  await initCurrentUserId();
+  check('identity_recovers_after_transient_failure',
+        window._currentUserId === 'carol');
+
+  console.log(out.join('\n'));})();
 """
 
 
@@ -236,7 +249,7 @@ def test_current_user_initializer_behaviour():
     fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
     assert not fails, 'initializer failures:\n' + output
     passes = [ln for ln in output.splitlines() if ln.startswith('PASS')]
-    assert len(passes) >= 10, f'expected >=10 PASS, got {len(passes)}:\n{output}'
+    assert len(passes) >= 12, f'expected >=10 PASS, got {len(passes)}:\n{output}'
 
 
 # ═════════════════════════════════════════════════════════════════════

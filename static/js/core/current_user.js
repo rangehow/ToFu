@@ -66,26 +66,35 @@ let _currentUserIdResolved = false;
  * `window._currentUserId`. Always resolves (never rejects). Idempotent. */
 async function initCurrentUserId() {
   if (_currentUserIdResolved) return window._currentUserId;
-  _currentUserIdResolved = true;
-  /* Default BEFORE the await so a gate that somehow runs mid-flight sees
-   * the accept-all sentinel rather than `undefined`. */
-  window._currentUserId = '';
+  /* Default only when nothing is resolved yet. A RE-ENTRANT call after a
+   * transient failure must NOT blank a value another attempt may have
+   * landed — blanking re-opens the accept-all window this module closes. */
+  if (window._currentUserId === undefined) window._currentUserId = '';
   try {
     const data = await Api.users.me();
     /* `user` is non-null ONLY for a login-bound multi-tenant session. */
     const id = (data && data.user && data.user.id !== undefined
                 && data.user.id !== null) ? data.user.id : '';
     window._currentUserId = id;
+    /* Latch AFTER a successful probe only. Setting it before the await
+     * would pin a transient network failure's '' forever: the tab would
+     * never re-acquire its identity, and every gate would stay
+     * accept-all for the rest of the page's life. Leaving it false on
+     * the catch path lets a later trigger (push reconnect, visibility
+     * resume, a manual retry) resolve the real id. */
+    _currentUserIdResolved = true;
     if (typeof debugLog === 'function') {
       debugLog(id === ''
         ? '[current-user] no tenant identity (personal install) — sync gates stay open'
         : `[current-user] identity resolved: ${String(id)}`, 'info');
     }
   } catch (e) {
-    /* Fail-open: '' keeps every gate accept-all. */
-    window._currentUserId = '';
+    /* Fail-open but RETRYABLE: '' keeps every gate accept-all (the
+     * personal-install default) while leaving the latch open so the next
+     * call can still resolve a real identity. */
+    if (window._currentUserId === undefined) window._currentUserId = '';
     if (typeof debugLog === 'function') {
-      debugLog(`[current-user] identity probe failed (staying unscoped): ${e && e.message}`,
+      debugLog(`[current-user] identity probe failed (staying unscoped, will retry): ${e && e.message}`,
                'warn');
     }
   }

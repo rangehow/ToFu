@@ -93,14 +93,123 @@ function _frameIsOurs(userId) {
   return theirs === my;
 }
 
+/* ── Fail-open tripwire ────────────────────────────────────────────────
+ * The three consumer gates (cross_tab_sync ×2, conv_sync_push) call
+ * ``window._frameIsOurs`` and DELIBERATELY fail OPEN when it is absent:
+ * accepting a frame matches the pre-identity default, whereas fail-closed
+ * would silently brick cross-device sync — a far worse outcome than briefly
+ * accepting a frame on a deployment that usually has one tenant.
+ *
+ * But a SILENT fail-open is indistinguishable from correct operation, and
+ * that indistinguishability is exactly the property that let the original
+ * int/str skew sit dormant. The predicate can only go missing via a
+ * BUILD-ORDER regression — this file moved out of ``_BUNDLE_FILES`` into
+ * ``_DEFERRED_FILES``, or reordered after a consumer. Epic-E
+ * (pt_3879f00e2d2f4bc4 sub-part 3) proposes deferring cross_tab_sync.js,
+ * which is precisely the change that can break it. So the fallback MUST
+ * leave a trace rather than degrade in silence.
+ *
+ * One-shot per page: a missing predicate would otherwise fire on EVERY
+ * inbound frame and flood the console, burying the signal it exists to
+ * surface.
+ *
+ * Published on ``window`` (not module-local) so a consumer can call it
+ * defensively via ``typeof``. Note the honest limit: if THIS file fails to
+ * load the reporter is gone too — that case is caught by the STATIC bundle
+ * guard in tests/test_frontend_identity_gate_parity.py, which is why that
+ * guard is mandatory rather than belt-and-braces. */
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PENDING BUSY STATE — a frame for a conv this client has not loaded yet
+
+   THE HOLE THIS CLOSES (owner-reproduced 2026-07-26)
+   --------------------------------------------------
+   A conv created ON ANOTHER DEVICE is unknown here when its first notify
+   frame arrives, so the ``conversations.find(...)`` below missed and the
+   frame was DISCARDED. ``_onConvNotifyPush`` separately schedules a
+   debounced list refresh which discovers the conv ~400ms later — but the
+   conversation-list payload carries NO busy field and the list-load path
+   never writes ``_authoritativeActiveTaskIds``. Net effect: the phone is
+   generating, the PC shows that conv IDLE, and it stays idle until some
+   later notify frame happens to arrive or the user hits F5. That is the
+   residual half of the original "phone shows 3, PC shows fewer" symptom.
+
+   WHY NOT FIX IT SERVER-SIDE
+   --------------------------
+   Making the list endpoint return ``runningTaskIds`` would be a SECOND
+   busy-state source and violates hard constraint #3 (task registry is the
+   ONLY physical SSOT, reaching the client through exactly one channel).
+   The two would then be free to drift — the very disease this epic cures.
+   ``tests/test_frontend_pending_busy_state.py`` guards against that.
+
+   SO: STASH, DON'T DISCARD
+   ------------------------
+   Park the authoritative payload keyed by convId; whoever later
+   materialises the conv (list refresh, cold-open hydration) calls
+   ``replayPendingBusyState`` and the parked state lands. The park is
+   rev-gated exactly like a live conv (a newer parked frame supersedes an
+   older one) and BOUNDED — a frame can legitimately name a conv this
+   client will never load (deleted elsewhere, another tenant's), so an
+   unbounded map would be a slow leak on a long-lived tab. */
+const _PENDING_BUSY_MAX = 200;
+const _pendingBusyState = new Map();   // convId → {runningTaskIds, rev}
+
+function _parkPendingBusyState(convId, tids, rev) {
+  const prior = _pendingBusyState.get(convId);
+  /* Same strict-lex rev gate a live conv gets: a reordered older frame
+   * must not overwrite a newer parked one. */
+  if (prior && !_revStrictlyGreater(rev, prior.rev)) return;
+  /* Bounded: evict the OLDEST insertion (Map preserves insertion order).
+   * Dropping the oldest is the safe direction — a genuinely live conv
+   * keeps re-announcing itself on every subsequent notify frame, whereas
+   * a ghost never does. */
+  if (!prior && _pendingBusyState.size >= _PENDING_BUSY_MAX) {
+    const oldest = _pendingBusyState.keys().next().value;
+    if (oldest !== undefined) _pendingBusyState.delete(oldest);
+  }
+  _pendingBusyState.delete(convId);          // re-insert to refresh order
+  _pendingBusyState.set(convId, { runningTaskIds: tids, rev: rev });
+}
+
+/* Apply every parked entry whose conv now exists, consuming it. Call this
+ * right after the conversations array grows (list refresh / hydration).
+ * Idempotent and a cheap no-op when nothing is parked. */
+function replayPendingBusyState(conversations) {
+  try {
+    if (!_pendingBusyState.size || !Array.isArray(conversations)) return;
+    for (const [convId, parked] of Array.from(_pendingBusyState.entries())) {
+      const conv = conversations.find((c) => c && c.id === convId);
+      if (!conv) continue;                    // still unknown — keep parked
+      /* CONSUME FIRST. The entry is spent whether or not the rev gate
+       * below accepts it: leaving a spent entry in the map would let a
+       * later replay resurrect state the conv has since moved past. */
+      _pendingBusyState.delete(convId);
+      if (!_revStrictlyGreater(parked.rev, conv._authoritativeActiveTaskIdsRev)) {
+        continue;                             // conv already newer
+      }
+      conv._authoritativeActiveTaskIds = new Set(parked.runningTaskIds);
+      conv._authoritativeActiveTaskIdsRev = parked.rev;
+    }
+  } catch (e) {
+    if (typeof debugLog === 'function') {
+      debugLog(`[conv-state-reducer] pending replay failed: ${e && e.message}`, 'warn');
+    }
+  }
+}
+
+function pendingBusyStateSize() { return _pendingBusyState.size; }
+
+/* Test seam only — never called by production code. */
+function resetPendingBusyStateForTests() { _pendingBusyState.clear(); }
+
 /* Consume a per-conv notify frame's server-authoritative half:
  *
  *   frame = { convId, runningTaskIds: [...], runningTaskIdsRev: [ns, rid],
  *             userId? }
  *
- * Best-effort: an unknown ``convId`` is a no-op (a genuinely new conv
- * lands via the list-refresh path). A malformed rev drops the frame.
- * NEVER writes settings; NEVER calls saveConversations.
+ * An unknown ``convId`` is PARKED (see above), never dropped. A malformed
+ * rev drops the frame. NEVER writes settings; NEVER calls saveConversations.
  */
 function applyRunningTaskIdsFrame(conversations, frame) {
   try {
@@ -108,12 +217,12 @@ function applyRunningTaskIdsFrame(conversations, frame) {
     if (!_frameIsOurs(frame.userId)) return;
     const convId = frame.convId;
     if (!convId) return;
-    const conv = conversations.find((c) => c && c.id === convId);
-    if (!conv) return;
     const nextRev = frame.runningTaskIdsRev;
+    const tids = Array.isArray(frame.runningTaskIds) ? frame.runningTaskIds : [];
+    const conv = conversations.find((c) => c && c.id === convId);
+    if (!conv) { _parkPendingBusyState(convId, tids, nextRev); return; }
     const priorRev = conv._authoritativeActiveTaskIdsRev;
     if (!_revStrictlyGreater(nextRev, priorRev)) return;
-    const tids = Array.isArray(frame.runningTaskIds) ? frame.runningTaskIds : [];
     conv._authoritativeActiveTaskIds = new Set(tids);
     conv._authoritativeActiveTaskIdsRev = nextRev;
   } catch (e) {
@@ -139,6 +248,20 @@ function applyConvStateSnapshot(conversations, frame) {
     if (!frame || !Array.isArray(conversations)) return;
     if (!_frameIsOurs(frame.userId)) return;
     const convs = (frame && typeof frame.convs === 'object' && frame.convs) || {};
+    /* Entries naming a conv we have NOT loaded must be PARKED, not skipped.
+     * This loop iterates the LOCAL array, so without this pass a snapshot
+     * arriving before the conversation list is hydrated (cold boot, or a
+     * conv created on another device) silently loses every unknown conv's
+     * busy state — the same hole applyRunningTaskIdsFrame had. */
+    for (const cid of Object.keys(convs)) {
+      if (conversations.some((c) => c && c.id === cid)) continue;
+      const entry = convs[cid];
+      if (!entry) continue;
+      _parkPendingBusyState(
+        cid,
+        Array.isArray(entry.runningTaskIds) ? entry.runningTaskIds : [],
+        entry.runningTaskIdsRev);
+    }
     for (const conv of conversations) {
       if (!conv || !conv.id) continue;
       const entry = convs[conv.id];
@@ -301,6 +424,9 @@ function startSyncDriftProbe(conversationsRef, intervalMs) {
 if (typeof window !== 'undefined') {
   window.applyRunningTaskIdsFrame = applyRunningTaskIdsFrame;
   window.applyConvStateSnapshot = applyConvStateSnapshot;
+  window.replayPendingBusyState = replayPendingBusyState;
+  window.pendingBusyStateSize = pendingBusyStateSize;
+  window.resetPendingBusyStateForTests = resetPendingBusyStateForTests;
   window.computeConvBusy = computeConvBusy;
   window.pickAuthoritativeTaskIdForReconnect = pickAuthoritativeTaskIdForReconnect;
   window.buildSyncDigest = buildSyncDigest;
@@ -317,4 +443,6 @@ if (typeof window !== 'undefined') {
    * equality. tests/test_frontend_identity_gate_parity.py enforces that no
    * gate anywhere under static/js/ re-implements them. */
   window._frameIsOurs = _frameIsOurs;
+  /* Tripwire for the consumers' fail-open branch (see above). Exported so
+   * a gate can report a missing predicate instead of degrading silently. */
 }

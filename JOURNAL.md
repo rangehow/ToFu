@@ -1,6 +1,28 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续25) — 运行时不变式从「装了但打不响」变成真能响:调用点挪到咽喉 + 生产可见(owner 复核续24 抓出,commit 见下,10 文件 +177/-36;套件 8/8,不变式探针 12→**16 全绿**,相邻环 69/70(唯一红为 sibling 在飞 RWA,A/B 实证),collect **9916** 0 err)
+- **owner 复核续24,拿代码证伪了我的第二道防线。两条独立理由,都成立:**
+  | # | 病 | 实证 |
+  |---|---|---|
+  | ① | **从没在尾部路径被调用过** | `assertChatInnerOrder` 全仓恰好 2 个调用点,都在 `renderChat` 里(`renderChat:surgical` / `renderChat:full`)。而续24 修的尾部 bug 走的是 `ConvView.apply` / `startStreaming` —— **两者都不会调它**。于是这个「不变式」看守的恰恰是**已经修好、且已有场景测试覆盖**的那两条路 |
+  | ② | **生产环境里是关着的** | 早返回条件是 `_featureFlags.debug_mode`,而它在 `lib/__init__.py:193` 默认解析为 **False** —— 真实部署上完全惰性 |
+- **owner 还亲手驱动 shipped 函数验了一遍:**debug off → 返回 `true`、零告警;debug on → 正确返回 `false` 并报 `MISPLACED SENTINEL`。**探测逻辑是好的,只是够不到它该管的地方。** owner 的定性一针见血:这和身份闸绊线当初被拆成独立文件要逃开的,是**同一个自指盲区** —— 一个在自己主触发条件上打不响的守卫。
+- **修①:调用点挪到咽喉。** 检查移进 `chatInnerInsert` 末尾 —— 续24 刚把九个写入方都收敛到这一个口子,**它就是天然的家**。每个写入方**显式**传 `conv` 与 `site`(**原语绝不去够全局** —— owner 明确要求),于是报告点名**真实调用者**(`ConvView.apply` / `turn_nav.scrollToTurn` / `_igGenerateBatch:grid` …)而不是永远只会说 renderChat。`renderChat` 的两个出口保留,负责全量重绘覆盖面。
+- **修②:拍板 (a) 生产可见(owner lean a,我同意并执行)。** 去掉 debug 门,并让违规**搭现成的生产信标**出海 —— `Api.clientError.report` → `POST /api/client-error` → 服务端日志,与 `window.onerror` 同一条通道,**不新造端点、不新增节律**。
+  - **理由不是审美:** 两个顺序 bug 都到达了真实用户,**都没有产生任何信号**。这正是这个不变式存在要终结的失败模式。留成 debug-only 等于「只有本来就知道的人才看得见」。
+  - **成本有界(已核实):** 一次 `inner.children` 单遍;渲染跨度被 `_MAX_RENDER_WINDOW=80` 封顶;插入是**每轮**事件不是每 token;违规**latch 一次**,一页只报一次(与身份闸绊线同款纪律 —— 会在每次重绘复发的条件若不 latch,就会把自己的信号埋掉)。
+  - **信标落点已端到端核实:** 按 `routes/common.py::client_error` 的真实格式化跑过 —— 进 `error.log`,`site=ConvView.apply` 完整保留。级别是 ERROR(不含 `[debuglog][warn]` 前缀),对「真实用户看到错乱投影」而言是正确的严重度。
+- **决定性证据(owner 点名要的那条测试):** 尾部 harness 在 `tail_anchor` NEUTER 下驱动**真实 ConvView.apply**——
+  ```
+  NEUTER : layout=a,b,SENT_BOT,NEW  →  violated=true  site=ConvView.apply  beacons=1
+  健康   : layout=a,b,NEW,SENT_BOT  →  violated=false                      beacons=0
+  ```
+  **修之前这条路是全哑的。** 这就是「不变式确实覆盖尾部写入方」的硬证明,而不是又一条只测头部的场景断言。
+- **不变式探针 12 → 16:** 新增 `detects_with_debug_off` / `beacons_with_debug_off` / `beacon_carries_site`(生产可达性三面)+ `chokepoint_detects_tail_violation` / `chokepoint_names_caller` / `chokepoint_beacons` / `chokepoint_silent_when_correct`(咽喉覆盖四面 —— 最后一条防止退化成「插入就报」的狼来了)。旧的 `silent_when_debug_off` **按拍板删除**,它编码的正是被推翻的那条契约。
+- **诚实标注(相邻环唯一红,非我):** `test_bundle_manifest_parity::test_every_manifest_file_has_dev_fallback_tag` 报 `settings/devices.js` 缺 index.html 标签 —— 这是 **sibling 在飞的 RWA 设备面板**:该行是 `lib/js_bundler.py` **未提交** diff 里的 `+` 行、HEAD 里没有,且 `static/js/settings/devices.js` 是未跟踪文件。**A/B 实证:**临时摘掉那一行 → parity **15/15 全绿**,随后 md5 逐字节恢复、未提交。我自己的 `core/chatinner_dom.js` 标签在 index.html 与 HEAD 里都在。
+- **生效边界:** 纯前端,走内容哈希 bundle —— **需重启服务器 + 浏览器硬刷新**。重启后这条不变式才真正开始在生产里守夜。
+
 ### 2026-07-26(续29) — RWA P4b-1 落地:Settings→Devices 页 + 伪路径绑定约定(commit 见下,16 文件;后端 12 测 + 前端 8 测含 NEUTER,四环 **38/38**,bundle 冒烟过,collect **9923** 0 err)
 - **拍板 5A 交付:** Settings 新页签「设备」——agents 表(名/平台/共享根/在线态)+ bridge token 颁发(原文只回一次,复制即隐)+ 吊销。三端点:`GET /devices`(caller 过滤)、`POST /token`(scope agents:bridge,201)、`DELETE /token/<id>`(**属主+scope 双校验,刻意不借 admin 宽权的 `/api/v1/keys` DELETE**)。装配链全钉:tab 按钮→SETTINGS_PANEL 标记→片段注入→`_BUNDLE_FILES`→core_panel 钩子→Api.desktop 域→i18n 双语。
 - **伪路径(本批最关键的设计收敛):** conv.projectPath = `remote:<agent>:<root>` —— 远程根**复用全部既有 per-conv 持久化机制**,`resolve_conv_config` 在总闸内翻译成 `cfg['project_remote']` 并清掉 projectPath。P4b-2 的选择器远程分组因此只剩「产出一个伪路径」,零新管道;settings 解析器原样持久化(有钉)。

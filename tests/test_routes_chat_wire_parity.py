@@ -903,24 +903,31 @@ def test_chat_stream_delegates_live_loop_to_next_live_tick():
 
 @_unit
 def test_is_task_terminal_pure_over_task():
-    """Slice 8: is_task_terminal is a pure predicate — True iff
-    task.status != 'running' AND NOT task.get('_autopilot_deciding').
+    """Slice 8 (updated 2026-07-27 for the pt_8dc03017 cutover):
+    is_task_terminal is a pure predicate — True iff
+    task.status != 'running'. PERIOD.
 
-    Guards the invariant: don't synthesize a late 'done' during the
-    autopilot end-of-turn window (see the ★ docstring in the original
-    closure — parent status flipped 'done' but VU LLM baton not yet
-    written to task['_autopilot_followup']).
+    The old ``_autopilot_deciding`` withhold was DELIBERATELY retired by
+    the pt_8dc03017 cutover (aa6f7ea6): the VU now runs as an
+    independent carrier task on its own stream, so a done parent is
+    genuinely terminal — the client discovers the successor via the
+    conv→latest-task supersede index (latestLiveTaskId), not via a
+    withheld baton.  This test pins the RETIREMENT so the withhold
+    cannot silently creep back: a task stamped ``_autopilot_deciding``
+    (a field nothing sets anymore) MUST still read terminal.
     """
     from lib.chat_dispatch import is_task_terminal
     # Running task → not terminal.
     assert is_task_terminal({'status': 'running'}) is False
-    # Done task, no autopilot window → terminal.
+    # Done task → terminal.
     assert is_task_terminal({'status': 'done'}) is True
-    # Done task, autopilot deciding → NOT terminal (baton race guard).
-    assert is_task_terminal(
-        {'status': 'done', '_autopilot_deciding': True}) is False
-    # Error task → terminal (still done, not deciding).
+    # Error task → terminal.
     assert is_task_terminal({'status': 'error'}) is True
+    # Retired withhold: the legacy ``_autopilot_deciding`` flag MUST NOT
+    # affect the verdict anymore (the VU has its own stream + carrier
+    # terminal done — see tests/test_vu_carrier_stream_contract.py).
+    assert is_task_terminal(
+        {'status': 'done', '_autopilot_deciding': True}) is True
 
 
 @_unit

@@ -6,6 +6,16 @@
 - 残余 = §5 三项待拍板(①轮询连败上限 ②心跳落表 vs poll 合成 ③ETA 范围,建议均 A)+ 实施范围,属口味/政策判断不擅自发明。已挂 question-block 四选项:**全按建议从 P-UX1 开工 / 四期一次做完 / 只做 P-UX1 / 逐项说明**。owner 点答即重新派发执行。
 
 
+### 2026-07-26(续8) — pt_679d064f68ac4dd6 半程收口:身份网关归一(把 sibling 即将踩的地雷先拆了),初始化器让路 mryjczi2(commit `40bc2992`,4 文件 +273/-9;新套件 4/4 含静态闸+jsdom驱动+NEUTER,SSOT 全环 **86/86**,collect **9322** 0 err)
+- **认领 → 让路的完整经过(如实记录,含一次自主判断被 owner 决策覆盖):** 我按看板「自主优先」规则认领了这张票并自主选了方案 **(c) 服务端把 `<script>window._currentUserId=…</script>` 拼进 index.html `<head>`** —— 理由是**零竞态**(fetch 是异步的,push 帧可能在它落地前到达,那个窗口里所有网关读到 `undefined` → 无作用域 → 接受外来帧,而 connect-time `conv_state_snapshot` 恰恰就在这个时刻到)。服务端半壁已写完并全绿(逐响应注入 + 缓存不落身份 + XSS 转义 + 幂等)。**但随后 sibling mryjczi2 来消息:owner 已明确答 "B —— boot 时 fetch users/me" 并点名重新派发了它。** owner 显式决策 > 我的自主选择,**当场 `git checkout -- routes/common.py` 全撤**,零行初始化器代码进 HEAD。
+- **撤回的严谨性(共享 HEAD 纪律):** 撤前先从被 drop 的 stash 对象 `7e031d66` 里 `git diff` 逐 hunk 核实 —— `routes/common.py` 只有我的 4 个 hunk,`_request_user_id` 是 sibling 早先 `3a93b66e` 已提交的内容,**确认撤回没有连带删掉任何 sibling 未提交改动**。
+- **真正落地的那一半(正交、任何 wire 下都必需):三处裸严格比较归一。** 四个多用户网关判定「这帧是不是我的」,其中三处是 `frame.userId !== myUser` 裸比较(`cross_tab_sync` 的 `_onConvNotifyPush` / `_onFoldersChangedPush`、`conv_sync_push` 的 `_onConvSyncPush`)。**今天它是哑弹**(没人写 `_currentUserId` → `myUser` 恒 null → 全接受),**但 mryjczi2 的初始化器会一次性把三处同时引爆**:服务端 `_request_user_id` / `task_user_id` 对数字 id 做 `int(uid) if str(uid).isdigit() else uid` 的 int 强转,租户 `'7'` 在帧上是 **int 7**,而客户端从 JSON body 读到的是 **str '7'** —— `7 !== '7'` → **标签页静默丢弃自己的帧**,跨设备会话同步/文件夹同步/history_rewrite 三条链全死且不报任何错。`conv_state_reducer::_frameIsOurs` 早就两侧 `String()` 归一并把这个坑写进注释(pt_ab42421158214591),另外三处从未同步。
+- **语义保持(单用户逐字节不变):** 两侧任一为 `null/undefined/''` = 无作用域全接受 —— 个人安装默认不变,pt_abae3a85a92440fd 刻意未迁移的 5 个后台写点(translate/commit、swarm/snapshot、swarm/_autocontinue、persistence_store、scheduler/_shared)发出的默认身份帧继续通行。
+- **测试 4 面 + 双向验证:** ①静态闸拒绝任何裸身份比较(排除 null/undefined/'' 存在性守卫的误报);②四处网关两侧都归一;③jsdom 驱动**真实 shipped 谓词**(int/str 偏斜必收、外来租户仍必拒 —— 网关不能为了宽松变成 no-op);④**NEUTER** 把参考网关还原成裸比较 → 偏斜面翻红。**另外手工把 `conv_sync_push` 还原成裸比较实测静态闸确实咬**(2 测翻红),不是只写不验。
+- **预存在红(A/B 实证非我引入):** `test_frontend_conv_notify_push`(7 面)/ `test_frontend_folders_notify_push`(2 测)/ `test_frontend_conv_history_rewrite_push`(`_applyHistoryRewrite` 里 `replaceAll of undefined`)—— stash 到净 HEAD 复跑同形复现,已在给 sibling 的消息里点名,免得它以为是自己改坏的。
+- **给 sibling 的交接(已发 project_message):** 除上述地雷外还提示了两点 ——(a)`data.user?.id ?? ''` 的 `''` 正是未登录值且语义正确,但**别"好心"默认成 1**,那会让 5 个未迁移后台写点的帧全被丢;(b)"before push subscribe" 只有在**真的 await** 了 fetch 才关得住竞态,否则要显式注释承认这个窗口。
+- **看板:** 归一半壁另开票并 mark done(`pt_f50f905527eb401b`);`pt_679d064f68ac4dd6` 以 `[sibling] path=static/js/main.js,static/js/api.js` 挂起并交还 mryjczi2 —— **非 human-gated,不需要 owner 做任何事**。
+
 ### 2026-07-26(续7) — RWA P1 落地:agent 项目命令集 + 本地写入安全网(commit 见下,9 文件;新套件 36/36 含双 NEUTER,desktop 六环 106/106,project_tools 环 94/94,宽环 126/126,collect **9317** 0 err)
 - **brain 按「全部按建议项」连续派发,P0(`8234d7b2`)之后自然推进 P1。** 交付 `lib/desktop_agent/_project.py`(333 行):`project_*` 七命令(list/read/write/apply_diff/grep/find/run_command),wire type=完整命令名(约束①)。
 - **约束⑤(路径校验下沉 agent 侧):** 严格 root-relative + realpath containment——`..`、绝对路径、兄弟前缀(`/app` vs `/app2`)、符号链接逃逸全拒;`_is_within` 参数化大小写模式(Win/mac 形态)+ commonpath ValueError(跨盘符)→ False。

@@ -196,6 +196,9 @@ var _i18n = {
   'err.k.bad_request.hint': { zh: '• 这不是 Key / 配额 / 429 问题——上游判定请求内容无效。展开下方错误详情查看具体原因。\n• 若反复出现且原因不明，请查看服务器日志（logs/error.log）。', en: '• This is NOT a key / quota / 429 problem — the API rejected the request payload itself. Expand the error detail below for the exact reason.\n• If it recurs with no clear cause, check the server logs (logs/error.log).' },
   'err.k.upstream_error.chip': { zh: '上游故障', en: 'Upstream error' },
   'err.k.upstream_error.title': { zh: '⚠️ 上游模型服务暂时不可用', en: 'Upstream model service temporarily unavailable' },
+  'err.k.content_refused.chip': { zh: '质量校验未过', en: 'Quality check failed' },
+  'err.k.content_refused.title': { zh: '⚠️ 翻译质量校验未通过', en: 'Translation rejected by quality check' },
+  'err.k.content_refused.hint': { zh: '• 模型多次输出错误语言 / 空结果 / 失控文本，系统拒绝采用并已自动重试。稍后再试通常会命中正常模型。\n• 若反复出现，可在 「设置 → 模型默认」 为翻译换一个更稳定的模型。', en: '• The models repeatedly produced wrong-language / empty / runaway output; it was rejected and retried automatically. Retrying shortly usually lands a healthy model.\n• If it recurs, switch the translation model in "Settings → Model defaults".' },
   'err.k.upstream_error.hint': { zh: '• 模型厂商或网关侧故障（不是本机 Key 问题），稍后重试通常可自行恢复。\n• 若持续数分钟仍失败，可在 「设置 → 模型默认」 临时切换到其他可用模型。', en: '• The model vendor or gateway is failing (not a problem with your API keys) — retrying shortly usually recovers.\n• If it keeps failing for several minutes, temporarily switch to another available model in "Settings → Model defaults".' },
   'conn.bootReconnect': { zh: '离线，显示缓存的对话，正在重连…', en: 'Offline — showing cached conversations, reconnecting…' },
   // ── In-stream liveness HUD (header timer + in-bubble line) shown when a

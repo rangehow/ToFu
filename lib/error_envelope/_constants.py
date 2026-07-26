@@ -24,6 +24,7 @@ KINDS = frozenset({
     'premature_close', 'abnormal_stop', 'aborted', 'server_offline',
     'internal', 'generic',
     'bad_request', 'upstream_error',
+    'content_refused',
 })
 
 # Default severities — warnings are recoverable / user-actionable, errors
@@ -33,7 +34,7 @@ _WARNING_KINDS = frozenset({
     'tool_rounds_exhausted', 'tool_timeout',
     'premature_close', 'abnormal_stop',
     'aborted', 'server_offline',
-    'upstream_error',
+    'upstream_error', 'content_refused',
 })
 
 # Kinds where retrying THE SAME REQUEST is genuinely likely to help
@@ -41,7 +42,7 @@ _WARNING_KINDS = frozenset({
 _RETRYABLE_KINDS = frozenset({
     'ratelimit', 'no_slot', 'timeout', 'network', 'endpoint_unreachable',
     'premature_close', 'abnormal_stop', 'server_offline',
-    'tool_timeout', 'upstream_error',
+    'tool_timeout', 'upstream_error', 'content_refused',
 })
 
 
@@ -211,4 +212,16 @@ _TITLES: dict[str, tuple[str, str, str, str]] = {
                             'retrying shortly usually recovers.\n'
                             '• If it keeps failing for several minutes, temporarily switch to another '
                             'available model in "Settings → Model defaults".'),
+    # Translation engine content-quality guards refused every candidate
+    # output after the retry budget (wrong-language flip / no-op echo /
+    # over-generated contamination). NOT a server crash — the distinction
+    # matters to the user: 500 says "we broke", this says "the models
+    # produced unusable output and we refused to commit it".
+    'content_refused':    ('⚠️ 翻译质量校验未通过',
+                            'Translation rejected by quality check',
+                            '• 模型多次输出错误语言 / 空结果 / 失控文本，系统拒绝采用并已自动重试。稍后再试通常会命中正常模型。\n'
+                            '• 若反复出现，可在 「设置 → 模型默认」 为翻译换一个更稳定的模型。',
+                            '• The models repeatedly produced wrong-language / empty / runaway output; '
+                            'it was rejected and retried automatically. Retrying shortly usually lands a healthy model.\n'
+                            '• If it recurs, switch the translation model in "Settings → Model defaults".'),
 }

@@ -42,6 +42,7 @@ const ERROR_KIND_LABELS = {
   internal:              'Internal error',
   generic:               'Error',
   bad_request:           'Bad request',
+  content_refused:       'Quality check failed',
   upstream_error:        'Upstream error',
 };
 

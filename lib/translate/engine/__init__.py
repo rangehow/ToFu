@@ -33,6 +33,7 @@ from ._split import (
 
 # Engine proper: routing + retry loop + entrypoints
 from ._engine import (
+    TranslationContentRefused,
     _build_trace,
     _translate_freetext,
     _translate_one_chunk,
@@ -49,6 +50,8 @@ __all__ = [
     '_ends_midsentence',
     # provenance helper
     '_build_trace',
+    # typed content-guard refusal (REST surface maps it to 502 + envelope)
+    'TranslationContentRefused',
     # module ref re-exported for parity with the original top-level import
     'translate_cache',
 ]

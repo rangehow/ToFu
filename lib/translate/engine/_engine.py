@@ -24,6 +24,25 @@ from ._split import _ends_midsentence
 
 logger = get_logger(__name__)
 
+
+class TranslationContentRefused(ValueError):
+    """A content-quality guard rejected every candidate output after the
+    full retry budget (wrong-language flip / no-op echo / over-generated
+    contamination). Subclasses ValueError so existing ``except ValueError``
+    handlers keep working; carries the machine-readable ``verdict`` so the
+    REST surface can answer 502 + a typed envelope instead of a bare 500
+    (pt_75d8f8c7)."""
+
+    def __init__(self, verdict, reason, *, attempts=0, content_fails=0):
+        self.verdict = verdict
+        self.reason = reason
+        self.attempts = attempts
+        self.content_fails = content_fails
+        super().__init__(
+            f'translation refused by content guard: verdict={verdict} '
+            f'after {content_fails} content fails ({attempts} attempts) '
+            f'— {reason}')
+
 # ── Over-generation guard thresholds (symmetric to the truncation floors) ──
 # A translation should be roughly the same order of magnitude as its input.
 # When a cheap model finishes the real translation of a SHORT input then keeps
@@ -599,11 +618,13 @@ def _translate_one_chunk(chunk, system_prompt, chunk_label='',
                              chunk_label, _content_fail_count, _noop_reason)
                 _notify('noop_final', _attempt, _elapsed,
                         f'no-op output after {_content_fail_count} retries')
-                # Force the trailing emptiness check below to raise, since
-                # accepting an identical-to-input "translation" is worse than
-                # failing — it would clobber any earlier good translation.
-                c = ''
-                break
+                # Refuse to commit an identical-to-input "translation" — it
+                # would clobber any earlier good translation. Raise the typed
+                # refusal so the REST surface can answer 502 + envelope
+                # instead of a bare 500 (pt_75d8f8c7).
+                raise TranslationContentRefused(
+                    'noop', _noop_reason,
+                    attempts=_attempt, content_fails=_content_fail_count)
             logger.warning('[Translate%s] No-op translation (attempt %d, content_fails=%d): %s '
                            '— excluding model and retrying',
                            chunk_label, _attempt, _content_fail_count, _noop_reason)
@@ -648,10 +669,11 @@ def _translate_one_chunk(chunk, system_prompt, chunk_label='',
                 _notify('wrong_language_final', _attempt, _elapsed,
                         f'output flipped language after {_content_fail_count} retries')
                 # Refuse to commit a flipped translation — it would clobber the
-                # already-Chinese source with English. Force the trailing
-                # emptiness check to raise.
-                c = ''
-                break
+                # already-Chinese source with English. Raise the typed refusal
+                # so the REST surface can answer 502 + envelope (pt_75d8f8c7).
+                raise TranslationContentRefused(
+                    'wrong_language', _flip_reason,
+                    attempts=_attempt, content_fails=_content_fail_count)
             logger.warning('[Translate%s] Wrong-language flip (attempt %d, content_fails=%d): %s '
                            '— excluding model and retrying',
                            chunk_label, _attempt, _content_fail_count, _flip_reason)
@@ -707,10 +729,11 @@ def _translate_one_chunk(chunk, system_prompt, chunk_label='',
                     logger.debug('[Translate%s] audit_log failed: %s', chunk_label, _ae)
                 # Refuse to commit the over-generated body — it would persist a
                 # correct translation fused with unrelated hallucinated text.
-                # Force the trailing emptiness check to raise.
-                _terminal_verdict = 'over_generated'
-                c = ''
-                break
+                # Raise the typed refusal so the REST surface can answer
+                # 502 + envelope instead of a bare 500 (pt_75d8f8c7).
+                raise TranslationContentRefused(
+                    'over_generated', _overgen_reason,
+                    attempts=_attempt, content_fails=_content_fail_count)
             logger.warning('[Translate%s] Over-generated translation (attempt %d, content_fails=%d): %s '
                            '— excluding model and retrying',
                            chunk_label, _attempt, _content_fail_count, _overgen_reason)

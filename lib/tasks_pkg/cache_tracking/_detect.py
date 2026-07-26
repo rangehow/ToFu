@@ -993,11 +993,16 @@ def detect_cache_break(
         # Accumulate session-level stats
         prev.total_cache_read += cache_read
         prev.total_cache_write += cache_write
-        prompt_tokens = 0
-        if usage:
-            prompt_tokens = (usage.get('prompt_tokens')
-                             or usage.get('input_tokens') or 0)
-        prev.total_input_tokens += prompt_tokens + cache_write + cache_read
+        # ★ total_input_tokens is the denominator of [CacheSession]'s
+        #   overall_hit%. It must be the TOTAL prompt the provider processed,
+        #   which is convention-dependent: on the OpenAI-compat wire
+        #   prompt_tokens ALREADY INCLUDES the cached tokens, so the previous
+        #   `prompt_tokens + cache_write + cache_read` counted them twice and
+        #   halved the session hit rate. split_input_tokens is the same helper
+        #   the cost engine uses (lib/cost.py), so session telemetry, per-round
+        #   telemetry and billing all read the prompt size identically.
+        from lib.cost import split_input_tokens as _split_input_tokens
+        prev.total_input_tokens += _split_input_tokens(usage)[1]
 
         # ★ When the authoritative wire fingerprint is available it REPLACES
         #   the client-side reconstruction as the prefix-mutation signal — it

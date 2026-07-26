@@ -180,6 +180,162 @@ def canonicalize_usage_cache_keys(usage: Optional[dict]) -> Optional[dict]:
     return usage
 
 
+# ── Cache-token CONVENTION detection (structural, not magnitude-based) ──
+
+# Keys that only ever appear on an OpenAI-compat payload. Their defining
+# property is that ``prompt_tokens`` is the TOTAL prompt — the cached tokens
+# are ALREADY INCLUDED in it.
+_OPENAI_TOTAL_KEYS = ('prompt_tokens', 'completion_tokens')
+# Keys that only ever appear on an Anthropic-native payload, where
+# ``input_tokens`` is the UNCACHED RESIDUAL and the cache counts sit beside it.
+_ANTHROPIC_RESIDUAL_KEYS = ('cache_read_input_tokens',
+                            'cache_creation_input_tokens')
+
+
+def usage_cache_convention(usage: Optional[dict]) -> str:
+    """Return ``'openai'`` or ``'anthropic'`` — how to read ``usage``'s input.
+
+    The two vendors disagree on what the prompt-token field MEANS:
+
+      * OpenAI-compat — ``prompt_tokens`` is the TOTAL; cached tokens are a
+        SUBSET of it (reported in ``cached_tokens`` /
+        ``prompt_tokens_details.cached_tokens``).
+      * Anthropic-native — ``input_tokens`` is only the UNCACHED residual;
+        the cached tokens are counted SEPARATELY and must be added on.
+
+    This decision used to be made by comparing magnitudes
+    (``input <= cache_write + cache_read`` ⇒ Anthropic). That is a latent
+    10x BILLING BUG: a round that reads its ENTIRE prompt back from cache has
+    ``cached == prompt_tokens``, satisfies ``<=``, and is misclassified as
+    Anthropic — so the cache is added ON TOP of a total that already contained
+    it and the whole prefix is re-priced at the full uncached rate. Live data
+    reached a margin of ONE token (prompt=428603, cached=428602) before this
+    was found, and a fully-cached 82843-token round mis-prices 10.4x.
+
+    So we decide STRUCTURALLY, on which key spellings the payload carries —
+    a property of the wire format, not of the numbers:
+
+      1. An Anthropic-only cache key present  → ``'anthropic'``.
+      2. ``prompt_tokens`` present (the OpenAI total field) → ``'openai'``.
+      3. ``input_tokens`` present without OpenAI keys → ``'anthropic'``.
+      4. Nothing conclusive → ``'openai'`` (cache-inclusive) — the SAFE
+         default: it never double-counts, so it can only under-report a total,
+         never over-charge.
+    """
+    if not isinstance(usage, dict):
+        return 'openai'
+    if any(usage.get(k) is not None for k in _ANTHROPIC_RESIDUAL_KEYS):
+        return 'anthropic'
+    if usage.get('prompt_tokens') is not None:
+        # ── Arithmetic-impossibility guard (NOT a magnitude heuristic) ──
+        # Some providers emit HYBRID payloads: the OpenAI ``prompt_tokens``
+        # spelling carrying Anthropic RESIDUAL semantics (e.g.
+        # prompt_tokens=100 with cache_read=15000). Under the OpenAI
+        # convention the cache is a SUBSET of prompt_tokens, so
+        # ``cache > prompt_tokens`` is physically impossible — when we see it,
+        # prompt_tokens cannot be the total and must be the residual.
+        #
+        # This uses STRICT ``>``, so the equality case (cached ==
+        # prompt_tokens, a round that read its whole prompt back) still reads
+        # as OpenAI. That equality IS the 10x mis-pricing cliff this function
+        # exists to fix, so the guard must never swallow it.
+        _cached = int(usage.get('cache_read_tokens') or 0) or _nested_cached(usage)
+        _written = int(usage.get('cache_write_tokens') or 0)
+        _prompt = int(usage.get('prompt_tokens') or 0)
+        if _cached + _written > _prompt:
+            return 'anthropic'
+        return 'openai'
+    if usage.get('input_tokens') is not None:
+        return 'anthropic'
+    return 'openai'
+
+
+def _nested_cached(usage: dict) -> int:
+    """Cached-token count from any vendor spelling (flat or nested)."""
+    for k in ('cached_tokens', 'effectiveCachedTokens',
+              'prompt_cache_hit_tokens', 'cached_content_token_count'):
+        v = usage.get(k)
+        if v:
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                pass
+    details = usage.get('prompt_tokens_details')
+    if isinstance(details, dict):
+        try:
+            return int(details.get('cached_tokens') or 0)
+        except (TypeError, ValueError):
+            pass
+    return 0
+
+
+def split_input_tokens(usage: Optional[dict]) -> tuple[int, int]:
+    """Return ``(uncached_input_tokens, total_input_tokens)`` for ``usage``.
+
+    THE single place the cache-token convention is applied. Both the cost
+    engine and the cache-hit-rate telemetry consume this, so a hit-rate figure
+    and the price charged for the same round can never disagree about what the
+    prompt size was.
+
+    ``uncached`` is what gets billed at the base input rate; ``total`` is the
+    full prompt the provider processed (the correct denominator for a cache
+    hit ratio).
+    """
+    _u = normalize_usage(usage)
+    inp, cw, cr = _u['input'], _u['cache_write'], _u['cache_read']
+    if not (cw or cr):
+        return inp, inp
+    if usage_cache_convention(usage) == 'anthropic':
+        # input_tokens is the uncached residual; cache sits beside it.
+        return inp, inp + cw + cr
+    # OpenAI-compat: prompt_tokens is the total; cache is a subset of it.
+    return max(0, inp - cw - cr), inp
+
+
+def synthesize_usage(*, input_tokens: int = 0, output_tokens: int = 0,
+                     cache_read_tokens: int = 0, cache_write_tokens: int = 0,
+                     reasoning_tokens: int = 0) -> dict:
+    """Build a usage dict from SCALARS, spelled so its convention survives.
+
+    Callers that hold loose token counts rather than a provider payload (the
+    billing adapter, pre-flight estimators) must still hand ``compute_cost``
+    something it can read correctly. Re-encoding scalars under the WRONG
+    spelling silently changes their meaning: writing an OpenAI TOTAL into
+    ``input_tokens`` makes the engine treat it as an uncached RESIDUAL and add
+    the cache on top — a real over-charge (a gpt-4o round of 10000 total /
+    6000 cached bills 10000 uncached instead of 4000).
+
+    Scalars carry no key-spelling signal, so the convention is inferred by the
+    one rule that is arithmetic rather than heuristic: under the OpenAI
+    convention the cache is a SUBSET of the input, so ``cache > input`` is
+    impossible and proves the input is a residual. Strict ``>`` keeps the
+    equality case (a round that read its ENTIRE prompt back) on the
+    cache-inclusive reading — that equality is precisely the 10x mis-pricing
+    cliff, so it must not be swallowed here either.
+    """
+    inp = int(input_tokens or 0)
+    cr = int(cache_read_tokens or 0)
+    cw = int(cache_write_tokens or 0)
+    base = {'reasoning_tokens': int(reasoning_tokens or 0)}
+    if cr + cw > inp:
+        # Residual semantics — Anthropic spelling.
+        base.update({
+            'input_tokens': inp,
+            'output_tokens': int(output_tokens or 0),
+            'cache_read_input_tokens': cr,
+            'cache_creation_input_tokens': cw,
+        })
+    else:
+        # Cache-inclusive total — OpenAI spelling.
+        base.update({
+            'prompt_tokens': inp,
+            'completion_tokens': int(output_tokens or 0),
+            'cache_read_tokens': cr,
+            'cache_write_tokens': cw,
+        })
+    return base
+
+
 def _legacy_preset_to_model(model_id: str) -> str:
     """Resolve a legacy preset id (e.g. 'opus') to its canonical model_id.
 
@@ -302,17 +458,14 @@ def compute_cost(
     output_cost_usd = (out * out_p) / 1e6
 
     # ── Cache convention detection ──
-    # OpenAI: prompt_tokens = total (inp >= cw + cr).
-    # Anthropic: prompt_tokens = uncached residual (inp << cw + cr).
+    # Delegated to split_input_tokens (the SINGLE source of this decision, also
+    # used by the cache-hit telemetry) so a reported hit-rate and the price
+    # charged for the same round can never disagree. It keys on the payload's
+    # KEY SPELLINGS, not on token magnitudes — see usage_cache_convention for
+    # the 10x mis-pricing that the old ``inp <= cw + cr`` comparison caused
+    # when a round read its entire prompt back from cache.
     if cache_write > 0 or cache_read > 0:
-        if inp <= cache_write + cache_read:
-            # Anthropic: inp IS the uncached portion.
-            uncached = inp
-            total_input = inp + cache_write + cache_read
-        else:
-            # OpenAI: inp is the total — derive uncached.
-            uncached = inp - cache_write - cache_read
-            total_input = inp
+        uncached, total_input = split_input_tokens(usage)
         input_cost_usd = (uncached * base_in) / 1e6
         cw_cost_usd = (cache_write * base_in * cw_mul) / 1e6
         cr_cost_usd = (cache_read * base_in * cr_mul) / 1e6
@@ -355,4 +508,5 @@ def compute_cost(
     }
 
 
-__all__ = ['compute_cost', 'normalize_usage', 'canonicalize_usage_cache_keys']
+__all__ = ['compute_cost', 'normalize_usage', 'canonicalize_usage_cache_keys',
+           'split_input_tokens', 'usage_cache_convention', 'synthesize_usage']

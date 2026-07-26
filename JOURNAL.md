@@ -3,6 +3,22 @@
 <!-- CLOSURE-PENDING _call.py err_str 截断 1 行 — 续58 三修的刻意遗留:lib/tasks_pkg/llm_fallback/_call.py:435 `err_str = str(e)[:200]` 应改为 `[:_ERR_BODY_LIMIT]`(from lib.llm_errors import _ERR_BODY_LIMIT)。当时未做的原因:该文件携带 ms1hc40 fallback-banner 未提交 WIP,任何 pathspec 提交都会连坐泄漏。已交接 ms1kuy4f:待 fallback-banner 落地后补这行。请勿整文件重写。 -->
 
 ### 2026-07-26(续59) — pt_48f29db9 我方侧收口:取证→交接→sibling 落地→互补验证(本侧 commit `3052fdcb`,1 测试文件 +176;双 NEUTER 复验全咬,环 **175/175**,collect **10168** 0 err)
+### 2026-07-26(续60) — LoopWatch 事件循环卡顿 epic `pt_c056025387634504`:**是真问题,但票面归错了因,正确的根是「PG 跑在 FUSE 上」**——同一批票里第 4 张,前 3 张全假,这张半真(取证零代码变更;修复挂 question-block)
+
+- **票面主张(我开的):「事件循环被大 JSON 序列化阻塞,修法 = json.dumps 挪 to_thread / messages blob 分块」。** 三问纪律 + 相关性实测后,**问题属实、机制错误、修法无效**:
+  | 维度 | 实测 | 判决 |
+  |---|---|---|
+  | 问题真不真 | **真**。16 次 LoopWatch STALLED/日(阈值 5s,最差 10.1s),期间所有请求/推送冻结。慢性(基线 31/28/25/21 四天,平稳非飙升) | ✅ 属实 |
+  | 机制 = 大 JSON? | **否**。5-10s 的 json.loads 需要 ~GB 级文本,DB 列不可能;且热点含 `_write_heartbeat`(文件 I/O,3 次),与「JSON 序列化」自洽不了 | ❌ 归因错 |
+  | 修法 to_thread? | **无效**。瓶颈不是 CPU 侧解析,是 FUSE 网络盘 I/O——to_thread 搬不动网络文件系统 | ❌ 修法错 |
+- **真正的根(三层证据咬合):**
+  1. **相关性**:16 次 stall 里 **11 次(69%)在 ±5s 内有一条 `Slow query`**;而今天 **248 条慢查询里 220 条(89%)打 `conversations` 表**(就是那张装着巨型 `messages` blob 的表),单条最慢 8.75s。
+  2. **热点的真实身份**:`safe_json`(json.loads)、`_jsonb_as_string`(psycopg2 类型转换)——**它们是「巨型 blob 慢吞吞抵达之后的解析/转换」,是 FUSE I/O 的下游受害者,不是独立的 JSON 病**。watchdog 是「dump 全线程栈」,抓到的帧是案发时在跑的那行,不等于元凶。
+  3. **根因代码自述**:`lib/database/db_paths.py` docstring 白纸黑字——「**在 DolphinFS FUSE 上跑生产 PostgreSQL 是不支持的**(WAL 需要 -shm mmap,POSIX 锁不可靠),**已造成真实损坏事故**。修法 = 本地盘主 + FUSE 备份」。实测:`data/pgdata`(FUSE)今天 18:19 仍在写、`/tmp/tofu/pgdata`(本地)**不存在** → 系统确实**仍在跑 legacy FUSE pgdata**,设计的 `TOFU_DB_SEED_LOCAL=1` 一次性迁移**从未执行**。
+- **一句话:** 事件循环每天被冻结 ~2 分钟,不是因为「JSON 太大」,是因为**生产 PG 的数据目录还挂在一块网络盘上,而代码里早就写好了搬回本地盘的迁移,只是一直没人按开关**。慢的是盘,不是解析。
+- **为什么挂 question-block 而不是自己动手:** 迁移一个 **6GB 生产 PostgreSQL 数据目录**是「不可逆-ish + 影响全部兄弟会话共享状态」的操作——迁移中断可能损坏活库。这正是「只有人能拍板」的那一类,代码本身也把它设计成 opt-in(`TOFU_DB_SEED_LOCAL=1`)。已挂问题给 owner,选项 = 跑迁移 / 另择方案 / 暂不处理。
+- **给后人(第 4 次的元教训,已成本日主线):** 这批 4 张票我用了同一套纪律,结果 3 假 1 半真。**这套纪律本身是对的,值得固化**:①这行日志何时开始存在(`git log -S`)?②代码有没有现成护栏/分级?③条数对基线真异常还是慢波动?④**watchdog/采样栈抓到的「热点帧」是案发时在跑的行,不等于元凶**——必须做相关性验证(stall↔慢查询 69%),不能只信帧。前 3 张靠 ①②③ 推翻,这张靠 ④ 纠正归因。**日志条数 ≠ 缺陷体量;栈帧位置 ≠ 故障原因。**
+
 - **这是「[sibling] path 持有 + peer 交接」模式第一次完整走通,值得立档:** ①我完成取证并 claim(签名采集侧缺失 + OpenAI 线无丢弃点 + 43 次 300s 锁 vs 17 次真 429 + 12 分钟假限流排队);②ms1kw1ke 持 owner 明令进场,我**让位不重复**,把设计增量(BadRequestError 载荷级分支 + 死 key 安全网谨慎点)经一条 peer message 交过去;③对方选 (A) 顺手落、自写 14 钉、commit `a6780c62`(署名取证来源);④我被 brain 重派后只做**互补验证**——零重复提交、零 shared-HEAD 冲突。对照续24 的提交事故,这是同一片雷区的正确走法。
 - **我侧补的验证(sibling 套件未覆盖的两层):**
   1. **分类器源头钉** `tests/test_classifier_vendor_transient.py`(17 测):分支顺序(transient 400/403 → RateLimitError(is_gateway,实码)、确定性残余 400 → BadRequestError)、**模式表保守性**(裸 'try again' 不带 'later' 绝不许命中——否则确定性坏载荷会 0.5s 轮换到天荒地老)、429/quota/5xx status 戳不变、两个新 reasonKey 的 i18n 字符串存在(防 missing-translation tripwire)。

@@ -1,6 +1,17 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续16) — 身份委托的 build-order 不变量 + fail-open 变可观测(owner 抓出「同族新洞」,commit `25dd7b19`,4 文件 +314/-26;套件 8→**12/12**,SSOT 环 **84/84**,collect **9403** 0 err)
+- **owner 抓的洞(比上一刀的问题更隐蔽):** 续11 把四处身份闸门收敛成单一谓词 `_frameIsOurs`,三处委托。但 `window._frameIsOurs` 是**跨文件运行时查找**,而委托刻意 **fail-open**(fail-closed 会锁死跨设备同步,比误收一帧更糟)。于是:**只要 `core/conv_state_reducer.js` 被移进 `_DEFERRED_FILES`、或被排到消费者之后,谓词就不存在,所有闸门静默退回全放行** —— 无报错、无红测、跨租户帧照流。这正是 int/str 偏斜那个洞**换了个位置**:从「比较写错」变成「比较器不在」。而续11 的套件**一行 bundler 状态都不读**,看不见它。
+- **不是假设:** Epic-E(`pt_3879f00e2d2f4bc4`)sub-part 3 明写着要把 `core/cross_tab_sync.js` 挪进 `_DEFERRED_FILES`。谁去做那一刀,就会踩中。
+- **两道互补守卫(单靠任一都不够):**
+  - **①静态 build-order 闸** `test_predicate_loads_before_every_delegating_consumer`:**解析 `lib/js_bundler.py` 真实的** `_BUNDLE_FILES` / `_DEFERRED_FILES`(不是手抄镜像,否则会各自漂移),断言谓词 ①在 eager bundle 内 ②不在 deferred ③index 严格小于**每个**委托消费者。失败信息**直接写规则**(「要延后消费者,谓词必须跟着走或留在它前面」),让未来做 Epic-E 的人读到意图而不是一句莫名的 index 不等。**A/B 双向实证:** 模拟 Epic-E 延后 → 咬(报「deferred while … stayed eager」);把谓词挪到消费者之后 → 咬(报「ORDER VIOLATION: idx 18 must load BEFORE idx 17」);还原 `js_bundler.py` → 转绿。
+  - **②运行时绊线** `reportIdentityGateUnavailable`(**一次性 latch**,否则谓词缺失会在**每一帧**刷屏,把要暴露的信号自己埋掉)。行为完全不变——帧照收;只是留痕并点名是哪个 site。**诚实边界已写进代码注释:reducer 自己没加载时,绊线也一起没了** —— 所以①不是锦上添花,是必需项。
+- **测试 8 → 12:** 新增静态 build-order 闸、绊线存在且 latch、**行为测试「不加载 reducer 只加载消费者」**(即 build-order 回归的真实形状:断言帧仍被接受 **且** 上报点名)、NEUTER 剥掉上报调用 → fail-open 复归静默 → 红。另外把 `test_delegation_is_fail_open_AND_reports` 升级成**委托数与上报数相等**,任何一处 fallback 退回静默都会被抓。
+- **两个 harness 坑(都会造成误绿/误红,值得记):** ①**jsdom 的 `document.visibilityState` 默认是 `prerender`**,而去抖列表刷新有 `visible` 空闲守卫 → 刷新永不执行,断言以完全无关的理由翻红;②那个去抖**会自我重排 timer**(第一个 timer 再排一个才真正调 `loadConversationsFromServer`),所以 timer 必须**排空到不动点**而非单趟。
+- **共享 HEAD 纪律:** 提交前逐符号核对 reducer 的未提交改动归属 —— sibling 的 pending-busy-state 簇已自行提交,工作树里只剩我的 3 个符号,精确 4 文件零泄漏。
+- **看板:** 给 Epic-E 留了约束票并 mark done(`pt_18ae462abf0a40df`)—— 写明做 defer 时的解法是**把 reducer 一起搬进同一 deferred chunk 并排在前面,不要拆开**,`conv_sync_push.js` 同理。
+
 ### 2026-07-26(续15) — 请求检视器 P5 数据面重构:snapshot 增量存储 + 分层保留 + 存量迁移(2 commit:`1a8d4cc8` 6 文件 +999/-18 / `fe2f220f` 4 文件 +474;新套件 12+5+5=22 测含 3 发 NEUTER,回归 11 套件 106/106,collect **9384** 0 err;epic `pt_9ab6f6b2c93f4653` 挂 human-gated 等重启)
 - **owner 实证的病根(不是推测):** 检视器打开全是「事件日志已过期」而任务只有 2 小时。两层:①6h TTL 一刀切把结构事件连同流式噪声一起删;②不敢延长保留期——每轮整包重存全量 messages+tools,snapshot 占 `task_events` 总字节 **92.4%**,单任务 `efb479f6` 167 轮 = **123.2MB**,`tools` 数组每轮固定 **201898 字节重存 167 遍**(≈33MB 纯冗余)。**顺序硬约束:先增量化、再延长保留**,反了会把 FUSE 上的 pg 拖垮。
 - **增量格式(设计稿 §10 冻结,owner 逐条拍板):** tools 按内容哈希去重 + messages 增量(`prefixLen`/`prefixHash`/`newMessages`/`messageCount`)+ 重复轮次只落空记录 + **回放 API 形状不变**(服务端重建,前端零感知)。

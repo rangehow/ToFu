@@ -59,9 +59,11 @@ from lib.llm_errors import (
     PromptTooLongError,
     RateLimitError,
     RetryableAPIError,
+    _ERR_BODY_LIMIT,
     _GATEWAY_THROTTLE_STATUS,
     _classify_http_error,
     _is_prompt_too_long,
+    repair_mojibake,
 )
 from lib.log import get_logger
 from lib.model_info import (
@@ -454,9 +456,16 @@ def classify_status_error(status_code, err_text, *, body, log_prefix, raw_dumper
     Always raises (via ``_classify_http_error``) — never returns normally
     when ``status_code != 200``.
     """
-    err_msg = f'API HTTP {status_code}: {err_text[:800]}'
+    # _ERR_BODY_LIMIT (not 800): the 800-char cap amputated the JSON envelope
+    # mid-way, so summarize_error_body (called inside _classify_http_error)
+    # failed to parse and leaked the raw envelope into the retry HUD, and the
+    # gateway's tail diagnostics (ext.error.source/service/stage + request id)
+    # were lost from error.log. repair_mojibake is NOT applied here: both
+    # callers hand in already-decoded text (stream.py via decode_error_body,
+    # astream.py via its own repair wrap), so the repair boundary stays single.
+    err_msg = f'API HTTP {status_code}: {err_text[:_ERR_BODY_LIMIT]}'
     if raw_dumper.enabled:
-        raw_dumper.line(f'[HTTP-{status_code}] {err_text[:2000]}')
+        raw_dumper.line(f'[HTTP-{status_code}] {err_text[:_ERR_BODY_LIMIT]}')
     _classify_http_error(status_code, err_msg, body.get('model', ''),
                          log_prefix, max_tokens=body.get('max_tokens', 0))
 
@@ -631,6 +640,14 @@ class SSEAccumulator:
     def _handle_sse_error(self, eo):
         """Classify an SSE-embedded error object; always raises."""
         err_text = eo.get('message', '') if isinstance(eo, dict) else str(eo)
+        # This text is parsed straight from the SSE error JSON — unlike the
+        # non-200 path it never passes through decode_error_body, so the
+        # UPSTREAM_VENDOR double-encoding (2026-07-26) would sail through into
+        # logs, the raised exception, AND the Chinese pattern matchers below
+        # (which would then miss '稍后重试'/'负载较高'). Repair FIRST so both
+        # display and classification see the intended text. Idempotent on
+        # already-clean CJK (repair only fires when it GAINS CJK).
+        err_text = repair_mojibake(err_text)
         _err_lower = err_text.lower()
         _model_id = self.body.get('model', '')
         _detected_limit = _parse_token_limit_from_error(err_text, _model_id)
@@ -642,7 +659,7 @@ class SSEAccumulator:
                 self.body.get('max_tokens', 0))
         if _is_prompt_too_long(err_text):
             logger.warning('%s Prompt too long detected in SSE error: %s',
-                           self.log_prefix, err_text[:300])
+                           self.log_prefix, err_text[:_ERR_BODY_LIMIT])
             raise PromptTooLongError(f'SSE error: {err_text}')
         _sse_err_type = eo.get('type', '') if isinstance(eo, dict) else ''
         _sse_http_code = str(eo.get('http_code', '')) if isinstance(eo, dict) else ''
@@ -689,7 +706,7 @@ class SSEAccumulator:
         )
         if _is_sse_quota:
             logger.warning('%s SSE rate-limit/quota detected — escalating to '
-                           'dispatch layer: %s', self.log_prefix, err_text[:300])
+                           'dispatch layer: %s', self.log_prefix, err_text[:_ERR_BODY_LIMIT])
             raise RateLimitError(
                 f'SSE error: {err_text}',
                 reason=f'HTTP 429: {err_text[:180]}')
@@ -698,12 +715,12 @@ class SSEAccumulator:
             if _sse_status in _GATEWAY_THROTTLE_STATUS:
                 logger.warning('%s SSE gateway throttle (HTTP %d) — escalating to '
                                'dispatch layer: %s', self.log_prefix, _sse_status,
-                               err_text[:300])
+                               err_text[:_ERR_BODY_LIMIT])
                 raise RateLimitError(
                     f'SSE error: {err_text}', is_gateway=True,
                     reason=f'HTTP {_sse_status}: {err_text[:180]}')
             logger.warning('%s SSE server error (retryable): %s',
-                           self.log_prefix, err_text[:300])
+                           self.log_prefix, err_text[:_ERR_BODY_LIMIT])
             raise RetryableAPIError(
                 f'SSE error: {err_text}',
                 status_code=_sse_status)

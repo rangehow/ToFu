@@ -941,3 +941,15 @@
 - **Object.assign / 解构 / spread 显式处置(不留白):** 守卫 docstring 里**具名豁免** —— 点号外的写/读形态别名扫描看不到;理由:点号赋值是本库唯一实践(grep 证),且 reader-surface 守卫钉死了任何能碰 session 的文件,这些形态的作者必须先出现在 allowlist 才会被本守卫扫到。
 - **git 纪律:** 单文件 numstat 全量不截断;暂存 stray 为空;sibling WIP 零损留在 worktree。
 
+
+### 2026-07-26(续20) — pt_conv_state_ssot:P5 探针从「不可判读」变为「可判据」,P6 前置就位(2 commit:`fa61e9b1` 收敛追踪 3 文件 / `f1892e3d` rev 语义修正 2 文件;新套件 8+5=13 测含 NEUTER×3,回归环 36/36,bundler manifest 126)
+- **起点是 owner 报的三件事(渲染错乱 / 前端慢 / 后端 DB 慢)。前两轮我在 DB 那条线上做了六轮基准,四次自我推翻(TEMP 表不写 WAL / 拿 p99 当典型 / 拿全体 p50 代表尾部),最终结论:行存迁移确实值 ~80×(2232ms → 10.8ms,真实 WAL 表实测),全量 `verify_conv_parity` 4159/4159 通过,但生产日志里零条对应告警 —— 优先级低于一个正在持续报警的故障,已留票不做。**
+- **转向依据是日志而非我的判断**:`logs/error.log` 里 `[SyncDrift]` 246 条,是这个系统自己在报客户端状态落后。979 条 DB ERROR 全部是测试产物(`/tmp/tofu-test-shim-*`),非生产。
+- **第 1 刀(`fa61e9b1`)**:P5 探针把每一次 client≠server 都打 WARNING。但流式会话上客户端 60s 前的快照**永远**追不上实时服务端值,于是告警恒响、真信号被埋。新增 `lib/conversations/drift_tracker.py`,判据不是时长而是**客户端值有没有在动**:server 动+client 动 = 采样滞后(DEBUG);server 动+client **冻住** = 真丢帧(超 180s 升 WARNING);两边都不动 = 空闲会话(DEBUG)。收敛也记录(`CONVERGED after Ns`)——这是 P6 删分支所需的**正面证据**。探针语义零变化:仍记录、仍返回全部 divergence、仍不改状态,只改日志级别。
+- **第 2 刀(`f1892e3d`)—— 也是本轮最重要的发现**:实测同一会话连续 8 次上报(跨 7 分钟)`ms0zuc59: c=523 s=645→652`、`ms14r8qs: c=62 s=155→163`,客户端值**一次都没动**。这是丢帧的精确形状,但**它不是丢帧**。根因:`conv._serverRev` 的语义是「本 tab 上次**拉取正文**时的 rev」,不是「本 tab 已知的最新 rev」。而 `cross_tab_sync.js:434-441` 对后台会话**刻意不重取正文**(设 `_needsLoad=true`,注释原文 "Never repaints the viewport")。**所以后台会话的 rev 冻结是设计行为,rev 这一维从结构上就无法区分「设计如此」与「真丢帧」。** 修法:会话自知正文陈旧时上报 `rev: null`(服务端本就跳过非数值 rev),`taskIds` 不动 —— 它只由服务端帧写入,冻结即真冻结,**这才是 P6 该依据的维度**。
+- **一个被我否决的自己的方案**:上一轮我提议给 digest 加 `isOpen`。否决理由已写进 commit body ——**那是为迁合一个测错量的指标,去给一个本来正确的客户端行为打补丁**。缺陷在 rev 语义,不在客户端行为。
+- **证据纪律**:第 2 刀的 5 个探针**驱动真实 shipped `buildSyncDigest`**(非复刻),NEUTER 还原守卫 → 精确复现 523 假阳性;并专门钉住「不能矫枉过正」——正文新鲜的会话**仍须上报 rev**,否则会把硬约束 #4 真正针对的洞一起堵死。
+- **重启后单次采样:两个维度均 0 分歧**(此前每周期 8 条)。**但这是重启后 71 秒的 1 个样本,且 bundle 哈希已变(`bundle-8ac20329.js`),浏览器可能仍跑旧 JS —— 不足以称「已修复」,需持续观察。**
+- **epic 状态更正(防止后人重做)**:P1–P5 **全部已落地**(`notify_conv_changed` 带 rev+userId 在 `meta_cache.py:184`;`[monotonic_ns, replica_id]` 元组 rev;bifurcated 客户端字段;`snapshot_running_by_conv` 单一 registry SSOT;`agent_core/push.py` 连接快照)。**只剩 P6**。
+- **P6 准入条件(已理顺)**:连续多个采样周期 `kind=task_ids` 零分歧 → 证明新帧通道健康 → 才可逐条删 `_reconcileStuckActiveTaskPins` / 孤儿 pin 清扫 / 离线轮询,且每条删除的 commit body 必须写明「哪个新帧替代了它的旧场景」。
+- **一起 git 泄漏的自首**:`fa61e9b1` 误含 sibling `ms14r8qs` 的 `tests/test_get_conversation_selection.py`(在我 `git add` 之后、`commit` 之前被创建,`git diff --cached` 看不到)。**内容完好、全仓仅一份、未被我改动,仅归属错误**,按惯例不改写共享历史。**教训:并发 HEAD 上「提交前看 diff --cached」不充分,只有提交后 `git show --stat` 是真相。** 第 2 刀已按此复核,精确 2 文件。

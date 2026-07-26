@@ -44,6 +44,13 @@
 - **生效边界(诚实):** ①**Personal-install / open-mode / 单用户:BYTE-IDENTICAL** to pre-P7 — helper fallback DEFAULT_USER_ID=1,seam coerce → unscoped snapshot(所有已 landed 测试 assert userId=1 都通)。②**Auth 落地那一刻起:per-tenant scoping 立即在 write path 生效**,与 c6d1bd71 的 read path 组合起来 SSOT 频道就是完整多租户隔离的。③**不在本 commit**:未来的 (a) `lib/translate/commit.py` / `lib/swarm/snapshot.py` 等 5 处 background sites 迁移(need DB user_id lookup 或 store signature 扩展 — 独立 workstream);(b) 前端 `_currentUserId` 初始化(pt_679d064f68ac4dd6 owner-question-blocked A/B/C/D)- 无 window._currentUserId 时 reducer 走 unscoped 分支,单用户 byte-identical。auth 落地 + 前端 init 落地那一刻,SSOT 频道 3 段(WS handshake + write-path scope + reducer gate)一体激活。
 - **epic 收口:** pt_abae3a85a92440fd mark done - write-path 契约完整落地,`_request_user_id` + `task_user_id` 两 helper 成为下一轮 migration 的标准 API(其余 5 sites + persistence_store 都可以按同款替换,是 mechanical 单纯 API 扩展)。
 
+### 2026-07-26(续7) — 产出底盘补链路测试:P4–P7 每层都测过,唯独「串起来」没测过(commit `2e815ff8`,1 文件 +113;新套件 3/3 双 NEUTER 都咬,八套件 **129/129**,collect **9332** 0 err)
+- **派发是陈旧重发,我没重做:** 本轮派发说「Go P6」,但 P6 上一轮已落地(`424d9c28`)且伞形 + P6 两个 epic 都已 complete、看板上已进「Recently done」。**单趟核实:七笔提交(P4 `a6f45f0c` → … → 文档 `ad3c9559`)全在祖先链**,sibling 已在其上推进 2 个提交,七套件 126/126 仍绿。重做 P6 只会产生重复提交,所以改为补一个我**确实欠着**的东西。
+- **欠的是什么:** P4/P5/P6/P7 每期都有单测,但**每个单测都把周围层 fake 掉了** —— recipe 测试 fake 底盘、底盘测试 fake 配方、引擎测试 fake 两者。结果是:**任何一处「接缝」断掉,全部现有测试都照样绿**。这一刀把真实组合跑起来,只 fake 三个外部缝(web search / LLM / TTS)。
+- **钉住三条没人钉过的性质:** ①配方产出的 scenes.json 必须被**引擎自己的** `check_storyboard` 接受 —— 以前只验「JSON 合法」,现在验「引擎不会拒」,把失败从渲染期提前到测试期;②第二次跑**零 web_search 零 LLM**(崩溃续跑契约在整条链上成立,不只在 `run_stages` 内部);③活 job 写的清单**正好是**重投扫描需要的字段,且 `done` 清单不被重投 —— 契约两半必须互相对得上。
+- **双 NEUTER 都咬:** 破坏底盘 resume-skip → checkpoint 测试红;摘掉配方的片尾来源卡 → storyboard 测试红。两个文件事后 `diff` 校验**逐字节还原**。
+- **为什么值得单独一刀:** 这个项目为「接缝处的静默失败」付过很多次代价(wire 指纹、killed_recovery、event fold)。产出底盘现在有三个能力骑在同一套阶段图上,接缝只会更多,不是更少。
+
 ### 2026-07-26(续6) — RWA P0 落地:Bridge agent 身份与寻址(owner 拍「全部按建议项,开工 P0」,commit 见下,9 文件;新套件 24/24 含双 NEUTER,相邻五环 82/82 + api_v1 81/81,collect **9176** 0 err)
 - **拍板记录:** 设计稿 §8 五项一键答复全按建议项(2A v1 回退档 / 3A 同名路由 / 4A 远程写默认 Manual / 5A Settings→Devices / 6A 项目面板远程设备分组),已回写设计稿 §8 + 头部状态 + §5 注记。
 - **交付(硬约束②的服务器半壁):** ①poll v2 注册帧(agent_id/机器名/平台/能力位);②服务端注册表 + 15s 心跳窗口(`register_agent`/`online_agents`/`list_agents`);③寻址谓词 `_deliverable`(target 只到目标 agent);④入队闸 `_addressing_enqueue_error`(寻址离线即拒;**多在线未寻址拒发**,模型收诚实错——「挂起不猜」);⑤拍板②A 回退档:v1 在无 v2 注册的世界 wire 投影 `{id,type,params}` 逐字节不变;⑥kill switch `TOFU_DESKTOP_ADDRESSING=0`;⑦agent 侧稳定身份 `lib/desktop_agent/config.py`(首启 uuid 持久化,复用 lib/json_store 原子写)+ `run_agent` 每 poll 上送注册帧;⑧status 端点 `agents` 列表。每用户 token(约束②第三条)属 P4(⑤A),本批不打断全局 secret。

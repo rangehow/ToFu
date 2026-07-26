@@ -10,6 +10,31 @@
  */
 var _i18nLang = localStorage.getItem('tofu_ui_lang') || 'zh';
 
+/* ── Server-visible language mirror (Epic-E sub-part 1, owner-approved) ──
+ * localStorage stays AUTHORITATIVE — this is a write-through mirror so the
+ * SERVER can pick which single-language bundle to ship. The server cannot read
+ * localStorage, and the boot dictionary must be present before _applyI18n()
+ * runs (index.html has 309 data-i18n bindings whose static fallback is not
+ * uniformly one language), so without this cookie a per-language bundle is
+ * impossible. See routes/common.py::request_ui_lang and
+ * tests/test_i18n_split_blocked_on_lang_signal.py.
+ *
+ * Written on EVERY boot, not just on change: a user who set their language
+ * before this shipped has localStorage but no cookie, and would otherwise be
+ * served the default bundle forever. SameSite=Lax keeps it off cross-site
+ * requests; it is a display preference, never an auth signal. */
+function _syncLangCookie(lang) {
+  try {
+    document.cookie = 'tofu_ui_lang=' + encodeURIComponent(lang) +
+                      ';path=/;max-age=31536000;SameSite=Lax';
+  } catch (e) {
+    /* Cookies disabled — the server falls back to the default language and the
+     * client still renders from whatever pack it received, because t() keeps
+     * its zh fallback (now observable via _reportMissingTranslation). */
+  }
+}
+_syncLangCookie(_i18nLang);
+
 /**
  * Translation dictionaries.
  * Key = translation key used in data-i18n attributes and t() calls.
@@ -3498,6 +3523,9 @@ function setLanguage(lang) {
   if (lang !== 'zh' && lang !== 'en') return;
   _i18nLang = lang;
   localStorage.setItem('tofu_ui_lang', lang);
+  /* Mirror immediately so the NEXT page load is served the matching bundle.
+   * Without this the server would keep shipping the previous language's pack. */
+  _syncLangCookie(lang);
   _applyI18n();
 }
 

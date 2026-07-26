@@ -396,7 +396,38 @@ FAVICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
 # ── Cached bundled index.html (avoids re-reading + regex on every page load) ──
 # Keyed by (bundle_tag, styles_link_tag, html_mtime) so any of those changing
 # triggers a re-render of the cached HTML.
-_bundled_index_cache = {'tag': None, 'styles_tag': None, 'feature': None, 'html': None, 'mtime': 0, 'panels': None}
+_bundled_index_cache = {'tag': None, 'styles_tag': None, 'feature': None, 'html': None, 'mtime': 0, 'panels': None, 'lang': None}
+
+# ── UI language as a SERVER-VISIBLE signal (Epic-E sub-part 1, owner-approved) ──
+# The UI language has always lived in localStorage['tofu_ui_lang'], which the
+# server cannot read. That made a per-language bundle impossible: an eagerly
+# shipped single-language pack must be chosen at serve time by a server with no
+# way to choose (see tests/test_i18n_split_blocked_on_lang_signal.py).
+#
+# Owner picked option A: mirror the language into a cookie so the server CAN
+# choose. localStorage stays AUTHORITATIVE for the client; the cookie is a
+# write-through mirror maintained by i18n.js (on boot and in setLanguage). The
+# server only ever READS it, and treats anything unrecognised as the default —
+# a hostile or stale cookie can therefore only ever select a real language,
+# never inject a filename.
+_UI_LANG_COOKIE = 'tofu_ui_lang'
+_UI_LANGS = ('zh', 'en')
+_UI_LANG_DEFAULT = 'zh'
+
+
+def request_ui_lang():
+    """Resolve the UI language for the current request from its cookie.
+
+    Returns one of ``_UI_LANGS``, defaulting to ``_UI_LANG_DEFAULT``. Safe to
+    call outside a request context. The whitelist is the security boundary:
+    the value reaches a bundle filename, so it must never be attacker-shaped.
+    """
+    try:
+        raw = (request.cookies.get(_UI_LANG_COOKIE) or '').strip().lower()
+    except Exception as e:  # noqa: BLE001 — no request context (tests, workers)
+        logger.debug('[Index] ui-lang cookie unavailable: %s', e)
+        return _UI_LANG_DEFAULT
+    return raw if raw in _UI_LANGS else _UI_LANG_DEFAULT
 
 # Regex: match contiguous block of app script tags + interleaved HTML comments/blank lines.
 # Two important details:
@@ -490,6 +521,7 @@ def _serve_raw_index_with_panels():
 def index_page():
     bundle_tag = _get_bundle_tag()
     styles_tag = _get_styles_link_tag()
+    ui_lang = request_ui_lang()
     if not bundle_tag:
         # Bundling failed — serve original index.html with individual scripts
         # (panels still spliced in so the settings modal isn't crippled).
@@ -525,6 +557,7 @@ def index_page():
             and _bundled_index_cache['feature'] == feature_tag
             and _bundled_index_cache['mtime'] == html_mtime
             and _bundled_index_cache['panels'] == panels_sig
+            and _bundled_index_cache['lang'] == ui_lang
             and _bundled_index_cache['html']):
         resp = make_response(_bundled_index_cache['html'])
         resp.content_type = 'text/html; charset=utf-8'
@@ -555,6 +588,7 @@ def index_page():
         _bundled_index_cache['styles_tag'] = styles_tag
         _bundled_index_cache['feature'] = feature_tag
         _bundled_index_cache['panels'] = panels_sig
+        _bundled_index_cache['lang'] = ui_lang
         _bundled_index_cache['html'] = html
         _bundled_index_cache['mtime'] = html_mtime
 

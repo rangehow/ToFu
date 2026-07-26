@@ -262,7 +262,21 @@ def build_body(model, messages, *, max_tokens=128000, temperature=1.0,
             body['thinking']['display'] = 'summarized'
         else:
             body['temperature'] = 1.0
-        if _effort and _effort != 'medium':
+        # Effort rung. On the ADAPTIVE generation (Opus 4.7+) EVERY rung is
+        # stated, including ``medium``. That exclusion used to be correct --
+        # medium WAS the model default, so omitting it was a free byte saving.
+        # Opus 5 moved the default to ``high``, which silently turned the
+        # omission into an UPGRADE of the user's explicit choice. Measured on
+        # the sankuai gateway (yuju-claude-opus-5-evaDaily, identical prompt,
+        # n=6, 2026-07-26): effort dropped -> median 2812.5 completion tokens,
+        # effort=medium -> median 1855.0 (~1.52x). index.html ships
+        # data-depth="medium" as the ACTIVE default on both the desktop (:795)
+        # and mobile (:1708) selectors, so this is the common path.
+        #
+        # Pre-4.7 Claude still defaults to medium, so omitting it there means
+        # the same thing -- that wire stays byte-identical.
+        _omit_medium = not is_claude_opus_47(model)
+        if _effort and not (_omit_medium and _effort == 'medium'):
             if _effort == 'xhigh' and not is_claude_opus_47(model):
                 logger.info('[build_body] effort=xhigh not supported on %s — '
                             'downgrading to high', model)

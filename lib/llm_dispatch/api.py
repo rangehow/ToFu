@@ -688,7 +688,14 @@ def _readjust_thinking_params(body: dict, new_model: str, thinking_format: str):
                 body['thinking']['display'] = 'summarized'
             else:
                 body['temperature'] = 1.0
-            if effort:
+            # Effort rung -- kept in lockstep with build_body(). The adaptive
+            # generation states EVERY rung (its default is `high`, so an
+            # omitted `medium` would be a silent upgrade); pre-4.7 Claude
+            # still defaults to medium and keeps the omit wire. The two paths
+            # diverged on exactly this rung before
+            # tests/test_claude_effort_rung_parity.py pinned them together.
+            _omit_medium = not is_claude_opus_47(new_model)
+            if effort and not (_omit_medium and effort == 'medium'):
                 # xhigh is Opus 4.7-only; downgrade on older Claude to avoid HTTP 400.
                 if effort == 'xhigh' and not is_claude_opus_47(new_model):
                     effort = 'high'

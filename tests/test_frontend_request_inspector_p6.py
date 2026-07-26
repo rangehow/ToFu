@@ -163,8 +163,12 @@ function extract(name, src) {
 }
 const svgConst = toolSrc.match(/const _RI_TOOL_ANCHOR_SVG =[\s\S]*?';/);
 if (!svgConst) throw new Error('cannot find _RI_TOOL_ANCHOR_SVG');
+/* The anchor row also embeds the inline-STATE anchor (P7) whose glyph is a
+ * second shipped const — extract it or the renderer call hits a TDZ error. */
+const stateSvgConst = toolSrc.match(/const _RI_STATE_ANCHOR_SVG =[\s\S]*?';/);
+if (!stateSvgConst) throw new Error('cannot find _RI_STATE_ANCHOR_SVG');
 
-eval(debugSrc + '\n' + riSrc + '\n' + svgConst[0] + '\n' +
+eval(debugSrc + '\n' + riSrc + '\n' + svgConst[0] + '\n' + stateSvgConst[0] + '\n' +
      extract('_renderToolRequestAnchor', toolSrc) + '\n' +
      ';win.__anchor = _renderToolRequestAnchor;');
 
@@ -182,6 +186,13 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     hB.indexOf('>R3<') !== -1 && hB.indexOf('>R2<') === -1);
   check('anchor_calls_tool_entry',
     hB.indexOf("openRequestInspectorForToolRound('task-T1',3)") !== -1);
+  /* P7: the same row also addresses its post-tool STATE mirror (same
+   * roundNum axis as the producing request) and carries the inline-state
+   * anchor that opens it next to the tool call. */
+  check('row_addresses_state_mirror',
+    hB.indexOf('data-ri-state="task-T1:3"') !== -1);
+  check('state_anchor_calls_inline_entry',
+    hB.indexOf("openStateInspector('task-T1',3") !== -1);
 
   /* ── 2. debug_mode OFF → nothing ── */
   win._featureFlags.debug_mode = false;

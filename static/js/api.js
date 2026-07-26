@@ -368,7 +368,8 @@
   // tasks (Request Inspector) ----------------------------------------
   // Server-authoritative per-task request fold (docs/DEBUG_PANEL_REDESIGN.md
   // P2). byConv: task rows for a conversation; getRequests: metadata-only
-  // request rows + attempts; getRequestPayload: full payload for one round.
+  // request rows + attempts; getRequestPayload: full payload for one round
+  // (kind='state' serves the post-tool / final / fallback mirrors).
   const tasks = {
     byConv: (convId) =>
       get(`/api/v1/tasks/by-conv/${encodeURIComponent(convId)}`,
@@ -376,9 +377,10 @@
     getRequests: (taskId) =>
       get(`/api/v1/tasks/${encodeURIComponent(taskId)}/requests`,
           { onError: 'null' }),
-    getRequestPayload: (taskId, roundNum, turn) =>
+    getRequestPayload: (taskId, roundNum, turn, kind) =>
       get(`/api/v1/tasks/${encodeURIComponent(taskId)}/requests/${encodeURIComponent(roundNum)}`,
-          { query: turn ? { turn } : {}, onError: 'null' }),
+          { query: { ...(turn ? { turn } : {}), ...(kind ? { kind } : {}) },
+            onError: 'null' }),
   };
 
   // optimizer -------------------------------------------------------

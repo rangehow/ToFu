@@ -203,6 +203,47 @@ def test_payload_on_demand_last_wins(task_a):
     assert get_request_payload(task_a, 99) is None
 
 
+def test_payload_kind_state_same_round_axis():
+    """kind='state' serves the post-tool / final mirrors via the SAME
+    roundNum axis (design §3.1: post-tool mirror of loop round N carries
+    roundNum=N+1) — the in-chat state inspector's fetch contract."""
+    from lib.tasks_pkg.request_inspector import get_request_payload
+    tid = f'ri-s-{uuid.uuid4().hex[:8]}'
+    req = _snap('request', 2, n_msgs=5)
+    req['messages'] = [{'role': 'user', 'content': 'pre-request'}] * 5
+    state = _snap('state', 2, label='Round 2 工具结果后 · 7条', n_msgs=7,
+                  tools=0)
+    state['messages'] = [{'role': 'tool', 'content': 'post-tool'}] * 7
+    fin = _snap('state', 'final', label='最终回复后 · 8条', n_msgs=8, tools=0)
+    fin['messages'] = [{'role': 'assistant', 'content': 'final'}] * 8
+    _seed(tid, [
+        ('messages_snapshot', req),
+        ('messages_snapshot', state),
+        ('messages_snapshot', fin),
+    ])
+    try:
+        # default kind stays the pre-request snapshot
+        p_req = get_request_payload(tid, 2)
+        assert p_req is not None and p_req['kind'] == 'request'
+        assert p_req['messages'][0]['content'] == 'pre-request'
+        # kind='state' at the SAME round number returns the post-tool mirror
+        p_state = get_request_payload(tid, 2, kind='state')
+        assert p_state is not None and p_state['kind'] == 'state'
+        assert p_state['messages'][0]['content'] == 'post-tool'
+        assert len(p_state['messages']) == 7
+        assert p_state['label'] == 'Round 2 工具结果后 · 7条'
+        # string round labels address the final / fallback mirrors
+        p_fin = get_request_payload(tid, 'final', kind='state')
+        assert p_fin is not None and p_fin['messages'][0]['content'] == 'final'
+        # cross-kind misses stay misses
+        assert get_request_payload(tid, 'final') is None
+        assert get_request_payload(tid, 1, kind='state') is None
+        # an unknown kind is refused, never silently reclassified
+        assert get_request_payload(tid, 2, kind='bogus') is None
+    finally:
+        _cleanup(tid)
+
+
 def test_list_conv_tasks_exact_tallies(task_a, task_legacy):
     from lib.database import DOMAIN_CHAT, get_thread_db
     from lib.database._core_schema import TASK_RESULTS, upsert
@@ -246,6 +287,14 @@ def test_routes_registered_on_v1_blueprint():
     assert '/api/v1/tasks/by-conv/<conv_id>' in rules
     assert '/api/v1/tasks/<task_id>/requests' in rules
     assert '/api/v1/tasks/<task_id>/requests/<round_num>' in rules
+    # the payload route passes kind through (state mirrors ride the same URL)
+    src = open(os.path.join(ROOT, 'routes', 'api_v1', 'tasks.py'),
+               encoding='utf-8').read()
+    assert "kind=request.args.get('kind', 'request')" in src
+    # merge-artifact guard: one stream route, one api_response import
+    assert src.count(
+        "@api_v1_tasks_bp.route('/api/v1/tasks/<task_id>/stream'") == 1
+    assert src.count('from lib.api_response import (') == 1
 
 
 # ─────────────────────────────────────────────────────────────────────────

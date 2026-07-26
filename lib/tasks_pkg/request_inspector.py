@@ -318,21 +318,31 @@ def fold_request_log(task_id: str) -> dict:
     return out
 
 
-def get_request_payload(task_id: str, round_num, turn: str = '') -> dict | None:
-    """Full payload for ONE request round (the on-demand detail fetch).
+def get_request_payload(task_id: str, round_num, turn: str = '',
+                        kind: str = 'request') -> dict | None:
+    """Full payload for ONE snapshot round (the on-demand detail fetch).
 
     ``turn`` (optional): endpoint phase tag ('planning'|'working'|
     'reviewing') or 'swarm-agent' — disambiguates same-numbered rounds.
     When given, only snapshots with a matching turn qualify; when empty,
     the last matching snapshot wins (legacy / untagged behavior).
 
-    Returns None when no request-kind snapshot exists for that round
-    (expired log, state-only round, or unknown task).
+    ``kind``: 'request' (default) reads pre-request snapshots; 'state'
+    reads the post-tool / final / fallback mirrors. Both share the SAME
+    roundNum axis (docs/DEBUG_PANEL_REDESIGN.md §3.1: the post-tool mirror
+    of loop round N carries roundNum=N+1, exactly the request that produced
+    those tool calls), so ONE addressing scheme serves both — this is what
+    the in-chat state inspector fetches.
+
+    Returns None when no matching snapshot exists for that round (expired
+    log, wrong kind, or unknown task).
     """
+    if kind not in ('request', 'state'):
+        return None
     best = None
     for e in _read_events(task_id):
         p = e['payload']
-        if e['type'] != _SNAPSHOT or _snapshot_kind(p) != 'request':
+        if e['type'] != _SNAPSHOT or _snapshot_kind(p) != kind:
             continue
         if str(p.get('roundNum')) != str(round_num):
             continue
@@ -345,6 +355,7 @@ def get_request_payload(task_id: str, round_num, turn: str = '') -> dict | None:
     out = {
         'taskId': task_id,
         'roundNum': p.get('roundNum'),
+        'kind': kind,
         'ts': e['ts_ms'],
         'model': p.get('model') or '',
         'turn': p.get('turn') or '',

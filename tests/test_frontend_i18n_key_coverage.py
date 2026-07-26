@@ -64,8 +64,18 @@ _KEY_REF_RE = re.compile(
 _KEY_DEF_RE = re.compile(r"""['"](projectBrain\.[A-Za-z0-9_.]+)['"]\s*:""")
 
 
+# Generated single-language pack artifacts, emitted into static/js by
+# lib/i18n_packs.py::emit_pack_files (name pattern kept in lockstep with
+# PACK_BASENAME_RE there and _BUILT_BUNDLE_RE in the bundler parity test).
+# They are DERIVED from i18n.js — which the scanner already skips by name —
+# so scanning them double-counts, and trips on i18n.js's own JSDoc example
+# `t('key', { count: 5 })` as a phantom reference to an undefined key.
+_BUILT_PACK_RE = re.compile(r'^i18n-(?:zh|en)-[0-9a-f]{8}\.js$')
+
+
 def _is_generated(name: str) -> bool:
-    return name.startswith('bundle-') and name.endswith('.js')
+    return (name.startswith('bundle-') and name.endswith('.js')) or bool(
+        _BUILT_PACK_RE.match(name))
 
 
 def _is_dynamic_prefix(key: str, next_char: str) -> bool:

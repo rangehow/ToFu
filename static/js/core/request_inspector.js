@@ -216,7 +216,14 @@ async function _riSelectTask(taskId) {
     for (const s of states) {
       const el = document.createElement('div');
       el.className = 'ri-state-row';
+      el.setAttribute('role', 'button');
+      el.tabIndex = 0;
+      el.title = t('ri.stateRowTip');
       el.textContent = `${s.label || s.roundNum} · ${s.messageCount} msgs`;
+      /* State rows are NAVIGATION (the drawer's quick-jump list): open the
+       * state mirror INLINE next to the tool call that produced it; falls
+       * back to the drawer detail when the tool row isn't in the DOM. */
+      el.onclick = () => openStateInspector(taskId, s.roundNum);
       rounds.appendChild(el);
     }
   }
@@ -230,26 +237,41 @@ async function _riSelectTask(taskId) {
  * FIFO-capped; entries are never mutated after insert. */
 const _riPayloadCache = {};
 const _RI_PAYLOAD_CACHE_MAX = 40;
-async function _riFetchPayload(taskId, roundNum, turn) {
+async function _riFetchPayload(taskId, roundNum, turn, kind) {
   turn = turn || '';
-  const key = taskId + ':' + turn + ':' + roundNum;
+  kind = kind || 'request';
+  const key = taskId + ':' + kind + ':' + turn + ':' + roundNum;
   /* Live accelerator FIRST — an SSE-fed entry is fresher than anything we
    * previously cached from the network (a new round may have re-emitted
    * the payload since the cache entry was stored). Turn-tagged rounds key
-   * as 'turn|roundNum' in the P1 log (endpoint phases re-number from 1). */
-  const _accKey = turn ? turn + '|' + roundNum : String(roundNum);
-  const acc = (typeof _debugRequests !== 'undefined') &&
-    _debugRequests[taskId] && _debugRequests[taskId].rounds[_accKey];
-  if (acc && acc.messages) {
-    const payload = { messages: acc.messages, tools: acc.tools,
-      label: acc.label, model: acc.model, params: acc.params,
-      turn: acc.turn || turn };
-    _riPayloadCache[key] = payload;
-    return payload;
+   * as 'turn|roundNum' in the P1 log (endpoint phases re-number from 1);
+   * state mirrors land in .states (same roundNum axis as the producing
+   * request — design §3.1), the latest mirror for a round wins. */
+  const _acc = (typeof _debugRequests !== 'undefined') && _debugRequests[taskId];
+  if (kind === 'state') {
+    const st = _acc && (_acc.states || []).filter((s) => s && s.messages &&
+      String(s.roundNum) === String(roundNum)).pop();
+    if (st) {
+      const payload = { messages: st.messages, tools: st.tools,
+        label: st.label, model: st.model, params: st.params, kind: 'state' };
+      _riPayloadCache[key] = payload;
+      return payload;
+    }
+  } else {
+    const _accKey = turn ? turn + '|' + roundNum : String(roundNum);
+    const acc = _acc && _acc.rounds[_accKey];
+    if (acc && acc.messages) {
+      const payload = { messages: acc.messages, tools: acc.tools,
+        label: acc.label, model: acc.model, params: acc.params,
+        turn: acc.turn || turn };
+      _riPayloadCache[key] = payload;
+      return payload;
+    }
   }
   if (_riPayloadCache[key]) return _riPayloadCache[key];
   const data = (typeof Api !== 'undefined' && Api.tasks)
-    ? await Api.tasks.getRequestPayload(taskId, roundNum, turn || undefined) : null;
+    ? await Api.tasks.getRequestPayload(taskId, roundNum, turn || undefined,
+        kind === 'state' ? 'state' : undefined) : null;
   if (data && data.messages) {
     const ids = Object.keys(_riPayloadCache);
     if (ids.length >= _RI_PAYLOAD_CACHE_MAX) delete _riPayloadCache[ids[0]];
@@ -283,15 +305,17 @@ async function _riSelectRound(taskId, roundNum, el, turn) {
   if (!payload || !payload.messages) return;
   /* P3 prefix-fold: diff this round's payload against the SAME phase's
    * round N-1 (endpoint phases each re-number from 1), so the shared
-   * prefix collapses and the increment highlights. */
-  let opts = null;
+   * prefix collapses and the increment highlights. resetScroll: switching
+   * rounds is a context switch — snap the detail pane to the top instead
+   * of keeping the previous round's (meaningless here) scroll offset. */
+  let opts = { resetScroll: true };
   const num = parseInt(roundNum, 10);
   if (Number.isFinite(num) && num > 1) {
     const prev = await _riFetchPayload(taskId, num - 1, turn);
     if (!_riOpen || _riSel.taskId !== taskId) return;  // stale
     if (prev && prev.messages) {
       const k = _riSharedPrefix(prev.messages, payload.messages);
-      if (k > 0) opts = { foldPrefix: k, diffBase: 'R' + (num - 1) };
+      if (k > 0) { opts.foldPrefix = k; opts.diffBase = 'R' + (num - 1); }
     }
   }
   if (typeof showMessagesInDebug === 'function')
@@ -363,6 +387,117 @@ async function openRequestInspectorForToolRound(taskId, roundNum) {
     setTimeout(() => el.classList.remove('ri-flash'), 1600);
   }
   await _riSelectRound(taskId, pick.roundNum, el, targetTurn);
+}
+
+/* ── Inline state inspector (state mirrors next to the tool call) ──────────
+ * The drawer's state list is NAVIGATION, not a destination: a state mirror
+ * ("Round N 工具结果后") belongs next to the tool call whose execution it
+ * captures. openStateInspector mounts a single .ri-state-panel right after
+ * that tool round's [data-prn] slot in chatinner and renders the payload
+ * through the SAME renderer as the drawer detail (renderDebugBlocksInto /
+ * updateDebugToolsBlock — no second JSON renderer). When the tool row is
+ * not in the DOM (unloaded/old conversation), falls back to the drawer
+ * detail pane so the click always lands somewhere meaningful. */
+async function openStateInspector(taskId, roundNum, anchorEl) {
+  if (!taskId || roundNum == null) return;
+  let slot = (anchorEl && typeof anchorEl.closest === 'function')
+    ? anchorEl.closest('[data-prn]') : null;
+  if (!slot) {
+    const marker = document.querySelector(
+      '[data-ri-state="' + String(taskId) + ':' + String(roundNum) + '"]');
+    if (marker && typeof marker.closest === 'function')
+      slot = marker.closest('[data-prn]');
+  }
+  if (!slot) {
+    /* Tool row not in the DOM — degrade to the drawer detail (kind=state)
+     * instead of a dead click. */
+    if (!_riOpen) openRequestInspector();
+    await _riSelectTask(taskId);
+    const payload = await _riFetchPayload(taskId, roundNum, '', 'state');
+    if (payload && payload.messages && typeof showMessagesInDebug === 'function')
+      showMessagesInDebug(payload.messages, payload.label || '', false,
+        typeof activeConvId !== 'undefined' ? activeConvId : null,
+        payload.tools || undefined, false, undefined, { resetScroll: true });
+    return;
+  }
+  _riMountStatePanel(slot, taskId, roundNum);
+}
+
+/* Mount the (single-instance) state panel after a tool slot and start both
+ * loads: the history strip (all state mirrors of the task, for quick
+ * navigation) and the requested snapshot itself. The panel is transient by
+ * design — a chat re-render may drop it; re-click reopens. */
+async function _riMountStatePanel(slot, taskId, roundNum) {
+  document.querySelectorAll('.ri-state-panel').forEach((p) => p.remove());
+  const panel = document.createElement('div');
+  panel.className = 'ri-state-panel';
+  panel.innerHTML =
+    '<div class="ri-state-panel-head">' +
+      '<span class="ri-state-panel-title"></span>' +
+      '<span class="ri-state-panel-close" role="button" tabindex="0" title="' +
+        _riEsc(t('ri.stateClose')) + '">' +
+        (typeof Icon === 'function' ? Icon('x', 12) : '') + '</span>' +
+    '</div>' +
+    '<div class="ri-state-strip"></div>' +
+    '<div class="ri-state-body"><div class="ri-empty">' +
+      _riEsc(t('ri.loading')) + '</div></div>';
+  panel.querySelector('.ri-state-panel-close').onclick = () => panel.remove();
+  slot.insertAdjacentElement('afterend', panel);
+  if (typeof panel.scrollIntoView === 'function')
+    panel.scrollIntoView({ block: 'nearest' });
+  _riFillStateStrip(panel, taskId, roundNum);   // async, populates in place
+  await _riRenderStatePanel(panel, taskId, roundNum);
+}
+
+/* History strip: one chip per state mirror of the task (the same rows the
+ * drawer lists), so the sequence is navigable without leaving the chat. */
+async function _riFillStateStrip(panel, taskId, activeRound) {
+  const fold = (typeof Api !== 'undefined' && Api.tasks)
+    ? await Api.tasks.getRequests(taskId) : null;
+  if (!panel.isConnected) return;
+  const strip = panel.querySelector('.ri-state-strip');
+  if (!strip) return;
+  const states = (fold && Array.isArray(fold.states)) ? fold.states : [];
+  if (!states.length) { strip.remove(); return; }
+  strip.innerHTML = '';
+  for (const s of states) {
+    const chip = document.createElement('span');
+    chip.className = 'ri-state-chip' +
+      (String(s.roundNum) === String(activeRound) ? ' ri-sel' : '');
+    chip.dataset.round = String(s.roundNum);
+    chip.setAttribute('role', 'button');
+    chip.textContent = s.label || ('R' + s.roundNum);
+    chip.onclick = () => _riRenderStatePanel(panel, taskId, s.roundNum);
+    strip.appendChild(chip);
+  }
+}
+
+/* Render ONE state mirror into the panel body (fetch kind=state, render via
+ * the shared debug renderer). Also re-points the panel dataset + active chip
+ * so strip navigation stays consistent. */
+async function _riRenderStatePanel(panel, taskId, roundNum) {
+  if (!panel.isConnected) return;  // closed while fetching
+  const payload = await _riFetchPayload(taskId, roundNum, '', 'state');
+  if (!panel.isConnected) return;
+  panel.dataset.riPanel = taskId + ':' + roundNum;
+  const body = panel.querySelector('.ri-state-body');
+  const titleEl = panel.querySelector('.ri-state-panel-title');
+  panel.querySelectorAll('.ri-state-chip').forEach((c) => {
+    c.classList.toggle('ri-sel', c.dataset.round === String(roundNum));
+  });
+  if (!payload || !payload.messages) {
+    if (titleEl) titleEl.textContent = 'R' + roundNum;
+    if (body) body.innerHTML = '<div class="ri-empty">' +
+      _riEsc(t('ri.stateEmpty')) + '</div>';
+    return;
+  }
+  if (titleEl) titleEl.textContent =
+    (payload.label || ('R' + roundNum)) + ' · ' + payload.messages.length + ' msgs';
+  if (body) {
+    renderDebugBlocksInto(body, payload.messages, null);
+    if (payload.tools && payload.tools.length)
+      updateDebugToolsBlock(body, payload.tools);
+  }
 }
 
 /* ── Bubble anchor (P3): jump from an assistant bubble to the exact

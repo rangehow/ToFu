@@ -959,6 +959,10 @@ var _i18n = {
   'ri.coverageAmbiguous': { zh: '旧 endpoint 任务：轮次未标相位（planner/worker/critic 同号不可区分）', en: 'Legacy endpoint task: rounds carry no phase tag (planner/worker/critic rounds share numbers)' },
   'ri.turnSwarmAgent': { zh: '子代理', en: 'sub-agent' },
   'ri.toolAnchorTip': { zh: '查看产生这次工具调用的请求（第 {round} 轮）', en: 'Inspect the request that produced this tool call (round {round})' },
+  'ri.stateAnchorTip': { zh: '就地查看这轮工具执行后的消息状态（第 {round} 轮状态镜像）', en: 'View the message state right after this tool round, inline (round {round} state mirror)' },
+  'ri.stateRowTip': { zh: '点击跳到对应工具调用旁，就地查看该状态镜像', en: 'Jump to the tool call and view this state mirror inline' },
+  'ri.stateEmpty': { zh: '该状态镜像已过期（>6h）或不存在', en: 'State mirror expired (>6h) or missing' },
+  'ri.stateClose': { zh: '关闭状态检视', en: 'Close state inspector' },
 
   // ══════════════════════════════════════
   //  Settings — Tabs

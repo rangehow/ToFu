@@ -3505,12 +3505,28 @@ function _renderToolRequestAnchor(r) {
   if (!taskId || lr == null) return '';
   const round = Number(lr) + 1;          // llmRound 0-based → roundNum 1-based
   const tip = (typeof t === 'function') ? t('ri.toolAnchorTip', { round }) : '';
-  return `<div class="ri-tool-anchor-row">` +
+  const stateTip = (typeof t === 'function') ? t('ri.stateAnchorTip', { round }) : '';
+  /* data-ri-state addresses this row's post-tool STATE mirror (same roundNum
+   * axis as the producing request — design §3.1) so the drawer's state list
+   * can locate this slot for its inline jump. The S anchor opens that state
+   * mirror INLINE right here; the R anchor keeps opening the producing
+   * request in the drawer. */
+  return `<div class="ri-tool-anchor-row" data-ri-state="${escapeHtml(String(taskId))}:${round}">` +
     `<span class="ri-tool-anchor" role="button" tabindex="0" ` +
     `title="${escapeHtml(tip)}" ` +
     `onclick="openRequestInspectorForToolRound('${escapeHtml(String(taskId))}',${round})">` +
-    `${_RI_TOOL_ANCHOR_SVG}<span class="ri-tool-anchor-label">R${round}</span></span></div>`;
+    `${_RI_TOOL_ANCHOR_SVG}<span class="ri-tool-anchor-label">R${round}</span></span>` +
+    `<span class="ri-tool-anchor ri-tool-anchor-state" role="button" tabindex="0" ` +
+    `title="${escapeHtml(stateTip)}" ` +
+    `onclick="openStateInspector('${escapeHtml(String(taskId))}',${round},this)">` +
+    `${_RI_STATE_ANCHOR_SVG}<span class="ri-tool-anchor-label">S${round}</span></span></div>`;
 }
+
+/* Snapshot-stack glyph for the inline state anchor (§3.4: SVG only). */
+const _RI_STATE_ANCHOR_SVG =
+  '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+  'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M12 2 2 7l10 5 10-5-10-5Z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>';
 
 /* Code-glyph SVG (§3.4: SVG only, never a unicode glyph as a control). */
 const _RI_TOOL_ANCHOR_SVG =

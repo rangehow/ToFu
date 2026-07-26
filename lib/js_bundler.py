@@ -422,6 +422,16 @@ _BUNDLE_FILES = [
     # lib/conversations/turn_settlement.py via
     # tests/test_frontend_turn_settlement_equivalence.py.
     'core/turn_settlement.js',
+    # THE ordered-insert primitive for #chatInner (2026-07-26). Owns the head
+    # and tail anchors that step over lazy-window furniture
+    # (#_lazyLoadSentinel / #_lazyLoadSentinelBottom), plus the RENDER_CONTRACT
+    # Invariant-1 runtime tripwire. Exists because the head-anchor rule first
+    # shipped as a CLOSURE inside renderChat, which ConvView could not reach —
+    # so the identical bug reappeared at the tail (a sent message rendering
+    # BELOW the bottom sentinel). Leaf module (document + console only); MUST
+    # load before ui/chat_render.js and conv_view.js.
+    # Order pinned by tests/test_frontend_lazy_sentinel_anchor.py.
+    'core/chatinner_dom.js',
     # pt_679d064f68ac4dd6 follow-up — the multi-user identity gate's WATCHDOG.
     # Owns the fail-open latch + reporter + a self-owned flush, and depends on
     # NOTHING it watches. MUST load BEFORE core/conv_state_reducer.js: the

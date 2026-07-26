@@ -308,7 +308,13 @@ async function generateImageDirect() {
     <div class="ig-gen-status" id="${loadingId}-status"></div>
     <button class="ig-gen-cancel" onclick="_igCancelGeneration()" title="Cancel">${Icon('x', 13)} Cancel</button>
   </div>`;
-  chatDiv.insertAdjacentHTML('beforeend', loadingHtml);
+  /* Tail insert via the shared furniture-aware primitive — a raw `beforeend`
+   * lands BELOW a bottom lazy-window sentinel. */
+  if (typeof chatInnerInsert === 'function') {
+    chatInnerInsert(chatDiv, loadingHtml, { position: 'tail' });
+  } else {
+    chatDiv.insertAdjacentHTML('beforeend', loadingHtml);
+  }
   scrollToBottom();
 
   // ── Save early so page refresh doesn't lose the user message ──

@@ -639,8 +639,14 @@ function _runTerminalContinuation(convId) {
       const inner = document.getElementById('chatInner');
       if (inner && !document.getElementById('streaming-msg')) {
         const _qTime = formatClockTime();
-        inner.insertAdjacentHTML('beforeend',
-          _streamingBubbleHTML('worker', 'Dispatching queued message…', _qTime));
+        const _qHtml = _streamingBubbleHTML('worker', 'Dispatching queued message…', _qTime);
+        /* Tail insert via the shared furniture-aware primitive — a raw
+         * `beforeend` lands below a bottom lazy-window sentinel. */
+        if (typeof chatInnerInsert === 'function') {
+          chatInnerInsert(inner, _qHtml, { position: 'tail' });
+        } else {
+          inner.insertAdjacentHTML('beforeend', _qHtml);
+        }
         if (isNearBottom(80)) scrollToBottom();
       }
     } catch (e) {

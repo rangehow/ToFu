@@ -644,16 +644,19 @@ function renderChat(conv, forceScroll) {
      * still null). It must be the first MESSAGE node, NOT `inner.firstChild` —
      * when a lazy window is active `firstChild` is `#_lazyLoadSentinel`, and
      * anchoring on it inserts message #1 ABOVE the sentinel, i.e. pushes the
-     * sentinel down one slot on EVERY background repaint. After a handful of
-     * repaints (cost / file-change / compaction all land as background
-     * repaints on a conversation open) the sentinel has migrated to the very
-     * BOTTOM of #chatInner — and `_loadOlderMessages`, which splices the older
-     * batch in with `sentinel.after(frag)`, then renders the OLDEST messages
-     * BELOW the newest one. That is the "first-round user message shows up at
-     * the bottom of chatInner" bug. The sentinel is layout furniture owned by
-     * the lazy-window code (_loadOlderMessages / _evictAboveWindow keep it
-     * pinned at the head); the reconcile must step OVER it, never past it. */
+     * sentinel down one slot on EVERY background repaint (→ it reaches the
+     * bottom, and `_loadOlderMessages` then splices the OLDEST messages below
+     * the newest one).
+     *
+     * The rule now lives in core/chatinner_dom.js so EVERY writer shares it.
+     * It used to be a closure right here, which is precisely why the mirror
+     * bug at the TAIL (ConvView's `beforeend` landing below the bottom
+     * sentinel) was not prevented: ConvView could not reach this closure.
+     * The local fallback is a build-order canary — the primitive is a leaf
+     * module loaded first, order pinned by
+     * tests/test_frontend_lazy_sentinel_anchor.py. */
     const _headAnchor = () => {
+      if (typeof chatInnerHeadAnchor === 'function') return chatInnerHeadAnchor(inner);
       const f = inner.firstChild;
       return (f && f.id === '_lazyLoadSentinel') ? f.nextSibling : f;
     };
@@ -688,14 +691,24 @@ function renderChat(conv, forceScroll) {
         }
         _prevEl = el;
       } else {
-        /* New message — insert at the cursor position (array order), not blind append. */
-        const wrapper = document.createElement("div");
-        wrapper.innerHTML = renderMessage(msg, i);
-        const newEl = wrapper.firstElementChild;
-        if (newEl) {
-          inner.insertBefore(newEl, _prevEl ? _prevEl.nextSibling : (_cursor ? _cursor.nextSibling : _headAnchor()));
-          _prevEl = newEl;
+        /* New message — insert at the cursor position (array order), not blind
+         * append. Routed through the shared ordered-insert primitive with an
+         * EXPLICIT anchor: the walk above already resolved the precise sibling,
+         * and when that resolves to null the primitive falls back to a
+         * furniture-aware tail insert instead of a raw append. */
+        const _newAnchor = _prevEl ? _prevEl.nextSibling
+          : (_cursor ? _cursor.nextSibling : _headAnchor());
+        let newEl;
+        if (typeof chatInnerInsert === 'function') {
+          newEl = chatInnerInsert(inner, renderMessage(msg, i),
+                                  _newAnchor ? { before: _newAnchor } : { position: 'tail' });
+        } else {
+          const wrapper = document.createElement("div");
+          wrapper.innerHTML = renderMessage(msg, i);
+          newEl = wrapper.firstElementChild;
+          if (newEl) inner.insertBefore(newEl, _newAnchor);
         }
+        if (newEl) _prevEl = newEl;
         anyChange = true;
       }
     }
@@ -746,6 +759,13 @@ function renderChat(conv, forceScroll) {
     }
     _lastRenderedFingerprint = fp;
     _lazyConvId = conv.id;
+    /* RENDER_CONTRACT Invariant 1 tripwire (debug-mode, one-shot). Both
+     * ordering bugs — head and tail — survived because nothing ever asserted
+     * that the DOM is an ordered projection of conv.messages. A scenario test
+     * only catches the scenario someone thought of; this catches the shape. */
+    if (typeof assertChatInnerOrder === 'function') {
+      assertChatInnerOrder(inner, conv, 'renderChat:surgical');
+    }
     return;
   }
 
@@ -832,6 +852,11 @@ function renderChat(conv, forceScroll) {
    * JSON.parse-s every tool round's args, which can take 50-200ms for large
    * conversations.  The turn nav is not critical for the initial render. */
   requestAnimationFrame(() => buildTurnNav(conv));
+
+  /* Same Invariant-1 tripwire as the surgical path (debug-mode, one-shot). */
+  if (typeof assertChatInnerOrder === 'function') {
+    assertChatInnerOrder(inner, conv, 'renderChat:full');
+  }
 
   /* Scroll handling: if we captured a pre-swap anchor (same-conv re-render, a
    * reader parked up in history), re-pin their viewport instead of forcing to

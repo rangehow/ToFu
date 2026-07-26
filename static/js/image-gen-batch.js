@@ -124,7 +124,13 @@ async function _igGenerateBatch(prompt, count) {
     </div>
   </div>`;
   if (chatDiv) {
-    chatDiv.insertAdjacentHTML('beforeend', gridHtml);
+    /* Tail insert via the shared furniture-aware primitive — a raw `beforeend`
+     * lands BELOW a bottom lazy-window sentinel. */
+    if (typeof chatInnerInsert === 'function') {
+      chatInnerInsert(chatDiv, gridHtml, { position: 'tail' });
+    } else {
+      chatDiv.insertAdjacentHTML('beforeend', gridHtml);
+    }
     chatDiv.scrollTop = chatDiv.scrollHeight;
   }
 

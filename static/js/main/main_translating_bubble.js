@@ -44,7 +44,14 @@ function _renderTranslatingBubble(label) {
         <div class="stream-status"><div class="pulse"></div> ${_label}</div>
       </div>
     </div>`;
-  inner.appendChild(el);
+  /* Tail insert via the shared furniture-aware primitive: a raw appendChild
+   * lands BELOW `#_lazyLoadSentinelBottom` when a lazy window has evicted the
+   * tail, putting this placeholder under the "⬇ N newer messages" strip. */
+  if (typeof chatInnerInsert === 'function') {
+    chatInnerInsert(inner, el, { position: 'tail' });
+  } else {
+    inner.appendChild(el);
+  }
   /* ★ Real-height scroll (see sendMessage): plain scrollToBottom under-measures
    *   against content-visibility:auto estimates and lands mid-history. */
   _forceScrollToBottom(null, true);

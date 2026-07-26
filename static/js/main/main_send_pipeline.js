@@ -1007,7 +1007,16 @@ async function _waitForVlmParsing(userMsg, convId, userMsgIdx) {
     _vlmIndicator.id = 'vlm-wait-indicator';
     _vlmIndicator.className = 'message';
     _vlmIndicator.innerHTML = '<div class="message-avatar"></div><div class="message-content"><div class="message-body"><div class="stream-status"><div class="pulse"></div> Waiting for VLM PDF parsing…</div></div></div>';
-    document.getElementById('chatInner')?.appendChild(_vlmIndicator);
+    /* Tail insert via the shared furniture-aware primitive — a raw appendChild
+     * lands BELOW a bottom lazy-window sentinel. */
+    const _vlmInner = document.getElementById('chatInner');
+    if (_vlmInner) {
+      if (typeof chatInnerInsert === 'function') {
+        chatInnerInsert(_vlmInner, _vlmIndicator, { position: 'tail' });
+      } else {
+        _vlmInner.appendChild(_vlmIndicator);
+      }
+    }
     scrollToBottom();
   }
   // Poll until all PDFs finish VLM (done/done-skipped/failed/timeout/unavailable)

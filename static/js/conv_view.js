@@ -103,6 +103,31 @@
     return removed;
   }
 
+  /** Tail-insert through the shared ordered-insert primitive
+   *  (core/chatinner_dom.js). Kept as a thin local wrapper so both call sites
+   *  read the same and a missing primitive degrades LOUDLY once rather than
+   *  silently reintroducing the raw `beforeend` bug.
+   *
+   *  The primitive is a leaf module loaded before conv_view.js by
+   *  lib/js_bundler.py (order pinned by
+   *  tests/test_frontend_lazy_sentinel_anchor.py), so the fallback is a
+   *  build-order canary, not an expected path. */
+  let _cvInsertWarned = false;
+  function _cvInsert(inner, html, position) {
+    if (typeof chatInnerInsert === 'function') {
+      return chatInnerInsert(inner, html, { position: position || 'tail' });
+    }
+    if (!_cvInsertWarned) {
+      _cvInsertWarned = true;
+      console.warn('[ConvView] chatInnerInsert UNAVAILABLE — falling back to a ' +
+        'raw beforeend append. core/chatinner_dom.js must load before ' +
+        'conv_view.js in lib/js_bundler.py _BUNDLE_FILES; without it a bottom ' +
+        'lazy-window sentinel will sort above newly sent messages.');
+    }
+    inner.insertAdjacentHTML('beforeend', html);
+    return inner.lastElementChild;
+  }
+
   /* ── Public API ──────────────────────────────────────────────────── */
 
   const ConvView = {
@@ -179,7 +204,13 @@
             (msg._msgId || '').slice(0, 12) + ') — DOM order may drift ' +
             'from conv.messages; existence-check or renderChat instead.');
         }
-        inner.insertAdjacentHTML('beforeend', html);
+        /* Tail insert via the ONE ordered-insert primitive: a raw
+         * `beforeend` lands AFTER `#_lazyLoadSentinelBottom` when a lazy
+         * window has evicted the tail, and `_loadNewerMessages` then splices
+         * the recovered messages ABOVE this one. `chatInnerInsert` steps over
+         * that furniture. With no bottom sentinel it is a plain append —
+         * byte-identical to the old behaviour. */
+        _cvInsert(inner, html, 'tail');
       }
       /* Identity sweep (ALL paths — step 3 ①): the swap/insert is the SOLE
        * node for this _msgId — evict any stranded twin (drifted static
@@ -326,9 +357,12 @@
        * singleton even when it carries no / a different msgId. */
       const oldSm = document.getElementById('streaming-msg');
       if (oldSm) { try { oldSm.remove(); } catch (e) { /* detached */ } }
-      inner.insertAdjacentHTML('beforeend',
+      /* Same furniture-aware tail insert as `apply` — the live bubble is the
+       * newest node and must sit ABOVE any bottom sentinel. */
+      _cvInsert(inner,
         _streamingBubbleHTML(opts.role || 'worker', opts.status || null,
-                             opts.timeStr || null, opts.msgId || null));
+                             opts.timeStr || null, opts.msgId || null),
+        'tail');
       return true;
     },
 

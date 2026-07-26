@@ -144,7 +144,15 @@ function scrollToTurn(idx) {
     if (sentinel) {
       sentinel.after(frag);
     } else {
-      inner.prepend(frag);
+      /* No head sentinel: insert at the HEAD via the shared furniture-aware
+       * primitive. A raw `inner.prepend` would land ABOVE a bottom sentinel's
+       * sibling set correctly today, but it also ignores any leading
+       * furniture — the same class of bug as the head/tail anchors. */
+      if (typeof chatInnerInsert === 'function') {
+        chatInnerInsert(inner, frag, { position: 'head' });
+      } else {
+        inner.prepend(frag);
+      }
     }
     _lazyRenderedFrom = targetStart;
 

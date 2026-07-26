@@ -570,4 +570,9 @@ def test_stream_phase_retry_reasonkey_neuter():
 
 
 if __name__ == '__main__':
+    import pathlib
+    import sys
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+    from tests._standalone_guard import guard_standalone_db
+    guard_standalone_db('test_stream_phase_i18n.py')
     unittest.main(verbosity=2)

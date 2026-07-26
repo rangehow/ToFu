@@ -831,3 +831,11 @@
 - **顺带否掉一个自己的误判:** 上一轮我以为 `json_extract` 慢查询(9214ms)会拖慢抽屉列表。这轮 `EXPLAIN ANALYZE` 实测:检视器真实读路径 `read_events` **11.6ms**、kind tally **6.3ms**,索引都用上了;9秒那条是**我自己诊断用的全表扫描**(无 task_id 限定),不是产品路径。**教训:把诊断查询的耗时当成产品耗时,会导致优化错的地方。**
 - **测试:** ★走完全部轮次只发**一次** `task_events` 读(计数 DB 包装器钉死,O(n²) 复发即红)、缓存前后 payload 冷/热/再冷三轮逐字节一致、在飞任务新轮可见、缓存有界、按 task_id 隔离、NEUTER(TTL 设无穷 → 新轮不可见)。
 
+
+### 2026-07-26(续30) — 测试污染收口第二刀:棘轮签名补 `append_event`,3 个真实裸跑污染源上闸(ratchet 14/14,pytest 回归 34 绿)
+- **缺口(实测定位,非推测):** `tests/test_db_guard.py` 的 `_DB_WRITE_SIGNATURES` 漏了 `tasks_pkg.manager.append_event`——它经 `_persist_before_push`(manager/_events.py → database/event_log.py)真写 `task_events`。于是「stub 掉 spawn_task 但在桩里调**真** append_event」的测试文件能逃过自发现棘轮:pytest 下有 conftest 兜底无事,**裸跑 `python tests/x.py` 且 PG 不可达回落 SQLite `data/tofu.db`(或 ambient postgres 直写 PG)时,固定 task_id 永久累积**——与 task_events 里 usagetas/task-cause 等固定 ID 污染同族。
+- **真实污染源 3 个(全部 `unittest.main()` 直跑测试体,桩内调真 append_event):** `test_api_v1_chat_route.py`、`test_api_v1_agent_run.py`(07-23 新增,晚于 guard 约定)、`test_stream_phase_i18n.py`。修法=`__main__` 首行接 `guard_standalone_db`(既有约定模式),pytest 路径零影响(改动只在 `__main__` 块内)。
+- **棘轮升级:** ①`_DB_WRITE_SIGNATURES` 补 `'append_event'`;②`_KNOWN_EXEMPT` 补 5 条**逐案审计过**的豁免:`test_task_runtime.py`(裸 TaskRuntime 无 before_push 持久钩子,纯内存)、`test_lib_orchestrator_wire_parity.py`(append_event 只是 monkeypatch 观察目标)、`test_paper_migration.py`(routes/paper 无任何 append_persistent 钩子)、`test_paper_media_ux.py`(`__main__` 委托 `python -m pytest` 子进程→conftest 生效)、`test_frontend_convview_apply_guards.py`(前端源码扫描,'upsert' 只是被扫 JS 符号名的子串)。
+- **顺手收口:** 后两个文件是兄弟会话落地后留下的棘轮红(`13 passed 1 failed` 基线),豁免后 ratchet **14/14 全绿**——棘轮恢复「新增无闸裸跑者自动咬人」的单调功能。
+- **证据:** ratchet 14/14;行为探针 `TOFU_DB_BACKEND=postgres + guard_standalone_db` → 解析为 `sqlite @ /tmp/tofu-standalone-*/tofu-test.db`(与套件内 double-neuter 子进程探针互为因果两端);`test_stream_phase_i18n.py` 裸跑(ambient postgres 被强制转 sqlite)13/13;pytest 回归 stream_phase_i18n 15/15、api_v1 两套件 19/19。
+- **边界(诚实记录):** 棘轮只管「有 `__main__` 的裸跑者」;纯 pytest 收集的测试由 conftest 强制 sqlite + `_assert_test_database` 兜底,不在本刀范围。SQLite 回落路径(PG 不可达→`data/tofu.db`)的污染由同一道闸覆盖——guard 在 DB 解析**之前**强制后端+路径,与走哪条回落无关。

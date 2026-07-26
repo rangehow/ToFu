@@ -1,5 +1,39 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
+<!-- CLOSURE-PENDING _call.py err_str 截断 1 行 — 续58 三修的刻意遗留:lib/tasks_pkg/llm_fallback/_call.py:435 `err_str = str(e)[:200]` 应改为 `[:_ERR_BODY_LIMIT]`(from lib.llm_errors import _ERR_BODY_LIMIT)。当时未做的原因:该文件携带 ms1hc40 fallback-banner 未提交 WIP,任何 pathspec 提交都会连坐泄漏。已交接 ms1kuy4f:待 fallback-banner 落地后补这行。请勿整文件重写。 -->
+
+### 2026-07-26(续58) — toio 上游 4xx 风暴三修:日志截断 + 双重编码乱码 + 硬 4xx 毒化槽位(commit `a6780c62`,12 文件 +890/-38;新套件 14+12+2 钉净 HEAD A/B failing-first 全红,相邻环 **117/117**,collect **10148** 0 err;epic `pt_48f29db9` 已 board-complete)
+- **owner 三条报告(17:09-17:10 yuju claude-opus-5 vendor 宕机):** ①错误日志在 JSON 中间被截断;②乱码 `è¯·æ±`;③Opus 5 又出了什么问题。三条全部根修,同题会话 ms1kuy4f 做独立验证,持票会话 ms1hov6r 让位并贡献 BadRequestError 设计。
+- **① 截断链(三级统一 `_ERR_BODY_LIMIT=4000`):** `classify_status_error` 800(peer ms1kuy4f 修,`ac6b6ccd`)→ `_classify_http_error` 300(用户看到的 `"stage":"downstr` 截肢点)→ `llm_fallback/_call.py` 200(**刻意遗留**,见顶部 CLOSURE-PENDING)。300/800 截掉的是网关 `ext.error` 诊断尾(source/service/stage/request id)——正是协同排查要的部分;800 还把信封截坏 JSON,summarize 解析失败 → HUD 直接渲染原始信封。
+- **② 乱码根因不是我方解码(三次排除法):** 服务器 17:05 已重启(带 6fe3f9ca),三条非 200 路径(stream/chat/astream)全部 UTF-8 正确解码,单进程无残留 —— 乱码仍在。实证为**上游双重编码**:UPSTREAM_VENDOR 包装层把 UTF-8 中文 latin-1 误读后再 UTF-8 重编码(原始字节 `\xc3\xa6\xc2\xb1` = 每个真字节自身再 UTF-8 编码,peer 字节级实证)。我方解码越正确,乱码越忠实穿透。修法:`decode_error_body` 收束处加**守护式** `repair_mojibake`(三重门:可 latin-1 重编码 ∧ UTF-8 净解码 ∧ 修复后新增 CJK;`café` 过不了 UTF-8 门故不动),astream 同步接线。**教训:修过一层编码 ≠ 修完——双重编码只在解码正确后才现形;07-25 的 decode_error_body 修的是第一层,今天是第二层。**
+- **③ Opus 5 事件全貌(app.log/error.log 实证):** vendor 宕机 → 500 Overloaded(可重试,处理正常)+ 400/403「请求失败,请稍后(再)尝试」(ext.source=UPSTREAM_VENDOR)。瞬时 4xx 被三处错误归类放大:403 → PermissionError_ → **pair 排除**;400 → non-retryable → record_error → consecutive_errors ≥3 → **300s 顶格锁**;全槽位锁死后等待相位**硬编码「限流排队中」**(api.py on_retry 无差别 429)。任务最终经模型回退 kimi-k3 跑完 R20(降级链路本身健康)。修法四层:
+  1. **分类器**:瞬时措辞(请稍后/try again later/overloaded 等,刻意不含 bare 'try again')的 400/401/403 → `RateLimitError(is_gateway=True, status_code=实码)` → 0.5s 轮换;真 auth(invalid key/revoked)走原 PermissionError_ 不变(pt_8f6cbc75 的死 key 形态不受影响)。
+  2. **确定性 400**(全部特判落空,如 `signature: Field required`)→ 新 `BadRequestError`:dispatch 三循环 `slot.release()`(ContentFilter 先例,不喂 consecutive_errors/cooldown/key_stats)+ 仅 pair 排除(400 可 key 特异)+ hard_attempts+1,耗尽走 turn 级模型回退。ms1hov6r 设计,我采纳其 (A) 方案落地。
+  3. **key_stats 解毒**:`record_error(is_gateway=…)` 不再喂 consecutive-429 auto-exhaust 连击(**现存 502/503/504 一并解毒**——网关风暴以前会把健康 key 连击停用一整天);仍记 `record_outcome(failure)` 保死 key 安全网(源码实证:record_outcome 无自动停用阈值,安全)。
+  4. **诚实标签**:`Slot.cooldown_reason` 单一事实源(rate_limit/upstream/error/quota,全部 14 处 cooldown_until setter 已标),`dispatch_stream` 全冷却等待按真实原因打标;`RateLimitError.status_code` 让 is_gateway 的 on_retry 报 'Upstream error'+实码;i18n 两新键(`stream.retryReason.upstreamError`/`waitingBackoff`)。
+- **★ 协作事故与两把新工具(给后人):**
+  1. **同题三会话**:同题 ms1kuy4f、持票 ms1hov6r、本会话。靠 project_message 两轮划清文件级分工(我 llm_errors+slot+dispatch,peer `_sse_core.py`),零碰撞。peer 先提交 `ac6b6ccd` 使**净 HEAD 一度 import 不了 lib.llm._sse_core**(它 import 我未提交的符号)——A/B worktree 实证,本提交落地后恢复。**教训:跨会话的文件级分工若带 import 依赖,被依赖方应先提交。**
+  2. **索引手术提交(surgical index commit)**:i18n.js 三路 WIP 纠缠(fallback-banner 2 键 + 我的 2 键 + i18n-pack ~70 行),pathspec 提交必连坐。解法:`git show HEAD:file` → 应用我的改动 → `git hash-object -w` → `git update-index --cacheinfo` —— **索引里只有我的 hunk,工作区三路 WIP 零触碰**,比 stash/checkout 都安全(那些会动工作区)。首次实战成功,值得成为共享-HEAD 标准动作。
+- **部署注意:** 运行中的 server(pid 7451,17:05 起)**不带本提交** —— 需 owner 重启生效;重启前硬 4xx 仍会毒化槽位并假「限流」。
+
+### 2026-07-26(续57) — 交易模块 P3 落地,epic `pt_6b2ec136` 收口:215 个字面量全上 token + 自包含三主题桥 + 启动前定主题(commit `ece8c6c`,4 文件;新套件 **7/7 含 NEUTER×3 全咬**,与宿主同进程 **112 过 5 skip**,collect **121** 0 err)
+- **先修两个结构性根因,字面量只是症状:**
+  | 根因 | 实测证据 |
+  |---|---|
+  | **P2 的 theme-bridge 在生产里从未生效** | 它把私有 token 映射到宿主 token **名字**(`var(--bg-primary)`),但 trading.html **根本不加载宿主 styles.css** —— 每个引用都解析成空。jsdom 显示不出来(实测 jsdom 对 `var()`/`color-mix` 返回 `rgba(0,0,0,0)`) |
+  | **trading.html 从不设 `data-theme`** | 全仓 grep 为 0 —— 主题桥就算有效也永远只有暗色 |
+  - 修法:bridge v2 **自包含**,把宿主 styles.css 里三个主题(dark `#6e56cf` / light `#6366f1` / tofu 纸 `#C1794B`,宿主默认)的**实际值**搬进来,不再是引用层;trading.html 在**第一条 stylesheet 之前**用宿主自己的存储键(`claude_ui_theme`)设主题,首帧就是对的,没有暗闪。
+- **替换是逐类刻意的,不是机械 sed(83 个 distinct 形式):**
+  - **白色玻璃**(rgba(255,255,255,x),52 处)→ `color-mix(in srgb, var(--t1) x%, transparent)`:暗色下 t1 是浅色=原来的玻璃;亮色下 t1 是深色,**同一条规则自动变成淡深色罩**,零 per-theme 规则两边都对。
+  - **旧 accent**(rgba(99,144,255,x),84 处)→ `color-mix(var(--accent))`。
+  - **语义色**(success/danger/warning/orange/cyan/purple,~45 处)→ 各自 token;bridge 按主题调对比度但**不映射到 accent** —— 红绿是盈亏语义,不是装饰。
+  - **#fff ×21**:全是 accent 面上的文字 → `var(--on-accent)`。**评审时抓到一个例外**:`.sim-spinner` 在**页面底色**上而非 accent 面上,弧必须跟 `--t1`,白色在亮色下会隐形。
+  - **rgba(255,255,255,.5)**:是深色带上的辅助**文字**不是玻璃,映射 `--t3` 而非罩层。
+- **★ 过程中自己制造并抓到的两个 bug(都是工具的错,不是 CSS 的错):**
+  1. **替换脚本的 hex 一通乱杀,把 :root 里的 token 定义也改成了自引用**(`--bg1: var(--on-bright)`)。靠自引用扫描抓回,恢复为字面量 —— **:root 是唯一允许字面量的地方**,规则引用它们。
+  2. **第一版主题链测试只排斥「已知的暗色值」**,所以删掉整个 light 块**反而绿**(NEUTER 2 起初不咬)。契约改成**正向的**:亮/tofu 主题下 surface 背景**必须是浅色**(亮度判定)、罩层必须是低 alpha —— 删块也红。
+- **验证:** 链式解析器(解析 CSS → 经 trading.css :root + bridge 各主题块解 var()/color-mix)实证:top-bar/panel 在三主题下分别解出 `#0a0a0c`/`#f4f2ed`/`#faf7f0`,暗主题仍是暗设计;NEUTER×3 全咬(还原一个字面量 → 报 L158;删 light 块 → 报「DARK surface #0a0a0c luminance 0.00」;删 tofu 块同);112 过 5 skip;collect 121;两文件括号平衡。
+- **诚实边界:** **没有真浏览器截图对照** —— 本机 playwright 的 chromium 缺 `libatk-1.0.so.0` 起不来。链式解析器是 computed style 的静态替身,不等于亲眼看页面;哪天有可用的浏览器,值得补一轮前后截图。
 
 ### 2026-07-26(续56) — 「重启后空卡缝合」两根修落地,A/B 两票全收口(commit `32890d1c`,4 文件 +874/-3;新后端套件 **11/11** + 新前端套件 **4/4**,双 NEUTER 全咬,相邻环 6 套件 34 过 2 红 stash A/B 实证预存在,collect **10148** 0 err,bundle `bundle-8d59c122.js`)
 - **续49 取证的两张票一次做完:** A=`pt_311cbd7a31ad4391`(恢复造槽闸)、B=`pt_9409bf7133c049cb`(空卡本身)。三处改动全部落在取证收窄后的点上,零补丁扩散。

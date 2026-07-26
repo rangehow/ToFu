@@ -1,6 +1,40 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续66) — 来源卡静默化 + 新闻时效性修复(commit `8ea2701a`,5 文件;新套件 5/5 failing-first,九套件 **134/134**)+ **真实 authored 验收跑通**:同主题双版对照,authored 质量跃迁实证
+- **owner 抓出的硬伤:** 片尾来源卡原来是 narration segment,**TTS 会把域名逐字念出来**。修:script 产物改挂 `sources_line` 字段(不进 segments),timeline 追加为**最后一镜 `spoken: False`、固定 3.5s** 的静默视觉卡,TTS 只发给 spoken 镜;engine 的 manifest 复用与新建同步过滤(mux 不用 `-shortest`,静默尾卡不会被配音轨截掉——修前已核实)。**顺手查清的疑点:** `lib/production/heartbeat.py` 是 sibling 的合法活(P-UX2 进度感知,`ed247760`),给长阶段发心跳防停滞收割器误杀,正好该躺横向底盘,**不是入侵,不动它**。
+- **新闻时效性:** research 主查询带 `freshness='week'`(背景查询保持不滤——常青内容不该被时间滤掉);script prompt 带当天日期。
+- **真实验收(owner 批准,全链路真跑,主题「核聚变净能量增益」):**
+  | | 模板版 | authored 版 |
+  |---|---|---|
+  | 成片 | `data/motion_video/jobs/motion_cf5a766ba20b4788/final.mp4` | `.../motion_1e6f465940a043c8/final.mp4` |
+  | 时长 | 48.5s / 4 镜 | 48.5s / 4 镜 |
+  | 真实耗时 | **78s** | **153s**(约 2×) |
+  | 作者成本 | 0(零 LLM) | **41,410 tokens**(4 镜全 authored,~10.4k/镜,远低于 60k/镜上限) |
+  | 抽帧对照(t=22.5) | 紫渐变 + 居中白字 +「02 / 04」 | **聚变等离子体光球 + 双轨道环**(纯视觉构图) |
+  | 抽帧对照(t=7.5) | 同左文字卡 | **「核裂变 vs 核聚变」对比信息卡**(双色原子图标 + 配文) |
+  | 来源卡 | 白字一行 | **专业来源列表卡**,且**逐字忠于该次调研**(china5e/news.sig/aiinking/vava8 全在真实事实卡中,无编造) |
+- **真实文案质量:** LLM 脚本引用 NIF 输入 2.05 兆焦 → 输出 3.15 兆焦,数据准确;调研来源含 36kr / wikipedia / 中国能源网等真实本周新闻。
+- **降级行为(如实):** 本机 TTS 未配置 → 两片均为**静音版**(设计好的地板);来源卡在无配音时仍是静默视觉卡,行为正确。
+- **验收暴露的新问题(给 owner,未修):** authored 第 2 镜(t=22.5)是**纯视觉零文字**——配音在时没问题,但**静音降级下文字是唯一信息载体**,该镜信息量为零。建议:**narration 降级为 silent 时自动开 burn_in**(侧车 SRT 已在,一行默认翻转),让静音片也保信息。这是一处行为变更,等你点头再动。
+
+### 2026-07-26(续65) — 「设置面板不停变宽变窄」根修:防 flap 的**强制回流把面板提交在了默认宽度**,而过渡在重加 class **之前**就恢复了 → 每次 re-fit 都动画 860→1240(commit `7050294d`,2 文件 +45/-2;守卫 failing-first A/B 实证 + NEUTER 咬,套件 **10/10**)
+
+- **症状(owner 报):** 停在 服务商 页(矩阵视图开着),设置窗口**持续循环**变宽变窄——不是点一下闪一下,是一直在扫。
+- **★ 这不是续45 那个缺陷复发。** 续45 修的是**判定**在被自己改过的状态上测量(measure-at-narrow),那道修法**完好无损**且仍然必要;本轮是同一函数里**另一层**的缺陷 —— 判定稳定了,但**提交时机**错了。两者叠在一起才产生「持续」而非「一次」。
+- **机制(三步,缺一不可):**
+  | 步 | 代码事实 | 后果 |
+  |---|---|---|
+  | ① | `_fitMatrixPanelWidth` 为了在**默认宽度**下测量,先 `classList.remove('stg-matrix-wide')` 再读 `scrollWidth`(读取 = **强制回流**) | 回流把面板**真的提交在 860px** |
+  | ② | stay-wide 分支(`wide && wasWide`,即「本来就宽、仍然该宽」)先 `panel.style.transition = ''` **恢复过渡**,再 `toggle(class, true)` | 过渡引擎看到 860 → 1240,**判定为一次真实变化 → 播 0.18s 动画** |
+  | ③ | 1.5s 探测轮询 `_pollMatrixProbe` → `_rerenderMatrix` → `_renderProvidersTab` → `_fitMatrixPanelWidth`,**永不停止**(只要探测在跑) | 每 1.5s 重放一次 ②,而动画 0.18s —— 于是**永续扫动** |
+- **关键点:一个「什么都没改变」的 re-fit 必须产生零动画。** 之前它产生了一次完整的 860→1240 动画,因为中间态被回流**提交**过。修法一行:在 stay-wide/unwiden 分支里,**过渡仍挂起时**用 `void panel.offsetWidth` 把终态宽度**提交掉**,再恢复过渡。窄→宽的**真实**边沿仍然走原来的「先恢复过渡再改 class」,所以用户第一次展开**照旧有动画**(没有为了修 bug 牺牲观感)。
+- **验证(诚实记录一处能力缺失):** 本想用 headless Chromium 真机采样面板宽度时间序列(脚本已写好 `/tmp/mxrepro/repro.py`),但本机 **Chromium 起不来**(`libatk-1.0.so.0` 缺失且 `CONDA_PREFIX` 为空,项目 skill 依赖的 conda GUI 库不在此环境)。**故本轮没有真机像素级证据**,改用既有 node 夹具:把 fakePanel 加上 `offsetWidth` getter 记录回流时点,断言 `reflow` 出现在 `t:restore` **之前**。
+  - **failing-first A/B 实证**:把我的修复撤掉后跑同一夹具 → `FAIL stay_wide_ops` / `FAIL stay_wide_commits_before_transition_restored` / `FAIL unwiden_ops` 三条全红;加回来 → 10/10 绿。
+  - **NEUTER**:删掉 `void panel.offsetWidth` → `stay_wide_commits_before_transition_restored` 精确变红。
+- **相邻环**:矩阵编辑器 cascade / nonchat skip / devices / bundle parity 共 47 过。`test_frontend_api_isolation` 1 红 —— **归属实证非猜测**:红在 `core/conv_image_hydrate.js`(变量 URL fetch),该文件由 sibling commit `2ba63a12` 引入,`git status` 证实我工作树里它**干净未碰**;与看板已记的同族 manifest/index.html 缺陷同一个文件,留给 pt_3879f00e。
+- **教训(给后人,和续45 同一函数第二次):** 「为了正确测量而临时改样式」这个手法,代价是**中间态会被回流真正提交**。凡是这么做的地方,必须问一句:**终态是在过渡挂起时提交的,还是在过渡活着时提交的?** 前者安静,后者每次调用都放一次动画。判定正确 ≠ 视觉稳定 —— 续45 修好了前者,却留下了后者,而**周期性调用方(轮询)会把一次性瑕疵放大成永续故障**。
+
 ### 2026-07-26(续63) — cache-cost B 收口:**混淆检验后 ¥662 → 无独立可修实弹,实测不做**(epic `pt_4c41eeb8f7954da7`;零代码变更;同批第 5 张票、第 5 次票面虚高被戳破)。数据源 7 天 17,602 轮全量,关键方法 = **设对照组**(换 key 组 vs 同模型/gap 窗口未换 key 组)而非「换 key 后跌了就归 key」。
 ### 2026-07-26(续64) — 日志覆盖收口 epic `pt_43b4aee1b98f4ffd`:**后端真缺口补了 8 处,前端「高危」4 处逐个核对代码后全是假阳性**(commit `3ad6018f`,4 文件 +34/-3;cost 33 + proxy 9 + motion 48 = **90 测全绿**,collect **10179** 0 err)。同批第 6 张票——这次不是全假,是**一半真一半假,而我分开对待**。
 

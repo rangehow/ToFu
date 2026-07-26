@@ -1,6 +1,61 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续63) — cache-cost B 收口:**混淆检验后 ¥662 → 无独立可修实弹,实测不做**(epic `pt_4c41eeb8f7954da7`;零代码变更;同批第 5 张票、第 5 次票面虚高被戳破)。数据源 7 天 17,602 轮全量,关键方法 = **设对照组**(换 key 组 vs 同模型/gap 窗口未换 key 组)而非「换 key 后跌了就归 key」。
+### 2026-07-26(续64) — 日志覆盖收口 epic `pt_43b4aee1b98f4ffd`:**后端真缺口补了 8 处,前端「高危」4 处逐个核对代码后全是假阳性**(commit `3ad6018f`,4 文件 +34/-3;cost 33 + proxy 9 + motion 48 = **90 测全绿**,collect **10179** 0 err)。同批第 6 张票——这次不是全假,是**一半真一半假,而我分开对待**。
+
+- **后端(真,已修):** 这次我没有直接信审计子代理的行号,而是**先读代码再动手**。8 处真静默 catch,逐个核实后补 log:
+  | 文件 | 处 | 修法 | 为什么是真缺口 |
+  |---|---|---|---|
+  | `cost.py::_nested_cached` | 2 | debug | 计费路径:非数值 cached_tokens 静默归零 → 少算缓存命中、**高估价格**;且 `normalize_usage` 同文件已有 debug 先例 |
+  | `proxy.py` netpath 集成点 | 4 | 3×debug + 1×warning | netpath 失效/LLM 路由冻结在无 trace;热路径 `proxies_for` 用**一次性闸**防每请求刷 error.log |
+  | `_renderers.py` 图片 ref 规范化 | 1 | debug | 附件渲染坏时无诊断 |
+  | `motion_video/_gates.py` ffprobe duration | 1 | debug | 下游只报「duration 0 != expected」,看不到根因 |
+- **后端(核实后刻意不修,3 处):** `big_prefix_gate.py:274`(模块 docstring 自述整个 gate 是建立在被否决前提上的 no-op,「do NOT invest」)、`request_inspector.py:59`(设计好的 mapping-vs-positional 回退)、`_resume_state.py:37`(实测其日志**确实到达 app.log 8 条**——路由没坏,纯约定不统一;且归 pt_03f4cdf1 兄弟 epic 所有,避让)。
+- **前端(4 处「高危」逐个核对代码 = 全假阳性,未动):** 这是本次最关键的一步——fe2 子代理(第一轮空跑后重跑的那个)把「catch + 注释」这个**表面形状**当成了缺陷,和我一样犯了 3 次的错。逐行核对:
+  - `main_send_pipeline.js:922/1502/1525` —— 包的是 `getElementById('streaming-msg').remove()` **DOM 幽灵元素清理**,注释 `/* ignore */`,失败=元素已不在,**不是「整条消息静默丢失」**;`:969` 是 best-effort 诊断日志。
+  - `api.js:162/932` —— **错误响应体**解析回退,失败后仍用 HTTP status 抛错;`:599` **本来就 return 了 error**,根本不静默。
+  - `conversations.js:744/1540/1617` —— header 读取 best-effort + `ConvCache.put` **本地缓存加速器**写(下一行照常 renderChat),不是「持久化静默」。
+  - `sse_*` —— opts JSON.parse 回退 + sessionStorage 隐私模式降级。
+  **没有一处是票面说的「静默吞消息/吞持久化/断流不可见」。** 改它们 = 在误读上churn,还要冒 bundle-manifest parity 与 shared-HEAD 撞车风险(今天已咬 2 次)。**不改。**
+- **「评估 info 级是否上送」:** 这是量级/设计决策(info 全上送可能淹了 error.log),不是单边代码改动,留给 owner。
+- **元教训(本日第 6 次,已是铁律):** 审计子代理给的「缺陷清单」和我自己凭日志条数开的票,**都会犯同一个错——把表面形状(catch 块 / 日志行数 / 栈帧位置)当缺陷语义**。这次的纪律救了场:**先读代码,再决定动不动**。真缺口(后端 8 处)读了代码确认后修;假阳性(前端 4 处)读了代码证伪后**不修**。同一张票里,核实让一半落地、一半避免误工。
+
+- **★ 三个实测事实,每个都独立成立:**
+  1. **kimi(¥113 纸面)= 纯伪影。** 换 key 轮 `cr` 保留率(cr/上轮 cr)**median 101%**(n=560,仅 10% <50%)—— **kimi 自动缓存是全局的,跨 key 有效**,换 key 对它零伤害。且 kimi 走零 cache_control 标记(续52),「sticky routing 防 key 轮换」这个机制对 kimi **根本不适用**。混淆检验:换 key 11% 跌 vs 不换 8% 跌,增量 3 个点是噪声。
+  2. **aws claude(唯一缓存健康 + 真 per-key 的线)= 不换 key。** 7 天换 key **<2 次**(用量少、不触发 429)。**本就无需修。**
+  3. **opus-5(¥136 纸面)= 92% 无可救 + 与 A 同源。** 130 次换 key 里 **119 次 prev_cr≤100k(缓存本来就冷/地板,无暖前缀可失)** —— 这正是 A 票的间歇性(43% 基准下跌)在换 key 时刻的投影。只有 **11 次 prev_cr>100k 真暖前缀被打飞**(ms0edz36 930k/721k、mryjczi2 640k、ms15drejs2 550k/525k、ms1apkcg 274k、ms1auj3n 234k,合计 ~3.87M tok)。**但 opus-5 的换 key 与 A 票(上游不稳定)是同一根因**:上游不稳 → 429/冷却 → 换 key;上游不稳 → 缓存间歇归零。两者共享「opus-5 上游」这个根。
+- **★ 为什么不做 sticky hold 动态化(票面方向①),三条独立的理由:**
+  1. **kimi 部分(占纸面 1/6)目标不存在** —— 自动缓存全局,sticky 救的是 per-key 伤,kimi 没有这种伤。
+  2. **opus-5 部分 sticky 收益被双重压缩**:sticky 只在「原 key 缓存还暖 + 冷却短到值得等」时有用,而 opus-5 缓存间歇(A 票)+ 换 key 多由上游硬不稳驱动,等也多半白等还加延迟。
+  3. **根因在 A 不在 B**:charter「勇于分析根因」。最完美方案是解决 A(opus-5 上游,¥3.4k+/周,是 B 的 5 倍+),A 一解决,opus-5 的 429 换 key 自然减少、缓存更稳,B 的 opus-5 部分随之消失。**在 dispatcher 热路径为一个已坏缓存加 sticky 补丁,是 charter 明确反对的「补丁式小修小补」。**
+- **★ 混淆检验的方法论价值(给后人):** 「换 key 后 cache_read 跌了」**不等于**「换 key 造成的」——必须先扣掉「即使不换也会跌」的基准。opus-5 不换 key 也有 43% 跌(A 票上游),直接归 key 会把上游的账记到调度头上。本批 5 张票,5 次都是「不做对照就高估」。**这是本批审计最值钱的一条纪律。**
+- **B 票唯一算对的:** key_events.json 里那 11 次大丢失确实真实存在且是 per-key 打飞(opus-5 手动断点)。但它不独立——归 A 票的下游。**结论:B 无独立实弹,实测不做,随 A 票结果自然消解。**
+
+### 2026-07-26(续62) — 交易模块 P3 补漏:抓出 P3 棘轮结构性看不见的两个缺陷(commit `54650df`,3 文件;token 套件 7→**10/10 含 NEUTER**,与宿主同进程 **115 过 5 skip**,collect **124** 0 err)
+- **起因是诚实复核:P3 已收口(`ece8c6c`),我问自己「棘轮通过但用户仍会看到什么坏东西?」** 棘轮只查「`:root` 外有没有字面量」,不查**「有没有规则引用了根本不存在的 token」**,更不查 **JS 用 canvas 画的字面量**。主动扫这两个盲区,两个都真有问题:
+  | 缺陷 | 后果 |
+  |---|---|
+  | **`--profit`/`--loss` 被 5 条规则引用,但从未在任何文件定义**(P3 前就潜伏,备份与 git 史双重证实) | var() 解析失败 → 声明在 computed-value 时整行作废 → **所有盈亏数字渲染成纯文本,没有红绿** |
+  | **simulator 权益曲线用 canvas 画**(canvas 读不了 CSS var)→ 硬编码 `rgba(6,8,13,.6)` 暗板 + `rgba(255,255,255,.12)` 白玻璃基线 + 霓虹盈亏色 | 亮色主题下基线**隐形**,面板是一块突兀的黑板 |
+- **修法:**
+  - `--profit`/`--loss` 在 trading.css `:root` 定义为 `--success`/`--danger` 的**别名**(不是字面量)—— 随 theme-bridge 的逐主题对比度调整走,而不是钉死一个 hue。
+  - 曲线改为 `_chartTheme()` 在**渲染时**读 `getComputedStyle` 拿当前主题 token(`--success`/`--danger`/`--bg2`/`--t2`),配 `_alpha()` 展开成 rgba 画渐变;主题切换不用刷新页面。**node/jsdom 用真实 theme-bridge.css 驱动三主题实证**:dark `#00e59b/#111115`、light `#12a150/#eceae4`、tofu `#3d7a55/#f4efe5`。有意思:jsdom 对**纯 hex token** 能返回 rgba 值,只是解不了 `var()`/`color-mix` 链 —— 所以 helper 只读纯 token,已在代码注释写明。
+  - 兜底值(dark 调色板)**保留**在 `_chartTheme` 里,那是 token 不可用时的正确降级,不是残留缺陷。
+- **新守卫(两个,堵的就是这两个盲区):**
+  - `test_no_undefined_token_references`:任何规则用的 `var(--x)` 必须在某个加载的样式表里有定义。**写它时自己先栽了一次**:bridge 的 doc 注释里提到宿主的 `--bg-primary` 被误报 —— 加了**剥注释**再扫。NEUTER:删掉 `--profit` 定义 → 守卫红。
+  - `test_js_canvas_uses_theme_tokens_not_literals`:钉住 `getComputedStyle` + `_chartTheme` 在场,且三处暗色字面量直接 paint 调用已不存在。
+- **教训同族(第 n+1 次):「测试全绿」只证明你测的那个面是绿的。** P3 棘轮没错,它只是不覆盖「悬空 token 引用」和「JS 画的字面量」这两个面 —— 而用户看的正是这两个面。每收一个口,值得花一分钟问「还有什么面是我的守卫**结构上**看不到的?」
+
+### 2026-07-26(续61) — cache-cost E 收口:**票面两个嫌疑(thinking 96×/日 + tool_result ~80×/日)7 天全量后只剩 6 轮**;真正的大头是 358 次「TTL marker flipped」——而再追一层,那是**检测器槽键碰撞伪影**(epic `pt_6ac5febf`;commit `6f010b93`,2 文件 +131/-2;3 新测 failing-first 2 红 + NEUTER 咬,相邻环 858 过,collect **10173** 0 err)
+- **票面归因被我自己的全量数据推翻(第 5 次/同批票):** 票面凭「64 次/日」的日志尖峰推断 thinking 重建/tool_result 是最大嫌疑。但 `cacheBreak` 标签的 7 天全量显示 `非幂等历史编辑` 类**只有 6 轮**;那 64/日 + 96×/日的尖峰集中在 `ms14r5vp` 一个会话、同一天,是**瞬态噪声,不是分布**。**教训(又一次):凭日志尖峰推断字段归因,不如直接读 cacheBreak 标签的聚合分布。**
+- **真正的头号标签(179× prefix_mutation + 35× mid_out_of_window)写的是「TTL marker flipped」**——我本已锁定 `latch per-task`(sys 槽 ttl `1h`↔`''` 跨轮翻转)准备修 `lib/llm/cache.py`。**幸亏先在全量 markers 上验证机制**:358 次同模型 TTL 槽值翻转,**100% 落在一个槽键 `msg:tool_result(toolu_bdrk)` 上、87% 在任务内**——latch 是 per-task,任务内不可能翻转,矛盾。追下去:
+- **★ 根因 = 槽键碰撞伪影:** `_brief` 给 tool_result 取槽键 `tool_use_id[:10]`,而 AWS Bedrock 的 id 形如 `toolu_bdrk_01ABC…` —— 前 10 字符**恰好全是厂商前缀**,所有 tool_result 塌进同一个槽 `tool_result(toolu_bdrk)`。于是 stable mid 标记(ttl=`1h`)和滚动 tail 标记(ttl=`''`)落在**两个不同 tool_result** 上时,被并成一个值集 `{1h, ''}`;尾巴一滚动,`markers_ttl_flipped` 就把「哪个 tool_result 当尾巴」的正常滚动**误报成 TTL 值翻转**。**铁证:790 轮同槽多值,值集 100% 恰为 `{'1h',''}`(一 stable + 一 tail),零例外。**
+- **修的是检测器,不是缓存热路径(第 4 次/同批 = 没按票面直接改 cache.py):** `lib/tasks_pkg/wire_fingerprint.py::_brief` 改用 id **尾部 12 位**(判别段)而非前缀 10 位。**安全论证钉死在测试里**:消息级对齐走 `canonical_key`(用 `fields.tool_call_id` **完整 id**,未截断),`_brief` 仅作 markers slot 键 + 人类日志标签,跨信封 diff 不受影响。3 守卫:①两个不同 AWS id 不再共键(failing-first 红);②「stable 在 tool A、tail 在 tool B、tail 前移」的生产真实形态**不报 flip**(failing-first 红);③同一消息真 `1h`→`''` **仍报 flip**(回归锚,始终绿)。
+- **影响面(如实):** 这是**纯诊断修复,0 计费影响**——那 358 次「翻转」从未真实重计费(tail 滚动本来就会命中)。但它**持续污染归因**:`<ttl-flip>` 是 culprit token,会压制「server-side PROVEN」判决——而续52 opus-5 的上游侧定性(170 轮字节全同不读回)**部分建立在当时已被这个伪影干扰的标签上**。修复后,aws 线的 server-side 判决会更准;**需要重跑 7 天 apiRounds 确认 opus-5 的「server-side 170 轮」有多少当年被误标为 ttl-flip**(本票不追,留给 A 票 owner 答复后一并复核)。
+- **9 红预存在(非本刀):** 相邻环 `test_inbox_inject_sidecar_wire_neutral` / `test_routes_chat_wire_parity` / `test_cache_prefix_byte_identity_r4r5r6` 等 9 红,**stash A/B 净 HEAD 同形复现**,与 `_brief` 无关。其中 `test_cache_prefix_byte_identity_r4r5r6::test_live_retry_preserves_task_id` 恰是 `_task_id` latch 的守卫,**反向佐证 latch 机制本就工作正常**——坐实「不是 latch 问题」。
+- **同批最终格局:** A(¥3.4k+/周,挂 owner 问网关)/ B(¥662/周,429 换槽,**未证伪,最大可修项**)/ C(实测否决)/ D(charter v6 否决)/ E(本票,伪影检测器已修)。**唯一还剩实弹的是 B。**
+
 ### 2026-07-26(续59) — pt_48f29db9 我方侧收口:取证→交接→sibling 落地→互补验证(本侧 commit `3052fdcb`,1 测试文件 +176;双 NEUTER 复验全咬,环 **175/175**,collect **10168** 0 err)
 ### 2026-07-26(续60) — LoopWatch 事件循环卡顿 epic `pt_c056025387634504`:**是真问题,但票面归错了因,正确的根是「PG 跑在 FUSE 上」**——同一批票里第 4 张,前 3 张全假,这张半真(取证零代码变更;修复挂 question-block)
 

@@ -1,6 +1,13 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续81) — pt_26a427d3 收口:P0 小修批三连(commit `f2008c11`,9 文件 +251/-192 含删 scheduler.js;新套件 **7/7 含 NEUTER×3**,bundle 环 6 套件 + 相邻 5 套件全绿)
+
+- **① 启动裸 JSON.parse ×3:** core.js(claude_client_config) + cost.js×2 是**模块顶层**裸 parse——一个坏键杀整个 bundle 求值=全站白屏。项目里其他读取点都有 try,这三处漏网。统一走新 `_safeJsonParse`(corrupt→fallback)。**模式教训:模块顶层 = 无保护执行区,任何可失败操作都要有兜底。**
+- **② image-gen 取消≠超时:** 单模式的 Cancel 与 150s 看门狗共用一个 AbortController,catch 把所有 AbortError 当超时推错误消息。`_igUserCancelled` 标志区分:取消→'cancelled' 中性通知(无 150s 文案无超时 toast),finally 复位。**batch 模式本来就对**('Cancelled')——单/批两条路径的同类判断必须对齐,只修一条是半修。
+- **③ scheduler.js 整文件死代码:** 面板/badge/toggle 元素在**零个**模板存在(工具本身是服务端 always-on)。删文件 + index.html script 标签 + _DEFERRED_FILES 条目 + main.js 的 _applySchedulerUI 及调用点 + toolset-apply revert 条目。**教训:删 UI 元素时要搜引用它的 JS(bundle manifest、script 标签、_apply*UI、revert family)——这次 parity 闸(test_every_stripped_index_script_is_rebundled)当场抓住我漏掉的 script 标签,闸在正常工作。**
+- **过程:** 7/7 一次过;bundle parity 先红(index.html script 标签漏删)后绿——**改 bundle manifest 必须同步 index.html,这是第二次实证。**
+
 ### 2026-07-27 — 「user agent agent 错标 + 哨兵泄漏 + 侧栏永挂」根修:VU carrier 自己的 SSE 流承载完整 VU 契约(epic `pt_decf1adc077843f3`,owner 拍板「双投非改投 + 快照感知 + 否决 _run_single_turn 翻终态」;commit `f97fd317`,18 文件 +1444/-257;新后端套件 **16/16** + 新前端 jsdom 套件 **4/4 含 NC×2**,wire-parity 改写 **5/5**,**NEUTER×4 全咬**,相邻前端 **13/13**、bundle **31/31**,collect **10308** 0 err)
 
 - **事故(conv ms1rrjchpa5pqw,三症同源):** pt_8dc03017 cutover 后客户端从父任务已关闭的流**跳**到 VU 子任务自己的流(latestLiveTaskId),而那条流三处全断:①**错标** —— 子任务事件列表装的是**裸** delta/tool 事件 + 冷连接合成 agent state 快照(`build_fresh_state_snapshot`),VU 渲染成第二个 "Agent" 气泡;②**幽灵** —— vu_start/vu_done/vu_cancel 只发父流(已关),占位气泡没人建/没人收/没人删,`[VU: TASK_DONE]`/`[PROGRESS:]` 哨兵留在屏上;③**永挂** —— `_endpoint_managed` 在 `_finalize_and_emit_done:1112` 提前 return,**不翻 status 也不发 done** → `is_task_terminal` 永假 → keepalive 到天荒地老 → 侧栏「回答中」永亮。流永不关的实锤:`discard_task` 只弹注册表,SSE 生成器持 dict 引用 + status 恒 'running'。

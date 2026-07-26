@@ -22,7 +22,8 @@ def _capture_enqueued_cmd_type(monkeypatch, fn_name):
 
     captured = {}
 
-    def fake_send_desktop_command(cmd_type, params=None, timeout=30):
+    def fake_send_desktop_command(cmd_type, params=None, timeout=30,
+                                  target_agent_id=None, user_id=''):
         captured['cmd_type'] = cmd_type
         captured['params'] = params
         return {'ok': True}, None

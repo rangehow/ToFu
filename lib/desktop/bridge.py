@@ -163,13 +163,15 @@ def get_command_stream(cmd_id, since_seq=0):
         }
 
 
-def register_agent(agent_id, meta=None) -> None:
+def register_agent(agent_id, meta=None, user_id='', key_id='') -> None:
     """Upsert a v2 agent in the registry and heartbeat it.
 
     ``meta`` is the agent frame from the poll body (name / platform /
-    capabilities). Registration doubles as the liveness heartbeat:
-    :func:`online_agents` only returns agents seen within the connection
-    window, and a registered agent counts toward
+    capabilities). ``user_id`` / ``key_id`` identify the bridge caller the
+    poll authenticated as (per-user token — RWA P4a 约束②第三条; the
+    legacy global secret registers unscoped ''). Registration doubles as
+    the liveness heartbeat: :func:`online_agents` only returns agents seen
+    within the connection window, and a registered agent counts toward
     :func:`is_desktop_agent_connected`.
     """
     meta = meta if isinstance(meta, dict) else {}
@@ -185,6 +187,8 @@ def register_agent(agent_id, meta=None) -> None:
             'share_roots': (list(meta['share_roots'])
                             if isinstance(meta.get('share_roots'), list)
                             else prev.get('share_roots') or []),
+            'user_id': str(user_id or ''),
+            'key_id': str(key_id or ''),
             'registered_at': prev.get('registered_at') or time.time(),
             'last_seen': time.time(),
         }
@@ -211,22 +215,38 @@ def online_agents() -> list:
                 if now - a['last_seen'] < _CONNECTED_WINDOW_S]
 
 
-def list_agents() -> list:
-    """All known agents with an ``online`` flag (status endpoint)."""
+def list_agents(user_id=None) -> list:
+    """All known agents with an ``online`` flag (status endpoint).
+
+    ``user_id`` (RWA P4a): when given, only agents registered by that
+    bridge caller are returned — a tenant must never see another tenant's
+    machines on a relay deployment. ``None`` = unfiltered (operator view).
+    """
     now = time.time()
     with command_queue_lock:
-        return [dict(a, online=(now - a['last_seen']) < _CONNECTED_WINDOW_S)
-                for a in _agents.values()]
+        out = [dict(a, online=(now - a['last_seen']) < _CONNECTED_WINDOW_S)
+               for a in _agents.values()]
+    if user_id is not None:
+        out = [a for a in out if (a.get('user_id') or '') == (user_id or '')]
+    return out
 
 
 def _v1_online_locked() -> bool:
     return bool(_v1_last_poll) and (time.time() - _v1_last_poll) < _CONNECTED_WINDOW_S
 
 
-def _online_ids_locked() -> set:
+def _online_ids_locked(user_id=None) -> set:
+    """Online registry ids — optionally scoped to one bridge user.
+
+    The single-agent fallback counts only the CALLER's own endpoints
+    (RWA P4a): other tenants' agents must not make an unaddressed command
+    look multi-target, nor make it look deliverable.
+    """
     now = time.time()
     return {aid for aid, a in _agents.items()
-            if now - a['last_seen'] < _CONNECTED_WINDOW_S}
+            if now - a['last_seen'] < _CONNECTED_WINDOW_S
+            and (user_id is None
+                 or (a.get('user_id') or '') == (user_id or ''))}
 
 
 def _v1_online() -> bool:
@@ -234,15 +254,19 @@ def _v1_online() -> bool:
         return _v1_online_locked()
 
 
-def _deliverable(cmd, agent_id, v1, online_ids, v1_on) -> bool:
-    """Routing predicate (RWA P0, owner-ratified fallback ②A):
+def _deliverable(cmd, agent_id, v1, online_ids, v1_on, poller_user='') -> bool:
+    """Routing predicate (RWA P0 ②A + P4a 用户作用域):
 
+    * user scope FIRST (fail-closed): a command only ever reaches a poller
+      whose authenticated bridge user matches the command's user — on a
+      relay deployment tenant A's agent can never pick up tenant B's
+      command. Both empty = legacy single-user world (byte-identical);
     * ``target_agent_id`` set → only that v2 agent's poll;
-    * unaddressed, v1 poller → only while NO v2 agent is online
-      (byte-identical legacy world);
-    * unaddressed, v2 poller → only when it is the SOLE online endpoint
-      (single-agent fallback; never guess among several).
+    * unaddressed, v1 poller → only while NO v2 agent is online;
+    * unaddressed, v2 poller → only when it is the SOLE online endpoint.
     """
+    if (cmd.get('user_id') or '') != (poller_user or ''):
+        return False
     target = cmd.get('target_agent_id')
     if target:
         return (not v1) and target == agent_id
@@ -251,21 +275,26 @@ def _deliverable(cmd, agent_id, v1, online_ids, v1_on) -> bool:
     return len(online_ids) == 1 and agent_id in online_ids and not v1_on
 
 
-def _addressing_enqueue_error(target_agent_id):
+def _addressing_enqueue_error(target_agent_id, user_id=''):
     """Validate a to-be-enqueued command against the online-agent set.
 
     Returns an error string when the command must NOT be queued, else None:
-    addressed → the target agent must be online right now; unaddressed with
-    >1 online endpoints → refused (hold, never deliver to a lucky poller);
-    unaddressed with 0/1 online → allowed (legacy / single-agent fallback).
+    addressed → the target agent must be online AND belong to the caller's
+    bridge user; unaddressed with >1 of the CALLER's endpoints online →
+    refused (hold, never deliver to a lucky poller); 0/1 online → allowed
+    (legacy / single-agent fallback). Other users' agents are invisible
+    here (RWA P4a 用户作用域).
     """
-    online = online_agents()
+    user_id = user_id or ''
+    online = [a for a in online_agents()
+              if (a.get('user_id') or '') == user_id]
     if target_agent_id:
         if not any(a['agent_id'] == target_agent_id for a in online):
             return (f'target desktop agent {target_agent_id!r} is not online '
-                    f'({len(online)} registered agent(s) online)')
+                    f'for this bridge user ({len(online)} own agent(s) online)')
         return None
-    v1 = _v1_online()
+    # v1 legacy agents are unscoped — only a legacy ('' user) caller sees them.
+    v1 = _v1_online() and not user_id
     n = len(online) + (1 if v1 else 0)
     if n > 1:
         names = [a.get('name') or a['agent_id'] for a in online]
@@ -277,16 +306,19 @@ def _addressing_enqueue_error(target_agent_id):
     return None
 
 
-def send_desktop_command(cmd_type, params=None, timeout=30, target_agent_id=None):
+def send_desktop_command(cmd_type, params=None, timeout=30, target_agent_id=None,
+                         user_id=''):
     """Queue a command for the desktop agent. Blocks until result or timeout.
 
     ``target_agent_id`` (RWA P0) routes the command to one registered
     agent; when omitted, the single-agent fallback applies and with
     several agents online the command is REFUSED up front — never
-    delivered to a lucky poller.
+    delivered to a lucky poller. ``user_id`` (RWA P4a) scopes the command
+    to agents registered by the same bridge user; it stays INTERNAL (never
+    projected onto the wire).
     """
     if _addressing_enabled():
-        err = _addressing_enqueue_error(target_agent_id)
+        err = _addressing_enqueue_error(target_agent_id, user_id=user_id)
         if err:
             logger.warning('[Desktop] refusing %s: %s', cmd_type, err)
             return None, err
@@ -306,6 +338,8 @@ def send_desktop_command(cmd_type, params=None, timeout=30, target_agent_id=None
     }
     if target_agent_id:
         cmd['target_agent_id'] = target_agent_id
+    if user_id:
+        cmd['user_id'] = str(user_id)
 
     with command_queue_lock:
         command_queue[cmd_id] = cmd
@@ -339,11 +373,12 @@ def resolve_results(results) -> int:
     return resolved
 
 
-def take_pending_commands(agent_id=None, v1=True) -> list:
+def take_pending_commands(agent_id=None, v1=True, user_id='') -> list:
     """Collect commands awaiting THIS poller, expiring stale ones.
 
-    ``agent_id`` / ``v1`` identify the poller (v2 registration frame vs
-    legacy agent). With addressing enabled the projection is filtered by
+    ``agent_id`` / ``v1`` / ``user_id`` identify the poller (v2 frame vs
+    legacy agent; bridge user from the authenticated poll — RWA P4a).
+    With addressing enabled the projection is filtered by
     :func:`_deliverable`; with the kill switch off it is the legacy
     unfiltered projection.
     """
@@ -351,7 +386,7 @@ def take_pending_commands(agent_id=None, v1=True) -> list:
     now = time.time()
     addressing = _addressing_enabled()
     with command_queue_lock:
-        online_ids = _online_ids_locked() if addressing else set()
+        online_ids = _online_ids_locked(user_id) if addressing else set()
         v1_on = _v1_online_locked() if addressing else False
         for cmd_id, cmd in list(command_queue.items()):
             if cmd['event'].is_set():
@@ -361,7 +396,7 @@ def take_pending_commands(agent_id=None, v1=True) -> list:
                 cmd['event'].set()
                 continue
             if addressing and not _deliverable(cmd, agent_id, v1,
-                                               online_ids, v1_on):
+                                               online_ids, v1_on, user_id):
                 continue
             wire = {
                 'id': cmd_id,
@@ -375,7 +410,7 @@ def take_pending_commands(agent_id=None, v1=True) -> list:
 
 
 async def take_pending_commands_async(timeout: float = None, agent_id=None,
-                                      v1: bool = True) -> list:
+                                      v1: bool = True, user_id: str = '') -> list:
     """Async long-poll variant of take_pending_commands for the async route.
 
     Awaits an asyncio.Event (woken cross-thread by send_desktop_command)
@@ -386,7 +421,7 @@ async def take_pending_commands_async(timeout: float = None, agent_id=None,
     """
     if timeout is None:
         timeout = POLL_WAIT_TIMEOUT
-    pending = take_pending_commands(agent_id=agent_id, v1=v1)
+    pending = take_pending_commands(agent_id=agent_id, v1=v1, user_id=user_id)
     if pending:
         return pending
 
@@ -399,7 +434,8 @@ async def take_pending_commands_async(timeout: float = None, agent_id=None,
         deadline = time.time() + timeout
         while time.time() < deadline:
             event.clear()
-            pending = take_pending_commands(agent_id=agent_id, v1=v1)
+            pending = take_pending_commands(agent_id=agent_id, v1=v1,
+                                            user_id=user_id)
             if pending:
                 return pending
             remaining = deadline - time.time()
@@ -410,7 +446,8 @@ async def take_pending_commands_async(timeout: float = None, agent_id=None,
             except asyncio.TimeoutError as e:
                 logger.debug('[Desktop] async poll slice elapsed, re-checking queue: %s', e)
                 pass
-        return take_pending_commands(agent_id=agent_id, v1=v1)
+        return take_pending_commands(agent_id=agent_id, v1=v1,
+                                     user_id=user_id)
     finally:
         with _async_waiters_lock:
             try:

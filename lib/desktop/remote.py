@@ -37,3 +37,33 @@ def remote_worktree_binding(cfg):
         return {'agent_id': str(remote['agent_id']),
                 'root': str(remote['root'])}
     return None
+
+
+def validate_remote_binding(agent_id, root, user_id=''):
+    """Validate + mint a ``project_remote`` binding (RWA P4 entry points).
+
+    Returns ``(binding, error)``: the agent must be online, ``root`` must
+    be one of ITS declared share_roots, and — when the caller is scoped
+    (per-user bridge token, RWA P4a) — the agent must belong to the same
+    bridge user. Every refusal is an honest, model/user-visible string.
+    """
+    if not remote_worktree_enabled():
+        return None, ('remote worktrees are disabled on this server '
+                      '(TOFU_REMOTE_WORKTREE is not set)')
+    from lib.desktop import online_agents
+    user_id = user_id or ''
+    agent = next((a for a in online_agents()
+                  if a['agent_id'] == agent_id), None)
+    if agent is None:
+        return None, (f'desktop agent {agent_id!r} is not online — start '
+                      'the agent on the target machine first')
+    if (agent.get('user_id') or '') != user_id:
+        return None, (f'desktop agent {agent_id!r} belongs to a different '
+                      'bridge user')
+    roots = {str(r.get('name') or '') for r in agent.get('share_roots') or []
+             if isinstance(r, dict)}
+    if root not in roots:
+        declared = ', '.join(sorted(r for r in roots if r)) or '(none)'
+        return None, (f'agent {agent_id!r} has no share root {root!r} '
+                      f'(declared: {declared})')
+    return {'agent_id': str(agent_id), 'root': str(root)}, None

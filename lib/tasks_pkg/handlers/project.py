@@ -93,7 +93,8 @@ def _execute_remote_project_tool(task, fn_name, tc_id, fn_args, rn,
                 remote['agent_id'][:8], remote['root'], task.get('id', '?')[:8])
     result, error = send_desktop_command(
         cmd_type, params, timeout=bridge_timeout,
-        target_agent_id=remote['agent_id'])
+        target_agent_id=remote['agent_id'],
+        user_id=task.get('_userId', '') or '')
     if error:
         return _finish(f'Error: remote worktree {remote["root"]}: {error}',
                        badge='remote error')

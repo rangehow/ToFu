@@ -45,22 +45,34 @@ def _maybe_audit_enforcement_on() -> None:
             logger.debug('[Desktop] startup audit_log failed: %s', e)
 
 
-def _check_bridge_auth(kind: str = 'desktop') -> bool:
-    """Verify the optional X-Bridge-Secret header.
+def _resolve_bridge_caller(kind: str = 'desktop'):
+    """Resolve the poll caller → ``(ok, user_id, key_id)``.
 
-    Behaviour mirrors routes.browser._check_bridge_auth:
-      * If TOFU_BRIDGE_SECRET is unset →
-        return True (auth disabled).
-      * Otherwise return True only on a timing-safe header match;
-        callers must abort(401) when this returns False.
+    Auth order (RWA P4a 约束②第三条):
+      * TOFU_BRIDGE_SECRET unset → open legacy ``(True, '', '')``;
+      * header matches the global secret → legacy super-user
+        ``(True, '', '')``;
+      * else the header is tried as a per-user API key carrying the
+        ``agents:bridge`` scope → ``(True, user_id, key_id)`` — the
+        agent's commands are then scoped to that user;
+      * otherwise rejected (callers must 401).
     """
     expected = (getenv_compat('TOFU_BRIDGE_SECRET') or '').strip()
     if not expected:
-        return True
+        return True, '', ''
     _maybe_audit_enforcement_on()
     provided = request.headers.get('X-Bridge-Secret', '')
     if provided and hmac.compare_digest(provided, expected):
-        return True
+        return True, '', ''
+    if provided:
+        try:
+            from lib.api_keys import validate_token
+            ctx = validate_token(provided)
+        except Exception as e:
+            logger.debug('[Desktop] bridge token validation failed: %s', e)
+            ctx = None
+        if ctx is not None and 'agents:bridge' in getattr(ctx, 'scopes', ()): 
+            return True, (getattr(ctx, 'user_id', '') or ''), ctx.key_id
     try:
         audit_log('bridge_auth_fail',
                   kind=kind,
@@ -72,7 +84,13 @@ def _check_bridge_auth(kind: str = 'desktop') -> bool:
         logger.debug('[Desktop] audit_log bridge_auth_fail failed: %s', _aerr)
     logger.warning('[Desktop] bridge auth rejected from %s on %s (header=%s)',
                    request.remote_addr, request.path, 'present' if provided else 'missing')
-    return False
+    return False, '', ''
+
+
+def _check_bridge_auth(kind: str = 'desktop') -> bool:
+    """Back-compat wrapper — see :func:`_resolve_bridge_caller`."""
+    ok, _uid, _kid = _resolve_bridge_caller(kind)
+    return ok
 
 
 def _bridge_unauthorized():
@@ -112,7 +130,8 @@ from lib.desktop import (  # noqa: F401,E402
 
 @desktop_bp.route('/api/desktop/poll', methods=['POST'])
 async def desktop_poll():
-    if not _check_bridge_auth('desktop'):
+    _auth_ok, _bridge_user, _bridge_key = _resolve_bridge_caller('desktop')
+    if not _auth_ok:
         return _bridge_unauthorized()
     record_poll()
 
@@ -134,7 +153,8 @@ async def desktop_poll():
     v1 = True
     if isinstance(agent_frame, dict) and agent_frame.get('agent_id'):
         agent_id = str(agent_frame['agent_id'])
-        register_agent(agent_id, agent_frame)
+        register_agent(agent_id, agent_frame,
+                       user_id=_bridge_user, key_id=_bridge_key)
         v1 = False
     else:
         note_v1_poll()
@@ -142,7 +162,8 @@ async def desktop_poll():
     # 2) Long-poll for pending commands. Async-native wait releases the worker
     #    thread for the window (see lib.desktop.bridge.take_pending_commands_async)
     #    and hands the agent a command the instant it is queued.
-    pending = await take_pending_commands_async(agent_id=agent_id, v1=v1)
+    pending = await take_pending_commands_async(
+        agent_id=agent_id, v1=v1, user_id=_bridge_user)
     if pending:
         logger.info('[Desktop] sending %d commands to agent %s: %s',
                     len(pending), agent_id or 'v1(legacy)',

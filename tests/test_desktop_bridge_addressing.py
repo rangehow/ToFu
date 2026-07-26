@@ -266,7 +266,8 @@ class TestNeuters:
 
     def test_neuter_enqueue_guard_queues_unaddressed_multi(self, monkeypatch):
         """剥掉入队检查 → 多在线未寻址命令进队列等幸运儿 = 入队闸承重."""
-        monkeypatch.setattr(db, '_addressing_enqueue_error', lambda _t: None)
+        monkeypatch.setattr(db, '_addressing_enqueue_error',
+                            lambda *a, **k: None)
         _register('agent-A')
         _register('agent-B')
         # 真实 send 会阻塞等待结果;趁它阻塞时断言命令已入队,再解决掉释放线程
@@ -274,8 +275,11 @@ class TestNeuters:
                              args=('desktop_list_files', {'path': '~'}),
                              kwargs={'timeout': 2})
         t.start()
-        time.sleep(0.2)
         try:
+            # 轮询等待入队(高负载机上固定 sleep 是竞态)
+            deadline = time.time() + 2
+            while db.pending_commands_count() == 0 and time.time() < deadline:
+                time.sleep(0.02)
             assert db.pending_commands_count() == 1
         finally:
             with db.command_queue_lock:

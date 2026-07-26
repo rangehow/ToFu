@@ -111,8 +111,11 @@ class TestStreamedProcess:
         outcome = box['o']
         assert outcome['timed_out'] is True
         assert outcome['killed_tree'] is True
-        time.sleep(0.3)
+        # 轮询等待子进程消亡(高负载机上固定 sleep 是竞态)
+        deadline = time.time() + 5
         for pid in child_pids:
+            while psutil.pid_exists(pid) and time.time() < deadline:
+                time.sleep(0.05)
             assert not psutil.pid_exists(pid), f'orphan child survived: {pid}'
 
     def test_output_capped_and_truncated(self, proj):

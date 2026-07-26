@@ -1,7 +1,7 @@
 # Tofu 远程工作树代理(Remote Worktree Agent, RWA)设计稿
 —— Studio 无缝改本地代码(Windows / macOS),不共享文件系统
 
-> **状态:IN PROGRESS — 方向已拍(2026-07-25「意图共享,非文件系统共享」);§8 五项实施拍板已落(2026-07-26,全部按建议项:2A+3A+4A+5A+6A);P0–P3 已落地;① 号先行票已闭环(`c1579401`)。**
+> **状态:IN PROGRESS — 方向已拍(2026-07-25「意图共享,非文件系统共享」);§8 五项实施拍板已落(2026-07-26,全部按建议项:2A+3A+4A+5A+6A);P0–P3 + P4a(后端半)已落地;① 号先行票已闭环(`c1579401`)。**
 > Board epic:`pt_7977b1e823454e5b`。
 > 关联潜伏 bug(先行票,不进本设计批):`pt_08a6d1afe79c4dfd`(desktop wire 前缀错配,§2.3)。
 > 本稿全部事实性结论均于 2026-07-25 在盘上逐文件核实(§2 标注文件:行号)。
@@ -265,7 +265,7 @@ Body: {
 | **P1** ✅ | **Agent 项目命令集 + 安全网**(已落地 2026-07-26):`project_*` 七命令、share_roots 路径校验、snapshot-before-write、freshness 门(重读刷新令牌) | `lib/desktop_agent/_project.py`(新)、`_dispatch.py`、`config.py` | 越界路径全拒(含符号链接/兄弟前缀/绝对路径);快照可回滚;外部改动后写入被拒、重读后放行;`.tofu` 对项目工具不可见 |
 | **P2** ✅ | **run_command 平价**(已落地 2026-07-26):流式分片、进程树 kill、删除目标锁根、超时放宽 | `lib/desktop_agent/_exec.py`、`_project.py`、`_run.py`、`bridge.py`(流帧) | 长命令分片按 seq 稠密上行;kill 后子进程全灭;`rm -rf ~` 类被拦;30s+ 命令不再误杀 |
 | **P3** ✅ | **工具投影 + 执行路由**(已落地 2026-07-26):`ToolContext.project_remote`、`_handle_project_tool` 路由、`ToolSpec('desktop')` 补 `write_tools` 声明(关批准门洞) | `_spec.py`、`_build.py`、`handlers/project.py`、`lib/desktop/remote.py`(新) | 同名 schema 不变仅描述提示;远程 `write_file` 按 agent_id 寻址;总闸 off 字节不变;latch-clear 一次性;批准门洞闭合 |
-| **P4** | **入口与前端**:`agent_run` `project: remote:<agent>:<root>` 语法、每用户 bridge token 颁发(Settings → Devices)、项目选择器列出在线 agent 与共享根 | `routes/api_v1/agent_run.py`、`routes/api_v1/desktop.py`、前端 | 远程项目挂载后全工具集可用;token 吊销后 agent 立即 401;离线 agent 在选择器灰显 |
+| **P4**(P4a ✅ 后端半 2026-07-26 / P4b 前端待) | **入口与前端**:每用户 bridge token ✅(api_keys scope `agents:bridge`)、poll 认证+用户作用域投递 ✅、`agent_run` `remote:<agent>:<root>` 绑定 ✅、status 按用户过滤 ✅ / token 颁发 UI(Settings → Devices,P4b)、项目选择器列出在线 agent 与共享根(P4b) | `routes/api_v1/agent_run.py`、`routes/desktop.py`、`bridge.py`、`remote.py` ✅ / `routes/api_v1/desktop.py`、前端(P4b) | 远程项目挂载后全工具集可用 ✅(后端链);token 错/无 scope 即 401 ✅;跨用户投递 fail-closed ✅;离线 agent 在选择器灰显(P4b) |
 | **P5** | **Project Brain 集成**:远程根纳入 write_set 声明,多会话并发写同一本地项目时 dispatch 串行化 | `lib/conversations/`、board | 两会话同根 write_set 重叠 → 不同时 dispatch;不同根不互斥 |
 
 - **P0 落地注记(2026-07-26):** 注册帧/注册表/心跳/寻址谓词(`_deliverable`)/入队闸
@@ -308,6 +308,19 @@ Body: {
   **顺带抓获潜伏 bug(独立批 `c1685520`):** `_build_rg_cmd/_build_grep_cmd` 的
   `list(IGNORE_DIRS)[:30]` —— set 超 30 条后按进程哈希种子随机丢排除项,
   node_modules 以 ~40% 概率泄回 grep 结果(P1 套件首个行为断言暴露)。
+
+- **P4a 落地注记(2026-07-26,后端半):** ①bridge token 复用 api_keys 生命周期
+  (新 scope `agents:bridge`,零新表;Settings→Keys 已可管)——拍板 5A 的 Devices 页
+  属 P4b;②poll 认证顺序:全局 secret(legacy 超户)→ per-user token → 401,
+  user_id 打进注册表;③命令用户作用域 fail-closed:`_deliverable` 首闸、入队闸
+  按 caller 过滤在线集、回退档只数自己的 agent、user_id 永不上 wire;
+  ④`agent_run` config 别名 `remote='<agent>:<root>'`(在线/root 已声明/用户匹配
+  三重校验,拒则诚实 400)+ `audit_log`;⑤远程绑定隐含 project_enabled
+  (model_config 派生);⑥status 端点按 caller user 过滤。
+  套件 `tests/test_remote_worktree_entry.py` **29 测**。
+  **过程事故(共享树):** sibling 的 `lib/llm_sanitize/_gateway.py` 破窗 WIP
+  (IndentationError)两度翻转阻断全仓 import;无 live peer,已 `git stash` 保管
+  (stash@{0},恢复 `git stash pop`),树恢复后全绿。
 
 工作量估算:P0 ~250 行 / P1 ~400 行 / P2 ~200 行 / P3 ~150 行 / P4 ~300 行+前端 / P5 ~80 行,
 全部为薄接缝改动,无新框架。

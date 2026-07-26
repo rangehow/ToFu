@@ -103,7 +103,10 @@ from lib.tasks_pkg.orchestrator._vu_startup import (
 from lib.tasks_pkg.orchestrator._prefetch import start_prefetches
 from lib.tasks_pkg.orchestrator._context_inject import inject_context_and_emit_chips  # noqa: E501
 from lib.tasks_pkg.orchestrator._tool_history import restore_tool_history
-from lib.tasks_pkg.orchestrator._memory_prefetch import maybe_run_memory_prefetch
+from lib.tasks_pkg.orchestrator._memory_prefetch import (
+    await_memory_prefetch,
+    maybe_run_memory_prefetch,
+)
 from lib.tasks_pkg.orchestrator._post_loop import (
     finalize_after_loop,
     handle_task_fatal,
@@ -514,6 +517,17 @@ def run_task(task: dict[str, Any]) -> None:
         # ★ 禁止添加 anti-loop / 预算警告 / _force_stop 等机制。
         #   不允许在运行时向 messages 注入任何 [SYSTEM NOTE] 或 [SYSTEM:] 消息来
         #   干扰模型的正常生成。详见 max_tool_rounds 注释。
+
+        # ── Join the background memory prefetch (epic pt_e92d3be4) ──
+        #   Section 3.5 SPAWNS the BM25 + cheap-LLM rerank instead of running
+        #   it inline, so it overlaps the turn prep above rather than adding
+        #   its 800 ms deadline to TTFT. It mutates `messages` in place, so it
+        #   has to land BEFORE the stream loop serializes them — this is the
+        #   last point where that is still true. The wait is BOUNDED: on
+        #   overrun the turn proceeds with no injection, because a late write
+        #   into a body already on the wire is worse than a missing advisory
+        #   memory. No-op when nothing was spawned.
+        await_memory_prefetch(task)
 
         _loop_exit_reason = 'max_rounds_exhausted'  # ★ DIAGNOSTIC: track why the loop ended
         _abort_detected_phase = None  # ★ Track exactly WHEN abort was detected

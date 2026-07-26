@@ -1,6 +1,12 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续19) — RWA P4a 落地:每用户 bridge token + 命令用户作用域 + agent_run remote 绑定(commit 见下,16 文件;新套件 29/29,十环 **280/280**,宽环 98/98,collect **9698** 0 err)
+- **约束②第三条(防 relay 跨用户投递)全链:** ①bridge token 复用 api_keys 生命周期(新 scope `agents:bridge`,零新表);②poll 认证顺序:全局 secret(legacy 超户,user_id='')→ per-user token(validate_token + scope)→ 401,user_id/key_id 打进注册表;③命令作用域 fail-closed:`_deliverable` 首闸用户匹配、入队闸按 caller 过滤在线集、单 agent 回退档只数自己的 agent、user_id 永不上 wire(legacy 投影 `{id,type,params}` 逐字节不变,有钉);④执行链 user 传递:`_handle_desktop_tool`(simple_call 闭包,swarm 同款)+ 远程项目路由均传 `task['_userId']`。
+- **agent_run 入口:** config 别名 `remote='<agent_id>:<root>'` → `validate_remote_binding`(在线/root 已声明/用户匹配三重校验,拒则诚实 400)+ audit_log;远程绑定隐含 project_enabled(`model_config._resolve_model_config` 派生,总闸 off 字节不变);status 端点按 caller user 过滤。
+- **过程事故(共享树,如实三连):** ①sibling 续18 刚宣布 gateway 阻塞解除,`_gateway.py` **再度破窗**(稳定 IndentationError,无 live peer)——`git stash` 保管 WIP(stash@{0},含恢复指引),树即恢复;②自摆乌龙两处:绑定校验测试忘开总闸、`_online_ids_locked` 回退档未按用户过滤(alice 视角把 bob 也数进在线集)——测试抓回;③mock 签名三连跟不上生产函数长出 `user_id` 参数(routing/parity/NEUTER lambda,最后一个是 `*a` 不接关键字,`PytestUnhandledThreadExceptionWarning` 供出真凶)。
+- **边界:** token 颁发 UI(Settings→Devices)+ 项目选择器远程分组 + 流帧 UI 渲染属 **P4b 前端片**,下一派发;agent_run 绑定即时生效(注册表是在线的);`TOFU_REMOTE_WORKTREE` 总闸默认关。
+
 ### 2026-07-26(续18) — pt_d42e7028869e492b 收口:gateway 阻塞已由 sibling 解除,全仓 collect 从 48 err 恢复到 **9698 收集 0 错误**(零代码改动,纯核实 + 交接)
 - **票的范围就是「阻塞」本身,不是 gateway 功能。** 我在 P6 批次里发现 `lib/llm_sanitize/_gateway.py` 处于未提交的破损状态(IndentationError),导致全仓 `--collect-only` 报 48 errors、`test_request_inspector.py` 13 红;当时 stash A/B 实证与我的改动无关,遂开票交由持有 gateway epic 的会话处置。
 - **本轮核实(三条全过):** ①`py_compile` 通过;②`git status` 该文件干净(sibling 已提交 `7bc05422`);③全仓 collect **9698 收集 0 错误**。当初被带红的检视器 6 套件复跑 **45/45**。

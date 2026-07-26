@@ -41,11 +41,15 @@ async def desktop_status():
         list_agents,
         pending_commands_count,
     )
+    from .auth import current_auth
+    _auth = current_auth()
+    _uid = (_auth.user_id
+            if _auth and getattr(_auth, 'user_id', '') else None)
     return jsonify({
         'connected': is_desktop_agent_connected(),
         'last_poll': last_poll_time(),
         'pending_commands': pending_commands_count(),
-        'agents': list_agents(),
+        'agents': list_agents(user_id=_uid),
     })
 
 

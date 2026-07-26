@@ -1,6 +1,35 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续52) — cache-cost A 判决:opus-5 体缓存失效**归因于上游模型线,非我方标记也非 key** —— 靠一组零歧义的同 key 对照实验坐实,epic `pt_a475804a661042dd` 挂 question-block(零代码变更;数据源 7 天 **17,644 轮**含 `_wire_markers` 全量)
+### 2026-07-26(续53) — SSE「早断家族」epic `pt_b00945098403477c` 收口:票面三条主张**三条全部实测否决**,零数据丢失、零代码变更——续51 教训的第二次实证(我昨天开的票,又被我自己推翻)
+
+- **这张票和 SyncDrift 是同一个错误:我盯着日志条数和那句吓人的措辞,没去核对代码和基线。** 三条独立核查,全错:
+  | 票面主张 | 实测结果 | 判决 |
+  |---|---|---|
+  | ①114 条「早断」**全部 INFO 级,mislevel 应升 WARNING** | `routes/chat.py:1246` **早已分级**:`_events_sent==0`→warning,否则→info。今天 4 条真零事件**已是 WARNING**。127/65/120 三天基线 = 慢速波动的**慢性噪声**,非新回归 | ❌ 误报 |
+  | ②16 条「跑满 7200s 且 task 仍 running」= **数据可能丢失** | 这 16 条 `events_sent` 全部 **54~8411,零条为 0**(0 事件 7200s 的恰为 0)。**已发几千事件的流被掐断 ≠ 丢数据**——轮询兜底接着播。真正危险的是「0 事件就被掐」(那 4 条),早已是 WARNING | ❌ 误报 |
+  | ③`tool_dispatch/_pipeline.py:447` 抛 shutdown RuntimeError → run_task FATAL + 误导性「检查 API key」 | 发射方**不是** _pipeline——`lib.token_counter.tiktoken_counter` 等 **9 个模块**,全部已是 WARNING/INFO;0 条带 FATAL,0 条在 _pipeline,0 条带「API key」。是**解释器关机竞态**跨模块浮现,本就被正确打日志,无需改 | ❌ 误报 |
+- **票面③'「superseded by newer task 丢 1010-5016 字符」是唯一看着像真 bug 的——逐条对账后,81/81 全 OK,零丢失。** 机制:`_sync.py` 的 freshness guard 拦的是**重复写**。同一任务在 `_persist`(00:11:27)已把**逐字节相同的 1010 字**写进会话,`done` 事件又触发第二次同步,被 guard 拦下并警告「never aborted」。**81 条里,每一条都能在同一 task_id 下找到一条早先的 `Synced result content=Nchars`,且 N 完全相等。** 「丢弃」的是重复写,不是内容。
+- **值得留的、真正的小缺陷(防御性,不在流血):** `_sync.py:491` 的「never aborted」分支在措辞上把「内容被丢」说得比实际重——实际是「内容已持久,拦掉的是一次重复写」。且这个分支大量由 `done` 事件二次触发的重复同步喂出来。两个可选改进(未做,记录下来供 P6 参考):①措辞从「discarded」改成「already persisted, duplicate write skipped」;②在 `done` 二次触发前查一下「本次内容是否已同步」从源头消音。**注意别好心改成降级为 debug** —— 这个分支设计的本意就是抓「从未 abort 却不再是最新」这种**不该发生**的形状,今天没发生不代表它该安静。
+- **给后人的教训(连续第二天同一坑,已成家族):** 一张「日志里很多 X」的票,正确动作是**先问三个问题再动手**:①这段日志是什么时候开始存在的(`git log -S`)?②代码里有没有现成的分级/护栏把它处理掉了?③条数和昨天/前天比是真异常还是慢速波动?我两次都跳过了,代价是两张 P0 级的误导票。**日志条数 ≠ 缺陷体量,措辞吓人 ≠ 真在流血。** 这条和续49「比对 snapshot 先按 kind 分层」、续51「比对先按形状分层」是同一个根:**先分层、先查史、先对账,再下结论。**
+
+- **★ 开票时我写的假设「消息体标记被 openai 兼容翻译层丢弃」——自查后否决,幸亏没挂人就先查。** 三步逐层排除,每步都推翻了一个我自己的推断:
+  1. **「我们没在体上打标记」→ 否决。** 生产 `_wire_markers` 实录:opus-5 与 aws(缓存健康的对照组)布局**完全同构** —— `count=4`(sys 块 ×2 @idx2,3 + tools + 体断点)、体断点带 `ttl=''`、`body_msg_blocks` 非空。1278/1555 主体轮**确实带体断点**。
+  2. **「体标记无效」→ 否决(反向证据)。** opus-5 **内部 A/B**:带体断点 1278 轮命中率 **52.6%**、不带 277 轮仅 **19.4%**(命中到体 28.8% vs 10.5%)。标记是**有用**的,拆掉会更糟 —— 票面②「把缓存目标折进 system 尾部块」的方案方向**是错的,不要做**。
+  3. **kimi 打 0 个标记却命中 87.7%** → 该网关线对 kimi 走**自动前缀缓存**(实测 72% 的连续轮 `cr ≈ 上一轮 pt`,即整条前缀自动缓存);opus-5 只有 12% 呈此形态。两条线的缓存机制**根本不同**,不是同一套里的参数差异。
+- **★ 判决性对照(同一把 key,不同模型,样本充足 —— key/端点/我方代码全部被排除):**
+  | key | kimi-k3 | opus-5 | aws 4.7 / 4.8 |
+  |---|---|---|---|
+  | sankuai_key_0 | **5%** (2324 轮) | **42%** (563 轮) | — |
+  | sankuai_key_1 | **5%** (2970 轮) | **40%** (682 轮) | 19% / 35% |
+  | sankuai_key_2 | **3%** (1690 轮) | **52%** (310 轮) | — |
+  (数字 = `cache_read` **完全归零**的主体轮占比。) 同 key 上 kimi 3-5% vs opus-5 40-52%,**差距一个数量级** —— 客户端在同一进程、同一 key、同一标记布局下发出的请求,结局只由**模型线**决定。
+- **归零形态排除清单(逐条实测,勿重跑):** 666 个归零轮中 **644 轮同 key**、**666 轮上一轮也是 opus-5**(非混线)、**662 轮 gap<60s**(非 TTL);其中 **127 轮是「同 key + 上轮暖 + gap<300s」** —— 无法用 TTL/换 key/模型切换任何一条解释。`tag`(轮号 R2/R8/R10…)分布上归零率均匀 37-54%,**不集中在任何一条代码路径**;`attempt=1` 占 98%(1478/1508),**非重试路径**。形态 = **每轮独立的伯努利式失败**,这是上游/网关特征,不是客户端 bug 的形状。
+- **一条计划外的观察(留给后人,本票不追):** opus-5 任务内 prompt **大幅回落(>10%)的有 75/98 任务**,kimi 只有 **6/214**。但回落轮与正常轮的归零率**相同**(44% vs 43%),所以**回落不是归因**,只是同一上游不稳定的另一个投影。别把它当元凶。
+- **为什么必须挂人而不是自己修:** 三层排除后剩下的唯一变量在**上游**(网关如何为 yuju/opus-5 线实现缓存)。charter 明文禁止合成 A/B 测缓存;而生产数据已经把客户端侧全部排除干净 —— 我这边**没有可改的东西了**。已挂 question-block 给 owner 选路(问网关方 / 换线 / 接受现状并降级用量 / 只做 C+E)。
+- **同批可自主推进的(不受本票阻塞):** C 票(`pt_2cd7a29c`,标记布局按 conv 稳定)与 E 票(`pt_6ac5febf`,thinking 重建字节不稳)都是**纯客户端**、证据已闭环,可直接开工。
+
 ### 2026-07-26(续50) — 缓存成本三笔账算清,epic `pt_3616d93d519c49b4` 收口:量化完成,两个假设被实测反转(零代码变更;数据源 = 7 天 task_results.apiRounds **17,602 轮全量**,非抽样;中间产物 /tmp/cache_audit/*.json)
 ### 2026-07-26(续51) — SyncDrift「爆炸 555 倍」是**我自己开票时的误读**,epic `pt_d6bd611e584a4645` 收口:那不是回归,是**当天上线的探针本身**(零代码变更;纯取证 + 自我否证)
 

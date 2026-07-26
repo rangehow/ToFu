@@ -1685,3 +1685,18 @@
 - **证据:** 新套件 `test_claude_unsigned_thinking_strip.py` 9/9(2 failing-first:剥离缺失时红;NEUTER=模拟修复前行为,致命形状上 wire 即红);parity 套件 NC 改为打**非 Claude 模型**(strip 之后 Claude wire 两形同被剥,NC 前提已变——这是预期修复不是 parity 回归),docstring 证伪断言已更正;`test_cache_content_freeze_non_claude` 7/7 无泄漏。
 - **`pt_8f6cbc753855415e` 代码部分(error 落库补 model):** 根因=`task['model']` 只在**首轮成功后**(_run.py 循环尾部)或 finalize 才盖戳,而 401/端点不可达等 dispatch 层失败在任何成功轮之前抛出 → `build_result_meta` 拿不到 model → metadata 只剩 `['finishReason','taskId']`。修法=`_run.py` Section 1 模型解析后立即 seed `task['model']`(回退换模型仍由 968 行原戳跟踪)。新套件 `test_error_result_model_metadata.py` 2/2:failing-first 驱动真 run_task + stub 首调即抛,复现生产形状(model=?);修后 metadata.model 正确落库;happy path 回归钉住。**归属粒度说明:** seed 记的是「请求的模型」;回退链末棒失败时(实测 yuju→kimi 双死)envelope 里有真凶,metadata 记请求模型——严格好于 NULL,更细的末棒归因留待需要时。
 - **ops 部分(重新登录 OAuth 槽)非代码可解,已挂 question-block 等 owner。**
+
+### 2026-07-26(续29) — i18n 单语分包**完成**:slice 2 落地,实测每个客户端省 37.9KB 压缩后 ≈ 首屏 9.4%(commit 见上,8 文件 +911/-26;14 套件 116 测全绿)
+- **这是 Epic-E sub-part 1 步骤③的最后一刀**,owner 拍 A(lang cookie)后的完整实现。前序:①t() 绊线(`4fbab4fa`)②boot-sync 形状守卫 ③slice 1 语言变服务端可见(cookie 镜像 + 白名单)。
+- **形状(硬约束,来自 boot-sync 守卫):** boot 语言**随首屏同步发且在核心 bundle 之前**(两者皆 defer,文档序决定执行序);另一种语言在 `setLanguage()` 内 fetch(用户主动动作,await 不可见)并 merge 进可变 `var _i18n`。
+- **机制五件:**
+  1. `lib/i18n_packs.build_full_pack_source()` —— 包是**全量 per-language i18n.js**(t()/setLanguage/_applyI18n/绊线/cookie 镜像全保留,只换字典块)。**边界不靠假设**:定位出的字典块必须**执行后等于**提取的字典,否则发射直接报错。
+  2. `build_bundle()` **先发射包再组装**:只有发射成功才把 i18n.js 排除出核心 bundle;**bundle 形状与 pack 状态在同一处原子更新**——「bundle 无 i18n.js 但无包可发」这个会把 t() 全灭的形状,在结构上不可达。
+  3. **发射 fail-open**:node 缺失/提取失败/往返闸跳闸 → bundle 照旧含 i18n.js(双语),一个 pack 标签都不发。坏包不可见,缺包只是「没拆」。
+  4. `index_page()` 注入 **pack 标签在 bundle 标签之前** + `__I18N_PACK_URLS__`(双语,供切换);HTML 缓存键含语言与 pack 标签。
+  5. `setLanguage()` 变 async:fetch 另一语言包 → **按条目并集 merge**(boot 语言的条目保留,切回不丢)→ 再重绘。fetch 失败仍切换:t() 逐键回退 zh,绊线把每个缺失变成可观测。`_onLanguageChange` 的所有重绘**链在 merge 之后**(会话列表/打开的聊天/paper/设置页),不再渲染「慢一拍的旧语言」。
+- **实测(brotli q9 = 生产实际编解码):** 双语 i18n.js 348.6KB raw→91.5KB;zh 全量包 192.3KB→**53.6KB**(en 194.1→51.9KB);**每客户端省 37.9KB 压缩 ≈ 首屏 ~402KB 的 9.4%**——比估算的 30.6KB 还好(生成同时剥掉了注释与第二语言的缩进)。
+- **证据纪律(本轮最硬的一条):** 新套件 `tests/test_i18n_pack_serving.py`(10 测)**驱动真实 flask_client 走真实 index_page**:boot 顺序、en 客户端拿 en 包(URL map 可以双语、**script 标签必须单语**)、恶意 cookie→zh、注入的 pack URL 真实存在、bundle 无字典、pack 带全函数、**merge 后双语俱在**(覆盖式 merge 会让切回渲染裸 key)、发射失败→双语 bundle 零 pack 标签、失败后备份态被恢复、**省的是磁盘上真实产物而非推算**。
+- **三处被套件自己抓住的测试 bug(全修,代码没错):** ①en 客户端的反向断言误匹配 URL map 里的 JSON(应只约束 script 标签);②包内条目是 `{zh:` 合法**无引号标识符键**而非 `{"zh":`;③esbuild 压缩后 `var _i18n={` 无空格——改断言**字典键字符串**(压缩不灭)。
+- **部署注意(与此前两刀同批):** 当前运行中的 server(17:05 启动)内存里是**旧 bundler 代码**——只会继续构建/下发**双语 bundle**,旧清理 regex 不会碰新 pack 文件,**不存在 split-without-pack 的危险窗口**。**重启后生效**:新 server 构建 split bundle + packs,按 cookie 下发。
+- **验收三条全兑现:**(a) sizing 复测绿 + 服务层实测 37.9KB;(b) en 下无缺失键——往返闸逐键保证 + merge 测试实证 t() 返回英文;(c) boot_sync 5/5、tripwire 7/7 保持绿。

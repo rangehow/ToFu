@@ -100,7 +100,32 @@ def _read_events(task_id: str) -> list:
         except (TypeError, ValueError) as e:
             logger.debug('[RequestInspector] row skipped for task=%s: %s',
                          task_id[:8], e)
-    return out
+    return _rebuild_snapshot_rows(out)
+
+
+def _rebuild_snapshot_rows(rows: list) -> list:
+    """Restore full ``messages``/``tools`` on delta-stored snapshot rows.
+
+    Storage is incremental (docs/DEBUG_PANEL_REDESIGN.md §10) but every
+    consumer of this module — the fold, the payload endpoint, the frontend —
+    sees the FULL payload, exactly as before. Rebuild is server-side and
+    total: a row that cannot be reconstructed is marked ``degraded`` by
+    ``rebuild_snapshots`` rather than silently truncated.
+    """
+    snap_idx = [i for i, r in enumerate(rows)
+                if r.get('type') == _SNAPSHOT]
+    if not snap_idx:
+        return rows
+    try:
+        from lib.tasks_pkg.snapshot_delta import rebuild_snapshots
+        rebuilt = rebuild_snapshots([rows[i] for i in snap_idx])
+    except Exception as e:
+        logger.warning('[RequestInspector] snapshot rebuild failed (serving '
+                       'rows as stored): %s', e)
+        return rows
+    for i, payload in zip(snap_idx, rebuilt):
+        rows[i] = dict(rows[i], payload=payload)
+    return rows
 
 
 def _snapshot_kind(payload: dict) -> str:
@@ -190,6 +215,9 @@ def fold_request_log(task_id: str) -> dict:
                 if p.get('agentId'):
                     row['agentId'] = p['agentId']
                     row['agentRole'] = p.get('agentRole') or ''
+                if p.get('degraded'):
+                    row['degraded'] = True
+                    row['degradedReason'] = p.get('degradedReason') or ''
                 requests.append(row)
         elif et == _ROUND_USAGE:
             u = p.get('usage') or {}
@@ -262,7 +290,7 @@ def get_request_payload(task_id: str, round_num, turn: str = '') -> dict | None:
     if best is None:
         return None
     e, p = best
-    return {
+    out = {
         'taskId': task_id,
         'roundNum': p.get('roundNum'),
         'ts': e['ts_ms'],
@@ -273,6 +301,12 @@ def get_request_payload(task_id: str, round_num, turn: str = '') -> dict | None:
         'messages': p.get('messages') or [],
         'tools': p.get('tools') or [],
     }
+    # §10.3: a round that could not be exactly reconstructed says so — the
+    # UI must never present a partial rebuild as the real request.
+    if p.get('degraded'):
+        out['degraded'] = True
+        out['degradedReason'] = p.get('degradedReason') or ''
+    return out
 
 
 def list_conv_tasks(conv_id: str, limit: int = 15) -> dict:
@@ -321,9 +355,6 @@ def list_conv_tasks(conv_id: str, limit: int = 15) -> dict:
     except Exception as e:
         logger.warning('[RequestInspector] task_results read failed for '
                        'conv=%s: %s', (conv_id or '')[:8], e)
-    tasks = sorted(rows.values(), key=lambda x: x['createdAt'] or 0,
-                   reverse=True)[:limit]
-    ids = [t['taskId'] for t in tasks]
     tasks = sorted(rows.values(), key=lambda x: x['createdAt'] or 0,
                    reverse=True)[:limit]
     # Swarm sub-agent rows (P4): sub-agents persist their LLM-request

@@ -186,6 +186,8 @@ SSE `messages_snapshot` **追加**进轮次表(不再整体覆盖);`_debugCache`
 | P2 | `/api/v1/tasks/<id>/requests` 元数据端点 + 右侧抽屉 + 请求列表 UI | 待开工 |
 | P3 | 气泡 `</>` 锚点 + 前缀折叠增量高亮 | 待开工 |
 | P4 | **独立 epic**:endpoint/swarm 调用点补发 snapshot(覆盖 `endpoint/_run`、planner/critic、swarm agent LLM 调用),摘除 uncovered chip | 待开工 |
+| **P5** | **数据面重构(owner 2026-07-25 拍板,最高优先)**:snapshot 改增量存储(§10)+ 保留期 30 天 + 一次性迁移带逐字节校验(§11) | **本批** |
+| P6 | 工具行就地展开入口(每行一枚 `</>`,默认展示增量)+ 上下文球内联输入框右侧 + 抽屉降为全文查看器 | 待开工 |
 
 ## 9. 测试与守卫
 
@@ -193,3 +195,87 @@ SSE `messages_snapshot` **追加**进轮次表(不再整体覆盖);`_debugCache`
 - jsdom:同 task 两轮 snapshot 追加保留(不覆盖)、kind 路由(request→轮次表/state→镜像槽)、kind 缺失的旧事件按 request 兼容;
 - 回归:`test_frontend_debug_preserve_open` / `test_frontend_debug_brain_badge` / `test_frontend_debug_approx_chip` / `test_frontend_sse_dispatch`(#22)/ `test_event_emit` / `test_wire_messages_fidelity` / `test_empty_assistant_ghost_wire` / `test_persist_vertical_block_relocate`;
 - 生效边界:后端随提交+重启生效;前端走内容哈希 bundle,需重启 + 硬刷。
+
+---
+
+## 10. 增量存储格式(P5,owner 2026-07-25 拍板——格式冻结)
+
+### 10.1 为何必需(实测数据,不是推测)
+
+当前每轮都整包重存全量 `messages` + 全量 `tools`。单任务 `efb479f6` 实测:
+
+| 项 | 实测值 |
+|---|---|
+| 全量存储 | **123.2 MB**(167 轮快照) |
+| 增量存储(messages diff + tools 去重) | **1.9 MB** |
+| 压缩比 | **65.7×** |
+| `tools` 数组 | 每轮固定 **201,898 字节**、167 轮**逐字不变地重存 167 遍**(≈33 MB 纯冗余) |
+| `messages` 每轮新增 | 通常 **2 条**,增量 2～28 KB;而整包是 180～294 KB |
+| 全库占比 | `messages_snapshot` 占 `task_events` 总字节的 **92.4%**(均值 403 KB/条) |
+
+结论:**单做 messages 增量不够** —— tools 的 33 MB 冗余会把压缩比从 65× 拉到 4×。
+三类冗余必须同时消除。
+
+### 10.2 四条格式要点(**冻结**)
+
+**① `tools` 按内容哈希去重,全任务共用一份**
+
+- 首次出现某 `toolsHash` 时,单独落一行 `tools_dict` 事件:
+  `{type:'tools_dict', toolsHash, tools:[…]}`;
+- 此后每轮 snapshot **只带 `toolsHash` 引用**,不带 `tools` 数组;
+- 工具集真变了(哈希变)才落新的一份——实测一个任务通常全程只有 1～2 份。
+
+**② `messages` 增量**
+
+```
+{ kind, roundNum, turn, model, params,          // 元数据(原样)
+  baseRound,        // 基线轮(上一条同 task 同 turn 的 snapshot)
+  prefixLen: K,     // 与基线共享的前 K 条
+  prefixHash,       // 前 K 条的 canonical 哈希(校验用)
+  newMessages: […], // 只存第 K+1 条起的新消息
+  messageCount: N,  // 重建后应有的总条数(校验用)
+  toolsHash, toolsCount, approxTokens }
+```
+
+- `approxTokens` / `messageCount` / `toolsCount` **写死在行里**——列表页(fold)不需要重建就能渲染;
+- 共享前缀用**与前端同一套语义**(canonical JSON 位置对齐求最长共享前缀),不造第二套。
+
+**③ 重复轮次不落整包**
+
+实测大量 `newMessages=[]`(增量 2 字节)的行——同一轮的重复发射。
+`prefixHash` 与前一条相同且 `newMessages` 为空 → 只落一行空记录
+(`prefixLen == messageCount`,无 `newMessages` 字段),绝不再存一遍整包。
+
+**④ 回放 API 形状不变**
+
+`GET /api/v1/tasks/<id>/requests/<round>` 依旧返回**完整重建后的报文**。
+重建在**服务端**完成(逐行回放:继承前 K 条 + 追加 newMessages),
+前端与任何其他消费方**完全不感知增量**——否则每个消费方自己拼,迟早不一致。
+
+### 10.3 重建失败 = 诚实降级,绝不假装
+
+`prefixHash` 对不上(基线行被 prune 删了 / 写入时崩溃留下空洞)→
+该轮标 `degraded: true` + `degradedReason`,返回已知的部分 + 前端挂诚实 chip
+「该轮无法精确重建」。**不允许静默返回不完整报文。**
+
+### 10.4 保留期分层(TTL)
+
+| 事件类 | 保留期 | 理由 |
+|---|---|---|
+| `delta` / `phase` / `tool_progress` 等流式噪声 | **6h**(不变) | 只为 SSE 断线重连窗口服务 |
+| `messages_snapshot` / `tools_dict` / `round_usage` / `round_start` / `round_end` | **30 天** | 请求检视器的结构事件;增量化后总量已降 20×+ |
+
+> 顺序硬约束:**先增量化、再延长保留期**。先延长会把 FUSE 上的 pg 拖坠。
+
+---
+
+## 11. 一次性迁移 + 校验(P5,不允许「迁完就删」)
+
+1. 逐任务扫 `messages_snapshot` 旧行 → 压成 §10.2 的增量形 + 抽出 `tools_dict`;
+2. **写入新行后、删旧行前**,逐轮调用重建函数,与原始整包报文**逐字节比对**
+   (canonical JSON 相等);任一轮不一致 → **该任务整体回滚、不删旧行、记 error 日志**;
+3. 幂等:已增量化的行(带 `prefixLen`)跳过;可重跑、可分批;
+4. 验收口径(owner 会重跑):
+   - `SELECT SUM(pg_column_size(payload)) … WHERE type='messages_snapshot'` 总字节**下降 ≥ 20×**;
+   - 随机 3 个历史任务逐轮调 `/requests/<round>`,与迁移前报文**逐字节一致**;
+   - 无法精确重建的轮次有**诚实标注**。

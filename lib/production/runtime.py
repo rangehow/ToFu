@@ -55,9 +55,10 @@ class ProductionRuntime:
 
     def __init__(self, kind: str, *, id_prefix: str, ttl: int = 3600,
                  push_channel: Optional[str] = None, error_source: str = '',
-                 log_label: str = ''):
+                 log_label: str = '', stall_timeout: float = 0):
         self.runtime = TaskRuntime(kind, ttl=ttl, push_channel=push_channel,
-                                   error_source=error_source)
+                                   error_source=error_source,
+                                   stall_timeout=stall_timeout)
         self.id_prefix = id_prefix
         self.log_label = log_label or kind
         self._dedup: dict[tuple, str] = {}

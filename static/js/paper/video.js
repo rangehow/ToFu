@@ -23,7 +23,7 @@ var _pvideo = {
   taskId: '',
   cursor: 0,
   pollTimer: null,
-  status: 'idle',          // idle|loading|generating|done|report_required|lookup_failed|error
+  status: 'idle',          // idle|loading|generating|done|report_required|lookup_failed|lost|interrupted|error
   errorText: '',
   progress: { done: 0, total: 0, phase: '' },
   result: null,            // poll done → {final_path, duration, scenes, narrated}
@@ -32,9 +32,34 @@ var _pvideo = {
   regenTaskId: '',
   ttsAvailable: true,
   defaultVoice: '',
+  // P-UX progress perception (docs/PAPER_MEDIA_UX_DESIGN.md §3.4)
+  pollFails: 0,
+  phases: [],
+  phaseIndex: 0,
+  genStartedAt: 0,
+  lastEventAt: 0,
+  tickTimer: null,
+  _rateFirstTick: 0,       // wall-clock of the first countable event (ETA)
+  _rateFirstDone: 0,
+  etaSec: 0,
+  _gridLoaded: false,      // scenes skeleton already fetched this run
 };
 // Poll cadence — a var (not const) so the JSDOM harness can shrink it.
 var _PVIDEO_POLL_MS = 1500;
+var _PV_POLL_FAIL_LIMIT = 5;
+
+function _pvResetRun() {
+  _pvideo.pollFails = 0;
+  _pvideo.phases = [];
+  _pvideo.phaseIndex = 0;
+  _pvideo.genStartedAt = Date.now();
+  _pvideo.lastEventAt = Date.now();
+  _pvideo._rateFirstTick = 0;
+  _pvideo._rateFirstDone = 0;
+  _pvideo.etaSec = 0;
+  _pvideo._gridLoaded = false;
+  _pvideo.scenes = [];
+}
 
 function _pvT(key, fallback) {
   return (typeof t === 'function') ? t(key) : (fallback || key);
@@ -49,6 +74,16 @@ function _pvEsc(s) {
 
 function _pvStopPoll() {
   if (_pvideo.pollTimer) { clearTimeout(_pvideo.pollTimer); _pvideo.pollTimer = null; }
+  _pvStopTick();
+}
+
+function _pvStartTick() {
+  if (_pvideo.tickTimer) return;
+  _pvideo.tickTimer = setInterval(_pvRenderActivity, 1000);
+}
+
+function _pvStopTick() {
+  if (_pvideo.tickTimer) { clearInterval(_pvideo.tickTimer); _pvideo.tickTimer = null; }
 }
 
 /** Entry point — called by _switchPaperTab('video'). */
@@ -78,8 +113,15 @@ async function _initVideoTab(force) {
         _pvideo.taskId = look.task_id;
         _pvideo.cursor = 0;
         _pvideo.status = 'generating';
+        _pvResetRun();
         _pvRender();
         _pvSchedulePoll();
+        return;
+      }
+      // P-UX4: previous run cut by a server restart — honest state.
+      if (look.interrupted) {
+        _pvideo.status = 'interrupted';
+        _pvRender();
         return;
       }
       if (look.result) {
@@ -111,19 +153,78 @@ function _pvSchedulePoll() {
   _pvideo.pollTimer = setTimeout(_pvPollOnce, _PVIDEO_POLL_MS);
 }
 
+/** Wall-clock-rate ETA (拍板 A — render/TTS phases only, never invented). */
+function _pvEtaTick(done, total) {
+  var now = Date.now();
+  if (!_pvideo._rateFirstTick) {
+    _pvideo._rateFirstTick = now;
+    _pvideo._rateFirstDone = done;
+  }
+  var elapsed = (now - _pvideo._rateFirstTick) / 1000;
+  var made = done - _pvideo._rateFirstDone;
+  if (made > 0 && total > done) {
+    _pvideo.etaSec = Math.round(elapsed / made * (total - done));
+  } else {
+    _pvideo.etaSec = 0;
+  }
+}
+
+function _pvConsumeEvent(ev) {
+  if (ev.type === 'phase_started') {
+    _pvideo.phases = ev.phases || _pvideo.phases;
+    _pvideo.phaseIndex = ev.phase_index || 0;
+    _pvideo.progress.phase = ev.phase || _pvideo.progress.phase;
+    _pvideo._rateFirstTick = 0;
+    _pvideo._rateFirstDone = 0;
+    _pvideo.etaSec = 0;
+    // The storyboard is on disk from here on — pull the grid skeleton.
+    if ((ev.phase === 'compose' || ev.phase === 'render') && !_pvideo._gridLoaded) {
+      _pvideo._gridLoaded = true;
+      _pvLoadScenes();
+    }
+    return true;   // phase changed → the stepper needs a full re-render
+  } else if (ev.type === 'phase') {
+    _pvideo.progress.phase = ev.phase || _pvideo.progress.phase;
+  } else if (ev.type === 'progress') {
+    _pvideo.progress = { done: ev.done || 0, total: ev.total || 0,
+                         phase: ev.phase || _pvideo.progress.phase };
+    if (ev.phase === 'narrate') _pvEtaTick(ev.done || 0, ev.total || 0);
+  } else if (ev.type === 'scene_done') {
+    _pvideo.progress = { done: ev.done || 0, total: ev.total || 0,
+                         phase: 'render' };
+    _pvEtaTick(ev.done || 0, ev.total || 0);
+    // P-UX3: light the scene up in the grid the moment it lands.
+    _pvLoadScenes();
+  }
+  // 'heartbeat' needs no handling — any event already bumps lastEventAt.
+}
+
+/** P-UX1 terminal backstop: 5 consecutive poll failures → lost state. */
+function _pvPollFail() {
+  _pvideo.pollFails++;
+  if (_pvideo.pollFails >= _PV_POLL_FAIL_LIMIT) {
+    _pvStopPoll();
+    _pvideo.taskId = '';
+    _pvideo.regenTaskId = '';
+    _pvideo.status = 'lost';
+    _pvRender();
+    return;
+  }
+  _pvSchedulePoll();
+}
+
 async function _pvPollOnce() {
   var tid = _pvideo.regenTaskId || _pvideo.taskId;
   if (!tid) return;
   try {
     var resp = await Api.motion.poll(tid, _pvideo.cursor);
-    if (!resp || !resp.ok) { _pvSchedulePoll(); return; }
+    if (!resp || !resp.ok) { _pvPollFail(); return; }
+    _pvideo.pollFails = 0;
+    _pvideo.lastEventAt = Date.now();
     _pvideo.cursor = resp.next_cursor != null ? resp.next_cursor : _pvideo.cursor;
+    var phaseChanged = false;
     (resp.events || []).forEach(function(ev) {
-      if (ev.type === 'phase') _pvideo.progress.phase = ev.phase || '';
-      if (ev.type === 'scene_done') {
-        _pvideo.progress = { done: ev.done || 0, total: ev.total || 0,
-                             phase: _pvideo.progress.phase };
-      }
+      if (_pvConsumeEvent(ev)) phaseChanged = true;
     });
     if (resp.done) {
       if (_pvideo.regenTaskId) {
@@ -138,26 +239,35 @@ async function _pvPollOnce() {
         _pvideo._doneTaskId = _pvideo.taskId;
         _pvideo.status = 'done';
         _pvideo.taskId = '';
+        _pvStopPoll();
         _pvRender();
         _pvLoadScenes();
       } else if (resp.status === 'aborted') {
         _pvideo.status = 'idle';
         _pvideo.taskId = '';
+        _pvStopPoll();
+        _pvRender();
+      } else if (resp.error && resp.error.kind === 'worker_lost') {
+        _pvideo.status = 'lost';
+        _pvideo.taskId = '';
+        _pvStopPoll();
         _pvRender();
       } else {
         _pvideo.status = 'error';
         _pvideo.errorText = (resp.error && resp.error.detail) ||
+          (typeof resp.error === 'string' ? resp.error : '') ||
           _pvT('paper.videoFailed', 'Video generation failed');
         _pvideo.taskId = '';
+        _pvStopPoll();
         _pvRender();
       }
       return;
     }
-    _pvRenderProgress();
+    if (phaseChanged) { _pvRender(); } else { _pvRenderProgress(); }
     _pvSchedulePoll();
   } catch (e) {
     console.warn('[Paper:Video] poll failed:', e);
-    _pvSchedulePoll();
+    _pvPollFail();
   }
 }
 
@@ -176,13 +286,14 @@ async function _videoGenerate(force) {
   _pvideo.quality = qualSel ? qualSel.value : _pvideo.quality;
   _pvideo.status = 'generating';
   _pvideo.progress = { done: 0, total: 0, phase: '' };
+  _pvResetRun();
   _pvRender();
   try {
     var resp = await Api.paper.videoStart({
       paper_hash: _pvideo.paperHash,
       lang: _pvideo.lang, voice: _pvideo.voice,
       narration: _pvideo.narration, burn_in: _pvideo.burnIn,
-      quality: _pvideo.quality,
+      quality: _pvideo.quality, force: !!force,
     });
     if (resp && resp.report_required) {
       _pvideo.status = 'report_required';
@@ -271,12 +382,14 @@ function _pvPhaseLabel(phase) {
   var map = {
     parse: 'paper.videoPhaseParse', storyboard: 'paper.videoPhaseStoryboard',
     narrate: 'paper.videoPhaseNarrate', compose: 'paper.videoPhaseCompose',
+    render: 'paper.videoPhaseRender',
     concat: 'paper.videoPhaseConcat', mux: 'paper.videoPhaseMux',
     burn_in: 'paper.videoPhaseBurnIn', regen: 'paper.videoPhaseRegen',
   };
   var fallbacks = {
     parse: 'Parsing subtitles', storyboard: 'Storyboarding',
     narrate: 'Voicing scenes', compose: 'Composing scenes',
+    render: 'Rendering scenes',
     concat: 'Joining scenes', mux: 'Mixing audio',
     burn_in: 'Burning subtitles', regen: 'Re-rendering scene',
   };
@@ -288,9 +401,49 @@ function _pvRenderProgress() {
   if (!el) return;
   var p = _pvideo.progress;
   var label = _pvPhaseLabel(p.phase);
-  el.textContent = (p.total > 0)
+  var line = (p.total > 0)
     ? label + ' ' + p.done + '/' + p.total
     : (label || _pvT('paper.videoStarting', 'Starting…'));
+  if (_pvideo.etaSec > 0 && (p.phase === 'render' || p.phase === 'narrate')) {
+    line += ' · ' + _pvT('paper.mediaEtaPrefix', '≈') + _pvFmtSec(_pvideo.etaSec);
+  }
+  el.textContent = line;
+}
+
+function _pvFmtSec(x) {
+  x = Math.max(0, Math.floor(x || 0));
+  return Math.floor(x / 60) + ':' + ('0' + (x % 60)).slice(-2);
+}
+
+/** Phase stepper (P-UX2) — vocabulary comes from the server's phase_started. */
+function _pvStepper() {
+  var phases = _pvideo.phases.length ? _pvideo.phases :
+    ['storyboard', 'narrate', 'compose', 'render', 'concat', 'mux'];
+  var cur = Math.max(_pvideo.phaseIndex, 1);
+  var h = '<div class="paper-stepper">';
+  phases.forEach(function(ph, i) {
+    var idx = i + 1;
+    var state = idx < cur ? 'is-done' : (idx === cur ? 'is-active' : '');
+    var mark = idx < cur ? '✓' : (idx === cur ? '●' : '○');
+    h += '<span class="paper-step ' + state + '">' +
+      '<span class="paper-step-mark">' + mark + '</span>' +
+      _pvEsc(_pvPhaseLabel(ph)) + '</span>';
+    if (idx < phases.length) h += '<span class="paper-step-sep"></span>';
+  });
+  return h + '</div>';
+}
+
+/** Liveness line (P-UX2): elapsed + last-activity; stale tint after 30s. */
+function _pvRenderActivity() {
+  var el = document.getElementById('videoActivityLine');
+  if (!el || _pvideo.status !== 'generating') return;
+  var elapsed = Math.max(0, Math.round((Date.now() - _pvideo.genStartedAt) / 1000));
+  var quiet = Math.max(0, Math.round((Date.now() - _pvideo.lastEventAt) / 1000));
+  el.classList.toggle('is-stale', quiet > 30);
+  el.textContent = _pvT('paper.mediaElapsed', 'elapsed') + ' ' + _pvFmtSec(elapsed) +
+    ' · ' + _pvT('paper.mediaLastActive', 'last activity') + ' ' + _pvFmtSec(quiet) +
+    (quiet > 30 ? ' — ' + _pvT('paper.mediaStillRunning',
+      'still running (this step can take minutes)') : '');
 }
 
 function _pvDegradeBanner() {
@@ -377,15 +530,41 @@ function _pvRender() {
 
   if (s.status === 'generating') {
     h += '<div class="paper-podcast-card">';
+    h += _pvStepper();
     h += '<div class="paper-podcast-progress">';
     h += '<span class="paper-podcast-spinner"></span>';
     h += '<span id="videoProgressLine">' +
       _pvEsc(_pvT('paper.videoStarting', 'Starting…')) + '</span>';
     h += '<button class="paper-podcast-btn paper-podcast-btn-ghost" onclick="_videoAbort()">' +
       _pvEsc(_pvT('paper.podcastAbort', 'Abort')) + '</button>';
-    h += '</div></div>';
+    h += '</div>';
+    h += '<div class="paper-media-activity" id="videoActivityLine"></div>';
+    // P-UX3: the grid fills in scene-by-scene as scene_done events land.
+    h += '<div class="paper-video-grid" id="paperVideoGrid"></div>';
+    h += '</div>';
     host.innerHTML = h;
     _pvRenderProgress();
+    _pvRenderActivity();
+    _pvStartTick();
+    _pvRenderSceneGrid(0);
+    return;
+  }
+
+  /* P-UX1/P-UX4 terminal honest states. */
+  if (s.status === 'lost' || s.status === 'interrupted') {
+    var lost = s.status === 'lost';
+    host.innerHTML =
+      '<div class="paper-podcast-hero">' +
+      '<div class="paper-podcast-hero-icon is-warn">' + _pvHeroIconSvg('warn') + '</div>' +
+      '<div class="paper-podcast-hero-sub">' + _pvEsc(lost
+        ? _pvT('paper.podcastLost', 'Task lost or connection dropped — the generation task can no longer be reached.')
+        : _pvT('paper.podcastInterrupted', 'The last generation was cut short by a server restart.')) + '</div>' +
+      '<div class="paper-podcast-actions">' +
+      '<button class="paper-podcast-btn paper-podcast-btn-ghost" onclick="_initVideoTab(true)">' +
+      _pvEsc(_pvT('paper.podcastRecheck', 'Re-check status')) + '</button>' +
+      '<button class="paper-podcast-btn" onclick="_videoGenerate(true)">' +
+      _pvEsc(_pvT('paper.podcastRegenerate', 'Regenerate')) + '</button>' +
+      '</div></div>';
     return;
   }
 
@@ -440,12 +619,14 @@ function _pvRenderSceneGrid(cacheBust) {
   var h = '<div class="paper-video-grid-title">' +
     _pvEsc(_pvT('paper.videoScenesTitle', 'Scenes — preview or re-render one')) +
     '</div><div class="paper-video-grid-row">';
+  var generating = s.status === 'generating';
   s.scenes.forEach(function(sc) {
     var sid = sc.scene_id;
     var regening = s.regenSceneId === sid;
     var src = Api.motion.sceneFileUrl(tid, sid) +
       (cacheBust ? '?v=' + cacheBust : '');
-    h += '<div class="paper-video-cell' + (regening ? ' is-regening' : '') + '">';
+    h += '<div class="paper-video-cell' + (regening ? ' is-regening' : '') +
+      (generating && !sc.has_video ? ' is-pending' : '') + '">';
     if (sc.has_video) {
       h += '<video class="paper-video-thumb" preload="metadata" muted ' +
         'src="' + _pvEsc(src) + '"' +
@@ -455,11 +636,13 @@ function _pvRenderSceneGrid(cacheBust) {
     }
     h += '<div class="paper-video-cell-text" title="' + _pvEsc(sc.text || '') + '">' +
       _pvEsc((sc.text || '').slice(0, 42)) + '</div>';
-    h += '<button class="paper-video-regen" data-scene="' + _pvEsc(sid) + '"' +
-      (regening ? ' disabled' : '') +
-      ' onclick="_videoRegenScene(\'' + _pvEsc(sid) + '\')">' +
-      (regening ? _pvEsc(_pvT('paper.videoRegening', 'Re-rendering…'))
-                : _pvEsc(_pvT('paper.videoRegen', 'Re-render'))) + '</button>';
+    if (!generating) {
+      h += '<button class="paper-video-regen" data-scene="' + _pvEsc(sid) + '"' +
+        (regening ? ' disabled' : '') +
+        ' onclick="_videoRegenScene(\'' + _pvEsc(sid) + '\')">' +
+        (regening ? _pvEsc(_pvT('paper.videoRegening', 'Re-rendering…'))
+                  : _pvEsc(_pvT('paper.videoRegen', 'Re-render'))) + '</button>';
+    }
     h += '</div>';
   });
   h += '</div>';

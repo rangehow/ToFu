@@ -20,9 +20,11 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from lib.log import get_logger
+from lib.production.heartbeat import heartbeat
 
 logger = get_logger(__name__)
 
@@ -33,6 +35,43 @@ __all__ = ['run_motion_task', 'run_scene_regen_task', 'run_topic_motion_task',
 def _emit(task: dict, event: dict) -> None:
     from lib.motion_video.runtime import _append_motion_event
     _append_motion_event(task, event)
+
+
+def _plan_phases(task: dict) -> list:
+    """The projected phase list for this job (P-UX2 stepper vocabulary).
+
+    Computed up-front from the task config; a mid-run degrade (no TTS slot)
+    keeps the narrate phase (marked degraded) and simply skips mux — the
+    frontend marks skipped steps done as later phase_started events arrive.
+    """
+    phases: list = []
+    topic = (task.get('topic') or '').strip()
+    scenes_path = task.get('scenes_path') or ''
+    srt_path = task.get('srt_path') or ''
+    if topic and not (scenes_path and os.path.isfile(scenes_path)) \
+            and not (srt_path and os.path.isfile(srt_path)):
+        phases.append('research')
+    if srt_path and os.path.isfile(srt_path):
+        phases.append('parse')
+    phases.append('storyboard')
+    if task.get('narration'):
+        phases.append('narrate')
+    phases += ['compose', 'render', 'concat']
+    if task.get('burn_in'):
+        phases.append('burn_in')
+    if task.get('narration'):
+        phases.append('mux')
+    return phases
+
+
+def _phase_started(task: dict, phases: list, phase: str) -> None:
+    try:
+        idx = phases.index(phase) + 1
+    except ValueError:
+        idx = 0
+    _emit(task, {'type': 'phase_started', 'phase': phase,
+                 'phase_index': idx, 'phase_total': len(phases),
+                 'phases': list(phases), 'started_at': time.time()})
 
 
 def _aborted(task: dict) -> bool:
@@ -168,6 +207,7 @@ def run_motion_task(task: dict) -> None:
     workdir = task['workdir']
     width, height = task['width'], task['height']
     fps = 30
+    phases = _plan_phases(task)
     try:
         os.makedirs(workdir, exist_ok=True)
         write_job_manifest(task, kind=task.get('kind') or 'scenes',
@@ -182,15 +222,17 @@ def run_motion_task(task: dict) -> None:
         if topic and not (scenes_path and os.path.isfile(scenes_path)) \
                 and not (task.get('srt_path') and os.path.isfile(task['srt_path'])):
             from lib.motion_video._recipe import build_scenes_from_topic
+            _phase_started(task, phases, 'research')
             _emit(task, {'type': 'phase', 'phase': 'research', 'topic': topic})
-            tl = build_scenes_from_topic(
-                topic, workdir, lang=task.get('lang') or 'zh',
-                max_scenes=int(task.get('max_scenes') or 8),
-                narration=bool(task.get('narration')),
-                voice=task.get('voice') or '', speed=task.get('speed'),
-                alignment=task.get('alignment') or 'loose',
-                abort_event=task.get('abort_event'),
-                emit=lambda ev: _emit(task, {'type': 'recipe', **ev}))
+            with heartbeat(task, lambda t, ev: _emit(t, ev), 'research'):
+                tl = build_scenes_from_topic(
+                    topic, workdir, lang=task.get('lang') or 'zh',
+                    max_scenes=int(task.get('max_scenes') or 8),
+                    narration=bool(task.get('narration')),
+                    voice=task.get('voice') or '', speed=task.get('speed'),
+                    alignment=task.get('alignment') or 'loose',
+                    abort_event=task.get('abort_event'),
+                    emit=lambda ev: _emit(task, {'type': 'recipe', **ev}))
             scenes_path = tl['scenes_path']
             task['scenes_path'] = scenes_path
             _emit(task, {'type': 'phase', 'phase': 'script_done',
@@ -205,6 +247,7 @@ def run_motion_task(task: dict) -> None:
         span = (0.0, 0.0)
         scenes_path = task.get('scenes_path') or ''
         if task.get('srt_path') and os.path.isfile(task['srt_path']):
+            _phase_started(task, phases, 'parse')
             with open(task['srt_path'], encoding='utf-8') as f:
                 entries = mv.parse_srt(f.read())
             if not entries:
@@ -239,6 +282,7 @@ def run_motion_task(task: dict) -> None:
             scenes = build_storyboard(entries)
         _write(os.path.join(workdir, 'scenes.json'),
                json.dumps(scenes, ensure_ascii=False, indent=1))
+        _phase_started(task, phases, 'storyboard')
         _emit(task, {'type': 'phase', 'phase': 'storyboard',
                      'scenes': len(scenes)})
 
@@ -260,12 +304,18 @@ def run_motion_task(task: dict) -> None:
                                          'overflow_s': e['overflow']}
                                         for e in manifest['scenes']]})
             else:
+                _phase_started(task, phases, 'narrate')
                 try:
-                    manifest = mv.synthesize_scene_narrations(
-                        scenes, audio_dir, voice=task.get('voice') or None,
-                        speed=task.get('speed'),
-                        alignment=task.get('alignment') or 'loose',
-                        abort_event=task.get('abort_event'))
+                    with heartbeat(task, lambda t, ev: _emit(t, ev), 'narrate'):
+                        manifest = mv.synthesize_scene_narrations(
+                            scenes, audio_dir, voice=task.get('voice') or None,
+                            speed=task.get('speed'),
+                            alignment=task.get('alignment') or 'loose',
+                            abort_event=task.get('abort_event'),
+                            on_scene_done=lambda i, n, sid: _emit(task, {
+                                'type': 'progress', 'phase': 'narrate',
+                                'done': i, 'total': n, 'unit': 'scene',
+                                'scene_id': sid}))
                 except mv.NarrationAborted:
                     _motion_runtime.finish(task_id)
                     return
@@ -296,6 +346,7 @@ def run_motion_task(task: dict) -> None:
         from lib.motion_video._scene_author import (author_scene,
                                                     scene_author_enabled)
         from lib.motion_video._template import render_scene_html
+        _phase_started(task, phases, 'compose')
         authoring = scene_author_enabled(task)
         scene_dirs: list[str] = []
         authored = 0
@@ -311,13 +362,14 @@ def run_motion_task(task: dict) -> None:
             if existing is not None:
                 html = existing
             elif authoring:
-                res = author_scene(sc, scene_dir, width=width, height=height,
-                                   duration=dur, scene_index=i,
-                                   total_scenes=total,
-                                   max_rounds=int(task.get('author_rounds') or 4),
-                                   token_budget=int(task.get('author_token_budget')
-                                                    or 60000),
-                                   abort_event=task.get('abort_event'))
+                with heartbeat(task, lambda t, ev: _emit(t, ev), 'compose'):
+                    res = author_scene(sc, scene_dir, width=width, height=height,
+                                       duration=dur, scene_index=i,
+                                       total_scenes=total,
+                                       max_rounds=int(task.get('author_rounds') or 4),
+                                       token_budget=int(task.get('author_token_budget')
+                                                        or 60000),
+                                       abort_event=task.get('abort_event'))
                 html = res['html']
                 if res['mode'] == 'authored':
                     authored += 1
@@ -337,6 +389,9 @@ def run_motion_task(task: dict) -> None:
             _write(index_path, html)
             sc['_duration'] = dur
             scene_dirs.append(scene_dir)
+            _emit(task, {'type': 'progress', 'phase': 'compose',
+                         'done': i, 'total': total, 'unit': 'scene',
+                         'scene_id': sc['id']})
             if _aborted(task):
                 _motion_runtime.finish(task_id)
                 return
@@ -348,12 +403,14 @@ def run_motion_task(task: dict) -> None:
             return
 
         # ── 5. render (bounded parallel) ──
+        _phase_started(task, phases, 'render')
         parallel = max(1, int(task.get('parallel') or 2))
         quality = task.get('quality') or 'standard'
         mp4s: dict[str, str] = {}
         failures: list[dict] = []
-        with ThreadPoolExecutor(max_workers=parallel,
-                                thread_name_prefix='mv-render') as pool:
+        with heartbeat(task, lambda t, ev: _emit(t, ev), 'render'), \
+                ThreadPoolExecutor(max_workers=parallel,
+                                   thread_name_prefix='mv-render') as pool:
             futures = {}
             for sc, scene_dir in zip(scenes, scene_dirs):
                 if _aborted(task):
@@ -403,10 +460,12 @@ def run_motion_task(task: dict) -> None:
                 f"({first['category']}): {first['detail']}")
 
         # ── 6. concat (silent) ──
+        _phase_started(task, phases, 'concat')
         ordered = [mp4s[sc['id']] for sc in scenes]
         silent_final = os.path.join(workdir, 'final_silent.mp4')
-        res = mv.concat_mp4s(ordered, silent_final,
-                             abort_event=task.get('abort_event'))
+        with heartbeat(task, lambda t, ev: _emit(t, ev), 'concat'):
+            res = mv.concat_mp4s(ordered, silent_final,
+                                 abort_event=task.get('abort_event'))
         if not res.get('ok'):
             raise RuntimeError('concat failed: ' + res.get('detail', ''))
         _emit(task, {'type': 'phase', 'phase': 'concat',
@@ -429,11 +488,13 @@ def run_motion_task(task: dict) -> None:
         # ── 7b. optional subtitle burn-in (re-encode) ──
         video_final = silent_final
         if task.get('burn_in'):
+            _phase_started(task, phases, 'burn_in')
             burned = os.path.join(workdir, 'final_burned.mp4')
-            br = mv.burn_in_subtitles(
-                silent_final, sidecar, burned,
-                fontsdir=task.get('burn_in_fontsdir') or '',
-                abort_event=task.get('abort_event'))
+            with heartbeat(task, lambda t, ev: _emit(t, ev), 'burn_in'):
+                br = mv.burn_in_subtitles(
+                    silent_final, sidecar, burned,
+                    fontsdir=task.get('burn_in_fontsdir') or '',
+                    abort_event=task.get('abort_event'))
             if not br.get('ok'):
                 raise RuntimeError('burn-in failed: ' + br.get('detail', ''))
             video_final = burned
@@ -443,14 +504,16 @@ def run_motion_task(task: dict) -> None:
         # ── 8. mux (optional) ──
         final_path = os.path.join(workdir, 'final.mp4')
         if narration:
+            _phase_started(task, phases, 'mux')
             wavs = [e['wav'] for e in manifest['scenes'] if e.get('wav')]
             narration_wav = os.path.join(workdir, 'audio', 'narration.wav')
-            cn = mv.concat_narrations(wavs, narration_wav)
-            if not cn.get('ok'):
-                raise RuntimeError('narration concat failed: '
-                                   + cn.get('detail', ''))
-            mx = mv.mux_audio_video(video_final, narration_wav, final_path,
-                                    abort_event=task.get('abort_event'))
+            with heartbeat(task, lambda t, ev: _emit(t, ev), 'mux'):
+                cn = mv.concat_narrations(wavs, narration_wav)
+                if not cn.get('ok'):
+                    raise RuntimeError('narration concat failed: '
+                                       + cn.get('detail', ''))
+                mx = mv.mux_audio_video(video_final, narration_wav, final_path,
+                                        abort_event=task.get('abort_event'))
             if not mx.get('ok'):
                 raise RuntimeError('mux failed: ' + mx.get('detail', ''))
             _emit(task, {'type': 'phase', 'phase': 'mux',
@@ -576,11 +639,12 @@ def run_scene_regen_task(task: dict) -> None:
             return
 
         mp4_path = os.path.join(scene_dir, f'{scene_id}.mp4')
-        r = _render_one(mv, scene_dir, mp4_path,
-                        quality=task.get('quality') or 'standard',
-                        width=task['width'], height=task['height'], fps=30,
-                        expect_dur=expect_dur,
-                        abort_event=task.get('abort_event'))
+        with heartbeat(task, lambda t, ev: _emit(t, ev), 'regen'):
+            r = _render_one(mv, scene_dir, mp4_path,
+                            quality=task.get('quality') or 'standard',
+                            width=task['width'], height=task['height'], fps=30,
+                            expect_dur=expect_dur,
+                            abort_event=task.get('abort_event'))
         if not r.get('ok'):
             raise RuntimeError(f"scene {scene_id} re-render failed "
                                f"({r.get('category')}): {r.get('detail', '')[:300]}")
@@ -599,8 +663,9 @@ def run_scene_regen_task(task: dict) -> None:
                                  'cannot re-assemble')
             ordered.append(p)
         silent_final = os.path.join(workdir, 'final_silent.mp4')
-        res = mv.concat_mp4s(ordered, silent_final,
-                             abort_event=task.get('abort_event'))
+        with heartbeat(task, lambda t, ev: _emit(t, ev), 'regen'):
+            res = mv.concat_mp4s(ordered, silent_final,
+                                 abort_event=task.get('abort_event'))
         if not res.get('ok'):
             raise RuntimeError('re-concat failed: ' + res.get('detail', ''))
 
@@ -608,10 +673,11 @@ def run_scene_regen_task(task: dict) -> None:
         if task.get('burn_in'):
             sidecar = os.path.join(workdir, 'final.srt')
             burned = os.path.join(workdir, 'final_burned.mp4')
-            br = mv.burn_in_subtitles(
-                silent_final, sidecar, burned,
-                fontsdir=task.get('burn_in_fontsdir') or '',
-                abort_event=task.get('abort_event'))
+            with heartbeat(task, lambda t, ev: _emit(t, ev), 'regen'):
+                br = mv.burn_in_subtitles(
+                    silent_final, sidecar, burned,
+                    fontsdir=task.get('burn_in_fontsdir') or '',
+                    abort_event=task.get('abort_event'))
             if not br.get('ok'):
                 raise RuntimeError('re-burn failed: ' + br.get('detail', ''))
             video_final = burned
@@ -619,8 +685,9 @@ def run_scene_regen_task(task: dict) -> None:
         final_path = os.path.join(workdir, 'final.mp4')
         if task.get('narration'):
             narration_wav = os.path.join(workdir, 'audio', 'narration.wav')
-            mx = mv.mux_audio_video(video_final, narration_wav, final_path,
-                                    abort_event=task.get('abort_event'))
+            with heartbeat(task, lambda t, ev: _emit(t, ev), 'regen'):
+                mx = mv.mux_audio_video(video_final, narration_wav, final_path,
+                                        abort_event=task.get('abort_event'))
             if not mx.get('ok'):
                 raise RuntimeError('re-mux failed: ' + mx.get('detail', ''))
         else:

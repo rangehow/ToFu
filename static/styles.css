@@ -1546,6 +1546,19 @@ textarea::placeholder{color:var(--text-tertiary)}
 .paper-podcast-spinner{width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:paperPodcastSpin 1s linear infinite;flex-shrink:0}
 @keyframes paperPodcastSpin{to{transform:rotate(360deg)}}
 .paper-podcast-error{font-size:12.5px;color:#f85149;line-height:1.5}
+.paper-podcast-error{font-size:12.5px;color:#f85149;line-height:1.5}
+/* P-UX2 阶段步进器 + 活性行(docs/PAPER_MEDIA_UX_DESIGN.md §3.4) */
+.paper-stepper{display:flex;flex-wrap:wrap;align-items:center;gap:4px;padding:2px 0 2px}
+.paper-step{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--text-tertiary);padding:3px 8px;border-radius:8px;border:1px solid transparent}
+.paper-step-mark{font-size:10px;line-height:1}
+.paper-step.is-done{color:var(--text-secondary)}
+.paper-step.is-done .paper-step-mark{color:#3fb950}
+.paper-step.is-active{color:var(--text-primary);background:var(--bg-tertiary);border-color:var(--border);font-weight:600}
+.paper-step.is-active .paper-step-mark{color:var(--accent)}
+.paper-step-sep{flex:0 0 14px;height:1px;background:var(--border)}
+.paper-media-activity{font-size:11.5px;color:var(--text-tertiary);padding:0 4px;font-variant-numeric:tabular-nums;min-height:15px}
+.paper-media-activity.is-stale{color:#d29922}
+.paper-video-cell.is-pending{opacity:.55}
 .paper-podcast-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
 .paper-podcast-title{font-size:14px;font-weight:700;color:var(--text-primary)}
 .paper-podcast-badge{padding:2px 8px;border-radius:10px;background:var(--bg-tertiary);border:1px solid var(--border);font-size:11px;color:var(--text-tertiary)}

@@ -119,7 +119,8 @@ def _synth_chunk_with_retry(chunk: str, *, voice, fmt, speed) -> bytes:
 def synthesize_scene_narrations(
         scenes: list[dict], out_dir: str, *, voice: str | None = None,
         speed: float | None = None, alignment: str = 'loose',
-        tail_pad: float = _DEFAULT_TAIL_PAD, abort_event=None) -> dict:
+        tail_pad: float = _DEFAULT_TAIL_PAD, abort_event=None,
+        on_scene_done=None) -> dict:
     """Synthesize per-scene narration WAVs + the alignment manifest.
 
     Args:
@@ -129,6 +130,8 @@ def synthesize_scene_narrations(
         alignment: ``'loose'`` (audio-led, default) or ``'strict'`` (srt-led).
         tail_pad: seconds of silence appended after narration (loose mode).
         abort_event: optional threading.Event — checked between chunks.
+        on_scene_done: optional ``fn(index, total, scene_id)`` called as each
+            scene's narration is settled (P-UX3 per-scene progress events).
 
     Returns ``{'ok', 'degraded', 'alignment', 'scenes': [{scene_id, wav,
     text_chars, audio_duration, srt_duration, target_duration, overflow}]}``.
@@ -154,6 +157,15 @@ def synthesize_scene_narrations(
     results: list[dict] = []
     silent_entries: list[dict] = []
     ref_params: tuple | None = None  # (channels, sampwidth, framerate) of provider WAVs
+
+    def _scene_settled(scene_id: str) -> None:
+        if on_scene_done is None:
+            return
+        try:
+            on_scene_done(len(results), len(scenes), scene_id)
+        except Exception as e:
+            logger.debug('[MotionVideo] on_scene_done sink failed: %s', e)
+
     for sc in scenes:
         if abort_event is not None and abort_event.is_set():
             raise NarrationAborted('aborted before scene '
@@ -168,6 +180,7 @@ def synthesize_scene_narrations(
         if not text:
             logger.info('[MotionVideo] scene %s has no text — silence only', scene_id)
             silent_entries.append(entry)
+            _scene_settled(scene_id)
             continue
 
         parts: list[bytes] = []
@@ -207,6 +220,7 @@ def synthesize_scene_narrations(
         entry['wav'] = wav_path
         logger.info('[MotionVideo] scene %s narration: %.2fs audio → target %.2fs',
                     scene_id, audio_dur, entry['target_duration'])
+        _scene_settled(scene_id)
 
     # Second pass: text-less scenes get silence in the PROVIDER's WAV params
     # (falls back to the lib.tts default when no scene carries text at all),

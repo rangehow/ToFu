@@ -21,7 +21,8 @@ logger = get_logger(__name__)
 
 _production = ProductionRuntime(
     'motion-video', id_prefix='motion', ttl=3600, push_channel='motion',
-    error_source='routes.api_v1.motion', log_label='MotionVideo')
+    error_source='routes.api_v1.motion', log_label='MotionVideo',
+    stall_timeout=120)
 
 #: The underlying TaskRuntime — what ``routes/api_v1/tasks.py::_registries()``
 #: discovers, and what existing call sites expect from this name.

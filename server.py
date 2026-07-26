@@ -1391,9 +1391,50 @@ _COMPRESS_MIN_SIZE = 256
 
 import gzip as _gzip
 
+from lib.ttl_cache import TTLCache
+
+try:
+    import brotli as _brotli
+except ImportError as _e:
+    _brotli = None
+    _lifecycle_log.info('[Compress] brotli unavailable (%s) — gzip only', _e)
+
+# Compressed-artifact cache for CONTENT-ADDRESSED immutable assets.
+#
+# Without it every single page load re-compresses the whole JS bundle: measured
+# 1711 KB → 463 KB costs ~55 ms of executor CPU, paid again for every visitor
+# and every hard refresh. The bundle filename carries a content hash and the
+# ETag carries mtime+size+adler32, so the compressed bytes are a pure function
+# of the ETag — cache them and the cost is paid once per build instead of once
+# per request. This is what makes it affordable to spend a HIGHER brotli quality
+# on these bodies (see _BR_QUALITY_CACHED).
+_COMPRESS_CACHE = TTLCache(ttl=6 * 3600, max_size=48)
+# Don't let one pathological body evict the whole cache / balloon RSS.
+_COMPRESS_CACHE_MAX_BYTES = 8 * 1024 * 1024
+
+# Two-tier brotli quality, justified by the cache above:
+#   cached  — compressed once per build, so buy the extra ratio (387 KB @ ~92 ms)
+#   uncached— on the request's critical path, so stay cheap (~26 ms for 1.7 MB;
+#             microseconds for a typical API JSON body)
+_BR_QUALITY_CACHED = 9
+_BR_QUALITY_LIVE = 4
+
+
+def _compress_bytes(data, encoding, quality):
+    """Compress *data* with *encoding*. Runs in a worker thread (CPU-bound)."""
+    if encoding == 'br':
+        return _brotli.compress(data, quality=quality)
+    return _gzip.compress(data, 6)
+
+
 @app.after_request
 async def _compress_response(response):
-    """Simple gzip compression for eligible responses."""
+    """gzip/brotli compression for eligible responses.
+
+    Immutable content-addressed static assets are compressed ONCE and served
+    from ``_COMPRESS_CACHE`` thereafter; everything else is compressed live at
+    a cheaper setting so the per-request cost stays negligible.
+    """
     # Skip SSE (buffering breaks streaming), small responses, already encoded
     if (response.content_type
             and 'text/event-stream' in response.content_type):
@@ -1409,7 +1450,13 @@ async def _compress_response(response):
     if response.status_code != 200 or 'Content-Range' in response.headers:
         return response
     accept_enc = request.headers.get('Accept-Encoding', '')
-    if 'gzip' not in accept_enc:
+    # Prefer brotli when the client advertises it: measured on the real
+    # 1711 KB bundle, br q=9 lands 387 KB vs gzip's 463 KB (-16% transfer).
+    if _brotli is not None and 'br' in accept_enc:
+        encoding = 'br'
+    elif 'gzip' in accept_enc:
+        encoding = 'gzip'
+    else:
         return response
     mime = (response.content_type or '').split(';')[0].strip()
     if mime not in _COMPRESS_MIMETYPES:
@@ -1417,15 +1464,32 @@ async def _compress_response(response):
     data = await response.get_data()
     if len(data) < _COMPRESS_MIN_SIZE:
         return response
-    # gzip is CPU-bound; running it inline would block the event loop (and
-    # every other connection / SSE keepalive) for the duration. Offload to
-    # the sync executor so a multi-MB body doesn't stall the whole server.
-    loop = asyncio.get_running_loop()
-    compressed = await loop.run_in_executor(None, _gzip.compress, data, 6)
+
+    # Cache key: the ETag identifies the exact bytes, so a hit means the
+    # compressed body is still valid. Only immutable content-addressed static
+    # assets are cached — a dynamic API body would just churn the cache.
+    etag = response.headers.get('ETag', '')
+    cache_key = None
+    if etag and len(data) <= _COMPRESS_CACHE_MAX_BYTES and request.path.startswith('/static/'):
+        cache_key = (etag, encoding)
+
+    compressed = _COMPRESS_CACHE.get(cache_key) if cache_key else None
+    if compressed is None:
+        # Compression is CPU-bound; running it inline would block the event
+        # loop (and every other connection / SSE keepalive) for the duration.
+        # Offload to the sync executor so a multi-MB body doesn't stall the
+        # whole server.
+        quality = _BR_QUALITY_CACHED if cache_key else _BR_QUALITY_LIVE
+        loop = asyncio.get_running_loop()
+        compressed = await loop.run_in_executor(
+            None, _compress_bytes, data, encoding, quality)
+        if cache_key:
+            _COMPRESS_CACHE.set(cache_key, compressed)
+
     if len(compressed) >= len(data):
         return response
     response.set_data(compressed)
-    response.headers['Content-Encoding'] = 'gzip'
+    response.headers['Content-Encoding'] = encoding
     response.headers['Content-Length'] = len(compressed)
     response.headers.pop('Vary', None)
     response.headers['Vary'] = 'Accept-Encoding'
@@ -2162,6 +2226,14 @@ def _start_background_workers():
             _server_log.info('[Server] resumed %d interrupted motion job(s)', n)
     except Exception as e:
         _server_log.warning('[Server] motion job resume failed: %s', e)
+    # Podcast counterpart (P-UX4): a 'generating' cache row can only belong
+    # to the process that just died — flip them to 'interrupted' so the tab
+    # says "被重启打断" instead of pretending nothing happened.
+    try:
+        from lib.paper.podcast_engine import mark_interrupted_podcasts
+        mark_interrupted_podcasts()
+    except Exception as e:
+        _server_log.warning('[Server] podcast interrupted sweep failed: %s', e)
     return
 
 

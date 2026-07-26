@@ -21,7 +21,8 @@ logger = get_logger(__name__)
 
 _production = ProductionRuntime(
     'paper-podcast', id_prefix='podcast', ttl=3600, push_channel='paper',
-    error_source='routes.paper:podcast', log_label='Paper:Podcast')
+    error_source='routes.paper:podcast', log_label='Paper:Podcast',
+    stall_timeout=120)
 
 #: The underlying TaskRuntime. Compatibility shims: legacy code in paper.py
 #: and tests reference these names directly.

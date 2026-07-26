@@ -21,7 +21,7 @@ var _podcast = {
   taskId: '',
   cursor: 0,
   pollTimer: null,
-  status: 'idle',          // idle|generating|done|script_only|report_required|lookup_failed|error
+  status: 'idle',          // idle|generating|done|script_only|report_required|lookup_failed|lost|interrupted|error
   data: null,              // {script, meta, audioUrl, durationSec, scriptOnly}
   errorText: '',
   progress: { done: 0, total: 0 },
@@ -29,9 +29,34 @@ var _podcast = {
   defaultVoice: '',
   sleepTimerId: 0,
   sleepDeadline: 0,
+  // P-UX progress perception (docs/PAPER_MEDIA_UX_DESIGN.md §3.4)
+  pollFails: 0,            // consecutive poll failures → 5 = lost state
+  phases: [],              // server phase vocabulary (phase_started.phases)
+  phaseIndex: 0,           // 1-based index of the current phase
+  currentPhase: '',
+  scriptStep: '',          // draft|validate|revise|critic (script sub-step)
+  genStartedAt: 0,         // local stopwatch start
+  lastEventAt: 0,          // last event/poll-success time (liveness)
+  tickTimer: null,         // 1s UI ticker for elapsed/last-active
+  _segFirstTick: 0,        // wall-clock of the first segment_done (ETA)
+  etaSec: 0,
 };
 // Poll cadence — a var (not const) so the JSDOM harness can shrink it.
 var _PODCAST_POLL_MS = 1200;
+// Consecutive poll failures before the honest 'lost' terminal state (拍板 A).
+var _PC_POLL_FAIL_LIMIT = 5;
+
+function _pcResetRun() {
+  _podcast.pollFails = 0;
+  _podcast.phases = [];
+  _podcast.phaseIndex = 0;
+  _podcast.currentPhase = '';
+  _podcast.scriptStep = '';
+  _podcast.genStartedAt = Date.now();
+  _podcast.lastEventAt = Date.now();
+  _podcast._segFirstTick = 0;
+  _podcast.etaSec = 0;
+}
 
 function _pcT(key, fallback) {
   return (typeof t === 'function') ? t(key) : (fallback || key);
@@ -46,6 +71,16 @@ function _pcEsc(s) {
 
 function _pcStopPoll() {
   if (_podcast.pollTimer) { clearTimeout(_podcast.pollTimer); _podcast.pollTimer = null; }
+  _pcStopTick();
+}
+
+function _pcStartTick() {
+  if (_podcast.tickTimer) return;
+  _podcast.tickTimer = setInterval(_pcRenderActivity, 1000);
+}
+
+function _pcStopTick() {
+  if (_podcast.tickTimer) { clearInterval(_podcast.tickTimer); _podcast.tickTimer = null; }
 }
 
 /** Entry point — called by _switchPaperTab('podcast'). Renders the tab by
@@ -80,8 +115,15 @@ async function _initPodcastTab(force) {
       _podcast.taskId = look.task_id;
       _podcast.cursor = 0;
       _podcast.status = 'generating';
+      _pcResetRun();
       _pcRender();
       _pcSchedulePoll();
+      return;
+    }
+    // P-UX4: the previous run was cut by a server restart — honest state.
+    if (look && look.ok && look.found && look.interrupted) {
+      _podcast.status = 'interrupted';
+      _pcRender();
       return;
     }
     if (look && look.ok && look.found && look.cached) {
@@ -118,16 +160,55 @@ function _pcSchedulePoll() {
   _podcast.pollTimer = setTimeout(_pcPollOnce, _PODCAST_POLL_MS);
 }
 
+function _pcConsumeEvent(ev) {
+  if (ev.type === 'phase_started') {
+    _podcast.phases = ev.phases || _podcast.phases;
+    _podcast.phaseIndex = ev.phase_index || 0;
+    _podcast.currentPhase = ev.phase || '';
+    if (ev.phase !== 'audio') { _podcast._segFirstTick = 0; _podcast.etaSec = 0; }
+    return true;   // phase changed → the stepper needs a full re-render
+  } else if (ev.type === 'progress' && ev.phase === 'script') {
+    _podcast.scriptStep = ev.step || '';
+  } else if (ev.type === 'segment_done') {
+    _podcast.progress = { done: ev.done, total: ev.total };
+    // Honest ETA (拍板 A): wall-clock rate of the segments done so far.
+    var now = Date.now();
+    if (!_podcast._segFirstTick) _podcast._segFirstTick = now;
+    if (ev.done > 0 && ev.total > ev.done) {
+      _podcast.etaSec = Math.round(
+        (now - _podcast._segFirstTick) / 1000 / ev.done * (ev.total - ev.done));
+    } else {
+      _podcast.etaSec = 0;
+    }
+  }
+  // 'heartbeat' needs no handling — any event already bumps lastEventAt.
+}
+
+/** P-UX1 terminal backstop: a poll that keeps failing (404 after a server
+ * restart, network down) must NOT spin forever — 5 strikes → lost state. */
+function _pcPollFail() {
+  _podcast.pollFails++;
+  if (_podcast.pollFails >= _PC_POLL_FAIL_LIMIT) {
+    _pcStopPoll();
+    _podcast.taskId = '';
+    _podcast.status = 'lost';
+    _pcRender();
+    return;
+  }
+  _pcSchedulePoll();
+}
+
 async function _pcPollOnce() {
   if (!_podcast.taskId) return;
   try {
     var resp = await Api.paper.podcastPoll(_podcast.taskId, _podcast.cursor);
-    if (!resp || !resp.ok) { _pcSchedulePoll(); return; }
+    if (!resp || !resp.ok) { _pcPollFail(); return; }
+    _podcast.pollFails = 0;
+    _podcast.lastEventAt = Date.now();
     _podcast.cursor = resp.cursor || _podcast.cursor;
+    var phaseChanged = false;
     (resp.events || []).forEach(function(ev) {
-      if (ev.type === 'segment_done') {
-        _podcast.progress = { done: ev.done, total: ev.total };
-      }
+      if (_pcConsumeEvent(ev)) phaseChanged = true;
     });
     _podcast.progress = resp.progress || _podcast.progress;
     if (resp.done) {
@@ -136,19 +217,25 @@ async function _pcPollOnce() {
         _podcast.status = resp.scriptOnly ? 'script_only' : 'done';
       } else if (resp.status === 'aborted') {
         _podcast.status = 'idle';
+      } else if (resp.error && resp.error.kind === 'worker_lost') {
+        // P-UX1: server reaped a dead worker — same honest lost state.
+        _podcast.status = 'lost';
       } else {
         _podcast.status = 'error';
-        _podcast.errorText = resp.error || _pcT('paper.podcastFailed', 'Podcast generation failed');
+        _podcast.errorText = (resp.error && resp.error.detail) ||
+          (typeof resp.error === 'string' ? resp.error : '') ||
+          _pcT('paper.podcastFailed', 'Podcast generation failed');
       }
       _podcast.taskId = '';
+      _pcStopPoll();   // also stops the 1s activity ticker
       _pcRender();
       return;
     }
-    _pcRenderProgress();
+    if (phaseChanged) { _pcRender(); } else { _pcRenderProgress(); }
     _pcSchedulePoll();
   } catch (e) {
     console.warn('[Paper:Podcast] poll failed:', e);
-    _pcSchedulePoll();
+    _pcPollFail();
   }
 }
 
@@ -163,6 +250,7 @@ async function _podcastGenerate(force) {
   _podcast.voice = voiceInp ? voiceInp.value.trim() : _podcast.voice;
   _podcast.status = 'generating';
   _podcast.progress = { done: 0, total: 0 };
+  _pcResetRun();
   _pcRender();
   try {
     var resp = await Api.paper.podcastStart({
@@ -223,9 +311,61 @@ function _pcRenderProgress() {
   var el = document.getElementById('podcastProgressLine');
   if (!el) return;
   var p = _podcast.progress;
-  el.textContent = (p.total > 0)
-    ? _pcT('paper.podcastAudioPhase', 'Synthesizing audio') + ' ' + p.done + '/' + p.total
-    : _pcT('paper.podcastScriptPhase', 'Writing the spoken script…');
+  var line;
+  if (p.total > 0) {
+    line = _pcT('paper.podcastAudioPhase', 'Synthesizing audio') + ' ' +
+      p.done + '/' + p.total;
+    if (_podcast.etaSec > 0) {
+      line += ' · ' + _pcT('paper.mediaEtaPrefix', '≈') + _pcFmtSec(_podcast.etaSec);
+    }
+  } else {
+    line = _pcT('paper.podcastScriptPhase', 'Writing the spoken script…');
+    var stepMap = { draft: 'paper.podcastStepDraft', validate: 'paper.podcastStepValidate',
+                    revise: 'paper.podcastStepRevise', critic: 'paper.podcastStepCritic' };
+    var fallback = { draft: 'draft done', validate: 'checking quality',
+                     revise: 'revising', critic: 'editor review' };
+    if (_podcast.scriptStep) {
+      line += ' · ' + _pcT(stepMap[_podcast.scriptStep] || '',
+                          fallback[_podcast.scriptStep] || _podcast.scriptStep);
+    }
+  }
+  el.textContent = line;
+}
+
+/** Phase stepper (P-UX2): 素材 → 剧本 → 配音, done ✓ / active ● / todo ○. */
+function _pcStepper() {
+  var phases = _podcast.phases.length ? _podcast.phases : ['source', 'script', 'audio'];
+  var labelMap = { source: ['paper.podcastPhaseSource', 'Material'],
+                   script: ['paper.podcastPhaseScript', 'Script'],
+                   audio: ['paper.podcastPhaseAudio', 'Voice-over'] };
+  var cur = Math.max(_podcast.phaseIndex, 1);
+  var h = '<div class="paper-stepper">';
+  phases.forEach(function(ph, i) {
+    var idx = i + 1;
+    var state = idx < cur ? 'is-done' : (idx === cur ? 'is-active' : '');
+    var mark = idx < cur ? '✓' : (idx === cur ? '●' : '○');
+    var lab = labelMap[ph] || ['', ph];
+    h += '<span class="paper-step ' + state + '">' +
+      '<span class="paper-step-mark">' + mark + '</span>' +
+      _pcEsc(_pcT(lab[0], lab[1])) + '</span>';
+    if (idx < phases.length) h += '<span class="paper-step-sep"></span>';
+  });
+  return h + '</div>';
+}
+
+/** Liveness line (P-UX2): elapsed stopwatch + "last activity Xs ago";
+ * goes visibly stale after 30s of silence (quiet ≠ dead). */
+function _pcRenderActivity() {
+  var el = document.getElementById('podcastActivityLine');
+  if (!el || _podcast.status !== 'generating') return;
+  var elapsed = Math.max(0, Math.round((Date.now() - _podcast.genStartedAt) / 1000));
+  var quiet = Math.max(0, Math.round((Date.now() - _podcast.lastEventAt) / 1000));
+  var txt = _pcT('paper.mediaElapsed', 'elapsed') + ' ' + _pcFmtSec(elapsed) +
+    ' · ' + _pcT('paper.mediaLastActive', 'last activity') + ' ' +
+    _pcFmtSec(quiet) + '';
+  el.classList.toggle('is-stale', quiet > 30);
+  el.textContent = txt + (quiet > 30 ? ' — ' +
+    _pcT('paper.mediaStillRunning', 'still running (this step can take minutes)') : '');
 }
 
 function _pcDegradeBanner() {
@@ -316,15 +456,38 @@ function _pcRender() {
 
   if (s.status === 'generating') {
     h += '<div class="paper-podcast-card">';
+    h += _pcStepper();
     h += '<div class="paper-podcast-progress">';
     h += '<span class="paper-podcast-spinner"></span>';
     h += '<span id="podcastProgressLine">' +
       _pcEsc(_pcT('paper.podcastScriptPhase', 'Writing the spoken script…')) + '</span>';
     h += '<button class="paper-podcast-btn paper-podcast-btn-ghost" onclick="_podcastAbort()">' +
       _pcEsc(_pcT('paper.podcastAbort', 'Abort')) + '</button>';
-    h += '</div></div>';
+    h += '</div>';
+    h += '<div class="paper-media-activity" id="podcastActivityLine"></div>';
+    h += '</div>';
     host.innerHTML = h;
     _pcRenderProgress();
+    _pcRenderActivity();
+    _pcStartTick();
+    return;
+  }
+
+  /* P-UX1/P-UX4 terminal honest states. */
+  if (s.status === 'lost' || s.status === 'interrupted') {
+    var lost = s.status === 'lost';
+    host.innerHTML =
+      '<div class="paper-podcast-hero">' +
+      '<div class="paper-podcast-hero-icon is-warn">' + _pcHeroIconSvg('warn') + '</div>' +
+      '<div class="paper-podcast-hero-sub">' + _pcEsc(lost
+        ? _pcT('paper.podcastLost', 'Task lost or connection dropped — the generation task can no longer be reached.')
+        : _pcT('paper.podcastInterrupted', 'The last generation was cut short by a server restart.')) + '</div>' +
+      '<div class="paper-podcast-actions">' +
+      '<button class="paper-podcast-btn paper-podcast-btn-ghost" onclick="_initPodcastTab(true)">' +
+      _pcEsc(_pcT('paper.podcastRecheck', 'Re-check status')) + '</button>' +
+      '<button class="paper-podcast-btn" onclick="_podcastGenerate(true)">' +
+      _pcEsc(_pcT('paper.podcastRegenerate', 'Regenerate')) + '</button>' +
+      '</div></div>';
     return;
   }
 

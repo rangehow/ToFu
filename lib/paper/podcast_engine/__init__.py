@@ -130,6 +130,50 @@ def _persist_podcast_row(paper_hash: str, mode: str, lang: str, voice: str,
     db.commit()
 
 
+def load_interrupted_podcast(paper_hash: str, mode: str, lang: str,
+                             voice: str) -> bool:
+    """True when the cache row says a previous run was cut by a restart.
+
+    P-UX4 (docs/PAPER_MEDIA_UX_DESIGN.md §3.3): the worker persists a
+    ``generating`` row at start; startup flips every lingering
+    ``generating`` row to ``interrupted`` (a live process would have
+    overwritten it). The lookup route surfaces this so the tab can say
+    "被服务器重启打断" + offer a one-click regenerate, instead of
+    pretending nothing ever happened.
+    """
+    from lib.database import get_thread_db
+
+    db = get_thread_db()
+    row = db.execute(
+        'SELECT status FROM paper_podcasts WHERE paper_hash = ? AND mode = ?'
+        ' AND lang = ? AND voice = ?',
+        (paper_hash, mode, lang, voice)).fetchone()
+    return bool(row and (row['status'] or '') == 'interrupted')
+
+
+def mark_interrupted_podcasts() -> int:
+    """Startup sweep: every ``generating`` row belongs to a dead process.
+
+    Called once at server boot (next to motion's resume_interrupted_jobs).
+    Returns the number of rows flipped. Best-effort, never raises.
+    """
+    try:
+        from lib.database import get_thread_db
+        db = get_thread_db()
+        cur = db.execute(
+            "UPDATE paper_podcasts SET status = 'interrupted',"
+            ' updated_at = ? WHERE status = ?', (int(time.time()), 'generating'))
+        db.commit()
+        n = cur.rowcount if cur is not None else 0
+        if n:
+            logger.info('[Paper:Podcast] marked %d generating row(s) '
+                        'interrupted on startup', n)
+        return n or 0
+    except Exception as e:
+        logger.warning('[Paper:Podcast] interrupted sweep failed: %s', e)
+        return 0
+
+
 def load_cached_podcast(paper_hash: str, mode: str, lang: str,
                         voice: str) -> dict | None:
     """Fetch the cached row for the dedup key; parsed script/meta included."""
@@ -174,11 +218,23 @@ def _run_podcast_task(task):
     from lib import tts as _tts
     from lib.paper import _load_image_manifest, _lookup_paper_title
     from lib.paper.podcast_runtime import _append_podcast_event
+    from lib.production.heartbeat import heartbeat
 
     task_id = task['task_id']
     paper_hash, mode, lang = task['paper_hash'], task['mode'], task['lang']
     voice, model = task['voice'], task.get('model')
     task['status'] = 'running'
+
+    # P-UX2: the phase vocabulary the frontend stepper renders.
+    _PHASES = ['source', 'script', 'audio']
+
+    def _phase_started(phase: str) -> None:
+        _append_podcast_event(task, {
+            'type': 'phase_started', 'phase': phase,
+            'phase_index': _PHASES.index(phase) + 1,
+            'phase_total': len(_PHASES), 'phases': list(_PHASES),
+            'started_at': time.time()})
+
     _append_podcast_event(task, {'type': 'status', 'status': 'running'})
     logger.info('[Paper:Podcast] task %s started phash=%s mode=%s lang=%s '
                 'voice=%s model=%s', task_id, paper_hash[:8], mode, lang,
@@ -186,22 +242,37 @@ def _run_podcast_task(task):
     audit_log('paper_podcast_start', task_id=task_id,
               paper_hash=paper_hash[:8], mode=mode, lang=lang)
 
+    # P-UX4: anchor the run in the DB so a server restart can honestly say
+    # "interrupted" instead of losing the run entirely.
+    try:
+        _persist_podcast_row(paper_hash, mode, lang, voice,
+                             status='generating', script={},
+                             meta={'task_id': task_id},
+                             model=model or '')
+    except Exception as e:
+        logger.warning('[Paper:Podcast] generating-row persist failed '
+                       '(continuing): %s', e)
+
     def _aborted() -> bool:
         return bool(task['abort_event'].is_set())
 
     try:
         # ── Stage 0: source material (report gate runs in the route) ──
+        _phase_started('source')
         source_text, source_kind = _load_source_text(paper_hash, lang)
         if not source_text:
             raise PodcastSourceError(f'no source material for {paper_hash[:8]}')
         images = _load_image_manifest(paper_hash)
         title = _lookup_paper_title(paper_hash)
 
-        # ── Stage 1: script ──
+        # ── Stage 1: script (1–3 min of LLM rounds — heartbeat + sub-steps) ──
+        _phase_started('script')
         _append_podcast_event(task, {'type': 'phase', 'phase': 'script'})
-        script, script_meta = generate_script(
-            source_text=source_text, lang=lang, mode=mode, title=title,
-            images=images, model=model, source_kind=source_kind)
+        with heartbeat(task, _append_podcast_event, 'script'):
+            script, script_meta = generate_script(
+                source_text=source_text, lang=lang, mode=mode, title=title,
+                images=images, model=model, source_kind=source_kind,
+                on_event=lambda ev: _append_podcast_event(task, ev))
         task['script'] = script
         task['script_meta'] = script_meta
         _append_podcast_event(task, {'type': 'script', 'script': script,
@@ -226,6 +297,7 @@ def _run_podcast_task(task):
             audit_log('paper_podcast_done', task_id=task_id, script_only=True)
             return
 
+        _phase_started('audio')
         _append_podcast_event(task, {'type': 'phase', 'phase': 'audio',
                                      'total': len(script.get('segments') or [])})
         audio = synthesize_script_audio(
@@ -279,11 +351,13 @@ def _run_podcast_task(task):
         _append_podcast_event(task, {'type': 'aborted'})
         logger.info('[Paper:Podcast] task %s aborted', task_id)
         audit_log('paper_podcast_abort', task_id=task_id)
+        _final_status = 'aborted'
     except PodcastSourceError as e:
         task['status'] = 'error'
         _append_podcast_event(task, {'type': 'error', 'error': str(e),
                                      'reason': 'report_required'})
         logger.warning('[Paper:Podcast] task %s source error: %s', task_id, e)
+        _final_status = 'error'
     except Exception as e:
         task['status'] = 'error'
         err_env = {'type': 'error', 'error': f'podcast generation failed: {e}'}
@@ -298,8 +372,29 @@ def _run_podcast_task(task):
         _append_podcast_event(task, err_env)
         logger.error('[Paper:Podcast] task %s failed: %s', task_id, e,
                      exc_info=True)
+        _final_status = 'error'
     finally:
         task['updated_at'] = time.time()
+        # P-UX4/§3.4F: the generating row must never linger (it would be
+        # misread as "interrupted by a restart" on the next boot). A completed
+        # script survives an abort as a script_only row — the partial product
+        # is kept, per the abort-semantics contract.
+        if task.get('status') in ('aborted', 'error'):
+            try:
+                if task['status'] == 'aborted' and task.get('script'):
+                    _persist_podcast_row(
+                        paper_hash, mode, lang, voice, status='script_only',
+                        script=task['script'],
+                        meta={**(task.get('script_meta') or {}),
+                              'degrade_reason': 'aborted_before_audio'},
+                        model=model or '')
+                else:
+                    _persist_podcast_row(
+                        paper_hash, mode, lang, voice,
+                        status=task['status'], script=task.get('script') or {},
+                        meta={'task_id': task_id}, model=model or '')
+            except Exception as e:
+                logger.warning('[Paper:Podcast] terminal-row persist failed: %s', e)
 
 
 __all__ = [
@@ -309,6 +404,8 @@ __all__ = [
     'has_report',
     'has_source_material',
     'load_cached_podcast',
+    'load_interrupted_podcast',
+    'mark_interrupted_podcasts',
     'podcast_audio_url',
     '_load_source_text',
     '_persist_podcast_row',

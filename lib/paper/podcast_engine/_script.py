@@ -185,7 +185,8 @@ def _critic_review(*, lang: str, script: dict, figure_list_text: str,
 
 def generate_script(*, source_text: str, lang: str, mode: str, title: str,
                     images: list[dict], model: str | None,
-                    source_kind: str = 'report') -> tuple[dict, dict]:
+                    source_kind: str = 'report',
+                    on_event=None) -> tuple[dict, dict]:
     """Generate + validate + critic-review a podcast script.
 
     Args:
@@ -197,11 +198,24 @@ def generate_script(*, source_text: str, lang: str, mode: str, title: str,
         title: Paper title for the prompt header.
         images: Figure manifest entries (figure list + figure_ref whitelist).
         model: prefer_model for the dispatch (None = dispatcher default).
+        on_event: optional sink for ``progress`` sub-step events
+            (docs/PAPER_MEDIA_UX_DESIGN.md §2.3) — called as
+            ``on_event({'type': 'progress', 'phase': 'script', 'unit': 'pass',
+            'step': 'draft'|'validate'|'revise'|'critic', ...})`` as the
+            pipeline advances. Never let a sink failure break generation.
 
     Returns:
         (script, meta) — meta carries low_confidence, issues, critic_issues,
         revisions, usage totals and source_kind.
     """
+    def _progress(step: str, **extra) -> None:
+        if on_event is None:
+            return
+        try:
+            on_event({'type': 'progress', 'phase': 'script', 'unit': 'pass',
+                      'step': step, **extra})
+        except Exception as e:
+            logger.debug('[Paper:Podcast:Script] on_event sink failed: %s', e)
     lang = 'zh' if lang == 'zh' else 'en'
     mode = mode if mode in ('short', 'full') else 'short'
     figure_list_text, manifest_files = render_figure_list(images)
@@ -236,6 +250,7 @@ def generate_script(*, source_text: str, lang: str, mode: str, title: str,
     except ScriptParseError as e:
         logger.info('[Paper:Podcast:Script] parse failed (%s) — one repair retry', e)
         meta['revisions'] += 1
+        _progress('revise', reason='json_repair')
         script = _call(base_messages + [
             {'role': 'assistant', 'content': '(上一条回复不是合法 JSON)'},
             {'role': 'user', 'content':
@@ -244,13 +259,16 @@ def generate_script(*, source_text: str, lang: str, mode: str, title: str,
                 'The previous reply was not valid script JSON. Re-output ONLY '
                 'the JSON object — no commentary, no fences.'},
         ])
+    _progress('draft')
 
     # ── Round 2: validator feedback revision (one shot) ──
+    _progress('validate')
     issues = validate_script(script, mode=mode, lang=lang,
                              source_text=source_text or '',
                              manifest_files=manifest_files)
     if issues:
         meta['revisions'] += 1
+        _progress('revise', reason='gate_feedback', issues=len(issues))
         issue_list = '\n'.join(f'- {i}' for i in issues)
         logger.info('[Paper:Podcast:Script] %d gate issue(s) — revision round',
                     len(issues))
@@ -269,11 +287,13 @@ def generate_script(*, source_text: str, lang: str, mode: str, title: str,
 
     # ── Round 3: critic semantic review (+1 critic-feedback revision) ──
     if critic_enabled() and not issues:
+        _progress('critic')
         critic_issues = _critic_review(lang=lang, script=script,
                                        figure_list_text=figure_list_text,
                                        fenced_report=fenced, model=model)
         if critic_issues:
             meta['revisions'] += 1
+            _progress('revise', reason='critic_feedback', issues=len(critic_issues))
             issue_list = '\n'.join(f'- {i}' for i in critic_issues)
             logger.info('[Paper:Podcast:Script] critic raised %d issue(s) — '
                         'revision round', len(critic_issues))

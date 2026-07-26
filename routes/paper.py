@@ -2860,7 +2860,8 @@ async def start_video_abstract_task():
         speed=data.get('speed'), alignment=alignment,
         narration=bool(data.get('narration', True)),
         burn_in=bool(data.get('burn_in', False)), quality=quality,
-        parallel=parallel, max_scenes=max_scenes)
+        parallel=parallel, max_scenes=max_scenes,
+        force=bool(data.get('force', False)))
     if not res.get('ok'):
         return jsonify({'ok': False, 'report_required':
                         res.get('reason') == 'report_required',
@@ -2898,9 +2899,74 @@ def lookup_video_abstract():
         })
         if best['status'] == 'done' and best.get('result'):
             resp['result'] = best['result']
+        return jsonify(resp)
+
+    # P-UX4: memory missed — fall back to the on-disk job manifests so a
+    # finished video survives a server restart (and an interrupted one is
+    # honestly reported instead of vanishing).
+    disk = _lookup_paper_video_on_disk(phash)
+    if disk:
+        resp.update(disk)
     else:
         resp['found'] = False
     return jsonify(resp)
+
+
+def _lookup_paper_video_on_disk(phash: str) -> dict | None:
+    """Newest on-disk motion job for this paper (P-UX4 disk fallback).
+
+    Scans ``<motion_root>/jobs/*/job.json`` for manifests tagged with this
+    paper_hash. A ``done`` manifest with its final.mp4 still on disk is a
+    playable result; a ``running`` manifest whose task is NOT live in the
+    runtime means the resume scanner already declined it (or it died
+    again) — report interrupted. Returns a lookup-response fragment or
+    None when nothing on disk matches.
+    """
+    from lib.motion_video._env import motion_root
+    from lib.motion_video.runtime import _motion_runtime
+    from lib.production.jobs import read_manifest
+
+    jobs_dir = os.path.join(motion_root(), 'jobs')
+    try:
+        names = sorted(os.listdir(jobs_dir))
+    except OSError as e:
+        logger.debug('[Paper:Video] disk lookup cannot list %s: %s', jobs_dir, e)
+        return None
+    best = None  # (mtime, task_id, manifest)
+    for name in names:
+        workdir = os.path.join(jobs_dir, name)
+        m = read_manifest(workdir)
+        if not m or m.get('paper_hash') != phash:
+            continue
+        try:
+            mt = os.path.getmtime(os.path.join(workdir, 'job.json'))
+        except OSError:
+            mt = 0.0
+        if best is None or mt > best[0]:
+            best = (mt, m.get('task_id') or name, m)
+    if not best:
+        return None
+    _mt, task_id, m = best
+    state = m.get('state')
+    if state == 'running' and _motion_runtime.get(task_id) is None:
+        return {'found': True, 'interrupted': True, 'task_id': task_id}
+    if state == 'done':
+        workdir = os.path.join(jobs_dir, task_id)
+        final = os.path.join(workdir, 'final.mp4')
+        if os.path.isfile(final):
+            duration = 0.0
+            try:
+                from lib import motion_video as mv
+                probe = mv.probe_video(final)
+                duration = round(float((probe or {}).get('duration') or 0), 3)
+            except Exception as e:
+                logger.debug('[Paper:Video] disk lookup probe failed: %s', e)
+            return {'found': True, 'running': False, 'status': 'done',
+                    'task_id': task_id,
+                    'result': {'final_path': final, 'duration': duration,
+                               'workdir': workdir,
+                               'narrated': bool(m.get('narration'))}}
+    return None
 
 
 @api_v1_paper_bp.route('/api/v1/paper/podcast/poll', methods=['GET'])
@@ -2916,6 +2982,9 @@ def poll_podcast_task():
         t = _podcast_tasks.get(task_id)
     if not t:
         return jsonify({'ok': False, 'error': 'Task not found'}), 404
+    # P-UX1: read-side stall reap — a running task silent for stall_timeout
+    # is declared worker_lost here (its worker died without finish()).
+    _podcast_runtime.reap_if_stalled(t)
     events = t['events']
     new_events = events[cursor:]
     status = t.get('status')
@@ -2968,6 +3037,12 @@ async def lookup_podcast():
                          if status == 'done' else ''),
             'durationSec': cached.get('duration_sec') or 0,
         })
+    # P-UX4: a generating row flipped to interrupted at boot = the last run
+    # was cut by a server restart. Surface it honestly (regenerate button).
+    from lib.paper.podcast_engine import load_interrupted_podcast
+    if load_interrupted_podcast(phash, mode, lang, eff_voice):
+        return jsonify({'ok': True, 'found': True, 'interrupted': True,
+                        'report_available': has_report(phash)})
     return jsonify({'ok': True, 'found': False,
                     'tts_available': _tts.tts_available(),
                     'report_available': has_report(phash)})

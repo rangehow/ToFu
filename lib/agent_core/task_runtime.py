@@ -78,7 +78,8 @@ class TaskRuntime:
 
     def __init__(self, kind: str, *, ttl: int = 3600,
                  push_channel: Optional[str] = None,
-                 error_source: str = ''):
+                 error_source: str = '',
+                 stall_timeout: float = 0):
         """
         Args:
             kind: Task kind identifier (e.g. 'chat', 'paper-report').
@@ -87,9 +88,16 @@ class TaskRuntime:
                 are also pushed via lib.agent_core.push.push_event(channel, task_id, event).
                 If None, defaults to ``kind``.
             error_source: Module identifier for error envelopes.
+            stall_timeout: Read-side stall reaping (docs/PAPER_MEDIA_UX_DESIGN.md
+                §3.2). When > 0, poll() declares a pending/running task whose
+                last event is older than this many seconds ``worker_lost``.
+                0 (default) disables reaping — only enable for runtimes whose
+                workers heartbeat every long phase, or slow-but-legit phases
+                (long tool calls) would be false-killed.
         """
         self.kind = kind
         self.ttl = ttl
+        self.stall_timeout = float(stall_timeout or 0)
         self.push_channel = push_channel if push_channel is not None else kind
         self.error_source = error_source or f'task_runtime.{kind}'
         self._tasks: dict[str, dict] = {}
@@ -157,6 +165,8 @@ class TaskRuntime:
         task = self.get(task_id)
         if not task:
             return None
+        # The stall-reap clock: every event is proof of life.
+        task['updated_at'] = time.time()
         with task['events_lock']:
             event['seq'] = len(task['events'])
             task['events'].append(event)
@@ -243,6 +253,42 @@ class TaskRuntime:
                     self.kind, task_id[:8])
         return True
 
+    # ── Stall reaping (read-side, opt-in via stall_timeout) ────
+
+    def reap_if_stalled(self, task: dict) -> bool:
+        """Declare a silent pending/running task ``worker_lost`` (P-UX1).
+
+        A task whose worker crashed (kill -9, process restart, thread death
+        without finish) sits at ``running`` forever and every poller spins
+        with it. There is no write-side reaper thread by design — the check
+        runs on the poll path instead (a task nobody watches needs no
+        verdict; self-healing, zero常驻 cost). The clock is ``updated_at``,
+        touched by every append_event — workers that wrap their long phases
+        in a heartbeat (lib/production/heartbeat.py) are never false-killed.
+
+        Returns True when this call reaped the task.
+        """
+        if not self.stall_timeout:
+            return False
+        if not task or task.get('status') not in ('pending', 'running'):
+            return False
+        last = task.get('updated_at') or task.get('created_at') or 0
+        if time.time() - last <= self.stall_timeout:
+            return False
+        task_id = task.get('id') or task.get('task_id') or '?'
+        logger.warning('[TaskRuntime:%s] task %s stalled (no events for %.0fs '
+                       '> %.0fs) — declaring worker_lost',
+                       self.kind, str(task_id)[:8],
+                       time.time() - last, self.stall_timeout)
+        return self.finish(
+            task_id,
+            error={'kind': 'worker_lost',
+                   'detail': 'no progress events for '
+                             f'{self.stall_timeout:.0f}s — the worker '
+                             'process is presumed dead; safe to retry',
+                   'source': self.error_source},
+            error_context=f'{self.kind}:stall')
+
     # ── Polling ────────────────────────────────────────────────
 
     def poll(self, task_id: str, cursor: int = 0) -> dict:
@@ -265,6 +311,7 @@ class TaskRuntime:
         if not task:
             return {'ok': False, 'error': 'not_found',
                     'events': [], 'next_cursor': cursor, 'done': True}
+        self.reap_if_stalled(task)
 
         with task['events_lock']:
             new_events = task['events'][cursor:]

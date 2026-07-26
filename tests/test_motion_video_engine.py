@@ -221,8 +221,9 @@ def test_engine_narration_degraded_continues_silent(monkeypatch, tmp_path):
     task = _engine_task(tmp_path)
     run_motion_task(task)
     assert task['status'] == 'done', task.get('error')
+    # phase_started events also carry .phase — select the phase event itself.
     narrate = [e for e in task['events']
-               if e.get('phase') == 'narrate'][0]
+               if e['type'] == 'phase' and e.get('phase') == 'narrate'][0]
     assert narrate['degraded'] is True
     assert task['result']['narrated'] is False
 

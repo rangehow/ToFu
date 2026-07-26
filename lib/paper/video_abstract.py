@@ -103,16 +103,25 @@ def start_video_abstract(paper_hash: str, *, lang: str = 'zh',
                          voice: str = '', speed=None,
                          alignment: str = 'loose', narration: bool = True,
                          burn_in: bool = False, quality: str = 'standard',
-                         parallel: int = 2, max_scenes: int = _DEFAULT_MAX_SCENES
-                         ) -> dict:
+                         parallel: int = 2, max_scenes: int = _DEFAULT_MAX_SCENES,
+                         force: bool = False) -> dict:
     """Start a motion-engine task rendering this paper's video abstract.
 
-    Returns ``{'ok', 'task_id', 'scenes', 'source_kind'}`` or
+    Dedup (§2.1 of docs/PAPER_MEDIA_UX_DESIGN.md): a second call with the
+    same (paper_hash, lang, voice, narration, burn_in, quality) joins the
+    in-flight task instead of starting a parallel render — same contract
+    as the motion main route. ``force=True`` (the frontend's Regenerate
+    button) explicitly bypasses the index, like the podcast's ``force``.
+
+    Returns ``{'ok', 'task_id', 'scenes', 'source_kind'}`` (plus
+    ``deduped: True`` on a join) or
     ``{'ok': False, 'reason': 'report_required'|'empty_source'}``.
     """
     from lib.motion_video._env import motion_root
     from lib.motion_video.engine import run_motion_task
     from lib.motion_video.runtime import (
+        _motion_index_get,
+        _motion_index_register,
         _motion_runtime,
         _motion_task_id,
         _new_motion_task,
@@ -121,6 +130,17 @@ def start_video_abstract(paper_hash: str, *, lang: str = 'zh',
 
     if not has_report(paper_hash):
         return {'ok': False, 'reason': 'report_required'}
+
+    dedup_key = ('paper', paper_hash, lang, voice, bool(narration),
+                 bool(burn_in), quality)
+    if not force:
+        existing = _motion_index_get(dedup_key)
+        if existing:
+            logger.info('[Paper:Video] dedup join: %s (paper=%s)',
+                        existing, paper_hash[:8])
+            return {'ok': True, 'task_id': existing, 'deduped': True,
+                    'scenes': 0, 'source_kind': 'joined'}
+
     text, kind = _load_source_text(paper_hash, lang)
     if not text.strip():
         return {'ok': False, 'reason': 'empty_source'}
@@ -129,6 +149,7 @@ def start_video_abstract(paper_hash: str, *, lang: str = 'zh',
         return {'ok': False, 'reason': 'empty_source'}
 
     task_id = _motion_task_id()
+    _motion_index_register(dedup_key, task_id)
     workdir = os.path.join(motion_root(), 'jobs', task_id)
     os.makedirs(workdir, exist_ok=True)
     scenes_path = os.path.join(workdir, 'scenes.json')

@@ -222,12 +222,19 @@ def serve_motion_file(task_id):
     never client-supplied path material.
     """
     task = _motion_runtime.get(task_id)
-    if not task:
-        return api_not_found('not_found')
-    result = task.get('result') or {}
     from flask import request as _req
     part = (_req.args.get('part') or 'mp4').strip()
-    path = result.get('srt_path') if part == 'srt' else result.get('final_path')
+    if task:
+        result = task.get('result') or {}
+        path = result.get('srt_path') if part == 'srt' else result.get('final_path')
+    else:
+        # P-UX4: task gone from memory (restart / TTL) — serve from the
+        # on-disk job dir so a finished video stays playable.
+        workdir = _disk_job_workdir(task_id)
+        if not workdir:
+            return api_not_found('not_found')
+        path = os.path.join(workdir, 'final.srt' if part == 'srt'
+                            else 'final.mp4')
     if not path or not os.path.isfile(path):
         return api_not_found('file_not_ready')
     mimetype = 'application/x-subrip' if part == 'srt' else 'video/mp4'
@@ -238,6 +245,25 @@ def _job_workdir(task) -> str:
     """The job workdir for a task (from its result or its own field)."""
     result = task.get('result') or {}
     return result.get('workdir') or task.get('workdir') or ''
+
+
+def _disk_job_workdir(task_id: str) -> str:
+    """Workdir of a job whose task is no longer live in the runtime (P-UX4).
+
+    A finished video must stay playable after a server restart: the
+    manifest at ``<motion_root>/jobs/<task_id>/job.json`` is the disk
+    anchor. Returns '' when there is no manifest (unknown task id).
+    """
+    import re as _re
+
+    if not _re.fullmatch(r'[A-Za-z0-9_-]{1,64}', task_id or ''):
+        return ''
+    from lib.motion_video._env import motion_root
+    from lib.production.jobs import read_manifest
+    workdir = os.path.join(motion_root(), 'jobs', task_id)
+    if not read_manifest(workdir):
+        return ''
+    return workdir
 
 
 @api_v1_motion_bp.route('/api/v1/motion/videos/<task_id>/scenes',
@@ -251,9 +277,15 @@ async def list_motion_scenes(task_id):
     import json as _json
 
     task = _motion_runtime.get(task_id)
-    if not task:
-        return api_not_found('not_found')
-    workdir = _job_workdir(task)
+    if task:
+        workdir = _job_workdir(task)
+        status = task['status']
+    else:
+        # P-UX4 disk fallback (finished job after a restart).
+        workdir = _disk_job_workdir(task_id)
+        if not workdir:
+            return api_not_found('not_found')
+        status = 'done'
     scenes_file = os.path.join(workdir, 'scenes.json') if workdir else ''
     if not scenes_file or not os.path.isfile(scenes_file):
         return api_not_found('scenes_not_ready')
@@ -276,7 +308,7 @@ async def list_motion_scenes(task_id):
                 os.path.join(workdir, 'audio', f'{sid}.wav')),
         })
     return jsonify({'ok': True, 'task_id': task_id,
-                    'status': task['status'], 'scenes': out})
+                    'status': status, 'scenes': out})
 
 
 @api_v1_motion_bp.route('/api/v1/motion/videos/<task_id>/scenes/<scene_id>/file',
@@ -289,9 +321,13 @@ def serve_scene_file(task_id, scene_id):
     if not _re.fullmatch(r'[A-Za-z0-9_-]{1,64}', scene_id or ''):
         return api_not_found('not_found')
     task = _motion_runtime.get(task_id)
-    if not task:
-        return api_not_found('not_found')
-    workdir = _job_workdir(task)
+    if task:
+        workdir = _job_workdir(task)
+    else:
+        # P-UX4 disk fallback (finished job after a restart).
+        workdir = _disk_job_workdir(task_id)
+        if not workdir:
+            return api_not_found('not_found')
     path = os.path.join(workdir, 'scenes', scene_id, f'{scene_id}.mp4')
     if not workdir or not os.path.isfile(path):
         return api_not_found('file_not_ready')

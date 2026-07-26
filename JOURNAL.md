@@ -1,6 +1,12 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续80) — pt_12fbc45b 收口:分支死按钮根修——接通真写闸 + 拆死 UI(commit `e4342840`,3 文件 +172/-33;新套件 **6/6 含 NEUTER×3**,相邻环 **20/20**)
+
+- **票面是半个 bug,根修挖出另一半:** ①死按钮渲染自 `approval_required` 事件——**服务端从不发射**(只在 events.py 注册),配一个函数体只有 console.warn 的 stub,纯死 UI;②**真闸** `write_approval_request`(tool_dispatch/_approval.py 发射,带可解析 approvalId)在分支流里**无人接收**——分支任务撞上写闸会在服务端干等 120s 超时且零 UI。死按钮是表象,真闸断线才是本体。
+- **修法:** branch_stream.js 新增顶层 `_branchHandleWriteApproval`(镜像主聊天 handler,按 toolCallId/roundNum 戳 round 的 status/approvalId/approvalMeta)——分支工具区用的本来就是共享渲染器 `_renderPendingApprovalBlock`,戳上数据即出**真能点**的按钮(全局 resolveWriteApproval → POST /api/v1/project/write-approval)。死 UI 三件套(渲染块/stub/stale stamping)全拆。
+- **教训(给后人):** 「按钮点了没反应」先查它监听的事件**是否真的会被发射**——`grep -rn 'approval_required' lib/` 只有注册没有 emit,答案立刻清楚。占位事件 + 桩函数是「看起来预留了扩展点,实际是用户面前的死功能」。
+
 ### 2026-07-26(续79) — pt_b5b0a00d 收口:lost_ack harness 重指向 conv_persist_helpers.js(守卫过期家族第 2 例;commit `02c989f9`,1 文件 +13/-6;2 红→**2/2 绿**,NEUTER 仍咬,相邻环 **38/38**)
 
 - **同族第二例(继 pt_124edf83):** Epic-E slice 3(`b33d9d21`)把 `_rebaseUnackedTail`/`_isErrorOnlyAssistant` 抽到 `conv_persist_helpers.js`,harness 仍只 eval conversations.js。修:harness 先 eval helpers(argv[3]),NEUTER 在新家变异(`helpers_override`)。**抽取重构的收尾清单必须含「引用该函数的测试 harness」一项**——这是该家族今天的第 2 次,值得写进 Epic-E slice checklist。

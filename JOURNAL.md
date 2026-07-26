@@ -1,6 +1,25 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续35) — Opus 5 收口订正:owner 连续两轮打脸,charter 改对(v4)+ 抓出一条**已过期的 PIN 前提**(零代码变更;新票 `pt_efcc3d01ca554544`)
+- **本轮没有写一行产品代码,产出是把三个错误结论纠正掉,并发现一个真问题。**
+- **错误 1(我的,owner 抓出):** 上一版 charter 写了「工具块已被现有断点完整缓存住」—— **这句从未测量过**,是从「工具逐轮不变」推导的。已删除,换成实测数据。WONTFIX 的成立**只依赖前提不发生**,不依赖任何缓存效率数字。
+- **错误 2(我的,owner 抓出):** 我算出「命中率 ~0.10」并据此说缓存表现不佳。**量纲错了** —— `task_results.metadata.usage.prompt_tokens` 是**整个任务多轮的累加值**,与**单轮** `cache_read` 相除毫无意义。按模型聚合后真实命中率:**Opus 5 = 53.3%**(114 任务,340.7M/181.3M),kimi-k3 58.1%。**缓存工作良好。** 这条度量陷阱已写进 charter,免得下一个人再踩。
+- **错误 3(我的,owner 抓出):** 我解释 `cache_write` 差异时说「4.8 的 2.64G 是我方 `synthesize_usage` 合成的」。**站不住** —— 该函数全仓只有一个调用方 `lib/billing/cost.py:117`,在计费适配器里,**从不回写 `task_results.metadata`**。
+- **真实机制(owner 给出、我复核确认):`cache_write` 的有无取决于该模型走哪条 usage 约定**,不是模型能力差异,也不是我方漏接字段。用 `usage_cache_convention` 逐条判定,对应关系近乎完美:
+
+  | 模型 | 约定 | cw>0 轮数 |
+  |---|---|---|
+  | 4.8 | anthropic 4881 / openai 121 | 4886 |
+  | 4.7 | anthropic 123 / openai 11 | 123 |
+  | 4.6 | anthropic 129 | 129 |
+  | **Opus 5** | **openai 117** | **0** |
+  | glm / qwen | 全 openai | 0 |
+
+  anthropic 残差约定的线路网关**真回** `cache_creation_input_tokens`(经 `_sse_core.py::canonicalize_usage_cache_keys` 归一);openai 兼容线不回。旗舰证据:4.7 某轮 `prompt_tokens=9` 而 `cache_write=1074046` —— 只有残差语义才可能是这个形状。
+- **★ 本轮真正的发现:一条 PIN 测试在保护一个过期事实。** `tests/test_cache_accounting_convention.py` Defect 4 的两条 PIN 断言「网关在**所有模型**上把 `cache_write` 钉为 0(231/231 观测轮)」,据此把 `is_floor_collapse` 与 `_classify_break` 的 no_reuse 分支判为**本部署死代码**,还写明「不要据此调 `_FLOOR_WRITE_LO`」。**当前全库:8000 条抽样中 5137 轮 cw>0,其中 4697 轮超过那个被断言不可达的 `>20000` 阈值,单轮最大 29,902,155。** 根因不是网关变了,是**当年 231 轮样本只覆盖了 openai-兼容一条线**。已开票 `pt_efcc3d01ca554544`,票面写明「前提可能已过期,用当前数据重判,勿重述旧结论」,并把「这不是我方解析漏接字段」这条错误方向提前排除。
+- **教训(比这些错误本身值钱):** 我这一轮连续三次给出**机制解释**而非**测量**,三次都错。工具集不变那部分之所以站得住,恰恰因为它是数出来的(156/104/20 三个口径)。**凡是「因为 A 所以 B」的推断,只要 B 可测,就必须去测。**
+
 ### 2026-07-26(续34) — 一条回复被提交两次:同 `_taskId` 两条 assistant 行,收敛进共享 reconcile 谓词(epic `pt_97f32163837b42ac`,commit `c1e1ff84`,2 文件 +514;新套件 19/19 含 NEUTER,相邻两环 49/49 + 65/66(1 红 A/B 实证预存在),collect **9977** 0 err)
 - **全库实测(不是抽样):** 4163 个会话里 **87 个**携带 **138 条多余 assistant 行** —— 同一 `_taskId` 下两条(或更多)行,content 逐字节相同,只在身份(服务端 UUID vs 客户端 `tmp_` id)与「哪些字段活下来」上不同。旗舰样本 `ms0z3wedmvs5l9` msgs[17]/[20];最坏的 `mrx1eknh7k8t63` **同一条回复存了 8 遍**。
 - **危害不止「看到两遍」:** 副本经常**丢掉 thinking**(旗舰对里丢了 5075 字符推理);若它排在后面,就成了该轮的「最终态」来源。

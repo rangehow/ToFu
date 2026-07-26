@@ -351,6 +351,41 @@ def _register_builtins() -> None:
                  }),
                  category='project', description='Project file tools / code exec'),
         ToolSpec('browser', _build_browser, phase='base',
+                 # 19 names = BROWSER_TOOLS (16) + ADVANCED_BROWSER_TOOLS (3).
+                 # Declared so the registry stays the single source of truth
+                 # for "what tools exist" — an undeclared handler is invisible
+                 # to the partition tables and to the custom-tool collision
+                 # check in lib/tools/tool_env.py.
+                 provides=frozenset({
+                     'browser_navigate', 'browser_read_tab', 'browser_list_tabs',
+                     'browser_create_tab', 'browser_close_tab',
+                     'browser_click', 'browser_hover', 'browser_keyboard',
+                     'browser_execute_js', 'browser_screenshot',
+                     'browser_get_cookies', 'browser_get_history',
+                     'browser_get_app_state', 'browser_summarize_page',
+                     'browser_get_interactive_elements', 'browser_wait',
+                     'browser_fill_form', 'browser_hover_and_click',
+                     'browser_right_click_menu',
+                 }),
+                 # These DRIVE the user's real browser session, so they belong
+                 # in the serial write partition + behind the Manual approval
+                 # gate (_pipeline.py derives needs_approval from it). Until
+                 # this was declared, browser_execute_js could run arbitrary JS
+                 # in the user's page with no prompt, from the parallel pool.
+                 # NOTE: this makes them SERIAL — a deliberate behaviour change;
+                 # concurrent clicks on one page were never actually safe.
+                 write_tools=frozenset({
+                     'browser_navigate', 'browser_click', 'browser_keyboard',
+                     'browser_execute_js', 'browser_fill_form',
+                     'browser_hover_and_click', 'browser_right_click_menu',
+                     'browser_create_tab', 'browser_close_tab',
+                 }),
+                 # Read-only observers stay parallel-safe AND cacheable within
+                 # a task. browser_read_tab/screenshot are deliberately NOT
+                 # idempotent — the page changes under us between calls.
+                 idempotent_tools=frozenset({
+                     'browser_list_tabs', 'browser_get_app_state',
+                 }),
                  category='browser', description='Browser automation tools'),
         ToolSpec('desktop', _build_desktop, phase='base',
                  # provides = LLM 可见的 10 个(desktop_move_file 刻意不
@@ -400,11 +435,18 @@ def _register_builtins() -> None:
         ToolSpec('conv_ref', _build_conv_ref, phase='base',
                  provides=frozenset({'list_conversations', 'get_conversation',
                                      'project_charter_read', 'project_charter_propose',
+                                     'project_charter_commit',
                                      'project_board_read', 'project_board_post',
                                      'project_board_claim', 'project_board_complete',
                                      'project_board_block',
                                      'project_peer_status', 'project_feed_read',
                                      'project_message', 'project_intervene'}),
+                 # project_charter_commit appends a decision that EVERY sibling
+                 # conversation of the project then reads as shared intent —
+                 # the widest-blast-radius write in this family, so it is
+                 # approval-eligible. propose/board/peer only queue advisory
+                 # items a human or peer can drop, so they stay parallel.
+                 write_tools=frozenset({'project_charter_commit'}),
                  idempotent_tools=frozenset({'list_conversations', 'get_conversation',
                                              'project_charter_read', 'project_board_read',
                                              'project_peer_status', 'project_feed_read'}),
@@ -414,10 +456,15 @@ def _register_builtins() -> None:
                  category='human', description='Ask the human for guidance'),
         # ── capability phase ──
         ToolSpec('memory', _build_memory, phase='capability',
+                 provides=frozenset({
+                     'search_memories', 'create_memory', 'update_memory',
+                     'delete_memory', 'merge_memories',
+                 }),
                  write_tools=frozenset({
                      'create_memory', 'update_memory',
                      'delete_memory', 'merge_memories',
                  }),
+                 idempotent_tools=frozenset({'search_memories'}),
                  category='memory', description='Memory CRUD tools'),
         ToolSpec('skills', _build_skills, phase='capability',
                  provides=frozenset({'activate_skill'}),
@@ -428,6 +475,19 @@ def _register_builtins() -> None:
                  provides=frozenset({'todo_write'}),
                  category='task', description='Structured task checklist'),
         ToolSpec('scheduler', _build_scheduler, phase='capability',
+                 provides=frozenset({
+                     'schedule_create', 'schedule_list', 'schedule_manage',
+                     'timer_create', 'timer_manage', 'await_task',
+                 }),
+                 # These persist state that OUTLIVES the turn (cron jobs,
+                 # polling watchers) and can execute shell/python on a
+                 # schedule — approval-eligible + serial. schedule_list /
+                 # await_task are pure reads and stay parallel.
+                 write_tools=frozenset({
+                     'schedule_create', 'schedule_manage',
+                     'timer_create', 'timer_manage',
+                 }),
+                 idempotent_tools=frozenset({'schedule_list'}),
                  category='scheduler', description='Scheduler / proactive agent tools'),
         ToolSpec('swarm', _build_swarm, phase='capability',
                  provides=frozenset({

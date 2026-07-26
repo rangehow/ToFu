@@ -147,6 +147,124 @@ def _approval_meta_create_project(approval_meta, fn_args):
         approval_meta['description'] = f'Create new workspace root at {target_path}'
 
 
+def _approval_meta_browser_execute_js(approval_meta, fn_args):
+    """Enrich approval metadata for ``browser_execute_js``.
+
+    The JS body IS the risk — approving this blind is strictly worse than not
+    prompting, so the code is surfaced verbatim (bounded) in the prompt.
+    """
+    code = fn_args.get('code', '') or ''
+    approval_meta['search'] = code[:2000] + ('…' if len(code) > 2000 else '')
+    approval_meta['codeChars'] = len(code)
+    approval_meta['codeLines'] = code.count('\n') + 1
+    tab = fn_args.get('tab_id', '') or fn_args.get('tabId', '')
+    if tab:
+        approval_meta['path'] = f'tab {tab}'
+    approval_meta['description'] = (
+        approval_meta.get('description', '')
+        or 'Execute JavaScript in the browser page'
+    )
+
+
+def _approval_meta_browser_navigate(approval_meta, fn_args):
+    """Enrich approval metadata for ``browser_navigate`` (destination URL)."""
+    url = fn_args.get('url', '') or ''
+    approval_meta['path'] = url
+    approval_meta['url'] = url
+    approval_meta['description'] = (
+        approval_meta.get('description', '') or f'Navigate the browser to {url}'
+    )
+
+
+def _approval_meta_browser_fill_form(approval_meta, fn_args):
+    """Enrich approval metadata for ``browser_fill_form``.
+
+    Field VALUES may be personal data the model inferred; show the field names
+    and a bounded preview of each value so the user can spot a bad autofill.
+    """
+    fields = fn_args.get('fields') or fn_args.get('form_data') or {}
+    pairs = []
+    if isinstance(fields, dict):
+        items = list(fields.items())
+    elif isinstance(fields, list):
+        items = [(f.get('selector', '?'), f.get('value', ''))
+                 for f in fields if isinstance(f, dict)]
+    else:
+        items = []
+    for k, v in items[:20]:
+        v_str = str(v)
+        pairs.append(f'{k} = {v_str[:120]}' + ('…' if len(v_str) > 120 else ''))
+    approval_meta['fieldCount'] = len(items)
+    approval_meta['replace'] = '\n'.join(pairs)
+    approval_meta['description'] = (
+        approval_meta.get('description', '')
+        or f'Fill {len(items)} form field(s) in the browser'
+    )
+
+
+def _approval_meta_schedule_create(approval_meta, fn_args):
+    """Enrich approval metadata for ``schedule_create``.
+
+    A cron job outlives the turn and can run shell/python repeatedly, so both
+    the CADENCE and the PAYLOAD must be visible before approval.
+    """
+    cmd = fn_args.get('command', '') or ''
+    approval_meta['schedule'] = fn_args.get('schedule', '')
+    approval_meta['taskType'] = fn_args.get('task_type', 'command')
+    approval_meta['search'] = cmd[:2000] + ('…' if len(cmd) > 2000 else '')
+    approval_meta['path'] = fn_args.get('name', '')
+    approval_meta['description'] = (
+        f"{approval_meta['taskType']} on schedule "
+        f"'{approval_meta['schedule']}': {cmd[:200]}"
+    )
+
+
+def _approval_meta_schedule_manage(approval_meta, fn_args):
+    """Enrich approval metadata for ``schedule_manage`` (action + target)."""
+    action = fn_args.get('action', '') or ''
+    task_id = fn_args.get('task_id', '') or ''
+    approval_meta['action'] = action
+    approval_meta['path'] = task_id
+    approval_meta['description'] = f"{action or 'manage'} scheduled task {task_id}"
+
+
+def _approval_meta_timer_create(approval_meta, fn_args):
+    """Enrich approval metadata for ``timer_create``.
+
+    Surfaces the predicate AND the continuation — the continuation is what
+    eventually runs unattended, so it is the part worth reading.
+    """
+    cont = fn_args.get('continuation_message', '') or ''
+    check = fn_args.get('check_command', '') or fn_args.get('condition_command', '') or ''
+    approval_meta['search'] = check[:1000] + ('…' if len(check) > 1000 else '')
+    approval_meta['replace'] = cont[:1000] + ('…' if len(cont) > 1000 else '')
+    approval_meta['pollInterval'] = fn_args.get('poll_interval', '')
+    approval_meta['description'] = 'Create a polling watcher (runs unattended)'
+
+
+def _approval_meta_timer_manage(approval_meta, fn_args):
+    """Enrich approval metadata for ``timer_manage`` (action + target)."""
+    action = fn_args.get('action', '') or ''
+    approval_meta['action'] = action
+    approval_meta['path'] = fn_args.get('timer_id', '') or ''
+    approval_meta['description'] = f"{action or 'manage'} timer {approval_meta['path']}"
+
+
+def _approval_meta_charter_commit(approval_meta, fn_args):
+    """Enrich approval metadata for ``project_charter_commit``.
+
+    The committed text becomes shared intent injected into EVERY sibling
+    conversation of the project, so it gets the widest blast radius in this
+    family — show the full decision text.
+    """
+    decision = fn_args.get('decision', '') or ''
+    approval_meta['replace'] = decision[:2000] + ('…' if len(decision) > 2000 else '')
+    approval_meta['decisionChars'] = len(decision)
+    approval_meta['description'] = (
+        'Commit a project-wide charter decision (all sibling conversations read it)'
+    )
+
+
 # Module-level dispatch table — maps tool name → approval meta enricher.
 # Only tools that need special approval metadata are listed; tools not in
 # this dict get the base metadata only (path + description).
@@ -158,6 +276,17 @@ _APPROVAL_META_ENRICHERS = {
     'insert_content':   _approval_meta_insert_content,
     'insert_contents':  _approval_meta_insert_contents,
     'create_project':   _approval_meta_create_project,
+    # Newly write-partitioned families. Without an enricher the prompt renders
+    # a bare tool name and the user approves blind — false confidence, worse
+    # than not prompting at all.
+    'browser_execute_js':     _approval_meta_browser_execute_js,
+    'browser_navigate':       _approval_meta_browser_navigate,
+    'browser_fill_form':      _approval_meta_browser_fill_form,
+    'schedule_create':        _approval_meta_schedule_create,
+    'schedule_manage':        _approval_meta_schedule_manage,
+    'timer_create':           _approval_meta_timer_create,
+    'timer_manage':           _approval_meta_timer_manage,
+    'project_charter_commit': _approval_meta_charter_commit,
 }
 
 

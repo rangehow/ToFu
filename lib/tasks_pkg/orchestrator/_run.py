@@ -385,6 +385,27 @@ def run_task(task: dict[str, Any]) -> None:
             task=task, cfg=cfg, messages=messages, tid=tid, vu_phase=_vu_phase,
         )
 
+        # ── Section 3.5 (SPAWN) ── Memory Prefetch, started EARLY
+        #   Runs on its own thread from HERE so it overlaps Section 3's
+        #   context injection — the FUSE/DB-bound project + memory context
+        #   loads — instead of the microseconds of checkpoint bookkeeping that
+        #   follow it. Joined by await_memory_prefetch() just before the stream
+        #   loop; see _memory_prefetch.py for why starting here is byte-safe
+        #   (every context-inject mutation to the true tail is wrapped in
+        #   <system-reminder>, which the rerank's query builder strips).
+        #
+        #   `injected_tool_calls` is read from cfg['toolHistory'] rather than
+        #   inject_tool_history()'s return value further down: that call is the
+        #   only producer of a non-zero count and it is driven entirely by that
+        #   cfg key, so the eligibility answer is identical and available now.
+        #   A parity test pins the two agreeing.
+        maybe_run_memory_prefetch(
+            task=task, cfg=cfg, messages=messages, tool_list=tool_list,
+            project_path=project_path, project_enabled=project_enabled,
+            memory_enabled=memory_enabled, has_real_tools=has_real_tools,
+            injected_tool_calls=len(cfg.get('toolHistory') or []),
+        )
+
         # ── Section 3: Context Injection ── (pt_03f4cdf1 slice 7)
         #   Extracted to lib.tasks_pkg.orchestrator._context_inject.
         #   The helper does: VU phase → _inject_system_contexts →
@@ -427,18 +448,21 @@ def run_task(task: dict[str, Any]) -> None:
             tool_call_happened = True
             tool_round_num = _injected_tool_calls  # offset so new roundNums don't conflict
 
-        # ── Section 3.5: Memory Prefetch ── (pt_03f4cdf1 slice 9)
-        #   Extracted to lib.tasks_pkg.orchestrator._memory_prefetch.
-        #   Proactive, per-user-turn, round-0-only BM25 → cheap-LLM
-        #   precision → inject <relevant_memories>. Always stashes
-        #   the profile-consolidation eligibility flag for the post-done
-        #   spawner in _finalize.py. Never raises.
-        maybe_run_memory_prefetch(
-            task=task, cfg=cfg, messages=messages, tool_list=tool_list,
-            project_path=project_path, project_enabled=project_enabled,
-            memory_enabled=memory_enabled, has_real_tools=has_real_tools,
-            injected_tool_calls=_injected_tool_calls,
-        )
+        # ── Section 3.5 ── the memory prefetch was SPAWNED above, before
+        #   Section 3, so it overlaps context injection. It is joined by
+        #   await_memory_prefetch() just before the stream loop.
+        #
+        #   Parity guard: the spawn passed len(cfg['toolHistory']) as the
+        #   eligibility input; assert it matches what inject_tool_history
+        #   actually injected, so a future change to that function's counting
+        #   cannot silently flip the prefetch's skip decision.
+        if bool(_injected_tool_calls) != bool(cfg.get('toolHistory') or []):
+            logger.warning(
+                '[%s] memory-prefetch eligibility drift: injected=%s but '
+                'cfg[toolHistory]=%s — the early spawn used the latter; '
+                'inject_tool_history no longer derives its count from that '
+                'key alone', tid, _injected_tool_calls,
+                len(cfg.get('toolHistory') or []))
 
         # ★ Apply preserved content prefix from Continue — ensures backend checkpoints
         #   include text the LLM generated alongside completed tool rounds in the prior

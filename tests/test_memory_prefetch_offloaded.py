@@ -280,6 +280,65 @@ def test_await_bounds_its_wait_and_leaves_messages_consistent(seam):
 
 # ── The wiring itself (the spawn is useless without the join) ───────────
 
+def test_spawn_precedes_context_inject_so_it_overlaps_real_io():
+    """The spawn must sit BEFORE Section 3, not between it and the loop.
+
+    This is the difference between a structurally-correct offload and one that
+    actually saves time. The first cut of this work spawned at Section 3.5 —
+    after context-inject — so the only thing overlapping the 800ms rerank was
+    the checkpoint-stash bookkeeping that follows it: measured at ~0.001 ms,
+    i.e. 0.0001% of the rerank. The join then blocked for essentially the full
+    duration and TTFT was unchanged.
+
+    Section 3 (inject_context_and_emit_chips) is the FUSE/DB-bound work — it
+    consumes the project + memory prefetch futures. Spawning ahead of it is
+    what gives the rerank something real to hide behind.
+    """
+    import pathlib
+    import re
+    src = pathlib.Path('lib/tasks_pkg/orchestrator/_run.py').read_text()
+
+    spawn = src.find('maybe_run_memory_prefetch(')
+    inject = src.find('inject_context_and_emit_chips(')
+    join = src.find('await_memory_prefetch(task)')
+    loop = re.search(r'^\s*while round_num \+ 1 <=', src, re.M)
+
+    assert -1 not in (spawn, inject, join), 'a required call site vanished'
+    assert loop is not None, 'stream loop not found — update this guard'
+    assert spawn < inject, (
+        'the prefetch spawn (%d) must precede context-inject (%d), otherwise '
+        'it only overlaps microseconds of bookkeeping and TTFT is unchanged'
+        % (spawn, inject))
+    assert inject < join < loop.start(), (
+        'ordering broken: expected inject(%d) < join(%d) < loop(%d)'
+        % (inject, join, loop.start()))
+
+
+def test_early_spawn_uses_a_tool_history_signal_equivalent_to_the_late_one():
+    """The early spawn cannot call inject_tool_history's return value yet, so
+    it reads cfg['toolHistory'] directly. Pin that the substitution is sound:
+    inject_tool_history's count is driven by that key alone, so the
+    eligibility answer (zero vs non-zero) is identical.
+
+    If inject_tool_history ever starts injecting from another source, this
+    fails and the early spawn's input must be revisited.
+    """
+    from lib.tasks_pkg.message_builder import inject_tool_history
+
+    for history in ([], [{'toolCalls': [{'id': 'c1', 'type': 'function',
+                                         'name': 'x', 'arguments': '{}'}],
+                          'results': [{'tool_call_id': 'c1',
+                                       'content': 'r'}]}]):
+        msgs = [{'role': 'user', 'content': 'hi'}]
+        cfg = {'toolHistory': history}
+        task = _task()
+        injected = inject_tool_history(msgs, cfg, task, 'gpt-4o')
+        assert bool(injected) == bool(history), (
+            'inject_tool_history returned %s for toolHistory=%d entries — the '
+            'early spawn reads len(cfg["toolHistory"]) and would now disagree'
+            % (injected, len(history)))
+
+
 def test_run_task_joins_the_prefetch_before_the_stream_loop():
     """STATIC GUARD on call ORDER in run_task.
 

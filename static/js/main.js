@@ -4,7 +4,7 @@
    wires toolbar UI, and boots the app.
    Feature modules live in separate files:
      image-gen.js, log-clean.js, translation.js,
-     upload.js, project.js, memory.js, scheduler.js, myday.js
+     upload.js, project.js, memory.js, myday.js
    ═══════════════════════════════════════════ */
 
 /* pendingPdfTexts → defined in upload.js */
@@ -419,15 +419,6 @@ function _applyMemoryUI(enabled) {
     ?.classList.toggle("visible", memoryEnabled);
   _updateMemoryModalBtn();
 }
-function _applySchedulerUI(enabled) {
-  schedulerEnabled = !!enabled;
-  document
-    .getElementById("schedulerToggle")
-    ?.classList.toggle("active", schedulerEnabled);
-  document
-    .getElementById("schedulerBadge")
-    ?.classList.toggle("visible", schedulerEnabled);
-}
 function _applyImageGenToolUI(enabled) {
   imageGenEnabled = !!enabled;
   document
@@ -600,7 +591,6 @@ function _restoreConvToolState(conv) {
   _applyBrowserUI(!!conv.browserEnabled);
   _applyDesktopUI(!!conv.desktopEnabled);
   _applyMemoryUI(conv.memoryEnabled !== undefined ? !!conv.memoryEnabled : true);
-  _applySchedulerUI(!!conv.schedulerEnabled);
   _applySwarmUI(!!conv.swarmEnabled);
   _applyEndpointUI(!!conv.endpointEnabled);
   _applyAutopilotUI(!!conv.autopilotEnabled);

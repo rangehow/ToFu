@@ -239,18 +239,25 @@ let thinkingEnabled = true,
   chatMode = "chat",
   debugVisible = false,
   sidebarSearchQuery = "";
+/* Boot-path localStorage reads must never throw: one corrupted key (hand
+ * edit, a truncated write in private mode, an older schema) would otherwise
+ * kill module evaluation and white-screen the whole app (pt_26a427d3). */
+function _safeJsonParse(raw, fallback) {
+  if (raw == null) return fallback;
+  try { return JSON.parse(raw); } catch (_) { return fallback; }
+}
 let serverModel = "aws.claude-opus-4.8";
-let config = JSON.parse(
-  localStorage.getItem("claude_client_config") ||
-    JSON.stringify({
-      temperature: 1,
-      maxTokens: 128000,
-      thinkingBudget: 64000,
-      thinkingEffort: "medium",
-      imageMaxWidth: 0,           // 0 = follow server upload-shrink policy (recommended)
-      systemPrompt: "",
-      model: serverModel,
-    }),
+let config = _safeJsonParse(
+  localStorage.getItem("claude_client_config"),
+  {
+    temperature: 1,
+    maxTokens: 128000,
+    thinkingBudget: 64000,
+    thinkingEffort: "medium",
+    imageMaxWidth: 0,           // 0 = follow server upload-shrink policy (recommended)
+    systemPrompt: "",
+    model: serverModel,
+  },
 );
 
 /* ── (cost.js, debug_panel.js extracted here) ── */
@@ -355,7 +362,42 @@ function scrollToBottom(force) {
  * A simple, always-available fallback affordance: when the reader scrolls
  * up away from the latest message, a floating pill appears; clicking it jumps
  * to the bottom via the real-height force-scroll path. */
+/* One-time arming of the manual-scroll-up listeners that CLEAR the explicit
+ * bottom latch: wheel-up and touch drag-down (= scroll content up) are the
+ * user's "stop following the bottom" signal. Registered lazily on the first
+ * click so the chat container is guaranteed to exist. */
+let _stbLatchListenersArmed = false;
+function _armStbLatchClearListeners() {
+  if (_stbLatchListenersArmed) return;
+  const c = _getChatContainer();
+  if (!c) return;  // container not in DOM yet — retry on next click
+  _stbLatchListenersArmed = true;
+  c.addEventListener("wheel", (e) => {
+    if (e.deltaY < 0) _explicitBottomLatch = null;
+  }, { passive: true });
+  let _touchY = null;
+  c.addEventListener("touchstart", (e) => {
+    _touchY = e.touches.length ? e.touches[0].clientY : null;
+  }, { passive: true });
+  c.addEventListener("touchmove", (e) => {
+    if (_touchY != null && e.touches.length
+        && e.touches[0].clientY > _touchY + 4) {
+      _explicitBottomLatch = null;  // drag down = scroll content up
+    }
+  }, { passive: true });
+}
 function scrollChatToBottom() {
+  /* ★ Explicit-bottom latch: this click is a COMMAND — "take me to the
+   * latest". Latch it so EVERY render still to come during this open
+   * (Phase-2 reconcile, .then fallback, background repaints) re-pins to the
+   * TRUE bottom instead of the anchor / no-scroll-on-open heuristics, which
+   * exist for unsolicited paints only. Cleared by manual scroll-up, an
+   * explicit scrollToTurn navigation, a conversation switch, or open end. */
+  const _latchConv = getActiveConv();
+  if (_latchConv && typeof _explicitBottomLatch !== "undefined") {
+    _explicitBottomLatch = _latchConv.id;
+    _armStbLatchClearListeners();
+  }
   /* ★ Hidden-tail restore (bounded-window fix). When the reader scrolled up
    * through history, `_loadOlderMessages` evicted the TAIL bubbles and
    * `_lazyRenderedTo` caps the window BELOW the newest message. A bare

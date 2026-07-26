@@ -639,7 +639,6 @@ _BUNDLE_FILES = [
     # (typeof-guarded), and both load together in the feature bundle, so the
     # ordering constraint is preserved within _DEFERRED_FILES. See
     # feature-loader.js.
-    'scheduler.js',
     'optimizer.js',
     'update.js',
     'timer.js',

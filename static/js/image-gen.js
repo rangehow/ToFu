@@ -11,6 +11,7 @@ var _igSelectedCount = 1;           // 1 | 2 | 4 — batch count
 let _igGenerating = false;
 let _igAbortController = null;       // AbortController for single request
 let _igAbortControllers = [];        // AbortControllers for batch requests
+let _igUserCancelled = false;        // user hit Cancel (vs the 150s watchdog firing)
 
 // All available image gen models (order matches dropdown)
 const _IG_ALL_MODELS = [
@@ -421,21 +422,24 @@ async function generateImageDirect() {
     clearInterval(timerInterval);
     const loadingEl = document.getElementById(loadingId);
     const isAbort = err.name === 'AbortError';
-    const errText = isAbort ? 'Request timed out (150s). The server may still be generating — please try again.'
+    const isUserCancel = isAbort && _igUserCancelled;
+    const errText = isUserCancel ? 'Cancelled by user.'
+                  : isAbort ? 'Request timed out (150s). The server may still be generating — please try again.'
                             : (err.message || 'Failed to connect to server');
     if (loadingEl) loadingEl.remove();
     console.error('[ImageGen] Direct generation error:', err);
 
-    // Show timeout toast
-    if (isAbort) {
+    // Show timeout toast (never on a deliberate cancel)
+    if (isAbort && !isUserCancel) {
       _igToast('⏱ Generation timed out (150s)', 'warning');
     }
 
     // ★ CRITICAL: Always push an assistant error message to prevent orphaned user messages
-    const errTitle = isAbort ? 'Generation timed out' : 'Network error';
-    const errMsg = { role: 'assistant', content: `${isAbort ? 'Image generation timed out' : 'Image generation network error'}: ${errText}`,
+    const errTitle = isUserCancel ? 'Cancelled' : isAbort ? 'Generation timed out' : 'Network error';
+    const errType = isUserCancel ? 'cancelled' : isAbort ? 'timeout' : 'network';
+    const errMsg = { role: 'assistant', content: `${isUserCancel ? 'Image generation cancelled' : isAbort ? 'Image generation timed out' : 'Image generation network error'}: ${errText}`,
                      timestamp: Date.now(), _isImageGen: true,
-                     _igError: { title: errTitle, text: errText, detail: '', errorType: isAbort ? 'timeout' : 'network', isTimeout: isAbort, isRateLimit: false, isContentBlocked: false } };
+                     _igError: { title: errTitle, text: errText, detail: '', errorType: errType, isTimeout: isAbort && !isUserCancel, isRateLimit: false, isContentBlocked: false } };
     _ensureMsgId(errMsg);
     conv.messages.push(errMsg);
     if (conv.id === activeConvId) window.ConvView.replaceAll(conv.id, { forceScroll: true });
@@ -444,6 +448,7 @@ async function generateImageDirect() {
   } finally {
     _igGenerating = false;
     _igAbortController = null;
+    _igUserCancelled = false;
     if (genBtn) genBtn.disabled = false;
     if (conv.id === activeConvId && chatDiv) chatDiv.scrollTop = chatDiv.scrollHeight;
   }
@@ -462,6 +467,7 @@ function _igUpdateGenButton() {
 
 /** Cancel an in-flight image generation (single or batch) */
 function _igCancelGeneration() {
+  _igUserCancelled = true;  // read by the single-mode catch to NOT mislabel this as a 150s timeout
   if (_igAbortController) {
     _igAbortController.abort();
   }

@@ -1,6 +1,23 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续26) — 「无头无尾的 Agent 卡片」根修:两条会话写入路径的守卫不对称,VU 载体把停止哨兵写成了真消息(owner 自己复现并定性,commit `c0d10272`,2 文件 +418/-2;新套件 13/13 含 NEUTER×2,相邻两环 95/95 + 71/74(3 红 stash A/B 实证预存在),collect **9936** 0 err)
+- **病象(截图 + 活库对齐):** conv `ms0z3wedmvs5l9` 的 `msgs[19]` —— `role=assistant`、`content='['`(**一个字符**)、前面是一条 VU 用户行所以**不回答任何真实提问**(无头)、finish 条只有模型名(无尾)。
+- **溯源(不是猜,是对表):** `'['` 是 autopilot 虚拟用户 `[VU: TASK_DONE]` 哨兵的**第一个流式分片**;该 `_taskId=bb5d457f` 在 `task_results` 里的权威内容正是 `'[VU: TASK_DONE]'`、`_vu_subtask` 载体、`status=done`。**VU 载体把自己的停止哨兵写成了一条真正的助手消息。**
+- **根因 —— 守卫不对称(owner 定性,我核实):**
+
+  | 路径 | 载体守卫 |
+  |---|---|
+  | `_sync_result_to_conversation`(终态) | **有**(`_inline_messages`) |
+  | `_sync_partial_to_conversation`(5s 流式检查点) | **没有** |
+
+  VU 子任务(`autopilot.py:415-427`)同时做三件事:①挂**真** `convId` ②置 `_inline_messages`/`_vu_subtask` ③用 `_record_latest_task` 把**自己**登记成该会话的 latest(pt_8dc03017 HB-1)。③ 意味着流式路径的新鲜度闸**按构造放行**;没有载体守卫,它找不到可复用的 assistant 槽(尾部是 VU 自己的 **user** 行),于是 `_new_assistant_slot` **新建并 append** 一行。
+- **「无尾」是同一个洞的第二段(不是第二个 bug):** 这行**永远等不到终态 sync**(终态守卫正确地拒绝载体),所以 content 冻结在第一个分片,而 partial 里的 P1a 补丁又零散盖上 finishReason/usage/cost —— **一条永远拼不全的 finish 条**。
+- **修法(owner 指定,拒绝前端过滤/删数据):** 把守卫下沉成**共享谓词**。`is_carrier_task`(`_registry.py`)本就是「载体 ≠ 用户可见工作」的单一事实源(`/api/chat/active`、重启守卫、侧边栏三个消费者都在用)。两条 conv-sync 路径改用同一个谓词:partial 加 `if is_carrier_task(task): return`;terminal 把裸 `_inline_messages` 判断换掉 —— 顺带纳入 `_vu_subtask`,**关掉一处此前只在终态路径存在的潜伏漂移**(纯 `_vu_subtask` 载体过去能溜过终态守卫)。导入无环:`_registry` 只依赖 `_state`/`_persist`。
+- **测试断言的是「类」不是字符串(owner 要求):** 13 测 failing-first(修前 9 红)。载体三形态全覆盖 —— `_vu_subtask+_inline_messages` / **纯 `_inline_messages`**(api_v1/chat、api_v1/agent_run、compat_openai、compat_anthropic、tasks_pkg.entry 五个产生点)/ 纯 `_vu_subtask`。**NEUTER×2 都咬**:任一路径绕过谓词,幽灵行以**线上原形**(`content='['`)复现。另有两条容易被忽略的面:①**症状钉**(两次检查点复现整张卡,并断言哨兵不得以任何形式泄漏进会话)②**覆写面** —— 尾部恰好是真 assistant 行时,无守卫的 partial 会**覆盖一条已结算的答案**(静默数据丢失,比可见幽灵更糟)。反向断言:真任务在两条路径上照常写、照常盖 `_committedMsg`。再加一条 SSOT 静态闸:两个函数都必须引用 `is_carrier_task`,防止未来又退回两份手写字符串判断。
+- **诚实边界:** 相邻环 71/74 的 3 红(`test_chat_manager_migration::test_append_event_phase_tracking` + `test_assistant_msgid_unification` 两条)**git stash A/B 在净 HEAD 同形复现**,与本刀无关(后者红因 `_rebaseUnackedTail` 已被 Epic-E slice 3 搬去 `conv_persist_helpers.js`,测试仍在旧文件里找符号 —— 测试漂移)。
+- **同批发现、已单独开票 `pt_97f32163837b42ac`(按 owner 不夹带的规矩):** 同一会话 `msgs[17]`/`msgs[20]` 携带**同一 `_taskId`**,content/toolRounds/segments/usage 逐字节相同,差异只在 `_msgId`(服务端 UUID vs 客户端 `tmp_` 前缀)+ 一份丢了 5075 字符 thinking。全库近期 84 会话扫出 **8 例**。形状指向**客户端 tmp_ 孪生行经正常全量 PUT 落库**,而非服务端两次 sync(服务端两次都写 UUID,不会产生 `tmp_`)。现成的 `_rebaseUnackedTail` 有 `_taskId` 去重分支专治此症,但**只在 409 CAS rescue-PUT 上跑**,正常 PUT 路径不参与。与 carrier 幽灵行**无因果**(8 例 dup 与 6 例 ghost 仅 2 例共现)。
+
 ### 2026-07-26(续25) — 运行时不变式从「装了但打不响」变成真能响:调用点挪到咽喉 + 生产可见(owner 复核续24 抓出,commit 见下,10 文件 +177/-36;套件 8/8,不变式探针 12→**16 全绿**,相邻环 69/70(唯一红为 sibling 在飞 RWA,A/B 实证),collect **9916** 0 err)
 - **owner 复核续24,拿代码证伪了我的第二道防线。两条独立理由,都成立:**
   | # | 病 | 实证 |

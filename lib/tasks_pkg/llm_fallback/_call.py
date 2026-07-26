@@ -16,6 +16,7 @@ The reactive-compaction retry state (``_reactive_compact_attempts`` /
 
 from lib.llm import build_body
 from lib.llm_error_format import format_llm_error_for_user
+from lib.llm_errors import _ERR_BODY_LIMIT
 from lib.log import audit_log, get_logger
 
 # Shared reactive-compaction state — imported by reference (never reassigned)
@@ -417,7 +418,7 @@ def _llm_call_with_fallback(task, body, model, round_num, max_tokens,
         # Fallback to another model won't help (same content = same filter).
         # Return content_filter finish_reason so orchestrator shows the right message.
         if isinstance(e, ContentFilterError):
-            err_str = str(e)[:200]
+            err_str = str(e)[:_ERR_BODY_LIMIT]
             logger.warning('[%s] 🚫 CONTENT_FILTER (HTTP 450) at round %d model=%s: %s',
                            tid, round_num, model, err_str, exc_info=True)
             return {
@@ -432,7 +433,7 @@ def _llm_call_with_fallback(task, body, model, round_num, max_tokens,
             }
 
         original_model = model
-        err_str = str(e)[:200]
+        err_str = str(e)[:_ERR_BODY_LIMIT]
         logger.error('[%s] conv=%s LLM call failed at round %d (model=%s): %s '
                      '(check M-TraceId in preceding debug logs for gateway coordination)',
                      tid, task.get('convId', ''), round_num + 1, model, err_str, exc_info=True)

@@ -1,6 +1,18 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续74) — 自动科研系统 R3 落地:反 A+B 创新点闸,智识核心(owner 两 pin:新颖性=f(检索近邻集)非 f(模型自报);缝合怪要可复算结构判据)。commit 见下,3 新文件 + facade + 设计稿冻结 idea schema;新套件 **8/8 含 NEUTER×2 + 双 failing-first 实证**,相邻 paper 四套件 **25/25**,collect **10341** 0 err
+
+- **阈值拍板(真数据校准,不拍脑袋):** `IDEATE_GATE_THRESHOLD=4.0` 作**单个命名常量**,不调逻辑只调值;淘汰 idea + 四轴分数 + 每道闸理由**全留档**(`rejected[]` + `ideate:<lang>` 复合键)。测试**不硬编码阈值**(4.0 收/4.5 毙同一 idea 验证可调性),等第一批真产出的留存率再校准。
+- **owner 两 pin 逐条落地:**
+  | pin | 落点 | failing-first / NEUTER 实证 |
+  |---|---|---|
+  | **① 新颖性 = f(检索集合),不是 f(模型自报)** | `_novelty_prior_set` **无条件**对 `title+core_mechanism` 跑 `search_arxiv`,top-K(K=5)拉进 prior 集;judge 只许拿这个集合对比 | **failing-first:** 强制检索改 `hits=[]` → pin-1 测试精确翻红(`retrieved 0 < K=5`);**NEUTER:** 检索拉进未自报的撞车近邻 → 断言在 prior 集 |
+  | **② 缝合怪要可复算结构判据,不只靠均分** | 闸① 零 LLM:`linked_gap_id` 必须命中 R2 `open_gaps[].id`;参数级增量 → novelty 轴确定性硬上限 2 | **NEUTER:** 摘掉 link-open_gap → 缝合怪漏过翻红;参数级 delta 实测 cap 到 2 并拖 overall 到阈值下 |
+- **三道闸按成本排序:** ①零 LLM 结构闸(免费)→ ②强制近邻检索(网络)→ ③四轴 rubric judge(LLM,照抄 insight `_rubric`)。先跑免费的,别拿 LLM 去毙一个字段都填不全的缝合怪。
+- **接地复用 recommend grounding:** prior_art 经 `fetch_arxiv_title` 接地,幻觉论文剥掉。
+- **给 R4:** `generate_ideas(direction, open_gaps)` 直接接 `build_survey` 的 `open_gaps`;`accepted[]` 带 scores/prior_set_ids,`rejected[]` 带 stage+reason,上底盘时两道闸产物都投影到生产卡;R5/R6 按 `kind` 分流。
+
 ### 2026-07-26(续84) — pt_5036b050 收口:notify harness 修复——守卫过期家族第 4 例,这次是「缺模块」型(commit `4a023352`,1 文件 +17/-1;6 红→**1/1 全绿含三个内建 NEUTER**,相邻环全绿)
 
 - **三处漂移两种类型:** ①`_verifyActiveConvFromServer` 现在调 `_mergeTerminalTurnFields`(conv_reducers.js,Epic-E 抽出)——harness 没加载 → verify 在采纳前就抛 → equalcount_content/thinking_adopted + noop_rev_still_advanced 全红;②渲染缝 renderChat→ConvView.replaceAll(与 history_rewrite 同型)→ *_rendered 三红;③多用户门委托 `window._frameIsOurs`(conv_state_reducer.js)——缺载时 fail-open → other_user_dropped 无法被检验。

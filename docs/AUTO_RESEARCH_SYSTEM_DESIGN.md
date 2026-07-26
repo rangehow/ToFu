@@ -163,7 +163,6 @@
 
 **做法(复用 report_engine 的 loop,做多篇版)**:
 - `messages` 里塞 N 篇的**已有报告/摘要/方法卡**(不是全文,控 token);仍给 web 工具做交叉核对;
-- 产物两份:①人读的综述 markdown;②机器读的**空白地图 JSON**:
 **输入纪律(降开销的落点,R2 pin #2)**:survey 喂给模型的每篇论文,**优先用 `paper_reports`
 里已生成的报告**(有则零成本引用),其次用 `paper_library.parsed_text` 的截断摘要;**绝不**对已入库
 论文重新 `parse_pdf` 或重新生成单篇报告。每篇输入按篇数硬上限截断(`_SURVEY_PER_PAPER_CHARS`),
@@ -249,34 +248,59 @@
 - 温度略高(insight_engine 用 0.45,发散但不破坏 JSON);
 - 注入 **reader-context**(库 + 记忆),让 idea 能建「这个技巧从 «你读过的X» 迁移到这个空白」的桥
   —— 迁移是 insight_engine 已验证的护城河,泛泛总结器造不出;
-- 每个 idea 结构:
-  ```
-  {"title", "kind": "methodology|analysis",
-   "core_mechanism": "为什么会work的机理,一句话",
-   "novelty_claim": "相对哪些具体工作(arxiv_id)新在哪",
-   "prior_art": ["arxiv_id", ...],        # 必须列出最近的近邻工作
-   "falsifiable_prediction": "一个能被实验证伪的具体预测",
-   "why_not_AB": "为什么这不是两个已有件的简单拼接"}
-  ```
+- **发散必须锚在 R2 的 `open_gaps` 上**:generator 收到 survey 冻结产出的 `open_gaps.json`,
+  每个 idea **必须 `linked_gap_id` 指向其中一个真实空白**(不是凭空发明问题)。
 
-**第二步 — 新颖性闸(反 A+B 的核心,做成 rubric 打分器,范本 = insight_engine `_rubric`)**:
-每个 idea 过一道 **LLM-as-judge 四轴打分**(judge 与 generator 用不同 prompt、低温、要求引用具体论文佐证),
-外加**零 LLM 的结构闸**:
+#### idea schema — 冻结契约(R3 pin,对齐 R2 `open_gaps`)
+
+```jsonc
+{
+  "id": "idea_1",
+  "title": "每层可学习压缩率的 KV 低秩投影",
+  "kind": "methodology",                  // methodology | analysis(必填,决定 R5/R6 模板)
+  "linked_gap_id": "gap_1",               // ★必填:指向 R2 open_gaps[].id;指不到已校验空白 → 结构闸判无效
+  "core_mechanism": "为什么会 work 的机理,一句话(不是操作步骤)",
+  "novelty_claim": "相对哪些具体工作(arxiv_id)新在哪",
+  "prior_art": ["2305.xxxxx", "2401.xxxxx"],  // 模型自报的近邻(★不是新颖性判据的全部,见 pin #1)
+  "falsifiable_prediction": "一个能被实验证伪的具体预测",
+  "why_not_AB": "为什么这不是两个已有件的简单拼接(必填,非空)"
+}
+```
+
+**第二步 — 反 A+B 闸(三道,顺序执行,前两道零 LLM 先跑省成本)**:
+
+**闸① 零 LLM 结构闸(免费,先跑)**:
+- `linked_gap_id`、`why_not_AB`、`core_mechanism`、`falsifiable_prediction`、`kind` **必填非空**;
+- **`linked_gap_id` 必须命中 R2 `open_gaps` 里一个真实 id** —— 指不到已校验空白的 idea 判无效
+  (R2 pin #1 姿态的延续:没有证据的 idea = 缝合怪的温床,凭空发明的问题不算解决问题);
+- `novelty_claim` 必须引用具体 `arxiv_id`(而非「据我所知没人做过」)。
+- **NEUTER 就打在这道闸**:摘掉「必须 link open_gap」这一条 → 凭空造问题的缝合怪漏过 → 测试翻红。
+
+**闸② 强制近邻检索的新颖性判定(R3 pin #1 的核心 —— 新颖性 = f(检索集合),不是 f(模型自报))**:
+- **不允许** judge 只用 idea 自带的 `prior_art`。判定前**强制对 `title + core_mechanism` 跑
+  `search_arxiv`**,把 top-K(K≥5)**无选择地**拉进 prior 集(与模型自报的 `prior_art` 合并去重);
+- judge 拿**这个检索集合**(而非模型挑的三篇)对比,显式回答:核心机制相对**检索到的最近那篇**,
+  差异是 **mechanism-level 还是 parameter-level**;
+- **parameter-level 增量(换数据集/换 backbone/两模块拼接)→ novelty 轴硬上限**(不让均分糊过去);
+- **NEUTER 就打在这道闸**:一个 idea 的新颖性主张只在「不检索、只用自带 prior_art」时成立,
+  一旦强制检索 top-K 拉进一篇明显撞车的近邻 → 闸把它毙掉。断言 judge 的 prior 集 ≥ K
+  且**包含非模型自报的 id**。
+
+**闸③ 四轴 rubric 打分(LLM-judge,照抄 insight `_rubric` 的 dispatch→parse→coerce→重算均值)**:
 
 | 轴 | 问什么 | 低分即淘汰的信号 |
 |---|---|---|
-| **新颖性(相对最近工作)** | 与 `prior_art` 里最近的 3 篇比,增量是机理级还是参数级? | 只是「换个数据集/换个backbone/两个模块拼一起」 |
+| **新颖性(相对检索集合)** | 与**检索到的**最近工作比,增量是机理级还是参数级? | 只是「换数据集/换 backbone/两模块拼一起」 |
 | **可证伪性** | `falsifiable_prediction` 是否具体到能设计实验判真伪? | 空泛(「效果更好」),无法证伪 |
 | **机理深度** | `core_mechanism` 是否解释了「为什么」,而非只描述「做什么」? | 只有操作步骤,没有原理 |
-| **价值** | 若成立,是否解决空白地图里一个 `open_gap`? | 解决的是不存在的问题 |
+| **价值** | 若成立,是否真正解决 `linked_gap_id` 那个空白? | 解决的是不存在/已被解决的问题 |
 
-- **零 LLM 结构闸(先跑,免费)**:`prior_art` 非空(逼它先承认近邻);`why_not_AB` 非空;
-  `novelty_claim` 必须引用具体 `arxiv_id`(而非「据我所知没人做过」);
-- **接地闸(复用 recommend_engine 的 grounding)**:`prior_art` / `novelty_claim` 里提到的每篇论文,
-  经 `search_arxiv`/`fetch_arxiv_title` 接地;**接不上的引用被剥成 null**,一个 idea 若其新颖性主张
-  建立在幻觉论文上,直接判无效;
-- **headroom 式门槛**:四轴均分低于阈值(比照 insight 的 `INSIGHT_GATE_THRESHOLD=4.0`)的 idea 被淘汰,
-  不进入下一阶段。宁缺毋滥。
+- **接地闸(复用 recommend grounding)**:`prior_art` / `novelty_claim` 提到的每篇论文经
+  `search_arxiv`/`fetch_arxiv_title` 接地;接不上的剥成 null,新颖性主张建立在幻觉论文上 → 判无效。
+- **阈值 = 单个可调常量 `IDEATE_GATE_THRESHOLD`(初值 4.0,与 insight 齐平)**:四轴均分 < 阈值的
+  idea 被淘汰。**宁缺毋滥**。阈值是常量不是硬编码在逻辑里 —— 调它不改行为、不翻测试。
+- **淘汰留档(可复盘,owner 要求)**:每个被毙的 idea + 四轴分数 + 每道闸的淘汰理由**全部落档**
+  (走 `paper_reports` 的 `ideate:<lang>` 复合键的 meta),用真数据校准阈值,而非拍脑袋定死。
 
 **第三步 — 对抗式自检(可选增强)**:对存活的 idea 起一个 `reviewer` 角色的反方 agent,
 专门找「这其实是 arxiv:XXXX 的换皮」的反例;找到即打回。这一步把「审稿人视角」前置。

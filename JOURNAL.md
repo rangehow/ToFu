@@ -1,6 +1,13 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续85) — pt_3cd6cd48 全量收口 + pt_791bda84 双根修(commits `47433c81` / `9b3cf9d8` + tofu-trade `99c0301`;folders 套件 2 红→**2/2 约 8s**,p2p3 批 **17/17**,facades 环 **72/72**)
+
+- **⑧ _pendingStreamTimer 悬挂(批最后一块):** 300ms interval 只在选择释放时自清,跨会话残留即永转。修:每次 pending 记 `_pendingStreamArmTs`,**30s 驻留上限**——到点丢弃陈旧 pending(不强制渲染压选择,那是守卫本来的用途)。**共享 HEAD 第二例 HEAD-relative 暂存(兄弟 WIP 与我区域不相交但同文件):先 reset 到 HEAD 打我的 hunk、暂存、恢复 combined 工作树、同一 hunk 再打一遍到工作树版——否则兄弟提交会静默回滚我的修复。口诀补一条:同文件纠缠且区域不相交时,两个版本都要打,暂存只带 HEAD 版。**
+- **folders harness 挂起根因(Epic-E 副作用):** sub-part 3 把 `new BroadcastChannel` **挪进** cross_tab_sync.js——Node 的 BroadcastChannel 是活动句柄保活事件循环,harness 进程永不退出(2×120s 超时)。修在源码:typeof 守卫 `unref()`(浏览器无此 API,no-op)。**教训:模块顶层的活动资源(通道/定时器/socket)对 headless 消费者是隐形的保活——挪进模块时要带 unref/退出路径。**
+- **挂起散去后浮出真断言红:** C_foreign_user_ignored = `_frameIsOurs` 缺载 fail-open(与 notify harness 同族第 5 例),extra_targets 加载真 conv_state_reducer.js 即绿。
+- **tofu-trade 侧根修(跨仓):** 4 处 `from lib.search import …` 陈旧 import 让 Intel Worker 后台线程每周期崩 ModuleNotFoundError。`test_no_stale_monoliths` 明确禁止 chatui 侧复活 lib/search facade → 正解只有插件侧迁移到 `tofu_search`(perform_web_search 同形;web_search 别名)。py_compile 净、零残留。
+
 ### 2026-07-26(续74) — 自动科研系统 R3 落地:反 A+B 创新点闸,智识核心(owner 两 pin:新颖性=f(检索近邻集)非 f(模型自报);缝合怪要可复算结构判据)。commit 见下,3 新文件 + facade + 设计稿冻结 idea schema;新套件 **8/8 含 NEUTER×2 + 双 failing-first 实证**,相邻 paper 四套件 **25/25**,collect **10341** 0 err
 
 - **阈值拍板(真数据校准,不拍脑袋):** `IDEATE_GATE_THRESHOLD=4.0` 作**单个命名常量**,不调逻辑只调值;淘汰 idea + 四轴分数 + 每道闸理由**全留档**(`rejected[]` + `ideate:<lang>` 复合键)。测试**不硬编码阈值**(4.0 收/4.5 毙同一 idea 验证可调性),等第一批真产出的留存率再校准。

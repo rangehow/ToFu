@@ -455,7 +455,10 @@ function _buildSwarmPanelHTML(round, allRounds) {
       const taskNum = `#${i + 1}`;
       const objective = escapeHtml(a.objective || "");
       const phase = a.phase || a.status || "";
-      const preview = (a.preview || "").slice(0, 1200);
+      /* FULL answer — the panel is a debugging surface, so the sub-agent's
+         result is never clipped. The durable snapshot carries the complete
+         text and CSS owns the visual bounding (scroll), not a JS slice. */
+      const preview = (a.preview || "");
       /* Backend log token — matches `[Agent:%s]` in lib/swarm/agent.py
          (self.agent_id = f'agent-{role}-{spec.id}') so a user copying
          the chip can grep server logs directly. */
@@ -580,7 +583,9 @@ function _buildSwarmPanelHTML(round, allRounds) {
       } else if (preview && (a.status === "done" || a.status === "completed")) {
         bodyContent += `<div class="sw-a-preview">${escapeHtml(preview)}</div>`;
       } else if (preview && (a.status === "failed" || a.status === "error")) {
-        bodyContent += `<div class="sw-a-err">${escapeHtml(preview.slice(0, 200))}</div>`;
+        /* A failed agent's error is exactly the text that needs reading in
+           full — a 200-char cut hid the cause/stack. */
+        bodyContent += `<div class="sw-a-err">${escapeHtml(preview)}</div>`;
       }
 
       // Meta line

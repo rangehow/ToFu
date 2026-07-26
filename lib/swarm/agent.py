@@ -142,6 +142,15 @@ def _build_dispatch_retry_phase(attempt: int, reason: str,
 # Default truncation limit for tool results (chars)
 DEFAULT_TOOL_RESULT_MAX_CHARS = 30_000
 
+#: Chars of a tool result carried on the LIVE ``agent_tool_call`` SSE frame.
+#: The swarm panel is a DEBUGGING surface, so this must be wide enough to read
+#: a real tool return (a fetch_url staging note, a grep block) end to end — the
+#: previous 300 cut mid-path through ``/mnt/dolphinfs/…`` and made the panel
+#: misreport what the sub-agent actually saw. The full text is ALSO persisted
+#: onto ``tool_log`` (see ``_execute_one_tool_call``) so a reloaded panel keeps
+#: it; this bound only governs the live wire frame.
+_SSE_TOOL_PREVIEW_CHARS = 4000
+
 # Max parallel tool calls per round
 MAX_PARALLEL_TOOLS = int(os.environ.get('TOOL_MAX_PARALLEL_WORKERS', '16'))
 
@@ -1056,6 +1065,10 @@ class SubAgent:
             'tool': fn_name,
             'args_brief': args_brief,
             'timestamp': time.time(),
+            # Filled in by _emit_finish once the call returns. Persisted so the
+            # durable snapshot can rebuild the panel's timeline WITH the result
+            # text, not just the tool name.
+            'preview': '',
         })
 
         # ── Per-tool-call SSE event: started ──
@@ -1072,6 +1085,18 @@ class SubAgent:
         )
 
         def _emit_finish(status: str, *, preview: str = '', error: str = ''):
+            _full_len = len(preview or '')
+            _sent = (preview or '')[:_SSE_TOOL_PREVIEW_CHARS]
+            # Persist the preview onto the tool_log row this call already
+            # appended, so the DURABLE snapshot (and therefore a reloaded
+            # panel) carries what the live frame showed. Without this the
+            # text exists only on a transient SSE frame.
+            if self.result.tool_log:
+                _row = self.result.tool_log[-1]
+                if isinstance(_row, dict) and _row.get('tool') == fn_name:
+                    _row['preview'] = preview or ''
+                    if error:
+                        _row['error'] = error
             self._emit_event(
                 'agent_tool_call',
                 f'{"✅" if status == "done" else "❌"} [{self.spec.role}] {fn_name}',
@@ -1080,8 +1105,10 @@ class SubAgent:
                 callId=tc_id, toolName=fn_name,
                 argsBrief=args_brief, callStatus=status,
                 callElapsed=round(time.time() - tool_start, 2),
-                preview=preview[:300] if preview else '',
-                error=error[:300] if error else '',
+                preview=_sent,
+                previewTruncated=(_full_len > len(_sent)),
+                previewFullChars=_full_len,
+                error=error or '',
             )
 
         # ── Handle artifact tools locally ──

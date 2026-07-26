@@ -132,6 +132,10 @@ def _snapshot_tool_timeline(tool_log: list):
             'toolName':  name,
             'argsBrief': e.get('args_brief') or '',
             'status':    'done',
+            # Carry the result text so a RELOADED panel shows the same tool
+            # output the live one did. Legacy rows predate this field.
+            'preview':   e.get('preview') or '',
+            'error':     e.get('error') or '',
         })
     if len(tool_calls) > _SNAPSHOT_TOOLCALLS_CAP:
         tool_calls = tool_calls[-_SNAPSHOT_TOOLCALLS_CAP:]
@@ -360,7 +364,6 @@ class MasterOrchestrator:
         swarm that was never awaited still gets real per-agent status, not the
         ``unknown`` stubs the handle-only recovery produced.
         """
-        from lib.swarm.snapshot import _PREVIEW_CHARS
 
         with self._lock:
             results = dict(self._results_by_id)
@@ -394,7 +397,11 @@ class MasterOrchestrator:
                     'status':        status,
                     'elapsed':       round(result.elapsed_seconds, 1),
                     'tokens':        result.total_tokens,
-                    'preview':       (result.final_answer or '')[:_PREVIEW_CHARS],
+                    # FULL final answer — the durable snapshot is the
+                    # authoritative terminal record a reloaded panel renders
+                    # from, so slicing here would permanently destroy the tail
+                    # of every sub-agent result. The panel shows it complete.
+                    'preview':       (result.final_answer or ''),
                     'modifiedFiles': _count_file_writes(result.tool_log),
                     'tools':         _tools,
                     'toolCalls':     _tool_calls,

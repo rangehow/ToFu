@@ -28,11 +28,6 @@ from lib.log import get_logger
 
 logger = get_logger(__name__)
 
-#: Max chars of an agent's final answer to embed as the card preview. The
-#: frontend slices to 1200 too (``_buildSwarmPanelHTML``), so this bounds the
-#: persisted blob without losing anything the UI would show.
-_PREVIEW_CHARS = 1200
-
 #: How many optimistic-lock retries before giving up the durable write.
 #: Paired with incremental backoff in persist_snapshot_to_conversation so a
 #: busy row gets several real chances rather than a tight spin.

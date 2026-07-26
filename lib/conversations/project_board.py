@@ -927,10 +927,15 @@ def execute_board_tool(fn_name: str, fn_args: dict, *,
             if res.get('ok') and (fn_args.get('question') or '').strip():
                 return ('Reported blocked WITH a question for the human. The '
                         'board panel now shows your question with answer '
-                        'controls (one-click options / free text). The epic '
+                        'controls (one-click options / free text) in its '
+                        '"Needs you" surface, and the collaboration bar counts '
+                        'it as work that is STOPPED. The epic '
                         'will NOT auto-retry — the moment the human answers, '
                         'it is re-dispatched with the answer in the kickoff '
-                        'context. Do NOT re-block on the same gate meanwhile.')
+                        'context. Do NOT re-block on the same gate meanwhile.\n'
+                        'While you wait: this epic is parked, but YOU are not. '
+                        'Pick up another open epic, or advance any part of this '
+                        'one that does not depend on the answer.')
             if res.get('ok'):
                 mins = _block_cooldown_ms(res.get('block_count', 1)) // 60_000
                 return ('Reported blocked. This epic is now on a self-expiring '
@@ -941,7 +946,13 @@ def execute_board_tool(fn_name: str, fn_args: dict, *,
                         '(no human un-block needed); a human reopen resets it '
                         'for an immediate retry. Tag the reason with the block '
                         'class ([human-gated] vs [sibling]) so it is visible on '
-                        'the board.')
+                        'the board.\n'
+                        'If this gate is really a DECISION you could make '
+                        'yourself — reversible, and a matter of engineering '
+                        'judgement rather than taste, policy or credentials — '
+                        'reopen it, pick the most robust long-term option, and '
+                        'record the choice with project_charter_commit instead '
+                        'of leaving the epic parked.')
             return f'Error reporting block: {res.get("error", "unknown")}.'
         return f"Error: Unknown board tool '{fn_name}'"
     except Exception as e:

@@ -1,6 +1,49 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续39) — 缓存写入可达性:Defect 4 的 PIN 收窄到 openai 线,写闸分支在 anthropic 线上**是活的**;并**自我推翻了开票时的 4697**(epic `pt_efcc3d01ca554544`,commit `a612cef4`,2 文件 +275/-13;新套件 9/9 含 **NEUTER×4 全咬**,相邻环 **78/78**,collect **9952** 0 err)
+- **本轮修的是一条「保护过期事实的守卫」。** `test_cache_accounting_convention.py` Defect 4 断言「网关在**所有模型**上把 `cache_write_tokens` 钉为 0(231/231)」,据此把 `is_floor_collapse` 与 `_classify_break` 的 no_reuse 判为**本部署死代码**,还写明「不要调 `_FLOOR_WRITE_LO`」。
+- **前提是抽样偏差,不是判断失误。** 那 231/231 来自 `round_usage` 事件。用当前全表重测:`round_usage` **3052/3052 全是 openai 约定**,只覆盖 opus-5 / kimi-k3 / 4.7 的 16 轮 —— **从未采到 4.6/4.8**。所谓「每个模型」其实是「这类事件恰好记录到的每个模型」,anthropic 约定那条线对它完全不可见。
+- **当前全表(`task_results` 27,189 行,23,980 条带 usage):**
+
+  | 约定 | cache_write>0 | cache_write==0 |
+  |---|---|---|
+  | anthropic | **10,938** | 23 |
+  | openai | 307 | 12,712 |
+
+  用**真谓词**跑全表:`is_floor_collapse` **触发 1732 次**(anthropic 1711 + openai 21)。不是死代码。
+- **★ 我推翻了自己开票时写的数字。** 票里说「4697 轮超过 `>20000` 阈值」—— 那只数了 `cache_write` 一半。而 `is_floor_collapse` 是**合取**:`cw > 20000 **且** cr <= 90000`。大写入 + 健康读取是正常热轮,不是塌陷。**诚实的可达数是 1732,不是 4697。** 新套件专门有一测钉住合取,让「只看写入」这种读法必红(NEUTER 1 正是它)。
+- **改法(刻意保守):** 既有两条 PIN 的**断言一字未改、依然全绿** —— 它们对 openai 线从来没错,错的只是**作用域**。只把 docstring 从「every model / this deployment」收窄成「the openai-compat wire」,并各自指明反向事实钉在哪。新建 `test_cache_write_reachability_by_convention.py`(9 测)钉住 anthropic 线方向。
+- **NEUTER×4 全咬:** ①`is_floor_collapse` 退化成只看 write → 合取守卫红(正是那个计数错误);②no_reuse 摘掉 write 闸 → openai 线守卫红;③`normalize_usage` 丢掉 `cache_creation_input_tokens` 别名 → 约定测试红;④摘掉 compaction 抑制 → compaction 测试红。
+- **刻意没做(按票面「先确认可达性,再谈阈值」):** 三个阈值一个没动,`floor_retry_enabled()` 保持默认 OFF(`floor_retry.py` 里有论证:单请求重发是期望成本**净亏**)。可达 ≠ 该开,这两件事必须分开。
+- **给后人的规则(已写进新套件的最后一测):** 「模型 X 不报写入」这类说法应改写成「**线路 X 不计量写入**」并**按约定分层重测**。写入有无是**约定的属性,不是模型的属性** —— 231/231 漏掉的正是这一层。
+- **过程中如实记录(非我的改动):** 共享树里 sibling 的未提交 WIP 在 `lib/llm_sanitize/_gateway.py` 留下**未解决的 git 冲突标记**(`<<<<<<< Updated upstream`),任何 import `lib.llm` 的套件收集即崩。**没碰**;全程在 `git worktree` 隔离到 HEAD 验证,提交用显式 2 文件 pathspec。
+
+### 2026-07-26(续38) — 交易模块 P1 第一刀:对账引擎 + 三张新表(epic `pt_3870fd73`,commit `441097f`,3 文件;新套件 18 测含**每道闸各一发 NEUTER**,预存在 54 绿,collect **95**,全包越权扫描仍 **0**)
+- **本轮先做了一件事:确认派发是陈旧的。** 派发票是 P0,但板面已 done、四个 commit 全在祖先链、越权查询 0、五个死模块文件不存在 —— 复核后**不重做**,转而推进我持有的 P1(`pt_3870fd73`)。
+- **把「命令」换成「目标」:** 旧 `trading_daily_briefing` 主键是 `date`,字面意思就是「每天一套指令」—— 漏一天就留下一条**过期且未重新定价**的命令,漏三天就是三条互相矛盾的。新模型不存「今天该干什么」,每次查看都从「目标 vs 实际 + 今日价格」现算。
+- **三张表(双方言、幂等):**
+  | 表 | 关键列 | 为什么 |
+  |---|---|---|
+  | `trading_target` | `approved` | owner 决策③是「AI 提议 + 我批准」,**未批准的行不得进入差额计算** —— 所以它是一列,不是一个假设 |
+  | `trading_position` | `pending_shares` / `settle_date` | owner 点名的两个在途字段,正是第三道闸要读的 |
+  | `trading_action` | `status` / `acted_at` / `actual_price` | **采纳闭环**。旧 `trading_recommendations.adopted` 全仓零读零写(P0 审计),系统根本不知道建议有没有被照做 |
+  - 一律用**复合自然键**而非代理 id:DDL 免去 `SERIAL` vs `AUTOINCREMENT` 分叉,且让 action 的 upsert 幂等 —— 而计划**每次查看都会重算**,不幂等就会堆垃圾。
+- **三道闸的顺序不是随便排的:**
+  1. **在途优先判**:未交收的标的**无论偏离多大都不能动**,后两道闸对它没有意义。
+  2. **免交易带**:相对(5%)**与**绝对(¥500)同时要求 —— 只看百分比会在小账户上误触发。
+  3. **最小票**(¥1000):**取整之后要再判一次** —— 向下取整可能把金额打回门槛以下,不复判就等于这道闸白设。
+  - **取整放在闸后**(否则它可能把已被拒的动作复活),且**永远向下**:买单向上取整会花掉用户没有的钱,卖单向上取整会卖掉他没有的份额。**先卖后买**,否则买单会认领卖单尚未释放的现金。
+  - 每条被拒都带**具名 gate + 人话说明**,前端能解释「今天为什么没事做」,而不是给一个空白页。
+  - **缺价 = 零偏离、零动作** —— 数据中断绝不能被读成「全部清仓」。
+- **★ 写测试时抓到自己两个 bug(都是测试的错,不是代码的错):**
+  1. `110022` 是**交易所债券**(整手 100),不是开放式基金。我拿它当「基金」样例,等于**断言了错误的契约**;现已连**真实分类器的判定**一起钉住。
+  2. 免交易带的 NEUTER 用的偏离**太小、连一手都不够** —— 真正拦住它的是**整手闸**,那条测试其实什么都没证明。换成便宜整手的标的重做,现在只有免交易带可能负责。
+  - 另有一处:测试里的 `lib` 桩**遮蔽了宿主**,导致 `lot_size_for` 静默走进「假设 100」兜底 —— 基金那条**测的是兜底分支**,分类器坏了它照样绿。现已把叶子模块注入真实导入名;并在**真实运行时**交叉验证(`003003 → lot 1`)。
+  - **教训同族**:守卫/测试「绿」不等于它测的是你以为的东西。NEUTER 必须验证**是那一道闸**在承重,否则只是证明了「某个东西拦住了」。
+- **验证:** 18 测在**独立**与**带宿主路径**两种模式下均绿;schema 重跑幂等;采纳闭环端到端可写(`pending → done + acted_at + actual_price`);两个用户可独立持有同一标的;预存在 54 绿;collect 95;**含三张新表的全包越权扫描仍为 0**。
+- **未做(如实):** 引擎尚未接 REST 端点与前端 —— 那是 P1 下一刀。本刀交付的是**可测的核心 + 表结构**,不是可点的功能。
+
 ### 2026-07-26(续27) — P5 尾款按 owner 拍板「先别重启,手动迁移顶着」执行:存量压 **2775MB → 546MB**,并把「手动」变成**定时自动**(零代码改动;135 任务迁移零失败;362 轮逐轮复验零降级)
 - **执行 owner 的选项 B。** 迁移前欠账已从上轮的 1842MB 涨到 **2775.4MB / 145 个待压缩任务**(旧进程持续写整包行)。全量迁移:**ok=135 failed=0**,耗时 387.9s,校验通过的 payload **4941.9MB → 321.8MB(15.4×)**,全表 **2775.4MB → 498.7MB**。单任务最高 `fdc702b4` 192 轮 **261.7MB → 2.87MB(91.1×)**。
 - **但我没有停在「又手动跑了一遍」。** 上一轮已证明这活会不断回来(每次派发欠账都涨),owner 选 B 的字面意思是「顶着」,而**顶着不该等于每次派发我手动跑一次** —— 那既不可靠(依赖我被派发)也掩盖问题。项目里有现成的 `lib/scheduler`,支持 `task_type='python'`。

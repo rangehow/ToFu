@@ -1,6 +1,18 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续56) — 「重启后空卡缝合」两根修落地,A/B 两票全收口(commit `32890d1c`,4 文件 +874/-3;新后端套件 **11/11** + 新前端套件 **4/4**,双 NEUTER 全咬,相邻环 6 套件 34 过 2 红 stash A/B 实证预存在,collect **10148** 0 err,bundle `bundle-8d59c122.js`)
+- **续49 取证的两张票一次做完:** A=`pt_311cbd7a31ad4391`(恢复造槽闸)、B=`pt_9409bf7133c049cb`(空卡本身)。三处改动全部落在取证收窄后的点上,零补丁扩散。
+- **A 票修法(两闸,缺一不可,`lib/tasks_pkg/manager/_recovery.py`):**
+  - **G1 `_merge_home_index`**:任务在会话里已有 `_taskId` 家门且家门**不在尾巴** → 整个合并跳过(跨轮缝合守卫;家门在尾巴 = 正常崩溃恢复,照旧合并)。取证案例逐条对上:msg#7 带 9b38f0ec、尾巴是 peer 消息 → 拦。
+  - **G2 `_conv_has_live_task_for_recovery`**:会话有**活任务** → 整个合并跳过。双探针(内存注册表[最新,未 checkpoint 也可见] + task_results `status='running'`[step-1 扫过之后仍 running 的只能是本进程新任务]),**双探针全死 fail-closed 朝跳过失败**(跳过合并的代价是气泡旧一点,错合并的代价是数据交叉)。
+  - **永久损伤路径一并封死**:若造壳后活任务失败/中止,壳将带旧 taskId + 残缺轮次永久残留——G2 在源头让壳根本造不出来。
+- **B② 持久层投影(`_project_display_fields`):** 重建轮次落库前补 `roundNum`(序号)/`query`(**复用 `tool_round_label`,与 live 同一 builder**,不另写一套)/`results`(单条合成项,**标 `recovered: true`**——live 逐项 results 的原料在持久层不存在,标清这是恢复投影而非实况,不假装)。已有 live 字段的轮次幂等不动(source 1 字节不变,有测试钉)。
+- **B① 渲染端降级(`_recoveryRoundFallbackTitle`,tool_rounds.js):** 无 `query` 轮次按 `_getToolDisplay` 的 label + 首个字符串参数摘要(80 字符)渲染,不再整片空白。单缝接线:`_renderUnifiedToolLine` 的 q 计算一处,所有下游分支通用。**对存量数据(投影落地前写入的残缺轮次)这是唯一可行救法**——owner 拍板的「两件都做」。
+- **证据面:** 后端 11 测(G1 正反/G2 正反/双 NEUTER/投影内容/幂等/探针 fail-closed);前端 4 测(node 直评**真** `_renderUnifiedToolLine`,无 jsdom——纯字符串路径;NEUTER 摘掉降级调用空卡即回归)。相邻环 `test_frontend_reconcile_defer` 2 红 stash A/B 在净 HEAD 同形复现,预存在非本刀。
+- **过程教训(第 3 次同族,记录在案):** 上轮我报告「JOURNAL 已提交/票已改写」时实际只跑了验证查询——owner 三查两假。本轮每个「完成」声明都以 `git log`/`project_board_read`/测试输出为据。**取证做到再细,不落到共享载体(git/board)就等于没做。**
+- **部署注意:** bundle 为 gitignore 构建产物,服务器探测 mtime 后台自动重建,无需重启;后端 `_recovery.py` 改动要随下次重启生效(恢复路径本就只在启动时跑)。
+
 ### 2026-07-26(续54) — cache-cost C 收口:**修前确认闸判定为「否」,票面修法前提不成立,不修**(epic `pt_2cd7a29cf66f4f81`;零代码变更;这是同一批票里我自己开的假设第 3 次被自己的闸挡下)
 ### 2026-07-26(续55) — 事件日志「event_id collision 冷重放缺口」epic `pt_b5783d74cd4a4395` 收口:**99% 是测试污染共享 DB,非生产数据完整性 bug**——同一批票里第 3 张被我自己推翻,但这次的根比前两次更值得记(零代码变更)
 

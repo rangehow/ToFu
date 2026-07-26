@@ -76,8 +76,10 @@ _ALLOWED_VARIABLE_FETCHES = {
     # Cross-origin OAuth provider token endpoint (Anthropic/OpenAI), not /api/*.
     'settings/oauth.js': 1,
     # Image blob hydration: fetches img.url / img.preview (a static asset or
-    # uploaded-image URL), not a JSON /api/* business endpoint.
-    'core/conversations.js': 1,
+    # uploaded-image URL), not a JSON /api/* business endpoint. The helper was
+    # extracted conversations.js → conv_image_hydrate.js by Epic-E slice 4
+    # (2ba63a12); the carve-out follows the code.
+    'core/conv_image_hydrate.js': 1,
 }
 
 # Bundle output is generated; never count it.

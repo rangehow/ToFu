@@ -1,6 +1,13 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-26(续46) — pt_5355329b 收口:ask_human 的 autopilot 分支把整个 vu_reply dict 喂回模型(epic `pt_5355329b2838404f`,commit `d9f15211`,2 文件 +149/-1;新套件 5/5(4 failing-first)含 **NEUTER×2 全咬**,相邻环 **63 过 1 红 A/B 实证预存在**,collect **10063** 0 err)
+- **这是续44 开票时就写明形状的同族第二路径,取证零重跑。** `run_virtual_user` 返回 `{'text','rounds','segments'}`,而 `_human.py:137` 把**整个 dict** 当用户回答:`f'Human response: {user_response}'` 把 dict repr——rounds/segments 元数据 + text 里刻意保留的 `[PROGRESS:]` 行——直接写进 tool_content 喂模型;同一个 dict 还进了 `human_guidance_response` SSE 事件的 `response` 字段(前端也渲染)。两重危害:模型看到的「用户回答」不是自然语言;PROGRESS 机器信号经**工具结果路径**二次泄漏(续44 修的是落库路径,两者独立)。
+- **修法即票面:** `user_response = strip_machine_tokens(vu_reply.get('text') or '') or '(no further input)'` —— 复用续44 落地的单一谓词(此路径**没有**需要 PROGRESS 原文的消费者,与预算护栏不同,故全剥)。边界行为逐条钉住:VU 返回 None 仍走 aborted;剥离后为空仍回落 `(no further input)`;resolve_human_guidance 与 SSE 事件拿到的是同一份干净文本。
+- **教训(写 NEUTER 时抓到自己的一次错):** 第一发 NC1 把「旧赋值」加在修复行**之前**,修复行随后覆盖 → neuter 不咬。NEUTER 必须让被测行为**真的退化**,不是在旁边摆一具尸体。重写为「替换修复行」后 NC1 咬 4 红、NC2(只取 text 不过谓词)咬 3 红。
+- **相邻环 1 红** `test_neuter_index_resolver_makes_it_miss` 在续44 已净 HEAD A/B 实证预存在,与本刀无关。
+- **部署注意:** 与 75ae1beb / c0d10272 / 95fa8513 同批,等 owner 重启生效。
+
 ### 2026-07-26(续45) — 「点矩阵视图,面板先变宽又缩回」根修:宽度判定在**被自己修改的状态**上测量,构成反馈环(commit `369421c4`,2 文件 +113/-16;矩阵套件 9/9 含 **NEUTER 咬 + failing-first**,相邻环 87/88,collect **10058** 0 err,bundle 重建 `bundle-60481300.js`)
 - **owner 报告:** 设置里点「⊞ 矩阵视图」,设置面板宽度先变宽、然后又变窄,3 列密钥时尤其明显。
 - **根因(一条确定性反馈环,不是竞态):** `_fitMatrixPanelWidth`(access_matrix.js)用面板**当前**宽度判矩阵是否溢出,但它自己正是改这个宽度的人(`.stg-matrix-wide`:860px ↔ min(1240px,96vw),还带 0.18s width 过渡)。点击链:①toggle → 在 860px 渲染 → 3 列溢出 → 加 class → 面板开始**变宽**;②同次渲染 `_renderAccessMatrix` 排了 `setTimeout(_resumeMatrixProbe, 0)` → 异步 fetch 回来 → `_rerenderMatrix` → 重新 fit —— 此刻面板已是宽态,3 列**不溢出** → 摘 class → **缩回 860px**。最终停在「窄 + 矩阵横向滚动」——正是第①步判定需要加宽的状态。探测运行中 1.5s 轮询每次重渲染都重新 fit,宽度会**反复振荡**;「有时候才闪」取决于是否有磁盘探测快照/正在探测(决定是否触发②的再渲染)。

@@ -490,3 +490,111 @@ def test_shared_credential_is_detected_rather_than_re_requested():
         'actually saved), not off the declared env_specs'
     )
     assert 'selfId' in body, 'must exclude the entry being installed itself'
+
+
+# ── 4. Suggestions must never dead-end ───────────────────────────────
+#
+# Layer 3. The "nothing installed" empty state offers a few servers to start
+# with. The load-bearing constraint is NOT that suggestions exist — it is that
+# every suggested card can actually be finished by the user unaided. A chip
+# for a server whose credential needs a business process is worse than no
+# chip: it spends the user's trust and their time.
+
+_SUGGEST_SIG = 'function _mcpSelfServeSuggestions(limit) {'
+
+_SUGGEST_HARNESS = r"""
+const fs = require('fs');
+global._mcpCatalog = JSON.parse(process.argv[3]);
+eval(fs.readFileSync(process.argv[2], 'utf8'));
+console.log(JSON.stringify(_mcpSelfServeSuggestions(50).map(function (e) { return e.id; })));
+"""
+
+
+def _run_suggest(catalog: list) -> list:
+    path = _find_defining_file(_SUGGEST_SIG, os.path.join(STATIC_JS, 'settings'))
+    body = _splice_fn(path, _SUGGEST_SIG)
+    src = os.path.join(HERE, '_cd_sug.js')
+    harness = os.path.join(HERE, '_cd_sug_h.js')
+    with open(src, 'w', encoding='utf-8') as fh:
+        fh.write(body)
+    with open(harness, 'w', encoding='utf-8') as fh:
+        fh.write(_SUGGEST_HARNESS)
+    try:
+        proc = subprocess.run(['node', harness, src, json.dumps(catalog)],
+                              capture_output=True, text=True, timeout=60)
+        assert proc.returncode == 0, f'node failed: {proc.stderr[:600]}'
+        return json.loads(proc.stdout.strip())
+    finally:
+        for p in (src, harness):
+            if os.path.exists(p):
+                os.remove(p)
+
+
+def _catalog_as_api_would_serve() -> list:
+    """The catalog shape the frontend receives (nothing installed yet)."""
+    from lib.mcp.registry import CATALOG
+    out = []
+    for e in CATALOG:
+        out.append({
+            'id': e['id'], 'name': e.get('name', e['id']),
+            'description': e.get('description', ''),
+            'featured': bool(e.get('featured')),
+            'env_specs': e.get('env_specs') or [],
+            'installed': False, 'stored_env_keys': [],
+        })
+    return out
+
+
+@pytest.mark.skipif(not _node_available(), reason='node not available')
+def test_suggestions_never_include_an_entry_the_user_cannot_finish():
+    """Every suggested id must be self-serve, checked against the REAL catalog.
+
+    Self-serve == needs no credential, or every required credential declares
+    an obtain_url. Measured at authoring time: 15 qualify, 36 do not.
+    """
+    catalog = _catalog_as_api_would_serve()
+
+    def _self_serve(e):
+        req = [s for s in e['env_specs'] if s.get('required')]
+        return (not req) or all(s.get('obtain_url') for s in req)
+
+    gated = {e['id'] for e in catalog if not _self_serve(e)}
+    assert gated, 'scan surface empty — no gated entries, guard would be vacuous'
+
+    suggested = _run_suggest(catalog)
+    assert suggested, 'no suggestions at all — the empty state has no next step'
+
+    leaked = sorted(set(suggested) & gated)
+    assert not leaked, (
+        f'suggested entries the user cannot finish unaided: {leaked}. A chip '
+        f'that dead-ends costs more than showing nothing.'
+    )
+
+
+@pytest.mark.skipif(not _node_available(), reason='node not available')
+def test_already_installed_entries_are_not_suggested():
+    """Complement: suggesting what is already installed makes the strip noise.
+
+    Also stops "suggest everything" from passing the guard above.
+    """
+    catalog = _catalog_as_api_would_serve()
+    for e in catalog:
+        e['installed'] = True
+    assert _run_suggest(catalog) == [], (
+        'entries already installed were still suggested'
+    )
+
+
+@pytest.mark.skipif(not _node_available(), reason='node not available')
+def test_a_credential_free_entry_is_suggestable():
+    """Positive control: the pool must not be empty by construction.
+
+    Without this, tightening the filter to "return nothing" would satisfy both
+    tests above while removing the feature entirely.
+    """
+    catalog = [{
+        'id': 'nokey', 'name': 'No Key Needed', 'description': '',
+        'featured': False, 'env_specs': [], 'installed': False,
+        'stored_env_keys': [],
+    }]
+    assert _run_suggest(catalog) == ['nokey']

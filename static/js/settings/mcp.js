@@ -166,6 +166,37 @@ function _mcpBreakerCountdownSpan(breaker) {
     escapeHtml(_mcpRetryLabel(secs)) + '</span>';
 }
 
+/**
+ * Entries worth suggesting to someone who has installed nothing yet.
+ *
+ * Restricted to servers a user can provably finish installing on their own:
+ * either they need no credential at all, or every required credential
+ * declares an `obtain_url` (so the card can hand them a real link). Anything
+ * gated behind a process we cannot show a route for is EXCLUDED — recommending
+ * it would send the user down a path that dead-ends, which is worse than not
+ * recommending at all.
+ *
+ * Deliberately NOT an in-conversation intent detector: a phrase-matching
+ * trigger was measured at 60% false positives on a sibling epic
+ * (pt_33ba079f5cea4841), so suggestions stay inside the panel the user
+ * already opened.
+ */
+function _mcpSelfServeSuggestions(limit) {
+  var out = _mcpCatalog.filter(function(e) {
+    if (e.installed || e.custom) return false;
+    var specs = e.env_specs || [];
+    var required = specs.filter(function(s) { return s.required; });
+    if (required.length === 0) return true;   // nothing to obtain
+    return required.every(function(s) { return !!s.obtain_url; });
+  });
+  out.sort(function(a, b) {
+    if (a.featured && !b.featured) return -1;
+    if (!a.featured && b.featured) return 1;
+    return (a.name || '').localeCompare(b.name || '');
+  });
+  return out.slice(0, limit || 6);
+}
+
 /** Render the main catalog grid. */
 function _renderMcpCatalog() {
   var grid = document.getElementById('mcpCatalogGrid');
@@ -175,7 +206,27 @@ function _renderMcpCatalog() {
     var emptyMsg = _mcpScope === 'installed' ? t('mcp.emptyInstalled')
       : _mcpScope === 'available' ? t('mcp.emptyAvailable')
       : t('mcp.emptyNoMatch');
-    grid.innerHTML = '<p class="stg-empty">' + emptyMsg + '</p>';
+    var emptyHtml = '<p class="stg-empty">' + emptyMsg + '</p>';
+    // "Nothing installed" is the one empty state where the user has a next
+    // action rather than a failed filter — offer it instead of a dead end.
+    if (_mcpScope === 'installed') {
+      var picks = _mcpSelfServeSuggestions(6);
+      if (picks.length > 0) {
+        emptyHtml += '<div class="mcp-suggest">';
+        emptyHtml += '<div class="mcp-suggest-title">' +
+          escapeHtml(t('mcp.suggestTitle')) + '</div>';
+        emptyHtml += '<div class="mcp-suggest-row">';
+        picks.forEach(function(e) {
+          emptyHtml += '<button class="mcp-suggest-chip" onclick="_mcpSetScope(\'available\');_mcpFilterCatalog(' +
+            JSON.stringify(e.name || e.id).replace(/"/g, '&quot;') + ')" title="' +
+            escapeHtml(e.description || '') + '">' +
+            (e.icon && !/^</.test(e.icon) ? escapeHtml(e.icon) + ' ' : '') +
+            escapeHtml(e.name || e.id) + '</button>';
+        });
+        emptyHtml += '</div></div>';
+      }
+    }
+    grid.innerHTML = emptyHtml;
     return;
   }
   // Show featured first, then alphabetical

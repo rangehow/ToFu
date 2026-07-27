@@ -3012,6 +3012,7 @@ var _i18n = {
   'mcp.fieldDescHint': { zh: '（可选）', en: '(optional)' },
   'mcp.saveConnect': { zh: '保存并连接', en: 'Save & Connect' },
   'mcp.obtainKey': { zh: '去申请 Key', en: 'Get a key' },
+  'mcp.suggestTitle': { zh: '从这几个开始（都能自助完成安装）', en: 'Start with these — all installable on your own' },
   'mcp.sharedCredential': { zh: '「{name}」已保存同一个凭证，留空即可复用，无需重新申请', en: 'Already saved by “{name}” — leave blank to reuse it; no need to apply again' },
   'mcp.installConnect': { zh: '安装并连接', en: 'Install & Connect' },
   'mcp.cancel': { zh: '取消', en: 'Cancel' },

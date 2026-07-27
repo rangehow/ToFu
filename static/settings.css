@@ -673,6 +673,39 @@
   line-height: 1.5;
 }
 .mcp-env-shared-note { color: var(--accent, #2563eb); }
+/* Empty-state suggestion strip: shown when nothing is installed yet. Only
+ * lists servers the user can finish installing unaided, so a chip never leads
+ * to a dead end. */
+.mcp-suggest {
+  margin: 10px auto 0;
+  max-width: 560px;
+  text-align: center;
+}
+.mcp-suggest-title {
+  font-size: 11.5px;
+  color: var(--s-ink-soft);
+  margin-bottom: 8px;
+}
+.mcp-suggest-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+}
+.mcp-suggest-chip {
+  padding: 5px 10px;
+  font-size: 11.5px;
+  color: var(--s-ink);
+  background: var(--s-white);
+  border: var(--s-border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.mcp-suggest-chip:hover {
+  border-color: var(--accent, #2563eb);
+  background: var(--s-bg-soft, rgba(0, 0, 0, .03));
+}
 /* Card footer: repo link + action
  * Use min-height matching the .btn-xs height so the left-side text
  * (Repo) and the right-side buttons (卸载/连接/…) share a common

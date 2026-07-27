@@ -529,6 +529,20 @@ class SSEAccumulator:
         # These counters change NO behaviour.
         self._tc_obs_index_absent = 0
         self._tc_obs_name_reissue = 0
+        # Slot the unindexed deltas of the CURRENT call accumulate into.
+        # ``None`` = no unindexed call open yet.
+        self._tc_unindexed_slot = None
+        # Upstream ``index`` → the internal slot its deltas currently belong to.
+        # These diverge the moment an upstream reuses one index for two calls:
+        # the second call gets a fresh internal slot, and EVERY later delta
+        # bearing that upstream index — arguments included — must follow it.
+        # Routing only the NAME would leave the second call's arguments piling
+        # into the first slot, producing two dispatchable calls with swapped /
+        # missing arguments (silently wrong, unlike a fused name).
+        self._tc_index_map: dict = {}
+        # How many times a second tool name forced a new slot instead of being
+        # concatenated onto the previous one (the 2026-07-27 root cause).
+        self._tc_obs_slot_split = 0
 
     def mark_aborted(self):
         self.aborted_by_client = True
@@ -811,7 +825,23 @@ class SSEAccumulator:
                             model=self.body.get('model', ''),
                             trace=self.trace_id,
                             chunks=self.chunk_count)
-                idx = tc.get('index', 0)
+                # An absent ``index`` must NOT default to slot 0 — that merges
+                # every unindexed call in the stream into one. Give it the next
+                # free slot so distinct calls stay distinct.
+                if 'index' in tc:
+                    _upstream_idx = tc['index']
+                    idx = self._tc_index_map.get(_upstream_idx, _upstream_idx)
+                else:
+                    _upstream_idx = None
+                    idx = self._tc_unindexed_slot
+                    if idx is None or self.tool_calls_acc.get(idx, {}).get(
+                            'function', {}).get('name'):
+                        # No open unindexed slot yet, or the current one is
+                        # already named and this delta starts a new call.
+                        if (tc.get('function') or {}).get('name') or idx is None:
+                            idx = (max(self.tool_calls_acc) + 1
+                                   if self.tool_calls_acc else 0)
+                    self._tc_unindexed_slot = idx
                 if idx not in self.tool_calls_acc:
                     if self.on_tool_call_ready and idx > 0 and (idx - 1) in self.tool_calls_acc:
                         _prev = self.tool_calls_acc[idx - 1]
@@ -824,6 +854,11 @@ class SSEAccumulator:
                         'id': '', 'type': 'function',
                         'function': {'name': '', 'arguments': ''},
                     }
+                # Capture the slot's id BEFORE it is overwritten below — a
+                # differing incoming id is how a second call in this slot is
+                # told apart from an upstream re-issue of the same call, and
+                # the overwrite would erase that evidence.
+                _slot_id_before = self.tool_calls_acc[idx].get('id')
                 if tc.get('id'):
                     self.tool_calls_acc[idx]['id'] = tc['id']
                 if tc.get('extra_content'):
@@ -831,40 +866,109 @@ class SSEAccumulator:
                 fn = tc.get('function', {})
                 if fn.get('name'):
                     _prev_name = self.tool_calls_acc[idx]['function']['name']
-                    # OBSERVATION: a name arriving into a slot that already
-                    # HAS a name is the only wire shape that can produce a
-                    # concatenated tool name here. The two candidate causes
-                    # are distinguishable by the fields logged below:
-                    #   * upstream re-issues the FULL name (non-incremental
-                    #     semantics)      → incr == prev
-                    #   * a second, distinct call landed in this slot
-                    #                     → incr != prev, and same_slot_id
-                    #     shows whether a new id came with it
-                    # If neither fires while a concatenated name still shows
-                    # up downstream, the name was already concatenated in the
-                    # FIRST frame — i.e. model-side output, not our parsing.
-                    if _prev_name:
-                        self._tc_obs_name_reissue += 1
+                    # A tool NAME is a one-shot identifier, not an incremental
+                    # text field. Appending it (the pre-2026-07-27 behaviour)
+                    # fused two calls that shared a slot into one
+                    # undispatchable name like ``read_filesrun_command``.
+                    #
+                    # Three shapes arrive here and only the first is a genuine
+                    # continuation:
+                    #   * fragment of the CURRENT name (``read_`` → ``files``)
+                    #     — the assembled string must stay one name;
+                    #   * the SAME full name re-sent (non-incremental upstream)
+                    #     — idempotent, keep one call;
+                    #   * a DIFFERENT full name — a second call landed in this
+                    #     slot; it gets its own slot instead of being appended.
+                    _incoming = fn['name']
+                    _new_id = bool(tc.get('id')) and bool(_slot_id_before) \
+                        and tc['id'] != _slot_id_before
+                    if not _prev_name:
+                        self.tool_calls_acc[idx]['function']['name'] = _incoming
+                    elif _prev_name == _incoming and not _new_id:
+                        # Upstream re-issued the whole name for the SAME call
+                        # (non-incremental semantics) — idempotent.
+                        pass
+                    elif not _new_id and self._tc_is_name_fragment(
+                            _prev_name, _incoming, tc, idx):
+                        self.tool_calls_acc[idx]['function']['name'] = _prev_name + _incoming
+                    else:
+                        self._tc_obs_slot_split += 1
                         logger.warning(
-                            '%s [tool_calls-shape] name re-arrival in slot %s '
-                            '— prev=%r incr=%r identical=%s incoming_id=%r '
-                            'slot_id=%r model=%s trace=%s chunk=%d',
-                            self.log_prefix, idx, _prev_name, fn['name'],
-                            _prev_name == fn['name'], tc.get('id'),
-                            self.tool_calls_acc[idx].get('id'),
-                            self.body.get('model', ''), self.trace_id,
-                            self.chunk_count)
+                            '%s [tool_calls-shape] second tool name in slot %s '
+                            '— opening a NEW slot instead of concatenating: '
+                            'prev=%r incoming=%r incoming_id=%r model=%s '
+                            'trace=%s chunk=%d',
+                            self.log_prefix, idx, _prev_name, _incoming,
+                            tc.get('id'), self.body.get('model', ''),
+                            self.trace_id, self.chunk_count)
                         self.raw_dumper.dump_anomaly(
-                            'tool_call_name_reissue',
+                            'tool_call_slot_split',
                             model=self.body.get('model', ''),
                             trace=self.trace_id,
-                            slot=idx,
-                            prev_name=_prev_name,
-                            incr_name=fn['name'],
+                            slot=idx, prev_name=_prev_name,
+                            incoming_name=_incoming,
                             chunks=self.chunk_count)
-                    self.tool_calls_acc[idx]['function']['name'] += fn['name']
+                        # The overwrite above put the NEW call's id on the old
+                        # slot; give it back its own id before moving on.
+                        if _slot_id_before:
+                            self.tool_calls_acc[idx]['id'] = _slot_id_before
+                        idx = max(self.tool_calls_acc) + 1
+                        self._tc_unindexed_slot = idx
+                        if _upstream_idx is not None:
+                            # Re-point this upstream index at the new slot so
+                            # the call's own argument deltas follow it.
+                            self._tc_index_map[_upstream_idx] = idx
+                        self.tool_calls_acc[idx] = {
+                            'id': tc.get('id') or '', 'type': 'function',
+                            'function': {'name': _incoming, 'arguments': ''},
+                        }
+                        if tc.get('extra_content'):
+                            self.tool_calls_acc[idx]['extra_content'] = tc['extra_content']
                 if fn.get('arguments') is not None:
                     self.tool_calls_acc[idx]['function']['arguments'] += fn.get('arguments', '')
+
+    def _tc_is_name_fragment(self, prev_name, incoming, tc, idx):
+        """Is ``incoming`` the CONTINUATION of ``prev_name``, not a new call?
+
+        Distinguishing a streamed name fragment from a second call that landed
+        in the same slot decides whether the two strings may be joined. The
+        dispatched toolset is the oracle: joining is right only when the joined
+        string is a real tool name (or a prefix of one) while ``prev_name``
+        alone is not yet complete. A new ``id`` arriving with the delta always
+        means a new call, whatever the strings look like.
+        """
+        _slot = self.tool_calls_acc.get(idx) or {}
+        _incoming_id = tc.get('id')
+        if _incoming_id and _slot.get('id') and _incoming_id != _slot['id']:
+            return False
+        if _slot.get('function', {}).get('arguments'):
+            # Arguments already started for this call — a name arriving now
+            # cannot be part of its identifier.
+            return False
+        try:
+            _sent = set()
+            for t in (self.body.get('tools') or []):
+                if not isinstance(t, dict):
+                    continue
+                _fn = t.get('function')
+                if isinstance(_fn, dict) and _fn.get('name'):
+                    _sent.add(_fn['name'])
+                elif t.get('name'):
+                    _sent.add(t['name'])
+        except Exception as _e:
+            logger.debug('%s toolset read failed in fragment check: %s',
+                         self.log_prefix, _e)
+            _sent = set()
+        if not _sent:
+            # No oracle available. Arguments-not-started was already checked
+            # above, which is the only safe structural cue we have; treat the
+            # delta as a fragment so a genuinely chunked name still assembles.
+            return True
+        joined = prev_name + incoming
+        prev_complete = prev_name in _sent
+        joined_plausible = joined in _sent or any(
+            n.startswith(joined) for n in _sent)
+        return joined_plausible and not prev_complete
 
     def _feed_minimax(self, cd):
         """MiniMax inline ``<think>…</think>`` demux into thinking vs content."""

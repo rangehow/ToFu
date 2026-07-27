@@ -427,7 +427,8 @@ def _sync_one(spec: ToolSpec, registry: Any) -> None:
             return
         registry.register(
             set(names), spec.handler,
-            category=spec.category, description=spec.description)
+            category=spec.category, description=spec.description,
+            source=spec.source, plugin_name=spec.plugin_name)
         logger.info('[ToolRegistry] synced handler for %s (spec=%s)',
                     sorted(names), spec.key)
     except Exception as e:

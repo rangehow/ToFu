@@ -62,10 +62,77 @@ class ToolRegistry:
         self._sets: list[tuple[frozenset, ToolHandler]] = []  # (name_set, handler)
         self._metadata: dict[str, dict[str, str]] = {}    # name → {category, description}
         self._special: dict[str, ToolHandler] = {}        # key → handler (e.g. __code_exec__)
+        # name → (source, plugin_name) — who owns this tool name. Drives the
+        # built-in hijack protection in :meth:`_claim_name`.
+        self._provenance: dict[str, tuple[str, str]] = {}
+
+    # ── Name provenance + built-in hijack protection ──────
+
+    def _claim_name(self, name: str, source: str, plugin_name: str) -> bool:
+        """Decide whether *source* may bind *name*; record the owner.
+
+        **Built-ins always beat plugins, regardless of arrival order.** A
+        "first writer wins" rule would be wrong in both directions here:
+        ``discover_plugin_specs()`` runs while ``lib.tools.registry`` is
+        imported, i.e. BEFORE the built-in ``@tool_registry`` decorators in
+        ``lib.tasks_pkg.handlers`` have run. So at real startup a plugin binds
+        first and the built-in binds second — ordering carries no authority.
+
+        Two distinct hijack shapes are covered, which is why this cannot live
+        in :meth:`register` as a dict-overwrite check:
+
+        * **overwrite** — the name is already in ``_exact`` (7 names today) and
+          gets replaced.
+        * **shadow** — the name lives in a ``_sets`` entry (83 names today,
+          including ``run_command`` / ``write_file`` / ``apply_diff``). A
+          plugin registering it lands in ``_exact``, and since
+          :meth:`lookup` consults ``_exact`` FIRST, the built-in set entry is
+          silently shadowed while remaining physically present.
+
+        Returns True when the caller may bind the name.
+        """
+        prev = self._provenance.get(name)
+        if prev is None:
+            self._provenance[name] = (source, plugin_name)
+            return True
+        prev_source, prev_plugin = prev
+
+        if source == 'builtin':
+            if prev_source == 'plugin':
+                # Plugin got there first (the normal startup order). Evict its
+                # _exact entry too, or it would keep shadowing a built-in that
+                # resolves through _sets.
+                self._exact.pop(name, None)
+                logger.warning(
+                    '[ToolRegistry] built-in tool %r reclaimed from plugin %r '
+                    '— a plugin may not provide a core tool name; its handler '
+                    'has been evicted', name, prev_plugin or '?')
+            self._provenance[name] = (source, plugin_name)
+            return True
+
+        # source == 'plugin'
+        if prev_source == 'builtin':
+            logger.warning(
+                '[ToolRegistry] plugin %r REFUSED tool name %r — that is a '
+                'built-in tool. Binding it would run third-party code while '
+                'inheriting the built-in write partition and approval prompt '
+                '(the user would see the familiar dialog for a different '
+                'callable). Rename the plugin tool.',
+                plugin_name or '?', name)
+            return False
+        if prev_plugin != plugin_name:
+            logger.warning(
+                '[ToolRegistry] plugin %r REFUSED tool name %r — already '
+                'provided by plugin %r', plugin_name or '?', name,
+                prev_plugin or '?')
+            return False
+        # Same plugin re-syncing its own name: idempotent, stay silent.
+        return True
 
     # ── Registration ──────────────────────────────────────
 
-    def register(self, names, handler: ToolHandler, *, category: str = '', description: str = ''):
+    def register(self, names, handler: ToolHandler, *, category: str = '', description: str = '',
+                 source: str = 'builtin', plugin_name: str = ''):
         """Register *handler* for one or more exact tool names.
 
         Parameters
@@ -78,22 +145,35 @@ class ToolRegistry:
             Logical grouping (e.g. ``'search'``, ``'browser'``).
         description : str
             Human-readable description of what the handler does.
+        source : str
+            ``'builtin'`` (core) or ``'plugin'`` (third-party ``tofu.tools``
+            entry point). A plugin may not take over a built-in tool name —
+            see :meth:`_claim_name`.
+        plugin_name : str
+            Entry-point name when ``source='plugin'``; used in log lines.
         """
         if isinstance(names, str):
             names = {names}
         for name in names:
+            if not self._claim_name(name, source, plugin_name):
+                continue
             self._exact[name] = handler
             self._metadata[name] = {'category': category, 'description': description}
 
-    def register_set(self, name_set, handler: ToolHandler, *, category: str = '', description: str = ''):
+    def register_set(self, name_set, handler: ToolHandler, *, category: str = '', description: str = '',
+                     source: str = 'builtin', plugin_name: str = ''):
         """Register *handler* for a set of tool names (checked in order).
 
         Unlike ``register()``, set-based entries are checked sequentially
         after exact matches, preserving priority ordering.
         """
-        self._sets.append((frozenset(name_set), handler))
+        allowed = frozenset(
+            n for n in name_set if self._claim_name(n, source, plugin_name))
+        if not allowed:
+            return
+        self._sets.append((allowed, handler))
         meta = {'category': category, 'description': description}
-        for name in name_set:
+        for name in allowed:
             self._metadata.setdefault(name, meta)
 
     def register_special(self, key: str, handler: ToolHandler, *, category: str = '', description: str = ''):

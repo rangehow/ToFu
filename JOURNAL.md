@@ -1,5 +1,16 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-27(续2) — ★ 我上一轮的结论被自己推翻:**「中国 OTA 不会开放消费侧」是从 2 家样本过度归纳的假命题**,途牛+飞猪实测都对个人自助开放且带下单闭环(epic `pt_6dcdc44482de4fe7`;commit `57086380`,3 文件 +132/-35;套件 **28/28**,**NEUTER×2 全咬**,MCP+skills 环 **184 过 9 skip**)
+
+- **本轮是复查一张我自己开的商务准入票,结果推翻了开票时的推理。** 上一轮我写下「OTA 的核心资产是库存和用户,开放 MCP 等于把入口让给别人」——这句**从携程+美团两家的观察外推到整个行业**,而它是错的。实测:**途牛**(2026-03 上线 MCP 开放平台)与**飞猪**(阿里,官方 skill)**都对个人开发者自助发 Key、都带真实下单链路**。途牛品类最全(酒店/机票/火车/门票/**邮轮**/**度假**六域),下单返回 `paymentUrl`;飞猪八个搜索命令、零配置可跑,填 Key 后结果更完整。
+- **★ 教训(与 charter「先实测前提再动手」同族但形状不同):我犯的不是「没测」,而是「测了 2 家就下了行业级判断」。** 携程/美团确实进不去,那部分复查后仍成立;但「因此中国 OTA 都不会开放」是**样本外推断**,我却把它当结论写进了代码注释。现已改成**逐厂商判据**并显式记录这次证伪 —— 判据永远是「**这一家**能不能自助拿到凭证」,不是「这个行业开不开放」。
+- **落点按协议分而非按厂商:** 途牛是 MCP(stdio + CLI)→ `lib/mcp/registry.py`;飞猪是 AgentSkills 包 → `lib/skills/catalog.py`。上架前**实测下载 zip 并确认真含合法 `skills/flyai/SKILL.md`**(22 条目、frontmatter 完整),没有凭新闻稿建卡片。
+- **★ 守卫补的两个洞,都源于「只防一个方向」:**
+  - **① 死卡片禁令只扫了 MCP 目录。** 厂商可以任一形态上架(飞猪 skill、途牛 MCP),只守一面等于给下一张死卡片留了另一道门。改为**两目录都扫**;NEUTER-E(往 skills 塞一张携程卡)→ 精确红。
+  - **② 「排除被门禁的厂商」单独存在会退化成「什么都不上」而守卫照样绿。** 补**补集守卫**:自助可得的厂商必须真在架上。NEUTER-F(移除途牛条目)→ **3 条同时红**。这与本轮证伪直接相关:只有禁令没有补集,今天这次纠正将来会被静默回退而无人知晓。
+- **★ 守卫红了一次而它是对的 —— 我差点改错对象。** `test_every_china_entry_credential_resolves_and_never_leaks` 在途牛上失败,报「advertises no env key」。第一反应是「守卫太严」,查下去发现是**我把三种载体混为一谈**:途牛是 **stdio**,Key 作为**真实子进程环境变量**传入,**根本没有 `${VAR}` 模板可扫**;只有 header 型(RollingGo)与 query 型(高德)才需要模板声明引用哪个 env key。原断言**对 stdio 断言了一件假的事**。改为**按载体分流**后三种形态各自被正确断言。**判据:守卫红了先问「它报的事实是否为真」,而不是先问「怎么让它变绿」。**
+- **诚实分账:** `test_skills_prefetch_consumed` 红,已在**未叠加任何我改动的 pristine HEAD worktree** 上复验同样红 → 预存在,与本轮零相关,不在本批修。
+
 ### 2026-07-27(续) — 覆盖缺口收尾:pg_ownership 进程/锁层 8-21% → 68-95%(epic `pt_faaf91f5` 收口;commit `266240e7`,70 测;**NEUTER×6 全咬**;干净 committed tree 全环 **129 passed** + 相邻 database 环 69 passed)
 
 - **实测覆盖率:** `_identity` 15%→**90%** · `_ownership` 21%→**95%** · `_lock` 14%→**78%** · `_binaries` 8%→**68%** · 包整体 **77%**(与既有 `test_pg_ownership.py` 合跑 115 绿)。这一层在启动时决定「本机能不能拥有这份 pgdata」,判错就是两台主机各起一个 postmaster → WAL/pg_subtrans 损坏。

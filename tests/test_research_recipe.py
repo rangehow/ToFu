@@ -274,6 +274,159 @@ def test_harvest_gate_fails_on_thin_corpus():
     _ok('harvest gate fails on a corpus below the fan-in minimum (survey never runs)')
 
 
+# ── Test 7-10: pipeline-pathology propagation (END-TO-END, not per-function) ──
+#
+# The R3 gate flags a run whose structural gate killed EVERY idea as degraded —
+# a pipeline defect, not 宁缺毋滥. That flag is worthless if it dies at the stage
+# boundary: the production symptom was `state=done, accepted 0`, indistinguishable
+# from a working gate. These tests drive the WHOLE graph
+# (build_research_from_direction) so the charter judgement holds: delete the
+# degraded logic in ideate.py today and these go red.
+
+def _seams_returning(ideate_result):
+    """A _Seams whose generate_ideas returns a fixed ideate result body."""
+    seams = _Seams()
+
+    def _gen(direction, open_gaps, *, lang, n_ideas, abort=None):
+        seams.ideate_calls.append({'direction': direction, 'open_gaps': open_gaps})
+        return dict(ideate_result)
+    seams.generate_ideas = _gen
+    return seams
+
+
+#: A total structural wipe as generate_ideas really reports it.
+_WIPE = {
+    'ok': True, 'threshold': 4.0, 'accepted': [],
+    'rejected': [{'title': 'a', 'reject_stage': 'structural', 'reject_reason': 'no gap'},
+                 {'title': 'b', 'reject_stage': 'structural', 'reject_reason': 'no gap'}],
+    'degraded': True, 'gate_reached': 'structural',
+    'degraded_reason': 'structural gate rejected ALL 2 generated idea(s) — the novelty '
+                       'retrieval and rubric never ran; dominant reason (2/2): no gap',
+}
+#: An honest zero — the rubric actually ran and the ideas genuinely lost.
+_HONEST_ZERO = {
+    'ok': True, 'threshold': 4.0, 'accepted': [],
+    'rejected': [{'title': 'a', 'reject_stage': 'rubric', 'reject_reason': 'overall 2.0 < 4.0'}],
+    'gate_reached': 'rubric',
+}
+
+
+def test_degraded_reaches_the_final_result_body():
+    """A total structural wipe must be visible in what the caller receives —
+    build_research_from_direction's return body IS task['result']."""
+    import lib.research.recipe as rc
+    seams = _seams_returning(_WIPE)
+    restore = _install(seams)
+    rc._generate_ideas = seams.generate_ideas
+    wd = tempfile.mkdtemp(prefix='research_degraded_')
+    try:
+        res = rc.build_research_from_direction('dir', wd, lang='en')
+        assert res.get('degraded') is True, \
+            f'degraded must reach the final result body, got keys {sorted(res)}'
+        assert res.get('degraded_reason'), 'degraded_reason must reach the caller'
+        assert 'structural' in res['degraded_reason']
+        assert res.get('gate_reached') == 'structural', \
+            f"gate_reached must say how deep the gate got, got {res.get('gate_reached')!r}"
+        assert res['accepted'] == [] and len(res['rejected']) == 2, \
+            'the audit trail must survive alongside the flag'
+    finally:
+        restore()
+        shutil.rmtree(wd, ignore_errors=True)
+    _ok('degraded + degraded_reason + gate_reached reach the final result body')
+
+
+def test_degraded_is_committed_to_the_checkpoint():
+    """The flag must be in the ideate stage ARTIFACT on disk — a crashed/resumed
+    process (and any later reader of pipeline_state.json) must still see it."""
+    import lib.research.recipe as rc
+    seams = _seams_returning(_WIPE)
+    restore = _install(seams)
+    rc._generate_ideas = seams.generate_ideas
+    wd = tempfile.mkdtemp(prefix='research_degraded_ckpt_')
+    try:
+        rc.build_research_from_direction('dir', wd, lang='en')
+        art = _state(wd)['stages']['ideate']['artifact']
+        assert art.get('degraded') is True, \
+            f'degraded missing from the committed ideate artifact: {sorted(art)}'
+        assert art.get('gate_reached') == 'structural'
+        # …and a resumed run (served from checkpoint) still reports it.
+        seams2 = _Seams()
+        restore2 = _install(seams2)
+        try:
+            res2 = rc.build_research_from_direction('dir', wd, lang='en')
+        finally:
+            restore2()
+        assert len(seams2.ideate_calls) == 0, 'completed job must not redo ideate'
+        assert res2.get('degraded') is True, \
+            'a run served from the checkpoint must still report degraded'
+    finally:
+        restore()
+        shutil.rmtree(wd, ignore_errors=True)
+    _ok('degraded is committed to the checkpoint and survives a resumed/served run')
+
+
+def test_honest_zero_is_not_degraded_but_reports_gate_depth():
+    """宁缺毋滥 counter-case: ideas that REACHED the rubric and lost are an
+    honest zero — NOT degraded — but the result must still say how deep the
+    gate got, so a frontend never shows a bare unexplained 0."""
+    import lib.research.recipe as rc
+    seams = _seams_returning(_HONEST_ZERO)
+    restore = _install(seams)
+    rc._generate_ideas = seams.generate_ideas
+    wd = tempfile.mkdtemp(prefix='research_honest_')
+    try:
+        res = rc.build_research_from_direction('dir', wd, lang='en')
+        assert not res.get('degraded'), \
+            'a rubric-based zero must NOT be flagged degraded (宁缺毋滥 preserved)'
+        assert res.get('gate_reached') == 'rubric', \
+            f"honest zero must report gate_reached='rubric', got {res.get('gate_reached')!r}"
+        assert res['accepted'] == []
+    finally:
+        restore()
+        shutil.rmtree(wd, ignore_errors=True)
+    _ok('honest zero: not degraded, but gate_reached=rubric distinguishes it from a wipe')
+
+
+def test_degraded_propagation_NEUTER():
+    """NEUTER: strip the pass-through out of _run_ideate (exactly the shape the
+    stage had before this fix) → the flag must vanish from the final body.
+
+    This is what makes the guard bite the PRODUCT and not just the function:
+    if the propagation is ever dropped again, the tests above go red."""
+    import lib.research.recipe as rc
+    seams = _seams_returning(_WIPE)
+    restore = _install(seams)
+    rc._generate_ideas = seams.generate_ideas
+    orig_run_ideate = rc._run_ideate
+
+    def _no_passthrough(ctx):
+        art = orig_run_ideate(ctx)
+        return {'accepted': art['accepted'], 'rejected': art['rejected'],
+                'threshold': art['threshold']}
+
+    rc._run_ideate = _no_passthrough
+    # rebuild the graph so the neutered stage fn is the one wired in
+    orig_stages = rc.research_recipe_stages
+
+    def _stages():
+        from lib.production.stages import Stage
+        return [Stage('harvest', rc._run_harvest, gate=rc._gate_harvest, retry=1),
+                Stage('survey', rc._run_survey, gate=rc._gate_survey, retry=1),
+                Stage('ideate', _no_passthrough, gate=rc._gate_ideate, retry=1)]
+    rc.research_recipe_stages = _stages
+    wd = tempfile.mkdtemp(prefix='research_neuter_deg_')
+    try:
+        res = rc.build_research_from_direction('dir', wd, lang='en')
+        leaked = not res.get('degraded')
+    finally:
+        rc._run_ideate = orig_run_ideate
+        rc.research_recipe_stages = orig_stages
+        restore()
+        shutil.rmtree(wd, ignore_errors=True)
+    assert leaked, 'NEUTER FAILED: removing the pass-through still surfaced degraded'
+    _ok('NEUTER: dropping the _run_ideate pass-through makes degraded vanish (guard bites)')
+
+
 # ── Test 6: runtime rides ProductionRuntime (no bespoke runtime) ───────────
 
 def test_runtime_is_production_substrate_not_bespoke():
@@ -298,6 +451,10 @@ def main():
         test_delete_mid_checkpoint_reruns_that_stage_NEUTER,
         test_fully_complete_job_redoes_nothing,
         test_harvest_gate_fails_on_thin_corpus,
+        test_degraded_reaches_the_final_result_body,
+        test_degraded_is_committed_to_the_checkpoint,
+        test_honest_zero_is_not_degraded_but_reports_gate_depth,
+        test_degraded_propagation_NEUTER,
         test_runtime_is_production_substrate_not_bespoke,
     ]
     for fn in tests:

@@ -24,8 +24,13 @@ carry real schema, not in-memory globals):
   * survey  → ``{open_gaps, survey_md, inputs_used}``
       the library-verified open-gap map (schema_version 1). ideate reads
       ``open_gaps`` from here — the exact frozen R2 contract.
-  * ideate  → ``{accepted, rejected, threshold}``
+  * ideate  → ``{accepted, rejected, threshold, gate_reached[, degraded,
+      degraded_reason]}``
       scored ideas + the full rejection audit for threshold calibration.
+      ``gate_reached`` records how deep the gate got; ``degraded`` marks a valid
+      artifact produced by a SICK pipeline (e.g. the free structural gate wiped
+      every idea, so nothing was ever judged) — it rides to the result body and
+      makes the job settle as ``degraded`` instead of a clean ``done``.
 
 Every seam into R1–R3 is resolved through this module (``_harvest_batch`` /
 ``_build_survey`` / ``_generate_ideas`` / ``_search_arxiv``) so a test patches
@@ -161,8 +166,21 @@ def _run_ideate(ctx: dict) -> dict:
                           n_ideas=ctx.get('n_ideas', 6), abort=ctx.get('abort'))
     if not res.get('ok'):
         raise RuntimeError(f'ideate failed: {res.get("error")}')
-    return {'accepted': res['accepted'], 'rejected': res['rejected'],
-            'threshold': res['threshold']}
+    art = {'accepted': res['accepted'], 'rejected': res['rejected'],
+           'threshold': res['threshold'],
+           # How deep the gate actually got ('accepted' | 'rubric' | 'structural' |
+           # 'none') — a bare accepted-count cannot tell an honest 宁缺毋滥 zero
+           # from a pipeline that killed everything before judging.
+           'gate_reached': res.get('gate_reached')}
+    # A degraded pass produced a VALID artifact from a SICK pipeline. It must
+    # cross the stage boundary (and be committed to the checkpoint) or the
+    # symptom reaching the user is an indistinguishable 'done, accepted 0' —
+    # the flag is only worth anything if it survives to the result body.
+    if res.get('degraded'):
+        art['degraded'] = True
+        art['degraded_reason'] = res.get('degraded_reason') or 'pipeline degraded'
+        logger.error('[Research:ideate] DEGRADED — %s', art['degraded_reason'])
+    return art
 
 
 def _gate_ideate(ctx: dict, art: dict) -> list:
@@ -227,14 +245,19 @@ def build_research_from_direction(direction: str, workdir: str, *, lang: str = '
     ideate = artifacts.get('ideate') or {}
     survey = artifacts.get('survey') or {}
     harvest = artifacts.get('harvest') or {}
-    return {
+    out = {
         'direction': direction, 'lang': lang, 'folder_id': folder_id,
         'accepted': ideate.get('accepted', []),
         'rejected': ideate.get('rejected', []),
         'threshold': ideate.get('threshold'),
+        'gate_reached': ideate.get('gate_reached'),
         'open_gaps': survey.get('open_gaps', {}),
         'survey_md': survey.get('survey_md', ''),
         'harvested': harvest.get('harvested', 0),
         'cache_hits': harvest.get('cache_hits', 0),
         'corpus_size': len(harvest.get('arxiv_ids') or []),
     }
+    if ideate.get('degraded'):
+        out['degraded'] = True
+        out['degraded_reason'] = ideate.get('degraded_reason') or 'pipeline degraded'
+    return out

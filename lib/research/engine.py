@@ -63,14 +63,26 @@ def run_research_task(task: dict) -> None:
             emit=lambda ev: _emit(task, {'type': 'stage', **ev}))
 
         task['result'] = result
-        _write_manifest(task, 'done')
+        # A degraded run produced a VALID artifact from a SICK pipeline — it is
+        # neither a clean success nor an error. Settling it as 'done' is what
+        # made the R3 total-wipe bug invisible (state=done, accepted 0).
+        _degraded = bool(result.get('degraded'))
+        _write_manifest(task, 'degraded' if _degraded else 'done')
         _emit(task, {'type': 'final', 'accepted': len(result.get('accepted', [])),
                      'rejected': len(result.get('rejected', [])),
-                     'corpus_size': result.get('corpus_size', 0)})
+                     'corpus_size': result.get('corpus_size', 0),
+                     'gate_reached': result.get('gate_reached'),
+                     'degraded': _degraded,
+                     'degraded_reason': result.get('degraded_reason', '')})
         _research_runtime.finish(task_id, result=result)
-        logger.info('[Research] %s done — %d accepted / %d rejected (corpus %d)',
-                    task_id, len(result.get('accepted', [])),
-                    len(result.get('rejected', [])), result.get('corpus_size', 0))
+        if _degraded:
+            logger.error('[Research] %s DEGRADED — %s', task_id,
+                         result.get('degraded_reason'))
+        logger.info('[Research] %s %s — %d accepted / %d rejected (corpus %d, gate %s)',
+                    task_id, 'degraded' if _degraded else 'done',
+                    len(result.get('accepted', [])),
+                    len(result.get('rejected', [])), result.get('corpus_size', 0),
+                    result.get('gate_reached'))
     except Exception as e:
         logger.error('[Research] task %s failed: %s', task_id, e, exc_info=True)
         _write_manifest(task, 'error')

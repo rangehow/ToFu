@@ -295,16 +295,36 @@ class TestNeuters:
 
 @pytest.mark.api
 class TestPollRouteV2:
+    """poll 路由 e2e —— 测的是注册帧/寻址/wire 形状,不是认证。
+
+    ⚠️ 每个请求都显式带 **凭据** 与 **scope_base**(B0,
+    docs/UNIFIED_DEVICE_BRIDGE_DESIGN.md §3.2c):
+      * 桥端点现在一律要求凭据,不看对端地址(同机反代下回环 == 全网);
+      * Quart 进程内客户端缺省上报 ``'<local>'``,会被判成回环拿到
+        open-mode 豁免 —— 不传 scope_base 就是在测豁免路径,断言无意义。
+    这里用**进程内 agent token**,顺带实证那条通道真的可用。
+    """
+
     @pytest.fixture(autouse=True)
     def _fast_long_poll(self, monkeypatch):
         monkeypatch.setattr(db, 'POLL_WAIT_TIMEOUT', 0.2)
 
+    @staticmethod
+    def _auth():
+        from routes.api_v1.auth import loopback_agent_token
+        return {'X-Bridge-Secret': loopback_agent_token()}
+
+    _PEER = {'client': ('127.0.0.1', 5555)}
+
+    def _poll(self, flask_client, body):
+        return flask_client.post('/api/desktop/poll', json=body,
+                                 headers=self._auth(), scope_base=self._PEER)
+
     def test_v2_poll_registers_agent(self, flask_client):
-        r = flask_client.post(
-            '/api/desktop/poll',
-            json={'results': [],
-                  'agent': {'agent_id': 'agent-C', 'name': 'pi',
-                            'platform': 'linux'}})
+        r = self._poll(flask_client,
+                       {'results': [],
+                        'agent': {'agent_id': 'agent-C', 'name': 'pi',
+                                  'platform': 'linux'}})
         assert r.status_code == 200
         assert r.get_json() == {'commands': []}
         online = db.online_agents()
@@ -317,24 +337,28 @@ class TestPollRouteV2:
         _register('agent-B', name='win')
         _plant('cmd-a', 'desktop_list_files', target='agent-A')
         _plant('cmd-b', 'desktop_run_command', target='agent-B')
-        rb = flask_client.post('/api/desktop/poll',
-                               json={'results': [],
-                                     'agent': {'agent_id': 'agent-B'}})
+        rb = self._poll(flask_client,
+                        {'results': [], 'agent': {'agent_id': 'agent-B'}})
         assert [c['type'] for c in rb.get_json()['commands']] == [
             'desktop_run_command']
-        ra = flask_client.post('/api/desktop/poll',
-                               json={'results': [],
-                                     'agent': {'agent_id': 'agent-A'}})
+        ra = self._poll(flask_client,
+                        {'results': [], 'agent': {'agent_id': 'agent-A'}})
         assert [c['type'] for c in ra.get_json()['commands']] == [
             'desktop_list_files']
 
     def test_v1_poll_shape_unchanged(self, flask_client):
         _plant()
-        r = flask_client.post('/api/desktop/poll', json={'results': []})
+        r = self._poll(flask_client, {'results': []})
         assert r.status_code == 200
         cmds = r.get_json()['commands']
         assert len(cmds) == 1
         assert set(cmds[0].keys()) == {'id', 'type', 'params'}
+
+    def test_poll_without_credential_is_rejected(self, flask_client):
+        """B0: 桥端点凭据强制 —— 无凭据即 401,回环长相也不行。"""
+        r = flask_client.post('/api/desktop/poll', json={'results': []},
+                              scope_base=self._PEER)
+        assert r.status_code == 401
 
 
 # ═══════════════════════════════════════════════════════════

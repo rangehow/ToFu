@@ -222,9 +222,32 @@ class TestPollPerUserToken:
                               headers={'X-Bridge-Secret': 'tofu-nope'})
         assert r.status_code == 401
 
-    def test_open_mode_unchanged(self, flask_client, monkeypatch):
+    def test_no_secret_still_requires_a_credential(self, flask_client, monkeypatch):
+        """B0: 未设 TOFU_BRIDGE_SECRET 不再等于「桥开放」。
+
+        本条原名 ``test_open_mode_unchanged``,断言「未设 secret → 200」。
+        该契约已被统一设备桥 B0 取代(docs/UNIFIED_DEVICE_BRIDGE_DESIGN.md
+        §3.4):桥命令能读 cookie、挂 CDP、写文件、跑 shell,「默认开放」
+        从来不是安全的默认值。
+
+        注意本类相邻的两条(``test_token_without_bridge_scope_rejected`` /
+        ``test_garbage_token_rejected``)已经在断言 401 —— 旧断言与它们
+        自相矛盾,只因不传 scope_base 拿到了 ``'<local>'`` 回环豁免才一直
+        绿着(pt_f6742ab6,守卫失效第三态的近亲)。
+        """
         monkeypatch.delenv('TOFU_BRIDGE_SECRET', raising=False)
-        r = flask_client.post('/api/desktop/poll', json={'results': []})
+        r = flask_client.post('/api/desktop/poll', json={'results': []},
+                              scope_base={'client': ('127.0.0.1', 5555)})
+        assert r.status_code == 401
+
+    def test_in_process_agent_token_accepted(self, flask_client, monkeypatch):
+        """打包托盘 app 的同进程 agent 走进程内 token(不落盘、不进 env)。"""
+        from routes.api_v1.auth import loopback_agent_token
+        monkeypatch.delenv('TOFU_BRIDGE_SECRET', raising=False)
+        r = flask_client.post(
+            '/api/desktop/poll', json={'results': []},
+            headers={'X-Bridge-Secret': loopback_agent_token()},
+            scope_base={'client': ('127.0.0.1', 5555)})
         assert r.status_code == 200
 
 

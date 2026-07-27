@@ -655,6 +655,23 @@ def generate_ideas(direction: str, open_gaps: dict, *, lang: str = 'en',
     # gate is indistinguishable from 'accepted 0' from a working one — exactly
     # how the kind bug hid behind 40 green tests.
     structural = [r for r in rejected if r.get('reject_stage') == 'structural']
+    # gate_reached — the DEPTH the pipeline actually got to, three states:
+    #   'accepted'   at least one idea cleared the whole chain;
+    #   'rubric'     the expensive gates ran (retrieval + judging) and the ideas
+    #                genuinely lost — an HONEST zero;
+    #   'structural' the free gate killed everything; nothing was ever judged.
+    # A bare `accepted: 0` cannot distinguish these, which is exactly how the
+    # kind bug stayed invisible. Callers (and the frontend) get the depth, not
+    # just the count.
+    if accepted:
+        out['gate_reached'] = 'accepted'
+    elif raw and len(structural) == len(raw):
+        out['gate_reached'] = 'structural'
+    elif rejected:
+        out['gate_reached'] = 'rubric'
+    else:
+        out['gate_reached'] = 'none'
+
     if raw and not accepted and len(structural) == len(raw):
         from collections import Counter
         reasons = Counter((r.get('reject_reason') or '').split('(')[0].strip()

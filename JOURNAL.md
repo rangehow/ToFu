@@ -1,6 +1,18 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-28(续3) — 交易页语义色收口:**我上一轮的 AA 闸绿着,而闸外的涨跌红绿比我刚修掉的灰字还差**(tofu-trade `23d6b54`;19 条守卫,**NEUTER×5 全咬**,相邻环 **51/51**,干净 committed worktree **51/51**,线上已提供)
+
+- **★ owner 复核指出的缺口比我修的那一半更严重,而我的守卫此刻正好全绿。** 上一轮 `TEXT_TIERS` 只列了 `--t1..--t4`,10 个语义色**一个都没进扫描面**。实测 `--bg3` 上:light `--success` **2.57**、`--danger` **2.99** —— **比我刚修掉的 `--t3`(2.81) 还差**。定性差异是关键:`--t1..--t4` 承载时间戳和说明文字,而 `--success/--danger` 承载**用户唯一真正在看的那个数字**,并且它们同时是**盈亏的唯一颜色编码**。charter「扫描面残缺 → 断言写对了也照样绿」的又一例。
+- **判据按用法分流,不一刀切:** 从 `trading.css` 实测每个 token 被哪个 CSS 属性消费 —— 作为 `color:` 渲染 → **4.5**;仅 background/border/icon → **3.0**(WCAG 1.4.11)。一律压 4.5 会把图表配色一起改坏。实测文字用法:`--accent` 32 处、`--success` 3、`--danger` 2、`--purple`/`--yellow` 各 2、`--blue` 1;`--warning`/`--cyan`/`--teal`/`--orange` **零文字用法**,归 3.0。
+- **★ 三个「天真做法会做错」的点,每个都是实测撞出来的:**
+  - **① `--success/--danger` 的直接 `color:` 用法是 0 —— 它们只经 `--profit/--loss` 别名到达文字。** 扫描若停在基名,会把盈亏色判成装饰并按 3.0 放行。守卫跟随别名跳转,并**断言这一跳仍然解析得出**(NEUTER 清空别名表 → 扫描面守卫精确红)。
+  - **② 逐 token 独立解会把红绿压成同一个灰度。** 首次求解后 light 红绿相互对比度 **1.01**、tofu **1.00** —— 两者都过了 AA,却**对红绿色盲完全等价**、灰度打印也不可分。加入 ≥1.40 分离约束后实测 1.94 / 1.46 / 1.45。这正是 owner 预先点出的失败形态。
+  - **③ 真找到一处「颜色是唯一通道」:** `.sim-j-equity` 渲染的是**权益金额(恒正)**,却被**另一个量**(区间收益)染成红绿。改中性色,方向交给相邻那个带符号的百分比。逐个审了全部 `pnlClass()` 调用点,其余都已有符号(`fmtPct` 恒加 `+`、`toLocaleString` 保留负号)或「赚了/亏了」字样。
+- **★ 我的启发式审计误报了 3/5,而这正好演示了为什么要逐个读。** 用「行号附近 grep 关键词」判断有没有符号通道,把 3 个其实带符号的点误标成「颜色单通道」。**grep 窗口报出的是一个可能为假的事实** —— 逐个读源码才定位到真正的那一个。与 charter 记的「用 grep 判断补丁是否生效」同族。
+- **dark 也不干净:** `--accent` 3.21(32 处文字用法)。上一轮只看文字层级时它被漏掉了。
+- **NEUTER×5 全咬,每发先确认改到了文件:** ①还原 light `--success` ②让 danger 与 success 同明度(分离守卫红)③还原 equity 的颜色单通道 ④摘掉 `fmtPct` 的 `+` ⑤清空别名表(扫描面红)。
+
 ### 2026-07-28 — 锚点漂移家族第 8 例收口:**我自己开的票低报了 4.5 倍规模**,而根修不是逐个重指向而是把「定位」收敛成单一真源(epic `pt_d922f21a04d640b5` done;commits `f47707b0` + `e2769caf`,13 文件;全家族 **18 红 → 84/84**,**NEUTER×10 全咬**,干净 committed worktree **77 过 1 skip**,生产码**零改动**)
 
 - **★ 先判活死,结论是防线完好 —— 票面要求的第一步救了整个方向。** `_trimMsgForPersist` 及其三条 inject lane 剥离块**活得很好**,只是 2026-07-25 被 pt_3879f00e slice 3 整体搬到 `core/conv_persist_helpers.js:50`,`conversations.js:82` 的注释还记着那次搬迁。**这是纯 harness 漂移(守卫活着、指错地方),不是回归** —— 若第一反应是「把断言改绿」,就会在防线仍然有效的情况下削弱它。

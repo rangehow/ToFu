@@ -39,6 +39,13 @@ def registry_state():
 
     The registry is a module-level singleton shared with every other test in
     the session, so a hijack attempt must not leak out of this module.
+
+    Restoration goes through ``ToolRegistry.snapshot()`` / ``restore()`` rather
+    than a hand-written list of tables. The first version of this fixture
+    listed four tables by hand and missed ``_provenance`` — added in the same
+    commit — which would have left a stale name claim behind that silently
+    REFUSES a later legitimate registration (a WARNING, not an exception, so
+    the resulting failure would surface far from its cause).
     """
     import lib.tasks_pkg.handlers  # noqa: F401 — ensures built-in handlers exist
     from lib.tasks_pkg.executor import tool_registry
@@ -46,23 +53,91 @@ def registry_state():
 
     saved_specs = list(_spec._TOOL_SPECS)
     saved_keys = set(_spec._REGISTERED_KEYS)
-    saved_exact = dict(tool_registry._exact)
-    saved_sets = list(tool_registry._sets)
-    saved_special = dict(tool_registry._special)
-    saved_meta = dict(tool_registry._metadata)
+    snap = tool_registry.snapshot()
     try:
         yield tool_registry
     finally:
         _spec._TOOL_SPECS[:] = saved_specs
         _spec._REGISTERED_KEYS.clear()
         _spec._REGISTERED_KEYS.update(saved_keys)
-        tool_registry._exact.clear()
-        tool_registry._exact.update(saved_exact)
-        tool_registry._sets[:] = saved_sets
-        tool_registry._special.clear()
-        tool_registry._special.update(saved_special)
-        tool_registry._metadata.clear()
-        tool_registry._metadata.update(saved_meta)
+        tool_registry.restore(snap)
+
+
+class TestRegistrySnapshotCoversEveryTable:
+    """Meta-ratchet: snapshot/restore must cover EVERY state table.
+
+    This is the guard against the failure mode that produced both known
+    leaks — a new state table gets added and the cleanup path keeps covering
+    only the old ones. Asserting over the registry's own ``__dict__`` means a
+    sixth table is included automatically; a snapshot implementation that
+    hard-codes a subset fails here instead of leaking silently.
+    """
+
+    def test_snapshot_captures_all_container_attributes(self):
+        from lib.tasks_pkg.executor import ToolRegistry
+
+        r = ToolRegistry()
+        snap = r.snapshot()
+        containers = {a for a, v in r.__dict__.items()
+                      if isinstance(v, (dict, list, set))}
+        missing = containers - set(snap)
+        assert not missing, (
+            f'snapshot() omits state table(s): {sorted(missing)} — a table '
+            f'left out of the snapshot leaks across tests'
+        )
+
+    def test_restore_reverts_every_table_including_provenance(self):
+        from lib.tasks_pkg.executor import ToolRegistry
+
+        r = ToolRegistry()
+        r.register('base_tool', _evil)
+        snap = r.snapshot()
+
+        r.register('later_tool', _evil)
+        r.register_set({'set_tool'}, _evil)
+        r.register_special('__later_special__', _evil)
+        r.restore(snap)
+
+        for attr, saved in snap.items():
+            assert getattr(r, attr) == saved, (
+                f'{attr} not restored — this is exactly how a stale entry '
+                f'survives into the next test'
+            )
+        assert 'later_tool' not in r._provenance
+        assert r.lookup('later_tool') is None
+        assert r.lookup('set_tool') is None
+
+    def test_restore_clears_a_table_created_after_the_snapshot(self):
+        """A table that did not exist at snapshot time must end up empty."""
+        from lib.tasks_pkg.executor import ToolRegistry
+
+        r = ToolRegistry()
+        snap = r.snapshot()
+        r.__dict__['_future_table'] = {'leaked': 1}
+        r.restore(snap)
+        assert r.__dict__['_future_table'] == {}
+
+    def test_stale_provenance_would_refuse_a_later_registration(self):
+        """Pins WHY _provenance must be restored — the concrete consequence.
+
+        Without restoration a finished test's claim silently refuses an
+        unrelated later registration, and the refusal only logs a WARNING.
+        """
+        from lib.tasks_pkg.executor import ToolRegistry
+
+        r = ToolRegistry()
+        snap = r.snapshot()
+        r.register('shared_name', _evil, source='plugin', plugin_name='first')
+        r.restore(snap)
+
+        def _second(*_a, **_k):
+            return ('tc', 'second', False)
+
+        r.register('shared_name', _second, source='plugin', plugin_name='second')
+        assert r.lookup('shared_name') is _second, (
+            'a stale claim from a finished test refused a legitimate '
+            'registration'
+        )
 
 
 def _evil(*_a, **_k):

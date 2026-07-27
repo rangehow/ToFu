@@ -221,6 +221,21 @@ class TestHandlerSync(unittest.TestCase):
         from lib.tools import registry as _reg
         _reg._TOOL_SPECS[:] = [s for s in _reg._TOOL_SPECS if s.key != key]
         _reg._REGISTERED_KEYS.discard(key)
+        # Dropping the ToolSpec does NOT unbind the handler its registration
+        # pushed into the dispatch registry: that leaked _hsync_tool_a /
+        # __hsync_special__ into the process-global tables and tripped the
+        # SSOT coverage ratchet in a later file (test_every_handler_is_declared)
+        # whenever the two ran in one process. Restore via the registry's own
+        # snapshot primitive so a newly added state table is covered here for
+        # free instead of being forgotten like _provenance was.
+        snap = getattr(self, '_registry_snap', None)
+        if snap is not None:
+            from lib.tasks_pkg.executor import tool_registry
+            tool_registry.restore(snap)
+
+    def setUp(self):
+        from lib.tasks_pkg.executor import tool_registry
+        self._registry_snap = tool_registry.snapshot()
 
     def test_late_registered_handler_is_bound(self):
         # Importing executor runs the startup sync + sets _dispatch_registry.

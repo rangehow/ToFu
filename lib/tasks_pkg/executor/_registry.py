@@ -66,6 +66,69 @@ class ToolRegistry:
         # built-in hijack protection in :meth:`_claim_name`.
         self._provenance: dict[str, tuple[str, str]] = {}
 
+    # ── State snapshot / restore (test isolation) ─────────
+    #
+    # The registry is a process-global singleton, so any test that registers
+    # a spec mutates state every later test sees. Cleaning up by hand means
+    # listing the state tables at the call site — and that list silently goes
+    # stale the moment a new table is added. That already bit us twice:
+    # ``test_tool_registry``'s per-test ``_cleanup`` dropped the ToolSpec but
+    # never unbound the handler (leaking ``_hsync_tool_a`` /
+    # ``__hsync_special__`` into the SSOT coverage ratchet), and the first
+    # version of the hijack guard's fixture restored four tables while
+    # ``_provenance`` — added in the same commit — kept a stale claim that
+    # would silently REFUSE a later legitimate registration.
+    #
+    # These two methods are therefore INTROSPECTIVE: they enumerate the
+    # instance's own ``__dict__`` rather than a hand-written table list, so a
+    # sixth state table is covered the day it is added, with no edit here and
+    # none at any call site.
+
+    def snapshot(self) -> dict[str, Any]:
+        """Deep-ish copy of every state table, for later :meth:`restore`.
+
+        Containers are copied one level (the handlers inside are immutable
+        function references, so a shallow copy per container is exact).
+        """
+        snap: dict[str, Any] = {}
+        for attr, value in self.__dict__.items():
+            if isinstance(value, dict):
+                snap[attr] = dict(value)
+            elif isinstance(value, list):
+                snap[attr] = list(value)
+            elif isinstance(value, set):
+                snap[attr] = set(value)
+            else:
+                snap[attr] = value
+        return snap
+
+    def restore(self, snap: dict[str, Any]) -> None:
+        """Restore state captured by :meth:`snapshot`, in place.
+
+        In-place mutation (rather than rebinding ``self.__dict__``) keeps any
+        module that captured a direct reference to a table — e.g. a test
+        holding ``registry._exact`` — pointing at the live object.
+        """
+        for attr, saved in snap.items():
+            current = getattr(self, attr, None)
+            if isinstance(current, dict) and isinstance(saved, dict):
+                current.clear()
+                current.update(saved)
+            elif isinstance(current, list) and isinstance(saved, list):
+                current[:] = saved
+            elif isinstance(current, set) and isinstance(saved, set):
+                current.clear()
+                current.update(saved)
+            else:
+                setattr(self, attr, saved)
+        # A table created AFTER the snapshot was taken is not in ``snap``;
+        # clearing it is the only way "restore" can mean what it says.
+        for attr, value in list(self.__dict__.items()):
+            if attr in snap:
+                continue
+            if isinstance(value, (dict, list, set)):
+                value.clear()
+
     # ── Name provenance + built-in hijack protection ──────
 
     def _claim_name(self, name: str, source: str, plugin_name: str) -> bool:

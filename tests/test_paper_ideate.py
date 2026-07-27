@@ -116,8 +116,8 @@ def _score_returning(overall, delta='mechanism-level', novelty=5):
             capped = True
         ov = round(sum(scores.values()) / len(scores), 2)
         return {'scores': scores, 'overall': overall if overall is not None else ov,
-                'mechanism_delta': delta, 'closest_neighbor': (prior_set['merged_ids'][0]
-                                                               if prior_set['merged_ids'] else ''),
+                'mechanism_delta': delta, 'closest_neighbor': (prior_set['retrieved_ids'][0]
+                                                               if prior_set['retrieved_ids'] else ''),
                 'justifications': {}, 'verdict': 'v', 'novelty_capped': capped}
     return _fn
 
@@ -198,10 +198,10 @@ def test_novelty_prior_set_forces_retrieval_including_unreported_id():
         ps = it._novelty_prior_set(_good_idea())
         assert len(ps['retrieved']) >= it.IDEATE_NOVELTY_RETRIEVAL_K, \
             f"retrieved {len(ps['retrieved'])} < K={it.IDEATE_NOVELTY_RETRIEVAL_K}"
-        assert '2402.55555' in ps['merged_ids'], \
+        assert '2402.55555' in ps['retrieved_ids'], \
             'forced-retrieval collider (unreported by the model) missing from prior set'
         assert fake_search.queries and 'learnable' in fake_search.queries[0].lower(), \
-            'retrieval query must include title+mechanism'
+            'retrieval query must be built from the title terms'
     finally:
         restore()
     _ok('novelty prior set forces search_arxiv top-K incl. ids the model never self-reported')
@@ -283,7 +283,11 @@ def test_good_idea_accepted_and_rejections_audited():
         res = it.generate_ideas('dir', _OPEN_GAPS, lang='en')
         assert len(res['accepted']) == 1, f"expected 1 accepted, got {len(res['accepted'])}"
         acc = res['accepted'][0]
-        assert acc['overall'] == 4.75 and 'scores' in acc and 'prior_set_ids' in acc
+        assert acc['overall'] == 4.75 and 'scores' in acc
+        # Provenance stays split: the retrieved basis the judge saw is recorded
+        # apart from the model's self-report (never one merged prior_set_ids).
+        assert 'retrieved_ids' in acc and 'self_reported_ids' in acc
+        assert 'prior_set_ids' not in acc
         # the stitch is rejected AND its record is auditable
         assert len(res['rejected']) == 1
         rej = res['rejected'][0]

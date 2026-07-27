@@ -18,14 +18,16 @@ cost order (free structural checks first, LLM judging last):
   Gate ② — forced-neighbor-retrieval novelty (:func:`_novelty_prior_set`)
     Owner pin #1: **novelty is measured against a RETRIEVED neighbor set, not
     against what the model chose to cite.** Before judging, we ALWAYS run
-    ``search_arxiv(title + core_mechanism)`` and pull the top-K unconditionally
-    into the prior set (merged with the model's self-reported prior_art). The
-    judge compares the mechanism against the CLOSEST retrieved paper and must
-    label the delta mechanism-level vs parameter-level; a parameter-level delta
-    (new dataset / new backbone / two modules glued) caps the novelty axis. A
-    model can hand-pick three old papers and claim it beats them all while the
-    actually-closest arXiv:XXXX it never mentioned sinks it — this pass is what
-    catches that.
+    ``search_arxiv`` on a SANITIZED term query (never the mechanism prose —
+    that returned 0/25 on-topic neighbours in production and one HTTP 500) and
+    pull the top-K into the basis. The retrieved set and the model's
+    self-reported prior_art are kept in SEPARATE fields and never merged: they
+    have different provenance and different trustworthiness. The judge compares
+    the mechanism against the CLOSEST retrieved paper and must label the delta
+    mechanism-level vs parameter-level; a parameter-level delta (new dataset /
+    new backbone / two modules glued) caps the novelty axis. When retrieval
+    yields nothing the basis is ``none`` and the idea CANNOT be accepted — pin
+    #1 does not hold, so a rubric score is not evidence of novelty.
 
   Gate ③ — four-axis rubric (:func:`_score_idea`, mirrors insight `_rubric`)
     novelty / falsifiability / mechanism_depth / value, each 1-5, mean must
@@ -107,6 +109,183 @@ _KIND_SYNONYMS = {
 }
 #: What an unmappable kind becomes (the more common template).
 _KIND_FALLBACK = 'methodology'
+
+# ── Retrieval-query construction (gate ②'s wire contract) ──────────────────
+#
+# Production evidence (research_7a444f96c65d42b5): sending `title + the whole
+# core_mechanism` — 473-558 chars of prose with `*asterisks*`, commas and
+# parentheses — as arXiv's `all:` query returned 0/25 on-topic neighbours
+# (gravitational-wave catalogues for KV-cache ideas), the SAME papers in 5 of 6
+# ideas, and one HTTP 500 from an unescaped `*`. A long prose query degrades
+# `all:` into near-unconstrained matching that just returns the most-cited
+# collaboration papers, so the novelty axis became a CONSTANT.
+
+#: Hard ceiling on a search query. Longer than this is prose, not search terms.
+_MAX_RETRIEVAL_QUERY_CHARS = 160
+#: How many terms the zero-LLM fallback extracts from the title.
+_FALLBACK_QUERY_TERMS = 8
+#: Stopwords the fallback drops — they carry no retrieval signal.
+_QUERY_STOPWORDS = frozenset((
+    'a', 'an', 'the', 'of', 'for', 'and', 'or', 'to', 'in', 'on', 'with', 'by',
+    'via', 'using', 'from', 'into', 'at', 'as', 'is', 'are', 'be', 'that',
+    'this', 'these', 'those', 'it', 'its', 'their', 'our', 'we', 'can', 'may',
+    'instead', 'based', 'towards', 'toward', 'novel', 'new', 'approach',
+))
+
+
+def sanitize_retrieval_query(raw, *, max_chars: int = _MAX_RETRIEVAL_QUERY_CHARS) -> str:
+    """Make any candidate query safe and useful to send to a search API.
+
+    Strips the characters that break arXiv's parser (an unescaped ``*`` in one
+    real mechanism caused HTTP 500 → zero neighbours → gate ② silently off),
+    collapses whitespace and truncates on a WORD boundary. Every path into
+    retrieval funnels through here — model-supplied and fallback alike — so
+    prose can never reach the wire regardless of which path produced it.
+    """
+    import re
+    txt = raw if isinstance(raw, str) else ''
+    # Drop everything that is punctuation/markup rather than a search term.
+    txt = re.sub(r'[*()\[\]{}"\'`,;:!?/\\|<>+=~^$#@&—–“”‘’]', ' ', txt)
+    txt = re.sub(r'[.](?!\d)', ' ', txt)          # keep 2502.09992, drop sentence dots
+    txt = re.sub(r'\s+', ' ', txt).strip()
+    if len(txt) <= max_chars:
+        return txt
+    cut = txt[:max_chars]
+    sp = cut.rfind(' ')
+    return (cut[:sp] if sp > 0 else cut).strip()
+
+
+def _fallback_retrieval_query(idea: dict) -> str:
+    """Zero-LLM query builder — the path that MUST work without model help.
+
+    The model is asked for a ``retrieval_query``, but 'the contract is in the
+    prompt' is not the same as 'the model obeyed it' (the `kind` bug proved
+    that), and ideas generated before the field existed have none at all. So
+    this derives terms from the TITLE (a noun phrase naming the mechanism —
+    exactly what a search needs) and never from the mechanism prose.
+    """
+    title = idea.get('title') if isinstance(idea.get('title'), str) else ''
+    words = sanitize_retrieval_query(title, max_chars=_MAX_RETRIEVAL_QUERY_CHARS).split()
+    terms = [w for w in words if w.lower() not in _QUERY_STOPWORDS]
+    return ' '.join((terms or words)[:_FALLBACK_QUERY_TERMS])
+
+
+def build_retrieval_query(idea: dict) -> tuple:
+    """Return ``(query, source)`` for one idea's neighbour retrieval.
+
+    ``source`` is ``'model'`` when the idea's own ``retrieval_query`` survived
+    sanitization, else ``'fallback'``. Both paths go through the SAME sanitizer,
+    so a model that ignores the contract and pastes a whole sentence is trimmed
+    rather than trusted.
+    """
+    supplied = sanitize_retrieval_query(idea.get('retrieval_query'))
+    # A model-supplied query must be terms, not a restated sentence; if it is
+    # implausible (empty or a single word) fall back to the title terms.
+    if supplied and len(supplied.split()) >= 2:
+        return supplied, 'model'
+    fb = _fallback_retrieval_query(idea)
+    return fb, 'fallback'
+
+
+# ── Fielded query: identity vs domain (owner ruling C) ─────────────────────
+#
+# Sanitizing the query fixed relevance (0/25 → 25/25 on-topic) but NOT
+# discrimination: two ideas whose titles share the domain words still got
+# byte-identical neighbour sets — `Predictive Delta Compression KV Cache` and
+# `Quantum-Inspired Entanglement KV Cache Compression` shared 5/5 papers,
+# because arXiv's `all:` is an unordered bag of words with no notion of which
+# terms name THIS idea and which merely place it in a field.
+#
+# The fix says what we actually mean, using syntax the API already has:
+#
+#     ti:"<identity terms>" AND all:"<domain terms>"
+#
+# Identity terms constrain the TITLE (so two different mechanisms diverge);
+# domain terms constrain the full text (so the search stays in the field and
+# does not drift to real quantum physics for a 'Quantum-Inspired' idea).
+#
+# The split is COMPUTED, not hand-tuned: within one batch of ideas, a term
+# carried by several ideas is domain background; a term unique to this idea is
+# its identity. That is a recomputable structural criterion over the batch, not
+# an invented weight.
+
+#: Share of a batch's ideas a term must appear in to count as domain
+#: background rather than one idea's identity.
+_DOMAIN_TERM_MIN_SHARE = 0.5
+
+
+def split_identity_domain(queries) -> list:
+    """Split each query's terms into identity vs domain across a batch.
+
+    Args:
+        queries: the sanitized term-string of every idea in the batch.
+
+    Returns:
+        One ``{'identity': [...], 'domain': [...]}`` per input query. A term
+        carried by >= ``_DOMAIN_TERM_MIN_SHARE`` of the batch is domain; the
+        rest is that idea's identity. With a single idea there is nothing to
+        compare against, so everything is identity and the domain leg is empty
+        (the caller then degrades to a plain ``all:`` query).
+    """
+    from collections import Counter
+    toks = [[t for t in (q or '').split() if t] for q in queries]
+    n = len([t for t in toks if t])
+    if n <= 1:
+        return [{'identity': list(t), 'domain': []} for t in toks]
+    seen = Counter()
+    for t in toks:
+        seen.update({w.lower() for w in t})       # once per idea, not per occurrence
+    cut = max(2, int(n * _DOMAIN_TERM_MIN_SHARE))
+    out = []
+    for t in toks:
+        out.append({'identity': [w for w in t if seen[w.lower()] < cut],
+                    'domain': [w for w in t if seen[w.lower()] >= cut]})
+    return out
+
+
+def assemble_arxiv_query(identity, domain, *, tier: int = 1) -> tuple:
+    """Build the arXiv query string; return ``(query, mode)``.
+
+    ``mode`` is ``'fielded'`` for a field-constrained query and ``'all'`` for
+    the flat fallback. A fielded query needs BOTH legs — with no domain terms
+    the search could drift out of the field, and with no identity terms there
+    is nothing to tell this idea apart, so either gap degrades to plain ``all:``.
+
+    ``tier`` widens the identity leg for :func:`_novelty_prior_set`'s retry
+    ladder (1 → title, 2 → abstract). Tier 3 is "domain only" and is expressed
+    by the caller passing no identity terms.
+
+    ★ Two syntax facts measured against the live API (2026-07-27), both of
+    which the first implementation got wrong — its queries returned ZERO for
+    all six real ideas and silently degraded to the flat ``all:`` bag it was
+    meant to replace:
+
+    1. A QUOTED multi-word value is an exact PHRASE match. ``ti:"predictive
+       delta"`` requires those two words adjacent in a title, and a novel
+       idea's identity phrase is by definition not in any existing title —
+       0 results, always. Identity terms must be separate unquoted terms.
+    2. Those terms must be OR-ed, not AND-ed. ``ti:predictive AND ti:delta``
+       demands every identity word appear in one title: also 0/6 measured.
+       OR-ing them asks "a paper whose title touches ANY of this idea's
+       distinguishing terms, inside our field", which is what a neighbour IS.
+
+    The domain leg stays a quoted phrase on purpose: it is common field
+    vocabulary ("KV cache compression"), so phrase-matching it is what keeps
+    the search from drifting to real quantum physics for a 'Quantum-Inspired'
+    idea. Measured on the 6 real ideas: 8/9 on-topic, 0% pairwise overlap
+    (was 0/25 on-topic, 100% overlap).
+    """
+    ident = [t for t in (identity or []) if t]
+    dom = ' '.join(domain or []).strip()
+    if ident and dom:
+        field = 'ti' if tier <= 1 else 'abs'
+        legs = ' OR '.join(f'{field}:{t}' for t in ident)
+        return f'({legs}) AND all:"{dom}"', f'fielded_t{1 if tier <= 1 else 2}'
+    if dom and not ident:
+        # Tier 3: domain only. Still fielded — an `all:"…"` PHRASE query is a
+        # real constraint, unlike the unquoted bag of words that shipped.
+        return f'all:"{dom}"', 'domain'
+    return (' '.join(ident) + ' ' + dom).strip(), 'all'
 
 
 def _normalize_kind(raw) -> tuple:
@@ -198,44 +377,123 @@ def _structural_gate(idea: dict, valid_gap_ids: set) -> Optional[str]:
 
 # ── Gate ②: forced-neighbor-retrieval novelty prior set ────────────────────
 
-def _novelty_prior_set(idea: dict, *, k: int = IDEATE_NOVELTY_RETRIEVAL_K) -> dict:
+def _novelty_prior_set(idea: dict, *, k: int = IDEATE_NOVELTY_RETRIEVAL_K,
+                       batch_terms=None) -> dict:
     """Build the neighbor set the novelty judge MUST use (owner pin #1).
 
-    ALWAYS runs ``search_arxiv(title + core_mechanism)`` and takes the top-k
-    hits unconditionally — this is the retrieved evidence the judge compares
-    against, NOT the model's self-reported prior_art. The two are merged (so
-    the model's picks still count) but the retrieved set can never be empty just
-    because the model chose to cite nothing damaging.
+    ALWAYS runs ``search_arxiv`` on a SANITIZED term query and takes the top-k
+    hits — this is the retrieved evidence the judge compares against, and it is
+    kept STRICTLY SEPARATE from the model's self-reported prior_art.
+
+    The two are never merged. Production shipped a ``merged_ids`` union in which
+    the model's self-report (up to 257 ids) outnumbered the retrieved set (5) by
+    50:1, and that union was what landed in the audit record — so the audit
+    claimed a 41-paper basis while the judge actually saw 5 papers. Different
+    provenance, different trustworthiness: they stay in different fields.
+
+    When ``batch_terms`` (every idea's sanitized query in this pass) is given,
+    the query is FIELDED so ideas that share a domain still retrieve different
+    neighbours. Two ideas whose titles both ended in "KV Cache Compression"
+    previously got byte-identical neighbour sets, which made the novelty axis a
+    constant.
+
+    Degradation chain, each step LOUD (never a silent empty basis):
+      title-identity → abstract-identity → domain phrase → flat ``all:`` →
+      ``novelty_basis='none'``. Widening the identity leg (rather than dropping
+      straight to the flat bag of words) is what keeps a genuinely-new idea from
+      reporting a false "no prior art".
 
     Returns::
 
         {
-          'retrieved': [ {arxiv_id, title, summary}, ... ],   # from search_arxiv
-          'self_reported': ['id', ...],                        # idea.prior_art (normalized)
-          'merged_ids': ['id', ...],                           # union, normalized
-          'retrieval_query': str,
+          'retrieved': [ {arxiv_id, title, summary}, ... ],  # from search_arxiv
+          'retrieved_ids': ['id', ...],                       # the ACTUAL basis
+          'self_reported_ids': ['id', ...],                   # idea.prior_art
+          'retrieval_query': str,                             # what hit the wire
+          'query_source': 'model'|'fallback',
+          'query_mode': 'fielded_t1'|'fielded_t2'|'domain'|'all',
+          'novelty_basis': 'retrieved'|'none',
         }
+
+    ``novelty_basis='none'`` means the retrieval produced nothing, so pin #1
+    cannot hold: the caller MUST NOT accept that idea on a rubric score alone.
     """
     import lib.paper.ideate as _self
     title = (idea.get('title') or '').strip()
-    mech = (idea.get('core_mechanism') or '').strip()
-    query = f'{title} {mech}'.strip()
-    retrieved = []
-    try:
-        hits = _self.search_arxiv(query, max_results=max(k, IDEATE_NOVELTY_RETRIEVAL_K)) or []
+    terms, query_source = _self.build_retrieval_query(idea)
+
+    # Fielded when the batch tells us which terms are shared domain background.
+    # The ladder WIDENS the identity leg instead of collapsing straight back to
+    # the flat bag of words: tier 1 title → tier 2 abstract → tier 3 domain
+    # phrase only. Measured on the 6 real ideas (2026-07-27): tier 1 alone left
+    # 2/6 with an empty basis (their identity terms are genuinely new, so no
+    # TITLE carries them); the ladder fills both from the abstract leg while
+    # keeping 0% pairwise overlap.
+    attempts = [(terms, 'all')]
+    if terms and batch_terms:
+        try:
+            legs = _self.split_identity_domain(list(batch_terms) + [terms])[-1]
+            ladder = []
+            for tier in (1, 2):
+                q, mode = _self.assemble_arxiv_query(legs['identity'],
+                                                     legs['domain'], tier=tier)
+                if mode.startswith('fielded'):
+                    ladder.append((q, mode))
+            q3, mode3 = _self.assemble_arxiv_query([], legs['domain'])
+            if mode3 == 'domain':
+                ladder.append((q3, 'domain'))
+            if ladder:
+                # Flat all: stays as the last resort behind the ladder.
+                attempts = ladder + [(terms, 'all')]
+        except Exception as e:
+            logger.warning('[Paper:Ideate] fielded query build failed for %.60s: %s '
+                           '— falling back to flat all:', title, e)
+            attempts = [(terms, 'all')]
+
+    def _search(q):
+        try:
+            hits = _self.search_arxiv(
+                q, max_results=max(k, IDEATE_NOVELTY_RETRIEVAL_K)) or []
+        except Exception as e:
+            logger.warning('[Paper:Ideate] novelty retrieval failed for %.60s: %s', title, e)
+            return []
+        out = []
         for h in hits[:k]:
             aid = _norm_id(h.get('arxiv_id'))
             if aid:
-                retrieved.append({'arxiv_id': aid, 'title': h.get('title') or '',
-                                  'summary': (h.get('summary') or '')[:400]})
-    except Exception as e:
-        logger.warning('[Paper:Ideate] novelty retrieval failed for %.60s: %s', title, e)
-    self_reported = [_norm_id(x) for x in (idea.get('prior_art') or []) if _norm_id(x)]
-    merged = list(dict.fromkeys([r['arxiv_id'] for r in retrieved] + self_reported))
-    logger.info('[Paper:Ideate] novelty prior set for %.50s — retrieved=%d self=%d merged=%d',
-                title, len(retrieved), len(self_reported), len(merged))
-    return {'retrieved': retrieved, 'self_reported': self_reported,
-            'merged_ids': merged, 'retrieval_query': query}
+                out.append({'arxiv_id': aid, 'title': h.get('title') or '',
+                            'summary': (h.get('summary') or '')[:400]})
+        return out
+
+    query, query_mode, retrieved = '', 'all', []
+    for _q, _mode in attempts:
+        if not _q:
+            continue
+        query, query_mode = _q, _mode
+        retrieved = _search(_q)
+        if retrieved:
+            break
+        # A too-narrow constraint must not masquerade as "no prior art".
+        logger.warning('[Paper:Ideate] %s query retrieved nothing for %.60s (%r) '
+                       '— widening', _mode, title, _q)
+    if not query:
+        logger.warning('[Paper:Ideate] no usable retrieval query for %.60s', title)
+
+    retrieved_ids = list(dict.fromkeys(r['arxiv_id'] for r in retrieved))
+    self_reported = list(dict.fromkeys(
+        _norm_id(x) for x in (idea.get('prior_art') or []) if _norm_id(x)))
+    basis = 'retrieved' if retrieved_ids else 'none'
+    if basis == 'none':
+        logger.error('[Paper:Ideate] EMPTY novelty basis for %.60s (query=%r source=%s '
+                     'mode=%s) — pin #1 cannot hold, this idea is unjudgeable',
+                     title, query, query_source, query_mode)
+    logger.info('[Paper:Ideate] novelty prior set for %.50s — retrieved=%d self=%d '
+                'basis=%s mode=%s query=%r (%s)', title, len(retrieved_ids),
+                len(self_reported), basis, query_mode, query, query_source)
+    return {'retrieved': retrieved, 'retrieved_ids': retrieved_ids,
+            'self_reported_ids': self_reported, 'retrieval_query': query,
+            'query_source': query_source, 'query_mode': query_mode,
+            'novelty_basis': basis}
 
 
 # ── Gate ②/③: the LLM judge (novelty + four-axis rubric in one dispatch) ────
@@ -513,7 +771,9 @@ def _ideate_system_prompt(lang: str, n_ideas: int) -> str:
             'core_mechanism/novelty_claim/prior_art/falsifiable_prediction/why_not_AB。'
             f'**kind 只能是 {" 或 ".join(_VALID_KINDS)} 两个值之一**'
             '(提出新方法/新机制写 methodology；做度量/实证分析写 analysis)，'
-            '可参考对应 open_gap 的 kind_hint。')
+            '可参考对应 open_gap 的 kind_hint。'
+            '另必须给 `retrieval_query`：3-8 个用于检索相似论文的**术语**（空格分隔，'
+            '不要标点/星号/整句）—— 它会被直接送进论文搜索 API，整段描述会使检索失效。')
     return (
         f'You are a tasteful senior researcher proposing {n_ideas} GENUINELY NOVEL ideas '
         'for a direction.\n'
@@ -525,7 +785,10 @@ def _ideate_system_prompt(lang: str, n_ideas: int) -> str:
         'linked_gap_id/core_mechanism/novelty_claim/prior_art/falsifiable_prediction/why_not_AB. '
         f'**kind MUST be exactly one of: {" | ".join(_VALID_KINDS)}** '
         '(a new method/mechanism is "methodology"; a measurement or empirical study is '
-        '"analysis") — follow the linked open_gap\'s kind_hint when unsure.')
+        '"analysis") — follow the linked open_gap\'s kind_hint when unsure. '
+        'Also give `retrieval_query`: 3-8 space-separated TERMS for finding similar '
+        'papers (no punctuation, no asterisks, no full sentences) — it goes straight '
+        'into a paper-search API, and a prose paragraph makes the search useless.')
 
 
 # ── Public entry ───────────────────────────────────────────────────────────
@@ -586,6 +849,19 @@ def generate_ideas(direction: str, open_gaps: dict, *, lang: str = 'en',
                 'lang': lang, 'accepted': [], 'rejected': [], 'threshold': thr}
 
     accepted, rejected = [], []
+    # Batch-wide term census for the fielded query: a term several ideas share is
+    # domain background, a term unique to one idea is its identity. Computed ONCE
+    # over the whole batch so the identity/domain split is a recomputable
+    # structural fact rather than a per-idea guess.
+    _batch_terms = []
+    for _i in raw:
+        if isinstance(_i, dict):
+            try:
+                _t, _ = _self.build_retrieval_query(_i)
+            except Exception:
+                _t = ''
+            if _t:
+                _batch_terms.append(_t)
     for idea in raw:
         if not isinstance(idea, dict):
             continue
@@ -605,14 +881,35 @@ def generate_ideas(direction: str, open_gaps: dict, *, lang: str = 'en',
         # Grounding — strip hallucinated prior_art
         _grounded, dropped = _ground_idea_prior_art(idea)
         # Gate ② — forced-neighbor retrieval prior set
-        prior_set = _novelty_prior_set(idea)
+        prior_set = _novelty_prior_set(idea, batch_terms=_batch_terms)
         # Gate ③ — four-axis rubric judged against the RETRIEVED set
         gap = _gap_by_id(open_gaps, idea.get('linked_gap_id'))
         verdict = _score_idea(idea, prior_set, gap, lang, model=model, abort=abort)
         if verdict is None:
             rejected.append({**idea, 'reject_stage': 'rubric',
                              'reject_reason': 'judge failed/unparseable',
-                             'prior_set_ids': prior_set['merged_ids']})
+                             'retrieved_ids': prior_set['retrieved_ids'],
+                             'self_reported_ids': prior_set['self_reported_ids'],
+                             'novelty_basis': prior_set['novelty_basis'],
+                             'query_mode': prior_set['query_mode']})
+            continue
+        # pin #1 hard floor: novelty is f(RETRIEVED set). With an empty basis
+        # there is nothing to measure novelty against, so a high rubric score is
+        # not evidence of novelty — it is an unjudged idea wearing a score.
+        # 宁可判不了,不许假装判过.
+        if prior_set['novelty_basis'] == 'none':
+            rejected.append({**idea, **verdict, 'reject_stage': 'novelty_basis',
+                             'reject_reason': (
+                                 'retrieval produced no neighbours (query='
+                                 f'{prior_set["retrieval_query"]!r}, source='
+                                 f'{prior_set["query_source"]}) — novelty could not be '
+                                 'judged against any prior art'),
+                             'retrieved_ids': [],
+                             'self_reported_ids': prior_set['self_reported_ids'],
+                             'novelty_basis': 'none',
+                             'retrieval_query': prior_set['retrieval_query']})
+            logger.error('[Paper:Ideate] REJECT(novelty_basis) %.50s — empty basis',
+                         idea.get('title'))
             continue
         # R2/R3 seam v2 — a gap resting ONLY on grounded-but-unharvested papers
         # (low_confidence) is a weaker foundation: R3 must not fully trust that
@@ -628,8 +925,13 @@ def generate_ideas(direction: str, open_gaps: dict, *, lang: str = 'en',
             logger.info('[Paper:Ideate] value axis docked (linked gap %s low_confidence) '
                         'for %.50s → overall %.2f', idea.get('linked_gap_id'),
                         idea.get('title'), verdict['overall'])
-        record = {**idea, **verdict, 'prior_set_ids': prior_set['merged_ids'],
+        record = {**idea, **verdict,
+                  'retrieved_ids': prior_set['retrieved_ids'],
+                  'self_reported_ids': prior_set['self_reported_ids'],
+                  'novelty_basis': prior_set['novelty_basis'],
                   'retrieval_query': prior_set['retrieval_query'],
+                  'query_source': prior_set['query_source'],
+                  'query_mode': prior_set['query_mode'],
                   'prior_art_dropped': dropped,
                   'linked_gap_low_confidence': linked_low_conf}
         if verdict['overall'] >= thr:

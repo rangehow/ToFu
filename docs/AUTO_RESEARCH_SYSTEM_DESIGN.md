@@ -324,6 +324,9 @@ R3 判新颖性时不能全信。
   "core_mechanism": "为什么会 work 的机理,一句话(不是操作步骤)",
   "novelty_claim": "相对哪些具体工作(arxiv_id)新在哪",
   "prior_art": ["2305.xxxxx", "2401.xxxxx"],  // 模型自报的近邻(★不是新颖性判据的全部,见 pin #1)
+  "retrieval_query": "KV cache low-rank projection compression",  // 3-8 个术语，无标点/星号/整句
+                                              // ★零额外 LLM 调用(随生成一并输出);缺失或不合法时
+                                              // 走零 LLM 兔底构造器，两路均过同一个净化器
   "falsifiable_prediction": "一个能被实验证伪的具体预测",
   "why_not_AB": "为什么这不是两个已有件的简单拼接(必填,非空)"
 }
@@ -339,14 +342,55 @@ R3 判新颖性时不能全信。
 - **NEUTER 就打在这道闸**:摘掉「必须 link open_gap」这一条 → 凭空造问题的缝合怪漏过 → 测试翻红。
 
 **闸② 强制近邻检索的新颖性判定(R3 pin #1 的核心 —— 新颖性 = f(检索集合),不是 f(模型自报))**:
-- **不允许** judge 只用 idea 自带的 `prior_art`。判定前**强制对 `title + core_mechanism` 跑
-  `search_arxiv`**,把 top-K(K≥5)**无选择地**拉进 prior 集(与模型自报的 `prior_art` 合并去重);
+- **不允许** judge 只用 idea 自带的 `prior_art`。判定前**强制跑 `search_arxiv`**,把 top-K(K≥5)
+  **无选择地**拉进检索集;
+- **★ 送上线的查询必须是术语，不是散文(2026-07-27 实测后固定)**。原实现把
+  `title + 整段 core_mechanism`(473-558 字符、带 `*星号*`/括号/逗号)直接当 `all:` 参数，
+  导致 pin #1 **从未真正生效**。用生产作业 `research_7a444f96c65d42b5` 的 6 条真 idea 实测
+  (每次都打真 arXiv API):
+
+  | 指标 | 修前(HEAD) | 修后 |
+  |---|---|---|
+  | 领域命中 | **0/25 (0%)** —— 召回全是引力波/中微子/GWTC 协作组论文 | **24/25 (96%)** |
+  | 距 idea 近邻集最大重合 | **80%** —— novelty 轴实际是常量 | **0%** |
+  | 空基底 | **1/6**(idea 3 的 `*difference*` 触发 HTTP 500，被吞成 `[]`) | **0/6** |
+
+- **两条查询构造路径，同一个净化器**:idea schema 的 `retrieval_query`(模型供，3-8 术语)
+  与零 LLM 兔底构造器(从 title 抽术语)**都过 `sanitize_retrieval_query`**。硬判据:
+  任何 idea 都不得把散文原样送进检索 API。
+- **字段化查询 + 渐宽阶梅(实测得出，两个语法坑都踩过)**:单纯净化修好了相关性却
+  治不了区分度 —— 两个标题都以 "KV Cache Compression" 结尾的 idea 仍得到**字节相同**的近邻集，
+  因为 `all:` 是无序词袋。改成 `(ti:a OR ti:b) AND all:"<domain>"`,其中 identity/domain 的划分
+  是**按批次计算**的结构判据(多条 idea 共享的术语 = 领域背景，独有的 = 该 idea 的身份)，
+  不是手调权重。**两个必须避开的写法，均实测 0 召回**:①`ti:"a b"` 引号 = 精确短语匹配，
+  而新颖 idea 的身份短语按定义不在任何已有标题里;②`ti:a AND ti:b` 要求每个身份词都在同一标题。
+  因此 identity 用 **OR**。阶梅 = title → abstract → domain 短语 → 平 `all:`,**渐宽而非直接塔缩回词袋**:
+  6 条真 idea 里有 2 条的身份术语真的新到没有任何标题带它，靠 abstract 腿才拿到基底，
+  否则会谬报成「无先行工作」。
 - judge 拿**这个检索集合**(而非模型挑的三篇)对比,显式回答:核心机制相对**检索到的最近那篇**,
   差异是 **mechanism-level 还是 parameter-level**;
 - **parameter-level 增量(换数据集/换 backbone/两模块拼接)→ novelty 轴硬上限**(不让均分糊过去);
+- **检索集为空 → `novelty_basis='none'`，该 idea 禁止进 `accepted`**。空基底上的高分不是新颖性证据，
+  是一个没被审的 idea 穿了分数的马甲。**宁可判不了,不许假装判过**，整个 pass 带 degraded/gate_reached。
+- **审计字段不得合并两种凭据**:`retrieved_ids`(真正被判的基底)与 `self_reported_ids`
+  (模型自报)**分字段存放**。旧实现合成一个 `prior_set_ids` 并集，而某条真 idea 自报 257 个 id
+  、检索只有 5 个 —— 审计记录于是声称了一个 41 篇的新颖性基底，而 judge 只看过 5 篇。
 - **NEUTER 就打在这道闸**:一个 idea 的新颖性主张只在「不检索、只用自带 prior_art」时成立,
   一旦强制检索 top-K 拉进一篇明显撞车的近邻 → 闸把它毙掉。断言 judge 的 prior 集 ≥ K
   且**包含非模型自报的 id**。
+- **守卡用真语料，不用 `_FakeSearch`**(教训):原有 17 个单测全绿却漏掉了这个缺陷，因为它们用
+  `_FakeSearch` 注入固定近邻，**从未测过真实查询构造**(charter「守卫绿着空转」同族)。
+  现在 `tests/test_paper_ideate_retrieval.py` 用那 6 条真 idea 作固定语料(落在
+  `tests/fixtures/r3_real_ideas.json`，**跟踪入库**—— 读未跟踪的 `data/` 会让它在干净检出里
+  全部 SKIP，那正是本 epic 要关的那个失效形态);语料缺失时**报错而非跳过**。
+
+**②-bis 后端对照(tofu-search vs arXiv Atom)—— 首轮因基线损坏未能进行，判定推迟不取消**:
+本次只修好了 arXiv 侧的查询构造。在修好之前做任何后端对照都是无意义的 —— 基线本身
+(0/25 相关、近邻集恒定)是坏的，任何对手都会赢，而那只能证明基线坏、不能证明对手好。
+现在基线已修复并有了可重算的数字(96% / 0% / 0空基底)，对照才有参系。
+**本条明确不是「实测否决」** —— tofu-search 供底的 rerank 在语义相似度上仍可能优于
+关键词匹配，只是尚未测。下轮用**同一组 6 条 idea + 同一套判据**(领域命中率下限 +
+跟 idea 重合上限)跑对照，才能下结论。
 
 **闸③ 四轴 rubric 打分(LLM-judge,照抄 insight `_rubric` 的 dispatch→parse→coerce→重算均值)**:
 

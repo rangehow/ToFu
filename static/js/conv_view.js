@@ -160,7 +160,7 @@
      *  @param {Object} msg     — the message object (must carry _msgId;
      *                            _ensureMsgId stamps one when missing).
      *  @param {Object} [opts]
-     *    @param {boolean} [opts.append=true] — set false for replace-only
+     *    @param {boolean} [opts.append=true] - set false for replace-only
      *                            (legacy upsertMessage semantics).
      *  @returns {boolean} true if the DOM was mutated.
      */

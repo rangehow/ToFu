@@ -413,6 +413,11 @@ OPENSOURCE_EXTRA_EXCLUDE_DIRS = {
 # secrets/internal paths before being added here.
 _OPENSOURCE_KEEP_FILES = {
     'scripts/gen_desktop_icons.py',   # CI icon generation (PIL only, no secrets)
+    # Regenerates static/js/globals.generated.d.ts, the ambient type surface
+    # for the concatenated-bundle global scope. CI runs it with --check
+    # (tests/test_frontend_globals_generated.py), so the public build needs it
+    # too. Pure regex scan of static/js -- no secrets, no internal paths.
+    'scripts/gen_frontend_globals.py',
 }
 
 OPENSOURCE_EXTRA_EXCLUDE_FILES = OPENSOURCE_EXTRA_EXCLUDE_FILES | {

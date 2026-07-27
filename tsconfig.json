@@ -37,6 +37,7 @@
   },
   "include": [
     "static/js/globals.d.ts",
+    "static/js/globals.generated.d.ts",
     "static/js/**/*.js"
   ],
   "exclude": [

@@ -1464,7 +1464,7 @@
     // Answer inputs: Enter submits (same as clicking 提交回答).
     var answerInputs = el.querySelectorAll('.pb-answer-text');
     for (var ai = 0; ai < answerInputs.length; ai++) {
-      answerInputs[ai].addEventListener('keydown', function (ev) {
+      answerInputs[ai].addEventListener('keydown', function (/** @type {KeyboardEvent} */ ev) {
         if (ev.key !== 'Enter') return;
         ev.preventDefault();
         var card = ev.currentTarget.closest ? ev.currentTarget.closest('.pb-board-card') : null;

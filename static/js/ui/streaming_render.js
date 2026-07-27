@@ -119,7 +119,7 @@ function _surgicalRerenderMsg(convId, idx) {
  * first (its finish bar is refreshed later when the parent `done` event
  * lands — see the done handler's autopilot branch in sse_pipeline.js).
  *
- * @param {Object} [parentMessage] — the SETTLED parent worker assistant dict
+ * @param {Object} [parentMessage] - the SETTLED parent worker assistant dict
  *   (== the parent `done` event's `committedMessage`), delivered early on
  *   `autopilot_vu_start`. When present, projected onto the parent assistant
  *   BEFORE it is finalized so its finish bar (model / usage / cost /
@@ -533,9 +533,19 @@ function _handleAutopilotVuEvent(convId, ev) {
       setStreamPhase(convId, {
         phase: inner.phase,
         detail: inner.detail || "",
+        /* Same whitelist contract as the worker ingress (sse_pipeline.js):
+         * detailKey/detailArgs carry the localized label (without them the
+         * VU bubble renders the raw English `detail` fallback), and
+         * attempt/statusCode/model carry the first-byte heartbeat's beat
+         * counter that the renderer keys its DOM refresh on. */
+        detailKey: inner.detailKey || "",
+        detailArgs: inner.detailArgs || null,
         tools: inner.tools || [],
         toolContext: inner.toolContext || "",
         round: inner.round || 0,
+        attempt: inner.attempt || 0,
+        statusCode: inner.statusCode || 0,
+        model: inner.model || "",
       });
     }
   } else {

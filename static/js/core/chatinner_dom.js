@@ -91,16 +91,16 @@ function chatInnerTailAnchor(inner) {
  *  @param {string|Node} content
  *  @param {Object} [opts]
  *    @param {'head'|'tail'} [opts.position='tail']
- *    @param {Node} [opts.before] — explicit anchor; overrides `position`.
+ *    @param {Node} [opts.before] - explicit anchor; overrides `position`.
  *                                  Callers that already computed a precise
  *                                  sibling (the surgical reconcile walking
  *                                  the list) pass it here.
- *    @param {Object} [opts.conv] — the conversation this DOM is projecting.
+ *    @param {Object} [opts.conv] - the conversation this DOM is projecting.
  *                                  Passed EXPLICITLY by every writer (the
  *                                  primitive never reaches for a global) so
  *                                  the order invariant below can run at the
  *                                  chokepoint. Omit ⇒ the check is skipped.
- *    @param {string} [opts.site] — caller name for the violation report
+ *    @param {string} [opts.site] - caller name for the violation report
  *                                  (e.g. 'ConvView.apply'). Without it a
  *                                  report would only ever name renderChat,
  *                                  which is how the tail path stayed dark.

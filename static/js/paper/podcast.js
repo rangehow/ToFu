@@ -734,7 +734,7 @@ function _pcRender() {
   host.innerHTML = h;
 
   if (!scriptOnly && audioUrl) {
-    var audio = document.getElementById('podcastAudio');
+    var audio = /** @type {HTMLAudioElement} */ (document.getElementById('podcastAudio'));
     if (audio) {
       audio.addEventListener('timeupdate', function() {
         _pcHighlightSegment(audio.currentTime, starts);
@@ -769,7 +769,7 @@ function _pcHighlightSegment(now, starts) {
 
 /** Click-to-seek: jump the player to a transcript segment's start offset. */
 function _podcastSeekSegment(i) {
-  var audio = document.getElementById('podcastAudio');
+  var audio = /** @type {HTMLAudioElement} */ (document.getElementById('podcastAudio'));
   var d = _podcast.data || {};
   var segs = (d.script && d.script.segments) || [];
   if (!audio || !segs.length) return;
@@ -790,7 +790,7 @@ function _podcastSleepTimerChange() {
   if (mins > 0) {
     _podcast.sleepDeadline = Date.now() + mins * 60000;
     _podcast.sleepTimerId = setTimeout(function() {
-      var audio = document.getElementById('podcastAudio');
+      var audio = /** @type {HTMLAudioElement} */ (document.getElementById('podcastAudio'));
       if (audio) { try { audio.pause(); } catch (e) { console.warn('[Paper:Podcast] sleep pause failed:', e); } }
       var n = document.getElementById('podcastSleepNote');
       if (n) n.textContent = '⏸';

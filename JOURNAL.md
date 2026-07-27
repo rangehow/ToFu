@@ -2,6 +2,13 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
 
+### 2026-07-27 — pt_8df8fc9b 收口:msgid-unification LAYER2 harness 重指向 conv_persist_helpers.js(守卫过期家族第 5 例;commit `6710ede4`,1 文件 +13/-6;2 红→**6/6 绿**,NEUTER 仍咬,相邻环 **43/43**,collect **10439** 0 err)
+
+- **漂移形状与 lost_ack(02c989f9)逐字同型:** Epic-E slice 3(`b33d9d21`)把 `_rebaseUnackedTail`(含 `_taskId` dedup 分支)抽到 `core/conv_persist_helpers.js`,而 `test_assistant_msgid_unification` 的 LAYER2 harness 仍只 eval `conversations.js`、NEUTER marker 也在旧文件里找 → `FAIL fn_exposed _rebaseUnackedTail missing` 双红。守卫本体完好(conv_persist_helpers.js:226 + :249),与 pt_b5b0a00d 同族。
+- **修法照抄先例(加载真模块,不复制实现):** harness 先 eval helpers(argv[3])再 eval conversations.js(argv[2]);NEUTER 改在 helpers 的新家 mutate `_taskId` dedup 分支,经 `helpers_override` 传入。LAYER1 后端 4 测全程未受影响。
+- **验证:** 6/6 绿(修复前 2 红 failing-first 实证);NEUTER 仍精确咬(`single_assistant_after_rebase` + `dropped_tmp_twin` 在 mutate 副本上翻红,`genuine_new_task_appended` 保持绿);相邻环 lost_ack + conv_persist_helpers_extracted + convview_apply_guards + api_isolation + bundle_manifest_parity **43/43**。
+- **家族教训第 5 次复验(引用 JOURNAL 续82 原话):守卫/测试没有声明为契约,重构时就没人知道谁依赖它。** extract 重构的收尾清单仍是那两项实证必查——「引用被抽函数的测试 harness」+「harness 是否 eval 了被委托的模块」。
+
 ### 2026-07-27(续) — 播客/视频面板大胆改版:「媒体演播室控制台」(owner「布局局促、样式不好看,大胆重新设计」;commit `7f8429b6`,4 文件 +843/-81;新套件 **6/6 含 NEUTER**,钉约环 26/26,后端媒体 60/60,i18n+bundle 环 72/72,相邻页签 11/11;headless Chrome 6 状态 × dark+tofu 双主题截图实证)
 
 - **根因取证(「局促」的两个来源):** ①idle 表单把 3 个微型 `<select>` + 裸音色输入 + 行内 checkbox + 生成按钮全塞进一条 wrap flex 行;②**视频专属 CSS 整块缺失**——`.paper-video-content` 容器、`.paper-video-grid/-cell/-thumb/-regen/-player` 在 styles.css 里**只有一条** `.paper-video-cell.is-pending{opacity:.55}`,分镜网格、播放器、重渲按钮全部以裸块渲染(截图里视频页内容贴边的元凶)。podcast 侧靠共享类撑着才没那么惨。

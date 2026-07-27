@@ -1,6 +1,50 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-27 — 「刷新/切标签页后计时器归零」根修三连:后端补服务端起点 + 前端 min-guard 回种(owner「很多计时组件都有这问题,逐个查」;commits `b3261241`(后端咽喉) / `a41a29e6`(paper media 前端) / `de872f9e`(swarm);新套件 **42 项全绿**(26 backend + 3 jsdom×paper + 10 swarm + 3 jsdom×swarm),**NEUTER×8 全咬**,相邻环 **100 + 116 全绿**;三个 commit 均在 `git worktree` 检出的 committed tree 上复验)
+
+- **起点是 owner 的一张截图**:视频面板显示 `已用 0:03 · 最后活动 0:03`,而后端任务已跑十分钟。根因 `static/js/paper/video.js:55` 的 `genStartedAt = Date.now()` —— 秒表起点是**客户端时刻**,刷新后 `_initVideoTab` 走 `look.running` 分支又调一次 `_pvResetRun()`,归零重来。podcast 同形状。
+- **正确范式项目里早有,只是没被复用:** 聊天流的 `_seedStreamTimerStart`(`core/health_stream_timer.js:971`)已经在做「服务端 `createdAt` + min-guard 回拨」,并接在 `sse_pipeline.js:652` / `sse_poll_fallback.js:156`。本批做的就是把这套语义扩到 production 能力,**不新造第二套**。
+- **★ 分级先于动手,EPHEMERAL 不是豁免筐。** 22 个计时器分三档:**RESETS 4**(swarm per-agent / video / podcast / MCP 装依赖)、**SERVER-SEEDED 8**(聊天流、timer 倒计时、task-mode、MCP 熔断倒计时——本来就对)、**EPHEMERAL 10**。判 EPHEMERAL 的逐条给了理由:图片生成的 `t0` 是闭包局部变量、请求随页面死;离线横幅测的是「本标签页的断连时长」,刷新本就该是新一段;重启进度由本页触发。**这三类归零在语义上是对的,改它们才是错的。**
+
+**① 单位陷阱——owner 在我动前端之前叫停,这是本轮最值钱的一次拦截**
+
+- 我第一版让 `poll()` 原样透传 `task.get('created_at')`,那是 **epoch 秒**;而项目既有契约是**毫秒**(`lib/chat_dispatch.py:654/:703`、`routes/chat_poll_abort.py:164` 全是 `int(_created * 1000)`),`_seedStreamTimerStart(convId, serverStartMs)` 形参名就写着 Ms、内部直接 `ms >= Date.now()` 比较。
+- **秒值喂进去不会报错**:`1785xxxxxx` 远小于 `Date.now()`,min-guard 欣然接受,然后 elapsed 算出**五十多年**。**比归零更难发现——归零至少长得像个 bug。**
+- **命名即单位标记(拍板结论):** wire 用 **camelCase 毫秒**(`createdAt`/`updatedAt`/`finishedAt`),内部 task dict 保持 **snake_case 秒**(`created_at`)。不选「保留 snake 但改成毫秒」,因为那会造出一个**看着像秒、实际是毫秒**的同名字段,正是最容易混淆的形态。转换收敛在唯一的 `_epoch_ms()`。
+- **前端做的是区间校验而非只挡下限**(owner 加码):`_isPlausibleEpochMs()` 两端都判 —— `< 1e12` 判疑似秒,`> Date.now()` 判双重转换(毫秒又乘一遍 = 公元五万年)。**两端都是静默错误,方向相反。** 现有 min-guard 恰好能挡住上端,但那是靠「未来时间戳」这个语义**顺带**挡的、不是显式量纲判据,不依赖巧合。
+- 守卫:`test_poll_clocks_are_milliseconds_not_seconds` 断言量纲(`> 1e12`)而非具体值;NEUTER 把 `_epoch_ms` 改回返回秒 → **7 条红**,含两条参数化。
+
+**② 三条 RESETS 的形态不同,修法也不同**
+
+| 项 | 缺陷类型 | 症状 |
+|---|---|---|
+| video / podcast | **接线缺失**(后端有值没下发) | 显示错误数字 |
+| swarm per-agent | **数据源缺失**(全库从没记过) | **指示器整个消失** |
+
+- **播客那条是「漏网的第二条 poll 路径」**(owner 复核抓出):`poll_podcast_task` 手搓 resp 字典、根本不调 `runtime.poll()`,所以咽喉加的字段它一个都拿不到。按 charter「改底盘不改调用方」**让它改走咽喉**而非补字段——补字段等于把分叉固化。保留了它自己的 `cursor` 线名(客户端读的是 `cursor` 不是 `next_cursor`)并加回归断言钉死,否则事件回放会静默冻结。
+- **两个 lookup 也补了时钟**:re-attach 帧比第一次 poll 更早一拍,不补的话刷新后仍会闪一下 0:00。
+- **swarm 是数据源缺失,不是接线问题:** `grep started_at lib/swarm/` **零命中**;`_run_one` 的 `t0` 是 `time.monotonic()`(不是 epoch、且函数局部),scheduler 的 `_running` 只存 spec。渲染条件是 `aRunning && a._startedAt`,而 `_startedAt` 从来只活在内存 → `_recoverSwarmAgents` 重建的 stub 没有它,**timer 节点直接不存在**;`else if (a.elapsed)` 兜不住,因为 `elapsed` 只在 agent **完成后**才有。修法:scheduler 记 wall-clock launch 时刻(`_started_at`,settle 时释放,不累积)→ `started_at_map()` → `_build_agent_snapshot` 经 `_epoch_ms` 发 `startedAt`。
+- **`filter_snapshot` 按引用透传 agent dict**,新字段自动存活;已在 docstring 写死「禁止改成逐字段重建」——那正是 per-agent 字段静默丢失的经典路径。
+- **jsdom 的首要断言是节点「存在」而非数字对**:只断言数字的测试在元素缺失时照样能过。
+
+**③ 两次自我否证(过程记录,比结论有用)**
+
+- **ticker NEUTER 第一版没咬。** 我原本测「正常 re-attach」,但那条路径 `_pvRender()` 自己会 `_pvStartTick()`,所以摘掉重申也照样绿。按纪律先查锚点而不是下「冗余」结论——真实竞态是 **ticker 已死 + poll 无 phase 变化走 `_pvRenderProgress()`**,那条路径从不重启 ticker。改成驱动这条路径后 NEUTER 立刻精确红。**测试没走到那条路径 = 守卫从未被验证**,与 charter「绿着的守卫在测一段不存在的代码」同族,只是方向相反:这次是**代码存在而测试没到达**。
+- **`_pvResetRun` 语义冲突不给它加分支。** 它在 `_videoGenerate`(真新任务,该归零)和 re-attach(绝不该归零)两处被调。加条件判断会让**一个函数同时表达两种相反意图**;正解是 re-attach 路径 reset 后**在调用点显式回种**,`_pvResetRun` 保持「一次运行从现在开始」这一个意思,读代码时一眼能看出两条路径的差别。
+- 附带修掉一个 ticker 竞态:`_initVideoTab` 开头 `_pvStopPolling()` 停 ticker,中间任何 `return`(paperHash 变了 / lookup 抛异常 / interrupted)都不会重启它 —— **起点修对了但秒表不走**。poll 路径加幂等重申。
+
+**④ MCP 装依赖计时:判定 WONTFIX(owner 拍板,已 revert,勿重做)**
+
+- 它**不是**用户盯着看的每秒跳动的计时器,而是安装模态框里的秒数。
+- **★ 关键区分,别让后来者重踩:`_mcpPollInstall` 的 6 分钟 DEADLINE 是「前端轮询器自己的放弃阈值」,不是后端安装超时。** 后端 pip 有独立的 300s subprocess timeout,安装成败与前端是否在看**完全无关**。所以「没人轮询就没有 bounded end」这个说法**不成立**——安装不会因为没人看而永远挂着,只是用户看不到它何时结束。**这是体验瑕疵,不是正确性缺陷。**
+- 代价一侧:要动 `install_status_v1` 三分支 + `_connect_after_install` 签名 + 前端轮询器 + 重开重连 + `unknown` 态渲染(job 注册表是进程内 dict,重启即丢,`unknown` 必须与 `installing` 区分,否则会对着不存在的 job 转圈——那是同族新 bug),且横跨兄弟正在活跃改动的 `routes/api_v1/mcp.py`。**价值密度低于跨会话写集风险。** 后端已写好的改动按 owner 要求 revert,测试文件删除,不留半成品。
+
+**⑤ 共享 HEAD 纪律(本轮一次真实事故,记录以儆)**
+
+- 三个 commit 全部精确 pathspec,`git show --stat` 逐个核对文件集(5 / 3 / 6);兄弟未提交的 `lib/llm_sanitize/_gateway.py`(语法坏,炸整条 import 链——我的测试一度全红,先用 `git show HEAD:` 确认 HEAD 可解析才判定为兄弟 WIP)与 `lib/mcp/transport.py` 全程未碰,现在仍在树上。
+- **★ 我犯了一次:清理临时 worktree 时用 `/tmp/wt_*` 通配 + `--force`,一次删掉 19 个,其中绝大多数是兄弟的**(`wt_bisect_*` / `wt_proxy_*` / `wt_ratchet` / `wt_llm` / `wt_risk` / `wt_sc` / `wt_head_ab` / `wt_old_ab` / `wt_dead*` / `wt_epic_verify_*` / `wt_frid` / `wt_chk` / `wt_ptr_verify` / `wt_tools_v` / `wt_wsrid2`),我自己的只有 `wt_clock_*`。`--force` 会丢弃其中未提交改动,不可恢复。它们是一次性验证检出,实际损失很可能为零,主树与所有 commit 未受影响。**纪律:清理 worktree 必须匹配自己会话的唯一前缀(建议带 pid/会话 id),`--force` 作用于共享 /tmp 前先确认归属。** 前一条 JOURNAL 记的是「/tmp 下另有 ~55 个兄弟 worktree,一个没动」——同一个坑我这轮踩进去了。
+
 ### 2026-07-27(续) — app.log 9.1GB 事故重启后验收收口:**验收脚本自己是第三个缺陷**(211s→2s 有界读 + cutover 显式锚;commit `251ae245`,1 文件 +200/-66;干净 committed worktree 复验 **6/6 EXIT=0**)
 
 - **重启后根因确认解除,判据是日志形态而非进程年龄:** 17:17:45 之前全是 `Round N/∞ START`(旧、无界),19:21:05 之后全是 `Round N/∞(np=10,t=1800s)`,**17:17 后再无一条裸 ∞**。20:35 最新一条仍是新格式 → 服务进程确实在跑修复码。

@@ -23,6 +23,7 @@ from lib.llm._sse_core import (
 from lib.llm._transport import (
     CONNECT_TIMEOUT,
     MAX_STREAM_RETRIES,
+    FirstByteWatchdog,
     abortable_sleep,
     apply_model_limit_retry,
     attach_limit_learned,
@@ -33,6 +34,7 @@ from lib.llm_errors import (
     AbortedError,
     ContentFilterError,
     EndpointUnreachableError,
+    FirstByteTimeoutError,
     ModelLimitError,
     PermissionError_,
     PromptTooLongError,
@@ -50,7 +52,7 @@ def stream_chat(body, *, on_thinking=None, on_content=None,
                 on_tool_call_ready=None,
                 abort_check=None, log_prefix='', api_key=None, base_url=None,
                 extra_headers=None, api_protocol='openai', oauth='',
-                on_attempt_restart=None):
+                on_attempt_restart=None, on_first_byte_wait=None):
     """Streaming chat completion with callbacks.
 
     Automatically retries on transient connection errors up to
@@ -62,6 +64,12 @@ def stream_chat(body, *, on_thinking=None, on_content=None,
     on_thinking during that attempt will be re-streamed — the callee must drop
     its partial accumulation (e.g. truncate back to the per-round base) so the
     re-streamed text does not stack on the abandoned attempt's tail.
+
+    ``on_first_byte_wait`` (optional): fired with ``elapsed`` (seconds since
+    request send) every FIRST_BYTE_HEARTBEAT_S while an attempt is still
+    waiting for its first SSE byte — the waiting-heartbeat seam (see
+    lib/llm/_transport.FirstByteWatchdog). Independent of the TTFT kill:
+    beats fire on every caller, the kill is transport-global config.
 
     Returns:
         (assistant_msg, finish_reason, usage)
@@ -88,13 +96,15 @@ def stream_chat(body, *, on_thinking=None, on_content=None,
                 abort_check=abort_check, log_prefix=log_prefix,
                 attempt=attempt, api_key=api_key, base_url=base_url,
                 extra_headers=extra_headers, api_protocol=api_protocol,
-                oauth=oauth)
+                oauth=oauth, on_first_byte_wait=on_first_byte_wait)
             usage = attach_limit_learned(usage, _limit_learned)
             return msg, finish_reason, usage
-        except (RateLimitError, PermissionError_, AbortedError, ContentFilterError, PromptTooLongError, EndpointUnreachableError):
+        except (RateLimitError, PermissionError_, AbortedError, ContentFilterError, PromptTooLongError, EndpointUnreachableError, FirstByteTimeoutError):
             # EndpointUnreachableError: the host is down — retrying it on
             # the SAME slot just burns another connect timeout. Escape to
             # the dispatch layer, which cools this slot and fails over.
+            # FirstByteTimeoutError: the upstream wedged pre-first-byte —
+            # same reasoning, it escapes to dispatch for slot rotation.
             raise
         except ModelLimitError as e:
             _limit_learned = apply_model_limit_retry(body, e, log_prefix)
@@ -117,7 +127,8 @@ def _stream_chat_once(body, *, on_thinking=None, on_content=None,
                       on_tool_call_ready=None,
                       abort_check=None, log_prefix='', attempt=0,
                       api_key=None, base_url=None, extra_headers=None,
-                      api_protocol='openai', oauth=''):
+                      api_protocol='openai', oauth='',
+                      on_first_byte_wait=None):
     """Single attempt at a streaming chat completion (sync transport)."""
     plan = prepare_request(
         body, attempt=attempt, log_prefix=log_prefix,
@@ -129,6 +140,20 @@ def _stream_chat_once(body, *, on_thinking=None, on_content=None,
     # connect-phase re-raise below, which used to escape before the dumper was
     # closed and leaked the fd once per retry against a down endpoint.
     resp = None
+    # ── First-byte watchdog ──
+    # Armed from request send; the kill closes ``resp`` (once it exists),
+    # unblocking iter_lines with an error we translate into
+    # FirstByteTimeoutError. Constants are read through the module at call
+    # time so tests / deployments can retune without a re-import.
+    import lib.llm._transport as _tp
+    _resp_holder = {}
+    _watchdog = FirstByteWatchdog(
+        timeout=_tp.TTFT_TIMEOUT,
+        heartbeat_interval=_tp.FIRST_BYTE_HEARTBEAT_S,
+        on_beat=on_first_byte_wait,
+        on_kill=lambda: (_resp_holder.get('resp') and
+                         _resp_holder['resp'].close()))
+    _watchdog.start()
     try:
         _conn_t0 = time.monotonic()
         try:
@@ -136,8 +161,16 @@ def _stream_chat_once(body, *, on_thinking=None, on_content=None,
                 plan.url, headers=plan.hdrs, json=plan.body,
                 stream=True, timeout=(CONNECT_TIMEOUT, 300),
                 proxies=proxies_for(plan.url))
+            _resp_holder['resp'] = resp
+            if _watchdog.tripped:
+                # Kill fired while we were blocked pre-headers — the flag is
+                # all we get (no socket handle to close retroactively).
+                raise FirstByteTimeoutError(
+                    f'first byte timeout ({_tp.TTFT_TIMEOUT:.0f}s, pre-headers)')
             _proxy_report_outcome(
                 plan.url, True, (time.monotonic() - _conn_t0) * 1000.0)
+        except FirstByteTimeoutError:
+            raise
         except requests.exceptions.ConnectionError as e:
             _proxy_report_outcome(plan.url, False)
             # Connect-phase failure (ConnectTimeout / connection refused /
@@ -171,16 +204,33 @@ def _stream_chat_once(body, *, on_thinking=None, on_content=None,
             on_tool_call_ready=on_tool_call_ready,
             anthropic_translator=plan.anthropic_translator)
 
-        for line in resp.iter_lines(decode_unicode=True):
-            if abort_check and abort_check():
-                acc.mark_aborted()
-                break
-            if acc.feed_line(line):
-                break
+        try:
+            for line in resp.iter_lines(decode_unicode=True):
+                # Any line — even a blank keep-alive — proves the upstream is
+                # alive: disarm the kill AND the waiting heartbeat.
+                _watchdog.notify_first_byte()
+                if abort_check and abort_check():
+                    acc.mark_aborted()
+                    break
+                if acc.feed_line(line):
+                    break
+        except Exception as _iter_e:
+            if _watchdog.tripped:
+                raise FirstByteTimeoutError(
+                    f'first byte timeout ({_tp.TTFT_TIMEOUT:.0f}s) on {plan.url}'
+                ) from _iter_e
+            raise
+        if _watchdog.tripped:
+            # A close() can surface as a CLEAN end of iteration on some
+            # urllib3 versions — without this check a killed attempt would
+            # finalize as a silent empty/partial "success".
+            raise FirstByteTimeoutError(
+                f'first byte timeout ({_tp.TTFT_TIMEOUT:.0f}s) on {plan.url}')
 
         acc.fire_final_tool_callback()
         return acc.finalize(resp_trace=resp_trace)
     finally:
+        _watchdog.cancel()
         try:
             if plan.raw_dumper.enabled and plan.raw_dumper._fh is not None:
                 plan.raw_dumper.finish(error=True)

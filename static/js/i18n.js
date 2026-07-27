@@ -2146,6 +2146,27 @@ var _i18n = {
   'paper.podcastSleepOff': { zh: '关闭', en: 'Off' },
   'paper.podcastSleepMin': { zh: '分钟', en: 'min' },
   'paper.podcastFailed': { zh: '播客生成失败', en: 'Podcast generation failed' },
+  // ── Media studio console (podcast + video tabs, 2026-07 redesign) ──
+  'paper.podcastStudioTitle': { zh: '播客演播室', en: 'Podcast studio' },
+  'paper.videoStudioTitle': { zh: '视频制片台', en: 'Video studio' },
+  'paper.podcastMakingTitle': { zh: '播客制作中', en: 'Producing your podcast' },
+  'paper.videoMakingTitle': { zh: '视频制作中', en: 'Producing your video' },
+  'paper.mediaOptDuration': { zh: '时长', en: 'Duration' },
+  'paper.mediaOptLang': { zh: '语言', en: 'Language' },
+  'paper.mediaOptVoice': { zh: '音色', en: 'Voice' },
+  'paper.mediaOptQuality': { zh: '画质', en: 'Quality' },
+  'paper.mediaOptExtras': { zh: '选项', en: 'Options' },
+  'paper.mediaOptional': { zh: '可选', en: 'optional' },
+  'paper.podcastModeShortName': { zh: '短版速听', en: 'Quick brief' },
+  'paper.podcastModeShortSub': { zh: '约 5 分钟 · 通勤路上', en: '~5 min · for the commute' },
+  'paper.podcastModeFullName': { zh: '完整深读', en: 'Full deep-read' },
+  'paper.podcastModeFullSub': { zh: '约 15 分钟 · 睡前细听', en: '~15 min · before sleep' },
+  'paper.videoQualityDraftSub': { zh: '快速预览', en: 'fast preview' },
+  'paper.videoQualityStandardSub': { zh: '推荐', en: 'recommended' },
+  'paper.videoQualityHighSub': { zh: '更慢 · 更精细', en: 'slower, finer' },
+  'paper.videoNarrationSub': { zh: 'TTS 语音旁白', en: 'TTS voice-over' },
+  'paper.videoBurnInSub': { zh: '字幕嵌入画面', en: 'subtitles baked into the frame' },
+  'paper.podcastTranscriptTitle': { zh: '逐字稿', en: 'Transcript' },
   // Reading-time estimate + progress bar (Report tab)
   'paper.readTimeTotal': { zh: '阅读时长约 {min}', en: '{min} read' },
   'paper.readTimeLeft': { zh: '剩余约 {min}', en: '{min} left' },
@@ -2549,6 +2570,18 @@ var _i18n = {
     zh: '已发送给 {model}，等待开始回复…',
     en: 'Sent to {model}, waiting for it to start replying…',
   },
+  // First-byte waiting heartbeat (backend on_waiting → retrying PHASE):
+  // a wedged/slow upstream shows a LIVE label instead of the static
+  // waiting_model spinner for the whole wait. {elapsed} is seconds since
+  // request send; the Reason variant carries the slot's known cause.
+  'stream.phase.waitingFirstByte': {
+    zh: '已等待 {elapsed}s：{model} 尚未返回首个字节…',
+    en: 'Waiting {elapsed}s — {model} has not sent its first byte yet…',
+  },
+  'stream.phase.waitingFirstByteReason': {
+    zh: '已等待 {elapsed}s：{model} 尚未返回首个字节（{reason}）',
+    en: 'Waiting {elapsed}s — no first byte from {model} yet ({reason})',
+  },
   'stream.phase.compactingWindow': {
     zh: '正在压缩早期上下文以适配窗口…',
     en: 'Compressing earlier context to fit the window…',
@@ -2599,6 +2632,10 @@ var _i18n = {
   'stream.retryReason.upstreamError': {
     zh: '上游服务错误，正在换线重试',
     en: 'Upstream error — rotating channel',
+  },
+  'stream.retryReason.firstByteTimeout': {
+    zh: '首字节超时（上游无响应）',
+    en: 'First byte timeout (upstream unresponsive)',
   },
   'stream.retryReason.waitingBackoff': {
     zh: '等待模型（错误退避中，非限流）',

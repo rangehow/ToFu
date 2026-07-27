@@ -10,6 +10,7 @@ Public API:
   - async_stream_chat(body, ...) → (assistant_msg, finish_reason, usage)
 """
 
+import asyncio
 import os
 import time
 
@@ -32,6 +33,7 @@ from lib.llm_errors import (
     AbortedError,
     ContentFilterError,
     EndpointUnreachableError,
+    FirstByteTimeoutError,
     ModelLimitError,
     PermissionError_,
     PromptTooLongError,
@@ -62,7 +64,8 @@ async def async_stream_chat(body, *, on_thinking=None, on_content=None,
                             on_tool_call_ready=None,
                             abort_check=None, log_prefix='', api_key=None,
                             base_url=None, extra_headers=None,
-                            api_protocol='openai', oauth=''):
+                            api_protocol='openai', oauth='',
+                            on_first_byte_wait=None):
     """Async streaming chat completion with callbacks.
 
     Same signature and semantics as stream_chat() but fully async.
@@ -81,14 +84,15 @@ async def async_stream_chat(body, *, on_thinking=None, on_content=None,
                 abort_check=abort_check, log_prefix=log_prefix,
                 attempt=attempt, api_key=api_key, base_url=base_url,
                 extra_headers=extra_headers, api_protocol=api_protocol,
-                oauth=oauth)
+                oauth=oauth, on_first_byte_wait=on_first_byte_wait)
             usage = attach_limit_learned(usage, _limit_learned)
             return msg, finish_reason, usage
         except (RateLimitError, PermissionError_, AbortedError,
                 ContentFilterError, PromptTooLongError,
-                EndpointUnreachableError):
+                EndpointUnreachableError, FirstByteTimeoutError):
             # EndpointUnreachableError escapes to the dispatch layer so a
             # dead host fails over instead of being retried on the same slot.
+            # FirstByteTimeoutError: upstream wedged pre-first-byte — same.
             raise
         except ModelLimitError as e:
             _limit_learned = apply_model_limit_retry(body, e, log_prefix)
@@ -105,7 +109,7 @@ async def _async_stream_chat_once(body, *, on_thinking=None, on_content=None,
                                   abort_check=None, log_prefix='', attempt=0,
                                   api_key=None, base_url=None,
                                   extra_headers=None, api_protocol='openai',
-                                  oauth=''):
+                                  oauth='', on_first_byte_wait=None):
     """Single async attempt at a streaming chat completion (httpx transport)."""
     plan = prepare_request(
         body, attempt=attempt, log_prefix=log_prefix,
@@ -146,22 +150,92 @@ async def _async_stream_chat_once(body, *, on_thinking=None, on_content=None,
                 on_tool_call_ready=on_tool_call_ready,
                 anthropic_translator=plan.anthropic_translator)
 
+            # ── First-byte watchdog (async idiom) ──
+            # Mirrors the sync FirstByteWatchdog in lib/llm/_transport.py:
+            # heartbeat beats while the first SSE byte is outstanding, and a
+            # single kill at TTFT_TIMEOUT that closes the response —
+            # aiter_lines then raises and we translate the kill into
+            # FirstByteTimeoutError. Armed AFTER the stream context is
+            # entered (a resp handle is required for the kill); a
+            # pre-headers hang stays bounded by the httpx read-timeout
+            # backstop, same as the sync transport. Constants are read
+            # through the module so tests / deployments can retune.
+            import lib.llm._transport as _tp
+            _fb = {'done': False, 'tripped': False}
+
+            async def _first_byte_watchdog():
+                _t0 = time.monotonic()
+                _timeout = _tp.TTFT_TIMEOUT
+                _interval = _tp.FIRST_BYTE_HEARTBEAT_S
+                if _timeout <= 0 and (_interval <= 0 or not on_first_byte_wait):
+                    return
+                while not _fb['done']:
+                    _elapsed = time.monotonic() - _t0
+                    _wait = _interval if (_interval > 0 and on_first_byte_wait) else None
+                    if _timeout > 0:
+                        _to_kill = _timeout - _elapsed
+                        if _to_kill <= 0:
+                            _fb['tripped'] = True
+                            try:
+                                await resp.aclose()
+                            except Exception as _ck:
+                                logger.debug('%s watchdog aclose raised: %s',
+                                             log_prefix, _ck)
+                            return
+                        _wait = _to_kill if _wait is None else min(_wait, _to_kill)
+                    if _wait is None:
+                        return
+                    try:
+                        await asyncio.sleep(_wait)
+                    except asyncio.CancelledError:
+                        return
+                    if _fb['done']:
+                        return
+                    if _timeout > 0 and (time.monotonic() - _t0) >= _timeout:
+                        continue  # loop head runs the kill branch
+                    if _interval > 0 and on_first_byte_wait:
+                        try:
+                            on_first_byte_wait(time.monotonic() - _t0)
+                        except Exception as _cb:
+                            logger.debug('%s on_first_byte_wait raised: %s',
+                                         log_prefix, _cb)
+
+            _wd_task = asyncio.ensure_future(_first_byte_watchdog())
             stopped = False
-            async for raw_line in resp.aiter_lines():
-                if abort_check and abort_check():
-                    # Abort mid-stream: break immediately. The response is
-                    # left partially read, so httpx drops the connection —
-                    # which is correct, an aborted stream must not be reused.
-                    acc.mark_aborted()
-                    break
-                if not stopped:
-                    if acc.feed_line(raw_line):
-                        # Accumulator is done, but do NOT break: keep pulling
-                        # the (now trivial) trailing lines to natural EOF so
-                        # httpx returns the keep-alive connection to the pool.
-                        # A partially-read response is discarded by httpx, which
-                        # would defeat connection reuse across turns.
-                        stopped = True
+            try:
+                async for raw_line in resp.aiter_lines():
+                    # Any line — even a blank keep-alive — proves the upstream
+                    # is alive: disarm the kill AND the waiting heartbeat.
+                    _fb['done'] = True
+                    if abort_check and abort_check():
+                        # Abort mid-stream: break immediately. The response is
+                        # left partially read, so httpx drops the connection —
+                        # which is correct, an aborted stream must not be reused.
+                        acc.mark_aborted()
+                        break
+                    if not stopped:
+                        if acc.feed_line(raw_line):
+                            # Accumulator is done, but do NOT break: keep pulling
+                            # the (now trivial) trailing lines to natural EOF so
+                            # httpx returns the keep-alive connection to the pool.
+                            # A partially-read response is discarded by httpx, which
+                            # would defeat connection reuse across turns.
+                            stopped = True
+            except BaseException as _iter_e:
+                if _fb['tripped']:
+                    raise FirstByteTimeoutError(
+                        f'first byte timeout ({_tp.TTFT_TIMEOUT:.0f}s) on {plan.url}'
+                    ) from _iter_e
+                raise
+            finally:
+                _fb['done'] = True
+                _wd_task.cancel()
+            if _fb['tripped']:
+                # A close() can surface as a CLEAN end of iteration — without
+                # this check a killed attempt would finalize as a silent
+                # empty/partial "success".
+                raise FirstByteTimeoutError(
+                    f'first byte timeout ({_tp.TTFT_TIMEOUT:.0f}s) on {plan.url}')
 
             acc.fire_final_tool_callback()
             return acc.finalize(resp_trace=resp_trace)

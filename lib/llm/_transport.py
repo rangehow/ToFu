@@ -31,6 +31,136 @@ except (ValueError, TypeError) as e:
     logger.debug('[Transport] TOFU_LLM_CONNECT_TIMEOUT parse failed, using default: %s', e)
     CONNECT_TIMEOUT = 10.0
 
+# ── First-byte (TTFT) watchdog ──
+# Bounds the time from request-send to the FIRST SSE byte of the response
+# body, independent of the 300s per-read timeout. Motivation (2026-07-27
+# incident, conv ms2gb19gfdco20 / task 53c65134): the gateway answered 200
+# and then sent ZERO bytes for the full 300s read timeout — the only
+# tripwire was the per-read timeout, so the attempt looked identical to a
+# slow-but-legit prefill for 5 minutes while the slot pool already knew
+# the line was erroring. The watchdog kills such an attempt at
+# TTFT_TIMEOUT seconds (translated by the transport into
+# FirstByteTimeoutError → normal dispatch rotation).
+#
+# Threshold justification (production data 2026-07-27, logs/app.log*):
+# the only TTFT telemetry is the turn-level metric (context-ready → first
+# token), which CONFLATES the in-request wait with retry/cooldown cycling:
+# n=8909, p50=13.7s, p90=32.4s, p95=48.9s, p99=154.1s. A single attempt's
+# first-byte wait is strictly shorter than its turn-level TTFT, so 180s
+# sits above even the conflated p99 — mis-firing on well under 1% of
+# rounds. A mis-fire costs one discarded (already billed) prefill plus a
+# normal slot rotation; the old behaviour cost a 300s blind window with
+# zero user-visible signal. Big prompts (~100k+ tokens) are routine here,
+# so do NOT lower this below the conflated p99 without re-measuring
+# per-attempt waits. 0 disables the kill entirely (opt-out hatch).
+# Override per-deployment with TOFU_LLM_TTFT_TIMEOUT.
+try:
+    TTFT_TIMEOUT = float(os.environ.get('TOFU_LLM_TTFT_TIMEOUT', '180'))
+    if TTFT_TIMEOUT < 0:
+        TTFT_TIMEOUT = 180.0
+except (ValueError, TypeError) as e:
+    logger.debug('[Transport] TOFU_LLM_TTFT_TIMEOUT parse failed, using default: %s', e)
+    TTFT_TIMEOUT = 180.0
+
+# ── First-byte waiting heartbeat (seconds) ──
+# While an attempt is in flight without its first byte, the watchdog fires
+# ``on_beat(elapsed)`` every FIRST_BYTE_HEARTBEAT_S seconds so the caller
+# can surface a live "still waiting, here is what the slot pool knows"
+# phase instead of a static spinner. 20s: frequent enough that a user
+# watching a stalled bubble sees movement well inside the old 300s blind
+# window, sparse enough that a long wait adds only a handful of transient
+# phase events (never persisted as message content). 0 disables beats.
+# Override with TOFU_LLM_FIRST_BYTE_HEARTBEAT_S.
+try:
+    FIRST_BYTE_HEARTBEAT_S = float(
+        os.environ.get('TOFU_LLM_FIRST_BYTE_HEARTBEAT_S', '20'))
+    if FIRST_BYTE_HEARTBEAT_S < 0:
+        FIRST_BYTE_HEARTBEAT_S = 20.0
+except (ValueError, TypeError) as e:
+    logger.debug('[Transport] TOFU_LLM_FIRST_BYTE_HEARTBEAT_S parse failed, using default: %s', e)
+    FIRST_BYTE_HEARTBEAT_S = 20.0
+
+
+class FirstByteWatchdog:
+    """Threading watchdog bounding time-to-first-byte of one HTTP attempt.
+
+    ``start()`` arms two independent schedules measured from ``t0``:
+    heartbeat beats (``on_beat(elapsed)`` every ``heartbeat_interval``)
+    and a single kill at ``timeout`` (``on_kill()`` — the transport
+    supplies a closure that closes the response, unblocking the read).
+    ``notify_first_byte()`` disarms BOTH (called on the first SSE line —
+    a blank keep-alive line also counts: it proves the upstream is
+    alive). ``cancel()`` disarms on any exit path. ``tripped`` is True
+    only when the kill actually fired, so the transport can translate
+    whatever exception the closed socket raised into
+    ``FirstByteTimeoutError``.
+
+    A kill that fires before the response object exists (pre-headers
+    wait) can only set ``tripped`` — the transport checks the flag once
+    ``post()`` returns and raises then; a headers-never-arrive hang stays
+    bounded by the 300s read-timeout backstop (documented limitation).
+
+    Callback exceptions are swallowed + debug-logged: a HUD-side bug must
+    never take the request watchdog down with it.
+    """
+
+    def __init__(self, timeout, heartbeat_interval=0, on_beat=None,
+                 on_kill=None, t0=None):
+        self._timeout = float(timeout or 0)
+        self._interval = float(heartbeat_interval or 0)
+        self._on_beat = on_beat
+        self._on_kill = on_kill
+        self._t0 = time.monotonic() if t0 is None else t0
+        self._done = threading.Event()
+        self._tripped = False
+        self._thread = None
+
+    @property
+    def tripped(self):
+        return self._tripped
+
+    def start(self):
+        if self._timeout <= 0 and (self._interval <= 0 or not self._on_beat):
+            return  # fully disabled — kill off and beats off
+        self._thread = threading.Thread(
+            target=self._run, name='first-byte-watchdog', daemon=True)
+        self._thread.start()
+
+    def notify_first_byte(self):
+        self._done.set()
+
+    def cancel(self):
+        self._done.set()
+
+    def _run(self):
+        while not self._done.is_set():
+            elapsed = time.monotonic() - self._t0
+            wait = None
+            if self._interval > 0 and self._on_beat:
+                wait = self._interval
+            if self._timeout > 0:
+                to_kill = self._timeout - elapsed
+                if to_kill <= 0:
+                    self._tripped = True
+                    if self._on_kill:
+                        try:
+                            self._on_kill()
+                        except Exception as e:
+                            logger.debug('[Watchdog] on_kill raised: %s', e)
+                    return
+                wait = to_kill if wait is None else min(wait, to_kill)
+            if wait is None:
+                return
+            if self._done.wait(wait):
+                return
+            if self._timeout > 0 and (time.monotonic() - self._t0) >= self._timeout:
+                continue  # let the loop head run the kill branch
+            if self._interval > 0 and self._on_beat:
+                try:
+                    self._on_beat(time.monotonic() - self._t0)
+                except Exception as e:
+                    logger.debug('[Watchdog] on_beat raised: %s', e)
+
 # ── Retry config for transient API errors (streaming & non-streaming) ──
 MAX_STREAM_RETRIES = 4          # retry up to 4 times (5 attempts total)
 RETRY_BACKOFF_BASE = 3          # base backoff in seconds (exponential: 3, 6, 12, 24)

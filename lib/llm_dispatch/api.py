@@ -1071,7 +1071,8 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
                     capability='text', prefer_model=None, tools=None,
                     max_retries=3, log_prefix='', strict_model=False,
                     on_retry=None, avoid_pairs=None,
-                    exclude_models=None, on_attempt_restart=None):
+                    exclude_models=None, on_attempt_restart=None,
+                    on_waiting=None):
     """Smart dispatch for streaming requests.
 
     Accepts either:
@@ -1100,6 +1101,15 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
       model's slots (different keys / alias group members).  Use this for
       user-facing requests where the frontend explicitly chose a model.
 
+    on_waiting:
+      Optional ``on_waiting(elapsed=…, slot=…)`` callback fired every
+      FIRST_BYTE_HEARTBEAT_S seconds while an attempt is still waiting for
+      its first SSE byte (the waiting-heartbeat seam). The slot context
+      lets the caller surface what the pool already knows (cooldown cause
+      / last error) instead of a static spinner. Orthogonal to on_retry:
+      that one fires on STATE TRANSITIONS (error caught, cooldown entered),
+      this one fires DURING a healthy-but-silent in-flight wait.
+
     avoid_pairs:
       Optional set of ``(key_name, model)`` tuples the caller wants the
       dispatcher to avoid for THIS call (in addition to whatever
@@ -1124,7 +1134,7 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
         RateLimitError,
         stream_chat,
     )
-    from lib.llm_errors import EndpointUnreachableError
+    from lib.llm_errors import EndpointUnreachableError, FirstByteTimeoutError
 
     def _fire_attempt_restart(reason: str) -> None:
         """Notify the callee an in-flight attempt is being discarded and the
@@ -1427,6 +1437,18 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
 
         try:
           with _big_gate:
+            # Waiting-heartbeat seam: the transport fires this every
+            # FIRST_BYTE_HEARTBEAT_S while the attempt waits for its first
+            # byte; enrich it with the CURRENT slot so the caller can show
+            # what the pool knows about this line (cooldown cause / last
+            # error / consecutive errors).
+            _on_first_byte_wait = None
+            if on_waiting:
+                def _on_first_byte_wait(elapsed, _slot=slot):
+                    try:
+                        on_waiting(elapsed=elapsed, slot=_slot)
+                    except Exception as _owe:
+                        logger.debug('%s on_waiting raised: %s', tag, _owe)
             msg, finish, usage = stream_chat(
                 body, api_key=slot.api_key,
                 base_url=slot.base_url or None,
@@ -1438,6 +1460,7 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
                 abort_check=abort_check,
                 log_prefix=tag,
                 on_attempt_restart=on_attempt_restart,
+                on_first_byte_wait=_on_first_byte_wait,
                 api_protocol=slot.protocol or 'openai',
             )
             latency = (time.time() - t0) * 1000
@@ -1549,6 +1572,25 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
                     log_prefix, slot.key_name, slot.model,
                     dispatcher.summarize_slots(capability))
 
+        except FirstByteTimeoutError as e:
+            # ★ Upstream wedged pre-first-byte (zero SSE bytes within
+            #   TTFT_TIMEOUT — the 2026-07-27 opus-5 incident shape). A
+            #   NORMAL upstream soft error: record_error feeds the
+            #   consecutive-error cooldown ladder, the pair is excluded so
+            #   another key of the same model is tried next, and the HUD
+            #   gets an honest reason instead of a static "waiting…".
+            slot.record_error(is_rate_limit=False, error=str(e)[:200])
+            state.last_err = e
+            state.note_generic_error(slot, is_timeout=True,
+                                     strict_model=strict_model)
+            logger.warning(
+                '%s First-byte timeout on %s:%s — upstream sent no bytes, '
+                'excluding pair + rotating: %s',
+                log_prefix, slot.key_name, slot.model, str(e)[:160])
+            if on_retry:
+                on_retry(attempt=state.hard_attempts,
+                         reason='First byte timeout', status_code=0)
+
         except EndpointUnreachableError as e:
             # ★ The endpoint host is down (connect-phase failure). The
             #   transport already escaped its same-key retry loop, so here
@@ -1652,7 +1694,7 @@ async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
                                 capability='text', prefer_model=None, tools=None,
                                 max_retries=3, log_prefix='', strict_model=False,
                                 on_retry=None, avoid_pairs=None,
-                                exclude_models=None):
+                                exclude_models=None, on_waiting=None):
     """Native-async streaming dispatch — non-blocking on the event loop.
 
     Unlike the previous ``to_thread(dispatch_stream)`` stopgap, this drives the
@@ -1698,7 +1740,7 @@ async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
     )
     from lib.llm._transport import async_abortable_sleep
     from lib.llm.astream import async_stream_chat
-    from lib.llm_errors import EndpointUnreachableError
+    from lib.llm_errors import EndpointUnreachableError, FirstByteTimeoutError
 
     dispatcher = get_dispatcher()
     state = _StreamRetryState(exclude_models=exclude_models, avoid_pairs=avoid_pairs)
@@ -1776,6 +1818,14 @@ async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
             logger.debug('%s cache-settle (async) unavailable: %s', tag, _cs_err)
 
         try:
+            # Waiting-heartbeat seam — see the sync dispatch_stream branch.
+            _on_first_byte_wait = None
+            if on_waiting:
+                def _on_first_byte_wait(elapsed, _slot=slot):
+                    try:
+                        on_waiting(elapsed=elapsed, slot=_slot)
+                    except Exception as _owe:
+                        logger.debug('%s on_waiting raised: %s', tag, _owe)
             msg, finish, usage = await async_stream_chat(
                 body, api_key=slot.api_key,
                 base_url=slot.base_url or None,
@@ -1785,6 +1835,7 @@ async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
                 on_content=_on_content_wrapper,
                 on_tool_call_ready=on_tool_call_ready,
                 abort_check=abort_check, log_prefix=tag,
+                on_first_byte_wait=_on_first_byte_wait,
                 api_protocol=slot.protocol or 'openai')
             latency = (time.time() - t0) * 1000
             _finalize_stream_success(
@@ -1824,6 +1875,22 @@ async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
             if not state.note_permission_pair(slot, dispatcher, capability, log_prefix):
                 logger.warning('%s Permission denied on %s:%s — excluding pair',
                                log_prefix, slot.key_name, slot.model)
+
+        except FirstByteTimeoutError as e:
+            # ★ Upstream wedged pre-first-byte — mirrors the sync
+            #   dispatch_stream handler (normal upstream soft error:
+            #   record_error + pair exclusion + rotation + honest HUD reason).
+            slot.record_error(is_rate_limit=False, error=str(e)[:200])
+            state.last_err = e
+            state.note_generic_error(slot, is_timeout=True,
+                                     strict_model=strict_model)
+            logger.warning(
+                '%s First-byte timeout on %s:%s — upstream sent no bytes, '
+                'excluding pair + rotating: %s',
+                log_prefix, slot.key_name, slot.model, str(e)[:160])
+            if on_retry:
+                on_retry(attempt=state.hard_attempts,
+                         reason='First byte timeout', status_code=0)
 
         except EndpointUnreachableError as e:
             # ★ Endpoint host down — cool the slot, exclude the pair, fail

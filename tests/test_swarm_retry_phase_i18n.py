@@ -93,6 +93,7 @@ class TestSharedRetryPhaseFields(unittest.TestCase):
             'Key auto-exhausted (consecutive 429s)',
             'Rate limited (429)',
             'Upstream error',
+            'First byte timeout',
         }
         self.assertEqual(set(RETRY_REASON_KEYS), expected)
         for key in RETRY_REASON_KEYS.values():

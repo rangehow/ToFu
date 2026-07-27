@@ -221,6 +221,73 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
             model=model,
         ))
 
+    # ★ Slot cooldown-reason → typed reasonKey for the waiting heartbeat.
+    #   Mirrors the dispatcher's honest-label ruling: a cooldown wait is
+    #   限流 ONLY when the cooling slot actually says rate_limit.
+    _WAIT_CAUSE_KEYS = {
+        'rate_limit': 'stream.retryReason.waitingForModel',
+        'quota': 'stream.retryReason.keyBalanceExhausted',
+        'upstream': 'stream.retryReason.upstreamError',
+        'error': 'stream.retryReason.waitingBackoff',
+    }
+
+    def _on_waiting(elapsed, slot=None):
+        """Heartbeat while an attempt waits for its first SSE byte.
+
+        Emits a transient ``retrying`` PHASE event so a wedged/slow
+        upstream shows a LIVE "still waiting + what the pool knows" label
+        instead of the static waiting_model spinner for the whole wait
+        (2026-07-27 incident: 300s of zero bytes, zero signal).
+        ``phase='retrying'`` is deliberate and load-bearing: the frontend
+        retrying branch keys its DOM refresh on ``attempt``, so each beat
+        (attempt=beat number) actually repaints — a constant-phase
+        heartbeat would freeze on the first beat's text.
+        """
+        _secs = int(elapsed)
+        try:
+            from lib.llm._transport import FIRST_BYTE_HEARTBEAT_S as _hb
+            _beat = max(1, int(elapsed // max(1, _hb)))
+        except Exception:
+            _beat = max(1, int(elapsed // 20))
+        _label = _display_model_name(model)
+        _reason = ''
+        _reason_key = ''
+        if slot is not None:
+            _cr = getattr(slot, 'cooldown_reason', '') or ''
+            _cooled = (getattr(slot, 'cooldown_until', 0) or 0) > time.time()
+            if _cooled and _cr in _WAIT_CAUSE_KEYS:
+                _reason_key = _WAIT_CAUSE_KEYS[_cr]
+                _reason = _cr  # raw fallback if the key is unknown client-side
+            else:
+                _lem = getattr(slot, 'last_error_msg', '') or ''
+                if _lem:
+                    _reason = str(_lem)[:80]
+                else:
+                    _ce = getattr(slot, 'consecutive_errors', 0) or 0
+                    if _ce >= 2:
+                        _reason = f'{_ce} consecutive errors on this line'
+        if _reason:
+            _detail_key = 'stream.phase.waitingFirstByteReason'
+            _detail = (f'Waiting {_secs}s — no first byte from {_label} yet '
+                       f'({_reason})')
+        else:
+            _detail_key = 'stream.phase.waitingFirstByte'
+            _detail = f'Waiting {_secs}s — no first byte from {_label} yet…'
+        _args = {'model': _label, 'elapsed': _secs}
+        if _reason:
+            _args['reason'] = _reason
+        if _reason_key:
+            _args['reasonKey'] = _reason_key
+        append_event(task, build_event(
+            EventType.PHASE,
+            phase='retrying',
+            detail=_detail,
+            detailKey=_detail_key,
+            detailArgs=_args,
+            attempt=_beat,
+            model=model,
+        ))
+
     # ── Consume zero-byte force-rotate signal ──
     # If the previous round zero-byte'd, ``analyse_stream_result`` set
     # ``task['_force_rotate_pair']`` to ``(key_name, model)``.  We pass
@@ -273,6 +340,7 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
         on_retry=_on_retry,
         avoid_pairs=_avoid_pairs,
         on_attempt_restart=_on_attempt_restart,
+        on_waiting=_on_waiting,
     )
 
     # ★ Timing fallback: if the first round was tool-call-only (no content/
@@ -348,7 +416,8 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
                         abort_check=lambda: task.get('aborted', False),
                         prefer_model=model, log_prefix=f'{pfx}[floor-retry{_fr_i+1}]',
                         strict_model=True, on_retry=_on_retry,
-                        avoid_pairs=_avoid_pairs)
+                        avoid_pairs=_avoid_pairs,
+                        on_waiting=_on_waiting)
                 except Exception as _rerr:
                     # 503/throttle/transient — do NOT keep piling resends on an
                     # already-throttled gateway; that only deepens the throttle.

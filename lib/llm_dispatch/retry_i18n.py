@@ -47,6 +47,7 @@ RETRY_REASON_KEYS = {
     'Upstream error': 'stream.retryReason.upstreamError',
     'Waiting for model (retry backoff)': 'stream.retryReason.waitingBackoff',
     'Rate limited (429)': 'stream.retryReason.rateLimited',
+    'First byte timeout': 'stream.retryReason.firstByteTimeout',
 }
 
 

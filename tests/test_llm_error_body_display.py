@@ -317,6 +317,106 @@ class TestUpstreamTransientClassification:
 
 
 # ══════════════════════════════════════════════════════════
+#  Mojibake 403 transient classification — 2026-07-26 10:21 incident
+# ══════════════════════════════════════════════════════════
+
+# The exact production shape (task f8045792, round 41, logs/app.log.2026-07-26
+# 10:21:09): the toio wrap layer double-encoded the Chinese message (each real
+# UTF-8 byte re-encoded as UTF-8 via a cp1252 print layer), so every Chinese
+# transient phrase missed and the 403 fell through to PermissionError_ — model
+# fallback fired with reason "permission" while ext.error.source sat intact in
+# the same body. 72h fallout: 34 permission-kind kimi fallbacks + 4 task deaths
+# (07-25 21:42) wearing the bogus "API Key 被拒绝 → Settings→Keys" envelope.
+_MOJI_ZH_MESSAGE = ('请求失败，请稍后再尝试 (request id: '
+                    'toio20260726022045530344569oeWynb4k)'
+                    ).encode('utf-8').decode('latin-1')
+
+
+def _moji_envelope(*, status=403, source='UPSTREAM_VENDOR', extra_field=''):
+    """Build the double-encoded production envelope (mojibake message)."""
+    src = f'"source":"{source}","service":"claude-opus-5"' if source else ''
+    ext = f'"ext":{{"error":{{{src},"stage":"downstream_http"{extra_field}}}}}' if source else ''
+    comma = ',' if ext else ''
+    return ('{"error":{"message":"' + _MOJI_ZH_MESSAGE + '",'
+            '"type":"toio_api_error","param":"","code":null,'
+            f'"status_code":{status}}}{comma}{ext}')
+
+
+@pytest.mark.unit
+class TestMojibake403Classification:
+    """Double-encoded (mojibake) bodies must converge with decoded bodies on
+    the vendor-transient branch — keyed on encoding-stable ASCII markers, with
+    message text only as corroborating evidence."""
+
+    def test_mojibake_403_with_vendor_marker_is_gateway_retry(self):
+        """THE 07-26 10:21 production body. ext.error.source=UPSTREAM_VENDOR
+        is ASCII and survives any message mojibake — the 403 must escalate to
+        gateway-class rotation, never PermissionError_."""
+        assert 'è¯' in _MOJI_ZH_MESSAGE  # sanity: the message IS garbled
+        with pytest.raises(RateLimitError) as ei:
+            _classify_http_error(403, f'API HTTP 403: {_moji_envelope()}',
+                                 'yuju-claude-opus-5-evaDaily', '[t]')
+        assert ei.value.is_gateway is True
+        assert ei.value.status_code == 403
+
+    def test_mojibake_403_marker_survives_when_repair_refuses(self):
+        """repair_mojibake is conservative BY DESIGN: a body mixing mojibake
+        with any non-cp1252 char (here a proper-CJK note in ext) cannot
+        round-trip and is returned unrepaired. The ASCII source marker is the
+        ONLY layer that still classifies this shape — it is the neuter target:
+        deleting the marker branch must turn this test red."""
+        env = _moji_envelope(extra_field=',"note":"供应商抖动稍候"')
+        # Pin the premise: repair really does refuse this mixed string.
+        assert repair_mojibake(f'API HTTP 403: {env}') == f'API HTTP 403: {env}'
+        with pytest.raises(RateLimitError) as ei:
+            _classify_http_error(403, f'API HTTP 403: {env}',
+                                 'yuju-claude-opus-5-evaDaily', '[t]')
+        assert ei.value.is_gateway is True
+
+    def test_mojibake_403_without_marker_caught_by_repair_layer(self):
+        """No ext tail at all (truncated/other-gateway shape): the mojibake-
+        repaired message still carries the transient phrase — rotate."""
+        env = _moji_envelope(source='')
+        assert 'upstream_vendor' not in env.lower()
+        with pytest.raises(RateLimitError) as ei:
+            _classify_http_error(403, f'API HTTP 403: {env}', 'm', '[t]')
+        assert ei.value.is_gateway is True
+
+    def test_mojibake_bare_text_converges(self):
+        """The qwen-plus bare-text shape (07-26 18:07: 'API HTTP 403: 请求失败，
+        请稍后再尝试' — no JSON envelope) in its mojibake form must also
+        converge to rotation, not auth."""
+        with pytest.raises(RateLimitError) as ei:
+            _classify_http_error(403, f'API HTTP 403: {_MOJI_ZH_MESSAGE}',
+                                 'qwen-plus', '[t]')
+        assert ei.value.is_gateway is True
+
+    def test_toio_type_alone_does_not_flip_real_403(self):
+        """toio_api_error is the gateway's GENERIC error type — a genuine
+        auth 403 carries it too. Without the UPSTREAM_VENDOR source marker
+        (and no transient phrasing) it must stay PermissionError_."""
+        raw = ('API HTTP 403: {"error":{"message":"Forbidden: key has no '
+               'access to this model","type":"toio_api_error","status_code":403}}')
+        with pytest.raises(PermissionError_):
+            _classify_http_error(403, raw, 'yuju-claude-opus-5-evaDaily', '[t]')
+
+    def test_real_401_ascii_auth_stays_permission(self):
+        raw = ('API HTTP 401: {"error":{"message":"Invalid API key provided",'
+               '"type":"authentication_error"}}')
+        with pytest.raises(PermissionError_):
+            _classify_http_error(401, raw, 'yuju-claude-opus-5-evaDaily', '[t]')
+
+    def test_mojibake_400_with_vendor_marker_is_gateway_retry(self):
+        """The 400 branch shares the predicate — a double-encoded toio 400
+        transient must rotate, not die as deterministic BadRequestError."""
+        with pytest.raises(RateLimitError) as ei:
+            _classify_http_error(400, f'API HTTP 400: {_moji_envelope(status=400)}',
+                                 'yuju-claude-opus-5-evaDaily', '[t]')
+        assert ei.value.is_gateway is True
+        assert ei.value.status_code == 400
+
+
+# ══════════════════════════════════════════════════════════
 #  _ERR_BODY_LIMIT — logs keep the diagnostic tail
 # ══════════════════════════════════════════════════════════
 

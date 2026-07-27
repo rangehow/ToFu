@@ -283,11 +283,36 @@ def _is_upstream_vendor_transient(err_msg: str) -> bool:
 
     Such errors must rotate slots (gateway-class retry), never exclude a
     (key, model) pair as auth, and never feed the consecutive-error lockout.
+
+    Detection layers, in order:
+      1. Encoding-stable marker: the gateway's own fault attribution
+         ``"source":"UPSTREAM_VENDOR"`` in the ext tail. Pure ASCII, so it
+         survives ANY mojibake / double-encoding of the human-readable
+         message — the 2026-07-26 10:21 incident (task f8045792, round 41):
+         a double-encoded toio 403 slipped past every Chinese phrase into
+         ``PermissionError_`` (72h fallout: 34 permission-kind kimi
+         fallbacks + 4 task deaths on 07-25 21:42 wearing the bogus
+         "API Key 被拒绝 → Settings→Keys" envelope), while this marker
+         sat intact in the same body. ``toio_api_error`` alone is NOT
+         sufficient — it is the gateway's generic error type and a genuine
+         auth 403 carries it too.
+      2. Message phrases on the raw text (properly decoded bodies).
+      3. Message phrases on the mojibake-REPAIRED text, for double-encoded
+         bodies whose ext tail was truncated before the marker.
+         ``repair_mojibake`` is conservative by design and refuses mixed-
+         encoding strings — which is exactly why layer 1 must not rely on it.
     """
     if not err_msg:
         return False
     lower = err_msg.lower()
-    return any(p in lower for p in _UPSTREAM_TRANSIENT_PATTERNS)
+    if '"source":"upstream_vendor"' in lower.replace(' ', ''):
+        return True
+    if any(p in lower for p in _UPSTREAM_TRANSIENT_PATTERNS):
+        return True
+    repaired = repair_mojibake(err_msg)
+    if repaired is not err_msg:
+        return any(p in repaired.lower() for p in _UPSTREAM_TRANSIENT_PATTERNS)
+    return False
 
 
 # ══════════════════════════════════════════════════════════

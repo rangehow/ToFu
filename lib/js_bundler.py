@@ -448,6 +448,15 @@ _BUNDLE_FILES = [
     'core/identity_gate_tripwire.js',
     'core/conv_state_reducer.js',
     'core/async_pool.js',
+    # Settings-column adopter extracted 2026-07-27 from
+    # core/conversations.js (pt_3879f00e sub-part 2, slice 5):
+    # _applySettingsToConv — 8 call sites inside conversations.js AND
+    # 1 cross-file call site inside cross_tab_sync.js's
+    # _handleConvNotifyPush. Load-order constraint: MUST come before
+    # cross_tab_sync (the earlier consumer) — the leaf must precede
+    # BOTH consumers so the bare-name call resolves via bundle-level
+    # window scope. Pure helper: reads settings, writes onto conv.
+    'core/conv_apply_settings.js',
     'core/cross_tab_sync.js',
     # Pure conversation reducers extracted 2026-07-25 from
     # core/conversations.js (pt_3879f00e sub-part 2, slice 1):

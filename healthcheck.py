@@ -226,21 +226,27 @@ if '--runtime' in sys.argv:
     else:
         try:
             from playwright.sync_api import sync_playwright
-            # Chromium is a CHILD process: it needs $env_prefix/lib on
+            # Chromium is a CHILD process: it needs the env's lib dir on
             # LD_LIBRARY_PATH (libatk/libnss) and, on hosts without /etc/fonts,
             # FONTCONFIG_* pointing at the env's config — or it either refuses
-            # to start or renders zero glyphs. server.py/bootstrap.py export
-            # these at boot; a bare `python3 healthcheck.py` has not, so reuse
-            # bootstrap's helper rather than reporting a false failure.
+            # to start or renders zero glyphs. chromium_env resolves both from
+            # sys.prefix, so this works with no .tofu_env.json marker (a bare
+            # `python3 healthcheck.py`, a fresh clone, or an exported bundle);
+            # the marker is only consulted as an extra candidate prefix.
+            _diag = {}
             try:
-                import json as _j
-                from bootstrap import _tofu_export_env_native_paths as _exp
-                with open(ROOT / '.tofu_env.json', encoding='utf-8') as _mf:
-                    _mk = _j.load(_mf)
-                _exp(_mk.get('env_prefix') or '', _mk.get('backend') or '',
-                     _mk.get('env_name'))
-            except Exception:
-                pass  # no marker / not installed by install.sh — probe as-is
+                from chromium_env import describe_chromium_env, ensure_chromium_env
+                _prefix = ''
+                try:
+                    import json as _j
+                    with open(ROOT / '.tofu_env.json', encoding='utf-8') as _mf:
+                        _prefix = (_j.load(_mf).get('env_prefix') or '')
+                except Exception as _me:
+                    logger.debug('no .tofu_env.json marker (fine): %s', _me)
+                ensure_chromium_env(env_prefix=_prefix)
+                _diag = describe_chromium_env(env_prefix=_prefix)
+            except Exception as _ce:
+                logger.debug('chromium_env unavailable: %s', _ce)
             with sync_playwright() as _pw:
                 _br = _pw.chromium.launch(headless=True, args=['--no-sandbox'])
                 try:
@@ -261,8 +267,12 @@ if '--runtime' in sys.argv:
                      "(conda install -c conda-forge fontconfig font-ttf-dejavu-sans-mono)")
         except Exception as _e:
             _msg = str(_e).replace('\n', ' ')[:200]
+            # Report the RESOLVED cause when we know it, not just the symptom:
+            # "cannot launch" alone sends people hunting the wrong thing.
+            _hint = '; '.join((_diag or {}).get('issues') or [])
             fail(f"playwright imports but Chromium cannot launch — browser "
-                 f"screenshots unavailable: {_msg}")
+                 f"screenshots unavailable: {_msg}"
+                 + (f" [diagnosis: {_hint}]" if _hint else ""))
 
     print(f"\n{C.BOLD}{'═'*60}{C.END}")
     if errors:

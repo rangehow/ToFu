@@ -49,6 +49,34 @@ def _bootstrap_py() -> str:
         return f.read()
 
 
+def _chromium_env_py() -> str:
+    """Source of chromium_env.py — where the LD_LIBRARY_PATH/fontconfig logic
+    lives after the 2026-07-28 de-duplication (it used to be hand-copied into
+    server.py, bootstrap.py, tests/conftest.py and lib/motion_video/_env.py,
+    each keyed on a different, weaker signal)."""
+    with open(os.path.join(ROOT, 'chromium_env.py'), 'r', encoding='utf-8') as f:
+        return f.read()
+
+
+def _really_imports_chromium_env(rel: str) -> bool:
+    """True when ``rel`` contains a REAL import of chromium_env (AST node).
+
+    Deliberately not a substring check: after the call site was deleted in a
+    NEUTER run, four mentions survived in comments/docstrings and a
+    substring-based guard stayed green. A comment must never satisfy a guard.
+    """
+    import ast
+    with open(os.path.join(ROOT, rel), 'r', encoding='utf-8') as f:
+        tree = ast.parse(f.read(), filename=rel)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == 'chromium_env':
+            return True
+        if isinstance(node, ast.Import) and any(
+                a.name == 'chromium_env' for a in node.names):
+            return True
+    return False
+
+
 def test_use_conda_flag_parses_and_defaults_off():
     """--use-conda must parse to USE_CONDA=1 and default to 0."""
     text = _install_sh()
@@ -204,11 +232,13 @@ def test_bootstrap_reexec_respects_uv_backend():
         r"if backend != 'uv':\s*\n\s*os\.environ\.setdefault\('CONDA_PREFIX', env_prefix\)",
         text), 'bootstrap.py setdefaults CONDA_PREFIX unconditionally (venv would misfire)'
     # CONDA_DEFAULT_ENV must be nested under the same backend != 'uv' guard.
-    # Asserted structurally, not as one literal line: the export logic lives in
-    # _tofu_export_env_native_paths (shared with the LD_LIBRARY_PATH/fontconfig
-    # exports), so the two setdefaults are no longer textually adjacent.
+    # Asserted structurally, not as one literal line: the two setdefaults are
+    # not textually adjacent. The end anchor is the function's own end (the next
+    # top-level `def`) rather than a neighbouring implementation literal — the
+    # previous anchor was the fontconfig probe, which MOVED to chromium_env.py
+    # and broke this guard with an unreadable "substring not found".
     guard = text.index("if backend != 'uv':")
-    nxt = text.index('if not os.path.isdir(\'/etc/fonts\')', guard)
+    nxt = text.index('\ndef ', guard)
     assert re.search(r"if env_name:\s*\n\s*os\.environ\.setdefault\('CONDA_DEFAULT_ENV', env_name\)",
                      text[guard:nxt]), \
         'bootstrap.py sets CONDA_DEFAULT_ENV outside the backend != \'uv\' guard'
@@ -223,6 +253,12 @@ def test_playwright_env_exported_before_reexec_early_return():
     `already_in_env` early return and never got LD_LIBRARY_PATH — every
     Playwright launch died with "libatk-1.0.so.0: cannot open shared object
     file". The export MUST happen before that early return, in both consumers.
+
+    2026-07-28: the SETTER moved into chromium_env.py (single source of truth),
+    so the LD_LIBRARY_PATH assertion follows it there. The call-ORDER assertion
+    stays here — that is the property this test uniquely protects. The
+    behavioural counterpart (a real screenshot from a scrubbed env) lives in
+    tests/test_chromium_env.py.
     """
     for src, name, early_var in ((_server_py(), 'server.py', 'already_in_env'),
                                  (_bootstrap_py(), 'bootstrap.py', 'same')):
@@ -237,8 +273,11 @@ def test_playwright_env_exported_before_reexec_early_return():
             f'{name}: the native-path export runs AFTER the {early_var} early '
             f'return — a directly launched server gets no LD_LIBRARY_PATH and '
             f'Chromium dies on libatk')
-        assert re.search(r"os\.environ\['LD_LIBRARY_PATH'\]", src), \
-            f'{name} never sets LD_LIBRARY_PATH'
+        assert _really_imports_chromium_env(name), (
+            f'{name} no longer imports chromium_env.py — it has grown its '
+            f'own copy of the LD_LIBRARY_PATH logic again')
+    assert re.search(r"target\['LD_LIBRARY_PATH'\]", _chromium_env_py()), \
+        'chromium_env.py never sets LD_LIBRARY_PATH'
     _ok('LD_LIBRARY_PATH is exported before the re-exec early return (both consumers)')
 
 
@@ -247,17 +286,26 @@ def test_fontconfig_exported_when_no_system_config():
     back to a builtin config that finds ZERO fonts. Chromium then launches and
     paints CSS backgrounds fine but draws every glyph as nothing — screenshots
     come back blank-but-styled, which reads as "the page didn't load" rather
-    than as an error, so it fails silently. Both consumers must point
-    fontconfig at the env's own config when the system one is absent.
+    than as an error, so it fails silently.
+
+    2026-07-28: this logic now lives once in chromium_env.py, so assert it
+    there. Both directions still matter: the fallback must exist, AND it must
+    stay conditional so a host WITH a real /etc/fonts keeps using it.
     """
-    for src, name in ((_server_py(), 'server.py'), (_bootstrap_py(), 'bootstrap.py')):
-        assert "os.path.isdir('/etc/fonts')" in src, \
-            f'{name} does not probe for a system fontconfig config'
-        assert 'FONTCONFIG_PATH' in src and 'FONTCONFIG_FILE' in src, \
-            f'{name} does not export FONTCONFIG_PATH/FONTCONFIG_FILE'
-        # Must be conditional: a host WITH /etc/fonts keeps using it.
-        assert re.search(r"if not os\.path\.isdir\('/etc/fonts'\):", src), \
-            f'{name} exports fontconfig unconditionally (would override a real system config)'
+    src = _chromium_env_py()
+    assert "os.path.isdir('/etc/fonts')" in src, \
+        'chromium_env.py does not probe for a system fontconfig config'
+    assert 'FONTCONFIG_PATH' in src and 'FONTCONFIG_FILE' in src, \
+        'chromium_env.py does not export FONTCONFIG_PATH/FONTCONFIG_FILE'
+    # Must be conditional: a host WITH /etc/fonts keeps using it. The probe
+    # returns (None, None) in that case, which is the guard.
+    assert re.search(r"if os\.path\.isdir\('/etc/fonts'\):\s*\n\s*return None, None", src), \
+        ('chromium_env.py does not bail out when /etc/fonts exists — it would '
+         'override a real system fontconfig config')
+    # And both entry points must actually route through it.
+    for name in ('server.py', 'bootstrap.py'):
+        assert _really_imports_chromium_env(name), \
+            f'{name} does not import chromium_env.py for the fontconfig fallback'
     _ok('fontconfig falls back to the env config only when /etc/fonts is absent')
 
 
@@ -315,11 +363,15 @@ def test_healthcheck_probe_actually_launches_chromium():
         'healthcheck browser probe never launches Chromium (import-only check)'
     assert 'measureText' in probe, \
         'healthcheck probe does not measure a glyph (misses the zero-fonts failure)'
-    assert '_tofu_export_env_native_paths' in probe, \
-        'healthcheck probe does not export the env native paths — false failure'
+    assert 'chromium_env' in probe, \
+        'healthcheck probe does not set up the Chromium env — false failure'
     # The two distinct failure modes must be reported distinctly, not merged.
     assert 'renders NO text' in probe, 'no distinct zero-fonts diagnosis'
     assert 'cannot launch' in probe, 'no distinct launch-failure diagnosis'
+    # A bare "cannot launch" sends people hunting the wrong thing, so when the
+    # resolver already knows WHY (no GUI libs / no fontconfig), say so.
+    assert 'diagnosis' in probe, \
+        'healthcheck reports a launch failure without the resolved cause'
     _ok('healthcheck probe really launches Chromium + measures a glyph')
 
 

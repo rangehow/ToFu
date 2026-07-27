@@ -357,11 +357,14 @@ def ensure_ffmpeg(*, install: bool = True, timeout: int = 300) -> str:
 # ── Render environment ────────────────────────────────────
 
 def _conda_gui_lib_dir() -> str:
-    """``sys.prefix/lib`` when it actually carries the headless-Chrome GUI libs."""
-    lib = os.path.join(sys.prefix, 'lib')
-    if os.path.isfile(os.path.join(lib, 'libatk-1.0.so.0')):
-        return lib
-    return ''
+    """``sys.prefix/lib`` when it actually carries the headless-Chrome GUI libs.
+
+    Thin wrapper over the shared resolver so this module keeps its own name for
+    the concept while the RULE (which dirs count, and why) lives in one place.
+    """
+    from chromium_env import chromium_lib_dirs
+    dirs = chromium_lib_dirs()
+    return dirs[0] if dirs else ''
 
 
 def build_render_env(base: dict | None = None) -> dict:
@@ -400,16 +403,29 @@ def build_render_env(base: dict | None = None) -> dict:
     chrome = chrome_bin()
     if chrome:
         env['HYPERFRAMES_BROWSER_PATH'] = chrome
+    # Headless-Chrome GUI libs. Resolution itself lives in the shared
+    # chromium_env module (see _conda_gui_lib_dir), but the injection stays
+    # here so _conda_gui_lib_dir remains a monkeypatchable seam for tests.
     gui_lib = _conda_gui_lib_dir()
     if gui_lib:
         existing = env.get('LD_LIBRARY_PATH', '')
         env['LD_LIBRARY_PATH'] = (gui_lib + os.pathsep + existing) if existing else gui_lib
-    # libass font bootstrap: no system fontconfig config → libass finds zero
-    # fonts → subtitle burns no-op SILENTLY (rc=0, identical frames).
-    if 'FONTCONFIG_FILE' not in env and not os.path.isfile('/etc/fonts/fonts.conf'):
-        conda_conf = os.path.join(sys.prefix, 'etc', 'fonts', 'fonts.conf')
-        if os.path.isfile(conda_conf):
-            env['FONTCONFIG_FILE'] = conda_conf
+    # Font bootstrap, delegated to the same shared module. NOTE this variable
+    # serves TWO consumers here: headless Chrome (blank-but-styled frames
+    # without it) and the static ffmpeg's libass \u2014 with no fontconfig config
+    # libass resolves zero fonts and every subtitle burn SILENTLY renders
+    # nothing (2026-07-26 root cause of test_burn_in_real_render: the burn
+    # exited 0 with a byte-identical frame). ensure_chromium_env honours an
+    # operator-set FONTCONFIG_FILE and no-ops when /etc/fonts exists, which is
+    # the behaviour both consumers want.
+    try:
+        from chromium_env import fontconfig_paths
+        _fc_dir, _fc_file = fontconfig_paths()
+        if _fc_file and 'FONTCONFIG_FILE' not in env:
+            env['FONTCONFIG_PATH'] = _fc_dir
+            env['FONTCONFIG_FILE'] = _fc_file
+    except Exception as e:
+        logger.warning('[MotionVideo] fontconfig resolution skipped: %s', e)
     return env
 
 

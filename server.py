@@ -688,20 +688,25 @@ if _TOFU_SEARCH_PATH and os.path.isdir(_TOFU_SEARCH_PATH):
 def _tofu_export_env_native_paths(env_prefix, backend):
     """Put the env's lib/ + bin/ on the search paths for CHILD processes.
 
-    Playwright's Chromium is spawned as a subprocess and resolves its GUI
-    libraries (libatk, libatk-bridge, libnss, ...) through the dynamic linker,
-    which does not know about Python's sys.prefix. install.sh Step 8 puts those
-    libs in $env_prefix/lib via conda-forge, so they only resolve when that dir
-    is on LD_LIBRARY_PATH. Idempotent: safe to call on every start.
+    The headless-Chromium half (LD_LIBRARY_PATH + fontconfig) is delegated to
+    chromium_env.ensure_chromium_env() — the single source of truth shared with
+    bootstrap.py, tests/conftest.py and lib/motion_video. It resolves from
+    sys.prefix, so it works even with no .tofu_env.json marker (a fresh clone,
+    an exported bundle, or Docker), which is precisely the case the four
+    hand-copied versions used to miss. See chromium_env.py's docstring.
+
+    What stays here is the marker-specific part: PATH and the CONDA_* shims.
     """
+    # Chromium's GUI libs + fonts. Passing env_prefix only ADDS a candidate;
+    # resolution still works when the marker is absent or wrong.
+    try:
+        from chromium_env import ensure_chromium_env
+        ensure_chromium_env(env_prefix=env_prefix)
+    except Exception as _e:
+        sys.stderr.write(f'[server.py] chromium env setup skipped: {_e}\n')
+
     if not env_prefix or not os.path.isdir(env_prefix):
         return
-    env_lib = os.path.join(env_prefix, 'lib')
-    if os.path.isdir(env_lib):
-        _cur = os.environ.get('LD_LIBRARY_PATH', '')
-        if env_lib not in _cur.split(os.pathsep):
-            os.environ['LD_LIBRARY_PATH'] = (
-                env_lib + os.pathsep + _cur) if _cur else env_lib
     env_bin = os.path.join(env_prefix, 'bin')
     if os.path.isdir(env_bin):
         _cur = os.environ.get('PATH', '')
@@ -713,25 +718,17 @@ def _tofu_export_env_native_paths(env_prefix, backend):
     # fallback down the conda-forge branch.
     if backend != 'uv':
         os.environ.setdefault('CONDA_PREFIX', env_prefix)
-    # Fontconfig: this host has no /etc/fonts, so fontconfig falls back to a
-    # builtin config that finds zero fonts and Chromium renders every glyph as
-    # nothing — pages screenshot as blank/textless while still painting CSS
-    # backgrounds, so the failure looks like an empty page rather than an
-    # error. The env ships both fontconfig and font packages, so point it at
-    # the env's own config. Only when the system config is genuinely absent:
-    # a host that has /etc/fonts should keep using it.
-    if not os.path.isdir('/etc/fonts'):
-        env_fonts = os.path.join(env_prefix, 'etc', 'fonts')
-        if os.path.isfile(os.path.join(env_fonts, 'fonts.conf')):
-            os.environ.setdefault('FONTCONFIG_PATH', env_fonts)
-            os.environ.setdefault(
-                'FONTCONFIG_FILE', os.path.join(env_fonts, 'fonts.conf'))
 
 
 def _tofu_maybe_reexec_into_env():
     """Re-exec into Tofu's conda env if not already there."""
     marker = os.path.join(_PROJ_DIR, '.tofu_env.json')
     if not os.path.isfile(marker):
+        # No marker (fresh clone, exported bundle, Docker, pip layout) — there
+        # is nothing to re-exec into, but Chromium still needs its GUI libs and
+        # fonts on the search paths. chromium_env resolves those from
+        # sys.prefix, so this path is no longer a dead browser.
+        _tofu_export_env_native_paths('', '')
         return
     try:
         with open(marker, 'r', encoding='utf-8') as f:

@@ -53,19 +53,25 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 def _tofu_export_env_native_paths(env_prefix, backend, env_name=None):
     """Put the env's lib/ + bin/ on the search paths for CHILD processes.
 
-    Playwright's Chromium resolves its GUI libs (libatk, libatk-bridge, libnss)
-    through the dynamic linker, which does not know about sys.prefix; install.sh
-    Step 8 installs them into $env_prefix/lib. Must run even when we are ALREADY
-    in the env, since that path spawns Chromium too. Idempotent.
+    The headless-Chromium half (LD_LIBRARY_PATH + fontconfig) is delegated to
+    chromium_env.ensure_chromium_env() — the single source of truth shared with
+    server.py, tests/conftest.py and lib/motion_video. It resolves from
+    sys.prefix rather than from this marker, so it also works on a fresh clone /
+    exported bundle where no .tofu_env.json exists. chromium_env is stdlib-only
+    BY CONTRACT precisely so bootstrap.py — whose job is to run when deps are
+    still missing — can import it safely.
+
+    Must run even when we are ALREADY in the env, since that path spawns
+    Chromium too. Idempotent.
     """
+    try:
+        from chromium_env import ensure_chromium_env
+        ensure_chromium_env(env_prefix=env_prefix)
+    except Exception as e:
+        sys.stderr.write(f'[bootstrap.py] chromium env setup skipped: {e}\n')
+
     if not env_prefix or not os.path.isdir(env_prefix):
         return
-    env_lib = os.path.join(env_prefix, 'lib')
-    if os.path.isdir(env_lib):
-        _cur = os.environ.get('LD_LIBRARY_PATH', '')
-        if env_lib not in _cur.split(os.pathsep):
-            os.environ['LD_LIBRARY_PATH'] = (
-                env_lib + os.pathsep + _cur) if _cur else env_lib
     env_bin = os.path.join(env_prefix, 'bin')
     if os.path.isdir(env_bin):
         _cur = os.environ.get('PATH', '')
@@ -78,21 +84,14 @@ def _tofu_export_env_native_paths(env_prefix, backend, env_name=None):
         os.environ.setdefault('CONDA_PREFIX', env_prefix)
         if env_name:
             os.environ.setdefault('CONDA_DEFAULT_ENV', env_name)
-    # No /etc/fonts on this host → fontconfig finds zero fonts and Chromium
-    # renders text as nothing, so screenshots come out blank-but-styled rather
-    # than erroring. Point fontconfig at the env's own config when the system
-    # one is absent.
-    if not os.path.isdir('/etc/fonts'):
-        env_fonts = os.path.join(env_prefix, 'etc', 'fonts')
-        if os.path.isfile(os.path.join(env_fonts, 'fonts.conf')):
-            os.environ.setdefault('FONTCONFIG_PATH', env_fonts)
-            os.environ.setdefault(
-                'FONTCONFIG_FILE', os.path.join(env_fonts, 'fonts.conf'))
 
 
 def _tofu_maybe_reexec_into_env():
     marker = os.path.join(BASE_DIR, '.tofu_env.json')
     if not os.path.isfile(marker):
+        # No marker — nothing to re-exec into, but Chromium still needs its GUI
+        # libs + fonts, which chromium_env resolves from sys.prefix.
+        _tofu_export_env_native_paths('', '')
         return
     try:
         with open(marker, 'r', encoding='utf-8') as f:

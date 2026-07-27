@@ -1168,34 +1168,21 @@ def live_server(flask_app):
 
 
 def _ensure_chromium_library_path():
-    """Augment ``LD_LIBRARY_PATH`` so a rootless Chromium build finds its GUI
-    shared libs (libatk / libgbm / libxkbcommon / …) on hosts without sudo.
+    """Make headless Chromium launchable, via the shared single source of truth.
 
-    Mirrors ``_ensure_chromium_library_path()`` in the tofu_search package's
-    ``playwright_pool.py`` (the mechanism the app itself relies on): prepend
-    ``$CONDA_PREFIX/lib`` and the cos7 sysroot lib dir, where the GUI libs are
-    installed via conda-forge (see the ``playwright-chromium-rootless-conda-libs``
-    project skill). Extra dirs can be injected via ``CHROMIUM_EXTRA_LIB_DIRS``
-    (colon-separated). Idempotent + best-effort: a missing CONDA_PREFIX or
-    unreadable dir is simply skipped, so this is a no-op on a vanilla machine
-    that already has the libs (e.g. a CI runner after ``--with-deps``).
+    Delegates to ``chromium_env.ensure_chromium_env()`` (repo root), which the
+    app itself uses. This used to be a local copy keyed on ``$CONDA_PREFIX``,
+    which is unset in any shell that never ran ``conda activate`` and on the
+    uv/venv install path — so the fixture skipped with "chromium unavailable"
+    on hosts where the libs were present all along. chromium_env resolves from
+    ``sys.prefix`` instead, and also handles the fontconfig half (a fontless
+    Chromium screenshots blank-but-styled rather than erroring).
+
+    Returns the list of directories added (empty when nothing was needed).
     """
-    candidates = []
-    prefix = os.environ.get('CONDA_PREFIX', '')
-    if prefix:
-        candidates.append(os.path.join(prefix, 'lib'))
-        candidates.append(os.path.join(
-            prefix, 'x86_64-conda-linux-gnu', 'sysroot', 'usr', 'lib64'))
-    extra = os.environ.get('CHROMIUM_EXTRA_LIB_DIRS', '')
-    if extra:
-        candidates.extend(p for p in extra.split(os.pathsep) if p)
-    existing = os.environ.get('LD_LIBRARY_PATH', '')
-    have = set(existing.split(os.pathsep)) if existing else set()
-    prepend = [p for p in candidates if p and os.path.isdir(p) and p not in have]
-    if prepend:
-        os.environ['LD_LIBRARY_PATH'] = os.pathsep.join(
-            prepend + ([existing] if existing else []))
-    return prepend
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from chromium_env import ensure_chromium_env
+    return ensure_chromium_env()['lib_dirs_added']
 
 
 @pytest.fixture(scope='session')

@@ -56,6 +56,7 @@ declare var __tofuDiagRing: any;   // static/js/core/debug_panel.js
 declare var __translatePushWired: any;   // static/js/translation.js
 declare var _bootLoadInFlight: any;   // static/js/core/cross_tab_sync.js
 declare var _bootReconnectStarted: any;   // static/js/main.js
+declare var _browserClientId: any;   // static/js/local-control.js
 declare var _canonRound: any;   // static/js/ui/stream_reducer.js
 declare var _connToastState: any;   // static/js/ui/sse_poll_fallback.js
 declare var _contextPolicy: any;   // static/js/main/main_toolbar_ui.js
@@ -179,6 +180,7 @@ interface Window {
   _applyReaderPrefs: any;
   _bootLoadInFlight: any;
   _bootReconnectStarted: any;
+  _browserClientId: any;
   _checkForQueuedTask: any;
   _classifyGhostTailJS: any;
   _clearPendingSyncMarkers: any;
@@ -199,6 +201,10 @@ interface Window {
   _isBootLoadHeld: any;
   _isErrorOnlyAssistant: any;
   _kickAutopilot: any;
+  _lcBrowserSetupState: any;
+  _lcRenderBrowser: any;
+  _lcRenderDesktop: any;
+  _lcUpdateBadge: any;
   _loadFeatureBundle: any;
   _markStreamXlateFinal: any;
   _maskVuMachineTokens: any;
@@ -281,6 +287,7 @@ interface Window {
   chatInnerTailAnchor: any;
   closeChatModeMenu: any;
   closeCompactionViewer: any;
+  closeLocalControlModal: any;
   closeProjectBrain: any;
   closeSystemPromptEditor: any;
   computeConvBusy: any;
@@ -328,6 +335,7 @@ interface Window {
   onProjectCleared: any;
   onToolsetDiverged: any;
   openCompactionViewer: any;
+  openLocalControlModal: any;
   openMobileFlowPicker: any;
   openMobileOptimizer: any;
   openMobileTimer: any;
@@ -386,7 +394,9 @@ interface Window {
   switchSettingsTab: any;
   syncToolsetBanner: any;
   tabletDrawerMediaQuery: any;
+  toggleBrowserFromLocalModal: any;
   toggleChatModeMenu: any;
+  toggleDesktopFromLocalModal: any;
   toggleOptimizerPanel: any;
   togglePendingQueueCollapsed: any;
   toggleProjectBrain: any;

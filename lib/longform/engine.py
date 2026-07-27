@@ -80,11 +80,35 @@ def run_longform_task(task: dict) -> None:
 
         result['artifact_id'] = artifact_id
         task['result'] = result
-        _write_manifest(task, 'done')
-        _emit(task, {'type': 'final', **result})
-        _longform_runtime.finish(task_id, result=result)
-        logger.info('[Longform] %s done — %d chars, %d sections',
-                    task_id, result.get('chars', 0), result.get('sections', 0))
+        # Quality axis: the report is readable, so status is legitimately
+        # 'done'. But a section whose stage never produced an artifact is
+        # silently skipped by _run_assemble, and an outline thinner than the
+        # requested depth passes _gate_outline (which only demands >= 2) —
+        # both ship a structurally-valid report that is missing content.
+        _written = result.get('sections_written', result.get('sections', 0))
+        _requested = result.get('sections_requested', 0)
+        _missing = max(0, result.get('sections', 0) - _written)
+        _thin = bool(_requested and _written < _requested)
+        _degraded = bool(_missing or _thin)
+        _reason = ''
+        if _missing:
+            _reason = (f'{_missing} of {result.get("sections", 0)} outlined '
+                       'section(s) produced no text and were dropped from the '
+                       'report')
+        elif _thin:
+            _reason = (f'report has {_written} section(s) but this depth asks '
+                       f'for {_requested} — the outline came back thin')
+        _write_manifest(task, 'degraded' if _degraded else 'done')
+        _emit(task, {'type': 'final', **result, 'degraded': _degraded,
+                     'degraded_reason': _reason})
+        _longform_runtime.finish(task_id, result=result, degraded=_degraded,
+                                 degraded_reason=_reason)
+        if _degraded:
+            logger.error('[Longform] %s DEGRADED — %s', task_id, _reason)
+        logger.info('[Longform] %s %s — %d chars, %d/%d sections written',
+                    task_id, 'degraded' if _degraded else 'done',
+                    result.get('chars', 0), _written,
+                    result.get('sections', 0))
     except Exception as e:
         logger.error('[Longform] task %s failed: %s', task_id, e, exc_info=True)
         _write_manifest(task, 'error')

@@ -24,9 +24,6 @@ import time
 from flask import Blueprint, request
 
 from lib.api_response import (
-    api_bad_request, api_not_found, api_ok, sse_response,
-)
-from lib.api_response import (
     api_bad_request, api_internal_error, api_not_found, api_ok, sse_response,
 )
 from lib.log import audit_log, get_logger
@@ -93,7 +90,16 @@ def _registries() -> dict:
 
 
 def _public_task(task: dict) -> dict:
-    """Copy a task dict, dropping internal handles (locks, events_lock, etc.)."""
+    """Copy a task dict, dropping internal handles (locks, events_lock, etc.).
+
+    ``artifact_quality`` (the product-quality axis — see
+    lib/agent_core/task_runtime.py) MUST survive this copy. A degraded job
+    keeps ``status='done'`` by design, so ``artifact_quality`` is the ONLY
+    thing on this response that distinguishes "delivered a good artifact"
+    from "delivered a valid artifact out of a broken pipeline". Adding it to
+    SKIP, or filtering the response down to a hand-listed field set, silently
+    re-hides the R3 total-wipe class of bug.
+    """
     SKIP = {'events_lock', 'abort_event', 'content_lock'}
     out = {}
     for k, v in task.items():
@@ -145,6 +151,11 @@ def list_tasks():
                 'id': t.get('id'),
                 'kind': t.get('kind') or k,
                 'status': t.get('status'),
+                # Product-quality axis. This surface hand-lists its fields, so
+                # unlike _public_task it must name the field explicitly or a
+                # degraded job is indistinguishable from a clean one in the
+                # list view (status is 'done' for both, by design).
+                'artifact_quality': t.get('artifact_quality'),
                 'created_at': t.get('created_at'),
                 'finished_at': t.get('finished_at'),
                 'meta': t.get('meta') or {},
@@ -236,13 +247,16 @@ def task_requests(task_id):
 @api_meta(summary='Request Inspector: full payload for one round',
           tags=['tasks'], scope='tasks')
 def task_request_payload(task_id, round_num):
-    """On-demand full payload (messages + tools + params) for one
-    request-kind snapshot round. 404 when the round has no request-kind
-    snapshot (expired, state-only, or unknown)."""
+    """On-demand full payload (messages + tools + params) for one snapshot
+    round. ``?kind=state`` serves the post-tool / final / fallback mirrors
+    (same roundNum axis — design §3.1); default is the pre-request snapshot.
+    404 when the round has no matching snapshot (expired, wrong kind, or
+    unknown)."""
     from lib.tasks_pkg.request_inspector import get_request_payload
     try:
         payload = get_request_payload(
-            task_id, round_num, turn=request.args.get('turn', ''))
+            task_id, round_num, turn=request.args.get('turn', ''),
+            kind=request.args.get('kind', 'request'))
     except Exception as e:
         logger.error('[api_v1.tasks] request payload failed for task=%s '
                      'round=%s: %s', task_id[:8], round_num, e, exc_info=True)
@@ -252,7 +266,6 @@ def task_request_payload(task_id, round_num):
     return api_ok(payload)
 
 
-@api_v1_tasks_bp.route('/api/v1/tasks/<task_id>/stream', methods=['GET'])
 @api_v1_tasks_bp.route('/api/v1/tasks/<task_id>/stream', methods=['GET'])
 @require_scope('tasks')
 @api_meta(summary='Server-Sent Events stream of task events',

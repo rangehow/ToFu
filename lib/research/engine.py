@@ -74,7 +74,8 @@ def run_research_task(task: dict) -> None:
                      'gate_reached': result.get('gate_reached'),
                      'degraded': _degraded,
                      'degraded_reason': result.get('degraded_reason', '')})
-        _research_runtime.finish(task_id, result=result)
+        _research_runtime.finish(task_id, result=result, degraded=_degraded,
+                                 degraded_reason=result.get('degraded_reason', ''))
         if _degraded:
             logger.error('[Research] %s DEGRADED — %s', task_id,
                          result.get('degraded_reason'))

@@ -162,10 +162,12 @@ def _run_assemble(ctx: dict) -> dict:
     cards = ctx['artifacts']['research']['cards']
     lang = ctx.get('lang', 'zh')
     parts = [f'# {outline["title"]}\n']
+    written = 0
     for i, heading in enumerate(outline['sections'], 1):
         sec = ctx['artifacts'].get(f'section-{i:02d}')
         if not sec:
             continue
+        written += 1
         parts.append(f'\n## {heading}\n\n{sec["body"]}\n')
     parts.append('\n## ' + ('参考来源' if lang == 'zh' else 'Sources') + '\n\n')
     for i, c in enumerate(cards, 1):
@@ -176,8 +178,16 @@ def _run_assemble(ctx: dict) -> dict:
     write_text_atomic(path, markdown)
     logger.info('[Longform:assemble] %d chars, %d section(s), %d source(s)',
                 len(markdown), len(outline['sections']), len(cards))
+    # ``sections`` is what the outline PROMISED; ``sections_written`` is what
+    # actually made it into the markdown. They diverge when a section stage's
+    # artifact is missing (the skip above), which produces a well-formed but
+    # incomplete report — the engine turns the gap into the task's quality
+    # verdict rather than shipping it as a clean success.
     return {'path': path, 'chars': len(markdown),
-            'sections': len(outline['sections']), 'sources': len(cards),
+            'sections': len(outline['sections']),
+            'sections_written': written,
+            'sections_requested': _DEPTHS[ctx.get('depth', 'standard')][0],
+            'sources': len(cards),
             'title': outline['title']}
 
 

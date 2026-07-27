@@ -580,7 +580,18 @@ def run_motion_task(task: dict) -> None:
         _drop_page_cache(workdir)
         _emit(task, {'type': 'final', 'final_path': final_path,
                      'duration': result['duration'], 'narrated': narration})
-        _motion_runtime.finish(task_id, result=result)
+        # Quality axis: a silent-degraded job still delivers a playable mp4,
+        # so status is legitimately 'done'. But narration was REQUESTED and
+        # the scene durations are char-estimated rather than measured from
+        # real audio (lib/motion_video/_recipe.py::_FALLBACK_CHARS_PER_SECOND),
+        # which is how "8 shots all pinned at the 15.0s ceiling" ships green.
+        _motion_runtime.finish(
+            task_id, result=result, degraded=degraded_narration,
+            degraded_reason=(
+                'narration requested but no TTS slot was available — shipped '
+                'the silent video with burned-in subtitles; scene durations '
+                'are char-estimated, not measured from audio'
+                if degraded_narration else ''))
         logger.info('[MotionVideo] task %s done: %s (%.2fs, %d scenes, '
                     'narrated=%s)', task_id, final_path, result['duration'],
                     total, narration)

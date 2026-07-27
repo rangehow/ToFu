@@ -23,6 +23,7 @@ Standard task dict shape:
         'id':           str,        # unique task ID
         'kind':         str,        # 'paper-report', 'translate', etc.
         'status':       str,        # 'pending'|'running'|'done'|'error'|'aborted'
+        'artifact_quality': dict|None,  # PRODUCT-quality axis, orthogonal to status
         'events':       list[dict], # append-only, each gets a 'seq'
         'events_lock':  Lock,
         'abort_event':  threading.Event,
@@ -33,6 +34,37 @@ Standard task dict shape:
         'finished_at':  float | None,
         'meta':         dict,        # caller-supplied custom fields
     }
+
+★ TWO INDEPENDENT AXES — do not conflate them:
+
+  * ``status`` is the **lifecycle** axis: pending → running → terminal. Its
+    membership is closed and load-bearing (every ``status in (…)`` terminal
+    check in this file depends on it), so a new *quality* concern must never
+    be added to it.
+  * ``artifact_quality`` is the **product** axis: did the job deliver a GOOD
+    artifact? A pipeline can complete its lifecycle cleanly (``status='done'``)
+    while shipping an artifact produced by a sick pipeline — a research pass
+    whose structural gate wiped every idea, a video whose narration silently
+    degraded to silent, a report assembled with missing sections. Reporting
+    those as plain 'done' is what made the R3 total-wipe bug invisible.
+
+The field is ``artifact_quality`` and NOT the shorter ``quality`` because
+``quality`` is already taken on a task dict: motion-video stores its render
+preset there (``lib/motion_video/runtime.py`` — the string 'draft' /
+'standard' / 'high', also a manifest field). Reusing the name made
+``finish()`` do ``'standard'.get('degraded')`` and blew up three existing
+tests. Two different meanings of the word 'quality' must not share a key.
+
+``artifact_quality`` is tri-state on purpose:
+
+  * ``None``  — this task kind does not assess quality (chat, translate…).
+    NOT the same as "clean"; nobody looked.
+  * ``{'degraded': False, 'reason': ''}`` — assessed and healthy.
+  * ``{'degraded': True,  'reason': str}`` — valid artifact, sick pipeline.
+
+Workers opt in by passing ``degraded=`` to :meth:`TaskRuntime.finish`. New
+quality dimensions get a new KEY inside ``artifact_quality`` — never a new
+``status`` member and never another top-level task field.
 """
 
 import asyncio
@@ -169,6 +201,9 @@ class TaskRuntime:
             'id': task_id,
             'kind': self.kind,
             'status': 'pending',
+            # Product-quality axis (see module docstring). None = unassessed;
+            # only a worker that passes degraded= to finish() populates it.
+            'artifact_quality': None,
             'events': [],
             'events_lock': threading.Lock(),
             'abort_event': threading.Event(),
@@ -249,12 +284,21 @@ class TaskRuntime:
         return seq
 
     def finish(self, task_id: str, *, result: Any = None,
-               error: Any = None, error_context: str = '') -> bool:
+               error: Any = None, error_context: str = '',
+               degraded: Optional[bool] = None,
+               degraded_reason: str = '') -> bool:
         """Mark a task as terminal (done | error | aborted).
 
         Always emits a final event with type='done' or type='error' so
         pollers/WebSocket subscribers see a guaranteed terminal frame.
         Returns True if the task was found and updated.
+
+        ``degraded`` is the PRODUCT-quality axis and is deliberately
+        orthogonal to ``status`` (module docstring). Pass it when the job
+        delivered a valid artifact from a pipeline that did not work properly;
+        ``status`` stays 'done' so every terminal check keeps its meaning and
+        the frontend reads one extra field. Leaving it None means "this kind
+        does not assess quality" — which is NOT the same as "clean".
         """
         task = self.get(task_id)
         if not task:
@@ -272,8 +316,16 @@ class TaskRuntime:
                 task['status'] = 'done'
             task['result'] = result
             task['error'] = envelope
+            if degraded is not None:
+                task['artifact_quality'] = {
+                    'degraded': bool(degraded),
+                    'reason': str(degraded_reason or ''),
+                }
             task['finished_at'] = time.time()
             final_status = task['status']
+            # .get(): legacy task dicts inserted straight into _tasks (older
+            # test code, chat's own shape) predate this key.
+            quality = task.get('artifact_quality')
 
         terminal_event = {
             'type': 'done' if final_status == 'done' else (
@@ -282,11 +334,16 @@ class TaskRuntime:
         }
         if envelope:
             terminal_event['error'] = envelope
+        if quality:
+            # Ride the guaranteed terminal frame so a live SSE/WS subscriber
+            # learns the verdict without a follow-up GET.
+            terminal_event['artifact_quality'] = quality
         if result is not None and final_status == 'done':
             terminal_event['result'] = result
         self.append_event(task_id, terminal_event)
-        logger.debug('[TaskRuntime:%s] task %s finished: %s',
-                     self.kind, task_id[:8], final_status)
+        logger.debug('[TaskRuntime:%s] task %s finished: %s%s',
+                     self.kind, task_id[:8], final_status,
+                     ' (DEGRADED)' if (quality or {}).get('degraded') else '')
         return True
 
     def abort(self, task_id: str) -> bool:
@@ -408,6 +465,10 @@ class TaskRuntime:
         }
         if terminal:
             resp['finishedAt'] = _epoch_ms(task.get('finished_at'))
+            # Product-quality axis, emitted only when the kind assessed it.
+            # A poller that reads status alone still sees 'done' — by design.
+            if task.get('artifact_quality'):
+                resp['artifact_quality'] = task['artifact_quality']
             if task['error']:
                 resp['error'] = task['error']
             elif task['result'] is not None:

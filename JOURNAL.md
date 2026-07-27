@@ -1,6 +1,18 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-27 — 大脑派单「事件通道」落地:发epic/轮次完成/peer消息全部即时启动,30s心跳降级为兜底网(owner「项目大脑经常把任务安排成30秒后自动重启,太慢了——做事件通道」;commit `6e2d0108`,11 文件 +996/-52;新套件 **14/14 含 NC×3**,failing-first A/B 在未修码上 **6 条精确红**,回归环 **182+84+35 全绿**,collect **10608** 0 err)
+
+- **起因与方案取舍:** owner 问「30秒自动重启在哪、能不能更快 + 提交了但一直没完成的任务是什么机制」。查明 30s 是 scheduler 唯一节拍(`lib/scheduler/manager.py:891` 硬编码 `time.sleep(30)`),大脑派单心跳明确搭这趟车。给了两个方向:(a) 缩短 tick(改一行,代价是 FUSE PG 上 6 倍查询量);(b) 事件通道(生产者侧即时触发,心跳留作兜底)。**owner 拍板 (b)。**
+- **三条事件缝(全部是「创建即启动」的生产者侧触发,复用既有 dispatch_next_queued 唯一排水缝,零新线程/零新全局):**
+  - **① `on_epic_posted`**(`post_task` 内触发):epic 可真正启动时(依赖全 done + 路由目标会话**存在**且**空闲**)在 post 瞬间 claim+入队+排空。三个刻意回落:忙目标(agent  mid-turn 发帖是常态)不 claim——留给缝②;依赖未满足——留给 `on_epic_completed`;**目标会话行不存在绝不 claim**(dispatch_epic 先 claim 后排空,向死会话 claim 会把 epic 卡到 30 分钟租约过期——比被取代的 ≤30s 心跳更糟,这是设计里最关键的一条负约束)。
+  - **② `on_conv_idle`**(`_dispatch_queued_message` 空队列分支触发):忙时发布的 epic 在**当前轮次结束瞬间**启动,链式每次完成推进一个(与队列排水链同形)。非空队列绝不抢占——真人排队消息永远先于看板工作。
+  - **③ peer 发时排空**(`send_peer_message` 内):空闲目标的 peer 消息从「等 ≤30s 的 `drain_idle_peer_messages`」变为**发送瞬间**渲染成轮;活目标双通道(twin+完成钩)不变;谓词与 30s 兜底完全同源(`_live_drain_eligible_task`,含 aborted 收尾中会话照样排空的 strand-closing 语义)。
+- **30s sweep 与 drain_idle_peer_messages 保留为恢复网**:崩溃/租约过期/断链/迁移这些**本质时间驱动**的路径(30 分钟 TTL 面前 30s 粒度是噪音)仍归心跳,不得删除。failing-first A/B 实证:补丁摘走后 6 条精确红(三条即时性断言:epic 停在 open / peer 行滞留队列;三条 NC baseline),8 条负面对照(忙目标/死会话/依赖未满足/无 projectPath/非空队列/他会话路由/活目标twin/心跳兜底)在**新旧码上都绿**——红的就是那个 30s,不是别的。
+- **守卫过期家族再咬两口(顺手根修,均预存在非本批引入):** ①`test_project_dispatch.py` NC1 锚点缺 pending-question 过滤块(answer_task 落地时就漂移了)——锚点重钉;②`test_peer_coordination_register.py` 读 facade `__init__` 而非 `_inject.py`(包拆开后的老毛病,与 JOURNAL 记载的 orchestrator 同族)——改读子模块。**顺手发现的家族规律:NC 锚点跨「后来被插入的中间块」就会静默漂移,锚点应尽量短且只跨必改行。**
+- **存量测试契约更新(全部诚实改测,非上调豁免):** integration 五处 busy-at-post(agent mid-turn 发帖才是生产真实形态,也让 sweep 路径继续被测);round_boundary 四处(idle 目标新契约=发时交付+心跳幂等;NC 重指向发时缝并验证 30s 网仍接住);target_resolution 两处(忙目标保队列语义,解析正确性与排水时机解耦)。
+- **生效条件:需重启服务。** 运行中进程的旧 post_task/send_peer_message/_dispatch_queued_message 不含触发缝;重启后冷启动 epic、轮末接续、peer 消息全部即时化,30s 仅剩恢复网职能。
+
 ### 2026-07-27 — 「ms2sd1wlug0sby autopilot 咋不工作了」根修三连 + ⚠️ 待执行的重启验证清单(owner 报障;commits `0964d6e6` / `7d2dbaaf` / `ef298158`;守卫 **19/19**,failing-first 三处各自先红)
 
 > **⚠️ RESTART-VERIFY(未执行,重启后必须跑;跑完把本块删掉)**

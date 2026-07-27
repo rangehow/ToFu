@@ -496,6 +496,55 @@ def analyse_stream_result(
                     'incomplete item(s) — allowing stop to avoid runaway loop',
                     tid, _nudges, _todo_max, len(_incomplete))
 
+        # ── Intent-stall nudge (epic pt_33ba079f5cea4841) ──
+        # The model's previous tool call was rejected/errored, and this round
+        # is prose-only — it said what it would do and then stopped. Ground
+        # truth: conv ms34yw0k74o2lq R18 ("Let me use explicit paths only."
+        # after a blocked run_command). The task settled normally and the user
+        # saw the conversation stop mid-thought.
+        #
+        # Four structural criteria, never wording — the ticket's A∧B pair
+        # alone measured 60% false positives over 7 days (5 hand-backs, 4 VU
+        # endings, 3 non-retryable), so C and D are load-bearing, not polish.
+        # See docs/INTENT_STALL_MEASUREMENT.md and _intent_stall.py.
+        #
+        # ONE nudge per task: the counter is checked and bumped here, so a
+        # model that stalls again after being nudged is allowed to stop (the
+        # runaway guard — same discipline as the retry caps above).
+        _stall_nudges = int(task.get('_intent_stall_nudge_count') or 0)
+        if _stall_nudges < 1:
+            from lib.tasks_pkg.stream_handler._intent_stall import (
+                NUDGE_TEXT as _stall_text,
+                should_nudge_intent_stall as _should_stall_nudge,
+            )
+            _do_nudge, _stall_reason = _should_stall_nudge(
+                task, assistant_msg, round_content)
+            if _do_nudge:
+                task['_intent_stall_nudge_count'] = _stall_nudges + 1
+                messages.append({'role': 'user', 'content': _stall_text})
+                logger.info(
+                    '[%s] ↻ Intent-stall nudge at round %d: previous tool '
+                    'round failed and this round was prose-only with no tool '
+                    'calls — re-driving once. model=%s content=%dchars',
+                    tid, round_num, model, len(round_content))
+                append_event(task, {
+                    'type': 'phase',
+                    'phase': 'intent_stall_nudge',
+                    'attempt': _stall_nudges + 1,
+                    'max': 1,
+                    'detail': '↻ 上一个工具未执行成功，提示模型继续…',
+                })
+                result['action'] = 'continue'
+                return result
+            if _stall_reason not in ('prev_tool_ok', 'no_tool_rounds',
+                                     'no_content', 'has_tool_calls'):
+                # Log only the INTERESTING skips (a stop that looked like a
+                # stall but was deliberately left alone), so the criteria that
+                # do the real work are observable in production.
+                logger.debug(
+                    '[%s] intent-stall nudge skipped at round %d: %s',
+                    tid, round_num, _stall_reason)
+
         # Normal exit — model returned content without tool calls
         result['action'] = 'break'
         result['loop_exit_reason'] = f'no_tool_calls_round_{round_num}'

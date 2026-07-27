@@ -1531,6 +1531,7 @@ var _i18n = {
   'settings.mePriceHint': { zh: '（$/1M tokens，留空 = 不覆盖内置价目）', en: '($/1M tokens, blank = keep built-in pricing)' },
   'settings.meCostDerived': { zh: '（已由输入/输出价自动折算）', en: '(auto-derived from input/output prices)' },
   'settings.mePriceCustomTag': { zh: '自定义', en: 'custom' },
+  'settings.mePriceInvalidWarn': { zh: '输入/输出价格需同时填写，且为非负数字——本次未改动已保存的价格。', en: 'Input and output prices must both be filled with non-negative numbers — your saved pricing was left unchanged.' },
   // ── Model card health strip (per-model runtime state, auto-polled) ──
   'settings.mhCooldown': { zh: '冷却 {s}s', en: 'cooldown {s}s' },
   'settings.mhReasonRateLimit': { zh: '限流', en: 'rate-limited' },

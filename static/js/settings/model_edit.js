@@ -203,6 +203,22 @@ function _saveModelEdit(provIdx, modelIdx) {
   var form = document.querySelector('.stg-edit-form');
   if (!form) return;
 
+  // Price validation happens BEFORE any mutation: an invalid pair (only one
+  // field filled / negative / non-numeric) REJECTS the whole save with an
+  // alert and leaves the stored override untouched — the pre-fix behaviour
+  // silently DELETED the saved pricing on any typo. Both-empty is the one
+  // explicit "clear the override" gesture and stays allowed.
+  var _pinRaw = String(form.querySelector('.stg-edit-pin').value || '').trim();
+  var _poutRaw = String(form.querySelector('.stg-edit-pout').value || '').trim();
+  var _pin = parseFloat(_pinRaw), _pout = parseFloat(_poutRaw);
+  var _bothEmpty = (_pinRaw === '' && _poutRaw === '');
+  var _bothValid = (_pinRaw !== '' && _poutRaw !== '' &&
+                    !isNaN(_pin) && !isNaN(_pout) && _pin >= 0 && _pout >= 0);
+  if (!_bothEmpty && !_bothValid) {
+    showAlert(t('settings.mePriceInvalidWarn'));
+    return;
+  }
+
   var oldModelId = m.model_id;
   m.model_id = String(form.querySelector('.stg-edit-mid').value || '').trim();
   m.rpm = parseInt(form.querySelector('.stg-edit-rpm').value) || 30;
@@ -214,12 +230,7 @@ function _saveModelEdit(provIdx, modelIdx) {
   // When both are set the composite routing cost is DERIVED from them —
   // a hand-entered blended number that disagrees with real prices is how
   // the two drifted apart in the first place.
-  var _pinRaw = String(form.querySelector('.stg-edit-pin').value || '').trim();
-  var _poutRaw = String(form.querySelector('.stg-edit-pout').value || '').trim();
-  var _pin = parseFloat(_pinRaw), _pout = parseFloat(_poutRaw);
-  var _hasPrices = (_pinRaw !== '' && _poutRaw !== '' &&
-                    !isNaN(_pin) && !isNaN(_pout) && _pin >= 0 && _pout >= 0);
-  if (_hasPrices) {
+  if (_bothValid) {
     var _pr = (m.pricing && typeof m.pricing === 'object' && !Array.isArray(m.pricing)) ? m.pricing : {};
     _pr.input = _pin;
     _pr.output = _pout;

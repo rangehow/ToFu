@@ -23,12 +23,15 @@ WHAT IS GUARDED (results, not implementation — charter 2026-07-27)
   * _refreshAllModelCardHealth updates strips in place (no tab re-render).
   * Edit dialog: prefills only the explicit override, derives composite cost
     live, saves m.pricing + derived cost, and clearing the fields removes
-    the override cleanly.
+    the override cleanly. INVALID input (only one axis / negative /
+    non-numeric) is REJECTED with an alert BEFORE any mutation — a typo
+    must never silently delete the saved pricing.
 
 NEUTERS (source-level, on mutated copies — shipped files untouched):
   * N1: drop the m.pricing preference      → override price lost (red)
   * N2: drop the cooldown merge in the fold → cooldown chip gone (red)
   * N3: stop deriving the composite cost    → cost stays manual (red)
+  * N4: drop the invalid-input reject        → override silently deleted (red)
 """
 
 from __future__ import annotations
@@ -75,7 +78,7 @@ const { document, check, report } = setup({
     _serverConfig: {},
     _renderProvidersTab: () => {},
     _renderPresetsTab: () => {},
-    showAlert: () => {},
+    showAlert: (m) => { (window._alertCalls = window._alertCalls || []).push(m); },
   },
 });
 
@@ -250,10 +253,46 @@ try {
   check('cost_editable_after_clear',
     form2.querySelector('.stg-edit-cost').readOnly === false);
   form2.querySelector('.stg-edit-cost').value = '0.077';
+  window._alertCalls = [];
   _saveModelEdit(0, 0);
   const m0b = _stgProviders[0].models[0];
   check('override_removed', m0b.pricing === undefined);
   check('manual_cost_kept', m0b.cost === 0.077);
+  check('explicit_clear_is_not_rejected', window._alertCalls.length === 0);
+
+  // ══ 15. Invalid price input is REJECTED — the override survives typos ══
+  // (Pre-fix: only-one-filled / negative / non-numeric all fell into the
+  // clear branch and SILENTLY deleted the saved pricing with no alert.)
+  seedProviders();          // model 0: pricing {input:5, output:25}, cost 0.045
+  renderCards();
+  _editModel(0, 0);
+  const f4 = document.querySelector('.stg-edit-form');
+  // negative
+  window._alertCalls = [];
+  f4.querySelector('.stg-edit-pin').value = '-5';
+  f4.querySelector('.stg-edit-pout').value = '3';
+  _saveModelEdit(0, 0);
+  check('negative_price_alerts', window._alertCalls.length === 1);
+  const mNeg = _stgProviders[0].models[0];
+  check('negative_price_override_preserved',
+    mNeg.pricing && mNeg.pricing.input === 5 && mNeg.pricing.output === 25);
+  check('negative_price_cost_preserved', mNeg.cost === 0.045);
+  // partial — only one axis filled
+  window._alertCalls = [];
+  f4.querySelector('.stg-edit-pin').value = '1';
+  f4.querySelector('.stg-edit-pout').value = '';
+  _saveModelEdit(0, 0);
+  check('partial_price_alerts', window._alertCalls.length === 1);
+  check('partial_price_override_preserved',
+    _stgProviders[0].models[0].pricing.input === 5);
+  // non-numeric garbage
+  window._alertCalls = [];
+  f4.querySelector('.stg-edit-pin').value = 'abc';
+  f4.querySelector('.stg-edit-pout').value = '3';
+  _saveModelEdit(0, 0);
+  check('nan_price_alerts', window._alertCalls.length === 1);
+  check('nan_price_override_preserved',
+    _stgProviders[0].models[0].pricing.input === 5);
 
   // ══ 14. Wire-pool contract: request_ids win, else root + aliases ══
   const idsPool = _modelWireIds({ model_id: 'x', request_ids: ['a', 'b'], aliases: ['c'] });
@@ -306,6 +345,25 @@ try {
     check('N3_cost_not_derived', _stgProviders[0].models[0].cost !== 0.002);
     indirectEval(SAVE_FN);   // restore
   }
+
+  // ══ NEUTER 4: drop the invalid-input reject → override silently deleted ══
+  {
+    const n = SAVE_FN.replace('if (!_bothEmpty && !_bothValid) {', 'if (false) {');
+    check('N4_applied', n !== SAVE_FN);
+    indirectEval(n);
+    seedProviders();          // model 0: pricing {input:5, output:25}
+    renderCards();
+    _editModel(0, 0);
+    const f5 = document.querySelector('.stg-edit-form');
+    f5.querySelector('.stg-edit-pin').value = '-5';
+    f5.querySelector('.stg-edit-pout').value = '3';
+    window._alertCalls = [];
+    _saveModelEdit(0, 0);
+    check('N4_silent_delete_returns',
+      _stgProviders[0].models[0].pricing === undefined &&
+      window._alertCalls.length === 0);
+    indirectEval(SAVE_FN);   // restore
+  }
 } catch (e) {
   check('harness_threw: ' + (e && e.message), false);
 } finally {
@@ -320,7 +378,7 @@ def test_model_card_health_and_pricing():
         target_js=PROVIDER_RENDER_JS,
         body_js=body,
         extra_targets=[KEY_STATS_JS, MODEL_EDIT_JS],
-        min_pass=30,
+        min_pass=39,
         label='model-card-health',
     )
 

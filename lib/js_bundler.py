@@ -521,6 +521,10 @@ _BUNDLE_FILES = [
     # apiUrl() from core.js, consumed by every feature module below.
     'api.js',
     'push.js',         # after core.js (uses apiUrl), before ui.js (uses pushSubscribe)
+    # Login-wall cookie-capture consent banner. Subscribes pushSubscribe
+    # (push.js, directly above) + Api.authSources (api.js) at runtime;
+    # everything else is typeof-guarded. Self-inits on DOMContentLoaded.
+    'cookie_capture_consent.js',
     # Global backend-liveness watch + prominent offline banner. Subscribes
     # pushOnLatency (push.js) + probes via Api.health (api.js) — both loaded
     # directly above; every other app symbol (showToast / recovery fns) is
@@ -768,6 +772,12 @@ _BUNDLE_FILES = [
     # after main.js. Consumed by ui/chat_render.js (renderTurnCtxNote) and
     # main/main_send_pipeline.js (buildTurnCtxSnapshot).
     'info-rail.js',
+    # Merged "Local Control" surface (browser bridge + desktop agent in ONE
+    # toolbar entry + ONE setup modal). Reads the toolbar globals
+    # (browserEnabled / desktopEnabled) and calls _applyBrowserUI /
+    # _applyDesktopUI / _saveConvToolState, so it MUST come after main.js and
+    # main/main_toolbar_ui.js.
+    'local-control.js',
     # Real-time network-latency signal indicator in the topbar. Pure runtime
     # subscriber on push.js's RTT probe (pushOnLatency) + reads t() at render
     # time, so it MUST come after main.js (and after push.js, loaded far above).
@@ -827,6 +837,7 @@ _DEFERRED_FILES = [
     # load BEFORE paper-reader.js; all window-scope var (no load-time cross-read).
     'paper/reader_prefs.js',  # reader comfort prefs (text-size + width); leaf
     'paper/arxiv.js',     # arXiv search + describe-recommend + fetch; owns _recStream (read by core KaTeX hook at runtime) → load before paper-reader.js
+    'paper/research.js',  # auto-research LANDING entry (direction → harvest/survey/ideate); pre-paper scope, reads NO _paperHash; owns _researchStream → before paper-reader.js
     'paper/qa.js',        # Q&A tab render+send+poll; QA state + _ensurePaperText stay in core → load before paper-reader.js
     'paper/pdf_viewer.js',  # pdf.js load/render/zoom pipeline; owns _paperResizeObserver/_paperZoomDebounce → BEFORE pdf_responsive.js (calls paperFitWidth) + paper-reader.js
     'paper/pdf_responsive.js',  # draggable divider + foldable/tablet responsive-crossing IIFE (self-contained; self-inits on DOMContentLoaded)

@@ -428,7 +428,10 @@ function _applyBrowserUI(enabled) {
   if (badge) {
     badge.classList.toggle("visible", browserEnabled);
   }
-  _updateBrowserModalBtn();
+  /* The browser bridge now shares ONE toolbar entry with the desktop agent
+   * (#localControlToggle). Its summary badge counts both capabilities, so it
+   * is repainted here rather than toggled per-flag. */
+  if (typeof _lcUpdateBadge === "function") _lcUpdateBadge();
 }
 function _applyMemoryUI(enabled) {
   memoryEnabled = !!enabled;
@@ -502,8 +505,24 @@ function _applyDesktopUI(enabled) {
   document
     .getElementById("desktopBadge")
     ?.classList.toggle("visible", desktopEnabled);
+  /* The desktop agent now shares ONE toolbar entry with the browser bridge
+   * (#localControlToggle). Its summary badge counts both capabilities, so it
+   * is repainted here rather than toggled per-flag. */
+  if (typeof _lcUpdateBadge === "function") _lcUpdateBadge();
 }
+/* Desktop control used to be a blind flag flip: it turned the toggle on
+ * without ever checking whether an agent was running, and
+ * lib/tools/registry/_build.py silently ships ZERO desktop tools when none
+ * is — so the user saw an enabled toggle and tools that never appeared.
+ * It now opens the merged Local Control modal, which shows live status and
+ * the ONE install step that applies to this deployment. */
 function toggleDesktop() {
+  if (typeof openLocalControlModal === "function") {
+    openLocalControlModal();
+    return;
+  }
+  // Bundle shipped without local-control.js — degrade to a plain flip rather
+  // than making the entry a dead button.
   _applyDesktopUI(!desktopEnabled);
   _saveConvToolState();
 }
@@ -1118,9 +1137,9 @@ function _installViewportHeightGuard() {
         e.preventDefault();
         return;
       }
-      const brm = document.getElementById("browserModal");
+      const brm = document.getElementById("localControlModal");
       if (brm && brm.classList.contains("open")) {
-        closeBrowserModal();
+        closeLocalControlModal();
         e.preventDefault();
         return;
       }

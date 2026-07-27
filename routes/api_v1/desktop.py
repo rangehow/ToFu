@@ -11,6 +11,9 @@ authenticated long-poll between server and agent, not a JSON REST verb.
 
 from __future__ import annotations
 
+import sys
+import time
+
 from flask import Blueprint, jsonify
 
 from lib.log import audit_log, get_logger
@@ -23,14 +26,55 @@ logger = get_logger(__name__)
 api_v1_desktop_bp = Blueprint('api_v1_desktop', __name__)
 
 
+def _setup_state(connected: bool) -> str:
+    """Which ONE install instruction the UI should show.
+
+    The setup surface must present a single next action, never a menu of
+    every possible path — so the CHOICE is made here, where the facts
+    actually live, rather than guessed in JS.
+
+    * ``connected``  — an agent polled within the window; nothing to install.
+    * ``tray``       — this server process is the packaged desktop app
+      (``sys.frozen``, set by PyInstaller and re-exec'd by
+      desktop/launcher.py with TOFU_RUN_SERVER=1). The agent runs
+      IN-PROCESS via the tray's "Enable Computer Control" item, so the
+      instruction is one click and no token is involved. This supersedes
+      the old ``python -m lib.desktop_agent`` flow (launcher.py docstring:
+      "Replaces the old 'install a second program and run python -m
+      lib.desktop_agent' flow").
+    * ``remote``     — anything else: the user's machine is not this
+      machine, so they need the desktop app plus a bridge token.
+
+    ``sys.frozen`` is the load-bearing signal, NOT the peer address:
+    :func:`routes.api_v1.auth._remote_is_loopback` documents that a
+    same-host reverse proxy makes every public request present as
+    loopback, so it can never distinguish "the user is on this box" from
+    "the user is behind nginx". A frozen process, by contrast, IS the
+    tray app by construction. Loopback is consulted only to keep a
+    source-run local dev server (frozen=False, peer=loopback) out of the
+    ``remote`` bucket — it would otherwise be told to install a second
+    copy of an app it is already running.
+    """
+    if connected:
+        return 'connected'
+    if getattr(sys, 'frozen', False):
+        return 'tray'
+    from .auth import _remote_is_loopback
+    if _remote_is_loopback():
+        return 'local_source'
+    return 'remote'
+
+
 @api_v1_desktop_bp.route('/api/v1/desktop/status', methods=['GET'])
 @require_auth
 @api_meta(
     summary='Desktop-agent connection status',
     description=(
-        'Returns ``{connected, last_poll, pending_commands}`` so the UI '
-        'can render a presence indicator. Connection is defined as a '
-        'poll within the last 15 s.'
+        'Returns ``{connected, last_poll, pending_commands, setup_state}`` '
+        'so the UI can render a presence indicator AND the single '
+        'appropriate install instruction. Connection is defined as a '
+        'poll within the last 15 s. ``setup_state`` is one of '
+        '``connected`` / ``tray`` / ``local_source`` / ``remote``.'
     ),
     tags=['capabilities'],
 )
@@ -45,11 +89,15 @@ async def desktop_status():
     _auth = current_auth()
     _uid = (_auth.user_id
             if _auth and getattr(_auth, 'user_id', '') else None)
+    connected = is_desktop_agent_connected()
+    _last = last_poll_time()
     return jsonify({
-        'connected': is_desktop_agent_connected(),
-        'last_poll': last_poll_time(),
+        'connected': connected,
+        'last_poll': _last,
+        'secondsAgo': (round(time.time() - _last, 1) if _last else None),
         'pending_commands': pending_commands_count(),
         'agents': list_agents(user_id=_uid),
+        'setup_state': _setup_state(connected),
     })
 
 

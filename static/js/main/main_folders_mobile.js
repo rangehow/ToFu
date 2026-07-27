@@ -553,10 +553,12 @@ function updateMobileSheet() {
    * codeExec / memory are gone — the capability mode owns them now. */
   const map = {
     mobileTranslate:   "translateToggle",
-    mobileBrowser:     "browserToggle",
     mobileImageGen:    "imageGenToggle",
     mobileHumanGuidance: "humanGuidanceToggle",
-    mobileDesktop:     "desktopToggle",
+    /* Browser bridge + desktop agent share ONE row now (see
+     * static/js/local-control.js); the merged entry is .active when either
+     * capability is on. */
+    mobileLocalControl: "localControlToggle",
     mobileSwarm:       "swarmToggle",
     mobileEndpoint:    "endpointToggle",
     mobileAutopilot:   "autopilotToggle"

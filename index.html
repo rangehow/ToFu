@@ -862,16 +862,19 @@
                     <span class="submenu-item-text"><span class="submenu-item-name" data-i18n="toolbar.humanAICollab">人机协作</span><span class="submenu-item-desc" data-i18n="toolbar.humanAICollabDesc">AI 可向你提问寻求指导</span></span>
                     <span class="submenu-item-check icon-box"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></span>
                   </div>
-                  <div class="submenu-item" id="browserToggle" onclick="toggleBrowser();updateSubmenuCounts()" title="Browser Bridge">
-                    <span class="submenu-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span>
-                    <span class="submenu-item-text"><span class="submenu-item-name" data-i18n="toolbar.browserBridge">浏览器桥接</span><span class="submenu-item-desc" data-i18n="toolbar.browserBridgeDesc">控制浏览器标签页</span></span>
-                    <span class="submenu-item-check icon-box"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></span>
-                  </div>
-                  <div class="submenu-item" id="desktopToggle" onclick="toggleDesktop();updateSubmenuCounts()" title="Desktop Agent">
+                  <!-- ★ Local Control — ONE entry for "let Tofu act on my machine".
+                       Merges the former #browserToggle + #desktopToggle rows: from the
+                       user's side these are one concept, and two rows + two modals +
+                       two status dots was strictly more cognitive load than one.
+                       The two backing flags (browserEnabled / desktopEnabled) stay
+                       SEPARATE on the wire — the tool families and risk tiers really do
+                       differ — only the SURFACE merges. Per-capability switches live
+                       inside #localControlModal. -->
+                  <div class="submenu-item" id="localControlToggle" onclick="openLocalControlModal()" title="Local Control">
                     <span class="submenu-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></span>
-                    <span class="submenu-item-text"><span class="submenu-item-name" data-i18n="toolbar.desktopControl">桌面控制</span><span class="submenu-item-desc" data-i18n="toolbar.desktopControlDesc">操作本地应用与文件</span></span>
+                    <span class="submenu-item-text"><span class="submenu-item-name" data-i18n="local.title">本机控制</span><span class="submenu-item-desc" data-i18n="local.desc">让 AI 操作你的浏览器与电脑</span></span>
                     <span class="submenu-item-check icon-box"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></span>
-                    <span class="tool-badge" id="desktopBadge" style="display:none"></span>
+                    <span class="tool-badge" id="localControlBadge" style="display:none"></span>
                   </div>
                   <div class="submenu-item" id="imageGenToggle" onclick="toggleImageGenTool();updateSubmenuCounts()" title="AI Image Generation">
                     <span class="submenu-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></span>
@@ -1486,36 +1489,68 @@
   </div>
 </div>
 
-<!-- ★ Browser Bridge Modal -->
-<div class="modal-overlay" id="browserModal" onclick="if(event.target===this)closeBrowserModal()">
-  <div class="modal browser-modal">
-    <h3 data-i18n="browser.title">浏览器桥接</h3>
-    <p class="modal-desc" data-i18n="browser.desc">通过 Chrome 扩展让 AI 读取和交互你的浏览器标签页。</p>
+<!-- ★ Local Control Modal — the SINGLE setup surface for "let Tofu act on my
+     machine". Replaces the former standalone #browserModal and the desktop
+     toggle that had no setup surface at all.
 
-    <div class="browser-status-box" id="browserStatusBox">
-      <div class="browser-status-indicator" id="browserStatusIndicator">
-        <span class="browser-status-dot disconnected"></span>
-        <span class="browser-status-text" data-i18n="browser.checkingDots">正在检查...</span>
+     Structure: two capability rows (browser tabs / this computer), each with
+     its OWN live status dot and its OWN enable switch, because the two backing
+     flags stay separate on the wire. Under each row sits ONE install
+     instruction chosen by detected state — never a menu of every possible
+     path. The desktop row's choice comes from the backend
+     (`setup_state` on /api/v1/desktop/status), which is the only side that can
+     see `sys.frozen`. -->
+<div class="modal-overlay" id="localControlModal" onclick="if(event.target===this)closeLocalControlModal()">
+  <div class="modal local-modal">
+    <h3 data-i18n="local.title">本机控制</h3>
+    <p class="modal-desc" data-i18n="local.modalDesc">让 AI 读取并操作你自己的设备。两项能力互相独立，可分别开启。</p>
+
+    <!-- ══ Capability 1: browser tabs ══ -->
+    <div class="lc-cap" id="lcBrowserCap">
+      <div class="lc-cap-head">
+        <span class="lc-cap-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span>
+        <span class="lc-cap-text">
+          <strong data-i18n="local.browserName">浏览器标签页</strong>
+          <span class="lc-cap-status" id="lcBrowserStatus">
+            <span class="browser-status-dot disconnected"></span>
+            <span class="lc-status-text" data-i18n="local.checking">正在检查…</span>
+          </span>
+        </span>
+        <button type="button" class="lc-switch" id="lcBrowserSwitch"
+                onclick="toggleBrowserFromLocalModal()" role="switch" aria-checked="false">
+          <span class="lc-switch-knob"></span>
+        </button>
       </div>
+      <div class="lc-cap-setup" id="lcBrowserSetup"></div>
     </div>
 
-    <!-- Zero-friction shortcut: when Tofu runs on the user's own machine the
-         unpacked extension already sits on disk — they can Load unpacked it
-         directly, no download/unzip. Populated by _checkBrowserStatus(). -->
-    <div class="browser-local-shortcut" id="browserLocalShortcut" style="display:none">
-      <strong data-i18n="browser.localTitle">在本机运行 Tofu？无需下载</strong>
-      <p data-i18n-html="browser.localDesc">在 <code>chrome://extensions/</code> 启用开发者模式后，点击「加载已解压的扩展程序」并直接选择下面这个文件夹：</p>
-      <code class="copyable-url" id="browserExtPath" data-tooltip="点击复制" data-i18n-title="browser.clickToCopy"
-            style="cursor:pointer;display:block;padding:8px 10px;border-radius:6px;word-break:break-all;border:1px dashed var(--accent-color)"></code>
+    <!-- ══ Capability 2: this computer ══ -->
+    <div class="lc-cap" id="lcDesktopCap">
+      <div class="lc-cap-head">
+        <span class="lc-cap-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></span>
+        <span class="lc-cap-text">
+          <strong data-i18n="local.desktopName">这台电脑</strong>
+          <span class="lc-cap-status" id="lcDesktopStatus">
+            <span class="browser-status-dot disconnected"></span>
+            <span class="lc-status-text" data-i18n="local.checking">正在检查…</span>
+          </span>
+        </span>
+        <button type="button" class="lc-switch" id="lcDesktopSwitch"
+                onclick="toggleDesktopFromLocalModal()" role="switch" aria-checked="false">
+          <span class="lc-switch-knob"></span>
+        </button>
+      </div>
+      <div class="lc-cap-setup" id="lcDesktopSetup"></div>
+      <!-- Permissions are deny-by-default in the agent itself
+           (lib/desktop_agent/_permissions.safe_default) and are granted in the
+           tray's Permissions submenu. Stated as a fact, NOT rendered as
+           checkboxes here — four extra toggles in a setup dialog is exactly the
+           cognitive load this merge exists to remove. -->
+      <p class="lc-perm-note" data-i18n="local.permNote">写文件、运行命令、控制鼠标键盘默认全部关闭；需要时在托盘菜单的「Permissions」里单独授予。</p>
     </div>
 
-
-    <!-- ★ Chrome 142+ Local Network Access (LNA) guidance. Shown only when the
-         CONNECTED extension reports Chromium >= 142 (chromeMajor from /status).
-         These browsers prompt "access other devices on your local network" for
-         every site a page touches — disruptive during multi-tab searches. The
-         extension cannot grant this itself (the CDP Browser domain is blocked
-         for chrome.debugger), so we guide the user to the browser setting. -->
+    <!-- Chrome 142+ Local Network Access guidance. Shown only when the
+         CONNECTED extension reports Chromium >= 142. -->
     <div class="browser-lna-warning" id="browserLnaWarning" style="display:none">
       <strong data-i18n="browser.lnaTitle">Chrome 142+ 可能反复弹出「访问本地网络设备」</strong>
       <p data-i18n="browser.lnaDesc">从 Chrome 142 起，访问本地网络的网页会逐站弹出权限请求，多标签搜索时需反复点击。扩展无法代为授权，请用以下任一方式关闭提示：</p>
@@ -1526,34 +1561,8 @@
       <p class="browser-lna-path" id="browserLnaPath" style="display:none"></p>
     </div>
 
-    <div class="browser-setup-steps">
-      <div class="setup-step">
-        <span class="step-num">1</span>
-        <div class="step-content">
-          <strong data-i18n="browser.stepDownload">下载并解压扩展</strong>
-          <p data-i18n-html="browser.stepDownloadDesc">点击下方按钮下载 ZIP，然后<strong>务必先解压</strong>。</p>
-          <button class="btn btn-primary btn-sm" onclick="downloadBrowserExtension()" data-i18n="browser.stepDownloadBtn">下载扩展 ZIP</button>
-        </div>
-      </div>
-      <div class="setup-step">
-        <span class="step-num">2</span>
-        <div class="step-content">
-          <strong data-i18n="browser.stepInstall">在 Chrome 中安装</strong>
-          <p data-i18n-html="browser.stepInstallDesc">打开 <code class="copyable-url" style="cursor:pointer;position:relative;border-bottom:1px dashed var(--accent-color)">chrome://extensions/</code> → 启用 <strong>开发者模式</strong> → 点击 <strong>加载已解压的扩展程序</strong> → 选择解压后的 <code>browser_extension</code> 文件夹。</p>
-        </div>
-      </div>
-      <div class="setup-step">
-        <span class="step-num">3</span>
-        <div class="step-content">
-          <strong data-i18n="browser.stepVerify">验证连接</strong>
-          <p data-i18n-html="browser.stepVerifyDesc">点击工具栏中的扩展图标，应显示 <strong>已连接</strong>。然后在此处开启浏览器功能。</p>
-        </div>
-      </div>
-    </div>
-
     <div class="modal-actions">
-      <button class="btn btn-secondary" onclick="closeBrowserModal()" data-i18n="browser.close">关闭</button>
-      <button class="btn btn-primary" id="browserModalToggleBtn" onclick="toggleBrowserFromModal()" data-i18n="browser.enable">启用浏览器桥接</button>
+      <button class="btn btn-primary" onclick="closeLocalControlModal()" data-i18n="browser.close">关闭</button>
     </div>
   </div>
 </div>
@@ -1773,10 +1782,12 @@
   <!-- Tools section -->
   <div class="mobile-sheet-section">
     <div class="mobile-sheet-section-title" data-i18n="mobile.tools">工具</div>
-    <div class="mobile-sheet-item" id="mobileBrowser" onclick="toggleBrowser();updateMobileSheet()">
-      <span class="mobile-sheet-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span>
+    <!-- ★ Local Control — merged entry (mirrors #localControlToggle on desktop). -->
+    <div class="mobile-sheet-item" id="mobileLocalControl" onclick="closeMobileSheet();openLocalControlModal()">
+      <span class="mobile-sheet-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></span>
       <span class="mobile-sheet-item-text">
-        <span class="mobile-sheet-item-name" data-i18n="toolbar.browserBridge">浏览器桥接</span>
+        <span class="mobile-sheet-item-name" data-i18n="local.title">本机控制</span>
+        <span class="mobile-sheet-item-desc" data-i18n="local.desc">让 AI 操作你的浏览器与电脑</span>
       </span>
       <span class="mobile-sheet-item-check icon-box"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></span>
     </div>
@@ -1792,14 +1803,6 @@
       <span class="mobile-sheet-item-text">
         <span class="mobile-sheet-item-name" data-i18n="toolbar.humanAICollab">人机协作</span>
         <span class="mobile-sheet-item-desc" data-i18n="mobile.aiCanAsk">AI 可向你提问</span>
-      </span>
-      <span class="mobile-sheet-item-check icon-box"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></span>
-    </div>
-    <div class="mobile-sheet-item" id="mobileDesktop" onclick="toggleDesktop();updateMobileSheet()">
-      <span class="mobile-sheet-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></span>
-      <span class="mobile-sheet-item-text">
-        <span class="mobile-sheet-item-name" data-i18n="toolbar.desktopControl">桌面控制</span>
-        <span class="mobile-sheet-item-desc" data-i18n="toolbar.desktopControlDesc">操作本地应用与文件</span>
       </span>
       <span class="mobile-sheet-item-check icon-box"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></span>
     </div>
@@ -2053,6 +2056,12 @@
 <script defer src="static/js/tofu-scene.js?v=20260709a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <!-- info-rail.js — per-turn context note builder/renderer (registered in lib/js_bundler.py:_BUNDLE_FILES). -->
 <script defer src="static/js/info-rail.js?v=20260622a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+
+<!-- local-control.js — merged browser-bridge + desktop-agent surface: one
+     toolbar entry + one setup modal (registered in lib/js_bundler.py:_BUNDLE_FILES).
+     MUST load after main.js / main_toolbar_ui.js — it drives _applyBrowserUI /
+     _applyDesktopUI / _saveConvToolState and reads the toolbar globals. -->
+<script defer src="static/js/local-control.js?v=20260728a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <!-- mobile_panels.js — mobile portaling of timer/optimizer panels + mobile flow picker (registered in lib/js_bundler.py:_BUNDLE_FILES). -->
 <script defer src="static/js/mobile_panels.js?v=20260625a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <!-- presence.js — cross-conversation live-presence strip (registered in lib/js_bundler.py:_BUNDLE_FILES). -->
@@ -2069,6 +2078,8 @@
 <script defer src="static/js/project-brain-i18n.js?v=20260706a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <!-- net-latency.js — topbar network-latency signal indicator (registered in lib/js_bundler.py:_BUNDLE_FILES). -->
 <script defer src="static/js/net-latency.js?v=20260702a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+<!-- cookie_capture_consent.js — login-wall cookie-capture consent banner (registered in lib/js_bundler.py:_BUNDLE_FILES). MUST load after push.js + api.js. -->
+<script defer src="static/js/cookie_capture_consent.js?v=20260727a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script>
 // Feature flags — show/hide optional modules
 var _featureFlags = {};

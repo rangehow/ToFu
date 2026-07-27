@@ -1903,6 +1903,30 @@ var _i18n = {
   'browser.enable': { zh: '启用浏览器桥接', en: 'Enable Browser Bridge' },
 
   // ══════════════════════════════════════
+  //  Local Control (merged browser bridge + desktop agent)
+  //  ONE surface for "let Tofu act on my machine". The *Setup keys below are
+  //  mutually exclusive: exactly one is rendered, chosen by detected state.
+  // ══════════════════════════════════════
+  'local.title': { zh: '本机控制', en: 'Local Control' },
+  'local.desc': { zh: '让 AI 操作你的浏览器与电脑', en: 'Let AI drive your browser and computer' },
+  'local.modalDesc': { zh: '让 AI 读取并操作你自己的设备。两项能力互相独立，可分别开启。', en: 'Let AI read and act on your own device. The two capabilities are independent — enable either on its own.' },
+  'local.browserName': { zh: '浏览器标签页', en: 'Browser tabs' },
+  'local.desktopName': { zh: '这台电脑', en: 'This computer' },
+  'local.checking': { zh: '正在检查…', en: 'Checking…' },
+  'local.connected': { zh: '已连接', en: 'Connected' },
+  'local.connectedN': { zh: '已连接 {n} 个', en: '{n} connected' },
+  'local.notInstalled': { zh: '尚未安装', en: 'Not installed' },
+  'local.notRunning': { zh: '未运行', en: 'Not running' },
+  'local.unreachable': { zh: '无法连接服务器', en: 'Cannot reach server' },
+  'local.browserLoadUnpacked': { zh: '打开 chrome://extensions/ → 打开右上角「开发者模式」→ 点「加载已解压的扩展程序」→ 选择下面这个文件夹：', en: 'Open chrome://extensions/ → turn on Developer mode → click "Load unpacked" → pick this folder:' },
+  'local.browserDownload': { zh: '下载扩展并解压，然后在 chrome://extensions/ 打开「开发者模式」→「加载已解压的扩展程序」→ 选择解压出的文件夹。', en: 'Download and unzip the extension, then in chrome://extensions/ turn on Developer mode → "Load unpacked" → pick the unzipped folder.' },
+  'local.desktopTray': { zh: '右键点击系统托盘里的 Tofu 图标 → 勾选「Enable Computer Control」。', en: 'Right-click the Tofu icon in your system tray → tick "Enable Computer Control".' },
+  'local.desktopSource': { zh: '当前 Tofu 以源码方式运行。安装桌面版后即可在系统托盘一键开启「Enable Computer Control」。', en: 'Tofu is running from source. Install the desktop app to get the tray\'s one-click "Enable Computer Control".' },
+  'local.desktopRemote': { zh: 'Tofu 运行在远程服务器上。在你自己的电脑安装桌面版，然后用下面这个令牌把它连过来：', en: 'Tofu runs on a remote server. Install the desktop app on your own machine, then connect it with this token:' },
+  'local.mintToken': { zh: '生成连接令牌', en: 'Generate connection token' },
+  'local.permNote': { zh: '写文件、运行命令、控制鼠标键盘默认全部关闭；需要时在托盘菜单的「Permissions」里单独授予。', en: 'Writing files, running commands and mouse/keyboard control are all OFF by default — grant them individually in the tray\'s "Permissions" menu when needed.' },
+
+  // ══════════════════════════════════════
   //  Memory Modal
   // ══════════════════════════════════════
   'memory.title': { zh: '记忆积累 · AI 自动学习并应用的知识库', en: 'Memory · AI auto-learns and applies knowledge' },
@@ -2017,6 +2041,21 @@ var _i18n = {
   'paper.describeLabel': { zh: '记不清标题？描述一下这篇论文', en: 'Forgot the title? Describe the paper' },
   'paper.describePlaceholder': { zh: '例如：今年 NeurIPS 有几篇关于扩散语言模型的论文拿了最佳/杰出论文，但我不记得标题了……', en: 'e.g. a few diffusion language model papers won Best/Outstanding at NeurIPS this year, but I forget the titles…' },
   'paper.describeBtn': { zh: '推荐论文', en: 'Recommend papers' },
+  // Auto-research (direction → harvest/survey/ideate). Shares the landing
+  // describe box: recommend FINDS papers, research RUNS the whole pipeline.
+  'paper.research.startBtn': { zh: '自动科研', en: 'Auto-research' },
+  'paper.research.subtitle': { zh: '爬取文献 → 综述与空白地图 → 新颖性打分', en: 'Harvest → survey + gap map → novelty-scored ideas' },
+  'paper.research.running': { zh: '正在研究…', en: 'Researching…' },
+  'paper.research.finished': { zh: '研究完成', en: 'Research complete' },
+  'paper.research.abort': { zh: '停止', en: 'Stop' },
+  'paper.research.harvest': { zh: '爬取入库', en: 'Harvest' },
+  'paper.research.survey': { zh: '综述与空白地图', en: 'Survey' },
+  'paper.research.ideate': { zh: '创新点与新颖性闸', en: 'Ideate' },
+  'paper.research.openFolder': { zh: '打开文献文件夹', en: 'Open paper folder' },
+  // A degraded job keeps status='done' by design, so this banner is the ONLY
+  // honest signal that the pipeline misfired (e.g. the structural gate
+  // rejected every idea before the expensive gates ever ran).
+  'paper.research.degraded': { zh: '产物可用，但流水线有问题', en: 'Delivered, but the pipeline was degraded' },
   'paper.recommending': { zh: '正在理解你的描述并核对 arXiv…', en: 'Interpreting your description & verifying against arXiv…' },
   'paper.recommendInterpreting': { zh: '正在理解你的描述…', en: 'Interpreting your description…' },
   'paper.recommendResearching': { zh: '正在检索最新文献（第 {n} 次搜索）…', en: 'Researching current literature (search {n})…' },
@@ -2972,6 +3011,8 @@ var _i18n = {
   'mcp.fieldDesc': { zh: '描述', en: 'Description' },
   'mcp.fieldDescHint': { zh: '（可选）', en: '(optional)' },
   'mcp.saveConnect': { zh: '保存并连接', en: 'Save & Connect' },
+  'mcp.obtainKey': { zh: '去申请 Key', en: 'Get a key' },
+  'mcp.sharedCredential': { zh: '「{name}」已保存同一个凭证，留空即可复用，无需重新申请', en: 'Already saved by “{name}” — leave blank to reuse it; no need to apply again' },
   'mcp.installConnect': { zh: '安装并连接', en: 'Install & Connect' },
   'mcp.cancel': { zh: '取消', en: 'Cancel' },
   'mcp.reconnecting': { zh: '连接失败，自动重试中', en: 'Connection failed, auto-retrying' },
@@ -3236,6 +3277,12 @@ var _i18n = {
   // ══════════════════════════════════════
   'common.confirm': { zh: '确定', en: 'OK' },
   'common.cancel': { zh: '取消', en: 'Cancel' },
+  // cookie-capture consent banner (cookie_capture_consent.js)
+  'cc.banner.title': { zh: '允许读取 {domain} 的登录态？', en: 'Allow reading {domain} session?' },
+  'cc.banner.body': { zh: '抓取该页面遇到登录墙。允许后 Tofu 会在你的浏览器中打开登录页，仅读取 {domain} 这一个域名的 cookies 并保存，之后的抓取将自动携带登录态。', en: 'Fetching this page hit a login wall. If you allow it, Tofu opens the login page in your browser, reads cookies for {domain} only, and stores them so later fetches carry your session.' },
+  'cc.banner.allow': { zh: '允许（记住此域名）', en: 'Allow (remember domain)' },
+  'cc.banner.deny': { zh: '拒绝', en: 'Deny' },
+  'cc.captured': { zh: '已保存 {domain} 的登录态，重试即可抓取', en: 'Session for {domain} saved — retry to fetch' },
   'common.close': { zh: '关闭', en: 'Close' },
   'common.save': { zh: '保存', en: 'Save' },
   'common.delete': { zh: '删除', en: 'Delete' },

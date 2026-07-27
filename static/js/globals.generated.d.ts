@@ -56,7 +56,6 @@ declare var __tofuDiagRing: any;   // static/js/core/debug_panel.js
 declare var __translatePushWired: any;   // static/js/translation.js
 declare var _bootLoadInFlight: any;   // static/js/core/cross_tab_sync.js
 declare var _bootReconnectStarted: any;   // static/js/main.js
-declare var _browserClientId: any;   // static/js/main/main_toolbar_ui.js
 declare var _canonRound: any;   // static/js/ui/stream_reducer.js
 declare var _connToastState: any;   // static/js/ui/sse_poll_fallback.js
 declare var _contextPolicy: any;   // static/js/main/main_toolbar_ui.js
@@ -180,7 +179,6 @@ interface Window {
   _applyReaderPrefs: any;
   _bootLoadInFlight: any;
   _bootReconnectStarted: any;
-  _browserClientId: any;
   _checkForQueuedTask: any;
   _classifyGhostTailJS: any;
   _clearPendingSyncMarkers: any;

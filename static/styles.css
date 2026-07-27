@@ -1779,6 +1779,17 @@ body.paper-mode-active #presenceStrip{display:none !important}
 .paper-describe-btn{display:flex;align-items:center;justify-content:center;gap:7px;padding:10px 20px;border:none;border-radius:10px;background:var(--accent);color:white;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s;font-family:inherit}
 .paper-describe-btn:hover{background:var(--accent-hover);transform:translateY(-1px);box-shadow:0 6px 16px -6px var(--accent)}
 .paper-describe-btn:active{transform:translateY(0)}
+/* Secondary verb on the SAME describe box: recommend finds papers, research
+   runs the whole pipeline. Outlined so the primary verb stays primary. */
+.paper-describe-btn-alt{background:transparent;color:var(--accent);border:1px solid var(--accent);margin-left:8px}
+.paper-describe-btn-alt:hover{background:color-mix(in srgb,var(--accent) 12%,transparent);box-shadow:none}
+/* Product-quality banner — a degraded job keeps status='done', so this is the
+   only thing that stops a 100% gate wipe from reading as a clean success. */
+.pm-quality{margin:12px 0;padding:11px 13px;border-radius:11px;font-size:12.5px;line-height:1.55}
+.pm-quality.is-degraded{border:1px solid color-mix(in srgb,#f59e0b 55%,transparent);background:color-mix(in srgb,#f59e0b 12%,transparent);color:var(--text-primary)}
+.pm-quality-title{font-weight:700;margin-bottom:3px}
+.pm-quality-reason{color:var(--text-secondary)}
+.pm-research-tally{display:flex;gap:16px;margin:10px 0;font-size:12.5px;color:var(--text-secondary)}
 
 /* ── Correction banner (false-premise) ── */
 .paper-correction{display:flex;gap:12px;padding:14px 16px;border:1px solid var(--warn,#d9922e);border-radius:14px;background:color-mix(in srgb,var(--warn,#d9922e) 8%,transparent)}
@@ -14456,6 +14467,48 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
 /* ── Desktop Agent toggle ── */
 #desktopToggle.active{background:rgba(168,85,247,0.15);color:#a855f7;border-color:rgba(168,85,247,0.3)}
 [data-theme="light"] #desktopToggle.active{background:rgba(126,34,206,0.1);color:#7e22ce;border-color:rgba(126,34,206,0.25)}
+
+/* ═══════════════════════════════════════════
+   ★ Local Control — merged browser + desktop surface
+   One toolbar entry, one modal, two capability rows.
+   ═══════════════════════════════════════════ */
+#localControlToggle.active{background:rgba(168,85,247,0.15);color:#a855f7;border-color:rgba(168,85,247,0.3)}
+[data-theme="light"] #localControlToggle.active{background:rgba(126,34,206,0.1);color:#7e22ce;border-color:rgba(126,34,206,0.25)}
+
+.local-modal{max-width:560px}
+.local-modal .modal-desc{color:var(--text-secondary,#888);font-size:13px;margin:0 0 18px}
+
+.lc-cap{border:1px solid var(--border,#2a2a35);border-radius:12px;padding:14px 16px;margin-bottom:12px;background:rgba(255,255,255,0.015)}
+.lc-cap-head{display:flex;align-items:center;gap:12px}
+.lc-cap-icon{display:flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:8px;background:rgba(168,85,247,0.12);color:#a855f7;flex-shrink:0}
+.lc-cap-text{flex:1;display:flex;flex-direction:column;gap:3px;min-width:0}
+.lc-cap-text strong{font-size:14px;color:var(--text-primary,#e8e8ed);font-weight:600}
+.lc-cap-status{display:flex;align-items:center;gap:6px;font-size:12px}
+.lc-status-text{color:var(--text-secondary,#9898a8)}
+
+/* Switch — reflects the REAL wire flag, one per capability. */
+.lc-switch{position:relative;width:40px;height:22px;border-radius:11px;border:none;flex-shrink:0;cursor:pointer;padding:0;background:var(--bg-active,#2a2a35);transition:background-color .18s ease}
+.lc-switch:hover{background:var(--bg-hover,#33333f)}
+.lc-switch.on{background:#a855f7}
+.lc-switch-knob{position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:transform .18s ease}
+.lc-switch.on .lc-switch-knob{transform:translateX(18px)}
+
+/* The single detected-state instruction. Empty (and therefore invisible)
+   whenever the capability is already connected. */
+.lc-cap-setup:empty{display:none}
+.lc-cap-setup{margin:12px 0 0;padding-top:12px;border-top:1px dashed var(--border,#2a2a35)}
+.lc-step{font-size:12.5px;line-height:1.6;color:var(--text-secondary,#9898a8);margin:0 0 8px}
+.lc-copy{position:relative;display:block;padding:8px 10px;border-radius:6px;word-break:break-all;font-size:12px;font-family:'JetBrains Mono',monospace;color:#a855f7;cursor:pointer;border:1px dashed rgba(168,85,247,0.4);background:rgba(168,85,247,0.06);transition:background-color .2s ease,box-shadow .2s ease}
+.lc-copy:hover{background:rgba(168,85,247,0.14);box-shadow:0 0 0 2px rgba(168,85,247,0.18)}
+.lc-copy::after{content:attr(data-tooltip);position:absolute;bottom:calc(100% + 6px);left:8px;font-size:11px;padding:3px 8px;border-radius:5px;background:#1e293b;color:#e2e8f0;white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .15s}
+.lc-copy:hover::after{opacity:1}
+.lc-copy.copied{background:rgba(34,197,94,0.16);color:#22c55e;border-color:rgba(34,197,94,0.4)}
+.lc-perm-note{font-size:11.5px;line-height:1.55;color:var(--text-tertiary,#6a6a7a);margin:10px 0 0}
+
+[data-theme="light"] .lc-cap{border-color:rgba(0,0,0,0.09);background:rgba(0,0,0,0.012)}
+[data-theme="light"] .lc-cap-icon{background:rgba(126,34,206,0.1);color:#7e22ce}
+[data-theme="light"] .lc-switch.on{background:#7e22ce}
+[data-theme="light"] .lc-copy{color:#7e22ce;border-color:rgba(126,34,206,0.35);background:rgba(126,34,206,0.05)}
 
 /* ═══════════════════════════════════════════
    ★ Memory Modal — v7 Tofu Unified Design

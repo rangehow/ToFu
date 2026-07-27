@@ -655,6 +655,11 @@ function updateSubmenuCounts() {
   const extrasTrigger = document.querySelector("#submenuExtras .submenu-trigger");
   if (extrasTrigger) extrasTrigger.classList.toggle("has-active", extrasCount > 0);
 
+  /* Browser + desktop share ONE merged row (#localControlToggle); its summary
+   * badge counts both. Repaint here so the row reflects state restored from a
+   * conversation, not just state changed through the modal's switches. */
+  if (typeof _lcUpdateBadge === "function") _lcUpdateBadge();
+
   // Flow: standalone box — no count pill, just reflect active-state on the trigger.
   const flowTrigger = document.getElementById("flowToggle");
   if (flowTrigger) flowTrigger.classList.toggle("has-active", !!activeFlow);
@@ -706,117 +711,33 @@ function cycleSearchMode() {
   debugLog(`Search: ${searchMode}`, "success");
 }
 
+/* ── Browser bridge ──────────────────────────────────────────────
+ * The browser bridge no longer has its own toolbar row or its own setup
+ * modal. Both it and the desktop agent are reached through the single
+ * "Local Control" entry (#localControlToggle → #localControlModal, see
+ * static/js/local-control.js): from the user's side "let Tofu act on my
+ * machine" is ONE concept, and two rows + two modals + two status dots was
+ * strictly more cognitive load than one.
+ *
+ * The wire flag `browserEnabled` is unchanged and still independent of
+ * `desktopEnabled` — only the surface merged. `_applyBrowserUI` (main.js)
+ * remains the single painter and is what the merged modal's switch drives.
+ *
+ * toggleBrowser() is kept as a thin alias because callers outside the
+ * toolbar reach the bridge by name (toolset-apply.js's revert families,
+ * mobile flows). It now opens the merged modal instead of flipping blind. */
 function toggleBrowser() {
-  // If not enabled yet and clicking to enable — open setup modal instead of just toggling
-  if (!browserEnabled) {
-    openBrowserModal();
+  if (typeof openLocalControlModal === 'function') {
+    openLocalControlModal();
     return;
   }
-  // If already enabled — just toggle off
-  _applyBrowserUI(false);
-  _saveConvToolState();
-  debugLog("Browser Bridge: OFF", "success");
-}
-function toggleBrowserFromModal() {
+  // Bundle shipped without local-control.js — degrade to a plain flip rather
+  // than making the entry a dead button.
   _applyBrowserUI(!browserEnabled);
   _saveConvToolState();
-  updateSubmenuCounts();
-  debugLog(`Browser Bridge: ${browserEnabled ? "ON" : "OFF"}`, "success");
-  if (browserEnabled) closeBrowserModal();
-}
-function openBrowserModal() {
-  document.getElementById("browserModal").classList.add("open");
-  _checkBrowserStatus();
-  _updateBrowserModalBtn();
-}
-function closeBrowserModal() {
-  document.getElementById("browserModal").classList.remove("open");
-}
-function _updateBrowserModalBtn() {
-  const btn = document.getElementById("browserModalToggleBtn");
-  if (!btn) return;
-  btn.textContent = browserEnabled
-    ? "Disable Browser Bridge"
-    : "Enable Browser Bridge";
-  btn.className = browserEnabled ? "btn btn-secondary" : "btn btn-primary";
-}
-async function _checkBrowserStatus() {
-  const dot = document.querySelector(
-    "#browserStatusIndicator .browser-status-dot",
-  );
-  const txt = document.querySelector(
-    "#browserStatusIndicator .browser-status-text",
-  );
-  const badge = document.getElementById("browserBadge");
-  try {
-    const d = await Api.browser.status();
-    _applyBrowserLocalShortcut(d && d.extensionPath);
-    _applyBrowserLnaWarning(d && d.chromeMajor);
-    if (d && d.connected) {
-      dot?.classList.replace("disconnected", "connected") ||
-        dot?.classList.add("connected");
-      dot?.classList.remove("disconnected");
-      /* ★ Per-client routing: capture the first connected client's ID.
-       * This ID is sent with every task so commands are routed to the
-       * correct device's extension, not a random one. */
-      const clients = d.clients || [];
-      const clientCount = clients.length;
-      /* secondsAgo is null until the first poll lands — render a fallback
-       * instead of the literal string "nulls ago". */
-      const ago = (d.secondsAgo != null) ? `${d.secondsAgo}s ago` : "just now";
-      if (clientCount > 0) {
-        /* Use the first connected client (most recently active) */
-        const activeClient = clients[0];
-        window._browserClientId = activeClient.client_id;
-        const shortId = activeClient.client_id.substring(0, 8);
-        txt &&
-          (txt.textContent = clientCount > 1
-            ? `${clientCount} extensions connected (using ${shortId}…)`
-            : `Extension connected (${shortId}…, ${ago})`);
-      } else {
-        txt &&
-          (txt.textContent = `Extension connected (${ago})`);
-      }
-      badge?.classList.remove("disconnected");
-    } else {
-      dot?.classList.replace("connected", "disconnected") ||
-        dot?.classList.add("disconnected");
-      dot?.classList.remove("connected");
-      window._browserClientId = null;
-      txt &&
-        (txt.textContent =
-          "Extension not connected — follow setup steps below");
-      badge?.classList.add("disconnected");
-    }
-  } catch (e) {
-    dot?.classList.replace("connected", "disconnected");
-    txt && (txt.textContent = "Cannot reach server");
-  }
 }
 function downloadBrowserExtension() {
   window.open(apiUrl("/api/browser/download"), "_blank");
-}
-
-/* ★ When Tofu runs on the user's own machine the unpacked extension already
- * sits on disk — show its absolute path so they can "Load unpacked" it
- * directly with NO download/unzip. The path is click-to-copy. */
-function _applyBrowserLocalShortcut(extPath) {
-  const box = document.getElementById("browserLocalShortcut");
-  const code = document.getElementById("browserExtPath");
-  if (!box || !code) return;
-  if (!extPath) {
-    box.style.display = "none";
-    return;
-  }
-  box.style.display = "";
-  code.textContent = extPath;
-  code.onclick = function () {
-    if (typeof _safeClipboardWrite === "function") {
-      _safeClipboardWrite(extPath)
-        .then(() => code.classList.add("copied"))
-        .catch(() => {});
-    }
-  };
 }
 
 /* ★ Chrome 142+ ships "Local Network Access" prompts on by default, which fire

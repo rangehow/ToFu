@@ -1044,6 +1044,11 @@
     remove: (domain)        => del(`/api/v1/auth-sources/${encodeURIComponent(domain)}`, { parse: 'response', onError: 'null' }),
     // Interactive headful login — long-running; no client timeout.
     login:  (domain, timeout) => post(`/api/v1/auth-sources/${encodeURIComponent(domain)}/login`, { timeout: timeout || 180 }, { timeout: 0 }),
+    // Login-wall cookie-capture consent (cookie_capture_consent.js banner).
+    cookieConsentPending: () => get('/api/v1/auth-sources/cookie-consent/pending', { onError: 'null' }),
+    cookieConsentResolve: (id, approved) => post('/api/v1/auth-sources/cookie-consent/resolve', { id, approved: !!approved }),
+    cookieConsentGrants:  () => get('/api/v1/auth-sources/cookie-consent/grants', { onError: 'null' }),
+    cookieConsentRevoke:  (domain) => del(`/api/v1/auth-sources/cookie-consent/${encodeURIComponent(domain)}`, { parse: 'response', onError: 'null' }),
   };
 
   // trading (AI investment assistant SPA — trading.html) ------------

@@ -32,6 +32,7 @@ declare var CHAT_EXCLUDED_CAPS_FALLBACK: any;   // static/js/core/model_caps.js
 declare var ChipInput: any;   // static/js/widgets/chip_input.js
 declare var CollabBar: any;   // static/js/presence.js
 declare var ConvView: any;   // static/js/conv_view.js
+declare var CookieCaptureConsent: any;   // static/js/cookie_capture_consent.js
 declare var Icon: any;   // static/js/core/icons.js
 declare var IconDot: any;   // static/js/core/icons.js
 declare var ProjectBrain: any;   // static/js/project-brain.js
@@ -146,6 +147,7 @@ interface Window {
   ChipInput: any;
   CollabBar: any;
   ConvView: any;
+  CookieCaptureConsent: any;
   Icon: any;
   IconDot: any;
   ProjectBrain: any;
@@ -366,6 +368,7 @@ interface Window {
   relayAdminTopup: any;
   relayAdminViewPayments: any;
   renderErrorEnvelope: any;
+  renderModelFallbackBannerHtml: any;
   renderTranslateIndicator: any;
   renderTurnCtxNote: any;
   replayPendingBusyState: any;

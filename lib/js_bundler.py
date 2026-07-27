@@ -521,6 +521,10 @@ _BUNDLE_FILES = [
     # apiUrl() from core.js, consumed by every feature module below.
     'api.js',
     'push.js',         # after core.js (uses apiUrl), before ui.js (uses pushSubscribe)
+    # Login-wall cookie-capture consent banner. Subscribes pushSubscribe
+    # (push.js, directly above) + Api.authSources (api.js) at runtime;
+    # everything else is typeof-guarded. Self-inits on DOMContentLoaded.
+    'cookie_capture_consent.js',
     # Global backend-liveness watch + prominent offline banner. Subscribes
     # pushOnLatency (push.js) + probes via Api.health (api.js) — both loaded
     # directly above; every other app symbol (showToast / recovery fns) is

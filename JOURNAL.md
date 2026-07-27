@@ -2,6 +2,13 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
 
+### 2026-07-27 — 行存储写路径迁移全期收口:④ 翻旗生效并实测(epic `pt_59140ecd` 标 done;owner 板上一键拍板「A 现在翻旗」;钉测试 commit `55039b2b`)
+
+- **④ 落地形态与票面的偏差(有意为之,更稳):** 翻旗**没用 env var**——服务重启走 re-exec(os.execv 保环境,注入不了新 var;restart_15000.sh 从哪个终端跑决定 env,env 翻旗会在下次别的终端重启时**静默回落**,镜像无声腐烂)。改作**持久旗标文件** `data/config/messages_rows_write.flag`(`rows_write_enabled`:env 恒优先——`=0` 仍是紧急 kill switch——未设则读文件;pytest 下不读部署路径)。旗标 11:53 首次生效,当前进程 13:49 再确认。
+- **dual-write 产线实测:** 本会话 blob=13/rows=13 秒级同步;全库 31,207→31,306 行、4,173→4,193 会话(**新会话出生即镜像**);旗标后 233 行写入。翻旗后全量 parity 复查:14 个漂移(全部 count 相等的内容漂移=10:45→11:53 无镜像窗口存量)→ 全部 backfill 修复 parity OK。
+- **翻旗逼出一个真缺陷并连环收口:** 产线 60 次被吞镜像失败(`unsupported Unicode escape sequence`,集中在 2 个活跃会话)——根因是 `message_to_row` 用裸 `json.dumps`,**含原始空字节的流式中间态**(终端输出截获)被序列化成 `\u0000`,PG jsonb 拒收;blob 写路径有 `json_dumps_pg` 护体所以没炸。**我独立复现定位后,发现兄弟已撞过同族事故并三修落 HEAD**(`0964d6e6` full 参数、`7d2dbaaf` json_dumps_pg 序列化、`ef298158` 镜像解耦调用方控制流——后者修的是我的钩设计缺陷:钩异常曾把「权威写已提交」的调用方拖进 except 返回失败,autopilot 静默停跑)。我补了 `\u0000` 序列化钉(`55039b2b`)防回归。**教训:best-effort 钩的「绝不抛」必须覆盖函数体+调用点两层,且序列化必须复用 blob 路径同一个 PG 安全序列化器。**
+- **残余漂移语义(诚实记录):** 13:46 进程是旧码,含空字节活跃会话的镜像在**进程重载前**每次 checkpoint 仍失败(60 次来源);但任务 settle 后下一次「从干净 blob 读入」的写入会**自愈**,且 backfill  runner 幂等可随时修复。当前仅剩 ms2pkbysd9r3b4(其任务仍在跑)属此类,读路径全程 OFF 故零用户面风险。`ef298158`+`7d2dbaaf` 随下次自然重启生效。
+- **后续(非本 epic):** 读翻转 `TOFU_MESSAGES_ROWS_READ` 是独立决策——届时先跑一次 fleet parity(活会话在那之前会再漂移),`row_window_usable` 失败关闭兜住任何漏网。
 ### 2026-07-27 — 四泡案收口三连:G3 状态面放宽(`77bd3cbc`)+ 僵尸生成器开票 `pt_8a491f9dad034880` + 守卫漂移第 6 例修复(`e9fe2705`,epic `pt_3a0cdc233c19408f` 标 done)
 
 - **孤儿 WIP 免提交(已落地):** owner 授权保护性提交的兄弟修复(`messages_rows.py` 的 `full` 参数 + mirror_hook_callable 测试),查史发现已由 `0964d6e6`(+续作 `7d2dbaaf` json_dumps_pg 序列化、`ef298158` 镜像解耦调用方控制流)落进 HEAD,我的两个四泡提交(`59c8ba88`/`6df0d693`)经 `merge-base --is-ancestor` 实证在 HEAD 祖先链上——早前「-14 窗口没扫到」是我自己误读,非历史被改写。**生产 PATCH 500 停止的条件仍是重启**(运行进程装的是旧码)。

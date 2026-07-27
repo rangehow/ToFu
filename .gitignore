@@ -128,11 +128,18 @@ static/js/bundle-*.js
 # the tracked SOURCE `feature-loader.js` (the lazy loader), the exact class of
 # bug _clean_old_bundles hit (see bundle-cleaner-must-not-delete-source).
 static/js/feature-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].js
+# Single-language i18n packs (lib/i18n_packs.py, Epic-E) — same content-hashed
+# runtime artifact family as feature- above, so the same 8-hex anchor applies:
+# NEVER a bare `i18n-*` glob, which would also match the tracked SOURCE
+# static/js/i18n.js. The `??` pins the 2-letter lang slot (zh/en), mirroring
+# lib/js_bundler._BUILT_BUNDLE_RE `i18n-(?:zh|en)-[0-9a-f]{8}`.
+static/js/i18n-??-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].js
 # Bundle build-lock + private temp files (leading dot; written by
 # lib/js_bundler during the atomic temp→rename publish). Runtime-only.
 static/js/.bundle-build.lock
 static/js/.bundle-*.js
 static/js/.feature-*.js
+static/js/.i18n-*.js
 
 # ── Minified stylesheets (auto-generated at startup by lib/css_bundler) ──
 static/styles-*.css

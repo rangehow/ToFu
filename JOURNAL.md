@@ -1,5 +1,14 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-27(续) — 覆盖缺口收尾:pg_ownership 进程/锁层 8-21% → 68-95%(epic `pt_faaf91f5` 收口;commit `266240e7`,70 测;**NEUTER×6 全咬**;干净 committed tree 全环 **129 passed** + 相邻 database 环 69 passed)
+
+- **实测覆盖率:** `_identity` 15%→**90%** · `_ownership` 21%→**95%** · `_lock` 14%→**78%** · `_binaries` 8%→**68%** · 包整体 **77%**(与既有 `test_pg_ownership.py` 合跑 115 绿)。这一层在启动时决定「本机能不能拥有这份 pgdata」,判错就是两台主机各起一个 postmaster → WAL/pg_subtrans 损坏。
+- **★ 这批测试围绕一条设计规则组织:「PID 胜过 IP」。** `.pg_owner_host` 由 `_get_local_ip()` 得出,容器 IP 被重分配时会漂移,于是一台主机把**自己的** postmaster 误认成远端、删掉 pidfile、再起第二个。所以每条「看起来是远端」的路径都有一个 IP 无关的覆盖判据(stable identity / pidfile 活性),而**每个覆盖判据都单独钉了一条测试**——fail-safe 守卫若只被整体测过,就能被一条一条删掉而套件保持绿。NEUTER×6 逐条验证,每发精确红在对应语义。
+- **两条相反方向的降级必须分别钉:** flock **不被文件系统支持**时降级为 no-op 并**放行**(单机部署不得被回归),但**争用**必须**硬拒**——两种 errno 走两条相反的路,只测一条等于没测。同族的还有 pidfile 名字检查失败时假定它**是** postgres:猜「不是」会放行双启动,比拒绝启动糟得多。
+- **反向断言比正向那半更重要:** `_clear_ownership_markers` 只删归属标记,`PG_VERSION` / `postgresql.conf` / `base/` 一个都不许碰。数据丢失不可恢复,所以「没删什么」才是那条测试的重点。
+- **★ 顺手修掉自己写的一条假测试(charter「守卫绿着空转」同族,本轮第二次栽在同一类问题上):** `_fix_unix_socket_conf` 的 FUSE 分支我第一版用 symlink + 两个无效 monkeypatch,最后断言 `'/mnt/x'.startswith('/mnt/')` —— **那是在验证 Python 的 str 方法,把整个函数删掉也照样绿**。重写成用 `str` 子类驱动真实前缀分支并断言**文件内容真的变了**,另补幂等 + 本地磁盘不动两条。判据仍是那句:「如果生产码今天就删掉这段逻辑,这个测试会红吗?」
+- **未做:** `_binaries` 残余 32% 是 macOS/Windows 的二进制发现分支(本机跑不到)与 `_pg_real_connect_ok` 真连接探针;`_lock` 残余是 Windows 分支。都属平台隔离代码,不为覆盖率数字造假环境。
+
 ### 2026-07-27(续) — 覆盖缺口 epic `pt_d3833f8e` 收口:轮次落库 daemon 6%→83% + pg_ownership 脑裂防线 13%→73%(commits `0c43e22c` / `5bfe0da4`;**NEUTER×8 全咬**,干净 committed worktree 复验 50/50 + 45/45)
 
 - **`commit_round` 包 6/13% → 86%(`5bfe0da4`,31 测)。** 它是 agent 轮次的落库收口点,回归即任务结果丢失且不可恢复,此前只被顺带 import 过。
@@ -634,3 +643,16 @@
 - **守卫断言结果、不断言常量:** `tests/test_read_files_exemption_contract.py` 断言「豁免工具结果字节不变」「硬顶两侧的实际行为」,**不**断言任何常量等于某值 —— 重调 `MAX_READ_CHARS`/批量预算/硬顶算术都不会假红,而豁免被悄悄摘掉立刻红。NEUTER×2 实测:摘 `read_files` 豁免 → **1 红**;分流塌回单一文案 → **2 红**(含「同工具两形状」那条),各自精确。另特意补了**反向**样本(真 blob 仍须得 investigate 文案),否则「删掉 blob 分支」也能保持全绿。
 - **★ 我踩了兄弟刚记下的同一个坑,而且是在提交环节(诚实记录):** `git add -- <显式三文件>` **不保护已被兄弟暂存的文件** —— `JOURNAL.md` 早已在暂存区,于是它带着兄弟 **1,299 行**一起进了我的 commit,并顶着我的 message。发现靠的是提交后 `git diff --cached --name-only` 回显里多出一行。已 `reset --soft` + `reset HEAD -- JOURNAL.md` 摘出重提(`e7ec228c` 干净 3 文件)。**教训:共享 HEAD 上显式 pathspec 只约束「加什么」,不约束「暂存区里已有什么」;`git commit` 前必须先看 `git diff --cached --name-only` 是否恰好等于你的写集,而不是提交后才看。** 另注:该环境 git 无 `git restore`,弹出用 `git reset HEAD -- <path>`。
 - **同期发现、未修(留作后续,非本刀):** 23 个上游截断点共 **15 种措辞**,且与中央预算层是**两套互不知情的阈值** —— 谁先触发取决于两个常量的相对大小,而没有任何地方声明这个关系。`doc_parser` 那 7 个(30k 量级硬上限)预期是**内存安全必需**(几百 MB Office 文本不能全量进内存),应保留但**必须把真实原长透传给中央层**(现在砍完就丢,中央层拿不到原长);`grep`/`find_files`/`list_dir`/`run_command`/`fetch_url` 的上游刀属**重复的第二把**(中央层对它们已有 15k–50k 预算且实测生效),应删掉让中央层唯一裁决。**结论先修一个工具、验完再推 22 个**,这是 owner 定的节奏。
+
+### 2026-07-27(续) — 把「注释里的数字」做成机检:棘轮落地,**而我自己写的守卫连栽两次「绿着空转」**(owner 拍板「先做机检、别继续手工推 22 个工具」;commit `d3cf776f`,1 文件 +389;干净 committed tree **11/11**,NEUTER 双发各自精确咬)
+
+- **动因(owner 的判断,值得记):** 我提的两个候选(推剩下 22 个截断点 / 拆 75 个缺 label)被否——「那都是把已知清单从 N 做到 0,而这一轮真正证明的是**清单本身在骗人**」。`read_files` 那条豁免连续骗过注释读者、骗过我、也骗过 owner 自己的假设,直到实测才翻出来;同形状在别处必然还有,**而当时没有任何机制会告诉我们**。所以下一步是把腐烂载体做成机检,不是继续手工推。
+- **实现:** `tests/test_comment_constant_claims.py` 扫 `lib/` 全部注释 + docstring,把每条「CONST = N」**跨模块**解析到该常量真实值比对。**同模块作用域先试过并否决**——只覆盖 1/86,且**恰好会漏掉本案**(`MAX_READ_CHARS` 在 compaction 被引用、在 project_mod 定义)。跨模块解析是这条守卫的全部意义,勿"简化"回去。
+- **★ 上线时存量 = 0,已写进文件头。** 它没挖出积压,价值纯粹前向:那两个假数字能躺很久正因为没有机制会注意到。**绿 ≠「审计过且干净」,只 =「没有新的注释开始撒谎」** —— 不写清楚,下一个人会把绿读成前者。
+- **★ 我自己的守卫栽了两次,两次都是 NEUTER 抓出来的(本条最值钱):**
+  ① **首版正则锚 `[A-Z]`,把全部下划线前缀常量整类漏扫。** 而本项目调参常量绝大多数是私有的(`_DEFAULT_TOOL_RESULT_MAX`/`_SINGLE_RESULT_HARD_CEILING_CHARS`/`_MID_TRAIL`),**即它当时只覆盖最小的一部分,却看起来全绿**。注入 `_DEFAULT_TOOL_RESULT_MAX = 99_000` 后守卫纹丝不动才暴露。
+  ② 修完①后,`when/at/for` 被我当成「实验条件前缀」放进豁免,于是 `advances when _MID_STEP = 99 rounds elapse` 被当历史放行,**NEUTER 第二次仍不咬**。收窄到 `with/under/using` 才咬住 —— 那三个才读作「保持该值同时观测」,`when/at/for` 是日常散文。
+  **教训(owner 拍板入册):新写扫描类守卫,第一步是打印它实际扫到的样本量和样本名,确认扫描面覆盖了你以为的目标,再谈断言。** 我是先写断言后验扫描面,于是两次都在「断言正确、扫描面残缺」上绿着。
+- **★ owner 拦下一次假阳,方向对了:** 扩面后守卫报 `lib/llm/cache.py:85` 的 `_MID_TRAIL=12` 撒谎。核源码是**调参记录**——记的是试过并否决的旧值 12 及其实测后果(`span sawtoothed 17→20→23→26`),紧接着写明选定值 4 并注明 `Verified by test_cache_mid_anchor_window.py`。**按现状提交,第一个撞上的人会被迫删掉一段实测结论去换绿灯**,而 charter 刚记过「删掉过去的错误记录等于毁掉制度记忆」。故豁免补「实验条件叙述 + 实测动词」两条,样本**从源码现取不手抄**(charter 禁止 harness 手抄生产文本),并配反向对照钉死「豁免不得吞掉真声明」——否则放宽豁免就能把整条棘轮变成 no-op。
+- **判据取舍(明确写下):豁免刻意从宽。** 漏掉一条陈旧数字只是麻烦;误判一条调参记录会逼人删证据,后者更坏且不可逆。所以拿不准时返回「是历史」。
+- **提交纪律(上一轮教训已生效):** `git commit` **之前**先跑 `git diff --cached --name-only` 核对暂存清单恰好等于写集 —— 上一轮我正是没这么做,`JOURNAL.md` 早在暂存区,带着兄弟 1,299 行进了我的 commit。这次一次过,单文件干净。

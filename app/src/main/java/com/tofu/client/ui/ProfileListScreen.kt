@@ -58,6 +58,7 @@ import com.tofu.client.data.Profile
 import com.tofu.client.session.ServerLifecycle
 import com.tofu.client.session.ServerState
 import com.tofu.client.session.ServerUrl
+import com.tofu.client.session.SessionManager
 import kotlinx.coroutines.CoroutineScope
 
 /**
@@ -85,6 +86,9 @@ fun ProfileListScreen(
     onDelete: (Profile) -> Unit,
     onAdd: () -> Unit,
     scope: CoroutineScope,
+    /** Used to establish a session on demand so a STOPPED server can still be
+     *  started — code-server stays up while Tofu is down. */
+    session: SessionManager? = null,
 ) {
     // Per-profile lifecycle state, lifted here so the header can summarize how
     // many servers are up without each card re-polling.
@@ -122,6 +126,7 @@ fun ProfileListScreen(
                         items(profiles, key = { it.id }) { p ->
                             ServerCard(
                                 profile = p,
+                                session = session,
                                 onActivate = onActivate,
                                 onEdit = onEdit,
                                 onDelete = onDelete,
@@ -196,6 +201,7 @@ private fun plural(n: Int) = if (n == 1) "server" else "servers"
 @Composable
 private fun ServerCard(
     profile: Profile,
+    session: SessionManager?,
     onActivate: (Profile) -> Unit,
     onEdit: (Profile) -> Unit,
     onDelete: (Profile) -> Unit,
@@ -272,7 +278,11 @@ private fun ServerCard(
                 SupervisorControls(
                     profile = profile,
                     scope = scope,
+                    session = session,
                     onStateChange = { state = it; onStateChange(it) },
+                    // A server the user just started is a server they want to
+                    // use — go straight in rather than making them tap Open.
+                    onServerReady = { onActivate(profile) },
                 )
             }
         }

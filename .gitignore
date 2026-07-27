@@ -15,3 +15,5 @@
 !app/debug.keystore
 /.testharness/
 .tofu*
+# AI assistant evolution journal (per-developer, not source)
+JOURNAL.md

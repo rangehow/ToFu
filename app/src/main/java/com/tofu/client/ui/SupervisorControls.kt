@@ -33,8 +33,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.tofu.client.data.Profile
+import com.tofu.client.session.LoginResult
 import com.tofu.client.session.ServerLifecycle
 import com.tofu.client.session.ServerState
+import com.tofu.client.session.SessionManager
 import com.tofu.client.session.SupervisorClient
 import com.tofu.client.session.SupervisorUrl
 import kotlinx.coroutines.CoroutineScope
@@ -61,8 +63,10 @@ fun SupervisorControls(
     profile: Profile,
     scope: CoroutineScope,
     client: SupervisorClient = SupervisorClient(),
+    session: SessionManager? = null,
     modifier: Modifier = Modifier,
     onStateChange: (ServerState) -> Unit = {},
+    onServerReady: () -> Unit = {},
 ) {
     // Keyed on the fields the supervisor result actually depends on, NOT just
     // the row id: editing a profile's URL (which clears cookieHost) or its
@@ -91,7 +95,25 @@ fun SupervisorControls(
     fun run(action: String) {
         busy = true
         failed = false
+        message = null
         scope.launch {
+            // Establish the session FIRST when we don't hold one. The supervisor
+            // rides the code-server cookie, and code-server (the proxy) is up
+            // even while Tofu is down — so this handshake works on a STOPPED
+            // server. Requiring an Open first was a deadlock: Open cannot
+            // succeed against a server that is down.
+            if (session != null && !ServerLifecycle.isSignedIn(profile)) {
+                val login = withContext(Dispatchers.IO) { session.login(profile) }
+                if (login is LoginResult.BadCredentials ||
+                    login is LoginResult.NoCredential ||
+                    login is LoginResult.Error
+                ) {
+                    failed = true
+                    message = ServerLifecycle.explainLoginBlock(login)
+                    busy = false
+                    return@launch
+                }
+            }
             val res = withContext(Dispatchers.IO) {
                 when (action) {
                     "start" -> client.start(profile)
@@ -116,6 +138,10 @@ fun SupervisorControls(
                             }
                         }
                     }
+                    // Starting a server is only ever a means to using it, so
+                    // hand the user straight through once the port is live
+                    // instead of making them watch a status dot.
+                    if (action == "start" && running == true) onServerReady()
                 }
                 is SupervisorClient.Result.Failed -> {
                     failed = true
@@ -126,9 +152,11 @@ fun SupervisorControls(
         }
     }
 
-    // Auto-probe once the profile is signed in, so state is known on arrival.
-    LaunchedEffect(stateKey, ServerLifecycle.isSignedIn(profile)) {
-        if (ServerLifecycle.isSignedIn(profile) && running == null && !busy) {
+    // Auto-probe on arrival so state is known without hunting for Refresh. This
+    // no longer waits for a session: `run` establishes one when missing, which
+    // is what makes a stopped server's state discoverable at all.
+    LaunchedEffect(stateKey) {
+        if (running == null && !busy) {
             run("status")
         }
     }
@@ -183,15 +211,6 @@ fun SupervisorControls(
                     Text("Check", style = MaterialTheme.typography.labelLarge)
                 }
             }
-        }
-
-        if (state == ServerState.LOCKED) {
-            Text(
-                "Open this server once to sign in — then you can start and stop it from here.",
-                Modifier.padding(top = 6.dp),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
 
         AnimatedVisibility(message != null) {

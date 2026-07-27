@@ -69,6 +69,7 @@ class MainActivity : ComponentActivity() {
                             onDelete = vm::deleteProfile,
                             onAdd = vm::startAdd,
                             scope = lifecycleScope,
+                            session = session,
                         )
                         is Screen.AddEdit -> {
                             val editing = vm.editing

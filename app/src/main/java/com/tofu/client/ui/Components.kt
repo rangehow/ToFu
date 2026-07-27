@@ -72,7 +72,6 @@ fun colorForState(state: ServerState): Color = when (state) {
     ServerState.STOPPED -> MaterialTheme.colorScheme.onSurfaceVariant
     ServerState.TRANSITIONING -> TofuTokens.Warn
     ServerState.UNREACHABLE -> TofuTokens.Danger
-    ServerState.LOCKED -> TofuTokens.Warn
     ServerState.UNKNOWN -> MaterialTheme.colorScheme.onSurfaceVariant
     ServerState.UNMANAGED -> MaterialTheme.colorScheme.onSurfaceVariant
 }

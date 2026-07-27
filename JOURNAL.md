@@ -3,9 +3,18 @@
 
 ### 2026-07-27 — 大脑派单「事件通道」落地:发epic/轮次完成/peer消息全部即时启动,30s心跳降级为兜底网(owner「项目大脑经常把任务安排成30秒后自动重启,太慢了——做事件通道」;commit `6e2d0108`,11 文件 +996/-52;新套件 **14/14 含 NC×3**,failing-first A/B 在未修码上 **6 条精确红**,回归环 **182+84+35 全绿**,collect **10608** 0 err)
 
+> **⚠️ RESTART-VERIFY(未执行,重启后必须跑;跑完把本块删掉)**
+> **为什么有这个块:** 本批三条事件缝(以及 reopen 缝)只在**重启后**上线——运行中进程还是旧的 post_task/send_peer_message/_dispatch_queued_message/reopen_task。四条判据全部可判定,不是「确认一下」:
+> 1. **发 epic 即时起** —— 在一个**空闲**项目会话上 `project_board_post` 一个 epic:~1s 内 `logs/app.log` 出现 `[Dispatch] epic <id> started at POST time`,且**不是**等到下一个 30s tick 的 `[Dispatch] heartbeat sweep`。
+>    命令:`grep -a "started at POST time" logs/app.log | tail -3`(重启后应有新增行)。
+> 2. **轮末链式接续** —— 该 epic 的任务完成后,看板上**下一个** open epic(若有)应在其前驱完成的同一秒内自启:`grep -a "started at completion-nudge time" logs/app.log | tail -3`。
+> 3. **peer 消息即时渲染** —— 向一个**空闲**会话发 `project_message`:立即出现 `[PeerMsg] idle target <conv> drained at send time`:`grep -a "drained at send time" logs/app.log | tail -3`;目标会话下一轮开头即带 `[Peer message from a sibling …]`。
+> 4. **网还在** —— `grep -a "\[Dispatch\] heartbeat sweep" logs/app.log | tail -3` 仍有每 30s 的扫描行(sweep 只是没活儿可派,不是死了);`grep -ac "peer idle-drain: woke" logs/app.log` 重启后不应再增长(发时排空接管了)。
+> **回滚:** `git revert 6e2d0108`(事件通道)+ 本 reopen 接缝 commit;30s sweep 从未被改,回滚只摘事件缝,恢复网不受影响。
+
 - **起因与方案取舍:** owner 问「30秒自动重启在哪、能不能更快 + 提交了但一直没完成的任务是什么机制」。查明 30s 是 scheduler 唯一节拍(`lib/scheduler/manager.py:891` 硬编码 `time.sleep(30)`),大脑派单心跳明确搭这趟车。给了两个方向:(a) 缩短 tick(改一行,代价是 FUSE PG 上 6 倍查询量);(b) 事件通道(生产者侧即时触发,心跳留作兜底)。**owner 拍板 (b)。**
 - **三条事件缝(全部是「创建即启动」的生产者侧触发,复用既有 dispatch_next_queued 唯一排水缝,零新线程/零新全局):**
-  - **① `on_epic_posted`**(`post_task` 内触发):epic 可真正启动时(依赖全 done + 路由目标会话**存在**且**空闲**)在 post 瞬间 claim+入队+排空。三个刻意回落:忙目标(agent  mid-turn 发帖是常态)不 claim——留给缝②;依赖未满足——留给 `on_epic_completed`;**目标会话行不存在绝不 claim**(dispatch_epic 先 claim 后排空,向死会话 claim 会把 epic 卡到 30 分钟租约过期——比被取代的 ≤30s 心跳更糟,这是设计里最关键的一条负约束)。
+  - **① `on_epic_posted`**(`post_task` 内触发):epic 可真正启动时(依赖全 done + 路由目标会话**存在**且**空闲**)在 post 瞬间 claim+入队+排空。三个刻意回落:忙目标(agent  mid-turn 发帖是常态)不 claim——留给缝②;依赖未满足——留给 `on_epic_completed`;**目标会话行不存在绝不 claim**(dispatch_epic 先 claim 后排空,向死会话 claim 会把 epic 卡到 30 分钟租约过期——比被取代的 ≤30s 心跳更糟,这是设计里最关键的一条负约束)。**同一缝也接进了 `reopen_task`**(owner 复核时抓到的第四条 30s 路径:人工复活杠杆原先要干等一个 sweep)——done/claimed → open 的人工复活同样在目标空闲时即时重启。`migrate_epic` 无需动:它在 sweep 内部同轮被捡起,已是即时。
   - **② `on_conv_idle`**(`_dispatch_queued_message` 空队列分支触发):忙时发布的 epic 在**当前轮次结束瞬间**启动,链式每次完成推进一个(与队列排水链同形)。非空队列绝不抢占——真人排队消息永远先于看板工作。
   - **③ peer 发时排空**(`send_peer_message` 内):空闲目标的 peer 消息从「等 ≤30s 的 `drain_idle_peer_messages`」变为**发送瞬间**渲染成轮;活目标双通道(twin+完成钩)不变;谓词与 30s 兜底完全同源(`_live_drain_eligible_task`,含 aborted 收尾中会话照样排空的 strand-closing 语义)。
 - **30s sweep 与 drain_idle_peer_messages 保留为恢复网**:崩溃/租约过期/断链/迁移这些**本质时间驱动**的路径(30 分钟 TTL 面前 30s 粒度是噪音)仍归心跳,不得删除。failing-first A/B 实证:补丁摘走后 6 条精确红(三条即时性断言:epic 停在 open / peer 行滞留队列;三条 NC baseline),8 条负面对照(忙目标/死会话/依赖未满足/无 projectPath/非空队列/他会话路由/活目标twin/心跳兜底)在**新旧码上都绿**——红的就是那个 30s,不是别的。

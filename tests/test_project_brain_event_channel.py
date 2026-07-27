@@ -270,6 +270,45 @@ def test_post_with_missing_target_conv_keeps_heartbeat_behaviour(flask_app,
     _clear_task_registry()
 
 
+def test_reopen_starts_immediately_when_target_idle(flask_app, monkeypatch):
+    """The human's revive lever rides the SAME event seam (owner, 2026-07-27):
+    an epic reopened (done → open) whose routing target EXISTS and is IDLE
+    starts AT reopen time — the operator never watches a dead 30 s gap. The
+    seam's own guards (busy/dead target) are already pinned by the post_task
+    negative tests above."""
+    from lib.conversations.project_board import (
+        complete_task, post_task, reopen_task,
+    )
+
+    proj = os.path.abspath('/tmp/ec-reopen')
+    conv = 'conv-ec-reopen'
+    _clear_task_registry()
+    _seed_conv(flask_app, conv, proj)
+    spawned = _stub_spawn(monkeypatch)
+
+    with flask_app.app_context():
+        _mark_busy(conv)                       # production-real: posted mid-turn
+        epic = post_task(proj, conv, 'Revive me later')['id']
+        _clear_task_registry()
+        complete_task(proj, conv, epic)        # done … the human changes course
+        assert _board_row(flask_app, proj, epic)['status'] == 'done'
+        assert spawned == [], 'nothing runs for the done epic'
+
+        res = reopen_task(proj, 'conv-operator', epic)
+
+    assert res.get('ok'), res
+    row = _board_row(flask_app, proj, epic)
+    assert row['status'] == 'claimed', \
+        'a reopened epic with an idle existing target must start AT reopen time'
+    assert row['owner_conv_id'] == conv, 'routed back to its creator'
+    assert len(spawned) == 1
+    assert _persisted_last_user(flask_app, conv).get('_boardTaskId') == epic
+    _clear_task_registry()
+
+
+# ════════════════════════════════════════════════════════════════════
+#  SEAM 2 — on_conv_idle: the completion nudge
+# ════════════════════════════════════════════════════════════════════
 # ════════════════════════════════════════════════════════════════════
 #  SEAM 2 — on_conv_idle: the completion nudge
 # ════════════════════════════════════════════════════════════════════

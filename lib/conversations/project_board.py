@@ -735,6 +735,16 @@ def reopen_task(project_path: str, conv_id: str, task_id: str) -> dict:
                    'prevOwner': prev_owner})
     audit_log('board_reopen', project_path=project_path, task_id=task_id,
               conv_id=conv_id, from_status=prev_status, prev_owner=prev_owner)
+    # ── Brain dispatch trigger (event channel): the human's revive lever is
+    #    also immediate — a reopened epic whose routing target EXISTS and is
+    #    IDLE starts NOW, not at the next 30 s sweep. Same seam, same guards
+    #    as post_task (busy/dead targets fall back to the nudge/sweep).
+    #    Best-effort: never raises into the reopen path. ──
+    try:
+        from lib.conversations.project_dispatch import on_epic_posted
+        on_epic_posted(project_path, task_id)
+    except Exception as e:
+        logger.debug('[Board] reopen-time dispatch trigger skipped: %s', e)
     return {'ok': True, 'from': prev_status}
 
 

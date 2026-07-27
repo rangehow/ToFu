@@ -345,7 +345,9 @@ conversation.
   genuinely start (deps done, routing-target conversation EXISTS and is IDLE).
   A busy target (the common case — an agent posts mid-turn) is deliberately
   NOT claimed; a missing target conv is never claim-stranded (both keep the
-  legacy heartbeat behaviour).
+  legacy heartbeat behaviour). The human's revive lever `reopen_task` rides
+  the SAME seam (done/claimed → open starts at reopen time, not the next
+  sweep).
 - **Completion nudge (event channel)** — wired into the post-task queue-drain
   hook (`_dispatch_queued_message` in `lib/tasks_pkg/manager/_sync.py`): when a
   task completes with an EMPTY queue, `on_conv_idle` dispatches + drains ONE

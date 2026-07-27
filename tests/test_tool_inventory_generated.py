@@ -65,22 +65,17 @@ def _model_visible_write_tools():
     return {t for t in _WRITE_TOOLS if t in provides}
 
 
-#: Write tools that reach the approval dialog with NO enricher, i.e. the user
-#: is shown a bare tool name. Grandfathered so the ratchet can land without a
-#: 18-enricher batch in the same commit. THIS LIST MAY ONLY SHRINK.
-GRANDFATHERED_NO_ENRICHER = {
-    # browser — drives the user's real session; the selector/target is the risk
-    'browser_click', 'browser_close_tab', 'browser_create_tab',
-    'browser_hover_and_click', 'browser_keyboard', 'browser_right_click_menu',
-    # desktop — runs on the user's own machine; command/path is the risk
-    'desktop_open_app', 'desktop_open_file', 'desktop_run_command',
-    'desktop_write_file',
-    # memory CRUD — destructive to stored notes; the target id is the risk
-    'create_memory', 'delete_memory', 'merge_memories', 'update_memory',
-    # motion_video — long, expensive renders; the job/paths are the risk
-    'motion_video_concat', 'motion_video_mux', 'motion_video_narrate',
-    'motion_video_render',
-}
+#: Write tools that reach the approval dialog WITHOUT rendering the
+#: risk-bearing argument. **NOW EMPTY** — all 33 model-visible write tools were
+#: fixed (18 new enrichers + 8 existing ones that wrote keys the renderer did
+#: not understand). It stays as an explicit empty set so a future regression has
+#: to justify re-opening the hole rather than silently appending a name.
+#:
+#: NOTE: "has an enricher" is NOT the criterion — 8 enrichers used to exist and
+#: still rendered a blank dialog. The real contract (dialog shows the risk) is
+#: proven end-to-end in tests/test_approval_dialog_renders_risk.py, which runs
+#: the SHIPPED frontend renderer. This list may only stay empty or shrink.
+GRANDFATHERED_NO_ENRICHER: set[str] = set()
 
 
 class TestInventoryNotStale:
@@ -167,20 +162,19 @@ class TestApprovalEnricherRatchet:
             f'tools — drop them: {sorted(gone)}'
         )
 
-    def test_base_meta_really_is_blank_without_an_enricher(self):
-        """Pins WHY the ratchet exists, in behavioural terms.
+    def test_base_meta_alone_cannot_surface_a_risky_argument(self):
+        """Pins WHY every write tool needs an enricher, in behavioural terms.
 
-        If a future refactor makes the base metadata self-describing (e.g. by
-        dumping all args), this test fails and the ratchet can be reconsidered
-        on evidence instead of being carried forever on a stale premise.
+        The base metadata is built from ``path`` + ``description`` only, so a
+        tool whose risk lives in another argument (``command``, ``selector``,
+        ``memory_id``) is invisible without an enricher. Asserted against the
+        base shape itself rather than against a still-unfixed tool, so the
+        premise survives every tool being fixed.
         """
-        from lib.tasks_pkg.tool_dispatch._approval import _APPROVAL_META_ENRICHERS
-
-        assert 'desktop_run_command' not in _APPROVAL_META_ENRICHERS
         base = {'approvalId': 'x', 'toolName': 'desktop_run_command',
                 'path': '', 'description': ''}
         rendered = ' '.join(str(v) for v in base.values())
         assert 'rm -rf' not in rendered, (
-            'base approval meta unexpectedly surfaces the command — if this '
-            'changed, re-evaluate the enricher ratchet'
+            'base approval meta unexpectedly surfaces a command — if the base '
+            'shape became self-describing, re-evaluate this ratchet'
         )

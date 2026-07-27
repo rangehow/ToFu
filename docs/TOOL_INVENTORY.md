@@ -14,38 +14,17 @@ Built-in tools: **89**
 
 | gap | count | meaning |
 |---|---|---|
-| write tool with no approval enricher | 18 | the approval dialog renders a bare tool name — the user approves blind, which the approval module itself calls "worse than not prompting at all" |
+| write tool with no approval enricher | 0 | the approval dialog renders a bare tool name — the user approves blind, which the approval module itself calls "worse than not prompting at all" |
 | no UI label | 75 | the raw tool name is shown in the activity line |
 | no reachable handler | 0 | schema advertised to the model but nothing executes it |
-
-Write tools lacking an approval enricher:
-
-- `browser_click`
-- `browser_close_tab`
-- `browser_create_tab`
-- `browser_hover_and_click`
-- `browser_keyboard`
-- `browser_right_click_menu`
-- `desktop_open_app`
-- `desktop_open_file`
-- `desktop_run_command`
-- `desktop_write_file`
-- `create_memory`
-- `delete_memory`
-- `merge_memories`
-- `update_memory`
-- `motion_video_concat`
-- `motion_video_mux`
-- `motion_video_narrate`
-- `motion_video_render`
 
 ## Built-in tools
 
 | tool | category | spec | dispatch | write | idempotent | label | approval_enricher | serial | read_gate | fresh_gate | streamable | arg_repair |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| browser_click | browser | browser | SET | ✓ |  |  |  |  |  |  |  |  |
-| browser_close_tab | browser | browser | SET | ✓ |  |  |  |  |  |  |  |  |
-| browser_create_tab | browser | browser | SET | ✓ |  |  |  |  |  |  |  |  |
+| browser_click | browser | browser | SET | ✓ |  |  | ✓ |  |  |  |  |  |
+| browser_close_tab | browser | browser | SET | ✓ |  |  | ✓ |  |  |  |  |  |
+| browser_create_tab | browser | browser | SET | ✓ |  |  | ✓ |  |  |  |  |  |
 | browser_execute_js | browser | browser | SET | ✓ |  |  | ✓ |  |  |  |  |  |
 | browser_fill_form | browser | browser | SET | ✓ |  |  | ✓ |  |  |  |  |  |
 | browser_get_app_state | browser | browser | SET |  | ✓ |  |  |  |  |  |  |  |
@@ -53,12 +32,12 @@ Write tools lacking an approval enricher:
 | browser_get_history | browser | browser | SET |  | ✓ |  |  |  |  |  |  |  |
 | browser_get_interactive_elements | browser | browser | SET |  | ✓ |  |  |  |  |  |  |  |
 | browser_hover | browser | browser | SET |  |  |  |  |  |  |  |  |  |
-| browser_hover_and_click | browser | browser | SET | ✓ |  |  |  |  |  |  |  |  |
-| browser_keyboard | browser | browser | SET | ✓ |  |  |  |  |  |  |  |  |
+| browser_hover_and_click | browser | browser | SET | ✓ |  |  | ✓ |  |  |  |  |  |
+| browser_keyboard | browser | browser | SET | ✓ |  |  | ✓ |  |  |  |  |  |
 | browser_list_tabs | browser | browser | SET |  | ✓ |  |  |  |  |  |  |  |
 | browser_navigate | browser | browser | SET | ✓ |  |  | ✓ |  |  |  |  |  |
 | browser_read_tab | browser | browser | SET |  | ✓ |  |  |  |  |  |  |  |
-| browser_right_click_menu | browser | browser | SET | ✓ |  |  |  |  |  |  |  |  |
+| browser_right_click_menu | browser | browser | SET | ✓ |  |  | ✓ |  |  |  |  |  |
 | browser_screenshot | browser | browser | SET |  |  |  |  |  |  |  |  |  |
 | browser_summarize_page | browser | browser | SET |  | ✓ |  |  |  |  |  |  |  |
 | browser_wait | browser | browser | SET |  |  |  |  |  |  |  |  |  |
@@ -79,20 +58,20 @@ Write tools lacking an approval enricher:
 | desktop_clipboard | desktop | desktop | SET |  |  |  |  |  |  |  |  |  |
 | desktop_gui_action | desktop | desktop | SET |  |  |  |  |  |  |  |  |  |
 | desktop_list_files | desktop | desktop | SET |  |  |  |  |  |  |  |  |  |
-| desktop_open_app | desktop | desktop | SET | ✓ |  |  |  |  |  |  |  |  |
-| desktop_open_file | desktop | desktop | SET | ✓ |  |  |  |  |  |  |  |  |
+| desktop_open_app | desktop | desktop | SET | ✓ |  |  | ✓ |  |  |  |  |  |
+| desktop_open_file | desktop | desktop | SET | ✓ |  |  | ✓ |  |  |  |  |  |
 | desktop_read_file | desktop | desktop | SET |  |  |  |  |  |  |  |  |  |
-| desktop_run_command | desktop | desktop | SET | ✓ |  |  |  |  |  |  |  |  |
+| desktop_run_command | desktop | desktop | SET | ✓ |  |  | ✓ |  |  |  |  |  |
 | desktop_screenshot | desktop | desktop | SET |  |  |  |  |  |  |  |  |  |
 | desktop_system_info | desktop | desktop | SET |  |  |  |  |  |  |  |  |  |
-| desktop_write_file | desktop | desktop | SET | ✓ |  |  |  |  |  |  |  |  |
+| desktop_write_file | desktop | desktop | SET | ✓ |  |  | ✓ |  |  |  |  |  |
 | ask_human | human | human_guidance | EXACT |  |  | ✓ |  | ✓ |  |  |  |  |
 | generate_image | image | image_gen | SET |  |  |  |  |  |  |  |  |  |
-| create_memory | memory | memory | SET | ✓ |  | ✓ |  |  |  |  |  |  |
-| delete_memory | memory | memory | SET | ✓ |  |  |  |  |  |  |  |  |
-| merge_memories | memory | memory | SET | ✓ |  |  |  |  |  |  |  |  |
+| create_memory | memory | memory | SET | ✓ |  | ✓ | ✓ |  |  |  |  |  |
+| delete_memory | memory | memory | SET | ✓ |  |  | ✓ |  |  |  |  |  |
+| merge_memories | memory | memory | SET | ✓ |  |  | ✓ |  |  |  |  |  |
 | search_memories | memory | memory | SET |  | ✓ |  |  |  |  |  |  |  |
-| update_memory | memory | memory | SET | ✓ |  |  |  |  |  |  |  |  |
+| update_memory | memory | memory | SET | ✓ |  |  | ✓ |  |  |  |  |  |
 | apply_diff | project | project | SET | ✓ |  | ✓ | ✓ |  | ✓ | ✓ |  | ✓ |
 | apply_diffs | project | project | SET | ✓ |  | ✓ | ✓ |  | ✓ | ✓ |  | ✓ |
 | create_project | project | project | SET | ✓ |  |  | ✓ |  |  |  |  |  |
@@ -122,12 +101,12 @@ Write tools lacking an approval enricher:
 | store_artifact | swarm | swarm | SET |  |  |  |  |  |  |  |  |  |
 | todo_write | task | todo | EXACT |  |  |  |  |  |  |  |  |  |
 | motion_video_check | video | motion_video | SET |  | ✓ |  |  |  |  |  |  |  |
-| motion_video_concat | video | motion_video | SET | ✓ |  |  |  |  |  |  |  |  |
+| motion_video_concat | video | motion_video | SET | ✓ |  |  | ✓ |  |  |  |  |  |
 | motion_video_env_check | video | motion_video | SET |  | ✓ |  |  |  |  |  |  |  |
-| motion_video_mux | video | motion_video | SET | ✓ |  |  |  |  |  |  |  |  |
-| motion_video_narrate | video | motion_video | SET | ✓ |  |  |  |  |  |  |  |  |
+| motion_video_mux | video | motion_video | SET | ✓ |  |  | ✓ |  |  |  |  |  |
+| motion_video_narrate | video | motion_video | SET | ✓ |  |  | ✓ |  |  |  |  |  |
 | motion_video_probe | video | motion_video | SET |  | ✓ |  |  |  |  |  |  |  |
-| motion_video_render | video | motion_video | SET | ✓ |  |  |  |  |  |  |  |  |
+| motion_video_render | video | motion_video | SET | ✓ |  |  | ✓ |  |  |  |  |  |
 | motion_video_storyboard_check | video | motion_video | SET |  | ✓ |  |  |  |  |  |  |  |
 | produce_report | video | produce | SET |  |  |  |  |  |  |  |  |  |
 | produce_research | video | produce | SET |  |  |  |  |  |  |  |  |  |

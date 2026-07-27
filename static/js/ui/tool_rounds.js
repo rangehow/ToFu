@@ -2029,7 +2029,36 @@ function _renderPendingApprovalBlock(round, ctx) {
   const aid = escapeHtml(round.approvalId);
   const ameta = round.approvalMeta || {};
   let detailHtml = "";
-  if (ameta.batchMode && ameta.editSummaries) {
+  if (Array.isArray(ameta.riskFields) && ameta.riskFields.length) {
+    // ★ Generic risk-field list — the shape EVERY write tool can use.
+    //
+    // The four shapes below (batch / diff / command / contentPreview) are
+    // hardcoded per tool family, which is why a write tool outside those
+    // families used to render NO detail block at all: the user saw a bare
+    // tool name plus Approve/Reject and approved blind. Rather than invent a
+    // fifth, sixth, … bespoke shape per family, an enricher now just declares
+    // WHICH arguments carry the risk and this branch renders them uniformly.
+    // Checked FIRST so an enricher can opt into it explicitly.
+    const rows = ameta.riskFields
+      .filter((f) => f && f.label != null)
+      .map((f) => {
+        const val = f.value == null ? "" : String(f.value);
+        const shown = val.length > 2000 ? val.slice(0, 2000) + "…" : val;
+        const lines = shown.split("\n");
+        const body = lines
+          .map(
+            (l) =>
+              `<div class="ptool-diff-line ptool-diff-add"><span class="ptool-diff-sign">+</span><span class="ptool-diff-code">${escapeHtml(l)}</span></div>`,
+          )
+          .join("");
+        return `<div class="ptool-risk-field"><div class="ptool-risk-label">${escapeHtml(String(f.label))}</div>${body}</div>`;
+      })
+      .join("");
+    const noteHtml = ameta.description
+      ? `<div class="ptool-cmd-desc">${escapeHtml(ameta.description)}</div>`
+      : "";
+    detailHtml = `<div class="ptool-diff-preview">${noteHtml}${rows}</div>`;
+  } else if (ameta.batchMode && ameta.editSummaries) {
     // ★ Batch apply_diff — show collapsible preview of all edits
     const edits = ameta.editSummaries;
     const maxPreviewLines = 12;

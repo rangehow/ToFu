@@ -702,6 +702,13 @@ function _showPaperLanding() {
             '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>' +
             ' ' + escapeHtml(_tt('paper.describeBtn')) +
           '</button>' +
+          // Same free-text box, second verb: recommend = "find me papers",
+          // research = "go run the whole harvest→survey→ideate pipeline on this
+          // direction". Both are DIRECTION-scoped, so neither needs an open paper.
+          '<button onclick="_startResearchFromDescribe()" class="paper-describe-btn paper-describe-btn-alt">' +
+            '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a7 7 0 0 0-4 12.7V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.3A7 7 0 0 0 12 2Z"/><line x1="9" y1="21" x2="15" y2="21"/></svg>' +
+            ' ' + escapeHtml(_tt('paper.research.startBtn')) +
+          '</button>' +
         '</div>' +
       '</div>' +
     '</div>';

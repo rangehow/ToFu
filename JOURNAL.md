@@ -1,5 +1,19 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+
+### 2026-07-28 — 交易页优化第二批:守卫从「一个文件」泛化到「全部页面」+ 首屏改为按持仓分流 + CSS 死规则实测(tofu-trade `647067d` / `a1873a0`;新套件 4+5,**NEUTER×7 全咬**,相邻环 **30/30**,全环 15F/**109P** vs 干净 HEAD 15F/100P)
+
+- **★ 守卫泛化时抓到一个只有实测才会发现的坑:`os.walk` 会让这条守卫永久假红。** 本仓 `.tofu_trash/` 里躺着**两份** `trading.html` 恢复快照,其中一份仍带修复前的 3 条绝对路径 —— 一个按目录遍历的守卫会扫到 3 个文件、并在一个**根本不发布**的文件上红,且无法通过修任何产品代码变绿。改用 `git ls-files`(同时也是 charter 定的口径:FUSE 上 `os.walk` 会超时)。**判据:扫描类守卫的输入集合必须是「会被发布的东西」,不是「磁盘上长得像的东西」。**
+- **泛化的理由不是洁癖,是这个 bug 的形状:它只在带前缀部署下发作,而整个套件跑在直连下。** 所以**新页面同样不会被任何现有测试发现**。钉死 `trading.html` 一个文件名 = 给第 2 个页面留着同一个坑。NEUTER-4 直接证明:新建一个带同样 bug 的 `reports.html`,泛化后的守卫**精确报出该文件名**,而旧版单文件守卫会保持全绿。
+- **顺带把 `<a href>` 纳入同一契约** —— 根绝对的导航目标同样会跳出部署,只是「点击时失败」而非「加载时失败」,症状不同、病因同一。
+- **首屏:`page-overview` 是按「陌生人」排的,而这是个每日回访的工具。** 顺序是 hero(整屏)→「怎么用?超简单」三步引导 → 成绩单 → …… → **最底下**才是 `#ovPortfolioSection`(用户自己的钱)。这个顺序**只对一次**;从第二次访问起,引导就是挡在用户和他唯一想看的东西之间的噪音。
+- **★ 关键:这一改零新增请求。** `_loadPortfolioPeek` 本来就每次加载都拉 `/holdings`(并在空仓时 early-return),**判断所需的数据早就在手里,缺的只是拿它做决定**。落点两个 helper 挂在 has-holdings 分支:`_promoteHoldingsFirst` 前置、`_setOnboardingVisible(false)` 收起 hero+引导;新手路径一行未动。
+- **守卫的 DOM 从真实模板切片而来,不是手写 mock** —— 直接从 `trading.html` 里 slice 出 overview 段落喂给 jsdom,于是重命名任何一个它依赖的 id 会**变红**,而不是对着一份陈旧副本继续绿(charter「手抄副本」纪律的同构应用)。
+- **★ 补集 NEUTER 第一版红错了地方,而错的是我的补丁不是产品。** 「无条件隐藏引导」这一发用了 `_setOnboardingVisible\(([^)]*)\)` 全局替换,结果把**函数声明**也改成了 `function _setOnboardingVisible(false)` → 语法错误。它确实红了,但**红的理由是假的**,什么都没证明。收窄到只改调用点后才真正咬在 `onboarding_intact_for_newcomer` 上。判据同族:**NEUTER 红了,先问「它红的理由是不是我要测的那件事」。**
+- **CSS 死规则实测(按 owner 要求只出数,不删):`trading.css` 576 个类中 122 个从未被引用(**21%**),150 条整规则全死(16%),死字节 **14,813 / 100,111(14%)**。** `theme-bridge.css` 与 `reconcile.css` **各 0 个死类**,干净。
+- **★ 这个数我先自己证伪过一轮再报:** 检查动态拼接类名的假阳性,发现 live 源码里确实有拼接(`"kpi-sub " + pnlClass(...)` 等 4 处 + `"page-" + page` 1 处)。逐个核:`pnlClass` 返回 `up/down/flat` 这类**完整名**(引号内带空格 = 名字已完结),`page-*` 是 **id 不是 class**。最终假阳性 **1 个**(`flat`),修正后 **122**。**先前那条 grep 的命中全在 `.tofu/file-history` 备份里,若不排除会误判成「大量动态拼接、扫描不可信」而放弃测量。**
+- **死类按前缀成簇,说明是整块废弃功能而非零散残留:** `breadth-*` 13 · `market-*` 10 · `index-*` 9 · `nb-*` 8 · `sim-*` 8 · `trend-*` 8 · `heatmap-*` 6 · `legend-*` 5 …… 共 33 个前缀。**未删** —— 按 owner 定的口径,本轮只交测量结果。
+- **诚实分账:** 全环 15 红仍是 `ModuleNotFoundError: lib.api_response`(宿主不在 `sys.path`),干净 HEAD worktree 复验同样 15 红,与本轮零相关;两侧差值 = 本轮新增的 9 条绿。**未做:** 三主题对比度实测(item 3)本轮未动。
 ### 2026-07-28 — 「长对话工具历史丢了」实测判定为**读取侧无门**而非数据丢失:73 轮完好躺在库里,前端却被 3 个 swarm 伪轮挡住取不回(commit `c04858a1`,2 文件 +241/-1;新套件 **7/7**,failing-first 精确红,**NEUTER×5 各咬各的**,干净 HEAD worktree 复验 4 条邻红为预存在)
 
 - **用户报「工具历史丢失」,推理是「收到了 swarm 回执却看不到 spawn 调用,因果倒置」。这个推理完全正确,但结论(丢数据)被实测推翻 —— 而正是这个正确推理指到了出问题的那一层。** 直连 PG 查 `ms34q20atwnf35`:msg[1] 有 **73 个 toolRounds**(含 round 15 的 `spawn_agents`、18 的 `await_agents`、19/22/26 的 `get_agent_result`)+ **130 个 segments**(73 个 `tool_use`),`msg_count=23` / `rev=252` 全部完好。**写路径一个字节没丢。**
@@ -31,6 +45,17 @@
 - **诚实分账:** 相邻环 3 条红(`test_project_board.py::test_NC5`、`test_project_feed.py` 两条 run_concluded)在**未叠加任何我改动的干净 committed HEAD worktree** 上复现同样红,报 `NC anchor not found in lib/tasks_pkg/autopilot.py` —— 兄弟会话的 harness 锚点漂移(charter 记的「守卫过期家族」第一态),与本轮零相关,按纪律不在本批修。
 - **设计结论(取证已完成,待 owner 排期实施):** charter 现在的数据模型**只有一个维度(追加顺序)**,却要表达至少三种东西 —— ①**方向**(人类独占、永不淘汰、永远注入)②**契约/不变式**(约束未来代码,如「凭证脱敏是 fail-closed 白名单」)③**方法论教训**(如「守卫必须断言结果」)。混在其中的第四类是**收口报告**(「TTFT 看门狗已落地 commit 69cd968c」),约 8–10 条 / ~5,000 字,**不约束任何未来决定,只在每轮计费,应迁进 JOURNAL**。owner 已拍板三条:①判据落到**条目级**不落长相级(`LoopWatch 根因裁定` 长得像报告但含「禁止据此改动」的禁令,是 invariant,留下);②`scope` 条件注入**只对 lesson 生效,invariant 一律全量**(漏注入的代价不对称);③**目标必须是独立存储位置,`kind='goal'` 解决不了** —— kind 仍在同一数组里,照样吃「顺序淘汰 + 窗口截断」两把刀。**本轮已按 ③ 落地。**
 - **另两处已取证待做:** ①**board 注入 16,764 字 / 16 条,单条「标题」最长 2,063 字**(整份技术规格塞在 `title` 里,已顶满 2000 上限)—— 协调只需「谁在做什么、别撞车」,注入路径应瘦身到标题级(预计 -15,000 字/轮),但**详情必须仍走 `project_board_read` 全文**,因为 `render_board_block` 被注入与工具**共用**,一起砍会让模型再也拿不到票面细节;②`project_board_read`/`project_charter_read` 返回的是**与注入字节完全相同**的文本,是一次纯浪费的往返 —— 应改为「注入给摘要、工具给详情」。
+
+### 2026-07-28(续) — 大脑第 2 步:board 渲染器一分为二,**注入 −52.6% 而协调信号零损失**;NEUTER 两发都真的「咬」了却报红,错的是我的断言极性(epic `pt_b61a7f56e9b04f8d`;commit `99041cb3`,3 文件 +301/-13;新套件 **8/8**,**NEUTER×2 全咬**,相邻环 **113 过**,干净 committed tree 复验 **134 过**)
+
+- **根因是一个函数服务两个语义不同的消费者。** `render_board_block` 同时喂**每轮注入**和 `project_board_read` **工具**,于是实测 **15,517 字 / 16 条 epic** 每轮无条件计费,单条 `title` 塞着整份技术规格(上限 2000,已顶满)。但**注入只需回答「谁在做什么、别撞车」**,规格是**接手时**才需要的,而接手是一次值得花工具往返的刻意动作。
+- **落点按 owner 拍板:拆成两个具名入口,而不是给一个函数加参数。** 两者共用**同一个** `_render_board` 核心(lane 分区 / 租约过期 / `(you)` 戳 / 别重做提示),所以两个消费者**永远不会对「board 上有什么」产生分歧**,只对「每条展开多少」不同。
+- **实测收益:15,517 → 7,353 字,−52.6%,16 条 epic 一条不少**,`do not redo` 提示与 owner 归属全在。**每轮大脑总注入 35,825 → 27,661。**
+- **★ 截断必须自述,且省略号必须是条件性的。** 头部说明「Epics are shown ABRIDGED … call `project_board_read` for an epic's full text」—— **沿用 charter 已记的 `read_files` 800k 硬顶教训:一个静默变短的结果比一个长结果更糟,因为模型无法察觉自己拿的是片段,会自信地在残片上推理。** 且短 epic **不加**省略号(`test_a_short_epic_is_not_marked_as_abridged`),否则标记沦为装饰、且「无脑全标」会让自述那条测试在截断逻辑被删后**照样绿**。
+- **守卫必须双向,否则「两边都砍」也能全绿。** 六条正向:注入变瘦 / 注入保住四项协调事实(id·标题·状态·owner + 别重做)/ 截断自述并指名取详情的工具 / 短 epic 不标记 / **工具仍返回完整规格** / 存储字节不变。**第五条是承重墙** —— 注入瘦身之所以可接受,唯一前提是详情仍可达;工具若丢了全文,模型**永远**拿不回来,比瘦身前更糟。
+- **★ 本轮教训:NEUTER 报红时,先判「中和是否生效」再判「谁错」。** 两发 NEUTER 都**成功**中和了生产码(NC-1 砍掉 `_abridge_title` → 全文确实涌回注入;NC-2 把工具指向瘦身渲染器 → 全文确实消失),但我在 `run()` 里把断言写成了**修复后的期望**(「不含全文」)而非**中和后的期望**(「含全文」)。**NC 的 `run()` 断言的是「这条性质现在已被破坏」,极性与正向测试相反** —— 我写反了两次。判据仍是那句:守卫红了,先问「它报的事实是否为真」;本例事实为真,该改的是守卫。
+- **★ 既有守卫 `test_epic_title_is_not_clipped` 未动而仍绿,这是设计对的旁证。** 它断言「完整 tail 出现在 `render_board_block` 里」—— 拆分后该函数**就是**全文渲染器,契约原样成立。**若当初选择「给原函数加 `abridged=` 参数、注入路径复用同名函数」,这条守卫会假红,而我很可能会去改测试而不是改设计。**
+- **诚实分账:** 相邻环唯一红 `test_project_board.py::test_NC5_board_post_audit_noop_breaks` 在**干净 committed HEAD** 上复现同样红,预存在,与本轮零相关。
 
 ### 2026-07-27(续5) — 「意图滞留」补推落地(owner 拍板 **D1 + D2 一起做**):四判据串联,**其中两条是实测逼出来的,不是票面授权的**(epic `pt_33ba079f5cea4841`;commit `5edd7d2e`,3 文件 +576;新套件 **15/15**,**NEUTER×6 全咬**,相邻环 **62/62**,干净 committed tree 复验 **62/62**)
 

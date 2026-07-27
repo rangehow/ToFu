@@ -418,6 +418,11 @@ _OPENSOURCE_KEEP_FILES = {
     # (tests/test_frontend_globals_generated.py), so the public build needs it
     # too. Pure regex scan of static/js -- no secrets, no internal paths.
     'scripts/gen_frontend_globals.py',
+    # Test-suite health census (AST-only scan of tests/, no imports/execution).
+    # CI gates on it via tests/test_suite_health_ratchet.py, so the public build
+    # needs the tool too. Reads only tests/*.py + lib//routes source paths --
+    # no secrets, no internal paths.
+    'scripts/audit_tests.py',
 }
 
 OPENSOURCE_EXTRA_EXCLUDE_FILES = OPENSOURCE_EXTRA_EXCLUDE_FILES | {

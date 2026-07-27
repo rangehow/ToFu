@@ -235,15 +235,18 @@ def test_no_variable_url_api_fetches():
 
 
 def test_baseline_reflects_real_counts():
-    """If BASELINE entries are stale (file dropped to zero or is missing)
-    or BASELINE is too generous (file is below baseline), nudge the user
-    to update BASELINE so future regressions are caught at the tighter
-    bound. This is a soft notice, not a failure."""
+    """A stale BASELINE entry (file dropped below its budget, or vanished) must
+    FAIL so the ratchet is tightened.
+
+    This previously ``pytest.skip()``d, i.e. it could never report a problem —
+    the one outcome it was written to detect produced a 'skipped' verdict. With
+    ``BASELINE = {}`` it is currently a no-op; it earns its keep the moment a
+    future endpoint family is granted a temporary budget here, by forcing that
+    budget back down as the migration progresses instead of letting it linger.
+    """
     actual = _scan_all()
     stale = [(n, b, actual.get(n, 0)) for n, b in BASELINE.items() if actual.get(n, 0) < b]
-    if stale:
-        msg = '\n'.join(f'  {n}: BASELINE={b}, actual={c}' for n, b, c in stale)
-        pytest.skip(
-            'BASELINE in tests/test_frontend_api_isolation.py is too generous '
-            '— please tighten it to actual counts:\n' + msg
-        )
+    assert not stale, (
+        'BASELINE in tests/test_frontend_api_isolation.py is too generous — '
+        'tighten it to the actual counts so the migrated files stay migrated:\n'
+        + '\n'.join(f'  {n}: BASELINE={b}, actual={c}' for n, b, c in stale))

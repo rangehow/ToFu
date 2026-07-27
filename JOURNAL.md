@@ -2,6 +2,16 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
 
+### 2026-07-27 — Opus 5 解锁 1M 上下文:清掉网关 213k shrink 学习条目(owner「Opus 5 has a 1M context window, update immediately」;纯数据修复,零产品代码;context_limits self-heal **21/21**,compact/token 批 **485 过 6 红全为兄弟在飞前端 WIP**)
+
+- **根因:静态预设本来就覆盖 Opus 5,钉子在学习层。** `is_claude_opus_47`(`lib/model_info/_family.py:36`)把 `yuju-claude-opus-5-evaDaily` 解析为 (5,0) ≥ (4,7) → `_get_static_context_limit` 返回 1,000,000。但 `data/config/server_config.json` 里有两条 **shrink 学习条目**(`sankuai::` 前缀 + 裸 key 各一)把有效窗口压到 **213,000**。
+- **来源取证(audit.log):** 2026-07-26 10:59/11:00 两次「prompt too long」(被拒 prompt 279,467 / 381,267 tokens),网关**明文声明** `stated_max=213000` → authoritative shrink,按设计绕过 strike gate 立即学习。也就是说:**模型原生 1M,但 yuju 网关线昨天物理截断在 213k**——学习机制本身工作正常,不是 bug。
+- **修复:** 走 `update_json_atomic`(与后台写者串行化的同一缝)删除两条 shrink + 其 meta。A/B 实测:改前 `resolve_model_context_limit` = 213,000,改后 = **1,000,000**(usable = 864,000 = 1M − 128K output reserve − 8K compaction reserve)。前端 Context Bar 经 `/api/v1/server-config` 读同一缝,零 JS 改动。
+- **回归:** context_limits self-heal 21/21 绿;`-k 'compact or token'` 批 485 过 6 红——6 红全在 test_frontend_manual_compaction(jsdom harness `window.ConvView.replaceAll` undefined,兄弟在飞前端 WIP,与本次零共享文件);test_paper_harvest.py collection IndentationError 同为兄弟 WIP。
+- **生效条件:需重启服务。** 运行中进程(PID 4053653)内存 `_LEARNED` 仍持有 213k 条目,重启前压缩闸仍按 213k 截;且重启前任何新 learn 事件的 `_persist()` 会把内存条目写回文件复活 shrink(窗口小,learn 事件罕见)。重启后从磁盘重载即为 1M。
+- **收敛性(两个方向都自愈):** 若网关线仍物理截断 213k,下一个 >213k prompt 会再次被拒、authoritative shrink 一击重新学到——设计内行为,代价 = 一次失败 prefill;若网关已放开(owner 情报),则不再被拒,1M 稳定,后续成功大 prompt 还会经 expand 路径 corroborate。
+- **与 kimi-k3(续69)的对照:** 那次要动代码(expand 条目当地板不当天花板 + 饥饿死锁),这次零代码——因为 Opus 5 的 1M 静态预设早已落地,唯一阻塞是数据层的学习条目。同族两案合起来的教训:**「模型有 X 上下文但系统不认」先查 `model_context_limits` 学习层,再查静态预设。**
+
 ### 2026-07-27 — 自动科研系统真跑暴露两个集成缝 bug 并根修(owner「先真跑一次当 forcing function」;commit 见下,6 改 + 2 新测试;新套件 **retry 5/5 + fitz 2/2 含 NEUTER + failing-first**,相邻 pdf/harvest 环 **18 过 5 skip**,collect **10464** 0 err)
 
 - **真跑定位:单元测试按定义测不到集成缝。** R1–R4 的 43 个离线测试全绿,但都在 monkeypatch 缝下;真调 `search_arxiv` + 真 `parse_pdf` 一跑,两个真 bug 立刻现形——这正是 owner 要真跑的价值。

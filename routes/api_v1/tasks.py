@@ -70,6 +70,7 @@ def _registries() -> dict:
         ('lib.motion_video.runtime', '_motion_runtime'),
         ('lib.paper.podcast_runtime', '_podcast_runtime'),
         ('lib.longform.runtime', '_longform_runtime'),
+        ('lib.research.runtime', '_research_runtime'),
     ):
         try:
             mod = __import__(mod_path, fromlist=[attr])

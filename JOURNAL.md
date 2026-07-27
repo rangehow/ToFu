@@ -1,6 +1,25 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-27(续) — 覆盖缺口 epic `pt_0c04c2b7` 收口:补测两个真缺口(_derive 10%→98% / webhooks 31%→59%),并先修掉 [I] 覆盖判据的假绿(commit `e7aa422b`,3 文件 +780/-13;52/52,**NEUTER×8 全咬**,committed-tree worktree 复核 52/52)
+
+- **先修元问题:[I] 覆盖判据自己就是假绿。** 票里点名「[I] 只扫 lib/*.py 顶层故报 0」。查明两因:①只枚举 `lib/*.py`+`routes/*.py` **顶层**,而本库几乎全部行为都在子包(tasks_pkg/database/llm/…);②`mod.startswith(k+'.')` 让「测试只提到**父包**」就算该模块被覆盖。修好后从报 0 → **340 模块 / 60,664 LOC 零测试引用,116 个在关键路径**。charter 说的「检测器不报 = 检测器没在找」正是这条——一个「干净」结果必须用一个独立方法交叉验证后才信。
+- **★ 票里的 #1 是假警报,实测推翻后不照票面执行。** 票面 #1 `_core_schema/_tables.py`(565L「零测试引用」)用 `coverage run` 实测覆盖率 **100%**——`test_core_schema_{groundwork,parity}` 把它驱动得很彻底,静态判据只因「没有测试点名这个文件」就漏看了它。**若照票面补测它,就是纯浪费。** 真缺口(实测):`commit_round/_commit.py 6% / _derive.py 10% / _profile.py 13%`,`_pg_ownership/* 8-21%`,`webhooks.py 31%`。按「决定语义的判据 × 可测性」选 `_derive.py`(纯函数、逻辑密度最高)+ `webhooks.py`(唯一外部可达入口、发 HMAC 密钥、向任意 URL 投事件)两个补。
+- **★ NC3 初版没咬,又一次「不咬先查锚点」。** `run_command` 存在性探测「用主 root 还是 mod 自己的 basePath」这一判据,我第一版测试把主 root 设成了**不存在的 `/primary`**——于是 `os.path.exists('/primary/gone.py')` 也是 False,**用错 root 和用对 root 殊途同归**,NEUTER 摘掉判据后 19 个测试仍全绿。改为在主 root 下**放同名存在文件**,使两条代码路径产生**可区分**的错误结果(错→modified,对→deleted),才精确咬中。教训同 NC1 系列:判据的「正路」和「错路」必须被设计成**结果不同**,否则测试在测一条它根本区分不了的路径。
+- **两个测试文件全是行为断言(charter 纪律),且有意不走 Quart test client。** `test_webhooks_fanout.py` 钉:secret 绝不进读路径(泄漏=永久凭据泄漏)、签名覆盖 `ts.body`(否则重放窗口无界)、四层过滤 AND 语义(task_id 过滤错=跨租户把 A 事件投给 B)、非 2xx 判失败供重试(否则静默丢事件)、扇出绝不拖垮浏览器 push。**特意不经 in-process test client**:它把对端报成 `'<local>'`,会静默走回环 auth 豁免(兄弟 epic `pt_f6742ab6` 正在查)——路由级测试会测到豁免路径而非真实远程行为,auth 强制归那个 epic。
+- **实测覆盖率提升:** `_derive.py` 10%→98%(剩 1 条 import 异常分支)、`webhooks.py` 31%→59%(剩 worker_loop/持久化/路由体样板)。按北极星「不镀金」在钉住决定语义的判据后停手,不为刷数字堆测试。`_pg_ownership/*`(含大量子进程/daemon/锁语义)与 `_commit.py`/`_profile.py` 留作后续单独 epic——值得认真做,不该塞进本批凑数。
+- **台账棘轮 `ratchet OK`**——两个新测试文件零违规(自己造的闸自己先过)。
+
+### 2026-07-27 — 守卫失效的**第四态**:「断言写在我以为的错误形态上,窄于真实故障」(owner 拍板记入;起因 = VU busy 信号修复 `7daf7c28` 过程中我**同一任务内连犯两次**同型错误)
+
+- **charter 已记三态,本条补第四态。** ①harness 锚点漂移(守卫活着、指错地方,前 6 例);②被守卫的实现没了(守卫已死,日志隔离那例);③守卫在测自己手抄的副本(从未上线的判据,`test_..._dedupe` 那例)。**第四态:守卫活着、指对地方、测的也是真生产码 —— 但它的断言只覆盖真实故障的一个更窄子集,于是「修错了但错在另一个方向」照样全绿。** 与前三态同样不产生任何红色信号,同样制造「有保护」的错觉。
+- **样本 A(前端 `#vu` 标记):** wire 用 `taskId + '#vu'` 区分「忙但不可 attach 的 VU 载体」。我第一版把标记只剥进**一个**集合,`pickAuthoritativeTaskIdForReconnect` 于是返回载体 id 交给 `connectToTask` —— 挂上一条永不完成的流(正是载体过滤器本来要防的「Waiting...」卡泡)。而我当时的断言写的是 `pick !== 'tid-carrier#vu'`:**只否掉了带标记的那个字符串形态,对剥完标记的 `tid-carrier` 完全睁眼瞎**。错误的实现精确落在断言的盲区里。修法是断言**后果**:「pick 出来的 id 必须不是任何载体」(按载体集合判定,而非按某个字面量)。
+- **样本 B(30s 窗口上限):** VU 窗口忙信号需要覆盖「父任务已 done、载体还在跑」这段。fixture 用**新鲜 latch**,于是一个「按墙钟给窗口设 30s 上限」的**错误**实现照样全绿 —— 真实事故里载体跑了 7 分钟,latch 早已 T+180s 陈旧。换成**真实事故时序**(T+180s 陈旧 latch + 7 分钟长轮)后立刻转红,才逼出正确形状:忙信号锚在**载体自身存活**(`is_vu_carrier_alive_for_conv`),30s 只用于 carrier 尚未出生的**前置薄片**。
+- **两次的共同形状:断言写在「我以为的错误形态」上,而不是写在「用户会遭遇的后果」上。** 这与已有的「断言结果而非实现」是**同族但不同刀**:那条管「实现被重写后守卫还咬不咬」,本条管「换一种错法守卫还咬不咬」。
+- **★ 判据(owner 定,与已有两句判据并列):「这个断言能不能区分『修对了』和『修错了但错在另一个方向』?」** 只能否掉一种错法的断言,等于没有守卫。落地姿势:断言**语义集合/后果**(「不得是任何载体」「忙集合非空」),不要断言**某个具体错误字面量**(`!== 'tid-carrier#vu'`)。
+- **★ 配套纪律:fixture 必须用真实事故时序,不许用便于通过的构造值。** 本轮唯一让样本 B 那个错误现形的就是它。凡守卫的对象带时间/序列/陈旧度语义,夹具时序 MUST 取自事故现场(本例 T+180s 陈旧 latch、7 分钟轮),取「刚好新鲜」「刚好在窗口内」的值等于自己给实现放水 —— 且这种放水**看不出来**,因为它只表现为绿。
+- **三句判据现在成套(任何新守卫过一遍):** ①实现被合理重写后,这个断言还该不该成立?(→ 断言结果,不断言实现)②生产码今天删掉这段逻辑,它会红吗?(→ 别测自己的副本)③**它能区分「修对」与「以另一种方式修错」吗?**(→ 断言后果集合,夹具用真实时序)
+
 ### 2026-07-27(补记) — 排序修复 × 身份契约反转的交叉复验:**两者正交,且反转把排序质量顺带改善了**(零代码变更,纯交叉验证;`554cd7b1` 与兄弟 `d9acbdf4` 落地后实测)
 
 - **为什么必须查这一条:** 我的显示名排序修复(`2bebb0b3` + `554cd7b1`)的排序键里有一条 `^(aws\.|vertex\.)` 前缀剥离规则,而兄弟同期落地的身份契约反转(`d9acbdf4`)**恰恰就是把这些供应商前缀从 `model_id` 上摘掉**。两个改动打在同一个字符串上,不交叉验证就等于赌它们不冲突。

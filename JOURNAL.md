@@ -1,5 +1,28 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-27(续5) — 「意图滞留」补推落地(owner 拍板 **D1 + D2 一起做**):四判据串联,**其中两条是实测逼出来的,不是票面授权的**(epic `pt_33ba079f5cea4841`;commit `5edd7d2e`,3 文件 +576;新套件 **15/15**,**NEUTER×6 全咬**,相邻环 **62/62**,干净 committed tree 复验 **62/62**)
+
+- **修的是「模型说了要做、然后停住」而任务报成功。** 铁证 conv `ms34yw0k74o2lq` R18:`run_command` 被前置钩子拦下 → 下一轮纯文本「让我改用显式路径」+ `finish=stop` + 0 工具调用 → 任务正常收工。用户视角:对话停在半句上,系统说成功。
+- **★ 票面授权的 A∧B 两条判据实测误报 60%(12/20),所以 C/D 不是锦上添花而是承重墙。** 7 天全量扫出的 20 个 A∧B 命中里:5 个是**模型在问用户**(补推 = 替用户抢答,比停住更糟)、4 个是 VU 回合的既定收尾、3 个是**工具根本不在本轮工具集**(补推 = 逼模型反复去抓拿不到的工具,无界烧钱)。真目标只有 8 例/7 天。**只按票面上线,六成补推是错的。**
+- **★ 实现时被自己的守卫抓出一个真排序缺陷:最需要 D 的场景恰恰是 D 不可达的场景。** 初版按 A→C→D 判定,而 `ask_user` 成功时**它就是最后一个 tool round** → A 读到「上一轮工具正常」直接返回 `prev_tool_ok`,**D 永远跑不到**。也就是说「模型问了用户」这个头号误报类,在我第一版里根本没有被 D 拦住,是被 A 顺手挡掉的 —— 一旦 A 的形状变化(例如 ask_user 之后又有别的失败轮),抢答就会真实发生。已改为 **D 先于 A** 并在代码里写明原因。这条是 charter「守卫必须能咬」的正面收益:**测试红的那一下,暴露的是产品缺陷不是测试缺陷。**
+- **D2 的落地形态比设计稿预想的更轻 —— 不改全局系统提示。** 补推文本自身就告知 `[END_TURN: awaiting_human|done|blocked]` 的用法:模型只在**被补推时**才需要这个出口,平时收尾不受影响。好处是零常驻 prompt 成本、零契约风险,**未被补推的会话行为字节不变**。未知 reason 一律当「未声明」,防止模型用任意文本静默掉这道安全网(守卫 `test_an_invented_end_reason_does_not_suppress_the_nudge` 钉死)。
+- **D1/D2 的分工是互补而非冗余(这正是 owner 要两条都做的理由):** D1 读状态(`ask_user`/`request_human_input`/live guidance),精确但**看不见用纯文本提出的问题**——那种问法不调任何工具,状态面上什么都没有;D2 读模型自报,恰好补上这个盲区。两条各有独立 NEUTER,删任一条都有测试变红。
+- **守卫结构:四个假阳性类别各一条独立测试。** 聚合测会让抑制器被逐支删掉而套件保持绿(charter 已记的失效家族)。NEUTER×6 各咬各的:A→3 红、B→1 红、C→1 红、D1→1 红、D2→3 红、去掉 1 次封顶→1 红。另有「措辞不得成为判据」的双向对照:无行动词的短句仍要补推、有行动词但结构正常的收尾不许补推。
+- **上限 1 次/任务**(与既有 retry cap 同纪律):补推后仍纯文本 stop 就放行收工,避免把「不肯动手」变成无限账单。
+
+### 2026-07-27(续4) — 「交易页面为什么长这样?能不能优化一下?」实测判定**不是设计问题,是 CSS 全 404**:11 条绝对路径在代理前缀下丢前缀(tofu-trade `29457bd`,3 文件 +164/-16;新套件 **4/4**,**NEUTER×4 全咬**,相邻环 **25/25**,干净 committed worktree 复验 **0 条残留 + 25/25**)
+
+- **★ 用户问的是「能不能优化」,但截图里根本没有可优化的设计 —— 那是一个 CSS 一条都没加载上的裸 DOM。** 先判「这是渲染失败还是审美问题」再动手,否则会去改一个其实没生效的样式表(本轮最值钱的一步就是没有直接去动 `trading.css`)。判据:截图里导航是竖排纯文字、按钮无边框、`1/2/3` 步骤号裸奔 —— 这是浏览器拿不到任何样式表时的默认流,不是某个 `.css` 写坏的样子。
+- **根因:`trading.html` 的 11 条自有资源引用全是根绝对路径(`/trading-static/...`)。** 本项目常态部署在路径前缀反代后面(实测 `VSCODE_PROXY_URI=https://…/proxy/{{port}}/`,`server.py::_detect_reverse_proxy` 枚举了 VS Code/Codespaces/Gitpod/JupyterHub 四类)。页面实际位于 `<prefix>/trading.html`,而 `/trading-static/trading.css` 会**相对 origin 解析、把 `/proxy/15000` 前缀整段丢掉** → 3 个样式表 + 8 个 JS 模块**全部 404**。
+- **★ 失败形态是「静默且完全」:DOM 照常绘制,只是没有任何样式。** 所以它看起来像「设计很丑」而不是「页面报错」—— 与 charter 记的「措辞精确的假归因」同族,只不过这次误导的载体是**视觉**:用户看到的不是错误页,是一个看起来像做得很糟的产品。
+- **判据来自项目自身既有约定,不是我的偏好:** 宿主 `index.html` 的绝对路径资源引用数实测 **0**(全相对),而 trading 页 11 条。`git log -S` 查明该页**从未**相对过 —— 绝对路径在插件抽离时(`0a5041c`)一次性带入,`static/vendor/*` 和 `static/js/api.js` 却是相对的,**同一个 `<head>` 里两套写法并存**,这就是它能长期没人发现的原因(共享资源一直是好的)。
+- **同一 bug class 顺手修掉第二处:`<a id="homeLink" href="/">`** —— 前缀部署下点「返回主页」会跳到**代理自己的根**而不是 Tofu 首页,即除了浏览器后退键没有别的路出去。改 `./`。
+- **守卫断言「结果」不断言路径字面量:** `test_page_asset_paths.py` 断言的是「**任何资源引用都不得在带前缀挂载下丢前缀**」,所以将来重命名 `trading-static`、加一个样式表、调 `<head>` 顺序都**不会**假红,而重新引入一条绝对路径**必红**。failing-first 实测精确红在 11 条 + homeLink 上。
+- **NEUTER×4 各咬各的:** ①还原一条绝对 CSS → 前缀守卫红;②homeLink 还原 `/` → homeLink 那条红;③**补集**:用「把 css link 全删掉」来「修」→ 3 条红(否则「删干净」也能让禁令变绿而页面更坏);④**扫描面**:抽掉全部 `<script src>` → 3 条红(扫描面残缺时守卫会空转,charter 已记的第 N 个变种)。
+- **顺带修掉一条会被我改红的既有测试,且改的是锚点不是断言:** `test_frontend_reconcile.py` 用 `html.index('/trading-static/trading.css')` 硬编码了带斜杠的字面量。它真正要守的是**层叠顺序**(bridge 必须在 trading.css 之后),与路径形状无关 —— 故按文件名重新锚定而非改断言语义。
+- **诚实分账:** tofu-trade 全环 **15 红**,全部是 `ModuleNotFoundError: lib.api_response`(宿主不在 `sys.path`)。已在**未含我改动的干净 HEAD worktree** 上复验同样 15 红 → 预存在、与本轮零相关;两侧差值恰为我新增的 4 条绿(15F/100P → 15F/104P)。
+- **未做:** 页面的**真实**视觉设计一行未动 —— 在样式表真的加载上之前,任何审美判断都没有依据。若样式恢复后用户仍想调设计,那是另一张票。
+
 ### 2026-07-27(续3) — 工具集中管理·`run_command` 输出折叠器:**owner 连续两轮否掉我的实测口径,把 P0 从「丢数据」改判成「造假事实」**;顺带抓出一条凭空造硬件的假归因(commit 待填;新套件 **8/8**,**NEUTER×4 全咬**,相邻环 **84/84**,干净 committed worktree 复验 **35/35**)
 
 - **★ 本轮最值钱的不是修了什么,而是我的度量口径被推翻了两次,而两次都是我自己在用合成 fixture 冒充生产行为。**
@@ -32,7 +55,13 @@
   - **`.docx` 的截断分支经实测**可达**,不是死分支** —— 30,000 段落只需 **258,691 字节**(OOXML 压缩比极高)即可产出 5,245 万字符触发上限,远在 `MAX_FILE_BYTES` 之内。故**保留**该分支且**不加**「无生产可达性」标注 —— 与 `_DEVICE_RE` 那次的处置相反,判据是实测而非印象。
   - **语料纪律(owner 批准的口径):** 真 OOXML 容器 + 真 5,000 行规模 + **内容脱敏**。被测属性是**行数与截断行为**,与单元格语义无关,脱敏不影响判据;**这与上轮被否的合成 fixture 不同** —— 那次假的恰恰是被测量的「相似度」本身。生产文档**不入库**。守卫的 `test_scan_surface_report` 在任何断言前先打印「写了几行/保留几行/几条 warning/字符上限有没有被碰到」,确认每份语料真的越过对应阈值。
 
-- **★ 续2:「截断必须报分母」升级为 `lib/doc_parser` 的模块级契约 + AST 棘轮(commit 待填;套件 **11 过 1 skip**,**NEUTER×4 全咬**,相邻环 **37 过 1 skip**,干净 committed worktree **17 过 1 skip**)。**
+- **★ 续3:`log_clean` 折叠标记的第二份副本收口 —— 定性按 owner 判据**降**一档,并抓到守卫自己的「静默 skip」(epic `pt_47570a2380d441fd`;套件 **6/6**,**NEUTER×5 全咬**,`test_log_clean` 环 **31/31**,干净 committed worktree **31/31 零 skip**)。**
+  - **先验证票面前提再动手,端到端实测确认缺陷真的到达用户:** 8 行 `DataLoader worker N`(输入里**没有任何** GPU 词)经 `detect_log_noise` 渲染成 `… (7 more similar, ×8 devices: 0-7) …`;3 个 `postgres: io worker N` 同样被算成「设备」。该路径是**活的**——`routes/api_v1/logs.py` → 前端日志降噪横幅,不是死代码。
+  - **严重度按 owner 定性保持低一档,未照抄 `command_analysis` 的三层门控。** 这里 `_format_device_range` **不加 `cuda:` 前缀**,所以从不产生「三个 postgres 进程 = 三块显卡」这个**具体假事实**;唯一未经证据的只有 `devices` 这个**词**。故修法是**中性措辞**:新增 `_describe_numbered_variants` 单一描述器,三处折叠点(进度条 / Pass A 连续 / Pass B 分散)全部改走它 → `×8 numbered variants: 0-7`。**没有引入加速器证据分层**——那套是为支撑 `cuda:` 标签才需要的,此处无标签可支撑。
+  - **补集守卫是必需的:** 只断言「不许说 devices」时,把整个注解删掉也能变绿而信息量反而下降。故补 `test_the_index_spread_is_still_reported` 断言 `0-7` 与数量仍在;NEUTER-4(描述器返回 `''`)精确红在这一条。
+  - **★ 本轮最值钱的一条:我的守卫第一版在干净检出里会永远 SKIP。** 语料原本从 `debug/test_log_cleanup.py` 运行时读取(那是**真实用户日志**,docstring 写着 "the user's exact example"),但 **`debug/` 被 `.gitignore` 忽略**——干净 worktree 上 2 条测试直接 skip 而套件**报绿**。这正是 charter 记的「守卫绿着空转」家族。改法:把该样本**入库**到 `tests/fixtures/real_worker_progress_log.txt`(带来源注释),且**语料缺失从 skip 改为硬 fail**;NEUTER-5(删掉语料文件)→ 2 条**红**而非跳过。
+  - **诚实记账:** 实测扫过 `logs/` 下**全部 24 个真实日志**,**没有任何一个**含「带编号且能触发折叠」的样本(它们折叠得很凶——`vendor.log` 折掉 5,633 行——但一律不带编号)。故这条路径唯一可得的真实语料就是那份捕获的训练日志,已在守卫文档头写明,**未用合成模板串顶替**。
+- **★ 续2:「截断必须报分母」升级为 `lib/doc_parser` 的模块级契约 + AST 棘轮(commit `a1484d1a`;套件 **11 过 1 skip**,**NEUTER×4 全咬**,相邻环 **37 过 1 skip**,干净 committed worktree **17 过 1 skip**)。**
   - **实际缺口比开工时认为的宽:先扫后断,查出 6 处**(不是 owner 点的 2 处)。除已修的 xlsx 三刀外,`_extract_docx` / `_extract_pptx` / `_extract_doc_legacy` / `_extract_xls_legacy` / `_extract_ppt_legacy` / `_extract_plaintext` **全部**只报「限额」不报「原量」。**先打印扫描面再写断言,这次直接兑现了收益。**
   - **★ pptx 那条不只是缺信息,是措辞误导(与 `log_clean` 判据同族)。** `Truncated at slide 48` —— 而总共 **200 页**。读起来像「第 48 页出了问题」,真相是「200 页里只给了你 47 页」。模型完全可能据此以为自己拿到了绝大部分内容。现为 `kept 47 of 200 slides; stopped at slide 48; the rest was NOT read`。
   - **落点是单一构造器而非逐处修补:** 新增 `lib/doc_parser/_truncation.py::truncation_warning(kept, total, unit, scope, detail)`,六处全部改走它;`total` 未知时**显式说出** `of an unknown total`,而不是悄悄省掉分母。**这是 charter 里 `redact_config` 从黑名单翻成 fail-closed 白名单的同一形状** —— 明年新增第七个格式时,**没有第二种方式**可以写出一个裸分子。

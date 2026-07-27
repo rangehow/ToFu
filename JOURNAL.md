@@ -36,6 +36,15 @@
 - **安全性由 reducer 的身份闸承担,不靠外层丢帧:** 流式中的尾轮本地正文与服务器不同 → reducer 直接拒绝;只有**已结束**的轮次能拿到译文。这是「精确开一条增量通道」而非拆闸的关键——不变式「不覆盖正在流式的气泡」由更靠内的一层保住了。
 - **后台会话(第三格)实测无需改码:** 四条重开分支(3 merge + 2 wholesale)全部经过共享 reducer,含 `loadConversationMessages` 的 cache-fresh 分支(`conversations.js:1662` 合并后再 `ConvCache.put`)。**先实测再动手,省下一刀无谓的改动**——owner 提的「别假设 `_needsLoad` 恢复路径经过 reducer」正是该查的点,查完是真经过。
 - **旧断言的处置(诚实记录):** `test_frontend_conv_notify_push.py` 4 项断言写的是「整帧丢弃」(`getCalls.length === 0`),那正是本次刻意改掉的行为。改为断言**「不发生破坏性采纳」**(正文逐字符不变 + 未重绘 + `_serverRev` 未推进),即这些用例真正要保护的性质;NEUTER A 重指向改道块。**没有把它们删掉或调宽——守卫要的性质一条没少。**
+### 2026-07-27 — 乱码 403/400 逃逸分类器根修:72h 全部 6 个 Opus 5 任务死亡同根(owner 复核揪出反例后下令;commit `c354bb18`,2 文件 +126/-1;failing-first **5 红 2 绿** → **43/43**,NEUTER 精确咬 1 发,回归环 **112/112**)
+
+- **我上一轮「403 分类器早已正确识别」的裁决错了,owner 拿生产日志当场推翻:** 07-26 10:21(乱码修复 6fe3f9ca 落地**之后**)任务 `f8045792` 第 41 轮,`PermissionError_: API HTTP 403: {"error":{"message":"è¯·æ±å¤±è´¥ï¼...","ext":{"error":{"source":"UPSTREAM_VENDOR"...` —— **双编码乱码形态的 403 被判成 PermissionError_**,直接以 reason=permission 降级 kimi。同日 18:07 对照组(正确解码的中文)走的是正确的 vendor-transient 分支。教训与 journal 已有多条同族:**「某形态测过」≠「所有编码形态测过」,判据必须编码无关。**
+- **根因:** `_is_upstream_vendor_transient`(lib/llm_errors.py)只按**消息文本子串**匹配('请稍后' 等);toio 网关的 UPSTREAM_VENDOR wrap 层把中文消息**双编码**(每个真实 UTF-8 字节再经 latin-1/cp1252 打印层重编码),文本形态全灭。而 ext 尾部的 `"source":"UPSTREAM_VENDOR"` 是**纯 ASCII、任何编码下都活着**,当时却没人看它。
+- **72h 全量 fallout,6 个任务死亡同根(DB task_results 逐个捞 detail 实证,非推测):** 4 个 permission 死(07-25 21:42)+ 2 个 generic 死(07-25 19:35/21:23,detail 全是乱码 400)+ 34 次 permission 类 kimi 降级。全部戴着 charter 明令禁止的「API Key 被拒绝 → Settings→Keys」误导航信封。**且在 budget=0 现行 regime 下,这是唯一还能杀任务的路径** —— permission 不可重试,owner「愿意等」的拍板在这条路上根本走不到。
+- **根修(三层,编码无关优先):** ①`"source":"UPSTREAM_VENDOR"` ASCII 标记直接判 transient —— 网关自己对故障的归因,乱码免疫;**`toio_api_error` 单独不算数**(它是网关通用错误类型,真鉴权 403 也带,测试钉死);②原文短语(不变);③`repair_mojibake` 修复后短语 —— 兜 ext 尾被截断的形态,但 repair 对混合编码**按设计拒绝**,所以第①层不能依赖它(NEUTER 的咬合点正在此)。
+- **验证:** failing-first 用**生产原文**(乱码 403+标记 / 混合编码 repair 拒修变体 / 无标记乱码 / qwen-plus 裸文本乱码 / toio-type-only 与真 401 两控制 / 乱码 400)**5 红 2 绿**,修后 43/43;**NEUTER**(标记分支改 `if False`):精确 1 红(repair 拒修变体 → 复现生产 PermissionError_ 形状),其余 6 绿证明多层各司其职;cp 备份往返 + `diff -q` 逐字节还原。回归环:error-body 43 + sse_core/first-byte/dispatch 40 + envelope i18n/transparency 29 = **112/112**。
+- **覆盖确认:** 谓词仅两个调用点(401/403 分支 + 400 分支),共享 `_classify_http_error` 咽喉 → 全模型线(qwen-plus 07-26 18:07 的裸文本 403 同伪装已由裸文本乱码测试钉住)。**需重启生效** —— 重启前乱码 4xx 风暴仍有杀任务风险。
+
 ### 2026-07-27 — Opus 5 稳定性攻坚:72h 量化 + 参数兼容性实测干净 + 熔断器提案实测否决 + 兄弟观测探针入库(owner「旗舰必须 100% 发挥,稳定优先于实时」;epic `pt_e14be5de174745ab`;唯一 commit `50e75211` 纯观测;SSE 七套件 **125/126**,唯一红 A/B 实证预存在)
 
 - **72h 量化(PG task_results + audit.log + error.log,非抽样):** opus-5 共 **285 任务**(模型 07-25 才上线):done 63.9%、error 0.7%、**interrupted 29.5%(最大异常面,看门狗/超时中止)**。fallback→kimi-k3 **97 次全部发生在 11:51 重启前**(旧 120s 故障预算 regime);**重启后零降级**——包括当天 14 时一场 **160 次 503** 的风暴(app.log 逐时计数实证),`TOFU_GATEWAY_OUTAGE_BUDGET_S=0` 按 owner 拍板工作正常。TTFT p50=24.2s / **p90=173.1s / p99=340.5s**(kimi-k3 p90 仅 35.8s,尾延迟 ~5×),FirstByteTimeout 全天仅 2 次——180s 看门狗几乎不误杀,压在 p90 之上的设计值成立。

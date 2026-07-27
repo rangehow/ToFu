@@ -1,6 +1,15 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-27(续) — app.log 9.1GB 事故重启后验收收口:**验收脚本自己是第三个缺陷**(211s→2s 有界读 + cutover 显式锚;commit `251ae245`,1 文件 +200/-66;干净 committed worktree 复验 **6/6 EXIT=0**)
+
+- **重启后根因确认解除,判据是日志形态而非进程年龄:** 17:17:45 之前全是 `Round N/∞ START`(旧、无界),19:21:05 之后全是 `Round N/∞(np=10,t=1800s)`,**17:17 后再无一条裸 ∞**。20:35 最新一条仍是新格式 → 服务进程确实在跑修复码。
+- **★ 我自己的 liveness 检查曾产生假红,根因是 re-exec 保留进程启动时间。** 初版拿 `ps` 启动时间与 commit 时间比,而本项目**重启走 re-exec**:pid 101752 的 `lstart` 与 `/proc` mtime 都还是 13:46:23,却在发新格式日志。按 charter「行为守卫必须断言结果」改为断言**它发出的日志形态**——不管代码是怎么重载进去的(restart / re-exec / 热导入)都成立,这才是 liveness 检查该有的性质。
+- **★ 本轮最值钱的发现:验收工具本身不可用,而且是它要防的那类问题的同构体。** 两个检查**逐行读完整个 app.log**,在事故当天的 **9.15GB** 上实测 **211 秒**、把 9GB 拽进 FUSE 页缓存。两个后果都是否决性的:①运维三周后跑它、看它静默挂 3.5 分钟会直接 Ctrl-C,于是「重启后唯一可信裁决」等于不存在;②charter 刚裁定 FUSE 页缓存顶满是夜间 SIGKILL 的根因之一,**验收脚本自己成了内存压力源**。修法:单一有界尾部读(`_read_log_tail`,32MB ≈ 20 万行)被所有日志类检查共用;窗口内无可判据据时**显式报错**,绝不退化成全文件扫描。实测 **2 秒**、同样 6/6。
+- **★ 第二个缺陷是「cutover 缺失时隐式认定全部都算新的」——今天恰好还能通过,这正是它危险的地方。** 切片锚在「最后一条裸 ∞ 行」上,而**今晚 0 点轮转后这条证据就没了**,`cutover=None` 会让语义从「判新代码产出」静默漂移成「判全部历史」。改为 `_cutover_anchor` 返回 `(锚, 来源)` 的显式回退链:裸 ∞ 行 → 服务进程启动时间 → **失败并说明原因**。两种轮转后形态各自实测:只有新格式 → 用进程启动锚、通过;轮转后回归旧格式 → **两个日志检查同时红**,而不是静默放过。注意进程启动时间在这里**只作切片锚**,绝不用来推断「代码是否已修」(那正是上面那个假红的成因)。
+- **pytest-timeout 环节已闭合(此前「声明了但没装」是误判):** 用 `/usr/bin/python` 测的,而项目解释器是 miniforge tofu env——**JOURNAL 早有同类记载**(本机 `python` 是 Python 2),此处第三次确认:任何验证都必须显式用项目 `python3`。实测 `pytest-timeout 2.4.0` 已装,`pyproject.toml` 的 `timeout = 300` + `addopts` 里 `-p pytest_timeout` 都在(后者是 load-bearing:套件常带 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`,不显式点名插件则该设置失效)。
+- **共享 HEAD 纪律(本轮两处):** ①工作树里 `lib/llm_sanitize/_gateway.py` 是兄弟的在飞改动且**语法坏的**(`_GATEWAY_BLOCKED_TERMS = {` 开头行缺失),它让三个验收检查 `import lib.log` 时崩溃——先用 `git show HEAD:` 确认 HEAD 本身可解析,判定为兄弟未提交状态,**全程未碰**;提交用显式单文件 pathspec + 提交前 `git diff --cached --name-only` 计数断言(=1)。②复验用 `git worktree` 检出 committed tree(**0 dirty files**)+ 把真实 `logs/` 软链进去,**6/6 EXIT=0 2s**,证明结论不靠我的脏树;用完删除我自己的两个 worktree(注:`git worktree remove` 会因软链被判 dirty 而失败,需先 `unlink` 再 `rm -rf` + `prune`;/tmp 下另有 ~55 个兄弟的 worktree,一个没动)。
+
 ### 2026-07-27(续) — 覆盖缺口 epic `pt_0c04c2b7` 收口:补测两个真缺口(_derive 10%→98% / webhooks 31%→59%),并先修掉 [I] 覆盖判据的假绿(commit `e7aa422b`,3 文件 +780/-13;52/52,**NEUTER×8 全咬**,committed-tree worktree 复核 52/52)
 
 - **先修元问题:[I] 覆盖判据自己就是假绿。** 票里点名「[I] 只扫 lib/*.py 顶层故报 0」。查明两因:①只枚举 `lib/*.py`+`routes/*.py` **顶层**,而本库几乎全部行为都在子包(tasks_pkg/database/llm/…);②`mod.startswith(k+'.')` 让「测试只提到**父包**」就算该模块被覆盖。修好后从报 0 → **340 模块 / 60,664 LOC 零测试引用,116 个在关键路径**。charter 说的「检测器不报 = 检测器没在找」正是这条——一个「干净」结果必须用一个独立方法交叉验证后才信。
@@ -9,6 +18,16 @@
 - **两个测试文件全是行为断言(charter 纪律),且有意不走 Quart test client。** `test_webhooks_fanout.py` 钉:secret 绝不进读路径(泄漏=永久凭据泄漏)、签名覆盖 `ts.body`(否则重放窗口无界)、四层过滤 AND 语义(task_id 过滤错=跨租户把 A 事件投给 B)、非 2xx 判失败供重试(否则静默丢事件)、扇出绝不拖垮浏览器 push。**特意不经 in-process test client**:它把对端报成 `'<local>'`,会静默走回环 auth 豁免(兄弟 epic `pt_f6742ab6` 正在查)——路由级测试会测到豁免路径而非真实远程行为,auth 强制归那个 epic。
 - **实测覆盖率提升:** `_derive.py` 10%→98%(剩 1 条 import 异常分支)、`webhooks.py` 31%→59%(剩 worker_loop/持久化/路由体样板)。按北极星「不镀金」在钉住决定语义的判据后停手,不为刷数字堆测试。`_pg_ownership/*`(含大量子进程/daemon/锁语义)与 `_commit.py`/`_profile.py` 留作后续单独 epic——值得认真做,不该塞进本批凑数。
 - **台账棘轮 `ratchet OK`**——两个新测试文件零违规(自己造的闸自己先过)。
+
+### 2026-07-27 — 统一设备桥 B0 落地:桥认证改为凭据制、地址盲;浏览器桥补 per-user 作用域;并顺带收口 test-infra 假绿(pt_130129b5 + pt_f6742ab6,commit `973edd92`,6 文件;10 套件 **182/182**,NEUTER×4 全咬,净 worktree 复验 **113/113**)
+
+- **B0 修的是一个会话接管原语,不是路由毛刺。** 浏览器桥此前**零用户作用域**(`grep user_id lib/browser/` = 0 命中),而 desktop 桥已全链带。桥命令能读整个 cookie jar、挂 DevTools debugger、写文件、跑 shell —— relay 部署下 A 租户的扩展能领走 B 租户的命令。镜像 desktop 桥落地:`mark_poll` 带 `user_id`、投递谓词**先查租户** fail-closed、状态按租户过滤;wire 投影逐字节不变(`{id,type,params}`,user_id 永不上线)。
+- **桥端点改成凭据制、地址盲,且插在 open-mode 短路之前。** 关键定性(owner 纠正我):「回环免认证」在同机反代下等价于「全网免认证」—— nginx/ngrok/cloudflared 同机反代到 127.0.0.1 是隧道的标准形态,`ProxyFix` 又未接线(pt_30d400a167df4440),`remote_addr` 对公网请求恒为 `127.0.0.1`。**地址不是凭据。** `TOFU_OPEN_MODE_ALLOW_REMOTE` 只能开普通 UI,不能降级桥(owner 拍板的不变量,有守卫钉死);OPTIONS 预检永不被闸(CORS 规范本就剥凭据,拦它会废掉扩展跨源调用);托盘同进程 agent 走进程内随机 token(`secrets.token_urlsafe`,不落盘、不进 env —— 落盘等于把「只有本机进程能读」降级成「任何本地用户能读」,回到同一个洞的另一件外衣)。
+- **威胁模型结论必须实测,推导不算 —— 本稿记了我自己的一次自我推翻(与 charter 的 cache_control 同族)。** 初版据 `routes/browser.py` 的 `return True` 推导「LAN 未认证」,实测真实 app 是 401:全局 open-mode 闸(`auth.py:317-326`)已先拦。后来 NEUTER 反向验证又推翻一次:那道闸自己就是纯 IP 判定,同机反代下照样放行。**读了一个函数、逻辑自洽,不足以断言攻击面存在或不存在 —— 中间件、装饰器、上游 hook 都可能改结局。** 每一格都要有一次真实请求的状态码。
+- **test-infra 假绿(pt_f6742ab6)是掩盖上述一切的测试陷阱。** Quart 进程内测试客户端缺省上报 `'<local>'`,被 `_remote_is_loopback()` 判为回环 → 自动获得 open-mode 合成 admin 豁免。**任何不传 `scope_base={'client': (ip,port)}` 的「未设凭据 → 200」断言都是假绿。** 三个样本:`TestBridgeAuthDisabledByDefault`(4 条,从未测过真实远程)、desktop 三条 poll e2e、`test_open_mode_unchanged`(与同类相邻两条 401 断言**自相矛盾**,只因假绿才共存)。全部改为显式 `scope_base` + 翻转期望,并各补一条「回环长相也必须有凭据」的 401 守卫。
+- **NEUTER 四发全咬,且每发都验证「守卫改完还咬得住」:** ①摘 user 首闸 → 跨租户投递放行必红;①b 中和整个谓词 → 两条跨租户全红;②摘桥端点闸 → 4 红(回环无凭据放行 ×2 + 远程带凭据被拒 + 跨套件);③让 ALLOW_REMOTE 降级桥 → 不变量守卫精确红。
+- **过程事故(共享 HEAD,两次):** ①兄弟的 `lib/llm_sanitize/_gateway.py` 破窗 WIP(IndentationError)阻断全仓 import —— 备份其 WIP → 临时垫 HEAD 版跑测试 → 跑完逐字节还原(我不动兄弟的活);②`git add` 的 11 文件里混进兄弟的 `tests/_acceptance_runaway_guards.py`(+266 行,我从未碰过)—— `git reset HEAD <path>` 逐出后精确 pathspec 提交。**教训:提交前必须 `git diff --cached --name-only` 核对暂存集,暂存区会被兄弟的共享 HEAD 操作清空或污染。**
+- **余留(下两期):** B1 抽共享队列底盘(TTL/寻址/长轮询/user-scope);B2 统一设备注册表(一个 device_id,多 capability);B3 launcher 补配置面 + 配对码;B4 一份 canonical 安装页并入 `docs/INSTALL.md` + 收窄默认权限至 10 项。设计稿 `docs/UNIFIED_DEVICE_BRIDGE_DESIGN.md` 有完整分期与 17 权限逐条 keep/drop 审计。
 
 ### 2026-07-27 — 守卫失效的**第四态**:「断言写在我以为的错误形态上,窄于真实故障」(owner 拍板记入;起因 = VU busy 信号修复 `7daf7c28` 过程中我**同一任务内连犯两次**同型错误)
 

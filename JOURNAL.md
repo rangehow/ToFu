@@ -1266,3 +1266,10 @@
 - **§6 待核对项查实:** 超时熔断路径**不发 ROUND_END**(四处发站点:budget×2/aborted/tools 自然;熔断 break 无事件)——由此暴露一个**预存在小缺陷**:该轮 ROUND_START(:540 已发)永无配对 ROUND_END,渲染层可能留一个永不关闭的 round。按纪律单独开票不进重构批(板已挂)。
 - **共享 HEAD:** 兄弟 `_resume_state.py` WIP 精确排除;7 文件 pathspec。
 - **下一刀(Slice 2,链上最硬):** 循环体按钩拆出 dispatch/execute_tools/before_round/retry_bonus,while 换 `run_agent_loop`——`retry_bonus` 接 `analyse_stream_result` 判定那刀是「真迁移」刀,单独成 slice;预算闸按裁决挂 dispatch 钩出口侧。
+
+### 2026-07-27 — 超时熔断 ROUND_START 无配对根修(epic `pt_a1895646a571439d`,slice 链发现的预存在缺陷,自主派单收口;commit 见下,3 文件 +7/-2;新守卫 **4/4 含 failing-first 实证**,注册表 4/5(唯一红=兄弟 WIP,A/B 证),reducer parity+chat wire+orchestrator parity **70/70**,collect **10474** 0 err)
+
+- **前端容忍度先取证再动刀:** `stream_reducer.js:126` 的 `case 'round_end'` **只清 `_currentRound`,从不读 `ev.reason`**;sse_pipeline 同样只转发——reason 是纯信息字段,新值零风险,前端零改动。修:熔断 FORCE STOP 的 `break` 前补 `ROUND_END reason='tool_timeout'`(对齐 budget×2/aborted/tools 四条已有配对路径),`events.py` 注册表 reason 枚举同步(+tool_timeout,additive 不 bump 版本)。
+- **守卫四针:** ①熔断分支 break 前有发射(failing-first 实证:同一扫描跑 HEAD 源码 pin1=False 且 reason 集无 tool_timeout,精确翻红);②_run.py 全部 ROUND_END 站点 reason 落封闭枚举(过程自坑:用 set 计数 ≥5 永远失败——budget 两站点去重后只剩 1,改 list 计数 set 判集);③注册表文档同步;④**容忍度反向钉**:reducer round_end case 体不许出现 'reason'——将来有人把 reducer 改成 reason 敏感,这针强迫同步重审枚举。
+- **顺带 A/B:** test_event_registry 的 `model_fallback` 未注册红 = 兄弟 health_stream_timer.js 在飞 WIP(HEAD 注册表 0 命中 + 该文件兄弟持有),与本修零关系,留给其批次携带。
+- **生效条件:** 后端改动,重启后生效;纯新增一个事件,不重启则熔断路径维持旧行为(已知的 START 无配对)。

@@ -226,8 +226,8 @@ _SPECS: tuple[EventSpec, ...] = (
               'inferring end-of-round from the next `round_start` or a `done`. '
               'Non-terminal (a `done` still follows on the terminal path).',
               fields={'roundNum': 'the round index this boundary closes',
-                      'reason': 'tools|final|aborted|budget|error — why the '
-                                'round ended'}),
+                      'reason': 'tools|final|aborted|budget|error|tool_timeout '
+                                '— why the round ended'}),
     EventSpec(EventType.DONE, _C.LIFECYCLE,
               'Terminal event — the turn finished (success or, with `error`, failure).',
               terminal=True,

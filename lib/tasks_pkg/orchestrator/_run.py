@@ -1309,6 +1309,16 @@ def run_task(task: dict[str, Any]) -> None:
                         raw=f'consecutive_tool_timeouts={rs.consecutive_tool_timeouts}',
                     )
                     rs.exit_reason = f'consecutive_tool_timeouts_{rs.consecutive_tool_timeouts}'
+                    # ★ RENDER_CONTRACT Phase 3: close THIS round's boundary —
+                    #   the FORCE-STOP break otherwise strands the ROUND_START
+                    #   emitted at this round's top with no pairing ROUND_END
+                    #   (the ONLY exit path that skipped it: budget x2 /
+                    #   aborted / tools all pair). The frontend reducer does
+                    #   not read `reason` (stream_reducer.js round_end case),
+                    #   so the new 'tool_timeout' value is wire-safe.
+                    append_event(task, build_event(
+                        EventType.ROUND_END,
+                        roundNum=round_num, reason='tool_timeout'))
                     break
             else:
                 rs.consecutive_tool_timeouts = 0  # Reset on successful tool execution

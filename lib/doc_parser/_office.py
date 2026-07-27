@@ -11,6 +11,8 @@ importing this module never hard-fails when a backend package is missing.
 
 from lib.log import get_logger
 
+from lib.doc_parser._truncation import truncation_warning
+
 logger = get_logger(__name__)
 
 # ── .xlsx scan bounds ──
@@ -55,6 +57,11 @@ def _extract_docx(file_bytes: bytes, limit: int) -> dict:
 
     parts = []
     total_chars = 0
+    # Denominator for any truncation warning: the full text length this doc
+    # WOULD have produced. Computed from the paragraph texts already in
+    # memory via python-docx, so a cut can say "kept N of M chars" rather
+    # than only naming the limit it hit.
+    doc_total_chars = sum(len(p.text.strip()) for p in doc.paragraphs)
 
     # ── Paragraphs with heading detection ──
     for para in doc.paragraphs:
@@ -88,7 +95,10 @@ def _extract_docx(file_bytes: bytes, limit: int) -> dict:
             if remaining > 50:
                 parts.append(line[:remaining])
             parts.append(f'\n[…truncated at {limit:,} chars]')
-            warnings.append(f'Text truncated at {limit:,} chars')
+            warnings.append(truncation_warning(
+                kept=total_chars - len(line) + max(remaining, 0),
+                total=doc_total_chars, unit='chars',
+                detail=f'char limit {limit:,}'))
             break
         parts.append(line)
 
@@ -178,7 +188,9 @@ def _extract_pptx(file_bytes: bytes, limit: int) -> dict:
         total_chars += len(slide_text)
         if total_chars > limit:
             parts.append(f'\n[…truncated at slide {si}/{n_slides}]')
-            warnings.append(f'Truncated at slide {si}')
+            warnings.append(truncation_warning(
+                kept=si - 1, total=n_slides, unit='slides',
+                detail=f'stopped at slide {si}'))
             break
         parts.append(slide_text)
 
@@ -284,25 +296,21 @@ def _extract_xlsx(file_bytes: bytes, limit: int) -> dict:
         sheet_cols = ws.max_column or 0
 
         if truncated_rows:
-            of_total = (f' of {sheet_rows:,}' if sheet_rows > len(rows_data)
-                        else '')
-            warnings.append(
-                f'Sheet "{sheet_name}": kept {len(rows_data):,}{of_total} rows '
-                f'(row cap {_XLSX_MAX_ROWS:,}); the rest was NOT read'
-            )
+            warnings.append(truncation_warning(
+                kept=len(rows_data), total=sheet_rows, unit='rows',
+                scope=f'Sheet "{sheet_name}"',
+                detail=f'row cap {_XLSX_MAX_ROWS:,}'))
         if empty_run_stopped_at:
-            remaining = max(sheet_rows - empty_run_stopped_at, 0)
-            warnings.append(
-                f'Sheet "{sheet_name}": stopped after {_XLSX_MAX_EMPTY_RUN} '
-                f'consecutive blank rows at data row {empty_run_stopped_at:,}; '
-                f'~{remaining:,} further row(s) were NOT read — content below a '
-                f'long blank gap is missing'
-            )
+            warnings.append(truncation_warning(
+                kept=empty_run_stopped_at, total=sheet_rows, unit='rows',
+                scope=f'Sheet "{sheet_name}"',
+                detail=(f'stopped after {_XLSX_MAX_EMPTY_RUN} consecutive '
+                        f'blank rows — content below a long blank gap is '
+                        f'missing')))
         if sheet_cols > _XLSX_MAX_COLS:
-            warnings.append(
-                f'Sheet "{sheet_name}": kept {_XLSX_MAX_COLS} of {sheet_cols:,} '
-                f'columns; the rest was NOT read'
-            )
+            warnings.append(truncation_warning(
+                kept=_XLSX_MAX_COLS, total=sheet_cols, unit='columns',
+                scope=f'Sheet "{sheet_name}"'))
 
         if rows_data:
             ncols = max(n_real_cols, 1)

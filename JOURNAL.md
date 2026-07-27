@@ -32,6 +32,14 @@
   - **`.docx` 的截断分支经实测**可达**,不是死分支** —— 30,000 段落只需 **258,691 字节**(OOXML 压缩比极高)即可产出 5,245 万字符触发上限,远在 `MAX_FILE_BYTES` 之内。故**保留**该分支且**不加**「无生产可达性」标注 —— 与 `_DEVICE_RE` 那次的处置相反,判据是实测而非印象。
   - **语料纪律(owner 批准的口径):** 真 OOXML 容器 + 真 5,000 行规模 + **内容脱敏**。被测属性是**行数与截断行为**,与单元格语义无关,脱敏不影响判据;**这与上轮被否的合成 fixture 不同** —— 那次假的恰恰是被测量的「相似度」本身。生产文档**不入库**。守卫的 `test_scan_surface_report` 在任何断言前先打印「写了几行/保留几行/几条 warning/字符上限有没有被碰到」,确认每份语料真的越过对应阈值。
 
+- **★ 续2:「截断必须报分母」升级为 `lib/doc_parser` 的模块级契约 + AST 棘轮(commit 待填;套件 **11 过 1 skip**,**NEUTER×4 全咬**,相邻环 **37 过 1 skip**,干净 committed worktree **17 过 1 skip**)。**
+  - **实际缺口比开工时认为的宽:先扫后断,查出 6 处**(不是 owner 点的 2 处)。除已修的 xlsx 三刀外,`_extract_docx` / `_extract_pptx` / `_extract_doc_legacy` / `_extract_xls_legacy` / `_extract_ppt_legacy` / `_extract_plaintext` **全部**只报「限额」不报「原量」。**先打印扫描面再写断言,这次直接兑现了收益。**
+  - **★ pptx 那条不只是缺信息,是措辞误导(与 `log_clean` 判据同族)。** `Truncated at slide 48` —— 而总共 **200 页**。读起来像「第 48 页出了问题」,真相是「200 页里只给了你 47 页」。模型完全可能据此以为自己拿到了绝大部分内容。现为 `kept 47 of 200 slides; stopped at slide 48; the rest was NOT read`。
+  - **落点是单一构造器而非逐处修补:** 新增 `lib/doc_parser/_truncation.py::truncation_warning(kept, total, unit, scope, detail)`,六处全部改走它;`total` 未知时**显式说出** `of an unknown total`,而不是悄悄省掉分母。**这是 charter 里 `redact_config` 从黑名单翻成 fail-closed 白名单的同一形状** —— 明年新增第七个格式时,**没有第二种方式**可以写出一个裸分子。
+  - **棘轮 `test_no_extractor_hand_rolls_a_truncation_warning`** 用 AST 走遍包内所有 `warnings.append(...)`,凡参数是**字面量**(非 `truncation_warning(...)` 调用)且含截断语义词的一律红。**扫描面同样先打印**:实测残留 4 处字面量,全部是合法的非截断告警(binary scan ×3、lossy decode ×1),与目标一致。
+  - **NEUTER×4 各咬各的:** ①手写一条 truncation 字符串 → 棘轮 + 该格式守卫**双红**;②摘掉 pptx 分母 → pptx 那条红;③**构造器停止输出 `total` → 5 条跨格式同时红**(证明契约真的是共享的,不是四份巧合);④plaintext 无条件报警 → 补集红。
+  - **legacy `.xls` 诚实 skip:** 本机 `xlwt` 缺失(xlrd 2.x 只读不写),无法造真 `.xls` 容器,故 `pytest.importorskip` 并在 docstring 写明「棘轮仍结构性覆盖该调用点,只是未被行为驱动」。**不为凑覆盖造假环境。**
+
 - **★ 追加一刀(owner 复核后自查发现,同一文件第三处):Phase 3 进度条路径也在无证据地声称设备。** `_clean_command_output` 的 tqdm 分支按「**有几行共享同一个百分比**」推断 `device_count`,于是一个**单进程** data loader 的四条进度条被报成 `, ×2 devices` —— 输入里**根本没有任何设备词**。重复百分比只证明**并发**,不证明**硬件**。改为同 Phase 4 一套判据:有显式加速器词才 `×N devices on cuda:a-b`,否则说 `×N parallel streams`。NEUTER-5(改回按百分比报 devices)/ NEUTER-6(摘掉加速器分支)各自精确红。
   - **★ 我的补集测试第一版是红的,而错的是测试不是产品。** 我把 `cuda:N` 写在 label 里(`cuda:0 train: 50%|…`),但 `_extract_progress_label` **按 bar 之前的文本分组**,于是每行 label 都不同、根本不成组 —— 这个 fixture 对**正确的生产码**也会红。加速器词必须落在 **20 字符以内的 trailing 段**才既成组又带证据。已把这条 fixture 约束写进测试 docstring。判据仍是那句:守卫红了先问「它报的事实是否为真」。
 - **`lib/log_clean/_helpers.py` 的第二份副本:同族但**低一档**,勿照抄本轮结论。** 它的正则同样混了 `Worker/rank/device` 与 `cuda/GPU`,**但 `_format_device_range` 不加 `cuda:` 前缀**,渲染出来是 `, ×3 devices: 0-2` —— 不会造出「CUDA 显卡」这个具体假事实,但 `devices` 这个词本身仍是未经证据的断言。**修法是把 `devices` 换成中性的编号变体表述,不是照搬三层门控。** 已独立开票,不在本批写集。

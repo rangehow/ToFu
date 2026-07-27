@@ -11,11 +11,29 @@ of them used to tell the caller how much was dropped:
     **no warning at all**, so a sheet shaped "summary / 60 blank rows /
     detail" lost the whole detail block leaving no trace in the output.
   * ``_XLSX_MAX_COLS``      — same missing-denominator shape as rows.
+  * ``_extract_pptx``       — ``Truncated at slide 48`` — of *200*. That reads
+    like "slide 48 had a problem", not "you received a quarter of the deck":
+    the wording itself misleads, it is not merely incomplete.
+  * ``_extract_docx`` / ``_extract_doc_legacy`` / ``_extract_ppt_legacy`` /
+    ``_extract_plaintext`` — ``Text truncated at N chars`` names the LIMIT,
+    never the original size.
 
 The measured char budget is NOT the cause of any of this: production passes
 ``MAX_TEXT_CHARS = 50 * 1024 * 1024`` (and the upload route passes 0 =
 unlimited), so a 175 KB / 5,000-row book never comes near it. These are
-ROW/COLUMN-level caps, independent of the char budget.
+ROW/COLUMN/SLIDE-level caps, independent of the char budget.
+
+THE CONTRACT (structural, not editorial)
+----------------------------------------
+All truncation warnings are built by ``lib/doc_parser/_truncation.py``'s
+``truncation_warning``, and
+:func:`test_no_extractor_hand_rolls_a_truncation_warning` walks the package
+AST to prove no site bypasses it. That is a fail-closed ratchet in the same
+shape as the MCP credential redactor — a format added next year cannot
+reintroduce a bare numerator, because there is no other way to phrase one.
+
+Legacy formats (.doc/.xls/.ppt) skip honestly when their optional backends
+are absent rather than faking an environment.
 
 DISCIPLINE (charter)
 --------------------
@@ -32,7 +50,9 @@ DISCIPLINE (charter)
   cannot leave the suite green while testing nothing.
 """
 
+import ast
 import io
+import pathlib
 
 import pytest
 
@@ -181,3 +201,161 @@ def test_an_untruncated_sheet_claims_nothing():
     res = _extract_xlsx(_real_xlsx(_sheet_small), PROD_CHAR_LIMIT)
     assert res['warnings'] == []
     assert res['textLength'] > 0
+
+
+# ══════════════════════════════════════════════════════════
+#  The RATCHET — no site may hand-roll a truncation warning
+# ══════════════════════════════════════════════════════════
+
+_PKG = pathlib.Path(__file__).resolve().parent.parent / 'lib' / 'doc_parser'
+
+# Words that mean "content was dropped". A warning containing one of these
+# is a truncation announcement and must come from the shared constructor.
+_TRUNCATION_WORDS = ('truncat', 'kept ', 'skipped', 'stopped after')
+
+
+def _warning_append_strings():
+    """Every literal string appended to a `warnings` list in the package.
+
+    Returns [(file, lineno, literal_or_fstring_source)]. Scans the AST so a
+    reformat cannot hide a site from the ratchet.
+    """
+    found = []
+    for path in sorted(_PKG.glob('*.py')):
+        tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            if not (isinstance(fn, ast.Attribute) and fn.attr == 'append'):
+                continue
+            if not (isinstance(fn.value, ast.Name)
+                    and fn.value.id == 'warnings'):
+                continue
+            for arg in node.args:
+                # A call argument (truncation_warning(...)) is compliant.
+                if isinstance(arg, ast.Call):
+                    continue
+                try:
+                    src = ast.unparse(arg)
+                except Exception:                     # pragma: no cover
+                    src = '<unparseable>'
+                found.append((path.name, node.lineno, src))
+    return found
+
+
+def test_ratchet_scan_surface(capsys):
+    """Print the scan surface before asserting on it (charter discipline)."""
+    sites = _warning_append_strings()
+    print('\n--- ratchet scan surface: non-call warnings.append sites ---')
+    for f, ln, src in sites:
+        print(f'  {f}:{ln}  {src[:90]}')
+    print(f'  total: {len(sites)} literal site(s) across '
+          f'{len(list(_PKG.glob("*.py")))} module(s)')
+    # The scan must actually find the package; an empty walk would make the
+    # ratchet below vacuous.
+    assert list(_PKG.glob('*.py')), 'AST walk found no modules to scan'
+
+
+def test_no_extractor_hand_rolls_a_truncation_warning():
+    """Any NEW truncation phrasing must go through truncation_warning().
+
+    Non-truncation warnings (missing backend, lossy decode, binary scan) are
+    legitimately literal and stay allowed — the ratchet targets exactly the
+    class of message that must carry a denominator.
+    """
+    offenders = [
+        (f, ln, src) for f, ln, src in _warning_append_strings()
+        if any(w in src.lower() for w in _TRUNCATION_WORDS)
+    ]
+    assert not offenders, (
+        'These sites announce a truncation with a hand-written string, so '
+        'nothing forces them to state a denominator. Route them through '
+        'lib/doc_parser/_truncation.py::truncation_warning:\n'
+        + '\n'.join(f'  {f}:{ln}  {src}' for f, ln, src in offenders)
+    )
+
+
+# ══════════════════════════════════════════════════════════
+#  Per-format coverage of the same contract
+# ══════════════════════════════════════════════════════════
+
+def test_pptx_truncation_states_the_deck_size():
+    """`Truncated at slide 48` of 200 read like a per-slide fault."""
+    pptx = pytest.importorskip('pptx')
+    prs = pptx.Presentation()
+    for i in range(200):
+        slide = prs.slides.add_slide(prs.slide_layouts[5])
+        slide.shapes.title.text = f'Slide {i} ' + 'content ' * 50
+    buf = io.BytesIO()
+    prs.save(buf)
+
+    from lib.doc_parser._office import _extract_pptx
+    res = _extract_pptx(buf.getvalue(), 20_000)
+    assert res['warnings'], 'slide truncation must warn'
+    warn = ' '.join(res['warnings'])
+    assert 200 in _digits(warn), (
+        f'warning must state the total slide count; got {warn!r}')
+    assert 'NOT read' in warn
+
+
+def test_docx_char_truncation_states_the_original_length():
+    docx = pytest.importorskip('docx')
+    doc = docx.Document()
+    for _ in range(3000):
+        doc.add_paragraph('lorem ipsum dolor sit amet ' * 40)
+    buf = io.BytesIO()
+    doc.save(buf)
+
+    from lib.doc_parser._office import _extract_docx
+    res = _extract_docx(buf.getvalue(), 200_000)
+    assert res['warnings'], 'char truncation must warn'
+    warn = ' '.join(res['warnings'])
+    nums = _digits(warn)
+    assert 200_000 in nums, f'must state what was kept; got {warn!r}'
+    assert any(n > 200_000 for n in nums), (
+        f'must state the ORIGINAL length (denominator), not just the limit; '
+        f'got {warn!r}')
+
+
+def test_plaintext_truncation_states_the_original_length():
+    from lib.doc_parser._plain import _extract_plaintext
+    res = _extract_plaintext(b'x' * 5000, 'sample.txt', 1000)
+    warn = ' '.join(res['warnings'])
+    nums = _digits(warn)
+    assert 1000 in nums and 5000 in nums, (
+        f'must state kept AND original size; got {warn!r}')
+
+
+def test_untruncated_document_claims_nothing():
+    """Complement across formats: 'always warn' must not satisfy the suite."""
+    from lib.doc_parser._plain import _extract_plaintext
+    res = _extract_plaintext(b'a short file', 'sample.txt', 1000)
+    assert res['warnings'] == []
+
+
+def test_legacy_xls_row_cap_states_the_denominator():
+    """Legacy .xls carries the same row cap as .xlsx.
+
+    Authoring a genuine .xls needs ``xlwt`` (xlrd 2.x reads that format but
+    cannot write it). When it is absent this SKIPS rather than substituting a
+    fake container — the ratchet above still covers this call site
+    structurally, so the format is not left unguarded, only unexercised.
+    """
+    xlwt = pytest.importorskip(
+        'xlwt', reason='xlwt needed to author a real legacy .xls fixture')
+    pytest.importorskip('xlrd')
+
+    wb = xlwt.Workbook()
+    ws = wb.add_sheet('S')
+    for r in range(1500):
+        ws.write(r, 0, f'row_{r}')
+        ws.write(r, 1, r)
+    buf = io.BytesIO()
+    wb.save(buf)
+
+    from lib.doc_parser._legacy import _extract_xls_legacy
+    res = _extract_xls_legacy(buf.getvalue(), PROD_CHAR_LIMIT)
+    warn = ' '.join(res['warnings'])
+    assert 1500 in _digits(warn), (
+        f'legacy .xls must state the real row count; got {warn!r}')

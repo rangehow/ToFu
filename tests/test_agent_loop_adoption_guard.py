@@ -12,22 +12,28 @@ within three months.
 
 This suite is the RATCHET, in three parts:
 
-1. AST heuristic — a ``while`` loop whose body BOTH calls an LLM turn
-   (``dispatch_stream`` / ``stream_llm_response`` / …, underscore prefixes
-   normalized) AND handles tool calls (``tool_calls`` / ``execute_tool`` /
-   …) IS the classic copy-paste agent-loop shape. Finding one in any
-   tracked file outside the grandfathered set fails the build. (Known blind
-   spot, accepted: a loop that delegates the LLM turn to a helper in
-   another function — the endpoint driver shape — is not caught here; those
-   are pinned by part 2's signatures instead.)
-2. Grandfather signatures — the three pre-decision private loops (chat
-   orchestrator, endpoint driver, swarm sub-agent) are pinned by a
-   file-specific code token PLUS the absence of a ``run_agent_loop``
-   import. Migrating one onto the chassis breaks its pin and turns this
-   test red until the entry is removed — the list only shrinks.
+1. AST heuristic — two shapes, either one convicts:
+   (a) DIRECT: a ``while`` loop whose body BOTH calls an LLM turn
+       (``dispatch_stream`` / ``stream_llm_response`` / …, underscore
+       prefixes normalized) AND handles tool calls (``tool_calls`` /
+       ``execute_tool`` / …) — the classic copy-paste agent loop.
+   (b) DELEGATED: a ``while`` loop whose body hand-checks abort
+       (``task['aborted']`` / ``task.get('aborted')`` / ``abort_check()``)
+       AND obtains its LLM turn from a helper call (name containing
+       ``turn`` / ``dispatch`` / ``llm``) — the endpoint driver shape,
+       where the LLM call itself hides inside a helper and shape (a)
+       is blind to it.
+   Finding either in any tracked file outside the grandfathered set
+   fails the build.
+2. Grandfather signatures — the REMAINING pre-decision private loops
+   (chat orchestrator, endpoint driver) are pinned by a file-specific
+   code token PLUS the absence of a ``run_agent_loop`` import. Migrating
+   one onto the chassis breaks its pin and turns this test red until the
+   entry is removed — the list only shrinks. (swarm was the first
+   grandfather to migrate out, 2026-07-27.)
 3. Adoption ratchet — the number of files importing ``run_agent_loop`` must
-   never decrease (currently 8: paper report/qa/survey/insight/ideate/
-   recommend, scheduler timer, motion-video scene author).
+   never decrease (currently 9: paper report/qa/survey/insight/ideate/
+   recommend, scheduler timer, motion-video scene author, swarm agent).
 
 NEUTER evidence (manual):
   * a probe file under lib/ containing ``while True: … dispatch_stream(…)``
@@ -40,6 +46,7 @@ from __future__ import annotations
 
 import ast
 import os
+import re
 import unittest
 
 import pytest
@@ -65,10 +72,11 @@ _TOOL_TOKENS = ('tool_calls', 'execute_tool', 'tool_call_id')
 #     migration blocked on pt_03f4cdf1 (~30 cross-iteration locals).
 #   * endpoint/_run.py:220      — Planner→Worker→Critic driver while; its
 #     worker turn delegates to _run_single_turn (nested run_task), so the
-#     heuristic cannot see it — pinned by signature instead.
-#   * swarm/agent.py:653        — sub-agent while; abort_check callback ×2
-#     (cheapest migration: AbortSignal.from_callback already wraps its
-#     exact abort shape). Caught by the heuristic AND pinned.
+#     DIRECT heuristic cannot see it — the DELEGATED shape catches it, and
+#     this signature pins it too.
+# (REMOVED 2026-07-27: 'lib/swarm/agent.py' — migrated onto the chassis;
+# its abort_check callback shape rode AbortSignal.from_callback as
+# predicted. See tests/test_swarm_agent_loop_chassis.py.)
 # Each entry: relpath -> a code token that uniquely identifies the private
 # loop. When the loop migrates onto run_agent_loop, the token disappears /
 # the import appears and the pin goes red — remove the entry then.
@@ -77,8 +85,6 @@ _GRANDFATHERED = {
         'while round_num + 1 <= max_tool_rounds + _premature_retry_count',
     'lib/tasks_pkg/endpoint/_run.py':
         '_run_single_turn(task,',
-    'lib/swarm/agent.py':
-        'self._dispatch_stream(',
 }
 
 # Files allowed to trip the heuristic besides the grandfathered set: the
@@ -97,7 +103,7 @@ _HEURISTIC_EXEMPT = frozenset(_GRANDFATHERED) | frozenset({
 # Minimum number of tracked files that must import run_agent_loop. Only
 # grows — a removal means an adopter was reverted to a private loop (or the
 # file was deleted), both of which need a conscious test edit.
-_MIN_LOOP_IMPORTERS = 8
+_MIN_LOOP_IMPORTERS = 9
 
 
 def _py_files():
@@ -125,10 +131,39 @@ def _call_name(node: ast.Call) -> str:
     return name.lstrip('_')
 
 
+# Call names (underscore prefixes stripped) that indicate a delegated
+# LLM-turn helper in the DELEGATED shape (e.g. ``_run_single_turn``).
+_TURN_HELPER_RE = re.compile(r'turn|dispatch|llm')
+
+
+def _is_abort_handcheck(sub: ast.AST) -> bool:
+    """A manual abort poll: task['aborted'] / task.get('aborted') /
+    abort_check() — NOT an AbortSignal predicate read."""
+    if isinstance(sub, ast.Subscript) \
+            and isinstance(sub.slice, ast.Constant) \
+            and sub.slice.value == 'aborted':
+        return True
+    if isinstance(sub, ast.Call):
+        if isinstance(sub.func, ast.Attribute):
+            if sub.func.attr == 'get' and sub.args \
+                    and isinstance(sub.args[0], ast.Constant) \
+                    and sub.args[0].value == 'aborted':
+                return True
+            if sub.func.attr.lstrip('_') == 'abort_check':
+                return True
+        elif isinstance(sub.func, ast.Name) \
+                and sub.func.id.lstrip('_') == 'abort_check':
+            return True
+    return False
+
+
 def _while_is_agent_loop(node: ast.While) -> bool:
-    """A while body that BOTH dispatches LLM turns AND handles tool calls."""
+    """Convicting shapes (see module docstring): (a) DIRECT = LLM call +
+    tool handling; (b) DELEGATED = abort hand-check + turn-helper call."""
     has_llm_call = False
     has_tool_handling = False
+    has_abort_handcheck = False
+    has_turn_helper = False
     for sub in ast.walk(node):
         if isinstance(sub, ast.Call) and _call_name(sub) in _LLM_CALL_NAMES:
             has_llm_call = True
@@ -138,7 +173,13 @@ def _while_is_agent_loop(node: ast.While) -> bool:
         elif isinstance(sub, ast.Attribute) \
                 and any(tok in sub.attr for tok in _TOOL_TOKENS):
             has_tool_handling = True
-        if has_llm_call and has_tool_handling:
+        if _is_abort_handcheck(sub):
+            has_abort_handcheck = True
+        elif isinstance(sub, ast.Call) \
+                and _TURN_HELPER_RE.search(_call_name(sub)):
+            has_turn_helper = True
+        if (has_llm_call and has_tool_handling) \
+                or (has_abort_handcheck and has_turn_helper):
             return True
     return False
 
@@ -198,13 +239,19 @@ class TestPrivateAgentLoopRatchet(unittest.TestCase):
 
     def test_heuristic_actually_finds_a_loop(self):
         """Guard against a silently empty scan (AST heuristic drift): the
-        swarm private loop MUST be detected."""
+        orchestrator DIRECT loop and the endpoint DELEGATED loop MUST both
+        be detected."""
         found = set(rel for rel, _ in _iter_agent_loops())
         self.assertIn(
-            'lib/swarm/agent.py', found,
-            'swarm private loop no longer detected — the heuristic may be '
-            'scanning nothing (or swarm was migrated: then drop it from '
-            '_GRANDFATHERED and relax this pin deliberately)')
+            'lib/tasks_pkg/orchestrator/_run.py', found,
+            'orchestrator private loop no longer detected — the DIRECT '
+            'heuristic may be scanning nothing (or it was migrated: then '
+            'relax this pin deliberately)')
+        self.assertIn(
+            'lib/tasks_pkg/endpoint/_run.py', found,
+            'endpoint driver loop no longer detected — the DELEGATED '
+            'heuristic (abort hand-check + turn-helper) may be broken '
+            '(or endpoint was migrated: then relax this pin deliberately)')
 
     def test_grandfathered_loops_still_pinned(self):
         stale = []

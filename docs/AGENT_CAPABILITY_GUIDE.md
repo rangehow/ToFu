@@ -81,11 +81,11 @@ web_search / fetch_url 工具,**直接复用** `_execute_report_tool`(它复用 
 | scheduler timer | `lib/scheduler/timer/_poll.py` | `AbortSignal.never()` 的无中止路径范本 |
 | 视频分镜作者 | `lib/motion_video/_scene_author.py` | 窄工具集 + 每场景 token 预算 + 失败降级范本 |
 
-## 5. 祖父豁免的三个私有循环(迁移顺序 = 成本从低到高)
+## 5. 祖父豁免的私有循环(迁移顺序 = 成本从低到高)
 
 棘轮钉住的存量私有循环,**只减不增**;扩展现有功能时优先把调用方迁上底盘:
 
-1. **swarm 子代理**(`lib/swarm/agent.py`)——中止形状已被 `AbortSignal.from_callback` 原生支持,迁移成本最低。
+1. ~~swarm 子代理~~ —— **已迁移(2026-07-27,第一个出祖父清单)**。`AbortSignal.from_callback` 直接吃下它的 abort_check 回调;timeout 走底盘新增的 `before_round` halt 缝;并行工具池走底盘新增的 `execute_tools` 批量钩;`tools_terminal_round=False` 保留它「轮轮带工具 + 历史抢救部分答案」的语义。对偶测试 `tests/test_swarm_agent_loop_chassis.py` 六条路径逐条钉。**它就是 endpoint/orchestrator 迁移的施工图。**
 2. **endpoint 驱动**(`lib/tasks_pkg/endpoint/_run.py`)——Worker turn 嵌套 run_task,需先拆 `_run_single_turn` 的边界。
 3. **主编排器 run_task**(`lib/tasks_pkg/orchestrator/_run.py`)——阻塞在 pt_03f4cdf1 的 ~30 个跨迭代 locals(`_RoundState` 设计,owner-scoped)。底盘的 `retry_bonus` 机制已为它的 premature-retry 天花板扩展预留了同形接口。
 

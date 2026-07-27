@@ -110,21 +110,25 @@ class LoopOutcome:
         exit_reason: WHY the loop stopped, for the orchestrator's diagnostic
             parity — one of ``completed``, ``aborted_before_round``,
             ``aborted_post_stream``, ``aborted_between_tools``,
-            ``max_rounds_exhausted``.
+            ``max_rounds_exhausted``, or the custom reason string returned
+            by a ``before_round`` halt hook (e.g. ``'timeout'``).
+        halted: a ``before_round`` hook stopped the loop (exit_reason carries
+            the hook's reason) — distinct from both abort and the round cap.
         retry_bonus_used: how many premature-close bonus rounds were granted.
     """
 
     __slots__ = ('aborted', 'completed', 'rounds', 'exit_reason',
-                 'retry_bonus_used')
+                 'retry_bonus_used', 'halted')
 
     def __init__(self, aborted: bool = False, completed: bool = False,
                  rounds: int = 0, exit_reason: str = 'max_rounds_exhausted',
-                 retry_bonus_used: int = 0):
+                 retry_bonus_used: int = 0, halted: bool = False):
         self.aborted = aborted
         self.completed = completed
         self.rounds = rounds
         self.exit_reason = exit_reason
         self.retry_bonus_used = retry_bonus_used
+        self.halted = halted
 
 
 def run_agent_loop(
@@ -133,11 +137,14 @@ def run_agent_loop(
     max_tool_rounds: int,
     round_tools: Any,
     dispatch: Callable[[int, Any], tuple],
-    execute_tool: Callable[[int, dict], None],
+    execute_tool: Callable[[int, dict], None] | None = None,
     on_round_result: Callable[[int, dict, Any, Any], None] | None = None,
     on_tool_round: Callable[[int, dict], None] | None = None,
     retry_bonus: Callable[[int, dict, Any, Any], bool] | None = None,
     max_retry_bonus: int = 2,
+    before_round: Callable[[int], str | None] | None = None,
+    tools_terminal_round: bool = True,
+    execute_tools: Callable[[int, list], None] | None = None,
 ) -> LoopOutcome:
     """Drive a bounded LLM tool-calling loop with the triple abort check.
 
@@ -178,6 +185,28 @@ def run_agent_loop(
         max_retry_bonus: ceiling on total bonus rounds ``retry_bonus`` may
             grant, so a stuck premature-close can't loop forever (default 2,
             matching orchestrator's ``_PREMATURE_RETRY_MAX``).
+        before_round: optional ``(rnd) -> str | None`` halt hook checked at
+            the TOP of every round (after the abort check). Returning a
+            non-empty reason string stops the loop with
+            ``outcome.halted=True`` and ``exit_reason=<reason>`` — the generic
+            seam for per-round guards the chassis does not own (swarm's
+            wall-clock timeout is the first adopter). Returning None lets
+            the round proceed.
+        tools_terminal_round: when True (default), the final round (index
+            ``max_tool_rounds``) is offered ``tools=None`` so the model must
+            answer without more tools. When False, EVERY round is offered
+            ``round_tools`` and the cap is a pure safety ceiling — the
+            contract swarm's loop always had (its max-rounds exit extracts
+            a partial answer from history instead of forcing a tool-less
+            final turn).
+        execute_tools: optional BATCH hook ``(rnd, tool_calls) -> None``.
+            When provided it replaces the per-tool ``execute_tool`` loop
+            ENTIRELY (including the between-tools abort checks — the hook
+            holds the ``abort`` signal and owns its own intra-batch
+            behavior). This exists for engines like swarm that execute a
+            round's tools in a parallel pool; prefer the per-tool
+            ``execute_tool`` contract for new engines so the between-tools
+            abort check (the "Stop has limited effect" fix) keeps biting.
 
     Returns:
         LoopOutcome describing why the loop stopped (incl. ``exit_reason``).
@@ -202,7 +231,17 @@ def run_agent_loop(
             outcome.exit_reason = 'aborted_before_round'
             break
 
-        tools = round_tools if rnd < max_tool_rounds else None
+        # Generic per-round halt hook (timeout and future guards live here,
+        # NOT re-implemented per engine).
+        if before_round is not None:
+            reason = before_round(rnd)
+            if reason:
+                outcome.halted = True
+                outcome.exit_reason = reason
+                break
+
+        tools = round_tools \
+            if (rnd < max_tool_rounds or not tools_terminal_round) else None
         msg, finish, usage = dispatch(rnd, tools)
         outcome.rounds += 1
         if on_round_result is not None:
@@ -232,15 +271,21 @@ def run_agent_loop(
         if on_tool_round is not None:
             on_tool_round(rnd, msg)
 
-        for tc in tool_calls:
-            # (3) BETWEEN-TOOLS — a Stop pressed during a slow tool must skip
-            # the remaining queued tools and NOT start a fresh round. Removing
-            # this check reintroduces the "Stop has limited effect" bug.
-            if abort.aborted:
-                outcome.aborted = True
-                outcome.exit_reason = 'aborted_between_tools'
-                break
-            execute_tool(rnd, tc)
+        if execute_tools is not None:
+            # Batch path (e.g. swarm's parallel tool pool): the hook owns
+            # intra-batch behavior incl. any abort checks.
+            execute_tools(rnd, tool_calls)
+        else:
+            for tc in tool_calls:
+                # (3) BETWEEN-TOOLS — a Stop pressed during a slow tool must
+                # skip the remaining queued tools and NOT start a fresh
+                # round. Removing this check reintroduces the "Stop has
+                # limited effect" bug.
+                if abort.aborted:
+                    outcome.aborted = True
+                    outcome.exit_reason = 'aborted_between_tools'
+                    break
+                execute_tool(rnd, tc)
 
         if outcome.aborted:
             break

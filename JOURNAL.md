@@ -17,6 +17,13 @@
 - **共享 HEAD 再实证(良性):** 我的 i18n.js 21 个新键在工作树里被兄弟提交 `69cd968c` 扫进(该提交还重建了 bundle + i18n packs)。`git hash-object` 实证工作树 == HEAD blob,内容零损失,我的提交只剩 4 文件。**教训复用:改共享热文件(i18n.js)后尽快提交,窗口越长越容易被扫进别人提交——这次运气好在兄弟提交信息完整、内容无损。**
 - **headless 截图环境配方(本机):** playwright 的 chrome-headless-shell 缺 libatk 等 10 个系统库,**`LD_LIBRARY_PATH=$(python3 -c 'import sys;print(sys.prefix)')/lib` + `FONTCONFIG_FILE=$PREFIX/etc/fonts/fonts.conf`** 即可跑(lib/motion_video/_env.py 的 conda-recipe 同一招);整页 styles.css 里的裸元素规则(h4/body flex)会破坏 mock 页布局,**每状态一个独立 HTML 文件、html,body{display:block!important}** 才截得准。
 
+### 2026-07-27 — 前端正确性语义模型设计对话:双轴分离获 owner 认可;实测**推翻**「assistant 消息 id 不回环」前提(纯设计+取证,零产品代码;board `pt_8df8fc9b4bf34e91`)
+
+- **设计主线(owner 已认可):** 「没有新气泡」是**活性**观测,「已结束」是**生命周期**事实——两条轴混用是 dedup 守卫丛生的第一因。生命周期只由显式事实翻转(done/error/abort;kill 后由服务端权威恢复通道**合成**终态事实),沉默只触发恢复动作(带 cursor 重连/poll 对账),恢复取回事实后才允许翻转。内容轴已有 `stream_reducer.js` 纯 fold 范式,生命周期轴照建 `reduceTaskLifecycle`,`finishStream`/`_runTerminalContinuation` 从「每条终态路径人肉记得调」改为 fold 的 onEnter(terminal)。
+- **实测修正(owner 复核时提出的 amendment 前提过期):** owner 要求补「assistant 乐观 id 回环」契约——**它已在 HEAD**(RENDER_CONTRACT §2.3 identity alignment):`main_send_pipeline.js:139/:497` 携带 → `_registry.py:161` stamped → `_events.py::_new_assistant_slot` 采纳为 _msgId → `_sync.py:631-638` ID-first 定位 → committedMessage 继承。**send/regen/edit-resend/continue 四流全携带**;autopilot follow-up 刻意剥离(无客户端双胞胎,服务端 mint 是正确姿态)。`tests/test_assistant_msgid_unification` LAYER1 实跑 **4/4 绿**。
+- **连带发现(守卫过期家族第 5 例):** 同套件 LAYER2 双红——Epic-E slice 3(`b33d9d21`)把 `_rebaseUnackedTail` 抽到 `conv_persist_helpers.js`,harness 仍只 eval `conversations.js`、marker 也在旧文件里找。守卫本体完好(conv_persist_helpers.js:249-258),与 pt_b5b0a00d 同型。已开 `pt_8df8fc9b4bf34e91`。**该家族近期第 3 次出现,再次验证:守卫/测试没有声明为契约,重构时就没人知道谁依赖它。**
+- **设计沉淀(两层去重契约,写进设计定稿):** 层1 事件 seq 轴(增量通道,(taskId,seq) fold 幂等,前提是唯一咽喉 + durable-before-visible)已成立;层2 消息身份轴(快照/持久化通道,_msgId 单 id 空间,客户端 mint 服务端 adopt)user/assistant 两侧**都已**成立——残留守卫 `_taskId` dedup 保护的是**修复前数据**,删除判据是数据年龄而非代码,正式定性为 legacy-data shim。真正欠账只剩:events.py DONE spec 未**声明** committedMessage._msgId 的来源保证(第三方前端从 capabilities 读不到)。
+
 ### 2026-07-27 — 「后端明明报错误导致 cooldown,前端为什么几乎没信息」根修:TTFT 首字节看门狗 + 等待心跳 phase(commit `69cd968c`,11 文件 +1036/-34;新套件 **17/17**,**NEUTER×3 全咬**,相邻环 **106/106**,bundle 守卫 **42/42**,collect **10395** 0 err)
 
 - **事故取证(conv ms2gb19gfdco20,task 53c65134):** 上游接受请求后 **300 秒零字节**,唯一绊线是 per-read 300s 超时;用户在日志里看到的 cooldown(slot.py `consecutive errors` 警告)是**别的会话的 swarm worker 撞在同一个共享 slot 上**报的——slot 级事件只进日志,不进任何会话流。本任务自己的 attempt 挂在 HTTP 读里,调度器没抓到错误、也不在冷却等待循环,于是**没有任何事件可发**,「已发送给…等待开始回复」是那 300 秒里唯一诚实的状态(TTFT 实测 318.5s,07:57:05 超时后换 key 18s 出首 token)。**教训:「前端显示少」的第一归因不是渲染层藏了信息,而是发射缝在那个状态下根本没有信号可发。**
@@ -1196,3 +1203,13 @@
 - **NEUTER 实证:** ①埋探针私有循环(`git add -N` 进 ls-files)→ test 1 精确咬出文件:行号;②谓词级验证导入检测四分支 + 三签名钉当前全部在位。**坑:`git add -N` 探针删除后索引残留 ghost 项,`git ls-files` 仍列出该路径 → 四个扫描类测试集体 FileNotFoundError**——探针流程必须以 `git reset -- <probe>` 收尾,不能只用 `rm`。
 - **指南:** `docs/AGENT_CAPABILITY_GUIDE.md`——三种能力形状对号(循环→run_agent_loop / 成品→production / 单发→直调)、五分钟接入契约、工具执行范本指向 `lib/paper/tools.py:244` 的 `make_research_tool_executor`(别再抄第三份)、迁移顺序按成本从低到高 swarm→endpoint→orchestrator。
 - **共享 HEAD:** 提交精确 pathspec(测试+文档+JOURNAL);JOURNAL 捎带兄弟一条已完成取证条目(同文件 EOF 单 hunk 不可分,documentation 零风险);20+ 兄弟 WIP 文件原样未动。
+
+### 2026-07-27 — 铁律实证第一刀:swarm 私有循环迁上 run_agent_loop 底盘(owner 复核三连:①CLAUDE.md 陈旧条目修复 ②棘轮盲区闭环 ③swarm 真迁移;commit 见下,8 文件;新对偶套件 **6/6**、底盘套件 16→**19/19**、棘轮 **4/4**、swarm 全族 **113/113**、直接命中环 **45/45**,collect **10434** 0 err)
+
+- **① 文档收尾(审计的不可分割部分):** CLAUDE.md 的 agent_loop 条目从「adopters: report+qa;timer adopt later」改为真实 9 调用方清单 + 指向 `docs/AGENT_CAPABILITY_GUIDE.md`——新会话进门读的是 CLAUDE.md,指南不挂进去就是死文档。
+- **② 棘轮盲区闭环:** 启发式补第二形状 DELEGATED——`while` 体内有 abort 手查(`task['aborted']`/`task.get('aborted')`/`abort_check()`)+ turn-helper 调用(名字含 turn/dispatch/llm)即判违规,endpoint 形状(`_run_single_turn` 委托)从此可被拦新,不只靠签名钉。NEUTER:endpoint 形状探针精确咬出文件:行号;健全性断言同时钉 orchestrator(DIRECT)与 endpoint(DELEGATED)两个锚点。
+- **③ swarm 迁移(铁律从纸面到实证):** 三个底盘能力缺口全部按铁律第 4 条**改底盘不改调用方**——`before_round(rnd)->str|None` 通用 halt 钩(timeout 住这里,不再每引擎重造)、`execute_tools(rnd, tool_calls)` 批量钩(swarm 的并行工具池整个塞进去,逐工具钩保留 between-tools 中止给新引擎)、`tools_terminal_round=False`(保留 swarm「轮轮带工具 + 历史抢救部分答案」语义,不强迫末轮无工具)。`_run_loop` 四个分支映射:completed→钩内已收尾;aborted→CANCELLED+partial;halted/timeout→COMPLETED+timeout 事件+partial;max_rounds_exhausted→COMPLETED+partial。LLM 错误走哨兵异常 `_LlmFailed`(钩内先跑旧错误路径再抛,循环外捕获即 return)。
+- **行为差(有意,已评估):** 底盘的 post-stream 中止检查对 swarm 是新增(旧码只查轮前与工具后)——流中按 Stop 更灵敏,与所有其他调用方一致。
+- **NEUTER 实证三连(含一次自我否证):** ①摘 `before_round` 接线 → timeout 测试**挂死**(假 dispatch 无限给 tool_calls,除 halt 外无刹车——挂死本身就是「接线承重」的铁证);②`execute_tools=` 换成 `execute_tool=` → 批量契约测试精确翻红;③**首版文档串声称 tools_terminal_round 翻转会在 swarm 层多一轮 dispatch——实测否决**:swarm 的 dispatch 钩故意忽略底盘给的 tools(自建 body 读 self.tools),翻转在 swarm 层不可见,该语义改由底盘层测试钉。文档串已按实测修正。**教训:NEUTER 声明必须先跑再写进文档串,写之前先问「这个翻转在我这层的可观察面上真的可见吗」。**
+- **棘轮祖父清单首胜:** swarm 条目按设计变红后移除(签名钉 + 导入检测双触发),`_MIN_LOOP_IMPORTERS` 8→9,清单只剩 orchestrator + endpoint,迁移施工图就是本次的钩映射(指南 §5 已更新)。
+- **共享 HEAD:** 精确 8 文件 pathspec;兄弟 WIP(conftest/static/db/pricing 等 15+ 文件)原样未动。

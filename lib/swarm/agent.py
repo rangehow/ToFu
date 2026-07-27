@@ -640,51 +640,49 @@ class SubAgent:
             logger.debug('[Agent:%s] checkpoint failed (non-fatal): %s',
                          self.agent_id, e)
 
+    # Chassis ceiling for "unlimited" (swarm max_rounds=0): the loop is
+    # then bounded by the timeout/abort safety nets, exactly as before.
+    _UNLIMITED_ROUND_CEILING = 2 ** 30
+
     def _run_loop(self, start_time: float):
         """Core agent loop: LLM call → tool execution → repeat.
 
-        Runs until the agent produces a final answer (content without tool
-        calls).  Safety nets: timeout and abort checks each round.
-        If max_rounds > 0, also stops after that many rounds.
+        Rides the shared ``run_agent_loop`` chassis (charter 2026-07-27 iron
+        rule): the chassis owns the round loop, the abort checks and the
+        ``before_round`` halt seam (the timeout guard lives there).
+        Everything swarm-specific — the streaming log, presence heartbeats,
+        stream phases, request snapshots, the parallel tool pool, round
+        checkpoints, partial-answer extraction — stays in the hooks below.
         """
+        from lib.agent_loop import AbortSignal, run_agent_loop
+
         timeout_seconds = getattr(self.spec, 'timeout_seconds', None)
+        abort = AbortSignal.from_callback(self.abort_check)
+        # swarm rounds are 1-indexed (round 1..max_rounds); the chassis rnd
+        # is 0-indexed, so the cap is max_rounds - 1. 0 = unlimited → a
+        # ceiling the timeout/abort safety nets always hit first.
+        cap = (self.max_rounds - 1) if self.max_rounds > 0 \
+            else self._UNLIMITED_ROUND_CEILING
 
-        round_num = 0
-        while True:
-            round_num += 1
+        class _LlmFailed(Exception):
+            """Sentinel: the dispatch hook already ran the LLM-error path."""
 
-            # ── Max rounds check (0 = unlimited) ──
-            if self.max_rounds and round_num > self.max_rounds:
-                logger.info('[%s] Exhausted %d rounds', self.agent_id, self.max_rounds)
-                self._extract_partial_answer(f'Max rounds ({self.max_rounds}) reached')
-                self.result.status = SubAgentStatus.COMPLETED.value
-                return
-
-            # ── Abort check ──
-            if self.abort_check():
-                logger.info('[%s] Aborted at round %d', self.agent_id, round_num)
-                self.result.status = SubAgentStatus.CANCELLED.value
-                self._extract_partial_answer(f'Agent cancelled at round {round_num}')
-                return
-
-            # ── Timeout check ──
+        def _before_round(rnd):
+            # Wall-clock timeout as a chassis halt (was an inline round-top
+            # check, same placement).
             if timeout_seconds and (time.time() - start_time) > timeout_seconds:
-                logger.warning(
-                    '[%s] Timeout after %ss at round %d',
-                    self.agent_id, timeout_seconds, round_num
-                )
-                self.result.status = SubAgentStatus.COMPLETED.value
-                self._extract_partial_answer(
-                    f'Agent timed out after {timeout_seconds}s (completed {round_num - 1} rounds)'
-                )
-                self._emit_event(
-                    'timeout',
-                    f'⏰ [{self.spec.role}] Timed out after {timeout_seconds}s',
-                    status='timeout', phase='timeout',
-                    round_num=round_num,
-                )
-                return
+                return 'timeout'
+            return None
 
+        def _dispatch(rnd, _tools):
+            """Round hook: the whole per-round LLM machinery (body build,
+            request snapshot, streaming log, heartbeats, stream phases,
+            dispatch, usage/trace bookkeeping, assistant-message append,
+            final-answer branch). ``_tools`` is unused — the body reads
+            ``self.tools`` directly (max-rounds exit = partial answer from
+            history, NOT a forced tool-less final turn, hence
+            ``tools_terminal_round=False`` below)."""
+            round_num = rnd + 1
             self.result.rounds_used = round_num
             round_start = time.time()
 
@@ -828,7 +826,7 @@ class SubAgent:
                     self.result.status = SubAgentStatus.COMPLETED.value
                 else:
                     self.result.status = SubAgentStatus.FAILED.value
-                return
+                raise _LlmFailed
 
             # Round complete — flush the streaming log file in one shot.
             _flush_log()
@@ -873,8 +871,17 @@ class SubAgent:
                     round_num=round_num,
                     preview=(content or '')[:600],
                 )
-                return  # ← Early stop: agent gave final answer
 
+            return msg, stop_reason, usage
+
+        def _execute_round_tools(rnd, tool_calls):
+            """Batch hook (chassis ``execute_tools``): progress event →
+            parallel tool pool → round-boundary checkpoint. Called once per
+            tool round; the old post-tools abort check is covered by the
+            chassis' before-round check of the NEXT round (outcome.aborted →
+            CANCELLED below).
+            """
+            round_num = rnd + 1
             # ── Execute tool calls ──
             tool_names = []
             for tc in tool_calls:
@@ -905,12 +912,51 @@ class SubAgent:
             # by design, see lib/swarm/persistence.py).
             self._checkpoint()
 
-            # ── Post-tool-execution abort check ──
-            if self.abort_check():
-                logger.info('[%s] Aborted after tools in round %d', self.agent_id, round_num)
-                self.result.status = SubAgentStatus.CANCELLED.value
-                self._extract_partial_answer(f'Agent cancelled after tools in round {round_num}')
-                return
+        try:
+            outcome = run_agent_loop(
+                abort=abort,
+                max_tool_rounds=cap,
+                round_tools=None,  # the dispatch hook reads self.tools itself
+                dispatch=_dispatch,
+                execute_tools=_execute_round_tools,
+                before_round=_before_round,
+                tools_terminal_round=False,
+            )
+        except _LlmFailed:
+            return  # the dispatch hook already ran the LLM-error path
+
+        if outcome.completed:
+            return  # the final-answer branch in _dispatch set everything
+
+        if outcome.aborted:
+            logger.info('[%s] Aborted (%s) at round %d',
+                        self.agent_id, outcome.exit_reason, outcome.rounds)
+            self.result.status = SubAgentStatus.CANCELLED.value
+            self._extract_partial_answer(
+                f'Agent cancelled at round {outcome.rounds}')
+            return
+
+        if outcome.halted and outcome.exit_reason == 'timeout':
+            logger.warning(
+                '[%s] Timeout after %ss at round %d',
+                self.agent_id, timeout_seconds, outcome.rounds + 1,
+            )
+            self.result.status = SubAgentStatus.COMPLETED.value
+            self._extract_partial_answer(
+                f'Agent timed out after {timeout_seconds}s '
+                f'(completed {outcome.rounds} rounds)')
+            self._emit_event(
+                'timeout',
+                f'⏰ [{self.spec.role}] Timed out after {timeout_seconds}s',
+                status='timeout', phase='timeout',
+                round_num=outcome.rounds + 1,
+            )
+            return
+
+        # outcome.exit_reason == 'max_rounds_exhausted'
+        logger.info('[%s] Exhausted %d rounds', self.agent_id, self.max_rounds)
+        self._extract_partial_answer(f'Max rounds ({self.max_rounds}) reached')
+        self.result.status = SubAgentStatus.COMPLETED.value
 
     # ─────────────────────────────────────────────────
     #  Answer extraction helpers

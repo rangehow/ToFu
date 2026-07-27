@@ -50,11 +50,22 @@ lib/                   — Core business logic
                          task['aborted'] flag / abort_check callback behind one
                          .aborted predicate) + run_agent_loop() owning the round
                          loop and the 3 abort checks (before-round / post-stream /
-                         between-tools). Adopters: paper report_engine + qa_engine
-                         (2026-07; orchestrator/endpoint/swarm/timer adopt later).
-                         The main orchestrator still owns its own loop in
-                         lib/tasks_pkg/orchestrator/_run.py — cutover blocked on
-                         the run_task locals inventory (~30 fields, see pt_03f4cdf1).
+                         between-tools). IRON RULE (charter 2026-07-27): NEW
+                         agentic capabilities MUST ride this chassis — see
+                         docs/AGENT_CAPABILITY_GUIDE.md; new private loops are
+                         blocked by tests/test_agent_loop_adoption_guard.py.
+                         Adopters (9): paper report_engine / qa_engine / survey /
+                         insight_engine / ideate / recommend_engine,
+                         scheduler timer, motion_video scene_author, swarm
+                         SubAgent (2026-07-27, first legacy loop migrated IN —
+                         drove the before_round halt / execute_tools batch /
+                         tools_terminal_round chassis extensions; parity in
+                         tests/test_swarm_agent_loop_chassis.py).
+                         Grandfathered private loops (migration order = cost):
+                         endpoint/_run.py, and the main orchestrator in
+                         lib/tasks_pkg/orchestrator/_run.py — cutover blocked
+                         on the run_task locals inventory (~30 fields, see
+                         pt_03f4cdf1).
   ttl_cache.py         — Generic in-memory TTL cache with LRU eviction +
                          get_or_compute serialization (TTLCache class)
   task_runtime.py      — Compatibility shim → re-exports TaskRuntime from

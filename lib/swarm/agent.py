@@ -26,7 +26,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from lib.llm import build_body as _default_build_body
 from lib.llm_dispatch import dispatch_stream as _default_dispatch_stream
 from lib.llm_dispatch.retry_i18n import retry_phase_fields
-from lib.log import get_logger
+from lib.log import audit_log, get_logger
 from lib.project_mod import format_tool_args_brief
 from lib.protocols import BodyBuilder
 from lib.swarm.protocol import (
@@ -644,6 +644,12 @@ class SubAgent:
     # then bounded by the timeout/abort safety nets, exactly as before.
     _UNLIMITED_ROUND_CEILING = 2 ** 30
 
+    # Consecutive rounds re-issuing an IDENTICAL tool call before the
+    # chassis declares the loop wedged. 10 leaves ample room for a genuine
+    # retry (a flaky fetch re-tried a few times) while bounding the runaway
+    # shape at a cost of ~10 rounds instead of 26.7 million.
+    _MAX_CONSECUTIVE_NO_PROGRESS_ROUNDS = 10
+
     def _run_loop(self, start_time: float):
         """Core agent loop: LLM call → tool execution → repeat.
 
@@ -921,6 +927,15 @@ class SubAgent:
                 dispatch=_dispatch,
                 execute_tools=_execute_round_tools,
                 before_round=_before_round,
+                # Wedged-loop breaker. On 2026-07-27 one sub-agent re-issued
+                # an identical tool call for 26.7M rounds (3.5h, 9.1 GB of
+                # app.log) because max_rounds=0 collapses to the 2**30
+                # ceiling. The chassis halts on N consecutive rounds whose
+                # tool-call fingerprint is unchanged; empty CONTENT is NOT
+                # the criterion (measured: 50.3% of legitimate rounds have
+                # content_len==0 — that is just a pure tool-calling turn).
+                max_consecutive_no_progress_rounds=(
+                    self._MAX_CONSECUTIVE_NO_PROGRESS_ROUNDS),
                 tools_terminal_round=False,
                 # Round-boundary checkpoint lives on the chassis'
                 # on_round_end seam (NOT inside the batch hook) so the
@@ -956,6 +971,40 @@ class SubAgent:
                 f'⏰ [{self.spec.role}] Timed out after {timeout_seconds}s',
                 status='timeout', phase='timeout',
                 round_num=outcome.rounds + 1,
+            )
+            return
+
+        if outcome.halted and outcome.exit_reason == 'no_progress':
+            # Wedged loop: the model re-issued an identical tool call for
+            # _MAX_CONSECUTIVE_NO_PROGRESS_ROUNDS rounds. Without its own
+            # branch this fell through to 'max rounds exhausted' below and
+            # mislabelled the cause, hiding the very defect it detects.
+            logger.warning(
+                '[%s] No-progress breaker: %d consecutive identical '
+                'tool-call rounds at round %d — halting a wedged loop',
+                self.agent_id, outcome.consecutive_no_progress_rounds,
+                outcome.rounds)
+            # L3 feedback: a structured, greppable record so a wedged agent
+            # is a first-class signal rather than something an operator has
+            # to infer from log VOLUME after the fact.
+            audit_log('agent_loop_no_progress',
+                      agent_id=self.agent_id,
+                      role=self.spec.role,
+                      model=self.model,
+                      rounds=outcome.rounds,
+                      consecutive_identical=outcome.consecutive_no_progress_rounds,
+                      objective=(self.spec.objective or '')[:200])
+            self.result.status = SubAgentStatus.COMPLETED.value
+            self._extract_partial_answer(
+                f'Agent made no progress for '
+                f'{outcome.consecutive_no_progress_rounds} consecutive rounds '
+                f'(stopped at round {outcome.rounds})')
+            self._emit_event(
+                'progress',
+                f'🛑 [{self.spec.role}] Stopped: no progress for '
+                f'{outcome.consecutive_no_progress_rounds} rounds',
+                status='running', phase='no_progress',
+                round_num=outcome.rounds,
             )
             return
 

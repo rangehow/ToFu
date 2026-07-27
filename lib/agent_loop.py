@@ -116,20 +116,23 @@ class LoopOutcome:
         exit_reason: WHY the loop stopped, for the orchestrator's diagnostic
             parity — one of ``completed``, ``aborted_before_round``,
             ``aborted_post_stream``, ``aborted_between_tools``,
-            ``max_rounds_exhausted``, or the custom reason string returned
-            by a ``before_round`` halt hook (e.g. ``'timeout'``).
+            ``max_rounds_exhausted``, ``no_progress``, or the custom reason
+            string returned by a ``before_round`` halt hook (e.g.
+            ``'timeout'``).
         halted: a ``before_round`` hook stopped the loop (exit_reason carries
             the hook's reason) — distinct from both abort and the round cap.
         retry_bonus_used: how many premature-close bonus rounds were granted.
     """
 
     __slots__ = ('aborted', 'completed', 'rounds', 'exit_reason',
-                 'retry_bonus_used', 'halted', 'consecutive_tool_timeouts')
+                 'retry_bonus_used', 'halted', 'consecutive_tool_timeouts',
+                 'consecutive_no_progress_rounds')
 
     def __init__(self, aborted: bool = False, completed: bool = False,
                  rounds: int = 0, exit_reason: str = 'max_rounds_exhausted',
                  retry_bonus_used: int = 0, halted: bool = False,
-                 consecutive_tool_timeouts: int = 0):
+                 consecutive_tool_timeouts: int = 0,
+                 consecutive_no_progress_rounds: int = 0):
         self.aborted = aborted
         self.completed = completed
         self.rounds = rounds
@@ -137,6 +140,7 @@ class LoopOutcome:
         self.retry_bonus_used = retry_bonus_used
         self.halted = halted
         self.consecutive_tool_timeouts = consecutive_tool_timeouts
+        self.consecutive_no_progress_rounds = consecutive_no_progress_rounds
 
 
 def run_agent_loop(
@@ -154,6 +158,7 @@ def run_agent_loop(
     tools_terminal_round: bool = True,
     execute_tools: Callable[[int, list], dict | None] | None = None,
     max_consecutive_tool_timeouts: int = 0,
+    max_consecutive_no_progress_rounds: int = 0,
     on_round_end: Callable[[int], None] | None = None,
 ) -> LoopOutcome:
     """Drive a bounded LLM tool-calling loop with the triple abort check.
@@ -232,6 +237,24 @@ def run_agent_loop(
             per engine (mirrors the orchestrator: breaker break happens
             BEFORE the crash-checkpoint, so a halted round fires no
             ``on_round_end``).
+        max_consecutive_no_progress_rounds: wedged-loop circuit breaker
+            (0 = off, default). When > 0, the chassis fingerprints each
+            round's tool calls (name + arguments, in order) and counts
+            CONSECUTIVE rounds whose fingerprint is IDENTICAL to the
+            previous round's; a differing fingerprint resets the count. At
+            the threshold the loop halts with ``outcome.halted=True`` and
+            ``exit_reason='no_progress'``.
+
+            This is the guard the 2026-07-27 runaway needed: one sub-agent
+            re-issued the same tool call for 26.7M rounds (3.5h, 9.1 GB of
+            log) because ``max_rounds=0`` collapses to the ``2**30`` ceiling
+            and ``timeout_seconds=0`` disabled the only wall-clock net.
+
+            The criterion is REPETITION, not empty content: measured across
+            the 07-24..07-26 logs, 866/1723 (50.3%) of legitimate rounds have
+            ``content_len == 0`` — an empty-content round is simply what a
+            pure tool-calling turn looks like, so halting on it would kill
+            half of all real agents.
         on_round_end: optional ``(rnd) -> None`` hook fired at the natural
             end of a round whose tools were executed WITHOUT an abort and
             WITHOUT a timeout-breaker halt — the seam for crash-recovery
@@ -251,6 +274,7 @@ def run_agent_loop(
     # mid-loop. rnd runs 0.. and the loop continues while rnd <= cap + bonus.
     bonus = 0
     rnd = -1
+    prev_tool_fingerprint = None
     while True:
         rnd += 1
         if rnd > max_tool_rounds + bonus:
@@ -302,6 +326,32 @@ def run_agent_loop(
 
         if on_tool_round is not None:
             on_tool_round(rnd, msg)
+
+        # Wedged-loop breaker: a round that re-issues the PREVIOUS round's
+        # tool calls byte-for-byte made no progress. Consecutive repeats are
+        # counted; any differing fingerprint resets the streak. Checked here
+        # (before the tools run) so a wedged agent cannot keep re-executing
+        # the same side-effecting call while the counter climbs.
+        if max_consecutive_no_progress_rounds > 0:
+            fingerprint = repr([
+                (tc.get('function', {}).get('name', ''),
+                 tc.get('function', {}).get('arguments', ''))
+                for tc in tool_calls if isinstance(tc, dict)
+            ])
+            if fingerprint == prev_tool_fingerprint:
+                outcome.consecutive_no_progress_rounds += 1
+                if outcome.consecutive_no_progress_rounds \
+                        >= max_consecutive_no_progress_rounds:
+                    logger.warning(
+                        '[AgentLoop] no-progress breaker tripped at round %d: '
+                        '%d consecutive identical tool-call rounds',
+                        rnd + 1, outcome.consecutive_no_progress_rounds)
+                    outcome.halted = True
+                    outcome.exit_reason = 'no_progress'
+                    break
+            else:
+                outcome.consecutive_no_progress_rounds = 0
+            prev_tool_fingerprint = fingerprint
 
         note = None
         if execute_tools is not None:

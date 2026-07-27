@@ -1,5 +1,21 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-27(续) — R3 gate② 近邻检索根修:**0/25 → 24/25 领域命中、跨 idea 重合 80% → 0%**;而我为此**连续踩了三个 arXiv 查询语法坑,每个都实测 0 召回**(epic `pt_a31ca01fd1574145`,commit `b53daf60`,5 文件 +1053/-45;新套件 **9 条**,failing-first 在未修码上 **9 红且缺陷本身可复现**,**NEUTER×4 全咬**,合环 **36/36** + 相邻 **51/51**)
+
+- **修的是「novelty 轴实际是常量」。** `_novelty_prior_set` 把 `title + 整段 core_mechanism`(473-558 字符散文,含 `*星号*`/括号/逗号)原样塞进 arXiv `all:`。用生产作业 `research_7a444f96c65d42b5` 的 6 条真 idea 打真 API,在**未修的 HEAD 上逐条复现**:领域命中 **0/25**(召回全是引力波/中微子/GWTC 协作组论文)、跨 idea 近邻集最大重合 **80%**、idea 3 的 `*difference*` 触发 **HTTP 500 → 空基底 1/6**。修后 **24/25 / 0% / 0 空基底**。
+
+- **★ 本轮最贵的三条:同一个「让查询变精确」的想法,我用三种语法写,前两种实测全 0 召回。** ①`ti:"predictive delta"` —— **引号 = 精确短语匹配**,而**新颖 idea 的身份短语按定义不在任何已有标题里**,6/6 全 0;②`ti:predictive AND ti:delta` —— 要求每个身份词都出现在同一标题,仍 6/6 全 0;③`(ti:a OR ti:b) AND all:"<domain>"` 才对(8/9 命中、0% 重合)。**关键在于:①②失败时不报错,而是安静地退回我自己写的 flat `all:` 兜底 —— 也就是说「修好的代码」实际每次都在跑那条我本要替换掉的坏路径。** 我第一次正是据此在上一轮把 C 方案判成「实测否决」,险些把一个**语法写错**结论成**方案不可行**。教训与 charter「常量是声明,测试结果才是事实」同族,但更窄一层:**降级链会掩盖上游写错——每一级都必须能单独观测到它是否真的被用上**(现在 `query_mode` 记录 `fielded_t1|fielded_t2|domain|all`,实测日志里能直接看到两条 idea 落到 t2)。
+
+- **★ 兜底必须「渐宽」而不是「塌回词袋」。** 6 条里有 **2 条**的身份术语新到没有任何标题带它(Hierarchical/Adaptive、Quantum-Inspired/Entanglement),tier1 必然空。若按常见写法直接回退 flat `all:`,它们会拿回那批引力波论文;而若干脆判空,则会**谎报「无先行工作」**——对新颖性判定来说这是最危险的假阳性。故阶梯 = title → abstract → domain 短语 → flat,实测两条都在 abstract 腿拿到真实近邻(`Models Take Notes at Prefill: KV Cache…` / `QET: Enhancing Quantized LLM … KV cache Compr`)。
+
+- **★ 守卫自身的失效形态(charter 第三态的新变种:不是绿着空转,是「整体 SKIP 着报绿」)。** 我上一轮写的 8 条守卫读**未跟踪的 `data/`** 取真语料 —— 在干净检出(CI / 新 worktree / 兄弟机器)里 **8/8 全部 SKIP**,pytest 报绿。**一个只在我这台机器上运行的守卫,和没有守卫的区别只是它让人放心。** 改法:把 6 条 idea 机器抽取成**跟踪入库**的 `tests/fixtures/r3_real_ideas.json`(带来源 job id),且**语料缺失从 skip 改为 fail**。这不违反「禁止手抄生产数据进 harness」——它是机器抽取的、被钉住的**事故证据**,必须冻结,否则它钉的回归就不可复现。
+
+- **NEUTER×4 各咬各的:** ①恢复散文查询 → 净化器测试红;②身份词改 AND → 语法测试红;③空基底放行 accept → pin#1 测试红;④删掉 fixture → 守卫**报错**而非静默跳过。
+
+- **④ 后端对照(tofu-search vs arXiv)如实写「首轮因基线损坏未能进行,判定推迟不取消」,未写成「实测否决」。** 理由是硬的:基线 0/25 相关时**任何对手都会赢**,那只证明基线坏、不证明对手好。现在基线有了可复算的数字(96%/0%/0 空基底),对照才有参系。
+
+- **顺带清掉的阻塞:** `lib/llm_sanitize/_gateway.py` 的未提交 IndentationError(epic `pt_530d7f51`)炸掉 `routes/` 全链导入。查明该脏改动不只是语法坏——它把 owner 已拍板的 `_invisible_break()` **派生**式实现改回硬编码,且 5 条全是 `blocked == safe` 恒等项,而 `_sanitize_gateway_content` 会跳过恒等项,**即使语法修好也是个静默 no-op**(HTTP 450 防护整体失效)。故按 epic 授权 `git checkout --` 丢弃(原件存 `.tofu_trash/`),而非「补缩进」。复验:sanitize 环 44/44、collect **11039 / 0 error**。
+
 ### 2026-07-27(续) — 「调用了本轮不存在的工具」从静默成功升级为可见 envelope:**落点被我自己的实测推翻一次**(epic `pt_88791cb08cb2495c`,commit `9abdcb22`,5 文件;新套件 **5/5**,**NEUTER×3 全咬**,相邻环 **57/57**,committed-tree 复验 **63/63**)
 
 - **修的是「一个实质失败的任务报 done」。** 7 天实测 3 例(conv `mrvpzoih636mdx`,4.8 线):模型反复调 `project_board_complete` / `code_exec`,被硬拒且**从未执行**,随后纯文本收尾 → 任务 `status=done`、`error=none`。用户视角只有「对话停在半途」,系统却宣称成功。**存量受害者就是本文件顶部那条 `CLOSURE-PENDING pt_a4c9d33e`**:活早干完了,只差一次拿不到的 `project_board_complete`,而没人被告知。

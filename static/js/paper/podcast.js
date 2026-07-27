@@ -443,6 +443,72 @@ function _pcDegradeBanner() {
     '</span></div>';
 }
 
+/* Option-card / segmented-control → hidden <select> bridge. Shared by
+ * podcast.js + video.js (guarded so the bundle's duplicate definition is a
+ * no-op). The real <select> keeps the generate path and the jsdom contract
+ * (stable ids + .value); the cards are a pure presentation layer that writes
+ * the pick back into the select. */
+if (typeof _pmPick !== 'function') {
+  var _pmPick = function (btn) {
+    var selId = btn.getAttribute('data-sel');
+    var sel = document.getElementById(selId);
+    if (!sel) return;
+    sel.value = btn.getAttribute('data-value');
+    var sibs = btn.parentNode
+      ? btn.parentNode.querySelectorAll('[data-sel="' + selId + '"]') : [];
+    for (var i = 0; i < sibs.length; i++) sibs[i].classList.remove('is-selected');
+    btn.classList.add('is-selected');
+  };
+}
+
+/* Studio icon set (SVG only, never emoji). */
+function _pcIconSvg(name) {
+  if (name === 'clock') {
+    return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/></svg>';
+  }
+  if (name === 'waves') {
+    return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 12c2-3 4-3 6 0s4 3 6 0 4-3 6 0"/><path d="M2 17c2-3 4-3 6 0s4 3 6 0 4-3 6 0" opacity=".55"/><path d="M2 7c2-3 4-3 6 0s4 3 6 0 4-3 6 0" opacity=".55"/></svg>';
+  }
+  if (name === 'mic') {
+    return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="17" x2="12" y2="21"/></svg>';
+  }
+  if (name === 'play') {
+    return '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M7 4.5v15l13-7.5z"/></svg>';
+  }
+  if (name === 'download') {
+    return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
+  }
+  if (name === 'file') {
+    return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+  }
+  if (name === 'refresh') {
+    return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>';
+  }
+  if (name === 'disc') {
+    return '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5.5" opacity=".45"/><circle cx="12" cy="12" r="1.8" fill="currentColor" stroke="none"/></svg>';
+  }
+  if (name === 'moon') {
+    return '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
+  }
+  return '';
+}
+
+/** One rich option card bound to a hidden select (see _pmPick). */
+function _pcOptCard(selId, value, icon, title, sub, selected) {
+  return '<button type="button" class="pm-opt' + (selected ? ' is-selected' : '') +
+    '" data-sel="' + selId + '" data-value="' + value + '" onclick="_pmPick(this)">' +
+    '<span class="pm-opt-icon">' + _pcIconSvg(icon) + '</span>' +
+    '<span class="pm-opt-title">' + _pcEsc(title) + '</span>' +
+    '<span class="pm-opt-sub">' + _pcEsc(sub) + '</span></button>';
+}
+
+/** One segment of a segmented control bound to a hidden select. */
+function _pcSegBtn(selId, value, label, selected) {
+  return '<button type="button" class="pm-seg-btn' + (selected ? ' is-selected' : '') +
+    '" data-sel="' + selId + '" data-value="' + value + '" onclick="_pmPick(this)">' +
+    _pcEsc(label) + '</button>';
+}
+
 function _pcRender() {
   var host = _pcEl();
   if (!host) return;
@@ -491,28 +557,58 @@ function _pcRender() {
     return;
   }
 
-  // Card header (mode/lang/voice pickers + generate button) is always
-  // available in idle/done/script_only/error so a re-roll is one click.
+  // Studio console card (mode/lang/voice pickers + generate CTA) is always
+  // available in idle/error so a re-roll is one click. The rich option cards
+  // write into the hidden selects (_pmPick) — the generate path still reads
+  // the selects, so the contract never leaves the DOM.
   if (s.status === 'idle' || s.status === 'error') {
-    h += '<div class="paper-podcast-card">';
-    h += '<div class="paper-podcast-hint">' + _pcEsc(_pcT('paper.podcastHint',
-      'A solo spoken deep-read of this paper — for the commute or before sleep.')) + '</div>';
+    h += '<div class="paper-podcast-card pm-studio">';
+    h += '<div class="pm-studio-head">' +
+      '<div class="pm-studio-badge">' + _pcHeroIconSvg('podcast') + '</div>' +
+      '<div class="pm-studio-head-text">' +
+      '<div class="pm-studio-title">' +
+      _pcEsc(_pcT('paper.podcastStudioTitle', 'Podcast studio')) + '</div>' +
+      '<div class="pm-studio-sub">' + _pcEsc(_pcT('paper.podcastHint',
+        'A solo spoken deep-read of this paper — for the commute or before sleep.')) +
+      '</div></div></div>';
     if (!s.ttsAvailable) h += _pcDegradeBanner();
-    h += '<div class="paper-podcast-form">';
-    h += '<select id="podcastModeSel" class="paper-podcast-sel">' +
+    h += '<div class="pm-field"><div class="pm-field-label">' +
+      _pcEsc(_pcT('paper.mediaOptDuration', 'Duration')) + '</div>' +
+      '<div class="pm-options">' +
+      _pcOptCard('podcastModeSel', 'short', 'clock',
+        _pcT('paper.podcastModeShortName', 'Quick brief'),
+        _pcT('paper.podcastModeShortSub', '~5 min · for the commute'),
+        s.mode === 'short') +
+      _pcOptCard('podcastModeSel', 'full', 'waves',
+        _pcT('paper.podcastModeFullName', 'Full deep-read'),
+        _pcT('paper.podcastModeFullSub', '~15 min · before sleep'),
+        s.mode === 'full') +
+      '</div>' +
+      '<select id="podcastModeSel" class="pm-sr" tabindex="-1" aria-hidden="true">' +
       '<option value="short"' + (s.mode === 'short' ? ' selected' : '') + '>' +
       _pcEsc(_pcT('paper.podcastModeShort', 'Short · ~5 min')) + '</option>' +
       '<option value="full"' + (s.mode === 'full' ? ' selected' : '') + '>' +
-      _pcEsc(_pcT('paper.podcastModeFull', 'Full · ~15 min')) + '</option></select>';
-    h += '<select id="podcastLangSel" class="paper-podcast-sel">' +
+      _pcEsc(_pcT('paper.podcastModeFull', 'Full · ~15 min')) + '</option></select></div>';
+    h += '<div class="pm-field"><div class="pm-field-label">' +
+      _pcEsc(_pcT('paper.mediaOptLang', 'Language')) + '</div>' +
+      '<div class="pm-seg">' +
+      _pcSegBtn('podcastLangSel', 'zh', '中文', s.lang === 'zh') +
+      _pcSegBtn('podcastLangSel', 'en', 'English', s.lang === 'en') +
+      '</div>' +
+      '<select id="podcastLangSel" class="pm-sr" tabindex="-1" aria-hidden="true">' +
       '<option value="zh"' + (s.lang === 'zh' ? ' selected' : '') + '>中文</option>' +
-      '<option value="en"' + (s.lang === 'en' ? ' selected' : '') + '>English</option></select>';
-    h += '<input id="podcastVoiceInp" class="paper-podcast-voice" type="text" value="' +
+      '<option value="en"' + (s.lang === 'en' ? ' selected' : '') + '>English</option></select></div>';
+    h += '<div class="pm-field"><div class="pm-field-label">' +
+      _pcEsc(_pcT('paper.mediaOptVoice', 'Voice')) +
+      '<span class="pm-field-opt">' +
+      _pcEsc(_pcT('paper.mediaOptional', 'optional')) + '</span></div>' +
+      '<div class="pm-voice-wrap">' + _pcIconSvg('mic') +
+      '<input id="podcastVoiceInp" type="text" value="' +
       _pcEsc(s.voice) + '" placeholder="' + _pcEsc(s.defaultVoice ||
-        _pcT('paper.podcastVoice', 'voice (optional)')) + '" />';
-    h += '<button class="paper-podcast-btn" onclick="_podcastGenerate()">' +
-      _pcEsc(_pcT('paper.podcastGenerate', 'Generate podcast')) + '</button>';
-    h += '</div>';
+        _pcT('paper.podcastVoice', 'voice (optional)')) + '" /></div></div>';
+    h += '<button class="paper-podcast-btn pm-cta" onclick="_podcastGenerate()">' +
+      _pcIconSvg('play') + '<span>' +
+      _pcEsc(_pcT('paper.podcastGenerate', 'Generate podcast')) + '</span></button>';
     if (s.status === 'error' && s.errorText) {
       h += '<div class="paper-podcast-error">' + _pcEsc(s.errorText) + '</div>';
     }
@@ -522,14 +618,18 @@ function _pcRender() {
   }
 
   if (s.status === 'generating') {
-    h += '<div class="paper-podcast-card">';
+    h += '<div class="paper-podcast-card pm-console">';
+    h += '<div class="pm-console-head">' +
+      '<span class="pm-eq" aria-hidden="true"><i></i><i></i><i></i><i></i></span>' +
+      '<span class="pm-console-title">' +
+      _pcEsc(_pcT('paper.podcastMakingTitle', 'Producing your podcast')) + '</span>' +
+      '<button class="paper-podcast-btn paper-podcast-btn-ghost pm-console-abort" onclick="_podcastAbort()">' +
+      _pcEsc(_pcT('paper.podcastAbort', 'Abort')) + '</button></div>';
     h += _pcStepper();
     h += '<div class="paper-podcast-progress">';
     h += '<span class="paper-podcast-spinner"></span>';
     h += '<span id="podcastProgressLine">' +
       _pcEsc(_pcT('paper.podcastScriptPhase', 'Writing the spoken script…')) + '</span>';
-    h += '<button class="paper-podcast-btn paper-podcast-btn-ghost" onclick="_podcastAbort()">' +
-      _pcEsc(_pcT('paper.podcastAbort', 'Abort')) + '</button>';
     h += '</div>';
     h += '<div class="paper-media-activity" id="podcastActivityLine"></div>';
     h += '</div>';
@@ -568,7 +668,7 @@ function _pcRender() {
   var ext = (meta.container === 'wav') ? 'wav' : (meta.container === 'mp3' ? 'mp3' : 'bin');
   var dlName = 'paper-podcast-' + s.mode + '-' + (s.paperHash || '').slice(0, 8) + '.' + ext;
 
-  h += '<div class="paper-podcast-card">';
+  h += '<div class="paper-podcast-card pm-studio">';
   if (scriptOnly) h += _pcDegradeBanner();
   h += '<div class="paper-podcast-head">';
   h += '<span class="paper-podcast-title">' + _pcEsc(script.title || '') + '</span>';
@@ -586,13 +686,16 @@ function _pcRender() {
   }
 
   if (!scriptOnly && audioUrl) {
-    h += '<audio id="podcastAudio" controls preload="metadata" src="' +
-      _pcEsc(audioUrl) + '"></audio>';
+    h += '<div class="pm-player" id="podcastPlayerWrap">' +
+      '<span class="pm-player-disc">' + _pcIconSvg('disc') + '</span>' +
+      '<audio id="podcastAudio" controls preload="metadata" src="' +
+      _pcEsc(audioUrl) + '"></audio></div>';
     h += '<div class="paper-podcast-actions">';
     h += '<a class="paper-podcast-btn" href="' + _pcEsc(audioUrl) +
-      '" download="' + _pcEsc(dlName) + '">' +
-      _pcEsc(_pcT('paper.podcastDownloadAudio', 'Download audio')) + '</a>';
-    h += '<label class="paper-podcast-sleep">' +
+      '" download="' + _pcEsc(dlName) + '">' + _pcIconSvg('download') +
+      '<span>' + _pcEsc(_pcT('paper.podcastDownloadAudio', 'Download audio')) +
+      '</span></a>';
+    h += '<label class="paper-podcast-sleep">' + _pcIconSvg('moon') +
       _pcEsc(_pcT('paper.podcastSleepTimer', 'Sleep timer')) + ' ' +
       '<select id="podcastSleepSel" class="paper-podcast-sel" onchange="_podcastSleepTimerChange()">' +
       '<option value="0">' + _pcEsc(_pcT('paper.podcastSleepOff', 'Off')) + '</option>' +
@@ -607,10 +710,14 @@ function _pcRender() {
 
   h += '<div class="paper-podcast-actions">';
   h += '<button class="paper-podcast-btn paper-podcast-btn-ghost" onclick="_podcastExportScript()">' +
-    _pcEsc(_pcT('paper.podcastExportScript', 'Export script (md)')) + '</button>';
+    _pcIconSvg('file') + '<span>' +
+    _pcEsc(_pcT('paper.podcastExportScript', 'Export script (md)')) + '</span></button>';
   h += '<button class="paper-podcast-btn paper-podcast-btn-ghost" onclick="_podcastGenerate(true)">' +
-    _pcEsc(_pcT('paper.podcastRegenerate', 'Regenerate')) + '</button>';
+    _pcIconSvg('refresh') + '<span>' +
+    _pcEsc(_pcT('paper.podcastRegenerate', 'Regenerate')) + '</span></button>';
   h += '</div>';
+  h += '<div class="pm-transcript-head">' +
+    _pcEsc(_pcT('paper.podcastTranscriptTitle', 'Transcript')) + '</div>';
 
   // Transcript: click a segment to seek (audio mode); prefix sums of
   // est_seconds give the seek offsets.
@@ -632,6 +739,15 @@ function _pcRender() {
       audio.addEventListener('timeupdate', function() {
         _pcHighlightSegment(audio.currentTime, starts);
         _pcSleepTick(audio);
+      });
+      /* Spinning vinyl while playing — pure presentation, no state. */
+      audio.addEventListener('play', function() {
+        var w = document.getElementById('podcastPlayerWrap');
+        if (w) w.classList.add('is-playing');
+      });
+      audio.addEventListener('pause', function() {
+        var w = document.getElementById('podcastPlayerWrap');
+        if (w) w.classList.remove('is-playing');
       });
     }
   }

@@ -474,6 +474,71 @@ function _pvDegradeBanner() {
     '</span></div>';
 }
 
+/* Option-card / segmented-control → hidden <select> bridge. Shared with
+ * podcast.js (guarded — first definition in the bundle wins, both bodies
+ * are identical). The real <select> keeps the generate path and the jsdom
+ * contract (stable ids + .value); the cards write the pick back into it. */
+if (typeof _pmPick !== 'function') {
+  var _pmPick = function (btn) {
+    var selId = btn.getAttribute('data-sel');
+    var sel = document.getElementById(selId);
+    if (!sel) return;
+    sel.value = btn.getAttribute('data-value');
+    var sibs = btn.parentNode
+      ? btn.parentNode.querySelectorAll('[data-sel="' + selId + '"]') : [];
+    for (var i = 0; i < sibs.length; i++) sibs[i].classList.remove('is-selected');
+    btn.classList.add('is-selected');
+  };
+}
+
+/* Studio icon set (SVG only, never emoji). */
+function _pvIconSvg(name) {
+  if (name === 'zap') {
+    return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>';
+  }
+  if (name === 'gauge') {
+    return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 19a9 9 0 1 1 16 0"/><path d="M12 15l3.5-5.5"/></svg>';
+  }
+  if (name === 'gem') {
+    return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12l4 6-10 12L2 9l4-6z"/><path d="M2 9h20" opacity=".6"/><path d="M9 3L7 9l5 12 5-12-2-6" opacity=".6"/></svg>';
+  }
+  if (name === 'mic') {
+    return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="17" x2="12" y2="21"/></svg>';
+  }
+  if (name === 'play') {
+    return '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M7 4.5v15l13-7.5z"/></svg>';
+  }
+  if (name === 'film') {
+    return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M7 4v16M17 4v16M2 9h5M2 15h5M17 9h5M17 15h5"/></svg>';
+  }
+  if (name === 'download') {
+    return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
+  }
+  if (name === 'file') {
+    return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+  }
+  if (name === 'refresh') {
+    return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>';
+  }
+  return '';
+}
+
+/** One rich option card bound to a hidden select (see _pmPick). */
+function _pvOptCard(selId, value, icon, title, sub, selected) {
+  return '<button type="button" class="pm-opt' + (selected ? ' is-selected' : '') +
+    '" data-sel="' + selId + '" data-value="' + value + '" onclick="_pmPick(this)">' +
+    '<span class="pm-opt-icon">' + _pvIconSvg(icon) + '</span>' +
+    '<span class="pm-opt-title">' + _pvEsc(title) + '</span>' +
+    '<span class="pm-opt-sub">' + _pvEsc(sub) + '</span></button>';
+}
+
+/** One segment of a segmented control bound to a hidden select. */
+function _pvSegBtn(selId, value, label, selected) {
+  return '<button type="button" class="pm-seg-btn' + (selected ? ' is-selected' : '') +
+    '" data-sel="' + selId + '" data-value="' + value + '" onclick="_pmPick(this)">' +
+    _pvEsc(label) + '</button>';
+}
+
 function _pvRender() {
   var host = _pvEl();
   if (!host) return;
@@ -512,34 +577,79 @@ function _pvRender() {
     return;
   }
 
+  /* Studio console card (lang/quality/voice/toggles + generate CTA). The
+   * rich option cards write into the hidden selects (_pmPick) — the
+   * generate path still reads the selects, so the contract never leaves
+   * the DOM. */
   if (s.status === 'idle' || s.status === 'error') {
-    h += '<div class="paper-podcast-card">';
-    h += '<div class="paper-podcast-hint">' + _pvEsc(_pvT('paper.videoHint',
-      'A short narrated motion-graphic video of this paper — beats, charts and kinetic type.')) + '</div>';
+    h += '<div class="paper-podcast-card pm-studio">';
+    h += '<div class="pm-studio-head">' +
+      '<div class="pm-studio-badge is-video">' + _pvHeroIconSvg('video') + '</div>' +
+      '<div class="pm-studio-head-text">' +
+      '<div class="pm-studio-title">' +
+      _pvEsc(_pvT('paper.videoStudioTitle', 'Video studio')) + '</div>' +
+      '<div class="pm-studio-sub">' + _pvEsc(_pvT('paper.videoHint',
+        'A short narrated motion-graphic video of this paper — beats, charts and kinetic type.')) +
+      '</div></div></div>';
     if (!s.ttsAvailable) h += _pvDegradeBanner();
-    h += '<div class="paper-podcast-form">';
-    h += '<select id="videoLangSel" class="paper-podcast-sel">' +
+    h += '<div class="pm-field"><div class="pm-field-label">' +
+      _pvEsc(_pvT('paper.mediaOptLang', 'Language')) + '</div>' +
+      '<div class="pm-seg">' +
+      _pvSegBtn('videoLangSel', 'zh', '中文', s.lang === 'zh') +
+      _pvSegBtn('videoLangSel', 'en', 'English', s.lang === 'en') +
+      '</div>' +
+      '<select id="videoLangSel" class="pm-sr" tabindex="-1" aria-hidden="true">' +
       '<option value="zh"' + (s.lang === 'zh' ? ' selected' : '') + '>中文</option>' +
-      '<option value="en"' + (s.lang === 'en' ? ' selected' : '') + '>English</option></select>';
-    h += '<select id="videoQualSel" class="paper-podcast-sel">' +
+      '<option value="en"' + (s.lang === 'en' ? ' selected' : '') + '>English</option></select></div>';
+    h += '<div class="pm-field"><div class="pm-field-label">' +
+      _pvEsc(_pvT('paper.mediaOptQuality', 'Quality')) + '</div>' +
+      '<div class="pm-options cols-3">' +
+      _pvOptCard('videoQualSel', 'draft', 'zap',
+        _pvT('paper.videoQualityDraft', 'Draft (fast)'),
+        _pvT('paper.videoQualityDraftSub', 'fast preview'), s.quality === 'draft') +
+      _pvOptCard('videoQualSel', 'standard', 'gauge',
+        _pvT('paper.videoQualityStandard', 'Standard'),
+        _pvT('paper.videoQualityStandardSub', 'recommended'), s.quality === 'standard') +
+      _pvOptCard('videoQualSel', 'high', 'gem',
+        _pvT('paper.videoQualityHigh', 'High'),
+        _pvT('paper.videoQualityHighSub', 'slower, finer'), s.quality === 'high') +
+      '</div>' +
+      '<select id="videoQualSel" class="pm-sr" tabindex="-1" aria-hidden="true">' +
       '<option value="draft"' + (s.quality === 'draft' ? ' selected' : '') + '>' +
       _pvEsc(_pvT('paper.videoQualityDraft', 'Draft (fast)')) + '</option>' +
       '<option value="standard"' + (s.quality === 'standard' ? ' selected' : '') + '>' +
       _pvEsc(_pvT('paper.videoQualityStandard', 'Standard')) + '</option>' +
       '<option value="high"' + (s.quality === 'high' ? ' selected' : '') + '>' +
-      _pvEsc(_pvT('paper.videoQualityHigh', 'High')) + '</option></select>';
-    h += '<input id="videoVoiceInp" class="paper-podcast-voice" type="text" value="' +
+      _pvEsc(_pvT('paper.videoQualityHigh', 'High')) + '</option></select></div>';
+    h += '<div class="pm-field"><div class="pm-field-label">' +
+      _pvEsc(_pvT('paper.mediaOptVoice', 'Voice')) +
+      '<span class="pm-field-opt">' +
+      _pvEsc(_pvT('paper.mediaOptional', 'optional')) + '</span></div>' +
+      '<div class="pm-voice-wrap">' + _pvIconSvg('mic') +
+      '<input id="videoVoiceInp" type="text" value="' +
       _pvEsc(s.voice) + '" placeholder="' + _pvEsc(s.defaultVoice ||
-        _pvT('paper.podcastVoice', 'voice (optional)')) + '" />';
-    h += '<label class="paper-video-chk"><input id="videoNarrChk" type="checkbox"' +
-      (s.narration ? ' checked' : '') + ' />' +
-      _pvEsc(_pvT('paper.videoNarration', 'Narration')) + '</label>';
-    h += '<label class="paper-video-chk"><input id="videoBurnChk" type="checkbox"' +
-      (s.burnIn ? ' checked' : '') + ' />' +
-      _pvEsc(_pvT('paper.videoBurnIn', 'Burn-in subtitles')) + '</label>';
-    h += '<button class="paper-podcast-btn" onclick="_videoGenerate()">' +
-      _pvEsc(_pvT('paper.videoGenerate', 'Generate video')) + '</button>';
-    h += '</div>';
+        _pvT('paper.podcastVoice', 'voice (optional)')) + '" /></div></div>';
+    h += '<div class="pm-field"><div class="pm-field-label">' +
+      _pvEsc(_pvT('paper.mediaOptExtras', 'Options')) + '</div>' +
+      '<div class="pm-toggles">' +
+      '<label class="pm-toggle">' +
+      '<input id="videoNarrChk" type="checkbox"' + (s.narration ? ' checked' : '') + ' />' +
+      '<span class="pm-toggle-track"><span class="pm-toggle-thumb"></span></span>' +
+      '<span class="pm-toggle-text"><b>' +
+      _pvEsc(_pvT('paper.videoNarration', 'Narration')) + '</b><small>' +
+      _pvEsc(_pvT('paper.videoNarrationSub', 'TTS voice-over')) +
+      '</small></span></label>' +
+      '<label class="pm-toggle">' +
+      '<input id="videoBurnChk" type="checkbox"' + (s.burnIn ? ' checked' : '') + ' />' +
+      '<span class="pm-toggle-track"><span class="pm-toggle-thumb"></span></span>' +
+      '<span class="pm-toggle-text"><b>' +
+      _pvEsc(_pvT('paper.videoBurnIn', 'Burn-in subtitles')) + '</b><small>' +
+      _pvEsc(_pvT('paper.videoBurnInSub', 'subtitles baked into the frame')) +
+      '</small></span></label>' +
+      '</div></div>';
+    h += '<button class="paper-podcast-btn pm-cta" onclick="_videoGenerate()">' +
+      _pvIconSvg('play') + '<span>' +
+      _pvEsc(_pvT('paper.videoGenerate', 'Generate video')) + '</span></button>';
     if (s.status === 'error' && s.errorText) {
       h += '<div class="paper-podcast-error">' + _pvEsc(s.errorText) + '</div>';
     }
@@ -549,15 +659,20 @@ function _pvRender() {
   }
 
   if (s.status === 'generating') {
-    h += '<div class="paper-podcast-card">';
+    h += '<div class="paper-podcast-card pm-console">';
+    h += '<div class="pm-console-head">' +
+      '<span class="pm-clap" aria-hidden="true">' + _pvIconSvg('film') + '</span>' +
+      '<span class="pm-console-title">' +
+      _pvEsc(_pvT('paper.videoMakingTitle', 'Producing your video')) + '</span>' +
+      '<button class="paper-podcast-btn paper-podcast-btn-ghost pm-console-abort" onclick="_videoAbort()">' +
+      _pvEsc(_pvT('paper.podcastAbort', 'Abort')) + '</button></div>';
     h += _pvStepper();
     h += '<div class="paper-podcast-progress">';
     h += '<span class="paper-podcast-spinner"></span>';
     h += '<span id="videoProgressLine">' +
       _pvEsc(_pvT('paper.videoStarting', 'Starting…')) + '</span>';
-    h += '<button class="paper-podcast-btn paper-podcast-btn-ghost" onclick="_videoAbort()">' +
-      _pvEsc(_pvT('paper.podcastAbort', 'Abort')) + '</button>';
     h += '</div>';
+    h += '<div class="pm-renderbar" aria-hidden="true"></div>';
     h += '<div class="paper-media-activity" id="videoActivityLine"></div>';
     // P-UX3: the grid fills in scene-by-scene as scene_done events land.
     h += '<div class="paper-video-grid" id="paperVideoGrid"></div>';
@@ -592,7 +707,7 @@ function _pvRender() {
   var r = s.result || {};
   var tid = s._doneTaskId || '';
   var fileUrl = tid ? Api.motion.fileUrl(tid) : '';
-  h += '<div class="paper-podcast-card">';
+  h += '<div class="paper-podcast-card pm-studio">';
   h += '<div class="paper-podcast-head">';
   h += '<span class="paper-podcast-title">' +
     _pvEsc(_pvT('paper.videoHeroTitle', 'Watch this paper')) + '</span>';
@@ -614,13 +729,15 @@ function _pvRender() {
     h += '<div class="paper-podcast-actions">';
     h += '<a class="paper-podcast-btn" href="' + _pvEsc(fileUrl) +
       '" download="paper-video-' + (s.paperHash || '').slice(0, 8) + '.mp4">' +
-      _pvEsc(_pvT('paper.videoDownload', 'Download video')) + '</a>';
+      _pvIconSvg('download') + '<span>' +
+      _pvEsc(_pvT('paper.videoDownload', 'Download video')) + '</span></a>';
     h += '<a class="paper-podcast-btn paper-podcast-btn-ghost" href="' +
       _pvEsc(Api.motion.fileUrl(tid, 'srt')) + '" download="paper-video-' +
-      (s.paperHash || '').slice(0, 8) + '.srt">' +
-      _pvEsc(_pvT('paper.videoDownloadSrt', 'Download SRT')) + '</a>';
+      (s.paperHash || '').slice(0, 8) + '.srt">' + _pvIconSvg('file') +
+      '<span>' + _pvEsc(_pvT('paper.videoDownloadSrt', 'Download SRT')) + '</span></a>';
     h += '<button class="paper-podcast-btn paper-podcast-btn-ghost" onclick="_videoGenerate(true)">' +
-      _pvEsc(_pvT('paper.podcastRegenerate', 'Regenerate')) + '</button>';
+      _pvIconSvg('refresh') + '<span>' +
+      _pvEsc(_pvT('paper.podcastRegenerate', 'Regenerate')) + '</span></button>';
     h += '</div>';
   }
   h += '<div class="paper-video-grid" id="paperVideoGrid"></div>';

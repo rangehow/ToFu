@@ -184,24 +184,32 @@ def test_unknown_arxiv_id_is_stripped_NEUTER():
     }
     restore = _patch_synthesis('survey', raw)
     ra = _patch_citation_audit(lambda md: None)
+    # Stub grounding so the FAKE id is a pure hallucination (not grounded): the
+    # 'grounded' tier requires _fetch_arxiv_title to confirm existence — return
+    # '' so FAKE is classified hallucination and stripped.
+    import lib.paper.survey as _sv
+    _orig_ground = _sv._fetch_arxiv_title
+    _sv._fetch_arxiv_title = lambda aid: ''
     try:
         res = sv.build_survey('dir', real, lang='en', folder_id=folder)
         gm = res['open_gaps']
-        # The fake id is stripped everywhere and recorded.
+        # The fake id is stripped everywhere and recorded as a hallucination.
         assert FAKE in gm['stripped_ids'], f"fake id not recorded stripped: {gm['stripped_ids']}"
-        assert FAKE in gm['missing_ids'], 'fake id not surfaced as missing (follow-up harvest signal)'
+        # A pure hallucination is NOT a missing_id (missing_ids = grounded-not-harvested only).
+        assert FAKE not in gm['missing_ids'], 'hallucination must NOT be a harvest-me signal'
         surfaced = sv._extract_survey_ids(gm)
         assert FAKE not in surfaced, f'fake id survived somewhere: {surfaced}'
         # cluster keeps only the real paper
         assert gm['clusters'][0]['papers'] == [real[0]], gm['clusters'][0]['papers']
         # method_matrix drops the fake-paper row entirely
         assert [m['paper'] for m in gm['method_matrix']] == [real[0]]
-        # the fabricated gap (evidence emptied) is DROPPED; the backed one survives
+        # the fabricated gap (evidence all hallucination) is DROPPED; the backed one survives
         gap_ids = [g['id'] for g in gm['open_gaps']]
         assert gap_ids == ['g_real'], f'expected only g_real, got {gap_ids}'
     finally:
+        _sv._fetch_arxiv_title = _orig_ground
         ra(); restore()
-    _ok('NEUTER: unknown arXiv id stripped, fabricated gap dropped, real gap survives')
+    _ok('NEUTER: hallucinated arXiv id stripped, fabricated gap dropped, real gap survives')
 
 
 def test_verify_against_library_is_pure_and_biting():
@@ -210,13 +218,14 @@ def test_verify_against_library_is_pure_and_biting():
     raw = {'clusters': [{'id': 'c', 'papers': ['1111.00001', '2222.00002']}],
            'method_matrix': [{'paper': '1111.00001'}, {'paper': '9999.00009'}],
            'open_gaps': [{'id': 'g', 'gap': 'x', 'evidence': ['9999.00009']}]}
-    out = sv._verify_against_library(raw, lib_ids={'1111.00001'})
+    out = sv._verify_against_library(raw, lib_ids={'1111.00001'}, ground_fn=lambda aid: '')
     assert out['clusters'][0]['papers'] == ['1111.00001']
     assert [m['paper'] for m in out['method_matrix']] == ['1111.00001']
-    assert out['open_gaps'] == [], 'gap backed only by an unverifiable id should drop'
+    assert out['open_gaps'] == [], 'gap backed only by a hallucinated id should drop'
     assert sorted(out['stripped_ids']) == ['2222.00002', '9999.00009']
     # counter: with both ids present, nothing strips
-    out2 = sv._verify_against_library(raw, lib_ids={'1111.00001', '2222.00002', '9999.00009'})
+    out2 = sv._verify_against_library(raw, lib_ids={'1111.00001', '2222.00002', '9999.00009'},
+                                      ground_fn=lambda aid: '')
     assert out2['stripped_ids'] == [] and len(out2['open_gaps']) == 1
     _ok('_verify_against_library is a pure, biting gate (version-normalized id set)')
 
@@ -289,6 +298,55 @@ def test_load_inputs_never_reparses_and_prefers_report():
     _ok('input load reuses reports/parsed_text, prefers report, and NEVER reparses')
 
 
+def test_grounded_tier_keeps_gap_and_flags_low_confidence():
+    """R2/R3 seam v2: an evidence id NOT in the library but GROUNDED (exists on
+    arXiv) keeps the gap alive, is reported in missing_ids (harvest-me), and —
+    because the gap has ZERO library-tier evidence — is flagged low_confidence."""
+    import lib.paper.survey as sv
+    raw = {'clusters': [], 'method_matrix': [],
+           'open_gaps': [{'id': 'g', 'gap': 'real but unharvested', 'evidence': ['2404.00001']}]}
+    # 2404.00001 is not in lib_ids, but ground_fn confirms it exists → grounded.
+    out = sv._verify_against_library(raw, lib_ids=set(),
+                                     ground_fn=lambda aid: 'A Real Title')
+    assert len(out['open_gaps']) == 1, 'grounded-only gap must survive (not dropped)'
+    g = out['open_gaps'][0]
+    assert g['evidence'] == ['2404.00001'], g['evidence']
+    assert g['evidence_tiers'].get('2404.00001') == 'grounded', g['evidence_tiers']
+    assert g['library_evidence_count'] == 0 and g['grounded_evidence_count'] == 1
+    assert g['low_confidence'] is True, 'grounded-only gap must be low_confidence'
+    assert '2404.00001' in out['missing_ids'], 'grounded-not-harvested → missing_ids'
+    assert out['stripped_ids'] == [], 'grounded id is not a hallucination'
+    _ok('grounded (not-in-library but real) evidence keeps gap + flags low_confidence + missing_ids')
+
+
+def test_library_tier_gap_is_high_confidence():
+    """A gap with at least one library-tier evidence id is NOT low_confidence."""
+    import lib.paper.survey as sv
+    raw = {'open_gaps': [{'id': 'g', 'gap': 'x',
+                          'evidence': ['1111.00001', '2404.00002']}]}
+    out = sv._verify_against_library(raw, lib_ids={'1111.00001'},
+                                     ground_fn=lambda aid: 'Real')  # 2404 grounded
+    g = out['open_gaps'][0]
+    assert g['library_evidence_count'] == 1 and g['grounded_evidence_count'] == 1
+    assert g['low_confidence'] is False, 'a library-backed gap is high confidence'
+    assert g['evidence_tiers']['1111.00001'] == 'library'
+    assert g['evidence_tiers']['2404.00002'] == 'grounded'
+    _ok('a gap with any library-tier evidence is high-confidence (low_confidence=False)')
+
+
+def test_grounding_tier_NEUTER():
+    """NEUTER: if the 'grounded' fallback is removed (ground_fn always ''), the
+    same real-but-unharvested gap is dropped as a hallucination — proving the
+    grounded tier is what keeps it alive."""
+    import lib.paper.survey as sv
+    raw = {'open_gaps': [{'id': 'g', 'gap': 'real but unharvested', 'evidence': ['2404.00001']}]}
+    out = sv._verify_against_library(raw, lib_ids=set(), ground_fn=lambda aid: '')
+    assert out['open_gaps'] == [], \
+        'NEUTER FAILED: without the grounded tier the unharvested gap should drop'
+    assert '2404.00001' in out['stripped_ids']
+    _ok('NEUTER: removing the grounded tier drops the real-but-unharvested gap (tier bites)')
+
+
 def test_no_library_inputs_is_clean_failure():
     _load_app()
     import lib.paper.survey as sv
@@ -309,6 +367,9 @@ def main():
         test_fake_citation_flagged,
         test_clean_citations_no_card,
         test_load_inputs_never_reparses_and_prefers_report,
+        test_grounded_tier_keeps_gap_and_flags_low_confidence,
+        test_library_tier_gap_is_high_confidence,
+        test_grounding_tier_NEUTER,
         test_no_library_inputs_is_clean_failure,
     ]
     for fn in tests:

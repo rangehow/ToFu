@@ -2,6 +2,16 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
 
+### 2026-07-27 — R2/R3 接缝 v2 落地:evidence 三档接地 + low_confidence 防后门 + harvest 重试(owner 拍板选 (c) 纯设计+离线码,真跑留到网络稳定;commit 见下,3 码 + 3 测试;三套件 **29/29**(+7 新测,含 NEUTER×3),研究全环 **40/40**,collect **10511** 0 err)
+
+- **起因(真跑暴露的真实设计张力,非网络问题):** v1 库内校验闸要求 `evidence` 每个 id **已入库**;真跑实证 LLM 综述会引用**存在但未入库**的近邻(harvest 只入解析成功的篇)→ 全部 gap 被丢 → 0 gaps → 链死。**根因是「已入库」判据本身太强。**
+- **① evidence 三档接地(取代二元判定):** `library`(在库,零成本 DB 查)/ `grounded`(不在库但 `fetch_arxiv_title` 确认真实存在,id 进 `missing_ids` 供下轮补 harvest)/ **剥掉**(既不在库也接不上=幻觉)。**只有 evidence 全部落第三档才丢弃该 gap** —— 既不放过幻觉引用,又不因 harvest 没抓全误杀真实空白。整条接缝**零新增 LLM 调用**。
+- **② `low_confidence` 防后门(owner 点名的关键约束):** gap 若 `library_evidence_count == 0`(纯靠 grounded 撑着)标 `low_confidence: true`;R3 消费时对 linked 到该 gap 的 idea **value 轴扣一档**并记 `linked_gap_low_confidence`。语义:**放宽 survey 覆盖率的代价由 R3 显式承担并标注,不静默传导**——防止「未真正读过的论文」偷偷变成 R3 判新颖性的地基。
+- **③ harvest 覆盖率补强(治本,压低 grounded 比例):** `harvest_arxiv_id` 对瞬时下载/解析失败**重试一次**(线性退避 3s);瞬时失败不该永久丢一篇。
+- **失败先行实证:** 把 `tiers[nid]='grounded'` 改回 v1 二元行为 → survey 两条接缝测试精确翻红(`grounded_evidence_count` 0≠1),改回即绿。**NEUTER×3:** grounding tier / high-confidence 不扣分 / 持久下载失败仍放弃。
+- **契约向后兼容:** 新字段(`evidence_tiers`/`library_evidence_count`/`grounded_evidence_count`/`low_confidence`)是 schema v1 增补,旧读者忽略新键即可,**未 bump 版本号**。
+- **诚实边界:** 本轮**不碰网络**,真跑(阈值校准 + 接缝真数据验证)留到 arXiv 连接稳定时一次做完。
+
 ### 2026-07-27 — 「末尾四个一模一样的因重启中断泡」根修三闸 + 幻影泡清理(owner「查数据库为什么四个泡,根修」;commit `59c8ba88`,2 文件 +477/-9;新套件 **6/6,其中 4 个 failing-first 在未修码上精确红**,恢复环+行存储钩环 **33 过**,collect **10495** 0 err)
 
 - **DB 取证链(全部生产实证,非推测):** 会话 ms2gipv5a7gvbc 尾部 #16/#17 两个 interrupted 泡(clen=0/tlen=4661,ts 同秒 11:42:18)内容逐字符 = 任务 `06b29421` 的检查点——那是一个 **08:07:43 出生的 autopilot 早产孪生**(父任务 984b3945 还在跑它就出生了,日志铁证 `[SyncConv 984b3945] skipping conv sync: superseded by newer task 06b29421`),父任务 08:08:51 done 且回复早已落地为 msg#1。**它的轮次 3.5 小时前就被回答了,自己却以 status='running' 僵尸到 11:42**(LLM 两轮 08:08:51 已完成,finalize 从未持久化,SSE 流挂了 7200s 被掐)。本会话 16 个任务里 8 个是这种「done+interrupted 孪生对」。

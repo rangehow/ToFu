@@ -562,9 +562,24 @@ def generate_ideas(direction: str, open_gaps: dict, *, lang: str = 'en',
                              'reject_reason': 'judge failed/unparseable',
                              'prior_set_ids': prior_set['merged_ids']})
             continue
+        # R2/R3 seam v2 — a gap resting ONLY on grounded-but-unharvested papers
+        # (low_confidence) is a weaker foundation: R3 must not fully trust that
+        # the idea "solves a real gap". Deterministically dock the value axis by
+        # one and recompute overall (mirrors the parameter-level novelty cap —
+        # applied HERE, not left to the judge). Flagged + a follow-up-harvest
+        # hint so the owner can re-judge after harvesting the missing papers.
+        linked_low_conf = bool(isinstance(gap, dict) and gap.get('low_confidence'))
+        if linked_low_conf and verdict['scores'].get('value', 0) > 1:
+            verdict['scores']['value'] -= 1
+            verdict['overall'] = round(
+                sum(verdict['scores'].values()) / len(verdict['scores']), 2)
+            logger.info('[Paper:Ideate] value axis docked (linked gap %s low_confidence) '
+                        'for %.50s → overall %.2f', idea.get('linked_gap_id'),
+                        idea.get('title'), verdict['overall'])
         record = {**idea, **verdict, 'prior_set_ids': prior_set['merged_ids'],
                   'retrieval_query': prior_set['retrieval_query'],
-                  'prior_art_dropped': dropped}
+                  'prior_art_dropped': dropped,
+                  'linked_gap_low_confidence': linked_low_conf}
         if verdict['overall'] >= thr:
             accepted.append(record)
             logger.info('[Paper:Ideate] ACCEPT %.50s overall=%.2f', idea.get('title'),

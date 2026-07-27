@@ -290,6 +290,63 @@ def test_batch_second_run_zero_reparse():
     _ok('batch second run is zero-reparse (all cache hits)')
 
 
+def test_transient_download_failure_is_retried():
+    """R2/R3 seam v2: a TRANSIENT download failure gets one retry before giving
+    up — a real paper must not be permanently dropped and starve the survey."""
+    _load_app()
+    counter, restore = _patch_harvest()
+    aid = f'2308.{int(time.time()) % 100000:05d}'
+    import lib.paper.harvest as h
+    # First download attempt raises (transient), second succeeds.
+    calls = {'n': 0}
+    orig_dl = h._download_pdf_bytes
+    def _flaky(arxiv_id, **kw):
+        calls['n'] += 1
+        if calls['n'] == 1:
+            raise TimeoutError('simulated transient arXiv timeout')
+        return b'%PDF-1.4 fake bytes'
+    h._download_pdf_bytes = _flaky
+    # Neutralize the retry backoff sleep so the test is fast.
+    orig_sleep = h.time.sleep
+    h.time.sleep = lambda s: None
+    try:
+        res = h.harvest_arxiv_id(aid)
+        assert res.status == 'parsed', f'transient failure should recover, got {res.status}: {res.error}'
+        assert calls['n'] == 2, f'should have retried the download once, got {calls["n"]} attempts'
+    finally:
+        h._download_pdf_bytes = orig_dl
+        h.time.sleep = orig_sleep
+        restore()
+    _ok('a transient download failure is retried once and recovers (paper not dropped)')
+
+
+def test_persistent_download_failure_gives_up_NEUTER():
+    """Counter: an ALWAYS-failing download exhausts the retry budget and returns
+    an error result (best-effort, never raises)."""
+    _load_app()
+    counter, restore = _patch_harvest()
+    aid = f'2309.{int(time.time()) % 100000:05d}'
+    import lib.paper.harvest as h
+    calls = {'n': 0}
+    orig_dl = h._download_pdf_bytes
+    def _always_fail(arxiv_id, **kw):
+        calls['n'] += 1
+        raise TimeoutError('down')
+    h._download_pdf_bytes = _always_fail
+    orig_sleep = h.time.sleep
+    h.time.sleep = lambda s: None
+    try:
+        res = h.harvest_arxiv_id(aid)
+        assert res.status == 'error', res.status
+        assert calls['n'] == h._HARVEST_FETCH_ATTEMPTS, \
+            f'should exhaust exactly {h._HARVEST_FETCH_ATTEMPTS} attempts, got {calls["n"]}'
+    finally:
+        h._download_pdf_bytes = orig_dl
+        h.time.sleep = orig_sleep
+        restore()
+    _ok('a persistent download failure exhausts the retry budget and errors (no raise)')
+
+
 def test_batch_dedups_input_ids():
     """Duplicate ids in the batch input are collapsed to one parse."""
     _load_app()
@@ -347,6 +404,8 @@ def main():
         test_cache_hit_skips_reparse,
         test_empty_parsed_text_is_not_a_cache_hit_NEUTER,
         test_batch_second_run_zero_reparse,
+        test_transient_download_failure_is_retried,
+        test_persistent_download_failure_gives_up_NEUTER,
         test_batch_dedups_input_ids,
         test_reading_mode_ingest_then_harvest_is_cache_hit,
     ]

@@ -313,6 +313,57 @@ def test_threshold_is_a_calibratable_constant_not_hardcoded():
     _ok('threshold is a calibratable constant (4.0 accepts, 4.5 rejects the same idea)')
 
 
+def test_low_confidence_gap_docks_value_axis():
+    """R2/R3 seam v2: an idea linked to a low_confidence gap (survey backed it
+    only with grounded-but-unharvested papers) gets its value axis docked by one
+    and is flagged — the reward for a loosened survey gate is paid HERE, visibly."""
+    import lib.paper.ideate as it
+    gaps_low = {
+        'schema_version': 1, 'direction': 'd',
+        'open_gaps': [{'id': 'gap_1', 'gap': 'g', 'low_confidence': True,
+                       'missing_ids': ['2404.00001']}],
+    }
+    fake_search = _FakeSearch([{'arxiv_id': '2305.11111', 'title': 'x', 'summary': ''}] * 5)
+    restore = _patch({
+        '_generate_raw_ideas': lambda *a, **k: [_good_idea()],
+        'search_arxiv': fake_search, 'fetch_arxiv_title': lambda aid: 'Real',
+        '_score_idea': _score_returning(None, delta='mechanism-level'),  # value=5 raw
+    })
+    try:
+        res = it.generate_ideas('dir', gaps_low, lang='en')
+        rec = (res['accepted'] + res['rejected'])[0]
+        assert rec['scores']['value'] == 4, f"value not docked (5→4): {rec['scores']}"
+        assert rec['linked_gap_low_confidence'] is True, 'idea not flagged low_confidence'
+        # overall recomputed: (5+5+5+4)/4 = 4.75
+        assert rec['overall'] == 4.75, rec['overall']
+    finally:
+        restore()
+    _ok('idea linked to a low_confidence gap has its value axis docked + is flagged')
+
+
+def test_high_confidence_gap_no_dock_NEUTER():
+    """Counter/NEUTER: the SAME idea linked to a high-confidence gap (no
+    low_confidence flag) keeps value=5 — proving the dock is gated on the flag,
+    not applied unconditionally."""
+    import lib.paper.ideate as it
+    gaps_hi = {'schema_version': 1, 'direction': 'd',
+               'open_gaps': [{'id': 'gap_1', 'gap': 'g', 'low_confidence': False}]}
+    fake_search = _FakeSearch([{'arxiv_id': '2305.11111', 'title': 'x', 'summary': ''}] * 5)
+    restore = _patch({
+        '_generate_raw_ideas': lambda *a, **k: [_good_idea()],
+        'search_arxiv': fake_search, 'fetch_arxiv_title': lambda aid: 'Real',
+        '_score_idea': _score_returning(None, delta='mechanism-level'),
+    })
+    try:
+        res = it.generate_ideas('dir', gaps_hi, lang='en')
+        rec = (res['accepted'] + res['rejected'])[0]
+        assert rec['scores']['value'] == 5, f'high-confidence gap must NOT dock value: {rec["scores"]}'
+        assert rec['linked_gap_low_confidence'] is False
+    finally:
+        restore()
+    _ok('NEUTER: a high-confidence gap does NOT dock value (dock is flag-gated)')
+
+
 def test_no_gaps_is_clean_failure():
     import lib.paper.ideate as it
     res = it.generate_ideas('dir', {'open_gaps': []}, lang='en')
@@ -332,6 +383,8 @@ def main():
         test_novelty_capped_below_threshold_rejects,
         test_good_idea_accepted_and_rejections_audited,
         test_threshold_is_a_calibratable_constant_not_hardcoded,
+        test_low_confidence_gap_docks_value_axis,
+        test_high_confidence_gap_no_dock_NEUTER,
         test_no_gaps_is_clean_failure,
     ]
     for fn in tests:

@@ -70,6 +70,14 @@ __all__ = ['harvest_arxiv_id', 'harvest_arxiv_batch', 'HarvestResult']
 _HARVEST_ID_PREFIX = 'harvest_'
 
 
+# A transient download/parse failure (arXiv timeout / rate-limit / flaky read)
+# gets one retry with a short linear backoff — a real paper must not be
+# permanently dropped and starve the survey corpus (R2/R3 seam finding). A
+# permanent failure (invalid PDF, empty text) is not retried.
+_HARVEST_FETCH_ATTEMPTS = 2
+_HARVEST_RETRY_SLEEP = 3.0
+
+
 def _harvest_paper_id(arxiv_id: str) -> str:
     """Deterministic bookshelf id for a harvested arXiv paper.
 
@@ -302,11 +310,27 @@ def harvest_arxiv_id(arxiv_id: str, *, folder_id: str = '', user_id: int = 1,
                 text_length=len(hit['parsed_text']), paper_id=hit['id'])
 
     # ── Download + parse (once) ──
-    try:
-        pdf_bytes = _self._download_pdf_bytes(arxiv_id)
-    except Exception as e:
-        logger.warning('[Paper:Harvest] download failed for %s: %s', arxiv_id, e)
-        return HarvestResult(arxiv_id, status='error', error=f'download failed: {e}')
+    # A TRANSIENT download/parse failure (arXiv timeout / rate-limit / a flaky
+    # read) should not permanently drop a real paper — that starves the survey
+    # corpus (R2/R3 seam finding). Retry the download+parse ONCE with a short
+    # backoff before giving up. A permanent failure (empty/invalid PDF) is not
+    # retried (validate_pdf_bytes already rejected it deterministically).
+    pdf_bytes = None
+    last_err = None
+    for attempt in range(1, _HARVEST_FETCH_ATTEMPTS + 1):
+        try:
+            pdf_bytes = _self._download_pdf_bytes(arxiv_id)
+            break
+        except Exception as e:
+            last_err = e
+            if attempt < _HARVEST_FETCH_ATTEMPTS:
+                logger.warning('[Paper:Harvest] download failed for %s (attempt %d/%d): %s '
+                               '— retrying', arxiv_id, attempt, _HARVEST_FETCH_ATTEMPTS, e)
+                time.sleep(_HARVEST_RETRY_SLEEP * attempt)
+            else:
+                logger.warning('[Paper:Harvest] download failed for %s (final): %s', arxiv_id, e)
+    if pdf_bytes is None:
+        return HarvestResult(arxiv_id, status='error', error=f'download failed: {last_err}')
 
     try:
         result = _self.parse_pdf(pdf_bytes)

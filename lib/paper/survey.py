@@ -218,38 +218,74 @@ def _library_id_set(user_id: int = 1, folder_id: str = '') -> set:
     return ids
 
 
-def _filter_ids(id_list, lib_ids: set, stripped: list) -> list:
-    """Keep only ids present in ``lib_ids`` (version-normalized); record drops."""
+def _tier_ids(id_list, lib_ids: set, stripped: list, tiers: dict,
+              ground_fn, ground_cache: dict) -> list:
+    """Classify each id into library / grounded / hallucinated (R2/R3 seam v2).
+
+    Returns the kept ids (library + grounded). Records:
+      * ``stripped`` (list): ids that are hallucinations (not in library, and
+        ``ground_fn`` could not confirm them) — removed from the entry.
+      * ``tiers`` (dict): id → 'library' | 'grounded' for every KEPT id.
+      * ``ground_cache`` (dict): id → bool memo so a repeated id isn't
+        re-grounded (one network probe per distinct id per verify pass).
+
+    ``library`` (a pure DB-set hit) is checked first and is free; ``grounded``
+    (``ground_fn`` confirms the paper exists) costs one title lookup and is the
+    fallback that keeps a real-but-not-yet-harvested citation alive; anything
+    else is a fabrication.
+    """
     kept = []
     for raw in (id_list or []):
         nid = _norm_id(raw)
-        if nid and nid in lib_ids:
+        if not nid:
+            continue
+        if nid in lib_ids:
             kept.append(raw)
-        elif nid:
+            tiers[nid] = 'library'
+            continue
+        # Not in the shelf — is it a real paper (grounded) or a hallucination?
+        if nid not in ground_cache:
+            ground_cache[nid] = bool(ground_fn(nid)) if ground_fn else False
+        if ground_cache[nid]:
+            kept.append(raw)
+            tiers[nid] = 'grounded'
+        else:
             stripped.append(nid)
     return kept
 
 
 def _verify_against_library(gap_map: dict, *, user_id: int = 1,
-                            folder_id: str = '', lib_ids: Optional[set] = None) -> dict:
-    """Strip every unverifiable arXiv id from an open-gap map (pin #1).
+                            folder_id: str = '', lib_ids: Optional[set] = None,
+                            ground_fn=None) -> dict:
+    """Grade every arXiv id in an open-gap map into three tiers (R2/R3 seam v2).
 
     Walks ``clusters[].papers``, ``method_matrix[].paper``, and
-    ``open_gaps[].evidence``; any id NOT present in ``paper_library`` (scoped to
-    ``folder_id`` when given) is removed. Rules:
-      * a ``cluster`` whose ``papers`` empties out is kept (its prose may still
-        describe a theme) but flagged;
-      * a ``method_matrix`` row whose ``paper`` is unverifiable is dropped
-        entirely (a matrix row IS a paper — no paper, no row);
-      * an ``open_gap`` whose ``evidence`` empties out is DROPPED (default: an
-        unbacked gap is a fabrication, not a crawl miss).
+    ``open_gaps[].evidence`` and classifies each id:
+      * **library** — in ``paper_library`` (scoped to ``folder_id`` when given):
+        the strongest evidence, a paper we actually harvested and read;
+      * **grounded** — not in the shelf but ``ground_fn`` (arXiv title lookup)
+        confirms it exists: kept, but the id is added to ``missing_ids`` as a
+        follow-up-harvest signal;
+      * **hallucination** — neither: stripped from the entry.
 
-    Returns a NEW dict (does not mutate the input) with two added meta keys:
-      * ``stripped_ids``: sorted unique ids removed (for replay/debug);
-      * ``missing_ids``: same list, surfaced as the follow-up-harvest signal.
+    Rules:
+      * a ``cluster``'s ``papers`` keeps library+grounded ids;
+      * a ``method_matrix`` row is dropped only if its paper is a hallucination
+        (a real-but-unharvested paper row is kept);
+      * an ``open_gap`` is DROPPED only when ALL its evidence is hallucination —
+        a gap with any library OR grounded evidence survives. A gap whose kept
+        evidence has ZERO ``library`` ids (grounded-only) is flagged
+        ``low_confidence=True`` — it rests on papers we have not actually read,
+        so R3 must discount it (see ideate).
 
-    ``lib_ids`` may be passed to avoid a DB hit (tests / batched callers);
-    otherwise it is queried once here.
+    Returns a NEW dict with added meta:
+      * ``stripped_ids`` — hallucinations removed (replay/debug);
+      * ``missing_ids`` — grounded-but-unharvested ids to harvest next;
+      * per-gap: ``evidence_tiers`` / ``library_evidence_count`` /
+        ``grounded_evidence_count`` / ``low_confidence``.
+
+    ``ground_fn`` defaults to the module's ``_fetch_arxiv_title`` seam; pass a
+    stub in tests to avoid the network.
     """
     if not isinstance(gap_map, dict):
         return {'schema_version': OPEN_GAPS_SCHEMA_VERSION, 'clusters': [],
@@ -257,10 +293,15 @@ def _verify_against_library(gap_map: dict, *, user_id: int = 1,
                 'missing_ids': []}
     if lib_ids is None:
         lib_ids = _library_id_set(user_id=user_id, folder_id=folder_id)
+    if ground_fn is None:
+        import lib.paper.survey as _self
+        ground_fn = _self._fetch_arxiv_title
 
     out = dict(gap_map)
     out['schema_version'] = OPEN_GAPS_SCHEMA_VERSION
     stripped: list = []
+    all_tiers: dict = {}      # id → 'library'|'grounded' across the whole map
+    ground_cache: dict = {}   # id → bool, one probe per distinct id
 
     # clusters
     clusters = []
@@ -268,45 +309,62 @@ def _verify_against_library(gap_map: dict, *, user_id: int = 1,
         if not isinstance(c, dict):
             continue
         c2 = dict(c)
-        c2['papers'] = _filter_ids(c.get('papers'), lib_ids, stripped)
+        c2['papers'] = _tier_ids(c.get('papers'), lib_ids, stripped, all_tiers,
+                                 ground_fn, ground_cache)
         clusters.append(c2)
     out['clusters'] = clusters
 
-    # method_matrix — a row IS a paper; drop the row if its paper is unverifiable
+    # method_matrix — a row IS a paper; drop only a hallucinated-paper row
     matrix = []
     for m in (gap_map.get('method_matrix') or []):
         if not isinstance(m, dict):
             continue
-        nid = _norm_id(m.get('paper'))
-        if nid and nid in lib_ids:
+        kept = _tier_ids([m.get('paper')], lib_ids, stripped, all_tiers,
+                         ground_fn, ground_cache)
+        if kept:
             matrix.append(dict(m))
-        elif nid:
-            stripped.append(nid)
     out['method_matrix'] = matrix
 
-    # open_gaps — drop a gap whose evidence empties out
+    # open_gaps — drop only when ALL evidence is hallucination; flag low_confidence
     gaps = []
     dropped_gaps = 0
     for g in (gap_map.get('open_gaps') or []):
         if not isinstance(g, dict):
             continue
         g2 = dict(g)
-        g2['evidence'] = _filter_ids(g.get('evidence'), lib_ids, stripped)
-        if g2['evidence']:
-            gaps.append(g2)
-        else:
+        gap_tiers: dict = {}
+        g2['evidence'] = _tier_ids(g.get('evidence'), lib_ids, stripped, gap_tiers,
+                                   ground_fn, ground_cache)
+        if not g2['evidence']:
             dropped_gaps += 1
-            logger.info('[Paper:Survey] dropped unbacked open_gap %s (all evidence stripped): %.80s',
-                        g.get('id', '?'), g.get('gap', ''))
+            logger.info('[Paper:Survey] dropped hallucinated open_gap %s (all evidence '
+                        'unresolvable): %.80s', g.get('id', '?'), g.get('gap', ''))
+            continue
+        lib_n = sum(1 for t in gap_tiers.values() if t == 'library')
+        gnd_n = sum(1 for t in gap_tiers.values() if t == 'grounded')
+        g2['evidence_tiers'] = {k: gap_tiers[k] for k in
+                                {_norm_id(e) for e in g2['evidence']} if k in gap_tiers}
+        g2['library_evidence_count'] = lib_n
+        g2['grounded_evidence_count'] = gnd_n
+        g2['low_confidence'] = (lib_n == 0)
+        all_tiers.update(gap_tiers)
+        if g2['low_confidence']:
+            logger.info('[Paper:Survey] open_gap %s is low_confidence (grounded-only, '
+                        '%d grounded / 0 library): %.60s', g.get('id', '?'), gnd_n,
+                        g.get('gap', ''))
+        gaps.append(g2)
     out['open_gaps'] = gaps
 
-    uniq = sorted(set(stripped))
-    out['stripped_ids'] = uniq
-    out['missing_ids'] = uniq
-    if uniq:
-        logger.warning('[Paper:Survey] library gate stripped %d unverifiable id(s), '
-                       'dropped %d unbacked gap(s): %s', len(uniq), dropped_gaps,
-                       ', '.join(uniq[:10]))
+    # missing_ids = grounded (real but not yet in the shelf) → next harvest;
+    # stripped_ids = hallucinations removed.
+    missing = sorted({nid for nid, t in all_tiers.items() if t == 'grounded'})
+    uniq_stripped = sorted(set(stripped))
+    out['stripped_ids'] = uniq_stripped
+    out['missing_ids'] = missing
+    if uniq_stripped or missing:
+        logger.warning('[Paper:Survey] library gate — %d hallucination(s) stripped, '
+                       '%d grounded-not-harvested → missing_ids, %d gap(s) dropped',
+                       len(uniq_stripped), len(missing), dropped_gaps)
     return out
 
 
@@ -343,6 +401,19 @@ def _execute_report_tool(*args, **kwargs):
     Patched by tests as ``survey._execute_report_tool``."""
     from lib.paper.report_engine import _execute_report_tool as _ert
     return _ert(*args, **kwargs)
+
+
+def _fetch_arxiv_title(arxiv_id):
+    """Facade seam → arXiv title verify (the 'grounded' evidence tier probe).
+
+    Patched by tests as ``survey._fetch_arxiv_title``. Returns '' when the id
+    cannot be confirmed to exist (→ that id is a hallucination, stripped)."""
+    try:
+        from lib.paper.arxiv import fetch_arxiv_title as _ft
+        return _ft(arxiv_id) or ''
+    except Exception as e:
+        logger.debug('[Paper:Survey] grounding title lookup failed for %s: %s', arxiv_id, e)
+        return ''
 
 
 def _synthesize_survey(paper_inputs, direction, lang, *, model=None, abort=None,

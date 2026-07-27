@@ -98,7 +98,7 @@ function _renderToolsetDiff(diff) {
   let chips = shown.map(({ e, kind }) => chip(e, kind)).join('');
   if (hidden > 0) {
     const more = (typeof t === 'function') ? t('toolset.moreChips') : '…还有 %n 项';
-    chips += `<span class="toolset-diff-chip more">${esc(more.replace('%n', hidden))}</span>`;
+    chips += `<span class="toolset-diff-chip more">${esc(more.replace('%n', String(hidden)))}</span>`;
   }
   textEl.innerHTML =
     `<span class="toolset-diff-lead">${esc(lead)}</span>` +

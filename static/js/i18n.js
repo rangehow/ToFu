@@ -1527,7 +1527,6 @@ var _i18n = {
   'settings.oauthTokenExchangeNoCmd': { zh: 'Token 交换失败: {reason}（且无法生成手动命令，请重新点击登录）', en: 'Token exchange failed: {reason} (and no manual command could be generated — please click Login again)' },
   'settings.oauthCurlHelp': { zh: '服务器网络无法连接 Anthropic（已被区域封锁）。请在<strong>本机终端（已开代理）</strong>运行下面的命令，再把返回的 JSON（含 <code>access_token</code>）粘贴到上方输入框后点「提交」：', en: 'The server cannot reach Anthropic (geo-blocked). Run the command below in <strong>your local terminal (with proxy on)</strong>, then paste the returned JSON (containing <code>access_token</code>) into the box above and click Submit:' },
   'settings.oauthCopyCmd': { zh: '复制命令', en: 'Copy command' },
-  'settings.oauthCopied': { zh: '已复制', en: 'Copied' },
   'settings.oauthPasteJsonPlaceholder': { zh: '粘贴 curl 返回的 JSON（含 access_token）', en: 'Paste the JSON returned by curl (containing access_token)' },
   'settings.oauthLoggedIn': { zh: '已登录', en: 'Logged in' },
   'settings.oauthGettingToken': { zh: '正在获取 Token…', en: 'Getting token…' },

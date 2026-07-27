@@ -16,12 +16,12 @@ function _populateDevicesTab() {
   var tokensEl = document.getElementById('devicesTokensList');
   if (!agentsEl || !tokensEl) return;
   agentsEl.innerHTML = '<p class="stg-loading">' + t('settings.loading') + '</p>';
-  var mintBtn = document.getElementById('devicesMintBtn');
+  var mintBtn = /** @type {any} */ (document.getElementById('devicesMintBtn'));
   if (mintBtn && !mintBtn._devicesWired) {
     mintBtn._devicesWired = true;
     mintBtn.onclick = _devicesMintToken;
   }
-  var copyBtn = document.getElementById('devicesCopyTokenBtn');
+  var copyBtn = /** @type {any} */ (document.getElementById('devicesCopyTokenBtn'));
   if (copyBtn && !copyBtn._devicesWired) {
     copyBtn._devicesWired = true;
     copyBtn.onclick = _devicesCopyMintedToken;

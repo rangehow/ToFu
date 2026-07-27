@@ -1143,7 +1143,7 @@ function twStop(convId) {
   if (_twRafId) { cancelAnimationFrame(_twRafId); _twRafId = null; }
   _twDirty = false;
   // Invalidate zone cache and incremental render state
-  if (typeof _streamZoneCache !== "undefined") _streamZoneCache = { body: null, tool: null, think: null, content: null, fc: null, status: null, swarmInbox: null };
+  if (typeof _streamZoneCache !== "undefined") _streamZoneCache = { body: null, tool: null, think: null, content: null, fc: null, status: null, swarmInbox: null, fallback: null };
   // Stop elapsed timer
   const timerInfo = _streamTimers.get(convId);
   if (timerInfo) {

@@ -26,7 +26,7 @@ try {
    * scripts) would hang forever at exit. unref() exists only on Node's
    * implementation (browsers lack it), so guard with typeof: in the browser
    * this is a no-op and the page never exits anyway (pt_791bda84). */
-  if (typeof _syncChannel.unref === 'function') _syncChannel.unref();
+  if (typeof /** @type {any} */ (_syncChannel).unref === 'function') /** @type {any} */ (_syncChannel).unref();
   _syncChannel.onmessage = (e) => {
     if (e.data && e.data.sourceTab !== TAB_ID) _handleCrossTabMsg(e.data);
   };

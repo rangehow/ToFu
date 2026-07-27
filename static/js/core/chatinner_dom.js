@@ -117,7 +117,7 @@ function chatInnerInsert(inner, content, opts) {
   } else {
     anchor = chatInnerTailAnchor(inner);
   }
-  let node = content;
+  let node = /** @type {Element} */ (/** @type {unknown} */ (content));
   if (typeof content === 'string') {
     const wrapper = document.createElement('div');
     wrapper.innerHTML = content;

@@ -233,7 +233,12 @@ function _fmtPrice(val) {
 function _renderModelCard(provIdx, modelIdx, m) {
   var brand = _detectBrand(m.model_id);
   var caps = m.capabilities || [];
-  var aliases = m.aliases || [];
+  // The wire-id pool (model-identity contract, lib/llm_dispatch/model_entry.py).
+  // `request_ids` is what actually goes on the wire; a pre-contract entry has
+  // none and routes through `[model_id] + aliases`. Showing the RESOLVED pool
+  // means the card never claims an id is used when it isn't.
+  var hasPool = !!(m.request_ids && m.request_ids.length);
+  var aliases = hasPool ? m.request_ids : (m.aliases || []);
   var isDisabled = (m.enabled === false);
 
   var html = '<div class="stg-mcard' + (isDisabled ? ' disabled' : '') +
@@ -311,10 +316,11 @@ function _renderModelCard(provIdx, modelIdx, m) {
     html += '<div class="stg-mcard-pricing"><span class="stg-price-na">' + escapeHtml(t('settings.noPricing')) + '</span></div>';
   }
 
-  // Aliases
+  // Wire-id pool (request_ids) or legacy aliases
   html += '<div class="stg-mcard-aliases">';
   if (aliases.length > 0) {
-    html += '<span class="stg-aliases-label">' + escapeHtml(t('settings.aliases')) + '</span>';
+    html += '<span class="stg-aliases-label">' +
+      escapeHtml(t(hasPool ? 'settings.requestIds' : 'settings.aliases')) + '</span>';
     for (var ai = 0; ai < aliases.length; ai++) {
       html += '<span class="stg-alias-chip">' +
         escapeHtml(aliases[ai]) +

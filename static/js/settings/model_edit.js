@@ -114,8 +114,17 @@ function _editModel(provIdx, modelIdx) {
   }
   html += '</div></div>';
 
-  html += '<div class="stg-field"><label>' + escapeHtml(t('settings.meAliases')) + ' <span class="stg-hint">' + escapeHtml(t('settings.meAliasesHint')) + '</span></label>' +
-    '<input type="text" class="stg-edit-aliases" value="' + escapeHtml((m.aliases || []).join(', ')) + '" placeholder="' + escapeHtml(t('settings.meAliasesPlaceholder')) + '"></div>';
+  var _field = _poolField(m);
+  var _isPool = (_field === 'request_ids');
+  html += '<div class="stg-field"><label>' +
+    escapeHtml(t(_isPool ? 'settings.meRequestIds' : 'settings.meAliases')) +
+    ' <span class="stg-hint">' +
+    escapeHtml(t(_isPool ? 'settings.meRequestIdsHint' : 'settings.meAliasesHint')) +
+    '</span></label>' +
+    '<input type="text" class="stg-edit-aliases" data-pool-field="' + _field + '"' +
+    ' value="' + escapeHtml((m[_field] || []).join(', ')) + '"' +
+    ' placeholder="' + escapeHtml(t(_isPool
+      ? 'settings.meRequestIdsPlaceholder' : 'settings.meAliasesPlaceholder')) + '"></div>';
 
   html += '<div class="stg-toggle-row"><span>' + escapeHtml(t('settings.meThinkingDefault')) + '</span>' +
     '<label class="stg-toggle"><input type="checkbox" class="stg-edit-think"' + (m.thinking_default ? ' checked' : '') + '>' +
@@ -152,8 +161,19 @@ function _saveModelEdit(provIdx, modelIdx) {
   form.querySelectorAll('.stg-cap-btn.active').forEach(function(el) { caps.push(el.dataset.cap); });
   m.capabilities = caps;
 
-  var aliasStr = (form.querySelector('.stg-edit-aliases').value || '').trim();
-  m.aliases = aliasStr ? aliasStr.split(',').map(function(s) { return s.trim(); }).filter(Boolean) : [];
+  var _aliasEl = form.querySelector('.stg-edit-aliases');
+  var _saveField = (_aliasEl && _aliasEl.dataset.poolField) || 'aliases';
+  var aliasStr = (_aliasEl ? _aliasEl.value || '' : '').trim();
+  var _parsed = aliasStr
+    ? aliasStr.split(',').map(function(s) { return s.trim(); }).filter(Boolean)
+    : [];
+  // Never let an edit empty a wire pool — that resolves to zero slots and the
+  // model disappears from routing while still rendering in the card.
+  if (_saveField === 'request_ids' && !_parsed.length) {
+    showAlert(t('settings.meRequestIdsLastWarn'));
+    return;
+  }
+  m[_saveField] = _parsed;
 
   // Update presets if model_id changed
   if (oldModelId && oldModelId !== m.model_id) {
@@ -173,19 +193,35 @@ function _saveModelEdit(provIdx, modelIdx) {
   _renderPresetsTab(_serverConfig);
 }
 
-// ── Alias CRUD (from model card chips) ──
+// ── Wire-id pool CRUD (from model card chips) ──
+//
+// The card renders `request_ids` when the entry declares one (the wire pool of
+// the model-identity contract) and falls back to legacy `aliases` otherwise.
+// These handlers MUST mutate whichever field the card actually rendered, or a
+// chip removal is a no-op that looks like it worked.
+
+/** Name of the field backing the chips for this entry. */
+function _poolField(m) {
+  return (m && m.request_ids && m.request_ids.length) ? 'request_ids' : 'aliases';
+}
 
 async function _addAlias(provIdx, modelIdx) {
   var p = _stgProviders[provIdx];
   if (!p || !p.models) return;
   var m = p.models[modelIdx];
   if (!m) return;
-  var alias = String(await showPrompt(t('settings.meAliasPrompt')) || '');
+  var field = _poolField(m);
+  var alias = String(await showPrompt(t(field === 'request_ids'
+    ? 'settings.meRequestIdPrompt' : 'settings.meAliasPrompt')) || '');
   if (!alias || !alias.trim()) return;
-  if (!m.aliases) m.aliases = [];
+  if (!m[field]) m[field] = [];
   alias = alias.trim();
-  if (m.aliases.indexOf(alias) === -1 && alias !== m.model_id) {
-    m.aliases.push(alias);
+  // A wire pool MAY legitimately contain the logical model_id (an entry whose
+  // logical name the gateway also accepts); legacy aliases may not, since the
+  // root is implicitly in that pool already.
+  var clash = (field === 'aliases') && alias === m.model_id;
+  if (m[field].indexOf(alias) === -1 && !clash) {
+    m[field].push(alias);
     _renderProvidersTab();
   }
 }
@@ -194,8 +230,17 @@ function _removeAlias(provIdx, modelIdx, aliasIdx) {
   var p = _stgProviders[provIdx];
   if (!p || !p.models) return;
   var m = p.models[modelIdx];
-  if (!m || !m.aliases) return;
-  m.aliases.splice(aliasIdx, 1);
+  if (!m) return;
+  var field = _poolField(m);
+  if (!m[field]) return;
+  // Refuse to empty a wire pool: an entry with no request id resolves to zero
+  // slots, so the model silently vanishes from routing while still showing in
+  // the card. Deleting the model is the explicit way to do that.
+  if (field === 'request_ids' && m[field].length <= 1) {
+    showAlert(t('settings.meRequestIdsLastWarn'));
+    return;
+  }
+  m[field].splice(aliasIdx, 1);
   _renderProvidersTab();
 }
 

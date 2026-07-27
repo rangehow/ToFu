@@ -25,6 +25,7 @@ from .conv_affinity import (
     record_conv_key,
     sticky_routing_enabled,
 )
+from .model_entry import resolve_request_ids, routing_group
 from .slot import Slot
 
 logger = get_logger(__name__)
@@ -353,16 +354,28 @@ class LLMDispatcher:
                                  model_id, prov_id)
                     continue
 
-                # ── Endpoint pool for THIS model (root-id binding check) ──
-                # /v1/models never lists aliases, so the binding is keyed by
-                # the ROOT model_id and every alias follows its root's
-                # endpoints. Computed once per entry, before the key/fan-out
-                # loops; an empty pool means no probed endpoint serves this
-                # model → honest absence (no slots) beats guaranteed 404s.
+                # ── Identity for THIS entry ──
+                # ``entry_group`` = {logical model_id} ∪ every wire id
+                # (entry-level and per-cell) — see lib/llm_dispatch/model_entry.py.
+                # The logical id is a member even when it never goes on the
+                # wire, which is what lets a preset / picker name stay stable
+                # while the gateway renames its deployments underneath.
+                # Computed here because the endpoint-binding check below
+                # consumes it.
+                entry_group = routing_group(model_entry)
+
+                # ── Endpoint pool for THIS model (wire-id binding check) ──
+                # A probe reports what ``/v1/models`` lists, i.e. WIRE ids. The
+                # logical ``model_id`` may not be one of them, so an endpoint
+                # qualifies when it serves ANY id in this entry's group. Keying
+                # this on the root id alone would drop every split-identity
+                # entry on a bound local fleet. An empty pool means no probed
+                # endpoint serves this model → honest absence (no slots) beats
+                # guaranteed 404s.
                 if endpoint_binding:
                     ep_pool = [u for u in (endpoint_urls or [base_url])
                                if not endpoint_binding.get(u)
-                               or model_id in endpoint_binding[u]]
+                               or (entry_group & set(endpoint_binding[u]))]
                 else:
                     ep_pool = endpoint_urls or [base_url]
                 if not ep_pool:
@@ -399,15 +412,9 @@ class LLMDispatcher:
                 # ``enabled: false`` disables just that (key, model) cell,
                 # leaving the model active for the other keys.
                 key_access = model_entry.get('key_access') or {}
-                base_aliases = model_entry.get('aliases', [])
 
-                # Record the declared interchangeable set for this entry
-                # ({model_id} ∪ every alias, including per-cell aliases) so the
-                # picker can route any member to any other member's slot.
-                entry_group = {model_id}
-                entry_group.update(a for a in base_aliases if a)
-                for _cell in key_access.values():
-                    entry_group.update(a for a in (_cell.get('aliases') or []) if a)
+                # Publish the interchangeable set (computed above) so the picker
+                # can route any member to any other member's slot.
                 if len(entry_group) > 1:
                     config_alias_groups.append(entry_group)
 
@@ -421,20 +428,21 @@ class LLMDispatcher:
                     cell_caps = cell.get('capabilities')
                     cell_rpm = cell.get('rpm', rpm)
                     cell_cost = cell.get('cost', cost)
-                    cell_aliases = cell.get('aliases', base_aliases)
 
-                    # ``disabled_ids`` lists concrete ids (the root model_id
-                    # and/or specific aliases) that this key must NOT serve.
-                    # Because each alias can map to a genuinely different
-                    # upstream model on the gateway, the matrix treats every
-                    # id independently — a key can keep the root reachable
-                    # while a dead alias is dropped, or vice-versa.
-                    disabled_ids = set(cell.get('disabled_ids') or [])
-
-                    # All model IDs to create slots for: primary + this cell's
-                    # aliases, minus any id this key has disabled.
-                    all_ids = [mid for mid in ([model_id] + [a for a in cell_aliases if a])
-                               if mid not in disabled_ids]
+                    # ── Wire-id pool for this (entry, key) ──
+                    # The ids actually sent as the ``"model"`` field. One slot
+                    # per id, so the dispatcher rotates across interchangeable
+                    # gateway deployments. ``disabled_ids`` (applied inside the
+                    # resolver) subtracts concrete ids this key must not serve —
+                    # each id can be a genuinely different upstream model, so a
+                    # key may keep the root reachable while a dead deployment is
+                    # dropped, or vice-versa.
+                    all_ids = resolve_request_ids(model_entry, cell)
+                    if not all_ids:
+                        logger.debug('[Dispatch] Model %s has an empty wire pool '
+                                     'for key #%d in provider %s — no slots',
+                                     model_id, key_idx, prov_id)
+                        continue
 
                     for mid in all_ids:
                         # Check DEFAULT_SLOT_CONFIGS for alias-specific overrides.

@@ -21,10 +21,11 @@ Two registration surfaces are audited:
 plus wire-shape parity against ``aws.claude-opus-4.8`` (the reference 4.7+
 model) through ``build_body``.
 
-Deliberately NOT pinned (matching the 4.7/4.8 evaDaily precedent):
-``DEFAULT_SLOT_CONFIGS`` / ``MODEL_PRICING`` / ``MODEL_ALIAS_GROUPS`` rows —
-the evaDaily models carry their caps on the provider template and have no
-marketplace price card to convert, so no table rows are invented.
+Deliberately NOT pinned: ``DEFAULT_SLOT_CONFIGS`` / ``MODEL_ALIAS_GROUPS``
+rows — the evaDaily models carry their caps on the provider template.
+``MODEL_PRICING`` rows were added 2026-07-27 with opus-tier pricing
+($5/$25 + 1.25/0.10 cache multipliers) and clean ``name`` fields
+('Claude Opus 5' etc.) — the display-name channel, not a wire concern.
 
 Run:
     PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests/test_meituan_claude_code_opus5.py -v
@@ -59,19 +60,33 @@ def _load_claude_code_template() -> dict:
 
 
 def _template_violations(models: list[dict]) -> list[str]:
-    """Audit the template model list: opus-5 present + field-parity with its
-    4.8 sibling. Reusable so the NEUTER face can feed a synthetic broken list
-    through the same predicate."""
-    by_id = {m.get('model_id'): m for m in models}
+    """Audit the template model list: opus-5 registered + field-parity with its
+    4.8 sibling.
+
+    Asserts the RESULT — the gateway id is REACHABLE and actually SENT — not
+    which config field holds it. Since 2026-07-27 the model-identity contract
+    (lib/llm_dispatch/model_entry.py) puts the wire ids in ``request_ids`` and
+    leaves ``model_id`` as the clean logical name, so a ``by_id`` lookup would
+    go red purely because the id moved fields.
+
+    Reusable so the NEUTER face can feed a synthetic broken list through the
+    same predicate."""
+    from lib.llm_dispatch.model_entry import resolve_request_ids, routing_group
+
     violations: list[str] = []
-    entry = by_id.get(OPUS5)
+    entry = next((m for m in models if OPUS5 in routing_group(m)), None)
     if entry is None:
         violations.append('%s: missing from template' % OPUS5)
         return violations
-    sibling = by_id.get(OPUS48)
+    sibling = next((m for m in models if OPUS48 in routing_group(m)), None)
     if sibling is None:
         violations.append('%s: parity sibling missing from template' % OPUS48)
         return violations
+    if OPUS5 not in resolve_request_ids(entry):
+        violations.append(
+            '%s: routable but NEVER SENT (wire pool=%r) — the gateway-accepted '
+            'id must be in the request pool'
+            % (OPUS5, resolve_request_ids(entry)))
     for field in ('capabilities', 'rpm', 'cost'):
         if entry.get(field) != sibling.get(field):
             violations.append(
@@ -209,7 +224,8 @@ def test_neuter_template_audit_flags_broken_payload():
         {'model_id': OPUS5, 'capabilities': ['text'], 'rpm': 30, 'cost': 0.045},
     ])
     assert any(OPUS5 in v and 'caps' in v for v in divergent), divergent
-    # …and the audit is green on a payload that is exactly right.
+    # …and the audit is green on a payload that is exactly right — in BOTH
+    # spellings, so repointing it never outlaws configs already on disk.
     good = [
         {'model_id': OPUS48, 'capabilities': ['text', 'vision', 'thinking'],
          'rpm': 30, 'cost': 0.045},
@@ -217,6 +233,37 @@ def test_neuter_template_audit_flags_broken_payload():
          'rpm': 30, 'cost': 0.045},
     ]
     assert _template_violations(good) == []
+    good_contract = [
+        {'model_id': 'claude-opus-4.8', 'request_ids': [OPUS48],
+         'capabilities': ['text', 'vision', 'thinking'], 'rpm': 30, 'cost': 0.045},
+        {'model_id': 'claude-opus-5', 'request_ids': [OPUS5],
+         'capabilities': ['text', 'vision', 'thinking'], 'rpm': 30, 'cost': 0.045},
+    ]
+    assert _template_violations(good_contract) == []
+    # ★ The half-migration: the entry still ROUTES opus-5 (a per-key cell lists
+    # it, so it is in the routing group) but the ENTRY-level wire pool omits it,
+    # so the default key dispatches an id the gateway refuses. Silent — nothing
+    # raises, the model even appears in the picker — hence a pinned face.
+    never_sent = _template_violations([
+        {'model_id': 'claude-opus-4.8', 'request_ids': [OPUS48],
+         'capabilities': ['text', 'vision', 'thinking'], 'rpm': 30, 'cost': 0.045},
+        {'model_id': 'claude-opus-5', 'request_ids': ['claude-opus-5'],
+         'key_access': {'0': {'request_ids': [OPUS5]}},
+         'capabilities': ['text', 'vision', 'thinking'], 'rpm': 30, 'cost': 0.045},
+    ])
+    assert any('NEVER SENT' in v for v in never_sent), never_sent
+    # A stale `aliases` left behind next to an explicit `request_ids` does NOT
+    # smuggle the id back in — the pool is `request_ids` verbatim, so the audit
+    # reports the honest verdict (not registered at all) rather than pretending
+    # the gateway id is reachable.
+    stale_alias = _template_violations([
+        {'model_id': 'claude-opus-4.8', 'request_ids': [OPUS48],
+         'capabilities': ['text', 'vision', 'thinking'], 'rpm': 30, 'cost': 0.045},
+        {'model_id': 'claude-opus-5', 'request_ids': ['claude-opus-5'],
+         'aliases': [OPUS5],
+         'capabilities': ['text', 'vision', 'thinking'], 'rpm': 30, 'cost': 0.045},
+    ])
+    assert any('missing from template' in v for v in stale_alias), stale_alias
 
 
 if __name__ == '__main__':

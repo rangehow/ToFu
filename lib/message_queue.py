@@ -1078,6 +1078,56 @@ def _append_user_msg_with_cas(db, conv_id: str, user_msg: dict) -> bool:
     return True
 
 
+def _brain_kickoff_still_wanted(project_path: str | None, board_task_id: str,
+                                conv_id: str) -> bool:
+    """True iff a brain kickoff for ``board_task_id`` is still worth spawning.
+
+    Consume-time re-check for the produce/consume gap (pt_1613ab83b1934884).
+    A kickoff is dropped when its epic is no longer waiting for work:
+
+      • the epic row is GONE (deleted board entry), or
+      • its effective status is ``done`` (finished while the kickoff queued —
+        THE incident: done at 21:01:55, drained at 21:03:07), or
+      • it is effectively ``claimed`` by a DIFFERENT conversation (a sibling
+        legitimately took it over; spawning here would duplicate the work).
+
+    Fails OPEN: any lookup error returns True, so an unrelated DB hiccup can
+    never silently swallow a legitimate kickoff — the failure mode we accept is
+    "a stale kickoff occasionally slips through" (recoverable, costs one task),
+    never "brain dispatch stops working" (invisible, stalls the whole project).
+    """
+    if not project_path or not board_task_id:
+        return True
+    try:
+        from lib.conversations.project_board import read_board
+        board = read_board(project_path)
+        epic = next((t for t in board.get('tasks', [])
+                     if t.get('id') == board_task_id), None)
+        if epic is None:
+            logger.info('[Queue] discarding brain kickoff conv=%s epic=%s — '
+                        'board row is gone', conv_id[:8], board_task_id)
+            return False
+        status = epic.get('status') or ''
+        if status == 'done':
+            logger.info('[Queue] discarding brain kickoff conv=%s epic=%s — '
+                        'epic already DONE (finished while the kickoff sat in '
+                        'the queue; spawning would re-verify finished work)',
+                        conv_id[:8], board_task_id)
+            return False
+        owner = epic.get('owner_conv_id') or ''
+        if status == 'claimed' and owner and owner != conv_id:
+            logger.info('[Queue] discarding brain kickoff conv=%s epic=%s — '
+                        'now live-claimed by conv=%s', conv_id[:8],
+                        board_task_id, owner[:8])
+            return False
+        return True
+    except Exception as e:
+        logger.warning('[Queue] brain-kickoff board re-check failed conv=%s '
+                       'epic=%s (dispatching anyway): %s',
+                       conv_id[:8], board_task_id, e)
+        return True
+
+
 def dispatch_next_queued(conv_id: str, *, _wait: float | None = None) -> str | None:
     """Dispatch the next queued message for a conversation as a new task.
 
@@ -1106,6 +1156,29 @@ def dispatch_next_queued(conv_id: str, *, _wait: float | None = None) -> str | N
         payload = item['payload']
         config = item['config']
         text = payload.get('text', '')
+
+        # ── Stale brain-kickoff discard (pt_1613ab83b1934884) ──
+        # A brain kickoff is PRODUCED when the board says an epic is dispatchable,
+        # but it is CONSUMED here — possibly much later. In the 2026-07-27
+        # incident the epic was marked done at 21:01:55 and this drain ran at
+        # 21:03:07, spawning an Opus-5 task that re-verified finished work
+        # (¥26, conv ms34yw0k74o2lq task 2ef5fcaa). Worse, that kickoff was
+        # itself a re-dispatch of an epic whose 30-min claim lease had expired
+        # under an 88-min task, so the board read it as open.
+        #
+        # The invariant that fixes ALL of those shapes at once: never trust the
+        # produce-time decision — re-check at consume time. It holds regardless
+        # of lease semantics, which is why lease renewal was ruled out as the
+        # fix (it would only shrink the window, not close it).
+        #
+        # Only brain-dispatched rows are gated. A human turn has no boardTaskId
+        # and must NEVER be discardable.
+        _board_task_id = payload.get('boardTaskId')
+        if _board_task_id and not _brain_kickoff_still_wanted(
+                config.get('projectPath'), _board_task_id, conv_id):
+            _finalize_queue_dispatch(get_thread_db(DOMAIN_CHAT), conv_id,
+                                     item['queueId'])
+            return None
 
         # ── Pillar #6 REVERSE-race de-dup ──
         # A live-target peer message is written to BOTH this durable row AND a

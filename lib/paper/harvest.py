@@ -37,7 +37,11 @@ Two-level dedup (both matter, for different reasons)
   already carries this ``arxiv_id`` WITH a non-empty ``parsed_text``, we skip
   the network download AND the parse entirely — this is the "already in the
   bookshelf (read it, or a prior harvest)" fast path. It is what makes a second
-  harvest of an overlapping topic nearly free.
+  harvest of an overlapping topic nearly free. Since 2026-07-27 the row's
+  ``parser_version`` must also match ``expected_parser_version()`` — a row
+  written by an older stack, by the raw fallback, or before the column existed
+  is re-parsed, so a parser upgrade (or a healed extractor) invalidates
+  naturally instead of freezing degraded text into the corpus forever.
 * **Post-parse, keyed on ``phash``**: the content hash is the library's true
   identity; the upsert is keyed on it so a paper that arrived under a different
   ``arxiv_id`` alias (or with no id) still coalesces onto one row.
@@ -93,13 +97,13 @@ class HarvestResult:
     to keep the module dependency-free and trivially JSON-projectable)."""
 
     __slots__ = ('arxiv_id', 'phash', 'status', 'title', 'page_count',
-                 'text_length', 'paper_id', 'error')
+                 'text_length', 'paper_id', 'error', 'degraded')
 
     #: status ∈ {'parsed', 'cache_hit', 'error'} — 'parsed' = downloaded+parsed
     #: this run; 'cache_hit' = an existing library row was reused (no reparse).
     def __init__(self, arxiv_id: str, *, status: str, phash: str = '',
                  title: str = '', page_count: int = 0, text_length: int = 0,
-                 paper_id: str = '', error: str = ''):
+                 paper_id: str = '', error: str = '', degraded: bool = False):
         self.arxiv_id = arxiv_id
         self.status = status
         self.phash = phash
@@ -108,13 +112,19 @@ class HarvestResult:
         self.text_length = text_length
         self.paper_id = paper_id
         self.error = error
+        #: True when the parse fell back to a LOWER-quality extractor than the
+        #: environment's expected one (e.g. raw text because the markdown
+        #: pipeline failed). The row is tagged with the raw parser_version, so
+        #: it never counts as a markdown-corpus cache hit — but the flag must
+        #: also be VISIBLE here, not only discoverable in the DB.
+        self.degraded = degraded
 
     def to_dict(self) -> dict:
         return {
             'arxivId': self.arxiv_id, 'status': self.status, 'phash': self.phash,
             'title': self.title, 'pageCount': self.page_count,
             'textLength': self.text_length, 'paperId': self.paper_id,
-            'error': self.error,
+            'error': self.error, 'degraded': self.degraded,
         }
 
 
@@ -175,18 +185,27 @@ def _existing_row_for_arxiv(arxiv_id: str, user_id: int) -> Optional[dict]:
     describe-to-recommend card) is deliberately NOT a hit — we still want to
     download+parse it to fill in the text. Only a row with real parsed_text
     lets us skip the work.
-    """
+
+    PARSE-ONCE CONTRACT (owner R1 fix, 2026-07-27): the row's
+    ``parser_version`` must ALSO equal ``expected_parser_version()`` — the
+    version a fresh parse would write today. Rows written by an older parser
+    stack, by the raw-fallback path, or before the version column existed
+    (legacy '') are NOT hits: they are re-parsed so a parser upgrade or a
+    healed extractor naturally re-parses instead of serving degraded text
+    for the life of the library. """
     if not arxiv_id:
         return None
     try:
         from lib.database._core import _pool_get, _pool_put
+        from lib.pdf_parser._common import expected_parser_version
         db = _pool_get()
         try:
             row = db.execute(
                 'SELECT id, paper_hash, title, parsed_text, page_count '
                 'FROM paper_library WHERE arxiv_id=? AND user_id=? '
-                "AND parsed_text != '' ORDER BY updated_at DESC LIMIT 1",
-                (arxiv_id, user_id),
+                "AND parsed_text != '' AND parser_version = ? "
+                'ORDER BY updated_at DESC LIMIT 1',
+                (arxiv_id, user_id, expected_parser_version()),
             ).fetchone()
         finally:
             _pool_put(db)
@@ -204,7 +223,7 @@ def _existing_row_for_arxiv(arxiv_id: str, user_id: int) -> Optional[dict]:
 
 def _persist_row(paper_id: str, *, title: str, arxiv_id: str, phash: str,
                  parsed_text: str, page_count: int, images, folder_id: str,
-                 user_id: int) -> bool:
+                 user_id: int, parser_version: str = '') -> bool:
     """Upsert a harvested paper into ``paper_library``.
 
     Uses the SAME partial-upsert contract as reading-mode ingest
@@ -242,6 +261,7 @@ def _persist_row(paper_id: str, *, title: str, arxiv_id: str, phash: str,
                 'arxiv_id': (arxiv_id or '')[:64],
                 'paper_hash': (phash or '')[:64],
                 'parsed_text': (parsed_text or '')[:_LIB_PARSED_TEXT_CAP],
+                'parser_version': (parser_version or '')[:128],
                 'qa_history': qa_history,
                 'images': json.dumps(imgs, ensure_ascii=False),
                 'babel_cache': babel_cache,
@@ -250,7 +270,8 @@ def _persist_row(paper_id: str, *, title: str, arxiv_id: str, phash: str,
                 'created_at': created_at, 'updated_at': now_ms,
             }, insert_cols=(
                 'id', 'user_id', 'title', 'pdf_url', 'pdf_filename',
-                'arxiv_id', 'paper_hash', 'parsed_text', 'qa_history',
+                'arxiv_id', 'paper_hash', 'parsed_text', 'parser_version',
+                'qa_history',
                 'images', 'babel_cache', 'page_count', 'folder_id',
                 'created_at', 'updated_at',
             ), retry=True)
@@ -379,13 +400,44 @@ def harvest_arxiv_id(arxiv_id: str, *, folder_id: str = '', user_id: int = 1,
                            arxiv_id, e)
 
     paper_id = _harvest_paper_id(arxiv_id)
+
+    # ── Stamp the parse-once version + loudly flag a degraded parse ──
+    # The version key reflects the extractor that ACTUALLY won this document
+    # (reported by parse_pdf). A degraded write — the environment expected
+    # the markdown pipeline but the document fell back to raw — is tagged
+    # with the RAW version, so it never satisfies the markdown probe (the
+    # row self-heals on next harvest). But a raw-tagged row that only shows
+    # up as a log line is exactly the silent-quality-regression shape the
+    # owner banned: flag it at ERROR level, in the audit trail, and on the
+    # returned result so the batch summary and the research stage see it.
+    from lib.pdf_parser._common import (HAS_PYMUPDF4LLM,
+                                        current_parser_version,
+                                        expected_parser_version)
+    extractor = (result.get('extractor') or '').strip() or (
+        'pymupdf4llm' if HAS_PYMUPDF4LLM else 'pymupdf-raw')
+    parser_version = current_parser_version(extractor)
+    degraded = bool(parser_version) and parser_version != expected_parser_version()
+    if degraded:
+        logger.error('[Paper:Harvest] DEGRADED parse for %s — extractor=%s '
+                     '(expected %s); row tagged with the raw parser_version '
+                     'and will NOT count as a markdown-corpus cache hit',
+                     arxiv_id, parser_version, expected_parser_version())
+        try:
+            from lib.log import audit_log
+            audit_log('paper_parse_degraded', arxiv_id=arxiv_id,
+                      extractor=extractor, parser_version=parser_version,
+                      expected=expected_parser_version())
+        except Exception as e:
+            logger.debug('[Paper:Harvest] audit_log failed (ignored): %s', e)
+
     _persist_row(paper_id, title=title, arxiv_id=arxiv_id, phash=phash,
                  parsed_text=parsed_text, page_count=page_count, images=images,
-                 folder_id=folder_id, user_id=user_id)
+                 folder_id=folder_id, user_id=user_id,
+                 parser_version=parser_version)
 
     return HarvestResult(arxiv_id, status='parsed', phash=phash, title=title,
                          page_count=page_count, text_length=len(parsed_text),
-                         paper_id=paper_id)
+                         paper_id=paper_id, degraded=degraded)
 
 
 def harvest_arxiv_batch(arxiv_ids: Iterable[str], *, folder_id: str = '',
@@ -431,7 +483,7 @@ def harvest_arxiv_batch(arxiv_ids: Iterable[str], *, folder_id: str = '',
 
     total = len(ids)
     out = {'total': total, 'parsed': 0, 'cache_hits': 0, 'errors': 0,
-           'reparse_count': 0, 'results': [], 'aborted': False}
+           'reparse_count': 0, 'degraded': 0, 'results': [], 'aborted': False}
     logger.info('[Paper:Harvest] batch start — %d distinct id(s), folder=%s',
                 total, folder_id or '(default)')
 
@@ -446,6 +498,8 @@ def harvest_arxiv_batch(arxiv_ids: Iterable[str], *, folder_id: str = '',
         if res.status == 'parsed':
             out['parsed'] += 1
             out['reparse_count'] += 1
+            if res.degraded:
+                out['degraded'] += 1
         elif res.status == 'cache_hit':
             out['cache_hits'] += 1
         else:
@@ -459,4 +513,9 @@ def harvest_arxiv_batch(arxiv_ids: Iterable[str], *, folder_id: str = '',
 
     logger.info('[Paper:Harvest] batch done — %d parsed / %d cache-hit / %d error '
                 '(of %d)', out['parsed'], out['cache_hits'], out['errors'], total)
+    if out['degraded']:
+        logger.error('[Paper:Harvest] %d/%d paper(s) parsed DEGRADED (raw fallback '
+                     'instead of the markdown pipeline) — tagged raw, excluded from '
+                     'markdown-corpus cache hits; check the parser stack',
+                     out['degraded'], out['parsed'])
     return out

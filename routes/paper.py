@@ -1948,11 +1948,14 @@ async def fetch_arxiv_stream():
         # control back, so the fetched paper survives even if the client's PUT
         # never lands (tab closed mid-stream). Runs on the SSE generator thread.
         if client_paper_id:
+            from lib.pdf_parser._common import current_parser_version as _cpv
             _persist_ingested_library_row(
                 client_paper_id, title=(paper_title or f'arXiv:{arxiv_id}'),
                 pdf_url=f'/api/paper/pdf/{filename}', pdf_filename=filename,
                 arxiv_id=arxiv_id, paper_hash=phash, parsed_text=parsed_text,
-                images=images, page_count=total_pages)
+                images=images, page_count=total_pages,
+                parser_version=(_cpv(result.get('extractor'))
+                                if parsed_text else ''))
 
         # ── Done — return everything the client needs ──
         yield _sse({'stage': 'done', 'ok': True,
@@ -2216,7 +2219,7 @@ def _is_broken_stub_row(paper):
 
 def _persist_ingested_library_row(paper_id, *, title, pdf_url, pdf_filename,
                                   arxiv_id, paper_hash, parsed_text, images,
-                                  page_count):
+                                  page_count, parser_version=''):
     r"""Create/refresh a ``paper_library`` row at INGEST time (server-authoritative).
 
     The ingestion endpoints (``/api/paper/upload``, ``/api/paper/fetch-arxiv-stream``)
@@ -2269,6 +2272,7 @@ def _persist_ingested_library_row(paper_id, *, title, pdf_url, pdf_filename,
                 'arxiv_id': (arxiv_id or '')[:64],
                 'paper_hash': (paper_hash or '')[:64],
                 'parsed_text': (parsed_text or '')[:_LIB_PARSED_TEXT_CAP],
+                'parser_version': (parser_version or '')[:128],
                 'qa_history': qa_history,
                 'images': json.dumps(imgs, ensure_ascii=False),
                 'babel_cache': babel_cache,
@@ -2276,7 +2280,8 @@ def _persist_ingested_library_row(paper_id, *, title, pdf_url, pdf_filename,
                 'created_at': created_at, 'updated_at': now_ms,
             }, insert_cols=(
                 'id', 'user_id', 'title', 'pdf_url', 'pdf_filename',
-                'arxiv_id', 'paper_hash', 'parsed_text', 'qa_history',
+                'arxiv_id', 'paper_hash', 'parsed_text', 'parser_version',
+                'qa_history',
                 'images', 'babel_cache', 'page_count',
                 'created_at', 'updated_at',
             ), retry=True)
@@ -2405,11 +2410,14 @@ def upload_paper():
     # write the bookshelf row NOW (don't wait on the client's PUT). The PDF is
     # viewable even when parsing failed, so we persist regardless of parse_error.
     if client_paper_id:
+        from lib.pdf_parser._common import current_parser_version as _cpv
         _persist_ingested_library_row(
             client_paper_id, title=original_name,
             pdf_url=f'/api/paper/pdf/{filename}', pdf_filename=filename,
             arxiv_id='', paper_hash=phash, parsed_text=parsed_text,
-            images=images, page_count=total_pages)
+            images=images, page_count=total_pages,
+            parser_version=(_cpv(result.get('extractor'))
+                            if parsed_text else ''))
 
     resp = {
         'ok': True,
@@ -2538,7 +2546,8 @@ async def upsert_library_entry(paper_id):
             # are the only places that originate those big columns.
             existing = db.execute(
                 'SELECT title, pdf_url, pdf_filename, arxiv_id, paper_hash, '
-                '       parsed_text, images, page_count, folder_id, created_at '
+                '       parsed_text, images, page_count, folder_id, created_at, '
+                '       parser_version '
                 'FROM paper_library WHERE id=? AND user_id=?',
                 (paper_id, DEFAULT_USER_ID),
             ).fetchone()
@@ -2571,6 +2580,13 @@ async def upsert_library_entry(paper_id):
                 folder_id = str(data.get('folderId') or '')[:64]
             else:
                 folder_id = (existing['folder_id'] if existing else '') or ''
+            # parser_version: same preserve contract as folder_id — the stamp
+            # is server-made at ingest/parse time, and a later metadata PUT
+            # must NOT clobber it. A client may only set it explicitly.
+            if 'parserVersion' in data:
+                parser_version = str(data.get('parserVersion') or '')[:128]
+            else:
+                parser_version = (existing['parser_version'] if existing else '') or ''
 
             # Images: accept client list on first write; fall back to disk
             # manifest (server source of truth) so the row always reflects reality.
@@ -2601,6 +2617,7 @@ async def upsert_library_entry(paper_id):
                 'pdf_url': pdf_url, 'pdf_filename': pdf_filename,
                 'arxiv_id': arxiv_id, 'paper_hash': paper_hash,
                 'parsed_text': parsed_text,
+                'parser_version': parser_version,
                 'qa_history': json.dumps(qa, ensure_ascii=False),
                 'images': json.dumps(images, ensure_ascii=False),
                 'babel_cache': json.dumps(babel, ensure_ascii=False),

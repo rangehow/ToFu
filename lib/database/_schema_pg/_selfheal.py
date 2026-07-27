@@ -47,8 +47,11 @@ _CRITICAL_COLUMNS = {
     # GET /api/v1/paper/library SELECT), so a version-current DB missing it
     # throws UndefinedColumn on every bookshelf load until re-migrated. The
     # guarded ALTER lives in _chat.py but only runs on a full DDL pass.
+    # parser_version is named in the harvest cache probe's WHERE clause — a
+    # DB missing it makes every probe throw (caught → treated as a miss →
+    # needless re-parses) until re-migrated.
     'paper_library': (
-        'folder_id',
+        'folder_id', 'parser_version',
     ),
 }
 

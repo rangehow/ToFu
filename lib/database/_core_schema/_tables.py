@@ -199,6 +199,12 @@ PAPER_LIBRARY = define_table(
     sa.Column('arxiv_id', sa.Text, nullable=False, server_default=''),
     sa.Column('paper_hash', sa.Text, nullable=False, server_default=''),
     sa.Column('parsed_text', sa.Text, nullable=False, server_default=''),
+    # parser_version — the extractor+version key that produced parsed_text
+    # (e.g. 'pymupdf4llm-1.27.2.3'; raw fallback 'pymupdf-raw-…'; '' = legacy/
+    # unknown). The harvest parse-once probe requires an exact match with the
+    # environment's expected version, so a parser upgrade or a degraded write
+    # invalidates naturally instead of serving stale text forever.
+    sa.Column('parser_version', sa.Text, nullable=False, server_default=''),
     sa.Column('qa_history', sa.Text, nullable=False, server_default='[]'),
     sa.Column('images', sa.Text, nullable=False, server_default='[]'),
     sa.Column('babel_cache', sa.Text, nullable=False, server_default='{}'),

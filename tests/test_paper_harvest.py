@@ -99,15 +99,23 @@ class _ParseCounter:
     """A fake parse_pdf that counts calls, so 'did we reparse?' is a hard
     assertion, not an inference."""
 
-    def __init__(self, text=_FAKE_TEXT, pages=7):
+    def __init__(self, text=_FAKE_TEXT, pages=7, extractor=None):
         self.calls = 0
         self.text = text
         self.pages = pages
+        # The extractor tag the fake reports. Default matches the env's
+        # expected winner so cache-hit tests hold on boxes with OR without
+        # pymupdf4llm; pass explicitly (e.g. 'pymupdf-raw') to simulate a
+        # degraded per-document fallback.
+        if extractor is None:
+            from lib.pdf_parser._common import HAS_PYMUPDF4LLM
+            extractor = 'pymupdf4llm' if HAS_PYMUPDF4LLM else 'pymupdf-raw'
+        self.extractor = extractor
 
     def __call__(self, pdf_bytes, **kw):
         self.calls += 1
         return {'text': self.text, 'totalPages': self.pages,
-                'textLength': len(self.text)}
+                'textLength': len(self.text), 'extractor': self.extractor}
 
 
 def _patch_harvest(*, parse=None, text=_FAKE_TEXT, pages=7):
@@ -153,6 +161,38 @@ def _phash_row_for_arxiv(arxiv_id, user_id=1):
             'SELECT paper_hash FROM paper_library WHERE arxiv_id=? AND user_id=? '
             'ORDER BY updated_at DESC LIMIT 1', (arxiv_id, user_id)).fetchone()
         return (row['paper_hash'] if row else '') or ''
+    finally:
+        _pool_put(db)
+
+
+def _seed_library_row(row_id, arxiv_id, *, parsed_text, parser_version, user_id=1):
+    """Insert a paper_library row directly (full-row upsert — every Core
+    column supplied), so a test controls the exact parser_version stamp."""
+    from lib.database._core import _pool_get, _pool_put
+    from lib.database._core_schema import PAPER_LIBRARY, upsert
+    now = int(time.time() * 1000)
+    db = _pool_get()
+    try:
+        upsert(db, PAPER_LIBRARY, {
+            'id': row_id, 'user_id': user_id, 'title': 'seeded',
+            'pdf_url': '', 'pdf_filename': '', 'arxiv_id': arxiv_id,
+            'paper_hash': 'seedhash', 'parsed_text': parsed_text,
+            'parser_version': parser_version, 'qa_history': '[]',
+            'images': '[]', 'babel_cache': '{}', 'page_count': 3,
+            'folder_id': '', 'created_at': now, 'updated_at': now,
+        }, retry=True)
+    finally:
+        _pool_put(db)
+
+
+def _parser_version_for_arxiv(arxiv_id, user_id=1):
+    from lib.database._core import _pool_get, _pool_put
+    db = _pool_get()
+    try:
+        row = db.execute(
+            'SELECT parser_version FROM paper_library WHERE arxiv_id=? AND user_id=? '
+            'ORDER BY updated_at DESC LIMIT 1', (arxiv_id, user_id)).fetchone()
+        return (row['parser_version'] if row else None)
     finally:
         _pool_put(db)
 
@@ -244,7 +284,7 @@ def test_empty_parsed_text_is_not_a_cache_hit_NEUTER():
         upsert(db, PAPER_LIBRARY, {
             'id': f'rec_{aid}', 'user_id': 1, 'title': 'saved rec',
             'pdf_url': '', 'pdf_filename': '', 'arxiv_id': aid, 'paper_hash': '',
-            'parsed_text': '', 'qa_history': '[]', 'images': '[]',
+            'parsed_text': '', 'parser_version': '', 'qa_history': '[]', 'images': '[]',
             'babel_cache': '{}', 'page_count': 0, 'folder_id': '',
             'created_at': now, 'updated_at': now,
         }, retry=True)
@@ -377,11 +417,13 @@ def test_reading_mode_ingest_then_harvest_is_cache_hit():
     # computing phash the canonical way from the SAME text.
     canonical = _paper_hash(_FAKE_TEXT)
     try:
+        from lib.pdf_parser._common import expected_parser_version
         assert rp._persist_ingested_library_row(
             f'paper_read_{aid}', title='Read in reading mode',
             pdf_url=f'/api/paper/pdf/arxiv_{aid}.pdf',
             pdf_filename=f'arxiv_{aid}.pdf', arxiv_id=aid,
-            paper_hash=canonical, parsed_text=_FAKE_TEXT, images=[], page_count=7)
+            paper_hash=canonical, parsed_text=_FAKE_TEXT, images=[], page_count=7,
+            parser_version=expected_parser_version())
         # Now harvest the same arxiv_id → must be a cache hit, no parse.
         import lib.paper.harvest as h
         res = h.harvest_arxiv_id(aid)
@@ -392,6 +434,124 @@ def test_reading_mode_ingest_then_harvest_is_cache_hit():
     finally:
         restore()
     _ok('reading-mode ingest → harvest is a cache hit (shared bookshelf, no reparse)')
+
+
+# ── Test 5: parser_version is the parse-once cache key (owner R1 fix) ─────
+#
+# The probe's version predicate is INLINE SQL, so it is not monkeypatchable —
+# these four tests are the biting guard BY CONSTRUCTION: every one of them
+# goes red the moment the `AND parser_version = ?` predicate (or the writer
+# stamping) is removed, because the seeded row would then hit unconditionally.
+
+def test_stale_parser_version_reparses():
+    """A row written by an OLDER parser stack is NOT a cache hit — a parser
+    upgrade naturally invalidates and re-parses, and the row's version stamp
+    is refreshed to the current one."""
+    _load_app()
+    counter, restore = _patch_harvest()
+    aid = f'2310.{int(time.time()) % 100000:05d}'
+    _seed_library_row(f'stale_{aid}', aid, parsed_text=_FAKE_TEXT,
+                      parser_version='pymupdf4llm-0.0.0-stale')
+    try:
+        import lib.paper.harvest as h
+        res = h.harvest_arxiv_id(aid)
+        assert res.status == 'parsed', \
+            f'a stale-version row must NOT hit; expected parsed, got {res.status}'
+        assert counter.calls == 1, 'should have re-parsed the stale row'
+        from lib.pdf_parser._common import expected_parser_version
+        assert _parser_version_for_arxiv(aid) == expected_parser_version(), \
+            're-parse must refresh the row to the current parser_version'
+    finally:
+        restore()
+    _ok('a stale parser_version invalidates → re-parse + version refresh')
+
+
+def test_raw_tagged_row_is_not_a_cache_hit():
+    """A row stamped with the OTHER extractor's version (e.g. raw-fallback text
+    in a markdown env) is NOT a hit — degraded text never serves as a
+    markdown-corpus hit."""
+    _load_app()
+    counter, restore = _patch_harvest()
+    aid = f'2311.{int(time.time()) % 100000:05d}'
+    from lib.pdf_parser._common import (current_parser_version,
+                                        expected_parser_version, HAS_PYMUPDF4LLM)
+    # The version a DEGRADED write would carry in this env: raw when the
+    # markdown pipeline is healthy, 4llm when it is not (either way it is NOT
+    # the expected one).
+    wrong = (current_parser_version('pymupdf-raw') if HAS_PYMUPDF4LLM
+             else current_parser_version('pymupdf4llm'))
+    assert wrong and wrong != expected_parser_version(), 'test premise broken'
+    _seed_library_row(f'raw_{aid}', aid, parsed_text=_FAKE_TEXT,
+                      parser_version=wrong)
+    try:
+        import lib.paper.harvest as h
+        res = h.harvest_arxiv_id(aid)
+        assert res.status == 'parsed', \
+            f'a degraded-tagged row must NOT hit; expected parsed, got {res.status}'
+        assert counter.calls == 1, 'should have re-parsed the degraded-tagged row'
+    finally:
+        restore()
+    _ok('a raw/degraded-tagged row is not a markdown-corpus cache hit')
+
+
+def test_null_legacy_row_is_not_a_cache_hit():
+    """A legacy row with EMPTY parser_version (written before the column
+    contract) is NOT a hit — the already-poisoned corpus self-heals on next
+    touch with no backfill script."""
+    _load_app()
+    counter, restore = _patch_harvest()
+    aid = f'2312.{int(time.time()) % 100000:05d}'
+    _seed_library_row(f'legacy_{aid}', aid, parsed_text=_FAKE_TEXT,
+                      parser_version='')
+    try:
+        import lib.paper.harvest as h
+        res = h.harvest_arxiv_id(aid)
+        assert res.status == 'parsed', \
+            f'a legacy NULL-version row must NOT hit; expected parsed, got {res.status}'
+        assert counter.calls == 1, 'should have re-parsed the legacy row'
+        from lib.pdf_parser._common import expected_parser_version
+        assert _parser_version_for_arxiv(aid) == expected_parser_version(), \
+            'self-heal must stamp the current parser_version on the row'
+    finally:
+        restore()
+    _ok('a legacy empty parser_version misses and self-heals on next harvest')
+
+
+def test_degraded_parse_is_tagged_flagged_and_reparsed():
+    """THE owner scenario: the markdown pipeline is available but the document
+    falls back to raw at parse time. The write must be (a) tagged with the raw
+    parser_version, (b) flagged degraded on the result, and (c) re-parsed on
+    the next harvest — a degraded row must never freeze into the corpus."""
+    _load_app()
+    from lib.pdf_parser._common import HAS_PYMUPDF4LLM
+    if not HAS_PYMUPDF4LLM:
+        _ok('skipped (no pymupdf4llm in this env — degraded path unreachable)')
+        return
+    # Fake parse reports the RAW winner (simulates the per-document 4llm→raw
+    # fallback) while the env expects the markdown pipeline.
+    counter, restore = _patch_harvest(
+        parse=_ParseCounter(extractor='pymupdf-raw'))
+    aid = f'2313.{int(time.time()) % 100000:05d}'
+    try:
+        import lib.paper.harvest as h
+        r1 = h.harvest_arxiv_id(aid)
+        assert r1.status == 'parsed', r1.error
+        assert r1.degraded is True, \
+            'a raw-fallback parse in a markdown env must be FLAGGED degraded'
+        from lib.pdf_parser._common import current_parser_version
+        assert _parser_version_for_arxiv(aid) == current_parser_version('pymupdf-raw'), \
+            'the row must carry the RAW parser_version, not the expected one'
+        # The very next harvest must NOT treat the degraded row as a hit —
+        # it re-parses (self-heal), which is exactly what un-poisons a corpus
+        # after the extractor is fixed.
+        r2 = h.harvest_arxiv_id(aid)
+        assert r2.status == 'parsed', \
+            f'a degraded row must NOT freeze: second harvest should re-parse, got {r2.status}'
+        assert counter.calls == 2, \
+            f'degraded row froze the corpus — parser called {counter.calls}x total, want 2'
+    finally:
+        restore()
+    _ok('degraded parse: raw-tagged + flagged + re-parsed next harvest (never frozen)')
 
 
 def main():
@@ -408,6 +568,10 @@ def main():
         test_persistent_download_failure_gives_up_NEUTER,
         test_batch_dedups_input_ids,
         test_reading_mode_ingest_then_harvest_is_cache_hit,
+        test_stale_parser_version_reparses,
+        test_raw_tagged_row_is_not_a_cache_hit,
+        test_null_legacy_row_is_not_a_cache_hit,
+        test_degraded_parse_is_tagged_flagged_and_reparsed,
     ]
     for fn in tests:
         try:

@@ -153,6 +153,18 @@
 **成本纪律**:parse-once 是关键。一次 `harvest` 若爬 40 篇,命中已读的 10 篇零成本,
 只解析新的 30 篇;**下次换个近邻方向,这 40 篇又是零成本命中**。库越用越省。
 
+**缓存失效契约(v3,2026-07-27 owner 拍板,已落地)**:「parse once, reuse forever」的缓存键是
+**`(phash, parser_version)`**,不是裸 `phash`。每个写 `parsed_text` 的写者(harvest 的
+`_persist_row`、阅读模式服务端落库、bookshelf PUT 保留语义)都给行打上**产出该文本的抽取器身份+版本**
+(如 `pymupdf4llm-1.27.2.3`;raw 降级路径打 `pymupdf-raw-…`)。harvest 预下载探针要求该版本与本环境
+`expected_parser_version()` **精确相等**才命中。于是:①解析栈升级 → 旧版本行自然 miss → 重解析,
+不会把陈旧文本冻结一辈子;②markdown 管线不可用时的 raw 降级写入,版本戳与期望不同 → **永远不算
+markdown 语料命中**,下次 harvest 自动重解析自愈;③契约前写入的存量行 `parser_version=''` → 按构造
+miss → 下次触碰即自愈,**无需任何回填脚本**。降级写入同时是**响的**:ERROR 日志 + `audit_log` +
+`HarvestResult.degraded` + 批次计数,而不是埋进一行 warning。教训来源:本机 PyMuPDF 1.24.1 缺
+`pymupdf` 模块名导致 `pymupdf4llm` ImportError,解析静默降级为无结构裸文本(实测 39,607 字符、
+0 个 markdown 表行),而非空 `parsed_text` 又是无条件命中 —— 若无版本键,整个语料库会被永久污染。
+
 **类比**:建自己的「文献仓库」而不是每次读论文都从头翻 PDF —— 仓库里已经上架的书,再借不要钱。
 
 ---

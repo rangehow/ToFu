@@ -103,8 +103,19 @@ tiktoken>=0.7
 # PDF parsing stack — pymupdf (fitz) is used across lib/pdf_parser, routes/paper,
 # and tofu_search.fetch for fast local PDF text/image extraction. pymupdf4llm is an
 # optional LLM-oriented Markdown extractor built on top of pymupdf.
-pymupdf>=1.24
-pymupdf4llm>=0.0.17
+# PINNED AS A TRIO at the same exact version: pymupdf4llm 1.27.2.3 exact-pins
+# pymupdf==1.27.2.3 AND pymupdf_layout==1.27.2.3, so the three lines MUST move
+# together — a floor-only pin is what produced the 2026-07-27 split-brain env
+# (pymupdf 1.24.1 without the `pymupdf` module name → pymupdf4llm ImportError →
+# every parse silently degraded to flat raw text and the corpus froze that way).
+# pymupdf_layout is only exercised by pymupdf4llm's OPTIONAL layout/OCR pipeline,
+# which lib/pdf_parser/text.py deliberately bypasses (it calls the classic
+# pymupdf_rag implementation directly); it is declared because it is a hard
+# transitive dep. Some internal mirrors do not carry pymupdf-layout — install it
+# from pypi.org if your index lacks it.
+pymupdf==1.27.2.3
+pymupdf_layout==1.27.2.3
+pymupdf4llm==1.27.2.3
 # Markdown — server-side renderer for paper-report HTML export
 # (routes/paper.py:export_report). Frontend still uses marked.js for live
 # rendering; this dep is only used for downloadable .html exports.

@@ -181,7 +181,7 @@ def _seed_raw_row(paper_id, *, pdf_filename, paper_hash='', arxiv_id='',
             'pdf_url': ('/api/paper/pdf/' + pdf_filename) if pdf_filename else '',
             'pdf_filename': pdf_filename, 'arxiv_id': arxiv_id,
             'paper_hash': paper_hash, 'parsed_text': parsed_text,
-            'qa_history': '[]', 'images': '[]', 'babel_cache': '{}',
+            'parser_version': '', 'qa_history': '[]', 'images': '[]', 'babel_cache': '{}',
             'page_count': 1, 'folder_id': '', 'created_at': now, 'updated_at': now,
         }, retry=True)
     finally:

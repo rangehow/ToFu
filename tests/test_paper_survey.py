@@ -91,7 +91,7 @@ def _seed_library_paper(arxiv_id, *, phash=None, parsed_text=None, report=None,
         upsert(db, PAPER_LIBRARY, {
             'id': f'lib_{arxiv_id}', 'user_id': user_id, 'title': f'Paper {arxiv_id}',
             'pdf_url': '', 'pdf_filename': '', 'arxiv_id': arxiv_id, 'paper_hash': phash,
-            'parsed_text': parsed_text, 'qa_history': '[]', 'images': '[]',
+            'parsed_text': parsed_text, 'parser_version': '', 'qa_history': '[]', 'images': '[]',
             'babel_cache': '{}', 'page_count': 5, 'folder_id': folder_id,
             'created_at': now, 'updated_at': now,
         }, retry=True)

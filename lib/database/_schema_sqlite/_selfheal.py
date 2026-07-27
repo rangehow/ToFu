@@ -44,8 +44,10 @@ _CRITICAL_COLUMNS = {
     # GET /api/v1/paper/library SELECT), so a version-current DB missing it
     # throws on every bookshelf load until re-migrated. The guarded ALTER
     # lives in _chat.py but only runs on a full DDL pass.
+    # parser_version is named in the harvest cache probe's WHERE clause (see
+    # the PG twin for the failure shape).
     'paper_library': (
-        'folder_id',
+        'folder_id', 'parser_version',
     ),
 }
 

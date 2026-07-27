@@ -2,6 +2,16 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
 
+### 2026-07-27 — 「末尾四个一模一样的因重启中断泡」根修三闸 + 幻影泡清理(owner「查数据库为什么四个泡,根修」;commit `59c8ba88`,2 文件 +477/-9;新套件 **6/6,其中 4 个 failing-first 在未修码上精确红**,恢复环+行存储钩环 **33 过**,collect **10495** 0 err)
+
+- **DB 取证链(全部生产实证,非推测):** 会话 ms2gipv5a7gvbc 尾部 #16/#17 两个 interrupted 泡(clen=0/tlen=4661,ts 同秒 11:42:18)内容逐字符 = 任务 `06b29421` 的检查点——那是一个 **08:07:43 出生的 autopilot 早产孪生**(父任务 984b3945 还在跑它就出生了,日志铁证 `[SyncConv 984b3945] skipping conv sync: superseded by newer task 06b29421`),父任务 08:08:51 done 且回复早已落地为 msg#1。**它的轮次 3.5 小时前就被回答了,自己却以 status='running' 僵尸到 11:42**(LLM 两轮 08:08:51 已完成,finalize 从未持久化,SSE 流挂了 7200s 被掐)。本会话 16 个任务里 8 个是这种「done+interrupted 孪生对」。
+- **四个泡的形成:** ①11:42 重启的启动恢复按「检查点文本最多」启发式挑中这个最老的僵尸(而非最新的前沿任务),向尾部(VU user 泡后)**追加了一个幻影泡 #16**;②追加的壳**没打 `_msgId` 也没打 `_taskId`**——前端 `core.js:_ensureMsgId` 对无 id 消息每次独立 fetch 现铸新 id,窗口化 lite 切片(剥 toolRounds 打 `_trimmedToolRoundCount`)与全量/debug 两路拉取各铸一个身份 → 渲染层最多 4 张卡(首 PUT 409 冲突丢失一对,重拉再铸)→ 11:53:03 的 PUT 把其中一对持久化成 #16(全量)+ #17(lite 孪生,`_trimmed` 瞬态标记都进了权威 blob——重填闸按 `_msgId` 匹配,新铸 id 匹配不上)。**库里 2 个 + 视图里最多 4 个,全部同源一个僵尸检查点。**
+- **根修三闸(`lib/tasks_pkg/manager/_recovery.py`):** **G3** `_task_superseded_by_newer_reply`——同会话存在「更晚完成(done 且 completed_at > 本任务 created_at)」的回复即判定该僵死任务的轮次**已被回答**,只落 status 翻转、**永不 merge**;候选选择从「文本最多」改为「最新非 superseded」(崩溃前沿)。**G4** 尾部归属闸——尾部 assistant 泡显式属于别的 `_taskId` 时,本任务的检查点永不写入(G1 的角色反转形态)。**ID 闸**——append 的壳出生即打 `_msgId`(uuid4)+ `_taskId`:前端不再现铸(消灭 lite 孪生),下一次恢复扫描经 G1 找到 home 原地合并(幂等)。
+- **全库扫描(11:42 那批 20 个恢复会话):20/20 全是 superseded merge**——受控重启会把真正的前沿轮次正常排干,剩下的 'running' 行只有僵尸;其中 18 个尾部是 assistant 的 merge 为空操作(检查点不长于既有泡),**幻影追加泡全库只有 2 个会话**:ms2gipv5a7gvbc ×2 + ms1rz4b2es7oiz ×1。已清理(备份 `/tmp/phantom_bubbles_backup_20260727.json` 657KB,audit_log `phantom_bubble_cleanup` 双条),尾部回到 VU user。7 个「尾部内容==僵尸数据但 `_taskId` 是别的任务」的会话判定为**孪生同文**(merge 只在严格更长时才覆写,等长=未覆写),不动。
+- **同根发现的兄弟修复(勿重复):** `mirror_write_and_commit` 的 `full` 参数缺失(NameError,生产 PATCH 500 连发 + autopilot VU append 静默失败)——**兄弟会话已在工作树修好 + 写了 tests/test_messages_rows_mirror_hook_callable.py(未提交 WIP)**,本 commit 不动该文件;我已验证其套件在工作树绿(6/6 含 full=True 形状),清理脚本运行时也实证 full=True 不再炸。**该 WIP 需尽快提交,否则共享树上易被扫进别人提交。**
+- **生效条件:需重启服务。** 不重启则旧行为(下次重启仍会复活 superseded 僵尸 + 追加无身份壳);PATCH 500 要等兄弟的 messages_rows 修复提交并重启才停。
+- **预存在红(留票不留修):** `test_frontend_reconcile_defer.py` ×2 红是 HEAD 上的 JS 源码锚点守卫漂移(main_init_tasks.js 被兄弟重构后锚点过期,守卫过期家族第 6 例,与 pt_8df8fc9b 同族),与本次零共享文件,已开票 `pt_3a0cdc233c19408f`。
+
 ### 2026-07-27 — Opus 5 解锁 1M 上下文:清掉网关 213k shrink 学习条目(owner「Opus 5 has a 1M context window, update immediately」;纯数据修复,零产品代码;context_limits self-heal **21/21**,compact/token 批 **485 过 6 红全为兄弟在飞前端 WIP**)
 
 - **根因:静态预设本来就覆盖 Opus 5,钉子在学习层。** `is_claude_opus_47`(`lib/model_info/_family.py:36`)把 `yuju-claude-opus-5-evaDaily` 解析为 (5,0) ≥ (4,7) → `_get_static_context_limit` 返回 1,000,000。但 `data/config/server_config.json` 里有两条 **shrink 学习条目**(`sankuai::` 前缀 + 裸 key 各一)把有效窗口压到 **213,000**。

@@ -139,11 +139,46 @@ def _install_shim_for_collection():
     # the production logs/app.log. netpath's own tests opt back in via
     # monkeypatch (tests/test_netpath.py).
     _os.environ.setdefault('TOFU_NETPATH', 'off')
+    # ⚠️ LOG ISOLATION (2026-07-27, after app.log hit 9.1 GB in one day).
+    # Everything else in this block is already isolated — DB, scheduler,
+    # netpath, mlock — but logs were NOT, so the test process appended to the
+    # REAL <repo>/logs/app.log. Measured: one test emitting a single
+    # logger.error() + audit_log() grew the production app.log by 83 bytes and
+    # landed its marker in app.log AND audit.log (four production file
+    # handlers are attached to the root logger once `import server` runs).
+    # The netpath comment right above even names this hazard out loud —
+    # evidence the risk was known but only ever patched case-by-case.
+    #
+    # ORDERING IS LOAD-BEARING: lib/log.py computes LOG_DIR at IMPORT time
+    # from _writable_base_dir(), which honours TOFU_DATA_DIR first. So this
+    # must be set BEFORE the `import server` below — the same constraint that
+    # governs TOFU_DB_PATH above. Keyed on PYTEST_XDIST_WORKER for the same
+    # reason: each worker is its own process inheriting the controller's env.
+    if not _os.environ.get('TOFU_DATA_DIR'):
+        import tempfile as _tf_log
+        _log_worker = _os.environ.get('PYTEST_XDIST_WORKER', '')
+        _log_suffix = f'-{_log_worker}' if _log_worker else ''
+        _os.environ['TOFU_DATA_DIR'] = _tf_log.mkdtemp(
+            prefix=f'tofu-test-logs{_log_suffix}-')
     try:
         import server  # noqa: F401 — side-effect: installs Flask→Quart shim
     except Exception as _e:  # never block collection on the shim probe
         import sys as _sys
         _sys.stderr.write(f'[conftest] shim pre-install skipped: {_e}\n')
+
+    # ─── HARD PATH LOCK (2026-07-26) ──────────────────────────────────
+    # Force lib.database._core.DB_PATH to the session-specific temp path
+    # immediately after the server import. This is a belt-and-suspenders
+    # guard against any test or background thread that might try to
+    # resolve the default data/tofu.db path, ensuring all test-side
+    # DB writes are contained within the temporary test area.
+    if _os.environ.get('TOFU_ALLOW_PG_TESTS') != '1':
+        try:
+            import lib.database._core as _dbc
+            _dbc.DB_PATH = _os.environ['TOFU_DB_PATH']
+            _dbc._BACKEND = 'sqlite'
+        except Exception as _e:
+            _sys.stderr.write(f'[conftest] hard path lock failed: {_e}\n')
 
 
 # ─── DATA-LOSS GUARD: refuse to run the suite against a production DB ──
@@ -895,6 +930,62 @@ _TEST_TIMER_SOURCE_LIKE = (
     'task-x',
 )
 
+# Task-id patterns used EXCLUSIVELY by tests (production task ids are
+# timestamp-random and never start with these).
+_TEST_TASK_ID_LIKE = (
+    'usagetas%',
+    'task-cause%',
+    'seamtask%',
+    'task-freeze%',
+    'task-parallel%',
+    'task-artifact%',
+    'tfeedpb%',
+    'aaaaaaaa%',
+)
+
+
+def _purge_test_task_events(reason: str = '') -> int:
+    """Delete test-pattern task_events rows from the active DB. Best-effort.
+
+    Returns the number of rows deleted (0 on any failure). Pattern-gated so it
+    is safe to run against the production DB the tests share.
+    """
+    try:
+        from lib.database import DOMAIN_SYSTEM, close_thread_db, get_thread_db
+    except Exception as e:
+        _conftest_logger.debug('task event purge skipped (db import failed): %s', e)
+        return 0
+
+    deleted = 0
+    try:
+        db = get_thread_db(DOMAIN_SYSTEM)
+
+        def _del(sql, params):
+            nonlocal deleted
+            try:
+                cur = db.execute(sql, params)
+                deleted += int(getattr(cur, 'rowcount', 0) or 0)
+            except Exception as ex:
+                _conftest_logger.debug('task event purge stmt failed (%s): %s', sql, ex)
+
+        for pat in _TEST_TASK_ID_LIKE:
+            _del('DELETE FROM task_events WHERE task_id LIKE ?', (pat,))
+        try:
+            db.commit()
+        except Exception as ex:
+            _conftest_logger.debug('task event purge commit failed: %s', ex)
+    except Exception as e:
+        _conftest_logger.warning('purge_test_task_events failed %s: %s', reason, e)
+    finally:
+        try:
+            close_thread_db()
+        except Exception:
+            pass
+
+    if deleted:
+        _conftest_logger.info('purged %d leaked test task_event row(s) %s', deleted, reason)
+    return deleted
+
 
 def _purge_test_timers(reason: str = '') -> int:
     """Delete test-pattern timer_watchers rows from the active DB. Best-effort.
@@ -963,11 +1054,13 @@ def _purge_leaked_test_conversations(_db_guard_session):
     DB before any DELETE is issued."""
     _purge_test_conversations('(session start)')
     _purge_test_timers('(session start)')
+    _purge_test_task_events('(session start)')
     try:
         yield
     finally:
         _purge_test_conversations('(session end)')
         _purge_test_timers('(session end)')
+        _purge_test_task_events('(session end)')
 
 
 # ════════════════════════════════════════════════════════════════════════

@@ -40,11 +40,12 @@ import subprocess
 
 import pytest
 
+from tests._conv_bundle_sources import JS_DIR, source_argv, sources_defining
+
 pytestmark = pytest.mark.unit
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, '..'))
-JS_DIR = os.path.join(ROOT, 'static', 'js')
 
 
 def _node_available() -> bool:
@@ -182,8 +183,12 @@ global.config = {};
 global.activeConvId = null;
 global.renderChat = function() {};
 
-eval(fs.readFileSync(process.argv[3], 'utf8'));  // core/conv_persist_helpers.js (Epic-E slice 3 home of _rebaseUnackedTail)
-eval(fs.readFileSync(process.argv[2], 'utf8'));  // core/conversations.js
+/* Eval every shipped file the bundle needs for _rebaseUnackedTail, in
+ * production order (resolved by tests/_conv_bundle_sources.py). Hard-coding the
+ * two paths broke when the cluster moved in Epic-E slice 3. */
+for (let i = 2; i < process.argv.length; i++) {
+  eval(fs.readFileSync(process.argv[i], 'utf8'));
+}
 
 const out = [];
 function check(name, cond) { out.push((cond ? 'PASS ' : 'FAIL ') + name); }
@@ -227,14 +232,13 @@ console.log(out.join('\n'));
 """
 
 
-def _run(js_source_path: str, helpers_override: str | None = None):
+def _run(override=None):
     harness = os.path.join(HERE, '_msgid_unif_harness.js')
     with open(harness, 'w') as f:
         f.write(_HARNESS)
-    helpers_js = helpers_override or os.path.join(
-        JS_DIR, 'core', 'conv_persist_helpers.js')
+    paths = source_argv('_rebaseUnackedTail', override=override)
     try:
-        return subprocess.run(['node', harness, js_source_path, helpers_js],
+        return subprocess.run(['node', harness, *paths],
                               capture_output=True, text=True, timeout=60)
     finally:
         try:
@@ -245,8 +249,7 @@ def _run(js_source_path: str, helpers_override: str | None = None):
 
 @pytest.mark.skipif(not _node_available(), reason='node not installed')
 def test_frontend_taskid_dedup_drops_tmp_twin():
-    conv_js = os.path.join(JS_DIR, 'core', 'conversations.js')
-    proc = _run(conv_js)
+    proc = _run()
     output = proc.stdout.strip()
     assert proc.returncode == 0, f'node failed: {proc.stderr}\n{output}'
     fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
@@ -258,10 +261,11 @@ def test_frontend_taskid_dedup_drops_tmp_twin():
 def test_neuter_taskid_dedup_is_load_bearing(tmp_path):
     """NEUTER: remove the _taskId dedup branch → the tmp_ twin is re-appended →
     single_assistant_after_rebase FAILS. Proves the dedup is load-bearing."""
-    # Epic-E slice 3 (b33d9d21) moved _rebaseUnackedTail (and its _taskId
-    # dedup branch) to core/conv_persist_helpers.js — neuter THAT file (the
-    # harness evals helpers first, then conversations.js).
-    helpers_js = os.path.join(JS_DIR, 'core', 'conv_persist_helpers.js')
+    # Epic-E slice 3 (b33d9d21) moved _rebaseUnackedTail (and its _taskId dedup
+    # branch) out of conversations.js — locate it by SYMBOL so a further move
+    # re-points automatically instead of leaving the neuter aimed at a file that
+    # no longer defines it (a neuter that cannot bite reads as a passing guard).
+    helpers_js = sources_defining('_rebaseUnackedTail')[0]
     with open(helpers_js, encoding='utf-8') as f:
         src = f.read()
     marker = "if (lm.role === 'assistant' && lm._taskId && serverAsstTaskIds.has(lm._taskId)) {"
@@ -273,8 +277,8 @@ def test_neuter_taskid_dedup_is_load_bearing(tmp_path):
         1)
     nfile = tmp_path / 'conv_persist_helpers_neutered.js'
     nfile.write_text(neutered, encoding='utf-8')
-    proc = _run(os.path.join(JS_DIR, 'core', 'conversations.js'),
-                helpers_override=str(nfile))
+    rel = os.path.relpath(helpers_js, JS_DIR).replace(os.sep, '/')
+    proc = _run(override={rel: str(nfile)})
     output = proc.stdout.strip()
     assert proc.returncode == 0, f'node failed on neutered copy: {proc.stderr}\n{output}'
     lines = {ln.split(' ', 1)[1]: ln.startswith('PASS')

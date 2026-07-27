@@ -1306,6 +1306,8 @@ class LLMDispatcher:
                 'provider_id': s.provider_id,
                 'base_url': s.base_url,
                 'available': s.is_available,
+                'cooldown_until': s.cooldown_until,
+                'cooldown_reason': s.cooldown_reason,
                 'last_success_time': s.last_success_time,
                 'last_error_time': s.last_error_time,
                 'last_error_msg': s.last_error_msg,

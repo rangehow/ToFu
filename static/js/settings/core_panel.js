@@ -282,6 +282,9 @@ function openSettings() {
       _startBalancePolling();
       // Fetch today's per-key success-rate stats and refresh inline badges.
       _loadKeyStats();
+      // Fetch per-model runtime health (success rate / error-throttle
+      // cooldowns) and keep it fresh while the panel is open.
+      if (typeof _startModelHealthPolling === 'function') _startModelHealthPolling();
       // Auto-poll per-endpoint live metrics (TTFT/latency/throughput/success)
       // so local-deployment status stays fresh without manual probing.
       _startLocalMetricsPolling();

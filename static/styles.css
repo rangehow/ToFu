@@ -5445,6 +5445,41 @@ input.settings-mono {
   border-radius: var(--s-radius);
 }
 .stg-price-na { color: var(--s-ink-soft); opacity: 0.5; font-style: italic; }
+.stg-price-custom {
+  color: #7c3aed;
+  font-weight: 800;
+  font-size: 9px;
+  padding: 0 5px;
+  border: 1px dashed #7c3aed;
+  border-radius: var(--s-radius);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ── Model Card Health Strip (success rate / error throttling) ── */
+.stg-mcard-health {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 5px;
+  font-size: 10px;
+  flex-wrap: wrap;
+}
+.stg-mcard-health:empty { display: none; }
+.stg-mh-chip {
+  font-weight: 700;
+  font-size: 9.5px;
+  padding: 1px 7px;
+  border: 1px solid var(--s-ink);
+  border-radius: var(--s-radius);
+  font-family: 'JetBrains Mono', monospace;
+  white-space: nowrap;
+}
+.stg-mh-chip.good  { color: #16a34a; background: rgba(74, 222, 128, 0.1); border-color: #16a34a; }
+.stg-mh-chip.ok    { color: #65a30d; background: rgba(163, 230, 53, 0.12); border-color: #65a30d; }
+.stg-mh-chip.warn  { color: #d97706; background: rgba(245, 158, 11, 0.12); border-color: #d97706; }
+.stg-mh-chip.cool  { color: #dc2626; background: rgba(248, 113, 113, 0.12); border-color: #dc2626; }
+.stg-mh-chip.muted { color: var(--s-ink-soft); opacity: 0.6; border-style: dashed; border-color: var(--s-ink-soft); font-weight: 600; }
 
 /* ── Model aliases ── */
 .stg-mcard-aliases { display: flex; gap: 4px; margin-top: 5px; flex-wrap: wrap; align-items: center; }

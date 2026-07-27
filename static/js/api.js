@@ -940,6 +940,7 @@
   const dispatch = {
     endpointMetrics: () => get('/api/v1/dispatch/endpoint-metrics', { onError: 'null' }),
     keyStats:        () => get('/api/v1/dispatch/key-stats', { onError: 'null' }),
+    modelHealth:     () => get('/api/v1/dispatch/model-health', { onError: 'null' }),
     keyOverride:     (body) =>
       post('/api/v1/dispatch/key-override', body, { onError: 'null', parse: 'none' }),
   };

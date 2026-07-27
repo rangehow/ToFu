@@ -296,8 +296,19 @@ function _renderModelCard(provIdx, modelIdx, m) {
   }
   html += '</div>';
 
-  // Pricing row — look up real input/output from pricing cache
-  var mp = (typeof _modelPricingCache !== 'undefined' && _modelPricingCache) ? _modelPricingCache[m.model_id] : null;
+  // Pricing row — resolution order: per-model `pricing` override (user-set
+  // via the edit dialog, also registered into PROVIDER_PRICING backend-side)
+  // → discovery's input_price/output_price → the global MODEL_PRICING cache.
+  var mp = null;
+  var mpCustom = false;
+  if (m.pricing && m.pricing.input != null && m.pricing.output != null) {
+    mp = m.pricing;
+    mpCustom = true;
+  } else if (m.input_price != null && m.output_price != null) {
+    mp = { input: m.input_price, output: m.output_price };
+  } else if (typeof _modelPricingCache !== 'undefined' && _modelPricingCache) {
+    mp = _modelPricingCache[m.model_id] || null;
+  }
   if (mp && (mp.input != null || mp.output != null)) {
     var isFree = (mp.input === 0 && mp.output === 0);
     if (isFree) {
@@ -310,11 +321,21 @@ function _renderModelCard(provIdx, modelIdx, m) {
         '<span class="stg-price-label">' + escapeHtml(t('settings.output')) + '</span>' +
         '<span class="stg-price-val out">' + _fmtPrice(mp.output) + '</span>' +
         '<span class="stg-price-unit">' + escapeHtml(t('settings.perMillionTokens')) + '</span>' +
+        (mpCustom ? '<span class="stg-price-custom">' + escapeHtml(t('settings.mePriceCustomTag')) + '</span>' : '') +
       '</div>';
     }
   } else {
     html += '<div class="stg-mcard-pricing"><span class="stg-price-na">' + escapeHtml(t('settings.noPricing')) + '</span></div>';
   }
+
+  // Runtime health strip (success rate / error throttling cooldown). Filled
+  // from _modelHealthCache; refreshed in place by _refreshAllModelCardHealth
+  // so polling never disturbs an open edit form.
+  html += '<div class="stg-mcard-health ' +
+    (typeof _modelCardHealthCls === 'function' ? _modelCardHealthCls(provIdx, modelIdx) : 'muted') +
+    '" data-prov="' + provIdx + '" data-model="' + modelIdx + '">' +
+    (typeof _modelCardHealthHTML === 'function' ? _modelCardHealthHTML(provIdx, modelIdx) : '') +
+  '</div>';
 
   // Wire-id pool (request_ids) or legacy aliases
   html += '<div class="stg-mcard-aliases">';

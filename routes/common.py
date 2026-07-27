@@ -320,6 +320,28 @@ def dispatch_endpoint_metrics():
     return jsonify(aggregate_endpoint_metrics(slots))
 
 
+@api_v1_common_bp.route('/api/v1/dispatch/model-health', methods=['GET'])
+def dispatch_model_health():
+    """Return per-(provider, wire-model) runtime health for the Settings
+    model cards: success rate, error counts, consecutive-error streaks, and
+    any ACTIVE cooldown (the error-rate throttling imposed after repeated
+    failures) with its remaining seconds + reason.
+
+    Response: ``{providers: {provider_id: {model: {...}}}, ts}`` — see
+    ``lib.dispatch_stats.aggregate_model_health`` for the row shape.
+    """
+    try:
+        from lib.llm_dispatch import get_dispatcher
+        d = get_dispatcher()
+        slots = d.get_slots_info()
+    except Exception as e:
+        logger.warning('[dispatch/model-health] Failed: %s', e, exc_info=True)
+        return jsonify({'providers': {}, 'ts': time.time()})
+
+    from lib.dispatch_stats import aggregate_model_health
+    return jsonify(aggregate_model_health(slots))
+
+
 @api_v1_common_bp.route('/api/v1/dispatch/key-stats', methods=['GET'])
 def dispatch_key_stats():
     """Return today's success/failure counts per API key.

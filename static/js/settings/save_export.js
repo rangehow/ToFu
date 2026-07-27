@@ -15,6 +15,7 @@
 function closeSettings() {
   _stopBalancePolling();
   _stopLocalMetricsPolling();
+  if (typeof _stopModelHealthPolling === 'function') _stopModelHealthPolling();
   document.getElementById("settingsModal").classList.remove("open");
   // Refresh model dropdown to reflect any visibility changes
   if (typeof _populateModelDropdown === 'function' && typeof _registeredModels !== 'undefined' && _registeredModels.length > 0) {

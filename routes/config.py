@@ -228,10 +228,23 @@ def get_server_config():
         for m in prov.get('models', []):
             mid = m.get('model_id', '')
             if mid and mid not in model_pricing:
-                if m.get('input_price') is not None and m.get('output_price') is not None:
+                # Two on-model shapes carry the same data: top-level
+                # input_price/output_price (discovery enrichment) and the
+                # nested pricing{input,output} dict (user/template override,
+                # also registered into PROVIDER_PRICING below). Both should
+                # feed the frontend pricing cache or a user-set price stays
+                # invisible until some other mechanism fills the row.
+                _pinfo = m.get('pricing') if isinstance(m.get('pricing'), dict) else {}
+                _inp = m.get('input_price')
+                if _inp is None:
+                    _inp = _pinfo.get('input')
+                _out = m.get('output_price')
+                if _out is None:
+                    _out = _pinfo.get('output')
+                if _inp is not None and _out is not None:
                     model_pricing[mid] = {
-                        'input': m['input_price'],
-                        'output': m['output_price'],
+                        'input': _inp,
+                        'output': _out,
                         'name': mid,
                     }
 

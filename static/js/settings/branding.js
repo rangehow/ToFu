@@ -103,6 +103,46 @@ function _modelShortName(modelId) {
   return modelId.replace(/^(aws\.|vertex\.)/, '').split('/').pop();
 }
 
+
+/* ★ Sort key for ordering a model list the way the user READS it.
+ *
+ * `_modelShortName` is not a pure function of model_id — it prefers
+ * `_modelPricingCache[id].name`, and that cache is only populated once
+ * /api/v1/server-config has returned `model_pricing`. Callers that run before
+ * (or without) that fetch — the `.catch` fallback in
+ * _loadServerConfigAndPopulate, a settings-close repaint on a failed load —
+ * would otherwise sort by a DIFFERENT string than the one on screen. Falling
+ * back to the same gateway-prefix-stripped id that _modelShortName itself
+ * returns on a cache miss keeps the degraded order stable and near-identical
+ * rather than arbitrary. */
+function _modelDisplaySortKey(modelId) {
+  var label = (typeof _modelShortName === 'function')
+    ? _modelShortName(modelId)
+    : String(modelId || '').replace(/^(aws\.|vertex\.)/, '').split('/').pop();
+  return String(label == null ? '' : label);
+}
+
+/* Numeric-aware collator: plain `<`/`>` on lowercased strings orders
+ * "Gemini 3.10" before "Gemini 3.5" and "Opus 4.10" before "Opus 4.6" —
+ * wrong the moment a minor version reaches two digits. `numeric: true` compares
+ * embedded digit runs as numbers. Built once; Intl.Collator construction is the
+ * expensive part, not the compare. */
+var _MODEL_NAME_COLLATOR = (typeof Intl !== 'undefined' && Intl.Collator)
+  ? new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
+  : null;
+
+/* ★ THE display-name comparator. Single source of truth for model ordering —
+ * the toolbar picker (_populateModelDropdown) and the Settings cold sort
+ * (_coldSortModels) both route through it so the two lists can never disagree.
+ * Accepts a model_id string or a {model_id} entry. */
+function _compareModelsByDisplayName(a, b) {
+  var ka = _modelDisplaySortKey((a && a.model_id !== undefined) ? a.model_id : a);
+  var kb = _modelDisplaySortKey((b && b.model_id !== undefined) ? b.model_id : b);
+  if (_MODEL_NAME_COLLATOR) return _MODEL_NAME_COLLATOR.compare(ka, kb);
+  var la = ka.toLowerCase(), lb = kb.toLowerCase();
+  return la < lb ? -1 : (la > lb ? 1 : 0);
+}
+
 /* ★ Friendly provider display name for a provider_id — used by the message
  * finish bar (route tag) to show which provider actually served a turn.
  * Resolves via the registered-models list (each carries provider_id +

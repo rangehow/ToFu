@@ -295,10 +295,32 @@ function _populateModelDropdown(models) {
     grouped[pid].models.push(m);
   }
 
-  /* Render each provider group */
+  /* Order the list the way the user READS it.
+   *
+   * Two axes, both previously unordered:
+   *   - Section order was Object.keys() insertion order, i.e. provider order in
+   *     server_config.json — arbitrary relative to anything on screen.
+   *   - Within a section, models arrived in model_id order (the Settings cold
+   *     sort writes that back), but the ROW shows _modelShortName(id). Those
+   *     differ: `yuju-claude-opus-5-evaDaily` renders as "Claude Opus 5" yet
+   *     sorted under 'y'.
+   *
+   * The comparator is the shared one from settings/branding.js, so this picker
+   * and the Settings model list can never disagree. Guarded: a stale bundle
+   * missing branding.js leaves the list unsorted rather than throwing and
+   * stranding an empty dropdown (same rationale as the isChatModel guard). */
+  const _canSort = (typeof _compareModelsByDisplayName === 'function');
   const providerIds = Object.keys(grouped);
+  if (_canSort) {
+    providerIds.sort((x, y) => {
+      const nx = String((grouped[x] && grouped[x].name) || x);
+      const ny = String((grouped[y] && grouped[y].name) || y);
+      return _compareModelsByDisplayName(nx, ny);
+    });
+  }
   for (const pid of providerIds) {
     const group = grouped[pid];
+    if (_canSort) group.models.sort(_compareModelsByDisplayName);
     /* Only show section headers when there are multiple providers */
     if (providerIds.length > 1) {
       const labelDiv = document.createElement('div');

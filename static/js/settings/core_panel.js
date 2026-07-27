@@ -36,7 +36,13 @@ function _setVal(id, value, prop) {
 //  Model list ordering — cold sort + insertion sort
 // ══════════════════════════════════════════════════════
 //
-// Each provider's model list is kept alphabetically ordered by model_id.
+// Each provider's model list is kept ordered by the DISPLAY name the user
+// actually reads (_modelShortName), NOT the raw model_id — sorting by id put
+// `yuju-claude-opus-5-evaDaily` (label "Claude Opus 5") under 'y', far from the
+// other Claude entries. The comparator itself lives in settings/branding.js
+// (_compareModelsByDisplayName) and is shared with the toolbar model picker so
+// the two lists can never disagree about order.
+//
 // To avoid re-sorting on every render (which would make rows jump around
 // while editing), the full sort runs only ONCE per editor session — a
 // "cold sort" when the working copy is loaded (_coldSortAllProviderModels
@@ -44,18 +50,22 @@ function _setVal(id, value, prop) {
 // add / rename) keep the order via _insertModelSorted (binary-search
 // insertion). The next settings-open cold-sorts again from scratch.
 
-/** Case-insensitive sort key for a model entry. */
-function _modelSortKey(m) {
-  return ((m && m.model_id) || '').toLowerCase();
+/** Order two model entries by display name. Delegates to the shared
+ *  comparator; falls back to a raw model_id compare only if branding.js is
+ *  absent (stale bundle) so the list still renders in a stable order. */
+function _compareModelEntries(a, b) {
+  if (typeof _compareModelsByDisplayName === 'function') {
+    return _compareModelsByDisplayName(a, b);
+  }
+  var ka = ((a && a.model_id) || '').toLowerCase();
+  var kb = ((b && b.model_id) || '').toLowerCase();
+  return ka < kb ? -1 : (ka > kb ? 1 : 0);
 }
 
-/** One-time full sort of a provider's model list (in place, by model_id). */
+/** One-time full sort of a provider's model list (in place, by display name). */
 function _coldSortModels(models) {
   if (!Array.isArray(models)) return models;
-  models.sort(function(a, b) {
-    var ka = _modelSortKey(a), kb = _modelSortKey(b);
-    return ka < kb ? -1 : (ka > kb ? 1 : 0);
-  });
+  models.sort(_compareModelEntries);
   return models;
 }
 
@@ -68,16 +78,15 @@ function _coldSortAllProviderModels() {
   }
 }
 
-/** Insert one model into an already-sorted list at its alphabetical
- *  position (binary search). Cheap incremental upkeep so freshly added or
- *  renamed models land correctly without re-sorting the whole list. */
+/** Insert one model into an already-sorted list at its display-name position
+ *  (binary search). Cheap incremental upkeep so freshly added or renamed
+ *  models land correctly without re-sorting the whole list. */
 function _insertModelSorted(models, m) {
   if (!Array.isArray(models)) return;
-  var key = _modelSortKey(m);
   var lo = 0, hi = models.length;
   while (lo < hi) {
     var mid = (lo + hi) >> 1;
-    if (_modelSortKey(models[mid]) <= key) lo = mid + 1;
+    if (_compareModelEntries(models[mid], m) <= 0) lo = mid + 1;
     else hi = mid;
   }
   models.splice(lo, 0, m);
@@ -256,9 +265,10 @@ function openSettings() {
     _stgProviders = JSON.parse(JSON.stringify(cfg.providers || []));
     _stgPresets = JSON.parse(JSON.stringify(cfg.presets || {}));
 
-    // One-time cold sort: order every provider's model list alphabetically
-    // by model_id. In-session additions stay ordered via _insertModelSorted,
-    // and the next settings-open cold-sorts again from scratch.
+    // One-time cold sort: order every provider's model list by the DISPLAY
+    // name (shared comparator, same one the toolbar picker uses). In-session
+    // additions stay ordered via _insertModelSorted, and the next
+    // settings-open cold-sorts again from scratch.
     _coldSortAllProviderModels();
 
     // Pre-load external templates so sync buttons appear on first render

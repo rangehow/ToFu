@@ -277,6 +277,21 @@ _UPSTREAM_TRANSIENT_PATTERNS = [
     '负载较高', '负载高',
 ]
 
+# Phrases in a 4xx body emitted by the gateway's own ROUTING layer when it
+# fails to resolve a vendor group — a 503 wearing a 4xx costume, NOT an auth
+# rejection. Observed on the toio/sankuai gateway (2026-07-26, 19:15–19:54):
+# 22 hits of ``resolve groups failed: model unsupported by selected groups:
+# claude-opus-5`` (HTTP 403) inside one 40-minute vendor-storm window, 10 of
+# them misclassified PermissionError_ → task deaths / kimi fallbacks wearing
+# the bogus "check your API key" envelope — while the SAME keys went on to
+# serve 43 successful opus-5 rounds 19:55–21:20, minutes later. A real auth
+# rejection does not heal in minutes. Pure-ASCII phrasing → encoding-stable
+# (immune to the mojibake failure mode that killed the Chinese-phrase layer).
+_GATEWAY_ROUTING_TRANSIENT_PATTERNS = [
+    'resolve groups failed',
+    'model unsupported by selected groups',
+]
+
 
 def _is_upstream_vendor_transient(err_msg: str) -> bool:
     """True if a 4xx error body is an upstream-vendor TRANSIENT failure.
@@ -308,6 +323,8 @@ def _is_upstream_vendor_transient(err_msg: str) -> bool:
     if '"source":"upstream_vendor"' in lower.replace(' ', ''):
         return True
     if any(p in lower for p in _UPSTREAM_TRANSIENT_PATTERNS):
+        return True
+    if any(p in lower for p in _GATEWAY_ROUTING_TRANSIENT_PATTERNS):
         return True
     repaired = repair_mojibake(err_msg)
     if repaired is not err_msg:

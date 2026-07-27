@@ -417,6 +417,68 @@ class TestMojibake403Classification:
 
 
 # ══════════════════════════════════════════════════════════
+#  Gateway routing-resolution transient — 2026-07-26 19:15–19:54 incident
+# ══════════════════════════════════════════════════════════
+
+# The exact production body (logs/app.log.2026-07-26, 22 hits in one 40-minute
+# window 19:15–19:54, 10 of them misclassified PermissionError_ — e.g. task
+# b4a01fd9 round 7 "LLM call failed" → task death / kimi fallback wearing the
+# bogus "API Key 被拒绝 → Settings→Keys" envelope). The SAME keys then served
+# 43 successful opus-5 rounds 19:55–21:20 — a real auth rejection does not
+# heal in minutes. This is the gateway's own routing layer flapping during a
+# vendor storm: a 503 wearing a 403 costume. Pure-ASCII phrasing, so it is
+# encoding-stable and needs no mojibake handling.
+_RESOLVE_GROUPS_403 = ('API HTTP 403: resolve groups failed: model unsupported '
+                       'by selected groups: claude-opus-5 (request id: '
+                       'toio202607261115134830414AoZHCTYl)')
+
+
+@pytest.mark.unit
+class TestGatewayRoutingTransient:
+
+    def test_resolve_groups_403_is_gateway_retry_not_auth(self):
+        """THE 07-26 19:15–19:54 production body must rotate slots, never die
+        as PermissionError_."""
+        with pytest.raises(RateLimitError) as ei:
+            _classify_http_error(403, _RESOLVE_GROUPS_403,
+                                 'yuju-claude-opus-5-evaDaily', '[t]')
+        assert ei.value.is_gateway is True
+        assert ei.value.status_code == 403
+
+    def test_resolve_groups_400_wrap_is_gateway_retry(self):
+        """The same gateway layer can wrap the routing failure in a 400 —
+        same predicate, same outcome (rotation, not BadRequestError)."""
+        with pytest.raises(RateLimitError) as ei:
+            _classify_http_error(400, _RESOLVE_GROUPS_403.replace('403', '400', 1),
+                                 'yuju-claude-opus-5-evaDaily', '[t]')
+        assert ei.value.is_gateway is True
+        assert ei.value.status_code == 400
+
+    def test_each_routing_phrase_alone_suffices(self):
+        assert _is_upstream_vendor_transient('API HTTP 403: resolve groups failed')
+        assert _is_upstream_vendor_transient(
+            'model unsupported by selected groups: claude-opus-5')
+        # Inside a JSON envelope too (future toio wrap shape).
+        env = ('{"error":{"message":"resolve groups failed: model unsupported '
+               'by selected groups: claude-opus-5","type":"toio_api_error"}}')
+        assert _is_upstream_vendor_transient(env)
+
+    def test_routing_phrases_are_encoding_stable(self):
+        """ASCII phrasing classifies even when the SAME body carries mojibake
+        elsewhere — the failure mode that killed the Chinese-phrase layer."""
+        assert _is_upstream_vendor_transient(
+            'è¯·æ±: resolve groups failed: model unsupported by selected groups')
+
+    def test_genuine_access_denied_stays_permission(self):
+        """Control: a real access-denied 403 (no routing-resolution phrasing)
+        must keep the PermissionError_ path unchanged."""
+        raw = ('API HTTP 403: {"error":{"message":"Forbidden: key has no '
+               'access to this model","type":"toio_api_error"}}')
+        with pytest.raises(PermissionError_):
+            _classify_http_error(403, raw, 'yuju-claude-opus-5-evaDaily', '[t]')
+
+
+# ══════════════════════════════════════════════════════════
 #  _ERR_BODY_LIMIT — logs keep the diagnostic tail
 # ══════════════════════════════════════════════════════════
 

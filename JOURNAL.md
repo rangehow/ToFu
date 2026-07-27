@@ -2,6 +2,14 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
 
+### 2026-07-27 — 自动翻译「要刷新才出来」根修第二刀:三道帧守卫的 translation-only 窄通道(owner 用真实入口复核推翻我的第一刀覆盖率;commit `92e21edd`,3 文件 +526/-19;新套件 **23/23**(failing-first 实测 6 红)+ conv_notify_push **1/1 三个 NEUTER 全咬**,回归环 19 套件 **92/92**,collect **10557** 0 err)
+
+- **第一刀(`3e168055`)只修对了四种到达形态中的一种。** 我的测试从 `_verifyActiveConvFromServer` **中段**切入,绕过了 `_onConvNotifyPush` 真正会丢帧的三道闸;owner 从真实入口打了一遍,实测 `get=0` 两格 + `_needsLoad` 一格。**教训(本轮最值钱):测试的切入点决定了它能看见哪些闸——从中段进去的测试对上游守卫链完全失明,「reducer 接线存在」≠「帧到得了 reducer」。**
+- **误伤的机理(为什么恰好命中自动翻译):** 翻译提交紧跟轮次结束,而轮次结束时前端刚做完 finishStream 的 PUT(`conversations.js:314` 设 `_localWriteAt`,自回声窗口 6s)、且 stream 尚未从 `activeStreams` 摘除。三道闸都是为**会覆盖正文的采纳**设计的,而 `_mergeTranslationFields` 严格增量、正文逐字节相等才动手,**天然不具备它们要防的破坏力**。rev 通道无重放 → 帧丢了就是丢了 → 回到「要刷新」。
+- **修法:不放宽守卫,改道进窄通道**(`cross_tab_sync.js::_translationOnlyVerify`)。守卫命中时仍拉一次 GET,但只跑翻译 reducer,正文/thinking/toolRounds 一律不碰;**不采纳 `data.rev`**(本通道只读了译文字段,正常 verify 仍需为其余改动照跑——这条是刻意的,别当遗漏优化掉);逐条 `ConvView.applyMessage` 重绘而非 `replaceAll`(流式气泡不重建、滚动位置不动);`_editingMsgIdx` 那条**跳过重绘**(合并无害,重绘会砸掉活表单);合并后 `ConvCache.put(live)` 落 IDB,所以缓存副本带译文而非英文原文(owner 担心的覆盖方向已实测覆盖)。
+- **安全性由 reducer 的身份闸承担,不靠外层丢帧:** 流式中的尾轮本地正文与服务器不同 → reducer 直接拒绝;只有**已结束**的轮次能拿到译文。这是「精确开一条增量通道」而非拆闸的关键——不变式「不覆盖正在流式的气泡」由更靠内的一层保住了。
+- **后台会话(第三格)实测无需改码:** 四条重开分支(3 merge + 2 wholesale)全部经过共享 reducer,含 `loadConversationMessages` 的 cache-fresh 分支(`conversations.js:1662` 合并后再 `ConvCache.put`)。**先实测再动手,省下一刀无谓的改动**——owner 提的「别假设 `_needsLoad` 恢复路径经过 reducer」正是该查的点,查完是真经过。
+- **旧断言的处置(诚实记录):** `test_frontend_conv_notify_push.py` 4 项断言写的是「整帧丢弃」(`getCalls.length === 0`),那正是本次刻意改掉的行为。改为断言**「不发生破坏性采纳」**(正文逐字符不变 + 未重绘 + `_serverRev` 未推进),即这些用例真正要保护的性质;NEUTER A 重指向改道块。**没有把它们删掉或调宽——守卫要的性质一条没少。**
 ### 2026-07-27 — Opus 5 稳定性攻坚:72h 量化 + 参数兼容性实测干净 + 熔断器提案实测否决 + 兄弟观测探针入库(owner「旗舰必须 100% 发挥,稳定优先于实时」;epic `pt_e14be5de174745ab`;唯一 commit `50e75211` 纯观测;SSE 七套件 **125/126**,唯一红 A/B 实证预存在)
 
 - **72h 量化(PG task_results + audit.log + error.log,非抽样):** opus-5 共 **285 任务**(模型 07-25 才上线):done 63.9%、error 0.7%、**interrupted 29.5%(最大异常面,看门狗/超时中止)**。fallback→kimi-k3 **97 次全部发生在 11:51 重启前**(旧 120s 故障预算 regime);**重启后零降级**——包括当天 14 时一场 **160 次 503** 的风暴(app.log 逐时计数实证),`TOFU_GATEWAY_OUTAGE_BUDGET_S=0` 按 owner 拍板工作正常。TTFT p50=24.2s / **p90=173.1s / p99=340.5s**(kimi-k3 p90 仅 35.8s,尾延迟 ~5×),FirstByteTimeout 全天仅 2 次——180s 看门狗几乎不误杀,压在 p90 之上的设计值成立。

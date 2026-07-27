@@ -279,6 +279,102 @@ def test_produce_video_search_gated():
 
 
 # ══════════════════════════════════════════════════════════
+#  produce_research reachability (R4 wiring)
+#
+#  The R4 capability shipped as an ISLAND: recipe + engine + runtime all
+#  existed and passed their unit tests, but nothing could reach them — no
+#  tool schema, no dispatch handler, no runtime discovery, no crash-resume
+#  call. These four tests pin each seam so a future refactor that drops one
+#  fails loudly instead of silently re-orphaning the feature.
+# ══════════════════════════════════════════════════════════
+
+def test_produce_research_reachable_and_search_gated():
+    """SEAM 1+2: the schema reaches the assembled tool list, un-project-gated
+    (same posture as produce_video/report) but search-gated — the ideation
+    screen is only meaningful against a real harvested corpus."""
+    from lib.tools.registry import assemble_tool_list
+    tools, _ = assemble_tool_list(_ctx(project=False, search=True))
+    names = [t['function']['name'] for t in tools]
+    assert 'produce_research' in names
+    # Appended AFTER the existing pair so the cache-stable prefix is untouched.
+    assert ([n for n in names if n.startswith('produce_')]
+            == ['produce_video', 'produce_report', 'produce_research'])
+    off, _ = assemble_tool_list(_ctx(project=False, search=False))
+    assert 'produce_research' not in {t['function']['name'] for t in off}
+
+
+def test_produce_research_handler_registered():
+    """SEAM 3: a schema with no handler is a phantom tool — the model would
+    call it and get 'unknown tool'. Pin the dispatch registration."""
+    from lib.tasks_pkg.executor import tool_registry
+    import lib.tasks_pkg.handlers  # noqa: F401 — fires the decorators
+    assert tool_registry.lookup('produce_research') is not None
+
+
+def test_produce_research_runtime_discovered_by_generic_tasks():
+    """SEAM 4: poll/abort ride /api/v1/tasks/*, which discovers runtimes by
+    their own .kind. Without this the job runs but is unpollable.
+
+    Asserts the runtime shape ``_registries()`` requires, rather than importing
+    routes (whose package init needs the full Quart app)."""
+    mod = __import__('lib.research.runtime', fromlist=['_research_runtime'])
+    rt = getattr(mod, '_research_runtime', None)
+    assert rt is not None and rt.kind == 'research'
+    assert all(hasattr(rt, a) for a in ('_lock', '_tasks', 'get', 'poll', 'abort'))
+    # The registry entry itself must name this module/attr pair.
+    import inspect
+    from routes.api_v1 import tasks as tasks_mod
+    assert "'lib.research.runtime', '_research_runtime'" in \
+        inspect.getsource(tasks_mod._registries)
+
+
+def test_produce_research_crash_resume_wired():
+    """SEAM 5: the resume sweep must be CALLED at startup, not merely defined
+    — otherwise a crashed job's harvested corpus is stranded on disk."""
+    import inspect
+    import server
+    src = inspect.getsource(server._start_background_workers)
+    assert 'resume_interrupted_research' in src
+
+
+def test_produce_research_handler_clamps_and_threads_args(monkeypatch):
+    """The handler is the arg-validation boundary: clamp n_ideas, require a
+    direction, and thread conv_id through so the job can post back."""
+    import lib.tasks_pkg.handlers.motion_video as hdl
+    import lib.research as research_pkg
+
+    captured = {}
+
+    def fake_produce(direction, **kw):
+        captured['direction'] = direction
+        captured.update(kw)
+        return {'task_id': 'research_fake1', 'deduped': False}
+
+    monkeypatch.setattr(research_pkg, 'produce_research', fake_produce)
+    monkeypatch.setattr(hdl, '_build_simple_meta', lambda *a, **k: {})
+    monkeypatch.setattr(hdl, '_finalize_tool_round', lambda *a, **k: None)
+
+    task = {'events': [], 'conv_id': 'convX'}
+    _, content, _ = hdl._handle_produce_research(
+        task, {'id': 'tc1'}, 'produce_research', 'tc1',
+        {'direction': 'KV cache compression', 'lang': 'zh', 'n_ideas': 99,
+         'seed_arxiv_ids': ['2312.00752']},
+        0, {'tool_calls': []}, cfg=None, project_path='', project_enabled=False)
+    result = json.loads(content)
+    assert result['ok'] and result['task_id'] == 'research_fake1'
+    assert result['poll'] == '/api/v1/tasks/research_fake1'
+    assert result['n_ideas'] == 12          # clamped from 99
+    assert captured['conv_id'] == 'convX'
+    assert captured['seed_arxiv_ids'] == ['2312.00752']
+
+    # An empty direction is rejected before any job is spawned.
+    _, content2, _ = hdl._handle_produce_research(
+        task, {'id': 't2'}, 'produce_research', 't2', {}, 0,
+        {'tool_calls': []}, cfg=None, project_path='', project_enabled=False)
+    assert json.loads(content2)['ok'] is False
+
+
+# ══════════════════════════════════════════════════════════
 #  engine job-manifest crash-resume helpers
 # ══════════════════════════════════════════════════════════
 

@@ -1,6 +1,8 @@
 # Tofu 自动科研系统设计稿(Auto-Research System)——「一句话方向 → 可投稿的论文雏形」
 
-> 状态:**设计稿 v1(待拍板)**。2026-07-26 落笔。
+> 状态:**R1–R4 已落地,R5–R7 仍为设计稿**。2026-07-26 落笔,2026-07-27 更新实施进度。
+> 已落地范围见 §6 表格的 ✅ 行;**「已落地」= 代码 + 单测 + 可达性接缝测试全绿**,
+> **不等于**「已用真实 LLM 跑通一次端到端」——后者尚未做,见 §6 末尾的诚实备注。
 > 作者视角:在完整盘点现有底盘后写成 —— 本稿的第一原则是**组合已有件,不造新轮子**。
 > 前置阅读:`docs/PRODUCTION_PIPELINE_DESIGN.md`(产出底盘/配方/知识包三层模型)、
 > `lib/paper/` 现有引擎(report / recommend / insight / citation_audit / terminology_audit)。
@@ -236,6 +238,54 @@
 最重要的是标出**没人占的高地**。而那道库内可查证闸,就是**核对地图上标的每支队伍确实在你的情报库里
 有档案** —— 地图上凭空多出一支查无此人的队伍,直接抹掉,免得 R3 拿它当真去规划。
 
+#### R2/R3 接缝修订(v2,2026-07-27 真跑暴露后拍板)——「库内校验闸 vs harvest 覆盖率」的三档接地
+
+> **真跑发现的张力**:上面 v1 的库内校验闸要求 `evidence` 的每个 id **已入库**(harvest 成功解析过)。
+> 但真跑实证:LLM 综述会引用**存在但未入库**的近邻(harvest 只入成功解析的篇,或综述提到库外相关工作)。
+> v1 把这些 gap 全丢弃 → 0 gaps → 链死。根因不是网络,是**「已入库」这个判据本身太强**。
+> 修订原则:放宽覆盖率**不能偷偷降低「基于真实读过的论文」这个地基**。
+
+**① evidence id 三档接地(取代 v1 的二元「在库/不在库」):** `_verify_against_library` 对每个
+`clusters[].papers` / `method_matrix[].paper` / `open_gaps[].evidence` 的 id 判定三档 —
+
+| 档 | 判定 | 处理 |
+|---|---|---|
+| **`library`**(最强) | 在 `paper_library`(按 `folder_id`/全库)查到 | 保留,是「真读过」的证据 |
+| **`grounded`**(中) | 不在库,但 `fetch_arxiv_title` 能确认真实存在 | 保留,标 `grounded`,**id 加进 `missing_ids`**(下轮 harvest 自动补——接上 R1 已有语义) |
+| **剥掉**(幻觉) | 既不在库、也接不上 | 从条目剥掉(维持 v1 行为) |
+
+一个 `open_gap` **只有 evidence 全部落到「剥掉」档(全幻觉)才丢弃**;有任一 `library` 或 `grounded`
+存活即保留。这样既不放过缝合怪的幻觉引用,又不因 harvest 没抓全而误杀真实空白。
+
+**② `low_confidence` 防后门(关键,防止放宽变成绕过 R3 地基的后门):** 一个 gap 若其 evidence 里
+**`library` 档为 0**(纯靠 `grounded` 撑着),标 `low_confidence: true` 并附
+`library_evidence_count` / `grounded_evidence_count`。语义:这个空白「基于我们**没真正读过**的论文」,
+R3 判新颖性时不能全信。
+
+**每个 gap 的新字段(schema v1 增补,向后兼容——旧读者忽略新键):**
+```jsonc
+{ "id": "gap_1", "gap": "...", "why_open": "...",
+  "evidence": ["2305.xxxxx", "2401.yyyyy"],      // 保留档(library + grounded)
+  "evidence_tiers": {"2305.xxxxx": "library", "2401.yyyyy": "grounded"},
+  "library_evidence_count": 1, "grounded_evidence_count": 1,
+  "low_confidence": false,                        // true 当 library_evidence_count == 0
+  "kind_hint": "methodology" }
+```
+
+**③ R3 消费 `low_confidence`(反 A+B 闸的地基保护):** `ideate.generate_ideas` 判一个 idea 时,
+若其 `linked_gap_id` 指向的 gap 是 `low_confidence`:
+- idea 的 rubric `value` 轴**扣一档**(该 gap 建立在未读论文上,「是否真解决真实空白」的置信度低);
+- 结果记 `linked_gap_low_confidence: true` + `补 harvest 建议`(用 gap 的 `missing_ids`),让 owner
+  可选择「补 harvest 后重判」而非直接采信。
+这条是硬约束:**放宽 survey 覆盖率的代价,由 R3 显式承担并标注,不静默传导。**
+
+**④ harvest 覆盖率补强(R1 侧,治本):** `harvest_arxiv_id` 对**瞬时**下载/解析失败**重试一次**
+(瞬时失败不该永久丢一篇);`_MIN_HARVEST_PAPERS` 与 `_DEFAULT_HARVEST_N` 拉开(默认 harvest_n
+提到能稳定拿到 ≥ 下限的量)。这样「grounded 但未入库」的比例从源头压低,`low_confidence` gap 变少。
+
+**零 LLM 纪律**:三档判定里 `library` 是纯 DB 查(零成本),`grounded` 复用 `fetch_arxiv_title`
+(已有重试+abs-page fallback);`low_confidence` 是纯计数。整条接缝**不新增一次 LLM 调用**。
+
 ---
 
 ### 阶段 4 — `ideate`:创新点发现 + 反「A+B」新颖性闸(智识核心)
@@ -412,10 +462,10 @@ report 的 upsert 写路径、PG/SQLite 桥、缓存读 —— **一行新 schem
 
 | 期 | 范围 | 验收(客观可查) | 依赖 |
 |---|---|---|---|
-| **R1 — harvest 原语** | 批量爬 + 逐篇 `parse_pdf` + 入 `paper_library`(parse-once 命中跳过) | 给 20 个 arxiv_id,首次全解析入库,二次运行**零重解析**(命中缓存);阅读模式能翻到这些库论文 | 无(纯用现有库) |
-| **R2 — survey 阶段** | 多篇 fan-in → 综述 markdown + 空白地图 JSON;citation_audit 接引用 | 给一个方向,产出综述,引用全部可解析(0 可疑);空白地图 JSON schema 合法 | R1 |
-| **R3 — ideate + 新颖性闸** | 创新点生成 + 四轴 rubric 打分 + 零 LLM 结构闸 + grounding | 一批 idea 里,故意塞的「A+B 缝合」样本被闸淘汰(NEUTER:摘掉 `why_not_AB`/`prior_art` 闸 → 缝合怪漏过,测试翻红) | R2 + insight_engine |
-| **R4 — 配方骨架上底盘** | 把 discover→…→ideate 串成 `lib/research/` 配方,骑 `ProductionRuntime`,崩溃续跑,`produce_research` 入口 | 崩溃后从未完成阶段续;已爬论文/已评分 idea 不重做;通用任务端点可 poll/abort | R1–R3 + `lib/production/` |
+| ✅ **R1 — harvest 原语** | 批量爬 + 逐篇 `parse_pdf` + 入 `paper_library`(parse-once 命中跳过) | 给 20 个 arxiv_id,首次全解析入库,二次运行**零重解析**(命中缓存);阅读模式能翻到这些库论文 | 无(纯用现有库) |
+| ✅ **R2 — survey 阶段** | 多篇 fan-in → 综述 markdown + 空白地图 JSON;citation_audit 接引用 | 给一个方向,产出综述,引用全部可解析(0 可疑);空白地图 JSON schema 合法 | R1 |
+| ✅ **R3 — ideate + 新颖性闸** | 创新点生成 + 四轴 rubric 打分 + 零 LLM 结构闸 + grounding | 一批 idea 里,故意塞的「A+B 缝合」样本被闸淘汰(NEUTER:摘掉 `why_not_AB`/`prior_art` 闸 → 缝合怪漏过,测试翻红) | R2 + insight_engine |
+| ✅ **R4 — 配方骨架上底盘** | 把 discover→…→ideate 串成 `lib/research/` 配方,骑 `ProductionRuntime`,崩溃续跑,`produce_research` 入口 | 崩溃后从未完成阶段续;已爬论文/已评分 idea 不重做;通用任务端点可 poll/abort | R1–R3 + `lib/production/` |
 | **R5 — figures 阶段** | matplotlib 样式表 + 数据图;HTML/SVG→Playwright 示意图;每图子 agent 自修降级 | 一份方案自动出 ≥3 张矢量图,单张失败降级不拖垮整篇;数据可追溯 | R4 |
 | **R6 — typeset + Overleaf 回环** | .tex 工程装配 + `compile_project` + 读日志自修 + `download_pdf`;bib 全接地 | 端到端:一个方向 → 出一份能编译的 LaTeX 工程 + PDF;无 dangling cite;refs.bib 0 编造 | R5 + Overleaf MCP |
 | **R7 — discover + 前端生产卡 + 知识包** | 趋势/机构选题阶段;气泡生产卡双投影;`research-director` 技能包 | 给一句方向,零人工干预跑完七阶段;进度可见、可介入、断线重放 | R4–R6 |
@@ -423,6 +473,24 @@ report 的 upsert 写路径、PG/SQLite 桥、缓存读 —— **一行新 schem
 **顺序理由**:R1(harvest)是所有阶段的燃料且完全独立,**先建库**;R3(反 A+B 闸)是智识核心且价值最高,
 早做早验证「这系统到底会不会造缝合怪」;后半段(figures/typeset)重工具、依赖前半段产物,靠后。
 discover 放最后是因为它最"锦上添花"—— 没有它用户手动给方向也能跑,有了它才「一句话出片」。
+
+### R1–R4 落地后的诚实备注(别把绿测试读成「能用」)
+
+**已证实的**:四阶段的代码路径、零 LLM 闸、schema 契约、崩溃续跑钩子均有单测覆盖(35 个用例);
+`produce_research` 的**四道可达性接缝**(工具 schema 进装配列表 / dispatch handler 已注册 / runtime 被
+通用任务端点发现 / 启动时调用崩溃续跑)各有一道守卫,且 **4 道均经 NEUTER 验证会真红**。
+
+**尚未证实的(下一步的真正门槛)**:
+- **未用真实 LLM + 真实网络跑通一次完整四阶段**。现有测试均为 stub/录回,证明的是「管道接对」而非
+  「产出质量」。尤其 R3 的核心主张——「反 A+B 闸真能淘汰缝合怪」——只在**构造的**缝合怪样本上
+  验证过,未在真实模型输出上验证。
+- **`IDEATE_GATE_THRESHOLD = 4.0` 是拍的,不是校准的**。需要一批真实跑出的 idea + 淘汰留档数据
+  才能定它(设计已把它做成单个常量就是为了这一天)。
+- **v2 修订的三档接地与 `low_confidence` 传导**已实现并有单测,但它本身是一次真跑暴露的问题的
+  修补——下一次真跑很可能暴露下一个。**真跑是唯一能发现这类问题的手段。**
+
+**所以 R5 之前应先做一次真实端到端跑**(一个真方向、真爬论文、真 LLM),拿真数据回答:闸的严格度
+对不对、成本多少、idea 能不能看。否则 R5/R6 是在一个未验证的地基上加盖。
 
 ---
 
@@ -454,7 +522,12 @@ discover 放最后是因为它最"锦上添花"—— 没有它用户手动给�
 3. **新颖性闸的严格度**:宁缺毋滥(高阈值,可能一个 idea 都不给)vs 多产但标注风险(低阈值)?
    —— 关系到用户体验,想听你的偏好。
 4. **图表美学基线**:有没有偏好的期刊/会议图风格模板(配色、字体)可作为 matplotlib 样式表的起点?
-5. **入口形态**:`produce_research(direction=)` 一个总入口,还是拆成 `survey` / `ideate` 等可单独调用的工具?
+5. ~~**入口形态**~~ —— **已定(R4 落地时拍板)**:一个总入口
+   `produce_research(direction=, lang=, n_ideas=, seed_arxiv_ids=, harvest_n=)`,与 `produce_video`/
+   `produce_report` 同构。**不拆成 `survey`/`ideate` 子工具**:两者共享同一个崩溃续跑 job 与
+   同一份 `open_gaps.json` 契约,拆开会把阶段间的 checkpoint 语义推给调用方(模型),而模型不应负责
+   编排阶段图。局部重跑的需求由底盘的**阶段级 checkpoint** 满足(同一 dedup key 重跑即续),
+   不需要额外的入口。
 
 ---
 

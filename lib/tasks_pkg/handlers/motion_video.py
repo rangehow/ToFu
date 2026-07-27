@@ -18,7 +18,9 @@ logger = get_logger(__name__)
 from lib.tasks_pkg.executor import _build_simple_meta, _finalize_tool_round
 from lib.tasks_pkg.executor import tool_registry
 from lib.tools.motion_video import MOTION_VIDEO_TOOL_NAMES
-from lib.tools.produce import PRODUCE_REPORT_TOOL_NAME, PRODUCE_VIDEO_TOOL_NAME
+from lib.tools.produce import (PRODUCE_REPORT_TOOL_NAME,
+                               PRODUCE_RESEARCH_TOOL_NAME,
+                               PRODUCE_VIDEO_TOOL_NAME)
 
 
 def _resolve(path: str, project_path: str | None) -> str:
@@ -319,6 +321,65 @@ def _handle_produce_report(task, tc, fn_name, tc_id, fn_args, rn,
     tool_content = _fmt(result)
     meta = _build_simple_meta(
         fn_name, tool_content, source='Produce', title='report',
+        snippet=tool_content.split('\n', 1)[0][:120] if tool_content else '',
+        badge=badge)
+    _finalize_tool_round(task, rn, round_entry, [meta])
+    return tc_id, tool_content, False
+
+
+@tool_registry.tool_set(
+    {PRODUCE_RESEARCH_TOOL_NAME},
+    category='video',
+    description='High-level direction → scored novel research ideas')
+def _handle_produce_research(task, tc, fn_name, tc_id, fn_args, rn,
+                             round_entry, cfg, project_path,
+                             project_enabled, all_tools=None):
+    """Handle produce_research: kick off a background direction→ideas job.
+
+    Same substrate posture as produce_report: the recipe owns harvest →
+    survey → ideate, ``lib.production.stages`` owns the checkpointed resume,
+    and the generic ``/api/v1/tasks/*`` endpoints own poll / stream / abort.
+    """
+    direction = str(fn_args.get('direction') or '').strip()
+    if not direction:
+        result = {'ok': False, 'detail': 'direction is required'}
+        badge = 'failed'
+    else:
+        try:
+            from lib.research import produce_research
+
+            lang = 'zh' if str(fn_args.get('lang') or 'en').strip() == 'zh' else 'en'
+            try:
+                n_ideas = int(fn_args.get('n_ideas') or 6)
+            except (TypeError, ValueError):
+                n_ideas = 6
+            n_ideas = max(3, min(n_ideas, 12))
+            seeds = fn_args.get('seed_arxiv_ids') or None
+            if seeds is not None and not isinstance(seeds, list):
+                seeds = None
+            conv_id = ''
+            if isinstance(task, dict):
+                conv_id = task.get('conv_id') or task.get('convId') or ''
+            started = produce_research(direction, lang=lang, n_ideas=n_ideas,
+                                       conv_id=conv_id, seed_arxiv_ids=seeds)
+            tid = started['task_id']
+            result = {'ok': True, 'task_id': tid, 'direction': direction,
+                      'lang': lang, 'n_ideas': n_ideas,
+                      'deduped': started.get('deduped', False),
+                      'poll': f'/api/v1/tasks/{tid}',
+                      'note': 'Research is running in the background: the '
+                              'literature corpus is harvested and surveyed '
+                              'first, then ideas are scored against it.'}
+            badge = 'joined' if started.get('deduped') else 'started'
+        except Exception as e:
+            logger.error('[Produce] failed to start research job: %s', e,
+                         exc_info=True)
+            result = {'ok': False, 'detail': str(e)}
+            badge = 'failed'
+
+    tool_content = _fmt(result)
+    meta = _build_simple_meta(
+        fn_name, tool_content, source='Produce', title='research',
         snippet=tool_content.split('\n', 1)[0][:120] if tool_content else '',
         badge=badge)
     _finalize_tool_round(task, rn, round_entry, [meta])

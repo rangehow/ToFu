@@ -1,6 +1,19 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-28 — 「切标签页后计时器归零」复查:**用户报的现象是真的,但我开工时的归因(没有持久化)是错的** —— 真因是线上进程比修复本身老 6h55m;顺带挖出两个重启后依然存在的真缺陷(commits `47445079` + `a45913bb`;新增 4 后端 + 2 前端断言,**NEUTER×5 全咬**,相邻环 **105/105**,干净 committed worktree **33/33**)
+
+- **★ 本轮最值钱的一条:三个静态信号全绿,而用户看到的仍是旧行为。** 代码在 HEAD、守卫 6/6 绿、`grep` 服务中的 bundle 符号 **8/8 齐全** —— 我据此差点回答「已修复,你刷新一下」。实测进程表才发现:**服务 pid 101752 启动于 07-27 13:46:23,而修复 `a41a29e6` 提交于 20:41:19(后端半 `b3261241` 20:16)**。跑着的那个进程从内存里服务着修复前的代码。这就是 charter 的「merged ≠ live」,只是这次栽在**我自己的验证口径**上:`pytest` 导入磁盘上的树,用户对话的是启动时加载了树的进程,**两者可以相差任意久**。
+- **实测确认持久化机制本身是对的**(所以不能按票面去「加持久化」):真 motion 任务驱动 `lookup`/`poll` 两条端点都下发 `createdAt/updatedAt`;jsdom 里切走再切回读数 `已用 9:00`,连切 3 次不退化。内存重挂载路径实测 **600s elapsed / 180s quiet**。
+- **★ 但用户的场景恰好命中一个真洞:`_lookup_paper_video_on_disk` 三个返回点一个都不带时钟。** 而它正是**服务重启后的重挂载路径** —— 且**没有下游自愈**:任务已不在内存,客户端首次 poll 直接 404,lookup 说什么就是整轮显示什么。于是「重启 → 计时器永久从 0 起算」,与用户描述高度吻合。修法用**真实证据**:`job.json` 的 `created_at`(`motion_video.engine._MANIFEST_FIELDS` 白名单里本来就有它,存在的理由正是 resume 会铸新 task id)+ mtime 作 liveness。
+- **拿不到就不发,绝不编。** 缺字段前端退回本地铸造(轻度退化),编一个假值会渲染出 1970 或 58000 年(**比没有更糟**)。补集守卫钉住这一点:manifest 抹掉 `created_at` → 字段必须**缺席**;NEUTER 把它改成 `else 0` → 精确红。**这条不写,「无脑总是发个数」也能让另外三条全绿。**
+- **第二个真缺陷:poll 采纳时钟后只重画进度行,活动行要等下一次 1s tick。** 实测 state 已 480s 而 DOM 仍读 `0:00`。平时是一帧闪烁,但在**无时钟的重挂载**上它就是整个修复被压住 —— 因为那条路径唯一的时钟来源就是 poll。video + podcast 同款,两边同时改。
+- **★ 守卫为什么绿着:扫描面残缺(charter 该纪律的又一例,这次我按纪律先打印了清单)。** 实测既有 **9/9 个 lookup fixture 全部带时钟**,**0 个**覆盖不带时钟的形状 —— 而不带时钟恰恰是重启后真实用户拿到的那一种。补 Case 5:喂无时钟 lookup + **主动杀掉 ticker**,于是只有 poll 能画出那个数,否则读到 `0:00`。
+- **★ 一个兄弟 NEUTER 因我的修复而变成「断言一件假事」,该改的是断言不是产品。** `test_NEUTER_liveness_ticker_survives_polling` 原断言 `FAIL liveness_elapsed_advances`;我让 poll 重画后,**ticker 死了文本也不再冻结**(只从 1s 粒度降级为每 poll 一次),于是该断言不再成立。实测输出恰好是 `FAIL liveness_ticker_survives_polling` / `PASS liveness_elapsed_advances` —— 改指向仍然为真的那条探针(ticker 活性),并在 docstring 写明为什么换。**判据仍是那句:守卫红了先问「它报的事实是否为真」。**
+- **配套 `tests/_acceptance_paper_media_clocks.py`(镜像 `_acceptance_runaway_guards.py`)**:三段 —— ①磁盘代码带修复 ②**服务中的 bundle** 带前端半(bundle 陈旧则即使重启也照发旧 JS)③**线上进程启动时间晚于每个必需 commit**。实测**正确报 FAIL** 并点名 pid 101752 早于三个 commit 6.5h/6.9h/17.1h。退出码 0/1/**2(无服务=测不出,绝不静默算过)**。以后「重启有没有生效」是**跑一个脚本**,不是等事故复现。
+- **诚实分账:** 我**没有**重启服务(owner 的动作)。故本轮结论分两类 —— 机检已证:磁盘代码、bundle、33 条守卫、5 发 NEUTER;**必须等重启后才算实证**:用户面板上的真实读数。另:podcast 的 `interrupted` 分支**故意不补时钟** —— 实测它渲染终态「重新生成」卡,`paper-media-activity` 只存在于 `generating`,补了就是给一个不存在的秒表喂数据。
+
+
 ### 2026-07-28 — 交易页优化第二批:守卫从「一个文件」泛化到「全部页面」+ 首屏改为按持仓分流 + CSS 死规则实测(tofu-trade `647067d` / `a1873a0`;新套件 4+5,**NEUTER×7 全咬**,相邻环 **30/30**,全环 15F/**109P** vs 干净 HEAD 15F/100P)
 
 - **★ 守卫泛化时抓到一个只有实测才会发现的坑:`os.walk` 会让这条守卫永久假红。** 本仓 `.tofu_trash/` 里躺着**两份** `trading.html` 恢复快照,其中一份仍带修复前的 3 条绝对路径 —— 一个按目录遍历的守卫会扫到 3 个文件、并在一个**根本不发布**的文件上红,且无法通过修任何产品代码变绿。改用 `git ls-files`(同时也是 charter 定的口径:FUSE 上 `os.walk` 会超时)。**判据:扫描类守卫的输入集合必须是「会被发布的东西」,不是「磁盘上长得像的东西」。**

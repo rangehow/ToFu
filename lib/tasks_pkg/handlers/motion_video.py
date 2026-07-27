@@ -233,8 +233,11 @@ def _handle_produce_video(task, tc, fn_name, tc_id, fn_args, rn,
             job['lang'] = lang
             job['max_scenes'] = max_scenes
             job['kind'] = 'topic'
-            visual = str(fn_args.get('visual_quality') or 'template').strip()
-            job['scene_author'] = (visual == 'authored')
+            # 默认精品 (owner 2026-07-27): the template path cannot pass the
+            # renderer's own lint, so it must not be what a user gets by
+            # default. 'template' stays reachable for explicit speed-over-looks.
+            visual = str(fn_args.get('visual_quality') or 'authored').strip()
+            job['scene_author'] = (visual != 'template')
             _motion_runtime.spawn(job_id, run_topic_motion_task, job)
             logger.info('[Produce] video job %s started topic=%r lang=%s '
                         'visual=%s', job_id, topic[:60], lang, visual)
@@ -245,16 +248,14 @@ def _handle_produce_video(task, tc, fn_name, tc_id, fn_args, rn,
             if lang == 'zh':
                 quality_hint = (
                     '本次为精品画质(每镜定制构图,约 2× 耗时)。'
-                    if visual == 'authored' else
-                    '本次为标准画质(模板构图)。回复「精品重制」可切换精品模式'
-                    '(每镜定制构图,约 2× 耗时)。')
+                    if visual != 'template' else
+                    '本次为标准画质(模板构图,单行文字卡),仅在你要求提速时使用。')
             else:
                 quality_hint = (
                     'This run uses boutique quality (per-scene bespoke '
-                    'composition, ~2× time).' if visual == 'authored' else
-                    'This run uses standard quality (template composition). '
-                    'Reply "remake in boutique quality" for per-scene bespoke '
-                    'composition (~2× time).')
+                    'composition, ~2× time).' if visual != 'template' else
+                    'This run uses the fast template card (a single centred '
+                    'line) — speed over looks, as requested.')
             result = {'ok': True, 'task_id': job_id, 'topic': topic,
                       'lang': lang, 'aspect': aspect,
                       'visual_quality': visual,

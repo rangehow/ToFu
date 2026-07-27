@@ -101,10 +101,13 @@ def _scene_gate_findings(mv, scene_dir: str, scene_id: str, *,
 
     ADVISORY by design: a finding means the frame is UGLY, not unrenderable, so
     the caller records it on the quality axis rather than aborting a film that
-    would still play. ``env_missing`` / ``aborted`` / ``timeout`` are not
-    composition defects and return empty.
+    would still play. ``env_missing`` / ``aborted`` / ``timeout`` / ``chrome``
+    are INFRASTRUCTURE outcomes, not composition defects, and return empty --
+    measured: a scene whose composition re-checks clean was rejected once
+    because Chrome hit memory pressure on that attempt, which charged an
+    infra flake to the author and degraded a good scene to the plain template.
 
-    Never raises — a gate crash must not take down a job.
+    Never raises -- a gate crash must not take down a job.
     """
     try:
         res = mv.check_project(scene_dir, abort_event=abort_event)
@@ -114,7 +117,7 @@ def _scene_gate_findings(mv, scene_dir: str, scene_id: str, *,
         return []
     if res.get('ok'):
         return []
-    if res.get('category') in ('env_missing', 'aborted', 'timeout'):
+    if res.get('category') in ('env_missing', 'aborted', 'timeout', 'chrome'):
         logger.info('[MotionVideo] scene %s real gates skipped (%s)',
                     scene_id, res.get('category'))
         return []
@@ -654,9 +657,21 @@ def run_motion_task(task: dict) -> None:
                 f'{len(scene_gate_issues)} of {total} scene(s) failed the '
                 f'renderer quality gates '
                 f'({", ".join(sorted(scene_gate_issues))}): ' + '; '.join(_first))
+        # 整片降级 (owner 2026-07-27): ONE scene falling back to the template
+        # is the designed local degrade, but when authoring was requested and
+        # EVERY scene fell back, the film the user asked for was not made —
+        # they get the plain card deck that prompted this work. That is a
+        # failed artifact, so it must not settle as a clean success.
+        _all_fell_back = bool(authoring and total and authored == 0)
+        if _all_fell_back:
+            _reasons.append(
+                f'boutique quality was requested but all {total} scene(s) fell '
+                f'back to the plain template card — the film shipped, but not '
+                f'at the quality asked for')
         _motion_runtime.finish(
             task_id, result=result,
-            degraded=bool(degraded_narration or scene_gate_issues),
+            degraded=bool(degraded_narration or scene_gate_issues
+                          or _all_fell_back),
             degraded_reason=' | '.join(_reasons))
         logger.info('[MotionVideo] task %s done: %s (%.2fs, %d scenes, '
                     'narrated=%s)', task_id, final_path, result['duration'],

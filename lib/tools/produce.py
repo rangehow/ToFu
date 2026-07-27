@@ -68,14 +68,17 @@ PRODUCE_VIDEO_TOOL = {
                 "visual_quality": {
                     "type": "string",
                     "enum": ["template", "authored"],
-                    "description": "'template' (default) renders each scene with "
-                                   "the fast zero-LLM kinetic-type card. "
-                                   "'authored' gives every scene its own small "
-                                   "agent that writes a bespoke composition — "
-                                   "much better looking, but costs one agent "
-                                   "loop per scene and takes longer. A scene "
-                                   "whose authoring fails falls back to the "
-                                   "template, so the film always completes."
+                    "description": "'authored' (DEFAULT) gives every scene its "
+                                   "own small agent that writes a bespoke "
+                                   "composition with real typographic "
+                                   "hierarchy, staggered entrances and "
+                                   "supporting graphics. 'template' is the "
+                                   "fast zero-LLM fallback card (one centred "
+                                   "line on a gradient) — pass it only when "
+                                   "the user explicitly wants speed over "
+                                   "looks. A scene whose authoring fails "
+                                   "falls back to the template, so the film "
+                                   "always completes."
                 }
             },
             "required": ["topic"],

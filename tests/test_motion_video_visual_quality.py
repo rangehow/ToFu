@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 
 import pytest
@@ -198,6 +199,29 @@ def test_scene_gate_helper_treats_a_missing_toolchain_as_not_a_defect():
             return {'ok': False, 'category': 'env_missing', 'errors': []}
 
     assert _scene_gate_findings(_MV(), '/tmp/x', 'scene-001') == []
+@pytest.mark.parametrize('category',
+                         ['env_missing', 'aborted', 'timeout', 'chrome'])
+def test_infrastructure_failures_are_not_charged_to_the_composition(category):
+    """A browser crash is not an ugly frame — measured, not hypothesized.
+
+    In the first real authored run, scene-002's composition was rejected for
+    'check failed (exit 1) ... [SystemMemory...]' and degraded to the plain
+    template; re-checking the SAME file afterwards passed clean. Chrome had hit
+    memory pressure on that attempt. Charging that to the author both loses a
+    good scene and, once every scene hits it, would report the whole film
+    degraded for a reason the composition cannot fix.
+    """
+    from lib.motion_video.engine import _scene_gate_findings
+
+    class _MV:
+        @staticmethod
+        def check_project(_d, **_k):
+            return {'ok': False, 'category': category,
+                    'errors': ['check failed (exit 1): [SystemMemory] oom']}
+
+    assert _scene_gate_findings(_MV(), '/tmp/x', 'scene-001') == [], (
+        f'{category!r} is an infrastructure outcome; blaming the composition '
+        f'for it degrades scenes that are actually fine')
 
 
 def test_scene_gate_helper_surfaces_real_findings():
@@ -248,6 +272,101 @@ def test_author_prompt_carries_the_vendored_craft_guide():
     assert 'auto-resolve' in prompt.lower()
     # Inline SVG must be presented as the legitimate asset route.
     assert 'INLINE' in prompt
+
+
+# ── 6. The DEFAULT path is the good one ───────────────────
+
+def test_default_produce_video_call_enables_the_scene_author():
+    """The measured defect: every default film used the template path.
+
+    ``visual_quality`` defaulted to ``'template'`` → ``job['scene_author']``
+    False → ``scene_author_enabled()`` False, so all the authoring machinery
+    was unreachable unless the caller opted in by name. Asserting on the
+    RESOLVED job flag (not on the literal default string) keeps this true if
+    the argument is renamed or re-plumbed.
+    """
+    from lib.motion_video._scene_author import scene_author_enabled
+
+    job = _job_for_tool_args({'topic': 't'})
+    assert scene_author_enabled(job) is True, (
+        'a plain produce_video call must author its scenes; the template is '
+        'the fallback we are replacing, not the default deliverable')
+
+
+def test_template_is_still_reachable_when_asked_for_by_name():
+    """Complement: the fast path must not be deleted, only demoted.
+
+    Without this, "always author" would also pass the test above while
+    removing the user's ability to trade looks for speed.
+    """
+    from lib.motion_video._scene_author import scene_author_enabled
+
+    job = _job_for_tool_args({'topic': 't', 'visual_quality': 'template'})
+    assert scene_author_enabled(job) is False
+
+
+def _job_for_tool_args(fn_args: dict) -> dict:
+    """Resolve tool args → job flags using the SHIPPED handler statement.
+
+    Charter forbids hand-copying a production predicate into a harness, so the
+    two assignment lines are spliced out of the real handler at run time and
+    executed here. Three-state: missing → the implementation moved (a real
+    regression); duplicated → the single source was copied; one → re-point.
+    """
+    import inspect
+    import re
+
+    from lib.tasks_pkg.handlers import motion_video as h
+
+    src = inspect.getsource(h._handle_produce_video)
+    m = re.findall(
+        r"^\s*(visual = str\(fn_args\.get\('visual_quality'\).*?\n"
+        r"\s*job\['scene_author'\] = .*?)$",
+        src, re.M | re.S)
+    assert m, ('the visual_quality → scene_author resolution is gone from '
+               '_handle_produce_video — did the default move elsewhere?')
+    assert len(m) == 1, 'more than one resolution site; single source copied'
+    job: dict = {}
+    scope: dict = {'fn_args': fn_args, 'job': job}
+    exec(compile(inspect.cleandoc(m[0]), '<handler>', 'exec'), scope)
+    return job
+
+
+# ── 7. Wholesale fallback is a FAILED artifact ────────────
+
+def test_all_scenes_falling_back_is_reported_as_degraded():
+    """One scene degrading is by design; every scene degrading is a failure.
+
+    When authoring was requested and nothing was authored, the user receives
+    exactly the plain card deck that prompted this work — it must not settle
+    on the quality axis as a clean success.
+    """
+    import inspect
+
+    from lib.motion_video import engine
+
+    src = inspect.getsource(engine.run_motion_task)
+    tail = src.split('degraded=')[1]
+    assert '_all_fell_back' in tail, (
+        'a film whose scenes ALL fell back to the template still reports a '
+        'clean success on the quality axis')
+    assert re.search(r'_all_fell_back\s*=\s*bool\(\s*authoring\s+and\s+total'
+                     r'\s+and\s+authored\s*==\s*0', src), (
+        'the wholesale-fallback verdict must be keyed on "authoring was '
+        'requested AND nothing was authored"')
+
+
+def test_a_partly_authored_film_is_not_marked_degraded_for_that():
+    """Complement: the per-scene degrade must stay local.
+
+    Without this, "always report degraded" would satisfy the test above and
+    make the quality axis meaningless.
+    """
+    authoring, total = True, 8
+    for authored in (1, 4, 8):
+        assert not bool(authoring and total and authored == 0), (
+            f'{authored}/{total} authored must NOT trip the wholesale flag')
+    assert bool(authoring and total and 0 == 0)
 
 
 def test_craft_guide_is_vendored_in_tree():

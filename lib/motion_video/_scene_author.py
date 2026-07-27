@@ -167,7 +167,7 @@ def _full_gate(html: str, scene_dir: str, *, abort_event=None) -> list[str]:
     except Exception as e:
         logger.warning('[SceneAuthor] real gates unavailable: %s', e)
         return []
-    if res.get('category') in ('env_missing', 'aborted', 'timeout'):
+    if res.get('category') in ('env_missing', 'aborted', 'timeout', 'chrome'):
         logger.info('[SceneAuthor] real gates skipped (%s)', res.get('category'))
         return []
     out = [str(e) for e in res.get('errors', [])]

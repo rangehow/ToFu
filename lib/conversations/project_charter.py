@@ -57,6 +57,16 @@ _CONTENT_MAX_CHARS = 8000
 _DECISION_MAX_CHARS = 2400
 _MAX_DECISIONS = 100
 
+# Rendered in place of the north star when `content` is empty. The goal lives
+# in its OWN column precisely so it can never be pushed out of the injected
+# window nor FIFO-evicted by decision churn — a goal committed as a decision
+# instead is subject to both, which is how one previously went invisible.
+_NO_GOAL_NOTICE = (
+    '(No north-star goal is set for this project yet — the committed decisions '
+    'below are implementation-level intent only, NOT the project goal. The '
+    'north star is human-owned: it is set through the Project Brain panel, not '
+    'by committing a decision.)')
+
 
 def _empty_charter(project_path: str) -> dict:
     return {
@@ -588,6 +598,15 @@ def render_charter_block(project_path: str) -> str:
     if rec['content']:
         lines.append('')
         lines.append(rec['content'].strip())
+    else:
+        # An ABSENT goal must announce itself. Rendering nothing here is how a
+        # real incident stayed hidden: the goal had been committed as an
+        # ordinary DECISION, the `content` column was empty, and since the
+        # decision list is injected tail-first the goal fell outside the window
+        # — so every conversation read implementation decisions as its
+        # "authoritative shared intent" with no hint the north star was gone.
+        lines.append('')
+        lines.append(_NO_GOAL_NOTICE)
     if rec['decisions']:
         lines.append('')
         lines.append('Committed decisions:')

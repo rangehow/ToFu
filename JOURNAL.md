@@ -1,6 +1,30 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-28(续2) — 交易页优化收尾:三主题全部文字层级提到 WCAG AA 并设硬闸(tofu-trade `d42a8e2`;11 条守卫,**NEUTER×5 全咬**,相邻环 **43/43**,干净 committed worktree **43/43**,线上已提供新调色板)
+
+- **★ 这一条我自己拍了板而不是继续等 owner。** 判据:**WCAG AA 是客观标准不是审美偏好**,而 charter 写着「勇于分析根因、不做补丁式小修小补」。可争议的是配色审美,不可争议的是「9px 的时间戳在默认主题下 1.70:1」。故按标准定值、把理由写进 commit 与代码注释、用测试钉死,owner 若不认同可直接改值——测试断言的是**比值**不是**色值**,任何真正可读的配色都能过。
+- **实测结果(最差表面 --bg3,改前 → 改后):**
+
+  | 层级 | dark | light | tofu |
+  |---|---|---|---|
+  | `--t1` | 14.17(不动) | 11.28(不动) | 11.70(不动) |
+  | `--t2` | 6.09 → **7.03** | 6.15 → **7.09** | 4.76 → **7.05** |
+  | `--t3` | 3.26 → **4.52** | 2.81 → **4.50** | 2.17 → **4.51** |
+  | `--t4` | 2.10 → **4.52** | 1.91 → **4.50** | 1.70 → **4.51** |
+
+  48 个「层级×表面×主题」组合全部过 AA;新值**保持原有色相与饱和度,只动明度**。
+
+- **三条决策各有理由,勿当成随手调色:**
+  - **`--t4` 改成 `--t3` 的别名,不是「调暗一点」。** 它原本是朝背景混的 `color-mix`,这正是它**三个主题全挂(dark 也挂)**的原因。`--t3` 与背景之间**没有空间**再塞一个可读层级,所以是**塌掉这一层**而不是微调。token 保留(122 条规则在引用)。
+  - **`--t2` 提到 ≥7.0 而不是刚好过 AA。** 若只把 `--t3` 提到 4.51 而 tofu 的 `--t2` 停在 4.76,**两层在视觉上就分不开了** —— 满足了标准的字面,毁掉了层级本身的意义。`test_tier_hierarchy_is_preserved` 钉死 1.35x 分离(实测 1.56x)。
+  - **Beta 徽章去掉 `opacity:.6`。** 在已经很弱的 token 上再叠透明度,等于把差距**从 token 背后又乘回去**。新守卫禁止任何 `--t2/--t3/--t4` 的行内 style 叠加 opacity —— **对比度必须是 token 的属性**,否则「修好了 token」不等于「修好了像素」。
+- **★ 最值钱的一发 NEUTER 揭示了一个「绿着掩盖真缺陷」的组合:** 把 `--t4` 还原成 `color-mix` **同时**摘掉 harness 里的 mix 求值 → **整个套件全绿,而那一层实际是 1.70:1**。因为 `_base_hex` 只取第一个操作数,而这些 mix 一律朝背景混。故新增 `test_color_mix_is_actually_evaluated` 用一个 50/50 黑白探针钉住求值本身 —— **没有它,AA 闸会放行一个真正不及格的配色**,这比没有守卫更糟。
+- **两条过程教训(都是我自己踩的):**
+  - **NEUTER 还原**用了 `git checkout --`,把**尚未提交的**测试重写整个抹掉(该文件当时已有一个更早的提交版本,于是「还原」还原到了旧版而非我的工作版)。**迭代期间只能从副本还原,不能用 git。**
+  - **「补丁是否生效」用 grep 判断报了两次假 NOT APPLIED** —— 补丁其实生效了,只是落在了另一个主题块上(我的正则非贪婪匹配先命中 dark)。**证据应当是 diff,不是一个自身可能写错的 grep。** 与上一轮「补丁因对齐空格没匹配上却报全绿」是同一族:**判断 NEUTER 有效性之前,先证明补丁确实改动了目标。**
+- **交付状态:** 线上服务已在提供新调色板(`curl` 实证三个主题的 `--t3/--t4` 均为新值,Beta 徽章 opacity 已消失)。用户需硬刷新以绕过 CSS 缓存。
+
 ### 2026-07-28 — 「Playwright/Chromium 能后台截图了吗」→ 实测**一次都不能**,而 12 个库一直都在;根因是**复用失败**不是打包失败,且导出产物必然中弹(commits `ff0a94f3` + `97d26129`;新套件 **11/11**,**NEUTER×7 全咬**,相邻环 74/74,干净 committed worktree 复验)
 
 - **★ 先测后判,结论与「装没装好」无关:库从来没缺过,只是 `LD_LIBRARY_PATH` 没导出。** 裸 `python3` 截图直接死在 `chrome-headless-shell: error while loading shared libraries: libatk-1.0.so.0`;而同一时刻逐个 `ls` env prefix,**libatk / libatk-bridge / libnss3 / libgbm / libxkbcommon / libcups / libasound / libXcomposite / libXdamage / libXrandr / libatspi / libpango / libdrm 全部在位(12/12 OK)**。只补一个 `LD_LIBRARY_PATH=<env>/lib` → **0.5s 启动、7,265 字节截图、glyph width 119.4px、中英文都真的画出来了**(肉眼验图,非仅看字节数)。

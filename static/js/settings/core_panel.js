@@ -163,14 +163,12 @@ function openSettings() {
   if (langSel) langSel.value = typeof _i18nLang !== 'undefined' ? _i18nLang : 'zh';
   if (typeof _syncLangPicker === 'function') _syncLangPicker(typeof _i18nLang !== 'undefined' ? _i18nLang : 'zh');
 
-  // Trading module toggle
+  // Trading module toggle. No restart hint: the flag is enforced live by the
+  // plugin (request-time guard + per-pass check in its background workers), so
+  // a flip takes effect immediately — see tofu_trading/gate.py.
   var tradingCb = document.getElementById('settingTradingEnabled');
   if (tradingCb) {
     tradingCb.checked = !!(typeof _featureFlags !== 'undefined' && _featureFlags.trading_enabled);
-    tradingCb.onchange = function() {
-      document.getElementById('tradingRestartHint').style.display =
-        (this.checked !== !!(typeof _featureFlags !== 'undefined' && _featureFlags.trading_enabled)) ? 'block' : 'none';
-    };
   }
 
   // PPTX translate module toggle
@@ -233,6 +231,12 @@ function openSettings() {
   var verEl = document.getElementById('settingsVersion');
   Api.health.info().then(function(d){
     if (verEl && d && d.version) verEl.textContent = 'v' + d.version;
+    // Mirror the version into the About/Update card. The "New" pill is
+    // rendered by update.js's own helper so the availability state has a
+    // single source of truth (_updateState) rather than being re-derived here.
+    var updVer = document.getElementById('settingsUpdateVersion');
+    if (updVer && d && d.version) updVer.textContent = t('settings.updateCurrent', { version: d.version });
+    if (typeof _renderSettingsUpdatePill === 'function') _renderSettingsUpdatePill();
     var mcEl = document.getElementById('settingsMobileClient');
     if (mcEl) {
       var url = d && d.mobile_client_url;

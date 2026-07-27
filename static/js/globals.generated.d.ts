@@ -127,6 +127,7 @@ declare var TOFU_CONV_WINDOW: any;   // optional operator override read at runti
 declare var _CONV_VERIFY_RETRY_DELAYS: any;   // test seam: a jsdom harness may shorten the verify backoff via this override
 declare var __I18N_PACK_URLS__: any;   // injected by routes/common.py:559 as an inline <script> in the page shell
 declare var _applyDebugModeVisibility: any;   // defined inline in index.html:2068 (loadFeatureFlags block)
+declare var _applyTradingVisibility: any;   // defined inline in index.html next to _applyDebugModeVisibility; shows/hides the optional trading entry from the feature flag
 declare var _waitForImageProcessing: any;   // defined in the deferred upload bundle; every call site is typeof-guarded
 declare var _withInstantScroll: any;   // defined inline in index.html (scroll-behaviour helper)
 
@@ -404,6 +405,7 @@ interface Window {
   _CONV_VERIFY_RETRY_DELAYS: any;
   __I18N_PACK_URLS__: any;
   _applyDebugModeVisibility: any;
+  _applyTradingVisibility: any;
   _waitForImageProcessing: any;
   _withInstantScroll: any;
 }

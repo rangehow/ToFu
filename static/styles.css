@@ -3843,6 +3843,103 @@ input.settings-mono {
 }
 
 /* ══════════════════════════════════════
+   About & Updates card (Settings › General)
+   The update entry point moved here from the topbar — checking for updates
+   is a rare, deliberate action. Built from the same primitives as
+   .settings-toggle-row (white card, hard ink border, offset shadow, lift on
+   hover) so it reads as a peer of the toggle rows rather than a new idiom.
+   ══════════════════════════════════════ */
+.stg-update-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  background: var(--s-white);
+  border: 1.5px solid var(--s-ink);
+  box-shadow: var(--s-shadow-xs);
+  transition: transform 0.1s, box-shadow 0.1s;
+}
+.stg-update-row:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0 var(--s-ink);
+}
+.stg-update-info {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  min-width: 0;
+}
+.stg-update-icon {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--s-ink);
+  background: var(--s-skin);
+  border: 1.5px solid var(--s-ink);
+  border-radius: var(--s-radius);
+}
+.stg-update-text { min-width: 0; }
+/* Version sits on its own line so a long description never collides with it. */
+.stg-update-version {
+  display: block;
+  margin-top: 2px;
+  font-weight: 700;
+  color: var(--s-ink);
+  opacity: 0.75;
+}
+.stg-update-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  height: 34px;
+  padding: 0 16px;
+  font-size: 11px;
+  font-weight: 900;
+  font-family: inherit;
+  color: var(--s-ink);
+  background: var(--s-gold);
+  border: var(--s-border);
+  border-radius: var(--s-radius);
+  box-shadow: var(--s-shadow-xs);
+  cursor: pointer;
+  transition: transform 0.1s, box-shadow 0.1s;
+}
+.stg-update-btn:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0 var(--s-ink);
+}
+.stg-update-btn:active {
+  transform: translate(1px, 1px);
+  box-shadow: 1px 1px 0 var(--s-ink);
+}
+/* "New" pill — shown only when update.js found a newer release. */
+.stg-update-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--s-ink);
+  color: var(--s-white);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  line-height: 1;
+}
+/* Narrow panes: stack so the button keeps its full label instead of
+   squeezing the description to a sliver. */
+@media (max-width: 560px) {
+  .stg-update-row { flex-direction: column; align-items: stretch; }
+  .stg-update-btn { justify-content: center; }
+}
+
+/* ══════════════════════════════════════
    Toggle Switch — brutalist square track
    ══════════════════════════════════════ */
 .stg-toggle { cursor: pointer; display: flex; align-items: center; flex-shrink: 0; }

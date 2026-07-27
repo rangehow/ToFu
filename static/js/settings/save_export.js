@@ -82,10 +82,12 @@ function saveSettings() {
         if (data && data.ok) {
           debugLog('Trading module ' + (newVal ? 'enabled' : 'disabled') + ' — applied', 'success');
           if (typeof _featureFlags !== 'undefined') _featureFlags.trading_enabled = newVal;
-          // Server tells us whether the toggle takes effect now or only after
-          // a restart (blueprint registration is import-time — see A14).
-          var hint = document.getElementById('tradingRestartHint');
-          if (hint) hint.style.display = data.needs_restart ? 'block' : 'none';
+          // Show/hide the topbar entry immediately. The backend enforces the
+          // same flag per request and in its background workers, so this is
+          // presentation only — nothing here is what stops the module.
+          if (typeof window._applyTradingVisibility === 'function') {
+            window._applyTradingVisibility();
+          }
         }
       }).catch(function(e) { debugLog('Feature flag save failed: ' + e.message, 'error'); });
     }

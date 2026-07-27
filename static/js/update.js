@@ -44,6 +44,18 @@ function _renderUpdateBadge() {
   } else {
     btn.title = t('update.checkTitle');
   }
+  _renderSettingsUpdatePill();
+}
+
+/** Mirror the "update available" state onto the Settings › General card.
+ *  The update entry point now lives there (the topbar button is a hidden
+ *  stub), so the pill must follow the same state rather than being computed
+ *  a second time — one source of truth, two surfaces. Safe to call before
+ *  the settings panel is in the DOM; it simply no-ops. */
+function _renderSettingsUpdatePill() {
+  const pill = document.getElementById('settingsUpdatePill');
+  if (!pill) return;
+  pill.style.display = (_updateState && _updateState.update_available) ? '' : 'none';
 }
 
 /** Open the update dialog. Re-checks live so the dialog is never stale. */

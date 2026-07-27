@@ -81,6 +81,9 @@ _EXTERNAL_GLOBALS = {
         'injected by routes/common.py:559 as an inline <script> in the page shell',
     '_applyDebugModeVisibility':
         'defined inline in index.html:2068 (loadFeatureFlags block)',
+    '_applyTradingVisibility':
+        'defined inline in index.html next to _applyDebugModeVisibility; '
+        'shows/hides the optional trading entry from the feature flag',
     '_withInstantScroll':
         'defined inline in index.html (scroll-behaviour helper)',
     'TOFU_CONV_WINDOW':

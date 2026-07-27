@@ -192,7 +192,7 @@ lib/                   — Core business logic
                          2026-07, epic pt_229606ca): registry (enumerate /
                          uninstall), injection (the always-visible
                          <available_skills> index, spliced as its own cache
-                         block by system_context/_inject.py), activate
+                         block by `lib/tasks_pkg/system_context/_inject.py`), activate
                          (activate_skill progressive-disclosure loader —
                          returns the SKILL.md guide + bundled-file manifest),
                          installer (zip → validated package), catalog
@@ -518,7 +518,7 @@ verb model):
 - Real-time push events → `pushSubscribe(channel, taskId, fn)` from `push.js`.
 - SSE chat stream `/api/chat/stream/<id>` → consumed via
   `Api.chat.streamResponse(taskId, {signal})`, which returns the raw
-  Response so the caller (`ui/sse_pipeline.js`, `branch.js`) can pipe
+  Response so the caller (`static/js/ui/sse_pipeline.js`, `static/js/branch.js`) can pipe
   `.body.getReader()`. No file calls this endpoint with a raw `fetch`.
 
 #### 3.2.1 ⚠️ JS Bundler Allowlist — DO NOT FORGET
@@ -695,7 +695,7 @@ multi-tenant deployment would splice the operator's memories (and the global
 `.tofu_user_profile.md` preference file) into an unrelated API caller's prompt.
 That is both a hallucination vector and a privacy/isolation leak. The
 prompt-assembly side already suppresses a capability's description when its flag
-is off (`system_context/_inject.py` gates `<memory_accumulation>` / `[USER PREFERENCE
+is off (`lib/tasks_pkg/system_context/_inject.py` gates `<memory_accumulation>` / `[USER PREFERENCE
 PROFILE]`), so the fix is purely about the DEFAULT a headless caller lands on.
 
 **The mechanism (single source of truth):**
@@ -1006,18 +1006,18 @@ Before submitting any code change, verify:
 | Debug endpoint (Planner/Worker/Critic) | `lib/tasks_pkg/endpoint/`, `endpoint_prompts/`, `endpoint_review.py` |
 | Change project file tools | `lib/project_mod/tools.py`, `lib/project_mod/read_tools.py`, `lib/project_mod/write_tools.py` |
 | Read local files (images/PDF/Office) | `lib/file_reader/` (core) → `lib/project_mod/read_tools.py` (`_read_absolute_file`) |
-| Manage memory / stored notes (legacy "skills") | `lib/memory/storage.py`, `lib/memory/tools.py`, `routes/memory.py`, on-disk `<project>/.tofu/skills/` (project scope); global memories moved to the server store `<data>/memories/global/` (2026-06) |
-| Install Anthropic / OpenClaw / AgentSkills `.zip` packages (drag-and-drop) | `lib/memory/installer.py` → `POST /api/v1/memory/install` (multipart). Packages live as `<.tofu/skills>/<name>/SKILL.md` + references/ + scripts/. Treated identically to flat `.md` memories by BM25 / search_memories — frontend marks them with a `SKILL` badge. `install.sh` is **never auto-executed**; surfaced as `install_hints`. |
-| Skills store / curated catalog / file browser | `lib/memory/catalog.py` (curated `SkillCatalogEntry` list), `routes/api_v1/memory.py` (`/api/v1/memory/catalog`, `/api/v1/memory/catalog/install`, `/api/v1/memory/<id>/files`), `static/js/skills.js`, Settings → **Skills** tab. App-Store layout mirrors the MCP tab: search + scope tabs (Catalog / Installed) + category pills + grid + drag-drop zone. Catalog one-click installs download a `.zip` over HTTPS (capped at 50 MB) and feed it to `install_skill_package`. |
+| Manage memory / stored notes (legacy "skills") | `lib/memory/storage/`, `lib/memory/tools.py`, `routes/api_v1/memory.py`, on-disk `<project>/.tofu/skills/` (project scope); global memories moved to the server store `<data>/memories/global/` (2026-06) |
+| Install Anthropic / OpenClaw / AgentSkills `.zip` packages (drag-and-drop) | `lib/skills/installer.py` → `POST /api/v1/memory/install` (multipart). Packages live as `<.tofu/skills>/<name>/SKILL.md` + references/ + scripts/. Treated identically to flat `.md` memories by BM25 / search_memories — frontend marks them with a `SKILL` badge. `install.sh` is **never auto-executed**; surfaced as `install_hints`. |
+| Skills store / curated catalog / file browser | `lib/skills/catalog.py` (curated `SkillCatalogEntry` list), `routes/api_v1/memory.py` (`/api/v1/memory/catalog`, `/api/v1/memory/catalog/install`, `/api/v1/memory/<id>/files`), `static/js/skills.js`, Settings → **Skills** tab. App-Store layout mirrors the MCP tab: search + scope tabs (Catalog / Installed) + category pills + grid + drag-drop zone. Catalog one-click installs download a `.zip` over HTTPS (capped at 50 MB) and feed it to `install_skill_package`. |
 | Modify trading features | External `tofu-trading` package (extracted 2026-06) — mounts via `tofu.blueprints` entry point; not in this repo |
 | Reusable agent base (run loop, dispatch, TaskRuntime, push, profiles) | `lib/agent_core/` (facade `__init__.py`; `task_runtime.py`, `push.py`, `events.py`, `profiles.py`) |
 | Per-user billing / wallet / cost ledger | `lib/billing/` (wallet, ledger, pricing, users, payments/), `routes/api_v1/billing.py` |
 | Declarative multi-agent orchestration (Studio) | `lib/orchestration/` (schema + validator), `lib/orchestration_engine.py`, `routes/api_v1/orchestrations.py`, `static/js/orchestration.js` |
 | Orchestration typed node I/O (Dify-style dataflow) | OPTIONAL `params.io = {inputs:[{name,type,from}], outputs:[{name,type}]}` on role/subflow nodes. Types: `VALID_IO_TYPES` (text/json/artifact/file/number/bool/any). `from` ref = `'<id>'`/`'<id>.<out>'`/`'start'`. Helpers `node_output_names` + `parse_io_ref`; `_validate_node_io` in `lib/orchestration/`. Engine (`lib/orchestration_engine.py`) `_compose_typed_inputs` (a node with declared inputs reads ONLY wired upstream outputs, not the scratchpad) + `_publish_outputs`/`_build_change_manifest` (an `artifact`-typed output is filled with the worker's state-changing tool manifest — how a tool-heavy worker exposes its many ops as ONE typed output vs a pure-NL node's single `text` output). FULLY back-compat: no `io` block ⇒ legacy accumulating scratchpad. Studio: edges are click-to-SELECT (not click-to-delete) + Delete/Backspace key + edge inspector (reverse/bind); I/O editor (`_orchRenderIoEditor`) authors ports. Tests: `tests/test_orchestration_io.py` + Scenario 5 in `tests/orch_nested_roundtrip_harness.js`. |
 | Paper / Reading Mode (reports, Q&A, translate) | `lib/paper/` (report_engine, translate_engine, prompts), `routes/paper.py`, `static/js/paper-reader.js` |
-| Daily report subsystem | `routes/daily_report.py`, `lib/scheduler/` |
-| Scheduled / proactive agents, cron, timers | `lib/scheduler/` (manager, executor, cron, timer, proactive), `routes/scheduler.py` |
-| MCP (Model Context Protocol) | `lib/mcp/` (client, registry, config), `routes/mcp.py`, `lib/tasks_pkg/handlers/mcp.py` |
+| Daily report subsystem | `routes/api_v1/daily_report.py`, `lib/daily_report/`, `lib/scheduler/` |
+| Scheduled / proactive agents, cron, timers | `lib/scheduler/` (manager, executor, cron, timer, proactive), `routes/api_v1/scheduler.py` |
+| MCP (Model Context Protocol) | `lib/mcp/` (client, registry, config), `routes/api_v1/mcp.py`, `lib/tasks_pkg/handlers/mcp.py` |
 | Use a Claude Pro/Max or ChatGPT subscription as a provider | `lib/oauth/` (PKCE login, token store) → `lib/oauth/outbound.py` bridges a logged-in subscription into a managed provider slot (the slot's `oauth` marker resolves per-request to a live token + client-identity headers). Used via the normal dispatch path — NOT a CLI subprocess. (The former `lib/agent_backends/` CLI-subprocess backend was removed 2026-06-21.) |
 | OAuth flows (Claude / Codex) | `lib/oauth/`, `routes/oauth.py` |
 | PDF parsing (text, images, math, VLM) | `lib/pdf_parser/` |

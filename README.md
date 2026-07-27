@@ -376,10 +376,26 @@ When you need the assistant to interact with your local machine beyond the brows
 **Setup:**
 ```bash
 pip install pyautogui pillow psutil
-python lib/desktop_agent.py --server http://your-server:15000 --allow-write --allow-exec
+python -m lib.desktop_agent --server http://your-server:15000 --allow-write --allow-exec
 ```
 
 The agent connects to your Tofu server and exposes tools for file operations, clipboard, screenshots, GUI automation (pyautogui), and system info. All dangerous operations require explicit `--allow-write` / `--allow-exec` flags.
+
+#### Remote Worktree
+
+Let Studio **edit project code on your own machine** (Windows/macOS) — no shared filesystem; only file *intents* are routed to the local agent for execution.
+
+**Journey:**
+1. Start the agent on your machine, declaring share roots (the project directories it may touch) — repeatable, persisted to `~/.tofu/desktop_agent.json` so they survive restarts:
+   ```bash
+   python -m lib.desktop_agent --server https://your-server --allow-write --allow-exec \
+       --bridge-secret <token-from-step-2> --root myapp=~/code/myapp
+   ```
+2. Mint a bridge token under **Settings → Devices** (shown once, scoped to your account — commands only ever reach YOUR devices);
+3. In the project picker's **Remote devices** group, add a share root to the workspace (offline devices greyed out);
+4. From then on Studio's `write_file` / `apply_diff` / `run_command` land on **your local disk** — snapshot-before-write (`<project>/.tofu/file-history/`, rollback-able), external edits are refused until re-read, and `run_command` output streams live into the terminal block just like server-side runs.
+
+**Safety boundary:** root-relative paths only (symlink/`..`/absolute escapes all refused); delete-command targets must stay inside the root; remote writes default to the Manual approval gate; per-user tokens isolate command delivery on relay deployments. Master switch `TOFU_REMOTE_WORKTREE` (server side) is OFF by default. See `docs/REMOTE_WORKTREE_DESIGN.md`.
 
 ---
 
@@ -655,7 +671,7 @@ The `.env.example` file documents all supported variables. Key ones:
 │   ├── scheduler/             Task scheduling (cron, proactive agents)
 │   ├── image_gen.py           Image generation (multi-model dispatch)
 │   ├── mt_provider.py         Machine translation providers (NiuTrans, custom)
-│   ├── desktop_agent.py       Desktop automation agent
+│   ├── desktop_agent/         Desktop automation agent (local bridge)
 │   └── ...
 │
 ├── lib/conversations/         Project Brain — charter, board, feed, peer messaging, path leases, status lane

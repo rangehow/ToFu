@@ -367,7 +367,7 @@ cd clients/typescript && npm install
 **安装：**
 ```bash
 pip install pyautogui pillow psutil
-python lib/desktop_agent.py --server http://your-server:15000 --allow-write --allow-exec
+python -m lib.desktop_agent --server http://your-server:15000 --allow-write --allow-exec
 ```
 
 代理连接到你的 Tofu 服务器，提供文件操作、剪贴板、截图、GUI 自动化（pyautogui）和系统信息等工具。所有危险操作需要显式启用 `--allow-write` / `--allow-exec` 标志。
@@ -377,7 +377,11 @@ python lib/desktop_agent.py --server http://your-server:15000 --allow-write --al
 让 Studio **直接修改你本地机器上的项目代码**（Windows / macOS 均可）——不共享文件系统，只把「文件意图」安全地路由到本机执行。
 
 **使用旅程：**
-1. 在本机启动 agent（同上），并在其配置文件声明共享根 `share_roots`（哪些项目目录允许被访问）；
+1. 在本机启动 agent，用 `--root 名字=路径` 声明共享根（哪些项目目录允许被访问；可重复，持久化到 `~/.tofu/desktop_agent.json`，重启不失）：
+   ```bash
+   python -m lib.desktop_agent --server https://your-server --allow-write --allow-exec \
+       --bridge-secret <第 2 步的令牌> --root myapp=~/code/myapp
+   ```；
 2. 打开 **设置 → 设备**，颁发一个 bridge 令牌（只显示一次），填进 agent 配置——令牌绑定你的账号，命令只投递给你自己的设备；
 3. 在项目选择器顶部的「远程设备」分组里，把某个共享根加进工作区（离线设备灰显不可选）；
 4. 之后 Studio 的 `write_file` / `apply_diff` / `run_command` 等全部落在**你的本地磁盘**——写前自动快照（`<项目>/.tofu/file-history/` 可回滚），外部改动会拒写并要求先重读，`run_command` 输出像服务器端一样**实时流式**显示在终端块里。
@@ -652,7 +656,7 @@ vim .env   # 填入你的值
 │   ├── scheduler/             任务调度（cron、主动代理）
 │   ├── image_gen.py           图片生成（多模型调度）
 │   ├── mt_provider.py         机器翻译服务商适配（小牛翻译、自定义）
-│   ├── desktop_agent.py       桌面自动化代理
+│   ├── desktop_agent/         桌面自动化代理（本地桥）
 │   └── ...
 │
 ├── lib/conversations/         项目大脑 —— 章程、看板、活动流、对话间消息、路径租约、状态通道

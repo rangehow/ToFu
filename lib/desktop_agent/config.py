@@ -26,6 +26,34 @@ def config_path():
             or os.path.expanduser('~/.tofu/desktop_agent.json'))
 
 
+def merge_cli_roots(existing_roots, cli_specs):
+    """Merge ``--root NAME=PATH`` specs into the persisted share_roots list.
+
+    Pure logic (no I/O) so the CLI merge is unit-testable. The CLI wins on a
+    name collision (path updated in place, list position kept); new names
+    append in declaration order. ``~`` is expanded. Raises ValueError on a
+    malformed spec (missing ``=`` / empty name / empty path).
+    """
+    roots = [dict(r) for r in (existing_roots or [])
+             if isinstance(r, dict) and r.get('name')]
+    by_name = {str(r['name']): r for r in roots}
+    order = [str(r['name']) for r in roots]
+    for spec in cli_specs or []:
+        if not spec or '=' not in spec:
+            raise ValueError(f'--root must be NAME=PATH, got {spec!r}')
+        name, path = spec.split('=', 1)
+        name = name.strip()
+        path = os.path.expanduser(path.strip())
+        if not name or not path:
+            raise ValueError(f'--root must be NAME=PATH, got {spec!r}')
+        if name in by_name:
+            by_name[name]['path'] = path
+        else:
+            by_name[name] = {'name': name, 'path': path}
+            order.append(name)
+    return [by_name[n] for n in order]
+
+
 def load_config():
     """Read the agent config, merged over defaults. Never raises."""
     cfg = dict(_DEFAULT_CONFIG)

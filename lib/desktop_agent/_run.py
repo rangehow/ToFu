@@ -265,6 +265,11 @@ Examples:
 
   # Full access
   python -m lib.desktop_agent --server http://localhost:5000 --allow-all
+
+  # Declare project share roots for Studio remote-worktree editing (repeatable,
+  # persisted to the agent config so they survive restarts)
+  python -m lib.desktop_agent --server http://localhost:5000 --allow-write \
+      --root myapp=~/code/myapp --root docs=~/Documents/notes
 """
     )
     parser.add_argument('--server', required=True, help='Tofu server URL')
@@ -277,6 +282,11 @@ Examples:
                         help='X-Bridge-Secret value matching server TOFU_BRIDGE_SECRET '
                              '(required when the server enforces bridge auth). '
                              'Falls back to TOFU_BRIDGE_SECRET env var.')
+    parser.add_argument('--root', action='append', default=[], metavar='NAME=PATH',
+                        help='Declare a project share root (repeatable). Merged into '
+                             'the agent config and persisted — a same-named existing '
+                             'root is updated. project_* commands are confined to '
+                             'these roots.')
 
     args = parser.parse_args(argv)
 
@@ -291,5 +301,21 @@ Examples:
     bridge_secret = (args.bridge_secret
                      or os.environ.get('TOFU_BRIDGE_SECRET')
                      or '').strip()
+
+    if args.root:
+        from lib.desktop_agent.config import merge_cli_roots
+        cfg = load_config()
+        try:
+            cfg['share_roots'] = merge_cli_roots(cfg.get('share_roots'), args.root)
+        except ValueError as e:
+            parser.error(str(e))
+        save_config(cfg)
+        for r in cfg['share_roots']:
+            if not os.path.isdir(os.path.expanduser(str(r.get('path', '')))):
+                logger.warning('[Agent] share root %r path does not exist: %s',
+                               r.get('name'), r.get('path'))
+        logger.info('[Agent] share roots: %s',
+                    ', '.join(f"{r.get('name')}={r.get('path')}"
+                              for r in cfg['share_roots']))
 
     run_agent(args.server, permissions, args.poll_interval, bridge_secret=bridge_secret)

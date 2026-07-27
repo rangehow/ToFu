@@ -1,6 +1,14 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-27 — RWA 收尾三件套:README 坏命令修正 + agent `--root` CLI 旗标 + slow 真 e2e 入库(epic `pt_837c0292b0834311`,owner 验收三条;commit 见下,4 文件改 + 2 新测试文件;CLI 套件 **15/15**(NEUTER 剥 save_config → 精确 3 红),slow e2e **1/1 真子进程×真服务器 6.3s**,桌面+流帧同进程环 **152/152**,RWA 其余环 **87/87**,collect **10359** 0 err)
+
+- **起因(owner 复核抓的三个第一步即死缺口):** ①README.md:379 / README_CN.md:370 的启动命令 `python lib/desktop_agent.py` 是坏的——它是**包**不是文件,照抄直接 "can't open file";②share_roots 没有任何声明入口,README 只说「在配置文件声明」却不说在哪怎么写;③设计稿 §7 承诺的 slow 真 e2e(真 agent 子进程 + 真服务器)从未入库,端到端证据只有进程内假 agent。
+- **①README×2:** 命令改 `python -m lib.desktop_agent`;目录树条目 `desktop_agent.py` → `desktop_agent/`;**README.md 补上缺失的 Remote Worktree 整节**(此前只有 CN 有,EN 只有安全注记一条——EN/CN 漂移),CN 的「使用旅程」第 1 步改写成可照抄的 `--root` 命令行。
+- **②`--root NAME=PATH` 旗标:** 合并逻辑放 `config.py::merge_cli_roots` **纯函数**(同名更新路径保位序、新名按声明序追加、`~` 展开、只按第一个 `=` 切分容忍路径内含 `=`、malformed 拒),`main()` 在 run_agent 前 merge→`save_config` 持久化(run_agent 从 config 读 share_roots,天然接上)。持久化是承重的一半:第二次不带旗标启动根仍在——**NEUTER 剥掉 save_config,恰好 3 个持久化测试翻红**。
+- **③`tests/test_desktop_e2e_slow.py`(@pytest.mark.slow,opt-in):** live_server(HEAD 已有,真 Hypercorn 服务真 app)+ 真 `python -m lib.desktop_agent` 子进程,真实 HTTP 全链路:无 secret 401 → v2 注册帧带 share_roots → 读 → 写 v2 → **快照真落在磁盘** → 外部改动 freshness 拒写 → 重读放行 → apply_diff → 流式 run_command(终态结果 + `get_command_stream` seq 去重拼帧都断言)→ `../evil.txt` 逃逸拒。**两处加固:** 等 agent 按 share-root 名匹配(防同进程兄弟套件 15s 窗口内的陈旧注册被误认);teardown 反注册自己的 agent(注册表是同进程共享状态)。整个闭环 **6.3s**。
+- **给后人:** 「文档里的命令」也是代码——README 的启动命令必须能照抄跑通,这次是 agent 从单文件变包之后没人回头改文档;`find_files` 不匹配目录名,grep 结果截断时**不能**下「不存在」结论(我在本会话第一轮误判 `lib/desktop_agent` 不存在,第二轮深搜才翻案)。
+
 ### 2026-07-26(续85) — pt_3cd6cd48 全量收口 + pt_791bda84 双根修(commits `47433c81` / `9b3cf9d8` + tofu-trade `99c0301`;folders 套件 2 红→**2/2 约 8s**,p2p3 批 **17/17**,facades 环 **72/72**)
 
 - **⑧ _pendingStreamTimer 悬挂(批最后一块):** 300ms interval 只在选择释放时自清,跨会话残留即永转。修:每次 pending 记 `_pendingStreamArmTs`,**30s 驻留上限**——到点丢弃陈旧 pending(不强制渲染压选择,那是守卫本来的用途)。**共享 HEAD 第二例 HEAD-relative 暂存(兄弟 WIP 与我区域不相交但同文件):先 reset 到 HEAD 打我的 hunk、暂存、恢复 combined 工作树、同一 hunk 再打一遍到工作树版——否则兄弟提交会静默回滚我的修复。口诀补一条:同文件纠缠且区域不相交时,两个版本都要打,暂存只带 HEAD 版。**

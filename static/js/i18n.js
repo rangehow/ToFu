@@ -384,7 +384,6 @@ var _i18n = {
   //  Toolbar & Input
   // ══════════════════════════════════════
   'toolbar.enhance': { zh: '增强', en: 'Enhance' },
-  'toolbar.enhance': { zh: '增强', en: 'Enhance' },
   // ── Two-tier capability dial (Chat / Studio) ──
   'toolbar.modeChatTooltip': { zh: 'Chat — 全能助手（默认），代码执行/记忆/搜索全开', en: 'Chat — the everyday all-rounder (default): code, memory, search' },
   'toolbar.modeStudioTooltip': { zh: 'Studio — 绑定项目仓库，解锁项目工具', en: 'Studio — attach a project/repo to unlock project tools' },
@@ -2131,7 +2130,6 @@ var _i18n = {
   'paper.mediaStillRunning': { zh: '仍在运行(这一步通常要几分钟)', en: 'still running (this step can take minutes)' },
   'paper.mediaEtaPrefix': { zh: '约', en: '≈' },
   'paper.podcastNeedReport': { zh: '播客由分析报告改编——请先生成报告。', en: 'The podcast is adapted from the analysis report — generate the report first.' },
-  'paper.podcastGoReport': { zh: '去生成报告', en: 'Go generate the report' },
   'paper.podcastGoReport': { zh: '去生成报告', en: 'Go generate the report' },
   'paper.podcastHeroTitle': { zh: '把这篇论文讲给你听', en: 'Listen to this paper' },
   'paper.podcastStepReport': { zh: '1. 生成报告', en: '1. Generate the report' },

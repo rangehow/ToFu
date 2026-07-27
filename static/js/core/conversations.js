@@ -1504,6 +1504,29 @@ async function loadConversationMessages(convId) {
           window.ConvView.replaceAll(conv.id, { forceScroll: false });
         }
       }
+      /* ★ Settings are METADATA — apply them even on this keep-local branch.
+       *   The reason MERGE_ACTIVE_TASK never replaces conv.messages (it would
+       *   orphan the assistantMsg ref connectToTask holds) has NOTHING to do
+       *   with model / tool state, but the branch used to skip settings too —
+       *   so a pinned conversation READ the server's correct settings.model
+       *   and DISCARDED it. With a model-less local copy the composer then
+       *   fell through to serverModel and painted the wrong model for as long
+       *   as the task stayed pinned; worse, the write-back sites persisted
+       *   that paint, laundering a display default into stored truth
+       *   (2026-07-27, conv ms352oniikgq10: an Opus 5 conversation whose
+       *   composer showed the kimi-k3 default while its own tag and every one
+       *   of its 24 LLM rounds said Opus 5).
+       *   Invariant: EVERY Phase-2 branch that received a server payload
+       *   applies its settings. Client-owned prefs are preserved exactly as
+       *   the OVERWRITE branch preserves them. */
+      {
+        const keepPinned = conv.pinned, keepPinnedAt = conv.pinnedAt;
+        _applySettingsToConv(conv, data.settings);
+        conv.pinned = keepPinned; conv.pinnedAt = keepPinnedAt;
+        if (convId === activeConvId && typeof _restoreConvToolState === 'function') {
+          _restoreConvToolState(conv);
+        }
+      }
       conv._needsLoad = false;
       conv._serverMsgCount = Math.max(serverMsgs.length, conv.messages.length);
     } else if (!hasLocalData || (!activeStreams.has(convId) && !conv.activeTaskId && !_hasFreshLocalActivity)) {

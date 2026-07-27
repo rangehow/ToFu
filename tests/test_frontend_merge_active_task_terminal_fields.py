@@ -94,6 +94,12 @@ global.config = {};
 global.renderConversationList = () => {};
 global.showStreamingUIForConv = () => {};
 global._restoreConvToolState = () => {};
+// core/conv_apply_settings.js — a real bundle sibling of conversations.js.
+// MERGE_ACTIVE_TASK now applies the server's settings blob (model /
+// thinkingDepth / tool state) so a pinned conversation cannot keep painting a
+// stale model. This harness exercises only the terminal-FIELD merge, so the
+// settings reader is stubbed.
+global._applySettingsToConv = () => {};
 global._convSorter = (a, b) => (b.updatedAt || 0) - (a.updatedAt || 0);
 global.apiUrl = (p) => p;
 global.AbortSignal = { timeout: () => undefined };

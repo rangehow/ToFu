@@ -12,7 +12,9 @@ function newChat() {
   _purgeEmptyConvs();
   const prevConv = getActiveConv();
   if (prevConv) {
-    prevConv.model = config.model || serverModel;
+    /* ★ See _saveConvToolState: a provisional (fallback) paint must never be
+     *   written back as the conversation's stored model. */
+    if (!config._modelIsProvisional && config.model) prevConv.model = config.model;
     prevConv.thinkingDepth = config.thinkingDepth;
     prevConv.searchMode = searchMode || "multi";
     prevConv.fetchEnabled = !!fetchEnabled;
@@ -192,7 +194,10 @@ function loadConversation(id) {
   let _needsDeferredSave = false;
   if (prevConv && prevConv.id !== id) {
     delete prevConv._initialSwitchLoad;   // ★ clear stale flag from previous conv
-    prevConv.model = config.model || serverModel;
+    /* ★ See _saveConvToolState: switching AWAY from a conv must not stamp a
+     *   provisional default paint onto it. This is the exact path that turned
+     *   a mispainted composer into persisted corruption. */
+    if (!config._modelIsProvisional && config.model) prevConv.model = config.model;
     prevConv.thinkingDepth = config.thinkingDepth;
     prevConv.searchMode = searchMode || "multi";
     prevConv.fetchEnabled = !!fetchEnabled;
@@ -240,6 +245,9 @@ function loadConversation(id) {
    *   anchor-preserve branch and HOLD that position instead of re-snapping —
    *   see renderChat. */
   if (typeof _openScrollConvId !== 'undefined') _openScrollConvId = null;
+  /* ★ The explicit-bottom latch belongs to the OLD conv's open — never let
+   *   it follow the user into a different conversation. */
+  if (typeof _explicitBottomLatch !== 'undefined') _explicitBottomLatch = null;
   /* ★ If loading a conv that doesn't belong to the active folder view, exit it */
   if (typeof getActiveFolderId === 'function' && getActiveFolderId()) {
     const _loadedConv = conversations.find(c => c.id === id);
@@ -304,6 +312,10 @@ function loadConversation(id) {
          *   snapping it to the bottom on open. */
       }
       delete c._initialSwitchLoad;   // ★ clear flag after initial load completes
+      /* ★ Open complete — the explicit-bottom latch has done its job (every
+       *   mid-open render re-pinned to the bottom). Release it so unsolicited
+       *   repaints return to the anchor / near-bottom heuristics. */
+      if (typeof _explicitBottomLatch !== 'undefined') _explicitBottomLatch = null;
       if (!activeStreams.has(id)) _resumePendingTranslations(id);
     });
   } else if (activeStreams.has(id)) {

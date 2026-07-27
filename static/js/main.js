@@ -56,13 +56,24 @@ var _hiddenIgModels = new Set();  // shared with image-gen.js
 let _lastAppliedModelId = null;
 let _lastAppliedIsThinking = null;
 
-function _applyModelUI(modelId) {
+function _applyModelUI(modelId, opts) {
+  /* ★ Provenance, not just value. A model id reaching here is EITHER an
+   *   explicit user choice (selectModel / a restored per-conv value) OR a
+   *   mere DISPLAY fallback (serverModel) used because nothing was stored.
+   *   The write-back sites persist config.model, so without this distinction
+   *   a fallback PAINT silently becomes the conversation's stored identity —
+   *   the 2026-07-27 corruption (conv ms352oniikgq10: an Opus 5 conv whose
+   *   composer painted the kimi-k3 default, which the next tool-toggle then
+   *   PATCHed over the real stored model). `_modelIsProvisional` is the flag
+   *   _saveConvToolState consults before writing conv.model. */
+  const _provisional = !modelId;
   if (!modelId) modelId = config.model || serverModel;
   /* Legacy preset migration */
   if (typeof _LEGACY_PRESET_TO_MODEL !== 'undefined' && _LEGACY_PRESET_TO_MODEL[modelId]) {
     modelId = _LEGACY_PRESET_TO_MODEL[modelId];
   }
   config.model = modelId;
+  config._modelIsProvisional = _provisional;
   const brand = typeof _detectBrand === 'function' ? _detectBrand(modelId) : 'generic';
   const shortName = _modelShortName(modelId);
   const isThinking = _isThinkingCapable(modelId);
@@ -489,7 +500,16 @@ function toggleDesktop() {
 function _saveConvToolState() {
   const conv = getActiveConv();
   if (!conv) return;
-  conv.model = config.model || serverModel;
+  /* ★ NEVER launder a paint-time default into stored truth. config.model may
+   *   be a DISPLAY fallback (serverModel) chosen only because this conv had
+   *   nothing stored; persisting it would overwrite the conversation's real
+   *   model with the global default and make the next send run on the wrong
+   *   model. Only a value the user actually chose (or one restored from the
+   *   conv itself) is durable. A conv with no model simply keeps none — the
+   *   composer still renders the default, it just stops being written down. */
+  if (!config._modelIsProvisional && config.model) {
+    conv.model = config.model;
+  }
   conv.thinkingDepth = config.thinkingDepth;
   /* ★ FIX: Track the selected image gen model separately so pure image-gen
    * conversations accurately record which model was actually used, without

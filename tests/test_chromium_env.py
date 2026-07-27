@@ -275,6 +275,33 @@ def test_module_imports_without_dragging_third_party():
     assert 'CLEAN_IMPORT' in out, out[-1500:]
 
 
+def test_conftest_browser_fixture_helper_actually_runs():
+    """The visual-E2E ``browser`` fixture's helper must RUN, not just parse.
+
+    Found the hard way: my first rewrite of ``_ensure_chromium_library_path``
+    used ``sys`` without importing it in conftest.py, so every
+    ``@pytest.mark.visual`` test ERRORed with ``NameError: name 'sys' is not
+    defined``. None of the other tests here caught it, because they exercise
+    the shared module directly and never go through conftest's wrapper.
+
+    So call the wrapper for real. A NameError / ImportError inside it fails
+    here instead of taking out the whole visual suite.
+
+    Loaded by PATH rather than by module name: ``conftest`` is not importable
+    as a top-level module under this rootdir, and a guard that dies on
+    ImportError is red in every state, which is just as useless as one that is
+    green in every state.
+    """
+    import importlib.util
+    path = os.path.join(ROOT, 'tests', 'conftest.py')
+    spec = importlib.util.spec_from_file_location('_cf_probe', path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    added = mod._ensure_chromium_library_path()
+    assert isinstance(added, list), \
+        f'_ensure_chromium_library_path returned {type(added).__name__}, not a list'
+
+
 def test_all_entry_points_use_the_shared_module():
     """Ratchet: no entry point may re-grow its own copy.
 

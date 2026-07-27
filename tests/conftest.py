@@ -1180,7 +1180,10 @@ def _ensure_chromium_library_path():
 
     Returns the list of directories added (empty when nothing was needed).
     """
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    import sys as _sys
+    _repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _repo_root not in _sys.path:
+        _sys.path.insert(0, _repo_root)
     from chromium_env import ensure_chromium_env
     return ensure_chromium_env()['lib_dirs_added']
 

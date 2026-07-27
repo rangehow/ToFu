@@ -411,7 +411,12 @@ function _renderFolderTabsInner(tabsEl, folders, activeFolderId, allConvs) {
     return;
   }
 
-  const sortedFolders = [...safeFolders].sort((a, b) => (lastActiveMap[b.id] || 0) - (lastActiveMap[a.id] || 0) || (a.order || 0) - (b.order || 0));
+  /* Rank by the project's most recent SIGNAL, counting creation as one: a
+   * just-created project has no conversations yet, so activity-only ranking
+   * scored it 0 and buried it at the rail bottom — exactly when the user is
+   * about to file something into it. */
+  const _folderSortTs = (f) => Math.max(lastActiveMap[f.id] || 0, f.createdAt || 0);
+  const sortedFolders = [...safeFolders].sort((a, b) => _folderSortTs(b) - _folderSortTs(a) || (a.order || 0) - (b.order || 0));
 
   /* ── Vertical project rail ──
    * Each project is a full-width ROW (dot + name + count) so names of any

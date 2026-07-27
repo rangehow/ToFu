@@ -447,6 +447,71 @@ async function _mcpQuickInstall(serverId) {
   }
 }
 
+/**
+ * The placeholder for a credential input.
+ *
+ * Always the spec's own hint when it has one. Previously this returned the
+ * "already saved, leave blank to keep" notice INSTEAD of the hint whenever a
+ * value was stored — which silently removed the guidance at the one moment a
+ * user is most likely to need it (rotating an expired key). The saved notice
+ * is now rendered as its own line by the caller, so neither fact evicts the
+ * other.
+ */
+function _mcpPlaceholder(spec, hasStored) {
+  if (spec.hint) return spec.hint;
+  return hasStored ? t('mcp.savedHint') : '';
+}
+
+/**
+ * Render "where do I get this credential" as a real link (+ optional ordered
+ * steps), instead of a breadcrumb crammed into the placeholder.
+ *
+ * A placeholder cannot be clicked, is truncated by the input width, and
+ * disappears the moment the user types — so a console path written there made
+ * the user hand-transcribe a URL. Returns '' when the entry declares no
+ * route, so nothing is invented for servers that need no credential.
+ */
+function _mcpObtainBlock(spec) {
+  var url = spec.obtain_url || '';
+  var steps = Array.isArray(spec.obtain_steps) ? spec.obtain_steps : [];
+  if (!url && steps.length === 0) return '';
+  var html = '<div class="mcp-obtain">';
+  if (url) {
+    // Only http(s) — a catalog entry is server-owned, but this is the one
+    // place a URL becomes a clickable target, so reject anything that could
+    // carry a javascript: payload.
+    var safe = /^https?:\/\//i.test(url) ? url : '';
+    if (safe) {
+      html += '<a class="mcp-obtain-link" href="' + escapeHtml(safe) +
+        '" target="_blank" rel="noopener noreferrer">' +
+        escapeHtml(t('mcp.obtainKey')) + ' ↗</a>';
+    }
+  }
+  if (steps.length > 0) {
+    html += '<ol class="mcp-obtain-steps">';
+    steps.forEach(function(s) {
+      html += '<li>' + escapeHtml(String(s)) + '</li>';
+    });
+    html += '</ol>';
+  }
+  html += '</div>';
+  return html;
+}
+
+/**
+ * Catalog entries that ALREADY have a stored value for `key`, excluding
+ * `selfId`. Two cards can legitimately share one credential (RollingGo hotel
+ * + flight share ROLLINGGO_API_KEY; github + github-batch share a PAT), and
+ * without this the second install asks for a key the user already gave us —
+ * so they go re-apply for a duplicate.
+ */
+function _mcpSharedCredentialSources(key, selfId) {
+  return _mcpCatalog.filter(function(e) {
+    return e.id !== selfId
+      && (e.stored_env_keys || []).indexOf(key) !== -1;
+  });
+}
+
 function _mcpOpenInstallModal(serverId, isReinstall) {
   var entry = _mcpCatalog.find(function(e) { return e.id === serverId; });
   if (!entry) return;
@@ -509,8 +574,27 @@ function _mcpOpenInstallModal(serverId, isReinstall) {
     if (spec.required) html += ' <span style="color:#ef4444;">*</span>';
     if (hasStored) html += ' <span style="color:#10b981;font-size:11px;">' + escapeHtml(t('mcp.savedBadge')) + '</span>';
     html += '</label>';
-    var ph = hasStored ? t('mcp.savedHint') : (spec.hint || '');
-    html += '<input type="' + inputType + '" class="mcp-env-input" data-key="' + escapeHtml(spec.key) + '" data-has-stored="' + (hasStored ? '1' : '0') + '" placeholder="' + escapeHtml(ph) + '">';
+    html += _mcpObtainBlock(spec);
+    html += '<input type="' + inputType + '" class="mcp-env-input" data-key="' + escapeHtml(spec.key) + '" data-has-stored="' + (hasStored ? '1' : '0') + '" placeholder="' + escapeHtml(_mcpPlaceholder(spec, hasStored)) + '">';
+    if (hasStored) {
+      // The "leave blank to keep" notice used to be pushed into the
+      // PLACEHOLDER, which meant it REPLACED spec.hint — so on a reinstall
+      // (exactly when someone is rotating a credential) the guidance about
+      // what to type disappeared. Both facts matter, so both are shown.
+      html += '<span class="stg-hint mcp-env-saved-note">' + escapeHtml(t('mcp.savedHint')) + '</span>';
+    } else {
+      // Not stored for THIS entry — but a sibling entry may already hold the
+      // very same credential. Say so, otherwise the user re-applies for a key
+      // they already have.
+      var shared = _mcpSharedCredentialSources(
+        spec.key, entry && entry.id);
+      if (shared.length > 0) {
+        html += '<span class="stg-hint mcp-env-shared-note">' +
+          escapeHtml(t('mcp.sharedCredential', {
+            name: shared.map(function(s) { return s.name || s.id; }).join('、'),
+          })) + '</span>';
+      }
+    }
     html += '</div>';
     return html;
   }
@@ -535,8 +619,11 @@ function _mcpOpenInstallModal(serverId, isReinstall) {
       html += '<option value="' + escapeHtml(opt.value) + '" data-autofill="' + af + '">' + escapeHtml(opt.label) + '</option>';
     });
     html += '</select>';
-    var ph = hasStored ? t('mcp.savedHint') : (spec.hint || '');
-    html += '<input type="text" class="mcp-env-input" data-key="' + escapeHtml(spec.key) + '" data-has-stored="' + (hasStored ? '1' : '0') + '" placeholder="' + escapeHtml(ph) + '" style="margin-top:6px;display:none;">';
+    html += _mcpObtainBlock(spec);
+    html += '<input type="text" class="mcp-env-input" data-key="' + escapeHtml(spec.key) + '" data-has-stored="' + (hasStored ? '1' : '0') + '" placeholder="' + escapeHtml(_mcpPlaceholder(spec, hasStored)) + '" style="margin-top:6px;display:none;">';
+    if (hasStored) {
+      html += '<span class="stg-hint mcp-env-saved-note">' + escapeHtml(t('mcp.savedHint')) + '</span>';
+    }
     html += '</div>';
     return html;
   }

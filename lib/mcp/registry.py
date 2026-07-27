@@ -43,6 +43,17 @@ class EnvSpec(TypedDict, total=False):
     options: list       # for type=="select": [{label, value, autofill?}]
                         # where autofill maps other env keys → preset values
                         # applied when this option is chosen
+    obtain_url: str     # WHERE to get this credential — rendered as a real
+                        # "Get a key ↗" link, not prose. `hint` is a
+                        # placeholder inside the input and is REPLACED by the
+                        # "saved" notice on a reinstall, so a breadcrumb
+                        # stuffed into it vanishes exactly when the user is
+                        # rotating a key and needs it most. Keep the route
+                        # here instead.
+    obtain_steps: list  # optional ordered list of SHORT steps (strings) shown
+                        # under the link. Use when the console path is
+                        # non-obvious (e.g. Amap: create app → add key → pick
+                        # "Web service"). Omit when the link is self-evident.
 
 
 class CatalogEntry(TypedDict, total=False):
@@ -1045,7 +1056,11 @@ CATALOG: list[CatalogEntry] = [
         'endpoint': 'https://mcp.amap.com/mcp?key=${AMAP_MAPS_API_KEY}',
         'env_specs': [
             {'key': 'AMAP_MAPS_API_KEY', 'label': 'Amap API Key (Web 服务)',
-             'hint': 'console.amap.com → 应用管理 → 添加 Key → 服务平台选「Web 服务」',
+             'hint': '粘贴你的 Key',
+             'obtain_url': 'https://console.amap.com/dev/key/app',
+             'obtain_steps': ['登录高德开放平台并完成个人实名认证',
+                              '应用管理 → 创建新应用',
+                              '添加 Key，服务平台选「Web 服务」'],
              'required': True, 'secret': True},
         ],
         'url': 'https://lbs.amap.com/api/mcp-server/summary',
@@ -1067,7 +1082,10 @@ CATALOG: list[CatalogEntry] = [
         'headers': {'Authorization': 'Bearer ${ROLLINGGO_API_KEY}'},
         'env_specs': [
             {'key': 'ROLLINGGO_API_KEY', 'label': 'RollingGo API Key',
-             'hint': 'rollinggo.store 申请，自动审核',
+             'hint': '粘贴你的 Key',
+             'obtain_url': 'https://rollinggo.store/apply',
+             'obtain_steps': ['填基本信息申请，自动审核（1-3 分钟）',
+                              '同一个 Key 同时用于酒店与机票两个服务'],
              'required': True, 'secret': True},
         ],
         'url': 'https://rollinggo.store/',
@@ -1087,7 +1105,9 @@ CATALOG: list[CatalogEntry] = [
         'headers': {'Authorization': 'Bearer ${ROLLINGGO_API_KEY}'},
         'env_specs': [
             {'key': 'ROLLINGGO_API_KEY', 'label': 'RollingGo API Key',
-             'hint': '与酒店服务共用同一个 Key',
+             'hint': '粘贴你的 Key',
+             'obtain_url': 'https://rollinggo.store/apply',
+             'obtain_steps': ['与酒店服务共用同一个 Key，已申请过就不用再申请'],
              'required': True, 'secret': True},
         ],
         'url': 'https://rollinggo.store/',
@@ -1103,7 +1123,10 @@ CATALOG: list[CatalogEntry] = [
         'args': ['-y', 'tuniu-cli@latest'],
         'env_specs': [
             {'key': 'TUNIU_API_KEY', 'label': '途牛开放平台 API Key',
-             'hint': 'open.tuniu.com/mcp/login 注册后在控制台自助申请',
+             'hint': '粘贴你的 Key',
+             'obtain_url': 'https://open.tuniu.com/mcp/login',
+             'obtain_steps': ['注册并登录途牛开放平台',
+                              '控制台 → API Keys → 创建应用并自助申请'],
              'required': True, 'secret': True},
         ],
         'url': 'https://open.tuniu.com/mcp/docs/',

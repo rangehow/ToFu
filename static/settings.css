@@ -644,6 +644,35 @@
   border-left: 2px solid var(--s-border-strong, rgba(0, 0, 0, .12));
   border-radius: 3px;
 }
+/* "Where do I get this key" — a real link + optional ordered steps, rendered
+ * ABOVE the credential input. Replaces cramming a console breadcrumb into the
+ * placeholder (uncklickable, truncated, and gone as soon as the user types). */
+.mcp-obtain {
+  margin: 2px 0 5px;
+}
+.mcp-obtain-link {
+  display: inline-block;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--accent, #2563eb);
+  text-decoration: none;
+}
+.mcp-obtain-link:hover { text-decoration: underline; }
+.mcp-obtain-steps {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--s-ink-soft);
+}
+.mcp-env-saved-note,
+.mcp-env-shared-note {
+  display: block;
+  margin-top: 4px;
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+.mcp-env-shared-note { color: var(--accent, #2563eb); }
 /* Card footer: repo link + action
  * Use min-height matching the .btn-xs height so the left-side text
  * (Repo) and the right-side buttons (卸载/连接/…) share a common

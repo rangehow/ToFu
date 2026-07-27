@@ -317,3 +317,176 @@ def test_every_credential_bearing_travel_entry_explains_how_to_get_the_key():
         f'expected several credential-bearing China travel entries, scanned '
         f'only {checked} — the block regex likely stopped matching'
     )
+
+
+# ── 3. Getting a credential must be a CLICKABLE route, not prose ─────
+#
+# Layer 2. The travel entries previously carried the console path inside
+# `hint`, which is the input's PLACEHOLDER: uncklickable, truncated by the
+# field width, gone the instant the user types — and, worst of all, REPLACED
+# wholesale by the "already saved" notice on a reinstall, i.e. it vanished
+# exactly when someone was rotating an expired key. `obtain_url` /
+# `obtain_steps` are structured fields rendered as a real link.
+
+_OBTAIN_SIG = 'function _mcpObtainBlock(spec) {'
+_PLACEHOLDER_SIG = 'function _mcpPlaceholder(spec, hasStored) {'
+
+_RENDER_HARNESS = r"""
+const fs = require('fs');
+// Minimal shims: the spliced helpers use escapeHtml + t() from the app bundle.
+global.escapeHtml = function (s) {
+  return String(s === undefined || s === null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+};
+global.t = function (k, vars) {
+  var out = 'T[' + k + ']';
+  if (vars) Object.keys(vars).forEach(function (v) { out += '{' + v + '=' + vars[v] + '}'; });
+  return out;
+};
+eval(fs.readFileSync(process.argv[2], 'utf8'));
+const fn = eval(process.argv[3]);
+const args = JSON.parse(process.argv[4]);
+console.log(JSON.stringify(fn.apply(null, args)));
+"""
+
+
+def _splice_helpers() -> str:
+    """Splice the obtain-block + placeholder helpers from the shipped file."""
+    path = _find_defining_file(_OBTAIN_SIG, os.path.join(STATIC_JS, 'settings'))
+    return (_splice_fn(path, _PLACEHOLDER_SIG) + '\n'
+            + _splice_fn(path, _OBTAIN_SIG))
+
+
+def _run_fn(js_text: str, fn_name: str, args: list):
+    src = os.path.join(HERE, f'_cd_h_{fn_name}.js')
+    harness = os.path.join(HERE, f'_cd_hh_{fn_name}.js')
+    with open(src, 'w', encoding='utf-8') as fh:
+        fh.write(js_text)
+    with open(harness, 'w', encoding='utf-8') as fh:
+        fh.write(_RENDER_HARNESS)
+    try:
+        proc = subprocess.run(
+            ['node', harness, src, fn_name, json.dumps(args)],
+            capture_output=True, text=True, timeout=60)
+        assert proc.returncode == 0, f'node failed: {proc.stderr[:600]}'
+        return json.loads(proc.stdout.strip())
+    finally:
+        for p in (src, harness):
+            if os.path.exists(p):
+                os.remove(p)
+
+
+def _travel_specs() -> list[tuple[str, dict]]:
+    """(entry_id, env_spec) for every credential-bearing China travel entry."""
+    from lib.mcp.registry import CATALOG, CAT_LOCAL_CN
+    out = []
+    for e in CATALOG:
+        if e.get('category') != CAT_LOCAL_CN:
+            continue
+        for s in (e.get('env_specs') or []):
+            if s.get('required'):
+                out.append((e['id'], s))
+    return out
+
+
+@pytest.mark.skipif(not _node_available(), reason='node not available')
+def test_obtain_route_renders_a_real_clickable_link():
+    """RESULT-level: the shipped helper emits an <a href> for a declared route."""
+    specs = _travel_specs()
+    assert specs, 'scan surface empty — no credential-bearing travel entries'
+
+    helpers = _splice_helpers()
+    checked = 0
+    for sid, spec in specs:
+        if not spec.get('obtain_url'):
+            continue
+        checked += 1
+        html = _run_fn(helpers, '_mcpObtainBlock', [spec])
+        assert '<a ' in html and 'href="' in html, (
+            f'{sid}/{spec["key"]}: declared obtain_url but no <a href> was '
+            f'rendered — the user still cannot click through. Got: {html!r}'
+        )
+        assert spec['obtain_url'] in html, (
+            f'{sid}: the rendered link does not point at the declared URL'
+        )
+        assert 'target="_blank"' in html and 'noopener' in html, (
+            f'{sid}: external link must open in a new tab with noopener'
+        )
+    assert checked >= 3, (
+        f'expected the travel entries to declare obtain_url, only {checked} do'
+    )
+
+
+@pytest.mark.skipif(not _node_available(), reason='node not available')
+def test_obtain_block_is_empty_when_no_route_is_declared():
+    """Complement: no route declared → render NOTHING.
+
+    Without this, "always emit a link block" would satisfy the test above
+    while putting an empty affordance on every credential-free server.
+    """
+    helpers = _splice_helpers()
+    html = _run_fn(helpers, '_mcpObtainBlock', [{'key': 'X'}])
+    assert html == '', f'expected empty string for a route-less spec, got {html!r}'
+
+
+@pytest.mark.skipif(not _node_available(), reason='node not available')
+def test_obtain_link_rejects_a_non_http_scheme():
+    """A catalog entry is server-owned, but this is the one place a string
+    becomes a clickable target — a javascript: URL must not survive."""
+    helpers = _splice_helpers()
+    html = _run_fn(helpers, '_mcpObtainBlock',
+                   [{'key': 'X', 'obtain_url': 'javascript:alert(1)'}])
+    assert 'javascript:' not in html, f'dangerous scheme rendered: {html!r}'
+
+
+@pytest.mark.skipif(not _node_available(), reason='node not available')
+def test_saved_credential_does_not_erase_the_input_hint():
+    """The reinstall defect: `hasStored` used to REPLACE the hint.
+
+    A user rotating an expired key opens the same modal and needs to know what
+    to paste; the old code swapped that guidance for "saved, leave blank".
+    Both facts must survive — this asserts the hint is still the placeholder
+    when a value is already stored.
+    """
+    helpers = _splice_helpers()
+    spec = {'key': 'AMAP_MAPS_API_KEY', 'hint': '粘贴你的 Key'}
+    stored = _run_fn(helpers, '_mcpPlaceholder', [spec, True])
+    fresh = _run_fn(helpers, '_mcpPlaceholder', [spec, False])
+    assert stored == spec['hint'], (
+        f'the hint was evicted by the saved-notice when a value exists: '
+        f'{stored!r} — that is the exact moment a key is being rotated'
+    )
+    assert fresh == spec['hint']
+
+
+def test_shared_credential_is_detected_rather_than_re_requested():
+    """Two cards can legitimately share one credential.
+
+    Measured: ROLLINGGO_API_KEY is declared by rollinggo-hotel AND
+    rollinggo-flight; GITHUB_PERSONAL_ACCESS_TOKEN by github AND github-batch.
+    The renderer must be able to see that, otherwise installing the second one
+    asks for a key the user already gave us and they go re-apply.
+    """
+    from lib.mcp.registry import CATALOG
+    import collections
+    key2ids = collections.defaultdict(list)
+    for e in CATALOG:
+        for s in (e.get('env_specs') or []):
+            key2ids[s['key']].append(e['id'])
+    shared = {k: v for k, v in key2ids.items() if len(v) > 1}
+    assert 'ROLLINGGO_API_KEY' in shared, (
+        'the RollingGo pair no longer shares a key — re-check the scan surface'
+    )
+
+    path = _find_defining_file('function _mcpSharedCredentialSources(key, selfId) {',
+                               os.path.join(STATIC_JS, 'settings'))
+    body = _splice_fn(path, 'function _mcpSharedCredentialSources(key, selfId) {')
+    # It must consult STORED keys (what the user actually supplied), not the
+    # declared spec — a sibling that merely declares the key has nothing to
+    # reuse yet.
+    assert 'stored_env_keys' in body, (
+        'shared-credential detection must key off stored_env_keys (what is '
+        'actually saved), not off the declared env_specs'
+    )
+    assert 'selfId' in body, 'must exclude the entry being installed itself'

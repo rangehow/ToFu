@@ -2,6 +2,17 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
 
+### 2026-07-27 — 「开了自动翻译,译文非要刷新/切会话才出来」根修:译文改走 rev 驱动的可靠通道(owner「前端同步不该依赖强制刷新」;commit `3e168055`,5 文件 +519/-57;新套件 **4/4 含 NEUTER**,failing-first A/B 在 HEAD 上 **8 条精确红**,回归 45+20 全绿,collect **10531** 0 err)
+
+- **根因(两条通告路,可靠的那条没接翻译):** 自动翻译是**事后写者**——`lib/translate/commit.py` 在轮次 settle 很久之后才提交 `translatedContent` + `segments[].translatedText`,然后两路 announce:①`translate` push 帧,**设计上有损**(`lib/agent_core/push.py::_deliver_frame` 在发帧瞬间无订阅者即丢弃,且无 Last-Event-ID 重放);②`notify_conv_changed(rev=post-commit rev)`,**可靠的一半**。而 notify 侧的采纳者 `_verifyActiveConvFromServer` 只在「**是否长大了**」的闸后合并 content/thinking/toolRounds(外加 `_mergeTerminalTurnFields`)。**翻译提交不长大任何东西**:条数相同、正文相同、toolRounds 相同,只多出两个译文字段 → Case 1 因条数相等跳过、Case 2 增长闸从不触发 → `changed=false`,译文当场丢弃。只有刷新/切会话走 `loadConversationMessages` 那份**能用的孪生**合并时才显现——正是 owner 指的强制刷新依赖。
+- **为什么 translation.js 那套看门狗兜不住:** 它只在 `_isRunning` 帧到达后才 arm(`_armAutoTranslateWatchdog`),且**只服务 activeConv**;running 帧和 done 帧一起丢时,前端从头到尾没有任何信号,看门狗根本不会上膛。**丢帧场景下 rev 通道是唯一还活着的路**,所以修在那儿而不是给 push 加重试。
+- **修法(收敛成唯一 reducer,不加第二份字段清单):** 新增纯 reducer `core/conv_reducers.js::_mergeTranslationFields`,字段清单 + 同轮身份闸只此一份;两条通道都调用它——notify 侧**在所有增长闸之外、对整个对齐窗口**跑(本次修复),on-open 侧的 `_mergeServerTranslations` 改为委托(删掉它自带的 64 行内联实现)。**整窗而非仅尾部**:开关打开时后端会扫掠所有未翻译消息,一次 rev bump 可能有多轮历史同时拿到译文(尾部-only 会漏掉前面几轮)。
+- **安全性靠身份闸而非乐观:** role / endpoint 泳道 / **正文逐字节相等**三重比对才允许采纳——译文只对产生它的那段文本有效,编辑或重生成过的轮次必须拒绝;本地已有译文永不被覆盖;正文/thinking 一律不动(原文↔译文切换仍需原文)。
+- **failing-first A/B 实证(本次最有价值的一步):** 用 `cp` 往返把三个文件换成 HEAD 原版(**照纪律不用 `git stash`/`git checkout --`**),新套件在修复前 **8 条 `B1_*` 精确红**(译文丢弃、`changed=false`、无重绘),而 B2 空转控制组 + B3 增长控制组**保持绿**——红的形状与用户报告逐字吻合,证明测到的就是那个 bug 而不是别的东西。
+- **踩坑记(自己造的回归,当场抓住):** 回归环里 `test_frontend_poll_open_conv_grow.py` 红,A/B 一查是 **HEAD 上绿、我改完才红 = 真回归**,不是预存在。原因:该 harness **单独抽取** `_verifyActiveConvFromServer` 并手工 splice 它调用的每个 helper(2026-07-25 已为 `_mergeTerminalTurnFields` splice 过一次),新 reducer 没 splice 就 ReferenceError 死在增长闸之前。**真实 bundle 里 `conv_reducers.js` 先加载,生产不受影响**,属「守卫过期」家族的 harness 漂移。**教训:给一个被 standalone-extract harness 覆盖的函数加新 helper 调用时,必查该 harness 的 splice 清单**——这已经是同一个 harness 第二次踩。
+- **预存在红(留票不留修):** `test_frontend_conv_verify_failure_reheal.py::verifying_dim_kept` 在 HEAD 上即红,断言的是 `chat-cache-verifying` 这个 CSS class,与本次 diff 零共享代码。
+- **生效条件:纯前端改动,需重新加载页面(bundle 重建)后生效。**
+
 ### 2026-07-27 — R2/R3 接缝 v2 落地:evidence 三档接地 + low_confidence 防后门 + harvest 重试(owner 拍板选 (c) 纯设计+离线码,真跑留到网络稳定;commit 见下,3 码 + 3 测试;三套件 **29/29**(+7 新测,含 NEUTER×3),研究全环 **40/40**,collect **10511** 0 err)
 
 - **起因(真跑暴露的真实设计张力,非网络问题):** v1 库内校验闸要求 `evidence` 每个 id **已入库**;真跑实证 LLM 综述会引用**存在但未入库**的近邻(harvest 只入解析成功的篇)→ 全部 gap 被丢 → 0 gaps → 链死。**根因是「已入库」判据本身太强。**

@@ -286,9 +286,35 @@ def test_incremental_mirror_avoids_msg_id_collision_across_seqs(conv_env):
     assert rows[0]['msg_id'] == 'dup-2'
 
 
-if __name__ == '__main__':
-    import pytest as _pt
-    sys.exit(_pt.main([__file__, '-v']))
+# ── 5. Persistent flag file (pt_59140ecd ④ — the owner-confirmed flip) ────
+
+def test_flag_file_parsing_and_pytest_guard(tmp_path):
+    """The flag file flips the write side only when it reads a truthy value;
+    under pytest the DEPLOYMENT path is never consulted (default = off)."""
+    p = tmp_path / 'messages_rows_write.flag'
+    assert mr._flag_file_on(path=str(p)) is False          # absent → off
+    p.write_text('1')
+    assert mr._flag_file_on(path=str(p)) is True
+    p.write_text('0')
+    assert mr._flag_file_on(path=str(p)) is False
+    p.write_text('true\n')
+    assert mr._flag_file_on(path=str(p)) is True
+    # Default (deployment) path must be inert under pytest even if a real
+    # deployment file exists on this box.
+    assert mr._flag_file_on() is False
+
+
+def test_env_var_overrides_flag_file_both_ways(monkeypatch):
+    """Env always wins: =0 is the kill switch even with the file present;
+    =1 engages even with no file. Unset env + pytest → off."""
+    monkeypatch.setenv('TOFU_MESSAGES_ROWS', '0')
+    assert mr.rows_write_enabled() is False
+    monkeypatch.setenv('TOFU_MESSAGES_ROWS', '1')
+    assert mr.rows_write_enabled() is True
+    monkeypatch.delenv('TOFU_MESSAGES_ROWS')
+    assert mr.rows_write_enabled() is False  # pytest guard on default path
+
+
 if __name__ == '__main__':
     import pytest as _pt
     sys.exit(_pt.main([__file__, '-v']))

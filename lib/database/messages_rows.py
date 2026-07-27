@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 
 from lib.log import get_logger
 from lib.conversations.search_index import build_search_text
@@ -48,9 +49,55 @@ def _truthy(v) -> bool:
     return str(v or '').strip().lower() in ('1', 'true', 'yes', 'on')
 
 
+_flag_file_engaged_logged = False
+
+
+def _flag_file_path() -> str:
+    from lib.runtime_paths import data_root
+    return os.path.join(data_root(), 'config', 'messages_rows_write.flag')
+
+
+def _flag_file_on(path=None) -> bool:
+    """Read the persistent write-flag file (pt_59140ecd ④).
+
+    The owner-confirmed flip must survive EVERY future restart path — an
+    env-var-only flip would silently revert the next time someone relaunches
+    the server from a terminal that doesn't export TOFU_MESSAGES_ROWS, and
+    the mirror would rot undetected. The deployment-local flag file makes
+    the flip durable state, not launch-shell state. The env var stays the
+    override in BOTH directions (``=0`` is the emergency kill switch even
+    with the file present). Under pytest the default deployment path is
+    never consulted (deployment state must not leak into the suite); tests
+    exercise the file by passing an explicit ``path``.
+    """
+    if path is None:
+        if 'pytest' in sys.modules:
+            return False
+        path = _flag_file_path()
+    try:
+        with open(path, encoding='utf-8') as f:
+            return f.read().strip().lower() in ('1', 'true', 'on', 'yes')
+    except OSError:
+        return False
+
+
 def rows_write_enabled() -> bool:
-    """Whether dual-write / backfill into conversation_messages is active."""
-    return _truthy(os.environ.get('TOFU_MESSAGES_ROWS'))
+    """Whether dual-write / backfill into conversation_messages is active.
+
+    Precedence: the env var ALWAYS wins when set (either value — ``=0`` is
+    the kill switch); otherwise the persistent flag file decides.
+    """
+    env = os.environ.get('TOFU_MESSAGES_ROWS')
+    if env is not None and str(env).strip() != '':
+        return _truthy(env)
+    on = _flag_file_on()
+    if on:
+        global _flag_file_engaged_logged
+        if not _flag_file_engaged_logged:
+            _flag_file_engaged_logged = True
+            logger.info('[messages_rows] write flag engaged via persistent '
+                        'flag file (%s)', _flag_file_path())
+    return on
 
 
 def rows_read_enabled() -> bool:

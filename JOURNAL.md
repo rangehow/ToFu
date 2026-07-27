@@ -1,6 +1,44 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-27 — 「ms2sd1wlug0sby autopilot 咋不工作了」根修三连 + ⚠️ 待执行的重启验证清单(owner 报障;commits `0964d6e6` / `7d2dbaaf` / `ef298158`;守卫 **19/19**,failing-first 三处各自先红)
+
+> **⚠️ RESTART-VERIFY(未执行,重启后必须跑;跑完把本块删掉)**
+> **这个清单为什么存在:** 下面三个 commit **全部是防御性修复** —— 它们不修复任何「当前正在发生」的损坏(生产已自愈,见下),所以 owner 拍板**推迟重启**是安全的。但也正因为不修复当前损坏,它们会在**下一次任意重启时无声上线**,届时没人知道该验什么、也没有异常现象提示去验。所以清单必须留在这里,而不是留在某个人的记忆里。**在验完之前,不要把本块当过期噪音删掉。**
+>
+> **三条判据(全部可判定,不是「确认一下」):**
+> 1. **Unicode 镜像失败归零** —— 重启后取新日志窗口:
+>    `tail -c 50000000 logs/app.log | grep -ac "unsupported Unicode escape"` → **必须为 0**。
+>    (重启前该计数持续增长,来源是 `message_to_row` 裸 `json.dumps` 把空字节写成 `\u0000`、PG jsonb 拒收。)
+> 2. **全库 partial 覆盖为 0** —— 判定逻辑照抄下面这段,别重新发明(「行数 < blob 消息数且 > 0」= charter 定义的杀手形状;`==0` 是安全形状不计):
+>    ```python
+>    from lib.database import DOMAIN_CHAT, get_thread_db
+>    from lib.database.messages_rows import _parse_messages
+>    db = get_thread_db(DOMAIN_CHAT)
+>    counts = {r['conv_id']: int(r['n']) for r in db.execute(
+>        'SELECT conv_id, COUNT(*) AS n FROM conversation_messages GROUP BY conv_id').fetchall()}
+>    partial = []
+>    for r in db.execute('SELECT id, messages FROM conversations WHERE user_id=1').fetchall():
+>        nb = len(_parse_messages(r['messages']))
+>        nr = counts.get(r['id'], 0)
+>        if nb and 0 < nr < nb:
+>            partial.append((r['id'], nb, nr))
+>    print('PARTIAL =', len(partial), partial[:10])   # 必须为 0
+>    ```
+>    非 0 时用 `tests/_migrate_messages_rows_backfill.py`(幂等,默认 dry-run)修复。
+> 3. **三套守卫全绿** —— `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_messages_rows_mirror_isolation.py tests/test_messages_rows_null_bytes.py tests/test_undefined_name_guard.py -q` → **19/19**。
+
+- **报障与实际根因链(三层,层层套娃):** owner 问「这个会话 autopilot 咋不工作了」。DB 取证:VU 轮 13:47:57 已落库,但**其后没有任何 agent 回复**,`autopilotTurnCount` 从未记账,载体 `e012a5f1` 僵在 `status=running`。日志钉死唯一错误行:`13:47:58 [ERROR] autopilot_baton: conv=ms2sd1wl append failed: name 'full' is not defined`。
+  - **① `0964d6e6` —— `mirror_write_and_commit` 签名缺 `full`。** 函数**体**有 `if full:` 分支、docstring 也写了 `full=True` 的用法,唯独签名漏了这个参数(AST 实证:`full` in body=True / in signature=False)。11:40 行存储写旗打开那一刻起这颗雷被引爆,尾部窗口内 **112 次失败横跨 4 个子系统**(translate.commit 18 / manager._sync 13 / swarm.snapshot 7 / autopilot_baton 6)。守卫:扫描全部调用点,任一传入的关键字不在签名里即红。
+  - **② `7d2dbaaf` —— JSONB 列用了裸 `json.dumps`。** `meta` / `content_json` 是 **jsonb** 列(information_schema 实证),`json.dumps` 把 U+0000 编成 `\u0000`,PG jsonb 解析器直接拒(`UntranslatableCharacter`)。权威 blob 写路径一直走 `json_dumps_pg` 所以从没炸过 —— **同一份数据的两个写者用了不同的序列化器,镜像永远不可能 parity**。改用同一个序列化器后端到端实测:带 NUL 的消息 `parity ok=True`、blob 与 row 都存 `ab`。同 commit 附带**通用未定义名 AST 棘轮**(969 文件 / 5768 函数,当前 0 违规)——因为「函数体引用签名里没有的名字」是一整类缺陷,只钉一个函数是补丁思维。
+  - **③ `ef298158` —— 真正的根:best-effort 钩与调用方控制流耦合。** 前两个是触发器,这个才是「为什么一个镜像 bug 能杀死 autopilot」。`_append_vu_message_to_conv` 里,权威 UPDATE 与镜像钩在**同一个 try 块**,`except` 返回 `None`;镜像抛异常时 VU 消息**已经durable 落库**,函数却返回 `None`,而 `maybe_run_autopilot` 把 `None` 读作「VU 轮没持久化」→ **整个 run 静默结束**。AST 扫描 25 个调用点揪出 **5 处同形耦合**(autopilot_baton / scheduler._shared / swarm.snapshot / swarm._autocontinue / killed_recovery),我另加解耦 `killed_recovery._dispatch_one`(那里镜像抛异常会让已记账的重派被计为 `skipped`——**烧掉一次 attempt 却没派任务**)。修法两层:钩自身全体防御(永不抛)+ **每个调用点各自 try/except**(签名级 `TypeError` 在被调方内部根本捕不到)。
+- **数据修复:** 全库扫描 4190 会话 → **13 个 partial 覆盖**(杀手形状,`parity ok=False`),已用 `backfill_conv` 从权威 blob 重建,**13/13 parity 转绿**,复查全库 partial=0,audit_log 留痕。
+- **生产结局(实证,非推断):** autopilot **已自行恢复**,无需人工干预。该会话任务链 `80308600`(done,4385)→ `a50b6f6c`(done,4964)→ `abef92d1`(done,1728,内容已落进会话 #6)→ 新任务在跑;VU 轮 2 个。恢复的原因是 VU append 走的是 `full=False` 默认分支,而那颗雷只在 `full=True` 分支。
+- **★ 方法论教训一:单样本推广——同一轮我犯了两次,方向还相反。** 先是抽查 `e012a5f1`(`content_len=1`)一个样本,就把 31 个 `status=running` 行全判成「按设计无终态写者的空载体」,被 owner 用「22 行带真实内容」的分布数据推翻;紧接着我又矫枉过正,把 `56755171`(1416 字符)判成「已完成但丢失的回复」,实际查时间线才发现它 15:54:44 停写、`abef92d1` 15:54:47 出生——**是被 3 秒后的 follow-up 正常 supersede 的中途快照**,那一棒的真正产物 1728 字符完好落在会话里。**两次错误的病根同一个:结论建立在单个样本上,既没做全体分布统计,也没查时间序。判定一类现象前,先看分布 + 看时间线,两样都做完再下结论。**
+- **★ 方法论教训二:「best-effort」是契约,不是注释。** `messages_rows.py` 每一处 docstring 都写着镜像「NEVER breaks the authoritative JSONB write path」。这句话对 `dual_write_conv` 成立(它吞自己的异常),但在 5 个调用点的 try/except 控制流下**运行时是假的** —— 这是**契约缺陷,不是命名缺陷**,所以未定义名棘轮按设计抓不到它。**docstring 承诺的不变量必须有守卫钉死,否则它只是一句愿望。** 本轮为此建了三层守卫:行为层(把钩 patch 成抛异常,autopilot VU append 仍须返回非 None)、结构层(AST 棘轮,新调用点若耦合直接红)、钩自防层。
+- **共享 HEAD 纪律(我违规了,记下防再犯):** A/B 验证时用了 `git stash push/pop`,charter 明令禁止(stash 栈里当时还压着兄弟会话保管的 WIP)。虽然本次往返干净、没吞掉别人的东西,但正解是 `git diff > patch` + `git checkout -- <files>` + `git apply` 往返,或 `cp` 备份/还原。
+- **不碰的相邻缺陷:** `status='running'` 挂死(载体到 `fr=stop` 后 finalize 不跑)是真缺陷,属 `pt_8a491f9dad034880`,已由 `ms2p04h3ln5nsg` 认领,本轮**不重复**。
+
 ### 2026-07-27 — swarm 派错角色事故根修:spawn_agents 描述补角色工具清单 + general 选型/恢复规则(owner 拍板 A 方案 + 补恢复闭环;epic `pt_f48e996922d541e1`,commit `7efae8f4`,3 文件 +262/-89;新套件 **5/5,failing-first 5 红,NEUTER×2 精确咬**,swarm 全环 **128/128**,collect **10587** 0 err)
 
 - **事故(owner 截图实证):** 主控派 `researcher` 子代理「消化 4 个历史会话(get_conversation)」,researcher 的 `tools_hint` 只有 web 四件套(registry.py:225),子代理如实报「工具不可用」后轮次烂尾。**瞎的是主控不是子代理**——子代理看得见自己的 schema 并正确拒绝编造;主控侧的 `format_role_catalogue()` 只有 `role: when_to_use` 散文,没有工具清单,注释自称镜像 Claude Code 的 "agents **and the tools they have access to**" 块,**只实现了一半**。

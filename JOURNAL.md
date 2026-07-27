@@ -1,6 +1,15 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+
+### 2026-07-27(续) — 播客/视频面板大胆改版:「媒体演播室控制台」(owner「布局局促、样式不好看,大胆重新设计」;commit `7f8429b6`,4 文件 +843/-81;新套件 **6/6 含 NEUTER**,钉约环 26/26,后端媒体 60/60,i18n+bundle 环 72/72,相邻页签 11/11;headless Chrome 6 状态 × dark+tofu 双主题截图实证)
+
+- **根因取证(「局促」的两个来源):** ①idle 表单把 3 个微型 `<select>` + 裸音色输入 + 行内 checkbox + 生成按钮全塞进一条 wrap flex 行;②**视频专属 CSS 整块缺失**——`.paper-video-content` 容器、`.paper-video-grid/-cell/-thumb/-regen/-player` 在 styles.css 里**只有一条** `.paper-video-cell.is-pending{opacity:.55}`,分镜网格、播放器、重渲按钮全部以裸块渲染(截图里视频页内容贴边的元凶)。podcast 侧靠共享类撑着才没那么惨。
+- **改版形态(两页签共享一套 `pm-*` 设计系统):** idle=演播室卡(渐变徽章+标题+hint、细条左侧 accent 的 TTS 降级横幅、**选项卡**(时长/画质:图标+标题+副标)、**分段控制器**(语言)、带麦克风图标的音色行、**开关式 toggles**(配音/烧录)、全宽渐变 CTA);generating=制作台(播客 EQ 跳动柱/视频渲染扫描线 + 台标 + 中止,pulse 的 active step);done=播客「正在播放」条(**黑胶盘播放时旋转**,play/pause 监听切 `.is-playing`)+ 逐字稿区头 + active 段 accent 左边条,视频影院卡 + **首次有样式的分镜网格**(3:4 竖版缩略图、hover 浮起、ghost 重渲钮)。
+- **契约不动的关键手法——`_pmPick` 桥:** 富选项卡/分段控制器**写回视觉隐藏的 `<select class="pm-sr">`**(两个文件各自守卫式定义,首个生效),generate 路径**仍读 select**——测试钉约(稳定 id + `.value`)、两处 NEUTER 源码标记(degrade banner 调用行 / regen 按钮 append 链)、stepper/activity 类与其 CSS 选择器**逐字保留**。老套件 26/26 未动一行即绿。**给后人:改版换脸不换契约时,把新交互层桥回旧表单元素,比改读值路径安全一个量级。**
+- **共享 HEAD 再实证(良性):** 我的 i18n.js 21 个新键在工作树里被兄弟提交 `69cd968c` 扫进(该提交还重建了 bundle + i18n packs)。`git hash-object` 实证工作树 == HEAD blob,内容零损失,我的提交只剩 4 文件。**教训复用:改共享热文件(i18n.js)后尽快提交,窗口越长越容易被扫进别人提交——这次运气好在兄弟提交信息完整、内容无损。**
+- **headless 截图环境配方(本机):** playwright 的 chrome-headless-shell 缺 libatk 等 10 个系统库,**`LD_LIBRARY_PATH=$(python3 -c 'import sys;print(sys.prefix)')/lib` + `FONTCONFIG_FILE=$PREFIX/etc/fonts/fonts.conf`** 即可跑(lib/motion_video/_env.py 的 conda-recipe 同一招);整页 styles.css 里的裸元素规则(h4/body flex)会破坏 mock 页布局,**每状态一个独立 HTML 文件、html,body{display:block!important}** 才截得准。
+
 ### 2026-07-27 — 「后端明明报错误导致 cooldown,前端为什么几乎没信息」根修:TTFT 首字节看门狗 + 等待心跳 phase(commit `69cd968c`,11 文件 +1036/-34;新套件 **17/17**,**NEUTER×3 全咬**,相邻环 **106/106**,bundle 守卫 **42/42**,collect **10395** 0 err)
 
 - **事故取证(conv ms2gb19gfdco20,task 53c65134):** 上游接受请求后 **300 秒零字节**,唯一绊线是 per-read 300s 超时;用户在日志里看到的 cooldown(slot.py `consecutive errors` 警告)是**别的会话的 swarm worker 撞在同一个共享 slot 上**报的——slot 级事件只进日志,不进任何会话流。本任务自己的 attempt 挂在 HTTP 读里,调度器没抓到错误、也不在冷却等待循环,于是**没有任何事件可发**,「已发送给…等待开始回复」是那 300 秒里唯一诚实的状态(TTFT 实测 318.5s,07:57:05 超时后换 key 18s 出首 token)。**教训:「前端显示少」的第一归因不是渲染层藏了信息,而是发射缝在那个状态下根本没有信号可发。**

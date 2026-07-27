@@ -452,7 +452,7 @@ def verify_conv_parity(db, conv_id: str) -> dict:
 
 
 def mirror_write_and_commit(db, conv_id: str, messages, *, now_ms: int = 0,
-                            changed_seqs=None) -> None:
+                            changed_seqs=None, full: bool = False) -> None:
     """The one-line dual-write hook for full-blob writers (pt_59140ecd ②).
 
     Call this AFTER the authoritative ``conversations.messages`` write has
@@ -497,11 +497,5 @@ __all__ = [
     'message_to_row', 'row_to_message', 'rows_to_messages',
     'backfill_conv', 'dual_write_conv', 'mirror_write_and_commit',
     'load_message_window',
-    'verify_search_text_parity', 'verify_conv_parity',
-]
-__all__ = [
-    'rows_write_enabled', 'rows_read_enabled',
-    'message_to_row', 'row_to_message', 'rows_to_messages',
-    'backfill_conv', 'dual_write_conv', 'load_message_window',
     'verify_search_text_parity', 'verify_conv_parity',
 ]

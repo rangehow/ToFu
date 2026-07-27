@@ -83,6 +83,14 @@
 - **安全性由 reducer 的身份闸承担,不靠外层丢帧:** 流式中的尾轮本地正文与服务器不同 → reducer 直接拒绝;只有**已结束**的轮次能拿到译文。这是「精确开一条增量通道」而非拆闸的关键——不变式「不覆盖正在流式的气泡」由更靠内的一层保住了。
 - **后台会话(第三格)实测无需改码:** 四条重开分支(3 merge + 2 wholesale)全部经过共享 reducer,含 `loadConversationMessages` 的 cache-fresh 分支(`conversations.js:1662` 合并后再 `ConvCache.put`)。**先实测再动手,省下一刀无谓的改动**——owner 提的「别假设 `_needsLoad` 恢复路径经过 reducer」正是该查的点,查完是真经过。
 - **旧断言的处置(诚实记录):** `test_frontend_conv_notify_push.py` 4 项断言写的是「整帧丢弃」(`getCalls.length === 0`),那正是本次刻意改掉的行为。改为断言**「不发生破坏性采纳」**(正文逐字符不变 + 未重绘 + `_serverRev` 未推进),即这些用例真正要保护的性质;NEUTER A 重指向改道块。**没有把它们删掉或调宽——守卫要的性质一条没少。**
+### 2026-07-27 — 误分类家族第二形状收口:resolve-groups 403 是穿马甲的 503(owner 48h 全量清扫发现;commit `96466f65`,2 文件 +79;failing-first **4 红 1 绿** → **48/48**,NEUTER 精确咬 4 发,回归环 **117/117**)
+
+- **形状:** `API HTTP 403: resolve groups failed: model unsupported by selected groups: claude-opus-5` —— 纯 ASCII、**不带 UPSTREAM_VENDOR 标记**,`c354bb18` 的乱码修复盖不住它。生产实测(07-26):22 次全挤在 **19:15–19:54 一个 40 分钟窗口**,10 次落 PermissionError_ → 任务死亡/降级,戴的仍是「API Key 被拒绝 → Settings→Keys」假信封(任务 `b4a01fd9` R7 为代表)。
+- **瞬时性的决定性证据:** 同一批 key 在窗口结束后**几分钟内恢复** —— 19:55–21:20 间 opus-5 成功轮 **43** 次。真鉴权拒绝不会隔几分钟自愈;这是网关自己的路由解析层在风暴窗口抖动 = 穿 403 马甲的 503。
+- **修法(与乱码修复同谓词同纪律):** 新增 `_GATEWAY_ROUTING_TRANSIENT_PATTERNS`('resolve groups failed' / 'model unsupported by selected groups',ASCII 故天然编码无关)进 `_is_upstream_vendor_transient` 原文层,401/403 与 400 分支同享;对照「Forbidden: key has no access」必须仍是 PermissionError_(钉死,防把真死 key 变成无限轮换)。
+- **顺带闭环:** cache_control `tool_result.content` 400 在 11:51 重启后**零真实发生**(今天唯一命中是 grep 自引用回声)——6fe3f9ca 协议闸有效,该风险关闭。
+- **生效条件:需重启服务** —— 与 `c354bb18`(乱码分类)+ `50e75211`(工具名观测探针)同批待激活;重启前该形状风暴仍会杀任务。
+
 ### 2026-07-27 — 乱码 403/400 逃逸分类器根修:72h 全部 6 个 Opus 5 任务死亡同根(owner 复核揪出反例后下令;commit `c354bb18`,2 文件 +126/-1;failing-first **5 红 2 绿** → **43/43**,NEUTER 精确咬 1 发,回归环 **112/112**)
 
 - **我上一轮「403 分类器早已正确识别」的裁决错了,owner 拿生产日志当场推翻:** 07-26 10:21(乱码修复 6fe3f9ca 落地**之后**)任务 `f8045792` 第 41 轮,`PermissionError_: API HTTP 403: {"error":{"message":"è¯·æ±å¤±è´¥ï¼...","ext":{"error":{"source":"UPSTREAM_VENDOR"...` —— **双编码乱码形态的 403 被判成 PermissionError_**,直接以 reason=permission 降级 kimi。同日 18:07 对照组(正确解码的中文)走的是正确的 vendor-transient 分支。教训与 journal 已有多条同族:**「某形态测过」≠「所有编码形态测过」,判据必须编码无关。**

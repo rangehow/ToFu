@@ -61,17 +61,30 @@ PYMUPDF_LOCK = threading.Lock()
 MAX_PDF_BYTES = 200 * 1024 * 1024  # 200 MB safety limit
 
 # ─── PyMuPDF (core PDF engine) ───
+# PyMuPDF exposes its top-level package as ``pymupdf`` since 1.24.3; older
+# installs (e.g. 1.24.1) ship ONLY the legacy ``fitz`` module name. Importing
+# solely as ``pymupdf`` silently disabled PDF parsing on a host that actually
+# had the library (real R4 harvest run: every parse raised
+# ``'NoneType' has no attribute 'open'`` because HAS_PYMUPDF was False). Try
+# the modern name, then fall back to ``fitz`` — same C library, identical API
+# (open / TOOLS.mupdf_display_*).
 try:
     import pymupdf
     HAS_PYMUPDF = True
-    # Suppress noisy MuPDF C-library warnings — they are harmless;
-    # MuPDF recovers gracefully.
     pymupdf.TOOLS.mupdf_display_errors(False)
     pymupdf.TOOLS.mupdf_display_warnings(False)
-except ImportError as e:
-    pymupdf = None  # type: ignore[assignment]
-    HAS_PYMUPDF = False
-    logger.warning('[PDF] pymupdf not installed — PDF parsing disabled: %s', e)
+except ImportError:
+    try:
+        import fitz as pymupdf  # PyMuPDF <1.24.3 legacy module name
+        HAS_PYMUPDF = True
+        pymupdf.TOOLS.mupdf_display_errors(False)
+        pymupdf.TOOLS.mupdf_display_warnings(False)
+        logger.info('[PDF] pymupdf imported via legacy "fitz" module name '
+                    '(PyMuPDF <1.24.3)')
+    except ImportError as e:
+        pymupdf = None  # type: ignore[assignment]
+        HAS_PYMUPDF = False
+        logger.warning('[PDF] pymupdf/fitz not installed — PDF parsing disabled: %s', e)
 
 # ─── pymupdf4llm (preferred for table/header-aware extraction) ───
 # Distinguish two failure modes that BOTH surface as ImportError so the log

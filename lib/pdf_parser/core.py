@@ -13,8 +13,11 @@ logger = get_logger(__name__)
 try:
     import pymupdf
 except ImportError:
-    pymupdf = None  # type: ignore[assignment]
-    logger.debug('pymupdf not available in core — guarded by HAS_PYMUPDF')
+    try:
+        import fitz as pymupdf  # PyMuPDF <1.24.3 legacy module name
+    except ImportError:
+        pymupdf = None  # type: ignore[assignment]
+        logger.debug('pymupdf not available in core — guarded by HAS_PYMUPDF')
 from lib.pdf_parser.images import detect_and_clip_figures
 from lib.pdf_parser.text import extract_pdf_text
 

@@ -24,6 +24,12 @@ _ATOM_NS = {'atom': 'http://www.w3.org/2005/Atom'}
 # rarely throttled in lockstep with the API).
 _ARXIV_TITLE_RETRIES = 2
 _ARXIV_TITLE_RETRY_SLEEP = 1.5
+# arXiv's search API rate-limits aggressively (HTTP 429) and times out under
+# load; a single transient failure must NOT return an empty result that
+# silently starves downstream callers (harvest seed / ideate novelty retrieval
+# / recommend). Retry with backoff seeded at arXiv's documented ~3s rate limit.
+_ARXIV_SEARCH_RETRIES = 3
+_ARXIV_SEARCH_RETRY_SLEEP = 3.0
 
 
 def _extract_arxiv_id(url_or_id):
@@ -222,12 +228,33 @@ def search_arxiv(query, max_results=10):
     )
     url = f'{_ARXIV_API_URL}?{params}'
 
-    try:
-        resp = http_get(url, timeout=15,
-                        headers={'User-Agent': 'Mozilla/5.0 (compatible; TofuBot/1.0)'})
-        resp.raise_for_status()
-    except Exception as e:
-        logger.warning('[Paper:arXiv:Search] Query failed for %.120s: %s', query, e)
+    resp = None
+    for attempt in range(1, _ARXIV_SEARCH_RETRIES + 1):
+        try:
+            resp = http_get(url, timeout=20,
+                            headers={'User-Agent': 'Mozilla/5.0 (compatible; TofuBot/1.0)'})
+            resp.raise_for_status()
+            if attempt > 1:
+                logger.info('[Paper:arXiv:Search] recovered for %.80s on attempt %d',
+                            query, attempt)
+            break
+        except Exception as e:
+            # Transient (429 rate-limit / 5xx / timeout) → back off and retry;
+            # a bare empty return here is what silently starves harvest.
+            status = getattr(getattr(e, 'response', None), 'status_code', None)
+            transient = (status in (429, 500, 502, 503, 504)
+                         or 'timed out' in str(e).lower()
+                         or 'timeout' in type(e).__name__.lower())
+            if attempt < _ARXIV_SEARCH_RETRIES and transient:
+                sleep_s = _ARXIV_SEARCH_RETRY_SLEEP * attempt  # linear backoff
+                logger.warning('[Paper:arXiv:Search] transient failure for %.80s '
+                               '(attempt %d/%d, status=%s): %s — retrying in %.1fs',
+                               query, attempt, _ARXIV_SEARCH_RETRIES, status, e, sleep_s)
+                time.sleep(sleep_s)
+                continue
+            logger.warning('[Paper:arXiv:Search] Query failed for %.120s: %s', query, e)
+            return []
+    if resp is None:
         return []
 
     try:

@@ -2,6 +2,15 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
 
+### 2026-07-27 — 自动科研系统真跑暴露两个集成缝 bug 并根修(owner「先真跑一次当 forcing function」;commit 见下,6 改 + 2 新测试;新套件 **retry 5/5 + fitz 2/2 含 NEUTER + failing-first**,相邻 pdf/harvest 环 **18 过 5 skip**,collect **10464** 0 err)
+
+- **真跑定位:单元测试按定义测不到集成缝。** R1–R4 的 43 个离线测试全绿,但都在 monkeypatch 缝下;真调 `search_arxiv` + 真 `parse_pdf` 一跑,两个真 bug 立刻现形——这正是 owner 要真跑的价值。
+- **Bug ①(根修):`search_arxiv` 无重试,arXiv 429/超时→返回 `[]`→harvest 静默饿死→整链死。** 对比:`fetch_arxiv_title` 早有重试+fallback,唯独 search 这条种子缝没有。修:`search_arxiv` 内加**有界重试+线性退避**(3 次,种子 3s = arXiv 文档限速),区分瞬时(429/5xx/timeout 退避重试)与永久(400 立即返回,不浪费退避)。**改共享缝而非调用方**(charter),recommend/ideate 近邻检索/harvest 种子全受益。测试 5/5 含 NEUTER(retry=1→429 掉 `[]`)。
+- **Bug ②(根修,影响面更大):PyMuPDF 1.24.1 只以旧名 `fitz` 暴露,代码只 `import pymupdf`→`HAS_PYMUPDF=False`→PDF 解析在装了库的机器上静默失效。** `pymupdf` 顶层别名 1.24.3+ 才有。修:4 处 guarded import(`_common`/`core`/`text`/`images`)全部 `try pymupdf → except: import fitz as pymupdf`,同一 C 库、API 全同(open/TOOLS)。**这是阅读模式/播客/harvest 共用的解析器 bug,不止科研链**。测试实证 HAS_PYMUPDF 转 True + 真 PDF 解析出文本。
+- **真跑三阶段实证进展:** ①fix 前 harvest 因 429 拿 0 篇;②fix search 后种子拿到真 id(2412.14838 等)但 parse 全炸(pymupdf);③fix fitz 后 harvest **真解析了 PDF**,survey 真跑出 open_gaps,但库内校验闸把**全部 gap 因 evidence 接不上而丢弃**(arXiv 此时 DNS 解析失败,citation verify 全超时)→ survey gate「0 gaps」失败。**第三个是待查的真发现(见下),非本 commit 修。**
+- **诚实边界:** 本 commit 只交付两个**已确证根因 + 有回归测试**的集成缝修复。真跑受当前 arXiv 连接性恶化(实时 `Failed to resolve export.arxiv.org`)影响未跑完全程,阈值校准数据未取到。
+- **给下一步:** survey 库内校验闸在真数据上「过严」——它要求每个 gap 的 evidence id 能在库中查到,但 harvest 只入库了成功解析的篇,LLM 综述可能引用了解析失败/未入库的篇。需判定:是闸太严(应允许 gap 引用直接搜到但未入库的近邻),还是 harvest 入库率需提上来。这是 R2 闸与真实 harvest 覆盖率的**接缝语义**问题,值得单独一轮。
+
 ### 2026-07-27 — 硬刷新雪崩根修三件套:json_dumps_pg 快速路径 + flip 方向判据 + 拒绝标记(owner「硬刷新后加载很久+一堆错」取证→拍板 A+C;commit `c8587db5`,7 文件 +798/-4;新套件 **38/38**(failing-first 4+1、手动 NEUTER×2 精确咬、内建 NEUTER×2),翻译环 **77+4+2**,envelope 环 **47**,collect **10448** 0 err)
 
 - **事故链(实测还原,非推测):** 硬刷新 → 前端爆发 ~200 请求(500 会话元数据+sync-digest+brain 面板+51×poll+36×detect-language+10×translate+34×extract-file-changes+25 条 40-94MB 全量 blob INSERT) → FUSE 上 PG 44 条慢查询(p50=3.6s/p90=8.3s/max=11.2s,平时全天 ~4 条) → 每条 blob 写前过纯 Python `strip_null_bytes_deep`(93.7MB blob 实测 0.9s 持 GIL CPU) → **08:43:59 faulthandler 转储 149/224 线程同在该函数** → 事件循环 8.8s 冻结 → 前端 poll 超时/SSE 早断 → 降级轮询 → 雪崩正反馈。**教训:慢查询日志只量 cursor.execute,Python 侧 sanitize CPU 不计入——两个根因要分开归因。**
@@ -1241,3 +1250,10 @@
 - **三个实测发现(清点才看得见):** ①orchestrator **本来就是 tools_terminal_round=True 语义**(:689 末轮无工具),与底盘默认一致无需翻转;②`_premature_retry_count` 是唯一直接参与循环条件的 local,它进 `retry_bonus` 的那一刀是「真迁移」刀,必须单独成 slice;③底盘缺口只有三个:连续工具超时熔断 / 崩溃 checkpoint / 预算闸——其中预算闸的挂载点(轮首 vs 流后)有**真语义差**(流后=本轮钱已花才停),已标记 owner 拍板项。
 - **退出路径全表:** 8 break + 1 continue + 自然落地,逐条对账 ROUND_END 发射;三处 abort 检查与底盘三检查一一对应(工具执行前那次 = 批量钩前检查,语义逐字节)。checkpoint 节流钩注意与 swarm 批量钩里的 checkpoint **两处收敛,别又长成两份**(agent_verdict 手抄 4 份的教训)。
 - **下一步:** owner 审清单 → 拍板 dataclass 形状(§5 建议 control/llm/usage/tools 四组)→ 按 §7 三条纪律切 slice(每组一刀,retry 刀单独,底盘缺口先落钩再接)。
+
+### 2026-07-27 — 「opus-5 掉到 kimi-k3」根因与裁决:厂商 503 风暴 × 120s 故障预算提前切断(conv ms2j3kue58xo0u;配置变更 .env,重启生效)
+
+- **现场(task 65f032fd R1):** 09:09:35–09:11:36 厂商(toio `UPSTREAM_VENDOR`/`service:claude-opus-5`)对**全部 3 把 key**持续回 503,dispatch 轮换 8 个 cycle 约 2 分钟;`_GATEWAY_OUTAGE_BUDGET_S=120s` 到期 → llm_fallback 切 kimi-k3 秒回。
+- **更正(owner 复核抓出,自引用污染家族又一例):** 本条目初版写「厂商 09:37 恢复」是**错的**——引用的 09:37:35/09:39:11/09:40:17 三行是 `lib.project_mod.run_command` 日志,即**我自己上一条 grep 命令被记进 app.log 的回声**,不是真实成功轮。排除 run_command 行后复核:09:12 后真实 opus-5 成功轮 **0**,09:12 后真实 503 又 **9** 条——**截至 09:51 厂商故障仍在持续**。教训:从 app.log grep 证据时,一律先 `grep -av 'lib.project_mod.run_command'` 排除自引用再下结论。
+- **owner 裁决:「模型最终会好就愿意一直等」→ `.env` 设 `TOFU_GATEWAY_OUTAGE_BUDGET_S=0`**(lib/llm_dispatch/api.py 内建开关,0=禁用上限,无限轮换直到厂商恢复或用户取消;abort_check 每 cycle 仍生效)。已接受的 trade-off:真·全员宕机期间每个等待任务占住一个 worker 线程。
+- **边界:** 该开关只管「全 slot 纯 5xx 风暴」;确定性错误(400/401/格式)仍走原 fallback(等待无意义);慢但活的请求本就不被任何超时杀(keep-alive 拆弹,见 69cd968c 条目)。

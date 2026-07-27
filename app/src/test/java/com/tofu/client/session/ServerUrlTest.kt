@@ -110,6 +110,39 @@ class ServerUrlTest {
         )
     }
 
+    // ── displayLabel: compress the 90-char sandbox URL for list rows ───────
+
+    @Test
+    fun displayLabel_compresses_mlp_sandbox_to_uuid_idc_port() {
+        // NEUTER CHECK: return the raw URL and this fails — reproducing the
+        // unreadable list where every row truncated to the same "https://5665b…".
+        assertEquals("5665bc99 · zw05 : 15000", ServerUrl.displayLabel(sandbox))
+    }
+
+    @Test
+    fun displayLabel_non_mlp_host_shows_host_and_proxy_port() {
+        assertEquals(
+            "tofu.example.com : 15000",
+            ServerUrl.displayLabel("https://tofu.example.com/proxy/15000/"),
+        )
+    }
+
+    @Test
+    fun displayLabel_bare_host_keeps_explicit_port() {
+        assertEquals(
+            "192.168.1.9:15000",
+            ServerUrl.displayLabel("http://192.168.1.9:15000/"),
+        )
+        // A default port is not noise worth showing.
+        assertEquals("tofu.example.com", ServerUrl.displayLabel("https://tofu.example.com/"))
+    }
+
+    @Test
+    fun displayLabel_returns_unparseable_input_as_typed() {
+        // A half-typed URL must still render something, not vanish.
+        assertEquals("https://", ServerUrl.displayLabel("  https://  "))
+    }
+
     @Test
     fun needsProxyAuthFix_false_for_bare_host_or_explicit_auth() {
         // Bare host on NONE → leave alone (correct zero-config default).

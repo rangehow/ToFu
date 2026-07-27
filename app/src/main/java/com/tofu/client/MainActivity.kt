@@ -3,8 +3,8 @@ package com.tofu.client
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -20,6 +20,7 @@ import com.tofu.client.ui.ProfileListScreen
 import com.tofu.client.ui.ProfilesViewModel
 import com.tofu.client.ui.Screen
 import com.tofu.client.ui.WebScreen
+import com.tofu.client.ui.theme.TofuTheme
 
 /**
  * Single-Activity host. Builds the dependency graph (Room DAO + encrypted
@@ -36,6 +37,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Draw behind the system bars; TofuTheme sets the bar icon contrast and
+        // each screen applies its own window insets.
+        enableEdgeToEdge()
 
         db = Room.databaseBuilder(
             applicationContext, ProfileDatabase::class.java, "tofu-profiles.db",
@@ -50,7 +54,7 @@ class MainActivity : ComponentActivity() {
         vm.migrateOnLaunch()
 
         setContent {
-            MaterialTheme {
+            TofuTheme {
                 Surface(Modifier.fillMaxSize()) {
                     val screen by vm.screen.collectAsState()
                     val profiles by vm.profiles.collectAsState()

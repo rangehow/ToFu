@@ -20,22 +20,42 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SmallFloatingActionButton
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.tofu.client.data.Profile
@@ -129,6 +149,13 @@ fun WebScreen(
 ) {
     val webRef = remember { arrayOfNulls<WebView>(1) }
 
+    // Load progress (0..100) from the chrome client. A WebView shell has no
+    // browser chrome, so without this the screen is blank-then-content with no
+    // feedback — indistinguishable from the white-screen failure mode we hit on
+    // the Shanghai server. The overlay hides once the first paint lands.
+    var progress by remember(profile.id) { mutableIntStateOf(0) }
+    var firstLoadDone by remember(profile.id) { mutableStateOf(false) }
+
     // A getUserMedia() request that arrived before the runtime RECORD_AUDIO
     // permission was granted, parked here until micLauncher returns a result.
     val pendingMicRequest = remember { arrayOfNulls<PermissionRequest>(1) }
@@ -158,7 +185,18 @@ fun WebScreen(
         pendingFileCallback[0] = null
         if (cb != null) {
             val uris = if (result.resultCode == android.app.Activity.RESULT_OK) {
-                WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
+                val data = result.data
+                // Multi-select: the picker returns the URIs in the Intent's
+                // ClipData, NOT in getData(). The framework's parseResult()
+                // only ever reads getData(), so it silently drops all but one
+                // file on a multi-selection — extract ClipData ourselves and
+                // fall back to parseResult() for the single-file case.
+                val clip = data?.clipData
+                if (clip != null) {
+                    Array(clip.itemCount) { clip.getItemAt(it).uri }
+                } else {
+                    WebChromeClient.FileChooserParams.parseResult(result.resultCode, data)
+                }
             } else {
                 null
             }
@@ -173,7 +211,11 @@ fun WebScreen(
 
     Box(Modifier.fillMaxSize()) {
         AndroidView(
-            modifier = Modifier.fillMaxSize(),
+            // The activity is edge-to-edge, so without a bottom inset the
+            // gesture-nav bar overlaps the SPA's composer — the one control the
+            // user needs most. The status bar is NOT inset: the SPA paints its
+            // own dark header there, which reads better full-bleed.
+            modifier = Modifier.fillMaxSize().navigationBarsPadding(),
             factory = { ctx ->
                 WebView(ctx).apply {
                     webRef[0] = this
@@ -215,6 +257,10 @@ fun WebScreen(
                     // and bridge the SPA's mic (getUserMedia) request to the
                     // app's runtime RECORD_AUDIO permission.
                     webChromeClient = object : WebChromeClient() {
+                        override fun onProgressChanged(view: WebView, newProgress: Int) {
+                            progress = newProgress
+                        }
+
                         override fun onConsoleMessage(m: ConsoleMessage): Boolean {
                             Log.i(
                                 "TofuWebConsole",
@@ -322,6 +368,7 @@ fun WebScreen(
                             scope.launch(Dispatchers.Main) { onBack() }
                         },
                         onPageDone = { view, _ ->
+                            firstLoadDone = true
                             // Viewport-parity probe: log the WebView's computed
                             // layout width + DPR so breakpoint agreement with
                             // Chrome (SPA TOFU_BP 768/1024, core.js) can be
@@ -344,34 +391,114 @@ fun WebScreen(
             },
         )
 
-        // Top-end affordance stack the WebView shell otherwise lacks (no
-        // address bar / menu). Status-bar inset + low alpha keep it clear of
-        // the SPA and unobtrusive over the chat.
-        //   • Refresh — reload the page (replaces the unusable pull-to-refresh).
-        //   • Copy diagnostics — collect client state + a live GET probe and
-        //     copy the JSON to the native clipboard so the user can paste it to
-        //     the maintainer in one tap. Native clipboard write means it works
-        //     even when the SPA is stuck on the "Fetching messages…" skeleton.
+        // Branded first-load cover. Without it the user stares at a white
+        // rectangle while the SPA boots, which is indistinguishable from the
+        // white-screen FAILURE mode — so a slow server read as a broken app.
+        // Covers only the FIRST load; later navigations use the thin bar below.
+        AnimatedVisibility(
+            visible = !firstLoadDone,
+            exit = fadeOut(animationSpec = tween(220)),
+        ) {
+            LoadingCover(profile.alias, progress)
+        }
+
+        // Thin determinate progress line for subsequent navigations/reloads —
+        // the one piece of browser chrome a shell genuinely needs.
+        if (firstLoadDone && progress in 1..99) {
+            LinearProgressIndicator(
+                progress = { progress / 100f },
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .fillMaxWidth(),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = Color.Transparent,
+                strokeCap = StrokeCap.Butt,
+            )
+        }
+
+        // Affordances the WebView shell otherwise lacks (no address bar/menu).
+        // Collapsed to a SINGLE handle by default: two permanent FABs sat on top
+        // of the SPA's own controls, so the shell's debug affordances were
+        // competing with the product's UI. Tap to reveal Reload + Diagnostics.
+        var toolsOpen by remember { mutableStateOf(false) }
         Column(
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .statusBarsPadding()
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+                .padding(10.dp),
+            horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.spacedBy(9.dp),
         ) {
             SmallFloatingActionButton(
-                onClick = { webRef[0]?.reload() },
-                modifier = Modifier.alpha(0.6f),
+                onClick = { toolsOpen = !toolsOpen },
+                containerColor = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.alpha(if (toolsOpen) 0.95f else 0.4f),
             ) {
-                Icon(Icons.Filled.Refresh, contentDescription = "Reload")
+                Icon(
+                    if (toolsOpen) Icons.Filled.Close else Icons.Filled.MoreVert,
+                    contentDescription = if (toolsOpen) "Hide tools" else "Show tools",
+                )
             }
-            SmallFloatingActionButton(
-                onClick = { collectAndCopyDiagnostics(webRef[0]) },
-                modifier = Modifier.alpha(0.6f),
-            ) {
-                Icon(Icons.Filled.BugReport, contentDescription = "Copy diagnostics")
+            AnimatedVisibility(toolsOpen) {
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(9.dp),
+                ) {
+                    SmallFloatingActionButton(
+                        onClick = { webRef[0]?.reload(); toolsOpen = false },
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                    ) {
+                        Icon(Icons.Filled.Refresh, contentDescription = "Reload")
+                    }
+                    SmallFloatingActionButton(
+                        onClick = { collectAndCopyDiagnostics(webRef[0]); toolsOpen = false },
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                    ) {
+                        Icon(Icons.Filled.BugReport, contentDescription = "Copy diagnostics")
+                    }
+                }
             }
         }
+    }
+}
 
+/**
+ * Full-bleed cover shown until the SPA's first paint: the server's identity
+ * tile, its name, and real load progress. Deliberately opaque — it must hide
+ * the WebView's white default background, which is the whole point.
+ */
+@Composable
+private fun LoadingCover(alias: String, progress: Int) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        ServerAvatar(alias, size = 60)
+        Spacer(Modifier.height(18.dp))
+        Text(
+            alias,
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onBackground,
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            if (progress > 0) "Loading… $progress%" else "Connecting…",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(22.dp))
+        LinearProgressIndicator(
+            progress = { (progress / 100f).coerceAtLeast(0.04f) },
+            modifier = Modifier.width(160.dp),
+            color = MaterialTheme.colorScheme.primary,
+            trackColor = MaterialTheme.colorScheme.surfaceVariant,
+        )
     }
 }

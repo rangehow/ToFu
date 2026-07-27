@@ -89,5 +89,45 @@ data class ServerUrl(
         fun needsProxyAuthFix(rawUrl: String, current: AuthType): Boolean =
             current == AuthType.NONE &&
                 defaultAuthType(rawUrl) == AuthType.CODE_SERVER_PASSWORD
+
+
+        /**
+         * A short, human-scannable label for a server URL, for list rows.
+         *
+         * An MLP sandbox URL is ~90 characters of which the only distinguishing
+         * part is the UUID prefix, so rendering the raw string made every row
+         * in the list look identical (and truncate to the same "https://5665b…").
+         * We compress `<uuid>-vscode-<idc>.<domain>/proxy/<port>/` to
+         * `5665bc99 · zw05 : 15000` — the three fields that actually differ
+         * between a user's sandboxes.
+         *
+         * Non-MLP hosts fall back to `host:port/path`, and an unparseable
+         * string is returned as typed (so a half-typed URL still shows).
+         * Pure and deterministic — unit-tested off-device.
+         */
+        fun displayLabel(rawUrl: String): String {
+            val u = parse(rawUrl) ?: return rawUrl.trim()
+            val port = PROXY_PORT.find(u.httpUrl.encodedPath)?.groupValues?.getOrNull(1)
+            val mlp = MLP_HOST.find(u.host)
+            if (mlp != null) {
+                val uuidHead = mlp.groupValues[1].take(8)
+                val idc = mlp.groupValues[2]
+                return buildString {
+                    append(uuidHead)
+                    append(" · ")
+                    append(idc)
+                    if (port != null) append(" : ").append(port)
+                }
+            }
+            val hostPort = u.httpUrl.host +
+                if (u.httpUrl.port != defaultPortFor(u.httpUrl.scheme)) ":${u.httpUrl.port}" else ""
+            return if (port != null) "$hostPort : $port" else hostPort
+        }
+
+        private val MLP_HOST =
+            Regex("""^([0-9a-fA-F-]{8,})-vscode-([^.]+)\.""")
+        private val PROXY_PORT = Regex("""/proxy/(\d+)""")
+
+        private fun defaultPortFor(scheme: String) = if (scheme == "https") 443 else 80
     }
 }

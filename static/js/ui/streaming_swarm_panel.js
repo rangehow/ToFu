@@ -225,6 +225,25 @@ function _recoverSwarmAgents(round, allRounds) {
          showed no tools/timeline even though the agent used them live. */
       const tools = Array.isArray(a.tools) ? a.tools : [];
       const toolCalls = Array.isArray(a.toolCalls) ? a.toolCalls : [];
+      /* ★ Restore the live stopwatch's anchor (backend `startedAt`, epoch ms
+         — see master._build_agent_snapshot). The per-agent timer renders only
+         while the agent is running AND has a `_startedAt`; that field used to
+         be minted client-side from Date.now() and was never persisted, so a
+         reload rebuilt stubs WITHOUT it and the timer node disappeared for an
+         agent that was still working. The `else if (a.elapsed)` fallback
+         cannot cover that case: `elapsed` only exists once the agent has
+         finished. Range-checked so a wrong-magnitude value (epoch seconds, or
+         a double-converted ms) is dropped rather than rendered as a ~50-year
+         / year-58000 elapsed — both fail silently, which is worse than the
+         missing timer this restores. */
+      let startedAt = 0;
+      const rawStart = Number(a.startedAt);
+      if (Number.isFinite(rawStart) && rawStart > 1e12 && rawStart <= Date.now()) {
+        startedAt = rawStart;
+      } else if (a.startedAt != null && a.startedAt !== "") {
+        console.warn("[Swarm] implausible startedAt for agent", a.id,
+          "=", a.startedAt, "— timer anchor dropped");
+      }
       return {
         id: a.id || "",
         role: a.role || "agent",
@@ -239,6 +258,7 @@ function _recoverSwarmAgents(round, allRounds) {
         error: a.error || "",
         tools,
         _toolCalls: toolCalls,
+        _startedAt: startedAt || undefined,
       };
     });
   }

@@ -116,6 +116,12 @@ def filter_snapshot(snapshot: dict, keep_ids: set) -> dict:
     therefore stamp EACH spawn round with only the agents its own handle
     launched. Recomputes the derived counts/version over the kept subset so
     the monotonic guard stays correct per panel.
+
+    NOTE: agent dicts are carried through BY REFERENCE, so every per-agent
+    field (including ``startedAt``, the running stopwatch's anchor) survives
+    this rewrite automatically. Do not switch to rebuilding agent dicts field
+    by field here — that is exactly how a per-agent field silently goes
+    missing on the reload path.
     """
     if not isinstance(snapshot, dict):
         return snapshot

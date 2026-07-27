@@ -25,6 +25,7 @@ import threading
 import time
 from collections.abc import Callable
 
+from lib.agent_core.task_runtime import _epoch_ms
 from lib.agent_inbox import consume as inbox_consume
 from lib.agent_inbox import enqueue as inbox_enqueue
 from lib.agent_inbox import format_swarm_update
@@ -371,6 +372,11 @@ class MasterOrchestrator:
                            if self._scheduler else set())
             pending_ids = ({s.id for s in self._scheduler._pending}
                            if self._scheduler else set())
+            # Wall-clock launch instants for the agents still in flight. This
+            # is the ONLY source for a running agent's start: its result (and
+            # thus `elapsed`) does not exist yet.
+            started_at = (self._scheduler.started_at_map()
+                          if self._scheduler else {})
             specs = list(self.specs)
             terminated = self._terminated
 
@@ -435,6 +441,19 @@ class MasterOrchestrator:
                     'preview':       '',
                     'modifiedFiles': 0,
                     'error':         '',
+                    # ★ The live stopwatch's anchor. The frontend renders a
+                    #   per-agent timer only while `status` is running AND it
+                    #   has a start; minting that start client-side meant a
+                    #   reload DROPPED THE TIMER NODE ENTIRELY for an agent
+                    #   that was still working (`elapsed` only exists once the
+                    #   agent finishes, so the fallback could not cover it).
+                    #   Epoch MILLISECONDS via the shared _epoch_ms seam — the
+                    #   same wire unit as every other clock in this codebase;
+                    #   seconds here would silently render a ~50-year elapsed.
+                    #   None for pending/unknown agents: not started yet, so
+                    #   there is no honest instant to report.
+                    'startedAt':     (_epoch_ms(started_at.get(spec.id))
+                                      if live == 'running' else None),
                 })
 
         # ── Monotonic version key (#2) ──

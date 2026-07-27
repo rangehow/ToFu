@@ -12,6 +12,16 @@
 - **B(PG 迁本地盘)按 owner 裁决不动:** 独立运维迁移;本次「25 条 40-94MB 全量 blob INSERT + 34 条 PATCH 整 blob 重写」的实测数字已挂上板,作为优先推进 `TOFU_MESSAGES_ROWS` 写路径翻转(先过 verify_conv_parity)的独立 epic 证据。
 - **生效条件:** 代码改动,**需重启服务**;不重启则旧行为(慢清洗+旧 flip 闸+无标记)不变。
 
+### 2026-07-27(续2) — 行存储写路径翻转证据包落地(epic `pt_341af8819c1848c1` 收口;纯取证+文档,零产品代码;`docs/MESSAGES_ROWS_WRITE_FLIP_EVIDENCE.md`)
+
+- **动机:** 硬刷新雪崩的 PG 侧根因(改一条消息重写整个 40-94MB blob)A 修不了,行存储写路径才是根治;本 epic 把「优先做」的决策依据做成**决策就绪**状态。
+- **三个今日实测增量(全部新数据,非复述):**
+  ①**backfill 自 07-26 逐字节冻结**(3,696 会话/26,950 行,旗子关着零推进);覆盖 = 完整 3,689 / **部分 484**(charter 定义的杀手形状实存)/ 空 477;**Top-10 最大 blob 中 9 个 0 行**——重写大户恰好全裸奔。
+  ②**parity 闸实测:完整覆盖 msg_count 最大 12 个全 OK**(含 1163 条的 mqyv664xjp3085,1.28MB search_text 逐字节一致),部分覆盖 3/3 MISMATCH(预期,row_window_usable 兜住)——**行表示法无损已证,唯一阻塞是覆盖率**。
+  ③**dual-write 挂钩仅 2/~19 个写点**(routes/conversations:1717 + chat/persistence:236);且 `backfill_conv` 是 DELETE+全量重插——1163 条会话每追加一条=1163 次 upsert,**比 blob 重写更甚**,翻旗前必须有增量形态。这是此前任何文档都没写出来的真结构缺口。
+- **迁移四步顺序(写进证据文档 §5):** 增量 dual-write → 挂钩扇出 19 写点 → fleet backfill(top blob 优先)+全库 parity → owner 确认翻旗。读路径翻转不在本范围。
+- **方法论增量:** 「证据挂板」类 epic 的收口标准 = 决策就绪(现状实测 + 闸判定 + 结构缺口地图 + 建议步骤),不是把 JOURNAL 数字复制一遍。
+
 ### 2026-07-27 — pt_8df8fc9b 收口:msgid-unification LAYER2 harness 重指向 conv_persist_helpers.js(守卫过期家族第 5 例;commit `6710ede4`,1 文件 +13/-6;2 红→**6/6 绿**,NEUTER 仍咬,相邻环 **43/43**,collect **10439** 0 err)
 
 - **漂移形状与 lost_ack(02c989f9)逐字同型:** Epic-E slice 3(`b33d9d21`)把 `_rebaseUnackedTail`(含 `_taskId` dedup 分支)抽到 `core/conv_persist_helpers.js`,而 `test_assistant_msgid_unification` 的 LAYER2 harness 仍只 eval `conversations.js`、NEUTER marker 也在旧文件里找 → `FAIL fn_exposed _rebaseUnackedTail missing` 双红。守卫本体完好(conv_persist_helpers.js:226 + :249),与 pt_b5b0a00d 同族。

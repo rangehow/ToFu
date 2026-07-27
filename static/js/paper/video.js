@@ -61,6 +61,87 @@ function _pvResetRun() {
   _pvideo.scenes = [];
 }
 
+/* ═══ Shared server-clock adoption (video.js + podcast.js) ═══
+ *
+ * Guarded duplicate definition — same convention as _pmPick below: both
+ * files are concatenated into one bundle and either may come first, so the
+ * bodies are identical and the first one wins.
+ *
+ * WHY THIS EXISTS: these panels used to mint their stopwatch from a local
+ * Date.now() and RE-MINT it on every refresh / tab switch, so a job the
+ * backend had run for ten minutes displayed 0:03. Worse, re-minting the
+ * last-activity clock washed an already-silent job into looking healthy —
+ * erasing the only stall signal the user has. The backend now reports the
+ * true clocks (createdAt / updatedAt, epoch ms) on both the poll and the
+ * re-attach lookup; these helpers adopt them safely.
+ */
+if (typeof _isPlausibleEpochMs !== 'function') {
+  /**
+   * RANGE check for a wire timestamp claiming to be epoch MILLISECONDS.
+   *
+   * Both ends are rejected, and neither is hypothetical:
+   *   - below the floor → an epoch-SECONDS value (~1.78e9) leaked through.
+   *     Nothing throws; the elapsed simply renders as ~50 years.
+   *   - in the future → a double-converted value (ms multiplied by 1000
+   *     again, ~1.78e15) or real clock skew. Renders as year ~58000.
+   * Both are SILENT — strictly worse than the 0:00 they replaced, because
+   * 0:00 at least looks wrong. This predicate is deliberately explicit
+   * rather than relying on a min-guard incidentally rejecting the upper
+   * end as a "future timestamp".
+   *
+   * @param {*} v raw value off the wire
+   * @param {string} field field name, for the diagnostic
+   * @returns {boolean} true when v is usable as an epoch-ms instant
+   */
+  var _isPlausibleEpochMs = function (v, field) {
+    var n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) return false;
+    // 1e12 ≈ 2001-09; any real job start is far above it, every epoch-seconds
+    // value for the next few centuries is far below it.
+    if (n < 1e12) {
+      console.warn('[PaperMedia] ' + (field || 'clock') + '=' + v +
+        ' looks like epoch SECONDS (expected milliseconds) — ignoring');
+      return false;
+    }
+    if (n > Date.now()) {
+      console.warn('[PaperMedia] ' + (field || 'clock') + '=' + v +
+        ' is in the future (double-converted or clock skew) — ignoring');
+      return false;
+    }
+    return true;
+  };
+}
+
+if (typeof _pmAdoptServerClocks !== 'function') {
+  /**
+   * Adopt the server's start / liveness clocks onto a media panel's state.
+   *
+   * Mirrors `_seedStreamTimerStart` (core/health_stream_timer.js), the
+   * chat stream's already-shipped fix, including its min-guard:
+   *
+   *   - genStartedAt only ever moves EARLIER, so the displayed elapsed can
+   *     never jump backward and a re-attach continues the real clock.
+   *   - lastEventAt takes the OLDER of local and server. The bias is
+   *     deliberate: this clock drives the stale tint / "still running"
+   *     warning, so it may only ever become MORE pessimistic. A refresh
+   *     must not be able to reset a ten-minute silence to zero.
+   *
+   * @param {object} st the panel state object (_pvideo / _podcast)
+   * @param {object} src a poll or lookup response carrying createdAt/updatedAt
+   */
+  var _pmAdoptServerClocks = function (st, src) {
+    if (!st || !src) return;
+    if (_isPlausibleEpochMs(src.createdAt, 'createdAt')) {
+      var started = Number(src.createdAt);
+      if (!st.genStartedAt || started < st.genStartedAt) st.genStartedAt = started;
+    }
+    if (_isPlausibleEpochMs(src.updatedAt, 'updatedAt')) {
+      var seen = Number(src.updatedAt);
+      if (!st.lastEventAt || seen < st.lastEventAt) st.lastEventAt = seen;
+    }
+  };
+}
+
 function _pvT(key, fallback) {
   return (typeof t === 'function') ? t(key) : (fallback || key);
 }
@@ -126,6 +207,12 @@ async function _initVideoTab(force) {
         _pvideo.cursor = 0;
         _pvideo.status = 'generating';
         _pvResetRun();
+        /* _pvResetRun means "a run starts NOW" and must keep that single
+         * meaning — giving it a re-attach branch would make one function
+         * express two opposite intents. The re-attach case instead states
+         * its difference explicitly right here: the run did NOT start now,
+         * so replace the freshly-minted local clocks with the server's. */
+        _pmAdoptServerClocks(_pvideo, look);
         _pvRender();
         _pvSchedulePoll();
         return;
@@ -238,6 +325,11 @@ async function _pvPollOnce() {
     /* Only real events reset the liveness clock — see podcast.js for why an
        empty-but-successful poll must NOT count as worker activity. */
     if ((resp.events || []).length) _pvideo.lastEventAt = Date.now();
+    /* Server truth wins where it is more honest: an earlier start (the real
+       one) and an older last-activity (a silence we would otherwise have
+       under-reported). Applied AFTER the local bump so a poll carrying
+       events cannot be talked out of its own freshness by a stale field. */
+    _pmAdoptServerClocks(_pvideo, resp);
     _pvideo.cursor = resp.next_cursor != null ? resp.next_cursor : _pvideo.cursor;
     var phaseChanged = false;
     (resp.events || []).forEach(function(ev) {
@@ -281,6 +373,12 @@ async function _pvPollOnce() {
       return;
     }
     if (phaseChanged) { _pvRender(); } else { _pvRenderProgress(); }
+    /* Ticker survival: _initVideoTab() opens with _pvStopPolling() (which
+     * stops the ticker) and several branches return before _pvRender()
+     * re-arms it. Re-assert it here — _pvStartTick is idempotent, and a
+     * generating panel whose ticker died shows a frozen stopwatch even
+     * though the start instant is now correct. */
+    if (_pvideo.status === 'generating') _pvStartTick();
     _pvSchedulePoll();
   } catch (e) {
     console.warn('[Paper:Video] poll failed:', e);

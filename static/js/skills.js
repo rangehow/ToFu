@@ -117,6 +117,22 @@ function _skillsRenderHeader() {
   }
 }
 
+// Display PREFERENCE only — a category absent from this list still renders
+// (appended alphabetically). Mirrors settings/mcp.js::_mcpOrderedCategories:
+// a literal whitelist here would silently hide any category added to
+// lib/skills/catalog.py::CATEGORIES later, which is exactly how the MCP
+// panel lost two whole categories.
+var _SKILLS_CAT_ORDER = ['Documents', 'Coding', 'Creative', 'Infrastructure',
+                         'Productivity', 'Research', 'Other'];
+
+function _skillsOrderedCategories(cats) {
+  var known = _SKILLS_CAT_ORDER.filter(function (c) { return cats[c]; });
+  var extra = Object.keys(cats).filter(function (c) {
+    return _SKILLS_CAT_ORDER.indexOf(c) === -1;
+  }).sort();
+  return known.concat(extra);
+}
+
 function _skillsRenderCategoryBar() {
   var bar = document.getElementById('skillsCategoryBar');
   if (!bar) return;
@@ -132,10 +148,8 @@ function _skillsRenderCategoryBar() {
     cats[c] = (cats[c] || 0) + 1;
   });
   var html = '<button class="mcp-cat-pill' + (_skillsActiveCategory === 'all' ? ' active' : '') + '" onclick="_skillsSetCategory(\'all\')">' + escapeHtml(t('skills.scopeAll')) + ' <span class="mcp-cat-count">' + _skillsCatalog.length + '</span></button>';
-  var order = ['Documents', 'Coding', 'Creative', 'Infrastructure', 'Productivity', 'Research', 'Other'];
-  order.forEach(function (c) {
-    if (!cats[c]) return;
-    html += '<button class="mcp-cat-pill' + (_skillsActiveCategory === c ? ' active' : '') + '" onclick="_skillsSetCategory(\'' + c + '\')">' + escapeHtml(c) + ' <span class="mcp-cat-count">' + cats[c] + '</span></button>';
+  _skillsOrderedCategories(cats).forEach(function (c) {
+    html += '<button class="mcp-cat-pill' + (_skillsActiveCategory === c ? ' active' : '') + '" onclick="_skillsSetCategory(\'' + escapeHtml(c).replace(/'/g, "\\'") + '\')">' + escapeHtml(c) + ' <span class="mcp-cat-count">' + cats[c] + '</span></button>';
   });
   bar.innerHTML = html;
 }
@@ -190,6 +204,12 @@ function _skillsRenderCatalogCard(e) {
     html += '<div class="skill-author">' + escapeHtml(t('skills.by', { author: e.author })) + '</div>';
   }
   html += '<div class="mcp-app-desc">' + escapeHtml(e.description || '') + '</div>';
+  // Getting-started note — same previously-dead field as the MCP catalog:
+  // SkillCatalogEntry documents it as "shown under the card" but nothing
+  // rendered it.
+  if (e.install_note) {
+    html += '<div class="mcp-app-note">' + escapeHtml(e.install_note) + '</div>';
+  }
 
   // Requirements warning
   var reqs = e.requires || {};

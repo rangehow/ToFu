@@ -619,6 +619,31 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+/* Getting-started note (catalog `install_note`): how to obtain a key, what the
+ * server can/cannot do. Sits under the description; MUST declare grid-column
+ * like its sibling since .mcp-app-card is a grid. Not line-clamped — the whole
+ * point is that the user can read the instruction. */
+.mcp-app-note {
+  grid-column: 2;
+  margin-top: 4px;
+  padding: 5px 7px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--s-ink-soft);
+  background: var(--s-bg-soft, rgba(0, 0, 0, .03));
+  border-left: 2px solid var(--s-border-strong, rgba(0, 0, 0, .12));
+  border-radius: 3px;
+}
+.mcp-install-modal-note {
+  margin-top: 6px;
+  padding: 6px 8px;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--s-ink-soft);
+  background: var(--s-bg-soft, rgba(0, 0, 0, .03));
+  border-left: 2px solid var(--s-border-strong, rgba(0, 0, 0, .12));
+  border-radius: 3px;
+}
 /* Card footer: repo link + action
  * Use min-height matching the .btn-xs height so the left-side text
  * (Repo) and the right-side buttons (卸载/连接/…) share a common

@@ -57,7 +57,31 @@ function _mcpUpdateToolCount() {
   badge.textContent = t('mcp.toolsCount', { n: total });
 }
 
-/** Render category filter pills. */
+/**
+ * Render category filter pills.
+ *
+ * The pill set is DERIVED from the categories the catalog actually returned,
+ * never from a hand-copied list. A literal whitelist here silently swallowed
+ * every category the backend added later: `lib/mcp/registry.py::CATEGORIES`
+ * grew to 12 while this list still held 10, so 'Local Life & Travel (China)'
+ * (5 entries) and 'Science & Research' (2) had NO pill at all — their cards
+ * existed but were unreachable by filtering. `_CAT_ORDER` is a display
+ * PREFERENCE only; anything missing from it still renders, appended
+ * alphabetically after the known ones.
+ */
+var _CAT_ORDER = ['Development','Data & DB','Communication','Search & Web',
+                  'Productivity','DevOps','Finance','Design',
+                  'Science & Research','Local Life & Travel (China)',
+                  'Other','Custom'];
+
+function _mcpOrderedCategories(cats) {
+  var known = _CAT_ORDER.filter(function(c) { return cats[c]; });
+  var extra = Object.keys(cats).filter(function(c) {
+    return _CAT_ORDER.indexOf(c) === -1;
+  }).sort();
+  return known.concat(extra);
+}
+
 function _renderMcpCategoryBar() {
   var bar = document.getElementById('mcpCategoryBar');
   if (!bar) return;
@@ -67,10 +91,8 @@ function _renderMcpCategoryBar() {
     cats[c] = (cats[c] || 0) + 1;
   });
   var html = '<button class="mcp-cat-pill' + (_mcpActiveCategory === 'all' ? ' active' : '') + '" onclick="_mcpSetCategory(\'all\')">' + escapeHtml(t('mcp.scopeAll')) + ' <span class="mcp-cat-count">' + _mcpCatalog.length + '</span></button>';
-  var order = ['Development','Data & DB','Communication','Search & Web','Productivity','DevOps','Finance','Design','Other','Custom'];
-  order.forEach(function(c) {
-    if (!cats[c]) return;
-    html += '<button class="mcp-cat-pill' + (_mcpActiveCategory === c ? ' active' : '') + '" onclick="_mcpSetCategory(\'' + c + '\')">' + escapeHtml(c) + ' <span class="mcp-cat-count">' + cats[c] + '</span></button>';
+  _mcpOrderedCategories(cats).forEach(function(c) {
+    html += '<button class="mcp-cat-pill' + (_mcpActiveCategory === c ? ' active' : '') + '" onclick="_mcpSetCategory(\'' + escapeHtml(c).replace(/'/g, "\\'") + '\')">' + escapeHtml(c) + ' <span class="mcp-cat-count">' + cats[c] + '</span></button>';
   });
   bar.innerHTML = html;
 }
@@ -196,6 +218,13 @@ function _renderMcpCatalog() {
     }
     html += '</div>';
     html += '<div class="mcp-app-desc">' + escapeHtml(e.description || '') + '</div>';
+    // Getting-started note (how to obtain a key, what the server can/can't do).
+    // This field was authored in lib/mcp/registry.py from the start but had NO
+    // renderer anywhere in the frontend, so every note written for a user was
+    // invisible to them.
+    if (e.install_note) {
+      html += '<div class="mcp-app-note">' + escapeHtml(e.install_note) + '</div>';
+    }
     // Footer: repo link (left) + tools count / action buttons (right)
     html += '<div class="mcp-app-footer">';
     if (e.url) {
@@ -438,6 +467,16 @@ function _mcpOpenInstallModal(serverId, isReinstall) {
       : escapeHtml(_icon);
   document.getElementById('mcpInstallTitle').textContent = entry.name;
   document.getElementById('mcpInstallDesc').textContent = entry.description || '';
+  var noteEl = document.getElementById('mcpInstallNote');
+  if (noteEl) {
+    if (entry.install_note) {
+      noteEl.textContent = entry.install_note;
+      noteEl.style.display = '';
+    } else {
+      noteEl.textContent = '';
+      noteEl.style.display = 'none';
+    }
+  }
   var repoLink = document.getElementById('mcpInstallRepo');
   if (repoLink) {
     if (entry.url) {

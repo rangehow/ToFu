@@ -176,7 +176,9 @@ function replayPendingBusyState(conversations) {
       if (!_revStrictlyGreater(parked.rev, conv._authoritativeActiveTaskIdsRev)) {
         continue;                             // conv already newer
       }
-      conv._authoritativeActiveTaskIds = new Set(parked.runningTaskIds);
+      conv._authoritativeActiveTaskIds = new Set(_busyIdsFrom(parked.runningTaskIds));
+      conv._authoritativeAttachableTaskIds =
+        new Set(_attachableIdsFrom(parked.runningTaskIds));
       conv._authoritativeActiveTaskIdsRev = parked.rev;
     }
   } catch (e) {
@@ -190,6 +192,50 @@ function pendingBusyStateSize() { return _pendingBusyState.size; }
 
 /* Test seam only — never called by production code. */
 function resetPendingBusyStateForTests() { _pendingBusyState.clear(); }
+
+/* ── VU-carrier marker — 'busy, but NOT attachable' ────────────────────
+ * The server surfaces a live autopilot VU carrier's id with a '#vu' suffix.
+ * A VU carrier is NOT independently reconnectable — its SSE never completes,
+ * so attaching to it would birth a permanently-stuck "Waiting…" bubble
+ * (exactly what /api/chat/active's carrier filter exists to prevent).
+ * But its EXISTENCE is precisely the fact that means "this conversation is
+ * working", and an EMPTY runningTaskIds list is what the client reads as
+ * IDLE — so busy and idle must not look identical on the wire.
+ *
+ * Hence TWO derived sets, never one:
+ *   _authoritativeActiveTaskIds      → BUSY-ness (carriers INCLUDED, so the
+ *                                      dot lights / composer offers Stop)
+ *   _authoritativeAttachableTaskIds  → RECONNECT targets (carriers EXCLUDED,
+ *                                      so click-open never attaches to a
+ *                                      stream that cannot complete)
+ * Collapsing them into one set is the bug: strip the marker into a single
+ * set and the carrier id silently becomes a reconnect target. */
+function _isVuMarked(tid) {
+  return typeof tid === 'string' && tid.endsWith('#vu');
+}
+function _stripVuMarker(tid) {
+  return _isVuMarked(tid) ? tid.slice(0, -3) : tid;
+}
+/* Busy set — every live worker, carriers included, markers stripped. */
+function _busyIdsFrom(tids) {
+  if (!Array.isArray(tids)) return [];
+  const out = [];
+  for (const t of tids) {
+    const s = _stripVuMarker(t);
+    if (s) out.push(s);
+  }
+  return out;
+}
+/* Attachable set — carriers EXCLUDED (they can never complete a stream). */
+function _attachableIdsFrom(tids) {
+  if (!Array.isArray(tids)) return [];
+  const out = [];
+  for (const t of tids) {
+    if (_isVuMarked(t)) continue;
+    if (t) out.push(t);
+  }
+  return out;
+}
 
 /* Consume a per-conv notify frame's server-authoritative half:
  *
@@ -206,12 +252,16 @@ function applyRunningTaskIdsFrame(conversations, frame) {
     const convId = frame.convId;
     if (!convId) return;
     const nextRev = frame.runningTaskIdsRev;
-    const tids = Array.isArray(frame.runningTaskIds) ? frame.runningTaskIds : [];
+    /* Park the RAW list (markers intact) so a later replay can still tell
+     * carriers from attachable workers — stripping before the park would
+     * lose that distinction irrecoverably. */
+    const raw = Array.isArray(frame.runningTaskIds) ? frame.runningTaskIds : [];
     const conv = conversations.find((c) => c && c.id === convId);
-    if (!conv) { _parkPendingBusyState(convId, tids, nextRev); return; }
+    if (!conv) { _parkPendingBusyState(convId, raw, nextRev); return; }
     const priorRev = conv._authoritativeActiveTaskIdsRev;
     if (!_revStrictlyGreater(nextRev, priorRev)) return;
-    conv._authoritativeActiveTaskIds = new Set(tids);
+    conv._authoritativeActiveTaskIds = new Set(_busyIdsFrom(raw));
+    conv._authoritativeAttachableTaskIds = new Set(_attachableIdsFrom(raw));
     conv._authoritativeActiveTaskIdsRev = nextRev;
   } catch (e) {
     if (typeof debugLog === 'function') {
@@ -268,6 +318,7 @@ function applyConvStateSnapshot(conversations, frame) {
          * registry), so we don't rev-gate the clear — we advance the
          * rev to a fresh sentinel so no stale notify can un-clear it. */
         conv._authoritativeActiveTaskIds = new Set();
+        conv._authoritativeAttachableTaskIds = new Set();
         /* Advance the rev to now-ish so a stale frame can't resurrect
          * the cleared state. Uses Date.now() * 1e6 as an ns proxy —
          * the server's monotonic_ns is process-relative, so on the
@@ -322,7 +373,14 @@ function computeConvBusy(conv, activeStreamsRef) {
 function pickAuthoritativeTaskIdForReconnect(conv) {
   if (!conv) return null;
   if (conv.activeTaskId) return conv.activeTaskId;
-  const set = conv._authoritativeActiveTaskIds;
+  /* ★ Read the ATTACHABLE set, never the busy set. A VU carrier lights the
+   *   busy dot but can never complete a stream, so offering it here would
+   *   reproduce the permanently-stuck "Waiting…" bubble the carrier filter
+   *   exists to prevent. When the only live worker is a carrier this
+   *   correctly returns null: the conv shows as generating, and click-open
+   *   simply does not attach (the VU's frames arrive on the parent's
+   *   stream / the autopilot_vu_event envelope instead). */
+  const set = conv._authoritativeAttachableTaskIds;
   if (set && set.size > 0) {
     /* Deterministic pick: iteration order of a Set is insertion order,
      * which mirrors the server's registry-dict iteration when the

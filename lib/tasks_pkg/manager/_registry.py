@@ -87,6 +87,108 @@ def is_carrier_task(task: dict) -> bool:
     return bool(task.get('_inline_messages') or task.get('_vu_subtask'))
 
 
+def _vu_window_secs() -> float:
+    """Ceiling on the PRE-CARRIER finalize sliver only (see below).
+
+    Scope note (deliberately narrow): this bounds ONLY the window between
+    the parent's terminal flip and the moment its VU carrier is registered
+    — measured 2.5–26.7s (objective resolve + message assembly, see
+    ``autopilot_event_forwarding._emit_vu_setup_phase``). Once the carrier
+    exists, busy-ness is keyed on the CARRIER'S OWN LIVENESS and this
+    ceiling is irrelevant.
+
+    It is emphatically NOT a general "how long may a conv stay busy" timer:
+    a VU turn legitimately runs for minutes, and bounding that by wall
+    clock is exactly the bug this module fixes. 30s > the 26.7s measured
+    worst case, and mirrors the ceiling the SSE reader applies to the same
+    latch in ``lib/chat_dispatch.py``.
+    """
+    return 30.0
+
+
+def is_vu_carrier_alive_for_conv(conv_id: str) -> bool:
+    """True if ``conv_id`` has a LIVE autopilot VU carrier in the registry.
+
+    Anchored on the CARRIER ITSELF — deliberately not on any parent's
+    ``_vu_carrier_id`` back-pointer. The parent leaves the registry once
+    its finalize returns, and the VU turn outlives it by minutes, so a
+    parent-anchored lookup evaporates precisely during the window it is
+    supposed to cover (the ms34u49egqwhug incident: carrier ran 8 rounds
+    over ~7 minutes with no parent left to point at it).
+
+    The carrier carries everything needed to stand on its own:
+    ``_vu_subtask`` marks it, ``convId`` places it (the pt_8dc03017
+    cutover registers it under the REAL conv id), and its ``status`` /
+    ``aborted`` give liveness.
+    """
+    if not conv_id:
+        return False
+    with tasks_lock:
+        for _tid, t in tasks.items():
+            if (t.get('_vu_subtask')
+                    and (t.get('convId') or '') == conv_id
+                    and t.get('status') == 'running'
+                    and not t.get('aborted')):
+                return True
+    return False
+
+
+def conv_has_work_in_flight(task: dict, *, now: float | None = None) -> bool:
+    """True if ``task`` means its conversation is STILL WORKING for the user.
+
+    This answers a DIFFERENT question from ``status == 'running'``, and the
+    difference is the ms34u49egqwhug incident (2026-07-27): the orchestrator
+    flips the parent to ``status='done'`` at the terminal seam
+    (``orchestrator/_finalize.py``) and only THEN, in the same synchronous
+    call stack, runs ``maybe_run_autopilot`` — which executes an entire VU
+    turn that can take minutes. During that window ``status`` correctly means
+    "the stream body is finished", but the conversation is emphatically NOT
+    idle: an autopilot turn is mid-flight and the user must see a live
+    indicator and be able to stop it.
+
+    Historically only ONE of the three readers of that fact honoured it:
+
+      * the SSE live-tick (``lib/chat_dispatch.py``) held its LATE-done while
+        ``task['_finalize_started_at']`` was fresh — which is why the stream
+        stayed open and the transcript kept updating;
+      * the busy projection (``snapshot_running_by_conv`` → the sidebar dot
+        and the composer Send/Stop button) did not — so the UI reported
+        "generation complete" while 8 LLM rounds ran;
+      * the reconnect view (``/api/chat/active``) does not either, but that is
+        a deliberate and separate concern (reconnecting a carrier's SSE would
+        birth a stuck bubble) — discoverability, not busy-ness.
+
+    Rather than teach the busy reader a second, divergent notion of "running",
+    this predicate is the ONE place that definition lives.
+
+    Two ways a task carries work in flight:
+
+      1. ``status == 'running'`` and not aborted — the ordinary case. NOTE
+         this ALREADY covers a live VU carrier, which is a running task in
+         its own right; the projection's job is merely not to filter it out.
+      2. a FRESH ``_finalize_started_at`` latch — covers ONLY the sliver
+         between the parent's terminal flip and its carrier's registration
+         (see :func:`_vu_window_secs`). Everything after the carrier exists
+         is covered by term 1 via the carrier itself, NOT by this timer.
+
+    ``aborted`` always wins: the instant the user presses Stop (or supersede
+    fires) the conversation must read idle so the composer returns to Send.
+    """
+    if not task or task.get('aborted'):
+        return False
+    if task.get('status') == 'running':
+        return True
+    # Pre-carrier finalize sliver ONLY. Once the carrier is registered it is
+    # itself a running task and term 1 covers the conv — this branch must
+    # never be the thing keeping a long VU turn visible.
+    _fin = task.get('_finalize_started_at') or 0
+    if _fin:
+        _now = time.time() if now is None else now
+        if (_now - _fin) < _vu_window_secs():
+            return True
+    return False
+
+
 def create_task(conv_id, messages, config, *, supersede=True):
     """Create (and register) a chat task.
 
@@ -453,11 +555,19 @@ def snapshot_running_by_conv(user_id: str = '') -> dict[str, list[str]]:
     """
     scope_user = str(user_id or '')
     out: dict[str, list[str]] = {}
+    _now = time.time()
     with tasks_lock:
         for tid, t in tasks.items():
-            if t.get('status') != 'running' or t.get('aborted'):
-                continue
-            if is_carrier_task(t):
+            # ★ "Is this conv still working for the user?" — the SHARED
+            #   predicate, not a bare status read. This is what covers the
+            #   finalize/VU window in which the parent is already
+            #   status='done' while its autopilot VU turn still runs
+            #   (ms34u49egqwhug: the sidebar and composer read "generation
+            #   complete" through ~7 minutes of real backend work because
+            #   the parent had flipped terminal AND the carrier was hidden
+            #   by the carrier filter — both candidates dropped out for
+            #   DIFFERENT reasons and the busy set went empty).
+            if not conv_has_work_in_flight(t, now=_now):
                 continue
             conv = t.get('convId') or ''
             if not conv:
@@ -469,7 +579,29 @@ def snapshot_running_by_conv(user_id: str = '') -> dict[str, list[str]]:
                 # user X see?" and X does not own a legacy-null task.
                 if str(t.get('_userId') or '') != scope_user:
                     continue
-            out.setdefault(conv, []).append(tid)
+            # ★ Carrier split — a carrier is NOT independently reconnectable
+            #   (its SSE never completes), so its id must never be offered as
+            #   an ATTACH target — but a LIVE VU CARRIER is precisely the thing
+            #   whose existence means "this conversation is working", so it
+            #   MUST light the busy dot. Anchor the busy fact on the carrier
+            #   itself; other carriers (inline reporters / summarize holders)
+            #   genuinely have no user-visible work and still contribute
+            #   neither id nor dot.
+            #
+            #   THE WIRE SHAPE IS LOAD-BEARING: the client treats an EMPTY
+            #   runningTaskIds list as IDLE (computeConvBusy →
+            #   ``_authoritativeActiveTaskIds.size > 0``). So "busy, but the
+            #   only worker is a non-attachable VU carrier" must NOT look
+            #   identical to "idle". We therefore surface the carrier's id
+            #   with a NON-ATTACHABLE marker the reducer strips when building
+            #   the busy Set — the conv reads busy (Set non-empty) while no
+            #   dangling attach target leaks into the reconnect path.
+            ids = out.setdefault(conv, [])
+            if is_carrier_task(t):
+                if t.get('_vu_subtask'):
+                    ids.append(tid + '#vu')
+            else:
+                ids.append(tid)
     return out
 
 

@@ -650,6 +650,26 @@ class SubAgent:
     # shape at a cost of ~10 rounds instead of 26.7 million.
     _MAX_CONSECUTIVE_NO_PROGRESS_ROUNDS = 10
 
+    def _round_budget_label(self) -> str:
+        """Render the EFFECTIVE round bounds for the per-round log line.
+
+        A bare ``\u221e`` (what the round line used to print whenever
+        ``max_rounds`` was 0) tells an operator the loop is unbounded, which
+        stopped being true when the no-progress breaker landed. With no
+        explicit ``max_rounds`` the real
+        bounds are the breaker and the wall clock, so name them:
+        ``\u221e(np=10,t=1800s)``. This string is the only live signal an
+        operator has while a loop is running — during the 2026-07-27 runaway
+        it was printed 26.7M times while saying nothing would stop it.
+        """
+        if self.max_rounds > 0:
+            return str(self.max_rounds)
+        bounds = [f'np={self._MAX_CONSECUTIVE_NO_PROGRESS_ROUNDS}']
+        timeout_seconds = getattr(self.spec, 'timeout_seconds', 0) or 0
+        if timeout_seconds > 0:
+            bounds.append(f't={timeout_seconds}s')
+        return '\u221e(' + ','.join(bounds) + ')'
+
     def _run_loop(self, start_time: float):
         """Core agent loop: LLM call → tool execution → repeat.
 
@@ -700,7 +720,7 @@ class SubAgent:
             # "it began round N and is still waiting on the model".
             logger.info('[Agent:%s] \u2500\u2500 Round %d/%s START \u2500\u2500 messages=%d',
                         self.agent_id, round_num,
-                        self.max_rounds or '\u221e', len(self.messages))
+                        self._round_budget_label(), len(self.messages))
 
             # ── LLM call (uses DI-injected or default build_body / dispatch_stream) ──
             body = self._build_body(

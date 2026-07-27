@@ -166,8 +166,22 @@ def backfill_conv(db, conv_id: str, messages, *, now_ms: int = 0, commit: bool =
     from lib.database._core_schema import CONVERSATION_MESSAGES, upsert
     msgs = _parse_messages(messages)
     db.execute('DELETE FROM conversation_messages WHERE conv_id=?', (conv_id,))
+    # Real blobs can carry TWO messages sharing one _msgId (the pt_97f32163
+    # duplicate-reply incident shape — e.g. prod conv ms1uojtuhk9fze). The
+    # partial unique index idx_conv_msgs_msgid(conv_id, msg_id) rejects the
+    # second occurrence, so per conv only the FIRST keeps the SQL-side id;
+    # later duplicates are written with msg_id='' (outside the index). The
+    # original id is preserved verbatim in meta, so row_to_message stays
+    # lossless — a dup id is not uniquely addressable by definition.
+    seen_msg_ids: set = set()
     for seq, msg in enumerate(msgs):
         row = message_to_row(conv_id, seq, msg, now_ms=now_ms)
+        mid = row['msg_id']
+        if mid:
+            if mid in seen_msg_ids:
+                row['msg_id'] = ''
+            else:
+                seen_msg_ids.add(mid)
         upsert(db, CONVERSATION_MESSAGES, row,
                conflict_cols=['conv_id', 'seq'], commit=False)
     if commit:
@@ -235,6 +249,19 @@ def _mirror_conv_rows(db, conv_id: str, messages, *, now_ms: int = 0,
         seqs = list(range(start, n))
     for seq in seqs:
         row = message_to_row(conv_id, seq, msgs[seq], now_ms=now_ms)
+        mid = row['msg_id']
+        if mid:
+            # A DIFFERENT seq may already own this msg_id (real blobs carry
+            # duplicate _msgIds — the pt_97f32163 shape). The partial unique
+            # index would reject the write AND every later mirror for this
+            # conv; degrade the later duplicate to msg_id='' instead (the
+            # original id survives verbatim in meta). Index-only probe,
+            # skipped entirely for id-less rows.
+            owner = db.execute(
+                'SELECT seq FROM conversation_messages WHERE conv_id=? '
+                'AND msg_id=? AND seq<>? LIMIT 1', (conv_id, mid, seq)).fetchone()
+            if owner is not None:
+                row['msg_id'] = ''
         upsert(db, CONVERSATION_MESSAGES, row,
                conflict_cols=['conv_id', 'seq'], commit=False)
     # Truncation repair: the blob is authoritative, so any row beyond its tail

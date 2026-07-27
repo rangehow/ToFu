@@ -31,6 +31,14 @@
 - **迁移四步顺序(写进证据文档 §5):** 增量 dual-write → 挂钩扇出 19 写点 → fleet backfill(top blob 优先)+全库 parity → owner 确认翻旗。读路径翻转不在本范围。
 - **方法论增量:** 「证据挂板」类 epic 的收口标准 = 决策就绪(现状实测 + 闸判定 + 结构缺口地图 + 建议步骤),不是把 JOURNAL 数字复制一遍。
 
+### 2026-07-27(续3) — 行存储写路径迁移 ①②③ 落地(epic `pt_59140ecd`,④ 翻旗挂 question-block;commits `a52f735b`(①②) + 见下(dup 修复+脚本);新套件 11/11 含 failing-first 6 红基线,回归环 **130+95+126+24 全绿**,collect **10468** 0 err)
+
+- **① 增量 dual-write:** count 探测+尾部追加+tip 刷新(流式 finalize 同数改写的显性覆盖)+截断修复+`changed_seqs` 提示;旧形状 1163 条会话每追加=1163 次行 upsert(比 blob 写更甚),新形状追加=1 COUNT+≤2 upsert。统一钩 `mirror_write_and_commit`(旗关纯 no-op;旗开镜像+立即提交,守 pt_7e4afe73 持久性纪律——钩点一律放权威写**自身提交之后**)。重排类写点(reconcile/recovery/delete/feishu 前裁)走 `full=True` 全量重建。
+- **② 26 个写点全挂钩(窄 grep 漏了 7 个,宽扫才抓全):** `_patch_message_by_id_blocking`(走 upsert 不走裸 SQL——雪崩 34 条 PATCH 的源头,差点漏钩)、patch/delete/branch 三路由、feishu sync_to_db、killed_recovery 两处。棘轮 `test_messages_rows_hook_coverage.py` 用函数跨度扫描锁死(UPDATE-messages/upsert-CONVERSATIONS/裸 INSERT 无钩即红,allowlist 仅 2 个 schema 迁移+空数组 INSERT)。**教训:「所有写点」清单必须用宽模式(`messages=\?` + `upsert(db, CONVERSATIONS` + `SET settings=\?, messages=\?`)交叉验证,窄 grep 的「~19」实际是 26。**
+- **③ fleet backfill 221s 完成:** 4,173 候选,3,697 原鲜跳过+476 重建,**parity 全 OK 零残留**;独立 SQL 复核 4,173/31,207 行、完整覆盖 4,173/0/0(基线 3,689/484/477)。试点先撞出一个真缺陷:**真实 blob 携带重复 `_msgId`**(pt_97f32163 形状,ms1uojtuhk9fze 实证)撞部分唯一索引——backfill 与增量探测双修(后序 dup 写空 id,meta 无损)。
+- **翻旗前漂移实证(写进翻旗流程):** backfill 完成后 3 个**活跃会话**立即 tip 陈旧(count 相同、parity 不符)——`row_window_usable` 的 count 闸看不见内容漂移,**④ 翻旗后必须立即重跑 dry-run parity + 修复漂移**才算完。
+- **④ 挂 question-block:** owner 确认后设 `TOFU_MESSAGES_ROWS=1`+重启(dual-write 生效)→ 重跑 parity → 收口;读翻转不在本 epic。
+
 ### 2026-07-27 — pt_8df8fc9b 收口:msgid-unification LAYER2 harness 重指向 conv_persist_helpers.js(守卫过期家族第 5 例;commit `6710ede4`,1 文件 +13/-6;2 红→**6/6 绿**,NEUTER 仍咬,相邻环 **43/43**,collect **10439** 0 err)
 
 - **漂移形状与 lost_ack(02c989f9)逐字同型:** Epic-E slice 3(`b33d9d21`)把 `_rebaseUnackedTail`(含 `_taskId` dedup 分支)抽到 `core/conv_persist_helpers.js`,而 `test_assistant_msgid_unification` 的 LAYER2 harness 仍只 eval `conversations.js`、NEUTER marker 也在旧文件里找 → `FAIL fn_exposed _rebaseUnackedTail missing` 双红。守卫本体完好(conv_persist_helpers.js:226 + :249),与 pt_b5b0a00d 同族。

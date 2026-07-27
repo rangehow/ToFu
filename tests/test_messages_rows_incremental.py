@@ -239,6 +239,56 @@ def test_incremental_sequence_keeps_parity(conv_env):
     db.commit()
 
 
+# ── 4. Duplicate _msgId robustness (the pt_97f32163 incident shape) ───────
+
+def test_backfill_dedups_duplicate_msg_ids(conv_env):
+    """Real blobs can carry two messages sharing one _msgId (prod conv
+    ms1uojtuhk9fze). The partial unique index rejects the second — backfill
+    must keep the id only on the FIRST occurrence and blank the later one,
+    while meta preserves it verbatim (row_to_message stays lossless)."""
+    db, conv_id = conv_env
+    dup = [{'role': 'user', 'content': 'q', '_msgId': 'dup-1'},
+           {'role': 'assistant', 'content': 'a1', '_msgId': 'dup-1'},
+           {'role': 'assistant', 'content': 'a2', '_msgId': 'dup-1'}]
+    n = mr.backfill_conv(db, conv_id, dup)
+    assert n == 3  # no UniqueViolation, all three rows landed
+    rows = db.execute(
+        'SELECT seq, msg_id, meta FROM conversation_messages WHERE conv_id=? '
+        'ORDER BY seq', (conv_id,)).fetchall()
+    kept = [r['seq'] for r in rows if r['msg_id'] == 'dup-1']
+    blanked = [r['seq'] for r in rows if r['msg_id'] == '']
+    assert kept == [0], f'first occurrence must keep the id, got {kept}'
+    assert blanked == [1, 2]
+    # meta is lossless: the blanked rows still reconstruct the original id.
+    assert mr.row_to_message(rows[1]).get('_msgId') == 'dup-1'
+
+
+def test_incremental_mirror_avoids_msg_id_collision_across_seqs(conv_env):
+    """A NEW message arriving with an _msgId that an EARLIER seq already owns
+    (a later duplicate reply) must not violate the unique index — the mirror
+    blanks the id on the new row (meta keeps it) instead of failing the whole
+    write and leaving the conv permanently un-mirrored."""
+    db, conv_id = conv_env
+    mr.backfill_conv(db, conv_id,
+                     [{'role': 'user', 'content': 'q', '_msgId': 'dup-2'}])
+    msgs = [{'role': 'user', 'content': 'q', '_msgId': 'dup-2'},
+            {'role': 'assistant', 'content': 'a', '_msgId': 'dup-2'}]
+    mr.dual_write_conv(db, conv_id, msgs)  # append with a colliding id
+    rows = db.execute(
+        'SELECT seq, msg_id FROM conversation_messages WHERE conv_id=? '
+        'ORDER BY seq', (conv_id,)).fetchall()
+    assert [r['msg_id'] for r in rows] == ['dup-2', '']
+    # … and re-mirroring the SAME seq with its own id is NOT a collision:
+    mr.dual_write_conv(db, conv_id, msgs[:1])
+    rows = db.execute(
+        'SELECT seq, msg_id FROM conversation_messages WHERE conv_id=? '
+        'ORDER BY seq', (conv_id,)).fetchall()
+    assert rows[0]['msg_id'] == 'dup-2'
+
+
+if __name__ == '__main__':
+    import pytest as _pt
+    sys.exit(_pt.main([__file__, '-v']))
 if __name__ == '__main__':
     import pytest as _pt
     sys.exit(_pt.main([__file__, '-v']))

@@ -90,3 +90,12 @@
    ③ fleet backfill（top blob 优先）+ 全库 `verify_conv_parity`；④ owner 确认后翻 `TOFU_MESSAGES_ROWS`。
 3. **PG 迁本地盘是独立运维迁移**（owner 2026-07-27 裁决），与本迁移正交，互不等待。
 4. 读路径翻转（`TOFU_MESSAGES_ROWS_READ`）不在本范围 —— 按 charter 是翻转后的另一步。
+---
+
+## 6. 执行结果（2026-07-27 当日落地，pt_59140ecd ①②③）
+
+- **① 增量 dual-write**：`dual_write_conv` 改为 count 探测 + 尾部追加 + tip 刷新（覆盖流式 finalize 的同数改写）+ 截断修复；编辑类调用方传 `changed_seqs`。统一钩 `mirror_write_and_commit`（旗关=纯 no-op，旗开=镜像+立即提交，pt_7e4afe73 持久性纪律）。
+- **② 挂钩覆盖**：26 个整 blob 写点全部接钩（24 新 + 2 既有），AST 棘轮 `test_messages_rows_hook_coverage.py` 封锁新写点（UPDATE-messages / upsert-CONVERSATIONS / 裸 INSERT 无钩即红）。
+- **③ fleet backfill 完成（221s）**：4,173 候选，3,697 原鲜跳过 + 476 重建，**parity 全 OK，0 残留**。独立 SQL 复核：4,173 会话 / 31,207 行，完整覆盖 **4,173 / 0 部分 / 0 空**（基线 3,689 / 484 / 477）。Top-5 blob 全 ✓。
+- **过程中的两个实测发现（已修）**：①真实 blob 会携带**重复 `_msgId`**（pt_97f32163 事故形状，ms1uojtuhk9fze 实证）——backfill 与同 seq 外增量探测都做了去重（后序 dup 写空 id，meta 无损）；②backfill 与翻旗之间活跃会话会**内容漂移**（3 个活会话 tip 陈旧，count 相同但 parity 不符）——**翻旗时必须再跑一次全量 parity + 修复漂移**（count 相等骗得过 `row_window_usable`，骗不过 parity）。
+- **剩余人工闸（④）**：owner 确认 → 设 `TOFU_MESSAGES_ROWS=1` + 重启 → dual-write 即时生效 → 翻旗后立即重跑本脚本 dry-run（应为全 fresh，修复残余漂移）→ 完成。读路径翻转（`TOFU_MESSAGES_ROWS_READ`）仍是之后的独立决策。

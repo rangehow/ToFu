@@ -136,6 +136,116 @@ def test_client_puts_the_rid_on_the_socket_url():
     )
 
 
+def _fn_node(name: str):
+    """A module-level function of routes/push.py, located by NAME in the AST."""
+    tree = ast.parse(_push_py_src())
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) \
+                and node.name == name:
+            return node
+    pytest.fail('routes/push.py no longer defines %s — re-point this guard' % name)
+
+
+def _info_logs_without_rid(node) -> list[str]:
+    """``logger.info`` calls in ``node`` that reference no rid.
+
+    A call counts as rid-carrying when the literal 'rid=' appears in its
+    format string AND it passes an argument whose source mentions a rid
+    (``_rid`` / ``req_id``). Checking both halves matters: a format string
+    saying `rid=%s` fed a task id would read as correlated while being a lie.
+    """
+    bare = []
+    for sub in ast.walk(node):
+        if not isinstance(sub, ast.Call):
+            continue
+        fn = sub.func
+        if not (isinstance(fn, ast.Attribute) and fn.attr == 'info'):
+            continue
+        if not (isinstance(fn.value, ast.Name) and fn.value.id == 'logger'):
+            continue
+        fmt = sub.args[0] if sub.args else None
+        fmt_txt = ''
+        for piece in ast.walk(fmt) if fmt is not None else []:
+            if isinstance(piece, ast.Constant) and isinstance(piece.value, str):
+                fmt_txt += piece.value
+        arg_src = ' '.join(ast.dump(a) for a in sub.args[1:])
+        if 'rid=' in fmt_txt and ('_rid' in arg_src or 'req_id' in arg_src):
+            continue
+        bare.append(fmt_txt[:70])
+    return bare
+
+
+def test_frame_handler_logs_carry_the_rid():
+    """The lines that describe an EVENT must name the socket it came from.
+
+    This is the whole point of the feature. Stamping only connect/disconnect
+    leaves the id useless for the questions people actually ask ("I pressed
+    stop and nothing happened") — those are logged by the frame handlers.
+    """
+    for fname in ('_handle_abort', '_handle_client_frame'):
+        bare = _info_logs_without_rid(_fn_node(fname))
+        assert not bare, (
+            'these logger.info calls in routes/push.py::%s do not carry a '
+            'correlation id: %r. Every socket-event log line must name its '
+            'socket (rid=%%s fed client.req_id / req_id), else a user-supplied '
+            'rid resolves only to the connect+disconnect pair and the events '
+            'in between are unjoinable.' % (fname, bare)
+        )
+
+
+def test_rid_rides_the_push_client():
+    """The rid must be carried per-CONNECTION, not as a handler local.
+
+    The frame handlers are module-level functions and cannot see push_ws's
+    locals, so PushClient is the carrier (mirroring ``user_id``, which exists
+    for exactly this reason). Asserted as behaviour on the real class.
+    """
+    from lib.push import PushClient
+
+    c = PushClient(user_id='u1', req_id='page1-ws3')
+    assert c.req_id == 'page1-ws3'
+    assert c.user_id == 'u1'
+    # Absent id must be the empty string, never None — it is spliced into
+    # %s log args and 'None' would read as a real id.
+    assert PushClient().req_id == ''
+    assert PushClient(req_id=None).req_id == ''
+
+
+def test_socket_always_has_an_id():
+    """There is no 'unidentified socket' state.
+
+    push_ws resolves the rid inside a try/except; BOTH branches must yield a
+    usable id. An except branch that fell back to '' would reintroduce a
+    socket whose lines join to nothing — the exact hole this closes.
+    """
+    src = _push_py_src()
+    handler = _fn_node('push_ws')
+    # Find the try/except that wraps the rid resolution and assert its
+    # handler body does not degrade to an empty id.
+    seen_try = False
+    for sub in ast.walk(handler):
+        if not isinstance(sub, ast.Try):
+            continue
+        body_src = ' '.join(ast.dump(s) for s in sub.body)
+        if 'resolve_inbound_rid' not in body_src:
+            continue
+        seen_try = True
+        for h in sub.handlers:
+            h_src = ' '.join(ast.dump(s) for s in h.body)
+            assert 'resolve_inbound_rid' in h_src, (
+                "the rid resolution's except branch must mint an id too "
+                '(resolve_inbound_rid(None, None)) — falling back to an '
+                'empty rid recreates a socket that cannot be joined to '
+                'anything.'
+            )
+    assert seen_try, 'rid resolution is no longer wrapped — re-point this guard'
+    # And the log lines must not paper over a missing id with a placeholder.
+    assert "_rid or '-'" not in src, (
+        "no `_rid or '-'` placeholder: a socket always has an id now, so the "
+        'fallback is dead code that would hide a regression in the resolver.'
+    )
+
+
 def test_rid_validation_rejects_log_injection():
     """The shared resolver must reject anything unsafe for a log line."""
     from lib.log import resolve_inbound_rid, rid_is_safe

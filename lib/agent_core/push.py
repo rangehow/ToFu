@@ -288,12 +288,23 @@ class PushClient:
     produce (see :func:`lib.api_keys.local_admin_context`). Downstream
     readers (``build_conv_state_snapshot``, ``snapshot_running_by_conv``)
     treat empty as "unscoped, all-registry".
+
+    ``req_id`` is this socket's correlation id, resolved at handshake from
+    the client's ``_rid`` query param (see routes/push.py::push_ws). It is
+    carried HERE, next to ``user_id``, for the same reason: the frame
+    handlers that log a socket's activity are module-level functions and
+    cannot see the handler coroutine's locals, so a per-connection field is
+    the only way for ``[Push] Client abort``-style lines to name the socket
+    they belong to. Without it those lines are unjoinable — the id would
+    cover only connect/disconnect, which are the two lines that least need
+    it.
     """
 
-    def __init__(self, user_id: str = ''):
+    def __init__(self, user_id: str = '', req_id: str = ''):
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
         self._connected = True
         self.user_id: str = str(user_id or '')
+        self.req_id: str = str(req_id or '')
 
     def enqueue(self, frame: dict):
         if not self._connected:

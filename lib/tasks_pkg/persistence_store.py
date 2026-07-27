@@ -85,6 +85,10 @@ class DefaultConversationStore:
             'WHERE id=? AND user_id=1',
             (json_dumps_pg(messages), now_ms, conv_id),
         )
+        # Phase 5 dual-write (flag-gated, inert when off): generic overwrite
+        # seam — caller's edit shape unknown → full rebuild mirror.
+        from lib.database.messages_rows import mirror_write_and_commit
+        mirror_write_and_commit(db, conv_id, messages, now_ms=now_ms, full=True)
         return now_ms
 
     def cas_update_conversation_messages(self, conv_id, messages, expected_updated_at):
@@ -103,7 +107,13 @@ class DefaultConversationStore:
         )
         db.commit()
         affected = getattr(cur, 'rowcount', None)
-        return affected if affected is not None else 0
+        affected = affected if affected is not None else 0
+        if affected:
+            # Phase 5 dual-write (flag-gated): CAS won — mirror the overwrite.
+            from lib.database.messages_rows import mirror_write_and_commit
+            mirror_write_and_commit(db, conv_id, messages, now_ms=now_ms,
+                                    full=True)
+        return affected
 
     def cas_sync_conversation_with_search(self, conv_id, messages, expected_updated_at):
         """CAS overwrite that ALSO refreshes msg_count + search_text + FTS.
@@ -142,6 +152,11 @@ class DefaultConversationStore:
             except Exception as e:
                 logger.debug('[Store] cas_sync FTS update skipped conv=%s: %s',
                              conv_id[:8] if conv_id else '?', e)
+            # Phase 5 dual-write (flag-gated): /compact removes messages
+            # (re-sequences) — full rebuild mirror.
+            from lib.database.messages_rows import mirror_write_and_commit
+            mirror_write_and_commit(db, conv_id, messages, now_ms=now_ms,
+                                    full=True)
         return affected
 
     def ensure_compaction_schema(self):
@@ -290,6 +305,10 @@ class DefaultConversationStore:
             WHERE id=? AND user_id=1''',
             (messages_json, now_ms, len(messages), search_text, conv_id))
         update_conversation_fts(db, conv_id, search_text)
+        # Phase 5 dual-write (flag-gated, inert when off): generic overwrite
+        # seam — full rebuild mirror.
+        from lib.database.messages_rows import mirror_write_and_commit
+        mirror_write_and_commit(db, conv_id, messages, now_ms=now_ms, full=True)
         return now_ms
 
     def notify_conversation_changed(self, conv_id):

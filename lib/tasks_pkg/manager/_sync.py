@@ -363,6 +363,10 @@ def _reconcile_orphan_placeholder_on_settle(task):
             update_conversation_fts(db, conv_id, search_text)
         except Exception as e:
             logger.debug('[SettleReconcile] conv=%s FTS update skipped: %s', conv_id[:8], e)
+        # Phase 5 dual-write (flag-gated, inert when off): reconcile drops a
+        # message mid-array (re-sequences) — full rebuild mirror.
+        from lib.database.messages_rows import mirror_write_and_commit
+        mirror_write_and_commit(db, conv_id, cleaned, now_ms=now_ms, full=True)
         logger.info('[SettleReconcile] conv=%s swept orphaned placeholder at task-end '
                     '(%d\u2192%d msgs, dropped-before-first-token)',
                     conv_id[:8], len(messages), len(cleaned))
@@ -1059,6 +1063,11 @@ def _sync_result_to_conversation(task, meta):
         if _cas_succeeded:
             from lib.conversations import update_conversation_fts
             update_conversation_fts(db, conv_id, search_text)
+            # Phase 5 dual-write (flag-gated, inert when off): terminal
+            # append/graft onto the tail — incremental tail mirror.
+            from lib.database.messages_rows import mirror_write_and_commit
+            mirror_write_and_commit(db, conv_id, messages,
+                                    now_ms=int(time.time() * 1000))
             # ── Phase-1 parity stamp (the never-landed write) ──
             # Freeze the EXACT terminal assistant dict we just committed to
             # conversations.messages so orchestrator.py can ship it verbatim as
@@ -1541,6 +1550,10 @@ def _sync_partial_to_conversation(task):
                              conv_id[:8], attempt + 1, MAX_CAS)
                 time.sleep(0.02 * (attempt + 1))
                 continue
+            # Phase 5 dual-write (flag-gated, inert when off): checkpoint
+            # mutates/appends the tail — incremental tail mirror.
+            from lib.database.messages_rows import mirror_write_and_commit
+            mirror_write_and_commit(db, conv_id, messages, now_ms=now_ms)
             logger.debug('[Checkpoint] conv=%s Synced partial: content=%d→%d thinking=%d→%d tools=%d',
                          conv_id, existing_content_len, len(content),
                          existing_thinking_len, len(thinking), len(tool_rounds or []))

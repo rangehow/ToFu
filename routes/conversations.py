@@ -530,6 +530,10 @@ def _persist_reconcile(db, conv_id, cleaned, settings_dict):
         (messages_json, settings_json, len(cleaned), search_text,
          conv_id, DEFAULT_USER_ID))
     db.commit()
+    # Phase 5 dual-write (flag-gated, inert when off): reconcile re-sequences
+    # the array, so mirror with a full rebuild, not the tail heuristic.
+    from lib.database.messages_rows import mirror_write_and_commit
+    mirror_write_and_commit(db, conv_id, cleaned, full=True)
 
     # The ``conversations_rev_bump_trg`` trigger advanced rev on the UPDATE;
     # read it back so the push carries the NEW version the client can dedupe on.
@@ -1979,6 +1983,10 @@ def _delete_message_blocking(db, conv_id, msg_idx, mode, msg_id=None):
     }, insert_cols=_CONV_INSERT_COLS, retry=True)
 
     update_conversation_fts(db, conv_id, search_text)
+    # Phase 5 dual-write (flag-gated, inert when off): arbitrary-index
+    # deletion re-sequences the array — full rebuild mirror.
+    from lib.database.messages_rows import mirror_write_and_commit
+    mirror_write_and_commit(db, conv_id, messages, now_ms=now_ms, full=True)
 
     _dm_rev_row = db.execute('SELECT rev FROM conversations WHERE id=? AND user_id=?',
                              (conv_id, DEFAULT_USER_ID)).fetchone()
@@ -2136,6 +2144,10 @@ def _patch_message_blocking(db, conv_id, msg_idx, data):
     }, insert_cols=_CONV_INSERT_COLS, retry=True)
 
     update_conversation_fts(db, conv_id, search_text)
+    # Phase 5 dual-write (flag-gated, inert when off): single-message edit.
+    from lib.database.messages_rows import mirror_write_and_commit
+    mirror_write_and_commit(db, conv_id, messages, now_ms=now_ms,
+                            changed_seqs=[msg_idx])
 
     _pm_rev_row = db.execute('SELECT rev FROM conversations WHERE id=? AND user_id=?',
                              (conv_id, DEFAULT_USER_ID)).fetchone()
@@ -2249,6 +2261,11 @@ def _patch_message_by_id_blocking(db, conv_id, msg_id, data):
     }, insert_cols=_CONV_INSERT_COLS, retry=True)
 
     update_conversation_fts(db, conv_id, search_text)
+    # Phase 5 dual-write (flag-gated, inert when off): single-message edit,
+    # mirror just that row via the seq hint.
+    from lib.database.messages_rows import mirror_write_and_commit
+    mirror_write_and_commit(db, conv_id, messages, now_ms=now_ms,
+                            changed_seqs=[target_idx])
 
     _pmi_rev_row = db.execute('SELECT rev FROM conversations WHERE id=? AND user_id=?',
                               (conv_id, DEFAULT_USER_ID)).fetchone()
@@ -2369,6 +2386,10 @@ def _delete_branch_blocking(db, conv_id, msg_idx, branch_idx, msg_id=None):
     }, insert_cols=_CONV_INSERT_COLS, retry=True)
 
     update_conversation_fts(db, conv_id, search_text)
+    # Phase 5 dual-write (flag-gated, inert when off): branches edit one message.
+    from lib.database.messages_rows import mirror_write_and_commit
+    mirror_write_and_commit(db, conv_id, messages, now_ms=now_ms,
+                            changed_seqs=[msg_idx])
 
     # Event-driven cross-device sync: a branch delete changes the conversation
     # body, so carry the post-write rev → a sibling tab with this conv open

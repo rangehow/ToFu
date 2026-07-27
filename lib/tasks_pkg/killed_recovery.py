@@ -436,6 +436,9 @@ def restamp_killed_after_internal_fatal(task: dict) -> bool:
             'UPDATE conversations SET messages=? WHERE id=? AND user_id=1',
             (json.dumps(messages, ensure_ascii=False), conv_id))
         db.commit()
+        # Phase 5 dual-write (flag-gated, inert when off): tail re-tag.
+        from lib.database.messages_rows import mirror_write_and_commit
+        mirror_write_and_commit(db, conv_id, messages)
         audit_log('killed_recovery_internal_fatal_restamp', conv_id=conv_id,
                   task_id=task.get('id', ''), tag=tag, attempts=attempts)
         return True
@@ -497,6 +500,11 @@ def _dispatch_one(conv_id: str, db, *, storm: bool) -> str:
             'UPDATE conversations SET settings=? WHERE id=? AND user_id=1',
             (json.dumps(settings, ensure_ascii=False), conv_id))
     db.commit()
+    # Phase 5 dual-write (flag-gated, inert when off): only the exhausted
+    # branch above rewrote messages (tail degrade tag) — mirror then.
+    if verdict.get('tag') == REASON_EXHAUSTED and messages:
+        from lib.database.messages_rows import mirror_write_and_commit
+        mirror_write_and_commit(db, conv_id, messages)
 
     if action == 'exhausted':
         # verdict['attempts'] is the DECISION counter — it reaches cap+1 on the

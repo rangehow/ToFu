@@ -196,6 +196,9 @@ def _append_vu_message_to_conv(conv_id: str, vu_msg_id: str,
             (json_dumps_pg(messages), now_ms, len(messages), search_text,
              conv_id),
         )
+        # Phase 5 dual-write (flag-gated, inert when off): tail append.
+        from lib.database.messages_rows import mirror_write_and_commit
+        mirror_write_and_commit(db, conv_id, messages, now_ms=now_ms)
         logger.info('[Autopilot] conv=%s ✅ Appended VU msg %s (%d chars, %d rounds)',
                     conv_id[:8], vu_msg_id[:12], len(text), len(rounds or []))
         return vu_msg

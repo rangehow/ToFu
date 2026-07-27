@@ -539,6 +539,10 @@ async def backfill_conv_narration_segments(conv_id: str, *, log_tag: str = '') -
                     if needs_segment_narration_translation(m)]
         if not eligible:
             return summary
+        # Phase 5: the positions narration-stamping will touch (computed
+        # pre-stamp — same objects/criteria as `eligible`).
+        eligible_seqs = [i for i, m in enumerate(messages)
+                         if needs_segment_narration_translation(m)]
 
         system_prompt = _build_translate_prompt(_TARGET, _SOURCE)
         # ★ ROOT-CAUSE FIX: the translate core is SYNCHRONOUS (requests-based
@@ -580,6 +584,18 @@ async def backfill_conv_narration_segments(conv_id: str, *, log_tag: str = '') -
             # Reset rev so the messages UPDATE does not bump it (no client CAS 409).
             await conn.execute(
                 'UPDATE conversations SET rev=? WHERE id=?', (expected_rev, conv_id))
+
+        # Phase 5 dual-write (flag-gated, inert when off): the stamp landed —
+        # mirror the stamped positions. The mirror uses the SYNC db layer, so
+        # it runs off the event loop (this file's own blocking-I/O rule).
+        from lib.database.messages_rows import (
+            mirror_write_and_commit as _mwc, rows_write_enabled as _rwe)
+        if _rwe():
+            def _mirror_offloop():
+                from lib.database import DOMAIN_CHAT, get_thread_db
+                _mwc(get_thread_db(DOMAIN_CHAT), conv_id, messages,
+                     changed_seqs=eligible_seqs)
+            await asyncio.to_thread(_mirror_offloop)
 
         summary.update(messagesStamped=msgs_stamped, segmentsStamped=segs_stamped,
                        wrote=True)

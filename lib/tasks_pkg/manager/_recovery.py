@@ -298,6 +298,7 @@ def recover_stale_tasks_on_startup(prev_shutdown=None, dispatch=True):
 
         cleared = 0
         recovered_conv_ids: list = []
+        _mirror_pending: list = []  # (cid, messages) for the Phase-5 post-commit mirror
         for cid, crow in conv_by_id.items():
             try:
                 settings = json.loads(crow['settings'] or '{}')
@@ -502,6 +503,11 @@ def recover_stale_tasks_on_startup(prev_shutdown=None, dispatch=True):
             if messages_json:
                 from lib.conversations import build_search_text
                 messages_parsed = json.loads(messages_json)
+                # Phase 5: collect for the post-commit mirror below (inert
+                # unless TOFU_MESSAGES_ROWS; recovery rewrites arbitrarily).
+                from lib.database.messages_rows import rows_write_enabled as _rwe
+                if _rwe():
+                    _mirror_pending.append((cid, messages_parsed))
                 search_text = build_search_text(messages_parsed)
                 db.execute(
                     "UPDATE conversations SET settings=?, messages=?, updated_at=?, "
@@ -536,6 +542,15 @@ def recover_stale_tasks_on_startup(prev_shutdown=None, dispatch=True):
             db.commit()
             logger.info('[Startup] Recovered %d conversation(s) (merged interrupted '
                         'content + cleared any dead activeTaskId)', cleared)
+            # Phase 5 dual-write (flag-gated; collection above is flag-gated
+            # too, so this loop is empty when off): recovery merges + ghost
+            # reconciles rewrite the array arbitrarily → full rebuild mirror
+            # per conv, AFTER the authoritative commit (transaction shape
+            # unchanged — pt_7e4afe73 discipline).
+            if _mirror_pending:
+                from lib.database.messages_rows import mirror_write_and_commit
+                for _cid, _msgs in _mirror_pending:
+                    mirror_write_and_commit(db, _cid, _msgs, full=True)
 
         total = len(stale_rows) + cleared
         if total:

@@ -181,6 +181,9 @@ def _start_autocontinue_turn(conv_id: str) -> bool:
             'UPDATE conversations SET messages=?, updated_at=?, msg_count=?, '
             'search_text=? WHERE id=? AND user_id=1',
             (messages_json, now_ms, len(messages), search_text, conv_id))
+        # Phase 5 dual-write (flag-gated, inert when off): tail append.
+        from lib.database.messages_rows import mirror_write_and_commit
+        mirror_write_and_commit(db, conv_id, messages, now_ms=now_ms)
         try:
             update_conversation_fts(db, conv_id, search_text)
         except Exception as e:

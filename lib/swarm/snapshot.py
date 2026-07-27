@@ -212,7 +212,9 @@ def persist_snapshot_to_conversation(conv_id: str, agent_ids,
             wanted = {str(x) for x in (agent_ids or [])}
             any_changed = False
             matched = False
-            for msg in reversed(messages):
+            _stamped_seqs: set = set()
+            for _mi in range(len(messages) - 1, -1, -1):
+                msg = messages[_mi]
                 if not isinstance(msg, dict) or msg.get('role') != 'assistant':
                     continue
                 for r in (msg.get('toolRounds') or []):
@@ -222,6 +224,7 @@ def persist_snapshot_to_conversation(conv_id: str, agent_ids,
                     matched = True
                     if stamp_round(r, filter_snapshot(snapshot, hids)):
                         any_changed = True
+                        _stamped_seqs.add(_mi)
             if not matched:
                 # Either the spawning turn hasn't been persisted yet (mid-turn
                 # before the first checkpoint — the live-task stamp covers that,
@@ -248,6 +251,11 @@ def persist_snapshot_to_conversation(conv_id: str, agent_ids,
             )
             db.commit()
             if (getattr(cur, 'rowcount', 0) or 0) > 0:
+                # Phase 5 dual-write (flag-gated, inert when off): rounds
+                # stamped inside known message positions → seq-hint mirror.
+                from lib.database.messages_rows import mirror_write_and_commit
+                mirror_write_and_commit(db, conv_id, messages, now_ms=now_ms,
+                                        changed_seqs=sorted(_stamped_seqs))
                 logger.info('[SwarmSnapshot] conv=%s persisted snapshot (%d agents, '
                             'v=%d) onto spawn round', conv_id[:8],
                             len(snapshot.get('agents') or []),

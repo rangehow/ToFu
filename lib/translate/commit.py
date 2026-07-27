@@ -268,6 +268,11 @@ def _commit_translation_inner(conv_id, msg_idx, field, translated_text,
                 # Small sleep to avoid hot-spinning on a contended row.
                 time.sleep(0.05 * (attempt + 1))
                 continue
+            # Phase 5 dual-write (flag-gated, inert when off): the CAS won —
+            # one message edited at a known index → seq-hint mirror.
+            from lib.database.messages_rows import mirror_write_and_commit
+            mirror_write_and_commit(db, conv_id, messages, now_ms=new_updated,
+                                    changed_seqs=[idx])
             logger.info('[Translate] Committed %s to conv=%s msg=%d via=%s '
                         '(%d chars, attempt=%d)',
                         field, conv_id[:8], idx, resolved_via or 'idx',

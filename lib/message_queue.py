@@ -1043,6 +1043,9 @@ def _append_user_msg_with_cas(db, conv_id: str, user_msg: dict) -> bool:
         )
         db.commit()
         if getattr(cur, 'rowcount', None) != 0:
+            # Phase 5 dual-write (flag-gated, inert when off): tail append.
+            from lib.database.messages_rows import mirror_write_and_commit
+            mirror_write_and_commit(db, conv_id, messages, now_ms=now_ms)
             return True
         # CAS miss — a concurrent writer bumped updated_at. Re-read + retry.
         logger.debug('[Queue] append CAS miss conv=%s attempt %d/%d — re-reading',
@@ -1069,6 +1072,9 @@ def _append_user_msg_with_cas(db, conv_id: str, user_msg: dict) -> bool:
     db_execute_with_retry(db, 'UPDATE conversations SET messages=?, updated_at=?, msg_count=? '
                           'WHERE id=? AND user_id=1',
                           (json_dumps_pg(messages), now_ms, len(messages), conv_id))
+    # Phase 5 dual-write (flag-gated, inert when off): tail append.
+    from lib.database.messages_rows import mirror_write_and_commit
+    mirror_write_and_commit(db, conv_id, messages, now_ms=now_ms)
     return True
 
 

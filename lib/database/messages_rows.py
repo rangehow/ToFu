@@ -175,8 +175,25 @@ def backfill_conv(db, conv_id: str, messages, *, now_ms: int = 0, commit: bool =
     return len(msgs)
 
 
-def dual_write_conv(db, conv_id: str, messages, *, now_ms: int = 0) -> None:
+def dual_write_conv(db, conv_id: str, messages, *, now_ms: int = 0,
+                    changed_seqs=None) -> None:
     """Mirror a JSONB ``messages`` write into conversation_messages rows.
+
+    Incremental (2026-07-27, pt_59140ecd): the previous shape delegated to
+    ``backfill_conv`` — a DELETE-all + per-row re-upsert of the WHOLE history
+    on every write, so a 1163-message conversation paid 1163 row round-trips
+    per appended message, strictly worse than the blob write being mirrored
+    (docs/MESSAGES_ROWS_WRITE_FLIP_EVIDENCE.md §4.2).
+
+    ``changed_seqs``: callers that KNOW which positions they edited in place
+    (translate commit, patch-by-id, …) pass them — only those rows are
+    re-mirrored (plus truncation repair). When ``None`` the mirror infers the
+    change from the row count: tail appends write only the new rows plus a
+    re-write of the previous tip row, which also covers the dominant
+    same-count mutation (a streaming task finalizing its LAST message).
+    A same-count edit NOT at the tip is invisible to the count heuristic —
+    edit-capable callers MUST pass ``changed_seqs`` (the fleet parity gate
+    is the backstop for anything that slips through).
 
     Best-effort: a no-op when the flag is off, and swallows every exception so
     a mirroring failure can NEVER break the authoritative JSONB write path.
@@ -184,10 +201,47 @@ def dual_write_conv(db, conv_id: str, messages, *, now_ms: int = 0) -> None:
     if not rows_write_enabled():
         return
     try:
-        backfill_conv(db, conv_id, messages, now_ms=now_ms, commit=False)
+        _mirror_conv_rows(db, conv_id, messages, now_ms=now_ms,
+                          changed_seqs=changed_seqs)
     except Exception as e:  # pragma: no cover - defensive
         logger.warning('[messages_rows] dual-write mirror failed conv=%s (non-fatal): %s',
                        (conv_id or '')[:12], e)
+
+
+def _mirror_conv_rows(db, conv_id: str, messages, *, now_ms: int = 0,
+                      changed_seqs=None) -> None:
+    """Incremental mirror of the authoritative blob into rows.
+
+    Cost per write on the dominant append path: one index-only COUNT plus
+    ≤2 row upserts (tip refresh + the new row), versus history-length
+    DELETE+reinsert before. Never commits — the caller owns the transaction
+    boundary (pt_7e4afe73).
+    """
+    from lib.database._core_schema import CONVERSATION_MESSAGES, upsert
+    msgs = _parse_messages(messages)
+    n = len(msgs)
+    if changed_seqs is not None:
+        seqs = sorted({s for s in changed_seqs if isinstance(s, int) and 0 <= s < n})
+    else:
+        cnt_row = db.execute(
+            'SELECT COUNT(*) AS n FROM conversation_messages WHERE conv_id=?',
+            (conv_id,)).fetchone()
+        old = int(cnt_row['n'] if hasattr(cnt_row, 'keys') else cnt_row[0]) if cnt_row else 0
+        # Re-write from the previous tip onward: pure appends mirror the new
+        # rows + refresh the tip (streaming writers mutate the last message
+        # in place with the count unchanged); a fresh conv (old=0) falls out
+        # as a full insert.
+        start = max(0, min(old, n) - 1)
+        seqs = list(range(start, n))
+    for seq in seqs:
+        row = message_to_row(conv_id, seq, msgs[seq], now_ms=now_ms)
+        upsert(db, CONVERSATION_MESSAGES, row,
+               conflict_cols=['conv_id', 'seq'], commit=False)
+    # Truncation repair: the blob is authoritative, so any row beyond its tail
+    # is stale (branch delete / regen). Index-range delete — cheap no-op when
+    # nothing is there.
+    db.execute('DELETE FROM conversation_messages WHERE conv_id=? AND seq>=?',
+               (conv_id, n))
 
 
 # ── Windowed read (tail window + page-up) ─────────────────────────────────
@@ -323,6 +377,54 @@ def verify_conv_parity(db, conv_id: str) -> dict:
     }
 
 
+def mirror_write_and_commit(db, conv_id: str, messages, *, now_ms: int = 0,
+                            changed_seqs=None) -> None:
+    """The one-line dual-write hook for full-blob writers (pt_59140ecd ②).
+
+    Call this AFTER the authoritative ``conversations.messages`` write has
+    committed (or at the end of a function whose teardown commits): mirrors
+    into ``conversation_messages`` rows via :func:`dual_write_conv` and —
+    only when the write flag is on — commits the mirror rows immediately so
+    they never hang uncommitted on a pooled connection (the pt_7e4afe73
+    durability gap). The flag-off path is a pure no-op, byte-identical to
+    not calling at all, so fanning this out to every blob writer is
+    behaviour-neutral until the flag flips.
+
+    ``full=True`` forces a complete rebuild (DELETE + re-insert of every row)
+    — use it for REWRITE-class writers that re-sequence or surgically rewrite
+    the array (reconcile / killed-recovery), where the count heuristic and
+    seq hints cannot express the change. These paths are rare, so the
+    O(history) cost is acceptable.
+
+    ``lib/chat/persistence.py::persist_conv_messages`` keeps its annotated
+    inline version (it interleaves the commit with the rev read-back).
+    """
+    if not rows_write_enabled():
+        return
+    if full:
+        try:
+            backfill_conv(db, conv_id, messages, now_ms=now_ms, commit=False)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning('[messages_rows] full mirror failed conv=%s (non-fatal): %s',
+                           (conv_id or '')[:12], e)
+    else:
+        dual_write_conv(db, conv_id, messages, now_ms=now_ms,
+                        changed_seqs=changed_seqs)
+    try:
+        db.commit()
+    except Exception as e:
+        logger.warning('[messages_rows] mirror commit failed conv=%s '
+                       '(non-fatal, JSONB truth already durable): %s',
+                       (conv_id or '')[:12], e)
+
+
+__all__ = [
+    'rows_write_enabled', 'rows_read_enabled',
+    'message_to_row', 'row_to_message', 'rows_to_messages',
+    'backfill_conv', 'dual_write_conv', 'mirror_write_and_commit',
+    'load_message_window',
+    'verify_search_text_parity', 'verify_conv_parity',
+]
 __all__ = [
     'rows_write_enabled', 'rows_read_enabled',
     'message_to_row', 'row_to_message', 'rows_to_messages',

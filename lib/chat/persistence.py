@@ -363,6 +363,9 @@ def append_pending_user_msg(db, conv_id, user_msg, valid_assistant_ids=None):
              DEFAULT_USER_ID, cur_rev))
         db.commit()
         if getattr(cur, 'rowcount', None) != 0:
+            # Phase 5 dual-write (flag-gated, inert when off): tail append.
+            from lib.database.messages_rows import mirror_write_and_commit
+            mirror_write_and_commit(db, conv_id, messages, now_ms=now_ms)
             try:
                 rev_row = db.execute(
                     'SELECT rev FROM conversations WHERE id=? AND user_id=?',

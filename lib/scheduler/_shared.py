@@ -462,6 +462,9 @@ def inject_and_run_task(
             (messages_json, now_ms, len(messages),
              search_text, conv_id)
         )
+        # Phase 5 dual-write (flag-gated, inert when off): user+assistant append.
+        from lib.database.messages_rows import mirror_write_and_commit
+        mirror_write_and_commit(db, conv_id, messages, now_ms=now_ms)
         from lib.conversations import update_conversation_fts
         update_conversation_fts(db, conv_id, search_text)
 

@@ -94,29 +94,37 @@ def test_anchor_reads_text_blocks_in_list_content():
     assert _objective_anchor_index(msgs) == 1
 
 
-def test_anchor_image_only_turn_is_currently_skipped_KNOWN_GAP():
-    """PINS CURRENT BEHAVIOUR, WHICH CONTRADICTS THE DOCSTRING.
+def test_anchor_accepts_an_image_only_opening_turn():
+    """A conversation opened with just a screenshot IS anchored on that turn.
 
-    `_objective_anchor_index` documents a branch for image-only turns:
-        elif content:  # non-empty non-text (e.g. image-only) — still real
-    but that branch is UNREACHABLE for list content — `isinstance(content, list)`
-    is checked first and only counts `type == 'text'` blocks, so an image-only
-    user turn returns False there and is skipped. The `elif` only ever sees
-    non-str non-list content.
+    Regression guard for pt_683c4550: the list branch used to count only
+    `type == 'text'` blocks, so an image-only turn looked empty and was
+    skipped — the anchor landed on a LATER turn and the user's actual request
+    ("fix this" + screenshot) became eligible for summarizing away, cumulative
+    over every compaction. The `elif content:` branch that documented this case
+    was unreachable for list content.
 
-    Consequence: a conversation opened with a bare screenshot ("fix this")
-    anchors on a LATER turn, so the actual request is eligible for summarizing
-    away. Contrast with `autopilot_state._extract_objective`, which returns
-    TEXT — there, skipping an image-only turn is correct. The two functions
-    share the skip rules but NOT this case, so "one definition of the
-    objective" does not settle it.
-
-    Filed as a separate ticket rather than fixed inside this test-only batch
-    (project convention: latent bugs found while adding coverage get their own
-    workflow). Flip this assertion to `== 0` when that ticket lands.
+    Deliberately DIFFERENT from autopilot_state._extract_objective, which
+    returns TEXT for the virtual user and is right to skip an image-only turn.
+    Here the return value is an INDEX meaning "protect this message", so an
+    image carries the goal just as well as text.
     """
     msgs = [_u([{'type': 'image', 'source': {}}]), _u('later text')]
-    assert _objective_anchor_index(msgs) == 1
+    assert _objective_anchor_index(msgs) == 0
+
+
+def test_anchor_accepts_mixed_image_plus_blank_text():
+    """Clients often emit an empty text block alongside the image."""
+    msgs = [_u([{'type': 'text', 'text': '  '}, {'type': 'image', 'source': {}}]),
+            _u('later')]
+    assert _objective_anchor_index(msgs) == 0
+
+
+def test_anchor_still_skips_a_genuinely_empty_list_turn():
+    """The fix must not make EVERY list-content turn count — an empty list (or
+    one holding only blank text) is still not a goal."""
+    msgs = [_u([]), _u([{'type': 'text', 'text': '\n'}]), _u('real')]
+    assert _objective_anchor_index(msgs) == 2
 
 
 def test_anchor_none_when_no_real_user_message():

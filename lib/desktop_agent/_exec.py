@@ -107,23 +107,27 @@ def _kill_tree(proc):
             try:
                 child.kill()
                 killed = True
-            except psutil.NoSuchProcess:
+            except psutil.NoSuchProcess as _e:
+                logger.debug('kill tree: process gone (%s)', _e)
                 pass
         try:
             parent.kill()
-        except psutil.NoSuchProcess:
+        except psutil.NoSuchProcess as _e:
+            logger.debug('kill tree: process gone (%s)', _e)
             pass
         _gone, alive = psutil.wait_procs(children + [parent], timeout=3)
         for p in alive:
             try:
                 p.kill()
-            except psutil.NoSuchProcess:
+            except psutil.NoSuchProcess as _e:
+                logger.debug('kill tree: process gone (%s)', _e)
                 pass
     except Exception as e:
         logger.warning('[Exec] tree kill failed for pid=%s: %s', proc.pid, e)
         try:
             proc.kill()
-        except Exception:
+        except Exception as _e:
+            logger.debug('kill tree: failed (%s)', _e)
             pass
     return killed
 
@@ -176,7 +180,8 @@ class _StreamedProcess:
             while True:
                 try:
                     data = os.read(fd, 4096)
-                except OSError:
+                except OSError as _e:
+                    logger.debug('reader: unreadable (%s)', _e)
                     break
                 if not data:
                     break
@@ -198,7 +203,8 @@ class _StreamedProcess:
         finally:
             try:
                 fh.close()
-            except Exception:
+            except Exception as _e:
+                logger.debug('reader: failed (%s)', _e)
                 pass
 
     def _waiter(self):

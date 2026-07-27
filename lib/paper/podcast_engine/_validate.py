@@ -136,7 +136,8 @@ def _decimals(raw: str) -> int:
 def _parse_number(raw: str) -> float | None:
     try:
         return float(raw.replace(',', ''))
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as _e:
+        logger.debug('parse number: unparseable/unexpected type (%s)', _e)
         return None
 
 

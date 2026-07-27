@@ -379,7 +379,8 @@ def emit_pack_files(out_dir: str, source_path: str | None = None) -> dict[str, s
         except Exception:
             try:
                 os.unlink(tmp_path)
-            except OSError:
+            except OSError as _e:
+                logger.debug('emit pack files: unreadable (%s)', _e)
                 pass
             raise
         published[lang] = filename

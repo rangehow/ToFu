@@ -2965,7 +2965,8 @@ def _lookup_paper_video_on_disk(phash: str) -> dict | None:
             continue
         try:
             mt = os.path.getmtime(os.path.join(workdir, 'job.json'))
-        except OSError:
+        except OSError as _e:
+            logger.debug('lookup paper video on disk: unreadable (%s)', _e)
             mt = 0.0
         if best is None or mt > best[0]:
             best = (mt, m.get('task_id') or name, m)
@@ -3001,7 +3002,8 @@ def poll_podcast_task():
     task_id = request.args.get('task_id', '')
     try:
         cursor = int(request.args.get('cursor', '0') or 0)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as _e:
+        logger.debug('poll podcast task: unparseable/unexpected type (%s)', _e)
         cursor = 0
     with _podcast_tasks_lock:
         t = _podcast_tasks.get(task_id)

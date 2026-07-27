@@ -73,6 +73,7 @@ def _handle_motion_video_tool(task, tc, fn_name, tc_id, fn_args, rn,
                 with open(scenes_path, encoding='utf-8') as f:
                     scenes = json.load(f)
             except (OSError, json.JSONDecodeError) as e:
+                logger.debug('handle motion video tool: unreadable/malformed JSON (%s)', e)
                 result = {'ok': False, 'errors': [f'cannot read inputs: {e}']}
                 badge = 'failed'
             else:
@@ -127,6 +128,7 @@ def _handle_motion_video_tool(task, tc, fn_name, tc_id, fn_args, rn,
                 with open(scenes_path, encoding='utf-8') as f:
                     scenes = json.load(f)
             except (OSError, json.JSONDecodeError) as e:
+                logger.debug('handle motion video tool: unreadable/malformed JSON (%s)', e)
                 result = {'ok': False, 'detail': f'cannot read scenes: {e}'}
                 badge = 'failed'
             else:
@@ -143,7 +145,8 @@ def _handle_motion_video_tool(task, tc, fn_name, tc_id, fn_args, rn,
                     else:
                         badge = ('degraded' if result.get('degraded')
                                  else 'failed')
-                except mv.NarrationAborted:
+                except mv.NarrationAborted as _e:
+                    logger.debug('handle motion video tool: NarrationAborted (%s)', _e)
                     result = {'ok': False, 'category': 'aborted',
                               'detail': 'narration aborted by user'}
                     badge = 'aborted'
@@ -213,7 +216,8 @@ def _handle_produce_video(task, tc, fn_name, tc_id, fn_args, rn,
             lang = 'en' if str(fn_args.get('lang') or 'zh').strip() == 'en' else 'zh'
             try:
                 max_scenes = int(fn_args.get('max_scenes') or 8)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError) as _e:
+                logger.debug('handle produce video: unexpected type/unparseable (%s)', _e)
                 max_scenes = 8
             max_scenes = max(3, min(max_scenes, 12))
             narration = bool(fn_args.get('narration', True))
@@ -351,7 +355,8 @@ def _handle_produce_research(task, tc, fn_name, tc_id, fn_args, rn,
             lang = 'zh' if str(fn_args.get('lang') or 'en').strip() == 'zh' else 'en'
             try:
                 n_ideas = int(fn_args.get('n_ideas') or 6)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError) as _e:
+                logger.debug('handle produce research: unexpected type/unparseable (%s)', _e)
                 n_ideas = 6
             n_ideas = max(3, min(n_ideas, 12))
             seeds = fn_args.get('seed_arxiv_ids') or None

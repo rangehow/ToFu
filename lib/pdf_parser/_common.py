@@ -196,7 +196,8 @@ def current_parser_version(extractor: str) -> str:
     canon = 'pymupdf-raw' if tag == 'pymupdf_raw' else tag
     try:
         return f'{canon}-{_md.version(pkg)}'
-    except _md.PackageNotFoundError:
+    except _md.PackageNotFoundError as _e:
+        logger.debug('current parser version: PackageNotFoundError (%s)', _e)
         return f'{canon}-?'
 
 

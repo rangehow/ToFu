@@ -637,7 +637,8 @@ async def sync_digest():
                 continue
             try:
                 server_rev = row['rev']
-            except (KeyError, TypeError, IndexError):
+            except (KeyError, TypeError, IndexError) as _e:
+                logger.debug('sync digest: missing key/unexpected type/short/malformed (%s)', _e)
                 server_rev = row[0]
             if server_rev != client_rev:
                 divergences.append({'convId': conv_id, 'kind': 'rev',

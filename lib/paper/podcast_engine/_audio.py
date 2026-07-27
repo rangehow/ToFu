@@ -80,7 +80,8 @@ def _synth_chunk_with_retry(chunk: str, *, voice: str, fmt: str,
     try:
         res = _tts.synthesize(chunk, voice=voice, fmt=fmt, speed=speed)
         return res.audio_bytes, res.model
-    except _tts.TTSError:
+    except _tts.TTSError as _e:
+        logger.debug('synth chunk with retry: TTSError (%s)', _e)
         res = _tts.synthesize(chunk, voice=voice, fmt=fmt, speed=speed)
         return res.audio_bytes, res.model
 

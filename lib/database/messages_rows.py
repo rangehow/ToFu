@@ -78,7 +78,8 @@ def _flag_file_on(path=None) -> bool:
     try:
         with open(path, encoding='utf-8') as f:
             return f.read().strip().lower() in ('1', 'true', 'on', 'yes')
-    except OSError:
+    except OSError as _e:
+        logger.debug('flag file on: unreadable (%s)', _e)
         return False
 
 

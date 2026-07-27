@@ -51,7 +51,8 @@ def _run_cli(args: list[str], *, cwd: str, timeout: int,
             args, cwd=cwd, env=env,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, start_new_session=True)
-    except FileNotFoundError:
+    except FileNotFoundError as _e:
+        logger.debug('run cli: missing (%s)', _e)
         return {'rc': None, 'out': '', 'err': f'executable not found: {args[0]}',
                 'elapsed': 0.0, 'category': 'env_missing'}
     except Exception as e:
@@ -134,8 +135,9 @@ def _gate(subcmd: str, project_dir: str, *, timeout: int,
     try:
         data = json.loads(res['out'])
         findings = data.get('findings') or []
-    except Exception:
+    except Exception as _e:
         # Non-JSON output (older CLI / human format): fall back to exit code.
+        logger.debug('gate: failed (%s)', _e)
         parse_note = 'non-json output; gated on exit code'
     errors = [f for f in findings if f.get('severity') == 'error']
     ok = res['rc'] == 0 and not errors

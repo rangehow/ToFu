@@ -55,7 +55,8 @@ def _row_get(r, key, idx):
     try:
         if key in r.keys():
             return r[key]
-    except Exception:
+    except Exception as _e:
+        logger.debug('row get: failed (%s)', _e)
         pass
     return r[idx]
 
@@ -140,7 +141,8 @@ def _read_events_uncached(task_id: str) -> list:
         if not isinstance(payload, dict):
             try:
                 payload = json.loads(payload or '{}')
-            except (TypeError, ValueError, json.JSONDecodeError):
+            except (TypeError, ValueError, json.JSONDecodeError) as _e:
+                logger.debug('read events uncached: unexpected type/unparseable/malformed JSON (%s)', _e)
                 payload = {}
         try:
             out.append({

@@ -94,7 +94,8 @@ def get(text: str, source: str, target: str):
     try:
         with open(path, 'r', encoding='utf-8') as f:
             data = json.load(f)
-    except FileNotFoundError:
+    except FileNotFoundError as _e:
+        logger.debug('get: missing (%s)', _e)
         return None
     except (OSError, json.JSONDecodeError) as e:
         logger.debug('[TranslateRefusal] read failed for %s: %s', path, e)

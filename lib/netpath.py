@@ -75,13 +75,15 @@ try:
     _PROBE_INTERVAL = float(os.environ.get('TOFU_NETPATH_INTERVAL', '180'))
     if _PROBE_INTERVAL <= 0:
         _PROBE_INTERVAL = 180.0
-except (ValueError, TypeError):
+except (ValueError, TypeError) as _e:
+    logger.debug('<module>: unparseable/unexpected type (%s)', _e)
     _PROBE_INTERVAL = 180.0
 try:
     _PROBE_TIMEOUT = float(os.environ.get('TOFU_NETPATH_TIMEOUT', '3'))
     if _PROBE_TIMEOUT <= 0:
         _PROBE_TIMEOUT = 3.0
-except (ValueError, TypeError):
+except (ValueError, TypeError) as _e:
+    logger.debug('<module>: unparseable/unexpected type (%s)', _e)
     _PROBE_TIMEOUT = 3.0
 
 _STORE_PATH = config_path('netpath.json')
@@ -106,7 +108,8 @@ def _is_ip_literal(host: str) -> bool:
     try:
         ipaddress.ip_address(host)
         return True
-    except ValueError:
+    except ValueError as _e:
+        logger.debug('is ip literal: unparseable (%s)', _e)
         return False
 
 
@@ -171,7 +174,8 @@ def note_url(url: str) -> None:
             return
         origin = '%s://%s/' % (parsed.scheme or 'https',
                                parsed.netloc.split('@')[-1])
-    except Exception:
+    except Exception as _e:
+        logger.debug('note url: failed (%s)', _e)
         return
     with _lock:
         st = _states.get(host)
@@ -281,7 +285,8 @@ def report_outcome(url: str, ok: bool, latency_ms: 'float | None' = None,
     global _dirty
     try:
         host = (urlparse(url).hostname or '').lower()
-    except Exception:
+    except Exception as _e:
+        logger.debug('report outcome: failed (%s)', _e)
         return
     if not host:
         return
@@ -333,7 +338,8 @@ def _probe_once(url: str, use_proxy: bool) -> 'tuple[bool, float | None]':
             proxies=proxies, stream=True, allow_redirects=False)
         resp.close()
         return (True, (time.monotonic() - t0) * 1000.0)
-    except Exception:
+    except Exception as _e:
+        logger.debug('probe once: failed (%s)', _e)
         return (False, None)
 
 
@@ -473,7 +479,8 @@ def _load() -> None:
                 _states[host] = fresh
             _dirty = False
         logger.info('[Netpath] Restored %d host(s) from disk', len(_states))
-    except FileNotFoundError:
+    except FileNotFoundError as _e:
+        logger.debug('load: missing (%s)', _e)
         pass
     except Exception as e:
         logger.debug('[Netpath] load failed: %s', e)

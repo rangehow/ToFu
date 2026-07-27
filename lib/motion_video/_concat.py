@@ -53,7 +53,8 @@ def _run_ffmpeg(args: list[str], *, timeout: int, abort_event=None,
         proc = subprocess.Popen(args, env=env, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True,
                                 start_new_session=True)
-    except FileNotFoundError:
+    except FileNotFoundError as _e:
+        logger.debug('run ffmpeg: missing (%s)', _e)
         return {'rc': None, 'err': f'ffmpeg not found: {args[0]}',
                 'elapsed': 0.0, 'category': 'env_missing'}
     except Exception as e:
@@ -256,7 +257,8 @@ def burn_in_subtitles(video_path: str, srt_path: str, output: str, *,
                        'silent no-op')
         try:
             os.unlink(tmp_out)
-        except OSError:
+        except OSError as _e:
+            logger.debug('burn in subtitles: unreadable (%s)', _e)
             pass  # tmp output may not exist yet — nothing to clean
         return {'ok': False, 'category': 'font_missing',
                 'detail': 'libass resolved no usable font for the subtitle '

@@ -144,7 +144,8 @@ def _request_user_id():
     try:
         from routes.api_v1.auth import current_auth
         ctx = current_auth()
-    except Exception:  # noqa: BLE001 — outside request context / test env
+    except Exception as _e:  # noqa: BLE001 — outside request context / test env
+        logger.debug('request user id: failed (%s)', _e)
         return DEFAULT_USER_ID
     uid = getattr(ctx, 'user_id', '') if ctx is not None else ''
     if not uid:
@@ -153,7 +154,8 @@ def _request_user_id():
     # comparisons behave uniformly with existing DEFAULT_USER_ID=1 semantics.
     try:
         return int(uid) if str(uid).isdigit() else uid
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as _e:
+        logger.debug('request user id: unexpected type/unparseable (%s)', _e)
         return uid
 
 

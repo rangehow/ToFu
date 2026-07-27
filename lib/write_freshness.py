@@ -122,13 +122,15 @@ def _fingerprint(abs_path: str) -> tuple | None:
     """
     try:
         st = os.stat(abs_path)
-    except OSError:
+    except OSError as _e:
+        logger.debug('fingerprint: unreadable (%s)', _e)
         return None
     if st.st_size <= _CONTENT_HASH_MAX_BYTES:
         try:
             with open(abs_path, 'rb') as f:
                 data = f.read()
-        except OSError:
+        except OSError as _e:
+            logger.debug('fingerprint: unreadable (%s)', _e)
             return None
         return ('c', st.st_size,
                 hashlib.blake2b(data, digest_size=16).hexdigest())
@@ -264,7 +266,8 @@ def load_snapshot() -> int:
                     ap = str(it['path'])
                     fp = tuple(it['fp'])
                     ts = float(it.get('ts') or 0)
-                except (KeyError, TypeError, ValueError):
+                except (KeyError, TypeError, ValueError) as _e:
+                    logger.debug('load snapshot: missing key/unexpected type/unparseable (%s)', _e)
                     continue
                 if not ck or not ap:
                     continue

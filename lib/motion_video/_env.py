@@ -144,7 +144,8 @@ def _playwright_chrome_candidates() -> list[str]:
             continue
         try:
             rev = int(b.rsplit('-', 1)[-1].rsplit('_', 1)[-1])
-        except ValueError:
+        except ValueError as _e:
+            logger.debug('playwright chrome candidates: unparseable (%s)', _e)
             rev = 0
         for rel in ('chrome-linux64/chrome', 'chrome-linux/chrome',
                     'chrome-headless-shell-linux64/chrome-headless-shell'):

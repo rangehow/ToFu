@@ -67,7 +67,8 @@ def _plan_phases(task: dict) -> list:
 def _phase_started(task: dict, phases: list, phase: str) -> None:
     try:
         idx = phases.index(phase) + 1
-    except ValueError:
+    except ValueError as _e:
+        logger.debug('phase started: unparseable (%s)', _e)
         idx = 0
     _emit(task, {'type': 'phase_started', 'phase': phase,
                  'phase_index': idx, 'phase_total': len(phases),
@@ -204,7 +205,8 @@ def _existing_composition(index_path: str, duration: float) -> str | None:
     try:
         if abs(float(m.group(1)) - float(duration)) > 0.01:
             return None
-    except ValueError:
+    except ValueError as _e:
+        logger.debug('existing composition: unparseable (%s)', _e)
         return None
     return html
 

@@ -963,7 +963,8 @@ class SubAgent:
                 # same placement — one shape, not two.
                 on_round_end=lambda rnd: self._checkpoint(),
             )
-        except _LlmFailed:
+        except _LlmFailed as _e:
+            logger.debug('run loop: _LlmFailed (%s)', _e)
             return  # the dispatch hook already ran the LLM-error path
 
         if outcome.completed:

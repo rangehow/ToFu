@@ -121,9 +121,10 @@ def _refund_rate_slot(from_conv: str, to_conv: str, ts: float) -> bool:
             return False
         try:
             hist.remove(ts)
-        except ValueError:
+        except ValueError as _e:
             # The exact timestamp already aged out / was pruned — nothing to
             # refund (the window moved on, which is itself budget relief).
+            logger.debug('refund rate slot: unparseable (%s)', _e)
             return False
         if hist:
             _peer_msg_history[key] = hist

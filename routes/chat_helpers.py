@@ -108,7 +108,8 @@ def _log_poll_task_id_mismatch(db, conv_id, polled_task_id, db_meta):
             return
         try:
             settings = json.loads(row['settings'] or '{}') or {}
-        except (json.JSONDecodeError, TypeError):
+        except (json.JSONDecodeError, TypeError) as _e:
+            logger.debug('log poll task id mismatch: malformed JSON/unexpected type (%s)', _e)
             settings = {}
         active_task_id = settings.get('activeTaskId')
         reconciled_at = settings.get('_reconciledAt')
@@ -119,7 +120,8 @@ def _log_poll_task_id_mismatch(db, conv_id, polled_task_id, db_meta):
                 if m.get('role') == 'assistant':
                     msg_task_id = m.get('_taskId')
                     break
-        except (json.JSONDecodeError, TypeError):
+        except (json.JSONDecodeError, TypeError) as _e:
+            logger.debug('log poll task id mismatch: malformed JSON/unexpected type (%s)', _e)
             pass
         logger.warning(
             '[Chat] Poll %s — EMPTY-metadata interrupted result; ID inconsistency: '

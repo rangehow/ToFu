@@ -209,7 +209,8 @@ def _auth_headers(api_key, extra_headers):
 def _validate_embedding(parsed, _raw):
     try:
         emb = (parsed or {}).get('data', [{}])[0].get('embedding')
-    except (AttributeError, IndexError, TypeError):
+    except (AttributeError, IndexError, TypeError) as _e:
+        logger.debug('validate embedding: missing attribute/short/malformed/unexpected type (%s)', _e)
         return 'no data[0].embedding'
     return None if emb else 'empty embedding vector'
 
@@ -221,7 +222,8 @@ def _validate_transcription(parsed, _raw):
 def _validate_images_api(parsed, _raw):
     try:
         item = (parsed or {}).get('data', [{}])[0]
-    except (AttributeError, IndexError, TypeError):
+    except (AttributeError, IndexError, TypeError) as _e:
+        logger.debug('validate images api: missing attribute/short/malformed/unexpected type (%s)', _e)
         return 'no data[0]'
     if item.get('b64_json') or item.get('url'):
         return None
@@ -231,7 +233,8 @@ def _validate_images_api(parsed, _raw):
 def _validate_image_chat(parsed, _raw):
     try:
         content = (parsed or {})['choices'][0]['message'].get('content')
-    except (AttributeError, IndexError, KeyError, TypeError):
+    except (AttributeError, IndexError, KeyError, TypeError) as _e:
+        logger.debug('validate image chat: missing attribute/short/malformed/missing key/unexpected type (%s)', _e)
         return 'no choices[0].message.content'
     if isinstance(content, str):
         return None if content.strip() else 'empty text content'

@@ -75,7 +75,8 @@ def _atomic_write_bytes(target, data):
     phys = os.path.realpath(target) if os.path.islink(target) else target
     try:
         mode = _stat.S_IMODE(os.stat(phys).st_mode)
-    except OSError:
+    except OSError as _e:
+        logger.debug('atomic write bytes: unreadable (%s)', _e)
         mode = None  # new file (or unreadable stat) → umask default below
 
     parent = os.path.dirname(phys) or '.'
@@ -90,7 +91,8 @@ def _atomic_write_bytes(target, data):
     except BaseException:
         try:
             os.unlink(tmp)
-        except OSError:
+        except OSError as _e:
+            logger.debug('atomic write bytes: unreadable (%s)', _e)
             pass
         raise
 

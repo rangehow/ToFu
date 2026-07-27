@@ -1129,7 +1129,8 @@ class SSEAccumulator:
                         try:
                             json.loads(_args or '{}')
                             _args_valid = True
-                        except Exception:
+                        except Exception as _e:
+                            logger.debug('finalize: failed (%s)', _e)
                             _args_valid = False
                         logger.warning(
                             '%s [tool_calls-shape] final tool name NOT in '

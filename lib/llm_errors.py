@@ -414,11 +414,13 @@ def repair_mojibake(text: str) -> str:
         # chars (0x82 → U+201A); try that codec before giving up.
         try:
             raw = text.encode('cp1252')
-        except UnicodeEncodeError:
+        except UnicodeEncodeError as _e:
+            logger.debug('repair mojibake: unencodable (%s)', _e)
             return text
     try:
         repaired = raw.decode('utf-8')
-    except UnicodeDecodeError:
+    except UnicodeDecodeError as _e:
+        logger.debug('repair mojibake: undecodable (%s)', _e)
         return text
     _has_cjk = lambda s: any('\u4e00' <= ch <= '\u9fff' for ch in s)
     if _has_cjk(repaired) and not _has_cjk(text):
@@ -446,7 +448,8 @@ def decode_error_body(resp) -> str:
     if encoding and encoding not in ('iso-8859-1', 'latin-1', 'latin1', 'ascii', 'utf-8'):
         try:
             return repair_mojibake(content.decode(encoding))
-        except (LookupError, UnicodeDecodeError):
+        except (LookupError, UnicodeDecodeError) as _e:
+            logger.debug('decode error body: lookup failed/undecodable (%s)', _e)
             pass  # declared charset unusable — fall through to UTF-8
     try:
         return repair_mojibake(content.decode('utf-8'))
@@ -454,7 +457,8 @@ def decode_error_body(resp) -> str:
         apparent = getattr(resp, 'apparent_encoding', None) or 'utf-8'
         try:
             return repair_mojibake(content.decode(apparent, errors='replace'))
-        except (LookupError, UnicodeDecodeError):
+        except (LookupError, UnicodeDecodeError) as _e:
+            logger.debug('decode error body: lookup failed/undecodable (%s)', _e)
             return repair_mojibake(content.decode('utf-8', errors='replace'))
 
 
@@ -480,7 +484,8 @@ def summarize_error_body(text: str) -> str:
         return text
     try:
         data = json.loads(s)
-    except ValueError:
+    except ValueError as _e:
+        logger.debug('summarize error body: unparseable (%s)', _e)
         return text
     err = data.get('error') if isinstance(data, dict) else None
     msg = err.get('message') if isinstance(err, dict) else None

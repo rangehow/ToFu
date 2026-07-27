@@ -247,7 +247,8 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
         try:
             from lib.llm._transport import FIRST_BYTE_HEARTBEAT_S as _hb
             _beat = max(1, int(elapsed // max(1, _hb)))
-        except Exception:
+        except Exception as _e:
+            logger.debug('on waiting: failed (%s)', _e)
             _beat = max(1, int(elapsed // 20))
         _label = _display_model_name(model)
         _reason = ''

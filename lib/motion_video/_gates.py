@@ -131,7 +131,8 @@ def check_scene_budget(scenes, *, width: int = 1080, height: int = 1440,
 def _num(v) -> float | None:
     try:
         return float(v)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as _e:
+        logger.debug('num: unexpected type/unparseable (%s)', _e)
         return None
 
 
@@ -282,7 +283,8 @@ def _probe_with_ffprobe(ffprobe: str, path: str) -> dict | None:
             try:
                 num, den = rate.split('/')
                 info['fps'] = round(float(num) / float(den), 3) if float(den) else 0.0
-            except (ValueError, ZeroDivisionError):
+            except (ValueError, ZeroDivisionError) as _e:
+                logger.debug('probe with ffprobe: unparseable/zero divisor (%s)', _e)
                 info['fps'] = 0.0
             if st.get('duration'):
                 try:

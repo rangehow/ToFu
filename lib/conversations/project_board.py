@@ -524,7 +524,8 @@ def claim_task(project_path: str, conv_id: str, task_id: str, *,
         # claimed write_set 是 select_dispatchable 降级排序的输入。
         try:
             cur_ws = json.loads(row['write_set'] or '[]')
-        except Exception:
+        except Exception as _e:
+            logger.debug('claim task: failed (%s)', _e)
             cur_ws = []
         merged_ws = _merge_remote_token(
             cur_ws if isinstance(cur_ws, list) else [],

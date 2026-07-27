@@ -102,7 +102,8 @@ def floor_retry_max() -> int:
     raw = (getenv_compat('TOFU_CACHE_FLOOR_RETRY_MAX', default='2') or '2').strip()
     try:
         n = int(raw)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as _e:
+        logger.debug('floor retry max: unparseable/unexpected type (%s)', _e)
         n = 2
     return max(0, min(3, n))
 

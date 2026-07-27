@@ -193,7 +193,8 @@ def _load_paper_inputs(arxiv_ids, *, lang: str = 'en', user_id: int = 1,
     finally:
         try:
             _pool_put(db)
-        except Exception:
+        except Exception as _e:
+            logger.debug('load paper inputs: failed (%s)', _e)
             pass
     logger.info('[Paper:Survey] loaded %d paper input(s) — %d from reports, %d from parsed_text',
                 len(out), sum(1 for p in out if p['source'] == 'report'),

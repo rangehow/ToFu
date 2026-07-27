@@ -73,7 +73,8 @@ def _execute_remote_run_command(task, tc_id, fn_args, rn, round_entry,
     try:
         bridge_timeout = min(
             max(float(fn_args.get('timeout', 300)) + 30.0, 60.0), 3660.0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as _e:
+        logger.debug('execute remote run command: unexpected type/unparseable (%s)', _e)
         bridge_timeout = 330.0
 
     progress_cb = _make_run_command_progress_cb(task, rn, round_entry, command)
@@ -190,7 +191,8 @@ def _execute_remote_project_tool(task, fn_name, tc_id, fn_args, rn,
         try:
             bridge_timeout = min(
                 max(float(fn_args.get('timeout', 300)) + 30.0, 60.0), 3660.0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as _e:
+            logger.debug('execute remote project tool: unexpected type/unparseable (%s)', _e)
             bridge_timeout = 330.0
     else:
         bridge_timeout = 60

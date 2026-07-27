@@ -95,6 +95,7 @@ async def async_stream_chat(body, *, on_thinking=None, on_content=None,
             # FirstByteTimeoutError: upstream wedged pre-first-byte — same.
             raise
         except ModelLimitError as e:
+            logger.debug('async stream chat: ModelLimitError (%s)', e)
             _limit_learned = apply_model_limit_retry(body, e, log_prefix)
             continue
         except _RETRYABLE as e:

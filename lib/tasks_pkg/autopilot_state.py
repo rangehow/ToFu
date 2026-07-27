@@ -461,7 +461,8 @@ def _resolve_run_anchor_msgid(conv_id: str, run_id: str) -> str:
             return ''
         try:
             msgs = json.loads(row[0] or '[]') if row[0] else []
-        except (json.JSONDecodeError, TypeError):
+        except (json.JSONDecodeError, TypeError) as _e:
+            logger.debug('resolve run anchor msgid: malformed JSON/unexpected type (%s)', _e)
             msgs = []
         # Last turn STAMPED with this run id (only the VU turn carries it).
         stamped_idx = -1

@@ -74,7 +74,8 @@ def _is_within(root_real, target_real, case_insensitive=False):
         root_real, target_real = root_real.lower(), target_real.lower()
     try:
         return os.path.commonpath((root_real, target_real)) == root_real
-    except ValueError:
+    except ValueError as _e:
+        logger.debug('is within: unparseable (%s)', _e)
         return False  # different drives (Windows)
 
 
@@ -158,6 +159,7 @@ def _guarded(fn, params):
     try:
         return fn(params)
     except ProjectError as e:
+        logger.debug('guarded: ProjectError (%s)', e)
         return {'error': str(e)}
 
 
@@ -372,7 +374,8 @@ def _validate_project_run(params):
     _check_delete_targets_within(command, root_real)
     try:
         timeout = float(params.get('timeout', 300))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as _e:
+        logger.debug('validate project run: unexpected type/unparseable (%s)', _e)
         timeout = 300.0
     timeout = min(max(timeout, 1.0), 3600.0)
     return {'command': command, 'cwd': target, 'timeout': timeout}
@@ -397,6 +400,7 @@ def start_project_run(cmd_id, params, on_chunk, on_exit):
     try:
         spec = _validate_project_run(params)
     except ProjectError as e:
+        logger.debug('start project run: ProjectError (%s)', e)
         return str(e)
     from lib.desktop_agent._exec import start_streamed_command
     start_streamed_command(spec['command'], spec['cwd'], spec['timeout'],

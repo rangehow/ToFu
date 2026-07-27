@@ -309,7 +309,8 @@ def get_server_config():
     try:
         from lib.netpath import status_summary as _np_status
         network_info['netpath'] = _np_status()
-    except Exception:
+    except Exception as _e:
+        logger.debug('get server config: failed (%s)', _e)
         pass
 
     # Machine translation provider config

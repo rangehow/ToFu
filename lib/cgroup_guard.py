@@ -64,13 +64,15 @@ def _read_first_int(paths) -> Optional[int]:
         try:
             with open(_p, 'r') as _f:
                 _raw = _f.read().strip()
-        except OSError:
+        except OSError as _e:
+            logger.debug('read first int: unreadable (%s)', _e)
             continue
         if _raw == 'max':
             return None
         try:
             return int(_raw)
-        except ValueError:
+        except ValueError as _e:
+            logger.debug('read first int: unparseable (%s)', _e)
             continue
     return None
 
@@ -111,7 +113,8 @@ def swap_total_bytes() -> Optional[int]:
                     parts = _line.split()
                     # "SwapTotal:  0 kB"
                     return int(parts[1]) * 1024
-    except (OSError, ValueError, IndexError):
+    except (OSError, ValueError, IndexError) as _e:
+        logger.debug('swap total bytes: unreadable/unparseable/short/malformed (%s)', _e)
         return None
     return None
 
@@ -137,7 +140,8 @@ def pressure() -> Optional[dict]:
 def _env_pct(name: str, default: float) -> float:
     try:
         return float(os.environ.get(name, str(default)))
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as _e:
+        logger.debug('env pct: unparseable/unexpected type (%s)', _e)
         return default
 
 
@@ -190,7 +194,8 @@ def drop_files_cache(paths, min_bytes: int = 0) -> dict:
         try:
             if min_bytes and os.path.getsize(p) < min_bytes:
                 continue
-        except OSError:
+        except OSError as _e:
+            logger.debug('drop files cache: unreadable (%s)', _e)
             continue
         n = fadvise_dontneed(p)
         if n > 0:
@@ -210,7 +215,8 @@ def drop_logs_cache(log_dir: str = 'logs') -> dict:
     import glob
     try:
         min_bytes = int(os.environ.get('TOFU_CGROUP_LOGDROP_MIN_BYTES', str(1 << 20)))
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as _e:
+        logger.debug('drop logs cache: unparseable/unexpected type (%s)', _e)
         min_bytes = 1 << 20
     try:
         paths = glob.glob(os.path.join(log_dir, '*.log*'))
@@ -327,9 +333,11 @@ def _read_memory_stat() -> dict:
                 if k in ('cache', 'rss'):
                     try:
                         out[k] = int(v)
-                    except ValueError:
+                    except ValueError as _e:
+                        logger.debug('read memory stat: unparseable (%s)', _e)
                         pass
-    except OSError:
+    except OSError as _e:
+        logger.debug('read memory stat: unreadable (%s)', _e)
         pass
     kmem = _read_first_int(('/sys/fs/cgroup/memory/memory.kmem.usage_in_bytes',))
     if kmem is not None:
@@ -343,7 +351,8 @@ def _self_rss_bytes() -> Optional[int]:
         with open('/proc/self/statm', 'r') as f:
             fields = f.read().split()
         return int(fields[1]) * os.sysconf('SC_PAGE_SIZE')
-    except (OSError, ValueError, IndexError):
+    except (OSError, ValueError, IndexError) as _e:
+        logger.debug('self rss bytes: unreadable/unparseable/short/malformed (%s)', _e)
         return None
 
 
@@ -356,7 +365,8 @@ def _top_rss_processes(n: int = 3) -> list:
     rows = []
     try:
         pids = [d for d in os.listdir('/proc') if d.isdigit()]
-    except OSError:
+    except OSError as _e:
+        logger.debug('top rss processes: unreadable (%s)', _e)
         return rows
     for pid in pids:
         try:
@@ -365,7 +375,8 @@ def _top_rss_processes(n: int = 3) -> list:
             with open('/proc/%s/comm' % pid, 'r') as f:
                 comm = f.read().strip()
             rows.append({'pid': int(pid), 'comm': comm, 'rss': rss})
-        except (OSError, ValueError, IndexError):
+        except (OSError, ValueError, IndexError) as _e:
+            logger.debug('top rss processes: unreadable/unparseable/short/malformed (%s)', _e)
             continue
     rows.sort(key=lambda r: -r['rss'])
     return rows[:n]
@@ -402,7 +413,8 @@ def write_pressure_journal(snap: dict) -> bool:
                 with open(tmp, 'w', encoding='utf-8') as f:
                     f.write(tail)
                 os.replace(tmp, _JOURNAL_PATH)
-        except OSError:
+        except OSError as _e:
+            logger.debug('write pressure journal: unreadable (%s)', _e)
             pass
         with open(_JOURNAL_PATH, 'a', encoding='utf-8') as f:
             f.write(line)
@@ -427,7 +439,8 @@ def check_oom_kill_count() -> bool:
                 if line.startswith('oom_kill '):
                     count = int(line.split()[1])
                     break
-    except (OSError, ValueError, IndexError):
+    except (OSError, ValueError, IndexError) as _e:
+        logger.debug('check oom kill count: unreadable/unparseable/short/malformed (%s)', _e)
         return False
     if count is None:
         return False
@@ -524,7 +537,8 @@ def check_request_headroom(ident: str = '', approx_bytes: int = 0) -> tuple[bool
     min_bytes = 0
     try:
         min_bytes = int(os.environ.get('TOFU_CGROUP_REQUEST_MIN_BYTES', '2000000'))
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as _e:
+        logger.debug('check request headroom: unparseable/unexpected type (%s)', _e)
         min_bytes = 2_000_000
     if approx_bytes < min_bytes:
         return True, None
@@ -578,7 +592,8 @@ def approx_body_bytes(body_or_messages) -> int:
                         else:
                             total += 512  # image/tool part — rough fixed cost
         return total
-    except Exception:
+    except Exception as _e:
+        logger.debug('approx body bytes: failed (%s)', _e)
         return 0
 
 

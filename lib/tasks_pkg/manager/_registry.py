@@ -55,7 +55,8 @@ def task_user_id(task):
         return DEFAULT_USER_ID
     try:
         return int(uid) if str(uid).isdigit() else uid
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as _e:
+        logger.debug('task user id: unexpected type/unparseable (%s)', _e)
         return uid
 
 

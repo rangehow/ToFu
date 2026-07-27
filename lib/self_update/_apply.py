@@ -316,7 +316,8 @@ def _verify_landed_py_integrity(src_root, dest_root, backup_dir=None):
         dest_p = dest_root_p / rel
         try:
             dsz = dest_p.stat().st_size
-        except OSError:
+        except OSError as _e:
+            logger.debug('verify landed py integrity: unreadable (%s)', _e)
             dsz = -1
         if dsz < 0 or dsz < ssz:
             action = 'no_backup'

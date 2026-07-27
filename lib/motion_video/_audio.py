@@ -255,6 +255,7 @@ def concat_narrations(wavs: list[str], out_path: str, *,
             with open(p, 'rb') as f:
                 parts.append(f.read())
         except OSError as e:
+            logger.debug('concat narrations: unreadable (%s)', e)
             return {'ok': False, 'detail': f'cannot read {p}: {e}'}
     merged = parts[0] if len(parts) == 1 else _tts.concat_wavs(
         parts, pause_ms=[pause_ms] * len(parts))

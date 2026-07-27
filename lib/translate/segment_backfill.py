@@ -162,7 +162,8 @@ def _read_message(conv_id, msg_id, msg_idx):
     if msg_idx is not None:
         try:
             idx = int(msg_idx)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as _e:
+            logger.debug('read message: unparseable/unexpected type (%s)', _e)
             idx = -1
         if 0 <= idx < len(messages):
             m = messages[idx]

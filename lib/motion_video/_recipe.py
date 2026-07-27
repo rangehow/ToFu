@@ -227,7 +227,8 @@ def _sources_line(cards: list[dict], lang: str) -> str:
         from urllib.parse import urlparse
         try:
             host = urlparse(c['url']).netloc.replace('www.', '')
-        except Exception:
+        except Exception as _e:
+            logger.debug('sources line: failed (%s)', _e)
             host = ''
         if host and host not in seen:
             seen.add(host)
@@ -469,6 +470,7 @@ def _gate_timeline(ctx: dict, artifact: dict) -> list:
         with open(path, encoding='utf-8') as f:
             scenes = json.load(f)
     except (OSError, json.JSONDecodeError) as e:
+        logger.debug('gate timeline: unreadable/malformed JSON (%s)', e)
         return [f'scenes.json unreadable: {e}']
     if not scenes:
         return ['scenes.json is empty']

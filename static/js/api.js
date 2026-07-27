@@ -475,6 +475,30 @@
       get(`/api/v1/tasks/${encodeURIComponent(taskId)}/requests/${encodeURIComponent(roundNum)}`,
           { query: { ...(turn ? { turn } : {}), ...(kind ? { kind } : {}) },
             onError: 'null' }),
+
+    // ── Generic production-job lifecycle ──
+    // start/get/events/abort are CAPABILITY-AGNOSTIC: the backend dispatches
+    // on `kind` (research | longform-report | …), so the next capability needs
+    // ZERO new client methods. Deliberately NOT routed through an LLM tool —
+    // the produce_* tools are search-gated and only fire if the model elects
+    // to call them, which cannot back a UI control.
+    start: (kind, payload) =>
+      post('/api/v1/tasks/start', Object.assign({ kind: kind }, payload || {})),
+    // Full snapshot. Carries `artifact_quality`: a degraded job keeps
+    // status='done' by design, so that field is the ONLY thing separating
+    // "good artifact" from "valid artifact out of a broken pipeline".
+    get: (taskId) =>
+      get(`/api/v1/tasks/${encodeURIComponent(taskId)}`, { onError: 'null' }),
+    events: (taskId, cursor) =>
+      get(`/api/v1/tasks/${encodeURIComponent(taskId)}/events`,
+          { query: { cursor: cursor || 0 }, onError: 'null' }),
+    abort: (taskId) =>
+      post(`/api/v1/tasks/${encodeURIComponent(taskId)}/abort`, undefined,
+           { onError: 'null' }),
+    list: (kind, status) =>
+      get('/api/v1/tasks', { query: Object.assign({}, kind ? { kind: kind } : {},
+                                                  status ? { status: status } : {}),
+                             onError: 'null' }),
   };
 
   // optimizer -------------------------------------------------------

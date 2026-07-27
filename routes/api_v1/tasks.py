@@ -7,6 +7,7 @@ for headless callers (legacy paths remain). One uniform shape:
   GET  /api/v1/tasks/{id}            — full state snapshot
   GET  /api/v1/tasks/{id}/events     — long-poll cursor replay
   GET  /api/v1/tasks/{id}/stream     — SSE event replay
+  POST /api/v1/tasks/start           — START a production job (kind-dispatched)
   POST /api/v1/tasks/{id}/abort      — graceful stop
   DELETE /api/v1/tasks/{id}          — drop from registry (admin only)
 
@@ -87,6 +88,130 @@ def _registries() -> dict:
     except Exception as e:
         logger.debug('[api_v1.tasks] plugin task-runtime discovery failed: %s', e)
     return out
+
+
+#: Capability-agnostic START registry: ``kind -> {start, input, params}``.
+#:
+#: Poll / abort / stream have always been generic (``_registries()`` above),
+#: but START had no HTTP verb at all — ``produce_research`` and
+#: ``produce_report`` existed ONLY as LLM tools. That makes them unreachable
+#: from a UI control for two independent reasons:
+#:
+#:   1. it depends on the model CHOOSING to call the tool, and
+#:   2. ``lib/tools/registry/_build.py::_build_produce`` is SEARCH-GATED, so
+#:      all three produce tools vanish when a user turns web search off —
+#:      a button whose availability tracks an unrelated setting.
+#:
+#: So this table is deliberately NOT "research + a special case": each entry
+#: declares its own primary ``input`` field name and the extra ``params`` it
+#: accepts, and the route below reads them from the table. Adding the next
+#: capability is one dict entry, not a new route (charter: an iteration's
+#: extensibility is measured by how much LESS the next capability has to
+#: write).
+#:
+#: The keys MUST match the ``kind`` its TaskRuntime registers in
+#: ``_registries()`` — otherwise a client could start a job and never be able
+#: to poll it. ``test_kinds_are_startable_and_pollable_under_the_same_name``
+#: pins that.
+_STARTERS: dict = {}
+
+
+def _starters() -> dict:
+    """Return ``{kind: {start, input, params}}`` for every startable capability.
+
+    Resolved lazily (and memoised) for the same reason ``_registries()`` is: a
+    capability whose module fails to import degrades to "absent" instead of
+    taking the whole endpoint down.
+    """
+    if _STARTERS:
+        return _STARTERS
+    for mod_path, attr, kind, field, params in (
+        ('lib.research.engine', 'produce_research', 'research', 'direction',
+         ('lang', 'n_ideas', 'seed_arxiv_ids')),
+        ('lib.longform.engine', 'start_report_job', 'longform-report', 'topic',
+         ('lang', 'depth')),
+    ):
+        try:
+            mod = __import__(mod_path, fromlist=[attr])
+            fn = getattr(mod, attr, None)
+            if callable(fn):
+                _STARTERS[kind] = {'start': fn, 'input': field, 'params': params}
+        except Exception as e:
+            logger.debug('[api_v1.tasks] starter %s.%s unavailable: %s',
+                         mod_path, attr, e)
+    return _STARTERS
+
+
+@api_v1_tasks_bp.route('/api/v1/tasks/start', methods=['POST'])
+@require_scope('tasks')
+@api_meta(
+    summary='Start a production job (research / long-form report)',
+    description=(
+        'Launch a "one sentence → finished product" job WITHOUT going through '
+        'the LLM tool path. Poll it with GET /api/v1/tasks/{id}, watch it with '
+        '/events or /stream, stop it with /abort. Returns the task id; a '
+        'duplicate request joins the in-flight job instead of regenerating '
+        '(deduped=true).'),
+    tags=['tasks'], scope='tasks',
+    request_body={'required': True, 'content': {'application/json': {
+        'schema': {'type': 'object', 'required': ['kind'], 'properties': {
+            'kind': {'type': 'string',
+                     'description': "'research' | 'longform-report'"},
+            'direction': {'type': 'string',
+                          'description': "research: the direction to mine"},
+            'topic': {'type': 'string',
+                      'description': 'longform-report: the report topic'},
+            'lang': {'type': 'string'},
+            'conv_id': {'type': 'string'},
+        }}}}})
+def start_task():
+    """Start a production job by kind. Capability-agnostic by construction."""
+    body = parse_body()
+    try:
+        kind = require_str(body, 'kind')
+    except ValueError as e:
+        return api_bad_request(str(e))
+
+    spec = _starters().get(kind)
+    if spec is None:
+        return api_bad_request(
+            f'unknown task kind {kind!r} — startable kinds: '
+            f'{sorted(_starters()) or "(none available)"}')
+
+    field = spec['input']
+    value = body.get(field)
+    if not (isinstance(value, str) and value.strip()):
+        return api_bad_request(
+            f'{field!r} is required and must be a non-empty string for '
+            f'kind={kind!r}')
+
+    kwargs = {}
+    for p in spec['params']:
+        if body.get(p) is not None:
+            kwargs[p] = body[p]
+    conv_id = body.get('conv_id')
+    if isinstance(conv_id, str) and conv_id:
+        kwargs['conv_id'] = conv_id
+
+    try:
+        res = spec['start'](value.strip(), **kwargs) or {}
+    except TypeError as e:
+        # A caller-supplied param the capability does not accept — a client
+        # bug, not a server fault, so report it as such with the real reason.
+        logger.warning('[api_v1.tasks] start %s rejected params %s: %s',
+                       kind, sorted(kwargs), e)
+        return api_bad_request(f'invalid parameters for kind={kind!r}: {e}')
+    except Exception as e:
+        logger.error('[api_v1.tasks] start %s failed: %s', kind, e, exc_info=True)
+        return api_internal_error('internal_error')
+
+    task_id = res.get('task_id') or ''
+    audit_log('api_task_start', kind=kind, task_id=task_id,
+              deduped=bool(res.get('deduped')),
+              key_id=(current_auth().key_id if current_auth() else ''))
+    logger.info('[api_v1.tasks] started %s task=%s deduped=%s',
+                kind, task_id, bool(res.get('deduped')))
+    return api_ok(taskId=task_id, kind=kind, deduped=bool(res.get('deduped')))
 
 
 def _public_task(task: dict) -> dict:

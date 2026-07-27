@@ -636,20 +636,23 @@ class MCPBridge:
             async with AsyncExitStack() as stack:
                 from lib.mcp.transport import (
                     SSE, STREAMABLE_HTTP, is_stdio, normalize_transport,
-                    resolve_headers,
+                    resolve_headers, resolve_url,
                 )
                 transport = normalize_transport(srv_cfg)
 
                 if not is_stdio(srv_cfg):
-                    url = srv_cfg.get('url', '')
-                    if not url:
+                    if not srv_cfg.get('url'):
                         raise ValueError(
                             f'MCP server {name}: {transport} transport '
                             f'requires "url"'
                         )
-                    # Auth headers are templated against the server's env
-                    # block; a missing credential raises here with the key
-                    # name instead of becoming an opaque upstream 401.
+                    # Both credential carriers are templated against the
+                    # server's env block, so the secret has ONE home: a header
+                    # (Bearer) or a query param (Amap ?key=). A missing
+                    # credential raises here naming the key instead of
+                    # becoming an opaque upstream 401. ``url`` now carries a
+                    # live secret — never log it (use scrub_text).
+                    url = resolve_url(srv_cfg, server_name=name)
                     hdrs = resolve_headers(srv_cfg, server_name=name)
                     if transport == STREAMABLE_HTTP:
                         from mcp.client.streamable_http import streamablehttp_client

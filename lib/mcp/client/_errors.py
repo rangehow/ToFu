@@ -165,4 +165,12 @@ class MCPConnectError(RuntimeError):
             if len(tail) > 1500:
                 tail = '…' + tail[-1500:]
             msg += f'\n\nServer stderr (tail):\n{tail}'
-        return msg
+        # Scrub credentials LAST, over the whole assembled message. A remote
+        # transport failure arrives as an httpx error whose text embeds the
+        # RESOLVED request URL (``... for url '…/mcp?key=<real key>'``), and a
+        # subprocess's stderr can echo its own argv/env — so both halves are
+        # credential-bearing. This is the third credential exit after the two
+        # config-returning endpoints, and the most durable one: an API response
+        # is transient, a log line persists.
+        from lib.mcp.transport import scrub_text
+        return scrub_text(msg)

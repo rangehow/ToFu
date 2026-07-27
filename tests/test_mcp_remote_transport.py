@@ -67,7 +67,15 @@ _SERVER_SRC = textwrap.dedent('''
                 return
             hdrs = {k.decode().lower(): v.decode()
                     for k, v in scope.get('headers') or []}
-            if hdrs.get('authorization') != f'Bearer {SECRET}':
+            from urllib.parse import parse_qs
+            qs = parse_qs((scope.get('query_string') or b'').decode())
+            # Accept EITHER auth style, mirroring the two real vendor shapes:
+            # a Bearer header (RollingGo) or a ?key= query param (Amap).
+            # Exact comparison, not a substring test: `key=<SECRET>-WRONG`
+            # contains `key=<SECRET>` and would otherwise authenticate.
+            ok = (hdrs.get('authorization') == f'Bearer {SECRET}'
+                  or qs.get('key', [None])[0] == SECRET)
+            if not ok:
                 resp = JSONResponse({'error': 'unauthorized'}, status_code=401)
                 await resp(scope, receive, send)
                 return
@@ -313,3 +321,288 @@ def test_catalog_build_never_gives_a_remote_server_a_launcher(monkeypatch):
 
     from lib.mcp.transport import resolve_headers
     assert resolve_headers(cfg) == {'Authorization': f'Bearer {SECRET}'}
+
+
+# ── 4. Query-param credentials (Amap) ride the same env store ────────
+#
+# Amap authenticates as `https://mcp.amap.com/mcp?key=<secret>` — the
+# credential is in the URL, not a header. Without URL templating a user's only
+# option is pasting the key literally into mcp_servers.json's url, which
+# bypasses the "all credentials live in env" rule entirely.
+
+_AMAP_URL_TMPL = 'https://mcp.amap.com/mcp?key=${AMAP_MAPS_API_KEY}'
+
+
+def _amap_cfg() -> dict:
+    return {
+        'transport': 'streamable-http',
+        'url': _AMAP_URL_TMPL,
+        'env': {'AMAP_MAPS_API_KEY': SECRET},
+        'enabled': True,
+    }
+
+
+def test_query_param_credential_resolves_from_env():
+    """The URL is a template too, so the key still has exactly one home."""
+    from lib.mcp.transport import resolve_url
+
+    assert resolve_url(_amap_cfg(), server_name='amap') == \
+        f'https://mcp.amap.com/mcp?key={SECRET}'
+
+
+def test_query_param_credential_is_redacted_but_endpoint_stays_readable():
+    """Mask the VALUE, keep scheme/host/path — a fully masked URL would make
+    every remote server look identical in the settings UI and push users back
+    to hand-editing the config file."""
+    from lib.mcp.transport import redact_config
+
+    out = redact_config({'transport': 'streamable-http',
+                         'url': f'https://mcp.amap.com/mcp?key={SECRET}'})
+    assert SECRET not in json.dumps(out), f'query credential leaked: {out}'
+    assert out['url'] == 'https://mcp.amap.com/mcp?key=***'
+
+
+def test_url_only_server_still_advertises_its_required_env_key():
+    """A query-param vendor has NO headers, so header-only key discovery would
+    report it as credential-free and the settings UI would never prompt."""
+    from lib.mcp.transport import header_env_keys
+
+    assert header_env_keys(_amap_cfg()) == ['AMAP_MAPS_API_KEY']
+
+
+def test_missing_query_param_credential_names_the_key():
+    from lib.mcp.transport import resolve_url
+
+    with pytest.raises(ValueError) as ei:
+        resolve_url({'url': _AMAP_URL_TMPL, 'env': {}}, server_name='amap')
+    assert 'AMAP_MAPS_API_KEY' in str(ei.value)
+
+
+def test_bridge_reaches_a_query_param_authenticated_server(auth_server):
+    """END-TO-END: the BRIDGE must template the URL, not just the helper.
+
+    Testing ``resolve_url`` alone leaves the wiring untested — deleting the
+    bridge's call to it keeps a helper-only suite fully green while every
+    query-param vendor (Amap) breaks in production. This drives a real
+    handshake against a server that rejects an unresolved ``${VAR}``, so the
+    assertion covers the call site rather than the function.
+    """
+    from lib.mcp.client import MCPBridge
+
+    cfg = {
+        'transport': 'streamable-http',
+        'url': auth_server + '?key=${AMAP_MAPS_API_KEY}',
+        'env': {'AMAP_MAPS_API_KEY': SECRET},
+        'enabled': True,
+    }
+    bridge = MCPBridge()
+    try:
+        tools = bridge.connect_server('amap', cfg)
+        assert [t.name for t in tools] == ['whoami'], (
+            'query-param credential was not substituted before the request — '
+            'the bridge sent the literal ${VAR} and got 401'
+        )
+        assert 'authenticated-ok' in str(bridge.call_tool('mcp__amap__whoami', {}))
+    finally:
+        bridge.disconnect_all()
+
+
+# ── 5. Redaction is a fail-closed WHITELIST, not a blacklist ─────────
+
+def test_unclassified_config_field_is_withheld_not_echoed():
+    """The default for an unforeseen field must be DROP, not EXPOSE.
+
+    Redaction started as a blacklist and three credential carriers were missed
+    in a row (env → headers → url). This asserts the inverted default: a field
+    nobody classified does not reach the caller, so the next carrier cannot
+    leak just because someone forgot to add it to a deny list.
+    """
+    from lib.mcp.transport import redact_config
+
+    out = redact_config({
+        'transport': 'streamable-http', 'url': 'https://x/mcp',
+        # A plausible future field that happens to carry a secret.
+        'oauth_refresh_token': SECRET,
+        'proxy_password': 'hunter2',
+    })
+    blob = json.dumps(out)
+    assert SECRET not in blob, f'unclassified field leaked: {out}'
+    assert 'hunter2' not in blob, f'unclassified field leaked: {out}'
+    assert 'oauth_refresh_token' not in out
+    assert out['transport'] == 'streamable-http'   # classified → still shown
+
+
+def test_every_config_field_has_a_declared_exposure_level():
+    """Ratchet: adding a field to MCPServerConfig without classifying it fails.
+
+    Anchored on the TypedDict's annotations (a semantic unit), not on a
+    hand-copied field list — so it tracks the real config shape.
+    """
+    from lib.mcp.transport import CLASSIFIED_CONFIG_FIELDS
+    from lib.mcp.types import MCPServerConfig
+
+    declared = set(MCPServerConfig.__annotations__)
+    unclassified = declared - CLASSIFIED_CONFIG_FIELDS
+    assert not unclassified, (
+        f'MCPServerConfig field(s) {sorted(unclassified)} have no exposure '
+        f'level. Classify them in lib/mcp/transport.py as PUBLIC_ / '
+        f'TRANSFORMED_ / SECRET_CONFIG_FIELDS.'
+    )
+
+
+def test_secret_and_public_classifications_are_disjoint():
+    """A field cannot be both echoed verbatim and withheld."""
+    from lib.mcp.transport import (
+        PUBLIC_CONFIG_FIELDS, SECRET_CONFIG_FIELDS, TRANSFORMED_CONFIG_FIELDS,
+    )
+
+    assert not (PUBLIC_CONFIG_FIELDS & SECRET_CONFIG_FIELDS)
+    assert not (PUBLIC_CONFIG_FIELDS & TRANSFORMED_CONFIG_FIELDS)
+    assert not (SECRET_CONFIG_FIELDS & TRANSFORMED_CONFIG_FIELDS)
+
+
+# ── 6. The third exit: log sinks ────────────────────────────────────
+
+def test_scrub_text_masks_a_credential_embedded_in_an_error_message():
+    """httpx failures embed the RESOLVED request URL in their message.
+
+    A remote connect failure therefore writes a live credential into
+    app.log / error.log, where it persists far longer than an API response.
+    This is the exit the two config endpoints do not cover.
+    """
+    from lib.mcp.transport import scrub_text
+
+    raw = (f"Client error '401 Unauthorized' for url "
+           f"'https://mcp.amap.com/mcp?key={SECRET}'\n"
+           f'For more information check: https://example.com/401')
+    out = scrub_text(raw)
+    assert SECRET not in out, f'credential survived scrubbing: {out}'
+    assert 'mcp.amap.com/mcp?key=***' in out
+    # The non-credential URL keeps its shape so the message stays useful.
+    assert 'https://example.com/401' in out
+
+
+def test_connect_error_message_is_scrubbed(auth_server):
+    """Result-level, on the REAL error type: a failed authenticated connect
+    must not put the key in the string that gets logged."""
+    from lib.mcp.client import MCPBridge, MCPConnectError
+
+    # Authenticate with a WRONG key so the server answers 401 — a genuine
+    # failure whose httpx message embeds the resolved URL (with the key in it).
+    cfg = {
+        'transport': 'streamable-http',
+        'url': auth_server + '?key=${AMAP_MAPS_API_KEY}',
+        'env': {'AMAP_MAPS_API_KEY': SECRET + '-WRONG'},
+    }
+    bridge = MCPBridge()
+    try:
+        with pytest.raises((MCPConnectError, Exception)) as ei:
+            bridge.connect_server('amap-fail', cfg)
+        assert SECRET not in str(ei.value), \
+            f'connect error leaked the credential: {ei.value}'
+    finally:
+        bridge.disconnect_all()
+
+
+# ── 7. Catalog: the China local-life entries are real, not decorative ──
+
+_CN_LOCAL_IDS = ['amap-maps', 'rollinggo-hotel', 'rollinggo-flight',
+                 '12306-train']
+
+
+def test_china_local_entries_build_usable_configs():
+    """Every new card must produce a config the bridge can actually consume.
+
+    Asserted on the BUILT config (what the bridge consumes) rather than on the
+    literal catalog dict, so a future entry that forgets `endpoint`, or lands a
+    remote server in the stdio branch, fails here instead of becoming a dead
+    Install button a user discovers.
+    """
+    import lib.mcp.registry as reg
+    from lib.mcp.transport import is_stdio
+
+    for sid in _CN_LOCAL_IDS:
+        entry = reg.get_catalog_entry(sid)
+        assert entry is not None, f'{sid} missing from catalog'
+        assert entry['category'] == reg.CAT_LOCAL_CN
+
+        env = {s['key']: SECRET for s in entry.get('env_specs', [])}
+        cfg = reg.build_server_config(sid, env)
+        assert cfg is not None, f'{sid} built no config'
+
+        if is_stdio(cfg):
+            assert cfg.get('command'), f'{sid}: stdio entry without a command'
+        else:
+            assert cfg.get('url'), f'{sid}: remote entry without an endpoint URL'
+            assert 'command' not in cfg, \
+                f'{sid}: remote entry was given a subprocess launcher'
+
+
+def test_every_china_entry_credential_resolves_and_never_leaks():
+    """Both credential carriers work, and neither survives redaction."""
+    import lib.mcp.registry as reg
+    from lib.mcp.transport import (
+        header_env_keys, redact_config, resolve_headers, resolve_url,
+    )
+
+    for sid in _CN_LOCAL_IDS:
+        entry = reg.get_catalog_entry(sid)
+        specs = entry.get('env_specs', [])
+        if not specs:
+            continue                      # 12306 needs no credential
+        cfg = reg.build_server_config(sid, {s['key']: SECRET for s in specs})
+
+        # The UI must know which key to prompt for, whichever carrier is used.
+        assert header_env_keys(cfg), \
+            f'{sid}: credential-bearing entry advertises no env key'
+
+        resolved = resolve_url(cfg, server_name=sid)
+        resolved_hdrs = resolve_headers(cfg, server_name=sid)
+        assert SECRET in resolved or SECRET in json.dumps(resolved_hdrs), \
+            f'{sid}: credential never reached the request'
+
+        assert SECRET not in json.dumps(redact_config(cfg)), \
+            f'{sid}: credential leaked through redact_config'
+
+
+def test_amap_key_rides_the_url_and_rollinggo_rides_a_header():
+    """Pin the two DIFFERENT carriers explicitly — the reason URL templating
+    exists at all. If Amap were header-only this whole mechanism would be
+    unnecessary, so the asymmetry is the contract worth guarding."""
+    import lib.mcp.registry as reg
+
+    amap = reg.build_server_config('amap-maps', {'AMAP_MAPS_API_KEY': SECRET})
+    assert '${AMAP_MAPS_API_KEY}' in amap['url']
+    assert not amap.get('headers')
+
+    hotel = reg.build_server_config('rollinggo-hotel',
+                                    {'ROLLINGGO_API_KEY': SECRET})
+    assert hotel['headers']['Authorization'] == 'Bearer ${ROLLINGGO_API_KEY}'
+    assert '${' not in hotel['url']
+
+
+def test_no_dead_card_for_a_business_gated_vendor():
+    """Ctrip / Meituan must NOT get catalog entries.
+
+    Both were researched: Ctrip's MCP is corporate-only (its individual-facing
+    'wendao' product is not MCP at all) and Meituan's open platform is
+    merchant-side behind a business review. An entry would render an Install
+    button that cannot succeed. Their status belongs in docs and a
+    business-access ticket, not in a clickable card.
+    """
+    import lib.mcp.registry as reg
+
+    banned = ('ctrip', 'xiecheng', '携程', 'meituan', '美团', 'dianping', '点评')
+    for entry in reg.get_catalog():
+        haystack = f"{entry['id']} {entry.get('name', '')}".lower()
+        # 'meituan' legitimately appears in internal_only research-cluster
+        # entries (hope / xuecheng / llm) — those are corp-internal dev tools,
+        # not consumer life-service cards.
+        if entry.get('internal_only'):
+            continue
+        for token in banned:
+            assert token not in haystack, (
+                f"catalog entry {entry['id']!r} references {token!r} — these "
+                f'vendors require business onboarding, so a card here is a '
+                f'dead Install button'
+            )

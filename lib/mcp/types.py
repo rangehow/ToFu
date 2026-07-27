@@ -68,7 +68,13 @@ class MCPServerConfig(TypedDict, total=False):
     command: str                # executable (e.g. 'npx', 'python3', 'node')
     args: list[str]             # command-line arguments
     env: dict[str, str]         # extra environment variables (merged with os.environ)
-    url: str                    # for SSE/HTTP transport (alternative to stdio)
+    url: str                    # remote transports only. Like ``headers`` this
+                                # is a TEMPLATE: a vendor that authenticates by
+                                # query parameter (Amap ``?key=<k>``) writes
+                                # ``?key=${AMAP_MAPS_API_KEY}`` here so the
+                                # secret still lives only in ``env``.
+                                # Resolved by transport.resolve_url; masked by
+                                # transport.redact_url on the way out.
     transport: str              # 'stdio' (default) | 'sse' | 'streamable-http'
     headers: dict[str, str]     # remote transports only. A TEMPLATE, never a
                                 # secret store: values hold ``${VAR}``

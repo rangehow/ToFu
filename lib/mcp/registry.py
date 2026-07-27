@@ -91,6 +91,7 @@ CAT_DEVOPS  = 'DevOps'
 CAT_FINANCE = 'Finance'
 CAT_DESIGN  = 'Design'
 CAT_RESEARCH = 'Science & Research'
+CAT_LOCAL_CN = 'Local Life & Travel (China)'
 CAT_OTHER   = 'Other'
 # Servers configured in mcp_servers.json that have no curated catalog entry
 # are surfaced under this category by the API layer (see routes/api_v1/mcp.py).
@@ -99,7 +100,7 @@ CAT_CUSTOM  = 'Custom'
 CATEGORIES = [
     CAT_DEV, CAT_DATA, CAT_COMMS, CAT_SEARCH,
     CAT_PROD, CAT_DEVOPS, CAT_FINANCE, CAT_DESIGN, CAT_RESEARCH,
-    CAT_OTHER, CAT_CUSTOM,
+    CAT_LOCAL_CN, CAT_OTHER, CAT_CUSTOM,
 ]
 
 
@@ -989,6 +990,104 @@ CATALOG: list[CatalogEntry] = [
     },
 
     # ── AI & Reasoning ─────────────────────────────────────
+
+    # ── Local Life & Travel (China) ─────────────────────────
+    #
+    # What Chinese users actually need an agent to DO — routing, hotels,
+    # flights, trains. Vetted against one criterion: can a normal developer
+    # obtain credentials and get real data?
+    #
+    # DELIBERATELY ABSENT — Ctrip (携程) and Meituan (美团). Both were checked
+    # and both fail that criterion, for policy reasons rather than technical
+    # ones, so a card here would be a dead Install button:
+    #   • Ctrip Business Travel launched an AI open platform (2026-04) that does
+    #     speak MCP — hotel/flight/train recommendation, visa policy, expense
+    #     compliance — but it is gated to CORPORATE customers via a business
+    #     onboarding process. Ctrip 问道 (wendao) is reachable by individuals
+    #     yet is NOT MCP: it is a bespoke HTTP API driven by a Node CLI script,
+    #     with QPS/quota limits and no booking step.
+    #   • Meituan's open platform is MERCHANT-side (group-buy voucher
+    #     redemption, delivery order management, storefront ops) and its
+    #     five-step onboarding begins with submitting company details for
+    #     business review. There is no consumer-side MCP surface at all.
+    # Both are tracked as a separate business-access ticket. Do NOT add
+    # speculative entries for them.
+
+    {
+        'id': 'amap-maps',
+        'name': '高德地图 Amap',
+        'description': 'Routing, POI/nearby search, geocoding, weather, ride-hailing and distance for mainland China — the official Amap MCP server.',
+        'icon': '🗺️',
+        'category': CAT_LOCAL_CN,
+        'command': '',
+        'transport': 'streamable-http',
+        'args': [],
+        # Amap authenticates by QUERY PARAM, not by header. The endpoint is a
+        # template so the key still lives only in env (see lib/mcp/transport).
+        'endpoint': 'https://mcp.amap.com/mcp?key=${AMAP_MAPS_API_KEY}',
+        'env_specs': [
+            {'key': 'AMAP_MAPS_API_KEY', 'label': 'Amap API Key (Web 服务)',
+             'hint': 'console.amap.com → 应用管理 → 添加 Key → 服务平台选「Web 服务」',
+             'required': True, 'secret': True},
+        ],
+        'url': 'https://lbs.amap.com/api/mcp-server/summary',
+        'tags': ['maps', 'china', 'travel', 'routing', 'weather', 'poi',
+                 '地图', '高德', '出行'],
+        'featured': True,
+        'install_note': '需高德开放平台实名认证个人开发者账号即可申请 Key。',
+    },
+    {
+        'id': 'rollinggo-hotel',
+        'name': 'RollingGo 酒店',
+        'description': 'Hotel search with real bookable inventory and live price confirmation (2M+ hotels, 110k+ direct-contract) — free for individual developers.',
+        'icon': '🏨',
+        'category': CAT_LOCAL_CN,
+        'command': '',
+        'transport': 'streamable-http',
+        'args': [],
+        'endpoint': 'https://mcp.rollinggo.cn/mcp',
+        'headers': {'Authorization': 'Bearer ${ROLLINGGO_API_KEY}'},
+        'env_specs': [
+            {'key': 'ROLLINGGO_API_KEY', 'label': 'RollingGo API Key',
+             'hint': 'rollinggo.store 申请，自动审核',
+             'required': True, 'secret': True},
+        ],
+        'url': 'https://rollinggo.store/',
+        'tags': ['hotel', 'travel', 'china', 'booking', '酒店', '订房', '比价'],
+        'featured': True,
+    },
+    {
+        'id': 'rollinggo-flight',
+        'name': 'RollingGo 机票',
+        'description': 'Airport lookup and flight search across 500+ airlines and 200+ countries. Shares one API key with the hotel server.',
+        'icon': '✈️',
+        'category': CAT_LOCAL_CN,
+        'command': '',
+        'transport': 'streamable-http',
+        'args': [],
+        'endpoint': 'https://mcp.rollinggo.cn/mcp/flight',
+        'headers': {'Authorization': 'Bearer ${ROLLINGGO_API_KEY}'},
+        'env_specs': [
+            {'key': 'ROLLINGGO_API_KEY', 'label': 'RollingGo API Key',
+             'hint': '与酒店服务共用同一个 Key',
+             'required': True, 'secret': True},
+        ],
+        'url': 'https://rollinggo.store/',
+        'tags': ['flight', 'travel', 'china', 'booking', '机票', '航班'],
+    },
+    {
+        'id': '12306-train',
+        'name': '12306 火车票查询',
+        'description': 'China Railway ticket availability, transfers and station lookup. Open-source, runs locally, query-only (no booking).',
+        'icon': '🚆',
+        'category': CAT_LOCAL_CN,
+        'command': 'npx',
+        'args': ['-y', '12306-mcp'],
+        'env_specs': [],
+        'url': 'https://github.com/Joooook/12306-mcp',
+        'tags': ['train', 'travel', 'china', '12306', '火车票', '余票'],
+        'install_note': '查询能力，不支持下单；无需 API Key。',
+    },
 
     {
         'id': 'mcp-compass',

@@ -9,6 +9,9 @@
 - **共享 HEAD 事故(给后人):** `git stash push -- <paths>` 的路径清单里混进一个**未跟踪**文件会整体报错不建 stash,紧随的 `git stash pop` 会把**栈顶兄弟的保管 stash** pop 进工作树。本次 pop 了 pt_871a26c7 的 gateway 保管 stash,幸亏它只触一个文件,`git checkout --ours` + `git reset` 精确还原。**A/B 验证改用 `git diff > patch && git checkout -- <files>` + `git apply` 往返,永远别在共享树上 stash。**
 - **预存在红(留票不留修):** `test_chat_flow_dispatch.py::AutopilotE2ETest::test_autopilot_run_emits_user_and_assistant_turns`(期望 user turn True)stash A/B 实证 HEAD 即红,属 pt_8dc03017 陈旧 pin 家族(板上 pt_9b6c8c55/pt_c6a10d9b 同族),未动。
 - **生效条件:** 看门狗/心跳对**新发起**的请求即时生效(热路径代码,**需重启服务**);i18n 新键已随 bundle 重建(bundle-6291add9 + i18n-zh-eccefec4/i18n-en-5f01a6d8,产物 gitignored),前端强制刷新即可。swarm/endpoint 路径本次只吃看门狗 kill(免费),心跳 UI 未接(on_waiting 可选参)——若 owner 要,同缝一发即通。
+- **验收尾巴(owner 复核补刀,commit `e621d87f`):** 新 i18n 键此前只做了源码扫描,未过真实渲染器——按「良好呈现」标准补齐:jsdom harness 的 _ZH 镜像表补三键,探针 12/13 驱动真 streaming_ui.js 渲染 waitingFirstByte[Reason](探针 13 挂 `!_NEUTER` 守卫,与探针 8 同款——neuter 摘掉 reasonKey 解析线时该探针必须跳过,否则误红)。套件 **15/15**。**教训:i18n 键的验收终点是渲染探针不是源码扫描——模板插值名写错(比如 {seconds} vs {elapsed})源码扫描全绿也抓不到。**
+
+(另注:上方 R4 条目 header 出现重复行,系兄弟会话在飞编辑的产物,非本批引入,留其自行收尾,未动。)
 
 ### 2026-07-27 — 自动科研系统 R4 落地:三段串上产出底盘阶段图 + `produce_research` 入口(owner 拍板「别造第四个雷同 runtime」)。commit 见下,4 新文件(`lib/research/` 包)+ 1 测试;新套件 **6/6 含 NEUTER + failing-first 实证**,相邻 R1–R3 三套件 **22/22**,collect **10395** 0 err
 ### 2026-07-27 — 自动科研系统 R4 落地:三段串上产出底盘阶段图 + `produce_research` 入口(owner 拍板「别造第四个雷同 runtime」)。commit 见下,4 新文件(`lib/research/` 包)+ 1 测试;新套件 **6/6 含 NEUTER + failing-first 实证**,相邻 R1–R3 三套件 **22/22**,collect **10395** 0 err

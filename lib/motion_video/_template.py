@@ -35,13 +35,18 @@ from lib.log import get_logger
 logger = get_logger(__name__)
 
 __all__ = ['render_scene_html', 'on_screen_capacity', 'fit_font_px',
-           'scene_on_screen', 'FONT_PX_STEPS', 'MIN_FONT_PX']
+           'scene_on_screen', 'FONT_PX_STEPS', 'MIN_FONT_PX', 'CAPTION_FONT_PX']
 
 #: Candidate headline sizes, largest first. The chosen size is the biggest one
 #: whose measured capacity still holds the caption.
 FONT_PX_STEPS = (120, 96, 76, 60, 46)
 #: The floor — below this the card stops reading as a title card.
 MIN_FONT_PX = FONT_PX_STEPS[-1]
+#: The size a CAPTION is expected to read at. The 46px floor exists so an
+#: over-long legacy caption still renders; it is NOT a licence to author at
+#: that size. A caption that only fits at the floor is a paragraph, so the
+#: authoring budget is the capacity at this title size instead.
+CAPTION_FONT_PX = 76
 
 #: Fraction of the frame the headline box may occupy. Mirrors the CSS below
 #: (``max-width`` = 84% of frame width); the height share leaves room for the

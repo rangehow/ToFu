@@ -190,6 +190,118 @@ def test_scene_author_still_receives_visual_as_art_direction():
 #  NEUTER — prove each check is load-bearing
 # ══════════════════════════════════════════════════════════
 
+# ══════════════════════════════════════════════════════════
+#  a caption is a COMPRESSION, not a second copy of the narration
+# ══════════════════════════════════════════════════════════
+
+def test_caption_budget_is_a_title_length_not_the_floor():
+    """The authoring budget is the capacity at title size, not at the 46px
+    floor. The floor only exists so a legacy over-long caption still renders;
+    treating it as the budget is what let a caption be 247 chars of prose."""
+    from lib.motion_video._template import CAPTION_FONT_PX
+
+    assert CAPTION_FONT_PX > MIN_FONT_PX
+    caption_budget = on_screen_capacity(WIDTH, HEIGHT, CAPTION_FONT_PX)
+    assert 0 < caption_budget < on_screen_capacity(WIDTH, HEIGHT, MIN_FONT_PX)
+
+
+def test_gate_rejects_a_caption_that_is_the_narration_verbatim():
+    """A caption UNDER the 46px floor still fails when it is the narration
+    copied verbatim and over the title budget — the capacity check alone
+    cannot see this, which is how 'three fields' silently became two."""
+    from lib.motion_video._template import CAPTION_FONT_PX
+
+    budget = on_screen_capacity(WIDTH, HEIGHT, CAPTION_FONT_PX)
+    floor = on_screen_capacity(WIDTH, HEIGHT, MIN_FONT_PX)
+    prose = '字' * ((budget + floor) // 2)   # fits the floor, over the budget
+    scene = {'id': 'scene-001', 'start': 0.0, 'end': 6.0,
+             'text': prose, 'on_screen': prose, 'visual': ''}
+    errors = mv.check_scene_budget([scene], width=WIDTH, height=HEIGHT,
+                                   max_scene_s=MAX_SCENE_S, narration=False)
+    assert any('duplicates the narration' in e for e in errors), errors
+    # A genuine condensation of the same beat passes.
+    scene['on_screen'] = '字' * min(12, budget)
+    assert not any('duplicates the narration' in e for e in
+                   mv.check_scene_budget([scene], width=WIDTH, height=HEIGHT,
+                                         max_scene_s=MAX_SCENE_S,
+                                         narration=False))
+
+
+# ══════════════════════════════════════════════════════════
+#  the film samples the WHOLE report, not its first 3%
+# ══════════════════════════════════════════════════════════
+
+def _long_report(sections: int = 40) -> str:
+    """A report whose sections are individually identifiable, so we can tell
+    WHERE in the document a beat came from."""
+    return '\n\n'.join(
+        f'第{i}节的论述内容在这里展开，包含足够长度的说明文字以构成一个完整段落。'
+        for i in range(1, sections + 1))
+
+
+def test_beats_are_drawn_from_across_the_whole_document():
+    """A ``max_scenes``-beat film holds far less text than a full report, so
+    reading from the top until the budget runs out ships the opening and
+    discards the results and limitations. Beats must SAMPLE the document.
+
+    Guards a property, not a splitter: any implementation that covers the
+    document keeps this green.
+    """
+    from lib.paper.video_abstract import build_abstract_scenes
+
+    report = _long_report(40)
+    scenes = build_abstract_scenes(report, max_scenes=8, use_llm=False)
+    assert scenes, 'a long report must yield beats'
+    # Where does each beat's text sit in the source?
+    positions = [report.find(sc['text'][:16]) for sc in scenes]
+    assert all(p >= 0 for p in positions), positions
+    # The last beat must come from the document's back half — the precise
+    # failure being guarded is "everything came from the top".
+    assert max(positions) > len(report) * 0.5, (
+        f'beats only cover up to {max(positions) / len(report):.0%} of the '
+        f'report — the tail (results/limitations) was discarded')
+    assert positions == sorted(positions), 'beats must stay in document order'
+
+
+def test_no_beat_is_a_three_second_runt():
+    """Filling each piece to the budget leaves a tiny tail (67 chars at a
+    58-char budget -> 58 + 9), and a 9-char scene is floored to the minimum
+    duration: seconds of screen time carrying almost nothing."""
+    from lib.paper.video_abstract import (_MIN_SCENE_S, build_abstract_scenes)
+
+    scenes = build_abstract_scenes(_long_report(40), max_scenes=8,
+                                   use_llm=False)
+    runts = [sc['id'] for sc in scenes
+             if (sc['end'] - sc['start']) <= _MIN_SCENE_S + 1e-6
+             and len(sc['text']) < 20]
+    assert not runts, f'runt scenes carrying almost no narration: {runts}'
+
+
+def test_split_beats_keep_their_authored_caption_and_art_direction():
+    """A beat split for length is ONE beat continuing across two scenes, so
+    the authored caption and art direction apply to every piece. Blanking
+    them for the tail produced placeholder captions on real LLM output."""
+    from lib.paper.video_abstract import _BEAT_CHAR_BUDGET
+    import lib.paper.video_abstract as VA
+
+    long_beat = '这是一段需要被切分的很长旁白内容。' * 6   # well over the budget
+    assert len(long_beat) > _BEAT_CHAR_BUDGET * 1.5
+    beats = [{'text': long_beat, 'on_screen': '被授权的标题',
+              'visual': '俯拍城市夜景'}]
+    orig = VA._llm_beats
+    VA._llm_beats = lambda *a, **k: [dict(b) for b in beats]
+    try:
+        scenes = VA.build_abstract_scenes('irrelevant', max_scenes=8,
+                                          use_llm=True)
+    finally:
+        VA._llm_beats = orig
+    assert len(scenes) >= 2, 'the beat should have been split'
+    assert all(sc['on_screen'] == '被授权的标题' for sc in scenes), \
+        [sc['on_screen'] for sc in scenes]
+    assert all(sc['visual'] == '俯拍城市夜景' for sc in scenes), \
+        [sc['visual'] for sc in scenes]
+
+
 def test_NEUTER_without_saturation_check_the_shipped_shape_slips_through():
     """Drop the saturation + capacity + narration findings and the broken
     storyboard is accepted — i.e. these findings ARE the defence, not

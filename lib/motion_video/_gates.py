@@ -70,7 +70,8 @@ def check_scene_budget(scenes, *, width: int = 1080, height: int = 1440,
 
     Returns a list of human-readable errors (empty = pass).
     """
-    from lib.motion_video._template import (MIN_FONT_PX, on_screen_capacity,
+    from lib.motion_video._template import (CAPTION_FONT_PX, MIN_FONT_PX,
+                                            on_screen_capacity,
                                             scene_on_screen)
 
     errors: list[str] = []
@@ -78,6 +79,7 @@ def check_scene_budget(scenes, *, width: int = 1080, height: int = 1440,
         return ['scenes must be a non-empty list']
 
     capacity = on_screen_capacity(width, height, MIN_FONT_PX)
+    caption_cap = on_screen_capacity(width, height, CAPTION_FONT_PX)
     for i, sc in enumerate(scenes):
         label = sc.get('id', f'#{i + 1}') if isinstance(sc, dict) else f'#{i + 1}'
         if not isinstance(sc, dict):
@@ -95,6 +97,7 @@ def check_scene_budget(scenes, *, width: int = 1080, height: int = 1440,
                 f'of re-cut; split this beat or shorten its text')
 
         caption = scene_on_screen(sc)
+        spoken_text = str(sc.get('text') or '').strip()
         if not caption:
             errors.append(f'scene {label}: no on_screen caption '
                           '(and no text to fall back to)')
@@ -103,6 +106,16 @@ def check_scene_budget(scenes, *, width: int = 1080, height: int = 1440,
                 f'scene {label}: on_screen caption is {len(caption)} chars but '
                 f'only {capacity} fit a {width}x{height} frame at {MIN_FONT_PX}px '
                 f'— write a caption, do not paste the narration')
+        elif caption == spoken_text and len(caption) > caption_cap:
+            # The capacity check alone cannot see this: a caption under the
+            # 46px floor still passes while being the narration shown twice.
+            # A caption is a COMPRESSION of the beat, so an over-long verbatim
+            # copy means the field was never authored.
+            errors.append(
+                f'scene {label}: on_screen duplicates the narration verbatim '
+                f'({len(caption)} chars, over the {caption_cap}-char caption '
+                f'budget at {CAPTION_FONT_PX}px) — captions must condense the '
+                f'beat, not repeat it')
 
         if narration and sc.get('spoken', True):
             spoken = str(sc.get('text') or '')

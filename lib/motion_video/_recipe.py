@@ -326,7 +326,7 @@ def _build_source_beat_prompt(source_text: str, *, lang: str, max_scenes: int,
 def script_stage_for_source(source_text: str, *, lang: str = 'zh',
                             max_scenes: int = _DEFAULT_MAX_SCENES,
                             char_budget: int = 58,
-                            caption_capacity: int = 247) -> list[dict]:
+                            caption_capacity: int = 88) -> list[dict]:
     """Rewrite existing prose into bounded beats. Returns beat dicts.
 
     The single implementation of "prose → spoken beats + on-screen captions +

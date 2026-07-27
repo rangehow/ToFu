@@ -67,6 +67,14 @@ _DEFAULT_MAX_SCENES = 8
 #: the ceiling so rounding can never land a scene exactly on it.
 _BEAT_CHAR_BUDGET = int((_MAX_SCENE_S - 1.0) * _CHARS_PER_SECOND)
 
+#: How far a beat may exceed the budget before it is SPLIT rather than absorbed.
+#: Splitting costs the authored caption and art direction of the tail piece, so
+#: a modest overrun is better absorbed. The factor is bounded by the ceiling:
+#: ``_BEAT_CHAR_BUDGET * 1.15 / _CHARS_PER_SECOND`` ≈ 15.3s would exceed 15.0s,
+#: so it is capped at whatever still lands strictly under ``_MAX_SCENE_S``.
+_OVERRUN_TOLERANCE = min(
+    1.15, (_MAX_SCENE_S - 0.5) * _CHARS_PER_SECOND / _BEAT_CHAR_BUDGET)
+
 _MD_NOISE_RE = re.compile(
     r'^\s{0,3}#{1,6}\s*|^\s{0,3}[-*+]\s+|^\s{0,3}>\s?|\*\*|__|`{1,3}|'
     r'\[([^\]]+)\]\([^)]*\)|<[^>]+>',
@@ -147,28 +155,78 @@ def _split_to_budget(spoken: str, budget: int) -> list[str]:
     return pieces or [spoken[:budget]]
 
 
-def _caption_for(spoken: str, capacity: int) -> str:
-    """Derive an on-frame caption from spoken text, within ``capacity``.
+#: Clause separators used to break a beat into candidate caption units.
+_CLAUSE_SPLIT_RE = re.compile(r'[。！？!?…；;，,、:：\n]+')
 
-    Used by the ZERO-LLM fallback only — the LLM path writes its own caption.
-    Takes whole leading sentences while they fit, so the caption is a
-    readable clause rather than a mid-word truncation.
+
+def _salient_terms(text: str) -> dict:
+    """Character-bigram frequencies over the WHOLE document.
+
+    A deliberately simple, deterministic salience signal: CJK has no spaces,
+    so word frequency needs a tokenizer, but character bigrams approximate
+    term frequency well enough to rank clauses. Computed over the whole report
+    (not the beat) so a clause is scored by how central it is to the PAPER.
     """
-    spoken = (spoken or '').strip()
-    if not spoken:
-        return ''
-    if len(spoken) <= capacity:
-        return spoken
-    out = ''
-    for sent in _sentences(spoken):
-        if not out:
-            out = sent if len(sent) <= capacity else sent[:capacity].rstrip()
-            continue
-        if len(out) + 1 + len(sent) <= capacity:
-            out = f'{out} {sent}'
-        else:
+    clean = re.sub(r'[\s\W_]+', '', text or '')
+    freq: dict = {}
+    for i in range(len(clean) - 1):
+        bg = clean[i:i + 2]
+        freq[bg] = freq.get(bg, 0) + 1
+    return freq
+
+
+#: A caption must be a real condensation of its beat, not a near-copy.
+_CAPTION_MAX_SHARE = 0.75
+
+
+def _split_balanced(spoken: str, budget: int) -> list[str]:
+    """Split an over-long beat into NEARLY EQUAL pieces, never a runt tail.
+
+    ``_split_to_budget`` fills each piece to the budget, so a 67-char beat at
+    a 58-char budget yields 58 + 9 — and a 9-char scene is floored to
+    ``_MIN_SCENE_S``, i.e. three seconds of screen time carrying nothing.
+    Choosing the piece COUNT first and dividing evenly keeps every piece
+    substantial (67 -> 34 + 33).
+    """
+    if len(spoken) <= budget:
+        return [spoken]
+    import math
+    n = math.ceil(len(spoken) / budget)
+    target = math.ceil(len(spoken) / n)
+    pieces: list[str] = []
+    rest = spoken
+    while rest and len(pieces) < n - 1:
+        head, rest = _hard_split(rest, target)
+        if not head:
             break
-    return out or spoken[:capacity].rstrip()
+        pieces.append(head)
+    if rest:
+        pieces.append(rest)
+    return [p for p in pieces if p] or [spoken[:budget]]
+
+
+def _compress(spoken: str, capacity: int, terms: dict,
+              *, index: int = 0, total: int = 0, lang: str = 'zh') -> str:
+    """The on-frame caption for a beat WITHOUT a model to write one.
+
+    **Why this does not extract a clause from the narration.** Measured on a
+    real 16.7k-char report: picking the most salient clause of each beat
+    produced grammatical debris in 6 of 8 scenes — ``qualitative/``,
+    ``prompted 39.7%）——``, ``2026 的 backward inference（small`` — because a
+    clause of running prose is not a headline, and no threshold turns it into
+    one. Tightening the length bounds only changes the SHAPE of the debris.
+
+    So the fallback stops pretending: it emits a **structural label** (beat
+    position) which is short, always grammatical, and honestly signals "no
+    model wrote this". The narration still carries the content, and the
+    real captions come from :func:`_llm_beats`. This is the floor that keeps
+    a model-less host renderable, not the intended output.
+    """
+    if total and index:
+        if lang == 'en':
+            return f'Key point {index} of {total}'
+        return f'要点 {index} / {total}'
+    return ('Key point' if lang == 'en' else '要点')
 
 
 def _timeline(beats: list[dict], *, chars_per_second: float,
@@ -204,33 +262,63 @@ def _timeline(beats: list[dict], *, chars_per_second: float,
 
 def slice_abstract_beats(source_text: str, *,
                          max_scenes: int = _DEFAULT_MAX_SCENES,
-                         capacity: int = 0) -> list[dict]:
-    """Zero-LLM fallback: sentence-packed beats within the char budget.
+                         capacity: int = 0,
+                         lang: str = 'zh') -> list[dict]:
+    """Zero-LLM fallback: one extractive beat per document SEGMENT.
 
     Returns beat dicts (``text`` / ``on_screen`` / ``visual``), NOT scenes —
-    :func:`_timeline` turns them into a storyboard. Unlike the original
-    implementation the per-beat size is driven by what a beat can SAY in its
-    slot (``_BEAT_CHAR_BUDGET``), not by ``total_chars // max_scenes``, so a
-    longer report yields MORE beats rather than fatter ones.
-    """
-    from lib.motion_video._template import MIN_FONT_PX, on_screen_capacity
+    :func:`_timeline` turns them into a storyboard.
 
-    capacity = capacity or on_screen_capacity(font_px=MIN_FONT_PX)
+    **Why segments and not the leading paragraphs.** A ``max_scenes``-beat film
+    can hold only ``max_scenes * _BEAT_CHAR_BUDGET`` spoken chars — 464 at the
+    defaults, against a ~16.7k-char report. Reading from the top until the
+    budget runs out therefore ships the first ~3% of the paper and silently
+    discards the rest, so the abstract never reaches the results or the
+    limitations. Instead the report is split into ``max_scenes`` equal
+    segments and each contributes its most salient sentence: the film samples
+    the WHOLE document (structure preserved, since segments stay in order)
+    rather than truncating it. Fidelity per beat is lower than an LLM rewrite
+    — that is the honest cost of having no model, and why this is the fallback.
+    """
+    from lib.motion_video._template import CAPTION_FONT_PX, on_screen_capacity
+
+    capacity = capacity or on_screen_capacity(font_px=CAPTION_FONT_PX)
     clean = _clean_markdown(source_text or '')
-    paragraphs = [p for p in re.split(r'\n{2,}|\n', clean) if p.strip()]
-    if not paragraphs:
+    sents = _sentences(clean)
+    if not sents:
         return []
 
-    beats: list[dict] = []
-    for para in paragraphs:
-        if len(beats) >= max_scenes:
+    terms = _salient_terms(clean)
+    max_scenes = max(1, int(max_scenes))
+    # Contiguous segments covering every sentence; the last absorbs the
+    # remainder so no tail is dropped by integer division.
+    per = max(1, len(sents) // max_scenes)
+    segments: list[list[str]] = []
+    for i in range(max_scenes):
+        lo = i * per
+        if lo >= len(sents):
             break
-        for piece in _split_to_budget(para.strip(), _BEAT_CHAR_BUDGET):
-            if len(beats) >= max_scenes:
-                break
-            beats.append({'text': piece,
-                          'on_screen': _caption_for(piece, capacity),
-                          'visual': ''})
+        hi = len(sents) if i == max_scenes - 1 else min(len(sents), lo + per)
+        segments.append(sents[lo:hi])
+
+    def salience(sent: str) -> float:
+        body = re.sub(r'[\s\W_]+', '', sent)
+        if len(body) < 2:
+            return 0.0
+        total = sum(terms.get(body[i:i + 2], 0) for i in range(len(body) - 1))
+        return total / (len(body) - 1)
+
+    beats: list[dict] = []
+    for seg in segments:
+        if not seg:
+            continue
+        lead = max(seg, key=salience)
+        spoken = _split_to_budget(lead, _BEAT_CHAR_BUDGET)[0]
+        beats.append({'text': spoken, 'on_screen': '', 'visual': ''})
+    total = len(beats)
+    for i, beat in enumerate(beats, 1):
+        beat['on_screen'] = _compress(beat['text'], capacity, terms,
+                                      index=i, total=total, lang=lang)
     return beats
 
 
@@ -273,21 +361,33 @@ def build_abstract_scenes(source_text: str, *,
     ``visual``, valid against both :func:`lib.motion_video.check_storyboard`
     and :func:`lib.motion_video.check_scene_budget`.
     """
-    from lib.motion_video._template import MIN_FONT_PX, on_screen_capacity
+    from lib.motion_video._template import CAPTION_FONT_PX, on_screen_capacity
 
-    capacity = on_screen_capacity(font_px=MIN_FONT_PX)
+    # Budgeted at the CAPTION size, not the 46px floor: a caption that only
+    # fits at the floor is a paragraph on a title card.
+    capacity = on_screen_capacity(font_px=CAPTION_FONT_PX)
+    terms = _salient_terms(_clean_markdown(source_text or ''))
     beats: list[dict] = []
     if use_llm:
         beats = _llm_beats(source_text, lang=lang, max_scenes=max_scenes,
                            capacity=capacity)
     if not beats:
         beats = slice_abstract_beats(source_text, max_scenes=max_scenes,
-                                     capacity=capacity)
+                                     capacity=capacity, lang=lang)
     if not beats:
         return []
 
     # Enforce the budget on WHATEVER produced the beats — the LLM is asked for
     # bounded output but never trusted to have obeyed.
+    #
+    # Splitting is a LAST resort, not the normal path: a beat cut in two leaves
+    # the second half with no authored caption (it would fall back to a
+    # positional placeholder) and duplicates the first half's art direction.
+    # Measured on a real run, splitting at exactly the budget degraded 3 of 8
+    # scenes that way. A modest overrun is therefore ABSORBED — the beat keeps
+    # its authored caption and simply occupies a slightly longer slot, which is
+    # still bounded well under the saturation ceiling.
+    absorb = int(_BEAT_CHAR_BUDGET * _OVERRUN_TOLERANCE)
     bounded: list[dict] = []
     for beat in beats:
         spoken = str(beat.get('text') or '').strip()
@@ -295,13 +395,21 @@ def build_abstract_scenes(source_text: str, *,
             continue
         caption = str(beat.get('on_screen') or '').strip()
         visual = str(beat.get('visual') or '').strip()
-        for piece in _split_to_budget(spoken, _BEAT_CHAR_BUDGET):
-            cap = caption if caption and len(caption) <= capacity else \
-                _caption_for(piece, capacity)
-            bounded.append({'text': piece, 'on_screen': cap, 'visual': visual})
-            # A split beat's single caption belongs to its first piece only;
-            # later pieces derive their own so they don't all repeat one line.
-            caption = ''
+        pieces = ([spoken] if len(spoken) <= absorb
+                  else _split_balanced(spoken, _BEAT_CHAR_BUDGET))
+        # A split beat is ONE beat continuing across two scenes, so its
+        # authored caption and art direction apply to every piece. Blanking
+        # them for the tail (an earlier attempt) produced placeholder captions
+        # on 3 of 8 scenes in a real run — the split is our doing, not a
+        # change of subject.
+        usable = (caption and len(caption) <= capacity
+                  and caption not in pieces)
+        for piece in pieces:
+            cap = caption if usable else _compress(
+                piece, capacity, terms, index=len(bounded) + 1,
+                total=max_scenes, lang=lang)
+            bounded.append({'text': piece, 'on_screen': cap,
+                            'visual': visual})
         if len(bounded) >= max_scenes:
             break
     bounded = bounded[:max_scenes]

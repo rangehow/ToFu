@@ -182,6 +182,7 @@ global.config = {};
 global.activeConvId = null;
 global.renderChat = function() {};
 
+eval(fs.readFileSync(process.argv[3], 'utf8'));  // core/conv_persist_helpers.js (Epic-E slice 3 home of _rebaseUnackedTail)
 eval(fs.readFileSync(process.argv[2], 'utf8'));  // core/conversations.js
 
 const out = [];
@@ -226,12 +227,14 @@ console.log(out.join('\n'));
 """
 
 
-def _run(js_source_path: str):
+def _run(js_source_path: str, helpers_override: str | None = None):
     harness = os.path.join(HERE, '_msgid_unif_harness.js')
     with open(harness, 'w') as f:
         f.write(_HARNESS)
+    helpers_js = helpers_override or os.path.join(
+        JS_DIR, 'core', 'conv_persist_helpers.js')
     try:
-        return subprocess.run(['node', harness, js_source_path],
+        return subprocess.run(['node', harness, js_source_path, helpers_js],
                               capture_output=True, text=True, timeout=60)
     finally:
         try:
@@ -255,8 +258,11 @@ def test_frontend_taskid_dedup_drops_tmp_twin():
 def test_neuter_taskid_dedup_is_load_bearing(tmp_path):
     """NEUTER: remove the _taskId dedup branch → the tmp_ twin is re-appended →
     single_assistant_after_rebase FAILS. Proves the dedup is load-bearing."""
-    conv_js = os.path.join(JS_DIR, 'core', 'conversations.js')
-    with open(conv_js, encoding='utf-8') as f:
+    # Epic-E slice 3 (b33d9d21) moved _rebaseUnackedTail (and its _taskId
+    # dedup branch) to core/conv_persist_helpers.js — neuter THAT file (the
+    # harness evals helpers first, then conversations.js).
+    helpers_js = os.path.join(JS_DIR, 'core', 'conv_persist_helpers.js')
+    with open(helpers_js, encoding='utf-8') as f:
         src = f.read()
     marker = "if (lm.role === 'assistant' && lm._taskId && serverAsstTaskIds.has(lm._taskId)) {"
     assert marker in src, 'neuter target not found — update the _taskId dedup marker'
@@ -265,9 +271,10 @@ def test_neuter_taskid_dedup_is_load_bearing(tmp_path):
         marker,
         "if (false && lm.role === 'assistant' && lm._taskId && serverAsstTaskIds.has(lm._taskId)) {  // NEUTER",
         1)
-    nfile = tmp_path / 'conversations_neutered.js'
+    nfile = tmp_path / 'conv_persist_helpers_neutered.js'
     nfile.write_text(neutered, encoding='utf-8')
-    proc = _run(str(nfile))
+    proc = _run(os.path.join(JS_DIR, 'core', 'conversations.js'),
+                helpers_override=str(nfile))
     output = proc.stdout.strip()
     assert proc.returncode == 0, f'node failed on neutered copy: {proc.stderr}\n{output}'
     lines = {ln.split(' ', 1)[1]: ln.startswith('PASS')

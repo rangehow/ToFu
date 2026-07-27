@@ -1,6 +1,26 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-27 — 「对话为什么断在半句话上?是不是 bug?是不是 Opus 5 特有?」用户三问的实测答案(纯取证 + 交接,**本会话零产品代码落地**;修复归 `pt_33ba079f5cea4841` + `pt_88791cb08cb2495c`)
+
+- **起因:** owner 指着会话 `ms34yw0k74o2lq` 的截图问「没头没脑就结束了,是不是有 bug,我发现 opus 5 的好多都这样」。三问逐个用 7 天生产数据(`task_results` 全量 1712 任务)答完,结论有两个**推翻了我自己最初的判断**。
+
+- **① 为什么断在半句话上(机制,已坐实):** R17 的 `run_command` 被前置钩子拒(`Blocked catastrophic delete of $(git`,`status=rejected`)→ R18 回来是**纯文本 + `finish_reason=stop` + 零 tool_call**,文本明说 "Let me use explicit paths only" 却没发工具 → `lib/tasks_pkg/stream_handler/_analyse.py:499` 的「Normal exit」分支把它判为正常收工(`no_tool_calls_round_N`),任务报 `done`、`error=none`。**用户看到的「戛然而止」在后端是一次完全合规的成功收尾。**
+
+- **② 是不是 bug:是,但根因不是我最初以为的那个。** 我一开始按「5 chunk 跑 72 秒 + cache_namespace_switch」推断成**流被截断误判成 stop**,三条反证全部推翻它:①64 个候选样本 `_stream_anomaly`/`_empty_stop` **全为 None**,一条都没进异常分支;②末句都是**完整句子带句号**,不是词中截断;③我一度当铁证的「计费输出远大于送达文本」在 aws 线**被 thinking 文本完全解释**(`think=5799` 字符 vs `gap=6536`),Opus 5 看着更严重只是因为**它这条线根本不回 reasoning_tokens**(charter 已记的 openai 兼容约定差异)。**真正的缺陷在判据侧:循环没有「上一轮工具被拒 + 本轮零动作」这个形状的判据。** 真截断在库里长得完全不同——`status=interrupted`、`apiRounds` 为空、文本词中断掉(样本 `f2906993` 末句 `Now I'll rel`),两个群可分离。
+
+- **③ 是不是 Opus 5 特有:不是,是采样偏差。** 7 天分模型,末轮纯文本且以行动意图收尾的占比:**aws.claude-opus-4.8 = 7.5%(24/316)> yuju-claude-opus-5-evaDaily = 5.0%(25/485)> aws.claude-opus-4.7 = 2.7% > kimi-k3 = 1.7%**。**4.8 比 Opus 5 还高。** 「好多 Opus 5 都这样」成立的原因是 Opus 5 用量最大;kimi 低一档才是真信号(模型家族的收尾习惯差异)。
+
+- **★ 方法论一:措辞判据 49% 误报,不可作为触发条件(本轮最贵的一条)。** 「末句像是宣告了动作」这个判据,53 个命中里 **26 个是模型合法地把球交回给人**——`Give me the go (and answers to the 3 questions) and I'll execute the export + push`、`Pick any one of those decisions and I'll implement it immediately`、`你拍板范围,我就开做`。**全都带 "I'll"/"我就",全都在等人拍板。** 补推它们等于让 agent 越过人类自己设的门,**比原 bug 严重**。owner 拍板:触发条件必须是结构组合(上一轮 rejected/errored + 本轮零 tool_call + 零状态变更 + fr=stop),措辞至多作遥测信号;代价是召回从 ~13 例掉到 1 例,**这类闸宁可漏,不可越过人类在环**。
+
+- **★ 方法论二:`task_results.tool_rounds` 这个**列**在生产里是空的,工具轮实际落在 `metadata.toolRounds` / segments。** 照列去读会给**每一条**都报 `last_tool_status='none'`(包括我们已知工具被拒的 `2ef5fcaa` 本身)——于是任何按它构造的结构判据**恒不触发,却看着在正常跑**。这是 charter「守卫绿着空转」在数据源侧的同构体:**不是判据写错了,是判据读了一个永远为空的字段**。
+
+- **★ 方法论三:`rejected` 至少是两个物种,只有一个可重试。** ①钩子拒了某个**具体写法**(R18 那例,钩子自己说 "Re-issue with that narrower target",改写真的能过);②`X is not a real tool ... not in the list of tools available to you this turn`(工具压根不在本轮工具集,**重试必然再拒**,7 天 3 例)。结构判据对**两者都命中**,所以它自身也会烧钱——补推第二类 = 逼模型再调一次拿不到的工具。区分办法是结构性的:**被拒工具名是否在本轮 dispatched toolset 内**。
+
+- **归属与残留(本会话不落码):** 判据实现归 `pt_33ba079f5cea4841`(ms3ao89ctbsrbc 持有,设计稿 `docs/INTENT_STALL_MEASUREMENT.md`);「工具不在本轮工具集」那一类走 `pt_88791cb08cb2495c` 的 error-envelope 路线(任务实质失败却报 done,属 charter 错误透明传递担保的缺口)。我原型过一版检测器(`lib/agent_verdict/_announced.py` + facade + `_analyse.py` 调用点),**已全部回退删除**——一个未接线、又不属于本会话职责的判据模块留在共享树上,正是「看着有保护、实则无人拥有」。仅保留 `tests/test_announced_inaction_gate.py` 作**语料 + 守卫模板**(文件头已声明未接线、并写明缺失的那个必须补的反样本),供接手者直接取用真实事故时序与双向 NEUTER 写法。
+
+- **另记一条自指的观察:这条会话在调查期间把这个 bug 自产了 7 次**——每次都是「一句宣告下一步的话 + 零工具调用 + 轮次结束」,owner 逐次抓出。样本就在 7 天数据里(`71f67f9f`/`cd7a5479`/`d6152882` 等),归因因此无需额外取证。
+
 ### 2026-07-27 — paper 视频「一帧糊 1968 字」根修:三用途拆字段 + 删静默 clamp + 覆盖率 3%→95%,**且新加的闸第一版对生产路径空转、被 owner 用算术拆穿**(epic `pt_c42462c449124aeb`;commits `44d36c87` + `d1509b89`;新套件 **18/18**,NEUTER **6 发全咬**,相邻环 11 套件 **193/193**)
 
 - **触发:** owner 看到成片截图问「不是把 auto-motion 内化了吗,怎么产出这种东西」。实测定位:截图走的是 paper 视频页签(`paper.videoHeroTitle`),**根本没走内化后的 authored 创作路径**,而是零 LLM 模板兜底。
@@ -31,6 +51,7 @@
 - **共享 HEAD 纪律(本轮两件):** ①兄弟的 `lib/llm_sanitize/_gateway.py` 仍是破窗 WIP(IndentationError,line 21),flask_client 路由测试在当前树因此 error——与整个 flask_client 家族同根,非本改动引入;按既定舞步「备份 WIP → 垫 HEAD 版跑测 → 逐字节还原(md5 校验)」验证 14/14 全绿后还原。②提交用显式 15 文件 pathspec + `git diff --cached --name-only` 核对,树里另有 ~20 个兄弟在飞文件,零混入。
 - **顺手发现(未修,非本票):** `debug/reeval_pricing_tags.py` 硬编码 `lib/llm_dispatch/config.py` 单文件路径,而该模块早已包化为 `config/`(HEAD 前就有)——守卫过期家族「锚点漂移」又一例,FileNotFoundError 直接崩。无 CI 测试引用它(仅 template_actions.js 注释提及),留作后续票。
 - **自纠:** 本轮在同一个坑栽了 5 次——`insert_content` 的 content 里又写了 anchor 文本导致锚行重复(IndentationError/SyntaxError),已存项目记忆 `insert_content_anchor_duplication_trap`:insert 的 content 绝不重打 anchor 行,插完立即 node --check / ast.parse。
+- **★ 跟进(owner 复核抓出,commit `49c858dd`,3 文件 +79/-9):** 我第一版的 `_hasPrices` 对「只填一个 / 负数 / 非数字」三种非法输入全部落进清除分支——`delete m.pricing.input/output` 零提示,用户敲错一个字符点「应用」就无声丢失已保存定价。改为**任何变更之前**做三分支校验:两空=明确清除、两合法≥0=写入+派生、其余=alert 拒绝且 return(新 i18n 键 `settings.mePriceInvalidWarn`)。教训点:拒绝分支不能照搬 request_ids 守卫的位置(那个在 mutation 之后,靠下次重算兜底),真正的「拒绝」必须在第一行写操作之前。jsdom 补三种非法形状 + 明确清除不报警 + NEUTER 4(摘拒绝分支→静默删除回归→红),套件 39+ 全绿。owner 复核方法值得记录:他不只重跑了测试,还逐行读了已提交的 save 逻辑并对照「目标是否真正达成」——测试全绿 ≠ 需求闭环,这个缺陷本身就是我写的代码+我写的测试共同放过的(测试只断言了我实现的行为,没断言用户意图)。
 
 ### 2026-07-27 — 「对话为什么没头没脑结束了」根因三连:模型说了不做(非崩溃) + 大脑一秒三发散弹重派(真 bug,规模超单案) + 意图滞留补推降级为测量票(owner 拍板;bug 票 `pt_1613ab83b1934884` + 测量票 `pt_33ba079f5cea4841`;零产品代码,纯取证 + 开票)
 

@@ -368,7 +368,6 @@ interface Window {
   relayAdminTopup: any;
   relayAdminViewPayments: any;
   renderErrorEnvelope: any;
-  renderModelFallbackBannerHtml: any;
   renderTranslateIndicator: any;
   renderTurnCtxNote: any;
   replayPendingBusyState: any;

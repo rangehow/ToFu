@@ -51,6 +51,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from lib.project_mod.command_analysis import (  # noqa: E402
     _clean_command_output,
     _extract_accelerator_ids,
+    _extract_progress_label,
     _line_fingerprint,
 )
 
@@ -189,6 +190,56 @@ def test_no_cuda_claim_when_the_output_has_no_accelerator():
         'accelerators. A marker that invents hardware is worse than no '
         'marker.\nOffending line(s): '
         + repr([ln for ln in out.split('\n') if 'cuda' in ln.lower()][:3])
+    )
+
+
+def test_progress_bars_do_not_invent_devices_from_duplicate_percentages():
+    """Phase 3 defect, same family as the cuda: one but a different code path.
+
+    The tqdm-group summariser inferred a device COUNT from "how many lines
+    share a percentage", so four progress bars from a single-process loader
+    were reported as '×2 devices' with no device word anywhere in the input.
+    Concurrency is a real observation; hardware is not — the marker may
+    describe the shape but must not name what runs it.
+    """
+    lines = [
+        'Ingesting records: 10%|##        | 10/100 [00:01<00:09, 9.99it/s]',
+        'Ingesting records: 50%|#####     | 50/100 [00:05<00:05, 9.99it/s]',
+        'Ingesting records: 50%|#####     | 50/100 [00:05<00:05, 9.98it/s]',
+        'Ingesting records: 99%|######### | 99/100 [00:09<00:00, 9.97it/s]',
+    ]
+    raw = '\n'.join(lines) + '\n'
+    assert not _extract_accelerator_ids(lines), 'fixture must carry no device'
+
+    out = _clean_command_output(raw)
+    assert 'device' not in out.lower(), (
+        'Progress-bar summary claims devices for output with no device word '
+        'at all — the count came from duplicate percentages, which only shows '
+        'concurrency.\nGot: '
+        + repr([ln for ln in out.split('\n') if 'device' in ln.lower()])
+    )
+
+
+def test_progress_bars_with_real_accelerators_keep_the_device_range():
+    """Complement: removing Phase 3's accelerator branch must also fail.
+
+    Fixture note (I got this wrong once): the accelerator token must sit in
+    the SHORT trailing segment, not in the label. ``_extract_progress_label``
+    keys the group on the text BEFORE the bar, so ``cuda:0 train: …`` gives
+    every line a different label and nothing groups — the test would have
+    failed against correct production code. Trailing text over 20 chars is
+    also rejected as an "announcement" line, so it must stay short.
+    """
+    lines = [
+        f'Loading shards: 50%|#####     | 50/100 [00:05<00:05, 9.9it/s] cuda:{i}'
+        for i in range(4)
+    ]
+    assert len({_extract_progress_label(ln) for ln in lines}) == 1, (
+        'fixture broken: lines must share one progress label to form a group'
+    )
+    out = _clean_command_output('\n'.join(lines) + '\n')
+    assert 'cuda:0-3' in out, (
+        'Genuine multi-GPU progress bars lost their device range: ' + repr(out)
     )
 
 

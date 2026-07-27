@@ -24,6 +24,11 @@
 - **语料纪律:** 固定语料是**真实捕获**(`tests/fixtures/real_ps_aux.txt` 248 行 / `real_ls_la_tests.txt` 1,253 行),不再造 `file_NNNN` 模板串;且**先验扫描面**——实测 247/1,251 行真的过了 `_line_fingerprint` 的 20 字符地板、最大同指纹连续组 14 与 4,否则会写出一条「怎么改都绿」的空转守卫(charter 已记 7 次的失效形态)。
 - **未做:** `doc_parser` 的 99.7%(该数据来自**真文档**,可信)按 owner 定的顺序留下一轮动结构。
 
+- **★ 追加一刀(owner 复核后自查发现,同一文件第三处):Phase 3 进度条路径也在无证据地声称设备。** `_clean_command_output` 的 tqdm 分支按「**有几行共享同一个百分比**」推断 `device_count`,于是一个**单进程** data loader 的四条进度条被报成 `, ×2 devices` —— 输入里**根本没有任何设备词**。重复百分比只证明**并发**,不证明**硬件**。改为同 Phase 4 一套判据:有显式加速器词才 `×N devices on cuda:a-b`,否则说 `×N parallel streams`。NEUTER-5(改回按百分比报 devices)/ NEUTER-6(摘掉加速器分支)各自精确红。
+  - **★ 我的补集测试第一版是红的,而错的是测试不是产品。** 我把 `cuda:N` 写在 label 里(`cuda:0 train: 50%|…`),但 `_extract_progress_label` **按 bar 之前的文本分组**,于是每行 label 都不同、根本不成组 —— 这个 fixture 对**正确的生产码**也会红。加速器词必须落在 **20 字符以内的 trailing 段**才既成组又带证据。已把这条 fixture 约束写进测试 docstring。判据仍是那句:守卫红了先问「它报的事实是否为真」。
+- **`lib/log_clean/_helpers.py` 的第二份副本:同族但**低一档**,勿照抄本轮结论。** 它的正则同样混了 `Worker/rank/device` 与 `cuda/GPU`,**但 `_format_device_range` 不加 `cuda:` 前缀**,渲染出来是 `, ×3 devices: 0-2` —— 不会造出「CUDA 显卡」这个具体假事实,但 `devices` 这个词本身仍是未经证据的断言。**修法是把 `devices` 换成中性的编号变体表述,不是照搬三层门控。** 已独立开票,不在本批写集。
+- **`_DEVICE_RE` 与 `_extract_device_ids` 现已无生产调用者**(折叠两条路径都改用 `_ACCEL_RE`/`_ORDINAL_RE`),仅为 `test_command_analysis_extraction.py` 的导出符号契约保留。已在两处 docstring 显式标注「⚠️ NO PRODUCTION CALLER,新代码必须用 `_extract_accelerator_ids` 或 `_extract_ordinal_ids`」—— 它是一个宽松正则,正是将来「顺手复用」重新引入假归因的入口,不能靠下一个人 grep 才发现。
+
 ### 2026-07-27(续2) — ★ 我上一轮的结论被自己推翻:**「中国 OTA 不会开放消费侧」是从 2 家样本过度归纳的假命题**,途牛+飞猪实测都对个人自助开放且带下单闭环(epic `pt_6dcdc44482de4fe7`;commit `57086380`,3 文件 +132/-35;套件 **28/28**,**NEUTER×2 全咬**,MCP+skills 环 **184 过 9 skip**)
 
 - **本轮是复查一张我自己开的商务准入票,结果推翻了开票时的推理。** 上一轮我写下「OTA 的核心资产是库存和用户,开放 MCP 等于把入口让给别人」——这句**从携程+美团两家的观察外推到整个行业**,而它是错的。实测:**途牛**(2026-03 上线 MCP 开放平台)与**飞猪**(阿里,官方 skill)**都对个人开发者自助发 Key、都带真实下单链路**。途牛品类最全(酒店/机票/火车/门票/**邮轮**/**度假**六域),下单返回 `paymentUrl`;飞猪八个搜索命令、零配置可跑,填 Key 后结果更完整。

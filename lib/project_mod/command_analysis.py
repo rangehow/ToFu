@@ -127,8 +127,13 @@ def _extract_progress_label(line):
 
 
 # ── Device / worker detection for multi-GPU annotation ──────────
-# Kept as the historical union for the exported-symbol contract; the two
-# regexes below are what the collapse path actually consults.
+# ⚠️ NO PRODUCTION CALLER. This permissive union (accelerator words AND plain
+# numbered workers in one class) is retained only for the exported-symbol
+# contract asserted by tests/test_command_analysis_extraction.py. Because it
+# cannot distinguish "cuda:0" from "io worker 0", using it to label output is
+# exactly how the folder came to report three postgres processes as three CUDA
+# devices. NEW CODE MUST USE _extract_accelerator_ids (hardware claims) or
+# _extract_ordinal_ids (index-only claims) — never this regex.
 _DEVICE_RE = re.compile(
     r'(?:cuda|gpu|device|rank|worker)[\s:_]*(\d+)', re.IGNORECASE
 )
@@ -164,10 +169,12 @@ def _extract_device_ids(lines):
     Looks for patterns like cuda:0, GPU 3, Worker 5, rank 2.
     Returns sorted list of unique integer IDs, or empty list.
 
-    NOTE: this is the permissive union (accelerators AND plain numbered
-    workers). It does NOT establish that a GPU is involved — use
+    ⚠️ NO PRODUCTION CALLER — kept for the exported-symbol contract only.
+    This is the permissive union (accelerators AND plain numbered workers), so
+    it does NOT establish that a GPU is involved. New code must use
     :func:`_extract_accelerator_ids` for anything that renders a ``cuda:``
-    label, or the marker will claim hardware that isn't there.
+    label, or :func:`_extract_ordinal_ids` for index-only claims; reusing this
+    one is how the fold marker started claiming hardware that isn't there.
     """
     ids = set()
     for ln in lines:
@@ -326,17 +333,30 @@ def _clean_command_output(output):
             if n <= 3:
                 result.extend(group)
             else:
-                # ── Percentage-aware sampling + device detection ──
+                # ── Percentage-aware sampling + concurrency detection ──
                 pcts = [(_extract_progress_pct(g), g) for g in group]
                 valid = [(p, g) for p, g in pcts if p is not None]
 
-                # Detect device parallelism: max lines sharing same %
-                device_count = 1
+                # ★ How many lines share a percentage tells us the output is
+                # CONCURRENT — it does NOT tell us what the workers are. The
+                # old code called every such group "×N devices", so four tqdm
+                # bars from a single-process data loader were reported as four
+                # devices. Same rule as the Phase 4 marker: name hardware only
+                # with an explicit accelerator word, otherwise describe the
+                # shape ('parallel streams') and claim nothing about what runs
+                # them.
+                stream_count = 1
                 if valid:
                     pct_freq = Counter(p for p, _ in valid)
-                    device_count = max(pct_freq.values())
-                device_note = (f', ×{device_count} devices'
-                               if device_count > 1 else '')
+                    stream_count = max(pct_freq.values())
+                accel_ids = _extract_accelerator_ids(group)
+                if len(accel_ids) > 1:
+                    device_note = (f', ×{len(accel_ids)} devices on '
+                                   f'{_format_cuda_device_range(accel_ids)}')
+                elif stream_count > 1:
+                    device_note = f', ×{stream_count} parallel streams'
+                else:
+                    device_note = ''
 
                 if valid:
                     # Pick lines by percentage: start / mid / end

@@ -910,7 +910,8 @@ class SubAgent:
             # the last completed round; an interrupted next round is re-run on
             # resume (side-effecting tools may therefore re-execute — accepted
             # by design, see lib/swarm/persistence.py).
-            self._checkpoint()
+            # (The checkpoint itself now lives on the chassis' on_round_end
+            #  seam — see the run_agent_loop call below.)
 
         try:
             outcome = run_agent_loop(
@@ -921,6 +922,11 @@ class SubAgent:
                 execute_tools=_execute_round_tools,
                 before_round=_before_round,
                 tools_terminal_round=False,
+                # Round-boundary checkpoint lives on the chassis'
+                # on_round_end seam (NOT inside the batch hook) so the
+                # orchestrator's throttled checkpoint converges on the
+                # same placement — one shape, not two.
+                on_round_end=lambda rnd: self._checkpoint(),
             )
         except _LlmFailed:
             return  # the dispatch hook already ran the LLM-error path

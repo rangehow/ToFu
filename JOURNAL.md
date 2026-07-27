@@ -1257,3 +1257,12 @@
 - **更正(owner 复核抓出,自引用污染家族又一例):** 本条目初版写「厂商 09:37 恢复」是**错的**——引用的 09:37:35/09:39:11/09:40:17 三行是 `lib.project_mod.run_command` 日志,即**我自己上一条 grep 命令被记进 app.log 的回声**,不是真实成功轮。排除 run_command 行后复核:09:12 后真实 opus-5 成功轮 **0**,09:12 后真实 503 又 **9** 条——**截至 09:51 厂商故障仍在持续**。教训:从 app.log grep 证据时,一律先 `grep -av 'lib.project_mod.run_command'` 排除自引用再下结论。
 - **owner 裁决:「模型最终会好就愿意一直等」→ `.env` 设 `TOFU_GATEWAY_OUTAGE_BUDGET_S=0`**(lib/llm_dispatch/api.py 内建开关,0=禁用上限,无限轮换直到厂商恢复或用户取消;abort_check 每 cycle 仍生效)。已接受的 trade-off:真·全员宕机期间每个等待任务占住一个 worker 线程。
 - **边界:** 该开关只管「全 slot 纯 5xx 风暴」;确定性错误(400/401/格式)仍走原 fallback(等待无意义);慢但活的请求本就不被任何超时杀(keep-alive 拆弹,见 69cd968c 条目)。
+
+### 2026-07-27 — orchestrator 上底盘 slice 链前两刀:底盘熔断/on_round_end 钩 + _RoundState 扁平容器落地(epic `pt_862771477a8649aa`,owner 两裁决执行:预算闸保持流后 / _RoundState 扁平砍两字段;commit 见下,7 文件;新守卫 **4/4**,底盘 19→**22/22**,orchestrator parity 全族 **47/47**,行为环 **84/84**,swarm 全族 **113/113**,collect **10468** 0 err)
+
+- **刀 1(底盘缺口 B/C,铁律第 4 条照 swarm 先例):** B 连续工具超时熔断进 `run_agent_loop`——批量钩可返 note dict,`max_consecutive_tool_timeouts>0` 时底盘拥有计数+halt(`exit_reason='tool_timeout'`,计数随 outcome 带出),**检测归引擎、机制归底盘**;熔断轮不发 `on_round_end`(镜像 orchestrator:熔断 break 在 checkpoint 之前)。C 新钩 `on_round_end(rnd)`——「工具执行完且未 abort 未熔断的自然轮末」这一**位置**归底盘所有,节流策略留钩内;**swarm 的 `self._checkpoint()` 当刀收敛出批量钩**挂上此缝(兑现「别长成两份」,orchestrator 的 5s 节流 checkpoint 切到底盘时也将挂同一位置)。
+- **刀 2(Slice 1,纯容器置换):** `_RoundState` 落地 `orchestrator/_round_state.py`——**扁平 14 字段**(实测对账:跨迭代 locals 是 16 不是文档写的 15,砍 round_num+premature_retry_count 后 14;文档的 15 是我清点时的计数误差,以代码为准)。44 处读取/写入点全部换 `rs.*`(含 fallback 对 model/preset/thinking_enabled 的轮间回写——这三个是「配置解析于 :262、突变于循环内」的跨界者,漏换任何一处日志参数都会让 fallback 后日志打印旧模型);`round_num`/`_premature_retry_count` 按裁决留普通 local。两轮补漏:精确正则扫(排除 rs./注释/kwarg 键)揪出 10 处残留(调用续行/回戳/AbortedError 分支),全灭。
+- **守卫:** 新 parity 套件 4 针——字段集精确枚举(删/加字段即红,这是 NEUTER 本体)、构造点、13 个 inline pivot 消失、默认值逐字节。过程教训:pivot 子串匹配被 `rs.` 前缀误伤(`"assistant_msg = llm_result["` 是 `"rs.assistant_msg = llm_result["` 的子串)→ pivot 锚定行首。**行为零差证明:orchestrator parity 全族 47/47 + chat/endpoint/stream 行为环 84/84,未改一个现有测试期望。**
+- **§6 待核对项查实:** 超时熔断路径**不发 ROUND_END**(四处发站点:budget×2/aborted/tools 自然;熔断 break 无事件)——由此暴露一个**预存在小缺陷**:该轮 ROUND_START(:540 已发)永无配对 ROUND_END,渲染层可能留一个永不关闭的 round。按纪律单独开票不进重构批(板已挂)。
+- **共享 HEAD:** 兄弟 `_resume_state.py` WIP 精确排除;7 文件 pathspec。
+- **下一刀(Slice 2,链上最硬):** 循环体按钩拆出 dispatch/execute_tools/before_round/retry_bonus,while 换 `run_agent_loop`——`retry_bonus` 接 `analyse_stream_result` 判定那刀是「真迁移」刀,单独成 slice;预算闸按裁决挂 dispatch 钩出口侧。

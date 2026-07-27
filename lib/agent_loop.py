@@ -34,6 +34,12 @@ content buffering / interim-draft discard, tool-result events, usage
 accumulation) stays in the caller via small hooks. The loop deliberately does
 NOT catch exceptions — a dispatcher ``AbortedError`` propagates to the caller's
 own handler unchanged.
+
+Generic per-round machinery extensions (all opt-in, all owned HERE so no
+engine re-implements them): ``before_round`` halt hook (timeouts),
+``retry_bonus`` (premature-close ceiling expansion), ``execute_tools`` batch
+hook (parallel pools), ``max_consecutive_tool_timeouts`` (timeout circuit
+breaker) and ``on_round_end`` (crash-checkpoint placement).
 """
 
 from __future__ import annotations
@@ -118,17 +124,19 @@ class LoopOutcome:
     """
 
     __slots__ = ('aborted', 'completed', 'rounds', 'exit_reason',
-                 'retry_bonus_used', 'halted')
+                 'retry_bonus_used', 'halted', 'consecutive_tool_timeouts')
 
     def __init__(self, aborted: bool = False, completed: bool = False,
                  rounds: int = 0, exit_reason: str = 'max_rounds_exhausted',
-                 retry_bonus_used: int = 0, halted: bool = False):
+                 retry_bonus_used: int = 0, halted: bool = False,
+                 consecutive_tool_timeouts: int = 0):
         self.aborted = aborted
         self.completed = completed
         self.rounds = rounds
         self.exit_reason = exit_reason
         self.retry_bonus_used = retry_bonus_used
         self.halted = halted
+        self.consecutive_tool_timeouts = consecutive_tool_timeouts
 
 
 def run_agent_loop(
@@ -144,7 +152,9 @@ def run_agent_loop(
     max_retry_bonus: int = 2,
     before_round: Callable[[int], str | None] | None = None,
     tools_terminal_round: bool = True,
-    execute_tools: Callable[[int, list], None] | None = None,
+    execute_tools: Callable[[int, list], dict | None] | None = None,
+    max_consecutive_tool_timeouts: int = 0,
+    on_round_end: Callable[[int], None] | None = None,
 ) -> LoopOutcome:
     """Drive a bounded LLM tool-calling loop with the triple abort check.
 
@@ -199,14 +209,36 @@ def run_agent_loop(
             contract swarm's loop always had (its max-rounds exit extracts
             a partial answer from history instead of forcing a tool-less
             final turn).
-        execute_tools: optional BATCH hook ``(rnd, tool_calls) -> None``.
-            When provided it replaces the per-tool ``execute_tool`` loop
-            ENTIRELY (including the between-tools abort checks — the hook
-            holds the ``abort`` signal and owns its own intra-batch
-            behavior). This exists for engines like swarm that execute a
-            round's tools in a parallel pool; prefer the per-tool
-            ``execute_tool`` contract for new engines so the between-tools
-            abort check (the "Stop has limited effect" fix) keeps biting.
+        execute_tools: optional BATCH hook ``(rnd, tool_calls) ->
+            dict | None``. When provided it replaces the per-tool
+            ``execute_tool`` loop ENTIRELY (including the between-tools
+            abort checks — the hook holds the ``abort`` signal and owns its
+            own intra-batch behavior). This exists for engines like swarm
+            that execute a round's tools in a parallel pool; prefer the
+            per-tool ``execute_tool`` contract for new engines so the
+            between-tools abort check (the "Stop has limited effect" fix)
+            keeps biting. The hook MAY return a note dict; the chassis
+            currently reads one key: ``'timed_out'`` (bool) — see
+            ``max_consecutive_tool_timeouts``.
+        max_consecutive_tool_timeouts: consecutive-tool-timeout circuit
+            breaker (0 = off, default). When > 0, the chassis counts
+            CONSECUTIVE batch notes carrying ``timed_out=True`` (a round
+            whose note is falsy/absent resets the count) and halts the
+            loop at the threshold with ``outcome.halted=True`` and
+            ``exit_reason='tool_timeout'`` — the generic form of the
+            chat orchestrator's ``_MAX_CONSECUTIVE_TOOL_TIMEOUTS`` guard.
+            Detection stays with the engine (it knows what a timeout is);
+            the counter + halt mechanics live here, not re-implemented
+            per engine (mirrors the orchestrator: breaker break happens
+            BEFORE the crash-checkpoint, so a halted round fires no
+            ``on_round_end``).
+        on_round_end: optional ``(rnd) -> None`` hook fired at the natural
+            end of a round whose tools were executed WITHOUT an abort and
+            WITHOUT a timeout-breaker halt — the seam for crash-recovery
+            checkpoints (the orchestrator's throttled ``checkpoint_task_
+            partial`` and swarm's per-round ``_checkpoint`` both live here;
+            throttling policy stays in the hook, the PLACEMENT is owned by
+            the chassis so the two engines can't drift into two shapes).
 
     Returns:
         LoopOutcome describing why the loop stopped (incl. ``exit_reason``).
@@ -271,10 +303,11 @@ def run_agent_loop(
         if on_tool_round is not None:
             on_tool_round(rnd, msg)
 
+        note = None
         if execute_tools is not None:
             # Batch path (e.g. swarm's parallel tool pool): the hook owns
             # intra-batch behavior incl. any abort checks.
-            execute_tools(rnd, tool_calls)
+            note = execute_tools(rnd, tool_calls)
         else:
             for tc in tool_calls:
                 # (3) BETWEEN-TOOLS — a Stop pressed during a slow tool must
@@ -289,5 +322,21 @@ def run_agent_loop(
 
         if outcome.aborted:
             break
+
+        # Consecutive-tool-timeout circuit breaker (before on_round_end:
+        # a halted round is NOT checkpointed, mirroring the orchestrator).
+        if max_consecutive_tool_timeouts > 0:
+            if note and note.get('timed_out'):
+                outcome.consecutive_tool_timeouts += 1
+                if outcome.consecutive_tool_timeouts \
+                        >= max_consecutive_tool_timeouts:
+                    outcome.halted = True
+                    outcome.exit_reason = 'tool_timeout'
+                    break
+            else:
+                outcome.consecutive_tool_timeouts = 0
+
+        if on_round_end is not None:
+            on_round_end(rnd)
 
     return outcome

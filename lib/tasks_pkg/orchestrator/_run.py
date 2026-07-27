@@ -102,6 +102,7 @@ from lib.tasks_pkg.orchestrator._vu_startup import (
 )
 from lib.tasks_pkg.orchestrator._prefetch import start_prefetches
 from lib.tasks_pkg.orchestrator._context_inject import inject_context_and_emit_chips  # noqa: E501
+from lib.tasks_pkg.orchestrator._round_state import RoundState
 from lib.tasks_pkg.orchestrator._tool_history import restore_tool_history
 from lib.tasks_pkg.orchestrator._memory_prefetch import (
     await_memory_prefetch,
@@ -384,7 +385,13 @@ def run_task(task: dict[str, Any]) -> None:
 
         messages = list(task['messages'])
         original_messages = list(messages)
-        tool_round_num = 0
+        # ── Round-loop cross-iteration state (pt_862771477a86 slice 1):
+        #    the 14 locals that cross the stream-loop iteration boundary
+        #    live on ONE flat carrier (docs/ROUND_STATE_LOCALS_INVENTORY.md).
+        #    round_num / _premature_retry_count stay plain locals
+        #    (chassis-owned at cutover). Pure container swap, byte-identical.
+        rs = RoundState(model=model, preset=preset,
+                        thinking_enabled=thinking_enabled)
         all_search_results_text = []
 
         # ── Section 2.5: Server-side tool history restoration ── (pt_03f4cdf1 slice 8)
@@ -448,18 +455,15 @@ def run_task(task: dict[str, Any]) -> None:
         logger.debug('[Task %s] conv=%s Start model=%s think=%s search=%s fetch=%s project=%s code_exec=%s',
                     task['id'][:8], task.get('convId', ''), model, thinking_enabled, search_mode, fetch_enabled,
                     'yes' if project_enabled else 'no', 'yes' if code_exec_enabled else 'no')
-        tool_call_happened = False
-        last_finish_reason = None
-        last_usage = None
-        assistant_msg = None  # ★ Initialize before loop — prevents UnboundLocalError if loop breaks early
-        accumulated_usage = {}  # ★ Accumulate usage across all tool rounds
-        api_rounds = []  # ★ Track per-round usage for cost breakdown
+        # (the six historical loop-state init lines — tool_call_happened /
+        #  last_finish_reason / last_usage / assistant_msg / accumulated_usage
+        #  / api_rounds — now live on `rs`, constructed above; slice 1)
 
         # ★ Inject toolHistory from continue — restore interrupted tool call context
         _injected_tool_calls = inject_tool_history(messages, cfg, task, model)
         if _injected_tool_calls:
-            tool_call_happened = True
-            tool_round_num = _injected_tool_calls  # offset so new roundNums don't conflict
+            rs.tool_call_happened = True
+            rs.tool_round_num = _injected_tool_calls  # offset so new roundNums don't conflict
 
         # ── Section 3.5 ── the memory prefetch was SPAWNED above, before
         #   Section 3, so it overlaps context injection. It is joined by
@@ -503,14 +507,12 @@ def run_task(task: dict[str, Any]) -> None:
         #   memory. No-op when nothing was spawned.
         await_memory_prefetch(task)
 
-        _loop_exit_reason = 'max_rounds_exhausted'  # ★ DIAGNOSTIC: track why the loop ended
-        _abort_detected_phase = None  # ★ Track exactly WHEN abort was detected
         _premature_retry_count = 0    # ★ Track retries for PREMATURE STREAM CLOSE
         _PREMATURE_RETRY_MAX = 2      # ★ Max premature-close retries (must match stream_handler)
-        _consecutive_tool_timeouts = 0  # ★ Track consecutive tool-execution timeouts to prevent runaway loops
         _MAX_CONSECUTIVE_TOOL_TIMEOUTS = 3  # ★ Force-stop after this many consecutive tool timeouts
-        _last_checkpoint = 0.0  # ★ Throttle crash-recovery checkpoints (epoch seconds)
         round_num = -1
+        # (exit_reason / abort_phase / consecutive_tool_timeouts /
+        #  last_checkpoint_ts now live on `rs` — slice 1 container swap)
         # ★ WHILE-loop instead of FOR — the ceiling expands when premature-close
         #   retries are used, so even max_tool_rounds=0 (no tools) gets retry
         #   iterations.  Without this, `continue` in a single-iteration for-loop
@@ -520,14 +522,14 @@ def run_task(task: dict[str, Any]) -> None:
         while round_num + 1 <= max_tool_rounds + _premature_retry_count:
             round_num += 1
             if task['aborted']:
-                _abort_detected_phase = f'loop_start_round_{round_num}'
-                _loop_exit_reason = f'aborted_at_round_{round_num}'
+                rs.abort_phase = f'loop_start_round_{round_num}'
+                rs.exit_reason = f'aborted_at_round_{round_num}'
                 _abort_ts = task.get('_abort_timestamp', 0)
                 _now = time.time()
                 _delay = f'{_now - _abort_ts:.1f}s ago' if _abort_ts else 'unknown'
                 logger.debug('[%s] Task aborted at START of round %d model=%s '
                              '(abort signal arrived %s, content so far: %dchars)',
-                             tid, round_num, model, _delay, len(task.get('content') or ''))
+                             tid, round_num, rs.model, _delay, len(task.get('content') or ''))
                 # ★ RENDER_CONTRACT Phase 3: explicit round-end boundary even on
                 #   the abort-at-start path (the round never opened, so no
                 #   round_start was emitted for it — close nothing here; the
@@ -543,7 +545,7 @@ def run_task(task: dict[str, Any]) -> None:
             append_event(task, build_event(EventType.ROUND_START, roundNum=round_num))
 
             # ★ Emit phase event so the frontend knows what's happening
-            _emit_tool_round_phase(task, assistant_msg if round_num > 0 else {}, round_num)
+            _emit_tool_round_phase(task, rs.assistant_msg if round_num > 0 else {}, round_num)
 
             # ★ Context compaction: two-layer pipeline
             #   L1: micro-compact cold tool results (every round, zero LLM cost)
@@ -784,7 +786,7 @@ def run_task(task: dict[str, Any]) -> None:
                     # snapshot sites (post-tool / final / fallback) are
                     # kind='state' (NOT LLM requests).
                     kind='request',
-                    model=model,
+                    model=rs.model,
                     # Endpoint turns (Planner/Worker/Critic) each re-run
                     # run_task with their OWN round numbering — tag the
                     # driver's phase so the Request Inspector can tell
@@ -794,9 +796,9 @@ def run_task(task: dict[str, Any]) -> None:
                     params={
                         'maxTokens': max_tokens,
                         'temperature': temperature,
-                        'thinkingEnabled': thinking_enabled,
+                        'thinkingEnabled': rs.thinking_enabled,
                         'thinkingDepth': thinking_depth,
-                        'preset': preset,
+                        'preset': rs.preset,
                         'responseFormat': response_format,
                         'stream': True,
                     },
@@ -808,14 +810,14 @@ def run_task(task: dict[str, Any]) -> None:
                     snap_evt['tools'] = _tools_this_round
                 append_event(task, snap_evt)
             except Exception:
-                logger.warning('[Task %s] messages_snapshot failed at round %d model=%s', tid, round_num + 1, model, exc_info=True)
+                logger.warning('[Task %s] messages_snapshot failed at round %d model=%s', tid, round_num + 1, rs.model, exc_info=True)
 
             body = _o.build_body(
-                model, messages,
+                rs.model, messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
-                thinking_enabled=thinking_enabled,
-                preset=preset,
+                thinking_enabled=rs.thinking_enabled,
+                preset=rs.preset,
                 thinking_depth=thinking_depth,
                 tools=_tools_this_round,
                 response_format=response_format,
@@ -832,7 +834,7 @@ def run_task(task: dict[str, Any]) -> None:
             from lib.tasks_pkg.streaming_tool_executor import StreamingToolAccumulator
             _stream_acc = StreamingToolAccumulator(
                 task, project_path=cfg.get('projectPath'),
-                tool_round_num=tool_round_num,
+                tool_round_num=rs.tool_round_num,
                 round_num=round_num,
                 project_enabled=project_enabled,
             )
@@ -863,18 +865,18 @@ def run_task(task: dict[str, Any]) -> None:
             # ★ LLM call with automatic fallback to Opus on failure
             try:
                 llm_result = _llm_call_with_fallback(
-                    task, body, model, round_num, max_tokens,
-                    tool_call_happened, tool_list, max_tool_rounds,
-                    messages, preset, thinking_enabled,
-                    accumulated_usage, api_rounds,
+                    task, body, rs.model, round_num, max_tokens,
+                    rs.tool_call_happened, tool_list, max_tool_rounds,
+                    messages, rs.preset, rs.thinking_enabled,
+                    rs.accumulated_usage, rs.api_rounds,
                     on_tool_call_ready=_stream_acc.on_tool_call_ready,
                 )
-                assistant_msg = llm_result['assistant_msg']
-                last_finish_reason = llm_result['finish_reason']
-                last_usage = llm_result['usage'] or last_usage
-                model = llm_result['model']
-                preset = llm_result['preset']
-                thinking_enabled = llm_result['thinking_enabled']
+                rs.assistant_msg = llm_result['assistant_msg']
+                rs.last_finish_reason = llm_result['finish_reason']
+                rs.last_usage = llm_result['usage'] or rs.last_usage
+                rs.model = llm_result['model']
+                rs.preset = llm_result['preset']
+                rs.thinking_enabled = llm_result['thinking_enabled']
 
                 # ── Flush DEFERRED peer delivery (never-zero fix) ──
                 #   The LLM call above succeeded, so the peer message injected
@@ -976,35 +978,35 @@ def run_task(task: dict[str, Any]) -> None:
                 # emitted during tool dispatch — e.g. report_hallucinated's
                 # `tool_hallucinated` audit — records the real model instead of
                 # an empty string and the optimizer can cluster by model.
-                if model:
-                    task['model'] = model
+                if rs.model:
+                    task['model'] = rs.model
 
                 if llm_result['_loop_action'] == 'break':
-                    _loop_exit_reason = llm_result['_loop_exit_reason']
+                    rs.exit_reason = llm_result['_loop_exit_reason']
                     break
             except Exception as e:
                 if isinstance(e, AbortedError):
                     logger.info('[%s] ✋ User abort caught at round %d', tid, round_num)
-                    _loop_exit_reason = 'user_abort'
+                    rs.exit_reason = 'user_abort'
                     break
                 raise
 
             # ★ Prompt cache break detection: track what changed between turns
             #   to diagnose unexpected cost spikes.
             #   Inspired by Claude Code's promptCacheBreakDetection.ts.
-            if task.get('convId') and last_usage:
+            if task.get('convId') and rs.last_usage:
                 _cache_break = detect_cache_break(
                     task['convId'], messages,
-                    tools=_tools_this_round, model=model,
-                    usage=last_usage,
+                    tools=_tools_this_round, model=rs.model,
+                    usage=rs.last_usage,
                 )
                 # Stamp the break reason onto the round we just recorded so
                 # the frontend cost popover can explain WHY cache_read dropped
                 # (system-prompt change, tools change, TTL expiry, …). Guard on
                 # the round number so we don't mis-attribute when this round
                 # produced no usage and api_rounds[-1] is an earlier round.
-                if _cache_break and api_rounds and api_rounds[-1].get('round') == round_num + 1:
-                    api_rounds[-1]['cacheBreak'] = _cache_break
+                if _cache_break and rs.api_rounds and rs.api_rounds[-1].get('round') == round_num + 1:
+                    rs.api_rounds[-1]['cacheBreak'] = _cache_break
                 # ★ Stamp WHAT the model did this round (the tool calls it
                 #   emitted). This is the causal driver of the NEXT round's
                 #   cache `write`: round N's assistant output (text + these
@@ -1013,15 +1015,15 @@ def run_task(task: dict[str, Any]) -> None:
                 #   names lets the cost popover explain why a round that
                 #   "generated" only a few hundred output tokens leads to a
                 #   multi-thousand-token write next round.
-                if api_rounds and api_rounds[-1].get('round') == round_num + 1:
+                if rs.api_rounds and rs.api_rounds[-1].get('round') == round_num + 1:
                     try:
-                        _tcs = (assistant_msg or {}).get('tool_calls') or []
+                        _tcs = (rs.assistant_msg or {}).get('tool_calls') or []
                         _names = [
                             (tc.get('function') or {}).get('name') or '?'
                             for tc in _tcs if isinstance(tc, dict)
                         ]
                         if _names:
-                            api_rounds[-1]['toolCalls'] = _names
+                            rs.api_rounds[-1]['toolCalls'] = _names
                     except Exception as _te:
                         logger.debug('[%s] tool-call stamp failed: %s', tid, _te)
                     # ★ Stamp the EXACT decomposition of this round's `write`
@@ -1041,18 +1043,18 @@ def run_task(task: dict[str, Any]) -> None:
                         # round-1 classifies an evicted-tail re-bill as recacheBody.
                         _prev_turn_read = (
                             get_prev_turn_cache_read(task['convId'])
-                            if len(api_rounds) < 2 else 0)
+                            if len(rs.api_rounds) < 2 else 0)
                         _wb = _compute_write_breakdown(
-                            task, api_rounds, round_num,
+                            task, rs.api_rounds, round_num,
                             prev_turn_cache_read=_prev_turn_read)
                         if _wb:
-                            api_rounds[-1]['writeBreakdown'] = _wb
+                            rs.api_rounds[-1]['writeBreakdown'] = _wb
                     except Exception as _we:
                         logger.debug('[%s] write-breakdown stamp failed: %s', tid, _we)
                 # ★ Per-round cache stats at INFO level for production visibility
                 log_round_cache_stats(
-                    task['convId'], round_num, last_usage,
-                    model=model, tid=task['id'],
+                    task['convId'], round_num, rs.last_usage,
+                    model=rs.model, tid=task['id'],
                 )
 
             # ★ Settle orphan early-announced rounds left by a discarded stream
@@ -1067,13 +1069,13 @@ def run_task(task: dict[str, Any]) -> None:
             #   per-round complement of the task-end dangling sweep — BEFORE
             #   parse_tool_calls so the orphan never reaches the render/persist
             #   path unsettled.
-            _stream_acc.reconcile_announced_rounds(assistant_msg)
+            _stream_acc.reconcile_announced_rounds(rs.assistant_msg)
 
             # ★ Read back updated tool_round_num from streaming accumulator
             #   (tool_start events emitted during streaming already consumed
             #   round numbers, so parse_tool_calls must start from here).
             if _stream_acc.announced_tc_map:
-                tool_round_num = _stream_acc.tool_round_num
+                rs.tool_round_num = _stream_acc.tool_round_num
 
             # ★ Inject pre-computed streaming tool results into dedup cache.
             #   execute_tool_pipeline will find these and skip re-execution.
@@ -1085,26 +1087,26 @@ def run_task(task: dict[str, Any]) -> None:
 
             # ★ Post-stream analysis: premature close, abort, normal exit
             stream_decision = analyse_stream_result(
-                assistant_msg, last_finish_reason, task, tid, model,
+                rs.assistant_msg, rs.last_finish_reason, task, tid, rs.model,
                 round_num, _premature_retry_count, messages,
-                usage=last_usage,
+                usage=rs.last_usage,
             )
             _premature_retry_count = stream_decision['premature_retry_count']
-            last_finish_reason = stream_decision['last_finish_reason']
+            rs.last_finish_reason = stream_decision['last_finish_reason']
             if stream_decision['abort_detected_phase']:
-                _abort_detected_phase = stream_decision['abort_detected_phase']
+                rs.abort_phase = stream_decision['abort_detected_phase']
             if stream_decision['action'] == 'break':
-                _loop_exit_reason = stream_decision['loop_exit_reason']
+                rs.exit_reason = stream_decision['loop_exit_reason']
                 break
             if stream_decision['action'] == 'continue':
                 continue
 
             # ── Per-round diagnostic: log finish_reason for every tool round ──
-            _round_content = len((assistant_msg or {}).get('content', '') or '')
-            _round_tcs = len((assistant_msg or {}).get('tool_calls', []))
+            _round_content = len((rs.assistant_msg or {}).get('content', '') or '')
+            _round_tcs = len((rs.assistant_msg or {}).get('tool_calls', []))
             logger.info('[%s] conv=%s Round %d result: finish_reason=%s model=%s '
                         'content=%dchars tool_calls=%d → proceeding to tool execution',
-                        tid, task.get('convId', ''), round_num + 1, last_finish_reason, model,
+                        tid, task.get('convId', ''), round_num + 1, rs.last_finish_reason, rs.model,
                         _round_content, _round_tcs)
 
             # ── max_budget_usd gate (Claude Agent SDK parity) ──
@@ -1113,21 +1115,21 @@ def run_task(task: dict[str, Any]) -> None:
             if _max_budget > 0:
                 from lib.cost_estimator import check_budget
                 _exceeded, _cost, _reason = check_budget(
-                    task, accumulated_usage, model, _max_budget,
+                    task, rs.accumulated_usage, rs.model, _max_budget,
                     round_num=round_num,
                 )
                 if _exceeded:
-                    last_finish_reason = 'budget_exceeded'
+                    rs.last_finish_reason = 'budget_exceeded'
                     from lib.error_envelope import make_envelope as _make_env
                     task['error'] = _make_env(
                         'budget_exceeded',
                         detail=_reason,
-                        model=model,
+                        model=rs.model,
                         context='budget-gate',
                         source='orchestrator',
                         raw=f'cost_usd={_cost:.6f} max={_max_budget:.6f}',
                     )
-                    _loop_exit_reason = f'budget_exceeded_round_{round_num}_${_cost:.4f}'
+                    rs.exit_reason = f'budget_exceeded_round_{round_num}_${_cost:.4f}'
                     append_event(task, build_event(EventType.ROUND_END,
                                                    roundNum=round_num, reason='budget'))
                     break
@@ -1135,23 +1137,23 @@ def run_task(task: dict[str, Any]) -> None:
             # ── Tool round budget check ──
             if round_num >= max_tool_rounds:
                 # Safety ceiling: tool round budget exhausted
-                last_finish_reason = 'tool_rounds_exhausted'
+                rs.last_finish_reason = 'tool_rounds_exhausted'
                 from lib.error_envelope import make_envelope as _make_env
                 task['error'] = _make_env(
                     'tool_rounds_exhausted',
                     detail=f'Tool call limit reached ({max_tool_rounds} rounds).',
-                    model=model,
+                    model=rs.model,
                     context='tool-budget',
                     source='orchestrator',
                     raw=f'max_tool_rounds={max_tool_rounds}',
                 )
                 logger.warning('[Task %s] conv=%s ⚠️ Tool rounds exhausted at round %d/%d', task['id'][:8], task.get('convId', ''), round_num+1, max_tool_rounds)
-                _loop_exit_reason = f'tool_rounds_exhausted_{round_num}'
+                rs.exit_reason = f'tool_rounds_exhausted_{round_num}'
                 append_event(task, build_event(EventType.ROUND_END,
                                                roundNum=round_num, reason='budget'))
                 break
 
-            tool_call_happened = True
+            rs.tool_call_happened = True
             # ★ SINGLE SOURCE: assemble the live-tail assistant/tool_call
             #   message through build_assistant_tool_call_message — the SAME
             #   function the replay path (_reconstruct_tool_call_messages) uses.
@@ -1167,10 +1169,10 @@ def run_task(task: dict[str, Any]) -> None:
             from lib.tasks_pkg.conv_message_builder import (
                 build_assistant_tool_call_message)
             clean_msg = build_assistant_tool_call_message(
-                tool_calls=assistant_msg['tool_calls'],
-                content=assistant_msg.get('content'),
-                reasoning_content=assistant_msg.get('reasoning_content'),
-                thinking_signature=assistant_msg.get('thinking_signature'))
+                tool_calls=rs.assistant_msg['tool_calls'],
+                content=rs.assistant_msg.get('content'),
+                reasoning_content=rs.assistant_msg.get('reasoning_content'),
+                thinking_signature=rs.assistant_msg.get('thinking_signature'))
             messages.append(clean_msg)
 
             # ★ Discard the inter-round narration this round streamed before
@@ -1185,7 +1187,7 @@ def run_task(task: dict[str, Any]) -> None:
             #   inside the helper; a no-op when autoTranslate is off.
             try:
                 from lib.translate import submit_round_segment
-                submit_round_segment(task, round_num, assistant_msg.get('content') or '')
+                submit_round_segment(task, round_num, rs.assistant_msg.get('content') or '')
             except Exception as _ite:
                 logger.debug('[%s] incremental translate submit failed (non-fatal): %s', tid, _ite)
 
@@ -1198,8 +1200,8 @@ def run_task(task: dict[str, Any]) -> None:
 
             # ── Abort check before tool execution ──
             if task['aborted']:
-                _abort_detected_phase = f'before_tool_exec_round_{round_num}'
-                _loop_exit_reason = f'aborted_before_tools_round_{round_num}'
+                rs.abort_phase = f'before_tool_exec_round_{round_num}'
+                rs.exit_reason = f'aborted_before_tools_round_{round_num}'
                 # ★ Remove the assistant message with tool_calls that we just
                 #   appended (line ~879) — since we're skipping tool execution,
                 #   leaving it creates orphaned tool_use blocks without matching
@@ -1221,8 +1223,8 @@ def run_task(task: dict[str, Any]) -> None:
             # ── Phase 1: Parse all tool_calls ──
             #   Pass early_announced so parse_tool_calls skips re-emitting
             #   tool_start events that were already sent during streaming.
-            parsed_tcs, tool_round_num = parse_tool_calls(
-                assistant_msg, task, round_num, tool_round_num, project_enabled,
+            parsed_tcs, rs.tool_round_num = parse_tool_calls(
+                rs.assistant_msg, task, round_num, rs.tool_round_num, project_enabled,
                 early_announced=_stream_acc.announced_tc_map,
             )
 
@@ -1280,7 +1282,7 @@ def run_task(task: dict[str, Any]) -> None:
             task['_dispatch_heartbeat'] = time.time()
             _tool_timed_out = execute_tool_pipeline(
                 task, parsed_tcs, cfg, project_path, project_enabled,
-                tool_list, messages, all_search_results_text, round_num, model,
+                tool_list, messages, all_search_results_text, round_num, rs.model,
             )
 
             # Clean up live messages ref after tool execution
@@ -1288,28 +1290,28 @@ def run_task(task: dict[str, Any]) -> None:
 
             # ── Phase 4b: Consecutive tool-timeout circuit breaker ──
             if _tool_timed_out:
-                _consecutive_tool_timeouts += 1
+                rs.consecutive_tool_timeouts += 1
                 logger.warning(
                     '[%s] conv=%s Tool timeout at round %d (%d/%d consecutive) model=%s',
-                    tid, task.get('convId', ''), round_num + 1, _consecutive_tool_timeouts,
-                    _MAX_CONSECUTIVE_TOOL_TIMEOUTS, model)
-                if _consecutive_tool_timeouts >= _MAX_CONSECUTIVE_TOOL_TIMEOUTS:
+                    tid, task.get('convId', ''), round_num + 1, rs.consecutive_tool_timeouts,
+                    _MAX_CONSECUTIVE_TOOL_TIMEOUTS, rs.model)
+                if rs.consecutive_tool_timeouts >= _MAX_CONSECUTIVE_TOOL_TIMEOUTS:
                     logger.error(
                         '[%s] conv=%s ⚠️ FORCE STOP: %d consecutive tool timeouts — breaking loop to prevent runaway task. model=%s',
-                        tid, task.get('convId', ''), _consecutive_tool_timeouts, model)
+                        tid, task.get('convId', ''), rs.consecutive_tool_timeouts, rs.model)
                     from lib.error_envelope import make_envelope as _make_env
                     task['error'] = _make_env(
                         'tool_timeout',
-                        detail=f'{_consecutive_tool_timeouts} consecutive tool execution timeouts.',
-                        model=model,
+                        detail=f'{rs.consecutive_tool_timeouts} consecutive tool execution timeouts.',
+                        model=rs.model,
                         context='tool-loop',
                         source='orchestrator',
-                        raw=f'consecutive_tool_timeouts={_consecutive_tool_timeouts}',
+                        raw=f'consecutive_tool_timeouts={rs.consecutive_tool_timeouts}',
                     )
-                    _loop_exit_reason = f'consecutive_tool_timeouts_{_consecutive_tool_timeouts}'
+                    rs.exit_reason = f'consecutive_tool_timeouts_{rs.consecutive_tool_timeouts}'
                     break
             else:
-                _consecutive_tool_timeouts = 0  # Reset on successful tool execution
+                rs.consecutive_tool_timeouts = 0  # Reset on successful tool execution
 
             # ══════════════════════════════════════════
             #  ★ Crash-recovery checkpoint: persist partial state to DB
@@ -1318,10 +1320,10 @@ def run_task(task: dict[str, Any]) -> None:
             # to task_results + conversation so data survives a server crash.
             # Throttled to at most once every 10 seconds to avoid DB pressure.
             _now = time.time()
-            if _now - _last_checkpoint >= 5:
+            if _now - rs.last_checkpoint_ts >= 5:
                 try:
                     checkpoint_task_partial(task)
-                    _last_checkpoint = _now
+                    rs.last_checkpoint_ts = _now
                 except Exception as e:
                     logger.warning('[%s] Checkpoint after round %d failed (non-fatal): %s', tid, round_num + 1, e, exc_info=True)
 
@@ -1343,21 +1345,21 @@ def run_task(task: dict[str, Any]) -> None:
         finalize_after_loop(
             task,
             cfg=cfg, tid=tid,
-            model=model, preset=preset,
+            model=rs.model, preset=rs.preset,
             thinking_depth=thinking_depth,
-            thinking_enabled=thinking_enabled,
+            thinking_enabled=rs.thinking_enabled,
             temperature=temperature, max_tokens=max_tokens,
             messages=messages, original_messages=original_messages,
-            tool_list=tool_list, assistant_msg=assistant_msg,
+            tool_list=tool_list, assistant_msg=rs.assistant_msg,
             round_num=round_num,
-            accumulated_usage=accumulated_usage, api_rounds=api_rounds,
-            last_finish_reason=last_finish_reason, last_usage=last_usage,
-            tool_call_happened=tool_call_happened,
+            accumulated_usage=rs.accumulated_usage, api_rounds=rs.api_rounds,
+            last_finish_reason=rs.last_finish_reason, last_usage=rs.last_usage,
+            tool_call_happened=rs.tool_call_happened,
             all_search_results_text=all_search_results_text,
             project_path=project_path, project_enabled=project_enabled,
             keep_tool_history=_keep_tool_history, conv_id=_conv_id,
-            loop_exit_reason=_loop_exit_reason,
-            abort_detected_phase=_abort_detected_phase,
+            loop_exit_reason=rs.exit_reason,
+            abort_detected_phase=rs.abort_phase,
         )
     except Exception as e:
         # FATAL-path handling extracted to

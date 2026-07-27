@@ -364,6 +364,70 @@ def test_execute_tools_batch_hook_replaces_per_tool_loop():
     _ok('execute_tools batch hook fires once with the full list; per-tool skipped')
 
 
+def test_tool_timeout_breaker_halts_at_threshold():
+    """max_consecutive_tool_timeouts: consecutive timed_out batch notes halt
+    the loop with exit_reason 'tool_timeout'; a halted round fires NO
+    on_round_end (mirrors orchestrator: breaker break precedes checkpoint)."""
+    from lib.agent_loop import AbortSignal, run_agent_loop
+    disp = {'n': 0}
+    round_ends = []
+
+    def dispatch(rnd, tools):
+        disp['n'] += 1
+        return _mk_msg([{'id': 'x', 'function': {'name': 'web_search', 'arguments': '{}'}}])
+
+    out = run_agent_loop(abort=AbortSignal.never(), max_tool_rounds=99,
+                         round_tools=['T'], dispatch=dispatch,
+                         execute_tools=lambda rnd, tcs: {'timed_out': True},
+                         max_consecutive_tool_timeouts=2,
+                         on_round_end=lambda rnd: round_ends.append(rnd))
+    assert out.halted and out.exit_reason == 'tool_timeout', out.exit_reason
+    assert out.consecutive_tool_timeouts == 2
+    assert disp['n'] == 2 and out.rounds == 2
+    assert round_ends == [0], f'round-ends {round_ends} — halted round must NOT checkpoint'
+    _ok('timeout breaker: 2 consecutive timeouts halt, halted round skips on_round_end')
+
+
+def test_tool_timeout_breaker_resets_on_clean_round():
+    """A round whose batch note is falsy resets the consecutive count —
+    isolated timeouts never trip the breaker."""
+    from lib.agent_loop import AbortSignal, run_agent_loop
+    notes = iter([{'timed_out': True}, None, {'timed_out': True}, None])
+    seq = iter([
+        _mk_msg([{'id': 'a', 'function': {'name': 'web_search', 'arguments': '{}'}}]),
+        _mk_msg([{'id': 'b', 'function': {'name': 'web_search', 'arguments': '{}'}}]),
+        _mk_msg([{'id': 'c', 'function': {'name': 'web_search', 'arguments': '{}'}}]),
+        _mk_msg([{'id': 'd', 'function': {'name': 'web_search', 'arguments': '{}'}}]),
+        _mk_msg(None),
+    ])
+    out = run_agent_loop(abort=AbortSignal.never(), max_tool_rounds=9,
+                         round_tools=['T'], dispatch=lambda rnd, tools: next(seq),
+                         execute_tools=lambda rnd, tcs: next(notes),
+                         max_consecutive_tool_timeouts=2)
+    assert out.completed and out.rounds == 5, out.exit_reason
+    assert out.consecutive_tool_timeouts == 0  # final tools round note was None
+    _ok('timeout breaker: clean round resets the consecutive count')
+
+
+def test_on_round_end_fires_only_after_executed_tool_rounds():
+    """on_round_end fires once per tools-executed round — NOT on the final
+    answer round and NOT on an aborted round."""
+    from lib.agent_loop import AbortSignal, run_agent_loop
+    ends = []
+    seq = iter([
+        _mk_msg([{'id': 'a', 'function': {'name': 'web_search', 'arguments': '{}'}}]),
+        _mk_msg([{'id': 'b', 'function': {'name': 'web_search', 'arguments': '{}'}}]),
+        _mk_msg(None),
+    ])
+    out = run_agent_loop(abort=AbortSignal.never(), max_tool_rounds=9,
+                         round_tools=['T'], dispatch=lambda rnd, tools: next(seq),
+                         execute_tools=lambda rnd, tcs: None,
+                         on_round_end=lambda rnd: ends.append(rnd))
+    assert out.completed and out.rounds == 3
+    assert ends == [0, 1], ends
+    _ok('on_round_end: fires per tools round, not on the final-answer round')
+
+
 def main():
     print('\n\033[36m═══ agent_loop.py Unit Tests ═══\033[0m\n')
     tests = [
@@ -386,6 +450,9 @@ def main():
         test_before_round_hook_halts_with_reason,
         test_tools_terminal_round_off_offers_tools_every_round,
         test_execute_tools_batch_hook_replaces_per_tool_loop,
+        test_tool_timeout_breaker_halts_at_threshold,
+        test_tool_timeout_breaker_resets_on_clean_round,
+        test_on_round_end_fires_only_after_executed_tool_rounds,
     ]
     for fn in tests:
         fn()

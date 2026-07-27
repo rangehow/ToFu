@@ -1,5 +1,29 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-27(续3) — 工具集中管理·`run_command` 输出折叠器:**owner 连续两轮否掉我的实测口径,把 P0 从「丢数据」改判成「造假事实」**;顺带抓出一条凭空造硬件的假归因(commit 待填;新套件 **8/8**,**NEUTER×4 全咬**,相邻环 **84/84**,干净 committed worktree 复验 **35/35**)
+
+- **★ 本轮最值钱的不是修了什么,而是我的度量口径被推翻了两次,而两次都是我自己在用合成 fixture 冒充生产行为。**
+  - **第一次:** 我报「折叠器丢 **99.98%**」,证据是一份 5,000 行的 fixture ——「NEEDLE line N + 180 个相同的 x」。owner 指出**指纹几乎完全一致才导致整组被折**,这只证明「构造出极端相似输入时会丢 99.98%」。
+  - **第二次(同一个坑,换了个壳):** 我改用「真实命令」重测,报 `ls -la` 大目录丢 **99.9%**。owner 查了那个目录,里面是 3,000 个 `file_0000_nnnnnnnn….txt` —— **文件名长度和字符全同、只有序号在变**,而 `_line_fingerprint` 恰好把数字换成 `#`。**我只是把合成输入从「一模一样的行」换成了「一模一样的文件名模板」。**
+  - **真实语料实测(owner 复跑,10 条):`ls -la tests/`(1,253 行真文件名)**0.3%** · `ls -la /usr/bin`(791 行)0.4% · `pip list`(463 个真包)**0.0%** · `git log --stat -30`(910 行)0.0% · `df -h` 0.0% · `ps aux` **11.1%**(唯一会折的)。**真实目录列表是 0.3%,不是 99.9%** —— 真文件名的字母部分各不相同,指纹就不同,整组不会被折。
+  - **判据(写死):合成输入上的压缩率是上界,不是生产数字。** 本条 JOURNAL 里 99.98% / 99.9% 两个数**均为合成输入下的上界**,生产口径是上面那 10 条 **0.0%–11.1%**。**禁止**将前两个数以生产行为的身份被后人引用 —— 与 charter 刚立的「注释里的假数字」棘轮同族,JOURNAL 里的假数字同样会被当依据。
+  - **结论:P0 因此从「加取回路径 + 动折叠结构」缩小到「只修措辞与归因」。** 没有任何真实输出出现高压缩率,`_line_fingerprint` 的分组算法**不动**(10 条实测证明它不滥杀)。
+
+- **★ 但在真实 `ps aux` 上抓到一条比措辞更严重的缺陷:折叠器凭空造出不存在的硬件。** `_DEVICE_RE` 把 `worker`/`rank` 与 `cuda`/`gpu` 放在**同一个字符类**里,于是:
+  ```
+  postgres: io worker 0 / 1 / 2   →  _extract_device_ids → [0,1,2]
+                                  →  … (×3 devices on cuda:0-2) …
+  ```
+  **三个 postgres IO 进程被渲染成三块 CUDA 卡,且原始 3 行被替换成 1 行 + 一句假的设备说明。** 这不是丢数据,是**造事实** —— 与 charter 记的 `read_files` 800k 硬顶「把正常批量读诬告成 base64 泄漏」是**同一反模式的第三例**:一条措辞精确、可信、但错误的诊断,正好是「让模型识别真问题」的反面。
+- **`similar lines` 也确实在说假话,且被折的行 100% 各不相同。** 7 个折叠组逐组数 distinct:3/3、6/6、11/11、14/14、7/7 —— **7 组全不同**(PID/端口/RSS/时间都不一样)。
+- **第三个缺口:折叠总量只进 `logger.debug`,模型看不到。** 每个标记只说自己那一组,**没有任何地方说总量**,模型无法判断拿到的是全貌还是片段。
+
+- **三点修法(结构不动):** ①归因按**证据分三层** —— 显式加速器词(`cuda/gpu/nvidia/hip/rocm/xpu`)才允许 `cuda:N-M`;`worker/rank/shard` 只说「N 个编号变体」;都没有则只陈述分组规则。②措辞改为「+N lines folded: same structure, differing values」,不再声称相似。③折叠总量写进结果文本(仅在真发生折叠时追加,未折叠输出保持字节不变)。
+- **NEUTER×4 各咬各的:** ①恢复 `similar` → 2 条红;②加速器门控回退成 `_extract_device_ids` → 假 `cuda:` 那条红;③摘掉结果里的总量 → 计数那条红;④**补集**:摘掉真 GPU 的 `cuda:` 归因 → 真加速器那条红。**④ 是必需的** —— 只有「无 GPU 不许说 cuda」这一个方向时,把整个加速器分支删掉也能保持绿。
+- **★ 守卫的前置条件先红了一次,而该改的是守卫不是产品。** 我写「语料不得含 `cuda|nvidia|\bgpu\b`」,结果被 chromium 的 `--disable-gpu` 命中。查明**裸标志没有序号,根本无法产出 `cuda:N` 声明**,原断言比真实要求更宽 —— 收窄为「不得含**带序号的**加速器证据」,且改用**生产的 `_extract_accelerator_ids` 判定**,守卫与产品不可能对同一件事有两套定义。(同族第二次:`ps aux` 的 `_extract_device_ids` 在 `lib/log_clean/_helpers.py` 还有**第二份同款正则副本**,该文件的同名假归因未修,已记为独立票,不在本批写集。)
+- **语料纪律:** 固定语料是**真实捕获**(`tests/fixtures/real_ps_aux.txt` 248 行 / `real_ls_la_tests.txt` 1,253 行),不再造 `file_NNNN` 模板串;且**先验扫描面**——实测 247/1,251 行真的过了 `_line_fingerprint` 的 20 字符地板、最大同指纹连续组 14 与 4,否则会写出一条「怎么改都绿」的空转守卫(charter 已记 7 次的失效形态)。
+- **未做:** `doc_parser` 的 99.7%(该数据来自**真文档**,可信)按 owner 定的顺序留下一轮动结构。
+
 ### 2026-07-27(续2) — ★ 我上一轮的结论被自己推翻:**「中国 OTA 不会开放消费侧」是从 2 家样本过度归纳的假命题**,途牛+飞猪实测都对个人自助开放且带下单闭环(epic `pt_6dcdc44482de4fe7`;commit `57086380`,3 文件 +132/-35;套件 **28/28**,**NEUTER×2 全咬**,MCP+skills 环 **184 过 9 skip**)
 
 - **本轮是复查一张我自己开的商务准入票,结果推翻了开票时的推理。** 上一轮我写下「OTA 的核心资产是库存和用户,开放 MCP 等于把入口让给别人」——这句**从携程+美团两家的观察外推到整个行业**,而它是错的。实测:**途牛**(2026-03 上线 MCP 开放平台)与**飞猪**(阿里,官方 skill)**都对个人开发者自助发 Key、都带真实下单链路**。途牛品类最全(酒店/机票/火车/门票/**邮轮**/**度假**六域),下单返回 `paymentUrl`;飞猪八个搜索命令、零配置可跑,填 Key 后结果更完整。

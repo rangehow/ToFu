@@ -127,9 +127,26 @@ def _extract_progress_label(line):
 
 
 # ── Device / worker detection for multi-GPU annotation ──────────
+# Kept as the historical union for the exported-symbol contract; the two
+# regexes below are what the collapse path actually consults.
 _DEVICE_RE = re.compile(
     r'(?:cuda|gpu|device|rank|worker)[\s:_]*(\d+)', re.IGNORECASE
 )
+
+# ★ Only these words are EVIDENCE of a real compute accelerator, and only
+# they may licence a ``cuda:`` prefix in the fold marker. ``worker``/``rank``
+# deliberately excluded: real ``ps aux`` output contains lines like
+# "postgres: io worker 0/1/2", which the old union regex turned into
+# "×3 devices on cuda:0-2" — three database processes reported as three
+# GPUs. A fold marker that invents hardware is worse than no marker at all,
+# so accelerator attribution now requires an accelerator word.
+_ACCEL_RE = re.compile(r'(?:cuda|gpu|nvidia|hip|rocm|xpu)[\s:_]*(\d+)',
+                       re.IGNORECASE)
+
+# Numbered-variant words: enough to say "these lines differ by an index",
+# NOT enough to name the hardware.
+_ORDINAL_RE = re.compile(r'(?:device|rank|worker|shard|replica)[\s:_]*(\d+)',
+                         re.IGNORECASE)
 
 
 def _extract_progress_pct(line):
@@ -146,10 +163,40 @@ def _extract_device_ids(lines):
 
     Looks for patterns like cuda:0, GPU 3, Worker 5, rank 2.
     Returns sorted list of unique integer IDs, or empty list.
+
+    NOTE: this is the permissive union (accelerators AND plain numbered
+    workers). It does NOT establish that a GPU is involved — use
+    :func:`_extract_accelerator_ids` for anything that renders a ``cuda:``
+    label, or the marker will claim hardware that isn't there.
     """
     ids = set()
     for ln in lines:
         for m in _DEVICE_RE.finditer(ln):
+            ids.add(int(m.group(1)))
+    return sorted(ids)
+
+
+def _extract_accelerator_ids(lines):
+    """Extract IDs backed by EXPLICIT accelerator evidence (cuda/gpu/…).
+
+    Returns sorted unique ints, or [] when the lines carry no accelerator
+    word — in which case the caller must not emit a ``cuda:`` label.
+    """
+    ids = set()
+    for ln in lines:
+        for m in _ACCEL_RE.finditer(ln):
+            ids.add(int(m.group(1)))
+    return sorted(ids)
+
+
+def _extract_ordinal_ids(lines):
+    """Extract IDs from plain numbered-variant words (worker/rank/shard/…).
+
+    Used to say "N numbered variants" WITHOUT naming any hardware.
+    """
+    ids = set()
+    for ln in lines:
+        for m in _ORDINAL_RE.finditer(ln):
             ids.add(int(m.group(1)))
     return sorted(ids)
 
@@ -334,15 +381,32 @@ def _clean_command_output(output):
                 result.extend(group)
             else:
                 result.append(group[0])
-                device_ids = _extract_device_ids(group)
-                if len(device_ids) > 1:
-                    dev_range = _format_cuda_device_range(device_ids)
+                # ★ Attribution is gated on EVIDENCE, not on "some word had a
+                # number after it". Three tiers, narrowest first:
+                #   1. explicit accelerator word → may say cuda:N-M
+                #   2. plain numbered variant (worker/rank/…) → count only
+                #   3. neither → state the grouping rule, claim nothing
+                # Tier 1 vs 2 matters: real `ps aux` has "postgres: io
+                # worker 0/1/2", and calling that three CUDA devices is an
+                # invented fact, not a lossy summary.
+                accel_ids = _extract_accelerator_ids(group)
+                ord_ids = _extract_ordinal_ids(group)
+                if len(accel_ids) > 1:
+                    dev_range = _format_cuda_device_range(accel_ids)
                     result.append(
-                        f'  … (×{len(device_ids)} devices on '
-                        f'{dev_range}) …')
+                        f'  … (+{n - 1} lines folded, '
+                        f'×{len(accel_ids)} devices on {dev_range}) …')
+                elif len(ord_ids) > 1:
+                    result.append(
+                        f'  … (+{n - 1} lines folded, '
+                        f'{len(ord_ids)} numbered variants) …')
                 else:
+                    # NOT "similar lines": these lines share a structural
+                    # fingerprint (digit runs normalised to #) and their
+                    # non-numeric text may differ completely.
                     result.append(
-                        f'  … (and {n - 1} more similar lines) …')
+                        f'  … (+{n - 1} lines folded: same structure, '
+                        f'differing values) …')
                 total_compressed += n - 1
             i = j
             continue
@@ -351,6 +415,18 @@ def _clean_command_output(output):
         i += 1
 
     cleaned = '\n'.join(result)
+    # ★ The fold total must reach the MODEL, not just the log. Without it a
+    # reader cannot tell whether they are looking at the whole output or a
+    # fraction of it — each marker states its own group, but nothing states
+    # the aggregate. Only emitted when folding actually happened, so
+    # untouched output stays byte-identical.
+    if total_compressed > 0:
+        kept = cleaned.count('\n') + 1
+        cleaned += (
+            f'\n[output folded: {total_compressed} of '
+            f'{len(lines)} lines omitted, {kept} shown — consecutive lines '
+            f'sharing a structural fingerprint were grouped]'
+        )
     if total_compressed > 5:
         logger.debug('_clean_command_output: compressed %d repetitive lines '
                      '(%d → %d chars)', total_compressed, original_len,

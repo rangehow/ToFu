@@ -25,6 +25,7 @@ KINDS = frozenset({
     'internal', 'generic',
     'bad_request', 'upstream_error', 'worker_lost', 'budget_exceeded',
     'content_refused',
+    'tool_not_available',
 })
 
 # Default severities — warnings are recoverable / user-actionable, errors
@@ -35,6 +36,7 @@ _WARNING_KINDS = frozenset({
     'premature_close', 'abnormal_stop',
     'aborted', 'server_offline',
     'upstream_error', 'worker_lost', 'budget_exceeded', 'content_refused',
+    'tool_not_available',
 })
 
 # Kinds where retrying THE SAME REQUEST is genuinely likely to help
@@ -245,4 +247,24 @@ _TITLES: dict[str, tuple[str, str, str, str]] = {
                             '• The background worker produced no progress for too long and was declared dead — '
                             'retrying the task is safe; partial output may have been lost.\n'
                             '• If it recurs, check the server logs (logs/error.log) to see whether the process was killed.'),
+    # A tool the model kept calling is NOT in this turn's dispatched toolset, so
+    # the call could never execute and retrying is guaranteed to fail again
+    # (docs/INTENT_STALL_MEASUREMENT.md §4 measured 3 such tasks in 7 days:
+    # project_board_complete / code_exec). Before this kind they reported
+    # status=done + error=none — a task that substantively FAILED looked like a
+    # success and the user only saw the conversation stop mid-thought. The hint
+    # points at the TOOLSET, never at Settings → Keys (charter forbids that
+    # misdirection: 46 wrong navigations/day measured in production).
+    'tool_not_available': ('⚠️ 模型调用了本轮不存在的工具，任务未完成',
+                            'Model called a tool that is not available this turn',
+                            '• 这不是 Key / 配额问题——模型反复调用了一个**本轮工具集里没有**的工具，'
+                            '该调用从未执行，任务因此停在半途。展开下方详情可看到具体工具名。\n'
+                            '• 常见原因：该能力在本会话未开启（如代码执行 / 浏览器 / 项目工具）。'
+                            '在工具栏打开对应开关后重试，或直接告诉模型改用已有的工具。',
+                            '• This is NOT a key / quota problem — the model repeatedly called a tool that '
+                            'is **not in this turn\'s toolset**, so it never executed and the task stopped '
+                            'part-way. Expand the detail below for the exact tool name.\n'
+                            '• Usually the capability is switched OFF for this conversation (e.g. code '
+                            'execution / browser / project tools). Enable it in the toolbar and retry, or '
+                            'tell the model to use a tool it actually has.'),
 }

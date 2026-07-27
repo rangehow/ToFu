@@ -46,6 +46,7 @@ const ERROR_KIND_LABELS = {
   upstream_error:        'Upstream error',
   worker_lost:           'Worker lost',
   budget_exceeded:       'Budget exceeded',
+  tool_not_available:    'Tool not available',
 };
 
 function isErrorEnvelope(obj) {

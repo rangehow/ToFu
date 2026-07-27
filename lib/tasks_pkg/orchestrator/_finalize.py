@@ -742,6 +742,58 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
         logger.warning('[%s] dangling-tool-round sweep failed (non-fatal): %s',
                        tid, _sweep_err, exc_info=True)
 
+    # ── Visible outcome for an unavailable-tool dead end (pt_88791cb08cb2495c) ──
+    #   A tool the model does NOT have this turn is hard-rejected and never
+    #   runs. If the turn then ends with that rejection as its last act, the
+    #   task substantively FAILED — yet it used to settle status=done,
+    #   error=none, so the user saw only the conversation stopping mid-thought
+    #   while the API reported success. docs/INTENT_STALL_MEASUREMENT.md §4
+    #   measured 3 such tasks in 7 days (project_board_complete / code_exec);
+    #   the standing CLOSURE-PENDING note atop JOURNAL.md is a live victim —
+    #   work finished, only the impossible call missing, nobody informed.
+    #
+    #   The criterion is STRUCTURAL, deliberately not the loop-breaker's
+    #   no-suggestion gate: measurement showed `code_exec` DOES get near-miss
+    #   suggestions, so gating on their absence would have missed 2 of the 3
+    #   real cases. What makes it unrecoverable is that the tool is absent for
+    #   the whole turn AND the turn produced no tool result afterwards.
+    #
+    #   §4 classifies this as NON-RETRYABLE and excludes it from the
+    #   intent-stall nudge on purpose: re-prompting can only make the model
+    #   reach for the same absent tool again.
+    if not task.get('error'):
+        try:
+            _rej_tail = None
+            for _entry in reversed(task.get('toolRounds') or []):
+                if _entry.get('status') == 'rejected' and _entry.get('_rejected'):
+                    _rej_tail = _entry
+                    break
+                if _entry.get('status') in ('done', 'error'):
+                    # A real tool ran after the rejection — the model recovered.
+                    break
+            if _rej_tail is not None:
+                _rj = _rej_tail.get('_rejected') or {}
+                _bad = _rj.get('attempted') or _rej_tail.get('tool') or 'unknown'
+                from lib.error_envelope import make_envelope
+                task['error'] = make_envelope(
+                    'tool_not_available',
+                    detail=(f'The model tried to call `{_bad}`, which is not in '
+                            f'this turn\'s toolset, and the turn ended without '
+                            f'any tool running afterwards.'),
+                    model=model or '',
+                    context='tool-dispatch',
+                    source='orchestrator._finalize',
+                    raw=f'attempted={_bad!r}',
+                )
+                logger.warning('[%s] conv=%s Task ended on an unavailable-tool '
+                               'rejection (%r) — surfacing tool_not_available '
+                               'instead of a silent success',
+                               tid, task.get('convId', '') or '', _bad)
+        except Exception as _e_tna:
+            logger.warning('[%s] tool_not_available classification failed '
+                           '(task still settles, reason renders generic): %s',
+                           tid, _e_tna, exc_info=True)
+
     # ── Fold in compaction's OWN LLM usage ──
     # L2 smart-summary and the advanced-host summarizers (OpenCode/Hermes/
     # OpenClaw arms) call the LLM but historically discarded that usage, so

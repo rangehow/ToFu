@@ -299,6 +299,30 @@ def test_uv_path_verifies_chromium_actually_launches():
     _ok('uv path verifies Chromium launches + renders text, with actionable recovery')
 
 
+def test_healthcheck_probe_actually_launches_chromium():
+    """`import playwright` is not evidence the browser WORKS: it stays green both
+    when Chromium cannot launch (missing libatk) and when it launches with zero
+    fonts (blank-but-styled screenshots). The runtime probe must really launch
+    it and measure a glyph, and must self-export the env's native paths — a
+    bare `python3 healthcheck.py` never ran server.py's boot exports, so
+    without that it would report a FALSE failure.
+    """
+    with open(os.path.join(ROOT, 'healthcheck.py'), 'r', encoding='utf-8') as f:
+        text = f.read()
+    probe = text[text.index('# 5. Optional browser engine'):]
+    probe = probe[:probe.index("print(f\"\\n{C.BOLD}")]
+    assert 'chromium.launch' in probe, \
+        'healthcheck browser probe never launches Chromium (import-only check)'
+    assert 'measureText' in probe, \
+        'healthcheck probe does not measure a glyph (misses the zero-fonts failure)'
+    assert '_tofu_export_env_native_paths' in probe, \
+        'healthcheck probe does not export the env native paths — false failure'
+    # The two distinct failure modes must be reported distinctly, not merged.
+    assert 'renders NO text' in probe, 'no distinct zero-fonts diagnosis'
+    assert 'cannot launch' in probe, 'no distinct launch-failure diagnosis'
+    _ok('healthcheck probe really launches Chromium + measures a glyph')
+
+
 def main():
     print()
     print(_color('═══ install.sh uv fast-path / conda-fallback Guard Tests ═══', '36'))
@@ -319,6 +343,7 @@ def main():
         test_fontconfig_exported_when_no_system_config,
         test_conda_path_installs_fonts_for_chromium,
         test_uv_path_verifies_chromium_actually_launches,
+        test_healthcheck_probe_actually_launches_chromium,
     ]
     for fn in tests:
         try:

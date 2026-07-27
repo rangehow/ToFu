@@ -213,11 +213,56 @@ if '--runtime' in sys.argv:
              "Settings → Providers")
 
     # 5. Optional browser engine (JS-rendered page fetching)
+    #
+    # `import playwright` is NOT evidence the browser works: it stays green when
+    # Chromium cannot launch at all (missing libatk/libnss → the binary dies
+    # instantly), and ALSO when Chromium launches but has zero fonts, which
+    # renders every glyph as nothing so screenshots come back blank-but-styled.
+    # Both were live defects here. Actually launch it and measure a glyph.
     try:
         import playwright  # noqa: F401
-        ok("playwright importable (browser engine available)")
     except ImportError:
         warn("playwright not importable — JS-rendered page fetching disabled (optional)")
+    else:
+        try:
+            from playwright.sync_api import sync_playwright
+            # Chromium is a CHILD process: it needs $env_prefix/lib on
+            # LD_LIBRARY_PATH (libatk/libnss) and, on hosts without /etc/fonts,
+            # FONTCONFIG_* pointing at the env's config — or it either refuses
+            # to start or renders zero glyphs. server.py/bootstrap.py export
+            # these at boot; a bare `python3 healthcheck.py` has not, so reuse
+            # bootstrap's helper rather than reporting a false failure.
+            try:
+                import json as _j
+                from bootstrap import _tofu_export_env_native_paths as _exp
+                with open(ROOT / '.tofu_env.json', encoding='utf-8') as _mf:
+                    _mk = _j.load(_mf)
+                _exp(_mk.get('env_prefix') or '', _mk.get('backend') or '',
+                     _mk.get('env_name'))
+            except Exception:
+                pass  # no marker / not installed by install.sh — probe as-is
+            with sync_playwright() as _pw:
+                _br = _pw.chromium.launch(headless=True, args=['--no-sandbox'])
+                try:
+                    _pg = _br.new_page()
+                    _pg.set_content('<h1>tofu</h1>')
+                    _gw = _pg.evaluate(
+                        "(()=>{const c=document.createElement('canvas')"
+                        ".getContext('2d');c.font='60px sans-serif';"
+                        "return c.measureText('tofu').width;})()")
+                finally:
+                    _br.close()
+            if _gw and _gw > 0:
+                ok(f"browser engine launches and renders text (glyph width {_gw:.0f}px)")
+            else:
+                fail("Chromium launches but renders NO text (zero fonts) — "
+                     "screenshots will come back blank-but-styled. Install "
+                     "fontconfig + a font family into the env "
+                     "(conda install -c conda-forge fontconfig font-ttf-dejavu-sans-mono)")
+        except Exception as _e:
+            _msg = str(_e).replace('\n', ' ')[:200]
+            fail(f"playwright imports but Chromium cannot launch — browser "
+                 f"screenshots unavailable: {_msg}")
 
     print(f"\n{C.BOLD}{'═'*60}{C.END}")
     if errors:

@@ -1,6 +1,15 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-27 — swarm 派错角色事故根修:spawn_agents 描述补角色工具清单 + general 选型/恢复规则(owner 拍板 A 方案 + 补恢复闭环;epic `pt_f48e996922d541e1`,commit `7efae8f4`,3 文件 +262/-89;新套件 **5/5,failing-first 5 红,NEUTER×2 精确咬**,swarm 全环 **128/128**,collect **10587** 0 err)
+
+- **事故(owner 截图实证):** 主控派 `researcher` 子代理「消化 4 个历史会话(get_conversation)」,researcher 的 `tools_hint` 只有 web 四件套(registry.py:225),子代理如实报「工具不可用」后轮次烂尾。**瞎的是主控不是子代理**——子代理看得见自己的 schema 并正确拒绝编造;主控侧的 `format_role_catalogue()` 只有 `role: when_to_use` 散文,没有工具清单,注释自称镜像 Claude Code 的 "agents **and the tools they have access to**" 块,**只实现了一半**。
+- **方向裁定(A vs B,owner 拍板 A):** B(子代理工具集与父代理全量一致)双杀:①denylist(spawn/await/get_agent_result/ask_human)是结构性必需,永远做不到真一致;②全工具集序列化实测 203,748 字节,子代理每轮请求带一遍,opus-5 线体缓存不命中=每轮重付。A 只补信息差,零 token 成本。
+- **落地三件套:** ①`format_role_catalogue()` 每角色行尾渲染 `[tools: ...]`,空 hint 角色写明 `ALL tools minus <denylist>`,末尾补共享 artifact 工具行——**全部从 AGENT_ROLES/SUB_AGENT_DENYLIST/ARTIFACT_TOOLS 单源派生,禁止第二份手抄清单**;②spawn 描述加选型规则(任务需要任何专家清单外的工具,如 get_conversation→`general`);③**owner 补充的恢复闭环**:子代理报缺工具→用 `general` 重派,不绕过、不放弃——截图事故里主控就是烂在这一步。
+- **实踩的坑(值得记):import 时构建撞上 partially-initialized module。** `SPAWN_AGENTS_TOOL` 的描述在 **import 时**构建,新的目录函数去读 tools.py 里的 `ARTIFACT_TOOLS`/`SUB_AGENT_DENYLIST`,而这两个常量原本定义在 `SPAWN_AGENTS_TOOL` **之后**——`from lib.swarm.tools import ARTIFACT_TOOLS` 精确炸 `partially initialized module`。`scope_tools_for_role` 里同样的 local import 不炸是因为它在**运行时**调用。修法:两个常量上移到文件顶部(master 区之前),并留注释钉住这个顺序约束——「定义顺序 = 导入时依赖的拓扑序」。
+- **守卫 NEUTER 证据:** ①摘目录工具渲染→`test_catalogue_lists_each_roles_hint_tools` + `test_description_embeds_tool_lists` 精确红(其余 3 绿,artifact footer 未被毒化=正确);②摘恢复段→`test_description_carries_recovery_rule` 唯一精确红。均 cp 备份/还原 + `diff -q` 逐字节一致,未用 git stash。
+- **生效条件:需重启服务**(描述在 import 时构建,运行中进程仍用旧描述);纯 prompt 面改动,无行为/契约变化,`test_swarm_tool_scoping` 等既有钉约全部不动。
+
 
 ### 2026-07-27 — 行存储写路径迁移全期收口:④ 翻旗生效并实测(epic `pt_59140ecd` 标 done;owner 板上一键拍板「A 现在翻旗」;钉测试 commit `55039b2b`)
 

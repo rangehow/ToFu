@@ -1137,3 +1137,18 @@
 - **测试:** `test_error_envelope_internal_classification.py` 新增 TestVendorOutageClassification 7 例——**failing-first 实测 6/7 在 HEAD 上红**(唯一在 HEAD 也绿的是 NEUTER 例:真 429/quota/permission 不被新分支吞);`test_error_envelope_i18n.py` 前端 harness 增 mojibake G 段(修复/干净不动/有损不动)+ 新 kind H 段(zh/en 标题、chip、无 Keys 误指)+ `neuter-mojibake` 变异模式;`test_frontend_conn_error_recover.py` JSDOM 提取表补 `_envRepairMojibake`。
 - **顺带(独立提交):** 三处源码扫描守卫随合法重构过期的修复——94035a12 按钮 onclick 改 `_msgElIndex(this)` 后 6 处断言更新;757c3626 memory→skills 迁移、chat_task_start 提取、turn-settlement 删 gen_persisted/gen_done 后 route-conversion manifest 重指;chat.py SSE 守卫**泛化负断言**(任何原始 `mimetype='text/event-stream'` 即咬,与端点专名解耦)。
 - **验证:** 129 tests 全绿(分类 18 + 前端信封 i18n + key 覆盖 + conn-recover + bundle manifest parity 15 + api_response 三环 + 按钮 harness 9);failing-first 6/6 红于 HEAD、双 NEUTER harness 均咬;node --check 两 JS 文件过。
+
+### 2026-07-27 — 「hello 能成、项目模式报错」取证:非格式问题,是 opus-5 上游大请求超时(owner 问 conv ms2ga6y8mqgkdm;零代码变更,纯取证)
+
+- **现象对账:** hello 会话(ms2ga6y8mqgkdm)1 轮 8.4s 成功;项目模式会话(ms2gb19gfdco20,带图)R1 TTFT=**318.5s**(07:52:05→07:57:23),贴着 read timeout=300s 死亡线,用户感知为「失败」。该任务 R1-R3 实际全部成功(tool_calls 正常解析),不是被打死。
+- **格式假设否决(三证据):** ①signature-400 已由 `1ab872f5` 根修(_model_tweaks.py 剥无签名 reasoning_content),今日生产日志 `signature: Field required` **零**次(残留的 06:04/06:14 两条是 `[t]` 测试线程);②格式错误是**确定性** 400,不会同一任务 R1-R3 全 200;③今日 07:00-08:00 opus-5 真实失败 **14 次全部是 `Read timed out (300s)`**(ms1hd6od45t7rz/ms1krgolgtvrhe/ms1uq1r8lcpyy6,均大上下文轮次 R2-R25),外加冷却循环。
+- **机理:** 项目模式把请求吹大——CLAUDE.md/journal/charter 等项目上下文 + 174 个 MCP 工具定义(序列化 ~204KB,charter 实测)+ 图片。上游 yuju opus-5 今天对大请求响应极慢(TTFT 300s+),小请求(hello,48 字符回复)8 秒返回。超时的轮次走 llm_fallback 换 kimi-k3,槽位记 consecutive errors 进冷却——这就是用户在 ms2ge5kb4yxb95 看到的「后端 cool down」。
+- **给后人:** 「同一模型小请求成功、大请求失败」先查 **TTFT vs read timeout**,别先查请求格式——确定性格式错误不会让小请求幸免。
+
+### 2026-07-27 — Agent 能力复用铁律落地三件套:合规审计 + 私有循环 AST 棘轮 + 上手指南(epic `pt_85bdb0a0aa6246eb`,owner 方向拍板后的执行批;commit 见下,2 新文件;新套件 **4/4 含 NEUTER×2 全咬**,相邻环底盘+信封棘轮 **30/30**,collect **10380** 0 err)
+
+- **审计(以代码为准,CLAUDE.md 已过时两处):** ①`run_agent_loop` 实际已有 **8 个导入方**(paper report/qa/survey/insight/ideate/recommend + timer + scene_author)——timer 早已迁完,「timer adopt later」是陈旧记录;②同行评审是**纯 facade**,委托 report_engine,构造合规;③播客/longform 是单发管线 + ProductionRuntime,不属铁律管辖。三个私有循环全部钉档:orchestrator(`_run.py:520`,premature-retry 手扩天花板,底盘 `retry_bonus` 已预留同形)、endpoint(`_run.py:220`,Worker→Critic 驱动,LLM 委托 `_run_single_turn` 故文本启发式不可见,用签名钉)、swarm(`agent.py:653`,abort_check 回调×2,**迁移成本最低**——`AbortSignal.from_callback` 原生兼容其形状)。
+- **棘轮三段式(照抄 error_transparency_guard 模式):** ①AST 启发式拦新——`while` 体内同时出现 LLM 调用名(下划线前缀归一,`_dispatch_stream` ≡ `dispatch_stream`)+ tool_calls 处理即判私有循环,豁免集外直接红;②祖父签名钉——三文件各钉一个私有循环代码 token + 无 `run_agent_loop` 导入,迁移落地即红、**清单只减不增**;③采纳数地板——导入方 <8 即红。**教训:启发式首版零命中被自带的「扫描非空」健全性测试当场抓住**——真实循环叫 `stream_llm_response`/`self._dispatch_stream`/委托 helper,不在首版名字单里。健全性测试与棘轮本体必须成对写。
+- **NEUTER 实证:** ①埋探针私有循环(`git add -N` 进 ls-files)→ test 1 精确咬出文件:行号;②谓词级验证导入检测四分支 + 三签名钉当前全部在位。**坑:`git add -N` 探针删除后索引残留 ghost 项,`git ls-files` 仍列出该路径 → 四个扫描类测试集体 FileNotFoundError**——探针流程必须以 `git reset -- <probe>` 收尾,不能只用 `rm`。
+- **指南:** `docs/AGENT_CAPABILITY_GUIDE.md`——三种能力形状对号(循环→run_agent_loop / 成品→production / 单发→直调)、五分钟接入契约、工具执行范本指向 `lib/paper/tools.py:244` 的 `make_research_tool_executor`(别再抄第三份)、迁移顺序按成本从低到高 swarm→endpoint→orchestrator。
+- **共享 HEAD:** 提交精确 pathspec(测试+文档+JOURNAL);JOURNAL 捎带兄弟一条已完成取证条目(同文件 EOF 单 hunk 不可分,documentation 零风险);20+ 兄弟 WIP 文件原样未动。

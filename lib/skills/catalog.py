@@ -190,6 +190,36 @@ CATALOG: list[SkillCatalogEntry] = [
     #  TOFU_SKILL_CATALOG_URL.)
 ]
 
+# ── Local Life & Travel (China) ──────────────────────────────────────
+#
+# Vendors that ship a SKILL package rather than an MCP server. The MCP-shaped
+# ones (Amap / RollingGo / 12306 / Tuniu) live in lib/mcp/registry.py under
+# the same category name — the split follows the PROTOCOL, not the vendor.
+#
+# Admission criterion, same as the MCP catalog: a normal developer must be
+# able to obtain credentials. Fliggy qualifies (self-service key, no company
+# verification); Ctrip and Meituan still do not — see the note in
+# lib/mcp/registry.py and ticket pt_6dcdc44482de4fe7.
+
+CATALOG += [
+    {
+        'id': 'flyai',
+        'name': '飞猪 FlyAI（出行旅游）',
+        'description': '阿里飞猪官方出行 skill：机票/火车/酒店/景点/演出的自然语言搜索，直连飞猪实时库存，结果自带可预订链接。零配置可用，填 API Key 后结果更完整。',
+        'icon': '🐷',
+        'category': CAT_PRODUCTIVITY,
+        'download_url': 'https://codeload.github.com/alibaba-flyai/flyai-skill/zip/refs/heads/main',
+        'homepage': 'https://github.com/alibaba-flyai/flyai-skill',
+        'subdir': 'skills/flyai',
+        'author': 'Alibaba Fliggy',
+        'tags': ['travel', 'china', 'flight', 'hotel', 'train', '机票', '酒店',
+                 '火车票', '门票', '飞猪', '出行'],
+        'featured': True,
+        'requires': {'bins': ['node']},
+        'install_note': '八个搜索命令零配置即可用；如需更完整结果，在飞猪 AI 开放平台登录后自助领取 API Key(个人可申请，无需企业认证)并设置 FLYAI_API_KEY。',
+    },
+]
+
 # ── vibe-motion / HyperFrames video packs ────────────────────────────
 #
 # The six AgentSkills packs bundled by vibe-motion/auto-motion (the

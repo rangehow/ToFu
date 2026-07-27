@@ -994,24 +994,31 @@ CATALOG: list[CatalogEntry] = [
     # ── Local Life & Travel (China) ─────────────────────────
     #
     # What Chinese users actually need an agent to DO — routing, hotels,
-    # flights, trains. Vetted against one criterion: can a normal developer
-    # obtain credentials and get real data?
+    # flights, trains, tickets. Admission criterion, applied PER VENDOR:
+    # **can a normal developer obtain credentials?**
     #
-    # DELIBERATELY ABSENT — Ctrip (携程) and Meituan (美团). Both were checked
-    # and both fail that criterion, for policy reasons rather than technical
-    # ones, so a card here would be a dead Install button:
+    # DELIBERATELY ABSENT — Ctrip (携程) and Meituan (美团). Both fail that
+    # criterion for POLICY reasons, so a card would be a dead Install button:
     #   • Ctrip Business Travel launched an AI open platform (2026-04) that does
     #     speak MCP — hotel/flight/train recommendation, visa policy, expense
     #     compliance — but it is gated to CORPORATE customers via a business
-    #     onboarding process. Ctrip 问道 (wendao) is reachable by individuals
-    #     yet is NOT MCP: it is a bespoke HTTP API driven by a Node CLI script,
-    #     with QPS/quota limits and no booking step.
+    #     onboarding process (ct.ctrip.com/contactBiz). Ctrip 问道 (wendao) is
+    #     reachable by individuals yet is NOT MCP: a bespoke HTTP API driven by
+    #     a Node CLI, with QPS/quota limits and no booking step.
     #   • Meituan's open platform is MERCHANT-side (group-buy voucher
     #     redemption, delivery order management, storefront ops) and its
     #     five-step onboarding begins with submitting company details for
     #     business review. There is no consumer-side MCP surface at all.
-    # Both are tracked as a separate business-access ticket. Do NOT add
+    # Tracked as a business-access ticket (pt_6dcdc44482de4fe7). Do NOT add
     # speculative entries for them.
+    #
+    # ⚠ The gate is PER-VENDOR, never market-wide. An earlier revision of this
+    # comment reasoned that Chinese OTAs would not open up because inventory is
+    # their moat — measurement refuted it: Tuniu (2026-03) and Fliggy both ship
+    # self-service, individually-obtainable credentials WITH a booking chain.
+    # Fliggy is a SKILL package so it lives in lib/skills/catalog.py; the split
+    # follows the PROTOCOL, not the vendor. Re-check each vendor on its own
+    # evidence rather than generalising from "OTAs don't open up".
 
     {
         'id': 'amap-maps',
@@ -1074,6 +1081,24 @@ CATALOG: list[CatalogEntry] = [
         ],
         'url': 'https://rollinggo.store/',
         'tags': ['flight', 'travel', 'china', 'booking', '机票', '航班'],
+    },
+    {
+        'id': 'tuniu-travel',
+        'name': '途牛旅游',
+        'description': 'Hotels, flights, trains, attraction tickets, cruises and package tours with a FULL booking chain (search → detail → order → payment link). Six service domains behind one CLI.',
+        'icon': '🐮',
+        'category': CAT_LOCAL_CN,
+        'command': 'npx',
+        'args': ['-y', 'tuniu-cli@latest'],
+        'env_specs': [
+            {'key': 'TUNIU_API_KEY', 'label': '途牛开放平台 API Key',
+             'hint': 'open.tuniu.com/mcp/login 注册后在控制台自助申请',
+             'required': True, 'secret': True},
+        ],
+        'url': 'https://open.tuniu.com/mcp/docs/',
+        'tags': ['travel', 'china', 'hotel', 'flight', 'train', 'ticket',
+                 'cruise', '途牛', '酒店', '机票', '门票', '邮轮', '度假'],
+        'install_note': '个人开发者可自助注册申请 Key。品类最全(含邮轮/度假)且支持下单，下单后返回 paymentUrl 供用户完成支付。',
     },
     {
         'id': '12306-train',

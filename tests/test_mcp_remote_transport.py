@@ -507,7 +507,7 @@ def test_connect_error_message_is_scrubbed(auth_server):
 # ── 7. Catalog: the China local-life entries are real, not decorative ──
 
 _CN_LOCAL_IDS = ['amap-maps', 'rollinggo-hotel', 'rollinggo-flight',
-                 '12306-train']
+                 '12306-train', 'tuniu-travel']
 
 
 def test_china_local_entries_build_usable_configs():
@@ -539,10 +539,19 @@ def test_china_local_entries_build_usable_configs():
 
 
 def test_every_china_entry_credential_resolves_and_never_leaks():
-    """Both credential carriers work, and neither survives redaction."""
+    """Every credential-bearing entry delivers its key, and none leaks it.
+
+    Split by CARRIER, because the three shapes are genuinely different and
+    collapsing them would assert something false for two of them:
+      - stdio (Tuniu): the key is handed to the subprocess as a real env var,
+        so there is no ``${VAR}`` template to discover;
+      - remote + header (RollingGo) and remote + query param (Amap): the key
+        stays in ``env`` and the carrier only references it, so the template
+        MUST advertise which env key it needs or the UI never prompts.
+    """
     import lib.mcp.registry as reg
     from lib.mcp.transport import (
-        header_env_keys, redact_config, resolve_headers, resolve_url,
+        header_env_keys, is_stdio, redact_config, resolve_headers, resolve_url,
     )
 
     for sid in _CN_LOCAL_IDS:
@@ -550,16 +559,23 @@ def test_every_china_entry_credential_resolves_and_never_leaks():
         specs = entry.get('env_specs', [])
         if not specs:
             continue                      # 12306 needs no credential
-        cfg = reg.build_server_config(sid, {s['key']: SECRET for s in specs})
+        keys = [s['key'] for s in specs]
+        cfg = reg.build_server_config(sid, {k: SECRET for k in keys})
 
-        # The UI must know which key to prompt for, whichever carrier is used.
-        assert header_env_keys(cfg), \
-            f'{sid}: credential-bearing entry advertises no env key'
-
-        resolved = resolve_url(cfg, server_name=sid)
-        resolved_hdrs = resolve_headers(cfg, server_name=sid)
-        assert SECRET in resolved or SECRET in json.dumps(resolved_hdrs), \
-            f'{sid}: credential never reached the request'
+        if is_stdio(cfg):
+            # The subprocess receives it as an environment variable.
+            for k in keys:
+                assert cfg['env'][k] == SECRET, \
+                    f'{sid}: {k} never reached the subprocess env'
+        else:
+            # The UI must know which key to prompt for, whichever remote
+            # carrier is used — a query-param vendor has no headers at all.
+            assert header_env_keys(cfg), \
+                f'{sid}: remote entry advertises no env key to prompt for'
+            resolved = resolve_url(cfg, server_name=sid)
+            resolved_hdrs = resolve_headers(cfg, server_name=sid)
+            assert SECRET in resolved or SECRET in json.dumps(resolved_hdrs), \
+                f'{sid}: credential never reached the request'
 
         assert SECRET not in json.dumps(redact_config(cfg)), \
             f'{sid}: credential leaked through redact_config'
@@ -582,27 +598,53 @@ def test_amap_key_rides_the_url_and_rollinggo_rides_a_header():
 
 
 def test_no_dead_card_for_a_business_gated_vendor():
-    """Ctrip / Meituan must NOT get catalog entries.
+    """Ctrip / Meituan must NOT get an entry — in EITHER catalog.
 
     Both were researched: Ctrip's MCP is corporate-only (its individual-facing
     'wendao' product is not MCP at all) and Meituan's open platform is
     merchant-side behind a business review. An entry would render an Install
     button that cannot succeed. Their status belongs in docs and a
     business-access ticket, not in a clickable card.
+
+    Scans the SKILLS catalog too: vendors ship either shape (Fliggy is a skill,
+    Tuniu is an MCP server), so guarding one surface would let the next dead
+    card in through the other door.
     """
     import lib.mcp.registry as reg
+    import lib.skills.catalog as skills
 
     banned = ('ctrip', 'xiecheng', '携程', 'meituan', '美团', 'dianping', '点评')
-    for entry in reg.get_catalog():
-        haystack = f"{entry['id']} {entry.get('name', '')}".lower()
-        # 'meituan' legitimately appears in internal_only research-cluster
-        # entries (hope / xuecheng / llm) — those are corp-internal dev tools,
-        # not consumer life-service cards.
-        if entry.get('internal_only'):
-            continue
-        for token in banned:
-            assert token not in haystack, (
-                f"catalog entry {entry['id']!r} references {token!r} — these "
-                f'vendors require business onboarding, so a card here is a '
-                f'dead Install button'
-            )
+    for surface, entries in (('mcp', reg.get_catalog()),
+                             ('skills', skills.get_catalog())):
+        for entry in entries:
+            haystack = f"{entry['id']} {entry.get('name', '')}".lower()
+            # 'meituan' legitimately appears in internal_only research-cluster
+            # entries (hope / xuecheng / llm) — those are corp-internal dev
+            # tools, not consumer life-service cards.
+            if entry.get('internal_only'):
+                continue
+            for token in banned:
+                assert token not in haystack, (
+                    f'{surface} catalog entry {entry["id"]!r} references '
+                    f'{token!r} — these vendors require business onboarding, '
+                    f'so a card is a dead Install button'
+                )
+
+
+def test_individually_accessible_travel_vendors_are_actually_shipped():
+    """The complement of the ban list: vendors that DO open up must be present.
+
+    Without this, "exclude the gated ones" degenerates into "ship nothing" and
+    the ban guard alone would still pass. An earlier revision reasoned that
+    Chinese OTAs keep inventory closed as a moat; measurement refuted it —
+    Tuniu and Fliggy both hand out self-service credentials WITH a booking
+    chain. Pinning them keeps that correction from silently regressing.
+    """
+    import lib.mcp.registry as reg
+    import lib.skills.catalog as skills
+
+    mcp_ids = {e['id'] for e in reg.get_catalog()}
+    assert 'tuniu-travel' in mcp_ids, 'Tuniu MCP entry went missing'
+
+    skill_ids = {e['id'] for e in skills.get_catalog()}
+    assert 'flyai' in skill_ids, 'Fliggy FlyAI skill entry went missing'

@@ -247,6 +247,11 @@ def _extract_xlsx(file_bytes: bytes, limit: int) -> dict:
         n_real_cols = 0
         empty_run = 0
         truncated_rows = False
+        # ★ Every cut must be able to report its DENOMINATOR. A warning that
+        # says "truncated at 1000 rows" without saying "of 5000" gives the
+        # model a numerator with no scale — it cannot tell 20% from 99%.
+        rows_scanned = 0          # data rows actually walked (excl. blanks)
+        empty_run_stopped_at = 0  # row index where a blank run ended the scan
         for row in ws.iter_rows(values_only=True, max_col=col_cap):
             cells = list(row)
             while cells and cells[-1] is None:
@@ -254,9 +259,15 @@ def _extract_xlsx(file_bytes: bytes, limit: int) -> dict:
             if not cells:
                 empty_run += 1
                 if empty_run > _XLSX_MAX_EMPTY_RUN:
+                    # This break used to be entirely SILENT. A sheet shaped
+                    # "summary block / 60 blank rows / detail block" lost the
+                    # whole detail block with no trace in the output at all —
+                    # worse than the row cap, which at least admits it fired.
+                    empty_run_stopped_at = rows_scanned
                     break
                 continue
             empty_run = 0
+            rows_scanned += 1
             n_real_cols = max(n_real_cols, len(cells))
             rows_data.append(
                 '| ' + ' | '.join(
@@ -267,10 +278,31 @@ def _extract_xlsx(file_bytes: bytes, limit: int) -> dict:
                 truncated_rows = True
                 break
 
+        # Sheet dimensions as reported by the workbook — the denominator the
+        # caller needs. Guarded because max_row/max_column can be None.
+        sheet_rows = ws.max_row or 0
+        sheet_cols = ws.max_column or 0
+
         if truncated_rows:
-            warnings.append(f'Sheet "{sheet_name}" truncated at {_XLSX_MAX_ROWS} rows')
-        if (ws.max_column or 0) > _XLSX_MAX_COLS:
-            warnings.append(f'Sheet "{sheet_name}" truncated at {_XLSX_MAX_COLS} columns')
+            of_total = (f' of {sheet_rows:,}' if sheet_rows > len(rows_data)
+                        else '')
+            warnings.append(
+                f'Sheet "{sheet_name}": kept {len(rows_data):,}{of_total} rows '
+                f'(row cap {_XLSX_MAX_ROWS:,}); the rest was NOT read'
+            )
+        if empty_run_stopped_at:
+            remaining = max(sheet_rows - empty_run_stopped_at, 0)
+            warnings.append(
+                f'Sheet "{sheet_name}": stopped after {_XLSX_MAX_EMPTY_RUN} '
+                f'consecutive blank rows at data row {empty_run_stopped_at:,}; '
+                f'~{remaining:,} further row(s) were NOT read — content below a '
+                f'long blank gap is missing'
+            )
+        if sheet_cols > _XLSX_MAX_COLS:
+            warnings.append(
+                f'Sheet "{sheet_name}": kept {_XLSX_MAX_COLS} of {sheet_cols:,} '
+                f'columns; the rest was NOT read'
+            )
 
         if rows_data:
             ncols = max(n_real_cols, 1)

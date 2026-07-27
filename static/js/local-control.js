@@ -231,24 +231,40 @@ function _lcRenderDesktop(d, err) {
       return;
 
     default:
-      // Remote server — the ONLY case that needs a token, so it is the only
-      // case that shows one.
+      // Remote server — the user's machine is NOT this machine, so this is
+      // the only case that needs a token. Three things must be present or the
+      // instruction is not actionable: WHERE to get the app, HOW to connect
+      // it, and WHAT address to point it at. A bare token would leave the
+      // user holding a secret with nowhere to put it.
+      var dl = (d.download_url || '').trim();
+      var srv = (d.server_url || '').trim();
       setup.innerHTML =
         '<p class="lc-step">' + _lcEsc(_lcT('local.desktopRemote',
-          'Tofu 运行在远程服务器上。在你自己的电脑安装桌面版，然后用下面这个令牌把它连过来：')) + '</p>' +
+          'Tofu 运行在远程服务器上。在你自己的电脑安装桌面版，再用下面这行把它连过来：')) + '</p>' +
+        (dl
+          ? '<p class="lc-substep"><a class="lc-dl-link" id="lcDesktopDownload" href="' +
+              _lcEsc(dl) + '" target="_blank" rel="noopener noreferrer">' +
+              _lcEsc(_lcT('local.desktopDownload', '下载桌面版 ↗')) + '</a></p>'
+          : '') +
         '<button type="button" class="btn btn-primary btn-sm" id="lcMintBtn">' +
-          _lcEsc(_lcT('local.mintToken', '生成连接令牌')) + '</button>' +
+          _lcEsc(_lcT('local.mintToken', '生成连接命令')) + '</button>' +
         '<code class="lc-copy" id="lcTokenBox" style="display:none"></code>';
       var mint = document.getElementById('lcMintBtn');
-      if (mint) mint.onclick = _lcMintToken;
+      if (mint) mint.onclick = function () { _lcMintToken(srv); };
       return;
   }
 }
 
-/* Mint a bridge token inline. Reuses the endpoint the Devices settings page
- * already drives (POST /api/v1/desktop/token) — the raw secret is returned
- * exactly once, so it is shown here and never re-fetched. */
-function _lcMintToken() {
+/* Mint a bridge token and render it as a COMPLETE, copy-paste-ready connect
+ * line — never a naked secret.
+ *
+ * The token alone is unusable: it has to be paired with the address of the
+ * server the agent should poll, and nothing on the user's machine knows that
+ * address. `serverUrl` comes from the backend (the request's own host, i.e. an
+ * address the user demonstrably reaches this server on), so one copy carries
+ * everything. Reuses POST /api/v1/desktop/token — the raw secret is returned
+ * exactly once, so it is rendered here and never re-fetched. */
+function _lcMintToken(serverUrl) {
   var btn = document.getElementById('lcMintBtn');
   var box = document.getElementById('lcTokenBox');
   if (btn) btn.disabled = true;
@@ -260,12 +276,13 @@ function _lcMintToken() {
         return;
       }
       if (!box) return;
+      var line = _lcConnectLine(serverUrl, r.token);
       box.style.display = '';
-      box.textContent = r.token;
+      box.textContent = line;
       box.setAttribute('data-tooltip', _lcT('browser.clickToCopy', '点击复制'));
       box.onclick = function () {
         if (typeof _safeClipboardWrite === 'function') {
-          _safeClipboardWrite(r.token)
+          _safeClipboardWrite(line)
             .then(function () { box.classList.add('copied'); })
             .catch(function () {});
         }
@@ -276,6 +293,14 @@ function _lcMintToken() {
       if (btn) btn.disabled = false;
       if (typeof showToast === 'function') showToast(_lcT('devices.mintFailed', '生成失败'));
     });
+}
+
+/* Build the one line the user pastes into the desktop app's connect field.
+ * Both halves are required — the server address is what makes the token
+ * usable, so they travel together in a single copy. */
+function _lcConnectLine(serverUrl, token) {
+  var srv = (serverUrl || '').trim().replace(/\/+$/, '');
+  return srv ? (srv + '  ' + token) : token;
 }
 
 // ══════════════════════════════════════════════════════
@@ -320,6 +345,7 @@ if (typeof window !== 'undefined') {
   window.toggleDesktopFromLocalModal = toggleDesktopFromLocalModal;
   window._lcUpdateBadge = _lcUpdateBadge;
   window._lcBrowserSetupState = _lcBrowserSetupState;
+  window._lcConnectLine = _lcConnectLine;
   window._lcRenderBrowser = _lcRenderBrowser;
   window._lcRenderDesktop = _lcRenderDesktop;
 }

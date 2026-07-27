@@ -1922,8 +1922,9 @@ var _i18n = {
   'local.browserDownload': { zh: '下载扩展并解压，然后在 chrome://extensions/ 打开「开发者模式」→「加载已解压的扩展程序」→ 选择解压出的文件夹。', en: 'Download and unzip the extension, then in chrome://extensions/ turn on Developer mode → "Load unpacked" → pick the unzipped folder.' },
   'local.desktopTray': { zh: '右键点击系统托盘里的 Tofu 图标 → 勾选「Enable Computer Control」。', en: 'Right-click the Tofu icon in your system tray → tick "Enable Computer Control".' },
   'local.desktopSource': { zh: '当前 Tofu 以源码方式运行。安装桌面版后即可在系统托盘一键开启「Enable Computer Control」。', en: 'Tofu is running from source. Install the desktop app to get the tray\'s one-click "Enable Computer Control".' },
-  'local.desktopRemote': { zh: 'Tofu 运行在远程服务器上。在你自己的电脑安装桌面版，然后用下面这个令牌把它连过来：', en: 'Tofu runs on a remote server. Install the desktop app on your own machine, then connect it with this token:' },
-  'local.mintToken': { zh: '生成连接令牌', en: 'Generate connection token' },
+  'local.desktopRemote': { zh: 'Tofu 运行在远程服务器上。在你自己的电脑安装桌面版，再用下面这行把它连过来：', en: 'Tofu runs on a remote server. Install the desktop app on your own machine, then connect it with the line below:' },
+  'local.desktopDownload': { zh: '下载桌面版 ↗', en: 'Download the desktop app ↗' },
+  'local.mintToken': { zh: '生成连接命令', en: 'Generate connect line' },
   'local.permNote': { zh: '写文件、运行命令、控制鼠标键盘默认全部关闭；需要时在托盘菜单的「Permissions」里单独授予。', en: 'Writing files, running commands and mouse/keyboard control are all OFF by default — grant them individually in the tray\'s "Permissions" menu when needed.' },
 
   // ══════════════════════════════════════

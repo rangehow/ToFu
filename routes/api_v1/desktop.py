@@ -65,16 +65,52 @@ def _setup_state(connected: bool) -> str:
     return 'remote'
 
 
+def _desktop_download_url() -> str:
+    """Releases page for the desktop app, derived from the ONE repo constant.
+
+    ``lib.self_update._config.UPDATE_REPO`` is already the project's canonical,
+    env-overridable source slug (``TOFU_UPDATE_REPO``), so a fork or mirror
+    gets a correct link for free. Deriving beats hardcoding: ``desktop/
+    launcher.py`` holds its own copy of this URL for the tray's update check,
+    and typing the slug a third time here would make a fork silently send its
+    users to upstream. That module is NOT importable from a web route anyway —
+    importing it creates directories, mutates ``sys.path`` and sets env vars at
+    import time.
+    """
+    try:
+        from lib.self_update import UPDATE_REPO
+    except Exception as e:
+        logger.debug('[Desktop] UPDATE_REPO unavailable, omitting '
+                     'download url: %s', e)
+        return ''
+    return f'https://github.com/{UPDATE_REPO}/releases/latest'
+
+
+def _agent_server_url() -> str:
+    """The base URL a remote agent should point itself at.
+
+    Taken from the REQUEST the browser just made, because that is by
+    construction an address the user can actually reach this server on —
+    a configured BIND_HOST would frequently be ``0.0.0.0`` (meaningless to
+    type) and an internal hostname may not resolve from the user's machine.
+    """
+    from flask import request
+    return (request.host_url or '').rstrip('/')
+
+
 @api_v1_desktop_bp.route('/api/v1/desktop/status', methods=['GET'])
 @require_auth
 @api_meta(
     summary='Desktop-agent connection status',
     description=(
-        'Returns ``{connected, last_poll, pending_commands, setup_state}`` '
-        'so the UI can render a presence indicator AND the single '
-        'appropriate install instruction. Connection is defined as a '
-        'poll within the last 15 s. ``setup_state`` is one of '
-        '``connected`` / ``tray`` / ``local_source`` / ``remote``.'
+        'Returns ``{connected, last_poll, pending_commands, setup_state, '
+        'download_url, server_url}`` so the UI can render a presence '
+        'indicator AND the single appropriate install instruction. '
+        'Connection is defined as a poll within the last 15 s. '
+        '``setup_state`` is one of ``connected`` / ``tray`` / '
+        '``local_source`` / ``remote``; the two URL fields let the remote '
+        'case render a real download link and a complete, copy-paste-ready '
+        'connect line instead of a bare secret.'
     ),
     tags=['capabilities'],
 )
@@ -98,6 +134,8 @@ async def desktop_status():
         'pending_commands': pending_commands_count(),
         'agents': list_agents(user_id=_uid),
         'setup_state': _setup_state(connected),
+        'download_url': _desktop_download_url(),
+        'server_url': _agent_server_url(),
     })
 
 

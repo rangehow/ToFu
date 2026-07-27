@@ -204,6 +204,7 @@ interface Window {
   _isErrorOnlyAssistant: any;
   _kickAutopilot: any;
   _lcBrowserSetupState: any;
+  _lcConnectLine: any;
   _lcRenderBrowser: any;
   _lcRenderDesktop: any;
   _lcUpdateBadge: any;
@@ -368,6 +369,7 @@ interface Window {
   relayAdminTopup: any;
   relayAdminViewPayments: any;
   renderErrorEnvelope: any;
+  renderModelFallbackBannerHtml: any;
   renderTranslateIndicator: any;
   renderTurnCtxNote: any;
   replayPendingBusyState: any;

@@ -110,7 +110,7 @@ def _slice_fn(symbol: str) -> str:
 _SHIPPED_SYMBOLS = (
     "_lcT", "_lcEsc", "_lcSetStatus", "_lcSetSwitch",
     "_lcBrowserSetupState", "_lcRenderBrowser", "_lcRenderDesktop",
-    "_lcMintToken",
+    "_lcMintToken", "_lcConnectLine",
 )
 
 
@@ -164,22 +164,42 @@ HARNESS = textwrap.dedent("""
 
     {shipped}
 
+    (async () => {{
+
     // Render each DESKTOP setup_state into a fresh slot and capture what the
-    // user would actually see.
+    // user would actually see. The two URL fields are what the backend sends
+    // alongside setup_state (routes/api_v1/desktop.py).
+    const DL = 'https://github.com/rangehow/ToFu/releases/latest';
+    const SRV = 'https://tofu.example.com';
     const desktopStates = ['connected', 'tray', 'local_source', 'remote'];
     const desktop = {{}};
     for (const st of desktopStates) {{
       document.getElementById('lcDesktopSetup').innerHTML = '';
-      _lcRenderDesktop({{ connected: st === 'connected', setup_state: st }});
+      _lcRenderDesktop({{ connected: st === 'connected', setup_state: st,
+                         download_url: DL, server_url: SRV }});
       const el = document.getElementById('lcDesktopSetup');
+      const dlA = el.querySelector('a[href]');
       desktop[st] = {{
         steps: el.querySelectorAll('.lc-step').length,
         text: el.textContent.trim(),
         hasMintButton: !!el.querySelector('#lcMintBtn'),
+        // A real, clickable link the user can follow — not prose.
+        downloadHref: dlA ? dlA.getAttribute('href') : '',
         dotConnected: !!document.querySelector(
           '#lcDesktopStatus .browser-status-dot.connected'),
       }};
     }}
+
+    // Drive the REAL mint handler and read what actually lands in the box.
+    // A bare secret is unusable: the line must carry the server address too.
+    document.getElementById('lcDesktopSetup').innerHTML = '';
+    _lcRenderDesktop({{ connected: false, setup_state: 'remote',
+                       download_url: DL, server_url: SRV }});
+    document.getElementById('lcMintBtn').onclick();
+    const mintedLine = await new Promise((res) => setTimeout(() => {{
+      const b = document.getElementById('lcTokenBox');
+      res(b ? b.textContent : '');
+    }}, 0));
 
     // Same for the BROWSER row: connected / on-disk folder / remote download.
     const browser = {{}};
@@ -200,7 +220,8 @@ HARNESS = textwrap.dedent("""
       }};
     }}
 
-    console.log(JSON.stringify({{ desktop, browser }}));
+    console.log(JSON.stringify({{ desktop, browser, mintedLine }}));
+    }})();
 """)
 
 
@@ -391,7 +412,83 @@ def test_NEUTER_rendering_an_instruction_while_connected_is_noise():
         "NEUTER did not inject an instruction into the connected state")
 
 
-# ── 4. Live polling — the 15s connection window ────────────────────────
+# ── 4. The remote case must be ACTIONABLE, not just present ────────────
+# "Install the desktop app" with no link, and a bare secret with no address,
+# are both dead ends: the user is told to do something they cannot do from
+# here. These assert the two halves that make the instruction followable.
+
+@pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
+def test_remote_state_offers_a_real_download_link():
+    """The remote user does not have the app — give them a way to get it.
+
+    The link target comes from the backend (derived from the ONE
+    ``UPDATE_REPO`` constant), so a fork points at its own releases. Asserting
+    "an anchor with an http(s) href" rather than a specific URL keeps this
+    green when the slug legitimately changes and red when the link vanishes.
+    """
+    out = _run(_shipped())["desktop"]
+    href = out["remote"]["downloadHref"]
+    assert href.startswith(("http://", "https://")), (
+        f"remote case must render a real, followable download link; got "
+        f"{href!r}. Telling a user to install something with no link is not "
+        f"an actionable instruction.")
+
+
+@pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
+def test_only_the_remote_state_shows_a_download_link():
+    """Complement: the other three states must NOT show one.
+
+    A tray user already has the app; a local_source user is running it. A
+    download link there is a second path competing with the one real action.
+    """
+    out = _run(_shipped())["desktop"]
+    for st in ("connected", "tray", "local_source"):
+        assert out[st]["downloadHref"] == "", (
+            f"setup_state={st} must not offer a desktop-app download")
+
+
+@pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
+def test_the_minted_line_carries_the_server_address():
+    """One copy must be enough — a naked token is unusable.
+
+    Nothing on the user's machine knows which server to poll, so the token
+    alone leaves them holding a secret with nowhere to put it. Drives the REAL
+    mint handler and reads what actually lands in the box.
+    """
+    line = _run(_shipped())["mintedLine"]
+    assert "T" in line, "the minted token must appear in the line"
+    assert "tofu.example.com" in line, (
+        f"the connect line must carry the server address the agent has to "
+        f"reach, not just the secret; got {line!r}")
+
+
+@pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
+def test_NEUTER_stripping_the_download_link_is_caught():
+    """Drop the anchor → the remote user is told to install with no link."""
+    out = _run(_shipped(
+        lambda s: s.replace("? '<p class=\"lc-substep\"><a class=\"lc-dl-link\"",
+                            "? '<p class=\"lc-substep\"><span class=\"lc-dl-link\"")
+    ))["desktop"]
+    assert out["remote"]["downloadHref"] == "", (
+        "NEUTER did not remove the followable link")
+
+
+@pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
+def test_NEUTER_reverting_to_a_bare_token_is_caught():
+    """Make the connect line the token alone → the address is gone.
+
+    This is exactly the shape that shipped first: 32 characters of secret and
+    no indication of where it goes.
+    """
+    out = _run(_shipped(
+        lambda s: s.replace("return srv ? (srv + '  ' + token) : token;",
+                            "return token;")
+    ))
+    assert "tofu.example.com" not in out["mintedLine"], (
+        "NEUTER did not reduce the line to a bare token")
+
+
+# ── 5. Live polling — the 15s connection window ────────────────────────
 
 def test_the_modal_polls_while_open():
     """`is_desktop_agent_connected()` is a 15s window, and a user enabling the

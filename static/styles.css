@@ -14504,6 +14504,11 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
 .lc-copy:hover::after{opacity:1}
 .lc-copy.copied{background:rgba(34,197,94,0.16);color:#22c55e;border-color:rgba(34,197,94,0.4)}
 .lc-perm-note{font-size:11.5px;line-height:1.55;color:var(--text-tertiary,#6a6a7a);margin:10px 0 0}
+.lc-substep{margin:0 0 10px}
+.lc-dl-link{font-size:12.5px;color:#a855f7;text-decoration:none;border-bottom:1px solid rgba(168,85,247,0.35);padding-bottom:1px;transition:color .15s ease,border-color .15s ease}
+.lc-dl-link:hover{color:#c084fc;border-bottom-color:#c084fc}
+[data-theme="light"] .lc-dl-link{color:#7e22ce;border-bottom-color:rgba(126,34,206,0.35)}
+[data-theme="light"] .lc-dl-link:hover{color:#6b21a8;border-bottom-color:#6b21a8}
 
 [data-theme="light"] .lc-cap{border-color:rgba(0,0,0,0.09);background:rgba(0,0,0,0.012)}
 [data-theme="light"] .lc-cap-icon{background:rgba(126,34,206,0.1);color:#7e22ce}

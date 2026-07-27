@@ -1,6 +1,36 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-28 — 浏览器桥 + 桌面控制合并为单一「本机控制」面:**owner 两次否掉我的方案形状**(第一版做成第二个 modal = 复制而非合并;引导内容教的是已废弃的 CLI 流程);外加我自己在共享 HEAD 上**把兄弟的两条清单行 commit 进去**,靠「committed tree 验收」才抓到(commits `747db641` + `3441df91` + `02de5158` + `6e6e29e4`;新套件 **15/15 零 skip**,**NEUTER×3 全咬**,相邻环 **68/68**,干净 committed worktree 复验通过)
+
+- **★ 起点是一个真缺陷,不是重构:`toggleDesktop()`(main.js:506)是三行盲翻。** 浏览器侧 `toggleBrowser()` 会拦截首次开启、弹装配引导、确认后才落旗;桌面侧直接 `_applyDesktopUI(!desktopEnabled)` 存盘。而 `_build_desktop`(`lib/tools/registry/_build.py:117`)在 agent 未连接时**静默返回 `[]`** —— 于是开关亮着、工具一个都不存在,用户毫无提示。`Api.desktop.status`(api.js:857)**全前端零调用点**,这就是为什么这个洞一直没人发现:状态通道从来没接上。
+- **★ owner 第一次纠偏:我提的「镜像 `#browserModal` 做一个 `#desktopModal`」是复制,不是合并。** 那会得到两行工具栏、两个 modal、两个状态点、两套心智模型 —— **比现状认知负担更重**。用户视角这两件事是同一个概念(「让 Tofu 操作我的机器」)。改为:**一个**「本机控制」菜单项(替掉 `#browserToggle`+`#desktopToggle` 与两条移动端行)、**一个** setup modal 内含两条能力行(浏览器标签页 / 电脑),各自有状态点与开关。**两个后端旗标 `browserEnabled`/`desktopEnabled` 保持分离** —— 工具族与风险层级本就不同,只合并**表面**。
+- **★ owner 第二次纠偏(比第一次更值钱):我写的引导教的是废弃流程。** 我提议告诉用户跑 `python -m lib.desktop_agent --server <url> --allow-write --allow-exec --allow-gui`,而 `desktop/launcher.py:305` **自己写着**这套托盘内进程 agent *"Replaces the old 'install a second program and run python -m lib.desktop_agent' flow."* —— 教一条四开关 CLI 正是「最小化认知负担」的反面,且教的是**被取代的路**。
+- **修法:modal 只显示按检测状态选出的**一条**下一步动作,绝不列出所有可能路径。** 判据沿用 `routes/api_v1/browser.py:62` 的 `_remote_is_loopback()` 先例:①agent 已在轮询 → 绿点「已连接」,无需安装,只给开关;②服务端就是本机打包桌面应用 → 「右键托盘图标 → 启用电脑控制」一句话;③远端服务端 → **唯一**需要 token 的情形,内联 mint(`POST /api/v1/desktop/token` 与 Devices 页 UI 本就存在)+ 一行预填好 token 的复制命令 + 下载链接。**权限(写/执行/GUI)不作为四个复选框出现** —— 它们在 `_permissions.safe_default()` 里默认拒绝、住在托盘的权限子菜单,只说明「存在且默认关闭」然后收口。
+- **实时轮询是必须的,不能照抄 `_checkBrowserStatus` 的一次性。** `is_desktop_agent_connected()`(`lib/desktop/bridge.py:94`)是 15 秒窗口,用户开着 modal 去启用托盘 agent 时**必须看到点自己变绿**而不用重开。
+- **★ 守卫按 charter 反手抄纪律:8 个渲染器全部从生产源码 splice 进 harness,不手抄判据。** 扫描面先打印(实测 8 个符号全部命中 `static/js/local-control.js`,与预期一致)。NEUTER×3 各咬各的:①摘掉状态检测 → **5 条红**,含「托盘用户被要求 mint token」这条泄漏后果;②摘掉合并(退回两个入口)→ 合并断言红;③摘掉轮询 → 实时翻绿那条红。
+- **★ 本轮我自己的事故:共享 HEAD 上 `git add lib/js_bundler.py` 整文件,把兄弟的两条清单行(`cookie_capture_consent.js` / `paper/research.js`)一起提交,而它们的 JS 文件**仍未跟踪**。** 于是**干净检出上 `test_bundle_manifest_parity` 红 4 条**(陈旧重命名 + 缺 dev-fallback 标签 + deferred 入口),而我的脏树全绿 —— 因为那两个文件在我本地存在。**这正是 charter「验收要在 committed tree 上跑」这条规则存在的理由,也是它第一次真的抓到我。** 分三个补丁收口:退清单行(`3441df91`)、退配对的孤立 `<script>` 标签(`02de5158`)、以及 —— 同族第三个 —— `globals.generated.d.ts` 我是在**脏树**上重新生成的,把兄弟**未提交**的 `streaming_ui.js` 里的 `renderModelFallbackBannerHtml` 烤进了一个受跟踪文件,干净检出上必红;改为**在 committed tree 的 worktree 里生成**(`6e6e29e4`)。
+- **诚实分账:** 期间撞到的 `paper/research.js` 与 `cookie_capture_consent.js` 两条 tsc/parity 红,经 A/B(只移除兄弟文件即转绿)证实**全部为兄弟在途工作**,我方代码 tsc 贡献 **0 错**,`BASELINE=0` 仍成立。index.html 的 `mcpInstallNote` 一行属 MCP 目录票(`pt_b06e37a6`),按纪律未纳入我的写集。
+
+
+### 2026-07-28(续) — 交易页优化第三批:**我自己上一批的修复带了个缺陷,靠「测状态迁移」才抓到** + 三主题对比度实测(tofu-trade `5ada08d` / `0d92d12`;干净 committed worktree **39/39**)
+
+- **★ 本轮最值钱的一条:我在 `a1873a0` 引入了一个自己的 bug,而两条单状态守卫都抓不到它。** 首屏改造给「有持仓」分支加了前置+隐藏引导,但空仓分支仍是一句裸 `return`。而 `loadOverview()` **每次回到该 tab 都重跑**,于是:用户先有持仓(引导被隐藏、持仓被前置)→ 卖光 → 再回来,空仓分支**什么都不做**,于是 hero 隐藏、引导隐藏、**陈旧的持仓框还挂在那里**,而且**永久如此** —— 后续任何一次访问走的都是那条什么都不做的分支,自己救不回来。
+- **判据:测「两个状态」不等于测「状态迁移」。** 原来两条场景各自建一个全新 document(invested 一个、newcomer 一个),**结构上不可能发现跨访问的残留**。新场景在**同一个 document** 上跑 invested → sold-out,这才是产品真实发生的事。修法是把两条分支都写**显式**:空仓分支主动隐藏持仓框、把 section append 回原位、恢复引导。实测三个症状全部翻转,文档顺序完全复原成出厂布局。
+- **三主题对比度实测(WCAG,取每层最差表面):**
+
+  | 层级 | dark | light | tofu | 判定 |
+  |---|---|---|---|---|
+  | `--t1` 正文 | 14.17 | 11.28 | 11.70 | 三主题全 AA |
+  | `--t2` 次要 | 6.09 | 6.15 | 4.76 | 三主题全 AA |
+  | `--t3` 弱化 | 3.26 | 2.81 | 2.17 | 递降 |
+  | `--t4` 最弱 | **2.10** | **1.91** | **1.70** | **三主题全不及格** |
+
+- **★ 关键更正:`--t4` 我第一版报的数字是错的(dark 报成 6.09,真实 2.10)。** 复用的 `_base_hex` 只取声明里**第一个** hex,而 `--t4` 在三个主题里**都是** `color-mix(in srgb, var(--t3) 75%, var(--bg2))` —— 它返回的是第一个操作数,不是混合结果。而这些 mix **一律朝背景混**,所以按操作数算出来的每一个 `--t4` 数字都偏乐观。补上 mix 求值后 dark 从 6.09 落到真实的 2.10。**NEUTER-4 专门把求值摘掉,确认虚高数字会回来** —— 否则这条报告会以一个精确但错误的数字长期存在(charter「注释里的假数字」同族,这次载体是测试输出)。
+- **`--t3`/`--t4` 只报告不设闸**,因为收紧它们是 owner 的视觉决策;**为了变绿去调阈值 = 让守卫描述 bug 而不是抓 bug**。`--t1`/`--t2` 已设为硬断言,防止将来改配色把可读正文改坏。补集守卫钉住「三主题背景必须互不相同」—— 否则把三套配色统统指向 dark 值也能满足对比度断言。
+- **★ 我的 NEUTER 第一轮全绿,而我差点据此宣布守卫有效。** 补丁写的是 `--t2:#504f5b`,而文件里是 `--t2:        #504f5b`(对齐空格),于是**四发补丁一个都没改到文件**。**「补丁没生效」和「守卫不咬」在输出上完全一样,都是全绿。** 改成先打印被改动的那一行再跑,四发才各自精确咬住。判据补充:**NEUTER 报绿时,先确认补丁真的改到了东西。**
+- **顺带量化影响面:** `trading.css` 里 122 条 muted 层规则中 **92 条**字号小于 14px,属 WCAG 严格 4.5 档;截图里标题旁那个 Beta 徽章同时叠了 `var(--t4)` 和 `opacity:.6`,默认主题下实际约 **1.7:1** —— 渲染出来是一团灰斑而不是一个词。
+
 ### 2026-07-28 — 「切标签页后计时器归零」复查:**用户报的现象是真的,但我开工时的归因(没有持久化)是错的** —— 真因是线上进程比修复本身老 6h55m;顺带挖出两个重启后依然存在的真缺陷(commits `47445079` + `a45913bb`;新增 4 后端 + 2 前端断言,**NEUTER×5 全咬**,相邻环 **105/105**,干净 committed worktree **33/33**)
 
 - **★ 本轮最值钱的一条:三个静态信号全绿,而用户看到的仍是旧行为。** 代码在 HEAD、守卫 6/6 绿、`grep` 服务中的 bundle 符号 **8/8 齐全** —— 我据此差点回答「已修复,你刷新一下」。实测进程表才发现:**服务 pid 101752 启动于 07-27 13:46:23,而修复 `a41a29e6` 提交于 20:41:19(后端半 `b3261241` 20:16)**。跑着的那个进程从内存里服务着修复前的代码。这就是 charter 的「merged ≠ live」,只是这次栽在**我自己的验证口径**上:`pytest` 导入磁盘上的树,用户对话的是启动时加载了树的进程,**两者可以相差任意久**。

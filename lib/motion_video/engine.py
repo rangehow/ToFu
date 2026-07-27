@@ -107,8 +107,13 @@ def _render_one(mv, scene_dir: str, mp4_path: str, *, quality: str,
 
 #: Task fields persisted to job.json so an interrupted job can be re-spawned
 #: verbatim after a server restart (crash-resume is a correctness contract).
+#: ``created_at`` is the job's TRUE start: ``resume_running_jobs`` re-creates
+#: the task via ``create_task()``, which mints a fresh one, so without the
+#: persisted value a resumed job's elapsed clock silently restarts at the
+#: restart instant.
 _MANIFEST_FIELDS = (
-    'task_id', 'kind', 'srt_path', 'scenes_path', 'workdir', 'voice', 'speed',
+    'task_id', 'kind', 'created_at',
+    'srt_path', 'scenes_path', 'workdir', 'voice', 'speed',
     'alignment', 'narration', 'quality', 'parallel', 'width', 'height',
     'burn_in', 'burn_in_fontsdir', 'topic', 'lang', 'max_scenes', 'paper_hash',
     'scene_author', 'author_rounds', 'author_token_budget',
@@ -630,6 +635,10 @@ def resume_interrupted_jobs() -> int:
                   'author_rounds', 'author_token_budget'):
             if m.get(k) is not None:
                 task[k] = m[k]
+        # Restore the ORIGINAL start so the resumed job's elapsed clock
+        # continues instead of restarting at the process-restart instant.
+        if m.get('created_at') is not None:
+            task['created_at'] = m['created_at']
         _motion_runtime.spawn(task_id, run_motion_task, task)
 
     return resume_running_jobs(

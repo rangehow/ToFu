@@ -28,7 +28,8 @@ Standard task dict shape:
         'abort_event':  threading.Event,
         'result':       Any,
         'error':        dict | None, # error envelope
-        'created_at':   float,
+        'created_at':   float,      # true start — surfaced by poll()
+        'updated_at':   float,      # last proof of life — surfaced by poll()
         'finished_at':  float | None,
         'meta':         dict,        # caller-supplied custom fields
     }
@@ -80,6 +81,34 @@ def _make_envelope(error, *, context: str, source: str) -> Optional[dict]:
     from lib.error_envelope import make_envelope as _make_env
     return _make_env('generic', detail=str(error)[:300], context=context,
                      source=source, raw=str(error)[:300])
+
+
+def _epoch_ms(seconds) -> Optional[int]:
+    """Convert an internal epoch-SECONDS timestamp to wire epoch-MILLISECONDS.
+
+    The unit boundary is deliberate and load-bearing. Internally every task
+    clock is ``time.time()`` (float seconds); on the wire this project's
+    established contract is **epoch milliseconds** under camelCase names
+    (``createdAt`` — see ``lib/chat_dispatch.py`` and
+    ``routes/chat_poll_abort.py``), because that is what JS ``Date.now()``
+    speaks and what ``_seedStreamTimerStart`` consumes.
+
+    Feeding a SECONDS value into that frontend seam is not a visible failure:
+    the min-guard happily accepts it (a seconds epoch is ~1000x smaller than
+    ``Date.now()``) and the UI then renders an elapsed of ~50 years. Keeping
+    the snake_case seconds field and the camelCase millisecond field under
+    DIFFERENT names is what makes that mistake impossible to make silently.
+
+    Returns None for a missing/unset clock so the field is emitted as null
+    rather than a bogus 0 (epoch 1970).
+    """
+    if seconds is None:
+        return None
+    try:
+        return int(float(seconds) * 1000)
+    except (TypeError, ValueError) as e:
+        logger.debug('[task_runtime] non-numeric timestamp %r: %s', seconds, e)
+        return None
 
 
 class TaskRuntime:
@@ -135,6 +164,7 @@ class TaskRuntime:
         """Create and register a new task. Returns the task dict."""
         if not task_id:
             task_id = short_id(n=12)
+        _now = time.time()
         task = {
             'id': task_id,
             'kind': self.kind,
@@ -144,7 +174,10 @@ class TaskRuntime:
             'abort_event': threading.Event(),
             'result': None,
             'error': None,
-            'created_at': time.time(),
+            'created_at': _now,
+            # Set at creation (not only in append_event) so the liveness clock
+            # is well-defined for a task that has not emitted anything yet.
+            'updated_at': _now,
             'finished_at': None,
             'meta': meta or {},
         }
@@ -322,11 +355,33 @@ class TaskRuntime:
                 'next_cursor': N,
                 'status': 'pending'|'running'|'done'|'error'|'aborted',
                 'done': bool,
+                'createdAt': int,   # true job start, epoch MILLISECONDS
+                'updatedAt': int,   # last proof of life, epoch MILLISECONDS
                 'result': ... (when done),
                 'error': ... (when error),
+                'finishedAt': int (when terminal), epoch MILLISECONDS
             }
 
-        If the task doesn't exist, returns {'ok': False, 'error': 'not_found'}.
+        ★ UNIT: the clock fields are epoch **milliseconds** under camelCase
+        names, matching this project's existing task-start contract
+        (``lib/chat_dispatch.py``, ``routes/chat_poll_abort.py``). The task
+        dict's own ``created_at`` / ``updated_at`` stay float SECONDS; the
+        camelCase/snake_case split is the unit marker. Never emit the raw
+        seconds value on the wire — see :func:`_epoch_ms`.
+
+        ``createdAt`` / ``updatedAt`` exist so a client that RE-ATTACHES to
+        a running job (page refresh, tab switch, conversation switch) can
+        continue the elapsed clock from the real start instead of restarting
+        it at zero, and can render "last activity" from server truth. A client
+        minting those locally re-mints them on every refresh, which not only
+        shows a wrong elapsed but **washes an already-silent job into looking
+        healthy** — the dangerous half. Mirrors the chat stream's
+        server-authoritative rewind (``_seedStreamTimerStart``); clients MUST
+        apply the same min-guard (only ever move the start EARLIER, ignore a
+        future timestamp) so the display can never jump backward.
+
+        If the task doesn't exist, returns {'ok': False, 'error': 'not_found'}
+        with no clocks — a task that does not exist has no start time.
         """
         task = self.get(task_id)
         if not task:
@@ -345,8 +400,14 @@ class TaskRuntime:
             'next_cursor': new_cursor,
             'status': task['status'],
             'done': terminal,
+            'createdAt': _epoch_ms(task.get('created_at')),
+            # Falls back to created_at so a task with no events yet still
+            # reports a liveness clock — 'now' is never a safe default here.
+            'updatedAt': _epoch_ms(task.get('updated_at')
+                                   or task.get('created_at')),
         }
         if terminal:
+            resp['finishedAt'] = _epoch_ms(task.get('finished_at'))
             if task['error']:
                 resp['error'] = task['error']
             elif task['result'] is not None:

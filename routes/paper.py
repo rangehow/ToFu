@@ -2908,11 +2908,19 @@ def lookup_video_abstract():
                     best = t
     resp = {'ok': True, 'report_available': has_report(phash)}
     if best:
+        from lib.agent_core.task_runtime import _epoch_ms
         resp.update({
             'found': True,
             'task_id': best['task_id'],
             'running': best['status'] in ('pending', 'running'),
             'status': best['status'],
+            # ★ Start clock on the re-attach frame (epoch ms) — this lands
+            #   before the first poll, so without it a refreshed tab paints
+            #   0:00 for a frame. `created_at` was already read above to pick
+            #   the newest task; it just was never surfaced.
+            'createdAt': _epoch_ms(best.get('created_at')),
+            'updatedAt': _epoch_ms(best.get('updated_at')
+                                   or best.get('created_at')),
         })
         if best['status'] == 'done' and best.get('result'):
             resp['result'] = best['result']
@@ -2999,20 +3007,31 @@ def poll_podcast_task():
         t = _podcast_tasks.get(task_id)
     if not t:
         return jsonify({'ok': False, 'error': 'Task not found'}), 404
-    # P-UX1: read-side stall reap — a running task silent for stall_timeout
-    # is declared worker_lost here (its worker died without finish()).
-    _podcast_runtime.reap_if_stalled(t)
-    events = t['events']
-    new_events = events[cursor:]
+    # ★ Go through the shared throat rather than re-deriving the reply here.
+    #   runtime.poll() owns the stall reap AND the server-authoritative clocks
+    #   (createdAt / updatedAt, epoch ms) that let a refreshed client continue
+    #   its elapsed timer instead of restarting at 0:00. A hand-rolled reply
+    #   silently misses every field the throat gains later — which is exactly
+    #   how this endpoint came to be the one production surface with no clocks.
+    base = _podcast_runtime.poll(task_id, cursor=cursor)
     status = t.get('status')
     resp = {
         'ok': True,
-        'status': status,
-        'done': status in ('done', 'error', 'aborted'),
-        'events': new_events,
-        'cursor': len(events),
+        'status': base.get('status', status),
+        'done': base.get('done', status in ('done', 'error', 'aborted')),
+        'events': base.get('events', []),
+        # This endpoint's wire name for the cursor is `cursor`, not
+        # `next_cursor` — keep it (the podcast client reads `cursor`).
+        'cursor': base.get('next_cursor', 0),
         'progress': t.get('progress') or {'done': 0, 'total': 0},
+        'createdAt': base.get('createdAt'),
+        'updatedAt': base.get('updatedAt'),
     }
+    if base.get('finishedAt') is not None:
+        resp['finishedAt'] = base['finishedAt']
+    # The reap may have just flipped the task terminal.
+    status = resp['status']
+    events = t['events']
     if status == 'done':
         resp['script'] = t.get('script')
         resp['meta'] = t.get('script_meta') or {}
@@ -3040,8 +3059,16 @@ async def lookup_podcast():
     eff_voice = voice or _tts.default_voice()
     tid = _podcast_index_get(phash, mode, lang, eff_voice)
     if tid:
+        # ★ The re-attach frame lands BEFORE the first poll, so it must carry
+        #   the start clock too — otherwise a refreshed panel paints 0:00 for
+        #   one frame before the first poll corrects it (a visible flash).
+        from lib.agent_core.task_runtime import _epoch_ms
+        _lt = _podcast_runtime.get(tid) or {}
         return jsonify({'ok': True, 'found': True, 'running': True,
-                        'task_id': tid})
+                        'task_id': tid,
+                        'createdAt': _epoch_ms(_lt.get('created_at')),
+                        'updatedAt': _epoch_ms(_lt.get('updated_at')
+                                               or _lt.get('created_at'))})
     cached = load_cached_podcast(phash, mode, lang, eff_voice)
     if cached:
         status = cached.get('status') or ''

@@ -80,9 +80,9 @@ def _merge_home_index(messages, merge_task_id):
 
 
 def _task_superseded_by_newer_reply(db, conv_id, task_created_at) -> bool:
-    """True when ANOTHER task of this conv COMPLETED (status='done') AFTER
-    this stale task STARTED — i.e. the interrupted task's turn was already
-    answered by a newer reply.
+    """True when ANOTHER task of this conv reached a TERMINAL state
+    (done / error / aborted) AFTER this stale task STARTED — i.e. the
+    interrupted task's turn already SETTLED visibly.
 
     Resurrecting its checkpoint would fabricate a bubble for a turn the
     conversation has long moved past — the ms2gipv5 incident (2026-07-27):
@@ -92,6 +92,16 @@ def _task_superseded_by_newer_reply(db, conv_id, task_created_at) -> bool:
     had landed at 08:08. Four identical 'interrupted' cards rendered after
     client-side identity re-minting fanned the id-less shell out.
 
+    error / aborted count as settled too (owner-reviewed widening, same
+    day): an error bubble is a settled turn, and resurrecting content
+    after a user-initiated ABORT would directly contradict the explicit
+    stop. Production evidence: 7-day statuses error=112 / aborted=2; the
+    widen-pattern (interrupted zombie + newer error/aborted + no newer
+    done) matched exactly ONE historical conv, so the widening closes the
+    invariant hole at essentially zero behaviour-change cost. 'interrupted'
+    deliberately does NOT count — that is the zombie state itself; the
+    newest non-superseded stale task remains the crash frontier.
+
     Fails OPEN (not superseded) on probe error — the probe runs inside the
     same DB sweep as every other SELECT, so a failure here coincides with
     total sweep failure; losing a genuine crash-frontier recovery to a
@@ -99,7 +109,8 @@ def _task_superseded_by_newer_reply(db, conv_id, task_created_at) -> bool:
     """
     try:
         row = db.execute(
-            "SELECT 1 AS x FROM task_results WHERE conv_id=? AND status='done' "
+            "SELECT 1 AS x FROM task_results WHERE conv_id=? "
+            "AND status IN ('done','error','aborted') "
             "AND COALESCE(completed_at, created_at) > ? LIMIT 1",
             (conv_id, int(task_created_at or 0))).fetchone()
         return row is not None
@@ -307,8 +318,8 @@ def recover_stale_tasks_on_startup(prev_shutdown=None, dispatch=True):
                 for row in rows:
                     if _task_superseded_by_newer_reply(db, cid, row['created_at']):
                         logger.info('[Startup] stale task %s (conv=%s) SUPERSEDED by a '
-                                    'newer completed reply — settled but NOT merged '
-                                    '(its turn was already answered)',
+                                    'newer settled turn (done/error/aborted) — settled '
+                                    'but NOT merged (its turn is already closed)',
                                     row['task_id'][:8], cid[:8])
                         continue
                     interrupted_task_by_conv[cid] = row['task_id']

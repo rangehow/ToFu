@@ -362,6 +362,49 @@ class TestSupersededGate(unittest.TestCase):
         self.assertEqual(bubble.get('thinking'), 'short',
                          'G4 failed: the done bubble thinking was stitched')
 
+    def test_newer_error_turn_also_supersedes(self):
+        """Widened G3 surface (owner-reviewed, evidence: 7-day error=112): an
+        ERROR-settled newer turn is a settled turn — the stale zombie must
+        not be resurrected after the error bubble."""
+        from lib.tasks_pkg.manager import recover_stale_tasks_on_startup
+
+        self._seed_superseded_shape()
+        # Re-point the "done" task to error: the turn settled with an error
+        # bubble AFTER the zombie started.
+        from lib.database import DOMAIN_CHAT, get_thread_db
+        db = get_thread_db(DOMAIN_CHAT)
+        db.execute("UPDATE task_results SET status='error' WHERE task_id=?", (self.done,))
+        db.commit()
+
+        _mark_running(self.zombie)
+        recover_stale_tasks_on_startup()
+
+        _, out = _read_conv(self.conv_id)
+        self.assertEqual(len(out), 3,
+                         'recovery resurrected a zombie whose turn settled with '
+                         'an ERROR — an error bubble is a settled turn, G3 must '
+                         'treat it as superseding')
+
+    def test_newer_aborted_turn_also_supersedes(self):
+        """Widened G3 surface: resurrecting content after a user-initiated
+        ABORT would directly contradict the explicit stop."""
+        from lib.tasks_pkg.manager import recover_stale_tasks_on_startup
+
+        self._seed_superseded_shape()
+        from lib.database import DOMAIN_CHAT, get_thread_db
+        db = get_thread_db(DOMAIN_CHAT)
+        db.execute("UPDATE task_results SET status='aborted' WHERE task_id=?", (self.done,))
+        db.commit()
+
+        _mark_running(self.zombie)
+        recover_stale_tasks_on_startup()
+
+        _, out = _read_conv(self.conv_id)
+        self.assertEqual(len(out), 3,
+                         'recovery resurrected a zombie after an ABORTED turn — '
+                         'that contradicts the user\u2019s explicit stop, G3 must '
+                         'treat aborted as superseding')
+
     def test_neuter_superseded_gate_restores_resurrection(self):
         """NEUTER: force the G3 probe to 'not superseded' → the resurrection
         comes back, proving the gate is load-bearing."""

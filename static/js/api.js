@@ -85,8 +85,68 @@
       this.code = (opts && opts.code) || null;
       this.body = (opts && opts.body) !== undefined ? opts.body : null;
       this.url = (opts && opts.url) || null;
+      /* ── Diagnostic surface (declared, not bolted on) ──────────────────
+       * These were previously assigned ad-hoc at the throw sites, which made
+       * them invisible to `tsc --checkJs` AND to anyone reading the class:
+       * the error's contract lived scattered across the request path. They
+       * are part of what an ApiError IS, so they are declared here.
+       *
+       *   requestId       the id to quote when reporting this failure — the
+       *                   server-resolved one when we know it, else ours
+       *   clientRequestId the id THIS client put on the wire
+       *   serverRequestId the id the server echoed back; a mismatch with
+       *                   clientRequestId proves a proxy rewrote the header
+       *   envelope        the backend's typed error envelope when it sent one
+       *                   (see lib/error_envelope/ + core/error_envelope.js)
+       */
+      this.requestId = (opts && opts.requestId) || null;
+      this.clientRequestId = (opts && opts.clientRequestId) || null;
+      this.serverRequestId = (opts && opts.serverRequestId) || null;
+      this.envelope = (opts && opts.envelope) || null;
     }
   }
+
+  /* ── Request correlation id (frontend → backend log join key) ───────
+   *
+   * The backend ALREADY prefers an inbound `X-Request-ID`
+   * (server.py::_assign_req_id_and_log) and stamps it on every log line for
+   * the request via a contextvar, then echoes it back on the response
+   * (`X-Request-ID`). Before this, the frontend never sent one, so every rid
+   * was server-minted and the client held no copy — a user-reported bug had
+   * NO join key back to the server logs (only timestamp + URL guessing).
+   *
+   * Shape: `<page>-<seq>` where `page` is a short id minted once per document
+   * load. The page prefix is what makes a whole page-load's requests
+   * groupable with one `grep` in app.log; the monotonic seq keeps every
+   * request individually addressable and makes a gap (a request that never
+   * reached the server) visible.
+   *
+   * Kept to [a-z0-9-] and short: it lands in a header, in log lines, and in
+   * an error surface a user may read aloud or screenshot.
+   */
+  const _PAGE_ID = (function () {
+    try {
+      const c = global.crypto;
+      if (c && typeof c.randomUUID === 'function') return c.randomUUID().slice(0, 6);
+      if (c && typeof c.getRandomValues === 'function') {
+        const b = new Uint8Array(3);
+        c.getRandomValues(b);
+        return Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+      }
+    } catch (e) { /* crypto unavailable (old WebView / insecure origin) */ }
+    return Math.random().toString(36).slice(2, 8);
+  })();
+
+  let _ridSeq = 0;
+
+  /** Mint the next correlation id for an outbound request. */
+  function _nextRequestId() {
+    _ridSeq += 1;
+    return _PAGE_ID + '-' + _ridSeq;
+  }
+
+  /** The page id every request from this document load shares. */
+  function pageRequestId() { return _PAGE_ID; }
 
   // ── Core request ──────────────────────────────────────────────────
   // opts:
@@ -104,6 +164,15 @@
     const method = (opts.method || 'GET').toUpperCase();
     const url = _resolve(path) + _qs(opts.query);
     const headers = Object.assign({}, opts.headers || {});
+    /* ★ Correlation id — injected HERE, at the ONE chokepoint every frontend
+     * backend call passes through (get/post/put/patch/del/stream all delegate
+     * to request()), so coverage is total without touching a single call site.
+     * That total coverage from one edit is the concrete payoff of the api.js
+     * isolation rule enforced by tests/test_frontend_api_isolation.py.
+     * A caller may override it explicitly (retry that wants to reuse the
+     * original id); we never clobber a provided value. */
+    const _rid = headers['X-Request-ID'] || _nextRequestId();
+    headers['X-Request-ID'] = _rid;
     let body = opts.body;
     if (opts.json !== undefined) {
       headers['Content-Type'] = headers['Content-Type'] || 'application/json';
@@ -139,7 +208,7 @@
     } catch (e) {
       if (timeoutId) clearTimeout(timeoutId);
       if (opts.onError === 'null') {
-        console.warn('[Api] %s %s failed: %s', method, url, e && e.message);
+        console.warn('[Api] %s %s failed: %s [rid=%s]', method, url, e && e.message, _rid);
         return null;
       }
       // Rethrow abort AND timeout DOMExceptions verbatim so callers that
@@ -147,7 +216,14 @@
       // 30s AbortSignal.timeout in main_send_pipeline.js) keep working exactly
       // as they did with a raw fetch.
       if (e && (e.name === 'AbortError' || e.name === 'TimeoutError')) throw e;
-      throw new ApiError(e && e.message || 'network error', { url, code: 'network' });
+      /* No response arrived, so there is no server-echoed id — but the id we
+       * SENT is still the join key: if the request reached the app at all,
+       * server.py logged this exact rid, which distinguishes "never left the
+       * client" from "server received it and then the connection broke". */
+      const _netErr = new ApiError(e && e.message || 'network error', { url, code: 'network' });
+      _netErr.clientRequestId = _rid;
+      _netErr.requestId = _rid;
+      throw _netErr;
     }
     if (timeoutId) clearTimeout(timeoutId);
 
@@ -179,12 +255,30 @@
         { status: resp.status, code, body: bodyData, url }
       );
       if (isEnvelope) err.envelope = code;
+      /* ★ Correlation: the id WE sent, plus the id the server actually used
+       * (echoed at server.py's after_request). They are normally identical
+       * — the backend prefers our inbound header — so a MISMATCH is itself a
+       * finding: something between us and the app (proxy / tunnel / CDN)
+       * rewrote or stripped the header. Keep both rather than assuming. */
+      err.clientRequestId = _rid;
+      const _srvRid = resp.headers.get('X-Request-ID');
+      if (_srvRid) err.serverRequestId = _srvRid;
       if (bodyData && typeof bodyData === 'object'
           && typeof bodyData.request_id === 'string' && bodyData.request_id) {
         err.requestId = bodyData.request_id;
+      } else if (_srvRid) {
+        /* Backends that don't echo request_id in the JSON body still gave us
+         * the header — populate the same field so every consumer of
+         * `err.requestId` (diagnostics, error surfaces) works uniformly. */
+        err.requestId = _srvRid;
+      } else {
+        err.requestId = _rid;
       }
       if (opts.onError === 'null') {
-        console.warn('[Api] %s', err.message);
+        /* Log the rid on the swallow path too: `onError:'null'` is the
+         * QUIETEST failure mode and therefore the one most in need of a
+         * server-side join key. */
+        console.warn('[Api] %s [rid=%s]', err.message, err.requestId);
         return null;
       }
       throw err;
@@ -1432,6 +1526,7 @@
     request, get, post, put, patch, del, stream,
     ApiError,
     _resolve,         // exposed for SSE/WS path building
+    pageRequestId,    // the correlation prefix every request of this page shares
     // domains
     folders, paperFolders, orchestrations, memory, skills, profile, timer, scheduler, optimizer, compactions,
     conversations, text, translate, chat, images, pdf, doc, audio, artifacts,

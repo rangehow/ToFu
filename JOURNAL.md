@@ -1,6 +1,21 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-27 — 自动科研系统 R4 落地:三段串上产出底盘阶段图 + `produce_research` 入口(owner 拍板「别造第四个雷同 runtime」)。commit 见下,4 新文件(`lib/research/` 包)+ 1 测试;新套件 **6/6 含 NEUTER + failing-first 实证**,相邻 R1–R3 三套件 **22/22**,collect **10395** 0 err
+
+- **形态 = 第四个配方,零新造生命周期:** `harvest → survey → ideate` 三个 `Stage` 骑 `lib/production/stages.py`(checkpoint 崩溃续跑)+ `jobs.py`(manifest re-spawn)+ `ProductionRuntime`(dedup/create/append/stale)。**runtime.py 是 longform/runtime.py 的近拷贝——这个雷同正是底盘生效的证据,不是待重构的重复**(owner 明确「别造第四个雷同 runtime」)。
+- **阶段数据契约钉死(owner R4 要求,边界传真 schema 不靠内存全局):**
+  | 阶段 | 产物 | 下游读什么 |
+  |---|---|---|
+  | harvest | `{folder_id, arxiv_ids, harvested, cache_hits}` | survey 读 folder_id + arxiv_ids |
+  | survey | `{open_gaps, survey_md, inputs_used}` | ideate 读 open_gaps(R2 冻结 schema v1) |
+  | ideate | `{accepted, rejected, threshold}` | 最终结果 + 淘汰留档 |
+- **崩溃续跑是正确性契约(NEUTER + failing-first 双实证):** pass1 在 ideate 崩 → harvest+survey 落 checkpoint、ideate 不落;pass2 只重跑 ideate(harvest/survey seam 断言 0 调用)。**NEUTER:** 删掉 survey checkpoint 条目 → 恰好 survey 重跑、harvest 不跑;**failing-first:** 把 survey 改 `resumable=False` → 崩溃续跑测试精确翻红(`survey MUST NOT re-run`)。
+- **零自建路由:** `_research_runtime` = `ProductionRuntime('research').runtime`,被 `routes/api_v1/tasks.py` 按 `kind='research'` 发现,通用 `/api/v1/tasks/*` poll+abort 直接服务。
+- **端到端可跑但尚未真跑:** `produce_research(direction=)` 总入口 + 各阶段 seam 可单独调;harvest 无种子 id 时从 direction `search_arxiv` 派生,不依赖 R7 即可端到端。**下一步:底盘上真跑一次(真 LLM+真 arXiv),拿可复现的第一批 idea 淘汰分布校准 `IDEATE_GATE_THRESHOLD`。**
+- **facade PEP 562 lazy:** 重依赖全惰性 import,零 import-time 成本(collect 10395 0 err 实证)。
+- **shared-HEAD 纪律:** 全新 `lib/research/` 包 + 独立测试,与 sibling 零共享文件;精确 pathspec 提交。
+
 ### 2026-07-27 — RWA 收尾三件套:README 坏命令修正 + agent `--root` CLI 旗标 + slow 真 e2e 入库(epic `pt_837c0292b0834311`,owner 验收三条;commit 见下,4 文件改 + 2 新测试文件;CLI 套件 **15/15**(NEUTER 剥 save_config → 精确 3 红),slow e2e **1/1 真子进程×真服务器 6.3s**,桌面+流帧同进程环 **152/152**,RWA 其余环 **87/87**,collect **10359** 0 err)
 
 - **起因(owner 复核抓的三个第一步即死缺口):** ①README.md:379 / README_CN.md:370 的启动命令 `python lib/desktop_agent.py` 是坏的——它是**包**不是文件,照抄直接 "can't open file";②share_roots 没有任何声明入口,README 只说「在配置文件声明」却不说在哪怎么写;③设计稿 §7 承诺的 slow 真 e2e(真 agent 子进程 + 真服务器)从未入库,端到端证据只有进程内假 agent。

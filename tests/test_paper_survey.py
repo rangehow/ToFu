@@ -334,6 +334,42 @@ def test_library_tier_gap_is_high_confidence():
     _ok('a gap with any library-tier evidence is high-confidence (low_confidence=False)')
 
 
+def test_dict_shaped_ids_are_extracted_not_crash():
+    """E2E regression (research_f12ab5e8, 2026-07-27): a REAL model emitted
+    dict-shaped entries in the gap map's id lists — ``{'id': '2305.x', 'note':
+    '…'}`` in clusters.papers and ``{'arxiv_id': '2401.y'}`` in
+    open_gaps.evidence — and ``_norm_id`` crashed with ``'dict' object has no
+    attribute 'split'``, killing the whole survey stage after a successful LLM
+    call. The gate must salvage the id from a dict, and treat a dict with no
+    usable id as unverifiable (stripped), never crash."""
+    import lib.paper.survey as sv
+    raw = {
+        'clusters': [{'id': 'c1', 'theme': 't',
+                      'papers': ['1111.00001', {'id': '2222.00002', 'note': 'dict entry'},
+                                 {'title': 'no id here'}]}],
+        'method_matrix': [{'paper': {'arxiv_id': '1111.00001'}, 'task': 'x'}],
+        'open_gaps': [{'id': 'g', 'gap': 'x',
+                       'evidence': [{'arxiv_id': '2222.00002', 'role': 'proves gap'},
+                                    '1111.00001']}],
+    }
+    out = sv._verify_against_library(
+        raw, lib_ids={'1111.00001', '2222.00002'}, ground_fn=lambda aid: '')
+    # Dict-carried ids are salvaged and kept; the id-less dict is stripped.
+    assert out['clusters'][0]['papers'] == ['1111.00001', '2222.00002'], \
+        out['clusters'][0]['papers']
+    assert len(out['method_matrix']) == 1, 'dict-shaped matrix paper must survive'
+    assert out['method_matrix'][0]['paper'] == '1111.00001', \
+        'salvaged matrix paper id should be normalized to the bare string'
+    g = out['open_gaps'][0]
+    assert g['evidence'] == ['2222.00002', '1111.00001'], g['evidence']
+    assert g['low_confidence'] is False
+    assert out['stripped_ids'], 'the id-less dict must be recorded as unverifiable'
+    # _extract_survey_ids must not crash on the same shapes either.
+    ids = sv._extract_survey_ids(out)
+    assert ids == {'1111.00001', '2222.00002'}
+    _ok('dict-shaped ids salvaged (e2e crash class), id-less dicts stripped, no crash')
+
+
 def test_grounding_tier_NEUTER():
     """NEUTER: if the 'grounded' fallback is removed (ground_fn always ''), the
     same real-but-unharvested gap is dropped as a hallucination — proving the
@@ -371,6 +407,7 @@ def main():
         test_library_tier_gap_is_high_confidence,
         test_grounding_tier_NEUTER,
         test_no_library_inputs_is_clean_failure,
+        test_dict_shaped_ids_are_extracted_not_crash,
     ]
     for fn in tests:
         try:

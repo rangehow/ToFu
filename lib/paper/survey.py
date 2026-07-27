@@ -91,8 +91,24 @@ def _norm_id(arxiv_id) -> str:
     """Strip a version suffix so ``2502.09992v3`` and ``2502.09992`` compare equal.
 
     Mirrors ``recommend_engine._ground._norm_id`` exactly (kept local to avoid a
-    cross-engine import on the survey cold path)."""
-    return (arxiv_id or '').split('v')[0].strip()
+    cross-engine import on the survey cold path).
+
+    TOTAL function (e2e fix, research_f12ab5e8): a real model emits dict-shaped
+    entries in gap-map id lists (``{'id': …}`` / ``{'arxiv_id': …}`` /
+    ``{'paper': …}``) — salvage the id from those keys and return '' for
+    anything unparseable instead of crashing on ``.split``.
+    """
+    if isinstance(arxiv_id, dict):
+        for _k in ('arxiv_id', 'id', 'paper'):
+            _v = arxiv_id.get(_k)
+            if isinstance(_v, str) and _v.strip():
+                arxiv_id = _v
+                break
+        else:
+            return ''
+    if not isinstance(arxiv_id, str):
+        return ''
+    return arxiv_id.split('v')[0].strip()
 
 
 # ── Input loading (pin #2: reports/library only, never a re-parse) ─────────
@@ -238,16 +254,20 @@ def _tier_ids(id_list, lib_ids: set, stripped: list, tiers: dict,
     for raw in (id_list or []):
         nid = _norm_id(raw)
         if not nid:
+            # A dict entry with no salvageable id is an unverifiable CLAIM —
+            # record it as stripped rather than silently skipping it.
+            if isinstance(raw, dict):
+                stripped.append(str(raw)[:80])
             continue
         if nid in lib_ids:
-            kept.append(raw)
+            kept.append(nid)
             tiers[nid] = 'library'
             continue
         # Not in the shelf — is it a real paper (grounded) or a hallucination?
         if nid not in ground_cache:
             ground_cache[nid] = bool(ground_fn(nid)) if ground_fn else False
         if ground_cache[nid]:
-            kept.append(raw)
+            kept.append(nid)
             tiers[nid] = 'grounded'
         else:
             stripped.append(nid)
@@ -322,7 +342,9 @@ def _verify_against_library(gap_map: dict, *, user_id: int = 1,
         kept = _tier_ids([m.get('paper')], lib_ids, stripped, all_tiers,
                          ground_fn, ground_cache)
         if kept:
-            matrix.append(dict(m))
+            m2 = dict(m)
+            m2['paper'] = kept[0]   # normalized bare id (salvaged if dict-shaped)
+            matrix.append(m2)
     out['method_matrix'] = matrix
 
     # open_gaps — drop only when ALL evidence is hallucination; flag low_confidence

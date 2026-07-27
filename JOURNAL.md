@@ -1,6 +1,14 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-27(续) — 「调用了本轮不存在的工具」从静默成功升级为可见 envelope:**落点被我自己的实测推翻一次**(epic `pt_88791cb08cb2495c`,commit `9abdcb22`,5 文件;新套件 **5/5**,**NEUTER×3 全咬**,相邻环 **57/57**,committed-tree 复验 **63/63**)
+
+- **修的是「一个实质失败的任务报 done」。** 7 天实测 3 例(conv `mrvpzoih636mdx`,4.8 线):模型反复调 `project_board_complete` / `code_exec`,被硬拒且**从未执行**,随后纯文本收尾 → 任务 `status=done`、`error=none`。用户视角只有「对话停在半途」,系统却宣称成功。**存量受害者就是本文件顶部那条 `CLOSURE-PENDING pt_a4c9d33e`**:活早干完了,只差一次拿不到的 `project_board_complete`,而没人被告知。
+- **★ 我的第一个落点是错的,是实测(不是评审)把它推翻的。** 我原本把 envelope 挂在幻觉循环断路器(`_parse.py` 的 `HALLUCINATION_ABORT_THRESHOLD` 分支),理由看似充分:那里正是「反复调不存在工具」的判定点。跑完守卫红了才去查真实数据,两条硬事实同时否掉这个落点:①`code_exec` **有**近似建议(`produce_research`/`browser_execute_js`/`schedule_create`),而该分支要求 `not suggestions` → **对它永不触发**;②`project_board_complete` 在默认工具集里(`in_known=True`),压根不进幻觉分类。**照这个落点上线会漏掉 3 例里的 2 例,而套件全绿。** 改到 `orchestrator/_finalize`,判据换成**结构式**:任务以「未解决的 rejected 轮」收尾(之后没有任何工具真的跑过)—— 与措辞无关、与有无建议无关。
+- **四处同步 + NEUTER 3 复现了 charter 点名的那个坑。** 新 kind 必须同步 `KINDS` / `_TITLES` / `err.k.*` i18n(zh+en) / `ERROR_KIND_LABELS`,`test_error_envelope_i18n` 逐字节钉死(19/19)。NEUTER 3 把 kind 从 `KINDS` 摘掉后,envelope **静默降级成 `generic`**、渲染出「⚠️ 模型调用失败」并把用户导向 Settings→Keys —— 与 `budget_exceeded` 当年的误显示一模一样。hint 按 charter 明令**指向工具集开关**,绝不指 Keys(生产实证 46 次/日误导航)。
+- **★ 守卫里最值钱的是那条「区分修对与修错」的对照。** 一个只要 `toolRounds` 里出现过 rejected 就报错的实现,会通过我其余所有断言 —— 却把「模型自我纠正成功」的正常轮次全部误标成失败。补 `test_recovery_after_the_rejection_is_not_reported_as_a_failure`(被拒后又成功跑了真工具),NEUTER 2(去掉「收尾于此」判据、改成任何 rejected 都报)**精确红在这一条**。另按 charter 纪律:守卫**不手抄**生产判据,而是每次运行时把 `_finalize` 的那段整块 splice 出来 exec —— 找不到就报「实现被删除」,而不是静默绿。
+- **不做补推(与姊妹票的边界)。** 该工具整轮都不存在,重试必被再拒,补推只会让模型反复去抓一个永远拿不到的工具 = 无限循环烧钱。故 `docs/INTENT_STALL_MEASUREMENT.md` §4 把它判为**不可重试**并明确排除在补推之外;两票正交、可并行。
+
 ### 2026-07-27(续) — 静默 catch 全库根修:96 处 except 补 `logger.debug`(epic `pt_98a4e0c2`,owner 拍板 **C:全部逐点加 debug**;commit `c92a7f2c`,45 文件 +185/-89;守卫 **5 红 → 3 红**,残余 3 条全部 sibling-gated;干净 committed-tree 复验 **13 passed + collect 10951/0 err**)
 
 - **票面数字 58 是旧快照,实测 96。** 差额不是票写错,是这段时间新代码继续欠债 —— 这类债**按天累积**,不一次性清零就永远追不上。用 `test_code_quality.py` 自己的 AST finder 驱动改写,保证「改的正好是守卫报的」;这个规模手工逐条改必然与守卫定义漂移。

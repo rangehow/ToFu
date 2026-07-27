@@ -527,10 +527,21 @@ def test_NEUTER_video_fail_limit_loadbearing():
 def test_NEUTER_liveness_ticker_survives_polling(module, harness, name, state,
                                                  stop_call):
     """NEUTER: fold the ticker teardown back into the POLL-path stop (the
-    pre-fix shape) → the 1s stopwatch dies on the first poll and the elapsed
-    probe flips FAIL. Proves the stop/stop-polling split is load-bearing and
-    not cosmetic: without it a silent-but-healthy worker renders as a frozen
-    0:00 card, which is precisely the reported "stuck" symptom."""
+    pre-fix shape) → the 1s stopwatch dies on the first poll.
+
+    Probe choice (updated 2026-07-27): this asserted ``FAIL
+    liveness_elapsed_advances``, because a dead ticker used to leave the
+    elapsed line frozen. The poll path now repaints the liveness line itself
+    (so a clockless disk-fallback re-attach cannot sit at 0:00 until the next
+    tick), which means a dead ticker no longer freezes the TEXT — it degrades
+    it from 1s granularity to once-per-poll. That old assertion is therefore
+    asserting something FALSE, and the honest probe for the damage this neuter
+    does is the ticker liveness itself, which still flips.
+
+    The split remains load-bearing: without it the stopwatch only moves when a
+    poll happens to land, so between polls a silent-but-healthy worker shows a
+    stalled clock — the reported "stuck" symptom in slower form.
+    """
     js_path = PODCAST_JS if module == 'podcast' else VIDEO_JS
     harness_src = _PODCAST_HARNESS if module == 'podcast' else _VIDEO_HARNESS
     src = open(js_path, encoding='utf-8').read()
@@ -552,7 +563,7 @@ def test_NEUTER_liveness_ticker_survives_polling(module, harness, name, state,
                              text=True, timeout=30)
         assert chk.returncode == 0, f'patched JS invalid: {chk.stderr}'
         out = _run_harness(harness_src, tmp, name)
-        assert 'FAIL liveness_elapsed_advances' in out, \
+        assert 'FAIL liveness_ticker_survives_polling' in out, \
             'restoring the ticker-in-poll-stop did NOT flip the probe:\n' + out
     finally:
         try:

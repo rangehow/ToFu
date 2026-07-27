@@ -376,6 +376,13 @@ async function _pcPollOnce() {
      * generating panel whose ticker died shows a frozen stopwatch even
      * though the start instant is now correct. */
     if (_podcast.status === 'generating') _pcStartTick();
+    /* Repaint the liveness line NOW, not on the next 1s tick. This poll may
+     * have just adopted the server's clocks (above) — on the re-attach where
+     * the lookup carried none, that adoption is the ONLY thing standing
+     * between the user and a 0:00 reset, and _pcRenderProgress() paints just
+     * the progress line. Without this the corrected elapsed is held back for
+     * up to a full second, so the panel shows 0:00 and then jumps. */
+    _pcRenderActivity();
     _pcSchedulePoll();
   } catch (e) {
     console.warn('[Paper:Podcast] poll failed:', e);

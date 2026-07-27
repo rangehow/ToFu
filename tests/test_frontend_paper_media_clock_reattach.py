@@ -209,6 +209,35 @@ function liveLine() { return document.getElementById('videoActivityLine'); }
   check('ticker_text_advances', before !== after);
   _pvStopPolling();
 
+  /* ── Case 5: the DISK-FALLBACK re-attach — lookup carries NO clocks ──
+   *
+   * After a server restart the task is gone from memory, so the lookup falls
+   * back to the on-disk manifest. Case 1 only ever fed a lookup that HAD
+   * clocks, so this shape — the one the post-restart user actually gets — was
+   * never exercised. Two things must hold:
+   *   - the first poll's clocks are adopted (the panel cannot stay at 0:00);
+   *   - the liveness line is repainted BY THAT POLL, not on the next 1s tick.
+   * The ticker is deliberately killed just before the poll so only the poll
+   * path can have painted what we assert. */
+  _pvStopPolling();
+  _pvideo.status = 'idle'; _pvideo.taskId = '';
+  _pvideo.genStartedAt = 0; _pvideo.lastEventAt = 0;
+  apiState.lookupResp = { ok: true, found: true, running: true,
+                          task_id: 'motion_disk', status: 'running' };
+  apiState.pollResp = { ok: true, done: false, next_cursor: 3, events: [],
+                        createdAt: NOW - 480000, updatedAt: NOW - 4000 };
+  await _initVideoTab();
+  await settle(4);
+  _pvStopTick();                       // only the poll may repaint from here
+  await _pvPollOnce();
+  await settle(2);                     // far below the 1000ms tick interval
+  _pvStopPoll();
+  const txt5 = (liveLine() || {}).textContent || '';
+  check('clockless_lookup_healed_by_poll_without_a_tick',
+        /elapsed 8:0\d/.test(txt5));
+  check('clockless_lookup_not_left_at_zero', !/elapsed 0:0\d/.test(txt5));
+  _pvStopPolling();
+
   console.log(out.join('\n'));
   process.exit(0);
 })().catch((e) => { console.error(e); process.exit(1); });
@@ -333,6 +362,29 @@ function liveLine() { return document.getElementById('podcastActivityLine'); }
   check('ticker_text_advances', before !== after);
   _pcStopPolling();
 
+  /* ── Case 5: DISK-FALLBACK re-attach — lookup carries NO clocks ──
+   * See the video harness: the post-restart shape was never exercised, and
+   * the poll must repaint the liveness line itself rather than leaving the
+   * corrected elapsed to the next 1s tick. Ticker killed before the poll. */
+  _pcStopPolling();
+  _podcast.status = 'idle'; _podcast.taskId = '';
+  _podcast.genStartedAt = 0; _podcast.lastEventAt = 0;
+  apiState.lookupResp = { ok: true, found: true, running: true,
+                          task_id: 'pc_disk' };
+  apiState.pollResp = { ok: true, done: false, cursor: 3, events: [],
+                        createdAt: NOW - 480000, updatedAt: NOW - 4000 };
+  await _initPodcastTab();
+  await settle(4);
+  _pcStopTick();                       // only the poll may repaint from here
+  await _pcPollOnce();
+  await settle(2);                     // far below the 1000ms tick interval
+  _pcStopPoll();
+  const txt5 = (liveLine() || {}).textContent || '';
+  check('clockless_lookup_healed_by_poll_without_a_tick',
+        /elapsed 8:0\d/.test(txt5));
+  check('clockless_lookup_not_left_at_zero', !/elapsed 0:0\d/.test(txt5));
+  _pcStopPolling();
+
   console.log(out.join('\n'));
   process.exit(0);
 })().catch((e) => { console.error(e); process.exit(1); });
@@ -421,6 +473,29 @@ class TestPaperMediaClockReattach(unittest.TestCase):
             '    /* neutered */',
             _VIDEO_HARNESS,
             'ticker_alive_after_reattach')
+
+    # ── NEUTER: the poll must repaint the liveness line itself ──
+    #
+    # Dropping the repaint leaves the corrected elapsed invisible until the
+    # next 1s tick. That is exactly the 0:00 flash a user reports as "the
+    # timer restarted", and on the disk-fallback re-attach it is the only
+    # thing standing between them and a permanent 0:00.
+
+    def test_NEUTER_video_poll_repaint_removed_leaves_zero_showing(self):
+        self._neuter(
+            VIDEO_JS,
+            '    _pvRenderActivity();\n    _pvSchedulePoll();',
+            '    _pvSchedulePoll();',
+            _VIDEO_HARNESS,
+            'clockless_lookup_healed_by_poll_without_a_tick')
+
+    def test_NEUTER_podcast_poll_repaint_removed_leaves_zero_showing(self):
+        self._neuter(
+            PODCAST_JS,
+            '    _pcRenderActivity();\n    _pcSchedulePoll();',
+            '    _pcSchedulePoll();',
+            _PODCAST_HARNESS,
+            'clockless_lookup_healed_by_poll_without_a_tick')
 
 
 if __name__ == '__main__':

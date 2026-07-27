@@ -2947,6 +2947,7 @@ def _lookup_paper_video_on_disk(phash: str) -> dict | None:
     again) — report interrupted. Returns a lookup-response fragment or
     None when nothing on disk matches.
     """
+    from lib.agent_core.task_runtime import _epoch_ms
     from lib.motion_video._env import motion_root
     from lib.motion_video.runtime import _motion_runtime
     from lib.production.jobs import read_manifest
@@ -2974,8 +2975,40 @@ def _lookup_paper_video_on_disk(phash: str) -> dict | None:
         return None
     _mt, task_id, m = best
     state = m.get('state')
+
+    # ★ Server-authoritative clocks on the DISK path too.
+    #
+    # This branch IS the post-restart re-attach: the task is gone from memory,
+    # so unlike the in-memory branch there is no first poll to correct a
+    # locally-minted stopwatch afterwards — runtime.poll() 404s on a task it
+    # does not hold. Whatever this response says is what the panel shows for
+    # the rest of the run, so omitting the clocks here made a resumed job
+    # restart its elapsed at 0:00 permanently.
+    #
+    # `created_at` is persisted in the manifest precisely because
+    # resume_running_jobs() mints a fresh task (see motion_video.engine's
+    # _MANIFEST_FIELDS note); job.json's mtime is the last time the worker
+    # actually wrote its state, which is the honest liveness signal available
+    # from disk. Both are OMITTED rather than guessed when unavailable: a
+    # missing field lets the client fall back to its local clock, whereas a
+    # fabricated one renders as 1970 or year 58000 — silently wrong beats
+    # nothing here only if it is TRUE.
+    def _disk_clocks() -> dict:
+        out = {}
+        created = _epoch_ms(m.get('created_at'))
+        if created is not None:
+            out['createdAt'] = created
+        seen = _epoch_ms(_mt) if _mt else None
+        # Liveness may never claim to predate the start.
+        if seen is not None and (created is None or seen >= created):
+            out['updatedAt'] = seen
+        elif created is not None:
+            out['updatedAt'] = created
+        return out
+
     if state == 'running' and _motion_runtime.get(task_id) is None:
-        return {'found': True, 'interrupted': True, 'task_id': task_id}
+        return {'found': True, 'interrupted': True, 'task_id': task_id,
+                **_disk_clocks()}
     if state == 'done':
         workdir = os.path.join(jobs_dir, task_id)
         final = os.path.join(workdir, 'final.mp4')
@@ -2991,7 +3024,8 @@ def _lookup_paper_video_on_disk(phash: str) -> dict | None:
                     'task_id': task_id,
                     'result': {'final_path': final, 'duration': duration,
                                'workdir': workdir,
-                               'narrated': bool(m.get('narration'))}}
+                               'narrated': bool(m.get('narration'))},
+                    **_disk_clocks()}
     return None
 
 

@@ -203,5 +203,123 @@ def test_video_lookup_running_branch_carries_clock():
         _motion_runtime._tasks.pop(tid, None)
 
 
+# ── the DISK-FALLBACK lookup: the post-restart re-attach ───────
+#
+# This branch is reached when the task is GONE from memory (server restarted),
+# and it is the one re-attach path with NO downstream correction: the client's
+# first poll hits a runtime that does not hold the task, so it 404s. Whatever
+# the lookup says is what the panel shows for the rest of the run — an omitted
+# clock there is a PERMANENT 0:00, not a one-frame flash.
+#
+# `created_at` is persisted in job.json precisely because resume mints a fresh
+# task (see motion_video.engine._MANIFEST_FIELDS), so the true start IS
+# recoverable from disk and must be surfaced.
+
+
+@pytest.fixture
+def disk_job(tmp_path, monkeypatch):
+    """A real on-disk motion job manifest, with the runtime holding nothing."""
+    import json
+
+    jobs = tmp_path / 'jobs'
+    jobs.mkdir()
+    monkeypatch.setattr('lib.motion_video._env.motion_root',
+                        lambda: str(tmp_path))
+
+    def _write(task_id, phash, state, created_at, *, final=False):
+        wd = jobs / task_id
+        wd.mkdir()
+        (wd / 'job.json').write_text(json.dumps({
+            'task_id': task_id, 'kind': 'paper-video', 'state': state,
+            'created_at': created_at, 'paper_hash': phash,
+            'narration': True, 'workdir': str(wd),
+        }), encoding='utf-8')
+        if final:
+            (wd / 'final.mp4').write_bytes(b'\x00' * 32)
+        return wd
+
+    return _write
+
+
+def _call_video_lookup(phash):
+    import asyncio
+
+    from quart import Quart
+
+    from routes.paper import lookup_video_abstract
+
+    app = Quart(__name__)
+
+    async def _run():
+        async with app.test_request_context(
+                f'/api/v1/paper/video/lookup?paper_hash={phash}'):
+            resp = lookup_video_abstract()
+            body = resp[0] if isinstance(resp, tuple) else resp
+            return await body.get_json()
+
+    return asyncio.run(_run())
+
+
+def test_disk_fallback_interrupted_carries_the_true_start_clock(disk_job):
+    """A restart-interrupted job reports when it REALLY started."""
+    started = time.time() - 900
+    disk_job('motion_disk_intr', 'diskhash1', 'running', started)
+    body = _call_video_lookup('diskhash1')
+    assert body['found'] is True and body['interrupted'] is True
+    assert body.get('createdAt') is not None, (
+        'the disk-fallback branch is the POST-RESTART re-attach and has no '
+        'poll to correct it later — omitting the clock is a permanent 0:00')
+    assert body['createdAt'] > _MS_FLOOR, 'epoch ms, like every other surface'
+    assert body['createdAt'] == pytest.approx(started * 1000, abs=5)
+
+
+def test_disk_fallback_done_carries_the_true_start_clock(disk_job):
+    """The playable-result branch carries the same clocks."""
+    started = time.time() - 1200
+    disk_job('motion_disk_done', 'diskhash2', 'done', started, final=True)
+    body = _call_video_lookup('diskhash2')
+    assert body['found'] is True and body['status'] == 'done'
+    assert body['createdAt'] == pytest.approx(started * 1000, abs=5)
+    assert body['createdAt'] > _MS_FLOOR
+
+
+def test_disk_fallback_liveness_never_predates_the_start(disk_job):
+    """updatedAt is a real signal (job.json mtime) and never before the start.
+
+    A liveness clock earlier than the start would render a NEGATIVE silence,
+    which the frontend floors to 0:00 — i.e. it would look maximally healthy
+    exactly when we know least. The start is the honest floor.
+    """
+    started = time.time() - 600
+    disk_job('motion_disk_live', 'diskhash3', 'running', started)
+    body = _call_video_lookup('diskhash3')
+    assert body.get('updatedAt') is not None
+    assert body['updatedAt'] >= body['createdAt']
+
+
+def test_disk_fallback_omits_the_clock_rather_than_inventing_one(disk_job):
+    """A manifest with NO created_at must omit the field, not fabricate it.
+
+    Fabricating (0, or 'now') is strictly worse than omitting: omitted lets the
+    client keep its own local clock, whereas 0 renders as 1970 and 'now' hides
+    a real elapsed. This is the complement guard — without it, 'always emit a
+    number' would also pass the three tests above.
+    """
+    import json
+    from lib.motion_video._env import motion_root
+
+    disk_job('motion_disk_noclk', 'diskhash4', 'running', time.time() - 60)
+    p = os.path.join(motion_root(), 'jobs', 'motion_disk_noclk', 'job.json')
+    m = json.loads(open(p, encoding='utf-8').read())
+    m.pop('created_at')
+    open(p, 'w', encoding='utf-8').write(json.dumps(m))
+
+    body = _call_video_lookup('diskhash4')
+    assert body['found'] is True
+    assert 'createdAt' not in body, (
+        'with no persisted start, the field must be ABSENT — a fabricated '
+        'epoch renders as 1970/58000 instead of falling back to local time')
+
+
 if __name__ == '__main__':
     sys.exit(pytest.main([__file__, '-q']))

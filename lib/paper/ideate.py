@@ -90,6 +90,41 @@ _REQUIRED_FIELDS = ('title', 'kind', 'linked_gap_id', 'core_mechanism',
                     'novelty_claim', 'falsifiable_prediction', 'why_not_AB')
 _VALID_KINDS = ('methodology', 'analysis')
 
+#: Synonyms a real model emits for the two frozen kinds. Production evidence
+#: (research_7a444f96c65d42b5): one run produced 'Methodology', 'Algorithm',
+#: 'Architecture' and 'Novelty' — none of which matched the enum, and ALL SIX
+#: ideas died at the structural gate before the novelty retrieval or the rubric
+#: ever ran. `kind` picks the R5/R6 template; it is metadata, so it is coerced
+#: here, never used to reject. Unmapped values fall back to 'methodology'.
+_KIND_SYNONYMS = {
+    'methodology': 'methodology', 'method': 'methodology', 'algorithm': 'methodology',
+    'architecture': 'methodology', 'model': 'methodology', 'system': 'methodology',
+    'technique': 'methodology', 'approach': 'methodology', 'framework': 'methodology',
+    'novelty': 'methodology', 'theory': 'methodology',
+    'analysis': 'analysis', 'empirical': 'analysis', 'empirical study': 'analysis',
+    'study': 'analysis', 'evaluation': 'analysis', 'benchmark': 'analysis',
+    'measurement': 'analysis', 'survey': 'analysis',
+}
+#: What an unmappable kind becomes (the more common template).
+_KIND_FALLBACK = 'methodology'
+
+
+def _normalize_kind(raw) -> tuple:
+    """Coerce a free-form ``kind`` into the frozen enum.
+
+    Returns ``(kind, was_normalized)``. NEVER raises and never signals
+    invalidity — an unrecognized kind degrades to ``_KIND_FALLBACK`` so a
+    labelling slip can never kill an otherwise-valid idea (owner ruling: the
+    structural gate judges evidence, not formatting).
+    """
+    txt = (raw or '').strip().lower() if isinstance(raw, str) else ''
+    if txt in _KIND_SYNONYMS:
+        out = _KIND_SYNONYMS[txt]
+    else:
+        # tolerate decorated values like 'Methodology (novel mechanism)'
+        out = next((v for k, v in _KIND_SYNONYMS.items() if k in txt), _KIND_FALLBACK)
+    return out, out != raw
+
 
 def ideate_lang_key(lang: str) -> str:
     """Composite ``paper_reports.lang`` key for a persisted ideate pass.
@@ -137,6 +172,12 @@ def _structural_gate(idea: dict, valid_gap_ids: set) -> Optional[str]:
     an idea must attach to a real, library-verified open gap from R2. An idea
     that invents its own problem is invalid (that is where A+B stitching hides).
     All checks are pure — no LLM, no network — so this runs first and free.
+
+    This gate judges EVIDENCE, never formatting: it asks "does this idea solve a
+    verified gap, is it falsifiable, does it name concrete prior art". ``kind``
+    is deliberately NOT a rejection reason — it selects the R5/R6 template and
+    is normalized by :func:`_normalize_kind` instead (a real run once lost 6/6
+    ideas to `invalid kind: 'Methodology'` before the expensive gates ran).
     """
     if not isinstance(idea, dict):
         return 'not a dict'
@@ -144,8 +185,6 @@ def _structural_gate(idea: dict, valid_gap_ids: set) -> Optional[str]:
         v = idea.get(f)
         if not (isinstance(v, str) and v.strip()):
             return f'missing/empty required field: {f}'
-    if idea.get('kind') not in _VALID_KINDS:
-        return f'invalid kind: {idea.get("kind")!r} (must be one of {_VALID_KINDS})'
     gid = (idea.get('linked_gap_id') or '').strip()
     if gid not in valid_gap_ids:
         return (f'linked_gap_id {gid!r} does not match any library-verified '
@@ -471,7 +510,10 @@ def _ideate_system_prompt(lang: str, n_ideas: int) -> str:
             '**不许凭空发明问题**。core_mechanism 要讲清「为什么 work」的机理,不是操作步骤;'
             'why_not_AB 要正面回答「为什么这不是两个已有件的拼接」;novelty_claim 要引用具体 arxiv_id。'
             f'只返回 JSON:{{"ideas":[{{...}} × {n_ideas}]}},每个 idea 含 title/kind/linked_gap_id/'
-            'core_mechanism/novelty_claim/prior_art/falsifiable_prediction/why_not_AB。')
+            'core_mechanism/novelty_claim/prior_art/falsifiable_prediction/why_not_AB。'
+            f'**kind 只能是 {" 或 ".join(_VALID_KINDS)} 两个值之一**'
+            '(提出新方法/新机制写 methodology；做度量/实证分析写 analysis)，'
+            '可参考对应 open_gap 的 kind_hint。')
     return (
         f'You are a tasteful senior researcher proposing {n_ideas} GENUINELY NOVEL ideas '
         'for a direction.\n'
@@ -480,7 +522,10 @@ def _ideate_system_prompt(lang: str, n_ideas: int) -> str:
         'mechanism, not steps); why_not_AB must directly answer why this is not two existing '
         'pieces glued; novelty_claim must cite a concrete arxiv_id. '
         f'Return ONLY JSON: {{"ideas":[{{...}} × {n_ideas}]}}, each idea with title/kind/'
-        'linked_gap_id/core_mechanism/novelty_claim/prior_art/falsifiable_prediction/why_not_AB.')
+        'linked_gap_id/core_mechanism/novelty_claim/prior_art/falsifiable_prediction/why_not_AB. '
+        f'**kind MUST be exactly one of: {" | ".join(_VALID_KINDS)}** '
+        '(a new method/mechanism is "methodology"; a measurement or empirical study is '
+        '"analysis") — follow the linked open_gap\'s kind_hint when unsure.')
 
 
 # ── Public entry ───────────────────────────────────────────────────────────
@@ -544,6 +589,13 @@ def generate_ideas(direction: str, open_gaps: dict, *, lang: str = 'en',
     for idea in raw:
         if not isinstance(idea, dict):
             continue
+        # `kind` is template metadata, not a validity verdict — coerce it into
+        # the frozen enum BEFORE any gate sees it, and record the coercion so
+        # the normalization is auditable rather than silent.
+        _kind, _kind_changed = _self._normalize_kind(idea.get('kind'))
+        idea['kind'] = _kind
+        if _kind_changed:
+            idea['kind_normalized'] = True
         # Gate ① — structural (free, first)
         reason = _structural_gate(idea, valid_gaps)
         if reason:
@@ -592,5 +644,27 @@ def generate_ideas(direction: str, open_gaps: dict, *, lang: str = 'en',
 
     logger.info('[Paper:Ideate] done — direction=%.60s generated=%d accepted=%d rejected=%d thr=%.2f',
                 direction, len(raw), len(accepted), len(rejected), thr)
-    return {'ok': True, 'direction': direction, 'lang': lang, 'accepted': accepted,
-            'rejected': rejected, 'threshold': thr, 'error': ''}
+    out = {'ok': True, 'direction': direction, 'lang': lang, 'accepted': accepted,
+           'rejected': rejected, 'threshold': thr, 'error': ''}
+
+    # Pipeline-pathology invariant: the zero-LLM structural gate wiping EVERY
+    # generated idea is a DEFECT, not 宁缺毋滥 — it means the expensive gates
+    # (novelty retrieval + rubric) never ran, so the run proved nothing. A
+    # rubric-based zero is honest and is NOT flagged: there the judging happened
+    # and the ideas genuinely lost. Without this, 'accepted 0' from a broken
+    # gate is indistinguishable from 'accepted 0' from a working one — exactly
+    # how the kind bug hid behind 40 green tests.
+    structural = [r for r in rejected if r.get('reject_stage') == 'structural']
+    if raw and not accepted and len(structural) == len(raw):
+        from collections import Counter
+        reasons = Counter((r.get('reject_reason') or '').split('(')[0].strip()
+                          for r in structural)
+        dominant, n = reasons.most_common(1)[0]
+        out['degraded'] = True
+        out['degraded_reason'] = (
+            f'structural gate rejected ALL {len(raw)} generated idea(s) — the novelty '
+            f'retrieval and rubric never ran; dominant reason ({n}/{len(structural)}): '
+            f'{dominant}')
+        logger.error('[Paper:Ideate] DEGRADED — %s', out['degraded_reason'])
+
+    return out

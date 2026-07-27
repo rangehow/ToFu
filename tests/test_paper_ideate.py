@@ -364,6 +364,210 @@ def test_high_confidence_gap_no_dock_NEUTER():
     _ok('NEUTER: a high-confidence gap does NOT dock value (dock is flag-gated)')
 
 
+# ── kind is metadata, NOT a validity verdict (real-run regression) ────────
+#
+# Production evidence: data/research/jobs/research_7a444f96c65d42b5 — 6/6 ideas
+# were killed at the structural gate with reject_stage='structural', every
+# reason `invalid kind: 'Methodology'/'Algorithm'/'Architecture'/'Novelty'`.
+# The novelty retrieval and the four-axis rubric NEVER RAN. The 40 unit tests
+# were all green because every fixture happened to spell kind in lowercase.
+#
+# Owner ruling: `kind` selects the R5/R6 template — it is metadata. A gate that
+# rejects on it turns a formatting slip into "this idea is invalid". The
+# structural gate keeps only the three real validity judgements (links a
+# verified gap / falsifiable / cites concrete prior art); kind is NORMALIZED.
+
+#: The exact kind strings the real model emitted (verbatim from the job file).
+_REAL_RUN_KINDS = ('Methodology', 'Algorithm', 'Architecture', 'Novelty')
+
+
+def test_kind_is_never_a_rejection_reason():
+    """Every kind the real run produced must pass the structural gate.
+
+    Failing-first: on the un-fixed gate all four are rejected with
+    'invalid kind'. This is the production bug, reproduced exactly."""
+    import lib.paper.ideate as it
+    valid = it._valid_gap_ids(_OPEN_GAPS)
+    for k in _REAL_RUN_KINDS:
+        idea = _good_idea()
+        idea['kind'] = k
+        reason = it._structural_gate(idea, valid)
+        assert reason is None, \
+            f'kind {k!r} must NOT be a rejection reason (idea is otherwise valid), got {reason!r}'
+    # Even total garbage in `kind` is not a validity verdict.
+    odd = _good_idea()
+    odd['kind'] = 'Methodology (novel mechanism)'
+    assert it._structural_gate(odd, valid) is None, \
+        'a free-form kind string must not reject an otherwise-valid idea'
+    _ok('kind is never a rejection reason (all 4 real-run kinds + free-form pass)')
+
+
+def test_kind_normalized_to_frozen_enum_with_audit_flag():
+    """kind is coerced into the frozen methodology|analysis enum, and a coerced
+    idea is flagged so the normalization is auditable rather than silent."""
+    import lib.paper.ideate as it
+    cases = {
+        'Methodology': 'methodology', 'methodology': 'methodology',
+        'Algorithm': 'methodology', 'Architecture': 'methodology',
+        'method': 'methodology', 'Novelty': 'methodology',
+        'Analysis': 'analysis', 'empirical study': 'analysis',
+        'Evaluation': 'analysis', '  ANALYSIS  ': 'analysis',
+    }
+    for raw, want in cases.items():
+        got, changed = it._normalize_kind(raw)
+        assert got == want, f'kind {raw!r} → {got!r}, expected {want!r}'
+        assert got in it._VALID_KINDS, f'normalized kind {got!r} escaped the frozen enum'
+        assert changed == (raw != want), f'kind_normalized flag wrong for {raw!r}: {changed}'
+    _ok('kind normalized into the frozen enum (synonyms mapped, flag records coercion)')
+
+
+def test_real_run_ideas_reach_the_expensive_gates_NEUTER():
+    """End-to-end with the REAL run's kind strings: ideas must now reach the
+    novelty retrieval + rubric. NEUTER — restore the kind rejection and they
+    all die at the structural gate again (the exact production failure)."""
+    import lib.paper.ideate as it
+    fake_search = _FakeSearch([{'arxiv_id': '2305.11111', 'title': 'x', 'summary': ''}] * 5)
+    ideas = []
+    for k in _REAL_RUN_KINDS:
+        idea = _good_idea()
+        idea['kind'] = k
+        idea['title'] = f'Idea kinded {k}'
+        ideas.append(idea)
+    common = {
+        '_generate_raw_ideas': lambda *a, **k: [dict(i) for i in ideas],
+        'search_arxiv': fake_search, 'fetch_arxiv_title': lambda aid: 'Real',
+        '_score_idea': _score_returning(4.5, delta='mechanism-level'),
+    }
+    restore = _patch(common)
+    try:
+        res = it.generate_ideas('dir', _OPEN_GAPS, lang='en')
+        assert res['ok'], res
+        assert len(res['accepted']) == len(_REAL_RUN_KINDS), (
+            f'all {len(_REAL_RUN_KINDS)} real-run ideas should reach+clear the rubric, '
+            f"got {len(res['accepted'])} accepted / {len(res['rejected'])} rejected: "
+            f"{[r.get('reject_reason') for r in res['rejected']]}")
+        assert all(a['kind'] in it._VALID_KINDS for a in res['accepted']), \
+            'accepted ideas must carry a normalized kind'
+        assert any(a.get('kind_normalized') for a in res['accepted']), \
+            'coercion must be recorded on the accepted record'
+        assert fake_search.queries, 'novelty retrieval (gate ②) never ran'
+    finally:
+        restore()
+
+    # NEUTER — remove the normalization AND restore the kind rejection, i.e.
+    # exactly the shipped code before this fix. The production failure returns.
+    # (Neutering only the gate proves nothing: normalization runs BEFORE the
+    # gate, so the gate would never see a non-enum kind to reject.)
+    orig_gate = it._structural_gate
+    orig_norm = it._normalize_kind
+
+    def _no_normalize(raw):
+        return raw, False
+
+    def _kind_rejecting(idea, valid_gap_ids):
+        if idea.get('kind') not in it._VALID_KINDS:
+            return f'invalid kind: {idea.get("kind")!r}'
+        return orig_gate(idea, valid_gap_ids)
+
+    it._normalize_kind = _no_normalize
+    it._structural_gate = _kind_rejecting
+    restore2 = _patch(common)
+    try:
+        res2 = it.generate_ideas('dir', _OPEN_GAPS, lang='en')
+        all_died_structural = (
+            len(res2['accepted']) == 0
+            and len(res2['rejected']) == len(_REAL_RUN_KINDS)
+            and all(r['reject_stage'] == 'structural' for r in res2['rejected'])
+            and all('invalid kind' in r['reject_reason'] for r in res2['rejected']))
+    finally:
+        restore2()
+        it._structural_gate = orig_gate
+        it._normalize_kind = orig_norm
+    assert all_died_structural, \
+        'NEUTER FAILED: removing kind normalization no longer reproduces the wipe'
+    _ok('NEUTER: removing normalization + restoring the kind check reproduces the 100% wipe')
+
+
+def test_prompt_declares_the_legal_kind_values():
+    """Root cause #2: the contract must be visible to the party bound by it —
+    the generation prompt never listed the legal kind values."""
+    import lib.paper.ideate as it
+    for lang in ('en', 'zh'):
+        p = it._ideate_system_prompt(lang, 6)
+        for k in it._VALID_KINDS:
+            assert k in p, f'{lang} prompt does not declare the legal kind value {k!r}'
+    _ok('generation prompt declares the legal kind enum (both languages)')
+
+
+# ── The gate must report its own pathology (charter: guards must not idle) ──
+
+def test_total_structural_wipe_is_reported_as_degraded():
+    """A structural gate that kills EVERY idea is a pipeline defect, not
+    宁缺毋滥 — the result must say so, with the dominant reason.
+
+    This is the invariant that would have made the kind bug self-announcing:
+    'accepted 0' and 'the gate worked' were indistinguishable from outside."""
+    import lib.paper.ideate as it
+    fake_search = _FakeSearch([{'arxiv_id': '2305.11111', 'title': 'x', 'summary': ''}] * 5)
+    restore = _patch({
+        # every idea invents its own problem → all die structurally
+        '_generate_raw_ideas': lambda *a, **k: [_ab_stitch_no_gap() for _ in range(4)],
+        'search_arxiv': fake_search, 'fetch_arxiv_title': lambda aid: 'Real',
+        '_score_idea': _score_returning(4.9),
+    })
+    try:
+        res = it.generate_ideas('dir', _OPEN_GAPS, lang='en')
+        assert res['ok'], res
+        assert res.get('degraded') is True, \
+            'a 100% structural wipe must be flagged degraded, not reported as a clean pass'
+        assert res.get('degraded_reason'), 'degraded result must carry the dominant reason'
+        assert 'linked_gap_id' in res['degraded_reason'], \
+            f"dominant reason should name the actual gate, got {res['degraded_reason']!r}"
+    finally:
+        restore()
+    _ok('100% structural wipe → degraded=True + dominant reason (gate reports its own pathology)')
+
+
+def test_partial_structural_rejection_is_not_degraded():
+    """Counter-case: genuine selectivity (some pass, some fail) is NOT degraded
+    — proving the flag tracks total-wipe pathology, not ordinary strictness."""
+    import lib.paper.ideate as it
+    fake_search = _FakeSearch([{'arxiv_id': '2305.11111', 'title': 'x', 'summary': ''}] * 5)
+    restore = _patch({
+        '_generate_raw_ideas': lambda *a, **k: [_good_idea(), _ab_stitch_no_gap()],
+        'search_arxiv': fake_search, 'fetch_arxiv_title': lambda aid: 'Real',
+        '_score_idea': _score_returning(4.5, delta='mechanism-level'),
+    })
+    try:
+        res = it.generate_ideas('dir', _OPEN_GAPS, lang='en')
+        assert len(res['accepted']) == 1 and len(res['rejected']) == 1
+        assert not res.get('degraded'), 'partial rejection must NOT be flagged degraded'
+    finally:
+        restore()
+    _ok('partial structural rejection is NOT degraded (flag tracks pathology, not strictness)')
+
+
+def test_zero_accepted_on_rubric_is_honest_not_degraded():
+    """宁缺毋滥 stays intact: ideas that REACH the rubric and score below the
+    threshold are an honest zero — the expensive gates ran, so not degraded."""
+    import lib.paper.ideate as it
+    fake_search = _FakeSearch([{'arxiv_id': '2305.11111', 'title': 'x', 'summary': ''}] * 5)
+    restore = _patch({
+        '_generate_raw_ideas': lambda *a, **k: [_good_idea(), _good_idea()],
+        'search_arxiv': fake_search, 'fetch_arxiv_title': lambda aid: 'Real',
+        '_score_idea': _score_returning(2.0, delta='mechanism-level'),
+    })
+    try:
+        res = it.generate_ideas('dir', _OPEN_GAPS, lang='en')
+        assert len(res['accepted']) == 0, 'low-scoring ideas should not be accepted'
+        assert all(r['reject_stage'] == 'rubric' for r in res['rejected'])
+        assert not res.get('degraded'), \
+            'an honest rubric-based zero must NOT be flagged degraded (宁缺毋滥 preserved)'
+    finally:
+        restore()
+    _ok('zero accepted via the rubric is honest, not degraded (宁缺毋滥 preserved)')
+
+
 def test_no_gaps_is_clean_failure():
     import lib.paper.ideate as it
     res = it.generate_ideas('dir', {'open_gaps': []}, lang='en')
@@ -385,6 +589,13 @@ def main():
         test_threshold_is_a_calibratable_constant_not_hardcoded,
         test_low_confidence_gap_docks_value_axis,
         test_high_confidence_gap_no_dock_NEUTER,
+        test_kind_is_never_a_rejection_reason,
+        test_kind_normalized_to_frozen_enum_with_audit_flag,
+        test_real_run_ideas_reach_the_expensive_gates_NEUTER,
+        test_prompt_declares_the_legal_kind_values,
+        test_total_structural_wipe_is_reported_as_degraded,
+        test_partial_structural_rejection_is_not_degraded,
+        test_zero_accepted_on_rubric_is_honest_not_degraded,
         test_no_gaps_is_clean_failure,
     ]
     for fn in tests:

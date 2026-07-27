@@ -1,6 +1,15 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-27 — 僵尸生成器根修(epic `pt_8a491f9dad034880` 收口):VU 载体 task_results 行终结化 + HB-1 误报消除(commit `37676c83`,5 文件 +381/-0;新套件 **10/10**,failing-first A/B 未修码 **9 红**,环 **86/86**)
+
+- **根因(比开票时的「早产孪生」框架更准,取证后自我修正):** 06b29421 不是早产孪生,是父任务 984b3945 的 **VU 载体**——父 finalize 内 maybe_run_autopilot → run_virtual_user 同步创建(simulated user「核实声明后发 TASK_DONE」),在父 done 事件**之前**注册并占 conv→latest 索引,这是 pt_8dc03017 的 **HB-1 刻意设计**(让客户端 transport-agnostic 接续)。逐项对账:08:07:43 创建=父 R24 刚结束、R1 tool_calls=2=截图里那两条核实 grep、08:08:51 R2 fr=stop=VU 回复、「superseded by newer task…never aborted」=HB-1 副作用、finalize 轨迹 CacheSession END→commit-round→无 ■ DONE 无 Persisting=`_endpoint_managed` 早退形状逐字吻合。
+- **僵尸机制一句话:** 载体跑 `_endpoint_managed=True`(设计:抑制终态翻转+persist),生命周期 owner(autopilot.py finally)只 `discard_task` 清**内存注册表**,从不结 **task_results 行**——行由每轮 checkpoint 以 status='running' 写入,`_maintenance.py:285` 早就文档化了这一类,但没有任何代码结它。下次重启恢复扫描全收。全库 **83 对 / 52 会话**。
+- **修法三件套:** ①底盘 `_registry.write_carrier_terminal_row(task, status)`(镜像 `_write_aborted_terminal_floor`,幂等 upsert,门面导出);②owner finally 里 discard 后按载体自身终态结行(aborted→aborted、error→error、finishReason→done、无 finishReason→error,**绝不假 done**);③`_sync.py` 新鲜度守卫加 `_is_own_vu_carrier` 分支——**键在父任务 `_vu_carrier_id` 印记而非注册表查询**(载体在父 trailing persist 前就被 discard,注册表查询必miss)——把每个 autopilot 轮次都误报「Unexpected—never aborted」的 WARNING(app.log:75363)降为 debug 的 HB-1 设计内交接。
+- **过程教训(诚实记录):** apply_diff 两次「replace 与 search 逐字相同」空操作——一次漏打 `_vu_carrier_id` 印记行、一次把 WARNING 正文挂到了新 elif 名下(编译能过、语义全错),靠「行数没涨」的异常感+回读现形。**教训:diff 工具报「N lines changed」但文件总长不变时,立即回读改动区。**
+- **生效条件:需重启。** 重启前旧码仍产生 running 载体行;存量(11:42 后新生)下次重启被 G3 安全挡下( superseded 判定),无害但有噪。
+- **余留(不阻塞,已足够):** ①存量 414 interrupted + 30 running 中的载体僵尸行不做一次性清洗——G3 使其无害,且行元数据无 `_vu_subtask` 标记,无法可靠区分真崩溃前沿;②endpoint Worker/Critic 复用父 task dict 不产子行,无同类洞(已核)。
+
 ### 2026-07-27 — 大脑派单「事件通道」落地:发epic/轮次完成/peer消息全部即时启动,30s心跳降级为兜底网(owner「项目大脑经常把任务安排成30秒后自动重启,太慢了——做事件通道」;commit `6e2d0108`,11 文件 +996/-52;新套件 **14/14 含 NC×3**,failing-first A/B 在未修码上 **6 条精确红**,回归环 **182+84+35 全绿**,collect **10608** 0 err)
 
 > **⚠️ RESTART-VERIFY(未执行,重启后必须跑;跑完把本块删掉)**

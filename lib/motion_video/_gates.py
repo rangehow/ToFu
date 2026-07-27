@@ -32,11 +32,87 @@ from lib.log import get_logger
 logger = get_logger(__name__)
 
 __all__ = ['check_storyboard', 'check_composition_html', 'probe_video',
-           'verify_spec']
+           'verify_spec', 'check_scene_budget', 'NARRATION_CHARS_PER_SECOND']
 
 # ── Storyboard gates ──────────────────────────────────────
 
 _SCENE_REQUIRED = ('id', 'start', 'end', 'text')
+
+#: Narration pace used to test whether a scene's spoken text fits its slot.
+#: Deliberately the same scale the paper/podcast chains estimate with, so a
+#: "fits" verdict here matches what TTS actually produces.
+NARRATION_CHARS_PER_SECOND = 4.2
+
+
+def check_scene_budget(scenes, *, width: int = 1080, height: int = 1440,
+                       max_scene_s: float = 15.0,
+                       chars_per_second: float = NARRATION_CHARS_PER_SECOND,
+                       narration: bool = True) -> list[str]:
+    """Reject storyboards whose text does not fit its frame or its time.
+
+    ``check_storyboard`` only validates the TIMELINE (contiguity, coverage,
+    duration sum) — a storyboard can pass it while every scene is an
+    unreadable wall of text, which is exactly how a 1968-char headline
+    reached a 1080x1440 frame. This gate closes the three holes that made
+    that possible:
+
+    1. **Saturation** — a scene sitting exactly on ``max_scene_s`` means the
+       duration was CLAMPED, i.e. the builder silently swallowed a text/time
+       mismatch instead of re-cutting the storyboard. Clamping is not a
+       rounding artefact, it is a lost error, so it fails here.
+    2. **Caption capacity** — ``on_screen`` must fit the headline box at the
+       minimum readable font size, measured with the SAME geometry the
+       template renders with (:func:`lib.motion_video._template.on_screen_capacity`).
+    3. **Narration fit** — spoken ``text`` must be utterable within the
+       scene's own duration at ``chars_per_second``. Without this a 2-minute
+       film can carry an hour of narration and ``loose`` alignment silently
+       stretches the film to match.
+
+    Returns a list of human-readable errors (empty = pass).
+    """
+    from lib.motion_video._template import (MIN_FONT_PX, on_screen_capacity,
+                                            scene_on_screen)
+
+    errors: list[str] = []
+    if not isinstance(scenes, list) or not scenes:
+        return ['scenes must be a non-empty list']
+
+    capacity = on_screen_capacity(width, height, MIN_FONT_PX)
+    for i, sc in enumerate(scenes):
+        label = sc.get('id', f'#{i + 1}') if isinstance(sc, dict) else f'#{i + 1}'
+        if not isinstance(sc, dict):
+            errors.append(f'scene {label}: not an object')
+            continue
+        start, end = _num(sc.get('start')), _num(sc.get('end'))
+        if start is None or end is None or end <= start:
+            continue  # shape errors are check_storyboard's job
+        dur = end - start
+
+        if dur >= max_scene_s - 1e-6:
+            errors.append(
+                f'scene {label}: duration {dur:.3f}s is saturated at the '
+                f'{max_scene_s}s ceiling — the storyboard was clamped instead '
+                f'of re-cut; split this beat or shorten its text')
+
+        caption = scene_on_screen(sc)
+        if not caption:
+            errors.append(f'scene {label}: no on_screen caption '
+                          '(and no text to fall back to)')
+        elif len(caption) > capacity:
+            errors.append(
+                f'scene {label}: on_screen caption is {len(caption)} chars but '
+                f'only {capacity} fit a {width}x{height} frame at {MIN_FONT_PX}px '
+                f'— write a caption, do not paste the narration')
+
+        if narration and sc.get('spoken', True):
+            spoken = str(sc.get('text') or '')
+            need = len(spoken) / chars_per_second if chars_per_second > 0 else 0.0
+            if need > dur + 0.5:
+                errors.append(
+                    f'scene {label}: narration needs ~{need:.1f}s at '
+                    f'{chars_per_second} chars/s but the scene is only '
+                    f'{dur:.1f}s — the film would stretch to fit')
+    return errors
 
 
 def _num(v) -> float | None:

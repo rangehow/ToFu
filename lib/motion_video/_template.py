@@ -8,6 +8,22 @@ as ``guide/skeleton.html``. Output is deterministic and passes
 
 The chat-agent path authors creative compositions itself; this template is
 the floor that lets a fully-automatic SRT → narrated-video run succeed.
+
+**Three separate fields, three separate jobs** (owner 2026-07-27). A scene
+carries:
+
+  * ``text``      — the SPOKEN narration (TTS input + sidecar SRT). May be
+                    long; it is never drawn on the frame.
+  * ``on_screen`` — the ON-FRAME caption. Bounded by :func:`on_screen_capacity`,
+                    which is derived from the real frame geometry.
+  * ``visual``    — ART DIRECTION for the per-scene author
+                    (:mod:`lib.motion_video._scene_author`) and the reserved
+                    ``'sources'`` marker for the end card. NEVER drawn as the
+                    headline.
+
+Collapsing any two of those onto one string is what produced the 1968-char
+headline at 46px that overflowed a 1440px frame — the template reads
+``on_screen`` and only falls back to ``text`` for legacy storyboards.
 """
 
 from __future__ import annotations
@@ -18,18 +34,70 @@ from lib.log import get_logger
 
 logger = get_logger(__name__)
 
-__all__ = ['render_scene_html']
+__all__ = ['render_scene_html', 'on_screen_capacity', 'fit_font_px',
+           'scene_on_screen', 'FONT_PX_STEPS', 'MIN_FONT_PX']
 
-#: (max_chars, font_px) — conservative steps so CJK text fits 1080px width.
-_FONT_STEPS = ((18, 120), (36, 96), (64, 76), (110, 60), (10**9, 46))
+#: Candidate headline sizes, largest first. The chosen size is the biggest one
+#: whose measured capacity still holds the caption.
+FONT_PX_STEPS = (120, 96, 76, 60, 46)
+#: The floor — below this the card stops reading as a title card.
+MIN_FONT_PX = FONT_PX_STEPS[-1]
+
+#: Fraction of the frame the headline box may occupy. Mirrors the CSS below
+#: (``max-width`` = 84% of frame width); the height share leaves room for the
+#: scene tag, the text-shadow bleed and top/bottom breathing space.
+_HEADLINE_WIDTH_SHARE = 0.84
+_HEADLINE_HEIGHT_SHARE = 0.62
+#: Matches ``line-height: 1.4`` in the stylesheet.
+_LINE_HEIGHT = 1.4
 
 
-def _font_size(text: str) -> int:
-    n = len(text)
-    for cap, px in _FONT_STEPS:
-        if n <= cap:
+def on_screen_capacity(width: int = 1080, height: int = 1440,
+                       font_px: int = MIN_FONT_PX) -> int:
+    """Max caption characters that fit the headline box at ``font_px``.
+
+    Derived from the SAME geometry the stylesheet uses (84% width box,
+    ``line-height: 1.4``), counting every glyph as full-width — CJK is
+    full-width and Latin is narrower, so the estimate never over-promises.
+
+    This is the single source of truth for "does this caption fit": the
+    template picks a font size with it and
+    :func:`lib.motion_video._gates.check_scene_budget` rejects captions that
+    exceed it, so the gate and the renderer can never disagree.
+    """
+    font_px = max(1, int(font_px))
+    cols = int((width * _HEADLINE_WIDTH_SHARE) // font_px)
+    lines = int((height * _HEADLINE_HEIGHT_SHARE) // (font_px * _LINE_HEIGHT))
+    return max(0, cols * lines)
+
+
+def fit_font_px(text: str, width: int = 1080, height: int = 1440) -> int:
+    """Largest step whose capacity holds ``text``; :data:`MIN_FONT_PX` if none.
+
+    Returning the floor for over-long text is deliberate: the renderer must
+    still produce a frame, and the budget gate is what refuses to let such a
+    caption reach the renderer in the first place.
+    """
+    n = len(text or '')
+    for px in FONT_PX_STEPS:
+        if n <= on_screen_capacity(width, height, px):
             return px
-    return 46
+    return MIN_FONT_PX
+
+
+def scene_on_screen(scene: dict) -> str:
+    """The caption to draw: ``on_screen``, falling back to ``text``.
+
+    ``visual`` is NEVER consulted — it holds art direction (and the reserved
+    ``'sources'`` marker), so reading it here would render the literal string
+    ``sources`` as the end card's headline.
+    """
+    if not isinstance(scene, dict):
+        return ''
+    caption = str(scene.get('on_screen') or '').strip()
+    if caption:
+        return caption
+    return str(scene.get('text') or '').strip()
 
 
 _TEMPLATE = """<!doctype html>
@@ -95,19 +163,34 @@ _GRADIENTS = (
 def render_scene_html(scene: dict, *, width: int = 1080, height: int = 1440,
                       duration: float | None = None,
                       scene_index: int = 1, total_scenes: int = 1) -> str:
-    """Render one scene dict (id/start/end/text) into a composition HTML."""
-    text = str(scene.get('text') or '').strip()
-    headline = _html.escape(text) if text else '…'
+    """Render one scene dict into a composition HTML.
+
+    Draws ``scene['on_screen']`` (falling back to ``text`` for legacy
+    storyboards) at the largest font size whose measured capacity holds it.
+    ``scene['visual']`` is art direction and is never drawn.
+    """
+    caption = scene_on_screen(scene)
+    headline = _html.escape(caption) if caption else '…'
     dur = duration if duration and duration > 0 else (
         float(scene.get('end') or 0) - float(scene.get('start') or 0))
     dur = max(0.5, round(float(dur), 3))
     scene_id = str(scene.get('id') or f'scene-{scene_index:03d}')
+    font_px = fit_font_px(caption, width, height)
+    if len(caption) > on_screen_capacity(width, height, font_px):
+        # The budget gate is supposed to stop this upstream; if we still get
+        # here the frame WILL overflow, so say so loudly rather than shipping
+        # a silently clipped card.
+        logger.warning('[MotionVideo] %s caption is %d chars but only %d fit '
+                       'at %dpx in %dx%d — the frame will overflow',
+                       scene_id, len(caption),
+                       on_screen_capacity(width, height, font_px), font_px,
+                       width, height)
     return _TEMPLATE.format(
         width=width, height=height, duration=dur,
         scene_id=_html.escape(scene_id),
         headline=headline,
         tag=_html.escape(f'{scene_index:02d} / {total_scenes:02d}'),
-        font_px=_font_size(text),
-        max_width=int(width * 0.84),
+        font_px=font_px,
+        max_width=int(width * _HEADLINE_WIDTH_SHARE),
         background=_GRADIENTS[(scene_index - 1) % len(_GRADIENTS)],
     )

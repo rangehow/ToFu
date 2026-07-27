@@ -45,7 +45,9 @@ from lib.motion_video._env import (
     probe_env,
 )
 from lib.motion_video._gates import (
+    NARRATION_CHARS_PER_SECOND,
     check_composition_html,
+    check_scene_budget,
     check_storyboard,
     probe_video,
     verify_spec,
@@ -65,7 +67,13 @@ from lib.motion_video._srt import (
     total_span,
 )
 from lib.motion_video._storyboard import build_storyboard
-from lib.motion_video._template import render_scene_html
+from lib.motion_video._template import (
+    MIN_FONT_PX,
+    fit_font_px,
+    on_screen_capacity,
+    render_scene_html,
+    scene_on_screen,
+)
 
 __all__ = [
     'PINNED_HYPERFRAMES',
@@ -85,6 +93,8 @@ __all__ = [
     'format_timestamp',
     'total_span',
     'check_storyboard',
+    'check_scene_budget',
+    'NARRATION_CHARS_PER_SECOND',
     'check_composition_html',
     'probe_video',
     'verify_spec',
@@ -101,4 +111,8 @@ __all__ = [
     'mux_audio_video',
     'build_storyboard',
     'render_scene_html',
+    'on_screen_capacity',
+    'fit_font_px',
+    'scene_on_screen',
+    'MIN_FONT_PX',
 ]

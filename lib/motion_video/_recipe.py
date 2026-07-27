@@ -42,7 +42,7 @@ from lib.production.stages import Stage, run_stages
 logger = get_logger(__name__)
 
 __all__ = ['build_scenes_from_topic', 'RESEARCH', 'SCRIPT', 'TIMELINE',
-           'video_recipe_stages']
+           'video_recipe_stages', 'script_stage_for_source']
 
 #: Hard ceilings (拍板 #3 — scene-count cap; no money cap here).
 _DEFAULT_MAX_SCENES = 8
@@ -278,6 +278,98 @@ def _gate_script(ctx: dict, artifact: dict) -> list:
 
 
 SCRIPT = Stage('script', _run_script, gate=_gate_script, retry=1)
+
+
+# ── Shared: prose → spoken beats + on-screen captions ─────
+
+def _build_source_beat_prompt(source_text: str, *, lang: str, max_scenes: int,
+                              char_budget: int, caption_capacity: int) -> str:
+    """Prompt for rewriting EXISTING prose (a paper report) into beats.
+
+    Distinct from :func:`_build_script_prompt`, which writes a script from
+    sourced fact CARDS. Both produce the same beat shape, so the paper path
+    and the topic path share one downstream contract.
+    """
+    body = source_text[:24000]
+    if lang == 'zh':
+        return (
+            f'你是科普短视频编导。把下面这份资料改写成一条短视频的分镜口播稿。\n\n'
+            '严格要求:\n'
+            f'1. 输出 JSON:{{"beats": [{{"text": "...", "on_screen": "...", '
+            f'"visual": "..."}}]}}。\n'
+            f'2. beats 数量 3 到 {max_scenes} 个。\n'
+            f'3. text = 该镜的口播旁白,**每条不超过 {char_budget} 字**,口语、'
+            '连贯、可直接配音。\n'
+            f'4. on_screen = 该镜画面上出现的短文案,**每条不超过 '
+            f'{caption_capacity} 字**,是标题式短句而不是旁白全文。\n'
+            '5. visual = 该镜的美术方向(构图/主体/动效意象),一句话。\n'
+            '6. 只依据资料,不得编造;只输出 JSON,不要解释或代码围栏。\n\n'
+            f'资料:\n{body}')
+    return (
+        'You are a science-explainer video writer. Rewrite the material below '
+        'into the beats of a short video.\n\n'
+        'Strict requirements:\n'
+        '1. Output JSON: {"beats": [{"text": "...", "on_screen": "...", '
+        '"visual": "..."}]}.\n'
+        f'2. Between 3 and {max_scenes} beats.\n'
+        f'3. text = spoken narration for that beat, AT MOST {char_budget} '
+        'characters each, voice-over ready.\n'
+        f'4. on_screen = the short caption drawn ON the frame, AT MOST '
+        f'{caption_capacity} characters each — a title-style line, NOT the '
+        'narration.\n'
+        '5. visual = art direction for that beat (composition / subject / '
+        'motion idea), one sentence.\n'
+        '6. Ground everything in the material; output ONLY the JSON.\n\n'
+        f'Material:\n{body}')
+
+
+def script_stage_for_source(source_text: str, *, lang: str = 'zh',
+                            max_scenes: int = _DEFAULT_MAX_SCENES,
+                            char_budget: int = 58,
+                            caption_capacity: int = 247) -> list[dict]:
+    """Rewrite existing prose into bounded beats. Returns beat dicts.
+
+    The single implementation of "prose → spoken beats + on-screen captions +
+    art direction" (charter reuse rule): the paper video-abstract path calls
+    THIS instead of maintaining its own splitter. Each beat is
+    ``{'text', 'on_screen', 'visual'}``.
+
+    Raises on an unusable model reply so the caller can fall back to its
+    deterministic path; never returns malformed beats.
+    """
+    prompt = _build_source_beat_prompt(
+        source_text, lang=lang, max_scenes=max_scenes,
+        char_budget=char_budget, caption_capacity=caption_capacity)
+    content, _usage = _llm_chat([{'role': 'user', 'content': prompt}],
+                                max_tokens=4096, temperature=0.4,
+                                log_prefix='[Recipe:source-beats]')
+    text = (content or '').strip()
+    m = _JSON_BLOCK_RE.search(text)
+    if not m:
+        raise ValueError('no JSON object in source-beat reply')
+    raw = json.loads(m.group(0))
+    if not isinstance(raw, dict) or not isinstance(raw.get('beats'), list):
+        raise ValueError('source-beat JSON has no beats array')
+    beats: list[dict] = []
+    for item in raw['beats']:
+        if not isinstance(item, dict):
+            continue
+        spoken = re.sub(r'\s+', ' ', str(item.get('text') or '')).strip()
+        if not spoken:
+            continue
+        beats.append({
+            'text': spoken,
+            'on_screen': re.sub(r'\s+', ' ',
+                                str(item.get('on_screen') or '')).strip(),
+            'visual': re.sub(r'\s+', ' ',
+                             str(item.get('visual') or '')).strip(),
+        })
+    if len(beats) < 2:
+        raise ValueError(f'source-beat reply yielded {len(beats)} usable beat(s)')
+    logger.info('[Recipe:source-beats] %d beat(s) from %d chars of source',
+                len(beats), len(source_text or ''))
+    return beats[:max_scenes]
+
 
 
 # ── Stage: timeline ───────────────────────────────────────

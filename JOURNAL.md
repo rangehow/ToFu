@@ -1,6 +1,15 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-28 — login-wall cookie 捕获 + 按域名一次性同意闸落地:「人能拿到的 agent 也能拿到」最后一块(epic `pt_c009ff1c36ba4527`;commits `dbb7511f` + `345c750c`,10+1 文件 +1174;新套件后端 **18/18** + 前端 **2/2**,**NEUTER×4 全咬**,failing-first 未挂钩 fetch.py **2 红**,tsc BASELINE=0,干净 committed worktree **41/41**)
+
+- **前置验收:** B0 桥硬化(`973edd92`,TOFU_BRIDGE_SECRET 凭据认证 + user_id 作用域 fail-closed)已实测在 HEAD,epic 声明的前置条件满足后才开工——owner 的「别在没认证的地基上盖楼」被当成开工闸门而非口头约束。
+- **实现形态(全部骑既有机器,零新底盘):** 墙检测挂在 `lib/browser/fetch.py`(扩展 result 自带 final URL,netloc 判定——SSO 登录页的 redirect_uri 参数里带原始路径,整串匹配会双向误判,这条是 `_authed_fetch_capture.py` 干跑抓过的课);同意闸骑 push 通道 + REST resolve(不复用 write-approval——它要 task 上下文,fetch 路径没有,**不为此做侵入式 plumbing**);捕获复用 `send_browser_command('get_cookies')` 域作用域读取 + `lib/auth_sources.upsert_source` 即时生效;每次捕获 `audit_log('cookie_capture')`(只记数不记值)。
+- **★ 写作中抓到并修掉自己一个真设计缺陷:「cookies 非空 ≠ 有会话」。** 初版立即路径见 cookie 就存——但登出的浏览器也有匿名追踪 cookie,存进去会毒害 auth_sources 一小时(新鲜源抑制真捕获)。改为**唯一不可造假的信号**:probe 重取页面不再墙才落库;后台路径同理,盯登录 tab 的 URL 离开 SSO 家族而非 cookie 计数。
+- **★ 守卫红了一次,该改的是产品判据不是测试:** 同域标题含 login 的判据把「Login to our newsletter」误判成墙——标题佐证只留给跨域跳转,同域仅登录路径算墙(charter:守卫红了先问「它报的事实是否为真」)。
+- **★ 共享 HEAD 三连坑(第三次,全套纪律再次兑现):** ①兄弟 `747db641` 把我的 i18n 键扫进它的提交(内容无损,认领留痕);②另两个兄弟提交把我当时还是孤儿的 bundler 条目/index.html 标签**正确退回**(引用不存在文件会破坏构建——退回是对的,我的错误是顺序:先注册引用后提交文件);③我自己的 globals.generated.d.ts 被兄弟**暂存区**的 `renderModelFallbackBannerHtml` 污染,净树复验立刻红——charter「验收在 committed tree 上跑」再一次值回票价,`345c750c` 用净树重生成的 d.ts 修复。
+- **生效条件:需重启服务**(fetch.py 挂钩与新模块在线上进程的内存里还不存在)。重启后任意 SSO 站的首个 login-wall 会弹一次性同意横幅;允许后该域名永久自动捕获。至此设计稿 docs/FETCH_IDENTITY_PATHS_DESIGN.md 的 F0(缝)+F1(B0)+本 epic(捕获链)全部落地,「人要扫码/登录的场景 agent 也能拿到」闭环。
+
 ### 2026-07-28 — MCP/Skills 目录降认知负担三层收口:**我上一轮上架的 5 张中国生活服务卡在设置页里根本没有分类入口**,而 `install_note` 是全前端零渲染的死字段(epic `pt_b06e37a67a824194`;commits `7497eb3a` + `1846fe71` + `0fb35249`;守卫 **14/14**,**NEUTER×12 全咬**,tsc BASELINE=0 不变,干净 committed worktree 逐层复验)
 
 - **★ 起因是 owner 说「装 MCP 时该给直链而不是告诉用户去哪找」,但实测发现比缺链接更硬的两件事,优先级必须倒过来 —— 能力得先「找得到」「看得见」,再谈「点得动」。**

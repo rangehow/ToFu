@@ -1269,6 +1269,24 @@ def run_task(task: dict[str, Any]) -> None:
                         'model in matching tool_result; gateway sees valid JSON',
                         tid, task.get('convId', ''), fn_name, tc_id[:12],
                         len(bad_args) if isinstance(bad_args, str) else 0)
+                    # ★ Keep the RAW args text, not just its length. It is the
+                    #   decisive cross-check on how a malformed call was
+                    #   produced (2026-07-27 concatenated-tool-name inquiry):
+                    #     * two concatenated valid JSON objects
+                    #       (``{...}{...}``) ⇒ two calls merged into one slot
+                    #       by the SSE accumulator (see the tool_calls-shape
+                    #       observation logs in lib/llm/_sse_core.py)
+                    #     * one single malformed object ⇒ model-side output,
+                    #       nothing for us to fix in parsing
+                    #   Truncated: args carry user/file content, and this line
+                    #   is INFO on a hot path.
+                    if isinstance(bad_args, str) and bad_args:
+                        logger.info(
+                            '[%s] conv=%s   ↳ raw malformed args for tc_id=%s '
+                            'model=%s: %r%s',
+                            tid, task.get('convId', ''), tc_id[:12],
+                            rs.model, bad_args[:600],
+                            '…(truncated)' if len(bad_args) > 600 else '')
                     break
 
             # ── Phase 2: Emit execution phase event ──

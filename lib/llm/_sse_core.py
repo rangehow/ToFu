@@ -516,6 +516,19 @@ class SSEAccumulator:
         self._mm_in_think = False
         self._mm_buf = ''
         self._consecutive_parse_errors = 0
+        # ── tool_calls wire-shape OBSERVATION counters (pure diagnostics) ──
+        # These exist to settle a 2026-07-27 open question: a concatenated
+        # tool name (``read_filesrun_command``) reached tool_dispatch, and two
+        # explanations were equally consistent — (a) a slot collision in the
+        # accumulator below (``index`` defaulting to 0 for two distinct
+        # calls), or (b) the model/gateway emitting the concatenated name
+        # itself. The existing raw_sse_anomaly.log could NOT decide it: its
+        # tool_calls samples are 100% ``toolu_bdrk_`` (bedrock line), zero
+        # frames from the sankuai OpenAI-compat line where the incident
+        # happened. So sample the shape here, on whatever line is live.
+        # These counters change NO behaviour.
+        self._tc_obs_index_absent = 0
+        self._tc_obs_name_reissue = 0
 
     def mark_aborted(self):
         self.aborted_by_client = True
@@ -780,6 +793,24 @@ class SSEAccumulator:
         _tc_list = delta.get('tool_calls') or []
         if _tc_list:
             for tc in _tc_list:
+                # OBSERVATION: an absent ``index`` silently lands in slot 0,
+                # which would merge two distinct tool calls. Never observed on
+                # the bedrock line; unmeasured elsewhere. Log once per stream.
+                if 'index' not in tc:
+                    self._tc_obs_index_absent += 1
+                    if self._tc_obs_index_absent == 1:
+                        logger.warning(
+                            '%s [tool_calls-shape] delta without "index" field '
+                            '— defaulting to slot 0 (collision risk): '
+                            'has_id=%s name=%r model=%s trace=%s',
+                            self.log_prefix, bool(tc.get('id')),
+                            (tc.get('function') or {}).get('name'),
+                            self.body.get('model', ''), self.trace_id)
+                        self.raw_dumper.dump_anomaly(
+                            'tool_call_index_absent',
+                            model=self.body.get('model', ''),
+                            trace=self.trace_id,
+                            chunks=self.chunk_count)
                 idx = tc.get('index', 0)
                 if idx not in self.tool_calls_acc:
                     if self.on_tool_call_ready and idx > 0 and (idx - 1) in self.tool_calls_acc:
@@ -799,6 +830,38 @@ class SSEAccumulator:
                     self.tool_calls_acc[idx]['extra_content'] = tc['extra_content']
                 fn = tc.get('function', {})
                 if fn.get('name'):
+                    _prev_name = self.tool_calls_acc[idx]['function']['name']
+                    # OBSERVATION: a name arriving into a slot that already
+                    # HAS a name is the only wire shape that can produce a
+                    # concatenated tool name here. The two candidate causes
+                    # are distinguishable by the fields logged below:
+                    #   * upstream re-issues the FULL name (non-incremental
+                    #     semantics)      → incr == prev
+                    #   * a second, distinct call landed in this slot
+                    #                     → incr != prev, and same_slot_id
+                    #     shows whether a new id came with it
+                    # If neither fires while a concatenated name still shows
+                    # up downstream, the name was already concatenated in the
+                    # FIRST frame — i.e. model-side output, not our parsing.
+                    if _prev_name:
+                        self._tc_obs_name_reissue += 1
+                        logger.warning(
+                            '%s [tool_calls-shape] name re-arrival in slot %s '
+                            '— prev=%r incr=%r identical=%s incoming_id=%r '
+                            'slot_id=%r model=%s trace=%s chunk=%d',
+                            self.log_prefix, idx, _prev_name, fn['name'],
+                            _prev_name == fn['name'], tc.get('id'),
+                            self.tool_calls_acc[idx].get('id'),
+                            self.body.get('model', ''), self.trace_id,
+                            self.chunk_count)
+                        self.raw_dumper.dump_anomaly(
+                            'tool_call_name_reissue',
+                            model=self.body.get('model', ''),
+                            trace=self.trace_id,
+                            slot=idx,
+                            prev_name=_prev_name,
+                            incr_name=fn['name'],
+                            chunks=self.chunk_count)
                     self.tool_calls_acc[idx]['function']['name'] += fn['name']
                 if fn.get('arguments') is not None:
                     self.tool_calls_acc[idx]['function']['arguments'] += fn.get('arguments', '')
@@ -921,6 +984,91 @@ class SSEAccumulator:
                     tc_entry['function']['arguments'] = '{}'
                 _filtered[idx] = tc_entry
             self.tool_calls_acc = _filtered
+
+        # ── OBSERVATION 3: final tool name not in the dispatched toolset ──
+        # The two per-delta observations above only fire when a name arrives
+        # into an already-named slot. A model that emits an already-concatenated
+        # name in its FIRST frame trips NEITHER of them — so their silence is
+        # indistinguishable from "this code never ran". That makes silence
+        # useless as evidence. This check gives that case a POSITIVE signature:
+        # compare the finished name against the tool whitelist we actually sent
+        # upstream, and report it together with both counters.
+        #
+        #   name_reissue>0 & identical=False → two distinct calls, one slot (our bug)
+        #   name_reissue>0 & identical=True  → upstream re-issued the name (our bug)
+        #   unknown_name  & both counters 0  → model emitted it whole (model side)
+        if self.tool_calls_acc:
+            try:
+                # Two dispatched-tool shapes exist on the wire and BOTH must be
+                # understood here, or this check silently no-ops on one line —
+                # the exact failure mode it was written to eliminate:
+                #   OpenAI-compat : {'type':'function','function':{'name':…}}
+                #   Anthropic     : {'name':…,'description':…,'input_schema':…}
+                # (see lib/llm/anthropic_outbound/_to_anthropic.py). Reading
+                # only the nested form yields an EMPTY whitelist on the
+                # Anthropic line, which would skip the loop entirely.
+                _sent_names = set()
+                for t in (self.body.get('tools') or []):
+                    if not isinstance(t, dict):
+                        continue
+                    _fn = t.get('function')
+                    if isinstance(_fn, dict) and _fn.get('name'):
+                        _sent_names.add(_fn['name'])
+                    elif t.get('name'):
+                        _sent_names.add(t['name'])
+                if _sent_names:
+                    for _idx, _tc in self.tool_calls_acc.items():
+                        _nm = _tc['function']['name']
+                        if not _nm or _nm in _sent_names:
+                            continue
+                        _args = _tc['function'].get('arguments', '') or ''
+                        try:
+                            json.loads(_args or '{}')
+                            _args_valid = True
+                        except Exception:
+                            _args_valid = False
+                        logger.warning(
+                            '%s [tool_calls-shape] final tool name NOT in '
+                            'dispatched toolset: name=%r slot=%s tc_id=%r '
+                            'slots=%d args_valid_json=%s args_len=%d '
+                            'obs_name_reissue=%d obs_index_absent=%d '
+                            'tools_sent=%d model=%s trace=%s',
+                            self.log_prefix, _nm, _idx,
+                            _tc.get('id'), len(self.tool_calls_acc),
+                            _args_valid, len(_args),
+                            self._tc_obs_name_reissue,
+                            self._tc_obs_index_absent,
+                            len(_sent_names),
+                            self.body.get('model', ''), self.trace_id)
+                        self.raw_dumper.dump_anomaly(
+                            'tool_name_unknown',
+                            model=self.body.get('model', ''),
+                            trace=self.trace_id,
+                            name=_nm,
+                            slot=_idx,
+                            args_valid_json=_args_valid,
+                            obs_name_reissue=self._tc_obs_name_reissue,
+                            obs_index_absent=self._tc_obs_index_absent,
+                        )
+                else:
+                    # The model returned tool calls but we could not build a
+                    # whitelist — so this check CANNOT vet the names, and its
+                    # silence would otherwise read as "names were fine". Say so
+                    # out loud, or the observation acquires a third
+                    # indistinguishable-silence mode of its own.
+                    logger.warning(
+                        '%s [tool_calls-shape] %d tool call(s) returned but the '
+                        'dispatched toolset could not be resolved (tools field '
+                        'empty/unrecognized shape) — name check SKIPPED, not '
+                        'passed: names=%r tools_raw_len=%d model=%s trace=%s',
+                        self.log_prefix, len(self.tool_calls_acc),
+                        [t['function']['name']
+                         for t in self.tool_calls_acc.values()],
+                        len(self.body.get('tools') or []),
+                        self.body.get('model', ''), self.trace_id)
+            except Exception as _unk_err:
+                logger.debug('%s tool-name whitelist check failed: %s',
+                             self.log_prefix, _unk_err)
 
         content = self.content
         thinking_text = self.thinking_text

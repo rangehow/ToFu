@@ -1223,3 +1223,11 @@
 - **NEUTER 实证三连(含一次自我否证):** ①摘 `before_round` 接线 → timeout 测试**挂死**(假 dispatch 无限给 tool_calls,除 halt 外无刹车——挂死本身就是「接线承重」的铁证);②`execute_tools=` 换成 `execute_tool=` → 批量契约测试精确翻红;③**首版文档串声称 tools_terminal_round 翻转会在 swarm 层多一轮 dispatch——实测否决**:swarm 的 dispatch 钩故意忽略底盘给的 tools(自建 body 读 self.tools),翻转在 swarm 层不可见,该语义改由底盘层测试钉。文档串已按实测修正。**教训:NEUTER 声明必须先跑再写进文档串,写之前先问「这个翻转在我这层的可观察面上真的可见吗」。**
 - **棘轮祖父清单首胜:** swarm 条目按设计变红后移除(签名钉 + 导入检测双触发),`_MIN_LOOP_IMPORTERS` 8→9,清单只剩 orchestrator + endpoint,迁移施工图就是本次的钩映射(指南 §5 已更新)。
 - **共享 HEAD:** 精确 8 文件 pathspec;兄弟 WIP(conftest/static/db/pricing 等 15+ 文件)原样未动。
+
+### 2026-07-27 — _RoundState 前置:主循环 locals 纯清点落地 + 迁移顺序按依赖关系纠正(epic `pt_5127e38c931b40f4`,owner 两拍板:顺序=依赖非成本 + 北极星目标补充采纳;commit 见下,3 文件纯文档零代码)
+
+- **顺序纠正(owner 发现,指南 §5 已改):** `_run_single_turn` 定义在 `lib.tasks_pkg.orchestrator`——endpoint 的 Worker turn 就是 run_task 本尊。先迁 endpoint = 把 1400 行私有循环塞进底盘 dispatch 钩,两层循环语义嵌套,私有循环一行没少。**orchestrator 在前、endpoint 在后**,已写进指南 §5 + charter(v18,随目标补充同条落地)。
+- **清点结论(`docs/ROUND_STATE_LOCALS_INVENTORY.md`,逐行扫 :505–1295):** 票面「~30-40 locals」对账后**真·跨迭代只有 15 个**(control 8 / llm 6 / usage 2 / tools 2 含共享项),~12 个轮内临时量留作钩内 locals,2 个常量,7 条 task-dict 通道(peer/steer 延迟确认、sidecar 累积、compact 引用、reaper 心跳)——**通道所有权属于 task,_RoundState 不收编,收编=第二事实源**。
+- **三个实测发现(清点才看得见):** ①orchestrator **本来就是 tools_terminal_round=True 语义**(:689 末轮无工具),与底盘默认一致无需翻转;②`_premature_retry_count` 是唯一直接参与循环条件的 local,它进 `retry_bonus` 的那一刀是「真迁移」刀,必须单独成 slice;③底盘缺口只有三个:连续工具超时熔断 / 崩溃 checkpoint / 预算闸——其中预算闸的挂载点(轮首 vs 流后)有**真语义差**(流后=本轮钱已花才停),已标记 owner 拍板项。
+- **退出路径全表:** 8 break + 1 continue + 自然落地,逐条对账 ROUND_END 发射;三处 abort 检查与底盘三检查一一对应(工具执行前那次 = 批量钩前检查,语义逐字节)。checkpoint 节流钩注意与 swarm 批量钩里的 checkpoint **两处收敛,别又长成两份**(agent_verdict 手抄 4 份的教训)。
+- **下一步:** owner 审清单 → 拍板 dataclass 形状(§5 建议 control/llm/usage/tools 四组)→ 按 §7 三条纪律切 slice(每组一刀,retry 刀单独,底盘缺口先落钩再接)。

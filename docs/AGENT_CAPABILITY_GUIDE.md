@@ -81,13 +81,15 @@ web_search / fetch_url 工具,**直接复用** `_execute_report_tool`(它复用 
 | scheduler timer | `lib/scheduler/timer/_poll.py` | `AbortSignal.never()` 的无中止路径范本 |
 | 视频分镜作者 | `lib/motion_video/_scene_author.py` | 窄工具集 + 每场景 token 预算 + 失败降级范本 |
 
-## 5. 祖父豁免的私有循环(迁移顺序 = 成本从低到高)
+## 5. 祖父豁免的私有循环(迁移顺序 = 依赖关系,不是成本)
 
-棘轮钉住的存量私有循环,**只减不增**;扩展现有功能时优先把调用方迁上底盘:
+棘轮钉住的存量私有循环,**只减不增**;扩展现有功能时优先把调用方迁上底盘。
 
-1. ~~swarm 子代理~~ —— **已迁移(2026-07-27,第一个出祖父清单)**。`AbortSignal.from_callback` 直接吃下它的 abort_check 回调;timeout 走底盘新增的 `before_round` halt 缝;并行工具池走底盘新增的 `execute_tools` 批量钩;`tools_terminal_round=False` 保留它「轮轮带工具 + 历史抢救部分答案」的语义。对偶测试 `tests/test_swarm_agent_loop_chassis.py` 六条路径逐条钉。**它就是 endpoint/orchestrator 迁移的施工图。**
-2. **endpoint 驱动**(`lib/tasks_pkg/endpoint/_run.py`)——Worker turn 嵌套 run_task,需先拆 `_run_single_turn` 的边界。
-3. **主编排器 run_task**(`lib/tasks_pkg/orchestrator/_run.py`)——阻塞在 pt_03f4cdf1 的 ~30 个跨迭代 locals(`_RoundState` 设计,owner-scoped)。底盘的 `retry_bonus` 机制已为它的 premature-retry 天花板扩展预留了同形接口。
+**⚠️ 顺序是 orchestrator 在前、endpoint 在后,这与「成本从低到高」的直觉相反,原因是依赖关系:** endpoint 的 Worker turn 调用的 `_run_single_turn` 定义在 `lib.tasks_pkg.orchestrator` 里——**endpoint 的 dispatch 就是 run_task 本尊**。先迁 endpoint 等于把 1400 行私有循环塞进底盘的 dispatch 钩,两层循环语义嵌套,比任何一种单层都糟,且真正的私有循环一行没少。orchestrator 上了底盘之后,endpoint 的驱动循环(Planner→Worker→Critic)迁移才有意义且近乎机械。
+
+1. ~~swarm 子代理~~ —— **已迁移(2026-07-27,第一个出祖父清单)**。`AbortSignal.from_callback` 直接吃下它的 abort_check 回调;timeout 走底盘新增的 `before_round` halt 缝;并行工具池走底盘新增的 `execute_tools` 批量钩;`tools_terminal_round=False` 保留它「轮轮带工具 + 历史抢救部分答案」的语义。对偶测试 `tests/test_swarm_agent_loop_chassis.py` 六条路径逐条钉。**它就是后续迁移的施工图。**
+2. **主编排器 run_task**(`lib/tasks_pkg/orchestrator/_run.py`,~790L 流式主循环)——阻塞在 ~30-40 个跨迭代 locals 的 `_RoundState` 设计(owner-scoped,前置清点文档 `docs/ROUND_STATE_LOCALS_INVENTORY.md`)。底盘的 `retry_bonus` 机制已为它的 premature-retry 天花板扩展预留了同形接口。
+3. **endpoint 驱动**(`lib/tasks_pkg/endpoint/_run.py`)——**等 2 落地后动工**。届时 Worker turn 已经是底盘调用,驱动循环自身的迁移只剩 Planner/Critic 单发调用的接线。
 
 ## 6.  checklist(提交前自查)
 

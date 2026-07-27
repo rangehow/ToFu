@@ -142,6 +142,7 @@ from lib.tasks_pkg.manager._registry import (  # noqa: E402,F401
     abort_running_tasks_for_conv,
     quiesce_running_tasks,
     _write_aborted_terminal_floor,
+    write_carrier_terminal_row,
 )
 
 
@@ -190,6 +191,7 @@ __all__ = [
     # registry
     'create_task', 'discard_task', 'is_carrier_task', 'list_running_tasks',
     'abort_running_tasks_for_conv', 'quiesce_running_tasks',
+    'write_carrier_terminal_row',
     # events
     'append_event', 'find_message_by_id',
     'build_event', 'EventType', 'emit',

@@ -262,6 +262,51 @@ def discard_task(task_id: str, conv_id: str | None = None) -> None:
             if _conv_latest_task.get(conv_id) == task_id:
                 del _conv_latest_task[conv_id]
 
+def write_carrier_terminal_row(task, status: str) -> None:
+    """Persist a terminal ``task_results`` row for a synchronous CARRIER task.
+
+    The autopilot VU sub-task (and any future row-producing carrier) runs
+    under ``_endpoint_managed=True``, which BY DESIGN suppresses the
+    orchestrator's terminal-status flip + ``persist_task_result`` — the
+    carrier's own finalize early-returns. Its per-round
+    ``checkpoint_task_partial`` writes therefore leave the row at
+    ``status='running'`` forever (the ms2gipv5 zombie generator,
+    pt_8a491f9d): the in-memory ``discard_task`` only cleans the registry,
+    and the next startup recovery sweep collects the stale row as a
+    crash-interrupted turn.
+
+    The carrier's LIFECYCLE OWNER (``autopilot.run_virtual_user``'s
+    finally) calls this right after ``discard_task`` so the row reaches a
+    terminal state in the same breath as the registry cleanup. Idempotent,
+    last-writer-wins (keyed on task_id, same ``_upsert_task_row`` channel as
+    ``_write_aborted_terminal_floor``); best-effort — a settle failure must
+    never break the owner's finally.
+
+    ``status`` is derived by the caller from the carrier's end state:
+    'done' (turn completed — the normal path), 'aborted' (parent abort /
+    real-message preemption), 'error' (died before any finish reason).
+    """
+    if status not in ('done', 'aborted', 'error'):
+        logger.warning('[Task %s] write_carrier_terminal_row: unexpected status %r '
+                       '— defaulting to done', (task.get('id') or '?')[:8], status)
+        status = 'done'
+    try:
+        conv_id = task.get('convId', '') or ''
+        tr_json = (None if _tool_rounds_have_dedicated_home(task)
+                   else json.dumps(_merge_tool_rounds(task), ensure_ascii=False))
+        meta = build_result_meta(task)
+        meta_json = json.dumps(meta, ensure_ascii=False) if meta else None
+        error_json = _err_to_json(task['error']) if task.get('error') is not None else None
+        _upsert_task_row(task, conv_id, content=task.get('content') or '',
+                         thinking=task.get('thinking') or '', status=status,
+                         error_json=error_json, tr_json=tr_json, meta_json=meta_json)
+        logger.info('[Task %s] conv=%s Carrier terminal row settled: status=%s',
+                    task['id'][:8], conv_id[:8], status)
+    except Exception as e:
+        logger.warning('[Task %s] Failed to settle carrier terminal row: %s',
+                       (task.get('id') or '?')[:8], e, exc_info=True)
+
+
 def list_running_tasks(exclude_conv_id: str | None = None) -> list[dict]:
     """Return one entry per CONVERSATION with genuinely-live running work.
 

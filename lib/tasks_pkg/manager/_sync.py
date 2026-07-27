@@ -436,6 +436,23 @@ def _is_floor_retry_residue(task, msg_dict):
     return False
 
 
+def _is_own_vu_carrier(latest_task_id, task) -> bool:
+    """True when ``latest_task_id`` is the VU carrier spawned by ``task``'s OWN
+    autopilot hook (HB-1, pt_8dc03017).
+
+    The carrier deliberately claims the conv→latest index BEFORE the parent's
+    done event so the client can attach to the successor
+    transport-agnostically — a DESIGNED supersede, not an unexpected
+    replacement. Keyed on the plain ``task['_vu_carrier_id']`` stamp (set at
+    carrier creation in autopilot.run_virtual_user), NOT a registry lookup:
+    the carrier is discarded from the in-memory registry before the parent's
+    trailing persist runs, so a registry probe would miss it and mislabel the
+    handoff as the WARNING branch (the every-autopilot-turn false alarm seen
+    in the pt_8a491f9d forensics).
+    """
+    return bool(latest_task_id) and latest_task_id == (task.get('_vu_carrier_id') or '')
+
+
 def _sync_result_to_conversation(task, meta):
     """Write the completed task result into the conversation's messages in the DB.
 
@@ -515,6 +532,21 @@ def _sync_result_to_conversation(task, meta):
                     pfx, conv_id[:8], _autopilot_child[:8], len(content),
                 )
             elif _is_own_vu_carrier(latest, task):
+                # Expected path (HB-1, pt_8dc03017): this task's OWN autopilot
+                # hook created the VU carrier sub-task, which deliberately
+                # claims the conv→latest index BEFORE this task's done event
+                # so the client can attach to the successor
+                # transport-agnostically. The parent was not aborted (it
+                # finished normally); its reply reached the conv via the
+                # pre-emit sync / committedMessage. NOT an unexpected
+                # replacement — the WARNING below used to fire on EVERY
+                # autopilot turn (pt_8a491f9d forensics, app.log:75363).
+                logger.debug(
+                    '%s conv=%s skipping conv sync: superseded by own VU '
+                    'carrier %s (HB-1 by design, %dchars)',
+                    pfx, conv_id[:8], latest[:8], len(content),
+                )
+            else:
                 # Unexpected: a task that was never aborted is no longer the
                 # latest for its conv. This shouldn't normally happen and may
                 # point to a missing abort path — worth a look.

@@ -435,6 +435,13 @@ def run_virtual_user(task: dict, vu_msg_id: str | None = None) -> dict | None:
     sub_task['_inline_messages'] = True
     sub_task['_vu_subtask'] = True
     sub_task['_autopilotParent'] = task.get('id', '')
+    # Back-pointer for the parent's conv-sync freshness guard: the carrier
+    # claims the conv→latest index BEFORE the parent's done (HB-1), so the
+    # parent's trailing sync must recognise "superseded by own VU carrier"
+    # as the DESIGNED handoff, not an unexpected replacement. A plain field
+    # (not a registry lookup) because the carrier is discarded from the
+    # registry before the parent's trailing persist runs.
+    task['_vu_carrier_id'] = sub_task['id']
     if _vu_conv_id:
         # HB-1: advance the conv→latest-task index to the VU BEFORE returning
         # to _finalize.py (which then emits the parent's done event). This is
@@ -531,6 +538,32 @@ def run_virtual_user(task: dict, vu_msg_id: str | None = None) -> dict | None:
         except Exception as _disc_err:
             logger.debug('[Autopilot %s] VU carrier discard failed: %s',
                          tid, _disc_err)
+        # ★ Row settle (pt_8a491f9d): discard_task only unregisters IN MEMORY.
+        #   The carrier ran under _endpoint_managed=True, which BY DESIGN
+        #   suppresses the orchestrator's terminal-status flip +
+        #   persist_task_result — so its per-round checkpoint_task_partial
+        #   writes leave a task_results row at status='running' that no
+        #   in-memory pass will ever revisit (manager/_maintenance.py:285).
+        #   That stale row is the zombie generator the next startup recovery
+        #   sweep feeds on (the ms2gipv5 four-bubble incident). Settle it to
+        #   a terminal status derived from the carrier's OWN end state, in
+        #   the same breath as the registry cleanup.
+        try:
+            from lib.tasks_pkg.manager import write_carrier_terminal_row
+            if sub_task.get('aborted'):
+                _carrier_status = 'aborted'
+            elif sub_task.get('status') == 'error' or sub_task.get('error'):
+                _carrier_status = 'error'
+            elif sub_task.get('finishReason'):
+                _carrier_status = 'done'
+            else:
+                # Died before any finish reason (e.g. _run_single_turn raised
+                # mid-round) — an honest 'error', never a fake 'done'.
+                _carrier_status = 'error'
+            write_carrier_terminal_row(sub_task, _carrier_status)
+        except Exception as _settle_err:
+            logger.warning('[Autopilot %s] VU carrier row settle failed: %s',
+                           tid, _settle_err)
 
     # ── Real-message preemption (owner-ratified 2026-07-25) ──
     # A REAL queued message aborted this VU mid-call (enqueue_message stamps

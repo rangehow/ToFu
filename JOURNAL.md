@@ -56,6 +56,13 @@
 - **★ 守卫里最值钱的是那条「区分修对与修错」的对照。** 一个只要 `toolRounds` 里出现过 rejected 就报错的实现,会通过我其余所有断言 —— 却把「模型自我纠正成功」的正常轮次全部误标成失败。补 `test_recovery_after_the_rejection_is_not_reported_as_a_failure`(被拒后又成功跑了真工具),NEUTER 2(去掉「收尾于此」判据、改成任何 rejected 都报)**精确红在这一条**。另按 charter 纪律:守卫**不手抄**生产判据,而是每次运行时把 `_finalize` 的那段整块 splice 出来 exec —— 找不到就报「实现被删除」,而不是静默绿。
 - **不做补推(与姊妹票的边界)。** 该工具整轮都不存在,重试必被再拒,补推只会让模型反复去抓一个永远拿不到的工具 = 无限循环烧钱。故 `docs/INTENT_STALL_MEASUREMENT.md` §4 把它判为**不可重试**并明确排除在补推之外;两票正交、可并行。
 
+### 2026-07-27(续) — 静默 catch 收口:兄弟提交后残余 2 处清零,守卫 `TestSilentCatches`/`TestAssignmentSilentCatches` **全绿**(epic `pt_98a4e0c2` done;commit `6c2dcc10`;committed-tree 复验 **15 passed + 静默 catch 零残余 + collect 11001/0 err**)
+
+- **sibling-hold 的正确用法验证了一次:** 上一轮把 `lib/paper/ideate.py` 挂 `[sibling] path=` hold 而非硬修。兄弟提交后回来复查,**原先的 `:252` 违规已随重写消失,但新代码带进来 2 处新的(`:510` / `:861`)** —— 如果当时照旧码硬改,改的是一段即将被删的代码,且新引入的两处仍会漏网。**「等兄弟提交再按新形态重判」不是拖延,是唯一正确的顺序。**
+- **★ 生成器的默认命名在这里恰好是错的,手工覆盖了一处:** `:861` 那个 catch 位于 `generate_ideas` 内,但真正失败的调用是 `build_retrieval_query`。生成器按「外层函数名」命名(在另外 96 处都对),这里会产出 `'generate ideas: failed'` —— **把排障的人指向错误的函数**。而这处失败的后果是「某条 idea 的术语被静默丢弃 → 整批的 identity/domain 划分被扭曲」,指错地方代价不小。改为点名 `retrieval-query build for the batch term census`。**批量工具的默认规则要逐条复核输出,不能因为它在多数情况下对就全盘接受。**
+- **写文件时闸再次拦下(这次照新纪律处理):** `apply_diff` 报 stale(我的脚本刚改过该文件、工具持栈旧快照)。按上一轮 clobber 的教训**直接改用 shell 读-改-写**,没有重试工具、也没有只验锚点。零事故。
+- **最终状态:** 静默 catch 两条守卫全绿、零残余;唯一剩的 1 红是 `TestLoggerStandardization` 的 `orchestrator/_resume_state.py` raw logging —— **不属本 epic**(本 epic 是静默 catch),且兄弟脏树已改成 `get_logger`,其提交即绿。
+
 ### 2026-07-27(续) — 静默 catch 全库根修:96 处 except 补 `logger.debug`(epic `pt_98a4e0c2`,owner 拍板 **C:全部逐点加 debug**;commit `c92a7f2c`,45 文件 +185/-89;守卫 **5 红 → 3 红**,残余 3 条全部 sibling-gated;干净 committed-tree 复验 **13 passed + collect 10951/0 err**)
 
 - **票面数字 58 是旧快照,实测 96。** 差额不是票写错,是这段时间新代码继续欠债 —— 这类债**按天累积**,不一次性清零就永远追不上。用 `test_code_quality.py` 自己的 AST finder 驱动改写,保证「改的正好是守卫报的」;这个规模手工逐条改必然与守卫定义漂移。

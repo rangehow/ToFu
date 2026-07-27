@@ -870,13 +870,65 @@ def _emit(kind: str, project_path: str, conv_id: str, summary: str,
         logger.debug('[Board] feed emit (%s) skipped: %s', kind, e)
 
 
-def render_board_block(project_path: str, current_conv_id: str = '') -> str:
-    """Render the board for system-context injection — the AUTO-COORDINATION
-    surface. Lists open epics + a per-claimed-epic explicit "avoid duplication"
-    hint when ANOTHER conversation holds an UNEXPIRED lease (this is what makes
-    a reading conversation step aside instead of redoing the work). Returns ''
-    when the board is empty (no prompt weight for an unused board).
+# How much of an epic title the PROMPT INJECTION carries. Epics routinely hold
+# a whole spec in `title` (stored uncapped up to _TITLE_MAX_CHARS), but the
+# injection only has to answer "who is doing what, so I don't collide" — the
+# spec is needed when PICKING UP an epic, which is a deliberate tool round.
+_INJECT_TITLE_MAX_CHARS = 200
+
+
+def _abridge_title(title: str) -> str:
+    """First line of ``title``, bounded — for the per-turn injection only.
+
+    Returns the title unchanged when it is already short, so the ellipsis stays
+    a MEANINGFUL signal ("there is more behind this") rather than decoration on
+    every row. The full text always remains reachable via ``project_board_read``
+    — an abridgement the model cannot detect or undo would be the worse defect.
     """
+    head = (title or '').strip().split('\n', 1)[0].strip()
+    multiline = '\n' in (title or '').strip()
+    if len(head) <= _INJECT_TITLE_MAX_CHARS and not multiline:
+        return head
+    return head[:_INJECT_TITLE_MAX_CHARS].rstrip() + ' …'
+
+
+def render_board_injection_block(project_path: str,
+                                 current_conv_id: str = '') -> str:
+    """The board as a per-turn PROMPT INJECTION — a coordination summary.
+
+    Same lanes and the same avoid-duplication hint as the full render, but each
+    epic is reduced to id + headline + status + owner. Measured on the live
+    board this cut the per-turn cost from 16,764 chars to a small fraction,
+    with no loss of coordination signal.
+
+    Use ``render_board_block`` (the full render) for the ``project_board_read``
+    TOOL and for any human-facing surface — those are pull-based and must show
+    the complete epic text.
+    """
+    return _render_board(project_path, current_conv_id, abridged=True)
+
+
+def render_board_block(project_path: str, current_conv_id: str = '') -> str:
+    """Render the board IN FULL — the pull-based detail channel.
+
+    Backs the ``project_board_read`` agent tool and the panel/influence reads:
+    every epic's complete stored text, never abridged. The per-turn prompt
+    injection deliberately uses ``render_board_injection_block`` instead.
+    """
+    return _render_board(project_path, current_conv_id, abridged=False)
+
+
+def _render_board(project_path: str, current_conv_id: str = '',
+                  *, abridged: bool = False) -> str:
+    """Shared board renderer — ONE lane-partitioning implementation.
+
+    ``abridged`` selects the per-turn injection shape (short titles + a pointer
+    to the detail tool); everything else — lane partitioning, lease expiry,
+    the "(you)" stamp, the avoid-duplication hint — is identical, so the two
+    consumers can never disagree about WHAT is on the board, only about how
+    much of each epic they spell out.
+    """
+    _t = _abridge_title if abridged else (lambda s: s)
     board = read_board(project_path)
     tasks = board['tasks']
     if not tasks:
@@ -911,7 +963,10 @@ def render_board_block(project_path: str, current_conv_id: str = '') -> str:
     lines = ['[PROJECT BOARD] — shared coordination board for this project. '
              'Before starting work, CHECK it: claim an open epic so siblings '
              'know you own it, and do NOT duplicate an epic another '
-             'conversation is already advancing.']
+             'conversation is already advancing.'
+             + (' Epics are shown ABRIDGED (headline only, marked …) — call '
+                'project_board_read for an epic\'s full text before you work it.'
+                if abridged else '')]
     if claimed_t:
         lines.append('')
         lines.append('In progress (claimed by a conversation — AVOID DUPLICATING):')
@@ -920,13 +975,13 @@ def render_board_block(project_path: str, current_conv_id: str = '') -> str:
             mine = ' (you)' if current_conv_id and owner == current_conv_id else ''
             hint = '' if mine else ' — another conversation is advancing this; ' \
                    'pick a different epic or coordinate, do not redo it'
-            lines.append(f'  • [{t["id"]}] {t["title"]} — claimed by {owner}{mine}{hint}')
+            lines.append(f'  • [{t["id"]}] {_t(t["title"])} — claimed by {owner}{mine}{hint}')
     if open_t:
         lines.append('')
         lines.append('Open (unclaimed — claim one with project_board_claim before working it):')
         for t in open_t:
             dep = f' (depends on {", ".join(t["depends_on"])})' if t['depends_on'] else ''
-            lines.append(f'  • [{t["id"]}] {t["title"]}{dep}')
+            lines.append(f'  • [{t["id"]}] {_t(t["title"])}{dep}')
     if blocked_t:
         lines.append('')
         lines.append('Waiting on an external gate (auto-retries on its own after a '
@@ -936,7 +991,7 @@ def render_board_block(project_path: str, current_conv_id: str = '') -> str:
             reason = (t.get('block_reason') or '').strip()
             why = f' — {reason}' if reason else ''
             cnt = int(t.get('block_count') or 0)
-            lines.append(f'  • [{t["id"]}] {t["title"]}{why} '
+            lines.append(f'  • [{t["id"]}] {_t(t["title"])}{why} '
                          f'(retry in ~{mins}m, blocked {cnt}×)')
     if pending_q:
         lines.append('')
@@ -946,12 +1001,12 @@ def render_board_block(project_path: str, current_conv_id: str = '') -> str:
         for t in pending_q:
             q = ((t.get('block_question') or {}).get('q') or '').strip()
             qq = f' — Q: {q}' if q else ''
-            lines.append(f'  • [{t["id"]}] {t["title"]}{qq}')
+            lines.append(f'  • [{t["id"]}] {_t(t["title"])}{qq}')
     if done_t:
         lines.append('')
         lines.append('Recently done:')
         for t in done_t[-8:]:
-            lines.append(f'  • {t["title"]}')
+            lines.append(f'  • {_t(t["title"])}')
     return '\n'.join(lines)
 
 

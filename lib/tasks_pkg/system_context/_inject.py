@@ -712,8 +712,8 @@ Round N+3, a2's update lands. Synthesise the full picture for the user.
         _ctx_suppressed('board', 'marker_present')
     if project_enabled and project_path and _BOARD_MARKER not in _existing:
         try:
-            from lib.conversations.project_board import render_board_block
-            _board_block = render_board_block(project_path, current_conv_id=_cid or '')
+            from lib.conversations.project_board import render_board_injection_block
+            _board_block = render_board_injection_block(project_path, current_conv_id=_cid or '')
         except Exception as e:
             logger.debug('[Inject] board build failed conv=%s: %s',
                          (_cid or '?')[:8], e)

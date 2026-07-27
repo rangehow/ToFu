@@ -253,9 +253,18 @@ def persist_snapshot_to_conversation(conv_id: str, agent_ids,
             if (getattr(cur, 'rowcount', 0) or 0) > 0:
                 # Phase 5 dual-write (flag-gated, inert when off): rounds
                 # stamped inside known message positions → seq-hint mirror.
-                from lib.database.messages_rows import mirror_write_and_commit
-                mirror_write_and_commit(db, conv_id, messages, now_ms=now_ms,
-                                        changed_seqs=sorted(_stamped_seqs))
+                # Guarded separately: the CAS UPDATE above already committed,
+                # so a mirror failure must not reach the `except` below and
+                # return False — that would report a landed snapshot as lost
+                # AND skip the cross-device notify.
+                try:
+                    from lib.database.messages_rows import mirror_write_and_commit
+                    mirror_write_and_commit(db, conv_id, messages, now_ms=now_ms,
+                                            changed_seqs=sorted(_stamped_seqs))
+                except Exception as _mirror_err:
+                    logger.warning('[SwarmSnapshot] conv=%s row mirror failed '
+                                   '(non-fatal, snapshot already durable): %s',
+                                   conv_id[:8], _mirror_err, exc_info=True)
                 logger.info('[SwarmSnapshot] conv=%s persisted snapshot (%d agents, '
                             'v=%d) onto spawn round', conv_id[:8],
                             len(snapshot.get('agents') or []),

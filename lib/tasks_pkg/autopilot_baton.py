@@ -197,8 +197,19 @@ def _append_vu_message_to_conv(conv_id: str, vu_msg_id: str,
              conv_id),
         )
         # Phase 5 dual-write (flag-gated, inert when off): tail append.
-        from lib.database.messages_rows import mirror_write_and_commit
-        mirror_write_and_commit(db, conv_id, messages, now_ms=now_ms)
+        # Guarded SEPARATELY from the authoritative write above: the VU turn is
+        # already durable at this point, so a mirror failure must not fall into
+        # this function's `except` and return None — the caller reads None as
+        # "the VU turn was not persisted" and ENDS the autopilot run (observed
+        # 2026-07-27: a NameError in the hook silently stopped autopilot with
+        # the VU message sitting committed in the conversation).
+        try:
+            from lib.database.messages_rows import mirror_write_and_commit
+            mirror_write_and_commit(db, conv_id, messages, now_ms=now_ms)
+        except Exception as _mirror_err:
+            logger.warning('[Autopilot] conv=%s row mirror failed (non-fatal, '
+                           'VU turn already durable): %s',
+                           conv_id[:8], _mirror_err, exc_info=True)
         logger.info('[Autopilot] conv=%s ✅ Appended VU msg %s (%d chars, %d rounds)',
                     conv_id[:8], vu_msg_id[:12], len(text), len(rounds or []))
         return vu_msg

@@ -482,24 +482,31 @@ def mirror_write_and_commit(db, conv_id: str, messages, *, now_ms: int = 0,
 
     ``lib/chat/persistence.py::persist_conv_messages`` keeps its annotated
     inline version (it interleaves the commit with the rev read-back).
+
+    **NEVER RAISES.** The whole body is defended because the mirror is
+    best-effort by contract: the authoritative blob write has ALREADY
+    committed by the time callers reach this hook, so an exception escaping
+    here would abort a caller mid-way through work that is already durable.
+    That is not hypothetical — a missing ``full`` parameter made this hook
+    raise ``NameError`` on 2026-07-27 and silently killed the autopilot baton
+    hand-off, the scheduler's task spawn, and swarm auto-continue, each of
+    which had already committed its messages. Callers additionally guard the
+    call itself, because a signature-level ``TypeError`` cannot be caught from
+    inside the callee.
     """
-    if not rows_write_enabled():
-        return
-    if full:
-        try:
-            backfill_conv(db, conv_id, messages, now_ms=now_ms, commit=False)
-        except Exception as e:  # pragma: no cover - defensive
-            logger.warning('[messages_rows] full mirror failed conv=%s (non-fatal): %s',
-                           (conv_id or '')[:12], e)
-    else:
-        dual_write_conv(db, conv_id, messages, now_ms=now_ms,
-                        changed_seqs=changed_seqs)
     try:
+        if not rows_write_enabled():
+            return
+        if full:
+            backfill_conv(db, conv_id, messages, now_ms=now_ms, commit=False)
+        else:
+            dual_write_conv(db, conv_id, messages, now_ms=now_ms,
+                            changed_seqs=changed_seqs)
         db.commit()
     except Exception as e:
-        logger.warning('[messages_rows] mirror commit failed conv=%s '
-                       '(non-fatal, JSONB truth already durable): %s',
-                       (conv_id or '')[:12], e)
+        logger.warning('[messages_rows] mirror failed conv=%s (non-fatal, '
+                       'JSONB truth already durable): %s',
+                       (conv_id or '')[:12], e, exc_info=True)
 
 
 __all__ = [

@@ -20,8 +20,11 @@ ghost-classifier inference.
 FE inference-debt #2 verdict: the "backend-issued taskId→msgId bind" the epic
 asked for already EXISTS (`_taskId`). The genuine remaining debt was that the
 identical predicate was DUPLICATED at the two connect sites and could drift.
-This test locks in ONE canonical reducer (core/conversations.js) that both call
-sites use.
+This test locks in ONE canonical reducer that both call sites use. The reducer's
+defining module is RESOLVED BY SEARCH (it has already moved once —
+core/conversations.js → core/conv_reducers.js, commit 0460e64a — and the
+hardcoded path turned that move into an unreadable `substring not found`), so
+only a genuine deletion or re-duplication of the reducer fails this test.
 
 Slices the REAL shipped reducer verbatim, runs under node, drives the truth
 table + a neuter proving the stale-taskId equality is load-bearing.
@@ -40,9 +43,42 @@ pytestmark = pytest.mark.unit
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, '..'))
-CONV_JS = os.path.join(ROOT, 'static', 'js', 'core', 'conversations.js')
+CORE_DIR = os.path.join(ROOT, 'static', 'js', 'core')
 SSE_JS = os.path.join(ROOT, 'static', 'js', 'ui', 'sse_pipeline.js')
 INIT_JS = os.path.join(ROOT, 'static', 'js', 'main', 'main_init_tasks.js')
+
+_REDUCER_SIG = 'function assistantTailIsPriorTurn(msg, activeTaskId) {\n'
+
+
+def _reducer_module() -> str:
+    """Locate the module that DEFINES the reducer, wherever it currently lives.
+
+    The reducer has already migrated once (core/conversations.js →
+    core/conv_reducers.js, commit 0460e64a) and that move silently broke this
+    guard for days: it read a hardcoded path, so the miss surfaced as a
+    `ValueError: substring not found` — indistinguishable from noise — rather
+    than as "the behaviour I protect is gone". Resolving the defining module by
+    SEARCHING for the definition keeps the guard anchored to the semantic unit
+    (the function), so a future re-extraction re-points itself and only a
+    genuine DELETION of the reducer fails the test.
+    """
+    hits = sorted(
+        os.path.join(CORE_DIR, name)
+        for name in os.listdir(CORE_DIR)
+        if name.endswith('.js')
+        and _REDUCER_SIG in open(os.path.join(CORE_DIR, name), encoding='utf-8').read()
+    )
+    assert hits, (
+        'assistantTailIsPriorTurn is not DEFINED in any static/js/core/*.js — '
+        'the shared prior-turn reducer was deleted, not merely relocated. The '
+        'two connect sites (sse_pipeline.js, main_init_tasks.js) call it, so '
+        'this is a real regression, not an anchor drift.'
+    )
+    assert len(hits) == 1, (
+        f'assistantTailIsPriorTurn is defined in MORE than one core module '
+        f'({hits}) — the single-source-of-truth reducer has been duplicated again.'
+    )
+    return hits[0]
 
 
 def _node_available() -> bool:
@@ -51,10 +87,14 @@ def _node_available() -> bool:
 
 def _extract_reducer(src_text: str) -> str:
     """Slice the `assistantTailIsPriorTurn` fn body (through its closing brace)."""
-    sig = 'function assistantTailIsPriorTurn(msg, activeTaskId) {\n'
-    start = src_text.index(sig)
+    start = src_text.index(_REDUCER_SIG)
     end = src_text.index("\n}\n", start) + len("\n}\n")
     return src_text[start:end]
+
+
+def _shipped_reducer() -> str:
+    with open(_reducer_module(), encoding='utf-8') as fh:
+        return _extract_reducer(fh.read())
 
 
 _HARNESS = r"""
@@ -119,8 +159,7 @@ def _run(reducer_text: str, tag: str) -> str:
 
 @pytest.mark.skipif(not _node_available(), reason='node not installed')
 def test_prior_turn_reducer_truth_table():
-    with open(CONV_JS, encoding='utf-8') as f:
-        reducer = _extract_reducer(f.read())
+    reducer = _shipped_reducer()
     out = _run(reducer, 'real')
     fails = [ln for ln in out.splitlines() if ln.startswith('FAIL')]
     assert not fails, 'prior-turn reducer failures:\n' + out
@@ -132,8 +171,7 @@ def test_prior_turn_reducer_neuter_drops_stale_taskid():
     """NEUTER: force _staleTaskId to false → a tail owned by a DIFFERENT task is
     no longer recognized as prior. Proves the taskId equality is load-bearing
     (its removal re-introduces the old-content-replay bug)."""
-    with open(CONV_JS, encoding='utf-8') as f:
-        reducer = _extract_reducer(f.read())
+    reducer = _shipped_reducer()
     neutered = reducer.replace(
         "const _staleTaskId = !!(msg._taskId && msg._taskId !== activeTaskId);",
         "const _staleTaskId = false;", 1)

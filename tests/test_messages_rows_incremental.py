@@ -315,6 +315,33 @@ def test_env_var_overrides_flag_file_both_ways(monkeypatch):
     assert mr.rows_write_enabled() is False  # pytest guard on default path
 
 
+# ── 6. Null-escape robustness (the 2026-07-27 live mirror-failure class) ──
+
+def test_message_to_row_strips_null_escapes_for_jsonb():
+    """PG jsonb rejects the  escape ('unsupported Unicode escape
+    sequence') — a mid-stream checkpoint carrying raw null bytes made every
+    mirror of two live convs fail best-effort (60 swallowed failures). meta /
+    content_json MUST be serialized with json_dumps_pg (the same serializer
+    the blob path uses). A bare json.dumps regression reintroduces the
+    escape → this test is RED."""
+    msg = {'role': 'assistant',
+           'content': 'terminal capture ' + chr(0) + ' tail',
+           '_msgId': 'n1'}
+    row = mr.message_to_row('cv', 0, msg)
+    assert '\\u0000' not in row['meta'], (
+        'meta carries a  escape — PG jsonb will reject the row write')
+    row2 = mr.message_to_row('cv', 1, {'role': 'user',
+                                       'content': [{'type': 'text',
+                                                    'text': 'a' + chr(0) + 'b'}]})
+    assert '\\u0000' not in row2['content_json']
+    # Round-trip still reconstructs the message (meta stays parseable, and
+    # the null byte is stripped EXACTLY as the blob writer would strip it).
+    import json as _json
+    back = _json.loads(row['meta'])
+    assert back['role'] == 'assistant'
+    assert back['content'] == 'terminal capture  tail'
+
+
 if __name__ == '__main__':
     import pytest as _pt
     sys.exit(_pt.main([__file__, '-v']))

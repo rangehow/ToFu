@@ -507,7 +507,8 @@ def _coerce_score(v):
     """Clamp a rubric score to an int in [1,5]; None on garbage (mirrors insight)."""
     try:
         n = int(round(float(v)))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as _e:
+        logger.debug('coerce score: unexpected type/unparseable (%s)', _e)
         return None
     return max(1, min(5, n))
 
@@ -858,7 +859,14 @@ def generate_ideas(direction: str, open_gaps: dict, *, lang: str = 'en',
         if isinstance(_i, dict):
             try:
                 _t, _ = _self.build_retrieval_query(_i)
-            except Exception:
+            except Exception as _e:
+                # Names the call that actually failed (build_retrieval_query)
+                # rather than the enclosing function: a census that silently
+                # drops one idea's terms skews the identity/domain split for
+                # the WHOLE batch, and 'generate ideas failed' would send the
+                # reader looking in the wrong place.
+                logger.debug('retrieval-query build for the batch term '
+                             'census failed: %s', _e)
                 _t = ''
             if _t:
                 _batch_terms.append(_t)

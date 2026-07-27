@@ -1,6 +1,20 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-28 — 锚点漂移家族第 8 例收口:**我自己开的票低报了 4.5 倍规模**,而根修不是逐个重指向而是把「定位」收敛成单一真源(epic `pt_d922f21a04d640b5` done;commits `f47707b0` + `e2769caf`,13 文件;全家族 **18 红 → 84/84**,**NEUTER×10 全咬**,干净 committed worktree **77 过 1 skip**,生产码**零改动**)
+
+- **★ 先判活死,结论是防线完好 —— 票面要求的第一步救了整个方向。** `_trimMsgForPersist` 及其三条 inject lane 剥离块**活得很好**,只是 2026-07-25 被 pt_3879f00e slice 3 整体搬到 `core/conv_persist_helpers.js:50`,`conversations.js:82` 的注释还记着那次搬迁。**这是纯 harness 漂移(守卫活着、指错地方),不是回归** —— 若第一反应是「把断言改绿」,就会在防线仍然有效的情况下削弱它。
+- **★ 我开票时报「4 条红」,实测是 **18 条红 / 13 个套件**。** 成因单一:pt_3879f00e 的每一次抽取 slice 都把符号搬出 `conversations.js`,而 13 个 harness 各自硬编码那个路径 → **每切一刀就批量打死一批**。低报的原因是我只跑了自己撞到的那两个套件就下了规模判断 —— 与 charter 记的「样本量 2 就下行业级判断」同族,只是这次的载体是票面数字。
+- **★ 根修落点:不是重指向 13 次,而是消灭「每个测试自己猜文件」这件事。** 逐个手改等于写出第 4、第 5 份同款定位代码 —— 那正是本家族连续 8 例的结构性成因。新增 `tests/_conv_bundle_sources.py`,读**生产的** `lib/js_bundler._BUNDLE_FILES`(浏览器拿到的同一张表)把**符号 → 需要 eval 的文件**解析出来,并按 bundle 顺序返回。**将来再切一刀,这些守卫自己跟着走。** 故意不用目录 glob:glob 会静默捞进 bundle 根本不发的文件,那是「守卫在测用户永远拿不到的代码」的入口。
+- **三态诊断是本票明确要求的能力,已做成可执行的:** 找不到 → 报「实现被移除,**这是产品回归而非 harness 漂移**,先恢复它再动守卫」;找到多个 → 报「单一真源被复制,先收敛」;找到一个 → 自动重指向。NEUTER-A(改名 `_rebaseUnackedTail`)实测精确打印第一种。
+- **★ 两个比重指向更值钱的发现:**
+  - **① 三个套件缺的是**第二个**依赖,且它的缺失伪装成产品缺陷。** `_clearPendingSyncMarkers`(slice 3 搬到 `core/pending_sync.js`)缺失时抛在**PUT 已经成功之后**,被 `catch` 吞成 `return false` —— 于是 rebase 数据全对(`server_msg_preserved`/`ordering`/`msgId` 全绿)却只有返回值那条红。**读作分页/同步失败,实际是 harness 符号集不完整。** 我一度差点去查生产码。
+  - **② `translation_freshness` 不是路径漂移,是 charter 的第三态。** 逐段 narration 合并**已从**闭包 `_mergeServerTranslations` **搬进** `core/conv_reducers.js::_mergeTranslationFields`(那里注释自称 "THE single source of truth")。守卫断言的分支**在它切下来的那段里已不存在**,连它的 NEUTER 正则都匹配不上(报 "regex did not modify")。改为交付**完整链**(闭包 + 被委派的 reducer),NEUTER 打在 reducer 真身 —— 实测删掉真身的 segment 循环 → 2 条红。**这条如果只按「路径漂移」处理,会被改成一个永远绿的空壳。**
+- **两条源码字面量守卫翻成断言结果:** 「三条 inject lane 逐条被真正过滤掉」「PUT 侧与缓存侧两道 segments 闸各自生效」—— 重排条件写法不再假红,而少掉任一条 lane 立刻红。
+- **诚实分账:** `conv_model_identity` 与 `merge_active_task_terminal_fields` 是**共享解析的连带受益**(它们本就显式列了多文件、NEUTER 还带 `count()==1` 漂移哨兵),不是独立成因,未记为我修的对象。
+- **NEUTER×10 全咬,各咬各的语义:** 删剥离块 / 只漏 `_userSteerInject`(边缘形态,非典型形态)/ 改名函数(报实现消失)/ **换重绘协作者名**(本轮第二条红的原始成因 —— 以前静默空转,现在直接报出并说明后果)/ 无条件显示 / 保留锚点放宽判据(驱动补集)/ 删 `_taskId` 去重 / 删 reducer segment 循环 / 删 PUT 侧与缓存侧 segments 闸。**生产码事后逐字节还原(`git diff` 两个文件皆空)+ `node --check` 通过。**
+- **未做/留痕:** `lost_ack` 有 1 条环境性 skip(干净 tree 上同样 skip),非本轮引入。
+
 ### 2026-07-28(续2) — 交易页优化收尾:三主题全部文字层级提到 WCAG AA 并设硬闸(tofu-trade `d42a8e2`;11 条守卫,**NEUTER×5 全咬**,相邻环 **43/43**,干净 committed worktree **43/43**,线上已提供新调色板)
 
 - **★ 这一条我自己拍了板而不是继续等 owner。** 判据:**WCAG AA 是客观标准不是审美偏好**,而 charter 写着「勇于分析根因、不做补丁式小修小补」。可争议的是配色审美,不可争议的是「9px 的时间戳在默认主题下 1.70:1」。故按标准定值、把理由写进 commit 与代码注释、用测试钉死,owner 若不认同可直接改值——测试断言的是**比值**不是**色值**,任何真正可读的配色都能过。

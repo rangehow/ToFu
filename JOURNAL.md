@@ -1,6 +1,16 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-27 — 模型卡片直显限流/错误健康态 + 输入/输出价格可配置:综合成本从手填改为派生(owner「I want the error rate throttling on each model's card; we still can't configure input/output costs — what's the point of a composite cost?」;epic `pt_745396fedc754914`,commit `61aa0f83`,15 文件 +1049/-10;后端 **14/14** + 前端 jsdom **30+** 全绿,**NEUTER×6 全咬**,tsc **0**,guard 环 47/47,dispatch+config 环 146/146)
+
+- **需求两根:** ①限流/错误节流(slot cooldown)在模型列表完全不可见——`get_slots_info` 从不导出 `cooldown_until`/`cooldown_reason`,被节流的模型在卡片上看起来健康;②编辑框只有手填「综合 $/1K」,输入/输出价没有 UI——综合成本与真实价格因此必然漂移。
+- **健康态链路(每层都有 NEUTER 钉):** `get_slots_info` 导出 cooldown 两字段 → 新 `lib/dispatch_stats.aggregate_model_health` 按 (provider, wire model) 折叠(成功率/连错/max 剩余冷却+原因/可用槽) → 新路由 `GET /api/v1/dispatch/model-health`(冷启动 dispatcher 不可用时降级 `{}` 不 5xx)→ 卡片健康条按**请求名池**再折叠一层(request_ids 优先,否则 [model_id]+aliases,与身份契约一致)。10s 轮询只原位刷新 `.stg-mcard-health` 节点,绝不整 tab 重渲染——否则打开的编辑框会被吹掉。首次拉取前健康条渲染为空(`:empty` 隐藏),不许把「还没数据」谎报成「暂无流量」。
+- **价格链路(全部走既有 PROVIDER_PRICING 缝,零新机制):** 编辑框新增输入/输出 $/1M 字段,写入 `m.pricing`(后端成本核算本就连通);**只**预填显式 override,当前生效价只进 placeholder——否则「打开再应用」会把隐式价固化成 pin。两个价都填时综合成本**自动派生**(`(in+out)/2/1000`,与 discovery enrich 同式)并置 readonly,清空则回手动。`reevaluate_pricing_tags` 此前只看顶层 `input_price/output_price`,用户写的嵌套 `pricing` 不更新 'cheap' 标签——补 `_model_input_price/_model_output_price` 双形状解析(顶层仍优先)。卡片价格行三级回退:override → discovery → 全局表,override 带「自定义」tag;server-config 的 model_pricing 同步合并嵌套形状。
+- **NEUTER×6 全部精确咬:** ①摘 get_slots_info 的 cooldown 导出 → 2 红(恰好是钉链路的两个);②聚合忽略 cooldown → 2 红;③reevaluate 回退到只看顶层 → 2 红;④卡片摘掉 m.pricing 优先 → override 丢失;⑤折叠摘 cooldown 合并 → 冷却 chip 消失;⑥save 停派生 → cost 停留手填。
+- **共享 HEAD 纪律(本轮两件):** ①兄弟的 `lib/llm_sanitize/_gateway.py` 仍是破窗 WIP(IndentationError,line 21),flask_client 路由测试在当前树因此 error——与整个 flask_client 家族同根,非本改动引入;按既定舞步「备份 WIP → 垫 HEAD 版跑测 → 逐字节还原(md5 校验)」验证 14/14 全绿后还原。②提交用显式 15 文件 pathspec + `git diff --cached --name-only` 核对,树里另有 ~20 个兄弟在飞文件,零混入。
+- **顺手发现(未修,非本票):** `debug/reeval_pricing_tags.py` 硬编码 `lib/llm_dispatch/config.py` 单文件路径,而该模块早已包化为 `config/`(HEAD 前就有)——守卫过期家族「锚点漂移」又一例,FileNotFoundError 直接崩。无 CI 测试引用它(仅 template_actions.js 注释提及),留作后续票。
+- **自纠:** 本轮在同一个坑栽了 5 次——`insert_content` 的 content 里又写了 anchor 文本导致锚行重复(IndentationError/SyntaxError),已存项目记忆 `insert_content_anchor_duplication_trap`:insert 的 content 绝不重打 anchor 行,插完立即 node --check / ast.parse。
+
 ### 2026-07-27 — 「对话为什么没头没脑结束了」根因三连:模型说了不做(非崩溃) + 大脑一秒三发散弹重派(真 bug,规模超单案) + 意图滞留补推降级为测量票(owner 拍板;bug 票 `pt_1613ab83b1934884` + 测量票 `pt_33ba079f5cea4841`;零产品代码,纯取证 + 开票)
 
 - **触发:** owner 问 conv `ms34yw0k74o2lq` 为何戛然而止,并说「Opus 5 好多都这样」。

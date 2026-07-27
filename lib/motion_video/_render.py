@@ -120,6 +120,42 @@ def _env_missing_result(tool: str) -> dict:
 
 # ── Quality gates (lint / validate / inspect) ─────────────
 
+#: Sub-report keys the CLI nests its findings under (``check`` merges three
+#: gates into one payload; the individual subcommands use their own key).
+_REPORT_SECTIONS = ('lint', 'runtime', 'layout')
+
+
+def _collect_findings(data) -> tuple[list, bool]:
+    """Pull findings out of a CLI JSON report, flat or nested.
+
+    ``hyperframes check`` reports ``{ok, lint:{findings…}, runtime:{findings…},
+    layout:{findings…}}`` while the older single-purpose subcommands report a
+    top-level ``findings`` list. Reading only the flat key silently discarded
+    EVERY finding of the merged report — a composition with a fatal runtime
+    error came back ``ok=False`` with an empty error list, which upstream then
+    rendered as "no problems found". Returns ``(findings, saw_report)``;
+    ``saw_report`` is False when the payload carried no recognisable report, so
+    the caller can fall back to the exit code instead of trusting an empty list.
+    """
+    if not isinstance(data, dict):
+        return [], False
+    findings: list = []
+    saw = False
+    if isinstance(data.get('findings'), list):
+        findings.extend(data['findings'])
+        saw = True
+    for key in _REPORT_SECTIONS:
+        section = data.get(key)
+        if isinstance(section, dict) and isinstance(section.get('findings'), list):
+            for f in section['findings']:
+                if isinstance(f, dict):
+                    f = dict(f)
+                    f.setdefault('_section', key)
+                findings.append(f)
+            saw = True
+    return findings, saw
+
+
 def _gate(subcmd: str, project_dir: str, *, timeout: int,
           abort_event=None) -> dict:
     cli = _cli_or_env_error()
@@ -132,15 +168,29 @@ def _gate(subcmd: str, project_dir: str, *, timeout: int,
                 'detail': (res['err'] or res['out'])[-_TAIL:]}
     findings: list[dict] = []
     parse_note = ''
+    saw_report = False
     try:
         data = json.loads(res['out'])
-        findings = data.get('findings') or []
+        findings, saw_report = _collect_findings(data)
     except Exception as _e:
         # Non-JSON output (older CLI / human format): fall back to exit code.
         logger.debug('gate: failed (%s)', _e)
         parse_note = 'non-json output; gated on exit code'
     errors = [f for f in findings if f.get('severity') == 'error']
     ok = res['rc'] == 0 and not errors
+    if not ok and not errors:
+        # The CLI failed but named no error-severity finding (or its report
+        # was unparseable). Surface the exit code + stderr as ONE synthetic
+        # finding: a failure carrying an empty reason list reads as SUCCESS to
+        # every consumer that inspects only the errors.
+        detail = (res['err'] or res['out'] or '').strip()[-_TAIL:]
+        errors = [{'message': (
+            f'{subcmd} failed (exit {res["rc"]}) without a machine-readable '
+            f'finding' + (f': {detail}' if detail else '')),
+            'severity': 'error'}]
+        findings = list(findings) + errors
+        if not saw_report and not parse_note:
+            parse_note = 'report carried no recognisable findings section'
     return {
         'ok': ok,
         'category': '' if ok else ('lint' if subcmd == 'lint' else _classify_failure(res)),
@@ -169,9 +219,33 @@ def inspect_project(project_dir: str, *, timeout: int = 300, abort_event=None) -
 
 
 def check_project(project_dir: str, *, timeout: int = 300, abort_event=None) -> dict:
-    """Run all three static gates and merge the results."""
+    """Run all three static gates and merge the results.
+
+    Prefers the CLI's own ``check`` subcommand, which runs lint + runtime
+    validation + layout inspection in ONE headless-Chrome boot (``validate``
+    and ``inspect`` are each separately deprecated, and three boots cost ~3×
+    the wall time). Falls back to the legacy per-gate calls when ``check`` is
+    unavailable, so an older pinned CLI keeps working.
+    """
     merged = {'ok': True, 'category': '', 'errors': [], 'warnings': [],
               'fix_hints': [], 'gates': {}, 'elapsed': 0.0}
+
+    combined = _gate('check', project_dir, timeout=timeout,
+                     abort_event=abort_event)
+    if combined.get('category') != 'env_missing' \
+            and 'unknown command' not in (combined.get('detail') or '').lower():
+        combined['ok'] = bool(combined.get('ok'))
+        merged.update({
+            'ok': combined['ok'],
+            'category': '' if combined['ok'] else (combined.get('category') or 'unknown'),
+            'errors': list(combined.get('errors', [])),
+            'warnings': list(combined.get('warnings', [])),
+            'fix_hints': [h for h in combined.get('fix_hints', []) if h],
+            'gates': {'check': combined},
+            'elapsed': round(combined.get('elapsed', 0.0), 2),
+        })
+        return merged
+
     for name, fn in (('lint', lint_project),
                      ('validate', validate_project),
                      ('inspect', inspect_project)):
@@ -203,7 +277,9 @@ def render_project(project_dir: str, output: str, *, quality: str = 'standard',
     """``hyperframes render`` one composition project → MP4.
 
     Args:
-        project_dir: hyperframes project dir (holds index.html + hyperframes.json).
+        project_dir: hyperframes project dir. Holding ``index.html`` is
+            sufficient — the CLI needs no project manifest and the engine
+            writes only that file per scene.
         output: MP4 output path (absolute, or relative to project_dir).
         quality: draft | standard | high.
         fps: optional 24/30/60 override.

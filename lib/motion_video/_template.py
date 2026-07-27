@@ -115,7 +115,12 @@ _TEMPLATE = """<!doctype html>
     <style>
       * {{ margin: 0; padding: 0; box-sizing: border-box; }}
       html, body {{ margin: 0; width: {width}px; height: {height}px; overflow: hidden; background: #000; }}
-      body {{ font-family: Inter, "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif; }}
+      /* Only fonts the renderer auto-resolves may be NAMED here: naming an
+         absent face (PingFang SC / Noto Sans CJK SC) does not get you that
+         face, it gets a silent fallback to whatever fontconfig has — on a
+         host whose only CJK face is a SERIF, this sans stack rendered serif.
+         CJK coverage therefore comes from fontconfig fallback. */
+      body {{ font-family: Inter, system-ui, sans-serif; }}
       #root {{ position: relative; width: {width}px; height: {height}px; overflow: hidden; }}
       .bgfill {{ position: absolute; inset: 0; background: {background}; }}
       .clip {{ position: absolute; inset: 0; display: grid; place-items: center; }}

@@ -88,6 +88,42 @@ def _write(path: str, text: str) -> None:
     os.replace(tmp, path)
 
 
+def _scene_gate_findings(mv, scene_dir: str, scene_id: str, *,
+                         abort_event=None) -> list[str]:
+    """Run the REAL HyperFrames gates on one composed scene dir.
+
+    ``check_composition_html`` is a regex pass over the contract fields and the
+    determinism ban-list; it is structurally blind to the defects a viewer
+    actually sees — a font the renderer cannot resolve (silently swapped for
+    whatever fontconfig has), a WCAG contrast failure, a runtime console error,
+    or text spilling its container. ``hyperframes check`` catches exactly
+    those, costs no render, and each finding carries a fix hint.
+
+    ADVISORY by design: a finding means the frame is UGLY, not unrenderable, so
+    the caller records it on the quality axis rather than aborting a film that
+    would still play. ``env_missing`` / ``aborted`` / ``timeout`` are not
+    composition defects and return empty.
+
+    Never raises — a gate crash must not take down a job.
+    """
+    try:
+        res = mv.check_project(scene_dir, abort_event=abort_event)
+    except Exception as e:
+        logger.warning('[MotionVideo] scene %s gate crashed: %s', scene_id, e,
+                       exc_info=True)
+        return []
+    if res.get('ok'):
+        return []
+    if res.get('category') in ('env_missing', 'aborted', 'timeout'):
+        logger.info('[MotionVideo] scene %s real gates skipped (%s)',
+                    scene_id, res.get('category'))
+        return []
+    findings = [str(e) for e in res.get('errors', [])]
+    logger.warning('[MotionVideo] scene %s failed %d real-gate check(s): %.400s',
+                   scene_id, len(findings), ' | '.join(findings))
+    return findings
+
+
 def _render_one(mv, scene_dir: str, mp4_path: str, *, quality: str,
                 width: int, height: int, fps: int, expect_dur: float,
                 abort_event) -> dict:
@@ -384,6 +420,7 @@ def run_motion_task(task: dict) -> None:
         authoring = scene_author_enabled(task)
         scene_dirs: list[str] = []
         authored = 0
+        scene_gate_issues: dict[str, list[str]] = {}
         total = len(scenes)
         for i, sc in enumerate(scenes, 1):
             dur = target_by_id.get(sc['id'], round(sc['end'] - sc['start'], 3))
@@ -421,6 +458,18 @@ def run_motion_task(task: dict) -> None:
                 raise ValueError(f"template composition failed its own gate "
                                  f"for {sc['id']}: {' | '.join(errs)}")
             _write(index_path, html)
+            # The REAL gates (fonts/contract + runtime errors + WCAG contrast +
+            # text overflow) — the regex gate above cannot see any of those,
+            # and they are exactly the defects that read as "no formatting".
+            # Advisory: a finding means the frame is ugly, not unrenderable, so
+            # it is reported and counted on the quality axis instead of killing
+            # a film that would still play.
+            gate_findings = _scene_gate_findings(
+                mv, scene_dir, sc['id'], abort_event=task.get('abort_event'))
+            if gate_findings:
+                scene_gate_issues[sc['id']] = gate_findings
+                _emit(task, {'type': 'scene_gate', 'scene_id': sc['id'],
+                             'ok': False, 'findings': gate_findings[:6]})
             sc['_duration'] = dur
             scene_dirs.append(scene_dir)
             _emit(task, {'type': 'progress', 'phase': 'compose',
@@ -431,7 +480,8 @@ def run_motion_task(task: dict) -> None:
                 return
         _emit(task, {'type': 'phase', 'phase': 'compose', 'scenes': total,
                      'authored': authored,
-                     'templated': total - authored})
+                     'templated': total - authored,
+                     'gate_failed_scenes': sorted(scene_gate_issues)})
         if _aborted(task):
             _motion_runtime.finish(task_id)
             return
@@ -575,6 +625,7 @@ def run_motion_task(task: dict) -> None:
             'burn_in_auto': bool(degraded_narration),
             'workdir': workdir,
             'mode': 'engine',
+            'gate_failed_scenes': sorted(scene_gate_issues),
         }
         task['result'] = result
         write_job_manifest(task, kind=task.get('kind') or 'scenes',
@@ -587,13 +638,26 @@ def run_motion_task(task: dict) -> None:
         # the scene durations are char-estimated rather than measured from
         # real audio (lib/motion_video/_recipe.py::_FALLBACK_CHARS_PER_SECOND),
         # which is how "8 shots all pinned at the 15.0s ceiling" ships green.
-        _motion_runtime.finish(
-            task_id, result=result, degraded=degraded_narration,
-            degraded_reason=(
+        # Scenes that failed the REAL gates are the same shape of defect on the
+        # VISUAL axis: the film plays, but those frames carry an unresolvable
+        # font, failing contrast, or text outside its container — so they must
+        # not ship looking like a clean success either.
+        _reasons = []
+        if degraded_narration:
+            _reasons.append(
                 'narration requested but no TTS slot was available — shipped '
                 'the silent video with burned-in subtitles; scene durations '
-                'are char-estimated, not measured from audio'
-                if degraded_narration else ''))
+                'are char-estimated, not measured from audio')
+        if scene_gate_issues:
+            _first = next(iter(scene_gate_issues.values()))[:2]
+            _reasons.append(
+                f'{len(scene_gate_issues)} of {total} scene(s) failed the '
+                f'renderer quality gates '
+                f'({", ".join(sorted(scene_gate_issues))}): ' + '; '.join(_first))
+        _motion_runtime.finish(
+            task_id, result=result,
+            degraded=bool(degraded_narration or scene_gate_issues),
+            degraded_reason=' | '.join(_reasons))
         logger.info('[MotionVideo] task %s done: %s (%.2fs, %d scenes, '
                     'narrated=%s)', task_id, final_path, result['duration'],
                     total, narration)

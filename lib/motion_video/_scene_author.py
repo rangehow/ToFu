@@ -7,9 +7,11 @@ of every scene rendering as "gradient background + one centred line".
 
 Design constraints (all deliberate):
 
-  * **Narrow toolset.** The author sees only ``write_file`` (hard-confined to
-    that scene's directory), ``web_search`` / ``fetch_url`` (for real logos /
-    reference material), and ``composition_check`` (the zero-LLM static gate).
+  * **Narrow toolset.** The author sees only ``write_composition`` (the HTML
+    is returned as an argument — there is deliberately no filesystem write
+    tool, so a composition can never reference a local asset path),
+    ``web_search`` / ``fetch_url`` (for real logos / reference material, which
+    are pasted in as INLINE SVG markup), and ``composition_check``.
     It CANNOT render — rendering stays in the engine's render stage, so an
     author loop can never burn a 35s render per iteration.
   * **Per-scene isolation.** Context is one scene's text + duration + the
@@ -85,9 +87,12 @@ SCENE_AUTHOR_TOOLS = [
         'function': {
             'name': 'composition_check',
             'description': (
-                'Run the zero-LLM static gate on the composition written so far '
-                '(contract fields, timeline key, determinism ban-list). Returns '
-                'the error list — empty means it passes.'),
+                'Run the full static gate on the composition written so far: '
+                'the contract/determinism checks PLUS the real renderer gates '
+                '(lint = fonts + contract, validate = headless-Chrome runtime '
+                'errors + WCAG contrast, inspect = text overflowing its '
+                'container across the timeline). Returns the error list — '
+                'empty means it passes.'),
             'parameters': {'type': 'object', 'properties': {}},
         },
     },
@@ -134,9 +139,46 @@ def _read_guide(name: str, limit: int = 12000) -> str:
         return ''
 
 
+def _full_gate(html: str, scene_dir: str, *, abort_event=None) -> list[str]:
+    """Regex gate + the THREE REAL gates (lint / validate / inspect).
+
+    The regex gate (:func:`~lib.motion_video._gates.check_composition_html`)
+    only sees the contract fields and the determinism ban-list — it cannot see
+    an unresolvable font, a WCAG contrast failure, a runtime console error, or
+    text spilling its container. Those are exactly the defects that read as
+    "no formatting", so the author must be judged on them BEFORE a render is
+    spent. Findings are returned as plain strings for the repair prompt.
+
+    When the CLI is unavailable the real gates report ``env_missing``; that is
+    NOT a composition defect, so it degrades to the regex verdict rather than
+    failing the scene.
+    """
+    from lib.motion_video._gates import check_composition_html
+
+    errors = list(check_composition_html(html))
+    if errors:
+        return errors  # contract broken — no point booting Chrome
+    try:
+        from lib.motion_video._render import check_project
+        with open(os.path.join(scene_dir, 'index.html'), 'w',
+                  encoding='utf-8') as f:
+            f.write(html)
+        res = check_project(scene_dir, abort_event=abort_event)
+    except Exception as e:
+        logger.warning('[SceneAuthor] real gates unavailable: %s', e)
+        return []
+    if res.get('category') in ('env_missing', 'aborted', 'timeout'):
+        logger.info('[SceneAuthor] real gates skipped (%s)', res.get('category'))
+        return []
+    out = [str(e) for e in res.get('errors', [])]
+    out += [f'{h}' for h in res.get('fix_hints', []) if h]
+    return out
+
+
 def _build_prompt(scene: dict, *, width: int, height: int, duration: float,
                   scene_index: int, total_scenes: int) -> str:
     contract = _read_guide('COMPOSITION_CONTRACT.md')
+    craft = _read_guide('MOTION_CRAFT.md')
     skeleton = _read_guide('skeleton.html', limit=6000)
     text = str(scene.get('text') or '').strip()
     visual = str(scene.get('visual') or '').strip()
@@ -159,15 +201,23 @@ def _build_prompt(scene: dict, *, width: int, height: int, duration: float,
         'window.__timelines under the SAME key as data-composition-id).\n'
         '3. DETERMINISM: no Date.now(), Math.random(), performance.now(), '
         'requestAnimationFrame, setInterval, or infinite repeats.\n'
-        '4. Visual quality is the point: typography hierarchy, staged reveals, '
-        'motion that supports the narration. Do NOT just centre one line of '
-        'text on a gradient — that is the fallback we are replacing.\n'
-        '5. Everything must be inline/self-contained except the GSAP CDN '
-        'script tag. No local asset files.\n'
+        '4. Visual quality is the point. Pick ONE archetype from the craft '
+        'guide below that fits this beat, then build it with a real type '
+        'hierarchy (eyebrow / headline / caption at clearly different sizes), '
+        'STAGGERED entrances, and at least one supporting graphic (rule, bar, '
+        'number, icon or divider). A single centred line on a gradient is the '
+        'fallback we are replacing and is not acceptable output.\n'
+        '5. Self-contained: the only external reference may be the GSAP CDN '
+        'script tag. Do NOT write or link local asset files — instead, when '
+        'you fetch a real brand/product SVG, PASTE ITS <svg> MARKUP INLINE '
+        'into the document (inline SVG is self-contained, deterministic and '
+        'strongly preferred over a generic icon or a text-only card).\n'
         '6. Text must be HTML-escaped and fit inside the frame at the chosen '
         'font size.\n\n'
         f'## Composition contract\n{contract}\n\n'
-        f'## Reference skeleton\n```html\n{skeleton}\n```\n'
+        f'## Motion craft — how to make this LOOK designed\n{craft}\n\n'
+        f'## Reference skeleton (a STARTING POINT, not the target quality)\n'
+        f'```html\n{skeleton}\n```\n'
     )
 
 
@@ -188,7 +238,6 @@ def author_scene(scene: dict, scene_dir: str, *, width: int, height: int,
     film.
     """
     from lib.agent_loop import AbortSignal, run_agent_loop
-    from lib.motion_video._gates import check_composition_html
     from lib.motion_video._template import render_scene_html
 
     def _fallback(detail: str, *, rounds: int = 0, tokens: int = 0) -> dict:
@@ -261,7 +310,7 @@ def author_scene(scene: dict, scene_dir: str, *, width: int, height: int,
                 _reply(tc_id, 'Rejected: that is not a complete HTML document.')
                 return
             state['html'] = html
-            errors = check_composition_html(html)
+            errors = _full_gate(html, scene_dir, abort_event=abort_event)
             state['gate_ok'] = not errors
             _reply(tc_id, {'written_chars': len(html),
                            'gate_errors': errors[:8],
@@ -270,7 +319,8 @@ def author_scene(scene: dict, scene_dir: str, *, width: int, height: int,
             if not state['html']:
                 _reply(tc_id, 'Nothing written yet — call write_composition first.')
                 return
-            errors = check_composition_html(state['html'])
+            errors = _full_gate(state['html'], scene_dir,
+                                abort_event=abort_event)
             state['gate_ok'] = not errors
             _reply(tc_id, {'gate_errors': errors[:8], 'passes_gate': not errors})
         elif name == 'web_search':
@@ -324,7 +374,7 @@ def author_scene(scene: dict, scene_dir: str, *, width: int, height: int,
     if not state['html']:
         return _fallback('author wrote no composition',
                          rounds=outcome.rounds, tokens=state['tokens'])
-    errors = check_composition_html(state['html'])
+    errors = _full_gate(state['html'], scene_dir, abort_event=abort_event)
     if errors:
         return _fallback('authored composition still fails the static gate: '
                          + '; '.join(str(e) for e in errors[:3]),

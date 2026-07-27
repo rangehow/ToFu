@@ -34,10 +34,13 @@ Persistence
       ]
     }
 
-Cookies are stored in Playwright's cookie shape. Operators usually supply
-them either as a raw ``Cookie:`` header copied from devtools (parsed by
-:func:`parse_cookie_header`) or captured by the interactive-login flow,
-which hands us a ``storage_state`` (normalised by :func:`cookies_from_storage_state`).
+Cookies are stored in Playwright's cookie shape. Operators normally supply them
+as a ``{cookie_name: value}`` mapping — the Settings UI renders one labelled
+input per cookie declared in :data:`DEFAULT_SOURCES` (see
+:func:`cookies_from_fields`), so there is no delimiter syntax for a user to get
+wrong. Two other paths remain: a raw ``Cookie:`` header copied from devtools
+(:func:`parse_cookie_header`) and the interactive-login flow's
+``storage_state`` (:func:`cookies_from_storage_state`).
 
 Security
 --------
@@ -55,7 +58,10 @@ Public API
   set_enabled(domain, enabled)           → bool
   delete_source(domain)                  → bool
   parse_cookie_header(raw, domain)       → list[dict]
+  cookies_from_fields(mapping, domain)   → list[dict]
   cookies_from_storage_state(state, …)   → list[dict]
+  source_spec(domain) / source_fields(domain)
+  missing_required_fields(cookies, domain) → list[str]
 """
 
 from __future__ import annotations
@@ -80,6 +86,10 @@ __all__ = [
     'delete_source',
     'parse_cookie_header',
     'cookies_from_storage_state',
+    'cookies_from_fields',
+    'source_spec',
+    'source_fields',
+    'missing_required_fields',
     'normalize_domain',
     'DEFAULT_SOURCES',
 ]
@@ -100,10 +110,25 @@ _cache_loaded = False
 # router to treat the host as login-walled (skip the doomed anonymous
 # attempt) ONLY once enabled with cookies. A source with no cookies is
 # always treated as not-configured regardless of ``enabled``.
+# ``fields`` declares the individual cookies that carry the session, so the UI
+# can ask for each one in its OWN input instead of making the user hand-assemble
+# a ``name=value; name=value`` string (the delimiters were a reliable source of
+# silent typos). ``importance`` is a single axis:
+#   required     — refuse to store without it; the login genuinely cannot work
+#   recommended  — store, but warn: usually needed for the site's request signing
+#   optional     — nice to have
 DEFAULT_SOURCES: list[dict] = [
     {'domain': 'xiaohongshu.com', 'label': 'Xiaohongshu / RED',
-     'aliases': ['xhslink.com']},
+     'aliases': ['xhslink.com'],
+     'login_url': 'https://www.xiaohongshu.com/explore',
+     'fields': [
+         {'name': 'web_session', 'importance': 'required'},
+         {'name': 'a1', 'importance': 'recommended'},
+         {'name': 'webId', 'importance': 'optional'},
+     ]},
 ]
+
+_VALID_IMPORTANCE = ('required', 'recommended', 'optional')
 
 
 def normalize_domain(value: str) -> str:
@@ -122,6 +147,69 @@ def normalize_domain(value: str) -> str:
     if raw.startswith('www.'):
         raw = raw[4:]
     return raw
+
+
+def source_spec(domain: str) -> dict:
+    """Return the static catalog spec for ``domain`` (``{}`` when unknown).
+
+    The spec is the SINGLE source of truth for a site's login URL and the
+    individual cookies its session is made of. Both the REST listing and the
+    Settings UI read it from here — neither keeps its own copy.
+    """
+    dom = normalize_domain(domain)
+    for d in DEFAULT_SOURCES:
+        if d['domain'] == dom:
+            return d
+    return {}
+
+
+def source_fields(domain: str) -> list[dict]:
+    """The declared cookie fields for ``domain`` (``[]`` when unknown)."""
+    fields = source_spec(domain).get('fields') or []
+    return [dict(f) for f in fields]
+
+
+def cookies_from_fields(fields: dict, domain: str) -> list[dict]:
+    """Build Playwright cookie dicts from a ``{cookie_name: value}`` mapping.
+
+    This is the structured counterpart to :func:`parse_cookie_header`: the UI
+    collects one input per cookie, so there is no delimiter for the user to get
+    wrong. Blank values are dropped (an untouched optional input is not an
+    instruction to store an empty cookie).
+    """
+    out: list[dict] = []
+    if not isinstance(fields, dict):
+        return out
+    dom = normalize_domain(domain)
+    cookie_domain = ('.' + dom) if dom else ''
+    for name, value in fields.items():
+        name = str(name or '').strip()
+        value = str(value if value is not None else '').strip()
+        if not name or not value:
+            continue
+        out.append({
+            'name': name,
+            'value': value,
+            'domain': cookie_domain or dom,
+            'path': '/',
+        })
+    return out[:_MAX_COOKIES_PER_SOURCE]
+
+
+def missing_required_fields(cookies: list, domain: str) -> list[str]:
+    """Names of ``required`` spec fields absent (or blank) in ``cookies``.
+
+    Without this the store happily accepted a mistyped paste and then reported
+    the source as "connected", so the failure only surfaced much later as an
+    unexplained empty fetch.
+    """
+    present = {
+        str(c.get('name', '')).strip()
+        for c in (cookies or [])
+        if isinstance(c, dict) and str(c.get('value', '')).strip()
+    }
+    return [f['name'] for f in source_fields(domain)
+            if f.get('importance') == 'required' and f['name'] not in present]
 
 
 def _host_matches(host: str, domain: str) -> bool:
@@ -248,6 +336,11 @@ def _redact(row: dict) -> dict:
     else:
         out['proxy_hint'] = ''
     out.pop('proxy', None)
+    # Catalog spec (login URL + the individual cookies that make up the
+    # session) travels with the row so the UI never hardcodes a second copy.
+    spec = source_spec(out.get('domain', ''))
+    out['login_url'] = spec.get('login_url', '')
+    out['fields'] = [dict(f) for f in (spec.get('fields') or [])]
     return out
 
 
@@ -303,20 +396,34 @@ def upsert_source(domain: str, *, label: Optional[str] = None,
                   enabled: Optional[bool] = None,
                   cookies: Optional[list] = None,
                   cookie_header: Optional[str] = None,
+                  cookie_fields: Optional[dict] = None,
                   proxy: Optional[str] = None,
                   aliases: Optional[list] = None) -> dict:
     """Create or update a source. Returns the redacted row.
 
-    Only the fields you pass are touched (None = leave unchanged), except
-    that supplying ``cookie_header`` parses + replaces ``cookies``. Raises
-    ``ValueError`` on a bad domain or when the source cap is hit.
+    Only the fields you pass are touched (None = leave unchanged), except that
+    supplying ``cookie_fields`` (a ``{cookie_name: value}`` mapping — the
+    structured path the Settings UI uses) or ``cookie_header`` (a raw devtools
+    ``Cookie:`` string) parses + replaces ``cookies``.
+
+    Raises ``ValueError`` on a bad domain, when the source cap is hit, or when
+    the supplied cookies omit a cookie the catalog marks ``required`` — storing
+    a credential set that cannot possibly authenticate only defers the failure
+    to a later, much less explainable, empty fetch.
     """
     dom = normalize_domain(domain)
     if not dom:
         raise ValueError('domain is required')
 
-    if cookie_header is not None:
+    if cookie_fields is not None:
+        cookies = cookies_from_fields(cookie_fields, dom)
+    elif cookie_header is not None:
         cookies = parse_cookie_header(cookie_header, dom)
+
+    if cookies is not None and cookies:
+        missing = missing_required_fields(cookies, dom)
+        if missing:
+            raise ValueError('missing required cookie(s): ' + ', '.join(missing))
 
     _ensure_loaded()
     with _lock:

@@ -1684,7 +1684,7 @@
 .auth-src-steps li { margin-bottom: 3px; }
 .auth-src-step-txt { margin-right: 8px; }
 .auth-src-steps code,
-.auth-src-key-cookie code {
+.auth-src-field-label code {
   font-family: var(--font-mono, ui-monospace, monospace);
   background: var(--s-gold-glow);
   border: 1.5px solid var(--s-gold-dim);
@@ -1692,17 +1692,26 @@
   font-weight: 700;
   color: var(--s-ink);
 }
-.auth-src-key-cookie {
-  font-size: 12px;
-  line-height: 1.7;
-  font-weight: 600;
-  color: var(--s-ink);
-  background: var(--s-cream);
-  border: var(--s-border-sm);
-  border-left: 5px solid var(--s-gold);
-  padding: 9px 12px;
+/* ── One labelled input per cookie ── */
+.auth-src-fields { display: flex; flex-direction: column; gap: 10px; }
+.auth-src-field { display: flex; flex-direction: column; gap: 5px; }
+.auth-src-field-label {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; font-weight: 700; color: var(--s-ink);
 }
-.auth-src-cookie, .auth-src-proxy {
+.auth-src-field-badge {
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: .3px;
+  padding: 1px 6px;
+  border: 1.5px solid var(--s-ink);
+  background: var(--s-skin);
+  color: var(--s-ink);
+}
+.auth-src-field-badge.required    { background: var(--s-gold); }
+.auth-src-field-badge.recommended { background: var(--s-cream); }
+.auth-src-field-badge.optional    { background: var(--s-white); color: var(--s-ink-soft); border-color: var(--s-ink-soft); }
+.auth-src-field-input, .auth-src-proxy {
   width: 100%;
   border: var(--s-border-sm);
   border-radius: var(--s-radius);
@@ -1712,14 +1721,13 @@
   font-size: 12px;
   padding: 9px 11px;
   box-sizing: border-box;
-  resize: vertical;
 }
-.auth-src-cookie:focus, .auth-src-proxy:focus {
+.auth-src-field-input:focus, .auth-src-proxy:focus {
   outline: none;
   border-color: var(--s-gold);
   box-shadow: var(--s-shadow-xs);
 }
-.auth-src-cookie::placeholder, .auth-src-proxy::placeholder { color: var(--s-ink-soft); opacity: .55; }
+.auth-src-field-input::placeholder, .auth-src-proxy::placeholder { color: var(--s-ink-soft); opacity: .55; }
 .auth-src-panel-actions { display: flex; gap: 10px; }
 .auth-src-msg { font-size: 12px; margin-top: 8px; min-height: 1em; color: var(--s-ink-soft); font-weight: 600; }
 .auth-src-msg.ok  { color: var(--s-gold-dim); }

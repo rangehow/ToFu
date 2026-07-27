@@ -35,10 +35,8 @@ logger = get_logger(__name__)
 
 api_v1_auth_sources_bp = Blueprint('api_v1_auth_sources', __name__)
 
-# Site-specific login landing pages for the interactive-capture flow.
-_LOGIN_URLS = {
-    'xiaohongshu.com': 'https://www.xiaohongshu.com/explore',
-}
+
+
 
 
 @api_v1_auth_sources_bp.route('/api/v1/auth-sources', methods=['GET'])
@@ -63,9 +61,13 @@ def list_auth_sources():
 @api_meta(
     summary='Create or update an authenticated-fetch source',
     description=(
-        'Body: ``{domain, label?, enabled?, cookie_header?, proxy?, '
-        'aliases?}``. ``cookie_header`` is a raw devtools ``Cookie:`` '
-        'string and replaces the stored cookies. Returns the redacted row.'
+        'Body: ``{domain, label?, enabled?, cookie_fields?, cookie_header?, '
+        'proxy?, aliases?}``. ``cookie_fields`` is a ``{cookie_name: value}`` '
+        'mapping (the structured path the Settings UI uses — one input per '
+        'cookie, no delimiters for the user to mistype); ``cookie_header`` is '
+        'a raw devtools ``Cookie:`` string. Either replaces the stored '
+        'cookies, and a payload omitting a cookie the catalog marks '
+        '``required`` is rejected with 400. Returns the redacted row.'
     ),
     tags=['capabilities'],
 )
@@ -76,11 +78,16 @@ def upsert_auth_source():
     domain = (data.get('domain') or '').strip()
     if not domain:
         return api_bad_request('domain is required', field='domain')
+    cookie_fields = data.get('cookie_fields')
+    if cookie_fields is not None and not isinstance(cookie_fields, dict):
+        return api_bad_request('cookie_fields must be an object',
+                               field='cookie_fields')
     try:
         row = upsert_source(
             domain,
             label=data.get('label'),
             enabled=data.get('enabled'),
+            cookie_fields=cookie_fields,
             cookie_header=data.get('cookie_header'),
             proxy=data.get('proxy'),
             aliases=data.get('aliases'),
@@ -132,12 +139,12 @@ def delete_auth_source(domain):
     tags=['capabilities'],
 )
 def interactive_login(domain):
-    from lib.auth_sources import normalize_domain
+    from lib.auth_sources import normalize_domain, source_spec
 
     dom = normalize_domain(domain)
     if not dom:
         return api_bad_request('domain is required', field='domain')
-    login_url = _LOGIN_URLS.get(dom, f'https://{dom}/')
+    login_url = source_spec(dom).get('login_url') or f'https://{dom}/'
     data = parse_body()
     timeout_s = int(data.get('timeout') or 180)
     timeout_s = max(30, min(timeout_s, 600))

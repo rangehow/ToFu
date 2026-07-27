@@ -119,7 +119,15 @@ function _modelDisplaySortKey(modelId) {
   var label = (typeof _modelShortName === 'function')
     ? _modelShortName(modelId)
     : String(modelId || '').replace(/^(aws\.|vertex\.)/, '').split('/').pop();
-  return String(label == null ? '' : label);
+  // Fold -, _ and / to a space BEFORE collating. The collator weights a space
+  // lower than a hyphen, so without this the SEPARATOR outranks the content and
+  // a friendly name always beats a raw id that shares its prefix:
+  // "Gemini 3.6 Flash" sorted before "gemini-3.1-flash-lite-preview", and
+  // "MiniMax M3" before "MiniMax-M2.5". Since only models WITH a
+  // MODEL_PRICING entry get a spaced label, the two spellings interleave in
+  // every real list. Folding is sort-key-only — the rendered label keeps its
+  // original punctuation, and numeric collation still sees the digit runs.
+  return String(label == null ? '' : label).replace(/[-_\/]+/g, ' ');
 }
 
 /* Numeric-aware collator: plain `<`/`>` on lowercased strings orders
@@ -141,6 +149,40 @@ function _compareModelsByDisplayName(a, b) {
   if (_MODEL_NAME_COLLATOR) return _MODEL_NAME_COLLATOR.compare(ka, kb);
   var la = ka.toLowerCase(), lb = kb.toLowerCase();
   return la < lb ? -1 : (la > lb ? 1 : 0);
+}
+
+
+/* Sort a list of {model_id} entries in place by display name. Thin wrapper
+ * around the comparator so callers never hand-roll one. */
+function _sortModelsByDisplayName(models) {
+  if (Array.isArray(models)) models.sort(_compareModelsByDisplayName);
+  return models;
+}
+
+/* Same, for the `{model: {model_id}, provider}` shape _getAllModels() yields. */
+function _sortModelEntriesByDisplayName(entries) {
+  if (Array.isArray(entries)) {
+    entries.sort(function(a, b) {
+      return _compareModelsByDisplayName(a && a.model, b && b.model);
+    });
+  }
+  return entries;
+}
+
+/* Order brand/provider group keys by the heading text actually rendered —
+ * the brandNames[] label when there is one, else the group's provider name,
+ * else the raw key. Callers previously used `for (var k in grouped)`, i.e.
+ * insertion order, which is provider order in server_config.json and
+ * unrelated to anything on screen. */
+function _sortedBrandKeys(grouped, brandNames) {
+  var keys = Object.keys(grouped || {});
+  keys.sort(function(x, y) {
+    var gx = grouped[x] || {}, gy = grouped[y] || {};
+    var nx = ((brandNames && brandNames[x]) || gx.name || x);
+    var ny = ((brandNames && brandNames[y]) || gy.name || y);
+    return _compareModelsByDisplayName(String(nx), String(ny));
+  });
+  return keys;
 }
 
 /* ★ Friendly provider display name for a provider_id — used by the message

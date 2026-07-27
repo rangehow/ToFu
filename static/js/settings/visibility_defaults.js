@@ -75,8 +75,11 @@ function _renderIgVisibility() {
   };
 
   var html = '';
-  for (var brand in grouped) {
+  var brandKeys = _sortedBrandKeys(grouped, brandNames);
+  for (var bi = 0; bi < brandKeys.length; bi++) {
+    var brand = brandKeys[bi];
     var group = grouped[brand];
+    _sortModelsByDisplayName(group.models);
     var displayName = brandNames[brand] || group.name || brand;
     html += '<div class="stg-dv-group">';
     html += '<div class="stg-dv-brand">' + _brandSvg(brand, 14) + ' <span>' + escapeHtml(displayName) + '</span></div>';
@@ -175,8 +178,11 @@ function _renderDropdownVisibility() {
     meituan:'Meituan', generic:'Other',
   };
 
-  for (var brand in grouped) {
+  var brandKeys = _sortedBrandKeys(grouped, brandNames);
+  for (var bi = 0; bi < brandKeys.length; bi++) {
+    var brand = brandKeys[bi];
     var group = grouped[brand];
+    _sortModelsByDisplayName(group.models);
     var displayName = brandNames[brand] || group.name || brand;
     html += '<div class="stg-dv-group">';
     html += '<div class="stg-dv-brand">' + _brandSvg(brand, 14) + ' <span>' + escapeHtml(displayName) + '</span></div>';
@@ -259,6 +265,14 @@ function _populateModelDefaults(cfg) {
       uniqueModels.push(chatModels[i]);
     }
   }
+
+  // Order the options by the DISPLAY name shown in the <select>, via the ONE
+  // shared comparator (settings/branding.js). These previously inherited
+  // whatever order _getAllModels walked the provider arrays in — model_id
+  // order, which the settings cold sort writes back — while the option TEXT is
+  // _modelShortName. Models with no MODEL_PRICING entry render their raw id and
+  // so landed at arbitrary positions among the friendly-named ones.
+  _sortModelEntriesByDisplayName(uniqueModels);
 
   // Read saved model_defaults from config
   var defaults = (cfg && cfg.model_defaults) || {};

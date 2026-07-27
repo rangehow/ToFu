@@ -54,6 +54,7 @@ pytestmark = pytest.mark.unit
 TOOLBAR_JS = os.path.join(JS_DIR, 'main', 'main_toolbar_ui.js')
 BRANDING_JS = os.path.join(JS_DIR, 'settings', 'branding.js')
 CORE_PANEL_JS = os.path.join(JS_DIR, 'settings', 'core_panel.js')
+VISIBILITY_JS = os.path.join(JS_DIR, 'settings', 'visibility_defaults.js')
 
 # Markup mirroring the shipped index.html dropdown (inner list + depth footer).
 _HTML = (
@@ -182,6 +183,20 @@ try {
   check('numeric_two_digit_minor',
     _compareModelsByDisplayName('gpt-5.10', 'gpt-5.6') > 0);
 
+  // ══ 4b. Separator weight must NOT outrank content ══
+  // The collator sorts a space BEFORE a hyphen, so a friendly (spaced) label
+  // would beat every raw (hyphenated) id sharing its prefix: 'Gemini 3.6 Flash'
+  // landed before 'gemini-3.1-flash-lite-preview' and 'MiniMax M3' before
+  // 'MiniMax-M2.5'. Only models WITH a MODEL_PRICING entry get a spaced label,
+  // so both spellings interleave in every real list.
+  check('separator_does_not_outrank_content',
+    _compareModelsByDisplayName('Gemini 3.6 Flash', 'gemini-3.1-flash-lite-preview') > 0);
+  check('separator_minimax_case',
+    _compareModelsByDisplayName('MiniMax M3', 'MiniMax-M2.5') > 0);
+  // Folding is sort-key-only and must not break numeric compare.
+  check('separator_fold_keeps_numeric',
+    _compareModelsByDisplayName('Gemini 3.5 Flash', 'Gemini 3.5 Flash-Lite') < 0);
+
   // ══ 5. Comparator is total + reflexive on mixed/degenerate input ══
   check('comparator_reflexive', _compareModelsByDisplayName('kimi-k3', 'kimi-k3') === 0);
   check('comparator_handles_entries',
@@ -254,6 +269,17 @@ try {
     check('N3_numeric_collation_regresses',
       _compareModelsByDisplayName('m-3.9', 'm-3.10') > 0);
   }
+
+  // ══ NEUTER 4: drop the separator fold → spaced labels jump the queue ══
+  {
+    const BRAND_SRC = fs.readFileSync(process.argv[4], 'utf8');
+    const n = BRAND_SRC.replace(".replace(/[-_\\/]+/g, ' ')", '');
+    check('N4_applied', n !== BRAND_SRC);
+    indirectEval(n);
+    check('N4_separator_fold_regresses',
+      _compareModelsByDisplayName('MiniMax M3', 'MiniMax-M2.5') < 0);
+    indirectEval(BRAND_SRC);
+  }
 } catch (e) {
   check('harness_threw: ' + (e && e.message), false);
 } finally {
@@ -275,6 +301,203 @@ def test_model_picker_ordered_by_display_name():
     )
 
 
+
+# ══════════════════════════════════════════════════════
+#  Settings → Preset tab: the same three lists must be ordered
+# ══════════════════════════════════════════════════════
+#
+# The Preset tab (index.html data-tab="preset", static/settings_panels/preset.html)
+# renders THREE model-name lists from visibility_defaults.js. None of them sorted:
+# they inherited whatever order _getAllModels() walked the provider arrays in,
+# i.e. model_id order (the settings cold sort writes that back) while the row
+# text is _modelShortName. Models WITH a MODEL_PRICING entry therefore looked
+# right by luck and models WITHOUT one were scattered.
+
+_PRESET_HTML = (
+    '<!DOCTYPE html><body>'
+    '<div id="stgIgVisibility"></div>'
+    '<div id="stgDropdownVisibility"></div>'
+    '<select id="settingFallbackModel"></select>'
+    '<select id="settingDefaultModel"></select>'
+    '</body>'
+)
+
+_PRESET_BODY = r'''
+const fs = require('fs');
+const { setup } = require(process.env.JSDOM_HARNESS);
+const { document, check, report } = setup({
+  root: process.argv[3],
+  html: HTML_PLACEHOLDER,
+  targets: [process.argv[2]],          // branding.js — comparator + wrappers
+  globals: {
+    BASE_PATH: '',
+    _serverConfig: { hidden_models: [], hidden_ig_models: [] },
+    isChatModel: function (m) {
+      const EX = ['image_gen', 'embedding', 'transcription'];
+      return !(m.capabilities || []).some((c) => EX.indexOf(c) >= 0);
+    },
+    _warnModelCapsMissing: function () {},
+    _modelPricingCache: {
+      'gemini-3.5-flash': { name: 'Gemini 3.5 Flash' },
+      'gemini-3.6-flash': { name: 'Gemini 3.6 Flash' },
+      'MiniMax-M3': { name: 'MiniMax M3' },
+      'yuju-claude-opus-5-evaDaily': { name: 'Claude Opus 5' },
+      'gpt-image-2': { name: 'GPT Image 2' },
+    },
+  },
+});
+
+const CORE_SRC = fs.readFileSync(process.argv[4], 'utf8');
+const VIS_SRC = fs.readFileSync(process.argv[5], 'utf8');
+const indirectEval = eval;
+indirectEval(CORE_SRC.match(/function _getAllModels[\s\S]*?\n}/)[0]);
+
+/* Two providers given in the WORST section order (Alpha inserted last), each
+ * with models whose model_id order differs from their label order, and a
+ * deliberate mix of priced (spaced label) and unpriced (hyphenated raw id)
+ * entries — the interleaving case the separator fold exists for. */
+function seedProviders() {
+  global._stgProviders = window._stgProviders = [
+    { id: 'zzz', name: 'Zzz Provider', brand: 'zzzbrand', enabled: true, models: [
+      { model_id: 'gemini-3.5-flash', capabilities: ['text'] },
+      { model_id: 'gemini-3.6-flash', capabilities: ['text'] },
+      { model_id: 'gemini-3.1-flash-lite-preview', capabilities: ['text'] },
+      { model_id: 'MiniMax-M3', capabilities: ['text'] },
+      { model_id: 'MiniMax-M2.5', capabilities: ['text'] },
+      { model_id: 'yuju-claude-opus-5-evaDaily', capabilities: ['text'] },
+      { model_id: 'gpt-image-2', capabilities: ['image_gen'] },
+      { model_id: 'gpt-image-1.5', capabilities: ['image_gen'] },
+    ] },
+    { id: 'alpha', name: 'Alpha Provider', brand: 'alphabrand', enabled: true, models: [
+      { model_id: 'kimi-k3', capabilities: ['text'] },
+    ] },
+  ];
+}
+
+function dvNames(containerId) {
+  return Array.from(document.querySelectorAll('#' + containerId + ' .stg-dv-name'))
+    .map((el) => el.textContent);
+}
+function brandHeadings(containerId) {
+  // _brandSvg emits <span class="stg-brand-icon"> as the FIRST child, so the
+  // label is the LAST element child — not `.stg-dv-brand span`.
+  return Array.from(document.querySelectorAll('#' + containerId + ' .stg-dv-brand'))
+    .map((el) => el.lastElementChild.textContent);
+}
+function optionTexts(id) {
+  return Array.from(document.querySelectorAll('#' + id + ' option'))
+    .map((o) => o.textContent).slice(1);   // drop the "" placeholder
+}
+function isSorted(list) {
+  for (let i = 1; i < list.length; i++) {
+    if (_compareModelsByDisplayName(list[i - 1], list[i]) > 0) return false;
+  }
+  return true;
+}
+
+try {
+  indirectEval(VIS_SRC);
+  seedProviders();
+  _renderPresetsTab({ model_defaults: {} });
+
+  // ══ 1. Chat-model visibility list ══
+  // 7 chat models (the 2 image_gen ones are filtered out by isChatModel).
+  // The list is GROUPED, so it is sorted WITHIN each brand section, not
+  // globally — 'kimi-k3' leads because Alpha Provider sorts before Zzz.
+  const dv = dvNames('stgDropdownVisibility');
+  check('dv_rendered', dv.length === 7);
+  const dvZzz = dv.slice(1);   // the Zzz Provider section
+  check('dv_display_name_ordered', isSorted(dvZzz));
+  // The two payload cases: an unpriced raw id must interleave with the priced
+  // spaced labels rather than being flushed to the end of the cluster.
+  check('dv_unpriced_id_interleaves',
+    dv.indexOf('gemini-3.1-flash-lite-preview') < dv.indexOf('Gemini 3.5 Flash'));
+  check('dv_minimax_numeric_interleave',
+    dv.indexOf('MiniMax-M2.5') < dv.indexOf('MiniMax M3'));
+  // 'Claude Opus 5' (model_id yuju-…, which sorts LAST by id) must lead its
+  // own section by label.
+  check('dv_opus5_sits_with_claude', dvZzz[0] === 'Claude Opus 5');
+
+  // ══ 2. Brand/provider group headings ordered ══
+  const heads = brandHeadings('stgDropdownVisibility');
+  check('dv_two_groups', heads.length === 2);
+  check('dv_group_headings_ordered', heads.join('|') === 'Alpha Provider|Zzz Provider');
+
+  // ══ 3. Image-gen visibility list ══
+  const ig = dvNames('stgIgVisibility');
+  check('ig_rendered', ig.length === 2);
+  check('ig_display_name_ordered', isSorted(ig));
+  check('ig_priced_label_used', ig.indexOf('GPT Image 2') >= 0);
+
+  // ══ 4. Both <select>s ordered, and identically ══
+  // Unlike the visibility list these are NOT grouped — one flat list, so it is
+  // globally sorted. Same model SET, different presentation.
+  const fb = optionTexts('settingFallbackModel');
+  const df = optionTexts('settingDefaultModel');
+  check('select_rendered', fb.length === 7);
+  check('select_display_name_ordered', isSorted(fb));
+  check('selects_agree_with_each_other', fb.join('|') === df.join('|'));
+  check('select_covers_same_models_as_visibility',
+    fb.slice().sort().join('|') === dv.slice().sort().join('|'));
+  // 'kimi-k3' sorts into the middle here (between Gemini and MiniMax) whereas
+  // the grouped list puts it first — proving the flat list really is sorted by
+  // label and not just inheriting the grouped order.
+  check('select_is_globally_not_group_ordered',
+    fb.indexOf('kimi-k3') > 0 && fb.indexOf('kimi-k3') < fb.length - 1);
+
+  // ══ NEUTER P1: drop the model sort in _renderDropdownVisibility ══
+  {
+    const n = VIS_SRC.replace(/    _sortModelsByDisplayName\(group\.models\);\n/g, '');
+    check('NP1_applied', n !== VIS_SRC);
+    indirectEval(n);
+    seedProviders();
+    _renderPresetsTab({ model_defaults: {} });
+    check('NP1_dv_order_regresses',
+      isSorted(dvNames('stgDropdownVisibility').slice(1)) === false);
+  }
+
+  // ══ NEUTER P2: drop the brand-group sort → insertion order returns ══
+  {
+    const n = VIS_SRC.replace(
+      /  var brandKeys = _sortedBrandKeys\(grouped, brandNames\);\n/g,
+      '  var brandKeys = Object.keys(grouped);\n');
+    check('NP2_applied', n !== VIS_SRC);
+    indirectEval(n);
+    seedProviders();
+    _renderPresetsTab({ model_defaults: {} });
+    check('NP2_group_order_regresses',
+      brandHeadings('stgDropdownVisibility').join('|') === 'Zzz Provider|Alpha Provider');
+  }
+
+  // ══ NEUTER P3: drop the <select> sort ══
+  {
+    const n = VIS_SRC.replace('  _sortModelEntriesByDisplayName(uniqueModels);\n', '');
+    check('NP3_applied', n !== VIS_SRC);
+    indirectEval(n);
+    seedProviders();
+    _renderPresetsTab({ model_defaults: {} });
+    check('NP3_select_order_regresses',
+      isSorted(optionTexts('settingFallbackModel')) === false);
+  }
+} catch (e) {
+  check('harness_threw: ' + (e && e.message), false);
+} finally {
+  indirectEval(VIS_SRC);
+  report();
+}
+'''
+
+
+def test_preset_tab_lists_ordered_by_display_name():
+    body = _PRESET_BODY.replace('HTML_PLACEHOLDER', json.dumps(_PRESET_HTML))
+    run_harness(
+        target_js=BRANDING_JS,
+        body_js=body,
+        extra_targets=[CORE_PANEL_JS, VISIBILITY_JS],
+        min_pass=20,
+        label='preset-tab-order',
+    )
+
 # ══════════════════════════════════════════════════════
 #  Static guard — ONE comparator, no duplicate sort logic
 # ══════════════════════════════════════════════════════
@@ -283,13 +506,15 @@ def test_single_comparator_no_duplicate_sort_logic():
     """The comparator must live in exactly one place.
 
     A second hand-rolled model comparator anywhere else is how the picker and
-    the Settings list drift apart again. Both consumers must call the shared
-    ``_compareModelsByDisplayName``; neither may re-implement a `<`/`>` compare
-    on a model label of its own.
+    the Settings list drift apart again. Every consumer must call the shared
+    ``_compareModelsByDisplayName`` (directly or via its thin
+    ``_sortModels*``/``_sortedBrandKeys`` wrappers); none may re-implement a
+    `<`/`>` compare on a model label of its own.
     """
     brand = open(BRANDING_JS, encoding='utf-8').read()
     toolbar = open(TOOLBAR_JS, encoding='utf-8').read()
     core = open(CORE_PANEL_JS, encoding='utf-8').read()
+    vis = open(VISIBILITY_JS, encoding='utf-8').read()
 
     assert 'function _compareModelsByDisplayName' in brand, \
         'the shared comparator must be defined in settings/branding.js'
@@ -298,11 +523,24 @@ def test_single_comparator_no_duplicate_sort_logic():
     assert 'numeric: true' in brand, \
         'collator must be numeric-aware or two-digit minor versions mis-sort'
 
-    for name, src in (('main_toolbar_ui.js', toolbar), ('core_panel.js', core)):
+    consumers = (
+        ('main_toolbar_ui.js', toolbar, ['_compareModelsByDisplayName']),
+        ('core_panel.js', core, ['_compareModelsByDisplayName']),
+        ('visibility_defaults.js', vis,
+         ['_sortModelsByDisplayName', '_sortModelEntriesByDisplayName',
+          '_sortedBrandKeys']),
+    )
+    for name, src, required in consumers:
         assert 'function _compareModelsByDisplayName' not in src, \
             f'{name} must NOT define its own copy of the comparator'
-        assert '_compareModelsByDisplayName' in src, \
-            f'{name} must route its sort through the shared comparator'
+        for sym in required:
+            assert sym in src, \
+                f'{name} must route its sort through the shared {sym}'
+
+    # No consumer may walk a brand/provider group map in insertion order —
+    # that was the section-order half of the bug.
+    assert 'for (var brand in grouped)' not in vis, \
+        'visibility_defaults.js still iterates brand groups in insertion order'
 
     # The old id-based sort key is gone (it WAS the bug).
     assert '_modelSortKey' not in core, \

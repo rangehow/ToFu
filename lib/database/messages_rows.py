@@ -36,6 +36,7 @@ import sys
 
 from lib.log import get_logger
 from lib.conversations.search_index import build_search_text
+from lib.database._wrappers import json_dumps_pg
 
 logger = get_logger(__name__)
 
@@ -123,6 +124,15 @@ def message_to_row(conv_id: str, seq: int, msg: dict, *, now_ms: int = 0) -> dic
     The full original ``msg`` is stored verbatim under ``meta`` so
     :func:`row_to_message` can return the byte-for-byte original. The hoisted
     columns are derived views used only for search reconstruction + addressing.
+
+    ``meta`` and ``content_json`` are bound to JSONB columns, so they MUST be
+    serialized with :func:`~lib.database._wrappers.json_dumps_pg` — the same
+    serializer the authoritative blob writer uses. A bare ``json.dumps``
+    encodes ``U+0000`` as ``\\u0000``, which PostgreSQL's JSONB parser rejects
+    (``UntranslatableCharacter``); since ``dual_write_conv`` swallows write
+    errors, such a row is silently dropped and the conversation is left with
+    fewer rows than blob messages — the "partial backfill" shape that a
+    windowed read renders as a silently truncated conversation.
     """
     if not isinstance(msg, dict):
         msg = {}
@@ -131,7 +141,7 @@ def message_to_row(conv_id: str, seq: int, msg: dict, *, now_ms: int = 0) -> dic
     content_str = ''
     content_json = '[]'
     if isinstance(content, list):
-        content_json = json.dumps(content, ensure_ascii=False)
+        content_json = json_dumps_pg(content)
     elif isinstance(content, str):
         content_str = content
     thinking = msg.get('thinking', '')
@@ -149,7 +159,7 @@ def message_to_row(conv_id: str, seq: int, msg: dict, *, now_ms: int = 0) -> dic
         'content_json': content_json,
         'thinking': thinking,
         'translated_content': translated,
-        'meta': json.dumps(msg, ensure_ascii=False),
+        'meta': json_dumps_pg(msg),
         'created_at': now_ms,
         'updated_at': now_ms,
     }

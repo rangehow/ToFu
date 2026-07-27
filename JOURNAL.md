@@ -1,5 +1,13 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-28 — 携程/美团商务准入票收口:owner 选 C(不争取)。**而真正的活儿不是关票,是把「不做」的理由从票里搬进代码**(epic `pt_6dcdc44482de4fe7` CLOSED;commit `314fb0b2`,2 文件 +19/-4;守卫 **9/9**,**NEUTER 双门各自咬住**)
+
+- **owner 拍板:两家都不争取,关票。** 判据不是「进不去」,而是**增量不足** —— 现有在架集合(高德 · RollingGo 酒店+机票 · 途牛六品类含邮轮/度假且下单闭环 · 12306 · 飞猪 FlyAI)已覆盖出行/酒店/机票/火车/门票/邮轮/度假,**且每一家个人开发者都能自助拿到凭证**;携程/美团的增量主要是**品牌熟悉度**加**美团独有的到店/外卖场景**,而不是可达能力范围。企业流程要公司主体+商务对接人,与该增量不匹配。
+- **★ 本轮唯一值钱的工程判断:关票会制造两处悬挂引用,而那正是「下一个人重做同一轮调研」的入口。** 两个 catalog 的注释原先都写着 `Tracked as a business-access ticket (pt_6dcdc44482de4fe7)`。票一关,读者看到的就是「两个最知名的厂商神秘缺席 + 一个查不到的票号」——**无从判断这是疏漏还是决定**。所以 WHAT / WHY / **重开条件**全部写进 `lib/mcp/registry.py` 与 `lib/skills/catalog.py` 的分类注释。**推广纪律:一条「不做 X」的决策,其理由与重开条件 MUST 记在代码的使用点;票是过程载体、会关闭,不是决策的存放处。**
+- **重开条件写死,保持可证伪而非永久判决:** (a) 出现**具体**的到店/外卖 agent 需求;或 (b) 任一家开始向**个人开发者**发凭证 —— 且 (b) 必须按既有「逐厂商实测」判据**重新测量**,禁止凭新闻稿。理由:我上一轮正是因为**样本量 2 就外推**而把「中国 OTA 不会开放」写成结论,随后被途牛+飞猪实测证伪。重开走**新票**,不复用已关闭的票号。
+- **★ 纯注释改动也复验了执行面,没有假设 doc-only 安全。** 排除从来不是靠散文成立的,靠的是 `test_no_dead_card_for_a_business_gated_vendor`(扫**两个**目录,因为厂商可任一形态上架)+ 补集 `test_individually_accessible_travel_vendors_are_actually_shipped`。实测 9/9 绿;**NEUTER 双门**:往 registry 注入携程卡 → 禁令红;往 skills catalog 注入美团卡 → 同样红。**先前那次「只守 MCP 一面」的洞正是这么发现的,所以两扇门都要单独验。**
+- **技术侧零残留:** 桥已支持 stdio/sse/streamable-http + header/query 双凭证载体。若将来 (b) 成立,接入 = registry 加一条数据(query 型参考 amap-maps、header 型参考 rollinggo-hotel),不需改实现代码。
+
 ### 2026-07-28 — 项目大脑 charter 设计重审:**北极星目标实测「不在模型视野里」**,而我计划里的两条修法有一条被 failing-first 当场推翻(epic `pt_1961665c67ec47bd`;commit `b0c07f0c`,2 文件 +254;新套件 **7/7**,**NEUTER×2 全咬**,相邻环 **128 过**,干净 committed tree 复验 **51/51**)
 
 - **起因是 owner 问「charter 里到底该装什么、模型该怎么和大脑交互」,而取证第一步就撞上一个活着的缺陷:项目目标是模型唯一读不到的那条。** 实测本仓 charter:`content` 列 **0 字符**、决策 **27 条 / 25,553 字**,owner 的目标被当成**第 5 条决策**(索引 4)存在 `decisions` 数组里;而 `render_charter_block` 只注入 `decisions[-20:]`,于是 `GOAL in block? **False**`。**26 个兄弟会话每轮把 20 条实现级决策读作「authoritative shared intent」,而真正的北极星一个字都没送到。** 我自己那一轮的注入块第一条是「key 轮换粘性——实测后不做」,一条已收口的调度实验结论。

@@ -256,7 +256,8 @@ class MCPBridge:
         # log-only — never writes git-tracked files by default. No-op for
         # non-vendored commands and on deploys without a sibling.
         try:
-            cmd = srv_cfg.get('command', '') if srv_cfg.get('transport', 'stdio') != 'sse' else ''
+            from lib.mcp.transport import stdio_command
+            cmd = stdio_command(srv_cfg)
             if cmd and os.sep not in cmd:
                 _pkg()._check_snapshot_staleness(cmd)
         except Exception as e:
@@ -633,16 +634,38 @@ class MCPBridge:
 
         try:
             async with AsyncExitStack() as stack:
-                transport = srv_cfg.get('transport', 'stdio')
+                from lib.mcp.transport import (
+                    SSE, STREAMABLE_HTTP, is_stdio, normalize_transport,
+                    resolve_headers,
+                )
+                transport = normalize_transport(srv_cfg)
 
-                if transport == 'sse':
+                if not is_stdio(srv_cfg):
                     url = srv_cfg.get('url', '')
                     if not url:
                         raise ValueError(
-                            f'MCP server {name}: SSE transport requires "url"'
+                            f'MCP server {name}: {transport} transport '
+                            f'requires "url"'
                         )
-                    from mcp.client.sse import sse_client
-                    read, write = await stack.enter_async_context(sse_client(url))
+                    # Auth headers are templated against the server's env
+                    # block; a missing credential raises here with the key
+                    # name instead of becoming an opaque upstream 401.
+                    hdrs = resolve_headers(srv_cfg, server_name=name)
+                    if transport == STREAMABLE_HTTP:
+                        from mcp.client.streamable_http import streamablehttp_client
+                        read, write, _get_sid = await stack.enter_async_context(
+                            streamablehttp_client(url, headers=hdrs or None)
+                        )
+                    elif transport == SSE:
+                        from mcp.client.sse import sse_client
+                        read, write = await stack.enter_async_context(
+                            sse_client(url, headers=hdrs or None)
+                        )
+                    else:
+                        raise ValueError(
+                            f'MCP server {name}: unknown remote transport '
+                            f'{transport!r}'
+                        )
                 else:
                     # stdio transport (default)
                     command = srv_cfg.get('command', '')

@@ -54,7 +54,16 @@ class CatalogEntry(TypedDict, total=False):
     category: str               # for grouping in the UI
     command: str                # executable (e.g. "npx")
     args: list[str]             # argv after command
-    transport: str              # "stdio" (default) or "sse"
+    transport: str              # "stdio" (default) | "sse" | "streamable-http"
+    endpoint: str               # remote transports: the MCP endpoint URL.
+                                # Distinct from ``url`` below, which is the
+                                # human docs/homepage link. When absent, the
+                                # endpoint is expected to arrive via env_specs
+                                # (e.g. Zapier's per-user ZAPIER_MCP_URL).
+    headers: dict[str, str]     # remote transports: auth header TEMPLATE with
+                                # ``${ENV_KEY}`` placeholders resolved at
+                                # connect time from the server's env block.
+                                # Never store a literal secret here.
     env_specs: list[EnvSpec]    # which env vars the user must supply
     url: str                    # homepage / docs link
     tags: list[str]             # searchable tags
@@ -1136,9 +1145,11 @@ def build_server_config(server_id: str, env_values: dict[str, str] | None = None
         logger.warning('[MCP:Registry] Unknown server_id: %s', server_id)
         return None
 
+    from lib.mcp.transport import is_stdio, normalize_transport
+
     transport = entry.get('transport', 'stdio')
     config: dict = {
-        'transport': transport,
+        'transport': normalize_transport(entry),
         'enabled': True,
         'description': entry.get('description', entry['name']),
     }
@@ -1151,9 +1162,13 @@ def build_server_config(server_id: str, env_values: dict[str, str] | None = None
     if entry.get('timeout'):
         config['timeout'] = entry['timeout']
 
-    if transport == 'sse':
-        # SSE transport: needs a URL, no command
-        config['url'] = ''  # will be set below from env_specs
+    if not is_stdio(config):
+        # Remote transport: needs an endpoint URL, never a command. The
+        # endpoint may be baked into the catalog entry or supplied per-user
+        # through env_specs (handled in the loop below).
+        config['url'] = entry.get('endpoint', '')
+        if entry.get('headers'):
+            config['headers'] = dict(entry['headers'])
     else:
         # stdio transport: needs command + args
         config['command'] = entry['command']

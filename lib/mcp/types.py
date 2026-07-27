@@ -69,7 +69,13 @@ class MCPServerConfig(TypedDict, total=False):
     args: list[str]             # command-line arguments
     env: dict[str, str]         # extra environment variables (merged with os.environ)
     url: str                    # for SSE/HTTP transport (alternative to stdio)
-    transport: str              # 'stdio' (default) or 'sse'
+    transport: str              # 'stdio' (default) | 'sse' | 'streamable-http'
+    headers: dict[str, str]     # remote transports only. A TEMPLATE, never a
+                                # secret store: values hold ``${VAR}``
+                                # placeholders resolved from ``env`` at connect
+                                # time (lib/mcp/transport.resolve_headers).
+                                # Credentials live in ``env`` so they pass
+                                # through the one redaction path.
     enabled: bool               # whether to connect on startup (default: True)
     description: str            # human-readable description
     timeout: int                # per-call timeout override (seconds)

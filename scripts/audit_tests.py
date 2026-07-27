@@ -540,33 +540,115 @@ def analyze_file(rel: str) -> FileReport:
 #  Cross-file analysis
 # ══════════════════════════════════════════════════════════════════════
 
-def coverage_gaps(reports: list[FileReport]) -> list[str]:
-    """Shipped modules no test file imports or even names."""
+# Subsystems on the critical path. A zero-coverage module here is materially
+# worse than one in a leaf utility: a silent regression costs data (task results,
+# user context), money (billing), or correctness that only shows up in
+# production. Used to rank gaps by RISK rather than alphabetically.
+_HIGH_RISK_PREFIXES = (
+    'lib/database/', 'lib/tasks_pkg/', 'lib/agent_core/', 'lib/agent_loop',
+    'lib/agent_verdict/', 'lib/llm/', 'lib/llm_dispatch/', 'lib/billing/',
+    'lib/production/', 'lib/conversations/', 'routes/api_v1/',
+)
+
+
+def _is_pure_facade(path: str) -> bool:
+    """True for a module that only re-exports / declares constants.
+
+    A facade has no behaviour of its own, so "nothing tests it directly" is not
+    a coverage gap — the tests exercise it through whatever it re-exports.
+    Counting facades would pad the gap list with unactionable entries.
+    """
+    try:
+        with open(os.path.join(REPO, path), encoding='utf-8') as f:
+            tree = ast.parse(f.read(), filename=path)
+    except (OSError, SyntaxError):
+        return False
+    for n in tree.body:
+        if isinstance(n, (ast.Import, ast.ImportFrom, ast.Expr)):
+            continue          # imports + docstring
+        if isinstance(n, (ast.Assign, ast.AnnAssign)):
+            continue          # __all__ / constant tables
+        if isinstance(n, ast.If):
+            continue          # TYPE_CHECKING blocks
+        return False          # a def/class = real behaviour
+    return True
+
+
+def _loc(path: str) -> int:
+    try:
+        with open(os.path.join(REPO, path), encoding='utf-8') as f:
+            return sum(1 for _ in f)
+    except OSError:
+        return 0
+
+
+def coverage_gaps(reports: list[FileReport]) -> list[dict]:
+    """Shipped modules that NO test file imports or even names.
+
+    ★ CALIBRATION (2026-07-27): the first version of this reported ZERO gaps
+    and that was a FALSE GREEN with two causes, both now fixed:
+
+      1. It only enumerated ``lib/*.py`` + ``routes/*.py`` — the TOP LEVEL. But
+         nearly all behaviour in this repo lives in sub-packages
+         (``lib/tasks_pkg/**``, ``lib/database/**``, ``lib/llm/**``, …), so the
+         scan looked past the entire codebase. Measured after switching to a
+         recursive walk: **195 modules / 23,190 LOC with no test reference at
+         all** (12.7% of shipped LOC), where the tool had claimed 0.
+      2. ``mod.startswith(k + '.')`` credited a module as covered when a test
+         merely named its PARENT package. ``import lib.database`` would mark
+         every one of the ~90 modules under it as tested. Only an exact match or
+         a reference to the module ITSELF (or something inside it) counts now.
+
+    The lesson is the charter's, applied to my own tool: a detector that reports
+    nothing is indistinguishable from a detector that is not looking. Cross-check
+    a "clean" result against an independent method before believing it.
+
+    Returns dicts sorted by risk then LOC, so the output is a work queue rather
+    than an alphabetical dump.
+    """
     haystack = set()
     for r in reports:
         haystack |= r.imports
-    # Also scan raw test text once for dotted module names (string-based
-    # importlib / patch('lib.x.y') usage that AST imports miss).
+    # Also scan raw test text for dotted module names (importlib / patch('lib.x.y')
+    # string usage that AST imports miss) AND for bare path mentions.
     blob_names: set[str] = set()
+    blob_paths: set[str] = set()
     for r in reports:
         try:
             with open(os.path.join(REPO, r.rel), encoding='utf-8') as f:
-                for m in re.finditer(r'\b((?:lib|routes)(?:\.\w+)+)', f.read()):
-                    blob_names.add(m.group(1))
+                txt = f.read()
         except OSError:
             continue
+        for m in re.finditer(r'\b((?:lib|routes)(?:\.\w+)+)', txt):
+            blob_names.add(m.group(1))
+        for m in re.finditer(r'\b((?:lib|routes)/[\w/]+\.py)', txt):
+            blob_paths.add(m.group(1))
     known = haystack | blob_names
 
     gaps = []
-    for rel in _tracked('lib/*.py') + _tracked('routes/*.py'):
+    for rel in _tracked('lib/**/*.py') + _tracked('routes/**/*.py') + \
+            _tracked('lib/*.py') + _tracked('routes/*.py'):
         if rel.endswith('__init__.py'):
             continue
-        mod = rel[:-3].replace('/', '.')
-        if any(k == mod or k.startswith(mod + '.') or mod.startswith(k + '.')
-               for k in known):
+        if rel in blob_paths:
             continue
-        gaps.append(rel)
-    return sorted(gaps)
+        mod = rel[:-3].replace('/', '.')
+        # EXACT module, or a test naming something INSIDE it. Naming only the
+        # PARENT package no longer counts (that was false-green cause #2).
+        if any(k == mod or k.startswith(mod + '.') for k in known):
+            continue
+        if _is_pure_facade(rel):
+            continue
+        risk = 'high' if rel.startswith(_HIGH_RISK_PREFIXES) else 'low'
+        gaps.append({'path': rel, 'loc': _loc(rel), 'risk': risk})
+    seen = set()
+    uniq = []
+    for g in gaps:
+        if g['path'] in seen:
+            continue
+        seen.add(g['path'])
+        uniq.append(g)
+    return sorted(uniq, key=lambda g: (g['risk'] != 'high', -g['loc']))
 
 
 def duplicate_names(reports: list[FileReport]) -> list[tuple[str, list[str]]]:
@@ -647,9 +729,12 @@ def main() -> int:
         print(f'       {name} — {len(fs)} files')
 
     gaps = coverage_gaps(reports)
-    print(f'\n[I] top-level lib/ + routes/ modules no test names: {len(gaps)}')
+    hi = [g for g in gaps if g['risk'] == 'high']
+    gap_loc = sum(g['loc'] for g in gaps)
+    print(f'\n[I] shipped modules NO test names: {len(gaps)} '
+          f'({gap_loc:,} LOC) — {len(hi)} on the critical path')
     for g in gaps[:30]:
-        print(f'       {g}')
+        print(f"       [{g['risk']:>4}] {g['loc']:>5}L  {g['path']}")
 
     census = {
         'files': len(files), 'tests': total_tests, 'loc': total_loc,

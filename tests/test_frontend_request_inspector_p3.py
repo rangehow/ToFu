@@ -15,8 +15,10 @@ jsdom:
      clicking the fold row expands the prefix.
   4. Round 1 has no diff base → NO fold row.
   5. Payload cache: re-selecting a round does not refetch.
-  6. Static pins: finish_info.js carries the debug_mode-gated ri-anchor
-     tag calling openRequestInspectorForMessage (the bubble entry).
+  6. Static pins: chat_render.js carries the debug_mode-gated ri-anchor
+     (a `.msg-action-btn` in the unified `.message-actions` bar) calling
+     openRequestInspectorForMessage (the bubble entry); finish_info.js
+     must NOT grow a duplicate back.
 
 NEUTER: force _riSharedPrefix to 0 in a COPY → the fold row vanishes and
 the prefix-fold probe flips red (the diff is load-bearing).
@@ -252,23 +254,32 @@ def test_neuter_shared_prefix_flips_red():
             'shipped request_inspector.js must be byte-identical')
 
 
-def test_finish_info_anchor_static_pins():
-    """Static pins: the bubble `</>` entry lives in finish_info.js, gated on
-    _featureFlags.debug_mode, calling openRequestInspectorForMessage with
-    the message id — and the anchor class exists in CSS."""
-    fi = os.path.join(JS_DIR, 'ui', 'finish_info.js')
-    with open(fi, encoding='utf-8') as f:
+def test_action_bar_anchor_static_pins():
+    """Static pins: the bubble `</>` entry lives in chat_render.js as a
+    `.msg-action-btn ri-anchor` inside the unified `.message-actions` bar,
+    gated on _featureFlags.debug_mode + msg._taskId, calling
+    openRequestInspectorForMessage with the message id. The finish meta row
+    (finish_info.js) must not carry a duplicate anchor."""
+    cr = os.path.join(JS_DIR, 'ui', 'chat_render.js')
+    with open(cr, encoding='utf-8') as f:
         src = f.read()
     assert 'openRequestInspectorForMessage' in src, (
-        'finish_info.js lost the Request Inspector anchor call')
-    assert 'ri-anchor' in src
-    # The anchor must sit inside a debug_mode gate.
+        'chat_render.js lost the Request Inspector anchor call')
+    assert 'msg-action-btn ri-anchor' in src, (
+        'ri-anchor must be a .msg-action-btn inside .message-actions')
+    # The anchor must sit inside a debug_mode + task gate.
     idx = src.index('openRequestInspectorForMessage')
     gate_window = src[max(0, idx - 700):idx]
     assert '_featureFlags.debug_mode' in gate_window, (
         'ri-anchor is NOT gated on debug_mode')
     assert 'msg._taskId' in gate_window, (
         'ri-anchor must require msg._taskId (no task → no anchor)')
+    # The move is load-bearing: exactly ONE anchor, in the action bar.
+    fi = os.path.join(JS_DIR, 'ui', 'finish_info.js')
+    with open(fi, encoding='utf-8') as f:
+        assert 'ri-anchor' not in f.read(), (
+            'finish_info.js re-grew an ri-anchor — the entry lives in '
+            '.message-actions now; keep exactly one')
     with open(os.path.join(ROOT, 'static', 'styles.css'),
               encoding='utf-8') as f:
         css = f.read()
@@ -277,6 +288,7 @@ def test_finish_info_anchor_static_pins():
     with open(os.path.join(JS_DIR, 'i18n.js'), encoding='utf-8') as f:
         i18n = f.read()
     assert "'ri.openTip'" in i18n and "'ri.prefixFold'" in i18n
+    assert "'msgAction.inspect'" in i18n
 
 
 if __name__ == '__main__':

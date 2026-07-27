@@ -2636,6 +2636,7 @@ var _i18n = {
   'msgAction.showOriginalTitle': { zh: '显示原文', en: 'Show Original' },
   'msgAction.export': { zh: '导出', en: 'Export' },
   'msgAction.exportTitle': { zh: '导出为手机屏幕图片', en: 'Export as phone-screen images' },
+  'msgAction.inspect': { zh: '检视', en: 'Inspect' },
   'msgAction.deleteTurnTitle': { zh: '删除此轮对话', en: 'Delete this turn' },
   'msgAction.deleteMsgTitle': { zh: '删除此消息', en: 'Delete this message' },
   'branch.add': { zh: '分支', en: 'Branch' },

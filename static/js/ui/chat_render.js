@@ -777,7 +777,14 @@ function renderChat(conv, forceScroll) {
      *   scrolled-up reader, then drop the cv-off guard. */
     if (_bgRepaint && _bgContainer) {
       void inner.scrollHeight;
-      if (_bgAnchor) _restoreScrollAnchor(_bgContainer, _bgAnchor);
+      /* ★ Explicit-bottom latch outranks the anchor re-pin here too: a
+       *   mid-open background repaint must not drag the reader off the bottom
+       *   they explicitly asked for. */
+      if (_explicitBottomLatch === conv.id && !activeStreams.has(conv.id)) {
+        _bgContainer.scrollTop = _bgContainer.scrollHeight;
+      } else if (_bgAnchor) {
+        _restoreScrollAnchor(_bgContainer, _bgAnchor);
+      }
       inner.classList.remove('cv-off');
     }
     _lastRenderedFingerprint = fp;
@@ -817,7 +824,11 @@ function renderChat(conv, forceScroll) {
    *   correctly force-scrolls + latches.) */
   const _openAlreadyPositioned = !!conv._initialSwitchLoad
     && _openScrollConvId === conv.id;
+  /* ★ Explicit-bottom latch outranks the anchor heuristic: while held, do
+   *   NOT capture an anchor — the re-pin target is the TRUE bottom, not
+   *   wherever the reader happened to be before this (unsolicited) repaint. */
   const _preSwapAnchor = (_sameConvDom && !activeStreams.has(conv.id)
+      && _explicitBottomLatch !== conv.id
       && (!_readerNearBottom || _openAlreadyPositioned))
     ? _captureScrollAnchor(container, inner)
     : null;
@@ -893,6 +904,13 @@ function renderChat(conv, forceScroll) {
     void inner.scrollHeight;  // force real heights before re-pinning
     _restoreScrollAnchor(container, _preSwapAnchor);
     inner.classList.remove('cv-off');
+  } else if (_explicitBottomLatch === conv.id && !activeStreams.has(conv.id)) {
+    /* ★ Explicit jump-to-bottom latch (scrollChatToBottom): re-pin to the
+     *   TRUE bottom across EVERY render of this open — Phase-2 reconcile,
+     *   the .then fallback, background repaints. Takes precedence over BOTH
+     *   the anchor heuristic above and the no-scroll-on-open directive below:
+     *   those govern UNSOLICITED paints; an explicit click is a command. */
+    _forceScrollToBottom(container, true);
   } else if (!_sameConvDom || conv._initialSwitchLoad) {
     /* ★ No-auto-scroll-on-OPEN (owner directive). A conversation OPEN — a
      *   genuine switch (`!_sameConvDom`: the DOM currently shows a different
@@ -1709,7 +1727,20 @@ function renderMessage(msg, idx) {
     const branchBtnH = !isUser
       ? `<button class="msg-action-btn msg-branch-btn" onclick="event.stopPropagation();promptNewBranch(_msgElIndex(this))" title="${escapeHtml(_branchLabel)}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg> ${escapeHtml(_branchLabel)}</button>`
       : "";
-    actionBtns = `<div class="message-actions">${copyH}${editH}${regenH}${continueH}${translateH}${exportImgH}${branchBtnH}${deleteH}</div>`;
+    /* ★ Request Inspector anchor (debug mode only) — assistant-lane action:
+     *   jump from this bubble to the exact LLM request(s) that produced it
+     *   (docs/DEBUG_PANEL_REDESIGN.md P3). Lives in the unified action bar as
+     *   a `.msg-action-btn` (class `ri-anchor`), not in the finish meta row. */
+    const _riGate = !isUser
+      && typeof _featureFlags !== 'undefined' && _featureFlags.debug_mode
+      && msg._taskId;
+    const _riMid = _riGate
+      ? String(msg._msgId || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+      : "";
+    const riH = _riGate
+      ? `<button class="msg-action-btn ri-anchor" onclick="event.stopPropagation();openRequestInspectorForMessage('${_riMid}')" title="${escapeHtml(_mt('ri.openTip', 'Locate in Request Inspector'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M10 12.5 8 15l2 2.5"/><path d="m14 12.5 2 2.5-2 2.5"/></svg> ${escapeHtml(_mt('msgAction.inspect', 'Inspect'))}</button>`
+      : "";
+    actionBtns = `<div class="message-actions">${copyH}${editH}${regenH}${continueH}${translateH}${exportImgH}${branchBtnH}${riH}${deleteH}</div>`;
   }
   // ★ Tofu mascot avatars: Worker gets worker tofu, Planner gets planner tofu
   let avatarContent = (typeof _TOFU_WORKER_SVG !== 'undefined') ? _TOFU_WORKER_SVG : "✦",

@@ -241,5 +241,53 @@ class ConcatenatedNameSegmentationTest(unittest.TestCase):
         self.assertIsNone(split_concatenated_tool_name('abc', known))
 
 
+class ConcatenatedNameIngestionTest(unittest.TestCase):
+    """Drive the real ingestion seam, not just the splitter underneath it.
+
+    The segmentation tests above call ``split_concatenated_tool_name``
+    directly, so every one of them stayed green while the branch that
+    CONSUMES it raised ``NameError: audit_log is not defined`` on the first
+    real concatenated name. Testing a helper is not testing its call site.
+    """
+
+    def _known(self):
+        from lib.tool_input_repair._schema import _schemas
+        return set(_schemas().keys())
+
+    def test_concatenated_name_is_rejected_without_raising(self):
+        from lib.tool_input_repair._ingest import ingest_tool_call
+        known = self._known()
+        result = ingest_tool_call(
+            {'function': {'name': 'read_filesrun_command', 'arguments': '{}'},
+             'id': 'tc_concat'},
+            known_tools=known,
+        )
+        self.assertIsNotNone(result.rejection)
+        self.assertEqual('concatenated', result.rejection.get('kind'))
+        self.assertEqual(['read_files', 'run_command'],
+                         result.rejection.get('suggestions'))
+
+    def test_audit_emission_is_the_default_path(self):
+        """``emit_audit`` defaults True, so the audit branch is what production
+        actually runs — the NameError needed no special configuration."""
+        import inspect
+
+        from lib.tool_input_repair._ingest import ingest_tool_call
+        default = inspect.signature(ingest_tool_call).parameters['emit_audit'].default
+        self.assertTrue(default)
+
+    def test_every_production_concat_name_survives_ingestion(self):
+        from lib.tool_input_repair._ingest import ingest_tool_call
+        known = self._known()
+        for name, parts in ConcatenatedNameSegmentationTest.NAMES:
+            with self.subTest(name=name):
+                result = ingest_tool_call(
+                    {'function': {'name': name, 'arguments': '{}'}, 'id': 'tc'},
+                    known_tools=known,
+                )
+                self.assertIsNotNone(result.rejection)
+                self.assertEqual(parts, result.rejection.get('suggestions'))
+
+
 if __name__ == '__main__':
     unittest.main()

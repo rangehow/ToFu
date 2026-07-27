@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from lib.log import get_logger
+from lib.log import audit_log, get_logger
 
 from lib.tool_input_repair._classify import classify_tool_call, resolve_tool_name
 from lib.tool_input_repair._concat import split_concatenated_tool_name

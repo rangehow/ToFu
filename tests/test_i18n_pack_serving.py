@@ -29,6 +29,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -270,6 +271,78 @@ def test_split_state_restored_after_fallback_test(flask_client):
         'fallback and pass/fail for the wrong reason')
     html = _get_index(flask_client, 'zh')
     assert re.search(r'static/js/i18n-zh-[0-9a-f]{8}\.js', html)
+
+
+
+# ── The publish window (a lock-free reader must never see a torn manifest) ──
+
+def test_publish_order_keeps_the_bundle_pointer_last(monkeypatch):
+    """``_bundle_filename`` must be published AFTER its i18n pair.
+
+    WHY THIS IS AN ORDER RATCHET AND NOT A BEHAVIOUR TEST. The accessors
+    ``get_i18n_pack_tag`` / ``get_i18n_pack_urls`` read the manifest globals
+    WITHOUT the build lock, and ``_schedule_background_rebuild()`` runs
+    build_bundle() on a daemon thread concurrent with live request threads.
+    Publishing the pointer first let a request thread pair the NEW bundle
+    (dictionary excluded) with the STALE ``_bundle_includes_i18n = True``:
+    the page then shipped neither the dictionary nor a pack, the index.html
+    ``t = key => key`` stub survived, and the whole UI rendered raw i18n keys
+    with no error.
+
+    I tried FOUR times to catch that behaviourally and every version was
+    VACUOUS — green against the buggy order. Recorded so nobody repeats them:
+      1. A reader thread racing build_bundle() in a loop — the five
+         assignments take microseconds inside a ~1.8s build; luck never hits
+         the window.
+      2. Sampling from ``_source_max_mtime()`` — in the buggy order that is
+         the LAST statement of the publish, so the manifest is already
+         coherent when it runs.
+      3. Reading ``bool(B._pack_filenames)`` from inside the probe — once
+         published, that global IS the probe object, so the read re-enters
+         ``__bool__`` and recurses; build_bundle()'s fail-open
+         ``except Exception`` swallowed the RecursionError and the probe
+         recorded nothing.
+      4. Probing at ``not pack_map`` — measured: a same-source rebuild is a
+         NO-OP (identical content hash, so ``core_name`` equals the published
+         name), hence there is no torn state to observe at all. Forcing a real
+         content change would mean mutating tracked static/js sources from a
+         test, which is worse than the ratchet.
+    So this asserts the ORDER directly, which is legitimate for a ratchet
+    (charter: ratchets may inspect implementation, anchored on a semantic
+    unit). It is anchored on the ASSIGNMENT STATEMENTS via AST, not on line
+    numbers or source text, so a reformat cannot make it lie.
+    """
+    import ast
+    import inspect
+
+    import lib.js_bundler as B
+
+    src = inspect.getsource(B.build_bundle)
+    tree = ast.parse(textwrap.dedent(src))
+
+    order = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name) and tgt.id in (
+                        '_bundle_filename', '_pack_filenames',
+                        '_bundle_includes_i18n'):
+                    order.append((node.lineno, tgt.id))
+    order.sort()
+    names = [n for _, n in order]
+
+    for required in ('_bundle_filename', '_pack_filenames',
+                     '_bundle_includes_i18n'):
+        assert required in names, (
+            f'{required} is no longer assigned in build_bundle() — the '
+            f'manifest moved; re-target this ratchet at its new home')
+
+    assert names[-1] == '_bundle_filename', (
+        f'_bundle_filename is published at position {names.index("_bundle_filename")} '
+        f'of {names} — it MUST be last. A lock-free reader that sees the new '
+        f'bundle pointer before the i18n pair is updated serves a page with '
+        f'neither the dictionary nor a pack, and the entire UI renders raw '
+        f'i18n keys with no error.')
 
 
 # ── Acceptance (a): the saving is real on the SERVED artifacts ───────────

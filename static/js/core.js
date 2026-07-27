@@ -463,9 +463,15 @@ if (typeof window !== "undefined") {
 }
 
 function getToolRoundsFromMsg(msg) {
-  if (msg.toolRounds && msg.toolRounds.length > 0) return msg.toolRounds;
+  // The inject sidecars must be rehydrated onto REAL rounds too, not only
+  // onto the empty base — after a reload/poll/committedMessage projection a
+  // turn normally has both. Returning `msg.toolRounds` directly here dropped
+  // every swarm/peer/steer chip from exactly the common case.
+  if (msg.toolRounds && msg.toolRounds.length > 0)
+    return _rehydrateInjectRows(msg, msg.toolRounds);
   // ── Backward compat: old conversations stored under 'searchRounds' ──
-  if (msg.searchRounds && msg.searchRounds.length > 0) return msg.searchRounds;
+  if (msg.searchRounds && msg.searchRounds.length > 0)
+    return _rehydrateInjectRows(msg, msg.searchRounds);
   if (msg.searchResults && msg.searchResults.length > 0)
     return [
       {

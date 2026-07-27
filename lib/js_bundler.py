@@ -1237,11 +1237,21 @@ def build_bundle():
         feature_name, feature_size = _assemble_bundle(_DEFERRED_FILES, 'feature-', critical=False)
 
         _clean_old_bundles(core_name, feature_name, keep_packs=pack_names)
-        _bundle_filename = core_name
-        _feature_filename = feature_name
+        # PUBLISH ORDER IS LOAD-BEARING. Readers of this manifest
+        # (get_i18n_pack_tag / get_i18n_pack_urls) are lock-free, so they can
+        # observe a partially-updated manifest. Publish the i18n pair FIRST and
+        # the `_bundle_filename` pointer that advertises it LAST: then a reader
+        # either sees the old pointer (with a pack pair that is valid for it too,
+        # since both packs are hash-named and still on disk) or the new pointer
+        # with its own pair. The reverse order let a reader pair the NEW bundle
+        # (i18n.js excluded) with the STALE `_bundle_includes_i18n = True`, so it
+        # injected neither the dictionary nor a pack and the whole UI rendered
+        # raw i18n keys with no error.
         _pack_filenames = pack_map
         _bundle_includes_i18n = not pack_map
         _bundle_mtime = _source_max_mtime()
+        _feature_filename = feature_name
+        _bundle_filename = core_name
 
     elapsed = time.time() - t0
     if feature_name:
@@ -1350,14 +1360,16 @@ def get_i18n_pack_tag(lang):
     i18n.js (dual fallback after a failed emission), returns None so the
     caller injects nothing — the dictionary is already in the bundle.
 
-    The ``_bundle_includes_i18n`` / ``_pack_filenames`` pair is updated
-    atomically with ``_bundle_filename`` inside build_bundle(), so a tag can
-    never be handed out for a bundle that already carries the dictionary.
+    The ``_bundle_includes_i18n`` / ``_pack_filenames`` pair is published
+    BEFORE the ``_bundle_filename`` pointer inside build_bundle(), and read
+    into locals in ONE snapshot here, so a tag can never be handed out for a
+    bundle that already carries the dictionary.
     """
     filename = get_bundle_filename_nonblocking()
-    if not filename or _bundle_includes_i18n:
+    includes_i18n, packs = _bundle_includes_i18n, _pack_filenames
+    if not filename or includes_i18n:
         return None
-    pack = _pack_filenames.get(lang) or _pack_filenames.get('zh')
+    pack = packs.get(lang) or packs.get('zh')
     if not pack:
         return None
     return (f'<script defer src="static/js/{pack}"'
@@ -1372,9 +1384,10 @@ def get_i18n_pack_urls():
     fetch because the dictionary already carries both languages.
     """
     filename = get_bundle_filename_nonblocking()
-    if not filename or _bundle_includes_i18n or not _pack_filenames:
+    includes_i18n, packs = _bundle_includes_i18n, _pack_filenames
+    if not filename or includes_i18n or not packs:
         return None
-    return {lang: f'static/js/{name}' for lang, name in _pack_filenames.items()}
+    return {lang: f'static/js/{name}' for lang, name in packs.items()}
 
 
 def get_bundle_filename():

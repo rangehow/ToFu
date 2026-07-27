@@ -288,6 +288,9 @@ const _ZH = {
   'stream.phase.retryReason':        '重试中…{reason}（{model}，第 {attempt} 次）',
   'stream.phase.retryGeneric':       '正在重试 {model}…（第 {attempt} 次）',
   'stream.retryReason.endpointUnreachable': '连不上模型服务器（网关/网络波动，正在自动切换通道）',
+  'stream.retryReason.waitingBackoff':   '等待模型（错误退避中，非限流）',
+  'stream.phase.waitingFirstByte':       '已等待 {elapsed}s：{model} 尚未返回首个字节…',
+  'stream.phase.waitingFirstByteReason': '已等待 {elapsed}s：{model} 尚未返回首个字节（{reason}）',
 };
 win.t = global.t = (k, o) => {
   let v = _ZH[k];
@@ -503,6 +506,43 @@ if (!_NEUTER) {
   });
   check('retry_generic_localized',
     html.includes('正在重试 kimi-k3') && html.includes('第 2 次'), html);
+}
+
+// ── 12. waitingFirstByte (no slot cause) → localized + elapsed/model ──
+//    (pt TTFT-watchdog: the wedged-upstream heartbeat must render zh, not
+//    the legacy English detail string.)
+{
+  const html = _renderAndProbe({
+    phase: 'retrying',
+    detail: 'Waiting 42s — no first byte from kimi-k3 yet…',
+    detailKey: 'stream.phase.waitingFirstByte',
+    detailArgs: { model: 'kimi-k3', elapsed: 42 },
+    attempt: 2,
+  });
+  check('wait_firstbyte_localized_with_elapsed_and_model',
+    html.includes('已等待 42s：kimi-k3 尚未返回首个字节…'), html);
+  check('wait_firstbyte_english_not_shown',
+    !html.includes('no first byte from kimi-k3'), html);
+}
+
+// ── 13. waitingFirstByteReason: typed reasonKey REPLACES the raw slot token ──
+//    (slot cooldown_reason 'error' must surface as the localized backoff
+//    cause, never as the raw English token; depends on the reasonKey
+//    resolution line, so NEUTER mode must skip it — same ruling as probe 8.)
+if (!_NEUTER) {
+  const html = _renderAndProbe({
+    phase: 'retrying',
+    detail: 'Waiting 63s — no first byte from kimi-k3 yet (error)',
+    detailKey: 'stream.phase.waitingFirstByteReason',
+    detailArgs: { model: 'kimi-k3', elapsed: 63, reason: 'error', reasonKey: 'stream.retryReason.waitingBackoff' },
+    attempt: 3,
+  });
+  check('wait_firstbyte_reason_localized_cause',
+    html.includes('等待模型（错误退避中，非限流）'), html);
+  check('wait_firstbyte_reason_raw_token_not_shown',
+    !html.includes('(error)'), html);
+  check('wait_firstbyte_reason_elapsed_and_model_interpolated',
+    html.includes('已等待 63s') && html.includes('kimi-k3'), html);
 }
 
 // ── NEUTER-only: with the resolution line stripped, the raw English token

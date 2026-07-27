@@ -203,9 +203,100 @@ def test_bootstrap_reexec_respects_uv_backend():
     assert re.search(
         r"if backend != 'uv':\s*\n\s*os\.environ\.setdefault\('CONDA_PREFIX', env_prefix\)",
         text), 'bootstrap.py setdefaults CONDA_PREFIX unconditionally (venv would misfire)'
-    assert "if backend != 'uv' and cfg.get('env_name'):" in text, \
-        'bootstrap.py sets CONDA_DEFAULT_ENV even for a uv venv'
+    # CONDA_DEFAULT_ENV must be nested under the same backend != 'uv' guard.
+    # Asserted structurally, not as one literal line: the export logic lives in
+    # _tofu_export_env_native_paths (shared with the LD_LIBRARY_PATH/fontconfig
+    # exports), so the two setdefaults are no longer textually adjacent.
+    guard = text.index("if backend != 'uv':")
+    nxt = text.index('if not os.path.isdir(\'/etc/fonts\')', guard)
+    assert re.search(r"if env_name:\s*\n\s*os\.environ\.setdefault\('CONDA_DEFAULT_ENV', env_name\)",
+                     text[guard:nxt]), \
+        'bootstrap.py sets CONDA_DEFAULT_ENV outside the backend != \'uv\' guard'
     _ok("bootstrap.py skips the conda shim for a uv-backed venv")
+
+
+def test_playwright_env_exported_before_reexec_early_return():
+    """Regression (2026-07-27): Chromium is a CHILD process and resolves libatk /
+    libatk-bridge / libnss out of $env_prefix/lib, which is not on the default
+    linker path. The export used to live INSIDE the re-exec branch, so a server
+    launched directly with the env interpreter (the documented way) hit the
+    `already_in_env` early return and never got LD_LIBRARY_PATH — every
+    Playwright launch died with "libatk-1.0.so.0: cannot open shared object
+    file". The export MUST happen before that early return, in both consumers.
+    """
+    for src, name, early_var in ((_server_py(), 'server.py', 'already_in_env'),
+                                 (_bootstrap_py(), 'bootstrap.py', 'same')):
+        assert '_tofu_export_env_native_paths' in src, \
+            f'{name} has no native-path export helper'
+        # Anchor on the CALL site (leading indent), not the bare name: the `def`
+        # line always precedes the early return, so indexing the name alone
+        # makes this assertion vacuously true even with the bug reintroduced.
+        call = src.index('\n    _tofu_export_env_native_paths(env_prefix')
+        early = src.index(f'    if {early_var}:\n        return')
+        assert call < early, (
+            f'{name}: the native-path export runs AFTER the {early_var} early '
+            f'return — a directly launched server gets no LD_LIBRARY_PATH and '
+            f'Chromium dies on libatk')
+        assert re.search(r"os\.environ\['LD_LIBRARY_PATH'\]", src), \
+            f'{name} never sets LD_LIBRARY_PATH'
+    _ok('LD_LIBRARY_PATH is exported before the re-exec early return (both consumers)')
+
+
+def test_fontconfig_exported_when_no_system_config():
+    """Regression (2026-07-27): this host has no /etc/fonts, so fontconfig falls
+    back to a builtin config that finds ZERO fonts. Chromium then launches and
+    paints CSS backgrounds fine but draws every glyph as nothing — screenshots
+    come back blank-but-styled, which reads as "the page didn't load" rather
+    than as an error, so it fails silently. Both consumers must point
+    fontconfig at the env's own config when the system one is absent.
+    """
+    for src, name in ((_server_py(), 'server.py'), (_bootstrap_py(), 'bootstrap.py')):
+        assert "os.path.isdir('/etc/fonts')" in src, \
+            f'{name} does not probe for a system fontconfig config'
+        assert 'FONTCONFIG_PATH' in src and 'FONTCONFIG_FILE' in src, \
+            f'{name} does not export FONTCONFIG_PATH/FONTCONFIG_FILE'
+        # Must be conditional: a host WITH /etc/fonts keeps using it.
+        assert re.search(r"if not os\.path\.isdir\('/etc/fonts'\):", src), \
+            f'{name} exports fontconfig unconditionally (would override a real system config)'
+    _ok('fontconfig falls back to the env config only when /etc/fonts is absent')
+
+
+def test_conda_path_installs_fonts_for_chromium():
+    """Chromium needs fontconfig + at least one real font family to render text.
+    These were previously only present as transitive deps of other packages; a
+    solver change could silently drop them and text rendering would break with
+    no error. Pin them explicitly in CHROMIUM_LIBS.
+    """
+    text = _install_sh()
+    libs = text[text.index('CHROMIUM_LIBS=('):]
+    libs = libs[:libs.index(')')]
+    assert 'atk-1.0' in libs, 'CHROMIUM_LIBS lost atk-1.0 (the original libatk failure)'
+    assert 'fontconfig' in libs, 'CHROMIUM_LIBS does not install fontconfig'
+    assert re.search(r'font-ttf-\S+', libs), \
+        'CHROMIUM_LIBS installs no font family — Chromium renders text as nothing'
+    _ok('conda path pins fontconfig + a real font family for Chromium')
+
+
+def test_uv_path_verifies_chromium_actually_launches():
+    """Downloading the browser != being able to RUN it. The uv venv has no
+    conda-forge to source Chromium's GUI libs/fonts from, so on a bare host the
+    binary lands but every launch dies on a missing .so. The fast path must
+    prove launch+text-render at install time and print actionable recovery,
+    instead of deferring the failure to a dead browser tool much later.
+    """
+    text = _install_sh()
+    fn = text[text.index('_try_uv_install() {'):text.index('\nif [[ "$USE_CONDA" -eq 1 ]]; then')]
+    assert 'chromium.launch' in fn, \
+        'uv path never verifies Chromium can actually launch'
+    assert 'measureText' in fn, \
+        'uv path does not verify text rendering (a fontless browser screenshots blank)'
+    assert 'install-deps chromium' in fn, \
+        'uv path gives no root recovery command'
+    assert '--use-conda' in fn, 'uv path gives no rootless recovery command'
+    # The verification must never abort the install — browser tools degrade.
+    assert 'fail ' not in fn and 'exit 1' not in fn, \
+        'Chromium verification must not abort the install (browser tools degrade)'
+    _ok('uv path verifies Chromium launches + renders text, with actionable recovery')
 
 
 def main():
@@ -224,6 +315,10 @@ def main():
         test_reexec_uses_prefix_not_just_executable,
         test_server_reexec_respects_uv_backend,
         test_bootstrap_reexec_respects_uv_backend,
+        test_playwright_env_exported_before_reexec_early_return,
+        test_fontconfig_exported_when_no_system_config,
+        test_conda_path_installs_fonts_for_chromium,
+        test_uv_path_verifies_chromium_actually_launches,
     ]
     for fn in tests:
         try:

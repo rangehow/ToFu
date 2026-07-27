@@ -685,6 +685,49 @@ if _TOFU_SEARCH_PATH and os.path.isdir(_TOFU_SEARCH_PATH):
     sys.path.insert(0, _TOFU_SEARCH_PATH)
 
 
+def _tofu_export_env_native_paths(env_prefix, backend):
+    """Put the env's lib/ + bin/ on the search paths for CHILD processes.
+
+    Playwright's Chromium is spawned as a subprocess and resolves its GUI
+    libraries (libatk, libatk-bridge, libnss, ...) through the dynamic linker,
+    which does not know about Python's sys.prefix. install.sh Step 8 puts those
+    libs in $env_prefix/lib via conda-forge, so they only resolve when that dir
+    is on LD_LIBRARY_PATH. Idempotent: safe to call on every start.
+    """
+    if not env_prefix or not os.path.isdir(env_prefix):
+        return
+    env_lib = os.path.join(env_prefix, 'lib')
+    if os.path.isdir(env_lib):
+        _cur = os.environ.get('LD_LIBRARY_PATH', '')
+        if env_lib not in _cur.split(os.pathsep):
+            os.environ['LD_LIBRARY_PATH'] = (
+                env_lib + os.pathsep + _cur) if _cur else env_lib
+    env_bin = os.path.join(env_prefix, 'bin')
+    if os.path.isdir(env_bin):
+        _cur = os.environ.get('PATH', '')
+        if env_bin not in _cur.split(os.pathsep):
+            os.environ['PATH'] = (env_bin + os.pathsep + _cur) if _cur else env_bin
+    # Only masquerade as a conda env when we ARE one. A uv venv
+    # (backend='uv') is not conda; setting CONDA_PREFIX would make
+    # bootstrap.py's _running_in_conda_env() misfire and route its pip
+    # fallback down the conda-forge branch.
+    if backend != 'uv':
+        os.environ.setdefault('CONDA_PREFIX', env_prefix)
+    # Fontconfig: this host has no /etc/fonts, so fontconfig falls back to a
+    # builtin config that finds zero fonts and Chromium renders every glyph as
+    # nothing — pages screenshot as blank/textless while still painting CSS
+    # backgrounds, so the failure looks like an empty page rather than an
+    # error. The env ships both fontconfig and font packages, so point it at
+    # the env's own config. Only when the system config is genuinely absent:
+    # a host that has /etc/fonts should keep using it.
+    if not os.path.isdir('/etc/fonts'):
+        env_fonts = os.path.join(env_prefix, 'etc', 'fonts')
+        if os.path.isfile(os.path.join(env_fonts, 'fonts.conf')):
+            os.environ.setdefault('FONTCONFIG_PATH', env_fonts)
+            os.environ.setdefault(
+                'FONTCONFIG_FILE', os.path.join(env_fonts, 'fonts.conf'))
+
+
 def _tofu_maybe_reexec_into_env():
     """Re-exec into Tofu's conda env if not already there."""
     marker = os.path.join(_PROJ_DIR, '.tofu_env.json')
@@ -717,24 +760,20 @@ def _tofu_maybe_reexec_into_env():
             already_in_env = os.path.realpath(target_py) == os.path.realpath(sys.executable)
         except OSError:
             already_in_env = (target_py == sys.executable)
+    # Export the env's native-library search path BEFORE the already_in_env
+    # early return. Chromium is a CHILD process and resolves libatk /
+    # libatk-bridge / libnss out of $env_prefix/lib, which is not on the
+    # default linker path. `python server.py` launched directly with the env
+    # interpreter (the documented way, and how the supervisor runs it) takes
+    # that early return, so while this lived inside the re-exec branch the
+    # variables were only ever set on the path that re-execs — a directly
+    # launched server left them unset and every Playwright launch died with
+    # "libatk-1.0.so.0: cannot open shared object file".
+    _tofu_export_env_native_paths(env_prefix, backend)
     if already_in_env:
         return
     if os.environ.get('_TOFU_ENV_REEXEC') == '1':
         return
-    if env_prefix and os.path.isdir(env_prefix):
-        env_lib = os.path.join(env_prefix, 'lib')
-        if os.path.isdir(env_lib):
-            os.environ['LD_LIBRARY_PATH'] = (
-                env_lib + os.pathsep + os.environ.get('LD_LIBRARY_PATH', ''))
-        env_bin = os.path.join(env_prefix, 'bin')
-        if os.path.isdir(env_bin):
-            os.environ['PATH'] = env_bin + os.pathsep + os.environ.get('PATH', '')
-        # Only masquerade as a conda env when we ARE one. A uv venv
-        # (backend='uv') is not conda; setting CONDA_PREFIX would make
-        # bootstrap.py's _running_in_conda_env() misfire and route its pip
-        # fallback down the conda-forge branch.
-        if backend != 'uv':
-            os.environ.setdefault('CONDA_PREFIX', env_prefix)
     os.environ['_TOFU_ENV_REEXEC'] = '1'
     try:
         os.execv(target_py, [target_py, *sys.argv])

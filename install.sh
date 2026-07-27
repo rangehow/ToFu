@@ -380,6 +380,32 @@ _try_uv_install() {
         "$_uvpy" -m playwright install chromium >/dev/null 2>&1 \
             && ok "Playwright Chromium installed" \
             || warn "Playwright Chromium install skipped/failed — JS-rendered fetch disabled until you run it manually"
+        # Downloading the browser is not the same as being able to RUN it.
+        # Unlike the conda path, a uv venv has no conda-forge to source
+        # Chromium's GUI libs (libatk, libnss, fontconfig, fonts) from, so on a
+        # bare host the binary lands but every launch dies on a missing .so.
+        # Prove it launches now, while we can still say something useful —
+        # otherwise the failure only surfaces much later as a dead browser tool.
+        info "Verifying Chromium can actually launch..."
+        if "$_uvpy" - <<'PYEOF' 2>/dev/null
+from playwright.sync_api import sync_playwright
+with sync_playwright() as p:
+    b = p.chromium.launch(args=['--no-sandbox'])
+    pg = b.new_page()
+    pg.set_content('<h1>x</h1>')
+    assert pg.evaluate(
+        "(()=>{const c=document.createElement('canvas').getContext('2d');"
+        "c.font='60px sans-serif';return c.measureText('x').width;})()") > 0, 'no fonts'
+    b.close()
+PYEOF
+        then
+            ok "Chromium launches and renders text"
+        else
+            warn "Chromium is installed but cannot launch/render on this host (missing system libs or fonts)."
+            warn "  Browser screenshots + JS-rendered fetch will be unavailable; plain HTTP fetching still works."
+            warn "  Fix with root:    sudo $_uvpy -m playwright install-deps chromium"
+            warn "  Fix rootless:     re-run ./install.sh --use-conda  (sources the libs + fonts from conda-forge)"
+        fi
     fi
 
     # Publish the env for the shared downstream steps (.env, launch, pgdata probe).
@@ -1730,8 +1756,9 @@ if [[ "$SKIP_PLAYWRIGHT" -eq 0 ]]; then
     step "Installing Playwright Chromium"
 
     # On Linux, install Chromium's shared libs from conda-forge so that no
-    # sudo / system packages are required. tofu_search/fetch/playwright_pool.py
-    # auto-prepends $CONDA_PREFIX/lib to LD_LIBRARY_PATH at runtime.
+    # sudo / system packages are required. server.py / bootstrap.py export
+    # $env_prefix/lib on LD_LIBRARY_PATH at startup (before any re-exec early
+    # return) so the Chromium child process can resolve them.
     if [[ "$OS" == "Linux" ]]; then
         info "Installing Chromium shared-lib deps from conda-forge (rootless)..."
         CHROMIUM_LIBS=(
@@ -1747,6 +1774,15 @@ if [[ "$SKIP_PLAYWRIGHT" -eq 0 ]]; then
             nspr
             nss
             mesa-libgbm-cos7-x86_64
+            # Text rendering. Without fontconfig + at least one real font
+            # family, Chromium launches and paints CSS fine but draws every
+            # glyph as nothing — screenshots come back blank-but-styled, which
+            # reads as "the page didn't load" rather than as an error. These
+            # were previously only present as transitive deps of other
+            # packages; pin them explicitly so a solver change can't drop them.
+            fontconfig
+            font-ttf-dejavu-sans-mono
+            font-ttf-ubuntu
         )
         if ! conda install -n "$ENV_NAME" -c conda-forge --override-channels -y "${CHROMIUM_LIBS[@]}"; then
             warn "Some Chromium shared-lib deps failed to install — browser may not launch"

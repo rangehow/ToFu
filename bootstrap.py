@@ -50,6 +50,46 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # pip / conda / subprocess logic so the rest of bootstrap.py operates
 # inside the right interpreter (so subprocess [sys.executable, 'server.py']
 # correctly inherits the env's python).
+def _tofu_export_env_native_paths(env_prefix, backend, env_name=None):
+    """Put the env's lib/ + bin/ on the search paths for CHILD processes.
+
+    Playwright's Chromium resolves its GUI libs (libatk, libatk-bridge, libnss)
+    through the dynamic linker, which does not know about sys.prefix; install.sh
+    Step 8 installs them into $env_prefix/lib. Must run even when we are ALREADY
+    in the env, since that path spawns Chromium too. Idempotent.
+    """
+    if not env_prefix or not os.path.isdir(env_prefix):
+        return
+    env_lib = os.path.join(env_prefix, 'lib')
+    if os.path.isdir(env_lib):
+        _cur = os.environ.get('LD_LIBRARY_PATH', '')
+        if env_lib not in _cur.split(os.pathsep):
+            os.environ['LD_LIBRARY_PATH'] = (
+                env_lib + os.pathsep + _cur) if _cur else env_lib
+    env_bin = os.path.join(env_prefix, 'bin')
+    if os.path.isdir(env_bin):
+        _cur = os.environ.get('PATH', '')
+        if env_bin not in _cur.split(os.pathsep):
+            os.environ['PATH'] = (env_bin + os.pathsep + _cur) if _cur else env_bin
+    # A uv venv (backend='uv') is not a conda env — don't set CONDA_PREFIX,
+    # or _running_in_conda_env() below misfires and routes the pip fallback
+    # down the conda-forge branch.
+    if backend != 'uv':
+        os.environ.setdefault('CONDA_PREFIX', env_prefix)
+        if env_name:
+            os.environ.setdefault('CONDA_DEFAULT_ENV', env_name)
+    # No /etc/fonts on this host → fontconfig finds zero fonts and Chromium
+    # renders text as nothing, so screenshots come out blank-but-styled rather
+    # than erroring. Point fontconfig at the env's own config when the system
+    # one is absent.
+    if not os.path.isdir('/etc/fonts'):
+        env_fonts = os.path.join(env_prefix, 'etc', 'fonts')
+        if os.path.isfile(os.path.join(env_fonts, 'fonts.conf')):
+            os.environ.setdefault('FONTCONFIG_PATH', env_fonts)
+            os.environ.setdefault(
+                'FONTCONFIG_FILE', os.path.join(env_fonts, 'fonts.conf'))
+
+
 def _tofu_maybe_reexec_into_env():
     marker = os.path.join(BASE_DIR, '.tofu_env.json')
     if not os.path.isfile(marker):
@@ -83,6 +123,10 @@ def _tofu_maybe_reexec_into_env():
             same = os.path.realpath(target_py) == os.path.realpath(sys.executable)
         except OSError:
             same = (target_py == sys.executable)
+    # Export BEFORE the early return — see server.py's twin helper. A direct
+    # `python bootstrap.py` with the env interpreter takes this return, and
+    # every Chromium it later spawns would otherwise miss $env_prefix/lib.
+    _tofu_export_env_native_paths(env_prefix, backend, cfg.get('env_name'))
     if same:
         return
     if os.environ.get('_TOFU_ENV_REEXEC') == '1':
@@ -95,21 +139,6 @@ def _tofu_maybe_reexec_into_env():
             '  Run:  unset _TOFU_ENV_REEXEC _TOFU_VIA_BOOTSTRAP\n'
             '  Overriding the leaked guard and re-execing into the env python now.\033[0m\n')
         sys.stderr.flush()
-    if env_prefix and os.path.isdir(env_prefix):
-        env_lib = os.path.join(env_prefix, 'lib')
-        if os.path.isdir(env_lib):
-            os.environ['LD_LIBRARY_PATH'] = (
-                env_lib + os.pathsep + os.environ.get('LD_LIBRARY_PATH', ''))
-        env_bin = os.path.join(env_prefix, 'bin')
-        if os.path.isdir(env_bin):
-            os.environ['PATH'] = env_bin + os.pathsep + os.environ.get('PATH', '')
-        # A uv venv (backend='uv') is not a conda env — don't set CONDA_PREFIX,
-        # or _running_in_conda_env() below misfires and routes the pip fallback
-        # down the conda-forge branch.
-        if backend != 'uv':
-            os.environ.setdefault('CONDA_PREFIX', env_prefix)
-    if backend != 'uv' and cfg.get('env_name'):
-        os.environ.setdefault('CONDA_DEFAULT_ENV', cfg['env_name'])
     os.environ['_TOFU_ENV_REEXEC'] = '1'
     sys.stderr.write(f'[bootstrap.py] Re-exec into Tofu env python: {target_py}\n')
     sys.stderr.flush()

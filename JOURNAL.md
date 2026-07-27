@@ -1,5 +1,25 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-27(续) — 「能不能深度整合携程/美团」→ 实测把问题重新定义,根修**凭证脱敏的黑名单缺陷**并上线中文生活服务能力(epic `pt_be6c23da57954d38` 收口;commits `62f43155` + `9d9aa34d`,共 12 文件 +1191/-67;新套件 **27 条**,**NEUTER×4 全咬**,MCP 全环 **130 过 9 skip**,干净 HEAD worktree 复验 + collect **10961 零错**)
+
+- **owner 的问题问的是「携程/美团」,实测答案是「问错了对象」。** 逐个查证:①**携程商旅 AI 开放平台**(2026-04 上线)**确实支持 MCP**,五类工具覆盖酒/机/火车实时推荐+签证+差旅合规——但**只对企业客户**,需企业身份+商务对接;②**携程「问道」**个人可申请却**不是 MCP**(自家 HTTP API + Node CLI 脚本,有 QPS/配额,且**无支付下单链路**);③**美团开放平台**是**纯商家侧**(团购核销/外卖订单/门店装修),五步接入第一步就是「提交企业信息→商务评估」,**根本不存在消费侧 MCP**。两家都不是技术不通,是**不对你开放**——OTA 的核心资产是库存和用户,开放 MCP 等于把入口让给别人。**真正能给中文用户办事的是高德(官方 MCP)+ RollingGo(道旅,B2B 真实库存)+ 12306**,这三家个人开发者都能拿到凭证。故 catalog **故意不建**携程/美团条目(建了就是点不动的死卡片),另开商务准入票 `pt_6dcdc44482de4fe7`,并写守卫 `test_no_dead_card_for_a_business_gated_vendor` 封锁。
+
+- **落点裁决(charter「自建 vs 复用」):不进 tofu-search**——它是检索/抓取包,而酒旅是**带凭证的交易型工具调用**,塞进去等于给检索包背上 API Key 与订单语义;也**不新建 lib/travel/**——工具发现/鉴权/重连/熔断/健康探针 MCP 桥全都有了。落在 `lib/mcp/`:一处改动解锁**所有**远程 MCP,新增服务只是往 registry 加一条数据。
+
+- **第 1 层的真缺口(不是「难用」,是「配不出来」):** `_bridge.py` 只有 `sse`/`stdio` 两个分支,且 `sse_client(url)` **不传 headers**;`MCPServerConfig` 无 `headers` 字段。而中国远程 MCP 几乎全是 `streamable-http` + `Authorization: Bearer` —— **RollingGo 在 Tofu 里根本无法配置**。本机 SDK 实测早已支持(`streamablehttp_client(url, headers=...)`),纯属我方没接。
+
+- **★ 三处 `!= 'sse'` 实为四处,第四处是真雷。** owner 点了 `_bridge.py:259` / 路由 `:468` / `:564`,那三处因 `command` 恰好为空而「巧合没炸」;但 `registry.py::build_server_config` 的同款判据会把 `streamable-http` 条目**塞进 stdio 分支当本地命令拉起** —— 第 2 层加 RollingGo 时**第一次点安装就会踩**。全部收敛成显式 `is_stdio()`。
+
+- **★ 凭证脱敏是个黑名单,而我连补了三次(env → headers → url)——第三次时停手反转成白名单。** 原实现 `{k:v for k,v in cfg.items() if k != 'env'}` **只挡 env**,新增任何携密字段都要靠作者当时记得,未预见字段的默认是**暴露**。高德的 key 在 **query string** 里(`?key=<k>`),`url` 原样回吐 = 又一个洞。改为 `redact_config` 只输出**显式分类**(PUBLIC/TRANSFORMED/SECRET)的字段,未分类**丢弃并告警**;棘轮读 `MCPServerConfig.__annotations__`,新增字段没声明暴露级别直接红。**默认从「暴露」翻成「丢弃」,第四个洞就不会存在。**
+
+- **★ 第三个出口是日志,比 API 响应更该堵。** httpx 失败消息内嵌**已解析的请求 URL**(`... for url 'https://mcp.amap.com/mcp?key=<真key>'`),**一次失败握手就把活密钥写进 app.log/error.log**,留存远比一次 API 响应长久、清理更难。`scrub_text` 挂在 `MCPConnectError._format` 这个**唯一咽喉**(每条连接失败消息都经过它,顺带覆盖 stderr tail),而不是在两个路由各写一遍。另:脱敏**按 query 参数粒度**,保留 scheme/host/path —— 整条打码会让设置页上几个远程服务长得一模一样,用户反而去手改配置,制造新的明文风险。
+
+- **★ URL 必须**模板代入**而不只是脱敏。** 只做输出脱敏的话,用户只能把 key 明文写进 `mcp_servers.json` 的 URL —— 恰好绕开刚建立的「密钥单一真源走 env」规则,等于白做。`url` 与 `headers` 共用同一个 `${VAR}` 解析器,凭证缺失时报**具体 key 名**而非上游一个说不清的 401。`header_env_keys` 也必须扫 url,否则高德这类 query 型厂商 header 为空、看起来「不需要凭证」,设置页永远不提示填 key。
+
+- **★ NEUTER-D 第一次没咬,暴露我自己的守卫缺陷:只测了 `resolve_url` 这个 helper,没测**桥有没有调它**。** 把桥里那行删掉,helper 测试照样全绿 —— 而生产上每个 query 型厂商都会挂。改成驱动**真实握手**(测试服务器同时接受 Bearer 头与 `?key=`),删掉调用点立刻红。**同族教训第二次:先前那条脱敏守卫也曾假绿,因为 fixture 用的是 `${VAR}` 模板形态、本身没有明文可泄漏 —— 判据是「把脱敏代码整段删掉,这个 fixture 里还有东西能泄漏吗?」**(顺带发现测试服务器用子串比对,`SECRET+'-WRONG'` 含 `key=<SECRET>` 竟能通过认证,改成精确比对。)
+
+- **共享 HEAD 纪律:** 工作树有兄弟未提交的 `lib/llm_sanitize/_gateway.py` IndentationError(`pt_530d7f51` 已认领),炸掉 `import routes.*` 全链,我的路由测试因此假红。全程改用 `git worktree` 干净 HEAD 检出叠加改动验收,**两次提交都在干净树上复验**;提交用显式 6 文件 pathspec + 提交前 `wc -l -eq 6` 计数断言。另记:本机 git 较老,**不支持 `git worktree remove`**,清理需 `shutil.rmtree` + `git worktree prune`。
+
 ### 2026-07-27(续) — R3 gate② 近邻检索根修:**0/25 → 24/25 领域命中、跨 idea 重合 80% → 0%**;而我为此**连续踩了三个 arXiv 查询语法坑,每个都实测 0 召回**(epic `pt_a31ca01fd1574145`,commit `b53daf60`,5 文件 +1053/-45;新套件 **9 条**,failing-first 在未修码上 **9 红且缺陷本身可复现**,**NEUTER×4 全咬**,合环 **36/36** + 相邻 **51/51**)
 
 - **修的是「novelty 轴实际是常量」。** `_novelty_prior_set` 把 `title + 整段 core_mechanism`(473-558 字符散文,含 `*星号*`/括号/逗号)原样塞进 arXiv `all:`。用生产作业 `research_7a444f96c65d42b5` 的 6 条真 idea 打真 API,在**未修的 HEAD 上逐条复现**:领域命中 **0/25**(召回全是引力波/中微子/GWTC 协作组论文)、跨 idea 近邻集最大重合 **80%**、idea 3 的 `*difference*` 触发 **HTTP 500 → 空基底 1/6**。修后 **24/25 / 0% / 0 空基底**。

@@ -1,5 +1,17 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-27(续) — 覆盖缺口 epic `pt_d3833f8e` 收口:轮次落库 daemon 6%→83% + pg_ownership 脑裂防线 13%→73%(commits `0c43e22c` / `5bfe0da4`;**NEUTER×8 全咬**,干净 committed worktree 复验 50/50 + 45/45)
+
+- **`commit_round` 包 6/13% → 86%(`5bfe0da4`,31 测)。** 它是 agent 轮次的落库收口点,回归即任务结果丢失且不可恢复,此前只被顺带 import 过。
+  - **★ 高价值目标是归因过滤(源码 Fix 2)。** file-history diff 是对 **PRIMARY root 的项目全局快照索引**做的,而同一项目上的并发会话也往那个索引写,所以原始 diff 里**合法地**含有别人的改动。三条判据各自独立、错了全都静默:①`writer == 本任务` → 保留;②`writer 为空` **且**本轮跑过 opaque writer(code_exec / MCP / 未知工具)→ 保留(**fail-open**,绝不抑制真实副作用写);③`writer 为空`且本轮只跑过只读/自签名工具 → **丢弃**——这就是那个曾让外来文件出现在本轮 files bar、而自己的 extra-root 编辑反而缺失的跨会话泄漏。
+  - **NC2 与 NC3 咬的是相反方向**,这点值得单独记:摘掉 drift 丢弃 → 两条「过度放行」红;把 opaque 探针钉死成 False → 两条「过度抑制」红。**一个 fail-open 判据必须两个方向都有守卫**,否则「删掉分支」也能保持绿。
+  - **设计取舍(写进文件头,勿"优化"掉):不起真线程。** 两模块都刻意拆成 `_spawn_*`(起 daemon)与 `_run_*_async`(线程体),docstring 明说线程体**通过 facade 解析被调方正是为了让测试能驱动它**。所以测试同步驱动线程体断言决策,只对 spawn 覆盖 GATE 条件。线程时序测试会 flaky 且不会多测到任何逻辑。
+- **`pg_ownership` 三模块 8-21% → 71-82%(`0c43e22c`,45 测)。** 跨主机互锁:判错就是两台主机在同一份 pgdata 上各起一个 postmaster,WAL 损坏。
+  - **★ 本批最值钱一条:NC1 第一次没咬,查锚点后发现测试根本到不了那条分支。** `_probe_flock_enforced` 存在的**唯一理由**是识别「静默 no-op 的文件系统」,但本机是真 flock 的 ext4,第二把锁真会阻塞,那条 `else` 分支**永不执行**;把它中和成 `True`(= no-op FS 判为安全)后 44 测全绿。补一个注入假 `fcntl` 模拟该挂载的测试后 NC1 精确咬中。**没有它,这个探针的全部意义从未被验证过。**
+  - **三处我猜错、读码后按实测纠正**(已写进测试注释):`_HOST_IDENTITY_CACHE` 初值是 `None` 不是 dict;`_get_host_identity()` 返回**字符串指纹**不是 dict;`_owner_is_self` 是**三态** True/False/**None**,无 marker 返回 None(「不知道,走 IP/PID 兜底」)——我先猜 True 再猜 False 都错,且它读 `.pg_owner_id` 不是 `.pg_owner_host`,**写错文件名会让测试绿着却什么都没验**。
+- **★ 两次差点把兄弟的语法错误算到自己头上(同一文件,同一天两次)。** 脏树跑压缩环见 **59 failed / 16 errors**,干净 HEAD 只有 8 red;追下去是 `lib/llm_sanitize/_gateway.py` 未提交的 IndentationError(`pt_530d7f51` 已认领)炸掉 `routes.*` 全链导入。**在本仓,脏树上的大批量红首先要怀疑「兄弟把某个共享 import 链写坏了」,而不是自己的改动。**
+- **未做(诚实记账,不为凑数字硬写):** `_pg_ownership` 的 `_binaries`/`_identity`/`_lock` 仍 8-21%(子进程探测 + 真实文件锁获取,需要真进程语义 harness);`_commit.py` 残余 17% 是 root-name 反查与多层 except 兜底分支。已另开票。
+
 ### 2026-07-27(续) — 「能不能深度整合携程/美团」→ 实测把问题重新定义,根修**凭证脱敏的黑名单缺陷**并上线中文生活服务能力(epic `pt_be6c23da57954d38` 收口;commits `62f43155` + `9d9aa34d`,共 12 文件 +1191/-67;新套件 **27 条**,**NEUTER×4 全咬**,MCP 全环 **130 过 9 skip**,干净 HEAD worktree 复验 + collect **10961 零错**)
 
 - **owner 的问题问的是「携程/美团」,实测答案是「问错了对象」。** 逐个查证:①**携程商旅 AI 开放平台**(2026-04 上线)**确实支持 MCP**,五类工具覆盖酒/机/火车实时推荐+签证+差旅合规——但**只对企业客户**,需企业身份+商务对接;②**携程「问道」**个人可申请却**不是 MCP**(自家 HTTP API + Node CLI 脚本,有 QPS/配额,且**无支付下单链路**);③**美团开放平台**是**纯商家侧**(团购核销/外卖订单/门店装修),五步接入第一步就是「提交企业信息→商务评估」,**根本不存在消费侧 MCP**。两家都不是技术不通,是**不对你开放**——OTA 的核心资产是库存和用户,开放 MCP 等于把入口让给别人。**真正能给中文用户办事的是高德(官方 MCP)+ RollingGo(道旅,B2B 真实库存)+ 12306**,这三家个人开发者都能拿到凭证。故 catalog **故意不建**携程/美团条目(建了就是点不动的死卡片),另开商务准入票 `pt_6dcdc44482de4fe7`,并写守卫 `test_no_dead_card_for_a_business_gated_vendor` 封锁。

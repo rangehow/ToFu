@@ -418,6 +418,12 @@ _OPENSOURCE_KEEP_FILES = {
     # (tests/test_frontend_globals_generated.py), so the public build needs it
     # too. Pure regex scan of static/js -- no secrets, no internal paths.
     'scripts/gen_frontend_globals.py',
+    # Derives docs/TOOL_INVENTORY.md — one row per tool × its facets (label,
+    # approval enricher, gates, dispatch path). CI pins it with --check
+    # (tests/test_tool_inventory_generated.py), so the public build needs the
+    # generator. Introspective import of lib.tools.registry + tool_dispatch
+    # tables -- no secrets, no internal paths.
+    'scripts/gen_tool_inventory.py',
     # Test-suite health census (AST-only scan of tests/, no imports/execution).
     # CI gates on it via tests/test_suite_health_ratchet.py, so the public build
     # needs the tool too. Reads only tests/*.py + lib//routes source paths --

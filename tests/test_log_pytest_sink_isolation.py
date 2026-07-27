@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
 
 import pytest
 
@@ -105,7 +106,14 @@ def test_console_handler_still_targets_stderr():
 def test_mock_error_does_not_reach_production_error_log():
     """A biz-logger error emitted during a test must not append to the real
     logs/error.log (nor app.log)."""
-    marker = 'TOFU_SINK_ISOLATION_PROBE_9c3f21'
+    # Minted PER RUN, deliberately. A hardcoded literal made this guard
+    # SELF-POISONING: once the marker leaked into logs/error.log (measured
+    # 2026-07-27 17:58, a single occurrence), the content assertion below
+    # failed on every subsequent run FOREVER — even once isolation was fully
+    # restored — because the string it searches for was already in the file.
+    # A red that cannot be cleared by fixing the bug is indistinguishable from
+    # noise, which is precisely how this file's predecessor rotted for 14 days.
+    marker = 'TOFU_SINK_ISOLATION_PROBE_' + uuid.uuid4().hex[:12]
     prod_error, prod_app = _prod('error.log'), _prod('app.log')
 
     def _size(p):

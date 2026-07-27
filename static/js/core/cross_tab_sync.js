@@ -152,6 +152,97 @@ const _CONV_SELF_ECHO_MS = 6000;
  *   keeping cross-device visibility near-instant. */
 const _CONV_ACTIVE_VERIFY_DELAY_MS = 60;
 let _convActiveVerifyTimer = 0;
+let _convXlateVerifyTimer = 0;
+/* ══════════════════════════════════════════════════════════════════════
+   TRANSLATION-ONLY verify lane (2026-07-27)
+
+   Three guards in _onConvNotifyPush drop a `conv_changed` frame outright:
+   a live stream on the conv, an in-progress message edit, and the self-echo
+   window after this device's own PUT. All three are CORRECT and stay in
+   force — they exist to stop a server snapshot from OVERWRITING content this
+   device holds more recently.
+
+   But they were written for DESTRUCTIVE adoption, and server-side
+   auto-translate is neither destructive nor optional: it commits
+   `translatedContent` right after a turn settles — i.e. exactly inside the
+   self-echo window (our finishStream PUT just set `_localWriteAt`) or while
+   the stream is still registered. The rev channel has NO replay, so a dropped
+   frame is gone for good and the 译文 only appears after a manual refresh.
+
+   So rather than weakening a guard (which would put "never clobber a
+   streaming bubble" at risk), the guards DIVERT here. This lane fetches the
+   server body and runs ONLY `_mergeTranslationFields` — content, thinking and
+   toolRounds are never touched, so it cannot do the damage the guards defend
+   against. Its safety rests on the reducer's own byte-equality identity
+   guard: a turn that is still streaming has local content that DIFFERS from
+   the server copy, so the reducer refuses it and only settled turns can gain
+   a 译文.
+
+   Repaint is per-message via ConvView.applyMessage (never replaceAll) so a
+   live streaming bubble is not rebuilt and scroll position is untouched; the
+   message being edited is skipped entirely.
+   ══════════════════════════════════════════════════════════════════════ */
+function _scheduleTranslationOnlyVerify(convId) {
+  clearTimeout(_convXlateVerifyTimer);
+  _convXlateVerifyTimer = setTimeout(() => {
+    _translationOnlyVerify(convId).catch((e) =>
+      debugLog(`[conv-notify] translation-only verify failed: ${e && e.message}`, "warn"));
+  }, _CONV_ACTIVE_VERIFY_DELAY_MS);
+}
+
+async function _translationOnlyVerify(convId) {
+  const conv = conversations.find((c) => c.id === convId);
+  if (!conv || !Array.isArray(conv.messages) || !conv.messages.length) return false;
+  let data = null;
+  try {
+    data = await Api.conversations.get(convId, {
+      signal: (typeof AbortSignal !== "undefined" && AbortSignal.timeout)
+        ? AbortSignal.timeout(15000) : undefined,
+    });
+  } catch (e) {
+    debugLog(`[conv-notify] translation fetch failed: ${e && e.message}`, "warn");
+    return false;
+  }
+  if (!data || !Array.isArray(data.messages)) return false;
+  /* Re-resolve: the conv may have been closed/replaced during the await. */
+  const live = conversations.find((c) => c.id === convId);
+  if (!live || !Array.isArray(live.messages)) return false;
+
+  const n = Math.min(data.messages.length, live.messages.length);
+  const touched = [];
+  for (let i = 0; i < n; i++) {
+    /* Never repaint the message the user is editing — its DOM is a live form.
+     * The merge itself is additive and harmless, but the repaint is not. */
+    if (activeConvId === convId && _editingMsgIdx === i) continue;
+    if (_mergeTranslationFields(live.messages[i], data.messages[i]) > 0) {
+      touched.push(i);
+    }
+  }
+  if (!touched.length) return false;
+
+  /* Deliberately do NOT adopt `data.rev` into `_serverRev`: this lane read
+   * only the translation fields, so the body's other changes remain unseen
+   * and the normal verify must still run for them when its guards clear. */
+  if (typeof saveConversations === "function") saveConversations(convId);
+  try { ConvCache.put(live); } catch (e) {
+    debugLog(`[conv-notify] cache put skipped: ${e && e.message}`, "debug");
+  }
+  if (activeConvId === convId && window.ConvView
+      && typeof window.ConvView.applyMessage === "function") {
+    for (const idx of touched) {
+      try {
+        window.ConvView.applyMessage(convId, live.messages[idx], { idx });
+      } catch (e) {
+        debugLog(`[conv-notify] translation repaint failed idx=${idx}: ${e && e.message}`, "warn");
+      }
+    }
+  }
+  debugLog(`[conv-notify] 🈯 translation-only merge: ${touched.length} message(s) conv=${convId.slice(0, 8)}`, "info");
+  return true;
+}
+if (typeof window !== "undefined") {
+  window._translationOnlyVerify = _translationOnlyVerify;
+}
 let _convNotifyListRefreshTimer = 0;
 function _scheduleConvListRefresh() {
   clearTimeout(_convNotifyListRefreshTimer);
@@ -423,9 +514,19 @@ function _onConvNotifyPush(frame) {
     }
 
     /* A genuinely-newer content rev. Never disturb a conv the user is actively
-     *   streaming or editing — its own SSE/poll lifecycle owns the update. */
-    if (activeStreams.has(convId)) return;
-    if (activeConvId === convId && _editingMsgIdx !== null) return;
+     *   streaming or editing — its own SSE/poll lifecycle owns the update.
+     *   But a translate commit carries fields that lifecycle NEVER produces,
+     *   and the rev channel has no replay, so dropping the frame outright
+     *   loses the 译文 until a manual refresh. Divert to the translation-only
+     *   lane, which cannot touch the content these guards protect. */
+    if (activeStreams.has(convId)) {
+      _scheduleTranslationOnlyVerify(convId);
+      return;
+    }
+    if (activeConvId === convId && _editingMsgIdx !== null) {
+      _scheduleTranslationOnlyVerify(convId);
+      return;
+    }
 
     /* ── SELF-ECHO fast-path (the two-writer race) ──
      *   A completed turn has TWO independent server writers: the backend
@@ -433,8 +534,17 @@ function _onConvNotifyPush(frame) {
      *   finishStream PUT. The backend's frame can arrive BEFORE our PUT's
      *   response advances `_serverRev`, so the rev-gate above can't yet see it
      *   as our own. If we just wrote this conv locally, treat a frame in that
-     *   window as our echo and skip — our PUT is the authoritative sync. */
-    if (conv._localWriteAt && (Date.now() - conv._localWriteAt) < _CONV_SELF_ECHO_MS) return;
+     *   window as our echo and skip — our PUT is the authoritative sync.
+     *
+     *   EXCEPT for translations: auto-translate commits right after the turn
+     *   settles, i.e. squarely inside this window, and our PUT carries no
+     *   译文 (the server minted it after we wrote). Treating that frame as a
+     *   pure echo is what made the 译文 need a manual refresh. Divert to the
+     *   translation-only lane — it adopts nothing our PUT owns. */
+    if (conv._localWriteAt && (Date.now() - conv._localWriteAt) < _CONV_SELF_ECHO_MS) {
+      _scheduleTranslationOnlyVerify(convId);
+      return;
+    }
 
     if (activeConvId === convId) {
       /* ── ACTIVE conv: NON-DESTRUCTIVE verify, DEBOUNCED ──
@@ -460,11 +570,17 @@ function _onConvNotifyPush(frame) {
       _convActiveVerifyTimer = setTimeout(() => {
         const c = conversations.find((x) => x.id === convId);
         if (!c || activeConvId !== convId) return;
-        if (activeStreams.has(convId) || _editingMsgIdx !== null) return;
+        if (activeStreams.has(convId) || _editingMsgIdx !== null) {
+          _scheduleTranslationOnlyVerify(convId);
+          return;
+        }
         /* Our own PUT (or a prior verify) may have already advanced _serverRev
          *   past this frame → nothing new; silent no-op (kills the self-echo). */
         if (typeof c._serverRev === "number" && _pendingRev !== null && _pendingRev <= c._serverRev) return;
-        if (c._localWriteAt && (Date.now() - c._localWriteAt) < _CONV_SELF_ECHO_MS) return;
+        if (c._localWriteAt && (Date.now() - c._localWriteAt) < _CONV_SELF_ECHO_MS) {
+          _scheduleTranslationOnlyVerify(convId);
+          return;
+        }
         _verifyActiveConvFromServer(convId).catch((e) =>
           debugLog(`[conv-notify] active verify failed: ${e && e.message}`, "warn"));
       }, _CONV_ACTIVE_VERIFY_DELAY_MS);

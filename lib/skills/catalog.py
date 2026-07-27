@@ -198,8 +198,12 @@ CATALOG: list[SkillCatalogEntry] = [
 #
 # Admission criterion, same as the MCP catalog: a normal developer must be
 # able to obtain credentials. Fliggy qualifies (self-service key, no company
-# verification); Ctrip and Meituan still do not — see the note in
-# lib/mcp/registry.py and ticket pt_6dcdc44482de4fe7.
+# verification); Ctrip and Meituan do not — corporate onboarding only, and the
+# owner decided 2026-07-27 not to pursue it (option C, ticket
+# pt_6dcdc44482de4fe7 CLOSED). The full rationale and the reopen condition live
+# next to the MCP-side entries in lib/mcp/registry.py; do not add cards for
+# them here either — test_no_dead_card_for_a_business_gated_vendor scans THIS
+# catalogue too, precisely because a vendor may ship in either shape.
 
 CATALOG += [
     {

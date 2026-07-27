@@ -1009,8 +1009,19 @@ CATALOG: list[CatalogEntry] = [
     #     redemption, delivery order management, storefront ops) and its
     #     five-step onboarding begins with submitting company details for
     #     business review. There is no consumer-side MCP surface at all.
-    # Tracked as a business-access ticket (pt_6dcdc44482de4fe7). Do NOT add
-    # speculative entries for them.
+    #
+    # RESOLVED 2026-07-27 — the owner decided NOT to pursue corporate
+    # onboarding for either vendor (option C on ticket pt_6dcdc44482de4fe7,
+    # now CLOSED). Rationale on the record: the shipped set below already
+    # covers routing / hotels / flights / trains / tickets / cruises /
+    # packages, and every one of those is obtainable by an individual
+    # developer, so Ctrip and Meituan add brand familiarity plus Meituan's
+    # to-store & delivery scenarios — not reach. Reopen as a NEW ticket only
+    # if a concrete to-store / delivery requirement appears, or if either
+    # vendor starts issuing individual credentials (re-check per §the gate
+    # below, not by assumption). Do NOT add speculative entries meanwhile:
+    # test_no_dead_card_for_a_business_gated_vendor enforces this across BOTH
+    # catalogues.
     #
     # ⚠ The gate is PER-VENDOR, never market-wide. An earlier revision of this
     # comment reasoned that Chinese OTAs would not open up because inventory is

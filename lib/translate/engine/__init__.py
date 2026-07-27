@@ -23,6 +23,9 @@ depends on ``_engine`` within the package.
 # the module did ``from lib import translate_cache`` at top level (tests
 # monkeypatch ``engine.translate_cache.get`` / ``.put``).
 from lib import translate_cache  # noqa: F401
+# Same parity for the refusal-marker store (tests monkeypatch
+# ``engine.translate_refusal.get`` / ``.put``).
+from lib import translate_refusal  # noqa: F401
 from lib.log import get_logger
 
 # Sentence-completeness helpers (pure primitives)
@@ -54,4 +57,5 @@ __all__ = [
     'TranslationContentRefused',
     # module ref re-exported for parity with the original top-level import
     'translate_cache',
+    'translate_refusal',
 ]

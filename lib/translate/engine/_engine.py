@@ -16,6 +16,7 @@ import re
 import time
 
 from lib import translate_cache
+from lib import translate_refusal
 from lib.log import get_logger
 
 from ..dedup import _dedup_repetition_loop
@@ -341,6 +342,26 @@ def _translate_one_chunk(chunk, system_prompt, chunk_label='',
     _excluded_models: set[str] = set()
     _dispatcher = get_dispatcher()
 
+    # ── Refusal-marker replay ──
+    # A chunk refused after the FULL content budget was refused for its
+    # content shape, not for an unlucky model pick — re-running the roster
+    # on every page load just burns 5 dispatches to reach the same verdict
+    # (production: one 488-char chunk refused 36×/day). Replay the stored
+    # refusal instantly with zero dispatches; the marker carries a TTL so a
+    # future healthier roster gets one fresh attempt. use_cache=False (the
+    # repair-script path) bypasses the replay and re-drives fresh.
+    if use_cache:
+        _ref = translate_refusal.get(chunk, source, target)
+        if _ref:
+            logger.info('[Translate%s] Refusal marker hit: verdict=%s model=%s '
+                        '— replaying cached refusal with zero dispatches',
+                        chunk_label, _ref.get('verdict'), _ref.get('model'))
+            raise TranslationContentRefused(
+                _ref['verdict'],
+                f"{_ref.get('reason', '')} (cached refusal, 0 dispatches)",
+                attempts=0,
+                content_fails=_ref.get('content_fails') or _MAX_CONTENT_RETRIES)
+
     # Emit a 'started' event up front so callers polling the status
     # side-channel see something within the first poll tick — without
     # this, a slow first attempt with no retries leaves the user staring
@@ -622,6 +643,9 @@ def _translate_one_chunk(chunk, system_prompt, chunk_label='',
                 # would clobber any earlier good translation. Raise the typed
                 # refusal so the REST surface can answer 502 + envelope
                 # instead of a bare 500 (pt_75d8f8c7).
+                translate_refusal.put(chunk, source, target, verdict='noop',
+                                      reason=_noop_reason, model=_model,
+                                      content_fails=_content_fail_count)
                 raise TranslationContentRefused(
                     'noop', _noop_reason,
                     attempts=_attempt, content_fails=_content_fail_count)
@@ -646,14 +670,25 @@ def _translate_one_chunk(chunk, system_prompt, chunk_label='',
         # different model usually keeps the Chinese intact.
         _is_flip = False
         _flip_reason = ''
+        _src_cjk = cjk_ratio(_src_stripped)
+        _out_cjk = cjk_ratio(_c_stripped)
+        # DIRECTIONAL verdict (owner adjudication 2026-07-27): a true flip
+        # always moves the CJK share DOWN toward zero. Output that keeps or
+        # raises the CJK share while staying latin-dominant is a FAITHFUL
+        # translation of code/identifier-dense text — the model translated
+        # the prose, the identifiers correctly stayed Latin. The old
+        # latin-dominance-only check could never pass such chunks and burned
+        # the full roster on them (production: 252 refusals/day, one chunk
+        # ×36). Only judge a flip when the CJK share actually fell.
         if (_target_is_chinese and len(_c_stripped) >= 200
-                and cjk_ratio(_src_stripped) >= 0.10
-                and is_predominantly_english(_c_stripped)):
+                and _src_cjk >= 0.10
+                and is_predominantly_english(_c_stripped)
+                and _out_cjk < _src_cjk):
             _is_flip = True
             _flip_reason = (
                 f'wrong-language flip: target=Chinese, source cjk_ratio='
-                f'{cjk_ratio(_src_stripped):.2f} but output latin-dominant '
-                f'(out cjk={cjk_ratio(_c_stripped):.2f}, len={len(_c_stripped)}), '
+                f'{_src_cjk:.2f} but output latin-dominant '
+                f'(out cjk={_out_cjk:.2f}, len={len(_c_stripped)}), '
                 f'model={_model}')
 
         if _is_flip:
@@ -671,6 +706,10 @@ def _translate_one_chunk(chunk, system_prompt, chunk_label='',
                 # Refuse to commit a flipped translation — it would clobber the
                 # already-Chinese source with English. Raise the typed refusal
                 # so the REST surface can answer 502 + envelope (pt_75d8f8c7).
+                translate_refusal.put(chunk, source, target,
+                                      verdict='wrong_language',
+                                      reason=_flip_reason, model=_model,
+                                      content_fails=_content_fail_count)
                 raise TranslationContentRefused(
                     'wrong_language', _flip_reason,
                     attempts=_attempt, content_fails=_content_fail_count)
@@ -731,6 +770,10 @@ def _translate_one_chunk(chunk, system_prompt, chunk_label='',
                 # correct translation fused with unrelated hallucinated text.
                 # Raise the typed refusal so the REST surface can answer
                 # 502 + envelope instead of a bare 500 (pt_75d8f8c7).
+                translate_refusal.put(chunk, source, target,
+                                      verdict='over_generated',
+                                      reason=_overgen_reason, model=_model,
+                                      content_fails=_content_fail_count)
                 raise TranslationContentRefused(
                     'over_generated', _overgen_reason,
                     attempts=_attempt, content_fails=_content_fail_count)

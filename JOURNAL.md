@@ -2,6 +2,16 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
 
+### 2026-07-27 — 硬刷新雪崩根修三件套:json_dumps_pg 快速路径 + flip 方向判据 + 拒绝标记(owner「硬刷新后加载很久+一堆错」取证→拍板 A+C;commit `c8587db5`,7 文件 +798/-4;新套件 **38/38**(failing-first 4+1、手动 NEUTER×2 精确咬、内建 NEUTER×2),翻译环 **77+4+2**,envelope 环 **47**,collect **10448** 0 err)
+
+- **事故链(实测还原,非推测):** 硬刷新 → 前端爆发 ~200 请求(500 会话元数据+sync-digest+brain 面板+51×poll+36×detect-language+10×translate+34×extract-file-changes+25 条 40-94MB 全量 blob INSERT) → FUSE 上 PG 44 条慢查询(p50=3.6s/p90=8.3s/max=11.2s,平时全天 ~4 条) → 每条 blob 写前过纯 Python `strip_null_bytes_deep`(93.7MB blob 实测 0.9s 持 GIL CPU) → **08:43:59 faulthandler 转储 149/224 线程同在该函数** → 事件循环 8.8s 冻结 → 前端 poll 超时/SSE 早断 → 降级轮询 → 雪崩正反馈。**教训:慢查询日志只量 cursor.execute,Python 侧 sanitize CPU 不计入——两个根因要分开归因。**
+- **A(_wrappers.py):** `json.dumps` 必把 U+0000 转义成 `\u0000` 六字符——**序列化文本里没有它就证明负载无 null**,递归清洗必是空操作;命中才回退深清洗,输出与历史算法**逐字节一致**(构造性证明 + 合成语料 12 例含 `\\u0000` 字面文本/键中 null/深层嵌套)。**生产真实 blob 实测(12 个最大会话):parity 全 OK,总 16.2s→7.0s(2.3×),最差 3.37s→0.84s(4×)。** 禁止项照 charter:不把 GIL CPU 挪 to_thread(挪了也没用),而是**消除**它。
+- **C1(flip 方向判据,owner 拍板):** 真翻转签名 = CJK 份额**跌向 0**;`out_cjk ≥ src_cjk` 即模型朝中文走,即便仍 latin-dominant 也是代码/路径密集型文本的**忠实翻译**——旧闸只看「输出拉丁主导」,这类块**永不过闸**(生产 252 次/天,len=488 单块 ×36)。夹具按生产签名调准(src cjk=0.126/out cjk=0.162/latin=0.662)并有自检钉死形状。
+- **C2(lib/translate_refusal.py 新模块):** 判死(full-budget TranslationContentRefused)按 sha256(target|source|text) 落小标记(TTL 7 天,`TOFU_TRANSLATE_REFUSAL=0`  kill switch,use_cache=False 绕过),同 chunk 再来**零派发**直接重放上次 typed refusal(attempts=0,envelope 链路不变仍 502)。**判死是内容形状的属性,不是阵容手气——重烧 5 模型买不来新结论。**
+- **踩坑记(两条都值后人):** ①NEUTER 还原**禁用 `git checkout -- <file>`**——它把我未提交的实现一起还原了(共享 HEAD 纪律已有同款禁令针对 stash,checkout 同罪);正解 = `cp` 备份/还原往返。②pytest 命名空间**必须带 pid**——tmpfs 比 pytest 进程活得长,我 NEUTER 实验落盘的拒绝标记在**下一次运行**被同名测试重放翻红;`_effective_dir` 现按 `tmp/…-pytest-{pid}/{test-slug}` 隔离(镜像 `_LOG_UNDER_PYTEST` 约定),既防跨套件(fixture 共享 `_MIXED_SOURCE`)也防跨运行污染。
+- **B(PG 迁本地盘)按 owner 裁决不动:** 独立运维迁移;本次「25 条 40-94MB 全量 blob INSERT + 34 条 PATCH 整 blob 重写」的实测数字已挂上板,作为优先推进 `TOFU_MESSAGES_ROWS` 写路径翻转(先过 verify_conv_parity)的独立 epic 证据。
+- **生效条件:** 代码改动,**需重启服务**;不重启则旧行为(慢清洗+旧 flip 闸+无标记)不变。
+
 ### 2026-07-27 — pt_8df8fc9b 收口:msgid-unification LAYER2 harness 重指向 conv_persist_helpers.js(守卫过期家族第 5 例;commit `6710ede4`,1 文件 +13/-6;2 红→**6/6 绿**,NEUTER 仍咬,相邻环 **43/43**,collect **10439** 0 err)
 
 - **漂移形状与 lost_ack(02c989f9)逐字同型:** Epic-E slice 3(`b33d9d21`)把 `_rebaseUnackedTail`(含 `_taskId` dedup 分支)抽到 `core/conv_persist_helpers.js`,而 `test_assistant_msgid_unification` 的 LAYER2 harness 仍只 eval `conversations.js`、NEUTER marker 也在旧文件里找 → `FAIL fn_exposed _rebaseUnackedTail missing` 双红。守卫本体完好(conv_persist_helpers.js:226 + :249),与 pt_b5b0a00d 同族。

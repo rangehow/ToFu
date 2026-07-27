@@ -178,17 +178,64 @@ def test_errors_carry_the_request_id_to_the_user_surface():
 
 @pytest.mark.unit
 def test_backend_prefers_inbound_request_id():
-    """server.py must adopt the client's id rather than always minting."""
+    """The backend must ADOPT the client's id rather than always minting.
+
+    Asserted as BEHAVIOUR (call the real resolver), not as a source pattern.
+    The first version of this guard regex-matched the inline
+    ``request.headers.get('X-Request-ID') or …`` expression in server.py and
+    went red the moment that expression moved into ``lib.log`` — while the
+    protection itself was completely intact. Per the charter: a behaviour guard
+    asserts the result, so it survives a reasonable reimplementation.
+    """
+    from lib.log import resolve_inbound_rid
+
+    # The client's id is adopted verbatim — that IS the join key.
+    assert resolve_inbound_rid('client-mint-42') == 'client-mint-42'
+    # Absent/unusable input still yields a usable server-minted id.
+    minted = resolve_inbound_rid(None)
+    assert minted and minted != 'client-mint-42'
+
+
+@pytest.mark.unit
+def test_backend_wires_the_resolver_into_the_request_lifecycle():
+    """The resolver must actually be ON the request path, and echoed back.
+
+    Ratchet-style (it reads source) because "is this wired into middleware?"
+    is not observable without booting the app — but it is anchored on the
+    AST call graph of the before_request handler, not on a source literal.
+    """
+    import ast
+
     with open(SERVER_PY, encoding='utf-8') as fh:
         src = fh.read()
-    m = re.search(
-        r"rid\s*=\s*request\.headers\.get\(\s*['\"]X-Request-ID['\"]\s*\)\s*or\s+",
-        src,
+
+    tree = ast.parse(src)
+    handler = None
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) \
+                and node.name == '_assign_req_id_and_log':
+            handler = node
+            break
+    assert handler is not None, (
+        'server.py no longer defines _assign_req_id_and_log — re-point this guard'
     )
-    assert m, (
-        'server.py must read an inbound X-Request-ID and only fall back to a '
-        'minted id — otherwise the client-side header is ignored and the '
+
+    called = set()
+    for sub in ast.walk(handler):
+        if isinstance(sub, ast.Call):
+            fn = sub.func
+            if isinstance(fn, ast.Name):
+                called.add(fn.id)
+            elif isinstance(fn, ast.Attribute):
+                called.add(fn.attr)
+    assert '_resolve_inbound_rid' in called or 'resolve_inbound_rid' in called, (
+        'the before_request handler must resolve the inbound id through the '
+        'shared resolver, else a client-sent X-Request-ID is ignored and the '
         'frontend/backend logs cannot be joined.'
+    )
+    assert 'set_req_id' in called, (
+        'the resolved rid must be pushed into the log context so every line '
+        'for this request carries it.'
     )
     assert re.search(r"response\.headers\[['\"]X-Request-ID['\"]\]\s*=\s*rid", src), (
         'server.py must echo the resolved rid back on the response so the '

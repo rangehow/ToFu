@@ -24,7 +24,7 @@ from flask import Blueprint, jsonify, request
 from quart import websocket
 
 from lib.api_response import api_error
-from lib.log import get_logger
+from lib.log import get_logger, resolve_inbound_rid
 from lib.push import PushClient, hub
 
 logger = get_logger(__name__)
@@ -118,6 +118,31 @@ async def push_ws():
     real ``AuthContext.user_id`` so multi-tenant snapshots are correctly
     scoped. pt_ab42421158214591.
     """
+    # ── Correlation id (pt_3d28727f / pt_ccaec091) ────────────────
+    # Quart's @app.before_request does NOT run on WS routes, so the HTTP
+    # middleware that resolves X-Request-ID never fires here and this socket
+    # would otherwise be invisible in the request-id log axis. A browser
+    # WebSocket cannot set custom headers, so the client puts its id in the
+    # `_rid` QUERY PARAM (static/js/push.js::_buildUrl); we honor it through
+    # the SAME validated resolver the HTTP path uses (lib.log), so one id
+    # space covers both transports and a malformed id can never reach a log
+    # line.
+    #
+    # ⚠️ Deliberately NOT set_req_id(): lib.log stores the rid in a
+    # THREAD-LOCAL, not a ContextVar. This handler is a long-lived coroutine
+    # sharing its event-loop thread with every HTTP request, so writing the
+    # thread-local here would stamp THIS socket's id onto unrelated requests
+    # (measured: after two concurrent HTTP handlers ran, the socket coroutine
+    # itself observed the SECOND handler's id). The rid is therefore passed
+    # EXPLICITLY to the log calls that describe this socket.
+    try:
+        _rid = resolve_inbound_rid(websocket.headers.get('X-Request-ID'),
+                                   websocket.args.get('_rid'))
+    except Exception as _e:
+        # Never let correlation bookkeeping break the socket.
+        logger.debug('[Push] rid resolve failed: %s', _e)
+        _rid = ''
+
     # ── pt_ab42421158214591: resolve WS handshake auth ────────────
     _user_id = ''
     try:
@@ -152,8 +177,8 @@ async def push_ws():
 
     client = PushClient(user_id=_user_id)
     hub.register(client)
-    logger.info('[Push] WS connected (clients=%d, user=%s)',
-                hub.client_count, _user_id or '<unscoped>')
+    logger.info('[Push] WS connected (clients=%d, user=%s, rid=%s)',
+                hub.client_count, _user_id or '<unscoped>', _rid or '-')
 
     send_task = None
     recv_task = None
@@ -204,7 +229,8 @@ async def push_ws():
             send_task.cancel()
         if recv_task and not recv_task.done():
             recv_task.cancel()
-        logger.info('[Push] WS disconnected (clients=%d)', hub.client_count)
+        logger.info('[Push] WS disconnected (clients=%d, rid=%s)',
+                    hub.client_count, _rid or '-')
 
 
 def _handle_client_frame(client: PushClient, raw) -> None:

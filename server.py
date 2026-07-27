@@ -1573,7 +1573,8 @@ async def method_override():
 
 
 # ── Request lifecycle logging ──
-from lib.log import get_logger, set_req_id, req_id as _get_req_id
+from lib.log import (get_logger, set_req_id, req_id as _get_req_id,
+                     resolve_inbound_rid as _resolve_inbound_rid)
 import uuid as _uuid
 
 _lifecycle_log = get_logger('server.lifecycle')
@@ -1615,9 +1616,13 @@ def _fmt_size(n):
         return '%.1fKB' % (n / 1024)
     return '%.1fMB' % (n / (1024 * 1024))
 
+
 @app.before_request
 async def _assign_req_id_and_log():
-    rid = request.headers.get('X-Request-ID') or _uuid.uuid4().hex[:12]
+    rid = _resolve_inbound_rid(
+        request.headers.get('X-Request-ID'),
+        request.args.get('_rid'),
+    )
     set_req_id(rid)
     request._start_time = time.time()
     path = request.path

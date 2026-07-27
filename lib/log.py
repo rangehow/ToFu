@@ -194,6 +194,50 @@ def _rid_prefix() -> str:
     return f'[rid:{rid}] ' if rid else ''
 
 
+# ── Inbound (client-supplied) correlation ids ──
+# A client may supply the id so its own logs join the server's. Two channels
+# exist because not every transport can set a header: `fetch` sends
+# `X-Request-ID` (static/js/api.js), while a browser `WebSocket` handshake
+# CANNOT set custom headers and must pass it as the `_rid` query param
+# (static/js/push.js). Both are honored through the ONE resolver below so the
+# id space is identical across transports and the validation cannot drift.
+#
+# Character-set check rather than a regex: this runs in before_request on EVERY
+# request, and a frozenset lookup says the same thing more cheaply.
+_RID_ALPHABET = frozenset(
+    'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-')
+_RID_MAX_LEN = 64
+
+
+def rid_is_safe(value) -> bool:
+    """True when ``value`` is a short, log-safe correlation token.
+
+    Client input reaches a log line and an ``X-Request-ID`` response header, so
+    an unvalidated value could inject newlines (forging log records) or bloat
+    every line for a request.
+    """
+    if not value or not isinstance(value, str) or len(value) > _RID_MAX_LEN:
+        return False
+    return all(ch in _RID_ALPHABET for ch in value)
+
+
+def resolve_inbound_rid(header_val=None, query_val=None) -> str:
+    """Resolve a request's correlation id: the client's, else a fresh one.
+
+    The header is the primary channel; ``query_val`` is the fallback for
+    transports that cannot set one (a browser WebSocket handshake).
+
+    An unsafe id is REJECTED in favour of a server-minted one rather than
+    sanitized: silently rewriting it would hand the client back an id it never
+    sent, so the id it quotes in a bug report would appear nowhere in the logs
+    — strictly worse than obviously ignoring it.
+    """
+    for candidate in (header_val, query_val):
+        if rid_is_safe(candidate):
+            return candidate
+    return uuid.uuid4().hex[:12]
+
+
 # ══════════════════════════════════════════
 #  Core Logger
 # ══════════════════════════════════════════

@@ -143,10 +143,41 @@ const _push = (() => {
 
   function _key(channel, taskId) { return `${channel}:${taskId}`; }
 
+  /* Per-socket correlation id, minted once per connect attempt.
+   *
+   * A browser `WebSocket` cannot set custom headers, so the id rides a QUERY
+   * PARAM instead of `X-Request-ID` (server.py::_resolve_inbound_rid honors
+   * both channels, so it is one id space across transports). Reconnects mint
+   * a FRESH id on purpose: each socket is its own session in the log, and
+   * reusing one id across reconnects would merge unrelated lifetimes.
+   *
+   * Shares api.js's page prefix when available so a socket groups with the
+   * HTTP requests from the same page load under one grep. */
+  let _wsRid = '';
+  let _wsRidSeq = 0;
+
+  function _mintWsRid() {
+    let page = '';
+    try {
+      if (typeof Api !== 'undefined' && Api && typeof Api.pageRequestId === 'function') {
+        page = Api.pageRequestId() || '';
+      }
+    } catch (e) { /* api.js not loaded yet — fall back to a standalone id */ }
+    if (!page) page = Math.random().toString(36).slice(2, 8);
+    return page + '-ws' + (++_wsRidSeq);
+  }
+
+  /** The correlation id of the CURRENT socket ('' when never connected).
+   *  Exposed so diagnostics can quote it alongside HTTP request ids. */
+  function socketRequestId() { return _wsRid; }
+
   function _buildUrl() {
     const loc = window.location;
     const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${proto}//${loc.host}${apiUrl('/api/push')}`;
+    _wsRid = _mintWsRid();
+    const base = `${proto}//${loc.host}${apiUrl('/api/push')}`;
+    return base + (base.indexOf('?') === -1 ? '?' : '&') +
+      '_rid=' + encodeURIComponent(_wsRid);
   }
 
   function connect() {
@@ -355,7 +386,7 @@ const _push = (() => {
     return () => _reconnectListeners.delete(fn);
   }
 
-  return { connect, subscribe, unsubscribe, send, isConnected, getLatency, onLatency, onReconnect };
+  return { connect, subscribe, unsubscribe, send, isConnected, getLatency, onLatency, onReconnect, socketRequestId };
 })();
 
 // Public API
@@ -367,3 +398,4 @@ function pushIsConnected() { return _push.isConnected(); }
 function pushGetLatency() { return _push.getLatency(); }
 function pushOnLatency(fn) { return _push.onLatency(fn); }
 function pushOnReconnect(fn) { return _push.onReconnect(fn); }
+function pushSocketRequestId() { return _push.socketRequestId(); }

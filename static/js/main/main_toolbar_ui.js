@@ -471,8 +471,11 @@ function _loadServerConfigAndPopulate() {
         }
       }
 
-      /* Re-apply model UI now that dropdown is populated */
-      _applyModelUI(config.model || serverModel);
+      /* Re-apply model UI now that dropdown is populated.
+       * Pass null when the current value is only a provisional default, so the
+       * repaint PRESERVES its provenance instead of promoting a fallback into
+       * a "user choice" that the write-back sites would then persist. */
+      _applyModelUI(config._modelIsProvisional ? null : config.model);
 
       /* ★ Auto-open settings if ?setup=1 (from bootstrap) or no API keys configured */
       _maybeAutoOpenSettings(data);
@@ -483,7 +486,8 @@ function _loadServerConfigAndPopulate() {
       _populateModelDropdown(
         serverModel ? [{ model_id: serverModel }] : []
       );
-      _applyModelUI(config.model || serverModel);
+      /* Same provenance-preserving repaint as the success path above. */
+      _applyModelUI(config._modelIsProvisional ? null : config.model);
     });
 }
 

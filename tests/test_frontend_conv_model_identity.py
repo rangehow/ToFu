@@ -338,10 +338,17 @@ def test_idb_settings_mirror_round_trips_model():
 # ═══════════════════════════════════════════════════════════════════════
 # Harness C — a paint-time default must never become STORED truth.
 #
-# Drives the REAL _saveConvToolState (main.js). The composer's `config.model`
-# is a DISPLAY value that may be a mere fallback; persisting it turns a
-# rendering accident into the conversation's identity. Only an explicit user
-# choice (selectModel) may make it durable.
+# ★ Drives the REAL PRODUCTION ENTRY POINTS — `_restoreConvToolState` (the
+#   conversation-open path) and `_resetToolsToDefaults` (new chat) — NOT
+#   `_applyModelUI` directly.
+#
+#   An earlier version of this harness called `_applyModelUI(undefined)`, a
+#   call shape NO shipped code produces: every real caller pre-resolved
+#   `conv.model || serverModel` first, so the provisional flag was always
+#   false and the guard was dead code while this test stayed green. That is
+#   charter's third guard-failure mode — "a green guard testing code that
+#   never existed". The rule this harness now obeys: enter through the same
+#   door production does.
 # ═══════════════════════════════════════════════════════════════════════
 _HARNESS_C = r"""
 const fs = require('fs');
@@ -381,6 +388,30 @@ global._igSelectedAspect = '1:1'; global._igSelectedResolution = '1K';
 let ACTIVE = null;
 global.getActiveConv = () => ACTIVE;
 
+// UI painters _restoreConvToolState / _resetToolsToDefaults fan out to.
+// Stubbed because this harness asserts STATE (what gets stored), not pixels.
+['_applySearchModeUI','_applyFetchEnabledUI','_applyCodeExecUI','_applyBrowserUI',
+ '_applyDesktopUI','_applyMemoryUI','_applySwarmUI','_applyEndpointUI',
+ '_applyAutopilotUI','_applyFlowUI','_applyImageGenToolUI','_applyImageGenUI',
+ '_applyHumanGuidanceUI','_applyChatModeUI','_applyAutoTranslateUI',
+ '_applySchedulerUI','updateContextBar','presenceRefresh','projectBrainRefresh',
+ 'convInfluenceRefresh','exitPaperMode','_clearProjectStateLocal',
+].forEach((k) => { global[k] = () => {}; });
+global.convAutoTranslate = () => false;
+global._deriveChatModeFromFlags = () => 'chat';
+global.paperMode = false;
+global.autoTranslate = false;
+/* Dependencies the REAL painters in main.js reach for. main.js DEFINES several
+ * of the _apply*UI functions itself (so it overwrites the stubs above); those
+ * real bodies then call these helpers, which live in other bundle files. */
+global._updateMemoryModalBtn = () => {};
+global._renderHintHtml = (s) => s;
+global._inputSendHintText = () => '';
+global.syncToolsetBanner = () => {};
+global._igModelsLoaded = true;
+global._loadIgModels = () => {};
+global._resetToolsToDefaultsExtra = () => {};
+
 global.isChatModel = () => true;
 global.applyCapabilityTaxonomy = () => {};
 global._populateModelDropdown = () => {};
@@ -389,44 +420,101 @@ global._maybeAutoOpenSettings = () => {};
 global.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
 global._CHAT_MODE_DEFAULTS = { chat: {}, studio: {} };
 
+/* main.js ends in a boot IIFE that wires the whole app. We are unit-driving
+ * three functions out of it, so stub what boot touches. It logs a ConvView
+ * banner and catches its own errors, so a partial environment is fine — but
+ * the stubs must exist or the crash aborts before our assertions run. */
+global.ConvView = { apply: () => {}, replaceAll: () => {} };
+global._loadServerConfigAndPopulate = () => {};
+global.refreshInputSendHint = () => {};
+global.renderConversationList = () => {};
+global.addEventListener = () => {};
+global._installViewportHeightGuard = () => {};
+global.sessionStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+global.navigator = { userAgent: 'node' };
+global.location = { search: '', pathname: '/', hash: '' };
+global.setInterval = () => 0;
+global.matchMedia = () => ({ matches: false, addEventListener: () => {} });
+
 eval(fs.readFileSync(process.argv[2], 'utf8'));  // REAL main/main_toolbar_ui.js
-eval(fs.readFileSync(process.argv[3], 'utf8'));  // REAL main.js
+/* Load the REAL main.js but WITHOUT its trailing boot IIFE. We are
+ * unit-driving three of its functions; running the app's whole wiring block
+ * would require stubbing the entire UI. The boot block is located by its own
+ * marker comment and sliced off AT RUNTIME from the shipped source — never
+ * copied into this file, so the functions under test are always the shipped
+ * ones (charter: no hand-copied production logic in harnesses). */
+{
+  const mainSrc = fs.readFileSync(process.argv[3], 'utf8');
+  const marker = '// \u2500\u2500 Event bindings \u2500\u2500';
+  const cut = mainSrc.indexOf(marker);
+  if (cut < 0) {
+    console.log('FAIL C_harness_boot_marker_found');
+    process.exit(0);
+  }
+  eval(mainSrc.slice(0, cut));
+}
 
 const out = [];
 function check(name, cond) { out.push((cond ? 'PASS ' : 'FAIL ') + name); }
 
 const TRUE_MODEL = 'yuju-claude-opus-5-evaDaily';
+check('C_harness_boot_marker_found', true);
+check('C_harness_drives_real_open_path',
+  typeof _restoreConvToolState === 'function'
+  && typeof _resetToolsToDefaults === 'function'
+  && typeof _saveConvToolState === 'function'
+  && typeof selectModel === 'function');
 
-// ══ C1. THE LAUNDERING PATH. A conv whose stored model is unknown gets
-//    painted with the serverModel DEFAULT (no user choice). Saving tool
-//    state must NOT stamp that default onto the conversation — otherwise
-//    the misrender becomes persisted truth and the next send runs on it. ══
+// ══ C1. THE LAUNDERING PATH, entered exactly as production does. Opening a
+//    conversation that stored no model paints the serverModel default; a
+//    later tool toggle must NOT stamp that default onto the conversation.
+//    Without the fix this writes 'kimi-k3' and PATCHes it to the server. ══
 {
-  ACTIVE = { id: 'c1', messages: [], model: undefined };
-  config.model = '';                      // nothing explicitly chosen
-  _applyModelUI(undefined);               // paints the serverModel default
-  _saveConvToolState();
-  check('C1_default_paint_not_persisted',
-    ACTIVE.model !== 'kimi-k3');
+  ACTIVE = { id: 'c1', messages: [{ role: 'user', content: 'q' }], model: undefined };
+  _restoreConvToolState(ACTIVE);          // ← the REAL conversation-open path
+  check('C1_composer_paints_default', config.model === 'kimi-k3');
+  _saveConvToolState();                   // ← the REAL write-back
+  check('C1_default_paint_not_persisted', ACTIVE.model !== 'kimi-k3');
 }
 
 // ══ C2. An EXPLICIT user choice must still persist — the guard may not
 //    break the normal path (this is what makes C1 a real constraint and
 //    not just "never write the field"). ══
 {
-  ACTIVE = { id: 'c2', messages: [], model: undefined };
+  ACTIVE = { id: 'c2', messages: [{ role: 'user', content: 'q' }], model: undefined };
   selectModel(TRUE_MODEL);                // the real user-choice entry point
   check('C2_explicit_choice_persisted', ACTIVE.model === TRUE_MODEL);
 }
 
-// ══ C3. A conv that ALREADY has a stored model must never have it
-//    downgraded to the default by an unrelated toggle save. ══
+// ══ C3. A conv that ALREADY stored a model: opening it restores that model,
+//    and an unrelated toggle-save must never downgrade it to the default. ══
 {
-  ACTIVE = { id: 'c3', messages: [], model: TRUE_MODEL };
-  config.model = '';
-  _applyModelUI(undefined);               // default paint again
+  ACTIVE = { id: 'c3', messages: [{ role: 'user', content: 'q' }], model: TRUE_MODEL };
+  _restoreConvToolState(ACTIVE);          // real open path, stored value present
+  check('C3_stored_model_restored', config.model === TRUE_MODEL);
   _saveConvToolState();
   check('C3_stored_model_not_downgraded', ACTIVE.model === TRUE_MODEL);
+}
+
+// ══ C4. NEW CHAT (_resetToolsToDefaults) is the other production entry that
+//    paints a default nobody chose. Its value must be provisional too. ══
+{
+  _resetToolsToDefaults();
+  check('C4_new_chat_paints_default', config.model === 'kimi-k3');
+  ACTIVE = { id: 'c4', messages: [{ role: 'user', content: 'q' }], model: undefined };
+  _saveConvToolState();
+  check('C4_new_chat_default_not_persisted', ACTIVE.model !== 'kimi-k3');
+}
+
+// ══ C5. Provenance must SURVIVE the config-load repaint. Boot re-paints the
+//    toolbar once the model dropdown is populated; if that repaint promoted
+//    the fallback to a "choice", the guard would silently reopen. ══
+{
+  ACTIVE = { id: 'c5', messages: [{ role: 'user', content: 'q' }], model: undefined };
+  _restoreConvToolState(ACTIVE);
+  _applyModelUI(config._modelIsProvisional ? null : config.model);  // the repaint shape
+  _saveConvToolState();
+  check('C5_provisional_survives_repaint', ACTIVE.model !== 'kimi-k3');
 }
 
 console.log(out.join('\n'));
@@ -446,7 +534,7 @@ def test_paint_default_never_becomes_stored_model():
     assert not fails, (
         'a paint-time default reached conv.model (write-back laundering):\n'
         + output)
-    assert output.count('PASS') >= 3, f'expected >=3 PASS, got:\n{output}'
+    assert output.count('PASS') >= 10, f'expected >=10 PASS, got:\n{output}'
     print(output)
 
 
@@ -550,9 +638,60 @@ def test_NC_provisional_guard_is_load_bearing(tmp_path):
     assert 'FAIL C1_default_paint_not_persisted' in output, (
         'NEUTER did not bite: the default paint was not persisted even '
         'without the guard.\n' + output)
-    assert 'FAIL C3_stored_model_not_downgraded' in output, output
-    # The explicit-choice path must stay green either way.
+    assert 'FAIL C4_new_chat_default_not_persisted' in output, (
+        'NEUTER did not bite on the new-chat entry point.\n' + output)
+    assert 'FAIL C5_provisional_survives_repaint' in output, (
+        'NEUTER did not bite on the config-load repaint.\n' + output)
+    # The explicit-choice paths must stay green either way — they are what
+    # prove the guard is narrow (it blocks defaults, not all writes) rather
+    # than a blanket "never write conv.model".
     assert 'PASS C2_explicit_choice_persisted' in output, output
+    assert 'PASS C3_stored_model_not_downgraded' in output, output
+
+    with open(main_js, encoding='utf-8') as f:
+        assert f.read() == src, 'harness mutated the shipped main.js'
+
+
+@pytest.mark.skipif(not _node_available(), reason='node not installed')
+def test_NC_single_resolver_is_load_bearing(tmp_path):
+    """NEUTER D: restore the pre-resolved fallback at the conversation-open
+    call site (``_applyModelUI(conv.model || ... || serverModel)``) → the
+    value arrives truthy, provenance is lost, and the default is laundered
+    again → red.
+
+    This is the neuter that the ORIGINAL layer-3 guard lacked. The provisional
+    flag is only meaningful if the fallback is resolved INSIDE
+    ``_applyModelUI``; a caller that pre-resolves it silently disables the
+    whole mechanism while every assertion downstream still passes. Charter's
+    third guard-failure mode ("a green guard testing code that never
+    existed") is exactly what this prevents from recurring.
+    """
+    main_js = os.path.join(JS_DIR, 'main.js')
+    with open(main_js, encoding='utf-8') as f:
+        src = f.read()
+
+    needle = '  _applyModelUI(conv.model || conv.preset || conv.effort);'
+    assert src.count(needle) == 1, (
+        'conversation-open model call drifted — update the neuter target')
+    copy = tmp_path / 'main_neutered_resolver.js'
+    copy.write_text(
+        src.replace(
+            needle,
+            '  _applyModelUI(conv.model || conv.preset || conv.effort '
+            '|| serverModel);', 1),
+        encoding='utf-8')
+
+    output = _run_harness(
+        'd_nc', _HARNESS_C,
+        os.path.join(JS_DIR, 'main', 'main_toolbar_ui.js'), str(copy))
+    assert 'FAIL C1_default_paint_not_persisted' in output, (
+        'NEUTER did not bite: pre-resolving the fallback at the call site no '
+        'longer defeats the provisional guard — the mechanism may have '
+        'changed shape.\n' + output)
+    # Explicit choice unaffected: this neuter only breaks provenance for the
+    # no-stored-model case.
+    assert 'PASS C2_explicit_choice_persisted' in output, output
+    assert 'PASS C3_stored_model_not_downgraded' in output, output
 
     with open(main_js, encoding='utf-8') as f:
         assert f.read() == src, 'harness mutated the shipped main.js'

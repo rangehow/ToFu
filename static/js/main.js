@@ -56,18 +56,28 @@ var _hiddenIgModels = new Set();  // shared with image-gen.js
 let _lastAppliedModelId = null;
 let _lastAppliedIsThinking = null;
 
-function _applyModelUI(modelId, opts) {
-  /* ★ Provenance, not just value. A model id reaching here is EITHER an
-   *   explicit user choice (selectModel / a restored per-conv value) OR a
-   *   mere DISPLAY fallback (serverModel) used because nothing was stored.
-   *   The write-back sites persist config.model, so without this distinction
-   *   a fallback PAINT silently becomes the conversation's stored identity —
-   *   the 2026-07-27 corruption (conv ms352oniikgq10: an Opus 5 conv whose
-   *   composer painted the kimi-k3 default, which the next tool-toggle then
-   *   PATCHed over the real stored model). `_modelIsProvisional` is the flag
-   *   _saveConvToolState consults before writing conv.model. */
+function _applyModelUI(modelId) {
+  /* ★ SINGLE RESOLVER. This function — and ONLY this function — decides what
+   *   to paint when a conversation has no stored model. Callers MUST pass the
+   *   conversation's own value (or nothing at all); they must NOT pre-resolve
+   *   `|| serverModel` themselves.
+   *
+   *   Why it matters: the write-back sites persist `config.model`, so the
+   *   composer's value becomes the conversation's stored identity. A model id
+   *   is therefore EITHER an explicit choice (selectModel / a value restored
+   *   from the conv) OR a mere DISPLAY fallback. Only this function can tell
+   *   the two apart — and only if the fallback is applied HERE. When a caller
+   *   pre-resolved `conv.model || serverModel`, every value arrived truthy,
+   *   `_modelIsProvisional` was permanently false, and the guard below it was
+   *   dead code: the kimi-k3 default was still laundered into storage
+   *   (2026-07-27, conv ms352oniikgq10 — an Opus 5 conversation whose composer
+   *   painted the global default, which the next tool-toggle then PATCHed over
+   *   the real stored model).
+   *
+   *   Contract: falsy `modelId` => "this conversation stored nothing" => paint
+   *   the default but mark it PROVISIONAL so it is never written down. */
   const _provisional = !modelId;
-  if (!modelId) modelId = config.model || serverModel;
+  if (!modelId) modelId = serverModel;
   /* Legacy preset migration */
   if (typeof _LEGACY_PRESET_TO_MODEL !== 'undefined' && _LEGACY_PRESET_TO_MODEL[modelId]) {
     modelId = _LEGACY_PRESET_TO_MODEL[modelId];
@@ -604,7 +614,10 @@ function _syncToolStateDebounced(conv, delayMs = 1500) {
 
 function _restoreConvToolState(conv) {
   config.thinkingDepth = conv.thinkingDepth || null;   // ← restore depth BEFORE model UI (let _applyModelUI normalize)
-  _applyModelUI(conv.model || conv.preset || conv.effort || serverModel);
+  /* Pass the conversation's OWN value only — no `|| serverModel` here. A conv
+   * that stored nothing must reach _applyModelUI as falsy so the default it
+   * paints is marked provisional and never written back. */
+  _applyModelUI(conv.model || conv.preset || conv.effort);
   _applySearchModeUI(conv.searchMode || "multi");
   _applyFetchEnabledUI(true);  // always on
   _applyCodeExecUI(!!conv.codeExecEnabled);
@@ -684,7 +697,9 @@ function _restoreConvToolState(conv) {
 }
 function _resetToolsToDefaults() {
   config.thinkingDepth = config.defaultThinkingDepth;   // ← reset to default depth BEFORE applying model UI (let _applyModelUI normalize)
-  _applyModelUI(serverModel);
+  /* A brand-new chat has stored nothing — pass nothing, so the default is
+   * painted as provisional rather than immediately owned. */
+  _applyModelUI();
   _applySearchModeUI("multi");
   _applyFetchEnabledUI(true);
   _applyCodeExecUI(false);
@@ -803,7 +818,7 @@ function _installViewportHeightGuard() {
   // ── Init model toggle from config ──
   (function initModelToggle() {
     thinkingEnabled = true;
-    _applyModelUI(config.model || serverModel);
+    _applyModelUI(config.model);
     _loadServerConfigAndPopulate();
   })();
   // Apply stored input-send-mode hint text on load

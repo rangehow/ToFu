@@ -146,20 +146,36 @@ def _fn_node(name: str):
     pytest.fail('routes/push.py no longer defines %s — re-point this guard' % name)
 
 
-def _info_logs_without_rid(node) -> list[str]:
-    """``logger.info`` calls in ``node`` that reference no rid.
+# Socket-event log lines that are REQUIRED to name their socket, keyed by
+# a stable substring of the format string. This is a RATCHET list: a line
+# that already carries the rid must not lose it. It is deliberately NOT
+# "every log call in the frame handlers" — a future diagnostic that has
+# nothing to do with socket identity should not be forced to carry an id,
+# and demanding that would make the guard a noise source instead of a
+# protection. Adding a new socket-event line? Add it here too.
+RID_REQUIRED_LINES = (
+    'Client abort for task',
+    'Client abort for unknown task',
+    'Subscribe:',
+    'Sender error',
+    'Receiver error',
+    'connect snapshot enqueue failed',
+)
 
-    A call counts as rid-carrying when the literal 'rid=' appears in its
-    format string AND it passes an argument whose source mentions a rid
-    (``_rid`` / ``req_id``). Checking both halves matters: a format string
-    saying `rid=%s` fed a task id would read as correlated while being a lie.
+
+def _logger_calls(node):
+    """Every ``logger.<level>(...)`` call inside ``node``, any level.
+
+    Yields ``(level, format_text, args_source)``. Level is NOT filtered:
+    stamping the rid on a line and later demoting it from info to debug
+    must not silently drop it out of the guard's sight — which is exactly
+    what an ``attr == 'info'`` filter would do.
     """
-    bare = []
     for sub in ast.walk(node):
         if not isinstance(sub, ast.Call):
             continue
         fn = sub.func
-        if not (isinstance(fn, ast.Attribute) and fn.attr == 'info'):
+        if not isinstance(fn, ast.Attribute):
             continue
         if not (isinstance(fn.value, ast.Name) and fn.value.id == 'logger'):
             continue
@@ -168,29 +184,61 @@ def _info_logs_without_rid(node) -> list[str]:
         for piece in ast.walk(fmt) if fmt is not None else []:
             if isinstance(piece, ast.Constant) and isinstance(piece.value, str):
                 fmt_txt += piece.value
-        arg_src = ' '.join(ast.dump(a) for a in sub.args[1:])
-        if 'rid=' in fmt_txt and ('_rid' in arg_src or 'req_id' in arg_src):
-            continue
-        bare.append(fmt_txt[:70])
-    return bare
+        yield fn.attr, fmt_txt, ' '.join(ast.dump(a) for a in sub.args[1:])
+
+
+def _carries_rid(fmt_txt: str, arg_src: str) -> bool:
+    """True when the call is genuinely correlated, not just cosmetically.
+
+    Requires BOTH halves: 'rid=' in the format string AND an argument whose
+    source mentions a rid. A format string saying `rid=%s` fed a task id
+    reads as correlated while being a lie — worse than a bare line, because
+    it invites the reader to trust it.
+    """
+    return 'rid=' in fmt_txt and ('_rid' in arg_src or 'req_id' in arg_src)
 
 
 def test_frame_handler_logs_carry_the_rid():
-    """The lines that describe an EVENT must name the socket it came from.
+    """Every socket-EVENT log line must name the socket it came from.
 
     This is the whole point of the feature. Stamping only connect/disconnect
     leaves the id useless for the questions people actually ask ("I pressed
     stop and nothing happened") — those are logged by the frame handlers.
+
+    Scanned across push_ws AND both frame handlers, at EVERY log level: the
+    covered lines are split across info (abort) and debug (subscribe, the two
+    socket-error paths, snapshot-enqueue), so a guard that only looked at
+    ``logger.info`` would leave four of the six unprotected — and demoting a
+    stamped info line to debug would silently drop it out of sight.
     """
-    for fname in ('_handle_abort', '_handle_client_frame'):
-        bare = _info_logs_without_rid(_fn_node(fname))
-        assert not bare, (
-            'these logger.info calls in routes/push.py::%s do not carry a '
-            'correlation id: %r. Every socket-event log line must name its '
-            'socket (rid=%%s fed client.req_id / req_id), else a user-supplied '
-            'rid resolves only to the connect+disconnect pair and the events '
-            'in between are unjoinable.' % (fname, bare)
-        )
+    seen: dict[str, bool] = {}
+    for fname in ('push_ws', '_handle_client_frame', '_handle_abort'):
+        for _level, fmt_txt, arg_src in _logger_calls(_fn_node(fname)):
+            for needle in RID_REQUIRED_LINES:
+                if needle in fmt_txt:
+                    # A needle can match more than one call (abort has a
+                    # known-task and an unknown-task line); ALL must carry it.
+                    seen[needle] = seen.get(needle, True) and \
+                        _carries_rid(fmt_txt, arg_src)
+
+    missing = sorted(n for n in RID_REQUIRED_LINES if n not in seen)
+    assert not missing, (
+        'these socket-event log lines vanished from routes/push.py: %r. If a '
+        'line was genuinely removed, drop it from RID_REQUIRED_LINES in this '
+        'file; if it was renamed, update the needle. Leaving the list stale '
+        'turns this guard into a false red, which is how the last one rotted '
+        'for 14 days.' % (missing,)
+    )
+
+    bare = sorted(n for n, ok in seen.items() if not ok)
+    assert not bare, (
+        'these socket-event log lines no longer carry a correlation id: %r. '
+        'Each must pass the socket\'s rid (rid=%%s fed client.req_id / '
+        '_rid / req_id), else a user-supplied rid resolves only to the '
+        'connect+disconnect pair and every event in between is unjoinable. '
+        'A cosmetic `rid=%%s` fed something that is not a rid does not '
+        'count.' % (bare,)
+    )
 
 
 def test_rid_rides_the_push_client():

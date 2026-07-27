@@ -8,6 +8,7 @@ default (``_boot_auto_dispatch_enabled``).
 
 import json
 import time
+import uuid
 
 from lib.database import DOMAIN_CHAT, get_thread_db, json_dumps_pg
 from lib.log import get_logger
@@ -76,6 +77,36 @@ def _merge_home_index(messages, merge_task_id):
         if isinstance(m, dict) and m.get('_taskId') == merge_task_id:
             return i
     return None
+
+
+def _task_superseded_by_newer_reply(db, conv_id, task_created_at) -> bool:
+    """True when ANOTHER task of this conv COMPLETED (status='done') AFTER
+    this stale task STARTED — i.e. the interrupted task's turn was already
+    answered by a newer reply.
+
+    Resurrecting its checkpoint would fabricate a bubble for a turn the
+    conversation has long moved past — the ms2gipv5 incident (2026-07-27):
+    an autopilot twin spawned 90s before its parent completed hung as a
+    'running' zombie for 3.5h, and the next restart's recovery appended its
+    stale checkpoint as a FRESH tail bubble even though the parent's reply
+    had landed at 08:08. Four identical 'interrupted' cards rendered after
+    client-side identity re-minting fanned the id-less shell out.
+
+    Fails OPEN (not superseded) on probe error — the probe runs inside the
+    same DB sweep as every other SELECT, so a failure here coincides with
+    total sweep failure; losing a genuine crash-frontier recovery to a
+    transient hiccup is the worse outcome.
+    """
+    try:
+        row = db.execute(
+            "SELECT 1 AS x FROM task_results WHERE conv_id=? AND status='done' "
+            "AND COALESCE(completed_at, created_at) > ? LIMIT 1",
+            (conv_id, int(task_created_at or 0))).fetchone()
+        return row is not None
+    except Exception as e:
+        logger.warning('[Startup] superseded probe failed conv=%s: %s',
+                       (conv_id or '')[:8], e)
+        return False
 
 
 def _conv_has_live_task_for_recovery(conv_id, db) -> bool:
@@ -237,19 +268,28 @@ def recover_stale_tasks_on_startup(prev_shutdown=None, dispatch=True):
 
         # ── Step 1: Mark stale running tasks as interrupted ──
         stale_rows = db.execute(
-            "SELECT task_id, conv_id, content, thinking FROM task_results WHERE status='running'"
+            "SELECT task_id, conv_id, content, thinking, created_at FROM task_results WHERE status='running'"
         ).fetchall()
 
-        # conv_id → task_id of the interrupted task carrying the MOST recovered
-        # text.  task_results.conv_id is BACKEND-AUTHORITATIVE (create_task stamps
+        # conv_id → task_id of the interrupted task to merge.
+        # task_results.conv_id is BACKEND-AUTHORITATIVE (create_task stamps
         # it), unlike the frontend-synced settings.activeTaskId which is null/stale
         # after a mid-stream crash (the PUT that persists it may never have landed).
         # Keying the merge off THIS map is what lets a crash-interrupted turn be
         # recovered into conversations.messages even when activeTaskId was lost —
         # the root fix for "Continue starts a brand-new agent from scratch".
+        #
+        # Candidate selection (G3, 2026-07-27): the NEWEST stale task that is
+        # NOT superseded by a newer completed reply. The previous "most
+        # recovered text" heuristic resurrected the meatiest checkpoint even
+        # when its turn had been answered hours and many turns later — in
+        # ms2gipv5 it picked a 3.5h-old superseded autopilot twin (4.6k
+        # thinking) over the fresher frontier task and appended a phantom
+        # bubble. A superseded task is still marked interrupted above (the
+        # row settles), it is just NEVER merged.
         interrupted_task_by_conv = {}
         if stale_rows:
-            _best_recovered_len = {}
+            _by_conv: dict = {}
             for row in stale_rows:
                 tid = row['task_id']
                 cid = row['conv_id'] or ''
@@ -259,12 +299,20 @@ def recover_stale_tasks_on_startup(prev_shutdown=None, dispatch=True):
                             'content=%dchars thinking=%dchars',
                             tid[:8], cid[:8], clen, tlen)
                 if cid:
-                    _tot = clen + tlen
-                    if _tot >= _best_recovered_len.get(cid, -1):
-                        _best_recovered_len[cid] = _tot
-                        interrupted_task_by_conv[cid] = tid
+                    _by_conv.setdefault(cid, []).append(row)
             db.execute("UPDATE task_results SET status='interrupted' WHERE status='running'")
             db.commit()
+            for cid, rows in _by_conv.items():
+                rows.sort(key=lambda r: int(r['created_at'] or 0), reverse=True)
+                for row in rows:
+                    if _task_superseded_by_newer_reply(db, cid, row['created_at']):
+                        logger.info('[Startup] stale task %s (conv=%s) SUPERSEDED by a '
+                                    'newer completed reply — settled but NOT merged '
+                                    '(its turn was already answered)',
+                                    row['task_id'][:8], cid[:8])
+                        continue
+                    interrupted_task_by_conv[cid] = row['task_id']
+                    break
             logger.info('[Startup] Marked %d stale running task(s) as interrupted '
                         '(%d owning conv(s) identified via task_results.conv_id)',
                         len(stale_rows), len(interrupted_task_by_conv))
@@ -366,6 +414,24 @@ def recover_stale_tasks_on_startup(prev_shutdown=None, dispatch=True):
                                 messages = []
                         if messages:
                             last_msg = messages[-1]
+                            # GATE 4 (tail owner): a tail assistant bubble
+                            # explicitly owned by a DIFFERENT task (_taskId set,
+                            # ≠ ours) must never receive this task's checkpoint
+                            # — the G1 cross-turn stitch with the roles
+                            # reversed (our task has no home; the tail is
+                            # someone else's home). A tail carrying NO _taskId
+                            # keeps the legacy merge (pre-identity data).
+                            if (last_msg.get('role') == 'assistant'
+                                    and last_msg.get('_taskId')
+                                    and last_msg.get('_taskId') != merge_task_id):
+                                logger.info('[Startup] conv=%s tail assistant belongs '
+                                            'to task=%s — skipping merge of task=%s '
+                                            '(tail-owner stitch guard)',
+                                            cid[:8], (last_msg.get('_taskId') or '')[:8],
+                                            merge_task_id[:8])
+                                messages = []
+                        if messages:
+                            last_msg = messages[-1]
                             if last_msg.get('role') == 'assistant':
                                 # Only update if task has more content
                                 existing_content = len(last_msg.get('content') or '')
@@ -402,13 +468,26 @@ def recover_stale_tasks_on_startup(prev_shutdown=None, dispatch=True):
                                         pass
                                 messages_json = json_dumps_pg(messages)
                             elif last_msg.get('role') == 'user':
-                                # Task started but no assistant msg was appended yet
+                                # Task started but no assistant msg was appended yet.
+                                # Durable identity is stamped at birth: without a
+                                # backend _msgId the frontend mints a FRESH client
+                                # id on every independent fetch (core.js
+                                # _ensureMsgId), so a conv fetched through two
+                                # projections concurrently (windowed lite slice +
+                                # full/debug fetch) renders the SAME bubble twice
+                                # and a PUT persists the twin (the ms2gipv5
+                                # four-bubble fan-out). _taskId gives the task its
+                                # durable home → the NEXT recovery sweep finds it
+                                # via G1 and merges in place instead of appending
+                                # a second shell.
                                 new_msg = {
                                     'role': 'assistant',
                                     'content': task_content,
                                     'thinking': task_thinking,
                                     'finishReason': 'interrupted',
                                     'timestamp': int(time.time() * 1000),
+                                    '_msgId': str(uuid.uuid4()),
+                                    '_taskId': merge_task_id,
                                 }
                                 if _interrupt_reason:
                                     new_msg['interruptedReason'] = _interrupt_reason

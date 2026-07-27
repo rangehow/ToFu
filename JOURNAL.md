@@ -1,6 +1,13 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
+### 2026-07-27(补记) — 排序修复 × 身份契约反转的交叉复验:**两者正交,且反转把排序质量顺带改善了**(零代码变更,纯交叉验证;`554cd7b1` 与兄弟 `d9acbdf4` 落地后实测)
+
+- **为什么必须查这一条:** 我的显示名排序修复(`2bebb0b3` + `554cd7b1`)的排序键里有一条 `^(aws\.|vertex\.)` 前缀剥离规则,而兄弟同期落地的身份契约反转(`d9acbdf4`)**恰恰就是把这些供应商前缀从 `model_id` 上摘掉**。两个改动打在同一个字符串上,不交叉验证就等于赌它们不冲突。
+- **实测结论:正交,且反转让排序更准。** ①当前生产配置 45 个 `model_id` 里**带 `aws./vertex./yuju-` 前缀的为 0**(全部移入 `request_ids` 池,如 `claude-opus-4.6 → ['aws.claude-opus-4.6', 'aws.claude-opus-4.6-b', 'vertex.claude-opus-4.6']`);②我的前缀剥离规则因此变成**幂等空操作**——不再有东西可剥,但**必须保留**:它同时服务于 `_modelShortName` 的 cache-miss 回退路径,且 `request_ids` 里前缀仍在,将来任何回流都靠它兜底;③**友好名覆盖率从原来的部分命中升到 21/24** —— 因为 `MODEL_PRICING` 的键本来就是无前缀形态,反转后 `model_id` 与之天然对齐,原先靠 `yuju-claude-opus-5-evaDaily` 这种带前缀 id 才能查到名字的绕路消失了。
+- **交叉复验证据(用反转后的真实配置驱动 shipped 函数):** 工具栏下拉两段(`Claude (Pro/Max subscription)` / `Meituan`)24 行全部按显示名有序;Preset 标签页可见性各组有序、组标题有序、回退/默认 select 全局有序。守卫 4/4 + 相邻 5 套件 **15/15** 全绿。
+- **★ 方法论(值得复用):共享 HEAD 上兄弟改了「我的排序键所依赖的那个字段的形态」时,守卫全绿不等于没事——因为我的守卫用的是自包含 fixture,它对生产配置形态的变化天生免疫。** 必须**另外**拿反转后的**真实配置**再驱动一次 shipped 函数。这次结论是良性的,但「fixture 绿 ≠ 生产对」这个缺口是结构性的,与 charter「绿着的守卫在测一段从未存在过的代码」属同族风险的不同切面:前者是测了副本,这里是**测了一个已经不存在的世界的配置形态**。
+
 ### 2026-07-27 — 模型身份契约反转:`model_id` 变成逻辑名,上线请求名池单列 `request_ids`(owner「模板名和 preset 的映射系统太绕,往后就按 id=名字、aliases=实际请求 ID 来」;epic `pt_78770b6cab5c4d11`,commit `d9acbdf4`,13 文件 +931/-133;契约套件+相邻环全绿,**NEUTER×3 精确咬(5+1+2)**,净 committed worktree 复验 **33/33**,collect **10,763** 0 err)
 
 - **用户的方向是对的,但按字面落地会静默掉路由——这是本轮唯一一个真正挡下的设计缺陷。** 提案让 `model_id` = preset 名、`aliases` = 上线 ID 池。问题在于:现网 43 个模型里 ~35 个 `aliases` 是空的、靠 `model_id` 自己当上线 ID;真改成「pool=aliases」这些模型 pool 全空、slot 一个都不建,**而每个模型仍显示在选择器里,没有任何报错**。解法落在兼容规则上:**有 `request_ids` 用它,没有就 `[model_id] + aliases`(root 永在池里)**——旧形状行为一字不变,新形状才启用逻辑/上线分离。判据一句话:**读 pool 时绝不能把 root 丢掉,丢掉就是无声的半成品迁移。**

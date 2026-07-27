@@ -243,3 +243,88 @@ function _mergeTerminalTurnFields(lm, sm) {
   return n;
 }
 if (typeof window !== 'undefined') window._mergeTerminalTurnFields = _mergeTerminalTurnFields;
+
+/* ═══════════════════════════════════════════════════════════════════
+   _mergeTranslationFields(localMsg, serverMsg) — THE single source of
+   truth for adopting a server-committed translation onto a local message.
+
+   The bug class this kills: server-side auto-translate is an AFTER-THE-FACT
+   writer. It commits `translatedContent` (+ per-round
+   `segments[].translatedText`) to the DB LONG after the turn settled, and
+   announces it two ways: a fire-and-forget `translate` push frame, and a
+   `conv_changed` notify carrying the post-commit rev
+   (lib/translate/commit.py). The push frame is lossy BY DESIGN — the hub
+   drops it when no client is subscribed at emit time and offers no replay
+   (lib/agent_core/push.py::_deliver_frame) — so `conv_changed` is the
+   RELIABLE half of the signal.
+
+   But the notify path's adopter (`_verifyActiveConvFromServer`) only ever
+   merged content / thinking / toolRounds behind a "did the turn GROW?" gate,
+   plus the terminal-metadata fields via _mergeTerminalTurnFields. A
+   translation commit grows NOTHING: same message count, same content, same
+   toolRounds — only `translatedContent` and `segments[].translatedText`
+   appear. So the verify ran, found "no change", and dropped the translation
+   on the floor. The Chinese then surfaced ONLY when the user hit refresh or
+   switched conversations (loadConversationMessages' own translation merge,
+   the working twin below) — exactly the forced-refresh dependency this
+   project's sync contract forbids.
+
+   Semantics — STRICTLY ADDITIVE, never destructive:
+     • deliverable: adopt `translatedContent` only when the local copy lacks
+       it (a local 译文 is never clobbered), carrying the display flags
+       (_showingTranslation / _translateDone / _translateModel /
+       originalContent) that the render path reads alongside it.
+     • per-round narration: adopt `segments[j].translatedText` for each
+       positionally-aligned non-deliverable text segment whose `llmRound`
+       matches, only where the local segment has none.
+     • `_translatePartialByRound` sidecar: fill-if-missing, so a later
+       whole-bubble repaint still has its source.
+
+   IDENTITY GUARD (load-bearing): the merge is skipped unless the two
+   messages are the SAME turn — equal role, equal endpoint-lane flags, and
+   BYTE-EQUAL content. A translation is only valid for the exact text it was
+   produced from; adopting one across an edited/regenerated turn would show a
+   译文 that does not correspond to its 原文.
+
+   Pure reducer over two message dicts (no DOM, no globals), so it is
+   load-order-safe. Returns the number of fields adopted so callers can gate
+   their changed/repaint flag.
+   ═══════════════════════════════════════════════════════════════════ */
+function _mergeTranslationFields(lm, sm) {
+  if (!lm || !sm || typeof lm !== 'object' || typeof sm !== 'object') return 0;
+  // Same-turn identity — a translation is only valid for the text it came from.
+  if (sm.role !== lm.role) return 0;
+  if (!!sm._isEndpointPlanner !== !!lm._isEndpointPlanner) return 0;
+  if (!!sm._isEndpointReview !== !!lm._isEndpointReview) return 0;
+  if (sm._epIteration !== lm._epIteration) return 0;
+  if ((sm.content || '') !== (lm.content || '')) return 0;
+
+  let n = 0;
+  if (sm.translatedContent && !lm.translatedContent) {
+    lm.translatedContent = sm.translatedContent;
+    lm._showingTranslation = sm._showingTranslation !== false;
+    lm._translateDone = true;
+    if (sm._translateModel && !lm._translateModel) lm._translateModel = sm._translateModel;
+    if (sm.originalContent && !lm.originalContent) lm.originalContent = sm.originalContent;
+    n++;
+  }
+  if (Array.isArray(sm.segments) && Array.isArray(lm.segments)) {
+    const segN = Math.min(sm.segments.length, lm.segments.length);
+    for (let j = 0; j < segN; j++) {
+      const ss = sm.segments[j], ls = lm.segments[j];
+      if (!ss || !ls) continue;
+      if (ss.type !== 'text' || ss.deliverable) continue;
+      if (ss.type !== ls.type || ss.llmRound !== ls.llmRound) continue;
+      const zh = ss.translatedText;
+      if (zh && zh.trim() && !(ls.translatedText && ls.translatedText.trim())) {
+        ls.translatedText = zh;
+        n++;
+      }
+    }
+  }
+  if (sm._translatePartialByRound && !lm._translatePartialByRound) {
+    lm._translatePartialByRound = sm._translatePartialByRound;
+  }
+  return n;
+}
+if (typeof window !== 'undefined') window._mergeTranslationFields = _mergeTranslationFields;

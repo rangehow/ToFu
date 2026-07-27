@@ -179,13 +179,20 @@ def _run(neuter=False):
     # standalone extraction crashes with ReferenceError before the growth gate.
     helper_fn = _extract_fn((REPO / "static" / "js" / "core" / "conv_reducers.js").read_text(),
                             "_mergeTerminalTurnFields")
+    # Same reason, second reducer: _verifyActiveConvFromServer also calls
+    # core/conv_reducers.js::_mergeTranslationFields (the server-committed
+    # translation adopt, 2026-07-27) BEFORE the growth gate. In the real bundle
+    # conv_reducers.js loads first; this standalone extraction must splice it
+    # too or the function throws ReferenceError before ever reaching the grow.
+    xlate_fn = _extract_fn((REPO / "static" / "js" / "core" / "conv_reducers.js").read_text(),
+                           "_mergeTranslationFields")
     if neuter:
         # NEUTER: strip the routing flag the fix sets, so the tail can never
         # take the keep-longer verify branch and falls back to the
         # count-plus-clock loadConversationMessages path (which drops the grow).
         load_fn = load_fn.replace("local._contentGrewNeedsVerify = true;",
                                   "local._contentGrewNeedsVerify = false;")
-    script = (_fetch_stub() + helper_fn + "\n" + _HARNESS
+    script = (_fetch_stub() + helper_fn + "\n" + xlate_fn + "\n" + _HARNESS
               .replace("__VERIFY_FN__", verify_fn)
               .replace("__LOAD_FN__", load_fn))
     out = subprocess.run(["node", "-e", script], capture_output=True, text=True, cwd=str(REPO))

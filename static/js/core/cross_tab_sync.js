@@ -209,6 +209,37 @@ async function _verifyActiveConvFromServer(convId) {
   const localMsgs = conv.messages || [];
   let changed = false;
 
+  /* ★ Server-committed TRANSLATIONS land independent of every growth gate
+   *   below, and across the WHOLE aligned window (not just the tail).
+   *
+   *   Server-side auto-translate commits `translatedContent` +
+   *   `segments[].translatedText` after the turn settled, bumping rev and
+   *   emitting the conv_changed frame that brought us here — but growing
+   *   NOTHING (same count, same content, same toolRounds). Both Case 1 and
+   *   Case 2 below therefore saw "no change" and dropped it, so the 译文
+   *   appeared only after a manual refresh / conversation switch. The
+   *   `translate` push frame is NOT a substitute: the hub drops it when no
+   *   client is subscribed at emit time and never replays it, which is why
+   *   this reliable rev-driven path has to carry the translation too.
+   *
+   *   Whole-window (not tail-only) because auto-translate sweeps every
+   *   still-untranslated message when the toggle is switched ON, so several
+   *   historical turns can gain a 译文 under ONE rev bump. Strictly additive
+   *   + same-turn identity-guarded (core/conv_reducers.js), so it is safe
+   *   ahead of the adopt branches: a Case-1 wholesale adopt replaces
+   *   conv.messages with the server copy that already carries these fields. */
+  {
+    const _trN = Math.min(serverMsgs.length, localMsgs.length);
+    let _trMerged = 0;
+    for (let i = 0; i < _trN; i++) {
+      _trMerged += _mergeTranslationFields(localMsgs[i], serverMsgs[i]);
+    }
+    if (_trMerged > 0) {
+      conv.updatedAt = data.updatedAt || data.updated_at || conv.updatedAt;
+      changed = true;
+    }
+  }
+
   if (serverMsgs.length > localMsgs.length) {
     /* Case 1: server has new messages — adopt the full set. */
     conv.messages = serverMsgs;

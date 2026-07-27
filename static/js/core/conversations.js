@@ -131,6 +131,10 @@ async function syncConversationToServer(conv, { allowTruncate = false } = {}) {
     if (!allowTruncate && conv._serverMsgCount && conv.messages.length < conv._serverMsgCount) {
       console.warn(`[syncToServer] ⚠️ SKIPPED sync for conv=${conv.id.slice(0,8)} — local ${conv.messages.length} msgs < server ${conv._serverMsgCount} msgs. ` +
         `This guard prevents overwriting server data, but local changes (including streamed content) will NOT be persisted to server!`);
+      /* This is a documented silent-data-loss branch (local streamed content is
+       * dropped). Surface it to the server log so "my message vanished" reports
+       * are diagnosable instead of invisible. */
+      debugLog(`[syncToServer] stale-overwrite guard skipped persist conv=${conv.id.slice(0,8)} local=${conv.messages.length} server=${conv._serverMsgCount}`, 'warn');
       return;
     }
     /* ★ CROSS-TALK DETECTION: check for sudden message count jumps that indicate injection */
@@ -1415,67 +1419,21 @@ async function loadConversationMessages(convId) {
      *   server has the Chinese ready.  Matches by index + role identity +
      *   content equality to avoid resurrecting stale translations.
      */
+    /* Delegates the per-message field work to the SHARED reducer
+     * core/conv_reducers.js::_mergeTranslationFields — the same one the
+     * event-driven notify path (_verifyActiveConvFromServer) uses. The field
+     * list (deliverable translatedContent + display flags, per-round
+     * segments[].translatedText, the _translatePartialByRound sidecar) and the
+     * same-turn identity guard live there ONCE, so the on-open lane and the
+     * no-refresh lane can never drift apart the way the terminal-metadata list
+     * did before _mergeTerminalTurnFields. This wrapper keeps the array-level
+     * alignment + the merged count for the log line below. */
     const _mergeServerTranslations = (sourceMsgs, destMsgs) => {
       if (!Array.isArray(sourceMsgs) || !Array.isArray(destMsgs)) return 0;
       const overlap = Math.min(sourceMsgs.length, destMsgs.length);
       let merged = 0;
       for (let i = 0; i < overlap; i++) {
-        const sm = sourceMsgs[i], lm = destMsgs[i];
-        if (!sm || !lm) continue;
-        // Identity check (shared by BOTH the deliverable and the per-round
-        // narration merge below — a mismatched turn must not receive either).
-        if (sm.role !== lm.role) continue;
-        if (!!sm._isEndpointPlanner !== !!lm._isEndpointPlanner) continue;
-        if (!!sm._isEndpointReview !== !!lm._isEndpointReview) continue;
-        if (sm._epIteration !== lm._epIteration) continue;
-        // Content must match byte-for-byte — stale content would make the
-        // preserved translation incorrect for the (edited) new content.
-        if ((sm.content || '') !== (lm.content || '')) continue;
-
-        // ── Deliverable translation (translatedContent) ──
-        if (sm.translatedContent && !lm.translatedContent) {
-          lm.translatedContent = sm.translatedContent;
-          lm._showingTranslation = sm._showingTranslation !== false;
-          lm._translateDone = true;
-          if (sm._translateModel && !lm._translateModel) lm._translateModel = sm._translateModel;
-          if (sm.originalContent && !lm.originalContent) lm.originalContent = sm.originalContent;
-          merged++;
-        }
-
-        /* ── Per-round narration translation (segments[].translatedText) ──
-         *   Server-side auto-translate stamps translatedText onto each
-         *   non-deliverable text segment (lib/translate/commit.py
-         *   _stamp_segment_translations), keyed by llmRound. This is a SEPARATE
-         *   field from translatedContent (the deliverable): a turn with tool
-         *   rounds carries interleaved narration whose Chinese lives ONLY here.
-         *   The IDB cache can be written from an in-memory copy captured BEFORE
-         *   the translate commit ran (or from a live-stream copy that never
-         *   stamped it), so the cached segments hold English narration while
-         *   the server has the Chinese. Without this merge the reopened
-         *   conversation shows English narration above every tool batch even
-         *   though the deliverable is Chinese — the reported "translations lost
-         *   on reopen" bug. Align segments POSITIONALLY within the (identity-
-         *   matched) message and copy translatedText the local copy lacks. */
-        if (Array.isArray(sm.segments) && Array.isArray(lm.segments)) {
-          const _segN = Math.min(sm.segments.length, lm.segments.length);
-          for (let _si = 0; _si < _segN; _si++) {
-            const _ss = sm.segments[_si], _ls = lm.segments[_si];
-            if (!_ss || !_ls) continue;
-            if (_ss.type !== 'text' || _ss.deliverable) continue;
-            if (_ss.type !== _ls.type || _ss.llmRound !== _ls.llmRound) continue;
-            const _zh = _ss.translatedText;
-            if (_zh && _zh.trim() && !(_ls.translatedText && _ls.translatedText.trim())) {
-              _ls.translatedText = _zh;
-              merged++;
-            }
-          }
-        }
-        /* Carry the per-round map sidecar too so a later whole-bubble repaint
-         * (_applyPartialByRoundToSettled) still has its source when segments
-         * are absent on the local copy for any reason. Additive only. */
-        if (sm._translatePartialByRound && !lm._translatePartialByRound) {
-          lm._translatePartialByRound = sm._translatePartialByRound;
-        }
+        merged += _mergeTranslationFields(destMsgs[i], sourceMsgs[i]);
       }
       return merged;
     };

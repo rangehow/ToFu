@@ -105,25 +105,78 @@ object ServerLifecycle {
         // discovers the server is down, and the WebView shows the failure.
         ServerState.STOPPED ->
             ServerCapabilities(canStart = true, canStop = false, canRefresh = true, canOpen = true)
+        // A start/stop is in flight. Open stays ENABLED on purpose: a start
+        // poll can outlast the window, and taking Open away would leave the
+        // user with no actionable control at all — the "looks like a deadlock"
+        // shape we just removed elsewhere. Opening mid-start is harmless; the
+        // WebView shows the server's own state.
         ServerState.TRANSITIONING ->
-            ServerCapabilities(canStart = false, canStop = false, canRefresh = false, canOpen = false)
+            ServerCapabilities(canStart = false, canStop = false, canRefresh = false, canOpen = true)
         ServerState.UNREACHABLE ->
             ServerCapabilities(canStart = true, canStop = true, canRefresh = true, canOpen = true)
     }
 
     /**
-     * Why a login-then-act attempt could not reach the supervisor. Only the
-     * outcomes that genuinely block control are mapped; a `Success` or an
-     * SSO hand-off is not a block and must not reach here.
+     * How long to wait for `server.py` to bind its port after `/start`. The
+     * supervisor returns immediately by design, so the caller polls. Cold
+     * starts (imports, model warmup) routinely exceed a few seconds, so the
+     * window is deliberately generous — and, critically, EXPIRING IT IS NOT AN
+     * ERROR: see [startTimeoutMessage].
+     */
+    const val START_POLL_ATTEMPTS = 15
+    const val START_POLL_INTERVAL_MS = 2_000L
+
+    /** Total start-poll window in seconds, for user-facing copy. */
+    val startPollWindowSeconds: Int
+        get() = (START_POLL_ATTEMPTS * START_POLL_INTERVAL_MS / 1000).toInt()
+
+    /**
+     * Shown when the start poll window expires without the port coming up.
+     *
+     * This is explicitly NOT phrased as a failure: `/start` was accepted, the
+     * server is probably still booting. What matters is that the user is left
+     * with something to DO — stranding them on a spinner with every control
+     * disabled is the same dead end as the old greyed-Start bug.
+     */
+    fun startTimeoutMessage(): String =
+        "Started, but the server hasn't answered in ${startPollWindowSeconds}s — " +
+            "it may still be booting. Tap Check again, or Open to watch it come up."
+
+    /**
+     * True when a login outcome BLOCKS the supervisor call that follows it.
+     *
+     * [LoginResult.NeedsInteractiveSso] counts as blocking: it yields no cookie,
+     * so proceeding would 401 and report "the daemon isn't responding" — blaming
+     * the host for what is actually an un-completed sign-in.
+     */
+    fun isLoginBlocking(result: LoginResult): Boolean = when (result) {
+        is LoginResult.Success -> false
+        is LoginResult.BadCredentials -> true
+        is LoginResult.NoCredential -> true
+        is LoginResult.NeedsInteractiveSso -> true
+        is LoginResult.Error -> true
+    }
+
+    /**
+     * Why a login-then-act attempt could not reach the supervisor. Exhaustive
+     * over [LoginResult] — no `else` branch, so a new outcome added later is a
+     * COMPILE error here rather than a silently generic "couldn't sign in".
      */
     fun explainLoginBlock(result: LoginResult): String = when (result) {
         is LoginResult.BadCredentials ->
             "Wrong password for this server — edit it and try again."
         is LoginResult.NoCredential ->
             "No saved password for this server, so it can't be controlled from here."
+        // The ONE case where Open genuinely is the answer: interactive SSO
+        // cannot be replayed headlessly, so the user must complete it once in
+        // the WebView before start/stop can work.
+        is LoginResult.NeedsInteractiveSso ->
+            "This server needs an interactive sign-in first — tap Open, sign in " +
+                "once, then Start and Stop will work from here."
         is LoginResult.Error ->
             "Can't reach this server: ${result.message}"
-        else -> "Couldn't sign in to this server."
+        is LoginResult.Success ->
+            "Signed in."   // not a block; never surfaced
     }
 
     /** Short status word for the state chip. */

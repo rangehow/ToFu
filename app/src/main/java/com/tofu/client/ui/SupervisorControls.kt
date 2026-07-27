@@ -62,8 +62,15 @@ import kotlinx.coroutines.withContext
 fun SupervisorControls(
     profile: Profile,
     scope: CoroutineScope,
+    /**
+     * REQUIRED and non-null on purpose. Controls do login-then-act, so a call
+     * site that omitted the session would silently skip the handshake and 401
+     * on every supervisor call — resurrecting the start-a-stopped-server
+     * deadlock with no compile error and no failing test. Making it mandatory
+     * turns that omission into a build failure.
+     */
+    session: SessionManager,
     client: SupervisorClient = SupervisorClient(),
-    session: SessionManager? = null,
     modifier: Modifier = Modifier,
     onStateChange: (ServerState) -> Unit = {},
     onServerReady: () -> Unit = {},
@@ -102,12 +109,12 @@ fun SupervisorControls(
             // even while Tofu is down — so this handshake works on a STOPPED
             // server. Requiring an Open first was a deadlock: Open cannot
             // succeed against a server that is down.
-            if (session != null && !ServerLifecycle.isSignedIn(profile)) {
+            if (!ServerLifecycle.isSignedIn(profile)) {
                 val login = withContext(Dispatchers.IO) { session.login(profile) }
-                if (login is LoginResult.BadCredentials ||
-                    login is LoginResult.NoCredential ||
-                    login is LoginResult.Error
-                ) {
+                // Includes NeedsInteractiveSso: it yields no cookie, so pressing
+                // on would 401 and misreport an un-completed sign-in as "the
+                // daemon isn't responding".
+                if (ServerLifecycle.isLoginBlocking(login)) {
                     failed = true
                     message = ServerLifecycle.explainLoginBlock(login)
                     busy = false
@@ -129,8 +136,8 @@ fun SupervisorControls(
                     // until the server reports itself up rather than leaving the
                     // card lying that it's still stopped.
                     if (action == "start" && !res.running) {
-                        for (i in 0 until 6) {
-                            delay(2000)
+                        for (i in 0 until ServerLifecycle.START_POLL_ATTEMPTS) {
+                            delay(ServerLifecycle.START_POLL_INTERVAL_MS)
                             val s = withContext(Dispatchers.IO) { client.status(profile) }
                             if (s is SupervisorClient.Result.Ok && s.running) {
                                 running = true
@@ -138,10 +145,18 @@ fun SupervisorControls(
                             }
                         }
                     }
-                    // Starting a server is only ever a means to using it, so
-                    // hand the user straight through once the port is live
-                    // instead of making them watch a status dot.
-                    if (action == "start" && running == true) onServerReady()
+                    if (action == "start") {
+                        if (running == true) {
+                            // Starting a server is only ever a means to using it,
+                            // so hand the user straight through once it's live.
+                            onServerReady()
+                        } else {
+                            // The window expired. NOT silently: leaving a spinner
+                            // with nothing to tap is the dead end we just removed
+                            // elsewhere. Say what happened and what to do next.
+                            message = ServerLifecycle.startTimeoutMessage()
+                        }
+                    }
                 }
                 is SupervisorClient.Result.Failed -> {
                     failed = true

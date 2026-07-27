@@ -154,12 +154,104 @@ class ServerLifecycleTest {
         assertEquals(ServerState.STOPPED, ServerLifecycle.resolve(p, running = false))
     }
 
+    /**
+     * A start poll can outlast its window, so TRANSITIONING must keep ONE
+     * actionable escape: Open. Taking every control away leaves the user on a
+     * spinner with nothing to tap — visually identical to the deadlock this
+     * class exists to prevent.
+     *
+     * NEUTER CHECK: set canOpen = false on TRANSITIONING and this fails.
+     */
     @Test
-    fun `transitioning disables every control`() {
+    fun `transitioning disables mutations but keeps open available`() {
         val caps = ServerLifecycle.capabilities(ServerState.TRANSITIONING)
         assertFalse(caps.canStart)
         assertFalse(caps.canStop)
         assertFalse(caps.canRefresh)
+        assertTrue("mid-start the user must still have a way out", caps.canOpen)
+    }
+
+    /**
+     * No state may strand the user with nothing to do. Every state must offer
+     * at least one action — this is the general form of the deadlock bug, so it
+     * is asserted across the whole enum rather than case by case.
+     */
+    @Test
+    fun `no state leaves the user with zero actions`() {
+        ServerState.values().forEach { s ->
+            val c = ServerLifecycle.capabilities(s)
+            assertTrue(
+                "$s offers no action at all — that is a dead end",
+                c.canStart || c.canStop || c.canRefresh || c.canOpen,
+            )
+        }
+    }
+
+    /**
+     * The start poll window must be generous enough for a cold boot. 12s (the
+     * original 6×2s) routinely expired mid-startup, so the auto-open hand-off
+     * silently never fired.
+     */
+    @Test
+    fun `start poll window is at least 30 seconds`() {
+        assertTrue(
+            "window was ${ServerLifecycle.startPollWindowSeconds}s",
+            ServerLifecycle.startPollWindowSeconds >= 30,
+        )
+    }
+
+    /** Timing out is not an error, so the copy must offer a next step. */
+    @Test
+    fun `start timeout message tells the user what to do next`() {
+        val msg = ServerLifecycle.startTimeoutMessage()
+        assertTrue(msg, msg.contains("Check") || msg.contains("Open"))
+        assertTrue("must state the window", msg.contains("30"))
+    }
+
+    // ── login-then-act blocking rules ──────────────────────────────────────
+
+    /**
+     * SSO yields NO cookie, so continuing to the supervisor call would 401 and
+     * be reported as "the daemon isn't responding" — blaming the host for an
+     * un-completed sign-in.
+     *
+     * NEUTER CHECK: return false for NeedsInteractiveSso and this fails.
+     */
+    @Test
+    fun `interactive sso blocks the supervisor call`() {
+        assertTrue(
+            ServerLifecycle.isLoginBlocking(
+                LoginResult.NeedsInteractiveSso("https://h/proxy/15000/"),
+            ),
+        )
+    }
+
+    /**
+     * SSO is the ONE case where Open genuinely is the fix, so the message must
+     * say so rather than falling through to a generic failure.
+     */
+    @Test
+    fun `sso explanation points at open not at a generic failure`() {
+        val msg = ServerLifecycle.explainLoginBlock(
+            LoginResult.NeedsInteractiveSso("https://h/proxy/15000/"),
+        )
+        assertTrue(msg, msg.contains("Open"))
+        assertFalse("must not be the generic fallback", msg == "Couldn't sign in to this server.")
+    }
+
+    @Test
+    fun `success never blocks`() {
+        assertFalse(ServerLifecycle.isLoginBlocking(LoginResult.Success("h")))
+    }
+
+    @Test
+    fun `credential failures block and explain themselves`() {
+        assertTrue(ServerLifecycle.isLoginBlocking(LoginResult.BadCredentials))
+        assertTrue(ServerLifecycle.isLoginBlocking(LoginResult.NoCredential))
+        assertTrue(ServerLifecycle.isLoginBlocking(LoginResult.Error("boom")))
+        assertTrue(
+            ServerLifecycle.explainLoginBlock(LoginResult.Error("boom")).contains("boom"),
+        )
     }
 
     /** Unreachable must stay actionable — retrying is the only way out. */

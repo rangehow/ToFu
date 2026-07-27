@@ -86,9 +86,13 @@ fun ProfileListScreen(
     onDelete: (Profile) -> Unit,
     onAdd: () -> Unit,
     scope: CoroutineScope,
-    /** Used to establish a session on demand so a STOPPED server can still be
-     *  started — code-server stays up while Tofu is down. */
-    session: SessionManager? = null,
+    /**
+     * Establishes a session on demand so a STOPPED server can still be started
+     * — code-server stays up while Tofu is down. Non-null by contract: a null
+     * here would silently disable login-then-act and re-create the
+     * start-a-stopped-server deadlock.
+     */
+    session: SessionManager,
 ) {
     // Per-profile lifecycle state, lifted here so the header can summarize how
     // many servers are up without each card re-polling.
@@ -201,7 +205,7 @@ private fun plural(n: Int) = if (n == 1) "server" else "servers"
 @Composable
 private fun ServerCard(
     profile: Profile,
-    session: SessionManager?,
+    session: SessionManager,
     onActivate: (Profile) -> Unit,
     onEdit: (Profile) -> Unit,
     onDelete: (Profile) -> Unit,

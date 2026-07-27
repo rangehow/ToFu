@@ -24,6 +24,15 @@ Locked design (owner, 2026-06-30):
     from ``complete_task`` (a completion may unblock a dependent); it reuses
     the existing post-task ``dispatch_next_queued`` machinery to actually start
     the enqueued kickoff. No background poller is added here.
+  • **Trigger needs no new global / thread.** ``on_epic_completed`` is called
+    from ``complete_task`` (a completion may unblock a dependent); it reuses
+    the existing post-task ``dispatch_next_queued`` machinery to actually start
+    the enqueued kickoff. No background poller is added here.
+  • **Event channel (2026-07-27).** The 30 s sweep is the crash/lease/strand
+    SAFETY NET, not the starter: common flows dispatch AT THE EVENT —
+    ``on_epic_posted`` (post time, idle existing target), ``on_conv_idle``
+    (a task completes with an empty queue), ``on_epic_completed`` /
+    ``on_epic_answered`` (dependency done / human answered).
   • **Per ``project_path``, never a process-global.**
 """
 
@@ -914,8 +923,99 @@ def on_epic_answered(project_path: str, task_id: str) -> int:
         return 0
 
 
+def on_epic_posted(project_path: str, task_id: str) -> int:
+    """Trigger seam: an epic was just POSTED to the board → start it
+    IMMEDIATELY when it can genuinely start (no 30 s heartbeat wait).
+
+    Fires ONLY on the genuinely-startable shape — the epic reads ``open``,
+    every dependency is ``done``, the routing target conversation EXISTS and
+    is IDLE. Every other shape falls back to the existing machinery
+    unchanged:
+
+      • deps unmet → the completion trigger (``on_epic_completed``) owns it;
+      • target busy (the common case — an agent posts mid-turn) → the
+        completion nudge (``on_conv_idle``) picks it up the moment the
+        poster's turn ends, else the next heartbeat sweep;
+      • target conv row MISSING → deliberately NOT dispatched here:
+        ``dispatch_epic`` claims FIRST, so dispatching into a dead conv would
+        strand the claim until lease expiry (worse than today's ≤30 s sweep
+        delay). The sweep's claim/migration path owns that shape.
+
+    Best-effort; returns 1 when dispatched. Never raises into the post path.
+    """
+    if not project_path or not task_id:
+        return 0
+    try:
+        from lib.conversations.project_board import read_board
+        board = read_board(project_path)
+        epic = next((t for t in board['tasks'] if t['id'] == task_id), None)
+        if not epic or epic.get('status') != 'open':
+            return 0
+        done_ids = {t['id'] for t in board['tasks'] if t['status'] == 'done'}
+        if any(d not in done_ids for d in (epic.get('depends_on') or [])):
+            return 0  # unmet deps — the completion trigger owns this one
+        target = _dispatch_target(epic)
+        if not target:
+            return 0
+        if _conv_has_live_task(target) or _epic_already_queued(target, task_id):
+            return 0  # busy target — the completion nudge / sweep owns it
+        from lib.database import DOMAIN_CHAT, get_thread_db
+        db = get_thread_db(DOMAIN_CHAT)
+        row = db.execute(
+            'SELECT 1 FROM conversations WHERE id=? AND user_id=1 LIMIT 1',
+            (target,)).fetchone()
+        if not row:
+            return 0  # dead/missing target — the sweep's migration owns it
+        res = dispatch_epic(project_path, epic, target)
+        if not res.get('ok'):
+            return 0
+        _drain_idle_target(target)
+        logger.info('[Dispatch] epic %s started at POST time (target %s idle; '
+                    'no heartbeat wait)', task_id, target[:8])
+        return 1
+    except Exception as e:
+        logger.warning('[Dispatch] on_epic_posted failed proj=%.40r task=%s: %s',
+                       project_path, task_id, e)
+        return 0
+
+
+def on_conv_idle(project_path: str, conv_id: str) -> int:
+    """Trigger seam: a conversation's task just completed with an EMPTY queue
+    — it is going idle. If an open epic routes to THIS conv, dispatch + drain
+    it NOW (no 30 s heartbeat wait).
+
+    Bounded ONE per call: the drained task's own completion hook re-fires this
+    seam for any remaining epics — the same chain shape the queue drain uses,
+    so a backlog of open epics advances one per completed turn with zero
+    heartbeat involvement. Epics routed to OTHER convs are not this seam's
+    business (their own completion hooks, or the sweep, handle them).
+    Best-effort; returns 1 when an epic was dispatched.
+    """
+    if not project_path or not conv_id:
+        return 0
+    try:
+        if _conv_has_live_task(conv_id):
+            return 0  # a successor already took over (fail-safe: never stack)
+        for epic in select_dispatchable(project_path):
+            if _dispatch_target(epic) != conv_id:
+                continue
+            res = dispatch_epic(project_path, epic, conv_id)
+            if not res.get('ok'):
+                return 0
+            _drain_idle_target(conv_id)
+            logger.info('[Dispatch] epic %s started at completion-nudge time '
+                        '(conv %s went idle; no heartbeat wait)',
+                        epic.get('id', '?'), conv_id[:8])
+            return 1
+        return 0
+    except Exception as e:
+        logger.warning('[Dispatch] on_conv_idle failed proj=%.40r conv=%s: %s',
+                       project_path, conv_id[:8], e)
+        return 0
+
+
 __all__ = [
     'select_dispatchable', 'dispatch_epic', 'on_epic_completed',
-    'on_epic_answered',
+    'on_epic_answered', 'on_epic_posted', 'on_conv_idle',
     'sweep_dispatch', 'sweep_all_active_projects', 'BRAIN_DISPATCH_MARKER',
 ]

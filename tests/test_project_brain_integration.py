@@ -50,6 +50,19 @@ def _clear_task_registry():
         pass
 
 
+def _mark_busy(conv_id, task_id='busytask0000001'):
+    """Register a fake LIVE task so the conv reads busy — the production-real
+    shape of an agent posting an epic MID-TURN. The post-time event seam
+    (on_epic_posted) deliberately defers busy targets to the sweep/nudge, so
+    tests exercising the SWEEP path must post while busy. Clear with
+    _clear_task_registry()."""
+    from lib.tasks_pkg.manager import tasks, tasks_lock
+    with tasks_lock:
+        tasks[task_id] = {'id': task_id, 'convId': conv_id, 'status': 'running',
+                          'aborted': False, 'config': {}, 'toolRounds': []}
+    return task_id
+
+
 @pytest.fixture(scope='module', autouse=True)
 def _ensure_schema(flask_app):
     from lib.database import init_db
@@ -159,9 +172,13 @@ def test_full_autonomous_flywheel(flask_app, monkeypatch):
 
     with flask_app.app_context():
         # 1) Two epics: A (no deps) + B (depends_on A), both posted by our conv.
+        #    Busy-at-post (the production-real shape: an agent posts mid-turn)
+        #    so the post-time event seam defers to the sweep under test.
+        _mark_busy(conv)
         a_id = post_task(proj, conv, 'Epic A — foundation')['id']
         b_id = post_task(proj, conv, 'Epic B — builds on A',
                          depends_on=[a_id])['id']
+        _clear_task_registry()
 
         # 2) The HEARTBEAT (real scheduler entry) sweeps → A dispatchable,
         #    B blocked by its unfinished dependency. The sweep now SELF-DRAINS
@@ -321,7 +338,11 @@ def test_cold_start_tick_spawns_task_in_idle_conv(flask_app, monkeypatch):
                         lambda: [{'path': proj}])
 
     with flask_app.app_context():
+        # Busy at post so the post-time event seam defers to the tick (the
+        # path this test is named for).
+        _mark_busy(conv)
         epic = post_task(proj, conv, 'Cold-start epic')['id']
+        _clear_task_registry()
         # Drive the REAL tick (no due tasks → falls through to the sweep).
         mgr = sched.get_scheduler()
         mgr._check_and_run_due_tasks()
@@ -390,7 +411,11 @@ def test_sweep_reconciles_stranded_kickoff(flask_app, monkeypatch):
                         lambda: [{'path': proj}])
 
     with flask_app.app_context():
+        # Busy at post so the post-time seam defers (the strand setup needs
+        # the epic OPEN to claim+enqueue it manually).
+        _mark_busy(conv)
         epic = post_task(proj, conv, 'Stranded epic')['id']
+        _clear_task_registry()
     # Strand it: claimed + kickoff queued, conv idle, NOT drained.
     _strand_kickoff(flask_app, proj, conv, epic)
 
@@ -442,7 +467,9 @@ def test_NC_reconcile_is_load_bearing(flask_app, monkeypatch):
             db.execute("DELETE FROM project_tasks WHERE project_path=?", (proj,))
             db.execute("DELETE FROM message_queue WHERE conv_id=?", (conv,))
             db.commit()
+            _mark_busy(conv)
             epic = post_task(proj, conv, 'Stranded epic')['id']
+            _clear_task_registry()
             e = [x for x in pd.select_dispatchable(proj) if x['id'] == epic][0]
             pd.dispatch_epic(proj, e, conv)  # strand: claim+enqueue, no drain
             pd.sweep_dispatch(proj)          # reconcile pass runs here
@@ -510,7 +537,9 @@ def test_NC_idle_drain_is_load_bearing(flask_app, monkeypatch):
             db.execute("DELETE FROM project_tasks WHERE project_path=?", (proj,))
             db.execute("DELETE FROM message_queue WHERE conv_id=?", (conv,))
             db.commit()
+            _mark_busy(conv)
             post_task(proj, conv, 'Cold-start epic')
+            _clear_task_registry()
             sched.get_scheduler()._check_and_run_due_tasks()
         _clear_task_registry()
         return len(spawned)

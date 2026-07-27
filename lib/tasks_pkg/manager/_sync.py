@@ -245,6 +245,11 @@ def _dispatch_queued_message(task):
         # Check if there are queued messages before dispatching
         depth = get_queue_depth(conv_id)
         if depth == 0:
+            # Event channel: the conv is going idle with an EMPTY queue — let
+            # the brain start an open epic routed to it NOW (no 30 s
+            # heartbeat wait). A non-empty queue drains normally; the LAST
+            # drained turn's own completion hook fires this nudge then.
+            _nudge_brain_dispatch(task, conv_id)
             return
 
         if task.get('aborted'):
@@ -258,6 +263,27 @@ def _dispatch_queued_message(task):
         from lib.database import log_db_finalize_error
         log_db_finalize_error(logger, 'warning', e,
                               f'[Queue] Auto-dispatch failed for conv={conv_id[:8]}')
+
+
+def _nudge_brain_dispatch(task, conv_id):
+    """Brain event-channel completion nudge: a task just completed leaving an
+    EMPTY queue — the conversation is going idle. If the project board has an
+    open epic routed to this conv, dispatch + drain it NOW instead of waiting
+    for the 30 s heartbeat sweep.
+
+    Best-effort: any failure leaves the epic to the sweep (the unchanged
+    fallback). No-op for conversations without a projectPath.
+    """
+    try:
+        project_path = ((task.get('config') or {}).get('projectPath')
+                        or '').strip()
+        if not project_path:
+            return
+        from lib.conversations.project_dispatch import on_conv_idle
+        on_conv_idle(project_path, conv_id)
+    except Exception as e:
+        logger.debug('[Queue] brain completion-nudge skipped conv=%s: %s',
+                     conv_id[:8], e)
 
 
 def _reconcile_orphan_placeholder_on_settle(task):
@@ -488,7 +514,7 @@ def _sync_result_to_conversation(task, meta):
                     'follow-up %s (%dchars; autopilot owns the DB write)',
                     pfx, conv_id[:8], _autopilot_child[:8], len(content),
                 )
-            else:
+            elif _is_own_vu_carrier(latest, task):
                 # Unexpected: a task that was never aborted is no longer the
                 # latest for its conv. This shouldn't normally happen and may
                 # point to a missing abort path — worth a look.

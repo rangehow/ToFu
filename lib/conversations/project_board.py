@@ -460,6 +460,16 @@ def post_task(project_path: str, conv_id: str, title: str, *,
         logger.error('[Board] post failed proj=%.40r: %s', project_path, e, exc_info=True)
         return {'ok': False, 'error': str(e)}
     audit_log('board_post', project_path=project_path, task_id=task_id, conv_id=conv_id)
+    # ── Brain dispatch trigger (event channel): an epic that can start RIGHT
+    #    NOW (deps met, routing target EXISTS and is IDLE) starts NOW — no 30 s
+    #    heartbeat wait. Every other shape (busy poster, unmet deps, dead
+    #    target) falls back to the completion nudge / sweep unchanged.
+    #    Best-effort: never raises into the post path. ──
+    try:
+        from lib.conversations.project_dispatch import on_epic_posted
+        on_epic_posted(project_path, task_id)
+    except Exception as e:
+        logger.debug('[Board] post-time dispatch trigger skipped: %s', e)
     return {'ok': True, 'id': task_id}
 
 

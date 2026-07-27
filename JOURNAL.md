@@ -2,6 +2,17 @@
 <!-- CLOSURE-PENDING pt_a4c9d33e — billing wallet CAS + settle DONE in HEAD (fbda6d98 + d12cd17f), CAS tests 5/5 green. ONLY the board-status flip remains; project_board_complete("pt_a4c9d33ec50c484a") is absent from autonomous-dispatch toolsets. Action: owner click done, OR next dispatch with project_board_* tools calls project_board_complete. Do NOT re-implement or re-block. -->
 
 
+### 2026-07-27 — 前端日志可追溯性:X-Request-ID 在 api.js 唯一咽喉注入(owner「后端每条日志都有 rid,但前端手里没有」;commit `35c38e7f`,2 文件;新套件 **5/5 + NEUTER 精确咬 2**,真服务器 e2e 实证同一字符串,tsc **94 → 92**)
+
+- **缺口的机制性根因(不是「没做」,是「只做了一半」):** 后端 `server.py:1620` 一直写着 `request.headers.get('X-Request-ID') or uuid4().hex[:12]` —— **它优先采用客户端 id**,`set_req_id` 灌 contextvar 后每条日志行都带 `[rid]`,并在 `:1672` 回写响应头。但 `static/js/api.js::request()` 从不设这个头,于是 rid **全部由后端现编、前端手里没有副本**。用户报 bug 只能给截图+大致时间,反查后端日志靠 URL 猜——这就是「bug 多却查不动」的机制。
+- **一处改动即全站覆盖(接口统一的红利,不是巧合):** `get/post/put/patch/del/stream` 全部委托 `request()`,而 `test_frontend_api_isolation.py` 钉死了「api.js 是唯一 fetch 出口」。所以在 `request()` 注入即 100% 覆盖,**禁止在调用点逐个加**。
+- **id 形状 `<page>-<seq>`:** page 前缀每次文档加载现铸一次(crypto.randomUUID → getRandomValues → Math.random 三级降级),**作用是让一次页面加载的全部请求能用一条 grep 聚起来**;单调 seq 让每个请求可单独寻址,并让「某个请求根本没到服务器」表现为序列里的**缺口**。限制在 `[a-z0-9]+-\d+`:它要进 HTTP 头、进日志行、还要被用户念出来或截图。
+- **实测两点覆盖(EventSource / 查询参数回退**是**不需要的,别投机加):** 全库 `new EventSource` **0 处**——SSE 走的是 `Api.stream` → fetch,能带头。唯一带不了头的是 `push.js:165` 的 WebSocket,但 `routes/push.py:112` 已注明 `@app.before_request` **在 WS 路由上不跑**,所以 WS 根本不在 HTTP rid 的作用域内,给它加 query 参数需要后端另建一套 WS 侧 rid——**已开票,不夹带进本批**。
+- **顺手根修一个真契约缺陷:** `ApiError` 是真 `class`,而 `envelope`/`requestId` 原本是在 throw 点**临时挂属性**——tsc 看不见,读代码的人也看不见,错误的诊断契约散落在请求路径里。改为在构造器里声明 `requestId/clientRequestId/serverRequestId/envelope`。**结果:api.js 从 2 个 tsc 错降到 0,全局 94 → 92** —— 本轮特性是**净减少**错误数,不是靠上调基线。
+- **三条失败路径都带 id(最容易漏的是最安静那条):** HTTP 错误路 + 无响应网络错误路(区分「压根没离开客户端」与「服务器记了日志后连接断」)+ `onError:'null'` 静默吞掉路——**最安静的失败模式最需要 join key**,所以它也 `console.warn('[rid=%s]')`。同时把服务器回写的 rid 读回 `serverRequestId`:与我方发出的**不一致本身就是发现**(中间代理改写/剥离了头)。
+- **e2e 实证(owner 明确要求「不要只给我加了这行代码」):** 对运行中的服务器发 `X-Request-ID: e2etest-1785139623-7`,`logs/app.log` 两行 `[e2etest-1785139623-7] → GET /api/health` / `← ... 200` **逐字符同一字符串**,响应头同值回写。另用 node 加载**真** api.js 拦截 fetch,实测 GET/POST/stream 三路头都在、共享 page 前缀、seq 递增、caller 显式传值不被覆盖。
+- **NEUTER:** 删掉注入那一行 → `chokepoint_sets_request_id` + `share_page_prefix_and_are_unique` **精确翻红 2 个**,caller-override 与后端两条守卫正确地不受影响(它们测的是别的契约)。
+
 ### 2026-07-27 — 自动翻译「要刷新才出来」根修第二刀:三道帧守卫的 translation-only 窄通道(owner 用真实入口复核推翻我的第一刀覆盖率;commit `92e21edd`,3 文件 +526/-19;新套件 **23/23**(failing-first 实测 6 红)+ conv_notify_push **1/1 三个 NEUTER 全咬**,回归环 19 套件 **92/92**,collect **10557** 0 err)
 
 - **第一刀(`3e168055`)只修对了四种到达形态中的一种。** 我的测试从 `_verifyActiveConvFromServer` **中段**切入,绕过了 `_onConvNotifyPush` 真正会丢帧的三道闸;owner 从真实入口打了一遍,实测 `get=0` 两格 + `_needsLoad` 一格。**教训(本轮最值钱):测试的切入点决定了它能看见哪些闸——从中段进去的测试对上游守卫链完全失明,「reducer 接线存在」≠「帧到得了 reducer」。**

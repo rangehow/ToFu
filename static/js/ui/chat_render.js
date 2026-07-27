@@ -1290,7 +1290,14 @@ function renderMessage(msg, idx) {
    *   the user can pull the full tool activity on demand — a click hydrates the
    *   FULL conversation (heavy fields refilled by _msgId) and repaints. Only
    *   when this turn actually had tool rounds and none are currently present. */
-  if (!_segTimelineRendered && rounds.length === 0 && msg && msg._trimmed
+  /*   Count REAL rounds only: getToolRoundsFromMsg rebuilds display-only
+   *   inject rows (swarm / peer / user-steer) from the underscore sidecars
+   *   whenever `toolRounds` is empty, so a trimmed turn that also received
+   *   injects arrives here with rounds.length > 0 and no real history — the
+   *   affordance is the ONLY way back to it. */
+  const _realRounds = rounds.filter(
+    (r) => r && !r._inboxInject && !r._peerInject && !r._userSteerInject);
+  if (!_segTimelineRendered && _realRounds.length === 0 && msg && msg._trimmed
       && msg._trimmedToolRoundCount > 0) {
     const _n = msg._trimmedToolRoundCount;
     const _cid = (typeof activeConvId !== 'undefined') ? activeConvId : '';

@@ -2226,6 +2226,16 @@ def _start_background_workers():
             _server_log.info('[Server] resumed %d interrupted motion job(s)', n)
     except Exception as e:
         _server_log.warning('[Server] motion job resume failed: %s', e)
+    # Auto-research counterpart (R4): same checkpointed stage-graph contract —
+    # a job left 'running' on disk resumes from its last completed stage, so
+    # an already-harvested corpus is not re-crawled.
+    try:
+        from lib.research import resume_interrupted_research
+        n = resume_interrupted_research()
+        if n:
+            _server_log.info('[Server] resumed %d interrupted research job(s)', n)
+    except Exception as e:
+        _server_log.warning('[Server] research job resume failed: %s', e)
     # Podcast counterpart (P-UX4): a 'generating' cache row can only belong
     # to the process that just died — flip them to 'interrupted' so the tab
     # says "被重启打断" instead of pretending nothing happened.

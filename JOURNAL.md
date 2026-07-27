@@ -1,6 +1,18 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-28 — MCP/Skills 目录降认知负担三层收口:**我上一轮上架的 5 张中国生活服务卡在设置页里根本没有分类入口**,而 `install_note` 是全前端零渲染的死字段(epic `pt_b06e37a67a824194`;commits `7497eb3a` + `1846fe71` + `0fb35249`;守卫 **14/14**,**NEUTER×12 全咬**,tsc BASELINE=0 不变,干净 committed worktree 逐层复验)
+
+- **★ 起因是 owner 说「装 MCP 时该给直链而不是告诉用户去哪找」,但实测发现比缺链接更硬的两件事,优先级必须倒过来 —— 能力得先「找得到」「看得见」,再谈「点得动」。**
+  - **① 分类药丸是硬编码白名单。** `mcp.js:70` 写死 10 项,后端 `CATEGORIES` 有 12 项。缺的正是 `Local Life & Travel (China)`(**5 条**:高德/RollingGo×2/途牛/12306)与 `Science & Research`(2 条,预存在)。**卡片在、搜得到,但按分类筛不到** —— 我刚上架的整个品类没有入口。这是 charter「后端单一真源被前端手抄」的同构体:**副本不会因原件变长而变红**。`skills.js:135` 同款写法(今天恰好覆盖全 7 类,属预防性)。
+  - **② `install_note` 全前端零渲染。** `grep -rn install_note static/` 命中 **0**,而两个目录共写了 **7 条**、`SkillCatalogEntry` 注释还承诺 "shown under the card"。我那句「需高德开放平台实名认证个人开发者账号即可申请 Key」**用户一个字都看不到** —— 与 charter 记的 `_BUDGET_EXEMPT_TOOLS` 假数字同族:**一句没有断言背书的承诺**。
+  - 修法是**结构性**的而非补两个字符串:药丸集合改为**从 catalog 返回的数据派生**,`_CAT_ORDER` 降级为纯显示偏好,**未知分类追加到末尾而非丢弃** —— 下一个后端新增分类不会再蒸发。
+- **第 2 层三个缺陷同一主题:把「怎么拿到凭证」写在了散文活不下去的地方。** ①控制台路径塞在 `hint`,而 `hint` 是 **placeholder** —— 不可点、被输入框宽度截断、用户一打字就消失;②更糟:`hasStored` 会把 hint **整个替换**成「已保存,留空则沿用」,于是**恰好在用户轮换过期 Key 时**指引消失;③RollingGo 酒店/机票共用 `ROLLINGGO_API_KEY`(实测 github/github-batch 也共用一个 PAT),装第二个时**再问一遍**用户已经给过的 Key,用户就去重复申请。改为 `EnvSpec` 加结构化 `obtain_url`/`obtain_steps` 渲染成真链接 + 有序步骤;hint 与「已保存」两条**并存**;共用凭证按 **`stored_env_keys`**(真存了什么)而非声明的 spec 判定。
+- **★ 一条我刻意没做的事:`obtain_url` 不强制全部 40 个携密条目声明。** 实测只有 4 个声明了,若写「全覆盖」断言 → 开局就红在 36 个上,只会逼后人**编造 URL** 来消红。故守卫断言**行为**(声明了路由就必须渲染出可点链接;没声明就必须渲染空),这样后续补一条路由永远是改进、而不是为了修红。
+- **第 3 层克制地做:只在面板内。** 空状态推荐**只推「用户能自助装完」的条目**(无需凭证 或 所有必填凭证都有 `obtain_url`)——实测 15 个够格、**36 个不够格**。推一个点进去走不通的卡片,比不推更糟,这与「携程/美团故意不建条目」是同一判据。**对话内意图检测明确不做**:同族短语判据在 `pt_33ba079f5cea4841` 实测 **60% 误报**,charter 要求先测量前提再造机制。
+- **★ 共享 HEAD 上我犯了同一类错两次,两次都是「提交前数文件」抓到的。** ①第一次提交时 `index.html` 显示 **146 行**变更而我只加了 1 行 —— 把兄弟未提交的「本机控制」合并(122 行)扫进了我的 commit,已 `--amend` 摘出并把他们的改动原样放回工作树;②第三层提交时 `git add` 又把兄弟**未跟踪**的 `cookie_capture_consent.js` 扫了进来。**判据:`git add` 后必须 `wc -l` 计数断言,数目不符就 abort —— 显式 pathspec 不足以防住未跟踪文件与他人脏改动。**
+- **诚实分账:** `test_frontend_globals_generated` 红,已在**未叠加任何我改动的 pristine HEAD worktree** 上复验同样红(兄弟 122 行重写删了 `_browserClientId`)。我的改动**不新增全局符号**,故撤销了 regeneration 而没有替他们提交。
+
 ### 2026-07-28 — 浏览器桥 + 桌面控制合并为单一「本机控制」面:**owner 两次否掉我的方案形状**(第一版做成第二个 modal = 复制而非合并;引导内容教的是已废弃的 CLI 流程);外加我自己在共享 HEAD 上**把兄弟的两条清单行 commit 进去**,靠「committed tree 验收」才抓到(commits `747db641` + `3441df91` + `02de5158` + `6e6e29e4`;新套件 **15/15 零 skip**,**NEUTER×3 全咬**,相邻环 **68/68**,干净 committed worktree 复验通过)
 
 - **★ 起点是一个真缺陷,不是重构:`toggleDesktop()`(main.js:506)是三行盲翻。** 浏览器侧 `toggleBrowser()` 会拦截首次开启、弹装配引导、确认后才落旗;桌面侧直接 `_applyDesktopUI(!desktopEnabled)` 存盘。而 `_build_desktop`(`lib/tools/registry/_build.py:117`)在 agent 未连接时**静默返回 `[]`** —— 于是开关亮着、工具一个都不存在,用户毫无提示。`Api.desktop.status`(api.js:857)**全前端零调用点**,这就是为什么这个洞一直没人发现:状态通道从来没接上。

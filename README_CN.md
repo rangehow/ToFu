@@ -470,7 +470,7 @@ pip install docling --extra-index-url https://download.pytorch.org/whl/cpu
 
 当你想连接外部工具服务器 —— GitHub、数据库、自定义 API —— MCP 可以把它们桥接到 Tofu 的工具系统中。
 
-**工作原理：** MCP 服务器作为子进程运行，通过 stdio/SSE（JSON-RPC 2.0）通信。Tofu 将它们的工具翻译成 OpenAI function-calling 格式，让 LLM 可以像使用原生工具一样发现和调用它们。
+**工作原理：** MCP 服务器既可以作为本地子进程运行（stdio），也可以是远程 HTTP 端点（`streamable-http` / `sse`），统一使用 JSON-RPC 2.0 通信。Tofu 将它们的工具翻译成 OpenAI function-calling 格式，让 LLM 可以像使用原生工具一样发现和调用它们。
 
 **配置：** 在 **设置** 中或编辑 `data/config/mcp_servers.json`：
 ```json
@@ -483,7 +483,32 @@ pip install docling --extra-index-url https://download.pytorch.org/whl/cpu
 }
 ```
 
+**远程服务器**若需要鉴权，密钥只放在 `env` 里；`headers` 与 `url` 只写
+`${VAR}` 引用，连接时才代入。这样密钥只有一个存放处，并且会从所有 API
+响应与日志中被脱敏掉：
+```json
+{
+  "rollinggo-hotel": {
+    "transport": "streamable-http",
+    "url": "https://mcp.rollinggo.cn/mcp",
+    "headers": { "Authorization": "Bearer ${ROLLINGGO_API_KEY}" },
+    "env": { "ROLLINGGO_API_KEY": "你的 key" }
+  },
+  "amap-maps": {
+    "transport": "streamable-http",
+    "url": "https://mcp.amap.com/mcp?key=${AMAP_MAPS_API_KEY}",
+    "env": { "AMAP_MAPS_API_KEY": "你的 key" }
+  }
+}
+```
+
 之后助手就可以调用 `mcp__github__create_issue`、`mcp__github__search_code` 等工具 —— 任何 MCP 兼容的服务器都能接入。
+
+**本地生活与出行（中国）。** 内置目录里有一类「办日常事」的服务器，个人开发者都能自助拿到
+凭证：**高德地图**（路径规划、周边搜索、天气）、**RollingGo** 酒店 + 机票（真实可订库存）、
+**途牛**（酒店/机票/火车/门票/邮轮/度假，支持完整下单链路）、**12306**（火车余票查询，本地运行、
+无需 key）。**飞猪**是 Skill 形态而非 MCP 服务器，请在 **设置 → Skills** 中查找。
+携程与美团**故意未收录**：它们的 AI 开放平台仅对企业客户开放，做成一键安装卡片会点不动。
 
 ---
 

@@ -485,7 +485,7 @@ When the assistant produces something you'd rather *see* than scroll past — a 
 
 When you want to connect external tool servers — GitHub, databases, custom APIs — MCP bridges them into Tofu's tool system.
 
-**How it works:** MCP servers run as subprocesses and communicate via stdio/SSE (JSON-RPC 2.0). Tofu translates their tools into OpenAI function-calling format, so the LLM can discover and invoke them alongside native tools.
+**How it works:** MCP servers run either as local subprocesses (stdio) or as remote HTTP endpoints (`streamable-http` / `sse`), all speaking JSON-RPC 2.0. Tofu translates their tools into OpenAI function-calling format, so the LLM can discover and invoke them alongside native tools.
 
 **Setup:** Go to **Settings** or configure in `data/config/mcp_servers.json`:
 ```json
@@ -498,7 +498,36 @@ When you want to connect external tool servers — GitHub, databases, custom API
 }
 ```
 
+A **remote** server that authenticates with a header or a query parameter keeps its
+secret in `env` — `headers` and `url` hold only `${VAR}` references, which are
+substituted at connect time. That way credentials live in exactly one place and
+are redacted out of every API response and log line:
+```json
+{
+  "rollinggo-hotel": {
+    "transport": "streamable-http",
+    "url": "https://mcp.rollinggo.cn/mcp",
+    "headers": { "Authorization": "Bearer ${ROLLINGGO_API_KEY}" },
+    "env": { "ROLLINGGO_API_KEY": "your-key" }
+  },
+  "amap-maps": {
+    "transport": "streamable-http",
+    "url": "https://mcp.amap.com/mcp?key=${AMAP_MAPS_API_KEY}",
+    "env": { "AMAP_MAPS_API_KEY": "your-key" }
+  }
+}
+```
+
 The assistant can then call tools like `mcp__github__create_issue`, `mcp__github__search_code`, etc. — any MCP-compatible server works.
+
+**Local life & travel (China).** The catalog ships a category of everyday-errand
+servers that individual developers can get keys for: **Amap** (routing, nearby
+search, weather), **RollingGo** hotels + flights (real bookable inventory),
+**Tuniu** (hotels/flights/trains/tickets/cruises/tours with a full booking
+chain) and **12306** (train availability, local + no key). **Fliggy** ships as a
+Skill instead of an MCP server, so you'll find it under **Settings → Skills**.
+Ctrip and Meituan are deliberately absent: their AI platforms are gated to
+corporate customers, so a one-click card could not actually work.
 
 ---
 

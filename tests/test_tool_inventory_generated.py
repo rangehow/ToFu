@@ -125,6 +125,87 @@ class TestInventoryNotStale:
             assert r['tool'] not in builtin
 
 
+class TestConfusableDetectorHasControls:
+    """Controls for the ONE judgement column that survived calibration.
+
+    Two sibling columns were cut during this work, and the reason both died is
+    the reason this class exists:
+
+    * ``returns`` (MARKED/CAPPED/UNBOUNDED) — five designs, each falsified
+      against source-verified tools; the last traded 3 false positives for 4
+      false negatives.
+    * ``params_ok`` — reported ``0`` defects, but fed its OWN motivating
+      precedent as a synthetic schema it returned no defect. Zero because the
+      rule fired on nothing, not because the surface was clean.
+
+    A detector reporting a low number is indistinguishable from a detector that
+    does not work, so ``describes_ok`` is pinned from both directions: a
+    known-bad input it MUST flag, and a known-good input it must NOT.
+    """
+
+    def test_positive_control_near_duplicate_pair_is_flagged(self):
+        """The rule must flag a pair engineered to be confusable.
+
+        This is exactly the check ``params_ok`` failed. Without it, a
+        ``confusable: 0`` line would be untrustworthy.
+        """
+        sys.path.insert(0, _repo_root())
+        from scripts.gen_tool_inventory import _confusable_pairs
+
+        schemas = {
+            'read_thing': {'description':
+                           'Read the contents of a thing from the project store.'},
+            'read_object': {'description':
+                            'Read the contents of an object from the project store.'},
+        }
+        rows = [{'tool': 'read_thing', 'category': 'files'},
+                {'tool': 'read_object', 'category': 'files'}]
+        pairs = _confusable_pairs(schemas, rows)
+        assert pairs, (
+            'the confusable detector failed its POSITIVE CONTROL: two '
+            'descriptions differing only by a synonym were not flagged, so a '
+            'low reported count means nothing'
+        )
+
+    def test_negative_control_unrelated_siblings_are_not_flagged(self):
+        """Same category, genuinely different jobs -> not confusable.
+
+        Guards the opposite failure: a threshold loose enough to flag everything
+        is equally useless (an earlier column read 89/89 for one value).
+        """
+        sys.path.insert(0, _repo_root())
+        from scripts.gen_tool_inventory import _confusable_pairs
+
+        schemas = {
+            'read_files': {'description':
+                           'Read the contents of one or more files.'},
+            'run_command': {'description':
+                            'Execute a shell command and return its output.'},
+        }
+        rows = [{'tool': 'read_files', 'category': 'files'},
+                {'tool': 'run_command', 'category': 'files'}]
+        assert _confusable_pairs(schemas, rows) == [], (
+            'unrelated same-category tools were reported confusable — the '
+            'threshold is too loose to discriminate'
+        )
+
+    def test_cross_category_pairs_are_not_compared(self):
+        """Identical wording in unrelated categories is not the model's problem.
+
+        Pins the scoping decision: the choice a model faces is between
+        neighbours, and comparing across the whole surface manufactures noise.
+        """
+        sys.path.insert(0, _repo_root())
+        from scripts.gen_tool_inventory import _confusable_pairs
+
+        desc = 'Read the contents of a thing from the store.'
+        schemas = {'a_tool': {'description': desc},
+                   'b_tool': {'description': desc}}
+        rows = [{'tool': 'a_tool', 'category': 'files'},
+                {'tool': 'b_tool', 'category': 'browser'}]
+        assert _confusable_pairs(schemas, rows) == []
+
+
 class TestApprovalEnricherRatchet:
     def test_every_write_tool_has_an_approval_enricher(self):
         from lib.tasks_pkg.tool_dispatch._approval import _APPROVAL_META_ENRICHERS

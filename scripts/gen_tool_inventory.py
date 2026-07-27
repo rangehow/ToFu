@@ -30,6 +30,65 @@ DESIGN RULES (mirrors scripts/gen_frontend_globals.py — see the charter's
   ratchets in ``tests/test_tool_inventory_generated.py`` decide what is
   acceptable.
 
+NOT HERE, AND WHY — the ``returns`` column (MARKED / CAPPED / UNBOUNDED)
+-----------------------------------------------------------------------
+An earlier revision tried to derive, per tool, whether its RESULT is bounded
+and whether truncation is announced to the model. The intent is sound — a
+silently shortened result is strictly worse than a hard error, because the
+model treats the surviving half as the whole answer. The column was cut after
+five successive designs were each falsified against source-verified tools:
+
+1. handler body only            -> 85/89 UNBOUNDED (handlers merely route)
+2. whole modules from sys.modules -> 89/89 MARKED (one match tars the module)
+3. AST call graph, depth 2       -> missed ``run_command`` (marker is 3 hops out)
+4. + literal dispatch-table resolution + package locality + depth 4
+                                 -> 9/9 ground-truth cases correct, but spot
+                                    checks found 6 FALSE POSITIVES: the marker
+                                    belonged to an unrelated helper on an error
+                                    path (``_find_closest_match``,
+                                    ``build_result_meta``, ``_chunk_text``).
+5. restrict evidence to return-reachable dataflow (transitive closure)
+                                 -> killed 3 false positives, introduced 4 new
+                                    FALSE NEGATIVES; net worse.
+
+The blocker is structural, not a tuning problem. The dominant idiom among
+exactly the tools that truncate is an accumulator mutated by METHOD CALL —
+``parts.append(result); return '\n\n'.join(parts)`` (``tool_find_files_batch``).
+Tracking that requires modelling container mutation and aliasing, i.e. real
+points-to analysis, which is a static-analysis project rather than a column in
+a generated document.
+
+So the facet is deliberately ABSENT rather than approximated: a plausible-
+looking column that is wrong for a sixth of its rows is worse than no column,
+because reviewers would trust it. If it is ever revived, the acceptance bar is
+the one used above — a source-verified ground-truth set INCLUDING negative
+cases, not just a distribution that looks discriminating.
+
+ALSO NOT HERE — the ``params_ok`` column
+----------------------------------------
+A second cut column, for a simpler reason: **it had no positive control.** The
+rule flagged a param whose prose promises a closed set of values while the
+schema declares no ``enum=``, motivated by a precedent where an undocumented
+``kind`` got 6/6 generated ideas rejected. Two measurements sank it:
+
+* Fed that exact precedent as a synthetic schema, the rule returned NO defect —
+  the prose reads "each idea has a kind: methodology or analysis", which none of
+  the trigger phrases (``one of`` / ``either`` / ``valid values`` / …) match. A
+  detector that misses its own motivating case is not a detector.
+* ``ideate`` is not in this corpus at all: it is an internal pipeline function
+  in ``lib/paper/ideate.py``, never exposed as an LLM-facing tool. A broader
+  literal-alternation rule then scanned all 160 string params across 90 schemas
+  and found exactly one hit, itself a false positive (``run_command``'s
+  ``working_dir`` mentions ``python``/``pip`` as example commands, not as
+  allowed values).
+
+So the reported ``0`` was a false green — zero because the rule fires on
+nothing, not because the tool surface is clean. Any revival must ship a POSITIVE
+CONTROL (a known-bad schema the rule provably flags) before its zero means
+anything. This is why ``describes_ok`` / ``_confusable_pairs`` is guarded by
+both a positive and a negative control in
+``tests/test_tool_inventory_generated.py``.
+
 USAGE
     python3 scripts/gen_tool_inventory.py            # write the inventory
     python3 scripts/gen_tool_inventory.py --check    # CI: fail if stale
@@ -41,6 +100,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -53,7 +113,7 @@ OUTPUT_PATH = os.path.join(REPO_ROOT, 'docs', 'TOOL_INVENTORY.md')
 COLUMNS = [
     'tool', 'category', 'spec', 'dispatch', 'write', 'idempotent',
     'label', 'approval_enricher', 'serial', 'read_gate', 'fresh_gate',
-    'streamable', 'arg_repair',
+    'streamable', 'arg_repair', 'describes_ok',
 ]
 
 
@@ -130,6 +190,129 @@ def _facet_tables():
     return tables
 
 
+def _tool_schemas() -> dict:
+    """tool name → its live OpenAI function schema.
+
+    Assembled through the real registry with every capability switched on, so
+    the text examined here is the text the MODEL receives. Families gated on a
+    live extension/agent (browser, desktop) are absent from an assembled list
+    in CI, so their module constants are read directly as a fallback.
+    """
+    out: dict = {}
+    try:
+        from lib.tools import ToolContext, assemble_tool_list
+        ctx = ToolContext(
+            cfg={}, task_id='inv', project_path='/tmp/inv', project_enabled=True,
+            search_mode='multi', search_enabled=True, fetch_enabled=True,
+            code_exec_enabled=False, browser_enabled=True, desktop_enabled=True,
+            swarm_enabled=True, image_gen_enabled=True,
+            human_guidance_enabled=True, scheduler_enabled=True, messages=[])
+        tool_list, _ = assemble_tool_list(ctx)
+        for t in tool_list or []:
+            fn = (t or {}).get('function') or {}
+            if fn.get('name'):
+                out[fn['name']] = fn
+    except Exception as e:  # noqa: BLE001
+        print(f'[gen_tool_inventory] WARNING: schema assembly failed: {e}',
+              file=sys.stderr)
+
+    import importlib
+    for mod, attr in (
+        ('lib.tools', 'BROWSER_TOOLS'),
+        ('lib.browser.advanced', 'ADVANCED_BROWSER_TOOLS'),
+        ('lib.desktop_tools', 'DESKTOP_TOOLS'),
+        ('lib.tools.motion_video', 'MOTION_VIDEO_TOOLS'),
+        ('lib.memory', 'ALL_MEMORY_TOOLS'),
+        ('lib.scheduler.tool_defs', 'SCHEDULER_TOOLS'),
+        ('lib.swarm.tools', 'ARTIFACT_TOOLS'),
+    ):
+        try:
+            group = getattr(importlib.import_module(mod), attr, None) or []
+        except Exception:  # noqa: BLE001 — an absent optional family is fine
+            continue
+        for t in (group if isinstance(group, (list, tuple)) else [group]):
+            fn = (t or {}).get('function') or {}
+            if fn.get('name') and fn['name'] not in out:
+                out[fn['name']] = fn
+    return out
+
+
+def _describe_defects(fn: dict) -> list:
+    """Presence-only checks. Kept minimal ON PURPOSE — the real description
+    defect is cross-tool CONFUSABILITY, which one schema alone cannot see and
+    which is therefore computed in :func:`_confusable_pairs`.
+    """
+    reasons = []
+    desc = str(fn.get('description') or '').strip()
+    if not desc:
+        reasons.append('no description at all')
+    return reasons
+
+
+_STOPWORDS = frozenset('''a an the of to in for on with and or is are be this that
+it its from by as at into use uses used using when what which you your not do
+does if then than so such can may will should must one all any each per via
+tool call calls called return returns returning given only also same other'''.split())
+
+
+def _first_sentence_tokens(desc: str) -> set:
+    """Content-word set of the description's FIRST sentence.
+
+    The first sentence is what a model skims when choosing between tools, and
+    stripping stopwords keeps the comparison about subject matter rather than
+    shared English scaffolding.
+    """
+    head = re.split(r'(?<=[.!?])\s|\n', desc.strip(), maxsplit=1)[0]
+    words = re.findall(r'[a-z_]{3,}', head.lower())
+    return {w for w in words if w not in _STOPWORDS}
+
+
+#: Jaccard overlap at or above which two same-category tools are reported as
+#: confusable. Calibrated on real data (see the discrimination test): the
+#: genuine near-duplicate families in this repo land at >=0.5, while unrelated
+#: siblings in the same category sit well below it.
+_CONFUSABLE_AT = 0.5
+
+
+def _confusable_pairs(schemas: dict, rows: list) -> list:
+    """Same-category tool pairs whose first sentences are near-duplicates.
+
+    THIS is the description defect that costs a turn: the model picks the wrong
+    tool. A length or presence check cannot see it — it needs a comparison
+    ACROSS tools, which is why this is computed over the whole inventory rather
+    than inside the per-tool defect function.
+
+    Restricted to pairs in the same ``category`` because that is the choice the
+    model actually faces; two identically-worded tools in unrelated categories
+    are disambiguated by the surrounding task.
+    """
+    by_cat: dict = {}
+    for r in rows:
+        fn = schemas.get(r['tool'])
+        if not fn:
+            continue
+        toks = _first_sentence_tokens(str(fn.get('description') or ''))
+        if len(toks) < 3:
+            continue  # too short to compare meaningfully
+        by_cat.setdefault(r['category'] or '', []).append((r['tool'], toks))
+
+    pairs = []
+    for cat, items in sorted(by_cat.items()):
+        for i in range(len(items)):
+            for j in range(i + 1, len(items)):
+                a, ta = items[i]
+                bname, tb = items[j]
+                union = ta | tb
+                if not union:
+                    continue
+                score = len(ta & tb) / len(union)
+                if score >= _CONFUSABLE_AT:
+                    pairs.append((cat, a, bname, round(score, 2),
+                                  sorted(ta & tb)[:6]))
+    pairs.sort(key=lambda p: -p[3])
+    return pairs
+
+
 def _dispatch_path(registry, name: str) -> str:
     """How ``lookup(name)`` resolves — EXACT / SET / NONE.
 
@@ -149,6 +332,8 @@ def collect() -> dict:
     """Build the full inventory: built-in rows + a plugin diagnostic list."""
     registry, specs = _load_registry()
     t = _facet_tables()
+    schemas = _tool_schemas()
+    all_names = {n for s in specs for n in s.provides}
     label_fn = t.get('label')
     parts = t.get('partitions') or {}
     write_set = parts.get('write') or set()
@@ -173,6 +358,16 @@ def collect() -> dict:
                 'streamable': name in (t.get('streamable') or set()),
                 'arg_repair': name in (t.get('arg_repair') or set()),
             }
+            _fn = schemas.get(name)
+            if _fn is None:
+                # No live schema resolved (gated family, or a handler-only
+                # name like the artifact tools injected per sub-agent).
+                row['describes_ok'] = '?'
+                row['_describe_reasons'] = []
+            else:
+                dr = _describe_defects(_fn)
+                row['describes_ok'] = not dr
+                row['_describe_reasons'] = dr
             if spec.source == 'plugin':
                 row['plugin'] = spec.plugin_name
                 plugin_rows.append(row)
@@ -181,7 +376,15 @@ def collect() -> dict:
 
     builtin_rows.sort(key=lambda r: (r['category'], r['tool']))
     plugin_rows.sort(key=lambda r: (r.get('plugin', ''), r['tool']))
-    return {'builtin': builtin_rows, 'plugin': plugin_rows}
+    confusable = _confusable_pairs(schemas, builtin_rows)
+    _confused = {p[1] for p in confusable} | {p[2] for p in confusable}
+    for r in builtin_rows:
+        if r['tool'] in _confused:
+            r['describes_ok'] = False
+            r.setdefault('_describe_reasons', []).append(
+                'first sentence near-duplicates a same-category sibling')
+    return {'builtin': builtin_rows, 'plugin': plugin_rows,
+            'confusable': confusable}
 
 
 def _mark(v) -> str:
@@ -222,6 +425,33 @@ def render(inv: dict) -> str:
                'in the activity line |')
     out.append(f'| no reachable handler | {len(gap_no_handler)} | schema advertised '
                'to the model but nothing executes it |')
+    gap_desc = [r for r in b if r.get('describes_ok') is False]
+    confusable = inv.get('confusable') or []
+    out.append(f'| description cannot disambiguate | {len(gap_desc)} | the model '
+               'cannot tell this tool apart from its neighbours and picks the '
+               'wrong one |')
+    out.append(f'| confusable tool pairs | {len(confusable)} | two same-category '
+               'tools open with near-identical sentences, so the model picks '
+               'the wrong one |')
+    out.append('')
+    for title, rows, key in (
+        ('Tools whose description cannot disambiguate', gap_desc, '_describe_reasons'),
+    ):
+        if rows:
+            out.append(f'{title}:')
+            out.append('')
+            for r in rows:
+                for reason in r.get(key) or []:
+                    out.append(f'- `{r["tool"]}` — {reason}')
+            out.append('')
+    if confusable:
+        out.append('Confusable same-category tool pairs '
+                   f'(first-sentence overlap >= {_CONFUSABLE_AT}):')
+        out.append('')
+        for cat, a, bb, score, shared in confusable:
+            out.append(f'- [{cat}] `{a}` vs `{bb}` — overlap {score}, '
+                       f'shared: {", ".join(shared)}')
+        out.append('')
     out.append('')
     if gap_write_no_enricher:
         out.append('Write tools lacking an approval enricher:')

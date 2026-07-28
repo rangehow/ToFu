@@ -157,6 +157,10 @@ _MANIFEST_FIELDS = (
     'alignment', 'narration', 'quality', 'parallel', 'width', 'height',
     'burn_in', 'burn_in_fontsdir', 'topic', 'lang', 'max_scenes', 'paper_hash',
     'scene_author', 'author_rounds', 'author_token_budget',
+    # Product-quality axis. Persisted because the paper panel's post-restart
+    # re-attach reads job.json and NOTHING else — without it a degraded film
+    # is laundered into a clean success by the next process restart.
+    'artifact_quality', 'authored_scenes', 'total_scenes',
 )
 
 
@@ -631,48 +635,29 @@ def run_motion_task(task: dict) -> None:
             'gate_failed_scenes': sorted(scene_gate_issues),
         }
         task['result'] = result
+        # ★ Computed BEFORE the manifest write, not after: job.json is the ONLY
+        #   thing the paper panel can read once the process restarts (the task
+        #   is gone from the runtime and poll() 404s), so a verdict reached
+        #   after the write would survive exactly until the next restart and
+        #   then silently become a clean success.
+        _quality = _quality_verdict(
+            degraded_narration=degraded_narration,
+            scene_gate_issues=scene_gate_issues,
+            authoring=bool(authoring), authored=authored, total=total)
+        # Same shape TaskRuntime.finish() puts on the task, so the disk
+        # fallback and the live poll hand the panel one field, not two.
+        task['artifact_quality'] = _quality
+        task['authored_scenes'] = authored
+        task['total_scenes'] = total
         write_job_manifest(task, kind=task.get('kind') or 'scenes',
                            state='done')
         _drop_page_cache(workdir)
         _emit(task, {'type': 'final', 'final_path': final_path,
                      'duration': result['duration'], 'narrated': narration})
-        # Quality axis: a silent-degraded job still delivers a playable mp4,
-        # so status is legitimately 'done'. But narration was REQUESTED and
-        # the scene durations are char-estimated rather than measured from
-        # real audio (lib/motion_video/_recipe.py::_FALLBACK_CHARS_PER_SECOND),
-        # which is how "8 shots all pinned at the 15.0s ceiling" ships green.
-        # Scenes that failed the REAL gates are the same shape of defect on the
-        # VISUAL axis: the film plays, but those frames carry an unresolvable
-        # font, failing contrast, or text outside its container — so they must
-        # not ship looking like a clean success either.
-        _reasons = []
-        if degraded_narration:
-            _reasons.append(
-                'narration requested but no TTS slot was available — shipped '
-                'the silent video with burned-in subtitles; scene durations '
-                'are char-estimated, not measured from audio')
-        if scene_gate_issues:
-            _first = next(iter(scene_gate_issues.values()))[:2]
-            _reasons.append(
-                f'{len(scene_gate_issues)} of {total} scene(s) failed the '
-                f'renderer quality gates '
-                f'({", ".join(sorted(scene_gate_issues))}): ' + '; '.join(_first))
-        # 整片降级 (owner 2026-07-27): ONE scene falling back to the template
-        # is the designed local degrade, but when authoring was requested and
-        # EVERY scene fell back, the film the user asked for was not made —
-        # they get the plain card deck that prompted this work. That is a
-        # failed artifact, so it must not settle as a clean success.
-        _all_fell_back = bool(authoring and total and authored == 0)
-        if _all_fell_back:
-            _reasons.append(
-                f'boutique quality was requested but all {total} scene(s) fell '
-                f'back to the plain template card — the film shipped, but not '
-                f'at the quality asked for')
         _motion_runtime.finish(
             task_id, result=result,
-            degraded=bool(degraded_narration or scene_gate_issues
-                          or _all_fell_back),
-            degraded_reason=' | '.join(_reasons))
+            degraded=_quality['degraded'],
+            degraded_reason=_quality['reason'])
         logger.info('[MotionVideo] task %s done: %s (%.2fs, %d scenes, '
                     'narrated=%s)', task_id, final_path, result['duration'],
                     total, narration)
@@ -686,6 +671,58 @@ def run_motion_task(task: dict) -> None:
             logger.debug('[MotionVideo] manifest error-state write failed: %s', _me)
         _motion_runtime.finish(task_id, error=e,
                                error_context='motion-video:engine')
+
+
+def _quality_verdict(*, degraded_narration: bool, scene_gate_issues: dict,
+                     authoring: bool, authored: int, total: int) -> dict:
+    """The film's PRODUCT-quality verdict: ``{'degraded': bool, 'reason': str}``.
+
+    Separate from ``status`` on purpose (lib/agent_core/task_runtime.py): all
+    three inputs below describe a film that PLAYS, so the lifecycle is a
+    legitimate 'done' — the question this answers is whether it is the film
+    that was asked for.
+
+    Three ways a playable film is still a failed artifact:
+
+    * **silent-degraded narration** — narration was REQUESTED but no TTS slot
+      existed, so durations are char-estimated rather than measured from real
+      audio. That is how "8 shots all pinned at the 15.0s ceiling" ships green.
+    * **scenes that failed the REAL gates** — those frames carry an
+      unresolvable font, failing contrast, or text outside its container:
+      exactly what a viewer calls "no formatting".
+    * **wholesale fallback** — ONE scene degrading to the template is the
+      designed local degrade, but when authoring was requested and EVERY scene
+      fell back, the user received the plain card deck that prompted this work.
+
+    A pure function rather than an inline block so it can be driven with real
+    inputs: while it lived inside ``run_motion_task`` the only way to check it
+    was to grep the function's source for a literal, which stops matching the
+    moment the expression is reformatted — a guard that reports formatting,
+    not behaviour.
+    """
+    reasons = []
+    if degraded_narration:
+        reasons.append(
+            'narration requested but no TTS slot was available — shipped '
+            'the silent video with burned-in subtitles; scene durations '
+            'are char-estimated, not measured from audio')
+    if scene_gate_issues:
+        first = next(iter(scene_gate_issues.values()))[:2]
+        reasons.append(
+            f'{len(scene_gate_issues)} of {total} scene(s) failed the '
+            f'renderer quality gates '
+            f'({", ".join(sorted(scene_gate_issues))}): ' + '; '.join(first))
+    all_fell_back = bool(authoring and total and authored == 0)
+    if all_fell_back:
+        reasons.append(
+            f'boutique quality was requested but all {total} scene(s) fell '
+            f'back to the plain template card — the film shipped, but not '
+            f'at the quality asked for')
+    return {
+        'degraded': bool(degraded_narration or scene_gate_issues
+                         or all_fell_back),
+        'reason': ' | '.join(reasons),
+    }
 
 
 def run_topic_motion_task(task: dict) -> None:

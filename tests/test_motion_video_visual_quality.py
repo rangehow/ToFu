@@ -179,10 +179,32 @@ def test_engine_records_gate_findings_on_the_quality_axis():
         'the compose stage no longer runs the real gates — the regex gate '
         'alone cannot see fonts, contrast, runtime errors or overflow')
     assert 'scene_gate_issues' in src
-    # The findings must reach the QUALITY axis, not just a log line.
-    assert 'degraded=bool(degraded_narration or scene_gate_issues)' in src \
-        or 'scene_gate_issues' in src.split('degraded=')[1], (
+    # …and the findings must reach the QUALITY axis, not just a log line.
+    # Driven through the real verdict function rather than grepped, so
+    # reformatting the expression cannot turn this green (and a genuine
+    # removal cannot stay green by keeping the words around).
+    verdict = engine._quality_verdict(
+        degraded_narration=False,
+        scene_gate_issues={'scene-002': ['text overflows its container']},
+        authoring=True, authored=8, total=8)
+    assert verdict['degraded'] is True, (
         'gate findings are collected but never reported as degraded')
+    assert 'scene-002' in verdict['reason']
+
+
+def test_a_film_with_no_defects_is_not_marked_degraded():
+    """Complement: the axis must not be a constant True.
+
+    Without this, "always degraded" satisfies every assertion above while
+    making the banner meaningless — users would learn to ignore it.
+    """
+    from lib.motion_video import engine
+
+    verdict = engine._quality_verdict(
+        degraded_narration=False, scene_gate_issues={},
+        authoring=True, authored=8, total=8)
+    assert verdict['degraded'] is False
+    assert verdict['reason'] == ''
 
 
 def test_scene_gate_helper_treats_a_missing_toolchain_as_not_a_defect():
@@ -345,15 +367,21 @@ def test_all_scenes_falling_back_is_reported_as_degraded():
 
     from lib.motion_video import engine
 
-    src = inspect.getsource(engine.run_motion_task)
-    tail = src.split('degraded=')[1]
-    assert '_all_fell_back' in tail, (
+    verdict = engine._quality_verdict(
+        degraded_narration=False, scene_gate_issues={},
+        authoring=True, authored=0, total=8)
+    assert verdict['degraded'] is True, (
         'a film whose scenes ALL fell back to the template still reports a '
         'clean success on the quality axis')
-    assert re.search(r'_all_fell_back\s*=\s*bool\(\s*authoring\s+and\s+total'
-                     r'\s+and\s+authored\s*==\s*0', src), (
-        'the wholesale-fallback verdict must be keyed on "authoring was '
-        'requested AND nothing was authored"')
+    assert '8' in verdict['reason'] and 'template' in verdict['reason']
+    # …and it must be keyed on "authoring was REQUESTED": a film that never
+    # asked for bespoke compositions is not degraded by having none.
+    not_asked = engine._quality_verdict(
+        degraded_narration=False, scene_gate_issues={},
+        authoring=False, authored=0, total=8)
+    assert not_asked['degraded'] is False, (
+        'an explicitly-template film must not be reported as degraded — that '
+        'is the tier the user chose')
 
 
 def test_a_partly_authored_film_is_not_marked_degraded_for_that():
@@ -362,11 +390,251 @@ def test_a_partly_authored_film_is_not_marked_degraded_for_that():
     Without this, "always report degraded" would satisfy the test above and
     make the quality axis meaningless.
     """
-    authoring, total = True, 8
+    from lib.motion_video import engine
+
     for authored in (1, 4, 8):
-        assert not bool(authoring and total and authored == 0), (
-            f'{authored}/{total} authored must NOT trip the wholesale flag')
-    assert bool(authoring and total and 0 == 0)
+        verdict = engine._quality_verdict(
+            degraded_narration=False, scene_gate_issues={},
+            authoring=True, authored=authored, total=8)
+        assert verdict['degraded'] is False, (
+            f'{authored}/8 authored must NOT trip the wholesale flag')
+
+
+# ── 8. EVERY entry point gets the good default ────────────
+#
+# The measured defect this section exists for: flipping `produce_video`'s
+# default to 'authored' fixed the TOOL path only. The two paths a human
+# actually reaches — the paper Video-studio button and a bare
+# `POST /api/v1/motion/videos` — never set `scene_author` at all, so they fell
+# through to `scene_author_enabled`'s own default, which was still OFF. The
+# quality flip was invisible to every real user.
+#
+# Enumerating the construction sites (rather than listing the three we happen
+# to know about) is the point: a FOURTH entry point added later is caught by
+# the same assertion instead of silently shipping template cards.
+
+
+def _motion_task_construction_sites() -> list[tuple[str, str]]:
+    """Every ``_new_motion_task(...)`` call site, as (file, enclosing func).
+
+    AST-derived from the files git actually tracks — never a hand-written
+    list (which would not grow when a new entry point lands) and never
+    ``os.walk`` (which times out on this FUSE mount, charter note).
+    """
+    import ast
+    import subprocess
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    tracked = subprocess.run(
+        ['git', 'ls-files', 'lib', 'routes'],
+        capture_output=True, text=True, cwd=root, timeout=120).stdout.split()
+    sites: list[tuple[str, str]] = []
+    for rel in tracked:
+        if not rel.endswith('.py'):
+            continue
+        try:
+            with open(os.path.join(root, rel), encoding='utf-8') as f:
+                tree = ast.parse(f.read())
+        except (OSError, SyntaxError) as e:
+            print(f'[scan] skipped {rel}: {e}')
+            continue
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for node in ast.walk(fn):
+                if not isinstance(node, ast.Call):
+                    continue
+                name = (getattr(node.func, 'id', None)
+                        or getattr(node.func, 'attr', None))
+                if name == '_new_motion_task':
+                    sites.append((rel, fn.name))
+                    break
+    return sites
+
+
+def test_the_construction_site_scan_actually_finds_the_known_entry_points():
+    """Verify the SCAN SURFACE before trusting any assertion built on it.
+
+    Charter: a scan-based guard fails silently when its input set is empty or
+    partial — the assertions then pass over nothing. This pins the surface
+    itself, so a scan that stops seeing the call sites reports THAT rather
+    than going quietly green.
+    """
+    sites = _motion_task_construction_sites()
+    files = {f for f, _ in sites}
+    assert len(sites) >= 5, (
+        f'the scan found only {len(sites)} construction site(s) — it is '
+        f'no longer seeing the real ones: {sorted(sites)}')
+    for expected in ('lib/paper/video_abstract.py',
+                     'routes/api_v1/motion.py',
+                     'lib/tasks_pkg/handlers/motion_video.py'):
+        assert expected in files, (
+            f'{expected} builds motion tasks but the scan missed it; every '
+            f'assertion below would skip that entry point')
+
+
+#: Sites that legitimately do NOT author, with the reason each is exempt.
+#: Keyed on the enclosing FUNCTION (a semantic unit), never a line number.
+_NON_AUTHORING_SITES = {
+    # Re-renders ONE scene from its existing index.html; there is no
+    # composition to author, and authoring here would silently discard the
+    # composition the user is asking to re-render.
+    'regen_scene': 'scene regen reuses the existing composition',
+    # Crash-resume restores the ORIGINAL job's persisted scene_author value
+    # (see _MANIFEST_FIELDS); imposing a default would change a resumed job's
+    # quality tier mid-flight.
+    '_respawn': 'resume restores the persisted flag verbatim',
+}
+
+
+def test_every_entry_point_defaults_to_an_authored_film(monkeypatch):
+    """A job spawned with no stated preference must author its scenes.
+
+    Drives the REAL predicate against the task shape each site produces. The
+    paper panel and the bare REST POST both build a task WITHOUT a
+    ``scene_author`` key — which is precisely how they kept shipping template
+    cards after the tool-path default was flipped.
+    """
+    monkeypatch.delenv('TOFU_MOTION_SCENE_AUTHOR', raising=False)
+    from lib.motion_video._scene_author import scene_author_enabled
+
+    authoring_sites = [(f, fn) for f, fn in _motion_task_construction_sites()
+                       if fn not in _NON_AUTHORING_SITES]
+    assert authoring_sites, 'every site got exempted — the guard is a no-op'
+
+    # The shape those sites hand to the engine when the caller said nothing.
+    unstated_task: dict = {'task_id': 't', 'workdir': '/tmp/x'}
+    assert scene_author_enabled(unstated_task) is True, (
+        f'a job built by {[f"{f}::{fn}" for f, fn in authoring_sites]} with '
+        f'no stated preference resolves to the TEMPLATE path — the default '
+        f'must live in scene_author_enabled, not be re-stated per caller')
+
+
+def test_no_entry_point_hand_copies_the_default(monkeypatch):
+    """The default must have exactly ONE home.
+
+    A site that writes ``task['scene_author'] = True`` unconditionally would
+    satisfy the test above while re-creating the copy that caused this bug —
+    the next entry point would again be the one nobody remembered.
+    """
+    import ast
+    import subprocess
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    tracked = subprocess.run(
+        ['git', 'ls-files', 'lib', 'routes'],
+        capture_output=True, text=True, cwd=root, timeout=120).stdout.split()
+    offenders = []
+    for rel in tracked:
+        if not rel.endswith('.py'):
+            continue
+        with open(os.path.join(root, rel), encoding='utf-8') as f:
+            src = f.read()
+        if "'scene_author'" not in src:
+            continue
+        try:
+            tree = ast.parse(src)
+        except SyntaxError as e:
+            print(f'[scan] unparseable {rel}: {e}')
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            for tgt in node.targets:
+                if (isinstance(tgt, ast.Subscript)
+                        and isinstance(tgt.slice, ast.Constant)
+                        and tgt.slice.value == 'scene_author'
+                        and isinstance(node.value, ast.Constant)
+                        and node.value.value is True):
+                    offenders.append(f'{rel}:{node.lineno}')
+    assert not offenders, (
+        f'these sites hard-code the authored default instead of letting '
+        f'scene_author_enabled own it: {offenders}')
+
+
+def test_the_env_var_is_an_emergency_kill_switch_in_both_directions(monkeypatch):
+    """Cost control must stay reachable fleet-wide without a code change.
+
+    Authoring spends one agent loop per scene; if it has to be switched off in
+    a hurry, the operator needs a lever that does not require editing every
+    caller. Both directions are asserted so the variable cannot decay into a
+    one-way switch that silently ignores '0'.
+    """
+    from lib.motion_video._scene_author import scene_author_enabled
+
+    monkeypatch.setenv('TOFU_MOTION_SCENE_AUTHOR', '0')
+    assert scene_author_enabled({'task_id': 't'}) is False
+    # An explicit per-job choice still wins over the fleet default.
+    assert scene_author_enabled({'task_id': 't', 'scene_author': True}) is True
+    monkeypatch.setenv('TOFU_MOTION_SCENE_AUTHOR', '1')
+    assert scene_author_enabled({'task_id': 't'}) is True
+
+
+# ── 9. A degraded film must LOOK degraded in the panel ────
+
+
+def test_paper_video_lookup_carries_the_quality_axis():
+    """The re-attach path must not launder a degraded film into a clean one.
+
+    ``/api/v1/paper/video/lookup`` is what the Video-studio panel calls on tab
+    open — and after a restart it is the ONLY response the panel ever sees
+    (runtime.poll 404s on a task it no longer holds). Omitting
+    ``artifact_quality`` there means a film whose every scene fell back to the
+    template renders identically to a good one.
+    """
+    import inspect
+
+    from routes import paper as paper_routes
+
+    src = inspect.getsource(paper_routes.lookup_video_abstract)
+    assert 'artifact_quality' in src, (
+        'the paper video lookup drops the product-quality axis — a degraded '
+        'film re-attaches looking like a clean success')
+    disk = inspect.getsource(paper_routes._lookup_paper_video_on_disk)
+    assert 'artifact_quality' in disk, (
+        'the post-restart disk fallback drops the quality axis; that path has '
+        'no later poll to correct it')
+
+
+def test_the_panel_renders_a_degrade_notice_when_the_axis_says_degraded():
+    """Asserts the RENDERED markup, not the presence of a variable.
+
+    A field the backend sends and the frontend never draws is the same class
+    of defect as ``install_note`` (declared, rendered nowhere) — the promise
+    exists only in a comment.
+    """
+    js = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'static', 'js', 'paper', 'video.js')
+    src = open(js, encoding='utf-8').read()
+    assert 'artifact_quality' in src, (
+        'video.js never reads the quality axis, so a degraded film is '
+        'indistinguishable from a clean one in the panel')
+    assert '_pvQualityBanner' in src, (
+        'no renderer for the degrade notice')
+    # It must be reachable from the terminal (done) render, not defined and
+    # never called — the failure mode this whole section is about.
+    done_tail = src.split('// done')[-1]
+    assert '_pvQualityBanner(' in done_tail, (
+        'the degrade banner is defined but never mounted in the done state')
+
+
+def test_the_composition_choice_is_its_own_control_not_the_render_preset():
+    """draft/standard/high is a RENDER preset — it must not imply looks.
+
+    A user picking 'High (slower, finer)' and receiving the plain template
+    card is a precise, credible false promise: the control claims to govern
+    quality while the thing they object to is chosen elsewhere.
+    """
+    js = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'static', 'js', 'paper', 'video.js')
+    src = open(js, encoding='utf-8').read()
+    assert 'videoVisualSel' in src, (
+        'the panel offers no composition control, so the render preset is '
+        'still the only thing that looks like a quality choice')
+    assert 'scene_author' in src, (
+        'the composition choice is never sent to the backend')
 
 
 def test_craft_guide_is_vendored_in_tree():

@@ -20,6 +20,8 @@ var _pvideo = {
   narration: true,
   burnIn: false,
   quality: 'standard',
+  visual: 'authored',      // composition tier — NOT the render preset above
+  quality_axis: null,      // {degraded, reason} from the server, or null
   taskId: '',
   cursor: 0,
   pollTimer: null,
@@ -225,6 +227,7 @@ async function _initVideoTab(force) {
       }
       if (look.result) {
         _pvideo.result = look.result;
+        _pvideo.quality_axis = look.artifact_quality || null;
         _pvideo.status = 'done';
         _pvRender();
         _pvLoadScenes();
@@ -345,6 +348,7 @@ async function _pvPollOnce() {
       }
       if (resp.status === 'done') {
         _pvideo.result = resp.result || null;
+        _pvideo.quality_axis = resp.artifact_quality || null;
         _pvideo._doneTaskId = _pvideo.taskId;
         _pvideo.status = 'done';
         _pvideo.taskId = '';
@@ -401,11 +405,16 @@ async function _videoGenerate(force) {
   var narrChk = document.getElementById('videoNarrChk');
   var burnChk = document.getElementById('videoBurnChk');
   var qualSel = document.getElementById('videoQualSel');
+  var visSel = document.getElementById('videoVisualSel');
   _pvideo.lang = langSel ? langSel.value : _pvideo.lang;
   _pvideo.voice = voiceInp ? voiceInp.value.trim() : _pvideo.voice;
   _pvideo.narration = narrChk ? !!narrChk.checked : _pvideo.narration;
   _pvideo.burnIn = burnChk ? !!burnChk.checked : _pvideo.burnIn;
   _pvideo.quality = qualSel ? qualSel.value : _pvideo.quality;
+  _pvideo.visual = visSel ? visSel.value : _pvideo.visual;
+  /* A new run has no verdict yet — carrying the previous run's banner would
+     label a fresh film degraded before a single scene was composed. */
+  _pvideo.quality_axis = null;
   _pvideo.status = 'generating';
   _pvideo.progress = { done: 0, total: 0, phase: '' };
   _pvResetRun();
@@ -417,6 +426,7 @@ async function _videoGenerate(force) {
       lang: _pvideo.lang, voice: _pvideo.voice,
       narration: _pvideo.narration, burn_in: _pvideo.burnIn,
       quality: _pvideo.quality, force: !!force,
+      scene_author: _pvideo.visual !== 'template',
     });
     /* Paper switched mid-start — the OLD paper's task must not attach here (pt_3cd6cd48). */
     if (_pvideo.paperHash !== genHash) return;
@@ -569,6 +579,27 @@ function _pvRenderActivity() {
     ' · ' + _pvT('paper.mediaLastActive', 'last activity') + ' ' + _pvFmtSec(quiet) +
     (quiet > 30 ? ' — ' + _pvT('paper.mediaStillRunning',
       'still running (this step can take minutes)') : '');
+}
+
+/**
+ * Degrade notice for a film that PLAYED but was not made at the quality asked
+ * for (artifact_quality.degraded).
+ *
+ * WHY THIS IS NOT OPTIONAL: a degraded job keeps `status='done'` by design
+ * (lifecycle axis vs product axis), so without this the film where all 8
+ * scenes fell back to the plain template card renders EXACTLY like a good
+ * one — same player, same badges. The user's only signal would be watching
+ * it and being disappointed again.
+ */
+function _pvQualityBanner() {
+  var q = _pvideo.quality_axis;
+  if (!q || !q.degraded) return '';
+  var reason = (q.reason || '').trim();
+  return '<div class="paper-podcast-banner">' +
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>' +
+    '<span>' + _pvEsc(_pvT('paper.videoDegraded',
+      'This film played, but was not produced at the quality requested.')) +
+    (reason ? ' ' + _pvEsc(reason) : '') + '</span></div>';
 }
 
 function _pvDegradeBanner() {
@@ -726,6 +757,27 @@ function _pvRender() {
       _pvEsc(_pvT('paper.videoQualityStandard', 'Standard')) + '</option>' +
       '<option value="high"' + (s.quality === 'high' ? ' selected' : '') + '>' +
       _pvEsc(_pvT('paper.videoQualityHigh', 'High')) + '</option></select></div>';
+    /* Composition tier — a SEPARATE control from the render preset above.
+     * They were conflated before: draft/standard/high governs bitrate/scale,
+     * so a user picking 'High (slower, finer)' still received the plain
+     * template card and read that as the product being bad. */
+    h += '<div class="pm-field"><div class="pm-field-label">' +
+      _pvEsc(_pvT('paper.videoVisual', 'Composition')) + '</div>' +
+      '<div class="pm-options cols-2">' +
+      _pvOptCard('videoVisualSel', 'authored', 'gem',
+        _pvT('paper.videoVisualAuthored', 'Designed (recommended)'),
+        _pvT('paper.videoVisualAuthoredSub', 'bespoke layout per scene'),
+        s.visual !== 'template') +
+      _pvOptCard('videoVisualSel', 'template', 'zap',
+        _pvT('paper.videoVisualTemplate', 'Plain cards'),
+        _pvT('paper.videoVisualTemplateSub', 'fastest, one line per card'),
+        s.visual === 'template') +
+      '</div>' +
+      '<select id="videoVisualSel" class="pm-sr" tabindex="-1" aria-hidden="true">' +
+      '<option value="authored"' + (s.visual !== 'template' ? ' selected' : '') + '>' +
+      _pvEsc(_pvT('paper.videoVisualAuthored', 'Designed (recommended)')) + '</option>' +
+      '<option value="template"' + (s.visual === 'template' ? ' selected' : '') + '>' +
+      _pvEsc(_pvT('paper.videoVisualTemplate', 'Plain cards')) + '</option></select></div>';
     h += '<div class="pm-field"><div class="pm-field-label">' +
       _pvEsc(_pvT('paper.mediaOptVoice', 'Voice')) +
       '<span class="pm-field-opt">' +
@@ -828,6 +880,7 @@ function _pvRender() {
       _pvEsc(_pvT('paper.videoSilent', 'silent')) + '</span>';
   }
   h += '</div>';
+  h += _pvQualityBanner();
   if (fileUrl) {
     h += '<video id="paperVideoPlayer" class="paper-video-player" controls ' +
       'preload="metadata" src="' + _pvEsc(fileUrl) + '"></video>';

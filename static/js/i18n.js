@@ -2235,6 +2235,16 @@ var _i18n = {
   'paper.videoQualityHighSub': { zh: '更慢 · 更精细', en: 'slower, finer' },
   'paper.videoNarrationSub': { zh: 'TTS 语音旁白', en: 'TTS voice-over' },
   'paper.videoBurnInSub': { zh: '字幕嵌入画面', en: 'subtitles baked into the frame' },
+  // Composition tier — a SEPARATE axis from the draft/standard/high RENDER
+  // preset above (that one is bitrate/scale and says nothing about layout).
+  'paper.videoVisual': { zh: '画面构图', en: 'Composition' },
+  'paper.videoVisualAuthored': { zh: '精心设计（推荐）', en: 'Designed (recommended)' },
+  'paper.videoVisualAuthoredSub': { zh: '每个镜头单独排版', en: 'bespoke layout per scene' },
+  'paper.videoVisualTemplate': { zh: '纯文字卡', en: 'Plain cards' },
+  'paper.videoVisualTemplateSub': { zh: '最快 · 每张一行字', en: 'fastest, one line per card' },
+  // Product-quality axis: the film played, but is not what was asked for.
+  'paper.videoDegraded': { zh: '这部片子生成完成了，但没有达到所要求的画质。',
+                           en: 'This film played, but was not produced at the quality requested.' },
   'paper.podcastTranscriptTitle': { zh: '逐字稿', en: 'Transcript' },
   // Reading-time estimate + progress bar (Report tab)
   'paper.readTimeTotal': { zh: '阅读时长约 {min}', en: '{min} read' },

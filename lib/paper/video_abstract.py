@@ -429,6 +429,7 @@ def start_video_abstract(paper_hash: str, *, lang: str = 'zh',
                          alignment: str = 'loose', narration: bool = True,
                          burn_in: bool = False, quality: str = 'standard',
                          parallel: int = 2, max_scenes: int = _DEFAULT_MAX_SCENES,
+                         scene_author: bool | None = None,
                          force: bool = False) -> dict:
     """Start a motion-engine task rendering this paper's video abstract.
 
@@ -458,7 +459,7 @@ def start_video_abstract(paper_hash: str, *, lang: str = 'zh',
         return {'ok': False, 'reason': 'report_required'}
 
     dedup_key = ('paper', paper_hash, lang, voice, bool(narration),
-                 bool(burn_in), quality)
+                 bool(burn_in), quality, scene_author)
     if not force:
         existing = _motion_index_get(dedup_key)
         if existing:
@@ -501,6 +502,12 @@ def start_video_abstract(paper_hash: str, *, lang: str = 'zh',
     task['burn_in'] = burn_in
     task['burn_in_fontsdir'] = ''
     task['paper_hash'] = paper_hash
+    # Written ONLY when the caller stated a preference. Leaving the key absent
+    # is what lets scene_author_enabled() own the default — hard-coding True
+    # here would re-create the per-caller copy that made this panel ship
+    # template cards for a whole release after the tool path was fixed.
+    if scene_author is not None:
+        task['scene_author'] = bool(scene_author)
     _motion_runtime.spawn(task_id, run_motion_task, task)
     logger.info('[Paper:Video] abstract started: %s (paper=%s scenes=%d '
                 'narration=%s)', task_id, paper_hash[:8], len(scenes),

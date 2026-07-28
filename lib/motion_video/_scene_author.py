@@ -25,9 +25,12 @@ Design constraints (all deliberate):
     ``token_budget`` stops it once cumulative tokens for THIS scene exceed the
     budget. There is no money cap here — that belongs to the wallet layer.
 
-Default OFF: the engine only calls this when the job opts in
-(``task['scene_author']`` or ``TOFU_MOTION_SCENE_AUTHOR=1``), because it
-spends one agent loop per scene.
+Default ON (owner 2026-07-27). The zero-LLM template cannot pass the
+renderer's own lint and reads as "text flying around with no formatting", so
+it is the FALLBACK, never the default deliverable. A job opts OUT per-job
+(``task['scene_author'] = False``) or globally via
+``TOFU_MOTION_SCENE_AUTHOR=0`` (the emergency kill switch — authoring spends
+one agent loop per scene).
 """
 
 from __future__ import annotations
@@ -49,16 +52,44 @@ _DEFAULT_TOKEN_BUDGET = 60000
 _MAX_TOKENS_PER_ROUND = 8192
 
 
+#: Values of ``TOFU_MOTION_SCENE_AUTHOR`` that force authoring OFF fleet-wide.
+_ENV_OFF = ('0', 'false', 'no', 'off')
+#: …and the ones that force it ON (redundant with the default, kept so the
+#: variable reads in BOTH directions rather than being a one-way switch).
+_ENV_ON = ('1', 'true', 'yes', 'on')
+
+
 def scene_author_enabled(task: dict | None = None) -> bool:
     """True when per-scene authoring is switched on for this job.
 
-    Default OFF (it spends one agent loop per scene). Opt in per-job via
-    ``task['scene_author']`` or globally via ``TOFU_MOTION_SCENE_AUTHOR=1``.
+    **This is the single source of the default** — every entry point that
+    spawns a motion job (the ``produce_video`` tool, ``POST /api/v1/motion/
+    videos``, the paper Video-studio panel, the crash-resume scanner) reads
+    the answer from here. A caller that wants the fast template path says so
+    explicitly; a caller that says nothing gets an authored film.
+
+    Resolution order (mirrors ``rows_write_enabled()``'s convention):
+
+      1. ``task['scene_author']`` when the job stated a preference;
+      2. ``TOFU_MOTION_SCENE_AUTHOR`` — honoured in BOTH directions, so ``0``
+         is an emergency fleet-wide kill switch (authoring costs one agent
+         loop per scene) and ``1`` pins it on;
+      3. **ON.** Owner 2026-07-27: the zero-LLM template does not pass the
+         renderer's own lint, so it must not be what a user gets by default.
+
+    Deliberately NOT done: defaulting per call site. Four construction sites
+    exist and the two that nobody thought about (paper panel, bare REST POST)
+    are exactly the ones a user actually reaches — a per-caller default is a
+    copy that silently stops matching.
     """
     if isinstance(task, dict) and task.get('scene_author') is not None:
         return bool(task['scene_author'])
-    return os.environ.get('TOFU_MOTION_SCENE_AUTHOR', '').strip().lower() \
-        in ('1', 'true', 'yes', 'on')
+    env = os.environ.get('TOFU_MOTION_SCENE_AUTHOR', '').strip().lower()
+    if env in _ENV_OFF:
+        return False
+    if env in _ENV_ON:
+        return True
+    return True
 
 
 # ── Narrow tool schemas ───────────────────────────────────

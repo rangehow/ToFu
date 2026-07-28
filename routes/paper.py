@@ -2872,12 +2872,21 @@ async def start_video_abstract_task():
     except (TypeError, ValueError):
         return api_bad_request('parallel/max_scenes must be ints',
                                field='parallel')
+    # Composition tier. None = follow the fleet default (authored), which is
+    # resolved in ONE place (lib/motion_video/_scene_author.scene_author_enabled)
+    # rather than re-stated here. This is deliberately NOT the draft/standard/
+    # high knob above: that one is the RENDER preset (bitrate/scale) and says
+    # nothing about whether a scene gets a bespoke composition.
+    scene_author = data.get('scene_author')
+    if scene_author is not None:
+        scene_author = bool(scene_author)
     res = start_video_abstract(
         phash, lang=lang, voice=(data.get('voice') or '').strip(),
         speed=data.get('speed'), alignment=alignment,
         narration=bool(data.get('narration', True)),
         burn_in=bool(data.get('burn_in', False)), quality=quality,
         parallel=parallel, max_scenes=max_scenes,
+        scene_author=scene_author,
         force=bool(data.get('force', False)))
     if not res.get('ok'):
         return jsonify({'ok': False, 'report_required':
@@ -2924,6 +2933,13 @@ def lookup_video_abstract():
         })
         if best['status'] == 'done' and best.get('result'):
             resp['result'] = best['result']
+        # Product-quality axis (lib/agent_core/task_runtime.py). A degraded
+        # film keeps status='done' BY DESIGN, so this field is the only thing
+        # separating "all 8 scenes fell back to the plain template card" from
+        # a clean success. Dropping it here is what let the panel render both
+        # identically.
+        if best.get('artifact_quality'):
+            resp['artifact_quality'] = best['artifact_quality']
         return jsonify(resp)
 
     # P-UX4: memory missed — fall back to the on-disk job manifests so a
@@ -3025,6 +3041,12 @@ def _lookup_paper_video_on_disk(phash: str) -> dict | None:
                     'result': {'final_path': final, 'duration': duration,
                                'workdir': workdir,
                                'narrated': bool(m.get('narration'))},
+                    # Read from the manifest, which the engine writes AFTER
+                    # computing the verdict. This branch has no later poll to
+                    # correct it (runtime.poll 404s on a task it no longer
+                    # holds), so whatever is omitted here is lost for good.
+                    **({'artifact_quality': m['artifact_quality']}
+                       if m.get('artifact_quality') else {}),
                     **_disk_clocks()}
     return None
 

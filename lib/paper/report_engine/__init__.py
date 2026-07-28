@@ -77,6 +77,11 @@ def _run_report_task(task, messages, images):
       - {type: 'enriched',   text}             — post-stream image injection
       - {type: 'done',       report, paperHash}
       - {type: 'error',      error}
+
+    thinking / delta / delta_reset / tool_start / tool_done all carry
+    ``llmRound`` (the 0-based dispatch round that produced them) so the
+    frontend can fold the ordered event stream into a chat-shaped segment
+    timeline (thinking adjacent to the tool calls of the same round).
     """
     task['status'] = 'running'
     _append_report_event(task, {'type': 'status', 'status': 'running'})
@@ -153,10 +158,12 @@ def _run_report_task(task, messages, images):
             _round['content'] += text
             full_content += text
             task['full_text'] = full_content
-            _append_report_event(task, {'type': 'delta', 'delta': text})
+            _append_report_event(task, {'type': 'delta', 'delta': text,
+                                        'llmRound': rnd})
 
         def _on_thinking(text):
-            _append_report_event(task, {'type': 'thinking', 'delta': text})
+            _append_report_event(task, {'type': 'thinking', 'delta': text,
+                                        'llmRound': rnd})
 
         logger.info('[Paper:Report] Task %s round %d — model=%s msgs=%d',
                     task['task_id'], rnd + 1, model_name, len(messages))
@@ -220,7 +227,7 @@ def _run_report_task(task, messages, images):
                         task['task_id'], len(round_content), rnd + 1)
             full_content = full_content[:-len(round_content)]
             task['full_text'] = full_content
-            _append_report_event(task, {'type': 'delta_reset'})
+            _append_report_event(task, {'type': 'delta_reset', 'llmRound': rnd})
         messages.append(msg)
 
     def _execute_tool(rnd, tc):
@@ -257,6 +264,7 @@ def _run_report_task(task, messages, images):
         _append_report_event(task, {
             'type': 'tool_start',
             'roundNum': rn,
+            'llmRound': rnd,
             'toolName': fn_name,
             'query': display_query,
             'toolCallId': tc_id,
@@ -285,6 +293,7 @@ def _run_report_task(task, messages, images):
         tool_done_event = {
             'type': 'tool_done',
             'roundNum': rn,
+            'llmRound': rnd,
             'toolName': fn_name,
             'toolCallId': tc_id,
             'elapsed': round(tool_elapsed, 1),

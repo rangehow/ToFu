@@ -131,6 +131,12 @@ function _makeReportStreamState(paperId, lang, taskId, kind) {
     fullText: '',
     thinkingText: '',
     toolRounds: [],      // chat-compatible: [{roundNum, toolName, query, toolCallId, toolArgs, status, toolContent, _elapsed}]
+    // Chat-shaped segment timeline — thinking / narration / tool_use folded
+    // per dispatch round from the ordered event stream, rendered through the
+    // SAME inline tool timeline the chat agent bubbles use
+    // (renderSegmentTimelineHTML). Rebuilt deterministically on cursor replay.
+    segments: [],
+    _segInferRound: 0,   // round inference for events without llmRound (old server shape)
     contentStarted: false,
     insightText: '',       // gated insight second-pass section (appended after `done`)
     _insightRunning: false,
@@ -173,6 +179,63 @@ function _renderReportSkeleton(container, lang, view) {
     '</div>';
 }
 
+/** Segment-timeline builders (chat-shaped). The report engine emits its
+ *  thinking / delta / tool events in strict order (seq-cursor polling), each
+ *  tagged with the 0-based dispatch round that produced it (`llmRound`).
+ *  Folding them into per-round segments is what lets the report stream render
+ *  through the chat inline tool timeline instead of the old three-zone layout.
+ *  Events lacking `llmRound` (an older server mid-upgrade) fall back to
+ *  order-based inference — thinking/delta before a tool_start belong to the
+ *  round that tool_start opens. */
+function _segRoundOf(s, ev) {
+  return (typeof ev.llmRound === 'number') ? ev.llmRound : s._segInferRound;
+}
+
+function _segAppendProse(s, type, delta, llmRound) {
+  if (!delta) return;
+  var last = s.segments[s.segments.length - 1];
+  if (last && last.type === type && last.llmRound === llmRound) {
+    last.text += delta;
+  } else {
+    s.segments.push({ type: type, text: delta, llmRound: llmRound });
+  }
+}
+
+function _segApplyToolStart(s, ev) {
+  var r = _segRoundOf(s, ev);
+  s.segments.push({ type: 'tool_use', id: ev.toolCallId || '', llmRound: r });
+  // Prose that arrives after this tool belongs to the NEXT dispatch round.
+  s._segInferRound = r + 1;
+}
+
+function _segApplyDeltaReset(s, ev) {
+  // The backend discards a tool round's interim DRAFT (the terminal round
+  // rewrites the whole report), so its narration segment goes with it — a
+  // discarded draft must not linger next to the tools. Thinking is never
+  // reset, so thinking segments are kept.
+  var r = _segRoundOf(s, ev);
+  s.segments = s.segments.filter(function (seg) {
+    return !(seg.type === 'text' && seg.llmRound === r);
+  });
+}
+
+/** Segments for the timeline render. Text (narration) segments render ONLY
+ *  for rounds that actually called tools — the terminal tool-less round's
+ *  text IS the report body, which the caller renders separately below the
+ *  panel; letting it into the timeline would double it (mirrors the chat
+ *  timeline, which skips `deliverable` segments). */
+function _reportSegmentsForRender(s) {
+  var withTools = {};
+  var i, seg;
+  for (i = 0; i < s.segments.length; i++) {
+    seg = s.segments[i];
+    if (seg.type === 'tool_use') withTools[seg.llmRound] = true;
+  }
+  return s.segments.filter(function (sg) {
+    return sg.type !== 'text' || withTools[sg.llmRound];
+  });
+}
+
 /** Apply a single event to the in-memory stream state. Returns dirty flag. */
 function _applyReportEvent(s, ev) {
   switch (ev.type) {
@@ -182,6 +245,7 @@ function _applyReportEvent(s, ev) {
 
     case 'thinking':
       s.thinkingText += (ev.delta || '');
+      _segAppendProse(s, 'thinking', ev.delta || '', _segRoundOf(s, ev));
       return true;
 
     case 'tool_start': {
@@ -195,6 +259,7 @@ function _applyReportEvent(s, ev) {
         status: 'searching',
         results: null,
       });
+      _segApplyToolStart(s, ev);
       return true;
     }
 
@@ -231,6 +296,7 @@ function _applyReportEvent(s, ev) {
     case 'delta':
       s.fullText += (ev.delta || '');
       s.contentStarted = true;
+      _segAppendProse(s, 'text', ev.delta || '', _segRoundOf(s, ev));
       return true;
 
     case 'delta_reset':
@@ -241,6 +307,7 @@ function _applyReportEvent(s, ev) {
       s.fullText = '';
       s.contentStarted = false;
       s._lastRenderedLen = -1;
+      _segApplyDeltaReset(s, ev);
       return true;
 
     case 'enriched':
@@ -1224,6 +1291,25 @@ function _renderFinalReport(container, text, meta, view) {
   var entries = _indexHeadings(article);
   var tocHTML = _buildReportTOC(entries);
 
+  // Inline tool timeline (live session only): a freshly finished generation
+  // keeps its tool/thinking timeline ABOVE the final body, exactly like a
+  // settled chat agent bubble keeps its tool panel above the deliverable.
+  // Reopened/cached reports have no live stream — no timeline (segments are
+  // not persisted; accepted simplification).
+  var _timelineHtml = '';
+  try {
+    var _st = view.stream;
+    if (_st && _st.toolRounds && _st.toolRounds.length
+        && typeof renderSegmentTimelineHTML === 'function') {
+      var _finalSegs = _reportSegmentsForRender(_st);
+      _timelineHtml = renderSegmentTimelineHTML(_finalSegs, { toolRounds: _st.toolRounds }, 0)
+        || (typeof renderToolRoundsHTML === 'function'
+            ? renderToolRoundsHTML(_st.toolRounds, false, _finalSegs) : '');
+    }
+  } catch (e) {
+    console.warn('[Paper:Report] timeline render failed (non-fatal):', e);
+  }
+
   container.classList.add('paper-report-enhanced');
   // Reading-time bar: sticky at the top of the scroll container, above the
   // doc/article. Built before mount so we can measure the article's word
@@ -1236,11 +1322,13 @@ function _renderFinalReport(container, text, meta, view) {
     doc.innerHTML = tocHTML;
     doc.appendChild(article);
     container.innerHTML = '';
+    if (_timelineHtml) container.insertAdjacentHTML('beforeend', _timelineHtml);
     if (readBar) container.appendChild(readBar);
     container.appendChild(doc);
     _wireReportScrollSpy(container, article, doc.querySelector('.paper-report-toc'));
   } else {
     container.innerHTML = '';
+    if (_timelineHtml) container.insertAdjacentHTML('beforeend', _timelineHtml);
     if (readBar) container.appendChild(readBar);
     container.appendChild(article);
   }
@@ -1389,14 +1477,24 @@ function _paintReportFromState(view) {
     _renderReportSkeleton(container, s.lang, view);
   }
 
-  // Tool rounds — reuse chat's unified renderer for identical look & feel
+  // Tool rounds + thinking — rendered through the chat inline tool
+  // timeline (renderSegmentTimelineHTML) so reasoning sits adjacent to the
+  // most recent tool calls, exactly like a chat agent bubble. Falls back to
+  // the grouped panel when the timeline can't resolve the rounds.
   var toolZone = document.getElementById(px + 'ToolZone');
   if (toolZone) {
     var toolCount = s.toolRounds.length;
     var searchingCount = s.toolRounds.filter(r => r.status === 'searching').length;
-    var toolKey = toolCount + ':' + searchingCount;
+    var toolKey = toolCount + ':' + searchingCount + ':' + s.segments.length
+      + ':' + s.thinkingText.length + ':' + s.fullText.length;
     if (s._lastToolKey !== toolKey) {
-      if (toolCount > 0 && typeof renderToolRoundsHTML === 'function') {
+      if (toolCount > 0 && typeof renderSegmentTimelineHTML === 'function') {
+        var _segs = _reportSegmentsForRender(s);
+        toolZone.innerHTML =
+          renderSegmentTimelineHTML(_segs, { toolRounds: s.toolRounds }, 0)
+          || (typeof renderToolRoundsHTML === 'function'
+              ? renderToolRoundsHTML(s.toolRounds, s.status === 'running', _segs) : '');
+      } else if (toolCount > 0 && typeof renderToolRoundsHTML === 'function') {
         toolZone.innerHTML = renderToolRoundsHTML(s.toolRounds, s.status === 'running');
       } else {
         toolZone.innerHTML = '';
@@ -1405,12 +1503,15 @@ function _paintReportFromState(view) {
     }
   }
 
-  // Thinking
+  // Thinking — the standalone strip is the PRE-TOOL placeholder only: once
+  // the first tool call lands, the timeline panel carries every thinking
+  // segment (including the pre-tool one), so the strip must get out of the
+  // way or the same reasoning shows twice.
   if (s.thinkingText) {
     var thBlock = document.getElementById(px + 'ThinkingBlock');
     var thBody = document.getElementById(px + 'ThinkingBody');
     if (thBlock) {
-      thBlock.style.display = '';
+      thBlock.style.display = s.toolRounds.length ? 'none' : '';
       if (s.contentStarted) thBlock.open = false;
     }
     if (thBody && thBody.textContent.length !== s.thinkingText.length) {

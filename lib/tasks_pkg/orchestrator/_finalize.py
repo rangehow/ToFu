@@ -183,6 +183,94 @@ def _check_suspicious_completion(task, last_finish_reason, _loop_exit_reason,
     return suspicion_reasons
 
 
+# ── Suspicious-completion INTERCEPTION (act, not just warn) ───────────────
+#
+# WHY this exists (2026-07-28 09:51–10:45 incident): the sankuai gateway
+# intermittently returned a 29-char canned greeting ("Hi! How can I help you
+# today?") with ``finish_reason=stop`` for every Opus 5 request — 68 times,
+# each carrying a real M-TraceId. Tasks that had just spent N rounds doing real
+# tool work then had their TERMINAL round replaced by that greeting, and
+# finalize persisted ``task['content']`` (the last round's 29 chars) over the
+# accumulated deliverable. ``_check_suspicious_completion`` SAW it
+# (``short_content_after_tool_calls`` fired 54×) — but only logged. Nothing
+# stopped the overwrite.
+#
+# What is recoverable: ``_discard_pretool_prose`` zeroes ``task['content']``
+# after every tool round, but the prose the model streamed ALONGSIDE those
+# calls is kept verbatim on the tool round as ``assistantContent`` (see
+# tool_dispatch/_parse.py). That is the accumulated inter-round work — the
+# "已做的工作 + 阶段性结论" the user watched happen. When the terminal round is
+# a suspicious short ``stop`` (the exact shape the detector already flags), we
+# rebuild the delivered content from those snapshots instead of shipping the
+# short residue, so the user gets the real accumulated work back.
+#
+# Gates (each one is a distinct no-false-positive boundary, all pinned by
+# tests/test_suspicious_short_completion_guard.py):
+#   * finish_reason == 'stop'   — only a completed turn is an overwrite
+#     candidate (tool_use/aborted/error finishes are not "the model stopped");
+#   * tool_call_happened        — no tool rounds means nothing accumulated;
+#   * content is short (<50)    — mirrors the detector's own threshold, so the
+#     interception fires on exactly the shape the detector flags, never on a
+#     normal long answer (complement test);
+#   * recovered narration is substantial (> accumulated chars) — a genuinely
+#     short turn with no real prior prose has nothing to recover, so it is
+#     left untouched (no mangling a real "好的。");
+#   * not aborted               — a user Stop legitimately truncates the
+#     accumulator and must never be "recovered" over.
+_SHORT_CONTENT_MAX = 50
+_MIN_RECOVERED_NARRATION = 80
+
+
+def _maybe_preserve_accumulated_on_suspicion(task, last_finish_reason,
+                                             tool_call_happened) -> bool:
+    """Recover accumulated inter-round narration when the terminal round is a
+    suspicious short ``stop`` after tool work.
+
+    Returns ``True`` when the content was replaced with recovered narration,
+    ``False`` when the turn was left untouched. See the module note above for
+    the incident this closes and the gate boundaries.
+    """
+    tid = task['id'][:8]
+    if last_finish_reason != 'stop':
+        return False
+    if not tool_call_happened:
+        return False
+    if task.get('aborted'):
+        return False
+    content = task.get('content') or ''
+    if len(content) >= _SHORT_CONTENT_MAX:
+        return False
+
+    parts = [
+        (r.get('assistantContent') or '').strip()
+        for r in (task.get('toolRounds') or [])
+        if isinstance(r, dict) and (r.get('assistantContent') or '').strip()
+    ]
+    recovered = '\n\n'.join(parts)
+    if len(recovered) < _MIN_RECOVERED_NARRATION:
+        return False
+
+    task['content'] = recovered
+    logger.warning(
+        '[Orchestrator] %s conv=%s ⚠️ SUSPICIOUS SHORT COMPLETION intercepted: '
+        'terminal stop round left only %d chars (likely a canned/upstream '
+        'residue), so the delivered content was rebuilt from %d prior tool '
+        'round(s)\' accumulated narration (%d chars) instead of overwriting '
+        'the turn\'s real work. finish=%s',
+        tid, task.get('convId', ''), len(content), len(parts),
+        len(recovered), last_finish_reason)
+    try:
+        from lib.log import audit_log
+        audit_log('suspicious_short_completion_intercepted',
+                  task_id=task['id'], conv=task.get('convId', ''),
+                  residue_chars=len(content),
+                  recovered_chars=len(recovered),
+                  rounds=len(parts))
+    except Exception as _ae:
+        logger.debug('[%s] suspicious-intercept audit failed: %s', tid, _ae)
+    return True
+
+
 
 # ── JSON repair for truncated / malformed LLM tool-call arguments ──────────
 # Canonical implementation lives in lib.utils.repair_json.
@@ -981,6 +1069,17 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
         tool_call_happened, round_num, model,
         assistant_msg=assistant_msg,
     )
+
+    # ── ACT on the suspicious-short shape, not just warn (2026-07-28 canned
+    #    greeting incident).  When the terminal round is a short ``stop``
+    #    after real tool work, recover the accumulated narration BEFORE the
+    #    pre-emit conv sync and the done event read task['content'] — so the
+    #    committed message and the client both get the real work back, not
+    #    the 29-char residue.  Must run after the fallback/synthesis paths
+    #    above (which can legitimately fill empty content) and after the
+    #    detector has logged its shape.
+    _maybe_preserve_accumulated_on_suspicion(
+        task, last_finish_reason, tool_call_happened)
 
     # ── Build done event ──
     done_evt = build_event(EventType.DONE)

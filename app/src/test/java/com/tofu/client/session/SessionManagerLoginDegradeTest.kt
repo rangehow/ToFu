@@ -48,6 +48,10 @@ class SessionManagerLoginDegradeTest {
         override suspend fun insert(profile: Profile): Long = 1
         override suspend fun update(profile: Profile): Int { current = profile; updates += profile; return 1 }
         override suspend fun deleteById(id: Long) {}
+        val stamps = mutableListOf<String?>()
+        override suspend fun setCookieHost(id: Long, host: String?): Int {
+            current = current.copy(cookieHost = host); stamps += host; return 1
+        }
     }
 
     /**

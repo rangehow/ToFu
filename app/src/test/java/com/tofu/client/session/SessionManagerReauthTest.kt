@@ -40,6 +40,9 @@ class SessionManagerReauthTest {
         override suspend fun insert(profile: Profile): Long = 1
         override suspend fun update(profile: Profile): Int { current = profile; updates += profile; return 1 }
         override suspend fun deleteById(id: Long) {}
+        override suspend fun setCookieHost(id: Long, host: String?): Int {
+            current = current.copy(cookieHost = host); return 1
+        }
     }
 
     private fun profile(url: String, cookieHost: String?) = Profile(

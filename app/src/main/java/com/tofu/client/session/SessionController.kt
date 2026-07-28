@@ -76,6 +76,13 @@ class SessionController(
      *  - new secret provided → overwrite it,
      *  - URL host change → purge + re-login (via updateUrlAndReauth),
      *  - plain field change → persist + re-login.
+     *
+     * Returns BOTH the login outcome and the row as actually PERSISTED. The
+     * caller must not reconstruct the edited profile itself: the two branches
+     * below write different rows (the host-change path nulls `cookieHost` and
+     * may refresh `instanceUuid`), so a hand-rolled `copy()` at the call site
+     * is silently wrong exactly when it matters — and for SSO that stale object
+     * is what gets handed to the WebView for the whole session.
      */
     suspend fun editProfile(
         current: Profile,
@@ -84,7 +91,7 @@ class SessionController(
         newAuthType: AuthType,
         newSecret: String,
         newProjectPath: String? = null,
-    ): LoginResult {
+    ): EditResult {
         val a = newAlias.trim()
         val pp = newProjectPath?.trim()?.ifEmpty { null }
 
@@ -112,14 +119,16 @@ class SessionController(
         val base = current.copy(alias = a, authType = newAuthType, projectPath = pp)
 
         return if (oldHost != null && newHost != null && oldHost != newHost) {
-            // URL host changed → the purge-and-relogin path owns persistence.
-            session.updateUrlAndReauth(base, newUrl)
+            // URL host changed → the purge-and-relogin path owns persistence, so
+            // it also owns what the persisted row looks like.
+            val reauth = session.updateUrlAndReauth(base, newUrl)
+            EditResult(reauth.login, reauth.persisted)
         } else {
             val updated = ProfileForm.toProfile(
                 current.id, a, newUrl, newAuthType, current.lastUsedAt, pp,
             )
             dao.update(updated)
-            session.login(updated)
+            EditResult(session.login(updated), updated)
         }
     }
 
@@ -164,6 +173,12 @@ class SessionController(
         data class Added(val profile: Profile, val login: LoginResult) : AddResult
         data object DuplicateAlias : AddResult
     }
+
+    /**
+     * The login outcome plus the row as it was actually written to Room. The UI
+     * navigates with [persisted], never with a locally-reconstructed copy.
+     */
+    data class EditResult(val login: LoginResult, val persisted: Profile)
 
     private companion object {
         const val TAG = "SessionController"

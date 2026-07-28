@@ -49,6 +49,11 @@ class SessionControllerTest {
         }
         override suspend fun update(profile: Profile): Int { rows[profile.id] = profile; return 1 }
         override suspend fun deleteById(id: Long) { rows.remove(id); deleted += id }
+        override suspend fun setCookieHost(id: Long, host: String?): Int {
+            val row = rows[id] ?: return 0
+            rows[id] = row.copy(cookieHost = host)
+            return 1
+        }
     }
 
     private fun mgr(dao: ProfileDao, vault: SecretVault, sink: FakeCookieSink) =

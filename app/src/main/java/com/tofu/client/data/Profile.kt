@@ -76,6 +76,21 @@ interface ProfileDao {
     @Update
     suspend fun update(profile: Profile): Int
 
+    /**
+     * Stamp ONLY the session-cookie host, leaving every other column untouched.
+     *
+     * Deliberately NOT `@Update`: that overwrites the whole row from whatever
+     * Profile instance the caller happens to hold. The callers here hold
+     * long-lived snapshots — `WebScreen` keeps the profile it was opened with
+     * for the entire session, and an SSO sign-in can take minutes (IdP redirect,
+     * one-time code). Writing the full row from that snapshot would silently
+     * roll back anything edited meanwhile. A targeted write makes "only this
+     * column changes" a fact of the query rather than a discipline the caller
+     * has to remember.
+     */
+    @Query("UPDATE profiles SET cookie_host = :host WHERE id = :id")
+    suspend fun setCookieHost(id: Long, host: String?): Int
+
     @Query("DELETE FROM profiles WHERE id = :id")
     suspend fun deleteById(id: Long)
 }

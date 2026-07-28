@@ -102,9 +102,11 @@ class ProfilesViewModel(
     fun submitEdit(current: Profile, alias: String, url: String, auth: AuthType, secret: String, projectPath: String = "") {
         _status.value = UiStatus.LoggingIn(alias)
         viewModelScope.launch {
-            val pp = projectPath.trim().ifEmpty { null }
-            val updated = current.copy(alias = alias, baseUrl = url, authType = auth, projectPath = pp)
-            handleLogin(controller.editProfile(current, alias, url, auth, secret, projectPath), updated)
+            // Navigate with the row the controller ACTUALLY wrote, never a
+            // locally-rebuilt copy: the host-change path nulls cookieHost, and
+            // for SSO this object is what WebScreen holds for the whole session.
+            val r = controller.editProfile(current, alias, url, auth, secret, projectPath)
+            handleLogin(r.login, r.persisted)
         }
     }
 

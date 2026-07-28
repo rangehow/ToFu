@@ -26,6 +26,13 @@ sealed interface LoginResult {
 }
 
 /**
+ * The outcome of [SessionManager.updateUrlAndReauth]: the login result plus the
+ * row as actually written. Callers navigate with [persisted] rather than a
+ * locally-rebuilt copy, which would miss the `cookieHost = null` invalidation.
+ */
+data class ReauthResult(val login: LoginResult, val persisted: Profile)
+
+/**
  * Owns the credential-replay lifecycle proven in the feasibility spike:
  *
  *   POST <origin>/login (password, base=.)  →  302 + Set-Cookie
@@ -102,7 +109,7 @@ class SessionManager(
                         return@withContext LoginResult.Success(server.host)
                     }
                     cookies.inject(server.origin, sessionCookies)
-                    dao.update(profile.copy(cookieHost = server.host))
+                    dao.setCookieHost(profile.id, server.host)
                     Log.i(TAG, "login ok alias=${profile.alias} host=${server.host}")
                     return@withContext LoginResult.Success(server.host)
                 }
@@ -152,7 +159,11 @@ class SessionManager(
         if (profile.cookieHost == host) return false
         val header = cookies.cookieHeader("https://$host")
         if (!InteractiveSso.completedSignIn(profile, finishedUrl, header)) return false
-        dao.update(profile.copy(cookieHost = host))
+        // Targeted write: this must NOT overwrite the whole row. The caller's
+        // `profile` is the snapshot WebScreen was opened with, and an SSO
+        // sign-in can take minutes — anything edited meanwhile would be
+        // silently rolled back by a full-row update.
+        dao.setCookieHost(profile.id, host)
         Log.i(TAG, "interactive sign-in recorded alias=${profile.alias} host=$host")
         return true
     }
@@ -162,10 +173,14 @@ class SessionManager(
      * the old host's cookie jar first (cookie is Domain-pinned) — this is the
      * re-provision invariant, baked into the update path, not an afterthought.
      * Then re-login against the new host from the stored credential.
+     *
+     * Returns the login outcome AND the row as persisted — this path nulls
+     * `cookieHost` and may refresh `instanceUuid`, so a caller that rebuilt the
+     * profile itself would hold a row that disagrees with the database.
      */
-    suspend fun updateUrlAndReauth(profile: Profile, newUrl: String): LoginResult {
+    suspend fun updateUrlAndReauth(profile: Profile, newUrl: String): ReauthResult {
         val newServer = ServerUrl.parse(newUrl)
-            ?: return LoginResult.Error("Invalid URL: $newUrl")
+            ?: return ReauthResult(LoginResult.Error("Invalid URL: $newUrl"), profile)
 
         val oldHost = profile.cookieHost ?: ServerUrl.parse(profile.baseUrl)?.host
         if (oldHost != null && oldHost != newServer.host) {
@@ -179,7 +194,7 @@ class SessionManager(
             cookieHost = null,     // invalidated until the fresh login re-stamps it
         )
         dao.update(updated)
-        return login(updated)
+        return ReauthResult(login(updated), updated)
     }
 
     /**

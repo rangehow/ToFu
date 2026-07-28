@@ -51,6 +51,15 @@ class SessionManagerInteractiveSsoTest {
             current = profile; updates += profile; return 1
         }
         override suspend fun deleteById(id: Long) {}
+        // Mirrors the real @Query: touches ONE column, so a test can tell a
+        // targeted write apart from a full-row overwrite.
+        val stamps = mutableListOf<String?>()
+        override suspend fun setCookieHost(id: Long, host: String?): Int {
+            if (current.id != id) return 0
+            current = current.copy(cookieHost = host)
+            stamps += host
+            return 1
+        }
     }
 
     private fun profile(cookieHost: String? = null) = Profile(
@@ -65,8 +74,8 @@ class SessionManagerInteractiveSsoTest {
      * true, and therefore the only thing that ever unlocks Start/Stop for an
      * SSO profile.
      *
-     * NEUTER CHECK: delete the `dao.update(...)` in noteInteractiveSignIn and
-     * this fails — the supervisor controls would stay locked forever.
+     * NEUTER CHECK: delete the `dao.setCookieHost(...)` in noteInteractiveSignIn
+     * and this fails — the supervisor controls would stay locked forever.
      */
     @Test
     fun completing_sso_in_the_webview_stamps_cookie_host() = runTest {
@@ -77,10 +86,41 @@ class SessionManagerInteractiveSsoTest {
         val stamped = mgr.noteInteractiveSignIn(profile(), finishedUrl = base)
 
         assertTrue("must record the completed sign-in", stamped)
-        assertEquals(1, dao.updates.size)
-        assertEquals(host, dao.updates.single().cookieHost)
+        assertEquals(listOf(host), dao.stamps)
+        assertEquals(host, dao.getById(1)!!.cookieHost)
         // It must read the jar for OUR origin, not some other host's.
         assertEquals(listOf("https://$host"), cookies.queried)
+    }
+
+    /**
+     * THE STALE-SNAPSHOT GUARD. `WebScreen` holds the profile it was opened
+     * with for the ENTIRE session, and an SSO sign-in can take minutes (IdP
+     * redirect, one-time code). If the stamp wrote the whole row from that
+     * snapshot, any edit made meanwhile would be silently rolled back.
+     *
+     * Here the row is renamed and re-pathed AFTER the snapshot is taken; the
+     * stamp must set cookieHost and touch nothing else.
+     *
+     * NEUTER CHECK: replace `dao.setCookieHost(...)` with
+     * `dao.update(profile.copy(cookieHost = host))` and this fails — the alias
+     * and projectPath revert to their pre-edit values.
+     */
+    @Test
+    fun stamping_does_not_roll_back_a_concurrent_edit() = runTest {
+        val stale = profile()                       // what WebScreen captured
+        val dao = FakeDao(stale)
+        val mgr = SessionManager(dao, FakeSecrets(), FakeCookieSink("code-server-session=tok"))
+
+        // Meanwhile the user edits the same row from the list screen.
+        dao.update(stale.copy(alias = "renamed", projectPath = "/srv/other"))
+
+        val stamped = mgr.noteInteractiveSignIn(stale, finishedUrl = base)
+
+        assertTrue(stamped)
+        val row = dao.getById(1)!!
+        assertEquals("the sign-in must be recorded", host, row.cookieHost)
+        assertEquals("a concurrent rename must survive", "renamed", row.alias)
+        assertEquals("a concurrent path edit must survive", "/srv/other", row.projectPath)
     }
 
     /** Sitting on the IdP is not a completed sign-in. */
@@ -95,7 +135,7 @@ class SessionManagerInteractiveSsoTest {
         )
 
         assertFalse(stamped)
-        assertTrue("must not stamp: ${dao.updates}", dao.updates.isEmpty())
+        assertTrue("must not stamp: ${dao.stamps}", dao.stamps.isEmpty())
     }
 
     /** An empty jar means the sign-in did not produce a session. */
@@ -106,7 +146,7 @@ class SessionManagerInteractiveSsoTest {
         val mgr = SessionManager(dao, FakeSecrets(), cookies)
 
         assertFalse(mgr.noteInteractiveSignIn(profile(), base))
-        assertTrue(dao.updates.isEmpty())
+        assertTrue(dao.stamps.isEmpty())
     }
 
     /**
@@ -127,7 +167,7 @@ class SessionManagerInteractiveSsoTest {
         val stamped = mgr.noteInteractiveSignIn(profile(cookieHost = host), base)
 
         assertFalse("already signed in → no write", stamped)
-        assertTrue("must not re-write: ${dao.updates}", dao.updates.isEmpty())
+        assertTrue("must not re-write: ${dao.stamps}", dao.stamps.isEmpty())
     }
 
     /** A password profile is stamped by the headless login, never from here. */
@@ -140,8 +180,8 @@ class SessionManagerInteractiveSsoTest {
 
         assertFalse(mgr.noteInteractiveSignIn(pw, base))
         assertTrue(
-            "stamping here would paper over a real login failure: ${dao.updates}",
-            dao.updates.isEmpty(),
+            "stamping here would paper over a real login failure: ${dao.stamps}",
+            dao.stamps.isEmpty(),
         )
     }
 }

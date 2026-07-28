@@ -1,5 +1,12 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-28(续·logo 再回滚) — **A2 上线当日被 owner 现场否决,全量回滚到原版**;in-situ 截图验收也不足以定品牌终审(方法论二次修正;家族 epic 前提动摇待 owner 三选一)
+
+- **经过:** A2(`13f8adee`,见下条「续·logo 定稿」)上线后 owner 在真实欢迎屏再次看到实物,决断「revert the welcome SVG to my original one」——第二次现场否决(第一次是 +40% 版 A)。本批把 `13f8adee` 的 6 个资产面(`tofu-welcome.svg`/`logo.png`/`manifest.json`/`apple-touch-icon`/README×2 的 `140×140`)全部 `git checkout 13f8adee~1` 还原 + `tofu.ico`/`icns` 重新生成;favicon link 本来指 `tofu-welcome.svg`,随文件自动还原;`tofu-favicon.svg` 保持旧手绘零引用未动;JOURNAL 历史保留(`13f8adee` 与其入账仍在链上,本批是它的回退执行而非历史抹除)。
+- **★ 方法第三条被同一证据二次修正:** 「设计评审禁止对比条拍板、必须 in-situ」**仍然不够**——A2 过了 in-situ 闸(欢迎屏 64px 实拍新旧对比)仍死在真实使用的长期观感上。截图过目与每天看着它工作是两种暴露强度;**品牌资产的终审只能是在岗试用**,logo 类改动的验收结论必须预设**可回滚窗口期**(本批即预设兑现:每步留快照,回滚 10 分钟完成)。
+- **家族 epic `pt_651bd5a3078e450d` 前提动摇:** 11 枚 A2 同源重绘已完成、in-situ 闸待 owner;主 logo 回滚后「以 A2 为家族模板」不再成立。但 22px 编排面新旧对照清晰度差距极大(旧家族是 VTracer 糊团),家族去留等 owner 三选一:①全部作废,保留旧 VTracer 家族;②主 logo 与家族分面决策,22px 编排面继续推进;③家族改走「现款像素风精修」路线(C 候选生成器还在)。稿子全部留在 `_gen/logo-redesign/family/` 未提交。
+- **验收边界:** 回滚纯静态,**刷新即回原版**;字标 CSS 归 peer 边界未碰;ico/icns 为未跟踪构建产物已同步。
+
 ### 2026-07-28(续·素材通道) — 「背景单调 / 素材极少」根因是**结构性禁令**,不是缺工具:两条规则叠加后素材唯一合法形态只剩内联字符串;顺带把本机唯一 CJK 面是**衬线**这件事修掉(commit `467b9e7b`,6 文件 +1100/-11;新套件 **25/25 含 NEUTER×2**,11 套 motion **254/254**,干净 committed worktree **130 passed / 2 skipped**;**首次给出像素级验收**)
 
 - **★ 根因(owner 的定性成立,我实测确认并补上第二条):** ①`COMPOSITION_CONTRACT.md` 禁渲染期取网络素材(正确,这是确定性的来源);②`_scene_author.py` docstring 明文不给任何写文件能力,「so a composition can never reference a local asset path」。**两条叠加的净效果:素材唯一合法形态是内联进 HTML 的字符串(即内联 SVG);位图、真实截图、背景视频不是没做,是被结构性判死。** 所以要做的是**一条通道**,不是加一把工具。

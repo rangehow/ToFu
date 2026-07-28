@@ -694,7 +694,6 @@
     <button class="scroll-to-bottom-btn" id="scrollToBottomBtn" onclick="scrollChatToBottom()" title="Scroll to latest" data-i18n-title="chat.scrollToBottom" aria-label="Scroll to latest">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
     </button>
-    <div class="turn-nav" id="turnNav"></div>
     <div class="ri-drawer" id="riDrawer" style="display:none">
       <div class="ri-side">
         <div class="ri-side-header">
@@ -718,6 +717,15 @@
       </div>
     </div>
     <div class="input-area">
+      <!-- Conversation-status strip: the CONVERSATION-scoped chrome (context
+           gauge + turn-nav dots), in-flow directly above the composer.
+           The gauge is prepended here by context-bar.js (_ensureBar).
+           Being inside .input-area means --input-area-h (main.js) already
+           includes it, so the scroll-to-bottom button stays anchored above
+           the whole band. -->
+      <div class="conv-status-strip" id="convStatusStrip">
+        <div class="turn-nav" id="turnNav"></div>
+      </div>
       <div class="input-inner">
         <div class="project-bar" id="projectBar" style="display:none">
           <span class="project-bar-icon" onclick="openProjectModal()" style="cursor:pointer" title="Manage folders"></span>

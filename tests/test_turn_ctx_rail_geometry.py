@@ -44,6 +44,25 @@ WHAT THIS ASSERTS (charter: assert the RESULT, not the threshold)
 None of these name a CSS constant or a source literal, so re-tuning the
 breakpoint, the rail width or the clamp keeps them green while a real
 regression turns them red.
+
+CONVERSATION-STATUS STRIP (second subject, same sweep)
+──────────────────────────────────────────────────────
+The context gauge (`.ctx-health-bar`) and the turn-nav dots are
+CONVERSATION-scoped chrome — one gauge for the whole context window, one dot
+strip for the whole conversation — unlike the per-turn rail. They used to
+float absolutely over the message flow (gauge `left:18px`, dots `right:8px`,
+both `top:50%` of `.chat-wrapper`): the gauge genuinely overlapped the
+message column below a ~1420px pane, and the dots vanished under a viewport
+media query. Both now live in-flow in `#convStatusStrip` directly above the
+composer, inside `.input-area` (so `--input-area-h` already includes them).
+
+The strip invariant is CONTAINMENT + PLACEMENT, not any constant: in every
+state the strip is visible directly above the composer, both cells' rects
+are contained inside the strip's rect, and neither cell overlaps any message
+or is clipped by the viewport. An absolute float restored by a future edit
+escapes containment in EVERY state — that is the NEUTER this guards against.
+The complement: both cells are present and non-empty in every state, so
+"hide the chrome everywhere" cannot satisfy the geometry either.
 """
 from __future__ import annotations
 
@@ -114,6 +133,20 @@ _PLANT = """() => {
                 + %s + '</div></div>'
                 + '</div>' + html;
     inner.appendChild(d);
+    /* Conversation-scoped chrome, through its PRODUCTION builders — never a
+     * hand-written copy: the gauge from context-bar.js (rAF-coalesced, the
+     * sweep's own waits cover creation; the test also waits for attach), the
+     * dots from turn_nav.js with five fake turns so the nav renders (it
+     * empties itself below two turns). */
+    if (typeof updateContextBar === 'function') updateContextBar();
+    if (typeof buildTurnNav === 'function') {
+        const __msgs = [];
+        for (let __t = 1; __t <= 5; __t++) {
+            __msgs.push({role:'user', content:'probe turn ' + __t + ' — geometry sweep seed'});
+            __msgs.push({role:'assistant', content:'probe answer ' + __t});
+        }
+        buildTurnNav({id:'__probe_conv', messages:__msgs});
+    }
     return 'ok';
 }""" % (_FAT_SNAPSHOT, repr(_PROSE))
 
@@ -150,6 +183,45 @@ _PROBE = """() => {
     // so any measure change moves it too. If it desyncs from the message
     // column the input box stops lining up with the text above it.
     const composer = document.querySelector('.input-inner');
+    // ── Conversation-status strip (gauge + turn-nav) ──
+    // CONTAINMENT is the invariant: a cell that escapes the strip's rect
+    // (e.g. an absolute float restored) is the old bug wearing a new name,
+    // regardless of whether it happens to intersect prose in today's layout.
+    const strip = document.getElementById('convStatusStrip');
+    const gauge = document.getElementById('contextHealthBar');
+    const nav   = document.getElementById('turnNav');
+    const rectOf  = (el) => el ? el.getBoundingClientRect() : null;
+    const visible = (el) => !!el && getComputedStyle(el).display !== 'none'
+                          && !!(el.offsetWidth || el.offsetHeight);
+    const overlap = (a, b) => !!a && !!b && a.width > 0 && b.width > 0 &&
+        !(a.right <= b.left + 0.5 || b.right <= a.left + 0.5 ||
+          a.bottom <= b.top + 0.5 || b.bottom <= a.top + 0.5);
+    const within = (inn, out) => !!inn && !!out &&
+        inn.left >= out.left - 0.5 && inn.right <= out.right + 0.5 &&
+        inn.top >= out.top - 0.5 && inn.bottom <= out.bottom + 0.5;
+    const stripR = rectOf(strip), gaugeR = rectOf(gauge), navR = rectOf(nav);
+    /* Overlap must be judged on the VISIBLE part of the message: a message
+     * scrolled out of the container still reports a raw rect (possibly right
+     * under the strip), which would fake an overlap. Scroll the probe into
+     * view (it is the last element), then clip to the container's rect — an
+     * empty clip means "not visible", and an invisible message cannot be
+     * overlapped by anything. */
+    cont.scrollTop = cont.scrollHeight;
+    const msgR = msg.getBoundingClientRect();
+    const clipToCont = (r) => {
+        if (!r) return null;
+        const c = {
+            left: Math.max(r.left, contR.left), right: Math.min(r.right, contR.right),
+            top: Math.max(r.top, contR.top), bottom: Math.min(r.bottom, contR.bottom),
+        };
+        if (c.right <= c.left || c.bottom <= c.top) return null;
+        c.width = c.right - c.left; c.height = c.bottom - c.top;
+        return c;
+    };
+    const visMsgR = clipToCont(msgR);
+    const mdR  = clipToCont(rectOf(md));
+    const compR = rectOf(composer);
+    const clippedByVw = (r) => !!r && (r.right > window.innerWidth + 0.5 || r.left < -0.5);
     // The body's CONTENT box — the measure minus the bubble's own inset. The
     // tofu theme pads `.message-content` by 16px a side and draws a 2.5px
     // border, which is legitimate bubble inset, NOT a second measure;
@@ -182,6 +254,19 @@ _PROBE = """() => {
         railText: rail ? (rail.textContent || '').trim().length : 0,
         msgHeight: msg.getBoundingClientRect().height,
         bodyHeight: body ? body.getBoundingClientRect().height : 0,
+        stripShown: visible(strip),
+        stripAboveComposer: !!stripR && !!compR && stripR.bottom <= compR.top + 1,
+        gaugeShown: visible(gauge),
+        gaugeInStripRect: within(gaugeR, stripR),
+        gaugeOverlapMsg: overlap(gaugeR, visMsgR),
+        gaugeOverlapProse: overlap(gaugeR, mdR),
+        gaugeClipped: clippedByVw(gaugeR),
+        navShown: visible(nav),
+        navInStripRect: within(navR, stripR),
+        navOverlapMsg: overlap(navR, visMsgR),
+        navOverlapProse: overlap(navR, mdR),
+        navClipped: clippedByVw(navR),
+        navDots: nav ? nav.querySelectorAll('.turn-dot').length : 0,
     };
 }"""
 
@@ -266,6 +351,14 @@ def test_rail_never_clipped_in_any_pane_state(page):
     page.wait_for_function("typeof renderTurnCtxNote === 'function'", timeout=20000)
     planted = page.evaluate(_PLANT)
     assert planted == 'ok', f'could not plant the probe turn: {planted}'
+    # The conversation chrome must have been built by its PRODUCTION builders:
+    # the gauge is rAF-coalesced, so wait for attach; the dots are sync.
+    page.wait_for_selector('#contextHealthBar', state='attached', timeout=5000)
+    _dots = page.evaluate(
+        "() => document.querySelectorAll('#turnNav .turn-dot').length")
+    assert _dots >= 2, (
+        f'probe nav rendered {_dots} dots — buildTurnNav did not produce the '
+        f'five fake turns, so every nav assertion below would be vacuous')
 
     rows = _sweep(page)
     pane_states = {(r['drawer'], r['sidebar'], r['vw']) for r in rows}
@@ -326,6 +419,27 @@ def test_rail_never_clipped_in_any_pane_state(page):
                     and not r['drawer'] and r['paneWidth'] >= 1368
                     and abs(r['composerW'] - r['measure']) > 120]
 
+    # ── 9. CONVERSATION CHROME (gauge + turn-nav): in-flow in the status
+    #      strip directly above the composer, CONTAINED by it, never over a
+    #      message, never clipped. Containment is the invariant that makes
+    #      "restore the absolute float" go red in EVERY state, not just the
+    #      states where the float happens to hit prose today. ──
+    strip_missing = [r for r in rows
+                     if not r['stripShown'] or not r['stripAboveComposer']]
+    chrome_escaped = [r for r in rows
+                      if (r['gaugeShown'] and not r['gaugeInStripRect'])
+                      or (r['navShown'] and not r['navInStripRect'])]
+    chrome_overlaps = [r for r in rows
+                       if r['gaugeOverlapMsg'] or r['navOverlapMsg']
+                       or r['gaugeOverlapProse'] or r['navOverlapProse']]
+    chrome_clipped = [r for r in rows if r['gaugeClipped'] or r['navClipped']]
+    # ── 10. CHROME COMPLEMENT: both cells must actually BE there in every
+    #      state — "hide the chrome everywhere" satisfies all of the above.
+    #      The sweep planted five turns, so an empty nav is always a
+    #      regression here, never a legitimate state. ──
+    gauge_missing = [r for r in rows if not r['gaugeShown']]
+    nav_missing = [r for r in rows if not r['navShown'] or r['navDots'] < 2]
+
     print(f'\n  states swept              : {len(states)} '
           f'({len(_THEMES)} themes \u00d7 {len(pane_states)} pane states \u00d7 2 = {len(rows)} rows)')
     print(f'  rail CLIPPED              : {len(clipped)}')
@@ -353,6 +467,12 @@ def test_rail_never_clipped_in_any_pane_state(page):
                   f'over={_tover} under={_tunder}')
         print(f'  prose/body disagreement   : {len(split_measure)}')
         print(f'  composer desynced         : {len(composer_off)}')
+        print(f'  strip missing/misplaced   : {len(strip_missing)}')
+        print(f'  chrome escaped strip      : {len(chrome_escaped)}')
+        print(f'  chrome overlapping msgs   : {len(chrome_overlaps)}')
+        print(f'  chrome clipped by viewport: {len(chrome_clipped)}')
+        print(f'  gauge missing             : {len(gauge_missing)}')
+        print(f'  nav missing/empty         : {len(nav_missing)}')
     if rows:
         _w = max(r['paneWidth'] for r in rows)
         _n = min(r['paneWidth'] for r in rows)
@@ -437,6 +557,67 @@ def test_rail_never_clipped_in_any_pane_state(page):
             'theme=%-5s sidebar=%-14s vw=%-5d composer=%.0f body=%.0f'
             % (r['theme'], r['sidebar'], r['vw'], r['composerW'], r['measure'])
             for r in composer_off[:12]))
+
+    assert not strip_missing, (
+        'the conversation-status strip is hidden or NOT directly above the '
+        'composer in %d state(s) — it is in-flow chrome, so a missing or '
+        'misplaced strip means something positioned it again:\n  '
+        % len(strip_missing)
+        + '\n  '.join(
+            'theme=%-5s drawer=%s sidebar=%-14s vw=%-5d shown=%s aboveComposer=%s'
+            % (r['theme'], r['drawer'], r['sidebar'], r['vw'],
+               r['stripShown'], r['stripAboveComposer'])
+            for r in strip_missing[:12]))
+
+    assert not chrome_escaped, (
+        'a conversation-chrome cell ESCAPED the strip rect in %d state(s) — '
+        'containment is the invariant; an absolute float restored by any '
+        'future edit fails this in every state, which is the point:\n  '
+        % len(chrome_escaped)
+        + '\n  '.join(
+            'theme=%-5s drawer=%s sidebar=%-14s vw=%-5d gaugeIn=%s navIn=%s'
+            % (r['theme'], r['drawer'], r['sidebar'], r['vw'],
+               r['gaugeInStripRect'], r['navInStripRect'])
+            for r in chrome_escaped[:12]))
+
+    assert not chrome_overlaps, (
+        'the gauge or turn-nav OVERLAPS a message in %d state(s) — the '
+        'pre-strip gauge genuinely covered the message column below a '
+        '~1420px pane; that must never come back:\n  ' % len(chrome_overlaps)
+        + '\n  '.join(
+            'theme=%-5s drawer=%s sidebar=%-14s vw=%-5d gMsg=%s nMsg=%s gProse=%s nProse=%s'
+            % (r['theme'], r['drawer'], r['sidebar'], r['vw'],
+               r['gaugeOverlapMsg'], r['navOverlapMsg'],
+               r['gaugeOverlapProse'], r['navOverlapProse'])
+            for r in chrome_overlaps[:12]))
+
+    assert not chrome_clipped, (
+        'the gauge or turn-nav is CLIPPED by the viewport in %d state(s):\n  '
+        % len(chrome_clipped)
+        + '\n  '.join(
+            'theme=%-5s drawer=%s sidebar=%-14s vw=%-5d gauge=%s nav=%s'
+            % (r['theme'], r['drawer'], r['sidebar'], r['vw'],
+               r['gaugeClipped'], r['navClipped'])
+            for r in chrome_clipped[:12]))
+
+    assert not gauge_missing, (
+        'the context gauge is missing in %d state(s) — hiding the chrome '
+        'everywhere must NOT be a way to satisfy the geometry:\n  '
+        % len(gauge_missing)
+        + '\n  '.join(
+            'theme=%-5s drawer=%s sidebar=%-14s vw=%-5d'
+            % (r['theme'], r['drawer'], r['sidebar'], r['vw'])
+            for r in gauge_missing[:12]))
+
+    assert not nav_missing, (
+        'the turn-nav is missing or empty in %d state(s) — the sweep planted '
+        'five turns, so an empty nav is a regression, not a state:\n  '
+        % len(nav_missing)
+        + '\n  '.join(
+            'theme=%-5s drawer=%s sidebar=%-14s vw=%-5d shown=%s dots=%d'
+            % (r['theme'], r['drawer'], r['sidebar'], r['vw'],
+               r['navShown'], r['navDots'])
+            for r in nav_missing[:12]))
 
 
 def test_overflow_toggle_bounds_the_chip_count(page):

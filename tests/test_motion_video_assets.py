@@ -299,6 +299,36 @@ def test_author_toolset_exposes_asset_generation():
         assert banned not in names
 
 
+def test_generate_asset_tells_the_model_a_background_must_recede():
+    """Measured on the first REAL-model run, not hypothesized.
+
+    Both scenes autonomously called generate_asset — the channel works. But
+    scene-001 pushed its background back (``opacity:.6`` PLUS
+    ``filter:brightness(.4) saturate(.8)``) while scene-002 used
+    ``opacity:.25`` and NO filter, so the asset's hard-edged blocks stayed
+    fully legible and cut straight through the bar chart in front of them.
+    The tool description said nothing about recession, so which behaviour you
+    got was luck. This pins the instruction, since the defect is invisible to
+    every existing gate: the frame is well-formed, in-bounds and
+    contrast-compliant — just badly layered.
+    """
+    from lib.motion_video._scene_author import SCENE_AUTHOR_TOOLS
+
+    desc = next(t['function']['description'] for t in SCENE_AUTHOR_TOOLS
+                if t['function']['name'] == 'generate_asset').lower()
+    assert 'recede' in desc, (
+        'the model is never told a background must recede behind the content')
+    assert 'filter' in desc and 'brightness' in desc, (
+        'no concrete darkening remedy is given — opacity alone does not make '
+        'a busy image recede, which is the measured failure')
+    assert 'opacity alone' in desc, (
+        'the specific trap (opacity without a filter) is not named')
+    # …and the complement: a hero/subject asset must NOT be dimmed.
+    assert 'subject' in desc, (
+        'without the exemption the model will also dim assets that ARE the '
+        'subject, which is the opposite defect')
+
+
 def test_gate_rejects_a_bad_asset_reference_before_chrome(library, tmp_path,
                                                           monkeypatch):
     """The asset check must run in the PURE phase of _full_gate.

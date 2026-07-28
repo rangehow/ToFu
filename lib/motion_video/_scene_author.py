@@ -223,7 +223,18 @@ SCENE_AUTHOR_TOOLS = [
                 'second time. Prefer this over a text-only card: a frame with a '
                 'real graphic is the whole point. Say what STYLE you want (flat '
                 'vector / UI illustration / paper-cut collage / photographic) '
-                'or you will get a photorealistic default.'),
+                'or you will get a photorealistic default.\n'
+                'A BACKGROUND MUST RECEDE. When the asset sits behind text or '
+                'a chart, push it back so it never competes with the content: '
+                'low opacity AND a darkening filter (e.g. '
+                '"opacity:.35; filter:brightness(.45) saturate(.8)"), or a '
+                'gradient scrim over it. Measured failure to avoid: an asset '
+                'used at opacity .25 with NO filter kept its hard-edged blocks '
+                'fully legible, and they cut straight through the bar chart in '
+                'front of them. Opacity alone does not make a busy image '
+                'recede. If the asset is the SUBJECT (a hero illustration, an '
+                'icon) rather than a background, that rule does not apply — '
+                'give it real size and let it read.'),
             'parameters': {
                 'type': 'object',
                 'properties': {

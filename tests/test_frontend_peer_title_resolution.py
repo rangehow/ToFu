@@ -46,9 +46,23 @@ pytestmark = pytest.mark.unit
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, '..'))
-CONV_JS = os.path.join(ROOT, 'static', 'js', 'core', 'conversations.js')
+# NOTE: convTitleById is NOT looked up by a hard-coded path. It started life in
+# core/conversations.js and moved to core/conv_reducers.js in the decomposition;
+# a pinned path turns that legitimate refactor into `convTitleById not found`,
+# which reads like the seam was deleted. Resolve it by SYMBOL from the
+# production bundle manifests so the next slice carries this guard with it.
 TR_JS = os.path.join(ROOT, 'static', 'js', 'ui', 'tool_rounds.js')
 SEND_JS = os.path.join(ROOT, 'static', 'js', 'main', 'main_send_pipeline.js')
+
+
+def _src_defining(symbol: str) -> str:
+    """Absolute path of the shipped file that defines *symbol*.
+
+    Raises with a four-state diagnosis (gone / unbundled / duplicated /
+    resolved) rather than a bare 'not found'.
+    """
+    from tests._conv_bundle_sources import sources_defining
+    return sources_defining(symbol)[-1]
 
 
 def _read(path: str) -> str:
@@ -183,7 +197,7 @@ def _run(harness: str) -> str:
 
 def _extracted(*, poison: bool = False) -> str:
     """The real convTitleById + _renderPeerDelivery + renderPendingQueueUI."""
-    conv_src = _read(CONV_JS)
+    conv_src = _read(_src_defining('convTitleById'))
     tr_src = _read(TR_JS)
     send_src = _read(SEND_JS)
     fn_title = _extract_fn(conv_src, 'convTitleById')

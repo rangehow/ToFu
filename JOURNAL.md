@@ -1,5 +1,12 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-28(续18) — tofu_guard 竞态根修**已上线**(epic `pt_aa3cd224b3b346e7` DONE;commit `4b9a3ab1`,4 文件;新套件 **7/7 含 NEUTER×2 各咬**,相邻环 **42/42**;守卫循环已重启在修复版脚本上,pid 2007747)
+
+- **落地(按复核稿 §8):** ①(b1) re-exec 标记——`_perform_server_reexec` 关闭前写 `data/.reexec_in_progress`,`server.py` ready 行清除,守卫 <300s 让位(45s 实测窗口的 6.7×);②(b2) 实例锁让位——无监听+无 HTTP 但**存活 server.py** 持 `data/.server.lock` → 无 TTL 让位(>600s 只 WARNING);**记录 pid 已死 = 陈旧锁不让位**(SIGKILL/孤儿持 fd/FUSE 延迟释放场景,复核阶段自查抓出的「永远让位」缺陷,服务端 `_reclaim_stale_instance_lock` 摘锁)。
+- **测试形态复用+一处自抓缺陷:** 守卫副本靠 PROJ 自定位(`<tmp>/deploy/`)+ 假 `.tofu_env.json` 桩 PY=/bin/true + PORT 环境变量,零 sed 伤筋动骨;(d) pgrep 回退照例 defang(14:21 同类)。`_LockStub` 初版在 data/ 目录创建前启动,bash 重定向静默失败「stub 活着但什么都没持」——靠「锁必须真被持有,否则 fail fast」断言当场抓出。**判据:测试桩的就绪检查必须断言其效果(锁已持),不能只断言其存在(进程活着)。**
+- **上线方式:** kill 旧循环(内存里跑着 7-27 旧解析)→ `--ensure` 秒级拉起新循环(不等 cron);`.restart.lock` 实测无人持有(两笔 standing-down 日志归因=我的脚本测试窗口持锁,守卫行为正确);生产 pid 1067797 全程无损。
+- **merged ≠ live 诚实分账:** 守卫两层**已活**;server 侧 marker 写/清在 committed 树,**当前进程不带**——它的下一次 re-exec 不会写 marker((b1) 盲一代),但 (b2) 在 exec 后锁重获(~数秒)起覆盖 boot 主体,残余裸露窗口仅 exec→锁重获数秒,随下次自然重启闭合。不为此重启机队。
+
 ### 2026-07-28(续·test-health 补) — 并行会话互补三提交:orphan-resume 按 owner 答**改写为通用 .action-btn 文本不变量** + conv_state_reducer 重锚 attachable 集 + jsdom harness 簇(epic `pt_dbd7a32ffa0e4dd3` 家族;提交 `38ec59b6`/`d5e384c7`/`5892fdb3`,干净 worktree 12/12)
 
 - **定位:与主线六提交互补不重复。** 主线(ms4b67gmthqc17)做 A/B/C 大类重锚并收口;本线(dispatch 到同一 epic 的并行会话)只做主线未碰的点。冲突一例已核:manual_compaction 双方独立修出**同一 convStatusStrip 根因**(conversation-chrome 收敛把 gauge 搬进 `#convStatusStrip`,`_ensureBar` 无宿主即 null),主线 `a0759015` 先落地,本方放弃重复提交。

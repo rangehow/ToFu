@@ -1,5 +1,15 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-28(续11) — 共享项目级 429 争抢不再污染模型健康成功率(epic `pt_47594accfe654410`):**外部争抢从「健康错误」里摘出来,卡片 24% 假红机制的根修**(新套件 **9/9** + 前端 harness **NEUTER-5 咬**,**NEUTER×2 各自精确咬**,相邻环 **69+30 全绿**,tsc BASELINE=0 保持)
+
+- **机制(上午诊断的落地):** sankuai→Moonshot 共享项目被外部租户顶格 50M TPM(本地实测 ~2M/4%),每个 429 重试被 `slot.record_error` 计入 `total_errors` 并喂 `record_rate_limit` 连击 —— 卡片成功率被砸到 24%,且连击再涨会把健康 key 自动熔断一整天。本批把这类 429 从两个健康账里摘出。
+- **落点链:** ①`lib/llm_errors.py` 新增窄谓词 `_is_shared_project_limit`(`reached project` + `tpm rate limit` **双特征**,单特征不中;quota 判定优先于它,钉了「双模式 body 仍判 quota」的补集)→ `RateLimitError(is_shared_contention=True)`;②`slot.record_error` 争抢分支:计 `contention_errors` 而非 `total_errors`,**补偿 total_requests**(争抢尝试既非胜也非负,不该进分母),`consecutive_errors` 照增保 0.5s 换 slot 行为,**key_stats 两个喂入全跳过**;③`api.py` 两个 429 循环传旗;④`get_slots_info`/`aggregate_model_health` 透出 `contention_errors`;⑤卡片健康条渲染独立「争抢 N」muted chip(与成功率分离),i18n 双语言。
+- **★ 自抓一处设计修正:** 成功率测试首发失败,不是产品缺陷 —— `success_rate` 属性在 `total_requests < 3` 时按冷启动惯例返回 0.95,我的场景只造了 2 次真实尝试。改为 9 争抢 + 1 真错 + 2 成功 → 断言 1−1/3。**判据:断言聚合属性时先把它的全部惯例分支列出来,再选场景。**
+- **NEUTER×2 各咬各的:** ①谓词恒 False → 精确红 1 条(真 body 分类),quota 优先与窄度补集不动;②争抢计入 `total_errors` → 精确红 3 条(记账×2 + dispatch 集成),分类套件不动。前端 NEUTER-5(摘掉 fold 行 → chip 消失)在 jsdom harness 内咬。
+- **分账(预存在 flake,未修):** `test_dispatch_model_health.py::test_cooldown_max_remaining_and_reason` 在慢组合(同进程前有 typecheck/jsdom ~20s)下红 —— 机制读码即证:`NOW = time.time()` 在**模块导入时**取值,断言 `cooldown_remaining_s > 40` 对 `NOW+44` 只有 **4s 余量**,慢套件烧掉余量即红;单跑/快组合必绿。与本批零相关(干净 HEAD A/B 受 skip 影响不可判定,但机制充分)。归 test-health 票 `pt_dbd7a32ffa0e4dd3`(兄弟 ms3sl904z633by 在办),已在本条留判据:NOW 移入测试体即修。
+- **验收边界:** 修复已 committed,**运行中进程不带修复**(merged ≠ live)——重启前线上卡片仍会把争抢 429 计入成功率。
+- **边界:** 争抢 429 的**统一退避**(替代 0.5s 换 key 空转)归姊妹票 `pt_1a72b708098d446f`(下一张),复用本票的 `is_shared_contention` 分类缝。
+
 ### 2026-07-28(续) — 工具行调试入口重设计收口(epic `pt_e021188c1fe942c5`):**两个控件各自认定拥有同一条右边缘,于是互相打印在对方身上**;票面四道门里有三道实测是死分支(commit `a586787c`,8 文件 +548/-104;新套件 **7+4**,相邻环 **26/26**,**NEUTER×5 全咬**,干净 committed HEAD 复验 **17/17**)
 
 - **①右端归属冲突(压字真因):** `.tc-preview-btn`(模型原文)用 `margin-left:auto` 领走最右端,而调试入口从一个**零高度块**(`.ri-tool-anchor-row{height:0}`)配 `margin-top:-14px` 浮上来 —— 两个元素都认为自己拥有那条边。**修法不是把负边距调小,是让重叠在结构上不可能**:新增单一 `.ptool-row-ctl` 包裹器独占 `margin-left:auto`,两控件在它的流内各占自己的空间。swarm inbox 那第三条 `margin-left:auto` 一并归口到同一包裹器(保留裸按钮回退选择器,因为该行未必带调试入口)。swarm 面板没有同形头部,故单独给一条**正常流**的右对齐条(不是浮层)。

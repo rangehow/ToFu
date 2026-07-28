@@ -134,6 +134,13 @@ class Slot:
     consecutive_errors: int = 0
     total_requests: int = 0
     total_errors: int = 0
+    # External shared-project contention (429s naming a project-level TPM
+    # limit saturated by OTHER tenants). Counted separately so the model
+    # success-rate column and the consecutive-429 auto-exhaust streak
+    # reflect only genuine key health (2026-07-28 kimi-k3 incident: 782
+    # contention 429s crushed the card's success rate to 24% while the
+    # genuine failure rate was ~1%).
+    contention_errors: int = 0
     last_error_time: float = 0.0
     last_error_msg: str = ''
 
@@ -314,7 +321,8 @@ class Slot:
                                self.consecutive_errors)
 
     def record_error(self, is_rate_limit=False, error: str = '',
-                     is_quota_exhausted: bool = False, is_gateway: bool = False):
+                     is_quota_exhausted: bool = False, is_gateway: bool = False,
+                     is_shared_contention: bool = False):
         """Call after a failed request.
 
         Args:
@@ -335,11 +343,26 @@ class Slot:
                 they are still recorded as ordinary failures via
                 record_outcome so the dead-key safety net (daily failure
                 stats) keeps working.
+            is_shared_contention: True when the 429 names a PROJECT-LEVEL
+                limit shared with other tenants of the gateway account
+                (RateLimitError.is_shared_contention). Counted into
+                ``contention_errors`` instead of ``total_errors`` (the
+                success-rate column stays honest) and feeds neither
+                key_stats path. Slot-local cooldown still applies so the
+                picker rotates away briefly.
         """
         with self._lock:
             self.inflight = max(0, self.inflight - 1)
             self.consecutive_errors += 1
-            self.total_errors += 1
+            if is_shared_contention and not is_gateway:
+                # External project-level contention: NOT this key's health.
+                # Count it separately and pull the attempt back out of
+                # total_requests (record_request already added it) so the
+                # success-rate column reflects genuine outcomes only.
+                self.contention_errors += 1
+                self.total_requests = max(0, self.total_requests - 1)
+            else:
+                self.total_errors += 1
             self.last_error_time = time.time()
             if error:
                 self.last_error_msg = str(error)[:200]
@@ -383,6 +406,14 @@ class Slot:
                                    model=self.model)
             except Exception as e:
                 logger.debug('[Slot] key_stats mark_key_exhausted failed: %s', e)
+        elif is_shared_contention and not is_gateway:
+            # External contention feeds NEITHER the consecutive-429
+            # auto-exhaust streak (a saturated shared project must not
+            # disable a healthy key for the day) NOR the daily failure
+            # stats (nothing failed — someone else's traffic filled the
+            # pipe). The slot-local contention_errors counter above keeps
+            # the volume visible on the model card.
+            pass
         elif is_rate_limit and not is_gateway:
             try:
                 from lib.key_stats import record_rate_limit

@@ -1573,6 +1573,8 @@ var _i18n = {
   'settings.mhNoTraffic': { zh: '暂无流量', en: 'no traffic yet' },
   'settings.mhInflight': { zh: '{n} 在途', en: '{n} inflight' },
   'settings.mhConsecErrors': { zh: '连续 {n} 错', en: '{n} consec errors' },
+  'settings.mhContention': { zh: '争抢 {n}', en: 'contention {n}' },
+  'settings.mhContentionTip': { zh: '项目级共享额度被其他租户打满导致的 429 次数 — 外部争抢，不计入成功率', en: '429s caused by other tenants saturating the shared project quota — external contention, excluded from the success rate' },
   'settings.mhRequestsTip': { zh: '本进程累计 {n} 次请求', en: '{n} requests this process' },
   // ── Visibility / model defaults (settings/visibility_defaults.js) ──
   'settings.vdNoIgModels': { zh: '未找到图片生成模型。请在服务商中添加具有 <code>image_gen</code> 能力的模型。', en: 'No image-gen models found. Add a model with the <code>image_gen</code> capability under a provider.' },
@@ -3450,6 +3452,9 @@ var _i18n = {
   'projectBrain.boardEmpty': { zh: '任务板为空', en: 'Board is empty' },
   'projectBrain.committedDecisions': { zh: '已确认的决策', en: 'Committed decisions' },
   'projectBrain.pendingProposals': { zh: '提议中（待你审核）', en: 'Proposed (awaiting your review)' },
+  'projectBrain.healthNoGoal': { zh: '尚未设定北极星目标——以下决策仅为实现级意图，不是项目目标。', en: 'No north-star goal is set — the decisions below are implementation-level intent only.' },
+  'projectBrain.healthStats': { zh: '{n} 条决策 · 每轮注入 {m} 条', en: '{n} decisions · {m} shown per turn' },
+  'projectBrain.summaryPlaceholder': { zh: '一句话规则（必填）', en: 'One-line summary (required)' },
   'projectBrain.commit': { zh: '确认', en: 'Commit' },
   'projectBrain.committing': { zh: '确认中…', en: 'Committing…' },
   'projectBrain.reject': { zh: '驳回', en: 'Reject' },

@@ -318,7 +318,7 @@ function _modelCardHealthRow(provIdx, modelIdx) {
     if (!r) continue;
     if (!agg) {
       agg = { slots: 0, available_slots: 0, total_requests: 0, total_errors: 0,
-              consecutive_errors: 0, inflight: 0,
+              contention_errors: 0, consecutive_errors: 0, inflight: 0,
               cooldown_remaining_s: 0, cooldown_reason: '',
               last_error_msg: '', last_error_ts: 0, success_rate: null };
     }
@@ -326,6 +326,7 @@ function _modelCardHealthRow(provIdx, modelIdx) {
     agg.available_slots += r.available_slots || 0;
     agg.total_requests += r.total_requests || 0;
     agg.total_errors += r.total_errors || 0;
+    agg.contention_errors += r.contention_errors || 0;
     agg.inflight += r.inflight || 0;
     if ((r.consecutive_errors || 0) > agg.consecutive_errors) {
       agg.consecutive_errors = r.consecutive_errors;
@@ -379,6 +380,14 @@ function _modelCardHealthHTML(provIdx, modelIdx) {
     html += '<span class="stg-mh-chip ' + cls + '" title="' +
       escapeHtml(t('settings.mhRequestsTip', { n: agg.total_requests })) + '">' +
       escapeHtml(t('settings.mhSuccessRate')) + ' ' + pct + '%</span>';
+  }
+  // External shared-project contention — rendered SEPARATELY from the
+  // success rate: the pipe was filled by other tenants, not by this model
+  // failing (2026-07-28: 782 such 429s made a healthy model look 24%).
+  if (agg.contention_errors > 0) {
+    html += '<span class="stg-mh-chip muted" title="' +
+      escapeHtml(t('settings.mhContentionTip')) + '">' +
+      escapeHtml(t('settings.mhContention', { n: agg.contention_errors })) + '</span>';
   }
   if (agg.cooldown_remaining_s <= 0 && agg.consecutive_errors > 0) {
     html += '<span class="stg-mh-chip warn" title="' + escapeHtml(agg.last_error_msg || '') + '">' +

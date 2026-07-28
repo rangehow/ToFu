@@ -132,6 +132,7 @@ function seedHealth() {
     provA: {
       'aws.opus': { slots: 1, available_slots: 0, total_requests: 10,
                     total_errors: 5, consecutive_errors: 3, inflight: 2,
+                    contention_errors: 782,
                     cooldown_remaining_s: 42, cooldown_reason: 'error',
                     last_error_msg: 'boom', last_error_ts: 10 },
       'vertex.opus': { slots: 1, available_slots: 1, total_requests: 5,
@@ -191,6 +192,13 @@ try {
   const srChip = strip0.querySelector('.stg-mh-chip.warn');
   check('pooled_success_rate', srChip !== null &&
     srChip.textContent.indexOf(expectedPct + '%') >= 0);
+
+  // ══ 5b. Contention chip renders SEPARATELY from the success rate ══
+  // (2026-07-28: 782 external 429s made a healthy model look 24% — they
+  // must surface as their own chip, never inside the success rate.)
+  check('contention_chip_present',
+    strip0.textContent.indexOf('mhContention') >= 0);
+  check('contention_chip_count', strip0.textContent.indexOf('n=782') >= 0);
 
   // ══ 6. Inflight chip ══
   check('inflight_chip', strip0.textContent.indexOf('n=2') >= 0);
@@ -364,6 +372,22 @@ try {
       window._alertCalls.length === 0);
     indirectEval(SAVE_FN);   // restore
   }
+
+  // ══ NEUTER 5: drop the contention fold → chip gone ══
+  {
+    const n = ROW_FN.replace(
+      'agg.contention_errors += r.contention_errors || 0;',
+      '');
+    check('N5_applied', n !== ROW_FN);
+    indirectEval(n);
+    seedProviders();
+    seedHealth();
+    const rl5 = renderCards();
+    const strip5 = rl5.querySelectorAll('.stg-mcard')[0]
+      .querySelector('.stg-mcard-health');
+    check('N5_contention_gone', strip5.textContent.indexOf('mhContention') < 0);
+    indirectEval(ROW_FN);   // restore
+  }
 } catch (e) {
   check('harness_threw: ' + (e && e.message), false);
 } finally {
@@ -378,7 +402,7 @@ def test_model_card_health_and_pricing():
         target_js=PROVIDER_RENDER_JS,
         body_js=body,
         extra_targets=[KEY_STATS_JS, MODEL_EDIT_JS],
-        min_pass=39,
+        min_pass=43,
         label='model-card-health',
     )
 

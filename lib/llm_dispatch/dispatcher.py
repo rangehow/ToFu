@@ -1302,6 +1302,7 @@ class LLMDispatcher:
                 'success_rate': round(s.success_rate, 3),
                 'total_requests': s.total_requests,
                 'total_errors': s.total_errors,
+                'contention_errors': s.contention_errors,
                 'requests_5h': s.requests_5h,
                 'provider_id': s.provider_id,
                 'base_url': s.base_url,

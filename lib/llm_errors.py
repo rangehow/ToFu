@@ -60,7 +60,7 @@ class RateLimitError(Exception):
         reason: Short human-readable reason (first ~200 chars of the error body).
     """
     def __init__(self, msg='', *, is_quota=False, is_gateway=False, reason='',
-                 status_code=0):
+                 status_code=0, is_shared_contention=False):
         super().__init__(msg)
         self.is_quota = bool(is_quota)
         # True when this is NOT a real per-key 429 but a gateway 5xx
@@ -71,6 +71,14 @@ class RateLimitError(Exception):
         # retry loop uses this to bound the outage instead of spinning forever
         # (see lib/llm_dispatch/api.py::_StreamRetryState gateway-outage cap).
         self.is_gateway = bool(is_gateway)
+        # True when the body names a PROJECT-LEVEL limit shared with OTHER
+        # tenants of the gateway account (2026-07-28: Moonshot "request
+        # reached project (kimi-k3) TPM rate limit, current: 50.02M, limit:
+        # 50M" — local traffic measured ~2M/min ≈ 4% of the pipe). This is
+        # EXTERNAL contention, not key health: it must not feed the model
+        # success-rate column nor the consecutive-429 auto-exhaust streak
+        # (see Slot.record_error is_shared_contention branch).
+        self.is_shared_contention = bool(is_shared_contention)
         self.reason = (reason or (str(msg) if msg else ''))[:200]
         # The real HTTP status that triggered this (429/402/502/…, or the
         # wrapped 4xx status for upstream-vendor transients). 0 = unknown.
@@ -524,6 +532,30 @@ def _is_quota_exhausted(err_msg: str) -> bool:
     return any(p in lower for p in _QUOTA_EXHAUSTED_PATTERNS)
 
 
+# Phrases naming a PROJECT-LEVEL limit shared with other tenants of the
+# gateway account. BOTH must appear (narrow on purpose — owner 2026-07-28):
+# a per-key/per-account throttle must NEVER match, or a genuinely sick key
+# would be laundered into "external contention" and stop feeding the
+# dead-key safety nets. Observed canonical body (Moonshot via sankuai):
+#   "request reached project (kimi-k3) TPM rate limit, current: 50019215,
+#    limit: 50000000"
+_SHARED_PROJECT_LIMIT_PATTERNS = ('reached project', 'tpm rate limit')
+
+
+def _is_shared_project_limit(err_msg: str) -> bool:
+    """True if a 429 body names a shared PROJECT-level (TPM) limit.
+
+    Such 429s are EXTERNAL contention — the pipe is saturated by other
+    tenants of the gateway account, so rotating our own keys is futile
+    (they all terminate at the same upstream project) and the error says
+    nothing about key health.
+    """
+    if not err_msg:
+        return False
+    lower = err_msg.lower()
+    return all(p in lower for p in _SHARED_PROJECT_LIMIT_PATTERNS)
+
+
 def _is_wrapped_overload(error_text: str) -> bool:
     """Detect if an HTTP 500 error body contains an embedded 429/529 overload.
 
@@ -586,6 +618,15 @@ def _classify_http_error(status_code: int, err_msg: str, model: str,
                            log_prefix, err_msg[:_ERR_BODY_LIMIT])
             raise RateLimitError(display_msg, is_quota=True, reason=display_msg[:200],
                                  status_code=429)
+        if _is_shared_project_limit(err_msg):
+            # Project-LEVEL contention (shared gateway account saturated by
+            # other tenants) — transient, NOT key health. Distinct from a
+            # plain 429 only in how the dispatch layer ACCOUNTS for it.
+            logger.info('%s Shared-project contention (HTTP 429, external): %s',
+                        log_prefix, err_msg[:_ERR_BODY_LIMIT])
+            raise RateLimitError(display_msg, status_code=429,
+                                 is_shared_contention=True,
+                                 reason=display_msg[:200])
         raise RateLimitError(display_msg, status_code=429)
     if status_code == 402:
         # ★ HTTP 402 Payment Required — DeepSeek and some providers return

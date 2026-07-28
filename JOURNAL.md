@@ -29,6 +29,14 @@
 
 ## Entries
 
+<!-- Append newest entries at the top. Suggested format:
+
+### YYYY-MM-DD — short title
+- **Change:** what changed
+- **Why:** the reasoning / problem being solved
+- **Result / status:** outcome, metrics, or current state
+-->
+
 ### 2026-07-28 — SSO sign-in was a closed loop: Open did nothing, Start locked forever (owner review)
 - **Change:** New pure `session/InteractiveSso.kt` (`shouldOpenWebView`, `completedSignIn`,
   `hostToStamp`); `SessionManager.noteInteractiveSignIn()` stamps `cookieHost` after an in-WebView
@@ -77,14 +85,6 @@
   indistinguishable, at the decision layer, from one that works.
 - **Still unverified on a device.** Per owner: **no release until an SSO profile is confirmed to
   open, sign in, and unlock Start/Stop on real hardware.**
-
-<!-- Append newest entries at the top. Suggested format:
-
-### YYYY-MM-DD — short title
-- **Change:** what changed
-- **Why:** the reasoning / problem being solved
-- **Result / status:** outcome, metrics, or current state
--->
 
 
 ### 2026-07-28 — Key asymmetry made the guard unreliable; JOURNAL now tracked (owner review)

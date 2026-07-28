@@ -1,5 +1,27 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-28(续·烧字几何) — 阅读模式视频「字幕冲出画布」根因:**`force_style` 从来没有任何调用方传过,而它本来也修不了这个问题**;守卫瞎在「一个字都没画」而非「画出界」(owner 实测抽帧证伪我的首轮归因;commit `bc92c91d`,5 文件 +944/-10;新套件 **17/17 含 NEUTER 真咬**,8 套 motion **193/193**,干净 committed worktree **104/104**)
+
+- **★ 我的首轮归因被 owner 用抽帧当场证伪(记下来防再犯):** 我看 `job.json` 里 `burn_in: False` 就断言「没烧字,溢出在 HTML 合成里」。错。`engine.py:615` 是 `burn_in_eff = bool(task.get('burn_in')) or degraded_narration`——**这单 TTS 降级了,自动烧字被强制打开**;manifest 的 `burn_in:False` 只是「用户没勾」,不是「没烧」。owner 抽同一时刻两帧对比:`final_silent.mp4` @46s 画面干净无字幕、构图饱满,`final.mp4` @46s 同帧多一行**左右两端同时被切**的字幕。**判据:manifest 记的是「用户请求」,不是「实际发生」;判断某阶段是否执行过,要看产物像素或该阶段的有效开关(`*_eff`),不能读用户输入字段。**
+- **实测基线(黑底 1080×1440 烧真实事故 cue #5,53 个中文字符零空格):** 墨迹 bbox `x[0..1079]`、单行高 61px ⇒ **两端全切**。
+- **★ 三种候选机制实测,前两种全废(这条最反直觉):**
+  | 机制 | 实测结果 | 结论 |
+  |---|---|---|
+  | `force_style='FontSize=10'` | 仍 `x[0..1079]` | ❌ 缩字号救不了 |
+  | 滤镜 `original_size=1080x1440` | 仍 `x[0..1079]` | ❌ 完全无效 |
+  | 真 `.ass` 带 `PlayResX/Y` + `\N` 预折行 | `x[261..817]`,3 行 | ✅ 唯一可行 |
+
+  **根因:`force_style` 只能覆盖 `[V4+ Styles]`,而 `PlayResX/PlayResY` 在 `[Script Info]` 里——它在语法上就够不着。** 裸 SRT 无 `[Script Info]` ⇒ libass 按 384×288 参考帧,把默认样式按 `height/288` 放大(1440px 上约 5 倍)。
+- **第二个独立根因:libass 根本不给中文折行。** `WrapStyle` 0/1/2 三种全测,产出**完全相同的 `x[0..1079]`**——它只在空格/连字符断行,而我们的 cue 是整句口播零空格,没有断点可用。所以**必须我们自己预折行**。
+- **折行不能用「字数预算」,必须用真实字体度量:** 教科书 east-asian 模型(CJK=1.0/Latin=0.5)实测 Latin 在本机 CJK 字面上的真实 advance 是 **0.77** 而非 0.5,该模型预测 912px 的行真实墨迹 **1054px,仍然溢出**。改用 FreeType(PIL)量 candidate 行的真实 advance。**校准:`ink/advance = 0.6909,sd = 0.0007`,在 Fontsize 32→64 上尺度不变**(因为 Fontsize 是 em 盒、ink 是实际字形),所以拿满 advance 当预算天然留 ~30% 余量,字体解析漂移也不会溢出。
+- **落点(单一真源 `lib/motion_video/_subtitle.py`):** 样式全部由画幅派生(字号随高、边距随宽、描边随字号),CJK 字面经 `fc-match charset=6c49` 解析(只匹配真有该字形的面,避免钉到 Latin-only 面出豆腐块);`safe_box()` 与折行预算读同一处,**守卫和被守卫的东西不可能漂移**。
+- **★ 守卫空洞才是它能上线的原因:** 旧的 `_font_burn_failed()` 只认 `failed to find any fallback`,即只能发现「一个字都没画出来」,**对「画出来了但出界」完全瞎**——管线自己从没看过烧字后的像素。新增 `_verify_safe_box()`:**对烧字前后帧做像素 diff**(而不是找亮像素——那会把场景自己的白色大标题当字幕),越界 → `subtitle_overflow`,零变化 → `subtitle_missing`;**验证跑在 tmp 文件上,坏片永远到不了交付路径**。
+- **几何从「探测到的视频」读,不从调用方参数读:** 这样新调用点**忘了传也不会**悄悄退回 384×288 默认。守卫 `test_geometry_comes_from_the_video_not_the_caller` 用 720×1280 异常画幅钉死这条。
+- **守卫自己抓出我一个真 bug:** `'x'*400` 单 token 被整行吐出未折——长 token 切分器只在「冲掉当前行」分支里可达,**对「该 token 就是行首」的情况永远不触发**。提出为 `_break_oversized()` 独立函数,行首/行中都可达。
+- **NEUTER 真咬:** 按旧方式烧裸 SRT → 验证器报 `subtitle_overflow`,detail 精确到 `ink spans x[0..1079] ... safe box x[72..1008]` 和肇事文本。拿真实事故作业重烧:`safe_box_checked=3`,同一 47s 帧目视为**两行居中、完整收尾「1.64倍。」、两端不切**。
+- **相邻套件一处红是陈旧 harness 非产品:** `test_burn_in_command_shape` 的假 ffmpeg 用 `>` 覆写参数文件,而验证器新增了抽帧调用,marker 只剩最后一次。改 `>>` 累积并补断言「烧字命令必须吃 `.ass`、裸 `.srt` 不得到达 libass」。
+- **验收边界(诚实分账):** 本批只修**烧字**这一刀。owner 列的另两刀未动:①**素材库**——`SCENE_AUTHOR_TOOLS` 仅 4 把且 docstring 明文禁本地素材,对照 auto-motion 自带 `image-gen`(MiniMax image-01 prompt→PNG 落盘)+ 真实磁盘素材库(avatars/brands/logo/两个背景视频);②**0/8 全量降级**(作业 `motion_bb4245444177498d` 八个 `index.html` 全带模板标记 `class="tag"`)。另:纯后端改动,**运行中进程不带,需重启才对新作业生效**。
+
 ### 2026-07-28(续·内网抓取) — `aigc.sankuai.com` 抓不到的根因是**三层拦截叠加,而顺序掩盖了后两层**;`allow_private_hosts` 主机名白名单 + 失败原因透传落地(commits chatui `5f9564fe` 16 文件 / tofu-search `6ee32ed` 6 文件;守卫 **46/46**,三环 **400 passed**(基线 361→400,+39),tofu-search 全套件 **459 passed / 6 skipped / 0 failed**;**验收未达成,卡在 2 步人工操作 + 重启**)
 
 - **起点(owner 三问 + 一个 URL):** tofu-search 是否最优、与 chatui 对接是否正确、还有什么值得优化;以及「怎么让 tofu 访问 `https://aigc.sankuai.com/ml/modelPlaza/modelInfo?...`」。

@@ -44,15 +44,23 @@ CONV_REF_GET_TOOL = {
             "Use this when the user asks you to reference specific information, decisions, code changes, "
             "debugging context, or tool outputs from a previous conversation. "
             "First use list_conversations to find the right conversation ID.\n\n"
-            "TWO output modes:\n"
-            "• Default (raw=false) — a READABLE prose transcript of user prompts + assistant "
-            "responses + a condensed view of tool calls/results. Best for understanding what was "
-            "discussed, but it SUMMARIZES tool rounds and drops per-message metadata.\n"
-            "• raw=true — for DEBUGGING / inspecting exact state. Returns the COMPLETE, un-summarized "
-            "DB record as structured JSON: every row column (created_at, updated_at, msg_count, rev, "
-            "settings) plus every field of every message preserved (finishReason, usage, model, "
-            "timestamp, _msgId, modifiedFileList, the full toolRounds), nothing summarized or "
-            "truncated away. Use this when you need the original metadata, not just the readable gist.\n\n"
+            "DEFAULT OUTPUT IS RAW — omit `raw` and you get the COMPLETE, "
+            "un-summarized DB record as structured JSON, the way you would read "
+            "it straight out of the database: every row column (created_at, "
+            "updated_at, msg_count, rev, settings) plus every field of every "
+            "message preserved (finishReason, usage, model, timestamp, _msgId, "
+            "modifiedFileList, the full toolRounds). This is what you want for "
+            "debugging and for any question about what actually happened, "
+            "because nothing is summarized away.\n"
+            "Pass raw=false ONLY when you want a READABLE prose transcript "
+            "instead — user prompts + assistant responses + a condensed view of "
+            "tool calls. It reads more easily but SUMMARIZES tool rounds and "
+            "drops per-message metadata, so a detail you need may simply not be "
+            "there.\n\n"
+            "Long conversations are WINDOWED (head + tail) rather than cut "
+            "mid-token, so the JSON always parses; `messageCount` / `omitted` "
+            "state what was left out and `before` pages backwards through the "
+            "rest.\n\n"
             "IMPORTANT: Only use this when the user EXPLICITLY requests information from a past conversation. "
             "Never call this proactively or speculatively."
         ),
@@ -65,11 +73,11 @@ CONV_REF_GET_TOOL = {
                 },
                 "include_tool_details": {
                     "type": "boolean",
-                    "description": "Whether to include full tool call arguments and results (default: true). Set to false for a shorter summary. Ignored when raw=true."
+                    "description": "Whether to include full tool call arguments and results (default: true). Set to false for a shorter summary. Only applies to the raw=false prose transcript; the raw record always carries them."
                 },
                 "raw": {
                     "type": "boolean",
-                    "description": "When true, return the full raw DB record (all columns + settings + every message field preserved) as structured JSON for debugging, instead of the readable prose transcript. Default: false."
+                    "description": "Output mode. DEFAULT true — the full raw DB record (all columns + settings + every message field preserved) as structured JSON, nothing summarized. Pass false for the readable prose transcript, which drops per-message metadata and condenses tool rounds."
                 }
             },
             "required": ["conversation_id"]

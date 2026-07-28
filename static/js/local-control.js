@@ -88,12 +88,40 @@ function _lcSetStatus(rowId, connected, label) {
   if (txt) txt.textContent = label;
 }
 
-/* Paint one row's switch (reflects the real wire flag, not modal-local state). */
-function _lcSetSwitch(switchId, on) {
+/* Paint one row's switch (reflects the real wire flag, not modal-local state).
+ *
+ * `usable` gates whether the switch can be operated at all. Turning a
+ * capability ON while nothing is connected is the ORIGINAL silent-failure bug
+ * in a new costume: `lib/tools/registry/_build.py` ships ZERO tools for an
+ * unconnected bridge, so the toggle would light up and the AI would still have
+ * nothing. A control that cannot achieve what it claims must not invite the
+ * click — it is disabled, and the row says why. Once the agent connects the
+ * live poll re-enables it within one beat, so this is never a dead end. */
+function _lcSetSwitch(switchId, on, usable) {
   var sw = document.getElementById(switchId);
   if (!sw) return;
+  var can = (usable === undefined) ? true : !!usable;
   sw.classList.toggle('on', !!on);
   sw.setAttribute('aria-checked', on ? 'true' : 'false');
+  sw.disabled = !can;
+  sw.classList.toggle('lc-switch-off', !can);
+  if (can) sw.removeAttribute('title');
+  else sw.title = _lcT('local.switchBlocked',
+    '连接成功后才能开启 —— 现在打开，AI 也拿不到任何工具。');
+}
+
+/* Render the "what does this actually give the AI" line for one row.
+ *
+ * Users are being asked to grant real access to their browser session and
+ * their machine; "Browser tabs / This computer" alone does not let them make
+ * that call. Kept to ONE short line per row — a full tool list would be the
+ * menu-of-everything this merge exists to remove — and phrased as concrete
+ * actions rather than tool names, since the tool names are an implementation
+ * detail the user never types. */
+function _lcSetAbout(rowId, text) {
+  var host = document.getElementById(rowId);
+  if (!host) return;
+  host.textContent = text;
 }
 
 // ══════════════════════════════════════════════════════
@@ -138,7 +166,9 @@ function _lcRenderBrowser(d, err) {
   }
 
   _lcSetSwitch('lcBrowserSwitch',
-    typeof browserEnabled !== 'undefined' && browserEnabled);
+    typeof browserEnabled !== 'undefined' && browserEnabled, connected);
+  _lcSetAbout('lcBrowserAbout', _lcT('local.browserAbout',
+    '读取你已打开的标签页内容，并代你点击、填表单、切换页面。'));
 
   // Chrome 142+ LNA guidance stays keyed on the CONNECTED extension's version.
   if (typeof _applyBrowserLnaWarning === 'function') {
@@ -203,7 +233,19 @@ function _lcRenderDesktop(d, err) {
     connected ? _lcT('local.connected', '已连接')
               : _lcT('local.notRunning', '未运行'));
   _lcSetSwitch('lcDesktopSwitch',
-    typeof desktopEnabled !== 'undefined' && desktopEnabled);
+    typeof desktopEnabled !== 'undefined' && desktopEnabled, connected);
+  _lcSetAbout('lcDesktopAbout', _lcT('local.desktopAbout',
+    '浏览与读写本机文件、截屏、打开应用、运行命令（写入与执行需单独授权）。'));
+
+  /* The permission note explains the TRAY's Permissions submenu. It is only
+   * actionable once the agent is actually running there — showing it to a
+   * user who has not installed anything is an instruction they cannot follow,
+   * competing with the ONE real next action. */
+  var perm = document.getElementById('lcPermNote');
+  if (perm) {
+    var trayReachable = connected || d.setup_state === 'tray';
+    perm.style.display = trayReachable ? '' : 'none';
+  }
 
   if (!setup) return;
 
@@ -308,18 +350,22 @@ function _lcConnectLine(serverUrl, token) {
 // ══════════════════════════════════════════════════════
 
 function toggleBrowserFromLocalModal() {
+  var sw = document.getElementById('lcBrowserSwitch');
+  if (sw && sw.disabled) return;   // not connected — turning it on grants nothing
   if (typeof _applyBrowserUI === 'function') _applyBrowserUI(!browserEnabled);
   if (typeof _saveConvToolState === 'function') _saveConvToolState();
   if (typeof updateSubmenuCounts === 'function') updateSubmenuCounts();
-  _lcSetSwitch('lcBrowserSwitch', browserEnabled);
+  _lcSetSwitch('lcBrowserSwitch', browserEnabled, true);
   _lcUpdateBadge();
 }
 
 function toggleDesktopFromLocalModal() {
+  var sw = document.getElementById('lcDesktopSwitch');
+  if (sw && sw.disabled) return;   // no agent — turning it on grants nothing
   if (typeof _applyDesktopUI === 'function') _applyDesktopUI(!desktopEnabled);
   if (typeof _saveConvToolState === 'function') _saveConvToolState();
   if (typeof updateSubmenuCounts === 'function') updateSubmenuCounts();
-  _lcSetSwitch('lcDesktopSwitch', desktopEnabled);
+  _lcSetSwitch('lcDesktopSwitch', desktopEnabled, true);
   _lcUpdateBadge();
 }
 
@@ -346,6 +392,7 @@ if (typeof window !== 'undefined') {
   window._lcUpdateBadge = _lcUpdateBadge;
   window._lcBrowserSetupState = _lcBrowserSetupState;
   window._lcConnectLine = _lcConnectLine;
+  window._lcSetAbout = _lcSetAbout;
   window._lcRenderBrowser = _lcRenderBrowser;
   window._lcRenderDesktop = _lcRenderDesktop;
 }

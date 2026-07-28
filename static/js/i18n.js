@@ -1908,22 +1908,7 @@ var _i18n = {
   // ══════════════════════════════════════
   //  Browser Bridge Modal
   // ══════════════════════════════════════
-  'browser.title': { zh: '浏览器桥接', en: 'Browser Bridge' },
-  'browser.desc': { zh: '通过 Chrome 扩展让 AI 读取和交互你的浏览器标签页。', en: 'Use Chrome extension to let AI read and interact with your browser tabs.' },
-  'browser.checking': { zh: '正在检查...', en: 'Checking...' },
-  'browser.downloadExtension': { zh: '下载扩展程序', en: 'Download Extension' },
-  'browser.downloadDesc': { zh: '点击下方按钮下载 ZIP 文件，然后解压。', en: 'Click the button below to download the ZIP file, then extract it.' },
-  'browser.downloadZip': { zh: '下载扩展 ZIP', en: 'Download Extension ZIP' },
-  'browser.installInChrome': { zh: '在 Chrome 中安装', en: 'Install in Chrome' },
-  'browser.installDesc': { zh: '打开 chrome://extensions/ → 启用开发者模式 → 点击加载已解压的扩展程序 → 选择解压后的 browser_extension 文件夹。', en: 'Open chrome://extensions/ → Enable Developer mode → Click Load unpacked → Select the extracted browser_extension folder.' },
-  'browser.verify': { zh: '验证连接', en: 'Verify Connection' },
-  'browser.verifyDesc': { zh: '点击工具栏中的扩展图标，应显示已连接。然后在此处开启浏览器功能。', en: 'Click the extension icon in the toolbar — it should show Connected. Then enable browser features here.' },
-  'browser.aiFeatures': { zh: '浏览器桥接的 AI 功能', en: 'Browser Bridge AI Features' },
-  'browser.listTabs': { zh: '列出所有打开的标签页（标题、URL）', en: 'List all open tabs (title, URL)' },
-  'browser.readTab': { zh: '读取任意标签页的文本内容，或使用 CSS 选择器', en: 'Read text content of any tab, or use CSS selectors' },
-  'browser.executeJs': { zh: '在任意标签页中执行 JavaScript（点击、填充表单、提取数据）', en: 'Execute JavaScript in any tab (click, fill forms, extract data)' },
   'browser.close': { zh: '关闭', en: 'Close' },
-  'browser.enable': { zh: '启用浏览器桥接', en: 'Enable Browser Bridge' },
 
   // ══════════════════════════════════════
   //  Local Control (merged browser bridge + desktop agent)
@@ -1935,6 +1920,9 @@ var _i18n = {
   'local.modalDesc': { zh: '让 AI 读取并操作你自己的设备。两项能力互相独立，可分别开启。', en: 'Let AI read and act on your own device. The two capabilities are independent — enable either on its own.' },
   'local.browserName': { zh: '浏览器标签页', en: 'Browser tabs' },
   'local.desktopName': { zh: '这台电脑', en: 'This computer' },
+  'local.browserAbout': { zh: '读取你已打开的标签页内容，并代你点击、填表单、切换页面。', en: 'Reads the tabs you already have open, and can click, fill forms and navigate for you.' },
+  'local.desktopAbout': { zh: '浏览与读写本机文件、截屏、打开应用、运行命令（写入与执行需单独授权）。', en: 'Browses and reads local files, takes screenshots, opens apps and runs commands (writing and running need separate permission).' },
+  'local.switchBlocked': { zh: '连接成功后才能开启 —— 现在打开，AI 也拿不到任何工具。', en: 'Available once connected — switching it on now would give the AI no tools.' },
   'local.checking': { zh: '正在检查…', en: 'Checking…' },
   'local.connected': { zh: '已连接', en: 'Connected' },
   'local.connectedN': { zh: '已连接 {n} 个', en: '{n} connected' },
@@ -3275,20 +3263,13 @@ var _i18n = {
   //  Browser bridge modal
   // ══════════════════════════════════════
   'browser.stepDownload': { zh: '下载并解压扩展', en: 'Download & unzip the extension' },
-  'browser.stepDownloadDesc': { zh: '点击下方按钮下载 ZIP，然后<strong>务必先解压</strong>。', en: 'Click the button below to download the ZIP, then <strong>be sure to unzip it</strong>.' },
   'browser.stepDownloadBtn': { zh: '下载扩展 ZIP', en: 'Download Extension ZIP' },
-  'browser.localTitle': { zh: '在本机运行 Tofu？无需下载', en: 'Running Tofu on this machine? No download needed' },
-  'browser.localDesc': { zh: '在 <code>chrome://extensions/</code> 启用开发者模式后，点击「加载已解压的扩展程序」并直接选择下面这个文件夹：', en: 'In <code>chrome://extensions/</code>, enable Developer mode, click "Load unpacked", and select this folder directly:' },
   'browser.clickToCopy': { zh: '点击复制', en: 'Click to copy' },
   'browser.lnaTitle': { zh: 'Chrome 142+ 可能反复弹出「访问本地网络设备」', en: 'Chrome 142+ may repeatedly prompt for "local network access"' },
   'browser.lnaDesc': { zh: '从 Chrome 142 起，访问本地网络的网页会逐站弹出权限请求，多标签搜索时需反复点击。扩展无法代为授权，请用以下任一方式关闭提示：', en: 'Since Chrome 142, pages touching the local network prompt per-site, so multi-tab searches require repeated clicks. The extension cannot grant this itself — disable the prompt with either method below:' },
   'browser.lnaFlag': { zh: '<strong>方式一（最快）</strong>：打开 <code>chrome://flags/#local-network-access-check</code> → 设为 <strong>Disabled</strong> → 重启 Chrome。', en: '<strong>Option 1 (fastest)</strong>: open <code>chrome://flags/#local-network-access-check</code> → set it to <strong>Disabled</strong> → restart Chrome.' },
   'browser.lnaPolicy': { zh: '<strong>方式二（持久）</strong>：放置一个 Chrome 托管策略文件，内容为：', en: '<strong>Option 2 (persistent)</strong>: drop a Chrome managed-policy file with this content:' },
   'browser.lnaPathLabel': { zh: '放置位置：', en: 'Place it at:' },
-  'browser.stepInstall': { zh: '在 Chrome 中安装', en: 'Install in Chrome' },
-  'browser.stepVerify': { zh: '验证连接', en: 'Verify connection' },
-  'browser.stepVerifyDesc': { zh: '点击工具栏中的扩展图标，应显示 <strong>已连接</strong>。然后在此处开启浏览器功能。', en: 'Click the extension icon in the toolbar — it should show <strong>Connected</strong>. Then turn on the browser feature here.' },
-  'browser.checkingDots': { zh: '正在检查...', en: 'Checking…' },
 
   // ══════════════════════════════════════
   //  Debug / toolbar tooltips
@@ -3305,7 +3286,6 @@ var _i18n = {
   'feishu.statusDotTitle': { zh: '连接状态', en: 'Connection status' },
   'settings.loadingPricing': { zh: '正在加载价格数据...', en: 'Loading pricing data…' },
   'settings.feishuBotTitleSuffix': { zh: '飞书 (Lark) 机器人', en: 'Feishu (Lark) Bot' },
-  'browser.stepInstallDesc': { zh: '打开 <code class="copyable-url" data-tooltip="点击复制" style="cursor:pointer;position:relative;border-bottom:1px dashed var(--accent-color)" onclick="_safeClipboardWrite(\'chrome://extensions/\').then(()=>{this.classList.add(\'copied\')}).catch(()=>{})">chrome://extensions/</code> → 启用 <strong>开发者模式</strong> → 点击 <strong>加载已解压的扩展程序</strong> → 选择解压后的 <code>browser_extension</code> 文件夹。', en: 'Open <code class="copyable-url" data-tooltip="Click to copy" style="cursor:pointer;position:relative;border-bottom:1px dashed var(--accent-color)" onclick="_safeClipboardWrite(\'chrome://extensions/\').then(()=>{this.classList.add(\'copied\')}).catch(()=>{})">chrome://extensions/</code> → enable <strong>Developer mode</strong> → click <strong>Load unpacked</strong> → pick the extracted <code>browser_extension</code> folder.' },
 
   // ══════════════════════════════════════
   //  Common

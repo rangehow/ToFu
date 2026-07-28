@@ -207,6 +207,7 @@ interface Window {
   _lcConnectLine: any;
   _lcRenderBrowser: any;
   _lcRenderDesktop: any;
+  _lcSetAbout: any;
   _lcUpdateBadge: any;
   _loadFeatureBundle: any;
   _markStreamXlateFinal: any;

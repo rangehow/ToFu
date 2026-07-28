@@ -108,7 +108,7 @@ def _slice_fn(symbol: str) -> str:
 
 # Every helper the two renderers call, spliced from the same shipped source.
 _SHIPPED_SYMBOLS = (
-    "_lcT", "_lcEsc", "_lcSetStatus", "_lcSetSwitch",
+    "_lcT", "_lcEsc", "_lcSetStatus", "_lcSetSwitch", "_lcSetAbout",
     "_lcBrowserSetupState", "_lcRenderBrowser", "_lcRenderDesktop",
     "_lcMintToken", "_lcConnectLine",
 )
@@ -133,6 +133,7 @@ MODAL_HTML = """
       <span class="lc-status-text">checking</span>
     </span>
     <button class="lc-switch" id="lcBrowserSwitch" aria-checked="false"></button>
+    <p class="lc-cap-about" id="lcBrowserAbout"></p>
     <div class="lc-cap-setup" id="lcBrowserSetup"></div>
   </div>
   <div class="lc-cap">
@@ -141,8 +142,10 @@ MODAL_HTML = """
       <span class="lc-status-text">checking</span>
     </span>
     <button class="lc-switch" id="lcDesktopSwitch" aria-checked="false"></button>
+    <p class="lc-cap-about" id="lcDesktopAbout"></p>
     <div class="lc-cap-setup" id="lcDesktopSetup"></div>
   </div>
+  <p class="lc-perm-note" id="lcPermNote" style="display:none"></p>
 </div>
 """
 
@@ -179,6 +182,7 @@ HARNESS = textwrap.dedent("""
                          download_url: DL, server_url: SRV }});
       const el = document.getElementById('lcDesktopSetup');
       const dlA = el.querySelector('a[href]');
+      const dsw = document.getElementById('lcDesktopSwitch');
       desktop[st] = {{
         steps: el.querySelectorAll('.lc-step').length,
         text: el.textContent.trim(),
@@ -187,6 +191,13 @@ HARNESS = textwrap.dedent("""
         downloadHref: dlA ? dlA.getAttribute('href') : '',
         dotConnected: !!document.querySelector(
           '#lcDesktopStatus .browser-status-dot.connected'),
+        // Can the user flip this on right now, and does the row explain
+        // what flipping it actually grants?
+        switchUsable: !dsw.disabled,
+        switchReason: dsw.getAttribute('title') || '',
+        about: document.getElementById('lcDesktopAbout').textContent.trim(),
+        permNoteShown:
+          document.getElementById('lcPermNote').style.display !== 'none',
       }};
     }}
 
@@ -212,11 +223,14 @@ HARNESS = textwrap.dedent("""
       document.getElementById('lcBrowserSetup').innerHTML = '';
       _lcRenderBrowser(bcases[k]);
       const el = document.getElementById('lcBrowserSetup');
+      const bsw = document.getElementById('lcBrowserSwitch');
       browser[k] = {{
         steps: el.querySelectorAll('.lc-step').length,
         text: el.textContent.trim(),
         hasPath: el.textContent.includes('/srv/tofu/browser_extension'),
         hasDownloadBtn: !!el.querySelector('#lcExtDownloadBtn'),
+        switchUsable: !bsw.disabled,
+        about: document.getElementById('lcBrowserAbout').textContent.trim(),
       }};
     }}
 
@@ -488,7 +502,135 @@ def test_NEUTER_reverting_to_a_bare_token_is_caught():
         "NEUTER did not reduce the line to a bare token")
 
 
-# ── 5. Live polling — the 15s connection window ────────────────────────
+# ── 5. Usability: never invite a click that grants nothing ─────────────
+# The original bug was a toggle that lit up while the tool registry shipped
+# ZERO tools. Moving it into a nicer modal does not fix that — a switch the
+# user CAN flip while nothing is connected reproduces the same dead end.
+
+@pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
+def test_the_switch_is_inert_until_the_capability_can_actually_work():
+    """Disconnected → the switch cannot be flipped, and says why.
+
+    ``lib/tools/registry/_build.py`` returns [] for an unconnected bridge, so
+    turning it on would give the AI nothing. Asserting the RESULT (not
+    operable + a reason) rather than any CSS class.
+    """
+    out = _run(_shipped())
+    for st in ("tray", "local_source", "remote"):
+        assert out["desktop"][st]["switchUsable"] is False, (
+            f"setup_state={st}: nothing is connected, yet the user can switch "
+            f"desktop control ON — that grants zero tools and reproduces the "
+            f"exact silent failure this merge set out to remove")
+        assert out["desktop"][st]["switchReason"].strip(), (
+            f"setup_state={st}: the switch is inert but gives no reason")
+    for k in ("load_unpacked", "download"):
+        assert out["browser"][k]["switchUsable"] is False, (
+            f"browser {k}: no extension connected, switch must not be flippable")
+
+
+@pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
+def test_a_connected_capability_is_switchable():
+    """Complement — otherwise 'disable everything' would pass the test above."""
+    out = _run(_shipped())
+    assert out["desktop"]["connected"]["switchUsable"] is True, (
+        "a connected agent MUST be switchable, or the feature is unreachable")
+    assert out["browser"]["connected"]["switchUsable"] is True, (
+        "a connected extension MUST be switchable")
+
+
+@pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
+def test_each_row_says_what_the_ai_actually_gets():
+    """Granting access to your browser session and machine needs informed consent.
+
+    "Browser tabs" / "This computer" alone does not let a user judge the risk.
+    Asserted as a non-empty, DISTINCT line per row — not a fixed string, so
+    the wording can be improved without a false red.
+    """
+    out = _run(_shipped())
+    b = out["browser"]["connected"]["about"]
+    d = out["desktop"]["connected"]["about"]
+    assert b, "browser row must say what enabling it grants"
+    assert d, "computer row must say what enabling it grants"
+    assert b != d, (
+        "the two rows describe very different powers (reading a tab vs "
+        "running a shell command); one shared sentence hides that")
+
+
+@pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
+def test_the_permissions_note_only_appears_where_it_can_be_followed():
+    """It explains the TRAY menu — useless to someone with nothing installed.
+
+    Showing it in the remote/source cases puts a second, unfollowable
+    instruction next to the one real next action.
+    """
+    out = _run(_shipped())["desktop"]
+    assert out["tray"]["permNoteShown"] is True, (
+        "the tray user CAN open that menu — the note belongs here")
+    assert out["connected"]["permNoteShown"] is True, (
+        "a running agent's permissions are adjustable — keep the note")
+    for st in ("local_source", "remote"):
+        assert out[st]["permNoteShown"] is False, (
+            f"setup_state={st} has no tray to open; the note is an "
+            f"instruction the user cannot follow")
+
+
+@pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
+def test_NEUTER_allowing_the_switch_while_disconnected_is_caught():
+    """Ungate the switch → the dead-end toggle is back."""
+    out = _run(_shipped(
+        lambda s: s.replace("sw.disabled = !can;", "sw.disabled = false;")
+    ))
+    assert out["desktop"]["tray"]["switchUsable"] is True, (
+        "NEUTER did not re-enable the switch")
+
+
+@pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
+def test_NEUTER_blanking_the_capability_line_is_caught():
+    """Remove the description → the user grants access without being told what."""
+    out = _run(_shipped(
+        lambda s: s.replace("host.textContent = text;", "host.textContent = '';")
+    ))
+    assert out["desktop"]["connected"]["about"] == "", (
+        "NEUTER did not blank the capability line")
+
+
+@pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
+def test_NEUTER_showing_the_permissions_note_everywhere_is_caught():
+    """Always-on note → an unfollowable instruction in the remote case."""
+    out = _run(_shipped(
+        lambda s: s.replace("perm.style.display = trayReachable ? '' : 'none';",
+                            "perm.style.display = '';")
+    ))["desktop"]
+    assert out["remote"]["permNoteShown"] is True, (
+        "NEUTER did not force the note into the remote case")
+
+
+# ── 6. No dead i18n strings on this surface ────────────────────────────
+
+def test_no_orphaned_local_control_strings():
+    """A declared-but-never-rendered string is a promise nobody keeps.
+
+    Four ``browser.*`` keys described what the bridge could do and had ZERO
+    render points anywhere — the guidance existed only in the dictionary.
+    Scans the whole surface (html + non-i18n js) rather than one file.
+    """
+    i18n = (JS_DIR / "i18n.js").read_text(encoding="utf-8")
+    html = INDEX_HTML.read_text(encoding="utf-8")
+    js_sources = "\n".join(
+        p.read_text(encoding="utf-8") for p in sorted(JS_DIR.rglob("*.js"))
+        if "i18n" not in p.name and not p.name.startswith(("bundle-", "feature-")))
+    declared = set(re.findall(r"^\s*'((?:local|browser)\.[A-Za-z0-9_]+)':",
+                              i18n, re.M))
+    assert declared, "scan surface empty — the regex stopped matching"
+    orphans = sorted(k for k in declared
+                     if k not in html and k not in js_sources)
+    assert not orphans, (
+        f"these keys are declared but rendered nowhere: {orphans}. Either "
+        f"render them or delete them — a dictionary entry no user can see is "
+        f"a maintenance trap that reads like shipped guidance.")
+
+
+# ── 7. Live polling — the 15s connection window ────────────────────────
 
 def test_the_modal_polls_while_open():
     """`is_desktop_agent_connected()` is a 15s window, and a user enabling the

@@ -1522,6 +1522,7 @@
           <span class="lc-switch-knob"></span>
         </button>
       </div>
+      <p class="lc-cap-about" id="lcBrowserAbout" data-i18n="local.browserAbout">读取你已打开的标签页内容，并代你点击、填表单、切换页面。</p>
       <div class="lc-cap-setup" id="lcBrowserSetup"></div>
     </div>
 
@@ -1541,13 +1542,14 @@
           <span class="lc-switch-knob"></span>
         </button>
       </div>
+      <p class="lc-cap-about" id="lcDesktopAbout" data-i18n="local.desktopAbout">浏览与读写本机文件、截屏、打开应用、运行命令（写入与执行需单独授权）。</p>
       <div class="lc-cap-setup" id="lcDesktopSetup"></div>
       <!-- Permissions are deny-by-default in the agent itself
            (lib/desktop_agent/_permissions.safe_default) and are granted in the
            tray's Permissions submenu. Stated as a fact, NOT rendered as
            checkboxes here — four extra toggles in a setup dialog is exactly the
            cognitive load this merge exists to remove. -->
-      <p class="lc-perm-note" data-i18n="local.permNote">写文件、运行命令、控制鼠标键盘默认全部关闭；需要时在托盘菜单的「Permissions」里单独授予。</p>
+      <p class="lc-perm-note" id="lcPermNote" style="display:none" data-i18n="local.permNote">写文件、运行命令、控制鼠标键盘默认全部关闭；需要时在托盘菜单的「Permissions」里单独授予。</p>
     </div>
 
     <!-- Chrome 142+ Local Network Access guidance. Shown only when the

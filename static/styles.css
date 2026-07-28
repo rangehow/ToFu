@@ -336,29 +336,41 @@ html[data-rail] .folder-quickadd{display:none}
  * as the `@media (max-width:1280px)` rule it replaces, one level down.
  * Guarded by tests/test_turn_ctx_rail_geometry.py. */
 .chat-container{flex:1;overflow-y:auto;overflow-x:hidden;min-height:0;will-change:scroll-position;container-type:inline-size;container-name:chatpane}
-/* Three tracks: [left gutter] [reading column] [right rail].
- * The rail OWNS its width instead of being floated into hoped-for margin, so
- * it cannot be clipped by construction. Both gutters are 0 by default (phones
- * / narrow panes) and only open up when the container query below says the
- * pane can afford them. The reading measure is clamped: at 2560px there is
- * ~1740px of slack and pouring all of it into line length would wreck
- * readability, so it grows with the pane and then stops. */
+/* Tracks: [reading column] [right rail]. The rail OWNS its width instead of
+ * being floated into hoped-for margin, so it cannot be clipped by
+ * construction.
+ *
+ * ⚠️ THE READING TRACK IS CAPPED, NOT THE CONTAINER. A first version clamped
+ * `.chat-inner` itself and left the text column as a bare `1fr`, so every
+ * pixel the rail did not take went into line length: at 2560 the running text
+ * measured ~1272px (~130 characters), against ~720px before. That trades the
+ * overflow bug for an unreadable measure. The container width is now DERIVED
+ * from `--measure-max` plus the fixed furniture (avatar + gaps + rail +
+ * padding), so surplus width lands in the symmetric outer margins created by
+ * `margin:0 auto` — which is what "the pane breathes" should mean.
+ * Guarded by the measure assertions in tests/test_turn_ctx_rail_geometry.py. */
 .chat-inner{
   --rail-w:0px;
   --rail-gap:0px;
+  /* Upper bound on the RUNNING TEXT column. ~880px at this font size is a
+   * comfortable measure and still a real gain over the previous ~720px. */
+  --measure-max:880px;
+  /* Fixed furniture inside a row: 40px avatar + 12px avatar gap. */
+  --row-furniture:52px;
   display:grid;
   grid-template-columns:minmax(0,1fr) var(--rail-w);
   column-gap:var(--rail-gap);
-  max-width:calc(1064px + var(--rail-gap) + var(--rail-w));
+  max-width:calc(var(--measure-max) + var(--row-furniture)
+                 + var(--rail-gap) + var(--rail-w) + 48px);
   margin:0 auto;
   padding:24px 24px 120px;
 }
-/* The rail column exists only when it fits. 1064px reading track + 24px gap +
- * 232px rail + 48px padding = 1368px of content box; below that the rail
- * folds inline under each message (see .turn-ctx rules) rather than being
- * clipped or vanishing. */
+/* The rail column exists only when it fits. 880px reading track + 52px row
+ * furniture + 24px gap + 232px rail + 48px padding = 1236px, so a 1368px pane
+ * clears it with margin to spare; below that the rail folds inline under each
+ * message (see .turn-ctx rules) rather than being clipped or vanishing. */
 @container chatpane (min-width: 1368px){
-  .chat-inner{ --rail-w:232px; --rail-gap:24px; max-width:clamp(1368px, 96cqw, 1616px); }
+  .chat-inner{ --rail-w:232px; --rail-gap:24px; }
 }
 
 /* Scroll-to-bottom affordance — a floating pill anchored just above the
@@ -1921,6 +1933,7 @@ body.paper-mode-active #presenceStrip{display:none !important}
 .paper-fetch-detail{color:var(--text-tertiary);font-size:12px;font-variant-numeric:tabular-nums}
 @keyframes paperProgressIndet{0%{margin-left:-40%}100%{margin-left:100%}}
 .paper-error{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:40px;color:var(--text-tertiary);font-size:13px;text-align:center}
+.paper-error-detail{font-size:12px;color:var(--text-secondary);max-width:560px;word-break:break-word;font-family:var(--font-mono,monospace)}
 .paper-retry-btn{margin-top:8px;padding:8px 20px;border:1px solid var(--border);border-radius:8px;background:var(--bg-hover);color:var(--text-primary);font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;font-family:inherit}
 .paper-retry-btn:hover{background:var(--bg-tertiary);border-color:var(--border-light)}
 

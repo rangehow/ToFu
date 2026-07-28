@@ -52,14 +52,33 @@ async function _searchArxivPapers(query) {
 
   try {
     var data = await Api.paper.searchArxiv(query, 12);
-    var results = (data && data.ok && Array.isArray(data.results)) ? data.results : [];
+    // A reachable server that still failed (upstream arXiv outage, 5xx with
+    // a string error body) must surface HERE as an error — never fall
+    // through to the empty-list renderer, which would print "no papers
+    // found" over what was really a failure.
+    if (!data || !data.ok) {
+      var serverErr = (data && typeof data.error === 'string' && data.error)
+        || (data && data.error && data.error.message) || '';
+      throw new Error(serverErr || 'arXiv search failed');
+    }
+    var results = Array.isArray(data.results) ? data.results : [];
     _paperSearchResults = results;
     _renderArxivSearchResults(query, results);
   } catch (e) {
     console.error('[Paper] arXiv search failed:', e);
     if (viewer) {
+      // Show the REAL reason (server string error / envelope message /
+      // network failure). ApiError carries a server-sent string error on
+      // `.code`; an envelope's message is already `e.message`; a network
+      // failure's `.code` is just 'network'/'timeout' — prefer e.message
+      // for those.
+      var detail = (e && typeof e.code === 'string' &&
+                    ['network', 'timeout', 'parse'].indexOf(e.code) === -1)
+        ? e.code
+        : ((e && e.message) || String(e));
       viewer.innerHTML =
         '<div class="paper-error">' + escapeHtml(_tt('paper.searchFailed')) +
+        (detail ? '<div class="paper-error-detail">' + escapeHtml(detail) + '</div>' : '') +
         '<br><button onclick="_showPaperLanding()" class="paper-retry-btn">' +
         escapeHtml(_tt('paper.searchBack')) + '</button></div>';
     }

@@ -6,13 +6,29 @@ Regression for the integration bug the R4 real-run surfaced: arXiv rate-limits
 first failure — which silently starved the research chain's harvest seed (0
 papers → gate fail → whole chain dead).
 
-Proven here (no network — http_get is monkeypatched):
-  1. a transient 429 on the first attempt is retried and the second (200)
-     attempt's results are returned;
-  2. NEUTER — if retry were removed (max 1 attempt), the 429 would return [];
-  3. a PERMANENT failure (e.g. 400) is NOT retried (returns [] immediately,
-     no wasted backoff);
-  4. all attempts transient → [] after exhausting the budget (no exception).
+★ Re-anchored 2026-07-28: the adapter no longer owns an HTTP client — the
+arXiv transport + Atom parsing live in ``tofu_search.search.vertical.arxiv``
+(``search_by_query``) and this module contributes retry/backoff + the title
+re-rank on top of its outcome envelope. The old revision of THIS suite
+patched ``ax.http_get``, a seam the adapter no longer calls, so every test
+here went silently red the day the delegation landed (http_get calls made:
+0 — proven by A/B against the pre-refactor file). The retry POLICY is
+unchanged; the SEAM moved, so the fakes now patch ``search_by_query``:
+
+  1. a transient request_failed on the first attempt is retried and the
+     second (hits) attempt's results are returned;
+  2. NEUTER — with the retry budget forced to 1, the first failure's error
+     surfaces immediately (the retry is what saves it);
+  3. all attempts failed → ( [], error ) after the budget, no exception —
+     and the wrapper search_arxiv still returns a bare [];
+  4. an exception OUT of the shared helper (e.g. the 2026-07-28 incident: a
+     stale server process holding a pre-search_by_query tofu_search raised
+     AttributeError on every call) PROPAGATES — it must never be swallowed
+     into a silent empty result; the route surfaces it.
+
+Note the per-status retry policy (429 vs 400) now lives inside tofu_search's
+own retry loop; this layer sees only the outcome envelope, so "permanent 400
+is not retried" cannot be expressed here anymore.
 
 Run standalone:  python tests/test_paper_arxiv_retry.py
 Under pytest:    pytest tests/test_paper_arxiv_retry.py -m unit
@@ -36,123 +52,123 @@ except ImportError:
     pytest = None
 
 
-# A minimal Atom feed with one entry so a 200 yields exactly one result.
-_ATOM = b'''<?xml version="1.0"?>
-<feed xmlns="http://www.w3.org/2005/Atom">
-  <entry>
-    <id>http://arxiv.org/abs/2301.12345v1</id>
-    <title>A Real Paper</title>
-    <summary>Body.</summary>
-    <published>2023-01-01T00:00:00Z</published>
-  </entry>
-</feed>'''
+def _envelope(outcome, papers=(), error=''):
+    return {'ok': outcome in ('hits', 'no_matches'),
+            'query': 'all:q', 'mode': 'terms',
+            'papers': list(papers), 'outcome': outcome, 'error': error}
 
 
-class _Resp:
-    def __init__(self, status, content=b''):
-        self.status_code = status
-        self.content = content
-        self.text = content.decode('utf-8', 'ignore')
-
-    def raise_for_status(self):
-        if self.status_code >= 400:
-            import requests
-            err = requests.exceptions.HTTPError(f'{self.status_code} error')
-            err.response = self
-            raise err
+_ONE_PAPER = {'arxiv_id': '2301.12345', 'title': 'A Real Paper',
+              'authors': ['A'], 'summary': 's', 'published': '2023-01-01',
+              'primary_category': 'cs.CL', 'pdf_url': '', 'abs_url': ''}
 
 
-class _Timeout(Exception):
-    """Stands in for a read-timeout exception (name contains 'timeout')."""
-
-
-def _patch_http(sequence):
-    """Patch arxiv.http_get to yield from a sequence of (_Resp | Exception).
-    Returns (restore, calls_counter_list)."""
+def _patch_search(sequence):
+    """Patch ts_arxiv.search_by_query to yield envelopes from `sequence`.
+    Returns (restore, calls_counter). Also neutralizes the backoff sleep."""
     import lib.paper.arxiv as ax
+    from tofu_search.search.vertical import arxiv as ts_arxiv
     calls = []
     it = iter(sequence)
 
-    def fake_get(url, **kw):
-        calls.append(url)
-        item = next(it)
-        if isinstance(item, Exception):
-            raise item
-        return item
-    orig = ax.http_get
-    ax.http_get = fake_get
-    # Neutralize the backoff sleep so the test is fast.
+    def fake_search(*a, **kw):
+        calls.append(a)
+        return next(it)
+    orig = ts_arxiv.search_by_query
+    ts_arxiv.search_by_query = fake_search
     orig_sleep = ax.time.sleep
     ax.time.sleep = lambda s: None
+
     def restore():
-        ax.http_get = orig
+        ts_arxiv.search_by_query = orig
         ax.time.sleep = orig_sleep
     return restore, calls
 
 
-def test_transient_429_then_success_is_retried():
+def test_transient_failure_then_success_is_retried():
     import lib.paper.arxiv as ax
-    restore, calls = _patch_http([_Resp(429), _Resp(200, _ATOM)])
+    restore, calls = _patch_search([
+        _envelope('request_failed', error='HTTP 429'),
+        _envelope('hits', [_ONE_PAPER]),
+    ])
     try:
-        res = ax.search_arxiv('long context kv cache', max_results=5)
-        assert len(res) == 1, f'expected 1 result after retry, got {len(res)}'
-        assert res[0]['arxiv_id'].startswith('2301.12345'), res[0]['arxiv_id']
+        results, error = ax.search_arxiv_explained('long context kv cache',
+                                                   max_results=5)
+        assert error == '', f'unexpected error: {error}'
+        assert len(results) == 1, f'expected 1 result after retry, got {len(results)}'
+        assert results[0]['arxiv_id'].startswith('2301.12345'), results[0]['arxiv_id']
         assert len(calls) == 2, f'should have retried once (2 calls), got {len(calls)}'
     finally:
         restore()
-    _ok('transient 429 then 200 → retried, second attempt result returned')
+    _ok('transient request_failed then hits → retried, second attempt returned')
 
 
 def test_no_retry_would_drop_the_result_NEUTER():
-    """NEUTER: force the retry budget to 1 → the 429 is not retried → []."""
+    """NEUTER: force the retry budget to 1 → the failure is NOT retried →
+    the error surfaces with zero results (the retry is what saves it)."""
     import lib.paper.arxiv as ax
     orig_n = ax._ARXIV_SEARCH_RETRIES
     ax._ARXIV_SEARCH_RETRIES = 1
-    restore, calls = _patch_http([_Resp(429), _Resp(200, _ATOM)])
+    restore, calls = _patch_search([
+        _envelope('request_failed', error='HTTP 429'),
+        _envelope('hits', [_ONE_PAPER]),
+    ])
     try:
-        res = ax.search_arxiv('q', max_results=5)
-        assert res == [], 'NEUTER FAILED: with retries=1 a 429 should drop to []'
+        results, error = ax.search_arxiv_explained('q', max_results=5)
+        assert results == [], 'NEUTER FAILED: with retries=1 a failure should give no results'
+        assert 'HTTP 429' in error, 'NEUTER FAILED: the failure reason must surface'
         assert len(calls) == 1, 'with retries=1 there should be exactly 1 call'
     finally:
         restore()
         ax._ARXIV_SEARCH_RETRIES = orig_n
-    _ok('NEUTER: with retry budget 1 the 429 drops the result (retry is what saves it)')
+    _ok('NEUTER: with retry budget 1 the failure surfaces (retry is what saves it)')
 
 
-def test_timeout_is_retried():
+def test_all_failures_exhaust_to_error_not_exception():
     import lib.paper.arxiv as ax
-    restore, calls = _patch_http([_Timeout('read timed out'), _Resp(200, _ATOM)])
+    restore, calls = _patch_search([
+        _envelope('request_failed', error='HTTP 429'),
+        _envelope('request_failed', error='HTTP 429'),
+        _envelope('request_failed', error='HTTP 429'),
+    ])
     try:
-        res = ax.search_arxiv('q', max_results=5)
-        assert len(res) == 1, 'timeout should be retried then succeed'
-        assert len(calls) == 2
-    finally:
-        restore()
-    _ok('a read-timeout is treated as transient and retried')
-
-
-def test_permanent_400_not_retried():
-    import lib.paper.arxiv as ax
-    restore, calls = _patch_http([_Resp(400), _Resp(200, _ATOM)])
-    try:
-        res = ax.search_arxiv('q', max_results=5)
-        assert res == [], 'a 400 is permanent → [] without consuming the 200'
-        assert len(calls) == 1, f'permanent failure must NOT retry, got {len(calls)} calls'
-    finally:
-        restore()
-    _ok('permanent 400 is not retried (fails fast, no wasted backoff)')
-
-
-def test_all_transient_exhausts_to_empty():
-    import lib.paper.arxiv as ax
-    restore, calls = _patch_http([_Resp(429), _Resp(429), _Resp(429)])
-    try:
-        res = ax.search_arxiv('q', max_results=5)
-        assert res == [], 'all-transient should exhaust to [] (no exception)'
+        results, error = ax.search_arxiv_explained('q', max_results=5)
+        assert results == [], 'all-failed should exhaust to no results (no exception)'
+        assert 'HTTP 429' in error, 'the reason must survive exhaustion'
         assert len(calls) == ax._ARXIV_SEARCH_RETRIES
+        # …and the back-compat wrapper still returns a bare list, no raise.
+        restore()  # re-patch for the wrapper pass
+        restore, calls = _patch_search([_envelope('request_failed', error='HTTP 500')] * 3)
+        assert ax.search_arxiv('q', max_results=5) == []
     finally:
         restore()
-    _ok('all attempts transient → [] after exhausting the budget, no exception')
+    _ok('all attempts failed → ( [], reason ) after the budget; wrapper returns bare []')
+
+
+def test_exception_from_shared_helper_propagates():
+    """THE 2026-07-28 incident shape: a stale server process raised
+    AttributeError out of the tofu_search seam on EVERY call. Swallowing it
+    into [] is what turned a loud outage into "no papers found" — the
+    exception MUST propagate so the route can surface it."""
+    import lib.paper.arxiv as ax
+    from tofu_search.search.vertical import arxiv as ts_arxiv
+    orig = ts_arxiv.search_by_query
+
+    def _boom(*a, **kw):
+        raise AttributeError(
+            "module 'tofu_search.search.vertical.arxiv' has no attribute "
+            "'search_by_query'")
+    ts_arxiv.search_by_query = _boom
+    try:
+        raised = False
+        try:
+            ax.search_arxiv_explained('q', max_results=5)
+        except AttributeError:
+            raised = True
+        assert raised, 'an exception out of the shared helper MUST propagate, not become []'
+    finally:
+        ts_arxiv.search_by_query = orig
+    _ok('exception out of the shared helper propagates (never a silent empty)')
 
 
 def main():
@@ -160,11 +176,10 @@ def main():
     print(_color('═══ search_arxiv Retry Tests ═══', '36'))
     print()
     tests = [
-        test_transient_429_then_success_is_retried,
+        test_transient_failure_then_success_is_retried,
         test_no_retry_would_drop_the_result_NEUTER,
-        test_timeout_is_retried,
-        test_permanent_400_not_retried,
-        test_all_transient_exhausts_to_empty,
+        test_all_failures_exhaust_to_error_not_exception,
+        test_exception_from_shared_helper_propagates,
     ]
     for fn in tests:
         try:

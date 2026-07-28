@@ -86,7 +86,13 @@ from .images import (
 )
 
 # arXiv + library
-from .arxiv import _extract_arxiv_id, fetch_arxiv_title, search_arxiv
+from .arxiv import (
+    ArxivQuerySyntaxError,
+    _extract_arxiv_id,
+    fetch_arxiv_title,
+    search_arxiv,
+    search_arxiv_explained,
+)
 from .harvest import HarvestResult, harvest_arxiv_batch, harvest_arxiv_id
 from .survey import OPEN_GAPS_SCHEMA_VERSION, build_survey, survey_lang_key
 from .ideate import IDEATE_GATE_THRESHOLD, generate_ideas, ideate_lang_key
@@ -197,7 +203,8 @@ __all__ = [
     '_extract_title_from_report', '_backfill_library_title',
     '_is_placeholder_title',
     # arxiv + library
-    '_extract_arxiv_id', 'fetch_arxiv_title', 'search_arxiv', 'recommend_papers',
+    '_extract_arxiv_id', 'fetch_arxiv_title', 'search_arxiv',
+    'search_arxiv_explained', 'ArxivQuerySyntaxError', 'recommend_papers',
     'iter_recommend_events',
     # harvest (auto-research R1 — batch crawl + parse-once ingest)
     'harvest_arxiv_id', 'harvest_arxiv_batch', 'HarvestResult',

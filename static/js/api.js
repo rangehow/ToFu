@@ -1293,8 +1293,12 @@
     fetchArxivStream: (url, paperId, opts) =>
       request('/api/paper/fetch-arxiv-stream',
               Object.assign({ method: 'POST', json: { url, paper_id: paperId || '' }, parse: 'response', timeout: 0 }, opts || {})),
+    /* searchArxiv MUST throw on failure (default onError:'throw'), not
+     * swallow to null: the caller renders null/!ok as "no papers found",
+     * which made every server/upstream outage look like an empty result set
+     * (2026-07-28 live 500 incident). The caller has a real error surface. */
     searchArxiv:    (query, maxResults)   =>
-      post('/api/v1/paper/search-arxiv', { query, max_results: maxResults || 10 }, { onError: 'null' }),
+      post('/api/v1/paper/search-arxiv', { query, max_results: maxResults || 10 }),
     recommend:      (description, maxResults) =>
       post('/api/v1/paper/recommend', { description, max_results: maxResults || 6 }, { onError: 'null' }),
     // Streaming describe-to-recommend (server-owned task; polled like Q&A so

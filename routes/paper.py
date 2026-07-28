@@ -127,6 +127,8 @@ from lib.paper import (  # noqa: F401  — back-compat re-exports
     _report_dedup_index,
     fetch_arxiv_title,
     search_arxiv,
+    search_arxiv_explained,
+    ArxivQuerySyntaxError,
     recommend_papers,
     _new_recommend_task,
     _append_recommend_event,
@@ -1465,7 +1467,25 @@ async def search_arxiv_route():
         logger.debug('[Paper:arXiv:Search] non-int max_results (%s) — defaulting to 10', e)
         max_results = 10
 
-    results = await asyncio.to_thread(search_arxiv, query, max_results)
+    # A failure MUST surface as an error, never as an empty result list:
+    # 2026-07-28 the live server 500'd every search for ~1h (stale process
+    # holding a pre-search_by_query tofu_search) and the frontend rendered
+    # every one of them as "no papers found". Three failure shapes, three
+    # explicit exits — the ok:[] payload is reserved for a query that ran
+    # clean and legitimately matched nothing.
+    try:
+        results, search_error = await asyncio.to_thread(
+            search_arxiv_explained, query, max_results)
+    except ArxivQuerySyntaxError as e:
+        logger.warning('[Paper:arXiv:Search] rejected built-syntax query %.120s: %s',
+                       query, e)
+        return api_bad_request(str(e))
+    except Exception as e:
+        logger.error('[Paper:arXiv:Search] route failed for %.120s: %s',
+                     query, e, exc_info=True)
+        return api_error('arXiv search failed: %s' % e, status=502)
+    if search_error:
+        return api_error('arXiv search failed: %s' % search_error, status=502)
     return api_ok({'query': query, 'results': results})
 
 

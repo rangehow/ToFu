@@ -220,8 +220,8 @@ def _rerank_by_title(query, results):
     return [r for _, r in ranked]
 
 
-def search_arxiv(query, max_results=10):
-    """Search arXiv by free-text query. Thin adapter over ``tofu_search``.
+def search_arxiv_explained(query, max_results=10):
+    """Search arXiv by free-text query, returning ``(results, error)``.
 
     ★ The arXiv HTTP client and Atom parsing live in
     ``tofu_search.search.vertical.arxiv`` — this function does NOT own a second
@@ -234,6 +234,14 @@ def search_arxiv(query, max_results=10):
     with backoff). A bare empty list cannot express that difference, and
     retrying a legitimate zero would just burn the rate limit.
 
+    ★ ``error`` is the distinction a UI caller MUST keep: it is ``''`` when
+    the query ran clean — whether it matched papers or legitimately matched
+    none — and carries a short human-readable reason when the request itself
+    failed (after all retries) or never ran. Collapsing "failed" and "matched
+    nothing" into the same ``[]`` is what made a live outage (a stale server
+    process holding a pre-``search_by_query`` tofu_search, 2026-07-28) render
+    on the frontend as "no papers found".
+
     Args:
         query: Free-text query (paper title, keywords, author names).
             MUST NOT contain arXiv field syntax (``ti:`` / ``all:`` / ``AND``
@@ -243,11 +251,11 @@ def search_arxiv(query, max_results=10):
         max_results: Maximum number of candidate papers to return (capped at 25).
 
     Returns:
-        A list of dicts, each with keys:
+        ``(results, error)`` — results is a list of dicts, each with keys:
             arxiv_id, title, authors (list[str]), summary, published (YYYY-MM-DD),
             primary_category, pdf_url, abs_url.
-        Returns an empty list when nothing matched or every attempt failed
-        (always logged).
+        error is ``''`` on success/no-match, else a short reason (always
+        logged regardless).
 
     Raises:
         ArxivQuerySyntaxError: the query contains built arXiv field syntax.
@@ -256,7 +264,7 @@ def search_arxiv(query, max_results=10):
 
     query = (query or '').strip()
     if not query:
-        return []
+        return [], ''
 
     # Fail LOUDLY rather than mangling. The alternative (sanitize and proceed)
     # is what returned titanium-alloy papers for a KV-cache query with no error.
@@ -297,17 +305,38 @@ def search_arxiv(query, max_results=10):
             continue
         logger.warning('[Paper:arXiv:Search] Query failed for %.120s: %s',
                        query, res.get('error'))
-        return []
+        return [], (res.get('error') or 'arXiv request failed')
 
     if not res or not res.get('ok'):
-        return []
+        # outcome 'unusable_query' lands here: the request never ran (every
+        # term was sanitized away). That is a failure to ASK, not "nothing
+        # matched" — surface it as an error, never as an empty result.
+        return [], ((res or {}).get('error')
+                    or 'query contained no usable search terms')
     if res.get('outcome') == 'no_matches':
         # A real answer, not a failure — log it as such so a genuinely empty
         # field is never mistaken for a broken query.
         logger.info('[Paper:arXiv:Search] 0 results for %.120s (query ran clean)',
                     query)
-        return []
+        return [], ''
 
     results = _rerank_by_title(query, res['papers'])[:max_results]
     logger.info('[Paper:arXiv:Search] %d results for %.120s', len(results), query)
+    return results, ''
+
+
+def search_arxiv(query, max_results=10):
+    """Search arXiv by free-text query. Thin adapter over ``tofu_search``.
+
+    Back-compatible list-only facade over :func:`search_arxiv_explained` for
+    internal callers (harvest seed / novelty retrieval / recommend / insight)
+    that treat "failed" and "matched nothing" identically. Callers rendering
+    a user-facing result (the search route) MUST use the explained variant —
+    see its docstring for why.
+
+    Args / Returns / Raises: see :func:`search_arxiv_explained`; only the
+    results list is returned here (an empty list means "nothing matched OR
+    every attempt failed", always logged).
+    """
+    results, _error = search_arxiv_explained(query, max_results)
     return results

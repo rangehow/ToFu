@@ -1,13 +1,43 @@
 #!/usr/bin/env python3
 """qr_login_capture.py — QR-scan SSO login capture (headless server variant).
 
+⚠️  MEASURED STATUS (2026-07-28) — READ BEFORE RUNNING
+-----------------------------------------------------
+This path has been run twice end-to-end and did NOT yield credentials:
+the QR was verified on screen and DELIVERED to the operator (as an image), the
+operator scanned it and confirmed in 大象 both times, and yet **this script's
+headless context saw ZERO cookie change** for the whole window —
+``auth_sources`` stayed ``enabled=False cookie_count=0``, no ``login detected``
+/ ``SUCCESS`` line was ever emitted, and ``ctxId`` / ``ctxId-<client_id>``
+remained byte-identical to the pre-scan baseline (never refreshed by the
+server). No SSO event other than our own QR polling appeared.
+
+What that DOES establish: the "QR had expired" hypothesis is disproven — the
+second attempt was scanned immediately after the operator saw a freshly
+refreshed code.
+
+What it does NOT establish: WHY the confirmation did not flow back to this
+context. Candidate directions — device/IP context binding, a PKCE constraint on
+which endpoint may confirm, headless fingerprinting — are ALL UNVERIFIED. Do
+not treat any of them as the cause, and do not conclude "QR login cannot cross
+phone → headless" either: QR login is *designed* for two separate ends and
+works that way every day; only this particular run is known to have failed.
+
+So: running this again unchanged is unlikely to help. Investigate one of the
+candidate directions first (e.g. compare against a headful run, or watch the
+SSO poll XHR for a status transition), then change the script accordingly.
+The alternative path is for a human to log in in their OWN browser and paste
+the cookie via Settings → 需要登录的来源.
+
+How it works
+------------
 The SSO login wall on sankuai.com is QR-based (ssosv.sankuai.com/sson/login).
 A headless server has no display — but the QR can be SHOWN to the user
 remotely: we screenshot it into ``static/tmp/`` (served by the app's built-in
 static route), the user scans it with 大象 on their phone, and the login
 completes INSIDE this script's Playwright context. We then persist the
-resulting session cookies (ssoid & friends) into lib/auth_sources — exactly
-where the fetch pipeline's authenticated replay expects them.
+resulting session cookies into lib/auth_sources — exactly where the fetch
+pipeline's authenticated replay expects them.
 
 Reuses tofu_search.fetch.interactive_login's core idea (wait-for-login-cookie
 → capture), replacing "headful window" with "screenshotted QR + poll".

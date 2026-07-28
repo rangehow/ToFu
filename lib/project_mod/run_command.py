@@ -293,6 +293,20 @@ def _maybe_wrap_rm_with_trash(command, cwd):
     a missing file still succeeds (exit 0) to match ``rm`` semantics. On each
     delete it also lazily prunes trash entries older than
     ``TOFU_TRASH_TTL_DAYS`` (default 7) so the bin can't grow unbounded.
+
+    ★ The trash is the WORKSPACE's undo bin, not the machine's. An absolute
+    operand that resolves OUTSIDE ``cwd`` (the routine
+    ``rm -rf /tmp/wt_fill`` temp-worktree cleanup) is deleted DIRECTLY by the
+    real ``rm`` inside the shim — moving it into the project trash is a
+    cross-device copy of the whole tree into the workspace (minutes on a
+    FUSE mount) and fills the bin with non-project temp data. This path only
+    became live when the blunt ``rm -rf /`` dangerous-pattern regex was
+    removed (2026-07-28): before that, every absolute delete was refused
+    upstream, so the shim never saw an outside-workspace target. Relative
+    and in-workspace absolute operands keep full trash semantics. The
+    boundary is textual (normpath prefix) and only applied when ``cwd`` is
+    itself absolute; otherwise every operand keeps the old trash behaviour
+    (fail-safe toward recoverability).
     """
     if not _RM_TRASH_ENABLED or not command:
         return command
@@ -303,6 +317,9 @@ def _maybe_wrap_rm_with_trash(command, cwd):
     if _TRASH_DIRNAME in command:
         return command
     trash_root = os.path.join(cwd or '.', _TRASH_DIRNAME)
+    _ws = os.path.normpath(cwd) if cwd and os.path.isabs(cwd) else None
+    if _ws == os.sep:
+        _ws = None  # root cwd: every absolute path is "inside" — trash all
     # Lazy retention prune: drop trash timestamp-dirs older than the TTL so the
     # bin can't grow unbounded. Runs at the START of the command, while `rm` is
     # still the real binary (before the function below shadows it). No-op when
@@ -320,16 +337,32 @@ def _maybe_wrap_rm_with_trash(command, cwd):
     # cwd may be a cloned target repo (e.g. an eval workdir) that has its own
     # git and no knowledge of our top-level .gitignore. Without this, `git add
     # -A` there would sweep trashed files into the captured diff.
+    # `_td` is created LAZILY on the first trashed operand so an
+    # outside-only delete leaves no empty timestamp dir behind; `_rc`
+    # surfaces a real-rm failure for the direct-delete branch (the trash
+    # branch keeps its historical always-0 best-effort semantics).
+    outside_branch = ''
+    if _ws:
+        outside_branch = (
+            'case "$_a" in '
+            '"{ws}"|"{ws}/"*) ;; '
+            '/*) command rm -rf -- "$_a" || _rc=$?; continue;; '
+            'esac; '
+        ).replace('{ws}', _ws)
     shim = prune + (
         'rm() { '
-        '_td="{trash}/$(date +%Y%m%d_%H%M%S_%N)"; mkdir -p "$_td"; '
-        '[ -f "{trash}/.gitignore" ] || printf "*\\n" > "{trash}/.gitignore" 2>/dev/null; '
+        '_td=; _rc=0; '
         'for _a in "$@"; do '
         'case "$_a" in -*) continue;; esac; '
         '[ -e "$_a" ] || [ -L "$_a" ] || continue; '
+        + outside_branch +
+        'if [ -z "$_td" ]; then '
+        '_td="{trash}/$(date +%Y%m%d_%H%M%S_%N)"; mkdir -p "$_td"; '
+        '[ -f "{trash}/.gitignore" ] || printf "*\\n" > "{trash}/.gitignore" 2>/dev/null; '
+        'fi; '
         'mkdir -p "$_td/$(dirname "$_a")" 2>/dev/null; '
         'mv "$_a" "$_td/$_a" 2>/dev/null || cp -a "$_a" "$_td/$_a" 2>/dev/null; '
-        'done; return 0; }; '
+        'done; return $_rc; }; '
     ).replace('{trash}', trash_root)
     return shim + command
     # All segments are known read-only

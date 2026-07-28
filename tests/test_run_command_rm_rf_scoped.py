@@ -190,3 +190,94 @@ class TestRegexLayerNoLongerOwnsDeletes:
         # The list itself was narrowed, not emptied.
         assert _is_dangerous_command('mkfs.ext4 /dev/sda1') is True
         assert _is_dangerous_command('shutdown -h now') is True
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  4. Trash wrap boundary: the bin is the WORKSPACE's undo, not the machine's
+# ═══════════════════════════════════════════════════════════════════════════
+
+@pytest.mark.unit
+class TestTrashWrapSkipsOutsideWorkspace:
+    """Once scoped absolute deletes were unblocked, they reached the rm→trash
+    shim for the first time — and the shim used to move EVERY operand into
+    ``<cwd>/.tofu_trash/``. For ``rm -rf /tmp/wt_fill`` that is a
+    cross-device copy of a whole worktree into the (FUSE) project dir on
+    every cleanup, plus 7 days of non-project temp data in the bin.
+
+    Contract: an absolute operand resolving OUTSIDE the workspace cwd is
+    deleted directly; relative / in-workspace absolute operands keep full
+    trash semantics. These tests use REAL directories and assert the result
+    (target gone? copy in the bin?) — not the shim's text.
+    """
+
+    def _enable_trash(self, monkeypatch):
+        monkeypatch.setattr(
+            'lib.project_mod.run_command._RM_TRASH_ENABLED', True)
+
+    def test_outside_target_deleted_directly_never_trashed(
+            self, tmp_path, monkeypatch):
+        self._enable_trash(monkeypatch)
+        ws = tmp_path / 'ws'
+        ws.mkdir()
+        victim = tmp_path / 'victim'
+        (victim / 'sub').mkdir(parents=True)
+        (victim / 'sub' / 'data.txt').write_text('x', encoding='utf-8')
+        result = tool_run_command(str(ws), f'{_RM} -rf {victim}')
+        assert 'blocked for safety' not in result
+        assert not victim.exists(), 'outside target must really be deleted'
+        assert not (ws / '.tofu_trash').exists(), (
+            'nothing may be copied into the workspace trash bin')
+
+    def test_relative_inside_target_still_trashed(self, tmp_path, monkeypatch):
+        """Complement: without this, 'never trash anything' also passes above."""
+        self._enable_trash(monkeypatch)
+        ws = tmp_path / 'ws'
+        (ws / 'sub').mkdir(parents=True)
+        (ws / 'sub' / 'keep.txt').write_text('keep', encoding='utf-8')
+        result = tool_run_command(str(ws), f'{_RM} -rf sub')
+        assert 'blocked for safety' not in result
+        assert not (ws / 'sub').exists()
+        found = list((ws / '.tofu_trash').rglob('keep.txt'))
+        assert found, 'workspace delete must land in the trash bin'
+
+    def test_absolute_inside_workspace_still_trashed(
+            self, tmp_path, monkeypatch):
+        self._enable_trash(monkeypatch)
+        ws = tmp_path / 'ws'
+        (ws / 'sub').mkdir(parents=True)
+        (ws / 'sub' / 'keep.txt').write_text('keep', encoding='utf-8')
+        result = tool_run_command(str(ws), f'{_RM} -rf {ws / "sub"}')
+        assert 'blocked for safety' not in result
+        assert not (ws / 'sub').exists()
+        found = list((ws / '.tofu_trash').rglob('keep.txt'))
+        assert found, 'in-workspace absolute delete must land in the bin'
+
+    def test_mixed_command_splits_by_target(self, tmp_path, monkeypatch):
+        """Per-operand split in ONE command: outside → direct delete,
+        inside → trash. This is the case a command-level all-or-nothing
+        skip cannot express."""
+        self._enable_trash(monkeypatch)
+        ws = tmp_path / 'ws'
+        (ws / 'sub').mkdir(parents=True)
+        (ws / 'sub' / 'keep.txt').write_text('keep', encoding='utf-8')
+        victim = tmp_path / 'victim'
+        (victim / 'sub').mkdir(parents=True)
+        (victim / 'sub' / 'data.txt').write_text('x', encoding='utf-8')
+        result = tool_run_command(
+            str(ws), f'{_RM} -rf {victim} && {_RM} -rf sub')
+        assert 'blocked for safety' not in result
+        assert not victim.exists() and not (ws / 'sub').exists()
+        trash = ws / '.tofu_trash'
+        assert list(trash.rglob('keep.txt')), 'inside operand must be trashed'
+        assert not list(trash.rglob('data.txt')), (
+            'outside operand must NOT be copied into the bin')
+
+    def test_boundary_disabled_without_absolute_cwd(self):
+        """Fail-safe shape: when the workspace boundary is unknown (relative
+        cwd), the shim keeps the old trash-everything behaviour — the
+        direct-delete branch only exists when cwd is absolute."""
+        from lib.project_mod.run_command import _maybe_wrap_rm_with_trash
+        out = _maybe_wrap_rm_with_trash(f'{_RM} -rf build/', 'rel/base')
+        assert 'command rm' not in out and '.tofu_trash' in out
+        out_abs = _maybe_wrap_rm_with_trash(f'{_RM} -rf build/', '/abs/base')
+        assert 'command rm' in out_abs

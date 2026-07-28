@@ -198,6 +198,24 @@ check_once() {
       return 0
     fi
   fi
+  # (b1) re-exec marker (pt_aa3cd224b3b346e7): an HTTP re-exec writes
+  # data/.reexec_in_progress just before the old process closes; the new
+  # image clears it at boot-ready. Between those points there is NO listener
+  # and — because os.execv KEEPS the pid — the process-age check (d) can
+  # never see the re-exec (etimes predates it): this marker is the only
+  # truthful signal for the re-exec window. 300s = 6.7x the measured 45s
+  # window; a stale marker just falls through to the checks below.
+  local reexec_marker="${PROJ}/data/.reexec_in_progress"
+  if [ -f "${reexec_marker}" ]; then
+    local marker_mtime marker_age
+    marker_mtime="$(stat -c %Y "${reexec_marker}" 2>/dev/null || echo 0)"
+    marker_age=$(( $(date +%s) - ${marker_mtime:-0} ))
+    if [ "${marker_age}" -lt 300 ]; then
+      log "[guard] re-exec in progress (marker age ${marker_age}s) — standing down"
+      return 0
+    fi
+    log "[guard] stale re-exec marker (age ${marker_age}s) — ignoring"
+  fi
   # (c) the positive proofs of life. TWO independent signals, because the
   # first alone once lied: cron's minimal PATH has no `ss`, so an empty
   # listener_pids meant "ss missing", NOT "server dead" (2026-07-27).
@@ -206,6 +224,34 @@ check_once() {
   fi
   if healthy; then
     return 0   # no socket visible, but HTTP answers — alive; never phantom-relaunch
+  fi
+  # (b2) boot-in-progress via the instance lock (pt_aa3cd224b3b346e7): no
+  # listener and no HTTP, but a LIVE server.py holds data/.server.lock —
+  # the boot is in progress. A memory-pressured boot took ~17 min on
+  # 2026-07-28 (5.7x BOOT_GRACE): racing it launched 4 duplicate relaunches
+  # that all died on the lock and polluted the crash-storm counter. Yield
+  # WITHOUT a TTL — but only when the lock's recorded <pid> is ALIVE and is
+  # server.py: a dead recorded pid means a STALE lock (SIGKILL / orphan-held
+  # fd / FUSE release lag), and yielding then would strand a genuinely dead
+  # server. The relaunched server reclaims the stale lock itself
+  # (_reclaim_stale_instance_lock in server.py).
+  local ilock="${PROJ}/data/.server.lock"
+  if [ -f "${ilock}" ] && command -v flock >/dev/null 2>&1 \
+     && ! flock -n "${ilock}" -c true 2>/dev/null; then
+    local il_pid
+    il_pid="$(head -n1 "${ilock}" 2>/dev/null | cut -d@ -f1 | tr -dc '0-9')"
+    if [ -n "${il_pid}" ] && kill -0 "${il_pid}" 2>/dev/null \
+       && tr '\0' ' ' < "/proc/${il_pid}/cmdline" 2>/dev/null | grep -q 'server\.py'; then
+      local il_age
+      il_age="$(ps -o etimes= -p "${il_pid}" 2>/dev/null | tr -d ' ')"
+      if [ -n "${il_age}" ] && [ "${il_age}" -gt 600 ]; then
+        log "[guard] WARNING: instance lock held ${il_age}s by pid ${il_pid} with no listener — boot unusually slow or wedged; still yielding (operator's call)"
+      else
+        log "[guard] instance lock held by live server.py pid ${il_pid} (boot in progress) — standing down"
+      fi
+      return 0
+    fi
+    log "[guard] instance lock held but recorded pid ${il_pid:-none} is dead/gone — STALE, proceeding"
   fi
   # (d) mid-boot: a young server.py process exists but has not bound yet.
   local spid etimes

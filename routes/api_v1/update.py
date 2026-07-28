@@ -20,6 +20,7 @@ fully-logged HTTP wrapper.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import threading
@@ -29,6 +30,7 @@ import uuid
 from flask import Blueprint, request
 
 from lib import lifecycle_approval as _lca
+from lib.runtime_paths import data_root
 from lib.api_response import (
     api_conflict, api_error, api_forbidden, api_internal_error, api_not_found,
     api_ok,
@@ -209,6 +211,20 @@ def _perform_server_reexec(reason: str) -> bool:
         mark_clean('restart')
     except Exception as _sm_e:
         logger.warning('[Update] mark_clean(restart) failed: %s', _sm_e)
+    # re-exec marker (pt_aa3cd224b3b346e7): tofu_guard must not relaunch into
+    # the re-exec window (old process dead → new one not yet exec'd/bound).
+    # execv KEEPS the pid, so the guard's process-age check can never see a
+    # re-exec — this marker is the only truthful signal. The fresh image
+    # clears it at boot-ready (server.py); the guard ignores markers older
+    # than 300s. Best-effort: a write failure degrades to the pre-marker
+    # behavior (a duplicate relaunch that dies harmlessly on the instance
+    # lock), never blocks the restart.
+    try:
+        with open(os.path.join(data_root(), '.reexec_in_progress'), 'w') as _fh:
+            json.dump({'pid': os.getpid(), 'ts': time.time()}, _fh)
+    except Exception as _mk_e:
+        logger.warning('[Update] re-exec marker write failed (guard may race): %s',
+                       _mk_e)
     try:
         # Let the env-reexec guard run again from a clean slate.
         os.environ.pop('_TOFU_ENV_REEXEC', None)

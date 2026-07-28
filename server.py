@@ -2950,6 +2950,17 @@ if __name__ == '__main__':
     except Exception as _fp_e:  # never let a diagnostic line block boot
         _boot_logger.warning('[CodeFingerprint] self-report failed: %s', _fp_e)
 
+    # Clear the re-exec marker (pt_aa3cd224b3b346e7): boot is done —
+    # tofu_guard may resume judging this process by the normal signals
+    # (listener / health / instance lock). Best-effort: a leftover marker
+    # just yields for the remainder of its 300s TTL, never blocks boot.
+    try:
+        os.unlink(os.path.join(_tofu_data_root(), '.reexec_in_progress'))
+    except FileNotFoundError:
+        pass
+    except Exception as _mkc_e:
+        _boot_logger.debug('[Update] re-exec marker clear failed: %s', _mkc_e)
+
     _boot('Ready — handing off to Hypercorn.')
     try:
         sys.stderr.write('\n' + _banner + '\n\n')

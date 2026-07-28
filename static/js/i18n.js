@@ -1951,7 +1951,10 @@ var _i18n = {
   'local.notInstalled': { zh: '尚未安装', en: 'Not installed' },
   'local.notRunning': { zh: '未运行', en: 'Not running' },
   'local.unreachable': { zh: '无法连接服务器', en: 'Cannot reach server' },
-  'local.browserLoadUnpacked': { zh: '打开 chrome://extensions/ → 打开右上角「开发者模式」→ 点「加载已解压的扩展程序」→ 选择下面这个文件夹：', en: 'Open chrome://extensions/ → turn on Developer mode → click "Load unpacked" → pick this folder:' },
+  'local.browserOpenPageBtn': { zh: '帮我打开扩展管理页（自动复制路径）', en: 'Open the extensions page for me (path auto-copied)' },
+  'local.browserLoadUnpacked': { zh: '剩下的三步 Chrome 不允许网页代劳：① 打开右上角「开发者模式」→ ② 点「加载已解压的扩展程序」→ ③ 粘贴路径（已自动复制）选择这个文件夹：', en: 'Three clicks remain that Chrome forbids any web page from doing for you: ① turn on Developer mode → ② click "Load unpacked" → ③ paste the path (already copied) and pick this folder:' },
+  'local.browserPageOpened': { zh: '已在你的浏览器打开扩展管理页，路径已复制 —— 剩下三步只能你来点。', en: 'The extensions page is open in your browser and the path is copied — the remaining three clicks are yours.' },
+  'local.browserPageOpenFailed': { zh: '没能替你打开（你不在本机，或服务器上没找到 Chrome）—— 请手动打开 chrome://extensions/，路径已复制。', en: 'Could not open it for you (you are not on this machine, or no Chrome was found on the server) — open chrome://extensions/ manually; the path is copied.' },
   'local.browserDownload': { zh: '下载扩展并解压，然后在 chrome://extensions/ 打开「开发者模式」→「加载已解压的扩展程序」→ 选择解压出的文件夹。', en: 'Download and unzip the extension, then in chrome://extensions/ turn on Developer mode → "Load unpacked" → pick the unzipped folder.' },
   'local.desktopTray': { zh: '右键点击系统托盘里的 Tofu 图标 → 勾选「Enable Computer Control」。', en: 'Right-click the Tofu icon in your system tray → tick "Enable Computer Control".' },
   'local.desktopSource': { zh: '当前 Tofu 以源码方式运行。安装桌面版后即可在系统托盘一键开启「Enable Computer Control」。', en: 'Tofu is running from source. Install the desktop app to get the tray\'s one-click "Enable Computer Control".' },
@@ -2113,6 +2116,7 @@ var _i18n = {
   'paper.qaInputPlaceholder': { zh: '就本论文提一个问题…', en: 'Ask a question about this paper…' },
   'paper.qaError': { zh: '出错', en: 'Error' },
   'paper.qaExpired': { zh: '问答任务已过期，请重试。', en: 'Q&A task expired. Please ask again.' },
+  'paper.qaThinking': { zh: '正在思考与检索…', en: 'Thinking & searching…' },
   'paper.fitWidth': { zh: '适应宽度', en: 'Fit to width' },
   'paper.zoomOut': { zh: '缩小', en: 'Zoom out' },
   'paper.zoomIn': { zh: '放大', en: 'Zoom in' },
@@ -2668,6 +2672,7 @@ var _i18n = {
   // SSE event + streaming_ui.js data-zone="fallback"). NOT a toast.
   'stream.fallback.banner': { zh: '主模型请求失败，已自动切换', en: 'Primary model failed — auto-switched' },
   'stream.fallback.bannerTip': { zh: '原模型 {from} 失败，已回退到 {to}\n原因：{reason}', en: 'Original model {from} failed, fell back to {to}\nReason: {reason}' },
+  'stream.fallback.reasonLabel': { zh: '原因', en: 'Reason' },
   'stream.phase.waiting': { zh: '等待中…', en: 'Waiting…' },
   // Backend-emitted phase.detail localizations. Each corresponds to a
   // `detailKey` shipped alongside a legacy English `detail` fallback so

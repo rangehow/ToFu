@@ -13,11 +13,18 @@ Routes:
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
+import sys
 import time
 
 from flask import Blueprint, jsonify, request
 
-from lib.log import get_logger
+from lib.api_response import (
+    api_forbidden, api_internal_error, api_not_found, api_ok,
+)
+from lib.log import audit_log, get_logger
 from lib.openapi import api_meta
 
 from .auth import require_auth
@@ -135,6 +142,101 @@ def browser_test():
     if error:
         return jsonify({'status': status, 'result': result, 'error': error}), 502
     return jsonify({'status': status, 'result': result, 'error': error})
+
+
+# ── Guided extension install: open the extensions page (loopback only) ──
+#
+# The merged Local Control modal walks a same-machine user through loading
+# the unpacked extension. Chrome's sandbox deliberately gives a web page no
+# way to flip Developer mode or click "Load unpacked" — but the SERVER, when
+# the user is browsing from the very machine it runs on, can at least open
+# the browser at the right page. That is ALL this route does, and the name
+# says so: pretending to finish an install we cannot finish would be the
+# same lie as a bare token with no address.
+
+
+def _find_chrome_binary() -> str | None:
+    """Locate a Chrome-family executable for this platform, or None.
+
+    The extension is Chrome-only, so falling back to the DEFAULT browser
+    (xdg-open / os.startfile) would be wrong whenever that default is
+    Firefox or Safari — better to report "not found" and let the UI keep
+    the manual instruction than to open a page that cannot help.
+    """
+    if sys.platform == 'darwin':
+        for cand in (
+                '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+                '/Applications/Chromium.app/Contents/MacOS/Chromium'):
+            if os.path.isfile(cand):
+                return cand
+        return shutil.which('chrome')
+    if sys.platform == 'win32':
+        for env in ('LOCALAPPDATA', 'PROGRAMFILES', 'PROGRAMFILES(X86)'):
+            base = os.environ.get(env)
+            if base:
+                cand = os.path.join(
+                    base, 'Google', 'Chrome', 'Application', 'chrome.exe')
+                if os.path.isfile(cand):
+                    return cand
+        return shutil.which('chrome')
+    for name in ('google-chrome', 'google-chrome-stable', 'chromium',
+                 'chromium-browser'):
+        hit = shutil.which(name)
+        if hit:
+            return hit
+    return None
+
+
+@api_v1_browser_bp.route('/api/v1/browser/open-extensions', methods=['POST'])
+@require_auth
+@api_meta(
+    summary='Open the local Chrome at chrome://extensions (loopback only)',
+    description=(
+        'Side effect: launches the server machine\'s Chrome-family browser '
+        'at the extensions page — one step of the guided extension install '
+        'in the Local Control modal. Gated on the request peer being '
+        'loopback, because the window opens on the SERVER machine, which '
+        'only helps when the user is browsing from that same machine. The '
+        'remaining steps (Developer mode → Load unpacked → pick the folder) '
+        'are Chrome-sandboxed and cannot be automated; the UI says so rather '
+        'than implying one click finishes the install.'
+    ),
+    tags=['capabilities'],
+)
+def browser_open_extensions():
+    """Open THIS machine's Chrome at the extensions page — loopback only."""
+    from .auth import _remote_is_loopback
+    if not _remote_is_loopback():
+        logger.warning('[Browser] open-extensions refused: peer %s is not '
+                       'loopback — the page would open on the server, not '
+                       "on the user's machine", request.remote_addr)
+        return api_forbidden(
+            'The extensions page can only be opened when you are browsing '
+            'from the same machine the server runs on.')
+    binary = _find_chrome_binary()
+    if not binary:
+        logger.info('[Browser] open-extensions: no Chrome-family browser '
+                    'found on this machine')
+        return api_not_found(
+            'No Chrome-family browser was found on this machine — open '
+            'chrome://extensions/ manually instead.')
+    try:
+        kwargs = {}
+        if sys.platform != 'win32':
+            kwargs['start_new_session'] = True
+        subprocess.Popen([binary, 'chrome://extensions'],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         **kwargs)
+    except Exception as e:
+        logger.error('[Browser] failed to launch %s: %s', binary, e,
+                     exc_info=True)
+        return api_internal_error(e, context='routes.api_v1.browser',
+                                  source='browser_open_extensions')
+    logger.info('[Browser] opened chrome://extensions via %s (loopback user)',
+                binary)
+    audit_log('browser_extensions_page_opened', browser=binary,
+              peer=request.remote_addr)
+    return api_ok({'opened': 'chrome://extensions', 'browser': binary})
 
 
 __all__ = ['api_v1_browser_bp']

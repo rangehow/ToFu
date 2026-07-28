@@ -209,14 +209,26 @@ function _lcRenderBrowser(d, err) {
   if (state === 'connected') { setup.innerHTML = ''; return; }
 
   if (state === 'load_unpacked') {
-    // Tofu runs on this machine — the unpacked extension is already on disk.
-    // One action: load that folder. No download, no unzip.
+    // Tofu runs on this machine — the unpacked extension is already on disk
+    // AND the server can open this machine's browser at the right page. One
+    // primary action: that button (it also copies the path). What remains —
+    // Developer mode, Load unpacked, paste — is inside Chrome's sandbox and
+    // no web page can do it for the user; the text says so instead of
+    // implying one click finishes the install.
     setup.innerHTML =
+      '<button type="button" class="btn btn-primary btn-sm" id="lcExtOpenBtn">' +
+        _lcEsc(_lcT('local.browserOpenPageBtn',
+          '帮我打开扩展管理页（自动复制路径）')) + '</button>' +
       '<p class="lc-step">' + _lcEsc(_lcT('local.browserLoadUnpacked',
-        '打开 chrome://extensions/ → 打开右上角「开发者模式」→ 点「加载已解压的扩展程序」→ 选择下面这个文件夹：')) + '</p>' +
+        '剩下的三步 Chrome 不允许网页代劳：① 打开右上角「开发者模式」→ ② 点「加载已解压的扩展程序」→ ③ 粘贴路径（已自动复制）选择这个文件夹：')) + '</p>' +
       '<code class="lc-copy" id="lcExtPath" data-tooltip="' +
         _lcEsc(_lcT('browser.clickToCopy', '点击复制')) + '">' +
-        _lcEsc(d.extensionPath) + '</code>';
+        _lcEsc(d.extensionPath) + '</code>' +
+      '<p class="lc-substep" id="lcExtOpenNote"></p>';
+    var openBtn = document.getElementById('lcExtOpenBtn');
+    if (openBtn) {
+      openBtn.onclick = function () { _lcOpenExtensionsPage(d.extensionPath); };
+    }
     var code = document.getElementById('lcExtPath');
     if (code) {
       code.onclick = function () {
@@ -295,13 +307,22 @@ function _lcRenderDesktop(d, err) {
         '右键点击系统托盘里的 Tofu 图标 → 勾选「Enable Computer Control」。')) + '</p>';
       return;
 
-    case 'local_source':
-      // Tofu is running from source on this same machine. Pointing the user at
-      // "download the desktop app" would tell them to install a second copy of
-      // something they are already running.
+    case 'local_source': {
+      // Tofu is running from source on this same machine. The desktop app is
+      // still the one-click tray path — but "install the desktop app" with no
+      // way to GET it is a dead sentence, and download_url is already in the
+      // payload (derived from the ONE UPDATE_REPO constant), so render the
+      // same followable link the remote case offers.
+      var dlSrc = (d.download_url || '').trim();
       setup.innerHTML = '<p class="lc-step">' + _lcEsc(_lcT('local.desktopSource',
-        '当前 Tofu 以源码方式运行。安装桌面版后即可在系统托盘一键开启「Enable Computer Control」。')) + '</p>';
+        '当前 Tofu 以源码方式运行。安装桌面版后即可在系统托盘一键开启「Enable Computer Control」。')) + '</p>' +
+        (dlSrc
+          ? '<p class="lc-substep"><a class="lc-dl-link" id="lcDesktopDownloadSrc" href="' +
+              _lcEsc(dlSrc) + '" target="_blank" rel="noopener noreferrer">' +
+              _lcEsc(_lcT('local.desktopDownload', '下载桌面版 ↗')) + '</a></p>'
+          : '');
       return;
+    }
 
     default:
       // Remote server — the user's machine is NOT this machine, so this is
@@ -366,6 +387,38 @@ function _lcMintToken(serverUrl) {
       if (btn) btn.disabled = false;
       if (typeof showToast === 'function') showToast(_lcT('devices.mintFailed', '生成失败'));
     });
+}
+
+/* The ONE action of the on-disk browser case: ask the server to open this
+ * machine's Chrome at chrome://extensions, and copy the extension path from
+ * the FRONTEND (navigator.clipboard — a headless server has no clipboard, so
+ * this half must happen here). Both fire together; whichever one fails, the
+ * note says what to do manually instead of leaving a dead button. The three
+ * remaining clicks live inside Chrome's sandbox — the note never claims the
+ * install is finished. */
+function _lcOpenExtensionsPage(path) {
+  var btn = document.getElementById('lcExtOpenBtn');
+  var note = document.getElementById('lcExtOpenNote');
+  if (btn) btn.disabled = true;
+  var copied = (path && typeof _safeClipboardWrite === 'function')
+    ? Promise.resolve(_safeClipboardWrite(path)).catch(function () {})
+    : Promise.resolve();
+  var opened = (typeof Api !== 'undefined' && Api.browser &&
+                typeof Api.browser.openExtensions === 'function')
+    ? Promise.resolve(Api.browser.openExtensions()).catch(function () { return null; })
+    : Promise.resolve(null);
+  Promise.all([copied, opened]).then(function (results) {
+    if (btn) btn.disabled = false;
+    var r = results[1];
+    if (!note) return;
+    if (r && r.ok) {
+      note.textContent = _lcT('local.browserPageOpened',
+        '已在你的浏览器打开扩展管理页，路径已复制 —— 剩下三步只能你来点。');
+    } else {
+      note.textContent = _lcT('local.browserPageOpenFailed',
+        '没能替你打开（你不在本机，或服务器上没找到 Chrome）—— 请手动打开 chrome://extensions/，路径已复制。');
+    }
+  });
 }
 
 /* Build the one line the user pastes into the desktop app's connect field.

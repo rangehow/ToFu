@@ -1046,6 +1046,10 @@
 
   const browser = {
     status: () => get('/api/v1/browser/status'),
+    // Guided install step (loopback-gated server-side): opens the SERVER
+    // machine's Chrome at chrome://extensions. null on refusal/failure.
+    openExtensions: () => post('/api/v1/browser/open-extensions', {},
+                               { onError: 'null' }),
   };
 
   // authSources (login-walled fetch sources: Xiaohongshu, …) ---------

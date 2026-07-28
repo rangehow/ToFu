@@ -121,6 +121,7 @@ _SHIPPED_SYMBOLS = (
     "_lcT", "_lcEsc", "_lcSetStatus", "_lcSetSwitch", "_lcSetAbout",
     "_lcBrowserSetupState", "_lcRenderBrowser", "_lcRenderDesktop",
     "_lcMintToken", "_lcConnectLine", "_lcUpdateBadge",
+    "_lcOpenExtensionsPage",
 )
 
 
@@ -188,9 +189,19 @@ HARNESS = textwrap.dedent("""
     global.t = (k) => k;                    // i18n absent -> fallback strings
     global.escapeHtml = (s) => String(s == null ? '' : s)
       .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    global.Api = {{ desktop: {{ mintToken: () => Promise.resolve({{token:'T'}}) }} }};
+    global._rec = {{ openExt: 0, clip: null }};
+    global.Api = {{
+      desktop: {{ mintToken: () => Promise.resolve({{token:'T'}}) }},
+      browser: {{ openExtensions: () => {{
+        global._rec.openExt++;
+        return Promise.resolve({{ok: true}});
+      }} }},
+    }};
     global.showToast = () => {{}};
-    global._safeClipboardWrite = () => Promise.resolve();
+    global._safeClipboardWrite = (s) => {{
+      global._rec.clip = s;
+      return Promise.resolve();
+    }};
     global.downloadBrowserExtension = () => {{}};
     global._applyBrowserLnaWarning = () => {{}};
 
@@ -258,12 +269,27 @@ HARNESS = textwrap.dedent("""
         text: el.textContent.trim(),
         hasPath: el.textContent.includes('/srv/tofu/browser_extension'),
         hasDownloadBtn: !!el.querySelector('#lcExtDownloadBtn'),
+        hasOpenBtn: !!el.querySelector('#lcExtOpenBtn'),
         switchUsable: !bsw.disabled,
         about: document.getElementById('lcBrowserAbout').textContent.trim(),
       }};
     }}
 
-    console.log(JSON.stringify({{ desktop, browser, mintedLine }}));
+    // Drive the ONE primary action of the on-disk case: the button must BOTH
+    // copy the folder path AND ask the server to open the extensions page —
+    // a page with no path, or a path with no page, is half an action.
+    document.getElementById('lcBrowserSetup').innerHTML = '';
+    _lcRenderBrowser({{ connected: false, extensionPath: '/srv/tofu/browser_extension' }});
+    const openBtn = document.getElementById('lcExtOpenBtn');
+    if (openBtn) openBtn.onclick();
+    const openClick = await new Promise((res) => setTimeout(() => res({{
+      present: !!openBtn,
+      routeCalls: global._rec.openExt,
+      clip: global._rec.clip,
+      note: (document.getElementById('lcExtOpenNote') || {{textContent: ''}}).textContent,
+    }}), 0));
+
+    console.log(JSON.stringify({{ desktop, browser, mintedLine, openClick }}));
     }})();
 """)
 
@@ -404,6 +430,39 @@ def test_browser_row_picks_the_actionable_instruction():
 
 
 @pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
+def test_load_unpacked_offers_the_one_click_open_button():
+    """The on-disk case's ONE action: open the page + copy the path.
+
+    What remains (Developer mode → Load unpacked → paste) lives inside
+    Chrome's sandbox — no web page may do it — so the residual text must
+    say so rather than implying the button finishes the install.
+    """
+    out = _run(_shipped())["browser"]
+    assert out["load_unpacked"]["hasOpenBtn"] is True, (
+        "the on-disk case must offer the one-click open-page button")
+    assert "开发者模式" in out["load_unpacked"]["text"], (
+        "the residual steps must be stated honestly — Chrome's sandbox "
+        "makes them un-automatable")
+    assert out["download"]["hasOpenBtn"] is False, (
+        "a REMOTE user gets no page-open button — the window would open on "
+        "the server, not on their machine")
+
+
+@pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
+def test_the_open_button_copies_the_path_and_calls_the_route():
+    """One click does BOTH halves, and reports what happened."""
+    click = _run(_shipped())["openClick"]
+    assert click["present"] is True, "no open button to drive"
+    assert click["routeCalls"] == 1, (
+        f"the click must call the server route exactly once, got "
+        f"{click['routeCalls']}")
+    assert click["clip"] == "/srv/tofu/browser_extension", (
+        f"the click must copy the extension path, got {click['clip']!r}")
+    assert click["note"].strip(), (
+        "the click must report the outcome — a silent button is a dead one")
+
+
+@pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
 def test_connected_state_lights_the_dot():
     """Complement: the merge must not lose the live status signal itself."""
     out = _run(_shipped())["desktop"]
@@ -478,16 +537,24 @@ def test_remote_state_offers_a_real_download_link():
 
 
 @pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
-def test_only_the_remote_state_shows_a_download_link():
-    """Complement: the other three states must NOT show one.
+def test_only_the_states_that_need_the_app_show_a_download_link():
+    """A download link belongs exactly where the user does NOT have the app.
 
-    A tray user already has the app; a local_source user is running it. A
-    download link there is a second path competing with the one real action.
+    tray + connected already have it — a link there competes with the one
+    real action. local_source + remote do not — a sentence saying "install
+    the app" with no way to GET it is the dead end review caught in the
+    remote branch; local_source shipped the same shape and is fixed to the
+    same standard.
     """
     out = _run(_shipped())["desktop"]
-    for st in ("connected", "tray", "local_source"):
+    for st in ("connected", "tray"):
         assert out[st]["downloadHref"] == "", (
-            f"setup_state={st} must not offer a desktop-app download")
+            f"setup_state={st} must not offer a desktop-app download — the "
+            f"app is already on this machine")
+    for st in ("local_source", "remote"):
+        assert out[st]["downloadHref"].startswith(("http://", "https://")), (
+            f"setup_state={st} tells the user to install the desktop app "
+            f"but gives no way to get it")
 
 
 @pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
@@ -514,6 +581,17 @@ def test_NEUTER_stripping_the_download_link_is_caught():
     ))["desktop"]
     assert out["remote"]["downloadHref"] == "", (
         "NEUTER did not remove the followable link")
+
+
+@pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
+def test_NEUTER_hiding_the_local_source_link_is_caught():
+    """Strip the local_source anchor → the dead sentence is back."""
+    out = _run(_shipped(
+        lambda s: s.replace('id="lcDesktopDownloadSrc" href="',
+                            'id="lcDesktopDownloadSrc" data-href="')
+    ))["desktop"]
+    assert out["local_source"]["downloadHref"] == "", (
+        "NEUTER did not remove the local_source link")
 
 
 @pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
@@ -936,3 +1014,91 @@ def test_the_modal_polls_while_open():
     assert int(m.group(1)) < 15000, (
         f"poll cadence {m.group(1)}ms is not shorter than the 15s connection "
         f"window — a state change could be missed entirely")
+
+
+# ── 8. The open-extensions route: loopback-gated, shell-free ─────────
+#
+# The button above lands on POST /api/v1/browser/open-extensions. Two facts
+# are load-bearing: a REMOTE peer must never make the server spawn a browser
+# on its own (headless) machine, and the spawn must be a list-form argv —
+# no shell for a future argument to travel through.
+
+_ROUTE_TOKEN = '_lc_route_test_token__'
+
+
+def _post_open_extensions(flask_client, monkeypatch, client_addr, *,
+                          chrome='/fake/chrome'):
+    """Drive ONE real POST through the full stack with a chosen socket peer.
+
+    ``scope_base={'client': ...}`` sets the ASGI peer the way Hypercorn
+    would (the mechanism tests/test_proxy_trust.py established), so the REAL
+    ``_remote_is_loopback`` runs against it. The tunnel-token header gives a
+    remote peer a valid credential: open mode refuses its synthetic admin
+    grant to non-loopback peers, so without one the request would die at the
+    auth gate (401) before ever reaching the route under test.
+    """
+    import subprocess as _sp
+
+    from routes.api_v1 import browser as browser_routes
+
+    calls = []
+
+    def _fake_popen(argv, **kwargs):
+        calls.append({'argv': argv, 'kwargs': kwargs})
+        return object()
+
+    monkeypatch.setattr(_sp, 'Popen', _fake_popen)
+    monkeypatch.setattr(browser_routes, '_find_chrome_binary',
+                        lambda: chrome)
+    monkeypatch.setenv('TUNNEL_TOKEN', _ROUTE_TOKEN)
+    resp = flask_client.post(
+        '/api/v1/browser/open-extensions',
+        headers={'X-Tunnel-Token': _ROUTE_TOKEN},
+        scope_base={'client': client_addr})
+    return resp.status_code, (resp.get_json(silent=True) or {}), calls
+
+
+def test_open_extensions_refuses_a_remote_peer(flask_client, monkeypatch):
+    """The page opens on the SERVER — a remote peer gets 403 and NO spawn.
+
+    An authenticated remote user is exactly who the gate exists for: valid
+    credential, wrong machine. Spawning here would open a browser window on
+    a headless server nobody is looking at.
+    """
+    status, body, calls = _post_open_extensions(
+        flask_client, monkeypatch, ('203.0.113.7', 5555))
+    assert status == 403, (
+        f"a non-loopback peer must be refused — got {status} with {body}")
+    assert calls == [], (
+        f"the route spawned a browser for a REMOTE peer: {calls}")
+
+
+def test_open_extensions_argv_is_shell_free(flask_client, monkeypatch):
+    """The launch is a list-form argv headed by the browser binary."""
+    status, body, calls = _post_open_extensions(
+        flask_client, monkeypatch, ('127.0.0.1', 5555))
+    assert status == 200, f"loopback launch failed: {status} {body}"
+    assert body.get('ok') is True
+    assert len(calls) == 1, f"expected exactly one spawn, got {calls}"
+    argv, kwargs = calls[0]['argv'], calls[0]['kwargs']
+    assert isinstance(argv, list) and argv[0] == '/fake/chrome', (
+        f"argv must be list-form headed by the browser binary, got {argv!r}")
+    assert 'chrome://extensions' in argv, (
+        f"the extensions page URL is missing from {argv!r}")
+    assert kwargs.get('shell') is not True, (
+        "shell=True today is where the next interpolated argument becomes "
+        "an injection vector tomorrow")
+
+
+def test_open_extensions_reports_when_no_chrome_exists(flask_client,
+                                                       monkeypatch):
+    """No Chrome found → a clear 404, and NOTHING is spawned.
+
+    The UI keeps the manual instruction for this case; the route must say
+    'not found', not crash and not pretend success.
+    """
+    status, body, calls = _post_open_extensions(
+        flask_client, monkeypatch, ('127.0.0.1', 5555), chrome=None)
+    assert status == 404, (
+        f"expected 404 when no browser exists, got {status} with {body}")
+    assert calls == []

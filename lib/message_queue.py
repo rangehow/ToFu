@@ -126,6 +126,59 @@ def _maybe_ensure_table():
         _table_ensured = True
 
 
+def _existing_board_kickoff(db, conv_id: str, message_data: dict,
+                            kind: str) -> str | None:
+    """Queue id of an EXISTING kickoff for the same ``(conv_id, boardTaskId)``,
+    or None when this row is not a duplicate (or not dedup-able at all).
+
+    The structural floor under brain-dispatch de-duplication. Producer-side
+    probes (``_epic_already_queued`` in ``sweep_dispatch`` / ``on_epic_posted``
+    / ``on_epic_completed``) each have to REMEMBER to ask; this asks once, for
+    every producer, present and future. That distinction is not theoretical:
+    on 2026-07-28 conv ms4b67gmthqc17 accumulated 11 queued rows for 4 distinct
+    epics because exactly ONE producer (``on_epic_completed``) lacked the probe
+    while its target's claim lease lapsed under an hours-long task.
+
+    Dedup-able means ALL of:
+      • ``kind == KIND_WORKFLOW`` — only brain kickoffs. A human turn or a peer
+        message is NEVER collapsed: repeating yourself is legitimate input.
+      • the payload carries a non-empty ``boardTaskId`` — the epic identity the
+        dedup is keyed on. A workflow row without one is not comparable.
+
+    Scoped to ONE conversation on purpose: ``migrate_epic`` re-enqueues the same
+    epic on a different (idle) conv, and that is a genuinely new row — a
+    cross-conv dedup would silently strand a migrated epic.
+
+    Fails OPEN: any lookup error returns None (→ insert). The accepted failure
+    mode is an occasional duplicate row (visible, and the consume-time discard
+    still stops the billed task); the unacceptable one is silently swallowing a
+    turn that no other row will deliver.
+    """
+    if kind != KIND_WORKFLOW:
+        return None
+    board_task_id = (message_data or {}).get('boardTaskId')
+    if not board_task_id:
+        return None
+    try:
+        rows = db.execute(
+            'SELECT id, payload FROM message_queue WHERE conv_id=? AND kind=?',
+            (conv_id, kind)).fetchall()
+        for r in rows:
+            try:
+                p = json.loads(r['payload']) if r['payload'] else {}
+            except (TypeError, ValueError) as e:
+                logger.debug('[Queue] dedup payload parse failed (skipping): %s', e)
+                continue
+            if p.get('boardTaskId') == board_task_id:
+                return r['id']
+        return None
+    except Exception as e:
+        logger.warning('[Queue] board-kickoff dedup probe failed conv=%s '
+                       'epic=%s (enqueuing anyway): %s',
+                       conv_id[:8] if conv_id else '?', board_task_id, e)
+        return None
+
+
 def enqueue_message(conv_id: str, message_data: dict, config: dict,
                     kind: str = KIND_REAL) -> dict:
     """Add a turn source to the server-side queue for a conversation.
@@ -142,16 +195,36 @@ def enqueue_message(conv_id: str, message_data: dict, config: dict,
               ``KIND_AUTOPILOT``.  Determines the priority bucket.
 
     Returns:
-        Dict with queueId, position, kind.
+        Dict with queueId, position, kind. On a COLLAPSED brain kickoff (a row
+        for the same ``(conv_id, boardTaskId)`` already queued) the EXISTING
+        row's id is returned with ``deduped: True`` — never a fresh uuid that
+        no row carries, so a caller storing it cannot hold a dangling id.
     """
     _maybe_ensure_table()
+
+    db = get_thread_db(DOMAIN_CHAT)
+
+    # ── Structural de-dup floor: one queued kickoff per (conv, epic) ──
+    # See _existing_board_kickoff. Applies ONLY to brain kickoffs carrying a
+    # boardTaskId; human and peer turns are never collapsed.
+    existing = _existing_board_kickoff(db, conv_id, message_data, kind)
+    if existing:
+        row = db.execute(
+            'SELECT position FROM message_queue WHERE id=?', (existing,)).fetchone()
+        position = int(row['position']) if row and row['position'] is not None else 1
+        logger.info('[Queue] collapsed duplicate %s kickoff for conv=%s epic=%s '
+                    '→ reusing queued row %s (position=%d); a second row would '
+                    'inflate the visible queue depth and, on drain, cost a '
+                    'billed task re-doing claimed work',
+                    kind, conv_id[:8], message_data.get('boardTaskId'),
+                    existing[:8], position)
+        return {'queueId': existing, 'position': position, 'kind': kind,
+                'deduped': True}
 
     queue_id = str(uuid.uuid4())
     now_ms = int(time.time() * 1000)
     timestamp = message_data.get('timestamp', now_ms)
     priority = _priority_for_kind(kind)
-
-    db = get_thread_db(DOMAIN_CHAT)
 
     # Get current queue depth for position
     row = db.execute(

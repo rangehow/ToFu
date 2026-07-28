@@ -913,34 +913,38 @@ def on_epic_completed(project_path: str, completed_conv_id: str = '') -> int:
                 # No conversation to route the work to — leave it open for a
                 # human (or a future idle-sibling selector). Never invent a conv.
                 continue
-            # ── Why this seam carries NO extra guard (pt_1613ab83b1934884) ──
-            # The 2026-07-27 20:38:01 scatter re-dispatched THREE epics in one
-            # second (pt_130129b5 / pt_6dd0050e / pt_78770b6) into conversations
-            # still running their own 88-min tasks, whose expired 30-min claim
-            # leases made the board read them 'open'. Two guards were tried HERE
-            # and both were rejected on measurement, not opinion:
+            # ── Which guard belongs on THIS seam (measured twice) ──
+            # ``_conv_has_live_task`` must stay OUT: it BREAKS this seam's
+            # actual job — the dependency chain. When A completes, dependent B
+            # must be claimed + enqueued *while the conv is still busy
+            # finishing A*, then drained by the post-task queue chain.
+            # test_project_brain_integration::test_full_autonomous_flywheel
+            # pins exactly that ("B claimed + enqueued but NOT drained" while
+            # busy) and goes RED with the check in place — A/B measured 6/6
+            # without it, 5/6 with it.
             #
-            #   • ``_conv_has_live_task`` (which sweep_dispatch does carry)
-            #     BREAKS this seam's actual job — the dependency chain. When A
-            #     completes, dependent B must be claimed + enqueued *while the
-            #     conv is still busy finishing A*, then drained by the post-task
-            #     queue chain. test_project_brain_integration::
-            #     test_full_autonomous_flywheel pins exactly that ("B claimed +
-            #     enqueued but NOT drained" while busy) and goes RED with the
-            #     check in place — A/B measured 6/6 without it, 5/6 with it.
-            #   • ``_epic_already_queued`` is unreachable-by-construction here:
-            #     dispatch_epic claims the epic and select_dispatchable excludes
-            #     'claimed', so a re-entrant call never reaches this line for the
-            #     same epic. Its NEUTER did not bite (5/5 still green with the
-            #     line deleted) — a guard that cannot fail is not a guard
-            #     (charter: "if production dropped this logic today, would the
-            #     test go red?"). Keeping it would have been decorative.
+            # ``_epic_already_queued`` DOES belong here. It was once argued
+            # unreachable-by-construction (dispatch_epic claims the epic and
+            # select_dispatchable excludes 'claimed', so a re-entrant call
+            # cannot reach this line for the same epic) and its NEUTER did not
+            # bite. That argument holds only while the claim LIVES. The claim
+            # is a 30-min soft lease and a target task can run for hours, so at
+            # every lease expiry the board reads the epic 'open' again and this
+            # seam stacks ANOTHER kickoff onto a conv that never drained the
+            # first. Measured 2026-07-28 on conv ms4b67gmthqc17: 11 queued rows
+            # for 4 distinct epics (pt_3c7f29f8 ×3, pt_c2e59181 ×3, pt_2c613da1
+            # ×2, pt_c1e3318a ×2), every one from this seam — the heartbeat
+            # sweep, which carries both guards, dispatched zero. The earlier
+            # NEUTER missed it because its fixture kept the lease LIVE; the
+            # guard is not unreachable, it is reachable once per lease TTL.
+            # Guarded by tests/test_project_brain_dispatch_dedup.py.
             #
-            # The scatter's real HARM is therefore neutralised where it CAN be:
-            # at CONSUME time in message_queue.dispatch_next_queued, which
-            # discards a kickoff whose epic is no longer open by drain time
-            # instead of spawning a billed task. That invariant holds regardless
-            # of lease semantics, which is why owner ruled out lease renewal.
+            # Consume-time discard (message_queue.dispatch_next_queued) remains
+            # the backstop for a kickoff whose epic finished while queued — it
+            # stops the BILLED task, but only after the queue has already
+            # misreported its depth to the user, so it does not replace this.
+            if _epic_already_queued(target, epic.get('id', '')):
+                continue
             res = dispatch_epic(project_path, epic, target)
             if res.get('ok'):
                 dispatched += 1

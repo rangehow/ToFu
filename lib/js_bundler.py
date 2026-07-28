@@ -541,6 +541,17 @@ _BUNDLE_FILES = [
     # `renderConversationList` — all resolved AT CALL TIME via bundle
     # scope, so the leaf-before-conversations order is safe.
     'core/conv_hydrate_cache.js',
+    # ── conv_merge_shells.js: `_serverConvCount` (3-key coalescing) +
+    # `mergeServerConvShells` (id-keyed shell merge with never-overwrite
+    # discipline) — the pair `folders.js` / `ui/conversation_list.js`
+    # / conversations.js's `loadConversationsFromServer` all call.
+    # Must load BEFORE conversations.js so the two remaining
+    # `_serverConvCount` call sites inside `loadConversationsFromServer`
+    # resolve via bundle window scope (pt_3879f00e slice 7). Kept
+    # CONTIGUOUS as a single leaf so `test_frontend_folder_members_load`'s
+    # source extract (start of `_serverConvCount` → end of
+    # `mergeServerConvShells`) still succeeds.
+    'core/conv_merge_shells.js',
     'core/conversations.js',
     # Shared SSE fetch-response read/decode/buffer loop (readSSEStream) —
     # extracted 2026-07-11 from branch.js / paper-reader.js / ui/sse_pipeline.js.

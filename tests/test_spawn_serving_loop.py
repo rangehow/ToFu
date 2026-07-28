@@ -30,8 +30,15 @@ import lib.tasks_pkg as tp
 pytestmark = pytest.mark.unit
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def clean_spawn_state():
+    # Reset BEFORE too: set_serving_loop / set_agent_executor are process-global
+    # singletons. Under xdist a FOREIGN file co-scheduled in this worker can set
+    # them and never clean up — this file then inherits a poisoned loop/executor
+    # (the parallel-only failure; 3/3 pass at -n 8 alone). autouse so no test in
+    # this file can forget the guard.
+    tp.set_serving_loop(None)
+    tp.set_agent_executor(None)
     yield
     tp.set_serving_loop(None)
     tp.set_agent_executor(None)

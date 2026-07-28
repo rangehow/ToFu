@@ -160,6 +160,16 @@ def test_setlanguage_fetch_merge_keeps_both_languages():
         print('SKIP (node unavailable)')
         return
     import lib.js_bundler as B
+    # Ensure built state FIRST — this test takes neither flask_client nor a
+    # fixture that builds, so under xdist it can be scheduled before ANY
+    # serving-path test in its worker and read an empty _pack_filenames
+    # (KeyError: 'zh'). get_bundle_filename_nonblocking populates the
+    # manifest (and packs) on a cold worker.
+    if not B.get_bundle_filename_nonblocking():
+        B.build_bundle()
+    assert B._pack_filenames.get('zh') and B._pack_filenames.get('en'), (
+        'pack manifest empty after build — cannot exercise the merge '
+        f'(state: {B._pack_filenames!r})')
     zh_pack = os.path.join(JS_DIR, B._pack_filenames['zh'])
     en_pack = os.path.join(JS_DIR, B._pack_filenames['en'])
 

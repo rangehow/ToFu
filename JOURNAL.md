@@ -1,5 +1,15 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-28 — 阅读模式报告生成复用聊天 inline 工具时间线:**三格便当盒 → agent 气泡同款流**(owner 复核我的分析属实后批准 B+A 兜底并写入五条验收标准;commit `b291888c`,3 文件 +420/-8;新守卫 **3/3**,**NEUTER×2 首跑全咬**,相邻环 18+7+8+3 全绿,干净 committed worktree 复验 **3/3**)
+
+- **起因:报告进度区与聊天 agent 气泡事件流同构,却只有工具卡片复用了 `renderToolRoundsHTML`;思考被怼进一个大字符串钉在固定格子(截图里「5 searches」卡片与「正在生成报告…」之间那个思考块)。** 根因不在渲染器不通用,在 round 归属被提前丢弃:后端 thinking/delta 事件只发 delta 文本,前端无从知道「这段思考发生在哪次搜索前后」。
+- **方案(owner 批准 B+A 兜底):** 后端五类事件(thinking/delta/delta_reset/tool_start/tool_done)补 `llmRound`(0 基调度轮,~15 行);前端流状态维护 chat 形 `segments`,无 `llmRound` 的老事件按事件序推断(tool_start 开新一轮——事件流严格有序,这不是启发式是结构);渲染走 `renderSegmentTimelineHTML(segments, {toolRounds}, 0)`,返回空回落分组渲染。
+- **★ 一个 chat 没有的坑——paper 的 text 段与 chat 语义相反:** 工具轮的草稿会被 `delta_reset` 整段丢弃(终轮重写全篇),而终端无工具轮的 text **就是正文**。照搬 chat(叙述段全留)会双倍渲染。解法是渲染过滤器:text 段只在「该轮真有 tool_use」时进时间线——草稿段先被 delta_reset 按轮摘掉(thinking 从不 reset,不摘),正文段被「该轮无工具」规则天然滤掉(对应 chat 跳过 deliverable 段的既有语义)。
+- **owner 五条验收逐条兑现:** ①首个工具前不黑屏——轻量思考条保留为 pre-tool 占位,工具一落地即让位给面板(同一思考不双显);②done 后时间线不消失——`_renderFinalReport` 在两处 `container.innerHTML=''` 后把面板插在正文上方(仅本会话流,重开缓存报告无 segments 属票面认可简化);③Review tab 共用 `_applyReportEvent`/骨架/绘制自动骑上同一路径,QA tab 零改动;④cursor 重放时 segments 从事件流确定性重建(守卫的打桩序列就是按 cursor 分页喂的);⑤守卫真浏览器 + 打桩 start/poll 喂录制序列,NEUTER×2(摘 segments 传递 → 面板无思考;删 delta_reset 摘段 → 草稿漏进面板)首跑全咬。
+- **过程抓坑一个:Playwright `page.route` glob 必须匹配完整 URL 含 query string** —— `.../report/poll` 拦不住 `.../poll?task_id=x&cursor=0`,请求漏到真服务器 404(访问日志现形);修成尾部 `**` 通配。已存项目记忆 `playwright-route-glob-querystring`。
+- **分账:** ①`test_events_round_key_unified` 红在干净 committed HEAD worktree **同样红**(docstring 示例里的 `{"round": 3}` 字面量,兄弟 `lib/agent_core/events.py` 在途,零相关),按纪律未修;②`globals.generated.d.ts` 重跑后 diff 仅含兄弟符号 `renderModelFallbackBannerHtml`(HEAD 版 streaming_ui.js 无此符,实证),我的新函数全以下划线开头按既有策略不入 d.ts——该文件**未提交**,留给兄弟;③三套件同跑时遇到一次进程级 `Fatal Python error: Aborted`(环境资源压力),拆开各自全绿,判 flake。
+- **验收边界(merged ≠ live):** 修复已 committed(`b291888c`),运行中服务器进程不带——重启后报告/评审生成页才会出现 inline 时间线。
+
 ### 2026-07-28(续10) — key 熔断粒度根修(epic `pt_69e9d6038c9344dc`):**per-(key, model) 计费熔断 + 「拦不住」真因不是缺检查,是三把 key 都带着陈旧 override=True**(新套件 **8/8**,**NEUTER×3 各自精确咬**,相邻环 **52+15+4+55 全绿**,预存在红 1 条 A/B 分账)
 
 - **★ 「拦不住」的真因被实测改写:** 票面假设是「派发路径没查熔断」。读码发现 pick 路径明明有 `_slot_key_enabled` 过滤,于是用线上数据实测 `is_key_enabled('sankuai','sankuai_key_1')` —— 返回 **True**,因为 `data/config/key_stats.json` 里**三把 sankuai key 全部带着持久的 `override: true`**(历史手动开启,跨天保留),按设计优先于 exhausted 标志,11:10 的 qwen 配额熔断**对派发零效果**。判据(charter 既有「守卫红了先判活死」的变形):**机制没生效先查是不是被更高优先级的合法状态覆盖,别急着加新闸。**

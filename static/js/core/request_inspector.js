@@ -293,6 +293,24 @@ function _riSharedPrefix(prevMsgs, curMsgs) {
   return k;
 }
 
+/* Scope one round's payload to what THAT round appended. Round N's
+ * messages are round N-1's + the messages that round produced/consumed, so
+ * the shared leading prefix is conversation history the user did NOT click
+ * for. The jump-button panel shows only the increment (owner, 2026-07-28:
+ * "records only for this round of tool calls are sufficient"). Round 1,
+ * a missing/expired previous payload, or a zero shared prefix all degrade
+ * to the full payload. */
+async function _riRoundScopedMessages(taskId, roundNum, tab, messages) {
+  const num = parseInt(roundNum, 10);
+  if (!Number.isFinite(num) || num <= 1 || !Array.isArray(messages)) return messages;
+  const prev = await _riFetchPayload(taskId, num - 1, '',
+    tab === 'state' ? 'state' : 'request');
+  if (!prev || !Array.isArray(prev.messages) || !prev.messages.length)
+    return messages;
+  const k = _riSharedPrefix(prev.messages, messages);
+  return k > 0 ? messages.slice(k) : messages;
+}
+
 async function _riSelectRound(taskId, roundNum, el, turn) {
   turn = turn || '';
   const rounds = _riEl('riRoundList');
@@ -401,10 +419,12 @@ async function openRequestInspectorForToolRound(taskId, roundNum) {
  * When the tool row is not in the DOM (unloaded/old conversation), degrades
  * to the drawer so the click always lands somewhere meaningful.
  *
- * NOTE: this panel deliberately does NOT show the tool's verbatim return
- * bytes — that is the model-view button's job and it stays a separate
- * control. Request context / post-tool state / verbatim result are three
- * different questions; none substitutes for another. */
+ * ROUND-SCOPED (owner, 2026-07-28): each tab renders ONLY what that round
+ * appended — the increment over the previous round's same-kind payload —
+ * never the full conversation-history dump ("records only for this round of
+ * tool calls are sufficient"). The cross-round chip strip was removed with
+ * it: one click answers one round; the drawer remains the place for
+ * cross-round navigation. */
 async function openToolDebugPanel(taskId, roundNum, anchorEl, tab) {
   if (!taskId || roundNum == null) return;
   let slot = (anchorEl && typeof anchorEl.closest === 'function')
@@ -470,7 +490,6 @@ async function _riMountToolPanel(slot, taskId, roundNum, tab) {
         _riEsc(t('ri.stateClose')) + '">' +
         (typeof Icon === 'function' ? Icon('x', 12) : '') + '</span>' +
     '</div>' +
-    '<div class="ri-state-strip"></div>' +
     '<div class="ri-state-body"><div class="ri-empty">' +
       _riEsc(t('ri.loading')) + '</div></div>';
   panel.querySelector('.ri-state-panel-close').onclick = () => panel.remove();
@@ -481,39 +500,13 @@ async function _riMountToolPanel(slot, taskId, roundNum, tab) {
   slot.insertAdjacentElement('afterend', panel);
   if (typeof panel.scrollIntoView === 'function')
     panel.scrollIntoView({ block: 'nearest' });
-  _riFillStateStrip(panel, taskId, roundNum);   // async, populates in place
   await _riRenderToolPanel(panel, taskId, roundNum, tab);
-}
-
-/* History strip: one chip per state mirror of the task (the same rows the
- * drawer lists), so the sequence is navigable without leaving the chat. */
-async function _riFillStateStrip(panel, taskId, activeRound) {
-  const fold = (typeof Api !== 'undefined' && Api.tasks)
-    ? await Api.tasks.getRequests(taskId) : null;
-  if (!panel.isConnected) return;
-  const strip = panel.querySelector('.ri-state-strip');
-  if (!strip) return;
-  const states = (fold && Array.isArray(fold.states)) ? fold.states : [];
-  if (!states.length) { strip.remove(); return; }
-  strip.innerHTML = '';
-  for (const s of states) {
-    const chip = document.createElement('span');
-    chip.className = 'ri-state-chip' +
-      (String(s.roundNum) === String(activeRound) ? ' ri-sel' : '');
-    chip.dataset.round = String(s.roundNum);
-    chip.setAttribute('role', 'button');
-    chip.textContent = s.label || ('R' + s.roundNum);
-    /* Strip navigation stays within the tab the user is looking at. */
-    chip.onclick = () => _riRenderToolPanel(panel, taskId, s.roundNum,
-      panel.dataset.riTab || 'state');
-    strip.appendChild(chip);
-  }
 }
 
 /* Render ONE tab of the panel: `request` = the payload that PRODUCED this
  * tool call, `state` = the message mirror captured right AFTER it ran. Both
- * go through the shared debug renderer. Also re-points the panel dataset,
- * the active tab and the active strip chip so navigation stays consistent. */
+ * go through the shared debug renderer, both scoped to this round's
+ * increment. Also re-points the panel dataset and the active tab. */
 async function _riRenderToolPanel(panel, taskId, roundNum, tab) {
   if (!panel.isConnected) return;  // closed while fetching
   tab = (tab === 'state') ? 'state' : 'request';
@@ -524,9 +517,6 @@ async function _riRenderToolPanel(panel, taskId, roundNum, tab) {
     const on = b.dataset.riTab === tab;
     b.classList.toggle('ri-sel', on);
     b.setAttribute('aria-selected', on ? 'true' : 'false');
-  });
-  panel.querySelectorAll('.ri-state-chip').forEach((c) => {
-    c.classList.toggle('ri-sel', c.dataset.round === String(roundNum));
   });
   const body = panel.querySelector('.ri-state-body');
   const titleEl = panel.querySelector('.ri-state-panel-title');
@@ -539,10 +529,17 @@ async function _riRenderToolPanel(panel, taskId, roundNum, tab) {
       _riEsc(t(tab === 'state' ? 'ri.stateEmpty' : 'ri.empty')) + '</div>';
     return;
   }
+  /* Round-scoped: only what THIS round appended (see the section header).
+   * An empty increment is degenerate — fall back to the full payload. */
+  const scoped = await _riRoundScopedMessages(taskId, roundNum, tab,
+    payload.messages);
+  if (!panel.isConnected) return;
+  const shown = (Array.isArray(scoped) && scoped.length)
+    ? scoped : payload.messages;
   if (titleEl) titleEl.textContent =
-    (payload.label || ('R' + roundNum)) + ' · ' + payload.messages.length + ' msgs';
+    (payload.label || ('R' + roundNum)) + ' · +' + shown.length + ' msgs';
   if (body) {
-    renderDebugBlocksInto(body, payload.messages, null);
+    renderDebugBlocksInto(body, shown, null);
     if (payload.tools && payload.tools.length)
       updateDebugToolsBlock(body, payload.tools);
   }

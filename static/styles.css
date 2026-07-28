@@ -667,20 +667,17 @@ html[data-rail] .folder-quickadd{display:none}
    call?". Stays nearly invisible until the row is hovered so it never
    competes with the tool content itself. */
 /* ── Tool-row right-hand control group ────────────────────────────
-   THE single owner of a tool row's right edge. Both the model-view
-   button and the debug entry live inside it and each occupies its own
-   space, so they cannot overlap.
+   THE single owner of a tool row's right edge. The debug entry lives
+   inside it and occupies its own space in the flow.
 
-   Why this exists: `.tc-preview-btn` claimed the right end via
-   `margin-left:auto` while the debug entry floated over it from a
-   zero-height block with `margin-top:-14px` — two elements each
-   believing they owned the same edge, so they printed on top of each
-   other. `margin-left:auto` now belongs to this wrapper ALONE; the
-   children just sit in its flow. Do not re-add `margin-left:auto` to
-   any descendant. */
+   Why this exists: the removed `.tc-preview-btn` used to claim the
+   right end via `margin-left:auto` while the debug entry floated over
+   it from a zero-height block with `margin-top:-14px` — two elements
+   each believing they owned the same edge, so they printed on top of
+   each other. `margin-left:auto` now belongs to this wrapper ALONE.
+   Do not re-add `margin-left:auto` to any descendant. */
 .ptool-row-ctl{display:inline-flex;align-items:center;gap:6px;margin-left:auto;flex-shrink:0}
 .ptool-row-ctl:empty{display:none}
-.ptool-line .ptool-row-ctl>.tc-preview-btn{margin-left:0}
 
 /* Debug entry per tool row — ONE control opening a panel with request /
    post-tool-state tabs (they are two views of one round, not two
@@ -708,10 +705,6 @@ html[data-rail] .folder-quickadd{display:none}
 .ri-state-panel-title{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:600;color:var(--text-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ri-state-panel-close{margin-left:auto;display:inline-flex;align-items:center;padding:2px;border-radius:3px;color:var(--text-tertiary);cursor:pointer}
 .ri-state-panel-close:hover{color:var(--accent);background:rgba(128,128,160,0.12)}
-.ri-state-strip{display:flex;flex-wrap:wrap;gap:4px;padding:5px 8px;border-bottom:1px dashed var(--border)}
-.ri-state-chip{padding:1px 7px;font-size:9.5px;color:var(--text-tertiary);background:rgba(128,128,160,0.10);border:1px solid var(--border);border-radius:3px;cursor:pointer}
-.ri-state-chip:hover{color:var(--accent);border-color:var(--accent)}
-.ri-state-chip.ri-sel{color:var(--accent);border-color:var(--accent);background:rgba(110,86,207,0.12)}
 .ri-state-body{max-height:420px;overflow-y:auto;padding:6px 8px}
 .ri-state-body .debug-msg-block{margin-bottom:4px}
 body.ri-open .chat-container{margin-right:min(780px,94vw);transition:margin-right .22s ease}
@@ -5931,8 +5924,6 @@ input.settings-mono {
   color: var(--s-gold);
 }.btn-sm{padding:5px 12px!important;font-size:11px!important}.cost-tag{font-size:10px;font-weight:700;font-family:'JetBrains Mono',monospace;padding:2px 8px;border-radius:10px;line-height:1.4;white-space:nowrap;color:#f59e0b;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);cursor:default;position:relative}.cost-tag-detail .cost-breakdown{font-size:8.5px;font-weight:500;opacity:0.7;margin-left:4px}
 
-/* ── Tool content preview button ── */
-.tc-preview-btn{display:inline-flex;align-items:center;gap:4px;background:none;border:1px solid rgba(255,255,255,0.12);border-radius:6px;padding:2px 7px;font-size:12px;cursor:pointer;flex-shrink:0;opacity:0.55;transition:opacity .2s,background .2s,border-color .2s;line-height:1;color:inherit}.tc-preview-btn:hover{opacity:1;background:rgba(59,130,246,0.15);border-color:rgba(59,130,246,0.4)}.tc-preview-btn .tc-preview-ico{display:inline-flex;align-items:center}.tc-preview-btn .tc-preview-ico svg{display:block}.ptool-line .tc-preview-btn{margin-left:auto;font-size:11px;padding:1px 6px}
 /* ═══════════════════════════════════════════
    ★ Swarm Panel styles
    ═══════════════════════════════════════════ */
@@ -6107,17 +6098,13 @@ input.settings-mono {
 .sw-peer-from-bubble svg{display:block;flex-shrink:0}
 .sw-peer-from-bubble>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sw-peer-from-more{flex-shrink:0;padding:1px 7px;border-radius:9px;font-size:10px;font-weight:700;color:var(--text-tertiary);background:rgba(130,170,255,.12)}
-/* Inbox/peer/steer rows put their model-view button at the right end. The
-   selector targets the CONTROL GROUP when present (the tool-row shape) and
-   falls back to the bare button for rows that carry no debug entry — the
-   right edge must have exactly ONE owner either way. */
+/* Inbox/peer/steer rows: the right-hand control group owns the right
+   end of the header — exactly ONE owner, same as every other row. */
 .sw-inbox-row>.sw-inbox-row-header .ptool-row-ctl{margin-left:auto}
-.sw-inbox-row>.sw-inbox-row-header>.tc-preview-btn{margin-left:auto}
 .sw-inbox-row .sw-inbox-row-body{padding:6px 10px 8px 30px;display:flex;flex-direction:column;gap:8px}
 .sw-inbox-row-empty{color:var(--text-tertiary);font-size:12px;font-style:italic}
 /* ── Beautified sub-agent / peer update cards (human view) ──
-   Replaces the old raw-<pre> XML dump. Clean field header + Markdown body,
-   with the verbatim payload tucked behind a "model view" <details> toggle. */
+   Replaces the old raw-<pre> XML dump. Clean field header + Markdown body. */
 .sw-card{border:1px solid var(--border);border-left:2px solid rgba(251,191,36,0.5);border-radius:7px;padding:8px 11px;background:var(--bg-secondary);display:flex;flex-direction:column;gap:6px}
 .sw-card-head{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
 .sw-card-agent{font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:#fbbf24}
@@ -6130,12 +6117,6 @@ input.settings-mono {
 .sw-card-preview > :last-child{margin-bottom:0}
 .sw-card-file{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--text-tertiary);font-family:'JetBrains Mono',monospace;overflow-wrap:anywhere}
 .sw-card-file svg{display:block;flex-shrink:0}
-.sw-card-raw{margin:0}
-.sw-card-raw-toggle{display:inline-flex;align-items:center;gap:4px;cursor:pointer;list-style:none;font-size:10.5px;color:var(--text-tertiary);opacity:0.75;transition:opacity .15s;width:fit-content}
-.sw-card-raw-toggle:hover{opacity:1;color:var(--text-secondary)}
-.sw-card-raw-toggle::-webkit-details-marker{display:none}
-.sw-card-raw-toggle svg{display:block}
-.sw-card-raw-meta{margin:5px 0 3px;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:var(--text-tertiary)}
 .sw-card-raw-pre{margin:0;white-space:pre-wrap;word-break:break-word;font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.5;color:var(--text-secondary);background:rgba(255,255,255,0.02);border-radius:6px;padding:8px 10px;max-height:280px;overflow:auto}
 .sw-card-rawonly .sw-card-raw-pre,.sw-peer-card-item{}
 .sw-peer-card-item{border-left-color:var(--accent)}
@@ -10007,7 +9988,6 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 [data-theme="light"] .search-result-fetched{color:#1f7a5c;background:rgba(31,122,92,0.08)}
 
 /* Light: fetch blocks */
-[data-theme="light"] .tc-preview-btn{border-color:rgba(0,0,0,0.13)}.tc-preview-btn:hover{background:rgba(64,104,184,0.1);border-color:rgba(64,104,184,0.3)}
 
 /* Light: search mode toggle */
 [data-theme="light"] .search-mode-toggle[data-mode="single"]{color:#4068b8;background:rgba(64,104,184,0.07);animation:none;box-shadow:0 0 8px rgba(64,104,184,0.1),0 0 3px rgba(64,104,184,0.06)}
@@ -20595,11 +20575,10 @@ body.artifact-panel-open {
 [data-theme="tofu"] .stream-elapsed,
 [data-theme="tofu"] .stream-elapsed-timer{color:#6B6452}
 
-/* Project-tool panel: label, info/err badges, preview button */
+/* Project-tool panel: label, info/err badges */
 [data-theme="tofu"] .ptool-panel-label{color:#7A5E12}
 [data-theme="tofu"] .ptool-badge-info{color:#6E4A1E;background:#E6DCC8}
 [data-theme="tofu"] .ptool-badge-err{color:#8E3526;background:#EAD9D2}
-[data-theme="tofu"] .tc-preview-btn{color:#6B6452;opacity:0.9}
 
 /* Thinking block label (purple) */
 [data-theme="tofu"] .thinking-label{color:#56477E}

@@ -1,38 +1,28 @@
-"""jsdom test for Request Inspector P7 — INLINE state inspector.
+"""jsdom test for the tool-row debug panel (request | post-tool state tabs).
 
-The owner's interaction complaint: the drawer's state-mirror list ("Round N
-工具结果后 · 6 msgs") was a dead end — clicking it did nothing, and even when
-it worked the content appeared in a far-away drawer instead of next to the
-tool call whose execution the mirror captures.
+The panel mounted by the `</> R{n}` entry next to a tool row.
 
-P7 makes the state axis navigable in place:
-  1. Every tool row addresses its post-tool STATE mirror via
-     data-ri-state="taskId:roundNum" (same roundNum axis as the producing
-     request — design §3.1) and carries an S-anchor that opens the mirror
-     INLINE, mounted as a .ri-state-panel right after the tool slot.
-  2. The drawer state rows become NAVIGATION: clicking one jumps to the
-     tool slot and opens the inline panel; when the slot is not in the DOM
-     (unloaded/old conversation), it degrades to the drawer detail pane
-     (kind=state) instead of a dead click.
-  3. The panel renders through the SHARED debug renderer
-     (renderDebugBlocksInto / updateDebugToolsBlock) — no second JSON
-     renderer — and offers a chip strip of all state mirrors of the task
-     for prev/next navigation without leaving the chat.
-  4. Payloads fetch with kind='state' (network) and the live accelerator's
-     .states log wins over the network when fresh.
+2026-07-28 owner directive — TWO contract changes pinned here:
+  1. ROUND-SCOPED: each tab renders ONLY what that round appended to the
+     conversation (the increment over the previous round's same-kind
+     payload), never the full conversation-history dump. "records only for
+     this round of tool calls would be sufficient."
+  2. NO cross-round chip strip: the in-panel navigation was ineffective, so
+     it is gone. One click answers one round; the drawer remains the place
+     for cross-round navigation.
 
-Covered:
-  1. openStateInspector mounts the panel right after the tool slot, fetches
-     the payload with kind='state', and renders the state messages.
-  2. The chip strip lists all state mirrors and switches the active round.
-  3. Single instance: reopening replaces the previous panel.
-  4. Live accelerator: an SSE-recorded state mirror needs NO network fetch.
-  5. Fallback: no tool slot in the DOM → drawer opens and renders the
-     state payload through showMessagesInDebug.
+Kept contract (the P7 baseline):
+  • The panel mounts INLINE right after the tool slot, fetches payloads with
+    kind='state' for the state tab, and renders through the SHARED debug
+    renderer (renderDebugBlocksInto / updateDebugToolsBlock).
+  • Single instance: reopening replaces the previous panel.
+  • Live accelerator: an SSE-recorded state mirror needs NO network fetch.
+  • Fallback: no tool slot in the DOM → drawer detail (kind=state).
 
-NEUTER: drop the kind='state' argument from the network fetch → the
-state-kind pin flips red, proving the payload comes from the STATE axis
-(post-tool mirrors), not the request axis.
+NEUTERs:
+  1. Drop the kind='state' argument → the state-kind pin flips red.
+  2. Drop the round-scoping call → the previous round's history leaks back
+     into the panel and the increment pin flips red.
 """
 
 from __future__ import annotations
@@ -106,6 +96,27 @@ global.debugVisible = win.debugVisible = false;
 global._featureFlags = win._featureFlags = { debug_mode: true };
 global.conversations = win.conversations = [{ id: 'conv-1', messages: [] }];
 
+/* Payloads engineered for prefix math: every round shares the SAME leading
+ * history (SYS + HIST-u1). Round 2's request appends NEW-a2/NEW-t2; a state
+ * mirror appends STATE-aN/STATE-tN on top of its round's request payload. */
+const HIST = [
+  { role: 'system', content: 'SYS' },
+  { role: 'user', content: 'HIST-u1' },
+];
+function reqMsgs(roundNum) {
+  const base = HIST.slice();
+  if (Number(roundNum) >= 2)
+    base.push({ role: 'assistant', content: 'NEW-a2' },
+              { role: 'tool', content: 'NEW-t2' });
+  return base;
+}
+function stateMsgs(roundNum) {
+  return reqMsgs(roundNum).concat([
+    { role: 'assistant', content: 'STATE-a' + roundNum },
+    { role: 'tool', content: 'STATE-t' + roundNum },
+  ]);
+}
+
 const CALLS = { getRequests: 0, payloads: [] };
 win.Api = global.Api = {
   tasks: {
@@ -129,9 +140,10 @@ win.Api = global.Api = {
     },
     getRequestPayload: async (taskId, roundNum, turn, kind) => {
       CALLS.payloads.push({ roundNum: String(roundNum), turn: turn || '', kind: kind || '' });
+      const msgs = (kind === 'state') ? stateMsgs(roundNum) : reqMsgs(roundNum);
       return { taskId, roundNum, turn: turn || '', kind: kind || 'request',
         model: 'm', params: {}, label: 'R' + roundNum, tools: [],
-        messages: [{ role: 'user', content: 'state-payload-R' + roundNum }] };
+        messages: msgs.map((m) => ({ ...m })) };
     },
   },
   clientError: { report: () => {} },
@@ -145,15 +157,15 @@ const out = [];
 function check(name, cond) { out.push((cond ? 'PASS ' : 'FAIL ') + name); }
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 /* createBlock lazy-renders the message body on first expand (header.onclick
- * → colorJson) — mirror the drawer UX: expand the block, THEN read text. */
-function expandFirst(root) {
-  const h = root && root.querySelector('.debug-msg-header');
-  if (h) h.onclick();
-  return !!h;
+ * → colorJson) — expand EVERY block, THEN read the text. */
+function expandAll(root) {
+  const hs = root ? root.querySelectorAll('.debug-msg-header') : [];
+  hs.forEach((h) => h.onclick());
+  return hs.length;
 }
 
 (async () => {
-  /* ── 1. Inline mount next to the tool slot ── */
+  /* ── 1. Inline mount next to the tool slot — STATE tab, round-scoped ── */
   await openStateInspector('task-T1', 2);
   await sleep(30);
   const slot = document.querySelector('[data-prn="1"]');
@@ -162,24 +174,28 @@ function expandFirst(root) {
   check('panel_after_slot', !!panel && slot.nextElementSibling === panel);
   check('payload_fetched_as_state_kind',
     CALLS.payloads.some(p => p.roundNum === '2' && p.kind === 'state'));
-  check('state_body_rendered',
-    !!panel && expandFirst(panel.querySelector('.ri-state-body')) &&
-    panel.querySelector('.ri-state-body')
-      .innerHTML.indexOf('state-payload-R2') !== -1);
-  check('strip_chips_rendered',
-    !!panel && panel.querySelectorAll('.ri-state-chip').length === 2);
-  const selChip = panel && panel.querySelector('.ri-state-chip.ri-sel');
-  check('active_chip_marked', !!selChip && selChip.dataset.round === '2');
+  const sbody = panel && panel.querySelector('.ri-state-body');
+  if (sbody) expandAll(sbody);
+  const sText = sbody ? sbody.textContent : '';
+  /* State R2 = [SYS, HIST-u1 | NEW-a2, NEW-t2, STATE-a2, STATE-t2]; the
+   * shared prefix with state R1 is 2, so ONLY the 4 new messages render. */
+  check('state_body_shows_increment', sText.indexOf('STATE-t2') !== -1);
+  check('state_body_hides_history', sText.indexOf('HIST-u1') === -1);
+  check('no_state_strip',
+    !!panel && !panel.querySelector('.ri-state-chip') &&
+    !panel.querySelector('.ri-state-strip'));
 
-  /* ── 2. Chip strip navigates without leaving the chat ── */
-  panel.querySelectorAll('.ri-state-chip')[0].onclick();
+  /* ── 2. Request tab — same round, request-axis increment ── */
+  panel.querySelector('[data-ri-tab="request"]').onclick();
   await sleep(30);
-  check('chip_nav_switches_round',
-    expandFirst(panel.querySelector('.ri-state-body')) &&
-    panel.querySelector('.ri-state-body')
-      .innerHTML.indexOf('state-payload-R1') !== -1);
-  const selChip2 = panel.querySelector('.ri-state-chip.ri-sel');
-  check('chip_nav_moves_active', !!selChip2 && selChip2.dataset.round === '1');
+  const rbody = panel.querySelector('.ri-state-body');
+  if (rbody) expandAll(rbody);
+  const rText = rbody ? rbody.textContent : '';
+  check('request_tab_shows_increment', rText.indexOf('NEW-a2') !== -1);
+  check('request_tab_hides_history', rText.indexOf('HIST-u1') === -1);
+  check('request_tab_hides_state', rText.indexOf('STATE-t2') === -1);
+  check('scoping_fetches_prev_round',
+    CALLS.payloads.some(p => p.roundNum === '1'));
 
   /* ── 3. Single instance: reopening replaces the panel ── */
   await openStateInspector('task-T1', 2);
@@ -187,7 +203,10 @@ function expandFirst(root) {
   check('single_panel_instance',
     document.querySelectorAll('.ri-state-panel').length === 1);
 
-  /* ── 4. Live accelerator: SSE-recorded state mirror needs NO fetch ── */
+  /* ── 4. Live accelerator: SSE-recorded state mirrors need NO fetch ── */
+  showMessagesInDebug([{ role: 'user', content: 'live-state-acc-prev' }],
+    'Round 2 工具结果后', true, 'conv-1', undefined, undefined,
+    { kind: 'state', model: 'm-x', roundNum: 2, taskId: 'task-T1' });
   showMessagesInDebug([{ role: 'user', content: 'live-state-acc' }],
     'Round 3 工具结果后', true, 'conv-1', undefined, undefined,
     { kind: 'state', model: 'm-x', roundNum: 3, taskId: 'task-T1' });
@@ -197,7 +216,7 @@ function expandFirst(root) {
   check('accelerator_state_no_fetch', CALLS.payloads.length === fetchesBefore);
   const panel3 = document.querySelector('.ri-state-panel');
   check('accelerator_state_rendered',
-    !!panel3 && expandFirst(panel3.querySelector('.ri-state-body')) &&
+    !!panel3 && expandAll(panel3.querySelector('.ri-state-body')) > 0 &&
     panel3.querySelector('.ri-state-body')
       .innerHTML.indexOf('live-state-acc') !== -1);
 
@@ -209,10 +228,9 @@ function expandFirst(root) {
   check('fallback_opens_drawer', document.body.classList.contains('ri-open'));
   check('fallback_fetches_state_kind',
     CALLS.payloads.some(p => p.roundNum === '7' && p.kind === 'state'));
+  const dbg = document.getElementById('debugContent');
   check('fallback_renders_in_drawer',
-    expandFirst(document.getElementById('debugContent')) &&
-    document.getElementById('debugContent').innerHTML
-      .indexOf('state-payload-R7') !== -1);
+    expandAll(dbg) > 0 && dbg.innerHTML.indexOf('STATE-t7') !== -1);
 
   console.log(out.join('\n'));
 })().catch(e => { console.log('FAIL harness_exception ' + (e && e.stack || e)); });
@@ -246,8 +264,8 @@ def _run(ri_src_path=None, expect_fail=None):
             f'neutered copy did NOT flip {expect_fail} red:\n{output}')
         return output
     fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
-    assert not fails, 'P7 inline-state failures:\n' + output
-    assert output.count('PASS') >= 14, f'expected >=14 PASS, got:\n{output}'
+    assert not fails, 'tool-row debug panel failures:\n' + output
+    assert output.count('PASS') >= 17, f'expected >=17 PASS, got:\n{output}'
     return output
 
 
@@ -283,24 +301,49 @@ def test_neuter_state_kind_dropped_flips_red():
         assert f.read() == src, 'shipped request_inspector.js must be byte-identical'
 
 
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed')
+def test_neuter_scoping_dropped_leaks_history():
+    """NC: render the FULL payload instead of this round's increment → the
+    previous round's history leaks back into the panel and the round-scoping
+    pin MUST fail. The panel exists to answer ONE round, not to dump the
+    whole conversation (owner, 2026-07-28)."""
+    shipped = os.path.join(JS_DIR, 'core', 'request_inspector.js')
+    with open(shipped, encoding='utf-8') as f:
+        src = f.read()
+    anchor = ("const scoped = await _riRoundScopedMessages(taskId, roundNum, tab,\n"
+              "    payload.messages);")
+    assert anchor in src, 'NC anchor drifted — update the neuter'
+    neutered = src.replace(anchor, 'const scoped = payload.messages;', 1)
+    assert neutered != src
+    tmp = os.path.join(HERE, '_request_inspector_p7_neutered.js')
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(neutered)
+    try:
+        _run(ri_src_path=tmp, expect_fail='state_body_hides_history')
+    finally:
+        os.remove(tmp)
+    with open(shipped, encoding='utf-8') as f:
+        assert f.read() == src, 'shipped request_inspector.js must be byte-identical'
+
+
 def test_state_inspector_wiring_pins():
     """Static pins: the inline entry, the row addressing, the i18n strings,
     the styles, and the api.js kind plumbing — the pieces a future refactor
     could silently drop while keeping every jsdom test green.
 
-    Re-pointed after the R/S merge: the two per-row buttons became ONE entry
-    (`openToolDebugPanel`) whose panel carries request/state TABS, so the
-    mount helper is now `_riMountToolPanel` and the row's onclick names the
-    merged entry. `openStateInspector` survives as the state-tab entry the
-    drawer's state rows use. What these pins PROTECT is unchanged: the tool
-    row must still address its state mirror, the drawer's state rows must
-    still be navigable, and the panel must still render."""
+    The 2026-07-28 owner directive ADDED two anti-regression pins: the
+    round-scoping helper must exist (the panel answers ONE round), and the
+    removed cross-round chip strip must not creep back."""
     ri = open(os.path.join(JS_DIR, 'core', 'request_inspector.js'),
               encoding='utf-8').read()
     assert 'function openStateInspector' in ri
     assert 'function openToolDebugPanel' in ri, (
         'the merged single tool-row debug entry is gone')
     assert '_riMountToolPanel' in ri
+    assert '_riRoundScopedMessages' in ri, (
+        'the round-scoping helper is gone — the panel dumps full history again')
+    assert 'ri-state-strip' not in ri, 'the cross-round strip crept back'
     assert "onclick = () => openStateInspector(taskId, s.roundNum)" in ri, (
         'drawer state rows must stay navigable')
     tr = open(os.path.join(JS_DIR, 'ui', 'tool_rounds.js'), encoding='utf-8').read()
@@ -315,7 +358,7 @@ def test_state_inspector_wiring_pins():
         assert key in i18n, f'{key} missing'
     css = open(os.path.join(ROOT, 'static', 'styles.css'), encoding='utf-8').read()
     assert '.ri-state-panel' in css
-    assert '.ri-state-chip' in css
+    assert '.ri-state-chip' not in css, 'the removed chip strip styles crept back'
     assert '.ri-panel-tab' in css
 
 

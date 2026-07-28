@@ -264,7 +264,6 @@ interface Window {
   _stripUsageTransient: any;
   _swReconcileTicker: any;
   _swTimerTicker: any;
-  _tcModelTextRegistry: any;
   _timerCountdownTicker: any;
   _tofuProjectModalOpen: any;
   _translateFinalizeShouldDefer: any;

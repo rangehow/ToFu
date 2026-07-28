@@ -613,11 +613,10 @@ function _swarmStatusClass(status) {
   return "ptool-badge-info";
 }
 
-/* Render one beautified sub-agent update card from a parsed field map `f`,
- * carrying the raw payload `rawText` behind an inline "model view · verbatim"
- * toggle. Human view = agent/role header + status badge + elapsed/tokens meta
+/* Render one beautified sub-agent update card from a parsed field map `f`.
+ * Human view = agent/role header + status badge + elapsed/tokens meta
  * + the preview rendered as Markdown; nothing angle-bracketed on screen. */
-function _renderSwarmUpdateCard(f, rawText) {
+function _renderSwarmUpdateCard(f) {
   const _t = (typeof t === "function") ? t : (k, d) => d;
   const aid = escapeHtml(f.agentId || "");
   const role = f.role ? `<span class="sw-card-role">${escapeHtml(f.role)}</span>` : "";
@@ -640,8 +639,6 @@ function _renderSwarmUpdateCard(f, rawText) {
   const fileHtml = f.outputFile
     ? `<div class="sw-card-file" title="${escapeHtml(f.outputFile)}">${Icon("file", 11)}<span>${escapeHtml(f.outputFile)}</span></div>`
     : "";
-  const modelTag = _t("tool.modelViewChip", "The model's view · verbatim");
-  const modelLbl = _t("tool.modelView", "Model view");
   return `<div class="sw-card">
        <div class="sw-card-head">
          ${aid ? `<span class="sw-card-agent">${aid}</span>` : ""}
@@ -652,27 +649,7 @@ function _renderSwarmUpdateCard(f, rawText) {
        ${errHtml}
        ${previewHtml}
        ${fileHtml}
-       <details class="sw-card-raw">
-         <summary class="sw-card-raw-toggle">${Icon("eye", 11)}<span>${escapeHtml(modelLbl)}</span></summary>
-         <div class="sw-card-raw-meta">${escapeHtml(modelTag)}</div>
-         <pre class="sw-card-raw-pre">${escapeHtml(String(rawText == null ? "" : rawText))}</pre>
-       </details>
      </div>`;
-}
-
-/* Build the verbatim "what the model actually saw" text for an inbox / peer /
- * steer synthetic row out of its previews. These rows have NO toolContent (they
- * mark an injected user message, not a tool return), so the far-right "模型原文"
- * entry sources its verbatim text from here — the exact payload joined per
- * preview, with an optional `[from <conv>]` attribution for multi-sender peer
- * injections. */
-function _injectVerbatimText(previews, withFrom) {
-  if (!Array.isArray(previews) || !previews.length) return "";
-  return previews.map((p) => {
-    const text = String((p && p.text) == null ? "" : p.text);
-    if (withFrom && p && p.fromConv) return `[from ${String(p.fromConv)}]\n${text}`;
-    return text;
-  }).join("\n\n———\n\n");
 }
 
 /* Header attribution for a peer-inject row: one title bubble per DISTINCT
@@ -727,7 +704,7 @@ function _renderInboxInjectRow(round) {
           // Backend may not have carried <agent-id> inside the payload — fall
           // back to the sibling `p.agentId` field so the card is never faceless.
           if (!parsed.agentId && p.agentId) parsed.agentId = p.agentId;
-          return _renderSwarmUpdateCard(parsed, p.text || "");
+          return _renderSwarmUpdateCard(parsed);
         }
         // Unrecognized payload — show it verbatim (still the model's view).
         const aid = escapeHtml(p.agentId || "");
@@ -739,15 +716,12 @@ function _renderInboxInjectRow(round) {
     : `<div class="sw-inbox-row-empty">${escapeHtml(_t("swarmCard.noPayload", "No payload available."))}</div>`;
   const badge = _t("peer.injectRowBadge", "injected → context");
   const label = _t("swarmCard.received", "Received");
-  const modelBtn = _tcModelViewBtnForText(
-    round, _injectVerbatimText(previews, false));
   return `<details class="sw-inbox-row" data-rn="${round.roundNum}">
        <summary class="ptool-line sw-inbox-row-header">
          <span class="ptool-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:1em;height:1em"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg></span>
          <span class="ptool-text">${escapeHtml(label)} <b>${count}</b> ${escapeHtml(word)}</span>
          ${idsLabel}
          <span class="ptool-badge ptool-badge-info">${escapeHtml(badge)}</span>
-         ${modelBtn}
        </summary>
        <div class="sw-inbox-row-body">${bodyHtml}</div>
      </details>`;
@@ -776,8 +750,7 @@ function _renderPeerInjectRow(round) {
         const text = String(p.text == null ? "" : p.text);
         // Attribution reads as a conversation-title bubble (via convTitleById),
         // NOT a raw id — users care who sent it. Peer messages are plain prose,
-        // rendered as Markdown for the human view; the far-right "模型原文" header
-        // entry carries the verbatim text the model saw.
+        // rendered as Markdown for the human view.
         const fromBubble = p.fromConv ? _peerFromBubble(p.fromConv) : "";
         const bodyMd = text.trim()
           ? `<div class="sw-card-preview md-content">${(typeof renderMarkdown === "function") ? renderMarkdown(text) : escapeHtml(text)}</div>`
@@ -792,14 +765,12 @@ function _renderPeerInjectRow(round) {
   // then a +K overflow chip). NEVER a raw id list — users care who sent it, and
   // multi-sibling injection is this project's normal case.
   const headBubble = _peerFromBubbleGroup(previews, 3);
-  const modelBtn = _tcModelViewBtnForText(round, _injectVerbatimText(previews, true));
   return `<details class="sw-inbox-row sw-peer-row" data-rn="${round.roundNum}">
        <summary class="ptool-line sw-inbox-row-header">
          <span class="ptool-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:1em;height:1em"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
          <span class="ptool-text">${escapeHtml(label)} <b>${count}</b> ${escapeHtml(word)}</span>
          ${headBubble}
          <span class="ptool-badge ptool-badge-info">${escapeHtml(badge)}</span>
-         ${modelBtn}
        </summary>
        <div class="sw-inbox-row-body">${bodyHtml}</div>
      </details>`;
@@ -831,13 +802,11 @@ function _renderUserSteerInjectRow(round) {
         return `<div class="sw-card sw-steer-card-item">` + bodyMd + `</div>`;
       }).join("")
     : `<div class="sw-inbox-row-empty">${escapeHtml(_t("steer.noPayload", "No message available."))}</div>`;
-  const modelBtn = _tcModelViewBtnForText(round, _injectVerbatimText(previews, false));
   return `<details class="sw-inbox-row sw-steer-row" data-rn="${round.roundNum}">
        <summary class="ptool-line sw-inbox-row-header">
          <span class="ptool-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:1em;height:1em"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span>
          <span class="ptool-text">${escapeHtml(label)} <b>${count}</b> ${escapeHtml(word)}</span>
          <span class="ptool-badge ptool-badge-info">${escapeHtml(badge)}</span>
-         ${modelBtn}
        </summary>
        <div class="sw-inbox-row-body">${bodyHtml}</div>
      </details>`;
@@ -1272,7 +1241,7 @@ function _renderConvDigest(cd) {
   if (cd.truncated && !(cd.omitted > 0)) {
     // Fallback marker when a truncation happened without an inline seam.
     html += `<div class="ptool-convdigest-more">${escapeHtml(
-      _t("convDigest.truncated", "… earlier messages omitted — open the model view for the full transcript."))}</div>`;
+      _t("convDigest.truncated", "… earlier messages omitted — use the </> button on a tool row for the full request record."))}</div>`;
   }
   html += `</div>`;
   return html;
@@ -1756,7 +1725,6 @@ function _renderConvMetaBlock(round, svg, q, badgeHtml) {
          ${countChip}
          ${sourceChip}
          ${badgeHtml}
-         ${_convMetaModelViewBtn(round)}
        </summary>
        <div class="ptool-convmeta-body">${purposeHtml}${bodyHtml}</div>
      </details>`;
@@ -1797,7 +1765,7 @@ function _linkifyMcpLabels(text, round) {
  * toolCallId/toolName/toolArgs/toolContent/status/llmRound) and, for history
  * written before the display projection landed, persisted them as-is. The
  * generic line below interpolates `q` as the whole title, so a query-less
- * round rendered as an EMPTY card (icon + 模型原文 button, nothing else —
+ * round rendered as an EMPTY card (an icon and nothing else —
  * the ms1auj3n restart symptom). Never render blank: fall back to the tool
  * label plus a short first-string-arg summary so the row still says what ran. */
 function _recoveryRoundFallbackTitle(round, td) {
@@ -2533,7 +2501,7 @@ function _renderSearchRows(round, ctx) {
       }
     }
     return `<div class="ptool-results-block" data-rn="${round.roundNum}">
-         <div class="ptool-line ptool-results-header" onclick="if(event.target.closest('[data-tc-preview],[data-tc-preview-text]'))return;event.stopPropagation();this.parentElement.classList.toggle('expanded')">
+         <div class="ptool-line ptool-results-header" onclick="if(event.target.closest('.ri-tool-anchor'))return;event.stopPropagation();this.parentElement.classList.toggle('expanded')">
            <span class="ptool-icon">${svg}</span>
            <span class="ptool-text">${q}</span>
            ${verts.length ? (()=>{const doms=[...new Set(verts.map(v=>v.domain||'').filter(Boolean))];return `<span class="ptool-badge vertical-badge" title="Vertical domain data">vertical: ${escapeHtml(doms.join(' · ') || 'auto')}</span>`;})() : ''}
@@ -3396,7 +3364,7 @@ function _renderTimerWatcherBlock(round, svg) {
   const uid = "tmr-r" + round.roundNum;
   const expandedByDefault = isActive;  // auto-expand while active
   return `<div class="timer-watcher-block ${headerCls}" data-rn="${round.roundNum}">
-       <div class="timer-watcher-header" onclick="if(event.target.closest('.timer-id-chip,[data-tc-preview],[data-tc-preview-text]'))return;event.stopPropagation();var w=document.getElementById('${uid}-wrap');w.classList.toggle('expanded');var t=this.querySelector('.timer-toggle');if(t)t.textContent=w.classList.contains('expanded')?'▾':'▸';">
+       <div class="timer-watcher-header" onclick="if(event.target.closest('.timer-id-chip,.ri-tool-anchor'))return;event.stopPropagation();var w=document.getElementById('${uid}-wrap');w.classList.toggle('expanded');var t=this.querySelector('.timer-toggle');if(t)t.textContent=w.classList.contains('expanded')?'▾':'▸';">
          <span class="timer-watcher-icon icon-box">${Icon('timer', 13)}</span>
          ${idChip}
          <span class="timer-watcher-label">${headerLabel}</span>
@@ -3504,8 +3472,8 @@ function _renderTurnHead(size, rno) {
  * is the full timeline (swarm panels need it for cross-round context).
  *
  * The debug entry rides inside the row's own header (see _rowRightControls),
- * so it shares one flex flow with the model-view button instead of floating
- * over it. Swarm panels have no `.ptool-line` header of that shape, so they
+ * occupying its own space in the row's flex flow instead of floating over
+ * anything. Swarm panels have no `.ptool-line` header of that shape, so they
  * — and only they — still get a standalone entry appended after the panel. */
 function _renderToolSlot(r, allRounds) {
   const isSwarm = _isRoundSwarm(r);
@@ -3532,9 +3500,9 @@ function _renderToolSlot(r, allRounds) {
  * mirror) buttons were two controls onto the same round; they are now tabs
  * INSIDE the panel the single entry opens, because "which request" and "what
  * the state looked like afterwards" are two views of one round, not two
- * destinations. The model-view button stays SEPARATE and is never replaced by
- * this: it shows the verbatim bytes this tool returned TO the model, which
- * neither tab carries.
+ * destinations. (The separate verbatim "model view" button was removed on
+ * 2026-07-28 per owner directive — the round-scoped records these tabs show
+ * are the surviving way to inspect what a tool call saw and returned.)
  *
  * `data-ri-state` addresses this row's state mirror so the drawer's state list
  * can find this slot for its inline jump.
@@ -3566,16 +3534,16 @@ function _renderStandaloneDebugEntry(r) {
 }
 
 /* The row's right-hand control group — the SINGLE owner of a tool row's right
- * edge. Both controls live here and each occupies its own space, so nothing
+ * edge. Every control lives here and each occupies its own space, so nothing
  * can overlap: previously `.tc-preview-btn` claimed the right end with
  * `margin-left:auto` while the debug entry floated over it from a zero-height
  * block. Now `margin-left:auto` belongs to this wrapper alone.
  *
- * Order is deliberate: model-view (what the tool returned) sits left of the
- * debug entry (how this call came to be), because the former is the far more
- * frequently used control. */
+ * The debug entry is the ONLY control left: the verbatim "model view" button
+ * was removed on 2026-07-28 per owner directive (its content duplicated what
+ * the debug panel answers better, round-scoped). */
 function _rowRightControls(round) {
-  return `<span class="ptool-row-ctl">${_rowModelViewBtn(round)}${_renderDebugEntry(round)}</span>`;
+  return `<span class="ptool-row-ctl">${_renderDebugEntry(round)}</span>`;
 }
 
 /* Code-glyph SVG (§3.4: SVG only, never a unicode glyph as a control). */
@@ -3937,101 +3905,6 @@ document.addEventListener("click", function (e) {
 // ★ Backwards compat aliases
 const _renderProjectGroup = _renderUnifiedGroup;
 const _renderBrowserGroup = _renderUnifiedGroup;
-
-// ── Tool content preview button ──
-function _tcPreviewBtn(round) {
-  if (!round || !round.toolContent) return "";
-  /* ★ "Model view" — the exact bytes this tool returned to the LLM, verbatim.
-   *   Renamed from the old ambiguous "Preview" (users read that as a human
-   *   summary, not "what the model actually saw"). An eye icon + label makes
-   *   the human-view / model-view distinction explicit. The class/data-attrs
-   *   stay identical so the click-delegation + streaming-inject paths that key
-   *   off `.tc-preview-btn` / `[data-tc-preview]` are unaffected. */
-  const _t = (typeof t === "function") ? t : (k, d) => d;
-  const label = _t("tool.modelView", "Model view");
-  const tip = _t("tool.modelViewTip", "Show the exact text this tool returned to the model — verbatim, nothing omitted.");
-  const eye = (typeof Icon === "function") ? Icon("eye", 12) : "";
-  return `<button class="tc-preview-btn" data-tc-preview data-tc-rn="${round.roundNum}" data-tc-tcid="${escapeHtml(round.toolCallId || '')}" title="${escapeHtml(tip)}"><span class="tc-preview-ico">${eye}</span><span class="tc-preview-lbl">${escapeHtml(label)}</span></button>`;
-}
-
-/* ★ Fallback verbatim-text registry for rows whose model view is NOT the raw
- *   `round.toolContent`. Some rows (board post/claim, charter, peer status,
- *   feed) render a STRUCTURED human card and, after a reload/poll projection,
- *   may arrive with an EMPTY `toolContent` — so `_tcPreviewBtn` would return ""
- *   and the row would have NO model-view entry (the exact gap the owner
- *   flagged: "每个工具行都要有模型原文"). For those we synthesize the best
- *   available verbatim source (see `_roundModelText`) and stash it here keyed by
- *   a synthetic id, so the click handler can open arbitrarily large text
- *   without bloating a DOM attribute. */
-const _tcModelTextRegistry = new Map();
-let _tcModelTextSeq = 0;
-if (typeof window !== "undefined") window._tcModelTextRegistry = _tcModelTextRegistry;
-
-/* Resolve the verbatim "what the model saw" text for a round, in priority
- * order: the real toolContent → the structured backend meta rendered as pretty
- * JSON (that IS what the tool returned, just already parsed) → the meta snippet
- * → a localized "no content" note. Never returns null so the affordance is
- * unconditional. */
-function _roundModelText(round) {
-  if (round && typeof round.toolContent === "string" && round.toolContent.trim()) {
-    return round.toolContent;
-  }
-  const meta = (round && round.results && round.results[0]) || null;
-  if (meta && typeof meta === "object") {
-    // Drop display-only chrome keys; keep the substantive tool payload so the
-    // verbatim view reflects the tool's actual structured return.
-    const OMIT = new Set(["icon", "badge", "title", "fetched", "fetchedChars", "source"]);
-    const keep = {};
-    for (const k of Object.keys(meta)) {
-      if (!OMIT.has(k) && meta[k] != null && meta[k] !== "") keep[k] = meta[k];
-    }
-    if (Object.keys(keep).length) {
-      try { return JSON.stringify(keep, null, 2); }
-      catch (_e) { /* fall through to snippet */ }
-    }
-    if (typeof meta.snippet === "string" && meta.snippet.trim()) return meta.snippet;
-  }
-  const _t = (typeof t === "function") ? t : (k, d) => d;
-  return _t("tool.noContent", "No content returned.");
-}
-
-/* Model-view button for a row that supplies an EXPLICIT verbatim text (not the
- * raw toolContent lookup). Used by convmeta / brain-mutation rows so every one
- * of them carries a "模型原文" entry even when toolContent is empty. The text is
- * parked in `_tcModelTextRegistry`; the delegated click handler opens it. */
-function _tcModelViewBtnForText(round, text, titleHint) {
-  const _t = (typeof t === "function") ? t : (k, d) => d;
-  const label = _t("tool.modelView", "Model view");
-  const tip = _t("tool.modelViewTip", "Show the exact text this tool returned to the model — verbatim, nothing omitted.");
-  const eye = (typeof Icon === "function") ? Icon("eye", 12) : "";
-  const id = "tcmt_" + (++_tcModelTextSeq);
-  // ★ Source-layer guard: never park an empty entry. An inject row whose
-  //   previews resolved to "" (a common case — autopilot/sub-agent/peer/steer
-  //   rows carry no toolContent) would otherwise register "" and open a body-
-  //   less "single bar" popup. Fall back to the same localized sentinel the
-  //   normal-row path (_roundModelText) uses, so the registry has no empty rows.
-  const resolved = String(text == null ? "" : text);
-  _tcModelTextRegistry.set(id, {
-    text: resolved.trim() ? resolved : _t("tool.noContent", "No content returned."),
-    title: titleHint || label,
-  });
-  return `<button class="tc-preview-btn" data-tc-preview-text="${id}" title="${escapeHtml(tip)}"><span class="tc-preview-ico">${eye}</span><span class="tc-preview-lbl">${escapeHtml(label)}</span></button>`;
-}
-
-/* Unconditional model-view entry for ANY tool row: prefer the normal
- * toolContent-backed button; when toolContent is empty, fall back to the
- * synthesized verbatim source (structured meta → snippet → "no content") so
- * the entry is NEVER missing. This is the row-agnostic guarantee behind the
- * objective "every tool row must carry a 模型原文 view" — used by convmeta /
- * brain rows, the timer watcher, memory, todo, and the generic command line. */
-function _rowModelViewBtn(round) {
-  if (round && typeof round.toolContent === "string" && round.toolContent.trim()) {
-    return _tcPreviewBtn(round);
-  }
-  return _tcModelViewBtnForText(round, _roundModelText(round));
-}
-// Alias kept for the convmeta call site (semantics identical).
-const _convMetaModelViewBtn = _rowModelViewBtn;
 
 // ── Memory Prefetch indicator (chip above tool panel) ──
 // Rendered in the streaming bubble AND in the finished assistant message.

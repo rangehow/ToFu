@@ -488,12 +488,6 @@ var _i18n = {
   //    this key made t() return the literal "upload.processing" on the chip.
   'upload.processing': { zh: '处理中…', en: 'Processing…' },
   'tool.noContent': { zh: '无返回内容。', en: 'No content returned.' },
-  // ── Model-view affordance: the exact, verbatim text a tool returned to the
-  //    LLM (nothing omitted). Replaces the old ambiguous "Preview" wording,
-  //    which users read as a human summary rather than "what the model saw".
-  'tool.modelView': { zh: '模型原文', en: 'Model view' },
-  'tool.modelViewTip': { zh: '查看该工具返回给模型的原始文本 —— 逐字、不省略。', en: 'Show the exact text this tool returned to the model — verbatim, nothing omitted.' },
-  'tool.modelViewChip': { zh: '模型原文 · 逐字', en: "The model's view · verbatim" },
   // ── Sub-agent (swarm) update card ──
   'swarmCard.received': { zh: '收到', en: 'Received' },
   'swarmCard.updateOne': { zh: '条子智能体更新', en: 'sub-agent update' },
@@ -3607,7 +3601,7 @@ var _i18n = {
   'convDigest.pdfs': { zh: '{n} 个 PDF', en: '{n} PDF' },
   'convDigest.noText': { zh: '（无文本）', en: '(no text)' },
   'convDigest.empty': { zh: '该会话没有消息。', en: 'This conversation has no messages.' },
-  'convDigest.truncated': { zh: '… 已省略较早的消息——展开「模型原文」查看完整记录。', en: '… earlier messages omitted — open the model view for the full transcript.' },
+  'convDigest.truncated': { zh: '… 已省略较早的消息——点工具行右侧 </> 按钮查看完整请求记录。', en: '… earlier messages omitted — use the </> button on a tool row for the full request record.' },
   'convDigest.updated': { zh: '更新于 {t}', en: 'updated {t}' },
   'convDigest.expand': { zh: '展开', en: 'expand' },
   'convDigest.omitted': { zh: '… 省略 {n} 条消息 …', en: '… {n} messages omitted …' },

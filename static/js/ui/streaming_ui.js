@@ -996,20 +996,6 @@ function _syncToolRoundsDOM(container, rounds) {
           // This covers both the initial ptool-line → timer-watcher-block transition
           // AND subsequent poll/skip additions to an existing timer-watcher-block.
           slot.innerHTML = _renderUnifiedToolLine(round, isActive);
-        } else if (round.toolContent && !slot.querySelector('[data-tc-preview]') && !slot.querySelector('.ptool-batch-done-block')) {
-          const ptLine = slot.querySelector('.ptool-line');
-          if (ptLine) {
-            /* A synthesized fallback model-view button (data-tc-preview-text,
-             * emitted by _rowModelViewBtn while toolContent was still empty —
-             * e.g. a tool pre-executed during streaming) shows a placeholder,
-             * NOT the real bytes sent to the model. Now that the verbatim
-             * toolContent has arrived, drop that stale fallback before adding
-             * the real toolContent-backed button, so the row keeps exactly ONE
-             * "model view" entry showing only the actual message content. */
-            const stale = ptLine.querySelector('[data-tc-preview-text]');
-            if (stale) stale.remove();
-            ptLine.insertAdjacentHTML('beforeend', _tcPreviewBtn(round));
-          }
         } else if (round.compactionLayer && !slot.querySelector('.ptool-compaction-label')) {
           /* ★ tool_compacted SSE landed on an already-rendered slot in
            *   the in-flight bubble.  By this point tool_complete has

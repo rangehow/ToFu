@@ -1,7 +1,19 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
-### 2026-07-28(续9) — R3 gate② 后端对照实测收口:**判定「不改检索后端」,而本轮真正的产出是抓到「假 fake」—— 18 个挂点里 16 个在打真网还全绿**(epic `pt_bc774ad33dcb43a6`;commits chatui `22a59f6d` + tofu-search `763819c`;chatui 环 **49/49**,tofu-search **16/16**,NEUTER×2 各自咬)
+### 2026-07-28(续9) — R3 gate② 后端对照实测收口
+<!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
+
+### 2026-07-28(续10) — paper 报告/评审模型选择器排序根修:**数据源本来就是同一个,分叉的是「排序」这一半;修在收敛到唯一比较器,不是手抄一份排序**(owner「paper-report-model-picker 的模型竟然没按字母排,输入框的已修好」;commit `78ce8c7c`,2 文件 +219/-4;套件 **10/10**,**NEUTER×2 各咬各的**,相邻环 16/16)
+
+- **缺陷形状 = charter「单一真源被手抄」的一个更隐蔽变体:数据面没分叉,规则面分叉了。** 两个选择器读的都是 `_registeredModels`(同一 `Api.serverConfig.get()`),过滤条件也一致(hidden + `isChatModel`);唯一不同的是工具栏选择器(`main_toolbar_ui.js:313-325`)把**两条轴**——provider 分节、节内模型——都过 `_compareModelsByDisplayName`(settings/branding.js,2bebb0b3 收敛的单一真源),而 `_populatePaperReportModelDropdown`(paper/report.js)一条排序都没有,按 `Object.keys(grouped)` 插入序渲染。**于是「同一数据源」给出了两个不同顺序的列表,且差异只在模型多到跨 provider 时才肉眼可见。**
+- **落点:把 paper 选择器接进同一个比较器(带 `_canSort` 守卫,陈旧 bundle 缺 branding.js 时降级为到达序而非抛异常空列表),一处改动同时覆盖报告与评审两个 picker。** 没有复制工具栏的排序代码 —— 那是又造一个副本;守卫钉的是「两个选择器共用同一比较器」这个结果。
+- **守卫按「三个不同序列」设计夹具,使「不排序」「按 raw id 排」「按显示名排」三种实现两两可区分:** 两 provider 逆序到达,且一个模型的 pricing 友好名(`Alpha One`)与 raw id(`gw/z-ultra`)排序方向相反。harness **运行时从两份真源码 splice**(report.js 的 populate + branding.js 的比较器链),零手抄。
+- **NEUTER×2 各咬各的:** 摘节内模型排序 → `items_follow_display_name_not_raw_id` 红;摘 provider 分节排序 → `sections_follow_provider_display_name` 红。补集:无比较器降级模式下拉列表仍渲染 3 项(摘 `_canSort` 守卫则无品牌脚本环境抛 ReferenceError → 红)。
+- **诚实分账:** `globals.generated.d.ts` 在脏树上 STALE,但**干净 committed HEAD worktree 上 `OK: 104 symbols`** —— 我的改动只加函数内局部变量、不碰全局符号面,STALE 唯一成因是兄弟的在途 JS 改动,按纪律未代为 regenerate 提交。
+
+### 2026-07-28(续9) — R3 gate② 后端对照实测收口
+:**判定「不改检索后端」,而本轮真正的产出是抓到「假 fake」—— 18 个挂点里 16 个在打真网还全绿**(epic `pt_bc774ad33dcb43a6`;commits chatui `22a59f6d` + tofu-search `763819c`;chatui 环 **49/49**,tofu-search **16/16**,NEUTER×2 各自咬)
 
 - **对照结论(票面 ④ 到期后的正式判定):** 修完基线后用同一组 6 条真 idea 重测,**arXiv 字段化阶梯 96% 领域命中(24/25)/ 0% 跨 idea 最差重合 / 0/6 空基底**,与基线数字一致 —— **字段化路线守住了,故不改检索后端**,票面「B 赢就直接调 tofu-search」的条件未触发。落点按 owner 三条约束执行:①**没有搬 `search_arxiv`**,而是给现有 vertical 补 `search_by_query`(query→list 是它的真实缺口,它此前只能按 id 取单篇),复用其 `base.http_get` + Atom 解析,**未新建第三条 HTTP 路径**;②三条语法知识做成**可执行断言**进 tofu-search 测试;③`identity/domain` 批次内切分**留在 ideate**,vertical 公开面只收「术语 + 领域约束」。
 

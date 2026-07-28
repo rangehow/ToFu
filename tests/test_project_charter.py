@@ -717,7 +717,9 @@ def test_agent_commit_appends_decision_and_bumps_version(flask_app):
     p = os.path.abspath('/p/agent-commit')
     with flask_app.app_context():
         out = _charter_tool('project_charter_commit',
-                            {'decision': 'Adopt AST boundaries in lib/.'},
+                            {'kind': 'invariant',
+                             'decision': 'Adopt AST boundaries in lib/.',
+                             'summary': 'Adopt AST boundaries in lib/.'},
                             project_path=p)
         assert 'version 1' in out, out
         rec = read_charter(p)
@@ -739,7 +741,9 @@ def test_agent_commit_resolves_proposal_dequeues(flask_app):
         pid = propose_amendment(p, 'cAgent', 'Move logic into lib/.')['proposalId']
         assert len(pending_proposals(p)) == 1
         out = _charter_tool('project_charter_commit',
-                            {'decision': 'Move logic into lib/.',
+                            {'kind': 'invariant',
+                             'decision': 'Move logic into lib/.',
+                             'summary': 'Move logic into lib/.',
                              'resolves_proposal': pid},
                             project_path=p)
         assert 'committed' in out.lower()
@@ -759,7 +763,9 @@ def test_agent_commit_cannot_write_content_NC(flask_app):
         # The agent commits a decision AND maliciously tries to smuggle a
         # `content` arg — the tool must ignore it entirely.
         _charter_tool('project_charter_commit',
-                      {'decision': 'agent decision',
+                      {'kind': 'invariant',
+                       'decision': 'agent decision',
+                       'summary': 'agent decision',
                        'content': 'AGENT-HIJACKED GOAL'},
                       project_path=p)
         rec = read_charter(p)
@@ -790,7 +796,8 @@ def test_agent_commit_version_conflict_surfaced(flask_app):
     with flask_app.app_context():
         commit_charter(p, add_decision='v1', updated_by_conv='human')  # version 1
         out = _charter_tool('project_charter_commit',
-                            {'decision': 'stale', 'expected_version': 0},
+                            {'kind': 'invariant', 'decision': 'stale',
+                             'summary': 'stale', 'expected_version': 0},
                             project_path=p)
     assert 'NOT committed' in out and 'version 1' in out
 
@@ -807,7 +814,9 @@ def test_agent_commit_hits_max_decisions_truncation(flask_app):
     with flask_app.app_context():
         for i in range(cap + 5):
             _charter_tool('project_charter_commit',
-                          {'decision': f'decision #{i}'}, project_path=p)
+                          {'kind': 'invariant',
+                           'decision': f'decision #{i}',
+                           'summary': f'decision #{i}'}, project_path=p)
         rec = read_charter(p)
     texts = [d['text'] for d in rec['decisions']]
     assert len(texts) == cap, 'rolling truncation must cap at _MAX_DECISIONS'

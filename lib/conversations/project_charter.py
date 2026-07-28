@@ -23,6 +23,13 @@ decision-making"):
     commits can't silently clobber, and emits ONE ``decided`` event so the
     commit is auditable. The agent path is ``add_decision``-ONLY — it can never
     edit the north-star ``content``.
+    **Kind routing (owner-directed 2026-07-28):** every commit declares a
+    ``kind``. Only ``invariant`` (a binding rule constraining FUTURE
+    decisions) lands here; ``lesson`` (methodology experience) routes to the
+    project memory system with BM25 dedup; ``report`` (completion record)
+    is rejected to JOURNAL.md. The per-turn injection
+    (``render_charter_injection_block``) renders each invariant's one-line
+    ``summary`` — the full text is the ``project_charter_read`` detail path.
 
 HUMAN-ONLY corrective levers (optional, NOT required for normal progress): the
 north-star ``content`` edit, ``update_decision`` / ``delete_decision`` /
@@ -56,6 +63,36 @@ logger = get_logger(__name__)
 _CONTENT_MAX_CHARS = 8000
 _DECISION_MAX_CHARS = 2400
 _MAX_DECISIONS = 100
+
+# Decision taxonomy (owner-directed 2026-07-28). A charter entry is ONE of:
+#   invariant — a binding rule that constrains FUTURE code/decisions
+#               (e.g. 'credential redaction is a fail-closed whitelist').
+#               Lives in the charter; agent-committable (the 2026-07-12
+#               de-gating stands); MUST carry a one-line `summary` — the
+#               binding rule itself — which is what the per-turn injection
+#               renders. The full text (evidence, archaeology) is read back
+#               on demand via project_charter_read.
+#   lesson    — a methodology experience note (e.g. 'guards must assert
+#               results, not implementation'). Does NOT belong in the
+#               always-injected charter; the tool ROUTES it to the project
+#               memory system (BM25 relevance-gated injection, updatable,
+#               mergeable) instead.
+#   report    — a completion / rejection record ('TTFT watchdog landed,
+#               commit 69cd968c'). Constrains nothing; belongs in JOURNAL.md.
+#               The tool REJECTS these with a pointer to the journal.
+_DECISION_KINDS = ('invariant', 'lesson', 'report')
+# One line: the binding rule itself. Long enough for 'A is a fail-closed
+# whitelist over B; never revert to name-based exclusion', short enough that
+# 20 of them stay a scannable list in the injected block.
+_SUMMARY_MAX_CHARS = 240
+# Conservative auto-fold gate for the lesson-router (channel 2 — see
+# _route_lesson_to_memory): fold a new lesson into the top project memory
+# only when query-term containment >= 0.5 (near-duplicate). Measured reality:
+# genuine same-FAMILY variants score ~0.10 (semantic family != lexical
+# overlap), cross-topic ~0.04, verbatim repeats 1.0 — so 0.5 catches repeats
+# without ever guessing at family. Family folding is the model's job via the
+# explicit `into_memory` channel.
+_LESSON_AUTOFOLD_MIN_CONTAINMENT = 0.5
 
 # Rendered in place of the north star when `content` is empty. The goal lives
 # in its OWN column precisely so it can never be pushed out of the injected
@@ -155,6 +192,8 @@ def propose_amendment(project_path: str, conv_id: str, proposal: str, *,
 
 def commit_charter(project_path: str, *, content: str | None = None,
                    add_decision: str | None = None,
+                   decision_kind: str = '',
+                   summary: str = '',
                    expected_version: int | None = None,
                    updated_by_conv: str = '',
                    resolves_proposal: str = '') -> dict:
@@ -192,11 +231,17 @@ def commit_charter(project_path: str, *, content: str | None = None,
         if add_decision:
             committed_decision = add_decision.strip()[:_DECISION_MAX_CHARS]
             if committed_decision:
-                decisions.append({
+                entry = {
                     'text': committed_decision,
                     'by_conv': updated_by_conv or '',
                     'ts': int(time.time() * 1000),
-                })
+                }
+                if decision_kind and decision_kind in _DECISION_KINDS:
+                    entry['kind'] = decision_kind
+                summary = (summary or '').strip()[:_SUMMARY_MAX_CHARS]
+                if summary:
+                    entry['summary'] = summary
+                decisions.append(entry)
                 if len(decisions) > _MAX_DECISIONS:
                     decisions = decisions[-_MAX_DECISIONS:]
         new_version = cur['version'] + 1
@@ -584,10 +629,38 @@ def repair_truncated_decisions(project_path: str) -> dict:
     return {'ok': True, 'repaired': repaired, 'version': new_version}
 
 
-def render_charter_block(project_path: str) -> str:
-    """Render the charter as a compact prompt block for system-context
-    injection, or '' when there is no charter (so an empty project adds no
-    prompt weight). Used by lib/tasks_pkg/system_context.py.
+def _decision_headline(d) -> str:
+    """The ONE line a per-turn injection shows for a decision.
+
+    The stored `summary` (the binding rule itself) when present; otherwise a
+    first-line abridgement of the full text — legacy entries from before the
+    summary field existed still render as a scannable headline rather than a
+    2,000-char wall. The full text is always one tool call away
+    (project_charter_read).
+    """
+    if isinstance(d, dict):
+        summary = (d.get('summary') or '').strip()
+        if summary:
+            return summary
+        txt = (d.get('text') or '').strip()
+    else:
+        txt = str(d).strip()
+    first = txt.split('\n', 1)[0].strip()
+    if len(first) > _SUMMARY_MAX_CHARS:
+        first = first[:_SUMMARY_MAX_CHARS].rstrip() + '…'
+    return first
+
+
+def render_charter_injection_block(project_path: str) -> str:
+    """Render the charter for PER-TURN prompt injection: goal in full,
+    decisions as a one-line headline list (summary when stored, abridged
+    first line otherwise), with a pointer to project_charter_read for the
+    full text of any entry.
+
+    The model needs the RULE always resident, not the evidence chain — the
+    1.5–2.2k-char measured-evidence narratives are read back on demand.
+    Mirrors the board split (render_board_injection_block vs
+    render_board_block). Returns '' when there is no charter.
     """
     rec = read_charter(project_path)
     if not rec.get('exists') or not (rec['content'] or rec['decisions']):
@@ -609,12 +682,152 @@ def render_charter_block(project_path: str) -> str:
         lines.append(_NO_GOAL_NOTICE)
     if rec['decisions']:
         lines.append('')
+        lines.append('Committed decisions (headlines — call '
+                     'project_charter_read for an entry\'s full text):')
+        for d in rec['decisions'][-20:]:
+            head = _decision_headline(d)
+            if head:
+                lines.append(f'  • {head}')
+    return '\n'.join(lines)
+
+
+def render_charter_block(project_path: str) -> str:
+    """Render the charter with EVERY decision's complete stored text, never
+    abridged. The per-turn prompt injection uses
+    ``render_charter_injection_block`` instead; this full renderer backs the
+    ``project_charter_read`` tool — the on-demand detail path the injection
+    block points to.
+    """
+    rec = read_charter(project_path)
+    if not rec.get('exists') or not (rec['content'] or rec['decisions']):
+        return ''
+    lines = ['[PROJECT CHARTER] — the shared north star for this project. '
+             'All conversations of this project read it; treat it as '
+             'authoritative shared intent.']
+    if rec['content']:
+        lines.append('')
+        lines.append(rec['content'].strip())
+    else:
+        lines.append('')
+        lines.append(_NO_GOAL_NOTICE)
+    if rec['decisions']:
+        lines.append('')
         lines.append('Committed decisions:')
         for d in rec['decisions'][-20:]:
             txt = (d.get('text') if isinstance(d, dict) else str(d)) or ''
             if txt:
                 lines.append(f'  • {txt}')
     return '\n'.join(lines)
+
+
+def _topic_containment(query: str, memories: list) -> list:
+    """Rank ``memories`` by unweighted query-term containment, best-first.
+
+    Returns ``[(coverage, mem)]`` with coverage = |query_terms ∩ doc_terms| /
+    |query_terms| ∈ [0, 1]. Chosen over a BM25 threshold after measurement:
+    raw BM25 scores are corpus-SIZE dependent (IDF collapses at N=1), and
+    global-background IDF punishes exactly the shared family vocabulary —
+    containment is deterministic across environments. Used ONLY as a
+    conservative near-duplicate gate (≥0.5); semantic family detection is the
+    model's job (the `into_memory` parameter).
+    """
+    from lib.memory.relevance._tokenize import _build_memory_doc, _tokenize
+    qt = set(_tokenize(query or ''))
+    if not qt:
+        return []
+    out = []
+    for m in memories:
+        doc = set(_build_memory_doc(m, include_body=True))
+        if not doc:
+            continue
+        cov = len(qt & doc) / len(qt)
+        if cov > 0:
+            out.append((cov, m))
+    out.sort(key=lambda x: -x[0])
+    return out
+
+
+def _route_lesson_to_memory(project_path: str, lesson_text: str,
+                            conv_id: str = '',
+                            into_memory: str = '') -> dict:
+    """Route a kind=lesson commit to the PROJECT MEMORY system, not the charter.
+
+    Dedup (owner-directed "search same-topic first, fold, else create") is
+    three-channel, because measurement showed lexical similarity alone cannot
+    detect a semantic family (real same-family lesson pairs score ~0.10
+    containment — the family head noun only exists from the second variant
+    onward):
+
+      1. EXPLICIT — the caller passes ``into_memory`` (id or exact name of a
+         project memory). The common case: the model READ the family memory
+         via BM25 prefetch while working, so when it commits a new variant it
+         KNOWS the fold target. This is the primary channel.
+      2. CONSERVATIVE AUTO-FOLD — top project-candidate containment ≥ 0.5
+         (near-duplicate vocabulary). Misses light variants (they take
+         channel 3) but never corrupts the corpus with a wrong merge.
+      3. CREATE + ADVISE — a new memory; the response lists the closest
+         candidates so the model can immediately fold explicitly instead.
+
+    Idempotent — a lesson already present verbatim is a no-op. Returns
+    ``{'ok', 'action', 'memory_id'?, 'candidates'?, 'error'?}``. Never raises.
+    """
+    try:
+        from lib.memory.storage import (create_memory, list_memories,
+                                        update_memory)
+        today = time.strftime('%Y-%m-%d')
+
+        def _fold(mem, via):
+            body = (mem.get('body') or '').rstrip()
+            if lesson_text[:200] in body:
+                return {'ok': True, 'action': 'already_present',
+                        'memory_id': mem['id']}
+            new_body = (body + f'\n\n---\n\n### 变体（{today}，charter 路由）'
+                        f'\n\n' + lesson_text)
+            update_memory(mem['id'], {'body': new_body},
+                          project_path=project_path)
+            audit_log('charter_lesson_routed', project_path=project_path,
+                      memory_id=mem['id'], action='updated', via=via,
+                      by_conv=conv_id)
+            return {'ok': True, 'action': 'updated', 'memory_id': mem['id'],
+                    'via': via}
+
+        proj_mems = [m for m in list_memories(project_path, scope='project')
+                     if not m.get('is_package')]
+
+        # Channel 1: explicit fold target (id or exact name).
+        into_memory = (into_memory or '').strip()
+        if into_memory:
+            target = next((m for m in proj_mems
+                           if m['id'] == into_memory
+                           or m.get('name') == into_memory), None)
+            if not target:
+                return {'ok': False,
+                        'error': f"into_memory '{into_memory}' matches no "
+                                 'project memory (id or exact name)'}
+            return _fold(target, via='explicit')
+
+        # Channel 2: conservative auto-fold on near-duplicate containment.
+        ranked = _topic_containment(lesson_text, proj_mems)
+        if ranked and ranked[0][0] >= 0.5:
+            return _fold(ranked[0][1], via=f'auto containment={ranked[0][0]:.2f}')
+
+        # Channel 3: create + advise with the closest candidates.
+        first = lesson_text.split('\n', 1)[0].strip().lstrip('*# ').strip()
+        mem = create_memory(
+            name=(first[:60] or 'charter lesson'),
+            description=first[:240], body=lesson_text,
+            tags=['charter-lesson'], scope='project',
+            project_path=project_path)
+        audit_log('charter_lesson_routed', project_path=project_path,
+                  memory_id=mem['id'], action='created', by_conv=conv_id)
+        cands = [{'id': m['id'], 'name': (m.get('name') or '')[:80],
+                  'containment': round(c, 2)} for c, m in ranked[:3]]
+        return {'ok': True, 'action': 'created', 'memory_id': mem['id'],
+                'candidates': cands}
+    except Exception as e:
+        logger.warning('[Charter] lesson route failed proj=%.40r: %s',
+                       project_path, e, exc_info=True)
+        return {'ok': False, 'error': str(e)}
 
 
 def execute_charter_tool(fn_name: str, fn_args: dict, *,
@@ -658,30 +871,97 @@ def execute_charter_tool(fn_name: str, fn_args: dict, *,
                         'to make binding.')
             return f'Error: could not record proposal ({res.get("error", "unknown")}).'
         if fn_name == 'project_charter_commit':
-            # Agent self-commit of a DECISION (owner-directed 2026-07-12). The
-            # SAME commit_charter the human REST route uses, exposed to agents
-            # so shared intent advances without a human gate. add_decision-ONLY:
-            # the north-star `content` is NOT passed, so this tool can never
-            # edit the goal/direction (guarded by test). resolves_proposal drops
-            # a matching pending proposal out of the human-review list. The
-            # _MAX_DECISIONS rolling truncation in commit_charter applies
-            # unchanged (no pagination).
+            # Agent self-commit of a DECISION (owner-directed 2026-07-12; the
+            # de-gating stands — invariants stay agent-committable). The SAME
+            # commit_charter the human REST route uses. add_decision-ONLY: the
+            # north-star `content` is NOT passed, so this tool can never edit
+            # the goal/direction (guarded by test).
+            #
+            # Kind routing (owner-directed 2026-07-28): every commit MUST
+            # declare its kind, and only INVARIANTS land in the charter —
+            # lessons route to project memory (relevance-gated, dedup-ed),
+            # reports are rejected to JOURNAL.md. The charter's per-turn
+            # injection renders each invariant's one-line `summary`; the full
+            # text is read back on demand via project_charter_read.
             decision = (fn_args.get('decision') or '').strip()
             if not decision:
                 return 'Error: decision text is required.'
+            kind = (fn_args.get('kind') or '').strip().lower()
+            if kind not in _DECISION_KINDS:
+                return ('Error: kind is required — one of:\n'
+                        '  invariant — a binding rule constraining FUTURE '
+                        'code/decisions (e.g. "credential redaction is a '
+                        'fail-closed whitelist"). Lands in the charter; '
+                        'requires summary.\n'
+                        '  lesson — a methodology experience note (e.g. '
+                        '"guards must assert results, not implementation"). '
+                        'Routed to PROJECT MEMORY (relevance-gated, dedup-ed), '
+                        'NOT the charter.\n'
+                        '  report — a completion/rejection record. Belongs in '
+                        'JOURNAL.md, NOT the charter.')
+            if kind == 'report':
+                return ('NOT committed — completion/rejection records do not '
+                        'belong in the charter: they constrain no future '
+                        'decision, and every conversation would pay for the '
+                        'text every turn. Append a dated entry to JOURNAL.md '
+                        'instead. If the text also contains a binding rule, '
+                        'commit THAT rule alone with kind=invariant.')
+            if kind == 'lesson':
+                routed = _route_lesson_to_memory(
+                    project_path, decision, current_conv_id,
+                    into_memory=(fn_args.get('into_memory') or ''))
+                if routed.get('ok'):
+                    action = routed.get('action')
+                    mid = routed.get('memory_id', '')
+                    if action == 'already_present':
+                        return (f'Already recorded — this lesson is already in '
+                                f'project memory \'{mid}\'. The charter was '
+                                'NOT grown. The memory surfaces via relevance '
+                                'prefetch when a conversation works on this '
+                                'topic.')
+                    if action == 'updated':
+                        return (f'Folded into existing project memory \'{mid}\' '
+                                f'({routed.get("via", "")}), NOT the charter. '
+                                'It surfaces via relevance prefetch when a '
+                                'conversation works on this topic.')
+                    resp = (f'Saved as new project memory \'{mid}\', NOT the '
+                            'charter. It surfaces via relevance prefetch when '
+                            'a conversation works on this topic.')
+                    cands = routed.get('candidates') or []
+                    if cands:
+                        listing = '; '.join(
+                            f"{c['name']!r} (id {c['id']})" for c in cands)
+                        resp += ('\n\nClosest existing project memories: '
+                                 + listing
+                                 + '. If this lesson IS a variant of one of '
+                                 'them, retry with into_memory=<id> to fold '
+                                 'it in instead of keeping a separate file.')
+                    return resp
+                return ('Error: could not route the lesson to project memory '
+                        f'({routed.get("error", "unknown")}).')
+            summary = (fn_args.get('summary') or '').strip()
+            if not summary:
+                return ('Error: an invariant commit requires `summary` — ONE '
+                        'line stating the binding rule itself (e.g. '
+                        '"Credential redaction is a fail-closed whitelist; '
+                        'never revert to name-based exclusion"). The per-turn '
+                        'injection renders ONLY the summary; `decision` keeps '
+                        'the full evidence.')
             ev = fn_args.get('expected_version')
             res = commit_charter(
                 project_path, add_decision=decision,
+                decision_kind='invariant', summary=summary,
                 updated_by_conv=current_conv_id,
                 expected_version=(int(ev) if isinstance(ev, (int, float))
                                   or (isinstance(ev, str) and ev.isdigit())
                                   else None),
                 resolves_proposal=(fn_args.get('resolves_proposal') or '').strip())
             if res.get('ok'):
-                return (f'Decision committed to the charter (version '
-                        f'{res.get("version")}). Every sibling conversation now '
-                        f'reads it as shared intent. A human can still edit or '
-                        f'remove it later if it needs correcting.')
+                return (f'Invariant committed to the charter (version '
+                        f'{res.get("version")}). Every sibling conversation '
+                        f'now reads its summary line as shared intent; the '
+                        f'full text is available via project_charter_read. A '
+                        f'human can still edit or remove it later.')
             if res.get('error') == 'version_conflict':
                 return ('NOT committed — the charter changed since you read it '
                         f'(current version {res.get("current_version")}). '

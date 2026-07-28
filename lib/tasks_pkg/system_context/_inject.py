@@ -681,8 +681,9 @@ Round N+3, a2's update lands. Synthesise the full picture for the user.
         _ctx_suppressed('charter', 'marker_present')
     if project_enabled and project_path and _CHARTER_MARKER not in _existing:
         try:
-            from lib.conversations.project_charter import render_charter_block
-            _charter_block = render_charter_block(project_path)
+            from lib.conversations.project_charter import (
+                render_charter_injection_block)
+            _charter_block = render_charter_injection_block(project_path)
         except Exception as e:
             logger.debug('[Inject] charter build failed conv=%s: %s',
                          (_cid or '?')[:8], e)

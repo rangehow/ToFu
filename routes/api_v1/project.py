@@ -1426,7 +1426,7 @@ def project_brain_peers():
         'the open epics it could pick up, and the decisions awaiting a human. '
         'Query: ``path`` (REQUIRED) + ``convId`` (REQUIRED). The two '
         '``injected`` flags mirror the actual system-context injection gate '
-        'exactly (computed from the SAME render_charter_block / '
+        'exactly (computed from the SAME render_charter_injection_block / '
         'render_board_block the prompt uses), so the panel can never drift '
         'from what the model really sees.'),
     tags=['project'],

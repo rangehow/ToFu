@@ -58,9 +58,10 @@ CONV_REF_GET_TOOL = {
             "drops per-message metadata, so a detail you need may simply not be "
             "there.\n\n"
             "Long conversations are WINDOWED (head + tail) rather than cut "
-            "mid-token, so the JSON always parses; `messageCount` / `omitted` "
-            "state what was left out and `before` pages backwards through the "
-            "rest.\n\n"
+            "mid-token, so the JSON always parses. The header states DELIVERED "
+            "N of M messages — check it, because on a long conversation one "
+            "call cannot carry everything. Use `before` to page backwards "
+            "through older messages and `limit` to widen the window.\n\n"
             "IMPORTANT: Only use this when the user EXPLICITLY requests information from a past conversation. "
             "Never call this proactively or speculatively."
         ),
@@ -78,6 +79,14 @@ CONV_REF_GET_TOOL = {
                 "raw": {
                     "type": "boolean",
                     "description": "Output mode. DEFAULT true — the full raw DB record (all columns + settings + every message field preserved) as structured JSON, nothing summarized. Pass false for the readable prose transcript, which drops per-message metadata and condenses tool rounds."
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "How many recent messages to render. Omit for a window sized to fit the output budget with whole, unclamped messages. Raising it past what fits causes per-message fields to be clamped, which the header reports."
+                },
+                "before": {
+                    "type": "integer",
+                    "description": "Page backwards: render the window ending just BEFORE this message number (1-based, exclusive). Take it from the header's 're-read with before=N' hint to walk further back through a long history."
                 }
             },
             "required": ["conversation_id"]
@@ -153,28 +162,53 @@ CHARTER_COMMIT_TOOL = {
     "function": {
         "name": "project_charter_commit",
         "description": (
-            "COMMIT a new key DECISION to the project charter — this makes it "
-            "project-wide shared intent that every sibling conversation reads. "
-            "Unlike project_charter_propose (which only records a suggestion for "
-            "later), this WRITES the decision immediately and bumps the charter "
-            "version. Use it when you and/or siblings have reached an "
-            "implementation-level consensus other conversations must align to "
-            "(an architecture invariant, a build-order rule, a resolved design "
-            "question). Be specific and actionable; anchor to concrete evidence.\n"
-            "SCOPE: this tool can ONLY append a decision — it can NOT edit the "
-            "project's north-star goal/direction text (that stays human-owned). "
-            "A human retains the ability to edit or remove a committed decision "
-            "afterwards, so this is self-service progress, not an irreversible "
-            "act. If this decision resolves a proposal you (or a sibling) raised "
-            "earlier with project_charter_propose, pass its proposalId as "
-            "`resolves_proposal` so it drops out of the pending-review list."
+            "COMMIT a new key DECISION — immediately, without a human gate. "
+            "Every commit MUST declare its `kind`, and the kind decides WHERE "
+            "the text lands:\n"
+            "  invariant — a binding rule that constrains FUTURE code and "
+            "decisions (an architecture invariant, a build-order rule, a "
+            "resolved design question other conversations must align to). "
+            "LANDS IN THE CHARTER; every sibling reads its one-line `summary` "
+            "in the injected block; the full `decision` text (evidence, "
+            "archaeology) is read back on demand via project_charter_read.\n"
+            "  lesson — a methodology experience note (e.g. 'guards must "
+            "assert results, not implementation'). ROUTED TO PROJECT MEMORY "
+            "instead — it surfaces via relevance prefetch exactly when a "
+            "conversation works on that topic, and same-topic lessons are "
+            "dedup-ed into one living memory. Does NOT grow the charter.\n"
+            "  report — a completion / 'we decided not to' record. REJECTED: "
+            "it constrains no future decision. Append it to JOURNAL.md "
+            "instead.\n"
+            "The test for the kind: does this text CHANGE what someone "
+            "decides next week? Binding rule → invariant. How-to-work "
+            "knowledge → lesson. What-happened → report.\n"
+            "SCOPE: this tool can ONLY append — it can NOT edit the project's "
+            "north-star goal/direction text (that stays human-owned). A human "
+            "retains the ability to edit or remove a committed invariant "
+            "afterwards, so this is self-service progress, not an "
+            "irreversible act. If this resolves a proposal raised earlier with "
+            "project_charter_propose, pass its proposalId as "
+            "`resolves_proposal`."
         ),
         "parameters": {
             "type": "object",
             "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": ["invariant", "lesson", "report"],
+                    "description": "Where this text lands: invariant → charter (binding rule); lesson → project memory (methodology, dedup-ed); report → rejected, belongs in JOURNAL.md."
+                },
                 "decision": {
                     "type": "string",
-                    "description": "The decision text to commit. Specific and actionable — it becomes injected shared intent for all conversations."
+                    "description": "The full text. For an invariant this is the complete record (evidence, reasoning, anchors) — the injection shows only `summary`. For a lesson, the experience note that lands in project memory."
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "REQUIRED when kind=invariant: ONE line stating the binding rule itself (e.g. 'Credential redaction is a fail-closed whitelist; never revert to name-based exclusion'). The per-turn injection renders ONLY this line."
+                },
+                "into_memory": {
+                    "type": "string",
+                    "description": "Optional, kind=lesson only: id or exact name of the EXISTING project memory this lesson is a variant of — it is then folded into that memory instead of creating a new file. When you have read a same-topic memory (via prefetch or search_memories), pass it here; the auto-fold fallback only catches near-duplicates."
                 },
                 "resolves_proposal": {
                     "type": "string",
@@ -185,7 +219,7 @@ CHARTER_COMMIT_TOOL = {
                     "description": "Optional concurrency guard: the charter version you last read. If the charter has since changed, the commit is rejected and you should re-read and retry."
                 },
             },
-            "required": ["decision"],
+            "required": ["kind", "decision"],
         },
     },
 }

@@ -11,7 +11,8 @@ lease), and which decisions are still awaiting a human.
 Single source of truth (owner invariant — backend is authoritative, the
 frontend is a pure renderer): the two prompt-facing markers this returns are
 computed from the SAME functions that build the actual injected system blocks
-(``render_charter_block`` / ``render_board_block(project_path, conv_id)``), so
+(``render_charter_injection_block`` / ``render_board_block(project_path,
+conv_id)``), so
 the "influence" the panel shows can never drift from what the model really
 sees. ``render_board_block`` is already conversation-aware — it stamps "(you)"
 on this conv's claims and an explicit avoid-duplication hint on peer-owned
@@ -73,7 +74,7 @@ def build_conv_influence(project_path: str, conv_id: str) -> dict:
     # ── Charter (the shared north star this conv is bound by) ──
     try:
         from lib.conversations.project_charter import (
-            read_charter, render_charter_block,
+            read_charter, render_charter_injection_block,
         )
         rec = read_charter(project_path)
         out['charter']['exists'] = bool(rec.get('exists'))
@@ -88,8 +89,10 @@ def build_conv_influence(project_path: str, conv_id: str) -> dict:
                 decisions.append(txt)
         decisions.reverse()
         out['charter']['decisions'] = decisions
-        # injected iff the SAME block the prompt uses is non-empty.
-        out['charter']['injected'] = bool(render_charter_block(project_path))
+        # injected iff the SAME block the prompt uses is non-empty — the
+        # per-turn INJECTION renderer (headlines), not the tool's full one.
+        out['charter']['injected'] = bool(
+            render_charter_injection_block(project_path))
     except Exception as e:
         logger.debug('[BrainInfluence] charter read failed proj=%.40r: %s',
                      project_path, e)

@@ -4,7 +4,7 @@
 
 The project's goal was stored as the 5th entry of the ``decisions`` array
 (``[Goal — promoted by owner] tofu项目需要具有长期扩展性…``) because the
-dedicated ``content`` column was EMPTY. ``render_charter_block`` injects only
+dedicated ``content`` column was EMPTY. The per-turn injection renders only
 ``decisions[-20:]``, and the charter had grown to 27 decisions — so the goal
 sat at index 4, outside the window, and the measured answer to "is the goal in
 the injected block?" was **False**. Every sibling conversation was reading 20
@@ -93,9 +93,14 @@ def _commit_decisions(flask_app, n, prefix='filler decision'):
 
 
 def _render(flask_app):
-    from lib.conversations.project_charter import render_charter_block
+    # The INJECTION renderer — what the model actually receives each turn
+    # (render_charter_block is now the tool's full-text detail path; guarding
+    # the detail path while the injection path could regress would be the
+    # "helper, not the call-site" gap the charter warns about).
+    from lib.conversations.project_charter import (
+        render_charter_injection_block)
     with flask_app.app_context():
-        return render_charter_block(_PROJ)
+        return render_charter_injection_block(_PROJ)
 
 
 def test_the_north_star_reaches_the_model_even_behind_many_decisions(flask_app):

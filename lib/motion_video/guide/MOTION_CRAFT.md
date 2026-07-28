@@ -134,11 +134,69 @@ tl.from('.row',      { opacity: 0, x: -32, duration: 0.5,
 - **Overshooting decoratives** (`yoyo`, `back.out`) need clearance at PEAK
   size, away from `overflow:hidden` edges — `inspect` catches spill.
 
+### Fill the frame vertically (portrait is 4:3 TALLER than you think)
+
+Margins tell you where content must NOT go; they say nothing about how much
+of the frame it should occupy. That gap has a measured cost: across the
+authored scenes on this host the mean vertical span is **65%** of frame
+height with a **19.5%** dead band at the bottom, and the worst two leave
+**34%** and **33%** empty below the content. A 1080×1440 frame with
+everything clustered in the middle band reads as a 16:9 slide letterboxed
+into a phone — the single most common "this looks unfinished" tell in
+portrait.
+
+- **Target 80-90% vertical span** between the top of the first element and
+  the bottom of the last. Below ~70% the frame reads as under-filled; 100%
+  means you are touching the edges and have lost your margins.
+- **Never bottom-dead more than ~15%.** Symmetry is the usual culprit: a
+  centred flex column on a tall frame parks everything mid-frame and splits
+  the leftover space top and bottom. On portrait, prefer
+  `justify-content: space-between` on a full-height column so content
+  distributes across the frame instead of pooling in the middle.
+- **Give the tall axis structure, not stretch.** Do not scale type up to fill
+  space — that breaks the hierarchy in §2. Fill it with *another band*: an
+  eyebrow row at the top, the hero block in the upper-middle, a supporting
+  row (stat, bars, rows, caption) in the lower third, and a footer hairline
+  or index mark near the bottom. Three or four horizontal bands is what makes
+  portrait look composed.
+- **Anchor something near the bottom edge.** A progress bar, a scene index
+  (`03 / 08`), a source line, or a hairline rule at ~88% frame height ends
+  the composition deliberately instead of letting it trail off.
+- **Full-height wrapper.** The content wrapper should be `height: 100%` with
+  explicit padding, not a `min-content` block centred by `align-items`. You
+  cannot distribute across space the wrapper does not occupy.
+
+### When the copy does not fit, REWRITE it — never truncate
+
+Density pressure from the section above has one specific failure mode, and it
+has already shipped once: a headline was cut to
+`硫化物固态电解质取代液态` — the author dropped the final noun (`电解液`) to make
+two lines fit, leaving a dangling phrase that ends mid-thought. Every gate
+passed it: a truncated string is perfectly well-formed, correctly sized, and
+fully contrast-compliant. Only a reader notices it says nothing.
+
+- **A headline must be a complete phrase.** If it will not fit at the size the
+  hierarchy requires, **write a shorter complete phrase** — condense the idea,
+  drop a modifier, split it across headline + caption. Cutting characters off
+  the end is not shortening, it is corrupting.
+- **Never end on a dangling modifier, measure word, or half of a compound
+  noun.** `取代液态` / `提升了` / `相比于` are not endings.
+- **Do not reach for `text-overflow: ellipsis` or `line-clamp` on hero copy.**
+  They hide the problem at render time instead of fixing the writing. Clamping
+  is for user-supplied text of unknown length; your headline is text you chose.
+- **Fit by re-writing first, type scale second, layout third.** Shrinking the
+  hero below its role size (§2) trades one visible defect for another.
+
 ## 5. Before you finish
 
 Run `composition_check`. It runs the same three gates the renderer runs
 (`lint` = contract + fonts, `validate` = headless-Chrome runtime errors +
-contrast, `inspect` = text spilling its container across timeline samples).
+contrast, `inspect` = text spilling its container across timeline samples),
+plus two the CLI cannot see: **text fidelity** (on-frame copy that corrupts
+its source beat) and **vertical fill** (the §4 span / dead-band targets,
+measured in a real browser at the END of the timeline). The fill numbers above
+are enforced, not advisory — a frame under 60% span or over 28% bottom dead
+comes back as a finding you must fix here.
 Fix every finding — each comes with a hint. A green gate is the floor, not the
 goal: re-read §0 and confirm you have hierarchy, stagger and a supporting
 graphic before you stop.

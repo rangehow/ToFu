@@ -44,13 +44,21 @@ from lib.motion_video._env import (
     motion_root,
     probe_env,
 )
+from lib.motion_video._fill import (
+    MAX_BOTTOM_DEAD_BAND,
+    MIN_VERTICAL_SPAN,
+    check_composition_fill,
+    measure_fill,
+)
 from lib.motion_video._gates import (
     NARRATION_CHARS_PER_SECOND,
     check_composition_html,
     check_scene_budget,
     check_storyboard,
+    check_text_fidelity,
     probe_video,
     verify_spec,
+    visible_text,
 )
 from lib.motion_video._render import (
     check_project,
@@ -96,6 +104,12 @@ __all__ = [
     'check_scene_budget',
     'NARRATION_CHARS_PER_SECOND',
     'check_composition_html',
+    'check_text_fidelity',
+    'check_composition_fill',
+    'measure_fill',
+    'MIN_VERTICAL_SPAN',
+    'MAX_BOTTOM_DEAD_BAND',
+    'visible_text',
     'probe_video',
     'verify_spec',
     'lint_project',

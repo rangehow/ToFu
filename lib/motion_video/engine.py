@@ -89,7 +89,8 @@ def _write(path: str, text: str) -> None:
 
 
 def _scene_gate_findings(mv, scene_dir: str, scene_id: str, *,
-                         abort_event=None) -> list[str]:
+                         abort_event=None, scene: dict | None = None,
+                         html: str = '') -> list[str]:
     """Run the REAL HyperFrames gates on one composed scene dir.
 
     ``check_composition_html`` is a regex pass over the contract fields and the
@@ -109,19 +110,43 @@ def _scene_gate_findings(mv, scene_dir: str, scene_id: str, *,
 
     Never raises -- a gate crash must not take down a job.
     """
+    # Text fidelity is judged on the HTML we already hold, so unlike the CLI
+    # gates it is unaffected by an env_missing / chrome outcome -- a corrupted
+    # headline is still corrupted when Chrome is out of memory. Collected
+    # FIRST for that reason, then merged with whatever the CLI reported.
+    fidelity: list[str] = []
+    if html and scene is not None:
+        try:
+            fidelity = list(mv.check_text_fidelity(html, scene))
+        except Exception as e:
+            logger.warning('[MotionVideo] scene %s fidelity gate crashed: %s',
+                           scene_id, e, exc_info=True)
+        if fidelity:
+            logger.warning('[MotionVideo] scene %s text fidelity: %.300s',
+                           scene_id, ' | '.join(fidelity))
+    # Vertical fill is measured from the HTML we already hold, in its own
+    # browser boot, so like fidelity it is NOT swallowed by an env_missing /
+    # chrome outcome from the CLI gates. Its own measurement failure returns
+    # empty on the same infrastructure-vs-defect rule.
+    if html:
+        try:
+            fidelity += list(mv.check_composition_fill(html))
+        except Exception as e:
+            logger.warning('[MotionVideo] scene %s fill gate crashed: %s',
+                           scene_id, e, exc_info=True)
     try:
         res = mv.check_project(scene_dir, abort_event=abort_event)
     except Exception as e:
         logger.warning('[MotionVideo] scene %s gate crashed: %s', scene_id, e,
                        exc_info=True)
-        return []
+        return fidelity
     if res.get('ok'):
-        return []
+        return fidelity
     if res.get('category') in ('env_missing', 'aborted', 'timeout', 'chrome'):
         logger.info('[MotionVideo] scene %s real gates skipped (%s)',
                     scene_id, res.get('category'))
-        return []
-    findings = [str(e) for e in res.get('errors', [])]
+        return fidelity
+    findings = fidelity + [str(e) for e in res.get('errors', [])]
     logger.warning('[MotionVideo] scene %s failed %d real-gate check(s): %.400s',
                    scene_id, len(findings), ' | '.join(findings))
     return findings
@@ -472,7 +497,8 @@ def run_motion_task(task: dict) -> None:
             # it is reported and counted on the quality axis instead of killing
             # a film that would still play.
             gate_findings = _scene_gate_findings(
-                mv, scene_dir, sc['id'], abort_event=task.get('abort_event'))
+                mv, scene_dir, sc['id'], abort_event=task.get('abort_event'),
+                scene=sc, html=html)
             if gate_findings:
                 scene_gate_issues[sc['id']] = gate_findings
                 _emit(task, {'type': 'scene_gate', 'scene_id': sc['id'],

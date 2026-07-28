@@ -637,6 +637,252 @@ def test_the_composition_choice_is_its_own_control_not_the_render_preset():
         'the composition choice is never sent to the backend')
 
 
+# ── 10. The frame must be RIGHT, not merely well-formed ───
+#
+# The measured defect: an authored scene rendered the eyebrow 「极极致耐用测试」
+# while its beat said 「耐用性」. lint + validate + inspect ALL passed — they
+# check fonts, contrast, runtime errors and overflow, i.e. whether a frame is
+# WELL-FORMED. None of them has an opinion on whether it is RIGHT. That is the
+# same class of failure this whole effort is about: shipping green while
+# looking wrong to a human.
+
+
+def _real_compositions() -> list[tuple[str, str, str, dict]]:
+    """Every authored composition on disk paired with its own beat.
+
+    Deliberately the REAL corpus, not synthetic fixtures: a fidelity gate is
+    a false-positive problem, and only genuine authored output can show
+    whether it fires on good writing. Returns (job, scene_id, html, scene);
+    empty when no job has been run on this host, which callers must skip on
+    rather than assert over nothing (charter: verify the scan surface).
+    """
+    import glob
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    jobs = os.path.join(root, 'data', 'motion_video', 'jobs')
+    out: list[tuple[str, str, str, dict]] = []
+    for html_path in sorted(glob.glob(
+            os.path.join(jobs, '*', 'scenes', '*', 'index.html'))):
+        scene_dir = os.path.dirname(html_path)
+        scene_id = os.path.basename(scene_dir)
+        job_dir = os.path.dirname(os.path.dirname(scene_dir))
+        storyboard = os.path.join(job_dir, 'scenes.json')
+        if not os.path.isfile(storyboard):
+            continue
+        try:
+            with open(storyboard, encoding='utf-8') as f:
+                scenes = json.load(f)
+            with open(html_path, encoding='utf-8') as f:
+                html = f.read()
+        except (OSError, ValueError) as e:
+            print(f'[corpus] skipped {html_path}: {e}')
+            continue
+        scene = next((s for s in scenes if str(s.get('id')) == scene_id), None)
+        if scene:
+            out.append((os.path.basename(job_dir), scene_id, html, scene))
+    return out
+
+
+def test_the_fidelity_gate_flags_the_measured_corruption():
+    """The one real defect in the corpus must be caught.
+
+    Uses the shipped 「极极致耐用测试」 frame rather than a synthetic string, so
+    the guard is anchored to output the pipeline actually produced.
+    """
+    from lib.motion_video import check_text_fidelity
+
+    corpus = _real_compositions()
+    if not corpus:
+        pytest.skip('no motion jobs on this host to measure against')
+    hits = {f'{job}/{sid}': check_text_fidelity(html, scene)
+            for job, sid, html, scene in corpus
+            if check_text_fidelity(html, scene)}
+    assert hits, (
+        'the fidelity gate fires on nothing in the whole corpus — including '
+        'the frame that shipped 极极致耐用测试 against a beat saying 耐用性')
+    assert any('极极' in e for errs in hits.values() for e in errs), (
+        f'the known corruption is no longer detected; gate fired on {hits}')
+
+
+def test_the_fidelity_gate_does_not_punish_good_writing():
+    """The false-positive bound — measured before the rule was tightened.
+
+    This is the assertion that keeps the gate honest. A naive "any doubled CJK
+    character" rule fires on **14** of the corpus's scenes, 13 of them ordinary
+    reduplicated words (恰恰 / 源源 / 准准 / 证证 / 偷偷) that the beat itself
+    contains. Degrading 13 good scenes to plain template cards would be worse
+    than the bug being fixed, so the shipped rule requires the doubled pair to
+    be ABSENT from the source. Anything above a couple of hits means the rule
+    has drifted back toward flagging legitimate prose.
+    """
+    from lib.motion_video import check_text_fidelity
+
+    corpus = _real_compositions()
+    if not corpus:
+        pytest.skip('no motion jobs on this host to measure against')
+    flagged = [f'{job}/{sid}: {check_text_fidelity(html, scene)}'
+               for job, sid, html, scene in corpus
+               if check_text_fidelity(html, scene)]
+    assert len(flagged) <= 2, (
+        f'{len(flagged)}/{len(corpus)} real scenes tripped the fidelity gate '
+        f'— at this rate it degrades good compositions, so the GATE is wrong, '
+        f'not the compositions: {flagged}')
+
+
+def test_a_reduplicated_word_the_beat_supports_is_not_a_corruption():
+    """Legitimate Chinese reduplication must pass.
+
+    The precise mechanism the false-positive bound relies on, asserted
+    directly so a refactor cannot drop the source cross-check and stay green
+    on a corpus that happens to be clean.
+    """
+    from lib.motion_video import check_text_fidelity
+
+    html = ('<html><body><div data-composition-id="s1">'
+            '<h1>源源不断的算力</h1></div></body></html>')
+    supported = {'id': 'scene-001', 'text': '算力源源不断地涌入这个行业'}
+    assert check_text_fidelity(html, supported) == [], (
+        'a reduplicated word the narration itself uses was reported as '
+        'corruption — this degrades correctly-written scenes')
+
+    unsupported = {'id': 'scene-001', 'text': '算力涌入这个行业'}
+    assert check_text_fidelity(html, unsupported), (
+        'the complement failed: with no support in the beat, the doubled '
+        'characters must be reported')
+
+
+def test_script_and_style_bodies_are_not_judged_as_on_frame_text():
+    """Only what a VIEWER reads counts.
+
+    Without this, a CSS rule or a JS identifier can trip the gate — text that
+    never reaches the frame, so the resulting degrade would be unexplainable
+    to anyone looking at the video.
+    """
+    from lib.motion_video import visible_text
+
+    html = ('<html><head><style>.aa{color:red}</style></head><body>'
+            '<script>const 变变 = 1;</script><p>正常标题</p></body></html>')
+    strings = visible_text(html)
+    assert '正常标题' in strings
+    assert not any('变变' in s for s in strings), (
+        'script bodies are being read as on-frame text')
+
+
+def test_fidelity_findings_reach_the_quality_verdict():
+    """A finding that only logs is not a gate.
+
+    Charter: testing the helper is not testing the wiring. This drives the
+    engine's own collector so removing the fidelity call from
+    ``_scene_gate_findings`` fails here, not just in review.
+    """
+    from lib.motion_video import engine
+
+    class _MV:
+        @staticmethod
+        def check_text_fidelity(html, scene):
+            from lib.motion_video import check_text_fidelity
+            return check_text_fidelity(html, scene)
+
+        @staticmethod
+        def check_project(_d, **_k):
+            return {'ok': True, 'errors': []}
+
+    html = ('<html><body><div data-composition-id="s1">'
+            '<h1>极极致耐用测试</h1></div></body></html>')
+    findings = engine._scene_gate_findings(
+        _MV(), '/tmp/x', 'scene-003',
+        scene={'id': 'scene-003', 'text': '这一代产品的耐用性大幅提升'},
+        html=html)
+    assert findings, (
+        'a corrupted headline passes the engine gate untouched — the CLI '
+        'gates cannot see it, so nothing would')
+    verdict = engine._quality_verdict(
+        degraded_narration=False,
+        scene_gate_issues={'scene-003': findings},
+        authoring=True, authored=8, total=8)
+    assert verdict['degraded'] is True and 'scene-003' in verdict['reason']
+
+
+def test_fidelity_survives_an_infrastructure_skip():
+    """A corrupted headline is still corrupted when Chrome is unavailable.
+
+    The CLI gates return empty on ``env_missing`` (correctly — that is an
+    infra outcome). Fidelity is computed from HTML we already hold, so it must
+    NOT be swallowed by the same exemption.
+    """
+    from lib.motion_video import engine
+
+    class _MV:
+        @staticmethod
+        def check_text_fidelity(html, scene):
+            from lib.motion_video import check_text_fidelity
+            return check_text_fidelity(html, scene)
+
+        @staticmethod
+        def check_project(_d, **_k):
+            return {'ok': False, 'category': 'env_missing', 'errors': []}
+
+    findings = engine._scene_gate_findings(
+        _MV(), '/tmp/x', 'scene-003',
+        scene={'id': 'scene-003', 'text': '这一代产品的耐用性大幅提升'},
+        html=('<html><body><div data-composition-id="s1">'
+              '<h1>极极致耐用测试</h1></div></body></html>'))
+    assert findings, (
+        'text fidelity was dropped along with the CLI gates on env_missing; '
+        'it needs no toolchain and must still be reported')
+
+
+def test_the_author_can_repair_a_fidelity_finding_before_the_film_ships():
+    """The finding must ride the author's own feedback loop.
+
+    Reported only at the end, a corrupted headline can no longer be fixed —
+    the scene just degrades. ``_full_gate`` is what the author's
+    ``composition_check`` tool calls, so the check must live there too.
+    """
+    from lib.motion_video._scene_author import _full_gate
+
+    html = ('<html><body><div data-composition-id="s1" data-duration="4" '
+            'data-width="1080" data-height="1440"><h1>极极致耐用测试</h1>'
+            '</div></body></html>')
+    errors = _full_gate(html, '/tmp/nowhere-scene',
+                        scene={'id': 'scene-003',
+                               'text': '这一代产品的耐用性大幅提升'})
+    assert any('极极' in e for e in errors), (
+        'composition_check does not report text corruption, so the author '
+        'never learns about it and cannot repair it')
+
+
+# ── 11. Vertical composition guidance ─────────────────────
+#
+# Measured on this host's authored scenes BEFORE the guidance existed: mean
+# vertical span 65.0% of frame height, mean bottom dead-band 19.5%, worst two
+# at 34.0% and 33.3%. The guide covered duration and edge margins but said
+# nothing about filling the frame's tall axis, so 35-40% dead space at the
+# bottom was a missing instruction rather than a per-scene accident.
+
+
+def test_the_craft_guide_instructs_the_author_on_vertical_composition():
+    """Asserts the instruction reaches the AUTHOR, not just the file.
+
+    Driven through ``_build_prompt`` (what the model actually receives) rather
+    than by reading the markdown — the guide is truncated into the prompt, so
+    a section appended past the limit would be invisible while the file
+    happily contains it.
+    """
+    from lib.motion_video._scene_author import _build_prompt
+
+    prompt = _build_prompt(
+        {'id': 'scene-001', 'text': '固态电池能量密度翻倍', 'visual': 'stat card'},
+        width=1080, height=1440, duration=4.0, scene_index=1, total_scenes=3)
+    low = prompt.lower()
+    assert 'vertical' in low, (
+        'the author is never told to fill the frame vertically — 35-40% dead '
+        'space at the bottom is the result')
+    assert 'dead' in low or 'space-between' in low, (
+        'the guidance names no concrete remedy for the dead band')
+    # A target the author can aim at, not just a prohibition.
+    assert re.search(r'8[05]\s*-\s*9[05]%', prompt), (
+        'no measurable vertical-span target for the author to hit')
 def test_craft_guide_is_vendored_in_tree():
     path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                         'lib', 'motion_video', 'guide', 'MOTION_CRAFT.md')

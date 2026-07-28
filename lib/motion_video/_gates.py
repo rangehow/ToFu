@@ -32,7 +32,8 @@ from lib.log import get_logger
 logger = get_logger(__name__)
 
 __all__ = ['check_storyboard', 'check_composition_html', 'probe_video',
-           'verify_spec', 'check_scene_budget', 'NARRATION_CHARS_PER_SECOND']
+           'verify_spec', 'check_scene_budget', 'check_text_fidelity',
+           'visible_text', 'NARRATION_CHARS_PER_SECOND']
 
 # ── Storyboard gates ──────────────────────────────────────
 
@@ -249,6 +250,91 @@ def check_composition_html(html: str) -> list[str]:
     for rx, label in _BANNED:
         if rx.search(code):
             errors.append(f'determinism violation: {label}')
+    return errors
+
+
+# ── Text fidelity ─────────────────────────────────────────
+#
+# WHY THIS GATE EXISTS (measured, not hypothesised): a real authored scene
+# rendered the eyebrow 「极极致耐用测试」 while its beat said 「耐用性」. The
+# frame passed EVERY existing gate — lint (fonts), validate (runtime errors +
+# WCAG contrast) and inspect (overflow) all check that a frame is
+# WELL-FORMED; none of them has an opinion on whether it is RIGHT. A
+# duplicated character today is a wrong number or a garbled product name
+# tomorrow, so "ships green while visibly wrong to a human" needs its own
+# check rather than a copy-edit pass.
+
+#: Two identical adjacent CJK characters. The narrow, unambiguous shape of
+#: text corruption — and cheap enough to run on every scene.
+_REPEATED_CJK_RE = re.compile(r'([\u4e00-\u9fff])\1')
+_CJK_RE = re.compile(r'[\u4e00-\u9fff]')
+_ENTITY_RE = re.compile(r'&[a-zA-Z#0-9]+;')
+_SCRIPT_STYLE_RE = re.compile(r'(?is)<(script|style)\b.*?</\1>')
+
+
+def visible_text(html: str) -> list[str]:
+    """The text strings a VIEWER would read, in document order.
+
+    Script and style bodies are removed first: their contents never reach the
+    frame, and judging them would flag identifiers and CSS as prose.
+    """
+    body = _SCRIPT_STYLE_RE.sub(' ', html or '')
+    out: list[str] = []
+    for chunk in re.findall(r'>([^<>]+)<', body):
+        text = _ENTITY_RE.sub(' ', chunk).strip()
+        if text:
+            out.append(text)
+    return out
+
+
+def check_text_fidelity(html: str, scene: dict) -> list[str]:
+    """Reject a composition whose on-frame text CORRUPTS its source beat.
+
+    The author is handed the beat's ``text`` / ``on_screen`` / ``visual`` and
+    may legitimately condense or re-word them — a headline is supposed to be
+    a rewrite, not a quotation. So this gate judges only what no rewrite can
+    excuse: a **doubled CJK character that does not occur doubled anywhere in
+    the source**.
+
+    **Why the source cross-check is load-bearing, with numbers.** Measured
+    over the 41 authored compositions on disk (166 visible strings), the bare
+    "repeated adjacent CJK" pattern fires **14** times — but 13 of those are
+    ordinary reduplicated Chinese words that the beat itself contains
+    (恰恰 / 源源 / 准准 / 证证 / 偷偷). Requiring the pair to be ABSENT from the
+    source drops it to **exactly 1 hit: the real 极极 defect**. Without the
+    cross-check this gate would degrade 13 good scenes to plain template
+    cards — worse than the bug it fixes.
+
+    **Deliberately NOT implemented: "on-frame text must appear in the
+    source".** Measured on the same corpus, verbatim containment flags
+    **59%** of CJK strings, and narrowing it to "introduces no character
+    absent from the source" still flags **12%** — including 「核聚变商业化浪潮」
+    and 「全球资本竞逐新高地」, which are exactly the well-written headlines this
+    whole effort is trying to produce. A gate that punishes good copywriting
+    is a wrong gate, so that rule is left out until a formulation exists that
+    measures clean on real output.
+
+    Returns human-readable errors (empty = pass), same contract as the
+    sibling gates so findings flow into the repair prompt unchanged.
+    """
+    if not html:
+        return []
+    source = ''.join(str(scene.get(k) or '')
+                     for k in ('text', 'on_screen', 'visual')) if scene else ''
+    errors: list[str] = []
+    for string in visible_text(html):
+        if not _CJK_RE.search(string):
+            continue
+        for match in _REPEATED_CJK_RE.finditer(string):
+            pair = match.group(0)
+            if pair in source:
+                continue  # a real reduplicated word — the beat says so
+            context = string[max(0, match.start() - 8):match.start() + 10]
+            errors.append(
+                f'on-frame text corrupts the source: {pair!r} is doubled in '
+                f'"{context}" but appears nowhere doubled in this scene\'s '
+                f'narration/caption/art-direction — fix the typo')
+            break  # one finding per string is enough to send it back
     return errors
 
 

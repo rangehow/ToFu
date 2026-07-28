@@ -170,7 +170,8 @@ def _read_guide(name: str, limit: int = 12000) -> str:
         return ''
 
 
-def _full_gate(html: str, scene_dir: str, *, abort_event=None) -> list[str]:
+def _full_gate(html: str, scene_dir: str, *, abort_event=None,
+               scene: dict | None = None) -> list[str]:
     """Regex gate + the THREE REAL gates (lint / validate / inspect).
 
     The regex gate (:func:`~lib.motion_video._gates.check_composition_html`)
@@ -183,12 +184,35 @@ def _full_gate(html: str, scene_dir: str, *, abort_event=None) -> list[str]:
     When the CLI is unavailable the real gates report ``env_missing``; that is
     NOT a composition defect, so it degrades to the regex verdict rather than
     failing the scene.
+
+    Also runs the two gates the CLI *cannot* express: text fidelity and
+    vertical fill. Both are computed from the HTML in hand, so neither is
+    swallowed by an ``env_missing`` outcome — a corrupted headline and a frame
+    that is two-thirds empty are equally wrong with or without a toolchain.
     """
-    from lib.motion_video._gates import check_composition_html
+    from lib.motion_video._gates import check_composition_html, check_text_fidelity
 
     errors = list(check_composition_html(html))
+    # Text fidelity rides the SAME feedback loop as the contract errors, so a
+    # corrupted headline is something the author can still repair in a later
+    # round rather than a verdict delivered after the film is finished.
+    if scene is not None:
+        errors += list(check_text_fidelity(html, scene))
     if errors:
         return errors  # contract broken — no point booting Chrome
+    # Vertical fill is measured in its OWN browser boot from the HTML we
+    # already hold, so — like fidelity, and unlike the CLI gates — it survives
+    # an env_missing / chrome outcome. Collected BEFORE the CLI call for that
+    # reason: both of the early returns below are unreachable-for-fill paths,
+    # and a frame that leaves a third of its height empty is still empty when
+    # the hyperframes CLI is absent. The CLI cannot see this defect at all —
+    # it reports content spilling OUT of the frame, never failing to fill it.
+    fill: list[str] = []
+    try:
+        from lib.motion_video._fill import check_composition_fill
+        fill = list(check_composition_fill(html))
+    except Exception as e:
+        logger.warning('[SceneAuthor] fill gate crashed: %s', e, exc_info=True)
     try:
         from lib.motion_video._render import check_project
         with open(os.path.join(scene_dir, 'index.html'), 'w',
@@ -197,13 +221,13 @@ def _full_gate(html: str, scene_dir: str, *, abort_event=None) -> list[str]:
         res = check_project(scene_dir, abort_event=abort_event)
     except Exception as e:
         logger.warning('[SceneAuthor] real gates unavailable: %s', e)
-        return []
+        return fill
     if res.get('category') in ('env_missing', 'aborted', 'timeout', 'chrome'):
         logger.info('[SceneAuthor] real gates skipped (%s)', res.get('category'))
-        return []
+        return fill
     out = [str(e) for e in res.get('errors', [])]
     out += [f'{h}' for h in res.get('fix_hints', []) if h]
-    return out
+    return out + fill
 
 
 def _build_prompt(scene: dict, *, width: int, height: int, duration: float,
@@ -341,7 +365,8 @@ def author_scene(scene: dict, scene_dir: str, *, width: int, height: int,
                 _reply(tc_id, 'Rejected: that is not a complete HTML document.')
                 return
             state['html'] = html
-            errors = _full_gate(html, scene_dir, abort_event=abort_event)
+            errors = _full_gate(html, scene_dir, abort_event=abort_event,
+                                scene=scene)
             state['gate_ok'] = not errors
             _reply(tc_id, {'written_chars': len(html),
                            'gate_errors': errors[:8],
@@ -351,7 +376,7 @@ def author_scene(scene: dict, scene_dir: str, *, width: int, height: int,
                 _reply(tc_id, 'Nothing written yet — call write_composition first.')
                 return
             errors = _full_gate(state['html'], scene_dir,
-                                abort_event=abort_event)
+                                abort_event=abort_event, scene=scene)
             state['gate_ok'] = not errors
             _reply(tc_id, {'gate_errors': errors[:8], 'passes_gate': not errors})
         elif name == 'web_search':
@@ -405,7 +430,8 @@ def author_scene(scene: dict, scene_dir: str, *, width: int, height: int,
     if not state['html']:
         return _fallback('author wrote no composition',
                          rounds=outcome.rounds, tokens=state['tokens'])
-    errors = _full_gate(state['html'], scene_dir, abort_event=abort_event)
+    errors = _full_gate(state['html'], scene_dir, abort_event=abort_event,
+                        scene=scene)
     if errors:
         return _fallback('authored composition still fails the static gate: '
                          + '; '.join(str(e) for e in errors[:3]),

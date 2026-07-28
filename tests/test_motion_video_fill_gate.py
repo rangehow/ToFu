@@ -312,7 +312,8 @@ def test_the_author_can_repair_a_fill_finding_before_the_film_ships():
         'window.__timelines["s1"] = gsap.timeline({paused:true});</script>'
         '</body>')
     with tempfile.TemporaryDirectory() as d:
-        errors = _full_gate(html, d, scene={'id': 'scene-005', 'text': 'x'})
+        errors = _full_gate(html, d, scene={'id': 'scene-005', 'text': 'x'},
+                            advisory=True)
     assert not any('__timelines' in e for e in errors), (
         f'fixture is still contract-incomplete, so the gate returned before '
         f'measuring fill: {errors}')
@@ -320,6 +321,55 @@ def test_the_author_can_repair_a_fill_finding_before_the_film_ships():
                for e in errors), (
         f'composition_check does not report under-fill, so the author never '
         f'learns about it and cannot repair it; got {errors}')
+
+
+def test_under_fill_is_advice_not_a_reason_to_ship_the_template():
+    """Under-fill must NOT be an accept/reject verdict.
+
+    Measured: the zero-LLM template itself scores 58% span / 38% bottom dead —
+    it cannot pass its own fill gate. So rejecting an under-filled AUTHORED
+    composition degrades it to a template that is no better on the very axis
+    that triggered the rejection, and burns an agent loop to get there. The
+    complement of the test above: the same composition, judged on the
+    non-advisory path, must come back clean.
+    """
+    import tempfile
+
+    from lib.motion_video._scene_author import _full_gate
+
+    _fill_or_skip(_UNDERFILLED)
+    html = _UNDERFILLED.replace(
+        'data-composition-id="s1"',
+        'data-composition-id="s1" data-duration="4"').replace(
+        '</body>',
+        '<script>window.__timelines = window.__timelines || {};'
+        'window.__timelines["s1"] = gsap.timeline({paused:true});</script>'
+        '</body>')
+    with tempfile.TemporaryDirectory() as d:
+        verdict = _full_gate(html, d, scene={'id': 'scene-005', 'text': 'x'})
+    assert not any('vertical span' in e or 'below the last element' in e
+                   for e in verdict), (
+        f'under-fill is being treated as a rejection, which sends the scene '
+        f'to a template that measures WORSE on the same axis: {verdict}')
+
+
+def test_the_zero_llm_template_cannot_pass_its_own_fill_gate():
+    """Pins the measurement the advisory/verdict split rests on.
+
+    If a future template redesign actually fills the frame, this turns red and
+    the split can be revisited — the reasoning above stops being true.
+    """
+    from lib.motion_video import check_composition_fill
+    from lib.motion_video._template import render_scene_html
+
+    html = render_scene_html(
+        {'id': 'scene-001', 'start': 0.0, 'end': 4.0,
+         'text': '空气分子把阳光散射开来。', 'visual': ''},
+        width=1080, height=1440, duration=4.0, scene_index=1, total_scenes=3)
+    _fill_or_skip(html)
+    assert check_composition_fill(html), (
+        'the template now passes the fill gate — revisit whether under-fill '
+        'should still be advisory-only rather than a rejection')
 
 
 # ── The craft guide must state the truncation rule ────────

@@ -171,7 +171,8 @@ def _read_guide(name: str, limit: int = 12000) -> str:
 
 
 def _full_gate(html: str, scene_dir: str, *, abort_event=None,
-               scene: dict | None = None) -> list[str]:
+               scene: dict | None = None,
+               advisory: bool = False) -> list[str]:
     """Regex gate + the THREE REAL gates (lint / validate / inspect).
 
     The regex gate (:func:`~lib.motion_video._gates.check_composition_html`)
@@ -185,10 +186,18 @@ def _full_gate(html: str, scene_dir: str, *, abort_event=None,
     NOT a composition defect, so it degrades to the regex verdict rather than
     failing the scene.
 
-    Also runs the two gates the CLI *cannot* express: text fidelity and
-    vertical fill. Both are computed from the HTML in hand, so neither is
-    swallowed by an ``env_missing`` outcome — a corrupted headline and a frame
-    that is two-thirds empty are equally wrong with or without a toolchain.
+    Also runs text fidelity, which the CLI cannot express. It is computed from
+    the HTML in hand, so it is not swallowed by an ``env_missing`` outcome — a
+    corrupted headline is corrupted with or without a toolchain.
+
+    ``advisory=True`` additionally reports **vertical fill**. This is the
+    author's FEEDBACK channel, not the accept/reject verdict, and the
+    distinction is load-bearing: the zero-LLM template itself measures 58%
+    span / 38% bottom dead-band, so treating under-fill as a rejection would
+    degrade a 58%-filled authored scene into a template that scores no
+    better — strictly worse output, plus a wasted agent loop. Under-fill is a
+    "make this better" signal; only a broken contract or a real renderer
+    error is a "do not ship this" signal.
     """
     from lib.motion_video._gates import check_composition_html, check_text_fidelity
 
@@ -208,11 +217,13 @@ def _full_gate(html: str, scene_dir: str, *, abort_event=None,
     # the hyperframes CLI is absent. The CLI cannot see this defect at all —
     # it reports content spilling OUT of the frame, never failing to fill it.
     fill: list[str] = []
-    try:
-        from lib.motion_video._fill import check_composition_fill
-        fill = list(check_composition_fill(html))
-    except Exception as e:
-        logger.warning('[SceneAuthor] fill gate crashed: %s', e, exc_info=True)
+    if advisory:
+        try:
+            from lib.motion_video._fill import check_composition_fill
+            fill = list(check_composition_fill(html))
+        except Exception as e:
+            logger.warning('[SceneAuthor] fill gate crashed: %s', e,
+                           exc_info=True)
     try:
         from lib.motion_video._render import check_project
         with open(os.path.join(scene_dir, 'index.html'), 'w',
@@ -366,7 +377,7 @@ def author_scene(scene: dict, scene_dir: str, *, width: int, height: int,
                 return
             state['html'] = html
             errors = _full_gate(html, scene_dir, abort_event=abort_event,
-                                scene=scene)
+                                scene=scene, advisory=True)
             state['gate_ok'] = not errors
             _reply(tc_id, {'written_chars': len(html),
                            'gate_errors': errors[:8],
@@ -376,7 +387,8 @@ def author_scene(scene: dict, scene_dir: str, *, width: int, height: int,
                 _reply(tc_id, 'Nothing written yet — call write_composition first.')
                 return
             errors = _full_gate(state['html'], scene_dir,
-                                abort_event=abort_event, scene=scene)
+                                abort_event=abort_event, scene=scene,
+                                advisory=True)
             state['gate_ok'] = not errors
             _reply(tc_id, {'gate_errors': errors[:8], 'passes_gate': not errors})
         elif name == 'web_search':
@@ -430,6 +442,11 @@ def author_scene(scene: dict, scene_dir: str, *, width: int, height: int,
     if not state['html']:
         return _fallback('author wrote no composition',
                          rounds=outcome.rounds, tokens=state['tokens'])
+    # The ACCEPT/REJECT verdict deliberately omits the advisory fill check:
+    # rejecting an under-filled composition degrades it to the template, which
+    # measures worse on the very same axis (58% span / 38% dead). Fill reaches
+    # the user through the engine's quality axis instead, where it is reported
+    # rather than acted on destructively.
     errors = _full_gate(state['html'], scene_dir, abort_event=abort_event,
                         scene=scene)
     if errors:

@@ -1,6 +1,23 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-28(续4) — **修可读性时我自己造了一个回归:一个 token 扛两个方向,补一半必然崩另一半**(tofu-trade `09e871a` + `c35c5a2`;22 条守卫,NEUTER×2 全咬,相邻环 **54/54**,干净 committed worktree **54/54**)
+
+- **★ 本轮的发现是自查出来的,而发现方式值得记:「我只测了这个 token 的一个方向」。** `23d6b54` 把 dark `--accent` 从 `#6e56cf` 提到 `#8773d7` 以满足**链接文字**的 AA(32 处 `color:`),但 `--accent` **同时是 chip/按钮的填充色**(114 处 background/border),上面压着 `--on-accent` 白字。提亮填充色的直接后果:**白字对比度从 5.39 掉到 3.84** —— 我在同一次编辑里修好了文字角色、弄坏了填充角色。
+- **根因不是取值错,是一个 token 承担了两个互相冲突的角色:文字角色要「亮」,填充角色要「暗」,不可能同时满足。** 修法是**拆 token**:`--accent` 回归填充(值退回原始),新增 `--accent-text` 承担文字角色;32 处 `color:` 改指新 token,114 处非文字用法一行未动。
+
+  | 主题 | accent-text 压 `--bg3` | on-accent 压 accent 填充 |
+  |---|---|---|
+  | dark | 4.50 | 5.39 |
+  | light | 4.50 | 6.29 |
+  | tofu | 4.52 | 5.62 |
+
+- **守卫钉住的是「两个方向同时成立」**,所以将来调任一角色都不能再静默弄坏另一个;并补断言「`--accent` **不得**再有文字用法」—— 把某条文字规则指回填充 token 正是这次回归的发生方式。NEUTER×2 各自精确红。
+- **★ 顺带纠正一个我自己刚写进注释的假数字:** tofu 那行写 `reads 5.03`,实测 **5.62** —— 那是求解草稿阶段的值,最终色定下来后没有重测。守卫测的是真实比值所以没红,**错的只是散文,而下一个读者信的正是散文**。与 charter「注释里的数字必须在可断言闭环内」同族,单独提交 `c35c5a2` 纠正。
+- **★ 扩展扫描面时发现一类更大的预存在问题,但它不是本轮回归 —— A/B 实证:** 压在**半透明 tint chip** 上的文字(`--red-bg` 等 = `color-mix(... 6%, transparent)`)当前 dark 6 / light 24 / tofu 20 对低于 AA;而**同一算法在 `0d92d12^` 上测得 30 / 56 / 54**,即调色板工作已把它砍掉约 **60%**。属历史欠账,已开独立票 `pt_61b79f4351f548cd`,**未并入本批**(owner 偏好:重构中发现的预存在缺陷单独开票)。
+- **★ 测量口径的坑(写进票里,避免下一个人重犯):** 按 base hex 直接算 tint chip 会得出 `--red` 压 `--red-bg` = **1.00** 这种不可能的比值(同色压同色)—— 必须**先把透明度合成到页面表面**再测;`--grad-*` 是 linear-gradient,两个色标没有单一底色,本轮**明确 skip 而非假装能测**。我的第一版扫描器正是栽在这里,报出 18/16/16 个「失败」其中大半是假的。
+- **★ 同一个错误我今天犯了第二次:** NEUTER 还原用 `git checkout --`,把**尚未提交**的 `--accent-text` 全量重写(32 处)一次抹掉。**迭代期间只能从副本还原。** 上一轮已记过一次,这次是复发 —— 说明「知道」不等于「做到」,已在本条显式重述。
+
 ### 2026-07-28(续4) — 本机控制「远端分支」收口:**四条路径里唯一让用户走不通的那条**,而它恰好是托管用户唯一会走到的那条(commits `3c0d1a72` + `a9d31b0f`;守卫 15 → **18/18**,**NEUTER×2 各自精确咬**,相邻环 **86/86**,干净 committed worktree **86/86 零 skip**)
 
 - **★ owner 复核的判据不是「有没有实现」,而是「用户能不能照着做完」。** 合并面(`#localControlToggle` / `#localControlModal` 各 1,旧的 `#browserToggle`/`#desktopToggle`/`#browserModal`/`#mobileBrowser`/`#mobileDesktop` 各 0)与三条本机分支都验过了,但**远端分支两处断链**:

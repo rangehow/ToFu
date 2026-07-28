@@ -1,5 +1,20 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-28(续·作者韧性) — 0/8 的另一半:**一次网络抖动 = 该镜创作永久报废**;而且 `_existing_composition` 分不清降级卡与真构图,把渐变卡**永久钉死**(owner 纠正我「gate 修完就不会落回渐变卡」的错误结论;commit `43b5ed9a`,5 文件 +726/-30;新套件 **23/23 含 NEUTER×2 各咬各的方向**,10 套 motion **229/229**,干净 committed worktree **87/87**)
+
+- **★ owner 纠正我一句错话(记下来):** 我上一批说「gate 误判已清除,素材通道做完不会再落回渐变卡」——**不成立**。8 镜里 gate 误判只占 4 条,另 4 条是 OAuth 掉线 1、token 预算耗尽 2、`aigc.sankuai.com` 读超时 119s 1。**一半降级跟 gate 无关,是 LLM 调用链在抖**;素材通道做完只要网络照旧抖,照样一半镜是渐变卡。
+- **实测基线(注入一次 ReadTimeout,发生在模型已写出好构图之后):** `mode=template`、dispatch 只调了 2 次(**零重试**)、返回的 html 是模板。也就是说**已完成的创作被一次网络抖动整个丢弃**。
+- **★ 比 owner 描述的更严重一层(我实测追加发现):锁定是永久的。** 引擎把降级模板 `_write` 进 `index.html`,而 `_existing_composition` **只比 `data-duration`**,分不清「authored 构图」与「fallback 卡」⇒ 下一轮 resume/regen 直接采纳那张渐变卡 ⇒ **该镜被永久钉死,重跑永远不会重试 authoring**。实测:写入模板后 `_existing_composition` 返回该模板、`is it the template card? True`。
+- **落点四件:**
+  ①`is_transient_fault()` 分离基础设施故障(超时/reset/429/502-504/OAuth 失效/无 slot)与质量判决。**按异常文本匹配而非 isinstance**——调度器把网关失败重抛为**裸 `RuntimeError`**(该作业的 OAuth case 正是如此),isinstance 会漏掉最常见那类。
+  ②`author_scene` 对瞬时故障重试(3 次指数退避),只有真质量判决才降级;循环体提为 `_author_once`,**把失败模式(authored/transient/quality/aborted)作为返回值的一部分**——旧的单函数形态只能说「降级了」,这正是网络抖动与坏构图不可区分的根因。
+  ③每次被接受的 `write_composition` **落盘为草稿**,并带着 gate 未决 findings 喂回下一次尝试/下一次运行 ⇒ 中断的镜头**接着修**而不是从零重写;预算耗尽改为保留最好版本。
+  ④模板自打标记 `TEMPLATE_MARKER`,`_existing_composition` 拒绝采纳 fallback 卡 ⇒ 锁定解除。token 预算按实测证据 60000 → 90000。
+- **★ 草稿位置是测试帮我抓出来的坑:** 第一版把草稿放在场景目录里(`composition.draft.html`),结果渲染器扫 project root 报 **`Multiple root-level HTML files with data-composition-id`**——**每个被恢复的镜头都因此闸红**,也就是「修复」把它本要救的镜头全弄坏了。改放 `.tofu-draft/` 子目录后恢复正常。**判据:任何写进场景目录的新文件都要先问「渲染器扫不扫它」。**
+- **相邻套件一处红是被我有意反转的前提,不是回归:** `test_existing_composition_reused_when_duration_matches` 用**模板**当「任意合法构图」的替身,而我恰好禁止采纳模板。重锚到非模板构图,并补一条新守卫钉「fallback 卡必须被重新创作」。顺带发现它的兄弟 `discarded_when_duration_changed` 修改后会**因错误的理由通过**(模板先被拒,永远走不到时长比较),故一并重锚。
+- **NEUTER×2 各咬各的方向:** 摘掉分类器 → 一次超时重新毁掉该镜(复现上线行为);藏掉模板标记 → resume 重新采纳渐变卡(复现永久锁定)。
+- **验收边界(诚实分账):** 本批只修韧性。素材通道本体(全局哈希库+场景内硬链接、`generate_asset` 走现有 image-gen 底盘、`_verify_asset_refs` 预检含显式拒 `../`、中文无衬线字体资产入库+「naming an absent face 静默回退」守卫)与「有素材镜 vs 纯渐变镜产物帧可区分」的像素验收**均未动**。四个原始问题里目前只有**字幕出界**有像素证据。另:纯后端,**运行中进程不带,需重启才对新作业生效**。
+
 ### 2026-07-28(续·闸判定) — 0/8 全量降级根因:**CLI 自己的报告说合格,`_gate` 只看退出码于是把 6 个好构图全扔了**;修的时候我自己造出「真缺陷被豁免」的反向漏洞,被补集实测抓出(commit `27f143dc`,2 文件 +306/-2;新套件 **12/12 含 NEUTER×2 各咬各的方向**,9 套 motion **205/205**,干净 committed worktree **68/68**)
 
 - **★ 根因不是任何人猜的那样(owner 与我都猜错过):** 我先猜「authoring 整体崩了」,owner 先猜「gate 拒绝 / token 耗尽 / LLM 失败」三选一。实测该作业日志分类:**4 条**是 `check failed (exit 1) without a machine-readable finding: [SystemMemory] cgroup memory limit detected: 225280 MiB`、**1 条** OAuth 掉线、**2 条** token 预算耗尽 + `aigc.sankuai.com` 读超时 119s。主因那 4 条里,**LLM 其实已经写出了构图**。

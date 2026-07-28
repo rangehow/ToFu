@@ -38,6 +38,16 @@
 
 - **顺带记一条环境事实(修正我自己的错误假设):** 我曾怀疑 Playwright 环境是坏的(`libatk-1.0.so.0` 缺失)。**结论是错的**——库缺失只发生在我的 shell;实际 server 进程(`/proc/<pid>/environ`)`CONDA_PREFIX` 与 `LD_LIBRARY_PATH` 齐全,`_ensure_chromium_library_path()` 正常工作(日志 `Augmented LD_LIBRARY_PATH with 2 conda lib dir(s)` → `Playwright browser launched`)。**生产这一层是好的**;复现要注入 `CONDA_PREFIX`。
 
+- **★★ 验收入口(下一段会话从这里接):** `python3 tests/_acceptance_aigc_model_plaza.py`(commit `3d6192a6`,需 `CONDA_PREFIX` 指向 tofu env;只读,不写 `data/config`,不碰凭证)。三态退出码:**0=REAL_CONTENT**(验收通过)/ **1=LOGIN_WALL**(SSRF 已放行但缺 SSO 凭证)/ **2=NO_CONTENT**(抓取失败,看 reason 定位哪一层)。
+  **判据必须锚在正文内容,不能锚在 `reason`**:`reason=extracted_ok` 只回答「提取管线是否产出了正文」,而 SSO 登录页**同样能被成功提取、同样返回 `extracted_ok`**——它对「真内容 vs 登录页」零区分力。我曾据此判定「链路已通」,实测那 1918 字正文全是登录页。现在:负向一票否决且**先于**正向(登录页可能含跳转提示里的正向词,正向先判会被骗),正向需结构词 + 模型实体词 + 正文≥200 字三项同时满足;离线自检 9 例含**陷阱样本**(含齐正向词且长度达标的登录页)仍判 LOGIN_WALL。
+
+- **★★ auth_sources 缓存跨进程陈旧根修(commit `b3141d24`):** `_cache_loaded` 一置 True 就**永不重读磁盘**且无对外失效接口 → 长驻读者(scheduler/optimizer worker 等非 server 入口)永久持有启动那一刻的快照,用户后来在设置面板连接的凭证由**另一个进程**写入,该读者永远读不到,抓取路径持续撞登录墙且除重启外无法恢复(实测坐实:外部写入后 `match_source` 仍返回 `None`)。
+  **判据:只加 `invalidate_cache()` 解决不了跨进程**——本进程调用影响不到另一进程的内存;真正的根因是**缓存没有失效依据**,所以有效性键必须锚在存储文件 **mtime**(任何进程写盘,其他进程下次读时自动发现并重载,不依赖任何一侧主动通知)。`_persist()` 后同步记录自身 mtime,避免自写触发无谓重读并保持 read-your-writes。`invalidate_cache()` 仍做成**公开接口并进 `__all__`**,定位是兜住 mtime 看不见的情形(同刻度覆写 / 手改 JSON / 测试换路径)——**禁止再从模块外扒 `_cache_loaded`**,验收脚本已改调公开接口。守卫 12 条,NEUTER×2 各咬各的(退回 load-once → 4 条跨进程红;摘 `__all__` → 公开性红)。
+
+- **★ 可复用判据(新旧 store 不对称已消除):** 修复前 `private_hosts` 有 `_resync()` 把变更推出去,而 `auth_sources` 连让别人重读的门都没有——这种不对称本身就是缺陷信号。**任何带模块级缓存的配置 store MUST 有失效依据**(mtime / 版本号 / 显式失效接口至少其一),否则它在多进程部署下必然读到陈旧值;新增此类 store 时先问「另一个进程改了盘,我怎么知道」。
+
+- **★ 第五个同型坑(用近似替代判据,这次是我自己抓的):** 缓存守卫首版用 `time.sleep(0.01)` 赌 mtime 粒度,**3 次跑红 1 次**;隔离单跑却 PASSED,一度差点误判成产品缺陷。改为**断言驱动**:`os.utime` 强制推进 mtime 并**断言它确实前进了**,连跑 5 次全绿。**判据:测试要断言前提成立,不要赌环境**——sleep 够不够长是环境属性,mtime 是否真的变了才是前提本身。本轮同型五次(计数替代身份、`extracted_ok` 替代内容、sleep 替代 mtime 断言…),共同形状是**用一个易得的近似信号替代真正的判据**。
+
 ### 2026-07-28(续·logo 定稿) — 主 logo 重设计收口:**A2 柔边精修全量上线**(owner 截图报障「不太满意」→ 三候选 → A 上线后被现场否决 → 全量回滚 → A2 in-situ 验收放行;守卫 `test_frontend_mobile_client_entry` **2/2**;纯静态资源,**刷新页面即生效**)
 
 - **全历程(一条完整的「设计评审方法论」教训链):** 现款 `tofu-welcome.svg` 是像素稿的 VTracer 机器描摹(30.6KB、阶梯随机、16px 五官糊化)→ 三候选对比(A 精修等距/B 扁平/C 规整像素,对比页 `static/icons/_gen/logo-redesign/preview.html`)→ owner 拍板 A 并要求五官 +40% → A 上线后 owner **在真实欢迎屏上否决**(放大的脸太吵、硬几何丢了手作感)→ 全量回滚(兄弟会话 3a225eba + checkout,我逐项 grep 验证零残留)→ A2 新 brief(**比例贴现款、ω 猫嘴保留、只修工艺不修性格**)→ 微调(眼 +15%、嘴 1.15→1.3)→ **in-situ 验收放行**(生产 CSS+真实 markup+playwright 无头截图:欢迎屏 64px/侧栏 22px/标签 16px 三 surface)。

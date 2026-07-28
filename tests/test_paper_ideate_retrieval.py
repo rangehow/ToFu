@@ -51,7 +51,13 @@ def _fail(msg): print(' ', _color('✗', '31'), msg); sys.exit(1)
 
 try:
     import pytest
-    pytestmark = [pytest.mark.unit]
+    # ★ `slow`, NOT `unit`: three tests in this file hit the real arXiv API.
+    # Marking them `unit` put live network calls into `make test-unit` and CI,
+    # where a rate-limit burst or a flaky link turns them red for reasons that
+    # have nothing to do with the code under test. A guard that goes red at
+    # random is indistinguishable from noise, and noise gets ignored — which is
+    # precisely how a real defect slips past a "failing" suite.
+    pytestmark = [pytest.mark.slow]
 except ImportError:
     pytest = None
 
@@ -150,6 +156,27 @@ _MIN_FIELD_HIT_RATE = 0.5
 _MAX_PAIRWISE_OVERLAP = 0.6
 
 
+
+# ── Retrieval seam helpers ─────────────────────────────────────────
+#
+# Gate ② retrieves through the STRUCTURED seam (`ts_search_by_query`), which
+# takes identity/domain LEGS and returns an envelope. It deliberately does NOT
+# use the free-text `search_arxiv` — routing built syntax through that path is
+# what produced the titanium-alloy regression, and these harnesses must drive
+# the seam production actually uses.
+
+def _envelope(papers, outcome=None, query='(ti:a OR ti:b) AND all:"d"'):
+    return {'ok': True, 'papers': list(papers), 'query': query, 'mode': 'fielded',
+            'outcome': outcome or ('hits' if papers else 'no_matches'), 'error': ''}
+
+
+def _patch_retrieval(it, fn):
+    """Patch the structured retrieval seam; returns a restore callable."""
+    saved = it.ts_search_by_query
+    it.ts_search_by_query = fn
+    return lambda: setattr(it, 'ts_search_by_query', saved)
+
+
 def _hit_rate(neighbours):
     if not neighbours:
         return 0.0
@@ -171,20 +198,21 @@ def test_retrieval_query_is_sanitized_never_raw_prose():
 
     captured = []
 
-    def _capture(query, max_results=10):
-        captured.append(query)
-        return []
+    def _capture(identity, domain=None, *, field='ti', max_results=5):
+        # Legs are what production sends now; join them to assert the same
+        # "no prose, no parser-breaking characters" property on the payload.
+        captured.append(' '.join(list(identity or []) + list(domain or [])))
+        return _envelope([])
 
-    saved = it.search_arxiv
-    it.search_arxiv = _capture
+    restore = _patch_retrieval(it, _capture)
     try:
         for idea in ideas:
             it._novelty_prior_set(idea, k=5)
     finally:
-        it.search_arxiv = saved
+        restore()
 
     assert len(captured) == len(ideas), \
-        f'expected one query per idea, got {len(captured)} for {len(ideas)}'
+        f'expected one retrieval per idea, got {len(captured)} for {len(ideas)}'
     for q, idea in zip(captured, ideas):
         assert len(q) <= _MAX_QUERY_CHARS, (
             f'query for {idea.get("title","?")[:40]!r} is {len(q)} chars '
@@ -211,12 +239,12 @@ def test_empty_neighbour_set_marks_novelty_basis_none():
         return
     import lib.paper.ideate as it
 
-    saved = it.search_arxiv
-    it.search_arxiv = lambda query, max_results=10: []   # total retrieval failure
+    restore = _patch_retrieval(
+        it, lambda i, d=None, *, field='ti', max_results=5: _envelope([]))
     try:
         ps = it._novelty_prior_set(ideas[0], k=5)
     finally:
-        it.search_arxiv = saved
+        restore()
 
     assert ps.get('novelty_basis') == 'none', (
         "an empty retrieval must set novelty_basis='none' so the judge's "
@@ -251,9 +279,10 @@ def test_idea_with_unjudgeable_novelty_cannot_be_accepted():
                 'novelty_capped': False}
 
     saved = {k: getattr(it, k) for k in
-             ('_generate_raw_ideas', 'search_arxiv', 'fetch_arxiv_title', '_score_idea')}
+             ('_generate_raw_ideas', 'ts_search_by_query', 'fetch_arxiv_title', '_score_idea')}
     it._generate_raw_ideas = lambda *a, **k: [dict(idea)]
-    it.search_arxiv = lambda query, max_results=10: []       # empty basis
+    it.ts_search_by_query = (lambda i, d=None, *, field='ti', max_results=5:
+                            _envelope([]))          # empty basis
     it.fetch_arxiv_title = lambda aid: 'Real Title'
     it._score_idea = _verdict                                # would score 5.0
     try:
@@ -306,12 +335,12 @@ def test_audit_fields_keep_retrieved_and_self_reported_separate():
                 'novelty_capped': False}
 
     saved = {k: getattr(it, k) for k in
-             ('_generate_raw_ideas', 'search_arxiv', 'fetch_arxiv_title', '_score_idea')}
+             ('_generate_raw_ideas', 'ts_search_by_query', 'fetch_arxiv_title', '_score_idea')}
     it._generate_raw_ideas = lambda *a, **k: [dict(idea)]
-    it.search_arxiv = lambda query, max_results=10: [
+    it.ts_search_by_query = lambda i, d=None, *, field='ti', max_results=5: _envelope([
         {'arxiv_id': '2401.00001', 'title': 'KV cache compression', 'summary': 's'},
         {'arxiv_id': '2401.00002', 'title': 'Attention sparsity', 'summary': 's'},
-    ]
+    ])
     it.fetch_arxiv_title = lambda aid: 'Real Title'
     it._score_idea = _verdict
     try:
@@ -345,16 +374,57 @@ def test_audit_fields_keep_retrieved_and_self_reported_separate():
 
 # ── Test 3: retrieval is on-topic AND discriminates between ideas ──────────
 
+_LIVE_CACHE = {}
+
+
+def _skip_if_retrieval_unreachable():
+    """Skip the live measurements when arXiv is unreachable RIGHT NOW.
+
+    ★ Deliberately narrow. This skips ONLY on a transport verdict
+    (``request_failed`` — 429 / timeout / DNS), never on a measurement result.
+    An on-topic rate that is genuinely too low, or neighbour sets that are
+    genuinely identical, MUST still fail: those are the defects this file
+    exists to catch, and letting the skip swallow them would produce the
+    quietest possible failure — a green suite that measured nothing.
+
+    The probe is one cheap request whose answer we already know (a real arXiv
+    id), so "can we reach the API" is decided separately from "what does the
+    corpus retrieve".
+    """
+    if pytest is None:
+        return
+    from tofu_search.search.vertical import arxiv as ts_arxiv
+    probe = ts_arxiv.search_by_query(['attention'], ['transformer'],
+                                     max_results=1)
+    if probe.get('outcome') == 'request_failed':
+        pytest.skip(
+            'arXiv is unreachable right now '
+            f"({probe.get('error')}) — skipping the LIVE retrieval "
+            'measurement. This is a transport gate only: a real on-topic or '
+            'overlap regression still fails.')
+
+
 def _live_neighbour_sets():
     """Retrieve real neighbours for every real idea (hits the network).
 
     Drives the BATCH path: the fielded query needs every idea's terms to tell
     shared domain background from this idea's identity, which is exactly how
     generate_ideas calls it.
+
+    ★ Memoized for the whole session. Three tests interrogate the SAME
+    retrieval from different angles (on-topic rate / empty basis / pairwise
+    overlap), and re-running it per test tripled the request volume against an
+    API that rate-limits — measured: the third run got HTTP 429 on every rung,
+    then hard read-timeouts, and reported an empty basis for ideas that had
+    real neighbours minutes earlier. The suite was throttling the very API it
+    was trying to measure, and the resulting red looked like a product defect.
     """
+    if 'v' in _LIVE_CACHE:
+        return _LIVE_CACHE['v']
     ideas = _require_corpus()
     if not ideas:
-        return None, None
+        _LIVE_CACHE['v'] = (None, None)
+        return _LIVE_CACHE['v']
     import time
     import lib.paper.ideate as it
     batch = []
@@ -367,7 +437,8 @@ def _live_neighbour_sets():
         ps = it._novelty_prior_set(idea, k=5, batch_terms=batch)
         sets.append(ps.get('retrieved') or [])
         time.sleep(3)          # be polite to the arXiv API
-    return ideas, sets
+    _LIVE_CACHE['v'] = (ideas, sets)
+    return _LIVE_CACHE['v']
 
 
 def test_retrieved_neighbours_are_in_the_ideas_field():
@@ -376,6 +447,7 @@ def test_retrieved_neighbours_are_in_the_ideas_field():
     Failing-first: production scored 0/25 — every neighbour was astrophysics."""
     if pytest is not None:
         pytest.importorskip('requests')
+    _skip_if_retrieval_unreachable()
     ideas, sets = _live_neighbour_sets()
     if ideas is None:
         return
@@ -397,6 +469,7 @@ def test_every_idea_retrieves_a_non_empty_basis():
     """No idea may silently end up with an empty basis (the HTTP-500 case)."""
     if pytest is not None:
         pytest.importorskip('requests')
+    _skip_if_retrieval_unreachable()
     ideas, sets = _live_neighbour_sets()
     if ideas is None:
         return
@@ -416,6 +489,7 @@ def test_neighbour_sets_discriminate_between_ideas():
     effectively a constant."""
     if pytest is not None:
         pytest.importorskip('requests')
+    _skip_if_retrieval_unreachable()
     ideas, sets = _live_neighbour_sets()
     if ideas is None:
         return
@@ -462,19 +536,24 @@ def test_batch_query_is_fielded_and_splits_identity_from_domain():
 
     captured = []
 
-    def _capture(query, max_results=10):
-        captured.append(query)
-        return [{'arxiv_id': '2401.00001', 'title': 'KV cache', 'summary': 's'}]
+    def _capture(identity, domain=None, *, field='ti', max_results=5):
+        # Build the wire query through the SHARED constructor, so this asserts
+        # what actually goes out rather than a string the harness invented.
+        from tofu_search.search.vertical.arxiv import build_query
+        q, _m = build_query(identity, domain, field=field)
+        captured.append(q)
+        return _envelope(
+            [{'arxiv_id': '2401.00001', 'title': 'KV cache', 'summary': 's'}],
+            query=q)
 
-    saved = it.search_arxiv
-    it.search_arxiv = _capture
+    restore = _patch_retrieval(it, _capture)
     try:
         modes = []
         for idea in ideas:
             ps = it._novelty_prior_set(idea, k=5, batch_terms=batch)
             modes.append(ps.get('query_mode'))
     finally:
-        it.search_arxiv = saved
+        restore()
 
     fielded = [q for q in captured if q.startswith('(ti:') and ' AND all:' in q]
     assert fielded, (
@@ -504,12 +583,12 @@ def test_batch_query_is_fielded_and_splits_identity_from_domain():
             f'idea: {q!r}')
 
     # NEUTER: no batch context => nothing to compare against => flat all:.
-    it.search_arxiv = _capture
+    restore = _patch_retrieval(it, _capture)
     captured.clear()
     try:
         it._novelty_prior_set(ideas[0], k=5, batch_terms=None)
     finally:
-        it.search_arxiv = saved
+        restore()
     assert captured and not captured[0].startswith('(ti:'), (
         'NEUTER FAILED: without batch context the query should degrade to a '
         f'flat all: string, got {captured[0]!r}')

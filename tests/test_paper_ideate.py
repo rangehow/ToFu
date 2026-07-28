@@ -86,7 +86,21 @@ def _ab_stitch_no_gap():
 
 
 class _FakeSearch:
-    """A fake search_arxiv returning a fixed neighbor list; records queries."""
+    """A fake arXiv search; records queries. Serves BOTH retrieval seams.
+
+    ★ Gate ② does NOT go through ``search_arxiv``. It calls
+    ``ts_search_by_query`` so identity/domain stay STRUCTURED legs all the way
+    into tofu-search (flattening them into a free-text string is what once
+    returned titanium-alloy papers for a KV-cache idea).
+
+    When this fake only replaced ``search_arxiv``, gate ② silently bypassed it
+    and hit the REAL arXiv API: 16 of 18 patch sites still passed — against
+    live network data — and only 2 went red. A fake that is no longer wired to
+    the code under test does not announce itself; it just stops being a fake.
+    So this object is callable as the free-text entry point AND exposes
+    ``.structured`` for the gate ② entry point, and both record into the same
+    ``queries`` list.
+    """
     def __init__(self, hits):
         self.hits = hits
         self.queries = []
@@ -95,10 +109,31 @@ class _FakeSearch:
         self.queries.append(query)
         return list(self.hits)
 
+    def structured(self, identity_terms, domain_terms=None, *, field='ti',
+                   max_results=5):
+        """Mimic the tofu-search envelope for the gate ② seam."""
+        ident = list(identity_terms or [])
+        dom = list(domain_terms or [])
+        self.queries.append(' '.join(ident + dom))
+        hits = list(self.hits)
+        return {'ok': True, 'query': ' '.join(ident + dom),
+                'mode': 'fielded' if (ident and dom) else 'terms',
+                'papers': hits, 'error': '',
+                'outcome': 'hits' if hits else 'no_matches'}
+
 
 def _patch(monkeyables):
-    """Patch ideate module attributes; return restore()."""
+    """Patch ideate module attributes; return restore().
+
+    Patching ``search_arxiv`` with a ``_FakeSearch`` automatically patches the
+    structured gate ② seam too — otherwise the test would quietly measure the
+    live arXiv API instead of its own fixture.
+    """
     import lib.paper.ideate as it
+    monkeyables = dict(monkeyables)
+    _fs = monkeyables.get('search_arxiv')
+    if isinstance(_fs, _FakeSearch) and 'ts_search_by_query' not in monkeyables:
+        monkeyables['ts_search_by_query'] = _fs.structured
     saved = {k: getattr(it, k) for k in monkeyables}
     for k, v in monkeyables.items():
         setattr(it, k, v)

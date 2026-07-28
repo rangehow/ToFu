@@ -246,46 +246,32 @@ def split_identity_domain(queries) -> list:
 def assemble_arxiv_query(identity, domain, *, tier: int = 1) -> tuple:
     """Build the arXiv query string; return ``(query, mode)``.
 
-    ``mode`` is ``'fielded'`` for a field-constrained query and ``'all'`` for
-    the flat fallback. A fielded query needs BOTH legs — with no domain terms
-    the search could drift out of the field, and with no identity terms there
-    is nothing to tell this idea apart, so either gap degrades to plain ``all:``.
+    ★ CONSTRUCTION LIVES IN tofu-search. This is a thin delegation to
+    ``tofu_search.search.vertical.arxiv.build_query`` — the three measured
+    syntax facts (quoted = exact phrase so novel terms recall zero; identity
+    terms must be OR-ed not AND-ed; the domain leg stays a quoted phrase) are
+    pinned by executable assertions in that package's
+    ``tests/test_arxiv_query_syntax.py``, not by this comment. A comment cannot
+    go red; that is exactly why the knowledge moved.
 
-    ``tier`` widens the identity leg for :func:`_novelty_prior_set`'s retry
-    ladder (1 → title, 2 → abstract). Tier 3 is "domain only" and is expressed
-    by the caller passing no identity terms.
+    Kept as a named function (rather than inlined at the call site) because
+    three tests drive it directly as the ideate-side contract. It maps our
+    ``tier`` (1 = title, 2 = abstract) onto the shared helper's ``field``, and
+    re-labels the mode as ``fielded_t1``/``fielded_t2`` because the ladder in
+    :func:`_novelty_prior_set` reports WHICH rung produced the basis.
 
-    ★ Two syntax facts measured against the live API (2026-07-27), both of
-    which the first implementation got wrong — its queries returned ZERO for
-    all six real ideas and silently degraded to the flat ``all:`` bag it was
-    meant to replace:
-
-    1. A QUOTED multi-word value is an exact PHRASE match. ``ti:"predictive
-       delta"`` requires those two words adjacent in a title, and a novel
-       idea's identity phrase is by definition not in any existing title —
-       0 results, always. Identity terms must be separate unquoted terms.
-    2. Those terms must be OR-ed, not AND-ed. ``ti:predictive AND ti:delta``
-       demands every identity word appear in one title: also 0/6 measured.
-       OR-ing them asks "a paper whose title touches ANY of this idea's
-       distinguishing terms, inside our field", which is what a neighbour IS.
-
-    The domain leg stays a quoted phrase on purpose: it is common field
-    vocabulary ("KV cache compression"), so phrase-matching it is what keeps
-    the search from drifting to real quantum physics for a 'Quantum-Inspired'
-    idea. Measured on the 6 real ideas: 8/9 on-topic, 0% pairwise overlap
-    (was 0/25 on-topic, 100% overlap).
+    ``mode``: ``'fielded_t1'`` | ``'fielded_t2'`` | ``'domain'`` | ``'all'``.
     """
-    ident = [t for t in (identity or []) if t]
-    dom = ' '.join(domain or []).strip()
-    if ident and dom:
-        field = 'ti' if tier <= 1 else 'abs'
-        legs = ' OR '.join(f'{field}:{t}' for t in ident)
-        return f'({legs}) AND all:"{dom}"', f'fielded_t{1 if tier <= 1 else 2}'
-    if dom and not ident:
-        # Tier 3: domain only. Still fielded — an `all:"…"` PHRASE query is a
-        # real constraint, unlike the unquoted bag of words that shipped.
-        return f'all:"{dom}"', 'domain'
-    return (' '.join(ident) + ' ' + dom).strip(), 'all'
+    from tofu_search.search.vertical import arxiv as _ts
+
+    field = 'ti' if tier <= 1 else 'abs'
+    query, mode = _ts.build_query(identity, domain, field=field)
+    if mode == 'fielded':
+        return query, f'fielded_t{1 if tier <= 1 else 2}'
+    if mode == 'domain':
+        return query, 'domain'
+    # 'terms' (no domain constraint) / 'empty' both read as the flat last rung.
+    return query, 'all'
 
 
 def _normalize_kind(raw) -> tuple:
@@ -329,10 +315,33 @@ def dispatch_stream(*args, **kwargs):
 
 
 def search_arxiv(query, max_results=10):
-    """Facade → arXiv search. Patched by tests as ``ideate.search_arxiv``.
-    This is the neighbor-retrieval seam gate ② depends on."""
+    """Facade → FREE-TEXT arXiv search. Patched by tests as ``ideate.search_arxiv``.
+
+    NOT the gate ② seam — that is :func:`ts_search_by_query`. Gate ② has
+    identity/domain legs to pass and must never flatten them into a string
+    here; see that function's docstring for the regression this split prevents.
+    """
     from lib.paper.arxiv import search_arxiv as _sa
     return _sa(query, max_results=max_results)
+
+
+def ts_search_by_query(identity_terms, domain_terms=None, *, field='ti',
+                       max_results=5):
+    """Facade → STRUCTURED neighbour retrieval in tofu-search. Patched by tests.
+
+    Gate ② uses this rather than :func:`search_arxiv` because the shared
+    vertical is the SINGLE place that turns legs into arXiv syntax. Passing a
+    pre-built query through the free-text entry point instead is what made a
+    KV-cache idea come back with titanium-alloy papers: the free-text path
+    sanitizes its input (correct for terms, destructive for built syntax).
+
+    Returns the shared envelope, whose ``outcome`` separates ``no_matches``
+    (asked properly, nothing there → widen the rung) from ``request_failed`` /
+    ``unusable_query`` (not evidence about the literature at all).
+    """
+    from tofu_search.search.vertical.arxiv import search_by_query as _sbq
+    return _sbq(identity_terms, domain_terms, field=field,
+                max_results=max_results)
 
 
 def fetch_arxiv_title(arxiv_id):
@@ -422,60 +431,77 @@ def _novelty_prior_set(idea: dict, *, k: int = IDEATE_NOVELTY_RETRIEVAL_K,
     title = (idea.get('title') or '').strip()
     terms, query_source = _self.build_retrieval_query(idea)
 
-    # Fielded when the batch tells us which terms are shared domain background.
-    # The ladder WIDENS the identity leg instead of collapsing straight back to
-    # the flat bag of words: tier 1 title → tier 2 abstract → tier 3 domain
-    # phrase only. Measured on the 6 real ideas (2026-07-27): tier 1 alone left
-    # 2/6 with an empty basis (their identity terms are genuinely new, so no
-    # TITLE carries them); the ladder fills both from the abstract leg while
-    # keeping 0% pairwise overlap.
-    attempts = [(terms, 'all')]
+    # ★ The ladder carries STRUCTURED LEGS, not pre-built query strings.
+    #
+    # It used to carry strings and hand them to `search_arxiv`, whose contract
+    # is "free text" — so the adapter sanitized them a SECOND time, stripping
+    # `(`, `)` and `:` out of a perfectly good fielded query. Measured damage:
+    # `(ti:predictive OR ti:delta) AND all:"KV cache compression"` became
+    # `all:ti predictive OR ti delta AND all KV cache compression`, and arXiv
+    # answered a KV-cache idea with TITANIUM ALLOY papers (bare `ti` matched
+    # "Ti"). Nothing raised; on-topic fell 96% → 57%.
+    #
+    # Sanitizing is correct for TERMS and destructive for an ALREADY-BUILT
+    # query. One function cannot take both input shapes, so the legs stay
+    # structured all the way down to the single constructor in tofu-search.
+    #
+    # Rungs: tier 1 title → tier 2 abstract → domain phrase only → flat terms.
+    # Measured: tier 1 alone left 2/6 real ideas with an empty basis (their
+    # identity terms are genuinely too new for ANY title); the abstract rung
+    # recovers both while keeping 0% pairwise overlap. Widening — never
+    # collapsing back to a bag of words — is what stops a genuinely-new idea
+    # from falsely reporting "no prior art".
+    #
+    # Each rung is (identity_terms, domain_terms, field, mode_label).
+    _flat = (sanitize_retrieval_query(terms).split(), None, 'ti', 'all')
+    attempts = [_flat]
     if terms and batch_terms:
         try:
             legs = _self.split_identity_domain(list(batch_terms) + [terms])[-1]
             ladder = []
-            for tier in (1, 2):
-                q, mode = _self.assemble_arxiv_query(legs['identity'],
-                                                     legs['domain'], tier=tier)
-                if mode.startswith('fielded'):
-                    ladder.append((q, mode))
-            q3, mode3 = _self.assemble_arxiv_query([], legs['domain'])
-            if mode3 == 'domain':
-                ladder.append((q3, 'domain'))
+            if legs['identity'] and legs['domain']:
+                ladder.append((legs['identity'], legs['domain'], 'ti', 'fielded_t1'))
+                ladder.append((legs['identity'], legs['domain'], 'abs', 'fielded_t2'))
+            if legs['domain']:
+                ladder.append(([], legs['domain'], 'ti', 'domain'))
             if ladder:
-                # Flat all: stays as the last resort behind the ladder.
-                attempts = ladder + [(terms, 'all')]
+                attempts = ladder + [_flat]
         except Exception as e:
-            logger.warning('[Paper:Ideate] fielded query build failed for %.60s: %s '
-                           '— falling back to flat all:', title, e)
-            attempts = [(terms, 'all')]
+            logger.warning('[Paper:Ideate] identity/domain split failed for %.60s: %s '
+                           '— falling back to flat terms', title, e)
+            attempts = [_flat]
 
-    def _search(q):
+    def _search(ident, dom, field):
+        """Retrieve via the shared vertical. Returns (papers, outcome)."""
         try:
-            hits = _self.search_arxiv(
-                q, max_results=max(k, IDEATE_NOVELTY_RETRIEVAL_K)) or []
+            res = _self.ts_search_by_query(
+                ident, dom, field=field,
+                max_results=max(k, IDEATE_NOVELTY_RETRIEVAL_K)) or {}
         except Exception as e:
             logger.warning('[Paper:Ideate] novelty retrieval failed for %.60s: %s', title, e)
-            return []
+            return [], 'request_failed', ''
         out = []
-        for h in hits[:k]:
+        for h in (res.get('papers') or [])[:k]:
             aid = _norm_id(h.get('arxiv_id'))
             if aid:
                 out.append({'arxiv_id': aid, 'title': h.get('title') or '',
                             'summary': (h.get('summary') or '')[:400]})
-        return out
+        return out, res.get('outcome') or '', res.get('query') or ''
 
     query, query_mode, retrieved = '', 'all', []
-    for _q, _mode in attempts:
-        if not _q:
+    for _ident, _dom, _field, _mode in attempts:
+        if not (_ident or _dom):
             continue
-        query, query_mode = _q, _mode
-        retrieved = _search(_q)
+        retrieved, _outcome, _wire = _search(_ident, _dom, _field)
+        query, query_mode = _wire, _mode
         if retrieved:
             break
-        # A too-narrow constraint must not masquerade as "no prior art".
-        logger.warning('[Paper:Ideate] %s query retrieved nothing for %.60s (%r) '
-                       '— widening', _mode, title, _q)
+        # `no_matches` = asked properly, nothing there → widen the rung.
+        # `request_failed` / `unusable_query` are NOT evidence about the
+        # literature, so they must not be read as "no prior art" either.
+        logger.warning('[Paper:Ideate] %s rung retrieved nothing for %.60s '
+                       '(outcome=%s query=%r) — widening',
+                       _mode, title, _outcome, _wire)
     if not query:
         logger.warning('[Paper:Ideate] no usable retrieval query for %.60s', title)
 

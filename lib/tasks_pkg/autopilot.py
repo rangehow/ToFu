@@ -595,6 +595,34 @@ def run_virtual_user(task: dict, vu_msg_id: str | None = None) -> dict | None:
         return None
 
     text = (result.get('content') or '').strip()
+
+    # ── Canned-greeting guard (2026-07-28 Opus 5 incident) ──
+    # The VU runs on the same upstream model as the worker, so when that
+    # deployment degenerates the VU's reply is the SAME canned greeting
+    # (see lib/tasks_pkg/stream_handler/_canned_greeting.py). Appending it
+    # would relay the artifact into the conversation as a synthetic user
+    # turn and spawn a follow-up task whose query IS the greeting — the
+    # incident's amplification leg (observed: 18 such rows in 10 convs in
+    # ~5h, e.g. ms3sahx7cotx3y ords 9/11/13). Stop the run instead: None
+    # routes the caller into its normal cancel/concluded path, and the next
+    # real event re-arms autopilot. A legitimate VU reply is never a bare
+    # opener-greeting, and the directive tail of vu_messages is substantial
+    # work text, so the small-talk complement inside the detector never
+    # suppresses this guard on a real reply.
+    from lib.tasks_pkg.stream_handler._canned_greeting import (
+        is_canned_greeting_reply as _is_canned_greeting_reply,
+    )
+    if _is_canned_greeting_reply(text, vu_messages):
+        logger.warning(
+            '[Autopilot %s] VU reply is a canned upstream greeting (%r) — '
+            'stopping the run instead of relaying the artifact into the '
+            'conversation as a user turn', tid, text[:60])
+        audit_log('autopilot_vu_canned_greeting',
+                  task_id=task.get('id', ''),
+                  conv_id=task.get('convId', ''),
+                  text=text[:60])
+        return None
+
     rounds = list(sub_task.get('toolRounds') or [])
     # Route the stop decision through the single source of truth.  The
     # virtual_user policy ends the loop only on an explicit TASK_DONE/STOP
@@ -978,6 +1006,17 @@ def _maybe_run_autopilot_inner(task: dict) -> dict | None:
         segments=vu_segments,
     )
     if vu_msg is None:
+        # The append did not land. Every reason for that (row gone, CAS budget
+        # exhausted, or a real human turn arriving mid-flight so we must NOT
+        # append behind them) means the run stands down with a finished reply
+        # in hand — which is exactly the case this bypass exists for. Falling
+        # through to a bare `return None` here is what destroyed 5 completed VU
+        # turns: yielding is not destroying.
+        _preserve_unsent_vu_and_conclude(
+            task, conv_id, run_id, vu_msg_id, vu_text_clean,
+            reason='vu_append_not_persisted')
+        _emit_vu_lifecycle_frame(task, build_event(
+            EventType.AUTOPILOT_VU_CANCEL, vuMsgId=vu_msg_id))
         return None
 
     # Server-side auto-translate safety net for the VU turn — the append path

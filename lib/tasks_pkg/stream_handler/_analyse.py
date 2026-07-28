@@ -13,10 +13,14 @@ from lib.tasks_pkg.manager import append_event
 
 from lib.tasks_pkg.stream_handler._audit import _maybe_audit_phase_scope
 from lib.tasks_pkg.stream_handler._budget import (
+    _CANNED_GREETING_RETRY_MAX,
     _EMPTY_STOP_RETRY_MAX,
     _PREMATURE_RETRY_MAX_CLASSIC,
     _PREMATURE_RETRY_MAX_ZERO_BYTE,
     _zero_byte_backoff_seconds,
+)
+from lib.tasks_pkg.stream_handler._canned_greeting import (
+    is_canned_greeting_reply,
 )
 
 logger = get_logger(__name__)
@@ -409,6 +413,75 @@ def analyse_stream_result(
             _interruptible_sleep(_backoff_s, task)
             result['action'] = 'continue'
             return result
+
+        # ── Canned-greeting upstream artifact (2026-07-28 Opus 5 incident) ──
+        # The gateway's only Opus 5 request-id (a daily eval build) began
+        # answering ANY request — including mid-tool-work continuations —
+        # with an identical canned greeting and a CLEAN finish_reason=stop
+        # (real M-TraceId, real usage). Every transport guard keys off
+        # MISSING output, so this "successful" degenerate response ended
+        # turns and was persisted over accumulated tool work (68+ events in
+        # ~5h, see _canned_greeting.py). Detect by CONTENT + INCONGRUENCE
+        # and retry like the other transient buckets — the failure was
+        # intermittent (~50%/round), so a bounded retry recovers most
+        # turns. Shares the per-phase counter (runaway-guard discipline).
+        _is_canned_greeting = is_canned_greeting_reply(round_content, messages)
+        if (_is_canned_greeting
+                and _premature_retry_count < _CANNED_GREETING_RETRY_MAX):
+            _premature_retry_count += 1
+            result['premature_retry_count'] = _premature_retry_count
+            if '_premature_retry_count_phase' in task:
+                task['_premature_retry_count_phase'] = _premature_retry_count
+            _backoff_s = 1.0 + random.uniform(0.0, 1.0)
+            logger.warning(
+                '[%s] ⚠️ CANNED GREETING detected at round %d: finish=stop '
+                'content=%dchars (%r) — a greeting opener incongruent with '
+                'the conversation tail. M-TraceId=%s elapsed=%.1fs model=%s '
+                'Retrying (%d/%d) after %.1fs backoff…',
+                tid, round_num, len(round_content), round_content[:40],
+                _trace_id, _stream_elapsed_ms / 1000, model,
+                _premature_retry_count, _CANNED_GREETING_RETRY_MAX,
+                _backoff_s,
+            )
+            append_event(task, {
+                'type': 'phase',
+                'phase': 'retrying',
+                'attempt': _premature_retry_count,
+                'max': _CANNED_GREETING_RETRY_MAX,
+                'bucket': 'canned_greeting',
+                'backoff_s': round(_backoff_s, 2),
+                'detail': (
+                    f'⚠️ 上游返回了与任务无关的模板问候（{len(round_content)}字符），'
+                    f'重试中 ({_premature_retry_count}/{_CANNED_GREETING_RETRY_MAX})…'
+                ),
+            })
+            _interruptible_sleep(_backoff_s, task)
+            result['action'] = 'continue'
+            return result
+
+        if _is_canned_greeting:
+            # Budget exhausted — ACCEPT, never fabricate an error: a greeting
+            # can be legitimate, and the persist-layer interception
+            # (_maybe_preserve_accumulated_on_suspicion) rebuilds accumulated
+            # narration when this overwrote real tool work. Loud + audited so
+            # the upstream incident stays observable.
+            logger.warning(
+                '[%s] ⚠️ CANNED GREETING retries exhausted at round %d '
+                '(%d/%d) — accepting the response. content=%r '
+                'M-TraceId=%s model=%s',
+                tid, round_num, _premature_retry_count,
+                _CANNED_GREETING_RETRY_MAX, round_content[:60],
+                _trace_id, model,
+            )
+            try:
+                from lib.log import audit_log
+                audit_log('canned_greeting_retries_exhausted',
+                          task_id=task.get('id', ''),
+                          conv=task.get('convId', ''),
+                          round=round_num, model=model,
+                          content=round_content[:60])
+            except Exception as _ae:
+                logger.debug('[%s] canned-greeting audit failed: %s', tid, _ae)
 
         # ── Stream anomaly — with or without content ──
         # If the LLM client flagged a stream anomaly (_missing_done,

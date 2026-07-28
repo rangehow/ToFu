@@ -546,6 +546,49 @@ def _kickoff_age_ms(conv_id: str, board_task_id: str, now_ms: int) -> int | None
         return None
 
 
+def _paths_waited_but_held(epic: dict, board_tasks: list) -> list:
+    """The subset of the epic's ``wait_paths`` currently under a LIVE path
+    lease held by a DIFFERENT conversation than the epic's dispatch target.
+
+    The inverse read of the kind='lease' board rows
+    (docs/PROJECT_BRAIN_WAIT_ON_PATH.md): the lease claim says "conv X is
+    actively touching path Y — hold off"; wait-on-path reads the same rows
+    from the epic's side ("hold my epic while Y is held by someone else").
+    A lease the epic's OWN target holds is not a hold — that conv is the one
+    supposed to run the work.
+
+    Fail-open by construction (design invariant 3): an empty/unparseable
+    ``wait_paths``, or a path nobody leases, resolves to [] (not held) so a
+    stale entry can never strand an epic. Matching reuses the write-set
+    ``_paths_intersect`` semantics (exact or containment either direction) —
+    conservative: a false overlap only HOLDS an epic (safe), never migrates
+    one. Returns the held subset (empty = not waiting).
+    """
+    paths = epic.get('wait_paths') or []
+    if not isinstance(paths, list) or not paths:
+        return []
+    target = _dispatch_target(epic)
+    live_foreign_leases = [
+        t for t in (board_tasks or [])
+        if isinstance(t, dict)
+        and t.get('kind') == 'lease'
+        and t.get('status') == 'claimed'          # effective: lease unexpired
+        and (t.get('owner_conv_id') or '') != target
+    ]
+    if not live_foreign_leases:
+        return []
+    held = []
+    for p in paths:
+        ps = str(p).strip()
+        if not ps:
+            continue
+        for lease in live_foreign_leases:
+            if _paths_intersect(ps, lease.get('title') or ''):
+                held.append(ps)
+                break
+    return held
+
+
 def _originator_stuck(project_path: str, epic: dict, board_tasks: list,
                       now_ms: int) -> bool:
     """True iff the epic's current dispatch target is GENUINELY unable to run
@@ -568,6 +611,12 @@ def _originator_stuck(project_path: str, epic: dict, board_tasks: list,
             return False
         # 3 — correctly held (cooldown) is NOT stuck.
         if int(epic.get('blocked_until') or 0) > now_ms:
+            return False
+        # 3b — correctly held (wait-on-path: a listed path is under a LIVE
+        # lease owned by a DIFFERENT conversation) is NOT stuck. Migrating
+        # would override the hold the epic declared, and the hold self-expires
+        # with the lease (never a deadlock, so never a migration trigger).
+        if _paths_waited_but_held(epic, board_tasks):
             return False
         # 2 — a busy target is working, not stuck.
         if _conv_has_live_task(target):

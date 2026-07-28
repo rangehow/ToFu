@@ -238,6 +238,16 @@ def _row_to_task(r, now_ms: int) -> dict:
     except (KeyError, IndexError, TypeError) as e:
         logger.debug('[Board] dispatch_target field parse failed, defaulting: %s', e)
         dispatch_target = ''
+    # wait_paths is nullable-safe: a pre-migration row (no column) reads as
+    # an empty list -> nothing waited on (never stranded). Malformed JSON
+    # also -> [] (fail-open; docs/PROJECT_BRAIN_WAIT_ON_PATH.md invariant 3).
+    try:
+        wait_paths = json.loads(r['wait_paths'] or '[]')
+        if not isinstance(wait_paths, list):
+            wait_paths = []
+    except (KeyError, IndexError, TypeError, ValueError) as e:
+        logger.debug('[Board] wait_paths parse failed, defaulting: %s', e)
+        wait_paths = []
     # write_set is nullable-safe: a pre-migration row (no column) reads as an
     # empty list -> unknown footprint -> treated as non-conflicting (never
     # stranded). Malformed JSON also -> []. See select_dispatchable's
@@ -272,6 +282,10 @@ def _row_to_task(r, now_ms: int) -> dict:
         # dispatch_target: mutable routing override (idle-sibling migration).
         # created_by_conv is immutable authorship; this is who runs it NEXT.
         'dispatch_target': dispatch_target,
+        # wait_paths: JSON list of paths this epic waits on — held while any is
+        # under a LIVE lease owned by a DIFFERENT conversation (inverse read of
+        # the kind='lease' rows; consumed by _originator_stuck condition 3).
+        'wait_paths': wait_paths,
         # write_set: JSON list of paths/globs/subsystem-tags this epic intends
         # to write; select_dispatchable prefers epics whose write_set is
         # disjoint from live-claimed epics' (dispatch-time collision avoidance).

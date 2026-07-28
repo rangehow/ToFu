@@ -1,6 +1,27 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-28 — 全量测试体检:11,112 用例 → **161 真失败**,其中只有 **3 条是真 bug**;而我为第 3 条写的行为守卫**连栽四次空转**,最后诚实降级为顺序棘轮(commits `6e41d542` + `e9cb1c43`;干净 HEAD worktree **137/137** + **15/15**)
+
+- **★ 方法论第一刀:先把「真失败」和「并行伪影」分开,否则会去修 28 个不存在的问题。** 并行(`-n 16`)报 **189 failed**,把同一批 ID 串行复跑 → **161 failed / 28 passed**。那 28 条是测试隔离缺陷(共享可变状态),**不是产品 bug**,也不该按产品 bug 排期。收集门先行:**11,112 collected / 0 import error**,所以没有任何失败是「导入炸了」这种廉价形态。
+- **判据分账(161 条):** 锚点漂移 **38** · jsdom harness **29** · 缺失符号 **2** · 生成物陈旧 **1** · 其余 **81**。派 6 个 agent 逐条判「守卫死了 vs 产品坏了」,回来的结论是 **~157 条守卫腐烂 / 3 条真 bug** —— 也就是说**这套套件当前 98% 的红色在说谎**。
+- **jsdom 那 29 条有单一根因,值钱远超 29 条笔记:** 每个 harness 只 `eval` **一个**生产 `.js`,而浏览器加载的是**一串**。`static/js` 拆包后 `chat_render.js` 裸用 `_explicitBottomLatch`(声明在 `ui/streaming_render.js:887`)、`core/cost.js` 裸用 `_safeJsonParse`(在 `core.js:245`)…… 于是 22/29 是 `ReferenceError`。把 5 个拆出来的兄弟模块拼回去重跑,**13 个文件 / 33 条测试直接转绿** —— 实测证明的是 harness 缺口,不是前端回归。
+- **三条真 bug(每条都先复现、先 failing-first、再 NEUTER):**
+  - **① `lib/tool_input_repair/_ingest.py:212` 用了 `audit_log` 但从未导入 —— 必崩的 `NameError`。** `emit_audit=True` 是**默认值**,两个活调用方(`tool_dispatch/_parse.py:124`、`swarm/agent.py:1150`)**都不包裹异常**。用 `0373090a` 记录的真实生产输入 `read_filesrun_command` 一跑就炸 —— **为那次事故写的诊断分支,自己会在那次事故上崩掉**。同包 `_rejection.py:17` / `_repair.py:20` 都导入对了,只有它漏。**为什么长期没被发现:既有测试只驱动 `split_concatenated_tool_name` 这个 helper,从不走 ingestion 调用点** —— 与 charter 已记的「测了 helper 不等于测了接线」完全同形。新增 `ConcatenatedNameIngestionTest`:未修 **6 红**,修后 **14 绿**,摘掉导入 **6 红**。
+  - **② `static/js/core.js:466` 的 early-return 让 inject 行永远重建不了。** `msg.toolRounds` 非空就直接 return,于是 `_rehydrateInjectRows`(:479)在**最常见的情况下不可达** —— 而它下方 20 行的注释明写「reload 后 `msg.toolRounds` 只剩真实轮,所以要在这里重建」。后果:**任何调用过工具的 assistant 轮,刷新后 swarm/peer/steer 芯片全部静默消失**。该函数本身幂等(按 key 去重)且拷贝不改原数组,故两条分支都走它是安全的。15 绿,NEUTER 精确咬 2 条。
+  - **③ `lib/js_bundler.py` 的清单发布非原子,而读者全部无锁。** 5 个赋值分开写,`get_i18n_pack_tag`/`get_i18n_pack_urls` **不持 build 锁**,`_schedule_background_rebuild` 又在守护线程上与**在线请求线程并发**跑 `build_bundle`。先发 `_bundle_filename` 就让请求线程把**新** bundle(已排除 i18n.js)和**旧** `_bundle_includes_i18n=True` 配成一对 → 字典和 pack **一个都不发** → `index.html` 的 `t = key => key` 兜底存活 → **整个 UI 渲染成裸 i18n key,且没有任何报错**。而 docstring 白纸黑字写着这对值「updated atomically」—— **对无锁读者根本不成立**(charter「注释里的假保证」家族又一例)。修法:先发 i18n 对、最后发那个广告它的指针;读者一次快照进局部变量。
+- **★ 本轮最值钱的教训,是我自己在 ③ 上连栽四次「绿着空转」:**
+  1. 起线程抢跑 —— 5 个赋值在 ~1.8s 构建里只占微秒,**靠运气永远撞不上**;
+  2. 从 `_source_max_mtime()` 采样 —— 它在**旧顺序里是发布的最后一句**,那时清单已经自洽;
+  3. 探针里读 `bool(B._pack_filenames)` —— 发布后那个全局**就是探针自己**,`__bool__` 无限递归,而 `build_bundle` 的 fail-open `except Exception` **把 RecursionError 吞了**,探针一条没记,测试照样绿;
+  4. 在 `not pack_map` 处探 —— 实测同源重建是 **no-op(内容哈希不变)**,`core_name` 等于已发布名,**根本不存在可观察的撕裂态**。
+  **四次都「绿」,而产品是坏的。** 最后诚实降级为**顺序棘轮**(charter 允许:棘轮可看实现,但须锚在语义单元)——用 AST 取 `ast.Assign` 节点判 `_bundle_filename` 是否最后发布,重排版不会让它说假话。修复后绿、还原旧顺序**精确红并给出可读诊断**。**判据写死:一个「怎么改都绿」的行为守卫,比没有守卫更坏 —— 它制造保护的错觉;这种情况下应当降级为棘轮并把降级原因写进 docstring,而不是留一个假绿。**
+- **★ 第二条教训:我差点把一个 owner 明确记录过的设计决定「修」掉。** `test_no_silent_except` 要求 `_persist.py::terminal_state_log_summary` 补日志,我照做了 —— 结果 `test_code_quality` 的**死条目元断言立刻转红**,因为它的 `ACCEPTABLE_SIGS` 早已豁免该 handler,理由写得很清楚:**它构造的就是给 `logger.error` 用的诊断串,在这里记日志会递归进它正在描述的那个失败**。真正的缺陷是**两个守卫对同一个 handler 意见相反**,于是永久假阳。**回退产品改动,补 `ALLOWED` 条目**,并注明两张清单必须同改。NEUTER:再注入第二处广义静默 catch 仍然红,证明 allowance=1 不是给整个文件放行。
+- **CLAUDE.md 路径守卫是「一半真一半假」:** `debug/test_cross_platform.py`(2 处)**真的陈旧**(该目录已不存在,测试搬到 `tests/`),而 `data/config/{api_keys,features,server_config}.json` **三条都是假阳** —— 它们在真实部署里存在、`lib/config_dir.py` 明写是运行时创建、且**被 gitignore**,所以在任何干净检出里必然缺失。守卫**在 CI 和每个 worktree 里都红**,这是守卫的归类错误。它自己的文案说「别靠加 `_RUNTIME_ABSENT` 消音」——对的,所以改成**派生判据**:问 `git check-ignore`,而不是再手抄一份 .gitignore。双向验证:干净树 **3 绿**(原本红),注入假路径**仍红**。
+- **诚实分账:** `lib/tasks_pkg/orchestrator/_resume_state.py` 的裸 `logging.getLogger` 是**真阳性**(HEAD 确实如此),但该文件正被兄弟会话改动,**不在本批写集**,未动。
+- **未做 / 留给后续:** 剩余约 **157 条守卫腐烂**未逐条修 —— 那是一次大规模重锚工程(38 条重指向 + 29 条 harness 补加载 + 81 条杂项),且其中不少涉及兄弟正在改的文件;已把逐条判据与修法(新位置 file:line)留在本轮 agent 报告里。**判据建议:重锚时一律改为「按符号搜索」而非硬编码路径,否则下一次拆包会再死一遍。**
+
+
 ### 2026-07-28(续4) — **修可读性时我自己造了一个回归:一个 token 扛两个方向,补一半必然崩另一半**(tofu-trade `09e871a` + `c35c5a2`;22 条守卫,NEUTER×2 全咬,相邻环 **54/54**,干净 committed worktree **54/54**)
 
 - **★ 本轮的发现是自查出来的,而发现方式值得记:「我只测了这个 token 的一个方向」。** `23d6b54` 把 dark `--accent` 从 `#6e56cf` 提到 `#8773d7` 以满足**链接文字**的 AA(32 处 `color:`),但 `--accent` **同时是 chip/按钮的填充色**(114 处 background/border),上面压着 `--on-accent` 白字。提亮填充色的直接后果:**白字对比度从 5.39 掉到 3.84** —— 我在同一次编辑里修好了文字角色、弄坏了填充角色。

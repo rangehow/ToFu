@@ -1,5 +1,16 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-28(续10) — key 熔断粒度根修(epic `pt_69e9d6038c9344dc`):**per-(key, model) 计费熔断 + 「拦不住」真因不是缺检查,是三把 key 都带着陈旧 override=True**(新套件 **8/8**,**NEUTER×3 各自精确咬**,相邻环 **52+15+4+55 全绿**,预存在红 1 条 A/B 分账)
+
+- **★ 「拦不住」的真因被实测改写:** 票面假设是「派发路径没查熔断」。读码发现 pick 路径明明有 `_slot_key_enabled` 过滤,于是用线上数据实测 `is_key_enabled('sankuai','sankuai_key_1')` —— 返回 **True**,因为 `data/config/key_stats.json` 里**三把 sankuai key 全部带着持久的 `override: true`**(历史手动开启,跨天保留),按设计优先于 exhausted 标志,11:10 的 qwen 配额熔断**对派发零效果**。判据(charter 既有「守卫红了先判活死」的变形):**机制没生效先查是不是被更高优先级的合法状态覆盖,别急着加新闸。**
+- **连坐根修 = 熔断带模型维度:** `mark_key_exhausted(..., model=)` 有模型名时记 `exhausted_models[model]`(不动 key-wide 标志);`is_key_enabled(..., model=)` 新增按模型闸 —— 只挡被熔断的那个模型,同 key 兄弟模型照常;按模型熔断**不参与 last-resort 提升**(重试配额死模型是白费,dispatcher 该换模型)。无模型名调用方保留 key-wide 旧行为。单厂商账号代价 = 每个模型各自吃一次配额错误后各自熔断 —— 这是「不从错误体猜厂商拓扑」的诚实价格(已写进 docstring)。
+- **override × 熔断冲突 = 可见化而非自动清:** owner 三把 key 都靠 override 常驻,自动清 override 会毁掉用户的持续决定。override 仍赢(钉了守卫 `test_override_still_wins_over_model_stop` 防后人误改),key 卡片新增「手动开启·但有熔断」冲突徽章 + per-model「{models} 熔断」徽章(带原因 tooltip);`set_key_override(True)` 同时清 key-wide 与 per-model 熔断(「我充值了」语义)。
+- **NEUTER×3 各咬各的:** ①摘 `is_key_enabled` 按模型闸 → 精确红 4 条(隔离×2 + dispatcher×2),key-wide 与 override 两条不动;②`mark_key_exhausted` 退回总是 key-wide → 红 6 条;③re-enable 不清 `exhausted_models` → 精确红 1 条。每发先 `ast.parse` 确认注入合法,回合结束 grep 确认标记全部还原。
+- **我的一条测试首发失败是判据盲区,不是产品缺陷:** key-wide 熔断测试撞上 **last-resort 提升**(单兄弟 key 必然被保底)—— 文档化的既有行为,修法是补健康兄弟隔离提升路径,不是改产品。
+- **分账:** `test_chat_flow_dispatch.py::AutopilotE2ETest` 红在干净 committed HEAD worktree **同样红**(autopilot marker 语义,零相关),按纪律未修。边界:连续-429 连击的**喂入**侧归兄弟票 `pt_47594accfe654410`,本票只动显式熔断路径。
+- **共享 HEAD 归账(诚实记录两处不完美):** ①我上一轮在工作树的 `static/js/i18n.js` 4 行被兄弟的 `a586787c`(debug-panel 票)顺带提交 —— 内容正确在 HEAD,但归账混了;②我的「续8」诊断条目被兄弟 journal commit `fc1618c7` 顺带提交(9 insertions 正是该条目)。两处都是兄弟按 charter #15 hunk 过滤前的连带,无内容损失。本批其余 11 文件用精确 pathspec + 计数断言提交。
+- **验收边界:** 修复已 committed,但**运行中的服务器进程不带修复**(「merged ≠ live」纪律)—— 需重启生效;重启前 per-model 熔断与冲突徽章不会出现在线上。
+
 ### 2026-07-28(续·arXiv 搜索) — arXiv 标题搜索「永远找不到」根修:**线上每次搜索都在 500,而三道独立坍塌把它显示成「没有找到论文」**;顺带发现同族守卫已死一套(重锚)(commits `950f6540`(兄弟 adapter 归账)+ `a6a4271a`(错误透明栈);新套件 **15/15** + 重锚重试套件 **4/4**,**NEUTER×2 全咬**,相邻环 **51/51**)
 
 - **事故链(日志铁证,非推断):** 运行中进程 **10:24 启动**(pid 3823640);tofu-search 的 `search_by_query` **10:43 才提交**(a96a829);而 chatui 侧 adapter(09:37 起就在工作树未提交)已经在调它。进程内缓存的旧 `tofu_search.search.vertical.arxiv` 模块**没有** `search_by_query` → 每次 POST `/api/v1/paper/search-arxiv` 都 `AttributeError` → 未捕获 **500**(11:16 起 logs/error.log 逐条)。**「merged ≠ live」本月第二次:进程比分叉的两半都老。**

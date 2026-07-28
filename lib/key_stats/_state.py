@@ -265,4 +265,11 @@ def _new_entry() -> dict:
         'consecutive_429': 0,    # current streak of 429s with no success
         'last_error': '',
         'exhausted': False,
+        # Per-model billing-stops: {model: reason}. A quota error carries a
+        # model dimension (the slot that observed it) — on an aggregating
+        # gateway one key proxies SEVERAL upstream vendors (kimi→Moonshot,
+        # qwen→Aliyun), so a billing-stop on one model says nothing about
+        # the others routed through the same key. Key-wide ``exhausted`` is
+        # reserved for callers that genuinely cannot name a model.
+        'exhausted_models': {},
     }

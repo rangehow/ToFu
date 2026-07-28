@@ -20,6 +20,16 @@ streak heuristic rather than trying to parse the body: a key that returns
 429 MAX_CONSECUTIVE_429 times IN A ROW without a single success is marked
 exhausted for the day. Any success or non-429 error resets the streak.
 
+Quota/billing errors (HTTP 402 / 429-insufficient_quota) are recorded at
+**(key, model)** granularity (``exhausted_models``) whenever the observing
+slot names a model — on an aggregating gateway one key proxies several
+upstream vendors, so a billing-stop on one model must not cross-poison the
+others (2026-07-28: qwen→Aliyun quota-death on a sankuai key must not stop
+kimi→Moonshot on the same key). Callers that cannot name a model still flip
+the key-wide ``exhausted`` flag. Manual overrides keep winning over BOTH
+(user supremacy); the Settings card surfaces the override-vs-stop conflict
+instead of letting a stale manual ON silently defeat a fresh billing-stop.
+
 Last-resort guard:
   The auto-disable logic (exhausted flag + success-rate threshold) will NEVER
   leave a provider with zero usable keys.  If disabling a key would remove the
@@ -35,7 +45,8 @@ Persistence:
       "providerId::key_name": {
         "success": 12, "failure": 3,
         "rate_limited": 48, "consecutive_429": 5,
-        "last_error": "...", "exhausted": false
+        "last_error": "...", "exhausted": false,
+        "exhausted_models": {"qwen3.5-plus": "insufficient_quota ..."}
       },
       ...
     },

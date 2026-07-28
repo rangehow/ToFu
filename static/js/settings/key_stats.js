@@ -130,6 +130,28 @@ function _renderKeyCardStatsHTML(provIdx, keyIdx) {
     streakBadge = '<span class="stg-keystat-badge warn" title="' + escapeHtml(t('settings.keyStat429StreakTip', { max: max429 })) + '">' + t('settings.keyStat429Streak', { n: cons429 }) + '</span>';
   }
 
+  // Per-model billing-stops (aggregating-gateway isolation): a quota-dead
+  // model is stopped WITHOUT taking down sibling models on the same key —
+  // show exactly which models are stopped and why.
+  var em = (row && row.exhausted_models) ? Object.keys(row.exhausted_models) : [];
+  var emBadge = '';
+  if (em.length) {
+    var emReasons = em.map(function(m) {
+      var r = String(row.exhausted_models[m] || '').slice(0, 80);
+      return m + (r ? ': ' + r : '');
+    }).join('\n');
+    emBadge = '<span class="stg-keystat-badge warn" title="' + escapeHtml(t('settings.keyStatModelExhaustedTip', { reasons: emReasons })) + '">' + escapeHtml(t('settings.keyStatModelExhausted', { models: em.join(', ') })) + '</span>';
+  }
+
+  // A manual ON keeps winning over billing-stops (user supremacy), but a
+  // stale override must not silently defeat a FRESH quota error — surface
+  // the conflict instead of letting the key look healthy while the
+  // provider reports it out of credit.
+  var conflictBadge = '';
+  if (row && row.override === true && (exhausted || em.length)) {
+    conflictBadge = '<span class="stg-keystat-badge warn" title="' + escapeHtml(t('settings.keyStatOverrideVsExhaustedTip')) + '">' + escapeHtml(t('settings.keyStatOverrideVsExhausted')) + '</span>';
+  }
+
   var showErr = row && row.last_error && (fail > 0 || exhausted);
   var lastErr = showErr ? ('<span class="stg-keystat-err" title="' + escapeHtml(row.last_error) + '">' + t('settings.keyStatLastError') + '</span>') : '';
 
@@ -146,7 +168,7 @@ function _renderKeyCardStatsHTML(provIdx, keyIdx) {
       (fail > 0 ? '<span class="stg-keystat-fail" title="' + escapeHtml(t('settings.keyStatFailTip')) + '">' + t('settings.keyStatFail', { n: fail }) + '</span>' : '') +
       (rl429 > 0 ? '<span class="stg-keystat-429" title="' + escapeHtml(t('settings.keyStat429Tip', { max: max429 })) + '">' + t('settings.keyStat429', { n: rl429 }) + '</span>' : '') +
     '</span>' +
-    streakBadge + badge + lastErr +
+    streakBadge + emBadge + conflictBadge + badge + lastErr +
     '<span class="stg-keystat-actions">' +
       '<label class="stg-toggle stg-key-toggle" title="' + escapeHtml(t('settings.keyStatToggleTip')) + '">' +
         '<input type="checkbox"' + (enabled ? ' checked' : '') +

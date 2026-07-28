@@ -435,7 +435,8 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
             #   so the current retry loop moves on immediately.
             try:
                 from lib.key_stats import is_key_enabled
-                if not is_key_enabled(slot.provider_id, slot.key_name):
+                if not is_key_enabled(slot.provider_id, slot.key_name,
+                                      model=slot.model):
                     exclude_keys.add(slot.key_name)
                     hard_attempts += 1
                     logger.warning(
@@ -1531,7 +1532,8 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
             #   exhausted — exclude it so we don't cycle back to it.
             try:
                 from lib.key_stats import is_key_enabled
-                if not is_key_enabled(slot.provider_id, slot.key_name):
+                if not is_key_enabled(slot.provider_id, slot.key_name,
+                                      model=slot.model):
                     state.note_auto_exhausted_key(slot)
                     logger.warning(
                         '%s Key %s auto-exhausted after %d consecutive 429s '

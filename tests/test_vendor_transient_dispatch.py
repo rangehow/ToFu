@@ -49,7 +49,7 @@ def key_stats_recorders(monkeypatch):
     monkeypatch.setattr('lib.key_stats.record_outcome',
                         lambda p, k, success, error='': rec['outcome'].append((p, k, success, error)))
     monkeypatch.setattr('lib.key_stats.mark_key_exhausted',
-                        lambda p, k, reason='': rec['exhausted'].append((p, k, reason)))
+                        lambda p, k, reason='', model='': rec['exhausted'].append((p, k, reason, model)))
     return rec
 
 

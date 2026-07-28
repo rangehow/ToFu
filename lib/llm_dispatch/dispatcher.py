@@ -858,7 +858,7 @@ class LLMDispatcher:
             if _key_enabled is None:
                 return True
             try:
-                return _key_enabled(s.provider_id, s.key_name)
+                return _key_enabled(s.provider_id, s.key_name, model=s.model)
             except Exception as e:
                 logger.debug('[Dispatch] is_key_enabled probe failed for %s/%s: %s',
                              s.provider_id, s.key_name, e)

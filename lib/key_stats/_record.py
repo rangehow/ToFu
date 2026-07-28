@@ -100,23 +100,38 @@ def record_rate_limit(provider_id: str, key_name: str,
     return just_exhausted
 
 
-def mark_key_exhausted(provider_id: str, key_name: str, reason: str = '') -> None:
-    """Mark a key as permanently exhausted for the rest of today.
+def mark_key_exhausted(provider_id: str, key_name: str,
+                        reason: str = '', model: str = '') -> None:
+    """Mark a key (or one model on it) as exhausted for the rest of today.
 
     Called on HTTP 402 / 429-with-insufficient-quota (billing/balance errors).
-    Unlike a transient rate-limit, these indicate the key needs a financial
-    top-up, so retrying before tomorrow is futile.
+    Unlike a transient rate-limit, these indicate the account needs a
+    financial top-up, so retrying before tomorrow is futile.
+
+    Args:
+        model: the wire model the quota error was observed on. When given,
+            the stop is recorded at **(key, model)** granularity
+            (``exhausted_models``) instead of flipping the key-wide
+            ``exhausted`` flag. This matters on AGGREGATING GATEWAYS where
+            one key proxies several upstream vendors (2026-07-28 incident:
+            a qwen→Aliyun ``insufficient_quota`` on ``sankuai_key_1``
+            key-wide-exhausted the key, cross-vendor poisoning kimi→Moonshot
+            capacity routed through the same key). A single-vendor account
+            converges to the same end state — each sibling model trips its
+            own billing-stop on its next call — at the cost of one failed
+            call per model, which is the honest price of not guessing
+            vendor topology from error bodies.
 
     The user can still manually re-enable the key via the Settings UI
-    (set_key_override) — e.g. after adding credit — and the exhaustion flag
-    is reset at day rollover.
+    (set_key_override) — e.g. after adding credit — which clears BOTH the
+    key-wide flag and all per-model stops; everything resets at day rollover.
 
     Note:
-        We still set ``exhausted=True`` even if this key is the last
-        raw-enabled one in its provider.  The "last-resort" guard lives at
-        READ time in :func:`is_key_enabled`, so stats surfaces still reflect
-        the billing error while the dispatcher keeps retrying the only key
-        available (better than "no slot available" mystery errors).
+        Stops are recorded even when this key is the last raw-enabled one in
+        its provider.  The "last-resort" guard lives at READ time in
+        :func:`is_key_enabled` — and deliberately does NOT promote a
+        model-specific billing-stop (retrying a quota-dead model is futile;
+        the dispatcher should fall back to another model).
     """
     if not key_name:
         return
@@ -129,9 +144,13 @@ def mark_key_exhausted(provider_id: str, key_name: str, reason: str = '') -> Non
             _cache['stats'][pk] = entry
         # Count this as a failure too so the success-rate column reflects it.
         entry['failure'] = int(entry.get('failure') or 0) + 1
-        entry['exhausted'] = True
+        if model:
+            entry.setdefault('exhausted_models', {})[model] = \
+                str(reason or '')[:200]
+        else:
+            entry['exhausted'] = True
         if reason:
             entry['last_error'] = str(reason)[:200]
         _save_unlocked()
-    logger.warning('[KeyStats] Key %s marked as exhausted for today: %s',
-                   pk, (reason or '')[:200])
+    logger.warning('[KeyStats] %s exhausted for today (model=%s): %s',
+                   pk, model or '<key-wide>', (reason or '')[:200])

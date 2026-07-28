@@ -379,7 +379,8 @@ class Slot:
             try:
                 from lib.key_stats import mark_key_exhausted
                 mark_key_exhausted(self.provider_id, self.key_name,
-                                   reason=error or 'quota exhausted (HTTP 402/429)')
+                                   reason=error or 'quota exhausted (HTTP 402/429)',
+                                   model=self.model)
             except Exception as e:
                 logger.debug('[Slot] key_stats mark_key_exhausted failed: %s', e)
         elif is_rate_limit and not is_gateway:

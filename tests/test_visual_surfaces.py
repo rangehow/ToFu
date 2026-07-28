@@ -188,6 +188,77 @@ def test_paper_reading_mode_opens_without_js_errors(page):
         'displayed — reading mode did not actually open')
 
 
+def test_auto_research_entry_is_reachable_without_a_paper(page):
+    """The auto-research entry lives on the landing screen, NOT in a paper tab.
+
+    Its input is a research DIRECTION, which exists before any paper is open,
+    so it deliberately does not sit with the six paper-hash-scoped sub-tabs —
+    putting it there would force the user to open an unrelated document first
+    just to start a study about something else. This test pins that shape: it
+    opens reading mode and drives the entry with NO paper loaded.
+
+    Asserts three outcomes, not one:
+      1. the button is really rendered on the landing screen (not just defined
+         somewhere) — a function nothing calls is not an entry point;
+      2. driving it raises no HARD JS error;
+      3. the research console actually replaces the viewer body, so a silently
+         no-op handler cannot pass on "no errors" alone.
+
+    The job itself is expected to fail fast here (the test server has no LLM
+    credentials). That is fine and is the point: what is under test is the
+    reachability of the entry and the console's ability to render a state, not
+    the pipeline behind it — that is covered by the backend suites.
+    """
+    _wait_ready(page)
+    _drain(page)
+    page.evaluate("typeof togglePaperMode === 'function' && togglePaperMode()")
+    page.wait_for_timeout(1500)
+
+    # 1. The production entry point is rendered, and the shared describe box
+    #    it reads from exists. Both come from paper-reader.js's landing screen.
+    wired = page.evaluate("""() => {
+        const btn = document.querySelector(
+            '[onclick*="_startResearchFromDescribe"]');
+        return {
+            button: !!btn,
+            label: btn ? (btn.textContent || '').trim() : '',
+            input: !!document.getElementById('paperDescribeInput'),
+            fn: typeof _startResearchFromDescribe === 'function',
+        };
+    }""")
+    assert wired['fn'], (
+        '_startResearchFromDescribe is not defined in the shipped bundle — '
+        'paper/research.js did not load')
+    assert wired['button'], (
+        'no landing-screen button calls _startResearchFromDescribe() — the '
+        'auto-research capability has no user-reachable entry point')
+    assert wired['input'], (
+        '#paperDescribeInput is missing — research reuses the landing screen '
+        "describe box, so without it the entry reads nothing")
+
+    # 2 + 3. Drive the real entry point with a direction and no paper open.
+    _drain(page)
+    page.evaluate("""() => {
+        document.getElementById('paperDescribeInput').value =
+            'long-context KV cache compression';
+        _startResearchFromDescribe();
+    }""")
+    page.wait_for_timeout(1500)
+
+    errs = _hard_errors(page)
+    assert not errs, (
+        'starting an auto-research job raised %d JavaScript error(s):\n  %s'
+        % (len(errs), '\n  '.join(errs[:8])))
+
+    shell = page.evaluate(
+        "() => !!document.querySelector('[data-research-shell]')")
+    assert shell, (
+        '_startResearchFromDescribe() raised no error but the research console '
+        '([data-research-shell]) never rendered — the entry silently did '
+        'nothing, which "no errors" alone cannot catch')
+    print(f'\n  auto-research entry reachable pre-paper; label={wired["label"]!r}')
+
+
 def test_every_inline_onclick_handler_is_defined(page):
     """No `onclick="foo()"` in the shipped page may call an undefined function.
 

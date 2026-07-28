@@ -480,7 +480,13 @@ def _inject_system_contexts(messages, project_path, project_enabled,
     #   (sorted by id) and splices as its OWN cache block, same rule as
     #   the memory count hint.
     if has_real_tools:
-        if '<available_skills>' in _existing:
+        # The idempotency marker MUST be the listing's closing tag, not the
+        # bare noun: the static memory_accumulation prose itself mentions
+        # `<available_skills>` (backticked, no close tag), so checking the
+        # noun suppressed the skills index on EVERY memory-enabled turn —
+        # installed skills were never advertised. A real listing (from a
+        # prior assembly of the same messages) always carries the close tag.
+        if '</available_skills>' in _existing:
             _ctx_suppressed('skills_index', 'marker_present')
         else:
             from lib.skills import build_skills_index
@@ -704,8 +710,8 @@ Round N+3, a2's update lands. Synthesise the full picture for the user.
     #   hint per epic another conversation holds an UNEXPIRED lease on. NOT a
     #   passive display: this is what a reading conversation acts on to step
     #   aside. Injected only when the board is non-empty; keyed STRICTLY on the
-    #   explicit project_path. render_board_block evaluates lease expiry at
-    #   read time (an abandoned claim reads open → never deadlocks).
+    #   explicit project_path. render_board_injection_block evaluates lease
+    #   expiry at read time (an abandoned claim reads open → never deadlocks).
     _BOARD_MARKER = '[PROJECT BOARD]'
     if not (project_enabled and project_path):
         _ctx_suppressed('board', 'project_off')

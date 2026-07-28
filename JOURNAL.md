@@ -8,6 +8,19 @@
 
 - **★ 范围必须止于工具面,而这不是保守而是实测约束。** `lib.conv_ref.get_conversation` 还有两个**要散文**的调用方:`lib/chat/messages.py::resolve_conv_refs`(`@` 提及注入,把会话拼进 prompt)与 `routes/conversations.py::export_conv`(人类导出)。**库默认若跟着翻,一个 `@` 提及的会话就会以 JSON dump 的形态进 prompt。** 故库签名一字未动,只有 tool executor 改;`TestLibraryDefaultUnchanged` 直接跑 `resolve_conv_refs` 断言拿到的是散文 —— **这条补集才是「这次是范围明确的改动而非全局翻转」的证据**,没有它,下一个人无从判断库默认是故意留着还是漏改。
 
+
+### 2026-07-28 — autopilot「让位 = 销毁」根修:**同一张队列表两个读者、两套过滤器,对同一行给出相反结论**(owner 拍板落点,epic `pt_e8296fbe15e2488d`;commit `4fc04360`,10 文件 +777/-17;新套件 **10/10**,**NEUTER×6 全咬**,干净 committed worktree 复验 **10 + 10 + 78**)
+
+- **事故(conv `ms3s8s0kjlvq18`,日志逐秒可复现,不是推断):** 06:45:54 大脑派单 `kind=workflow_step` 入队(`18af2440`)→ 06:54:38 **VU 自己**调 `project_board_complete` 把 epic `pt_b61a7f56` 标 done → 06:55:13 **同一秒**两闸相反结论:闸① `_has_pending_real_message`(→`get_queue_depth`,判据 `kind != KIND_AUTOPILOT`)判定「有人在等」→ **丢弃已完成的 24 轮 / 15 分钟 VU 回复**;闸② `_brain_kickoff_still_wanted` consume-time 复检判定 epic 已 done → **丢弃队列行、不派任何任务**。结果:对话永久停在 4 条消息,marker 已清(崩溃恢复永不再碰),前端抱着两个死 task id 空等 **2h12m**(`SyncDrift STALLED age=7920s`)。**丢弃点 `autopilot.py:889` 在落库点 `:907` 之前 —— 是「先判停所以没落库」,不是「落库失败所以停」。**
+- **★ owner 否掉了我的第一版落点(把 kind 收窄成 `KIND_REAL`),理由是它只修这一个实例、留着成因。** 真实结构缺陷:两个读者**各带一套过滤器**(闸①只滤 kind;闸②滤 kind+租约+board 复检),autopilot 拿**弱过滤计数**去回答一个**强过滤才能回答**的问题 ——「接下来真的会有一个回合被派出去吗」。收窄 kind 之后,下一个新增过滤条件照样只落一边。**根修 = `_row_is_dispatchable` 单一 consume-time 判据 + `next_dispatchable_turn` / `has_pending_human_turn` 两个公开读法,派单侧与让位侧共用。** 判据一句话:**改完之后,决定「队列里有没有活」的地方只剩一处。**
+- **★ 让位 ≠ 销毁,这两件事此前被同一个 `return None` 合并。** `_preserve_unsent_vu_and_conclude()` 作为**无条件动作**落在**每一条** VU 已产出之后才决定停机的路径之前(让位 / abort / 两处 supersede 复检),先把产出存进 `autopilotSummaries` 旁路(`unsent=True`)并发 `autopilot_run_concluded`,再返回。**后者是这条路径上唯一能让系统承认自己停了的信号** —— 缺它就是「不可观测地死亡」。
+- **★ 明确不插进 `messages`,理由写死在代码注释里:** 那是**送上游的对话历史**,一条没发出去的 VU 回复插进去,下一轮就成了模型眼里 owner 真说过的话(与 pt_0ae59e94「机器 token 泄进历史」同族)。守卫 `test_preserved_reply_never_enters_conversation_history` 钉死。
+- **★ 我自己在实现中途造了一个回归,靠「先想清楚语义」当场拦下:** 首版让位路径调了 `clear_autopilot_marker` —— 那会**静默把 autopilot 关掉**,而让位只应**暂停**。改为只清 run pin(下一轮必须 mint 新 run id,否则 fold gate 会吞掉活轮次),marker 保持 armed。补 NEUTER-6(注入 disarm)确认 `test_yield_does_not_disarm_autopilot` 转红。
+- **NEUTER×6 各咬各的,每发先断言补丁真的命中文件:** ①`has_pending_human_turn` 退回 `bool(rows)`(旧判据)→ machine-work 两条红;②`_row_is_dispatchable` 恒 True → 事故复现那条红;③摘 `_store_run_record` → 保全那条红;④摘 `_emit_run_concluded_event` → 同条红(断言分离:`records` 与 `events` 各判);⑤`has_pending_human_turn` 恒 False → **补集两条红**(真人仍须优先 —— 只有正向断言时「永不让位」也能全绿,那会把人压在 autopilot 底下);⑥让位路径 disarm → 上条红。
+- **★ 一个测试 harness 缺陷被 failing-first 抓出,值得记:** 我只 patch 了 `autopilot_run_lifecycle._store_run_record`(origin),而 `autopilot.py` **re-export 了同名符号**,直接调用解析的是 **facade 绑定** → 假 store 没被调用、真 DB 被打、断言报 `KeyError: 'text'`。**判据:对 facade 模块的符号做 monkeypatch,origin 与 facade 两个绑定都要打**,否则守卫测的是一条没被走到的路径。
+- **★ 共享 HEAD 暂存:charter 记的同类错误我这轮又踩到,靠计数断言两次拦下。** ①`git add` 后计数 10 但 `i18n.js` 带 **23 行删除** —— 那是兄弟未提交的 `browser.*`→`local.*` 合并,**不是我的改动**;`git reset HEAD -- static/js/i18n.js` 摘出后,**计数不降反升到 11**(兄弟在我两条命令之间又往共享 index 里 stage 了 `index.html` + `_gateway.py`)。②最终用 `git diff > patch` **只切出我那一个 hunk**(+23/-0)`git apply --cached` 再 `--amend`,兄弟那 23 行原样留在工作树未提交。**判据:计数断言必须在 `git commit` 前的最后一刻重跑 —— 共享 index 会在你两条命令之间被改。**
+- **验收纪律:5 条 `test_queue_lease` 失败先做 A/B 再动手 ——** 干净 committed HEAD worktree 上**同样 5 红**(100 passed / 5 failed),而该文件**单跑两棵树都 10/10** → 判定为**预存在的测试顺序污染**,与本轮零相关,按纪律未修、也未据此改我的代码。
+
 - **★ 字符串 `"false"` 必须当 opt-out。** 模型完全可能把 flag 发成 JSON 字符串,而 `bool("false")` 是 **True** —— 那样**关不掉的默认等于删掉了功能**,且失败方向恰好是「用户明确要求 A,拿到 B」。`raw_requested` 显式吃 `0/false/no/off/''`。NEUTER-2(把字符串分支改成恒 `True`)咬 **5 条**。
 
 - **NEUTER×3,每发先断言补丁真的命中文件(未命中即硬报错,不看测试结果):** ①默认翻回 `False` → **4 红**;②字符串 `"false"` 读成真 → **5 红**;③卡片徽章改回各自解释 `bool(_fn_args.get('raw'))` → **3 红**(其中精确红在 `fn_args3` = `'false'` 这一格与地板那条)。

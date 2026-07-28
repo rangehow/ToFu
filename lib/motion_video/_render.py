@@ -103,6 +103,13 @@ def _classify_failure(res: dict) -> str:
         return 'env_missing'
     if 'chrome' in blob or 'browser' in blob or 'puppeteer' in blob:
         return 'chrome'
+    # Memory pressure is the other way a headless-Chrome boot dies without
+    # ever naming itself: under cgroup pressure the CLI's own memory notice is
+    # all that reaches stderr (measured 2026-07-28 — the shipped 0-of-8 job).
+    # Left as 'unknown' it was charged to the composition author.
+    if 'cgroup memory' in blob or 'out of memory' in blob \
+            or 'oom' in blob.split() or 'enomem' in blob:
+        return 'infra'
     return 'unknown'
 
 
@@ -169,15 +176,42 @@ def _gate(subcmd: str, project_dir: str, *, timeout: int,
     findings: list[dict] = []
     parse_note = ''
     saw_report = False
+    report_ok = None
     try:
         data = json.loads(res['out'])
         findings, saw_report = _collect_findings(data)
+        if saw_report and isinstance(data.get('ok'), bool):
+            report_ok = data['ok']
     except Exception as _e:
         # Non-JSON output (older CLI / human format): fall back to exit code.
         logger.debug('gate: failed (%s)', _e)
         parse_note = 'non-json output; gated on exit code'
     errors = [f for f in findings if f.get('severity') == 'error']
-    ok = res['rc'] == 0 and not errors
+
+    # ── Two INDEPENDENT verdict sources: the report and the exit code ──
+    # The CLI's machine-readable report is the authority on COMPOSITION
+    # quality; the exit code also fires for things that have nothing to do
+    # with the composition. Measured 2026-07-28 (the 0-of-8 job): under cgroup
+    # memory pressure the CLI emitted a complete report saying ok=true with
+    # zero findings and STILL exited 1, and because its stderr named only its
+    # own memory notice the failure classified as 'unknown' — which the
+    # engine's infrastructure exemption does not cover. Six good authored
+    # compositions were thrown away and the film shipped as eight gradient
+    # cards.
+    #
+    # So: when the CLI told us in its own report that the composition passed,
+    # believe the report. A non-zero exit alongside it is an INFRASTRUCTURE
+    # event, logged and classified as such — never charged to the author.
+    if report_ok is True and not errors:
+        if res['rc'] != 0:
+            logger.warning(
+                '[MotionVideo] %s exited %s but its JSON report says ok with '
+                'zero findings — trusting the report and classifying the '
+                'non-zero exit as infrastructure (stderr: %.200s)',
+                subcmd, res['rc'], (res['err'] or '').strip())
+        ok = True
+    else:
+        ok = res['rc'] == 0 and not errors
     if not ok and not errors:
         # The CLI failed but named no error-severity finding (or its report
         # was unparseable). Surface the exit code + stderr as ONE synthetic
@@ -191,9 +225,23 @@ def _gate(subcmd: str, project_dir: str, *, timeout: int,
         findings = list(findings) + errors
         if not saw_report and not parse_note:
             parse_note = 'report carried no recognisable findings section'
+        # No named finding => the failure is UNEXPLAINED, so the stderr
+        # heuristics are the only evidence of what went wrong.
+        category = 'lint' if subcmd == 'lint' else _classify_failure(res)
+    elif not ok:
+        # The report NAMED a composition defect. That verdict owns the
+        # category: running the stderr heuristics here would relabel a real
+        # font/contrast/overflow error as 'infra' or 'chrome' merely because
+        # the CLI also printed a memory notice — and both consumers
+        # (engine._scene_gate_findings, _scene_author._full_gate) EXEMPT those
+        # categories, which would silently forgive the very defects this gate
+        # exists to catch.
+        category = 'lint'
+    else:
+        category = ''
     return {
         'ok': ok,
-        'category': '' if ok else ('lint' if subcmd == 'lint' else _classify_failure(res)),
+        'category': category,
         'errors': [f.get('message', '') for f in errors],
         'warnings': [f.get('message', '') for f in findings
                      if f.get('severity') == 'warning'],

@@ -660,4 +660,18 @@ TTFT 首字节看门狗 + 等待心跳已落地(commit 69cd968c,2026-07-27):①l
 - **★ 扩展扫描面时发现一类更大的预存在问题,但它不是本轮回归 —— A/B 实证:** 压在**半透明 tint chip** 上的文字(`--red-bg` 等 = `color-mix(... 6%, transparent)`)当前 dark 6 / light 24 / tofu 20 对低于 AA;而**同一算法在 `0d92d12^` 上测得 30 / 56 / 54**,即调色板工作已把它砍掉约 **60%**。属历史欠账,已开独立票 `pt_61b79f4351f548cd`,**未并入本批**(owner 偏好:重构中发现的预存在缺陷单独开票)。
 - **★ 测量口径的坑(写进票里,避免下一个人重犯):** 按 base hex 直接算 tint chip 会得出 `--red` 压 `--red-bg` = **1.00** 这种不可能的比值(同色压同色)—— 必须**先把透明度合成到页面表面**再测;`--grad-*` 是 linear-gradient,两个色标没有单一底色,本轮**明确 skip 而非假装能测**。我的第一版扫描器正是栽在这里,报出 18/16/16 个「失败」其中大半是假的。
 - **★ 同一个错误我今天犯了第二次:** NEUTER 还原用 `git checkout --`,把**尚未提交**的 `--accent-text` 全量重写(32 处)一次抹掉。**迭代期间只能从副本还原。** 上一轮已记过一次,这次是复发 —— 说明「知道」不等于「做到」,已在本条显式重述。
+- **★ 同一个错误我今天犯了第二次:** NEUTER 还原用 `git checkout --`,把**尚未提交**的 `--accent-text` 全量重写(32 处)一次抹掉。**迭代期间只能从副本还原。** 上一轮已记过一次,这次是复发 —— 说明「知道」不等于「做到」,已在本条显式重述。
+
+---
+
+<!-- ARCHIVE POINTER (added 2026-07-28 续22 batch): the 2026-07-28 archiving
+     pass moved entries older than the recent block out of this file. Their
+     full text lives in .tofu/journal-archive/ (JOURNAL-2026-06.md,
+     JOURNAL-2026-07.md, JOURNAL-undated.md — ~23.7k lines, verified covering
+     the cut 续13–续17 family and older). Grep those files for any entry not
+     found below. -->
+
+> **更早的条目已归档:** 本文件 2026-07-28 归档后仅保留近期条目;更早全文见
+> `.tofu/journal-archive/`(JOURNAL-2026-06.md / JOURNAL-2026-07.md /
+> JOURNAL-undated.md,合计 ~2.4 万行)。grep 归档文件找本文件没有的条目。
 

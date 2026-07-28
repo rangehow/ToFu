@@ -46,11 +46,18 @@ from lib.paper.images import (
     _is_placeholder_title,
     _lookup_paper_title,
 )
-from lib.paper.prompts import _MAX_REPORT_TOOL_ROUNDS, _REPORT_TOOLS
+from lib.paper.prompts import (
+    _FULL_REPORT_TOOLS,
+    _MAX_REPORT_TOOL_ROUNDS,
+    _REPORT_TOOLS,
+)
 from lib.paper.report_runtime import _append_report_event, _cleanup_stale_report_tasks
 from lib.paper.tools import (
     _execute_report_tool,
+    cap_tool_result,
     display_query_for,
+    make_paper_exec_shim,
+    paper_effective_tool_name,
     parse_and_repair_tool_args,
 )
 
@@ -131,6 +138,11 @@ def _run_report_task(task, messages, images):
     aborted = False
 
     abort_signal = AbortSignal.from_event(abort_event)
+
+    # Shim for the SHARED dispatch (full tool set): one per run, reused across
+    # rounds so per-run state (e.g. the todo checklist) survives between calls.
+    _exec_shim = make_paper_exec_shim(task_id=task['task_id'],
+                                      abort=abort_signal.is_set)
 
     # Per-round content buffer. Tool-calling models often emit a full interim
     # DRAFT of the report in a round that ALSO issues a tool call, then rewrite
@@ -249,10 +261,13 @@ def _run_report_task(task, messages, images):
         rn = task['round_counter']
 
         display_query = display_query_for(fn_name, fn_args)
+        # The dispatch/display name: run_command → code_exec in a project-less
+        # engine (chat's tool_display override, mirrored by the adapter).
+        effective_name = paper_effective_tool_name(fn_name)
 
         round_entry = {
             'roundNum': rn,
-            'toolName': fn_name,
+            'toolName': effective_name,
             'query': display_query,
             'toolCallId': tc_id,
             'toolArgs': fn_args_raw if isinstance(fn_args_raw, str) else json.dumps(fn_args, ensure_ascii=False),
@@ -265,7 +280,7 @@ def _run_report_task(task, messages, images):
             'type': 'tool_start',
             'roundNum': rn,
             'llmRound': rnd,
-            'toolName': fn_name,
+            'toolName': effective_name,
             'query': display_query,
             'toolCallId': tc_id,
             'toolArgs': round_entry['toolArgs'],
@@ -274,7 +289,8 @@ def _run_report_task(task, messages, images):
         tool_t0 = time.time()
         result, display_results, search_diag, engine_breakdown, verticals = _execute_report_tool(
             fn_name, fn_args_raw, user_question=_report_user_question,
-            abort=abort_signal.is_set)
+            abort=abort_signal.is_set,
+            exec_shim=_exec_shim, round_entry=round_entry)
         tool_elapsed = time.time() - tool_t0
         logger.info('[Paper:Report:Tool] %s → %d chars in %.1fs', fn_name, len(result), tool_elapsed)
 
@@ -294,7 +310,7 @@ def _run_report_task(task, messages, images):
             'type': 'tool_done',
             'roundNum': rn,
             'llmRound': rnd,
-            'toolName': fn_name,
+            'toolName': effective_name,
             'toolCallId': tc_id,
             'elapsed': round(tool_elapsed, 1),
             'toolContent': tool_preview,
@@ -311,14 +327,16 @@ def _run_report_task(task, messages, images):
         messages.append({
             'role': 'tool',
             'tool_call_id': tc_id,
-            'content': result[:30000],
+            'content': cap_tool_result(result, fn_name, tc_id,
+                                       conv_id=f'paper-{phash}',
+                                       can_read=True),
         })
 
     try:
         _outcome = run_agent_loop(
             abort=abort_signal,
             max_tool_rounds=_MAX_REPORT_TOOL_ROUNDS,
-            round_tools=_REPORT_TOOLS,
+            round_tools=_FULL_REPORT_TOOLS,
             dispatch=_dispatch,
             execute_tool=_execute_tool,
             on_round_result=_accumulate_usage,
@@ -632,4 +650,5 @@ __all__ = [
     '_lookup_paper_title',
     '_MAX_REPORT_TOOL_ROUNDS',
     '_REPORT_TOOLS',
+    '_FULL_REPORT_TOOLS',
 ]

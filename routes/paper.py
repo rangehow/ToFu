@@ -724,7 +724,10 @@ async def start_report_task():
     tool_instruction = (
         date_anchor_clause(ui_lang) +
         injection_notice(ui_lang, _inj_findings) +
-        "You have access to web_search (batch) and fetch_url (batch) tools.\n\n"
+        "You have access to the full standard tool set — web_search (batch) and "
+        "fetch_url (batch) are your primary research instruments; read_files opens "
+        "any local file a fetch stages (or an oversized tool result spills to "
+        "disk); code_exec runs numeric checks.\n\n"
         "BEFORE writing any of the report, you are EXPECTED to do a research-grade "
         "literature scan. The reader's most common complaint is that follow-up work "
         "is missing — do not let that happen.\n\n"
@@ -2833,25 +2836,34 @@ async def start_podcast_task():
     from lib import tts as _tts
     eff_voice = voice or _tts.default_voice()
 
-    tid = _podcast_index_get(phash, mode, lang, eff_voice)
+    tid = _podcast_index_get(phash, mode, lang, eff_voice, model)
     if tid:
         return jsonify({'ok': True, 'task_id': tid, 'reused': True})
 
     cached = load_cached_podcast(phash, mode, lang, eff_voice)
-    if cached and not force:
+    # The cache row is ONE slot per (paper_hash, mode, lang, voice) — and
+    # the model that MADE it is part of its honest identity: asking for a
+    # different model and being served the previous model's audio would be
+    # the cache-key-skew family (label says X, key is generic). A requested
+    # model that differs from the row's model is a cache MISS (regenerate +
+    # overwrite the slot); a legacy caller sending no model accepts the
+    # row as-is, preserving pre-picker behaviour for API clients.
+    if (cached and not force
+            and not (model and (cached.get('model') or '') != model)):
         status = cached.get('status') or ''
         return jsonify({
             'ok': True, 'cached': True, 'status': status,
             'script': cached.get('script_json') or {},
             'meta': cached.get('meta') or {},
             'scriptOnly': status == 'script_only',
+            'model': cached.get('model') or '',
             'audioUrl': (podcast_audio_url(phash, mode, lang, eff_voice)
                          if status == 'done' else ''),
             'durationSec': cached.get('duration_sec') or 0,
         })
 
     task_id = _podcast_task_id()
-    _podcast_index_register(phash, mode, lang, eff_voice, task_id)
+    _podcast_index_register(phash, mode, lang, eff_voice, model, task_id)
     task = _new_podcast_task(task_id, phash, mode, lang, eff_voice, model)
     _podcast_runtime.spawn(task_id, _run_podcast_task, task)
     return jsonify({'ok': True, 'task_id': task_id})
@@ -2862,7 +2874,7 @@ async def start_video_abstract_task():
     """Start a paper video abstract (report → narrated MG video).
 
     Request: {paper_hash, lang?, voice?, speed?, alignment?, narration?,
-              burn_in?, quality?, parallel?, max_scenes?}
+              burn_in?, quality?, parallel?, max_scenes?, model?}
     Responses:
       - {ok, task_id, scenes, source_kind}  — motion task started; poll via
         GET /api/v1/motion/videos/poll/<task_id>, download via
@@ -2907,6 +2919,7 @@ async def start_video_abstract_task():
         burn_in=bool(data.get('burn_in', False)), quality=quality,
         parallel=parallel, max_scenes=max_scenes,
         scene_author=scene_author,
+        model=(data.get('model') or '').strip() or None,
         force=bool(data.get('force', False)))
     if not res.get('ok'):
         return jsonify({'ok': False, 'report_required':
@@ -2943,6 +2956,7 @@ def lookup_video_abstract():
             'task_id': best['task_id'],
             'running': best['status'] in ('pending', 'running'),
             'status': best['status'],
+            'model': best.get('model') or '',
             # ★ Start clock on the re-attach frame (epoch ms) — this lands
             #   before the first poll, so without it a refreshed tab paints
             #   0:00 for a frame. `created_at` was already read above to pick
@@ -3044,6 +3058,7 @@ def _lookup_paper_video_on_disk(phash: str) -> dict | None:
 
     if state == 'running' and _motion_runtime.get(task_id) is None:
         return {'found': True, 'interrupted': True, 'task_id': task_id,
+                'model': m.get('model') or '',
                 **_disk_clocks()}
     if state == 'done':
         workdir = os.path.join(jobs_dir, task_id)
@@ -3058,6 +3073,7 @@ def _lookup_paper_video_on_disk(phash: str) -> dict | None:
                 logger.debug('[Paper:Video] disk lookup probe failed: %s', e)
             return {'found': True, 'running': False, 'status': 'done',
                     'task_id': task_id,
+                    'model': m.get('model') or '',
                     'result': {'final_path': final, 'duration': duration,
                                'workdir': workdir,
                                'narrated': bool(m.get('narration'))},
@@ -3116,6 +3132,7 @@ def poll_podcast_task():
         resp['scriptOnly'] = bool(t.get('script_only'))
         resp['audioUrl'] = t.get('audio_url') or ''
         resp['durationSec'] = t.get('duration_sec') or 0
+        resp['model'] = t.get('model') or ''
     elif status == 'error':
         for ev in reversed(events):
             if ev.get('type') == 'error':
@@ -3135,7 +3152,7 @@ async def lookup_podcast():
         return err
     from lib import tts as _tts
     eff_voice = voice or _tts.default_voice()
-    tid = _podcast_index_get(phash, mode, lang, eff_voice)
+    tid = _podcast_index_get(phash, mode, lang, eff_voice, _model)
     if tid:
         # ★ The re-attach frame lands BEFORE the first poll, so it must carry
         #   the start clock too — otherwise a refreshed panel paints 0:00 for
@@ -3143,7 +3160,7 @@ async def lookup_podcast():
         from lib.agent_core.task_runtime import _epoch_ms
         _lt = _podcast_runtime.get(tid) or {}
         return jsonify({'ok': True, 'found': True, 'running': True,
-                        'task_id': tid,
+                        'task_id': tid, 'model': _lt.get('model') or '',
                         'createdAt': _epoch_ms(_lt.get('created_at')),
                         'updatedAt': _epoch_ms(_lt.get('updated_at')
                                                or _lt.get('created_at'))})
@@ -3155,6 +3172,7 @@ async def lookup_podcast():
             'script': cached.get('script_json') or {},
             'meta': cached.get('meta') or {},
             'scriptOnly': status == 'script_only',
+            'model': cached.get('model') or '',
             'audioUrl': (podcast_audio_url(phash, mode, lang, eff_voice)
                          if status == 'done' else ''),
             'durationSec': cached.get('duration_sec') or 0,

@@ -211,9 +211,13 @@ def _append_vu_message_to_conv(conv_id: str, vu_msg_id: str,
                 logger.warning('[Autopilot] conv=%s not found — cannot append VU msg',
                                conv_id[:8])
                 return None
-            _keys = set(row.keys()) if hasattr(row, 'keys') else set()
-            raw = row['messages'] if 'messages' in _keys else row[0]
-            cur_rev = int((row['rev'] if 'rev' in _keys else row[1]) or 0)
+            # Reuse the store's row reader: rows arrive as psycopg DictRow,
+            # sqlite3.Row, or plain tuples from fakes, and indexing by position
+            # as a fallback is WRONG for both mapping rows (dict[1] is a KEY
+            # lookup) and short tuples (IndexError). One helper, one behaviour.
+            from lib.tasks_pkg.persistence_store import _row_fields
+            raw, _rev_raw = _row_fields(row, 'messages', 'rev')
+            cur_rev = int(_rev_raw or 0)
             try:
                 messages = json.loads(raw or '[]')
             except (json.JSONDecodeError, TypeError) as e:

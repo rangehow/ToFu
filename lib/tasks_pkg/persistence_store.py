@@ -39,7 +39,16 @@ def _row_fields(row, *names):
         keys = set(row.keys())
         if all(n in keys for n in names):
             return tuple(row[n] for n in names)
-    return tuple(row[i] for i in range(len(names)))
+        # Mapping row missing a requested column: report None for it rather
+        # than falling through to positional access, where `row[1]` on a dict
+        # is a KEY lookup that raises KeyError.
+        return tuple(row[n] if n in keys else None for n in names)
+    # Sequence row. A row shorter than the request means the caller asked for a
+    # column this query did not select (e.g. a legacy `SELECT messages` reached
+    # by a test double); yield None for the missing tail instead of raising
+    # IndexError, so a widened SELECT degrades to "no CAS token" rather than
+    # killing the write path.
+    return tuple(row[i] if i < len(row) else None for i in range(len(names)))
 
 
 class ConcurrentWriteConflict(RuntimeError):

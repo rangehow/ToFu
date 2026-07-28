@@ -327,6 +327,26 @@ function isNearBottom(threshold) {
   if (!c) return true;
   return c.scrollHeight - c.scrollTop - c.clientHeight < (threshold || 150);
 }
+/* ── Instant-scroll seam ───────────────────────────────────────────────
+ * Run `fn` with `scroll-behavior` forced to `auto` on `el`, then restore the
+ * previous value. If any stylesheet sets `scroll-behavior:smooth` on a scroll
+ * container, a `scrollTop` write becomes an ANIMATION: during streaming it
+ * perpetually chases a growing scrollHeight (reader drifts off the bottom then
+ * snaps back), and at turn-finalize it visibly slides instead of re-pinning.
+ *
+ * Every programmatic scroll write that must land IMMEDIATELY goes through
+ * here, so the restore is never forgotten and callers cannot half-implement
+ * it. Restores in a `finally` so a throwing `fn` cannot leave the container
+ * stuck on `auto`. */
+function _withInstantScroll(el, fn) {
+  if (!el) { fn(); return; }
+  const _prev = el.style.scrollBehavior;
+  el.style.scrollBehavior = 'auto';
+  try { fn(); }
+  finally { el.style.scrollBehavior = _prev; }
+}
+if (typeof window !== 'undefined') window._withInstantScroll = _withInstantScroll;
+
 let _scrollRafId = null;
 function scrollToBottom(force) {
   const c = _getChatContainer();
@@ -352,10 +372,7 @@ function scrollToBottom(force) {
      * Force instant scroll for the duration of the write. The tofu theme
      * no longer sets smooth; this is belt-and-suspenders for future
      * themes / user stylesheets. */
-    const _prev = c.style.scrollBehavior;
-    c.style.scrollBehavior = 'auto';
-    c.scrollTop = c.scrollHeight;
-    c.style.scrollBehavior = _prev;
+    _withInstantScroll(c, () => { c.scrollTop = c.scrollHeight; });
   });
 }
 /* ── Scroll-to-bottom button ──────────────────────────────────────────

@@ -84,8 +84,6 @@ _EXTERNAL_GLOBALS = {
     '_applyTradingVisibility':
         'defined inline in index.html next to _applyDebugModeVisibility; '
         'shows/hides the optional trading entry from the feature flag',
-    '_withInstantScroll':
-        'defined inline in index.html (scroll-behaviour helper)',
     'TOFU_CONV_WINDOW':
         'optional operator override read at runtime; never assigned in-tree',
     '_CONV_VERIFY_RETRY_DELAYS':

@@ -139,7 +139,6 @@ declare var __I18N_PACK_URLS__: any;   // injected by routes/common.py:559 as an
 declare var _applyDebugModeVisibility: any;   // defined inline in index.html:2068 (loadFeatureFlags block)
 declare var _applyTradingVisibility: any;   // defined inline in index.html next to _applyDebugModeVisibility; shows/hides the optional trading entry from the feature flag
 declare var _waitForImageProcessing: any;   // defined in the deferred upload bundle; every call site is typeof-guarded
-declare var _withInstantScroll: any;   // defined inline in index.html (scroll-behaviour helper)
 
 // ── window.<name> property access ──
 // `declare var X` covers the bare reference; this covers `window.X`.
@@ -280,6 +279,7 @@ interface Window {
   _welcomePillsHtml: any;
   _wireConvHistoryRewritePush: any;
   _wireConvSyncPush: any;
+  _withInstantScroll: any;
   aiCompressLog: any;
   applyCapabilityTaxonomy: any;
   applyConvStateSnapshot: any;
@@ -439,5 +439,4 @@ interface Window {
   _applyDebugModeVisibility: any;
   _applyTradingVisibility: any;
   _waitForImageProcessing: any;
-  _withInstantScroll: any;
 }

@@ -131,6 +131,11 @@ global.Api = {
 global.conversations = [];
 
 eval(fs.readFileSync(process.argv[2], 'utf8'));  // REAL core/conversations.js
+// Extracted leaf modules (pt_3879f00e decomposition): the meta-merge calls
+// _applySettingsToConv (core/conv_apply_settings.js); the persist helpers live
+// in core/conv_persist_helpers.js. Eval them so harness scope matches the
+// shipped bundle.
+for (const extra of process.argv.slice(3)) eval(fs.readFileSync(extra, 'utf8'));
 global.conversations = conversations;
 
 // Override the real loadConversationMessages with a COUNTER (late-bound global
@@ -224,9 +229,14 @@ def _run(js_path: str) -> subprocess.CompletedProcess:
     harness = os.path.join(HERE, '_open_conv_body_reconcile_harness.js')
     with open(harness, 'w') as f:
         f.write(_HARNESS)
+    extra_js = [
+        os.path.join(JS_DIR, 'core', 'conv_apply_settings.js'),
+        os.path.join(JS_DIR, 'core', 'conv_persist_helpers.js'),
+        os.path.join(JS_DIR, 'core', 'pending_sync.js'),
+    ]
     try:
         return subprocess.run(
-            ['node', harness, js_path],
+            ['node', harness, js_path, *extra_js],
             capture_output=True, text=True, timeout=60,
         )
     finally:

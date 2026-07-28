@@ -322,7 +322,10 @@ def test_daemon_body_never_raises_on_internal_failure(fh_env, monkeypatch):
                             get_last_snapshot_id=lambda p: (_ for _ in ()).throw(
                                 RuntimeError('store corrupt')),
                         ))
-    commit_mod._run_commit_round_async(_task(), '/proj')   # must not raise
+    task = _task()
+    commit_mod._run_commit_round_async(task, '/proj')   # must not raise
+    assert fh_env['events'] == [], 'a corrupt store must not emit round_committed'
+    assert 'snapshotId' not in task, 'a failed snapshot must not stamp the task'
 
 
 def test_disabled_file_history_is_a_clean_noop(fh_env, monkeypatch):
@@ -414,12 +417,20 @@ def test_patch_requires_conv_task_and_sha(store):
 def test_patch_is_a_noop_when_conversation_is_gone(monkeypatch):
     """A deleted conversation must not raise from the post-done daemon."""
     import types
-    fake = types.SimpleNamespace(
-        patch_message_fields_by_task=lambda cid, tid, fields, **kw: False)
+    calls = []
+
+    def _gone(cid, tid, fields, **kw):
+        calls.append((cid, tid))
+        return False
+
+    fake = types.SimpleNamespace(patch_message_fields_by_task=_gone)
     monkeypatch.setitem(
         sys.modules, 'lib.agent_core.store',
         types.SimpleNamespace(get_conversation_store=lambda: fake))
     cr._patch_assistant_message_with_git(_task(), {'gitSha': 's'})
+    # The tagged-message lookup was attempted (narrow write, no positional
+    # fallback) and its False verdict was accepted without raising.
+    assert calls == [('conv-1', TASK_ID)]
 
 
 def test_patch_carries_modified_list_onto_the_message(store):

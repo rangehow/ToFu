@@ -290,4 +290,10 @@ def test_real_done_event_also_stamps_successor():
     assert 'latestLiveTaskId' in src, (
         '_finalize.py must stamp latestLiveTaskId on the real done event'
     )
-    assert '_live_successor_task_id' in src
+    # The finalize path uses the two-return variant (it also surfaces
+    # ``latestLiveTaskIsVu``); the LATE-done synthesis uses the simpler
+    # ``_live_successor_task_id`` pinned above. Pin the name this file's
+    # builder actually calls, not its sibling.
+    assert '_live_successor_info' in src, (
+        '_finalize.py must resolve the successor via _live_successor_info'
+    )

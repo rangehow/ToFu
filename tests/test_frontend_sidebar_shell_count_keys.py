@@ -78,7 +78,17 @@ global._migratePinnedToFolder = () => {};
 global._ensureMsgId = (m) => m;
 global.ConvCache = { put() {}, remove() {}, get: async () => null };
 global._bootLoadInFlight = false;
-global.Api = { conversations: { list: async () => SERVER_LIST, get: async () => null } };
+// The shipped loader fetches via Api.conversations.listMeta (the ?meta=1
+// sidebar seam) — stubbing the retired `.list` leaves listMeta undefined and
+// the loader bails before creating any shell.
+const _listResp = () => ({
+  ok: true, status: 200,
+  headers: { get: () => null },
+  json: async () => SERVER_LIST,
+});
+global.Api = { conversations: { listMeta: async () => _listResp(),
+                                list: async () => SERVER_LIST,
+                                get: async () => null } };
 global.fetch = async () => ({
   ok: true, status: 200,
   headers: { get: () => null },
@@ -188,9 +198,16 @@ def test_sidebar_shell_count_keys_neuter(tmp_path):
     load-bearing. Real file untouched."""
     with open(CONV_JS, encoding='utf-8') as f:
         src = f.read()
-    anchor = 'const _scCount = _serverConvCount(sc);'
+    # Two sites read `const _scCount = _serverConvCount(sc);` — the harness
+    # drives loadConversationsFromServer (the second). Anchor with the
+    # following shell-build line so the neuter bites the path under test.
+    anchor = ('const _scCount = _serverConvCount(sc);\n'
+              '        const nc = {\n'
+              '          id: sc.id,')
     assert anchor in src, 'new-shell count anchor not found — update the neuter target'
-    neutered = src.replace(anchor, 'const _scCount = sc.messageCount || 0;', 1)
+    neutered = src.replace(anchor, 'const _scCount = sc.messageCount || 0;\n'
+                                   '        const nc = {\n'
+                                   '          id: sc.id,', 1)
     assert neutered != src, 'neuter did not change source'
     nfile = tmp_path / 'conversations_neutered.js'
     nfile.write_text(neutered, encoding='utf-8')

@@ -77,8 +77,11 @@ global._patchTranslateLoadingDom = () => {};
 global._tryRecoverFromServer = async () => false;
 global._pollTranslateTaskBatch = async () => [];
 
-// core/conversations.js — defines convAutoTranslate + convAutoTranslateEffective
+// core/conversations.js
 eval(fs.readFileSync(process.argv[2], 'utf8'));
+// core/conv_reducers.js — defines convAutoTranslate + convAutoTranslateEffective
+// (extracted out of conversations.js in the pt_3879f00e decomposition)
+eval(fs.readFileSync(process.argv[5], 'utf8'));
 // core/translation_model.js — the REAL needsTranslation/readTranslation the
 // resume sweep decision now depends on (must load before translation.js).
 eval(fs.readFileSync(process.argv[4], 'utf8'));
@@ -218,6 +221,7 @@ def test_frontend_retro_autotranslate_honors_live_toggle():
              os.path.join(JS_DIR, 'core', 'conversations.js'),  # argv[2]
              os.path.join(JS_DIR, 'translation.js'),            # argv[3]
              os.path.join(JS_DIR, 'core', 'translation_model.js'),  # argv[4]
+             os.path.join(JS_DIR, 'core', 'conv_reducers.js'),      # argv[5]
              ],
             capture_output=True, text=True, timeout=60,
         )

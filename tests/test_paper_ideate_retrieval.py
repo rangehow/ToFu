@@ -364,7 +364,9 @@ def test_audit_fields_keep_retrieved_and_self_reported_separate():
             "every judged record must record the model's self-reported prior "
             "art separately ('self_reported_ids')")
         # And the two must genuinely be distinct sets, not aliases of a union.
-        assert set(rec['retrieved_ids']).isdisjoint(rec['self_reported_ids']) or True
+        assert set(rec['retrieved_ids']).isdisjoint(rec['self_reported_ids']), (
+            'retrieved_ids and self_reported_ids overlap — the two provenances '
+            'are aliased to one union under separate names')
         assert '2305.11111' not in rec['retrieved_ids'], (
             'a self-reported id leaked into retrieved_ids — the fields are '
             'separate in name only')

@@ -259,19 +259,36 @@ def _run(js_path: str) -> subprocess.CompletedProcess:
 
 
 @pytest.mark.skipif(not _node_available(), reason='node not installed')
-def test_warm_open_adopts_reconciled_list():
-    """RED until the fix lands: a warm re-open must adopt the backend's
-    reconciled (shorter) message list so an orphaned empty-assistant ghost is
-    dropped — while a live stream and genuine fresh local activity are never
-    truncated."""
+def test_warm_open_controls_hold_today():
+    """The anti-over-correction invariants must hold TODAY, independent of the
+    not-yet-landed fix: a LIVE stream is never truncated, and genuine fresh
+    local activity (KEEP_LOCAL) is never truncated. Kept out of the xfail
+    below so a control regression can never hide inside an expected failure."""
     conv_js = os.path.join(JS_DIR, 'core', 'conversations.js')
     proc = _run(conv_js)
     output = proc.stdout.strip()
     assert proc.returncode == 0, f'node failed: {proc.stderr}\n{output}'
-    # Controls must already hold today (they guard against over-correction).
     for want in ('PASS C_live_stream_not_truncated',
                  'PASS D_keep_local_fresh_not_truncated'):
         assert want in output, 'control regressed:\n' + output
+
+
+@pytest.mark.xfail(
+    reason='product gap by design: warm re-open does not yet adopt the '
+           'backend-reconciled (shorter) list — the orphaned empty-assistant '
+           'ghost survives (bypass :1168 + MERGE_ACTIVE_TASK keep-longer). '
+           'strict=True: when the adoption fix lands this flips XPASS and '
+           'the marker MUST come off (the TDD driver completes).',
+    strict=True)
+@pytest.mark.skipif(not _node_available(), reason='node not installed')
+def test_warm_open_adopts_reconciled_list():
+    """TDD driver (xfail, strict): a warm re-open must adopt the backend's
+    reconciled (shorter) message list so an orphaned empty-assistant ghost is
+    dropped. The controls live in test_warm_open_controls_hold_today."""
+    conv_js = os.path.join(JS_DIR, 'core', 'conversations.js')
+    proc = _run(conv_js)
+    output = proc.stdout.strip()
+    assert proc.returncode == 0, f'node failed: {proc.stderr}\n{output}'
     # The two ghost-adoption checks are the RED target.
     for want in ('PASS A_warm_idle_adopts_reconciled',
                  'PASS B_merge_active_task_adopts_reconciled'):

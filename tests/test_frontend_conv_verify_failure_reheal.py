@@ -181,6 +181,12 @@ global.conversations = [{
 }];
 
 eval(fs.readFileSync(process.argv[2], 'utf8'));  // REAL core/conversations.js
+// Extracted leaf modules (pt_3879f00e decomposition): the cache-paint path
+// calls _applySettingsToConv (core/conv_apply_settings.js) and the load path
+// calls helpers from core/pending_sync.js + core/conv_persist_helpers.js,
+// none of which still live in conversations.js. Eval them so the harness
+// scope matches the shipped bundle (lib/js_bundler.py concatenates them all).
+for (const extra of process.argv.slice(3)) eval(fs.readFileSync(extra, 'utf8'));
 global.conversations = conversations;
 
 const out = [];
@@ -249,9 +255,15 @@ def _run(js_path: str) -> subprocess.CompletedProcess:
     harness = os.path.join(HERE, '_conv_verify_reheal_harness.js')
     with open(harness, 'w') as f:
         f.write(_HARNESS)
+    extra_js = [
+        os.path.join(JS_DIR, 'core', 'conv_apply_settings.js'),
+        os.path.join(JS_DIR, 'core', 'conv_image_hydrate.js'),
+        os.path.join(JS_DIR, 'core', 'pending_sync.js'),
+        os.path.join(JS_DIR, 'core', 'conv_persist_helpers.js'),
+    ]
     try:
         return subprocess.run(
-            ['node', harness, js_path],
+            ['node', harness, js_path, *extra_js],
             capture_output=True, text=True, timeout=60,
         )
     finally:

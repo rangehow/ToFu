@@ -964,14 +964,37 @@ function renderFinishInfo(msg, isLiveTail) {
     }
   }
   if (msg.fallbackModel) {
-    const _fbReason = msg.fallbackReason || msg.fallbackKind || "";
-    const _reasonLine = _fbReason
-      ? t('finishInfo.fallbackReason', { reason: _fbReason })
+    /* ★ The cause is rendered as VISIBLE text, not only in the hover title.
+     *   A tooltip is unreachable on touch and easy to miss on desktop, so a
+     *   settled fallback used to read as "回退 → kimi-k3" with no cause at
+     *   all — the reason (often an entire upstream HTML error page) was
+     *   locked inside `title`. Formatting comes from the shared
+     *   core/error_envelope.js helper so this tag and the live streaming
+     *   banner can never name the same failure differently. */
+    const _fb = (typeof fallbackCauseParts === 'function')
+      ? fallbackCauseParts(msg)
+      /* core/error_envelope.js is loaded before this file in BOTH the bundle
+       * and the index.html script-tag path. The guard is for the isolated
+       * eval contexts (dev fallback / JSDOM harnesses that load finish_info.js
+       * alone) this file is already required to survive — degrade to the
+       * verbatim cause rather than throwing and killing the whole finish bar. */
+      : { kindLabel: '', detail: String(msg.fallbackReason || msg.fallbackKind || ''),
+          shown: '', hasCause: false };
+    const _reasonLine = _fb.detail || _fb.kindLabel
+      ? t('finishInfo.fallbackReason', { reason: _fb.detail || _fb.kindLabel })
       : "";
     const _tip = t('finishInfo.fallbackTip', { from: msg.fallbackFrom || "?", to: msg.fallbackModel, reason: _reasonLine });
     parts.push(
       `<span class="finish-tag warn" title="${escapeHtml(_tip)}">${escapeHtml(t('finishInfo.fallbackTag'))} → ${escapeHtml(msg.fallbackModel)}</span>`,
     );
+    if (_fb.hasCause) {
+      parts.push(
+        `<span class="finish-tag warn fb-cause" title="${escapeHtml(_fb.detail || _fb.kindLabel)}">` +
+        (_fb.kindLabel ? `<span class="fb-cause-kind">${escapeHtml(_fb.kindLabel)}</span>` : '') +
+        (_fb.shown ? `<span class="fb-cause-detail">${escapeHtml(_fb.shown)}</span>` : '') +
+        `</span>`,
+      );
+    }
   }
   if (parts.length === 0) return "";
   return `<div class="message-finish">${parts.join("")}</div>`;

@@ -3314,6 +3314,14 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .paper-qa-send-btn:activ
 /* Route tag — actual provider · API-key slot that served the turn */
 .finish-tag.route{font-size:9px;font-weight:600;letter-spacing:.02em;padding:1px 6px;max-width:240px;overflow:hidden;text-overflow:ellipsis;vertical-align:middle;color:var(--text-tertiary);background:var(--bg-tertiary);border-color:var(--border);opacity:.85}
 
+/* Fallback cause tag — the settled counterpart of the streaming banner's
+   .fb-reason. Renders WHY the fallback happened as visible text; the verbatim
+   (possibly whole-HTML-page) cause stays in the title. Wraps rather than
+   truncating hard, since a distilled cause is short but not fixed-width. */
+.finish-tag.warn.fb-cause{display:inline-flex;align-items:baseline;gap:5px;max-width:100%;min-width:0;font-weight:500;white-space:normal;text-align:left}
+.finish-tag.warn.fb-cause .fb-cause-kind{font-weight:700;letter-spacing:.02em;flex-shrink:0}
+.finish-tag.warn.fb-cause .fb-cause-detail{font-family:'JetBrains Mono',monospace;opacity:.9;word-break:break-word;overflow-wrap:anywhere}
+
 /* ═══════════════════════════════════════════
    ★ Full-page Drop Overlay
    ═══════════════════════════════════════════ */

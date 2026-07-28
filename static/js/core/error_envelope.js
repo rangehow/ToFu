@@ -270,8 +270,84 @@ function errorEnvelopeMessage(err) {
   return _loc != null ? _loc : _envRepairMojibake(env.message);
 }
 
+/* ── Model-fallback cause formatting (SINGLE source) ──────────────────
+ *
+ * A fallback's cause is shown by TWO renderers: the live in-bubble banner
+ * (ui/streaming_ui.js) and the settled finish-tag (ui/finish_info.js). Both
+ * read the same msg.fallbackReason/fallbackKind fields, so the FORMATTING
+ * lives here — once — or the two surfaces drift and name one failure two
+ * ways (charter #2: the envelope layer is the single normalization throat).
+ * Kind labels resolve through the same chain renderErrorEnvelope uses. */
+
+/* Visible-cause budget. The verbatim text (which can be an entire upstream
+ * HTML error page, as with a bare openresty 502) is kept by callers in a
+ * title attribute; only the VISIBLE line is capped. */
+const FALLBACK_DETAIL_MAX = 160;
+
+/* Distill an upstream error body down to its human signal.
+ *
+ * A gateway 5xx often arrives as a whole HTML page, so the raw detail reads
+ * '<html> <head><title>502 Bad Gateway</title></head> <body> <center><h1>502
+ * Bad Gateway</h1></center> <hr><center>openresty</center>...' — technically
+ * the cause, but the reader has to mine it out of markup. Keep any leading
+ * non-markup prefix (the 'API HTTP 502:' our own layer adds), then replace
+ * the markup tail with the page's own de-duplicated text nodes:
+ * '502 Bad Gateway · openresty'. Returns the input UNTOUCHED when there are
+ * no tags, so a plain message (the common case: rate limits, timeouts) is
+ * never reworded — this is a de-noiser, not a rewriter. */
+function distillFallbackDetail(detail) {
+  const lt = detail.indexOf('<');
+  if (lt === -1 || !/<\/?[a-zA-Z][^>]*>/.test(detail)) return detail;
+  const prefix = detail.slice(0, lt).trim();
+  const stripped = detail.slice(lt)
+    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ')
+    .replace(/<[^>]*>/g, '\u0001');            // tag → text-node separator
+  const seen = [];
+  for (const piece of stripped.split('\u0001')) {
+    const s = piece.replace(/\s+/g, ' ').trim();
+    /* A <title> repeats the <h1> on nginx/openresty pages — dedupe so the
+     * distilled line reads once, not three times. */
+    if (s && seen.indexOf(s) === -1) seen.push(s);
+  }
+  const body = seen.join(' \u00b7 ');
+  if (!body) return prefix || detail;
+  return prefix ? `${prefix} ${body}` : body;
+}
+
+/* Human label for a typed error kind (keyed i18n → ERROR_KIND_LABELS → raw
+ * kind), so a fallback cause and an error block never disagree on a name. */
+function fallbackKindLabel(kind) {
+  if (!kind) return '';
+  const loc = _envResolveI18n('err.k.' + kind + '.chip');
+  if (loc) return loc;
+  return ERROR_KIND_LABELS[kind] || kind;
+}
+
+/* Resolve a message's fallback cause into display parts.
+ *
+ * Returns { kind, kindLabel, detail, shown, hasCause } where `detail` is the
+ * verbatim (whitespace-collapsed) cause for a title attribute and `shown` is
+ * the distilled + length-capped text safe to render VISIBLY. */
+function fallbackCauseParts(msg) {
+  const kind = (msg && msg.fallbackKind) || '';
+  let detail = String((msg && msg.fallbackReason) || '');
+  /* The backend composes the field as `${kind}: ${detail}`
+   * (lib/tasks_pkg/llm_fallback/_call.py), so drop the kind prefix — it is
+   * already rendered as its own label and would otherwise print twice. */
+  if (kind && detail.indexOf(kind + ':') === 0) detail = detail.slice(kind.length + 1);
+  detail = detail.replace(/\s+/g, ' ').trim();
+  const distilled = distillFallbackDetail(detail);
+  const shown = distilled.length > FALLBACK_DETAIL_MAX
+    ? distilled.slice(0, FALLBACK_DETAIL_MAX) + '\u2026' : distilled;
+  const kindLabel = fallbackKindLabel(kind);
+  return { kind, kindLabel, detail, shown, hasCause: !!(kindLabel || shown) };
+}
+
 window.renderErrorEnvelope = renderErrorEnvelope;
 window.normalizeErrorEnvelope = normalizeErrorEnvelope;
 window.errorEnvelopeKind = errorEnvelopeKind;
 window.errorEnvelopeMessage = errorEnvelopeMessage;
 window.isErrorEnvelope = isErrorEnvelope;
+window.distillFallbackDetail = distillFallbackDetail;
+window.fallbackKindLabel = fallbackKindLabel;
+window.fallbackCauseParts = fallbackCauseParts;

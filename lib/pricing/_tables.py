@@ -54,6 +54,9 @@ MODEL_PRICING = {
     'claude-opus-4-8':           {'input': 5.0,   'output': 25.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Opus 4.8'},
     'us.anthropic.claude-opus-4-8-v1:0':        {'input': 5.0,   'output': 25.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Opus 4.8 (Bedrock)'},
     'aws.claude-opus-4.7':       {'input': 5.0,   'output': 25.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Opus 4.7'},
+    # Nova-04 deployment of the same model — an interchangeable member of the
+    # claude-opus-4.7 wire pool, so it must price identically or cost books at $0.
+    'aws.claude-opus-4.7-nova04': {'input': 5.0,  'output': 25.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Opus 4.7'},
     'claude-opus-4-7':           {'input': 5.0,   'output': 25.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Opus 4.7'},
     'us.anthropic.claude-opus-4-7-v1:0':        {'input': 5.0,   'output': 25.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Opus 4.7 (Bedrock)'},
     'us.anthropic.claude-opus-4-6-v1:0':        {'input': 5.0,   'output': 25.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Opus 4.6 (Bedrock)'},

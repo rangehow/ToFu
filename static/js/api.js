@@ -859,7 +859,19 @@
     restart: (payload) => post('/api/v1/update/restart', payload || {}, { onError: 'throw' }),
     // shutdown: POST — graceful manual stop (writes the manual-shutdown
     // marker so the next boot won't mistake it for an OS kill). No re-exec.
-    shutdown: ()    => post('/api/v1/update/shutdown', {}, { onError: 'null' }),
+    // Takes {approvalId} once a human approved the pending request.
+    shutdown: (payload) => post('/api/v1/update/shutdown', payload || {}, { onError: 'throw' }),
+    // Lifecycle approvals (pt_40d00fd526e5479a human-approval gate): a
+    // restart/shutdown POST without an approvalId answers 202 +
+    // {pendingApproval}; the human decides here; the caller retries with
+    // {approvalId}. onError:'throw' so callers can read 403/404 bodies.
+    listLifecycleApprovals: (query) =>
+      get('/api/v1/update/lifecycle-approvals', { query: query || {}, onError: 'null' }),
+    getLifecycleApproval: (id) =>
+      get(`/api/v1/update/lifecycle-approvals/${encodeURIComponent(id)}`, { onError: 'null' }),
+    decideLifecycleApproval: (id, approved) =>
+      post(`/api/v1/update/lifecycle-approvals/${encodeURIComponent(id)}/decide`,
+           { approved: !!approved }, { onError: 'throw' }),
   };
 
   // swarm (multi-agent control plane) -------------------------------

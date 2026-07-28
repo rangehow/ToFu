@@ -68,6 +68,11 @@ lib/                   — Core business logic
                          pt_03f4cdf1).
   ttl_cache.py         — Generic in-memory TTL cache with LRU eviction +
                          get_or_compute serialization (TTLCache class)
+  lifecycle_approval.py — Human-approval gate for server lifecycle actions
+                         (restart/shutdown): pending-request store, one-time
+                         short-TTL tokens, 15-min restart cooldown, script-gate
+                         CLI for restart_15000.sh, restart-class call detector
+                         for the recovery no-refire note (pt_40d00fd526e5479a)
   task_runtime.py      — Compatibility shim → re-exports TaskRuntime from
                          lib/agent_core/task_runtime.py (relocated 2026-06). See §13.
   push.py              — Compatibility shim → re-exports PushHub + push_event() from

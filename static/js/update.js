@@ -64,6 +64,7 @@ async function openUpdateDialog() {
   if (!modal) return;
   modal.classList.add('open');
   _runUpdateCheck();
+  _renderPendingLifecycleApprovals();
 }
 
 /** Run the version check with a visible spinner + bounded timeout.
@@ -228,7 +229,9 @@ function _renderUpdateDialogBody(r) {
 
   body.innerHTML =
     _updateHeroHtml(r) +
-    '<div class="upd-action" id="updateActionArea">' + actionHtml + '</div>';
+    '<div class="upd-action" id="updateActionArea">' + actionHtml + '</div>' +
+    '<div id="updateLifecycleApprovals" style="display:none"></div>';
+  _renderPendingLifecycleApprovals();
 }
 
 /** Render the live stepper (one row per stage) into the action area. */
@@ -692,6 +695,26 @@ async function restartServer(opts) {
   };
   if (btn) { btn.disabled = true; btn.textContent = t('update.restarting'); }
 
+  // Human-approval gate (pt_40d00fd526e5479a): a restart POST without an
+  // approvalId only REGISTERS a pending request (202). The human's click on
+  // this very button IS the approval gesture, so we approve the pending
+  // request immediately and retry with the token — the flow stays seamless
+  // for the operator while agent shells (no UI, no gesture) stay gated.
+  // A pre-approved id (from the pending-approvals card) rides in via opts.
+  var _approvalId = (opts && opts.approvalId) || '';
+  async function _requestRestart(forceFlag) {
+    const payload = { convId: _ownConv };
+    if (forceFlag) payload.force = true;
+    if (_approvalId) payload.approvalId = _approvalId;
+    const r = await Api.update.restart(payload);
+    if (r && r.pendingApproval) {
+      _approvalId = r.pendingApproval.id;
+      await Api.update.decideLifecycleApproval(_approvalId, true);
+      return _requestRestart(forceFlag);
+    }
+    return r;
+  }
+
   // Capture the CURRENT process's bootId first, so we can require the
   // post-restart health to report a DIFFERENT one (proof a new process
   // answered). Best-effort: if this probe fails we fall back to null, and the
@@ -722,22 +745,43 @@ async function restartServer(opts) {
   // (so there is no double-confirm) and never silently kills sibling tasks.
   var _triggered = false;
   try {
-    await Api.update.restart({ convId: _ownConv });
+    await _requestRestart(false);
     _triggered = true;
   } catch (e) {
+    if (e && e.status === 429) {
+      // Cooldown: the server was restarted moments ago — surface the
+      // remaining seconds and stay put (NO progress card, nothing fired).
+      const secs = (e.body && e.body.retryAfterSec) || '?';
+      showToast('⏳', t('update.restartCooldown').replace('%s', String(secs)), '', 6000);
+      _restartActive = false;
+      _restoreBtn();
+      return;
+    }
+    if (e && (e.status === 400 || e.status === 403 || e.status === 404)) {
+      // Approval rejected/expired — definitive refusal, nothing is scheduled.
+      showToast('⚠️', (e && e.message) || t('update.errUnknown'), '', 6000);
+      if (typeof debugLog === 'function') debugLog('[Update] restart refused: HTTP ' + e.status + ' ' + (e && e.message), 'warning');
+      _restartActive = false;
+      _restoreBtn();
+      return;
+    }
     if (e && e.status === 409 && e.body && e.body.needsForce) {
       const count = (e.body.runningTasks || []).length;
       const ok = await showConfirm(
         t('update.restartForceConfirm').replace('%s', String(count)),
         { danger: true });
       if (!ok) {
-        // Declined — abort cleanly; leave the dialog on its current card.
+        // Declined — deny the still-unconsumed approval so a stray approved
+        // token cannot be fired later, then abort cleanly.
+        if (_approvalId) {
+          try { await Api.update.decideLifecycleApproval(_approvalId, false); } catch (_e) { /* best effort */ }
+        }
         _restartActive = false;
         _restoreBtn();
         return;
       }
       try {
-        await Api.update.restart({ force: true, convId: _ownConv });
+        await _requestRestart(true);
       } catch (e2) {
         if (typeof debugLog === 'function') debugLog('[Update] forced restart request failed: ' + (e2 && e2.message), 'warning');
       }
@@ -766,15 +810,27 @@ async function restartServer(opts) {
 /** Manual graceful shutdown — writes the manual-shutdown marker so the next
  *  boot won't mistake this for an OS kill, then stops the server (no re-exec,
  *  so it does NOT come back on its own). Admin-only; always confirms. */
-async function shutdownServer() {
+async function shutdownServer(opts) {
   if (_restartActive) return;   // a restart already owns the modal body
   if (!await showConfirm(t('update.shutdownConfirm'), { danger: true })) return;
   const rBtn = document.getElementById('updateRestartNowBtn');
   const sBtn = document.getElementById('updateShutdownBtn');
   if (rBtn) rBtn.disabled = true;
   if (sBtn) { sBtn.disabled = true; }
+  await _fireShutdown((opts && opts.approvalId) || '');
+}
+
+/** Fire the shutdown through the approval gate (shared by the button and
+ *  the pending-approvals card). The confirm click IS the human gesture, so
+ *  a freshly-pended request is approved immediately and retried. */
+async function _fireShutdown(approvalId) {
   try {
-    await Api.update.shutdown();
+    const payload = approvalId ? { approvalId: approvalId } : {};
+    const r = await Api.update.shutdown(payload);
+    if (r && r.pendingApproval) {
+      await Api.update.decideLifecycleApproval(r.pendingApproval.id, true);
+      await Api.update.shutdown({ approvalId: r.pendingApproval.id });
+    }
   } catch (e) {
     if (typeof debugLog === 'function') debugLog('[Shutdown] request failed: ' + (e && e.message), 'warning');
   }
@@ -785,6 +841,73 @@ async function shutdownServer() {
       escapeHtml(t('update.shuttingDown')) + '</span></div>';
   }
   showToast('◐', t('update.shuttingDown'), t('update.shutdownHint'), 8000);
+}
+
+// ── Pending lifecycle approvals (agent-initiated restart/shutdown requests) ──
+// An agent curl against /api/v1/update/restart|shutdown now ONLY registers a
+// pending request; the human reviews the queue here and approves/denies.
+// Approving executes the action immediately through the same UX as the
+// operator's own button (force-confirm on running tasks included).
+async function _renderPendingLifecycleApprovals() {
+  const host = document.getElementById('updateLifecycleApprovals');
+  if (!host) return;
+  let records = [];
+  try {
+    const r = await Api.update.listLifecycleApprovals({ status: 'pending' });
+    records = (r && r.records) || [];
+  } catch (e) { records = []; }
+  if (!records.length) {
+    host.innerHTML = '';
+    host.style.display = 'none';
+    return;
+  }
+  host.style.display = '';
+  host.innerHTML = '<div class="upd-lc-card">' +
+    '<div class="upd-lc-title">' + escapeHtml(t('update.pendingApprovals')) + '</div>' +
+    records.map(function (rec) {
+      const o = rec.origin || {};
+      let when = '';
+      try { when = new Date((rec.requested_at || 0) * 1000).toLocaleTimeString(); } catch (_e) { when = ''; }
+      const meta = [o.ua, o.conv_id, o.remote_addr].filter(Boolean).join(' · ');
+      const btnLabel = rec.action === 'shutdown'
+        ? t('update.approveExecuteShutdown') : t('update.approveExecuteRestart');
+      return '<div class="upd-lc-row" data-id="' + escapeHtml(rec.id) +
+        '" data-action="' + escapeHtml(rec.action) + '">' +
+        '<div class="upd-lc-meta"><span class="upd-lc-action">' + escapeHtml(rec.action) +
+        '</span> · ' + escapeHtml(when) + (meta ? ' · ' + escapeHtml(meta) : '') + '</div>' +
+        '<div class="upd-lc-btns">' +
+        '<button class="upd-lc-approve" onclick="_lcDecide(this,true)">' + escapeHtml(btnLabel) + '</button>' +
+        '<button class="upd-lc-deny" onclick="_lcDecide(this,false)">' + escapeHtml(t('update.deny')) + '</button>' +
+        '</div></div>';
+    }).join('') + '</div>';
+}
+
+/** Approve (and execute) or deny one pending lifecycle request. */
+async function _lcDecide(btn, approved) {
+  const row = btn && btn.closest ? btn.closest('.upd-lc-row') : null;
+  const id = row && row.dataset ? row.dataset.id : '';
+  const action = row && row.dataset ? row.dataset.action : '';
+  if (!id) return;
+  btn.disabled = true;
+  try {
+    await Api.update.decideLifecycleApproval(id, approved);
+  } catch (e) {
+    showToast('⚠️', (e && e.message) || t('update.errUnknown'), '', 5000);
+    btn.disabled = false;
+    return;
+  }
+  if (!approved) {
+    showToast('◐', t('update.approvalDenied'), '', 4000);
+    _renderPendingLifecycleApprovals();
+    return;
+  }
+  if (action === 'shutdown') {
+    await _fireShutdown(id);
+  } else {
+    // The approved id rides into the standard restart flow (progress card,
+    // force-confirm on running tasks, health-poll, auto-reload).
+    restartServer({ approvalId: id });
+  }
 }
 
 /** One health probe; on success finish, on overall timeout bail.

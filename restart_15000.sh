@@ -173,6 +173,45 @@ if [ -n "${LPIDS_INIT}" ]; then
   done
 fi
 
+# ── [pre/5c] HUMAN APPROVAL GATE (pt_40d00fd526e5479a, 2026-07-28) ──────────
+# A restart of a RUNNING server is a high-risk action and requires explicit
+# HUMAN approval (owner ruling after an autopilot conv curl'ed the HTTP
+# restart endpoint twice in 3 minutes, killing 23 in-flight tasks). The HTTP
+# endpoint is gated server-side; this gate stops the same bypass through the
+# shell script (the 2026-07-27 watcher incident ran this script detached).
+# Three ways through:
+#   (i)  NO live listener on :PORT → this is a recovery/relaunch of a DEAD
+#        server, not a restart of a live one — the gate does not apply.
+#   (ii) interactive TTY → the human types RESTART at the prompt (a real
+#        person at a terminal IS the approval).
+#   (iii) non-interactive (agent shell / watcher) → a server-minted,
+#        human-approved, unexpired, unconsumed token in
+#        data/lifecycle_approvals.json (approved in the UI beforehand).
+LPIDS_GATE="$(listener_pids)"
+if [ -n "${LPIDS_GATE}" ]; then
+  if [ -t 0 ]; then
+    echo "[pre/5c] LIVE server on :${PORT} (pid(s): ${LPIDS_GATE})."
+    echo "        Restarting it interrupts every in-flight task. This action"
+    echo "        requires a HUMAN decision — confirm below."
+    printf '        Type RESTART to proceed: '
+    read -r _LC_ANSWER
+    if [ "${_LC_ANSWER}" != "RESTART" ]; then
+      echo "[pre/5c] Not confirmed — aborted (no process was touched)."
+      exit 3
+    fi
+    echo "[pre/5c] Confirmed interactively."
+  else
+    echo "[pre/5c] Non-interactive run with a LIVE server on :${PORT} —"
+    echo "        checking for a human-approved restart token ..."
+    if "${PY}" -m lib.lifecycle_approval --script-gate restart; then
+      echo "[pre/5c] Human-approved token consumed — proceeding."
+    else
+      echo "[pre/5c] Aborted (no process was touched)."
+      exit 3
+    fi
+  fi
+fi
+
 # ── [pre/5b] RESTART SERIALIZATION LOCK — one restart at a time on this box. ──
 # On a shared-HEAD box, multiple sibling agents may each run this script to load
 # a commit, unaware of each other. Without a lock they BOTH reach [1/5] and kill

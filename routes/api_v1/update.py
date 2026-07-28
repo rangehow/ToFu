@@ -26,9 +26,13 @@ import threading
 import time
 import uuid
 
-from flask import Blueprint
+from flask import Blueprint, request
 
-from lib.api_response import api_conflict, api_internal_error, api_ok
+from lib import lifecycle_approval as _lca
+from lib.api_response import (
+    api_conflict, api_error, api_forbidden, api_internal_error, api_not_found,
+    api_ok,
+)
 from lib.log import audit_log, get_logger
 from lib.openapi import api_meta
 from lib.push import push_event
@@ -238,17 +242,71 @@ def _deferred_reexec(delay: float = 0.6):
     _perform_server_reexec('update')
 
 
+def _lifecycle_origin(own_conv, force, running_count):
+    """Attribution payload recorded on every pending approval request.
+
+    This is what makes the NEXT restart attempt attributable in seconds:
+    user-agent, socket peer, conversation, force flag, whether a real
+    credential rode along, and how many tasks were in flight.
+    """
+    try:
+        cred = bool(request.headers.get('Authorization') or request.cookies)
+        ua = request.headers.get('User-Agent', '')
+        peer = request.remote_addr or ''
+    except Exception as e:
+        logger.debug('[Update] origin capture degraded: %s', e)
+        cred, ua, peer = False, '', ''
+    return {'ua': ua, 'remote_addr': peer, 'conv_id': own_conv or '',
+            'force': bool(force), 'running_tasks': running_count,
+            'credential': cred}
+
+
+def _approval_required(action, origin):
+    """202 + pending-approval record — the gate's default answer.
+
+    Nothing is executed; the human must approve in the UI and the caller
+    retries with ``approvalId``. Loud by construction (create_request
+    audits + logs)."""
+    rec = _lca.create_request(action, origin=origin)
+    resp, _ = api_ok({'needsApproval': True,
+                      'pendingApproval': rec,
+                      'message': (
+                          'A live-server %s requires HUMAN approval. The '
+                          'request was registered as pending; approve it in '
+                          'the Tofu UI (Settings → 更新/Update), then retry '
+                          'with {"approvalId": "%s"}.' % (action, rec['id']))})
+    return resp, 202
+
+
+def _consume_or_forbid(approval_id, action):
+    """validate (early) → consume (at acceptance). Returns an error tuple or None."""
+    ok, why = _lca.validate(approval_id, action)
+    if not ok:
+        logger.warning('[Update] %s approval %s rejected: %s',
+                       action, approval_id[:8], why)
+        audit_log('lifecycle_token_rejected', approval_id=approval_id,
+                  action=action, reason=why)
+        return api_forbidden(
+            'Invalid %s approval (%s). Register a new request (POST without '
+            'approvalId → 202) and have a human approve it in the UI.'
+            % (action, why))
+    return None
+
+
 @api_v1_update_bp.route('/api/v1/update/restart', methods=['POST'])
 @require_scope('admin')
 @api_meta(
     summary='Restart the server',
     description=(
         'Re-execs the server process so freshly-pulled code takes effect. '
-        'Explicit and admin-only — there is no silent auto-restart. The '
-        'response is sent before the process restarts; clients should wait '
-        'a few seconds and reconnect. Refuses with 409 when OTHER '
-        'conversations have in-flight tasks (a re-exec kills every running '
-        'task); pass {"force": true} to override.'
+        'HUMAN-APPROVAL GATED: without a valid approvalId this only '
+        'registers a pending approval (202) and executes nothing — a human '
+        'approves it in the UI, then the caller retries with '
+        '{"approvalId": "<id>"}. The one-time token is consumed at '
+        'acceptance. A second restart within the 15-minute cooldown is '
+        'refused (429). Refuses with 409 when OTHER conversations have '
+        'in-flight tasks (a re-exec kills every running task); pass '
+        '{"force": true} to override (the token survives the 409).'
     ),
     tags=['system'],
 )
@@ -258,9 +316,35 @@ def update_restart():
     # are mid-run — otherwise an agent's own run_command probing this endpoint
     # silently interrupts all its long-running siblings. The caller's own
     # conversation (if any) is excluded so it can restart itself.
+    #
+    # HUMAN-APPROVAL GATE (pt_40d00fd526e5479a, 2026-07-28 incident: an
+    # autopilot conv curl'ed this endpoint twice in 3 minutes, killing 23
+    # in-flight tasks; the "approval" came from its own VU, not a human):
+    # without a valid ``approvalId`` the request only REGISTERS a pending
+    # approval (202) and executes nothing; the human approves in the UI; the
+    # retried request with the id executes. The approval is consumed ONLY at
+    # acceptance, so the running-tasks 409 / force retry keeps its token.
     body = parse_body()
     force = bool(body.get('force'))
     own_conv = (body.get('convId') or body.get('conv_id') or '').strip() or None
+    approval_id = (body.get('approvalId') or body.get('approval_id')
+                   or '').strip()
+
+    # Idempotency net: a second restart within the cooldown is refused — this
+    # is what stops a crash-resume / re-drive from double-firing a restart
+    # that already succeeded (the state file survives the re-exec).
+    remaining = _lca.restart_cooldown_remaining()
+    if remaining > 0:
+        logger.warning('[Update] Restart REFUSED — cooldown (%ds left of %ds)',
+                       remaining, _lca.RESTART_COOLDOWN_SEC)
+        audit_log('lifecycle_restart_rate_limited', remaining=remaining,
+                  cooldown=_lca.RESTART_COOLDOWN_SEC, conv_id=own_conv or '')
+        return api_error(
+            'Restart refused: the server was already restarted %ds ago '
+            '(cooldown %ds). Retry later.'
+            % (_lca.RESTART_COOLDOWN_SEC - remaining,
+               _lca.RESTART_COOLDOWN_SEC),
+            status=429, retryAfterSec=remaining)
 
     running = []
     try:
@@ -268,6 +352,14 @@ def update_restart():
         running = list_running_tasks(exclude_conv_id=own_conv)
     except Exception as e:
         logger.warning('[Update] Could not check running tasks before restart: %s', e)
+
+    if not approval_id:
+        return _approval_required(
+            'restart', _lifecycle_origin(own_conv, force, len(running)))
+
+    err = _consume_or_forbid(approval_id, 'restart')
+    if err is not None:
+        return err
 
     if running and not force:
         logger.warning(
@@ -282,11 +374,20 @@ def update_restart():
             % len(running),
             runningTasks=running, needsForce=True)
 
+    # Acceptance: consume the one-time token NOW (a refusal above — the
+    # running-tasks 409 — deliberately left it usable for the force retry).
+    c_ok, c_why = _lca.consume(approval_id, 'restart')
+    if not c_ok:
+        logger.warning('[Update] Restart approval %s vanished at acceptance: %s',
+                       approval_id[:8], c_why)
+        return api_forbidden('Restart approval no longer valid (%s).' % c_why)
+    _lca.stamp_restart()
     audit_log('self_update_restart', pid=os.getpid(),
-              forced=force, running_tasks=len(running))
+              forced=force, running_tasks=len(running),
+              approval_id=approval_id)
     logger.warning('[Update] Restart requested — re-exec scheduled (pid=%d, '
-                   'force=%s, running_tasks=%d)',
-                   os.getpid(), force, len(running))
+                   'force=%s, running_tasks=%d, approval=%s)',
+                   os.getpid(), force, len(running), approval_id[:8])
     threading.Thread(target=_deferred_reexec, name='tofu-restart',
                      daemon=True).start()
     return api_ok({'restarting': True, 'forced': force,
@@ -334,11 +435,98 @@ def _deferred_shutdown(delay: float = 0.6):
     tags=['system'],
 )
 def update_shutdown():
-    audit_log('manual_shutdown', pid=os.getpid())
-    logger.warning('[Shutdown] Manual shutdown requested (pid=%d)', os.getpid())
+    # Same human-approval gate as restart (pt_40d00fd526e5479a) — a shutdown
+    # strands every user and in-flight task, so a unilateral agent call must
+    # not be able to trigger it. No cooldown: a shutdown is one-way.
+    body = parse_body()
+    own_conv = (body.get('convId') or body.get('conv_id') or '').strip() or None
+    approval_id = (body.get('approvalId') or body.get('approval_id')
+                   or '').strip()
+
+    if not approval_id:
+        return _approval_required(
+            'shutdown', _lifecycle_origin(own_conv, False, None))
+
+    err = _consume_or_forbid(approval_id, 'shutdown')
+    if err is not None:
+        return err
+
+    c_ok, c_why = _lca.consume(approval_id, 'shutdown')
+    if not c_ok:
+        return api_forbidden('Shutdown approval no longer valid (%s).' % c_why)
+    audit_log('manual_shutdown', pid=os.getpid(), approval_id=approval_id)
+    logger.warning('[Shutdown] Manual shutdown requested (pid=%d, approval=%s)',
+                   os.getpid(), approval_id[:8])
     threading.Thread(target=_deferred_shutdown, name='tofu-shutdown',
                      daemon=True).start()
     return api_ok({'shuttingDown': True})
+
+
+# ── Lifecycle approval surface (the human side of the gate) ──────────
+
+
+@api_v1_update_bp.route('/api/v1/update/lifecycle-approvals', methods=['GET'])
+@require_scope('admin')
+@api_meta(
+    summary='List lifecycle approval requests',
+    description=(
+        'Lists restart/shutdown approval requests newest-first. '
+        '``?status=pending|approved|denied|consumed|expired`` filters by '
+        'status, ``?action=restart|shutdown`` by action. This is the queue '
+        'the human reviews in the UI before approving.'
+    ),
+    tags=['system'],
+)
+def lifecycle_approvals_list():
+    status = (request.args.get('status') or '').strip() or None
+    action = (request.args.get('action') or '').strip() or None
+    records = _lca.list_records(status=status, action=action)
+    return api_ok({'records': records,
+                   'cooldownRemainingSec': _lca.restart_cooldown_remaining()})
+
+
+@api_v1_update_bp.route('/api/v1/update/lifecycle-approvals/<approval_id>',
+                        methods=['GET'])
+@require_scope('admin')
+@api_meta(
+    summary='Get one lifecycle approval request',
+    description=(
+        'Poll the status of one approval request — the 202-pended caller '
+        '(human UI or an agent that was told to wait) uses this to learn '
+        'the human\'s decision.'
+    ),
+    tags=['system'],
+)
+def lifecycle_approval_get(approval_id):
+    rec = _lca.get(approval_id)
+    if rec is None:
+        return api_not_found('Unknown approval id')
+    return api_ok({'record': rec})
+
+
+@api_v1_update_bp.route('/api/v1/update/lifecycle-approvals/<approval_id>/decide',
+                        methods=['POST'])
+@require_scope('admin')
+@api_meta(
+    summary='Approve or deny a lifecycle request (human)',
+    description=(
+        'The HUMAN decision on a pending restart/shutdown request. Approving '
+        'mints a one-time, short-TTL token: the caller retries the gated '
+        'endpoint with {"approvalId": "<id>"} and the action executes. The '
+        'token is consumed at acceptance, so exactly one action rides on one '
+        'approval.'
+    ),
+    tags=['system'],
+)
+def lifecycle_approval_decide(approval_id):
+    body = parse_body()
+    approved = bool(body.get('approved'))
+    rec = _lca.decide(approval_id, approved, decided_by='ui',
+                      decide_ua=(request.headers.get('User-Agent', '') or ''))
+    if rec is None:
+        return api_not_found(
+            'Unknown, expired or already-decided approval id')
+    return api_ok({'record': rec})
 
 
 __all__ = ['api_v1_update_bp']

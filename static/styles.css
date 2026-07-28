@@ -370,6 +370,25 @@ html[data-rail] .folder-quickadd{display:none}
   .chat-inner{ --rail-w:232px; --rail-gap:24px; }
 }
 
+/* ── Conversation-status strip — conversation-scoped chrome, IN-FLOW ──
+ * The context gauge and the turn-nav are CONVERSATION-scoped (one gauge for
+ * the whole context window, one dot strip for the whole conversation) —
+ * unlike the per-turn right rail, they were never per-message furniture.
+ * They used to float absolutely over the message flow (gauge left:18px,
+ * dots right:8px, both top:50% of .chat-wrapper): the gauge genuinely
+ * overlapped the message column below a ~1420px pane, and the dots VANISHED
+ * below a viewport media query. Both now live in-flow in this strip directly
+ * above the composer — they cannot overlap prose by construction, and narrow
+ * panes compress (the dots scroll horizontally) instead of disappearing.
+ * The strip is a child of .input-area so --input-area-h (main.js:1105,
+ * measured from inputArea.offsetHeight) automatically includes it and the
+ * scroll-to-bottom button keeps anchoring above the whole band.
+ * Guard: tests/test_turn_ctx_rail_geometry.py (strip invariants). */
+.conv-status-strip{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;max-width:calc(var(--msg-measure) + 52px);margin:0 auto;padding:0 0 8px;min-height:0}
+/* When both cells are empty (fresh conversation, <2 turns) the strip takes
+ * no vertical space at all — the composer band looks exactly as before. */
+.conv-status-strip:has(.turn-nav:empty):not(:has(.ctx-health-bar)){display:none}
+
 /* Scroll-to-bottom affordance — a floating pill anchored just above the
  * composer inside the position:relative .chat-wrapper. Hidden by default;
  * JS toggles .visible via the #chatContainer scroll listener when the reader
@@ -417,7 +436,7 @@ html[data-rail] .folder-quickadd{display:none}
 .md-content{font-family:var(--md-sans);font-size:14.5px;line-height:1.75;letter-spacing:0.005em;color:var(--text-primary);contain:layout style;overflow-x:hidden;max-width:100%;overflow-wrap:break-word;word-wrap:break-word}.md-content p{margin-bottom:13px}.md-content p:last-child{margin-bottom:0}.md-content strong{font-weight:650}.md-content em{font-style:italic;color:var(--text-secondary)}.md-content a{color:var(--accent);text-decoration:none;word-break:break-word;text-underline-offset:2px}.md-content a:hover{text-decoration:underline}.md-content ul,.md-content ol{margin:10px 0 13px 22px}.md-content li{margin-bottom:5px}.md-content li::marker{color:var(--text-tertiary)}.md-content h1,.md-content h2,.md-content h3,.md-content h4{margin:22px 0 9px;font-weight:650;letter-spacing:-0.01em;line-height:1.35}.md-content h1{font-size:20px}.md-content h2{font-size:17px}.md-content h3{font-size:15px}.md-content blockquote{border-left:3px solid var(--accent);padding:8px 16px;margin:12px 0;color:var(--text-secondary);background:var(--bg-tertiary);border-radius:0 var(--radius-xs) var(--radius-xs) 0}.md-content code{font-family:'JetBrains Mono',monospace;font-size:12.5px;background:var(--bg-tertiary);padding:2px 6px;border-radius:4px;border:1px solid var(--border)}.md-content pre{margin:12px 0;border-radius:var(--radius-sm);overflow:hidden;border:1px solid var(--border)}.md-content pre code{display:block;padding:16px;overflow-x:auto;background:var(--bg-secondary);border:none;line-height:1.5}.code-header{display:flex;align-items:center;gap:8px;padding:6px 12px;background:var(--bg-tertiary);border-bottom:1px solid var(--border);font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--text-tertiary)}.code-header span{flex:1}.copy-btn{background:none;border:none;color:var(--text-tertiary);cursor:pointer;font-size:11px;font-family:inherit;padding:2px 8px;border-radius:4px;transition:color var(--transition),background-color var(--transition);flex-shrink:0}.copy-btn:hover{color:var(--text-primary);background:var(--bg-hover)}.md-content.user-content{white-space:pre-wrap;word-break:break-word}pre.code-long{position:relative}pre.code-long[data-collapsed="true"]>code{max-height:200px;overflow:hidden}pre.code-long[data-collapsed="true"]::after{content:'';position:absolute;bottom:0;left:0;right:0;height:60px;background:linear-gradient(to bottom,transparent,var(--bg-secondary));pointer-events:none;border-radius:0 0 var(--radius-sm) var(--radius-sm)}.code-collapse-btn{background:none;border:none;color:var(--accent);cursor:pointer;font-size:11px;font-family:'JetBrains Mono',monospace;padding:2px 8px;border-radius:4px;transition:color var(--transition),background-color var(--transition);flex-shrink:0;white-space:nowrap}.code-collapse-btn:hover{background:var(--accent-subtle);color:var(--accent-hover)}.table-header{display:flex;align-items:center;gap:8px;padding:4px 12px;background:var(--bg-tertiary);border-bottom:1px solid var(--border);font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--text-tertiary)}.table-header span{flex:1}.md-table-wrapper{overflow-x:auto;margin:12px 0;border:1px solid var(--border);border-radius:var(--radius-sm);scrollbar-width:thin;scrollbar-color:var(--text-tertiary) transparent}.md-table-wrapper::-webkit-scrollbar{height:6px}.md-table-wrapper::-webkit-scrollbar-track{background:transparent}.md-table-wrapper::-webkit-scrollbar-thumb{background:var(--text-tertiary);border-radius:3px}.md-content table{width:max-content;min-width:100%;border-collapse:collapse;font-size:13px;margin:0}.md-content th,.md-content td{padding:8px 12px;border:1px solid var(--border);text-align:left;white-space:normal;word-break:break-word}.md-content th{background:var(--bg-tertiary);font-weight:600;white-space:nowrap}
 /* ★ Perf: replaced backdrop-filter:blur(10px) with solid rgba bg — blur forces GPU re-composite on every scroll frame, 
  * costing ~2-4ms per frame. Solid bg is visually identical on dark theme and costs nothing. */
-.turn-nav{position:absolute;right:8px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;align-items:center;gap:2px;z-index:10;max-height:calc(100% - 180px);overflow-y:auto;padding:5px;background:rgba(17,17,21,0.96);border:1px solid var(--border);border-radius:16px;scrollbar-width:none;opacity:0.75;transition:opacity .3s;will-change:opacity}.turn-nav:hover{opacity:1}.turn-nav::-webkit-scrollbar{display:none}.turn-nav:empty{display:none}.turn-nav-label{font-size:8px;font-weight:700;color:var(--text-secondary);letter-spacing:.08em;text-transform:uppercase;padding:2px 0 3px;user-select:none}.turn-dot{width:26px;height:26px;border-radius:50%;background:rgba(255,255,255,0.04);border:1.5px solid var(--border);color:var(--text-secondary);font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:color .2s,background-color .2s,border-color .2s,transform .2s;font-family:'JetBrains Mono',monospace;flex-shrink:0}.turn-dot:hover{background:var(--accent-subtle);color:var(--accent);border-color:var(--accent);transform:scale(1.15)}.turn-dot.active{background:var(--accent);color:white;border-color:var(--accent)}/* ★ Perf: contain:content isolates thinking block layout from parent reflows */
+.turn-nav{display:flex;flex-direction:row;align-items:center;gap:2px;min-width:0;max-width:min(52%,560px);overflow-x:auto;overflow-y:hidden;padding:3px 5px;background:rgba(17,17,21,0.96);border:1px solid var(--border);border-radius:16px;scrollbar-width:none;opacity:0.85;transition:opacity .3s;flex:0 1 auto}.turn-nav:hover{opacity:1}.turn-nav::-webkit-scrollbar{display:none}.turn-nav:empty{display:none}.turn-nav-label{font-size:8px;font-weight:700;color:var(--text-secondary);letter-spacing:.08em;text-transform:uppercase;padding:2px 0 3px;user-select:none}.turn-dot{width:26px;height:26px;border-radius:50%;background:rgba(255,255,255,0.04);border:1.5px solid var(--border);color:var(--text-secondary);font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:color .2s,background-color .2s,border-color .2s,transform .2s;font-family:'JetBrains Mono',monospace;flex-shrink:0}.turn-dot:hover{background:var(--accent-subtle);color:var(--accent);border-color:var(--accent);transform:scale(1.15)}.turn-dot.active{background:var(--accent);color:white;border-color:var(--accent)}/* ★ Perf: contain:content isolates thinking block layout from parent reflows */
 .thinking-block{margin-bottom:12px;border:1px solid var(--thinking-border);border-radius:var(--radius-sm);background:var(--thinking-bg);overflow:hidden;contain:content}
 
 /* Windowed/trimmed open: click-to-load affordance for a message whose heavy
@@ -695,13 +714,6 @@ html[data-rail] .folder-quickadd{display:none}
 .ri-state-chip.ri-sel{color:var(--accent);border-color:var(--accent);background:rgba(110,86,207,0.12)}
 .ri-state-body{max-height:420px;overflow-y:auto;padding:6px 8px}
 .ri-state-body .debug-msg-block{margin-bottom:4px}
-
-/* ── Context ball yields the left flank while the drawer is open (P6) ──
-   The liquid bubble sits at left:18px — exactly the room the inspector's
-   reading column needs. Rather than delete a feature the owner likes, it
-   slides to the bottom-right for the duration. */
-body.ri-open .ctx-health-bar{left:auto;right:16px;top:auto;bottom:12px;transform:none}
-.ctx-health-bar{transition:left .2s ease,right .2s ease,bottom .2s ease}
 body.ri-open .chat-container{margin-right:min(780px,94vw);transition:margin-right .22s ease}
 @media (max-width:900px){
   body.ri-open .chat-container{margin-right:0}
@@ -869,6 +881,21 @@ textarea::placeholder{color:var(--text-tertiary)}
 .upd-apply-btn:hover{background:var(--accent-hover)}
 .upd-apply-btn:disabled{opacity:.55;cursor:default}
 .upd-apply-btn svg{width:15px;height:15px}
+/* Restart progress card */
+.upd-apply-btn svg{width:15px;height:15px}
+/* Pending lifecycle approvals (human-approval gate, pt_40d00fd526e5479a) */
+.upd-lc-card{margin-top:16px;padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:var(--bg-tertiary)}
+.upd-lc-title{font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px}
+.upd-lc-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-top:1px solid var(--border)}
+.upd-lc-row:first-of-type{border-top:none}
+.upd-lc-meta{font-size:12px;color:var(--text-secondary);line-height:1.5;word-break:break-all}
+.upd-lc-action{font-weight:700;color:var(--text-primary);text-transform:uppercase}
+.upd-lc-btns{display:flex;gap:8px;flex-shrink:0}
+.upd-lc-approve{padding:6px 12px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer}
+.upd-lc-approve:hover{background:var(--accent-hover)}
+.upd-lc-approve:disabled{opacity:.55;cursor:default}
+.upd-lc-deny{padding:6px 12px;background:transparent;color:var(--error-text);border:1px solid var(--error-text);border-radius:8px;font-size:12px;font-weight:700;cursor:pointer}
+.upd-lc-deny:disabled{opacity:.55;cursor:default}
 /* Restart progress card */
 .upd-restart{padding:18px 16px;background:linear-gradient(180deg,var(--bg-tertiary),var(--bg-secondary));border:1px solid var(--border);border-radius:14px}
 .upd-restart-head{display:flex;align-items:center;gap:12px;margin-bottom:16px}
@@ -1676,6 +1703,19 @@ textarea::placeholder{color:var(--text-tertiary)}
 .pm-voice-wrap svg{flex-shrink:0}
 .pm-voice-wrap input{flex:1;min-width:0;border:none;background:none;padding:10px 0;color:var(--text-primary);font-size:13px;font-family:inherit;outline:none}
 .pm-voice-wrap input::placeholder{color:var(--text-tertiary)}
+/* model picker (podcast + video studio cards, and the done-card inline
+ * variant next to Regenerate). The dropdown LIST reuses the report picker's
+ * .paper-report-model-dropdown styles — one list design across paper mode. */
+.pm-model{position:relative}
+.pm-model-btn{display:flex;align-items:center;gap:9px;width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:var(--bg-secondary);color:var(--text-primary);font-size:13px;font-family:inherit;cursor:pointer;transition:border-color .16s,box-shadow .16s,color .16s}
+.pm-model-btn:hover{border-color:var(--border-light)}
+.pm-model-btn:focus-visible{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 18%,transparent);outline:none}
+.pm-model-btn svg{flex-shrink:0;color:var(--text-tertiary)}
+.pm-model-btn .pm-model-label{flex:1;min-width:0;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pm-model-inline{position:relative}
+.pm-model-inline-btn span{max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pm-model .paper-report-model-dropdown,
+.pm-model-inline .paper-report-model-dropdown{left:0;min-width:230px;z-index:120}
 .pm-toggles{display:flex;flex-direction:column;gap:8px}
 .pm-toggle{display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:var(--bg-secondary);cursor:pointer;transition:border-color .16s}
 .pm-toggle:hover{border-color:var(--border-light)}
@@ -16900,8 +16940,13 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
    * cramped feel of the composer. */
   .input-footer{display:none!important}
 
-  /* --- Turn navigation: hide on mobile (scroll with thumb instead) --- */
-  .turn-nav{display:none!important}
+  /* --- Turn navigation on mobile: COMPACT, never removed. Hiding the dots
+   * outright used to leave touch users with no conversation-scale navigation
+   * at all — the same "vanishing cliff" class as the desktop float. The
+   * strip stays above the composer; the label goes, dots shrink, and the row
+   * scrolls horizontally. --- */
+  .turn-nav-label{display:none}
+  .turn-dot{width:22px;height:22px;font-size:8px}
 
   /* --- Modals: full screen on mobile --- */
   .modal{padding:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));width:100%;max-width:100%;max-height:var(--vh100,100dvh);height:var(--vh100,100dvh);border-radius:0;border:none}
@@ -19196,11 +19241,11 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
    ═══════════════════════════════════════════════════════════════════ */
 
 .ctx-health-bar{
-  position:absolute;
-  left:18px;
-  top:50%;
-  transform:translateY(-50%);
-  z-index:10;
+  /* In-flow inside #convStatusStrip (context-bar.js _ensureBar prepends it).
+   * It used to be absolute at left:18px/top:50% of .chat-wrapper — which
+   * genuinely overlapped the message column below a ~1420px pane — so the
+   * anchoring is gone, not re-tuned. */
+  flex:0 0 auto;
   display:inline-flex;
   align-items:center;
   gap:9px;

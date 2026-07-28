@@ -2250,6 +2250,8 @@ var _i18n = {
   'paper.mediaOptDuration': { zh: '时长', en: 'Duration' },
   'paper.mediaOptLang': { zh: '语言', en: 'Language' },
   'paper.mediaOptVoice': { zh: '音色', en: 'Voice' },
+  'paper.mediaOptModel': { zh: '模型', en: 'Model' },
+  'paper.mediaModelTitle': { zh: '生成所用的模型', en: 'Model used for generation' },
   'paper.mediaOptQuality': { zh: '画质', en: 'Quality' },
   'paper.mediaOptExtras': { zh: '选项', en: 'Options' },
   'paper.mediaOptional': { zh: '可选', en: 'optional' },

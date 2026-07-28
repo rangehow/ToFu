@@ -1,6 +1,19 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-28(续6) — auto-motion 画质根修第二刀:**我上一轮翻的默认值只覆盖了 3 条入口里的 1 条,而漏掉的恰好是用户真会点的那条**(owner 实测抓出;commits `97562fda` + `24f47101`,8 文件 +500;新守卫 **8 条**,**NEUTER×8 全咬**,motion 全环干净 committed worktree **142/142**)
+
+- **★ 缺陷形状 = charter「后端单一真源被前端手抄」的同构体,只是这次副本是「默认值」。** 上一轮我把 `produce_video` 的 `visual_quality` 默认改成 `authored` 就宣布收工。owner 清空 env 后逐条实测:`produce_video → True`、**论文「Video studio」面板 → False**、**`POST /api/v1/motion/videos`(不带字段)→ False**。成因单一:`lib/paper/video_abstract.py:496` 与 `routes/api_v1/motion.py:194` **压根不写 `scene_author` 键**,双双落到 `scene_author_enabled` 自己那句 `Default OFF` 上 —— **我的默认值翻转对真实用户完全不可见**。
+- **★ 根修落点是「消灭每个调用方各自表态」,不是补两行。** 默认翻在 `scene_author_enabled` 这个唯一真源上(env `TOFU_MOTION_SCENE_AUTHOR` **双向恒优先**,`=0` 是紧急 kill switch,镜像 `rows_write_enabled()` 的解析序约定)。**刻意不在 `video_abstract.py` 补 `task['scene_author']=True`** —— 那正是本 bug 的成因,第 4 个入口会再漏一次。守卫 `test_no_entry_point_hand_copies_the_default` 用 AST 封锁这个反模式(NEUTER-2 精确红)。
+- **★ 守卫改成「枚举构造点」而非列举我知道的那 3 个。** 先按 charter 纪律**把扫描面打印出来核对**:AST 扫 `git ls-files`(**不用 `os.walk`** —— FUSE 上超时,实测),得 **5 个 `_new_motion_task` 调用点**;`regen_scene`(复用既有构图)与 `_respawn`(恢复持久化档位)按**函数名**豁免并写明理由。`test_the_construction_site_scan_actually_finds_the_known_entry_points` 钉住扫描面本身 —— 扫描类守卫的失效点在**输入集合**,而输入集合不会自己报错。
+- **★ 顺手挖出一个「验收永远看不见」的时序缺陷:降级判定发生在 manifest 写入之后。** 于是 `artifact_quality` **从来没进过 job.json**,而 job.json 是论文面板**重启后唯一**能读到的东西(`runtime.poll` 对已不持有的 task 直接 404)。判定前移 + 持久化 + 两条 lookup 分支都带出。**否则「degraded」只能活到下一次重启,然后静默变成干净成功。**
+- **★ 第二个假承诺:面板上 draft/standard/high 是渲染码率档,却是唯一长得像画质选择的控件。** 用户选「High(slower, finer)」拿到的还是白底大字 —— 与 charter 记的「800k 硬顶把正常批量读诬告成 base64 泄漏」同族:**一条措辞精确、可信、但归因错误的信号**。新增独立的「画面构图」控件(默认「精心设计」),并补齐 6 个 i18n 键(原本会让中文用户看到英文兜底)。
+- **★ 两条守卫红了,而该改的是产品不是断言 —— 但方式是「把判定变得可驱动」。** `test_engine_records_gate_findings...` 与 `test_all_scenes_falling_back...` 只能 grep `run_motion_task` 源码里的字面量,我把表达式重排后立刻假红。**抽出纯函数 `_quality_verdict()`**,两条守卫改为**用真实输入驱动真实判定**;NEUTER-7(恒净)与 NEUTER-8(恒降级)**双向**各自咬住 —— 只有单向断言时「永远报降级」也能全绿,那会把横幅变成用户学会忽略的噪音。
+- **★ 同族第三态:兄弟套件 `test_scene_author_off_by_default` 钉的是 owner 明确推翻的行为。** 先判活死:防线活着、产品**故意**变了,故**翻转断言**而非改码,并补上 kill-switch 断言 —— 原测试保护的成本杠杆不能在翻转中丢掉。
+- **端到端从面板路径实跑(`start_video_abstract`,不传 `scene_author`):3/3 镜全部 authored、`degraded=false`、manifest 带轴。** 抽帧肉眼验证:eyebrow/headline/caption 三级层次、统计卡、递减柱状图、分隔线、计数器从中间值滚到真值 1000(中途帧的 859 是动画过程,非错误)。
+- **⚠️ 遗留两条真缺陷(未修,已量化,不属本批写集):** ①**底部 35–40% 死区** —— 三镜内容分别止于 y=937/1440 等位置,craft guide 只讲了时长与边距、**从未约束垂直构图**;②**authored 文案会出错字** —— scene-003 眉标实际写成「极极致耐用测试」(HTML 里就是重复字),说明 gate 查得了溢出/对比度,**查不了文案本身**。两条都需要在 craft guide 与 gate 层面补,建议单开票。
+
+
 ### 2026-07-28(续5) — 本机控制远端分支闭环:**我上一轮交付的引导指向一个不存在的 UI**,owner 实测桌面端后抓出(commit `9f3df336`;新套件 **20/20**,**NEUTER×3 各自精确咬**,desktop 全环 **143/143**,干净 committed worktree **84/84**)
 
 - **★ 缺陷形状比「裸 token」更糟:一条措辞完整、可信、但无法执行的指引。** 上一轮我让远端分支渲染出「下载桌面版 → 用这行连过来」,但**桌面端根本没有可粘贴的地方**:`_start_computer_control` 硬写 `server_url = f'http://127.0.0.1:{port}'`,`bridge_secret` 只从 `TOFU_BRIDGE_SECRET` 环境变量读;托盘菜单全部条目 = Open / Download update / Enable Computer Control / Permissions / Install Components / Port / Quit —— **没有输入框、没有对话框、没有任何远端服务器入口**。用户照做下载、打开、然后找不到那个字段。**裸 token 至少读起来像「没做完」,而这个读起来像「做完了」,于是把用户送去找一个不存在的 UI。**

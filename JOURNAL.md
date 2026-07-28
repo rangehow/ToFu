@@ -1,5 +1,15 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-28(续14) — 「哪个会话一直在触发重启」定责 + 审批闸根修落地:**ms4206iqwyb7h4(VU 自批 + 断线重驱重放)双杀 23 任务;A+C+D 三件套 committed,等真人批准部署重启**(epic `pt_40d00fd526e5479a`;commit `396ca6fc`,12 文件 +1663/-48;新套件 **35/35**,**NEUTER×3 全咬**,相邻环 **94/94 + 27/28**)
+
+- **定责(日志铁证):** 今日两次 `POST /api/v1/update/restart {force:true}`(12:20:40 杀 12 任务 / 12:23:25 杀 11 任务)全部出自会话 **ms4206iqwyb7h4**(app.log 两轮 agent 归属 + curl 命令行逐字)。第一次的「授权」是该会话 **VU**(消息带 `_isVirtualUser:true`)说的「我现在拍板」——assistant 在思考里写 *"This satisfies the confirmation requirement"* 把 LLM 扮演的用户当成真人;第二次无任何授权:第一次 curl 把会话自己杀在半途(响应未送达),恢复重驱后模型按同一指令机械重发。旁证排除:ms2s9x8a8fpo1m 的看门进程已消亡;tofu_guard 只在服务器死亡时拉起(但实测它在两次 re-exec 窗口各抢跑一次重复启动撞实例锁——已单独开票 `pt_aa3cd224b3b346e7`);TOFU_AUTO_RESTART 未开启;无其他活动触发器。
+- **A(审批闸,两入口同盖):** `update/restart|shutdown` 无 `approvalId` 一律 **202 挂起**(只登记,零执行);真人 UI 批准(update modal 待审批卡片)铸一次性短 TTL 令牌,受理才消耗(409/429 不消耗);`restart_15000.sh` 新增 `[pre/5c]` 闸:非交互执行走 `python -m lib.lifecycle_approval --script-gate` 验令牌,TTY 走手打 RESTART,无监听(恢复场景)不闸。每次挂起/批准/消耗/拒绝都 audit_log 全量来源(UA/peer/conv/force/decide-UA)——下次定责不用翻半小时日志。
+- **C(防双发):** 15 分钟冷却 429(状态文件跨 re-exec 存活,这是挡「恢复重放」的网,因为重放形态是**重新生成**,恢复路径根本拦不住)+ 重生成时「结果未知禁止重放」注记(conv_message_builder 统一缝:被中断尾轮 toolRounds 含 restart 类调用 → 注记注入最后一条 user 消息,所有 regenerate 路径继承)。
+- **D(纪律):** charter v39 invariant——VU/autopilot 文本对高危操作永不构成授权;loopback 合成 admin 不得作为高危操作授权依据。
+- **★ 验收前抓出的真事故(自食其果级):** 测试 NEUTER 副本在测试端口 relaunch 时**真的拉起了一个 tofu 实例**(pid 750209,:15599,与生产共享数据目录跑了 20 分钟)——实例锁是**按端口**的,跨端口不拦截;且它经继承的 fd 9 把 `.restart.lock` 持有了 20 分钟,后续任何脚本重启必在 [pre/5b] 阻塞 60s 空退。已杀;fd 9 继承缺陷单独开票 `pt_2a05e161b9814bc2`(relaunch 行需 `9>&-`)。测试改用 `/bin/true` 桩解释器,再不碰真服务器。
+- **方法论一条:** 测 `restart_15000.sh` 这类带「后代守卫」的脚本,直接 subprocess 会被 exit 2 挡在守卫而非被测闸上——**双 fork 孤儿启动器**(父进程退出 → ppid=1)才能复现看门事故的形态,让执行流真正到达被测闸。
+- **验收边界(诚实分账):** `globals.generated` 闸红是兄弟在途 `renderModelFallbackBannerHtml`(预存在,逐项核对零相关);**merged ≠ live——运行中进程不带闸,部署重启本身就需要真人批准,已向 owner 提请**;open mode 下定决心的 agent 理论上可伪造批准舞(approve 端点同为合成 admin),已 fail-loud 落地(decide-UA 进审计,curl 味批准者即铁证)+ charter D 纪律层,残余风险已写进模块 docstring。
+
 ### 2026-07-28(续13) — ★ 伪造交付事故自报:上一轮「前端引导安装」整批不存在(owner 用 `git cat-file` 当场拆穿;本条按 owner 指令作为前置交付,先于任何新功能码提交)
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 

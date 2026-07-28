@@ -9,6 +9,15 @@
 - **归账纪律:** adapter 是兄弟会话(ms34xbwv,R3 测量票)09:37 起留在工作树的完整可用改动,会话已不在线而线上正在 500 —— 用 `git hash-object -w` + `update-index --cacheinfo` 把它**原样**单独提交(`950f6540`,message 注明来由),我的错误透明栈作为第二个 commit(`a6a4271a`),两块各自可审。**index 里同时躺着兄弟 stage 的 JOURNAL.md 与 tests/_migrate_charter_kinds.py,先 `git reset HEAD --` 逐出再 stage,提交后 `git diff --cached` 归零断言。**
 - **验收边界(诚实分账):** `globals.generated` 闸在脏树上的红是兄弟在途的 `ui/streaming_ui.js::renderModelFallbackBannerHtml`,与本改动零相关(逐项核对);**线上进程仍是 10:24 的旧进程,实测 curl 仍 500 —— 需要重启才生效**;重启后即便 arXiv 真宕机/限流,用户看到的也是「arXiv 搜索失败:HTTP 429」而不是「没有找到论文」。
 
+### 2026-07-28(续) — 问候语事故收尾:owner 拍板立即重启 + 假 done 清单与待办交接(本条目是重启前的**持久交接**,重启杀死当前 turn 后由下一段拾起)
+
+- **owner 拍板(12:15):** 立刻重启 —— 每延迟一分钟,多轮任务继续被杀、问候继续按 done 落库、VU 接力链还活着,代价倒挂。顺带:兄弟的 arXiv 500 修复(`950f6540` + `a6a4271a`)也在等同一个重启。
+- **重启路径:** `POST http://127.0.0.1:15000/api/v1/update/restart` body `{"force": true}`(项目自带 re-exec:同解释器同 argv 原位 execv,端口回收与 FD 清理由 `_perform_server_reexec` 处理;open mode loopback 合成 admin;force 因为舰队有在跑任务,owner 知情接受)。被重启进程:PID 3823640,boot 10:24:34。
+- **★ 重启后待办(按序):**
+  1. **验收(merged ≠ live):** 确认 `data/.server_boots.json` 新增记录 + app.log 出现新 boot 行;等下一个自然退化轮,断言出现 `CANNED GREETING` 重试行且该会话**不再**落 29 字符 greeting persist;30 分钟无自然样本则用 `tests/test_canned_greeting_retry.py` 的复放形状造一条。
+  2. **假 done 重派(终态消息 = 问候的 6 个会话,DB 实查):** assistant 终态 4 个 = `ms40kfqq690t93`(曼谷机票,**真人会话,用户真问题没得到答案 —— 不自动注入,报给 owner 决定**)、`ms405xnhohqvpc`、`ms3sfyrmn31omb`、`ms3y5s14tpwjeg`;VU 终态 2 个 = `ms3sahx7cotx3y`、`ms3ybqfifalh8e`(autopilot 会话,可直接 re-drive)。重派方式:查各会话 autopilot marker / message_queue 行,在的直接 re-drive;不在的由大脑派单说明「上一轮回复是上游故障产生的无效问候,请重新生成」。注意 `ms3sl904z633by`(11:29 受害)终态**不是**问候,已自行续跑,勿重复派单。
+  3. **上报:** 把 M-TraceId 样本(`0baf16396434476bb1924072044edc92` / `736dc4da1cdb4ca296cbbca6887ad261` / `8704b24f9822422eba86b9ed5e6a0ed4`)给 owner 转 sankuai 网关团队,并争取非 daily 的稳定 opus-5 别名(当前 request_ids 池单点)。
+
 ### 2026-07-28 — Opus 5「全部变成问候语」重大事故根修:根因在上游每日构建,但三道内部防线全部缺口;**上一调查会话自己被同一事故 kill 在半途**(commit `ddcb73fb` + 兄弟 `48afcc9b`;新套件 **23/23**,**NEUTER×3 各咬各的**,相邻环 **88/88**)
 
 - **事故形状(DB+日志铁证,非推断):** 今日 06:25 起,sankuai 网关对 Opus 5 请求间歇返回**逐字节相同**的 29 字符 `Hi! How can I help you today?` + 干净 `finish_reason=stop` + 真实 M-TraceId/usage —— 66+ 事件 / 14 会话 / 全部 3 个 API key;最近 30 条 Opus 5 persist 里 15 条是问候(~50%)。**所有传输层守卫(zero-byte/premature/empty-stop)都问「有没有字节」,对这种「看起来成功」的退化响应全部放行**,回合正常 break、按 done 落库,把前面 N 轮真实工具成果整段顶掉(ms40kfqq 曼谷机票:2×searchFlights 各 195KB 的答案被 29 字符问候顶掉)。

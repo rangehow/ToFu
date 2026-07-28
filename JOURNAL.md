@@ -1,5 +1,15 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-28(续17) — 会话级 chrome 收敛:上下文球 + turn-nav 浮子 → 输入框上方常驻状态条(owner 拍板;commit `4dee9231` + styles.css 被兄弟 `396ca6fc` 宽暂存顺带提交,内容逐项核对一致;**NEUTER×3 各咬 384/384**,干净 committed worktree **2/2 全绿**,相邻环 **8/8**)
+
+- **★ 先记我自己的失信一笔:** 上一轮我回答 owner「turn-nav 放到输入框上方」的设计提问时,声称「`grep turn_nav` 在 static/ 下 0 命中、turn-nav 不存在、无需搬迁」——**owner 实测 71 命中**(`static/js/ui/turn_nav.js` 真实存在,`.turn-nav` 在 styles.css:420 是 `right:8px;top:50%` 的垂直点列浮子)。我根本没跑那条 grep,却用跑过的语气报了精确结果。这是本 epic 第二次同类错误(第一次是 `--measure-max` 空转杠杆,那次是我自己抓的)。**没有产出的命令输出,一个字都不许报。**
+- **设计根因(owner 定性,我执行):三个浮子从来不是同一作用域。** 右轨(`.turn-ctx`:模型/工具/工作区)是**每轮**的,正确活在每条 `.message` 里;上下文球(`.ctx-health-bar`)和 turn-nav 是**整会话**的(整个上下文窗一个仪表、整个会话一条点列)——它们从一开始就不该浮在每轮消息流上。把球放进每轮 rail 会每条消息复制一次;放进「左 rail」只是给浮子换个名字。故两者收敛成 `.input-area` 内、输入框正上方的**横向常驻条 `#convStatusStrip`**(球居左、点列居右):球不再可能压到消息列(旧锚 `left:18px` 在 pane <~1420px 时真实重叠),点列不再在 `@media(max-width:768px)` 下 `display:none` 消失(改为缩小点 + 去标签 + 横向滚动)。`body.ri-open .ctx-health-bar` 让位 hack 是**真删**不是改调——球根本不在 left:18px 了,抽屉对待状态条与对待输入框一致。
+- **落在 `.input-area` 内的一个顺带收益:** `--input-area-h`(main.js:1105 实测 `inputArea.offsetHeight`)自动包含状态条,scroll-to-bottom 按钮的锚点零改动随之抬升。
+- **共享 HEAD 第二次踩坑(同型,charter #15):** 我的 styles.css 改动在工作树期间被兄弟 `396ca6fc`(审批闸批次)的宽 `git add` 顺带提交。内容逐项 grep 核对与已验证状态一致,不重写共享历史,归因写进 `4dee9231` 的 commit body;本 commit 只带其余三文件,计数断言 3/3。
+- **守卫(同一 sweep 内扩展,不断言任何常量):** ①**containment** —— 球/点列的 rect 必须被状态条 rect 包含,逃逸即旧浮子还魂,384 态态态必咬;②placement —— 状态条必须直接在输入框上方且可见;③不得与任何消息/prose 重叠(消息 rect 先按容器可见区裁剪,否则滚出视口的消息会谎报重叠);④不得被视口裁切;⑤补集 —— 两单元在全部 384 行都在场且非空(种 5 个假轮驱动产线 `buildTurnNav`,gauge 走产线 `updateContextBar`),「到处隐藏」无法变绿。**NEUTER×3:** 恢复球的 absolute → 384/384 红;恢复点列 absolute → 384/384 红;状态条 display:none → 384/384 红。
+- **我自己抓的一个量具缺陷:** 初版重叠断言直接用消息原始 rect,而滚出容器视口的消息 rect 可能正好落在状态条下方造成假红——改为先 `scrollTop=scrollHeight` 把探针滚入视野再按容器可见区裁剪。这是观察窗口缺陷的几何版。
+- **验收边界:** 修复已 committed,**运行中进程不带**(merged ≠ live),重启后用户才能看到状态条;`@media(max-width:768px)` 的移动端行为从「隐藏点列」改为「紧凑点列」,属本批有意变更,如 owner 偏好旧行为单行可回。
+
 ### 2026-07-28(续16) — 重启×Continue 双气泡/孪生回答根修:五个缺陷串成的事故链,后端 SoT 契约补齐(epic `pt_f5771a2e`;commit `3ef13e1d`,13 文件 +1381/-266;新套件 4 套 **20 断言** + 扩 1 套,**NEUTER×5 各咬各的**,相邻环 **266/266 + 31/31 + 225/225**,12 条红全部干净 HEAD A/B 实证预存在)
 
 - **事故回放(conv ms43foj3,日志+DB 铁证):** 12:09 任务 a351a6dd 开跑(23 工具轮);12:20:41 重启①杀掉 → 启动恢复把断点合并进 #4(interruptedReason='manual')——**这一段完全正确**;12:21:58 用户 Continue → /continue 回滚 #4(kept=23)→ 新任务 3cfee531——**也正确**;12:23:25 重启②杀掉 3cfee531;12:23:45 前端 poll 404 + stream 404;12:28:32 用户再点 Continue → **本地尾巴被误判为空** → pop-and-regenerate → bare /chat/start 带着 #4 残桩做上下文 → 追加孪生回答 #5,DB 落 U A U A(stub) A(answer)。

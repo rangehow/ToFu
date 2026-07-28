@@ -840,6 +840,11 @@ def probe_provider_cells_start():
     timeout = int(data.get('timeout') or 12)
     attempts = max(1, min(5, int(data.get('attempts') or 3)))
     protocol = (data.get('protocol') or 'openai').strip() or 'openai'
+    # 'claude' / 'codex' for a SUBSCRIPTION provider — its configured api_key
+    # is the 'oauth-managed' sentinel, so the probe resolves the live token
+    # per cell instead of sending the sentinel (which would 401 → false
+    # recommend-disable). Empty for normal key-based providers.
+    oauth = (data.get('oauth') or '').strip()
     force = bool(data.get('force'))
 
     # Optional scope for row / column / single-cell probes. When present the
@@ -934,6 +939,7 @@ def probe_provider_cells_start():
         '_base_url': base_url,
         '_extra_headers': extra_headers,
         '_protocol': protocol,
+        '_oauth': oauth,
     }
     with _CELL_PROBE_LOCK:
         _CELL_PROBE_TASKS[provider_id] = task

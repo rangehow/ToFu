@@ -287,12 +287,26 @@ function _populateModelDropdown(models) {
     return isChatModel(m);
   });
 
-  /* Group models by provider (transit endpoint) */
-  const grouped = {};  // provider_id → { name, models: [] }
+  /* Group models by the SHARED brand rule (core/model_group.js) — NOT by
+   * provider_id. Grouping by provider leaks the backend's wire detail: the
+   * Meituan gateway serves openai on one face and anthropic on another
+   * (sankuai vs sankuai_anthropic), which the picker would render as TWO
+   * "Meituan" sections. The settings preset tab groups by the same brand
+   * rule, so the two lists can never disagree. Degrade to a per-provider
+   * grouping only if the shared module failed to load (stale bundle). */
+  const _hasGroup = (typeof modelGroupKey === 'function'
+                     && typeof modelGroupLabel === 'function');
+  const grouped = {};  // groupKey → { name, models: [] }
   for (const m of visibleModels) {
-    const pid = m.provider_id || 'default';
-    if (!grouped[pid]) grouped[pid] = { name: m.provider_name || pid, models: [] };
-    grouped[pid].models.push(m);
+    const _entryProvider = { brand: m.brand, name: m.provider_name };
+    const gkey = _hasGroup
+      ? modelGroupKey(_entryProvider, m)
+      : (m.provider_id || 'default');
+    const gname = _hasGroup
+      ? modelGroupLabel(gkey, m.provider_name)
+      : (m.provider_name || gkey);
+    if (!grouped[gkey]) grouped[gkey] = { name: gname, models: [] };
+    grouped[gkey].models.push(m);
   }
 
   /* Order the list the way the user READS it.
@@ -310,19 +324,19 @@ function _populateModelDropdown(models) {
    * missing branding.js leaves the list unsorted rather than throwing and
    * stranding an empty dropdown (same rationale as the isChatModel guard). */
   const _canSort = (typeof _compareModelsByDisplayName === 'function');
-  const providerIds = Object.keys(grouped);
+  const groupKeys = Object.keys(grouped);
   if (_canSort) {
-    providerIds.sort((x, y) => {
+    groupKeys.sort((x, y) => {
       const nx = String((grouped[x] && grouped[x].name) || x);
       const ny = String((grouped[y] && grouped[y].name) || y);
       return _compareModelsByDisplayName(nx, ny);
     });
   }
-  for (const pid of providerIds) {
-    const group = grouped[pid];
+  for (const gkey of groupKeys) {
+    const group = grouped[gkey];
     if (_canSort) group.models.sort(_compareModelsByDisplayName);
-    /* Only show section headers when there are multiple providers */
-    if (providerIds.length > 1) {
+    /* Only show section headers when there are multiple groups */
+    if (groupKeys.length > 1) {
       const labelDiv = document.createElement('div');
       labelDiv.className = 'ps-dd-section-label';
       labelDiv.textContent = group.name;

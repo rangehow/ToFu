@@ -5615,6 +5615,24 @@ input.settings-mono {
 .stg-mh-chip.warn  { color: #d97706; background: rgba(245, 158, 11, 0.12); border-color: #d97706; }
 .stg-mh-chip.cool  { color: #dc2626; background: rgba(248, 113, 113, 0.12); border-color: #dc2626; }
 .stg-mh-chip.muted { color: var(--s-ink-soft); opacity: 0.6; border-style: dashed; border-color: var(--s-ink-soft); font-weight: 600; }
+.stg-mh-chip.muted { color: var(--s-ink-soft); opacity: 0.6; border-style: dashed; border-color: var(--s-ink-soft); font-weight: 600; }
+
+/* ── Preset-tab per-model probe health dot ──
+ * Level colours mirror the pool verdict (core/model_health.js):
+ * ok=green, degraded=olive (still usable), down=red, unknown/skipped/
+ * not_logged_in=muted, stale=muted dashed (expired — never paints green). */
+.stg-dv-health { display: inline-flex; align-items: center; margin: 0 6px; }
+.stg-dv-health-dot {
+  width: 9px; height: 9px; border-radius: 50%; display: inline-block;
+  background: var(--s-ink-soft); opacity: 0.35; cursor: help;
+}
+.stg-dv-health-dot.mh-ok            { background: #16a34a; opacity: 1; }
+.stg-dv-health-dot.mh-degraded      { background: #65a30d; opacity: 1; }
+.stg-dv-health-dot.mh-down          { background: #dc2626; opacity: 1; }
+.stg-dv-health-dot.mh-stale         { background: var(--s-ink-soft); opacity: 0.5; box-shadow: 0 0 0 1.5px var(--s-ink-soft); }
+.stg-dv-health-dot.mh-unknown,
+.stg-dv-health-dot.mh-skipped,
+.stg-dv-health-dot.mh-not_logged_in { background: var(--s-ink-soft); opacity: 0.35; }
 
 /* ── Model aliases ── */
 .stg-mcard-aliases { display: flex; gap: 4px; margin-top: 5px; flex-wrap: wrap; align-items: center; }

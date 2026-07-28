@@ -50,7 +50,7 @@ logger = get_logger(__name__)
 
 
 def probe_one_cell(base_url, api_key, model_id, extra_headers, timeout,
-                   protocol='openai'):
+                   protocol='openai', oauth=''):
     """Send a minimal completion to test one (key, model) pair.
 
     Returns one of: 'ok', 'rate_limited', 'unauthorized', 'not_found',
@@ -64,8 +64,65 @@ def probe_one_cell(base_url, api_key, model_id, extra_headers, timeout,
     (``POST /v1/messages`` with ``x-api-key`` + ``anthropic-version``)
     instead of OpenAI Chat Completions. The status→verdict table is
     identical for both protocols.
+
+    ``oauth`` (``'claude'``/``'codex'``) marks a SUBSCRIPTION provider whose
+    configured api_key is the 'oauth-managed' SENTINEL — probing with it
+    literally would return a 401 and wrongly flag a working subscription as
+    recommend-disable. We resolve the live per-request token via
+    :func:`lib.oauth.outbound.resolve_oauth_request` and send it as
+    ``x-api-key`` (Anthropic's 2026 block rejects ``Authorization: Bearer``
+    for subscription tokens). A provider with no usable token is reported as
+    the NEUTRAL verdict ``'not_logged_in'`` — never a model fault, never
+    recommend-disable.
     """
     from lib.http_client import http_post
+
+    # ── Subscription (OAuth) providers ──────────────────────────────────
+    if oauth:
+        if oauth == 'codex':
+            # Codex is Responses-API STREAMING only; the app's translator has
+            # no non-stream path, so a non-stream probe would be a guaranteed
+            # false negative. Skipping is the honest verdict.
+            return SKIPPED, 'codex subscription is stream-only — no non-stream probe'
+        from lib.llm.anthropic_outbound import anthropic_messages_url
+        from lib.oauth.outbound import claude_oauth_url, resolve_oauth_request
+        payload = {
+            'model': model_id,
+            'messages': [{'role': 'user', 'content': '.'}],
+            'max_tokens': 1,
+        }
+        try:
+            token, hdrs, body = resolve_oauth_request(oauth, payload,
+                                                      extra_headers)
+        except RuntimeError as e:
+            # Not logged in / refresh failed — a SESSION state, not a model
+            # fault. Distinct from an authenticated 401.
+            logger.info('[CellProbe] %s @ %s oauth token unavailable: %s',
+                        model_id, base_url, e)
+            return 'not_logged_in', str(e)[:160]
+        url = claude_oauth_url(anthropic_messages_url(base_url))
+        headers = {
+            'Content-Type': 'application/json',
+            'anthropic-version': '2023-06-01',
+        }
+        headers.update(hdrs or {})          # beta flags, x-app, User-Agent
+        headers.pop('Authorization', None)  # subscription tokens ride x-api-key
+        headers['x-api-key'] = token
+        payload = body                      # resolve prepends the identity block
+        try:
+            resp = http_post(url, json=payload, headers=headers, timeout=timeout)
+        except Exception as e:
+            logger.warning('[CellProbe] %s @ %s network error: %s',
+                           model_id, base_url, e)
+            return 'unavailable', 'network: %s' % str(e)[:120]
+        code = resp.status_code
+        try:
+            resp_body = resp.text[:400]
+        except (UnicodeDecodeError, ValueError, OSError) as e:
+            logger.debug('[CellProbe] %s @ %s: could not read response body: %s',
+                         model_id, base_url, e)
+            resp_body = ''
+        return _classify_status(code, resp_body)
 
     # ``max_tokens: 1`` is the floor — the probe only needs to learn whether
     # the gateway accepts the (key, model) routing, never the completion
@@ -378,37 +435,30 @@ _PROBE_DEFINITIVE = {'unauthorized', 'not_found'}
 
 def probe_cell_multi(base_url, api_key, model_id, extra_headers, timeout,
                      attempts=3, retry_delay=0.8, protocol='openai',
-                     probe_fn=None):
+                     probe_fn=None, oauth=''):
     """Probe a cell up to ``attempts`` times to filter out FALSE 429s.
 
     ``probe_fn`` defaults to :func:`probe_one_cell` (chat surface); the
     modality probes share its signature so the same multi-attempt policy
-    drives them unchanged.
-
-    Rationale: gateways routinely return a transient 429 / 5xx even for a
-    (key, model) pair the key is fully entitled to. Flagging it after one
-    shot would wrongly recommend disabling a working model. So:
-
-      * A single ``ok`` on ANY attempt wins immediately — the earlier
-        rate-limit was transient.
-      * ``unauthorized`` / ``not_found`` are definitive → return at once.
-      * Transient failures are retried after ``retry_delay`` seconds; if
-        every attempt fails we return the LAST transient verdict with an
-        ``(N/N attempts)`` note so the UI can show it was persistent.
-
-    Returns ``(status, detail)`` like :func:`probe_one_cell`.
+    drives them unchanged. ``oauth`` is forwarded to the chat surface only —
+    modality probes keep the 6-arg signature.
     """
     attempts = max(1, int(attempts))
     fn = probe_fn or probe_one_cell
     last_status, last_detail = 'error', ''
     for i in range(attempts):
         # Call through the module global so tests can patch probe_one_cell.
-        status, detail = fn(base_url, api_key, model_id, extra_headers,
-                            timeout, protocol)
+        if probe_fn is None:
+            status, detail = fn(base_url, api_key, model_id, extra_headers,
+                                timeout, protocol, oauth=oauth)
+        else:
+            status, detail = fn(base_url, api_key, model_id, extra_headers,
+                                timeout, protocol)
         if status == 'ok':
             note = '' if i == 0 else ' (ok on attempt %d/%d)' % (i + 1, attempts)
             return 'ok', detail + note
-        if status in _PROBE_DEFINITIVE:
+        # A session verdict is final — retrying can't conjure a login.
+        if status in _PROBE_DEFINITIVE or status in ('not_logged_in', SKIPPED):
             return status, detail
         last_status, last_detail = status, detail
         if i < attempts - 1:
@@ -481,6 +531,7 @@ def run_cell_probe_task(task: dict, work: list, timeout: int):
     base_url = task['_base_url']
     extra_headers = task['_extra_headers']
     protocol = task.get('_protocol', 'openai')
+    oauth = task.get('_oauth', '')
     attempts = task.get('attempts', 3)
     if task['cells']:
         _recount_summary(task)
@@ -519,7 +570,8 @@ def run_cell_probe_task(task: dict, work: list, timeout: int):
         # reachable cell. A single ok on any attempt wins.
         status, detail = probe_cell_multi(base_url, api_key, mid, extra_headers,
                                           cell_timeout, attempts=cell_attempts,
-                                          protocol=protocol, probe_fn=probe_fn)
+                                          protocol=protocol, probe_fn=probe_fn,
+                                          oauth=oauth)
         return {
             'key_idx': key_idx,
             'model_id': mid,

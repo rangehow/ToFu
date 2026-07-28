@@ -48,16 +48,17 @@ pytestmark = pytest.mark.unit
 PROVIDER_RENDER_JS = os.path.join(JS_DIR, 'settings', 'provider_render.js')
 KEY_STATS_JS = os.path.join(JS_DIR, 'settings', 'key_stats.js')
 MODEL_EDIT_JS = os.path.join(JS_DIR, 'settings', 'model_edit.js')
+MODEL_HEALTH_JS = os.path.join(JS_DIR, 'core', 'model_health.js')
 
 _HTML = '<!DOCTYPE html><body><div id="stgProviderList"></div></body>'
 
 _BODY = r'''
 const fs = require('fs');
 const { setup } = require(process.env.JSDOM_HARNESS);
-const { document, check, report } = setup({
+const { document, window, check, report } = setup({
   root: process.argv[3],
   html: HTML_PLACEHOLDER,
-  targets: [process.argv[2], process.argv[4], process.argv[5]],
+  targets: [process.argv[2], process.argv[4], process.argv[5], process.argv[6]],
   globals: {
     _detectBrand: () => 'claude',
     _brandSvg: () => '',
@@ -84,9 +85,15 @@ const { document, check, report } = setup({
 
 const indirectEval = eval;
 
-/* The real _renderProvidersTab lands during eval (it lives in
- * provider_render.js) and pulls in the whole key-stats/matrix stack; the
- * save path only needs it to be a no-op so assertions stay on the data. */
+/* model_health.js (argv[6]) is an IIFE publishing on `window`. In a browser
+ * those props are globals; under node they are NOT, so key_stats.js's bare
+ * `typeof foldRuntimeHealth === 'function'` guard would degrade to null and
+ * the verdict would never materialise. Bridge them into node global scope —
+ * this simulates the browser environment the product actually runs in. */
+global.foldRuntimeHealth = window.foldRuntimeHealth;
+global.foldProbeHealth = window.foldProbeHealth;
+global.modelHealthUsable = window.modelHealthUsable;
+global.modelHealthLevelClass = window.modelHealthLevelClass;
 function neutralizeRerenders() {
   global._renderProvidersTab = window._renderProvidersTab = function () {};
   global._renderPresetsTab = window._renderPresetsTab = function () {};
@@ -187,11 +194,29 @@ try {
   check('cooldown_reason_shown',
     cool && cool.textContent.indexOf('mhReasonError') >= 0);
 
-  // ══ 5. Success rate folds pooled totals (10+5 req, 5 err → 67%) ══
+  // ══ 5. Pool rule (pt_464f2baf): 67% is INFORMATIONAL; the strip is NOT
+  // red. The seed folds 'aws.opus' (5/10 err, cooling) + 'vertex.opus'
+  // (1 live slot) — under the OLD sum-and-divide rule that is 67% → warn.
+  // Under the pool rule a live slot exists → the model is USABLE, so the
+  // strip class must be available (cool, because a slot IS cooling), never
+  // warn/down. The rate chip still SHOWS 67% (the pool genuinely is lossy). ══
   const expectedPct = Math.round((1 - 5 / 15) * 100);
-  const srChip = strip0.querySelector('.stg-mh-chip.warn');
-  check('pooled_success_rate', srChip !== null &&
-    srChip.textContent.indexOf(expectedPct + '%') >= 0);
+  const srChip5 = strip0.querySelector('.stg-mh-chip.warn');
+  check('pooled_success_rate_shown', srChip5 !== null &&
+    srChip5.textContent.indexOf(expectedPct + '%') >= 0);
+  // The strip wrapper is cooling → 'cool' — but the verdict is NOT warn.
+  const stripCls = strip0.className;
+  check('pool_rule_strip_not_warn', stripCls.indexOf('warn') < 0);
+  check('pool_rule_strip_available', /stg-mcard-health (cool|ok|good)/.test(stripCls));
+  // Direct verdict check: one live slot ⇒ not 'down'.
+  {
+    const agg = _modelCardHealthRow(0, 0);
+    check('pool_rule_verdict_degraded', agg.verdict && agg.verdict.level === 'degraded');
+    check('pool_rule_verdict_usable',
+      typeof modelHealthUsable === 'function' ? modelHealthUsable(agg.verdict) : true);
+    check('pool_rule_strip_cls_degraded', _modelCardHealthCls(0, 0) === 'ok' ||
+      _modelCardHealthCls(0, 0) === 'cool');  // cooling overrides the left accent
+  }
 
   // ══ 5b. Contention chip renders SEPARATELY from the success rate ══
   // (2026-07-28: 782 external 429s made a healthy model look 24% — they
@@ -388,6 +413,30 @@ try {
     check('N5_contention_gone', strip5.textContent.indexOf('mhContention') < 0);
     indirectEval(ROW_FN);   // restore
   }
+
+  // ══ NEUTER 6: revert strip colour to the pooled success_rate → the
+  // degraded pool turns warn (red) again. Guards the pool rule in
+  // _modelCardHealthCls, not just the chip. ══
+  {
+    const CLS_FN = sliceFn(KS_SRC, 'function _modelCardHealthCls(provIdx, modelIdx) {');
+    const n = CLS_FN.replace(
+      "if (agg.verdict) {",
+      "if (agg.success_rate != null && agg.success_rate < 0.9) return 'warn';\n    if (agg.verdict) {");
+    check('N6_applied', n !== CLS_FN);
+    indirectEval(n);
+    seedProviders();
+    seedHealth();
+    // Cooldown short-circuits to 'cool' before the success-rate branch, so
+    // clear it — otherwise the NEUTER would test the cooldown override, not
+    // the success_rate reversion it means to prove.
+    global._modelHealthCache.provA['aws.opus'].cooldown_remaining_s = 0;
+    check('N6_degraded_turns_warn', _modelCardHealthCls(0, 0) === 'warn');
+    indirectEval(CLS_FN);   // restore
+    // Re-seed fully — the cleared cooldown above must not leak into the
+    // restored code path or the earlier section-5 'degraded' expectations.
+    global._modelHealthCache.provA['aws.opus'].cooldown_remaining_s = 42;
+    check('N6_restored', _modelCardHealthCls(0, 0) !== 'warn');
+  }
 } catch (e) {
   check('harness_threw: ' + (e && e.message), false);
 } finally {
@@ -401,8 +450,8 @@ def test_model_card_health_and_pricing():
     run_harness(
         target_js=PROVIDER_RENDER_JS,
         body_js=body,
-        extra_targets=[KEY_STATS_JS, MODEL_EDIT_JS],
-        min_pass=43,
+        extra_targets=[KEY_STATS_JS, MODEL_EDIT_JS, MODEL_HEALTH_JS],
+        min_pass=52,
         label='model-card-health',
     )
 

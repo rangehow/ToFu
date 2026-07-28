@@ -394,6 +394,28 @@ _BUNDLE_FILES = [
     # touches window at load; server-config payload is applied at runtime.
     # See lib/model_info/capability_taxonomy.py for the SSOT.
     'core/model_caps.js',
+    # THE model-availability judgment (2026-07-28, pt_464f2baf). A logical
+    # model is served by a POOL of (wire id × key) slots and the dispatcher
+    # rotates over all of them, so the ONLY correct rule is "any usable slot
+    # ⇒ usable model". The rule it replaces summed the pool's requests/errors
+    # and divided, which paints a model with 8 dead slots + 1 healthy one as
+    # ~11% (red) even though the dispatcher serves it fine — one redeployed
+    # upstream made whole cards permanently red. Same function folds BOTH
+    # axes (runtime dispatch-health rows + active probe cells) so the passive
+    # and active signals can never disagree. Consumed by
+    # settings/key_stats.js; leaf module (window only at load), so its
+    # ordering requirement is just "before its consumers".
+    'core/model_health.js',
+    # THE model-grouping rule (2026-07-28, pt_464f2baf). The toolbar picker
+    # grouped by provider_id — so moving Claude to the Anthropic-native face
+    # (same gateway, same keys, just a different wire protocol) split the
+    # dropdown into two "Meituan" sections, leaking a backend detail to the
+    # user. The settings preset tab grouped by brand and never split. Two
+    # lists of the SAME data must not disagree about grouping; this is the
+    # single key/label both use. Also owns the brand-name table (previously
+    # duplicated verbatim twice in visibility_defaults.js). Consumed by
+    # main_toolbar_ui.js + settings/visibility_defaults.js (both load after).
+    'core/model_group.js',
     # pt_679d064f68ac4dd6 (2026-07-25) — boot-time tenant identity probe.
     # Defines initCurrentUserId(), which main.js awaits (as a promise chain)
     # BEFORE wiring the push subscribers so the four multi-user gates
@@ -845,6 +867,7 @@ _DEFERRED_FILES = [
     'paper/library.js',   # Paper Library (bookshelf) cache+CRUD+render; owns _paperLibrary state (extracted from paper-reader.js 2026-07) → runtime cross-refs, order free; before paper-reader.js
     'paper/podcast.js',   # Paper Podcast tab (player + transcript + sleep timer); reads _paperHash/Api.paper.podcast* at RUNTIME only → before paper-reader.js
     'paper/video.js',     # Paper Video Abstract tab (player + scene grid + per-scene regen); reads _paperHash/Api.motion* at RUNTIME only → before paper-reader.js
+    'paper/research.js',  # Auto-research console (direction → scored ideas). Reads NO paper state (pre-paper capability); reached from paper-reader.js:708's describe-box button → MUST load before paper-reader.js
     'paper-reader.js',    # Paper Reader (togglePaperMode) — ~54KB gz; init via _onReady (feature-loader.js)
     # Image-Gen mode (enterImageGenMode + panel controls) — ~11KB gz. No
     # load-time side effect; only load-time core read is `escapeHtml` (present,

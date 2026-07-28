@@ -347,6 +347,33 @@ function _modelCardHealthRow(provIdx, modelIdx) {
   agg.success_rate = (agg.total_requests >= 3)
     ? Math.max(0, 1 - agg.total_errors / agg.total_requests)
     : null;
+
+  /* THE availability verdict comes from the pool rule (core/model_health.js)
+   * — "any usable slot ⇒ usable model" — NOT from the pooled success_rate
+   * above. The rate is INFORMATIONAL: it tells the user how lossy the pool
+   * is, and it must NOT decide the strip's colour. A gateway that redeploys
+   * one upstream (the yuju daily builds) would otherwise drive a model the
+   * dispatcher still serves into the red. Degrade to the legacy success_rate
+   * judgment only if the shared module failed to load (stale bundle). */
+  if (typeof foldRuntimeHealth === 'function') {
+    var _verdictRows = [];
+    for (var _i = 0; _i < ids.length; _i++) {
+      var _r = rows[ids[_i]];
+      if (_r) {
+        _verdictRows.push({
+          wire_id: ids[_i],
+          available_slots: _r.available_slots || 0,
+          total_requests: _r.total_requests || 0,
+          total_errors: _r.total_errors || 0,
+          cooldown_reason: _r.cooldown_reason || '',
+          last_error_msg: _r.last_error_msg || '',
+        });
+      }
+    }
+    agg.verdict = foldRuntimeHealth(_verdictRows);
+  } else {
+    agg.verdict = null;
+  }
   return agg;
 }
 
@@ -401,11 +428,23 @@ function _modelCardHealthHTML(provIdx, modelIdx) {
   return html;
 }
 
-/** State class for the strip wrapper — drives the left accent of the row. */
+/** State class for the strip wrapper — drives the left accent of the row.
+ *  Colour = the pool-verdict (any usable slot ⇒ usable), NOT the pooled
+ *  success rate. A model with 8 dead slots + 1 live one is 'degraded'
+ *  (amber, still working), never 'warn' (red). Falls back to the legacy
+ *  rate-based judgement only when the shared module is unavailable. */
 function _modelCardHealthCls(provIdx, modelIdx) {
   var agg = _modelCardHealthRow(provIdx, modelIdx);
   if (!agg) return 'muted';
   if (agg.cooldown_remaining_s > 0) return 'cool';
+  if (agg.verdict) {
+    var lv = agg.verdict.level;
+    if (lv === 'ok') return 'good';
+    if (lv === 'degraded') return 'ok';
+    if (lv === 'down') return 'warn';
+    return 'muted';   // unknown / skipped / not_logged_in — no colour claim
+  }
+  // Legacy fallback (shared module not loaded).
   if (agg.success_rate != null && agg.success_rate < 0.9) return 'warn';
   if (agg.consecutive_errors > 0) return 'warn';
   if (agg.total_requests > 0) return 'good';

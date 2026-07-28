@@ -780,6 +780,10 @@ function _runMatrixProbe(provIdx, force, only) {
     api_keys: keys,
     extra_headers: p.extra_headers || {},
     protocol: p.protocol || 'openai',
+    // Subscription providers carry the 'oauth-managed' sentinel key — the
+    // backend resolves the live token per cell when oauth is set, rather
+    // than probing the sentinel (a guaranteed 401 → false recommend-disable).
+    oauth: p.oauth || '',
     // capabilities ride along so the server probes non-chat models via
     // their REAL endpoint (image / audio-transcription / embeddings)
     // instead of chat-probing them into a guaranteed false verdict.

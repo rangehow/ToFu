@@ -55,6 +55,7 @@ TOOLBAR_JS = os.path.join(JS_DIR, 'main', 'main_toolbar_ui.js')
 BRANDING_JS = os.path.join(JS_DIR, 'settings', 'branding.js')
 CORE_PANEL_JS = os.path.join(JS_DIR, 'settings', 'core_panel.js')
 VISIBILITY_JS = os.path.join(JS_DIR, 'settings', 'visibility_defaults.js')
+MODEL_GROUP_JS = os.path.join(JS_DIR, 'core', 'model_group.js')
 
 # Markup mirroring the shipped index.html dropdown (inner list + depth footer).
 _HTML = (
@@ -68,10 +69,10 @@ _HTML = (
 _BODY = r'''
 const fs = require('fs');
 const { setup } = require(process.env.JSDOM_HARNESS);
-const { document, check, report } = setup({
+const { document, window, check, report } = setup({
   root: process.argv[3],
   html: HTML_PLACEHOLDER,
-  targets: [process.argv[4]],          // branding.js — real _modelShortName + comparator
+  targets: [process.argv[4], process.argv[6]],  // branding.js + model_group.js
   globals: {
     BASE_PATH: '',
     config: { model: 'kimi-k3' },
@@ -115,13 +116,22 @@ const POPULATE_SIG = 'function _populateModelDropdown(models) {';
 const POPULATE = sliceFn(TOOLBAR_SRC, POPULATE_SIG);
 const indirectEval = eval;
 
-/* Two providers, deliberately given in the WORST order on both axes:
- *  - "Meituan" appears SECOND (so section order must be fixed, not inherited)
- *  - models within each group are in model_id order (what the config file
- *    holds) which is NOT display-name order. */
+/* model_group.js (argv[6]) publishes on window; the picker's bare-global
+ * `typeof modelGroupKey` guard resolves only via node global scope here. */
+global.modelGroupKey = window.modelGroupKey;
+global.modelGroupLabel = window.modelGroupLabel;
+global.modelGroupBrandNames = window.modelGroupBrandNames;
+
+/* Two brand groups, deliberately given in the WORST section order for the
+ * brand-grouping rule: the 'meituan' group is inserted FIRST, but 'Claude'
+ * must sort before 'Meituan' — so the section order must be FIXED by the
+ * sort, not inherited. Models within each group are in model_id order (what
+ * the config file holds) which is NOT display-name order.
+ *
+ * (2026-07-28, pt_464f2baf) The picker now groups by BRAND (core/model_group)
+ * not provider_id, so the section key is the detected brand: the two
+ * dated-id models detect as 'claude', the rest as 'meituan'. */
 const MODELS = [
-  { model_id: 'claude-opus-4-1-20250805', provider_id: 'oauth_claude', provider_name: 'Zzz Subscription', capabilities: ['text'] },
-  { model_id: 'claude-sonnet-4-5-20250929', provider_id: 'oauth_claude', provider_name: 'Zzz Subscription', capabilities: ['text'] },
   { model_id: 'aws.claude-opus-4.6', provider_id: 'sankuai', provider_name: 'Meituan', capabilities: ['text'] },
   { model_id: 'aws.claude-opus-4.8', provider_id: 'sankuai', provider_name: 'Meituan', capabilities: ['text'] },
   { model_id: 'claude-fable-5', provider_id: 'sankuai', provider_name: 'Meituan', capabilities: ['text'] },
@@ -130,6 +140,8 @@ const MODELS = [
   { model_id: 'hy3-preview', provider_id: 'sankuai', provider_name: 'Meituan', capabilities: ['text'] },
   { model_id: 'kimi-k3', provider_id: 'sankuai', provider_name: 'Meituan', capabilities: ['text'] },
   { model_id: 'yuju-claude-opus-5-evaDaily', provider_id: 'sankuai', provider_name: 'Meituan', capabilities: ['text'] },
+  { model_id: 'claude-opus-4-1-20250805', provider_id: 'oauth_claude', provider_name: 'Zzz Subscription', capabilities: ['text'] },
+  { model_id: 'claude-sonnet-4-5-20250929', provider_id: 'oauth_claude', provider_name: 'Zzz Subscription', capabilities: ['text'] },
 ];
 
 function labels() {
@@ -164,10 +176,13 @@ try {
   check('opus5_sits_with_claudes',
     gotMeituan.indexOf('Claude Opus 5') === 2);
 
-  // ══ 2. Section headers ordered by provider display name ══
+  // ══ 2. Section headers ordered by brand-group display name ══
+  // Brand grouping (core/model_group): the dated oauth models detect as
+  // 'claude' → 'Claude'; the sankuai models as 'meituan' → 'Meituan'. Even
+  // though 'meituan' was inserted first, Claude must sort before it.
   const S = sections();
   check('two_sections_rendered', S.length === 2);
-  check('sections_in_name_order', S.join('|') === 'Meituan|Zzz Subscription');
+  check('sections_in_name_order', S.join('|') === 'Claude|Meituan');
 
   // ══ 3. Cache MISS models don't throw and sort by stripped id ══
   // oauth_claude's dated ids have no _modelPricingCache entry → the label IS
@@ -247,16 +262,16 @@ try {
     check('N1_model_order_regresses', got.join('|') !== wantMeituan.join('|'));
   }
 
-  // ══ NEUTER 2: remove the provider-group sort → section order regresses ══
+  // ══ NEUTER 2: remove the brand-group sort → section order regresses ══
   {
-    const n = POPULATE.replace(/  if \(_canSort\) \{\n    providerIds\.sort[\s\S]*?\n  \}\n/,
+    const n = POPULATE.replace(/  if \(_canSort\) \{\n    groupKeys\.sort[\s\S]*?\n  \}\n/,
                                '');
     check('N2_applied', n !== POPULATE);
     indirectEval(n);
     reset();
     _populateModelDropdown(MODELS.slice());
     check('N2_section_order_regresses',
-      sections().join('|') === 'Zzz Subscription|Meituan');
+      sections().join('|') === 'Meituan|Claude');
   }
 
   // ══ NEUTER 3: drop numeric collation → 3.9 vs 3.10 goes wrong ══
@@ -295,7 +310,7 @@ def test_model_picker_ordered_by_display_name():
     run_harness(
         target_js=TOOLBAR_JS,
         body_js=body,
-        extra_targets=[BRANDING_JS, CORE_PANEL_JS],
+        extra_targets=[BRANDING_JS, CORE_PANEL_JS, MODEL_GROUP_JS],
         min_pass=22,
         label='model-picker-order',
     )

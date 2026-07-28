@@ -307,8 +307,21 @@ def test_anchor_is_wired_at_the_single_render_chokepoint():
     assert '_featureFlags.debug_mode' in src, 'anchor is not debug_mode-gated'
     css = open(os.path.join(ROOT, 'static', 'styles.css'), encoding='utf-8').read()
     assert '.ri-tool-anchor' in css
-    assert 'body.ri-open .ctx-health-bar' in css, (
-        'context ball does not yield the left flank while the drawer is open')
+    # The drawer's accommodation for the context gauge: pre-4dee9231 the gauge
+    # was an absolutely-positioned ball needing its own `body.ri-open
+    # .ctx-health-bar` yield hack; 4dee9231 moved it INTO #convStatusStrip
+    # inside .input-area, so it now yields WITH the whole chat container as one
+    # unit. The pin therefore targets the unit-yield rule plus the strip's
+    # in-flow placement — a per-widget hack would be obsolete by design.
+    assert 'body.ri-open .chat-container{margin-right:' in css, (
+        'the drawer no longer yields the chat container — the status strip '
+        '(gauge + turn-nav) would collide with it')
+    html = open(os.path.join(ROOT, 'index.html'), encoding='utf-8').read()
+    ia = html.index('class="input-area"') if 'class="input-area"' in html else 0
+    strip = html.index('id="convStatusStrip"')
+    assert ia and strip > ia, (
+        '#convStatusStrip must stay INSIDE .input-area so the container-yield '
+        'rule covers it (out of flow = needs its own ri-open hack again)')
     i18n = open(os.path.join(JS_DIR, 'i18n.js'), encoding='utf-8').read()
     assert "'ri.toolAnchorTip'" in i18n
 

@@ -109,18 +109,20 @@ def test_last_active_conv_mirrored_to_localstorage_on_leave():
 
 
 def test_ensure_newest_preserves_inflight_skeleton():
-    """_ensureNewest must skip its full renderChat when the active conv is still
+    """_ensureNewest must skip its full repaint when the active conv is still
     mid first-open load (skeleton painted): _initialSwitchLoad + _needsLoad +
     empty messages. Otherwise it repaints the generic loading welcome over the
-    skeleton (downgrade flash)."""
+    skeleton (downgrade flash). The repaint call itself moved
+    renderChat → ConvView.replaceAll (the ConvView fold) — the GUARD is what's
+    pinned, not the retired callee name."""
     src = INIT_JS.read_text()
     m = re.search(r"function _ensureNewest\s*\(\)\s*\{([\s\S]*?)\n\}", src)
     assert m, "_ensureNewest not found"
     body = m.group(1)
     assert re.search(
-        r"_initialSwitchLoad[\s\S]{0,80}_needsLoad[\s\S]{0,80}messages\.length\s*===\s*0[\s\S]{0,80}renderChat\(c\)",
+        r"_initialSwitchLoad[\s\S]{0,80}_needsLoad[\s\S]{0,80}messages\.length\s*===\s*0[\s\S]{0,80}ConvView\.replaceAll\(c\.id\)",
         body,
-    ), "_ensureNewest must guard renderChat(c) against an in-flight first-open skeleton"
+    ), "_ensureNewest must guard the full repaint (ConvView.replaceAll) against an in-flight first-open skeleton"
 
 
 if __name__ == "__main__":

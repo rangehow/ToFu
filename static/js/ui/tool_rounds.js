@@ -952,7 +952,7 @@ function _renderMemoryBlock(round, svg, q, compactionLabelHtml, rootPill, badgeH
          ${rootPill}
          <span class="ptool-text">${q}</span>
          ${badgeHtml}
-         ${_rowModelViewBtn(round)}
+         ${_rowRightControls(round)}
        </summary>
        <div class="ptool-memory-body">${inner}</div>
      </details>`;
@@ -1023,7 +1023,7 @@ function _renderTodoBlock(round, svg, q, badgeHtml) {
          <span class="ptool-text">${escapeHtml(headLabel)}</span>
          ${barHtml}
          ${countChip}
-         ${_rowModelViewBtn(round)}
+         ${_rowRightControls(round)}
        </summary>
        <div class="ptool-todo-body"><div class="ptool-todo-list">${rows}</div></div>
      </details>`;
@@ -1987,7 +1987,7 @@ function _renderUnifiedToolLine(round, isSearching) {
        <span class="ptool-text">${q}</span>
        ${repairedBadge}
        ${badgeHtml}
-       ${_rowModelViewBtn(round)}
+       ${_rowRightControls(round)}
      </div>`;
 }
 
@@ -2329,7 +2329,7 @@ function _renderCmdDoneBlock(round, ctx) {
            ${cmdRootPill}
            ${descInlineHtml}
            <span class="ptool-cmd-status">${statusLabel}</span>
-           ${_rowModelViewBtn(round)}
+           ${_rowRightControls(round)}
          </div>
          <pre class="ptool-cmd-code"><code>$ ${cmd}</code></pre>
          ${outputHtml}
@@ -2373,7 +2373,7 @@ function _renderBrowserExecJsBlock(round, ctx) {
            ${rootPill}
            <span class="ptool-cmd-label">${escapeHtml(round.query || "Execute JS")}</span>
            <span class="ptool-cmd-status">${statusLabel}</span>
-           ${_rowModelViewBtn(round)}
+           ${_rowRightControls(round)}
          </div>
          ${descHtml}
          ${codeHtml}
@@ -2416,7 +2416,7 @@ function _renderSearchRows(round, ctx) {
          <span class="ptool-icon">${svg}</span>
          <span class="ptool-text">${q}</span>
          <span class="ptool-badge ${badgeCls}">${badgeText}</span>
-         ${_rowModelViewBtn(round)}
+         ${_rowRightControls(round)}
          ${detailHtml}
        </div>`;
   }
@@ -2538,7 +2538,7 @@ function _renderSearchRows(round, ctx) {
            <span class="ptool-text">${q}</span>
            ${verts.length ? (()=>{const doms=[...new Set(verts.map(v=>v.domain||'').filter(Boolean))];return `<span class="ptool-badge vertical-badge" title="Vertical domain data">vertical: ${escapeHtml(doms.join(' · ') || 'auto')}</span>`;})() : ''}
            <span class="ptool-badge ptool-badge-info">${results.length} result${results.length !== 1 ? "s" : ""}</span>
-           ${_rowModelViewBtn(round)}
+           ${_rowRightControls(round)}
            <span class="ptool-results-toggle">▼</span>
          </div>
          <div class="ptool-results-content">${verticalHtml}${items}${engineBkdnHtml}</div>
@@ -2582,7 +2582,7 @@ function _renderReadImagesBlock(round, ctx) {
              <span class="ptool-text">${q}</span>
              ${opsChip}
              ${countBadge}
-             ${_rowModelViewBtn(round)}
+             ${_rowRightControls(round)}
            </div>
            <div class="rf-img-grid${multi ? " rf-img-grid-multi" : ""}${isInspect ? " rf-img-grid-inspect" : ""}">${tiles}</div>
          </div>`;
@@ -2653,7 +2653,7 @@ function _renderImageGenBlock(round, ctx) {
              ${paramsBadges}
              ${svgBadge}
              <span class="ptool-badge ptool-badge-ok">${escapeHtml(meta.badge || "✓ done")}</span>
-             ${_rowModelViewBtn(round)}
+             ${_rowRightControls(round)}
            </div>
            <div class="imagegen-card">
              ${imageArea}
@@ -2675,7 +2675,7 @@ function _renderImageGenBlock(round, ctx) {
              <span class="ptool-text">${q}</span>
              ${modeChip}
              <span class="ptool-badge ptool-badge-err">failed</span>
-             ${_rowModelViewBtn(round)}
+             ${_rowRightControls(round)}
            </div>
            <div class="imagegen-error">
              <div class="ig-error-title">${isEdit ? "Image editing failed" : "Image generation failed"}</div>
@@ -3402,7 +3402,7 @@ function _renderTimerWatcherBlock(round, svg) {
          <span class="timer-watcher-label">${headerLabel}</span>
          ${kindBadge}
          ${isActive ? '<span class="ptool-spinner"></span>' : ''}
-         ${_rowModelViewBtn(round)}
+         ${_rowRightControls(round)}
          <span class="timer-toggle">${expandedByDefault ? '▾' : '▸'}</span>
        </div>
        <div class="timer-watcher-body${expandedByDefault ? ' expanded' : ''}" id="${uid}-wrap">
@@ -3501,31 +3501,46 @@ function _renderTurnHead(size, rno) {
 
 /* Render one tool round into its `[data-prn]` slot. Swarm rounds get the
  * full agent dashboard; everything else the compact tool line. `allRounds`
- * is the full timeline (swarm panels need it for cross-round context). */
+ * is the full timeline (swarm panels need it for cross-round context).
+ *
+ * The debug entry rides inside the row's own header (see _rowRightControls),
+ * so it shares one flex flow with the model-view button instead of floating
+ * over it. Swarm panels have no `.ptool-line` header of that shape, so they
+ * — and only they — still get a standalone entry appended after the panel. */
 function _renderToolSlot(r, allRounds) {
-  const inner = _isRoundSwarm(r)
+  const isSwarm = _isRoundSwarm(r);
+  const inner = isSwarm
     ? _buildSwarmPanelHTML(r, allRounds)
     : _renderUnifiedToolLine(r, r.status === "searching");
-  const swarmAttr = _isRoundSwarm(r) ? ' data-prn-kind="swarm"' : '';
-  return `<div data-prn="${r.roundNum}"${swarmAttr}>${inner}${_renderToolRequestAnchor(r)}</div>`;
+  const swarmAttr = isSwarm ? ' data-prn-kind="swarm"' : '';
+  const trailing = isSwarm ? _renderStandaloneDebugEntry(r) : '';
+  return `<div data-prn="${r.roundNum}"${swarmAttr}>${inner}${trailing}</div>`;
 }
 
-/* ── Request Inspector anchor per TOOL ROW (P6) ──────────────────────────
- * The owner's actual complaint: "I see a suspicious tool call in chatinner
+/* ── Debug entry per TOOL ROW ────────────────────────────────────────────
+ * The owner's original complaint: "I see a suspicious tool call in chatinner
  * and there is no way to find WHICH request produced it." A single per-bubble
- * anchor (P3) is the wrong granularity — one bubble holds N rounds x M tool
- * calls. This puts an anchor on EVERY tool row.
+ * anchor is the wrong granularity — one bubble holds N rounds x M tool calls.
+ * So every tool row carries its own entry.
  *
  * The mapping needs no new backend data: the backend tags each round with
  * `llmRound` (0-based orchestrator loop index, see _computeToolBatches), and
  * the request snapshot's `roundNum` is 1-based — so this row was PRODUCED by
  * request R(llmRound+1), and its result was carried INTO R(llmRound+2).
- * We anchor on the producing request (that is the payload that contains the
- * tool definitions + context the model saw when it decided to make this call).
  *
- * Rendered ONLY in debug mode, and only when we can name a task + round —
- * an anchor that cannot resolve is worse than no anchor. */
-function _renderToolRequestAnchor(r) {
+ * ONE entry, not two. The former R (producing request) and S (post-tool state
+ * mirror) buttons were two controls onto the same round; they are now tabs
+ * INSIDE the panel the single entry opens, because "which request" and "what
+ * the state looked like afterwards" are two views of one round, not two
+ * destinations. The model-view button stays SEPARATE and is never replaced by
+ * this: it shows the verbatim bytes this tool returned TO the model, which
+ * neither tab carries.
+ *
+ * `data-ri-state` addresses this row's state mirror so the drawer's state list
+ * can find this slot for its inline jump.
+ *
+ * Rendered ONLY in debug mode, and only when we can name a task + round. */
+function _renderDebugEntry(r) {
   if (typeof _featureFlags === 'undefined' || !_featureFlags.debug_mode) return '';
   if (!r || r._inboxInject || r._peerInject || r._userSteerInject) return '';
   const taskId = r._taskId || (typeof _riTaskIdForRound === 'function'
@@ -3534,28 +3549,34 @@ function _renderToolRequestAnchor(r) {
   if (!taskId || lr == null) return '';
   const round = Number(lr) + 1;          // llmRound 0-based → roundNum 1-based
   const tip = (typeof t === 'function') ? t('ri.toolAnchorTip', { round }) : '';
-  const stateTip = (typeof t === 'function') ? t('ri.stateAnchorTip', { round }) : '';
-  /* data-ri-state addresses this row's post-tool STATE mirror (same roundNum
-   * axis as the producing request — design §3.1) so the drawer's state list
-   * can locate this slot for its inline jump. The S anchor opens that state
-   * mirror INLINE right here; the R anchor keeps opening the producing
-   * request in the drawer. */
-  return `<div class="ri-tool-anchor-row" data-ri-state="${escapeHtml(String(taskId))}:${round}">` +
-    `<span class="ri-tool-anchor" role="button" tabindex="0" ` +
+  const esc = escapeHtml(String(taskId));
+  return `<button type="button" class="ri-tool-anchor" ` +
+    `data-ri-state="${esc}:${round}" ` +
     `title="${escapeHtml(tip)}" ` +
-    `onclick="openRequestInspectorForToolRound('${escapeHtml(String(taskId))}',${round})">` +
-    `${_RI_TOOL_ANCHOR_SVG}<span class="ri-tool-anchor-label">R${round}</span></span>` +
-    `<span class="ri-tool-anchor ri-tool-anchor-state" role="button" tabindex="0" ` +
-    `title="${escapeHtml(stateTip)}" ` +
-    `onclick="openStateInspector('${escapeHtml(String(taskId))}',${round},this)">` +
-    `${_RI_STATE_ANCHOR_SVG}<span class="ri-tool-anchor-label">S${round}</span></span></div>`;
+    `onclick="openToolDebugPanel('${esc}',${round},this)">` +
+    `${_RI_TOOL_ANCHOR_SVG}<span class="ri-tool-anchor-label">R${round}</span></button>`;
 }
 
-/* Snapshot-stack glyph for the inline state anchor (§3.4: SVG only). */
-const _RI_STATE_ANCHOR_SVG =
-  '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
-  'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-  '<path d="M12 2 2 7l10 5 10-5-10-5Z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>';
+/* Swarm-panel variant: the dashboard has no shared header to sit in, so the
+ * entry gets its own right-aligned strip UNDER the panel. Still a real block
+ * in normal flow — never a negative-margin overlay. */
+function _renderStandaloneDebugEntry(r) {
+  const btn = _renderDebugEntry(r);
+  return btn ? `<div class="ri-tool-anchor-row">${btn}</div>` : '';
+}
+
+/* The row's right-hand control group — the SINGLE owner of a tool row's right
+ * edge. Both controls live here and each occupies its own space, so nothing
+ * can overlap: previously `.tc-preview-btn` claimed the right end with
+ * `margin-left:auto` while the debug entry floated over it from a zero-height
+ * block. Now `margin-left:auto` belongs to this wrapper alone.
+ *
+ * Order is deliberate: model-view (what the tool returned) sits left of the
+ * debug entry (how this call came to be), because the former is the far more
+ * frequently used control. */
+function _rowRightControls(round) {
+  return `<span class="ptool-row-ctl">${_rowModelViewBtn(round)}${_renderDebugEntry(round)}</span>`;
+}
 
 /* Code-glyph SVG (§3.4: SVG only, never a unicode glyph as a control). */
 const _RI_TOOL_ANCHOR_SVG =

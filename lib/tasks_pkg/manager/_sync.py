@@ -800,6 +800,20 @@ def _sync_result_to_conversation(task, meta):
                 last_msg['model'] = meta['model']
             if meta.get('provider_id') and not last_msg.get('provider_id'):
                 last_msg['provider_id'] = meta['provider_id']
+            # ★ _taskId MUST be copied on this path too. It is pure PROVENANCE
+            #   (which task produced this turn), never content, so writing it
+            #   can never clobber the fuller content this branch is protecting.
+            #   Omitting it was a real data defect: this branch stamps
+            #   finishReason but not _taskId, so a turn that took it settled
+            #   PERMANENTLY without a task id — measured at 24 of 42 anchor-less
+            #   turns, "finishReason present + _taskId absent" being this
+            #   branch's exact fingerprint. The consequence is user-visible: the
+            #   per-tool-row debug entry resolves through msg._taskId, so every
+            #   tool row of such a turn silently loses its entry.
+            _taskid_wrote = False
+            if meta.get('taskId') and not last_msg.get('_taskId'):
+                last_msg['_taskId'] = meta['taskId']
+                _taskid_wrote = True
             # ★ Inbox-inject sidecars: persist EVEN on the content-guard path.
             #   The frontend PUT'd fuller content before we settled, but it can
             #   never carry these (they are backend-observed at inject time), so
@@ -807,12 +821,13 @@ def _sync_result_to_conversation(task, meta):
             #   this branch fall through to the DB write below instead of the
             #   bare skip `return`.
             _sidecar_wrote = _persist_inject_sidecars(task, last_msg)
-            if _tr_updated or meta.get('finishReason') or _sidecar_wrote:
+            if _tr_updated or meta.get('finishReason') or _sidecar_wrote or _taskid_wrote:
                 logger.info('%s conv=%s Content guard: existing=%d+%d > new=%d+%d, '
-                           'but still updating toolRounds=%s metadata=%s sidecar=%s',
+                           'but still updating toolRounds=%s metadata=%s sidecar=%s taskId=%s',
                            pfx, conv_id, existing_content_len, existing_thinking_len,
                            new_content_len, new_thinking_len,
-                           _tr_updated, bool(meta.get('finishReason')), _sidecar_wrote)
+                           _tr_updated, bool(meta.get('finishReason')), _sidecar_wrote,
+                           _taskid_wrote)
             else:
                 logger.info('%s conv=%s Server already has MORE content (existing=%d+%d > new=%d+%d) — '
                            'frontend likely already synced. Skipping.',

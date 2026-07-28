@@ -91,7 +91,7 @@ const _I18N = {
   'ri.turnPlanning': 'Planner', 'ri.turnWorking': 'Worker',
   'ri.turnReviewing': 'Critic',
   'ri.prefixFold': 'prefix {k} vs {base}',
-  'ri.stateAnchorTip': 'state after round {round}',
+  'ri.toolAnchorTip': 'View request that generated this tool (Round {round})',
   'ri.stateRowTip': 'jump to the tool call',
   'ri.stateEmpty': 'State mirror expired or missing',
   'ri.stateClose': 'Close state inspector',
@@ -286,25 +286,37 @@ def test_neuter_state_kind_dropped_flips_red():
 def test_state_inspector_wiring_pins():
     """Static pins: the inline entry, the row addressing, the i18n strings,
     the styles, and the api.js kind plumbing — the pieces a future refactor
-    could silently drop while keeping every jsdom test green."""
+    could silently drop while keeping every jsdom test green.
+
+    Re-pointed after the R/S merge: the two per-row buttons became ONE entry
+    (`openToolDebugPanel`) whose panel carries request/state TABS, so the
+    mount helper is now `_riMountToolPanel` and the row's onclick names the
+    merged entry. `openStateInspector` survives as the state-tab entry the
+    drawer's state rows use. What these pins PROTECT is unchanged: the tool
+    row must still address its state mirror, the drawer's state rows must
+    still be navigable, and the panel must still render."""
     ri = open(os.path.join(JS_DIR, 'core', 'request_inspector.js'),
               encoding='utf-8').read()
     assert 'function openStateInspector' in ri
-    assert '_riMountStatePanel' in ri
+    assert 'function openToolDebugPanel' in ri, (
+        'the merged single tool-row debug entry is gone')
+    assert '_riMountToolPanel' in ri
     assert "onclick = () => openStateInspector(taskId, s.roundNum)" in ri, (
         'drawer state rows must stay navigable')
     tr = open(os.path.join(JS_DIR, 'ui', 'tool_rounds.js'), encoding='utf-8').read()
     assert 'data-ri-state=' in tr, 'tool rows lost their state-mirror address'
-    assert 'openStateInspector(' in tr
+    assert 'openToolDebugPanel(' in tr, (
+        'tool rows lost their debug entry wiring')
     api = open(os.path.join(JS_DIR, 'api.js'), encoding='utf-8').read()
     assert 'getRequestPayload: (taskId, roundNum, turn, kind)' in api
     i18n = open(os.path.join(JS_DIR, 'i18n.js'), encoding='utf-8').read()
-    for key in ("'ri.stateAnchorTip'", "'ri.stateRowTip'", "'ri.stateEmpty'",
-                "'ri.stateClose'"):
+    for key in ("'ri.tabRequest'", "'ri.tabState'", "'ri.stateRowTip'",
+                "'ri.stateEmpty'", "'ri.stateClose'"):
         assert key in i18n, f'{key} missing'
     css = open(os.path.join(ROOT, 'static', 'styles.css'), encoding='utf-8').read()
     assert '.ri-state-panel' in css
     assert '.ri-state-chip' in css
+    assert '.ri-panel-tab' in css
 
 
 if __name__ == '__main__':

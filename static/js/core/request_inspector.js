@@ -389,16 +389,23 @@ async function openRequestInspectorForToolRound(taskId, roundNum) {
   await _riSelectRound(taskId, pick.roundNum, el, targetTurn);
 }
 
-/* ── Inline state inspector (state mirrors next to the tool call) ──────────
- * The drawer's state list is NAVIGATION, not a destination: a state mirror
- * ("Round N 工具结果后") belongs next to the tool call whose execution it
- * captures. openStateInspector mounts a single .ri-state-panel right after
- * that tool round's [data-prn] slot in chatinner and renders the payload
- * through the SAME renderer as the drawer detail (renderDebugBlocksInto /
- * updateDebugToolsBlock — no second JSON renderer). When the tool row is
- * not in the DOM (unloaded/old conversation), falls back to the drawer
- * detail pane so the click always lands somewhere meaningful. */
-async function openStateInspector(taskId, roundNum, anchorEl) {
+/* ── Merged tool-row debug panel (request | post-tool state) ──────────────
+ * ONE entry per tool row, two TABS inside — because "which request produced
+ * this call" and "what the message state looked like after it ran" are two
+ * views of the SAME round, not two destinations. They were previously two
+ * separate buttons (R and S) competing for the row's right edge.
+ *
+ * Mounts a single panel right after the tool round's [data-prn] slot and
+ * renders through the SAME renderer as the drawer detail
+ * (renderDebugBlocksInto / updateDebugToolsBlock — no second JSON renderer).
+ * When the tool row is not in the DOM (unloaded/old conversation), degrades
+ * to the drawer so the click always lands somewhere meaningful.
+ *
+ * NOTE: this panel deliberately does NOT show the tool's verbatim return
+ * bytes — that is the model-view button's job and it stays a separate
+ * control. Request context / post-tool state / verbatim result are three
+ * different questions; none substitutes for another. */
+async function openToolDebugPanel(taskId, roundNum, anchorEl, tab) {
   if (!taskId || roundNum == null) return;
   let slot = (anchorEl && typeof anchorEl.closest === 'function')
     ? anchorEl.closest('[data-prn]') : null;
@@ -409,30 +416,55 @@ async function openStateInspector(taskId, roundNum, anchorEl) {
       slot = marker.closest('[data-prn]');
   }
   if (!slot) {
-    /* Tool row not in the DOM — degrade to the drawer detail (kind=state)
-     * instead of a dead click. */
-    if (!_riOpen) openRequestInspector();
-    await _riSelectTask(taskId);
-    const payload = await _riFetchPayload(taskId, roundNum, '', 'state');
-    if (payload && payload.messages && typeof showMessagesInDebug === 'function')
-      showMessagesInDebug(payload.messages, payload.label || '', false,
-        typeof activeConvId !== 'undefined' ? activeConvId : null,
-        payload.tools || undefined, false, undefined, { resetScroll: true });
+    /* Tool row not in the DOM (unloaded / old conversation) — degrade to the
+     * drawer instead of a dead click, HONOURING the tab that was asked for.
+     * Falling back to the request view for a state request would silently
+     * answer a different question than the user clicked. */
+    if (tab === 'state') {
+      if (!_riOpen) openRequestInspector();
+      await _riSelectTask(taskId);
+      const payload = await _riFetchPayload(taskId, roundNum, '', 'state');
+      if (payload && payload.messages && typeof showMessagesInDebug === 'function')
+        showMessagesInDebug(payload.messages, payload.label || '', false,
+          typeof activeConvId !== 'undefined' ? activeConvId : null,
+          payload.tools || undefined, false, undefined, { resetScroll: true });
+      return;
+    }
+    await openRequestInspectorForToolRound(taskId, roundNum);
     return;
   }
-  _riMountStatePanel(slot, taskId, roundNum);
+  /* Re-clicking the entry for the round already open closes it (toggle). */
+  const existing = document.querySelector('.ri-state-panel');
+  if (existing && existing.dataset.riRound === String(roundNum) &&
+      existing.dataset.riTask === String(taskId) && !tab) {
+    existing.remove();
+    return;
+  }
+  _riMountToolPanel(slot, taskId, roundNum, tab || 'request');
 }
 
-/* Mount the (single-instance) state panel after a tool slot and start both
- * loads: the history strip (all state mirrors of the task, for quick
- * navigation) and the requested snapshot itself. The panel is transient by
+/* Back-compat entry: the drawer's state list still addresses a round's state
+ * mirror directly, which is now the panel's `state` tab. */
+async function openStateInspector(taskId, roundNum, anchorEl) {
+  return openToolDebugPanel(taskId, roundNum, anchorEl, 'state');
+}
+
+/* Mount the (single-instance) tabbed panel after a tool slot. Transient by
  * design — a chat re-render may drop it; re-click reopens. */
-async function _riMountStatePanel(slot, taskId, roundNum) {
+async function _riMountToolPanel(slot, taskId, roundNum, tab) {
   document.querySelectorAll('.ri-state-panel').forEach((p) => p.remove());
   const panel = document.createElement('div');
   panel.className = 'ri-state-panel';
+  panel.dataset.riTask = String(taskId);
+  panel.dataset.riRound = String(roundNum);
   panel.innerHTML =
     '<div class="ri-state-panel-head">' +
+      '<span class="ri-panel-tabs" role="tablist">' +
+        '<button type="button" class="ri-panel-tab" data-ri-tab="request" ' +
+          'role="tab">' + _riEsc(t('ri.tabRequest')) + '</button>' +
+        '<button type="button" class="ri-panel-tab" data-ri-tab="state" ' +
+          'role="tab">' + _riEsc(t('ri.tabState')) + '</button>' +
+      '</span>' +
       '<span class="ri-state-panel-title"></span>' +
       '<span class="ri-state-panel-close" role="button" tabindex="0" title="' +
         _riEsc(t('ri.stateClose')) + '">' +
@@ -442,11 +474,15 @@ async function _riMountStatePanel(slot, taskId, roundNum) {
     '<div class="ri-state-body"><div class="ri-empty">' +
       _riEsc(t('ri.loading')) + '</div></div>';
   panel.querySelector('.ri-state-panel-close').onclick = () => panel.remove();
+  panel.querySelectorAll('.ri-panel-tab').forEach((b) => {
+    b.onclick = () => _riRenderToolPanel(panel, taskId,
+      Number(panel.dataset.riRound), b.dataset.riTab);
+  });
   slot.insertAdjacentElement('afterend', panel);
   if (typeof panel.scrollIntoView === 'function')
     panel.scrollIntoView({ block: 'nearest' });
   _riFillStateStrip(panel, taskId, roundNum);   // async, populates in place
-  await _riRenderStatePanel(panel, taskId, roundNum);
+  await _riRenderToolPanel(panel, taskId, roundNum, tab);
 }
 
 /* History strip: one chip per state mirror of the task (the same rows the
@@ -467,28 +503,40 @@ async function _riFillStateStrip(panel, taskId, activeRound) {
     chip.dataset.round = String(s.roundNum);
     chip.setAttribute('role', 'button');
     chip.textContent = s.label || ('R' + s.roundNum);
-    chip.onclick = () => _riRenderStatePanel(panel, taskId, s.roundNum);
+    /* Strip navigation stays within the tab the user is looking at. */
+    chip.onclick = () => _riRenderToolPanel(panel, taskId, s.roundNum,
+      panel.dataset.riTab || 'state');
     strip.appendChild(chip);
   }
 }
 
-/* Render ONE state mirror into the panel body (fetch kind=state, render via
- * the shared debug renderer). Also re-points the panel dataset + active chip
- * so strip navigation stays consistent. */
-async function _riRenderStatePanel(panel, taskId, roundNum) {
+/* Render ONE tab of the panel: `request` = the payload that PRODUCED this
+ * tool call, `state` = the message mirror captured right AFTER it ran. Both
+ * go through the shared debug renderer. Also re-points the panel dataset,
+ * the active tab and the active strip chip so navigation stays consistent. */
+async function _riRenderToolPanel(panel, taskId, roundNum, tab) {
   if (!panel.isConnected) return;  // closed while fetching
-  const payload = await _riFetchPayload(taskId, roundNum, '', 'state');
-  if (!panel.isConnected) return;
+  tab = (tab === 'state') ? 'state' : 'request';
+  panel.dataset.riTab = tab;
+  panel.dataset.riRound = String(roundNum);
   panel.dataset.riPanel = taskId + ':' + roundNum;
-  const body = panel.querySelector('.ri-state-body');
-  const titleEl = panel.querySelector('.ri-state-panel-title');
+  panel.querySelectorAll('.ri-panel-tab').forEach((b) => {
+    const on = b.dataset.riTab === tab;
+    b.classList.toggle('ri-sel', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
   panel.querySelectorAll('.ri-state-chip').forEach((c) => {
     c.classList.toggle('ri-sel', c.dataset.round === String(roundNum));
   });
+  const body = panel.querySelector('.ri-state-body');
+  const titleEl = panel.querySelector('.ri-state-panel-title');
+  const payload = await _riFetchPayload(taskId, roundNum, '',
+    tab === 'state' ? 'state' : 'request');
+  if (!panel.isConnected) return;
   if (!payload || !payload.messages) {
     if (titleEl) titleEl.textContent = 'R' + roundNum;
     if (body) body.innerHTML = '<div class="ri-empty">' +
-      _riEsc(t('ri.stateEmpty')) + '</div>';
+      _riEsc(t(tab === 'state' ? 'ri.stateEmpty' : 'ri.empty')) + '</div>';
     return;
   }
   if (titleEl) titleEl.textContent =

@@ -163,14 +163,10 @@ function extract(name, src) {
 }
 const svgConst = toolSrc.match(/const _RI_TOOL_ANCHOR_SVG =[\s\S]*?';/);
 if (!svgConst) throw new Error('cannot find _RI_TOOL_ANCHOR_SVG');
-/* The anchor row also embeds the inline-STATE anchor (P7) whose glyph is a
- * second shipped const — extract it or the renderer call hits a TDZ error. */
-const stateSvgConst = toolSrc.match(/const _RI_STATE_ANCHOR_SVG =[\s\S]*?';/);
-if (!stateSvgConst) throw new Error('cannot find _RI_STATE_ANCHOR_SVG');
 
-eval(debugSrc + '\n' + riSrc + '\n' + svgConst[0] + '\n' + stateSvgConst[0] + '\n' +
-     extract('_renderToolRequestAnchor', toolSrc) + '\n' +
-     ';win.__anchor = _renderToolRequestAnchor;');
+eval(debugSrc + '\n' + riSrc + '\n' + svgConst[0] + '\n' +
+     extract('_renderDebugEntry', toolSrc) + '\n' +
+     ';win.__anchor = _renderDebugEntry;');
 
 const out = [];
 function check(name, cond) { out.push((cond ? 'PASS ' : 'FAIL ') + name); }
@@ -185,14 +181,14 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   check('anchor_maps_llmRound_plus_1_B',
     hB.indexOf('>R3<') !== -1 && hB.indexOf('>R2<') === -1);
   check('anchor_calls_tool_entry',
-    hB.indexOf("openRequestInspectorForToolRound('task-T1',3)") !== -1);
-  /* P7: the same row also addresses its post-tool STATE mirror (same
-   * roundNum axis as the producing request) and carries the inline-state
-   * anchor that opens it next to the tool call. */
+    hB.indexOf("openToolDebugPanel('task-T1',3") !== -1);
+  /* R and S were MERGED into one entry whose panel carries request/state
+   * tabs. The row still addresses its post-tool state mirror so the drawer's
+   * state list can locate this slot, and there must be exactly ONE control. */
   check('row_addresses_state_mirror',
     hB.indexOf('data-ri-state="task-T1:3"') !== -1);
-  check('state_anchor_calls_inline_entry',
-    hB.indexOf("openStateInspector('task-T1',3") !== -1);
+  check('single_merged_entry_not_two',
+    (hB.match(/class="ri-tool-anchor"/g) || []).length === 1);
 
   /* ── 2. debug_mode OFF → nothing ── */
   win._featureFlags.debug_mode = false;
@@ -302,10 +298,10 @@ def test_anchor_is_wired_at_the_single_render_chokepoint():
     every tool row (including swarm panels) is rendered. If a future refactor
     adds a second render path, this pin is the reminder."""
     src = open(os.path.join(JS_DIR, 'ui', 'tool_rounds.js'), encoding='utf-8').read()
-    assert '_renderToolRequestAnchor(r)' in src, 'anchor not called'
+    assert '_renderDebugEntry(r)' in src, 'anchor not called'
     slot = src[src.index('function _renderToolSlot'):]
     slot = slot[:slot.index('\n}')]
-    assert '_renderToolRequestAnchor' in slot, (
+    assert '_renderStandaloneDebugEntry' in slot or '_renderDebugEntry' in slot, (
         'the anchor must be emitted from _renderToolSlot (the single '
         'chokepoint), not from an individual branch renderer')
     assert '_featureFlags.debug_mode' in src, 'anchor is not debug_mode-gated'

@@ -1,4 +1,42 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
+<!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
+
+### 2026-07-28(续9) — R3 gate② 后端对照实测收口:**判定「不改检索后端」,而本轮真正的产出是抓到「假 fake」—— 18 个挂点里 16 个在打真网还全绿**(epic `pt_bc774ad33dcb43a6`;commits chatui `22a59f6d` + tofu-search `763819c`;chatui 环 **49/49**,tofu-search **16/16**,NEUTER×2 各自咬)
+
+- **对照结论(票面 ④ 到期后的正式判定):** 修完基线后用同一组 6 条真 idea 重测,**arXiv 字段化阶梯 96% 领域命中(24/25)/ 0% 跨 idea 最差重合 / 0/6 空基底**,与基线数字一致 —— **字段化路线守住了,故不改检索后端**,票面「B 赢就直接调 tofu-search」的条件未触发。落点按 owner 三条约束执行:①**没有搬 `search_arxiv`**,而是给现有 vertical 补 `search_by_query`(query→list 是它的真实缺口,它此前只能按 id 取单篇),复用其 `base.http_get` + Atom 解析,**未新建第三条 HTTP 路径**;②三条语法知识做成**可执行断言**进 tofu-search 测试;③`identity/domain` 批次内切分**留在 ideate**,vertical 公开面只收「术语 + 领域约束」。
+
+- **★ 本轮最值钱的发现:一个 fake 不再挂在被测代码上时,它不会报错,只会停止是一个 fake。** gate② 改走 `ts_search_by_query` 后,`tests/test_paper_ideate.py` 的 `_FakeSearch` 仍只 patch `search_arxiv` —— **18 个挂点里只有 2 个转红,另外 16 个继续绿着,而它们打的是真 arXiv**。铁证一是**时长**:接回 fake 后 **38.65s → 1.58s**,NEUTER(摘掉自动挂点)又跳回 **28s**;铁证二是失败断言里出现 `2605.09649` 这类**真实 arXiv id**,而 fixture 里根本没有它们。**修在唯一缝**(`_patch` 检测到 `_FakeSearch` 就自动补挂结构化入口),不是逐个改 18 处。
+  - **判据(charter「守卫绿着空转」家族新成员,与「测了 helper 不等于测了调用点」互补):「被测代码换了入口之后,我的 fake 还在那条路上吗?」** 本例比同族更隐蔽 —— **测试仍然绿,只是它测的是真实网络而非产品逻辑**,而真网恰好常返回合理数据,断言照样过。**信号是时长,不是颜色。**
+
+- **★ 第二个自伤:我的测试自己在给它要测量的 API 限流。** 三条 live 断言各自调 `_live_neighbour_sets()`,于是 6 idea × 4 rung 的检索**跑了三遍**;第三轮起 HTTP 429 → 读超时,**报出「3/6 空基底」而几分钟前它们都有真近邻** —— 这条红看起来完全像产品缺陷。改 session 级 memoize 后 **902s → 31s**。**判据:测量类测试先问「我这一趟自己会不会改变被测对象的状态」**(限流、配额、缓存均属此列)。
+
+- **★ 退避必须放在「唯一那个不走适配层的调用方」也能吃到的地方。** 3× 线性退避原本写在 `lib/paper/arxiv.py::search_arxiv`(自由文本适配层),而 gate② **故意绕开它**直连共享 vertical —— 于是**唯一一个「丢一次请求就污染科学判断」的调用方,恰恰没有任何重试**。已把退避移进 `vertical/arxiv.py::search_by_query`,所有调用方共享;`no_matches`(真答案)**绝不重试**,只有 `request_failed` 才退避,否则只会继续烧掉造成问题的那个限额。三条守卫 + NEUTER 实证(摘掉重试 → 两条重试守卫红,`no_matches` 那条正确保持绿)。
+
+- **★ 依赖以「拷贝」形式安装,会让源码守卫全绿而生产带病(charter「导出产物是第一等验收目标」的依赖边界变体)。** `tofu_search` 此前是 site-packages 下的**实体拷贝**,与源码树**同报 0.5.2** 却差 30+ 个 `.py` —— **版本号这个最顺手的判据恰好在积极地撒谎**。今天的症状是响的(新函数 `AttributeError`);**危险方向是静默的**:源码树修好一个 bug、拷贝仍旧,则该仓所有守卫全绿而生产跑旧码。取证(AST 结构比对 + 剥离 `logger.*`)确认 **site-packages 独有文件 = 0、独有逻辑 = 0**(14 个 differ 全是源码树**新增**的日志与 ASCII 化),方向单向 → 切 `pip install -e`。**守卫必须双向**:`tofu_search.__file__` 落在源码树内 **且** site-packages 无实体 `tofu_search/` 目录 —— 只守前者,将来一次不带 `-e` 的安装会让两者共存,谁生效取决于 `sys.path` 顺序,而 `__file__` 断言可能仍然通过。
+  - 顺带实测损失:那 14 个文件的差异**全是可观测性改进**,即**这半年 tofu-search 侧所有日志增强在 chatui 生产里一行都没生效**,排障时看到的是半年前的日志密度。
+
+- **live 测试的分级:** 三条联网断言从 `unit` 改标 `slow`(此前跑在 `make test-unit`/CI 里,一次限流就随机变红,而随机红等于没有守卫),并加**只对 transport 失败**跳过的闸 —— 探针是一次结果已知的廉价请求,**绝不因「命中率不够」或「重合度过高」而跳过**,否则守卫会恰好在检索真坏掉时安静下来。
+
+- **诚实分账:** tofu-search 的 `test_mcp_server_smoke.py` 7 条红**与本轮零相关** —— 兄弟正在 `registry.py` 未提交地加 `DOMAIN_META`(+180 行,HEAD 里 `grep -c` = 0),而我的 `arxiv.py` 对 `registry`/`DOMAIN_META` 命中 **0**,按纪律未修、未提交他人在途文件。两仓各自 `git add` 后做计数断言(2 / 4)才提交;`requirements.txt` 的 tofu-search 0.5.2 floor 是兄弟改动,已排除出我的 commit。
+
+### 2026-07-28(续8) — kimi-k3 卡片「成功率 24%」排查定案:**外部租户挤爆共享 Moonshot 项目 TPM,卡片把每次 429 重试记为错误**;owner 复核推翻我两处归因后开三张修复票(纯诊断,零产品码;票 `pt_47594accfe654410` / `pt_1a72b708098d446f` / `pt_69e9d6038c9344dc`)
+
+- **最终归因(实测闭环):** 2026-07-28 10:11:47 起,sankuai 网关上游 Moonshot 项目(`org-ad4041fa…/proj-330e2da…/ak-etdrwtdnxeh111d51wz1`,331 条 429 报文三维度全一致)**50M TPM 被顶格**;本地 CacheStats 实测峰值仅 **1.98M tok/min(约 4%)**,96% 是共享该 ak 的其他租户。三把 sankuai key(`200338…/203132…/220806…`)在上游是同一把 ak,**换 key = 同一检票口换队伍**。至 11:33 已 782+ 次 429 且仍在加速(10 分钟桶 40→631),单任务重试最高 **cycle #19**。真实口径(key_stats.json):**9,122+ 成功 / 116 真失败** —— 24% 是「尝试级」失败率被重试稀释,不是模型病了。
+- **★ owner 复核推翻我的两处归因,纪律存档:** ①我第一版写「我们把管子顶满了、该本地 TPM 节流」——owner 用 CacheStats 算出 2M/50M,**本地节流对 96% 的外部水位无效**,方向性错误;②我第二版把 `sankuai_key_1` 的 `exhausted` 归给「共享争抢下的配额误判」——owner 拿日志铁证(app.log 行 **134381-134383**,11:10:34):是**翻译路径**(`inc-translate-db675c13`)在 **qwen3.5-plus** 上吃 Aliyun `insufficient_quota`,与 Moonshot/kimi/TPM 争抢**零关系**,分类器做的是对的事(qwen 真欠费)。**判据:熔断/事故归因必须落到具体日志行,不得凭机制相似就拼接因果。**
+- **★ owner 顺藤摸到的结构性真缺陷(比我的版本大一号,票 `pt_69e9d6038c9344dc` 优先级最高):** sankuai 一把 key 代理多家上游厂商(kimi→Moonshot,qwen→Aliyun),而熔断**按 key 不按厂商** —— 阿里 qwen 欠费把同 key 的 Moonshot kimi 连坐;且执行不一致:11:19:42 与 11:32:59 该「已禁用」key 照样被派发 kimi 请求。**范围过宽 + 拦不住,两头都错。** owner 拍板:不手动复位 key_1(kimi 流量实际未被拦;qwen 真欠费,明日自然翻篇)。
+- **与问候语事故(`pt_60b98556a2304b60`)的时间关系(已实测,勿再传「第二幕」):** 仅重叠 —— 429 起点 10:11 落在问候语窗口(09:55–10:59)内,但问候语结束后 429 反而加速(11:2x 桶 631),**不是它的尾巴**。
+- **三张票(owner 批准开工,约束已写入票面):** ①`pt_47594accfe654410` 争抢失败不计入健康成功率/不喂连击熔断——窄模式(`project`+`TPM rate limit` 双特征)识别 `is_shared_contention`,落 `llm_errors.py` / `slot.py:record_error` / `api.py` 两循环 / `dispatch_stats.aggregate_model_health` / `key_stats.js` 独立「争抢」chip;②`pt_1a72b708098d446f` 项目级统一退避+抖动——per-(provider,model) 争抢状态(≤60s 上限让位 fallback、抖动防雷群),替代 0.5s 换 key 空转,新 HUD reason token 必须与 `test_swarm_retry_phase_i18n` 期望集合同一 commit(charter 既有警告);③`pt_69e9d6038c9344dc` 熔断/配额状态 per-key → per-(key, 上游厂商/模型),派发与 `is_key_enabled` 判定收敛同粒度。
+
+### 2026-07-28(续7) — 「SUSPICIOUS COMPLETION 只报警不拦截」根修:**检测早就看见了,但检测和持久化之间从没接过线**(epic `pt_473309109ace4240` done;commit `48afcc9b`,2 文件 +319/-0;新守卫 **8/8**,**NEUTER×2 各自精确咬**,干净 committed worktree **18/18**)
+
+- **事故回放(已被前一轮调查坐实,本轮只修):** 2026-07-28 09:51–10:45,sankuai 网关对全部 Opus 5 请求间歇返回同一句 29 字符 `Hi! How can I help you today?` + `finish_reason=stop`(68 次,都带真 `M-TraceId`)。花了 N 轮干真活的任务,**终结轮**被这句问候顶掉,而 `_finalize_and_emit_done` 持久化的是 `task['content']`(只有最后一轮的 29 字符)——于是整段累积成果被覆盖,用户就看到一句问候。样本 `ms40kfqq` 曼谷机票:2×`searchFlights` 各 195KB + `run_command` 解析,全没了。
+- **根因不是「没检测」,是「检测白检测」。** `_check_suspicious_completion` 的 `short_content_after_tool_calls(<50chars)` **当天报了警 54 次** —— 但它只有 `logger.warning`,随后 finalize 照常把 `task['content']` 落库。**检测命中时,没有任何机制阻止覆盖。** 这是「只报警不关门的闸」家族在持久化层的又一个实例(与 `conversations.js:1588` 的 len 检查同款)。
+- **修法 = 补上「漏网之后不覆盖」这道防线,而不是去拦上游。** 上游那张票(`pt_60b98556a2304b60`)管「尽量拦住别进来」,本票管「拦漏了也别覆盖」——两道防线独立成立。落点是 `_maybe_preserve_accumulated_on_suspicion()`:当终结轮是「stop + 有工具历史 + content<50」且**能恢复出实质内容**时,用各工具轮上逐字保留的 `assistantContent`(那是 `_discard_pretool_prose` 清累加器时特意留在工具轮上的过程性产出)重建交付内容,而不是把 29 字符残汤端给用户。
+- **★ 关键设计判断:恢复源不是 `task['content']`,是工具轮上的 `assistantContent` 快照。** 我一度以为 `_discard_pretool_prose` 清零累加器后过程文本就丢了 —— 读了 `tool_dispatch/_parse.py` 才确认每轮的散文被**逐字**打在工具轮的 `assistantContent` 上(UI / Continue 重放都靠它)。所以拦截不是「找回不存在的东西」,是「把已存在但没被当成交付物的东西扶正」。**先想清楚恢复源真实存在,再写拦截,否则就是拿空气盖空气。**
+- **五道闸各自钉一条「不得误伤」边界(每条都有补集测试):** 仅 `stop` / 有工具调用 / content<50(与检测器同阈值)/ 恢复出的叙述必须够分量(>80 字符,否则真短回答如「好的。」会被误判)/ 未中止。补集:正常长回答**逐字节不动**——拦截不得碰它。
+- **接线位置是实测定的,不是拍的:** 必须跑在 fallback/synthesis(可能合法填空)**之后**、pre-emit conv sync 与 done 事件构建**之前** —— 后两者都读 `task['content']`,拦晚了残汤照样进库进客户端。守卫用 **AST 断言真实 `Call` 节点**(不是注释/docstring 里有这个名字),并断言它在 `_sync_result_to_conversation` 之前 —— 这是 charter「把这行调用删掉,守卫会红吗?」的直接兑现。
+- **NEUTER×2 各咬各的:** ①摘掉接线调用 → 只有「接线存在」那条红;②把 helper 掏成 `return False` → 只有「恢复行为」那条红。两发都先 `ast.parse` 确认注入合法(charter:NEUTER 必须先进运行路径)。
+- **诚实分账:** `test_finalize_user_msg_id.py::test_vu_subtask_inherits_parent_user_msg_id` 在 sibling 环里红 —— A/B 实证(临时换成 HEAD 版 `autopilot.py`)**同样红**,确认是预存在的守卫腐烂(硬编码 `<=15` 行阈值 vs 注释增长),与本轮零相关;且当时 `autopilot.py` 还带着兄弟未提交的 11 行,按纪律未动、未扫进 commit。共享 HEAD:`git add` 后计数断言 **=2** 才提交。
 
 
 ### 2026-07-28 — `rm -rf /tmp/wt_fill` 被「危险模式」恒拒根修:**第一代 blunt regex 短路了第二代参数解析守卫,而解析守卫早就实现了用户要的「两段路径可删」规则**(owner 截图报障「这是什么 dangerous pattern?tmp 两段路径应该可删,放宽一点」;commit `46c1bb70`,7 文件 +284/-10;新套件 **34/34**,**NEUTER×3 各自精确咬**,干净 committed worktree **136/136**)

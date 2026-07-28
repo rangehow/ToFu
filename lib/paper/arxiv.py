@@ -31,6 +31,26 @@ _ARXIV_TITLE_RETRY_SLEEP = 1.5
 _ARXIV_SEARCH_RETRIES = 3
 _ARXIV_SEARCH_RETRY_SLEEP = 3.0
 
+# ★ `search_arxiv` takes FREE TEXT ONLY. These markers mean the caller already
+# built arXiv query syntax, and feeding that here is a SILENT corruption: the
+# free-text path sanitizes its input (correct for terms, destructive for built
+# syntax), so `(ti:predictive OR ti:delta) AND all:"KV cache compression"`
+# became `all:ti predictive OR ti delta AND all KV cache compression` and arXiv
+# answered a KV-cache query with TITANIUM ALLOY papers — bare `ti` matched
+# "Ti". No exception, no empty result, just five confidently wrong papers.
+#
+# One entry point cannot accept both "terms" and "a built query": whichever
+# shape it was not written for gets mangled without a signal. So this raises
+# instead of best-effort cleaning. Callers with structural legs (the novelty
+# gate) must use `tofu_search.search.vertical.arxiv.search_by_query`, which
+# takes identity/domain as PARAMETERS and owns the construction.
+_FIELDED_SYNTAX_RE = re.compile(
+    r'(?:\b(?:ti|abs|au|cat|jr|rn|id|all)\s*:)|(?:\s(?:AND|OR|ANDNOT)\s)')
+
+
+class ArxivQuerySyntaxError(ValueError):
+    """Raised when built arXiv syntax is passed to the free-text entry point."""
+
 
 def _extract_arxiv_id(url_or_id):
     """Extract arXiv paper ID from various URL formats.
@@ -201,103 +221,93 @@ def _rerank_by_title(query, results):
 
 
 def search_arxiv(query, max_results=10):
-    """Search arXiv by free-text title/keyword query via the public Atom API.
+    """Search arXiv by free-text query. Thin adapter over ``tofu_search``.
+
+    ★ The arXiv HTTP client and Atom parsing live in
+    ``tofu_search.search.vertical.arxiv`` — this function does NOT own a second
+    copy of them. It contributes only the two things that are genuinely local
+    policy: retry/backoff for arXiv's aggressive 429s, and the title re-rank.
+
+    Retry is driven by the shared helper's ``outcome`` field, which
+    distinguishes "the query ran and matched nothing" (``no_matches`` — a real
+    answer, do not retry) from "the request failed" (``request_failed`` — retry
+    with backoff). A bare empty list cannot express that difference, and
+    retrying a legitimate zero would just burn the rate limit.
 
     Args:
         query: Free-text query (paper title, keywords, author names).
+            MUST NOT contain arXiv field syntax (``ti:`` / ``all:`` / ``AND``
+            …) — that raises :class:`ArxivQuerySyntaxError`. A caller with
+            identity/domain legs wants
+            ``tofu_search.search.vertical.arxiv.search_by_query`` instead.
         max_results: Maximum number of candidate papers to return (capped at 25).
 
     Returns:
         A list of dicts, each with keys:
             arxiv_id, title, authors (list[str]), summary, published (YYYY-MM-DD),
             primary_category, pdf_url, abs_url.
-        Returns an empty list on any failure (logged).
+        Returns an empty list when nothing matched or every attempt failed
+        (always logged).
+
+    Raises:
+        ArxivQuerySyntaxError: the query contains built arXiv field syntax.
     """
+    from tofu_search.search.vertical import arxiv as ts_arxiv
+
     query = (query or '').strip()
     if not query:
         return []
+
+    # Fail LOUDLY rather than mangling. The alternative (sanitize and proceed)
+    # is what returned titanium-alloy papers for a KV-cache query with no error.
+    if _FIELDED_SYNTAX_RE.search(query):
+        raise ArxivQuerySyntaxError(
+            f'search_arxiv() takes FREE TEXT, got built arXiv syntax: {query[:120]!r}. '
+            'Sanitizing it here would strip the field structure and silently '
+            'return wrong papers. Use '
+            'tofu_search.search.vertical.arxiv.search_by_query(identity_terms, '
+            'domain_terms, field=...) to pass legs as parameters instead.')
 
     max_results = max(1, min(int(max_results or 10), 25))
     # Over-fetch so the title re-rank has a deeper pool to pull the obvious
     # match up from (arXiv often buries it past the naive top-N).
     fetch_n = min(max_results * 2 + 5, 50)
-    params = (
-        f'search_query={quote("all:" + query)}'
-        f'&start=0&max_results={fetch_n}'
-        f'&sortBy=relevance&sortOrder=descending'
-    )
-    url = f'{_ARXIV_API_URL}?{params}'
 
-    resp = None
+    res = None
     for attempt in range(1, _ARXIV_SEARCH_RETRIES + 1):
-        try:
-            resp = http_get(url, timeout=20,
-                            headers={'User-Agent': 'Mozilla/5.0 (compatible; TofuBot/1.0)'})
-            resp.raise_for_status()
+        # Free-text search: every token is a query term, and the domain leg is
+        # omitted (this entry point has no notion of a separate field
+        # constraint — callers that DO, like the novelty gate, build the fielded
+        # query themselves and call the shared helper directly).
+        res = ts_arxiv.search_by_query(query, max_results=fetch_n)
+        if res.get('outcome') != 'request_failed':
             if attempt > 1:
                 logger.info('[Paper:arXiv:Search] recovered for %.80s on attempt %d',
                             query, attempt)
             break
-        except Exception as e:
-            # Transient (429 rate-limit / 5xx / timeout) → back off and retry;
-            # a bare empty return here is what silently starves harvest.
-            status = getattr(getattr(e, 'response', None), 'status_code', None)
-            transient = (status in (429, 500, 502, 503, 504)
-                         or 'timed out' in str(e).lower()
-                         or 'timeout' in type(e).__name__.lower())
-            if attempt < _ARXIV_SEARCH_RETRIES and transient:
-                sleep_s = _ARXIV_SEARCH_RETRY_SLEEP * attempt  # linear backoff
-                logger.warning('[Paper:arXiv:Search] transient failure for %.80s '
-                               '(attempt %d/%d, status=%s): %s — retrying in %.1fs',
-                               query, attempt, _ARXIV_SEARCH_RETRIES, status, e, sleep_s)
-                time.sleep(sleep_s)
-                continue
-            logger.warning('[Paper:arXiv:Search] Query failed for %.120s: %s', query, e)
-            return []
-    if resp is None:
-        return []
-
-    try:
-        root = ET.fromstring(resp.content)
-    except ET.ParseError as e:
-        logger.warning('[Paper:arXiv:Search] Atom parse failed for %.120s: %s', query, e)
-        return []
-
-    results = []
-    for entry in root.findall('atom:entry', _ATOM_NS):
-        id_el = entry.find('atom:id', _ATOM_NS)
-        raw_id = (id_el.text or '').strip() if id_el is not None else ''
-        arxiv_id = _extract_arxiv_id(raw_id)
-        if not arxiv_id:
-            # Atom <id> is like http://arxiv.org/abs/2301.12345v2
-            m = re.search(r'/abs/([^\s]+?)(?:v\d+)?$', raw_id)
-            arxiv_id = m.group(1) if m else None
-        if not arxiv_id:
+        # Transient → back off and retry; a bare empty return here is what
+        # silently starves harvest / novelty retrieval / recommend.
+        if attempt < _ARXIV_SEARCH_RETRIES:
+            sleep_s = _ARXIV_SEARCH_RETRY_SLEEP * attempt  # linear backoff
+            logger.warning('[Paper:arXiv:Search] transient failure for %.80s '
+                           '(attempt %d/%d): %s — retrying in %.1fs',
+                           query, attempt, _ARXIV_SEARCH_RETRIES,
+                           res.get('error'), sleep_s)
+            time.sleep(sleep_s)
             continue
+        logger.warning('[Paper:arXiv:Search] Query failed for %.120s: %s',
+                       query, res.get('error'))
+        return []
 
-        title_el = entry.find('atom:title', _ATOM_NS)
-        summary_el = entry.find('atom:summary', _ATOM_NS)
-        published_el = entry.find('atom:published', _ATOM_NS)
-        cat_el = entry.find(
-            '{http://arxiv.org/schemas/atom}primary_category')
+    if not res or not res.get('ok'):
+        return []
+    if res.get('outcome') == 'no_matches':
+        # A real answer, not a failure — log it as such so a genuinely empty
+        # field is never mistaken for a broken query.
+        logger.info('[Paper:arXiv:Search] 0 results for %.120s (query ran clean)',
+                    query)
+        return []
 
-        authors = [
-            _strip_arxiv_text(a.findtext('atom:name', default='', namespaces=_ATOM_NS))
-            for a in entry.findall('atom:author', _ATOM_NS)
-        ]
-        authors = [a for a in authors if a]
-
-        results.append({
-            'arxiv_id': arxiv_id,
-            'title': _strip_arxiv_text(title_el.text if title_el is not None else ''),
-            'authors': authors,
-            'summary': _strip_arxiv_text(summary_el.text if summary_el is not None else ''),
-            'published': ((published_el.text or '')[:10] if published_el is not None else ''),
-            'primary_category': (cat_el.get('term') if cat_el is not None else ''),
-            'pdf_url': f'https://arxiv.org/pdf/{arxiv_id}.pdf',
-            'abs_url': f'https://arxiv.org/abs/{arxiv_id}',
-        })
-
-    results = _rerank_by_title(query, results)[:max_results]
+    results = _rerank_by_title(query, res['papers'])[:max_results]
     logger.info('[Paper:arXiv:Search] %d results for %.120s', len(results), query)
     return results

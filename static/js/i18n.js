@@ -2116,7 +2116,6 @@ var _i18n = {
   'paper.qaInputPlaceholder': { zh: '就本论文提一个问题…', en: 'Ask a question about this paper…' },
   'paper.qaError': { zh: '出错', en: 'Error' },
   'paper.qaExpired': { zh: '问答任务已过期，请重试。', en: 'Q&A task expired. Please ask again.' },
-  'paper.qaThinking': { zh: '正在思考与检索…', en: 'Thinking & searching…' },
   'paper.fitWidth': { zh: '适应宽度', en: 'Fit to width' },
   'paper.zoomOut': { zh: '缩小', en: 'Zoom out' },
   'paper.zoomIn': { zh: '放大', en: 'Zoom in' },
@@ -2672,7 +2671,6 @@ var _i18n = {
   // SSE event + streaming_ui.js data-zone="fallback"). NOT a toast.
   'stream.fallback.banner': { zh: '主模型请求失败，已自动切换', en: 'Primary model failed — auto-switched' },
   'stream.fallback.bannerTip': { zh: '原模型 {from} 失败，已回退到 {to}\n原因：{reason}', en: 'Original model {from} failed, fell back to {to}\nReason: {reason}' },
-  'stream.fallback.reasonLabel': { zh: '原因', en: 'Reason' },
   'stream.phase.waiting': { zh: '等待中…', en: 'Waiting…' },
   // Backend-emitted phase.detail localizations. Each corresponds to a
   // `detailKey` shipped alongside a legacy English `detail` fallback so

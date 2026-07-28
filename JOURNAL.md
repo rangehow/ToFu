@@ -1,6 +1,19 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-28(续6) — 本机控制「按用户视角复审」:**合并让界面变小了,但还没变清楚**;四个缺陷里最严重的一个是我自己刚修掉的老 bug换了层皮(commit `5d79a0dd`;守卫 18 → **26/26**,**NEUTER×3 各自精确咬**,干净 committed worktree **69/69**)
+
+- **★ 缺陷 1(最严重):开关邀请了一次注定无效的点击 —— 这正是本轮开工时要根除的那个 bug,只是换了个更好看的壳。** 什么都没连接时,用户**照样能把能力开关打成 ON**;而 `lib/tools/registry/_build.py` 对未连接的桥返回 `[]`,于是开关亮着、AI 一个工具都拿不到。**我把「盲翻开关」搬进了一个漂亮的 modal,却没有解决「亮着但无效」这件事本身。** 现改为:未连接时开关**不可操作**并在 hover 上给出原因;连接成功后实时轮询会在一拍之内自动解禁,所以**不会变成死路**。
+- **缺陷 2:两行从没说过「开了之后 AI 能干什么」。** 「浏览器标签页」「这台电脑」这两个标题**不足以让用户判断自己在授予什么** —— 这是要交出浏览器会话与整台机器的访问权。现在每行一句**具体动作**(不是工具名,用户从不输入那些)。**只给一句,不给清单** —— 列全部工具就又变回本次合并要消除的「所有可能路径都摆出来」。
+- **缺陷 3:权限说明被显示在根本照做不了的地方。** 那句话讲的是**托盘菜单**里的 Permissions 子菜单,却无条件渲染 —— 包括给那些**什么都还没装**的远端/源码用户看。于是在唯一那条真实下一步动作旁边,多了一条**无法执行的指令**。现按 tray/connected 分流。
+- **缺陷 4:19 条死 i18n 字符串。** `browser.title/desc/step*/verify*` 等由**我这次删掉的 `#browserModal`** 渲染;另有 4 条(`aiFeatures/listTabs/readTab/executeJs`)**在此之前就零渲染点**。**用户永远看不到的字典条目读起来却像是已上线的引导**,是纯维护陷阱,已删。
+- **★ 方法论(本轮最值钱一条,charter「扫描类守卫必须先验证扫描面」的又一次兑现):我靠肉眼数出「4 条死字符串」,而新写的守卫把扫描面打印出来后报的是 19 条。** 差了近 5 倍。**先打印扫描面、再写断言**,这一步直接决定了这次是修掉 4 条还是 19 条。
+- **守卫全部断言「用户能感知的结果」:** 开关不可操作且有原因 / 每行有各自不同的能力说明 / 权限说明只在托盘可达时出现 / 不存在「声明了却没有渲染点」的 local·browser 键。**补集同时写死**(已连接的能力**必须**可开、托盘态**必须**显示权限说明),否则「把所有开关都禁掉」「把说明整段删掉」也能让套件变绿。
+- **NEUTER×3 各咬各的:** ①解除开关门控 → 2 红;②清空能力说明 → 2 红;③权限说明无条件显示 → 2 红。
+- **★ 一次 NEUTER 因超时被中断,而恢复语句没跑到 —— 生产码带着 NEUTER 留在树上。** 我在下一步**先 grep 三处生产标记确认状态**才继续,发现 `perm.style.display` 那处仍是被中和的版本并立即恢复。**判据:NEUTER 回合结束后必须显式验证生产码已还原,不能假定「命令跑完了 = 恢复了」** —— 超时会把 `cp` 恢复那半截一起杀掉。
+- **诚实分账:** `globals.generated.d.ts` 在脏树上仍红,A/B 实证(单独还原兄弟未提交的 `ui/streaming_ui.js` → 立即报 `OK: 104 symbols`)确认**唯一成因是兄弟的在途改动**,其文件已原样放回;干净 committed worktree 上该闸 **绿**。另:我写的 CSS(`lc-cap-about` / `lc-switch-off`)被兄弟的 commit `4fc04360` 顺带扫入并已落地,内容正确,故本批未重复提交。
+
+
 ### 2026-07-28 — 真实浏览器覆盖面扩张:18 个零覆盖面板铺开 + 抓到一处死 onclick;**而我的守卫第一版对 settings 整个面板层空转,是 NEUTER 而非评审发现的**(epic `pt_de6b74141e3141a4` 收口;commit `ffd0ebff`,2 文件 +238/-8;新套件 **6/6 / 29s**,**NEUTER×5 全咬**,visual 全环 **40 → 46 passed 零红**,干净 committed worktree **6/6**)
 
 - **★ 本轮最值钱的不是新增的覆盖,而是我第一版守卫的失效形态:断言写对了、驱动的入口也对,但**观测窗口**开错了,于是整个 settings 面板层无覆盖而套件全绿。**

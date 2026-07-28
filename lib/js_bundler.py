@@ -364,6 +364,14 @@ JS_DIR = os.path.join(BASE_DIR, 'static', 'js')
 _BUILT_BUNDLE_RE = re.compile(
     r'^(?:(?:bundle|feature)-[0-9a-f]{8}|i18n-(?:zh|en)-[0-9a-f]{8})\.js$')
 
+# How long a built artifact is immune to another process's cleanup (seconds).
+# Covers the longest realistic serve overlap: a browser holding an old
+# index.html (bfcache / long-lived tab / caching proxy) plus an i18n pack
+# fetch. 2h by default so an hourly deploy cadence can never 404 an in-flight
+# page; 0 restores the pre-grace behaviour (keep-set only).
+_BUILT_ARTIFACT_GRACE_S = int(
+    os.environ.get('TOFU_BUNDLE_ARTIFACT_GRACE_S', '7200'))
+
 # ── Load order MUST match index.html (dependencies flow top → bottom) ──
 _BUNDLE_FILES = [
     'i18n.js',         # MUST be first — t() is used by all other modules
@@ -520,6 +528,19 @@ _BUNDLE_FILES = [
     # core/conversations.js so its two call sites inside
     # loadConversationMessages still resolve the bare name at runtime.
     'core/conv_image_hydrate.js',
+    # Cold-boot cache-first sidebar paint extracted 2026-07-28 from
+    # core/conversations.js (pt_3879f00e sub-part 2, slice 6):
+    # hydrateSidebarFromCache. Reads ConvCache (getSidebarList /
+    # getAllMeta), seeds `conversations` with lightweight shells before
+    # any server round-trip so first paint has zero network dependency.
+    # Called ONCE from main.js's bootstrap. Load BEFORE
+    # core/conversations.js so main.js's bare-name call resolves via
+    # bundle-level window scope; the leaf itself calls `_serverConvCount`
+    # (still in conversations.js), `_applySettingsToConv`,
+    # `_startPendingSyncPolling` / `_flushPendingSyncs`, `_convSorter`,
+    # `renderConversationList` — all resolved AT CALL TIME via bundle
+    # scope, so the leaf-before-conversations order is safe.
+    'core/conv_hydrate_cache.js',
     'core/conversations.js',
     # Shared SSE fetch-response read/decode/buffer loop (readSSEStream) —
     # extracted 2026-07-11 from branch.js / paper-reader.js / ui/sse_pipeline.js.
@@ -958,7 +979,7 @@ def _source_max_mtime():
 
 
 def _clean_old_bundles(keep_core, keep_feature, keep_packs=()):
-    """Remove stale built bundles (keep the current set).
+    """Remove stale built bundles (keep the current set + anything YOUNG).
 
     Matches ONLY the content-hashed output filenames — ``bundle-<hash>.js`` /
     ``feature-<hash>.js`` / ``i18n-<lang>-<hash>.js`` — so a SOURCE file like
@@ -966,17 +987,38 @@ def _clean_old_bundles(keep_core, keep_feature, keep_packs=()):
     deleted. (Deleting feature-loader.js would silently break the lazy loader.)
     ``keep_packs`` is the CURRENT i18n pack filenames; any other pack-shaped
     artifact is stale.
+
+    ★ CROSS-PROCESS AGE GRACE: an artifact younger than
+    ``_BUILT_ARTIFACT_GRACE_S`` is NEVER deleted, whatever the keep-set says.
+    The keep-set is per-process, but the directory is shared — a second
+    builder (an xdist worker, a supervisor-restart overlap, a sibling agent
+    running the bundler tests) computes its own keep-set and would delete the
+    bundle/pack THIS process is currently serving: an old index.html still
+    references it, and an ``i18n-<lang>-<hash>.js`` has no stale-resolver
+    heal — its 404 blanks the whole UI through t()'s silent fallback. The
+    build lock serializes builder-vs-builder, never builder-vs-reader, so the
+    only safe reap clock is the filesystem's own mtime (process-independent).
+    The grace bounds the disk the same way a TTL does: stale artifacts are
+    still reaped, just never while they can still be in anyone's serve path.
     """
     keep = {keep_core, keep_feature, *keep_packs}
+    now = time.time()
     try:
         for f in os.listdir(JS_DIR):
             if f in keep:
                 continue
-            if _BUILT_BUNDLE_RE.match(f):
-                try:
-                    os.remove(os.path.join(JS_DIR, f))
-                except OSError as e:
-                    logger.debug('[Bundle] Failed to remove old bundle %s: %s', f, e)
+            if not _BUILT_BUNDLE_RE.match(f):
+                continue
+            path = os.path.join(JS_DIR, f)
+            try:
+                if now - os.path.getmtime(path) < _BUILT_ARTIFACT_GRACE_S:
+                    continue  # another process may have just published + be serving this
+            except OSError:
+                continue
+            try:
+                os.remove(path)
+            except OSError as e:
+                logger.debug('[Bundle] Failed to remove old bundle %s: %s', f, e)
     except OSError as e:
         logger.debug('Failed to clean old bundles: %s', e)
 

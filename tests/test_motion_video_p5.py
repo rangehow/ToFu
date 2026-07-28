@@ -13,7 +13,7 @@ Load-bearing behaviours under test:
     a composition the gate rejects);
   * the per-scene token budget (拍板 #3) stops the loop;
   * the narrow toolset really is narrow (no render/concat/mux reachable);
-  * authoring is OFF by default and opt-in per job / per env;
+  * authoring is ON by default, with a per-job / per-env opt-OUT;
   * the engine's compose stage skips re-authoring a composition already on
     disk with a matching duration (resume — no re-spent agent loop).
 
@@ -211,13 +211,29 @@ def test_unknown_tool_is_rejected_not_crashing(monkeypatch, tmp_path):
 #  Opt-in gating
 # ══════════════════════════════════════════════════════════
 
-def test_scene_author_off_by_default(monkeypatch):
+def test_scene_author_on_by_default(monkeypatch):
+    """Authoring is the DEFAULT deliverable (owner 2026-07-27).
+
+    This assertion was inverted on purpose: it used to pin "off by default",
+    which is the behaviour that made every film a deck of plain template
+    cards. The template is the fallback, not the default — see
+    tests/test_motion_video_visual_quality.py for the entry-point coverage
+    that proves EVERY spawn site inherits this.
+    """
     monkeypatch.delenv('TOFU_MOTION_SCENE_AUTHOR', raising=False)
+    assert sa.scene_author_enabled({}) is True
+    assert sa.scene_author_enabled(None) is True
+
+
+def test_scene_author_env_kill_switch_forces_it_off(monkeypatch):
+    """Cost control: one agent loop per scene must stay switchable off."""
+    monkeypatch.setenv('TOFU_MOTION_SCENE_AUTHOR', '0')
     assert sa.scene_author_enabled({}) is False
-    assert sa.scene_author_enabled(None) is False
+    # An explicit per-job choice still outranks the fleet default.
+    assert sa.scene_author_enabled({'scene_author': True}) is True
 
 
-def test_scene_author_opt_in_per_job_and_env(monkeypatch):
+def test_scene_author_per_job_choice_wins_over_the_env(monkeypatch):
     monkeypatch.delenv('TOFU_MOTION_SCENE_AUTHOR', raising=False)
     assert sa.scene_author_enabled({'scene_author': True}) is True
     # Per-job False wins even when the env switches it on globally.

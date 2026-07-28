@@ -1162,6 +1162,16 @@ function _stopScanPoll() {
 
 
 function _updateProjectUI() {
+  /* ★ Every projectState mutation funnels through here to repaint the
+   *   project bar — attach / clear / rollback / restore / remote-state —
+   *   with the state already final. So this is THE seam that re-resolves
+   *   the Project-Brain surfaces (collab bar + an open Brain panel), which
+   *   key on getActiveConv()/projectState: sprinkling the refresh at
+   *   individual callers left the same stale-bar window on the clear and
+   *   attach paths that the newChat-only fix closed. Cheap: presenceRefresh
+   *   renders are fingerprint-gated and its refetch is debounced. */
+  if (typeof presenceRefresh === 'function') presenceRefresh();
+  if (typeof projectBrainRefresh === 'function') projectBrainRefresh();
   const bar = document.getElementById("projectBar");
   const badge = document.getElementById("projectBadge");
   const toggle = document.getElementById("projectToggle");

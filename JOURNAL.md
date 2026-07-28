@@ -1,6 +1,24 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-28(续) — tint chip 文字对比度收口:**票面给的修法方向是反的,实测把它证伪**(epic `pt_61b79f4351f548cd` done;commit `db3abe8`;套件 **33/33**,**NEUTER×5 全咬**,相邻环 **65/65**,干净 committed worktree **65/65**,线上已提供)
+
+- **先按票面要求重测再动手,底数已变:** 票写 dark 6 / light 24 / tofu 20,实测 **5 / 21 / 17**(`.sr-type-*` 那批已在 `0909bfd` 修掉)。收口后 **0 / 0 / 0**。
+- **★ 票面写的旋钮是反的,而它写得很有说服力。** 票说「6% 太淡,文字和底几乎同色 → 提高 tint 百分比」。实测主簇(`--accent-text` 压 `--accent` 的 tint):
+
+  | tint | 0% | 8% | 12% | 20% | 30% | 50% |
+  |---|---|---|---|---|---|---|
+  | 对比度 | 4.90 | 4.38 | 4.12 | 3.67 | 3.15 | 2.26 |
+
+  **tint 越高对比度越低** —— 因为 tint 把底色**朝文字色相拉**。照票面做会让每一条都更糟。这一发已固化成 NEUTER-1(把 8% 提到 30% → 3 条红),**让错误假设本身变成一条会报警的实验**。
+- **真实根因是两种形状,都不在 tint 百分比上:**
+  - **A. 实心填充上用错了前景 token**(1.59–1.66 那批)。两处把 `--on-accent`(白)压在 `--green` 填充上,`::selection` 把白字压在 25% accent 冲淡层上。**白字还是墨字更好按主题翻转** —— dark 的绿是亮薄荷(白 1.66 / 墨 11.74),light/tofu 的绿被压暗(白 8.59 / 5.60)。故需要**分主题的 `--on-green`**,而不是一个全局常量;`::selection` 改用 `--t1`(唯一保证能压住任何由页面派生的底色的前景)。
+  - **B. 文字 token 当初是压「裸页面」求解的,不是压它实际所在的 chip。** chip 是**更严的约束**,而它从未进入求解。按每个 token **实际遇到的最大 tint**(从 CSS 扫出来,最高 15%,不是我第一轮假定的 8%)重解 21 个值 —— 第一轮只到 43→24,补上真实百分比后才 →0。全程保色相。
+- **守卫补的是一整类盲区:** 此前所有闸都拿 token 压**平面表面**(`--bg..--bg3`),而页面上多数 chip 的底是「页面 + 第三个 token 的冲淡层」。新闸从**发布的 CSS** 派生配对,并在测量前**把透明度合成到页面上** —— 不合成的话 `--red` 压 `--red-bg` 会算出 **1.00**(同色压同色),我早前一版扫描器正因此报出 **125 个幻影失败**。渐变**显式跳过且跳过路径本身被测**,防止将来某次改动开始为它编造一个色标而无人察觉。
+- **★ 一条既有补集在同一批里抓到了我引入的回归,当场证明了它的价值。** 为 chip 压暗 `--danger`/`--success` 后,红绿相互间距掉到 **1.30 / 1.34**,低于 `23d6b54` 定的 1.40 色盲分离下限。改为对 `--success` **同时**满足三个约束(页面 / chip / 分离)后解出。**如果当初只写了正向断言,这次「修可读性」会顺手把色盲可分性破坏掉且无人知道。**
+- **NEUTER×5 全咬,每发先确认改到了文件:** ①提高 tint 百分比(3 红)②还原一个按 chip 求解的文字 token(1 红)③Class-A 规则指回 `--on-accent`(1 红)④合成函数返回裸操作数(4 红)⑤让渐变解析出一个编造色标(4 红)。
+
+
 ### 2026-07-28(续6) — auto-motion 画质根修第二刀:**我上一轮翻的默认值只覆盖了 3 条入口里的 1 条,而漏掉的恰好是用户真会点的那条**(owner 实测抓出;commits `97562fda` + `24f47101`,8 文件 +500;新守卫 **8 条**,**NEUTER×8 全咬**,motion 全环干净 committed worktree **142/142**)
 
 - **★ 缺陷形状 = charter「后端单一真源被前端手抄」的同构体,只是这次副本是「默认值」。** 上一轮我把 `produce_video` 的 `visual_quality` 默认改成 `authored` 就宣布收工。owner 清空 env 后逐条实测:`produce_video → True`、**论文「Video studio」面板 → False**、**`POST /api/v1/motion/videos`(不带字段)→ False**。成因单一:`lib/paper/video_abstract.py:496` 与 `routes/api_v1/motion.py:194` **压根不写 `scene_author` 键**,双双落到 `scene_author_enabled` 自己那句 `Default OFF` 上 —— **我的默认值翻转对真实用户完全不可见**。

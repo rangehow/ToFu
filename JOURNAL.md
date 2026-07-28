@@ -1,6 +1,17 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-28(续) — 浏览器修好之后,把它**当探测器用**:visual 环 28P/12F → **40P/0F**,而新装的 JS 错误捕获**首跑就抓到一个真产品 bug**(commit `2fc2b9af`;新套件 **8/8**,**NEUTER×3 全咬**,相邻记忆环 75/75,collect **11,339** 0 err;epic `pt_f5a6da80a0444ca1` 收口,后续扩张开 `pt_de6b74141e3141a4`)
+
+- **★ 起点是上一轮留下的一句警告,而它被证实了:「长期整体 skip 的测试环等于没有覆盖,不得据其全绿作决策前提」。** `ff0a94f3` 让浏览器能跑之后第一次跑通 visual 全环:**12 failed / 28 passed / 5 skipped**,耗时 7m55s。这 12 条**在此之前一直是 skip**,套件报绿。
+- **12 条全部同源,且根因在测试侧、产品侧是对的。** 报错都是 `Locator.click: Timeout 30000ms` + `<div id="settingsModal" class="modal-overlay open"> intercepts pointer events`。查明:`_maybeAutoOpenSettings`(`main_toolbar_ui.js:496`)在**零 API key** 时自动弹出设置引导 —— 而临时测试服务器恰恰永远零 key,所以这是**正确的产品行为**,是测试从没关过这个弹窗。**修在 `page` fixture 一处收口**,现存 12 条与将来所有 visual 测试同时受益;**明确不用 `click(force=True)`** —— 那会把「弹窗本该关掉」这件事盖掉,下一个被遮挡的元素换个地方重演。
+- **★ 我的第一版收口完全无效,而这是一次有价值的失败:我按「加载完就关」写,实测一字未改地照样 12 红。** 查明打开链路是 **async config fetch → `setTimeout(..., 500)`**,单次关闭跑在定时器**之前**,弹窗随后又开。改成**轮询到遮罩稳定消失**才算数。判据:关一次然后祈祷 ≠ 关掉了;**要断言的是「遮罩确实不在了」这个结果**。
+- **★ 本轮最值钱的发现:全库 `grep -rn "on('pageerror'" tests/` = **0 命中** —— 没有任何测试在听浏览器控制台。** 意味着页面每次启动都抛 `TypeError` 也能全环绿,因为断言只看各测试恰好点名的那几个 DOM 节点。而一个未捕获异常会**中止该脚本剩余部分**,后面的 handler 静默不绑定 —— 正是本项目 JOURNAL 里反复手工重新发现的「点了没反应」那一类。
+- **捕获必须分级,不能计数(这是它能活下来的原因)。** 实测健康应用启动即有 **4 条 console error + 1 条 requestfailed**,所以「零 console 错误」这种闸**开局就红**,只会被人删掉。分级判据:`pageerror` **永远** HARD(未捕获异常没有「正常」的);`console.error` 除白名单外 HARD;`requestfailed` 除 `ERR_ABORTED` 外 HARD。**`ERR_ABORTED` 那条特意查了盘**:`oneko-surprised.png` **文件真实存在**,那是浏览器取消预载而非 404 —— 按 404 报会是一条 charter 反复警告的「措辞精确的假归因」。分级后健康应用 **HARD=0**,故今天就能绿着上线,只在真回归时变红。白名单只 2 条且都写明理由(SSE premature close / poll 回退,均为前端**正确报告**降级)。
+- **★ 首跑就抓到真 bug,而且不是测试自己的问题:`tags.forEach is not a function`。** `_parse_frontmatter` 只认 `tags: [a, b]` 这种带括号写法,但手写记忆文件大量使用 `tags: a, b, c` 裸逗号形式(`_build_frontmatter` 自己**只产出**带括号的,所以这个分歧长期无人察觉)。于是 `tags` 解析成**字符串**,`memory.js:231` 的 `.forEach` 直接抛,卡片渲染成 `memory-card-error`。**实测规模先扫后断:1163 个带 tags 的记忆文件里 6 个中弹(1%)**,数字不大但每一个都是用户看不到的记忆。**修在唯一解析缝**,让 API / 注入 / 搜索一起拿到 `list[str]`,而不是让前端各写一遍防御性兜底;**允许拆分的键收窄成 `tags`/`keywords`** —— 对 `description` 按逗号拆会**损坏真内容**,比这个渲染 bug 严重得多,故补集守卫钉死散文键不得被拆(NEUTER-3 精确红)。
+- **收益兑现:visual 环 40P/0F/5S,耗时 7m55s → 2m55s**(不再有 12 条各自空等 30s 超时)。
+- **覆盖面缺口已量化并开票(`pt_de6b74141e3141a4`),不在本轮做:** `static/js` **157 个模块** / **377 个 jsdom 测试** / 真实浏览器只有 **40 条**,且集中在 chat 三个面;逐面 grep 确认 **9 个顶层面板零浏览器覆盖**(paper/skills/settings/orchestration/artifacts/myday/scheduler/translation/optimizer)。已**干跑实证**「打开面板 → 断言 HARD 错误为 0」这一模式可行(4 个面 11.9s),且它正是抓到本轮 bug 的方式。票里写明纪律:断言结果不断言实现、BENIGN 白名单只减不增且每条须写明理由、**NEUTER 必做**(注入真异常确认转红),否则又是一条绿着空转的守卫。
+
 ### 2026-07-28 — 全量测试体检:11,112 用例 → **161 真失败**,其中只有 **3 条是真 bug**;而我为第 3 条写的行为守卫**连栽四次空转**,最后诚实降级为顺序棘轮(commits `6e41d542` + `e9cb1c43`;干净 HEAD worktree **137/137** + **15/15**)
 
 - **★ 方法论第一刀:先把「真失败」和「并行伪影」分开,否则会去修 28 个不存在的问题。** 并行(`-n 16`)报 **189 failed**,把同一批 ID 串行复跑 → **161 failed / 28 passed**。那 28 条是测试隔离缺陷(共享可变状态),**不是产品 bug**,也不该按产品 bug 排期。收集门先行:**11,112 collected / 0 import error**,所以没有任何失败是「导入炸了」这种廉价形态。

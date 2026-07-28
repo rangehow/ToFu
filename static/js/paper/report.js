@@ -2182,9 +2182,28 @@ function _populatePaperReportModelDropdown(view) {
     grouped[pid].models.push(m);
   }
 
+  /* Order both axes the way the user READS them, via the SAME shared
+   * comparator the toolbar picker uses (_compareModelsByDisplayName,
+   * settings/branding.js): provider sections by provider name, in-section
+   * models by display name (_modelShortName — NOT the raw model_id, which
+   * sorts `yuju-claude-opus-5-evaDaily` under 'y' while rendering as
+   * "Claude Opus 5"). Both pickers read the same _registeredModels, so
+   * routing through one comparator keeps the two lists from ever
+   * disagreeing. Guarded: a stale bundle missing branding.js leaves the
+   * list in arrival order rather than throwing and stranding an empty
+   * dropdown (same rationale as the toolbar picker's isChatModel guard). */
+  var _canSort = (typeof _compareModelsByDisplayName === 'function');
   var pids = Object.keys(grouped);
+  if (_canSort) {
+    pids.sort(function(x, y) {
+      var nx = String((grouped[x] && grouped[x].name) || x);
+      var ny = String((grouped[y] && grouped[y].name) || y);
+      return _compareModelsByDisplayName(nx, ny);
+    });
+  }
   for (var pi = 0; pi < pids.length; pi++) {
     var group = grouped[pids[pi]];
+    if (_canSort) group.models.sort(_compareModelsByDisplayName);
     if (pids.length > 1) {
       var section = document.createElement('div');
       section.className = 'paper-report-model-dropdown-section';

@@ -37,9 +37,9 @@ def _build_search(ctx: ToolContext) -> list[dict]:
     # 'single' is a retired mode kept as a legacy alias for old conversations
     # — it now behaves like 'multi' (the one-shot SEARCH_TOOL_SINGLE schema
     # was removed). Only 'off' yields no search tool.
-    from lib.tools import SEARCH_TOOL_MULTI
+    from lib.tools import build_search_tool
     if ctx.search_mode in ('single', 'multi'):
-        return [SEARCH_TOOL_MULTI]
+        return [build_search_tool()]
     return []
 
 

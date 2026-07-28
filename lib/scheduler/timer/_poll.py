@@ -196,7 +196,7 @@ def _build_poll_tools(tools_config: dict) -> list | None:
             FETCH_URL_TOOL,
             PROJECT_TOOLS,
             READ_FILES_TOOL,
-            SEARCH_TOOL_MULTI,
+            build_search_tool,
         )
 
         tool_list = []
@@ -211,7 +211,7 @@ def _build_poll_tools(tools_config: dict) -> list | None:
         #   runs its check_command for grounding instead.
         search_mode = tools_config.get('searchMode', '')
         if search_mode:
-            tool_list.append(SEARCH_TOOL_MULTI)
+            tool_list.append(build_search_tool())
         if tools_config.get('fetchEnabled', False) or search_mode:
             tool_list.append(FETCH_URL_TOOL)
 

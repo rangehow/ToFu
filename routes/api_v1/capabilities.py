@@ -112,10 +112,10 @@ def _tools_summary() -> list[dict]:
         from lib.tools import (
             BROWSER_TOOLS, CODE_EXEC_TOOL, FETCH_URL_TOOL,
             PROJECT_TOOLS, READ_FILES_TOOL,
-            SEARCH_TOOL_MULTI,
+            build_search_tool,
         )
         groups = {
-            'search': [SEARCH_TOOL_MULTI],
+            'search': [build_search_tool()],
             'fetch': [FETCH_URL_TOOL],
             'project': [READ_FILES_TOOL] + list(PROJECT_TOOLS),
             'code_exec': [CODE_EXEC_TOOL],

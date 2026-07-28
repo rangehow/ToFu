@@ -62,11 +62,106 @@ API_JS = os.path.join(JS_DIR, 'api.js')
 
 # ── Shared helpers ────────────────────────────────────────────────────
 def _strip_comments(src: str) -> str:
-    """Remove /* */ block and // line comments (not a full JS parser — good
-    enough to stop a path/call mentioned in a comment from being counted)."""
-    src = re.sub(r'/\*.*?\*/', '', src, flags=re.DOTALL)
-    src = re.sub(r'//[^\n]*', '', src)
-    return src
+    """Remove /* */ block and // line comments WITHOUT ever treating a comment
+    marker that appears inside a string/template literal — or a ``/*`` that
+    appears inside an already-open ``//`` line comment — as real syntax.
+
+    WHY a single-pass scanner, not two regex subs: the naive
+    ``re.sub(r'/\\*.*?\\*/', …, DOTALL)`` pass ran FIRST and matched the ``/*``
+    inside the *line* comment ``// … /api/paper/* (multipart …)`` (that ``*``
+    is a path wildcard, not a comment closer). It then ate forward to the next
+    real ``*/``, deleting the live ``upload:`` / ``fetchArxivStream:`` entries
+    of the ``paper`` domain in api.js — and Direction-2 then reported those
+    real call sites as "method NOT defined under that domain". Running the
+    line-comment sub first instead is equally wrong in the other direction (a
+    ``//`` inside a block comment would corrupt it). The only correct rule is
+    "whichever comment/string opener comes FIRST wins", which is what this
+    scanner implements.
+    """
+    out = []
+    i, n = 0, len(src)
+    NORMAL, SQ, DQ, TPL, LINE, BLOCK = range(6)
+    state = NORMAL
+    while i < n:
+        c = src[i]
+        nxt = src[i + 1] if i + 1 < n else ''
+        if state == NORMAL:
+            if c == '/' and nxt == '/':
+                state = LINE
+                i += 2
+                continue
+            if c == '/' and nxt == '*':
+                state = BLOCK
+                i += 2
+                continue
+            if c == "'":
+                state = SQ
+                out.append(c)
+                i += 1
+                continue
+            if c == '"':
+                state = DQ
+                out.append(c)
+                i += 1
+                continue
+            if c == '`':
+                state = TPL
+                out.append(c)
+                i += 1
+                continue
+            out.append(c)
+            i += 1
+        elif state == SQ:
+            if c == '\\':
+                out.append(c)
+                if i + 1 < n:
+                    out.append(src[i + 1])
+                i += 2
+                continue
+            out.append(c)
+            i += 1
+            if c == "'":
+                state = NORMAL
+        elif state == DQ:
+            if c == '\\':
+                out.append(c)
+                if i + 1 < n:
+                    out.append(src[i + 1])
+                i += 2
+                continue
+            out.append(c)
+            i += 1
+            if c == '"':
+                state = NORMAL
+        elif state == TPL:
+            # Template literal: no comment processing inside; honour escapes so
+            # an escaped backtick doesn't end it early. ( ${...} interpolation
+            # is not re-scanned for comments — api.js has none containing // or
+            # /* that would be miscounted, and paths are matched elsewhere.)
+            if c == '\\':
+                out.append(c)
+                if i + 1 < n:
+                    out.append(src[i + 1])
+                i += 2
+                continue
+            out.append(c)
+            i += 1
+            if c == '`':
+                state = NORMAL
+        elif state == LINE:
+            if c == '\n':
+                out.append(c)   # keep the newline so line numbers don't shift
+                state = NORMAL
+            i += 1
+        elif state == BLOCK:
+            if c == '*' and nxt == '/':
+                state = NORMAL
+                i += 2
+                continue
+            if c == '\n':
+                out.append(c)   # keep line count stable for any downstream :N
+            i += 1
+    return ''.join(out)
 
 
 def _norm_path(p: str) -> str:

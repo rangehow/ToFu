@@ -46,9 +46,28 @@ RETRY_REASON_KEYS = {
     'Key auto-exhausted (consecutive 429s)': 'stream.retryReason.keyAutoExhausted',
     'Upstream error': 'stream.retryReason.upstreamError',
     'Waiting for model (retry backoff)': 'stream.retryReason.waitingBackoff',
+    'Waiting for model (shared project limit)': 'stream.retryReason.waitingSharedProject',
     'Rate limited (429)': 'stream.retryReason.rateLimited',
     'First byte timeout': 'stream.retryReason.firstByteTimeout',
 }
+
+
+def cooldown_wait_label(causes: set) -> tuple:
+    """(reason token, status_code) for an all-slots-cooling wait — labelled by
+    the ACTUAL cooldown cause, never a hardcoded 限流.
+
+    Precedence: shared-project contention > per-key rate-limit > generic
+    backoff. Contention wins because it is the most actionable truth (the
+    whole (provider, model) family is parked by EXTERNAL saturation, not by
+    anything this key did). The contention token rides status_code 0 so
+    retry_phase_fields takes the reason branch — a 429 status would swallow
+    it into the generic rate-limited detailKey.
+    """
+    if causes and 'contention' in causes:
+        return 'Waiting for model (shared project limit)', 0
+    if causes and 'rate_limit' not in causes:
+        return 'Waiting for model (retry backoff)', 0
+    return 'Waiting for model (rate-limited)', 429
 
 
 def retry_phase_fields(*, model: str, attempt: int, reason: str = '',
@@ -87,4 +106,4 @@ def retry_phase_fields(*, model: str, attempt: int, reason: str = '',
 
 
 __all__ = ['GATEWAY_PREFIXES', 'display_model_name', 'RETRY_REASON_KEYS',
-           'retry_phase_fields']
+           'cooldown_wait_label', 'retry_phase_fields']

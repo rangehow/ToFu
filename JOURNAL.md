@@ -1,5 +1,16 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-28(续12) — 项目级限流统一退避落地(epic `pt_1a72b708098d446f`):**争抢 429 把整族 (provider, model) 一起停车,替代 0.5s 换 key 空转**(新套件 **14/14**,**NEUTER×2 各咬各的**,全环 **124/124**,抖动 flaky 自抓一条)
+
+- **设计(owner 批的约束全兑现):** 争抢 429(`is_shared_contention`,上一票的分类缝)触发 `dispatcher.note_shared_contention(slot)` —— 把**同 (provider_id, model) 的全部 slot** 一起冷却一个**指数升级 + ±25% 抖动**的窗口(2s → 翻倍 → **60s 封顶**;静默一个窗口+30s 宽限后 strike 归零,痊愈的项目不继承昨天的升级)。抖动是雷群闸:没有它,所有被停的 worker 在同一秒醒来又把管子打满。fallback 自然成立 —— 窗口只停一族,其他模型/服务商的 slot 分数有限,picker 直接落地(钉了 `test_fallback_to_other_model`)。
+- **HUD 说真话:** 等待标签收敛进 `retry_i18n.cooldown_wait_label`(争抢 > per-key 限流 > 错误退避),新 token `'Waiting for model (shared project limit)'` → `stream.retryReason.waitingSharedProject` —— **status 必须骑 0 而非 429**,否则 `retry_phase_fields` 的 429 分支会把 token 吞进通用限流键(钉了守卫)。`test_swarm_retry_phase_i18n` 的期望 token 集合同 commit 更新(charter 既有警告)。模型卡片冷却 chip 同步识别 `contention` 原因(`settings.mhReasonContention`)。
+- **★ 上一票的漏网(诚实分账):** `api.py` 有**三个** `RateLimitError` 捕获点,`032777cd` 只接了两个(dispatch_chat / dispatch_stream),**async_dispatch_stream 的第三个没带争抢旗** —— async 路径的争抢 429 仍在污染健康账。本票补齐(旗 + 注册),根因是上一票守卫只驱动了 dispatch_stream 一条路径。**判据:同一异常类的处理点必须 grep 全,守卫至少抽一条走每个循环。**
+- **附带修对一处:** 争抢 429 **不再衰减 `rpm_limit`**(外部饱和给不出「这把 key 慢」的信号,衰减是假教训,恢复要 1.1x 慢慢爬);per-key 真 429 照衰减(补集钉死)。
+- **NEUTER×2 各咬各的:** ①`note_shared_contention` 不冷却任何 slot → 精确红 5 条(族冷却×4 + dispatch 集成),标签/rpm 套件不动;②标签助手摘掉争抢分支 → 精确红 2 条(争抢优先/混合成因),其余标签不动。
+- **★ 自抓 flaky:** 升级断言 `w2 > w1×1.5` 在抖动下是抛硬币(w1 抽到 2.5 上限时 w2 下限 3.0 < 3.75)。修法:升级测试钉住 `random.uniform=1.0` 变确定性(2.0→4.0→…→60 封顶),抖动范围单独成测试(strike-1 带 [1.5,2.5] 且真在抖)。5 连跑稳定。**判据:涉及随机量的断言,先把区间写明白再决定钉死还是放宽。**
+- **分账(预存在红,已交接):** `test_stream_phase_i18n.py` 两条在干净 HEAD 60s 超时 —— 它引用的 `_stream_phase_i18n_harness.js` **从未被提交**(e621d87f 只带了测试没带资产,全库/兄弟 worktree/trash 均搜不到),与本批零相关。已 peer-message 交接给 test-health 票 owner(ms3sl904z633by),给出两条修法。
+- **验收边界:** 已 committed,**线上进程不带修复**(merged ≠ live);重启前争抢 429 仍走 0.5s 空转 + 假「限流排队」标签。
+
 ### 2026-07-28(续·时间线) — 时间线守卫补齐 review view 验证(owner 复核抓出「第 3 条只兑现一半」:测试里 grep 不到一个 review;commit `f7861704`,1 文件 +147/-48;守卫 **4/4**,干净 committed worktree 复验 **4/4**)
 
 - **owner 判据(值得记下):「共用 `_applyReportEvent` 所以自动骑上同一路径」是构造性推断,不是验证** —— 这个项目的历史恰恰是「共用路径但 idPrefix/入口分叉」腐烂的高发区。review view 的容器是 `#paperReviewContent`、生成入口先走 `_resolveReviewVenue` 场馆解析,这条前置链此前零覆盖。

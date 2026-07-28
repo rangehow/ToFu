@@ -7,6 +7,7 @@ best-for-model, etc.).
 
 import json
 import os
+import random
 import threading
 import time
 
@@ -45,6 +46,9 @@ class LLMDispatcher:
         # id → frozenset routing group, merged from config aliases + static
         # MODEL_ALIAS_GROUPS. Rebuilt by _build_alias_index during slot build.
         self._alias_index: dict[str, frozenset] = {}
+        # (provider_id, model) → (strikes, cooled_until) for shared-project
+        # contention (see note_shared_contention).
+        self._contention_strikes: dict = {}
 
     def initialize(self):
         """Build slot pool from env vars + benchmark data. Idempotent."""
@@ -1168,6 +1172,49 @@ class LLMDispatcher:
                 return True
         return False
 
+
+    # ── Shared-project contention (external saturation) ──
+    # A 429 naming a PROJECT-level limit (RateLimitError.is_shared_contention)
+    # means the gateway account's shared pipe is saturated by OTHER tenants —
+    # rotating our own keys is futile (they all terminate at the same
+    # upstream project; measured 2026-07-28: 3 sankuai keys → 1 Moonshot ak).
+    # Instead of the 0.5s-per-slot spin (one task hit 429 cycle #19 in the
+    # incident), the whole (provider, model) family steps back together for
+    # a jittered, escalating window while OTHER models/providers take over.
+    _CONTENTION_BASE_S = 2.0
+    _CONTENTION_CAP_S = 60.0         # never park a model longer than this
+    _CONTENTION_RESET_GRACE_S = 30.0  # quiet window+grace → strikes reset
+
+    def note_shared_contention(self, slot) -> float:
+        """Cool ALL slots of *slot*'s (provider_id, model) for a jittered,
+        escalating window (2s → doubling → 60s cap, ±25% jitter). Returns
+        the window seconds.
+
+        Jitter is the thundering-herd guard: without it every worker parked
+        on the same window wakes in the same second and re-saturates the
+        pipe. Strikes reset after a full quiet window + grace — a healed
+        project must not inherit yesterday's escalation.
+        """
+        key = (slot.provider_id, slot.model)
+        now = time.time()
+        with self._lock:
+            strikes, until = self._contention_strikes.get(key, (0, 0.0))
+            strikes = (strikes + 1
+                       if now < until + self._CONTENTION_RESET_GRACE_S else 1)
+            window = min(self._CONTENTION_CAP_S,
+                         self._CONTENTION_BASE_S * (2 ** (strikes - 1))
+                         * random.uniform(0.75, 1.25))
+            until = now + window
+            self._contention_strikes[key] = (strikes, until)
+            for s in self.slots:
+                if (s.provider_id, s.model) == key:
+                    with s._lock:
+                        s.cooldown_until = until
+                        s.cooldown_reason = 'contention'
+        logger.info('[Dispatch] shared-project contention on %s:%s — family '
+                    'cooled %.1fs (strike %d)',
+                    slot.provider_id, slot.model, window, strikes)
+        return window
 
     def cooling_cause_summary(self, capability: str = 'text',
                               exclude_models=None, exclude_keys=None,

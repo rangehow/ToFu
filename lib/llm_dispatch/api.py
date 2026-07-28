@@ -402,6 +402,12 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
                               is_shared_contention=_is_contention,
                               error=_err_str if _is_quota else '')
             last_err = e
+            if _is_contention:
+                try:
+                    dispatcher.note_shared_contention(slot)
+                except Exception as _nce:
+                    logger.debug('%s note_shared_contention failed: %s',
+                                 log_prefix, _nce)
             if _is_quota:
                 # ★ Persistent billing/quota exhaustion (HTTP 402 or
                 #   429+insufficient_quota). Retrying on this key all day
@@ -1338,14 +1344,11 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
                             exclude_models=state.exclude,
                             exclude_keys=state.exclude_keys,
                             exclude_pairs=state.exclude_pairs)
-                        if _causes and 'rate_limit' not in _causes:
-                            on_retry(attempt=state._429_count,
-                                     reason='Waiting for model (retry backoff)',
-                                     status_code=0)
-                        else:
-                            on_retry(attempt=state._429_count,
-                                     reason='Waiting for model (rate-limited)',
-                                     status_code=429)
+                        from lib.llm_dispatch.retry_i18n import (
+                            cooldown_wait_label)
+                        _reason, _status = cooldown_wait_label(_causes)
+                        on_retry(attempt=state._429_count,
+                                 reason=_reason, status_code=_status)
                     except Exception as _ore:
                         logger.debug('%s on_retry (cooldown) raised: %s',
                                      log_prefix, _ore)
@@ -1494,6 +1497,12 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
                               is_shared_contention=_is_contention,
                               error=_err_str if _is_quota else '')
             state.last_err = e
+            if _is_contention:
+                try:
+                    dispatcher.note_shared_contention(slot)
+                except Exception as _nce:
+                    logger.debug('%s note_shared_contention failed: %s',
+                                 log_prefix, _nce)
             if _is_quota:
                 # ★ Persistent billing/quota exhaustion — disable this key
                 #   for the remainder of this dispatch and flag it so the
@@ -1854,10 +1863,18 @@ async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
         except RateLimitError as e:
             _is_quota = bool(getattr(e, 'is_quota', False))
             _is_gateway = bool(getattr(e, 'is_gateway', False))
+            _is_contention = bool(getattr(e, 'is_shared_contention', False))
             slot.record_error(is_rate_limit=True, is_quota_exhausted=_is_quota,
                               is_gateway=_is_gateway,
+                              is_shared_contention=_is_contention,
                               error=str(e)[:200] if _is_quota else '')
             state.last_err = e
+            if _is_contention:
+                try:
+                    dispatcher.note_shared_contention(slot)
+                except Exception as _nce:
+                    logger.debug('%s note_shared_contention failed: %s',
+                                 log_prefix, _nce)
             if _is_quota:
                 state.note_quota_key(slot)
                 if on_retry:

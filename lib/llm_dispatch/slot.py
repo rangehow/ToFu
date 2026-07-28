@@ -155,7 +155,10 @@ class Slot:
     # for EVERY cooldown wait, so a hard-error 300s backoff masqueraded as
     # 限流排队). One of: '' (none) / 'rate_limit' (per-key 429, 0.5s) /
     # 'upstream' (gateway 5xx, upstream-vendor transient, endpoint
-    # unreachable) / 'error' (consecutive-error backoff) / 'quota' (billing).
+    # unreachable) / 'error' (consecutive-error backoff) / 'quota' (billing)
+    # / 'contention' (shared project-level TPM saturation by other tenants,
+    # escalated 2s→60s family window — see
+    # LLMDispatcher.note_shared_contention).
     cooldown_reason: str = ''
 
     # ── Cost ──
@@ -374,8 +377,13 @@ class Slot:
                 self.cooldown_until = time.time() + 3600
                 self.cooldown_reason = 'quota'
             elif is_rate_limit:
-                # Reduce effective RPM estimate
-                self.rpm_limit = max(5, self.rpm_limit * 0.8)
+                # Reduce effective RPM estimate — but NOT for external
+                # shared-project contention: the pipe is full of OTHER
+                # tenants' tokens, so decaying our own pacing estimate
+                # teaches the scorer a false "this key is slow" lesson it
+                # then has to recover from at 1.1x.
+                if not is_shared_contention:
+                    self.rpm_limit = max(5, self.rpm_limit * 0.8)
                 # Very brief cooldown — just enough to steer picker to
                 # another slot; the caller will keep cycling rapidly.
                 self.cooldown_until = time.time() + 0.5

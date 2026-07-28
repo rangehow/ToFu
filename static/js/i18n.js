@@ -1295,6 +1295,12 @@ var _i18n = {
   'update.logLabel': { zh: '完整日志', en: 'Full log' },
   'update.copyLog': { zh: '复制日志', en: 'Copy log' },
   'update.logCopied': { zh: '已复制', en: 'Copied' },
+  'update.pendingApprovals': { zh: '待审批的服务器操作（由后台任务发起，需真人确认）', en: 'Pending server actions (initiated by background tasks — human decision required)' },
+  'update.approveExecuteRestart': { zh: '批准并重启', en: 'Approve & restart' },
+  'update.approveExecuteShutdown': { zh: '批准并关机', en: 'Approve & shut down' },
+  'update.deny': { zh: '拒绝', en: 'Deny' },
+  'update.approvalDenied': { zh: '已拒绝该请求。', en: 'Request denied.' },
+  'update.restartCooldown': { zh: '服务器刚重启过，处于冷却期（剩余 %s 秒），请稍后再试。', en: 'The server was just restarted — cooldown active (%ss left). Try again later.' },
   'settings.loadingFailed': { zh: '加载服务器配置失败。请检查服务器是否正在运行。', en: 'Failed to load server config. Please check if the server is running.' },
   'settings.noProviders': { zh: '还没有配置服务商。点击"+ 自定义服务商"开始添加。', en: 'No providers configured. Click "+ Custom Provider" to start.' },
   'settings.keys': { zh: '个密钥', en: 'keys' },
@@ -1574,6 +1580,7 @@ var _i18n = {
   'settings.mhInflight': { zh: '{n} 在途', en: '{n} inflight' },
   'settings.mhConsecErrors': { zh: '连续 {n} 错', en: '{n} consec errors' },
   'settings.mhContention': { zh: '争抢 {n}', en: 'contention {n}' },
+  'settings.mhReasonContention': { zh: '项目级争抢', en: 'shared contention' },
   'settings.mhContentionTip': { zh: '项目级共享额度被其他租户打满导致的 429 次数 — 外部争抢，不计入成功率', en: '429s caused by other tenants saturating the shared project quota — external contention, excluded from the success rate' },
   'settings.mhRequestsTip': { zh: '本进程累计 {n} 次请求', en: '{n} requests this process' },
   // ── Visibility / model defaults (settings/visibility_defaults.js) ──
@@ -2739,6 +2746,10 @@ var _i18n = {
   'stream.retryReason.waitingBackoff': {
     zh: '等待模型（错误退避中，非限流）',
     en: 'Waiting for model (error backoff, not rate-limit)',
+  },
+  'stream.retryReason.waitingSharedProject': {
+    zh: '等待模型（项目级共享额度争抢中，非本 key 问题）',
+    en: 'Waiting for model (shared project contention, not this key)',
   },
   'stream.thinking.active': { zh: '思考中...', en: 'Thinking...' },
   'stream.thinking.done': { zh: '思考过程', en: 'Thinking Process' },

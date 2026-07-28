@@ -355,6 +355,7 @@ var _MH_REASON_KEYS = {
   upstream:   'settings.mhReasonUpstream',
   error:      'settings.mhReasonError',
   quota:      'settings.mhReasonQuota',
+  contention: 'settings.mhReasonContention',
 };
 
 /** Inner HTML of one card's health strip (state class lives on the strip). */

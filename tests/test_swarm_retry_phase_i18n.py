@@ -89,6 +89,7 @@ class TestSharedRetryPhaseFields(unittest.TestCase):
             'Request timed out',
             'Waiting for model (rate-limited)',
             'Waiting for model (retry backoff)',
+            'Waiting for model (shared project limit)',
             'Key balance exhausted',
             'Key auto-exhausted (consecutive 429s)',
             'Rate limited (429)',

@@ -206,7 +206,12 @@ def test_neuter_strip_connect_regresses():
     """NEUTER: strip the connectToTask call from the fn body → the running task
     is never reconnected → the frozen-placeholder bug returns (no arm)."""
     src = _fn()
-    neutered = src.replace("connectToTask(id, conv.activeTaskId);",
+    # Anchor on the connectToTask CALL, not its argument expression — the
+    # gate now picks a target tid via pickAuthoritativeTaskIdForReconnect,
+    # so `conv.activeTaskId` is no longer the literal call argument.
+    m = re.search(r"connectToTask\(id, [^)]+\);", src)
+    assert m, "connectToTask call not found in _reconnectServerTaskIfIdle"
+    neutered = src.replace(m.group(0),
                            "/* connectToTask neutered */ void 0;", 1)
     assert neutered != src, "neuter pattern did not match connectToTask call"
     r = _run(neutered, _running_conv(), "c1", behaviour="running")
@@ -226,13 +231,17 @@ def test_source_wires_reconnect_in_both_open_branches():
     call_sites = src.count("if (_reconnectServerTaskIfIdle(id))")
     assert call_sites == 2, \
         f"expected 2 if(_reconnectServerTaskIfIdle(id)) call sites (both open branches), found {call_sites}"
-    # Gate must key off the persisted, server-authoritative activeTaskId, and
-    # guard idempotency on activeStreams.
-    assert "if (!conv || !conv.activeTaskId) return false;" in src, \
-        "reconnect gate no longer keys off server-authoritative conv.activeTaskId"
+    # Gate must require a non-null reconnect target tid — resolved via
+    # pickAuthoritativeTaskIdForReconnect (union of conv.activeTaskId and the
+    # server-authoritative Set), never a bare client guess — and guard
+    # idempotency on activeStreams.
+    assert "pickAuthoritativeTaskIdForReconnect" in src, \
+        "reconnect no longer resolves its target via pickAuthoritativeTaskIdForReconnect"
+    assert re.search(r"if \(!targetTid\) return false;", src), \
+        "reconnect gate no longer requires a non-null target task id"
     assert "activeStreams.has(id)) return false;" in src, \
         "reconnect idempotency guard (skip when a stream is already live) removed"
-    assert "connectToTask(id, conv.activeTaskId);" in src, \
+    assert re.search(r"connectToTask\(id, targetTid\);", src), \
         "reconnect no longer delegates to the existing connectToTask mechanism"
 
 

@@ -9,6 +9,17 @@
 - **★ 方法论(最值钱一条):前一个调查会话 ms40pmdpyuyc3j 自己就是这个事故的受害者 —— 47 轮取证后被 kill 在半途(`interruptedReason: killed`),而它查的正是 kill 它的东西。** 它留下的中间结论(「mock_llm_server 是树内唯一问候源」)是**对的方向但错的答案**:mock 的罐头串是 54 字符的另一句,真凶一句代码里都没有 —— 是上游模型自己的 canonical 开场白。**判据:排查「模型行为异常」时,先把「响应逐字节相同 + finish=stop + 真实 trace」这三件事对上,再决定往代码里找还是往上游找。**
 - **验收边界(诚实分账):** 修复已 committed,但**运行中的服务器进程是 10:24 启动的,不带修复** —— 需要重启才生效(「merged ≠ live」纪律);截至 11:18 上游仍在退化(最新问候 persist 11:18:29)。key[0] 在网关侧还有独立的 per-key RPM 限流(429「每分钟请求次数超过限制」),与本事故无关但会加剧排队。建议 owner 把 M-TraceId 样本(如 `0baf16396434476bb1924072044edc92`)报给 sankuai 网关团队,并争取一个非 daily 的稳定 opus-5 别名。
 
+### 2026-07-28(续) — charter「该装什么」根修落地:kind 路由 + 两层注入 + 33 条大迁移,**注入块 28,944 → 2,777 字(-90%)**(epic `pt_3023b980a4a2421f` done;commits `a8f9f209`(机制)+ 迁移批次;新套件 **17/17**,**NEUTER×2 全咬**,干净 committed tree **142/142**,迁移后守卫全套 **91/91**)
+
+- **起因:owner 问「为什么 charter 现在不经人审批就能加?很多根本不像 charter,更像 memory」。** 答案分两层:①审批门是 owner 自己 2026-07-12 拆的(docstring 白纸黑字:「DECISION-commit de-gated by owner … humans no longer participate in charter decision-making」),不是失控;②但**分拣缺失**是真缺陷——普查 33 条实测:~11 条真契约、~12 条方法论教训、~9 条完工报告、3 条陈旧。owner 拍板五条:不加回审批闸、改按 kind 分流;invariant 也要 board 同款两层拆分(每条必须带一句话 `summary`);lesson 路由必须 dedup;迁移授权端到端「先写后删、删前验证」;守卫行为断言 + NEUTER。
+- **机制(commit `a8f9f209`):** `project_charter_commit` 必填 `kind`:`invariant`(必须带 `summary` → 进 charter)/ `lesson`(→ 项目记忆,**charter 决策数不增**)/ `report`(拒绝并指向 JOURNAL.md)。注入渲染拆两层:`render_charter_injection_block`(目标全文 + 决策 headline 列表,旧条目无 summary 时首行截断)供每轮注入;`render_charter_block` 保留全文供 `project_charter_read` 工具——与 board 瘦身同一模式。**模型需要永远在线的是规则,不是证据链。**
+- **★ 本轮最值钱的实测:lesson dedup 的纯词面方案被三组测量连续证伪,设计被迫改成三通道。** ①BM25 原始分随语料规模漂移:同一对文本,全集语料 36.06 分、仅项目语料 2.94 分(N=1 时 IDF 塌缩);②全集背景 IDF 恰好惩罚家族词(守卫/扫描在全集语料里太常见,0.074 vs 0.035,分离度仅 2×);③未加权 containment 实测**真同族对仅 ~0.10** ——「同族」是语义关系,词面阈值在结构上抓不到(家族头名词「守卫失效」从第二个变体才开始存在)。**最终三通道:①显式 `into_memory`(id 或名字)主通道——模型经 BM25 prefetch 本就读过家族记忆,提交变体时知道并入目标;②≥0.5 containment 保守自动并入——只抓近重复,永不猜家族;③新建 + 响应附最近 3 条候选,漏并入可自我纠正。** 判据沿 charter 同族:阈值类设计必须先在真实文本上量出分离带,再定常量。
+- **迁移(`tests/_migrate_charter_kinds.py`,dry-run 默认、幂等、先写后删):** 33 条逐条人工分类(分类表进脚本供审计)——**14 keep + 2 rewrite → 16 条 invariant**(全部补写一句话 `summary`);**6 条守卫课训 + #32 课训段 → 一份 `测试守卫纪律家族` 项目记忆(7 个变体并入同一文件,验证可被 BM25 搜到后才删 charter 条目)**;**9 条完工/否决报告 → 迁入本志(上一条目,原文未改写)**;**3 条陈旧删除**(#2 被 #3 取代、#13/#16 内容已在 content 列)。#16 拆出真决策「迁移顺序 orchestrator 在前」保留,#32 拆出「共享 HEAD 禁止工作树中间态」保留。
+- **结果实测:** decisions 33 → 16,全部 `kind='invariant'` 且带 summary;**注入块 28,944 → 2,777 字**;工具全文路径 19,304 字(证据链完整);家族记忆 1 文件 7 变体;FIFO 淘汰压力解除(此前按 6 条/天,最旧真契约约一周后被 `_MAX_DECISIONS=100` 永久删除)。
+- **★ 过程缺陷一次(自查抓出):** JOURNAL 写入验证的 marker 常量用了全角括号、写入文本是半角,验证误报 FAILED 且 Phase C 未跑——**先写后删的顺序设计接住了它**:charter 原封未动(33 条),memory/journal 已写,修复 marker 后幂等重跑只补 Phase C。**判据:幂等迁移的验证字符串必须与写入文本共用同一常量,不能各写一份。**
+- **诚实分账:** 4 条预存在红(board NC5、feed run_concluded×2、context_trace 的 board patch、skills_prefetch)全部干净 HEAD A/B 实证与本批零相关,已单独开票 `pt_c306a73cc5944e68`(owner 纪律:重构批次不混修潜在 bug)。`test_context_trace` 的 charter patch 漂移属本批接线变更,已随批修(改 patch `render_charter_injection_block`)。
+- **待办(下一步):** 前端体检条(第 4 步)——渲染 kind 计数、summary 列表、北极星缺失告警;`project_charter_read` 可考虑支持按条读取(现在返回全部 16 条全文 19,304 字,单条场景浪费)。
+
 ### 2026-07-28 — charter 决策大迁移(33 条 → kind 分流):9 条完工/否决记录自 charter 迁入本志。
 > 背景:charter 只留约束未来决策的 invariant;以下为收口/实测否决的审计留痕,逐条原文迁移,未改写。
 

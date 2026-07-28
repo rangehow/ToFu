@@ -1,6 +1,18 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-28 — `rm -rf /tmp/wt_fill` 被「危险模式」恒拒根修:**第一代 blunt regex 短路了第二代参数解析守卫,而解析守卫早就实现了用户要的「两段路径可删」规则**(owner 截图报障「这是什么 dangerous pattern?tmp 两段路径应该可删,放宽一点」;commit `46c1bb70`,7 文件 +284/-10;新套件 **34/34**,**NEUTER×3 各自精确咬**,干净 committed worktree **136/136**)
+
+- **事故形态:** agent 在 committed tree 上建干净 worktree 的常规流程(`rm -rf /tmp/wt_fill 2>/dev/null` → `git worktree add`)被 `Error: Command blocked for safety: matches dangerous pattern.` 硬拒。匹配到的是 `lib/project_mod/config.py` 的 `DANGEROUS_PATTERNS[0]` = `\brm\s+-rf\s+/` —— **它对任何「rm -rf + 绝对路径」都开火**,且在 `run_command.py` 里先于真正的删除守卫 `_is_catastrophic_delete` 执行,后者根本没机会说话。
+- **★ 根因是代际短路,不是规则太严。** 第二代守卫 `_is_catastrophic_delete`(参数解析)早已实现 owner 说的规则:深度 <2(`/`、`/mnt`、`/home`)恒拒、**深度 ≥2 的 scoped 路径(`/tmp/wt_fill` 正好两段)放行**,且在全部三个执行点(run_command / desktop agent / safety pre-hook)都被调用。blunt regex 是第一代遗物,它拦下的真危险(`/`)解析守卫拦得更准(连 `rm /mnt -r -f` 乱序、`rm -rf /mnt/*` 通配都拦),却把所有合法绝对路径删除一起误伤。**修法 = 删 regex,让解析器成为唯一删除裁决者**,而不是给 regex 打补丁加白名单。
+- **覆盖中立性验证(删 regex 前必须回答「它独家拦过什么」):** 唯一一种 regex 拦到而解析器漏掉的现实形态是 `sudo rm -rf /` —— 解析器看 `parts[0]='sudo'` 就跳过。故同步给 `_is_catastrophic_delete` 与 desktop agent 的 `_check_delete_targets_within` 补上 sudo/doas 看穿(`_unwrap_command_parts`,含 `sudo -u root` 这类带参 flag);`xargs`/`find -exec`/`timeout` 前缀与旧 regex 时代同为盲区,记为已知边界。**顺带修复一个 pre-existing 洞:** agent 侧 `sudo rm -rf ~` 此前两道工序都漏(regex 要字面 `/`,containment 跳过 sudo),现已拦。
+- **desktop 平价语义随之翻正(不是放松,是对齐):** 旧 parity 测试断言「根内绝对路径 rm -rf 也拒」——那是与误伤平价。现改为与相对路径形态对齐:**根内 scoped 绝对删除放行且真执行,越 share root 拒、深度 <2 拒**,`docs/REMOTE_WORKTREE_DESIGN.md` P2 注记 ⑥ 已加 dated 取代标记(charter:「不做 X」的理由与取代关系记在代码使用点)。
+- **补集守卫(防「把闸全删也绿」):** 新套件同时钉死两个方向 —— `_is_dangerous_command('rm -rf /')` 现在为 False(regex 层不再管删除)**且** `tool_run_command('rm -rf /')` 端到端仍拒、且拒在任何 subprocess 产生之前(Popen 设绊线:守卫若回退,测试先红在绊线上而不是真去执行)。**只有放行断言时,「删掉整个灾难删除守卫」也能全绿。**
+- **NEUTER×3 各咬各的:** ①regex 回加 → **5 红**(两条 e2e 放行 + 根删除的拒绝文案分层断言 + 两条 regex 层补集钉);②解析器里摘掉 unwrap → **6 红**(sudo/doas 矩阵 5 条 + sudo e2e 绊线 1 条);③agent containment 摘掉 unwrap → **1 红**(`sudo rm -rf <root外>` 逃出校验真的去执行了)。
+- **★ 一次「61 failed」假警报的完整分账(共享 HEAD 纪律再次兑现):** 三个我没碰的套件联跑报 61 红,先 A/B —— 干净 HEAD 上 62 全过,遂隔离:approval 单跑 6/6 过、SSOT 单跑 62/62 过、三件套复跑 **63 过 1 红**,唯一真红是兄弟**未跟踪**的 jsdom WIP 文件 `test_frontend_rejected_round_terminal.py`(独立复跑也红,60s 级 node 子进程,与本改动零交集)。**判据:联跑爆红先按「组合 flake」处理,逐层缩到最小复现组合再归因** —— 与 board 上 test-health epic 记的「-n16 报 164 真失败远少于此」同族。
+- **诚实分账(预存在红,干净 HEAD eb0942b2 同样红,未在本批修):** `test_project_tools.py::test_multi_device_startup_collapsed`(输出折叠行数断言 ≤3 得 4,与 footer 计数行相关)与 `TestPollRouteStreams` ×2(本环境 bridge-auth 401)。
+
+
 ### 2026-07-28(续6) — 本机控制「按用户视角复审」:**合并让界面变小了,但还没变清楚**;四个缺陷里最严重的一个是我自己刚修掉的老 bug换了层皮(commit `5d79a0dd`;守卫 18 → **26/26**,**NEUTER×3 各自精确咬**,干净 committed worktree **69/69**)
 
 - **★ 缺陷 1(最严重):开关邀请了一次注定无效的点击 —— 这正是本轮开工时要根除的那个 bug,只是换了个更好看的壳。** 什么都没连接时,用户**照样能把能力开关打成 ON**;而 `lib/tools/registry/_build.py` 对未连接的桥返回 `[]`,于是开关亮着、AI 一个工具都拿不到。**我把「盲翻开关」搬进了一个漂亮的 modal,却没有解决「亮着但无效」这件事本身。** 现改为:未连接时开关**不可操作**并在 hover 上给出原因;连接成功后实时轮询会在一拍之内自动解禁,所以**不会变成死路**。

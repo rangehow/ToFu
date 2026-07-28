@@ -1029,7 +1029,7 @@ Before submitting any code change, verify:
 | Folder / conversation organization | `routes/api_v1/folders.py`, `routes/conversations.py` |
 | Check recent errors | `tail -f logs/error.log` or `grep_search` the `logs/` directory |
 | Export / sanitize project | `export.py` (three modes: `--mode personal` / `--mode internal` / `--mode opensource`) — see §10 |
-| Cross-platform compat | `lib/compat/_platform.py` (core, re-exported from `lib/compat/__init__.py`) → `debug/test_cross_platform.py` (smoke test) |
+| Cross-platform compat | `lib/compat/_platform.py` (core, re-exported from `lib/compat/__init__.py`) → `tests/test_cross_platform.py` (smoke test) |
 | Cross-DC FUSE latency | `lib/cross_dc/` (detection) → `data/config/cross_dc.json` (config) |
 
 ### 8.1 Conversation IDs & tracing a conversation
@@ -1161,7 +1161,7 @@ conversation itself — that's always the DB query above.
   - FS keepalive (`lib/fs_keepalive.py`) is Linux-only; graceful no-op on other platforms.
   - Interactive stdin detection in `run_command` is Linux-only (requires `/proc`); degrades to non-interactive on macOS/Windows.
   - `DANGEROUS_PATTERNS` in `lib/project_mod/config.py` include both Unix and Windows equivalents.
-  - Smoke test: `python debug/test_cross_platform.py` validates compat layer on any platform.
+  - Smoke test: `python -m pytest tests/test_cross_platform.py` validates compat layer on any platform.
 
 ---
 

@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 
 import pytest
 
@@ -59,12 +60,40 @@ _PATH_RE = re.compile(
 # Paths that are legitimately absent from a fresh checkout: runtime-generated
 # state, user-installed content, or deliberately git-ignored artifacts.
 # Keep this list SHORT and justified -- it is not a place to hide drift.
+#
+# PREFER the gitignore check below over adding an entry here. A path that git
+# itself ignores is BY CONSTRUCTION absent from any clean checkout while being
+# present in every real deployment, so failing on it is the GUARD's category
+# error, not doc rot -- and it fires in CI and in every worktree, i.e. exactly
+# where the guard is supposed to be trustworthy. Measured 2026-07-28: three
+# correct references (data/config/{api_keys,features,server_config}.json) were
+# reported as stale for this reason; all three exist in the live deployment and
+# are documented as runtime-created in lib/config_dir.py.
 _RUNTIME_ABSENT = {
     # Written at runtime when a user installs a skill package.
     '.tofu/skills/separation-of-concerns-directive.md',
     # Optional operator-supplied config, absent by default.
     'data/config/cross_dc.json',
 }
+
+
+def _git_ignored(rel: str) -> bool:
+    """True when git itself ignores `rel` (so a clean checkout cannot have it).
+
+    Uses ``git check-ignore``, which consults the real .gitignore rules rather
+    than a second hand-maintained copy of them here.
+    """
+    try:
+        r = subprocess.run(
+            ['git', 'check-ignore', '-q', '--', rel],
+            cwd=ROOT, capture_output=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        # No git / no timeout budget: fall back to treating it as NOT ignored,
+        # so a genuine stale path still fails rather than being waved through.
+        print(f'git check-ignore unavailable for {rel}: {e}')
+        return False
+    return r.returncode == 0
 
 
 def _referenced_paths() -> set[str]:
@@ -115,7 +144,7 @@ def test_claude_md_paths_are_not_stale():
     """
     stale = sorted(
         p for p in _referenced_paths()
-        if p not in _RUNTIME_ABSENT and not _resolves(p)
+        if p not in _RUNTIME_ABSENT and not _resolves(p) and not _git_ignored(p)
     )
     if stale:
         listing = '\n'.join(f'    {p}' for p in stale)
@@ -126,5 +155,6 @@ def test_claude_md_paths_are_not_stale():
             'asserted to the agent as ground truth before it reads any code.\n'
             'Fix by pointing each reference at the real location (the usual '
             'cause is a file that became a package, or a module that moved).\n'
-            'Do NOT silence this by adding entries to _RUNTIME_ABSENT.'
+            'Do NOT silence this by adding entries to _RUNTIME_ABSENT '
+            '(git-ignored runtime files are already excluded automatically).'
         )

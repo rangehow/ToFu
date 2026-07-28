@@ -295,7 +295,6 @@ private fun StatusBanner(status: UiStatus) {
         is UiStatus.Error -> status.message
         is UiStatus.BadCredentials ->
             "Wrong password for ${status.profile.alias} — edit it to fix."
-        is UiStatus.NeedsSso -> "This server needs interactive sign-in — opening…"
         UiStatus.Idle -> null
     }
     val isError = status is UiStatus.Error || status is UiStatus.BadCredentials

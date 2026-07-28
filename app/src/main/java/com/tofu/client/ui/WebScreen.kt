@@ -367,8 +367,18 @@ fun WebScreen(
                             // blank surface; return to the profile list.
                             scope.launch(Dispatchers.Main) { onBack() }
                         },
-                        onPageDone = { view, _ ->
+                        onPageDone = { view, url ->
                             firstLoadDone = true
+                            // An INTERACTIVE_SSO sign-in completes INSIDE the
+                            // WebView, so no OkHttp response ever stamps
+                            // cookieHost. Without this the profile stays
+                            // "not signed in" forever and the supervisor's
+                            // Start/Stop can never be used, no matter how many
+                            // times the user signs in. Idempotent + guarded on
+                            // landing back on our own host with a real cookie.
+                            scope.launch {
+                                session.noteInteractiveSignIn(profile, url)
+                            }
                             // Viewport-parity probe: log the WebView's computed
                             // layout width + DPR so breakpoint agreement with
                             // Chrome (SPA TOFU_BP 768/1024, core.js) can be

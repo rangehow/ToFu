@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.tofu.client.data.AuthType
 import com.tofu.client.data.Profile
 import com.tofu.client.data.ProfileDao
+import com.tofu.client.session.InteractiveSso
 import com.tofu.client.session.LoginResult
 import com.tofu.client.session.SecretVault
 import com.tofu.client.session.SessionController
@@ -26,7 +27,6 @@ sealed interface UiStatus {
     data object Idle : UiStatus
     data class LoggingIn(val alias: String) : UiStatus
     data class Error(val message: String) : UiStatus
-    data class NeedsSso(val url: String, val profile: Profile) : UiStatus
     data class BadCredentials(val profile: Profile) : UiStatus
 }
 
@@ -113,12 +113,21 @@ class ProfilesViewModel(
     }
 
     private fun handleLogin(result: LoginResult, profile: Profile) {
+        // SSO must NAVIGATE, not just set a status. Its whole design is "the
+        // WebView completes the sign-in once, then we persist the jar" — so
+        // leaving the user on the list behind an "opening…" label meant Open
+        // did nothing at all, while the card copy told them Open was the fix.
+        if (InteractiveSso.shouldOpenWebView(result)) {
+            _screen.value = Screen.Web(profile)
+            _status.value = UiStatus.Idle
+            return
+        }
         _status.value = when (result) {
-            is LoginResult.Success -> { _screen.value = Screen.Web(profile); UiStatus.Idle }
-            is LoginResult.NeedsInteractiveSso -> UiStatus.NeedsSso(result.url, profile)
             is LoginResult.BadCredentials -> UiStatus.BadCredentials(profile)
             is LoginResult.NoCredential -> UiStatus.BadCredentials(profile)
             is LoginResult.Error -> UiStatus.Error(result.message)
+            // Both navigate above; unreachable here.
+            is LoginResult.Success, is LoginResult.NeedsInteractiveSso -> UiStatus.Idle
         }
     }
 }

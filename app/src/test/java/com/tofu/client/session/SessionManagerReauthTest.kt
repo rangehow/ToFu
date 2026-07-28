@@ -24,6 +24,7 @@ class SessionManagerReauthTest {
         val injected = mutableListOf<String>()
         override fun inject(origin: String, cookies: List<Cookie>) { injected += origin }
         override fun purgeHost(host: String) { purged += host }
+        override fun cookieHeader(origin: String): String? = null
     }
 
     private class FakeSecrets(private val secret: String?) : SecretLookup {

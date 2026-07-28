@@ -33,6 +33,9 @@ object CookieBridge : CookieSink {
         cm.flush()
     }
 
+    override fun cookieHeader(origin: String): String? =
+        manager().getCookie(origin)?.takeIf { it.isNotBlank() }
+
     override fun purgeHost(host: String) {
         val cm = manager()
         val origin = "https://$host"

@@ -134,6 +134,30 @@ class SessionManager(
     }
 
     /**
+     * Record that an INTERACTIVE_SSO sign-in completed INSIDE the WebView.
+     *
+     * The headless [login] path stamps `cookieHost` when it injects a cookie it
+     * obtained itself. An interactive sign-in never passes through that path —
+     * the cookie is set by the browser engine — so without this nothing would
+     * ever stamp the profile, `isSignedIn` would stay false forever, and the
+     * supervisor's Start/Stop would remain unusable no matter how many times
+     * the user signed in. Called from the WebView's page-finished callback.
+     *
+     * Returns true when the profile was actually updated. Idempotent: a profile
+     * already stamped for this host is left alone (so it does not write on
+     * every page load).
+     */
+    suspend fun noteInteractiveSignIn(profile: Profile, finishedUrl: String): Boolean {
+        val host = InteractiveSso.hostToStamp(profile) ?: return false
+        if (profile.cookieHost == host) return false
+        val header = cookies.cookieHeader("https://$host")
+        if (!InteractiveSso.completedSignIn(profile, finishedUrl, header)) return false
+        dao.update(profile.copy(cookieHost = host))
+        Log.i(TAG, "interactive sign-in recorded alias=${profile.alias} host=$host")
+        return true
+    }
+
+    /**
      * Update a profile's editable fields. If the URL host changed, HARD-PURGE
      * the old host's cookie jar first (cookie is Domain-pinned) — this is the
      * re-provision invariant, baked into the update path, not an afterthought.

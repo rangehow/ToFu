@@ -8,6 +8,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import com.tofu.client.data.AuthType
 import com.tofu.client.data.Profile
 
 /**
@@ -57,6 +58,10 @@ class ReauthWebViewClient(
         errorResponse: WebResourceResponse,
     ) {
         if (request.isForMainFrame && errorResponse.statusCode == 401) {
+            // Same reasoning as shouldOverrideUrlLoading: a headless re-login
+            // cannot resolve an SSO gate, so triggering here would just latch
+            // reauthInFlight and log noise while the user signs in.
+            if (profile.authType == AuthType.INTERACTIVE_SSO) return
             trigger(view, "401 on main frame")
         }
     }
@@ -102,6 +107,14 @@ class ReauthWebViewClient(
     ): Boolean {
         val url = request.url.toString()
         if (request.isForMainFrame && looksLikeLogin(url)) {
+            // INTERACTIVE_SSO must NOT be intercepted. Its sign-in IS a sequence
+            // of main-frame navigations through login pages, and a headless
+            // re-login can never satisfy it (login() returns
+            // NeedsInteractiveSso, so onReauth's `is Success` reload never
+            // fires). Swallowing them leaves the WebView frozen on a blank
+            // surface — the user is handed into the WebView and still cannot
+            // sign in. Let the engine navigate; the user completes the flow.
+            if (profile.authType == AuthType.INTERACTIVE_SSO) return false
             trigger(view, "redirect to login: $url")
             return true   // swallow the navigation; re-auth will reload
         }

@@ -25,6 +25,7 @@ class SessionControllerTest {
         val purged = mutableListOf<String>()
         override fun inject(origin: String, cookies: List<Cookie>) {}
         override fun purgeHost(host: String) { purged += host }
+        override fun cookieHeader(origin: String): String? = null
     }
 
     private class FakeVault : SecretVault {

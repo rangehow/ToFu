@@ -12,4 +12,14 @@ interface CookieSink {
 
     /** Hard-invalidate every cookie pinned to [host] (Domain-pinned re-provision path). */
     fun purgeHost(host: String)
+
+    /**
+     * The raw `Cookie:` header the jar holds for [origin], or null when empty.
+     *
+     * Needed by the INTERACTIVE_SSO path: that login happens inside the WebView,
+     * so no OkHttp response ever passes through [inject] and nothing would
+     * otherwise stamp `cookieHost`. Reading the jar back is the only way to
+     * observe that an interactive sign-in actually succeeded.
+     */
+    fun cookieHeader(origin: String): String?
 }

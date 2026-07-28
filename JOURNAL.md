@@ -1,5 +1,24 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-28(续·素材通道) — 「背景单调 / 素材极少」根因是**结构性禁令**,不是缺工具:两条规则叠加后素材唯一合法形态只剩内联字符串;顺带把本机唯一 CJK 面是**衬线**这件事修掉(commit `467b9e7b`,6 文件 +1100/-11;新套件 **25/25 含 NEUTER×2**,11 套 motion **254/254**,干净 committed worktree **130 passed / 2 skipped**;**首次给出像素级验收**)
+
+- **★ 根因(owner 的定性成立,我实测确认并补上第二条):** ①`COMPOSITION_CONTRACT.md` 禁渲染期取网络素材(正确,这是确定性的来源);②`_scene_author.py` docstring 明文不给任何写文件能力,「so a composition can never reference a local asset path」。**两条叠加的净效果:素材唯一合法形态是内联进 HTML 的字符串(即内联 SVG);位图、真实截图、背景视频不是没做,是被结构性判死。** 所以要做的是**一条通道**,不是加一把工具。
+- **★ owner 的 `../` 纠正救了我一次返工,实测复现:** 全局库直接引用 `../../assets/a.png` → **rc=1**,报 `Found 1 asset path(s) traversing above the project root with "../"` + `<img> element references local file(s) not found in the project`。可行形态实测:**软链 / 硬链 / 场景子目录三种全部 rc=0**。故落点=**全局内容哈希库存真身 + 场景目录内链接**。
+- **★ 三级降级不是防御性编程,是今天就必需的(实测推翻我自己的注释):** 我先写「库与作业同设备,硬链应该可用」,直接测 `os.link` → **`PermissionError EPERM (Operation not permitted)`**,dolphinfs **同设备也拒绝硬链**。若按「同设备就用硬链」的判断走,**每一次落地都会失败**。另 `/tmp` 确为不同设备(教科书 `EXDEV`)。**判据:落地机制必须逐级尝试并报告实际生效的那级,永不预测。**
+- **★ 预检的容器判定必须用字面路径,不能 realpath(我自己造的假阳性,被真渲染抓出):** 正确落地的素材通常是**指向库的软链**,`realpath` 天然指到场景外 ⇒ 先解析再判包含**会把每一个合法素材判成越界**——实测它拒绝了那些真能渲染出来的素材。改用 `normpath` 判是否真的以 `..` 开头;而**存在性检查仍然跟随软链**(悬空软链必须报,渲染器只会画个空白)。
+- **三类拒绝(owner 要求,全部实测各自咬):** `../` 越界 / 绝对路径 / 引用了但文件不存在(含悬空软链)。补集同样钉住:合法场景内引用、`data:` URI、CDN `<script>` 三者必须干净——否则预检无法使用。
+- **字体(owner 要求不拖到最后):** `fc-list :lang=zh` 实测**只有一个面 `Noto Serif CJK SC`**,即此前每一帧中文都是**没人选过的衬线**。走同一条通道:无衬线面取一次入库(jsdelivr woff2 1,142,552 B;github OTF 8.3 MB 备用),场景内 `@font-face` 声明。**实测该形态过闸 rc=0 且真从该文件取字形**——无需 fontconfig 注册、无需 root。守卫用 `undeclared_font_families` 把「naming an absent face 静默回退」变成可检出:命名 `PingFang SC` 而不声明 → 报;命名 `Inter`/自声明 → 不报。另有一条守卫**断言本机确实没有无衬线 CJK**(而非假设),将来真装上了会红,那是「重新评估是否还要自带」的正确信号。
+- **复用既有底盘而非新起一套:** `generate_asset` 走 `lib.image_gen.generate_image`(slot 轮换 / 429 cycling / 重试预算已在那里解决),只加一层 `_generate_scene_asset` 把 base64 → 入库 → 链入场景 → 返回场景相对路径。
+- **★ 像素级验收(owner 的唯一结束条件),真引擎 + 真 hyperframes + 真 ffmpeg:** 3 镜成片,2 镜带生成素材 + 1 镜刻意纯渐变对照。`authored_scenes=2/3`,`artifact_quality` **只点名对照镜** scene-003(58% span / 38% 底部死区)。交付帧实测:
+  | 镜 | 彩色像素 | 边缘密度 | 纵向占比 | 独立色数 |
+  |---|---|---|---|---|
+  | scene-001(素材) | 461,714 | 6.31 | 85.2% | 74,542 |
+  | scene-002(素材) | 461,887 | 6.00 | 85.2% | 72,936 |
+  | scene-003(纯渐变对照) | 54,016 | 1.89 | 56.0% | 5,450 |
+  即 **色彩面积 ~8.5×、边缘密度 ~3.3×、独立色数 13.7×、纵向占比 +29pp**;素材镜中文为自带**无衬线**,对照镜为宿主**衬线**。目视亦确认:素材镜有真实图形 + 三段式满幅构图,对照镜是居中两行字。
+- **两条兄弟守卫重锚,都因本批**有意反转其前提**:** ①窄工具集守卫现接纳 `generate_asset`(仍禁 render/shell,并说明它只能写进内容哈希库、无法落到别处);②prompt 守卫原断言 `'INLINE'`——**那正是造成缺陷的「只准内联 SVG」规则**,改为钉「必须告知 `generate_asset` + 场景相对路径 + 哪些引用会被拒」。
+- **过程自纠两条:** ①`store_bytes(suffix='.png')` 首版全被拒——`os.path.splitext('.png')` 返回**空扩展名**;现同时接受 `logo.png` / `.png` / `png` 三种形态。②我的验收 harness 自己画图时椭圆坐标退化(`y1 must be >= y0`),是 harness bug 非管线问题。
+- **验收边界(诚实分账):** 四个原始问题现全部有像素证据——字幕出界(`bc92c91d`)、画面乱/背景单调/素材极少(本批,通过素材+字体+满幅构图)。**但仍有两点必须说明:** ①本次验收的 LLM 调度是**脚本化**的(离线确定性),`generate_asset` 之后的全链路是生产码,真模型自主用素材的效果需线上跑一条才算数;②纯后端改动,**运行中进程不带,需重启才对新作业生效**。
 ### 2026-07-28(续·作者韧性) — 0/8 的另一半:**一次网络抖动 = 该镜创作永久报废**;而且 `_existing_composition` 分不清降级卡与真构图,把渐变卡**永久钉死**(owner 纠正我「gate 修完就不会落回渐变卡」的错误结论;commit `43b5ed9a`,5 文件 +726/-30;新套件 **23/23 含 NEUTER×2 各咬各的方向**,10 套 motion **229/229**,干净 committed worktree **87/87**)
 
 - **★ owner 纠正我一句错话(记下来):** 我上一批说「gate 误判已清除,素材通道做完不会再落回渐变卡」——**不成立**。8 镜里 gate 误判只占 4 条,另 4 条是 OAuth 掉线 1、token 预算耗尽 2、`aigc.sankuai.com` 读超时 119s 1。**一半降级跟 gate 无关,是 LLM 调用链在抖**;素材通道做完只要网络照旧抖,照样一半镜是渐变卡。

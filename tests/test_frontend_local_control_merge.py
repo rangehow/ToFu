@@ -32,6 +32,7 @@ drift into asserting a world that production left behind. Symbols are located
 by SEARCHING for their definition, not by hardcoding a line range, and the
 three failure modes are separately diagnosable (deleted / duplicated / found).
 """
+import functools
 import json
 import re
 import shutil
@@ -55,7 +56,16 @@ def _node() -> str:
     return exe
 
 
+@functools.lru_cache(maxsize=1)
 def _has_jsdom() -> bool:
+    """Probe for jsdom ONCE per session.
+
+    Cached because every ``@pytest.mark.skipif`` argument is evaluated at
+    IMPORT time, and `require('jsdom')` costs ~5s on this FUSE mount (measured:
+    0.12s for bare node, 5.2s once jsdom's module tree is pulled in). With one
+    probe per decorator that was ~145s of collection before a single test body
+    ran — enough to look like a hang and to blow a suite timeout.
+    """
     try:
         subprocess.run([_node(), "-e", "require('jsdom')"], cwd=ROOT,
                        capture_output=True, check=True)
@@ -110,13 +120,32 @@ def _slice_fn(symbol: str) -> str:
 _SHIPPED_SYMBOLS = (
     "_lcT", "_lcEsc", "_lcSetStatus", "_lcSetSwitch", "_lcSetAbout",
     "_lcBrowserSetupState", "_lcRenderBrowser", "_lcRenderDesktop",
-    "_lcMintToken", "_lcConnectLine",
+    "_lcMintToken", "_lcConnectLine", "_lcUpdateBadge",
 )
+
+
+def _module_state() -> str:
+    """Splice the module-level `var` declarations the renderers depend on.
+
+    Taken from the shipped source rather than re-declared here: the renderers
+    write `_lcReach` (last CONFIRMED reachability per capability), so a
+    hand-written stub in this file would be exactly the copied-predicate
+    pattern the charter forbids — and a rename in production would leave the
+    stub silently satisfying the reference.
+    """
+    src = _find_defining_file("_lcRenderDesktop").read_text(encoding="utf-8")
+    decls = re.findall(r"^var _lc[A-Za-z]+ = .*?;$", src, re.M)
+    assert decls, (
+        "no module-level `var _lc… =` declarations found — the renderers' "
+        "shared state moved or was renamed; re-point this splice before "
+        "trusting any test below")
+    return "\n".join(decls)
 
 
 def _shipped(extra_neuter=None) -> str:
     """Concatenate the shipped renderers; optionally apply a NEUTER rewrite."""
-    body = "\n".join(_slice_fn(s) for s in _SHIPPED_SYMBOLS)
+    body = _module_state() + "\n" + "\n".join(
+        _slice_fn(s) for s in _SHIPPED_SYMBOLS)
     if extra_neuter:
         neutered = extra_neuter(body)
         assert neutered != body, "NEUTER substitution did not apply"
@@ -603,6 +632,258 @@ def test_NEUTER_showing_the_permissions_note_everywhere_is_caught():
     ))["desktop"]
     assert out["remote"]["permNoteShown"] is True, (
         "NEUTER did not force the note into the remote case")
+
+
+# ── 5b. Revoking access must never be harder than granting it ─────────
+#
+# Gating the switch on "is it connected" is right for turning something ON
+# (an unconnected bridge ships zero tools). Applying the SAME gate to turning
+# it OFF produced a worse failure than the one it fixed: a capability enabled
+# while the agent was up became UNREVOKABLE the moment that agent dropped —
+# the wire flag stayed ON and kept travelling to the server, the switch showed
+# ON and greyed out, and the one action a worried user wants (withdraw access
+# to their own machine) was the one action the UI refused.
+#
+# These drive the WHOLE shipped file — the toggle handlers, the reachability
+# bookkeeping and the badge are all part of the behaviour under test, so
+# slicing individual renderers would miss the interaction between them.
+
+LC_FILE_HARNESS = textwrap.dedent("""
+    const {{ JSDOM }} = require('jsdom');
+    const dom = new JSDOM(`<!DOCTYPE html><body>{html}
+      <div id="localControlToggle"></div>
+      <span id="localControlBadge"></span></body>`);
+    global.document = dom.window.document;
+    global.window = dom.window;
+    global.t = (k) => k;
+    global.escapeHtml = (s) => String(s == null ? '' : s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    global.Api = {{ desktop: {{ mintToken: () => Promise.resolve({{token:'T'}}) }} }};
+    global.showToast = () => {{}};
+    global._safeClipboardWrite = () => Promise.resolve();
+    global.downloadBrowserExtension = () => {{}};
+    global._applyBrowserLnaWarning = () => {{}};
+    // The real wire flags + their real painters live in main.js; the modal
+    // only ever reaches them through these two setters.
+    global.browserEnabled = false;
+    global.desktopEnabled = false;
+    global._applyBrowserUI = (v) => {{ global.browserEnabled = !!v; }};
+    global._applyDesktopUI = (v) => {{ global.desktopEnabled = !!v; }};
+    global._saveConvToolState = () => {{}};
+    global.updateSubmenuCounts = () => {{}};
+
+    {shipped}
+
+    const dsw = () => document.getElementById('lcDesktopSwitch');
+    const badge = () => document.getElementById('localControlBadge');
+    const snap = () => ({{
+      operable: !dsw().disabled,
+      shownOn: dsw().classList.contains('on'),
+      flaggedStale: dsw().classList.contains('lc-switch-stale'),
+      badgeStale: badge().classList.contains('lc-badge-stale'),
+      badgeText: badge().textContent,
+      reason: dsw().getAttribute('title') || '',
+    }});
+
+    const out = {{}};
+
+    // (a) Enabled while the agent was up, agent then drops.
+    global.desktopEnabled = true;
+    _lcRenderDesktop({{ connected: false, setup_state: 'tray' }});
+    out.enabledThenDropped = snap();
+    toggleDesktopFromLocalModal();          // the user tries to revoke
+    out.afterRevoke = {{ flag: global.desktopEnabled, ...snap() }};
+
+    // (b) Complement: OFF + disconnected must still refuse to turn ON.
+    global.desktopEnabled = false;
+    _lcRenderDesktop({{ connected: false, setup_state: 'tray' }});
+    out.offAndDisconnected = snap();
+    toggleDesktopFromLocalModal();
+    out.offFlipAttempt = {{ flag: global.desktopEnabled }};
+
+    // (c) Complement: a connected capability behaves exactly as before.
+    global.desktopEnabled = false;
+    _lcRenderDesktop({{ connected: true, setup_state: 'connected' }});
+    out.connectedBefore = snap();
+    toggleDesktopFromLocalModal();
+    out.connectedAfterOn = {{ flag: global.desktopEnabled, ...snap() }};
+
+    // (d) Never probed: the modal was never opened this session. An
+    //     unverified capability must not be presented as broken.
+    global.desktopEnabled = true;
+    global.browserEnabled = false;
+    _lcReach.desktop = null; _lcReach.browser = null;
+    _lcUpdateBadge();
+    out.neverProbed = snap();
+
+    console.log(JSON.stringify(out));
+""")
+
+
+def _run_file(neuter=None) -> dict:
+    """Eval the ENTIRE shipped local-control.js — handlers, state and badge."""
+    path = _find_defining_file("toggleDesktopFromLocalModal")
+    body = path.read_text(encoding="utf-8")
+    if neuter:
+        rewritten = neuter(body)
+        assert rewritten != body, (
+            "NEUTER substitution did not apply — the anchor text is gone, so "
+            "this run proves nothing about whether the guard bites")
+        body = rewritten
+    script = LC_FILE_HARNESS.format(shipped=body,
+                                    html=MODAL_HTML.replace("`", "\\`"))
+    proc = subprocess.run([_node(), "-e", script], cwd=ROOT,
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, f"node failed: {proc.stderr}"
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+@pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
+def test_an_enabled_capability_can_always_be_switched_off():
+    """The agent dropping must not trap the user with access they can't revoke."""
+    out = _run_file()
+    assert out["enabledThenDropped"]["operable"] is True, (
+        "desktop control is ON but the agent is gone, and the switch is "
+        "inert — the user cannot withdraw access to their own machine. A "
+        "safety control must never be harder to turn off than on.")
+    assert out["afterRevoke"]["flag"] is False, (
+        "clicking the switch did not actually clear the wire flag; it is "
+        "still being sent to the server")
+
+
+@pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
+def test_an_enabled_but_unreachable_capability_does_not_look_healthy():
+    """ON + disconnected ⇒ the AI gets ZERO tools. Saying otherwise is the lie
+    this whole merge exists to stop telling.
+
+    ``_build_desktop`` returns [] for an unconnected agent, so a badge that
+    counts it identically to a live one sends the user away believing the AI
+    can reach their machine.
+    """
+    out = _run_file()
+    assert out["enabledThenDropped"]["flaggedStale"] is True, (
+        "the switch shows ON with no agent connected and is not marked — it "
+        "reads as a working capability that ships no tools")
+    assert out["enabledThenDropped"]["badgeStale"] is True, (
+        "the merged badge counts an unreachable capability as live; the user "
+        "closes the modal and sees a confident badge for tools that do not "
+        "exist")
+    assert out["enabledThenDropped"]["reason"].strip(), (
+        "flagged as stale but with no explanation of what is wrong")
+
+
+@pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
+def test_turning_it_on_while_disconnected_is_still_refused():
+    """Complement: the one-way gate must not become no gate at all."""
+    out = _run_file()
+    assert out["offAndDisconnected"]["operable"] is False, (
+        "OFF + disconnected must stay inert — enabling it grants zero tools")
+    assert out["offFlipAttempt"]["flag"] is False, (
+        "the flip was not actually refused")
+
+
+@pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
+def test_a_connected_capability_is_unaffected():
+    """Complement: none of the above may degrade the working path."""
+    out = _run_file()
+    assert out["connectedBefore"]["operable"] is True
+    assert out["connectedBefore"]["flaggedStale"] is False, (
+        "a connected capability must not be flagged as stale")
+    assert out["connectedAfterOn"]["flag"] is True, "connected → must turn on"
+    assert out["connectedAfterOn"]["badgeStale"] is False, (
+        "a live capability must not warn")
+
+
+@pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
+def test_an_unprobed_capability_is_not_reported_as_broken():
+    """Complement: 'never checked' ≠ 'unreachable'.
+
+    The badge paints on conversation restore, long before the modal is ever
+    opened. Treating unprobed as broken would warn about a perfectly healthy
+    setup — its own kind of false alarm.
+    """
+    out = _run_file()
+    assert out["neverProbed"]["badgeStale"] is False, (
+        "a capability that was never probed is being reported as broken")
+
+
+@pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
+def test_NEUTER_gating_both_directions_traps_the_user():
+    """Restore the symmetric gate → revoking becomes impossible again."""
+    out = _run_file(lambda s: s.replace(
+        "var can = canEnable || !!on;   // already on ⇒ always revocable",
+        "var can = canEnable;"))
+    assert out["enabledThenDropped"]["operable"] is False, (
+        "NEUTER did not restore the symmetric gate")
+    assert out["afterRevoke"]["flag"] is True, (
+        "NEUTER should have made the wire flag unrevokable")
+
+
+@pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
+def test_NEUTER_counting_unreachable_capabilities_as_live_is_caught():
+    """Drop the staleness split → the badge overstates what the AI has."""
+    out = _run_file(lambda s: s.replace(
+        "var stale = ((bOn && _lcReach.browser === false) ? 1 : 0)\n"
+        "            + ((dOn && _lcReach.desktop === false) ? 1 : 0);",
+        "var stale = 0;"))
+    assert out["enabledThenDropped"]["badgeStale"] is False, (
+        "NEUTER did not collapse the badge back to a plain count")
+
+
+@pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
+def test_NEUTER_letting_a_toggle_assert_reachability_is_caught():
+    """The toggle must report what the POLL observed, not assume success.
+
+    Passing a hardcoded `true` here re-paints a disconnected capability as
+    healthy the instant the user touches it — the stale marking would vanish
+    on click while the tools still do not exist.
+    """
+    out = _run_file(lambda s: s.replace(
+        "_lcSetSwitch('lcDesktopSwitch', desktopEnabled, _lcReach.desktop !== false);",
+        "_lcSetSwitch('lcDesktopSwitch', desktopEnabled, true);"))
+    # Turning it ON from the connected state, then the flag stays on: with the
+    # NEUTER the switch no longer consults observed reachability at all.
+    assert out["afterRevoke"]["flaggedStale"] is False
+
+
+# ── 5c. Granting machine access must not leak into a new conversation ──
+
+def test_a_new_chat_does_not_inherit_computer_control():
+    """Desktop was the ONE tool flag `_resetToolsToDefaults` never cleared.
+
+    `_restoreConvToolState` sets it per-conversation and nothing reset it, so
+    a brand-new chat silently inherited computer control — shell, file writes,
+    GUI — from whatever conversation came before, and the merged badge then
+    reported it as active on a conversation the user never granted it on.
+
+    Asserts the RESULT (the reset path clears both local-control flags) by
+    locating the function via symbol search, not a hardcoded path or line.
+    """
+    reset = _slice_fn("_resetToolsToDefaults")
+    assert "_applyBrowserUI(false)" in reset, (
+        "browser access is no longer reset on a new chat")
+    assert "_applyDesktopUI(false)" in reset, (
+        "a new chat does not reset desktop control, so it is inherited from "
+        "the previous conversation — the highest-risk capability here "
+        "(shell / file writes / GUI) must not carry over by omission")
+
+
+def test_the_reset_path_covers_every_local_control_flag():
+    """Complement: pin the pair together so the next capability isn't forgotten.
+
+    The bug was an omission, not a wrong value — one setter simply missing
+    from a long list. Asserting both flags reset in the same place makes the
+    omission visible rather than silent.
+    """
+    reset = _slice_fn("_resetToolsToDefaults")
+    restored = _slice_fn("_restoreConvToolState")
+    for setter in ("_applyBrowserUI", "_applyDesktopUI"):
+        assert setter in restored, (
+            f"{setter} is not restored per-conversation — the guard below "
+            f"would then be pinning a flag nothing sets")
+        assert setter in reset, (
+            f"{setter} is restored per-conversation but never reset for a new "
+            f"chat, so its value leaks across conversations")
 
 
 # ── 6. No dead i18n strings on this surface ────────────────────────────

@@ -33,6 +33,13 @@
 var _LC_POLL_MS = 3000;
 var _lcPollTimer = null;
 
+/* Last CONFIRMED reachability per capability, written only by the renderers
+ * from a real status response. `null` = never confirmed, which is NOT the same
+ * as "unreachable" — an unchecked capability must never be presented as
+ * broken. Read by the switch repaint (which would otherwise have to guess) and
+ * by the badge. */
+var _lcReach = { browser: null, desktop: null };
+
 function openLocalControlModal() {
   var el = document.getElementById('localControlModal');
   if (!el) return;
@@ -90,24 +97,44 @@ function _lcSetStatus(rowId, connected, label) {
 
 /* Paint one row's switch (reflects the real wire flag, not modal-local state).
  *
- * `usable` gates whether the switch can be operated at all. Turning a
- * capability ON while nothing is connected is the ORIGINAL silent-failure bug
- * in a new costume: `lib/tools/registry/_build.py` ships ZERO tools for an
- * unconnected bridge, so the toggle would light up and the AI would still have
- * nothing. A control that cannot achieve what it claims must not invite the
- * click — it is disabled, and the row says why. Once the agent connects the
- * live poll re-enables it within one beat, so this is never a dead end. */
-function _lcSetSwitch(switchId, on, usable) {
+ * `reachable` gates turning the capability ON. Switching it on while nothing
+ * is connected is the ORIGINAL silent-failure bug in a new costume:
+ * `lib/tools/registry/_build.py` ships ZERO tools for an unconnected bridge,
+ * so the toggle would light up and the AI would still have nothing. A control
+ * that cannot achieve what it claims must not invite the click. Once the agent
+ * connects the live poll re-enables it within one beat, so it is never a dead
+ * end.
+ *
+ * ── The gate is ONE-WAY, and that asymmetry is the point ──
+ * Turning OFF is ALWAYS allowed, even while disconnected. Gating both
+ * directions meant a capability enabled while the agent was up became
+ * unrevokable the moment that agent dropped: the flag stayed ON on the wire
+ * (it persists per-conversation and is sent to the server), the switch showed
+ * ON and greyed out, and the one action a worried user wants — withdraw access
+ * to their own machine — was the one action the UI refused. A safety control
+ * must never be harder to switch off than on. */
+function _lcSetSwitch(switchId, on, reachable) {
   var sw = document.getElementById(switchId);
   if (!sw) return;
-  var can = (usable === undefined) ? true : !!usable;
+  var canEnable = (reachable === undefined) ? true : !!reachable;
+  var can = canEnable || !!on;   // already on ⇒ always revocable
   sw.classList.toggle('on', !!on);
   sw.setAttribute('aria-checked', on ? 'true' : 'false');
   sw.disabled = !can;
   sw.classList.toggle('lc-switch-off', !can);
-  if (can) sw.removeAttribute('title');
-  else sw.title = _lcT('local.switchBlocked',
-    '连接成功后才能开启 —— 现在打开，AI 也拿不到任何工具。');
+  /* Flag a capability that is ON while nothing is connected: the AI is getting
+   * zero tools from it, so leaving it looking healthy repeats the original
+   * lie in a quieter form. */
+  sw.classList.toggle('lc-switch-stale', !!on && !canEnable);
+  if (!can) {
+    sw.title = _lcT('local.switchBlocked',
+      '连接成功后才能开启 —— 现在打开，AI 也拿不到任何工具。');
+  } else if (!!on && !canEnable) {
+    sw.title = _lcT('local.switchStale',
+      '已开启，但当前未连接 —— AI 现在拿不到这项能力的任何工具。可随时关闭。');
+  } else {
+    sw.removeAttribute('title');
+  }
 }
 
 /* Render the "what does this actually give the AI" line for one row.
@@ -165,8 +192,10 @@ function _lcRenderBrowser(d, err) {
     _lcSetStatus('lcBrowserStatus', false, _lcT('local.notInstalled', '尚未安装'));
   }
 
+  _lcReach.browser = connected;
   _lcSetSwitch('lcBrowserSwitch',
     typeof browserEnabled !== 'undefined' && browserEnabled, connected);
+  _lcUpdateBadge();
   _lcSetAbout('lcBrowserAbout', _lcT('local.browserAbout',
     '读取你已打开的标签页内容，并代你点击、填表单、切换页面。'));
 
@@ -232,8 +261,10 @@ function _lcRenderDesktop(d, err) {
   _lcSetStatus('lcDesktopStatus', connected,
     connected ? _lcT('local.connected', '已连接')
               : _lcT('local.notRunning', '未运行'));
+  _lcReach.desktop = connected;
   _lcSetSwitch('lcDesktopSwitch',
     typeof desktopEnabled !== 'undefined' && desktopEnabled, connected);
+  _lcUpdateBadge();
   _lcSetAbout('lcDesktopAbout', _lcT('local.desktopAbout',
     '浏览与读写本机文件、截屏、打开应用、运行命令（写入与执行需单独授权）。'));
 
@@ -355,7 +386,7 @@ function toggleBrowserFromLocalModal() {
   if (typeof _applyBrowserUI === 'function') _applyBrowserUI(!browserEnabled);
   if (typeof _saveConvToolState === 'function') _saveConvToolState();
   if (typeof updateSubmenuCounts === 'function') updateSubmenuCounts();
-  _lcSetSwitch('lcBrowserSwitch', browserEnabled, true);
+  _lcSetSwitch('lcBrowserSwitch', browserEnabled, _lcReach.browser !== false);
   _lcUpdateBadge();
 }
 
@@ -365,23 +396,47 @@ function toggleDesktopFromLocalModal() {
   if (typeof _applyDesktopUI === 'function') _applyDesktopUI(!desktopEnabled);
   if (typeof _saveConvToolState === 'function') _saveConvToolState();
   if (typeof updateSubmenuCounts === 'function') updateSubmenuCounts();
-  _lcSetSwitch('lcDesktopSwitch', desktopEnabled, true);
+  _lcSetSwitch('lcDesktopSwitch', desktopEnabled, _lcReach.desktop !== false);
   _lcUpdateBadge();
 }
 
 /* ONE summary badge on the merged toolbar entry, counting whichever
- * capabilities are on. The merged row is `active` when either is. */
+ * capabilities are on. The merged row is `active` when either is.
+ *
+ * ── Enabled ≠ working, and the badge must not blur the two ──
+ * `_build_browser` / `_build_desktop` return [] when their bridge is not
+ * connected, so a flag that is ON while the bridge is down contributes
+ * literally zero tools. Counting it the same as a live one restates the very
+ * claim this merge exists to stop making — the user closes the modal, sees a
+ * confident badge, and reasonably concludes the AI can reach their machine.
+ * A capability confirmed unreachable is marked, not hidden: hiding it would
+ * lose the fact that the flag is still ON and still travelling to the server.
+ * `null` (never probed — the modal has not been opened this session) counts as
+ * live, because presenting an unverified capability as broken is its own lie. */
 function _lcUpdateBadge() {
-  var n = ((typeof browserEnabled !== 'undefined' && browserEnabled) ? 1 : 0)
-        + ((typeof desktopEnabled !== 'undefined' && desktopEnabled) ? 1 : 0);
+  var bOn = (typeof browserEnabled !== 'undefined' && browserEnabled);
+  var dOn = (typeof desktopEnabled !== 'undefined' && desktopEnabled);
+  var n = (bOn ? 1 : 0) + (dOn ? 1 : 0);
+  var stale = ((bOn && _lcReach.browser === false) ? 1 : 0)
+            + ((dOn && _lcReach.desktop === false) ? 1 : 0);
   var badge = document.getElementById('localControlBadge');
   if (badge) {
     badge.textContent = n > 0 ? String(n) : '';
     badge.style.display = n > 0 ? '' : 'none';
     badge.classList.toggle('visible', n > 0);
+    badge.classList.toggle('lc-badge-stale', stale > 0);
+    if (stale > 0) {
+      badge.title = _lcT('local.badgeStale',
+        '已开启，但当前未连接 —— AI 实际拿不到这些工具。');
+    } else {
+      badge.removeAttribute('title');
+    }
   }
   var row = document.getElementById('localControlToggle');
-  if (row) row.classList.toggle('active', n > 0);
+  if (row) {
+    row.classList.toggle('active', n > 0);
+    row.classList.toggle('lc-row-stale', stale > 0);
+  }
 }
 
 if (typeof window !== 'undefined') {

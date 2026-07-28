@@ -723,6 +723,13 @@ function _resetToolsToDefaults() {
   _applyFetchEnabledUI(true);
   _applyCodeExecUI(false);
   _applyBrowserUI(false);
+  /* ★ Desktop was the ONE tool flag this function never reset, so a new chat
+   * silently inherited computer control from whatever conversation came
+   * before — `_restoreConvToolState` sets it per-conv, nothing cleared it, and
+   * the merged badge then reported it as active on a conversation the user
+   * never granted it on. It is the highest-risk flag here (shell, file writes,
+   * GUI), so inheriting it by omission is the wrong default. */
+  _applyDesktopUI(false);
   _applyMemoryUI(true);
   /* ★ Swarm + Autopilot default OFF for a project-LESS chat. They are
    * auto-enabled only when the user turns Project mode on (see

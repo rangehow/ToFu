@@ -1067,6 +1067,17 @@
     cookieConsentRevoke:  (domain) => del(`/api/v1/auth-sources/cookie-consent/${encodeURIComponent(domain)}`, { parse: 'response', onError: 'null' }),
   };
 
+  // privateHosts (internal-host SSRF allowlist) ---------------------
+  // REACHABILITY only. An entry here exempts a host from the SSRF guard and
+  // grants NO credentials; authSources above grants credentials and NO SSRF
+  // exemption. Two separate gates on purpose — do not merge them.
+  const privateHosts = {
+    list:   ()           => get('/api/v1/private-hosts', { onError: 'null' }),
+    upsert: (body)       => post('/api/v1/private-hosts', body),
+    toggle: (host, on)   => post(`/api/v1/private-hosts/${encodeURIComponent(host)}/toggle`, { enabled: !!on }, { onError: 'null' }),
+    remove: (host)       => del(`/api/v1/private-hosts/${encodeURIComponent(host)}`, { parse: 'response', onError: 'null' }),
+  };
+
   // trading (AI investment assistant SPA — trading.html) ------------
   // The trading page is a standalone SPA that loads api.js directly. All
   // its endpoints live under /api/v1/trading. `call()` preserves the exact
@@ -1583,6 +1594,7 @@
     health, pricing, clientError, serverConfig, browser, project, daily, paper,
     desktop,
     features, providers, dispatch, oauth, mcp, update, trading, authSources,
+    privateHosts,
     swarm, endpoint, logs, motion, tasks, users,
   };
 

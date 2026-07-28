@@ -1737,6 +1737,76 @@
 .auth-src-btn.danger { background: var(--s-white); color: var(--s-blocked); }
 .auth-src-btn.danger:hover { background: var(--s-blocked); color: var(--s-white); }
 
+/* ── Internal-host allowlist (SSRF exemption — reachability, NOT credentials) ──
+   Deliberately flatter than .auth-src-card: an entry here is one hostname with
+   two verbs, not a multi-step connect flow, so it reads as a list row rather
+   than a card. Shares the same tokens so the two sections look related. */
+.private-hosts-list { display: flex; flex-direction: column; gap: 10px; }
+.priv-host-loading, .priv-host-empty {
+  color: var(--s-ink-soft);
+  font-size: 13px;
+  padding: 10px 2px;
+}
+.priv-host-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  border: var(--s-border-sm);
+  border-radius: var(--s-radius);
+  padding: 10px 14px;
+  background: var(--s-white);
+  box-shadow: var(--s-shadow-xs);
+}
+.priv-host-main { display: flex; align-items: center; gap: 10px; flex: 1 1 auto; min-width: 0; }
+.priv-host-dot {
+  flex: none;
+  width: 12px; height: 12px;
+  border: 2px solid var(--s-ink);
+  background: var(--s-skin);
+}
+.priv-host-dot.on  { background: var(--s-done); }
+.priv-host-dot.off { background: var(--s-skin); }
+.priv-host-name {
+  font-weight: 800;
+  font-size: 13.5px;
+  color: var(--s-ink);
+  word-break: break-all;
+}
+.priv-host-state { font-size: 12px; font-weight: 600; color: var(--s-ink-soft); }
+.priv-host-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.priv-host-btn {
+  padding: 5px 12px;
+  font-size: 11.5px;
+  font-weight: 700;
+  line-height: 1;
+  border-radius: var(--s-radius);
+  border: var(--s-border-sm);
+  background: var(--s-white);
+  color: var(--s-ink);
+  cursor: pointer;
+  box-shadow: var(--s-shadow-xs);
+  transition: transform .1s ease, box-shadow .1s ease, background .1s ease;
+}
+.priv-host-btn:hover  { transform: translate(-1px,-1px); box-shadow: 3px 3px 0 var(--s-ink); }
+.priv-host-btn:active { transform: translate(1px,1px); box-shadow: none; }
+.priv-host-btn.primary { background: var(--s-gold); color: var(--s-ink); }
+.priv-host-btn.danger  { background: var(--s-white); color: var(--s-blocked); }
+.priv-host-btn.danger:hover { background: var(--s-blocked); color: var(--s-white); }
+.priv-host-add { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+.priv-host-input {
+  flex: 1 1 220px;
+  min-width: 0;
+  padding: 7px 12px;
+  font-size: 13px;
+  border-radius: var(--s-radius);
+  border: var(--s-border-sm);
+  background: var(--s-white);
+  color: var(--s-ink);
+}
+.priv-host-msg { flex: 1 1 100%; font-size: 12px; font-weight: 600; color: var(--s-ink-soft); }
+.priv-host-msg.err { color: var(--s-blocked); }
+
 /* ── Toggle switch — brutalist hard-edged ── */
 .auth-src-switch { flex: none; position: relative; display: inline-block; cursor: pointer; }
 .auth-src-switch input { position: absolute; opacity: 0; width: 0; height: 0; }

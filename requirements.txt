@@ -53,7 +53,14 @@ psutil>=5.9
 # min_request_interval_ms to configure(), so an older tofu-search does not crash — it
 # just lacks the throttle. Live-tune via the TOFU_SEARCH_MIN_REQUEST_INTERVAL_MS env
 # var (configure() picks it up for any field the bridge leaves unset).
-tofu-search>=0.5.1
+# >=0.5.2: identity fallback seams — 200+SPA-shell / login-wall / known-SPA-empty /
+# auth-source-failed outcomes now consult the host BrowserProvider (the user's live
+# logged-in browser) instead of dying at anonymous Playwright. SOFT floor: with no
+# extension connected the seams are no-ops (byte-identical to 0.5.1); an older
+# tofu-search does not crash, it just never reaches the browser on shell outcomes
+# (the aigc.sankuai.com failure shape). Deployed-package acceptance:
+# tests/_acceptance_fetch_identity_fallback.py.
+tofu-search>=0.5.3
 trafilatura>=1.6
 # playwright is optional — powers the JS-rendered fallback in tofu_search.fetch.
 # On Linux, Chromium needs X11/GTK shared libs (libatk, libgbm, libXcomposite, …).

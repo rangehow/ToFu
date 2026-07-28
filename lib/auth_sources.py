@@ -126,6 +126,19 @@ DEFAULT_SOURCES: list[dict] = [
          {'name': 'a1', 'importance': 'recommended'},
          {'name': 'webId', 'importance': 'optional'},
      ]},
+    # SSO-walled internal site. Anonymous rendering reaches the SSO login page
+    # (ssosv.sankuai.com), never the content, so only a replayed logged-in
+    # session can read it. NOTE: reaching this host at all ALSO requires it to
+    # be listed in tofu-search's ``allow_private_hosts`` — it resolves to an
+    # RFC-1918 address behind a rotating internal load balancer, so the SSRF
+    # guard blocks it by default. The two gates are deliberately separate:
+    # connecting an account must never silently grant an SSRF exemption.
+    {'domain': 'sankuai.com', 'label': 'Meituan internal (SSO)',
+     'aliases': [],
+     'login_url': 'https://aigc.sankuai.com/ml/modelPlaza/modelInfo',
+     'fields': [
+         {'name': 'ssoid', 'importance': 'required'},
+     ]},
 ]
 
 _VALID_IMPORTANCE = ('required', 'recommended', 'optional')

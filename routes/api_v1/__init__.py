@@ -45,6 +45,7 @@ from .swarm import api_v1_swarm_bp
 from .desktop import api_v1_desktop_bp
 from .browser import api_v1_browser_bp
 from .auth_sources import api_v1_auth_sources_bp
+from .private_hosts import api_v1_private_hosts_bp
 from .memory import api_v1_memory_bp
 from .skills import api_v1_skills_bp
 from .mcp import api_v1_mcp_bp
@@ -88,6 +89,7 @@ ALL_V1_BLUEPRINTS = [
     api_v1_desktop_bp,
     api_v1_browser_bp,
     api_v1_auth_sources_bp,
+    api_v1_private_hosts_bp,
     api_v1_memory_bp,
     api_v1_skills_bp,
     api_v1_mcp_bp,

@@ -740,6 +740,7 @@ _BUNDLE_FILES = [
     'settings/other_tabs.js',
     'settings/speech.js',
     'settings/auth_sources.js',
+    'settings/private_hosts.js',
     'settings/save_export.js',
     'settings/system_prompt_editor.js',
     'settings/oauth.js',

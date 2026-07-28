@@ -310,15 +310,35 @@ def _fetch_url_one(target_url: str, user_question: str, fetch_reason: str = ''):
         }
 
     _facade = _facade_mod()
+    _fetch_diag = {}
     try:
         page_content = _facade.fetch_page_content(
             target_url,
             max_chars=_lib.FETCH_MAX_CHARS_DIRECT,
             pdf_max_chars=_lib.FETCH_MAX_CHARS_PDF,
+            diag=_fetch_diag,
         )
+    except TypeError as e:
+        # tofu-search < 0.5.3 has no `diag` out-param. Retry without it rather
+        # than reporting a fetch failure that never happened.
+        logger.debug('[Executor] fetch_page_content has no diag param (%s) — retrying', e)
+        _fetch_diag = {}
+        try:
+            page_content = _facade.fetch_page_content(
+                target_url,
+                max_chars=_lib.FETCH_MAX_CHARS_DIRECT,
+                pdf_max_chars=_lib.FETCH_MAX_CHARS_PDF,
+            )
+        except Exception as e2:
+            logger.error('[Executor] fetch_url failed for url=%s: %s', target_url, e2, exc_info=True)
+            page_content = None
+            _fetch_diag = {'reason': type(e2).__name__,
+                           'detail': '%s: %s' % (type(e2).__name__, e2)}
     except Exception as e:
         logger.error('[Executor] fetch_url failed for url=%s: %s', target_url, e, exc_info=True)
         page_content = None
+        _fetch_diag = {'reason': type(e).__name__,
+                       'detail': '%s: %s' % (type(e).__name__, e)}
 
     is_pdf = (target_url.lower().rstrip('/').endswith('.pdf')
               or (page_content and page_content.startswith('[Page ')))
@@ -391,6 +411,17 @@ def _fetch_url_one(target_url: str, user_question: str, fetch_reason: str = ''):
             saved_path = asset.get('saved_path')
             is_asset = bool(asset.get('is_asset'))
             reason = 'asset'
+        else:
+            # Nothing extracted AND nothing stageable. The pipeline knows WHY;
+            # forward it so the model can act on the cause (retry, pick another
+            # source, or tell the user an internal host needs allowlisting)
+            # instead of seeing an indistinguishable "Failed to fetch".
+            _why = (_fetch_diag or {}).get('detail')
+            _tok = (_fetch_diag or {}).get('reason')
+            if _tok:
+                reason = 'fetch_failed:%s' % _tok
+            if _why:
+                error_msg = _why
 
     filtered_chars = len(page_content) if page_content else 0
     return {

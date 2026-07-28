@@ -11181,31 +11181,15 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 /* 字身深陶土 var(--brand-ink) — 比墨黑暖一度,与吉祥物奶油-琥珀豆腐块同族;
    不用主题 accent #C1794B(会与链接/按钮撞色,显不出品牌) */
 [data-theme="tofu"] .tofu-brand .tofu-brand-t,
+[data-theme="tofu"] .tofu-brand .tofu-brand-o1,
 [data-theme="tofu"] .tofu-brand .tofu-brand-f,
 [data-theme="tofu"] .tofu-brand .tofu-brand-u{
   background:none;
   color:var(--brand-ink);-webkit-text-fill-color:currentColor
 }
-[data-theme="tofu"] .tofu-brand .tofu-brand-o1{
-  position:relative;background:none;
-  color:transparent;-webkit-text-fill-color:transparent
-}
-[data-theme="tofu"] .tofu-brand .tofu-brand-o1::after{
-  content:"";position:absolute;left:50%;top:50%;
-  width:.56em;height:.56em;
-  transform:translate(-50%,-58%) rotate(-7deg);
-  border-radius:28%;
-  background:linear-gradient(148deg,#F9EDD6 10%,#EED3A5 52%,#E0AE6C 100%);
-  box-shadow:
-    inset 0 0 0 1px rgba(146,104,52,.32),
-    inset 2px 2px 3px rgba(255,252,244,.75),
-    inset -2px -3px 5px rgba(178,124,62,.38),
-    0 1px 2px rgba(92,72,44,.22);
-  transition:transform .3s cubic-bezier(.34,1.56,.64,1)
-}
-[data-theme="tofu"] .tofu-brand:hover .tofu-brand-o1::after{
-  transform:translate(-50%,-58%) rotate(9deg) scale(1.07)
-}
+/* 2026-07-28 owner 拍板字标方案 A:摘掉 ::after 方块 o——欢迎屏上方已有具象
+   立方体吉祥物,字标里再放一只扁平方块是重复元素打架;o 回归真字母,
+   悬停 tofuWobble 抖动保留(动画打在 span 上,不依赖 ::after)。 */
 [data-theme="tofu"] .tofu-brand:hover .tofu-brand-t{animation:tofuWobble .72s cubic-bezier(.34,1.56,.64,1)}
 [data-theme="tofu"] .tofu-brand:hover .tofu-brand-o1{animation:tofuWobble .72s cubic-bezier(.34,1.56,.64,1);animation-delay:.07s}
 [data-theme="tofu"] .tofu-brand:hover .tofu-brand-f{animation:tofuWobble .72s cubic-bezier(.34,1.56,.64,1);animation-delay:.14s}

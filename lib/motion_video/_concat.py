@@ -213,18 +213,147 @@ def _font_burn_failed(stderr: str) -> bool:
     return 'failed to find any fallback' in (stderr or '')
 
 
+def _frame_png(video: str, t: float, dest: str, *, ffmpeg: str,
+               env: dict) -> bool:
+    """Extract the frame at ``t`` seconds into ``dest``. False on failure."""
+    try:
+        proc = subprocess.run(
+            [ffmpeg, '-y', '-v', 'error', '-ss', f'{max(0.0, t):.3f}',
+             '-i', video, '-frames:v', '1', dest],
+            env=env, capture_output=True, text=True, timeout=120)
+    except Exception as e:
+        logger.debug('[MotionVideo] frame extract failed: %s', e)
+        return False
+    return proc.returncode == 0 and os.path.isfile(dest) \
+        and os.path.getsize(dest) > 0
+
+
+def _subtitle_ink_bbox(before_png: str, after_png: str):
+    """BBox of pixels the burn CHANGED, i.e. the subtitle ink itself.
+
+    Differencing against the pre-burn frame is what makes this work over a
+    real composition: the scene's own artwork is identical in both frames, so
+    whatever moved is the subtitle. Scanning for "bright pixels" instead would
+    just find the scene's own white headline.
+
+    Returns ``(x0, y0, x1, y1)``, None when nothing changed (a no-op burn), or
+    ``'unavailable'`` when numpy/PIL are missing so the caller can tell
+    "cannot check" apart from "check passed".
+    """
+    try:
+        import numpy as np
+        from PIL import Image
+    except Exception as e:
+        logger.debug('[MotionVideo] ink scan needs numpy+PIL: %s', e)
+        return 'unavailable'
+    try:
+        a = np.asarray(Image.open(before_png).convert('L'), dtype=np.int16)
+        b = np.asarray(Image.open(after_png).convert('L'), dtype=np.int16)
+    except Exception as e:
+        logger.warning('[MotionVideo] ink scan could not read frames: %s', e)
+        return 'unavailable'
+    if a.shape != b.shape:
+        return 'unavailable'
+    # 24/255 ignores encoder noise while still catching antialiased outline.
+    ys, xs = np.where(np.abs(b - a) > 24)
+    if not len(xs):
+        return None
+    return int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
+
+
+def _verify_safe_box(video_path: str, burned: str, cues, width: int,
+                     height: int, *, ffmpeg: str, env: dict,
+                     workdir: str) -> dict:
+    """Assert burned ink lands inside the safe box, by REAL pixel inspection.
+
+    This closes the gate hole that let the overflow ship: the only burn check
+    was :func:`_font_burn_failed`, which detects "no glyph was drawn at all"
+    and is completely blind to "drawn, but running off both edges" (measured
+    2026-07-28: ink bbox ``x[0..1079]`` on a 1080px frame passed every gate).
+
+    Returns ``{'ok': True, 'checked': n}``, or an ``ok=False`` dict with
+    category ``subtitle_overflow`` / ``subtitle_missing``. Inability to
+    inspect (no numpy/PIL, extraction failure) is NOT a failure — it reports
+    ``checked=0`` so a thin environment degrades instead of blocking.
+    """
+    from lib.motion_video._subtitle import safe_box, style_for_frame, wrap_line
+
+    if not cues or width <= 0 or height <= 0:
+        return {'ok': True, 'checked': 0}
+    left, right = safe_box(width, height)
+    style = style_for_frame(width, height)
+    # Check the cues most likely to overflow: widest wrapped line first.
+    ranked = sorted(
+        cues,
+        key=lambda c: -max((len(ln) for ln in wrap_line(c[2], style)),
+                           default=0))
+    checked = 0
+    for start, end, text in ranked[:3]:
+        mid = float(start) + (float(end) - float(start)) / 2.0
+        b_png = os.path.join(workdir, f'_sbcheck_before_{checked}.png')
+        a_png = os.path.join(workdir, f'_sbcheck_after_{checked}.png')
+        try:
+            if not _frame_png(video_path, mid, b_png, ffmpeg=ffmpeg, env=env):
+                continue
+            if not _frame_png(burned, mid, a_png, ffmpeg=ffmpeg, env=env):
+                continue
+            box = _subtitle_ink_bbox(b_png, a_png)
+            if box == 'unavailable':
+                return {'ok': True, 'checked': checked}
+            if box is None:
+                return {'ok': False, 'category': 'subtitle_missing',
+                        'detail': (f'the burn changed no pixels at t={mid:.2f}s '
+                                   f'though cue text was present — subtitles '
+                                   f'did not render')}
+            x0, _y0, x1, _y1 = box
+            if x0 < left or x1 > right:
+                return {
+                    'ok': False, 'category': 'subtitle_overflow',
+                    'detail': (
+                        f'burned subtitle ink spans x[{x0}..{x1}] at '
+                        f't={mid:.2f}s but the safe box for a {width}x{height} '
+                        f'frame is x[{left}..{right}] — the line runs past the '
+                        f'frame edge and is clipped. Text was '
+                        f'{len(text)} chars: {text[:40]!r}')}
+            checked += 1
+        finally:
+            for p in (b_png, a_png):
+                try:
+                    if os.path.isfile(p):
+                        os.unlink(p)
+                except OSError as e:
+                    logger.debug('[MotionVideo] safe-box temp cleanup: %s', e)
+    return {'ok': True, 'checked': checked}
+
+
 def burn_in_subtitles(video_path: str, srt_path: str, output: str, *,
                       fontsdir: str = '', force_style: str = '',
-                      timeout: int = 1800, abort_event=None) -> dict:
+                      timeout: int = 1800, abort_event=None,
+                      verify_safe_box: bool = True) -> dict:
     """Burn a sidecar SRT into the video (hard subtitles), atomic + verified.
 
-    Re-encodes (libx264) — there is no lossless way to hard-sub. ``fontsdir``
-    should point at a directory containing a CJK-capable font when the
-    subtitles contain non-Latin text (fontconfig picks the best match; use
-    ``force_style`` e.g. ``FontName=Noto Serif CJK SC,FontSize=22`` to pin).
-    Post-verified: output exists and duration is preserved (±0.5s).
+    Re-encodes (libx264) — there is no lossless way to hard-sub.
+
+    **The SRT is converted to a geometry-bound ASS document first**
+    (:mod:`lib.motion_video._subtitle`), because a bare SRT is exactly what
+    produced the shipped overflow: with no ``[Script Info]`` header libass
+    assumes a 384x288 reference frame and scales its default style by
+    ``height/288`` (a 5x blow-up at 1440px), and it will not wrap CJK at all,
+    so an unspaced Chinese sentence renders as one line off both edges.
+    ``force_style`` cannot fix either problem — it only reaches
+    ``[V4+ Styles]``, never ``PlayResX``/``PlayResY`` (measured, along with
+    the ``original_size`` option, which also had no effect).
+
+    Frame geometry is read from the VIDEO ITSELF rather than taken from a
+    caller argument, so a new call site cannot forget to pass it and silently
+    reintroduce the 384x288 default.
+
+    ``fontsdir`` adds a font search dir; ``force_style`` still appends for
+    operator overrides. Post-verified: output exists, duration is preserved
+    (±0.5s), and — when ``verify_safe_box`` — the burned ink really lands
+    inside the frame's safe box (a real pixel diff, not a log scan).
     """
-    from lib.motion_video._env import ffmpeg_bin
+    from lib.motion_video._env import build_render_env, ffmpeg_bin
     from lib.motion_video._gates import probe_video
 
     for p, label in ((video_path, 'video'), (srt_path, 'srt')):
@@ -236,7 +365,43 @@ def burn_in_subtitles(video_path: str, srt_path: str, output: str, *,
         return {'ok': False, 'category': 'env_missing',
                 'detail': 'ffmpeg not found (pip install imageio-ffmpeg)'}
 
-    filt = f"subtitles='{_escape_filter_path(os.path.abspath(srt_path))}'"
+    # Geometry comes from the real pixels — the authoritative source.
+    src_probe = probe_video(video_path)
+    frame_w = int((src_probe or {}).get('width') or 0)
+    frame_h = int((src_probe or {}).get('height') or 0)
+
+    sub_path = os.path.abspath(srt_path)
+    cues: list = []
+    if frame_w > 0 and frame_h > 0:
+        from lib.motion_video._srt import parse_srt
+        from lib.motion_video._subtitle import build_ass
+        try:
+            with open(srt_path, encoding='utf-8') as f:
+                cues = [(e.start, e.end, e.text) for e in parse_srt(f.read())]
+        except OSError as e:
+            return {'ok': False, 'category': 'io',
+                    'detail': f'cannot read srt: {e}'}
+        if cues:
+            ass_text, warns = build_ass(cues, frame_w, frame_h)
+            ass_path = os.path.join(
+                os.path.dirname(os.path.abspath(output)) or '.',
+                os.path.basename(output) + '.burn.ass')
+            try:
+                with open(ass_path, 'w', encoding='utf-8') as f:
+                    f.write(ass_text)
+                sub_path = ass_path
+            except OSError as e:
+                logger.warning('[MotionVideo] cannot stage ASS (%s) — '
+                               'falling back to the raw SRT', e)
+            if warns:
+                logger.warning('[MotionVideo] %d over-long cue(s) in this burn',
+                               len(warns))
+    else:
+        logger.warning('[MotionVideo] could not probe %s for frame size — '
+                       'burning the raw SRT without a geometry contract',
+                       video_path)
+
+    filt = f"subtitles='{_escape_filter_path(sub_path)}'"
     if fontsdir:
         filt += f":fontsdir='{_escape_filter_path(os.path.abspath(fontsdir))}'"
     if force_style:
@@ -269,6 +434,25 @@ def burn_in_subtitles(video_path: str, srt_path: str, output: str, *,
     if not os.path.isfile(tmp_out) or os.path.getsize(tmp_out) == 0:
         return {'ok': False, 'category': 'io',
                 'detail': 'ffmpeg produced no output'}
+
+    # ── Safe-box verification BEFORE the output is promoted ──
+    # Runs on tmp_out so a defective burn never reaches the deliverable path.
+    safe_checked = 0
+    if verify_safe_box and cues and frame_w > 0 and frame_h > 0:
+        vres = _verify_safe_box(
+            video_path, tmp_out, cues, frame_w, frame_h, ffmpeg=ffmpeg,
+            env=build_render_env(),
+            workdir=os.path.dirname(os.path.abspath(output)) or '.')
+        if not vres.get('ok'):
+            logger.warning('[MotionVideo] burn-in rejected: %s',
+                           vres.get('detail'))
+            try:
+                os.unlink(tmp_out)
+            except OSError as e:
+                logger.debug('[MotionVideo] rejected burn cleanup: %s', e)
+            return vres
+        safe_checked = vres.get('checked', 0)
+
     os.replace(tmp_out, output)
 
     v_probe = probe_video(video_path)
@@ -282,7 +466,9 @@ def burn_in_subtitles(video_path: str, srt_path: str, output: str, *,
         if dv > 0.5:
             return {'ok': False, 'category': 'io',
                     'detail': f'burned duration drifted {dv:.3f}s'}
-    logger.info('[MotionVideo] burn-in done: %s', output)
+    logger.info('[MotionVideo] burn-in done: %s (safe-box verified on %d cue(s))',
+                output, safe_checked)
     return {'ok': True, 'output': output,
             'duration': round(float(f_probe.get('duration') or 0), 3),
+            'safe_box_checked': safe_checked,
             'elapsed': round(res['elapsed'], 2)}

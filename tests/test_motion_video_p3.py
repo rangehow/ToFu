@@ -42,8 +42,11 @@ def _make_exe(dirpath: str, name: str, body: str) -> str:
 
 def _fake_ffmpeg(tmp_path):
     marker = tmp_path / 'ffmpeg_args.txt'
+    # APPENDS: burn_in_subtitles now also extracts frames for the safe-box
+    # verification, so more than one invocation reaches this fake. Overwriting
+    # would leave only the LAST call and hide the burn command under test.
     cli = _make_exe(str(tmp_path), 'ffmpeg', f"""#!/bin/sh
-echo "$@" > "{marker}"
+echo "$@" >> "{marker}"
 for a in "$@"; do out="$a"; done
 printf 'video' > "$out"
 exit 0
@@ -75,6 +78,12 @@ def test_burn_in_command_shape(monkeypatch, tmp_path):
     assert 'subtitles=' in args
     assert 'libx264' in args and '-c:v copy' not in args  # re-encode, not copy
     assert 'fontsdir=' in args
+    # The burn must consume a geometry-bound ASS document, never the bare SRT:
+    # a style-less SRT is what made libass assume 384x288 and clip the line
+    # off both frame edges (see tests/test_motion_video_subtitle_geometry.py).
+    burn_cmd = next(ln for ln in args.splitlines() if 'subtitles=' in ln)
+    assert '.ass' in burn_cmd, burn_cmd
+    assert 'f.srt' not in burn_cmd, burn_cmd
 
 
 def test_burn_in_missing_inputs(tmp_path):

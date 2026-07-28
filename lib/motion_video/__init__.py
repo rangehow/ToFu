@@ -75,6 +75,14 @@ from lib.motion_video._srt import (
     total_span,
 )
 from lib.motion_video._storyboard import build_storyboard
+from lib.motion_video._subtitle import (
+    MAX_LINES_PER_CUE,
+    SubtitleStyle,
+    build_ass,
+    safe_box,
+    style_for_frame,
+    wrap_line,
+)
 from lib.motion_video._template import (
     MIN_FONT_PX,
     fit_font_px,
@@ -124,6 +132,12 @@ __all__ = [
     'concat_narrations',
     'mux_audio_video',
     'build_storyboard',
+    'SubtitleStyle',
+    'style_for_frame',
+    'safe_box',
+    'wrap_line',
+    'build_ass',
+    'MAX_LINES_PER_CUE',
     'render_scene_html',
     'on_screen_capacity',
     'fit_font_px',

@@ -21,6 +21,16 @@ Fix: (a) persist the tier immediately on attach/clear so ``conv.chatMode``
 never lags the truth; (b) clamp on restore — a stored ``'studio'`` with no
 ``projectPath`` falls back to ``'chat'``, healing already-poisoned convs.
 
+Bidirectional extension (epic pt_19634a23c5744c18, owner-directed 2026-07-28):
+the MIRROR poison — a stored non-studio tier WITH a ``projectPath`` (stamped
+by the one-way projectState→conv sync while another conversation's project
+was globally active; measured in the DB: ms3sl904z633by, ms43foj3og3qh7) —
+restored with the dial painted Chat while the project bar and collab bar
+both appeared. The dial can never produce this shape deliberately (picking
+Chat detaches the project), so the restore clamp now heals BOTH ways:
+``studio ⟺ projectPath`` — demote studio-without-project, PROMOTE
+non-studio-with-project. Both heals stay paint-only.
+
 These tests drive the REAL shipped functions under node
 (``_restoreConvToolState`` sliced from static/js/main.js,
 ``_deriveChatModeFromFlags`` / ``onProjectAttached`` / ``onProjectCleared``
@@ -42,7 +52,9 @@ MAIN_JS = ROOT / "static" / "js" / "main.js"
 TOOLBAR_JS = ROOT / "static" / "js" / "main" / "main_toolbar_ui.js"
 PROJECT_JS = ROOT / "static" / "js" / "project.js"
 
-RESTORE_CLAMP = "(_storedMode === 'studio' && !conv.projectPath) ? 'chat' : _storedMode"
+RESTORE_CLAMP = ("(_storedMode === 'studio' && !conv.projectPath) ? 'chat'\n"
+                 "      : (_storedMode !== 'studio' && conv.projectPath) ? 'studio'\n"
+                 "      : _storedMode")
 PERSIST_HOOK = "if (typeof _saveConvToolState === 'function') _saveConvToolState();"
 
 
@@ -181,12 +193,64 @@ def test_restore_legacy_conv_without_chatMode_derives_from_project():
 
 
 def test_restore_clamp_leaves_legacy_non_studio_tiers_untouched():
-    """The clamp must ONLY touch 'studio' — legacy air/pro tiers flow through
-    to _applyChatModeUI (which normalises them) unchanged."""
+    """The DEMOTE clamp must ONLY touch 'studio' — a legacy air tier with no
+    project flows through to _applyChatModeUI (which normalises it) unchanged."""
     out = _run_restore({"chatMode": "air"})
     assert out["applied"] == "air", (
-        "the clamp fired on a non-studio tier — it must be studio-specific"
+        "the clamp fired on a non-studio tier with no project — the demote "
+        "branch must be studio-specific"
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Promote clamp — a stored non-studio tier WITH a projectPath is the mirror
+# poison: the project IS attached, so the conversation IS Studio
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_restore_poisoned_chat_with_project_promotes_to_studio():
+    """The exact mirror poison measured in the DB (chatMode='chat' +
+    projectPath=chatui on ms3sl904z633by / ms43foj3og3qh7): restore painted
+    the dial Chat while the project bar and the collab bar both showed — the
+    'Studio not selected but Project Brain exists' complaint. Restore must
+    heal it UP to Studio: a project attached IS Studio."""
+    out = _run_restore({"chatMode": "chat", "projectPath": "/mnt/work/repo"})
+    assert out["calls"] == 1
+    assert out["applied"] == "studio", (
+        "a conversation WITH an attached project must restore as Studio — the "
+        "stored 'chat' tier is the mirror poison and must be clamped upward"
+    )
+
+
+def test_promote_clamp_does_not_fire_without_project():
+    """The promote branch must key on projectPath — a plain 'chat' conv with
+    no project stays chat (no phantom Studio)."""
+    out = _run_restore({"chatMode": "chat", "projectPath": ""})
+    assert out["applied"] == "chat"
+
+
+def test_NC_without_promote_clamp_poisoned_conv_restores_as_chat():
+    """Neuter: revert the clamp to the PRE-FIX one-way shape (demote only)
+    → the poisoned conv restores as Chat with a project attached (the
+    reported mismatch) — proving the promote branch specifically, not just
+    'a clamp exists', is what heals the mirror poison."""
+    fn = _restore_fn()
+    assert RESTORE_CLAMP in fn, "harness stale: clamp expression not found"
+    one_way = ("(_storedMode === 'studio' && !conv.projectPath) ? 'chat'"
+               " : _storedMode")
+    neutered = fn.replace(RESTORE_CLAMP, one_way)
+    assert neutered != fn
+    out = _run_restore({"chatMode": "chat", "projectPath": "/mnt/work/repo"},
+                       restore_src=neutered)
+    assert out["applied"] == "chat", (
+        "NEUTER must reproduce the bug: with the pre-fix one-way clamp, "
+        "poisoned chatMode='chat' + projectPath restores as Chat with the "
+        "project still attached"
+    )
+    # discriminating: the demote direction still works on the one-way shape,
+    # so the red is attributable to the MISSING promote branch alone.
+    out2 = _run_restore({"chatMode": "studio", "projectPath": ""},
+                        restore_src=neutered)
+    assert out2["applied"] == "chat"
 
 
 def test_NC_without_clamp_poisoned_conv_restores_as_studio():

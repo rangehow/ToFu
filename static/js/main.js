@@ -666,11 +666,19 @@ function _restoreConvToolState(conv) {
   if (typeof _applyChatModeUI === 'function') {
     const _storedMode = conv.chatMode
       || (typeof _deriveChatModeFromFlags === 'function' ? _deriveChatModeFromFlags(conv) : 'chat');
-    /* ★ Studio ⟺ a project is attached. A stored 'studio' tier with NO
-     * projectPath is a poisoned state (e.g. persisted before the project was
-     * cleared — the clear path once repainted without saving) — never restore
-     * it: a project-less conversation is not Studio. */
-    const _mode = (_storedMode === 'studio' && !conv.projectPath) ? 'chat' : _storedMode;
+    /* ★ Studio ⟺ a project is attached — the clamp is BIDIRECTIONAL.
+     * (a) A stored 'studio' tier with NO projectPath is poisoned (e.g.
+     * persisted before the project was cleared — the clear path once
+     * repainted without saving) — never restore it.
+     * (b) The mirror poison: a stored NON-studio tier WITH a projectPath
+     * (stamped by the one-way projectState→conv sync while another conv's
+     * project was globally active; the dial can never produce this on
+     * purpose — picking Chat detaches the project). A project attached IS
+     * Studio, so restore heals it upward. Both heals are paint-only, like
+     * the original one-way clamp. */
+    const _mode = (_storedMode === 'studio' && !conv.projectPath) ? 'chat'
+      : (_storedMode !== 'studio' && conv.projectPath) ? 'studio'
+      : _storedMode;
     _applyChatModeUI(_mode);
   }
   /* ★ Restore the image gen model + batch count + aspect + resolution from conv settings */

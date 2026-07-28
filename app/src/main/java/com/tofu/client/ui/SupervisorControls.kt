@@ -34,17 +34,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.tofu.client.data.Profile
-import com.tofu.client.session.LoginResult
 import com.tofu.client.session.ProbeTrigger
 import com.tofu.client.session.ServerLifecycle
 import com.tofu.client.session.ServerState
 import com.tofu.client.session.SessionManager
 import com.tofu.client.session.SupervisorAction
 import com.tofu.client.session.SupervisorClient
-import com.tofu.client.session.SupervisorUrl
-import kotlinx.coroutines.CancellationException
+import com.tofu.client.session.executeSupervisorCall
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -109,89 +106,49 @@ fun SupervisorControls(
         SideEffect { onStateChange(state) }
     }
 
+    // The identity the RUNNING work belongs to. Held in a remember-ed ref that
+    // every composition refreshes, so an in-flight coroutine can observe the
+    // card changing underneath it. A captured local would compare a value with
+    // itself and be structurally always-true — a guard that guards nothing.
+    val currentKey = remember { arrayOfNulls<Any>(1) }
+    currentKey[0] = stateKey
+
     fun run(action: SupervisorAction, trigger: ProbeTrigger) {
         val plan = ServerLifecycle.probePlan(trigger, ServerLifecycle.isSignedIn(profile))
         // An AUTO probe with no session doesn't run at all — see probePlan.
         // Leaving `busy` untouched matters: setting it would render the card as
         // TRANSITIONING ("Working…") for a call we never make.
         if (!plan.proceed) return
-        // Identity of the card as it is RIGHT NOW. Compared after the call to
-        // decide whether the result still belongs to what's on screen.
         val startedFor = stateKey
         busy = true
         failed = false
         message = null
         scope.launch {
             try {
-                // Establish the session FIRST when we don't hold one. The
-                // supervisor rides the code-server cookie, and code-server (the
-                // proxy) is up even while Tofu is down — so this handshake works
-                // on a STOPPED server. Requiring an Open first was a deadlock:
-                // Open cannot succeed against a server that is down.
-                //
-                // Gated on plan.mayLogIn: only a USER tap gets to spend a login.
-                if (plan.mayLogIn && !ServerLifecycle.isSignedIn(profile)) {
-                    val login = withContext(Dispatchers.IO) { session.login(profile) }
-                    // Includes NeedsInteractiveSso: it yields no cookie, so
-                    // pressing on would 401 and misreport an un-completed
-                    // sign-in as "the daemon isn't responding".
-                    if (ServerLifecycle.isLoginBlocking(login)) {
-                        failed = true
-                        message = ServerLifecycle.explainLoginBlock(login)
-                        return@launch
-                    }
-                }
-                val res = withContext(Dispatchers.IO) {
-                    when (action) {
-                        SupervisorAction.START -> client.start(profile)
-                        SupervisorAction.STOP -> client.stop(profile)
-                        SupervisorAction.STATUS -> client.status(profile)
-                    }
-                }
-                when (res) {
-                    is SupervisorClient.Result.Ok -> {
-                        running = res.running
-                        message = null
-                        // /start returns before the port binds (by design), so
-                        // poll until the server reports itself up rather than
-                        // leaving the card lying that it's still stopped.
-                        if (action == SupervisorAction.START && !res.running) {
-                            for (i in 0 until ServerLifecycle.START_POLL_ATTEMPTS) {
-                                delay(ServerLifecycle.START_POLL_INTERVAL_MS)
-                                val s = withContext(Dispatchers.IO) { client.status(profile) }
-                                if (s is SupervisorClient.Result.Ok && s.running) {
-                                    running = true
-                                    break
-                                }
+                val outcome = executeSupervisorCall(
+                    profile = profile,
+                    action = action,
+                    plan = plan,
+                    signedIn = ServerLifecycle.isSignedIn(profile),
+                    login = { session.login(it) },
+                    call = { a, p ->
+                        withContext(Dispatchers.IO) {
+                            when (a) {
+                                SupervisorAction.START -> client.start(p)
+                                SupervisorAction.STOP -> client.stop(p)
+                                SupervisorAction.STATUS -> client.status(p)
                             }
                         }
-                        // The poll can outlive the card's relevance (user
-                        // navigated away, or edited the profile). A stale
-                        // completion must not force-open a WebView.
-                        val completion = ServerLifecycle.completionFor(
-                            action = action,
-                            running = running == true,
-                            stillCurrent = startedFor == stateKey,
-                        )
-                        if (completion.handOff) onServerReady()
-                        if (completion.showTimeout) {
-                            message = ServerLifecycle.startTimeoutMessage()
-                        }
-                    }
-                    is SupervisorClient.Result.Failed -> {
-                        // An AUTO probe stays silent: "we couldn't reach it just
-                        // now" is not worth painting the card red when the user
-                        // asked for nothing. A USER tap always reports.
-                        if (plan.reportFailure) {
-                            failed = true
-                            message = SupervisorUrl.explainFailure(res.code, res.message)
-                        }
-                    }
-                }
-            } catch (e: CancellationException) {
-                // Leaving composition is not an error — never paint the card
-                // red for it, and let the cancellation propagate normally.
-                throw e
+                    },
+                    // Reads the ref's CURRENT value, which later compositions
+                    // overwrite — so a profile edit mid-poll really does flip
+                    // this to false.
+                    isCurrent = { currentKey[0] == startedFor },
+                )
+                outcome.running?.let { running = it }
+                failed = outcome.failed
+                message = outcome.message
+                if (outcome.handOff) onServerReady()
             } finally {
                 // MUST be in finally. Previously `busy = false` sat at the tail
                 // of each branch, so any throw (a dropped socket mid-poll) left

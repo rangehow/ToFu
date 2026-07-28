@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="static/icons/tofu-welcome.svg" width="140" height="160" alt="Tofu logo" /><br/>
+  <img src="static/icons/tofu-welcome.svg" width="140" height="140" alt="Tofu logo" /><br/>
   <img src="static/icons/tofu-brand-title.svg" width="280" height="78" alt="Tofu" /><br/>
   <sub>豆腐 — 自托管 AI 助手</sub>
 </p>

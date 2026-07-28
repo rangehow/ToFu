@@ -1,5 +1,14 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-28(续·logo 定稿) — 主 logo 重设计收口:**A2 柔边精修全量上线**(owner 截图报障「不太满意」→ 三候选 → A 上线后被现场否决 → 全量回滚 → A2 in-situ 验收放行;守卫 `test_frontend_mobile_client_entry` **2/2**;纯静态资源,**刷新页面即生效**)
+
+- **全历程(一条完整的「设计评审方法论」教训链):** 现款 `tofu-welcome.svg` 是像素稿的 VTracer 机器描摹(30.6KB、阶梯随机、16px 五官糊化)→ 三候选对比(A 精修等距/B 扁平/C 规整像素,对比页 `static/icons/_gen/logo-redesign/preview.html`)→ owner 拍板 A 并要求五官 +40% → A 上线后 owner **在真实欢迎屏上否决**(放大的脸太吵、硬几何丢了手作感)→ 全量回滚(兄弟会话 3a225eba + checkout,我逐项 grep 验证零残留)→ A2 新 brief(**比例贴现款、ω 猫嘴保留、只修工艺不修性格**)→ 微调(眼 +15%、嘴 1.15→1.3)→ **in-situ 验收放行**(生产 CSS+真实 markup+playwright 无头截图:欢迎屏 64px/侧栏 22px/标签 16px 三 surface)。
+- **A2 终稿(2.2KB,现款的 1/14):** 圆角顶点 plush 剪影 + 2:1 等距 + 三面柔渐变 + 现款五官比例 + ω 猫嘴 + 柔腮红 + 压暗高光。16px 实测五官可读 → **单文件通吃 favicon,无需变体**;奶油/浅/深三底色自持(owner 深色合成实测)。
+- **上线六项:** ①`tofu-welcome.svg` ← A2;②`logo.png` 重渲 1024 真 PNG(替旧伪 JPEG)+ `tofu.ico`/`icns` 重新生成;③README×2 img `140×160`→`140×140`(旧竖版 viewBox 的盒子,方形新图会留空白带);④`manifest.json` PWA 图标 + ⑤`apple-touch-icon` 内联 data-URI 从 A2 重生成(python 生成 + JSON 回验);⑥favicon link **零改动**(回滚后已指回 tofu-welcome.svg)。字标 cube-o 是 CSS 扁平块(`styles.css:11201`),与新几何同色系不同详略,不打架,字标零改动(字标探索归 peer 工作流)。
+- **★ 方法三条(本轮最贵重的产出):** ①**设计评审禁止对比条拍板**——A 在 256px 对比条成立、在 64px 真实欢迎屏被否;in-situ(生产 CSS+真实 markup+真实尺寸无头截图)是唯一的验收闸,harness 留在 `_gen/logo-redesign/insitu.html`(`?icon=` 可换任意候选,LD_LIBRARY_PATH 指 conda lib 解 libatk);②「加强五官」类指令必须在真实尺寸复核——owner 自己的 +40% 指令也被实测证伪,放大 15% 才是胆识与气质的平衡点;③icon 面是共享 HEAD 高 traffic 面——本批被兄弟宽 add 卷带进 359ca94e 一次、回滚被卷带式执行一次,提交窗口要短、状态核对要逐文件。
+- **家族后续:** 角色图标(planner/worker/critic 等 11 枚,同工艺 VTracer 描摹)原 epic `pt_873f13c288d24a96` 文案基于已否决的「方向 A」,已被新 epic 取代——以 **A2 终稿**为家族模板 + 22px/40px in-situ 验收闸 + 引用面普查先行(.svg/.png 双格式),字标 CSS 仍归 peer 边界。
+- **验收边界(诚实分账):** ①全部修复 committed 且纯静态,用户刷新即见;②`static/icons/_gen/logo-redesign/`(候选稿/生成器/对比页/harness)按 owner 指令不进提交,保留为家族 epic 工作台;③README 的 `tofu-brand-title.svg` 像素字标未动(与字标 cube-o 同属风格保留面);④`make desktop-icons` 在本机需 `python3` 直跑(`python`=Py2 怪癖,Makefile 不改)。
+
 ### 2026-07-28(续24) — test-health 第三批:**守卫红了的第五态 —— 它断言的事实从来不存在**;其中一条虚构符号掩护着一个真的死分支(commit `3895b523`,5 文件 +379/-35;finalize **3/3** + **NEUTER×2 各咬**,typography **8/8** 含新 NC,globals+tsc **8/8**,相邻滚动/渲染 7 套 **23/23**,`static/styles.css` 按 owner 指令零触碰)
 
 - **★ 第五态(前四态之外的新形态):** 已知四态是「锚点漂移 / 产品真坏 / 并行互踩 / 断言极性写反」,四者都默认**被断言的符号是真的**。本批两条守卫各自钉在一个**虚构事实**上:

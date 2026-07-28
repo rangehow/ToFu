@@ -261,6 +261,15 @@ def _existing_composition(index_path: str, duration: float) -> str | None:
     NOT be re-authored (that would re-spend an agent loop per restart). The
     duration check guards against a stale composition from a run whose
     timeline changed — that one is discarded and re-made.
+
+    **A degraded FALLBACK card is never reused.** Measured 2026-07-28: this
+    function compared only ``data-duration``, so it could not tell an authored
+    composition from the zero-LLM template. A scene degraded by a transient
+    network blip therefore had the gradient card written to ``index.html``, and
+    every later resume/regen adopted it — pinning that scene to the fallback
+    FOREVER, so re-running the job could never retry its authoring. The
+    template stamps itself (see ``_template.TEMPLATE_MARKER``); that marker is
+    the honest signal that this scene still owes the user a real composition.
     """
     if not os.path.isfile(index_path):
         return None
@@ -269,6 +278,11 @@ def _existing_composition(index_path: str, duration: float) -> str | None:
             html = f.read()
     except OSError as e:
         logger.debug('[MotionVideo] cannot read %s: %s', index_path, e)
+        return None
+    from lib.motion_video._template import is_template_composition
+    if is_template_composition(html):
+        logger.info('[MotionVideo] %s holds a degraded fallback card — '
+                    're-authoring instead of adopting it', index_path)
         return None
     import re as _re
     m = _re.search(r'data-duration="([0-9.]+)"', html)

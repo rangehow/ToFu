@@ -35,7 +35,19 @@ from lib.log import get_logger
 logger = get_logger(__name__)
 
 __all__ = ['render_scene_html', 'on_screen_capacity', 'fit_font_px',
-           'scene_on_screen', 'FONT_PX_STEPS', 'MIN_FONT_PX', 'CAPTION_FONT_PX']
+           'scene_on_screen', 'FONT_PX_STEPS', 'MIN_FONT_PX', 'CAPTION_FONT_PX',
+           'TEMPLATE_MARKER', 'is_template_composition']
+
+#: Stamped into every template composition so a FALLBACK card is
+#: distinguishable from an authored one on disk. Without it the engine's
+#: resume path (which compared only ``data-duration``) adopted a card left by
+#: a transient failure and pinned that scene to the gradient forever.
+TEMPLATE_MARKER = 'data-tofu-composition="template-fallback"'
+
+
+def is_template_composition(html: str) -> bool:
+    """True when ``html`` is the zero-LLM fallback card rather than authored."""
+    return TEMPLATE_MARKER in (html or '')
 
 #: Candidate headline sizes, largest first. The chosen size is the biggest one
 #: whose measured capacity still holds the caption.
@@ -140,6 +152,7 @@ _TEMPLATE = """<!doctype html>
     <div
       id="root"
       data-composition-id="main"
+      data-tofu-composition="template-fallback"
       data-start="0"
       data-duration="{duration}"
       data-width="{width}"

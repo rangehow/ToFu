@@ -246,8 +246,39 @@ def test_scene_author_per_job_choice_wins_over_the_env(monkeypatch):
 #  Engine compose-stage resume (no re-authoring)
 # ══════════════════════════════════════════════════════════
 
+def _authored_html(duration=4.0):
+    """A composition that passes the gate WITHOUT the template's fallback mark.
+
+    The resume tests below must not use :func:`_good_html`: that returns the
+    zero-LLM TEMPLATE, and ``_existing_composition`` now deliberately refuses
+    to adopt a fallback card (a scene degraded by a transient blip used to be
+    pinned to the gradient forever, because the resume path compared only
+    ``data-duration``). Using the template here would test the opposite of the
+    intended behaviour — and, in the duration-mismatch case, would pass for
+    the wrong reason.
+    """
+    return f'''<!doctype html>
+<html><head><meta charset="UTF-8">
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+<style>*{{margin:0;padding:0;box-sizing:border-box}}
+html,body{{width:1080px;height:1440px;overflow:hidden;background:#000}}
+#root{{position:relative;width:1080px;height:1440px;overflow:hidden}}
+.bgfill{{position:absolute;inset:0;background:linear-gradient(160deg,#0b0f14,#1d3a5f)}}
+.clip{{position:absolute;inset:0;display:grid;place-items:center}}
+.headline{{font-size:96px;font-weight:800;color:#fff;max-width:900px}}</style></head><body>
+<div id="root" data-composition-id="main" data-start="0" data-duration="{duration}"
+     data-width="1080" data-height="1440">
+<div class="bgfill"></div>
+<section id="c1" class="clip" data-start="0" data-duration="{duration}" data-track-index="1">
+<h1 class="headline" id="hl">Authored scene</h1></section></div>
+<script>window.__timelines=window.__timelines||{{}};
+const tl=gsap.timeline({{paused:true}});
+tl.from('#hl',{{opacity:0,y:56,duration:.7}},0.2);
+window.__timelines['main']=tl;</script></body></html>'''
+
+
 def test_existing_composition_reused_when_duration_matches(tmp_path):
-    html = _good_html(duration=4.0)
+    html = _authored_html(duration=4.0)
     p = tmp_path / 'index.html'
     p.write_text(html, encoding='utf-8')
     assert eng._existing_composition(str(p), 4.0) == html
@@ -255,8 +286,22 @@ def test_existing_composition_reused_when_duration_matches(tmp_path):
 
 def test_existing_composition_discarded_when_duration_changed(tmp_path):
     p = tmp_path / 'index.html'
-    p.write_text(_good_html(duration=4.0), encoding='utf-8')
+    p.write_text(_authored_html(duration=4.0), encoding='utf-8')
     assert eng._existing_composition(str(p), 7.5) is None
+
+
+def test_existing_composition_refuses_a_degraded_fallback_card(tmp_path):
+    """A template card on disk must be RE-AUTHORED, not adopted.
+
+    Pins the fix for the permanent lock-in: pre-fix, one transient network
+    fault wrote the gradient card to index.html and every later resume/regen
+    adopted it, so re-running the job could never retry that scene's
+    authoring. Full coverage (incl. NEUTER) lives in
+    tests/test_motion_video_author_resilience.py.
+    """
+    p = tmp_path / 'index.html'
+    p.write_text(_good_html(duration=4.0), encoding='utf-8')   # the template
+    assert eng._existing_composition(str(p), 4.0) is None
 
 
 def test_existing_composition_absent_file(tmp_path):

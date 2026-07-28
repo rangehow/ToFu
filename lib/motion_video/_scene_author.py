@@ -36,20 +36,86 @@ one agent loop per scene).
 from __future__ import annotations
 
 import json
+import logging
 import os
 
 from lib.log import get_logger
 
 logger = get_logger(__name__)
 
-__all__ = ['author_scene', 'scene_author_enabled', 'SCENE_AUTHOR_TOOLS']
+__all__ = ['author_scene', 'scene_author_enabled', 'SCENE_AUTHOR_TOOLS',
+           'is_transient_fault', 'load_draft', 'save_draft',
+           'DRAFT_FILENAME']
 
 #: Bounded rounds per scene (tool-eligible rounds; +1 final no-tools round).
 _DEFAULT_MAX_ROUNDS = 4
 #: Cumulative token ceiling per scene — the cost cap (拍板 #3).
-_DEFAULT_TOKEN_BUDGET = 60000
+#:
+#: Raised from 60000 after measuring the shipped 0-of-8 job: two scenes blew
+#: through it (74040 and 67941 tokens) on compositions that were otherwise
+#: progressing, so the old ceiling was cutting off complex scenes mid-repair
+#: rather than catching a runaway.
+_DEFAULT_TOKEN_BUDGET = 90000
 #: Max output tokens per dispatch (a composition is a few hundred lines).
 _MAX_TOKENS_PER_ROUND = 8192
+
+#: Attempts for the WHOLE author loop when it dies of a TRANSIENT fault.
+#: A transient fault is an infrastructure event (the network, a rate limit, an
+#: expired token) — not evidence that the model cannot compose this scene, so
+#: retrying is the correct response and degrading is not.
+_TRANSIENT_ATTEMPTS = 3
+#: Base seconds for the exponential backoff between those attempts.
+_TRANSIENT_BACKOFF_S = 2.0
+
+#: Where the in-progress composition is persisted.
+#:
+#: It lives in a DOT-SUBDIRECTORY, not beside ``index.html``, and that is not
+#: cosmetic: the renderer scans the project root and rejects the project with
+#: "Multiple root-level HTML files with data-composition-id" the moment a
+#: second composition-looking file sits next to it. Measured — the first draft
+#: implementation put the file in the scene dir and turned every resumed scene
+#: into a gate failure, i.e. it broke the very scenes it was meant to save.
+DRAFT_SUBDIR = '.tofu-draft'
+DRAFT_FILENAME = os.path.join(DRAFT_SUBDIR, 'composition.html')
+
+#: Substrings that identify a TRANSIENT infrastructure fault in an exception.
+#: Measured from the shipped 0-of-8 job's own log lines: an expired OAuth
+#: token, a 429 from the shared gateway, and a 119s read timeout each
+#: destroyed one scene's creative work permanently.
+_TRANSIENT_MARKERS = (
+    'read timed out', 'readtimeout', 'timed out', 'timeout',
+    'connection reset', 'connection aborted', 'connection error',
+    'connectionreset', 'remote end closed', 'broken pipe',
+    'temporarily unavailable', 'service unavailable', 'bad gateway',
+    'too many requests', 'rate limit', 'ratelimit', ' 429', 'http 429',
+    ' 502', ' 503', ' 504',
+    'not logged in', 'no valid oauth token', 'token expired',
+    'invalid_grant', 'unauthorized', 'http 401',
+    'all providers failed', 'no slot available', 'no healthy',
+)
+
+
+def is_transient_fault(exc: BaseException) -> bool:
+    """True when ``exc`` is an infrastructure fault worth RETRYING.
+
+    The distinction this draws is the whole point: "the model wrote a
+    composition that fails the gate" is a quality verdict and degrading to the
+    template is the right answer, but "the gateway timed out" says nothing
+    about the composition — and treating the two identically is what turned
+    four transient blips into four gradient cards in the shipped 0-of-8 job.
+
+    Errors are matched on their TEXT rather than their class because the
+    dispatcher re-raises gateway failures as plain ``RuntimeError`` (the OAuth
+    case measured in that job was exactly that), so an isinstance check would
+    miss the most common one.
+    """
+    # A cooperative abort is NOT a fault — the user asked us to stop.
+    for cls_name in type(exc).__mro__:
+        if getattr(cls_name, '__name__', '') in ('KeyboardInterrupt',
+                                                 'SystemExit'):
+            return False
+    blob = f'{type(exc).__name__}: {exc}'.lower()
+    return any(m in blob for m in _TRANSIENT_MARKERS)
 
 
 #: Values of ``TOFU_MOTION_SCENE_AUTHOR`` that force authoring OFF fleet-wide.
@@ -168,6 +234,72 @@ def _read_guide(name: str, limit: int = 12000) -> str:
     except OSError as e:
         logger.warning('[SceneAuthor] cannot read guide %s: %s', name, e)
         return ''
+
+
+def save_draft(scene_dir: str, html: str) -> None:
+    """Persist the best composition written so far, gate-passing or not.
+
+    Why this exists: the loop used to hold the authored HTML in memory only, so
+    a transient fault (or a blown token budget) threw away work the model had
+    already done — the next run started from an empty page. A draft on disk
+    turns "start over" into "continue repairing", which is the same
+    crash-resume contract the engine already applies to FINISHED compositions
+    via ``_existing_composition``.
+
+    Deliberately NOT written to ``index.html``: the engine treats that file as
+    the finished composition and its resume path would then serve a draft that
+    never passed the gate as if it were a deliverable.
+    """
+    if not html:
+        return
+    path = os.path.join(scene_dir, DRAFT_FILENAME)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            f.write(html)
+        os.replace(tmp, path)          # atomic — a torn draft is unusable
+    except OSError as e:
+        logger.warning('[SceneAuthor] cannot save draft to %s: %s', path, e)
+
+
+def load_draft(scene_dir: str, duration: float) -> str:
+    """The persisted draft for this scene iff it matches ``duration``.
+
+    The duration check mirrors ``engine._existing_composition``: a draft from a
+    run whose timeline has since changed is stale and must not be resumed, or
+    the scene renders at the wrong length.
+    """
+    path = os.path.join(scene_dir, DRAFT_FILENAME)
+    try:
+        with open(path, encoding='utf-8') as f:
+            html = f.read()
+    except OSError as _e:
+        logger.debug('[SceneAuthor] no draft at %s (%s)', path, _e)
+        return ''
+    import re as _re
+    m = _re.search(r'data-duration="([0-9.]+)"', html)
+    if not m:
+        return ''
+    try:
+        if abs(float(m.group(1)) - float(duration)) > 0.01:
+            logger.info('[SceneAuthor] discarding stale draft (%ss vs %ss)',
+                        m.group(1), duration)
+            return ''
+    except ValueError as _e:
+        logger.debug('[SceneAuthor] draft duration unparseable (%s)', _e)
+        return ''
+    return html
+
+
+def clear_draft(scene_dir: str) -> None:
+    """Remove the draft once its composition has passed the gate."""
+    path = os.path.join(scene_dir, DRAFT_FILENAME)
+    try:
+        if os.path.isfile(path):
+            os.unlink(path)
+    except OSError as e:
+        logger.debug('[SceneAuthor] cannot clear draft %s: %s', path, e)
 
 
 def _full_gate(html: str, scene_dir: str, *, abort_event=None,
@@ -294,7 +426,8 @@ def author_scene(scene: dict, scene_dir: str, *, width: int, height: int,
                  max_rounds: int = _DEFAULT_MAX_ROUNDS,
                  token_budget: int = _DEFAULT_TOKEN_BUDGET,
                  model: str | None = None,
-                 abort_event=None) -> dict:
+                 abort_event=None,
+                 transient_attempts: int = _TRANSIENT_ATTEMPTS) -> dict:
     """Author one scene's composition with a bounded agent loop.
 
     Returns ``{'ok', 'html', 'mode', 'rounds', 'tokens', 'detail'}`` where
@@ -302,7 +435,24 @@ def author_scene(scene: dict, scene_dir: str, *, width: int, height: int,
     or ``'template'`` (degraded — ``html`` is the zero-LLM template). NEVER
     raises: every failure path degrades, so one bad scene cannot take down the
     film.
+
+    **Transient faults are retried, not degraded** (owner 2026-07-28). Measured
+    on the shipped 0-of-8 job: half its scenes degraded for reasons that said
+    nothing about composition quality — an expired OAuth token, a 429 from the
+    shared gateway, and a 119s read timeout. Each cost that scene its creative
+    work permanently, because the engine then wrote the fallback card to
+    ``index.html`` and the resume path (which compares only ``data-duration``)
+    cannot tell a fallback card from an authored composition, pinning the scene
+    to the gradient card for every future run.
+
+    So: an infrastructure fault gets ``transient_attempts`` tries with
+    exponential backoff, and whatever the author already wrote is persisted as
+    a DRAFT (:func:`save_draft`) and fed back in on the next attempt or the
+    next run. Only a genuine quality verdict — a composition that exists and
+    still fails the gate — degrades to the template.
     """
+    import time as _time
+
     from lib.agent_loop import AbortSignal, run_agent_loop
     from lib.motion_video._template import render_scene_html
 
@@ -321,10 +471,113 @@ def author_scene(scene: dict, scene_dir: str, *, width: int, height: int,
     if abort.aborted:
         return _fallback('aborted before authoring')
 
-    state = {'html': '', 'tokens': 0, 'gate_ok': False}
-    messages = [{'role': 'user', 'content': _build_prompt(
-        scene, width=width, height=height, duration=duration,
-        scene_index=scene_index, total_scenes=total_scenes)}]
+    # Resume from a draft left by an earlier attempt / an earlier process:
+    # continuing a repair is strictly better than restarting from a blank page.
+    resumed = load_draft(scene_dir, duration)
+    if resumed:
+        logger.info('[SceneAuthor] %s resuming from a %d-char draft',
+                    scene.get('id'), len(resumed))
+
+    attempts = max(1, int(transient_attempts))
+    total_tokens = 0
+    last_transient = ''
+    for attempt in range(1, attempts + 1):
+        res = _author_once(
+            scene, scene_dir, width=width, height=height, duration=duration,
+            scene_index=scene_index, total_scenes=total_scenes,
+            max_rounds=max_rounds, token_budget=token_budget, model=model,
+            abort=abort, abort_event=abort_event, seed_html=resumed)
+        total_tokens += res['tokens']
+
+        if res['outcome'] == 'authored':
+            clear_draft(scene_dir)
+            logger.info('[SceneAuthor] %s authored in %d round(s), %d tokens'
+                        '%s', scene.get('id'), res['rounds'], total_tokens,
+                        f' (attempt {attempt})' if attempt > 1 else '')
+            return {'ok': True, 'mode': 'authored', 'html': res['html'],
+                    'rounds': res['rounds'], 'tokens': total_tokens,
+                    'detail': ''}
+
+        # Any HTML produced this attempt is kept for the next one / next run,
+        # whatever the outcome — this is the "never throw away written work"
+        # half of the contract.
+        if res['html']:
+            resumed = res['html']
+            save_draft(scene_dir, res['html'])
+
+        if res['outcome'] == 'transient' and attempt < attempts \
+                and not abort.aborted:
+            last_transient = res['detail']
+            delay = _TRANSIENT_BACKOFF_S * (2 ** (attempt - 1))
+            logger.warning(
+                '[SceneAuthor] %s attempt %d/%d hit a TRANSIENT fault (%s) — '
+                'retrying in %.1fs; %d chars of work kept as a draft',
+                scene.get('id'), attempt, attempts, res['detail'][:120],
+                delay, len(res['html'] or ''))
+            _time.sleep(delay)
+            continue
+
+        if res['outcome'] == 'transient':
+            # Out of attempts. Degrade, but the draft stays on disk so the
+            # NEXT run continues instead of restarting.
+            return _fallback(
+                f'transient fault persisted across {attempts} attempt(s): '
+                f'{res["detail"][:160]}',
+                rounds=res['rounds'], tokens=total_tokens)
+        # A genuine quality verdict (or an abort) — degrading is correct.
+        detail = res['detail']
+        if last_transient:
+            detail += f' (an earlier attempt also hit: {last_transient[:80]})'
+        return _fallback(detail, rounds=res['rounds'], tokens=total_tokens)
+
+    return _fallback('author loop exhausted its attempts',
+                     tokens=total_tokens)
+
+
+def _author_once(scene: dict, scene_dir: str, *, width: int, height: int,
+                 duration: float, scene_index: int, total_scenes: int,
+                 max_rounds: int, token_budget: int, model: str | None,
+                 abort, abort_event, seed_html: str = '') -> dict:
+    """ONE attempt of the author loop.
+
+    Returns ``{'outcome', 'html', 'rounds', 'tokens', 'detail'}`` where
+    ``outcome`` is:
+
+      * ``'authored'``  — the composition passed the gate;
+      * ``'transient'`` — an infrastructure fault (retry is worthwhile);
+      * ``'quality'``   — a composition exists but fails the gate, or none was
+                          written at all (degrade is correct);
+      * ``'aborted'``   — the user stopped us.
+
+    Split out of :func:`author_scene` so the retry policy is expressed once,
+    over a function whose failure MODE is part of its return value — the old
+    single-function shape could only say "fell back", which is precisely why a
+    network blip and a bad composition were indistinguishable.
+    """
+    import json as _json
+
+    from lib.agent_loop import AbortSignal, run_agent_loop
+
+    state = {'html': seed_html, 'tokens': 0, 'gate_ok': False}
+    prompt = _build_prompt(scene, width=width, height=height,
+                           duration=duration, scene_index=scene_index,
+                           total_scenes=total_scenes)
+    if seed_html:
+        # Hand the model its own unfinished work plus the gate's current
+        # verdict, so the attempt continues the repair rather than restarting.
+        pending = _full_gate(seed_html, scene_dir, abort_event=abort_event,
+                             scene=scene, advisory=True)
+        prompt += (
+            '\n## Work in progress (resume this, do not start over)\n'
+            'A previous attempt was interrupted by an infrastructure fault. '
+            'Its composition is below. Continue from it: call '
+            'write_composition with an IMPROVED full document, then '
+            'composition_check.\n'
+            + ('Outstanding gate findings:\n'
+               + '\n'.join(f'- {e}' for e in pending[:8]) + '\n'
+               if pending else 'It passed the static gate as written.\n')
+            + f'```html\n{seed_html[:20000]}\n```\n')
+    messages = [{'role': 'user', 'content': prompt}]
 
     def _dispatch(rnd, tools):
         from lib.llm_dispatch.api import dispatch_chat
@@ -346,8 +599,8 @@ def author_scene(scene: dict, scene_dir: str, *, width: int, height: int,
         # cheapest way to break out without a special-case return path.
         if state['tokens'] > token_budget:
             logger.warning('[SceneAuthor] %s hit the %d-token budget (%d used)'
-                           ' — stopping', scene.get('id'), token_budget,
-                           state['tokens'])
+                           ' — stopping (work so far is kept)',
+                           scene.get('id'), token_budget, state['tokens'])
             state['budget_exhausted'] = True
 
     def _on_tool_round(rnd, msg):
@@ -356,15 +609,15 @@ def author_scene(scene: dict, scene_dir: str, *, width: int, height: int,
     def _reply(tc_id: str, payload) -> None:
         messages.append({'role': 'tool', 'tool_call_id': tc_id,
                          'content': payload if isinstance(payload, str)
-                         else json.dumps(payload, ensure_ascii=False)})
+                         else _json.dumps(payload, ensure_ascii=False)})
 
     def _execute(rnd, tc):
         fn = tc.get('function') or {}
         name = fn.get('name') or ''
         tc_id = tc.get('id', '')
         try:
-            args = json.loads(fn.get('arguments') or '{}')
-        except (json.JSONDecodeError, TypeError) as e:
+            args = _json.loads(fn.get('arguments') or '{}')
+        except (_json.JSONDecodeError, TypeError) as e:
             _reply(tc_id, f'Invalid JSON arguments: {e}')
             return
         if not isinstance(args, dict):
@@ -376,6 +629,9 @@ def author_scene(scene: dict, scene_dir: str, *, width: int, height: int,
                 _reply(tc_id, 'Rejected: that is not a complete HTML document.')
                 return
             state['html'] = html
+            # Persist EVERY accepted write: if the next dispatch dies of a
+            # network fault, this is the work that survives.
+            save_draft(scene_dir, html)
             errors = _full_gate(html, scene_dir, abort_event=abort_event,
                                 scene=scene, advisory=True)
             state['gate_ok'] = not errors
@@ -425,23 +681,34 @@ def author_scene(scene: dict, scene_dir: str, *, width: int, height: int,
 
     # The budget flag participates in the loop's abort seam so a blown budget
     # exits through the same path as a user Stop.
-    combined = AbortSignal(lambda: abort.aborted or bool(state.get('budget_exhausted')))
+    combined = AbortSignal(
+        lambda: abort.aborted or bool(state.get('budget_exhausted')))
 
+    rounds = 0
     try:
         outcome = run_agent_loop(
             abort=combined, max_tool_rounds=max_rounds,
             round_tools=SCENE_AUTHOR_TOOLS, dispatch=_dispatch,
             execute_tool=_execute, on_round_result=_on_round,
             on_tool_round=_on_tool_round)
+        rounds = outcome.rounds
     except Exception as e:
-        logger.error('[SceneAuthor] %s loop crashed: %s', scene.get('id'), e,
-                     exc_info=True)
-        return _fallback(f'author loop error: {type(e).__name__}: {e}',
-                         tokens=state['tokens'])
+        kind = 'transient' if is_transient_fault(e) else 'quality'
+        logger.log(
+            logging.WARNING if kind == 'transient' else logging.ERROR,
+            '[SceneAuthor] %s loop raised (%s): %s', scene.get('id'), kind, e,
+            exc_info=(kind != 'transient'))
+        return {'outcome': kind, 'html': state['html'], 'rounds': rounds,
+                'tokens': state['tokens'],
+                'detail': f'author loop error: {type(e).__name__}: {e}'}
 
+    if abort.aborted:
+        return {'outcome': 'aborted', 'html': state['html'], 'rounds': rounds,
+                'tokens': state['tokens'], 'detail': 'aborted during authoring'}
     if not state['html']:
-        return _fallback('author wrote no composition',
-                         rounds=outcome.rounds, tokens=state['tokens'])
+        return {'outcome': 'quality', 'html': '', 'rounds': rounds,
+                'tokens': state['tokens'],
+                'detail': 'author wrote no composition'}
     # The ACCEPT/REJECT verdict deliberately omits the advisory fill check:
     # rejecting an under-filled composition degrades it to the template, which
     # measures worse on the very same axis (58% span / 38% dead). Fill reaches
@@ -450,11 +717,9 @@ def author_scene(scene: dict, scene_dir: str, *, width: int, height: int,
     errors = _full_gate(state['html'], scene_dir, abort_event=abort_event,
                         scene=scene)
     if errors:
-        return _fallback('authored composition still fails the static gate: '
-                         + '; '.join(str(e) for e in errors[:3]),
-                         rounds=outcome.rounds, tokens=state['tokens'])
-
-    logger.info('[SceneAuthor] %s authored in %d round(s), %d tokens',
-                scene.get('id'), outcome.rounds, state['tokens'])
-    return {'ok': True, 'mode': 'authored', 'html': state['html'],
-            'rounds': outcome.rounds, 'tokens': state['tokens'], 'detail': ''}
+        return {'outcome': 'quality', 'html': state['html'], 'rounds': rounds,
+                'tokens': state['tokens'],
+                'detail': ('authored composition still fails the static gate: '
+                           + '; '.join(str(e) for e in errors[:3]))}
+    return {'outcome': 'authored', 'html': state['html'], 'rounds': rounds,
+            'tokens': state['tokens'], 'detail': ''}

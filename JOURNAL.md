@@ -1,5 +1,11 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-28(续·时间线) — 时间线守卫补齐 review view 验证(owner 复核抓出「第 3 条只兑现一半」:测试里 grep 不到一个 review;commit `f7861704`,1 文件 +147/-48;守卫 **4/4**,干净 committed worktree 复验 **4/4**)
+
+- **owner 判据(值得记下):「共用 `_applyReportEvent` 所以自动骑上同一路径」是构造性推断,不是验证** —— 这个项目的历史恰恰是「共用路径但 idPrefix/入口分叉」腐烂的高发区。review view 的容器是 `#paperReviewContent`、生成入口先走 `_resolveReviewVenue` 场馆解析,这条前置链此前零覆盖。
+- **补法:** 守卫驱动 `_generatePaperReview()` 走真实前置链(打桩 `review/venues` 返回一个场馆 → 路由层捕获 start 请求体,断言复合缓存键恰为 `review:neurips2026:en` —— 顺手钉死了「label 说 NeurIPS 但键是 generic」那个历史 cache-key-skew 家族),同一套事件序列在 `#paperReviewContent` 上断言同样四条;并补 owner 点名的翻译切换面:`_setReviewLang('zh')`(打桩 translate/cache 命中走即时 `_renderFinalReport`)与 `_setReviewLang('en')` 两个方向各自断言时间线仍在正文上方。四断言驱动器按两 view 的 DOM id 参数化,NEUTER 不重复(共享缝已咬)。
+- **环境分账(实测铁证,非推断):** 兄弟套件 stop_button + delta_reset_stall 的 jsdom harness 撞 60s subprocess 超时 —— 直接探针实测**裸 `require('jsdom')` 在 FUSE 上就要 77s 墙钟**(0.5s user + 6.7s sys,其余全是 I/O 等),jsdom 数千小文件的访问模式正踩网盘最差 case;harness 加载的 9 个 JS `node --check` 全净,同两套件在生产码完全相同时(本会话早些)全绿过。判环境 flake;60s 硬编码超时对 FUSE 太紧属测试基建票,不入本批。
+
 ### 2026-07-28(续13) — VU 行被静默吞掉的根修:**非 CAS 整表覆盖这个原语本身**(epic `pt_8fe291984c29466f` done;commits `5f82be70` + `96d8fa5a`;裸写点 **9 → 5**,守卫 **39/39** 干净 committed worktree 复验,**NEUTER×4 各自精确咬**)
 
 - **起因(owner 实测):** conv `ms3sfyrmn31omb` 里 `logs/app.log` 有 **13 次 `✅ Appended VU msg`**,DB 里 `_isVirtualUser` 只剩 **8 条** —— **5 条已完成的 VU 回复(1665–3252 字,各带 2–4 轮工具调用)被抹掉**。模型随后反复说「这条消息是我上一轮的回复原样返回,没有新指令」:因为末尾 VU 行没了,下一轮把**助手自己的上一条回复**当成新指令喂了回去。

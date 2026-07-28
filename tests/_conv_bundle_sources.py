@@ -47,9 +47,55 @@ JS_DIR = os.path.join(ROOT, 'static', 'js')
 
 
 def bundle_files():
-    """The production bundle order (list of paths relative to static/js)."""
-    from lib.js_bundler import _BUNDLE_FILES
-    return list(_BUNDLE_FILES)
+    """Every shipped JS file, in the order the browser ends up executing it.
+
+    BOTH production manifests, not just the core one. `_BUNDLE_FILES` becomes
+    `bundle-<hash>.js` (eager, in the page) and `_DEFERRED_FILES` becomes
+    `feature-<hash>.js`, which `feature-loader.js` (itself IN the core bundle)
+    injects on demand. So core always precedes deferred at runtime, and
+    concatenating the two lists in that order is the real execution sequence —
+    both bundles are plain concatenated <script>s sharing one window scope, so
+    a deferred file may legitimately reference a core symbol.
+
+    Core-only was a SCAN-SURFACE BUG, not a scoping choice: 21 deferred files
+    (all of paper/*, project-brain*, orchestration*, image-gen*, task-mode)
+    were invisible, so a lookup for a symbol living in one of them fell into
+    the "not defined by any bundled file" branch and was reported as a PRODUCT
+    REGRESSION. Measured 2026-07-28: `_activeReviewLang` (paper/report.js),
+    `_loadPaperLibrary` (paper/library.js) and `_refreshAttention`
+    (project-brain.js) all produced "the implementation was REMOVED" while the
+    files were on disk and shipping to users — a precisely-worded false
+    attribution that would send the next reader off to restore code that never
+    left.
+    """
+    from lib.js_bundler import _BUNDLE_FILES, _DEFERRED_FILES
+    return list(_BUNDLE_FILES) + list(_DEFERRED_FILES)
+
+
+def _unbundled_files_defining(symbol):
+    """On-disk `static/js` files that define *symbol* but ship in NO bundle.
+
+    Only consulted to explain a miss. A file here is a real (and different)
+    product problem — the code exists but no user can reach it — so it must
+    not be silently conflated with "the implementation was removed".
+    """
+    shipped = set(bundle_files())
+    found = []
+    for dirpath, dirnames, filenames in os.walk(JS_DIR):
+        dirnames[:] = [d for d in dirnames if d not in ('node_modules', '__pycache__')]
+        for name in filenames:
+            if not name.endswith('.js'):
+                continue
+            # Build artefacts are regenerated copies of the sources above.
+            if name.startswith(('bundle-', 'feature-', 'i18n-')):
+                continue
+            abs_p = os.path.join(dirpath, name)
+            rel = os.path.relpath(abs_p, JS_DIR).replace(os.sep, '/')
+            if rel in shipped:
+                continue
+            if _defines(abs_p, symbol):
+                found.append(rel)
+    return sorted(found)
 
 
 def _defines(path, symbol):
@@ -66,33 +112,52 @@ def _defines(path, symbol):
     return bool(pat.search(src))
 
 
-def files_defining(symbol, *, subtree='core/'):
-    """Bundle-relative paths (in bundle order) that define *symbol*.
+def files_defining(symbol, *, subtree=''):
+    """Bundle-relative paths (in execution order) that define *symbol*.
 
-    Restricted to *subtree* by default so a same-named local in an unrelated
-    feature module cannot hijack the lookup.
+    *subtree* optionally narrows the search (e.g. ``'core/'``) when a
+    same-named local in an unrelated module would otherwise hijack the lookup.
+    It defaults to EVERYTHING shipped: a symbol's home is decided by the
+    bundler's manifests, and pre-filtering by directory is how the deferred
+    tree became invisible in the first place. Narrow only when a measured
+    collision demands it.
     """
     return [f for f in bundle_files()
             if f.startswith(subtree) and _defines(os.path.join(JS_DIR, f), symbol)]
 
 
-def sources_defining(*symbols, subtree='core/'):
-    """Absolute paths to eval, in BUNDLE ORDER, so *symbols* all resolve.
+def sources_defining(*symbols, subtree=''):
+    """Absolute paths to eval, in EXECUTION ORDER, so *symbols* all resolve.
 
-    Raises with a THREE-STATE diagnosis (the distinction that the old
-    hard-coded-path guards could not make):
-      none -> the implementation is gone: a REAL regression, fix the product
-      many -> the single source of truth was copied: collapse it first
-      one  -> resolved; the caller evals the returned files
+    Raises with a FOUR-STATE diagnosis (the distinction a hard-coded path
+    cannot make). The states name DIFFERENT problems and must not share a
+    message — conflating the first two sends the reader to restore code that
+    never left:
+      none, and nowhere on disk -> the implementation is GONE: a real product
+          regression; restore it before touching the guard.
+      none, but present on disk -> the file ships in NO bundle, so no user can
+          reach that code. Also a product problem, but the fix is the MANIFEST
+          (_BUNDLE_FILES / _DEFERRED_FILES), not the implementation.
+      many -> the single source of truth was copied: collapse it first.
+      one  -> resolved; the caller evals the returned files.
     """
     out = []
     for sym in symbols:
         hits = files_defining(sym, subtree=subtree)
         if not hits:
+            stray = _unbundled_files_defining(sym)
+            if stray:
+                raise AssertionError(
+                    f'{sym} is defined by {stray} but that file is in NEITHER '
+                    f'_BUNDLE_FILES nor _DEFERRED_FILES — it is never served, so '
+                    f'no user can reach this code. The implementation is INTACT; '
+                    f'fix the bundler manifest, not the source.')
+            where = f' under {subtree!r}' if subtree else ''
             raise AssertionError(
-                f'{sym} is not defined by any bundled file under {subtree!r} — '
-                f'the implementation was REMOVED. This is a product regression, '
-                f'not harness drift: restore it before touching the guard.')
+                f'{sym} is not defined by any shipped file{where}, and no file '
+                f'under static/js defines it either — the implementation was '
+                f'REMOVED. This is a product regression, not harness drift: '
+                f'restore it before touching the guard.')
         if len(hits) > 1:
             raise AssertionError(
                 f'{sym} is defined by {len(hits)} bundled files ({hits}) — the '
@@ -104,7 +169,7 @@ def sources_defining(*symbols, subtree='core/'):
     return [os.path.join(JS_DIR, f) for f in uniq]
 
 
-def source_argv(*symbols, override=None, subtree='core/'):
+def source_argv(*symbols, override=None, subtree=''):
     """Ordered abs paths for ``node harness <paths...>``, with optional override.
 
     *override* maps a bundle-relative path (e.g. ``'core/conversations.js'``) to
@@ -135,7 +200,7 @@ def source_argv(*symbols, override=None, subtree='core/'):
     return out
 
 
-def eval_prelude(*symbols, subtree='core/'):
+def eval_prelude(*symbols, subtree=''):
     """A node snippet that eval's every file needed to define *symbols*.
 
     Drop-in replacement for a harness's hard-coded

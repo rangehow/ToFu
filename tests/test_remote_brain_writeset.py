@@ -108,7 +108,18 @@ def test_post_missing_conv_no_crash(flask_app):
 #  claim:认领时并入(claimed write_set 是 dispatch 降级的输入)
 # ═══════════════════════════════════════════════════════════
 
-def test_claim_merges_remote_token(flask_app):
+@pytest.fixture
+def _no_post_dispatch(monkeypatch):
+    """post_task now auto-dispatches a startable epic (on_epic_posted), which
+    CLAIMS it for the idle poster conv — a later claim_task by another conv
+    then fails with {'ok': False, 'error': 'already_claimed', 'owner': <poster>}.
+    These tests exercise claim-time write_set merging, not the post-time
+    dispatch trigger, so neuter the trigger seam to keep the epic open."""
+    import lib.conversations.project_dispatch as pd
+    monkeypatch.setattr(pd, 'on_epic_posted', lambda *a, **k: 0)
+
+
+def test_claim_merges_remote_token(flask_app, _no_post_dispatch):
     from lib.conversations.project_board import claim_task, post_task
     _mk_conv(flask_app, 'convPoster', '')
     _mk_conv(flask_app, 'convClaimer', TOKEN)
@@ -116,19 +127,19 @@ def test_claim_merges_remote_token(flask_app):
         tid = post_task(_PROJ, 'convPoster', 'clean epic',
                         write_set=['lib/z.py'])['id']
         r = claim_task(_PROJ, 'convClaimer', tid)
-    assert r['ok']
+    assert r['ok'], f'claim_task failed: {r}'
     ws = _ws_of(flask_app, tid)
     assert 'lib/z.py' in ws and TOKEN in ws
 
 
-def test_claim_local_conv_unchanged(flask_app):
+def test_claim_local_conv_unchanged(flask_app, _no_post_dispatch):
     from lib.conversations.project_board import claim_task, post_task
     _mk_conv(flask_app, 'convP2', '')
     _mk_conv(flask_app, 'convL2', '/srv/code')
     with flask_app.app_context():
         tid = post_task(_PROJ, 'convP2', 'clean2', write_set=['a.py'])['id']
         r = claim_task(_PROJ, 'convL2', tid)
-    assert r['ok']
+    assert r['ok'], f'claim_task failed: {r}'
     assert _ws_of(flask_app, tid) == ['a.py']
 
 

@@ -302,15 +302,23 @@ class TestPollRouteStreams:
     def _fast_long_poll(self, monkeypatch):
         monkeypatch.setattr(db, 'POLL_WAIT_TIMEOUT', 0.2)
 
+    @staticmethod
+    def _auth():
+        """Bridge endpoints are credential-gated (B0); use the in-process
+        loopback agent token like TestPollRouteV2 does."""
+        from routes.api_v1.auth import loopback_agent_token
+        return {'X-Bridge-Secret': loopback_agent_token()}
+
     def test_poll_body_streams_reach_bridge(self, flask_client, clean_streams):
         r = flask_client.post('/api/desktop/poll', json={
             'results': [],
             'streams': [{'cmd_id': 'c9', 'seq': 1, 'stream': 'stdout',
                          'data': 'hello', 'done': False}],
-        })
+        }, headers=self._auth())
         assert r.status_code == 200
         assert db.get_command_stream('c9')['stdout'] == 'hello'
 
     def test_poll_without_streams_still_ok(self, flask_client, clean_streams):
-        r = flask_client.post('/api/desktop/poll', json={'results': []})
+        r = flask_client.post('/api/desktop/poll', json={'results': []},
+                              headers=self._auth())
         assert r.status_code == 200

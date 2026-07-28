@@ -271,15 +271,24 @@ function _reflowToolbar() {
    * with the messages above it, instead of collapsing to the (now much
    * narrower) decluttered-toolbar content width — on a wide landscape display
    * a ~540px toolbar under an 820px message column reads as "input too narrow".
-   * Read the measure from .chat-inner so the responsive reading width (820
-   * desktop / 920 portrait-tablet) stays SINGLE-SOURCE in CSS and adapts per
-   * resolution; the measured toolbar width can still EXPAND beyond it when the
-   * content genuinely needs more room. The min(…,maxW) cap still wins on a
-   * narrow window so we never overflow the viewport. */
+   * Read `--msg-measure`, the SINGLE source of the reading measure, so the
+   * composer tracks the message column per resolution; the measured toolbar
+   * width can still EXPAND beyond it when the content genuinely needs more
+   * room. The min(…,maxW) cap still wins on a narrow window so we never
+   * overflow the viewport.
+   *
+   * ⚠️ DO NOT read `.chat-inner`'s max-width here. It used to be the measure,
+   * but .chat-inner is now a three-track grid ([text][gap][rail]) whose
+   * max-width is the measure PLUS the rail furniture — reading it floored the
+   * composer at ~1178px under an 820px message column, i.e. an input box
+   * visibly wider than the text it belongs to. Measured desync in every
+   * roomy state before this changed; guarded by the composer-alignment
+   * assertion in tests/test_turn_ctx_rail_geometry.py. */
   let readingFloor = 820;
   const chatInner = document.querySelector('.chat-inner');
   if (chatInner) {
-    const mw = parseFloat(getComputedStyle(chatInner).maxWidth);
+    const mw = parseFloat(
+      getComputedStyle(chatInner).getPropertyValue('--msg-measure'));
     if (mw && isFinite(mw)) readingFloor = mw;
   }
   w = Math.min(Math.max(w, readingFloor), maxW);

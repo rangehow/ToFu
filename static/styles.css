@@ -340,35 +340,32 @@ html[data-rail] .folder-quickadd{display:none}
  * being floated into hoped-for margin, so it cannot be clipped by
  * construction.
  *
- * ⚠️ THE READING TRACK IS CAPPED, NOT THE CONTAINER. A first version clamped
- * `.chat-inner` itself and left the text column as a bare `1fr`, so every
- * pixel the rail did not take went into line length: at 2560 the running text
- * measured ~1272px (~130 characters), against ~720px before. That trades the
- * overflow bug for an unreadable measure. The container width is now DERIVED
- * from `--measure-max` plus the fixed furniture (avatar + gaps + rail +
- * padding), so surplus width lands in the symmetric outer margins created by
- * `margin:0 auto` — which is what "the pane breathes" should mean.
- * Guarded by the measure assertions in tests/test_turn_ctx_rail_geometry.py. */
+ * ⚠️ THE MEASURE IS CAPPED ON THE MESSAGE BODY, NOT HERE. Two earlier attempts
+ * were wrong in instructive ways — don't redo either:
+ *   1. Clamping `.chat-inner` and leaving the text as a bare `1fr` poured every
+ *      spare pixel into line length (~130 chars at 2560, vs ~90 comfortable).
+ *   2. Capping via a `--measure-max` var on THIS element was INERT: the real
+ *      bound came from `[data-theme="tofu"] .md-content{max-width:72ch}`, so
+ *      deleting the var changed nothing and the guard asserting it was vacuous.
+ *      That theme-scoped rule also meant dark/light had NO cap at all.
+ * The single source of truth is now `--msg-measure` on `.message-content`
+ * (below), which is theme-agnostic. This element is a plain track container:
+ * surplus width becomes symmetric outer margin via `margin:0 auto`, which is
+ * what "the pane breathes" should mean. */
 .chat-inner{
   --rail-w:0px;
   --rail-gap:0px;
-  /* Upper bound on the RUNNING TEXT column. ~880px at this font size is a
-   * comfortable measure and still a real gain over the previous ~720px. */
-  --measure-max:880px;
-  /* Fixed furniture inside a row: 40px avatar + 12px avatar gap. */
-  --row-furniture:52px;
   display:grid;
   grid-template-columns:minmax(0,1fr) var(--rail-w);
   column-gap:var(--rail-gap);
-  max-width:calc(var(--measure-max) + var(--row-furniture)
-                 + var(--rail-gap) + var(--rail-w) + 48px);
+  max-width:calc(var(--msg-measure) + 52px + var(--rail-gap) + var(--rail-w) + 48px);
   margin:0 auto;
   padding:24px 24px 120px;
 }
-/* The rail column exists only when it fits. 880px reading track + 52px row
- * furniture + 24px gap + 232px rail + 48px padding = 1236px, so a 1368px pane
- * clears it with margin to spare; below that the rail folds inline under each
- * message (see .turn-ctx rules) rather than being clipped or vanishing. */
+/* The rail column exists only when it fits: 820px measure + 52px row furniture
+ * (40px avatar + 12px gap) + 24px gap + 232px rail + 48px padding = 1176px, so
+ * a 1368px pane clears it with room to spare; below that the rail folds inline
+ * under each message (see .turn-ctx rules) rather than being clipped. */
 @container chatpane (min-width: 1368px){
   .chat-inner{ --rail-w:232px; --rail-gap:24px; }
 }
@@ -386,7 +383,20 @@ html[data-rail] .folder-quickadd{display:none}
 .tofu-brand{font-family:'Pixelify Sans','Press Start 2P',cursive;font-size:26px;font-weight:700;letter-spacing:0.08em;margin-bottom:6px}.tofu-brand .tofu-brand-t{background:linear-gradient(135deg,#f5d5a0,#e8b86d);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}.tofu-brand .tofu-brand-o1{background:linear-gradient(135deg,#fdf2d7,#f0dbb8);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}.tofu-brand .tofu-brand-f{background:linear-gradient(135deg,#dcc8a4,#c5a87e);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}.tofu-brand .tofu-brand-u{background:linear-gradient(135deg,#e8b86d,#d4a050);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}.welcome p{color:var(--text-secondary);font-size:13px;max-width:380px;line-height:1.5}.feature-pills{display:flex;gap:6px;margin-top:16px;flex-wrap:wrap;justify-content:center}.feature-pill{font-size:11px;padding:4px 12px;border-radius:20px;border:1px solid var(--border);color:var(--text-secondary);background:var(--bg-tertiary);display:flex;align-items:center;gap:5px}
 .cv-off .message{content-visibility:visible!important}.message{margin-bottom:24px;content-visibility:auto;contain-intrinsic-size:auto 120px;display:grid;grid-template-columns:auto minmax(0,1fr) var(--rail-w);column-gap:12px;align-items:flex-start;position:relative;grid-column:1 / -1}@keyframes slideUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}@keyframes fadeIn{from{opacity:0}to{opacity:1}}.message-new{animation:slideUp .3s ease;content-visibility:visible}
 .message-avatar{width:40px;height:40px;border-radius:0;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;flex-shrink:0;background:transparent;color:white;margin-top:2px;overflow:visible;box-shadow:none}.message-avatar img,.message-avatar svg{filter:brightness(0.82) saturate(0.85)}.message-avatar svg{image-rendering:pixelated}.message:not(.user-msg) .message-avatar{background:transparent;border-radius:0;box-shadow:none}.message.user-msg .message-avatar{width:40px;height:40px;background:transparent;color:#a5b4fc}
-.message-content{flex:1;min-width:0;max-width:100%;overflow:hidden;position:relative;contain:layout style}
+/* ── READING MEASURE (single source of truth, theme-agnostic) ──────
+ * `--msg-measure` bounds the ENTIRE message body: prose, code blocks, tables
+ * and tool cards all lay out against the same number, so a code block never
+ * runs wider than the paragraph above it.
+ *
+ * WHY IT LIVES HERE AND NOT IN A THEME BLOCK: the only cap that ever existed
+ * was `[data-theme="tofu"] .md-content{max-width:72ch}` — theme-scoped, so
+ * dark and light users had NO bound and read the full content box. Declaring
+ * it on `:root` + applying it on `.message-content` makes all three themes
+ * inherit one value. Re-introducing a per-theme measure would recreate the
+ * split; change THIS number instead.
+ * Guarded per-theme by tests/test_turn_ctx_rail_geometry.py. */
+:root{ --msg-measure:820px; }
+.message-content{flex:1;min-width:0;max-width:var(--msg-measure);overflow:hidden;position:relative;contain:layout style}
 .message-header{display:flex;align-items:center;gap:10px;margin-bottom:8px}
 .avatar{width:28px;height:28px;border-radius:var(--radius-xs);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;flex-shrink:0}.avatar.user{background:var(--user-bubble);color:#a5b4fc}.avatar.assistant{background:linear-gradient(135deg,var(--accent),#a78bfa);color:white}
 .message-role{font-size:13px;font-weight:600}.message-time{font-size:11px;color:var(--text-tertiary)}.stream-elapsed-timer{font-size:11px;font-family:'JetBrains Mono',monospace;margin-left:6px;display:inline-flex;align-items:center;gap:4px}.stream-elapsed{color:var(--text-tertiary);font-weight:400}.stream-stuck-warn{color:var(--thinking-text);font-weight:600;animation:stuckPulse 2s ease-in-out infinite}.stream-stuck-severe{color:var(--error-text);font-weight:700;animation:stuckPulse 1s ease-in-out infinite}.stream-stuck-activity{color:var(--text-secondary);font-weight:500;font-style:italic;animation:stuckPulse 2.4s ease-in-out infinite}@keyframes stuckPulse{0%,100%{opacity:0.6}50%{opacity:1}}.stream-liveness-wrap{margin-top:6px}.stream-liveness{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:6px;line-height:1.5}.stream-liveness-icon{flex-shrink:0}.stream-liveness-ok{color:var(--text-secondary);background:rgba(120,170,120,.12)}.stream-liveness-warn{color:var(--thinking-text);background:rgba(200,170,90,.12);animation:stuckPulse 2s ease-in-out infinite}.stream-force-finish-btn{font-size:10px;font-family:'JetBrains Mono',monospace;background:var(--error-text);color:white;border:none;border-radius:4px;padding:1px 8px;margin-left:6px;cursor:pointer;font-weight:600;opacity:0.9;transition:opacity .2s}.stream-force-finish-btn:hover{opacity:1}.message-body{padding-left:0;overflow:hidden;max-width:100%}
@@ -10245,8 +10255,12 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 }
 [data-theme="tofu"] .md-content{
   font-family:var(--sans-body);
-  font-size:15px;line-height:1.7;letter-spacing:0.005em;font-weight:400;
-  max-width:72ch
+  font-size:15px;line-height:1.7;letter-spacing:0.005em;font-weight:400
+  /* NOTE: the former `max-width:72ch` here was the ONLY reading-measure cap in
+   * the whole app, and being theme-scoped it left dark/light uncapped. The
+   * measure is now `--msg-measure` on `.message-content` (theme-agnostic — see
+   * that rule). Do NOT reintroduce a per-theme measure: two sources drift, and
+   * the drift is invisible until someone switches theme. */
 }
 [data-theme="tofu"] .md-content.user-content{font-weight:500}
 [data-theme="tofu"] .md-content p{margin-bottom:16px}
@@ -20905,6 +20919,19 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
   .pb-charter-row-actions{opacity:1;pointer-events:auto}
 }
 .pb-decision-text{padding-right:2px}
+/* ── Charter health strip (backend-computed signals; a missing north star is loud) ── */
+.pb-charter-health{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-tertiary);padding:5px 10px;margin:0 0 10px;border:1px solid var(--border);border-radius:var(--pb-radius-sm);background:var(--pb-card-bg)}
+.pb-charter-health-warn{color:var(--error-text);border-color:var(--error-border);background:var(--error-bg);font-weight:600}
+.pb-charter-health-warn svg{flex:none;color:var(--error-text)}
+/* ── Decision two-tier row: kind badge + summary headline above the clamped full text ── */
+.pb-decision-head{display:flex;align-items:baseline;gap:6px;margin-bottom:4px;padding-right:52px}
+.pb-kind-badge{flex:none;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--accent);background:var(--accent-subtle);border:1px solid var(--accent);border-radius:4px;padding:1px 5px}
+.pb-decision-summary{font-size:12.5px;font-weight:600;line-height:1.4;color:var(--text-primary);overflow-wrap:anywhere}
+/* ── Proposal summary input (required by the commit route) ── */
+.pb-proposal-summary-row{margin:6px 0}
+.pb-proposal-summary{width:100%;font-size:12px;padding:6px 9px;color:var(--text-primary);background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--pb-radius-sm);outline:none}
+.pb-proposal-summary:focus{border-color:var(--accent)}
+.pb-proposal-summary::placeholder{color:var(--text-tertiary)}
 .pb-charter-act{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--pb-radius-sm);color:var(--text-tertiary);cursor:pointer;transition:color var(--transition),border-color var(--transition),background var(--transition)}
 .pb-charter-act:hover{color:var(--text-primary);border-color:var(--border-light);background:var(--bg-hover)}
 .pb-charter-act svg{display:block}

@@ -37,6 +37,40 @@
 - **Result / status:** outcome, metrics, or current state
 -->
 
+
+### 2026-07-28 — Key asymmetry made the guard unreliable; JOURNAL now tracked (owner review)
+- **Change:** New `CardKey` data class + pure `isStillCurrent(started, current)`; the identity ref
+  is keyed on the SAME `CardKey` as every other per-card state; card message colour now follows
+  `RunOutcome.failed`; `JOURNAL.md` removed from `.gitignore`. Commit `595b2c2`.
+- **Why (defect 1 — the third version of the same guard):** every per-card state used
+  `remember(stateKey)` but the identity ref used a **bare `remember`**. That asymmetry means the
+  ref and the state it guards **do not share a lifetime** — on a key change Compose rebuilds one
+  and not the other, leaving the card half-new/half-old. Correctness then rested on a
+  `listOf(...)` happening to compare equal, which is not something to rely on in a recycled
+  `LazyColumn` row.
+  - *One correction to the owner's diagnosis, recorded so the next reader isn't misled:*
+    `remember(stateKey)` with a `List` passes **one** key (the list object), compared by
+    `equals`; a `List` is NOT spread into multiple key parameters. The asymmetry was the real
+    defect, not key-spreading.
+- **Why the fix is a named type:** `CardKey(id, baseUrl, cookieHost, projectPath)` writes the
+  fields that make a result *belong* to a card into the type itself, so a future field cannot be
+  silently dropped at one of the several sites the key is built. Neuter-verified: nulling
+  `cookieHost`/`projectPath` in `CardKey.of` fails two tests.
+- **Why the comparison is its own function:** all three versions of this guard failed **not
+  because the rule was hard but because the values fed to it were computed wrongly**. Naming the
+  comparison lets a test assert the INPUTS. Added the recycled-slot case
+  (`work started before a slot was recycled is not current`) — a `LazyColumn` reusing a row for a
+  DIFFERENT profile, which is how scrolling during a start could hand the user into the wrong
+  server's WebView.
+- **Why (defect 2 — a slow boot looked broken):** the message was rendered unconditionally in
+  `colorScheme.error`, but `startTimeoutMessage()` is explicitly NOT an error — `/start` was
+  accepted and the server is probably still booting. Painted red it was **visually identical to
+  "login failed"**, so a healthy slow boot read as a broken Start. Colour now follows `failed`.
+- **`JOURNAL.md` un-ignored.** I added that ignore in `9a0a446` reasoning "per-developer, not
+  source". That does not survive scrutiny: this file carries the design reasoning a future
+  maintainer actually needs, and it was living on exactly one machine. Now tracked.
+- **Result / status:** **106 unit tests pass** (+3), lint clean, both APKs signed. Still
+  unverified on a device.
 ### 2026-07-28 — The staleness guard was dead code — and the test couldn't tell (owner review)
 - **Change:** New `session/SupervisorRunner.kt` — `executeSupervisorCall(...)` takes
   `login` / `call` / `isCurrent` as parameters and RETURNS a `RunOutcome` instead of firing

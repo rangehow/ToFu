@@ -760,3 +760,18 @@ TTFT 首字节看门狗 + 等待心跳已落地(commit 69cd968c,2026-07-27):①l
 - **热修(零重启、零审批):** `git checkout HEAD -- static/js/core/conversations.js lib/js_bundler.py` 两文件回 HEAD(内联定义 + 清单条目同时复位,bundle 双份定义与今日全天证明无害的 HEAD 态一致);下一次 `GET /` 触发后台重建,实测新 bundle-71fea33c 两函数定义俱在。**抽提成果零损失:conv_merge_shells.js 原样保留在磁盘。**
 - **判据(与既有 parity 守卫同型):** `_BUNDLE_FILES` 与 index.html script 标签是同一枚硬币的两面——抽提一个符号到新文件,必须「进清单 AND 进标签」同时成立,缺一即生产白屏;bundle 构建的 node-gate 只查语法,查不出「运行时才缺符号」,这类错只能靠 test_bundle_manifest_parity + 引用-定义对扫描在编辑时刻拦住。
 - **兄弟协作分账:** 被回退的是兄弟 staged/unstaged 各一处,均可 trivially 重放;重做抽提的正确姿势=保留清单条目再删内联定义(HEAD 注释里本就写着「Must load BEFORE conversations.js … resolve via bundle window scope」)。已 peer 交接。
+
+## 2026-07-28 — fix(project-brain): 完成事件缝重复派发 + 入队幂等 (cc85384b)
+
+**事故** conv ms4b67gmthqc17 队列积压 11 行，board 上路由到它的 epic 只有 4 个。
+
+**根因** `on_epic_completed` 里一段注释论证 `_epic_already_queued` 不可达（dispatch_epic 会 claim，select_dispatchable 排除 claimed）。该论证只在 claim 存活期间成立；claim 是 30 分钟软租约，目标任务跑了数小时，每次租约到期 board 把 epic 读回 open，该缝就往从未排空的会话再叠一条 kickoff。心跳 sweep 带双守卫所以 0 次触发，所有 10 条都来自完成缝。
+
+**危害分级** 不烧钱（消费端闸把 9 条自然丢弃，仅 1 条真活的派成任务）。真伤害：①队列深度对用户撒谎 3 小时；②真正的新工作（2 条 peer 消息）被压在僵尸后面；③重复 claim 续约掩盖「会话已堵 3 小时」信号，_originator_stuck 迁移永不触发。
+
+**三处修复**
+- A: `on_epic_completed` 补 `_epic_already_queued`（epic 级探针）。`_conv_has_live_task` 刻意排除——依赖链要求忙会话也能入队，由 `test_full_autonomous_flywheel` 钉住。
+- B: `enqueue_message` 按 `(conv_id, boardTaskId)` 幂等（`_existing_board_kickoff`）。结构性地板，覆盖所有生产者。仅 KIND_WORKFLOW + boardTaskId 行生效；人类/peer 永不折叠；按会话作用域；失败朝插入开放。
+- C: 清理存量僵尸行（ms3sl904z633by 上 pt_dbd7a32ffa0e4dd3 最后 1 行；其余已被消费端闸自然清掉）。
+
+**守卫** `tests/test_project_brain_dispatch_dedup.py` 9/9；NEUTER×2 各咬各的；相邻环 57/57（含 test_full_autonomous_flywheel）；干净 worktree 66/66。

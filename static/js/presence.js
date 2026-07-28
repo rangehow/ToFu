@@ -77,9 +77,20 @@
   function _displayedRoot() {
     try {
       const conv = (typeof getActiveConv === "function") ? getActiveConv() : null;
-      if (!conv) return "";
-      const p = (typeof _getConvProjectPath === "function")
-        ? _getConvProjectPath(conv) : (conv.projectPath || "");
+      let p = "";
+      if (conv) {
+        p = (typeof _getConvProjectPath === "function")
+          ? _getConvProjectPath(conv) : (conv.projectPath || "");
+      }
+      // Fallback mirrors project-brain.js's _displayedProjectPath: a New Chat
+      // with pending input keeps the project ARMED in the active-project
+      // singleton while there is no conv to read projectPath from (and a
+      // shell-loaded conv may not carry it in-memory yet). The bar and the
+      // panel must resolve the SAME project, or one shows what the other
+      // denies.
+      if (!p && typeof projectState !== "undefined" && projectState && projectState.active) {
+        p = projectState.path || "";
+      }
       return _norm(p);
     } catch (e) { return ""; }
   }

@@ -73,6 +73,15 @@ function newChat() {
     _clearProjectStateLocal();
     _resetToolsToDefaults();
   }
+  /* ★ The Project-Brain surfaces resolve the displayed project from the
+   *   active conv / projectState — both of which newChat just dropped (the
+   *   collab bar's accessor reads getActiveConv()/projectState live). Without
+   *   this re-resolution — the same seam loadConversation uses — the collab
+   *   bar kept rendering the PREVIOUS conversation's project counts for up
+   *   to one presence tick and opened a Brain panel with no project behind
+   *   it (every tab blank while the bar claimed work was waiting). */
+  if (typeof presenceRefresh === 'function') presenceRefresh();
+  if (typeof projectBrainRefresh === 'function') projectBrainRefresh();
   if (typeof updateContextBar === 'function') updateContextBar();
 }
 /* ★ Reconnect-on-open — the root-cause fix for "click into a conversation →

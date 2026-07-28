@@ -1811,7 +1811,36 @@
       _refreshPeers(path);
       _refreshStatus(path);
       _subscribePanelLive(path);
+    } else {
+      // No displayed project — the panel must never open into blank or stale
+      // tabs (a stale collab bar or a project-less deep-link lands here).
+      closeFeed();
+      _unsubscribePanelLive();
+      _renderNoProject();
     }
+  }
+
+  /** Paint an explicit "no project attached" state into every tab body. A
+   *  blank panel reads as broken and contradicts whatever surface the user
+   *  clicked to get here; an honest empty state says WHY there is nothing. */
+  function _renderNoProject() {
+    var html = '<div class="pb-no-project">' +
+      _esc(_t('projectBrain.noProject',
+        'No project is attached to this conversation — attach one (Studio) to open its Brain.')) +
+      '</div>';
+    var ids = ['projectBrainAttentionBody', 'projectBrainCharterBody',
+               'projectBrainBoardBody', 'projectBrainActivityList',
+               'projectBrainPeersBody', 'projectBrainStatusBody'];
+    for (var i = 0; i < ids.length; i++) {
+      var el = document.getElementById(ids[i]);
+      if (el) el.innerHTML = html;
+    }
+    var banner = document.getElementById('projectBrainInfluence');
+    if (banner) banner.hidden = true;
+    _setTabCount('pbTabCountAttention', 0);
+    _setTabCount('pbTabCountCharter', 0);
+    _setTabCount('pbTabCountBoard', 0);
+    _setTabCount('pbTabCountPeers', 0);
   }
 
   /** Drive the Needs-you tab (project-brain-attention.js) if it's loaded. */

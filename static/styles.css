@@ -20805,7 +20805,7 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
 .project-brain-col-body::-webkit-scrollbar-thumb:hover{background:var(--border-light)}
 
 /* Empty states — a centered, quiet dashed frame instead of bare text. */
-.pb-activity-empty,.pb-charter-empty,.pb-board-empty,.pb-peers-empty,.pb-status-empty,.pb-status-loading{flex:1;display:flex;align-items:center;justify-content:center;min-height:200px;color:var(--text-tertiary);font-size:13px;text-align:center;padding:24px;margin:2px;border:1px dashed var(--border);border-radius:var(--pb-radius);background:color-mix(in srgb,var(--bg-tertiary) 30%,transparent)}
+.pb-activity-empty,.pb-charter-empty,.pb-board-empty,.pb-peers-empty,.pb-status-empty,.pb-status-loading,.pb-no-project{flex:1;display:flex;align-items:center;justify-content:center;min-height:200px;color:var(--text-tertiary);font-size:13px;text-align:center;padding:24px;margin:2px;border:1px dashed var(--border);border-radius:var(--pb-radius);background:color-mix(in srgb,var(--bg-tertiary) 30%,transparent)}
 .pb-board-lane-empty{color:var(--text-tertiary);font-size:12px;padding:8px 10px;text-align:center;border:1px dashed var(--border);border-radius:var(--pb-radius-sm);background:color-mix(in srgb,var(--bg-tertiary) 25%,transparent)}
 
 /* ── Activity column ── */

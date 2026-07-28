@@ -223,18 +223,35 @@ win.conversations = global.conversations = [{ id: 'conv-self' }];  // no project
 render();
 check('no_root_hidden', strip.hidden === true);
 
+// ── projectState fallback (parity with the panel's _displayedProjectPath):
+//    a New Chat with pending input keeps the project ARMED in the global
+//    singleton while there is no active conv to read projectPath from — the
+//    bar must resolve the same root the panel would, or the two surfaces
+//    disagree about whether a project is displayed. ──
+win.activeConvId = global.activeConvId = null;   // New Chat: no active conv at all
+win.projectState = global.projectState = { active: true, path: '/proj/B', extraRoots: [] };
+setS('/proj/B', { epicsOpen: 2, epicsClaimed: 0, epicsDone: 0,
+                  pendingDecisions: 0, activePeers: 0, peerEpics: {}, charterExists: true });
+render();
+check('projectstate_fallback_visible', strip.hidden === false);
+check('projectstate_fallback_counts', !!strip.querySelector('.collab-seg-open'));
+// Clearing the singleton hides the bar again (the project is truly gone).
+win.projectState = global.projectState = { active: false, path: '', extraRoots: [] };
+render();
+check('projectstate_cleared_hidden', strip.hidden === true);
+
 console.log(out.join('\n'));
 """
 
 
-def _run():
+def _run(presence_src: str | None = None) -> str:
     harness = os.path.join(HERE, '_presence_harness.js')
     with open(harness, 'w') as f:
         f.write(_HARNESS)
     try:
         proc = subprocess.run(
             ['node', harness,
-             os.path.join(JS_DIR, 'presence.js'),   # argv[2]
+             presence_src or os.path.join(JS_DIR, 'presence.js'),  # argv[2]
              ROOT,                                   # argv[3]
              ],
             capture_output=True, text=True, timeout=60,
@@ -246,12 +263,41 @@ def _run():
             pass
     output = proc.stdout.strip()
     assert proc.returncode == 0, f'node failed: {proc.stderr}\n{output}'
-    fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
-    assert not fails, 'collab-bar render failures:\n' + output
-    assert output.count('PASS') >= 20, f'expected >=20 PASS lines, got:\n{output}'
+    return output
 
 
 @pytest.mark.skipif(not _node_deps_available(),
                     reason='node + jsdom dev-deps not installed (run npm install)')
 def test_presence_strip_renders_end_to_end():
-    _run()
+    output = _run()
+    fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
+    assert not fails, 'collab-bar render failures:\n' + output
+    assert output.count('PASS') >= 24, f'expected >=24 PASS lines, got:\n{output}'
+
+
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
+def test_NC_projectstate_fallback_is_load_bearing(tmp_path):
+    """NEUTER: strip the projectState fallback from _displayedRoot() → a New
+    Chat whose project is still armed in the singleton no longer resolves a
+    root → the bar hides while the panel would open with data (the two
+    surfaces disagree again) → projectstate_fallback_visible goes red."""
+    presence_js = os.path.join(JS_DIR, 'presence.js')
+    with open(presence_js, encoding='utf-8') as f:
+        src = f.read()
+    needle = 'if (!p && typeof projectState !== "undefined" && projectState && projectState.active) {'
+    assert src.count(needle) == 1, (
+        'projectState fallback drifted — update the neuter target')
+    copy = tmp_path / 'presence_neutered_fallback.js'
+    copy.write_text(src.replace(needle, 'if (!p && false) {', 1),
+                    encoding='utf-8')
+    output = _run(str(copy))
+    assert 'FAIL projectstate_fallback_visible' in output, (
+        'NEUTER did not bite: the bar still resolved the singleton project '
+        'without the fallback.\n' + output)
+    # Everything keyed on the conv's own projectPath must stay green — the
+    # neuter hit ONLY the singleton fallback, not the primary accessor.
+    assert 'PASS bar_visible' in output, output
+    assert 'PASS projectstate_cleared_hidden' in output, output
+    with open(presence_js, encoding='utf-8') as f:
+        assert f.read() == src, 'harness mutated the shipped presence.js'

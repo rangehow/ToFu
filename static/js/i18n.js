@@ -3463,6 +3463,7 @@ var _i18n = {
   'projectBrain.activityEmpty': { zh: '暂无动态', en: 'No activity yet' },
   'projectBrain.charterEmpty': { zh: '尚无章程', en: 'No charter yet' },
   'projectBrain.boardEmpty': { zh: '任务板为空', en: 'Board is empty' },
+  'projectBrain.noProject': { zh: '当前会话未绑定项目 —— 绑定项目（Studio）后，项目大脑会显示在这里。', en: 'No project is attached to this conversation — attach one (Studio) to open its Brain.' },
   'projectBrain.committedDecisions': { zh: '已确认的决策', en: 'Committed decisions' },
   'projectBrain.pendingProposals': { zh: '提议中（待你审核）', en: 'Proposed (awaiting your review)' },
   'projectBrain.healthNoGoal': { zh: '尚未设定北极星目标——以下决策仅为实现级意图，不是项目目标。', en: 'No north-star goal is set — the decisions below are implementation-level intent only.' },

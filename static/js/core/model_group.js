@@ -71,7 +71,7 @@
     var hint = (provider.name || '') + ' ' + (provider.base_url || '') + ' '
       + ((model && model.model_id) || '');
     return (typeof _detectBrand === 'function')
-      ? _detectBrand(hint)
+      ? /** @type {string} */ (_detectBrand(hint))
       : (brand || 'generic');
   }
 

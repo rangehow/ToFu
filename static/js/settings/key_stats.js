@@ -320,7 +320,8 @@ function _modelCardHealthRow(provIdx, modelIdx) {
       agg = { slots: 0, available_slots: 0, total_requests: 0, total_errors: 0,
               contention_errors: 0, consecutive_errors: 0, inflight: 0,
               cooldown_remaining_s: 0, cooldown_reason: '',
-              last_error_msg: '', last_error_ts: 0, success_rate: null };
+              last_error_msg: '', last_error_ts: 0, success_rate: null,
+              verdict: /** @type {any} */ (null) };
     }
     agg.slots += r.slots || 0;
     agg.available_slots += r.available_slots || 0;

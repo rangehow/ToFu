@@ -485,8 +485,8 @@ function _probeAllDropdownModels() {
   for (var i = 0; i < all.length; i++) {
     var e = all[i];
     if (e.provider.enabled === false) continue;
-    var pid = e.provider.id || ('idx_' + e.provIdx);
-    if (!byProvider[pid]) byProvider[pid] = e;
+    var pidKey = e.provider.id || ('idx_' + e.provIdx);
+    if (!byProvider[pidKey]) byProvider[pidKey] = e;
   }
   var entries = [];
   for (var pid in byProvider) entries.push(byProvider[pid]);
@@ -512,8 +512,8 @@ function _ddResumeProbeSnapshots() {
   for (var i = 0; i < all.length; i++) {
     var e = all[i];
     if (e.provider.enabled === false) continue;
-    var pid = e.provider.id || ('idx_' + e.provIdx);
-    if (!byProvider[pid]) byProvider[pid] = e;
+    var pidKey = e.provider.id || ('idx_' + e.provIdx);
+    if (!byProvider[pidKey]) byProvider[pidKey] = e;
   }
   for (var pid in byProvider) {
     (function(pid, e) {

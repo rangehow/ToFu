@@ -212,6 +212,36 @@ SCENE_AUTHOR_TOOLS = [
     {
         'type': 'function',
         'function': {
+            'name': 'generate_asset',
+            'description': (
+                'Create a real image asset for this scene from a text prompt '
+                '(background texture, diagram, icon, illustration) and store it '
+                'on disk. Returns the scene-relative path to reference in your '
+                'HTML, e.g. "assets/ab12cd.png" — use it as <img src="..."> or '
+                'in CSS background-image. Assets are content-addressed and '
+                'shared across scenes, so an identical prompt costs nothing the '
+                'second time. Prefer this over a text-only card: a frame with a '
+                'real graphic is the whole point. Say what STYLE you want (flat '
+                'vector / UI illustration / paper-cut collage / photographic) '
+                'or you will get a photorealistic default.'),
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'prompt': {'type': 'string',
+                               'description': 'Subject + style + palette + '
+                                              'negative constraints.'},
+                    'width': {'type': 'integer',
+                              'description': '512-2048, multiple of 8.'},
+                    'height': {'type': 'integer',
+                               'description': '512-2048, multiple of 8.'},
+                },
+                'required': ['prompt'],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'function': {
             'name': 'fetch_url',
             'description': 'Fetch one URL (e.g. an official SVG asset page).',
             'parameters': {
@@ -302,6 +332,54 @@ def clear_draft(scene_dir: str) -> None:
         logger.debug('[SceneAuthor] cannot clear draft %s: %s', path, e)
 
 
+def _generate_scene_asset(prompt: str, scene_dir: str, *, width: int = 1024,
+                          height: int = 1024) -> str:
+    """Generate an image, store it in the library, link it into the scene.
+
+    Returns the SCENE-RELATIVE path a composition must reference (e.g.
+    ``assets/ab12cd.png``). Raises on failure so the caller can tell the model
+    the asset does not exist — inventing a filename is worse than having no
+    graphic, because the renderer then draws a blank where the image should be.
+
+    Reuses the project's existing image-generation chassis
+    (:func:`lib.image_gen.generate_image`) rather than opening a second path to
+    a provider: slot picking, 429 cycling and the retry budget are already
+    solved there, and a private copy would drift.
+    """
+    from lib.image_gen import generate_image
+    from lib.motion_video._assets import materialise, store_bytes
+
+    ar = _aspect_ratio_for(width, height)
+    res = generate_image(prompt, aspect_ratio=ar,
+                         resolution='2K' if max(width, height) > 1280 else '1K')
+    if not res.get('ok'):
+        raise RuntimeError(res.get('error') or 'image generation failed')
+    import base64
+    raw = base64.b64decode(res['image_b64'])
+    mime = (res.get('mime_type') or 'image/png').lower()
+    suffix = {'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp'}\
+        .get(mime, '.png')
+    lib_path = store_bytes(raw, suffix=suffix)
+    rel, tier = materialise(lib_path, scene_dir)
+    logger.info('[SceneAuthor] generated asset %s (%d bytes, %s) for %s',
+                rel, len(raw), tier, scene_dir)
+    return rel
+
+
+def _aspect_ratio_for(width: int, height: int) -> str:
+    """Nearest supported aspect-ratio token for a requested pixel size."""
+    if height <= 0:
+        return '1:1'
+    ratio = width / height
+    best, best_d = '1:1', 1e9
+    for token, value in (('1:1', 1.0), ('16:9', 16 / 9), ('9:16', 9 / 16),
+                         ('4:3', 4 / 3), ('3:4', 3 / 4)):
+        d = abs(ratio - value)
+        if d < best_d:
+            best, best_d = token, d
+    return best
+
+
 def _full_gate(html: str, scene_dir: str, *, abort_event=None,
                scene: dict | None = None,
                advisory: bool = False) -> list[str]:
@@ -339,6 +417,34 @@ def _full_gate(html: str, scene_dir: str, *, abort_event=None,
     # round rather than a verdict delivered after the film is finished.
     if scene is not None:
         errors += list(check_text_fidelity(html, scene))
+    # ── Asset + font references, checked BEFORE Chrome ──
+    # Both are cheap pure-Python passes over the HTML, and both catch defects
+    # the CLI would only surface after a browser boot (or not at all):
+    #   * an asset reference that escapes the project root, points at an
+    #     absolute path, or names a file that is not there — the renderer draws
+    #     a blank where the graphic should be;
+    #   * a font family the document NAMES but neither declares via @font-face
+    #     nor can rely on the renderer resolving. That one is invisible by
+    #     construction: fontconfig silently substitutes, so the frame renders
+    #     in a face nobody chose (on this host, a serif).
+    try:
+        from lib.motion_video._assets import verify_asset_refs
+        errors += list(verify_asset_refs(html, scene_dir))
+    except Exception as e:
+        logger.warning('[SceneAuthor] asset-ref check crashed: %s', e,
+                       exc_info=True)
+    try:
+        from lib.motion_video._fonts import undeclared_font_families
+        for fam in undeclared_font_families(html):
+            errors.append(
+                f'font-family {fam!r} is neither declared with an @font-face '
+                f'in this document nor auto-resolved by the renderer — naming '
+                f'an absent face does NOT get you that face, it silently '
+                f'falls back to whatever the host has. Either declare it from '
+                f'a stored font asset or name one the renderer resolves.')
+    except Exception as e:
+        logger.warning('[SceneAuthor] font-family check crashed: %s', e,
+                       exc_info=True)
     if errors:
         return errors  # contract broken — no point booting Chrome
     # Vertical fill is measured in its OWN browser boot from the HTML we
@@ -374,12 +480,28 @@ def _full_gate(html: str, scene_dir: str, *, abort_event=None,
 
 
 def _build_prompt(scene: dict, *, width: int, height: int, duration: float,
-                  scene_index: int, total_scenes: int) -> str:
+                  scene_index: int, total_scenes: int,
+                  font_rel: str = '') -> str:
     contract = _read_guide('COMPOSITION_CONTRACT.md')
     craft = _read_guide('MOTION_CRAFT.md')
     skeleton = _read_guide('skeleton.html', limit=6000)
     text = str(scene.get('text') or '').strip()
     visual = str(scene.get('visual') or '').strip()
+    font_block = ''
+    if font_rel:
+        from lib.motion_video._fonts import CJK_SANS_FAMILY, font_face_css
+        font_block = (
+            f'\n## Typeface (already staged in this scene)\n'
+            f'This scene ships a CJK **sans** face. The host\'s only installed '
+            f'Chinese font is a SERIF, so WITHOUT this the frame silently '
+            f'renders in a serif nobody chose. Put this rule in your <style> '
+            f'and set it on your text:\n'
+            f'```css\n{font_face_css(font_rel)}\n'
+            f"body {{ font-family: '{CJK_SANS_FAMILY}', Inter, sans-serif; }}\n"
+            f'```\n'
+            f'Never name a family you have not declared this way (PingFang SC, '
+            f'Microsoft YaHei, Source Han Sans…): naming an absent face does '
+            f'not get you that face, it silently falls back.\n')
     return (
         f'You are authoring ONE scene of a {total_scenes}-scene motion-graphics '
         f'video. Write a single self-contained HTML composition for it.\n\n'
@@ -390,6 +512,7 @@ def _build_prompt(scene: dict, *, width: int, height: int, duration: float,
         f'- frame: {width}x{height} px\n'
         f'- narration (spoken over this scene): {text or "(none)"}\n'
         + (f'- visual direction: {visual}\n' if visual else '')
+        + font_block
         + '\n## Hard requirements\n'
         '1. Call write_composition with the COMPLETE document, then '
         'composition_check. Iterate until the check returns no errors.\n'
@@ -405,11 +528,14 @@ def _build_prompt(scene: dict, *, width: int, height: int, duration: float,
         'STAGGERED entrances, and at least one supporting graphic (rule, bar, '
         'number, icon or divider). A single centred line on a gradient is the '
         'fallback we are replacing and is not acceptable output.\n'
-        '5. Self-contained: the only external reference may be the GSAP CDN '
-        'script tag. Do NOT write or link local asset files — instead, when '
-        'you fetch a real brand/product SVG, PASTE ITS <svg> MARKUP INLINE '
-        'into the document (inline SVG is self-contained, deterministic and '
-        'strongly preferred over a generic icon or a text-only card).\n'
+        '5. REAL IMAGERY IS AVAILABLE — use it when the beat calls for it. '
+        'Call generate_asset to create a background texture, an illustration '
+        'or a diagram; it returns a scene-relative path like '
+        '"assets/ab12cd.png" that you reference with <img src="..."> or CSS '
+        'background-image. You may also paste a fetched brand SVG inline. '
+        'What you may NOT do is reference a local file you did not create: '
+        'every src/url() must resolve inside this scene directory, no "../", '
+        'no absolute paths — the gate rejects those before rendering.\n'
         '6. Text must be HTML-escaped and fit inside the frame at the chosen '
         'font size.\n\n'
         f'## Composition contract\n{contract}\n\n'
@@ -559,9 +685,24 @@ def _author_once(scene: dict, scene_dir: str, *, width: int, height: int,
     from lib.agent_loop import AbortSignal, run_agent_loop
 
     state = {'html': seed_html, 'tokens': 0, 'gate_ok': False}
+    # Stage the CJK sans face INTO this scene before prompting, so the author
+    # can declare it with a scene-local @font-face. Best-effort: an
+    # unreachable network leaves font_rel empty and the prompt simply omits the
+    # typeface block (pre-existing fontconfig fallback behaviour).
+    font_rel = ''
+    try:
+        from lib.motion_video._assets import materialise
+        from lib.motion_video._fonts import ensure_cjk_sans
+        font_path = ensure_cjk_sans()
+        if font_path:
+            font_rel, _tier = materialise(
+                font_path, scene_dir,
+                name='cjk-sans' + os.path.splitext(font_path)[1])
+    except Exception as e:
+        logger.warning('[SceneAuthor] could not stage the CJK sans face: %s', e)
     prompt = _build_prompt(scene, width=width, height=height,
                            duration=duration, scene_index=scene_index,
-                           total_scenes=total_scenes)
+                           total_scenes=total_scenes, font_rel=font_rel)
     if seed_html:
         # Hand the model its own unfinished work plus the gate's current
         # verdict, so the attempt continues the repair rather than restarting.
@@ -662,6 +803,29 @@ def _author_once(scene: dict, scene_dir: str, *, width: int, height: int,
             except Exception as e:
                 logger.warning('[SceneAuthor] web_search failed: %s', e)
                 _reply(tc_id, f'Search failed: {e}')
+        elif name == 'generate_asset':
+            prompt = str(args.get('prompt') or '').strip()
+            if not prompt:
+                _reply(tc_id, 'Error: prompt is required')
+                return
+            try:
+                w = int(args.get('width') or 1024)
+                h = int(args.get('height') or 1024)
+            except (TypeError, ValueError):
+                w = h = 1024
+            try:
+                rel = _generate_scene_asset(prompt, scene_dir, width=w, height=h)
+            except Exception as e:
+                logger.warning('[SceneAuthor] generate_asset failed: %s', e)
+                _reply(tc_id, f'Asset generation failed ({e}). Continue '
+                              f'without it — do NOT reference a file that '
+                              f'was not created.')
+                return
+            state.setdefault('assets', []).append(rel)
+            _reply(tc_id, {
+                'path': rel,
+                'usage': f'<img src="{rel}"> or background-image: url(\'{rel}\')',
+                'note': 'stored on disk and scene-local; safe to reference'})
         elif name == 'fetch_url':
             url = str(args.get('url') or '').strip()
             if not url:

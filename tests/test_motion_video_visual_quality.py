@@ -292,8 +292,20 @@ def test_author_prompt_carries_the_vendored_craft_guide():
     # The host font constraint must be stated, or the author reintroduces the
     # silent serif fallback this batch just removed.
     assert 'auto-resolve' in prompt.lower()
-    # Inline SVG must be presented as the legitimate asset route.
-    assert 'INLINE' in prompt
+    # The legitimate asset route must be stated. This used to assert INLINE
+    # (SVG) because inline markup was the ONLY legal form an asset could
+    # take — the author had no filesystem-write tool, so a bitmap or a real
+    # background was structurally impossible. That restriction is what made
+    # every frame "a gradient plus text", so the assertion now pins the route
+    # that replaced it: generate_asset returns a scene-relative path, and a
+    # reference that escapes the scene directory is rejected before rendering.
+    low = prompt.lower()
+    assert 'generate_asset' in prompt, (
+        'the author is never told it can create real imagery, so every frame '
+        'stays a gradient plus text')
+    assert 'assets/' in prompt, 'no example of the scene-relative asset path'
+    assert '../' in prompt or 'absolute path' in low, (
+        'the author is not warned which references the gate rejects')
 
 
 # ── 6. The DEFAULT path is the good one ───────────────────

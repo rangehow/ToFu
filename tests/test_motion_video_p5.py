@@ -189,8 +189,12 @@ def test_max_rounds_is_bounded(monkeypatch, tmp_path):
 def test_toolset_is_narrow_and_has_no_render_path():
     names = {t['function']['name'] for t in sa.SCENE_AUTHOR_TOOLS}
     assert names == {'write_composition', 'composition_check',
-                     'web_search', 'fetch_url'}
-    # No render / concat / mux / arbitrary write_file reachable from a scene author.
+                     'web_search', 'generate_asset', 'fetch_url'}
+    # No render / concat / mux / arbitrary write_file reachable from a scene
+    # author. `generate_asset` is deliberately IN the set: it writes only into
+    # the content-addressed asset library and returns a scene-relative path,
+    # which is the sanctioned way for a composition to carry real imagery —
+    # unlike a general filesystem write, it cannot place a file anywhere else.
     for banned in ('motion_video_render', 'motion_video_concat',
                    'motion_video_mux', 'write_file', 'run_command'):
         assert banned not in names

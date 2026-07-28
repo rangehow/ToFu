@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -145,22 +146,27 @@ function escapeHtml(s) {
 function t(k, d) { return d || k; }
 const _EMPTY = () => '';
 const _FALSE = () => false;
-var _renderToolRootPill = _EMPTY, _renderToolRepairedBadge = _EMPTY,
-    _renderInboxInjectRow = _EMPTY, _renderPeerInjectRow = _EMPTY,
-    _renderUserSteerInjectRow = _EMPTY, _renderRejectedToolLine = _EMPTY,
-    _renderHumanGuidanceCard = _EMPTY, _renderHumanGuidanceRows = _EMPTY,
-    _renderPendingApprovalBlock = _EMPTY, _renderTimerWatcherBlock = _EMPTY,
-    _renderTimerWaitingRow = _EMPTY, _renderStdinBlock = _EMPTY,
-    _renderAbortedRow = _EMPTY, _renderSearchingRow = _EMPTY,
-    _renderCmdDoneBlock = _EMPTY, _renderBrowserExecJsBlock = _EMPTY,
-    _renderSearchRows = _EMPTY, _renderReadImagesBlock = _EMPTY,
-    _renderImageGenBlock = _EMPTY, _computeToolBadgeHtml = _EMPTY,
-    _renderCompactionLabel = _EMPTY, _renderMemoryBlock = _EMPTY,
-    _renderTodoBlock = _EMPTY, _renderWriteFileBlock = _EMPTY,
-    _renderSingleDiffBlock = _EMPTY, _renderBatchEditsBlock = _EMPTY,
-    _renderConvMetaBlock = _EMPTY;
 function _rowModelViewBtn() { return 'BTN'; }
 """
+    # ── Auto-derived collaborator stubs ────────────────────────────────
+    # The list of `_renderX(...)` helpers this driver must stub used to be
+    # hand-written. That is a rot generator: a586787c added _rowRightControls
+    # (5 call sites inside _renderUnifiedToolLine) and the driver died with
+    # `ReferenceError: _rowRightControls is not defined` — a harness fault
+    # that reads exactly like a product regression. Derive it instead: every
+    # `_name(` the extracted functions call, minus whatever the prefix/stubs
+    # already define, gets a no-op stub. A helper added tomorrow is covered
+    # automatically.
+    _extracted = fallback_fn + '\n' + render_fn
+    _called = set(re.findall(r'\b(_[A-Za-z_]\w*)\s*\(', _extracted))
+    _already = set(re.findall(r'\bfunction\s+(_[A-Za-z_]\w*)\s*\(', prefix + stubs))
+    _already |= set(re.findall(r'\b(?:const|let|var)\s+(_[A-Za-z_]\w*)\s*=', prefix + stubs))
+    # The two functions under test are real, never stubbed.
+    _already |= {'_recoveryRoundFallbackTitle', '_renderUnifiedToolLine'}
+    _missing = sorted(_called - _already)
+    if _missing:
+        stubs += ('var ' + ' = _EMPTY, '.join(_missing) + ' = _EMPTY;\n')
+
     call = f"\nconst ROUND = {round_json};\nconsole.log(_renderUnifiedToolLine(ROUND, false));\n"
     return prefix + '\n' + fallback_fn + '\n' + render_fn + '\n' + stubs + call
 

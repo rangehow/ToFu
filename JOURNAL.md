@@ -1,6 +1,21 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-28(续4) — 本机控制「远端分支」收口:**四条路径里唯一让用户走不通的那条**,而它恰好是托管用户唯一会走到的那条(commits `3c0d1a72` + `a9d31b0f`;守卫 15 → **18/18**,**NEUTER×2 各自精确咬**,相邻环 **86/86**,干净 committed worktree **86/86 零 skip**)
+
+- **★ owner 复核的判据不是「有没有实现」,而是「用户能不能照着做完」。** 合并面(`#localControlToggle` / `#localControlModal` 各 1,旧的 `#browserToggle`/`#desktopToggle`/`#browserModal`/`#mobileBrowser`/`#mobileDesktop` 各 0)与三条本机分支都验过了,但**远端分支两处断链**:
+  - **① 叫用户装一个拿不到的东西。** 文案写「install the desktop app」,而**文件里 9 处下载引用全在浏览器行** —— 浏览器行给按钮,桌面行给一句话。发布页 URL 在 `desktop/launcher.py:74-75` 就有(指向 `github.com/rangehow/ToFu/releases/latest`),但**只被托盘自更新检查用,服务端从来到不了**。
+  - **② 铸出 token 后不说它去哪。** 分支只渲染铸造按钮 + 一个空 `<code>`,成功后填进 32 字符 base64 就停手 —— 用户拿到一个裸密钥,不知道它属于托盘的 server 字段。**这正是本项目在凭证配置那一轮已经否掉的「给你个密钥,你自己想办法」形状。**
+- **落点选 `UPDATE_REPO` 而非照抄 launcher 的字面量,理由是实测的不是偏好:** `desktop/launcher.py` **不能从 web 路由 import** —— 它在 import 期就建目录、改 `sys.path`、设环境变量。而 `lib/self_update/_config.py::UPDATE_REPO` 是既有的、可被 env 覆盖的唯一源;从它派生 = **fork/镜像链到自己的 releases**,而不是把自己用户静默送去上游。第三次手打这个 slug 才是错的那条路。
+- **`server_url` 取请求自身的 host,不取配置的 BIND_HOST** —— 后者通常是 `0.0.0.0`(对用户毫无意义),前者**按构造**就是用户此刻真的连得上本服务的地址。
+- **铸造结果改为 `_lcConnectLine` 产出的一行完整命令,同时含地址与 token。** 单独一个 token 不可用:用户机器上没有任何东西知道该连哪个服务。
+- **★ 守卫按「用户可行动的结果」写,不按 URL 字面量写:** 断言「存在一个带 http(s) href 的 anchor」而非某个具体 URL —— 于是**合法换 slug 保持绿,链接消失立刻红**;另补**补集**(其余三态**不得**出现下载链接,否则「四态都塞链接」也能变绿)+ 一条**端到端驱动真实铸造回调**、读框里真正落下的内容(而不是测 helper 返回值 —— charter「测了 helper 不等于测了调用点」)。
+- **NEUTER×2 各自精确咬:** ①把 anchor 换成 `<span>` → 下载链接两条红;②把连接行退回裸 token → 携带地址两条红。原有的 `test_only_the_remote_state_offers_a_token` 只证明「出现了一个 token」,**不证明用户能拿它做成事**,故两条新守卫不是它的重复。
+- **★ 两次被并发兄弟咬到,记法与处置:**
+  - **暂存区被兄弟换掉。** `git add` 与 `git diff --cached` 之间兄弟跑了自己的 `git add`,我的 6 个文件消失、5 个他的进来 —— **此时提交就是替他人提交**。计数断言按 charter 生效并 abort;改为**在同一个 shell 内原子完成 add + 计数 + commit**,不给交错留窗口。
+  - **`globals.generated.d.ts` 我在同一处栽了第二次(`6e6e29e4` → `3c0d1a72`)。** 生成器读**工作树**,共享 HEAD 上必然把兄弟未提交的 `streaming_ui.js` 里的 `renderModelFallbackBannerHtml` 一起烤进去,干净检出上守卫即红。**判据:凡生成式声明,必须在 committed tree 的 worktree 里重新生成**(`a9d31b0f` 已按此修)。诚实分账:该行与本轮功能零相关,我的 3 个 `_lc*` 符号自始正确在位。
+  - **另有一次「假红」:** 单跑绿、环里红,原因是兄弟正在写同一文件 —— 先确认生产文件完好 + 单跑复绿再重跑,**没有据首次结果改任何代码**。
+
 ### 2026-07-28(续3) — 交易页语义色收口:**我上一轮的 AA 闸绿着,而闸外的涨跌红绿比我刚修掉的灰字还差**(tofu-trade `23d6b54`;19 条守卫,**NEUTER×5 全咬**,相邻环 **51/51**,干净 committed worktree **51/51**,线上已提供)
 
 - **★ owner 复核指出的缺口比我修的那一半更严重,而我的守卫此刻正好全绿。** 上一轮 `TEXT_TIERS` 只列了 `--t1..--t4`,10 个语义色**一个都没进扫描面**。实测 `--bg3` 上:light `--success` **2.57**、`--danger` **2.99** —— **比我刚修掉的 `--t3`(2.81) 还差**。定性差异是关键:`--t1..--t4` 承载时间戳和说明文字,而 `--success/--danger` 承载**用户唯一真正在看的那个数字**,并且它们同时是**盈亏的唯一颜色编码**。charter「扫描面残缺 → 断言写对了也照样绿」的又一例。

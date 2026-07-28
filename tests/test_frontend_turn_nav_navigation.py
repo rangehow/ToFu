@@ -390,7 +390,10 @@ if (NC === 'nc_gate') {
   if (CR === before) { console.log('FAIL nc_pattern_applied nc_gate'); process.exit(0); }
 }
 console.log('PASS nc_pattern_applied');
-(0, eval)(CR);
+// chat_render.js reads `_explicitBottomLatch`, `let`-declared in
+// ui/streaming_render.js. A `let` does not escape its own eval, so the two are
+// concatenated into ONE eval — exactly how the bundler ships them.
+(0, eval)(fs.readFileSync(path.join(JS, 'ui', 'streaming_render.js'), 'utf8') + '\n;\n' + CR);
 
 const inner = document.getElementById('chatInner');
 const u = { role: 'user', _msgId: 'u1', content: 'go' };

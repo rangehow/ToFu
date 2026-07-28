@@ -292,6 +292,50 @@ REQ_FILE="${INSTALL_DIR}/requirements.txt"
 # ═══════════════════════════════════════════════════════════════
 _FAST_PATH_DONE=0
 
+# ═══════════════════════════════════════════════════════════════
+#  Step 0.55: Download accelerants — MUST precede the backend fork
+#
+#  These were previously configured at ~L784, INSIDE the conda-only block
+#  ($_FAST_PATH_DONE != 1). But _try_uv_install runs BEFORE that block and
+#  returns on success, so on the DEFAULT (uv) path the mirror was never read:
+#  a corp/China user's `uv pip install` went straight to pypi.org and hung to
+#  the 900s timeout. The faster route was the one with zero acceleration.
+#  Everything that redirects or caches a DOWNLOAD therefore lives here, above
+#  the fork, so both backends inherit one source of truth.
+# ═══════════════════════════════════════════════════════════════
+
+# ── PyPI index (baked by export.py for corp hosts) ──
+# pip and uv read DIFFERENT variables: exporting PIP_INDEX_URL alone leaves
+# `uv pip install` pointed at the public PyPI, which is the whole bug. Set
+# both. UV_INDEX_URL is uv's documented override (UV_DEFAULT_INDEX on newer
+# builds) — export both names so the redirect survives a uv upgrade.
+if [[ -n "${TOFU_PYPI_INDEX:-}" ]]; then
+    info "PyPI index override: ${TOFU_PYPI_INDEX}"
+    export PIP_INDEX_URL="${TOFU_PYPI_INDEX}"
+    export UV_INDEX_URL="${TOFU_PYPI_INDEX}"
+    export UV_DEFAULT_INDEX="${TOFU_PYPI_INDEX}"
+    _PYPI_HOST="$(printf '%s' "$TOFU_PYPI_INDEX" | sed -E 's|^https?://([^/:]+).*|\1|')"
+    export PIP_TRUSTED_HOST="${_PYPI_HOST}"
+    export UV_INSECURE_HOST="${_PYPI_HOST}"
+fi
+
+# ── Playwright browser CDN mirror (opt-in) ──
+# cdn.playwright.dev is slow-to-unreachable from mainland China. Honour a
+# mirror when the operator sets one; empty = upstream, so public installs are
+# unaffected.
+if [[ -n "${TOFU_PLAYWRIGHT_MIRROR:-}" ]]; then
+    info "Playwright download host: ${TOFU_PLAYWRIGHT_MIRROR}"
+    export PLAYWRIGHT_DOWNLOAD_HOST="${TOFU_PLAYWRIGHT_MIRROR}"
+fi
+
+# ── Persistent, backend-shared download caches ──
+# Both default to a per-env location, so a venv rebuild (`uv venv --clear`),
+# a second env, or a plain re-run re-downloads ~115 MB of browser and the
+# entire wheel set. Pin them to the user cache dir instead — deliberately
+# OUTSIDE ${INSTALL_DIR}/.venv, which gets wiped on rebuild.
+export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-${HOME}/.cache/ms-playwright}"
+export UV_CACHE_DIR="${UV_CACHE_DIR:-${HOME}/.cache/uv}"
+
 # Return 0 iff this host's glibc is >= 2.28 (or non-Linux, e.g. macOS where
 # wheels are arch-tagged and the old GLIBC trap doesn't apply). Conservative:
 # if the version can't be determined, return non-zero (→ prefer conda).
@@ -377,7 +421,13 @@ _try_uv_install() {
     # Playwright Chromium — best-effort, never blocks (browser tools degrade).
     if [[ "$SKIP_PLAYWRIGHT" -eq 0 ]]; then
         info "Installing Playwright Chromium (best-effort)..."
-        "$_uvpy" -m playwright install chromium >/dev/null 2>&1 \
+        # --only-shell: a default `install chromium` fetches BOTH the full
+        # Chromium build (175.4 MB) and chrome-headless-shell (113.2 MB) plus
+        # ffmpeg — measured 290.9 MB. Every consumer here launches headless
+        # (no headless=False / record_video / channel= call site exists) and
+        # lib/motion_video/_env.py already accepts the shell binary, so the
+        # full build is download nobody runs. Shell-only = 115.5 MB (-60%).
+        "$_uvpy" -m playwright install --only-shell chromium >/dev/null 2>&1 \
             && ok "Playwright Chromium installed" \
             || warn "Playwright Chromium install skipped/failed — JS-rendered fetch disabled until you run it manually"
         # Downloading the browser is not the same as being able to RUN it.
@@ -776,21 +826,11 @@ EOF
     ok "Wrote ${CONDA_BASE}/.condarc (conda-forge → ${TOFU_CONDA_MIRROR}/conda-forge)"
 fi
 
-# Similarly for pip: if TOFU_PYPI_INDEX is set (by export, for corp hosts),
-# configure the sibling env's pip to use it.  pip.conf is scoped to this
-# user/home; put it in $HOME/.config/pip/pip.conf IF not already present,
-# but prefer the per-conda-env pip.conf if we can determine the env path.
-# (We actually write it after the env is created — see later.)
-if [[ -n "${TOFU_PYPI_INDEX:-}" ]]; then
-    info "PyPI index override: ${TOFU_PYPI_INDEX}"
-    # Export PIP_INDEX_URL for any pip invocation during install.sh.
-    # The pip-stanza writer lower in the script picks up this variable
-    # too, so the env's pip.conf is permanently pinned.
-    export PIP_INDEX_URL="${TOFU_PYPI_INDEX}"
-    # Trust the mirror host (common for corp http mirrors without TLS).
-    _PYPI_HOST="$(printf '%s' "$TOFU_PYPI_INDEX" | sed -E 's|^https?://([^/:]+).*|\1|')"
-    export PIP_TRUSTED_HOST="${_PYPI_HOST}"
-fi
+# PyPI index override is configured ONCE at Step 0.55, ABOVE the uv-vs-conda
+# fork, so both backends inherit it (PIP_INDEX_URL + UV_INDEX_URL + trusted
+# host). It used to be duplicated here, inside the conda-only block, which is
+# exactly why the uv fast path never saw the mirror. The env's pip.conf writer
+# further down still reads $PIP_INDEX_URL — unchanged.
 
 # ═══════════════════════════════════════════════════════════════
 #  Step 2: Update conda — ONLY if it's the sibling we own
@@ -1141,18 +1181,49 @@ CONDA_CONFLICT_PKGS=(
     lxml libxml2 libxml2-16 libxslt
     icu
 )
+# Snapshot the env's package list BEFORE the purge, so we can tell whether the
+# purge actually removed anything (see _PURGED_SOMETHING below). Cheap: one
+# `conda list` against an env we are about to solve anyway.
+_CONDA_PKGS_BEFORE_PURGE="$(conda list -n "$ENV_NAME" 2>/dev/null || true)"
 conda remove -n "$ENV_NAME" -y --force "${CONDA_CONFLICT_PKGS[@]}" >/dev/null 2>&1 || true
 ok "Conflict-prone packages cleared (will reinstall below)"
+
+# Did the purge ACTUALLY remove anything? `conda remove` above is best-effort
+# and silently succeeds on a clean env where none of those packages are
+# present — which is the common re-run case.
+_PURGED_SOMETHING=0
+for _p in "${CONDA_CONFLICT_PKGS[@]}"; do
+    if [[ -n "${_CONDA_PKGS_BEFORE_PURGE:-}" ]] && \
+       grep -qE "^${_p}[[:space:]]" <<< "${_CONDA_PKGS_BEFORE_PURGE}"; then
+        _PURGED_SOMETHING=1
+        break
+    fi
+done
 
 # Also purge any pip-installed trafilatura/htmldate from prior runs so
 # pip's own install below is clean.
 python -m pip uninstall -y trafilatura htmldate courlan >/dev/null 2>&1 || true
 
-# --force-reinstall: make sure conda actually re-lays-down the files even if
-# its metadata still thinks the package is satisfied (common right after a
-# pip-uninstall — conda's view of the env can be stale).
+# --force-reinstall makes conda re-lay-down files even when its metadata still
+# thinks the package is satisfied — genuinely needed right after the purge
+# above, because a pip-uninstall leaves conda's view stale.
+#
+# But it is NOT free: applied unconditionally it re-downloads and re-links all
+# ~30 CONDA_PKGS on EVERY run, including a re-run of an already-correct env.
+# So gate it on the purge having actually removed something. When nothing was
+# purged there is no stale metadata to repair, and a plain `conda install` is
+# a fast no-op. The retry branch below still force-reinstalls unconditionally,
+# so a genuinely broken env is still repaired — we only skip the sledgehammer
+# on the happy path.
+_FORCE_REINSTALL=""
+if [[ "$_PURGED_SOMETHING" -eq 1 ]]; then
+    _FORCE_REINSTALL="--force-reinstall"
+    info "Purge removed packages — using --force-reinstall to repair conda metadata"
+else
+    info "Nothing was purged — skipping --force-reinstall (re-run stays fast)"
+fi
 _install_main_deps() {
-    conda install -n "$ENV_NAME" -c conda-forge --override-channels -y --force-reinstall "${CONDA_PKGS[@]}"
+    conda install -n "$ENV_NAME" -c conda-forge --override-channels -y ${_FORCE_REINSTALL} "${CONDA_PKGS[@]}"
 }
 
 if ! _install_main_deps; then
@@ -1807,10 +1878,12 @@ if [[ "$SKIP_PLAYWRIGHT" -eq 0 ]]; then
 
     if ! python -c "import playwright" 2>/dev/null; then
         warn "playwright still not importable — skipping Chromium download (fetching still works via requests)"
-        warn "Manual recovery: conda activate ${ENV_NAME} && pip install 'playwright>=1.40' && python -m playwright install chromium"
+        warn "Manual recovery: conda activate ${ENV_NAME} && pip install 'playwright>=1.40' && python -m playwright install --only-shell chromium"
     else
-        info "Downloading Chromium browser binary via playwright..."
-        if python -m playwright install chromium; then
+        info "Downloading Chromium headless shell via playwright..."
+        # --only-shell: see the uv path above — skips the 175 MB full Chromium
+        # build that no consumer in this repo ever launches.
+        if python -m playwright install --only-shell chromium; then
             ok "Playwright Chromium installed"
         else
             warn "Playwright Chromium install failed (non-critical — fetching still works via requests)"

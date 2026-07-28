@@ -375,6 +375,192 @@ def test_healthcheck_probe_actually_launches_chromium():
     _ok('healthcheck probe really launches Chromium + measures a glyph')
 
 
+def _fork_index(text: str) -> int:
+    """Index of the uv-vs-conda fork — the line that decides which backend runs.
+
+    Anchored on the decision chain's first line rather than a line number so a
+    reindent or an inserted step cannot silently relocate it.
+    """
+    return text.index('if [[ "$USE_CONDA" -eq 1 ]]; then')
+
+
+def test_mirror_and_index_config_precede_the_backend_fork():
+    """Regression (2026-07-28): the accelerants were unreachable on the FAST path.
+
+    ``TOFU_CONDA_MIRROR`` / ``TOFU_PYPI_INDEX`` are baked into install.sh by
+    export.py for corp hosts (mirrors.sankuai.com et al). Their consumers used
+    to live at ~L784, i.e. INSIDE the ``_FAST_PATH_DONE != 1`` conda-only block
+    that spans L476–L1823. But ``_try_uv_install`` runs BEFORE that block and
+    returns on success — so on the default (uv) path the mirror was never read
+    and every wheel came from the public PyPI. The faster route was the one
+    with no acceleration at all.
+
+    Assert the RESULT that matters: the index/mirror configuration happens
+    before the fork, so BOTH backends inherit it from one source. Deliberately
+    not asserting a line number or which variable name a backend consumes —
+    a reasonable rewrite that keeps the ordering must stay green.
+    """
+    text = _install_sh()
+    fork = _fork_index(text)
+    pre = text[:fork]
+
+    def _exports(var: str) -> list:
+        """Real `export VAR=...` assignment lines only — NOT mentions in prose.
+
+        A substring check let a NEUTER pass: deleting the two uv export lines
+        left the word UV_DEFAULT_INDEX alive in a comment, and the guard stayed
+        green. A comment must never satisfy a guard.
+        """
+        return re.findall(rf'^\s*export\s+{var}=.*$', pre, re.M)
+
+    print(f'\n    PIP_INDEX_URL exports before fork : {_exports("PIP_INDEX_URL")}')
+    print(f'    uv index exports before fork     : '
+          f'{_exports("UV_INDEX_URL") + _exports("UV_DEFAULT_INDEX")}')
+
+    assert 'TOFU_PYPI_INDEX' in pre, (
+        'TOFU_PYPI_INDEX is consumed only after the uv-vs-conda fork — the uv '
+        'fast path never sees the mirror, so corp hosts get zero acceleration '
+        'on the DEFAULT path')
+    assert _exports('PIP_INDEX_URL'), \
+        'PIP_INDEX_URL is not exported before the backend fork'
+    # uv reads its own env vars, not pip.conf. Without these the hoist is
+    # cosmetic: pip's var alone does not redirect `uv pip install`.
+    assert _exports('UV_INDEX_URL') or _exports('UV_DEFAULT_INDEX'), (
+        'no uv-specific index var EXPORTED before the fork — uv ignores '
+        "PIP_INDEX_URL, so hoisting pip's variable alone changes nothing")
+    _ok('mirror/index config precedes the backend fork (both paths inherit it)')
+
+
+def test_playwright_downloads_only_the_headless_shell():
+    """Measured 2026-07-28: a default ``playwright install chromium`` fetches
+    BOTH full Chromium (175.4 MB) AND chrome-headless-shell (113.2 MB) plus
+    ffmpeg (2.3 MB) = 290.9 MB. Every consumer in this repo launches headless
+    (zero ``headless=False`` / ``record_video`` / ``channel=`` call sites), and
+    ``lib/motion_video/_env.py::_playwright_chrome_candidates`` already accepts
+    ``chrome-headless-shell-linux64/chrome-headless-shell``. So the full build
+    is 175 MB of download nobody runs — ``--only-shell`` cuts the fetch to
+    115.5 MB (-60%).
+
+    Evidence this is sufficient, not a guess: the dev host carries ONLY
+    ``chromium_headless_shell-1223`` (no ``chromium-*`` dir at all) and every
+    screenshot path works, including the 40-test visual ring.
+    """
+    text = _install_sh()
+    # Match the browser-download subcommand only. `install-deps` is a DIFFERENT
+    # subcommand (it apt-installs system libs and takes no --only-shell), so it
+    # is excluded by requiring a following token that is not `-deps`.
+    installs = [m.group(0) for m in
+                re.finditer(r'playwright install(?!-deps)[^\n|&>]*', text)]
+    # Print the scan surface BEFORE asserting — a regex that silently matches
+    # nothing would otherwise make this guard vacuously green (charter:
+    # "verify the scan surface first").
+    print(f'\n    scanned {len(installs)} `playwright install` invocation(s):')
+    for inv in installs:
+        print('      -', inv.strip())
+    assert installs, 'no `playwright install` invocation found at all'
+    for inv in installs:
+        assert '--only-shell' in inv, (
+            f'`{inv.strip()}` still pulls the full 175 MB Chromium '
+            f'build that no consumer launches — pass --only-shell')
+    _ok(f'all {len(installs)} playwright installs fetch only the headless shell')
+
+
+def test_browser_and_uv_caches_are_persistent_and_shared():
+    """A re-run, a second env, or a rebuilt venv must not re-download 115 MB of
+    browser and the whole wheel set again. Both caches must be pinned to a
+    stable location OUTSIDE the venv/env dir (which gets cleared on --clear).
+
+    Asserted as a result — the vars are exported before the fork so both
+    backends share one cache — rather than pinning an exact path.
+    """
+    text = _install_sh()
+    fork = _fork_index(text)
+    pre = text[:fork]
+
+    def _export_line(var: str) -> str:
+        m = re.search(rf'^\s*export\s+{var}=(.*)$', pre, re.M)
+        return m.group(1).strip() if m else ''
+
+    pw_line = _export_line('PLAYWRIGHT_BROWSERS_PATH')
+    uv_line = _export_line('UV_CACHE_DIR')
+    print(f'\n    PLAYWRIGHT_BROWSERS_PATH = {pw_line or "<not exported before fork>"}')
+    print(f'    UV_CACHE_DIR             = {uv_line or "<not exported before fork>"}')
+
+    assert pw_line, (
+        'PLAYWRIGHT_BROWSERS_PATH is not exported before the backend fork — the '
+        'browser cache defaults per-env and gets re-downloaded per install')
+    assert uv_line, (
+        'UV_CACHE_DIR is not exported before the fork — uv re-fetches every '
+        'wheel when the venv is rebuilt')
+    # Must NOT live inside the venv, or `uv venv --clear` throws it away.
+    # Scan the WHOLE assignment: an earlier regex stopped at the first '}' and
+    # so never saw a '.venv' later in the same line (NEUTER did not bite).
+    for var, line in (('PLAYWRIGHT_BROWSERS_PATH', pw_line), ('UV_CACHE_DIR', uv_line)):
+        assert '.venv' not in line, (
+            f'{var} points inside .venv ({line}) — that cache is destroyed on '
+            f'every venv rebuild, so the download happens again')
+    _ok('browser + wheel caches are persistent and shared across backends')
+
+
+def test_force_reinstall_is_conditional_not_unconditional():
+    """``--force-reinstall`` on the main conda solve re-lays-down all 30
+    CONDA_PKGS on EVERY run, including a re-run where the env is already
+    correct. It exists to compensate for the purge immediately above it (conda's
+    metadata goes stale right after a pip-uninstall), so it is genuinely needed
+    WHEN a purge actually removed something — and pure overhead when nothing
+    was purged.
+
+    Do not just delete it (that reintroduces the stale-metadata bug). Assert it
+    is gated on the purge having done something.
+    """
+    text = _install_sh()
+    assert '_install_main_deps() {' in text, 'the main-solve helper vanished'
+    fn = text[text.index('_install_main_deps() {'):]
+    fn = fn[:fn.index('\n}')]
+    assert '--force-reinstall' in text, (
+        '--force-reinstall was removed outright — that reintroduces the stale '
+        'conda-metadata bug it was added for; make it CONDITIONAL instead')
+    assert re.search(r'\$\{?_FORCE_REINSTALL', fn), (
+        'the main solve hard-codes --force-reinstall — it re-lays-down all 30 '
+        'conda packages even on a clean re-run where nothing was purged')
+    _ok('--force-reinstall is gated on the purge actually removing something')
+
+
+def test_chromium_env_survives_the_export():
+    """Regression class (charter 2026-07-28): "export product is a first-class
+    acceptance target". chromium_env.py is what makes Chromium launch in the
+    bundle OTHER PEOPLE install, and the root cause it fixed was precisely that
+    the old logic keyed off ``.tofu_env.json`` — a file export.py deliberately
+    STRIPS. Nothing currently stops the same thing happening to chromium_env.py
+    itself: add it to an exclusion set (or let .gitignore eat it) and the whole
+    browser test ring stays green while every exported bundle ships a dead
+    browser again.
+
+    Drives the PRODUCTION predicate (export._should_exclude) plus the
+    git-tracking door, so it cannot pass by testing a copy of the rules.
+    """
+    sys.path.insert(0, ROOT)
+    import importlib
+    export = importlib.import_module('export')
+
+    target = 'chromium_env.py'
+    for mode in ('personal', 'internal', 'opensource'):
+        reason = export._should_exclude(target, target, mode)
+        assert reason is None, (
+            f'chromium_env.py is excluded from the {mode} export '
+            f'(reason={reason!r}) — every bundle built this way ships a '
+            f'browser that cannot launch, exactly the bug it was added to fix')
+
+    # Second door: an untracked root file is dropped even if no rule names it.
+    import subprocess
+    r = subprocess.run(['git', 'ls-files', '--error-unmatch', target],
+                       cwd=ROOT, capture_output=True, text=True)
+    assert r.returncode == 0, (
+        'chromium_env.py is not tracked by git — _untracked_root_excludes drops '
+        'untracked root files from the tarball, so it would never ship')
+    _ok('chromium_env.py survives all three export modes and is git-tracked')
+
+
 def main():
     print()
     print(_color('═══ install.sh uv fast-path / conda-fallback Guard Tests ═══', '36'))
@@ -396,6 +582,11 @@ def main():
         test_conda_path_installs_fonts_for_chromium,
         test_uv_path_verifies_chromium_actually_launches,
         test_healthcheck_probe_actually_launches_chromium,
+        test_mirror_and_index_config_precede_the_backend_fork,
+        test_playwright_downloads_only_the_headless_shell,
+        test_browser_and_uv_caches_are_persistent_and_shared,
+        test_force_reinstall_is_conditional_not_unconditional,
+        test_chromium_env_survives_the_export,
     ]
     for fn in tests:
         try:

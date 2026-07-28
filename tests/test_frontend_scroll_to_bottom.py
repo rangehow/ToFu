@@ -233,8 +233,13 @@ win.getActiveConv = global.getActiveConv = () => convA;
 global.__out = [];
 
 let SR = fs.readFileSync(path.join(ROOT, 'static', 'js', 'ui', 'streaming_render.js'), 'utf8');
-let CORE = fs.readFileSync(path.join(ROOT, 'static', 'js', 'core.js'), 'utf8')
-  .match(/function scrollChatToBottom\(\) \{[\s\S]*?\n\}/)[0];
+// Slice TWO blocks out of core.js: the explicit-bottom-latch listener arming
+// (`_stbLatchListenersArmed` / `_armStbLatchClearListeners` — free vars that
+// scrollChatToBottom calls on every click) AND scrollChatToBottom itself.
+// Slicing only the latter leaves a bare ReferenceError in the one-eval scope.
+const _CORE_SRC = fs.readFileSync(path.join(ROOT, 'static', 'js', 'core.js'), 'utf8');
+const LATCH = _CORE_SRC.match(/let _stbLatchListenersArmed[\s\S]*?\n\}/)[0];
+let CORE = _CORE_SRC.match(/function scrollChatToBottom\(\) \{[\s\S]*?\n\}/)[0];
 if (NC === 'nc_restore') {
   // NC: disable the hidden-tail restore block — the button goes back to a
   // bare force-scroll that can only reach the bottom sentinel.
@@ -246,7 +251,7 @@ if (NC === 'nc_restore') {
 console.log('PASS nc_pattern_applied');
 
 const DRIVER = __DRIVER__;
-eval(SR + '\n' + CORE + '\n' + DRIVER);
+eval(SR + '\n' + LATCH + '\n' + CORE + '\n' + DRIVER);
 """
 
 

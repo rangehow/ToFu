@@ -1,6 +1,33 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-28 — 安装加速根修:**加速配置被关在慢路径里,跑得越快的那条路完全没有加速**(owner 逐项核对推翻我上一轮的「已调研」交付;commit `53620bb4`,2 文件 +287/-23;套件 **21/21**,**NEUTER×6 全咬**(其中**我自己两条守卫首发不咬**),相邻环 **43/43**,collect **11,379** 0 err,干净 committed worktree **32/32**)
+
+- **★ owner 先否掉了我上一轮的交付形态:目标第三段「maximize acceleration for other users' installations」被我做成了一份调研报告。** 他逐项 grep 核对:`PLAYWRIGHT_DOWNLOAD_HOST`=0 · `UV_CACHE_DIR`=0 · `PLAYWRIGHT_BROWSERS_PATH`=0 · `--only-shell`=0 · `--find-links`=0,且 `git log -- install.sh export.py` 最新一笔是别人的 `521160b0` —— **这一轮一行都没改**。判据(记死):**「查清了该怎么加速」不等于「加速了」;安装类目标的验收物是 install.sh 的 diff + 前后 wall-clock,不是一份清单。**
+
+- **★ 而 owner 查出的结构性缺陷比清单里任何一项都硬,它让所有加速措施根本到不了用户:** `_try_uv_install` 在 **L450**,`if [[ "$_FAST_PATH_DONE" -ne 1 ]]` 这道 conda-only 守卫从 **L476 一直包到 L1823**,而 PyPI 镜像导出在 **L784** —— **镜像设置被关在 conda 慢路径里面**。uv 快路径一旦成功就 `return`,**中国/内网用户配的 `TOFU_PYPI_INDEX` 永远不会被读到**,请求直奔 pypi.org 挂到 900s 超时。**跑得越快的那条路,反而是完全没有加速的那条。** 这不是少一个环境变量,是**加速配置与执行路径接错了**,故必须先修它 —— 否则后面每一项都只对慢路径生效。
+  - **修完还发现一层:光把 pip 的变量提上去是无效的。** `uv pip install` **不读** `PIP_INDEX_URL`(实测 `uv --help` 与 driver 源码确认它读 `UV_INDEX_URL` / `UV_DEFAULT_INDEX`)。只搬 `PIP_INDEX_URL` = 提了个假的,守卫因此同时断言 uv 专属变量。
+
+- **实测四项数字(全部真跑,不是估算):**
+
+| 项 | 前 | 后 | 依据 |
+|---|---|---|---|
+| 镜像可达性(uv 路径) | **永不生效** | 两条路径共享 | Step 0.55 提到分叉之前 |
+| 浏览器下载 | 290.9 MB / 157s | **115.5 MB / 62s**(-60%) | CDN Content-Length + 实测 1.85 MB/s |
+| 重装/多环境 | 每次重下 115 MB | **0 MB** | 缓存移出 `.venv` |
+| conda 30 包 | 每次全量重装 | 仅 purge 真删了才重装 | purge 前快照对照 |
+
+- **`--only-shell` 的判据是「谁在跑」而不是「省多少」:** 默认 `playwright install chromium` 会**同时**拉完整 Chromium(175.4 MB)**和** chrome-headless-shell(113.2 MB)。全库 grep 无 `headless=False` / `record_video` / `channel=` 调用点,且 `lib/motion_video/_env.py::_playwright_chrome_candidates` **本来就接受** shell 二进制。**最硬的证据是本机:`~/.cache/ms-playwright/` 里只有 `chromium_headless_shell-1223` + `ffmpeg`,根本没有完整 Chromium,而今天所有截图都正常** —— 完整包是**下载了但没人跑**的字节。
+- **`--force-reinstall` 不删而是配判据(owner 明确要求查清来由再动):** 它紧跟在一段**无条件 purge**(`conda remove` 掉 postgresql/psycopg2/lxml/icu 等冲突包)之后,存在意义是修复 purge + `pip uninstall` 留下的**陈旧元数据**。但无条件用等于每次重铺 ~30 个包。改为**purge 前先 `conda list` 快照**,真删了才 force;**retry 分支保持无条件 force**,所以真坏的环境照样能修好 —— 只在 happy path 上收起大锤。
+
+- **★ 我自己两条守卫首发 NEUTER 不咬,而且是 charter 已记过的两个形状原样重现:**
+  - **① 一条注释就满足了一个守卫。** 我删掉两行 `export UV_INDEX_URL/UV_DEFAULT_INDEX` 后守卫纹丝不动 —— 因为**注释里那句** "UV_INDEX_URL is uv's documented override (UV_DEFAULT_INDEX on newer builds)" 里还留着这两个词,而我用的是子串检查。改为正则锚 `^\s*export\s+VAR=` 真实赋值行。**与 `chromium_env` ratchet 那次(注释里 4 处同名字符串)是同一个错,我在同一天犯了第二次。**
+  - **② 正则在 `}` 处截断,越过边缘形态。** 缓存守卫用 `[^"\n}]*` 抓路径,于是把 `${PLAYWRIGHT_BROWSERS_PATH:-${INSTALL_DIR}/.venv/...}` 只读到 `${INSTALL_DIR`,**永远看不见后面的 `.venv`** —— NEUTER 把缓存指进 `.venv`(每次 venv 重建就被清空)照样绿。改为扫**整行赋值**。这正是 charter「扫描面残缺」那条;`--only-shell` 那条守卫同理,第一版负向 lookahead 把三个真调用点全排除掉,报 "no invocation found at all"。**故三条守卫现在都先 `print` 扫到的清单再断言。**
+
+- **★ 顺手补上「我的浏览器修复自己缺的那道防线」(owner 指出):** `tests/test_chromium_env.py` 的 docstring 自己写着根因是「exported product had no working browser」,却只在洗净 shell 里测**本机**启动 —— **把 `chromium_env.py` 加进 `ALWAYS_EXCLUDE_FILES` 或让 `.gitignore` 吃掉它,整套守卫照样全绿,而别人装的那份又变成死浏览器。** charter 刚写下「导出产物是第一等验收目标」,这条恰好没有棘轮。新守卫驱动**真实的** `export._should_exclude` + git 跟踪状态(**两道门都查** —— 排除集和 `_untracked_root_excludes` 各能独立杀死它),NEUTER 打在排除集上必红。
+- **诚实记账:我在测量里报过一个假数字并自查推翻。** 先报「完整 Chromium 下载耗时 0.6s」,复核 `%{http_code}` 发现是 **307 重定向 + 0 字节**,不是下载。加 `-L` 重测 20 MB 分片得 **206 / 20,971,521 字节 / 10.8s = 1.85 MB/s**,上表所有秒数按此折算。**与 JOURNAL 里「合成输入的压缩率是上界不是生产数字」同族:一个没核对过 status/字节数的计时,不是测量。**
+- **端到端复验(不是只跑单测):** 真跑 `export.py --mode opensource` → 产物含 `chromium_env.py`、`.tofu_env.json` 正确缺席、导出的 install.sh 里 10 处加速接线在位;洗净环境 shell-only 截图 **7,694 字节 / h1 宽 1264px**。
+
 ### 2026-07-28 — 更正票 `pt_a34a9277` 收口:**把决策从票搬进代码的过程中,我自己写的那条注释被实测证伪**(commit `815b72a`;新守卫 1 条,NEUTER 咬;`test_theme_contrast` **34/34**,相邻环 **55/55**,干净 committed worktree 复验 **55/55**)
 
 - **本轮最值钱的不是收口,而是「写注释」这个动作本身抓出了一个错误判断。** 我为自 tint 徽章(`.sr-type-*`,前景与背景同一个 token)写下:「提高 15% tint 在**这里**是有效旋钮,不像不同 token 的 chip 那样越 tint 越糟」。落码前按 charter「注释里的数字必须有可执行断言背书」去实测,结果**两种形状的曲线完全同向**:light `--type-stock` 5%=5.22 · 15%=4.55 · 25%=3.89 · 40%=3.08 · 60%=2.17,单调**下降**;不同 token 的 chip 5.24→2.19,形状一致。**更多 tint 永远把底色拉向文字,没有例外。**

@@ -326,7 +326,14 @@ fi
 #   because stdout is already a file (not a tty), nohup never creates a stray
 #   `nohup.out`. (Both facts verified empirically 2026-07-16.)
 echo "[3/5] Relaunching (detached via setsid nohup): PORT=${PORT} setsid nohup ${PY} server.py > ${LOG} 2>&1 &"
-PORT="${PORT}" BIND_HOST="${BIND_HOST:-127.0.0.1}" setsid nohup "${PY}" server.py > "${LOG}" 2>&1 &
+#   9>&- (pt_2a05e161b9814bc2): fd 9 holds the [pre/5b] restart serialization
+#   flock. Without this close the relaunched server INHERITS fd 9 and keeps the
+#   flock alive for its WHOLE lifetime (measured: a relaunched pid held
+#   data/.restart.lock for 20+ min) — so every subsequent run of this script
+#   blocks 60s at [pre/5b] and then aborts doing nothing. The lock must belong
+#   to THIS script's lifetime only: it releases when this script exits. 9>&-
+#   on an unopened fd (flock unavailable path) is a silent no-op.
+PORT="${PORT}" BIND_HOST="${BIND_HOST:-127.0.0.1}" setsid nohup "${PY}" server.py > "${LOG}" 2>&1 9>&- &
 NEWPID=$!
 echo "      Launched pid ${NEWPID}; logging to ${LOG}"
 

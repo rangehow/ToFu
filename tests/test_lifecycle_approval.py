@@ -196,6 +196,23 @@ def _real_store_has_fireable_restart_token() -> bool:
         la._APPROVALS_FILE = orig
 
 
+def _defang_pgrep_fallback(text: str) -> str:
+    """Neutralise the script's ``pgrep -f 'server\\.py'`` kill fallback in a copy.
+
+    The fallback exists for the mid-crash case (no listener socket) — but its
+    pattern ALSO matches the PRODUCTION `python server.py`. In a test copy
+    whose dummy listener is already dead (or never started), [1/5]/[2/5]
+    would SIGTERM the REAL server. THIS FIRED FOR REAL on 2026-07-28 14:21:
+    an earlier version of the fd-9 test ran (a) — which killed the dummy —
+    then (b) hit the fallback and killed the live :15000 server, triggering
+    a 25-minute guard-race crash loop. Every test copy MUST be defanged.
+    """
+    out = text.replace("pgrep -f 'server\\.py'",
+                       "pgrep -f 'tofu_test_never_matches'")
+    assert out != text, 'pgrep server.py fallback not found — script changed?'
+    return out
+
+
 def _run_orphaned(script_path: str, timeout: int = 120) -> tuple:
     """Run ``script_path`` detached (orphaned → PPID 1), like a setsid watcher.
 
@@ -279,9 +296,12 @@ class TestRealScriptGate:
             pytest.skip('fireable approved restart token in the real store')
         with open(SCRIPT, encoding='utf-8') as f:
             src = f.read()
-        # retarget the port on BOTH copies.
+        # retarget the port on BOTH copies, and defang the pgrep fallback
+        # (would SIGTERM the PRODUCTION server if the dummy is dead — see
+        # _defang_pgrep_fallback).
         ported = src.replace('PORT=15000', f'PORT={_TEST_PORT}', 1)
         assert ported != src
+        ported = _defang_pgrep_fallback(ported)
         # strip the gate block ([pre/5c] … up to the [pre/5b] marker)
         start = ported.index('# ── [pre/5c]')
         end = ported.index('# ── [pre/5b]')
@@ -337,6 +357,138 @@ class TestRealScriptGate:
                 dummy.send_signal(signal.SIGTERM)
             except Exception:
                 pass
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# ── restart-lock fd-9 inheritance (pt_2a05e161b9814bc2) ─────────────
+
+class TestRestartLockInheritance:
+    """The relaunched server must NOT inherit the [pre/5b] restart-lock fd.
+
+    Incident shape: a relaunched `python server.py` inherited fd 9 (the
+    script's flock on data/.restart.lock) and held it for 20+ minutes, so
+    every later script run blocked 60s at [pre/5b] and aborted doing
+    nothing. Fix: `9>&-` on the relaunch line. This test runs a retargeted
+    copy (test port, stub interpreter, shortened health wait) and checks the
+    lock's holder AFTER the script exits:
+
+      * FIXED copy (with 9>&-): nothing holds the lock once the script exits;
+      * NEUTER copy (9>&- stripped): the relaunched child holds it — proving
+        the assertion bites and the fix is load-bearing.
+    """
+
+    _STUB_NAME = 'tofu_fd9_stub'
+
+    def _make_copies(self, tmpdir):
+        with open(SCRIPT, encoding='utf-8') as f:
+            src = f.read()
+        ported = src.replace('PORT=15000', f'PORT={_TEST_PORT}', 1)
+        assert ported != src
+        # CRITICAL: defang the pgrep fallback BEFORE anything runs — this
+        # exact gap SIGTERM'd the production server on 2026-07-28 14:21
+        # (run (a) kills the dummy; run (b) then matched 'server\\.py' on
+        # the REAL process). See _defang_pgrep_fallback.
+        ported = _defang_pgrep_fallback(ported)
+        # strip the [pre/5c] approval gate (it has its own e2e; here we
+        # exercise the relaunch line only)
+        start = ported.index('# ── [pre/5c]')
+        end = ported.index('# ── [pre/5b]')
+        nogate = ported[:start] + ported[end:]
+        # stub interpreter: ignores args, sleeps long enough to outlive the
+        # script (never serves — the [4/5] health wait expires → exit 4)
+        stub = os.path.join(tmpdir, self._STUB_NAME)
+        with open(stub, 'w') as f:
+            # `exec` so the stub process IS the sleep (no bash wrapper whose
+            # orphaned sleep child would keep holding fd 9 after pkill of the
+            # wrapper — that leak blocked the whole suite for 60s once).
+            f.write('#!/bin/bash\nexec sleep 297\n')
+        os.chmod(stub, 0o755)
+        py_line = nogate.index('PY="')
+        py_end = nogate.index('\n', py_line)
+        stubbed = nogate[:py_line] + f'PY="{stub}"' + nogate[py_end:]
+        # shorten the [4/5] health wait 40s → 6s (test-only copy tweak)
+        stubbed = stubbed.replace('for i in $(seq 1 40); do',
+                                  'for i in $(seq 1 6); do', 1)
+        # neuter: remove the 9>&- close from the relaunch line
+        neutered = stubbed.replace(' 9>&- &', ' &')
+        assert neutered != stubbed, 'relaunch 9>&- not found to strip'
+        fixed_path = os.path.join(tmpdir, 'fixed.sh')
+        neuter_path = os.path.join(tmpdir, 'neutered.sh')
+        for path, text in ((fixed_path, stubbed), (neuter_path, neutered)):
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(text)
+            os.chmod(path, 0o755)
+        return fixed_path, neuter_path
+
+    def _lock_holders(self):
+        try:
+            out = subprocess.run(['fuser', os.path.join(ROOT, 'data', '.restart.lock')],
+                                 capture_output=True, text=True, timeout=10)
+            return set(out.stdout.split())
+        except Exception:
+            return set()
+
+    def _stub_pids(self):
+        out = subprocess.run(['pgrep', '-x', 'sleep'],
+                             capture_output=True, text=True, timeout=10)
+        mine = set()
+        for pid in out.stdout.split():
+            try:
+                with open(f'/proc/{pid}/cmdline', 'rb') as fh:
+                    argv = [a for a in fh.read().split(b'\x00') if a]
+            except OSError:
+                continue
+            if argv == [b'sleep', b'297']:
+                mine.add(pid)
+        return mine
+
+    def _kill_stubs(self):
+        for pid in self._stub_pids():
+            try:
+                os.kill(int(pid), signal.SIGKILL)
+            except OSError:
+                pass
+
+    def test_relaunched_child_does_not_hold_restart_lock(self):
+        if _real_store_has_fireable_restart_token():
+            pytest.skip('fireable approved restart token in the real store')
+        tmpdir = tempfile.mkdtemp()
+        fixed_path, neuter_path = self._make_copies(tmpdir)
+        dummy = subprocess.Popen(
+            [sys.executable, '-m', 'http.server', str(_TEST_PORT)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            for _ in range(50):
+                if _port_listening(_TEST_PORT):
+                    break
+                time.sleep(0.1)
+            if not _port_listening(_TEST_PORT):
+                pytest.skip(f'dummy listener on :{_TEST_PORT} failed to start')
+
+            # (a) FIXED: after the script exits, NOTHING holds the lock
+            rc_f, out_f = _run_orphaned(fixed_path, timeout=120)
+            assert rc_f == 4, f'expected health-wait exit 4, got {rc_f}:\n{out_f}'
+            holders = self._lock_holders()
+            assert not holders, (
+                f'lock held after fixed script exited (fd-9 inheritance '
+                f'regressed): {holders}')
+            self._kill_stubs()
+
+            # (b) NEUTER: without 9>&- the relaunched child KEEPS the lock —
+            # proving (a) actually measures the fix, not empty air
+            rc_n, out_n = _run_orphaned(neuter_path, timeout=120)
+            assert rc_n == 4, f'expected health-wait exit 4, got {rc_n}:\n{out_n}'
+            holders_n = self._lock_holders()
+            assert holders_n & self._stub_pids(), (
+                'neutered copy: relaunched child does NOT hold the lock — '
+                'the regression assertion would not bite')
+            self._kill_stubs()
+        finally:
+            try:
+                dummy.send_signal(signal.SIGTERM)
+            except Exception:
+                pass
+            self._kill_stubs()
             shutil.rmtree(tmpdir, ignore_errors=True)
 
 

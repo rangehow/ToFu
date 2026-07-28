@@ -37,6 +37,44 @@
 - **Result / status:** outcome, metrics, or current state
 -->
 
+### 2026-07-28 — A full-row `@Update` could silently roll back a concurrent edit (owner review)
+- **Change:** New `ProfileDao.setCookieHost(id, host)` — a targeted
+  `@Query("UPDATE profiles SET cookie_host = :host WHERE id = :id")`. Both stamping sites use it.
+  `SessionController.editProfile` now returns `EditResult(login, persisted)` and
+  `SessionManager.updateUrlAndReauth` returns `ReauthResult(login, persisted)`; `submitEdit`
+  navigates with `persisted`. Commit `f9978a3`.
+- **Why (defect 1 — the write was too wide):** `ProfileDao.update` is Room's `@Update`, which
+  rewrites the **whole row** from whatever `Profile` instance the caller holds. Both cookieHost
+  stamps passed a **long-lived snapshot**: `WebScreen` keeps the profile it was opened with for the
+  entire session, and an interactive SSO sign-in can take minutes (IdP redirect, one-time code).
+  Any edit landing in that window — including the `cookieHost = null` invalidation
+  `updateUrlAndReauth` performs on a host change — would be **reverted by the stamp**. The fix is
+  not "remember to re-read first": it is to make the write narrow, so *only this column changes*
+  is a property of the **query** rather than a discipline every caller must keep. The
+  headless-login stamp got the same treatment — identical pattern, identical hazard, and leaving
+  one of the two wide would just wait for the next reader to copy the wrong one.
+- **Why (defect 2 — the caller invented the row):** `submitEdit` rebuilt the edited profile as
+  `current.copy(alias, baseUrl, authType, projectPath)` and navigated with it. That copy carries
+  the **pre-edit `cookieHost`**, while `editProfile`'s host-change branch had just nulled it. So
+  the object handed to the WebView was **known to disagree with the database** — and for SSO that
+  object is what the entire session runs on. The two branches persist *different* rows (the
+  host-change path also refreshes `instanceUuid`), so reconstructing at the call site is wrong
+  exactly when it matters. Both functions now **return what they wrote**.
+- **Result / status:** **122 unit tests pass** (+1), lint clean, both APKs signed.
+  **Neuter-verified:** restoring `dao.update(profile.copy(cookieHost = host))` fails both
+  `stamping_does_not_roll_back_a_concurrent_edit` and
+  `completing_sso_in_the_webview_stamps_cookie_host`. The new guard renames *and* re-paths the row
+  **after** the snapshot is taken, then asserts the stamp records the sign-in without reverting
+  either field — the fake DAO implements `setCookieHost` with real single-column semantics, so it
+  can actually tell a targeted write apart from a full-row overwrite.
+- **The recurring shape, now six for six:** every defect this session came from **conflating two
+  things that merely co-occur**. This one: *"I know this row's identity"* with *"I know this row's
+  current contents."* Holding a valid `id` does not license rewriting the other columns from a
+  snapshot taken minutes ago.
+- **Still unverified on a device** — the SSO round trip (Open → IdP → back → Start/Stop unlocked)
+  is exercised only by unit tests.
+
+
 ### 2026-07-28 — SSO sign-in was a closed loop: Open did nothing, Start locked forever (owner review)
 - **Change:** New pure `session/InteractiveSso.kt` (`shouldOpenWebView`, `completedSignIn`,
   `hostToStamp`); `SessionManager.noteInteractiveSignIn()` stamps `cookieHost` after an in-WebView

@@ -1657,7 +1657,14 @@
       if (decs.length) {
         cparts.push('<ul class="pb-inf-decisions">');
         for (var i = 0; i < Math.min(decs.length, 6); i++) {
-          cparts.push('<li>' + _clampBlock(_mdLite(decs[i]), String(decs[i])) + '</li>');
+          // decisions are STRUCTURED {text, summary, kind, …} (backend single
+          // source) — render the one-line rule, fall back to text, and keep
+          // the string shape for legacy payloads. Same value feeds the clamp
+          // raw text, or the title/expand would show [object Object].
+          var _di = decs[i];
+          var _dTxt = (_di && typeof _di === 'object')
+            ? (_di.summary || _di.text || '') : String(_di);
+          cparts.push('<li>' + _clampBlock(_mdLite(_dTxt), _dTxt) + '</li>');
         }
         cparts.push('</ul>');
       }

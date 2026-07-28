@@ -64,6 +64,7 @@ _DOM = r'''<!DOCTYPE html><body>
     <div class="project-brain-col pb-tab-panel pb-tab-panel-active" data-pb-panel="charter"><div class="project-brain-col-body" id="projectBrainCharterBody"></div></div>
   </div>
 </div>
+<div id="projectBrainInfluence"><div id="projectBrainInfluenceBody"></div><span id="projectBrainInfluenceConv"></span></div>
 </body>'''
 
 
@@ -188,6 +189,20 @@ const FULL = RULE + '. Full evidence: ' + EVIDENCE;
   out.commitDecision = com ? (com[2] || {}).add_decision : null;
   out.commitResolves = com ? (com[2] || {}).resolves_proposal : null;
 
+  // ── renderInfluence consumer (peer-flagged): structured decisions must
+  // NOT render as [object Object] in the influence banner either. ──
+  PB.renderInfluence({
+    charter: { content: 'Ship the platform.', injected: true,
+      decisions: [{ text: FULL, summary: RULE, kind: 'invariant', ts: 1, by_conv: 'cA' }] },
+    board: { mine: [], avoid: [], open: [] },
+    pendingDecisions: [],
+  });
+  await drain();
+  const infBody = win.document.getElementById('projectBrainInfluenceBody');
+  const infText = infBody ? infBody.textContent : '';
+  out.infShowsRule = infText.indexOf(RULE) !== -1;
+  out.infNoObjectObject = infText.indexOf('[object Object]') === -1;
+
   console.log('__RESULT__' + JSON.stringify(out));
 })();
 '''.replace('DOM_PLACEHOLDER', json.dumps(_DOM)) \
@@ -238,6 +253,33 @@ def test_two_tier_health_strip_and_summary_gate():
     assert out['commitSummary'] == 'Adopt AST boundaries', out
     assert out['commitDecision'] == 'Adopt AST boundaries everywhere.\nLong rationale follows.', out
     assert out['commitResolves'] == 'pid1', out
+    # renderInfluence consumer: structured decisions render the rule, never
+    # '[object Object]' (peer-flagged miss from the structured-payload change).
+    assert out['infShowsRule'] is True, out
+    assert out['infNoObjectObject'] is True, out
+
+
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
+def test_NC3_stringifying_the_object_renders_object_Object(tmp_path):
+    """NC-3: revert the influence consumer to String(decs[i]) → the banner
+    shows '[object Object]' again and the assertion fails. Byte-identical."""
+    with open(_BRAIN_SRC, encoding='utf-8') as f:
+        original = f.read()
+    anchor = ("          var _dTxt = (_di && typeof _di === 'object')\n"
+              "            ? (_di.summary || _di.text || '') : String(_di);")
+    assert anchor in original, 'influence-decision anchor not found'
+    patched = original.replace(
+        anchor, "          var _dTxt = String(_di);  // NC-3", 1)
+    assert patched != original
+    src = os.path.join(tmp_path, 'brain-nc3.js')
+    with open(src, 'w', encoding='utf-8') as f:
+        f.write(patched)
+    out = _run(brain=src)
+    assert out['infNoObjectObject'] is False, \
+        f'NC-3: stringifying the structured decision must bring back [object Object]: {out}'
+    with open(_BRAIN_SRC, encoding='utf-8') as f:
+        assert f.read() == original, 'shipped project-brain.js must be byte-identical'
 
 
 @pytest.mark.skipif(not _node_deps_available(),

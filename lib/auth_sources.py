@@ -141,8 +141,31 @@ DEFAULT_SOURCES: list[dict] = [
     {'domain': 'sankuai.com', 'label': 'Meituan internal (SSO)',
      'aliases': [],
      'login_url': 'https://aigc.sankuai.com/ml/modelPlaza/modelInfo',
+     # Cookie names below are from a MEASURED anonymous run of the SSO chain
+     # (Playwright, networkidle) — NOT guessed. What that run proves and what
+     # it cannot:
+     #   * PROVEN, pre-login: the chain sets only telemetry / device-fingerprint
+     #     / PKCE-context cookies — `_lxsdk*`, `WEBDFPID`, `logan_session_token`,
+     #     `webDeviceUuid`, `ctxId` / `ctxId-<client_id>` (httpOnly, per-login
+     #     attempt), and `com.sankuai.speechfe.sft_strategy` on the app host.
+     #     NONE of these is a session credential.
+     #   * NOT PROVEN: the post-login session cookie's name. It is only issued
+     #     AFTER a successful QR scan, so an anonymous probe cannot see it.
+     #     `ssoid` is the long-standing assumption in this repo (it is also
+     #     tests/_qr_login_capture.py's wait-for anchor) but remains UNVERIFIED
+     #     against a real logged-in session.
+     # Hence NOTHING here is marked `required`: a required field that turns out
+     # to carry the wrong name would REJECT a perfectly good credential paste
+     # at the store boundary, which is a worse failure than storing a set we
+     # then discover is incomplete. Promote to `required` once a real login has
+     # confirmed the name.
+     # NOTE: reaching this host at all ALSO requires it in tofu-search's
+     # ``allow_private_hosts`` — the two gates stay separate on purpose.
      'fields': [
-         {'name': 'ssoid', 'importance': 'required'},
+         {'name': 'ssoid', 'importance': 'recommended'},
+         {'name': 'ssoid_sankuai', 'importance': 'optional'},
+         {'name': 'ssousername', 'importance': 'optional'},
+         {'name': 'ssosession', 'importance': 'optional'},
      ]},
 ]
 

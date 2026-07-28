@@ -78,6 +78,88 @@ function _apRunConcluded(conv, runId, isLast) {
  * `.autopilot-run-fold` left in the DOM (e.g. from a surgical re-render that
  * predates this change), hoisting its turns back to the flat sibling level so
  * the layout never gets stuck half-folded. */
+/* ★ Run-tail notice for a run that ENDED WITHOUT ANSWERING ────────────────
+ * A run can stop after the virtual user already produced a reply — it yielded
+ * to a human, was aborted, or was superseded mid-flight. That reply is
+ * deliberately NOT in `conv.messages` (that list is the history sent upstream;
+ * an undelivered VU reply there would read back as words the human actually
+ * said), so without this notice the transcript simply STOPS: the last thing on
+ * screen is the agent asking a question, with no indication that the loop ended
+ * or that work was done and withheld. That silence is the whole bug — the run
+ * died and the UI showed nothing at all for 2h12m.
+ *
+ * So the terminal fact is rendered from the SIDECAR record instead: why the run
+ * ended, plus the preserved-but-unsent text behind a <details> so it is
+ * recoverable without ever entering the conversation. Appended once, after the
+ * run's last stamped turn. */
+function _apRunNoticeHTML(rec) {
+  const _l = (k, fallback) => (typeof t === 'function' && t(k) !== k) ? t(k) : fallback;
+  const reason = (rec && rec.reason) || '';
+  const _REASONS = {
+    yielded_to_human: ['autopilot.endedYielded',
+      'Autopilot stood down — you sent a message, so it stopped here'],
+    aborted_mid_vu: ['autopilot.endedAborted',
+      'Autopilot stopped — the turn was cancelled while it was working'],
+    superseded: ['autopilot.endedSuperseded',
+      'Autopilot stood down — a newer turn took over this conversation'],
+    budget_exhausted: ['autopilot.endedBudget',
+      'Autopilot stopped early — it hit its turn budget (needs review)'],
+    no_progress: ['autopilot.endedNoProgress',
+      'Autopilot stopped early — it stopped making progress (needs review)'],
+    stuck: ['autopilot.endedStuck',
+      'Autopilot stopped early — it was repeating itself (needs review)'],
+  };
+  const spec = _REASONS[reason];
+  if (!spec) return '';
+  const label = _l(spec[0], spec[1]);
+  const unsent = (rec && rec.unsent && rec.content) ? String(rec.content) : '';
+  let body = '';
+  if (unsent) {
+    /* The reply is shown as PLAIN TEXT, not rendered markdown: it never became
+     * a turn, and dressing it up like one invites reading it as something the
+     * user said. The label states plainly that it was never sent. */
+    body = String(safeHtml`<details class="ap-run-notice-unsent"><summary>${
+      _l('autopilot.unsentReply',
+         'This reply was written but never sent to the conversation')
+    }</summary><pre class="ap-run-notice-text">${unsent}</pre></details>`);
+  }
+  return String(safeHtml`<div class="ap-run-notice" data-ap-notice="1"
+    data-ap-reason="${reason}"><span class="ap-run-notice-label">${label}</span>${raw(body)}</div>`);
+}
+
+/* Append the run-tail notice after the LAST stamped turn of each concluded run
+ * that ended without answering. Idempotent: an existing notice for the run is
+ * replaced, so repeated render passes never stack duplicates. */
+function _applyAutopilotRunNotices(inner, conv) {
+  if (!inner || !conv) return;
+  try {
+    const stamped = inner.querySelectorAll('[data-ap-run]');
+    const lastOf = {};
+    stamped.forEach(el => {
+      const rid = el.getAttribute('data-ap-run');
+      if (rid) lastOf[rid] = el;
+    });
+    Object.keys(lastOf).forEach(runId => {
+      const rec = _apRunRecord(conv, runId);
+      if (!rec || rec.status !== 'concluded') return;
+      const html = _apRunNoticeHTML(rec);
+      const anchor = lastOf[runId];
+      /* Drop any prior notice for this run (reason/content may have changed). */
+      const stale = inner.querySelector(`[data-ap-notice][data-ap-run-id="${runId}"]`);
+      if (stale) stale.remove();
+      if (!html) return;
+      const holder = document.createElement('div');
+      holder.innerHTML = html;
+      const node = holder.firstElementChild;
+      if (!node) return;
+      node.setAttribute('data-ap-run-id', runId);
+      anchor.parentNode.insertBefore(node, anchor.nextSibling);
+    });
+  } catch (e) {
+    console.warn('[Autopilot notice] render failed (non-fatal):', e && e.message);
+  }
+}
+
 function _applyAutopilotRunFolds(inner, conv) {
   if (!inner) return;
   try {
@@ -771,6 +853,7 @@ function renderChat(conv, forceScroll) {
     }
     if (!activeStreams.has(conv.id)) {
       _applyAutopilotRunFolds(inner, conv);
+      _applyAutopilotRunNotices(inner, conv);
     }
     /* ★ Re-pin the anchor captured above (background repaint only) so an
      *   above-fold height change from the freshly-landed data doesn't drift a
@@ -873,6 +956,7 @@ function renderChat(conv, forceScroll) {
   inner.innerHTML = html;
   if (!activeStreams.has(conv.id)) {
     _applyAutopilotRunFolds(inner, conv);
+    _applyAutopilotRunNotices(inner, conv);
   }
   _lastRenderedFingerprint = fp;
 

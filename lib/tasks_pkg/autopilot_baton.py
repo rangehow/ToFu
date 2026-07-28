@@ -69,14 +69,33 @@ def _presync_parent_reply(task: dict) -> None:
 
 
 def _has_pending_real_message(conv_id: str) -> bool:
-    """True if a real user message is queued — autopilot must defer."""
+    """True iff a real HUMAN turn is queued — autopilot must yield to a person.
+
+    Delegates to ``message_queue.has_pending_human_turn``, THE single
+    consume-time predicate the dispatcher itself uses. It must stay a
+    delegation: the previous implementation counted rows with
+    ``get_queue_depth`` (filter: ``kind != KIND_AUTOPILOT``), a WEAKER filter
+    than the dispatcher's, so the two readers could disagree about the same
+    row. On 2026-07-28 they did — a brain kickoff whose epic finished while it
+    sat queued read as "a human is waiting" here and as "discard me" there, so
+    a completed VU turn was thrown away and nothing was dispatched in its
+    place.
+
+    Two behaviours are load-bearing and both are asserted in
+    ``tests/test_autopilot_yield_not_destroy.py``:
+      * only ``KIND_REAL`` preempts — machine work items (brain kickoffs, peer
+        messages) wait for the run to end and are then picked up by the idle
+        drain;
+      * a row that would NOT really be dispatched never counts as a reason to
+        stand down.
+    """
     if not conv_id:
         return False
     try:
-        from lib.message_queue import get_queue_depth
-        return get_queue_depth(conv_id) > 0
+        from lib.message_queue import has_pending_human_turn
+        return has_pending_human_turn(conv_id)
     except Exception as e:
-        logger.debug('[Autopilot] queue depth probe failed (non-fatal): %s', e)
+        logger.debug('[Autopilot] queue probe failed (non-fatal): %s', e)
         return False
 
 

@@ -83,6 +83,7 @@ logger = get_logger(__name__)
 def _store_run_record(conv_id: str, run_id: str, *,
                       reason: str,
                       text: str = '',
+                      unsent: bool = False,
                       translated: str = '') -> dict | None:
     """Persist the SINGLE authoritative per-run record in the SIDECAR.
 
@@ -177,6 +178,19 @@ def _store_run_record(conv_id: str, run_id: str, *,
                 record['incomplete'] = True
             if content:
                 record['content'] = content
+            # ★ UNSENT — ``content`` here is a VU reply that was PRODUCED but
+            #   never delivered into the conversation (the run yielded to a
+            #   human / was superseded mid-flight). The frontend must label it
+            #   as such: it is evidence of work done, NOT a turn that happened,
+            #   and it deliberately does NOT exist in ``conv.messages`` (that
+            #   list is the history sent upstream — injecting an undelivered VU
+            #   reply there would make the model read it back as words the
+            #   human said). Sticky like the anchor: once a record is marked
+            #   unsent, a later bare re-conclude must not quietly clear the
+            #   label while the text is still the unsent one.
+            if unsent or (prior.get('unsent') and content
+                          and content == (prior.get('content') or '')):
+                record['unsent'] = True
             if translated_final:
                 record['translatedContent'] = translated_final
             summaries[run_id] = record

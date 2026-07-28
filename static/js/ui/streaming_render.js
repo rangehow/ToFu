@@ -609,6 +609,16 @@ function _applyAutopilotRunConcluded(conv, rec, runId) {
      * when the merged reason is task_done. */
     incomplete: (_reason !== 'task_done')
       && !!(rec.incomplete || (prior && prior.incomplete)),
+    /* ★ UNSENT — the `content` is a VU reply that was PRODUCED but never
+     * delivered into the conversation (the run yielded to a human / was
+     * superseded mid-flight). MUST survive this merge: it is the only thing
+     * that lets the UI say "this was written but never sent" instead of
+     * presenting it as a turn that happened. Dropping it here would make the
+     * backend field dead on arrival — the "declared but never rendered"
+     * failure this fix exists to end. Cleared by a clean task_done, same as
+     * `incomplete`. */
+    unsent: (_reason !== 'task_done')
+      && !!(rec.unsent || (prior && prior.unsent)),
   };
   return true;
 }

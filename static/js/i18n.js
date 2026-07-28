@@ -437,6 +437,29 @@ var _i18n = {
   'autopilot.sentToAgent': { zh: '作为下一条消息发送给智能体', en: 'Sent to the agent as the next message' },
   'autopilot.privateNotSent': { zh: '私有过程 · 不发送给智能体', en: 'Private · not sent to the agent' },
   'autopilot.runFold': { zh: '自动驾驶运行', en: 'Autopilot run' },
+  /* Run-tail notices — a run that ended WITHOUT answering. Each names the
+   * actual cause: a silent stop is what made the original failure invisible. */
+  'autopilot.endedYielded': {
+    zh: 'Autopilot 已让位 —— 你发了新消息，它到此停止',
+    en: 'Autopilot stood down — you sent a message, so it stopped here' },
+  'autopilot.endedAborted': {
+    zh: 'Autopilot 已停止 —— 本轮在运行中被取消',
+    en: 'Autopilot stopped — the turn was cancelled while it was working' },
+  'autopilot.endedSuperseded': {
+    zh: 'Autopilot 已让位 —— 新的一轮接管了这个对话',
+    en: 'Autopilot stood down — a newer turn took over this conversation' },
+  'autopilot.endedBudget': {
+    zh: 'Autopilot 提前停止 —— 已用尽轮次预算（需人工复核）',
+    en: 'Autopilot stopped early — it hit its turn budget (needs review)' },
+  'autopilot.endedNoProgress': {
+    zh: 'Autopilot 提前停止 —— 不再有实质进展（需人工复核）',
+    en: 'Autopilot stopped early — it stopped making progress (needs review)' },
+  'autopilot.endedStuck': {
+    zh: 'Autopilot 提前停止 —— 出现重复循环（需人工复核）',
+    en: 'Autopilot stopped early — it was repeating itself (needs review)' },
+  'autopilot.unsentReply': {
+    zh: '这条回复已写出，但从未发进对话',
+    en: 'This reply was written but never sent to the conversation' },
   'autopilot.runFoldHint': { zh: '轮交互 · 点击展开', en: 'turns — click to expand' },
   'autopilot.label': { zh: 'Autopilot', en: 'Autopilot' },
   'stream.role.worker': { zh: '执行者', en: 'Worker' },

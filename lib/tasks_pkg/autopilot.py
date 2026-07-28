@@ -671,6 +671,68 @@ from lib.tasks_pkg.autopilot_baton import (  # noqa: E402
 
 
 
+def _preserve_unsent_vu_and_conclude(task: dict, conv_id: str, run_id: str,
+                                     vu_msg_id: str, vu_text: str,
+                                     reason: str) -> None:
+    """Preserve an ALREADY-PRODUCED VU reply that will not become a turn.
+
+    ★ YIELDING IS NOT DESTROYING. Every path that decides to stop AFTER the VU
+    has produced text must call this BEFORE returning. Standing down means "do
+    not chain another turn"; it has never meant "throw away the work already
+    done". On 2026-07-28 those two were the same ``return None``, so a finished
+    24-round / 15-minute VU reply was discarded leaving no trace anywhere but a
+    truncated log line, and the run died with the frontend still attached to it.
+
+    Two things happen here, in this order:
+
+    1. **Persist the text into the SIDECAR** (``settings.autopilotSummaries``),
+       explicitly flagged ``unsent=True`` so a reader can tell it never entered
+       the conversation.
+
+       ★ DELIBERATELY NOT ``conv.messages``. That list is the conversation
+       history sent UPSTREAM on the next turn, not merely a render source. A VU
+       reply that was never delivered would, if appended there, become
+       something the model reads back as words the human actually said. The
+       sidecar is human-only by construction and is already the channel the
+       run fold renders from.
+
+    2. **Emit the terminal fact** via ``_emit_run_concluded_event`` \u2014 the only
+       signal that makes the system admit the run is over. Without it the run
+       is unobservable-dead: the marker is cleared so crash-resume will never
+       revisit it, while a connected client keeps holding task ids that will
+       never settle (observed: SyncDrift STALLED for 2h12m).
+
+    ``reason`` names WHY the output went unsent (e.g. ``yielded_to_human``);
+    it reaches the fold as the record's reason. Best-effort throughout: this
+    runs on a path that is already stopping, so a failure here must never
+    replace the stop with an exception.
+    """
+    tid = task['id'][:8]
+    text = (vu_text or '').strip()
+    if text:
+        try:
+            _store_run_record(conv_id, run_id, reason=reason, text=text,
+                              unsent=True)
+        except Exception as e:
+            logger.warning('[Autopilot %s] unsent-VU preserve failed '
+                           '(non-fatal): %s', tid, e, exc_info=True)
+    try:
+        _emit_run_concluded_event(task, conv_id, run_id, reason=reason)
+    except Exception as e:
+        logger.warning('[Autopilot %s] conclude-on-yield failed '
+                       '(non-fatal): %s', tid, e, exc_info=True)
+    # Clear the run PIN (not the armed marker): this run is now concluded, so
+    # the next VU turn must mint a FRESH run id. Reusing a concluded id would
+    # make the fold gate (which keys on the concluded record) swallow live
+    # turns. The marker is deliberately left ARMED — yielding to a human, or
+    # being superseded, does not mean the user turned autopilot off, and
+    # silently disarming here would end the loop instead of pausing it.
+    _clear_run_id(conv_id)
+    logger.info('[Autopilot %s] run concluded (reason=%s) with %d unsent VU '
+                'chars preserved in the sidecar (NOT conversation history) '
+                'vuMsgId=%s', tid, reason, len(text), vu_msg_id[:12])
+
+
 def maybe_run_autopilot(task: dict) -> dict | None:
     """End-of-turn autopilot hook + the VU-carrier close-on-exit guarantee.
 
@@ -883,17 +945,24 @@ def _maybe_run_autopilot_inner(task: dict) -> dict | None:
     # signal.
     vu_text_clean = _strip_machine_tokens(vu_text)
 
-    # Race-close: a real user may have submitted a message while the VU
-    # LLM call was running.  If so, defer to that real message instead
-    # of clobbering it with a synthetic VU turn.
+    # Race-close: a real HUMAN may have submitted a message while the VU LLM
+    # call was running.  Yield to that person — but PRESERVE the reply the VU
+    # already produced (see _preserve_unsent_vu_and_conclude: yielding is not
+    # destroying) and emit the terminal fact so the run is visibly over.
     if _has_pending_real_message(conv_id):
-        logger.info('[Autopilot %s] Real user message arrived during VU '
-                    'call — deferring to queue', tid)
+        logger.info('[Autopilot %s] Human message arrived during VU '
+                    'call — yielding to it', tid)
+        _preserve_unsent_vu_and_conclude(
+            task, conv_id, run_id, vu_msg_id, vu_text_clean,
+            reason='yielded_to_human')
         _emit_vu_lifecycle_frame(task, build_event(
             EventType.AUTOPILOT_VU_CANCEL, vuMsgId=vu_msg_id))
         return None
     if task.get('aborted'):
         logger.info('[Autopilot %s] Aborted while VU was running — stopping', tid)
+        _preserve_unsent_vu_and_conclude(
+            task, conv_id, run_id, vu_msg_id, vu_text_clean,
+            reason='aborted_mid_vu')
         _emit_vu_lifecycle_frame(task, build_event(
             EventType.AUTOPILOT_VU_CANCEL, vuMsgId=vu_msg_id))
         return None
@@ -986,10 +1055,14 @@ def _maybe_run_autopilot_inner(task: dict) -> dict | None:
     if task.get('aborted'):
         logger.info('[Autopilot %s] Superseded (task aborted) just before '
                     'follow-up spawn — standing down', tid)
+        _preserve_unsent_vu_and_conclude(
+            task, conv_id, run_id, vu_msg_id, '', reason='superseded')
         return None
     if _successor_already_running(task, conv_id):
         logger.info('[Autopilot %s] Superseded (a newer task owns conv=%s) just '
                     'before follow-up spawn — standing down', tid, conv_id[:8])
+        _preserve_unsent_vu_and_conclude(
+            task, conv_id, run_id, vu_msg_id, '', reason='superseded')
         return None
 
     next_task_id = _start_followup_task(task, conv_id)

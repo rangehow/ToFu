@@ -1173,9 +1173,16 @@ def dispatch_next_queued(conv_id: str, *, _wait: float | None = None) -> str | N
         #
         # Only brain-dispatched rows are gated. A human turn has no boardTaskId
         # and must NEVER be discardable.
-        _board_task_id = payload.get('boardTaskId')
-        if _board_task_id and not _brain_kickoff_still_wanted(
-                config.get('projectPath'), _board_task_id, conv_id):
+        #
+        # ★ The filter itself lives in ``_row_is_dispatchable`` — the SINGLE
+        #   consume-time predicate this function shares with the autopilot
+        #   hook's yield gate. Do NOT re-inline a filter here: a filter that
+        #   only one of the two readers applies is exactly what let a queued
+        #   kickoff read as "a turn is waiting" to autopilot and as "discard
+        #   me" to this dispatcher, destroying a finished VU turn and spawning
+        #   nothing (conv ms3s8s0kjlvq18, 2026-07-28).
+        if not _row_is_dispatchable(get_thread_db(DOMAIN_CHAT), conv_id,
+                                    payload, config):
             _finalize_queue_dispatch(get_thread_db(DOMAIN_CHAT), conv_id,
                                      item['queueId'])
             return None
@@ -1444,6 +1451,135 @@ def _get_queue_depth(db, conv_id: str) -> int:
 
 
 def get_queue_depth(conv_id: str) -> int:
-    """Public version: dispatchable queue depth with its own DB connection."""
+    """Public version: dispatchable queue depth with its own DB connection.
+
+    ⚠️ This is a COUNT with a WEAK filter (kind only) — it deliberately does
+    NOT apply the consume-time filters that decide whether a row will really
+    become a turn. Use it for badges/telemetry, NEVER to answer "is a turn
+    about to take over?" — for that ask :func:`has_pending_human_turn` /
+    :func:`next_dispatchable_turn`, which route through the single
+    ``_row_is_dispatchable`` predicate.
+    """
     db = get_thread_db(DOMAIN_CHAT)
     return _get_queue_depth(db, conv_id)
+
+
+# ── THE single consume-time dispatchability predicate ────────────────
+#
+# Both readers of this queue MUST route through here:
+#   • ``dispatch_next_queued`` — decides whether a leased row becomes a task;
+#   • ``next_dispatchable_turn`` / ``has_pending_human_turn`` — let the
+#     autopilot hook ask "will a turn really take over from me?".
+#
+# WHY THE SEAM EXISTS (conv ms3s8s0kjlvq18, 2026-07-28): the dispatch side
+# applied the board re-check while the autopilot side counted rows with a
+# WEAKER filter (kind only). A brain kickoff whose epic had finished while it
+# sat queued therefore read as "a human is waiting" to autopilot (which threw
+# away a completed 24-round VU turn) and as "discard me" to the dispatcher
+# (which spawned nothing). Two correct-looking gates, opposite verdicts on the
+# SAME row, and the conversation died with no signal.
+#
+# Narrowing the kind check alone would have fixed that ONE instance and left
+# the cause: every future filter would again land on only one side. Adding a
+# filter HERE moves both readers at once — that is the entire point.
+
+def _row_is_dispatchable(db, conv_id: str, payload: dict,
+                         config: dict) -> bool:
+    """True iff this queued row would really be dispatched as a turn.
+
+    Args:
+        db: Open chat-domain DB handle (filters may need to read state).
+        conv_id: Owning conversation id.
+        payload: The row's decoded payload dict.
+        config: The row's decoded config dict.
+
+    Returns:
+        ``False`` only when a consume-time filter rejects the row. Fails OPEN
+        (see ``_brain_kickoff_still_wanted``): an unrelated lookup error must
+        never silently swallow a legitimate turn.
+    """
+    board_task_id = (payload or {}).get('boardTaskId')
+    if board_task_id and not _brain_kickoff_still_wanted(
+            (config or {}).get('projectPath'), board_task_id, conv_id):
+        return False
+    return True
+
+
+def _dispatchable_rows(db, conv_id: str) -> list[dict]:
+    """Queued rows that would REALLY be dispatched, in dispatch order.
+
+    Mirrors ``dequeue_next``'s row selection (non-autopilot kinds, lease-aware,
+    ``priority ASC, position ASC``) and then applies ``_row_is_dispatchable``
+    to each — but takes NO lease and mutates nothing, so it is safe to ask
+    from a decision gate.
+
+    Returns a list of ``{'queueId', 'kind', 'isHuman'}``.
+    """
+    now_ms = int(time.time() * 1000)
+    rows = db.execute(
+        'SELECT id, kind, payload, config FROM message_queue '
+        'WHERE conv_id=? AND kind!=? '
+        'AND (leased_until IS NULL OR leased_until < ?) '
+        'ORDER BY priority ASC, position ASC',
+        (conv_id, KIND_AUTOPILOT, now_ms)
+    ).fetchall()
+    out: list[dict] = []
+    for row in rows:
+        try:
+            payload = json.loads(row['payload'] or '{}')
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.debug('[Queue] peek payload parse failed id=%s: %s',
+                         str(row['id'])[:8], e)
+            payload = {}
+        try:
+            config = json.loads(row['config'] or '{}')
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.debug('[Queue] peek config parse failed id=%s: %s',
+                         str(row['id'])[:8], e)
+            config = {}
+        if not _row_is_dispatchable(db, conv_id, payload, config):
+            continue
+        kind = row['kind'] or KIND_REAL
+        out.append({'queueId': row['id'], 'kind': kind,
+                    'isHuman': kind == KIND_REAL})
+    return out
+
+
+def next_dispatchable_turn(conv_id: str) -> dict | None:
+    """The next queued turn that would REALLY be dispatched, or ``None``.
+
+    Returns ``{'queueId', 'kind', 'isHuman'}`` for the head of the dispatchable
+    queue. ``None`` means nothing here will become a turn — so a caller that
+    stands down for it would be standing down for nobody.
+    """
+    if not conv_id:
+        return None
+    rows = _dispatchable_rows(get_thread_db(DOMAIN_CHAT), conv_id)
+    return rows[0] if rows else None
+
+
+def has_pending_human_turn(conv_id: str) -> bool:
+    """True iff a real HUMAN turn is queued and would really be dispatched.
+
+    The autopilot yield gate. The judgement is "is there a person waiting on
+    this conversation" — NOT "is there a non-autopilot row". Machine work items
+    (``KIND_WORKFLOW`` brain kickoffs, ``KIND_PEER_MSG`` sibling messages) do
+    NOT preempt a run that is actively working: they are picked up by the
+    existing idle drain once the run ends. Only a human outranks the loop.
+
+    Scans ALL dispatchable rows rather than just the head, so the answer cannot
+    depend on ``KIND_REAL``'s priority happening to sort first.
+
+    Fails OPEN (``False``) on a probe error, matching the prior posture: a DB
+    hiccup must not wedge a healthy loop, and the follow-up spawn is still
+    guarded by the final supersede recheck.
+    """
+    if not conv_id:
+        return False
+    try:
+        rows = _dispatchable_rows(get_thread_db(DOMAIN_CHAT), conv_id)
+        return any(r['isHuman'] for r in rows)
+    except Exception as e:
+        logger.debug('[Queue] human-turn probe failed conv=%s (non-fatal): %s',
+                     conv_id[:8], e)
+        return False

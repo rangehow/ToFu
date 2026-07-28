@@ -243,15 +243,20 @@ check('reducer_exposes_pickAuthoritativeTaskIdForReconnect',
 
 // ─────────────────────────────────────────────────────────────────
 // Face 5: pickAuthoritativeTaskIdForReconnect prefers Set when local is null.
+// NOTE: the picker reads the ATTACHABLE set (_authoritativeAttachableTaskIds),
+// NOT the busy set (_authoritativeActiveTaskIds) — since 7daf7c28 a VU carrier
+// lights the busy dot but can never complete a stream, so it must NOT be a
+// reconnect target. This face therefore seeds the attachable set; the busy set
+// alone (carrier-only) must yield null (checked at the bottom of this face).
 // ─────────────────────────────────────────────────────────────────
 {
   const c1 = { id: 'c1',
-               _authoritativeActiveTaskIds: new Set(['tid-server']) };
+               _authoritativeAttachableTaskIds: new Set(['tid-server']) };
   check('reconnect_picks_from_set_when_local_null',
         pickAuthoritativeTaskIdForReconnect(c1) === 'tid-server');
 
   const c2 = { id: 'c2', activeTaskId: 'tid-local',
-               _authoritativeActiveTaskIds: new Set(['tid-server']) };
+               _authoritativeAttachableTaskIds: new Set(['tid-server']) };
   // Local wins when present — local reflects THIS tab's own send, which
   // is the natural reconnect target.
   check('reconnect_prefers_local_when_present',
@@ -261,8 +266,16 @@ check('reducer_exposes_pickAuthoritativeTaskIdForReconnect',
   check('reconnect_null_when_both_empty',
         pickAuthoritativeTaskIdForReconnect(c3) === null);
 
-  const c4 = { id: 'c4', _authoritativeActiveTaskIds: new Set() };
+  const c4 = { id: 'c4', _authoritativeAttachableTaskIds: new Set() };
   check('reconnect_null_when_set_empty', pickAuthoritativeTaskIdForReconnect(c4) === null);
+
+  // 7daf7c28 invariant: a VU carrier is BUSY but never ATTACHABLE. A conv whose
+  // only live worker is a carrier (busy set non-empty, attachable set absent /
+  // empty) must return null — offering it would resurrect the permanently-stuck
+  // "Waiting…" bubble the carrier filter exists to prevent.
+  const c5 = { id: 'c5', _authoritativeActiveTaskIds: new Set(['tid-vu-carrier']) };
+  check('reconnect_null_for_carrier_only',
+        pickAuthoritativeTaskIdForReconnect(c5) === null);
 }
 
 // ─────────────────────────────────────────────────────────────────

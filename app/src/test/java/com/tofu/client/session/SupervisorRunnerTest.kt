@@ -236,6 +236,81 @@ class SupervisorRunnerTest {
         assertTrue(outcome.message.orEmpty().isNotBlank())
     }
 
+    // ── CardKey identity: what makes a result "still mine" ─────────────────
+
+    /**
+     * Editing the URL or the project path changes what a supervisor call MEANS,
+     * while leaving `id` untouched. If those fields were left out of the key,
+     * an in-flight result would be applied to the edited card.
+     *
+     * NEUTER CHECK: drop cookieHost/projectPath from CardKey and this fails.
+     */
+    @Test
+    fun `card identity covers every field that changes a call's meaning`() {
+        val base = CardKey.of(profile())
+        assertEquals("same profile must be the same card", base, CardKey.of(profile()))
+
+        val p = profile()
+        assertTrue(base != CardKey.of(p.copy(baseUrl = "https://other/proxy/15000/")))
+        assertTrue(base != CardKey.of(p.copy(cookieHost = null)))
+        assertTrue(base != CardKey.of(p.copy(projectPath = "/other")))
+        assertTrue(base != CardKey.of(p.copy(id = 2)))
+    }
+
+    /**
+     * THE RECYCLED-CARD CASE. A LazyColumn reuses a row's slot for a DIFFERENT
+     * profile. Work started under the old identity must not be applied to the
+     * new occupant — otherwise scrolling during a start could hand the user
+     * into the wrong server's WebView.
+     */
+    @Test
+    fun `work started before a slot was recycled is not current`() {
+        val started = CardKey.of(profile())
+        val recycledInto = CardKey.of(
+            profile().copy(id = 7, baseUrl = "https://zzz-vscode-zw05.mlp.sankuai.com/proxy/15000/"),
+        )
+        assertFalse(isStillCurrent(started, recycledInto))
+        assertTrue(isStillCurrent(started, started))
+    }
+
+    /**
+     * The wiring contract the Composable must honour: the ref holding "who am I
+     * now" is keyed on the SAME CardKey as every other piece of card state, so
+     * a key change resets them together. Modelled here because the asymmetry —
+     * some state keyed, the ref not — is precisely how the last two versions of
+     * this guard became unable to fire.
+     */
+    @Test
+    fun `a profile edit mid-call flips the guard to false`() = runTest {
+        val original = profile()
+        val started = CardKey.of(original)
+        // Stands in for the remembered ref that each composition refreshes.
+        var liveKey = started
+
+        val outcome = executeSupervisorCall(
+            profile = original,
+            action = SupervisorAction.START,
+            plan = userPlan,
+            signedIn = true,
+            login = { LoginResult.Success(host) },
+            call = { a, _ ->
+                if (a == SupervisorAction.START) {
+                    ok(false)
+                } else {
+                    // The user edits the profile while we poll: a new
+                    // composition writes a NEW key into the ref.
+                    liveKey = CardKey.of(original.copy(projectPath = "/edited"))
+                    ok(true)
+                }
+            },
+            isCurrent = { isStillCurrent(started, liveKey) },
+            pollAttempts = 3,
+            pollIntervalMs = 1,
+        )
+        assertEquals("the server did come up", true, outcome.running)
+        assertFalse("but this card is no longer the one that asked", outcome.handOff)
+    }
+
     /** A Stop must never navigate the user anywhere. */
     @Test
     fun `stop never hands off`() = runTest {

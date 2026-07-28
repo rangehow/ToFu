@@ -34,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.tofu.client.data.Profile
+import com.tofu.client.session.CardKey
 import com.tofu.client.session.ProbeTrigger
 import com.tofu.client.session.ServerLifecycle
 import com.tofu.client.session.ServerState
@@ -41,6 +42,7 @@ import com.tofu.client.session.SessionManager
 import com.tofu.client.session.SupervisorAction
 import com.tofu.client.session.SupervisorClient
 import com.tofu.client.session.executeSupervisorCall
+import com.tofu.client.session.isStillCurrent
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -74,12 +76,12 @@ fun SupervisorControls(
     onStateChange: (ServerState) -> Unit = {},
     onServerReady: () -> Unit = {},
 ) {
-    // Keyed on the fields the supervisor result actually depends on, NOT just
-    // the row id: editing a profile's URL (which clears cookieHost) or its
-    // project path leaves id unchanged, so keying on id alone would keep
-    // showing the PREVIOUS server's Running/Stopped badge — and the auto-probe
-    // below, guarded on `running == null`, would never re-fire to correct it.
-    val stateKey = listOf(profile.id, profile.baseUrl, profile.cookieHost, profile.projectPath)
+    // The card's identity, as a NAMED type rather than an ad-hoc listOf(...).
+    // Editing a profile's URL (which clears cookieHost) or its project path
+    // leaves `id` unchanged, so keying on id alone would keep showing the
+    // PREVIOUS server's Running/Stopped badge — and the auto-probe below,
+    // guarded on `running == null`, would never re-fire to correct it.
+    val stateKey = CardKey.of(profile)
     var running by remember(stateKey) { mutableStateOf<Boolean?>(null) }
     var busy by remember(stateKey) { mutableStateOf(false) }
     var failed by remember(stateKey) { mutableStateOf(false) }
@@ -106,12 +108,13 @@ fun SupervisorControls(
         SideEffect { onStateChange(state) }
     }
 
-    // The identity the RUNNING work belongs to. Held in a remember-ed ref that
-    // every composition refreshes, so an in-flight coroutine can observe the
-    // card changing underneath it. A captured local would compare a value with
-    // itself and be structurally always-true — a guard that guards nothing.
-    val currentKey = remember { arrayOfNulls<Any>(1) }
-    currentKey[0] = stateKey
+    // The identity the RUNNING work belongs to. Keyed on stateKey — the SAME
+    // key as every other piece of per-card state above — so its lifetime is
+    // strictly identical to `busy`'s. An unkeyed remember here would outlive a
+    // state reset and leave the card half-new/half-old, which is how the last
+    // two versions of this guard ended up unable to fire.
+    val currentKey = remember(stateKey) { mutableStateOf(stateKey) }
+    currentKey.value = stateKey
 
     fun run(action: SupervisorAction, trigger: ProbeTrigger) {
         val plan = ServerLifecycle.probePlan(trigger, ServerLifecycle.isSignedIn(profile))
@@ -143,7 +146,7 @@ fun SupervisorControls(
                     // Reads the ref's CURRENT value, which later compositions
                     // overwrite — so a profile edit mid-poll really does flip
                     // this to false.
-                    isCurrent = { currentKey[0] == startedFor },
+                    isCurrent = { isStillCurrent(startedFor, currentKey.value) },
                 )
                 outcome.running?.let { running = it }
                 failed = outcome.failed
@@ -228,7 +231,15 @@ fun SupervisorControls(
                 message.orEmpty(),
                 Modifier.padding(top = 8.dp),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
+                // Only a genuine failure is red. The start-timeout copy says
+                // "accepted, probably still booting" — painting that red makes a
+                // healthy slow boot look identical to "login failed", so the
+                // user concludes Start broke when it did not.
+                color = if (failed) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
                 textAlign = TextAlign.Start,
             )
         }

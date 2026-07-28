@@ -5,6 +5,46 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 
 /**
+ * The identity of one server card, as far as supervisor work is concerned.
+ *
+ * A named type rather than an ad-hoc `listOf(...)`: the four fields that make a
+ * result belong to a card are written into the type, so a future field cannot
+ * be silently forgotten at one of the several places this key is built. It is
+ * also what `remember` is keyed on, so every piece of per-card state shares one
+ * lifetime — the asymmetry of keying some state and not other state is exactly
+ * how a staleness guard degenerates into a no-op.
+ *
+ * [cookieHost] and [projectPath] are part of the identity because editing
+ * either changes what a supervisor call MEANS, while leaving [id] untouched.
+ */
+data class CardKey(
+    val id: Long,
+    val baseUrl: String,
+    val cookieHost: String?,
+    val projectPath: String?,
+) {
+    companion object {
+        fun of(profile: Profile): CardKey = CardKey(
+            id = profile.id,
+            baseUrl = profile.baseUrl,
+            cookieHost = profile.cookieHost,
+            projectPath = profile.projectPath,
+        )
+    }
+}
+
+/**
+ * Whether a finished call still belongs to what is on screen.
+ *
+ * Trivial by design — the POINT is that it is a named, testable step. Both
+ * previous versions of this guard were wrong not because the rule was hard but
+ * because the values fed into it were computed wrongly (first a local compared
+ * with itself, then a ref whose `remember` key disagreed with its siblings').
+ * Naming the comparison lets a test assert the inputs, not just the rule.
+ */
+fun isStillCurrent(started: CardKey, current: CardKey?): Boolean = started == current
+
+/**
  * What the UI should apply once a supervisor call has finished.
  *
  * Returned as DATA rather than applied via callbacks so the whole execution

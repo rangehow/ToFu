@@ -1,5 +1,24 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-28(续19) — New Chat 残留协作条 + 大脑面板空开根修:**两个表面对「当前项目」的解析时刻/回退不一致**(owner 截图报障「输入框没选 Studio,项目大脑还在;点进去全空,外面却说有事要我处理」;commit `ca25a1d1`,8 文件 +322/-10;新套件 **4+2 全绿**,**NEUTER×3 各咬**,相邻环 **167 绿**;纯前端修复,后台 bundle 重建已带,**刷新页面即生效,无需重启**)
+
+- **事故链(逐环实证):** Studio 会话点「+ New Chat」→ `newChat()` 清了 activeConvId/projectState,却**从不刷新大脑表面**(`loadConversation` 有 presenceRefresh+projectBrainRefresh 缝,main.js:713-716;newChat 一个都没有)→ 协作条带上一会话的项目计数残留到下一个 presence tick(截图:需你处理 1 · 待认领 4,与本项目 board 实况逐字吻合);此刻点进面板,`_displayedProjectPath()=''` → `openProjectBrain` 的 `if(path)` 整块跳过 → 全 tab 空白,与条上计数正面矛盾。旁证:本条会话(DB ms4aw9wyq888l6)从无项目页发出却落 chatMode=studio+projectPath=chatui —— 发送管线从全局 projectState 继承(main_send_pipeline.js:310),证明全局项目态在 New Chat 页仍然是活的,只是 dial 漆成了 Chat。
+- **根修三处(同源):** ①`newChat()` 补 `presenceRefresh()+projectBrainRefresh()`——离开项目会话即重解析,不再残留 ≤15s 的可点击谎言;②presence.js `_displayedRoot()` 补 projectState 回退(与面板 `_displayedProjectPath` 同一回退)——输入框有草稿时新项目仍 armed,条与面板必须解析出**同一个**项目;③`openProjectBrain()` 无项目 else 分支渲染显式空态(`_renderNoProject`,新 i18n 键 `projectBrain.noProject` + `.pb-no-project` 共享空态样式),不再开进空白/陈旧 tab,且零数据请求。
+- **守卫:** 新静态缝守卫 test_frontend_newchat_brain_refresh(+NC);presence 套件 +3 断言(回退可见/计数/清除后隐藏)及 NC(去回退必红);project-brain 套件新增无项目开面板测试(六 body 空态/零 fetch/徽章清零/influence 隐藏)及 NC(去空态渲染必红)。**另修一条预存在锚点漂移:commit-wiring NC 锚停在 5 参调用上(`738914cd` 加 summary 必填后实为 6 参 `_commitCharterDecision(..., summary)`),重锚即绿——归 pt_dbd7a32f 家族计数。**
+- **归账(charter #15):** i18n.js 5 hunk 只 1 个是我的(其余是兄弟的 probeAllModels/browserOpenPageBtn/qaThinking/reasonLabel),styles.css 3 hunk 只 1 个是我的——两文件走 hunk 过滤 `git apply --cached`,其余 6 件精确 pathspec,index 计数断言 8/8。
+- **判据一条:同一「实体解析」在多个表面各自实现时,改一处必须全库普查另一处——条(presence.js)与面板(project-brain.js)各有一份「当前项目」解析,回退不对称本身就是 bug。**
+- **验收边界(诚实分账):** 存量 chatMode='chat'+projectPath=chatui 会话(DB 实测 2 条:ms3sl904/ms43foj3)恢复时 dial 漆 Chat 但项目条/协作条都会显示——属「恢复钳制只修一个方向」的镜像毒态,本批未动(改恢复语义会翻旧会话的用户可见档位),如 owner 拍板可做双向钳制;`convInfluenceRefresh` 在 main.js:722 被 typeof 守卫引用却全库无定义(死守卫),影响栏已折进面板,未顺手删。
+
+### 2026-07-28(续·paper-media) — 播客/视频面板模型选择器收口:**接管被 12:20 重启事故中止的孤儿批次,顺带修好 committed-HEAD 两处 podcast/video start 必崩 TypeError**(epic `pt_9d4ca6f76a314806` DONE;commit `a73d94ce`,13 文件 +964/-19;干净 committed worktree 全环 **108/108**,相邻环 **121/121**)
+
+- **孤儿批次来历:** 兄弟会话 ms47lujp 被派此 epic 后撞上 12:20 重启(23 任务事故),+688/-24 留在共享工作树未提交。本会话(board 认领后)逐 hunk 核实完整性:前端共享下拉(_pm* 家族,podcast.js/video.js 首定义胜出守卫)、视频 model 全链 threading(video_abstract→_recipe→prefer_model;engine compose→scene author;manifest+resume)、播客 dedup 键 +model、三组守卫(jsdom×2 NEUTER、motion_p3×3、podcast_api×2)。**归因保留,本会话是核实者+补漏者,不是重写者。**
+- **★ committed-HEAD 必崩实证:** HEAD routes 已传 `model=` 给 `start_video_abstract`、已传 6 参给 `_podcast_index_get`,而 HEAD 被调方都不收——routes 半批先落、被调半批随孤儿滞留,**已提交树上 podcast/video start 路由双双 TypeError 必崩**。孤儿 diff 恰好是被拆散的后半批,合并即修复。**判据:跨文件签名变更被拆成「调用方 committed / 被调方 uncommitted」时,已提交树是坏的,接管孤儿批次不是捡便宜,是修 HEAD。**
+- **本会话补的最后一环:** `TaskRuntime.poll` 通用帧在 `task.model` 存在时携带 model——此前仅 lookup 重连能拿到生成模型,实时 poll 收不到,视频面板 done 卡徽章首屏不亮。行为钉(running/done 帧带 model + 无 model 不增字段补集)+ NEUTER(截肢该行帧即丢 model),test_task_runtime.py 31/31。
+- **过程陷阱自报:** `git status --short | head -40` 截断让我漏掉孤儿的 podcast_api +72 行(2 条 dedup/cache 守卫),首轮提交 12 文件后靠「worktree 收集数 106 ≠ 主树 108」的算术对账抓回,amend 补齐 13 文件。**判据:共享工作树盘点一律不用 head 截断;提交后收集数对账是最便宜的漏件探测器。**
+- **归账纪律(charter #15):** 6 源文件+3 测试文件整件归本 epic,精确 pathspec;`globals.generated.d.ts` 混合 hunk 走 blob 手术(`git show HEAD:…` + 两行插入 + `hash-object -w` + `update-index --cacheinfo`),只提 `_pmModelDocCloseBound`×2,兄弟在途 `renderModelFallbackBannerHtml` hunk 留在工作树;qa.js/arxiv.js/report.js 的 agent-shell 改动是另一兄弟的活,未碰。
+- **验收边界(诚实分账):** ①修复已 committed,**运行中进程不带**(merged ≠ live),重启后徽章/下拉才真实生效——不过同批的审批闸部署重启(14:3x)发生在本提交之前,需下一次重启;②播客后端 model→prefer_model 链路本就 committed(_script.py),无需等待;③i18n 键与 pm-model CSS 此前已在 HEAD,本批零依赖。
+
+### 2026-07-28(续18) — 会话主列视觉重设计
 ### 2026-07-28(续18) — 会话主列视觉重设计:「太丑太乱」的根因是**盒中盒**,不是任何一个浮子(owner 截图报障;epic `pt_1ad1b9da8f534d70` DONE;commit `960fed4b`;几何扫 384 态 **3/3**,相邻环 **20/22**,tofu+dark 双主题截图实证;与兄弟 `9169e490` 同块互补合流)
 
 - **分账先行(两条红圈都已有人修):** owner 截图红圈的上下文球 + TURNS 浮子,根治批次是 `4dee9231`(状态条收敛,已 committed,merged≠live);右上角轨卡被裁的归属是兄弟在途「turn-ctx 展开」(`9169e490`,132px 断头台→内容上限+200px 滚动兜底)。**我开工前先查清这两条,避免把别人的活重干一遍**——本批只打剩下的真根因。

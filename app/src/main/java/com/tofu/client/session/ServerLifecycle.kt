@@ -49,6 +49,30 @@ data class ServerCapabilities(
     val canOpen: Boolean,
 )
 
+/**
+ * What caused a supervisor call. This is NOT cosmetic: the two triggers have
+ * fundamentally different licence to cause side effects.
+ *
+ * A USER tap is an explicit request, so signing in on the user's behalf is
+ * expected and a failure deserves a visible error. An AUTO probe happens on
+ * every composition with nobody asking, so it must stay READ-ONLY — it may not
+ * spend a `POST /login`, and its failure may not paint the card red.
+ */
+enum class ProbeTrigger { AUTO, USER }
+
+/**
+ * Whether a supervisor call may log in first, and whether its failure may be
+ * surfaced. Derived by [ServerLifecycle.probePlan].
+ */
+data class ProbePlan(
+    /** Run the call at all. False = skip silently. */
+    val proceed: Boolean,
+    /** Allowed to `POST /login` when no cookie is held. */
+    val mayLogIn: Boolean,
+    /** Allowed to set the failed flag / show an error message. */
+    val reportFailure: Boolean,
+)
+
 object ServerLifecycle {
 
     /** True when [profile] opted into supervisor control by setting a project path. */
@@ -114,6 +138,36 @@ object ServerLifecycle {
             ServerCapabilities(canStart = false, canStop = false, canRefresh = false, canOpen = true)
         ServerState.UNREACHABLE ->
             ServerCapabilities(canStart = true, canStop = true, canRefresh = true, canOpen = true)
+    }
+
+    /**
+     * Decide what a supervisor call is permitted to do, given who asked.
+     *
+     * The rule that matters: an AUTO probe against a profile with NO session is
+     * SKIPPED entirely. Letting it run would mean that merely opening the home
+     * screen fires one `POST /login` per unsigned server — a burst of logins
+     * nobody requested, which on a bad password is an auto-retry loop toward
+     * account lockout, and on an SSO profile can never succeed at all, so the
+     * card would paint itself red on every cold start while the server is
+     * perfectly healthy. "Not signed in yet" is not "unreachable".
+     *
+     * A USER tap always proceeds and always may log in: that is the
+     * login-then-act path which makes a stopped server startable.
+     */
+    fun probePlan(trigger: ProbeTrigger, signedIn: Boolean): ProbePlan = when (trigger) {
+        ProbeTrigger.USER -> ProbePlan(
+            proceed = true,
+            mayLogIn = true,
+            reportFailure = true,
+        )
+        // Read-only by construction: with a cookie we can ask /status for free;
+        // without one there is nothing to ask with, so we don't ask at all and
+        // leave the card in UNKNOWN ("Tap to check").
+        ProbeTrigger.AUTO -> ProbePlan(
+            proceed = signedIn,
+            mayLogIn = false,
+            reportFailure = false,
+        )
     }
 
     /**

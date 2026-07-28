@@ -34,6 +34,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.tofu.client.data.Profile
 import com.tofu.client.session.LoginResult
+import com.tofu.client.session.ProbeTrigger
 import com.tofu.client.session.ServerLifecycle
 import com.tofu.client.session.ServerState
 import com.tofu.client.session.SessionManager
@@ -99,7 +100,12 @@ fun SupervisorControls(
         SideEffect { onStateChange(state) }
     }
 
-    fun run(action: String) {
+    fun run(action: String, trigger: ProbeTrigger) {
+        val plan = ServerLifecycle.probePlan(trigger, ServerLifecycle.isSignedIn(profile))
+        // An AUTO probe with no session doesn't run at all — see probePlan.
+        // Leaving `busy` untouched matters: setting it would render the card as
+        // TRANSITIONING ("Working…") for a call we never make.
+        if (!plan.proceed) return
         busy = true
         failed = false
         message = null
@@ -109,7 +115,9 @@ fun SupervisorControls(
             // even while Tofu is down — so this handshake works on a STOPPED
             // server. Requiring an Open first was a deadlock: Open cannot
             // succeed against a server that is down.
-            if (!ServerLifecycle.isSignedIn(profile)) {
+            //
+            // Gated on plan.mayLogIn: only a USER tap gets to spend a login.
+            if (plan.mayLogIn && !ServerLifecycle.isSignedIn(profile)) {
                 val login = withContext(Dispatchers.IO) { session.login(profile) }
                 // Includes NeedsInteractiveSso: it yields no cookie, so pressing
                 // on would 401 and misreport an un-completed sign-in as "the
@@ -159,20 +167,27 @@ fun SupervisorControls(
                     }
                 }
                 is SupervisorClient.Result.Failed -> {
-                    failed = true
-                    message = SupervisorUrl.explainFailure(res.code, res.message)
+                    // An AUTO probe stays silent: "we couldn't reach it just now"
+                    // is not worth painting the card red when the user asked for
+                    // nothing. A USER tap always reports.
+                    if (plan.reportFailure) {
+                        failed = true
+                        message = SupervisorUrl.explainFailure(res.code, res.message)
+                    }
                 }
             }
             busy = false
         }
     }
 
-    // Auto-probe on arrival so state is known without hunting for Refresh. This
-    // no longer waits for a session: `run` establishes one when missing, which
-    // is what makes a stopped server's state discoverable at all.
+    // Auto-probe on arrival so state is known without hunting for Refresh.
+    // Marked AUTO: it is READ-ONLY. With no session it does not run at all
+    // (probePlan), so opening the home screen never fires a burst of logins the
+    // user didn't ask for, and an un-signed-in card simply stays "Tap to check"
+    // instead of falsely reading "Unreachable".
     LaunchedEffect(stateKey) {
         if (running == null && !busy) {
-            run("status")
+            run("status", ProbeTrigger.AUTO)
         }
     }
 
@@ -192,7 +207,7 @@ fun SupervisorControls(
             }
             if (caps.canStart) {
                 FilledTonalButton(
-                    onClick = { run("start") },
+                    onClick = { run("start", ProbeTrigger.USER) },
                     enabled = !busy,
                     contentPadding = CompactButtonPadding,
                     modifier = TouchTarget,
@@ -204,7 +219,7 @@ fun SupervisorControls(
             }
             if (caps.canStop) {
                 OutlinedButton(
-                    onClick = { run("stop") },
+                    onClick = { run("stop", ProbeTrigger.USER) },
                     enabled = !busy,
                     contentPadding = CompactButtonPadding,
                     modifier = TouchTarget,
@@ -216,7 +231,7 @@ fun SupervisorControls(
             }
             if (caps.canRefresh) {
                 TextButton(
-                    onClick = { run("status") },
+                    onClick = { run("status", ProbeTrigger.USER) },
                     enabled = !busy,
                     contentPadding = CompactButtonPadding,
                     modifier = TouchTarget,

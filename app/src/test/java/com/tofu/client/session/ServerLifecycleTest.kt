@@ -254,6 +254,70 @@ class ServerLifecycleTest {
         )
     }
 
+    // ── AUTO vs USER: who is allowed to cause side effects ─────────────────
+
+    /**
+     * THE SILENT-LOGIN GUARD. The auto-probe runs on every composition with
+     * nobody asking. If it were allowed to log in, merely opening the home
+     * screen would fire one `POST /login` per un-signed-in server: a burst of
+     * unrequested logins, which on a wrong password is an auto-retry loop
+     * toward account lockout.
+     *
+     * NEUTER CHECK: set mayLogIn = true (or proceed = true) for AUTO and this
+     * fails.
+     */
+    @Test
+    fun `auto probe without a session never logs in`() {
+        val plan = ServerLifecycle.probePlan(ProbeTrigger.AUTO, signedIn = false)
+        assertFalse("opening the app must not spend a login", plan.mayLogIn)
+        assertFalse("with no cookie there is nothing to ask with", plan.proceed)
+    }
+
+    /**
+     * "Not signed in yet" is not "unreachable". An AUTO probe must never paint
+     * the card red — an SSO server can never satisfy a headless login, so it
+     * would show a permanent false error on every cold start while being
+     * perfectly healthy.
+     *
+     * NEUTER CHECK: set reportFailure = true for AUTO and this fails.
+     */
+    @Test
+    fun `auto probe never reports failure`() {
+        assertFalse(ServerLifecycle.probePlan(ProbeTrigger.AUTO, signedIn = false).reportFailure)
+        assertFalse(ServerLifecycle.probePlan(ProbeTrigger.AUTO, signedIn = true).reportFailure)
+    }
+
+    /** With a live cookie the auto-probe is free — read-only, no login. */
+    @Test
+    fun `auto probe with a session proceeds read only`() {
+        val plan = ServerLifecycle.probePlan(ProbeTrigger.AUTO, signedIn = true)
+        assertTrue(plan.proceed)
+        assertFalse("a held cookie is enough; still no login", plan.mayLogIn)
+    }
+
+    /**
+     * The other half of the contract: an explicit tap MUST be able to log in,
+     * or the start-a-stopped-server deadlock comes straight back.
+     *
+     * NEUTER CHECK: set mayLogIn = false for USER and this fails.
+     */
+    @Test
+    fun `user action without a session may log in`() {
+        val plan = ServerLifecycle.probePlan(ProbeTrigger.USER, signedIn = false)
+        assertTrue("login-then-act is what makes a stopped server startable", plan.mayLogIn)
+        assertTrue(plan.proceed)
+        assertTrue("an explicit tap that fails must say so", plan.reportFailure)
+    }
+
+    @Test
+    fun `user action always proceeds regardless of session`() {
+        listOf(true, false).forEach { signedIn ->
+            val plan = ServerLifecycle.probePlan(ProbeTrigger.USER, signedIn)
+            assertTrue("USER/$signedIn must proceed", plan.proceed)
+            assertTrue("USER/$signedIn must report failures", plan.reportFailure)
+        }
+    }
+
     /** Unreachable must stay actionable — retrying is the only way out. */
     @Test
     fun `unreachable can retry`() {

@@ -1052,30 +1052,48 @@ def _append_user_msg_with_cas(db, conv_id: str, user_msg: dict) -> bool:
                      conv_id[:8], attempt + 1, _MAX_CAS)
         time.sleep(0.02 * (attempt + 1))
 
-    # Exhausted retries: fall back to an unconditional write so the queued
-    # turn is NEVER dropped (correctness > the rare lost-concurrent-write). The
-    # idempotent append means we won't duplicate the message.
-    logger.warning('[Queue] append CAS exhausted for conv=%s — forcing unconditional write', conv_id[:8])
-    row = db.execute(
-        'SELECT messages FROM conversations WHERE id=? AND user_id=1',
-        (conv_id,)
-    ).fetchone()
-    if not row:
-        return False
-    try:
-        messages = json.loads(row['messages'] or '[]')
-    except (json.JSONDecodeError, TypeError) as e:
-        logger.debug('[Queue] messages JSON parse failed, using fallback: %s', e)
-        messages = []
-    append_user_msg_idempotent(messages, user_msg)
-    now_ms = int(time.time() * 1000)
-    db_execute_with_retry(db, 'UPDATE conversations SET messages=?, updated_at=?, msg_count=? '
-                          'WHERE id=? AND user_id=1',
-                          (json_dumps_pg(messages), now_ms, len(messages), conv_id))
-    # Phase 5 dual-write (flag-gated, inert when off): tail append.
-    from lib.database.messages_rows import mirror_write_and_commit
-    mirror_write_and_commit(db, conv_id, messages, now_ms=now_ms)
-    return True
+    # Exhausted retries. The old code fell back to an UNCONDITIONAL write here,
+    # justified as "correctness > the rare lost-concurrent-write". Measurement
+    # disproved that trade (conv ms3sfyrmn31omb, 2026-07-28): what an
+    # unconditional whole-blob write loses is not a rare metadata tweak, it is
+    # whatever row another writer appended in the meantime — five completed
+    # autopilot turns, 1665–3252 chars each, gone with no error and no red test.
+    # Dropping a queued turn is visible and recoverable; erasing a committed
+    # turn is neither. So we keep re-reading instead, with a wider budget.
+    logger.warning('[Queue] append CAS contended for conv=%s — widening the '
+                   'retry budget rather than overwriting a concurrent writer',
+                   conv_id[:8])
+    for attempt in range(_MAX_CAS, _MAX_CAS * 3):
+        row = db.execute(
+            'SELECT messages, rev FROM conversations WHERE id=? AND user_id=1',
+            (conv_id,)
+        ).fetchone()
+        if not row:
+            return False
+        try:
+            messages = json.loads(row['messages'] or '[]')
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.debug('[Queue] messages JSON parse failed, using fallback: %s', e)
+            messages = []
+        cur_rev = row['rev']
+        append_user_msg_idempotent(messages, user_msg)
+        now_ms = int(time.time() * 1000)
+        cur = db.execute(
+            'UPDATE conversations SET messages=?, updated_at=?, msg_count=? '
+            'WHERE id=? AND user_id=1 AND rev=?',
+            (json_dumps_pg(messages), now_ms, len(messages), conv_id, cur_rev)
+        )
+        db.commit()
+        if getattr(cur, 'rowcount', None) != 0:
+            from lib.database.messages_rows import mirror_write_and_commit
+            mirror_write_and_commit(db, conv_id, messages, now_ms=now_ms)
+            return True
+        time.sleep(0.05 * (attempt - _MAX_CAS + 1))
+    logger.error('[Queue] append could not win the rev CAS for conv=%s after '
+                 '%d attempts — the queued turn was NOT appended (it stays '
+                 'queued for the next drain rather than clobbering the row)',
+                 conv_id[:8], _MAX_CAS * 3)
+    return False
 
 
 def _brain_kickoff_still_wanted(project_path: str | None, board_task_id: str,

@@ -150,11 +150,16 @@ def _append_vu_message_to_conv(conv_id: str, vu_msg_id: str,
     ``_msgId`` is the caller-minted id that the frontend used to route
     streaming updates; persisting it here lets a page reload right
     AFTER autopilot completes find the same message id and reconcile.
+
+    Returns the appended message on success, or ``None`` when the turn was NOT
+    persisted — which the caller must treat as "stand down and preserve the
+    reply via ``_preserve_unsent_vu_and_conclude``", never as a silent drop.
+    ``None`` covers a missing row, an exhausted CAS budget, and the deliberate
+    stand-down when a real human turn landed mid-flight.
     """
     try:
         from lib.database import (
             DOMAIN_CHAT,
-            db_execute_with_retry,
             get_thread_db,
             json_dumps_pg,
         )
@@ -164,21 +169,11 @@ def _append_vu_message_to_conv(conv_id: str, vu_msg_id: str,
 
     try:
         db = get_thread_db(DOMAIN_CHAT)
-        row = db.execute(
-            'SELECT messages FROM conversations WHERE id=? AND user_id=1',
-            (conv_id,)
-        ).fetchone()
-        if not row:
-            logger.warning('[Autopilot] conv=%s not found — cannot append VU msg',
-                           conv_id[:8])
-            return None
-        try:
-            messages = json.loads(row[0] or '[]')
-        except (json.JSONDecodeError, TypeError) as e:
-            logger.warning('[Autopilot] conv=%s messages parse failed: %s',
-                           conv_id[:8], e)
-            return None
-
+        # Time basis for "did a human speak while we were producing this?".
+        # Taken BEFORE the first read so any human row we observe with a later
+        # timestamp genuinely arrived during this append attempt rather than
+        # being pre-existing history.
+        _started_ms = int(time.time() * 1000)
         vu_msg = {
             'role': 'user',
             'content': text,
@@ -197,41 +192,106 @@ def _append_vu_message_to_conv(conv_id: str, vu_msg_id: str,
         # client PUT — so the timeline survives refresh, not just live+settle.
         if segments:
             vu_msg['segments'] = segments
-        messages.append(vu_msg)
 
-        now_ms = int(time.time() * 1000)
-        try:
-            from lib.conversations import build_search_text
-            search_text = build_search_text(messages)
-        except Exception as e:
-            logger.debug('[Autopilot] build_search_text failed: %s', e)
-            search_text = ''
+        # Append under a rev-CAS, replaying onto a fresh read on a lost race.
+        #
+        # This function is BOTH victim and aggressor. It was the row erased by
+        # the snapshot daemon's blind write-back, but its own UPDATE used to be
+        # equally unconditional — so it would just as happily erase an assistant
+        # sync or a translation commit that landed after its SELECT. Fixing only
+        # the reader would have left the identical hole open at the hottest
+        # concurrency point in the system.
+        _MAX_CAS = 5
+        for attempt in range(1, _MAX_CAS + 1):
+            row = db.execute(
+                'SELECT messages, rev FROM conversations WHERE id=? AND user_id=1',
+                (conv_id,)
+            ).fetchone()
+            if not row:
+                logger.warning('[Autopilot] conv=%s not found — cannot append VU msg',
+                               conv_id[:8])
+                return None
+            _keys = set(row.keys()) if hasattr(row, 'keys') else set()
+            raw = row['messages'] if 'messages' in _keys else row[0]
+            cur_rev = int((row['rev'] if 'rev' in _keys else row[1]) or 0)
+            try:
+                messages = json.loads(raw or '[]')
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.warning('[Autopilot] conv=%s messages parse failed: %s',
+                               conv_id[:8], e)
+                return None
 
-        db_execute_with_retry(
-            db,
-            '''UPDATE conversations
-                  SET messages=?, updated_at=?, msg_count=?, search_text=?
-                  WHERE id=? AND user_id=1''',
-            (json_dumps_pg(messages), now_ms, len(messages), search_text,
-             conv_id),
-        )
-        # Phase 5 dual-write (flag-gated, inert when off): tail append.
-        # Guarded SEPARATELY from the authoritative write above: the VU turn is
-        # already durable at this point, so a mirror failure must not fall into
-        # this function's `except` and return None — the caller reads None as
-        # "the VU turn was not persisted" and ENDS the autopilot run (observed
-        # 2026-07-27: a NameError in the hook silently stopped autopilot with
-        # the VU message sitting committed in the conversation).
-        try:
-            from lib.database.messages_rows import mirror_write_and_commit
-            mirror_write_and_commit(db, conv_id, messages, now_ms=now_ms)
-        except Exception as _mirror_err:
-            logger.warning('[Autopilot] conv=%s row mirror failed (non-fatal, '
-                           'VU turn already durable): %s',
-                           conv_id[:8], _mirror_err, exc_info=True)
-        logger.info('[Autopilot] conv=%s ✅ Appended VU msg %s (%d chars, %d rounds)',
-                    conv_id[:8], vu_msg_id[:12], len(text), len(rounds or []))
-        return vu_msg
+            # A REAL human turn landed while we were producing this reply.
+            # Do NOT append behind it: the next turn feeds conversation history
+            # back to the model, so a virtual-user row sitting after a human
+            # question reads as words the human said — the machine-token leak
+            # (pt_0ae59e94) in message form. Only KIND_REAL preempts autopilot,
+            # and preemption means the run stands down. Returning None routes
+            # the caller into _preserve_unsent_vu_and_conclude, so the text is
+            # kept in the sidecar (expandable by the user) and the run emits its
+            # terminal event — preserved and observable, never silently dropped.
+            if any(isinstance(m, dict) and m.get('role') == 'user'
+                   and not m.get('_isVirtualUser')
+                   and m.get('timestamp', 0) > _started_ms
+                   for m in messages):
+                logger.info('[Autopilot] conv=%s a real human turn landed while the '
+                            'VU was producing — standing down instead of appending '
+                            'behind it (reply preserved in the sidecar)',
+                            conv_id[:8])
+                return None
+
+            if any(isinstance(m, dict) and m.get('_msgId') == vu_msg_id
+                   for m in messages):
+                logger.info('[Autopilot] conv=%s VU msg %s already present — '
+                            'treating append as done', conv_id[:8], vu_msg_id[:12])
+                return vu_msg
+
+            messages.append(vu_msg)
+            now_ms = int(time.time() * 1000)
+            try:
+                from lib.conversations import build_search_text
+                search_text = build_search_text(messages)
+            except Exception as e:
+                logger.debug('[Autopilot] build_search_text failed: %s', e)
+                search_text = ''
+
+            cur = db.execute(
+                '''UPDATE conversations
+                      SET messages=?, updated_at=?, msg_count=?, search_text=?
+                      WHERE id=? AND user_id=1 AND rev=?''',
+                (json_dumps_pg(messages), now_ms, len(messages), search_text,
+                 conv_id, cur_rev),
+            )
+            db.commit()
+            affected = getattr(cur, 'rowcount', None)
+            if not (affected if affected is not None else 0):
+                logger.debug('[Autopilot] conv=%s VU append lost the rev=%s race '
+                             '(attempt %d/%d) — re-reading',
+                             conv_id[:8], cur_rev, attempt, _MAX_CAS)
+                continue
+
+            # Phase 5 dual-write (flag-gated, inert when off): tail append.
+            # Guarded SEPARATELY from the authoritative write above: the VU turn
+            # is already durable at this point, so a mirror failure must not
+            # fall into this function's `except` and return None — the caller
+            # reads None as "the VU turn was not persisted" and ENDS the
+            # autopilot run (observed 2026-07-27: a NameError in the hook
+            # silently stopped autopilot with the VU message sitting committed).
+            try:
+                from lib.database.messages_rows import mirror_write_and_commit
+                mirror_write_and_commit(db, conv_id, messages, now_ms=now_ms)
+            except Exception as _mirror_err:
+                logger.warning('[Autopilot] conv=%s row mirror failed (non-fatal, '
+                               'VU turn already durable): %s',
+                               conv_id[:8], _mirror_err, exc_info=True)
+            logger.info('[Autopilot] conv=%s ✅ Appended VU msg %s (%d chars, %d rounds)',
+                        conv_id[:8], vu_msg_id[:12], len(text), len(rounds or []))
+            return vu_msg
+
+        logger.warning('[Autopilot] conv=%s VU append gave up after %d CAS '
+                       'attempts — reply preserved by the caller instead',
+                       conv_id[:8], _MAX_CAS)
+        return None
     except Exception as e:
         logger.error('[Autopilot] conv=%s append failed: %s',
                      conv_id[:8], e, exc_info=True)

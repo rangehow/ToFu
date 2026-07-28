@@ -1031,6 +1031,32 @@ function _scheduleConvVerifyRetry(convId) {
   }, delays[attempt]);
 }
 
+/* ── _rescuableLocalTail: the server-is-not-authoritative decision ──────────
+ *
+ * A server reply holding FEWER messages than the client does is NOT proof the
+ * client is stale. A backend whole-blob writer that lost a race can erase a row
+ * that was already committed (measured: 13 autopilot appends, 8 survivors), and
+ * at that moment the local copy is the ONLY place the message still exists —
+ * overwriting is what destroys it for good.
+ *
+ * Extracted as a pure function on purpose: the caller is a ~35k-char async
+ * function wired to the DOM, ConvView and ~19 helpers, so the decision could
+ * only be guarded by reproducing all of that. A pure seam lets the rule itself
+ * be driven directly, which is the difference between a guard that tests the
+ * product and one that tests a hand-copied twin of it.
+ *
+ * Returns the locally-held rows that the server is missing AND that look
+ * persisted (they carry an identity: _msgId or _isVirtualUser). A half-built
+ * optimistic draft has no id, so it is NOT rescuable and the normal overwrite
+ * proceeds — otherwise "keep everything" would strand drafts the server has
+ * legitimately never seen. */
+function _rescuableLocalTail(localMsgs, serverMsgs) {
+  if (!Array.isArray(localMsgs) || !Array.isArray(serverMsgs)) return [];
+  if (localMsgs.length <= serverMsgs.length) return [];
+  return localMsgs.slice(serverMsgs.length)
+    .filter(m => m && (m._msgId || m._isVirtualUser));
+}
+
 async function loadConversationMessages(convId) {
   const conv = conversations.find((c) => c.id === convId);
   if (!conv) return null;
@@ -1568,23 +1594,50 @@ async function loadConversationMessages(convId) {
         _serverHasTranslationLocalLacks(serverMsgs, conv.messages);
 
       if (cacheIsStale) {
-        /* ★ Diagnostic: if we're about to wipe a non-empty local that
-         *   doesn't match the server, leave a warn breadcrumb (forwarded
-         *   to logs/app.log via /api/client-error).  This is the place
-         *   the chatInner-disappearance bug was born; if it ever recurs,
-         *   the postmortem starts here. */
-        if (hasLocalData && conv.messages.length > serverMsgs.length) {
+        /* ★ The server is NOT authoritative when it has FEWER messages than we
+         *   hold locally. A backend whole-blob writer that lost a race can
+         *   erase a row that was already committed (measured: 13 autopilot
+         *   appends, 8 survivors), and when that happens this local copy is the
+         *   only place the message still exists. Overwriting here is what
+         *   destroys it for good.
+         *
+         *   This branch used to log exactly that situation as a warning and
+         *   then overwrite anyway — a gate that reports the break-in instead of
+         *   closing the door. It is the birthplace of the chatInner
+         *   disappearance bug, and it recurred.
+         *
+         *   So: keep the local copy and push it back. Guarded on the extra rows
+         *   carrying an identity (_msgId / _isVirtualUser) so this only rescues
+         *   real persisted-shape messages, never a half-built optimistic draft
+         *   that the server legitimately doesn't have yet. */
+        const _rescuable = hasLocalData
+          ? _rescuableLocalTail(conv.messages, serverMsgs) : [];
+        if (_rescuable.length > 0) {
           if (typeof debugLog === 'function') {
             debugLog(
-              `[loadConvMsgs] ⚠️ OVERWRITE conv=${convId.slice(0,8)} ` +
-              `wiping local len=${conv.messages.length} → server len=${serverMsgs.length} ` +
-              `(cacheHit=${cacheHit} preLen=${_preFetchMsgCount} ` +
-              `freshLocal=${_hasFreshLocalActivity} taskId=${conv.activeTaskId || 'null'} ` +
-              `streaming=${activeStreams.has(convId)})`,
+              `[loadConvMsgs] 🛟 KEEPING local conv=${convId.slice(0,8)} ` +
+              `local len=${conv.messages.length} > server len=${serverMsgs.length} — ` +
+              `${_rescuable.length} message(s) missing server-side, pushing back ` +
+              `instead of overwriting (cacheHit=${cacheHit} ` +
+              `freshLocal=${_hasFreshLocalActivity} taskId=${conv.activeTaskId || 'null'})`,
               'warn'
             );
           }
+          conv.title = data.title || conv.title;
+          const _keepPinned = conv.pinned, _keepPinnedAt = conv.pinnedAt;
+          _applySettingsToConv(conv, data.settings);
+          conv.pinned = _keepPinned; conv.pinnedAt = _keepPinnedAt;
+          conv._needsLoad = false;
+          try {
+            if (typeof syncConversationToServer === 'function') {
+              syncConversationToServer(conv);
+            }
+          } catch (e) {
+            console.warn('[loadConvMsgs] push-back of locally-held messages failed', e);
+          }
+          return;
         }
+
         conv.messages = serverMsgs;
         conv.title = data.title || conv.title;
         conv.updatedAt = serverUpdatedAt || conv.updatedAt;

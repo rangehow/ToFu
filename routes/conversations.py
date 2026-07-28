@@ -505,7 +505,7 @@ def _compute_reconcile(conv_id, r):
     return cleaned, True, settings_dict
 
 
-def _persist_reconcile(db, conv_id, cleaned, settings_dict):
+def _persist_reconcile(db, conv_id, cleaned, settings_dict, expected_rev=None):
     """WRITE half of the reconcile — the (FUSE-fsync) ``UPDATE``+``commit`` that
     the GET read path defers to a background task (see ``_schedule_reconcile_persist``).
 
@@ -514,22 +514,55 @@ def _persist_reconcile(db, conv_id, cleaned, settings_dict):
         sort order is untouched (backend mirror of the ``saveConversations``
         load-time-restamp gotcha).
       • ``_reconciledAt`` already stamped into ``settings_dict`` by ``_compute_reconcile``.
+      • ★ rev-CAS. ``cleaned`` was computed from a row read EARLIER, and this
+        write runs on a BACKGROUND task (``_schedule_reconcile_persist``), so an
+        append that landed in between would be erased by this stale array —
+        the whole-blob read-modify-write data loss this module is being audited
+        for (conv ms3sfyrmn31omb: 13 VU appends, 8 survivors). ``expected_rev``
+        pins the version the verdict was computed from; a lost race is a no-op
+        (rev unchanged → 0 rows), NOT an overwrite, and the caller re-reads.
+        Reconcile is idempotent, so dropping the write is always safe: the next
+        GET recomputes the same verdict against the newer row.
+        ``expected_rev=None`` keeps the legacy unconditional write for callers
+        that hold the row inside the same transaction.
+
     After the write it signals ``notify_history_rewrite`` (honest cache-break
     naming) AND emits ``push_event('conv', conv_id, {kind:'history_rewrite', rev})``
     so every client that has this conversation open re-aligns WITHOUT a manual
-    refresh. Returns the post-write ``rev`` (0 if unreadable).
+    refresh. Returns the post-write ``rev`` (0 if unreadable, -1 if the CAS lost
+    its race and nothing was written).
     """
     from lib.tasks_pkg.cache_tracking import notify_history_rewrite
 
     messages_json = json_dumps_pg(cleaned)
     settings_json = json.dumps(settings_dict, ensure_ascii=False)
     search_text = build_search_text(cleaned)
-    db.execute(
-        'UPDATE conversations SET messages=?, settings=?, msg_count=?, '
-        'search_text=? WHERE id=? AND user_id=?',
-        (messages_json, settings_json, len(cleaned), search_text,
-         conv_id, DEFAULT_USER_ID))
-    db.commit()
+    if expected_rev is None:
+        db.execute(
+            'UPDATE conversations SET messages=?, settings=?, msg_count=?, '
+            'search_text=? WHERE id=? AND user_id=?',
+            (messages_json, settings_json, len(cleaned), search_text,
+             conv_id, DEFAULT_USER_ID))
+        db.commit()
+    else:
+        cur = db.execute(
+            'UPDATE conversations SET messages=?, settings=?, msg_count=?, '
+            'search_text=? WHERE id=? AND user_id=? AND rev=?',
+            (messages_json, settings_json, len(cleaned), search_text,
+             conv_id, DEFAULT_USER_ID, int(expected_rev)))
+        db.commit()
+        # rowcount 0 == another writer advanced rev between the read that
+        # produced `cleaned` and this write. Standing down is the CORRECT
+        # outcome: writing would erase that writer's row. Reconcile is
+        # idempotent so the next GET recomputes against the fresher row.
+        affected = getattr(cur, 'rowcount', None)
+        if affected == 0:
+            logger.info(
+                '[get_conv] reconcile persist STOOD DOWN conv=%s expected_rev=%s '
+                '— a concurrent writer advanced the row; not overwriting with a '
+                'stale %d-message array (next GET will recompute)',
+                conv_id[:8], expected_rev, len(cleaned))
+            return -1
     # Phase 5 dual-write (flag-gated, inert when off): reconcile re-sequences
     # the array, so mirror with a full rebuild, not the tail heuristic.
     from lib.database.messages_rows import mirror_write_and_commit
@@ -614,7 +647,7 @@ def _reconcile_conv_served_readonly(db, conv_id, r):
 _bg_reconcile_persist_tasks: set = set()
 
 
-def _schedule_reconcile_persist(conv_id, cleaned, settings_dict):
+def _schedule_reconcile_persist(conv_id, cleaned, settings_dict, expected_rev=None):
     """Fire-and-forget the reconcile WRITE off the GET request.
 
     The read handler has already returned the cleaned dict to the opening
@@ -629,7 +662,8 @@ def _schedule_reconcile_persist(conv_id, cleaned, settings_dict):
     async def _run():
         try:
             await run_pooled(
-                lambda db: _persist_reconcile(db, conv_id, cleaned, settings_dict))
+                lambda db: _persist_reconcile(db, conv_id, cleaned, settings_dict,
+                                              expected_rev=expected_rev))
         except Exception as e:
             logger.warning('[get_conv] background reconcile persist failed '
                            'conv=%s: %s', conv_id[:8], e, exc_info=True)
@@ -1041,7 +1075,8 @@ async def get_conv(conv_id):
                         lambda db: _windowed_blob_slice_readonly(
                             conv_id, r, _window, _before_seq))
                 if changed and cleaned_full is not None:
-                    _schedule_reconcile_persist(conv_id, cleaned_full, sd)
+                    _schedule_reconcile_persist(conv_id, cleaned_full, sd,
+                                                expected_rev=_row_rev(r))
                 _maybe_backfill_narration_on_open(conv_id, served)
                 return jsonify(served)
             except Exception as e:
@@ -1068,7 +1103,8 @@ async def get_conv(conv_id):
         #    persist + history_rewrite push are deferred off-request so this GET
         #    never blocks on a FUSE-fsync UPDATE+commit. ──
         if changed:
-            _schedule_reconcile_persist(conv_id, cleaned, settings_dict)
+            _schedule_reconcile_persist(conv_id, cleaned, settings_dict,
+                                        expected_rev=_row_rev(r))
         _maybe_backfill_narration_on_open(conv_id, served)
         return jsonify(served)
     except Exception as e:

@@ -1,6 +1,25 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-28 — `get_conversation` 工具面翻成 raw 默认(owner「调试太不友好,元数据全都要,像查数据库一样」):**默认值被两处各自解释,只翻一处会让卡片撒谎**(commit `438aab75`,6 文件 +300/-17;新套件 **22/22**,**NEUTER×3 全咬**,相邻环 **130/130**,tool inventory `--check` in sync,干净 committed worktree **98/98**)
+
+- **缺陷形状 = charter「后端单一真源被前端手抄」的同族,这次副本是「默认值」,而两个副本分属两条语义不同的通道。** `raw` 的默认在两处**各自**从 `fn_args` 读:①`lib/conv_ref/_tool.py` 决定**真正跑哪种读法**;②`lib/tasks_pkg/handlers/misc/_brain.py:81` 决定**人类卡片要不要打 `RAW · debug` 徽章**(`raw=bool(_fn_args.get('raw'))`)。**只翻一处的后果不是「有一处没生效」,而是卡片写着 RAW 而载荷是散文**(或反过来)—— 一条措辞精确、可信、但归因错误的信号,与 charter 已记的「800k 硬顶把正常批量读诬告成 base64 泄漏」同族。故落点是 `raw_requested()` 单一真源,两侧都改为向它问,而不是在两处各写一遍 `get('raw', True)`。
+  - **守卫按「缝」设计而非按任一侧:** `test_badge_matches_the_payload_that_was_returned` 用**同一个 args dict** 同时驱动**真实 executor** 与**真实 `_post_build` 闭包**,断言 `badge is payload`。四种形状参数化(缺省 / `True` / `False` / `'false'`)。**只测 resolver 的守卫会在两侧漂移时保持全绿** —— 那正是要防的失效形态。另补 `test_default_read_is_badged_raw` 作**具体地板**:纯 parity 断言能被「两侧同时翻回散文」这种双向回退满足。
+
+- **★ 范围必须止于工具面,而这不是保守而是实测约束。** `lib.conv_ref.get_conversation` 还有两个**要散文**的调用方:`lib/chat/messages.py::resolve_conv_refs`(`@` 提及注入,把会话拼进 prompt)与 `routes/conversations.py::export_conv`(人类导出)。**库默认若跟着翻,一个 `@` 提及的会话就会以 JSON dump 的形态进 prompt。** 故库签名一字未动,只有 tool executor 改;`TestLibraryDefaultUnchanged` 直接跑 `resolve_conv_refs` 断言拿到的是散文 —— **这条补集才是「这次是范围明确的改动而非全局翻转」的证据**,没有它,下一个人无从判断库默认是故意留着还是漏改。
+
+- **★ 字符串 `"false"` 必须当 opt-out。** 模型完全可能把 flag 发成 JSON 字符串,而 `bool("false")` 是 **True** —— 那样**关不掉的默认等于删掉了功能**,且失败方向恰好是「用户明确要求 A,拿到 B」。`raw_requested` 显式吃 `0/false/no/off/''`。NEUTER-2(把字符串分支改成恒 `True`)咬 **5 条**。
+
+- **NEUTER×3,每发先断言补丁真的命中文件(未命中即硬报错,不看测试结果):** ①默认翻回 `False` → **4 红**;②字符串 `"false"` 读成真 → **5 红**;③卡片徽章改回各自解释 `bool(_fn_args.get('raw'))` → **3 红**(其中精确红在 `fn_args3` = `'false'` 这一格与地板那条)。
+
+- **★ 一条兄弟守卫红了,而该改的是断言不是码 —— 但先判活死再动手。** `test_conv_ref_raw.py::test_handler_attaches_digest_in_raw_mode` 断言「缺省读取的卡片**不带** raw 标记」,正是 owner 明确推翻的行为。**先确认它是活的**(它驱动真实 `_post_build`,指向真实字段,不是锚点漂移也不是被守卫实现消失),再**翻转**而非删除;并且**把它原本保护的东西保留下来** —— 徽章不得声称一次没发生的调试读取 —— 做法是把该断言改挂在**显式 `raw=False`** 这一格上。**删掉它会连带丢掉这条保护,而它与本轮新加的 parity 守卫正交。**
+
+- **文档面也是产品面:schema 描述若还写 "Default: false",模型会学到「裸调用给散文」这个假事实**,并冗余地传 `raw=true`。描述与两个参数说明一并重写;守卫按**契约**断言(不得宣称 false 默认 + 必须交代缺省行为)而非匹配具体文案,这样重新润色文案不会假红。`docs/TOOL_INVENTORY.md` 由 `scripts/gen_tool_inventory.py --check` 复验 in sync(89 tools)。
+
+- **端到端在真实 DB 行上实跑(不只 fake):** 裸调用返回 `Raw Conversation Record` + **可 `json.loads`** 的记录,`input_tokens` / `finishReason` 在内;`raw=False` 返回 `Referenced Conversation` 散文且无 json fence。
+- **诚实分账:** 干净 worktree 那 20 条 frontend 跳过是**环境性**的(新 worktree 无 `node_modules`),同批在主树里是真跑真过 —— 按 charter「长期整体 skip 的环不得据其全绿作决策前提」记明,不当作已验证。共享 HEAD 纪律:精确 pathspec,`git add` 后计数断言 **=6** 才提交。
+
+
 ### 2026-07-28 — 安装加速根修:**加速配置被关在慢路径里,跑得越快的那条路完全没有加速**(owner 逐项核对推翻我上一轮的「已调研」交付;commit `53620bb4`,2 文件 +287/-23;套件 **21/21**,**NEUTER×6 全咬**(其中**我自己两条守卫首发不咬**),相邻环 **43/43**,collect **11,379** 0 err,干净 committed worktree **32/32**)
 
 - **★ owner 先否掉了我上一轮的交付形态:目标第三段「maximize acceleration for other users' installations」被我做成了一份调研报告。** 他逐项 grep 核对:`PLAYWRIGHT_DOWNLOAD_HOST`=0 · `UV_CACHE_DIR`=0 · `PLAYWRIGHT_BROWSERS_PATH`=0 · `--only-shell`=0 · `--find-links`=0,且 `git log -- install.sh export.py` 最新一笔是别人的 `521160b0` —— **这一轮一行都没改**。判据(记死):**「查清了该怎么加速」不等于「加速了」;安装类目标的验收物是 install.sh 的 diff + 前后 wall-clock,不是一份清单。**

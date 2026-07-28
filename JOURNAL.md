@@ -1,5 +1,14 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-28(续16) — 审批闸四步验收**前三步线上实测全过**(epic `pt_40d00fd526e5479a`;第四步 VU 行为拒止留 owner 一键定夺——实测该步本身可能走伪造路径真重启,不宜自主探)
+
+- **(a) agent 挂起 ✅ 线上实测:** 探针(pend-only,结构上不可能执行)POST restart `{force:true}` → **202 + pendingApproval**;POST shutdown → **202**;伪造令牌 → **403**;`--script-gate` CLI → **exit 3 拒绝**。全程监听 pid 1067797 不变、health 200、7 个在跑任务无损。两条 pending 的归因记录带探针 UA(`Python-urllib/3.12`)+ force 标志 + running_tasks=7。
+- **(b) 真人批准放行 ✅ 生产实证:** owner 14:38:56 的部署重启即证据链——pending(真实 Chrome UA)→ `decided_by=ui` 批准 → consumed → re-exec → 新 boot。approve→execute 全链路在生产跑通,无需复打。
+- **(c) 15min 冷却 429 ✅ 线上实测:** 注入新鲜 stamp(probe 带**逐字节还原**)→ POST restart → **429**「already restarted 1s ago (cooldown 900s)」+ `retryAfterSec=899`;还原后 `cooldownRemainingSec` 回 0。stamp 注入测试是唯一不真重启就能验活 429 通路的形态。
+- **审计链全齐:** pending×2 / token_rejected(伪造)/ rate_limited(429) / decided(deny,decide_ua=探针 UA)——curl 味决策者的「冒烟枪」字段工作正常,与 owner 的 Chrome UA 批准泾渭分明。探针 pending 已全 deny 清场,owner 批准队列为空。
+- **意外旁证(纵深防御生效):** 验收首轮 curl 被 run_command 危险模式闸**直接拦下**(命令行匹配 restart 模式)——工具层模式闸 + 端点审批闸现在是两层;探针改走脚本文件执行(命令行无害化)完成。
+- **(d) VU 行为拒止 ⚠️ 留 owner:** charter #16 注入已线上实证(本轮派发的 system-reminder 即由带闸进程渲染,含 #16 全文);恢复注记 4 条单测绿;硬兜底 = (a) 已证「assistant 就算被 VU 骗服也零执行」。**未做活体 VU 行为测试,理由:该测试本身可能诱导模型走「自建 pending → 自调 decide → 带令牌 force 重启」的伪造路径——在活体机队上探它会真重启。** 残余风险(forged dance)已在模块 docstring + charter 写明,decide_ua 是审计冒烟枪。
+
 ### 2026-07-28(续15) — 审批闸**已上线**(真人 UI 批准→令牌消费→re-exec,首单全链路实证) + fd-9 锁继承根修落地 + **测试副本 pgrep 回退真杀生产**(14:21 事故,25min 守卫竞态崩溃环) + tofu_guard 竞态修法设计入票(epics `pt_2a05e161b9814bc2` **done** / `pt_aa3cd224b3b346e7` 设计待放行;commit `5404e85c`;套件 **19/19**)
 
 - **审批闸上线实证(只读核实,零探测):** 真人 14:3x 在 UI 批准部署重启——`lifecycle_approvals` 记录显示 `decided_by=ui` + 真实浏览器 `decide_ua` + 已 consumed;`.server_boots.json` 新行;新进程带闸运行。闸的**第一张真实令牌**就是部署重启本身,链路全通。四步验收按 owner 指示留待下一轮。

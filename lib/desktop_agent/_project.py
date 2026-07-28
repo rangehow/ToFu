@@ -315,6 +315,7 @@ def _check_delete_targets_within(command, root_real):
     from lib.project_mod.command_analysis import (
         _DELETE_COMMANDS,
         _split_pipeline,
+        _unwrap_command_parts,
     )
     for seg in _split_pipeline(command):
         seg = seg.strip()
@@ -322,7 +323,9 @@ def _check_delete_targets_within(command, root_real):
             continue
         while re.match(r'^\w+=\S*\s', seg):
             seg = re.sub(r'^\w+=\S*\s+', '', seg, count=1)
-        parts = seg.split()
+        # See through a leading sudo/doas — ``sudo rm -rf <outside>`` must be
+        # judged by the rm, not skipped because the first word is ``sudo``.
+        parts = _unwrap_command_parts(seg.split())
         if not parts:
             continue
         if parts[0].split('/')[-1] not in _DELETE_COMMANDS:

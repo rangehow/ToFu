@@ -141,6 +141,16 @@ class TestDeleteTargetContainment:
         out = pj.cmd_project_run_command(
             {'root': 'app', 'command': f'rm -rf {target}'})
         assert 'error' in out and 'blocked' in out['error']
+        assert target.exists()  # 拒于校验期,未被执行
+
+    def test_sudo_delete_outside_root_refused(self, proj):
+        """sudo 前缀不得绕开锁根守卫:sudo rm -rf <root外> 同拒。"""
+        target = proj['tmp'] / 'elsewhere_sudo'
+        target.mkdir()
+        out = pj.cmd_project_run_command(
+            {'root': 'app', 'command': f'sudo rm -rf {target}'})
+        assert 'error' in out and 'blocked' in out['error']
+        assert target.exists()
 
     def test_rm_relative_inside_root_allowed(self, proj):
         out = pj.cmd_project_run_command(
@@ -148,16 +158,22 @@ class TestDeleteTargetContainment:
         assert out.get('exit_code') == 0
         assert not (proj['root'] / 'sub').exists()
 
-    def test_rm_rf_absolute_always_blocked_parity(self, proj):
-        """DANGEROUS_PATTERNS[0]=\\brm\\s+-rf\\s+/:连根内绝对路径也拒——与服务器平价."""
+    def test_rm_rf_absolute_inside_root_allowed_parity(self, proj):
+        """服务器平价(2026-07-28 起):scoped 绝对路径删除放行.
+
+        旧 DANGEROUS_PATTERNS[0]=\\brm\\s+-rf\\s+/ 连根内绝对路径也拒 —— 与
+        服务器同款误伤(``rm -rf /tmp/wt_fill`` 这类临时 worktree 清理被恒拒,
+        见 tests/test_run_command_rm_rf_scoped.py)。该 regex 已全库移除,
+        删除命令统一由参数解析守卫裁决:深度 <2 拒(catastrophic)、
+        越 share root 拒(上方锁根守卫)、根内 scoped 删除放行 —— 与
+        test_rm_relative_inside_root_allowed 的相对路径形态对齐。"""
         out = pj.cmd_project_run_command(
             {'root': 'app', 'command': f'rm -rf {proj["root"] / "sub"}'})
-        assert 'error' in out and 'blocked' in out['error']
+        assert out.get('exit_code') == 0
+        assert not (proj['root'] / 'sub').exists()
 
     def test_neuter_containment_guard_lets_escape_through(self, proj, monkeypatch):
-        """剥掉锁根守卫 → 绝对路径删除越界放过 = 守卫承重(用临时目录,不碰真路径).
-
-        用 ``rm -r``(非 ``-rf``)绕开 DANGEROUS_PATTERNS 的恒拒,专测锁根守卫."""
+        """剥掉锁根守卫 → 绝对路径删除越界放过 = 守卫承重(用临时目录,不碰真路径)."""
         monkeypatch.setattr(pj, '_check_delete_targets_within',
                             lambda _cmd, _root: None)
         target = proj['tmp'] / 'would_die'

@@ -292,6 +292,11 @@ Body: {
   `command_analysis._is_catastrophic_delete` 的锁根规则只对服务器 restricted 主体生效,
   agent 侧自建 `_check_delete_targets_within`——`rm -rf ~` 类拦下;⑥平价实证:
   `rm -rf /abs` 连根内也拒(DANGEROUS_PATTERNS[0] 与服务器同一条)。
+  **〔⑥已被取代,2026-07-28〕** 该 blunt regex 把 `rm -rf /tmp/wt_fill` 这类
+  scoped 临时清理也恒拒(误伤,见 tests/test_run_command_rm_rf_scoped.py),
+  已全库移除;删除命令现统一由参数解析守卫裁决——深度 <2 拒(⑤的
+  catastrophic 深度规则)、越 share root 拒(⑤的锁根守卫,sudo/doas 前缀
+  可看穿)、根内 scoped 删除(含绝对路径)放行,与服务器端规则一致。
   套件 `tests/test_desktop_exec_streaming.py` **18 测**(含 NEUTER:剥锁根守卫 → 越界删除放过)。
 
 - **P3 落地注记(2026-07-26):** ①绑定契约单一事实源 `lib/desktop/remote.py`

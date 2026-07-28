@@ -868,6 +868,44 @@ _DELETE_COMMANDS = frozenset({'rm', 'rmdir', 'unlink'})
 # ``/mnt/foo`` → 2 (allowed). Tunable via env for stricter sites.
 _MIN_DELETE_DEPTH = max(1, int(os.environ.get('TOFU_MIN_DELETE_DEPTH', '2')))
 
+# Privilege wrappers that can precede the real command word. A delete behind
+# one (``sudo rm -rf /``) must be judged by the ``rm``, not by the ``sudo`` —
+# otherwise a one-word prefix smuggles a catastrophic delete past every
+# argument-level guard. (The retired substring guard ``\brm\s+-rf\s+/``
+# caught this shape precisely because it never parsed; when the regex was
+# removed in favour of this parser, seeing through sudo/doas is what keeps
+# coverage neutral-or-better.)
+_PRIV_WRAPPERS = frozenset({'sudo', 'doas'})
+# Wrapper flags that consume the NEXT token as their argument
+# (``sudo -u root rm …``) — skip them together or the argument is mistaken
+# for the command word.
+_PRIV_WRAPPER_ARG_FLAGS = frozenset(
+    {'-u', '-g', '-h', '-p', '-C', '-U', '-r', '-t'})
+
+
+def _unwrap_command_parts(parts):
+    """Strip a leading privilege wrapper (``sudo``/``doas`` + its flags).
+
+    Returns the token list of the wrapped command, or *parts* unchanged when
+    no wrapper is present. Only ONE wrapper level is unwrapped; anything more
+    exotic (``xargs rm``, ``find -exec rm``, ``timeout 5 rm``) is out of
+    scope for this best-effort net — the same blind spots the retired
+    substring guard also had.
+    """
+    if not parts or parts[0].split('/')[-1] not in _PRIV_WRAPPERS:
+        return parts
+    i = 1
+    while i < len(parts):
+        tok = parts[i]
+        if tok in _PRIV_WRAPPER_ARG_FLAGS:
+            i += 2
+            continue
+        if tok.startswith('-'):
+            i += 1
+            continue
+        return parts[i:]
+    return []
+
 
 def _is_catastrophic_delete(command, cwd=None):
     """Return the offending path if *command* deletes a forbidden abs target.
@@ -891,6 +929,9 @@ def _is_catastrophic_delete(command, cwd=None):
          project (e.g. ``rm -rf ~/old_build``) is preserved — no product
          regression.
 
+    A leading privilege wrapper (``sudo rm -rf /``) is seen through via
+    :func:`_unwrap_command_parts` before the delete-command check.
+
     Only absolute / ``~`` / env-var-expanded targets are evaluated: a
     relative ``rm -rf build`` stays inside ``cwd`` and is always safe.
     """
@@ -912,7 +953,7 @@ def _is_catastrophic_delete(command, cwd=None):
             continue
         while _re.match(r'^\w+=\S*\s', seg):
             seg = _re.sub(r'^\w+=\S*\s+', '', seg, count=1)
-        parts = seg.split()
+        parts = _unwrap_command_parts(seg.split())
         if not parts:
             continue
         base_cmd = parts[0].split('/')[-1]

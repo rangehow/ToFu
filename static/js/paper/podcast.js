@@ -18,6 +18,8 @@ var _podcast = {
   mode: 'short',
   lang: 'zh',
   voice: '',
+  model: '',           // the NEXT run's pick (persisted; see _pmSeedModel)
+  artifactModel: '',   // what the DISPLAYED artifact was made with ('' = unknown)
   taskId: '',
   cursor: 0,
   pollTimer: null,
@@ -148,6 +150,262 @@ if (typeof _pmAdoptServerClocks !== 'function') {
   };
 }
 
+/* ═══ Shared media model picker (podcast.js + video.js) ═══
+ *
+ * Guarded duplicate definitions — same convention as _pmPick / the clock
+ * helpers above: both files are concatenated into one bundle and either may
+ * come first, so the bodies are identical and the first one wins.
+ *
+ * WHY THIS EXISTS: the Report/Review tabs grew a model picker
+ * (paper-report-model-picker); the podcast/video studio cards never did.
+ * The backend carries `model` end-to-end, so these helpers are the surface.
+ * They reuse the report picker's data path (_registeredModels + isChatModel
+ * + _compareModelsByDisplayName + _modelShortName) and its dropdown styles:
+ * one model list, one sort, one look across paper mode.
+ *
+ * The pick is part of the artifact's IDENTITY, not a display preference —
+ * the backend includes it in the dedup key / cache identity. Two separate
+ * values are therefore tracked per panel:
+ *   st.model         — the NEXT run's pick (persisted per panel);
+ *   st.artifactModel — what the DISPLAYED artifact was actually made with
+ *                      ('' = unknown legacy artifact → badge hidden; showing
+ *                      the seeded pick there would claim a making-model the
+ *                      artifact never had).
+ */
+if (typeof _pmChatModels !== 'function') {
+  var _pmChatModels = function () {
+    var models = (typeof _registeredModels !== 'undefined') ? _registeredModels : [];
+    var hiddenSet = (typeof _hiddenModels !== 'undefined') ? _hiddenModels : new Set();
+    return models.filter(function (m) {
+      if (!m || hiddenSet.has(m.model_id)) return false;
+      return (typeof isChatModel === 'function') ? isChatModel(m) : true;
+    });
+  };
+}
+
+if (typeof _pmEsc !== 'function') {
+  var _pmEsc = function (s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  };
+}
+
+if (typeof _pmT !== 'function') {
+  var _pmT = function (key, fallback) {
+    return (typeof t === 'function') ? t(key) : (fallback || key);
+  };
+}
+
+if (typeof _pmShortName !== 'function') {
+  var _pmShortName = function (mid) {
+    return (typeof _modelShortName === 'function') ? _modelShortName(mid) : mid;
+  };
+}
+
+if (typeof _pmPanelState !== 'function') {
+  var _pmPanelState = function (panel) {
+    if (panel === 'podcast' && typeof _podcast !== 'undefined') return _podcast;
+    if (panel === 'video' && typeof _pvideo !== 'undefined') return _pvideo;
+    return null;
+  };
+}
+
+if (typeof _pmSeedModel !== 'function') {
+  /* Seed order (identical to the report picker): the panel's own saved pick
+   * → the chat toolbar preset (config.model, then serverModel) → the first
+   * visible chat model. Deliberately NO "auto" entry — generation always
+   * names the model it will use, and the model rides the backend's
+   * dedup/cache identity, so it must be concrete. */
+  var _pmSeedModel = function (panel) {
+    var st = _pmPanelState(panel);
+    if (!st || st.model) return;
+    var lsKey = panel === 'podcast' ? 'paperPodcastModel' : 'paperVideoModel';
+    var saved = '';
+    try { saved = localStorage.getItem(lsKey) || ''; } catch (e) {}
+    var chatModels = _pmChatModels();
+    var ids = {};
+    for (var i = 0; i < chatModels.length; i++) ids[chatModels[i].model_id] = true;
+    var preset = (typeof config !== 'undefined' && config && config.model)
+      ? config.model
+      : ((typeof serverModel !== 'undefined' && serverModel) ? serverModel : '');
+    st.model = (saved && ids[saved]) ? saved
+      : ((preset && ids[preset]) ? preset
+      : (chatModels.length ? chatModels[0].model_id : ''));
+  };
+}
+
+if (typeof _pmAdoptModel !== 'function') {
+  /* Record the DISPLAYED artifact's making-model (lookup / poll truth).
+   * When it is known, the pick follows it (and becomes the saved pick) —
+   * the picker never claims the artifact was made by a different model.
+   * When unknown (legacy artifact), only artifactModel is cleared; the
+   * seeded pick stays. */
+  var _pmAdoptModel = function (panel, mid) {
+    var st = _pmPanelState(panel);
+    if (!st) return;
+    st.artifactModel = mid || '';
+    if (!mid) return;
+    st.model = mid;
+    try {
+      localStorage.setItem(
+        panel === 'podcast' ? 'paperPodcastModel' : 'paperVideoModel', mid);
+    } catch (e) {}
+  };
+}
+
+if (typeof _pmPopulateModelDropdown !== 'function') {
+  /* Populate from _registeredModels — grouped by provider, sorted by the
+   * SAME shared comparator the toolbar + report pickers use, so the three
+   * lists can never disagree. */
+  var _pmPopulateModelDropdown = function (panel) {
+    var prefix = panel === 'podcast' ? 'podcast' : 'video';
+    var dropdown = document.getElementById(prefix + 'ModelDropdown');
+    if (!dropdown) return;
+    _pmSeedModel(panel);
+    var st = _pmPanelState(panel);
+    var chatModels = _pmChatModels();
+    dropdown.innerHTML = '';
+    var grouped = {};
+    for (var i = 0; i < chatModels.length; i++) {
+      var m = chatModels[i];
+      var pid = m.provider_id || 'default';
+      if (!grouped[pid]) grouped[pid] = { name: m.provider_name || pid, models: [] };
+      grouped[pid].models.push(m);
+    }
+    var _canSort = (typeof _compareModelsByDisplayName === 'function');
+    var pids = Object.keys(grouped);
+    if (_canSort) {
+      pids.sort(function (x, y) {
+        var nx = String((grouped[x] && grouped[x].name) || x);
+        var ny = String((grouped[y] && grouped[y].name) || y);
+        return _compareModelsByDisplayName(nx, ny);
+      });
+    }
+    for (var pi = 0; pi < pids.length; pi++) {
+      var group = grouped[pids[pi]];
+      if (_canSort) group.models.sort(_compareModelsByDisplayName);
+      if (pids.length > 1) {
+        var section = document.createElement('div');
+        section.className = 'paper-report-model-dropdown-section';
+        section.textContent = group.name;
+        dropdown.appendChild(section);
+      }
+      for (var mi = 0; mi < group.models.length; mi++) {
+        var mod = group.models[mi];
+        var item = document.createElement('div');
+        item.className = 'paper-report-model-dropdown-item' +
+          (st && mod.model_id === st.model ? ' active' : '');
+        item.textContent = _pmShortName(mod.model_id);
+        item.title = mod.model_id;
+        (function (mid) {
+          item.onclick = function () { _pmSelectModel(panel, mid); };
+        })(mod.model_id);
+        dropdown.appendChild(item);
+      }
+    }
+  };
+}
+
+if (typeof _pmSelectModel !== 'function') {
+  var _pmSelectModel = function (panel, mid) {
+    var st = _pmPanelState(panel);
+    if (!st) return;
+    st.model = mid || '';
+    try {
+      localStorage.setItem(
+        panel === 'podcast' ? 'paperPodcastModel' : 'paperVideoModel',
+        st.model);
+    } catch (e) {}
+    var prefix = panel === 'podcast' ? 'podcast' : 'video';
+    var label = document.getElementById(prefix + 'ModelLabel');
+    if (label) label.textContent = _pmShortName(mid);
+    /* The done-card badge is deliberately NOT updated here: it names what
+     * the displayed artifact WAS made with, which a new pick does not
+     * change until a regenerate actually runs. */
+    var dropdown = document.getElementById(prefix + 'ModelDropdown');
+    if (dropdown) {
+      dropdown.classList.remove('open');
+      var items = dropdown.querySelectorAll('.paper-report-model-dropdown-item');
+      for (var i = 0; i < items.length; i++) {
+        items[i].classList.toggle('active', items[i].title === mid);
+      }
+    }
+  };
+}
+
+if (typeof _pmToggleModelDropdown !== 'function') {
+  var _pmToggleModelDropdown = function (ev, panel) {
+    if (ev) ev.stopPropagation();
+    var prefix = panel === 'podcast' ? 'podcast' : 'video';
+    var dropdown = document.getElementById(prefix + 'ModelDropdown');
+    if (!dropdown) return;
+    var isOpen = dropdown.classList.contains('open');
+    if (!isOpen) _pmPopulateModelDropdown(panel);
+    dropdown.classList.toggle('open');
+  };
+}
+
+if (typeof _pmModelIcons !== 'function') {
+  var _pmModelIcons = function (kind) {
+    if (kind === 'chev') {
+      return '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>';
+    }
+    return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></svg>';
+  };
+}
+
+if (typeof _pmModelFieldHtml !== 'function') {
+  /* The studio-card Model field (dropdown button + list). */
+  var _pmModelFieldHtml = function (panel, st) {
+    var prefix = panel === 'podcast' ? 'podcast' : 'video';
+    var cur = (st && st.model) || '';
+    return '<div class="pm-field"><div class="pm-field-label">' +
+      _pmEsc(_pmT('paper.mediaOptModel', 'Model')) + '</div>' +
+      '<div class="pm-model">' +
+      '<button type="button" class="pm-model-btn" id="' + prefix + 'ModelBtn"' +
+      ' title="' + _pmEsc(_pmT('paper.mediaModelTitle', 'Model used for generation')) + '"' +
+      ' onclick="_pmToggleModelDropdown(event,\'' + panel + '\')">' +
+      _pmModelIcons('chip') +
+      '<span class="pm-model-label" id="' + prefix + 'ModelLabel">' +
+      _pmEsc(cur ? _pmShortName(cur) : _pmT('paper.reportSelectModel', 'Select model')) +
+      '</span>' + _pmModelIcons('chev') + '</button>' +
+      '<div class="paper-report-model-dropdown" id="' + prefix + 'ModelDropdown"></div>' +
+      '</div></div>';
+  };
+}
+
+if (typeof _pmModelInlineHtml !== 'function') {
+  /* The done-card variant: the same dropdown as an inline ghost button in
+   * the actions row, so switching model before Regenerate is one click.
+   * Same element ids as the studio-card field — a panel only ever has ONE
+   * of the two cards in the DOM at a time. */
+  var _pmModelInlineHtml = function (panel, st) {
+    var prefix = panel === 'podcast' ? 'podcast' : 'video';
+    var cur = (st && st.model) || '';
+    return '<div class="pm-model-inline">' +
+      '<button type="button" class="paper-podcast-btn paper-podcast-btn-ghost pm-model-inline-btn"' +
+      ' title="' + _pmEsc(_pmT('paper.mediaModelTitle', 'Model used for generation')) + '"' +
+      ' onclick="_pmToggleModelDropdown(event,\'' + panel + '\')">' +
+      _pmModelIcons('chip') +
+      '<span id="' + prefix + 'ModelLabel">' +
+      _pmEsc(cur ? _pmShortName(cur) : _pmT('paper.reportSelectModel', 'Select model')) +
+      '</span>' + _pmModelIcons('chev') + '</button>' +
+      '<div class="paper-report-model-dropdown" id="' + prefix + 'ModelDropdown"></div>' +
+      '</div>';
+  };
+}
+
+/* Close the dropdown on outside click — one listener per document. */
+if (typeof window !== 'undefined' && !window._pmModelDocCloseBound) {
+  window._pmModelDocCloseBound = true;
+  document.addEventListener('click', function () {
+    ['podcastModelDropdown', 'videoModelDropdown'].forEach(function (id) {
+      var dd = document.getElementById(id);
+      if (dd) dd.classList.remove('open');
+    });
+  });
+}
+
 function _pcT(key, fallback) {
   return (typeof t === 'function') ? t(key) : (fallback || key);
 }
@@ -206,6 +464,7 @@ async function _initPodcastTab(force) {
       '</p></div>';
     return;
   }
+  _pmSeedModel('podcast');
   _podcast.status = 'loading';
   _pcRender();   // skeleton while the lookup round-trips
   try {
@@ -227,6 +486,7 @@ async function _initPodcastTab(force) {
       _podcast.taskId = look.task_id;
       _podcast.cursor = 0;
       _podcast.status = 'generating';
+      if (look.model) _pmAdoptModel('podcast', look.model);
       _pcResetRun();
       /* _pcResetRun means "a run starts NOW" and keeps that single meaning —
        * the re-attach case states its difference explicitly instead of
@@ -245,6 +505,7 @@ async function _initPodcastTab(force) {
     }
     if (look && look.ok && look.found && look.cached) {
       _podcast.data = look;
+      _pmAdoptModel('podcast', look.model || '');
       _podcast.status = look.scriptOnly ? 'script_only' : 'done';
       _pcRender();
       return;
@@ -352,6 +613,7 @@ async function _pcPollOnce() {
     if (resp.done) {
       if (resp.status === 'done') {
         _podcast.data = resp;
+        _pmAdoptModel('podcast', resp.model || '');
         _podcast.status = resp.scriptOnly ? 'script_only' : 'done';
       } else if (resp.status === 'aborted') {
         _podcast.status = 'idle';
@@ -399,6 +661,10 @@ async function _podcastGenerate(force) {
   _podcast.mode = modeSel ? modeSel.value : _podcast.mode;
   _podcast.lang = langSel ? langSel.value : _podcast.lang;
   _podcast.voice = voiceInp ? voiceInp.value.trim() : _podcast.voice;
+  _pmSeedModel('podcast');
+  /* The run just started WILL be made with the current pick — the done
+   * card's badge may say so (the poll's done frame confirms it). */
+  _podcast.artifactModel = _podcast.model || '';
   _podcast.status = 'generating';
   _podcast.progress = { done: 0, total: 0 };
   _pcResetRun();
@@ -408,7 +674,8 @@ async function _podcastGenerate(force) {
     var resp = await Api.paper.podcastStart({
       paper_hash: _podcast.paperHash,
       mode: _podcast.mode, lang: _podcast.lang,
-      voice: _podcast.voice, force: !!force,
+      voice: _podcast.voice, model: _podcast.model || undefined,
+      force: !!force,
     });
     /* Paper switched mid-start — the OLD paper's task must not attach here (pt_3cd6cd48). */
     if (_podcast.paperHash !== genHash) return;
@@ -702,6 +969,7 @@ function _pcRender() {
       '<select id="podcastLangSel" class="pm-sr" tabindex="-1" aria-hidden="true">' +
       '<option value="zh"' + (s.lang === 'zh' ? ' selected' : '') + '>中文</option>' +
       '<option value="en"' + (s.lang === 'en' ? ' selected' : '') + '>English</option></select></div>';
+    h += _pmModelFieldHtml('podcast', s);
     h += '<div class="pm-field"><div class="pm-field-label">' +
       _pcEsc(_pcT('paper.mediaOptVoice', 'Voice')) +
       '<span class="pm-field-opt">' +
@@ -777,6 +1045,11 @@ function _pcRender() {
   h += '<div class="paper-podcast-head">';
   h += '<span class="paper-podcast-title">' + _pcEsc(script.title || '') + '</span>';
   h += '<span class="paper-podcast-badge">' + _pcEsc(s.mode) + ' · ' + _pcEsc(s.lang) + '</span>';
+  if (s.artifactModel) {
+    h += '<span class="paper-podcast-badge" id="podcastModelBadge" title="' +
+      _pcEsc(_pcT('paper.mediaModelTitle', 'Model used for generation')) + '">' +
+      _pcEsc(_pmShortName(s.artifactModel)) + '</span>';
+  }
   if (d.durationSec) {
     var mm = Math.floor(d.durationSec / 60), ss = Math.round(d.durationSec % 60);
     h += '<span class="paper-podcast-badge">' + mm + ':' + (ss < 10 ? '0' : '') + ss +
@@ -813,6 +1086,7 @@ function _pcRender() {
   }
 
   h += '<div class="paper-podcast-actions">';
+  h += _pmModelInlineHtml('podcast', s);
   h += '<button class="paper-podcast-btn paper-podcast-btn-ghost" onclick="_podcastExportScript()">' +
     _pcIconSvg('file') + '<span>' +
     _pcEsc(_pcT('paper.podcastExportScript', 'Export script (md)')) + '</span></button>';

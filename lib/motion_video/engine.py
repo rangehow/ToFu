@@ -182,6 +182,10 @@ _MANIFEST_FIELDS = (
     'alignment', 'narration', 'quality', 'parallel', 'width', 'height',
     'burn_in', 'burn_in_fontsdir', 'topic', 'lang', 'max_scenes', 'paper_hash',
     'scene_author', 'author_rounds', 'author_token_budget',
+    # The user-picked LLM model (paper panels). Persisted so a crash-resume
+    # keeps composing with the SAME model instead of silently falling back
+    # to the dispatcher default mid-film.
+    'model',
     # Product-quality axis. Persisted because the paper panel's post-restart
     # re-attach reads job.json and NOTHING else — without it a degraded film
     # is laundered into a clean success by the next process restart.
@@ -472,6 +476,7 @@ def run_motion_task(task: dict) -> None:
                                        max_rounds=int(task.get('author_rounds') or 4),
                                        token_budget=int(task.get('author_token_budget')
                                                         or 60000),
+                                       model=task.get('model') or None,
                                        abort_event=task.get('abort_event'))
                 html = res['html']
                 if res['mode'] == 'authored':
@@ -787,7 +792,7 @@ def resume_interrupted_jobs() -> int:
             scenes_path=m.get('scenes_path') or '')
         for k in ('burn_in', 'burn_in_fontsdir', 'topic', 'lang',
                   'max_scenes', 'paper_hash', 'kind', 'scene_author',
-                  'author_rounds', 'author_token_budget'):
+                  'author_rounds', 'author_token_budget', 'model'):
             if m.get(k) is not None:
                 task[k] = m[k]
         # Restore the ORIGINAL start so the resumed job's elapsed clock

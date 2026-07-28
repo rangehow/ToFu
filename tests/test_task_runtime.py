@@ -255,6 +255,81 @@ def test_poll_unknown_task():
     _ok('poll() on unknown task returns ok=False, error=not_found')
 
 
+def test_poll_surfaces_model():
+    """A task whose worker named its making-model (paper podcast/video)
+    exposes it in EVERY poll frame — running and terminal — so a live
+    poller can badge the artifact without waiting for a lookup re-attach.
+    A task with no model concept must NOT grow the field (frames stay
+    minimal for every other kind)."""
+    rt = TaskRuntime('test')
+    task = rt.create()
+    task['model'] = 'm-alpha'
+    rt.append_event(task['id'], {'type': 'progress'})
+
+    running = rt.poll(task['id'], cursor=0)
+    assert running.get('model') == 'm-alpha', \
+        f'running frame lost the model: {running!r}'
+
+    rt.finish(task['id'], result={'final_path': '/job/final.mp4'})
+    done = rt.poll(task['id'], cursor=0)
+    assert done['done'] is True
+    assert done.get('model') == 'm-alpha', \
+        f'done frame lost the model: {done!r}'
+
+    # Complement pin: no model → no key at all.
+    plain = rt.create()
+    rt.append_event(plain['id'], {'type': 'progress'})
+    r2 = rt.poll(plain['id'], cursor=0)
+    assert 'model' not in r2, f"model-less task grew a model field: {r2!r}"
+    rt.finish(plain['id'], result='ok')
+    r3 = rt.poll(plain['id'], cursor=0)
+    assert 'model' not in r3, f"model-less done frame grew a model field: {r3!r}"
+    _ok('poll() surfaces task.model (running + done); absent when unnamed')
+
+
+def test_NEUTER_poll_model_line_loadbearing():
+    """Amputate the ``if task.get('model'):`` block from a COPY of
+    lib/agent_core/task_runtime.py, import the copy, and prove the poll
+    frame LOSES the model — the behavior probe above must be wired to the
+    shipped line, not to a stub."""
+    import importlib.util
+
+    real = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), 'lib', 'agent_core', 'task_runtime.py')
+    with open(real, encoding='utf-8') as f:
+        src = f.read()
+    marker = "        if task.get('model'):\n            resp['model'] = task['model']\n"
+    assert marker in src, 'poll model marker not found — test is stale'
+    broken = src.replace(marker, '', 1)
+    assert broken != src
+
+    tmp = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       '_task_runtime_no_model.py')
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(broken)
+    try:
+        spec = importlib.util.spec_from_file_location(
+            '_task_runtime_no_model', tmp)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        rt = mod.TaskRuntime('neuter')
+        task = rt.create()
+        task['model'] = 'm-alpha'
+        rt.finish(task['id'], result='ok')
+        frame = rt.poll(task['id'], cursor=0)
+        assert 'model' not in frame, \
+            'amputating the model line did NOT remove it from the frame'
+        _ok('NEUTER: without the poll model line the frame loses the model')
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+    with open(real, encoding='utf-8') as f:
+        assert f.read() == src, 'shipped file modified!'
+
+
 def test_spawn_outside_event_loop():
     """Spawn falls back to daemon thread when no asyncio loop is running."""
     rt = TaskRuntime('test')
@@ -569,6 +644,8 @@ def main():
         test_poll_after_done,
         test_poll_after_error,
         test_poll_unknown_task,
+        test_poll_surfaces_model,
+        test_NEUTER_poll_model_line_loadbearing,
         test_spawn_outside_event_loop,
         test_spawn_inside_event_loop,
         test_spawn_holds_strong_ref_under_gc,

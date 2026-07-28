@@ -73,6 +73,14 @@ win.t = global.t = (k) => T_MAP[k] || k;
 win.escapeHtml = global.escapeHtml = (s) =>
   String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+// Model-picker stubs: two registered chat models + a toolbar preset, and
+// localStorage so the per-panel persistence path runs for real.
+global.localStorage = win.localStorage;
+win._registeredModels = global._registeredModels = [
+  { model_id: 'm-alpha', provider_id: 'p1', provider_name: 'P1' },
+  { model_id: 'm-beta', provider_id: 'p1', provider_name: 'P1' },
+];
+win.config = global.config = { model: 'm-alpha' };
 
 const apiState = {
   statusResp: { ok: true, tts_available: true },
@@ -85,6 +93,7 @@ const apiState = {
   ]},
   regenCalls: [],
   reportTabCalls: 0,
+  startBodies: [],
 };
 global.Api = win.Api = {
   motion: {
@@ -102,7 +111,7 @@ global.Api = win.Api = {
     sceneFileUrl: (tid, sid) => '/api/v1/motion/videos/' + tid + '/scenes/' + sid + '/file',
   },
   paper: {
-    videoStart: async () => apiState.startResp,
+    videoStart: async (body) => { apiState.startBodies.push(body); return apiState.startResp; },
     videoLookup: async () => apiState.lookupResp,
   },
 };
@@ -145,22 +154,36 @@ async function settle(n) { for (let i = 0; i < n; i++) await new Promise(r => se
   check('idle_card_renders', !!host().querySelector('#videoLangSel')
     && !!host().querySelector('#videoNarrChk') && !!host().querySelector('#videoBurnChk'));
   check('degrade_banner_shown', host().innerHTML.includes('NO_TTS_BANNER_TEXT'));
+  // Model picker (the whole point of the panel fix): the field renders in
+  // the studio card, seeded from the toolbar preset (config.model).
+  check('model_field_renders', !!host().querySelector('#videoModelBtn')
+    && !!host().querySelector('#videoModelDropdown'));
+  const seedLabel = host().querySelector('#videoModelLabel');
+  check('model_seeded_from_preset', !!seedLabel && seedLabel.textContent === 'm-alpha');
 
   // ── Case C: generate → poll → done → player + scene grid + regen ──
   apiState.statusResp = { ok: true, tts_available: true };
+  // Pick a DIFFERENT model than the seed — the start body must carry it.
+  _pmSelectModel('video', 'm-beta');
   apiState.pollQueue = [
     { ok: true, done: false, next_cursor: 2, events: [
       { type: 'phase', phase: 'compose' },
       { type: 'scene_done', scene_id: 'scene-001', ok: true, done: 1, total: 2 }] },
     { ok: true, done: true, status: 'done', next_cursor: 3, events: [],
+      model: 'm-beta',
       result: { final_path: '/job/final.mp4', duration: 6.0, scenes: 2,
                 narrated: true, workdir: '/job' } },
   ];
   await _videoGenerate();
   check('generate_shows_progress', !!host().querySelector('#videoProgressLine'));
+  check('start_body_carries_model', apiState.startBodies.length === 1
+    && apiState.startBodies[0].model === 'm-beta');
   await settle(8);
   const player = host().querySelector('#paperVideoPlayer');
   check('done_renders_player', !!player);
+  const modelBadge = host().querySelector('#videoModelBadge');
+  check('done_model_badge', !!modelBadge && modelBadge.textContent === 'm-beta');
+  check('done_inline_model_picker', !!host().querySelector('#videoModelDropdown'));
   check('player_src', !!player && player.src.includes(
     '/api/v1/motion/videos/motion_x1/file'));
   const dl = host().querySelector('a[download]');
@@ -248,6 +271,40 @@ def test_NEUTER_regen_button_loadbearing():
         assert proc.returncode == 0, f'node crashed: {proc.stderr}\n{out}'
         assert 'FAIL regen_button_present' in out, \
             'amputating the regen button did NOT flip the probe:\n' + out
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+    assert open(VIDEO_JS, encoding='utf-8').read() == src, 'shipped file modified!'
+
+
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
+def test_NEUTER_model_in_start_body_loadbearing():
+    """Amputate ``model: _pvideo.model || undefined,`` from a COPY of the
+    module and prove the start-body probe flips to FAIL — the picked model
+    reaching the request is the whole point of the picker; without this
+    line the UI is a placebo (the backend would silently use the default)."""
+    src = open(VIDEO_JS, encoding='utf-8').read()
+    marker = "      model: _pvideo.model || undefined,\n"
+    assert marker in src, 'model body marker not found — test is stale'
+    broken = src.replace(marker, '', 1)
+    assert broken != src
+
+    tmp = os.path.join(HERE, '_paper_video_no_model.js')
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(broken)
+    try:
+        chk = subprocess.run(['node', '--check', tmp], capture_output=True,
+                             text=True, timeout=30)
+        assert chk.returncode == 0, f'patched JS invalid: {chk.stderr}'
+        proc = _run_harness(tmp)
+        out = proc.stdout.strip()
+        assert proc.returncode == 0, f'node crashed: {proc.stderr}\n{out}'
+        assert 'FAIL start_body_carries_model' in out, \
+            'amputating the model field did NOT flip the probe:\n' + out
     finally:
         try:
             os.remove(tmp)

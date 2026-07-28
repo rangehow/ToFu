@@ -67,6 +67,7 @@ declare var _evRoundNum: any;   // static/js/ui/stream_reducer.js
 declare var _finalizeProjection: any;   // static/js/ui/stream_reducer.js
 declare var _isBootLoadHeld: any;   // static/js/core/cross_tab_sync.js
 declare var _paperResponsiveOnCrossing: any;   // static/js/paper/pdf_responsive.js
+declare var _pmModelDocCloseBound: any;   // static/js/paper/podcast.js
 declare var _resolveContextLimit: any;   // static/js/context-bar.js
 declare var _setOptimizerPanelOpen: any;   // static/js/optimizer.js
 declare var _setTimerPanelOpen: any;   // static/js/timer.js
@@ -225,6 +226,7 @@ interface Window {
   _onReady: any;
   _paperResponsiveOnCrossing: any;
   _patchTranslateLoadingDom: any;
+  _pmModelDocCloseBound: any;
   _prefetchConvCosts: any;
   _prefetchConvFileChanges: any;
   _promptInjectMode: any;

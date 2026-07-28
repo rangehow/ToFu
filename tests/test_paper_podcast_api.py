@@ -294,6 +294,78 @@ def test_lookup(flask_client, podcast_env, phash):
     assert body['found'] is True and body.get('cached') is True
 
 
+def test_cache_identity_includes_model(flask_client, podcast_env, phash):
+    """Cache-key-skew guard: a cached podcast made with model A must NOT be
+    served for a request naming model B (the row is ONE slot per
+    (hash, mode, lang, voice) — a model mismatch regenerates + overwrites).
+    The same model as the row IS a cache hit, and the lookup surfaces the
+    making-model for the panel's badge."""
+    from lib import tts as _tts
+    eff_voice = _tts.default_voice()   # resolved exactly like the route does
+    _insert_report(phash)
+    r = flask_client.post('/api/v1/paper/podcast/start',
+                          json={'paper_hash': phash, 'mode': 'short',
+                                'lang': 'zh', 'model': 'm-alpha'})
+    body = r.get_json()
+    assert body['ok'] and body['task_id']
+    final = _wait_done(flask_client, body['task_id'])
+    assert final['status'] == 'done'
+    assert final.get('model') == 'm-alpha'
+
+    # same key incl. model → cache hit, NO new task
+    r2 = flask_client.post('/api/v1/paper/podcast/start',
+                           json={'paper_hash': phash, 'mode': 'short',
+                                 'lang': 'zh', 'model': 'm-alpha'})
+    body2 = r2.get_json()
+    assert body2.get('cached') is True and 'task_id' not in body2
+    assert body2.get('model') == 'm-alpha'
+
+    # a DIFFERENT model → a NEW task; the old audio is not served as if it
+    # were model-B's work
+    r3 = flask_client.post('/api/v1/paper/podcast/start',
+                           json={'paper_hash': phash, 'mode': 'short',
+                                 'lang': 'zh', 'model': 'm-beta'})
+    body3 = r3.get_json()
+    assert body3.get('ok') and body3.get('task_id') and not body3.get('cached')
+    final3 = _wait_done(flask_client, body3['task_id'])
+    assert final3['status'] == 'done'
+
+    # the one-slot row now belongs to m-beta: m-beta hits, and the lookup
+    # carries the making-model
+    import lib.paper.podcast_engine as PE
+    row = PE.load_cached_podcast(phash, 'short', 'zh', eff_voice)
+    assert row and (row.get('model') or '') == 'm-beta'
+    r4 = flask_client.post('/api/v1/paper/podcast/start',
+                           json={'paper_hash': phash, 'mode': 'short',
+                                 'lang': 'zh', 'model': 'm-beta'})
+    assert r4.get_json().get('cached') is True
+    r5 = flask_client.post('/api/v1/paper/podcast/lookup',
+                           json={'paper_hash': phash, 'mode': 'short',
+                                 'lang': 'zh'})
+    body5 = r5.get_json()
+    assert body5.get('found') and body5.get('cached')
+    assert body5.get('model') == 'm-beta'
+
+
+def test_dedup_index_separates_models():
+    """A request for model B must never JOIN an in-flight task made with
+    model A — the join would silently hand back A's audio."""
+    import uuid
+    from lib.paper.podcast_runtime import (
+        _new_podcast_task,
+        _podcast_index_get,
+        _podcast_index_register,
+    )
+    tid = 'podcast_idx_' + uuid.uuid4().hex[:8]
+    task = _new_podcast_task(tid, 'ph_dedup', 'short', 'zh', 'alloy', 'm-alpha')
+    _podcast_index_register('ph_dedup', 'short', 'zh', 'alloy', 'm-alpha',
+                            task['task_id'])
+    assert _podcast_index_get('ph_dedup', 'short', 'zh', 'alloy',
+                              'm-alpha') == task['task_id']
+    assert _podcast_index_get('ph_dedup', 'short', 'zh', 'alloy',
+                              'm-beta') is None
+
+
 def test_audio_range(flask_client, podcast_env, phash):
     _insert_report(phash)
     r = flask_client.post('/api/v1/paper/podcast/start',

@@ -323,7 +323,7 @@ def slice_abstract_beats(source_text: str, *,
 
 
 def _llm_beats(source_text: str, *, lang: str, max_scenes: int,
-               capacity: int) -> list[dict]:
+               capacity: int, model: str | None = None) -> list[dict]:
     """Rewrite the report into spoken beats + captions via the script stage.
 
     Reuses :func:`lib.motion_video._recipe.script_stage_for_source` so the
@@ -335,7 +335,8 @@ def _llm_beats(source_text: str, *, lang: str, max_scenes: int,
         from lib.motion_video._recipe import script_stage_for_source
         beats = script_stage_for_source(
             source_text, lang=lang, max_scenes=max_scenes,
-            char_budget=_BEAT_CHAR_BUDGET, caption_capacity=capacity)
+            char_budget=_BEAT_CHAR_BUDGET, caption_capacity=capacity,
+            model=model)
     except Exception as e:
         logger.warning('[Paper:Video] LLM beat rewrite failed (%s) — falling '
                        'back to zero-LLM slicing', e)
@@ -349,7 +350,8 @@ def build_abstract_scenes(source_text: str, *,
                           max_scene_s: float = _MAX_SCENE_S,
                           chars_per_second: float = _CHARS_PER_SECOND,
                           lang: str = 'zh',
-                          use_llm: bool = True) -> list[dict]:
+                          use_llm: bool = True,
+                          model: str | None = None) -> list[dict]:
     """Build a budget-satisfying storyboard from a paper report.
 
     Beats are written by the shared script stage when a model is reachable and
@@ -370,7 +372,7 @@ def build_abstract_scenes(source_text: str, *,
     beats: list[dict] = []
     if use_llm:
         beats = _llm_beats(source_text, lang=lang, max_scenes=max_scenes,
-                           capacity=capacity)
+                           capacity=capacity, model=model)
     if not beats:
         beats = slice_abstract_beats(source_text, max_scenes=max_scenes,
                                      capacity=capacity, lang=lang)
@@ -430,6 +432,7 @@ def start_video_abstract(paper_hash: str, *, lang: str = 'zh',
                          burn_in: bool = False, quality: str = 'standard',
                          parallel: int = 2, max_scenes: int = _DEFAULT_MAX_SCENES,
                          scene_author: bool | None = None,
+                         model: str | None = None,
                          force: bool = False) -> dict:
     """Start a motion-engine task rendering this paper's video abstract.
 
@@ -458,8 +461,11 @@ def start_video_abstract(paper_hash: str, *, lang: str = 'zh',
     if not has_report(paper_hash):
         return {'ok': False, 'reason': 'report_required'}
 
+    # The model is part of the dedup identity: joining an in-flight render
+    # made with a DIFFERENT model would silently serve the wrong film — the
+    # cache-key-skew family (same class as the podcast cache row).
     dedup_key = ('paper', paper_hash, lang, voice, bool(narration),
-                 bool(burn_in), quality, scene_author)
+                 bool(burn_in), quality, scene_author, model or '')
     if not force:
         existing = _motion_index_get(dedup_key)
         if existing:
@@ -471,7 +477,8 @@ def start_video_abstract(paper_hash: str, *, lang: str = 'zh',
     text, kind = _load_source_text(paper_hash, lang)
     if not text.strip():
         return {'ok': False, 'reason': 'empty_source'}
-    scenes = build_abstract_scenes(text, max_scenes=max_scenes, lang=lang)
+    scenes = build_abstract_scenes(text, max_scenes=max_scenes, lang=lang,
+                                   model=model)
     if not scenes:
         return {'ok': False, 'reason': 'empty_source'}
 
@@ -502,6 +509,10 @@ def start_video_abstract(paper_hash: str, *, lang: str = 'zh',
     task['burn_in'] = burn_in
     task['burn_in_fontsdir'] = ''
     task['paper_hash'] = paper_hash
+    # The composing model, threaded to the scene author (engine compose
+    # stage) and persisted in the manifest so a crash-resume does not
+    # silently swap the user's pick for the dispatcher default.
+    task['model'] = model or ''
     # Written ONLY when the caller stated a preference. Leaving the key absent
     # is what lets scene_author_enabled() own the default — hard-coding True
     # here would re-create the per-caller copy that made this panel ship

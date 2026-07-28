@@ -515,6 +515,107 @@ def test_paper_video_start_flow(flask_client, monkeypatch, tmp_path):
     assert r.status_code == 400
 
 
+def test_paper_video_model_threaded_and_deduped(flask_client, monkeypatch,
+                                                tmp_path):
+    """The video start route's `model` must reach the beat-writer AND the
+    task, and it rides the dedup key: same model joins the in-flight task,
+    a different model starts a NEW one (cache-key-skew family)."""
+    import uuid
+    from lib.paper import video_abstract as VA
+
+    phash = uuid.uuid4().hex[:16]
+    _insert_report(phash)
+    seen = {}
+
+    def fake_build(text, **kw):
+        seen['model'] = kw.get('model')
+        return [{'id': 'scene-001', 'start': 0.0, 'end': 3.0,
+                 'text': '一。', 'on_screen': '要点', 'visual': ''}]
+
+    monkeypatch.setattr(VA, 'build_abstract_scenes', fake_build)
+    monkeypatch.setattr('lib.motion_video.engine.run_motion_task',
+                        lambda task: None)
+    monkeypatch.setattr('lib.motion_video._env.motion_root',
+                        lambda: str(tmp_path))
+
+    r1 = flask_client.post('/api/v1/paper/video/start',
+                           json={'paper_hash': phash, 'narration': False,
+                                 'model': 'm-alpha'})
+    b1 = r1.get_json()
+    assert b1['ok'] and b1['task_id'], b1
+    assert seen['model'] == 'm-alpha'
+    from lib.motion_video.runtime import _motion_runtime
+    t1 = _motion_runtime.get(b1['task_id'])
+    assert t1 and (t1.get('model') or '') == 'm-alpha'
+
+    # same key incl. model → dedup join
+    r2 = flask_client.post('/api/v1/paper/video/start',
+                           json={'paper_hash': phash, 'narration': False,
+                                 'model': 'm-alpha'})
+    b2 = r2.get_json()
+    assert b2.get('deduped') is True and b2['task_id'] == b1['task_id']
+
+    # a DIFFERENT model must NOT join — the user asked for a new film
+    r3 = flask_client.post('/api/v1/paper/video/start',
+                           json={'paper_hash': phash, 'narration': False,
+                                 'model': 'm-beta'})
+    b3 = r3.get_json()
+    assert b3['ok'] and b3['task_id'] != b1['task_id']
+    assert not b3.get('deduped')
+
+    # and the lookup surfaces the making-model for the panel's badge
+    r4 = flask_client.get(f'/api/v1/paper/video/lookup?paper_hash={phash}')
+    b4 = r4.get_json()
+    assert b4['found'] and (b4.get('model') or '') in ('m-alpha', 'm-beta')
+
+
+def test_job_manifest_carries_model(tmp_path):
+    """model is a manifest field: a crash-resume must not silently swap the
+    user's pick for the dispatcher default."""
+    from lib.motion_video.engine import write_job_manifest
+    from lib.production.jobs import read_manifest
+    from lib.motion_video.runtime import _motion_task_id, _new_motion_task
+
+    task = _new_motion_task(_motion_task_id(), srt_path='',
+                            workdir=str(tmp_path), voice='', speed=None,
+                            alignment='loose', narration=False,
+                            quality='draft', parallel=1, width=1080,
+                            height=1440)
+    task['model'] = 'm-alpha'
+    write_job_manifest(task, kind='paper', state='running')
+    m = read_manifest(str(tmp_path))
+    assert m and (m.get('model') or '') == 'm-alpha'
+
+
+def test_engine_compose_passes_task_model_to_author(monkeypatch, tmp_path):
+    """The compose stage must hand the task's model to the scene author's
+    dispatch — otherwise only the beats honor the user's pick and the
+    per-scene compositions silently come from the default model."""
+    from lib.motion_video.engine import run_motion_task
+    from lib.motion_video._template import render_scene_html
+    _fake_media(monkeypatch)
+    monkeypatch.setattr('lib.motion_video.engine._scene_gate_findings',
+                        lambda *a, **k: [])
+    captured = {}
+
+    def fake_author(sc, scene_dir, **kw):
+        captured['model'] = kw.get('model')
+        html = render_scene_html(sc, width=1080, height=1440, duration=3.0,
+                                 scene_index=1, total_scenes=1)
+        return {'ok': True, 'html': html, 'mode': 'authored',
+                'rounds': 1, 'tokens': 10, 'detail': ''}
+
+    monkeypatch.setattr('lib.motion_video._scene_author.author_scene',
+                        fake_author)
+    scenes = [{'id': 'scene-001', 'start': 0.0, 'end': 3.0, 'text': '一。'}]
+    task = _scenes_only_task(tmp_path, scenes)
+    task['scene_author'] = True
+    task['model'] = 'm-alpha'
+    run_motion_task(task)
+    assert task['status'] == 'done', task.get('error')
+    assert captured.get('model') == 'm-alpha'
+
+
 def test_paper_video_lookup(flask_client):
     import uuid
     from lib.motion_video.runtime import _new_motion_task, _motion_runtime

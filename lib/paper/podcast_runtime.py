@@ -6,8 +6,10 @@ be hand-rolled here now live in the substrate (P6, driven by the P7
 measurement in docs/PRODUCTION_PIPELINE_DESIGN.md §9).
 
 Background podcast generation (report → script → TTS → audio) with a
-dedup-by-(paper_hash, mode, lang, voice) index so a second request for the
-same podcast joins the in-flight task instead of regenerating. Events:
+dedup-by-(paper_hash, mode, lang, voice, model) index so a second request
+for the same podcast joins the in-flight task instead of regenerating —
+and a request for a DIFFERENT model never silently joins a task the user
+didn't ask for (cache-key-skew family). Events:
 status / delta / done / error / aborted, plus the podcast-specific
 ``script`` / ``segment_done`` / ``audio_ready`` events the engine emits.
 """
@@ -29,17 +31,18 @@ _production = ProductionRuntime(
 _podcast_runtime = _production.runtime
 _podcast_tasks = _production.tasks
 _podcast_tasks_lock = _production.lock
-#: (paper_hash, mode, lang, voice) -> task_id
+#: (paper_hash, mode, lang, voice, model) -> task_id
 _podcast_dedup_index = _production.dedup_index
 
 
-def _podcast_index_get(paper_hash, mode, lang, voice):
+def _podcast_index_get(paper_hash, mode, lang, voice, model=''):
     """Return a live task_id for the dedup key, pruning stale entries."""
-    return _production.index_get((paper_hash, mode, lang, voice))
+    return _production.index_get((paper_hash, mode, lang, voice, model or ''))
 
 
-def _podcast_index_register(paper_hash, mode, lang, voice, task_id):
-    _production.index_register((paper_hash, mode, lang, voice), task_id)
+def _podcast_index_register(paper_hash, mode, lang, voice, model, task_id):
+    _production.index_register((paper_hash, mode, lang, voice, model or ''),
+                               task_id)
 
 
 def _new_podcast_task(task_id, paper_hash, mode, lang, voice, model):

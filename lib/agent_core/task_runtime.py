@@ -463,6 +463,13 @@ class TaskRuntime:
             'updatedAt': _epoch_ms(task.get('updated_at')
                                    or task.get('created_at')),
         }
+        # The making-model is part of the artifact's identity (paper podcast/
+        # video panels badge it; the backend cache/dedup keys ride it) — a
+        # live poll must be able to adopt it, not just a lookup re-attach.
+        # Emitted only when the worker named one, so kinds that have no
+        # model concept keep their frames unchanged.
+        if task.get('model'):
+            resp['model'] = task['model']
         if terminal:
             resp['finishedAt'] = _epoch_ms(task.get('finished_at'))
             # Product-quality axis, emitted only when the kind assessed it.

@@ -327,13 +327,18 @@ def _build_source_beat_prompt(source_text: str, *, lang: str, max_scenes: int,
 def script_stage_for_source(source_text: str, *, lang: str = 'zh',
                             max_scenes: int = _DEFAULT_MAX_SCENES,
                             char_budget: int = 58,
-                            caption_capacity: int = 88) -> list[dict]:
+                            caption_capacity: int = 88,
+                            model: str | None = None) -> list[dict]:
     """Rewrite existing prose into bounded beats. Returns beat dicts.
 
     The single implementation of "prose → spoken beats + on-screen captions +
     art direction" (charter reuse rule): the paper video-abstract path calls
     THIS instead of maintaining its own splitter. Each beat is
     ``{'text', 'on_screen', 'visual'}``.
+
+    ``model`` is the caller's preferred dispatch model (None = dispatcher
+    default) — the paper panels let the user pick it, so it must reach the
+    dispatch rather than stop at this seam.
 
     Raises on an unusable model reply so the caller can fall back to its
     deterministic path; never returns malformed beats.
@@ -343,6 +348,7 @@ def script_stage_for_source(source_text: str, *, lang: str = 'zh',
         char_budget=char_budget, caption_capacity=caption_capacity)
     content, _usage = _llm_chat([{'role': 'user', 'content': prompt}],
                                 max_tokens=4096, temperature=0.4,
+                                prefer_model=model,
                                 log_prefix='[Recipe:source-beats]')
     text = (content or '').strip()
     m = _JSON_BLOCK_RE.search(text)

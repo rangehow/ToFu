@@ -78,6 +78,13 @@ win.escapeHtml = global.escapeHtml = (s) =>
   String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 win.debugLog = global.debugLog = () => {};
+// Model-picker stubs: two registered chat models + a toolbar preset. The
+// picker's fallbacks (isChatModel/_modelShortName undefined) stay exercised.
+win._registeredModels = global._registeredModels = [
+  { model_id: 'm-alpha', provider_id: 'p1', provider_name: 'P1' },
+  { model_id: 'm-beta', provider_id: 'p1', provider_name: 'P1' },
+];
+win.config = global.config = { model: 'm-alpha' };
 
 const SCRIPT = { title: '测试播客', segments: [
   { id: 0, section: 'cold_open', speaker: 'host', text: '开场:成绩 86.3。', est_seconds: 60 },
@@ -86,7 +93,7 @@ const SCRIPT = { title: '测试播客', segments: [
 ]};
 const DONE_BODY = { ok: true, done: true, status: 'done', cursor: 3, events: [],
   script: SCRIPT, meta: { container: 'mp3' }, audioUrl: '/api/v1/paper/podcast/audio/h1/short/zh/alloy',
-  durationSec: 180, scriptOnly: false };
+  durationSec: 180, scriptOnly: false, model: 'm-beta' };
 const SCRIPT_ONLY_BODY = Object.assign({}, DONE_BODY, {
   audioUrl: '', scriptOnly: true, meta: { degrade_reason: 'no_tts_slot' } });
 
@@ -95,13 +102,14 @@ const apiState = {
   statusResp: { ok: true, tts_available: true, default_voice: 'alloy' },
   lookupResp: { ok: true, found: false, report_available: true },
   startResp: { ok: true, task_id: 'podcast_x1' },
+  startBodies: [],
   pollQueue: [],
   reportTabCalls: 0,
 };
 global.Api = win.Api = { paper: {
   podcastStatus: async () => apiState.statusResp,
   podcastLookup: async () => apiState.lookupResp,
-  podcastStart: async () => apiState.startResp,
+  podcastStart: async (body) => { apiState.startBodies.push(body); return apiState.startResp; },
   podcastPoll: async () => apiState.pollQueue.length
     ? apiState.pollQueue.shift()
     : { ok: true, done: false, cursor: 0, events: [], progress: { done: 0, total: 0 } },
@@ -167,9 +175,17 @@ async function settle(n) { for (let i = 0; i < n; i++) await new Promise(r => se
   await _initPodcastTab();
   check('idle_card_renders', !!host().querySelector('#podcastModeSel'));
   check('degrade_banner_shown', host().innerHTML.includes('NO_TTS_BANNER_TEXT'));
+  // Model picker (the whole point of the panel fix): the field renders in
+  // the studio card, seeded from the toolbar preset (config.model).
+  check('model_field_renders', !!host().querySelector('#podcastModelBtn')
+    && !!host().querySelector('#podcastModelDropdown'));
+  const seedLabel = host().querySelector('#podcastModelLabel');
+  check('model_seeded_from_preset', !!seedLabel && seedLabel.textContent === 'm-alpha');
 
   // ── Case C: generate → poll → done → player + transcript + seek ──
   apiState.statusResp = { ok: true, tts_available: true, default_voice: 'alloy' };
+  // Pick a DIFFERENT model than the seed — the start body must carry it.
+  _pmSelectModel('podcast', 'm-beta');
   apiState.pollQueue = [
     { ok: true, done: false, cursor: 2, events: [{ type: 'segment_done', done: 1, total: 3 }],
       progress: { done: 1, total: 3 } },
@@ -177,9 +193,15 @@ async function settle(n) { for (let i = 0; i < n; i++) await new Promise(r => se
   ];
   await _podcastGenerate();
   check('generate_shows_progress', host().innerHTML.includes('WRITING_SCRIPT'));
+  check('start_body_carries_model', apiState.startBodies.length === 1
+    && apiState.startBodies[0].model === 'm-beta');
+  check('model_pick_persisted', win.localStorage.getItem('paperPodcastModel') === 'm-beta');
   await settle(6);
   const progLine = host().innerHTML;
   check('done_renders_player', !!host().querySelector('#podcastAudio'));
+  const modelBadge = host().querySelector('#podcastModelBadge');
+  check('done_model_badge', !!modelBadge && modelBadge.textContent === 'm-beta');
+  check('done_inline_model_picker', !!host().querySelector('#podcastModelDropdown'));
   check('audio_src', host().querySelector('#podcastAudio').src.includes(
     '/api/v1/paper/podcast/audio/h1/short/zh/alloy'));
   const dl = host().querySelector('a[download]');
@@ -338,6 +360,40 @@ def test_NEUTER_lookup_gate_loadbearing():
         assert proc.returncode == 0, f'node crashed: {proc.stderr}\n{out}'
         assert 'FAIL lookup_failed_state' in out, \
             'amputating the ok-gate did NOT flip the probe — gate non-load-bearing:\n' + out
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+    assert open(PODCAST_JS, encoding='utf-8').read() == src, 'shipped file modified!'
+
+
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
+def test_NEUTER_model_in_start_body_loadbearing():
+    """Amputate ``model: _podcast.model || undefined,`` from a COPY of the
+    module and prove the start-body probe flips to FAIL — the picked model
+    reaching the request is the whole point of the picker; without this
+    line the UI is a placebo (the backend would silently use the default)."""
+    src = open(PODCAST_JS, encoding='utf-8').read()
+    marker = "      voice: _podcast.voice, model: _podcast.model || undefined,\n"
+    assert marker in src, 'model body marker not found — test is stale'
+    broken = src.replace(marker, '      voice: _podcast.voice,\n', 1)
+    assert broken != src
+
+    tmp = os.path.join(HERE, '_paper_podcast_no_model.js')
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(broken)
+    try:
+        chk = subprocess.run(['node', '--check', tmp], capture_output=True,
+                             text=True, timeout=30)
+        assert chk.returncode == 0, f'patched JS invalid: {chk.stderr}'
+        proc = _run_harness(tmp)
+        out = proc.stdout.strip()
+        assert proc.returncode == 0, f'node crashed: {proc.stderr}\n{out}'
+        assert 'FAIL start_body_carries_model' in out, \
+            'amputating the model field did NOT flip the probe:\n' + out
     finally:
         try:
             os.remove(tmp)

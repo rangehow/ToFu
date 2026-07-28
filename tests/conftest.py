@@ -1249,6 +1249,163 @@ def _conv_global_ready(pg):
         return False
 
 
+#: Console-error substrings that are KNOWN, app-authored degradation notices
+#: rather than defects. Kept deliberately SHORT and specific — this list is the
+#: one place a real regression could hide, so every entry needs a reason.
+#:
+#: Measured on a healthy app (2026-07-28, live server + real Chromium): boot
+#: produced 4 console errors, ALL of them `_trySSE` premature-close notices
+#: from reconnecting to pre-existing background tasks. They are the frontend
+#: correctly REPORTING a degraded transport and falling back to polling — a
+#: working recovery path, not a broken page.
+_BENIGN_CONSOLE_ERRORS = (
+    'SSE PREMATURE CLOSE',        # transport degraded → poll fallback engaged
+    'falling back to poll',       # the same path's follow-up line
+)
+
+
+def _attach_js_error_capture(pg):
+    """Record uncaught JS exceptions + unexpected console errors on ``pg``.
+
+    WHY THIS EXISTS
+    ---------------
+    Measured 2026-07-28: **no test in this repo listened to the browser
+    console**. `grep -rn "on('pageerror'" tests/` returned zero. So a page
+    could throw `TypeError: x is not a function` on every boot and the whole
+    visual ring would still pass, because assertions only ever looked at the
+    DOM nodes each test happened to name. An uncaught exception aborts the rest
+    of that script — later handlers silently never bind — which is exactly the
+    "click does nothing" bug class this project keeps rediscovering by hand.
+
+    WHY IT CLASSIFIES INSTEAD OF COUNTING
+    -------------------------------------
+    A strict "zero console errors" gate measured 4 errors on a HEALTHY app, so
+    it would be red on day one and promptly deleted. Instead:
+
+      * ``pageerror``   → ALWAYS hard. An uncaught exception is never fine.
+      * ``console.error`` → hard UNLESS it matches :data:`_BENIGN_CONSOLE_ERRORS`.
+      * ``requestfailed`` → hard unless ``ERR_ABORTED``, which is the browser
+        cancelling an in-flight preload/navigation, not a missing asset.
+        (Verified: the one ERR_ABORTED seen at boot is `oneko-surprised.png`,
+        and that file EXISTS on disk — treating it as a 404 would be a false
+        accusation of the kind the charter warns about.)
+
+    Findings are attached to the page as ``pg._tofu_js_errors``; the
+    ``assert_no_js_errors`` fixture is what turns them into a failure, so
+    capture stays cheap and always-on while enforcement is opt-in per test.
+    """
+    hard = []
+    pg._tofu_js_errors = hard
+
+    def _on_pageerror(exc):
+        hard.append(f'uncaught exception: {str(exc)[:300]}')
+
+    def _on_console(msg):
+        if msg.type != 'error':
+            return
+        text = msg.text or ''
+        if any(b in text for b in _BENIGN_CONSOLE_ERRORS):
+            return
+        hard.append(f'console.error: {text[:300]}')
+
+    def _on_requestfailed(req):
+        failure = req.failure or ''
+        if 'ERR_ABORTED' in failure:
+            return
+        hard.append(f'request failed: {req.url[:200]} ({failure})')
+
+    try:
+        pg.on('pageerror', _on_pageerror)
+        pg.on('console', _on_console)
+        pg.on('requestfailed', _on_requestfailed)
+    except Exception as e:  # pragma: no cover - defensive
+        _conftest_logger.debug('js error capture not attached: %s', e)
+
+
+def _dismiss_onboarding_modals(pg):
+    """Close the first-run settings modal so it can't swallow clicks.
+
+    NOT a test hack — it reproduces what a real user does. `_maybeAutoOpenSettings`
+    (static/js/main/main_toolbar_ui.js) deliberately auto-opens Settings when the
+    server has **zero API keys**, which is always true of the ephemeral test
+    server. The modal is a full-viewport `.modal-overlay`, so every subsequent
+    `click()` lands on the overlay instead of the target and times out after 30s.
+
+    Measured 2026-07-28: this single seam accounted for **12 of the 12** visual
+    failures across test_e2e_smoke.py and test_visual_e2e.py. Those had been
+    invisible because the whole ring skipped on "chromium unavailable" until
+    ff0a94f3 made the browser work.
+
+    Deliberately does NOT use ``click(force=True)`` at the call sites: that
+    would paper over the interception, leave the modal open, and let the next
+    obscured element repeat the failure somewhere less obvious.
+
+    WHY IT POLLS INSTEAD OF CLOSING ONCE (measured, after my first attempt
+    failed): the open is not synchronous with load. The chain is
+    ``_loadServerConfigAndPopulate`` (async fetch of the server config)
+    ``→ _maybeAutoOpenSettings → setTimeout(..., 500)``. A single close right
+    after ``domcontentloaded`` therefore runs BEFORE the timer fires and the
+    modal opens again a moment later — which is exactly what happened: the
+    first version of this helper changed nothing and the same 12 tests kept
+    failing with the identical interception message. So we wait for the
+    overlay to be reliably ABSENT rather than closing once and hoping.
+    """
+    import time
+    deadline = time.monotonic() + 12.0
+    closed_any = False
+    try:
+        while time.monotonic() < deadline:
+            has_overlay = pg.evaluate(
+                "() => !!document.querySelector('.modal-overlay.open')")
+            if has_overlay:
+                pg.evaluate(
+                    "() => { if (typeof closeSettings === 'function') closeSettings();"
+                    "  document.querySelectorAll('.modal-overlay.open')"
+                    "    .forEach(el => el.classList.remove('open')); }")
+                closed_any = True
+                pg.wait_for_timeout(120)
+                continue
+            # Absent right now — but the 500ms auto-open timer may still be
+            # pending. Settle past it before declaring the page usable.
+            pg.wait_for_timeout(700)
+            if not pg.evaluate(
+                    "() => !!document.querySelector('.modal-overlay.open')"):
+                if closed_any:
+                    _conftest_logger.debug(
+                        'onboarding modal dismissed (auto-open on a keyless '
+                        'test server is expected product behaviour)')
+                return
+        _conftest_logger.warning(
+            'onboarding overlay still reopening after 12s — clicks will be '
+            'intercepted; check _maybeAutoOpenSettings')
+    except Exception as e:
+        _conftest_logger.warning(
+            'onboarding modal dismiss failed (%s) — clicks may be intercepted', e)
+
+
+@pytest.fixture()
+def assert_no_js_errors(page):
+    """Fail the test if the page raised uncaught JS errors (opt-in).
+
+    Request it alongside ``page`` to bind the browser's own error channel into
+    the assertion set::
+
+        def test_something(page, assert_no_js_errors):
+            ...
+
+    Enforcement is a separate fixture from capture so that adopting it is a
+    per-test decision: a test that legitimately drives an error path can keep
+    using ``page`` alone instead of being forced to widen the benign list,
+    which would weaken the signal for everyone else.
+    """
+    yield
+    errors = getattr(page, '_tofu_js_errors', [])
+    assert not errors, (
+        'the page reported %d JavaScript error(s) — an uncaught exception '
+        'aborts the rest of that script, so later handlers silently never '
+        'bind:\n  %s' % (len(errors), '\n  '.join(errors[:10])))
+
+
 @pytest.fixture()
 def page(browser, live_server):
     """A fresh page navigated to the live app, with automatic cleanup of any
@@ -1257,11 +1414,14 @@ def page(browser, live_server):
     """
     ctx = browser.new_context()
     pg = ctx.new_page()
+    _attach_js_error_capture(pg)
     pg.goto(live_server, wait_until='domcontentloaded')
     try:
         pg.wait_for_function("typeof conversations !== 'undefined'", timeout=10000)
     except Exception as e:
         _conftest_logger.debug('page: conversations global not ready: %s', e)
+
+    _dismiss_onboarding_modals(pg)
 
     ids_before = _conv_ids_in_page(pg)
     # Did we get a TRUSTWORTHY baseline? ``_conv_ids_in_page`` returns an empty

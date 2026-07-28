@@ -35,6 +35,7 @@ declare var ConvView: any;   // static/js/conv_view.js
 declare var CookieCaptureConsent: any;   // static/js/cookie_capture_consent.js
 declare var Icon: any;   // static/js/core/icons.js
 declare var IconDot: any;   // static/js/core/icons.js
+declare var MODEL_HEALTH_STALE_AFTER_S: any;   // static/js/core/model_health.js
 declare var ProjectBrain: any;   // static/js/project-brain.js
 declare var ProjectBrainAttention: any;   // static/js/project-brain-attention.js
 declare var ProjectBrainPeers: any;   // static/js/project-brain-peers.js
@@ -90,11 +91,18 @@ declare var closeProjectBrain: any;   // static/js/project-brain.js
 declare var contextUsageSummary: any;   // static/js/context-bar.js
 declare var emptyStreamState: any;   // static/js/ui/stream_reducer.js
 declare var flashGaugeForArchive: any;   // static/js/context-bar.js
+declare var foldProbeHealth: any;   // static/js/core/model_health.js
+declare var foldRuntimeHealth: any;   // static/js/core/model_health.js
 declare var getChatExcludedCaps: any;   // static/js/core/model_caps.js
 declare var initNetLatency: any;   // static/js/net-latency.js
 declare var initVoiceInput: any;   // static/js/voice.js
 declare var isChatModel: any;   // static/js/core/model_caps.js
 declare var locateRound: any;   // static/js/ui/stream_reducer.js
+declare var modelGroupBrandNames: any;   // static/js/core/model_group.js
+declare var modelGroupKey: any;   // static/js/core/model_group.js
+declare var modelGroupLabel: any;   // static/js/core/model_group.js
+declare var modelHealthLevelClass: any;   // static/js/core/model_health.js
+declare var modelHealthUsable: any;   // static/js/core/model_health.js
 declare var openCompactionViewer: any;   // static/js/compaction-viewer.js
 declare var openMobileFlowPicker: any;   // static/js/mobile_panels.js
 declare var openMobileOptimizer: any;   // static/js/mobile_panels.js
@@ -151,6 +159,7 @@ interface Window {
   CookieCaptureConsent: any;
   Icon: any;
   IconDot: any;
+  MODEL_HEALTH_STALE_AFTER_S: any;
   ProjectBrain: any;
   ProjectBrainAttention: any;
   ProjectBrainI18n: any;
@@ -309,12 +318,17 @@ interface Window {
   detectLogNoise: any;
   dismissToolsetBanner: any;
   displayContent: any;
+  distillFallbackDetail: any;
   emitMessageChanged: any;
   errorEnvelopeKind: any;
   errorEnvelopeMessage: any;
+  fallbackCauseParts: any;
+  fallbackKindLabel: any;
   finishLabelForSettlement: any;
   flashGaugeForArchive: any;
   flushIdentityGateDegraded: any;
+  foldProbeHealth: any;
+  foldRuntimeHealth: any;
   formatFileSize: any;
   getChatExcludedCaps: any;
   hideLogCleanBanner: any;
@@ -335,6 +349,11 @@ interface Window {
   markConvPendingSync: any;
   markIdentityGateReported: any;
   mobileMediaQuery: any;
+  modelGroupBrandNames: any;
+  modelGroupKey: any;
+  modelGroupLabel: any;
+  modelHealthLevelClass: any;
+  modelHealthUsable: any;
   needsTranslation: any;
   normalizeErrorEnvelope: any;
   onProjectAttached: any;
@@ -372,6 +391,7 @@ interface Window {
   relayAdminTopup: any;
   relayAdminViewPayments: any;
   renderErrorEnvelope: any;
+  renderModelFallbackBannerHtml: any;
   renderTranslateIndicator: any;
   renderTurnCtxNote: any;
   replayPendingBusyState: any;

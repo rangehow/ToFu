@@ -97,6 +97,11 @@ global.fetch = async () => ({
 global.apiUrl = (p) => p;
 
 eval(fs.readFileSync(process.argv[2], 'utf8'));  // core/conversations.js
+// Extracted leaves (pt_3879f00e sub-part 2): _serverConvCount +
+// mergeServerConvShells (slice 7) live in core/conv_merge_shells.js;
+// _applySettingsToConv (slice 5) in conv_apply_settings.js. Both are
+// referenced by loadConversationsFromServer at call time via bundle scope.
+for (const extra of process.argv.slice(3)) eval(fs.readFileSync(extra, 'utf8'));
 
 const out = [];
 function check(name, cond) { out.push((cond ? 'PASS ' : 'FAIL ') + name); }
@@ -168,7 +173,13 @@ def _run(js_path: str):
     try:
         with os.fdopen(fd, 'w') as f:
             f.write(_HARNESS)
-        return subprocess.run(['node', harness, js_path],
+        # Extracted leaves (pt_3879f00e sub-part 2 slices 5 + 7) fed as
+        # extra argv so the harness eval loop finds them AT bundle-scope.
+        extra_js = [
+            os.path.join(JS_DIR, 'core', 'conv_merge_shells.js'),
+            os.path.join(JS_DIR, 'core', 'conv_apply_settings.js'),
+        ]
+        return subprocess.run(['node', harness, js_path, *extra_js],
                               capture_output=True, text=True, timeout=60)
     finally:
         try:

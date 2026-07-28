@@ -235,6 +235,7 @@ def _run(js_path: str, hydratable: bool = True, p2fail: bool = False,
         pending_sync_path or os.path.join(JS_DIR, 'core', 'pending_sync.js'),
         os.path.join(JS_DIR, 'core', 'conv_apply_settings.js'),
         os.path.join(JS_DIR, 'core', 'conv_persist_helpers.js'),
+        os.path.join(JS_DIR, 'core', 'conv_merge_shells.js'),
         os.path.join(JS_DIR, 'core', 'conv_hydrate_cache.js'),
     ]
     try:

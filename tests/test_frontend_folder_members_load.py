@@ -113,10 +113,10 @@ global.Api = {
   },
 };
 
-// Load the REAL merge helper from core/conversations.js. That file is large and
-// references many boot globals at load time, so instead of eval'ing the whole
-// module we surgically extract just the mergeServerConvShells function body —
-// it's self-contained (uses conversations, _serverConvCount, _applySettingsToConv).
+// Load the REAL merge helper — post slice-7 it lives in the leaf
+// core/conv_merge_shells.js (`_serverConvCount` + `mergeServerConvShells`
+// extracted contiguously from conversations.js). Surgical extract keeps the
+// harness independent of the rest of the leaf's future companions.
 const convSrc = fs.readFileSync(process.argv[2], 'utf8');
 // _serverConvCount + mergeServerConvShells are contiguous; grab from the first
 // to the end of the second.
@@ -205,7 +205,7 @@ def _run(conv_js: str, folders_js: str):
 
 @pytest.mark.skipif(not _node_available(), reason='node not installed')
 def test_folder_members_load_and_merge():
-    conv_js = os.path.join(JS_DIR, 'core', 'conversations.js')
+    conv_js = os.path.join(JS_DIR, 'core', 'conv_merge_shells.js')
     folders_js = os.path.join(JS_DIR, 'core', 'folders.js')
     proc = _run(conv_js, folders_js)
     output = proc.stdout.strip()
@@ -227,7 +227,7 @@ def test_NC_without_member_fetch_members_stay_invisible(tmp_path):
     """NEUTER: strip the loadFolderMembers fetch call from setActiveFolderId in a
     COPY of folders.js and prove the folder's older members are then NEVER
     merged — i.e. the fetch is load-bearing and the test discriminates it."""
-    conv_js = os.path.join(JS_DIR, 'core', 'conversations.js')
+    conv_js = os.path.join(JS_DIR, 'core', 'conv_merge_shells.js')
     folders_js = os.path.join(JS_DIR, 'core', 'folders.js')
     with open(folders_js, encoding='utf-8') as f:
         src = f.read()

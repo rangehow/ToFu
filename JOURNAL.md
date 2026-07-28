@@ -1,6 +1,21 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-28 — 更正票 `pt_a34a9277` 收口:**把决策从票搬进代码的过程中,我自己写的那条注释被实测证伪**(commit `815b72a`;新守卫 1 条,NEUTER 咬;`test_theme_contrast` **34/34**,相邻环 **55/55**,干净 committed worktree 复验 **55/55**)
+
+- **本轮最值钱的不是收口,而是「写注释」这个动作本身抓出了一个错误判断。** 我为自 tint 徽章(`.sr-type-*`,前景与背景同一个 token)写下:「提高 15% tint 在**这里**是有效旋钮,不像不同 token 的 chip 那样越 tint 越糟」。落码前按 charter「注释里的数字必须有可执行断言背书」去实测,结果**两种形状的曲线完全同向**:light `--type-stock` 5%=5.22 · 15%=4.55 · 25%=3.89 · 40%=3.08 · 60%=2.17,单调**下降**;不同 token 的 chip 5.24→2.19,形状一致。**更多 tint 永远把底色拉向文字,没有例外。**
+  - **我的诊断脚本第一版打印的是 `-> rises with tint. Claim holds.`** —— 标签是我按预期硬写的散文,数字却在同一屏上反着走。**如果只读标签不读数字,这条错误结论会以「已实测」的身份进注释。** 与 charter 记的「措辞精确的假归因」同族,这次载体是我自己的验证输出。
+  - **后果不只是措辞:** `pt_61b79f43` 与本票**两张票都写过「tint 太淡,真正的旋钮是 tint 百分比」**。按那个方向修会让两种 chip **同时更糟**。唯一有效的旋钮是**该 token 自身的明度,分主题给值** —— 这正是 `0909bfd` 实际做的事,但票面把理由记反了。
+  - **落点:** 新增 `test_raising_a_tint_never_improves_contrast`,断言**单调下降**而非任何具体比值 —— 重新调色板永远不会让它假红,只有数学真的反转才会。NEUTER(把 `reverse=True` 去掉)精确红。
+
+- **决策从票搬进代码(charter「票是过程载体,会关闭」的执行项)。** 自 tint 徽章的全部约束此前只活在 board 票里:为什么它们是全库唯一需要分主题的内容色、为什么 1.35:1 出现在这里、哪个旋钮有效。票一关,下一个读者只看到三行 `color-mix(... 15%)` 而无从判断 15% 能不能动。现已连同实测数列写进 `trading.css` 使用点,并指名两条钉住它的守卫(含补集)。
+
+- **★ 顺带纠正我自己在票里留下的一条错误线索(已单独实测证伪,不是复述票面):** 我曾报「`.sr-type-*` 用硬编码 `#ffb74d`,`test_no_literals_outside_root` 该抓没抓到,疑似扫描面残缺家族」。**先打印扫描面再判断**:该棘轮扫 **2460/2578 行(95%)**,唯一豁免窗口 `L9–126` 正是真实 `:root`;三行 badge 用的是 `var(--type-stock/etf/fund)` 真 token。**NEUTER×3 全咬** —— ①使用处塞字面量 → 红;②**边缘形态**(3 位小写 `#A0F` + 大小写混写 `#bb86FC`,深埋文件尾部)→ 红;③**豁免滥用**(把 `:root` 的闭合括号挪到文件末尾,让整个文件变成「在 root 内」)→ **3 条同时红**。棘轮从未漏扫。
+  - **成因值得记:** 我看到 `#ffb74d` 出现在 `theme-bridge.css` 就断定是违规,没分辨那是 token 的**定义处**(`:root` 内,棘轮**允许**的形态)还是**使用处**。**判据:报一条「守卫漏扫」之前,先把那条守卫实际扫到的行数与豁免窗口打出来。** 这与 charter 已记的「扫描面残缺」是**镜像错误** —— 那些是守卫真漏了,这次是我误告了一个正常工作的守卫。**误告的代价同样实在:它会让下一个人去「修」一道没坏的防线,顺手放宽豁免。**
+
+- **诚实分账:** 本轮产品行为零改动(CSS 只加注释),`git diff` 仅注释 + 一条新测试;两文件精确 pathspec,`git add` 后做了计数断言(=2)才提交。
+
+
 ### 2026-07-28(续) — tint chip 文字对比度收口:**票面给的修法方向是反的,实测把它证伪**(epic `pt_61b79f4351f548cd` done;commit `db3abe8`;套件 **33/33**,**NEUTER×5 全咬**,相邻环 **65/65**,干净 committed worktree **65/65**,线上已提供)
 
 - **先按票面要求重测再动手,底数已变:** 票写 dark 6 / light 24 / tofu 20,实测 **5 / 21 / 17**(`.sr-type-*` 那批已在 `0909bfd` 修掉)。收口后 **0 / 0 / 0**。

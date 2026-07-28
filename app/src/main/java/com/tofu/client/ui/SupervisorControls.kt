@@ -27,6 +27,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,9 +39,10 @@ import com.tofu.client.session.ProbeTrigger
 import com.tofu.client.session.ServerLifecycle
 import com.tofu.client.session.ServerState
 import com.tofu.client.session.SessionManager
+import com.tofu.client.session.SupervisorAction
 import com.tofu.client.session.SupervisorClient
 import com.tofu.client.session.SupervisorUrl
-import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -62,7 +64,6 @@ import kotlinx.coroutines.withContext
 @Composable
 fun SupervisorControls(
     profile: Profile,
-    scope: CoroutineScope,
     /**
      * REQUIRED and non-null on purpose. Controls do login-then-act, so a call
      * site that omitted the session would silently skip the handshake and 401
@@ -87,6 +88,14 @@ fun SupervisorControls(
     var failed by remember(stateKey) { mutableStateOf(false) }
     var message by remember(stateKey) { mutableStateOf<String?>(null) }
 
+    // Scoped to the COMPOSITION, not the Activity. A start polls for up to
+    // ~30s, and an Activity-wide scope would keep that poll alive after the
+    // card left the screen: it would go on writing to discarded state, survive
+    // a rotation (two polls racing the same server), and fire the WebView
+    // hand-off for a card the user had already navigated away from. Leaving
+    // composition now cancels the work.
+    val scope = rememberCoroutineScope()
+
     val state = ServerLifecycle.resolve(profile, running, busy, failed)
     val caps = ServerLifecycle.capabilities(state)
 
@@ -100,83 +109,97 @@ fun SupervisorControls(
         SideEffect { onStateChange(state) }
     }
 
-    fun run(action: String, trigger: ProbeTrigger) {
+    fun run(action: SupervisorAction, trigger: ProbeTrigger) {
         val plan = ServerLifecycle.probePlan(trigger, ServerLifecycle.isSignedIn(profile))
         // An AUTO probe with no session doesn't run at all — see probePlan.
         // Leaving `busy` untouched matters: setting it would render the card as
         // TRANSITIONING ("Working…") for a call we never make.
         if (!plan.proceed) return
+        // Identity of the card as it is RIGHT NOW. Compared after the call to
+        // decide whether the result still belongs to what's on screen.
+        val startedFor = stateKey
         busy = true
         failed = false
         message = null
         scope.launch {
-            // Establish the session FIRST when we don't hold one. The supervisor
-            // rides the code-server cookie, and code-server (the proxy) is up
-            // even while Tofu is down — so this handshake works on a STOPPED
-            // server. Requiring an Open first was a deadlock: Open cannot
-            // succeed against a server that is down.
-            //
-            // Gated on plan.mayLogIn: only a USER tap gets to spend a login.
-            if (plan.mayLogIn && !ServerLifecycle.isSignedIn(profile)) {
-                val login = withContext(Dispatchers.IO) { session.login(profile) }
-                // Includes NeedsInteractiveSso: it yields no cookie, so pressing
-                // on would 401 and misreport an un-completed sign-in as "the
-                // daemon isn't responding".
-                if (ServerLifecycle.isLoginBlocking(login)) {
-                    failed = true
-                    message = ServerLifecycle.explainLoginBlock(login)
-                    busy = false
-                    return@launch
+            try {
+                // Establish the session FIRST when we don't hold one. The
+                // supervisor rides the code-server cookie, and code-server (the
+                // proxy) is up even while Tofu is down — so this handshake works
+                // on a STOPPED server. Requiring an Open first was a deadlock:
+                // Open cannot succeed against a server that is down.
+                //
+                // Gated on plan.mayLogIn: only a USER tap gets to spend a login.
+                if (plan.mayLogIn && !ServerLifecycle.isSignedIn(profile)) {
+                    val login = withContext(Dispatchers.IO) { session.login(profile) }
+                    // Includes NeedsInteractiveSso: it yields no cookie, so
+                    // pressing on would 401 and misreport an un-completed
+                    // sign-in as "the daemon isn't responding".
+                    if (ServerLifecycle.isLoginBlocking(login)) {
+                        failed = true
+                        message = ServerLifecycle.explainLoginBlock(login)
+                        return@launch
+                    }
                 }
-            }
-            val res = withContext(Dispatchers.IO) {
-                when (action) {
-                    "start" -> client.start(profile)
-                    "stop" -> client.stop(profile)
-                    else -> client.status(profile)
+                val res = withContext(Dispatchers.IO) {
+                    when (action) {
+                        SupervisorAction.START -> client.start(profile)
+                        SupervisorAction.STOP -> client.stop(profile)
+                        SupervisorAction.STATUS -> client.status(profile)
+                    }
                 }
-            }
-            when (res) {
-                is SupervisorClient.Result.Ok -> {
-                    running = res.running
-                    message = null
-                    // /start returns before the port binds (by design), so poll
-                    // until the server reports itself up rather than leaving the
-                    // card lying that it's still stopped.
-                    if (action == "start" && !res.running) {
-                        for (i in 0 until ServerLifecycle.START_POLL_ATTEMPTS) {
-                            delay(ServerLifecycle.START_POLL_INTERVAL_MS)
-                            val s = withContext(Dispatchers.IO) { client.status(profile) }
-                            if (s is SupervisorClient.Result.Ok && s.running) {
-                                running = true
-                                break
+                when (res) {
+                    is SupervisorClient.Result.Ok -> {
+                        running = res.running
+                        message = null
+                        // /start returns before the port binds (by design), so
+                        // poll until the server reports itself up rather than
+                        // leaving the card lying that it's still stopped.
+                        if (action == SupervisorAction.START && !res.running) {
+                            for (i in 0 until ServerLifecycle.START_POLL_ATTEMPTS) {
+                                delay(ServerLifecycle.START_POLL_INTERVAL_MS)
+                                val s = withContext(Dispatchers.IO) { client.status(profile) }
+                                if (s is SupervisorClient.Result.Ok && s.running) {
+                                    running = true
+                                    break
+                                }
                             }
                         }
-                    }
-                    if (action == "start") {
-                        if (running == true) {
-                            // Starting a server is only ever a means to using it,
-                            // so hand the user straight through once it's live.
-                            onServerReady()
-                        } else {
-                            // The window expired. NOT silently: leaving a spinner
-                            // with nothing to tap is the dead end we just removed
-                            // elsewhere. Say what happened and what to do next.
+                        // The poll can outlive the card's relevance (user
+                        // navigated away, or edited the profile). A stale
+                        // completion must not force-open a WebView.
+                        val completion = ServerLifecycle.completionFor(
+                            action = action,
+                            running = running == true,
+                            stillCurrent = startedFor == stateKey,
+                        )
+                        if (completion.handOff) onServerReady()
+                        if (completion.showTimeout) {
                             message = ServerLifecycle.startTimeoutMessage()
                         }
                     }
-                }
-                is SupervisorClient.Result.Failed -> {
-                    // An AUTO probe stays silent: "we couldn't reach it just now"
-                    // is not worth painting the card red when the user asked for
-                    // nothing. A USER tap always reports.
-                    if (plan.reportFailure) {
-                        failed = true
-                        message = SupervisorUrl.explainFailure(res.code, res.message)
+                    is SupervisorClient.Result.Failed -> {
+                        // An AUTO probe stays silent: "we couldn't reach it just
+                        // now" is not worth painting the card red when the user
+                        // asked for nothing. A USER tap always reports.
+                        if (plan.reportFailure) {
+                            failed = true
+                            message = SupervisorUrl.explainFailure(res.code, res.message)
+                        }
                     }
                 }
+            } catch (e: CancellationException) {
+                // Leaving composition is not an error — never paint the card
+                // red for it, and let the cancellation propagate normally.
+                throw e
+            } finally {
+                // MUST be in finally. Previously `busy = false` sat at the tail
+                // of each branch, so any throw (a dropped socket mid-poll) left
+                // busy stuck true — pinning the card to TRANSITIONING for the
+                // rest of the process lifetime, the exact all-controls-disabled
+                // dead end this screen keeps re-inventing.
+                busy = false
             }
-            busy = false
         }
     }
 
@@ -187,7 +210,7 @@ fun SupervisorControls(
     // instead of falsely reading "Unreachable".
     LaunchedEffect(stateKey) {
         if (running == null && !busy) {
-            run("status", ProbeTrigger.AUTO)
+            run(SupervisorAction.STATUS, ProbeTrigger.AUTO)
         }
     }
 
@@ -207,7 +230,7 @@ fun SupervisorControls(
             }
             if (caps.canStart) {
                 FilledTonalButton(
-                    onClick = { run("start", ProbeTrigger.USER) },
+                    onClick = { run(SupervisorAction.START, ProbeTrigger.USER) },
                     enabled = !busy,
                     contentPadding = CompactButtonPadding,
                     modifier = TouchTarget,
@@ -219,7 +242,7 @@ fun SupervisorControls(
             }
             if (caps.canStop) {
                 OutlinedButton(
-                    onClick = { run("stop", ProbeTrigger.USER) },
+                    onClick = { run(SupervisorAction.STOP, ProbeTrigger.USER) },
                     enabled = !busy,
                     contentPadding = CompactButtonPadding,
                     modifier = TouchTarget,
@@ -231,7 +254,7 @@ fun SupervisorControls(
             }
             if (caps.canRefresh) {
                 TextButton(
-                    onClick = { run("status", ProbeTrigger.USER) },
+                    onClick = { run(SupervisorAction.STATUS, ProbeTrigger.USER) },
                     enabled = !busy,
                     contentPadding = CompactButtonPadding,
                     modifier = TouchTarget,

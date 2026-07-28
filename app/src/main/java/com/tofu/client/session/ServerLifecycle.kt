@@ -73,6 +73,24 @@ data class ProbePlan(
     val reportFailure: Boolean,
 )
 
+/**
+ * Which supervisor call to make. An enum rather than a string so the dispatch
+ * `when` is exhaustive — a stringly-typed action silently degraded any typo to
+ * a harmless-looking `/status` call.
+ */
+enum class SupervisorAction { START, STOP, STATUS }
+
+/**
+ * What a finished call should do to the UI. Kept pure so the "don't yank the
+ * user into a WebView they navigated away from" rule is testable off-device.
+ */
+data class CallCompletion(
+    /** Hand the user into the WebView (a start that reached RUNNING). */
+    val handOff: Boolean,
+    /** Show the "still booting" copy (a start whose poll window expired). */
+    val showTimeout: Boolean,
+)
+
 object ServerLifecycle {
 
     /** True when [profile] opted into supervisor control by setting a project path. */
@@ -168,6 +186,28 @@ object ServerLifecycle {
             mayLogIn = false,
             reportFailure = false,
         )
+    }
+
+    /**
+     * Decide what a COMPLETED call does to the UI.
+     *
+     * [stillCurrent] is the guard that matters: a start poll runs for up to
+     * [startPollWindowSeconds], and the user can navigate away or edit the
+     * profile while it runs. Handing them into a WebView at that point would
+     * yank them somewhere they didn't ask to go — possibly for a server they
+     * just navigated away from. So a stale completion does nothing at all.
+     *
+     * Only a START can hand off or time out; STOP and STATUS never do either.
+     */
+    fun completionFor(
+        action: SupervisorAction,
+        running: Boolean,
+        stillCurrent: Boolean,
+    ): CallCompletion {
+        if (!stillCurrent || action != SupervisorAction.START) {
+            return CallCompletion(handOff = false, showTimeout = false)
+        }
+        return CallCompletion(handOff = running, showTimeout = !running)
     }
 
     /**

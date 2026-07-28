@@ -318,6 +318,56 @@ class ServerLifecycleTest {
         }
     }
 
+    // ── completion: what a FINISHED call may do to the UI ──────────────────
+
+    /**
+     * THE STALE-HANDOFF GUARD. A start polls for up to 30s, during which the
+     * user can navigate away or edit the profile. If the completion still fired
+     * the hand-off, the app would yank them into a WebView they never asked
+     * for — possibly for a server they had just left.
+     *
+     * NEUTER CHECK: ignore stillCurrent and this fails.
+     */
+    @Test
+    fun `a stale start never hands off`() {
+        val c = ServerLifecycle.completionFor(
+            SupervisorAction.START, running = true, stillCurrent = false,
+        )
+        assertFalse("the card is gone — do not force-open a WebView", c.handOff)
+        assertFalse("and do not write a message onto a discarded card", c.showTimeout)
+    }
+
+    @Test
+    fun `a current start that reached running hands off`() {
+        val c = ServerLifecycle.completionFor(
+            SupervisorAction.START, running = true, stillCurrent = true,
+        )
+        assertTrue(c.handOff)
+        assertFalse(c.showTimeout)
+    }
+
+    /** Poll window expired while still on screen → explain, don't hand off. */
+    @Test
+    fun `a current start that timed out shows the timeout copy`() {
+        val c = ServerLifecycle.completionFor(
+            SupervisorAction.START, running = false, stillCurrent = true,
+        )
+        assertFalse(c.handOff)
+        assertTrue(c.showTimeout)
+    }
+
+    /** Only START navigates. A Stop or a Check must never move the user. */
+    @Test
+    fun `stop and status never hand off or time out`() {
+        listOf(SupervisorAction.STOP, SupervisorAction.STATUS).forEach { a ->
+            listOf(true, false).forEach { running ->
+                val c = ServerLifecycle.completionFor(a, running, stillCurrent = true)
+                assertFalse("$a must not navigate", c.handOff)
+                assertFalse("$a must not show start-timeout copy", c.showTimeout)
+            }
+        }
+    }
+
     /** Unreachable must stay actionable — retrying is the only way out. */
     @Test
     fun `unreachable can retry`() {

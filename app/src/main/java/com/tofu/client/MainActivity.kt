@@ -68,7 +68,6 @@ class MainActivity : ComponentActivity() {
                             onEdit = vm::startEdit,
                             onDelete = vm::deleteProfile,
                             onAdd = vm::startAdd,
-                            scope = lifecycleScope,
                             session = session,
                         )
                         is Screen.AddEdit -> {

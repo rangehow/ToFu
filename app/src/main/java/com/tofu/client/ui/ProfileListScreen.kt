@@ -59,7 +59,6 @@ import com.tofu.client.session.ServerLifecycle
 import com.tofu.client.session.ServerState
 import com.tofu.client.session.ServerUrl
 import com.tofu.client.session.SessionManager
-import kotlinx.coroutines.CoroutineScope
 
 /**
  * Home — the server list / switcher.
@@ -85,7 +84,6 @@ fun ProfileListScreen(
     onEdit: (Profile) -> Unit,
     onDelete: (Profile) -> Unit,
     onAdd: () -> Unit,
-    scope: CoroutineScope,
     /**
      * Establishes a session on demand so a STOPPED server can still be started
      * — code-server stays up while Tofu is down. Non-null by contract: a null
@@ -134,7 +132,6 @@ fun ProfileListScreen(
                                 onActivate = onActivate,
                                 onEdit = onEdit,
                                 onDelete = onDelete,
-                                scope = scope,
                                 onStateChange = { states[p.id] = it },
                             )
                         }
@@ -209,7 +206,6 @@ private fun ServerCard(
     onActivate: (Profile) -> Unit,
     onEdit: (Profile) -> Unit,
     onDelete: (Profile) -> Unit,
-    scope: CoroutineScope,
     onStateChange: (ServerState) -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -281,7 +277,6 @@ private fun ServerCard(
                 Spacer(Modifier.height(10.dp))
                 SupervisorControls(
                     profile = profile,
-                    scope = scope,
                     session = session,
                     onStateChange = { state = it; onStateChange(it) },
                     // A server the user just started is a server they want to

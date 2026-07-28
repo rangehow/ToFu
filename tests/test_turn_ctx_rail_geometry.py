@@ -99,7 +99,13 @@ _FAT_SNAPSHOT = """{
     {label:'MCP: hope ×50', tone:'mcp'}, {label:'MCP: llm ×30', tone:'mcp'},
     {label:'MCP: overleaf ×21', tone:'mcp'}, {label:'MCP: xuecheng ×32', tone:'mcp'}
   ],
-  roots: [{short:'INS/chatui', path:'/mnt/dolphinfs/ssd_pool/docker/user/hadoop-aipnlp/INS/ruanjunhao04/chatui', ro:false}]
+  roots: [
+    {short:'INS/chatui', path:'/mnt/dolphinfs/ssd_pool/docker/user/hadoop-aipnlp/INS/ruanjunhao04/chatui', ro:false},
+    {short:'team/lib', path:'/mnt/dolphinfs/ssd_pool/docker/user/hadoop-aipnlp/team/lib', ro:false},
+    {short:'data/sets', path:'/mnt/dolphinfs/ssd_pool/docker/user/hadoop-aipnlp/data/sets', ro:true},
+    {short:'scratch/tmp', path:'/mnt/dolphinfs/ssd_pool/docker/user/hadoop-aipnlp/scratch/tmp', ro:false},
+    {short:'vendor/sdk', path:'/mnt/dolphinfs/ssd_pool/docker/user/hadoop-aipnlp/vendor/sdk', ro:true}
+  ]
 }"""
 
 #: Long enough that the text box FILLS its track instead of shrink-wrapping.
@@ -661,3 +667,50 @@ def test_overflow_toggle_bounds_the_chip_count(page):
         f'clicking "+N" revealed nothing ({before} → {visible_after}); the '
         f'hidden chips are unreachable, so the information is lost rather '
         f'than collapsed')
+
+
+def test_overflow_toggle_bounds_the_path_count(page):
+    """The "+N" toggle bounds WORKSPACE paths the same way it bounds chips.
+
+    Roots used to render unbounded — the same defect family as chips (the
+    rail's height driven by how many roots the workspace happens to have).
+    The probe snapshot carries five roots, so a bound must gate them and
+    the toggle must really reveal the rest.
+    """
+    page.wait_for_selector('#userInput', state='visible', timeout=20000)
+    page.wait_for_function("typeof renderTurnCtxNote === 'function'", timeout=20000)
+    page.set_viewport_size({'width': 1920, 'height': 900})
+    page.evaluate("() => { const s = document.querySelector('.sidebar');"
+                  " if (s) s.classList.add('collapsed'); }")
+    assert page.evaluate(_PLANT) == 'ok'
+    page.wait_for_timeout(200)
+
+    before = page.evaluate(
+        "() => document.querySelectorAll('.message.__probe .tctx-path:not(.tctx-overflow .tctx-path)').length")
+    total = page.evaluate(
+        "() => document.querySelectorAll('.message.__probe .tctx-path').length")
+    toggles = page.evaluate(
+        "() => document.querySelectorAll('.message.__probe .tctx-paths [data-tctx-more]').length")
+    page.evaluate(_EXPAND)
+    page.wait_for_timeout(150)
+    visible_after = page.evaluate("""() => {
+        const els = document.querySelectorAll('.message.__probe .tctx-path');
+        let n = 0;
+        els.forEach(e => { if (e.offsetParent !== null) n++; });
+        return n;
+    }""")
+
+    print(f'\n  paths total={total} visible-before={before} '
+          f'toggles={toggles} visible-after={visible_after}')
+
+    assert toggles >= 1, (
+        'a 5-root snapshot produced no workspace "+N" toggle — the path '
+        'count is unbounded, so the rail height is driven by how many '
+        'roots the workspace happens to have')
+    assert before < total, (
+        f'all {total} paths rendered up-front ({before} visible) — the '
+        f'bound is not in effect')
+    assert visible_after > before, (
+        f'clicking "+N" revealed no path ({before} → {visible_after}); '
+        f'the hidden roots are unreachable, so the information is lost '
+        f'rather than collapsed')

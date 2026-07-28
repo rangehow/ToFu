@@ -198,16 +198,27 @@
 
   const _LOCK = '<svg class="tctx-lock" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
 
-  /** Max tool chips rendered up-front. The rest collapse behind a "+N"
-   * CLICK toggle. WHY a bound and why click: the rail is permanent
-   * furniture in a grid track, so its height contributes to the turn's
-   * height — and `_collectTools()` emits one chip per connected MCP server,
-   * which can be dozens. Without a bound a heavily-connected setup would
-   * make every user turn taller than its own message. Expansion is a click
-   * (not hover) because a hover overlay would have to escape `.message`'s
-   * content-visibility paint containment — exactly the carve-out this
-   * redesign deleted. */
-  const _MAX_VISIBLE_CHIPS = 6;
+  /** Max tool chips rendered up-front; the rest collapse behind a "+N"
+   * CLICK toggle. This cap — together with `_MAX_VISIBLE_PATHS` — decides
+   * what a card shows up-front so a TYPICAL card renders complete (the old
+   * 132px `overflow:hidden` guillotine clipped ordinary cards mid-WORKSPACE
+   * with no way to reach the facts). Genuinely fat cards are then bounded
+   * by the scrollable pixel backstop in styles.css. WHY a bound at all:
+   * the rail is permanent furniture in a grid track, so its height adds to
+   * the turn's height — and `_collectTools()` emits one chip per connected
+   * MCP server, which can be dozens. 9 keeps a typical setup (a few feature
+   * toggles + a few MCP servers) fully visible while the geometry guard's
+   * 10-tool probe stays gated. Expansion is a click (not hover) because a
+   * hover overlay would have to escape `.message`'s content-visibility
+   * paint containment — exactly the carve-out this redesign deleted. */
+  const _MAX_VISIBLE_CHIPS = 9;
+
+  /** Max workspace paths rendered up-front; extra roots collapse behind
+   * the same "+N" toggle as chips (the delegated click handler only asks
+   * for a `.tctx-overflow` sibling, so the mechanism is shared verbatim).
+   * Roots were previously unbounded — the same defect family as chips:
+   * rail height driven by how many roots the workspace happens to have. */
+  const _MAX_VISIBLE_PATHS = 3;
 
   /**
    * Render a captured snapshot into the per-turn rail HTML.
@@ -276,12 +287,20 @@
       // absolute path is ~90 chars and `word-break:break-all` would stack it
       // four lines high inside a 232px rail, inflating every turn that has a
       // workspace. The rail is a glance surface; the full path stays reachable.
-      const paths = roots.map((r) =>
+      const _path = (r) =>
         '<div class="tctx-path" title="' + _esc(r.path || r.short) + '">' +
-        (r.ro ? _LOCK : '') + '<span>' + _esc(r.short || r.path) + '</span></div>'
-      ).join('');
+        (r.ro ? _LOCK : '') + '<span>' + _esc(r.short || r.path) + '</span></div>';
+      const shownPaths = roots.slice(0, _MAX_VISIBLE_PATHS).map(_path).join('');
+      const restPaths = roots.slice(_MAX_VISIBLE_PATHS);
+      let pathOverflow = '';
+      if (restPaths.length) {
+        pathOverflow =
+          '<div class="tctx-overflow" hidden>' + restPaths.map(_path).join('') + '</div>' +
+          '<button type="button" class="tctx-more" data-tctx-more="1"' +
+          ' aria-expanded="false">+' + restPaths.length + '</button>';
+      }
       rows.push('<div class="tctx-row"><span class="tctx-row-h">Workspace</span>' +
-        '<div class="tctx-paths">' + paths + '</div></div>');
+        '<div class="tctx-paths">' + shownPaths + pathOverflow + '</div></div>');
     }
 
     // ── Fold line for panes with no rail track ──
@@ -297,22 +316,29 @@
     return fold + '<div class="turn-ctx">' + head.join('') + rows.join('') + '</div>';
   }
 
-  /* "+N" toggle. Delegated at document level so it survives every re-render
-   * of the message list without per-node listener bookkeeping. Expanding
-   * changes the rail's height IN FLOW — no overlay, no paint containment to
-   * escape. */
-  function _onTctxMoreClick(ev) {
-    const btn = (ev.target && ev.target.closest)
-      ? ev.target.closest('[data-tctx-more]') : null;
-    if (!btn) return;
-    const chips = btn.parentNode;
-    const hidden = chips && chips.querySelector('.tctx-overflow');
-    if (!hidden) return;
-    const opening = hidden.hasAttribute('hidden');
-    if (opening) hidden.removeAttribute('hidden');
-    else hidden.setAttribute('hidden', '');
-    btn.setAttribute('aria-expanded', opening ? 'true' : 'false');
-    btn.textContent = opening ? '−' : '+' + hidden.children.length;
+  /* "+N" toggle + rail click guard. Delegated at document level so it
+   * survives every re-render of the message list without per-node listener
+   * bookkeeping. Expanding changes the rail's height IN FLOW — no overlay,
+   * no paint containment to escape. The rail is hit-testable (its backstop
+   * scrolls, paths have hover titles), but a click ANYWHERE inside it must
+   * never be seen by a message-level delegated handler — so every rail
+   * click is swallowed here, toggle or not. */
+  function _onTctxClick(ev) {
+    const rail = (ev.target && ev.target.closest)
+      ? ev.target.closest('.turn-ctx') : null;
+    if (!rail) return;
+    const btn = ev.target.closest('[data-tctx-more]');
+    if (btn) {
+      const chips = btn.parentNode;
+      const hidden = chips && chips.querySelector('.tctx-overflow');
+      if (hidden) {
+        const opening = hidden.hasAttribute('hidden');
+        if (opening) hidden.removeAttribute('hidden');
+        else hidden.setAttribute('hidden', '');
+        btn.setAttribute('aria-expanded', opening ? 'true' : 'false');
+        btn.textContent = opening ? '−' : '+' + hidden.children.length;
+      }
+    }
     ev.stopPropagation();
   }
 
@@ -496,7 +522,7 @@
    * already reflects connected servers (not just after the settings panel
    * is opened). Best-effort; failures are swallowed inside the function. */
   if (typeof document !== 'undefined') {
-    document.addEventListener('click', _onTctxMoreClick);
+    document.addEventListener('click', _onTctxClick);
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', () => { refreshMcpRailState(); }, { once: true });
     } else {

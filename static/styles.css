@@ -19545,10 +19545,13 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .ctx-health-bar[data-zon
   font-weight:600;
   line-height:1.5;
   user-select:none;
-  /* The rail is reference material, not a control surface: it must never
-   * compete with the message's own hover action-bar for the pointer. Only
-   * the "+N more" toggle inside it opts back in. */
-  pointer-events:none;
+  /* The rail IS hit-testable: the height backstop below SCROLLS (needs the
+   * pointer), paths expose their full path via hover title, and hovering
+   * the rail keeps `.message:hover` true regardless (the rail is a child
+   * of `.message`), so the message's hover action-bar is unaffected. What
+   * the rail must never do is impersonate a message click — the delegated
+   * guard in info-rail.js stopPropagations every click inside it. */
+  pointer-events:auto;
 }
 /* No rail track (narrow pane / drawer open) → the rail folds away. It is a
  * grid item in a zero-width track, so leaving it visible would smear it. */
@@ -19567,15 +19570,22 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .ctx-health-bar[data-zon
      * from the prose column. The boxed card (bg + border + radius) was one
      * more rectangle competing with the message — the rail now whispers. */
     border-left:1px solid var(--border);
-    /* HEIGHT DISCIPLINE: the rail sits beside a bubble that is often a single
-     * line (~76px). Left unbounded it stacked head + Tools + Workspace into a
-     * ~250px column and every short turn inherited that height as whitespace.
-     * So the collapsed rail is capped and scrolls internally; clicking "+N"
-     * lifts the cap because the user asked to see more. Not clipping is not
-     * enough — it must also look right. Guarded by the height-ratio assertion
-     * in tests/test_turn_ctx_rail_geometry.py. */
-    max-height:132px;
-    overflow:hidden;
+    /* HEIGHT DISCIPLINE, two layers. (1) CONTENT caps in info-rail.js
+     * decide what renders up-front (≤9 chips / ≤3 paths, the rest behind
+     * the "+N" click) — a typical card renders COMPLETE, which the removed
+     * 132px `overflow:hidden` guillotine never allowed (it clipped ordinary
+     * cards mid-WORKSPACE with no way to reach the facts — the 2026-07-28
+     * complaint). (2) This pixel BACKSTOP covers the genuinely fat card:
+     * unlike the guillotine it SCROLLS, so nothing is ever unreachable, and
+     * clicking "+N" lifts it entirely (expansion is the explicit ask).
+     * The backstop makes the turn-height bound hold by CONSTRUCTION in
+     * every theme/font — guarded by the height-ratio assertion in
+     * tests/test_turn_ctx_rail_geometry.py. */
+    max-height:200px;
+    overflow-x:hidden;
+    overflow-y:auto;
+    overscroll-behavior:contain;
+    scrollbar-width:thin;
   }
   .turn-ctx:has(.tctx-overflow:not([hidden])){ max-height:none; }
 }
@@ -19674,6 +19684,9 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .ctx-health-bar[data-zon
 .turn-ctx .tctx-overflow{ display:contents; }
 .turn-ctx .tctx-overflow[hidden]{ display:none; }
 .turn-ctx .tctx-paths{ display:flex; flex-direction:column; gap:3px; }
+/* In the paths column the "+N" pill would stretch to the rail's full width
+ * (column flex children stretch); keep it pill-sized like in the chips row. */
+.turn-ctx .tctx-paths .tctx-more{ align-self:flex-start; }
 .turn-ctx .tctx-path{
   display:flex;
   align-items:flex-start;

@@ -157,7 +157,13 @@ for (const name of ['renderMarkdown','getToolRoundsFromMsg','renderFinishInfo',
   if (typeof win[name] === 'undefined') { win[name] = global[name] = _noop; }
 }
 
-let src = fs.readFileSync(process.argv[2], 'utf8');  // ui/chat_render.js
+// argv[5..] = ordered shipped sources (resolved BY SYMBOL from the production
+// bundle manifests — see tests/_conv_bundle_sources.py), CONCATENATED into ONE
+// eval exactly as the bundler concatenates them. Load-bearing:
+// `_explicitBottomLatch` is `let`-declared in ui/streaming_render.js and a
+// `let` does NOT escape its own eval, so separate evals still leave
+// chat_render.js with a bare ReferenceError.
+let src = process.argv.slice(5).map((p) => fs.readFileSync(p, 'utf8')).join('\n;\n');
 
 if (NEUTER === 'open') {
   // Collapse the OPEN no-scroll branch → an open falls through to the
@@ -168,11 +174,38 @@ if (NEUTER === 'open') {
   if (src === before) { console.log('FAIL neuter_open_not_applied'); process.exit(0); }
 }
 
+// ui/streaming_render.js `let`-declares _openScrollConvId / _lazyConvId /
+// _lazyRenderedFrom, and declares `function _forceScrollToBottom(...)` /
+// `_ensureLazyObserver()`. Those bindings live in the EVAL's own scope, which a
+// SEPARATE eval cannot see (measured: a second eval reading `_lazyConvId`
+// throws ReferenceError) and which a post-eval bare assignment does not reach.
+// So the stubs and state accessors are APPENDED TO THE SAME SOURCE STRING,
+// closing over exactly the bindings renderChat reads and writes. Getting this
+// wrong is silent: the harness seeds one variable, the product latches another,
+// and the latch assertion reads a stale value while the DOM renders fine.
+src += `
+;
+globalThis.__H = {
+  get openScroll(){ return _openScrollConvId; },
+  set openScroll(v){ _openScrollConvId = v; },
+  set lazyConv(v){ _lazyConvId = v; },
+  set lazyFrom(v){ _lazyRenderedFrom = v; },
+  installStubs(force, noop){ _forceScrollToBottom = force; _ensureLazyObserver = noop; _destroyLazyObserver = noop; },
+  setRenderMessage(fn){ renderMessage = fn; },
+};
+`;
+
 eval(src);
 
-renderMessage = win.renderMessage = global.renderMessage = (msg, idx) =>
+const S = globalThis.__H;
+S.installStubs(
+  (c) => { _forceScrollCalls++; _scrollTop = N * MSG_H - 600; },
+  () => {},
+);
+S.lazyFrom = Infinity;
+S.setRenderMessage((msg, idx) =>
   '<div class="message" id="msg-' + idx + '" data-mfp="v' + ((msg && msg.content) || '') + '">' +
-  ((msg && msg.content) || '') + '</div>';
+  ((msg && msg.content) || '') + '</div>');
 
 const out = [];
 function check(name, cond) { out.push((cond ? 'PASS ' : 'FAIL ') + name); }
@@ -182,9 +215,9 @@ for (let i = 0; i < N; i++) conv.messages.push({ role: i % 2 ? 'assistant' : 'us
 
 // ── Simulate an OPEN: loadConversation resets the latch, then the multi-phase
 //    renders fire while _initialSwitchLoad is set. ──
-_openScrollConvId = null;          // loadConversation reset
+S.openScroll = null;               // loadConversation reset
 conv._initialSwitchLoad = true;
-_lazyConvId = null;                // a genuine SWITCH (prev conv was different)
+S.lazyConv = null;                 // a genuine SWITCH (prev conv was different)
 
 // Render #1 — Phase-1 cache paint (switch first-paint). Must NOT force-scroll.
 _scrollTop = 0;
@@ -192,7 +225,7 @@ _forceScrollCalls = 0;
 renderChat(conv, false);
 check('open_render1_no_force_scroll', _forceScrollCalls === 0);
 check('open_render1_stays_at_top', _scrollTop === 0);
-check('open_render1_latched', _openScrollConvId === 'oc-conv');
+check('open_render1_latched', S.openScroll === 'oc-conv');
 
 // Render #2 — Phase-2 server reconcile paint, SAME open (_initialSwitchLoad
 // still set). Vary the tail so the fingerprint guard doesn't short-circuit.
@@ -216,7 +249,7 @@ check('open_render3_no_force_scroll', _forceScrollCalls === 0);
 //    forceScroll=true full-render path (the surgical forceScroll===false path
 //    preserves scroll on its own and is out of scope here). ──
 delete conv._initialSwitchLoad;
-_openScrollConvId = null;
+S.openScroll = null;
 _scrollTop = N * MSG_H - 600;      // reader parked exactly at the bottom
 conv.messages.push({ role: 'assistant', content: 'm6-settled-later' });
 _forceScrollCalls = 0;
@@ -228,15 +261,21 @@ console.log(out.join('\n'));
 
 
 def _run(neuter: str = 'none'):
+    from tests._conv_bundle_sources import sources_defining
+    deps = sources_defining('_explicitBottomLatch')
+    target = os.path.join(JS_DIR, 'ui', 'chat_render.js')
+    src_paths = [p for p in deps if p != target] + [target]
+
     harness = os.path.join(HERE, '_open_no_autoscroll_harness.js')
     with open(harness, 'w') as f:
         f.write(_HARNESS)
     try:
         proc = subprocess.run(
             ['node', harness,
-             os.path.join(JS_DIR, 'ui', 'chat_render.js'),   # argv[2]
+             target,                                          # argv[2] (legacy)
              ROOT,                                            # argv[3]
              neuter,                                          # argv[4]
+             *src_paths,                                      # argv[5..]
              ],
             capture_output=True, text=True, timeout=60,
         )

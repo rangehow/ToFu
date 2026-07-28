@@ -1,6 +1,32 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-28 — trade 模块可读性收尾:资产类型徽章 **1.35:1**(全页最差)根修,**而我自己上一轮开的票里那条线索是错的**(commit `0909bfd`;套件 **27/27**,**NEUTER×3 全咬**,相邻环 **59/59**,干净 committed worktree 复验 **59/59**,线上三主题值已提供)
+
+- **★ 先更正我自己写进票 `pt_61b79f4351f548cd` 的一条错误线索。** 我在那张票里写「`.sr-type-stock/etf/fund` 用硬编码字面量 `#ffb74d`,而 `test_no_literals_outside_root` 本该抓它却没抓到 —— 可能是扫描面残缺家族的又一例」。**实测证伪:** 它们用的是 `var(--type-stock/etf/fund)` **真 token**,棘轮**工作正常**、没有漏扫。
+  - **成因(比结论值钱):我看到 `#ffb74d` 出现在 `theme-bridge.css` 里就断定是违规字面量,没往下看它出现在 token 的「定义处」而非「使用处」** —— `:root` 内的字面量正是那条棘轮**明确允许**的形态,我把合法定义读成了违规使用。
+  - **判据(与 charter「先打印扫描面」同族,换了个方向):报一条「某守卫漏扫了」之前,必须先真的把那条守卫的扫描面打印出来看它到底扫了什么。** 我这次是**在没看扫描面的情况下指控了一个健康的守卫** —— 上一次同族错误是「守卫红了先想怎么改绿」,这次是「守卫绿着先想它是不是坏了」,两个方向都必须先取证。
+
+- **★ 真实缺陷不同,而且严重得多:这三个是全库唯一「没有分主题覆盖」的内容色。** dark 调的柔和色(`#ffb74d`/`#64b5f6`/`#ba68c8`)被**原样**用在近白背景上。语义色/文字层此前都已分主题重定,只有它们从未进入那轮工作 —— 因为我当时的扫描面锚在 `SEMANTIC` 与 `TEXT_TIERS` 两张表上,这三个都不在表里。
+- **★ 它们的渲染形态是一整类此前无法被度量的东西:文字压「自身的 15% tint」。** `.sr-type-*` 的 `color` 与 `background` 是**同一个 token**(`color-mix(in srgb, var(--type-stock) 15%, transparent)`),于是**前景与背景一起移动** —— 把 token 压暗,它自己的底也跟着暗,**对比度被 tint 百分比封顶,而不是被色相决定**。任何「这个 token 压 `--bg3` 读数多少」的检查都**结构上看不到**这一类。
+
+  | 主题 | token | 修前 | 修后 |
+  |---|---|---|---|
+  | light | `--type-stock` | **1.35** | 4.55 |
+  | light | `--type-etf` | 1.68 | 4.55 |
+  | light | `--type-fund` | 2.54 | 4.51 |
+  | tofu | `--type-stock` | 1.42 | 4.50 |
+  | tofu | `--type-etf` | 1.75 | 4.50 |
+  | tofu | `--type-fund` | 2.67 | 4.55 |
+  | dark | `--type-fund` | 4.45 | 4.50 |
+
+  **1.35:1 实质等于看不见**,比此前修掉的任何 muted 文字层都差(那些最低 1.70)。保色相、只动明度。
+- **★ dark 那一行不在我的计划里,是新守卫立刻抓出来的。** 我量了 light 与 tofu、修完就准备收工,守卫首跑**直接红在 dark `--type-fund` = 4.45**(差 AA 一点点)。我的手工排查漏掉它,**因为我只盯着两个已知坏掉的主题** —— 这正是「测两个状态 ≠ 测全状态」在配色轴上的重演。**选择修掉而不是豁免**:4.45 与 4.5 的差距肉眼难辨,但一条为凑绿而开的豁免会把这道闸的语义永久稀释。
+- **守卫的两条设计约束:** ①**tint 百分比从 CSS 规则里读出来,不写死 15%** —— 改了 `trading.css` 的百分比,度量必须跟着动,否则又是一个「注释里的数字」;②**补集 `test_asset_type_colours_are_themed`** 断言三主题不得共用同一组值 —— 只有正向断言时,「把 token 压暗到 light 能过」也能变绿,而那会毁掉 dark(实测 N2 咬中 3 条)。
+- **NEUTER×3,每发都先确认补丁真的改到了文件:** ①light `--type-stock` 还原成柔和色 → 1 红;②三主题共用一值 → **补集 3 红**;③删掉 tint 规则让配对不再解析 → 扫描面守卫红。
+- **未做(留给 `pt_61b79f4351f548cd`,范围已缩小):** `::selection`(1.59)、`.sim-slab-wr-mid`(2.88) 等剩余项的**前景与背景是不同 token**,属另一种形状,修法是调 tint 百分比或改实心底,不是本轮这套。已在板上开更正条目 `pt_a34a92777f4d4069` 说明,并提示接手者**重跑测量拿最新底数,别用票面旧数字**。
+
+
 ### 2026-07-28(续) — 浏览器修好之后,把它**当探测器用**:visual 环 28P/12F → **40P/0F**,而新装的 JS 错误捕获**首跑就抓到一个真产品 bug**(commit `2fc2b9af`;新套件 **8/8**,**NEUTER×3 全咬**,相邻记忆环 75/75,collect **11,339** 0 err;epic `pt_f5a6da80a0444ca1` 收口,后续扩张开 `pt_de6b74141e3141a4`)
 
 - **★ 起点是上一轮留下的一句警告,而它被证实了:「长期整体 skip 的测试环等于没有覆盖,不得据其全绿作决策前提」。** `ff0a94f3` 让浏览器能跑之后第一次跑通 visual 全环:**12 failed / 28 passed / 5 skipped**,耗时 7m55s。这 12 条**在此之前一直是 skip**,套件报绿。

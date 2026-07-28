@@ -66,6 +66,7 @@ Public API
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from typing import Optional
@@ -91,6 +92,7 @@ __all__ = [
     'source_fields',
     'missing_required_fields',
     'normalize_domain',
+    'invalidate_cache',
     'DEFAULT_SOURCES',
 ]
 
@@ -102,6 +104,9 @@ _MAX_COOKIES_PER_SOURCE = 256
 _lock = threading.RLock()
 _cache: list[dict] = []
 _cache_loaded = False
+# mtime of the store when _cache was filled — the cache's validity key. A
+# different mtime means another process wrote the file, so we must re-read.
+_cache_mtime = 0.0
 
 
 # ── Default catalog ─────────────────────────────────────────────────
@@ -293,12 +298,55 @@ def cookies_from_storage_state(state, domain: Optional[str] = None) -> list[dict
     return out[:_MAX_COOKIES_PER_SOURCE]
 
 
+def _store_mtime() -> float:
+    """Store file mtime, or 0.0 when it does not exist / cannot be stat'ed."""
+    try:
+        return os.path.getmtime(_STORE_PATH)
+    except OSError:
+        return 0.0
+
+
+def invalidate_cache() -> None:
+    """Drop the in-memory cache so the next read re-loads from disk.
+
+    The cache is normally self-invalidating (see :func:`_ensure_loaded` — it
+    re-reads whenever the file's mtime moves), so callers rarely need this.
+    It exists for the cases mtime cannot cover:
+
+      * a same-second write on a coarse-mtime filesystem;
+      * a test that swaps ``_STORE_PATH`` and wants a guaranteed clean read;
+      * an operator forcing a re-read after editing the JSON by hand.
+
+    Public on purpose: reaching into ``_cache_loaded`` from outside the module
+    is what this replaces.
+    """
+    global _cache_loaded, _cache_mtime
+    with _lock:
+        _cache_loaded = False
+        _cache_mtime = 0.0
+        _cache.clear()
+    logger.debug('[AuthSrc] cache invalidated — next read re-loads from disk')
+
+
 def _ensure_loaded() -> None:
-    global _cache_loaded
-    if _cache_loaded:
+    """Load the store into the module cache, re-reading when the file changed.
+
+    The cache used to be load-once-per-process, which made a LONG-LIVED reader
+    (a scheduler / optimizer worker, or any non-server entrypoint) keep the
+    snapshot it took at startup forever: credentials connected later through
+    the Settings UI — written by a DIFFERENT process — were never picked up,
+    and the fetch path kept hitting the login wall with no way to recover short
+    of a restart. Keying the cache on the file's mtime makes it self-healing
+    across processes; :func:`invalidate_cache` remains for the cases mtime
+    cannot see.
+    """
+    global _cache_loaded, _cache_mtime
+    mtime = _store_mtime()
+    if _cache_loaded and mtime == _cache_mtime:
         return
     with _lock:
-        if _cache_loaded:
+        mtime = _store_mtime()
+        if _cache_loaded and mtime == _cache_mtime:
             return
         store = read_json(_STORE_PATH, default=None)
         rows: list[dict] = []
@@ -322,12 +370,17 @@ def _ensure_loaded() -> None:
         _cache.clear()
         _cache.extend(rows)
         _cache_loaded = True
+        _cache_mtime = mtime
         logger.info('[AuthSrc] loaded %d source(s) from %s', len(_cache), _STORE_PATH)
 
 
 def _persist() -> None:
+    global _cache_mtime
     payload = {'version': _STORE_VERSION, 'sources': list(_cache)}
     update_json_atomic(_STORE_PATH, lambda _: payload, default=payload)
+    # Our own write must not look like someone else's: record the new mtime so
+    # the next read trusts the cache we just updated in memory.
+    _cache_mtime = _store_mtime()
 
 
 def _redact(row: dict) -> dict:

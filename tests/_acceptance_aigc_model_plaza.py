@@ -28,15 +28,14 @@
 ----------------------------------------
 ``allow_private_hosts`` 和 SSO cookie 走的是 **两条不同的缝**：
   * 前者由 ``sync_search_config()`` 推给库，本脚本每次都调，永远新鲜；
-  * 后者由 ``lib.auth_sources.match_source()`` 在抓取时现查，而该模块
-    有模块级 ``_cache`` + ``_cache_loaded``：**一旦在进程内加载过就不再
-    重读磁盘**，且没有对外的失效接口。
+  * 后者由 ``lib.auth_sources.match_source()`` 在抓取时现查。该模块的缓存
+    已按存储文件 mtime 自愈（外部进程写入会被自动发现），但 mtime 看不见
+    「同一刻度内的覆写」。
 
-所以在长驻进程里（或先跑一次未连接、再跑一次已连接），可能读到陈旧的
-空 cookie 集而判 LOGIN_WALL —— 那是**假阴性**：看着像“cookie 没生效”，
-实际是缓存没刷。本脚本因此在抓取前强制刷新缓存并打印命中情况
-（只打 domain + cookie 数量，**绝不打印值**），让“凭证到底有没有被这次
-抓取看见”在输出里一目了然。
+本脚本因此在抓取前调用公开的 ``invalidate_cache()`` 并打印命中情况
+（只打 domain + cookie 数量，**绝不打印值**），让「凭证到底有没有被这次
+抓取看见」在输出里一目了然 —— 从而把「真没连接」和「连了却仍被挡」
+（cookie 过期 / 字段名不对 / 二次鉴权）区分开。
 
 用法
 ----
@@ -129,9 +128,9 @@ def probe_auth_source(url):
     """
     try:
         import lib.auth_sources as _as
-        # 强制下一次查询重读磁盘 —— 该模块没有公开的失效接口。
-        _as._cache_loaded = False
-        _as._cache.clear()
+        # 走公开接口强制下一次查询重读磁盘。缓存本身已按 mtime 自愈,
+        # 这里显式失效是为了连「同刻度覆写」也不漏。
+        _as.invalidate_cache()
         src = _as.match_source(url)
     except Exception as e:
         return f'探测失败（{type(e).__name__}: {e}）', False

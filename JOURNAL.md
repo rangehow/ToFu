@@ -1,6 +1,22 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-28 — 真实浏览器覆盖面扩张:18 个零覆盖面板铺开 + 抓到一处死 onclick;**而我的守卫第一版对 settings 整个面板层空转,是 NEUTER 而非评审发现的**(epic `pt_de6b74141e3141a4` 收口;commit `ffd0ebff`,2 文件 +238/-8;新套件 **6/6 / 29s**,**NEUTER×5 全咬**,visual 全环 **40 → 46 passed 零红**,干净 committed worktree **6/6**)
+
+- **★ 本轮最值钱的不是新增的覆盖,而是我第一版守卫的失效形态:断言写对了、驱动的入口也对,但**观测窗口**开错了,于是整个 settings 面板层无覆盖而套件全绿。**
+  - 我按「每切一个 tab 前清空错误缓冲、只判这次切换产生了什么」写,读起来完全合理。**NEUTER-1 往 `_populateMcpTab` 注入一个真 `TypeError`,套件纹丝不动。**
+  - 查明:`settings/core_panel.js` 的 `openSettings()` **一趟把每个 `_populate*Tab` 全调掉**(`:292-301` 连续 9 个调用),`switchSettingsTab` 之后**只翻 CSS class**。所以**面板主体的渲染全发生在 open 那一刻**,而我恰好在 open **之后**才开始清缓冲 —— 把唯一能看见渲染崩溃的窗口自己丢掉了。修法:open 阶段独立断言,置于任何 drain 之前。
+  - **判据(charter「扫描面残缺」家族的时间轴变体):扫描类守卫问「扫到哪些东西」,而事件类守卫必须问「我的观测窗口覆盖了被测行为真正发生的时刻吗」。** 前者残缺在**输入集合**,后者残缺在**时间**,两者都不产生红色信号。
+- **★ 第二个自伤:第一发 NEUTER 本身是无效的,它证明不了任何事。** 我注入 `null.boom;` 到 IIFE 里,实测报 `[Bundle] esbuild minify failed (exit=1), Expected "=>" but found "."` —— **破坏的是压缩器,不是运行时**,bundle 回落到 `_minify_js` 后页面照常工作。**纪律:NEUTER 注入后必须 `node --check` 确认语法合法,否则「守卫没咬」与「注入没生效」在输出上完全一样。**
+- **入口全部实测得出,票面猜的名字一个都不存在。** epic 建议 `switchSettingsTab('providers'/'memory')` + `openMyDay`/`openScheduler`/`openArtifacts`;实测 tab 真名是 `general/api/preset/mcp/skills/search/speech/translate/oauth/network/devices/feishu/preferences/advanced`(**14 个**),模态真名是 `openDailyReport`/`openOrchestration`/`openMemoryModal`。**照票面写会得到一套「调用不存在的函数、什么都不做、然后全绿」的测试** —— 与 charter 记的「绿着空转」同族,只是这次的空转源是票面而非漂移。
+- **每条断言都是「无 HARD 错误」+「容器真的出现」双条件。** 只断言前者时,一个静默 no-op 的入口同样全绿 —— NEUTER-3/4(把 `togglePaperMode`/`openDailyReport` 改成 `return;`)精确红在容器那一半,证明这半条不是装饰。
+- **★ 产品缺陷一个(通用 onclick 扫描首跑即抓到):`index.html:1812` 的移动端「定时任务」调用 `toggleScheduler()`,而该函数全库零定义。** `f2008c11` 把 `scheduler.js` 作为死面板整体删除(`_BUNDLE_FILES` 里也已不在),**但这一个调用点活了下来**,于是移动端点它就抛异常、什么都不发生。定时任务的真实入口是 `#mobileTimer`,scheduler 工具本身是服务端常开。已删除该条并把 WHAT/WHY 写在原位注释里(charter:「不做 X」的理由记在代码使用点,不是票里)。
+  - 该检查**在浏览器内**对真 bundle 做符号解析(`typeof window[name] !== 'function'`),**不手抄任何符号清单** —— 下次再有人删模块留调用点,它自己会红。
+- **共享 HEAD 纪律:我违反了 charter 明令,用 `git stash` 做暂存分离,代价很大。** 我需要把兄弟未提交的三行 `lcBrowserAbout`/`lcDesktopAbout`/`lcPermNote`(`local-control.js` 正在接线)排除出我的 commit,却用了 `git stash push --keep-index` + `git checkout --`,**同时抹掉了兄弟的改动和我自己的改动**,并且那次 `stash pop` 撞上另一个兄弟的**保管 stash**,在我从未碰过的 `lib/llm_sanitize/_gateway.py` 上留下 `UU` 冲突。
+  - 全部已恢复:预存的 `git diff` 把两边改动原样放回工作树;冲突 pop **不会** drop stash,故兄弟的保管件仍在 `stash@{0}`;`_gateway.py` 复位到 HEAD 且 `ast.parse` 通过。
+  - **正解(零风险,应一开始就用):`git diff > d.patch` → 按 hunk 过滤 → `git apply --cached`。** 它**只**写 index、**从不碰工作树**,所以别人的脏改动不可能被牵连。charter 已写「A/B 验证禁止 stash」,本轮证明**暂存分离同样禁止** —— 判据统一成:共享 HEAD 上任何操作都不得以工作树为中间态。
+- **成本:** 新套件 29s(14 tab 共用一次页面加载),visual 全环 2m55s → 3m56s / 46 条。**未做:** paper 的六个子 tab 需要真论文 fixture(paper-hash 作用域),本轮只覆盖 shell;`optimizer`/`translation`/`artifacts` 的入口是移动端专用或需先有产物,留待后续。
+
 ### 2026-07-28 — `get_conversation` 工具面翻成 raw 默认(owner「调试太不友好,元数据全都要,像查数据库一样」):**默认值被两处各自解释,只翻一处会让卡片撒谎**(commit `438aab75`,6 文件 +300/-17;新套件 **22/22**,**NEUTER×3 全咬**,相邻环 **130/130**,tool inventory `--check` in sync,干净 committed worktree **98/98**)
 
 - **缺陷形状 = charter「后端单一真源被前端手抄」的同族,这次副本是「默认值」,而两个副本分属两条语义不同的通道。** `raw` 的默认在两处**各自**从 `fn_args` 读:①`lib/conv_ref/_tool.py` 决定**真正跑哪种读法**;②`lib/tasks_pkg/handlers/misc/_brain.py:81` 决定**人类卡片要不要打 `RAW · debug` 徽章**(`raw=bool(_fn_args.get('raw'))`)。**只翻一处的后果不是「有一处没生效」,而是卡片写着 RAW 而载荷是散文**(或反过来)—— 一条措辞精确、可信、但归因错误的信号,与 charter 已记的「800k 硬顶把正常批量读诬告成 base64 泄漏」同族。故落点是 `raw_requested()` 单一真源,两侧都改为向它问,而不是在两处各写一遍 `get('raw', True)`。

@@ -1,4 +1,77 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
+
+### 2026-07-28 — Opus 5「全部变成问候语」重大事故根修:根因在上游每日构建,但三道内部防线全部缺口;**上一调查会话自己被同一事故 kill 在半途**(commit `ddcb73fb` + 兄弟 `48afcc9b`;新套件 **23/23**,**NEUTER×3 各咬各的**,相邻环 **88/88**)
+
+- **事故形状(DB+日志铁证,非推断):** 今日 06:25 起,sankuai 网关对 Opus 5 请求间歇返回**逐字节相同**的 29 字符 `Hi! How can I help you today?` + 干净 `finish_reason=stop` + 真实 M-TraceId/usage —— 66+ 事件 / 14 会话 / 全部 3 个 API key;最近 30 条 Opus 5 persist 里 15 条是问候(~50%)。**所有传输层守卫(zero-byte/premature/empty-stop)都问「有没有字节」,对这种「看起来成功」的退化响应全部放行**,回合正常 break、按 done 落库,把前面 N 轮真实工具成果整段顶掉(ms40kfqq 曼谷机票:2×searchFlights 各 195KB 的答案被 29 字符问候顶掉)。
+- **根因(外层,不可自愈):`claude-opus-5` 的 request_ids 池只有一个成员 `yuju-claude-opus-5-evaDaily` —— 一个每日构建的评估部署。** 实测逐 id 探活:`aws.claude-opus-5` / `vertex.claude-opus-5` / `yuju-claude-opus-5` 全部 HTTP 400「不支持的模型类型」→ **Opus 5 没有任何可故障转移的上游**。时间线排除我方代码:爆发始于 06:25,而当日请求路径零提交(HEAD=a1484d1a doc_parser);小请求直连网关实测正常,同会话 328k-379k token 的相邻任务 11 轮全健康 —— 触发面与上下文大小、key、会话均无关,就是上游部署间歇性退化。
+- **放大腿(内层,两张 owner 票分治):** ①worker 问候按正常完成落库(姊妹票 pt_473309109ace4240,兄弟 `48afcc9b` 已落地 persist 层拦截);②**VU(同一模型)的问候被 `_append_vu_message_to_conv` 当中继成合成 user 消息,下一个任务的 query 就是这句问候** —— 18 条 / 10 会话(ms3sahx7cotx3y ords 9/11/13 与 task `lastUserQuery='Hi! How can I help you today?'` 逐条对上)。
+- **修复(本票 pt_60b98556a2304b60,`ddcb73fb`):** 新增纯函数 `is_canned_greeting_reply`(三闸:短 ≤60 字符 + 开场问候族正则 en/zh + **最后一条真实 user 消息不是寒暄**——寒暄补集是结构性的,用户真说「你好/在吗」永不误伤)接入 `analyse_stream_result` 为有界重试桶(cap 2,共享 per-phase 计数,与 empty_stop 同纪律);**重试耗尽后接受而非伪造错误**(问候可能是合法的 + 兄弟的 persist 拦截兜底,只 loud + audit_log)。VU 侧 `run_virtual_user` 检出问候 → 返回 None 干净停 run,不再中继。
+- **★ 方法论(最值钱一条):前一个调查会话 ms40pmdpyuyc3j 自己就是这个事故的受害者 —— 47 轮取证后被 kill 在半途(`interruptedReason: killed`),而它查的正是 kill 它的东西。** 它留下的中间结论(「mock_llm_server 是树内唯一问候源」)是**对的方向但错的答案**:mock 的罐头串是 54 字符的另一句,真凶一句代码里都没有 —— 是上游模型自己的 canonical 开场白。**判据:排查「模型行为异常」时,先把「响应逐字节相同 + finish=stop + 真实 trace」这三件事对上,再决定往代码里找还是往上游找。**
+- **验收边界(诚实分账):** 修复已 committed,但**运行中的服务器进程是 10:24 启动的,不带修复** —— 需要重启才生效(「merged ≠ live」纪律);截至 11:18 上游仍在退化(最新问候 persist 11:18:29)。key[0] 在网关侧还有独立的 per-key RPM 限流(429「每分钟请求次数超过限制」),与本事故无关但会加剧排队。建议 owner 把 M-TraceId 样本(如 `0baf16396434476bb1924072044edc92`)报给 sankuai 网关团队,并争取一个非 daily 的稳定 opus-5 别名。
+
+### 2026-07-28 — charter 决策大迁移(33 条 → kind 分流):9 条完工/否决记录自 charter 迁入本志。
+> 背景:charter 只留约束未来决策的 invariant;以下为收口/实测否决的审计留痕,逐条原文迁移,未改写。
+
+#### Opus 5 适配收口结论(2026-07-26,实测后拍板 —— 本条**取代**先前同名决策,后者含一句未经测量的推断,已删除):
+
+Opus 5 适配收口结论(2026-07-26,实测后拍板 —— 本条**取代**先前同名决策,后者含一句未经测量的推断,已删除):
+
+**`mid-conversation-tool-changes-2026-07-01` beta 对本项目零收益,判定 WONTFIX。** 结论**只依赖一件事:该 beta 的触发前提在本项目从不发生**,与任何缓存效率数字无关。
+
+**前提不成立的证据(生产库 task_events,6013 条 messages_snapshot / 163 任务,全量扫描):**
+- 剥离我方自加的 `cache_control` 标记后,**156 个携带工具的任务里,工具集在轮间变动的有 0 个**;只比对 `kind=request` 快照(真正的上wire形态)同样 **104 个多轮任务中 0 个变动**。
+- **跨任务同会话**(即连续用户轮次)另测:**20 个会话,0 个变动**。
+- 全库只有 **4 种**工具集形状(227 工具 ×154 任务、193 ×1、196 ×1),差异在**任务之间**(不同 profile/项目态),**不在任务之内、也不在会话之内**。
+beta 要解决的是「工具变了还想复用前缀」,而我们根本不变。
+
+**`server-side-fallback-2026-07-01` 不落码,理由不同(不是无收益,是无法验证):** 只在 Anthropic 原生协议上有意义,而生产走 sankuai OpenAI 兼容线(不消费 `anthropic-beta` 头),`oauth_claude` 原生线 `data/config/oauth/` 实测 0 个 token 文件、发不出请求。将来原生线有流量时只需重估**这一个**。
+
+**缓存实测(取代先前「工具块已被完整缓存住」那句推断 —— 那句从未测量过):**
+- 按模型**聚合**的真实命中率:`yuju-claude-opus-5-evaDaily` **53.3%**(114 任务,340.7M prompt / 181.3M cache_read),kimi-k3 58.1%。缓存在这条线上工作良好。
+- **⚠️ 度量陷阱(我在本轮栽过):`task_results.metadata.usage.prompt_tokens` 是整个任务多轮的累加值**,与**单轮** `cache_read` 不同量纲,两者相除会得到荒谬的低值(我一度算出 0.10)。要算命中率**必须按模型聚合后再除**。
+- **`cache_write` 的有无取决于该模型走哪条 usage 约定,不是模型能力差异,也不是我方解析漏接字段。** 实测一一对应(`usage_cache_convention` 判定):4.8 anthropic 4881 轮 / cw>0 4886 轮;4.7 anthropic 123 / cw>0 123;4.6 anthropic 129 / cw>0 129;**Opus 5 anthropic 0 / cw>0 0**。走 anthropic 残差约定的线路网关**真回** `cache_creation_input_tokens`(经 `_sse_core.py` 的 `canonicalize_usage_cache_keys` 归一);走 openai 兼容约定的线路(Opus 5 / glm / qwen)不回。**不要据此去查「谁漏了字段」——那是错误方向。**
+
+**方法论(适用于将来任何 beta/优化提案):**
+1. 采纳上游特性前,先用**生产数据**验证它针对的模式在本项目真实存在。本票前提写得具体可信,但它是从「代码里有按 profile 装配工具的逻辑」推导的,而非测出来的——那套逻辑确实存在,只是在同一任务/会话内从不触发。
+2. **不要用合成请求打网关做缓存 A/B**,已证测不准;用 `task_results.metadata` 的真实 usage 做统计对照(样本充足)。
+3. 比对 snapshot 必须先按 `kind` 分层:`kind=request` 在 `add_cache_breakpoints` **之前**捕获、`kind=state` 在**之后**,混比会造出不存在的缺陷(我一度误判 `cache_control` 标记「翻转」,实为同一轮的两张照片)。
+
+#### 回退链混缓存不兼容模型——实测否决,维持现状(2026-07-26,epic pt_3616d93d519c49b4 收口):7 天 17,602 轮全量实测,
+
+回退链混缓存不兼容模型——实测否决,维持现状(2026-07-26,epic pt_3616d93d519c49b4 收口):7 天 17,602 轮全量实测,claude↔kimi 混线的真实超额仅 ¥38/周(跳入 ¥14.6 + 回跳 ¥23.4)。「回跳重计费 ×2」假设不成立:opus-5 回跳时暖前缀恒为 0(其体缓存被网关侧缺陷杀死,无可失);kimi input 价仅为 opus-5 的 1/5、read 价低于 claude read,长混线段稳态反而省钱。**结论:`/models/fallback_model = kimi-k3` 不改,不为成本重构回退链。** 唯一保留条款:aws 线缓存健康,回跳真付钱(单次 ¥10-13);若 opus-5 体缓存缺陷(epic 后续票 A)修复使回跳时存在暖前缀,必须按新数据重评本决策。
+
+#### breakpoint-lost / extended-ttl beta flap —— 实测否决,不做「latch 按 conv 稳定」(2026-07-26,
+
+breakpoint-lost / extended-ttl beta flap —— 实测否决,不做「latch 按 conv 稳定」(2026-07-26,epic pt_2cd7a29cf66f4f81 收口)。①机制归因:20 条 `<ns>beta` 事件中 17 条同时换 key(属 key 轮换,B 票);仅 3 条纯 beta flap,逐条查模型序列后**全部精确落在模型切换那一秒**(ms0zuc59 09:50:39 / ms14r5vp 11:58:00 / ms1hfkfb 16:20:47)——beta 头随模型走(kimi 强制 use_extended_ttl=False),不随 task 走,故把 latch 从 per-task 提为 per-conv 一分钱省不下。②成本归属:24 个 breakpoint-lost 轮中 20 轮是 opus-5(丢 4.36M tok ¥425.85,占 98%),而 opus-5 缓存失效已由同 key 对照实验判归上游模型线(kimi 3-5% vs opus-5 40-52% 归零率);剥离后纯 C 样本仅 4 轮、真丢 2 例 ≈¥9.6/7天。③附带实测结论(推翻票面推断):**体断点位置抖动对命中率无影响** —— 断点索引移动 949 次 vs 不变 249 次,两组 median cache_read 完全相同(83,277)。结论:不为此改 lib/llm/cache.py 的标记布局(全模型共用热路径)。
+
+#### key 轮换粘性(sticky routing/hold)——实测后不做,无独立可修实弹(2026-07-26,epic pt_4c41eeb8f7954da7
+
+key 轮换粘性(sticky routing/hold)——实测后不做,无独立可修实弹(2026-07-26,epic pt_4c41eeb8f7954da7 收口)。混淆检验(换 key 组 vs 同模型/gap 窗口未换 key 组)三段结论:①**kimi 自动缓存是全局的,跨 key 有效**——换 key 轮 cache_read 保留率 median 101%(n=560),换 key 对 kimi 零伤害,且 kimi 走零 cache_control 标记,sticky 机制对它根本不适用(¥113 纸面=伪影);②**aws claude(唯一缓存健康+真 per-key 的线)7 天换 key <2 次**,无需修;③**opus-5 的 130 次换 key 中 119 次发生在缓存本来就冷/地板时(prev_cr≤100k,无可救)**,仅 11 次真暖前缀被打飞,但 opus-5 换 key 与 A 票(上游不稳定→429 换 key+缓存间歇归零)同根——sticky 收益被「缓存间歇+冷却多硬」双重压缩,且解决 A 后换 key 自然减少。**★ 方法论纪律(本批审计最值钱一条):「换 key 后 cache_read 跌了」≠「换 key 造成的」,必须设对照组扣掉基准下跌(opus-5 不换 key 也有 43% 跌),否则把上游的账误记到调度头上。** 结论:不在 dispatcher 热路径为已坏缓存加 sticky 补丁(charter 反对的补丁式小修小补),B 随 A 票(pt_a475804a,opus-5 上游)结果自然消解。
+
+#### opus-5 evaDaily 体缓存几乎不命中(46.3% 大头是静态地板 83,277,主体轮仅 24.9% 命中到体;170 轮 wire 指纹实证字节+
+
+opus-5 evaDaily 体缓存几乎不命中(46.3% 大头是静态地板 83,277,主体轮仅 24.9% 命中到体;170 轮 wire 指纹实证字节+标记全同仍不读回)——owner 拍板「接受现状」(2026-07-26,epic pt_a475804a 收口,选项 C)。不问网关侧、不改客户端断点策略、不把缓存目标折进 system 尾部块。后果已知并 accepted:该线 ¥3.4k+/周 的可省成本不追回。两条联动条款保留:①回退链决策(fallback_model=kimi-k3 不改)以「opus-5 回跳时无暖前缀可失」为前提之一,该前提现在固化,回退链决策维持;②key 轮换粘性(B 票)已实测不做,其 opus-5 部分随本决策彻底消解。若将来网关侧行为变化(如换线/升级)使体缓存恢复命中,可用生产 apiRounds 数据重新评估,届时 B/D 两票的重评条款自动激活。
+
+#### [perf] LoopWatch 非阻塞日志修复已实证生效(2026-07-27 验证):修复 commit 18f47517 随 04:56:56 重启上线后
+
+[perf] LoopWatch 非阻塞日志修复已实证生效(2026-07-27 验证):修复 commit 18f47517 随 04:56:56 重启上线后,对当前进程 tmpfs faulthandler 转储(/dev/shm/tofu_faulthandler_3063759.log,06:51:48 stall,201 线程)的分析显示全线程 0 个 logging I/O 帧;而修复前 logs/faulthandler.log 累计 80 个 loop 线程块中有 6 个真实文件 I/O 日志帧(handlers.py emit/doRollover/flush)。STALLED 频率从修复前 ~15 次/天降至重启后 3.5h 内 1 次,且该次与日志无关。原 epic 前提(json.dumps 阻塞 loop)被证伪:所有转储中 loop 线程 0 个 json encoder 帧,唯一 json 活动是后台 file_history GC 线程的 json.loads。已知残余(未修,实测 0 帧故不镀金):audit_log() lib/log.py:262 仍绕过 QueueHandler 在全局锁下同步写 FUSE——若从 async handler 调用在 FUSE hang 时会卡 loop,但改它会牺牲审计日志崩溃持久性,需单独拍板。07-27 06:51 残余 stall 根因未捕获(转储截断),可见证据指向 180 个 executor 线程的 FUSE I/O 与 GIL 竞争——属不同根因,不属本 epic。
+
+#### TTFT 首字节看门狗 + 等待心跳已落地(commit 69cd968c,2026-07-27):①lib/llm/_transport.py::FirstB
+
+TTFT 首字节看门狗 + 等待心跳已落地(commit 69cd968c,2026-07-27):①lib/llm/_transport.py::FirstByteWatchdog 限制 send→首字节(TOFU_LLM_TTFT_TIMEOUT 默认 180s,0=关闭;TOFU_LLM_FIRST_BYTE_HEARTBEAT_S 默认 20s),kill 经两条传输路径翻译成 FirstByteTimeoutError,在 dispatch 两个循环走正常 upstream 软错误路径(record_error 连错阶梯 + pair 排除 + 换 slot),HUD 原因 token 'First byte timeout' 已注册进 retry_i18n.RETRY_REASON_KEYS——注意:test_swarm_retry_phase_i18n 的 expected token 集合已 +1,兄弟若也加 token 会在此集合上冲突,两处必须同 commit。②dispatch_stream/async_dispatch_stream 新增可选参 on_waiting(elapsed, slot),manager/_stream.py 把心拍发成 transient 'retrying' PHASE(attempt=beat 序号,前端零改动重绘),detailKey stream.phase.waitingFirstByte[Reason]。③共享 HEAD 纪律:A/B 验证禁止用 git stash(stash push 路径清单混入未跟踪文件会整体失败,紧随的 pop 会把栈顶兄弟的保管 stash pop 进树);改用 git diff > patch && git checkout -- <files> 与 git apply 往返。
+
+#### [perf] audit_log 残余同步写已修复(2026-07-27,commit a156160d,owner 对残余问题拍板「非阻塞日志」后执行):au
+
+[perf] audit_log 残余同步写已修复(2026-07-27,commit a156160d,owner 对残余问题拍板「非阻塞日志」后执行):audit_log() 不再在调用线程做磁盘 I/O——原实现在全局锁下同步 open/append audit.log 且每次调用 os.makedirs(FUSE syscall),event loop 上的 async handler 调用时会在挂载 hang 时冻结全部请求,这是 18f47517 之后最后一条同步日志写路径。新实现:调用方只做 JSON 序列化(纯 CPU)并 enqueue,专用 daemon writer 线程执行落盘,镜像 server.py 的 QueueHandler/QueueListener 架构;atexit 有界 5s drain 保证优雅退出不丢队列;pytest 下保持同步(镜像 _LOG_UNDER_PYTEST 约定)。已接受的 trade-off:SIGKILL 时仍在队列中的审计条目丢失。守护测试 tests/test_audit_log_nonblocking.py ×4(同步模式默认、队列路径 JSON 行、调用方不等待写完成、写失败走 fallback 不抛);6 个红 guard 测试经 HEAD 对照证实为预存在红(违规全在未触碰文件),与本改动零相关。
+
+#### 行存储写路径迁移全期收口(2026-07-27,owner 板上拍板「A 现在翻旗」,epic pt_59140ecd done):**dual-write 已
+
+行存储写路径迁移全期收口(2026-07-27,owner 板上拍板「A 现在翻旗」,epic pt_59140ecd done):**dual-write 已上线**,旗标形式为**持久文件** `data/config/messages_rows_write.flag` 而非 env var——`rows_write_enabled()` 解析序:env `TOFU_MESSAGES_ROWS` 恒优先(任一方向,`=0` 是紧急 kill switch)→ 未设则读旗标文件。选择文件是因为 re-exec 重启保环境无法注入新 var、而 env 翻旗会在下次异终端重启时静默回落(镜像无声腐烂)。
+
+当前状态(替代此前「rows_write_enabled() False / backfill 陈旧」的记录):全库 4,193 会话 / 31,306 行,翻旗后 parity 复查全部修复通过;新写入实时镜像(26 个整 blob 写点全挂钩,AST 棘轮 test_messages_rows_hook_coverage 封锁新写点;dual_write 为增量形态——count 探测+tip 刷新+changed_seqs 提示,重排类写点走 full=True)。
+
+**已知残余(读翻转前必须重验):** ①读路径 `TOFU_MESSAGES_ROWS_READ` 仍 OFF,是独立后续决策——翻转时必须先跑一次 fleet parity(活跃会话会再漂移)+ 遵守既有 row_window_usable 失败关闭;②13:46 进程重载前,含原始空字节的活跃会话镜像仍会间歇失败(HEAD 已修 json_dumps_pg 序列化,`55039b2b` 钉),任务 settle 后经 blob 重读的下一次写入自愈,backfill runner(tests/_migrate_messages_rows_backfill.py,幂等 dry-run 默认)可随时修复。
+
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 ### 2026-07-28(续9) — R3 gate② 后端对照实测收口
@@ -49,6 +122,16 @@
 - **接线位置是实测定的,不是拍的:** 必须跑在 fallback/synthesis(可能合法填空)**之后**、pre-emit conv sync 与 done 事件构建**之前** —— 后两者都读 `task['content']`,拦晚了残汤照样进库进客户端。守卫用 **AST 断言真实 `Call` 节点**(不是注释/docstring 里有这个名字),并断言它在 `_sync_result_to_conversation` 之前 —— 这是 charter「把这行调用删掉,守卫会红吗?」的直接兑现。
 - **NEUTER×2 各咬各的:** ①摘掉接线调用 → 只有「接线存在」那条红;②把 helper 掏成 `return False` → 只有「恢复行为」那条红。两发都先 `ast.parse` 确认注入合法(charter:NEUTER 必须先进运行路径)。
 - **诚实分账:** `test_finalize_user_msg_id.py::test_vu_subtask_inherits_parent_user_msg_id` 在 sibling 环里红 —— A/B 实证(临时换成 HEAD 版 `autopilot.py`)**同样红**,确认是预存在的守卫腐烂(硬编码 `<=15` 行阈值 vs 注释增长),与本轮零相关;且当时 `autopilot.py` 还带着兄弟未提交的 11 行,按纪律未动、未扫进 commit。共享 HEAD:`git add` 后计数断言 **=2** 才提交。
+
+
+### 2026-07-28(续) — trash 回收站边界收口:**放宽让 `rm -rf /tmp/…` 第一次到达 trash 改写层,而 shim 会把整棵 worktree 跨设备拷进 FUSE 项目目录**(owner 复核 `46c1bb70` 时抓出「我分析里注意到却没写进报告」的缺陷;commit `0bf3c98b`,2 文件 +127/-3;套件 **39/39**,NEUTER 精确咬 3,干净 committed worktree **128/128**)
+
+- **缺陷形态(owner 判词:「回收站是 workspace 内容的 undo,不是整台机器的 undo」):** `46c1bb70` 放行 scoped 绝对删除后,`rm -rf /tmp/wt_fill` 第一次真正到达 `_maybe_wrap_rm_with_trash`;而 shim 把**每个**操作数 `mv` 进 `<cwd>/.tofu_trash/` —— 对 `/tmp/wt_fill` 就是把 ~61MB(2,784 个跟踪文件)的 worktree 从本地盘**跨设备复制到 FUSE 项目目录**(本机 `du -sh` 在这挂载上 60s+ 超时),外加 7 天 TTL 的非项目临时数据。用户场景从「被拦」变成「慢 + 污染回收站」。**这是放宽才激活的新活路径 —— 之前所有绝对删除在危险闸就被拒,shim 从未见过 workspace 外目标。**
+- **修法(per-operand 分流,不是命令级全有/全无):** shim 内对逐个操作数判定 —— 绝对路径且解析后落在 workspace cwd **之外** → `command rm -rf -- "$_a"` 真删(且失败经 `_rc` 上抛,不再被旧的 `return 0` 吞掉);相对路径与根内绝对路径 → trash 语义一字不动。命令级判定表达不了 `rm -rf /tmp/x && rm -rf build` 这种混合命令,所以判定点必须沉到 shim 的逐个操作数层。
+- **两个顺手的根修,均按「先查清它当初防的是什么」:** ①`_td` 改为**首个被回收操作数时惰性创建** —— 原实现对不存在的目标也留下空时间戳目录(纯 litter);②直删分支失败上抛 —— 原实现 `return 0` 会吞掉真 rm 的失败,让模型以为删成了。trash 分支保持 always-0 的 best-effort 语义不变(那是回收站的既有设计)。
+- **fail-safe 边界:** cwd 非绝对(无法定界)时退回旧的「全部回收」形态 —— 边界未知时偏向可恢复,与「导出产物是第一等验收目标」同款保守方向。cwd 为 `/` 时同理。
+- **测试全部用真实目录断言结果(不断言 shim 文本):** 外目标真消失 **且** 回收站零副本 / 相对与根内绝对仍进回收站(补集,否则「永不回收」也能绿)/ 单条混合命令按目标分流 / 边界 fallback 形态。**NEUTER 一发(强制 `_ws=None`)精确咬 3 红**(外目标、混合、fallback 形态),trash 路径 2 条保持绿 —— 证明断言的是分流逻辑而非「删除本身」。
+- **方法论(owner 复核原话,值得记下):** 「你在分析里注意到、却没写进交付报告的问题,我认为属于本次变更的直接后果,不能算范围外。」**放宽一个闸门时,必须把「被放行的流量下一站撞到什么」当作本变更的一部分来验收 —— 闸门的下游也是闸门。**
 
 
 ### 2026-07-28 — `rm -rf /tmp/wt_fill` 被「危险模式」恒拒根修:**第一代 blunt regex 短路了第二代参数解析守卫,而解析守卫早就实现了用户要的「两段路径可删」规则**(owner 截图报障「这是什么 dangerous pattern?tmp 两段路径应该可删,放宽一点」;commit `46c1bb70`,7 文件 +284/-10;新套件 **34/34**,**NEUTER×3 各自精确咬**,干净 committed worktree **136/136**)

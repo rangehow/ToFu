@@ -29,6 +29,55 @@
 
 ## Entries
 
+### 2026-07-28 — SSO sign-in was a closed loop: Open did nothing, Start locked forever (owner review)
+- **Change:** New pure `session/InteractiveSso.kt` (`shouldOpenWebView`, `completedSignIn`,
+  `hostToStamp`); `SessionManager.noteInteractiveSignIn()` stamps `cookieHost` after an in-WebView
+  sign-in; `CookieSink.cookieHeader()` reads the jar back; `ReauthWebViewClient` stands down for
+  SSO profiles; the `NeedsSso` `UiStatus` and its copy are deleted. Commit `fa3bdcb`.
+- **Why (defect 1 — the exit that did not exist):** `Screen.Web` had **exactly one assignment
+  site** — `ProfilesViewModel.handleLogin`'s `LoginResult.Success` branch. `INTERACTIVE_SSO`
+  returns `NeedsInteractiveSso`, whose only consumer was a status string:
+  *"This server needs interactive sign-in — opening…"*. **Nothing opened anything.** Tap Open →
+  read "opening…" → stay on the list → tap again → same.
+  This closed a loop with the SSO copy shipped in `ed4aeb1` ("tap Open, sign in once, then Start
+  and Stop will work"), which **pointed the user at the one exit that did not exist** — the same
+  shape as the original greyed-Start deadlock, one layer up. Five review passes missed it because
+  every one of them read the *decision* layer, where the rule looked right; the defect was that
+  the decision had **no consumer that could act on it**.
+- **Why (defect 2 — signed in, still locked):** even once navigation worked, nothing would ever
+  stamp `cookieHost` for SSO. The headless path stamps it at `SessionManager.kt:105`, when it
+  injects a cookie **it fetched itself**; an interactive sign-in is performed by the browser
+  engine and never passes through that line. So `isSignedIn` stayed false **permanently** and the
+  supervisor's Start/Stop could never be used no matter how many times the user signed in.
+  `noteInteractiveSignIn` is called from `onPageDone` and is deliberately conservative: it
+  requires landing back on our **own** host, **off** the `/login` page (a CSRF/state cookie alone
+  is a false positive), with a real cookie in the jar — and is idempotent, because `onPageDone`
+  fires on **every** main-frame load and `cookieHost` is part of `CardKey`, so a chatty write
+  would reset every card's polled state on each navigation.
+- **Why (defect 3 — found while fixing, and fatal to the fix on its own):**
+  `ReauthWebViewClient.shouldOverrideUrlLoading` returns `true` for **any** main-frame `/login`
+  navigation and defers to a headless re-login. For an SSO profile `login()` returns
+  `NeedsInteractiveSso`, so `onReauth`'s `if (result is LoginResult.Success) view.reload()`
+  **never fires**. An SSO sign-in *is* a sequence of main-frame navigations through login pages —
+  so the client would have swallowed the very flow we just sent the user into, freezing the
+  WebView on a blank surface. The user would have been handed in and **still** unable to sign in.
+  SSO is now exempt from that intercept and from the 401 trigger.
+- **Result / status:** **121 unit tests pass** (+15), lint clean, both APKs signed.
+  **Neuter-verified at BOTH levels** — reverting the fixes fails the pure guards
+  (`interactive sso must open the webview`, `landing back on our own host with a cookie records
+  the sign-in`) *and* the flow-level `completing_sso_in_the_webview_stamps_cookie_host`. The
+  two-level split is deliberate: it is the standing lesson from the staleness guards that a pure
+  rule tested in isolation says nothing about whether its inputs are wired correctly.
+- **`.gitignore` checked (owner asked):** `.tofu*` is anchored to names *starting with* `.tofu`,
+  so it cannot match `JOURNAL.md`. `git check-ignore -v JOURNAL.md` reports no match and
+  `git ls-files` lists it — tracked, no conflict.
+- **The recurring shape, now five for five:** every defect this session came from **conflating
+  two things that merely co-occur**. This one is the sharpest yet — *"the code decided X"* was
+  conflated with *"X happens"*. A `sealed interface` outcome with no consumer that acts is
+  indistinguishable, at the decision layer, from one that works.
+- **Still unverified on a device.** Per owner: **no release until an SSO profile is confirmed to
+  open, sign in, and unlock Start/Stop on real hardware.**
+
 <!-- Append newest entries at the top. Suggested format:
 
 ### YYYY-MM-DD — short title

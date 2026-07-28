@@ -818,8 +818,8 @@ def test_NC5_board_post_audit_noop_breaks(flask_app):
 
     _patch_restore(
         _BOARD_SRC,
-        "    audit_log('board_post', project_path=project_path, task_id=task_id, conv_id=conv_id)\n    return {'ok': True, 'id': task_id}",
-        "    return {'ok': True, 'id': task_id}  # NC-5 (audit disabled)",
+        "    audit_log('board_post', project_path=project_path, task_id=task_id, conv_id=conv_id)",
+        "    pass  # NC-5 (audit disabled)",
         run,
     )
 

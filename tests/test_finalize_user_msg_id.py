@@ -139,7 +139,9 @@ def test_vu_subtask_inherits_parent_user_msg_id():
         f'bookkeeping. Displacement into a baton block would be dangerous.'
     )
     gap = src[subtask_marker:inherit_pos]
-    assert gap.count('\n') <= 15, (
+    # Budget 25: a 22-line explanatory comment block now sits between the
+    # _vu_subtask stamp and the inheritance line (autopilot.py:436 → :458).
+    assert gap.count('\n') <= 25, (
         f'{AUTOPILOT_PATH}: _userMsgId inheritance drifted far from the '
         f'_vu_subtask marker ({gap.count(chr(10))} lines). Keep them '
         f'adjacent — this line is a diagnostic anchor, NOT baton flow.'

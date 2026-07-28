@@ -1203,10 +1203,323 @@ def dispatch_prefill_continue(
     })
 
 
+@dataclass
+class ContinueOutcome:
+    """Discriminated union for :func:`execute_chat_continue`.
+
+    kind:
+      * ``'started'``  — a resume task was started; ``payload`` is the
+        continue response body (``taskId`` / ``convId`` / ``checkpoint``).
+      * ``'fallback'`` — nothing recoverable; ``payload`` is
+        ``{'fallback': 'regenerate', 'reason': ...}`` and the caller
+        decides how to regenerate (the HTTP route ships it verbatim;
+        chat_start's interrupted-tail guard pops the stub and starts
+        fresh instead).
+      * ``'error'``    — passthrough error response (400/404/500 or a
+        task-start failure); the caller returns ``err_resp`` verbatim.
+    """
+    kind: str
+    payload: dict[str, Any] | None = None
+    err_resp: Any = None
+
+
+def execute_chat_continue(
+    conv_id: str,
+    config: dict[str, Any],
+    settings_patch: Any,
+    data: dict[str, Any],
+    *,
+    user_id: Any,
+    _start_task_for_conv,
+    _persist_conv_messages,
+    _set_conversation_settings,
+    _notify_conv_changed,
+    _audit_log,
+) -> ContinueOutcome:
+    """Atomic continue: roll back the last assistant message to its last
+    complete tool-call checkpoint, persist the rolled-back state to DB,
+    then start a new task that resumes from that checkpoint.
+
+    Single source of truth for the continue contract, shared by:
+
+      * ``routes/chat.py::chat_continue`` — the HTTP entry (thin wrapper
+        that parses the body and maps the outcome to responses), and
+      * ``routes/chat.py::chat_start``'s interrupted-tail guard — a bare
+        start whose DB tail is an interrupted assistant stub must RESUME
+        it via this same contract instead of appending a twin turn (the
+        ms43foj3 ``U A U A(stub) A(answer)`` doubled-bubble incident:
+        the frontend's pop-and-regenerate escape hatch reached
+        ``/chat/start`` with the rolled-back stub still at the tail, and
+        the fresh task appended a sibling answer instead of continuing
+        the stub).
+
+    If no recoverable checkpoint is found (no complete tool rounds) the
+    outcome is ``{'fallback': 'regenerate'}`` and the caller decides how
+    to regenerate.
+
+    The collaborators (``_start_task_for_conv``, ``_persist_conv_messages``,
+    ``_set_conversation_settings``, ``_notify_conv_changed``,
+    ``_audit_log``) are passed as callables — same seam pattern as
+    ``dispatch_prefill_continue`` — so the extraction is unit-testable
+    without a Flask app context, and monkeypatches of the routes.chat
+    module bindings keep steering the real route exactly as before.
+    """
+    # Late imports (matches this module's established style — keeps the
+    # import graph acyclic with routes.* / lib.tasks_pkg).
+    import json as _json
+
+    from lib.api_response import api_bad_request, api_internal_error, api_not_found
+    from lib.chat import scan_continue_checkpoint
+    from lib.database import DOMAIN_CHAT, get_thread_db
+    from routes.common import DEFAULT_USER_ID
+
+    db = get_thread_db(DOMAIN_CHAT)
+    row = db.execute(
+        'SELECT messages, title FROM conversations WHERE id=? AND user_id=?',
+        (conv_id, DEFAULT_USER_ID)
+    ).fetchone()
+
+    if not row:
+        return ContinueOutcome(kind='error', err_resp=api_not_found('Conversation not found'))
+
+    try:
+        messages = _json.loads(row['messages'] or '[]')
+    except (_json.JSONDecodeError, TypeError) as e:
+        logger.warning('[Continue] Failed to parse messages for conv=%s: %s',
+                       conv_id[:8], e)
+        return ContinueOutcome(kind='error',
+                               err_resp=api_internal_error('Failed to parse conversation'))
+
+    title = row['title']
+
+    if not messages:
+        return ContinueOutcome(kind='error',
+                               err_resp=api_bad_request('Conversation has no messages'))
+    if messages[-1].get('role') != 'assistant':
+        return ContinueOutcome(
+            kind='error',
+            err_resp=api_bad_request('Last message is not an assistant message'))
+
+    assistant_msg = messages[-1]
+    # Trivial case: empty content & thinking → no checkpoint needed; ask
+    # the caller to fall back to pop-and-resend (full regeneration).
+    if not assistant_msg.get('content') and not assistant_msg.get('thinking') \
+            and not (assistant_msg.get('toolRounds') or []):
+        logger.info('[Continue] conv=%s last assistant is empty — fallback to regenerate',
+                    conv_id[:8])
+        return ContinueOutcome(kind='fallback',
+                               payload={'fallback': 'regenerate', 'reason': 'empty_assistant'})
+
+    # ★ Resume-prefill extraction (epic pt_cb8f98b0cb9b47fb) — MUST happen
+    #   BEFORE any rollback mutates assistant_msg. The segment list is the
+    #   SoT: resume_prefill_from_segments reads the terminal deliverable
+    #   (the tail the model was mid-writing) from assistant_msg['segments'],
+    #   gated on model prefill capability + a resumable finish reason. This
+    #   is the segments-first replacement for tail-diffing. Claude → None
+    #   (fail closed). The full pre-rollback content is captured too, to
+    #   seed task['content'] so nothing the user saw vanishes on resume.
+    _model = (config.get('model') or '').strip()
+    _finish_reason = assistant_msg.get('finishReason') or ''
+    _orig_full_content = assistant_msg.get('content') or ''
+    _resume_prefill = None
+    try:
+        from lib.tasks_pkg.segments import resume_prefill_from_segments
+        _resume_prefill = resume_prefill_from_segments(
+            assistant_msg.get('segments'), _model, finish_reason=_finish_reason,
+            content=_orig_full_content)
+    except Exception as _rp_e:
+        logger.debug('[Continue] resume-prefill extraction failed (non-fatal): %s', _rp_e)
+
+    scan = scan_continue_checkpoint(assistant_msg)
+    if scan is None:
+        # No tool-call checkpoint. If we DO have a resumable prefill (a
+        # no-tool mid-answer turn — case 3), resume via prefill alone rather
+        # than regenerating from scratch. Otherwise fall back to regenerate.
+        if _resume_prefill:
+            logger.info('[Continue] conv=%s no tool checkpoint but resumable '
+                        'prefill (%d chars) — resuming via assistant prefill (case 3)',
+                        conv_id[:8], len(_resume_prefill))
+            _res = dispatch_prefill_continue(
+                db=db, conv_id=conv_id, messages=messages,
+                assistant_msg=assistant_msg, title=title, config=config,
+                settings_patch=settings_patch,
+                resume_prefill=_resume_prefill,
+                orig_full_content=_orig_full_content, data=data,
+                _start_task_for_conv=_start_task_for_conv,
+                _persist_conv_messages=_persist_conv_messages,
+                _set_conversation_settings=_set_conversation_settings,
+                _notify_conv_changed=_notify_conv_changed,
+                _audit_log=_audit_log,
+                user_id=user_id,
+            )
+            if _res.kind == 'passthrough':
+                return ContinueOutcome(kind='error', err_resp=_res.err_resp)
+            return ContinueOutcome(kind='started', payload=_res.payload)
+        logger.info('[Continue] conv=%s no tool-call checkpoint available — fallback to regenerate',
+                    conv_id[:8])
+        return ContinueOutcome(kind='fallback',
+                               payload={'fallback': 'regenerate', 'reason': 'no_checkpoint'})
+
+    # ── Apply rollback in place on the assistant message ──
+    preserved_content = scan['preserved_content']
+    assistant_msg['toolRounds'] = scan['kept_rounds']
+    if _resume_prefill:
+        # ★ case-2 prefill (P5, LOSSLESS): the trailing prose is CONTINUED
+        #   (shipped as resumePrefill below), NOT discarded. Keep the FULL
+        #   deliverable content and drop nothing into priorContent — the
+        #   checkpoint-regenerate branch (else) discards the tail instead.
+        assistant_msg['content'] = _orig_full_content
+        assistant_msg.pop('priorContent', None)
+    else:
+        assistant_msg['content'] = preserved_content
+    # Strip live thinking — any replay-worthy thinking already lives on
+    # keptRounds[i].thinking and is carried forward via toolHistory.
+    # If there was trailing message-level thinking (reasoning emitted
+    # after the last completed tool batch) we can't replay it on the
+    # wire, but we stash it on a display-only field so the UI can
+    # render it as a collapsed "earlier thinking" block.  Stripped by
+    # _strip_non_api_fields before any LLM call (not in _API_MESSAGE_FIELDS).
+    assistant_msg['thinking'] = ''
+    if scan.get('discarded_thinking_text'):
+        # Replace rather than append — a Continue cycle that produced new
+        # trailing thinking is the freshest signal of "what the model was
+        # reasoning about right before we resumed."  Older priorThinking
+        # from a prior Continue is no longer the immediate context.
+        assistant_msg['priorThinking'] = scan['discarded_thinking_text']
+    # else: leave any existing priorThinking from a previous Continue cycle
+    # in place — streaming this turn produced no extra trailing thinking,
+    # so the prior "earlier thinking" remains the most recent discard.
+    # Same treatment for the discarded prose tail (display-only priorContent)
+    # so a post-Continue page refresh (DB reload) doesn't lose the visible
+    # record of what was rolled back — keeping the content area honest
+    # rather than silently empty beside an unchanged tool panel.
+    if scan.get('discarded_content_text') and not _resume_prefill:
+        assistant_msg['priorContent'] = scan['discarded_content_text']
+    for stale_key in ('finishReason', 'toolSummary', 'error'):
+        assistant_msg.pop(stale_key, None)
+
+    # Stash pre-checkpoint metadata on cfg for the task + for DB merge.
+    kept_usage = assistant_msg.get('usage') or None
+    kept_api_rounds = assistant_msg.get('apiRounds') or []
+    kept_modified_files = assistant_msg.get('modifiedFiles') or None
+    kept_modified_file_list = assistant_msg.get('modifiedFileList') or []
+
+    # Persist rolled-back state BEFORE starting the task — mirrors the
+    # order used in chat_regenerate to avoid the streaming task
+    # overwriting the rollback in ``_sync_result_to_conversation``.
+    _persist_conv_messages(db, conv_id, messages, title, settings_patch)
+
+    logger.info(
+        '[Continue] conv=%s kept=%d rounds discarded=%d rounds preservedContent=%d '
+        'discardedContent=%d preservedThinking=%d discardedThinking=%d priorThinking=%s',
+        conv_id[:8], len(scan['kept_rounds']), scan['discarded_rounds'],
+        len(preserved_content), scan['discarded_content'],
+        scan['preserved_thinking_chars'], scan['discarded_thinking'],
+        'preserved' if scan.get('discarded_thinking_text') else 'none',
+    )
+
+    # Build cfg payload — same shape the frontend used to build.
+    cfg_payload = dict(config)
+    cfg_payload['excludeLast'] = True
+    if scan['tool_history']:
+        cfg_payload['toolHistory'] = scan['tool_history']
+    if preserved_content:
+        cfg_payload['contentPrefix'] = preserved_content
+    # ★ Resume-prefill (case 2 — mid-prose AFTER a completed tool batch).
+    #   When the provider tolerates prefill AND the tail is resumable, ship
+    #   the terminal deliverable tail so the model continues the SAME tokens
+    #   (inject_tool_history replays the tool batch; the prefill is appended
+    #   as the trailing assistant turn by the orchestrator). Seed
+    #   task['content'] with the FULL pre-rollback content so the resumed
+    #   turn displays [everything the user saw] + [continuation] with no
+    #   duplication — the continuation the model returns is ONLY the new
+    #   tokens after the prefill. Claude / clean stop → _resume_prefill is
+    #   None → contentPrefix (preserved_content) drives the universal path.
+    if _resume_prefill:
+        cfg_payload['resumePrefill'] = _resume_prefill
+        cfg_payload['contentPrefix'] = _orig_full_content
+    if scan['kept_rounds']:
+        cfg_payload['checkpointToolRounds'] = scan['kept_rounds']
+    if kept_usage:
+        cfg_payload['checkpointUsage'] = kept_usage
+    if kept_api_rounds:
+        cfg_payload['checkpointApiRounds'] = kept_api_rounds
+    if kept_modified_files:
+        cfg_payload['checkpointModifiedFiles'] = kept_modified_files
+    if kept_modified_file_list:
+        cfg_payload['checkpointModifiedFileList'] = kept_modified_file_list
+
+    # Start the task.
+    # Anchor the turn-ctx capsule reconcile: continue resumes the assistant
+    # for the last user BEFORE it. Walk back from the assistant tail to find
+    # that user's stable _msgId; ships as done_evt.userMsgId.
+    _continue_user_msg_id = ''
+    for _m in reversed(messages[:-1]):
+        if isinstance(_m, dict) and _m.get('role') == 'user':
+            _continue_user_msg_id = _m.get('_msgId') or ''
+            break
+    task_id, err_resp = _start_task_for_conv(
+        conv_id, cfg_payload, data,
+        user_msg_id=_continue_user_msg_id)
+    if err_resp is not None:
+        return ContinueOutcome(kind='error', err_resp=err_resp)
+
+    # Persist activeTaskId (settings-only — same rationale as chat_send:
+    #    a full-row rewrite would clobber a task-thread checkpoint).
+    try:
+        # notify=False: the _notify_conv_changed below emits the push; the
+        # settings write must invalidate the local cache (structural
+        # guarantee) WITHOUT a second cross-device push.
+        _set_conversation_settings(conv_id, {'activeTaskId': task_id},
+                                   db=db, notify=False)
+    except Exception as e:
+        logger.warning('[Continue] Failed to update activeTaskId: %s', e)
+
+    _notify_conv_changed(conv_id, rev=None, user_id=user_id)
+    try:
+        _audit_log(
+            'continue_checkpoint',
+            conv_id=conv_id,
+            kept=len(scan['kept_rounds']),
+            discarded=scan['discarded_rounds'],
+            preservedContentLen=len(preserved_content),
+            discardedContentLen=scan['discarded_content'],
+            preservedThinking=scan['preserved_thinking_chars'],
+            discardedThinking=scan['discarded_thinking'],
+            priorThinkingChars=len(scan.get('discarded_thinking_text') or ''),
+        )
+    except Exception as e:
+        logger.debug('[Continue] audit_log failed (non-fatal): %s', e)
+
+    return ContinueOutcome(kind='started', payload={
+        'taskId': task_id,
+        'convId': conv_id,
+        'checkpoint': {
+            'keptRounds': len(scan['kept_rounds']),
+            'discardedRounds': scan['discarded_rounds'],
+            'preservedContentLen': len(preserved_content),
+            'discardedContentLen': scan['discarded_content'],
+            'preservedThinkingChars': scan['preserved_thinking_chars'],
+            'discardedThinking': scan['discarded_thinking'],
+            # ── Authoritative anchor DATA (typed fact) ──────────────
+            # The rollback the server ALREADY computed + persisted. The
+            # frontend is a pure reducer over these: it slices its local
+            # rounds to `keptRounds` and adopts these strings verbatim,
+            # rather than re-deriving the checkpoint by scanning
+            # status==='done' (which duplicated this exact logic).
+            'resumeMode': 'prefill' if _resume_prefill else 'checkpoint',
+            'contentPrefix': _orig_full_content if _resume_prefill else preserved_content,
+            'priorContent': '' if _resume_prefill else (scan.get('discarded_content_text') or ''),
+            'priorThinking': scan.get('discarded_thinking_text') or '',
+        },
+    })
+
+
 __all__ = [
     'SendIntent', 'classify_send_intent', 'build_cold_replay_response',
     'WarmResumePlan', 'plan_warm_resume', 'build_fresh_state_snapshot',
     'LiveTickAction', 'next_live_tick', 'is_task_terminal',
     'apply_autopilot_baton',
     'PrefillContinueResult', 'dispatch_prefill_continue',
+    'ContinueOutcome', 'execute_chat_continue',
 ]

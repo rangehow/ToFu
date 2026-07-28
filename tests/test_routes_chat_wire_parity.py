@@ -1147,22 +1147,30 @@ def test_chat_dispatch_exposes_dispatch_prefill_continue():
 
 @_unit
 def test_chat_continue_delegates_prefill_only_to_dispatch():
-    """Slice 9: routes/chat.py::chat_continue must delegate the
-    no-tool-checkpoint-with-resumable-prefill branch (case 3) to
-    lib.chat_dispatch.dispatch_prefill_continue. The old inline
-    ``_continue_via_prefill_only(...)`` closure must be GONE from
-    routes/chat.py."""
+    """Slice 9 + epic pt_f5771a2e: routes/chat.py::chat_continue delegates
+    its WHOLE core (scan / rollback / persist / task-start) to
+    lib.chat_dispatch.execute_chat_continue — the shared continue contract
+    that chat_start's interrupted-tail guard also rides. The case-3
+    prefill branch inside that core delegates in turn to
+    dispatch_prefill_continue (slice 9, now chat_dispatch-internal).
+    The old inline ``_continue_via_prefill_only(...)`` closure must stay
+    GONE from routes/chat.py."""
     import os
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     with open(os.path.join(root, 'routes/chat.py'), encoding='utf-8') as f:
         src = f.read()
-    assert 'from lib.chat_dispatch import dispatch_prefill_continue' in src, (
-        'routes/chat.py must IMPORT dispatch_prefill_continue from '
-        'lib.chat_dispatch (slice 9 pt_04686ac6)')
+    assert 'from lib.chat_dispatch import execute_chat_continue' in src, (
+        'routes/chat.py must IMPORT execute_chat_continue from '
+        'lib.chat_dispatch (epic pt_f5771a2e — the shared continue core)')
     import re as _re
-    assert _re.search(r'\bdispatch_prefill_continue\s*\(', src), (
-        'routes/chat.py must CALL dispatch_prefill_continue(...) — a bare '
-        'mention in a comment does not satisfy slice 9')
+    assert _re.search(r'\bexecute_chat_continue\s*\(', src), (
+        'routes/chat.py must CALL execute_chat_continue(...) — a bare '
+        'mention in a comment does not satisfy the extraction')
+    with open(os.path.join(root, 'lib', 'chat_dispatch.py'), encoding='utf-8') as f:
+        dispatch_src = f.read()
+    assert _re.search(r'\bdispatch_prefill_continue\s*\(', dispatch_src), (
+        'lib/chat_dispatch.py must CALL dispatch_prefill_continue(...) for '
+        'the case-3 prefill branch (slice 9 contract, moved with the core)')
     # The old inline closure must be GONE — a silent revert would leave
     # its `def _continue_via_prefill_only(` re-declared.
     assert 'def _continue_via_prefill_only(' not in src, (

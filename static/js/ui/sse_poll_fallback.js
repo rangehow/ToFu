@@ -111,11 +111,34 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
           continue;
         }
         if (resp && resp.status === 404) {
-          console.error(`[_pollFallback] 404 NOT FOUND — taskId=${taskId.slice(0,8)} conv=${convId.slice(0,8)} ` +
-            `existingContent=${assistantMsg.content?.length||0}chars existingThinking=${assistantMsg.thinking?.length||0}chars — ` +
-            `${(assistantMsg.content || assistantMsg.thinking) ? 'PRESERVING existing accumulated data' : 'NO DATA to preserve, marking error'}`);
-          if (!assistantMsg.content && !assistantMsg.thinking)
-            assistantMsg.error = "Task not found";
+          /* ★ Task LOST (server restart wiped the in-memory registry before
+           *   the first checkpoint, or TTL cleanup) — a TRANSPORT-level loss,
+           *   not a task error. The conversation DB is the single source of
+           *   truth: re-sync from it (the reloaded tail shows the real state —
+           *   an interrupted turn with its Continue affordance, or already-
+           *   settled content) and NEVER mint a terminal error bubble for a
+           *   task the server simply forgot (the ms43foj3 incident: the 404
+           *   became a red "Task not found" bubble, and that ghost tail then
+           *   drove the next Continue down the pop-and-regenerate path that
+           *   appended a twin answer). */
+          console.warn(`[_pollFallback] 404 task lost — re-syncing conv from server SoT — ` +
+            `taskId=${taskId.slice(0,8)} conv=${convId.slice(0,8)}`);
+          try {
+            const _lostConv = conversations.find(c => c.id === convId);
+            if (_lostConv) {
+              _lostConv.activeTaskId = null;
+              _lostConv._needsLoad = true;   // force the server fetch, bypass the loaded cache
+              if (typeof loadConversationMessages === 'function') {
+                await loadConversationMessages(convId);
+              }
+              saveConversations(convId);
+              if (activeConvId === convId && window.ConvView) {
+                window.ConvView.replaceAll(convId);
+              }
+            }
+          } catch (_rsErr) {
+            console.warn(`[_pollFallback] post-404 SoT re-sync failed (non-fatal): ${_rsErr && _rsErr.message}`);
+          }
           if (typeof twStop === 'function') twStop(convId);
           finishStream(convId);
           return;

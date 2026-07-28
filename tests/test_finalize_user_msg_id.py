@@ -44,6 +44,9 @@ FINALIZE_PATH = os.path.join(
     ROOT, 'lib', 'tasks_pkg', 'orchestrator', '_finalize.py')
 TASK_START_PATH = os.path.join(ROOT, 'routes', 'chat_task_start.py')
 CHAT_ROUTE_PATH = os.path.join(ROOT, 'routes', 'chat.py')
+# chat_continue's core moved here (epic pt_f5771a2e — the route is now a
+# thin wrapper around lib.chat_dispatch.execute_chat_continue).
+CHAT_DISPATCH_PATH = os.path.join(ROOT, 'lib', 'chat_dispatch.py')
 AUTOPILOT_PATH = os.path.join(ROOT, 'lib', 'tasks_pkg', 'autopilot.py')
 
 
@@ -99,13 +102,16 @@ def test_all_three_chat_callers_pass_user_msg_id():
         f'lacks the anchor and the frontend falls back to the tail heuristic.'
     )
     # chat_continue: passes the user BEFORE the assistant being resumed.
-    assert '_continue_user_msg_id' in src, (
-        f'{CHAT_ROUTE_PATH}: chat_continue must resolve the user turn before '
-        f'the tail assistant (variable _continue_user_msg_id) and pass it '
-        f'as user_msg_id.'
+    # The core moved to lib/chat_dispatch.py (epic pt_f5771a2e) — the anchor
+    # moves with the contract; routes/chat.py stays a thin wrapper.
+    dispatch_src = _read(CHAT_DISPATCH_PATH)
+    assert '_continue_user_msg_id' in dispatch_src, (
+        f'{CHAT_DISPATCH_PATH}: execute_chat_continue must resolve the user '
+        f'turn before the tail assistant (variable _continue_user_msg_id) '
+        f'and pass it as user_msg_id.'
     )
-    assert "user_msg_id=_continue_user_msg_id" in src, (
-        f'{CHAT_ROUTE_PATH}: chat_continue must pass user_msg_id='
+    assert "user_msg_id=_continue_user_msg_id" in dispatch_src, (
+        f'{CHAT_DISPATCH_PATH}: execute_chat_continue must pass user_msg_id='
         f'_continue_user_msg_id to _start_task_for_conv.'
     )
 

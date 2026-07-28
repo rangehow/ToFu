@@ -305,6 +305,38 @@ def create_task(conv_id, messages, config, *, supersede=True):
         task['_profileScope'] = ''
         task['_userId'] = ''
 
+    # ★ Durable-at-birth: write the task_results row AT CREATION
+    #   (status='running', empty content/thinking). The running-checkpoint
+    #   writers only fire on content/thinking deltas and per-round boundaries,
+    #   so a task killed by a server restart BEFORE its first delta left NO row
+    #   at all — and the cold-replay / poll-DB / startup-recovery stale-scan
+    #   all found NOTHING (the ms43foj3 incident: resume task killed 87s in,
+    #   R1 pure tool_calls → zero content/thinking deltas →
+    #   checkpoint_task_partial's empty-guard no-op'd every time → poll and
+    #   stream returned 404 'Task not found' → the frontend minted a terminal
+    #   error bubble for what was really a transport-level task loss). With
+    #   the row existing from second 0, every one of those readers resolves
+    #   the task to its real state (running → interrupted after recovery)
+    #   instead of a 404. Best-effort: a write failure must never break task
+    #   creation; the checkpoint/persist writers upsert over it last-wins.
+    try:
+        _birth_meta = {}
+        _bcfg = config or {}
+        if _bcfg.get('model'):
+            _birth_meta['model'] = _bcfg['model']
+        if _bcfg.get('preset'):
+            _birth_meta['preset'] = _bcfg['preset']
+        if _bcfg.get('thinkingDepth'):
+            _birth_meta['thinkingDepth'] = _bcfg['thinkingDepth']
+        _upsert_task_row(
+            task, conv_id or '', content='', thinking='', status='running',
+            error_json=None, tr_json=None,
+            meta_json=(json.dumps(_birth_meta, ensure_ascii=False)
+                       if _birth_meta else None))
+    except Exception as e:
+        logger.warning('[Task %s] durable-at-birth row write failed (non-fatal): %s',
+                       task_id[:8], e)
+
     # ★ Project-brain Activity Feed: a 'started' pulse, EXCEPT for autopilot
     #   follow-up turns (config.autopilotRunId set) — a deep autopilot run is
     #   dozens of tasks and would flood the feed; those collapse to a single

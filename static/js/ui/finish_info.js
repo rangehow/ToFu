@@ -721,7 +721,12 @@ function renderFinishInfo(msg, isLiveTail) {
   //   ONLY for the active running tail (isLiveTail). A finished-but-model-
   //   only message (legacy pre-usage-persistence, or a degenerate empty
   //   completion) is NOT the live tail, so it keeps its bar — no regression.
-  if (!_terminal && isLiveTail) return "";
+  // ★ An interrupted stub (interruptedReason stamped by the crash/restart
+  //   recovery, no finishReason/usage yet) is NOT a finished turn either:
+  //   the same bogus model-only bar would FREEZE into the bubble (no live
+  //   stream ever tears it down — the ms43foj3 double-restart incident,
+  //   both bubbles frozen with a bare "K kimi-k3" bar).
+  if (!_terminal && (isLiveTail || msg.interruptedReason)) return "";
   const parts = [];
   const _mid = msg.model || msg.preset || msg.effort || "";
   const _pid = msg.provider_id || msg.providerId || "";

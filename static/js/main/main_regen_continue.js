@@ -273,6 +273,12 @@ function _applyContinueCheckpoint(assistantMsg, allRounds, ckpt) {
   delete assistantMsg.finishReason;
   delete assistantMsg.toolSummary;
   delete assistantMsg.error;
+  // ★ The dead task's bind must go too: keeping `_taskId` makes
+  //   `assistantTailIsPriorTurn` (ui/sse_pipeline.js connectToTask) classify
+  //   this adopted bubble as a PRIOR turn and push a placeholder twin for
+  //   the resume task — the ms43foj3 restart double-bubble. The resume
+  //   task's stream/poll re-stamps `_taskId` from its own payloads.
+  delete assistantMsg._taskId;
 
   // Streaming-merge seed consumed by sse_pipeline.js / sse_poll_fallback.js:
   // the pre-continue rounds/prefix to merge with newly-streamed ones.

@@ -1,6 +1,19 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-28(续5) — 本机控制远端分支闭环:**我上一轮交付的引导指向一个不存在的 UI**,owner 实测桌面端后抓出(commit `9f3df336`;新套件 **20/20**,**NEUTER×3 各自精确咬**,desktop 全环 **143/143**,干净 committed worktree **84/84**)
+
+- **★ 缺陷形状比「裸 token」更糟:一条措辞完整、可信、但无法执行的指引。** 上一轮我让远端分支渲染出「下载桌面版 → 用这行连过来」,但**桌面端根本没有可粘贴的地方**:`_start_computer_control` 硬写 `server_url = f'http://127.0.0.1:{port}'`,`bridge_secret` 只从 `TOFU_BRIDGE_SECRET` 环境变量读;托盘菜单全部条目 = Open / Download update / Enable Computer Control / Permissions / Install Components / Port / Quit —— **没有输入框、没有对话框、没有任何远端服务器入口**。用户照做下载、打开、然后找不到那个字段。**裸 token 至少读起来像「没做完」,而这个读起来像「做完了」,于是把用户送去找一个不存在的 UI。**
+- **明确不用「设个环境变量再重启」兜底** —— 那与我上一轮刚删掉的 `python -m lib.desktop_agent --allow-*` 是同一类东西(要求用户在 GUI 之外做一件命令行的事)。
+- **落点:格式必须有唯一属主。** `lib/desktop_agent/config.py::parse_connect_line` 是**唯一**解析器,`remote_server()`/`save_remote_server()` 落在**已经存在**的 `~/.tofu/desktop_agent.json`(本就装 `agent_id`/`share_roots`、本就跨重启存活)—— 不新开存储位置。解析**故意按任意空白切**而非钉死分隔符:这串字符要经过剪贴板、终端、可能还有聊天窗口,任何一段都可能重排或折叠空格,吸收掉比让用户自己发现强。
+- **托盘新增「Connect to remote Tofu…」:一个输入框、一次粘贴。** 两个分开的字段会逼用户手工拆串,正是这次合并要消除的负担。拒绝时**留在对话框里给出具体原因且绝不回显密钥**(该文案可能被截图或贴进 bug 报告)。保存后**主动重启运行中的 agent** —— 它启动时就捕获了旧地址,不重启用户得自己猜「要不要开关一次」。
+- **菜单改读 `Server: <url>` / `this computer (port N)`。** 原来粘完之后**毫无反馈**,用户无从判断是否生效。
+- **未配置 = 走 loopback,与改动前逐字节一致**,由 `test_no_attachment_means_the_local_server` 钉住 —— 托盘用户不受影响。
+- **★ 守卫测的是「缝」,不是任何一侧。** 两边分属两种语言、互不 import,各自的单测都对也可以整体坏掉:**跑真实的 `_lcConnectLine`(node)→ 把它的真实输出喂给真实的 `parse_connect_line`**。只测解析器的守卫会在两侧漂移时保持全绿,那正是要防的失效形态。另用 AST 断言**目的地可达**(对话框真被定义、MenuItem 真被挂上、launcher 真的 import 共享解析器而非自己再写一个 split)—— 子串断言会被一句注释满足。
+- **NEUTER×3 各咬各的:** ①web 侧分隔符 `'  '`→`'|'` → **7 红**;②app 侧 `.split()`→`.split(' ')` → **6 红**;③删掉 MenuItem 但保留 handler → **精确红在可达性那一条**。
+- **★ 一次「NEUTER 没应用却报绿」被自己的断言拦下。** 首发 NEUTER-C 的替换串用了真实省略号,而源码里是字面量 `\u2026` 转义,`assert` 直接报 "did not apply" —— 若当时只看 pytest 那行「20 passed」就会得出「守卫无效」的错误结论。**判据:NEUTER 必须先断言替换真的命中,再看测试结果**;顺带把源码里的 `\u2026` 换成真省略号,消除这个陷阱本身。
+
+
 ### 2026-07-28 — trade 模块可读性收尾:资产类型徽章 **1.35:1**(全页最差)根修,**而我自己上一轮开的票里那条线索是错的**(commit `0909bfd`;套件 **27/27**,**NEUTER×3 全咬**,相邻环 **59/59**,干净 committed worktree 复验 **59/59**,线上三主题值已提供)
 
 - **★ 先更正我自己写进票 `pt_61b79f4351f548cd` 的一条错误线索。** 我在那张票里写「`.sr-type-stock/etf/fund` 用硬编码字面量 `#ffb74d`,而 `test_no_literals_outside_root` 本该抓它却没抓到 —— 可能是扫描面残缺家族的又一例」。**实测证伪:** 它们用的是 `var(--type-stock/etf/fund)` **真 token**,棘轮**工作正常**、没有漏扫。

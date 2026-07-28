@@ -196,21 +196,31 @@
     return '';
   }
 
-  const _ICON_TOOLS = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 1-5 5L4 17l3 3 5.7-5.7a4 4 0 0 1 5-5 4 4 0 0 0-3-6.6 4 4 0 0 0 0 3.6z"/></svg>';
-  const _ICON_FOLDER = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.7-.9L9.6 3.9A2 2 0 0 0 7.9 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2z"/></svg>';
   const _LOCK = '<svg class="tctx-lock" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
 
+  /** Max tool chips rendered up-front. The rest collapse behind a "+N"
+   * CLICK toggle. WHY a bound and why click: the rail is permanent
+   * furniture in a grid track, so its height contributes to the turn's
+   * height — and `_collectTools()` emits one chip per connected MCP server,
+   * which can be dozens. Without a bound a heavily-connected setup would
+   * make every user turn taller than its own message. Expansion is a click
+   * (not hover) because a hover overlay would have to escape `.message`'s
+   * content-visibility paint containment — exactly the carve-out this
+   * redesign deleted. */
+  const _MAX_VISIBLE_CHIPS = 6;
+
   /**
-   * Render a captured snapshot into the per-turn note HTML.
+   * Render a captured snapshot into the per-turn rail HTML.
    *
-   * Design: a self-contained widget in the right gutter that has two
-   * states driven purely by CSS `:hover` — no native tooltip:
-   *   • COLLAPSED `.tctx-bar` — brand logo + model name + depth + small
-   *     tool/workspace count badges. Always visible.
-   *   • EXPANDED `.tctx-panel` — grows DOWN into the empty gutter on hover,
-   *     listing the full model id, every enabled tool as a toned chip, and
-   *     each workspace path. Because it lives in the gutter (a direct child
-   *     of `.message`, not `.message-content`) it never covers chat content.
+   * Two surfaces, both in normal flow — there is NO hover overlay:
+   *   • `.turn-ctx` — the RAIL. Lives in the third grid track that
+   *     `.chat-inner` owns, so it can never overflow the viewport. Shows
+   *     model + depth + mode badges + tool chips + workspace paths
+   *     permanently. Visible only when the container query grants the track.
+   *   • `.tctx-fold` — the same facts compressed to ONE line under the
+   *     message header, shown exactly when the rail track is absent (narrow
+   *     pane, or the request-inspector drawer is open and the pane has as
+   *     little as 74px to give). The context is compacted, never lost.
    *
    * @param {object|null} snap — output of buildTurnCtxSnapshot (or a
    *   persisted copy loaded from the DB).
@@ -234,50 +244,76 @@
     const logo = model ? _brandLogo(snap.model, 15) : '';
     const depthChip = snap.depth ? '<span class="tctx-depth">' + _esc(snap.depth) + '</span>' : '';
 
-    // ── Collapsed bar ──
-    const bar = ['<div class="tctx-bar">'];
-    if (logo) bar.push('<span class="tctx-logo">' + logo + '</span>');
-    if (model) bar.push('<span class="tctx-model">' + _esc(model) + '</span>');
-    if (depthChip) bar.push(depthChip);
-    // Mode badge(s) — always visible so the run mode is legible at a glance.
+    // ── Rail head: brand + model + depth + mode badges ──
+    const head = ['<div class="tctx-head">'];
+    if (logo) head.push('<span class="tctx-logo">' + logo + '</span>');
+    if (model) head.push('<span class="tctx-model">' + _esc(model) + '</span>');
+    if (depthChip) head.push(depthChip);
     for (const md of modes) {
-      bar.push('<span class="tctx-mode-badge">' + _esc(md.label) + '</span>');
+      head.push('<span class="tctx-mode-badge">' + _esc(md.label) + '</span>');
     }
-    if (tools.length) bar.push('<span class="tctx-count tctx-count-tools">' + _ICON_TOOLS + tools.length + '</span>');
-    if (roots.length) bar.push('<span class="tctx-count tctx-count-ws">' + _ICON_FOLDER + roots.length + '</span>');
-    bar.push('</div>');
+    head.push('</div>');
 
-    // ── Expand panel ──
     const rows = [];
-    if (modes.length) {
-      const mchips = modes.map((md) =>
-        '<span class="tctx-chip tctx-tone-mode">' + _esc(md.label) + '</span>'
-      ).join('');
-      rows.push('<div class="tctx-row"><span class="tctx-row-h">Mode</span>' +
-        '<div class="tctx-chips">' + mchips + '</div></div>');
-    }
-    if (model) {
-      rows.push('<div class="tctx-row"><span class="tctx-row-h">Model</span>' +
-        '<span class="tctx-row-v">' + (logo ? '<span class="tctx-logo">' + logo + '</span>' : '') +
-        '<span class="tctx-row-model">' + _esc(snap.model) + '</span>' + depthChip + '</span></div>');
-    }
     if (tools.length) {
-      const chips = tools.map((tl) =>
-        '<span class="tctx-chip tctx-tone-' + _esc(tl.tone || 'mode') + '">' + _esc(tl.label) + '</span>'
-      ).join('');
+      const _chip = (tl) =>
+        '<span class="tctx-chip tctx-tone-' + _esc(tl.tone || 'mode') + '">' +
+        _esc(tl.label) + '</span>';
+      const shown = tools.slice(0, _MAX_VISIBLE_CHIPS).map(_chip).join('');
+      const rest = tools.slice(_MAX_VISIBLE_CHIPS);
+      let overflow = '';
+      if (rest.length) {
+        overflow =
+          '<span class="tctx-overflow" hidden>' + rest.map(_chip).join('') + '</span>' +
+          '<button type="button" class="tctx-more" data-tctx-more="1"' +
+          ' aria-expanded="false">+' + rest.length + '</button>';
+      }
       rows.push('<div class="tctx-row"><span class="tctx-row-h">Tools</span>' +
-        '<div class="tctx-chips">' + chips + '</div></div>');
+        '<div class="tctx-chips">' + shown + overflow + '</div></div>');
     }
     if (roots.length) {
+      // SHORT path (last two segments) with the full path on hover: a full
+      // absolute path is ~90 chars and `word-break:break-all` would stack it
+      // four lines high inside a 232px rail, inflating every turn that has a
+      // workspace. The rail is a glance surface; the full path stays reachable.
       const paths = roots.map((r) =>
-        '<div class="tctx-path">' + (r.ro ? _LOCK : '') + '<span>' + _esc(r.path || r.short) + '</span></div>'
+        '<div class="tctx-path" title="' + _esc(r.path || r.short) + '">' +
+        (r.ro ? _LOCK : '') + '<span>' + _esc(r.short || r.path) + '</span></div>'
       ).join('');
       rows.push('<div class="tctx-row"><span class="tctx-row-h">Workspace</span>' +
         '<div class="tctx-paths">' + paths + '</div></div>');
     }
 
-    return '<div class="turn-ctx">' + bar.join('') +
-           '<div class="tctx-panel">' + rows.join('') + '</div></div>';
+    // ── Fold line for panes with no rail track ──
+    const foldBits = [];
+    if (model) foldBits.push(model);
+    if (snap.depth) foldBits.push(snap.depth);
+    for (const md of modes) foldBits.push(md.label);
+    if (tools.length) foldBits.push(tools.length + ' tools');
+    if (roots.length) foldBits.push(roots.length + ' ws');
+    const fold = '<div class="tctx-fold"><span class="tctx-fold-dot"></span>' +
+      '<span>' + _esc(foldBits.join(' · ')) + '</span></div>';
+
+    return fold + '<div class="turn-ctx">' + head.join('') + rows.join('') + '</div>';
+  }
+
+  /* "+N" toggle. Delegated at document level so it survives every re-render
+   * of the message list without per-node listener bookkeeping. Expanding
+   * changes the rail's height IN FLOW — no overlay, no paint containment to
+   * escape. */
+  function _onTctxMoreClick(ev) {
+    const btn = (ev.target && ev.target.closest)
+      ? ev.target.closest('[data-tctx-more]') : null;
+    if (!btn) return;
+    const chips = btn.parentNode;
+    const hidden = chips && chips.querySelector('.tctx-overflow');
+    if (!hidden) return;
+    const opening = hidden.hasAttribute('hidden');
+    if (opening) hidden.removeAttribute('hidden');
+    else hidden.setAttribute('hidden', '');
+    btn.setAttribute('aria-expanded', opening ? 'true' : 'false');
+    btn.textContent = opening ? '−' : '+' + hidden.children.length;
+    ev.stopPropagation();
   }
 
   /* ── Reconcile a captured snapshot against the tool-schema latch ──
@@ -460,6 +496,7 @@
    * already reflects connected servers (not just after the settings panel
    * is opened). Best-effort; failures are swallowed inside the function. */
   if (typeof document !== 'undefined') {
+    document.addEventListener('click', _onTctxMoreClick);
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', () => { refreshMcpRailState(); }, { once: true });
     } else {

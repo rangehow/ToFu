@@ -323,7 +323,43 @@ html[data-rail] .folder-quickadd{display:none}
    glyph sit low even inside a centered box. Decision rule + traps: CLAUDE.md §3.4. */
 .icon-box{display:inline-flex;align-items:center;justify-content:center}
 .icon-box>svg,.icon-box>img{display:block}
-.chat-container{flex:1;overflow-y:auto;overflow-x:hidden;min-height:0;will-change:scroll-position}.chat-inner{max-width:820px;margin:0 auto;padding:24px 24px 120px}
+/* ── Chat pane = the SIZING CONTAINER for the right rail ──────────
+ * `container-type:inline-size` MUST be declared HERE, not on
+ * `.chat-wrapper`. The space the rail can occupy is
+ *   viewport − sidebar − request-inspector-drawer
+ * and the drawer (`.ri-drawer`, position:fixed) shrinks THIS element via
+ * `body.ri-open .chat-container{margin-right:min(780px,94vw)}` — it never
+ * touches the wrapper's used width. Measured across 64 states
+ * (8 widths × 4 sidebar states × drawer open/closed): wrapper and container
+ * disagree in 32 of them, by exactly the 780px drawer. A container query on
+ * the wrapper is therefore blind in half the matrix — the same class of bug
+ * as the `@media (max-width:1280px)` rule it replaces, one level down.
+ * Guarded by tests/test_turn_ctx_rail_geometry.py. */
+.chat-container{flex:1;overflow-y:auto;overflow-x:hidden;min-height:0;will-change:scroll-position;container-type:inline-size;container-name:chatpane}
+/* Three tracks: [left gutter] [reading column] [right rail].
+ * The rail OWNS its width instead of being floated into hoped-for margin, so
+ * it cannot be clipped by construction. Both gutters are 0 by default (phones
+ * / narrow panes) and only open up when the container query below says the
+ * pane can afford them. The reading measure is clamped: at 2560px there is
+ * ~1740px of slack and pouring all of it into line length would wreck
+ * readability, so it grows with the pane and then stops. */
+.chat-inner{
+  --rail-w:0px;
+  --rail-gap:0px;
+  display:grid;
+  grid-template-columns:minmax(0,1fr) var(--rail-w);
+  column-gap:var(--rail-gap);
+  max-width:calc(1064px + var(--rail-gap) + var(--rail-w));
+  margin:0 auto;
+  padding:24px 24px 120px;
+}
+/* The rail column exists only when it fits. 1064px reading track + 24px gap +
+ * 232px rail + 48px padding = 1368px of content box; below that the rail
+ * folds inline under each message (see .turn-ctx rules) rather than being
+ * clipped or vanishing. */
+@container chatpane (min-width: 1368px){
+  .chat-inner{ --rail-w:232px; --rail-gap:24px; max-width:clamp(1368px, 96cqw, 1616px); }
+}
 
 /* Scroll-to-bottom affordance — a floating pill anchored just above the
  * composer inside the position:relative .chat-wrapper. Hidden by default;
@@ -336,7 +372,7 @@ html[data-rail] .folder-quickadd{display:none}
 .welcome{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:50vh;text-align:center;animation:fadeIn .5s ease;gap:2px}.welcome-icon{width:64px;height:64px;border-radius:0;background:transparent;display:flex;align-items:center;justify-content:center;font-size:28px;margin-bottom:6px;box-shadow:none;border:none;outline:none}.welcome-icon img{width:100%;height:100%;object-fit:contain;border-radius:0;border:none;outline:none;transition:transform 0.3s cubic-bezier(0.34,1.56,0.64,1)}.welcome-icon:hover img{transform:rotate(-5deg) scale(1.08)}.welcome-icon svg{filter:drop-shadow(0 2px 8px rgba(168,85,247,0.3))}.welcome h2 small{display:inline;font-family:'Jakarta Toolbar','Plus Jakarta Sans','Jakarta Fallback',sans-serif;font-size:11px;font-weight:400;color:var(--text-tertiary);letter-spacing:0.12em;margin-left:6px;vertical-align:middle;opacity:0.7}.welcome h2{font-size:24px;font-weight:600;margin-bottom:4px;letter-spacing:-0.03em}
 /* ── Vibrant gradient brand text (pixel font) ── */
 .tofu-brand{font-family:'Pixelify Sans','Press Start 2P',cursive;font-size:26px;font-weight:700;letter-spacing:0.08em;margin-bottom:6px}.tofu-brand .tofu-brand-t{background:linear-gradient(135deg,#f5d5a0,#e8b86d);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}.tofu-brand .tofu-brand-o1{background:linear-gradient(135deg,#fdf2d7,#f0dbb8);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}.tofu-brand .tofu-brand-f{background:linear-gradient(135deg,#dcc8a4,#c5a87e);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}.tofu-brand .tofu-brand-u{background:linear-gradient(135deg,#e8b86d,#d4a050);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}.welcome p{color:var(--text-secondary);font-size:13px;max-width:380px;line-height:1.5}.feature-pills{display:flex;gap:6px;margin-top:16px;flex-wrap:wrap;justify-content:center}.feature-pill{font-size:11px;padding:4px 12px;border-radius:20px;border:1px solid var(--border);color:var(--text-secondary);background:var(--bg-tertiary);display:flex;align-items:center;gap:5px}
-.cv-off .message{content-visibility:visible!important}.message{margin-bottom:24px;content-visibility:auto;contain-intrinsic-size:auto 120px;display:flex;gap:12px;align-items:flex-start;position:relative}@keyframes slideUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}@keyframes fadeIn{from{opacity:0}to{opacity:1}}.message-new{animation:slideUp .3s ease;content-visibility:visible}
+.cv-off .message{content-visibility:visible!important}.message{margin-bottom:24px;content-visibility:auto;contain-intrinsic-size:auto 120px;display:grid;grid-template-columns:auto minmax(0,1fr) var(--rail-w);column-gap:12px;align-items:flex-start;position:relative;grid-column:1 / -1}@keyframes slideUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}@keyframes fadeIn{from{opacity:0}to{opacity:1}}.message-new{animation:slideUp .3s ease;content-visibility:visible}
 .message-avatar{width:40px;height:40px;border-radius:0;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;flex-shrink:0;background:transparent;color:white;margin-top:2px;overflow:visible;box-shadow:none}.message-avatar img,.message-avatar svg{filter:brightness(0.82) saturate(0.85)}.message-avatar svg{image-rendering:pixelated}.message:not(.user-msg) .message-avatar{background:transparent;border-radius:0;box-shadow:none}.message.user-msg .message-avatar{width:40px;height:40px;background:transparent;color:#a5b4fc}
 .message-content{flex:1;min-width:0;max-width:100%;overflow:hidden;position:relative;contain:layout style}
 .message-header{display:flex;align-items:center;gap:10px;margin-bottom:8px}
@@ -589,20 +625,45 @@ html[data-rail] .folder-quickadd{display:none}
    One anchor per TOOL ROW — the fix for "which request produced this
    call?". Stays nearly invisible until the row is hovered so it never
    competes with the tool content itself. */
-.ri-tool-anchor-row{display:flex;justify-content:flex-end;margin:-2px 0 2px;height:0;overflow:visible}
-.ri-tool-anchor{display:inline-flex;align-items:center;gap:3px;padding:1px 6px;margin-top:-14px;font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:600;line-height:1.5;color:var(--text-tertiary);background:var(--bg-secondary,rgba(30,30,40,0.9));border:1px solid var(--border);border-radius:3px;cursor:pointer;opacity:0;transition:opacity .15s ease,color .15s ease,border-color .15s ease}
-[data-prn]:hover .ri-tool-anchor,.ri-tool-anchor:focus-visible{opacity:.85}
-.ri-tool-anchor:hover{opacity:1;color:var(--accent);border-color:var(--accent)}
+/* ── Tool-row right-hand control group ────────────────────────────
+   THE single owner of a tool row's right edge. Both the model-view
+   button and the debug entry live inside it and each occupies its own
+   space, so they cannot overlap.
+
+   Why this exists: `.tc-preview-btn` claimed the right end via
+   `margin-left:auto` while the debug entry floated over it from a
+   zero-height block with `margin-top:-14px` — two elements each
+   believing they owned the same edge, so they printed on top of each
+   other. `margin-left:auto` now belongs to this wrapper ALONE; the
+   children just sit in its flow. Do not re-add `margin-left:auto` to
+   any descendant. */
+.ptool-row-ctl{display:inline-flex;align-items:center;gap:6px;margin-left:auto;flex-shrink:0}
+.ptool-row-ctl:empty{display:none}
+.ptool-line .ptool-row-ctl>.tc-preview-btn{margin-left:0}
+
+/* Debug entry per tool row — ONE control opening a panel with request /
+   post-tool-state tabs (they are two views of one round, not two
+   destinations). Always visible: a hover-only control is a control the
+   user never discovers. Quiet by default so it does not compete with
+   the tool content, full strength on hover/focus. */
+.ri-tool-anchor{display:inline-flex;align-items:center;gap:3px;padding:1px 6px;font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:600;line-height:1.5;color:var(--text-tertiary);background:none;border:1px solid var(--border);border-radius:3px;cursor:pointer;flex-shrink:0;opacity:.6;transition:opacity .15s ease,color .15s ease,border-color .15s ease}
+.ri-tool-anchor:hover,.ri-tool-anchor:focus-visible{opacity:1;color:var(--accent);border-color:var(--accent)}
 .ri-tool-anchor svg{display:block}
 .ri-tool-anchor-label{letter-spacing:.02em}
-.ri-tool-anchor-state:hover{color:#34d399;border-color:#34d399}
+/* Swarm panels carry no shared row header, so their entry gets its own
+   right-aligned strip UNDER the panel — a real block in normal flow. */
+.ri-tool-anchor-row{display:flex;justify-content:flex-end;margin:2px 10px 4px}
 
-/* ── Inline state inspector (state mirror next to the tool call) ────────
-   Mounted after a [data-prn] slot by openStateInspector; renders through
+/* ── Tool-row debug panel (request | post-tool state tabs) ─────────────
+   Mounted after a [data-prn] slot by openToolDebugPanel; renders through
    the shared debug renderer (renderDebugBlocksInto), so .debug-msg-* rules
    apply unchanged inside .ri-state-body. Single instance, transient. */
 .ri-state-panel{margin:4px 0 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-secondary,rgba(30,30,40,0.6));overflow:hidden}
 .ri-state-panel-head{display:flex;align-items:center;gap:6px;padding:5px 8px;border-bottom:1px solid var(--border);background:rgba(128,128,160,0.06)}
+.ri-panel-tabs{display:inline-flex;gap:2px;flex-shrink:0}
+.ri-panel-tab{padding:2px 9px;font-size:10px;font-weight:600;color:var(--text-tertiary);background:none;border:1px solid var(--border);border-radius:3px;cursor:pointer;transition:color .15s ease,border-color .15s ease,background .15s ease}
+.ri-panel-tab:hover{color:var(--text-secondary);border-color:var(--text-tertiary)}
+.ri-panel-tab.ri-sel{color:var(--accent);border-color:var(--accent);background:rgba(110,86,207,0.12)}
 .ri-state-panel-title{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:600;color:var(--text-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ri-state-panel-close{margin-left:auto;display:inline-flex;align-items:center;padding:2px;border-radius:3px;color:var(--text-tertiary);cursor:pointer}
 .ri-state-panel-close:hover{color:var(--accent);background:rgba(128,128,160,0.12)}
@@ -5957,7 +6018,12 @@ input.settings-mono {
 .sw-peer-from-bubble svg{display:block;flex-shrink:0}
 .sw-peer-from-bubble>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sw-peer-from-more{flex-shrink:0;padding:1px 7px;border-radius:9px;font-size:10px;font-weight:700;color:var(--text-tertiary);background:rgba(130,170,255,.12)}
-.sw-inbox-row>.sw-inbox-row-header .tc-preview-btn{margin-left:auto}
+/* Inbox/peer/steer rows put their model-view button at the right end. The
+   selector targets the CONTROL GROUP when present (the tool-row shape) and
+   falls back to the bare button for rows that carry no debug entry — the
+   right edge must have exactly ONE owner either way. */
+.sw-inbox-row>.sw-inbox-row-header .ptool-row-ctl{margin-left:auto}
+.sw-inbox-row>.sw-inbox-row-header>.tc-preview-btn{margin-left:auto}
 .sw-inbox-row .sw-inbox-row-body{padding:6px 10px 8px 30px;display:flex;flex-direction:column;gap:8px}
 .sw-inbox-row-empty{color:var(--text-tertiary);font-size:12px;font-style:italic}
 /* ── Beautified sub-agent / peer update cards (human view) ──
@@ -14496,6 +14562,15 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
    the AI zero tools. Visibly inert + cursor tells the truth before the click. */
 .lc-switch:disabled,.lc-switch.lc-switch-off{opacity:.4;cursor:not-allowed}
 .lc-switch:disabled:hover,.lc-switch.lc-switch-off:hover{background:var(--bg-active,#2a2a35)}
+/* ON while the bridge is down: the tool registry ships ZERO tools for it, so
+   it must not read as healthy. Deliberately NOT disabled — switching it OFF
+   stays available, since that is the action a worried user actually wants. */
+.lc-switch.lc-switch-stale{background:#f59e0b}
+.lc-switch.lc-switch-stale:hover{background:#fbbf24}
+.tool-badge.lc-badge-stale{background:#f59e0b;color:#1a1a21}
+[data-theme="light"] .lc-switch.lc-switch-stale{background:#b45309}
+[data-theme="light"] .lc-switch.lc-switch-stale:hover{background:#92400e}
+[data-theme="light"] .tool-badge.lc-badge-stale{background:#b45309;color:#fff}
 /* One short line per row: what the AI actually gets. Users are granting real
    access to their browser session and machine; the row title alone is not
    enough to make that call. */
@@ -19351,61 +19426,82 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .ctx-health-bar[data-zon
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   Per-turn context capsule (.turn-ctx) — built by info-rail.js
+   Per-turn context rail (.turn-ctx) — built by info-rail.js
    (buildTurnCtxSnapshot / renderTurnCtxNote) and spliced into each USER
-   turn by renderMessage(). A single, frozen-in-time glass capsule —
-   model name + tool/workspace COUNT badges — describing the context the
-   turn was sent with; full detail is in the native tooltip.
+   turn by renderMessage(). A frozen-in-time record of the context the turn
+   ACTUALLY ran with: model + depth + run-mode + the tools that fired +
+   the workspace roots.
 
-   Placement: floats in the RIGHT GUTTER (the blank band between the
-   820px chat column and the turn-nav), vertically level with its turn.
-   It is a DIRECT child of `.message` (NOT `.message-content`, which clips
-   via overflow:hidden) and positioned at `left:100%` so it sits clear of
-   both the bubble and the hover action-bar — hovering for the tooltip is
-   never blocked.
+   ── Why this is IN-FLOW furniture and not a floating capsule ──
+   The previous design anchored it at `left:calc(100% + 24px)` off the
+   centered reading column and hid it under `@media (max-width:1280px)`.
+   That predicate asks about the WINDOW, but the space the note lands in is
+   `viewport − sidebar − drawer`: the sidebar has four widths (0/280/332/430)
+   and the request-inspector drawer eats up to another 780px. Measured across
+   all 64 combinations in a real browser, 35 of them clipped the note while
+   the media query said "show it", and NONE were hidden while having room —
+   i.e. no viewport threshold can be correct, because the predicate is blind
+   to two of the three variables. The rail now occupies a real grid track
+   that the pane OWNS (see `.chat-inner`), so overflow is impossible by
+   construction rather than by tuning.
 
-   ⚠️ `.message` has `content-visibility:auto`, which applies PAINT
-   containment → it would clip this overflowing absolute child. So the
-   `:has(> .turn-ctx)` rule below neutralises containment ONLY on messages
-   that actually carry a capsule (every other message keeps the cv perf
-   win). See the delete-turn-popup memory for the same overflow gotcha.
+   ── Why there is no hover overlay ──
+   `.message` carries `content-visibility:auto`, which applies PAINT
+   containment and clips any overflowing descendant. The old design needed
+   `.message:has(> .turn-ctx){contain:none}` to escape it — a real perf
+   carve-out that existed solely to let a hover panel spill out. Keeping the
+   overlay would mean keeping the carve-out, so the overlay is gone: the rail
+   renders its content permanently and inline, and expanding the tool list is
+   a CLICK that changes in-flow height (no escape needed). The carve-out is
+   therefore deleted, NOT weakened.
 
-   The leading bead (.tctx-orb) deliberately echoes the live context
-   sphere (.ctx-bubble-*) so the per-turn note reads as a frozen sibling
-   of the token gauge — "merged" by shared visual language. It carries no
-   liquid level (it's a static snapshot, not a live meter).
+   ── Drawer open → the rail leaves entirely ──
+   With the inspector open the pane can be as narrow as 74px (has-rail
+   sidebar @1280). Nothing legible fits there, so the rail is not squeezed —
+   the container query simply never grants the track, `.turn-ctx` collapses,
+   and the turn's context survives as the compact `.tctx-fold` summary line
+   under the message header. The information is never silently lost.
    ═══════════════════════════════════════════════════════════════════ */
-.message:has(> .turn-ctx){ content-visibility:visible; contain:none; }
 .turn-ctx{
-  position:absolute;
-  top:2px;
-  left:calc(100% + 24px);
-  z-index:5;                 /* below turn-nav (z:10) if they ever meet */
-  width:188px;
+  grid-column:3;
+  grid-row:1;
+  align-self:start;
+  min-width:0;
   font-size:10.5px;
   font-weight:600;
   line-height:1.5;
   user-select:none;
-  cursor:default;
+  /* The rail is reference material, not a control surface: it must never
+   * compete with the message's own hover action-bar for the pointer. Only
+   * the "+N more" toggle inside it opts back in. */
+  pointer-events:none;
 }
-/* ── Collapsed bar — brand logo + model + mode/count badges ──
-   A rounded-rectangle (NOT a full pill) so it can WRAP to a second row
-   without the capsule shape breaking: the logo + model claim the first
-   row (model ellipsis-truncates), and any mode/count badges that don't
-   fit wrap underneath. Fixed-width column (188px) caps the footprint. */
-.turn-ctx .tctx-bar{
-  display:flex;
-  align-items:center;
-  flex-wrap:wrap;
-  gap:4px 6px;
-  padding:4px 8px;
-  border-radius:11px;
-  opacity:0.85;
-  background:rgba(20,22,32,0.55);
-  border:1px solid rgba(255,255,255,0.08);
-  transition:opacity var(--transition), box-shadow var(--transition);
+/* No rail track (narrow pane / drawer open) → the rail folds away. It is a
+ * grid item in a zero-width track, so leaving it visible would smear it. */
+.chat-inner{ --rail-shown:0; }
+.turn-ctx{ display:none; }
+@container chatpane (min-width: 1368px){
+  .turn-ctx{
+    display:flex;
+    flex-direction:column;
+    gap:5px;
+    padding:6px 8px;
+    border-radius:10px;
+    background:rgba(20,22,32,0.42);
+    border:1px solid rgba(255,255,255,0.07);
+    /* HEIGHT DISCIPLINE: the rail sits beside a bubble that is often a single
+     * line (~76px). Left unbounded it stacked head + Tools + Workspace into a
+     * ~250px column and every short turn inherited that height as whitespace.
+     * So the collapsed rail is capped and scrolls internally; clicking "+N"
+     * lifts the cap because the user asked to see more. Not clipping is not
+     * enough — it must also look right. Guarded by the height-ratio assertion
+     * in tests/test_turn_ctx_rail_geometry.py. */
+    max-height:132px;
+    overflow:hidden;
+  }
+  .turn-ctx:has(.tctx-overflow:not([hidden])){ max-height:none; }
 }
-.turn-ctx:hover .tctx-bar{ opacity:1; box-shadow:0 2px 10px rgba(0,0,0,0.18); }
+.turn-ctx .tctx-head{ display:flex; align-items:center; flex-wrap:wrap; gap:4px 6px; }
 .turn-ctx .tctx-logo{ display:inline-flex; flex:0 0 auto; align-items:center; }
 .turn-ctx .tctx-logo .stg-brand-icon svg{ display:block; width:100%; height:100%; fill:currentColor; }
 .turn-ctx .tctx-model{
@@ -19414,6 +19510,7 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .ctx-health-bar[data-zon
   min-width:0;
   overflow:hidden;
   text-overflow:ellipsis;
+  white-space:nowrap;
 }
 .turn-ctx .tctx-depth{
   font-size:8px;
@@ -19426,24 +19523,7 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .ctx-health-bar[data-zon
   color:#c4b5fd;
   flex:0 0 auto;
 }
-.turn-ctx .tctx-count{
-  display:inline-flex;
-  align-items:center;
-  gap:3px;
-  flex:0 0 auto;
-  padding:0 6px 0 5px;
-  border-radius:999px;
-  font-size:9.5px;
-  font-weight:700;
-  font-variant-numeric:tabular-nums;
-  border:1px solid transparent;
-}
-.turn-ctx .tctx-count svg{ flex:0 0 auto; opacity:0.85; }
-.turn-ctx .tctx-count-tools{ background:rgba(45,212,191,0.16); color:#5eead4; border-color:rgba(45,212,191,0.24); }
-.turn-ctx .tctx-count-ws   { background:rgba(148,163,184,0.16); color:#94a3b8; border-color:rgba(148,163,184,0.24); }
-/* Mode badge — always visible on the collapsed bar (Endpoint / Autopilot /
-   Swarm / a named flow) so the run mode is legible at a glance, not just on
-   hover. Echoes the amber `mode` tone used by the panel chips. */
+/* Mode badge — Endpoint / Autopilot / Swarm / a named flow. */
 .turn-ctx .tctx-mode-badge{
   flex:0 0 auto;
   padding:1px 6px;
@@ -19461,52 +19541,13 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .ctx-health-bar[data-zon
 [data-theme="light"] .turn-ctx .tctx-mode-badge{ background:rgba(217,158,40,0.14); color:#b45309; border-color:rgba(217,158,40,0.28); }
 [data-theme="tofu"] .turn-ctx .tctx-mode-badge{ background:rgba(200,150,60,0.18); color:#8a6a2a; border-color:rgba(200,150,60,0.32); }
 
-/* ── Expand panel — grows DOWN into the empty gutter on hover ── */
-.turn-ctx .tctx-panel{
-  position:absolute;
-  top:calc(100% + 5px);
-  left:0;
-  width:230px;
-  display:flex;
-  flex-direction:column;
-  gap:9px;
-  padding:11px 12px;
-  border-radius:12px;
-  background:rgba(20,22,32,0.94);
-  border:1px solid rgba(255,255,255,0.08);
-  box-shadow:0 8px 24px rgba(0,0,0,0.35);
-  /* Collapsed: fade + slide-up + non-interactive. Revealed on hover. */
-  opacity:0;
-  transform:translateY(-4px);
-  pointer-events:none;
-  transition:opacity .16s ease, transform .16s ease;
-  z-index:11;                /* above turn-nav when expanded */
-}
-/* Invisible bridge across the 5px gap so moving the cursor from the bar
- * down to the panel doesn't cross a non-hover zone and dismiss it. */
-.turn-ctx .tctx-panel::before{
-  content:"";
-  position:absolute;
-  left:0;
-  right:0;
-  top:-7px;
-  height:7px;
-}
-.turn-ctx:hover .tctx-panel{ opacity:1; transform:translateY(0); pointer-events:auto; }
-.turn-ctx .tctx-row{ display:flex; flex-direction:column; gap:4px; }
+.turn-ctx .tctx-row{ display:flex; flex-direction:column; gap:3px; }
 .turn-ctx .tctx-row-h{
-  font-size:8.5px;
+  font-size:8px;
   font-weight:700;
   letter-spacing:0.09em;
   text-transform:uppercase;
-  opacity:0.5;
-}
-.turn-ctx .tctx-row-v{ display:flex; align-items:center; gap:5px; color:var(--text-secondary); }
-.turn-ctx .tctx-row-model{
-  font-size:11px;
-  font-weight:600;
-  word-break:break-all;
-  line-height:1.35;
+  opacity:0.45;
 }
 .turn-ctx .tctx-chips{ display:flex; flex-wrap:wrap; gap:4px; }
 .turn-ctx .tctx-chip{
@@ -19516,8 +19557,39 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .ctx-health-bar[data-zon
   border-radius:999px;
   border:1px solid transparent;
   white-space:nowrap;
+  max-width:100%;
+  overflow:hidden;
+  text-overflow:ellipsis;
 }
 .turn-ctx .tctx-tone-mode  { background:rgba(245,158,11,0.15); color:#fcd34d; border-color:rgba(245,158,11,0.25); }
+.turn-ctx .tctx-tone-search{ background:rgba(59,130,246,0.15); color:#93c5fd; border-color:rgba(59,130,246,0.25); }
+.turn-ctx .tctx-tone-net   { background:rgba(16,185,129,0.15); color:#6ee7b7; border-color:rgba(16,185,129,0.25); }
+.turn-ctx .tctx-tone-code  { background:rgba(168,85,247,0.15); color:#d8b4fe; border-color:rgba(168,85,247,0.25); }
+.turn-ctx .tctx-tone-ai    { background:rgba(45,212,191,0.15); color:#5eead4; border-color:rgba(45,212,191,0.25); }
+.turn-ctx .tctx-tone-mcp   { background:rgba(148,163,184,0.15); color:#cbd5e1; border-color:rgba(148,163,184,0.25); }
+/* "+N more" — a CLICK toggle, deliberately not hover. Expanding grows the
+ * rail IN FLOW, which needs no containment escape (see the block comment).
+ * It is the only pointer-reactive thing in the rail. */
+.turn-ctx .tctx-more{
+  pointer-events:auto;
+  cursor:pointer;
+  font-size:9.5px;
+  font-weight:700;
+  padding:1px 7px;
+  border-radius:999px;
+  background:transparent;
+  color:var(--text-tertiary);
+  border:1px dashed rgba(148,163,184,0.45);
+  font-family:inherit;
+}
+.turn-ctx .tctx-more:hover{ color:var(--text-primary); border-color:var(--accent); }
+/* The overflow group must NOT be a flex item of its own: as a single item it
+ * cannot wrap internally, so its nowrap chips run straight off the rail's
+ * right edge (measured +110px past the pane at 1440). `display:contents`
+ * dissolves the wrapper so each chip becomes a direct item of `.tctx-chips`
+ * and wraps exactly like the always-visible ones. */
+.turn-ctx .tctx-overflow{ display:contents; }
+.turn-ctx .tctx-overflow[hidden]{ display:none; }
 .turn-ctx .tctx-paths{ display:flex; flex-direction:column; gap:3px; }
 .turn-ctx .tctx-path{
   display:flex;
@@ -19530,47 +19602,47 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .ctx-health-bar[data-zon
 }
 .turn-ctx .tctx-path .tctx-lock{ flex:0 0 auto; margin-top:2px; opacity:0.7; }
 
-/* ── Per-theme palettes (mirror .ctx-health-bar) ─────────────── */
-[data-theme="light"] .turn-ctx .tctx-bar{ background:rgba(255,255,255,0.9); border-color:#e8e6df; }
-[data-theme="light"] .turn-ctx .tctx-panel{
-  background:#ffffff;
-  border-color:#e8e6df;
-  box-shadow:0 8px 24px rgba(20,20,40,0.12);
+/* ── Fold: the rail's content as ONE line under the message header ──
+ * Shown exactly when the rail track is absent (narrow pane, or the
+ * inspector drawer is open). Guarantees the turn's context is never lost,
+ * only compacted. */
+.tctx-fold{
+  display:flex;
+  align-items:center;
+  gap:5px;
+  margin-bottom:6px;
+  font-size:10px;
+  font-weight:600;
+  color:var(--text-tertiary);
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
 }
-[data-theme="light"] .turn-ctx .tctx-model,
-[data-theme="light"] .turn-ctx .tctx-row-v,
-[data-theme="light"] .turn-ctx .tctx-path{ color:#4a4a58; }
-[data-theme="light"] .turn-ctx .tctx-count-tools{ background:rgba(13,148,136,0.10); color:#0d9488; border-color:rgba(13,148,136,0.22); }
-[data-theme="light"] .turn-ctx .tctx-count-ws   { background:rgba(100,116,139,0.10); color:#64748b; border-color:rgba(100,116,139,0.20); }
-[data-theme="light"] .turn-ctx .tctx-tone-mode  { background:rgba(217,158,40,0.12); color:#b45309; border-color:rgba(217,158,40,0.25); }
+.tctx-fold .tctx-fold-dot{ width:5px; height:5px; border-radius:50%; background:var(--accent); flex:0 0 auto; opacity:.7; }
+@container chatpane (min-width: 1368px){
+  .tctx-fold{ display:none; }
+}
 
-[data-theme="tofu"] .turn-ctx .tctx-bar{
+/* ── Per-theme palettes ─────────────── */
+[data-theme="light"] .turn-ctx{ background:rgba(255,255,255,0.75); border-color:#e8e6df; }
+[data-theme="light"] .turn-ctx .tctx-model,
+[data-theme="light"] .turn-ctx .tctx-path{ color:#4a4a58; }
+[data-theme="light"] .turn-ctx .tctx-tone-mode  { background:rgba(217,158,40,0.12); color:#b45309; border-color:rgba(217,158,40,0.25); }
+[data-theme="light"] .turn-ctx .tctx-tone-ai    { background:rgba(13,148,136,0.10); color:#0d9488; border-color:rgba(13,148,136,0.22); }
+[data-theme="light"] .turn-ctx .tctx-tone-mcp   { background:rgba(100,116,139,0.10); color:#64748b; border-color:rgba(100,116,139,0.20); }
+
+[data-theme="tofu"] .turn-ctx{
   background:#fdf8e6;
   border:1px solid #d8cda8;
   box-shadow:0 1px 0 #ebdfba;
 }
-[data-theme="tofu"] .turn-ctx .tctx-panel{
-  background:#fdf8e6;
-  border:1px solid #d8cda8;
-  box-shadow:0 1px 0 #ebdfba, 0 8px 20px rgba(120,100,70,0.18);
-}
 [data-theme="tofu"] .turn-ctx .tctx-model,
-[data-theme="tofu"] .turn-ctx .tctx-row-v,
 [data-theme="tofu"] .turn-ctx .tctx-path{ color:#6a5a40; }
 [data-theme="tofu"] .turn-ctx .tctx-row-h{ color:#8a7a5e; }
 [data-theme="tofu"] .turn-ctx .tctx-depth{ background:rgba(200,150,60,0.18); color:#8a6a2a; }
-[data-theme="tofu"] .turn-ctx .tctx-count-tools{ background:rgba(70,150,140,0.16); color:#2f7268; border-color:rgba(70,150,140,0.28); }
-[data-theme="tofu"] .turn-ctx .tctx-count-ws   { background:rgba(150,135,110,0.16); color:#7a6a50; border-color:rgba(150,135,110,0.28); }
+[data-theme="tofu"] .turn-ctx .tctx-tone-ai    { background:rgba(70,150,140,0.16); color:#2f7268; border-color:rgba(70,150,140,0.28); }
+[data-theme="tofu"] .turn-ctx .tctx-tone-mcp   { background:rgba(150,135,110,0.16); color:#7a6a50; border-color:rgba(150,135,110,0.28); }
 [data-theme="tofu"] .turn-ctx .tctx-tone-mode  { background:rgba(200,150,60,0.16); color:#8a6a2a; border-color:rgba(200,150,60,0.30); }
-
-/* The chat column is a fixed 820px centered, so the right gutter only
- * gets wide enough to hold the widget (clear of the turn-nav) on roomy
- * screens. Below that it would collide with the turn-nav / run off-screen,
- * so hide it — exactly like the turn-nav and context sphere vanish when
- * the gutters get cramped. */
-@media (max-width: 1280px){
-  .turn-ctx{ display:none; }
-}
 
 /* ── Fallback: browsers without color-mix() drop the meniscus
  *    blending and use a flat near-white stroke. */

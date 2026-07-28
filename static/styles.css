@@ -416,7 +416,7 @@ html[data-rail] .folder-quickadd{display:none}
  * Guarded per-theme by tests/test_turn_ctx_rail_geometry.py. */
 :root{ --msg-measure:820px; }
 .message-content{flex:1;min-width:0;max-width:var(--msg-measure);overflow:hidden;position:relative;contain:layout style}
-.message-header{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.message-header{display:flex;align-items:center;gap:10px;margin-bottom:5px}
 .avatar{width:28px;height:28px;border-radius:var(--radius-xs);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;flex-shrink:0}.avatar.user{background:var(--user-bubble);color:#a5b4fc}.avatar.assistant{background:linear-gradient(135deg,var(--accent),#a78bfa);color:white}
 .message-role{font-size:13px;font-weight:600}.message-time{font-size:11px;color:var(--text-tertiary)}.stream-elapsed-timer{font-size:11px;font-family:'JetBrains Mono',monospace;margin-left:6px;display:inline-flex;align-items:center;gap:4px}.stream-elapsed{color:var(--text-tertiary);font-weight:400}.stream-stuck-warn{color:var(--thinking-text);font-weight:600;animation:stuckPulse 2s ease-in-out infinite}.stream-stuck-severe{color:var(--error-text);font-weight:700;animation:stuckPulse 1s ease-in-out infinite}.stream-stuck-activity{color:var(--text-secondary);font-weight:500;font-style:italic;animation:stuckPulse 2.4s ease-in-out infinite}@keyframes stuckPulse{0%,100%{opacity:0.6}50%{opacity:1}}.stream-liveness-wrap{margin-top:6px}.stream-liveness{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:6px;line-height:1.5}.stream-liveness-icon{flex-shrink:0}.stream-liveness-ok{color:var(--text-secondary);background:rgba(120,170,120,.12)}.stream-liveness-warn{color:var(--thinking-text);background:rgba(200,170,90,.12);animation:stuckPulse 2s ease-in-out infinite}.stream-force-finish-btn{font-size:10px;font-family:'JetBrains Mono',monospace;background:var(--error-text);color:white;border:none;border-radius:4px;padding:1px 8px;margin-left:6px;cursor:pointer;font-weight:600;opacity:0.9;transition:opacity .2s}.stream-force-finish-btn:hover{opacity:1}.message-body{padding-left:0;overflow:hidden;max-width:100%}
 /* ── Message image thumbnail grid ── */
@@ -437,11 +437,11 @@ html[data-rail] .folder-quickadd{display:none}
 /* ★ Perf: replaced backdrop-filter:blur(10px) with solid rgba bg — blur forces GPU re-composite on every scroll frame, 
  * costing ~2-4ms per frame. Solid bg is visually identical on dark theme and costs nothing. */
 .turn-nav{display:flex;flex-direction:row;align-items:center;gap:2px;min-width:0;max-width:min(52%,560px);overflow-x:auto;overflow-y:hidden;padding:3px 5px;background:rgba(17,17,21,0.96);border:1px solid var(--border);border-radius:16px;scrollbar-width:none;opacity:0.85;transition:opacity .3s;flex:0 1 auto}.turn-nav:hover{opacity:1}.turn-nav::-webkit-scrollbar{display:none}.turn-nav:empty{display:none}.turn-nav-label{font-size:8px;font-weight:700;color:var(--text-secondary);letter-spacing:.08em;text-transform:uppercase;padding:2px 0 3px;user-select:none}.turn-dot{width:26px;height:26px;border-radius:50%;background:rgba(255,255,255,0.04);border:1.5px solid var(--border);color:var(--text-secondary);font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:color .2s,background-color .2s,border-color .2s,transform .2s;font-family:'JetBrains Mono',monospace;flex-shrink:0}.turn-dot:hover{background:var(--accent-subtle);color:var(--accent);border-color:var(--accent);transform:scale(1.15)}.turn-dot.active{background:var(--accent);color:white;border-color:var(--accent)}/* ★ Perf: contain:content isolates thinking block layout from parent reflows */
-.thinking-block{margin-bottom:12px;border:1px solid var(--thinking-border);border-radius:var(--radius-sm);background:var(--thinking-bg);overflow:hidden;contain:content}
+.thinking-block{margin-bottom:8px;border:1px solid var(--thinking-border);border-radius:var(--radius-sm);background:var(--thinking-bg);overflow:hidden;contain:content}
 
 /* Windowed/trimmed open: click-to-load affordance for a message whose heavy
    tool timeline was stripped for transport (hydrateFullConversation). */
-.trimmed-tool-activity{margin-bottom:12px;padding:5px 12px 5px 10px;border:1px solid var(--border);border-radius:999px;background:var(--bg-tertiary);color:var(--text-secondary);font-size:12px;font-weight:500;cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:6px;transition:background var(--transition),border-color var(--transition),color var(--transition)}
+.trimmed-tool-activity{margin-bottom:8px;padding:4px 12px 4px 10px;border:1px solid var(--border);border-radius:999px;background:var(--bg-tertiary);color:var(--text-secondary);font-size:12px;font-weight:500;cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:6px;transition:background var(--transition),border-color var(--transition),color var(--transition)}
 .trimmed-tool-activity>svg{display:block;opacity:.7}
 .trimmed-tool-activity:hover{background:var(--accent-subtle);border-color:var(--accent);color:var(--accent)}
 .trimmed-tool-activity:hover>svg{opacity:1}
@@ -454,7 +454,7 @@ html[data-rail] .folder-quickadd{display:none}
 .thinking-block.thinking-prior .thinking-label::before{content:"\2937  ";opacity:.7}
 .thinking-block.content-prior .thinking-label{color:var(--text-tertiary)}
 .thinking-block.content-prior .thinking-label::before{content:"\21A9  "}
-.thinking-header{display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer;user-select:none;transition:background var(--transition)}.thinking-header:hover{background:rgba(207,167,56,0.1)}.thinking-label{font-size:12px;font-weight:600;color:var(--thinking-text);flex:1}.thinking-toggle{font-size:11px;color:var(--thinking-text);opacity:.6;transition:transform .3s ease}.thinking-block.expanded .thinking-toggle{transform:rotate(180deg)}.thinking-content{max-height:0;overflow:hidden;transition:max-height .4s ease}.thinking-block.expanded .thinking-content{max-height:none}.thinking-text{padding:0 14px 14px;font-size:13px;line-height:1.6;color:var(--text-secondary);white-space:pre-wrap;word-break:break-word}
+.thinking-header{display:flex;align-items:center;gap:8px;padding:7px 12px;cursor:pointer;user-select:none;transition:background var(--transition)}.thinking-header:hover{background:rgba(207,167,56,0.1)}.thinking-label{font-size:12px;font-weight:600;color:var(--thinking-text);flex:1}.thinking-toggle{font-size:11px;color:var(--thinking-text);opacity:.6;transition:transform .3s ease}.thinking-block.expanded .thinking-toggle{transform:rotate(180deg)}.thinking-content{max-height:0;overflow:hidden;transition:max-height .4s ease}.thinking-block.expanded .thinking-content{max-height:none}.thinking-text{padding:0 14px 14px;font-size:13px;line-height:1.6;color:var(--text-secondary);white-space:pre-wrap;word-break:break-word}
 .bilingual-block{margin-top:10px;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-secondary);contain:layout style}.bilingual-original{border-color:rgba(165,180,252,0.2);background:rgba(30,27,75,0.15)}.bilingual-translated{border-color:rgba(110,86,207,0.2);background:rgba(110,86,207,0.04)}.bilingual-header{display:flex;align-items:center;gap:8px;padding:7px 12px;cursor:pointer;user-select:none;transition:background var(--transition)}.bilingual-header:hover{background:var(--bg-hover)}.bilingual-label{font-size:11px;color:var(--text-tertiary);flex:1;display:flex;align-items:center;gap:0}.bilingual-type{opacity:.5;transition:opacity .2s}.bilingual-type.active{opacity:1;color:var(--text-secondary);font-weight:600}.bilingual-sep{opacity:.3;margin:0 4px;font-size:10px}.bilingual-model{margin-left:8px;font-size:10px;font-weight:500;color:var(--accent);background:rgba(139,92,246,0.1);padding:1px 7px;border-radius:8px;font-family:'JetBrains Mono',monospace;letter-spacing:.02em;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.bilingual-toggle{font-size:10px;color:var(--text-tertiary);opacity:.5;transition:transform .3s ease}.bilingual-block.expanded .bilingual-toggle{transform:rotate(180deg)}.bilingual-body{max-height:0;overflow:hidden;transition:max-height .4s ease}.bilingual-block.expanded .bilingual-body{max-height:none}.bilingual-body .md-content{padding:0 12px 10px;font-size:13px;opacity:.85}.bilingual-copy-btn{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;border:none;border-radius:4px;background:transparent;color:var(--text-tertiary);cursor:pointer;opacity:.5;transition:all .2s ease;flex-shrink:0}.bilingual-copy-btn:hover{opacity:1;background:var(--bg-hover);color:var(--text-secondary)}.bilingual-copy-btn.copied{opacity:1;color:#34d399}
 /* ── Live auto-translation indicator ──
  * Streams the 译文 in as it arrives, then morphs into the purple
@@ -10326,16 +10326,23 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   position:relative
 }
 
-/* ── Assistant messages — calm paper card, soft diffuse depth ── */
+/* ── Assistant messages — open prose on the page, no card ──
+ * The theme direction above says it plainly: "no frame theatrics". The card
+ * (bg + border + clay shadow) wrapped EVERY reply in a box while thinking
+ * strips / tool panels / tables drew their own boxes inside it — that
+ * boxes-in-boxes stack was the visual mess. Dark/light never had an
+ * assistant card; tofu now matches: prose sits directly on the paper, and
+ * only real containers (code / tables / thinking / tool panels) keep a
+ * frame. Geometry-neutral: same --msg-measure track, zero inset change to
+ * the content box (the rail-geometry sweep subtracts padding/border). */
 [data-theme="tofu"] .message:not(.user-msg) .message-content{
-  background:#FFFDF9;
-  border:1px solid var(--border);
-  border-radius:var(--radius);
-  box-shadow:var(--clay-md);
-  padding:16px 20px 14px;
+  background:transparent;
+  border:none;
+  border-radius:0;
+  box-shadow:none;
+  padding:0;
   position:relative;
-  overflow:visible;
-  transition:box-shadow 0.2s ease
+  overflow:visible
 }
 /* ── No speech bubble tail — clean rounded card ── */
 [data-theme="tofu"] .message:not(.user-msg) .message-content::before{
@@ -10363,7 +10370,7 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 
 /* ── Message header — clean game-style ── */
 [data-theme="tofu"] .message-header{
-  margin-bottom:8px;
+  margin-bottom:5px;
   padding-bottom:0;
   border-bottom:none
 }
@@ -11222,28 +11229,25 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   [data-theme="tofu"] .welcome h2.tofu-brand{font-size:18px}
 }
 
-/* ── Turn nav — pixel bar ── */
+/* ── Turn nav — a quiet pill (the beveled "pixel bar" read as a toy
+   toolbar floating over the paper; one hairline + one soft shadow is enough) ── */
 [data-theme="tofu"] .turn-nav{
-  background:rgba(245,243,237,0.97);
-  border:2px solid #C2BCA4;
-  border-top-color:#FFFCF6;
-  border-left-color:#FFFCF6;
-  border-right-color:#A89878;
-  border-bottom-color:#A89878;
-  border-radius:4px;
+  background:rgba(250,247,240,0.96);
+  border:1px solid var(--border);
+  border-radius:999px;
   box-shadow:var(--clay-sm);
   backdrop-filter:none
 }
-[data-theme="tofu"] .turn-dot{border-radius:3px;transition:all 0.12s}
+[data-theme="tofu"] .turn-dot{border-radius:50%;transition:all 0.12s}
 [data-theme="tofu"] .turn-dot.active{
   background:#BB9572;
-  border-color:transparent;color:#FFF8F0;border-radius:3px;
+  border-color:transparent;color:#FFF8F0;
   box-shadow:var(--clay-sm)}
 [data-theme="tofu"] .turn-dot:hover{
-  background:rgba(196,149,106,0.1);color:#A67B52;border-color:transparent;border-radius:3px;
+  background:rgba(196,149,106,0.1);color:#A67B52;border-color:transparent;
   box-shadow:none
 }
-[data-theme="tofu"] .turn-dot-writes{border-color:transparent;color:#A67B52;background:rgba(196,149,106,0.06);border-radius:3px}
+[data-theme="tofu"] .turn-dot-writes{border-color:transparent;color:#A67B52;background:rgba(196,149,106,0.06)}
 [data-theme="tofu"] .turn-dot-writes:hover{border-color:transparent;color:#A67B52;background:rgba(196,149,106,0.1);box-shadow:none}
 [data-theme="tofu"] .turn-dot-writes.active{
   background:#BB9572;
@@ -13647,15 +13651,13 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
 [data-theme="tofu"] .preset-dropdown-item.selected{background:rgba(196,149,106,0.15);color:#4A3820}
 [data-theme="tofu"] .img-preview{border-radius:8px;border:1px solid rgba(90,78,64,0.3);box-shadow:0 2px 8px rgba(0,0,0,0.1)}
 
-/* ── User bubble: soft warm card, no tail ── */
+/* ── User bubble: a gently tinted note — hairline, one soft shadow ── */
 [data-theme="tofu"] .message.user-msg .message-content{
   background:#F5F3ED;
-  border:2px solid rgba(196,179,150,0.45);
-  border-radius:16px;
-  padding:12px 16px;
-  box-shadow:
-    0 2px 0 rgba(196,179,150,0.15),
-    0 3px 6px rgba(120,100,70,0.05);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  padding:10px 16px;
+  box-shadow:var(--clay-sm);
   position:relative
 }
 /* ── No speech tails ── */
@@ -18208,7 +18210,7 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
    this strip. */
 .turn-prov{
   display:flex;align-items:center;gap:10px;flex-wrap:wrap;
-  margin:0 0 8px 0;padding:3px 4px;
+  margin:0 0 6px 0;padding:2px 2px;
   border:1px solid transparent;border-radius:var(--radius-sm);
   font-size:11.5px;line-height:1.4;color:var(--text-secondary);
   transition:background .15s ease,border-color .15s ease;
@@ -19557,10 +19559,14 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .ctx-health-bar[data-zon
     display:flex;
     flex-direction:column;
     gap:5px;
-    padding:6px 8px;
-    border-radius:10px;
-    background:rgba(20,22,32,0.42);
-    border:1px solid rgba(255,255,255,0.07);
+    padding:3px 0 3px 10px;
+    border-radius:0;
+    background:transparent;
+    border:none;
+    /* Reference marginalia, not a card: a single hairline rule separates it
+     * from the prose column. The boxed card (bg + border + radius) was one
+     * more rectangle competing with the message — the rail now whispers. */
+    border-left:1px solid var(--border);
     /* HEIGHT DISCIPLINE: the rail sits beside a bubble that is often a single
      * line (~76px). Left unbounded it stacked head + Tools + Workspace into a
      * ~250px column and every short turn inherited that height as whitespace.
@@ -19591,8 +19597,9 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .ctx-health-bar[data-zon
   letter-spacing:0.04em;
   padding:0 4px;
   border-radius:5px;
-  background:rgba(167,139,250,0.20);
+  background:transparent;
   color:#c4b5fd;
+  border:1px solid color-mix(in srgb, currentColor 42%, transparent);
   flex:0 0 auto;
 }
 /* Mode badge — Endpoint / Autopilot / Swarm / a named flow. */
@@ -19606,12 +19613,12 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .ctx-health-bar[data-zon
   text-transform:uppercase;
   letter-spacing:0.03em;
   white-space:nowrap;
-  background:rgba(245,158,11,0.18);
-  color:#fcd34d;
-  border:1px solid rgba(245,158,11,0.30);
+  background:transparent;
+  color:#e8b04a;
+  border:1px solid color-mix(in srgb, currentColor 42%, transparent);
 }
-[data-theme="light"] .turn-ctx .tctx-mode-badge{ background:rgba(217,158,40,0.14); color:#b45309; border-color:rgba(217,158,40,0.28); }
-[data-theme="tofu"] .turn-ctx .tctx-mode-badge{ background:rgba(200,150,60,0.18); color:#8a6a2a; border-color:rgba(200,150,60,0.32); }
+[data-theme="light"] .turn-ctx .tctx-mode-badge{ color:#b45309; }
+[data-theme="tofu"] .turn-ctx .tctx-mode-badge{ color:#8a6a2a; }
 
 .turn-ctx .tctx-row{ display:flex; flex-direction:column; gap:3px; }
 .turn-ctx .tctx-row-h{
@@ -19625,20 +19632,24 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .ctx-health-bar[data-zon
 .turn-ctx .tctx-chip{
   font-size:10px;
   font-weight:600;
-  padding:1px 7px;
+  padding:0 6px;
   border-radius:999px;
-  border:1px solid transparent;
+  background:transparent;
+  /* Quiet outline chips: the tone color survives ONLY as the ink, and the
+   * border is the same ink at 40% via currentColor — the six candy-fill
+   * backgrounds were the noisiest element on the whole message row. */
+  border:1px solid color-mix(in srgb, currentColor 38%, transparent);
   white-space:nowrap;
   max-width:100%;
   overflow:hidden;
   text-overflow:ellipsis;
 }
-.turn-ctx .tctx-tone-mode  { background:rgba(245,158,11,0.15); color:#fcd34d; border-color:rgba(245,158,11,0.25); }
-.turn-ctx .tctx-tone-search{ background:rgba(59,130,246,0.15); color:#93c5fd; border-color:rgba(59,130,246,0.25); }
-.turn-ctx .tctx-tone-net   { background:rgba(16,185,129,0.15); color:#6ee7b7; border-color:rgba(16,185,129,0.25); }
-.turn-ctx .tctx-tone-code  { background:rgba(168,85,247,0.15); color:#d8b4fe; border-color:rgba(168,85,247,0.25); }
-.turn-ctx .tctx-tone-ai    { background:rgba(45,212,191,0.15); color:#5eead4; border-color:rgba(45,212,191,0.25); }
-.turn-ctx .tctx-tone-mcp   { background:rgba(148,163,184,0.15); color:#cbd5e1; border-color:rgba(148,163,184,0.25); }
+.turn-ctx .tctx-tone-mode  { color:#e8b04a; }
+.turn-ctx .tctx-tone-search{ color:#93c5fd; }
+.turn-ctx .tctx-tone-net   { color:#6ee7b7; }
+.turn-ctx .tctx-tone-code  { color:#d8b4fe; }
+.turn-ctx .tctx-tone-ai    { color:#5eead4; }
+.turn-ctx .tctx-tone-mcp   { color:#cbd5e1; }
 /* "+N more" — a CLICK toggle, deliberately not hover. Expanding grows the
  * rail IN FLOW, which needs no containment escape (see the block comment).
  * It is the only pointer-reactive thing in the rail. */
@@ -19696,25 +19707,34 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .ctx-health-bar[data-zon
 }
 
 /* ── Per-theme palettes ─────────────── */
-[data-theme="light"] .turn-ctx{ background:rgba(255,255,255,0.75); border-color:#e8e6df; }
+[data-theme="light"] .turn-ctx{ background:transparent; border:none; border-left:1px solid #e8e6df; }
 [data-theme="light"] .turn-ctx .tctx-model,
 [data-theme="light"] .turn-ctx .tctx-path{ color:#4a4a58; }
-[data-theme="light"] .turn-ctx .tctx-tone-mode  { background:rgba(217,158,40,0.12); color:#b45309; border-color:rgba(217,158,40,0.25); }
-[data-theme="light"] .turn-ctx .tctx-tone-ai    { background:rgba(13,148,136,0.10); color:#0d9488; border-color:rgba(13,148,136,0.22); }
-[data-theme="light"] .turn-ctx .tctx-tone-mcp   { background:rgba(100,116,139,0.10); color:#64748b; border-color:rgba(100,116,139,0.20); }
+[data-theme="light"] .turn-ctx .tctx-tone-mode  { color:#b45309; }
+[data-theme="light"] .turn-ctx .tctx-tone-ai    { color:#0d9488; }
+[data-theme="light"] .turn-ctx .tctx-tone-mcp   { color:#64748b; }
 
 [data-theme="tofu"] .turn-ctx{
-  background:#fdf8e6;
-  border:1px solid #d8cda8;
-  box-shadow:0 1px 0 #ebdfba;
+  background:transparent;
+  border:none;
+  box-shadow:none;
+  border-left:1px solid #e2dac8;
 }
 [data-theme="tofu"] .turn-ctx .tctx-model,
 [data-theme="tofu"] .turn-ctx .tctx-path{ color:#6a5a40; }
 [data-theme="tofu"] .turn-ctx .tctx-row-h{ color:#8a7a5e; }
-[data-theme="tofu"] .turn-ctx .tctx-depth{ background:rgba(200,150,60,0.18); color:#8a6a2a; }
-[data-theme="tofu"] .turn-ctx .tctx-tone-ai    { background:rgba(70,150,140,0.16); color:#2f7268; border-color:rgba(70,150,140,0.28); }
-[data-theme="tofu"] .turn-ctx .tctx-tone-mcp   { background:rgba(150,135,110,0.16); color:#7a6a50; border-color:rgba(150,135,110,0.28); }
-[data-theme="tofu"] .turn-ctx .tctx-tone-mode  { background:rgba(200,150,60,0.16); color:#8a6a2a; border-color:rgba(200,150,60,0.30); }
+[data-theme="tofu"] .turn-ctx .tctx-depth{ color:#8a6a2a; }
+[data-theme="tofu"] .turn-ctx .tctx-tone-ai    { color:#2f7268; }
+[data-theme="tofu"] .turn-ctx .tctx-tone-mcp   { color:#7a6a50; }
+[data-theme="tofu"] .turn-ctx .tctx-tone-mode  { color:#8a6a2a; }
+
+/* ── Fallback: browsers without color-mix() get a neutral hairline on the
+ *    quiet outline chips/badges (same fallback family as the meniscus). ── */
+@supports not (color: color-mix(in srgb, red, blue)){
+  .turn-ctx .tctx-chip,
+  .turn-ctx .tctx-mode-badge,
+  .turn-ctx .tctx-depth{ border-color:rgba(148,163,184,0.45); }
+}
 
 /* ── Fallback: browsers without color-mix() drop the meniscus
  *    blending and use a flat near-white stroke. */

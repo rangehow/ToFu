@@ -1,5 +1,17 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-28(续·自领四票) — 四张自开票全部收口 + 两起共享 HEAD 事故自报与制度修正(epics `pt_c2e59181`/`pt_3c7f29f8`/`pt_2c613da1`/`pt_c1e3318a` 全部 DONE;commits `9973b683`/`943ffc24`/`776fc646`+`d6f8baf3`/`359ca94e`+`7c734414`;净树复验 migration 101、bundler 环串行 52 + xdist -n8 86、p6+boot 8/8)
+
+- **landscape「重复媒体查询」(pt_c2e59181):** 实测两处载荷完全不相交(:11262 tofu 品牌断点梯 / :18209 横屏布局块),CSS 无缺陷,体检 rec 49 的「删其一」是假阳性——真红是 NC 守卫的唯一性前提撞上合法双块共条件(且裸 header replace(1) 必打错块)。锚收窄到布局块(header + 首行载荷 `.topbar{`),CSS 零改动。**判据:同型锚在文件里有两处时,replace(1) 必然打错——锚必须带下行上下文。**
+- **_originator_stuck 条件 3(pt_3c7f29f8):** docstring 承诺「不在 live wait-on-path 上」而实现只查 blocked_until——落地 `_paths_waited_but_held`(wait_paths 对 kind='lease' 行的逆读,设计稿 docs/PROJECT_BRAIN_WAIT_ON_PATH.md 的机制层从未实现):target 自持租约不算持有、空/坏/无人租一律 fail-open、判据失败一律报 NOT stuck(宁漏迁移勿错迁移)。既有 RED-first 测试转绿 + 三补集 + NEUTER。顺带根修预存在顺序污染(HEAD A/B 实证):`_clean` 只清 DB 不清进程级任务注册表,neutered_source 的 exec 会覆盖 canonical 上 monkeypatch 的缝——NC-age 单跑绿整跑红的典型,补注册表清理后 27/27。
+- **暖重开采纳(pt_2c613da1):** 实测反转——产品采纳**早已被 ghost 谱系批次落地**(committed HEAD 即有 `_openConvMayHoldOrphanGhost` bypass 逃逸 + MERGE_ACTIVE_TASK 短表采纳),strict xfail 未翻 XPASS 的真因是 harness 缺 `convHasPendingSync` 桩(抽提家族),D 控制组此前是「崩出来的假绿」。补忠实桩后 4/4 绿,按设计撕 xfail 转正为常驻守卫 + NEUTER;mrxinirv peer 确认冲突面=0,conversations.js 零改动。**判据:xfail(strict) 不翻 XPASS 先查 harness 是否还跑得动,别先假设产品没修。**
+- **并行互踩(pt_c1e3318a):** 不止测试隔离——`_clean_old_bundles` 按本进程 keep-set 删文件,而目录多进程共享(xdist/supervisor 重叠/兄弟跑 bundler 测试),`i18n-<lang>-<hash>.js` 连 stale-resolver 自愈都没有,404 = t() 静默回退全 UI 白屏。根修 mtime 宽限期(`_BUILT_ARTIFACT_GRACE_S` 默认 7200s,0=旧行为)+ 守卫×3(grace=0 即 NEUTER)。测试侧:merge 测试冷 worker 不热身直读 `_pack_filenames['zh']`(补 nonblocking 热身)、spawn 单例 yield 前也复位(autouse)、index.html 补 model_health/model_group/paper/research 三个 dev-fallback 标签。xdist -n8 全簇 86/86。
+- **★ 事故一(776fc646→d6f8baf3):** 不带 pathspec 的提交 = 提交整个 index——ms4lpqzs 暂存的 gateway 模板测试删除被卷走。已原样还原 + peer 交回,对方 90202d96 带归因重删。**判据:`git add` 后计数断言必须覆盖所有状态列(M/D/R),不止 '^M '。**
+- **★ 事故二(359ca94e 整文件 add):** mrxinirv 未提交的 slice-7 manifest hunk(conv_merge_shells 条目)随我的 js_bundler.py 一起进提交,实现文件未随——committed HEAD 的 manifest 引用不存在的文件(parity 两红)。拟外科回退时 mrxinirv peer 实证其工作树 hunk 与我提交字面等同、slice-7 即将自落(后已 7c67c870 落地),**选择不回退**,parity 自动转绿。**判据:卷入兄弟 hunk 后,先问兄弟是否即将自落完整 slice——回退常常比留着更糟。**
+- **merge 状态清理:** 兄弟遗留的 stash-pop 冲突(_gateway.py)经查证 stash 内容是被 HEAD 完全取代的 ZWSP 转换半成品(最终形态已在 HEAD)——resolve to upstream + drop stash,提交链恢复。
+- **收尾两条锚漂移(7c734414):** request_inspector_p6 的 ri-open 让位 hack 按 4dee9231 设计作废(改锚容器级让位 + 状态条必须在 .input-area 内);boot_early_restore 的 _ensureNewest 重绘已走 ConvView.replaceAll(锚从新调用不钉退役被调名)。8/8 绿。
+
+### 2026-07-28(续19) — 模板漂移根修
 ### 2026-07-28(续19) — 模板漂移根修:**meituan.json 是一把「撤销今日签名迁移」的上膛枪**;顺带被既有守卫抓出 nova04 部署 **$0 记账**真漏洞(epic `pt_f71f44b2a7654fa3` DONE;commit `90202d96`,5 文件 +311/-194;干净 committed worktree **28/28**,提交前全环 **43/43**)
 
 - **漂移形状(owner 讨论中我实测发现,按其习惯单独开票、不混进讨论批次):** `static/provider_templates/meituan.json` 仍带 6 个 Claude(request_ids=`yuju-*`/`aws.*`)挂在 `/v1/openai/native`,而 live 的 `sankuai` 面在今日签名迁移后**已零 Claude**。危险不在文件陈旧,而在 `_syncFromTemplate` 对 provider 缺失的模板条目**一律 ADD**——用户点一次「应用模板」或「从模板同步」,6 个 Claude 就以 OpenAI 协议重新落地,**静默撤销签名迁移**。实测依据(续·签名闭环那条留下的活体探针):OpenAI 面 111 chunk / 33 `reasoning_content` / **0 signature**;同部署换 Anthropic 原生面 `signature_delta` 真实到达。thinking 块回放缺签名会被上游拒绝,所以「Claude 挂哪个协议面」是**正确性事实,不是偏好**。漂移的另一半:模板缺 live 已有的 3 个模型(gemini-2.5-flash-image / gemini-3-pro-image-preview / text-embedding-3-large),它们此前**永远无法经模板重建**。修完两面模型集与 live 完全对称(四向差集皆空)。
@@ -715,3 +727,11 @@ TTFT 首字节看门狗 + 等待心跳已落地(commit 69cd968c,2026-07-27):①l
 > `.tofu/journal-archive/`(JOURNAL-2026-06.md / JOURNAL-2026-07.md /
 > JOURNAL-undated.md,合计 ~2.4 万行)。grep 归档文件找本文件没有的条目。
 
+
+### 2026-07-28(续23) — 侧边栏会话全消失事故:**bundle 清单剔除与符号抽提不同步,爆炸时刻被延迟到下一次后台重建**(无重启热修;客户端遥测 `convs=0` 实证)
+
+- **现象:** owner 报「侧边栏所有对话都没了」。后端无辜:`/api/v1/conversations?meta=1` 实测 200 / 500 条;access log 同一接口响应体在 21:02 前后 232KB→7.9KB→227KB 抖动是 folderId  scoped 请求干扰项,不是根因。真凶在客户端遥测:`20:59:01 [CLIENT-ERROR] Server load: _serverConvCount is not defined | convs=0`。
+- **根因链(四环,缺一不可):** ①Epic-E(pt_3879f00e slice 7)兄弟 WIP 把 `_serverConvCount`/`mergeServerConvShells` 从 conversations.js 抽进新文件 conv_merge_shells.js(untracked,完好);②同批把 `'core/conv_merge_shells.js'` 从 `_BUNDLE_FILES` **staged 删除**——而 bundle 模式 `_APP_SCRIPTS_RE` 会剥掉 index.html 里全部 per-file script 标签(含兄弟新加的那条),不在清单=浏览器永远收不到;③静态 JS 从磁盘直供,抽提后的 conversations.js 立即生效;④运行中进程(14:27 启动,内存里是坏清单)在源文件 mtime 跳动时后台重建 → 20:58 产出「只引用、不定义」的 bundle-58508037 → 20:59 用户吃到 ReferenceError,`loadConversationsFromServer` 抛死,侧边栏空。**爆炸不在编辑时刻,而在下一次 mtime 触发的后台重建——14:27 到 20:58 之间潜伏了 6.5 小时。**
+- **热修(零重启、零审批):** `git checkout HEAD -- static/js/core/conversations.js lib/js_bundler.py` 两文件回 HEAD(内联定义 + 清单条目同时复位,bundle 双份定义与今日全天证明无害的 HEAD 态一致);下一次 `GET /` 触发后台重建,实测新 bundle-71fea33c 两函数定义俱在。**抽提成果零损失:conv_merge_shells.js 原样保留在磁盘。**
+- **判据(与既有 parity 守卫同型):** `_BUNDLE_FILES` 与 index.html script 标签是同一枚硬币的两面——抽提一个符号到新文件,必须「进清单 AND 进标签」同时成立,缺一即生产白屏;bundle 构建的 node-gate 只查语法,查不出「运行时才缺符号」,这类错只能靠 test_bundle_manifest_parity + 引用-定义对扫描在编辑时刻拦住。
+- **兄弟协作分账:** 被回退的是兄弟 staged/unstaged 各一处,均可 trivially 重放;重做抽提的正确姿势=保留清单条目再删内联定义(HEAD 注释里本就写着「Must load BEFORE conversations.js … resolve via bundle window scope」)。已 peer 交接。

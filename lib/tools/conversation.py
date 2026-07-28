@@ -117,9 +117,20 @@ CHARTER_READ_TOOL = {
             "conversation of the project reads: the project goal/direction plus the "
             "list of COMMITTED key decisions. Use it to align your work with the "
             "project's shared intent and to avoid contradicting an already-committed "
-            "decision. Read-only; returns the current charter text + decisions + version."
+            "decision. Read-only. DEFAULT returns the headline list (the same "
+            "shape the per-turn injection shows); pass `index` for ONE entry's "
+            "full text — the evidence chain costs one entry, not the whole charter."
         ),
-        "parameters": {"type": "object", "properties": {}, "required": []},
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "index": {
+                    "type": "integer",
+                    "description": "Optional. 0-based decision index (negative counts from the end). When given, returns ONLY that entry's full text + its summary."
+                },
+            },
+            "required": [],
+        },
     },
 }
 

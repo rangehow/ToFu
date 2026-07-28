@@ -40,6 +40,7 @@ def _empty_influence(project_path: str = '', conv_id: str = '') -> dict:
         'charter': {
             'exists': False, 'content': '', 'decisions': [], 'version': 0,
             'injected': False,
+            'contentSet': False, 'decisionCount': 0, 'injectedCount': 0,
         },
         'board': {
             'exists': False,
@@ -80,15 +81,34 @@ def build_conv_influence(project_path: str, conv_id: str) -> dict:
         out['charter']['exists'] = bool(rec.get('exists'))
         out['charter']['content'] = rec.get('content', '') or ''
         out['charter']['version'] = int(rec.get('version', 0) or 0)
-        # Committed decisions, newest-first, capped to what the prompt shows
-        # (render_charter_block injects the last 20).
+        # Committed decisions, STRUCTURED (the frontend is a pure renderer —
+        # it must never re-derive kind/summary from raw text), newest-first,
+        # capped to what the prompt shows (the injection's tail window).
+        from lib.conversations.project_charter import (
+            _INJECTION_DECISION_WINDOW)
         decisions = []
-        for d in (rec.get('decisions') or [])[-20:]:
-            txt = (d.get('text') if isinstance(d, dict) else str(d)) or ''
-            if txt:
-                decisions.append(txt)
+        for d in (rec.get('decisions') or [])[-_INJECTION_DECISION_WINDOW:]:
+            if isinstance(d, dict):
+                decisions.append({
+                    'text': d.get('text') or '',
+                    'summary': d.get('summary') or '',
+                    'kind': d.get('kind') or '',
+                    'ts': d.get('ts') or 0,
+                    'by_conv': d.get('by_conv') or '',
+                })
+            elif str(d).strip():
+                decisions.append({'text': str(d), 'summary': '', 'kind': '',
+                                  'ts': 0, 'by_conv': ''})
         decisions.reverse()
         out['charter']['decisions'] = decisions
+        # Health signals for the panel's health strip — computed HERE, never
+        # re-derived in the frontend (backend single source of truth).
+        all_decisions = rec.get('decisions') or []
+        out['charter']['contentSet'] = bool(
+            (rec.get('content') or '').strip())
+        out['charter']['decisionCount'] = len(all_decisions)
+        out['charter']['injectedCount'] = min(
+            len(all_decisions), _INJECTION_DECISION_WINDOW)
         # injected iff the SAME block the prompt uses is non-empty — the
         # per-turn INJECTION renderer (headlines), not the tool's full one.
         out['charter']['injected'] = bool(

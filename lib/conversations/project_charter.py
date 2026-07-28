@@ -104,6 +104,11 @@ _NO_GOAL_NOTICE = (
     'north star is human-owned: it is set through the Project Brain panel, not '
     'by committing a decision.)')
 
+# How many decisions the per-turn injection shows (the tail window). Single
+# source for BOTH renderers and the panel health strip's `injectedCount` —
+# never re-hardcode 20 elsewhere.
+_INJECTION_DECISION_WINDOW = 20
+
 
 def _empty_charter(project_path: str) -> dict:
     return {
@@ -683,11 +688,13 @@ def render_charter_injection_block(project_path: str) -> str:
     if rec['decisions']:
         lines.append('')
         lines.append('Committed decisions (headlines — call '
-                     'project_charter_read for an entry\'s full text):')
-        for d in rec['decisions'][-20:]:
+                     'project_charter_read with index=N for an entry\'s full '
+                     'text):')
+        start = max(0, len(rec['decisions']) - _INJECTION_DECISION_WINDOW)
+        for i, d in enumerate(rec['decisions'][start:], start):
             head = _decision_headline(d)
             if head:
-                lines.append(f'  • {head}')
+                lines.append(f'  • [#{i}] {head}')
     return '\n'.join(lines)
 
 
@@ -854,8 +861,34 @@ def execute_charter_tool(fn_name: str, fn_args: dict, *,
                         'project-wide decision, commit it with '
                         'project_charter_commit so every sibling conversation '
                         'aligns to it (the human sets the north-star goal).')
-            block = render_charter_block(project_path)
-            return block + f'\n\n(charter version {rec["version"]})'
+            idx = fn_args.get('index')
+            if idx is not None and idx != '':
+                # Per-entry read: the detail half of the two-tier design. The
+                # default (no index) returns the SAME headline list the
+                # injection shows; index=N returns ONE entry's full text so
+                # the evidence chain costs one entry, not the whole charter.
+                try:
+                    i = int(idx)
+                except (TypeError, ValueError):
+                    return f'Error: index must be an integer, got {idx!r}.'
+                decisions = rec['decisions']
+                if i < 0:
+                    i += len(decisions)
+                if i < 0 or i >= len(decisions):
+                    return (f'Error: index {idx} out of range '
+                            f'(0..{len(decisions) - 1}).')
+                d = decisions[i]
+                txt = (d.get('text') if isinstance(d, dict) else str(d)) or ''
+                summary = (d.get('summary') or '') if isinstance(d, dict) else ''
+                head = f'[PROJECT CHARTER] decision #{i}'
+                if summary:
+                    head += f' — {summary}'
+                return (head + '\n\n' + txt +
+                        f'\n\n(charter version {rec["version"]}, '
+                        f'{i + 1} of {len(decisions)})')
+            block = render_charter_injection_block(project_path)
+            return (block + f'\n\n(charter version {rec["version"]}; pass '
+                    'index=N for an entry\'s full text)')
         if fn_name == 'project_charter_propose':
             proposal = (fn_args.get('proposal') or '').strip()
             if not proposal:

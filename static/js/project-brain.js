@@ -693,6 +693,25 @@
       _setTabCount('pbTabCountCharter', 0);
       return;
     }
+    // Health strip — data comes from the BACKEND (`rec.health`, computed by
+    // the charter route), never re-derived here. A missing north star is the
+    // incident shape that once hid for days: it renders as a loud warning,
+    // not silence.
+    var health = (rec && rec.health) || null;
+    if (health && !health.contentSet) {
+      parts.push('<div class="pb-charter-health pb-charter-health-warn" data-pb-health="no-goal">' +
+        ((typeof Icon === 'function') ? Icon('alertTriangle', 12) : '') +
+        '<span>' + _esc(_t('projectBrain.healthNoGoal',
+          'No north-star goal is set — the decisions below are implementation-level intent only.')) +
+        '</span></div>');
+    } else if (health) {
+      parts.push('<div class="pb-charter-health" data-pb-health="ok">' +
+        '<span>' + _esc(_t('projectBrain.healthStats',
+          '{n} decisions · {m} shown per turn')
+          .replace('{n}', health.decisionCount)
+          .replace('{m}', health.injectedCount)) +
+        '</span></div>');
+    }
     if (content) {
       parts.push('<div class="pb-charter-northstar-row">' +
         '<div class="pb-charter-northstar" data-charter-northstar="1">' +
@@ -709,8 +728,23 @@
       parts.push('<ul class="pb-charter-decisions">');
       for (var i = 0; i < decisions.length; i++) {
         var d = decisions[i];
-        var txt = (d && typeof d === 'object') ? (d.text || '') : String(d);
+        var isObj = (d && typeof d === 'object');
+        var txt = isObj ? (d.text || '') : String(d);
+        var dKind = isObj ? (d.kind || '') : '';
+        var dSummary = isObj ? (d.summary || '') : '';
+        // Two-tier row: the one-line binding rule (summary) is the headline
+        // with its kind badge; the full evidence text stays behind the clamp.
+        var headHtml = '';
+        if (dKind || dSummary) {
+          headHtml = '<div class="pb-decision-head">' +
+            (dKind ? '<span class="pb-kind-badge pb-kind-' + _esc(dKind) +
+              '" data-pb-kind="' + _esc(dKind) + '">' + _esc(dKind) + '</span>' : '') +
+            (dSummary ? '<span class="pb-decision-summary" data-pb-src="' +
+              _esc(dSummary) + '">' + _esc(dSummary) + '</span>' : '') +
+            '</div>';
+        }
         parts.push('<li data-decision-idx="' + i + '">' +
+          headHtml +
           '<div class="pb-decision-text">' + _clampBlock(_mdLite(txt), txt) + '</div>' +
           '<div class="pb-charter-row-actions">' +
           _charterActBtn('pb-decision-edit', 'edit',
@@ -735,13 +769,25 @@
         // decision from this text, so render (and commit) the full version.
         var ptext = (p.payload && p.payload.proposal) || p.summary || '';
         var pid = p.proposalId || (p.payload && p.payload.proposalId) || '';
+        // The commit route REQUIRES a one-line summary (the binding rule the
+        // per-turn injection renders) — pre-fill with the proposal's first
+        // line, editable; commit stays disabled while it is empty.
+        var firstLine = (ptext.split('\n', 1)[0] || '').trim();
+        if (firstLine.length > 200) firstLine = firstLine.slice(0, 200).trim();
         parts.push(
           '<div class="pb-proposal" data-event-id="' + _esc(p.event_id) +
           '" data-proposal-id="' + _esc(pid) + '">' +
           '<div class="pb-proposal-text">' + _clampBlock(_mdLite(ptext), ptext) + '</div>' +
+          '<div class="pb-proposal-summary-row">' +
+          '<input type="text" class="pb-proposal-summary" maxlength="240" ' +
+          'placeholder="' + _esc(_t('projectBrain.summaryPlaceholder',
+            'One-line summary (required)')) + '" ' +
+          'value="' + _esc(firstLine) + '">' +
+          '</div>' +
           '<div class="pb-proposal-actions">' +
           '<button type="button" class="pb-proposal-commit" data-text="' + _esc(ptext) +
-          '" data-ver="' + version + '" data-proposal-id="' + _esc(pid) + '">' +
+          '" data-ver="' + version + '" data-proposal-id="' + _esc(pid) + '"' +
+          (firstLine ? '' : ' disabled') + '>' +
           _esc(_t('projectBrain.commit', 'Commit')) + '</button>' +
           '<button type="button" class="pb-proposal-reject" data-proposal-id="' + _esc(pid) + '">' +
           _esc(_t('projectBrain.reject', 'Reject')) + '</button>' +
@@ -772,7 +818,20 @@
         var text = btn.getAttribute('data-text') || '';
         var ver = parseInt(btn.getAttribute('data-ver') || '0', 10);
         var pid = btn.getAttribute('data-proposal-id') || '';
-        _commitCharterDecision(path, text, ver, pid, btn);
+        var card = btn.closest('.pb-proposal');
+        var input = card ? card.querySelector('.pb-proposal-summary') : null;
+        var summary = input ? (input.value || '').trim() : '';
+        if (!summary) { if (input) input.focus(); return; }
+        _commitCharterDecision(path, text, ver, pid, btn, summary);
+      });
+    }
+    // Keep the commit button disabled while its summary input is empty.
+    var sumInputs = el.querySelectorAll('.pb-proposal-summary');
+    for (var si = 0; si < sumInputs.length; si++) {
+      sumInputs[si].addEventListener('input', function (ev) {
+        var card = ev.currentTarget.closest('.pb-proposal');
+        var btn = card ? card.querySelector('.pb-proposal-commit') : null;
+        if (btn) btn.disabled = !((ev.currentTarget.value || '').trim());
       });
     }
     var rejectBtns = el.querySelectorAll('.pb-proposal-reject');
@@ -942,14 +1001,16 @@
     }, 4000);
   }
 
-  function _commitCharterDecision(path, text, expectedVersion, proposalId, btn) {
+  function _commitCharterDecision(path, text, expectedVersion, proposalId, btn, summary) {
     var api = (typeof Api !== 'undefined' && Api.project) ? Api.project : null;
     if (!api || !path) return;
+    summary = (summary || '').trim();
+    if (!summary) return;   // the route rejects kindless decisions anyway
     if (btn) { btn.disabled = true; btn.textContent = _t('projectBrain.committing', 'Committing…'); }
     // Thread resolves_proposal so this commit durably resolves THIS proposal
     // → it drops out of the pending set (no over-count).
     Promise.resolve(api.commitCharter(path, {
-      add_decision: text, expected_version: expectedVersion,
+      add_decision: text, summary: summary, expected_version: expectedVersion,
       resolves_proposal: proposalId || '',
     })).then(function () {
       // Re-fetch charter so the committed decision now shows under

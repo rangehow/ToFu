@@ -554,8 +554,18 @@ def project_charter():
     if not project_path:
         return api_bad_request('path is required', field='path')
     try:
-        from lib.conversations.project_charter import read_charter
-        return api_ok(read_charter(project_path))
+        from lib.conversations.project_charter import (
+            _INJECTION_DECISION_WINDOW, read_charter)
+        rec = read_charter(project_path)
+        # Health strip data — computed HERE (backend single source), never
+        # re-derived in the frontend.
+        _decisions = rec.get('decisions') or []
+        rec['health'] = {
+            'contentSet': bool((rec.get('content') or '').strip()),
+            'decisionCount': len(_decisions),
+            'injectedCount': min(len(_decisions), _INJECTION_DECISION_WINDOW),
+        }
+        return api_ok(rec)
     except Exception as e:
         logger.error('[Project.v1] charter read failed for %s: %s',
                      project_path, e, exc_info=True)
@@ -584,6 +594,17 @@ def project_charter_commit():
     add_decision = data.get('add_decision')
     if content is None and not add_decision:
         return api_bad_request('provide content and/or add_decision')
+    # A committed decision is an INVARIANT: it MUST carry its one-line
+    # summary (the binding rule the per-turn injection renders). The agent
+    # tool path has enforced kind+summary since the kind routing landed;
+    # this closes the same gap on the human REST path so kindless entries
+    # cannot flow back in through the panel.
+    summary = (data.get('summary') or '').strip()
+    if add_decision and not summary:
+        return api_bad_request(
+            'add_decision requires summary — ONE line stating the binding '
+            'rule itself (the per-turn injection renders only this line)',
+            field='summary')
     expected_version = data.get('expected_version')
     if expected_version is not None:
         try:
@@ -595,6 +616,8 @@ def project_charter_commit():
         from lib.conversations.project_charter import commit_charter
         result = commit_charter(
             project_path, content=content, add_decision=add_decision,
+            decision_kind=('invariant' if add_decision else ''),
+            summary=summary,
             expected_version=expected_version,
             updated_by_conv=(data.get('updated_by_conv') or '').strip(),
             resolves_proposal=(data.get('resolves_proposal') or '').strip())

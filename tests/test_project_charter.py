@@ -238,7 +238,8 @@ def test_route_charter_read_and_commit(flask_app, flask_client):
     # commit via the human-gated route
     r = flask_client.post('/api/v1/project/charter/commit', json={
         'path': '/p/route-c', 'content': 'North star.',
-        'add_decision': 'Decision via route.'})
+        'add_decision': 'Decision via route.',
+        'summary': 'Decision via route.'})
     assert r.status_code == 200, r.get_data(as_text=True)
     body = _json.loads(r.get_data(as_text=True))
     assert body.get('version') == 1
@@ -610,13 +611,34 @@ def test_delete_missing_charter_is_noop_success(flask_app):
     assert r['ok'] is True and r.get('deleted') is False
 
 
+def test_route_commit_add_decision_requires_summary(flask_app, flask_client):
+    """The human-side回流缺口 (owner 2026-07-28): the tool path already
+    forces kind+summary; the REST human path must too, or kindless entries
+    flow back in through the panel's door."""
+    import json as _json
+    p = os.path.abspath('/p/route-no-summary')
+    r = flask_client.post('/api/v1/project/charter/commit',
+                          json={'path': p, 'add_decision': 'D'})
+    assert r.status_code == 400
+    assert 'summary' in r.get_data(as_text=True)
+    # Nothing was committed.
+    data = _json.loads(flask_client.get(
+        '/api/v1/project/charter?path=' + p).get_data(as_text=True))
+    assert not data.get('exists') or not data.get('decisions')
+    # content-ONLY commits (north-star edits) stay summary-free.
+    r2 = flask_client.post('/api/v1/project/charter/commit',
+                           json={'path': p, 'content': 'NS only'})
+    assert r2.status_code == 200, r2.get_data(as_text=True)
+
+
 def test_routes_charter_edit_delete_roundtrip(flask_app, flask_client):
     import json as _json
     p = os.path.abspath('/p/route-editdel')
     flask_client.post('/api/v1/project/charter/commit',
-                      json={'path': p, 'content': 'NS', 'add_decision': 'D0'})
+                      json={'path': p, 'content': 'NS', 'add_decision': 'D0',
+                            'summary': 'D0'})
     flask_client.post('/api/v1/project/charter/commit',
-                      json={'path': p, 'add_decision': 'D1'})
+                      json={'path': p, 'add_decision': 'D1', 'summary': 'D1'})
     ver = _json.loads(flask_client.get(
         '/api/v1/project/charter?path=' + p).get_data(as_text=True))['version']
     # Edit decision 0 via route.
@@ -644,7 +666,8 @@ def test_routes_charter_edit_delete_roundtrip(flask_app, flask_client):
 def test_routes_charter_edit_delete_version_conflict_409(flask_app, flask_client):
     p = os.path.abspath('/p/route-editdel-409')
     flask_client.post('/api/v1/project/charter/commit',
-                      json={'path': p, 'add_decision': 'D'})  # version 1
+                      json={'path': p, 'add_decision': 'D',
+                            'summary': 'D'})  # version 1
     # A stale expected_version on each mutation route → 409.
     assert flask_client.post('/api/v1/project/charter/decision/update', json={
         'path': p, 'index': 0, 'text': 'X', 'expected_version': 0}).status_code == 409

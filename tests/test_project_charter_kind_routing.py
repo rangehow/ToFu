@@ -146,9 +146,48 @@ def test_injection_renders_the_summary_not_the_evidence(flask_app):
     assert _EVIDENCE_TAIL not in inj, (
         'the evidence chain leaked into the per-turn injection — the split '
         'is gone and the block will bloat back to 2k/entry')
-    full = _tool_read(flask_app)
-    assert _EVIDENCE_TAIL in full, (
-        'the tool detail path must keep the full evidence')
+    # The DEFAULT tool read mirrors the injection (headlines); the evidence
+    # is one index= call away (owner directive ③).
+    default_read = _tool_read(flask_app)
+    assert _RULE in default_read
+    assert _EVIDENCE_TAIL not in default_read, (
+        'the default read must be the headline list, not the full charter')
+
+
+def test_read_with_index_returns_one_entry_full_text(flask_app):
+    """Owner directive ③: project_charter_read(index=N) returns ONLY that
+    entry — the evidence chain costs one entry, not the whole charter."""
+    _commit(flask_app, {'kind': 'invariant', 'decision': _FULL_DECISION,
+                        'summary': _RULE})
+    _commit(flask_app, {'kind': 'invariant',
+                        'decision': '第二条决策:共享 HEAD 禁止 stash。',
+                        'summary': '禁止 stash'})
+    from lib.conversations.project_charter import execute_charter_tool
+    with flask_app.app_context():
+        out = execute_charter_tool('project_charter_read', {'index': 0},
+                                   current_conv_id='conv-test',
+                                   project_path=_PROJ)
+    assert _EVIDENCE_TAIL in out, 'index read must return the full evidence'
+    assert _RULE in out, 'index read carries the entry summary as header'
+    assert '第二条决策' not in out, 'index read must NOT drag in other entries'
+    # Negative index counts from the end.
+    with flask_app.app_context():
+        out_neg = execute_charter_tool('project_charter_read', {'index': -1},
+                                       current_conv_id='conv-test',
+                                       project_path=_PROJ)
+    assert '第二条决策' in out_neg and _EVIDENCE_TAIL not in out_neg
+
+
+def test_read_index_out_of_range_is_an_error_not_a_dump(flask_app):
+    _commit(flask_app, {'kind': 'invariant', 'decision': _FULL_DECISION,
+                        'summary': _RULE})
+    from lib.conversations.project_charter import execute_charter_tool
+    with flask_app.app_context():
+        out = execute_charter_tool('project_charter_read', {'index': 9},
+                                   current_conv_id='conv-test',
+                                   project_path=_PROJ)
+    assert 'out of range' in out, out
+    assert _EVIDENCE_TAIL not in out
 
 
 def test_a_legacy_decision_without_summary_still_renders_a_headline(flask_app):
@@ -307,6 +346,31 @@ def test_NC1_short_circuiting_the_memory_route_breaks_the_lesson_test(flask_app)
         "        from lib.memory.storage import (create_memory, "
         "list_memories,\n"
         "                                        update_memory)",
+        run)
+
+
+def test_NC3_stripping_the_index_branch_breaks_per_entry_read(flask_app):
+    """NEUTER the index branch (fall through to the default headline list)
+    → an index= call no longer returns the entry's full evidence."""
+    _commit(flask_app, {'kind': 'invariant', 'decision': _FULL_DECISION,
+                        'summary': _RULE})
+
+    def run(_mod=None):
+        from lib.conversations.project_charter import execute_charter_tool
+        with flask_app.app_context():
+            out = execute_charter_tool('project_charter_read', {'index': 0},
+                                       current_conv_id='conv-test',
+                                       project_path=_PROJ)
+        assert _EVIDENCE_TAIL not in out, (
+            'NC-3 did not bite: the evidence still returned after the index '
+            'branch was neutered')
+
+    _patch_restore(
+        _CHARTER_SRC,
+        "            idx = fn_args.get('index')\n"
+        "            if idx is not None and idx != '':",
+        "            idx = fn_args.get('index')\n"
+        "            if False:  # NC-3: index branch stripped",
         run)
 
 

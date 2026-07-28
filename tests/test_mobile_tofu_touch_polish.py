@@ -255,11 +255,15 @@ def test_nc_removing_decoration_hide_regresses():
 # ─────────────────────────── 3. orientation-aware landscape ───────────────────────────
 
 def test_landscape_phone_rule_is_orientation_aware():
-    """The landscape-phone block anchors on orientation:landscape and covers up
-    to 600px tall — not the old max-height:500px-only rule."""
+    """The landscape-phone LAYOUT block anchors on orientation:landscape and
+    covers up to 600px tall — not the old max-height:500px-only rule. Scoped
+    to the layout block (header + its first payload line): the same media
+    condition also heads the tofu welcome-brand ladder, so a bare-header
+    presence check can pass while the layout rule is gone."""
     css = _css()
-    assert '@media(orientation:landscape) and (max-height:600px) and (max-width:900px){' in css, (
-        'orientation-aware landscape-phone media query missing')
+    assert ('@media(orientation:landscape) and (max-height:600px) and (max-width:900px){'
+            '\n  .topbar{') in css, (
+        'orientation-aware landscape-phone LAYOUT rule missing')
     # The old 500px-only header must be gone (proves the edit replaced it).
     assert '@media(max-height:500px) and (max-width:900px){' not in css, (
         'the old max-height:500px-only landscape rule is still present')
@@ -271,13 +275,26 @@ def test_nc_reverting_landscape_to_500_only_regresses():
     original = _css()
     new_header = '@media(orientation:landscape) and (max-height:600px) and (max-width:900px){'
     old_header = '@media(max-height:500px) and (max-width:900px){'
-    assert original.count(new_header) == 1, 'landscape header not unique/found'
+    # The same media CONDITION legitimately heads TWO blocks (the tofu
+    # welcome-brand breakpoint ladder ~:11262 and the landscape-phone layout
+    # block ~:18209) — their payloads are disjoint, so the CSS is correct and
+    # a bare-header count==1 can never hold. Scope the revert to the LAYOUT
+    # block via its first payload line; a replace(1) on the bare header would
+    # hit the tofu-brand block and the NC would revert the wrong thing.
+    layout_anchor = new_header + '\n  .topbar{'
+    assert original.count(layout_anchor) == 1, 'landscape layout block not unique/found'
     try:
         with open(CSS, 'w', encoding='utf-8') as f:
-            f.write(original.replace(new_header, old_header, 1))
+            f.write(original.replace(layout_anchor, old_header + '\n  .topbar{', 1))
         reverted = _css()
-        assert new_header not in reverted and old_header in reverted, (
-            'NC setup failed to revert the landscape header')
+        assert new_header + '\n  .topbar{' not in reverted, (
+            'NC setup failed: the LAYOUT block still anchors on orientation:landscape')
+        assert old_header + '\n  .topbar{' in reverted, (
+            'NC setup failed: the LAYOUT block was not reverted to 500-only')
+        # The tofu-brand block shares the media condition — it must remain
+        # untouched (the NC reverts ONLY the layout block).
+        assert reverted.count(new_header) == 1, (
+            'NC clobbered the tofu-brand occurrence — the anchor was not scoped')
     finally:
         with open(CSS, 'w', encoding='utf-8') as f:
             f.write(original)

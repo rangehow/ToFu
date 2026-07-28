@@ -340,14 +340,28 @@ def test_disabled_file_history_is_a_clean_noop(fh_env, monkeypatch):
 
 @pytest.fixture
 def store(monkeypatch):
-    """Fake conversation store; returns the dict holding loaded/saved messages."""
+    """Fake conversation store; returns the dict holding loaded/saved messages.
+
+    Mirrors the NARROW-WRITE contract the daemons now use: they no longer
+    read-modify-write the whole transcript (that erased rows a concurrent
+    autopilot append had just committed), they patch the fields of the ONE
+    message tagged with their own task id. The fake reproduces that, including
+    the deliberate absence of any positional fallback.
+    """
     import types
     state = {'messages': [], 'saved': None}
 
-    fake = types.SimpleNamespace(
-        load_conversation_messages=lambda cid: (list(state['messages']), 0),
-        save_conversation_messages=lambda cid, msgs: state.update(saved=msgs),
-    )
+    def _patch(cid, task_id, fields, *, max_attempts=5):
+        msgs = [dict(m) for m in state['messages']]
+        for i in range(len(msgs) - 1, -1, -1):
+            m = msgs[i]
+            if m.get('role') == 'assistant' and m.get('_taskId') == task_id:
+                m.update(fields)
+                state['saved'] = msgs
+                return True
+        return False
+
+    fake = types.SimpleNamespace(patch_message_fields_by_task=_patch)
     monkeypatch.setitem(
         sys.modules, 'lib.agent_core.store',
         types.SimpleNamespace(get_conversation_store=lambda: fake))
@@ -368,12 +382,24 @@ def test_patch_targets_the_message_tagged_with_this_task(store):
     assert '_snapshotId' not in store['saved'][2]
 
 
-def test_patch_falls_back_to_last_assistant_when_untagged(store):
+def test_patch_writes_nothing_when_no_message_carries_this_task(store):
+    """No ``_taskId`` match → write NOTHING; never guess the last assistant.
+
+    This asserts the INVERSE of what it once did. The old "fall back to the last
+    assistant message" branch is the blob-clobber bug wearing a quieter mask:
+    these daemons run AFTER the turn settled, so by the time they fire the tail
+    may belong to a DIFFERENT task (a follow-up, an autopilot VU turn) and the
+    snapshot id gets stamped onto someone else's turn. An untagged message means
+    the row was compacted away or rebuilt — the correct action is to skip and
+    say so in the log, not to guess.
+    """
     store['messages'] = [{'role': 'user', 'content': 'q'},
                          {'role': 'assistant', 'content': 'a'}]
     cr._patch_assistant_message_with_git(
         _task(), {'gitSha': 'snap-9', 'snapshotId': 'snap-9'})
-    assert store['saved'][1]['_gitSha'] == 'snap-9'
+    assert store['saved'] is None, (
+        'the snapshot was stamped onto an untagged assistant message — under '
+        'concurrency that is another task\'s turn')
 
 
 def test_patch_requires_conv_task_and_sha(store):
@@ -389,8 +415,7 @@ def test_patch_is_a_noop_when_conversation_is_gone(monkeypatch):
     """A deleted conversation must not raise from the post-done daemon."""
     import types
     fake = types.SimpleNamespace(
-        load_conversation_messages=lambda cid: None,
-        save_conversation_messages=lambda cid, m: pytest.fail('must not save'))
+        patch_message_fields_by_task=lambda cid, tid, fields, **kw: False)
     monkeypatch.setitem(
         sys.modules, 'lib.agent_core.store',
         types.SimpleNamespace(get_conversation_store=lambda: fake))

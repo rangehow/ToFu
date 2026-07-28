@@ -118,22 +118,30 @@ def test_autopilot_vu_append_survives_a_raising_mirror(monkeypatch):
 
     committed = {}
 
+    class _Cur:
+        def __init__(self, row=None, rowcount=0):
+            self._row = row
+            self.rowcount = rowcount
+
+        def fetchone(self):
+            return self._row
+
     class _DB:
         def execute(self, sql, params=None):
-            class _Cur:
-                def fetchone(_self):
-                    return ['[]']
-            return _Cur()
+            # The append now reads (messages, rev) in ONE statement and writes
+            # under a rev-CAS, so the fake row must carry the rev column and the
+            # UPDATE must report rowcount — that IS the authoritative write.
+            if sql.strip().upper().startswith('SELECT'):
+                return _Cur(['[]', 0])
+            if 'UPDATE' in sql.upper():
+                committed['written'] = True
+                return _Cur(None, rowcount=1)
+            return _Cur(None)
 
         def commit(self):
             pass
 
     monkeypatch.setattr('lib.database.get_thread_db', lambda *a, **kw: _DB())
-
-    def _fake_retry(db, sql, params):
-        committed['written'] = True
-
-    monkeypatch.setattr('lib.database.db_execute_with_retry', _fake_retry)
 
     out = baton._append_vu_message_to_conv('conv-x', 'vu-1', 'hello world')
 

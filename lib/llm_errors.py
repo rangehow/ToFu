@@ -300,6 +300,24 @@ _GATEWAY_ROUTING_TRANSIENT_PATTERNS = [
     'model unsupported by selected groups',
 ]
 
+# Phrase emitted by the toio gateway's GENERIC upstream wrap: any upstream
+# non-200 arrives as HTTP 400/403 with an Anthropic-style envelope whose
+# error.type is literally ``<nil>`` and whose message is ``bad response
+# status code <NNN> (request id: …)`` — no UPSTREAM_VENDOR marker, no ext
+# tail, no retry-later phrasing, so it fell through every transient layer
+# into BadRequestError (deterministic, pair-excluding round-killer).
+# Observed 2026-07-28 12:47 on the Anthropic-native surface
+# (/v1/anthropic/v1/messages): two identical adaptive+effort bodies 400'd
+# inside one window, then the SAME shape went 200 in 8/8 samples minutes
+# later — a real payload rejection does not heal, these are transient
+# upstream blips. ASCII phrasing → encoding-stable (mojibake-proof), and a
+# deterministic rejection ("Field required", "invalid …") never contains
+# it, so rotating on it is safe: a genuinely bad payload still dies, just
+# after bounded gateway-class rotation instead of fail-fast.
+_WRAPPED_UPSTREAM_STATUS_PATTERNS = [
+    'bad response status code',
+]
+
 
 def _is_upstream_vendor_transient(err_msg: str) -> bool:
     """True if a 4xx error body is an upstream-vendor TRANSIENT failure.
@@ -333,6 +351,8 @@ def _is_upstream_vendor_transient(err_msg: str) -> bool:
     if any(p in lower for p in _UPSTREAM_TRANSIENT_PATTERNS):
         return True
     if any(p in lower for p in _GATEWAY_ROUTING_TRANSIENT_PATTERNS):
+        return True
+    if any(p in lower for p in _WRAPPED_UPSTREAM_STATUS_PATTERNS):
         return True
     repaired = repair_mojibake(err_msg)
     if repaired is not err_msg:

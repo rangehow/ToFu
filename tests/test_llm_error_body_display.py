@@ -479,6 +479,70 @@ class TestGatewayRoutingTransient:
 
 
 # ══════════════════════════════════════════════════════════
+#  Wrapped upstream-status transient — 2026-07-28 12:47 incident
+# ══════════════════════════════════════════════════════════
+
+# The exact production body (owner probe of the Anthropic-native surface
+# /v1/anthropic/v1/messages, request id toio20260728044734160442739SC7sFnGZ):
+# the toio gateway wraps ANY upstream non-200 as HTTP 400 with an Anthropic-
+# style envelope whose error.type is literally "<nil>" and whose message is
+# "bad response status code <NNN> (request id: …)" — no UPSTREAM_VENDOR
+# marker, no ext tail, no retry-later phrasing. The SAME adaptive+effort body
+# then went 200 in 8/8 samples minutes later, so at least some of these wraps
+# are TRANSIENT upstream blips — but _classify_http_error fell through every
+# transient layer into BadRequestError (deterministic, pair-excluding round-
+# killer). The ASCII marker 'bad response status code' is encoding-stable and
+# never appears in a deterministic payload rejection ("Field required",
+# "invalid …"), so it is safe to rotate on: a genuinely bad payload still
+# dies — just after bounded gateway-class rotation instead of fail-fast.
+_WRAPPED_STATUS_400 = ('API HTTP 400: {"type":"error","error":{"type":"<nil>",'
+                       '"message":"bad response status code 400 (request id: '
+                       'toio20260728044734160442739SC7sFnGZ)"}}')
+
+
+@pytest.mark.unit
+class TestWrappedUpstreamStatusTransient:
+
+    def test_wrapped_status_400_is_gateway_retry_not_bad_request(self):
+        """THE 2026-07-28 12:47 production body must rotate slots gateway-
+        class, never die as deterministic BadRequestError."""
+        with pytest.raises(RateLimitError) as ei:
+            _classify_http_error(400, _WRAPPED_STATUS_400,
+                                 'yuju-claude-opus-5-evaDaily', '[t]')
+        assert ei.value.is_gateway is True
+        assert ei.value.status_code == 400
+        assert 'bad response status code' in str(ei.value)
+
+    def test_wrapped_status_403_variant_also_rotates(self):
+        """The same wrap layer can surface on a 403 (the 2026-07-26 vendor
+        storm wrapped both ways) — same predicate, same rotation."""
+        with pytest.raises(RateLimitError) as ei:
+            _classify_http_error(403, _WRAPPED_STATUS_400.replace('400', '403', 1),
+                                 'yuju-claude-opus-5-evaDaily', '[t]')
+        assert ei.value.is_gateway is True
+        assert ei.value.status_code == 403
+
+    def test_wrapped_status_predicate_ascii_stable(self):
+        assert _is_upstream_vendor_transient(_WRAPPED_STATUS_400)
+        assert _is_upstream_vendor_transient(
+            'bad response status code 503 (request id: toioX)')
+
+    def test_deterministic_400_never_matches(self):
+        """Control: real payload rejections must stay BadRequestError — the
+        pattern is a gateway wrap phrase, not a request-shape verdict."""
+        assert not _is_upstream_vendor_transient(
+            'API HTTP 400: bad request: signature: Field required')
+        assert not _is_upstream_vendor_transient('API HTTP 400: invalid api key')
+        raw = ('API HTTP 400: {"error":{"message":"Invalid request: '
+               'signature: Field required","type":"invalid_request_error"}}')
+        with pytest.raises(BadRequestError):
+            _classify_http_error(400, raw, 'm', '[t]')
+
+
+# ══════════════════════════════════════════════════════════
+#  _ERR_BODY_LIMIT — logs keep the diagnostic tail
+# ══════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 #  _ERR_BODY_LIMIT — logs keep the diagnostic tail
 # ══════════════════════════════════════════════════════════
 

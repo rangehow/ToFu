@@ -100,7 +100,13 @@ def build_body(model, messages, *, max_tokens=128000, temperature=1.0,
     clean_messages = _strip_non_api_fields(messages)
 
     _pid = provider_id.lower() if provider_id else ''
-    if _pid == 'sankuai' or (not _pid and 'sankuai' in _lib.LLM_BASE_URL):
+    # Keyed on the GATEWAY, not one provider id's exact spelling: every
+    # sankuai* provider (sankuai, sankuai_anthropic, …) terminates at
+    # aigc.sankuai.com, whose keyword filter is surface-agnostic — the
+    # 2026-07-28 Claude → Anthropic-native migration proved exact-equality
+    # silently strips the ZWSP sanitizer from the new surface (HTTP 450
+    # re-exposure on blocked-term conversations).
+    if _pid.startswith('sankuai') or (not _pid and 'sankuai' in _lib.LLM_BASE_URL):
         _sanitize_messages(clean_messages)
 
     clean_messages = _fix_orphaned_tool_calls(clean_messages)

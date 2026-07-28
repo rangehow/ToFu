@@ -75,6 +75,53 @@ class TestShippedZwspMap:
 
 
 @pytest.mark.unit
+class TestBuildBodyProviderGate:
+    """The ``_pid == 'sankuai'`` gate in build_body decided which providers
+    get the gateway keyword sanitizer. The 2026-07-28 Claude → Anthropic-
+    native migration created provider ``sankuai_anthropic`` (same aigc.sankuai
+    .com gateway, different surface) — under exact-equality it silently LOST
+    sanitization, re-exposing blocked-term conversations to intermittent
+    HTTP 450. The gate must key on the gateway, not the provider id's exact
+    spelling: any ``sankuai*`` provider rides the same gateway."""
+
+    @staticmethod
+    def _term_and_broken():
+        from lib.llm_sanitize._gateway import _GATEWAY_BLOCKED_TERMS
+        k = next(iter(_GATEWAY_BLOCKED_TERMS))
+        return k, _GATEWAY_BLOCKED_TERMS[k]
+
+    def test_sankuai_anthropic_provider_gets_sanitized(self):
+        from lib.llm.body import build_body
+        term, broken = self._term_and_broken()
+        body = build_body('claude-opus-5',
+                          [{'role': 'user', 'content': f'报道 {term} 的新闻'}],
+                          provider_id='sankuai_anthropic')
+        text = body['messages'][0]['content']
+        assert term not in text and broken in text, (
+            'provider sankuai_anthropic rides the same aigc.sankuai.com '
+            'gateway — its requests must get the ZWSP sanitizer')
+
+    def test_sankuai_provider_still_sanitized(self):
+        from lib.llm.body import build_body
+        term, broken = self._term_and_broken()
+        body = build_body('claude-opus-5',
+                          [{'role': 'user', 'content': f'报道 {term} 的新闻'}],
+                          provider_id='sankuai')
+        text = body['messages'][0]['content']
+        assert term not in text and broken in text
+
+    def test_unrelated_provider_not_sanitized(self):
+        from lib.llm.body import build_body
+        term, _broken = self._term_and_broken()
+        body = build_body('kimi-k3',
+                          [{'role': 'user', 'content': f'报道 {term} 的新闻'}],
+                          provider_id='moonshot')
+        assert term in body['messages'][0]['content'], (
+            'a non-sankuai provider must NOT be mangled — the sanitizer is '
+            'a gateway-specific workaround, not a global transform')
+
+
+@pytest.mark.unit
 class TestGatewaySanitizeMechanism:
     """Mechanism guards (monkeypatched map) — carried over from the
     placeholder era; they prove the replacement machinery itself works and

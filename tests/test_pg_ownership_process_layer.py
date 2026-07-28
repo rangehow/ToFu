@@ -666,6 +666,8 @@ def test_get_username_never_raises():
 
 def test_fix_unix_socket_conf_is_a_noop_without_a_conf(tmp_path):
     pg._fix_unix_socket_conf(str(tmp_path))   # must not raise
+    assert not (tmp_path / 'postgresql.conf').exists(), (
+        'a missing conf must stay missing — creating one would shadow PG defaults')
 
 
 def test_fix_unix_socket_conf_disables_sockets_on_a_fuse_path(tmp_path, monkeypatch):

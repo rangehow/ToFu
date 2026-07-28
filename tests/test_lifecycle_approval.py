@@ -355,8 +355,8 @@ class TestRealScriptGate:
         finally:
             try:
                 dummy.send_signal(signal.SIGTERM)
-            except Exception:
-                pass
+            except OSError:
+                pass  # dummy already dead (the neutered copy killed it)
             shutil.rmtree(tmpdir, ignore_errors=True)
 
 
@@ -486,8 +486,8 @@ class TestRestartLockInheritance:
         finally:
             try:
                 dummy.send_signal(signal.SIGTERM)
-            except Exception:
-                pass
+            except OSError:
+                pass  # dummy already dead (the script copies killed it)
             self._kill_stubs()
             shutil.rmtree(tmpdir, ignore_errors=True)
 

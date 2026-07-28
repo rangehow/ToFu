@@ -18,7 +18,82 @@ _DEFAULT_CONFIG = {
     # RWA P1: [{name, path}] — the agent's declared project worktrees;
     # project_* commands are confined to these roots (constraint ⑤).
     'share_roots': [],
+    # Remote attachment: {url, secret} written by the tray's
+    # "Connect to remote Tofu…" dialog. EMPTY means "poll my own loopback
+    # server", which is the packaged app's default and must stay that way —
+    # a tray user never touches this.
+    'remote_server': {},
 }
+
+
+def parse_connect_line(line):
+    """Parse the connect line the web UI hands the user → ``(url, secret)``.
+
+    THE single owner of this format. The remote setup flow is a closed loop:
+    ``static/js/local-control.js::_lcConnectLine`` renders
+    ``<server-url><whitespace><token>`` into a click-to-copy box, and the user
+    pastes that ONE string here. Both halves are required — a token with no
+    address is unusable because nothing on the user's machine knows which
+    server to poll, which is exactly why they travel together.
+
+    Deliberately whitespace-tolerant rather than pinned to a specific
+    separator: the string makes a round trip through a clipboard, a terminal
+    and possibly a chat window, any of which may re-wrap it or collapse runs
+    of spaces. Splitting on arbitrary whitespace absorbs that without asking
+    the user to notice. Surrounding whitespace and a trailing slash on the URL
+    are also normalised, since both are common paste artefacts.
+
+    Raises:
+        ValueError: with a message safe to show in a dialog, when either half
+            is missing or the URL is not http(s). Never echoes the secret.
+    """
+    parts = (line or '').split()
+    if len(parts) < 2:
+        raise ValueError(
+            'Paste the whole line from Tofu — it must contain the server '
+            'address AND the token, separated by a space.')
+    if len(parts) > 2:
+        raise ValueError(
+            'That looks like more than one server address and token. Paste '
+            'exactly the line Tofu showed you.')
+    url, secret = parts[0].strip(), parts[1].strip()
+    if not url.startswith(('http://', 'https://')):
+        raise ValueError(
+            'The server address must start with http:// or https:// — got '
+            f'{url[:40]!r}.')
+    return url.rstrip('/'), secret
+
+
+def remote_server():
+    """Return the configured ``(url, secret)``, or ``('', '')`` when unset.
+
+    ``('', '')`` is the signal to fall back to the local loopback server, so
+    an unconfigured tray app behaves exactly as it did before this existed.
+    """
+    cfg = load_config()
+    rs = cfg.get('remote_server')
+    if not isinstance(rs, dict):
+        return '', ''
+    return (rs.get('url') or '').strip(), (rs.get('secret') or '').strip()
+
+
+def save_remote_server(url, secret):
+    """Persist the remote attachment so it survives an app restart.
+
+    Lives in the SAME file as ``agent_id`` / ``share_roots``
+    (``~/.tofu/desktop_agent.json``) — that file already exists precisely for
+    agent-local settings that must outlive the process, so this needs no new
+    storage location. Passing an empty url clears the attachment and returns
+    the agent to its local server.
+    """
+    cfg = load_config()
+    if (url or '').strip():
+        cfg['remote_server'] = {'url': url.strip().rstrip('/'),
+                                'secret': (secret or '').strip()}
+    else:
+        cfg['remote_server'] = {}
+    save_config(cfg)
+    return cfg['remote_server']
 
 
 def config_path():

@@ -1807,14 +1807,15 @@
       </span>
       <span class="mobile-sheet-item-check icon-box"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></span>
     </div>
-    <div class="mobile-sheet-item" id="mobileScheduler" onclick="toggleScheduler();updateMobileSheet()">
-      <span class="mobile-sheet-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>
-      <span class="mobile-sheet-item-text">
-        <span class="mobile-sheet-item-name" data-i18n="toolbar.scheduledTasks">定时任务</span>
-        <span class="mobile-sheet-item-desc" data-i18n="toolbar.scheduledTasksDesc">计划任务与 Cron</span>
-      </span>
-      <span class="mobile-sheet-item-check icon-box"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></span>
-    </div>
+    <!-- NOTE: the "定时任务" mobile item that used to sit here was removed with
+         the rest of the dead scheduler panel in f2008c11 ("scheduler.js was an
+         entirely dead panel"), but THIS call site survived that cleanup and
+         kept calling toggleScheduler() — a function that no longer exists
+         anywhere in the bundle, so tapping it threw and did nothing. Scheduled
+         tasks are reachable through #mobileTimer ("Active Counter", the
+         background timer/observer panel) in the Monitoring section below; the
+         scheduler TOOL itself is server-side and always on. Found by
+         tests/test_visual_surfaces.py::test_every_inline_onclick_handler_is_defined. -->
     <div class="mobile-sheet-item" id="mobileProject" onclick="closeMobileSheet();openProjectModal()">
       <span class="mobile-sheet-item-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span>
       <span class="mobile-sheet-item-text">

@@ -53,14 +53,23 @@
   /**
    * Report a FAILED resolving action to the operator.
    *
-   * These actions previously only console.warn'd on rejection, so a refused
-   * mutation (e.g. the commit route's 400 when `summary` is missing) was
-   * indistinguishable from a dead button: nothing moved and nothing was said.
-   * A control that mutates shared project state must never fail silently.
-   * The backend's own message is shown when it sent one — it names the
-   * offending field, which a generic string cannot.
+   * Delegates to project-brain.js's `_reportFailure` so the panel has ONE
+   * failure surface rather than two that can drift — the same reason this
+   * module borrows its clamp/markdown/tab-switch primitives. The local
+   * fallback below only runs if project-brain.js is somehow absent (this
+   * module is bundled after it) and must still SAY something: these actions
+   * previously only console.warn'd, so a refused mutation (e.g. the commit
+   * route's 400 when `summary` is missing) was indistinguishable from a dead
+   * button.
    */
   function _reportFailure(key, fallback, err) {
+    try {
+      if (window.ProjectBrain &&
+          typeof window.ProjectBrain._reportFailure === 'function') {
+        window.ProjectBrain._reportFailure(key, fallback, err);
+        return;
+      }
+    } catch (_e) { /* fall through to the local surface */ }
     var detail = (err && err.message) ? String(err.message) : '';
     if (typeof console !== 'undefined') {
       console.warn('[Attention] %s: %s', fallback, detail || err);
@@ -479,7 +488,8 @@
       if (path !== _path()) return;
       renderAttention(res || {});
     }).catch(function (e) {
-      if (typeof console !== 'undefined') console.warn('[Attention] load failed', e);
+      _reportFailure('projectBrain.loadFailed',
+                     'Loading the project brain failed', e);
     });
   }
 

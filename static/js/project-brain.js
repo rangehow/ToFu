@@ -245,6 +245,37 @@
     catch (_e) { return fallback; }
   }
 
+  /**
+   * Report a FAILED panel operation to the operator — the ONE failure surface
+   * for every Project Brain write.
+   *
+   * Every mutation here used to end in a bare `console.warn`, which makes a
+   * REFUSED write and a BROKEN listener the same observation for the user:
+   * nothing moves and nothing is said. That is not cosmetic — it is what let a
+   * Commit button that was being rejected on every click read as "dead" for as
+   * long as it did. A control that changes shared project state must never
+   * fail silently.
+   *
+   * The backend's own message is shown when there is one: it names the
+   * offending field (`summary`, `version_conflict`, …), which a generic
+   * "failed" string cannot.
+   *
+   * `quiet` is for BACKGROUND enrichment the user never asked for (a hover
+   * preview). Toasting those would train the operator to ignore the surface —
+   * the same disease as staying silent. Anything the user CLICKED, and any
+   * load that leaves the panel blank or stale, is never quiet.
+   */
+  function _reportFailure(key, fallback, err, quiet) {
+    var detail = (err && err.message) ? String(err.message) : '';
+    if (typeof console !== 'undefined') {
+      console.warn('[ProjectBrain] %s: %s', fallback, detail || err);
+    }
+    if (quiet) return;
+    if (typeof showToast === 'function') {
+      showToast(_t(key, fallback) + (detail ? ' — ' + detail : ''), 'error');
+    }
+  }
+
   function _activityListEl() { return document.getElementById('projectBrainActivityList'); }
 
   // ── Hover preview for opaque conversation IDs ────────────────────
@@ -280,7 +311,8 @@
       _convPreviewCache[convId] = rec;   // cache even null (avoid refetch storms)
       return rec;
     }).catch(function (e) {
-      if (typeof console !== 'undefined') console.warn('[ProjectBrain] conv preview failed', e);
+      _reportFailure('projectBrain.previewFailed', 'Conversation preview failed',
+                     e, true);
       _convPreviewCache[convId] = null;
       return null;
     });
@@ -583,7 +615,7 @@
       var _al = _activityListEl();
       if (_al) _applyContentI18n(_al);
     }).catch(function (e) {
-      if (typeof console !== 'undefined') console.warn('[ProjectBrain] backfill failed', e);
+      _reportFailure('projectBrain.loadFailed', 'Loading the project brain failed', e);
       _ensureActivityEmptyState();
     });
 
@@ -897,7 +929,7 @@
         // refreshCharter re-renders the whole panel from the server, which
         // removes this editor implicitly; nothing more to do here.
       }).catch(function (e) {
-        if (typeof console !== 'undefined') console.warn('[ProjectBrain] charter save failed', e);
+        _reportFailure('projectBrain.saveFailed', 'Save failed', e);
         save.disabled = false; cancel.disabled = false;
         save.textContent = _t('projectBrain.save', 'Save');
       });
@@ -953,7 +985,7 @@
           Promise.resolve(api.deleteDecision(path, idx, { expected_version: ver }))
             .then(function () { refreshCharter(path); })
             .catch(function (er) {
-              if (typeof console !== 'undefined') console.warn('[ProjectBrain] decision delete failed', er);
+              _reportFailure('projectBrain.deleteFailed', 'Delete failed', er);
             });
         });
       });
@@ -969,7 +1001,7 @@
           Promise.resolve(api.deleteCharter(path, { expected_version: ver }))
             .then(function () { refreshCharter(path); })
             .catch(function (er) {
-              if (typeof console !== 'undefined') console.warn('[ProjectBrain] charter delete failed', er);
+              _reportFailure('projectBrain.deleteFailed', 'Delete failed', er);
             });
         });
       });
@@ -1009,15 +1041,22 @@
     if (btn) { btn.disabled = true; btn.textContent = _t('projectBrain.committing', 'Committing…'); }
     // Thread resolves_proposal so this commit durably resolves THIS proposal
     // → it drops out of the pending set (no over-count).
+    //
+    // Deliberately NO expected_version: committing a proposal is a pure
+    // APPEND, and appends commute. The version baked into this button at
+    // render time goes stale the moment any sibling self-commits a decision —
+    // which is constant — so pinning it made the button 409 exactly when the
+    // project was busy. Concurrent appends are kept from eating each other by
+    // the backend CAS; a version pin here would only refuse work that is safe.
     Promise.resolve(api.commitCharter(path, {
-      add_decision: text, summary: summary, expected_version: expectedVersion,
+      add_decision: text, summary: summary,
       resolves_proposal: proposalId || '',
     })).then(function () {
       // Re-fetch charter so the committed decision now shows under
       // "Committed decisions" and the proposal control disappears.
       refreshCharter(path);
     }).catch(function (e) {
-      if (typeof console !== 'undefined') console.warn('[ProjectBrain] commit failed', e);
+      _reportFailure('projectBrain.commitFailed', 'Commit failed', e);
       if (btn) { btn.disabled = false; btn.textContent = _t('projectBrain.commit', 'Commit'); }
     });
   }
@@ -1036,7 +1075,7 @@
     Promise.resolve(api.dismissProposal(path, proposalId)).then(function () {
       refreshCharter(path);
     }).catch(function (e) {
-      if (typeof console !== 'undefined') console.warn('[ProjectBrain] dismiss failed', e);
+      _reportFailure('projectBrain.rejectFailed', 'Reject failed', e);
       if (btn) { btn.disabled = false; }
     });
   }
@@ -1062,7 +1101,7 @@
         }).catch(function () { renderCharter(rec || {}, []); });
       }
     }).catch(function (e) {
-      if (typeof console !== 'undefined') console.warn('[ProjectBrain] charter load failed', e);
+      _reportFailure('projectBrain.loadFailed', 'Loading the project brain failed', e);
     });
   }
 
@@ -1296,7 +1335,7 @@
         refreshBoard(path);
         refreshInfluence(path);
       }).catch(function (e) {
-        if (typeof console !== 'undefined') console.warn('[ProjectBrain] board block failed', e);
+        _reportFailure('projectBrain.boardActionFailed', 'Board action failed', e);
         if (submitBtn) submitBtn.disabled = false;
       });
     }
@@ -1348,7 +1387,7 @@
       refreshBoard(path);
       refreshInfluence(path);
     }).catch(function (e) {
-      if (typeof console !== 'undefined') console.warn('[ProjectBrain] board ' + act + ' failed', e);
+      _reportFailure('projectBrain.boardActionFailed', 'Board action failed', e);
       if (btn) btn.disabled = false;
     });
   }
@@ -1384,7 +1423,7 @@
       Promise.resolve(api.boardPost(path, { title: title, convId: convId }))
         .then(function () { refreshBoard(path); })
         .catch(function (e) {
-          if (typeof console !== 'undefined') console.warn('[ProjectBrain] board post failed', e);
+          _reportFailure('projectBrain.boardActionFailed', 'Board action failed', e);
           if (submitBtn) submitBtn.disabled = false;
         });
     }
@@ -1553,7 +1592,7 @@
       _state.board = board || {};  // answer acts resolve option labels from it
       renderBoard(board || {});
     }).catch(function (e) {
-      if (typeof console !== 'undefined') console.warn('[ProjectBrain] board load failed', e);
+      _reportFailure('projectBrain.loadFailed', 'Loading the project brain failed', e);
     });
   }
 
@@ -1728,7 +1767,7 @@
           inf.convId !== activeConvId) return;
       renderInfluence(inf || {});
     }).catch(function (e) {
-      if (typeof console !== 'undefined') console.warn('[ProjectBrain] influence load failed', e);
+      _reportFailure('projectBrain.loadFailed', 'Loading the project brain failed', e);
       if (banner) banner.hidden = true;
     });
   }
@@ -1972,6 +2011,7 @@
     // Shared primitives the Needs-you tab (project-brain-attention.js) reuses
     // so the panel has ONE clamp/markdown/tab-switch grammar, not two.
     _clampBlock: _clampBlock,
+    _reportFailure: _reportFailure,
     _mdLite: _mdLite,
     _wireClampToggles: _wireClampToggles,
     _selectTab: _selectTab,

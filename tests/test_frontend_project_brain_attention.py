@@ -705,3 +705,155 @@ def test_NC_swallowed_failure_looks_like_a_dead_button():
             pass
     with open(_ATTN_SRC, encoding='utf-8') as f:
         assert f.read() == original, 'shipped project-brain-attention.js must be byte-identical'
+
+
+# ════════════════════════════════════════════════════════════════════
+#  Panel-wide invariant: a REFUSED mutation must reach the user
+#
+#  The reported "dead button" was two defects wearing one face — a payload the
+#  route refused, and a rejection swallowed into console.warn. Fixing only the
+#  Needs-you tab would leave the SAME disease in the Charter/Board tab, whose
+#  13 mutation handlers all ended in a bare console.warn. So the invariant is
+#  stated over the WHOLE panel source, not over one function: to a user, a
+#  refused write and a broken listener are the same observation.
+#
+#  Asserted over the REAL catch set (every `.catch(` in the file), so a handler
+#  added next month is covered without editing this test — the failure mode a
+#  hand-listed set of function names cannot catch.
+# ════════════════════════════════════════════════════════════════════
+
+_BRAIN_SRC = os.path.join(JS_DIR, 'project-brain.js')
+
+
+def _catch_bodies(src):
+    """Yield (line_no, body) for every `.catch(function (x) { … })` block.
+
+    Brace-matched rather than regex-sliced: several handlers contain nested
+    functions, which a naive slice would truncate — hiding whether the handler
+    reports anything at all.
+    """
+    out = []
+    idx = 0
+    while True:
+        i = src.find('.catch(', idx)
+        if i == -1:
+            break
+        idx = i + 1
+        brace = src.find('{', i)
+        if brace == -1:
+            continue
+        depth, j = 0, brace
+        while j < len(src):
+            if src[j] == '{':
+                depth += 1
+            elif src[j] == '}':
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        out.append((src.count('\n', 0, i) + 1, src[brace:j + 1]))
+    return out
+
+
+def test_every_panel_failure_reaches_the_user():
+    """No handler may end in console-only."""
+    with open(_BRAIN_SRC, encoding='utf-8') as f:
+        src = f.read()
+    bodies = _catch_bodies(src)
+    assert len(bodies) >= 10, \
+        f'the catch parser must actually find the handlers (found {len(bodies)})'
+    offenders = [f'project-brain.js:{ln} logs but never tells the user'
+                 for ln, body in bodies
+                 if '_reportFailure' not in body
+                 and ('console.warn' in body or 'console.error' in body)]
+    assert not offenders, (
+        'a refused Project Brain operation must produce a user-visible signal '
+        '(the reported "dead button" was exactly this):\n  ' +
+        '\n  '.join(offenders))
+
+
+def test_reporter_is_shared_not_duplicated():
+    """The Needs-you tab must DELEGATE to project-brain.js's reporter.
+
+    Two copies drift: the panel would grow two failure vocabularies and the
+    invariant above would only hold for whichever file someone remembered to
+    update. The attention module keeps a local fallback for the case where
+    project-brain.js is absent, so this pins the DELEGATION, not the absence of
+    any local code.
+    """
+    with open(_BRAIN_SRC, encoding='utf-8') as f:
+        brain = f.read()
+    with open(_ATTN_SRC, encoding='utf-8') as f:
+        attn = f.read()
+    assert '_reportFailure: _reportFailure' in brain, \
+        'project-brain.js must EXPORT the shared reporter'
+    assert 'window.ProjectBrain._reportFailure' in attn, \
+        'the Needs-you tab must delegate to the shared reporter, not fork it'
+
+
+def test_charter_tab_commit_sends_no_expected_version():
+    """Committing a proposal is a pure APPEND, so the Charter tab must not pin
+    the version it rendered.
+
+    Sibling agents self-commit decisions constantly, so that version is stale
+    by the time a human clicks — pinning it made the button 409 exactly when
+    the project was busy, i.e. the same dead button as the other tab.
+    Concurrent appends stay safe via the backend CAS, not via this pin.
+    """
+    with open(_BRAIN_SRC, encoding='utf-8') as f:
+        src = f.read()
+    start = src.index('function _commitCharterDecision(')
+    end = src.index('function _dismissProposal(', start)
+    # Strip comments before asserting: the fix is DOCUMENTED in a comment that
+    # names the very field it removes, so matching raw text would fail on the
+    # explanation of why the field is gone. What must be absent is the field in
+    # the PAYLOAD, not the word on the page.
+    body = '\n'.join(
+        ln for ln in src[start:end].splitlines()
+        if not ln.lstrip().startswith('//'))
+    assert 'expected_version' not in body, \
+        ('the proposal commit must not send expected_version — an append '
+         'commutes, so a stale version is not a conflict')
+    assert 'add_decision' in body and 'summary' in body, \
+        'it must still send the decision text and its required summary'
+    assert 'content:' not in body, \
+        ('and never content — content and add_decision are mutually '
+         'exclusive, which is what makes the append replay-safe')
+
+
+def test_NC_a_console_only_catch_is_caught():
+    """NC: revert ONE handler to console-only → the panel-wide invariant FAILS.
+
+    Guards against the test above passing vacuously: if `_catch_bodies` ever
+    stopped finding handlers, it would assert over an empty list and go green
+    while the panel was entirely silent again.
+    """
+    with open(_BRAIN_SRC, encoding='utf-8') as f:
+        original = f.read()
+    anchor = "      _reportFailure('projectBrain.commitFailed', 'Commit failed', e);"
+    assert anchor in original, 'commit-failure anchor not found (source changed?)'
+    patched = original.replace(
+        anchor,
+        "      if (typeof console !== 'undefined') console.warn("
+        "'[ProjectBrain] commit failed', e);  // NC", 1)
+    bodies = _catch_bodies(patched)
+    offenders = [b for _, b in bodies
+                 if '_reportFailure' not in b and 'console.warn' in b]
+    assert offenders, \
+        'NC: a console-only catch must be reported by the panel-wide invariant'
+    with open(_BRAIN_SRC, encoding='utf-8') as f:
+        assert f.read() == original, 'shipped project-brain.js must be byte-identical'
+
+
+def test_NC_a_forked_reporter_is_caught():
+    """NC: drop the export → the shared-reporter contract FAILS.
+
+    Without the export the attention tab silently falls back to its own local
+    copy, which is exactly the drift this pins.
+    """
+    with open(_BRAIN_SRC, encoding='utf-8') as f:
+        original = f.read()
+    patched = original.replace('    _reportFailure: _reportFailure,\n', '', 1)
+    assert patched != original, 'export anchor not found (source changed?)'
+    assert '_reportFailure: _reportFailure' not in patched, \
+        'NC: with the export removed the shared-reporter assertion must fail'

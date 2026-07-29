@@ -581,7 +581,7 @@ Promise.resolve().then(()=>{}).then(()=>{}).then(()=>{}).then(()=>{}).then(() =>
   // Feature A: the brain-dispatched claim shows the autonomy badge.
   check('board_dispatched_badge', !!board.querySelector('.pb-board-badge-dispatched'));
 
-  // Click commit → calls the commit route with the proposal text + version.
+  // Click commit → calls the commit route with the proposal text + summary.
   if (commitBtn) {
     commitBtn.click();
     Promise.resolve().then(()=>{}).then(() => {
@@ -589,7 +589,13 @@ Promise.resolve().then(()=>{}).then(()=>{}).then(()=>{}).then(()=>{}).then(() =>
       check('commit_path', committed.length && committed[0].p === '/proj/real');
       check('commit_carries_text', committed.length &&
         (committed[0].body.add_decision || '').indexOf('Adopt the soft-lease board') !== -1);
-      check('commit_carries_version', committed.length && committed[0].body.expected_version === 7);
+      // Re-anchored 2026-07-29 (was: expected_version === 7). Committing a
+      // proposal is a pure APPEND, and appends commute — the version baked in
+      // at render time goes stale the moment any sibling self-commits, so
+      // pinning it made the button 409 exactly when the project was busy.
+      // Concurrent appends are kept safe by the backend CAS instead.
+      check('commit_sends_no_version', committed.length &&
+        committed[0].body.expected_version === undefined);
       // Root-cause fix: the commit must carry resolves_proposal (the id from
       // the pending list) so the proposal drops out of pending durably.
       check('commit_carries_proposal', committed.length &&
@@ -640,7 +646,7 @@ def test_charter_board_render_into_real_fragment_and_commit():
                  'PASS board_open_card', 'PASS board_claimed_card',
                  'PASS board_owner_chip', 'PASS board_dispatched_badge',
                  'PASS commit_called', 'PASS commit_carries_proposal',
-                 'PASS commit_carries_text', 'PASS commit_carries_version'):
+                 'PASS commit_carries_text', 'PASS commit_sends_no_version'):
         assert must in output, output
 
 

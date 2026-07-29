@@ -1,5 +1,16 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·face 药丸清点过滤面) — owner 抓出我上一批**新增了 resolve_face 的第二个消费者却没清点 dispatcher 的前置过滤面** ⇒ 用户自己关掉的模型被画成醒目琥珀「未注册(协议面缺失)」;**而我第一版只修后端,前端那条腿让整个修复在生产路径上不可达、后端套件却全绿**(`pt_db4730d10104498e` DONE;commit `dc1a73b3`,3 文件;守卫 **24/24**(7 条失败先行),**NEUTER×7 各咬各的**(3/1/1/1/1/1/1,含 2 发反向);相邻环 **88/88**;HEAD archive 独立复跑 **24/24**)
+
+- **★ owner 点名 2 个过滤面,实测是 4 个,我先清点再动手才发现第 3 个:** `_build_slots_from_providers` 在调 `resolve_face` **之前**有 4 道语义早退闸——L334 `provider.enabled=False` 整卡跳过 / **L399 `effective_keys` 为空整卡跳过(owner 与我第一轮都漏了)** / L408 `model_id` 空(端点已过滤,无缺口) / L414 `model.enabled=False`。三格实测均为「端点 `ok=False` 而 dispatcher 连 resolve 都不做」⇒ 三处假告警。**判据:清点过滤面要用脚本枚举 resolve 之前的全部 `continue`,不能按票面列的条目逐个修——票面本身可能不全。**
+- **★ L399 的判据不是「有无密钥」而是 `effective_keys`,这个区别会咬掉整类用户:** `brand=='local'` 且无密钥时 dispatcher **放行**(拿空串当单个密钥,vLLM/SGLang 无鉴权)。若按密钥数判 `no_keys`,**每个自建部署的药丸会全部消失**。已补反向守卫 `test_keyless_LOCAL_provider_is_NOT_skipped` 钉死这个补集。
+- **★ 本批最重要的一条:我的 Python 守卫全绿,而修复在真实产品路径上完全不可达。** 后端 skip 逻辑读 `provider.enabled`/`model.enabled`/密钥数,但 `_refreshFaceResolutions` **自己构造 payload 且三个字段一个都不带** ⇒ 分支永不触发。**根因是守卫形状**:5 条 Python 守卫直接 POST 完整 provider dict,**结构上看不见「payload 构造」这一步**。补两条 node 驱动真 shipped JS 的跨腿守卫后立刻转红(`KeyError: 'providerEnabled'`)。**判据:当缺陷可能落在「A 段发的 ≠ B 段读的」时,只测 B 段的守卫是结构性免疫的;必须有一条端到端驱动 A 段真代码。**
+- **★ 凭证承诺与新需求的张力,解法是传计数而非明文:** 端点 docstring 明确承诺「凭证永不到达此处」,而 skip 需要知道「有没有可用密钥」。直接把 `api_keys` 塞进 payload 会破坏该承诺(且那是 UI→后端最敏感的一跳)。改传 `api_key_count` + `brand`——**回答问题所需的最小诚实事实**;并补反向 NEUTER(把真密钥塞进 payload → 泄露断言咬)。端点同时接受两种形状,因为直接传入的已存 provider dict 仍带 `api_keys`。
+- **★ skipped 选择「标记」而非「静默跳过」,理由是可观测性不是行为:** 跳过会让客户端缓存 miss,而 miss 按设计**不渲染**——像素恰好是对的,但**原因是错的**,且未来想显示「已禁用」态时没有数据。标记后 `_faceChipHTML` 对 `r.skipped` 早退返回空串:**不建 slot 的条目没有 wire face 可标**,贴任何药丸都是前端无权做的路由声明(与琥珀假告警同类,只是更安静)。
+- **顺带实测到一个真实事实:** 线上 `gpt-5.6-sol` 本来就是关闭状态,修复前它会被渲染成普通 `openai` 药丸,现在正确地不渲染。
+- **★ 同型失误第三次(已入记忆):** `insert_content` 的 `content` 末尾又带上了锚点行 ⇒ 函数定义重复 ⇒ `IndentationError` 收集期崩。**两次都不是断言红而是文件坏,而 pytest 的收集期错误在 `-q` 下被日志噪声完全淹没**(grep `passed|failed` 得到空输出,看起来像「没跑」)。判据:`-q` 输出为空时先 `grep '^E '` 看收集期,不要重试跑法。
+- **验收边界:** 纯后端端点 + 前端,**运行中进程不带**,需重启 + bundle 重建。真浏览器未实测(node 驱动 shipped 函数 + Quart test_client 端到端)。
+
 ### 2026-07-29(续·429 事件收尾:覆写清回自动) — owner 指令把今晚的手动覆写**提前**清回自动模式(原条目写的是「明天若健康再清」);**owner 同时抓出 fold 的一个复活陷阱**:清除必须打两个命名空间——只清账户那两行的话,面命名空间的死覆写会在下次重启被 fold「账户无值则迁移」规则原样复活(运行时状态操作,零产品码)
 
 - **执行:** `key-override enabled=null` × 4(`sankuai::key_0/1` + `sankuai_anthropic::key_0/1`)。读回:磁盘 `overrides: {}`,fold 复活不可能;自动判定 key_0 **89%** / key_1 **94%** 成功率、exhausted=False,无需覆写自然启用。

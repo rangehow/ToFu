@@ -275,6 +275,21 @@
 - **端到端验收(真路由,不是 mock):** 1414 字提议 → 确认 **HTTP 200** → 落库 **1414 字完整** + summary 落库 → 提议**出待办队列** → `needsYou` 归零。
 - **验收边界(诚实分账):** 纯前后端改动,**运行中进程不带,需重启才对新会话生效**;本次未在真实浏览器里点过那颗按钮(jsdom 与真路由两段各自实测,中间的 `Api.project.commitCharter` 是 api.js 既有薄封装)。
 
+### 2026-07-29(续·商店清单派生化) — 商店版少一个权限会让 `download` 命令**装上就炸**;而票里给的理由(「0 次调用」)对 `activeTab` **恰好是错的**——那个权限根本没有 API 面(自主派单;commit `f9aa375c`,5 文件 +468/-19;守卫 **9 条 failing-first → 15 passed/1 skipped**,**NEUTER×4 各咬各的方向**,相邻环 **32**,干净 committed worktree **13 passed/3 named-skip**,**真产物 zip 实测**)
+
+- **★ 根因是「两份手抄清单必须一致,而不一致只在商店审核之后才显形」。** `docs/chrome-web-store/manifest.store.json` 是 shipped manifest 的手工裁剪版,`package_extension.sh --store` 打包时换进去。实测漂移:`downloads` **缺失**,而 `background.js::cmdDownload` 真的调 `chrome.downloads.download`、`download` 又是扩展的 wire 命令之一 ⇒ **商店安装的用户一触发就抛错,静默且无从诊断**。
+- **★ 落点不是补一行,是把清单变成派生量:** 守卫从扩展**真实的 `chrome.*` 调用**推导所需权限集再比对,于是下一个漏掉的权限**由测试点名,而不是由用户撞见**。补集也钉住:声明了但代码从不调用的权限 = 审核表上无法自证的格子(`management`/`declarativeNetRequest` 是典型驳回触发器)。
+- **★ 票里的 `activeTab` 理由是错的,结论对——而理由才是防复发的东西:** 票写「activeTab 实测 0 次调用」。但 **`chrome.activeTab` 不是 API**,grep 它永远返回 0,**证明不了任何事**(这是一次范畴错误)。查 Chrome 官方 tabs 文档:它**只在用户手势时授予**,作用是把 `tabs.captureVisibleTab` 放宽到敏感目标(`chrome://` 页、别的扩展的页、`data:` URL)。本扩展实测:**无 `commands` 键、无 `context_menus`、`popup.js` 从不截图**,每条命令都经 `executeAndReport` 从服务器长轮询来 ⇒ **任何截图之前都不存在用户手势,该权限永远不可能被授予**。普通页截图靠**已声明的 `<all_urls>`** 兜住。守卫把这套推理写进断言,并在「有人新增手势入口」时报红——而不是让下一个人靠 grep 把它加回来。
+- **★ 守卫顺带抓出三个票里没提的缺陷:**
+  ①**版本错位**——store 停在 `4.3.0` 而 shipped 已 `4.5.0`;`package_extension.sh` **从它打包的那份 manifest 同时取版本号与 zip 文件名**,所以商店版会**用 4.3.0 的标签装着 4.5.0 的代码**,用户永远收不到正确更新。
+  ②**`action` 键分叉**——store 版漏 `default_icon`,两个构建的差异**超出了「只裁权限」**这个契约。
+  ③**清单文档教人做不可能的事**——`SUBMISSION_CHECKLIST` 让提交者确认 `4.3.0-store.zip`(构建已产不出这个名字),并核对「10 个权限,不是 16」(**两个数都错**)。**一个只能失败的检查步骤,教会读者跳过检查步骤。**
+- **陈旧计数根治而非改数:** 三处散文写死「移除 6 项」(实际 7 项)。改为**表格是唯一真源**、散文不复述数字,并加守卫禁止任何文档硬编码移除计数;打包脚本改为**运行时算**(实测输出「7 permissions removed, 10 declared」)。
+- **★ 真产物验收(唯一算数的证据):** 真跑 `--store`,产出 `tofu-browser-bridge-4.5.0-store.zip`,解包核对 manifest:**10 权限 / `downloads` 在 / `activeTab` 不在 / 版本 4.5.0**,且 zip 内的 `background.js` 确实含 `chrome.downloads.download`。
+- **★ 我自己的守卫缺陷(提交前自查抓出):** 打包脚本扫描用 `\.js` 匹配拷贝源,**在 `manifest.json` 内部也命中了**,凭空造出一个不存在的 `manifest.js` 并据此报红。加词边界锚定修正。**判据:文件名正则必须锚词边界,否则 `.json` 会被截成 `.js`。**
+- **★ 同型陷阱第二次出现,这次我提前撞上:** `scripts/package_extension.sh` **未被 git 跟踪**(`.gitignore:61` `/scripts/*` 通配 + 仅 4 条 `!` 例外,它不在其中),而**已跟踪的** `SUBMISSION_CHECKLIST.md` 却指示读者运行它 ⇒ **干净 clone 里商店构建整条路不存在**。这与上一批 `README_EXTENSION.md` 同型:**一份已跟踪文档指向一个被忽略的文件**。我的 3 条守卫因此在干净检出上会 `FileNotFoundError` **崩溃**(实测确认),已改为**带理由的具名 skip 并指向工单**——崩溃是坏测试,不是发现。按 owner「潜在缺陷单开工单」的偏好立票 `pt_d64220b406e841b2`(该脚本实测无密钥/无内网路径,可跟踪;修法照 charter #8 既有四条例外惯例)。脚本的改动**留在盘上但未提交**,已写进 commit message 不留悬念。
+- **验收边界:** 纯上架资产 + 文档 + 测试,**不含任何运行时代码**,因此**不需要重启**;与本日 local-control 探测批次(`7c150dd0`/`fd73bf9b`)无代码耦合。兄弟 WIP 51 项完好,提交不带 pathspec、零兄弟标记。
+
 ### 2026-07-29(续·最后一公里) — Edge 支持**到用户为止**才算发货 + 探测挂在 3s 轮询上没缓存(owner 复核 `7c150dd0` 抓出两条;commit `fd73bf9b`,4 文件 +310/-17;新守卫 **10 条 failing-first → 套件 25/25**,**NEUTER×4 各咬各的方向**,相邻环 **104/104**,干净 committed worktree **67/67**,**导出存活实测通过**)
 
 - **★ owner 的判据值得记下:「后端能驱动 Edge」和「Edge 用户能装上」是两件事。** 后端表里有 Edge,但 `README.md:348` / `README_CN.md:339` 仍写「打开 `chrome://extensions`」——**在 Edge 里输 `chrome://` 什么也打不开**,所以文档路径对刚刚被支持的那批用户是**死的**,与死按钮同型。CLAUDE.md 明写 README 是用户面产品文档、须中英同步,这条上一批漏了。

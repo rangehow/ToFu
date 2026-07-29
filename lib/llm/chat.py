@@ -49,7 +49,7 @@ logger = get_logger(__name__)
 
 def chat(messages, model=None, *, max_tokens=4096, temperature=0,
          thinking_enabled=False, preset='low', effort=None, extra=None,
-         timeout=120, log_prefix='', api_key=None, base_url=None,
+         timeout=None, log_prefix='', api_key=None, base_url=None,
          extra_headers=None, max_retries=None, _limit_retry=False,
          thinking_format='', provider_id='', api_protocol='openai', oauth=''):
     """Non-streaming chat completion.
@@ -59,6 +59,10 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
         base_url:     optional base URL override.
         extra_headers: optional dict of additional headers.
         max_retries:  override retry count (default: MAX_STREAM_RETRIES).
+        timeout:      READ timeout in seconds. ``None`` (the default) means
+            no read timeout — a slow completion is waited out rather than
+            truncated. The connect phase stays bounded by CONNECT_TIMEOUT
+            so a dead host still fails over.
 
     Returns:
         (content_text: str, usage_dict: dict)

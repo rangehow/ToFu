@@ -48,7 +48,6 @@ RETRY_REASON_KEYS = {
     'Waiting for model (retry backoff)': 'stream.retryReason.waitingBackoff',
     'Waiting for model (shared project limit)': 'stream.retryReason.waitingSharedProject',
     'Rate limited (429)': 'stream.retryReason.rateLimited',
-    'First byte timeout': 'stream.retryReason.firstByteTimeout',
 }
 
 

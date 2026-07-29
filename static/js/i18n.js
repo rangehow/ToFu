@@ -2745,6 +2745,18 @@ var _i18n = {
     zh: '已等待 {elapsed}s：{model} 尚未返回首个字节（{reason}）',
     en: 'Waiting {elapsed}s — no first byte from {model} yet ({reason})',
   },
+  // Mid-stream stall heartbeat: the model already sent text and then went
+  // quiet. There is no read timeout, so this wait is unbounded by design —
+  // the beat is what proves the turn is still alive (and what keeps the
+  // stuck-task reaper from force-failing it). Press Stop to end it.
+  'stream.phase.stalledMidStream': {
+    zh: '已停顿 {elapsed}s：{model} 回复到一半没继续（仍在等，可随时点停止）…',
+    en: 'Paused {elapsed}s — {model} stopped mid-reply (still waiting; press Stop to end it)…',
+  },
+  'stream.phase.stalledMidStreamReason': {
+    zh: '已停顿 {elapsed}s：{model} 回复到一半没继续（{reason}）',
+    en: 'Paused {elapsed}s — {model} stopped mid-reply ({reason})',
+  },
   // Intent-stall nudge (backend _analyse.py → intent_stall_nudge PHASE):
   // the previous tool call did not run and the model answered with prose
   // only, so the loop re-drives it ONCE. Transient status, not an error.
@@ -2802,10 +2814,6 @@ var _i18n = {
   'stream.retryReason.upstreamError': {
     zh: '上游服务错误，正在换线重试',
     en: 'Upstream error — rotating channel',
-  },
-  'stream.retryReason.firstByteTimeout': {
-    zh: '首字节超时（上游无响应）',
-    en: 'First byte timeout (upstream unresponsive)',
   },
   'stream.retryReason.waitingBackoff': {
     zh: '等待模型（错误退避中，非限流）',

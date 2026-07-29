@@ -1,5 +1,26 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·彻底去掉读超时) — owner:「除非崩了,有什么是不能等的?等不了我自己会暂停」。实测发现**他的兜底当时是失效的**:`abort_check` 只写在逐行循环体内,零字节挂死时那个循环一次都不迭代 ⇒ **按停止无人读**;而更隐蔽的是**读超时今天顺手挡住了 reaper**,删掉它 reaper 就接班当杀手(commit `9c4d1a52`,10 文件;新套件 **22/22 失败先行**,**NEUTER×3 各咬各的**(4/1/3),相邻环 **130/130**)
+
+- **★ 先证伪「我自己暂停」这个前提,再动手删——这一步救了整批:** 写探针把 `TTFT_TIMEOUT=0`(即 owner 要的「无首字节超时」),在 t=1.0s 模拟按下停止:
+  | | 结果 |
+  |---|---|
+  | 停止标志置位 | t=1.0s |
+  | 请求实际结束 | **t=6.2s**(而 6.2s 只是假上游自带的上限,真实是**无穷**) |
+  
+  也就是说:**当时唯一能让挂死请求松手的东西,正是要删掉的读超时**。若照字面先删再说,owner 会得到一个「停止键点了没反应、且永不返回」的系统——比原缺陷严重。**判据:删掉一个安全网之前,先实测那个「我还有别的办法」是否真的存在。**
+- **★ owner 抓出我漏的 reaper,而它比读超时更致命:** `_maintenance.py:158` 的 stuck-task reaper 阈值 1800s,双时钟 `_t_last_event` ∧ `_dispatch_heartbeat` 都过期就判死并往对话里写「terminated as wedged」错误气泡。它今天咬不到人,**是因为 300s 读超时先炸→重试→产生事件**;删掉读超时后两个时钟一起过期 ⇒ **第 30 分钟被判死**。**一个超时被另一个超时掩盖着,删前者会让后者从沉默变成活跃。**
+- **★ 关键分工(owner 的话,已成为本批的设计规则):用「还在跳」证明活着,而不是用「等太久」证明死了。** 前者不误杀,后者必然误杀。落点:
+  - `FirstByteWatchdog` → **`StreamIdleWatchdog`**:**没有任何基于时间的 kill**;`notify_first_byte()`(一次性撤防)→ `notify_activity()`(**只重置空闲钟,不撤防**),因为无读超时后**流中静默与首字节前静默同样无界**;
+  - 新增 **abort 轮询**(0.5s):让「我自己暂停」在等待期间真正可达 —— 这是删超时的**前置条件**,不是附赠;
+  - `_on_waiting` 补 `task['_dispatch_heartbeat'] = time.time()`,与 `append_event` 一起保证 reaper 的 AND 闸**永远有一边新鲜**。真死的线程一个 beat 都发不出,reaper 保留真职责。
+- **删除面:** 同步 `timeout=(CONNECT,300)`→`(CONNECT,None)`、httpx `read=300`→`read=None`、`chat(timeout=120)`→`None`、dispatch 的 `_deadline`/`_total_budget` 整块删除(owner 明确否决「后台调用没人盯着所以可以砍」——被砍的翻译是**内容缺失且无人知情**)。`TTFT_TIMEOUT` / `FirstByteTimeoutError` / 两个 dispatch handler / i18n `firstByteTimeout` 全部删净,**不留「默认关闭的常量」**(那等于留一个可被重新打开的开关)。
+- **保留 `CONNECT_TIMEOUT`(owner 同意):** 它不是「等生成」,是「TCP 握不上手」= owner 说的「崩了」,且是换 slot 的触发器;删了变成对着死机器干等,反而更违背本意。
+- **★ 顺手修一个我自己造的诚实缺陷:** 心跳现在也在**流中途**触发,而文案仍写「尚未返回首个字节」——用户屏幕上已经有字了,**这是看得见的谎**。按是否已产出文本分支到新 key `stalledMidStream`,并在文案里直接写「可随时点停止」。
+- **NEUTER×3 全咬且各咬各的:** 摘 abort 轮询 → **4 红**(含头条「按停止 1 秒内返回」);摘 `_dispatch_heartbeat` 刷新 → **1 红**(40 分钟不被收割那条);退回「首字节即撤防」 → **3 红**。三发后均 `diff -q` 逐字节还原。
+- **★ 自报一起 charter #15 违规(我自己踩的):** 为判断 4 条前端红是否属我,我用了 `git stash push/pop` —— **共享 HEAD 明令禁止**。`pop` 与兄弟 stash 冲突,把 `lib/llm_sanitize/_gateway.py` 留成 `UU` 冲突态。已 `git checkout HEAD --` 还原该文件,兄弟 stash **仍在 `stash@{0}` 完好可 pop**。改用**只读**判据复核:该测试文件 `git ls-files` = 0(**兄弟未跟踪 WIP**)、它读的 3 个 JS 全部 `modified? 0`、把我的 `i18n.js` 换成 HEAD 版**仍是同样 4 红** ⇒ 非我。**判据:定责必须用只读手段(ls-files / show / 换文件复跑),任何以工作树为中间态的操作在共享 HEAD 上都是禁止的——包括「只是想验证一下」。**
+- **验收边界:** 纯后端 + i18n 字典,**运行中进程不带**,需重启;前端需 bundle 重建。未做真浏览器实测。
+
 ### 2026-07-29(续·幽灵 Stop 键) — 自查抓出**我自己守卫里的散文承诺**:docstring 写着「must not resurrect a dot」而断言里根本没有这一半;它保护的正是本 objective 的**反面**——「看得见却没在生成」(commit `48aa84e4`,test-only 零产品码;套件 **10/10**,**NEUTER-F 精确咬 1 条**,相邻环 **56/56**)
 
 - **★ 这不是「测试不严谨」,它守的是我自己引进的风险面。** VU 可见性四批里**每一个修复都在让会话读作忙**,所以镜像风险是我造的:VU 轮次若在 push 断线期间结束,客户端最后的认知停在「carrier 在跑」⇒ **停止键永远亮着、什么都不生成**。与 owner 最初报的「在生成却看不见」是**同一种卡死状态,只是反过来**。

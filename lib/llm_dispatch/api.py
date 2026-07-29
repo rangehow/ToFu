@@ -264,13 +264,14 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
             logger.debug('%s Excluding stream-only model %s from non-streaming dispatch',
                         log_prefix, slot.model)
 
-    # ★ Total time budget — all attempts share this deadline to prevent
-    #   serial timeout accumulation (e.g. 5 × 35s = 175s).
-    #   429 retries do NOT consume the budget — only real errors do.
-    _per_attempt_timeout = timeout if timeout is not None else (
-        30 if capability == 'cheap' else 120)
-    _total_budget = _per_attempt_timeout * min(max_retries, 3)  # cap at 3× single timeout
-    _deadline = time.time() + _total_budget
+    # ★ NO total time budget. A non-streaming call is waited out for as long
+    #   as the upstream needs — truncating a translate/summarize call at a
+    #   deadline produced silently incomplete content, which is worse than
+    #   waiting. ``timeout`` is honored when a caller explicitly passes one;
+    #   otherwise None = no read timeout (connect phase stays bounded, so a
+    #   dead host still fails over). Retries are bounded by max_retries, and
+    #   an abort is honored by the transport's abort poll.
+    _per_attempt_timeout = timeout
 
     # ★ hard_attempts counts only non-429 failures; 429 loops forever.
     hard_attempts = 0
@@ -279,12 +280,6 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
     _EXCLUSION_RESET_INTERVAL = 60  # reset exclude_pairs every 60s during 429 cycling
 
     while hard_attempts < max_retries:
-        _remaining = _deadline - time.time()
-        if _remaining < 3:   # less than 3s left — not worth trying
-            logger.debug('%s Total budget exhausted (%.1fs left), stopping dispatch',
-                         log_prefix, _remaining)
-            break
-
         total_attempts = hard_attempts + _429_count
 
         # ★ Periodically reset hard-error exclusions during 429 cycling.
@@ -348,8 +343,9 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
             if tools:
                 _extra['tools'] = tools
 
-            # Use the lesser of per-attempt timeout and remaining budget
-            _timeout = min(_per_attempt_timeout, _remaining)
+            # No budget clamp: pass the caller's timeout through unchanged
+            # (None = no read timeout).
+            _timeout = _per_attempt_timeout
 
             content, usage = chat(
                 model=slot.model, messages=messages,
@@ -1112,12 +1108,14 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
 
     on_waiting:
       Optional ``on_waiting(elapsed=…, slot=…)`` callback fired every
-      FIRST_BYTE_HEARTBEAT_S seconds while an attempt is still waiting for
-      its first SSE byte (the waiting-heartbeat seam). The slot context
+      IDLE_HEARTBEAT_S seconds while the attempt is SILENT — both before
+      the first SSE byte and during any mid-stream stall. The slot context
       lets the caller surface what the pool already knows (cooldown cause
       / last error) instead of a static spinner. Orthogonal to on_retry:
       that one fires on STATE TRANSITIONS (error caught, cooldown entered),
-      this one fires DURING a healthy-but-silent in-flight wait.
+      this one fires DURING a healthy-but-silent in-flight wait. With no
+      read timeout left, this is also what keeps the stuck-task reaper's
+      liveness clocks fresh — see lib/llm/_transport.IDLE_HEARTBEAT_S.
 
     avoid_pairs:
       Optional set of ``(key_name, model)`` tuples the caller wants the
@@ -1143,7 +1141,7 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
         RateLimitError,
         stream_chat,
     )
-    from lib.llm_errors import EndpointUnreachableError, FirstByteTimeoutError
+    from lib.llm_errors import EndpointUnreachableError
 
     def _fire_attempt_restart(reason: str) -> None:
         """Notify the callee an in-flight attempt is being discarded and the
@@ -1443,11 +1441,11 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
 
         try:
           with _big_gate:
-            # Waiting-heartbeat seam: the transport fires this every
-            # FIRST_BYTE_HEARTBEAT_S while the attempt waits for its first
-            # byte; enrich it with the CURRENT slot so the caller can show
-            # what the pool knows about this line (cooldown cause / last
-            # error / consecutive errors).
+            # Idle-heartbeat seam: the transport fires this every
+            # IDLE_HEARTBEAT_S while the attempt is silent (pre-first-byte
+            # or a mid-stream stall); enrich it with the CURRENT slot so
+            # the caller can show what the pool knows about this line
+            # (cooldown cause / last error / consecutive errors).
             _on_first_byte_wait = None
             if on_waiting:
                 def _on_first_byte_wait(elapsed, _slot=slot):
@@ -1586,25 +1584,6 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
                     'remaining slots: %s',
                     log_prefix, slot.key_name, slot.model,
                     dispatcher.summarize_slots(capability))
-
-        except FirstByteTimeoutError as e:
-            # ★ Upstream wedged pre-first-byte (zero SSE bytes within
-            #   TTFT_TIMEOUT — the 2026-07-27 opus-5 incident shape). A
-            #   NORMAL upstream soft error: record_error feeds the
-            #   consecutive-error cooldown ladder, the pair is excluded so
-            #   another key of the same model is tried next, and the HUD
-            #   gets an honest reason instead of a static "waiting…".
-            slot.record_error(is_rate_limit=False, error=str(e)[:200])
-            state.last_err = e
-            state.note_generic_error(slot, is_timeout=True,
-                                     strict_model=strict_model)
-            logger.warning(
-                '%s First-byte timeout on %s:%s — upstream sent no bytes, '
-                'excluding pair + rotating: %s',
-                log_prefix, slot.key_name, slot.model, str(e)[:160])
-            if on_retry:
-                on_retry(attempt=state.hard_attempts,
-                         reason='First byte timeout', status_code=0)
 
         except EndpointUnreachableError as e:
             # ★ The endpoint host is down (connect-phase failure). The
@@ -1755,7 +1734,7 @@ async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
     )
     from lib.llm._transport import async_abortable_sleep
     from lib.llm.astream import async_stream_chat
-    from lib.llm_errors import EndpointUnreachableError, FirstByteTimeoutError
+    from lib.llm_errors import EndpointUnreachableError
 
     dispatcher = get_dispatcher()
     state = _StreamRetryState(exclude_models=exclude_models, avoid_pairs=avoid_pairs)
@@ -1898,22 +1877,6 @@ async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
             if not state.note_permission_pair(slot, dispatcher, capability, log_prefix):
                 logger.warning('%s Permission denied on %s:%s — excluding pair',
                                log_prefix, slot.key_name, slot.model)
-
-        except FirstByteTimeoutError as e:
-            # ★ Upstream wedged pre-first-byte — mirrors the sync
-            #   dispatch_stream handler (normal upstream soft error:
-            #   record_error + pair exclusion + rotation + honest HUD reason).
-            slot.record_error(is_rate_limit=False, error=str(e)[:200])
-            state.last_err = e
-            state.note_generic_error(slot, is_timeout=True,
-                                     strict_model=strict_model)
-            logger.warning(
-                '%s First-byte timeout on %s:%s — upstream sent no bytes, '
-                'excluding pair + rotating: %s',
-                log_prefix, slot.key_name, slot.model, str(e)[:160])
-            if on_retry:
-                on_retry(attempt=state.hard_attempts,
-                         reason='First byte timeout', status_code=0)
 
         except EndpointUnreachableError as e:
             # ★ Endpoint host down — cool the slot, exclude the pair, fail
@@ -2229,7 +2192,7 @@ def smart_chat(messages, *, model=None, max_tokens=4096, temperature=0,
         logger.warning('%s[Dispatch] All slots exhausted (%s), '
                     'falling back to direct chat()', log_prefix, e, exc_info=True)
         from lib.llm import chat
-        _fb_timeout = timeout if timeout is not None else 120
+        _fb_timeout = timeout
         # ★ For 'cheap' tasks (translate etc.), fall back to a cheap model,
         #   NOT the default LLM_MODEL (which is Opus — way too slow/expensive).
         _fb_model = model

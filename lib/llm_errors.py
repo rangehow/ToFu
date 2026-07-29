@@ -160,27 +160,6 @@ class BadRequestError(Exception):
     pass
 
 
-class FirstByteTimeoutError(Exception):
-    """The upstream accepted the request but sent no SSE byte in time.
-
-    Raised by the streaming transports (``lib/llm/stream.py`` /
-    ``lib/llm/astream.py``) when the first-byte watchdog
-    (``lib/llm/_transport.FirstByteWatchdog``, ``TOFU_LLM_TTFT_TIMEOUT``)
-    kills a wedged attempt: the gateway answered 200 and then stalled
-    before producing a single byte (2026-07-27 incident: an opus-5
-    request sat the full 300s read timeout with zero bytes — the ONLY
-    tripwire was the per-read timeout, so the user stared at a static
-    "waiting…" phase for 5 minutes).
-
-    Deliberately does NOT subclass any ``_RETRYABLE`` transport error, so
-    it escapes the same-key retry loop straight to the dispatch layer,
-    which treats it as a normal upstream soft error: ``record_error``
-    (feeding the consecutive-error cooldown ladder) + pair exclusion +
-    slot rotation — the exact path a read timeout already takes.
-    """
-    pass
-
-
 class EndpointUnreachableError(Exception):
     """The model endpoint could not be reached at the connect phase.
 

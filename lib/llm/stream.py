@@ -23,7 +23,7 @@ from lib.llm._sse_core import (
 from lib.llm._transport import (
     CONNECT_TIMEOUT,
     MAX_STREAM_RETRIES,
-    FirstByteWatchdog,
+    StreamIdleWatchdog,
     abortable_sleep,
     apply_model_limit_retry,
     attach_limit_learned,
@@ -34,7 +34,6 @@ from lib.llm_errors import (
     AbortedError,
     ContentFilterError,
     EndpointUnreachableError,
-    FirstByteTimeoutError,
     ModelLimitError,
     PermissionError_,
     PromptTooLongError,
@@ -65,11 +64,13 @@ def stream_chat(body, *, on_thinking=None, on_content=None,
     its partial accumulation (e.g. truncate back to the per-round base) so the
     re-streamed text does not stack on the abandoned attempt's tail.
 
-    ``on_first_byte_wait`` (optional): fired with ``elapsed`` (seconds since
-    request send) every FIRST_BYTE_HEARTBEAT_S while an attempt is still
-    waiting for its first SSE byte — the waiting-heartbeat seam (see
-    lib/llm/_transport.FirstByteWatchdog). Independent of the TTFT kill:
-    beats fire on every caller, the kill is transport-global config.
+    ``on_first_byte_wait`` (optional): fired with the current IDLE duration
+    (seconds since the last byte, or since request send when none has
+    arrived) every IDLE_HEARTBEAT_S while the attempt is silent — both
+    before the first SSE byte and during any mid-stream stall. See
+    lib/llm/_transport.StreamIdleWatchdog. There is no read timeout, so
+    this beat is the only liveness signal a long silence produces; the
+    stuck-task reaper depends on it (docstring there).
 
     Returns:
         (assistant_msg, finish_reason, usage)
@@ -99,12 +100,11 @@ def stream_chat(body, *, on_thinking=None, on_content=None,
                 oauth=oauth, on_first_byte_wait=on_first_byte_wait)
             usage = attach_limit_learned(usage, _limit_learned)
             return msg, finish_reason, usage
-        except (RateLimitError, PermissionError_, AbortedError, ContentFilterError, PromptTooLongError, EndpointUnreachableError, FirstByteTimeoutError):
+        except (RateLimitError, PermissionError_, AbortedError, ContentFilterError, PromptTooLongError, EndpointUnreachableError):
             # EndpointUnreachableError: the host is down — retrying it on
             # the SAME slot just burns another connect timeout. Escape to
             # the dispatch layer, which cools this slot and fails over.
-            # FirstByteTimeoutError: the upstream wedged pre-first-byte —
-            # same reasoning, it escapes to dispatch for slot rotation.
+            # AbortedError: the user pressed Stop — never retry that.
             raise
         except ModelLimitError as e:
             _limit_learned = apply_model_limit_retry(body, e, log_prefix)
@@ -140,36 +140,39 @@ def _stream_chat_once(body, *, on_thinking=None, on_content=None,
     # connect-phase re-raise below, which used to escape before the dumper was
     # closed and leaked the fd once per retry against a down endpoint.
     resp = None
-    # ── First-byte watchdog ──
-    # Armed from request send; the kill closes ``resp`` (once it exists),
-    # unblocking iter_lines with an error we translate into
-    # FirstByteTimeoutError. Constants are read through the module at call
-    # time so tests / deployments can retune without a re-import.
+    # ── Idle watchdog ──
+    # Two jobs, neither of which bounds the request: beat while the
+    # upstream is silent (HUD + the reaper's liveness clocks), and poll
+    # ``abort_check`` so a Stop pressed during a silent stretch actually
+    # lands. The in-loop abort check below only runs when a line arrives,
+    # so without this poll a zero-byte hang would ignore Stop entirely —
+    # and with no read timeout left, nothing else would ever end it.
+    # Constants are read through the module at call time so tests /
+    # deployments can retune without a re-import.
     import lib.llm._transport as _tp
     _resp_holder = {}
-    _watchdog = FirstByteWatchdog(
-        timeout=_tp.TTFT_TIMEOUT,
-        heartbeat_interval=_tp.FIRST_BYTE_HEARTBEAT_S,
+    _watchdog = StreamIdleWatchdog(
+        heartbeat_interval=_tp.IDLE_HEARTBEAT_S,
         on_beat=on_first_byte_wait,
-        on_kill=lambda: (_resp_holder.get('resp') and
-                         _resp_holder['resp'].close()))
+        abort_check=abort_check,
+        on_abort=lambda: (_resp_holder.get('resp') and
+                          _resp_holder['resp'].close()))
     _watchdog.start()
     try:
         _conn_t0 = time.monotonic()
         try:
             resp = get_sync_session().post(
                 plan.url, headers=plan.hdrs, json=plan.body,
-                stream=True, timeout=(CONNECT_TIMEOUT, 300),
+                stream=True, timeout=(CONNECT_TIMEOUT, None),
                 proxies=proxies_for(plan.url))
             _resp_holder['resp'] = resp
-            if _watchdog.tripped:
-                # Kill fired while we were blocked pre-headers — the flag is
-                # all we get (no socket handle to close retroactively).
-                raise FirstByteTimeoutError(
-                    f'first byte timeout ({_tp.TTFT_TIMEOUT:.0f}s, pre-headers)')
+            if _watchdog.aborted:
+                # Stop landed while we were blocked pre-headers — the flag
+                # is all we get (no socket handle to close retroactively).
+                raise AbortedError('User aborted while awaiting response headers')
             _proxy_report_outcome(
                 plan.url, True, (time.monotonic() - _conn_t0) * 1000.0)
-        except FirstByteTimeoutError:
+        except AbortedError:
             raise
         except requests.exceptions.ConnectionError as e:
             _proxy_report_outcome(plan.url, False)
@@ -207,25 +210,26 @@ def _stream_chat_once(body, *, on_thinking=None, on_content=None,
         try:
             for line in resp.iter_lines(decode_unicode=True):
                 # Any line — even a blank keep-alive — proves the upstream is
-                # alive: disarm the kill AND the waiting heartbeat.
-                _watchdog.notify_first_byte()
+                # alive: reset the idle clock. Deliberately NOT a disarm:
+                # with no read timeout, a stream that goes quiet again after
+                # its first byte is just as unbounded as one that never
+                # started, so beats must resume and abort must stay pollable.
+                _watchdog.notify_activity()
                 if abort_check and abort_check():
                     acc.mark_aborted()
                     break
                 if acc.feed_line(line):
                     break
         except Exception as _iter_e:
-            if _watchdog.tripped:
-                raise FirstByteTimeoutError(
-                    f'first byte timeout ({_tp.TTFT_TIMEOUT:.0f}s) on {plan.url}'
-                ) from _iter_e
+            if _watchdog.aborted:
+                raise AbortedError(
+                    'User aborted while waiting on %s' % plan.url) from _iter_e
             raise
-        if _watchdog.tripped:
+        if _watchdog.aborted:
             # A close() can surface as a CLEAN end of iteration on some
-            # urllib3 versions — without this check a killed attempt would
+            # urllib3 versions — without this check an aborted attempt would
             # finalize as a silent empty/partial "success".
-            raise FirstByteTimeoutError(
-                f'first byte timeout ({_tp.TTFT_TIMEOUT:.0f}s) on {plan.url}')
+            raise AbortedError('User aborted while waiting on %s' % plan.url)
 
         acc.fire_final_tool_callback()
         return acc.finalize(resp_trace=resp_trace)

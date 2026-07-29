@@ -232,20 +232,37 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
     }
 
     def _on_waiting(elapsed, slot=None):
-        """Heartbeat while an attempt waits for its first SSE byte.
+        """Heartbeat while an attempt is SILENT (no bytes yet, or a
+        mid-stream stall).
 
-        Emits a transient ``retrying`` PHASE event so a wedged/slow
-        upstream shows a LIVE "still waiting + what the pool knows" label
-        instead of the static waiting_model spinner for the whole wait
-        (2026-07-27 incident: 300s of zero bytes, zero signal).
-        ``phase='retrying'`` is deliberate and load-bearing: the frontend
-        retrying branch keys its DOM refresh on ``attempt``, so each beat
-        (attempt=beat number) actually repaints — a constant-phase
-        heartbeat would freeze on the first beat's text.
+        Two jobs:
+
+        1. **HUD.** Emits a transient ``retrying`` PHASE event so a slow
+           upstream shows a LIVE "still waiting + what the pool knows"
+           label instead of a static spinner. ``phase='retrying'`` is
+           deliberate and load-bearing: the frontend retrying branch keys
+           its DOM refresh on ``attempt``, so each beat (attempt=beat
+           number) actually repaints — a constant-phase heartbeat would
+           freeze on the first beat's text.
+
+        2. **Reaper liveness.** Refreshes ``_dispatch_heartbeat``. The
+           stuck-task reaper (manager/_maintenance.reap_stuck_running_tasks)
+           force-fails a task once BOTH ``_t_last_event`` AND
+           ``_dispatch_heartbeat`` are stale past 30 min. There is no read
+           timeout any more, so a genuinely long silence is no longer
+           interrupted-and-retried — without this bump the reaper would
+           become the new 30-minute timeout and kill exactly the long waits
+           we made legal, writing a "terminated as wedged" error bubble
+           into the conversation. ``append_event`` below covers
+           ``_t_last_event``; this line covers the other clock, so EITHER
+           being fresh (the reaper's own AND-gate) is guaranteed while we
+           are legitimately waiting. A truly dead worker emits no beats at
+           all, so the reaper keeps its real job.
         """
+        task['_dispatch_heartbeat'] = time.time()
         _secs = int(elapsed)
         try:
-            from lib.llm._transport import FIRST_BYTE_HEARTBEAT_S as _hb
+            from lib.llm._transport import IDLE_HEARTBEAT_S as _hb
             _beat = max(1, int(elapsed // max(1, _hb)))
         except Exception as _e:
             logger.debug('on waiting: failed (%s)', _e)
@@ -267,7 +284,19 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
                     _ce = getattr(slot, 'consecutive_errors', 0) or 0
                     if _ce >= 2:
                         _reason = f'{_ce} consecutive errors on this line'
-        if _reason:
+        # ★ Honest label: the beat now fires for TWO shapes, and calling a
+        #   mid-stream stall "no first byte yet" would be a lie the user can
+        #   see (text is already on screen). Distinguish by whether this
+        #   round has produced anything yet.
+        with task['content_lock']:
+            _started = bool(task['content'] != _round_base_content
+                            or task['thinking'] != _round_base_thinking)
+        if _started:
+            _detail_key = ('stream.phase.stalledMidStreamReason' if _reason
+                           else 'stream.phase.stalledMidStream')
+            _detail = (f'Paused {_secs}s — {_label} stopped mid-reply'
+                       + (f' ({_reason})' if _reason else '…'))
+        elif _reason:
             _detail_key = 'stream.phase.waitingFirstByteReason'
             _detail = (f'Waiting {_secs}s — no first byte from {_label} yet '
                        f'({_reason})')

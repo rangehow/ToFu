@@ -33,7 +33,6 @@ from lib.llm_errors import (
     AbortedError,
     ContentFilterError,
     EndpointUnreachableError,
-    FirstByteTimeoutError,
     ModelLimitError,
     PermissionError_,
     PromptTooLongError,
@@ -89,10 +88,10 @@ async def async_stream_chat(body, *, on_thinking=None, on_content=None,
             return msg, finish_reason, usage
         except (RateLimitError, PermissionError_, AbortedError,
                 ContentFilterError, PromptTooLongError,
-                EndpointUnreachableError, FirstByteTimeoutError):
+                EndpointUnreachableError):
             # EndpointUnreachableError escapes to the dispatch layer so a
             # dead host fails over instead of being retried on the same slot.
-            # FirstByteTimeoutError: upstream wedged pre-first-byte — same.
+            # AbortedError: the user pressed Stop — never retry that.
             raise
         except ModelLimitError as e:
             logger.debug('async stream chat: ModelLimitError (%s)', e)
@@ -151,63 +150,63 @@ async def _async_stream_chat_once(body, *, on_thinking=None, on_content=None,
                 on_tool_call_ready=on_tool_call_ready,
                 anthropic_translator=plan.anthropic_translator)
 
-            # ── First-byte watchdog (async idiom) ──
-            # Mirrors the sync FirstByteWatchdog in lib/llm/_transport.py:
-            # heartbeat beats while the first SSE byte is outstanding, and a
-            # single kill at TTFT_TIMEOUT that closes the response —
-            # aiter_lines then raises and we translate the kill into
-            # FirstByteTimeoutError. Armed AFTER the stream context is
-            # entered (a resp handle is required for the kill); a
-            # pre-headers hang stays bounded by the httpx read-timeout
-            # backstop, same as the sync transport. Constants are read
-            # through the module so tests / deployments can retune.
+            # ── Idle watchdog (async idiom) ──
+            # Mirrors the sync StreamIdleWatchdog in lib/llm/_transport.py:
+            # beat while the upstream is silent (HUD + the stuck-task
+            # reaper's liveness clocks) and poll ``abort_check`` so a Stop
+            # pressed during a silent stretch closes the response. There is
+            # NO time-based kill and no read timeout — a wait is not a
+            # failure. The idle clock RESETS on each line rather than
+            # disarming, so a mid-stream stall keeps beating and stays
+            # abortable. Constants are read through the module so tests /
+            # deployments can retune.
             import lib.llm._transport as _tp
-            _fb = {'done': False, 'tripped': False}
+            _fb = {'last': time.monotonic(), 'aborted': False, 'done': False}
 
-            async def _first_byte_watchdog():
-                _t0 = time.monotonic()
-                _timeout = _tp.TTFT_TIMEOUT
-                _interval = _tp.FIRST_BYTE_HEARTBEAT_S
-                if _timeout <= 0 and (_interval <= 0 or not on_first_byte_wait):
+            async def _idle_watchdog():
+                _interval = _tp.IDLE_HEARTBEAT_S
+                _beats = _interval > 0 and on_first_byte_wait is not None
+                if not _beats and abort_check is None:
                     return
+                _last_beat = time.monotonic()
                 while not _fb['done']:
-                    _elapsed = time.monotonic() - _t0
-                    _wait = _interval if (_interval > 0 and on_first_byte_wait) else None
-                    if _timeout > 0:
-                        _to_kill = _timeout - _elapsed
-                        if _to_kill <= 0:
-                            _fb['tripped'] = True
-                            try:
-                                await resp.aclose()
-                            except Exception as _ck:
-                                logger.debug('%s watchdog aclose raised: %s',
-                                             log_prefix, _ck)
-                            return
-                        _wait = _to_kill if _wait is None else min(_wait, _to_kill)
-                    if _wait is None:
-                        return
-                    try:
-                        await asyncio.sleep(_wait)
-                    except asyncio.CancelledError:
-                        return
-                    if _fb['done']:
-                        return
-                    if _timeout > 0 and (time.monotonic() - _t0) >= _timeout:
-                        continue  # loop head runs the kill branch
-                    if _interval > 0 and on_first_byte_wait:
+                    if abort_check is not None:
                         try:
-                            on_first_byte_wait(time.monotonic() - _t0)
+                            if abort_check():
+                                _fb['aborted'] = True
+                                try:
+                                    await resp.aclose()
+                                except Exception as _ck:
+                                    logger.debug('%s watchdog aclose raised: %s',
+                                                 log_prefix, _ck)
+                                return
+                        except Exception as _ae:
+                            logger.debug('%s abort_check raised: %s', log_prefix, _ae)
+                    _now = time.monotonic()
+                    _idle = _now - _fb['last']
+                    if (_beats and _idle >= _interval
+                            and (_now - _last_beat) >= _interval):
+                        _last_beat = _now
+                        try:
+                            on_first_byte_wait(_idle)
                         except Exception as _cb:
                             logger.debug('%s on_first_byte_wait raised: %s',
                                          log_prefix, _cb)
+                    _wait = _tp.ABORT_POLL_INTERVAL if abort_check is not None else _interval
+                    if _beats:
+                        _wait = min(_wait, _interval)
+                    try:
+                        await asyncio.sleep(max(_wait, 0.01))
+                    except asyncio.CancelledError:
+                        return
 
-            _wd_task = asyncio.ensure_future(_first_byte_watchdog())
+            _wd_task = asyncio.ensure_future(_idle_watchdog())
             stopped = False
             try:
                 async for raw_line in resp.aiter_lines():
                     # Any line — even a blank keep-alive — proves the upstream
-                    # is alive: disarm the kill AND the waiting heartbeat.
-                    _fb['done'] = True
+                    # is alive: reset the idle clock (NOT a disarm; see above).
+                    _fb['last'] = time.monotonic()
                     if abort_check and abort_check():
                         # Abort mid-stream: break immediately. The response is
                         # left partially read, so httpx drops the connection —
@@ -223,20 +222,18 @@ async def _async_stream_chat_once(body, *, on_thinking=None, on_content=None,
                             # would defeat connection reuse across turns.
                             stopped = True
             except BaseException as _iter_e:
-                if _fb['tripped']:
-                    raise FirstByteTimeoutError(
-                        f'first byte timeout ({_tp.TTFT_TIMEOUT:.0f}s) on {plan.url}'
-                    ) from _iter_e
+                if _fb['aborted']:
+                    raise AbortedError(
+                        'User aborted while waiting on %s' % plan.url) from _iter_e
                 raise
             finally:
                 _fb['done'] = True
                 _wd_task.cancel()
-            if _fb['tripped']:
+            if _fb['aborted']:
                 # A close() can surface as a CLEAN end of iteration — without
-                # this check a killed attempt would finalize as a silent
+                # this check an aborted attempt would finalize as a silent
                 # empty/partial "success".
-                raise FirstByteTimeoutError(
-                    f'first byte timeout ({_tp.TTFT_TIMEOUT:.0f}s) on {plan.url}')
+                raise AbortedError('User aborted while waiting on %s' % plan.url)
 
             acc.fire_final_tool_callback()
             return acc.finalize(resp_trace=resp_trace)

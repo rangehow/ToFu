@@ -21,7 +21,13 @@ logger = get_logger(__name__)
 # How long to wait for the TCP/TLS handshake to the model endpoint before
 # declaring it unreachable. Kept short (default 10s) so a dead self-hosted
 # box fails over to a healthy slot fast instead of burning a full minute
-# per attempt. The READ timeout stays large (300s) — generation is slow.
+# per attempt.
+#
+# This is the ONLY timeout left on an LLM request, and deliberately so: it
+# bounds "the box never answered the SYN", i.e. a crash, not a wait. Once
+# the handshake succeeds there is NO read timeout at all — generation may
+# take as long as it takes, and a user who does not want to wait presses
+# Stop (honored by StreamIdleWatchdog's abort poll below).
 # Override per-deployment with TOFU_LLM_CONNECT_TIMEOUT.
 try:
     CONNECT_TIMEOUT = float(os.environ.get('TOFU_LLM_CONNECT_TIMEOUT', '10'))
@@ -31,135 +37,145 @@ except (ValueError, TypeError) as e:
     logger.debug('[Transport] TOFU_LLM_CONNECT_TIMEOUT parse failed, using default: %s', e)
     CONNECT_TIMEOUT = 10.0
 
-# ── First-byte (TTFT) watchdog ──
-# Bounds the time from request-send to the FIRST SSE byte of the response
-# body, independent of the 300s per-read timeout. Motivation (2026-07-27
-# incident, conv ms2gb19gfdco20 / task 53c65134): the gateway answered 200
-# and then sent ZERO bytes for the full 300s read timeout — the only
-# tripwire was the per-read timeout, so the attempt looked identical to a
-# slow-but-legit prefill for 5 minutes while the slot pool already knew
-# the line was erroring. The watchdog kills such an attempt at
-# TTFT_TIMEOUT seconds (translated by the transport into
-# FirstByteTimeoutError → normal dispatch rotation).
+# ── Abort poll interval (seconds) ──
+# A blocked socket read sits OUTSIDE the SSE line loop, so the in-loop
+# ``abort_check`` cannot observe a Stop pressed while the upstream is
+# silent. StreamIdleWatchdog polls the same predicate on this cadence and
+# closes the response, which is what makes "no timeouts, I will stop it
+# myself" actually true rather than a promise the transport cannot keep.
+# 0.5s: a Stop feels instant to a human, and the poll is one flag read.
+try:
+    ABORT_POLL_INTERVAL = float(
+        os.environ.get('TOFU_LLM_ABORT_POLL_INTERVAL', '0.5'))
+    if ABORT_POLL_INTERVAL <= 0:
+        ABORT_POLL_INTERVAL = 0.5
+except (ValueError, TypeError) as e:
+    logger.debug('[Transport] TOFU_LLM_ABORT_POLL_INTERVAL parse failed, using default: %s', e)
+    ABORT_POLL_INTERVAL = 0.5
+
+# ── Idle heartbeat (seconds) ──
+# Fires ``on_beat(idle_seconds)`` whenever the attempt has produced nothing
+# for this long — before the first byte AND during any mid-stream silence.
 #
-# Threshold justification (production data 2026-07-27, logs/app.log*):
-# the only TTFT telemetry is the turn-level metric (context-ready → first
-# token), which CONFLATES the in-request wait with retry/cooldown cycling:
-# n=8909, p50=13.7s, p90=32.4s, p95=48.9s, p99=154.1s. A single attempt's
-# first-byte wait is strictly shorter than its turn-level TTFT, so 180s
-# sits above even the conflated p99 — mis-firing on well under 1% of
-# rounds. A mis-fire costs one discarded (already billed) prefill plus a
-# normal slot rotation; the old behaviour cost a 300s blind window with
-# zero user-visible signal. Big prompts (~100k+ tokens) are routine here,
-# so do NOT lower this below the conflated p99 without re-measuring
-# per-attempt waits. 0 disables the kill entirely (opt-out hatch).
-# Override per-deployment with TOFU_LLM_TTFT_TIMEOUT.
+# Load-bearing, not cosmetic. Two consumers depend on it:
+#   1. the HUD, which shows a live "still waiting, here is what the slot
+#      pool knows" phase instead of a frozen spinner;
+#   2. the stuck-task reaper (lib/tasks_pkg/manager/_maintenance.py), which
+#      force-fails a task once BOTH ``_t_last_event`` and
+#      ``_dispatch_heartbeat`` have been silent past
+#      TOFU_STUCK_TASK_MAX_SILENT_SECS (30 min). With no read timeout left
+#      to interrupt a long silence, this beat is the ONLY thing keeping
+#      those clocks fresh — remove it and the reaper becomes the new
+#      30-minute timeout, killing exactly the long waits we just made
+#      legal. Aliveness is proven by beating, never by not-timing-out.
+# 20s is well inside the reaper window while adding only a handful of
+# transient phase events. 0 disables beats.
+# Override with TOFU_LLM_IDLE_HEARTBEAT_S.
 try:
-    TTFT_TIMEOUT = float(os.environ.get('TOFU_LLM_TTFT_TIMEOUT', '180'))
-    if TTFT_TIMEOUT < 0:
-        TTFT_TIMEOUT = 180.0
+    IDLE_HEARTBEAT_S = float(
+        os.environ.get('TOFU_LLM_IDLE_HEARTBEAT_S', '20'))
+    if IDLE_HEARTBEAT_S < 0:
+        IDLE_HEARTBEAT_S = 20.0
 except (ValueError, TypeError) as e:
-    logger.debug('[Transport] TOFU_LLM_TTFT_TIMEOUT parse failed, using default: %s', e)
-    TTFT_TIMEOUT = 180.0
-
-# ── First-byte waiting heartbeat (seconds) ──
-# While an attempt is in flight without its first byte, the watchdog fires
-# ``on_beat(elapsed)`` every FIRST_BYTE_HEARTBEAT_S seconds so the caller
-# can surface a live "still waiting, here is what the slot pool knows"
-# phase instead of a static spinner. 20s: frequent enough that a user
-# watching a stalled bubble sees movement well inside the old 300s blind
-# window, sparse enough that a long wait adds only a handful of transient
-# phase events (never persisted as message content). 0 disables beats.
-# Override with TOFU_LLM_FIRST_BYTE_HEARTBEAT_S.
-try:
-    FIRST_BYTE_HEARTBEAT_S = float(
-        os.environ.get('TOFU_LLM_FIRST_BYTE_HEARTBEAT_S', '20'))
-    if FIRST_BYTE_HEARTBEAT_S < 0:
-        FIRST_BYTE_HEARTBEAT_S = 20.0
-except (ValueError, TypeError) as e:
-    logger.debug('[Transport] TOFU_LLM_FIRST_BYTE_HEARTBEAT_S parse failed, using default: %s', e)
-    FIRST_BYTE_HEARTBEAT_S = 20.0
+    logger.debug('[Transport] TOFU_LLM_IDLE_HEARTBEAT_S parse failed, using default: %s', e)
+    IDLE_HEARTBEAT_S = 20.0
 
 
-class FirstByteWatchdog:
-    """Threading watchdog bounding time-to-first-byte of one HTTP attempt.
+class StreamIdleWatchdog:
+    """Watches one HTTP attempt while it is idle — without bounding it.
 
-    ``start()`` arms two independent schedules measured from ``t0``:
-    heartbeat beats (``on_beat(elapsed)`` every ``heartbeat_interval``)
-    and a single kill at ``timeout`` (``on_kill()`` — the transport
-    supplies a closure that closes the response, unblocking the read).
-    ``notify_first_byte()`` disarms BOTH (called on the first SSE line —
-    a blank keep-alive line also counts: it proves the upstream is
-    alive). ``cancel()`` disarms on any exit path. ``tripped`` is True
-    only when the kill actually fired, so the transport can translate
-    whatever exception the closed socket raised into
-    ``FirstByteTimeoutError``.
+    ``start()`` arms two independent schedules:
 
-    A kill that fires before the response object exists (pre-headers
-    wait) can only set ``tripped`` — the transport checks the flag once
-    ``post()`` returns and raises then; a headers-never-arrive hang stays
-    bounded by the 300s read-timeout backstop (documented limitation).
+      * **heartbeat** — ``on_beat(idle_seconds)`` once the attempt has been
+        silent for ``heartbeat_interval``, and every interval thereafter
+        while it stays silent.
+      * **abort poll** — ``abort_check()`` every ``ABORT_POLL_INTERVAL``;
+        the first True latches ``aborted`` and fires ``on_abort()`` (the
+        transport supplies a closure that closes the response, unblocking
+        the read).
+
+    ``notify_activity()`` resets the idle clock but does NOT disarm: a
+    stream that delivers a byte and then goes quiet again resumes beating,
+    and abort stays pollable for the whole attempt. This is the difference
+    that matters now that no read timeout exists — a mid-stream stall is
+    just as unbounded as a pre-first-byte one, so both need the beat and
+    both need the abort poll.
+
+    There is deliberately NO time-based kill. A wait is not a failure.
 
     Callback exceptions are swallowed + debug-logged: a HUD-side bug must
     never take the request watchdog down with it.
+
+    Known boundary: an abort that fires before the response object exists
+    (the pre-headers wait) can only latch ``aborted`` — there is no socket
+    handle to close yet. The transport checks the flag once ``post()``
+    returns and raises ``AbortedError`` then.
     """
 
-    def __init__(self, timeout, heartbeat_interval=0, on_beat=None,
-                 on_kill=None, t0=None):
-        self._timeout = float(timeout or 0)
+    def __init__(self, *, heartbeat_interval=0, on_beat=None,
+                 abort_check=None, on_abort=None):
         self._interval = float(heartbeat_interval or 0)
         self._on_beat = on_beat
-        self._on_kill = on_kill
-        self._t0 = time.monotonic() if t0 is None else t0
+        self._abort_check = abort_check
+        self._on_abort = on_abort
         self._done = threading.Event()
-        self._tripped = False
+        self._aborted = False
+        self._lock = threading.Lock()
+        self._last_activity = time.monotonic()
         self._thread = None
 
     @property
-    def tripped(self):
-        return self._tripped
+    def aborted(self):
+        return self._aborted
+
+    def _beats_on(self):
+        return self._interval > 0 and self._on_beat is not None
 
     def start(self):
-        if self._timeout <= 0 and (self._interval <= 0 or not self._on_beat):
-            return  # fully disabled — kill off and beats off
+        if not self._beats_on() and self._abort_check is None:
+            return  # nothing to watch
         self._thread = threading.Thread(
-            target=self._run, name='first-byte-watchdog', daemon=True)
+            target=self._run, name='stream-idle-watchdog', daemon=True)
         self._thread.start()
 
-    def notify_first_byte(self):
-        self._done.set()
+    def notify_activity(self):
+        """Record upstream activity — resets the idle clock, keeps watching."""
+        with self._lock:
+            self._last_activity = time.monotonic()
 
     def cancel(self):
         self._done.set()
 
     def _run(self):
+        last_beat = time.monotonic()
         while not self._done.is_set():
-            elapsed = time.monotonic() - self._t0
-            wait = None
-            if self._interval > 0 and self._on_beat:
-                wait = self._interval
-            if self._timeout > 0:
-                to_kill = self._timeout - elapsed
-                if to_kill <= 0:
-                    self._tripped = True
-                    if self._on_kill:
-                        try:
-                            self._on_kill()
-                        except Exception as e:
-                            logger.debug('[Watchdog] on_kill raised: %s', e)
-                    return
-                wait = to_kill if wait is None else min(wait, to_kill)
-            if wait is None:
-                return
-            if self._done.wait(wait):
-                return
-            if self._timeout > 0 and (time.monotonic() - self._t0) >= self._timeout:
-                continue  # let the loop head run the kill branch
-            if self._interval > 0 and self._on_beat:
+            if self._abort_check is not None:
                 try:
-                    self._on_beat(time.monotonic() - self._t0)
+                    if self._abort_check():
+                        self._aborted = True
+                        if self._on_abort:
+                            try:
+                                self._on_abort()
+                            except Exception as e:
+                                logger.debug('[Watchdog] on_abort raised: %s', e)
+                        return
+                except Exception as e:
+                    logger.debug('[Watchdog] abort_check raised: %s', e)
+            now = time.monotonic()
+            with self._lock:
+                idle = now - self._last_activity
+            if (self._beats_on() and idle >= self._interval
+                    and (now - last_beat) >= self._interval):
+                last_beat = now
+                try:
+                    self._on_beat(idle)
                 except Exception as e:
                     logger.debug('[Watchdog] on_beat raised: %s', e)
+            wait = ABORT_POLL_INTERVAL if self._abort_check is not None else self._interval
+            if self._beats_on():
+                wait = min(wait, self._interval)
+            if self._done.wait(max(wait, 0.01)):
+                return
 
 # ── Retry config for transient API errors (streaming & non-streaming) ──
 MAX_STREAM_RETRIES = 4          # retry up to 4 times (5 attempts total)
@@ -346,7 +362,13 @@ def get_async_client(proxy_url) -> "httpx.AsyncClient":
         if client is None or client.is_closed:
             client = httpx.AsyncClient(
                 proxy=proxy_url,
-                timeout=httpx.Timeout(connect=CONNECT_TIMEOUT, read=300,
+                # read=None: no read timeout. A slow generation is not a
+                # failure; a Stop is honored by StreamIdleWatchdog's abort
+                # poll instead. write/pool stay bounded — neither is a wait
+                # for the model (write = uploading our own request body,
+                # pool = queueing for a free connection), and an unbounded
+                # pool wait would deadlock silently rather than wait.
+                timeout=httpx.Timeout(connect=CONNECT_TIMEOUT, read=None,
                                       write=60, pool=60),
                 follow_redirects=True,
             )

@@ -471,10 +471,46 @@ html[data-rail] .folder-quickadd{display:none}
   /* bottom 取负值：图片盒与图标盒完全重合(实测两者同为 84×84、imgTop=0),
      落影若留在盒内就贴在贴图下沿、读不出「托住」的感觉;探出盒外才像地面。
      这要求祖先不能裁切 —— .welcome-icon 本身无 overflow 设置(默认 visible),
-     守卫会按三主题钉住「差分像素必须出现在图标下缘」。 */
-  content:"";position:absolute;left:50%;bottom:-5px;transform:translateX(-50%);
+     守卫会按三主题钉住「差分像素必须出现在图标下缘」。
+     ★ 水平居中用 left:11%(=(100-78)/2) 而不用 translateX(-50%) —— transform 必须
+     整个留给呼吸动画的 scale,两者写在同一属性上会互相覆盖。 */
+  content:"";position:absolute;left:11%;bottom:-5px;
   width:78%;height:13px;border-radius:50%;display:block;
-  background:radial-gradient(ellipse at 50% 50%,rgba(140,100,52,.34),rgba(140,100,52,0) 72%)
+  background:radial-gradient(ellipse at 50% 50%,rgba(140,100,52,.34),rgba(140,100,52,0) 72%);
+  animation:tofuShadowBreathe 4s ease-in-out infinite
+}
+
+/* ══ 品牌动效 — 会呼吸的吉祥物 + 跟着呼吸的影子 ══════════════════════════
+   2026-07-29 owner 实测退回:此前 `animation:tofuFloat` 挂在 .welcome-icon 上,而落影是
+   同一元素的 ::before ⇒ 父元素 translateY 时影子**锁死同步移动**(9 帧采样 icon bottom
+   160.03→156.55,摆幅 3.48px)。地面线跟着飘,恰好复活了引入落影本要解决的「贴纸感」。
+   真实接触影的行为是:地面线**不动**,物体升高时影子**变小变淡**。
+
+   落点:浮动改挂在 img 上,宿主 .welcome-icon 保持静止,落影的地面线因此钉死;落影配一条
+   同周期同缓动的反相动画,相位天然对齐(两者都 4s ease-in-out、同时起播)。
+
+   ★ img 的浮动用独立变换属性 `translate` 而不是 `transform` —— hover 态
+   (`transform:scale(1.06) rotate(-3deg)`)已经占用了 transform,写在同一属性上会互相
+   覆盖:悬停会掐掉浮动,或浮动会掐掉悬停。独立属性与 transform 各自成分复合,两者共存。
+   同理落影的呼吸占用 transform,故它的水平居中改用 left:11% 几何量而非 translateX。
+
+   ★ 挂在基础层而非 [data-theme="tofu"] —— 动效同属品牌形态,此前只有 tofu 用户看得到,
+   dark/light 下吉祥物完全静止,与前两轮「形态挂在 tofu 上」是同一类缺陷。 */
+@keyframes tofuMascotFloat{
+  0%,100%{translate:0 0}
+  50%{translate:0 -4px}
+}
+@keyframes tofuShadowBreathe{
+  /* 反相:吉祥物升到最高点(50%)时影子最小最淡 —— 物体离地面越远,接触影越散越弱 */
+  0%,100%{transform:scale(1);opacity:1}
+  50%{transform:scale(.82);opacity:.62}
+}
+.welcome-icon img{animation:tofuMascotFloat 4s ease-in-out infinite}
+/* 无障碍兜底:关掉动效后,影子必须停在「贴地」的静止态(scale 1 / opacity 1),
+   而不是停在动画中途某个收缩帧。 */
+@media (prefers-reduced-motion:reduce){
+  .welcome-icon img{animation:none;translate:0 0}
+  .welcome-icon::before{animation:none;transform:scale(1);opacity:1}
 }
 /* ── 字母配色 — 两处共用同一套渐变。侧栏此前是紫渐变(#8b6cf6→#a78bfa)、欢迎屏是
    豆腐奶油-琥珀金渐变,dark 下实测就是「侧栏紫 Tofu + 欢迎屏金 Tofu」同一品牌两个
@@ -11300,7 +11336,9 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   border:none;
   box-shadow:none;
   overflow:visible;position:relative;
-  animation:tofuFloat 4s ease-in-out infinite;
+  /* 2026-07-29:此处原有 `animation:tofuFloat 4s` 已移除 —— 浮动挂在宿主上会把它的
+     ::before 落影一起带飞,地面线跟着动就读作贴纸而非影子。浮动现由基础层挂在
+     .welcome-icon img 上(见 tofuMascotFloat),宿主保持静止。 */
   margin-bottom:24px
 }
 [data-theme="tofu"] .welcome-icon:hover{

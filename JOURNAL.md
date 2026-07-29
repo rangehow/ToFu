@@ -14,6 +14,14 @@
 - **验收边界:** 纯前端+新端点,**运行中进程不带**,需重启 + bundle 重建才到用户面前。
 
 
+### 2026-07-29(续·credit 次日自启机制定案) — owner 纠正我前一晚的处方:「我不是让你定时明天启动,我要的是机制,因为 credit 按日赋予」。实测:**机制一直存在,两轮事故都是手动 override 架空了它**(commit `24ded30b`,test-only +71;新守卫 **3 条**,**NEUTER 精确咬 2 红**,套件 **11/11**)
+
+- **★ 我前一晚的处置本身就是病:** 402 复发时我设了手动 `override=false` + 一次性定时任务次日清除。owner 点破后实测代码:402/quota 停机走 `mark_key_exhausted` 写 **day-scoped** `stats`,`_ensure_fresh_unlocked` 在日历日边界惰性清零 ⇒ **次日首个请求自动恢复,零调度器依赖**。而我的手动 override 按设计**永久粘滞**(user supremacy),次日不会自己回来——**我的「补救」恰恰破坏了 owner 要的机制**。
+- **★ 两轮事故同根:** 7-28 是陈旧 `override=true` 架空停机标记(402 全天复发,tests/test_key_stats_model_exhaustion.py:11  docstring 档案在案);7-29 是我新设 `override=false` 架空次日自启。同一个陷阱的两个方向。**判据:credit 场景永不用手动 override 当停机器——它的语义是「人的长期意图」,不是「停到今天为止」。** 已存项目记忆。
+- **处置:** 删一次性定时任务;经活机 API 清除我对 `sankuai_key_2` 的 `override=false`(override→null,12 个按模型的 402 停机标记今日继续生效,未停模型若再 402 各自补标,明日全部自动清零)。
+- **守卫补的是机制本身:** TestDayRolloverRecovery 三条钉死不对称——按模型停机次日恢复 / key-wide 停机次日恢复 / **手动 override 次日不恢复**(防有人「好心」自动清用户状态)。NEUTER:摘掉 rollover 的 stats 清零 → 恰好前 2 红,第 3 条保持绿(override 持久与 stats 清零无关,方向正确);`_state.py` 已 `git diff` 验证逐字节还原。
+- **悬而未决(owner 定夺):** `key_stats.json` 里还有 4 条陈旧 `override: true`(sankuai key_0/key_1、sankuai_anthropic key_0/key_1)——与本次事故同型的引信:这些 key 一旦 credit 耗尽,钉子会再次架空停机。未动:那是 owner 自己拨过的开关,user supremacy。
+- **验收边界:** 纯测试 + 一条活机 API 状态变更(即时生效);无产品码改动,运行中进程无需重启。
 
 ### 2026-07-29(续·陈旧感知闭环) — owner 抓出我**一半守卫是空的,且被测试名掩盖**:名字写着 and poll projection,函数体一行没碰那条路——摘掉 poll 的 rev,**18/18 全绿**;修完再做原始问题的后半句「前端不知道自己陈旧」(commits `28170cdf` + `5e04a13f`;**12 + 13 条守卫**,**NEUTER×6**(其中**一发首版空转,由我自查抓回**);相邻环 **101 + 22 全绿**;charter 不变量已提交)
 
@@ -1012,3 +1020,13 @@
 - **★ 顺带暴露两条测试基建缺陷(未修,属独立工作项):** 全量跑**两次被卡死打断**——`tests/test_paper_terminology_audit.py` 真的去打线上 LLM(栈停在 `dispatch_chat` → `time.sleep(0.3)` 重试循环)、`tests/test_recovery_merge_guards.py` + `test_recipe_sources_card_spoken.py` 真的连 DB 阻塞在 `_core.py:852 cursor.execute`。conftest 本已为 2026-06-28 删 2300 会话的事故强制 sqlite,但它自己的注释承认「Several tests deliberately write to the REAL database」——**这类测试在生产库被 8 个 agent 打满时必然挂起,使全量跑不可能一次跑完**。
 - **验收边界(诚实分账):** ①收集门 **11,878 用例 0 收集错误**,说明无 import 层断裂;②全量跑因上述卡死未能一次跑完,已分段覆盖 a-z(跳过 3 个卡死文件),失败清单完整;③两条修复的目标守卫 20/20 绿,相邻环唯一那条红(`test_export_js_sanitize_syntax`)**已在干净 HEAD 实测同样红**,非我引入;④纯前端静态资产改动,**刷新即生效,无需重启**。
 
+
+### 2026-07-29(续·phase 播种) — 原始报障第三条收口:poll 车道**结构上**播不出阶段文字,而票面自己的处方会把刚修好的缺陷原样再犯一次(`pt_a1b803793eb84925` DONE;commits `563ee06f` + 自纠 `d948615c`;守卫 **10/10**(3 条失败先行),**NEUTER×3 各咬**;相邻环 **69 passed**)
+
+- **★ 判据选错了代理,而不是逻辑写错:** `setStreamPhase` 问的是 `activeStreams.has(convId)`——「**本 tab** 有没有开着 SSE」;要问的是「**这条 turn** 还在跑吗」。两者在本项目最常见的那一格里分岔:冷接续 / socket 掉线 / 仅 poll 车道。而 `sse_poll_fallback.js:389` 是 poll 车道**唯一**的 phase 写入点 ⇒ 后端每次 poll 都送 phase、前端每次都丢,阶段文字**结构上不可能出现**。实测(驱动真 `setStreamPhase`):`activeStreams` 空 ⇒ 写入被丢、session 都不存在;含该 conv ⇒ `{"phase":"tool_exec","detail":"read_files"}`。
+- **★ 票面自己的处方是错的,而且错在刚修过的地方(本轮最值钱的一条):** 票面写「改用 `_convTurnInFlight`(委托 `computeConvBusy`)」。两处皆错:①该符号在 HEAD 里**出现 0 次**,`94347aa7` 已把它拆成 turn 级 `_convMainTurnInFlight` 与 conv 级 `_convBusyAnyLane`;②`computeConvBusy` **带分支流前缀扫描**,照做会让「分支流在跑 ⇒ 主 turn 也显示阶段文字」——正是 `94347aa7` 刚从渲染门里拿掉的那个缺陷。**NEUTER #2 就是逐字实现票面处方**,红在 `test_branch_stream_alone_does_not_seed_main_turn_phase`,即「票面会犯的错」被守卫当场证明,不是嘴上说说。
+- **判据(已请 owner 并入方法论):票面是「写票那一刻的快照」,不是稳定接口。** 处方应描述**语义**(「turn 级、不认分支流」),实现符号名只能作指路标并注明「以 HEAD 为准」。本轮是同一形态在一条工作线上第二次出现(上次是守卫钉死实现字面量,产品码一改就失配)。
+- **★ 改判据前先清点「谁把 session 当流存在」(docstring 的担忧是真的,它选的代理不是):** 全库消费者只读 `.phase`——`health_stream_timer:824/:997`、`sse_pipeline:1041`、`stream_lifecycle:140/:179`;唯一的 `.has()` 是**调试日志字符串**。且 paint 读者由 `_streamTimers` 前置门保护,故播种 session **不可能**凭空画出幽灵流。回收契约(`clearStreamSession`/`twStop`)一行未动并有断言。
+- **补集是承重的,不是装饰:** 「turn 真结束后迟到的 phase 仍必须被丢弃」——否则 `streamSessions` 永不回收、paint 读者永远读作「流存在」,那是把缺陷修成反向缺陷。NEUTER #3(删掉早退)精确咬这一条。
+- **★ 一处自纠,发在同一批:** 我的守卫调 `strip_comments(src)` 却**没传 `lang='js'`**,而该 helper 默认 `lang='shell'`、**不剥 `/* … */`**。后果是「剥注释后」的文本里仍留着整段 JSDoc——正是 charter #24 要防的形态,出现在**引用 charter #24 的那一批**里。且它咬的方向是**对正确文件误报红**:`stream_session.js` 的注释里**故意写着** `computeConvBusy`(解释为何不用它),未剥就违反守卫自己的「不得走 conv 级」断言。已改为显式 `lang='js'`,并补 `test_comment_stripping_is_bidirectional` 驱动**真** helper 双向验证(注释既不能违反否定断言、也不能满足肯定断言)。
+- **诚实边界:** ①`tests/test_frontend_stream_phase_heartbeat_live.py` 4/6 红是**既有缺陷**——把我的改动完全回滚后仍同样红,它扫的 `sse_pipeline.js` 我本批未碰(`attempt` 字段随兄弟提交 `f97fd317` 从 PHASE ingress 白名单消失),已单独开票 `pt_1e7f6539b41c4d8f` 并写明「先判定是守卫过期还是产品码回归,禁止不判定就二选一」。②纯前端改动,bundle 下次页面加载自重建、**不需重启**;但 `/api/v1/chat/conv-state` 仍 404(进程停在 10:51),故三源并集里的权威集合一源在重启前拿不到,`activeTaskId` 那一源已生效。重启时机归 owner。

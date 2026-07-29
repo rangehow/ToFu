@@ -1,5 +1,15 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·context_limits 折叠) — 同族第三张牌:`model_context_limits` 以 slot.provider_id 为键,账户/面合并后 `sankuai_anthropic::*` 学习条目全部孤儿化——含今晚 opus-5 刚从一条 1.1M 成功提示学到的 expand,重启即丢(`pt_998336d4ec734207` DONE;commit 待填,3 文件;新套件 **10/10 失败先行**,**NEUTER×3 各咬各的**(6/1/2);相邻环 **75/75**)
+
+- **★ 与 key_stats 折叠同型但有一处关键不同:这个文件被前端裸读。** `routes/config.py` 把 `model_context_limits` 原样发给 Settings UI,所以只做内存态折叠挡不住 UI 显示孤儿——`_load` 折叠后**立即持久化**;且持久化的 mutate 折的是**写时**的文件内容而非读时快照(跨进程并发 learn 不丢更新,复用 update_json_atomic 的 flock)。
+- **冲突规则:meta.ts 新者胜,平手账户赢。** 学习即证据,新证据描述的是当前上游窗口;账户是存活命名空间(新学习写向它)。
+- **★ 真实数据校准的三个形状(肉眼查过真文件才定的判据):** ①`ephemeral:local::glm5.1-FP8`——provider 段自带单冒号,**只能按第一个 `::` 切**;②裸模型键(`glm5.1`)不动;③dangling meta(无对应 limit 值的)不复活(与 `_persist` 同契约)。
+- **映射复用同一真源** `provider_face.account_namespace_map`(charter #24 无第二份面规则),结构守卫钉住「consume 而非 reimplement」。
+- **NEUTER×3 各咬各的:** 摘折叠调用 → 6 红;折叠但不持久化 → 恰 1 红(文件断言那条);ts 冲突规则反转 → 恰 2 红(两条冲突测试)。还原 `diff -q` 逐字节一致。
+- **真实冒烟(收敛性写盘,如实记录):** 真 config 加载后 `sankuai::claude-opus-5=1110553`、`sankuai::aws.claude-opus-4.7` 已折叠落盘,面键清零。边界:运行中进程(23:14 boot)仍持旧内存态,下次 `_persist` 会暂时写回孤儿,**重启永久收敛**;且当前进程对 opus-5 的窗口查找在重启前 miss 这条学习(退回静态预设)——与今晚所有批次同一「需重启」边界。
+- **验收边界:** 纯后端,**需重启**;重启当刻 opus-5 恢复使用 1.1M 学习窗口。
+
 ### 2026-07-29(续·face 药丸清点过滤面) — owner 抓出我上一批**新增了 resolve_face 的第二个消费者却没清点 dispatcher 的前置过滤面** ⇒ 用户自己关掉的模型被画成醒目琥珀「未注册(协议面缺失)」;**而我第一版只修后端,前端那条腿让整个修复在生产路径上不可达、后端套件却全绿**(`pt_db4730d10104498e` DONE;commit `dc1a73b3`,3 文件;守卫 **24/24**(7 条失败先行),**NEUTER×7 各咬各的**(3/1/1/1/1/1/1,含 2 发反向);相邻环 **88/88**;HEAD archive 独立复跑 **24/24**)
 
 - **★ owner 点名 2 个过滤面,实测是 4 个,我先清点再动手才发现第 3 个:** `_build_slots_from_providers` 在调 `resolve_face` **之前**有 4 道语义早退闸——L334 `provider.enabled=False` 整卡跳过 / **L399 `effective_keys` 为空整卡跳过(owner 与我第一轮都漏了)** / L408 `model_id` 空(端点已过滤,无缺口) / L414 `model.enabled=False`。三格实测均为「端点 `ok=False` 而 dispatcher 连 resolve 都不做」⇒ 三处假告警。**判据:清点过滤面要用脚本枚举 resolve 之前的全部 `continue`,不能按票面列的条目逐个修——票面本身可能不全。**

@@ -183,6 +183,73 @@ class TestDispatcherModelGate:
 
 
 @pytest.mark.unit
+class TestAccountVsModelQuotaScope:
+    """「402 → 整 key 停（账户语义）；429+insufficient_quota → 按模型停」
+    粒度规则守卫（owner 2026-07-29 裁定）。
+
+    The 2026-07-28 per-model contract was scoped to AMBIGUOUS
+    ``insufficient_quota`` 429 bodies — on an aggregating gateway one
+    vendor's quota-death must not poison sibling vendors routed through
+    the same key. An HTTP 402 Payment Required is a different signal
+    class: it is emitted by the gateway's OWN credit-validation layer
+    (sankuai body: ext.error.source=AIGC, stage=validation) about the
+    ACCOUNT's credit pool, so EVERY model on that key is dead and the
+    honest stop is the key-wide ``exhausted`` flag. Per-model stops there
+    just make each remaining model burn one live 402 before converging
+    (43 model entries on the sankuai account, 12 stopped, ~30 more live
+    402s queued for real users on 2026-07-29).
+    """
+
+    def _slot(self, model, key=KEY):
+        from lib.llm_dispatch.slot import Slot
+        return Slot(key_name=key, api_key='sk-test', model=model,
+                    capabilities={'text'}, provider_id=PROV)
+
+    def _healthy_sibling(self, ks, monkeypatch):
+        """Keep the last-resort guard out of scope: one healthy sibling."""
+        monkeypatch.setattr(ks, '_list_siblings',
+                            lambda pid: [PK, f'{PROV}::gwtest_key_1'])
+        ks.record_outcome(PROV, 'gwtest_key_1', success=True)
+
+    def test_402_quota_flips_keywide_stop(self, fresh_stats, monkeypatch):
+        """Account-level 402: key-wide exhausted, NO per-model noise, and
+        EVERY model on the key is blocked (not just the observing one)."""
+        ks = fresh_stats
+        self._healthy_sibling(ks, monkeypatch)
+        self._slot('kimi-k3').record_error(
+            is_rate_limit=True, is_quota_exhausted=True,
+            is_account_quota=True,
+            error='HTTP 402: 您的Credit已耗尽')
+        row = ks.get_today_stats(PROV, KEY)
+        assert row['exhausted'] is True, (
+            'HTTP 402 (account credit pool dead) must flip the KEY-WIDE '
+            'exhausted flag, not a per-model stop')
+        assert row['exhausted_models'] == {}, (
+            'an account-level stop must not litter per-model stops — '
+            'the key-wide flag already covers every model')
+        assert ks.is_key_enabled(PROV, KEY) is False
+        assert ks.is_key_enabled(PROV, KEY, model='qwen3.5-plus') is False, (
+            'a 402 account stop kills every model on the key, including '
+            'models that never saw the 402')
+
+    def test_429_quota_stays_per_model(self, fresh_stats, monkeypatch):
+        """The 2026-07-28 contract preserved: an ambiguous vendor-quota
+        signal stops ONLY the observing model (no cross-vendor poison)."""
+        ks = fresh_stats
+        self._healthy_sibling(ks, monkeypatch)
+        self._slot('qwen3.5-plus').record_error(
+            is_rate_limit=True, is_quota_exhausted=True,
+            is_account_quota=False,
+            error='insufficient_quota (aliyun)')
+        row = ks.get_today_stats(PROV, KEY)
+        assert row['exhausted'] is False
+        assert set(row['exhausted_models']) == {'qwen3.5-plus'}
+        assert ks.is_key_enabled(PROV, KEY) is True
+        assert ks.is_key_enabled(PROV, KEY, model='kimi-k3') is True, (
+            '429-quota must NOT poison sibling vendors on the same key')
+
+
+@pytest.mark.unit
 class TestDayRolloverRecovery:
     """「credit 按日赋予 ⇒ credit 停机次日自动恢复」机制守卫
     (owner requirement, 2026-07-29 sankuai_key_2 402 storm).
@@ -251,7 +318,5 @@ class TestDayRolloverRecovery:
         assert ks.get_today_stats(PROV, KEY)['override'] is False
 
 
-if __name__ == '__main__':
-    sys.exit(pytest.main([__file__, '-v']))
 if __name__ == '__main__':
     sys.exit(pytest.main([__file__, '-v']))

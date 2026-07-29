@@ -342,5 +342,117 @@ class TestDispatchStreamAbort:
         assert slot.inflight == 0
 
 
+@pytest.mark.unit
+class TestDispatchStreamQuotaScope:
+    """End-to-end at the dispatch seam: RateLimitError.status_code decides
+    the key_stats stop granularity (owner 2026-07-29: HTTP 402 = the
+    gateway ACCOUNT's credit pool is dead → key-wide stop; a 429-quota
+    body stays vendor-ambiguous → per-model stop)."""
+
+    @pytest.fixture
+    def isolated_key_stats(self, monkeypatch, tmp_path):
+        import lib.key_stats as ks
+        snapshot = {k: ks._cache[k] for k in
+                    ('day', 'stats', 'overrides', 'loaded')}
+        monkeypatch.setattr(ks, '_STATS_PATH',
+                            str(tmp_path / 'key_stats.json'))
+        monkeypatch.setattr(ks, '_list_siblings',
+                            lambda pid: ['default::k1', 'default::k2'])
+        ks._cache.update(day='', stats={}, overrides={}, loaded=False)
+        yield ks
+        ks._cache.update(snapshot)
+
+    def _run_quota_dispatch(self, monkeypatch, status_code):
+        from lib.llm_dispatch import api
+        from lib.llm_errors import RateLimitError
+
+        slot1 = _make_slot(key='k1')
+        slot2 = _make_slot(key='k2')
+        disp = _FakeDispatcher([slot1, slot2])
+        monkeypatch.setattr(api, 'get_dispatcher', lambda: disp)
+        calls = {'n': 0}
+
+        def _fake_stream(body, **kwargs):
+            calls['n'] += 1
+            if calls['n'] == 1:
+                raise RateLimitError('quota exhausted',
+                                     is_quota=True,
+                                     status_code=status_code)
+            return 'ok', 'stop', {}
+
+        import lib.llm as llm_mod
+        monkeypatch.setattr(llm_mod, 'stream_chat', _fake_stream)
+        msg, finish, usage = api.dispatch_stream(
+            [{'role': 'user', 'content': 'hi'}], log_prefix='[t]')
+        assert msg == 'ok' and calls['n'] == 2
+
+    def test_402_quota_stops_entire_key(self, monkeypatch,
+                                        isolated_key_stats):
+        ks = isolated_key_stats
+        self._run_quota_dispatch(monkeypatch, status_code=402)
+        row = ks.get_today_stats('default', 'k1')
+        assert row['exhausted'] is True, (
+            'a 402 quota error must flip the KEY-WIDE exhausted flag — '
+            'the account credit pool is dead for EVERY model on the key')
+        assert row['exhausted_models'] == {}
+        assert ks.is_key_enabled('default', 'k1') is False
+        assert ks.is_key_enabled('default', 'k1', model='qwen-plus') is False
+
+    def test_429_quota_stops_only_the_model(self, monkeypatch,
+                                            isolated_key_stats):
+        ks = isolated_key_stats
+        self._run_quota_dispatch(monkeypatch, status_code=429)
+        row = ks.get_today_stats('default', 'k1')
+        assert row['exhausted'] is False, (
+            'a 429-quota body is vendor-ambiguous and must NOT key-wide '
+            'stop the key (2026-07-28 aggregating-gateway contract)')
+        assert set(row['exhausted_models']) == {'qwen-plus'}
+        assert ks.is_key_enabled('default', 'k1', model='other-model') is True
+
+
+@pytest.mark.unit
+class TestQuotaScopeCallSites:
+    """Every RateLimitError handler in the dispatch layer must wire the
+    402-vs-429 distinction into record_error — a call site that forgets
+    `is_account_quota=` silently degrades account-level 402s back to
+    per-model convergence (the 2026-07-29 key_2 incident shape)."""
+
+    def test_every_quota_record_error_passes_account_scope(self):
+        from tests._source_scan import strip_comments
+
+        with open('lib/llm_dispatch/api.py', encoding='utf-8') as f:
+            live = strip_comments(f.read(), lang='python')
+
+        calls = []
+        idx = 0
+        while True:
+            j = live.find('record_error(', idx)
+            if j < 0:
+                break
+            depth = 0
+            k = j + len('record_error')
+            for k in range(k, len(live)):
+                ch = live[k]
+                if ch == '(':
+                    depth += 1
+                elif ch == ')':
+                    depth -= 1
+                    if depth == 0:
+                        break
+            calls.append(live[j:k + 1])
+            idx = k + 1
+
+        quota_sites = [c for c in calls if 'is_quota_exhausted=' in c]
+        assert len(quota_sites) >= 3, (
+            f'expected >=3 quota record_error call sites in api.py, found '
+            f'{len(quota_sites)} — the scan must stay non-vacuous')
+        for c in quota_sites:
+            assert 'is_account_quota=' in c, (
+                'a quota record_error call site does not pass '
+                'is_account_quota= — the 402 key-wide rule is unwired there')
+
+
+if __name__ == '__main__':
+    pytest.main([__file__, '-v'])
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

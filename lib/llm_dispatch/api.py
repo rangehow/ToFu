@@ -1481,6 +1481,7 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
             _err_str = str(e)[:200]
             slot.record_error(is_rate_limit=True,
                               is_quota_exhausted=_is_quota,
+                              is_account_quota=_is_account_quota,
                               is_gateway=_is_gateway,
                               is_shared_contention=_is_contention,
                               error=_err_str if _is_quota else '')

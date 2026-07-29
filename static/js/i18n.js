@@ -1930,6 +1930,7 @@ var _i18n = {
   'settings.tplSyncAdded': { zh: '新增 {n} 个模型', en: 'added {n} model(s)' },
   'settings.tplSyncUpdated': { zh: '更新 {n} 个模型', en: 'updated {n} model(s)' },
   'settings.tplSyncAliases': { zh: '补全 {n} 个别名', en: 'filled in {n} alias(es)' },
+  'settings.tplSyncFaces': { zh: '补全 {n} 个协议面', en: 'added {n} wire face(s)' },
   'settings.tplSyncJoin': { zh: '，', en: ', ' },
   'settings.tplSyncNoChange': { zh: '所有模型已是最新，无需更新。', en: 'All models are up to date, no update needed.' },
   'settings.tplSyncUserAliases': { zh: '\n\n⚠ 以下别名是你手动添加的（模板中没有），请确认它们在网关上确实存在；不存在的会一直返回 HTTP 400：\n  • {list}', en: '\n\n⚠ The following aliases were added by you (not in the template). Confirm they exist on the gateway; missing ones will keep returning HTTP 400:\n  • {list}' },

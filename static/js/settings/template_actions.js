@@ -290,6 +290,14 @@ async function addProviderFromTemplate(templateKey) {
   if (tpl.protocol) {
     newProv.protocol = tpl.protocol;
   }
+  // The alternate wire faces (account/face separation). MUST be carried: the
+  // template's Claude entries resolve to faces.anthropic by family, so a card
+  // created without it would have every Claude model REFUSED at slot-build
+  // time (lib/llm_dispatch/provider_face.py fails loud rather than silently
+  // dispatching them over the signature-dropping OpenAI wire).
+  if (tpl.faces && Object.keys(tpl.faces).length > 0) {
+    newProv.faces = JSON.parse(JSON.stringify(tpl.faces));
+  }
   _stgProviders.unshift(newProv);
   _renderProvidersTab();
   _renderPresetsTab(_serverConfig);
@@ -351,6 +359,29 @@ async function _syncFromTemplate(provIdx) {
   var added = 0;
   var updated = 0;
   var aliasesAdded = 0;
+
+  /* ── Provider-level wire faces ──
+   * Sync used to touch ONLY model entries, never provider-level fields. That
+   * was safe while every model shared one wire, but the template now carries
+   * Claude entries that resolve to faces.anthropic BY FAMILY. Adding those
+   * entries to a card with no faces{} would make every one of them refused at
+   * slot-build time (or, without the fail-loud guard, silently dispatched over
+   * the wire that drops thinking-block signatures).
+   *
+   * So a face the template declares and the provider lacks is ADDED. Existing
+   * faces are left alone — the user may have edited the URL, and this is a
+   * merge, not a reset. */
+  var facesAdded = 0;
+  if (tpl.faces && typeof tpl.faces === 'object') {
+    if (!p.faces || typeof p.faces !== 'object') p.faces = {};
+    for (var fname in tpl.faces) {
+      if (!Object.prototype.hasOwnProperty.call(tpl.faces, fname)) continue;
+      if (!p.faces[fname]) {
+        p.faces[fname] = JSON.parse(JSON.stringify(tpl.faces[fname]));
+        facesAdded++;
+      }
+    }
+  }
   // Aliases the user has on a model but which the template does NOT list.
   // These are usually hand-added and may be dead deployments — surface them
   // so the user can review and prune.
@@ -486,6 +517,7 @@ async function _syncFromTemplate(provIdx) {
   if (added > 0) parts.push(t('settings.tplSyncAdded', { n: added }));
   if (updated > 0) parts.push(t('settings.tplSyncUpdated', { n: updated }));
   if (aliasesAdded > 0) parts.push(t('settings.tplSyncAliases', { n: aliasesAdded }));
+  if (facesAdded > 0) parts.push(t('settings.tplSyncFaces', { n: facesAdded }));
   msg += parts.length ? parts.join(t('settings.tplSyncJoin')) : t('settings.tplSyncNoChange');
   if (userOnlyAliases.length > 0) {
     msg += t('settings.tplSyncUserAliases', { list: userOnlyAliases.join('\n  • ') });

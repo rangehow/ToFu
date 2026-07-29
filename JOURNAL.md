@@ -1,5 +1,27 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·扫码显示) — 后端二维码在前端可见:`run_command` 终端二维码「不是丑,是结构上不可扫」根因落地 + `ask_human` 扫码登录闸(新增 `lib/qr.py` 460L;新套件 **41 + 7**,**NEUTER×7 全咬**(其中**一发首版空转,是我自己的断言假**),干净 HEAD worktree **50/50**;wire-parity **2/2 无需重生基线**)
+
+- **需求:** owner「后端生成二维码,前端怎么看见?比如要我扫码登录某个东西」+ 追加「希望 `run command` 的结果里也能显示二维码」。
+- **★ 根因不是美观问题(这条决定了整个方案形态):** 终端二维码画在 `.ptool-cmd-output` 里,而该面板 `static/styles.css:7562` 是 `white-space: pre-wrap` + **`word-break: break-all`** —— 模块行会在任意列被重新折行,二维码的二维栅格**当场被摧毁**;且该面板默认 `display:none`(要点「Show output」才展开)。**所以再怎么调样式都救不了一个「必须用手机对着扫」的东西,它必须变成真位图。** 落点因此是「重建 bitmap」,不是「把字符画渲染得好看点」。
+- **★ 偏极性不能假设,必须由 QR 标准自己裁决(实测两种工具方向相反):** `qrcode.print_ascii` 用 cp437 `[255=NBSP, 223=▀, 220=▄, 219=█]`、`pos = top + (bottom<<1)`,**块字符=暗模块**;而 `print_ascii(tty=True)/invert=True` 与多数 Go/Node QR CLI 是**反色**(块字符=亮模块)。猜错方向产出的是**照片负片,任何扫描器都读不出**。故实现把每种可能读法都构造出来,再用**三个 7×7 finder 角标**验证,只有真过标准的读法才输出——自纠而非「按第一个测过的 CLI 调参」。
+- **★ 验收唯一标准是「手机能读」,所以断言必须真解码:** 用 `cv2.QRCodeDetector`(本机 cv2 4.13 实测可用)把交付的 PNG **解码回原始字符串比对**。**11 种终端风格 × 3 种尺寸(21/33/49 模块)= 33 组全部解码成功**;负样本 8 类(普通日志/box-drawing/进度条/块表格/markdown `###`/阴影块/spinner/空)**全部 0 误报**。
+- **过程自纠三处,全是我自己的假设被实测推翻:**
+  ① 我为支持 `##` 风格把 art-glyph 闸放宽后,**反而弄坏了原本可用的 `print_ascii` 与反色**——因为我给 `_trim` 加了句「finder 外沿是均匀的,所以剥完要退回一格」,**这是错的**:QR 最外行横跨两个角标 + 中间的浅色分隔带,**永不均匀**;退一格把 29 模块撑成 31 直接判废。
+  ② `_candidate_blocks` 原按「art 字符出现的列」裁窗口,但 `print_ascii` 里**暗模块恰恰是那个空白字符(NBSP)**,于是裁掉了真模块(29 模块的码只剩 25 列)。改为不裁列、交给 `_trim` 剥任意颜色的均匀边框——缩进与日志前缀顺带一并解决。
+  ③ 我第一版「顺序守卫」**是空转的**:`event['results']` 与 round 持有**同一个 list 对象**,所以把挂载挪到 `append_event` 之后断言照样过(实测 NEUTER 4 首发全绿)。改为在 emit 时刻**深拷贝快照**再断言——因为真正会坏的消费者是**会复制/序列化**的 SSE sink。重写后该发真咬。
+- **落点(两条通道 + 一个咽喉):**
+  | 通道 | 机制 | 为什么这样 |
+  |---|---|---|
+  | `run_command` 结果显示 | `_finalize_tool_round` 唯一咽喉扫 `meta.output` → 挂 `qrImages` | 三个 run_command 建 meta 处(本地/远程/project)**一次覆盖**,不写三份会漂的实现 |
+  | `ask_human` 扫码登录 | `qr_login_question()` 落盘 PNG + 返回 `![](/api/images/x.png)` markdown | 问题文本走 `renderMarkdown`(`tool_rounds.js:347`),阻塞等人期间图就在卡片里 |
+- **★ 扫码登录**不能**内联 base64(实测两条硬理由):** ①`autoTranslate` 开启时 `_autoTranslateHumanGuidance` 会把**整段问题文本**发去翻译再替换显示,1.5k 字符 base64 会被当正文送进 LLM 嚼一遍并改坏 ⇒ 扫不出;②`renderMarkdown` 会给 `/api/...` 图片自动补 `BASE_PATH`,反代/云 IDE 前缀下才加载得到,手写 `<img>` 没这个待遇。
+- **体积实测(这条支持「QR 可以内联」而截图不行):** QR PNG data URI **0.8–2.2 KB**,**比它替换掉的 ASCII 字符画还小**(1710→770 / 6554→2238);SVG 形态大 13 倍故只出 PNG。因此不属于 `test_binary_blob_text_stream_guard` 防的多 MB 那一类,`idb-cache.js` 的 `imageDataUris[].uri` 剥离也不会碰 `qrImages`(独立字段),刷新后仍可扫。
+- **依赖真缺口(顺手补):** `qrcode` **本机装着但 requirements.txt 从未声明**——干净环境会**静默降级**(生成返回 `''`),而对一个登录提示来说那看起来像功能坏了而不是缺可选件。已声明 `qrcode>=7.4` 并标注:检测半边只需 Pillow(已声明),生成半边缺包时 log + 返回 `''` 不崩(实测)。
+- **wire-parity 零回归:** 无 QR 时 markdown 逐字节不变(`${qrStripHtml}` 为空串),`test_frontend_tool_rounds_wire_parity` **2/2 绿,无需重生基线**。
+- **★ 共享 HEAD 事故(第三方视角实录,两起):** 我的 8 个文件被**两个不同的兄弟提交**连带带走——`4c3ad19a`(字标)吃掉我的 CSS,`6a5dec8d`(JOURNAL)吃掉其余 7 个。**我的计数断言正确 abort 了**(staged=7≠8)并因此定位到事故;兄弟随后自报「计数读到 8 仍继续」。内容 HEAD 上完整且干净 worktree 50/50 绿,**不做 history rewrite**(风险更大),仅在此留档。**另纠正兄弟一处误判:`tests/_qr_login_capture.py` 不是我的**(先前提交 `31f3519f`,当前正被第三个会话编辑),若按其建议「归我提交」会连带第三方在改的文件。
+- **验收边界(诚实分账):** ①**纯后端 + 前端静态**,运行中进程不带,`run_command` 通道需**重启**才对新作业生效;前端改动需**刷新**。②`ask_human` 扫码闸给的是 `qr_login_question()` 这块**积木**,「扫完自动继续」需调用方起后台线程轮询上游状态后调 `resolve_human_guidance()`——本批未内建任何具体站点的登录轮询。③二维码**时效与清理未做**:落盘 PNG 无过期回收,`uploads/images` 会累积;登录 URL 带 token 等同凭证,`uuid4` 文件名只是「难猜」不是「有鉴权」,高敏感场景应另走带会话校验的路由。这三点均**未实现**,不是已完成项。
+
 ### 2026-07-29(续·logo 收官) — 家族 epic 以「前提蒸发」关闭:主 logo 回滚原版后 VTracer 家族与主 logo 工艺**重新自洽**,统一不再必要;像素精修版 11 枚留盘可一言重启;另实测主 logo 三处引用无 cache-bust 是真缺口
 
 - **收官逻辑:** 家族 epic(`pt_651bd5a3078e450d`)的前提是「主 logo 已精确几何化 → 两套工艺不齐」。owner 对家族票答「退回修改」后我按**像素精修**路线改完(保留现行血统与道具、严格 32 网格、22px 道具可辨,生成器 `gen_family_pixel.py`,in-situ 闸图 `_gen/logo-redesign/family-pixel-gate.png`)——但复盘确认:A2 回滚(`c69c7aec`)后,家族与主 logo **同为 VTracer 工艺,重新一致**,epic 的统一目标由「回滚主 logo」这一事件达成,上线新家族反而再次引入两套工艺。故**关闭而非上线**;11 枚像素精修稿 + 闸图全部留在 `_gen/logo-redesign/family-pixel/`,owner 一言可重启。

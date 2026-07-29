@@ -29,9 +29,9 @@ All three are structural traps, not typos, so this script nails them down:
     measurement (same-instant round-1), not a missing value.
 
 USAGE
-    python3 debug/cache_waste_report.py                  # all rotated logs
-    python3 debug/cache_waste_report.py --glob 'logs/app.log'
-    python3 debug/cache_waste_report.py --min-write 20000 --json
+    python3 scripts/cache_waste_report.py                  # all rotated logs
+    python3 scripts/cache_waste_report.py --glob 'logs/app.log'
+    python3 scripts/cache_waste_report.py --min-write 20000 --json
 
 The input is the ``[CacheRoundRecord]`` JSON line emitted once per LLM round by
 lib/tasks_pkg/cache_tracking/_detect.py, which stamps its bucket via the
@@ -68,10 +68,25 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 RECORD_MARKER = '[CacheRoundRecord]'
 
-# Buckets that are NOT recoverable waste. Kept as a named set (not an inline
-# literal at the one call site) because every consumer of this report has to
-# agree on what "recoverable" excludes.
-NON_WASTE_BUCKETS = frozenset({'ttl_expiry'})
+# Buckets that are NOT recoverable waste.
+#
+# ★ The name is IMPORTED from the production taxonomy, never retyped. A string
+#   literal here keeps matching the OLD name after a rename in _detect.py,
+#   silently moving TTL expiry back into the recoverable total — the exact
+#   "the guard checked my own constant, not the real one" failure this report
+#   exists to prevent. Measured: with the literal in place, renaming the
+#   production constant put 900 CNY of a 1M-token TTL fixture back into
+#   recoverable and nothing noticed.
+try:
+    from lib.tasks_pkg.cache_tracking._detect import BUCKET_TTL_EXPIRY
+except Exception as _imp_err:  # pragma: no cover - fail loud, never guess
+    raise SystemExit(
+        'cannot import BUCKET_TTL_EXPIRY from the production taxonomy '
+        f'({_imp_err}). Refusing to fall back to a hardcoded bucket name: a '
+        'stale literal would silently misclassify TTL expiry as recoverable '
+        'waste.')
+
+NON_WASTE_BUCKETS = frozenset({BUCKET_TTL_EXPIRY})
 
 COLD_START_LABEL = 'cold_start (gap=0, no predecessor)'
 

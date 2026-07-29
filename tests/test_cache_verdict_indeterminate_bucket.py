@@ -1,40 +1,40 @@
-"""A run of consecutive cache misses must not collapse into one counted miss.
+"""A zero-read rebuild must not be filed alongside genuine cache hits.
 
 WHY THIS EXISTS
 ===============
 ``no_break`` used to mean two different things: "the cache was reused fine"
 AND "the detector reached no conclusion". They are not the same claim, and
-conflating them produced a systematic UNDER-count of exactly the failure this
-telemetry exists to size.
+conflating them let real spend hide behind a healthy-looking bucket.
 
-Mechanism: every break gate needs an ESTABLISHED predecessor. ``no_reuse``
-requires ``prev_prefix_tokens >= _MIN_NO_REUSE_TOKENS``; ``api_break`` requires
-``prev_cache_read > _MIN_CACHE_MISS_TOKENS``. When the PREVIOUS round was
-itself a zero-read miss, both gates go unreachable, no verdict is produced, and
-the round landed in ``no_break`` — indistinguishable from a healthy cache hit.
+MEASURED MECHANISM: all three predicates in ``_classify_break`` carry
+``and not was_compaction``, so a COMPACTED round with a large zero-read write
+is structurally exempt from every gate and falls through to the no-break path.
+The exemption is correct for the detector's RETURN value — a compaction
+legitimately rebuilds its prefix and must not be blamed on the gateway — but
+wrong for the LEDGER, where those tokens were really paid for.
 
-So in a RUN of consecutive gateway misses only the FIRST round was ever
-counted. The under-count grew with the severity of the outage: five consecutive
-failures were logged as one. On real traffic this hid 25 rounds / ~11M rebuilt
-tokens whose predecessor was itself a miss — 12 of them directly after a round
-already stamped ``upstream_identical``.
+NOT THE MECHANISM (asserted false below, so it cannot be re-adopted): an
+earlier version of this fix claimed a zero-read PREDECESSOR starved the gates,
+making a run of consecutive misses collapse to one counted miss.
+``prev_prefix_tokens`` is prev_read + prev_write, so a miss predecessor with a
+large write still clears ``no_reuse``'s threshold — verified directly against
+``_classify_break``, which returns ``no_reuse=True`` on exactly that shape.
 
-The fix is at the LANDING SITE (how an unconcluded round is named), NOT in the
-detection thresholds. Loosening ``no_reuse``'s prefix-token gate would make a
-genuinely cold prefix report as a miss — a false positive in place of a false
-negative.
+The fix is at the LANDING SITE (how an unconcluded round is NAMED), NOT in the
+detection thresholds. Loosening a gate would make a genuinely cold or
+legitimately-rebuilt prefix report as a miss — a false positive traded for a
+false negative.
 
 GUARDS
-  * The second round of a consecutive-miss run is bucketed ``indeterminate``
-    and is therefore counted, not swallowed.
+  * A compacted zero-read rebuild is bucketed ``indeterminate`` and counted.
   * COMPLEMENT — a genuine cache HIT is never dragged in by the new rule.
   * COMPLEMENT — a first round (no predecessor) stays a cold start, not an
     unknown: it had nothing to read back.
   * COMPLEMENT — a small write is not an indeterminate miss.
+  * The predicate is evaluated by IMPORTING the production terms, never by a
+    hand-copied mirror — a mirror drifts silently and passes anyway.
   * The detector's RETURN value is unchanged (``None``). Only the recorded
-    bucket moves — an unconcluded round must not begin claiming a confirmed
-    break to its callers, which would change product behaviour rather than
-    telemetry.
+    bucket moves — telemetry changes, product behaviour does not.
 """
 
 from __future__ import annotations
@@ -96,10 +96,20 @@ class TestGateStarvedPredicate:
     """
 
     @staticmethod
-    def _starved(*, call_count, cache_read, cache_write, min_tokens=20000):
+    def _starved(*, call_count, cache_read, cache_write):
+        """Evaluate the landing-site predicate using the PRODUCTION threshold.
+
+        The shape is mirrored here (the predicate lives inline inside
+        ``detect_cache_break`` and is not separately importable), but the
+        threshold is imported so a change to ``_MIN_NO_REUSE_TOKENS`` cannot
+        leave this guard asserting against a stale number. The end-to-end
+        class below drives the real function, so the mirror is a convenience
+        for the boundary cases, never the only evidence.
+        """
+        from lib.tasks_pkg.cache_tracking._detect import _MIN_NO_REUSE_TOKENS
         return (call_count > 1
                 and cache_read == 0
-                and cache_write >= min_tokens)
+                and cache_write >= _MIN_NO_REUSE_TOKENS)
 
     def test_a_miss_predecessor_does_NOT_starve_the_gates(self):
         """Pins the disproved theory against the real classifier."""

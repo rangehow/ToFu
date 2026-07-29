@@ -1,4 +1,4 @@
-"""Guards for debug/cache_waste_report.py — the reproducible cache-waste table.
+"""Guards for scripts/cache_waste_report.py — the reproducible cache-waste table.
 
 WHY THIS EXISTS
 ===============
@@ -146,6 +146,48 @@ class TestRatesComeFromTheProduct:
         """A silent fallback rate is how a 27x error survives review."""
         with pytest.raises(SystemExit):
             cwr.derive_rates('definitely-not-a-real-model-xyz')
+
+
+class TestBucketNamesComeFromProduction:
+    """The report must not retype names the detector owns.
+
+    This report reads the ``bucket`` field that ``classify_verdict`` stamps, so
+    every bucket name it special-cases is a contract with production code. A
+    string LITERAL satisfies a test written against the same literal while
+    silently disagreeing with the real taxonomy after a rename — the failure
+    mode where a guard verifies its own constant instead of the shipped one.
+    Measured before this was fixed: renaming the production constant put 900
+    CNY of a 1M-token TTL fixture back into recoverable and nothing noticed.
+    """
+
+    def test_non_waste_set_is_the_production_constant(self):
+        from lib.tasks_pkg.cache_tracking._detect import BUCKET_TTL_EXPIRY
+        assert BUCKET_TTL_EXPIRY in cwr.NON_WASTE_BUCKETS, (
+            'the report excludes TTL expiry from recoverable waste using a '
+            'name the detector no longer stamps')
+
+    def test_a_ttl_round_is_excluded_using_the_production_name(self):
+        """End-to-end with the REAL constant as the record's bucket — catches a
+        rename even if a stale literal is left in the set alongside it."""
+        from lib.tasks_pkg.cache_tracking._detect import BUCKET_TTL_EXPIRY
+        rep = cwr.build_report(
+            [_rec(BUCKET_TTL_EXPIRY, call=9, gap=400.0, write=1_000_000)],
+            min_write=20000, w_rate=0.001, r_rate=0.0001)
+        assert rep['true_recoverable_cny'] == 0
+        assert rep['rows'][0]['is_waste'] is False
+
+    def test_an_indeterminate_round_counts_as_waste(self):
+        """COMPLEMENT — "we could not tell" is NOT a reason to drop the spend.
+
+        Driven by the production constant so that if `indeterminate` were ever
+        added to the non-waste set, real unexplained cost would vanish from the
+        total without a failing test."""
+        from lib.tasks_pkg.cache_tracking._detect import BUCKET_INDETERMINATE
+        rep = cwr.build_report(
+            [_rec(BUCKET_INDETERMINATE, call=9, gap=30.0, write=1_000_000)],
+            min_write=20000, w_rate=0.001, r_rate=0.0001)
+        assert rep['true_recoverable_cny'] > 0
+        assert rep['rows'][0]['is_waste'] is True
 
 
 class TestMinWriteFilter:

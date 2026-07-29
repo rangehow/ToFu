@@ -18,7 +18,23 @@ prefix is re-billed as `cache_creation`.
 We are not asking you to accept a diagnosis. We are reporting a reproducible
 observation with per-request trace IDs so it can be checked against your side.
 
-**Fleet scale (all retained logs, 47,344 instrumented rounds):**
+**Fleet scale.**
+
+> **Measurement window.** The figures below are a SNAPSHOT taken at 47,344
+> instrumented rounds. The log is live and still growing, so re-running
+> `python3 scripts/cache_waste_report.py` will report larger absolute totals;
+> the SHAPE is what matters and it is stable (a re-run at 47,891 rounds gave
+> `upstream_identical` 86.1 % with the same 38.5 s median and 3.9 % under
+> 18 s). Nothing here needs re-measuring before you read it — but if a number
+> in this report and a number we quote in conversation differ slightly, this
+> is why, and the command above is the arbiter.
+>
+> Two buckets in the table are labelled from records stamped BEFORE the
+> classifier fixes of 2026-07-29: `ttl_expiry` reads empty and a group of
+> unclassifiable rounds still reads `no_break` rather than `indeterminate`.
+> Buckets are stamped at write time (that is what keeps offline and live
+> counts from drifting), so historical rows keep their original label. Neither
+> affects the `upstream_identical` claim, which is the subject of this report.
 
 Of 2,313 rounds that wrote >20k cache tokens and read back **zero**:
 

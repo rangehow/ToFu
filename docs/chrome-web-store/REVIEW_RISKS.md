@@ -45,11 +45,15 @@ change in `background.js` (the `fullPage=false` path already exists).
 
 **Policy:** request the narrowest permissions that work.
 
-**Mitigation already applied:** `manifest.store.json` removes the 6 permissions
-the code never uses (`webNavigation`, `clipboardRead`, `clipboardWrite`,
-`declarativeNetRequest`, `management`, `offscreen`). `management` in particular
-is a classic rejection trigger, and it was pure dead weight. Each remaining
-permission has a concrete, code-backed justification.
+**Mitigation already applied:** `manifest.store.json` drops every permission
+the code cannot justify — `webNavigation`, `clipboardRead`, `clipboardWrite`,
+`declarativeNetRequest`, `management`, `offscreen` (all zero-call), plus
+`activeTab` (which is gesture-granted and can never be granted here, since
+every command arrives from the server long-poll rather than a user click).
+`management` in particular is a classic rejection trigger, and it was pure
+dead weight. Each remaining permission has a concrete, code-backed
+justification — see the REMOVED table in `PERMISSIONS_JUSTIFICATION.md`, which
+`tests/test_chrome_store_manifest_parity.py` keeps in step with the manifest.
 
 `<all_urls>` + `cookies` + `history` + `bookmarks` together still constitute a
 broad request. The defense is the genuinely general-purpose single purpose

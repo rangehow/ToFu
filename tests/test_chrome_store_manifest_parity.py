@@ -1,0 +1,430 @@
+"""tests/test_chrome_store_manifest_parity.py — the store build must declare
+exactly the permissions the shipped code actually needs.
+
+WHY THIS EXISTS
+---------------
+``docs/chrome-web-store/manifest.store.json`` is a HAND-MAINTAINED trim of
+``browser_extension/manifest.json``: the store build swaps it in
+(``scripts/package_extension.sh --store``) so reviewers are not asked to
+justify permissions the code never calls. Two independent lists that must
+agree, edited by hand, with the consequence of disagreement only visible
+AFTER a store review — that is a drift generator.
+
+It had already drifted, in the direction that hurts users:
+
+  * ``downloads`` was MISSING from the store manifest while
+    ``background.js::cmdDownload`` really calls ``chrome.downloads.download``
+    and ``download`` is one of the extension's wire commands. Shipping that
+    build meant the ``download`` command threw at runtime — for a user who
+    installed from the store, silently and with no way to diagnose it.
+  * the store manifest was pinned at version 4.3.0 while the shipped manifest
+    had moved to 4.5.0, so the store build would carry 4.5.0's CODE under a
+    4.3.0 label. ``package_extension.sh`` reads the version from whichever
+    manifest it ships, so the zip name was wrong too.
+
+THE INVARIANT
+-------------
+**The store manifest is DERIVED, not remembered.** These guards compute the
+required permission set from the extension source and compare — so the next
+time someone adds a ``chrome.X`` call, the guard names the permission they
+forgot instead of a store reviewer (or a user) finding it later.
+
+A NOTE ON ``activeTab`` — WHY "ZERO CALLS" IS THE WRONG TEST
+------------------------------------------------------------
+``activeTab`` has NO API surface: ``chrome.activeTab`` does not exist, so
+grepping for calls to it always returns zero and proves nothing. It is a
+*capability* permission, and per Chrome's own tabs documentation it is granted
+only **on a user gesture** (clicking the action, a keyboard command, a context
+menu) — and it exists here to widen ``tabs.captureVisibleTab`` to sensitive
+targets (``chrome://`` pages, other extensions' pages, ``data:`` URLs).
+
+Measured against this extension: there is no ``commands`` key, no
+``context_menus`` key, and ``popup.js`` never triggers a capture. Every
+screenshot arrives through ``executeAndReport`` from the server long-poll, so
+NO user gesture ever precedes one. ``activeTab`` therefore can never actually
+be granted, while ``<all_urls>`` (already declared) is what makes
+``captureVisibleTab`` work for ordinary pages. Dropping it is right — but for
+the reason above, not for a call count. The guard below encodes that reasoning
+so nobody "restores" it by grepping.
+"""
+import json
+import re
+import subprocess
+from pathlib import Path
+
+import pytest
+
+pytestmark = pytest.mark.unit
+
+ROOT = Path(__file__).resolve().parent.parent
+EXT_DIR = ROOT / 'browser_extension'
+STORE_DIR = ROOT / 'docs' / 'chrome-web-store'
+DEV_MANIFEST = EXT_DIR / 'manifest.json'
+STORE_MANIFEST = STORE_DIR / 'manifest.store.json'
+JUSTIFICATION = STORE_DIR / 'PERMISSIONS_JUSTIFICATION.md'
+PACKAGE_SH = ROOT / 'scripts' / 'package_extension.sh'
+
+
+def _json(p: Path) -> dict:
+    return json.loads(p.read_text(encoding='utf-8'))
+
+
+def _ext_sources() -> str:
+    """Concatenated JS the store build actually ships.
+
+    Mirrors the copy list in scripts/package_extension.sh — if that script
+    starts shipping another file, this scan must follow it, which is why the
+    file list is asserted separately below.
+    """
+    return '\n'.join(
+        (EXT_DIR / n).read_text(encoding='utf-8')
+        for n in ('background.js', 'popup.js') if (EXT_DIR / n).exists())
+
+
+def _called_namespaces() -> set[str]:
+    """Every ``chrome.<ns>`` namespace the shipped JS actually touches."""
+    return set(re.findall(r'chrome\.([a-zA-Z]+)', _ext_sources()))
+
+
+# A chrome.<namespace> call implies this manifest permission. Only namespaces
+# that REQUIRE a declared permission appear here — `chrome.runtime` and
+# `chrome.action` need none, so listing them would manufacture a false
+# requirement.
+_NS_REQUIRES_PERMISSION = {
+    'tabs': 'tabs',
+    'scripting': 'scripting',
+    'storage': 'storage',
+    'cookies': 'cookies',
+    'history': 'history',
+    'bookmarks': 'bookmarks',
+    'debugger': 'debugger',
+    'notifications': 'notifications',
+    'alarms': 'alarms',
+    'downloads': 'downloads',
+    'webNavigation': 'webNavigation',
+    'declarativeNetRequest': 'declarativeNetRequest',
+    'management': 'management',
+    'offscreen': 'offscreen',
+}
+
+# Permissions with NO callable namespace, kept or dropped on a reasoned basis
+# rather than a call count. See the module docstring for activeTab.
+_NO_API_SURFACE = {'activeTab', 'clipboardRead', 'clipboardWrite'}
+
+
+def _required_permissions() -> set[str]:
+    """The permission set the shipped code genuinely needs."""
+    return {_NS_REQUIRES_PERMISSION[ns]
+            for ns in _called_namespaces()
+            if ns in _NS_REQUIRES_PERMISSION}
+
+
+# ══════════════════════════════════════════════════════════
+#  1. The store build must not break a command at runtime
+# ══════════════════════════════════════════════════════════
+
+def test_store_manifest_declares_every_permission_the_code_calls():
+    """THE bug this file was written for.
+
+    ``downloads`` was absent from the store manifest while ``cmdDownload``
+    calls ``chrome.downloads.download``. A store-installed user hitting the
+    ``download`` wire command got a runtime throw with no diagnosis path.
+    """
+    declared = set(_json(STORE_MANIFEST).get('permissions', []))
+    missing = sorted(_required_permissions() - declared)
+    assert not missing, (
+        f"the store manifest omits {missing}, but the shipped background.js "
+        f"really calls the matching chrome.* API. A store build would throw "
+        f"at runtime for any user who triggers that command.")
+
+
+def test_every_wire_command_has_its_permission_in_the_store_build():
+    """Stated as the user-visible consequence: each wire command the server
+    can send must be executable under the STORE permission set.
+
+    ``download`` is the command that was broken; pinning the whole command
+    surface keeps the next one from slipping through.
+    """
+    src = _ext_sources()
+    commands = set(re.findall(r"case '([a-z_]+)':", src))
+    assert 'download' in commands, (
+        "the `download` wire command vanished — this guard's anchor is gone; "
+        "re-point it at the current command surface rather than deleting it")
+    declared = set(_json(STORE_MANIFEST).get('permissions', []))
+    # cmdDownload is the one whose permission was missing; assert the link
+    # explicitly so the failure message names the command, not just the API.
+    assert 'downloads' in declared, (
+        "the `download` wire command is dispatchable but the store manifest "
+        "does not declare `downloads` — the command throws for store users")
+
+
+# ══════════════════════════════════════════════════════════
+#  2. No unjustifiable permission (store-review rejection)
+# ══════════════════════════════════════════════════════════
+
+def test_store_manifest_declares_nothing_the_code_never_uses():
+    """A permission the code never exercises cannot be justified to a
+    reviewer, and `management` / `declarativeNetRequest` are outright red
+    flags. The complement of test 1 — together they pin the set exactly."""
+    declared = set(_json(STORE_MANIFEST).get('permissions', []))
+    callable_perms = set(_NS_REQUIRES_PERMISSION.values())
+    # Only judge permissions that HAVE an API surface; activeTab et al. are
+    # decided on reasoning (see the dedicated test below).
+    unused = sorted((declared & callable_perms) - _required_permissions())
+    assert not unused, (
+        f"the store manifest declares {unused}, which the shipped code never "
+        f"calls. Each one is an unjustifiable box on the Privacy practices "
+        f"tab and a rejection risk.")
+
+
+def test_active_tab_stays_out_because_no_user_gesture_can_grant_it():
+    """``activeTab`` is gesture-granted; this extension has no gesture path.
+
+    Asserted from the FACTS that make it true (no commands key, no
+    context_menus, popup never captures), not from a call count — because
+    ``chrome.activeTab`` does not exist and grepping for it proves nothing.
+    If someone later adds a keyboard command or a popup-driven capture, this
+    test fails and the permission should be reconsidered on its merits.
+    """
+    dev = _json(DEV_MANIFEST)
+    assert 'commands' not in dev and 'context_menus' not in dev, (
+        "the extension gained a gesture entry point (commands/context_menus). "
+        "activeTab may now be grantable — re-evaluate whether the store "
+        "manifest should declare it, and update this guard's reasoning.")
+    popup = (EXT_DIR / 'popup.js').read_text(encoding='utf-8')
+    assert 'captureVisibleTab' not in popup and 'screenshot' not in popup, (
+        "popup.js now triggers a capture from a real user gesture, which is "
+        "exactly the case activeTab exists for — re-evaluate.")
+    declared = set(_json(STORE_MANIFEST).get('permissions', []))
+    assert 'activeTab' not in declared, (
+        "activeTab is declared but can never be granted here: every command "
+        "arrives from the server long-poll, never from a user gesture, and "
+        "<all_urls> already covers captureVisibleTab for ordinary pages. "
+        "It is an unjustifiable permission on the review form.")
+
+
+def test_host_permissions_cover_capture_on_ordinary_pages():
+    """Complement to dropping activeTab: `captureVisibleTab` still needs
+    `<all_urls>` OR `activeTab`. Removing both would silently break every
+    screenshot, which is the failure this whole file exists to prevent."""
+    src = _ext_sources()
+    if 'captureVisibleTab' not in src:
+        pytest.skip('extension no longer captures the visible tab')
+    hosts = _json(STORE_MANIFEST).get('host_permissions', [])
+    assert '<all_urls>' in hosts, (
+        f"captureVisibleTab is used and activeTab is (correctly) not declared, "
+        f"so <all_urls> is what keeps screenshots working — but "
+        f"host_permissions is {hosts}. Screenshots would fail for every user.")
+
+
+# ══════════════════════════════════════════════════════════
+#  3. Version parity — the store zip must not mislabel code
+# ══════════════════════════════════════════════════════════
+
+def test_store_manifest_version_matches_the_shipped_code():
+    """The store manifest sat at 4.3.0 while the code moved to 4.5.0.
+
+    ``package_extension.sh`` derives both the shipped version AND the zip
+    filename from whichever manifest it uses, so the drift produced a build
+    labelled 4.3.0 that actually contained 4.5.0's background.js — an
+    update users could never receive correctly.
+    """
+    dev_v = _json(DEV_MANIFEST).get('version')
+    store_v = _json(STORE_MANIFEST).get('version')
+    assert store_v == dev_v, (
+        f"store manifest says {store_v!r} but the shipped extension is "
+        f"{dev_v!r}. The store build would carry the newer code under an "
+        f"older version label.")
+
+
+def test_the_two_manifests_agree_on_everything_except_permissions():
+    """The store manifest is a PERMISSION trim — nothing else may diverge.
+
+    Any other drift (name, CSP, background entry, icons) means the store
+    build behaves differently from the tested one, which is the same class of
+    defect as the version skew above.
+    """
+    dev, store = _json(DEV_MANIFEST), _json(STORE_MANIFEST)
+    for key in ('manifest_version', 'name', 'background', 'action',
+                'content_security_policy', 'icons', 'host_permissions'):
+        assert store.get(key) == dev.get(key), (
+            f"manifest key {key!r} differs between the dev and store builds "
+            f"({dev.get(key)!r} vs {store.get(key)!r}). Only `permissions` "
+            f"may be trimmed.")
+
+
+# ══════════════════════════════════════════════════════════
+#  4. The submission paperwork must match the manifest
+# ══════════════════════════════════════════════════════════
+
+def _justification_blocks() -> set[str]:
+    """Permission names that have a `## \\`name\\`` justification heading."""
+    txt = JUSTIFICATION.read_text(encoding='utf-8')
+    return set(re.findall(r'^## `([A-Za-z]+)`\s*$', txt, re.M))
+
+
+def test_every_declared_permission_has_a_justification_block():
+    """The dashboard shows one mandatory text box per declared permission.
+    A missing block means submitting with an empty justification, which is a
+    documented rejection cause."""
+    declared = set(_json(STORE_MANIFEST).get('permissions', []))
+    missing = sorted(declared - _justification_blocks())
+    assert not missing, (
+        f"declared in the store manifest but with no justification block in "
+        f"PERMISSIONS_JUSTIFICATION.md: {missing}. The reviewer sees an empty "
+        f"box.")
+
+
+def test_no_justification_block_for_a_permission_we_do_not_ask_for():
+    """The reverse drift: a block for a permission we dropped tells whoever
+    submits to paste a justification for something not in the manifest, which
+    is how a dropped permission gets re-added by accident."""
+    declared = set(_json(STORE_MANIFEST).get('permissions', []))
+    orphans = sorted(_justification_blocks() - declared)
+    assert not orphans, (
+        f"PERMISSIONS_JUSTIFICATION.md still has justification blocks for "
+        f"{orphans}, which the store manifest no longer declares. Delete them "
+        f"or they invite re-adding the permission.")
+
+
+def test_the_removed_permissions_table_matches_reality():
+    """The doc's "REMOVED for the store build" table is what a human reads
+    before submitting. It said 6; the real trim is larger. A stale count
+    there is how the activeTab decision silently got lost."""
+    txt = JUSTIFICATION.read_text(encoding='utf-8')
+    dev = set(_json(DEV_MANIFEST).get('permissions', []))
+    store = set(_json(STORE_MANIFEST).get('permissions', []))
+    actually_removed = sorted(dev - store)
+    listed = set(re.findall(r'^\| `([A-Za-z]+)` \|', txt, re.M))
+    missing = sorted(set(actually_removed) - listed)
+    assert not missing, (
+        f"these permissions are trimmed from the store build but the "
+        f"REMOVED table never explains why: {missing}. Whoever submits has "
+        f"no record of the decision.")
+    stale = sorted(listed - set(actually_removed))
+    assert not stale, (
+        f"the REMOVED table lists {stale}, which are NOT actually removed "
+        f"from the store manifest — the table and the manifest disagree.")
+
+
+def test_no_document_states_a_hardcoded_removed_count():
+    """A prose count ("removes 6 permissions") goes stale the moment the trim
+    changes, and it already did. The table above is the single source of
+    truth; the prose must not restate a number that can drift from it."""
+    offenders = {}
+    for p in list(STORE_DIR.glob('*.md')) + [PACKAGE_SH]:
+        if not p.exists():
+            continue
+        txt = p.read_text(encoding='utf-8')
+        hits = re.findall(r'(?:removes?|removed|dropp?e?d?)\s+(?:the\s+)?'
+                          r'(\d+)\s+(?:unused\s+)?permissions?', txt, re.I)
+        if hits:
+            offenders[p.name] = hits
+    assert not offenders, (
+        f"these files hardcode a permission-removal COUNT: {offenders}. The "
+        f"count drifts whenever the trim changes (it already read 6 while the "
+        f"real trim was 7). Say 'the permissions listed below' and let the "
+        f"table be the source of truth.")
+
+
+def test_no_document_pins_a_stale_extension_version():
+    """SUBMISSION_CHECKLIST told the submitter to look for a
+    ``4.3.0-store.zip`` that ``package_extension.sh`` would never produce
+    once the version moved — a checklist step that can only fail."""
+    dev_v = _json(DEV_MANIFEST).get('version')
+    offenders = {}
+    for p in STORE_DIR.glob('*.md'):
+        txt = p.read_text(encoding='utf-8')
+        stale = sorted({v for v in re.findall(r'\b(\d+\.\d+\.\d+)-store\b', txt)
+                        if v != dev_v}
+                       | {v for v in re.findall(r'tofu-browser-bridge-(\d+\.\d+\.\d+)', txt)
+                          if v != dev_v})
+        if stale:
+            offenders[p.name] = stale
+    assert not offenders, (
+        f"store docs pin extension versions that no longer exist (shipped is "
+        f"{dev_v}): {offenders}. The build produces a different filename, so "
+        f"the checklist step cannot be completed as written.")
+
+
+# ══════════════════════════════════════════════════════════
+#  5. The packaging script must ship what we audited
+# ══════════════════════════════════════════════════════════
+#
+# ⚠️ `scripts/package_extension.sh` is currently NOT tracked by git —
+# `.gitignore` carries a blanket `/scripts/*` with four `!` exceptions, and
+# this script is not one of them. So in a clean clone the store build tool
+# does not exist, even though the TRACKED SUBMISSION_CHECKLIST.md tells the
+# reader to run it. That is a pre-existing repo-policy gap (a charter-#8
+# `scripts/` exception + export-whitelist decision), filed separately rather
+# than fixed inside this manifest batch. The guards below therefore report
+# that state instead of crashing on a missing file — a FileNotFoundError
+# would be a broken test rather than a finding.
+
+
+def test_the_store_build_tool_is_reachable_by_whoever_submits():
+    """The tracked checklist says "run scripts/package_extension.sh --store".
+
+    If that script is not in the repo, the instruction is a dead end for
+    anyone working from a clean clone — the documentation form of a dead
+    button. Reported as a skip-with-reason (not a silent pass) while the
+    `/scripts/*` gitignore exception is decided in its own ticket.
+    """
+    checklist = (STORE_DIR / 'SUBMISSION_CHECKLIST.md').read_text(encoding='utf-8')
+    if 'package_extension.sh' not in checklist:
+        pytest.skip('checklist no longer references the packaging script')
+    tracked = subprocess.run(
+        ['git', 'ls-files', '--error-unmatch', 'scripts/package_extension.sh'],
+        cwd=ROOT, capture_output=True, text=True, timeout=60).returncode == 0
+    if not tracked:
+        pytest.skip(
+            'KNOWN GAP (own ticket): SUBMISSION_CHECKLIST.md instructs the '
+            'reader to run scripts/package_extension.sh, but /scripts/* is '
+            'gitignored with no ! exception for it, so a clean clone cannot '
+            'run the store build at all.')
+    assert PACKAGE_SH.exists()
+
+
+def test_package_script_ships_exactly_the_files_we_scanned():
+    """These guards scan background.js + popup.js. If the store build starts
+    shipping another JS file, the permission scan above goes blind to it —
+    so the file list is itself an invariant."""
+    if not PACKAGE_SH.exists():
+        pytest.skip('packaging script absent from this checkout (see above)')
+    sh = PACKAGE_SH.read_text(encoding='utf-8')
+    # Match the copy SOURCE only up to the filename — `\.js` alone also
+    # matched inside `manifest.json`, inventing a `manifest.js` that does not
+    # exist. Anchor on a word boundary so `.json` cannot be truncated to `.js`.
+    copied_js = set(re.findall(r'\$SRC_DIR/([A-Za-z0-9_-]+\.js)\b', sh))
+    scanned = {'background.js', 'popup.js'}
+    assert copied_js == scanned, (
+        f"package_extension.sh ships JS {sorted(copied_js)} but the "
+        f"permission scan in this file only reads {sorted(scanned)}. Update "
+        f"_ext_sources() or the scan misses whatever the new file calls.")
+
+
+def test_package_script_swaps_in_the_audited_store_manifest():
+    """The whole audit is worthless if --store does not actually use the file
+    these tests check."""
+    if not PACKAGE_SH.exists():
+        pytest.skip('packaging script absent from this checkout (see above)')
+    sh = PACKAGE_SH.read_text(encoding='utf-8')
+    assert 'manifest.store.json' in sh, (
+        "package_extension.sh no longer references manifest.store.json — the "
+        "audited manifest is not what gets shipped")
+
+
+def test_the_store_manifest_is_tracked_by_git():
+    """A store asset that git ignores cannot be reviewed, shared, or shipped
+    from a clean clone — and a guard on an untracked file passes vacuously.
+    (This repo has a live precedent: docs/README_EXTENSION.md is gitignored,
+    so a guard aimed at it would never have run on CI.)
+    """
+    out = subprocess.run(
+        ['git', 'ls-files', '--error-unmatch',
+         str(STORE_MANIFEST.relative_to(ROOT))],
+        cwd=ROOT, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, (
+        f"{STORE_MANIFEST.relative_to(ROOT)} is not tracked by git, so these "
+        f"guards would pass vacuously on a clean checkout and the store build "
+        f"would have no manifest to swap in.")

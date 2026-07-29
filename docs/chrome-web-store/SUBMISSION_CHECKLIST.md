@@ -20,8 +20,13 @@ kit.
 ## 2. Build the upload package **[done — re-run to refresh]**
 
 - [ ] `bash scripts/package_extension.sh --store`
-- [ ] Confirm output: `dist/tofu-browser-bridge-4.3.0-store.zip`
-- [ ] (Sanity) the zip's `manifest.json` has **10** permissions, not 16.
+- [ ] Confirm the output zip is named for the version in
+      `browser_extension/manifest.json` (the script derives both the shipped
+      version and the filename from the manifest it packages).
+- [ ] (Sanity) the zip's `manifest.json` declares fewer permissions than the
+      dev manifest, and **includes `downloads`** — the `download` wire command
+      throws without it. `tests/test_chrome_store_manifest_parity.py` checks
+      this automatically; run it rather than counting by hand.
 
 ## 3. Host the privacy policy **[you]**
 
@@ -37,7 +42,7 @@ kit.
 
 ## 5. Create the item & fill the listing **[you — copy from this kit]**
 
-- [ ] Dashboard → **New item** → upload `tofu-browser-bridge-4.3.0-store.zip`.
+- [ ] Dashboard → **New item** → upload the `-store.zip` built in step 2.
 - [ ] **Store listing** tab: paste name / summary / description / category /
       language from `LISTING.md`. Upload icon + screenshots.
 - [ ] **Privacy practices** tab:

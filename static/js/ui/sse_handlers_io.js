@@ -63,6 +63,16 @@ function _handleToolProgress(ev, c) {
           // It's replaced wholesale by meta.output once tool_result arrives.
           if (typeof r._partialOutput !== "string") r._partialOutput = "";
           r._partialOutput += (ev.chunk || "");
+          /* ★ Live QR: the backend recovers a scannable bitmap from terminal
+           * block art WHILE the command is still running. That timing IS the
+           * feature — a scan-to-login command blocks waiting for the scan, so
+           * a code that only appears at finalize arrives after the window has
+           * closed. Store it on the round; the running-state renderer draws it
+           * above the live output pane. The event carries the full accumulated
+           * list (not just the newest), so a late reconnect gets every code. */
+          if (Array.isArray(ev.qrImages) && ev.qrImages.length) {
+            r.qrImages = ev.qrImages;
+          }
         }
       }
       if (typeof twUpdate === 'function') twUpdate(convId);

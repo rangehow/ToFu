@@ -55,7 +55,11 @@ def _render(round_obj: dict) -> str:
         // NOTE: with `node -e`, args after `--` start at argv[1] (there is no
         // script-path entry), unlike a script file where they start at argv[2].
         eval(fs.readFileSync(process.argv[1], 'utf8'));
-        const round = JSON.parse(process.argv[2]);        process.stdout.write(_renderUnifiedToolLine(round, false));
+        const round = JSON.parse(process.argv[2]);
+        // isSearching mirrors the real dispatcher: an in-flight round routes to
+        // the running-state renderer, a settled one to the done renderer.
+        const isSearching = round.status === 'searching';
+        process.stdout.write(_renderUnifiedToolLine(round, isSearching));
         process.exit(0);
     ''')
     proc = subprocess.run(
@@ -73,6 +77,58 @@ def _cmd_round(**meta_extra) -> dict:
     meta.update(meta_extra)
     return {'roundNum': 4, 'toolName': 'run_command', 'status': 'done',
             'query': 'gh auth login', 'results': [meta]}
+
+
+def _running_round(**round_extra) -> dict:
+    """A run_command STILL IN FLIGHT — the state a scan-to-login command sits
+    in while it blocks waiting for the scan. Note the descriptors live on the
+    ROUND here: tool_progress delivers them before any `results` exists."""
+    r = {'roundNum': 4, 'toolName': 'run_command', 'status': 'searching',
+         'query': 'gh auth login',
+         '_partialOutput': 'Open this QR:\n<blockart>\nWaiting for scan...',
+         'results': []}
+    r.update(round_extra)
+    return r
+
+
+class TestQrRendersWhileCommandStillRunning:
+    """The acceptance criterion for scan-to-login: the code is visible DURING
+    the wait. A QR that only appears when the command exits is useless — the
+    authorization window has closed by then."""
+
+    def test_running_command_renders_its_qr(self):
+        html = _render(_running_round(qrImages=[
+            {'uri': _URI, 'format': 'png', 'filename': 'qr.png'}]))
+        assert 'ptool-cmd-running' in html, 'not the running-state block'
+        assert 'ptool-qr-strip' in html, (
+            'a still-running command did not render its QR — the user cannot '
+            'scan it until the command exits, which is too late'
+        )
+        assert f'src="{_URI}"' in html
+
+    def test_running_qr_precedes_and_stays_out_of_the_live_pane(self):
+        """The live pane is `pre-wrap` + `word-break: break-all` — the exact
+        styling that destroys block-art QR rows. The image must sit before it,
+        not inside it."""
+        html = _render(_running_round(qrImages=[
+            {'uri': _URI, 'format': 'png', 'filename': 'qr.png'}]))
+        qr_at = html.index('ptool-qr-strip')
+        live_at = html.index('ptool-cmd-output-live')
+        assert qr_at < live_at
+        assert 'ptool-qr' not in html[live_at:]
+
+    def test_running_without_qr_is_unchanged(self):
+        html = _render(_running_round())
+        assert 'ptool-cmd-running' in html
+        assert 'ptool-qr' not in html
+
+    def test_qr_shows_before_any_output_has_streamed(self):
+        """A CLI can print the QR as its very first bytes; the strip must not
+        depend on the live-output pane existing."""
+        html = _render(_running_round(_partialOutput='', qrImages=[
+            {'uri': _URI, 'format': 'png', 'filename': 'qr.png'}]))
+        assert 'ptool-qr-strip' in html
+        assert 'ptool-cmd-output-live' not in html
 
 
 class TestQrRendersInTerminalBlock:

@@ -2218,6 +2218,15 @@ function _renderSearchingRow(round, ctx) {
         : partial;
       liveOutHtml = `<pre class="ptool-cmd-output ptool-cmd-output-live"><code>${escapeHtml(shown)}</code></pre>`;
     }
+    /* ★ Live QR — the scan-to-login seam. A device-code / QR login command
+     * PRINTS the code and then BLOCKS waiting for the scan, so this running
+     * state is exactly when the user needs to scan it. The art in the live
+     * <pre> above is unscannable by construction (that pane is `pre-wrap` +
+     * `word-break: break-all`, which re-wraps the module rows), so the
+     * backend's recovered bitmap is drawn here, before the pane. While the
+     * round is in flight the descriptors live on the round itself (there is
+     * no `results` entry until tool_result lands). */
+    const liveQrHtml = _renderQrStrip(round);
     return `<div class="ptool-cmd-block ptool-cmd-running">
            <div class="ptool-cmd-header">
              <span class="ptool-cmd-icon">${svg}</span>
@@ -2227,9 +2236,8 @@ function _renderSearchingRow(round, ctx) {
              <span class="ptool-spinner"></span>
            </div>
            <pre class="ptool-cmd-code"><code>$ ${cmdText}</code></pre>
-           ${liveOutHtml}
-         </div>`;
-  }
+           ${liveQrHtml}${liveOutHtml}
+         </div>`;  }
   // ★ Web search: show orbit animation
   if (_isRoundSearch(round)) {
     return `<div class="ptool-line ptool-active ptool-search-line">
@@ -2254,6 +2262,11 @@ function _renderSearchingRow(round, ctx) {
 //   the grid — so the backend reconstructs a real bitmap and we surface it
 //   here, ABOVE the collapsed output, because the whole point is that the
 //   user must be able to scan it without hunting for a toggle.
+//
+//   Takes any object carrying `qrImages`, because the descriptors live in two
+//   places across a round's life: on the ROUND while the command is still
+//   running (tool_progress delivers them before any `results` exists), and on
+//   the RESULT meta once tool_result lands. Both callers pass what they have.
 function _renderQrStrip(meta) {
   const qrs = Array.isArray(meta.qrImages)
     ? meta.qrImages.filter((d) => d && d.uri) : [];

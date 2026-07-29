@@ -35,6 +35,7 @@ call instead of breaking import of this module.
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import os
 import re
@@ -449,6 +450,100 @@ def terminal_qr_images(text: str, *, scale: int = 6):
     return out
 
 
+def qr_signature(descriptor) -> str:
+    """Stable identity for a recovered QR, used to avoid re-emitting one code.
+
+    Keyed on the rendered image bytes, so two scans of the same symbol collapse
+    to one entry while a genuinely different code (a refreshed login token)
+    registers as new. The ``uri`` already encodes the full module matrix, so
+    hashing it is equivalent to hashing the matrix without re-serialising it.
+    """
+    if not isinstance(descriptor, dict):
+        return ''
+    uri = descriptor.get('uri') or ''
+    if not uri:
+        return ''
+    return hashlib.sha256(uri.encode('ascii', errors='ignore')).hexdigest()[:16]
+
+
+class LiveQrScanner:
+    """Incrementally scan a GROWING terminal buffer for QR art.
+
+    Why this exists: the whole point of a scan-to-login QR is that the command
+    is still RUNNING — ``gh auth login`` / device-code flows print the code and
+    then block waiting for the scan. A QR that only materialises when the
+    process exits arrives after the authorization window has closed (or after
+    the command timed out for lack of a scan), which is the same as not having
+    it. So detection has to happen on the live ``tool_progress`` path, not only
+    at finalize.
+
+    Two properties the naive "re-scan everything on every chunk" version lacks:
+
+    * **Idempotent** — a chunk arrives every ~200 ms, and the art sits in the
+      buffer for the entire wait. Without dedup the same code would be
+      re-attached and re-emitted dozens of times, flooding the SSE channel with
+      multi-KB frames. Signatures are remembered, so each distinct code is
+      emitted exactly once.
+    * **Bounded** — a full re-scan of a large buffer per chunk is O(n) work per
+      chunk, i.e. O(n²) over the command. Scanning is therefore gated on a
+      cheap art-glyph check, skipped until the buffer holds enough lines to
+      contain a symbol, throttled to a minimum growth delta between attempts,
+      and capped at a tail window (a QR is drawn as one contiguous block, so
+      the recent tail is where an unseen one can be).
+
+    Not thread-safe by itself; the caller (the run_command progress callback)
+    already holds its flush lock.
+    """
+
+    #: Only rescan once the buffer has grown by at least this much since the
+    #: last attempt — a QR block is thousands of chars, so sub-KB growth cannot
+    #: complete a previously-absent symbol.
+    _MIN_GROWTH = 512
+    #: Tail window scanned on each attempt. Comfortably larger than the biggest
+    #: terminal QR (a 177-module symbol printed 2 chars wide is ~63 KB).
+    _TAIL_CHARS = 96 * 1024
+
+    def __init__(self):
+        self._seen: set[str] = set()
+        self._last_len = 0
+
+    def scan(self, buffer: str):
+        """Return descriptors for codes in *buffer* not yet reported.
+
+        Callers pass the FULL accumulated buffer each time; the scanner does
+        the windowing. Returns ``[]`` when there is nothing new — which is the
+        overwhelmingly common case and must stay cheap.
+        """
+        if not buffer:
+            return []
+        n = len(buffer)
+        if n - self._last_len < self._MIN_GROWTH and self._last_len:
+            return []
+        window = buffer[-self._TAIL_CHARS:] if n > self._TAIL_CHARS else buffer
+        if not any(g in window for g in _ART_GLYPHS):
+            self._last_len = n
+            return []
+        if window.count('\n') < _MIN_BLOCK_LINES:
+            self._last_len = n
+            return []
+        self._last_len = n
+        fresh = []
+        try:
+            for d in terminal_qr_images(window):
+                sig = qr_signature(d)
+                if not sig or sig in self._seen:
+                    continue
+                self._seen.add(sig)
+                fresh.append(d)
+        except Exception as e:
+            logger.warning('[QR] live scan failed (non-fatal): %s', e)
+            return []
+        if fresh:
+            logger.info('[QR] live scan surfaced %d new QR code(s) mid-command',
+                        len(fresh))
+        return fresh
+
+
 __all__ = [
     'qr_png_data_uri',
     'save_qr_png',
@@ -457,4 +552,6 @@ __all__ = [
     'is_valid_qr_matrix',
     'detect_terminal_qr_matrices',
     'terminal_qr_images',
+    'qr_signature',
+    'LiveQrScanner',
 ]

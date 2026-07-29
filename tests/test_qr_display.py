@@ -345,6 +345,133 @@ class TestRunCommandSeam:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+#  Seam 1b — the LIVE phase: the code must appear WHILE the command blocks
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestLiveScanSeam:
+    """The seam that makes scan-to-login actually usable.
+
+    A device-code / QR login command PRINTS the code and then BLOCKS waiting
+    for the scan. Recovering the QR only at ``_finalize_tool_round`` delivers
+    the image after the authorization window has closed — or after the command
+    timed out for lack of a scan — which is indistinguishable from not having
+    the feature. These guards pin that the image exists DURING the wait.
+    """
+
+    def _art(self, payload=PAYLOAD):
+        return _cells(_qr_matrix(payload))
+
+    def _run_stream(self, chunks):
+        """Drive the real run_command progress callback and collect events."""
+        import lib.tasks_pkg.handlers.code_exec as ce
+        events = []
+        orig = ce.append_event
+        ce.append_event = lambda task, ev: events.append(ev)
+        try:
+            round_entry = {'toolCallId': 'tc1', 'toolName': 'run_command'}
+            cb = ce._make_run_command_progress_cb(
+                {'id': 't' * 8}, 7, round_entry, 'gh auth login')
+            for c in chunks:
+                cb('stdout', c)
+            cb.flush()
+        finally:
+            ce.append_event = orig
+        return events, round_entry
+
+    def test_qr_is_emitted_while_the_command_is_still_running(self):
+        """The core acceptance criterion: a scannable image reaches the client
+        from the PROGRESS path, with no tool_result / finalize involved."""
+        events, round_entry = self._run_stream(
+            ['Open this QR:\n', self._art(), '\nWaiting for you to scan...\n'])
+        qr_evs = [e for e in events if e.get('qrImages')]
+        assert qr_evs, (
+            'no tool_progress event carried a QR — the code only becomes an '
+            'image at finalize, which is after the login window has closed'
+        )
+        assert all(e['type'] == 'tool_progress' for e in qr_evs)
+        assert _decode(qr_evs[0]['qrImages'][0]['uri']) == PAYLOAD
+        # and it is stamped on the round so a reconnect replay restores it
+        assert round_entry.get('qrImages')
+
+    def test_same_code_is_emitted_once_not_per_chunk(self):
+        """A chunk arrives every ~200ms and the art stays in the buffer for the
+        whole wait. Without dedup the same multi-KB image would be re-emitted
+        dozens of times and flood the SSE channel.
+
+        Drives ``LiveQrScanner`` DIRECTLY rather than through the progress
+        callback: that callback coalesces output (``_COALESCE_BYTES`` /
+        ``_COALESCE_MS``), so a burst of trailing chunks collapses into ~2
+        flushes and ``scan()`` is barely reached. A callback-level assertion
+        therefore passes even with the dedup memory destroyed (verified — it
+        was measuring the coalescer, not the dedup). Growth here is above
+        ``_MIN_GROWTH`` every time, so the ONLY thing that can suppress a
+        repeat is the signature memory."""
+        from lib.qr import LiveQrScanner
+        s = LiveQrScanner()
+        buf = 'Scan:\n' + self._art() + '\nWaiting...\n'
+        first = s.scan(buf)
+        assert len(first) == 1, 'the code was not reported on first sight'
+        repeats = 0
+        for i in range(12):
+            # grow well past _MIN_GROWTH each round so the throttle cannot be
+            # the thing that stays quiet — the art is still in the buffer.
+            buf += 'still waiting ' + 'x' * 1024 + '\n'
+            repeats += len(s.scan(buf))
+        assert repeats == 0, (
+            f'the same QR was re-reported {repeats}x on later scans — dedup is '
+            'broken and every poll would re-push a multi-KB image over SSE'
+        )
+
+    def test_progress_path_emits_one_event_for_one_code(self):
+        """End-to-end complement to the scanner-level dedup test: the wire sees
+        exactly one QR-bearing frame for one code."""
+        chunks = ['Scan:\n', self._art(), '\nWaiting...\n'] + ['.'] * 40
+        events, round_entry = self._run_stream(chunks)
+        qr_evs = [e for e in events if e.get('qrImages')]
+        assert len(qr_evs) == 1, f'QR re-emitted {len(qr_evs)}x on the wire'
+        assert len(round_entry['qrImages']) == 1
+
+    def test_a_second_distinct_code_is_still_reported(self):
+        """Dedup must key on the code, not latch after the first one — a
+        refreshed/expired login prints a NEW code that must also surface."""
+        other = 'https://second.example/device?code=ZZZ'
+        events, round_entry = self._run_stream(
+            ['first:\n', self._art(), '\nexpired, new code:\n',
+             self._art(other), '\nwaiting\n'])
+        got = {_decode(d['uri']) for d in round_entry.get('qrImages', [])}
+        assert got == {PAYLOAD, other}
+
+    def test_plain_chatty_output_emits_no_qr_and_stays_cheap(self):
+        """The overwhelmingly common case: a noisy build log must not trigger
+        detection work or attach anything."""
+        events, round_entry = self._run_stream(
+            [f'compiling module {i}\n' for i in range(200)])
+        assert not [e for e in events if e.get('qrImages')]
+        assert 'qrImages' not in round_entry
+
+    def test_scanner_skips_until_the_buffer_can_hold_a_symbol(self):
+        """Cost guard: re-scanning the whole buffer on every chunk is O(n^2)
+        over a long command. Sub-threshold growth must not trigger a scan."""
+        from lib.qr import LiveQrScanner
+        s = LiveQrScanner()
+        assert s.scan('x') == []
+        assert s.scan('no art here\n' * 3) == []
+
+    def test_scanner_is_resilient_to_garbage(self):
+        from lib.qr import LiveQrScanner
+        s = LiveQrScanner()
+        assert s.scan('') == []
+        assert s.scan('\x00\x01\x02' * 500) == []
+
+    def test_signature_distinguishes_codes(self):
+        from lib.qr import qr_signature, terminal_qr_images
+        a = terminal_qr_images(self._art())[0]
+        b = terminal_qr_images(self._art('https://other.example/x'))[0]
+        assert qr_signature(a) and qr_signature(a) != qr_signature(b)
+        assert qr_signature({}) == ''
+
+
+# ═══════════════════════════════════════════════════════════════════════
 #  Seam 2 — ask_human: the blocking scan-to-login prompt
 # ═══════════════════════════════════════════════════════════════════════
 

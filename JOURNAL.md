@@ -1,5 +1,17 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29 — 「待你处理」提议的确认按钮点了没反应:根因是**载荷不合契约,而不是控件没接线**——「同一后端契约」这句注释对 URL 成立、对**请求体**不成立;顺带抓到同一字段的静默截断(owner 截图报障;commit `aa74e850`,5 文件;后端 **19/19 含 NEUTER×1**,前端 **8/8 含 NEUTER×2 各咬各的方向**,相邻环 **134 passed**)
+
+- **★ 两侧各自实测复现,没有一步是推断:** ①jsdom 跑 shipped `project-brain-attention.js`,「确认」真实发出的请求体只有 `{add_decision, resolves_proposal}`——**没有 summary**;②拿这个请求体打真实路由 `project_charter_commit` → **400 `add_decision requires summary`(field=summary)**,同一路由补上 summary → **200 `{"ok":true}`**。即该按钮**每一次点击都被后端拒绝**;而「驳回」实测 **200**,本来就是好的——用户报「确认/驳回都没反应」里其实只有一个真坏,另一个是**因为界面没变化而误判**(见第三条)。
+- **★ 根因不是缺监听器,是「一个契约被拆成两半、只对了一半」:** 模块头部写着「Resolving controls are the SAME calls the owning tabs make … so there is one backend contract per action」。这句话**对 URL 成立、对载荷不成立**:Charter 页签的同名控件一直渲染着必填的一句话 summary 输入框(`.pb-proposal-summary`,`maxlength=240`,首行预填,空则 disabled),而 Needs-you 卡片只有一个裸按钮。**判据:声称「复用同一后端契约」时必须同时核对 URL 与请求体——决定这一下点击有没有用的是后者。**
+- **第二半缺陷是「失败不出声」,它才让这个 bug 从外部无法分辨:** catch 里只有 `console.warn`。**被拒绝的变更与坏掉的监听器,在用户眼里是同一个现象:什么都没动,什么都没说。** 现新增 `_reportFailure` 把后端原文一起 toast(原文点名了出错字段 `field=summary`,通用文案做不到这件事)。
+- **★ 顺带修掉一条同因的静默数据缺陷(实测出来的,不是顺手改):** attention 载荷把提议正文按 `_TEXT_MAX=600` 截断,**而 Needs-you 正是提交这个字段当作落库决策**。实测 1500 字提议:Charter 页签拿到 **1500**、Needs-you 只拿到 **600** ⇒ 从这个页签确认会存进一条**被切断的章程决策**,而章程决策是要注入给每个兄弟会话的共享意图。600 这个上限对 conflict 文案(纯展示)是对的、对可提交字段是错的。**判据(已写进代码注释):凡是被某个解析控件回传的字段,不得套用展示上限。** 补集守卫同时钉住 conflict 文案**仍然** capped,免得「别截断了」被过度施用。
+- **过程自纠两条:** ①我给新守卫写的长文本夹具以空格结尾,而 `propose_amendment` 会 `strip()` ⇒ 两条守卫首跑因**我的夹具**而红,不是产品问题;②按 hunk 过滤 i18n 时我的脚本 `''.join(list_of_lists)` 抛 TypeError,`git apply --cached` 随之报 `unrecognized input`——**失败发生在写 index 之前,工作树与 index 都没被污染**,修好 join 后重放即成。
+- **共享 HEAD 纪律兑现:** `git add` 后计数断言=5;`static/js/i18n.js` 首次暂存夹带了兄弟两条键(`paper.qaThinking` / `stream.fallback.reasonLabel`),按章程 #15 走 `git diff > patch → 按 hunk 过滤 → git apply --cached`(**只写 index、不碰工作树**),提交后 index 只含我的 3 键、工作树仍保留兄弟 2 个 hunk 未动。
+- **相邻红的归属查清后再下结论:** `test_every_manifest_file_has_dev_fallback_tag` 报 `settings/private_hosts.js` 缺 dev fallback tag。用 `git grep HEAD` 证明它在**干净 committed HEAD** 上就已在 bundler 清单里、index.html 里就已没有 tag ⇒ **干净树同样红**,属兄弟会话 SSRF 票;我未碰 `index.html` / `lib/js_bundler.py` / `static/js/settings/`(`git diff --stat` 为空)。
+- **端到端验收(真路由,不是 mock):** 1414 字提议 → 确认 **HTTP 200** → 落库 **1414 字完整** + summary 落库 → 提议**出待办队列** → `needsYou` 归零。
+- **验收边界(诚实分账):** 纯前后端改动,**运行中进程不带,需重启才对新会话生效**;本次未在真实浏览器里点过那颗按钮(jsdom 与真路由两段各自实测,中间的 `Api.project.commitCharter` 是 api.js 既有薄封装)。
+
 ### 2026-07-28(续·logo 再回滚) — **A2 上线当日被 owner 现场否决,全量回滚到原版**;in-situ 截图验收也不足以定品牌终审(方法论二次修正;家族 epic 前提动摇待 owner 三选一)
 
 - **经过:** A2(`13f8adee`,见下条「续·logo 定稿」)上线后 owner 在真实欢迎屏再次看到实物,决断「revert the welcome SVG to my original one」——第二次现场否决(第一次是 +40% 版 A)。本批把 `13f8adee` 的 6 个资产面(`tofu-welcome.svg`/`logo.png`/`manifest.json`/`apple-touch-icon`/README×2 的 `140×140`)全部 `git checkout 13f8adee~1` 还原 + `tofu.ico`/`icns` 重新生成;favicon link 本来指 `tofu-welcome.svg`,随文件自动还原;`tofu-favicon.svg` 保持旧手绘零引用未动;JOURNAL 历史保留(`13f8adee` 与其入账仍在链上,本批是它的回退执行而非历史抹除)。

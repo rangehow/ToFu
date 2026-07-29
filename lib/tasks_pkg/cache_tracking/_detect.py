@@ -373,6 +373,18 @@ def _emit_round_record(conv_id, call_num, verdict, *, ns_switch, ttl_flip,
 BUCKET_NAMESPACE = 'cache_namespace_switch'
 BUCKET_TURN_BOUNDARY = 'turn_boundary_rebill'
 BUCKET_TTL_FLIP = 'ttl_flip'
+# ★ TTL EXPIRY is NOT waste and NOT a client change. ``_resolve_break_cause``
+#   emits 'TTL expiry (>5min gap, prompt unchanged)' for any >300s gap, but
+#   classify_verdict used to match only 'ttl marker flipped' / 'new cache key',
+#   so every idle-expiry rebuild fell through to body_change ("the client
+#   changed the bytes" — the exact mislabel this detector family exists to
+#   prevent) or to the `other` catch-all. Measured on real traffic: 73 rounds /
+#   1,516 CNY of ORDINARY cache rebuilds were being counted as recoverable
+#   waste, which distorted where the money looked like it was going (removing
+#   them moves the upstream-gateway share of avoidable spend 86.1% → 91.2%).
+#   A cache entry that expired on its own schedule HAD to be re-created; the
+#   honest bucket is what lets a cost view subtract it instead of chasing it.
+BUCKET_TTL_EXPIRY = 'ttl_expiry'
 BUCKET_BREAKPOINT_LOST = 'breakpoint_lost'
 BUCKET_MID_WINDOW = 'cache_mid_out_of_window'
 BUCKET_WRITE_UNSETTLED = 'cache_write_unsettled'
@@ -408,6 +420,12 @@ def classify_verdict(verdict: dict | None) -> str:
                                   'model', 'no_cache_reuse')):
         if 'ttl marker flipped' in _cause or 'new cache key' in _cause:
             return BUCKET_TTL_FLIP
+        # A >5min idle gap expired the entry on its own schedule — an ordinary
+        # rebuild, not a client body change. Checked BEFORE the generic
+        # body_change fallthrough below, which would otherwise accuse our own
+        # client of mutating a prefix the wire fingerprint proved identical.
+        if 'ttl expiry' in _cause:
+            return BUCKET_TTL_EXPIRY
         if 'lookback window' in _cause:
             return BUCKET_MID_WINDOW
         if 'breakpoint lost' in _cause:
@@ -424,6 +442,10 @@ def classify_verdict(verdict: dict | None) -> str:
         return BUCKET_BODY_CHANGE
     if 'ttl marker flipped' in _cause or 'new cache key' in _cause:
         return BUCKET_TTL_FLIP
+    # Same reasoning as the client-keys branch above: an idle-expiry rebuild is
+    # its own honest verdict, not the `other` catch-all.
+    if 'ttl expiry' in _cause:
+        return BUCKET_TTL_EXPIRY
     if 'lookback window' in _cause:
         return BUCKET_MID_WINDOW
     if 'breakpoint lost' in _cause:

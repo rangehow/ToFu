@@ -329,6 +329,66 @@ def test_walk_cycle_shows_both_feet_leading_across_the_stride():
     )
 
 
+def test_both_feet_actually_render_in_every_walk_frame():
+    """PIXEL PROOF: an alternating stride is invisible if only one foot is drawn.
+
+    The position guards above prove the offsets alternate; they cannot see a
+    foot that is HIDDEN behind the block or FUSED with its partner. Measured on
+    the committed art before this guard existed, three of eight frames rendered
+    a single foot at the shipped 30px — the stride was correct in the numbers
+    and absent on screen.
+
+    Counts distinct ink RUNS on rows strictly BELOW the block's bottom outline.
+    Two details are load-bearing:
+
+      · start below `FRONT_B + STROKE`, not at the body edge. The outline is a
+        solid ink bar spanning the whole underside; a scan that includes it
+        connects both feet through it and always reports ONE shape. (That
+        mistake produced a false "1 foot everywhere" reading during
+        development — the instrument, not the art.)
+      · assert at 30px, the size the pet actually ships at. One viewBox unit is
+        0.94px there, so a gap under ~1.8u is sub-pixel and antialiasing fuses
+        it: a separation that is clean at 320px can vanish in the bar.
+    """
+    cairosvg = pytest.importorskip("cairosvg", reason="pixel proof needs cairosvg")
+    from PIL import Image
+
+    FRONT_B, STROKE, VB = 26.0, 1.5, 32.0
+
+    def feet_visible(name: str, px: int) -> int:
+        svg = _frame(name)
+        # Neutralise the character-space CSS transform (facing-independent) and
+        # resolve var() fallbacks, so we measure the authored geometry.
+        svg = re.sub(r'<g data-space="char" style="[^"]*"',
+                     '<g data-space="char"', svg)
+        svg = re.sub(r"var\(--[a-z-]+,\s*([^)]+)\)", r"\1", svg)
+        png = cairosvg.svg2png(bytestring=svg.encode("utf-8"),
+                               output_width=px, output_height=px)
+        p = Image.open(io.BytesIO(png)).convert("RGBA").load()
+        best = 0
+        for y in range(int((FRONT_B + STROKE) / VB * px), px):
+            runs, prev = 0, False
+            for x in range(px):
+                ink = p[x, y][3] > 40
+                if ink and not prev:
+                    runs += 1
+                prev = ink
+            best = max(best, runs)
+        return best
+
+    for px in (30, 320):
+        counts = {n: feet_visible(n, px) for n in WALK_FRAMES}
+        short = {n: c for n, c in counts.items() if c < 2}
+        assert not short, (
+            f"at {px}px these walk frames render fewer than two feet: {short}\n"
+            f"  full counts: {counts}\n"
+            "A foot is either hidden behind the block or fused with its partner, "
+            "so the alternating stride cannot be seen — the pet reads as a "
+            "wobble. Widen the split (the two ellipses are NEAR_RX+FAR_RX wide "
+            "combined, and the gap must exceed ~1.8 viewBox units to survive "
+            "30px rasterisation) or push the feet further below the body edge."
+        )
+
 def test_swing_foot_gathers_under_the_body_on_the_passing_beat():
     """On a passing beat the swinging foot travels THROUGH the planted one.
 

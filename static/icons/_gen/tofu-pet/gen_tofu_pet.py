@@ -228,6 +228,26 @@ def _feet(pose, cy=FOOT_Y):
     (positive) and the far foot TRAILS (negative); in a 'b' beat they swap. The
     guards assert this on the RESOLVED position, never on the raw table.
 
+    BOTH FEET MUST RENDER (a pixel constraint, not a taste choice)
+    ────────────────────────────────────────────────────────
+    An alternating stride is invisible if only one foot is actually drawn.
+    Measured on the rendered PNG, two failure modes cost four of eight frames:
+
+      · 'up' tucked the feet too shallow. The body transform lifts the WHOLE
+        group, feet included, so a push-off `lift` moves block and feet together
+        and the feet never emerged below the silhouette — walk4/walk8 rendered
+        ZERO feet. Fixed by pushing the up-beat feet DOWN (+0.9/+0.2) so they
+        still clear the edge after the lift.
+      · 'passing' pulled the feet so close their ellipses fused into one blob
+        (gap -2.3u) — walk3/walk7 rendered ONE foot. The two ellipses are
+        NEAR_RX+FAR_RX = 5.5u wide combined, so the split must exceed that;
+        ±3.2 leaves a 0.9u gap while staying narrower than contact's ±4.6,
+        which is what still reads as a pass.
+
+    The guard asserts this on rendered pixels (two separate blobs below the
+    outline, every walk frame), because a position-only check cannot see a foot
+    that is hidden or fused.
+
     Each tuple is (near_x, far_x, near_y, far_y). The FAR foot also sits a touch
     higher and is drawn first, so it reads as the leg on the far side of the
     body rather than a second foot on the same side.
@@ -235,14 +255,14 @@ def _feet(pose, cy=FOOT_Y):
     offsets = {
         'stand':     (-4.0, 4.2, 0.0, 0.0),
         # ─ contact: one foot planted ahead, the other trailing behind ─
-        'contact_a': (6.0, -6.0, 0.5, -0.5),    # NEAR foot forward
-        'contact_b': (-6.0, 6.0, -0.5, 0.4),    # FAR foot forward
+        'contact_a': (4.6, -4.6, 0.5, -0.3),    # NEAR foot forward
+        'contact_b': (-4.6, 4.6, -0.3, 0.5),    # FAR foot forward
         # ─ passing: the swinging foot passes under the body, lifted ─
-        'passing_a': (1.8, -1.4, 0.4, -1.5),    # near still ahead, closing
-        'passing_b': (-1.4, 1.8, -1.5, 0.4),    # far still ahead, closing
+        'passing_a': (3.2, -3.2, 0.5, -0.3),    # near still ahead, gathered
+        'passing_b': (-3.2, 3.2, -0.3, 0.5),    # far still ahead, gathered
         # ─ lift: push-off, both feet gathered under a rising body ─
-        'up_a':      (4.6, -4.2, -0.9, -0.5),
-        'up_b':      (-4.2, 4.6, -0.5, -0.9),
+        'up_a':      (3.8, -3.8, 0.9, 0.2),
+        'up_b':      (-3.8, 3.8, 0.2, 0.9),
         'sit':       (-4.2, 4.4, 0.9, 0.9),
         'tip':       (-3.4, 3.6, 0.5, 0.5),
     }

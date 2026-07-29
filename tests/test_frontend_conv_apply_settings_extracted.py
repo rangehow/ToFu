@@ -113,23 +113,41 @@ def test_conversations_js_no_longer_declares_apply_settings_inline():
     ``function _applySettingsToConv(`` declaration. All EIGHT call sites
     (bare ``_applySettingsToConv(...)``) MUST still exist — extraction
     is a move, not a removal.
+
+    NOTE: as further slices extract other functions FROM conversations.js
+    into their own leaves, some ``_applySettingsToConv(...)`` call sites
+    move with their host function into those leaves. The invariant is
+    that the TOTAL number of call sites (across every leaf that inherits
+    them) never shrinks — otherwise a caller was silently dropped. Slice
+    9 (conv_disaster_recovery.js) moved forceRecoverFromServer, which
+    carries one such call site; slice 5's original guard would then read
+    7 in conversations.js and appear to fail even though the caller is
+    just in a new file. Sum across the known migrated leaves.
     """
     with open(_CONV, encoding='utf-8') as f:
-        src = f.read()
-    assert not re.search(r'\bfunction\s+_applySettingsToConv\s*\(', src), (
+        conv_src = f.read()
+    assert not re.search(r'\bfunction\s+_applySettingsToConv\s*\(', conv_src), (
         'conversations.js must NOT re-carry inline '
         '``function _applySettingsToConv(...)`` — extracted to '
         'core/conv_apply_settings.js in slice 5.'
     )
-    # Every one of the eight call sites in conversations.js must remain
-    # (the leaf owns the definition; the callers keep their bare-name
-    # invocation). Count via regex to distinguish caller vs definition.
+    # Sum call sites across conversations.js AND the migrated leaves that
+    # inherit them (grew as later slices carved out functions).
     call_pattern = r'_applySettingsToConv\s*\('
-    hits = re.findall(call_pattern, src)
-    assert len(hits) >= 8, (
-        f'conversations.js must still CALL _applySettingsToConv at all '
-        f'8 sites (found {len(hits)}) — extraction is a move.'
+    total_hits = len(re.findall(call_pattern, conv_src))
+    migrated_leaves = [
+        os.path.join(_ROOT, 'static/js/core/conv_disaster_recovery.js'),
+    ]
+    for leaf in migrated_leaves:
+        if os.path.exists(leaf):
+            with open(leaf, encoding='utf-8') as f:
+                total_hits += len(re.findall(call_pattern, f.read()))
+    assert total_hits >= 8, (
+        f'the TOTAL number of _applySettingsToConv call sites (across '
+        f'conversations.js + migrated leaves) must not shrink below 8 '
+        f'(found {total_hits}) — extraction is a move, not a drop.'
     )
+
 
 
 @_unit

@@ -574,6 +574,14 @@ _BUNDLE_FILES = [
     # via bundle-level window scope. Pure seam — no DOM, no globals, no
     # state (pt_3879f00e slice 8).
     'core/conv_rescue_tail.js',
+    # ── conv_disaster_recovery.js: forceRecoverFromServer /
+    # auditConversations / recoverAll — console-invokable last-resort
+    # rescue trio. Zero cross-file callers (grep-verified); the three
+    # reach each other inside this leaf. Load BEFORE conversations.js so
+    # the trio is available on window scope for console use, and AFTER
+    # conv_apply_settings.js because forceRecoverFromServer calls
+    # `_applySettingsToConv` (pt_3879f00e slice 9).
+    'core/conv_disaster_recovery.js',
     'core/conversations.js',
     # Shared SSE fetch-response read/decode/buffer loop (readSSEStream) —
     # extracted 2026-07-11 from branch.js / paper-reader.js / ui/sse_pipeline.js.

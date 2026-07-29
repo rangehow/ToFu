@@ -551,17 +551,33 @@ def tool_run_command(base, command, timeout=None, stdin_callback=None, task=None
     if not base:
         base = os.path.expanduser('~')
 
-    # ★ Resolve timeout
+    # ★ Resolve timeout — NO DEFAULT CEILING.
+    #   A build / test suite / pip install / big grep is a WAIT, not a crash,
+    #   and the old auto-detect (60s FS-heavy, 300s otherwise) SIGKILLed the
+    #   process tree mid-run and returned "[Command timed out]" for work that
+    #   was progressing fine. That is strictly worse than the transport read
+    #   timeouts already removed (lib/llm/_transport.py): a dropped socket
+    #   loses a connection, this loses the build.
+    #
+    #   Ending a long command is the USER's call, and that path is already
+    #   independent of this one: both run loops poll ``task['aborted']`` every
+    #   ~0.2s and kill the process tree on Stop. So removing the ceiling costs
+    #   no control — it only stops the clock from deciding.
+    #
+    #   A caller (or the model) may still pass an explicit budget; 0 means
+    #   unlimited and is preserved for back-compat with existing call sites.
+    #   ``MAX_COMMAND_TIMEOUT`` (None by default) still clamps an explicit one.
+    #   Pinned by tests/test_no_backend_timeouts.py.
     if timeout is None:
-        timeout = 60 if _FS_HEAVY_RE.search(command) else 300
-    if not isinstance(timeout, (int, float)):
-        timeout = 300
+        timeout = None                      # no ceiling
+    elif not isinstance(timeout, (int, float)):
+        timeout = None                      # unparseable → wait, don't guess
     elif int(timeout) == 0:
-        timeout = None
+        timeout = None                      # explicit "unlimited"
     elif MAX_COMMAND_TIMEOUT is not None:
         timeout = max(1, min(int(timeout), MAX_COMMAND_TIMEOUT))
     else:
-        timeout = max(1, int(timeout)) if timeout > 0 else 300
+        timeout = max(1, int(timeout)) if timeout > 0 else None
 
     if _is_dangerous_command(command):
         return 'Error: Command blocked for safety: matches dangerous pattern.'

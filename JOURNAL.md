@@ -1,5 +1,22 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·工具执行层那一层) — 前两批清完传输层与浏览器,**杀伤力最大的一层还在**:`run_command` 到点 SIGKILL 整棵进程树。owner 指出「读超时只是断连,这个是把我的构建杀了」——判据成立(7 文件;新套件 **17/17 失败先行**,**NEUTER×6 双向全咬**(2/1/1/2/1/1);相邻环 **85/85**)
+
+- **★ 三层同一条规则,这一层最狠:** ①`run_command.py:556` 按命令形态自动判 60s(FS-heavy)/300s,到点 `_kill_process_tree` 发 SIGTERM→SIGKILL,返回 `[Command timed out]`。全量测试、编译、`pip install`、大目录 grep **全部落在这个窗口里**。②`MCP_CALL_TIMEOUT = 120` 作为 `read_timeout_seconds` 传进 `session.call_tool` ——**字面意义的 read timeout**,只是在 MCP 通道上。
+- **★ 「默认值是残留而非设计」有硬证据:** 同文件 `MAX_COMMAND_TIMEOUT = None` 注释写着 `no timeout limit`。上限早就取消了,只有那个自动判定的默认值留着——它不是深思熟虑的策略,是没人回头清的旧代码。
+- **★ 删这个上限零代价,而且是实测的不是假设的:** `_run_command_simple` 与 `_run_command_interactive` **各自**每 ~0.2s 轮询 `task['aborted']` 并 kill 进程树。**abort 与 timeout 从来就是两条独立的路**,所以「我自己按停止」在这一层本来就成立——不像 LLM 传输层那批,需要先补 abort 轮询才能删超时。守卫钉死这个前提(`>= 2` 处 abort 检查 + `_kill_process_tree` 存活)。
+- **★ 模型的心智模型也要一起改,否则改了等于没改:** `lib/tools/project.py:343` 的工具描述明写「60s for filesystem-heavy commands, 300s otherwise」。代码改了而描述不改,模型会继续按旧模型防御性地传小超时。已改为「NO default timeout……用户不想等就按 Stop」,并给 `timeout` 参数写明「OMIT IT for normal use」。
+- **★ owner 点名要的「不许留永不触发的分支」——查清了,结论是「正确收窄」不是死代码:** MCP 的 `MCP_DEGRADED_TIMEOUT_STREAK` 熔断依赖 call timeout 来累计 streak。全局读超时变 None 后,**只有声明了自己 `"timeout"` 的 server 才可能超时**,所以该闸对未声明预算的 server 不再触发。**但这是正确的作用域,不是腐烂**:闸的意义是「不要为一个已知的、用户声明的预算反复付费」,没声明预算的 server 根本没有可付的东西。已把这段推理写在常量旁边,并**补测试钉住可达路径**(`config.get('timeout')` 仍被读、`_timeout_streak` 仍在、`_is_call_timeout_error` 仍在喂它),使这条分支不会被后人当死代码删掉。
+- **★ 我自己造了三个缺陷,全部被自查/运行抓回:**
+  - `%ds` 对 `None` 会 `TypeError`——而且是**每一次 MCP 调用都崩**。实测 `'%ds' % None` 确认后改为 `%s` + `'none'` 渲染。这类缺陷只在生产触发,是最坏的一种。
+  - 四处 `timeout + 10` 算术,我第一轮只找到三处,**第四处在 reconnect-retry 分支**(`_bridge.py:1212`),漏了会在「重连后重试」这条罕见路径上崩。已补守卫扫描所有 `timeout + 10` 必须带守卫。
+  - 断言 `'timeout=%ds' not in 整个模块` **过宽**——keepalive 的 `interval=%ds` / `ping_timeout=%ds` 是真 int,不该被咬。已收窄到 call-budget 那一行。
+- **★ 最值得记的一条:我的守卫自己把套件挂死了,而根因是环境不是逻辑。** ratchet 首版用 `os.walk(lib/)` 全量读 835 个 `.py`,在这台 DolphinFS/FUSE 上**连 240s 都跑不完**(实测 `timeout 240` 直接 124)。改用 `git grep` 走**索引**:**0.12s**。**判据:跑不完的守卫等于会被删掉的守卫;在 FUSE 上做全库扫描必须走 git 索引,不能走文件系统。**
+- **★ 第二条同源教训:`pytest.skip` 把 ratchet 变成了永久黄灯。** kill 侧的 AST 守卫首版在 fragment 解析失败时 `pytest.skip('not standalone-parseable')`——实测**它真的跳过了**,而套件仍报「passed」。已改为 `textwrap.dedent` + `def` 包裹使其必然可解析,解析失败改为 `pytest.fail`。**判据:守卫的失败模式必须是红,不能是黄;skip 会烂成永久绿灯。**
+- **NEUTER×6 双向:** 恢复 300s 默认 → **2 红**(含行为级那条);恢复 `MCP_CALL_TIMEOUT=120` → 1 红;**反向**删掉 `MCP_CONNECT_TIMEOUT`(握手应保留)→ 1 红;**反向**把 `read_timeout_seconds` 改回无条件 → **2 红**(含 ratchet);**反向**把 ratchet 正则改成永不匹配 → 1 红(反空转);把工具描述改回 60s/300s → 1 红。六发后 `diff -q` 全部逐字节还原。
+- **保留项(与前两批同一判据):** `MCP_CONNECT_TIMEOUT = 30` 与 LLM 的 `CONNECT_TIMEOUT = 10` ——**握手不完成 = 服务端没起来 = 崩了**,不是等待。守卫用**补集断言**钉死它不许被后人「顺手一起删掉」。
+- **验收边界:** 纯后端,**运行中进程不带**,需重启;MCP 侧未做真实 server 端到端实测(用的是既有 `test_mcp_call_health` 相邻环 7/7)。
+
 ### 2026-07-29(续·wire face 三层 UI) — owner 问「模板界面是不是该能给每个模型设 OpenAI/Anthropic」——**机制早在,缺的是可见性;而他设想的「每模型开关」实测比现状更差**,故按 C 全量做但把家族规则留在后端(`pt_29517689500f464c` DONE;commit `547827e1`,11 文件;新套件 **17/17**,**NEUTER×5 全咬**;相邻环 **41/41**;回归 **0 红**(基线 12))
 
 - **★ 先纠前提,因为它决定要不要做那个开关:** owner 说「本以为两者兼容」——**半对**。纯单轮能出字,但 2026-07-28 实测 `yuju-claude-opus-5-evaDaily`:OpenAI 面流出 **111 chunk / 33 个 reasoning_content / 0 个 signature**,Anthropic 面 `signature_delta` 完整;**思考块没签名会被上游拒绝**,故多轮必崩。这是**正确性事实不是偏好**。

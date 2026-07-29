@@ -206,7 +206,7 @@ class MCPBridge:
                 (connect / disconnect) that don't carry a per-server budget.
         """
         if timeout is None:
-            timeout = MCP_CALL_TIMEOUT + 10
+            timeout = (MCP_CALL_TIMEOUT + 10) if MCP_CALL_TIMEOUT else None
         loop = self._ensure_loop()
         future = asyncio.run_coroutine_threadsafe(coro, loop)
         return future.result(timeout=timeout)
@@ -1145,9 +1145,10 @@ class MCPBridge:
             if streak >= MCP_DEGRADED_TIMEOUT_STREAK:
                 logger.warning(
                     '[MCP:Call] %s.%s SKIPPED — server degraded after %d '
-                    'consecutive call timeouts (timeout=%ds). Not retried; '
+                    'consecutive call timeouts (timeout=%s). Not retried; '
                     'reconnect or raise the per-server timeout to recover.',
-                    server_name, tool_name, streak, timeout,
+                    server_name, tool_name, streak,
+                    f'{timeout}s' if timeout else 'none',
                 )
                 audit_log('mcp_server_degraded', server=server_name,
                           tool=tool_name, consecutive_timeouts=streak,
@@ -1160,14 +1161,15 @@ class MCPBridge:
                     f'timeout; do not retry blindly.'
                 )
 
-        logger.info('[MCP:Call] %s.%s(args=%s) timeout=%ds',
-                    server_name, tool_name, str(arguments)[:200], timeout)
+        logger.info('[MCP:Call] %s.%s(args=%s) timeout=%s',
+                    server_name, tool_name, str(arguments)[:200],
+                    f'{timeout}s' if timeout else 'none')
 
         t0 = time.time()
         try:
             result = self._run_async(
                 self._async_call_tool(handle, tool_name, arguments, timeout),
-                timeout=timeout + 10,
+                timeout=(timeout + 10) if timeout else None,
             )
         except Exception as e:
             elapsed = time.time() - t0
@@ -1209,7 +1211,7 @@ class MCPBridge:
                 try:
                     result = self._run_async(
                         self._async_call_tool(new_handle, tool_name, arguments, timeout),
-                        timeout=timeout + 10,
+                        timeout=(timeout + 10) if timeout else None,
                     )
                     elapsed = time.time() - t0
                     self._reset_timeout_streak(server_name)
@@ -1256,7 +1258,10 @@ class MCPBridge:
         result = await handle.session.call_tool(
             tool_name,
             arguments=arguments,
-            read_timeout_seconds=timedelta(seconds=timeout),
+            # None = no read timeout (the default). A per-server "timeout" in
+            # mcp_servers.json still bounds that server's calls, and that is
+            # what keeps the degraded-streak breaker meaningful.
+            read_timeout_seconds=timedelta(seconds=timeout) if timeout else None,
         )
 
         # Extract text from the MCP CallToolResult

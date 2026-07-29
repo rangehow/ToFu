@@ -339,10 +339,12 @@ PROJECT_TOOL_RUN_COMMAND = {
             "Execute a shell command in the project directory and return its output "
             "(stdout + stderr). Use this for running tests, linting, building, checking "
             "git status, installing packages — anything that needs a real shell.\n\n"
-            "The command runs with the project root as working directory. A default "
-            "timeout applies (see the `timeout` param: 60s for filesystem-heavy "
-            "commands, 300s otherwise); pass `timeout=0` for a genuinely long-running "
-            "process. Avoid interactive commands that require stdin input (they will "
+            "The command runs with the project root as working directory. There is "
+            "NO default timeout — a build, test suite or install runs to completion "
+            "however long it takes, and the user ends it with Stop if they don't want "
+            "to wait. Pass an explicit `timeout` ONLY when the command itself should "
+            "be abandoned after a bound (e.g. a probe you expect to answer quickly). "
+            "Avoid interactive commands that require stdin input (they will "
             "hang).\n\n"
             "Each call runs in its own fresh subprocess — there is **no persistent "
             "shell**, so environment/shell state (exported variables, sourced "
@@ -376,7 +378,7 @@ PROJECT_TOOL_RUN_COMMAND = {
                 },
                 "timeout": {
                     "type": "integer",
-                    "description": "Timeout in seconds. Default auto-detects (60s for FS-heavy, 300s otherwise). Set to 0 for NO timeout (unlimited) — only use when user explicitly requests it."
+                    "description": "Optional timeout in seconds. OMIT IT for normal use — the default is NO timeout, so a long build/test/install is waited out rather than killed. Set a value only when the command should be abandoned after a bound; 0 also means unlimited."
                 },
                 "working_dir": {
                     "type": "string",

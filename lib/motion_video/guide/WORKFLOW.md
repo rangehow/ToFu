@@ -103,8 +103,21 @@ re-renders):
 ## Going deeper (optional)
 
 The full upstream knowledge packs — 29 atomic motion rules, 13 multi-phase
-blueprints with runnable examples, 20+ design frame presets — are
-installable from Settings → Skills (search "hyperframes"). Activate
-`hyperframes-motion` / `hyperframes-design` when a scene needs real
-choreography or brand-level design; this guide's contract is enough for
-clean kinetic-type / stat / icon scenes.
+blueprints with runnable examples, and 13 design frame presets — carry
+working GSAP code well beyond this guide's summary.
+
+**Which path are you on?**
+
+- **You, the chat agent, driving the `motion_video_*` tools by hand**: the
+  packs are installable from Settings → Skills (search "hyperframes"), then
+  `activate_skill` `hyperframes-motion` / `hyperframes-design` when a scene
+  needs real choreography or brand-level design.
+- **The automatic engine** (`produce_video` / paper reading mode): its
+  per-scene author reaches the SAME corpus with no installation at all — the
+  packs are fetched once into the managed motion root and the author is given
+  the index in its prompt plus a `craft_reference` tool to read any entry in
+  full. `activate_skill` is NOT in that loop's toolset, so never write engine
+  instructions that assume it.
+
+Either way this guide's contract is enough for clean kinetic-type / stat /
+icon scenes; reach for the corpus when the beat needs more.

@@ -262,6 +262,33 @@ SCENE_AUTHOR_TOOLS = [
             },
         },
     },
+    {
+        'type': 'function',
+        'function': {
+            # The DEEP CHANNEL. The craft guide in this package is a ~20 KB
+            # distillation; the corpus behind this tool is 29 atomic motion
+            # rules, 13 multi-phase scene blueprints and 13 frame presets, each
+            # with working GSAP code. WORKFLOW.md used to tell the author to
+            # "Activate hyperframes-motion", but activate_skill is a CHAT-agent
+            # tool this loop does not have — measured skill hits: 0. This is
+            # that instruction made real on the engine path.
+            'name': 'craft_reference',
+            'description': (
+                'Read the FULL text of one motion rule, scene blueprint or '
+                'frame preset from the craft corpus — working GSAP code and '
+                'exact parameters, far beyond the summary in the craft guide. '
+                'Pass a name exactly as the craft index printed it (e.g. '
+                '"3d-text-depth-layers", "biennale-yellow"). Read one before '
+                'authoring a beat that needs real choreography.'),
+            'parameters': {
+                'type': 'object',
+                'properties': {'name': {
+                    'type': 'string',
+                    'description': 'Entry name from the craft index.'}},
+                'required': ['name'],
+            },
+        },
+    },
 ]
 
 
@@ -566,6 +593,29 @@ def _build_prompt(scene: dict, *, width: int, height: int, duration: float,
             f'Never name a family you have not declared this way (PingFang SC, '
             f'Microsoft YaHei, Source Han Sans…): naming an absent face does '
             f'not get you that face, it silently falls back.\n')
+    # The DEEP CHANNEL index. Handed over WITH the prompt because a tool the
+    # model cannot enumerate is a tool it will not call: the author has to see
+    # which rules and blueprints exist before craft_reference is worth reaching
+    # for. Only the index travels here (~27 KB of name + summary + tags); the
+    # full text of an entry costs a tool call, which is the whole point of
+    # progressive disclosure. Absent corpus → empty block, and the author
+    # simply works from the distilled craft guide as before.
+    craft_block = ''
+    try:
+        from lib.motion_video._craft import craft_index
+        index = craft_index()
+    except Exception as e:  # never let the deep channel break authoring
+        logger.warning('[SceneAuthor] craft index unavailable: %s', e)
+        index = ''
+    if index:
+        craft_block = (
+            '## Craft corpus (deep reference — READ ONE BEFORE YOU AUTHOR)\n'
+            'These are complete, working techniques with real GSAP code — the '
+            'craft guide above is only a summary of the same discipline. '
+            'Choose the ONE entry whose tags best match this beat and call '
+            'craft_reference with its name to read it in full, THEN author. '
+            'Composing a proven technique beats inventing one.\n'
+            f'{index}\n\n')
     return (
         f'You are authoring ONE scene of a {total_scenes}-scene motion-graphics '
         f'video. Write a single self-contained HTML composition for it.\n\n'
@@ -603,7 +653,8 @@ def _build_prompt(scene: dict, *, width: int, height: int, duration: float,
         'no absolute paths — the gate rejects those before rendering.\n'
         '6. Text must be HTML-escaped and fit inside the frame at the chosen '
         'font size.\n\n'
-        f'## Composition contract\n{contract}\n\n'
+        + craft_block
+        + f'## Composition contract\n{contract}\n\n'
         f'## Motion craft — how to make this LOOK designed\n{craft}\n\n'
         f'## Reference skeleton (a STARTING POINT, not the target quality)\n'
         f'```html\n{skeleton}\n```\n'
@@ -812,6 +863,15 @@ def _author_once(scene: dict, scene_dir: str, *, width: int, height: int,
                 name='cjk-sans' + os.path.splitext(font_path)[1])
     except Exception as e:
         logger.warning('[SceneAuthor] could not stage the CJK sans face: %s', e)
+    # Materialise the deep craft corpus BEFORE the prompt is built — the index
+    # travels inside the prompt, so a corpus fetched later would be invisible
+    # to this scene. Same managed-dependency contract as the font above:
+    # one-time fetch, cached under the motion root, never fatal.
+    try:
+        from lib.motion_video._craft import ensure_craft_corpus
+        ensure_craft_corpus()
+    except Exception as e:
+        logger.warning('[SceneAuthor] craft corpus unavailable: %s', e)
     prompt = _build_prompt(scene, width=width, height=height,
                            duration=duration, scene_index=scene_index,
                            total_scenes=total_scenes, font_rel=font_rel)
@@ -952,6 +1012,15 @@ def _author_once(scene: dict, scene_dir: str, *, width: int, height: int,
             except Exception as e:
                 logger.warning('[SceneAuthor] fetch_url failed: %s', e)
                 _reply(tc_id, f'Fetch failed: {e}')
+        elif name == 'craft_reference':
+            from lib.motion_video._craft import craft_reference
+            ref = str(args.get('name') or '').strip()
+            if not ref:
+                _reply(tc_id, 'Error: name is required')
+                return
+            body = craft_reference(ref)
+            state.setdefault('craft_reads', []).append(ref)
+            _reply(tc_id, body)
         else:
             _reply(tc_id, f'Unknown tool {name!r}')
 
@@ -976,14 +1045,17 @@ def _author_once(scene: dict, scene_dir: str, *, width: int, height: int,
             exc_info=(kind != 'transient'))
         return {'outcome': kind, 'html': state['html'], 'rounds': rounds,
                 'tokens': state['tokens'],
+            'craft_reads': list(state.get('craft_reads') or []),
                 'detail': f'author loop error: {type(e).__name__}: {e}'}
 
     if abort.aborted:
         return {'outcome': 'aborted', 'html': state['html'], 'rounds': rounds,
-                'tokens': state['tokens'], 'detail': 'aborted during authoring'}
+                'tokens': state['tokens'],
+            'craft_reads': list(state.get('craft_reads') or []), 'detail': 'aborted during authoring'}
     if not state['html']:
         return {'outcome': 'quality', 'html': '', 'rounds': rounds,
                 'tokens': state['tokens'],
+            'craft_reads': list(state.get('craft_reads') or []),
                 'detail': 'author wrote no composition'}
     # The ACCEPT/REJECT verdict deliberately omits the advisory fill check:
     # rejecting an under-filled composition degrades it to the template, which
@@ -995,7 +1067,9 @@ def _author_once(scene: dict, scene_dir: str, *, width: int, height: int,
     if errors:
         return {'outcome': 'quality', 'html': state['html'], 'rounds': rounds,
                 'tokens': state['tokens'],
+            'craft_reads': list(state.get('craft_reads') or []),
                 'detail': ('authored composition still fails the static gate: '
                            + '; '.join(str(e) for e in errors[:3]))}
     return {'outcome': 'authored', 'html': state['html'], 'rounds': rounds,
-            'tokens': state['tokens'], 'detail': ''}
+            'tokens': state['tokens'],
+            'craft_reads': list(state.get('craft_reads') or []), 'detail': ''}

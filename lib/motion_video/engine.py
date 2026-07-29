@@ -615,6 +615,7 @@ def run_motion_task(task: dict) -> None:
             os.makedirs(scene_dir, exist_ok=True)
             index_path = os.path.join(scene_dir, 'index.html')
             author_rounds = author_tokens = 0
+            author_craft_reads: list = []
             # Resume: a composition already on disk for this scene is kept —
             # never re-author (that would re-spend an agent loop per restart).
             existing = _existing_composition(
@@ -644,6 +645,7 @@ def run_motion_task(task: dict) -> None:
                 html = res['html']
                 author_rounds = res.get('rounds', 0)
                 author_tokens = res.get('tokens', 0)
+                author_craft_reads = list(res.get('craft_reads') or [])
                 if res['mode'] == 'authored':
                     authored += 1
                 _emit(task, {'type': 'scene_authored', 'scene_id': sc['id'],
@@ -714,7 +716,8 @@ def run_motion_task(task: dict) -> None:
                 rec = scene_telemetry(sc, html, scene_dir, mode=scene_mode,
                                       fill=fill, rounds=author_rounds,
                                       tokens=author_tokens,
-                                      gate_findings=gate_findings)
+                                      gate_findings=gate_findings,
+                                      craft_reads=author_craft_reads)
                 scene_records.append(rec)
                 _emit(task, {'type': 'scene_quality', **rec})
             except Exception as e:

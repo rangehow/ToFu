@@ -240,7 +240,8 @@ def asset_floor_findings(scene: dict, html: str, scene_dir: str, *,
 def scene_telemetry(scene: dict, html: str, scene_dir: str, *,
                     mode: str, fill: dict | None,
                     rounds: int = 0, tokens: int = 0,
-                    gate_findings: list | None = None) -> dict:
+                    gate_findings: list | None = None,
+                    craft_reads: list | None = None) -> dict:
     """The per-scene quality record persisted into ``job.json``.
 
     ``fill`` is a :func:`lib.motion_video._fill.measure_fill` result the caller
@@ -270,6 +271,13 @@ def scene_telemetry(scene: dict, html: str, scene_dir: str, *,
         'author_rounds': int(rounds or 0),
         'author_tokens': int(tokens or 0),
         'gate_findings': len(gate_findings or []),
+        # Which deep-craft entries this scene actually read. Recorded because
+        # the channel's predecessor was a DEAD instruction (WORKFLOW.md told
+        # the author to activate a skill the engine path cannot call, measured
+        # hits: 0) — and the only reason that went unnoticed for so long is
+        # that nothing counted it. A capability whose usage is not measured is
+        # indistinguishable from one that does not exist.
+        'craft_reads': list(craft_reads or []),
     }
     if exempt:
         rec['text_only_exempt'] = exempt_reason
@@ -356,4 +364,10 @@ def film_quality_summary(records: list) -> dict:
         'mean_graphics': round(sum(graphics) / len(graphics), 2),
         'scenes_with_font_face': sum(1 for r in records
                                      if int(r.get('font_faces') or 0) > 0),
+        # Deep-channel reach: how many scenes consulted the craft corpus, and
+        # which entries the film leaned on. Makes "is the deep channel alive?"
+        # a number in job.json rather than a manual grep of the transcript.
+        'scenes_using_craft': sum(1 for r in records if r.get('craft_reads')),
+        'craft_entries_read': sorted({e for r in records
+                                      for e in (r.get('craft_reads') or [])}),
     }

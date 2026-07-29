@@ -188,8 +188,16 @@ def test_max_rounds_is_bounded(monkeypatch, tmp_path):
 
 def test_toolset_is_narrow_and_has_no_render_path():
     names = {t['function']['name'] for t in sa.SCENE_AUTHOR_TOOLS}
-    assert names == {'write_composition', 'composition_check',
-                     'web_search', 'generate_asset', 'fetch_url'}
+    # The AUTHORING core. Pinned as a subset rather than an exact set: the
+    # toolset is allowed to grow a read-only knowledge channel (craft_reference
+    # was added for epic pt_db5602172ac44b11 item ③) without this guard having
+    # to be edited, but it may never LOSE one of these or gain a side-effecting
+    # one — which is what the banned list below actually enforces.
+    assert {'write_composition', 'composition_check',
+            'web_search', 'generate_asset', 'fetch_url'} <= names
+    # Everything in the set must be authoring, search, or read-only reference.
+    assert names <= {'write_composition', 'composition_check', 'web_search',
+                     'generate_asset', 'fetch_url', 'craft_reference'}
     # No render / concat / mux / arbitrary write_file reachable from a scene
     # author. `generate_asset` is deliberately IN the set: it writes only into
     # the content-addressed asset library and returns a scene-relative path,

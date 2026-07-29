@@ -11852,8 +11852,8 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   width:30px;
   height:30px;
   z-index:1;
-  cursor:grab;              /* the kitten is draggable (press+move) */
-  touch-action:none;        /* let a touch-drag move the cat, not scroll the page */
+  cursor:grab;              /* the pet is draggable (press+move) */
+  touch-action:none;        /* let a touch-drag move the pet, not scroll the page */
   will-change:transform;
   -webkit-tap-highlight-color:transparent;
   /* LIVE SCENE LIGHTING (set per-frame by tofu-pet.js from TofuScene.lightInfo).
@@ -11872,7 +11872,7 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 .tofu-pet[data-state="drag"]{cursor:grabbing}
 /* OVERLAP FIX (owner: "the way it overlaps the foreground seems strange"): the
    near occluder plane sits at z2, IN FRONT of the resting pet (z1) so grass
-   hides its paws — correct while it stands IN the scene. But a PICKED-UP cat is
+   hides its feet — correct while it stands IN the scene. But a PICKED-UP pet is
    airborne: it must rise ABOVE that near plane, not stay trapped behind the
    grass. Lift the held sprite above the fg canvas (z2) while dragging. */
 .tofu-pet[data-state="drag"]{z-index:5}
@@ -11883,7 +11883,7 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
    turn motion is carried by the data-turning pivot pop on the img layer below. */
 .tofu-pet-facing{display:block;width:100%;height:100%}
 /* A turn is a PIVOT, not a page-flip: tofu-pet.js stamps data-turning="1" for
-   ~260ms whenever the facing flips, and this brief squash-hop makes the cat
+   ~260ms whenever the facing flips, and this brief squash-hop makes the pet
    plant + spin. It composites over the breathe/walk anim (they own translate/
    scale on the img; this owns a tiny lift + settle). */
 .tofu-pet[data-turning] .tofu-pet-img{animation:tofuPetPivot .26s ease-out 1, tofuPetBreathe 3.8s ease-in-out infinite}
@@ -11895,10 +11895,10 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   object-position:bottom;
   user-select:none;
   -webkit-user-drag:none;
-  /* the kitten is a refined pixel-art sprite (generated art, high-res 1024px
-     PNG downscaled into the 30px box) → smooth scaling. pixelated/crisp-edges
-     applies to native-resolution pixel art; here it would jag the heavily
-     downscaled antialiased outline into mud. */
+  /* the pet is a BRAND-NATIVE SVG frame (static/icons/pet/tofu/tofu-<x>.svg, a
+     32-unit viewBox rendered into this 30px box) → smooth scaling, crisp at any
+     DPR. pixelated/crisp-edges applies to native-resolution pixel art; here it
+     would only jag the vector outline into mud. */
   image-rendering:auto;
   transform-origin:50% 92%;
   animation:tofuPetBreathe 3.8s ease-in-out infinite;

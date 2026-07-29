@@ -427,6 +427,51 @@ html[data-rail] .folder-quickadd{display:none}
 }
 .sidebar-header h1 .sidebar-brand>span,
 .welcome h2.tofu-brand>span{display:inline-block}
+
+/* ══ BRAND SEAL + GROUND SHADOW — THEME-AGNOSTIC FORM ══════════════════════
+   品牌区的两个形态特征。与字形真源同一道理(2026-07-29 owner 实测二次退回):上一版
+   它们只挂在 `[data-theme="tofu"]` 上,于是切到 dark/light 品牌区就退回改造前的样子
+   ——实测「豆腐」在 dark 为 11px/400/灰 #6a6a7a、light 为 11px/400/灰 #868490 的裸字,
+   正是「在 42px 主标旁读作漏排说明文字」那个原始缺陷在另两个主题原样存活;吉祥物
+   落影同样缺席,两个主题下它仍悬空。
+
+   故形态(印章几何 / clamp 字号下限 / 字距补偿 / 倾角 / 落影椭圆)在此一次性供给三个
+   主题,主题层只允许覆盖「印底色」与「落影浓度」。选择器带上下文到 (0,3,2),严格压过
+   低优先级的 `.welcome h2 small`(0,2,2)——后者把 `-webkit-text-fill-color` 设成灰色
+   且该属性可继承,不显式声明会被它穿透。
+
+   三个数字是实拍定的,不是估的(static/icons/_gen/wordmark-preview/a3.png):
+   ① font-size 用 clamp 而非纯 em —— 纯 .30em 在移动 20px 主标下只有 6px,中文两字
+      糊成一团;纯 px(12.5)反过来在 20px 主标旁几乎与主标同高。两端都实拍过。
+   ② padding 左右不等(.64em 左 / .50em 右)—— letter-spacing 会在末字「腐」后多留一份
+      字距,左右等距会看起来右边更空。
+   ③ margin-left .52em —— .36em 实拍贴住了 u 的右侧。
+   几何全部用 em,随 clamp 后的字号一起缩放,只有字号本身有下限。 */
+.welcome h2.tofu-brand small{
+  font-family:var(--sans-body);
+  font-size:clamp(10.5px,.30em,13px);
+  font-weight:700;
+  letter-spacing:.14em;line-height:1;
+  color:#FCF8EE;-webkit-text-fill-color:#FCF8EE;
+  background:linear-gradient(150deg,#A05E17 0%,#84470F 100%);
+  padding:.42em .50em .42em .64em;
+  border-radius:.52em;
+  margin-left:.52em;
+  vertical-align:middle;opacity:1;
+  transform:translateY(-.62em) rotate(-3.2deg);
+  box-shadow:0 .06em .16em rgba(92,72,44,.30),
+             inset 0 .06em 0 rgba(255,247,232,.30)
+}
+/* 吉祥物接地投影 —— 没有它时吉祥物悬在纸面上方(只有 drop-shadow、没有落影),读作
+   贴图而非放在纸上的物件。纯装饰,不参与布局。
+   position:relative 必须在此一并声明 —— 基础层 .welcome-icon 本来没有定位,之前只是
+   tofu 层顺手给了一个;不补的话落影会逃到最近的定位祖先上去。 */
+.welcome-icon{position:relative}
+.welcome-icon::before{
+  content:"";position:absolute;left:50%;bottom:1px;transform:translateX(-50%);
+  width:72%;height:11px;border-radius:50%;display:block;
+  background:radial-gradient(ellipse at 50% 50%,rgba(140,100,52,.24),rgba(140,100,52,0) 70%)
+}
 /* ── 字母配色 — 两处共用同一套渐变。侧栏此前是紫渐变(#8b6cf6→#a78bfa)、欢迎屏是
    豆腐奶油-琥珀金渐变,dark 下实测就是「侧栏紫 Tofu + 欢迎屏金 Tofu」同一品牌两个
    颜色。保留金系(它是豆腐本身的颜色;紫是早年通用 accent 的遗留)。 ── */
@@ -11261,7 +11306,9 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   font-family:var(--sans-body);
   font-size:42px;font-weight:800;letter-spacing:-0.03em;text-transform:none
 }
-[data-theme="tofu"] .welcome h2 small{
+/* 非品牌的说明小字。必须排除 .tofu-brand —— 它与基础层的印章规则同为 (0,2,2)
+   且位置在后,不排除就会把印面字拉回 Jakarta 500/13px(实测如此)。 */
+[data-theme="tofu"] .welcome h2:not(.tofu-brand) small{
   -webkit-text-fill-color:#9C9178;
   font-family:'Jakarta Toolbar','Plus Jakarta Sans','Jakarta Fallback',sans-serif;
   letter-spacing:.12em;font-weight:500;font-size:13px
@@ -11317,28 +11364,29 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
    ③ margin-left .52em —— .36em 实拍贴住了 u 的右侧。
    几何全部用 em,所以随 clamp 后的字号一起缩放,只有字号本身有下限。 ── */
 [data-theme="tofu"] .welcome h2.tofu-brand small{
-  font-family:var(--sans-body);
-  font-size:clamp(10.5px,.30em,13px);
-  font-weight:700;
-  letter-spacing:.14em;line-height:1;
-  /* 必须显式声明 fill —— 低优先级的 .welcome h2 small(0,2,2)把
-     -webkit-text-fill-color 设成 #9C9178 且该属性可继承,不显式声明会被它穿透 */
-  color:#FCF8EE;-webkit-text-fill-color:#FCF8EE;
-  background:linear-gradient(150deg,#C8814F 0%,#A55F31 100%);
-  padding:.42em .50em .42em .64em;
-  border-radius:.52em;
-  margin-left:.52em;
-  vertical-align:middle;opacity:1;
-  transform:translateY(-.62em) rotate(-3.2deg);
-  box-shadow:0 .06em .16em rgba(92,72,44,.30),
-             inset 0 .06em 0 rgba(255,247,232,.30)
+  /* 印底色与基础层同值(奶油纸底上已达标:印面字 4.82:1、印章对页底 4.78:1),
+     故不重复声明——多写一份就多一个会漂移的副本。本块故意留空。 */
 }
 /* 吉祥物接地投影 —— 此前它悬在纸面上方(有 drop-shadow 但没有落影),读作贴图而非
    放在纸上的物件;一片暖椭圆把它「托」住。纯装饰,不参与布局。 */
 [data-theme="tofu"] .welcome-icon::before{
-  content:"";position:absolute;left:50%;bottom:1px;transform:translateX(-50%);
-  width:72%;height:11px;border-radius:50%;display:block;
+  /* 几何由基础层供给;此处只调浓度。奶油纸底用基础层原值。 */
   background:radial-gradient(ellipse at 50% 50%,rgba(140,100,52,.24),rgba(140,100,52,0) 70%)
+}
+/* ── 品牌区的两处主题口音 —— 只允许改「印底色」与「落影浓度」,形态一律走基础层。
+   ● dark:印底色沜用基础层(实测已达标 —— 印面奶油字 4.82:1、印章对深底 3.87:1),
+     故只调落影:深底上暖棕色落影几乎不可见且会发脏,改用更淡的中性阴影。
+   ● light:白底需要更深的印底(印面字 5.28:1、印章对白底 5.60:1),落影略加深以免化开。
+   ★ 本区域的任何新增覆盖都不得再写几何/字号/倒角 —— 那正是把形态拆成三份、
+   切主题就退化的根因;守卫按三主题参数化钉死。 ── */
+[data-theme="dark"] .welcome-icon::before{
+  background:radial-gradient(ellipse at 50% 50%,rgba(255,241,214,.10),rgba(255,241,214,0) 70%)
+}
+[data-theme="light"] .welcome h2.tofu-brand small{
+  background:linear-gradient(150deg,#9A5716 0%,#7C4210 100%)
+}
+[data-theme="light"] .welcome-icon::before{
+  background:radial-gradient(ellipse at 50% 50%,rgba(120,84,40,.30),rgba(120,84,40,0) 70%)
 }
 
 /* ── Mobile breakpoints: tofu 主标恢复全局移动意图 — 42px 是桌面值(上方 0,2,1

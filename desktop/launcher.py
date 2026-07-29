@@ -642,10 +642,14 @@ def main():
     # work (main() would just boot a second app). Instead post_install.py
     # relaunches us with TOFU_PLAYWRIGHT_INSTALL=1, and here we drive the
     # bundled playwright package in-process to fetch its Chromium binary.
+    #
+    # --only-shell matches install.sh + post_install.py: a default install
+    # also fetches the 175 MB full build, which no call site here launches
+    # (every one is headless).
     if os.environ.get('TOFU_PLAYWRIGHT_INSTALL') == '1':
         try:
             from playwright.__main__ import main as _pw_main
-            sys.argv = ['playwright', 'install', 'chromium']
+            sys.argv = ['playwright', 'install', '--only-shell', 'chromium']
             _pw_main()
         except SystemExit:
             raise

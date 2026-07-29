@@ -1,4 +1,10 @@
-"""chromium_env.py — single source of truth for the headless-Chromium runtime env.
+"""chromium_env.py — single source of truth for the headless-Chromium runtime.
+
+Two questions, one module, because getting either wrong produces the same
+symptom (a dead browser) and they were each hand-copied into four places:
+
+  1. **Which environment** must a launch inherit? (:func:`ensure_chromium_env`)
+  2. **Which binary** counts as an installed Chromium? (:func:`chromium_executable`)
 
 Playwright's Chromium is a CHILD process. It resolves its GUI shared libs
 (``libatk-1.0.so.0``, ``libnss3.so``, ``libgbm.so.1``, …) through the dynamic
@@ -66,6 +72,9 @@ __all__ = [
     'fontconfig_paths',
     'ensure_chromium_env',
     'describe_chromium_env',
+    'browsers_root',
+    'chromium_binaries',
+    'chromium_executable',
 ]
 
 #: Libs whose presence proves a directory really carries Chromium's GUI deps.
@@ -221,6 +230,149 @@ def ensure_chromium_env(env=None, env_prefix=None):
     return report
 
 
+# ── Binary resolution ────────────────────────────────────────────────
+#
+# WHY THIS LIVES HERE (the second half of the same single-source rule)
+# --------------------------------------------------------------------
+# Resolving the ENV was centralised above, but "which binary counts" stayed
+# hand-copied, and the copies disagreed — measured 2026-07-29 on a host whose
+# ONLY build is ``chromium_headless_shell-1223``:
+#
+#   ``desktop/post_install.py``  asked Playwright for ``chromium.executable_path``
+#       and ``os.path.isfile``'d it. That property names the FULL build
+#       (``chromium-1223/chrome-linux64/chrome``) even when only the shell is
+#       installed, so it reported "not installed" while ``launch()`` succeeded
+#       — the desktop app kept offering a ~150 MB download for a working
+#       browser. Not a transient skew: ``install.sh`` deliberately installs
+#       ``--only-shell``, so the full build is a path it NEVER creates.
+#   ``lib/motion_video/_env.py`` probed the shell layout correctly but hard-coded
+#       ``~/.cache/ms-playwright``, which ``install.sh`` overrides via
+#       ``PLAYWRIGHT_BROWSERS_PATH``.
+#
+# So: one resolver, evidence-based (a path counts only when it is a real file),
+# honouring the same env var the installer sets.
+
+#: Executable paths relative to a build dir, most-capable first.
+#: The full build can do headed AND headless, so it wins when both exist; the
+#: shell is a complete answer on its own (every launch in this repo is
+#: headless). Covers current + legacy layouts on all three platforms.
+_CHROMIUM_REL_PATHS = (
+    # full build — Linux (new/old), macOS, Windows
+    'chrome-linux64/chrome',
+    'chrome-linux/chrome',
+    'chrome-mac/Chromium.app/Contents/MacOS/Chromium',
+    'chrome-mac-arm64/Chromium.app/Contents/MacOS/Chromium',
+    'chrome-win64/chrome.exe',
+    'chrome-win/chrome.exe',
+    # headless shell — Linux (new/old), macOS, Windows
+    'chrome-headless-shell-linux64/chrome-headless-shell',
+    'chrome-headless-shell-mac/chrome-headless-shell',
+    'chrome-headless-shell-mac-x64/chrome-headless-shell',
+    'chrome-headless-shell-mac-arm64/chrome-headless-shell',
+    'chrome-headless-shell-win64/chrome-headless-shell.exe',
+    'chrome-headless-shell-win/chrome-headless-shell.exe',
+    'chrome-linux/headless_shell',
+)
+
+#: System-wide browsers to fall back on, in preference order.
+_SYSTEM_BROWSERS = ('google-chrome', 'google-chrome-stable', 'chromium',
+                    'chromium-browser', 'microsoft-edge', 'msedge')
+
+
+def browsers_root():
+    """Return Playwright browser-cache roots to search, most-authoritative first.
+
+    ``PLAYWRIGHT_BROWSERS_PATH`` is an OVERRIDE, not an extra candidate — that
+    is Playwright's own semantics, verified 2026-07-29 by pointing it at an
+    EMPTY directory: ``chromium.executable_path`` still resolved inside that
+    directory and never fell back to ``~/.cache/ms-playwright``. Searching both
+    would make us report a browser from a cache Playwright will not actually
+    launch from.
+
+    The special value ``'0'`` means "store inside the pip package", not a
+    directory, so it is ignored rather than treated as a path.
+    """
+    env_root = (os.environ.get('PLAYWRIGHT_BROWSERS_PATH') or '').strip()
+    if env_root and env_root != '0':
+        return [env_root] if os.path.isdir(env_root) else []
+    home = os.path.expanduser('~')
+    roots = [os.path.join(home, '.cache', 'ms-playwright'),
+             os.path.join(home, 'Library', 'Caches', 'ms-playwright'),
+             os.path.join(home, 'AppData', 'Local', 'ms-playwright')]
+    return [r for r in roots if os.path.isdir(r)]
+
+
+def _build_revision(name):
+    """Parse the trailing revision from a build dir name (``chromium-1223`` →
+    1223). Unparseable names sort last rather than raising."""
+    tail = name.rsplit('-', 1)[-1].rsplit('_', 1)[-1]
+    try:
+        return int(tail)
+    except ValueError:
+        return 0
+
+
+def chromium_binaries(include_system=True):
+    """Every usable Chromium executable, most-preferred first.
+
+    A path is returned only when it is a real file — never inferred from a
+    directory's name. Ordering: newest Playwright build first; within a build,
+    the full build before the headless shell; then system-wide browsers.
+
+    Args:
+        include_system: Also consider ``google-chrome`` / ``chromium`` / … on
+            PATH. Set False to ask strictly about the managed install.
+
+    Returns:
+        List of existing executable paths (may be empty).
+    """
+    found = []
+    for root in browsers_root():
+        try:
+            entries = os.listdir(root)
+        except OSError as e:
+            _log().debug('[ChromiumEnv] cannot list %s: %s', root, e)
+            continue
+        # Rank by (capability tier, revision) so a full build beats the shell at
+        # the SAME revision, and a newer build beats an older one regardless of
+        # listdir order. Sorting build dirs alone is not enough: the shell lives
+        # in its own `chromium_headless_shell-<rev>` directory, so tier is a
+        # property of the resolved PATH, not of the directory ordering.
+        ranked = []
+        for name in entries:
+            if not name.startswith(('chromium-', 'chromium_')):
+                continue
+            rev = _build_revision(name)
+            for tier, rel in enumerate(_CHROMIUM_REL_PATHS):
+                path = os.path.join(root, name, *rel.split('/'))
+                if os.path.isfile(path):
+                    ranked.append((-rev, tier, path))
+        for _rev, _tier, path in sorted(ranked):
+            if path not in found:
+                found.append(path)
+    if include_system:
+        import shutil
+        for name in _SYSTEM_BROWSERS:
+            path = shutil.which(name)
+            if path and path not in found:
+                found.append(path)
+    return found
+
+
+def chromium_executable(include_system=True):
+    """The Chromium executable to use, or ``''`` when none is installed.
+
+    An explicit ``HYPERFRAMES_BROWSER_PATH`` override always wins (it is what
+    the HyperFrames CLI itself honours), so an operator pointing at a
+    hand-built binary is never second-guessed.
+    """
+    override = (os.environ.get('HYPERFRAMES_BROWSER_PATH') or '').strip()
+    if override and os.path.isfile(override):
+        return override
+    cands = chromium_binaries(include_system=include_system)
+    return cands[0] if cands else ''
+
+
 def describe_chromium_env(env_prefix=None):
     """Diagnose the Chromium runtime env WITHOUT mutating anything.
 
@@ -230,13 +382,22 @@ def describe_chromium_env(env_prefix=None):
     Returns:
         dict with ``lib_dirs`` (resolvable GUI-lib dirs), ``fontconfig``
         (config file that would be used, or None), ``system_fontconfig``
-        (whether ``/etc/fonts`` exists) and ``issues`` (human-readable list;
-        empty means nothing is known to be missing).
+        (whether ``/etc/fonts`` exists), ``executable`` (the Chromium binary
+        that would be used, or ''), ``binaries`` (all candidates) and
+        ``issues`` (human-readable list; empty means nothing is known to be
+        missing).
     """
     lib_dirs = chromium_lib_dirs(env_prefix)
     _, conf_file = fontconfig_paths(env_prefix)
     system_fc = os.path.isdir('/etc/fonts')
+    binaries = chromium_binaries()
+    executable = chromium_executable()
     issues = []
+    if not executable:
+        issues.append(
+            'no Chromium executable found — install one with: python -m '
+            'playwright install --only-shell chromium (the headless shell is '
+            'sufficient; every launch here is headless)')
     if sys.platform.startswith('linux') and not lib_dirs:
         issues.append(
             'no directory carrying Chromium GUI libs (libatk/libnss/libgbm) '
@@ -251,4 +412,5 @@ def describe_chromium_env(env_prefix=None):
             'screenshots). Install: conda install -c conda-forge fontconfig '
             'font-ttf-dejavu-sans-mono')
     return {'lib_dirs': lib_dirs, 'fontconfig': conf_file,
-            'system_fontconfig': system_fc, 'issues': issues}
+            'system_fontconfig': system_fc, 'executable': executable,
+            'binaries': binaries, 'issues': issues}

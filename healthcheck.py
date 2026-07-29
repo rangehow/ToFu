@@ -259,7 +259,15 @@ if '--runtime' in sys.argv:
                 finally:
                     _br.close()
             if _gw and _gw > 0:
-                ok(f"browser engine launches and renders text (glyph width {_gw:.0f}px)")
+                _exe = (_diag or {}).get('executable') or ''
+                _which = ''
+                if _exe:
+                    _which = (' [headless shell]' if 'headless' in _exe
+                              else ' [full build]')
+                ok(f"browser engine launches and renders text "
+                   f"(glyph width {_gw:.0f}px){_which}")
+                if _exe:
+                    print(f"      binary: {_exe}")
             else:
                 fail("Chromium launches but renders NO text (zero fonts) — "
                      "screenshots will come back blank-but-styled. Install "

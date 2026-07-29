@@ -16,8 +16,11 @@ four external binaries the HyperFrames render chain needs:
     static binary (pip package, no root needed) → PATH.
   * **ffprobe**    — ``TOFU_FFPROBE`` env → PATH. OPTIONAL: ``probe_video``
     falls back to parsing ``ffmpeg -i`` stderr when absent.
-  * **chrome**     — ``HYPERFRAMES_BROWSER_PATH`` (honoured natively by the
-    CLI) → newest Playwright chromium under ``~/.cache/ms-playwright``.
+  * **chrome**     — resolved by ``chromium_env.chromium_executable()``
+    (the shared single source of truth): ``HYPERFRAMES_BROWSER_PATH``
+    override → the Playwright cache (honouring ``PLAYWRIGHT_BROWSERS_PATH``,
+    which install.sh exports) → a system browser. Accepts the
+    headless-shell build, which is the only one install.sh downloads.
 
 The headless-Chromium shared-library trap (libatk/libgbm missing on
 minimal servers) is handled by prepending the running Python's
@@ -130,45 +133,22 @@ def ffprobe_bin() -> str:
     return shim if os.path.isfile(shim) else ''
 
 
-def _playwright_chrome_candidates() -> list[str]:
-    """All Playwright-cached Chrome executables, newest build first."""
-    base = os.path.expanduser(os.path.join('~', '.cache', 'ms-playwright'))
-    cands: list[tuple[int, str]] = []
-    try:
-        builds = os.listdir(base)
-    except OSError as e:
-        logger.debug('[MotionVideo] cannot list %s: %s', base, e)
-        return []
-    for b in builds:
-        if not (b.startswith('chromium-') or b.startswith('chromium_')):
-            continue
-        try:
-            rev = int(b.rsplit('-', 1)[-1].rsplit('_', 1)[-1])
-        except ValueError as _e:
-            logger.debug('playwright chrome candidates: unparseable (%s)', _e)
-            rev = 0
-        for rel in ('chrome-linux64/chrome', 'chrome-linux/chrome',
-                    'chrome-headless-shell-linux64/chrome-headless-shell'):
-            p = os.path.join(base, b, rel)
-            if os.path.isfile(p):
-                cands.append((rev, p))
-    cands.sort(key=lambda t: -t[0])
-    return [p for _, p in cands]
-
-
 def chrome_bin() -> str:
-    """Locate a Chromium executable for HyperFrames capture."""
-    override = os.environ.get('HYPERFRAMES_BROWSER_PATH', '').strip()
-    if override and os.path.isfile(override):
-        return override
-    cands = _playwright_chrome_candidates()
-    if cands:
-        return cands[0]
-    for name in ('google-chrome', 'chromium', 'chromium-browser'):
-        p = shutil.which(name)
-        if p:
-            return p
-    return ''
+    """Locate a Chromium executable for HyperFrames capture.
+
+    Delegates to the shared resolver (operator override → Playwright cache →
+    system browsers) so this path can never disagree with the desktop
+    installer or the healthcheck about whether a browser is present.
+
+    There is deliberately no local candidate-enumerating helper any more: the
+    previous ``_playwright_chrome_candidates`` hard-coded ``~/.cache/
+    ms-playwright`` (going blind whenever install.sh pinned a shared cache via
+    ``PLAYWRIGHT_BROWSERS_PATH``) and listed only the Linux layouts. Keeping it
+    as a delegating wrapper would leave a function that LOOKS authoritative but
+    is called by nothing — the next reader would edit it and see no effect.
+    """
+    from chromium_env import chromium_executable
+    return chromium_executable()
 
 
 def ensure_hyperframes(*, install: bool = True, timeout: int = 900) -> str:

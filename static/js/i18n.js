@@ -980,6 +980,8 @@ var _i18n = {
   'ri.toolAnchorTip': { zh: '调试这次工具调用（第 {round} 轮）：产生它的请求 + 执行后的消息状态', en: 'Debug this tool call (round {round}): the request that produced it, and the message state after it ran' },
   'ri.tabRequest': { zh: '请求', en: 'Request' },
   'ri.tabState': { zh: '结果状态', en: 'Result state' },
+  'ri.stateKindTip': { zh: '工具执行后的消息状态（已包含产生这次调用的请求内容）', en: 'Message state after the tools ran (includes the request that produced this call)' },
+  'ri.requestKindTip': { zh: '这一轮没有留下执行后状态（如子代理轮次），显示产生这次调用的请求', en: 'This round left no post-tool state (e.g. a sub-agent round) — showing the request that produced the call' },
   'ri.stateRowTip': { zh: '点击跳到对应工具调用旁，就地查看该状态镜像', en: 'Jump to the tool call and view this state mirror inline' },
   'ri.stateEmpty': { zh: '该状态镜像已过期（>6h）或不存在', en: 'State mirror expired (>6h) or missing' },
   'ri.stateClose': { zh: '关闭状态检视', en: 'Close state inspector' },

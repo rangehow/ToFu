@@ -748,8 +748,17 @@ html[data-rail] .folder-quickadd{display:none}
 .ri-state-panel-head{display:flex;align-items:center;gap:8px;padding:6px 9px;border-bottom:1px solid var(--border);background:rgba(128,128,160,0.06)}
 /* Which axis the single view came from — the post-tool mirror, or the
    producing request as a fallback for rounds that emitted no mirror (swarm
-   sub-agents). Named on screen so a fallback is never read as the mirror. */
-.ri-state-panel-kind{padding:1px 7px;font-size:10px;font-weight:600;line-height:1.6;color:var(--accent);background:var(--accent-subtle);border:1px solid var(--accent);border-radius:3px;flex-shrink:0;cursor:help}
+   sub-agents). Named on screen so a fallback is never read as the mirror.
+
+   --ri-kind-ink, NOT var(--accent): --accent is a FILL colour (button grounds,
+   1-2px borders) and as chip TEXT it measured 3.49 / 3.71 / 3.00:1 on the
+   dark / light / tofu grounds. Found by the real-browser pass
+   (tests/_ri_panel_visual_check.py) AFTER the static guard went green — the
+   static guard only graded pre-existing tokens, so a newly-added element
+   inheriting a fill colour was exactly its blind spot. */
+.ri-state-panel-kind{--ri-kind-ink:#c4b5fd;padding:1px 7px;font-size:10px;font-weight:600;line-height:1.6;color:var(--ri-kind-ink);background:var(--accent-subtle);border:1px solid var(--accent);border-radius:3px;flex-shrink:0;cursor:help}
+[data-theme="light"] .ri-state-panel-kind{--ri-kind-ink:#3730a3}
+[data-theme="tofu"] .ri-state-panel-kind{--ri-kind-ink:#7d4720}
 .ri-state-panel-kind:empty{display:none}
 .ri-state-panel-kind.ri-kind-fallback{color:var(--text-secondary);background:rgba(128,128,160,0.10);border-color:var(--border-light)}
 .ri-state-panel-title{font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:600;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -10006,7 +10015,18 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 [data-theme="light"] .debug-panel{background:rgba(244,242,237,0.97);color:#505060;border-color:var(--border)}
 [data-theme="light"] .debug-msg-block{border-color:rgba(0,0,0,0.12)}
 [data-theme="light"] .debug-msg-body pre{color:#333}
-[data-theme="light"] .debug-msg-body pre .debug-key{color:#1565c0}[data-theme="light"] .debug-msg-body pre .debug-str{color:#2e7d32}[data-theme="light"] .debug-msg-body pre .debug-num{color:#d84315}[data-theme="light"] .debug-msg-body pre .debug-null{color:#00838f}
+/* Syntax + role colours are re-picked per theme, never inherited: the dark
+   palette is tuned for a #111 ground and lands at 1.7-4.3:1 on paper. Every
+   value below is >=4.5:1 on --bg-secondary (#eceae4), measured. */
+[data-theme="light"] .debug-msg-body pre .debug-key{color:#0b4f9e}[data-theme="light"] .debug-msg-body pre .debug-str{color:#1b5e20}[data-theme="light"] .debug-msg-body pre .debug-num{color:#9c3200}[data-theme="light"] .debug-msg-body pre .debug-null{color:#00606b}
+/* The ROLE labels had no light override at all — the dark #4fc3f7/#81c784/
+   #ce93d8 family measured 1.67-1.99:1 here, i.e. barely legible. */
+[data-theme="light"] .debug-msg-header .role-system{color:#9a5b00}
+[data-theme="light"] .debug-msg-header .role-user{color:#0b5c8a}
+[data-theme="light"] .debug-msg-header .role-assistant{color:#1f6b3a}
+[data-theme="light"] .debug-msg-header .role-tool{color:#6b3fa0}
+[data-theme="light"] .debug-msg-header .role-tools{color:#8a4b00}
+[data-theme="light"] .debug-tool-calls{color:#8a4b00}
 [data-theme="light"] pre.code-long[data-collapsed="true"]::after{background:linear-gradient(to bottom,transparent,#eceae4)}
 
 /* Light: scrollbar */
@@ -12467,10 +12487,20 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
   box-shadow:0 4px 12px rgba(74,63,47,0.08);border-radius:var(--radius)}
 [data-theme="tofu"] .debug-msg-block{border-color:#D8D1C0}
 [data-theme="tofu"] .debug-msg-body pre{color:#4A3F2F}
-[data-theme="tofu"] .debug-msg-body pre .debug-key{color:#5A8AA8}
-[data-theme="tofu"] .debug-msg-body pre .debug-str{color:#6A8A5E}
-[data-theme="tofu"] .debug-msg-body pre .debug-num{color:#B8884A}
-[data-theme="tofu"] .debug-msg-body pre .debug-null{color:#8A78B0}
+/* Darkened from the original #5A8AA8/#6A8A5E/#B8884A/#8A78B0, which measured
+   2.75-3.40:1 on the paper ground (#F4EFE5) — the same hues, taken to >=4.5:1
+   so the palette still reads as tofu rather than as the dark theme. */
+[data-theme="tofu"] .debug-msg-body pre .debug-key{color:#2F5A72}
+[data-theme="tofu"] .debug-msg-body pre .debug-str{color:#3D5C33}
+[data-theme="tofu"] .debug-msg-body pre .debug-num{color:#8A5A1E}
+[data-theme="tofu"] .debug-msg-body pre .debug-null{color:#5A4A80}
+/* Role labels had no tofu override either (1.51-2.08:1 before). */
+[data-theme="tofu"] .debug-msg-header .role-system{color:#8A5A1E}
+[data-theme="tofu"] .debug-msg-header .role-user{color:#2F5A72}
+[data-theme="tofu"] .debug-msg-header .role-assistant{color:#3A6B45}
+[data-theme="tofu"] .debug-msg-header .role-tool{color:#63508F}
+[data-theme="tofu"] .debug-msg-header .role-tools{color:#8A5A1E}
+[data-theme="tofu"] .debug-tool-calls{color:#8A5A1E}
 [data-theme="tofu"] pre.code-long[data-collapsed="true"]::after{background:linear-gradient(to bottom,transparent,#EDE9DF);border-radius:0 0 11px 11px}
 
 /* ── Modal — neo-brutalist tofu block (generic shell) ──

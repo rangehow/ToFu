@@ -300,11 +300,11 @@ function _riSharedPrefix(prevMsgs, curMsgs) {
  * "records only for this round of tool calls are sufficient"). Round 1,
  * a missing/expired previous payload, or a zero shared prefix all degrade
  * to the full payload. */
-async function _riRoundScopedMessages(taskId, roundNum, tab, messages) {
+async function _riRoundScopedMessages(taskId, roundNum, kind, messages) {
   const num = parseInt(roundNum, 10);
   if (!Number.isFinite(num) || num <= 1 || !Array.isArray(messages)) return messages;
   const prev = await _riFetchPayload(taskId, num - 1, '',
-    tab === 'state' ? 'state' : 'request');
+    kind === 'state' ? 'state' : 'request');
   if (!prev || !Array.isArray(prev.messages) || !prev.messages.length)
     return messages;
   const k = _riSharedPrefix(prev.messages, messages);
@@ -407,25 +407,35 @@ async function openRequestInspectorForToolRound(taskId, roundNum) {
   await _riSelectRound(taskId, pick.roundNum, el, targetTurn);
 }
 
-/* ── Merged tool-row debug panel (request | post-tool state) ──────────────
- * ONE entry per tool row, two TABS inside — because "which request produced
- * this call" and "what the message state looked like after it ran" are two
- * views of the SAME round, not two destinations. They were previously two
- * separate buttons (R and S) competing for the row's right edge.
+/* ── Tool-row debug panel (ONE view: the post-tool result state) ──────────
+ * ONE entry per tool row opening ONE view. The former request | state tab
+ * pair was redundant, not two questions: the state mirror for round N is
+ * captured AFTER the tool results are appended to the SAME message list the
+ * request was built from (lib/tasks_pkg/tool_dispatch/_pipeline.py — same
+ * roundNum axis), so the request payload is a strict PREFIX of the mirror.
+ * Showing both meant clicking twice to see the same messages minus the
+ * results (owner, 2026-07-29: "we don't need both").
  *
- * Mounts a single panel right after the tool round's [data-prn] slot and
- * renders through the SAME renderer as the drawer detail
- * (renderDebugBlocksInto / updateDebugToolsBlock — no second JSON renderer).
- * When the tool row is not in the DOM (unloaded/old conversation), degrades
- * to the drawer so the click always lands somewhere meaningful.
+ * The request axis survives as a FALLBACK, not a tab: swarm sub-agents
+ * persist kind='request' snapshots only (lib/swarm/agent.py has no state
+ * emission), so a state-only panel would render "mirror missing" on every
+ * sub-agent tool row. `_riFetchRoundView` therefore tries the mirror first
+ * and degrades to the request, telling the caller which one it got so the
+ * chip can name the axis instead of silently mislabelling it.
  *
- * ROUND-SCOPED (owner, 2026-07-28): each tab renders ONLY what that round
- * appended — the increment over the previous round's same-kind payload —
- * never the full conversation-history dump ("records only for this round of
- * tool calls are sufficient"). The cross-round chip strip was removed with
- * it: one click answers one round; the drawer remains the place for
- * cross-round navigation. */
-async function openToolDebugPanel(taskId, roundNum, anchorEl, tab) {
+ * Mounts right after the tool round's [data-prn] slot and renders through
+ * the SAME renderer as the drawer detail (renderDebugBlocksInto /
+ * updateDebugToolsBlock — no second JSON renderer). When the tool row is
+ * not in the DOM (unloaded/old conversation), degrades to the drawer so the
+ * click always lands somewhere meaningful.
+ *
+ * ROUND-SCOPED (owner, 2026-07-28): renders ONLY what that round appended —
+ * the increment over the previous round's same-kind payload — never the full
+ * conversation-history dump ("records only for this round of tool calls are
+ * sufficient"). The cross-round chip strip was removed with it: one click
+ * answers one round; the drawer remains the place for cross-round
+ * navigation. */
+async function openToolDebugPanel(taskId, roundNum, anchorEl) {
   if (!taskId || roundNum == null) return;
   let slot = (anchorEl && typeof anchorEl.closest === 'function')
     ? anchorEl.closest('[data-prn]') : null;
@@ -437,17 +447,16 @@ async function openToolDebugPanel(taskId, roundNum, anchorEl, tab) {
   }
   if (!slot) {
     /* Tool row not in the DOM (unloaded / old conversation) — degrade to the
-     * drawer instead of a dead click, HONOURING the tab that was asked for.
-     * Falling back to the request view for a state request would silently
-     * answer a different question than the user clicked. */
-    if (tab === 'state') {
-      if (!_riOpen) openRequestInspector();
-      await _riSelectTask(taskId);
-      const payload = await _riFetchPayload(taskId, roundNum, '', 'state');
-      if (payload && payload.messages && typeof showMessagesInDebug === 'function')
-        showMessagesInDebug(payload.messages, payload.label || '', false,
-          typeof activeConvId !== 'undefined' ? activeConvId : null,
-          payload.tools || undefined, false, undefined, { resetScroll: true });
+     * drawer instead of a dead click, showing the SAME view the inline panel
+     * would have: the result state, or the request when no mirror exists. */
+    if (!_riOpen) openRequestInspector();
+    await _riSelectTask(taskId);
+    const view = await _riFetchRoundView(taskId, roundNum);
+    if (view && view.payload && view.payload.messages &&
+        typeof showMessagesInDebug === 'function') {
+      showMessagesInDebug(view.payload.messages, view.payload.label || '', false,
+        typeof activeConvId !== 'undefined' ? activeConvId : null,
+        view.payload.tools || undefined, false, undefined, { resetScroll: true });
       return;
     }
     await openRequestInspectorForToolRound(taskId, roundNum);
@@ -456,22 +465,37 @@ async function openToolDebugPanel(taskId, roundNum, anchorEl, tab) {
   /* Re-clicking the entry for the round already open closes it (toggle). */
   const existing = document.querySelector('.ri-state-panel');
   if (existing && existing.dataset.riRound === String(roundNum) &&
-      existing.dataset.riTask === String(taskId) && !tab) {
+      existing.dataset.riTask === String(taskId)) {
     existing.remove();
     return;
   }
-  _riMountToolPanel(slot, taskId, roundNum, tab || 'request');
+  _riMountToolPanel(slot, taskId, roundNum);
 }
 
-/* Back-compat entry: the drawer's state list still addresses a round's state
- * mirror directly, which is now the panel's `state` tab. */
+/* Back-compat entry: the drawer's state list addresses a round's state
+ * mirror directly, which is what the panel now shows outright. */
 async function openStateInspector(taskId, roundNum, anchorEl) {
-  return openToolDebugPanel(taskId, roundNum, anchorEl, 'state');
+  return openToolDebugPanel(taskId, roundNum, anchorEl);
 }
 
-/* Mount the (single-instance) tabbed panel after a tool slot. Transient by
+/* Resolve the ONE view a tool row's debug entry shows, and say which axis it
+ * came from. The post-tool mirror is preferred because it is a superset of
+ * the request; the request is the fallback for rounds that never emitted a
+ * mirror (swarm sub-agents, an aborted round, an expired state row).
+ * Returns {kind, payload} or null when neither axis has anything. */
+async function _riFetchRoundView(taskId, roundNum) {
+  const state = await _riFetchPayload(taskId, roundNum, '', 'state');
+  if (state && state.messages && state.messages.length)
+    return { kind: 'state', payload: state };
+  const req = await _riFetchPayload(taskId, roundNum, '', 'request');
+  if (req && req.messages && req.messages.length)
+    return { kind: 'request', payload: req };
+  return null;
+}
+
+/* Mount the (single-instance) panel after a tool slot. Transient by
  * design — a chat re-render may drop it; re-click reopens. */
-async function _riMountToolPanel(slot, taskId, roundNum, tab) {
+async function _riMountToolPanel(slot, taskId, roundNum) {
   document.querySelectorAll('.ri-state-panel').forEach((p) => p.remove());
   const panel = document.createElement('div');
   panel.className = 'ri-state-panel';
@@ -479,12 +503,7 @@ async function _riMountToolPanel(slot, taskId, roundNum, tab) {
   panel.dataset.riRound = String(roundNum);
   panel.innerHTML =
     '<div class="ri-state-panel-head">' +
-      '<span class="ri-panel-tabs" role="tablist">' +
-        '<button type="button" class="ri-panel-tab" data-ri-tab="request" ' +
-          'role="tab">' + _riEsc(t('ri.tabRequest')) + '</button>' +
-        '<button type="button" class="ri-panel-tab" data-ri-tab="state" ' +
-          'role="tab">' + _riEsc(t('ri.tabState')) + '</button>' +
-      '</span>' +
+      '<span class="ri-state-panel-kind"></span>' +
       '<span class="ri-state-panel-title"></span>' +
       '<span class="ri-state-panel-close" role="button" tabindex="0" title="' +
         _riEsc(t('ri.stateClose')) + '">' +
@@ -493,45 +512,46 @@ async function _riMountToolPanel(slot, taskId, roundNum, tab) {
     '<div class="ri-state-body"><div class="ri-empty">' +
       _riEsc(t('ri.loading')) + '</div></div>';
   panel.querySelector('.ri-state-panel-close').onclick = () => panel.remove();
-  panel.querySelectorAll('.ri-panel-tab').forEach((b) => {
-    b.onclick = () => _riRenderToolPanel(panel, taskId,
-      Number(panel.dataset.riRound), b.dataset.riTab);
-  });
   slot.insertAdjacentElement('afterend', panel);
   if (typeof panel.scrollIntoView === 'function')
     panel.scrollIntoView({ block: 'nearest' });
-  await _riRenderToolPanel(panel, taskId, roundNum, tab);
+  await _riRenderToolPanel(panel, taskId, roundNum);
 }
 
-/* Render ONE tab of the panel: `request` = the payload that PRODUCED this
- * tool call, `state` = the message mirror captured right AFTER it ran. Both
- * go through the shared debug renderer, both scoped to this round's
- * increment. Also re-points the panel dataset and the active tab. */
-async function _riRenderToolPanel(panel, taskId, roundNum, tab) {
+/* Render the panel's ONE view: the message mirror captured right after this
+ * round's tools ran, or the producing request when that round emitted no
+ * mirror. Goes through the shared debug renderer, scoped to this round's
+ * increment. The kind chip names the axis on screen, so a fallback render is
+ * never mistaken for the mirror. */
+async function _riRenderToolPanel(panel, taskId, roundNum) {
   if (!panel.isConnected) return;  // closed while fetching
-  tab = (tab === 'state') ? 'state' : 'request';
-  panel.dataset.riTab = tab;
   panel.dataset.riRound = String(roundNum);
   panel.dataset.riPanel = taskId + ':' + roundNum;
-  panel.querySelectorAll('.ri-panel-tab').forEach((b) => {
-    const on = b.dataset.riTab === tab;
-    b.classList.toggle('ri-sel', on);
-    b.setAttribute('aria-selected', on ? 'true' : 'false');
-  });
   const body = panel.querySelector('.ri-state-body');
   const titleEl = panel.querySelector('.ri-state-panel-title');
-  const payload = await _riFetchPayload(taskId, roundNum, '',
-    tab === 'state' ? 'state' : 'request');
+  const kindEl = panel.querySelector('.ri-state-panel-kind');
+  const view = await _riFetchRoundView(taskId, roundNum);
   if (!panel.isConnected) return;
-  if (!payload || !payload.messages) {
+  if (!view) {
+    panel.dataset.riKind = '';
+    if (kindEl) kindEl.textContent = '';
     if (titleEl) titleEl.textContent = 'R' + roundNum;
     if (body) body.innerHTML = '<div class="ri-empty">' +
-      _riEsc(t(tab === 'state' ? 'ri.stateEmpty' : 'ri.empty')) + '</div>';
+      _riEsc(t('ri.stateEmpty')) + '</div>';
     return;
+  }
+  const payload = view.payload;
+  panel.dataset.riKind = view.kind;
+  if (kindEl) {
+    kindEl.textContent = t(view.kind === 'state'
+      ? 'ri.tabState' : 'ri.tabRequest');
+    kindEl.classList.toggle('ri-kind-fallback', view.kind !== 'state');
+    kindEl.title = t(view.kind === 'state'
+      ? 'ri.stateKindTip' : 'ri.requestKindTip');
   }
   /* Round-scoped: only what THIS round appended (see the section header).
    * An empty increment is degenerate — fall back to the full payload. */
-  const scoped = await _riRoundScopedMessages(taskId, roundNum, tab,
+  const scoped = await _riRoundScopedMessages(taskId, roundNum, view.kind,
     payload.messages);
   if (!panel.isConnected) return;
   const shown = (Array.isArray(scoped) && scoped.length)

@@ -1,21 +1,33 @@
-"""jsdom test for the tool-row debug panel (request | post-tool state tabs).
+"""jsdom test for the tool-row debug panel (ONE view: the post-tool state).
 
 The panel mounted by the `</> R{n}` entry next to a tool row.
 
-2026-07-28 owner directive — TWO contract changes pinned here:
-  1. ROUND-SCOPED: each tab renders ONLY what that round appended to the
-     conversation (the increment over the previous round's same-kind
-     payload), never the full conversation-history dump. "records only for
-     this round of tool calls would be sufficient."
-  2. NO cross-round chip strip: the in-panel navigation was ineffective, so
-     it is gone. One click answers one round; the drawer remains the place
-     for cross-round navigation.
+2026-07-29 owner directive — the panel is now ONE view, not two tabs:
+  "the request button seems redundant; we don't need both a request and a
+  result status button. Directly displaying just the result status button
+  seems to be the correct approach."
+  That is correct at the DATA level, which is what this suite pins: the
+  post-tool mirror for round N is captured AFTER the tool results are
+  appended to the same message list the request was built from
+  (lib/tasks_pkg/tool_dispatch/_pipeline.py, same roundNum axis), so the
+  request payload is a strict PREFIX of the mirror. Showing both meant two
+  clicks for the same messages minus the results.
+  BUT the request axis must survive as a FALLBACK: swarm sub-agents persist
+  kind='request' snapshots ONLY (lib/swarm/agent.py has no state emission),
+  so a state-only panel would render "mirror missing" on every sub-agent
+  tool row. The fallback must also SAY which axis it fell back to.
+
+2026-07-28 owner directive — still pinned:
+  1. ROUND-SCOPED: the view renders ONLY what that round appended (the
+     increment over the previous round's same-kind payload), never the full
+     conversation-history dump.
+  2. NO cross-round chip strip.
 
 Kept contract (the P7 baseline):
   • The panel mounts INLINE right after the tool slot, fetches payloads with
-    kind='state' for the state tab, and renders through the SHARED debug
-    renderer (renderDebugBlocksInto / updateDebugToolsBlock).
-  • Single instance: reopening replaces the previous panel.
+    kind='state', and renders through the SHARED debug renderer
+    (renderDebugBlocksInto / updateDebugToolsBlock).
+  • At most one panel; a different round replaces, the same round toggles.
   • Live accelerator: an SSE-recorded state mirror needs NO network fetch.
   • Fallback: no tool slot in the DOM → drawer detail (kind=state).
 
@@ -23,6 +35,8 @@ NEUTERs:
   1. Drop the kind='state' argument → the state-kind pin flips red.
   2. Drop the round-scoping call → the previous round's history leaks back
      into the panel and the increment pin flips red.
+  3. Drop the request-axis fallback → sub-agent rounds (mirror-less) render
+     an empty panel, and the fallback pin flips red.
 """
 
 from __future__ import annotations
@@ -62,6 +76,7 @@ const dom = new JSDOM(
   '<div id="chatinner">' +
   '  <div data-prn="1"><div class="ri-tool-anchor-row" data-ri-state="task-T1:2"></div></div>' +
   '  <div data-prn="2"><div class="ri-tool-anchor-row" data-ri-state="task-T1:3"></div></div>' +
+  '  <div data-prn="3"><div class="ri-tool-anchor-row" data-ri-state="task-T1:5"></div></div>' +
   '</div></body>',
   { url: 'http://localhost/' });
 const win = dom.window;
@@ -85,6 +100,9 @@ const _I18N = {
   'ri.stateRowTip': 'jump to the tool call',
   'ri.stateEmpty': 'State mirror expired or missing',
   'ri.stateClose': 'Close state inspector',
+  'ri.tabRequest': 'Request', 'ri.tabState': 'Result state',
+  'ri.stateKindTip': 'state after the tools ran',
+  'ri.requestKindTip': 'no post-tool state for this round',
 };
 global.t = win.t = (k, a) => {
   let s = _I18N[k] || k;
@@ -97,17 +115,21 @@ global._featureFlags = win._featureFlags = { debug_mode: true };
 global.conversations = win.conversations = [{ id: 'conv-1', messages: [] }];
 
 /* Payloads engineered for prefix math: every round shares the SAME leading
- * history (SYS + HIST-u1). Round 2's request appends NEW-a2/NEW-t2; a state
- * mirror appends STATE-aN/STATE-tN on top of its round's request payload. */
+ * history (SYS + HIST-u1). Round N's request appends NEW-aN/NEW-tN; a state
+ * mirror appends STATE-aN/STATE-tN on top of its round's request payload.
+ *
+ * Round 5 is the SUB-AGENT shape: request snapshots exist, state does NOT
+ * (lib/swarm/agent.py persists kind='request' only). */
 const HIST = [
   { role: 'system', content: 'SYS' },
   { role: 'user', content: 'HIST-u1' },
 ];
+const NO_STATE_ROUNDS = new Set(['5']);
 function reqMsgs(roundNum) {
   const base = HIST.slice();
   if (Number(roundNum) >= 2)
-    base.push({ role: 'assistant', content: 'NEW-a2' },
-              { role: 'tool', content: 'NEW-t2' });
+    base.push({ role: 'assistant', content: 'NEW-a' + roundNum },
+              { role: 'tool', content: 'NEW-t' + roundNum });
   return base;
 }
 function stateMsgs(roundNum) {
@@ -140,6 +162,7 @@ win.Api = global.Api = {
     },
     getRequestPayload: async (taskId, roundNum, turn, kind) => {
       CALLS.payloads.push({ roundNum: String(roundNum), turn: turn || '', kind: kind || '' });
+      if (kind === 'state' && NO_STATE_ROUNDS.has(String(roundNum))) return null;
       const msgs = (kind === 'state') ? stateMsgs(roundNum) : reqMsgs(roundNum);
       return { taskId, roundNum, turn: turn || '', kind: kind || 'request',
         model: 'm', params: {}, label: 'R' + roundNum, tools: [],
@@ -165,7 +188,7 @@ function expandAll(root) {
 }
 
 (async () => {
-  /* ── 1. Inline mount next to the tool slot — STATE tab, round-scoped ── */
+  /* ── 1. Inline mount next to the tool slot — the result state, scoped ── */
   await openStateInspector('task-T1', 2);
   await sleep(30);
   const slot = document.querySelector('[data-prn="1"]');
@@ -185,19 +208,34 @@ function expandAll(root) {
     !!panel && !panel.querySelector('.ri-state-chip') &&
     !panel.querySelector('.ri-state-strip'));
 
-  /* ── 2. Request tab — same round, request-axis increment ── */
-  panel.querySelector('[data-ri-tab="request"]').onclick();
-  await sleep(30);
-  const rbody = panel.querySelector('.ri-state-body');
-  if (rbody) expandAll(rbody);
-  const rText = rbody ? rbody.textContent : '';
-  check('request_tab_shows_increment', rText.indexOf('NEW-a2') !== -1);
-  check('request_tab_hides_history', rText.indexOf('HIST-u1') === -1);
-  check('request_tab_hides_state', rText.indexOf('STATE-t2') === -1);
-  check('scoping_fetches_prev_round',
-    CALLS.payloads.some(p => p.roundNum === '1'));
+  /* ── 2. ONE view, not two: no tab strip, and the axis is NAMED ── */
+  check('no_request_tab_button',
+    !!panel && !panel.querySelector('[data-ri-tab="request"]'));
+  check('no_tab_strip_at_all',
+    !!panel && !panel.querySelector('.ri-panel-tab') &&
+    !panel.querySelector('.ri-panel-tabs'));
+  check('view_axis_is_state', panel.dataset.riKind === 'state');
+  const kindEl = panel.querySelector('.ri-state-panel-kind');
+  check('axis_named_on_screen',
+    !!kindEl && kindEl.textContent === 'Result state' &&
+    !kindEl.classList.contains('ri-kind-fallback'));
+  /* The request payload is a PREFIX of the mirror, so the single view already
+   * carries what the removed Request tab showed — nothing was lost. */
+  check('state_view_carries_request_content', sText.indexOf('NEW-t2') !== -1);
 
-  /* ── 3. Single instance: reopening replaces the panel ── */
+  /* ── 3. At most ONE panel. Opening a DIFFERENT round replaces the open one;
+   *      re-clicking the SAME round toggles it closed. With two tabs the
+   *      toggle was suppressed for state opens (the caller always passed a
+   *      tab); one button means one unambiguous toggle. ── */
+  await openStateInspector('task-T1', 3);
+  await sleep(30);
+  check('other_round_replaces_panel',
+    document.querySelectorAll('.ri-state-panel').length === 1 &&
+    document.querySelector('.ri-state-panel').dataset.riRound === '3');
+  await openStateInspector('task-T1', 3);
+  await sleep(30);
+  check('same_round_toggles_closed',
+    document.querySelectorAll('.ri-state-panel').length === 0);
   await openStateInspector('task-T1', 2);
   await sleep(30);
   check('single_panel_instance',
@@ -220,7 +258,26 @@ function expandAll(root) {
     panel3.querySelector('.ri-state-body')
       .innerHTML.indexOf('live-state-acc') !== -1);
 
-  /* ── 5. Fallback: tool slot not in the DOM → drawer detail (kind=state) ── */
+  /* ── 5. Sub-agent shape: NO state mirror → fall back to the request axis,
+   *      and say so. A state-only panel would render an empty view on every
+   *      swarm sub-agent tool row (agent.py persists kind='request' only). ── */
+  await openStateInspector('task-T1', 5);
+  await sleep(30);
+  const panel5 = document.querySelector('.ri-state-panel');
+  const body5 = panel5 && panel5.querySelector('.ri-state-body');
+  if (body5) expandAll(body5);
+  const t5 = body5 ? body5.textContent : '';
+  check('mirrorless_round_falls_back_to_request',
+    !!panel5 && panel5.dataset.riKind === 'request' &&
+    t5.indexOf('NEW-t5') !== -1);
+  check('mirrorless_round_is_not_empty',
+    t5.indexOf('State mirror expired') === -1);
+  const kind5 = panel5 && panel5.querySelector('.ri-state-panel-kind');
+  check('fallback_axis_labelled_as_request',
+    !!kind5 && kind5.textContent === 'Request' &&
+    kind5.classList.contains('ri-kind-fallback'));
+
+  /* ── 6. Fallback: tool slot not in the DOM → drawer detail (kind=state) ── */
   check('drawer_still_closed_before_fallback',
     !document.body.classList.contains('ri-open'));
   await openStateInspector('task-T1', 7);   // no data-ri-state marker for 7
@@ -265,8 +322,28 @@ def _run(ri_src_path=None, expect_fail=None):
         return output
     fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
     assert not fails, 'tool-row debug panel failures:\n' + output
-    assert output.count('PASS') >= 17, f'expected >=17 PASS, got:\n{output}'
+    assert output.count('PASS') >= 23, f'expected >=23 PASS, got:\n{output}'
     return output
+
+
+def _neuter_run(anchor, replacement, expect_fail, *, count=1):
+    """Drive a copy of request_inspector.js with `anchor` replaced, assert the
+    named probe flips red, and assert the shipped file was not touched."""
+    shipped = os.path.join(JS_DIR, 'core', 'request_inspector.js')
+    with open(shipped, encoding='utf-8') as f:
+        src = f.read()
+    assert anchor in src, 'NC anchor drifted — update the neuter'
+    neutered = src.replace(anchor, replacement, count)
+    assert neutered != src
+    tmp = os.path.join(HERE, '_request_inspector_p7_neutered.js')
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(neutered)
+    try:
+        _run(ri_src_path=tmp, expect_fail=expect_fail)
+    finally:
+        os.remove(tmp)
+    with open(shipped, encoding='utf-8') as f:
+        assert f.read() == src, 'shipped request_inspector.js must be byte-identical'
 
 
 @pytest.mark.skipif(not _node_deps_available(),
@@ -283,22 +360,8 @@ def test_neuter_state_kind_dropped_flips_red():
     render the PRE-REQUEST snapshot (the request axis) while claiming to
     show the post-tool state — the exact off-axis confusion this feature
     exists to kill."""
-    shipped = os.path.join(JS_DIR, 'core', 'request_inspector.js')
-    with open(shipped, encoding='utf-8') as f:
-        src = f.read()
-    anchor = "kind === 'state' ? 'state' : undefined"
-    assert anchor in src, 'NC anchor drifted — update the neuter'
-    neutered = src.replace(anchor, 'undefined', 1)
-    assert neutered != src
-    tmp = os.path.join(HERE, '_request_inspector_p7_neutered.js')
-    with open(tmp, 'w', encoding='utf-8') as f:
-        f.write(neutered)
-    try:
-        _run(ri_src_path=tmp, expect_fail='payload_fetched_as_state_kind')
-    finally:
-        os.remove(tmp)
-    with open(shipped, encoding='utf-8') as f:
-        assert f.read() == src, 'shipped request_inspector.js must be byte-identical'
+    _neuter_run("kind === 'state' ? 'state' : undefined", 'undefined',
+                'payload_fetched_as_state_kind')
 
 
 @pytest.mark.skipif(not _node_deps_available(),
@@ -308,23 +371,30 @@ def test_neuter_scoping_dropped_leaks_history():
     previous round's history leaks back into the panel and the round-scoping
     pin MUST fail. The panel exists to answer ONE round, not to dump the
     whole conversation (owner, 2026-07-28)."""
-    shipped = os.path.join(JS_DIR, 'core', 'request_inspector.js')
-    with open(shipped, encoding='utf-8') as f:
-        src = f.read()
-    anchor = ("const scoped = await _riRoundScopedMessages(taskId, roundNum, tab,\n"
-              "    payload.messages);")
-    assert anchor in src, 'NC anchor drifted — update the neuter'
-    neutered = src.replace(anchor, 'const scoped = payload.messages;', 1)
-    assert neutered != src
-    tmp = os.path.join(HERE, '_request_inspector_p7_neutered.js')
-    with open(tmp, 'w', encoding='utf-8') as f:
-        f.write(neutered)
-    try:
-        _run(ri_src_path=tmp, expect_fail='state_body_hides_history')
-    finally:
-        os.remove(tmp)
-    with open(shipped, encoding='utf-8') as f:
-        assert f.read() == src, 'shipped request_inspector.js must be byte-identical'
+    _neuter_run(
+        "const scoped = await _riRoundScopedMessages(taskId, roundNum, view.kind,\n"
+        "    payload.messages);",
+        'const scoped = payload.messages;',
+        'state_body_hides_history')
+
+
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed')
+def test_neuter_request_fallback_dropped_empties_subagent_rounds():
+    """NC: make the single view state-ONLY (drop the request fallback) → every
+    round without a post-tool mirror renders an empty panel, and the
+    sub-agent pin MUST fail.
+
+    This is the trap in collapsing the two tabs into one: swarm sub-agents
+    persist kind='request' snapshots only (lib/swarm/agent.py never emits a
+    state mirror), so 'just show the result state' is a dead panel for them.
+    """
+    _neuter_run(
+        "  const req = await _riFetchPayload(taskId, roundNum, '', 'request');\n"
+        "  if (req && req.messages && req.messages.length)\n"
+        "    return { kind: 'request', payload: req };\n",
+        '',
+        'mirrorless_round_falls_back_to_request')
 
 
 def test_state_inspector_wiring_pins():
@@ -332,18 +402,24 @@ def test_state_inspector_wiring_pins():
     the styles, and the api.js kind plumbing — the pieces a future refactor
     could silently drop while keeping every jsdom test green.
 
-    The 2026-07-28 owner directive ADDED two anti-regression pins: the
-    round-scoping helper must exist (the panel answers ONE round), and the
-    removed cross-round chip strip must not creep back."""
+    The 2026-07-28 directive ADDED the round-scoping + no-chip-strip pins.
+    The 2026-07-29 directive ADDED the single-view pins: the tab strip must
+    not creep back, and the request axis must stay reachable as a fallback."""
     ri = open(os.path.join(JS_DIR, 'core', 'request_inspector.js'),
               encoding='utf-8').read()
     assert 'function openStateInspector' in ri
     assert 'function openToolDebugPanel' in ri, (
-        'the merged single tool-row debug entry is gone')
+        'the single tool-row debug entry is gone')
     assert '_riMountToolPanel' in ri
     assert '_riRoundScopedMessages' in ri, (
         'the round-scoping helper is gone — the panel dumps full history again')
     assert 'ri-state-strip' not in ri, 'the cross-round strip crept back'
+    assert 'ri-panel-tab' not in ri, (
+        'the request|state tab strip crept back — the owner removed the second '
+        'button on 2026-07-29 because the mirror is a superset of the request')
+    assert '_riFetchRoundView' in ri, (
+        'the state-first / request-fallback resolver is gone — mirror-less '
+        'rounds (swarm sub-agents) would render an empty panel')
     assert "onclick = () => openStateInspector(taskId, s.roundNum)" in ri, (
         'drawer state rows must stay navigable')
     tr = open(os.path.join(JS_DIR, 'ui', 'tool_rounds.js'), encoding='utf-8').read()
@@ -354,12 +430,16 @@ def test_state_inspector_wiring_pins():
     assert 'getRequestPayload: (taskId, roundNum, turn, kind)' in api
     i18n = open(os.path.join(JS_DIR, 'i18n.js'), encoding='utf-8').read()
     for key in ("'ri.tabRequest'", "'ri.tabState'", "'ri.stateRowTip'",
-                "'ri.stateEmpty'", "'ri.stateClose'"):
+                "'ri.stateEmpty'", "'ri.stateClose'", "'ri.stateKindTip'",
+                "'ri.requestKindTip'"):
         assert key in i18n, f'{key} missing'
     css = open(os.path.join(ROOT, 'static', 'styles.css'), encoding='utf-8').read()
     assert '.ri-state-panel' in css
     assert '.ri-state-chip' not in css, 'the removed chip strip styles crept back'
-    assert '.ri-panel-tab' in css
+    assert '.ri-panel-tab' not in css, 'the removed tab-strip styles crept back'
+    assert '.ri-state-panel-kind' in css, (
+        'the axis chip has no styles — a request-axis fallback would be '
+        'indistinguishable from the post-tool mirror')
 
 
 if __name__ == '__main__':

@@ -385,11 +385,24 @@ def get_server_config():
         logger.warning('[ServerConfig] capability taxonomy unavailable: %s', e)
         capability_taxonomy = {}
 
+    # Model entries the dispatcher REFUSED to register because their wire face
+    # could not be resolved safely (a Claude model on a dual-face gateway whose
+    # provider declares no anthropic face). Surfaced because a refusal the user
+    # cannot see is its own silent failure: the model would simply be absent
+    # from the picker with no explanation.
+    face_refusals = []
+    try:
+        from lib.llm_dispatch.factory import get_dispatcher
+        face_refusals = list(getattr(get_dispatcher(), 'face_refusals', []) or [])
+    except Exception as e:
+        logger.debug('[ServerConfig] face_refusals unavailable: %s', e)
+
     return jsonify({
         'providers': providers, 'presets': presets,
         'models': models, 'search': search_info,
         'server_info': server_info,
         'feishu': feishu_info,
+        'face_refusals': face_refusals,
         'dropdown_models': dropdown_models,
         'hidden_models': hidden_models,
         'hidden_ig_models': hidden_ig_models,

@@ -289,6 +289,7 @@ function openSettings() {
     }
     // Deep-copy providers (they include nested models now)
     _stgProviders = JSON.parse(JSON.stringify(cfg.providers || []));
+    _stgFaceRefusals = Array.isArray(cfg.face_refusals) ? cfg.face_refusals : [];
     _stgPresets = JSON.parse(JSON.stringify(cfg.presets || {}));
 
     // One-time cold sort: order every provider's model list by the DISPLAY

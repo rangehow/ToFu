@@ -89,6 +89,30 @@ function _renderProvidersTab() {
       '<span class="stg-chevron">▾</span>' +
     '</div>';
 
+
+    // ── Wire-face refusals ──
+    // The dispatcher REFUSES to register a model whose wire face can't be
+    // resolved safely (a Claude model on a dual-face gateway whose provider
+    // declares no faces.anthropic). Without this banner the model would just
+    // be absent from the picker with no explanation — a silent failure. The
+    // fix is one click, so the banner says so.
+    var _refusals = (typeof _stgFaceRefusals !== 'undefined' && _stgFaceRefusals)
+      ? _stgFaceRefusals.filter(function(r) { return r && r.provider_id === p.id; })
+      : [];
+    if (_refusals.length) {
+      html += '<div class="stg-face-refusal">' +
+        '<div class="stg-face-refusal-title">' +
+          escapeHtml(t('settings.faceRefusedTitle', { n: _refusals.length })) +
+        '</div>' +
+        '<div class="stg-face-refusal-models">' +
+          escapeHtml(_refusals.map(function(r) { return r.model_id; }).join('、')) +
+        '</div>' +
+        '<div class="stg-face-refusal-hint">' +
+          escapeHtml(t('settings.faceRefusedHint')) +
+        '</div>' +
+      '</div>';
+    }
+
     // ── Expanded body ──
     html += '<div class="stg-provider-body">';
 

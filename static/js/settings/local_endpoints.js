@@ -822,5 +822,10 @@ async function _discoverLocalModels(provIdx) {
 // providers[]: each has { id, name, base_url, api_keys:[], enabled, models:[], extra_headers:{} }
 //   models[]: each has { model_id, aliases:[], capabilities:[], rpm, cost, thinking_default }
 let _stgProviders = [];
+// Model entries the dispatcher REFUSED to register because their wire face
+// could not be resolved safely (e.g. a Claude model on a dual-face gateway
+// whose provider declares no faces.anthropic). Populated from
+// /api/v1/server-config; rendered as a per-card banner by provider_render.js.
+let _stgFaceRefusals = [];
 let _stgPresets = {};  // kept for backward-compat save/load, but no longer used for preset→model mapping
 

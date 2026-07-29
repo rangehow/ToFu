@@ -805,6 +805,7 @@ from lib.provider_probe import (  # noqa: E402,F401
     probe_one_cell as _probe_one_cell,
     probe_cell_multi as _probe_cell_multi,
     run_cell_probe_task as _run_cell_probe_task,
+    build_probe_work as _build_probe_work,
     probe_cache_path as _probe_cache_path,
     probe_cell_key as _probe_cell_key,
     persist_probe_task as _persist_probe_task,
@@ -840,6 +841,14 @@ def probe_provider_cells_start():
     timeout = int(data.get('timeout') or 12)
     attempts = max(1, min(5, int(data.get('attempts') or 3)))
     protocol = (data.get('protocol') or 'openai').strip() or 'openai'
+    # Alternate wire faces of this ONE account (account/face separation). A
+    # gateway can serve some models over OpenAI-compat and others over the
+    # Anthropic-native wire with the SAME keys, so the probe must ask each
+    # cell on the wire that cell actually dispatches over — probing a
+    # Claude model on the OpenAI face yields a false 'not_found'.
+    # Resolution is delegated to lib.llm_dispatch.provider_face so the probe
+    # and the dispatcher can never disagree about which wire a model uses.
+    faces = data.get('faces') if isinstance(data.get('faces'), dict) else {}
     # 'claude' / 'codex' for a SUBSCRIPTION provider — its configured api_key
     # is the 'oauth-managed' sentinel, so the probe resolves the live token
     # per cell instead of sending the sentinel (which would 401 → false
@@ -887,15 +896,10 @@ def probe_provider_cells_start():
     # Capabilities ride along so the probe can SKIP non-chat models
     # (image_gen / embedding / transcription) instead of chat-probing them
     # into a guaranteed false 'unavailable' verdict.
-    work = []
-    for key_idx, api_key in enumerate(api_keys):
-        for m in models:
-            root = (m.get('model_id') or '').strip()
-            if not root:
-                continue
-            caps = m.get('capabilities') or []
-            for mid in [root] + [a for a in (m.get('aliases') or []) if a]:
-                work.append((key_idx, api_key, root, mid, caps))
+    work = _build_probe_work(
+        {'id': provider_id, 'base_url': base_url, 'protocol': protocol,
+         'faces': faces},
+        models, api_keys)
 
     if not work:
         return api_bad_request('no testable (key, model) pairs')

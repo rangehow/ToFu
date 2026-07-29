@@ -780,6 +780,11 @@ function _runMatrixProbe(provIdx, force, only) {
     api_keys: keys,
     extra_headers: p.extra_headers || {},
     protocol: p.protocol || 'openai',
+    // Alternate wire faces of this ONE account. The backend resolves each
+    // cell's face from these (same resolver the dispatcher uses), so a
+    // Claude model on a dual-face gateway is probed over the Anthropic wire
+    // instead of returning a false 'not_found' from the OpenAI one.
+    faces: p.faces || {},
     // Subscription providers carry the 'oauth-managed' sentinel key — the
     // backend resolves the live token per cell when oauth is set, rather
     // than probing the sentinel (a guaranteed 401 → false recommend-disable).

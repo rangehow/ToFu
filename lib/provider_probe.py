@@ -475,6 +475,44 @@ CELL_PROBE_LOCK = threading.Lock()
 _PROBE_DISABLE_STATUSES = {'rate_limited', 'unauthorized', 'not_found', 'unavailable'}
 
 
+def build_probe_work(provider: dict, models: list, api_keys: list) -> list:
+    """Build the probe work list: one item per (key × concrete id).
+
+    Each item is ``(key_idx, api_key, root_id, wire_id, caps, base_url,
+    protocol)``. The last two are resolved PER MODEL via
+    :func:`lib.llm_dispatch.provider_face.resolve_face`, because one account
+    can expose several wire faces — probing a Claude cell on the OpenAI face
+    of a dual-face gateway returns a false ``not_found`` and the matrix then
+    recommends disabling a model that works.
+
+    THE SEAM: the route and the tests both call this, so a regression in the
+    resolution is visible to a test rather than hiding behind a re-implemented
+    copy of the loop.
+
+    A REFUSED entry (Claude with no anthropic face on a dual-face gateway)
+    still gets probed on the provider default: the matrix reports
+    reachability, and the refusal itself is surfaced by the dispatcher.
+    """
+    from lib.llm_dispatch.provider_face import resolve_face
+
+    base_url = provider.get('base_url') or ''
+    protocol = (provider.get('protocol') or 'openai') or 'openai'
+    work = []
+    for key_idx, api_key in enumerate(api_keys or []):
+        for m in (models or []):
+            root = (m.get('model_id') or '').strip()
+            if not root:
+                continue
+            caps = m.get('capabilities') or []
+            face = resolve_face(provider, m)
+            cell_url = face.base_url if (face.ok and face.base_url) else base_url
+            cell_proto = (face.protocol if face.ok else protocol) or 'openai'
+            for mid in [root] + [a for a in (m.get('aliases') or []) if a]:
+                work.append((key_idx, api_key, root, mid, caps,
+                             cell_url, cell_proto))
+    return work
+
+
 def probe_cache_path(provider_id: str) -> str:
     """Disk path for a provider's persisted probe snapshot."""
     safe = hashlib.sha1((provider_id or '').encode('utf-8')).hexdigest()[:16]
@@ -542,6 +580,14 @@ def run_cell_probe_task(task: dict, work: list, timeout: int):
     def _run(item):
         key_idx, api_key, root, mid = item[0], item[1], item[2], item[3]
         caps = item[4] if len(item) > 4 else None
+        # Per-cell wire face (account/face separation). A work tuple may carry
+        # its own (base_url, protocol) because ONE account can expose several
+        # wire faces — e.g. the Meituan gateway serves Claude over
+        # /v1/anthropic and everything else over /v1/openai/native with the
+        # same keys. Probing a cell on the wrong face returns a false
+        # 'not_found'. Older 5-tuples fall back to the task-level values.
+        cell_base_url = item[5] if len(item) > 5 and item[5] else base_url
+        cell_protocol = item[6] if len(item) > 6 and item[6] else protocol
         cell_attempts = attempts
         cell_timeout = timeout
         probe_fn = None
@@ -568,9 +614,10 @@ def run_cell_probe_task(task: dict, work: list, timeout: int):
                 cell_timeout = max(timeout, _IMAGE_PROBE_MIN_TIMEOUT)
         # Multi-attempt so a FALSE 429 / transient 5xx doesn't wrongly flag a
         # reachable cell. A single ok on any attempt wins.
-        status, detail = probe_cell_multi(base_url, api_key, mid, extra_headers,
+        status, detail = probe_cell_multi(cell_base_url, api_key, mid,
+                                          extra_headers,
                                           cell_timeout, attempts=cell_attempts,
-                                          protocol=protocol, probe_fn=probe_fn,
+                                          protocol=cell_protocol, probe_fn=probe_fn,
                                           oauth=oauth)
         return {
             'key_idx': key_idx,
@@ -629,5 +676,6 @@ __all__ = [
     'probe_embedding_cell', 'probe_transcription_cell', 'probe_image_cell',
     'probe_tts_cell', 'nonchat_probe_fn',
     'probe_cache_path', 'probe_cell_key', 'persist_probe_task',
+    'build_probe_work',
     'public_probe_snapshot', 'CELL_PROBE_TASKS', 'CELL_PROBE_LOCK', 'SKIPPED',
 ]

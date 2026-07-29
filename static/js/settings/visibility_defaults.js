@@ -450,6 +450,7 @@ function _ddProbeProvider(entry, force) {
     provider_id: pid, base_url: p.base_url || '',
     api_keys: keys, extra_headers: p.extra_headers || {},
     protocol: proto, oauth: p.oauth || '',
+    faces: p.faces || {},
     models: chatModels, attempts: 3, force: !!force,
   }).then(function(snap) {
     if (!snap) return;

@@ -217,23 +217,41 @@ def cookies_from_fields(fields: dict, domain: str) -> list[dict]:
     collects one input per cookie, so there is no delimiter for the user to get
     wrong. Blank values are dropped (an untouched optional input is not an
     instruction to store an empty cookie).
+
+    A value may also be a ``{'value': ..., 'domain': ..., 'path': ...}`` dict to
+    pin that ONE cookie's scope. This matters: the previous version stamped
+    EVERY cookie with ``'.' + domain``, which silently broke host-only cookies.
+    A session cookie issued for ``aigc.sankuai.com`` (no leading dot) became
+    ``.sankuai.com``; the browser then treats it as a DIFFERENT cookie, the
+    site's auth probe never receives it, and the fetch lands on the login wall
+    while the store still reports "connected". Host-only is therefore the
+    DEFAULT (narrower scope = the safer guess, and it is what devtools shows for
+    such cookies); a parent-domain cookie must be asked for explicitly by
+    passing a leading-dot ``domain``.
     """
     out: list[dict] = []
     if not isinstance(fields, dict):
         return out
     dom = normalize_domain(domain)
-    cookie_domain = ('.' + dom) if dom else ''
-    for name, value in fields.items():
+    for name, raw in fields.items():
         name = str(name or '').strip()
-        value = str(value if value is not None else '').strip()
-        if not name or not value:
+        if not name:
             continue
-        out.append({
-            'name': name,
-            'value': value,
-            'domain': cookie_domain or dom,
-            'path': '/',
-        })
+        # Per-cookie scope override, or a bare value.
+        if isinstance(raw, dict):
+            value = str(raw.get('value') if raw.get('value') is not None else '').strip()
+            c_dom = str(raw.get('domain') or '').strip().lower() or dom
+            c_path = str(raw.get('path') or '').strip() or '/'
+        else:
+            value = str(raw if raw is not None else '').strip()
+            c_dom = dom          # host-only default — NO leading dot
+            c_path = '/'
+        if not value:
+            continue
+        entry = {'name': name, 'value': value, 'domain': c_dom, 'path': c_path}
+        if isinstance(raw, dict) and raw.get('secure') is not None:
+            entry['secure'] = bool(raw.get('secure'))
+        out.append(entry)
     return out[:_MAX_COOKIES_PER_SOURCE]
 
 
@@ -261,16 +279,21 @@ def _host_matches(host: str, domain: str) -> bool:
 def parse_cookie_header(raw: str, domain: str) -> list[dict]:
     """Parse a raw ``Cookie:`` header string into Playwright cookie dicts.
 
-    ``"a=1; b=2"`` → ``[{name:'a', value:'1', domain:'.<domain>', path:'/'},
+    ``"a=1; b=2"`` → ``[{name:'a', value:'1', domain:'<domain>', path:'/'},
     …]``. This is the format a user copies from devtools → Network → any
     request → Request Headers → Cookie. Returns ``[]`` on empty/garbage
     input (logged at debug).
+
+    The scope is HOST-ONLY (no leading dot) for the same reason as
+    :func:`cookies_from_fields`: a ``Cookie:`` header carries no scope
+    information at all, so inventing ``.<domain>`` for every entry breaks any
+    host-only session cookie the site issued. A request to the host itself
+    matches a host-only cookie, which is exactly the case this input covers.
     """
     out: list[dict] = []
     if not raw or not raw.strip():
         return out
     dom = normalize_domain(domain)
-    cookie_domain = '.' + dom if dom else ''
     # Strip an accidental leading "Cookie:" prefix the user may have pasted.
     text = raw.strip()
     if text.lower().startswith('cookie:'):
@@ -287,7 +310,7 @@ def parse_cookie_header(raw: str, domain: str) -> list[dict]:
         out.append({
             'name': name,
             'value': value,
-            'domain': cookie_domain or dom,
+            'domain': dom,
             'path': '/',
         })
     if not out:

@@ -64,16 +64,25 @@ class TestAuthSourceParsing:
         assert A.normalize_domain('') == ''
 
     def test_parse_cookie_header_basic(self):
+        # Scope is HOST-ONLY (no leading dot). A `Cookie:` header carries no
+        # scope information at all, and stamping '.'+domain onto every entry
+        # silently broke host-only session cookies: a browser treats
+        # '.sankuai.com' as a DIFFERENT cookie from 'aigc.sankuai.com', so the
+        # site's auth probe never received it and the authenticated fetch landed
+        # on the login wall — while the store still reported "connected".
+        # Host-only is the narrower and therefore safer default; a parent-domain
+        # cookie must now be asked for explicitly (per-cookie `domain`).
+        # Full invariant set: tests/test_auth_sources_cookie_domain.py
         out = A.parse_cookie_header('web_session=abc; a1=xyz', 'xiaohongshu.com')
         assert out == [
-            {'name': 'web_session', 'value': 'abc', 'domain': '.xiaohongshu.com', 'path': '/'},
-            {'name': 'a1', 'value': 'xyz', 'domain': '.xiaohongshu.com', 'path': '/'},
+            {'name': 'web_session', 'value': 'abc', 'domain': 'xiaohongshu.com', 'path': '/'},
+            {'name': 'a1', 'value': 'xyz', 'domain': 'xiaohongshu.com', 'path': '/'},
         ]
 
     def test_parse_cookie_header_strips_prefix_and_blanks(self):
         out = A.parse_cookie_header('Cookie: k=v;; =noname; bad', 'x.com')
         # only the valid k=v pair survives
-        assert out == [{'name': 'k', 'value': 'v', 'domain': '.x.com', 'path': '/'}]
+        assert out == [{'name': 'k', 'value': 'v', 'domain': 'x.com', 'path': '/'}]
 
     def test_parse_cookie_header_empty(self):
         assert A.parse_cookie_header('', 'x.com') == []
@@ -184,11 +193,13 @@ class TestStructuredCookieFields:
         assert A.source_fields('nope.example') == []
 
     def test_cookies_from_fields_builds_playwright_shape(self):
+        # Host-only default — see test_parse_cookie_header_basic for why the
+        # previous '.'+domain behaviour was a defect, not a convention.
         out = A.cookies_from_fields(
             {'web_session': 'abc', 'a1': 'xyz'}, 'xiaohongshu.com')
         assert out == [
-            {'name': 'web_session', 'value': 'abc', 'domain': '.xiaohongshu.com', 'path': '/'},
-            {'name': 'a1', 'value': 'xyz', 'domain': '.xiaohongshu.com', 'path': '/'},
+            {'name': 'web_session', 'value': 'abc', 'domain': 'xiaohongshu.com', 'path': '/'},
+            {'name': 'a1', 'value': 'xyz', 'domain': 'xiaohongshu.com', 'path': '/'},
         ]
 
     def test_cookies_from_fields_drops_blanks_and_garbage(self):

@@ -54,6 +54,16 @@
 - **本部署是显示口径失真,不是真扣款:** `compute_request_cost`(钱包)与 `compute_cost`(显示)共用同一引擎,但 relay 计费由 `billing_enabled()` 闸住、只在多用户中继生效。**故本机 owner 看到的 350 是估算被放大,不是余额被多扣;但开了 relay 计费的部署会真的多扣。**
 - **验收边界(诚实分账):** 本批**纯诊断,零产品码** —— 两个缺陷的修法都涉及成本引擎/退避默认值的设计取舍,已按 owner 惯例分别开票(`pt_28375442baa9487b` 记账双计、`pt_7b850a669a074cec` 缓存洗空),等拍板后再动手。另:12 轮 `server_side` 需带 `trace_id` 找网关方确认是 per-request miss 还是 TTL 边界,**不属我方可修范围**。
 
+### 2026-07-29(续·被证伪的前提与悬空引用) — 「结论对、论证错」的 ratchet 是危险的那一种:它永久强制一个决策,却拿一句实测为假的话当依据(owner 点名我漏做的第 4 项;commit `f4112121`,2 文件;两套 **39/39**,**NEUTER×2(咬/不恒红)**;干净 committed worktree **39/39**)
+
+- **★ owner 的判据(比「注释过时」重一档):** `--only-shell` 的三处理由都写着「no headless=False / record_video / channel= call site exists」,而其中一处正是 `test_playwright_downloads_only_the_headless_shell` 这条**强制 `--only-shell` 的 ratchet 的论证依据**。下一个人想搞清「为什么只装 shell、代价是什么」,读到的是「没有任何 headed 调用点」——于是永远不会知道登录墙功能是这个决策的**已知代价**。论证错的 ratchet 迟早会被人用错误的理由推翻或扩大。
+- **三处落点(全部改成实测事实 + 完整权衡):** `install.sh:427`(uv 路径)、`install.sh:1885`(conda 路径)、ratchet 的 docstring。现在都写明:全仓**恰好一个** headed 调用点(`tofu_search/fetch/interactive_login.py`,登录墙 cookie 捕获);`chrome-headless-shell` **架构上无 headed 模式**(独立二进制,非 flag);所以 `--only-shell` 是**「省 60% 下载,代价是该功能不可用」的交易而非免费的胜利**;该功能现由 `headed_chromium_executable()` 判定并以 `reason='headed_unavailable'` 诚实降级,需要它的用户跑 `python -m playwright install chromium`。
+- **★ owner 另抓出的悬空引用(与前者同型):** 同一段 docstring 引用 `lib/motion_video/_env.py::_playwright_chrome_candidates` 作为「已接受 shell 二进制」的证据,**而那个函数在委派重构中已被我删除**(它成了死代码)。断言仍然全绿,而论证链指向一个不存在的符号——**结论可能成立,但陈述的理由无法被审计**,和陈旧前提是同一种失效。已重锚到活路径(`chromium_env.chromium_binaries`,`chrome_bin` 委派它)。
+- **把这一类钉住而非只修这一处:** 新增 `test_docstrings_do_not_cite_deleted_symbols`——本文件任何 `module.py::symbol` 形式的引用都必须能**经 AST 解析到真实符号**。**NEUTER×2 双向验证:** 植入一条指向已删除 helper 的引用 → 精确报 `(symbol deleted)` 变红;植入一条**仍然有效**的引用 → 保持绿。既不空转,也不恒红。
+- **★ 我在修的过程中自己造出一个同型缺陷(且是我上一轮修过的同一类):** 新写的 install.sh 注释里含恢复命令 `python -m playwright install chromium`(**全量构建,故意的**),`--only-shell` 的 ratchet 立刻把它当成真调用告警。根修不是改注释措辞,而是**让守卫先剔除注释行再扫真调用**——注释永远不该满足**或违反**守卫。这条原则本文件别处已在用,这次补齐。
+- **★ 第二个自伤(守卫的自指陷阱):** 新守卫的 docstring 为了记录历史,**自己写下了那条已删除符号的引用**,于是它把自己判红了。改为**散文形式**提及(不构成可解析的 `module::symbol`),既保住历史记录又不违反自身规则。另:示例占位符 `path/to/mod.py::symbol` 也需排除,否则同样自指为红。
+- **验收边界:** 纯注释/守卫改动,**无行为变更**;`--only-shell` 决策本身**未改**(owner 定调保留),改的只是它的论证与代价披露。
+
 ### 2026-07-29(续·第四份拷贝与 headed 前提) — owner 实测抓出两个洞:①我上一轮收编了 chromium_env docstring **点名在案的四份拷贝中的三份**,独漏用户最常撞的那份;②`--only-shell` 的决策依据「zero headless=False call sites」**是假的**(owner 复核;commits tofu-search `c61fa7d` + chatui `cb461f9d`;守卫 **17/17**,**NEUTER×4 各咬各的**(3/1/1/2);全环 **129/129**;干净 committed worktree **34/34**)
 
 - **★ owner 的第一击(我的漏项,不是新缺陷):** `tofu_search/fetch/playwright_pool.py` 的自愈仍只认 `$CONDA_PREFIX`——本机实测该变量**为空**。洗净 env 走生产池:`LD_LIBRARY_PATH` 保持 `''`、launch 抛 `TargetClosedError`。而 `chromium_env.py` 自己的 docstring **早就写着**它是四份漂移拷贝之一、且注明「measured: with it unset, its self-heal is a no-op」。我上一轮收编三份、留下这份,**而它恰是 `fetch_url`/JS 渲染抓取的唯一入口**。

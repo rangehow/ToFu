@@ -182,5 +182,76 @@ class TestDispatcherModelGate:
         assert disp._pick('text', None, None, None) is None
 
 
+@pytest.mark.unit
+class TestDayRolloverRecovery:
+    """「credit 按日赋予 ⇒ credit 停机次日自动恢复」机制守卫
+    (owner requirement, 2026-07-29 sankuai_key_2 402 storm).
+
+    The mechanism: billing-stops live in the DAY-SCOPED ``stats`` map, so
+    ``_ensure_fresh_unlocked`` resetting stats at the calendar boundary IS
+    the auto-restart — no scheduler, no cron, no manual re-enable needed.
+    Manual ``overrides`` are the asymmetry: they persist by design (user
+    supremacy), which is also why a manual override must never be used as
+    a stopgap for credit exhaustion (it would NOT come back on its own).
+    """
+
+    DAY1 = '2026-07-29'
+    DAY2 = '2026-07-30'
+
+    def test_model_credit_stop_auto_recovers_next_day(self, fresh_stats,
+                                                      monkeypatch):
+        """A 402 per-model stop blocks the model TODAY and is gone
+        TOMORROW — the daily credit grant finds the key dispatchable again
+        with zero human action."""
+        ks = fresh_stats
+        monkeypatch.setattr(ks, '_today', lambda: self.DAY1)
+        ks.mark_key_exhausted(PROV, KEY, reason='您的Credit已耗尽',
+                              model='kimi-k3')
+        assert ks.is_key_enabled(PROV, KEY, model='kimi-k3') is False
+
+        monkeypatch.setattr(ks, '_today', lambda: self.DAY2)
+        assert ks.is_key_enabled(PROV, KEY, model='kimi-k3') is True, (
+            'credit stops must auto-recover at day rollover — the daily '
+            'credit grant must not require a manual re-enable')
+        assert ks.get_today_stats(PROV, KEY)['exhausted_models'] == {}, (
+            'the stop record itself must reset with the day, not linger')
+
+    def test_keywide_credit_stop_auto_recovers_next_day(self, fresh_stats,
+                                                        monkeypatch):
+        """Same contract for the key-wide ``exhausted`` flag (callers that
+        cannot name a model): dead today, back tomorrow."""
+        ks = fresh_stats
+        monkeypatch.setattr(ks, '_today', lambda: self.DAY1)
+        # Healthy sibling keeps last-resort promotion out of this test.
+        monkeypatch.setattr(ks, '_list_siblings',
+                            lambda pid: [PK, f'{PROV}::gwtest_key_1'])
+        ks.record_outcome(PROV, 'gwtest_key_1', success=True)
+        ks.mark_key_exhausted(PROV, KEY, reason='HTTP 402 credit exhausted')
+        assert ks.is_key_enabled(PROV, KEY) is False
+
+        monkeypatch.setattr(ks, '_today', lambda: self.DAY2)
+        assert ks.is_key_enabled(PROV, KEY) is True, (
+            'key-wide credit exhaustion must also auto-recover at rollover')
+
+    def test_manual_override_does_not_auto_recover(self, fresh_stats,
+                                                   monkeypatch):
+        """The asymmetry that caused the 2026-07-29 incident: a MANUAL
+        override persists across rollover BY DESIGN (user supremacy). Pin
+        it so nobody "helps" by auto-clearing user state — and so a manual
+        disable is never mistaken for a day-scoped credit stop."""
+        ks = fresh_stats
+        monkeypatch.setattr(ks, '_today', lambda: self.DAY1)
+        ks.set_key_override(PROV, KEY, False)
+        assert ks.is_key_enabled(PROV, KEY) is False
+
+        monkeypatch.setattr(ks, '_today', lambda: self.DAY2)
+        assert ks.is_key_enabled(PROV, KEY) is False, (
+            'manual overrides persist across day rollover by design — '
+            'do not auto-clear them (user supremacy)')
+        assert ks.get_today_stats(PROV, KEY)['override'] is False
+
+
+if __name__ == '__main__':
+    sys.exit(pytest.main([__file__, '-v']))
 if __name__ == '__main__':
     sys.exit(pytest.main([__file__, '-v']))

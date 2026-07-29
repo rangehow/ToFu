@@ -1,5 +1,19 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·wire face 三层 UI) — owner 问「模板界面是不是该能给每个模型设 OpenAI/Anthropic」——**机制早在,缺的是可见性;而他设想的「每模型开关」实测比现状更差**,故按 C 全量做但把家族规则留在后端(`pt_29517689500f464c` DONE;commit `547827e1`,11 文件;新套件 **17/17**,**NEUTER×5 全咬**;相邻环 **41/41**;回归 **0 红**(基线 12))
+
+- **★ 先纠前提,因为它决定要不要做那个开关:** owner 说「本以为两者兼容」——**半对**。纯单轮能出字,但 2026-07-28 实测 `yuju-claude-opus-5-evaDaily`:OpenAI 面流出 **111 chunk / 33 个 reasoning_content / 0 个 signature**,Anthropic 面 `signature_delta` 完整;**思考块没签名会被上游拒绝**,故多轮必崩。这是**正确性事实不是偏好**。
+- **★ 而「每个模型一个协议下拉」作为主开关是退步(实测后否决 owner 原设想的形态):** 手工开关意味着**下一个 Claude 模型加进来那天默认是错的**,等着人记得去拨。现有家族规则(`resolve_face` 规则 2)让 opus-6/fable-6 **加进来当天就对**。所以钉选只做**逃生舱**、默认「自动」,而不是主开关。实测线上此刻:6 个 Claude 全在 `/v1/anthropic`,kimi-k3/gpt-5.6-sol/gemini-3.5-flash 在 `/v1/openai/native`。
+- **★ 真正的缺口是「答案不可见」——owner 这次提问本身就是症状:** 要知道 Opus 5 走哪条线,只能翻 `server_config.json`。三面全补:模型卡药丸 / 编辑器钉选 / provider 级 `faces{}` 编辑器(在此之前 `faces{}` 的**唯一写入者是模板同步**,自建双面网关只能手改 JSON)。
+- **★ 最危险的实现方向是「在 JS 里重写家族规则」,已用守卫钉死:** 那份副本漂移时**不会报错**,只会在一个实际走 OpenAI 面的模型上渲染 `anthropic` 药丸——**正是 resolver 要防的静默丢签名,还盖了个绿标签**。故新增无状态端点 `POST /api/v1/providers/resolve-faces` 调**同一个** `resolve_face`,UI 只渲染答案(章程 #12 同理)。
+- **★ 为什么必须是端点而不是 GET 时算好的静态字段:** 设置面板编辑的是**未保存的工作副本**,`face_refusals` 在用户钉一个面/加一个模型的瞬间就**过期**,而过期方向恰是那个假绿。端点收工作副本、**剥掉密钥**(密钥不参与路由决策)。
+- **异步与同步的缝(渲染纪律):** 解析是网络往返而 `_renderModelCard` 是同步,故药丸读缓存、**miss 时什么都不渲染**——缺药丸是诚实的,猜出来的药丸是前端无权做的路由声明。解析回来后 `_repaintFaceChips` **就地打补丁而非重渲染**:往返正是被编辑触发的,全量重渲染会毁掉引发它的那个表单。
+- **NEUTER×5 全部精确咬中:** JS 家族规则副本(最危险方向)→ 1 红;摘掉药丸调用 → 1;钉选只渲染不保存(用户以为钉了而路由无视)→ 1;不登记 bundle → 1;端点本地重推导 → 1;全部逐字节还原。
+- **★ 两个我自己造又自己抓到的缺陷,方向相反:** ①**量具错**——i18n 守卫正则用 `[^}]*`,在 `{face}` 占位符处截断,把**两条完整词条报成缺 en 半边**;先证实数据是好的再改断言,顺序不能反。②**真回归**——`_BUNDLE_FILES` 登记了新文件却漏了 `index.html` 的 script 标签,被 `test_bundle_manifest_parity` 咬:bundle 失败时的 dev 回退路径会**静默丢掉全部三个界面**。用干净 HEAD 的只读 worktree 取基线作差(12 vs 13)才定位到它——**「共享 HEAD 上有一堆兄弟 WIP」时,不作差就分不清红是谁的**。
+- **★ 章程 #26 当场应验:** `static/js/api.js` 的 `resolveFaces` 改动**工作区显示干净**,一度像是丢了;`git show HEAD:` 断言确认是**被兄弟提交顺带带走**、内容在 HEAD 里。故本批 pathspec 是 11 个文件而非 12。
+- **验收边界:** 纯前端+新端点,**运行中进程不带**,需重启 + bundle 重建才到用户面前。
+
+
 
 ### 2026-07-29(续·陈旧感知闭环) — owner 抓出我**一半守卫是空的,且被测试名掩盖**:名字写着 and poll projection,函数体一行没碰那条路——摘掉 poll 的 rev,**18/18 全绿**;修完再做原始问题的后半句「前端不知道自己陈旧」(commits `28170cdf` + `5e04a13f`;**12 + 13 条守卫**,**NEUTER×6**(其中**一发首版空转,由我自查抓回**);相邻环 **101 + 22 全绿**;charter 不变量已提交)
 

@@ -211,14 +211,13 @@ function _hashStr(s) {
 function _convActionGate() {
   const conv = (typeof getActiveConv === 'function') ? getActiveConv() : null;
   if (!conv) return '';
-  return _convTurnInFlight(conv) ? 'B' : 'I';
+  return _convBusyAnyLane(conv) ? 'B' : 'I';
 }
 
-/* ── THE liveness predicate for a conversation (pt_ae8777b4eee04ef1) ───────
- * "Is this conversation still producing a turn?" — ONE answer, four consumers.
+/* ── TWO liveness questions, TWO predicates (pt_ae8777b4eee04ef1) ──────────
  *
- * WHY THIS EXISTS. renderMessage used to answer that question FOUR separate
- * times, and they disagreed:
+ * renderMessage used to answer "has this turn settled?" FOUR separate times,
+ * and they disagreed:
  *     _isLiveTail     = activeStreams.has || conv.activeTaskId     (read the pin)
  *     isLastAssistant = !activeStreams.has                         (did NOT)
  *     canDelete       = !activeStreams.has && !conv.activeTaskId   (read the pin)
@@ -237,21 +236,38 @@ function _convActionGate() {
  * has actually stopped. Liveness is that missing dimension; it can never be
  * inferred from the absence of finishReason.
  *
- * SINGLE SOURCE. Delegates to core/conv_state_reducer.js `computeConvBusy`,
- * the SAME union the composer's Stop button reads through convIsBusy
- * (ui/send_button.js → ui/conversation_list.js). That is deliberate: the Stop
- * button and the action bar answer the same question, so they must not be able
- * to diverge again. computeConvBusy unions THREE sources — this tab's
- * activeStreams, the optimistic `conv.activeTaskId` pin, and the
- * server-authoritative `conv._authoritativeActiveTaskIds` (which INCLUDES VU
- * carriers behind the `#vu` marker, the only way the poll lane can see a live
- * autopilot turn) — plus the branch-stream key-prefix scan.
+ * ★ WHY TWO PREDICATES AND NOT ONE. The first fix collapsed all four onto
+ * `computeConvBusy`, the composer/sidebar union. That imported a semantic the
+ * render gate must NOT have: computeConvBusy ALSO scans for branch-stream keys
+ * (`conv.id + ':'` — branch_stream.js writes `convId:msgIdx:branchIdx` into
+ * activeStreams). "Is anything running in this conversation" is the right
+ * question for the sidebar dot and the Stop button; it is the WRONG question
+ * for "is this turn's tail still being written". Measured consequence: with a
+ * branch streaming, a MAIN turn that had already finished (finishReason=stop,
+ * usage present) lost its finish bar and its Delete button — the mirror of the
+ * bug being fixed. A branch stream does not write the main tail, so:
+ *
+ *   TURN level  (_isTurnInFlight)   — writers of THIS turn's tail only:
+ *       this tab's MAIN stream (exact `conv.id` key), the optimistic
+ *       `conv.activeTaskId` pin, and the server-authoritative
+ *       `_authoritativeActiveTaskIds` (which INCLUDES VU carriers behind the
+ *       `#vu` marker — the only way the poll lane sees a live autopilot turn).
+ *       Deliberately NO branch-key prefix scan.
+ *       Consumers: the finish bar, the Continue affordance, the force-reveal.
+ *
+ *   CONV level  (_convBusyAnyLane)  — delegates to computeConvBusy, so it is
+ *       byte-identical to what the Stop button reads, branch scan included.
+ *       Consumer: Delete. Deleting a message while ANY lane of this
+ *       conversation streams can pull the anchor out from under a live branch
+ *       (branch_stream.js keys its stream on convId:msgIdx:branchIdx, so a
+ *       shifting index corrupts it), and the action-gate fingerprint token —
+ *       the sidebar-facing "is this conv busy" fact.
  *
  * Load order is pinned: core/conv_state_reducer.js is bundled before
- * ui/chat_render.js (lib/js_bundler.py _BUNDLE_FILES). The inline fallback is a
- * build-order canary for degenerate/partial bundles only — it must stay a
- * strict subset of computeConvBusy, never a second opinion. */
-function _convTurnInFlight(conv) {
+ * ui/chat_render.js (lib/js_bundler.py _BUNDLE_FILES). The inline fallback in
+ * _convBusyAnyLane is a build-order canary for degenerate/partial bundles only
+ * — it must stay a strict subset of computeConvBusy, never a second opinion. */
+function _convBusyAnyLane(conv) {
   if (!conv) return false;
   if (typeof computeConvBusy === 'function') {
     return !!computeConvBusy(conv, activeStreams);
@@ -261,16 +277,27 @@ function _convTurnInFlight(conv) {
         && conv._authoritativeActiveTaskIds.size > 0));
 }
 
-/* Is the message at `idx` the TAIL of a conversation that is still working?
- * The tail is the only message a live turn can be writing into, so every
- * "has this turn settled?" gate in renderMessage is this one predicate. */
+/* Is a writer of the MAIN turn active on this conversation? See the block
+ * above for why this deliberately does NOT scan branch-stream keys. */
+function _convMainTurnInFlight(conv) {
+  if (!conv) return false;
+  if (activeStreams.has(conv.id)) return true;          // this tab's MAIN stream
+  if (conv.activeTaskId) return true;                   // our own optimistic send
+  const _auth = conv._authoritativeActiveTaskIds;       // server truth (incl. #vu carrier)
+  return !!(_auth && typeof _auth.size === 'number' && _auth.size > 0);
+}
+
+/* Is the message at `idx` the TAIL of a turn still being written? The tail is
+ * the only message a live turn can write into, so the finish bar / Continue /
+ * force-reveal gates are all this one predicate. */
 function _isTurnInFlight(conv, idx) {
   if (!conv || !Array.isArray(conv.messages)) return false;
   if (idx !== conv.messages.length - 1) return false;
-  return _convTurnInFlight(conv);
+  return _convMainTurnInFlight(conv);
 }
 if (typeof window !== "undefined") {
-  window._convTurnInFlight = _convTurnInFlight;
+  window._convBusyAnyLane = _convBusyAnyLane;
+  window._convMainTurnInFlight = _convMainTurnInFlight;
   window._isTurnInFlight = _isTurnInFlight;
 }
 
@@ -1242,6 +1269,10 @@ function renderMessage(msg, idx) {
   const _showTrans = !!_disp.isMarkdown && !!_tr.text && _tr.showing !== false;
   /* ★ Precise date + time for all messages */
   const messageTime = msg.timestamp ? _fmtAbsoluteDateTime(msg.timestamp) : "";
+  /* Resolve the conversation ONCE for every liveness gate in this render pass
+   * (finish bar, Continue, force-reveal). Re-resolving per gate risks two
+   * lookups straddling a conversation switch and disagreeing within one row. */
+  const _lvConvForGates = (typeof getActiveConv === 'function') ? getActiveConv() : null;
   let body = "";
   if (msg.images?.length > 0) {
     const srcMap = { clip_render: "CLIP", vector_clip: "VEC", page_render: "SCAN", embedded: "RAW", pixmap_fallback: "PIX", pymupdf4llm: "FIG", figure_page_render: "FIG" };
@@ -1774,8 +1805,7 @@ function renderMessage(msg, idx) {
      * usage mid-stream, so a model-only assistant message that is the last
      * message of a conv still working is in progress — suppress its premature
      * finish bar (see renderFinishInfo). Consumer #1 of _isTurnInFlight. */
-    const _lvConv = getActiveConv();
-    const _isLiveTail = _isTurnInFlight(_lvConv, idx);
+    const _isLiveTail = _isTurnInFlight(_lvConvForGates, idx);
     body += renderFinishInfo(msg, _isLiveTail);
   }
   const idAttr = typeof idx === "number" ? ` id="msg-${idx}"` : "";
@@ -1875,10 +1905,15 @@ function renderMessage(msg, idx) {
     const exportImgH = !isUser
       ? `<button class="msg-action-btn msg-export-img-btn" onclick="event.stopPropagation();ExportImages.exportMessageWithPreview(_msgElIndex(this))" title="${escapeHtml(_mt('msgAction.exportTitle', 'Export as phone-screen images'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg> ${escapeHtml(_mt('msgAction.export', 'Export'))}</button>`
       : "";
-    /* Consumer #3: deleting a turn the backend is still writing would race the
-     * stream. Same shared predicate — but conversation-wide, not tail-only:
-     * NO message may be deleted while the conv is working. */
-    const canDelete = conv_ && !_convTurnInFlight(conv_);
+    /* Consumer #3 — deliberately the CONV-level predicate, not the turn-level
+     * one. Deleting shifts every later message's index, and a live BRANCH
+     * stream is keyed on `convId:msgIdx:branchIdx` (branch_stream.js), so a
+     * delete during ANY streaming lane can corrupt that key. Delete therefore
+     * stays blocked while anything in this conversation streams — the same
+     * answer the composer's Stop button gives. (The finish bar / Continue /
+     * force-reveal use the TURN-level predicate instead: a branch does not
+     * write the main tail.) */
+    const canDelete = conv_ && !_convBusyAnyLane(conv_);
     const deleteH = canDelete
       ? `<button class="msg-action-btn msg-delete-btn" onclick="event.stopPropagation();deleteTurn(_msgElIndex(this))" title="${escapeHtml(isUser ? _mt('msgAction.deleteTurnTitle', 'Delete this turn') : _mt('msgAction.deleteMsgTitle', 'Delete this message'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>`
       : "";
@@ -2029,10 +2064,15 @@ function renderMessage(msg, idx) {
    *   underneath work the backend is still doing — which is how the reported
    *   symptom read as "the action bar has already appeared" rather than
    *   "appears on hover". A live turn keeps the quiet treatment; the reveal
-   *   applies once it has actually stopped. */
+   *   applies once it has actually stopped.
+   *
+   *   Resolves the conv ONCE (`_lvConvForGates`, shared with the finish-bar
+   *   gate above) instead of calling getActiveConv() again here: two lookups in
+   *   one render of the same row could in principle straddle a conv switch and
+   *   disagree, and re-resolving per message is pointless work. */
   const _turnFailed = !isUser
     && (!!msg.error || msg.finishReason === 'interrupted')
-    && !_isTurnInFlight(getActiveConv(), idx);
+    && !_isTurnInFlight(_lvConvForGates, idx);
   const _failedCls = _turnFailed ? ' turn-failed' : '';
   /* Queued-pending: a cross-device queued user message that has landed in the
    *   body but is NOT yet dispatched (its turn runs after the current one

@@ -164,7 +164,8 @@ function sliceFn(src, name) {
   }
   throw new Error('unbalanced braces for ' + name);
 }
-(0, eval)(sliceFn(renderSrc, '_convTurnInFlight'));
+(0, eval)(sliceFn(renderSrc, '_convBusyAnyLane'));
+(0, eval)(sliceFn(renderSrc, '_convMainTurnInFlight'));
 (0, eval)(sliceFn(renderSrc, '_isTurnInFlight'));
 
 /* ── The gate under test ────────────────────────────────────────────────
@@ -206,7 +207,7 @@ const _isLiveTail = _isTurnInFlight(conv, idx);
 const isLastAssistant =
   !isUser && conv && idx === conv.messages.length - 1
   && !_isTurnInFlight(conv, idx);
-const canDelete = conv && !_convTurnInFlight(conv);
+const canDelete = conv && !_convBusyAnyLane(conv);
 """
 
 # The PRE-FIX gate: position + this tab's activeStreams only. Used as the NEUTER
@@ -285,6 +286,33 @@ def _settled_tail_scenario() -> dict:
     }
 
 
+def _settled_main_with_live_branch_scenario() -> dict:
+    """The MAIN turn finished cleanly, but a BRANCH stream is running.
+
+    branch_stream.js:430 writes `convId:msgIdx:branchIdx` straight into
+    `activeStreams`, and computeConvBusy scans for that `conv.id + ':'` prefix.
+    Borrowing that conv-level union for the TURN-level gates made a finished
+    main turn read as in-flight — it lost its finish bar and its Delete button
+    while an unrelated branch streamed. A branch does not write the main tail.
+    """
+    return {
+        'activeTaskId': None,
+        'activeStreamKeys': ['convA:3:0'],   # a live BRANCH, not the main stream
+        'messages': [
+            {'role': 'user', 'content': 'redesign the game loop'},
+            {
+                'role': 'assistant',
+                'model': 'claude-opus-5',
+                'content': 'the complete answer',
+                'finishReason': 'stop',
+                'usage': {'input_tokens': 10, 'output_tokens': 20},
+                'toolRounds': [{'toolCallId': 'tc1', 'status': 'done',
+                                'toolContent': 'bootstrap.ts', 'roundNum': 0}],
+            },
+        ],
+    }
+
+
 # ── Premise anchoring ─────────────────────────────────────────────────────
 # If these ever stop holding, every assertion below is vacuous.
 
@@ -309,26 +337,45 @@ def test_premise_shipped_gate_matches_the_literal_under_test():
     be satisfiable by a comment) via the shared helper when available.
     """
     scan = _scan_source(CHAT_RENDER_JS)
-    assert 'function _convTurnInFlight(' in scan, (
-        'the shared conversation-liveness predicate _convTurnInFlight is gone '
-        '— the four gates have no single source to derive from.')
+    assert 'function _convMainTurnInFlight(' in scan, (
+        'the TURN-level liveness predicate _convMainTurnInFlight is gone — the '
+        'tail gates have no single source to derive from.')
+    assert 'function _convBusyAnyLane(' in scan, (
+        'the CONV-level predicate _convBusyAnyLane is gone.')
     assert 'function _isTurnInFlight(' in scan, (
         'the shared tail-liveness predicate _isTurnInFlight is gone.')
-    # It must delegate to the reducer's union, not grow a fifth private copy.
-    m = re.search(r'function _convTurnInFlight\(conv\)\s*\{(.*?)\n\}', scan,
+    # The CONV-level one must delegate to the reducer's union (Stop-button parity).
+    m = re.search(r'function _convBusyAnyLane\(conv\)\s*\{(.*?)\n\}', scan,
                   flags=re.S)
     assert m and 'computeConvBusy' in m.group(1), (
-        '_convTurnInFlight no longer delegates to computeConvBusy — the render '
+        '_convBusyAnyLane no longer delegates to computeConvBusy — the delete '
         'gate and the composer Stop button can drift apart again.')
-    # And every one of the four consumers must read it.
+    # The TURN-level one must NOT scan branch keys (that was the regression).
+    mt = re.search(r'function _convMainTurnInFlight\(conv\)\s*\{(.*?)\n\}', scan,
+                   flags=re.S)
+    assert mt, '_convMainTurnInFlight body not found'
+    body = mt.group(1)
+    assert 'computeConvBusy' not in body, (
+        '_convMainTurnInFlight delegates to computeConvBusy, which scans '
+        'branch-stream keys — a branch stream would then suppress the MAIN '
+        "turn's finish bar. Keep the turn-level predicate branch-blind.")
+    assert '.keys()' not in body and "+ ':'" not in body, (
+        '_convMainTurnInFlight appears to scan stream keys by prefix; the '
+        'turn-level predicate must only read exact-id / pin / authoritative.')
+    # Tail gates read the turn-level predicate; delete reads the conv-level one.
     for decl in ('const _isLiveTail', 'const isLastAssistant',
-                 'const canDelete', 'const _turnFailed'):
+                 'const _turnFailed'):
         mm = re.search(re.escape(decl) + r'\s*=(.*?);', scan, flags=re.S)
         assert mm, f'{decl} not found in chat_render.js'
-        expr = mm.group(1)
-        assert ('_isTurnInFlight' in expr or '_convTurnInFlight' in expr), (
-            f'{decl} does not derive from the shared liveness predicate '
-            f'— got: {expr.strip()!r}')
+        assert '_isTurnInFlight' in mm.group(1), (
+            f'{decl} does not derive from the TURN-level predicate '
+            f'— got: {mm.group(1).strip()!r}')
+    md = re.search(r'const canDelete\s*=(.*?);', scan, flags=re.S)
+    assert md, 'canDelete not found in chat_render.js'
+    assert '_convBusyAnyLane' in md.group(1), (
+        'canDelete must use the CONV-level predicate (a delete shifts indices '
+        'and can corrupt a live branch stream keyed on msgIdx) — got: '
+        f'{md.group(1).strip()!r}')
 
 
 # ── FAILING-FIRST: the defect ─────────────────────────────────────────────
@@ -435,6 +482,65 @@ def test_settled_tail_shows_delete():
 
 
 # ── NEUTER: prove the guard discriminates ─────────────────────────────────
+
+@requires_node
+def test_live_branch_does_not_suppress_settled_main_turn():
+    """A live BRANCH stream must not make a finished MAIN turn read as live.
+
+    Regression cell for the first fix, which routed the turn-level gates
+    through computeConvBusy (branch-key prefix scan included).
+    """
+    r = _run(_settled_main_with_live_branch_scenario())
+    assert r['isLiveTail'] is False, (
+        'A branch stream made the settled MAIN turn read as in-flight, so its '
+        f'finish bar (cost / duration / model) is suppressed. got {r!r}')
+    assert r['outcome'] == 'completed', (
+        f'premise broken: the main turn should verdict as completed. got {r!r}')
+
+
+@requires_node
+def test_live_branch_still_blocks_delete():
+    """…but Delete STAYS blocked while a branch streams.
+
+    Deleting shifts message indices and a branch stream is keyed on
+    `convId:msgIdx:branchIdx`, so this is the deliberate conv-level semantic —
+    asserted explicitly so the split cannot be "simplified" into one predicate.
+    """
+    r = _run(_settled_main_with_live_branch_scenario())
+    assert r['showsDelete'] is False, (
+        'Delete was offered while a branch stream is live in this conversation '
+        f'— an index shift can corrupt the branch stream key. got {r!r}')
+
+
+@requires_node
+def test_neuter_turn_level_predicate_scanning_branch_keys_bites():
+    """NEUTER: put the branch-key prefix scan back into the TURN-level gate and
+    the settled-main-turn cell must go RED — proving that cell measures the
+    branch dimension rather than passing for an unrelated reason."""
+    branch_scanning_gate = """
+function _turnLevelWithBranchScan(conv) {
+  if (activeStreams.has(conv.id)) return true;
+  if (conv.activeTaskId) return true;
+  if (conv._authoritativeActiveTaskIds && conv._authoritativeActiveTaskIds.size > 0) return true;
+  const prefix = conv.id + ':';
+  for (const k of activeStreams.keys()) {
+    if (typeof k === 'string' && k.startsWith(prefix)) return true;
+  }
+  return false;
+}
+const _inFlight = !!(conv && idx === conv.messages.length - 1
+  && _turnLevelWithBranchScan(conv));
+const _isLiveTail = _inFlight;
+const isLastAssistant =
+  !isUser && conv && idx === conv.messages.length - 1 && !_inFlight;
+const canDelete = conv && !_convBusyAnyLane(conv);
+"""
+    r = _run(_settled_main_with_live_branch_scenario(), gate=branch_scanning_gate)
+    assert r['isLiveTail'] is True, (
+        'NEUTER did not bite: re-adding the branch-key scan to the turn-level '
+        'predicate did NOT make the settled main turn read as live, so '
+        f'test_live_branch_does_not_suppress_settled_main_turn is vacuous. got {r!r}')
+
 
 @requires_node
 def test_neuter_position_only_gate_leaks_continue():

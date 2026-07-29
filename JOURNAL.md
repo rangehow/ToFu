@@ -1,5 +1,21 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·headless-shell 通道) — 「装了吗」这个问题有三个互相矛盾的答案;而**桌面端那个答案在检查一条安装器故意永不创建的路径**(owner 质疑「不是装过吗」;commit `92af42fc`,7 文件 +610/-58;新套件 **17/17**,**NEUTER×5 各咬各的**(其中**一发首版空转,因为我把被测函数改成了死代码**);相邻环 **119/119** + 真浏览器视觉环 **18/18**;干净 committed worktree **49/49**)
+
+- **★ owner 的质疑成立,而「缺 libatk」是条件性的不是缺失:** 裸跑 headless-shell 确实死在 `libatk-1.0.so.0`,但 10 个库**全部就在** conda env prefix 里(`describe_chromium_env()['issues']` 为空)。走 `ensure_chromium_env()` 后 `rc=0`、真出 DOM、Playwright 真截图 **8598 个墨迹像素 / 249 灰阶**。**缺的不是库,是 `LD_LIBRARY_PATH` 导出**——`chromium_env.py` 正为此存在。
+- **★ 真缺陷在「哪个二进制算数」这半边,而它从没被下沉:** `chromium_env.py` 管住了 env,但二进制解析仍是手抄三份且互相矛盾。实测本机只有 `chromium_headless_shell-1223`(完整 `chromium-1223` **不存在**):
+  - `desktop/post_install.py:88` 问 Playwright 要 `chromium.executable_path` 再 `isfile`。**该属性恒指完整构建**——实测 `exists=False` 而同一解释器里 `launch()` 成功(`ps` 抓到父进程就是 shell)。于是桌面端永远显示「浏览器引擎未安装 ~150MB」并劝用户重复下载**一个本来就能用的浏览器**。
+  - **这不是暂态偏差:** `install.sh:430` 用 `--only-shell` 是深思熟虑的省 60% 下载决定,**那条路径产品永远不会创建**。
+  - `lib/motion_video/_env.py` 探测形态正确,但写死 `~/.cache/ms-playwright`,对 `install.sh:336` 导出的 `PLAYWRIGHT_BROWSERS_PATH` 全盲。
+- **落点(按 charter #13「二进制解析必须 isfile 到目标」):** 二进制解析下沉进 `chromium_env.py` 成 `browsers_root/chromium_binaries/chromium_executable`,跨平台形态齐全(Linux/macOS/Windows × 完整/shell),排序按**(能力档, 版本)双键**——同版本时完整构建胜出。两个探测器改为委派;`describe_chromium_env` 报告已解析二进制并把「没有浏览器」列为可执行 issue。
+- **★ 写守卫时抓出的第二个真缺陷(我原实现也错了):** `PLAYWRIGHT_BROWSERS_PATH` 是 **OVERRIDE 不是追加**——实测把它指向一个**空目录**,Playwright 仍解析到该目录内且**绝不回退** `~/.cache`。我第一版按「追加」写,会报告一个 Playwright 根本不会从那儿启动的浏览器。是我的测试先红把它抓出来的。
+- **★ NEUTER B 首版空转,原因是我自己造成的:** 我把 `chrome_bin()` 改成直接委派后,`_playwright_chrome_candidates()` **成了死代码**——NEUTER 改了个没人调的函数,自然不咬。**判据:委派式重构后要问「原来那个 helper 现在还有调用方吗」**;留着一个「看起来权威实则无人调用」的函数是给下一个人挖坑。已删除它并把守卫重锚到活路径 `chrome_bin`,重做后真咬 2 条。
+- **★ 既有 9 条浏览器守卫为何全绿地放行:** 它们**只驱动「已安装的那个通道」**,断言真浏览器能出像素——这在整个缺陷期间都是对的。**没有一条断言「探测器怎么说」或「三个探测器是否互相同意」**。新套件正是补这一面:用合成磁盘布局(仅完整/仅 shell/两者/都无)驱动三个探测器并断言**verdict 一致**。
+- **顺带修掉的两处安装漂移:** `desktop/launcher.py:648`(frozen 路径,**打包版用户真正走的那条**)与 `post_install.py` 都在拉 175MB 完整构建;`scripts/install_on_server.sh` 同样漂移。三处补齐 `--only-shell`。
+- **更正一条已被证伪的陈旧断言:** `test_frontend_tofu_scene_pixeldiff.py:25` 的模块 docstring 写着「Chromium 缺 ~12 个系统库所以不可用」——实测为假。该文件继续用 cairo 是因为**重放确定性**,与可用性无关,已改写清楚。
+- **共享 HEAD 纪律(本批两次):** ①`git add` 后计数断言读到 **staged=8 而非 7**,查出兄弟把 `scripts/package_extension.sh`(它自己 epic `pt_d64220b406e841b2` 的产物)预暂存在共享 index 里,按 charter #15 用 `git reset HEAD` 只写 index 剔除,复核其工作树 2618 字节原封不动;②`git commit -F /tmp/...` 的消息文件被兄弟活动清掉导致提交失败(JOURNAL 记过的同型竞态),改用 `.git/` 内文件成功。
+- **验收边界(诚实分账):** ①`scripts/install_on_server.sh` 的修复**在工作树里但没进提交**——`.gitignore:64` 的 `/scripts/*` 使它**未被 git 跟踪**,干净 clone 里根本没有这个文件。这与兄弟正在做的 `pt_d64220b406e841b2` 是同一个仓库策略缺口,已在提交信息与板上注明,不越界改 `.gitignore`;②纯后端 + 桌面端,**运行中进程不带**,需重启才对新会话生效;③相邻红一条已定责非我:`tests/test_brand_shadow_pixels.py` 有重复 `def _chromium_available` 的 IndentationError,属兄弟在飞 WIP,HEAD 版本语法正常,我未碰该文件。
+
 ### 2026-07-29(续·死控件根修) — owner 去戴皮肤时发现**开关不在他手里**:标题+说明是静态 HTML 照常渲染,格子由缺失的 JS 填充,于是他看到「标题 + 说明 + 一个空盒子」;而我把「需重启」写在验收边界脚注里却让他现在去点——**两句话冲突,他按后者行动了**(commit `4546356f`,9 文件;新套件 **6/6 含 NEUTER 真咬**,相邻环 **44/44**;真浏览器实测降级形态)
 
 - **★ 缺陷形态(项目明令禁止的那一种):** 功能不可用,界面却把它呈现为可用。根因不是代码错——`brand_logo.js` 的 bundler 注册与 dev-fallback 标签**都在 HEAD 里**;而是**运行中的进程持有它启动时的打包清单**,新模块要等重启才进 bundle。于是「代码正确」与「界面诚实」是两件事:前者绿,后者是个假装可点的空盒子。

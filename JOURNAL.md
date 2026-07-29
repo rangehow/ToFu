@@ -1,5 +1,29 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·测试互毒) — owner 抓出:我上一批的守卫**自己就是我刚修完的那个缺陷**——快照/还原对把陈旧事实盖回去,毒死同进程后续每个测试(CI 真断;commit `e740887d`,4 文件;**结构守卫连错三版,每版错法不同,全部由 NEUTER 而非评审抓出**;验收单次调用含 `pack_serving` **111 passed / 0 failed**,干净 committed worktree 复验同数)
+
+- **★ 最该记住的一条:我犯了自己刚修完的同型错误。** `4b3398bf`/`05b55fbe` 修的正是「快照/还原对静默重置陈旧事实」;而我为它写的守卫 `test_i18n_pack_boot_floor.py` 里,恰好用 save-mutate-restore 去管 `js_bundler._pack_filenames` / `_bundle_includes_i18n`。
+- **实测复现(owner 给出、我逐行确认):**
+  ```
+  before:                  {} | includes_i18n = True     <- 被当作 saved 捕获
+  after get_i18n_pack_tag: {'zh': 'i18n-zh-…'} | False    <- 真实已发布状态
+  after "restore":         {} | includes_i18n = True     <- 陈旧值盖回
+  >>> 下一个文件拿到的 get_i18n_pack_tag('zh'): None
+  ```
+  根因:这两个全局是**构建的副作用产物**,而快照拍在「测试自己触发的那次构建」**之前**,所以 restore 不是复原,是把前构建态盖到真实态上;模块从此永久自称「pack 未启用」。
+- **★ 为什么单文件跑不出来(这决定了守卫形态):** `test_i18n_pack_boot_floor.py` 与 `test_i18n_pack_serving.py` **各自单独跑都全绿**,组合才 7 红;两者都是 `@pytest.mark.unit`,`make test-unit` / `ci` 一定同时收集 ⇒ **这是当天就断的 CI,不是 flake**。故守卫必须**按文件对、在同一进程内、按毒化顺序**跑,per-file 绿不能替代。
+- **落点:** ①`js_bundler.reset_manifest_for_tests()` —— 撤销 manifest 变更的唯一受支持方式是**作废**(并且必须一起清 `_bundle_mtime`,否则陈旧闸会让读者直接服务被清空的 manifest),让下一个读者重建,永不重放快照;②boot_floor 改为断言**真实构建态**产生的 tag,dual-bundle 回退时诚实 skip;③`_Pinned` 只还原被 monkeypatch 的**函数**(那不是构建副作用),**数据**走 reset 缝。
+- **★ 结构守卫连错三版,三种错法各不相同,全部由 NEUTER 抓出(不是评审):**
+  | 版本 | 错法 | 后果 |
+  |---|---|---|
+  | v1 | 锚在 `saved` 这个**名字**上 | 漏掉 `self._saved` 形式,植入后守卫照绿 |
+  | v2 | 只要右值不是字面量就报 | **误报合法 setup**(`_pack_filenames = self._packs`)——逼人去改正确代码,比没有守卫更坏 |
+  | v3 | 数括号拼接续行 | 被**字符串字面量里的不平衡括号**打败(本文件自己的正则就有),把后续整个文件吞进一行,藏住已植入的违规 |
+
+  终版改用 **`ast` 解析**:识别「capture(`x = mod._pack_filenames`)」与「replay(`mod._pack_filenames = x`)」的**配对**,只报配对成立者。**判据:扫 Python 源的守卫不要用行正则拼续行——解析器不会被字符串内容骗。**
+- **NEUTER×4 各咬各的方向:** 把毒化放回去 → 顺序守卫红并列出组合失败;两种 replay 形式(裸名 / `self._saved` 元组)→ 结构守卫红且带行号;去掉 reset 里的 mtime 清零 → reset 缝守卫红。合法 setup 全程不误报。
+- **验收边界:** ①owner 判据「单次 pytest 调用且必须含 `test_i18n_pack_serving.py`」= **111 passed / 0 failed**,干净 committed worktree 复验同数;②`private_hosts.js` 与兄弟的 `project.qrScan*` 两处红按 owner 指示未碰;③本批纯测试基础设施 + 一个测试专用缝,**不改任何运行时行为**,但前两批仍需重启才生效。
+
 ### 2026-07-29(续·检视面板) — 工具行调试面板收敛为单视图 + **对比度缺陷不在这个面板,在它复用的共享渲染器**(owner「字号偏小、对比度偏低;请求按钮多余,直接只显示结果状态才对」;commit `4fa28c5c`,6 文件 +750/-142;新套件 **13 + 23 探针**,**NEUTER×3 + ×4 各咬各的**,干净 committed worktree **48/48**,真浏览器三主题像素验收 PASS)
 
 - **★ owner 的第二半判断在数据层就是对的,我先去验证了它才动手:** `tool_dispatch/_pipeline.py:857` 的 post-tool 镜像是在**工具结果已追加进同一条 messages 列表之后**拍的(同 roundNum 轴),所以「请求」载荷是「结果状态」的**严格前缀**。两个 tab = 点两次看同一批消息、第二次少了结果。收敛为单视图后**信息零损失**(守卫 `state_view_carries_request_content` 钉死)。

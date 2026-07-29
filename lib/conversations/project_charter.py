@@ -195,6 +195,13 @@ def propose_amendment(project_path: str, conv_id: str, proposal: str, *,
             'proposalId': proposal_id}
 
 
+# How many times a pure append re-reads and replays after losing a CAS race.
+# Contention here is a handful of humans/agents committing decisions, not a hot
+# loop, so a small bound is ample; exhausting it is REPORTED as a failure
+# rather than silently dropping the decision.
+_CAS_MAX_ATTEMPTS = 6
+
+
 def commit_charter(project_path: str, *, content: str | None = None,
                    add_decision: str | None = None,
                    decision_kind: str = '',
@@ -202,74 +209,99 @@ def commit_charter(project_path: str, *, content: str | None = None,
                    expected_version: int | None = None,
                    updated_by_conv: str = '',
                    resolves_proposal: str = '') -> dict:
-    """Commit a charter change (optimistic-locked).
+    """Commit a charter change. Concurrency-safe per OPERATION, not per caller.
 
-    Two callers: the human REST route (may set ``content`` AND/OR append a
-    decision) and the ``project_charter_commit`` agent tool (append a decision
-    ONLY — never ``content``). Updates ``content`` and/or appends one committed
-    ``decision``, bumping ``version``. If ``expected_version`` is provided and
-    does NOT match the
-    current row version, the commit is REJECTED (concurrent-edit guard) — the
-    caller must re-read and retry. On success emits ONE ``decided`` event.
+    ``content`` and ``add_decision`` are MUTUALLY EXCLUSIVE — a mixed call is
+    refused with ``invalid_combination``. That is not tidiness: it is what makes
+    "is this a pure append?" decidable from the arguments, which is the
+    precondition for replaying one safely below. While the combination was
+    representable, replay safety rested on caller habit.
+
+    Two operations, two concurrency contracts:
+
+    * **append** (``add_decision``) — COMMUTES with every other append, so a
+      concurrent commit is not a conflict. The write is a CAS on ``version``;
+      on a miss we RE-READ and re-append only our OWN entry, up to
+      ``_CAS_MAX_ATTEMPTS``. ``expected_version`` is therefore advisory here: a
+      stale one does NOT refuse the append. (The panel bakes the version it
+      rendered into the button and sibling agents self-commit constantly, so
+      refusing would break that button exactly when the project is busy.)
+      ``content`` is never written by this path — an append carries no opinion
+      about the north star and must not revert a concurrent edit to it.
+    * **overwrite** (``content``) — does NOT commute: rewriting the north star
+      from a stale base destroys the other edit. ``expected_version`` stays a
+      HARD gate (``version_conflict``), and the write is still CAS'd so the
+      check cannot be defeated by a race after the read.
+
+    Before this split the whole function was a read-modify-write that wrote the
+    ENTIRE row from a stale read, so two interleaved commits clobbered each
+    other and the loser was told ``ok=True`` — measured, see
+    tests/test_project_charter_concurrency.py.
 
     Returns ``{'ok': bool, 'version'?: int, 'error'?: str,
     'current_version'?: int}``.
     """
     if not project_path:
         return {'ok': False, 'error': 'no project'}
+    if content is not None and add_decision:
+        # Refused BEFORE any write: a partial application is worse than none.
+        logger.info('[Charter] commit refused (content + add_decision in one '
+                    'call) proj=%.40r', project_path)
+        return {'ok': False, 'error': 'invalid_combination',
+                'detail': 'content and add_decision are mutually exclusive'}
     from lib.conversations.project_feed import normalize_project_path
     project_path = normalize_project_path(project_path)
+
+    committed_decision = ''
+    if add_decision:
+        committed_decision = add_decision.strip()[:_DECISION_MAX_CHARS]
+
     try:
         db = get_thread_db(DOMAIN_CHAT)
-        cur = read_charter(project_path)
-        if expected_version is not None and cur['version'] != expected_version:
-            logger.info('[Charter] commit rejected (version skew) proj=%.40r '
-                        'expected=%s current=%s', project_path,
-                        expected_version, cur['version'])
-            return {'ok': False, 'error': 'version_conflict',
-                    'current_version': cur['version']}
+        new_version = None
+        for attempt in range(_CAS_MAX_ATTEMPTS):
+            cur = read_charter(project_path)
+            base_version = cur['version']
 
-        new_content = cur['content'] if content is None else content
-        new_content = (new_content or '')[:_CONTENT_MAX_CHARS]
-        decisions = list(cur['decisions'])
-        committed_decision = ''
-        if add_decision:
-            committed_decision = add_decision.strip()[:_DECISION_MAX_CHARS]
-            if committed_decision:
-                entry = {
-                    'text': committed_decision,
-                    'by_conv': updated_by_conv or '',
-                    'ts': int(time.time() * 1000),
-                }
-                if decision_kind and decision_kind in _DECISION_KINDS:
-                    entry['kind'] = decision_kind
-                summary = (summary or '').strip()[:_SUMMARY_MAX_CHARS]
-                if summary:
-                    entry['summary'] = summary
-                decisions.append(entry)
-                if len(decisions) > _MAX_DECISIONS:
-                    decisions = decisions[-_MAX_DECISIONS:]
-        new_version = cur['version'] + 1
-        ts = int(time.time() * 1000)
-        decisions_json = json.dumps(decisions, ensure_ascii=False)
+            if content is not None:
+                if expected_version is not None and base_version != expected_version:
+                    logger.info('[Charter] commit rejected (version skew) '
+                                'proj=%.40r expected=%s current=%s',
+                                project_path, expected_version, base_version)
+                    return {'ok': False, 'error': 'version_conflict',
+                            'current_version': base_version}
+                new_content = (content or '')[:_CONTENT_MAX_CHARS]
+                decisions = list(cur['decisions'])
+            else:
+                # Pure append: carry the CURRENT content through untouched.
+                new_content = (cur['content'] or '')[:_CONTENT_MAX_CHARS]
+                decisions = list(cur['decisions'])
+                if committed_decision:
+                    decisions.append(_decision_entry(
+                        committed_decision, decision_kind=decision_kind,
+                        summary=summary, updated_by_conv=updated_by_conv))
+                    if len(decisions) > _MAX_DECISIONS:
+                        decisions = decisions[-_MAX_DECISIONS:]
 
-        # Upsert: the single-PK row. ON CONFLICT bumps in place. Use the
-        # Core-compiled dialect-correct upsert so PG + SQLite both work.
-        # Explicit ON CONFLICT upsert with positional ? binds — the same
-        # placeholder style project_feed.py uses (proven through the
-        # _sql_translate ?→%s bridge on both PG + SQLite). The single-PK
-        # project_charter row is created on first commit, updated thereafter.
-        db.execute(
-            'INSERT INTO project_charter '
-            '(project_path, content, decisions, updated_by_conv, updated_at, version) '
-            'VALUES (?, ?, ?, ?, ?, ?) '
-            'ON CONFLICT(project_path) DO UPDATE SET '
-            'content=excluded.content, decisions=excluded.decisions, '
-            'updated_by_conv=excluded.updated_by_conv, '
-            'updated_at=excluded.updated_at, version=excluded.version',
-            (project_path, new_content, decisions_json,
-             updated_by_conv or '', ts, new_version))
-        db.commit()
+            if _cas_write(db, project_path, content=new_content,
+                          decisions=decisions,
+                          updated_by_conv=updated_by_conv,
+                          base_version=base_version):
+                new_version = base_version + 1
+                break
+
+            # Lost the race. An overwrite that pinned a version must NOT be
+            # silently replayed onto the winner's text — report the skew.
+            if content is not None and expected_version is not None:
+                return {'ok': False, 'error': 'version_conflict',
+                        'current_version': read_charter(project_path)['version']}
+            logger.debug('[Charter] CAS miss proj=%.40r attempt=%d base=%s',
+                         project_path, attempt + 1, base_version)
+        else:
+            logger.warning('[Charter] commit gave up after %d CAS attempts '
+                           'proj=%.40r', _CAS_MAX_ATTEMPTS, project_path)
+            return {'ok': False, 'error': 'contention',
+                    'current_version': read_charter(project_path)['version']}
     except Exception as e:
         logger.error('[Charter] commit failed proj=%.40r: %s',
                      project_path, e, exc_info=True)
@@ -307,6 +339,58 @@ def commit_charter(project_path: str, *, content: str | None = None,
     except Exception as e:
         logger.debug('[Charter] watch address trigger skipped: %s', e)
     return {'ok': True, 'version': new_version}
+
+
+def _decision_entry(text: str, *, decision_kind: str, summary: str,
+                    updated_by_conv: str) -> dict:
+    """Build ONE committed-decision entry (the shape stored in ``decisions``)."""
+    entry = {
+        'text': text,
+        'by_conv': updated_by_conv or '',
+        'ts': int(time.time() * 1000),
+    }
+    if decision_kind and decision_kind in _DECISION_KINDS:
+        entry['kind'] = decision_kind
+    summary = (summary or '').strip()[:_SUMMARY_MAX_CHARS]
+    if summary:
+        entry['summary'] = summary
+    return entry
+
+
+def _cas_write(db, project_path: str, *, content: str, decisions: list,
+               updated_by_conv: str, base_version: int) -> bool:
+    """Write the row ONLY if it is still at ``base_version``. Returns whether
+    it landed.
+
+    The version test lives in the WHERE clause, not in a preceding read: a
+    read-then-compare only narrows the race window, it does not close it. This
+    is the single place the charter row is written under contention.
+
+    ``base_version == 0`` means "the row must not exist yet", so that case takes
+    the INSERT branch whose PK conflict is itself the CAS-failure signal — a
+    concurrent creator wins and we re-read rather than clobbering their row.
+    """
+    ts = int(time.time() * 1000)
+    decisions_json = json.dumps(decisions, ensure_ascii=False)
+    if base_version == 0:
+        cur = db.execute(
+            'INSERT INTO project_charter '
+            '(project_path, content, decisions, updated_by_conv, updated_at, version) '
+            'VALUES (?, ?, ?, ?, ?, ?) '
+            'ON CONFLICT(project_path) DO NOTHING',
+            (project_path, content, decisions_json,
+             updated_by_conv or '', ts, 1))
+    else:
+        cur = db.execute(
+            'UPDATE project_charter SET content=?, decisions=?, '
+            'updated_by_conv=?, updated_at=?, version=? '
+            'WHERE project_path=? AND version=?',
+            (content, decisions_json, updated_by_conv or '', ts,
+             base_version + 1, project_path, base_version))
+    landed = (getattr(cur, 'rowcount', 0) or 0) > 0
+    if landed:
+        db.commit()
+    return landed
 
 
 def _persist_charter(db, project_path: str, content: str, decisions: list,

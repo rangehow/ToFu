@@ -82,12 +82,16 @@ def _feed_kinds(flask_app, project_path):
 def test_commit_then_read(flask_app):
     from lib.conversations.project_charter import commit_charter, read_charter
     with flask_app.app_context():
-        r = commit_charter('/p/c', content='Ship Pillar 2.',
-                           add_decision='Use soft leases.', updated_by_conv='cA')
-        assert r['ok'] and r['version'] == 1
+        # content and add_decision are mutually exclusive (one call = one
+        # operation), so the north star and the decision are two commits.
+        assert commit_charter('/p/c', content='Ship Pillar 2.',
+                              updated_by_conv='cA')['ok']
+        r = commit_charter('/p/c', add_decision='Use soft leases.',
+                           summary='Use soft leases.', updated_by_conv='cA')
+        assert r['ok'] and r['version'] == 2
         rec = read_charter('/p/c')
     assert rec['content'] == 'Ship Pillar 2.'
-    assert rec['version'] == 1
+    assert rec['version'] == 2
     assert any(d['text'] == 'Use soft leases.' for d in rec['decisions'])
     assert rec['exists'] is True
 
@@ -172,8 +176,9 @@ def test_render_block_present_and_absent(flask_app):
     from lib.conversations.project_charter import commit_charter, render_charter_block
     with flask_app.app_context():
         assert render_charter_block('/p/none') == ''
-        commit_charter('/p/has', content='North star here.',
-                       add_decision='Decision A.', updated_by_conv='cA')
+        commit_charter('/p/has', content='North star here.', updated_by_conv='cA')
+        commit_charter('/p/has', add_decision='Decision A.',
+                       summary='Decision A.', updated_by_conv='cA')
         block = render_charter_block('/p/has')
     assert '[PROJECT CHARTER]' in block
     assert 'North star here.' in block
@@ -195,7 +200,9 @@ def _run_inject(flask_app, project_path, has_charter):
     with flask_app.app_context():
         if has_charter:
             commit_charter(project_path, content='Injected north star.',
-                           add_decision='Inj decision.', updated_by_conv='cA')
+                           updated_by_conv='cA')
+            commit_charter(project_path, add_decision='Inj decision.',
+                           summary='Inj decision.', updated_by_conv='cA')
         messages = [{'role': 'user', 'content': 'hello'}]
         sc_inject._inject_system_contexts(
             messages, project_path, True,   # project_path, project_enabled
@@ -236,13 +243,18 @@ def test_injection_absent_when_no_charter(flask_app):
 def test_route_charter_read_and_commit(flask_app, flask_client):
     import json as _json
     # commit via the human-gated route
+    # One call = one operation (content and add_decision are mutually
+    # exclusive), so the north star and the decision are two requests.
+    r0 = flask_client.post('/api/v1/project/charter/commit', json={
+        'path': '/p/route-c', 'content': 'North star.'})
+    assert r0.status_code == 200, r0.get_data(as_text=True)
     r = flask_client.post('/api/v1/project/charter/commit', json={
-        'path': '/p/route-c', 'content': 'North star.',
+        'path': '/p/route-c',
         'add_decision': 'Decision via route.',
         'summary': 'Decision via route.'})
     assert r.status_code == 200, r.get_data(as_text=True)
     body = _json.loads(r.get_data(as_text=True))
-    assert body.get('version') == 1
+    assert body.get('version') == 2
     # read it back
     r2 = flask_client.get('/api/v1/project/charter?path=/p/route-c')
     data = _json.loads(r2.get_data(as_text=True))
@@ -582,7 +594,8 @@ def test_delete_charter_removes_row(flask_app):
     )
     p = os.path.abspath('/p/del-all')
     with flask_app.app_context():
-        commit_charter(p, content='NS', add_decision='D', updated_by_conv='cA')
+        commit_charter(p, content='NS', updated_by_conv='cA')
+        commit_charter(p, add_decision='D', summary='D', updated_by_conv='cA')
         ver = read_charter(p)['version']
         r = delete_charter(p, expected_version=ver, updated_by_conv='human')
         assert r['ok'] and r.get('deleted') is True
@@ -635,8 +648,9 @@ def test_routes_charter_edit_delete_roundtrip(flask_app, flask_client):
     import json as _json
     p = os.path.abspath('/p/route-editdel')
     flask_client.post('/api/v1/project/charter/commit',
-                      json={'path': p, 'content': 'NS', 'add_decision': 'D0',
-                            'summary': 'D0'})
+                      json={'path': p, 'content': 'NS'})
+    flask_client.post('/api/v1/project/charter/commit',
+                      json={'path': p, 'add_decision': 'D0', 'summary': 'D0'})
     flask_client.post('/api/v1/project/charter/commit',
                       json={'path': p, 'add_decision': 'D1', 'summary': 'D1'})
     ver = _json.loads(flask_client.get(
@@ -811,18 +825,36 @@ def test_agent_commit_source_never_passes_content():
         'agent commit branch must NEVER pass content= to commit_charter'
 
 
-def test_agent_commit_version_conflict_surfaced(flask_app):
-    """A stale expected_version is rejected and the tool tells the agent to
-    re-read and retry (optimistic lock preserved through the tool)."""
-    from lib.conversations.project_charter import commit_charter
+def test_agent_commit_survives_a_stale_version(flask_app):
+    """A stale expected_version must NOT refuse an agent's decision append.
+
+    Re-anchored 2026-07-29 — this test previously asserted the OPPOSITE. The
+    agent tool can only append, and appends COMMUTE: another conversation
+    committing in between is not a conflict, it is the normal state of a busy
+    project. Refusing here made the tool fail precisely when siblings were
+    active, and the same contract made the panel's Commit button 409 on a
+    version it had rendered moments earlier.
+
+    The property that actually matters is asserted on the DATA: BOTH decisions
+    are present afterwards. So this is not "the refusal was deleted" but "the
+    append landed without eating the other one". Overwrites keep their hard
+    lock — see tests/test_project_charter_concurrency.py.
+    """
+    from lib.conversations.project_charter import commit_charter, read_charter
     p = os.path.abspath('/p/agent-conflict')
     with flask_app.app_context():
-        commit_charter(p, add_decision='v1', updated_by_conv='human')  # version 1
+        commit_charter(p, add_decision='v1', summary='v1',
+                       updated_by_conv='human')          # version 1
+        commit_charter(p, add_decision='sibling', summary='sibling',
+                       updated_by_conv='sibB')           # version 2 — moved on
         out = _charter_tool('project_charter_commit',
-                            {'kind': 'invariant', 'decision': 'stale',
-                             'summary': 'stale', 'expected_version': 0},
+                            {'kind': 'invariant', 'decision': 'mine',
+                             'summary': 'mine', 'expected_version': 0},
                             project_path=p)
-    assert 'NOT committed' in out and 'version 1' in out
+        texts = [d['text'] for d in read_charter(p)['decisions']]
+    assert 'NOT committed' not in out, out
+    assert texts == ['v1', 'sibling', 'mine'], \
+        f'the append must land and no sibling decision may be lost; {texts}'
 
 
 def test_agent_commit_hits_max_decisions_truncation(flask_app):

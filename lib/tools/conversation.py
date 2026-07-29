@@ -227,7 +227,7 @@ CHARTER_COMMIT_TOOL = {
                 },
                 "expected_version": {
                     "type": "integer",
-                    "description": "Optional concurrency guard: the charter version you last read. If the charter has since changed, the commit is rejected and you should re-read and retry."
+                    "description": "Optional and rarely useful. This tool only ever APPENDS a decision, and appends commute — so a charter that moved since you read it is NOT a conflict: the commit re-reads and lands yours alongside the other one instead of refusing. A stale value here does not block the commit."
                 },
             },
             "required": ["kind", "decision"],

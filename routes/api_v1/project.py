@@ -581,8 +581,15 @@ def project_charter():
         'The human gate for the charter north star — an agent can only PROPOSE '
         '(project_charter_propose); only this route COMMITS. Body: ``{path, '
         'content?, add_decision?, expected_version?, updated_by_conv?}``. '
-        'Optimistic-locked: a stale ``expected_version`` is rejected with '
-        '``version_conflict``. On success emits a ``decided`` activity event.'),
+        '``content`` and ``add_decision`` are MUTUALLY EXCLUSIVE (400) — one '
+        'call is either an overwrite or an append, never both, which is what '
+        'lets the append be replayed safely under contention. '
+        '``expected_version`` is scoped by OPERATION: an OVERWRITE '
+        '(``content``) treats it as a hard optimistic lock and a stale value is '
+        'rejected with ``version_conflict`` (409); an APPEND (``add_decision``) '
+        'commutes with other appends, so a stale value does NOT refuse it — the '
+        'write CAS-retries instead. On success emits a ``decided`` activity '
+        'event.'),
     tags=['project'],
 )
 def project_charter_commit():
@@ -594,6 +601,14 @@ def project_charter_commit():
     add_decision = data.get('add_decision')
     if content is None and not add_decision:
         return api_bad_request('provide content and/or add_decision')
+    if content is not None and add_decision:
+        # Mirrors commit_charter's own refusal, so an external client can never
+        # reach a shape the library refuses — and "is this a pure append?"
+        # stays decidable from the body alone.
+        return api_bad_request(
+            'content and add_decision are mutually exclusive — send one call '
+            'per operation (an overwrite or an append, never both)',
+            field='add_decision')
     # A committed decision is an INVARIANT: it MUST carry its one-line
     # summary (the binding rule the per-turn injection renders). The agent
     # tool path has enforced kind+summary since the kind routing landed;

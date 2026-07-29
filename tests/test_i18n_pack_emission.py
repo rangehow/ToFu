@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -40,6 +41,7 @@ from lib.i18n_packs import (
     emit_pack_files,
     verify_pack_roundtrip,
     extract_dictionary,
+    _ARTIFACT_GRACE_S,
 )
 
 
@@ -121,8 +123,17 @@ def test_stale_artifacts_are_removed_but_current_kept():
         stale = os.path.join(d, 'i18n-zh-deadbeef.js')
         with open(stale, 'w') as f:
             f.write('var _i18n = {};')
+        # AGE it past the grace window. Cleanup is deliberately two-condition
+        # — "not current" AND "not young" — because a pack is referenced by an
+        # already-served index.html and deleting a JUST-published one 404s the
+        # page currently loading (which has no error path: the core bundle
+        # excludes i18n.js, so t() simply doesn't exist). Writing the file and
+        # immediately expecting it gone would assert the young case, i.e. the
+        # exact behaviour tests/test_stale_i18n_pack_self_heal.py forbids.
+        old = time.time() - (_ARTIFACT_GRACE_S + 600)
+        os.utime(stale, (old, old))
         out = emit_pack_files(d, source_path=src)
-        assert not os.path.exists(stale), 'stale pack was not cleaned'
+        assert not os.path.exists(stale), 'aged stale pack was not cleaned'
         for name in out.values():
             assert os.path.exists(os.path.join(d, name)), (
                 'cleanup deleted a CURRENT pack — that is the dangerous '

@@ -364,6 +364,11 @@ JS_DIR = os.path.join(BASE_DIR, 'static', 'js')
 _BUILT_BUNDLE_RE = re.compile(
     r'^(?:(?:bundle|feature)-[0-9a-f]{8}|i18n-(?:zh|en)-[0-9a-f]{8})\.js$')
 
+# The i18n-pack subset of _BUILT_BUNDLE_RE, CAPTURING the language — a stale
+# pack can only ever heal to the current pack of the same language, so the
+# resolver needs the language, not just "is a pack".
+_PACK_LANG_RE = re.compile(r'^i18n-(zh|en)-[0-9a-f]{8}\.js$')
+
 # How long a built artifact is immune to another process's cleanup (seconds).
 # Covers the longest realistic serve overlap: a browser holding an old
 # index.html (bfcache / long-lived tab / caching proxy) plus an i18n pack
@@ -1517,10 +1522,26 @@ def resolve_stale_bundle(filename):
         None. Returns None when the request already names the current file
         (let it serve normally) or is not a built-bundle name at all (a real
         404 — must NOT be masked).
+
+    ★ KIND IS THREE-WAY, NOT TWO-WAY. ``_BUILT_BUNDLE_RE`` also admits the
+    single-language ``i18n-<lang>-<hash>.js`` packs, and a pack must heal to
+    the current pack OF THE SAME LANGUAGE. A two-way ``bundle-`` / else-
+    ``feature-`` split sent every stale pack request to the FEATURE bundle:
+    the browser then ran the feature bundle in the pack's place, so the core
+    bundle (which EXCLUDES i18n.js whenever packs are active) never got
+    ``_i18n`` / ``_i18nLang`` / ``t()`` at all — the whole UI rendered raw
+    i18n keys — while the doubly-executed feature bundle threw
+    ``Identifier already declared``, killing the rest of boot.
     """
     if not filename or not _BUILT_BUNDLE_RE.match(filename):
         return None
-    if filename.startswith('bundle-'):
+    pack = _PACK_LANG_RE.match(filename)
+    if pack:
+        # Keeps the pair coherent: _pack_filenames is published inside
+        # build_bundle() together with the bundle pointer this resolves against.
+        get_bundle_filename()
+        current = _pack_filenames.get(pack.group(1))
+    elif filename.startswith('bundle-'):
         current = get_bundle_filename()
     else:  # 'feature-'
         current = get_feature_bundle_filename()

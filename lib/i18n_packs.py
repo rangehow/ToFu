@@ -40,6 +40,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 
 from lib.log import get_logger
 
@@ -64,6 +65,13 @@ SUPPORTED_LANGS = ('zh', 'en')
 # disk-orphan edge treats anything NOT matching its built-artifact regex as a
 # source file, so a pack name outside this pattern trips the closed system.
 PACK_BASENAME_RE = re.compile(r'^i18n-(?:zh|en)-[0-9a-f]{8}\.js$')
+
+# How long a published pack is immune to cleanup, mirroring
+# lib/js_bundler._BUILT_ARTIFACT_GRACE_S. Read from the SAME env var rather
+# than imported, because js_bundler imports THIS module (importing back would
+# be a cycle) — the shared var name is what keeps them in lockstep.
+_ARTIFACT_GRACE_S = int(
+    os.environ.get('TOFU_BUNDLE_ARTIFACT_GRACE_S', '7200'))
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 I18N_SOURCE = os.path.join(_REPO, 'static', 'js', 'i18n.js')
@@ -385,15 +393,27 @@ def emit_pack_files(out_dir: str, source_path: str | None = None) -> dict[str, s
             raise
         published[lang] = filename
 
-    # Clean stale packs only after every current pack is safely on disk.
+    # Clean stale packs only after every current pack is safely on disk, and
+    # never one that is still YOUNG. A pack is referenced by an already-served
+    # index.html; deleting it the instant a rebuild renames it 404s the page
+    # that is loading RIGHT NOW. Unlike a bundle, a missing pack has no
+    # user-visible error path — the core bundle excludes i18n.js, so t() and
+    # _i18nLang are simply undefined and the UI renders raw keys. Same grace
+    # window as the bundle cleaner (lib/js_bundler._BUILT_ARTIFACT_GRACE_S),
+    # read from the same env var so the two can't drift apart.
     current = set(published.values())
+    now = time.time()
     try:
         for f in os.listdir(out_dir):
-            if PACK_BASENAME_RE.match(f) and f not in current:
-                try:
-                    os.remove(os.path.join(out_dir, f))
-                except OSError as e:
-                    logger.debug('[i18nPacks] stale pack cleanup failed %s: %s', f, e)
+            if not PACK_BASENAME_RE.match(f) or f in current:
+                continue
+            path = os.path.join(out_dir, f)
+            try:
+                if now - os.path.getmtime(path) < _ARTIFACT_GRACE_S:
+                    continue
+                os.remove(path)
+            except OSError as e:
+                logger.debug('[i18nPacks] stale pack cleanup failed %s: %s', f, e)
     except OSError as e:
         logger.debug('[i18nPacks] pack dir listing failed: %s', e)
 

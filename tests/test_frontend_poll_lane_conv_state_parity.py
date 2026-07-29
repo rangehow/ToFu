@@ -221,6 +221,19 @@ function connectToTask(id, taskId, retries, opts) {
   activeStreams.set(id, { controller: {}, taskId });
 }
 
+/* Report the OBSERVABLE busy verdict (what lights the dot / flips the composer
+ * to Stop), not the internal set — so a test can assert the user-visible state
+ * rather than an implementation detail. */
+function _busyVerdict(convId) {
+  const c = conversations.find((x) => x && x.id === convId);
+  if (!c) return null;
+  return {
+    busy: computeConvBusy(c, activeStreams),
+    carrier: (typeof pickVuCarrierForAttach === 'function')
+      ? pickVuCarrierForAttach(c) : null,
+  };
+}
+
 /* Api stub: convState resolves the projection (or REJECTS, to prove the
  * fail-safe posture); active() is the legacy probe that hides carriers. */
 const Api = {
@@ -238,12 +251,25 @@ __REDUCER_FNS__
 __SEAM_FN__
 __POLL_FN__
 
+/* Seed PRIOR busy knowledge through the REAL reducer (never hand-built sets):
+ * models a client that already learned a VU carrier was live — the state that
+ * must later be EXTINGUISHED by a projection omitting the conv. */
+for (const c of conversations) {
+  if (!c || !c.__seedWire) continue;
+  applyRunningTaskIdsFrame(conversations, {
+    convId: c.id, runningTaskIds: c.__seedWire,
+    runningTaskIdsRev: [50, 'seed'], userId: null,
+  });
+}
+
 const _ret = _crossDeviceReconcile();
 /* Drain microtasks so the probe .then() chains settle before we report. */
 Promise.resolve()
   .then(() => {}).then(() => {}).then(() => {}).then(() => {}).then(() => {})
   .then(() => {
-    process.stdout.write(JSON.stringify({ ret: _ret, calls: _calls }));
+    process.stdout.write(JSON.stringify({
+      ret: _ret, calls: _calls, busyVerdict: _busyVerdict(CFG.activeConvId),
+    }));
   });
 """
 
@@ -263,6 +289,11 @@ def _reducer_fns() -> str:
         _extract_fn(src, "_vuCarrierIdsFrom"),
         _extract_fn(src, "applyRunningTaskIdsFrame"),
         _extract_fn(src, "applyConvStateSnapshot"),
+        # The REAL busy predicate — the thing that actually lights the dot /
+        # flips the composer to Stop. Lifted, never stubbed: a hand-written
+        # busy check could disagree with the shipped one and let a stale-dot
+        # regression pass.
+        _extract_fn(src, "computeConvBusy"),
         _extract_fn(src, "pickAuthoritativeTaskIdForReconnect"),
         _extract_fn(src, "pickVuCarrierForAttach"),
     ])
@@ -335,10 +366,48 @@ def test_poll_fallback_uses_plain_path_for_a_real_worker():
 
 @pytest.mark.skipif(not _node_available(), reason="node not installed")
 def test_poll_fallback_idle_projection_attaches_nothing():
-    """An idle projection must not attach — and must not resurrect a dot."""
+    """An idle projection must not attach — and must not resurrect a dot.
+
+    The second half of that sentence is now ASSERTED. It used to be prose only:
+    the harness never exposed the busy verdict, so 'must not resurrect a dot'
+    was a promise with no check behind it — the same shape of empty guard as a
+    text scan satisfied by its own docstring.
+    """
     r = _run(_open_conv(), active_conv_id="c1",
              projection={"convs": {}})
     assert r["calls"]["connectToTask"] == [], r
+    assert r["busyVerdict"]["busy"] is False, \
+        f'an idle projection must not light the busy dot: {r["busyVerdict"]}'
+    assert r["busyVerdict"]["carrier"] is None, r
+
+
+@pytest.mark.skipif(not _node_available(), reason="node not installed")
+def test_poll_clears_a_stale_busy_dot_when_the_vu_turn_ended():
+    """THE COMPLEMENT of the whole objective, and the failure mode that would
+    have replaced one stuck state with another.
+
+    Every fix in this family makes a conv read BUSY so its live VU work becomes
+    visible. The mirror risk is a dot that never goes out: if the VU turn ends
+    while the push socket is down, the client's last knowledge is 'carrier
+    running' and it would sit on Stop forever with nothing generating — exactly
+    the inconsistent state this work exists to remove, just inverted.
+
+    ``applyConvStateSnapshot`` clears convs ABSENT from a snapshot, so the poll
+    projection is what extinguishes it. Drive the real transition: carrier busy
+    first, then a projection that omits the conv.
+    """
+    convs = _open_conv()
+    # Seed prior knowledge of a live VU carrier the way the wire really does.
+    convs[0]["__seedWire"] = ["da0717c8#vu"]
+    r = _run(convs, active_conv_id="c1", projection={"convs": {}})
+    assert r["busyVerdict"]["busy"] is False, (
+        'a poll projection that omits the conv must EXTINGUISH the busy dot — '
+        'otherwise the composer stays on Stop with nothing generating, which '
+        f'is the same stuck state inverted: {r["busyVerdict"]}')
+    assert r["busyVerdict"]["carrier"] is None, \
+        f'the stale carrier must be dropped too: {r["busyVerdict"]}'
+    assert r["calls"]["connectToTask"] == [], \
+        'nothing is running — the poll must not attach to a dead carrier'
 
 
 @pytest.mark.skipif(not _node_available(), reason="node not installed")

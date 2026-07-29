@@ -97,19 +97,54 @@ def parse_end_turn_reason(content: str) -> str | None:
     return None
 
 
-def _last_tool_round(task: dict[str, Any]) -> dict | None:
-    """The most recent tool round, ordered the way the orchestrator appends."""
-    rounds = task.get('toolRounds') or []
+def _ordered_rounds(task: dict[str, Any]) -> list:
+    """Tool rounds in the order the orchestrator appended them."""
+    rounds = [r for r in (task.get('toolRounds') or []) if isinstance(r, dict)]
     if not rounds:
-        return None
+        return []
     try:
         return sorted(
             rounds,
             key=lambda r: (r.get('llmRound') or 0, r.get('roundNum') or 0),
-        )[-1]
+        )
     except Exception as e:  # pragma: no cover — defensive
         logger.debug('[IntentStall] tool-round ordering failed: %s', e)
-        return rounds[-1]
+        return rounds
+
+
+def _last_tool_round(task: dict[str, Any]) -> dict | None:
+    """The most recent tool round, ordered the way the orchestrator appends."""
+    ordered = _ordered_rounds(task)
+    return ordered[-1] if ordered else None
+
+
+def _uncovered_failure(task: dict[str, Any]) -> dict | None:
+    """Criterion A's selector: a failure in the turn's FINAL tool batch.
+
+    Why not simply "the last round" (the original implementation): the
+    orchestrator dispatches every tool call of one LLM turn as a parallel
+    BATCH sharing an ``llmRound`` (see ``_computeToolBatches`` on the render
+    side). Sorting all rounds and taking ``[-1]`` therefore picks an arbitrary
+    member of that batch — whichever happens to sort last. When a batch mixes
+    outcomes (``read_files`` fails, a sibling ``grep_search`` succeeds), that
+    lottery decides whether criterion A sees the failure at all.
+
+    A batch is ONE model decision: the model received all of its results
+    together and then chose to stop. So a failure anywhere in the final batch
+    is NOT covered — nothing ran after it. A failure in an EARLIER batch *is*
+    covered, because the model demonstrably went on to do more tool work
+    afterwards and is no longer stalled on it.
+
+    Returns the failing round (preferring the last-sorted failure in that
+    batch), or ``None`` when the final batch succeeded outright.
+    """
+    ordered = _ordered_rounds(task)
+    if not ordered:
+        return None
+    last_key = (ordered[-1].get('llmRound') or 0)
+    final_batch = [r for r in ordered if (r.get('llmRound') or 0) == last_key]
+    failed = [r for r in final_batch if _round_failed(r)]
+    return failed[-1] if failed else None
 
 
 def _round_failed(entry: dict[str, Any]) -> bool:
@@ -212,11 +247,13 @@ def should_nudge_intent_stall(
         #     the suppressor would be unreachable exactly when it matters.
         if _awaiting_human(task, assistant_msg, content):
             return False, 'awaiting_human'
-        entry = _last_tool_round(task)
-        if entry is None:
+        if not _ordered_rounds(task):
             return False, 'no_tool_rounds'
-        # A — the previous tool round must have failed.
-        if not _round_failed(entry):
+        # A — the turn's FINAL tool batch must carry a failure. Batch-aware:
+        #     one llmRound is one model decision, so a failure anywhere in it
+        #     is uncovered (nothing ran after it). See _uncovered_failure.
+        entry = _uncovered_failure(task)
+        if entry is None:
             return False, 'prev_tool_ok'
         # C — an absent tool can never succeed on retry.
         if _is_non_retryable(entry):

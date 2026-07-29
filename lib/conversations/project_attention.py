@@ -67,7 +67,8 @@ _TYPE_RANK = {
 }
 
 # A conflict message is a fully-formed backend string; cap it so one pathological
-# advisory can't dominate the panel.
+# advisory can't dominate the panel. DISPLAY-ONLY fields: never apply it to a
+# field a resolving control submits back (see _charter_proposals).
 _TEXT_MAX = 600
 
 
@@ -128,6 +129,12 @@ def _charter_proposals(project_path: str) -> list[dict]:
     "only for suggestions you are not yet ready to make binding". Nothing stops
     while one is pending — which is exactly why it must NOT drive the bar's
     emphasis the way it used to.
+
+    ``text`` is NOT capped at ``_TEXT_MAX``: unlike a conflict advisory (pure
+    display), this field is what the Needs-you tab COMMITS as the durable
+    decision, so a display cap here would store a decision truncated
+    mid-sentence. ``pending_proposals`` already bounds it at
+    ``_DECISION_MAX_CHARS`` — the same bound the commit route applies.
     """
     from lib.conversations.project_charter import pending_proposals
     return [{
@@ -135,7 +142,7 @@ def _charter_proposals(project_path: str) -> list[dict]:
         'severity': 'advisory',
         'id': p.get('proposalId', ''),
         'title': (p.get('title') or '')[:_TEXT_MAX],
-        'text': (p.get('summary') or '')[:_TEXT_MAX],
+        'text': p.get('summary') or '',
         'convId': p.get('conv_id', ''),
         'ts': int(p.get('ts') or 0),
         'tab': 'charter',

@@ -50,6 +50,26 @@
 
   function _bodyEl() { return document.getElementById('projectBrainAttentionBody'); }
 
+  /**
+   * Report a FAILED resolving action to the operator.
+   *
+   * These actions previously only console.warn'd on rejection, so a refused
+   * mutation (e.g. the commit route's 400 when `summary` is missing) was
+   * indistinguishable from a dead button: nothing moved and nothing was said.
+   * A control that mutates shared project state must never fail silently.
+   * The backend's own message is shown when it sent one — it names the
+   * offending field, which a generic string cannot.
+   */
+  function _reportFailure(key, fallback, err) {
+    var detail = (err && err.message) ? String(err.message) : '';
+    if (typeof console !== 'undefined') {
+      console.warn('[Attention] %s: %s', fallback, detail || err);
+    }
+    if (typeof showToast === 'function') {
+      showToast(_t(key, fallback) + (detail ? ' — ' + detail : ''), 'error');
+    }
+  }
+
   /** Displayed project path — same accessor the sibling modules use. */
   function _path() {
     try {
@@ -156,15 +176,29 @@
   }
 
   /** A pending charter proposal — commit / reject inline (same routes the
-   *  Charter tab calls). */
+   *  Charter tab calls).
+   *
+   *  The commit route REQUIRES a one-line `summary` (the binding rule the
+   *  per-turn injection renders) and 400s without it, so the card must offer
+   *  the same editable input the Charter tab does — pre-filled with the
+   *  proposal's first line. A bare Commit button here submitted no summary and
+   *  was rejected on every click. */
   function _proposalCard(item) {
+    var firstLine = (String(item.text || '').split('\n', 1)[0] || '').trim();
+    if (firstLine.length > 200) firstLine = firstLine.slice(0, 200).trim();
     return _card(item,
       '<div class="pb-attn-head">' + _sevPill(item.severity) +
         '<span class="pb-attn-kind">' +
         _esc(_t('projectBrain.attnKindProposal', 'Proposed decision')) + '</span></div>' +
       '<div class="pb-attn-body">' + _rich(item.text) + '</div>' +
+      '<div class="pb-proposal-summary-row">' +
+        '<input type="text" class="pb-proposal-summary" maxlength="240" placeholder="' +
+        _esc(_t('projectBrain.summaryPlaceholder', 'One-line summary (required)')) +
+        '" value="' + _esc(firstLine) + '">' +
+      '</div>' +
       '<div class="pb-attn-actions">' +
-        '<button type="button" class="pb-attn-act pb-btn-primary" data-act="commit">' +
+        '<button type="button" class="pb-attn-act pb-btn-primary" data-act="commit"' +
+        (firstLine ? '' : ' disabled') + '>' +
         _esc(_t('projectBrain.commit', 'Commit')) + '</button>' +
         '<button type="button" class="pb-attn-act" data-act="reject">' +
         _esc(_t('projectBrain.reject', 'Reject')) + '</button>' +
@@ -320,6 +354,18 @@
         if (submit) submit.click();
       });
     }
+    // The commit route REQUIRES a one-line summary — keep Commit unclickable
+    // while it is empty rather than letting the click 400.
+    var sums = el.querySelectorAll('.pb-proposal-summary');
+    for (var s = 0; s < sums.length; s++) {
+      sums[s].addEventListener('input', function (ev) {
+        var card = ev.currentTarget.closest
+          ? ev.currentTarget.closest('.pb-attn-card') : null;
+        var commit = card
+          ? card.querySelector('.pb-attn-act[data-act="commit"]') : null;
+        if (commit) commit.disabled = !((ev.currentTarget.value || '').trim());
+      });
+    }
     var acts = el.querySelectorAll('.pb-attn-act');
     for (var a = 0; a < acts.length; a++) {
       acts[a].addEventListener('click', function (ev) {
@@ -366,11 +412,15 @@
             ? body.getAttribute('data-pb-src') : (body.textContent || ''))
         : '';
       if (!txt) return;
+      var sumEl = card.querySelector('.pb-proposal-summary');
+      var summary = sumEl ? (sumEl.value || '').trim() : '';
+      // The route REQUIRES it; committing without one is a guaranteed 400.
+      if (!summary) { if (sumEl) sumEl.focus(); return; }
       btn.disabled = true;
       Promise.resolve(api.commitCharter(path, {
-        add_decision: txt, resolves_proposal: id,
+        add_decision: txt, summary: summary, resolves_proposal: id,
       })).then(_refreshAll).catch(function (e) {
-        if (typeof console !== 'undefined') console.warn('[Attention] commit failed', e);
+        _reportFailure('projectBrain.commitFailed', 'Commit failed', e);
         btn.disabled = false;
       });
       return;
@@ -381,7 +431,7 @@
       Promise.resolve(api.dismissProposal(path, id))
         .then(_refreshAll)
         .catch(function (e) {
-          if (typeof console !== 'undefined') console.warn('[Attention] reject failed', e);
+          _reportFailure('projectBrain.rejectFailed', 'Reject failed', e);
           btn.disabled = false;
         });
     }
@@ -393,7 +443,7 @@
     Promise.resolve(api.boardAnswer(path, taskId, convId, answer))
       .then(_refreshAll)
       .catch(function (e) {
-        if (typeof console !== 'undefined') console.warn('[Attention] answer failed', e);
+        _reportFailure('projectBrain.answerFailed', 'Submitting the answer failed', e);
         btn.disabled = false;
       });
   }

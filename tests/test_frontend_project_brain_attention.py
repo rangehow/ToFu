@@ -483,3 +483,225 @@ def test_NC_bar_alarm_keys_on_blocking_not_count():
             pass
     with open(_PRESENCE_SRC, encoding='utf-8') as f:
         assert f.read() == original, 'shipped presence.js must be byte-identical'
+
+
+# ════════════════════════════════════════════════════════════════════
+#  The proposal card's Commit / Reject controls must actually RESOLVE
+#
+#  Reported symptom: clicking 确认 (Commit) in the Needs-you tab did nothing —
+#  the proposal stayed and nothing was said. Two defects behind it:
+#
+#    1. The commit route REQUIRES a one-line `summary` (the binding rule the
+#       per-turn injection renders) and 400s without it. This card shipped a
+#       bare button that submitted none, so EVERY click was rejected. The
+#       Charter tab's commit control has always rendered that input — the
+#       "one contract per action" claim held for the URL but not the PAYLOAD,
+#       which is the half that decides whether the click does anything.
+#    2. The rejection was swallowed into console.warn, so a refused mutation
+#       was indistinguishable from a dead button.
+#
+#  These assert the CONSEQUENCES (what goes on the wire, what the user sees),
+#  not the presence of a particular DOM node, so a restyled card still passes.
+# ════════════════════════════════════════════════════════════════════
+
+_COMMIT_HARNESS = r"""
+const fs = require('fs');
+const path = require('path');
+const SRC = process.argv[2];
+const ROOT = process.argv[3];
+const FRAG = process.argv[4];
+const fragment = fs.readFileSync(FRAG, 'utf8');
+const { JSDOM } = require(path.join(ROOT, 'node_modules', 'jsdom'));
+const dom = new JSDOM('<!DOCTYPE html><body>' + fragment +
+  '<div id="toastContainer"></div></body>', { url: 'http://localhost/' });
+const win = dom.window;
+global.window = win; global.document = win.document; global.console = console;
+
+win.escapeHtml = global.escapeHtml = (s) => String(s == null ? '' : s).replace(/"/g, '&quot;');
+win.t = global.t = (k) => k;
+win.Icon = global.Icon = () => '<svg></svg>';
+win.activeConvId = global.activeConvId = 'c-self';
+const TOASTS = [];
+win.showToast = global.showToast = (m, ty) => TOASTS.push(String(ty) + ': ' + String(m));
+// Real clamp semantics: the ORIGINAL text stays retrievable from data-pb-src
+// even when the translation overlay repaints innerHTML.
+win.ProjectBrain = global.ProjectBrain = {
+  _state: { path: '/proj/real' },
+  _selectTab: () => {},
+  _wireClampToggles: () => {},
+  _mdLite: (x) => String(x),
+  _clampBlock: (inner, raw) =>
+    '<div class="pb-clamp" data-pb-src="' + String(raw).replace(/"/g, '&quot;') +
+    '">' + inner + '</div>',
+};
+let FAIL = false;
+const CALLS = [];
+win.Api = global.Api = { project: {
+  commitCharter: (p, body) => {
+    CALLS.push(['commit', body]);
+    return FAIL ? Promise.reject(new Error('HTTP 400 add_decision requires summary'))
+                : Promise.resolve({});
+  },
+  dismissProposal: (p, id) => { CALLS.push(['dismiss', id]); return Promise.resolve({}); },
+  brainAttention: () => Promise.resolve({}),
+}};
+
+eval(fs.readFileSync(SRC, 'utf8'));  // project-brain-attention.js
+
+const out = [];
+function check(name, cond) { out.push((cond ? 'PASS ' : 'FAIL ') + name); }
+const PBA = win.ProjectBrainAttention;
+const body = win.document.getElementById('projectBrainAttentionBody');
+
+// A realistic proposal: a headline first line, then detail, LONGER than the
+// clamp threshold so it renders through the clamp path (as the real one does).
+const HEAD = 'RULE: keep the two gates separate';
+const TEXT = HEAD + '\n' + 'detail '.repeat(120) + 'END';
+function renderOne(id, text) {
+  PBA.renderAttention({ blocking: 0, advisory: 1, needsYou: 1, waiting: 0,
+    items: [{ type: 'charter_proposal', severity: 'advisory', id: id,
+              text: text, tab: 'charter' }] });
+}
+function commitBtn() { return body.querySelector('.pb-attn-act[data-act="commit"]'); }
+
+renderOne('prop_abc', TEXT);
+commitBtn().click();
+
+setTimeout(() => {
+  const sent = CALLS.find(c => c[0] === 'commit');
+  const b = sent ? sent[1] : null;
+  // ── THE bug: a commit with no summary is refused by the route ──
+  check('commit_was_attempted', !!b);
+  check('commit_sends_summary', !!(b && (b.summary || '').trim()));
+  check('summary_is_one_line', !!(b && (b.summary || '').indexOf('\n') === -1));
+  check('summary_from_proposal_head', !!(b && b.summary === HEAD));
+  // The decision text must be the WHOLE proposal, never the clamp's view.
+  check('commit_sends_full_text', !!(b && b.add_decision === TEXT));
+  check('commit_carries_proposal_id', !!(b && b.resolves_proposal === 'prop_abc'));
+
+  // ── An empty summary must be blocked CLIENT-side, not sent and 400'd ──
+  CALLS.length = 0;
+  renderOne('prop_empty', '');
+  const cb = commitBtn();
+  check('empty_summary_disables_commit', !!cb && cb.disabled === true);
+  cb.disabled = false;          // force the click past the disabled attribute
+  cb.click();
+  setTimeout(() => {
+    check('empty_summary_sends_nothing', CALLS.length === 0);
+
+    // ── A refused mutation must be VISIBLE (not console-only) ──
+    FAIL = true; CALLS.length = 0; TOASTS.length = 0;
+    renderOne('prop_fail', TEXT);
+    commitBtn().click();
+    setTimeout(() => {
+      check('failure_is_surfaced', TOASTS.length === 1);
+      check('failure_names_the_reason',
+        (TOASTS[0] || '').indexOf('requires summary') !== -1);
+      check('failure_reenables_button', !!commitBtn() && commitBtn().disabled === false);
+
+      // ── Reject still resolves by id (unchanged contract) ──
+      FAIL = false; CALLS.length = 0;
+      renderOne('prop_rej', TEXT);
+      body.querySelector('.pb-attn-act[data-act="reject"]').click();
+      setTimeout(() => {
+        const d = CALLS.find(c => c[0] === 'dismiss');
+        check('reject_sends_proposal_id', !!d && d[1] === 'prop_rej');
+        console.log(out.join('\n'));
+        process.exit(0);
+      }, 30);
+    }, 30);
+  }, 30);
+}, 30);
+"""
+
+_COMMIT_MUSTS = (
+    'PASS commit_was_attempted',
+    'PASS commit_sends_summary',
+    'PASS summary_is_one_line',
+    'PASS summary_from_proposal_head',
+    'PASS commit_sends_full_text',
+    'PASS commit_carries_proposal_id',
+    'PASS empty_summary_disables_commit',
+    'PASS empty_summary_sends_nothing',
+    'PASS failure_is_surfaced',
+    'PASS failure_names_the_reason',
+    'PASS failure_reenables_button',
+    'PASS reject_sends_proposal_id',
+)
+
+
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
+def test_proposal_commit_sends_the_payload_the_route_requires():
+    output = _write_and_run(_COMMIT_HARNESS, _ATTN_SRC, 'commit')
+    fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
+    assert not fails, 'proposal commit/reject failures:\n' + output
+    for must in _COMMIT_MUSTS:
+        assert must in output, output
+
+
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
+def test_NC_commit_without_summary_is_a_dead_button():
+    """NC: drop `summary` from the commit payload (the shipped bug) → the route
+    contract is violated → commit_sends_summary FAILS.
+
+    The neuter removes ONLY the payload field, leaving the input rendered, so it
+    isolates "does the click carry what the route requires" from "is there an
+    input on screen" — a card that renders the box but forgets to read it is the
+    same dead button to the user.
+    """
+    with open(_ATTN_SRC, encoding='utf-8') as f:
+        original = f.read()
+    anchor = 'add_decision: txt, summary: summary, resolves_proposal: id,'
+    assert anchor in original, 'commit-payload anchor not found (source changed?)'
+    patched = original.replace(
+        anchor, 'add_decision: txt, resolves_proposal: id,  // NC (summary dropped)', 1)
+    copy_path = os.path.join(HERE, '_attn_nc_summary.js')
+    try:
+        with open(copy_path, 'w', encoding='utf-8') as f:
+            f.write(patched)
+        output = _write_and_run(_COMMIT_HARNESS, copy_path, 'ncsummary')
+        assert 'FAIL commit_sends_summary' in output, \
+            ('NC: a commit that omits the route-required summary must break the '
+             'payload contract:\n' + output)
+    finally:
+        try:
+            os.remove(copy_path)
+        except OSError:
+            pass
+    with open(_ATTN_SRC, encoding='utf-8') as f:
+        assert f.read() == original, 'shipped project-brain-attention.js must be byte-identical'
+
+
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
+def test_NC_swallowed_failure_looks_like_a_dead_button():
+    """NC: swallow the rejection into console.warn only (the shipped behaviour)
+    → nothing reaches the user → failure_is_surfaced FAILS.
+
+    This is the half that made the bug so hard to see from the outside: with the
+    payload wrong AND the error invisible, a rejected click and a broken
+    listener are the same observation.
+    """
+    with open(_ATTN_SRC, encoding='utf-8') as f:
+        original = f.read()
+    anchor = "    if (typeof showToast === 'function') {"
+    assert anchor in original, 'failure-surface anchor not found (source changed?)'
+    patched = original.replace(
+        anchor, '    if (false) {  // NC (failure swallowed)', 1)
+    copy_path = os.path.join(HERE, '_attn_nc_silent.js')
+    try:
+        with open(copy_path, 'w', encoding='utf-8') as f:
+            f.write(patched)
+        output = _write_and_run(_COMMIT_HARNESS, copy_path, 'ncsilent')
+        assert 'FAIL failure_is_surfaced' in output, \
+            ('NC: a silently-swallowed rejection must leave the user with no '
+             'signal:\n' + output)
+    finally:
+        try:
+            os.remove(copy_path)
+        except OSError:
+            pass
+    with open(_ATTN_SRC, encoding='utf-8') as f:
+        assert f.read() == original, 'shipped project-brain-attention.js must be byte-identical'

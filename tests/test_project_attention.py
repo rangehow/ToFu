@@ -308,6 +308,92 @@ def test_summary_advisory_only_reports_zero_blocking(flask_app):
 from tests._nc_harness import patch_restore as _patch_restore  # noqa: E402
 
 
+# ════════════════════════════════════════════════════════════════════
+#  The proposal `text` is COMMITTABLE, not display-only
+#
+#  The Needs-you tab commits the durable charter decision from this exact
+#  field. It was capped at _TEXT_MAX (600) like the display-only conflict
+#  message, so committing a longer proposal from that tab silently stored a
+#  decision cut mid-sentence — and a charter decision is prompt-injected
+#  shared intent, so a truncated one misleads every sibling conversation.
+# ════════════════════════════════════════════════════════════════════
+
+def test_proposal_text_is_not_capped_at_the_display_max(flask_app):
+    """A proposal longer than _TEXT_MAX must arrive WHOLE, because the panel
+    submits this field back as the committed decision."""
+    from lib.conversations.project_attention import _TEXT_MAX, build_attention_items
+    from lib.conversations.project_charter import propose_amendment
+    p = os.path.abspath('/tmp/attn-longprop')
+    long_proposal = 'RULE: keep the two gates separate.\n' + ('detail ' * 300) + 'END'
+    assert len(long_proposal) > _TEXT_MAX, 'fixture must exceed the display cap'
+    with flask_app.app_context():
+        propose_amendment(p, 'cA', long_proposal)
+        item = build_attention_items(p)['items'][0]
+    assert item['text'] == long_proposal, (
+        'the committable proposal text must not be truncated — the Needs-you '
+        'tab commits THIS string as the durable decision')
+
+
+def test_conflict_text_is_still_capped(flask_app):
+    """The complement: a conflict message IS display-only, so it keeps the cap.
+    Without this, "stop truncating" could be over-applied to every field and
+    one pathological advisory could dominate the panel."""
+    import lib.conversations.project_attention as attn
+    p = os.path.abspath('/tmp/attn-longconflict')
+
+    def _one_huge(peers):
+        return [{'path': 'src/x.py', 'peers': ['cA', 'cB'],
+                 'message': 'X' * (attn._TEXT_MAX * 3)}]
+
+    reg.announce(p, 'cA', task_id='tA', title='A')
+    monkey = attn._conflicts
+    assert monkey is not None
+    import lib.presence.conflict as confl
+    _orig = confl.detect_overlaps
+    confl.detect_overlaps = _one_huge
+    try:
+        with flask_app.app_context():
+            items = attn.build_attention_items(p)['items']
+    finally:
+        confl.detect_overlaps = _orig
+    conflicts = [i for i in items if i['type'] == 'conflict']
+    assert len(conflicts) == 1
+    assert len(conflicts[0]['text']) == attn._TEXT_MAX, \
+        'a display-only conflict message must stay capped'
+
+
+def test_proposal_text_commits_whole_through_the_real_route(flask_app):
+    """End-to-end: what the panel receives is what the commit route stores.
+
+    Pins the two halves TOGETHER — payload not truncated AND the commit that
+    consumes it persists the same bytes — so re-introducing a cap anywhere
+    between them fails here.
+    """
+    from lib.conversations.project_attention import build_attention_items
+    from lib.conversations.project_charter import (
+        commit_charter, pending_proposals, propose_amendment, read_charter,
+    )
+    p = os.path.abspath('/tmp/attn-commit-whole')
+    long_proposal = 'RULE: never merge the gates.\n' + ('reason ' * 300) + 'END'
+    with flask_app.app_context():
+        propose_amendment(p, 'cA', long_proposal)
+        item = build_attention_items(p)['items'][0]
+        res = commit_charter(
+            p, add_decision=item['text'],
+            summary=item['text'].split('\n', 1)[0].strip(),
+            updated_by_conv='human', resolves_proposal=item['id'])
+        assert res.get('ok'), res
+        stored = read_charter(p)['decisions'][-1]
+        assert pending_proposals(p) == [], 'the proposal must leave the queue'
+    assert stored['text'] == long_proposal, \
+        'the committed decision must be the WHOLE proposal, not a display slice'
+
+
+# ── Source-level NEGATIVE CONTROL ──
+
+from tests._nc_harness import patch_restore as _patch_restore  # noqa: E402
+
+
 def test_NC_severity_rank_is_load_bearing(flask_app):
     """NC: invert the severity rank table → advisory outranks blocking → the
     "blocking leads" assertion FAILS.
@@ -343,5 +429,34 @@ def test_NC_severity_rank_is_load_bearing(flask_app):
         _ATTN_SRC,
         "_SEVERITY_RANK = {'blocking': 0, 'advisory': 1}",
         "_SEVERITY_RANK = {'blocking': 1, 'advisory': 0}  # NC (ranks inverted)",
+        run,
+    )
+
+
+def test_NC_proposal_text_cap_would_truncate_a_committed_decision(flask_app):
+    """NC: re-apply the display cap to the proposal `text` → the panel's
+    committable string is a 600-char slice → the whole-commit assertion FAILS.
+
+    This is the shipped bug, reproduced: `_TEXT_MAX` is right for the conflict
+    message (pure display) and wrong for this field, because a resolving control
+    submits it back. The NC keeps the CONFLICT cap intact, so it isolates the
+    one field under test rather than proving "some cap exists somewhere".
+    """
+    def run():
+        import lib.conversations.project_attention as attn
+        from lib.conversations.project_charter import propose_amendment
+        p = os.path.abspath('/tmp/attn-nc-trunc')
+        long_proposal = 'RULE: never merge the gates.\n' + ('reason ' * 300) + 'END'
+        with flask_app.app_context():
+            propose_amendment(p, 'cA', long_proposal)
+            item = attn.build_attention_items(p)['items'][0]
+        assert item['text'] != long_proposal, \
+            'NC: with the display cap re-applied the committable text must be a slice'
+        assert len(item['text']) == attn._TEXT_MAX
+
+    _patch_restore(
+        _ATTN_SRC,
+        "        'text': p.get('summary') or '',",
+        "        'text': (p.get('summary') or '')[:_TEXT_MAX],  # NC (cap restored)",
         run,
     )

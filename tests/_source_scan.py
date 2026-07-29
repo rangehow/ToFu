@@ -34,13 +34,25 @@ __all__ = [
     'playwright_install_invocations',
 ]
 
-#: Line-comment markers per language family. Block comments are deliberately
-#: NOT handled: no guard here needs them, and a half-correct block-comment
-#: parser is worse than none (it would silently drop real code).
+#: Line-comment markers per language family.
+#:
+#: The ``js`` family also lists ``*`` so that the CONTINUATION lines of a
+#: ``/* … */`` banner (conventionally ``   * …``) are blanked as whole-line
+#: comments; the block delimiters themselves are handled by the block pass in
+#: :func:`strip_comments`.
 _LINE_COMMENT_PREFIXES = {
     'shell': ('#',),
     'python': ('#',),
+    'js': ('//', '*'),
 }
+
+#: Languages whose ``/* … */`` block comments :func:`strip_comments` removes.
+#:
+#: Opt-in per language, and deliberately WHOLE-LINE only (see the function's
+#: docstring): a half-correct block parser that tried to handle ``/*`` inside a
+#: string literal or a regex would silently drop real code, which is worse than
+#: not stripping at all.
+_BLOCK_COMMENT_LANGS = frozenset({'js'})
 
 
 def strip_comments(text, lang='shell'):
@@ -54,17 +66,42 @@ def strip_comments(text, lang='shell'):
     and this module refuses to half-parse quoting. Guards that need to ignore
     trailing comments should match a more specific command shape instead.
 
+    For ``lang='js'`` a ``/* … */`` BLOCK pass runs first, again whole-line
+    only: a line is blanked while it sits inside a block that OPENED on its own
+    line. A ``/*`` that appears after code on the same line is ignored rather
+    than half-parsed, for the same reason trailing ``#`` is left alone — it
+    could be inside a string literal or a regex, and dropping real code is a
+    worse failure than leaving a comment in.
+
     Args:
         text: Full source text.
-        lang: ``'shell'`` or ``'python'`` (both use ``#``).
+        lang: ``'shell'`` / ``'python'`` (both ``#``), or ``'js'``
+            (``//``, ``*`` continuations, and ``/* … */`` blocks).
 
     Returns:
         The text with comment-only lines replaced by empty lines.
     """
     prefixes = _LINE_COMMENT_PREFIXES.get(lang, ('#',))
+    strip_blocks = lang in _BLOCK_COMMENT_LANGS
     out = []
+    in_block = False
     for line in text.splitlines():
         stripped = line.lstrip()
+        if strip_blocks:
+            if in_block:
+                # Still inside a block comment: blank the line, and close the
+                # block when this line carries the terminator.
+                if '*/' in line:
+                    in_block = False
+                out.append('')
+                continue
+            if stripped.startswith('/*'):
+                # A one-line ``/* … */`` closes immediately; otherwise the
+                # block stays open for the lines that follow.
+                if '*/' not in stripped[2:]:
+                    in_block = True
+                out.append('')
+                continue
         out.append('' if stripped.startswith(prefixes) else line)
     return '\n'.join(out)
 

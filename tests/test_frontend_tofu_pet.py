@@ -931,8 +931,15 @@ def test_walk_cycle_ADVANCES_frames_while_walking():
     """The core of the owner's ask: while state=='walk', the frame ticker must
     ADVANCE through the walk keyposes on the rAF loop (not hold one frame). We
     run the REAL module with a controllable rAF clock + reduced-motion OFF,
-    drive several animation ticks, and assert the <img> src cycles through more
-    than one distinct walk frame. A NEUTER (remove the advance) must break it."""
+    drive several animation ticks, and assert the pet reports more than one
+    distinct walk frame. A NEUTER (remove the advance) must break it.
+
+    Re-anchored 2026-07-29: this used to sniff `<img>.src` writes, but the
+    sprite is no longer an <img> — frames are inlined as live <svg> so the
+    scene's light can reach them through CSS custom properties (a custom
+    property cannot cross an <img> boundary). Sampling `TofuPet.getFrame()`
+    tests the same thing through the engine's own public seam, which survives
+    that change instead of encoding the old delivery mechanism."""
     def frames_seen(src_text):
         harness = r'''
 'use strict';
@@ -948,35 +955,57 @@ global.BASE_PATH = '';
 global.ResizeObserver = function(){ return {observe(){}, disconnect(){}}; };
 global.localStorage = { _d:{}, getItem(k){return this._d[k]||null;}, setItem(k,v){this._d[k]=v;} };
 global.Image = function(){ return { set src(v){}, get src(){return '';} }; };
+// The engine fetches each frame's SVG once and keeps the parsed node. Resolve
+// SYNCHRONOUSLY so a frame is available on the very next tick — an async stub
+// would leave every frame unpainted and the cycle would look static.
+global.fetch = function(url){
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"></svg>';
+  return Promise.resolve({ ok:true, status:200, text(){ return Promise.resolve(svg); } });
+};
+// The engine paints a frame from a .then() continuation, i.e. on a microtask.
+// Draining the microtask queue between rAF ticks is what lets a fetched frame
+// actually become visible; without it every frame stays pending and the cycle
+// looks static even though the ticker is advancing correctly.
+const _drain = () => new Promise(r => setImmediate(r));
 global.t = function (k, p) {
   let text = k;
   if (p) { for (const q in p) { if (Object.prototype.hasOwnProperty.call(p, q)) text = text.split('{' + q + '}').join(p[q]); } }
   return text;   // passthrough — mirrors the page boot stub (index.html:80)
 };
 let _mounted=null; const _seen=[];
-function _fakeEl(tag){ return { _attrs:{}, tagName:tag||'', offsetWidth:30,
-  set src(v){ if(this.tagName==='img'){ _seen.push(v); } this._src=v; }, get src(){ return this._src||''; },
+function _fakeEl(tag){ return { _attrs:{}, tagName:tag||'', offsetWidth:30, children:[],
+  set src(v){ this._src=v; }, get src(){ return this._src||''; },
+  set innerHTML(v){ this._html=v; }, get innerHTML(){ return this._html||''; },
   setAttribute(k,v){this._attrs[k]=v;}, getAttribute(k){return this._attrs[k];},
-  addEventListener(){}, appendChild(){}, insertBefore(){}, querySelector(){return null;}, querySelectorAll(){return [];},
+  addEventListener(){}, appendChild(c){ this.children.push(c); }, insertBefore(){},
+  querySelector(sel){ return sel === 'svg' ? _fakeEl('svg') : null; }, querySelectorAll(){return [];},
   getBoundingClientRect(){ return {left:0,right:400,top:0,bottom:48,width:400,height:48}; }, firstChild:null, style:{setProperty(){}, removeProperty(){}} }; }
 global.document = { readyState:'complete', hidden:false, addEventListener(){},
   getElementById(id){ if(id==='projectBar') return _fakeEl(); return _mounted; },
-  createElement(t){ const e=_fakeEl(t); if(t!=='img') _mounted=e; return e; },
+  createElement(t){ const e=_fakeEl(t); if(t==='span' && !_mounted) _mounted=e; return e; },
   querySelectorAll(){ return _mounted?[_mounted]:[]; } };
 __SRC__
 // Force a walk state, then pump the rAF loop advancing the clock ~150ms/tick.
 const TP = window.TofuPet;
 _seen.length = 0;
-// run ~12 frames of ~150ms each = enough to cross multiple 150ms keyposes
-for (let k=0; k<12; k++){
-  _t += 160;
-  const cb = _cbs.shift();
-  if (cb) cb(_t);
-}
-const walkSeen = _seen.filter(s => /walk\d/.test(s));
-const distinct = Array.from(new Set(walkSeen));
-console.log(JSON.stringify({ distinct: distinct.length, walkSeen: walkSeen.length }));
-process.exit(0);
+// run ~12 frames of ~160ms each — comfortably more than one 75ms keypose each,
+// so a cycle that advances at all must report several distinct frames.
+(async () => {
+  await _drain();               // let the boot-time frame preloads settle
+  for (let k=0; k<12; k++){
+    _t += 160;
+    const cb = _cbs.shift();
+    if (cb) cb(_t);
+    await _drain();             // let this tick's frame fetch/paint land
+    // Sample through the engine's PUBLIC seam rather than a DOM side effect.
+    const f = TP && TP.getFrame ? TP.getFrame() : '';
+    if (f) _seen.push(f);
+  }
+  const walkSeen = _seen.filter(s => /walk\d/.test(s));
+  const distinct = Array.from(new Set(walkSeen));
+  console.log(JSON.stringify({ distinct: distinct.length, walkSeen: walkSeen.length }));
+  process.exit(0);
+})();
 '''
         script = harness.replace("__SRC__", src_text)
         out = subprocess.run(["node", "-e", script], capture_output=True, text=True,
@@ -1043,20 +1072,36 @@ def test_success_celebrates():
 
 
 def test_facing_layer_has_no_transition_no_paper_flip():
-    """ROOT of the 'flips like a sheet of paper on its vertical axis' bug: the
-    direction layer (.tofu-pet-facing) owns the scaleX(±1) mirror. If that layer
-    carries a `transition:transform`, flipping +1→-1 tweens THROUGH scaleX(0) —
-    the sprite collapses to a zero-width line and mirrors (the paper flip). The
-    mirror MUST be instant, so the .tofu-pet-facing rule must have no transition.
-    The natural turn motion is instead carried by the tofuPetPivot keyframe."""
+    """ROOT of the 'flips like a sheet of paper on its vertical axis' bug: if the
+    scaleX(±1) mirror carries a `transition:transform`, flipping +1→-1 tweens
+    THROUGH scaleX(0) — the sprite collapses to a zero-width line and mirrors
+    (the paper flip). The mirror MUST be instant; the natural turn motion is
+    carried by the tofuPetPivot keyframe instead.
+
+    Re-anchored 2026-07-29: the mirror moved OFF the old `.tofu-pet-facing`
+    wrapper and INTO the sprite, onto its [data-space="char"] groups via
+    --pet-face-flip. Mirroring a wrapper also mirrored the block's baked
+    shading, so the sun appeared to jump across the body on every turn while the
+    cast shadow (driven by the real scene sun) correctly stayed put. The
+    paper-flip lesson is unchanged — only where it applies moved — so this now
+    guards that neither surviving layer tweens a transform."""
     css = (REPO / "static" / "styles.css").read_text()
-    m = re.search(r"\.tofu-pet-facing\{([^}]*)\}", css)
-    assert m, "could not isolate the .tofu-pet-facing rule"
+    assert ".tofu-pet-facing" not in css, (
+        "the .tofu-pet-facing wrapper is back. Mirroring a wrapper drags the "
+        "block's lighting around with the pet — the sun teleports on every turn.")
+    m = re.search(r"\.tofu-pet \.tofu-pet-img\{([^}]*)\}", css)
+    assert m, "could not isolate the .tofu-pet-img rule"
     body = m.group(1)
     assert "transition" not in body, (
-        "the .tofu-pet-facing (direction) layer regained a transition — the "
-        "scaleX mirror will tween through 0 and re-create the paper-flip smear.\n"
-        "body=" + body)
+        "the frame layer gained a transition. Any transform tween on the layers "
+        "around the sprite risks the paper-flip smear the instant mirror avoids."
+        "\nbody=" + body)
+    # The mirror itself must stay a bare property write, never a tweened one.
+    for rule in re.findall(r"\.tofu-pet[^{]*\{([^}]*)\}", css):
+        if "--pet-face-flip" in rule and "transition" in rule:
+            raise AssertionError(
+                "a rule both sets --pet-face-flip and declares a transition; "
+                "the facing flip must be instant or the face smears through 0.")
 
 
 def test_turn_pivot_keyframe_exists_and_is_wired():
@@ -1110,16 +1155,20 @@ def test_neuter_gaze_hop_scope_is_load_bearing():
 
 
 def test_neuter_facing_transition_reintroduces_paper_flip_risk():
-    """NEUTER: re-add a transform transition to .tofu-pet-facing in a COPY →
-    the no-transition guard must fire, proving it's load-bearing."""
+    """NEUTER: re-add a transform transition to the frame layer in a COPY → the
+    no-transition guard must fire, proving it's load-bearing.
+
+    Re-anchored with the guard above: the mirror now lives inside the sprite, so
+    the neuter poisons the layer that still exists (.tofu-pet-img) rather than
+    the deleted .tofu-pet-facing wrapper."""
     css = (REPO / "static" / "styles.css").read_text()
-    poisoned = css.replace(
-        ".tofu-pet-facing{display:block;width:100%;height:100%}",
-        ".tofu-pet-facing{display:block;width:100%;height:100%;transition:transform 0.15s ease}",
-        1)
-    assert poisoned != css, "neuter did not match the .tofu-pet-facing rule"
-    m = re.search(r"\.tofu-pet-facing\{([^}]*)\}", poisoned)
-    assert m and "transition" in m.group(1), "neuter did not actually add a transition"
+    anchor = ".tofu-pet .tofu-pet-img{"
+    assert anchor in css, "could not locate the .tofu-pet-img rule to poison"
+    poisoned = css.replace(anchor, anchor + "transition:transform 0.15s ease;", 1)
+    assert poisoned != css, "neuter did not match the .tofu-pet-img rule"
+    m = re.search(r"\.tofu-pet \.tofu-pet-img\{([^}]*)\}", poisoned)
+    assert m and "transition" in m.group(1), (
+        "neuter did not actually add a transition")
 
 
 def test_pet_reads_scene_light_and_drives_lighting_props():

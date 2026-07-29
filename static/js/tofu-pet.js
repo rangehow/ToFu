@@ -33,8 +33,22 @@
  * shipped 30px a raised nub reads as a mouse ear and a lowered one as a panel
  * glued to the side, both of which wreck the cube silhouette that makes this
  * the logo.) Layers (so transforms never fight): .tofu-pet owns POSITION
- * (translateX, set by the wander loop) · .tofu-pet-facing owns DIRECTION
- * (scaleX ±1) · .tofu-pet-img owns the swapped frame + idle breathe.
+ * (translateX, set by the wander loop) · .tofu-pet-img owns the swapped frame +
+ * idle breathe · and DIRECTION lives INSIDE the sprite, on its character-space
+ * group, not on any wrapper.
+ *
+ * WHY DIRECTION IS NOT A WRAPPER MIRROR (the one-sun invariant): the block is an
+ * isometric solid whose three faces and specular streak encode a sun in the
+ * upper-left, and the scene lights the pet + its cast shadow from a sun that
+ * really drifts (tofu-scene.js lightInfo). Mirroring the whole sprite to turn it
+ * around therefore MOVED THE SUN: measured, the body's light/dark sides swapped
+ * exactly (luminance 117 ↔ 183) on every turn while the cast shadow correctly
+ * did not follow. The frames are now emitted in two groups —
+ * [data-space="world"] (the solid + its lighting, never mirrored) and
+ * [data-space="char"] (eyes/mouth/blush, the only things that flip) — and the
+ * engine mirrors the second by setting --pet-face-flip. The sprite is INLINE
+ * <svg> for the same reason: CSS custom properties cannot cross an <img>
+ * boundary, so a sprite behind <img> can never be lit by the scene at all.
  *
  * PET ⋈ SCENE INTERACTION (owner ask — "interaction between the pet and the
  * background"): tofu-scene.js exposes the drifting critter's position
@@ -117,9 +131,20 @@
   // drawing per mood). 'curious' → the alert perk; nothing else needs remapping.
   var FRAME_ALIAS = { curious: 'alert' };
 
-  // The WALK CYCLE: four keyposes played in order while state==='walk'.
-  var WALK_FRAMES = ['walk1', 'walk2', 'walk3', 'walk4'];
-  var WALK_FRAME_MS = 150;   // per keypose → full ~600ms stride cycle
+  // The WALK CYCLE: eight keyposes played in order while state==='walk'.
+  //
+  // EIGHT, not four, and 75ms, not 150ms — both halves of that matter:
+  //   · The old cycle reused ONE symmetric contact pose for both contact beats,
+  //     so no foot ever led and the gait read as shuffling in place / sliding
+  //     BACKWARDS. A stride only reads as walking if the leading foot
+  //     alternates, which needs a near-leads and a far-leads pose.
+  //   · 4 frames at 150ms is 6.7fps. Below roughly 12fps a cycle stops reading
+  //     as motion and starts reading as a flicker between drawings — the
+  //     "animation isn't smooth" half of the same report. 8 at 75ms is 13.3fps
+  //     over the SAME 600ms stride, so the pet's speed is unchanged.
+  var WALK_FRAMES = ['walk1', 'walk2', 'walk3', 'walk4',
+    'walk5', 'walk6', 'walk7', 'walk8'];
+  var WALK_FRAME_MS = 75;    // per keypose → full ~600ms stride cycle at 13.3fps
   var _walkIdx = 0, _walkAccum = 0;
 
   // GROOM cycle (a settling wobble) and STRETCH cycle (a full-body stretch) —
@@ -258,35 +283,97 @@
 
   // ── DOM ──
   var _el = null;         // .tofu-pet (position layer)
-  var _facing = null;     // .tofu-pet-facing (direction layer)
-  var _img = null;        // <img> (frame layer)
+  var _img = null;        // .tofu-pet-img (frame layer — holds the live <svg>)
   var _bar = null;        // .project-bar
   var _revertTimer = null;
 
+  // ── FRAME ART: each frame is INLINED into the DOM as a live <svg>, rather
+  // than pointed at with <img src>. That is a requirement, not a preference.
+  // The block's three faces are lit by the scene's sun through CSS custom
+  // properties (see _applyLight), and a custom property CANNOT cross an <img>
+  // boundary — inside an <img> the SVG is an isolated document, so every var()
+  // would collapse to its fallback and the pet would be welded to a frozen sun
+  // for ever. Inlining is also what lets the face mirror live INSIDE the sprite
+  // (see _face), keeping the body's shading in world space while the face turns.
+  //
+  // The 22 frames are fetched once, parsed once, and kept as live DOM. Frame
+  // changes then toggle which one is VISIBLE — no markup reparse, no node
+  // construction, nothing for the GC. Writing innerHTML per frame instead would
+  // rebuild the sprite's whole subtree 13 times a second, which is exactly the
+  // kind of per-frame churn that shows up as stutter on a busy page.
+  var _frameNode = Object.create(null);      // frame name → live <svg> element
+  var _frameFetching = Object.create(null);  // in-flight guard (fetch once)
+  var _wantFrame = null;                     // last frame ASKED for
+  var _curFrame = null;                      // frame currently visible
+
+  function _paintFrame(name) {
+    var node = _frameNode[name];
+    if (!_img || !node) return;
+    if (_curFrame && _frameNode[_curFrame]) {
+      _frameNode[_curFrame].style.display = 'none';
+    }
+    node.style.display = '';
+    _curFrame = name;
+  }
+
+  function _loadFrame(name) {
+    if (_frameNode[name] || _frameFetching[name]) return;
+    _frameFetching[name] = 1;
+    fetch(_frameUrl(name)).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.text();
+    }).then(function (txt) {
+      delete _frameFetching[name];
+      if (!_img || _frameNode[name]) return;
+      // Parse ONCE, here, and keep the element for the life of the page.
+      var holder = document.createElement('div');
+      holder.innerHTML = txt;
+      var svg = holder.querySelector('svg');
+      if (!svg) throw new Error('no <svg> in frame');
+      svg.style.display = 'none';
+      svg.setAttribute('data-frame', name);
+      _img.appendChild(svg);
+      _frameNode[name] = svg;
+      // Paint only if this is still the frame we want — a walk cycle may have
+      // advanced several times while this fetch was in flight.
+      if (_wantFrame === name) _paintFrame(name);
+    }).catch(function (e) {
+      delete _frameFetching[name];
+      // Same-origin static asset served by the same app that served this JS, so
+      // this is not an expected state; surface it instead of failing silently.
+      console.warn('[TofuPet] frame art unavailable:', name, e && e.message);
+    });
+  }
+
+  // The ONE seam every pose path goes through, so "which art is on screen" has a
+  // single writer (the old code wrote _img.src from three places).
+  function _setFrameArt(name) {
+    _wantFrame = name;
+    if (_frameNode[name]) _paintFrame(name);
+    else _loadFrame(name);
+  }
+
   function _preload() {
     var all = EXPRESSIONS.concat(WALK_FRAMES, GROOM_FRAMES, SCRATCH_FRAMES);
-    for (var i = 0; i < all.length; i++) {
-      var im = new Image();
-      im.src = _frameUrl(all[i]);
-    }
+    for (var i = 0; i < all.length; i++) _loadFrame(all[i]);
   }
 
   function _setWalkFrame(i) {
     _walkIdx = ((i % WALK_FRAMES.length) + WALK_FRAMES.length) % WALK_FRAMES.length;
-    if (_img) _img.src = _frameUrl(WALK_FRAMES[_walkIdx]);
+    _setFrameArt(WALK_FRAMES[_walkIdx]);
   }
   // Advance a generic pose cycle (groom / scratch), used by the sit/scratch
   // states. Mirrors _setWalkFrame but over the active pose frame list.
   function _setPoseFrame(i) {
     if (!_poseFrames || !_poseFrames.length) return;
     _poseIdx = ((i % _poseFrames.length) + _poseFrames.length) % _poseFrames.length;
-    if (_img) _img.src = _frameUrl(_poseFrames[_poseIdx]);
+    _setFrameArt(_poseFrames[_poseIdx]);
   }
 
   function _setFrame(expr) {
     var frame = FRAME_ALIAS[expr] || expr;
     if (EXPRESSIONS.indexOf(frame) === -1) frame = 'idle';
-    if (_img) _img.src = _frameUrl(frame);
+    _setFrameArt(frame);
   }
 
   // Show a resting expression (idle/sleepy/…): used by the wander FSM's
@@ -512,10 +599,23 @@
     if (pivot === undefined) pivot = true;
     var changed = (dir !== W.dir);
     W.dir = dir;
-    // The facing layer has NO transition, so the horizontal mirror is INSTANT
-    // — it never tweens scaleX(+1)->scaleX(-1) through scaleX(0), which is what
-    // made the cat look like a sheet of paper flipping on its vertical axis.
-    if (_facing) _facing.style.transform = 'scaleX(' + dir + ')';
+    // ── THE MIRROR IS CHARACTER-SPACE ONLY ──
+    // Written as a custom property that the sprite's [data-space="char"] group
+    // consumes, so the eyes/mouth/blush turn while the block's three faces —
+    // which encode where the SUN is — stay in world space.
+    //
+    // This used to be scaleX(dir) on a wrapper around the WHOLE sprite, which
+    // mirrored the lighting too: measured, the body's light and dark sides
+    // swapped exactly (luminance 117 ↔ 183) on every turn, and the specular
+    // streak jumped from the top-left of the block to the top-right. Meanwhile
+    // the cast shadow is derived from the real scene sun and did NOT flip, so
+    // the body and its own shadow claimed two different suns and the pet read as
+    // a sticker rather than a solid standing in the diorama.
+    //
+    // Still a bare property write with no transition: tweening the flip would
+    // pass the face through scaleX(0) and smear it, the paper-flip the old
+    // wrapper was careful to avoid.
+    if (_el) _el.style.setProperty('--pet-face-flip', String(dir));
     // A real turn is a PIVOT, not a page-flip: overlay a brief squash-hop on the
     // sprite (CSS keyframe gated by data-turning) so the cat reads as planting
     // its feet and spinning to face the other way. Skipped under reduced-motion
@@ -553,6 +653,24 @@
   // Fully guarded: no scene / no light → reset to the neutral defaults (flat
   // baked shading, centred shadow), so a scene-less or non-tofu pet is
   // unchanged. Cheap: a few CSS var writes per frame, no layout.
+  // The two cream families the block's SIDE faces live between. Both are
+  // measured present in the shipped mascot (see the generator's palette note),
+  // and re-lighting only ever produces one of them or a blend of the two — so
+  // the pet cannot be lit off-brand into a colour the logo does not contain.
+  var FACE_LIT = ['#F6E3CB', '#E9D0AE'];    // front-facing plane, sunlit
+  var FACE_SHADE = ['#DFC4A3', '#E0C6A1'];  // the plane turned away
+
+  function _mixHex(a, b, t) {
+    function ch(s, i) { return parseInt(s.slice(i, i + 2), 16); }
+    function h2(n) { var s = Math.round(n).toString(16); return s.length < 2 ? '0' + s : s; }
+    var out = '#';
+    for (var i = 1; i < 7; i += 2) {
+      var av = ch(a, i), bv = ch(b, i);
+      out += h2(av + (bv - av) * t);
+    }
+    return out;
+  }
+
   var _lastLightK = '';
   function _applyLight() {
     if (!_el) return;
@@ -562,7 +680,7 @@
         info = window.TofuScene.lightInfo();
       }
     } catch (e) { /* scene absent — flat shading, harmless */ }
-    var dx = 0, scale = 1, shade = 0, warm = 0;
+    var dx = 0, scale = 1, shade = 0, warm = 0, sunT = 0.5;
     if (info && typeof info.nx === 'number') {
       // Pet foot-centre as a 0..1 position along the bar, so "which side is the
       // sun on" is measured relative to the CAT, not the bar centre.
@@ -577,10 +695,16 @@
       // form shade sits on the anti-sun side of the body (same sign as shadow).
       shade = -rel * 0.7;                             // px drop-shadow x-offset
       warm = Math.max(0, Math.min(1, info.warm || 0)) * (1 - Math.abs(rel) * 0.4);
+      // ONE SUN, BOTH CHANNELS. The cast shadow above is already derived from
+      // `rel`; the block's OWN faces are now derived from the same number, so
+      // the body can no longer claim a different sun than its shadow does.
+      // 0 = sun fully to the pet's left · 1 = fully to its right.
+      sunT = (rel + 1) / 2;
     }
     // only touch the DOM when a rounded value actually changed (avoid per-frame
     // style churn when the cat + sun are momentarily static).
-    var k = dx.toFixed(1) + '|' + scale.toFixed(2) + '|' + shade.toFixed(2) + '|' + warm.toFixed(2);
+    var k = dx.toFixed(1) + '|' + scale.toFixed(2) + '|' + shade.toFixed(2) + '|' +
+      warm.toFixed(2) + '|' + sunT.toFixed(2);
     if (k === _lastLightK) return;
     _lastLightK = k;
     var st = _el.style;
@@ -588,6 +712,18 @@
     st.setProperty('--pet-shadow-scale', scale.toFixed(2));
     st.setProperty('--pet-shade-dx', shade.toFixed(2) + 'px');
     st.setProperty('--pet-light-warm', warm.toFixed(2));
+    // Re-derive the two SIDE faces. The front face is lit when the sun is to the
+    // pet's left and shaded when it swings right; the right face does the
+    // opposite — so the pair swaps as the sun crosses over, which is what makes
+    // the solid look like it is standing under a moving light instead of wearing
+    // a painted-on one. The top face is left alone: the sun stays overhead
+    // (scene ny≈0.14), so the lit plane is lit from every sun position.
+    st.setProperty('--pet-front-a', _mixHex(FACE_LIT[0], FACE_SHADE[0], sunT));
+    st.setProperty('--pet-front-b', _mixHex(FACE_LIT[1], FACE_SHADE[1], sunT));
+    st.setProperty('--pet-right-a', _mixHex(FACE_SHADE[0], FACE_LIT[0], sunT));
+    st.setProperty('--pet-right-b', _mixHex(FACE_SHADE[1], FACE_LIT[1], sunT));
+    // Specular is strongest with the sun overhead and softens as it grazes.
+    st.setProperty('--pet-sheen', (0.52 - 0.22 * Math.abs(sunT * 2 - 1)).toFixed(2));
   }
 
   // Is there a scene critter close enough to chase? Reads TofuScene.critterX()
@@ -653,6 +789,13 @@
       W.until = _now() + _rand(1400, 3000);   // shorter trips — walking is one behavior among many, not the default
       S.expr = 'walk';
       _walkAccum = 0;
+      // Face the way we are ABOUT to travel. Without this the pet inherits
+      // whatever direction the previous state left behind — and 'gaze' flips
+      // facing every 1.3s on purpose — so entering a walk straight out of a
+      // glance could set off with the body facing backwards and the stride
+      // pushing the wrong way. Cheap, and it closes the last path by which the
+      // pet could appear to walk backwards.
+      _face(W.dir, false);
       if (_el) { _el.setAttribute('data-expr', 'walk'); _el.setAttribute('title', _title()); }
       _setWalkFrame(0);
     } else if (state === 'chase') {
@@ -893,15 +1036,15 @@
     _el.setAttribute('role', 'img');
     _el.setAttribute('aria-hidden', 'true');
     _el.setAttribute('data-pet', 'tofu');
-    _facing = document.createElement('span');
-    _facing.className = 'tofu-pet-facing';
-    _img = document.createElement('img');
+    // The frame layer is a plain box that HOLDS the live <svg> (see the frame-art
+    // note above). There is no separate direction layer any more: mirroring the
+    // whole sprite is exactly the bug that dragged the block's lighting around
+    // with it, so the mirror now lives inside the sprite on the character-space
+    // group and this element owns only the per-frame life animation.
+    _img = document.createElement('span');
     _img.className = 'tofu-pet-img';
-    _img.alt = '';
     _img.setAttribute('aria-hidden', 'true');
-    _img.setAttribute('draggable', 'false');
-    _facing.appendChild(_img);
-    _el.appendChild(_facing);
+    _el.appendChild(_img);
     _wireDrag();   // press = click (interact); press+move = drag the pet
     _el.addEventListener('contextmenu', function (e) { e.preventDefault(); e.stopPropagation(); cycleDecor(); react('happy', 1000); });
     _el.addEventListener('mouseenter', _onHover);
@@ -972,7 +1115,7 @@
     },
     mount: mount,
     frameUrl: _frameUrl,
-    getFrame: function () { return _img ? _img.src : ''; },
+    getFrame: function () { return _curFrame ? _frameUrl(_curFrame) : ''; },
     WALK_FRAMES: WALK_FRAMES,
     GROOM_FRAMES: GROOM_FRAMES,
     SCRATCH_FRAMES: SCRATCH_FRAMES,

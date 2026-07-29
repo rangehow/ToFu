@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""gen_tofu_pet.py — emit the 18 project-bar pet frames as brand-native SVG.
+"""gen_tofu_pet.py — emit the project-bar pet frames as brand-native SVG.
 
 WHY THIS EXISTS (the drift argument)
 ────────────────────────────────────
-The pet needs 18 frames (9 expressions + 4 walk + 3 groom + 2 scratch). Hand
-writing 18 SVGs means the body geometry and the brand palette are copied 18
+The pet needs 22 frames (9 expressions + 8 walk + 3 groom + 2 scratch). Hand
+writing them by hand means the body geometry and the brand palette are copied 22
 times, and the first palette tweak silently desynchronises them — the exact
 "same declaration written twice, drift is invisible in the code" failure the
 project has been bitten by before. So the BODY is defined ONCE here and every
@@ -76,16 +76,55 @@ DEPTH_X, DEPTH_Y = 5.0, 3.4      # isometric offset to the back-top-right
 STROKE = 1.5
 FOOT_Y = 29.0
 
+# The character-space mirror, shared by the feet group and the face group so the
+# two can never drift apart (a stride flipping while the face did not would be
+# its own bug). `style=` and NOT `transform=`: var() is a CSS feature and is not
+# resolved inside an SVG transform ATTRIBUTE. Two further details are
+# load-bearing: `transform-box:view-box` + an explicit `transform-origin:0 0`
+# make the CSS transform behave exactly like the SVG attribute would (CSS
+# defaults transform-origin to 50% 50%, which would silently add a half-viewBox
+# offset on top of the sandwich); and the translate sandwich is what pivots the
+# mirror about the body's own centre rather than the viewBox edge.
+_BODY_CX = (FRONT_L + FRONT_R) / 2
+_CHAR_FLIP_STYLE = (
+    'transform-box:view-box;transform-origin:0 0;'
+    f'transform:translate({_BODY_CX:.2f}px,0) '
+    f'scaleX(var(--pet-face-flip, 1)) translate({-_BODY_CX:.2f}px,0)'
+)
 
-def _g(gid, x1, y1, x2, y2, a, b):
+
+def _g(gid, x1, y1, x2, y2, a, b, var_a=None, var_b=None):
+    """One face gradient.
+
+    Each stop is written as `var(--pet-<face>-<stop>, <authored hex>)` so the
+    LIVE sun (tofu-pet.js `_applyLight`, from TofuScene.lightInfo) can re-derive
+    the three faces per frame, while the authored brand hex remains the fallback
+    — a scene-less pet, a non-tofu theme, or any renderer that ignores custom
+    properties still gets exactly the palette this generator authored.
+
+    This is only reachable because the frame is INLINED into the DOM (see the
+    world/character note in `frame`): custom properties cannot cross an <img>
+    boundary, which is why the sprite used to be lit by nothing at all.
+    """
+    sa = f'var({var_a}, {a})' if var_a else a
+    sb = f'var({var_b}, {b})' if var_b else b
     return (f'<linearGradient id="{gid}" x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}">'
-            f'<stop offset="0" stop-color="{a}"/><stop offset="1" stop-color="{b}"/>'
+            f'<stop offset="0" style="stop-color:{sa}"/>'
+            f'<stop offset="1" style="stop-color:{sb}"/>'
             f'</linearGradient>')
 
 
 def _eyes(kind, cx_l, cx_r, cy):
-    """The face's eyes. Rounded-rect + specular dot is the logo's own eye."""
-    w, h, r = 3.1, 4.2, 1.55
+    """The face's eyes. Rounded-rect + specular dot is the logo's own eye.
+
+    Two specular dots, not one: a single hard dot reads as a printed sticker,
+    while a large primary catchlight plus a small secondary one on the opposite
+    side is the standard way an eye reads as WET and rounded. At 30px the
+    secondary lands sub-pixel and simply softens the primary, which is exactly
+    the intent — it stops the pupil going dead-flat without adding visible
+    clutter.
+    """
+    w, h, r = 3.3, 4.4, 1.65
     out = []
     if kind in ('open', 'wide', 'up'):
         hh = h * (1.22 if kind == 'wide' else 1.0)
@@ -93,8 +132,10 @@ def _eyes(kind, cx_l, cx_r, cy):
         for cx in (cx_l, cx_r):
             out.append(f'<rect x="{cx - w/2:.2f}" y="{cy - hh/2 + dy:.2f}" '
                        f'width="{w:.2f}" height="{hh:.2f}" rx="{r:.2f}" fill="{INK}"/>')
-            out.append(f'<circle cx="{cx + 0.55:.2f}" cy="{cy - hh/2 + 1.15 + dy:.2f}" '
-                       f'r="0.72" fill="{SHEEN}"/>')
+            out.append(f'<circle cx="{cx + 0.62:.2f}" cy="{cy - hh/2 + 1.12 + dy:.2f}" '
+                       f'r="0.80" fill="{SHEEN}"/>')
+            out.append(f'<circle cx="{cx - 0.66:.2f}" cy="{cy + hh/2 - 1.15 + dy:.2f}" '
+                       f'r="0.36" fill="{SHEEN}" opacity="0.62"/>')
     elif kind == 'happy':          # ^ ^ — upward arcs
         for cx in (cx_l, cx_r):
             out.append(f'<path d="M{cx - 1.8:.2f} {cy + 0.9:.2f} Q{cx:.2f} {cy - 1.9:.2f} '
@@ -167,23 +208,48 @@ def _feet(pose, cy=FOOT_Y):
     the block's bottom edge. A fully-exposed stroked ellipse reads as a hollow
     ring / wheel at 30px (measured); tucking it under the body turns the same
     shape into a foot emerging from the block.
+
+    THE STRIDE (why the poses come in near/far PAIRS)
+    ──────────────────────────────────────────────
+    A walk only reads as a WALK if the LEADING foot alternates: near foot swings
+    ahead, pass, far foot swings ahead, pass. The first cut of this cycle used a
+    single symmetric 'contact' pose for BOTH contact beats, so no foot ever led
+    — the legs merely scissored open and shut twice per cycle while the body
+    rocked, which reads as shuffling in place or sliding BACKWARDS (owner
+    report), never as stepping forward. Hence contact/passing/lift now exist in
+    an 'a'/'b' pair: the pair members swap which foot is forward, and the cycle
+    plays a → b so the gait actually alternates.
+
+    Each tuple is (near_x, far_x, near_y, far_y). The FAR foot also sits a touch
+    higher and is drawn first, so it reads as the leg on the far side of the
+    body rather than a second foot on the same side.
     """
     offsets = {
-        'stand':   (-4.0, 4.2, 0.0, 0.0),
-        'contact': (-6.6, 6.4, 0.5, -0.4),
-        'passing': (-1.6, 2.4, -0.3, 0.3),
-        'up':      (-5.4, 5.2, -0.7, -0.7),
-        'sit':     (-4.2, 4.4, 0.9, 0.9),
-        'tip':     (-3.4, 3.6, 0.5, 0.5),
+        'stand':     (-4.0, 4.2, 0.0, 0.0),
+        # ─ contact: one foot planted ahead, the other trailing behind ─
+        'contact_a': (-6.8, 5.2, 0.5, -0.5),   # NEAR foot leads
+        'contact_b': (-4.6, 7.0, -0.5, 0.4),   # FAR foot leads
+        # ─ passing: the swinging foot passes under the body, lifted ─
+        'passing_a': (-1.4, 3.0, 0.4, -1.5),   # far foot lifted, swinging through
+        'passing_b': (-3.0, 1.6, -1.5, 0.4),   # near foot lifted, swinging through
+        # ─ lift: push-off, both feet gathered under a rising body ─
+        'up_a':      (-5.6, 4.4, -0.9, -0.5),
+        'up_b':      (-4.4, 5.6, -0.5, -0.9),
+        'sit':       (-4.2, 4.4, 0.9, 0.9),
+        'tip':       (-3.4, 3.6, 0.5, 0.5),
     }
-    lx, rx, ly, ry = offsets.get(pose, offsets['stand'])
+    near_x, far_x, near_y, far_y = offsets.get(pose, offsets['stand'])
     cx = (FRONT_L + FRONT_R) / 2 + 1.0
     top = cy - 2.0   # ellipse centre; body bottom (FRONT_B) hides everything above it
     out = []
-    for ox, oy in ((lx, ly), (rx, ry)):
-        out.append(f'<ellipse cx="{cx + ox:.2f}" cy="{top + oy:.2f}" rx="2.9" ry="2.15" '
-                   f'fill="{LEFT_B}" stroke="{INK}" stroke-width="{STROKE}" '
-                   f'stroke-linejoin="round"/>')
+    # FAR foot first (painted under), slightly smaller + darker: cheap depth cue
+    # that stops the two nubs reading as one flat pair of wheels.
+    out.append(f'<ellipse cx="{cx + far_x:.2f}" cy="{top + far_y - 0.35:.2f}" rx="2.6" ry="1.95" '
+               f'fill="{RIGHT_B}" stroke="{INK}" stroke-width="{STROKE}" '
+               f'stroke-linejoin="round"/>')
+    out.append(f'<ellipse cx="{cx + near_x:.2f}" cy="{top + near_y:.2f}" rx="2.9" ry="2.15" '
+               f'fill="{LEFT_B}" stroke="{INK}" stroke-width="{STROKE}" '
+               f'stroke-linejoin="round"/>')
     return ''.join(out)
 
 
@@ -226,12 +292,48 @@ def _extra(kind):
 
 def frame(name, *, squash=1.0, lean=0.0, lift=0.0, tilt=0.0, eyes='open', mouth='omega',
           feet='stand', blush=True, extra=''):
-    """Render ONE frame. Every pose is this body under different parameters."""
+    """Render ONE frame. Every pose is this body under different parameters.
+
+    TWO COORDINATE SPACES (why this frame has two groups)
+    ─────────────────────────────────────────────────��───
+    The block is an isometric solid with the sun baked into it: the top face is
+    the lit plane, the right face the shaded one, plus a specular streak on the
+    top-left. A cube's shading belongs to the WORLD — the sun does not move
+    because the pet turned around. But the pet must still LOOK where it walks,
+    and the engine used to deliver that by mirroring the entire sprite with
+    scaleX(-1), which dragged the shading along: measured, the body's light/dark
+    sides swapped exactly (lum 117↔183) on every turn while the cast shadow
+    (driven by the real TofuScene sun) correctly did not. Half the time the pet
+    contradicted the diorama's one-sun invariant and read as a sticker.
+
+    So the frame emits two sibling groups with different semantics:
+
+      <g data-space="world">  — the three faces, the specular, the outline and
+                                seams. NEVER mirrored. Its gradients are
+                                var()-driven so the live sun re-derives them.
+      <g data-space="char">   — the FEET, eyes, mouth, blush. These mirror,
+                                because "which way am I facing" is a property of
+                                the character, not of the light.
+
+    The FEET are character-space and that is load-bearing: they carry the GAIT,
+    and a stride has a leading foot. Left in world space they would keep
+    stepping to the right while the pet travelled left — moonwalking, a second
+    flavour of the "walks backwards" complaint this pass exists to kill. They
+    are also drawn first inside the group so the block's bottom edge overlaps
+    them.
+
+    `_extra` accents stay OUTSIDE both: a Zzz or sparkle is a symbol pinned to
+    the frame's top-right, not part of the body, and mirroring it would fling it
+    across the sprite. Keeping it out of `char` is deliberate.
+
+    The engine mirrors ONLY [data-space="char"] (tofu-pet.js `_face`).
+    """
     front, top, right, peri, seams = _body_path()
     cx = (FRONT_L + FRONT_R) / 2
     eye_y = FRONT_T + 6.2
     # Squash & stretch (and tilt) about the FOOT LINE — a soft block's own way
-    # of moving, and the reason this character can act without limbs.
+    # of moving, and the reason this character can act without limbs. It applies
+    # to BOTH spaces (the whole body deforms), so it wraps them.
     stretch = 1.0 / squash if squash else 1.0
     body_tf = (f'translate({cx + lean:.2f} {FOOT_Y + lift:.2f}) '
                f'rotate({tilt:.2f}) '
@@ -239,36 +341,83 @@ def frame(name, *, squash=1.0, lean=0.0, lift=0.0, tilt=0.0, eyes='open', mouth=
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">',
         '<defs>',
-        _g('t', 0, 0, 0.6, 1, TOP_A, TOP_B),
-        _g('l', 0, 0, 0.3, 1, LEFT_A, LEFT_B),
-        _g('r', 0, 0, 1, 0.7, RIGHT_A, RIGHT_B),
+        _g('t', 0, 0, 0.6, 1, TOP_A, TOP_B, '--pet-top-a', '--pet-top-b'),
+        _g('l', 0, 0, 0.3, 1, LEFT_A, LEFT_B, '--pet-front-a', '--pet-front-b'),
+        _g('r', 0, 0, 1, 0.7, RIGHT_A, RIGHT_B, '--pet-right-a', '--pet-right-b'),
+        # Ambient-occlusion wash: transparent for the top two-thirds, a shadow
+        # gathering at the foot line. Deliberately restrained — the first cut
+        # ran 0.30 from 35% height and turned the block's lower half muddy, and
+        # its warm brown (#C79A63) was a colour the shipped mascot does not
+        # contain, which the brand-lineage guard correctly rejected. The wash is
+        # therefore the mascot's OWN shaded face (RIGHT_B) at low alpha: it can
+        # only ever deepen the block toward a tone the logo already has.
+        f'<linearGradient id="ao" x1="0" y1="0.62" x2="0" y2="1">'
+        f'<stop offset="0" stop-color="{RIGHT_B}" stop-opacity="0"/>'
+        f'<stop offset="1" stop-color="{RIGHT_B}" stop-opacity="0.42"/>'
+        f'</linearGradient>',
         '</defs>',
         f'<g transform="{body_tf}">',
+        # ── CHARACTER SPACE (feet). Mirrored with facing so the stride leads
+        # the way the pet travels. Painted BEFORE the block so its bottom edge
+        # overlaps the nubs. Same group id as the face group below — the engine
+        # flips every [data-space="char"] node. ──
+        f'<g data-space="char" style="{_CHAR_FLIP_STYLE}">',
         _feet(feet),
+        '</g>',
+        # ── WORLD SPACE: the solid + its lighting. Never mirrored. ──
+        '<g data-space="world">',
         f'<path d="{top}" fill="url(#t)"/>',
         f'<path d="{right}" fill="url(#r)"/>',
         f'<path d="{front}" fill="url(#l)"/>',
-        # top-face sheen, quiet — the same cue the brand cube carries
+        # AMBIENT OCCLUSION — a soft dark wash pooling at the block's base. A
+        # flat-filled face reads as a printed shape; real matter is darker where
+        # it meets the ground because the sky is occluded there. This is the
+        # single cheapest thing that makes the cube read as a SOLID rather than
+        # a rectangle, and it survives 30px because it is a broad gradient with
+        # no detail to lose.
+        f'<path d="{front}" fill="url(#ao)"/>',
+        # RIM LIGHT — a thin bright edge down the block's leading vertical.
+        # Separates the silhouette from the scene behind it (the bar is a busy
+        # painted diorama), which is what stops the pet reading as pasted on.
+        f'<path d="M{FRONT_L} {FRONT_T + 1.4} L{FRONT_L} {FRONT_B - 1.2}" '
+        f'stroke="{SHEEN}" stroke-width="0.9" stroke-linecap="round" '
+        f'style="opacity:var(--pet-rim, 0.34)"/>',
+        # top-face sheen, quiet — the same cue the brand cube carries. Opacity is
+        # var-driven so a side sun can strengthen/soften the specular with the
+        # rest of the shading rather than sitting at a fixed brightness.
         f'<path d="M{FRONT_L + 2.2} {FRONT_T - 0.9} L{FRONT_L + 6.4} {FRONT_T - 3.1}" '
-        f'stroke="{SHEEN}" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/>',
+        f'stroke="{SHEEN}" stroke-width="1.5" stroke-linecap="round" '
+        f'style="opacity:var(--pet-sheen, 0.5)"/>',
         f'<path d="{peri}" fill="none" stroke="{INK}" stroke-width="{STROKE}" '
         f'stroke-linejoin="round" stroke-linecap="round"/>',
-        f'<path d="{seams}" fill="none" stroke="{INK}" stroke-width="{STROKE * 0.62:.2f}" '
-        f'stroke-linejoin="round" stroke-linecap="round" opacity="0.75"/>',
+        # Interior SEAMS. Thin and faint: these are where two faces of one soft
+        # solid meet, not outlines of separate panels. The first cut drew them
+        # at 0.62× stroke / 0.75 alpha, which at 30px turned into dirty grey
+        # bars that visually cut the block into three stuck-together plates.
+        f'<path d="{seams}" fill="none" stroke="{INK}" stroke-width="{STROKE * 0.44:.2f}" '
+        f'stroke-linejoin="round" stroke-linecap="round" opacity="0.42"/>',
+        '</g>',
     ]
+    # ── CHARACTER SPACE: the face. Mirrored about the body's own centre (cx)
+    # so a flip pivots it in place instead of translating it off the block. ──
+    parts.append(f'<g data-space="char" style="{_CHAR_FLIP_STYLE}">')
     if blush:
-        for bx in (FRONT_L + 2.6, FRONT_R - 2.6):
-            parts.append(f'<ellipse cx="{bx:.2f}" cy="{eye_y + 3.6:.2f}" rx="1.9" ry="1.15" '
-                         f'fill="{BLUSH}" opacity="0.62"/>')
+        # Soft and low-contrast: at 30px a saturated blush becomes two pink
+        # PILLS stuck to the face. This should read as warmth in the cream, not
+        # as makeup — so it is wide, faint, and sits low on the cheek.
+        for bx in (FRONT_L + 2.7, FRONT_R - 2.7):
+            parts.append(f'<ellipse cx="{bx:.2f}" cy="{eye_y + 3.3:.2f}" rx="1.85" ry="1.0" '
+                         f'fill="{BLUSH}" opacity="0.38"/>')
     parts.append(_eyes(eyes, cx - 3.4, cx + 3.4, eye_y))
     parts.append(_mouth(mouth, cx, eye_y + 3.9))
+    parts.append('</g>')
     parts.append('</g>')
     parts.append(_extra(extra))
     parts.append('</svg>')
     return ''.join(parts) + '\n'
 
 
-# ── The 18 frames the engine resolves (9 expressions + 4 walk + 3 groom + 2
+# ── The 22 frames the engine resolves (9 expressions + 8 walk + 3 groom + 2
 # scratch). Names MUST match tofu-pet.js EXPRESSIONS / *_FRAMES. ──
 FRAMES = {
     # resting expressions
@@ -282,16 +431,36 @@ FRAMES = {
     'celebrating': dict(eyes='happy', mouth='open', squash=0.92, lift=-2.0,
                         feet='tip', extra='sparkle'),
     'alert':       dict(eyes='wide', mouth='o', squash=0.96, lift=-0.5, extra='alert'),
-    # Walk cycle: contact → down(squash) → passing → up(stretch). The amplitude
-    # is deliberately large: at 30px a subtle 4% squash is invisible, so the
-    # keyposes are pushed until the down-beat and up-beat differ at a glance.
-    'walk1': dict(feet='contact', lean=0.9, tilt=2.5, squash=0.99,
+    # WALK CYCLE — 8 keyposes, a full alternating stride.
+    #
+    # Two things were wrong with the first 4-frame cut and BOTH are fixed here:
+    #   1. walk1 and walk3 were the SAME symmetric 'contact' pose, so no foot
+    #      ever led and the gait read as shuffling / sliding backwards.
+    #      Now the contact beats are a near-leads / far-leads PAIR.
+    #   2. 4 poses at 150ms is 6.7fps — below the ~12fps floor where a cycle
+    #      stops reading as motion and starts reading as a flicker between
+    #      drawings. 8 poses at 75ms is the same 600ms stride at 13.3fps.
+    #
+    # The beat structure is the classic one, run twice with the feet swapped:
+    #   contact → down(squash) → passing → up(stretch)   × 2, mirrored
+    # The body's vertical travel is carried by lift + squash: it is LOWEST on
+    # the down beat right after contact and HIGHEST on the push-off, which is
+    # what sells weight on a character with no knees to bend.
+    'walk1': dict(feet='contact_a', lean=0.9, tilt=2.2, squash=1.02, lift=0.3,
                   eyes='open', mouth='smile'),
-    'walk2': dict(feet='passing', squash=1.13, lift=0.8,
+    'walk2': dict(feet='contact_a', lean=0.4, tilt=1.0, squash=1.11, lift=0.9,
                   eyes='open', mouth='smile'),
-    'walk3': dict(feet='contact', lean=-0.9, tilt=-2.5, squash=0.99,
+    'walk3': dict(feet='passing_a', squash=1.0, lift=-0.4,
                   eyes='open', mouth='smile'),
-    'walk4': dict(feet='up', squash=0.88, lift=-2.0,
+    'walk4': dict(feet='up_a', squash=0.90, lift=-1.9, tilt=0.8,
+                  eyes='open', mouth='smile'),
+    'walk5': dict(feet='contact_b', lean=-0.9, tilt=-2.2, squash=1.02, lift=0.3,
+                  eyes='open', mouth='smile'),
+    'walk6': dict(feet='contact_b', lean=-0.4, tilt=-1.0, squash=1.11, lift=0.9,
+                  eyes='open', mouth='smile'),
+    'walk7': dict(feet='passing_b', squash=1.0, lift=-0.4,
+                  eyes='open', mouth='smile'),
+    'walk8': dict(feet='up_b', squash=0.90, lift=-1.9, tilt=-0.8,
                   eyes='open', mouth='smile'),
     # Groom: with no limbs to lick a paw, the "tidy myself up" beat is a WOBBLE
     # — rock left, rock right, settle upright with a gleam. Tilt carries it;

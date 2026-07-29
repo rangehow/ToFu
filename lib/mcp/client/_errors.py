@@ -153,6 +153,83 @@ def _is_call_timeout_error(exc: BaseException) -> bool:
     return False
 
 
+#: JSON-RPC 2.0 "Method not found". Owned by the JSON-RPC spec (not by the MCP
+#: SDK and not by any server), which is why it is safe to hard-code: unlike a
+#: class name or an English message, this number cannot be renamed upstream.
+#: ``mcp.types.METHOD_NOT_FOUND`` carries the same value in BOTH SDK majors
+#: (measured: v1 1.27.2 and v2 2.0.0 both define it as -32601); we prefer the
+#: SDK constant when importable and fall back to the literal.
+_JSONRPC_METHOD_NOT_FOUND = -32601
+
+
+def _jsonrpc_error_code(exc: BaseException) -> int | None:
+    """Return the JSON-RPC error code carried by ``exc``, or None.
+
+    Both SDK majors expose the code the same way despite differing
+    constructors (measured: v1 ``McpError(ErrorData)`` and v2
+    ``MCPError(code, message)`` both end up with ``.error.code``), so reading
+    ``.error.code`` spans the pin boundary without a version test.
+    """
+    leaf = _unwrap_exception_group(exc)
+    code = getattr(getattr(leaf, 'error', None), 'code', None)
+    return code if isinstance(code, int) else None
+
+
+def _is_peer_answered_error(exc: BaseException) -> bool:
+    """True when ``exc`` is a protocol-level error RESPONSE from the peer.
+
+    THE DISTINCTION THIS ENCODES
+    ----------------------------
+    A JSON-RPC error response is *proof of liveness*, not evidence of death:
+    the request reached the server, the server parsed it, and the reply
+    travelled back. "The peer answered" and "the peer answered successfully"
+    are different questions, and conflating them is what makes a health probe
+    reconnect a perfectly healthy transport.
+
+    This became load-bearing with protocol revision 2026-07-28, which REMOVED
+    ``ping`` from the schema entirely (measured: 0 occurrences in the published
+    schema.ts, versus ``logging/setLevel`` which merely carries an
+    ``@deprecated`` tag). A conforming server answers a ping with
+    ``-32601 Method not found`` while remaining perfectly usable — measured
+    end-to-end against a real 2.0.0 server: the very next ``tools/list`` on the
+    same session succeeds.
+
+    Deliberately narrow: only genuine protocol-error responses count. A
+    timeout, a dead pipe, or a transport-layer failure is NOT an answer, so
+    those keep their existing "reconnect" verdict.
+    """
+    leaf = _unwrap_exception_group(exc)
+    # A timeout is the absence of an answer — never treat it as liveness.
+    if _is_call_timeout_error(leaf) or _is_transport_dead_error(leaf):
+        return False
+    if _jsonrpc_error_code(leaf) is not None:
+        return True
+    # No structured code (SDK restructured / wrapped): fall back to the SDK's
+    # protocol-error class. Still strictly narrower than "any exception".
+    sdk_types = _mcp_error_types()
+    if sdk_types and isinstance(leaf, sdk_types):
+        return True
+    return type(leaf).__name__ in ('McpError', 'MCPError')
+
+
+def _is_method_not_found(exc: BaseException) -> bool:
+    """True when the peer answered with JSON-RPC ``-32601 Method not found``.
+
+    Used to detect that a health-probe RPC is not implemented by this peer so
+    the caller can fall back to one that is, instead of declaring the server
+    dead. Anchored on the numeric code (see ``_JSONRPC_METHOD_NOT_FOUND``);
+    the English message is only consulted when no structured code survived
+    the SDK's wrapping.
+    """
+    code = _jsonrpc_error_code(exc)
+    if code is not None:
+        return code == _JSONRPC_METHOD_NOT_FOUND
+    leaf = _unwrap_exception_group(exc)
+    if not _is_peer_answered_error(leaf):
+        return False
+    return 'method not found' in (str(leaf) or '').lower()
+
+
 def _read_stderr_tail(f, max_bytes: int = _MCP_STDERR_TAIL_BYTES) -> str:
     """Read the last ``max_bytes`` bytes of a binary tempfile, decoded as UTF-8.
 

@@ -76,6 +76,13 @@ data/
 # clean clone without it breaks the release pipeline in CI rather than
 # locally, which is the worst place to discover a missing file.
 !/scripts/release_assets.py
+# Cache-waste distribution report. The measurement discipline it encodes —
+# rates DERIVED from lib.cost rather than hand-written, non-waste classes
+# (TTL expiry / cold start) excluded from the recoverable denominator,
+# percentiles that treat 0 as a number — is the deliverable. An untracked copy
+# means the next cost audit goes back to throwaway one-liners and re-makes the
+# errors tests/test_cache_waste_report.py now pins.
+!/scripts/cache_waste_report.py
 # debug/ = standalone scratch/benchmark scripts (never imported by the app);
 # tracked *.log already ignored above, this covers the .py/.json/.png/.md/.html too.
 /debug/

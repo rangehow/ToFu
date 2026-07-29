@@ -1,6 +1,19 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-29(续·发布并发) — owner 抓出**我自己改触发时放大的风险**:没有 concurrency group;而实测把他偏好的 `cancel-in-progress: true` **反向否决**——那个值会用新成因复现原始故障(commit `5f7075ac`,2 文件 +175;守卫 **25 → 28**,**NEUTER×4 各咬一条**,相邻环 **93/93**,干净 worktree **28/28**)
+
+- **★ owner 的定性成立,而且这是我改动的直接后果不是既有缺陷:** 旧触发 `refs/tags/v*` 一天最多跑一两次;换成 `push: branches:[main]` 后,**进入「VERSION 未发布」窗口的每一次 push 都拉起整套四平台构建**。实测本仓自 2026-07-28 起 **339 个提交、相邻间隔中位数 165s**,八个会话共享 HEAD ⇒ 窗口内多次 push 是常态。
+- **危害不是「烧 runner」而是「重放我刚修的那个缺陷」:** 多个 release job 各自探到 404、各自 `git push --force` 到**自己那个** `github.sha`、再各自调 `action-gh-release` —— **ref 归最后一个写者,而更早的 run 可能已经传完产物**。即上一批用 retarget 消灭的「二进制与源码不同源」,换成竞态重新出现。**判据:retarget 把单 run 内的锚点修对了,但它本身在多 run 下不是原子的。**
+- **★ owner 偏好 `cancel-in-progress: true`,实测把它否决(本轮最值钱的一步):** 构建腿 `timeout-minutes: 30`,而 **338 个间隔里只有 8 个(2.4%)≥ 30 分钟**。所以带取消时,**约 97.6% 的构建会在完成前被新 push 顶掉**,安装包只在罕见静默期才发得出来 —— **正是本 workflow 要修的那句「版本号变了却没有包」,只是换了个成因**。第二条理由:取消可能落在「force 移 tag」与「上传产物」之间,留下一个 Release,而 version 门下次读到 200 就**永不重试**。
+- **落点改为排队而非取消(`cancel-in-progress: false`):** 默认 `queue: single` 下最多一个 pending —— N 次 push 塌缩成「一个在跑 + 最新的一个在等」,而那个最新 run 的 version 门探到 200 后**几秒内跳过**。于是一场风暴的代价是**一次完整构建 + 若干秒级 ubuntu 任务**,**去重由那道门完成**,而它本来就是干这个的。group 键取 `github.ref`:被争抢的资源是**每分支的发布**(tag + Release),不是单个 commit。
+- **★ 「构建可取消、发布不可取消」这个折中在 GitHub 上不可表达(查文档而非假设):** workflow 级取消会**杀掉整个 run**,job 级 `cancel-in-progress: false` 挡不住它;而 workflow 级 `cancel-in-progress` 的表达式上下文只有 `github`/`inputs`/`vars`,**拿不到「release job 是否已开始」**。故只能二选一,而实测把选择定死。
+- **守卫钉的是资源不是 YAML 键:** 把 group 模板**对两个假 push 上下文求值再比较字符串** —— 同 ref 不同 sha/run_id 必须解析成**同一个** group;补集断言不同 ref 必须**不同** group(否则 `group: "x"` 这种全局常量会满足正向断言,却让每个分支排队等 main)。`_resolve_expr` 对**任何它算不动的上下文直接抛错**,而不是静默返回常量 —— 一个把所有输入都塌缩成同一字符串的解析器会让上面每条断言**无论 group 写成什么都通过**,那正是这类守卫变空的方式。
+- **NEUTER×4 各咬一条,互不重叠:** 删掉整个 concurrency → 3 红;`cancel-in-progress: true` → 只红取消那条;group 改用 `github.sha` → 只红同分支那条;group 改成常量 → 只红不同分支补集那条。每发后 `cmp` 确认逐字节还原。
+- **★ 第一发 NEUTER 顺带抓出我自己守卫的缺陷:** 删掉 concurrency 后有两条是**裸 `KeyError`** 而不是我写的诊断 —— 撞上它的人只看到「KeyError: 'concurrency'」,学不到「为什么需要这个 group」。已改为先断言 mapping 存在并给出指向另一条守卫的说明。**判据:守卫的失败信息也是产品面;一条只会抛 KeyError 的断言等于把它自己的理由删掉了。**
+- **★ 单开票不并入(owner 惯例):** release job 若在「创建 Release」与「上传产物」之间因任何原因中断(取消 / runner 崩 / 网络),会留下一个**产物不全的 Release**,而 version 门下次读到 **200 → 永不重建**,**没有任何自愈路径**。这条与本批无关(排队不取消反而降低了它的触发频率),但它是真实的单点,已开 `pt_10bb4dad1ba7419e`。
+- **验收边界(诚实分账):** ①仍是下一次 push 到 main 才生效;②本批只动 workflow 与守卫,**无运行时代码,不需要重启**;③排队语义的代价是「最新那次 push 要等前一次构建跑完才开始」——但它随后探到 200 直接跳过,所以等的是**秒级**而非一次构建。
+
 ### 2026-07-29(续·成本回填收口) — 记账双计修完之后,**它静默改掉的第二样东西是缓存遥测,而那正是另一张票的立论依据**;回填脚本的 `--apply` 分支实测是死代码(owner 复核 `ebfd5464` 逐条抓出;commits `a6114ded`(遥测轴)+ `e8c56e65`(apply 根修+守卫);套件 **28/28 + 6/6**,**NEUTER×4 各咬各的**,干净 committed worktree 复验 **46/46**)
 
 - **★ owner 抓出的第一半:同一个 `split_input_tokens` 既喂成本也喂遥测,我只报了成本那一半。** `_roi.py:251` 与 `_detect.py:1005` 的 `total_input` 都来自它,所以修完之后:

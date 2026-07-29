@@ -582,6 +582,15 @@ _BUNDLE_FILES = [
     # conv_apply_settings.js because forceRecoverFromServer calls
     # `_applySettingsToConv` (pt_3879f00e slice 9).
     'core/conv_disaster_recovery.js',
+    # ── conv_verify_visibility.js: _setCacheVerifying (DOM decoration)
+    # + _openConvMayHoldOrphanGhost (ghost predicate). Two pure helpers
+    # on the cache-verify visibility path. Load BEFORE conversations.js
+    # so the 11 bare-name call sites (9 for the visibility toggle, 2
+    # for the ghost predicate) resolve via bundle-level window scope
+    # (pt_3879f00e slice 10). The bounded self-heal retry cluster
+    # remains in conversations.js — it calls into the still-unextracted
+    # _verifyActiveConvFromServer path.
+    'core/conv_verify_visibility.js',
     'core/conversations.js',
     # Shared SSE fetch-response read/decode/buffer loop (readSSEStream) —
     # extracted 2026-07-11 from branch.js / paper-reader.js / ui/sse_pipeline.js.

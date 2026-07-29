@@ -779,50 +779,14 @@ async function loadConversationsFromServer(prefetchId) {
  * Load full messages for a single conversation on demand.
  * Returns the conversation object or null.
  */
-/**
- * Toggle the "verifying" visual state on the chat viewport. Used when a
- * known-stale IndexedDB copy is painted optimistically while a background
- * server GET is in flight to correct it: the provisional content is dimmed so
- * the transient pre-correction render reads as "being checked", not as truth.
- * Cleared (on=false) the moment Phase-2 reconciles or the fetch settles.
- * Pure DOM decoration — no effect on state / persistence.
- */
-function _setCacheVerifying(convId, on) {
-  if (convId !== activeConvId) return;
-  const inner = (typeof document !== 'undefined')
-    ? document.getElementById('chatInner') : null;
-  if (!inner) return;
-  if (on) inner.classList.add('chat-cache-verifying');
-  else inner.classList.remove('chat-cache-verifying');
-}
+/* ── _setCacheVerifying + _openConvMayHoldOrphanGhost:
+ *   extracted 2026-07-29 to core/conv_verify_visibility.js
+ *   (pt_3879f00e sub-part 2 slice 10). The two functions are pure
+ *   helpers on the cache-verify visibility path; the 11 call sites
+ *   below still resolve at CALL time via bundle-level window scope.
+ *   The bounded self-heal retry cluster remains here — it calls into
+ *   the still-unextracted _verifyActiveConvFromServer path. */
 
-/* An OPEN conversation held in memory may still carry a client-minted,
- * never-reconciled trailing empty-assistant placeholder (an orphaned "ghost"
- * bubble left behind when a task's stream dropped before its first token).
- * The backend GET path reconciles these away (routes/conversations.py →
- * lib/conversations/reconcile.py), but the warm-open early-return below would
- * skip that fetch entirely, so the ghost renders forever until a hard refresh.
- *
- * This predicate ONLY decides whether to re-verify against the server — it
- * NEVER decides the ghost is dead or splices it. When it returns true we fall
- * through to Phase 2 and adopt whatever the server says exists (if the server
- * still lists the placeholder, e.g. a live task it owns, it stays). That keeps
- * the server authoritative and avoids the banned frontend-lifecycle-inference
- * pattern (the client truncating history on its own verdict). A genuinely-live
- * stream is excluded via activeStreams so a legitimate "Preparing…" pre-first-
- * token bubble is never disturbed. */
-function _openConvMayHoldOrphanGhost(conv, convId) {
-  if (!conv || activeStreams.has(convId)) return false;
-  const msgs = conv.messages;
-  if (!msgs || msgs.length === 0) return false;
-  const tail = msgs[msgs.length - 1];
-  return !!tail && tail.role === 'assistant'
-    && !(tail.content && tail.content.length)
-    && !(tail.thinking && tail.thinking.length)
-    && !(tail.toolRounds && tail.toolRounds.length)
-    && !tail.finishReason
-    && !tail.error;
-}
 
 /* ★ Bounded self-heal for an ACTIVE conv whose Phase-2 verify never landed
  *   (timeout / 5xx / offline). Without it, a failed background sync left the

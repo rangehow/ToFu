@@ -187,6 +187,49 @@ fully contrast-compliant. Only a reader notices it says nothing.
 - **Fit by re-writing first, type scale second, layout third.** Shrinking the
   hero below its role size (§2) trades one visible defect for another.
 
+### Overlapping elements: the occlusion flag goes on the COVERED text
+
+`inspect` reports `Text is hidden beneath an opaque element.` whenever an
+opaque element lands on top of text. Its fix hint offers three ways out, and
+the third — *"mark intentional layering with `data-layout-allow-occlusion`"* —
+does not say WHICH element to mark. It is the covered **text**, or one of its
+ancestors. Marking the element that does the covering does nothing.
+
+Measured 2026-07-29, and the reason this section exists: a scene placed two
+52px circular `+` / `−` badges over a token-alignment diagram and put
+`data-layout-allow-occlusion` on the **badges**. The author had read the hint
+and acted on it, spent 5 repair rounds and 53k tokens, and the finding never
+cleared — because the audit tests `element.closest('[data-layout-allow-occlusion]')`
+where `element` is the text being covered. The badges exempted only their own
+`+` / `−` glyphs; the two characters they sat on top of (`好`, covered 15.4%,
+and `—`, covered 12.4%) were never exempt and kept failing.
+
+```html
+<!-- WRONG: the flag is on the coverer; the text underneath still fails -->
+<div class="badge" data-layout-allow-occlusion>+</div>
+<span>好</span>
+
+<!-- RIGHT: the flag is on (or above) the text that gets covered -->
+<div class="badge">+</div>
+<span data-layout-allow-occlusion>好</span>
+```
+
+Reach for the flag LAST. A single character clipped by a floating badge is
+usually a layout mistake, not an intentional effect, so prefer the other two
+exits the hint lists:
+
+- **give the text its own zone** — move the badge into a gutter, or into the
+  gap between rows, so nothing overlaps in the first place;
+- **raise the text's stacking order** above the covering element when the
+  overlap really is the design.
+
+One asymmetry worth knowing: a short label with no whitespace (a single glyph,
+`03 / 08`, `+`) is treated as an **atomic label** and flags at ANY coverage,
+while running prose only flags past ~15%. So a decorative badge grazing one
+character of a headline is a finding even though it looks trivial — that is
+deliberate, because a partly-covered single glyph is unreadable in a way a
+partly-covered paragraph is not.
+
 ## 5. Before you finish
 
 Run `composition_check`. It runs the same three gates the renderer runs

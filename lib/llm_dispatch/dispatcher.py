@@ -27,6 +27,7 @@ from .conv_affinity import (
     sticky_routing_enabled,
 )
 from .model_entry import resolve_request_ids, routing_group
+from .provider_face import DEFAULT_FACE, dual_face_hosts, resolve_face
 from .slot import Slot
 
 logger = get_logger(__name__)
@@ -49,6 +50,11 @@ class LLMDispatcher:
         # (provider_id, model) → (strikes, cooled_until) for shared-project
         # contention (see note_shared_contention).
         self._contention_strikes: dict = {}
+        # Model entries REFUSED at slot-build time because their wire face
+        # could not be resolved safely (e.g. a Claude model on a dual-face
+        # gateway whose provider declares no anthropic face). Surfaced to the
+        # UI — a refusal the user cannot see is its own silent failure.
+        self.face_refusals: list[dict] = []
 
     def initialize(self):
         """Build slot pool from env vars + benchmark data. Idempotent."""
@@ -269,6 +275,12 @@ class LLMDispatcher:
         """
         self._direct_models = set()
         config_alias_groups: list[set] = []
+        # Derived ONCE per build: gateway hosts known to offer an
+        # Anthropic-native face (read from the shipped templates). Passed
+        # explicitly into resolve_face so the per-model call is a pure
+        # function of already-computed state.
+        _dual_face_hosts = dual_face_hosts()
+        self.face_refusals = []
         from lib.llm_dispatch.discovery import normalize_base_url, should_bypass_proxy
         from lib.proxy import register_no_proxy_url
 
@@ -368,6 +380,30 @@ class LLMDispatcher:
                 # consumes it.
                 entry_group = routing_group(model_entry)
 
+                # ── Wire FACE for THIS model (account/face separation) ──
+                # base_url + protocol are per-MODEL, not per-provider: one
+                # gateway account can expose several wire faces (the Meituan
+                # gateway speaks OpenAI on /v1/openai/native and Anthropic on
+                # /v1/anthropic with the SAME keys). resolve_face owns the
+                # decision — including the fail-loud refusal that stops a
+                # Claude model from silently dispatching over a wire that
+                # drops thinking-block signatures. See provider_face.py.
+                face = resolve_face(provider, model_entry,
+                                    dual_face_hosts=_dual_face_hosts)
+                if not face.ok:
+                    logger.error('[Dispatch] Model %s in provider %s NOT '
+                                 'registered: %s', model_id, prov_id, face.error)
+                    self.face_refusals.append({
+                        'provider_id': prov_id,
+                        'model_id': model_id,
+                        'error': face.error,
+                    })
+                    continue
+                if face.forced:
+                    logger.warning('[Dispatch] Model %s in provider %s is '
+                                   'pinned to face %r, overriding the family '
+                                   'default', model_id, prov_id, face.face_name)
+
                 # ── Endpoint pool for THIS model (wire-id binding check) ──
                 # A probe reports what ``/v1/models`` lists, i.e. WIRE ids. The
                 # logical ``model_id`` may not be one of them, so an endpoint
@@ -376,12 +412,17 @@ class LLMDispatcher:
                 # entry on a bound local fleet. An empty pool means no probed
                 # endpoint serves this model → honest absence (no slots) beats
                 # guaranteed 404s.
-                if endpoint_binding:
-                    ep_pool = [u for u in (endpoint_urls or [base_url])
+                # A non-default face names exactly ONE URL, so it replaces the
+                # endpoint fan-out (which exists for local multi-endpoint
+                # fleets and is meaningless for a gateway's alternate face).
+                if face.face_name != DEFAULT_FACE:
+                    ep_pool = [face.base_url]
+                elif endpoint_binding:
+                    ep_pool = [u for u in (endpoint_urls or [face.base_url])
                                if not endpoint_binding.get(u)
                                or (entry_group & set(endpoint_binding[u]))]
                 else:
-                    ep_pool = endpoint_urls or [base_url]
+                    ep_pool = endpoint_urls or [face.base_url]
                 if not ep_pool:
                     logger.info('[Dispatch] Model %s skipped: no bound endpoint '
                                 'serves it in provider %s', model_id, prov_id)
@@ -495,7 +536,7 @@ class LLMDispatcher:
                                 provider_id=prov_id,
                                 extra_headers=dict(prov_extra_headers),
                                 thinking_format=prov_thinking_format,
-                                protocol=prov_protocol,
+                                protocol=face.protocol,
                                 oauth=prov_oauth,
                                 rpm_limit=slot_rpm,
                                 latency_ema=slot_lat,

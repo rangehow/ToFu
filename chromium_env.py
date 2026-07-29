@@ -75,6 +75,8 @@ __all__ = [
     'browsers_root',
     'chromium_binaries',
     'chromium_executable',
+    'is_headless_shell',
+    'headed_chromium_executable',
 ]
 
 #: Libs whose presence proves a directory really carries Chromium's GUI deps.
@@ -373,6 +375,42 @@ def chromium_executable(include_system=True):
     return cands[0] if cands else ''
 
 
+def is_headless_shell(path):
+    """True when ``path`` is a chrome-headless-shell build.
+
+    The shell has NO headed mode — it is a separate, smaller binary, not a
+    flag on the full build. Measured 2026-07-29: with only the shell
+    installed, ``chromium.launch(headless=False)`` fails with "Executable
+    doesn't exist at .../chromium-<rev>/chrome-linux64/chrome" plus
+    Playwright's "just installed or updated" banner — an error that sends the
+    reader off to reinstall something that is already correctly installed.
+
+    So callers that genuinely need a visible window must be able to ASK, and
+    degrade with a truthful message. Keyed on the binary's own name, which is
+    what distinguishes the two builds in every Playwright layout.
+    """
+    return 'headless-shell' in os.path.basename(path or '') or \
+           os.path.basename(path or '') == 'headless_shell'
+
+
+def headed_chromium_executable():
+    """A Chromium that can open a VISIBLE window, or ``''`` when none exists.
+
+    ``install.sh`` installs ``--only-shell`` on purpose (-60% download) because
+    almost every launch in this product is headless. That trade is correct, but
+    it means "a browser is installed" and "a browser that can show a window is
+    installed" are DIFFERENT questions, and a headed feature that asks the
+    first one reports itself available and then dies at launch.
+
+    Returns the first candidate that is not a headless shell (a full Playwright
+    build or a system-wide Chrome/Edge/Chromium).
+    """
+    for path in chromium_binaries():
+        if not is_headless_shell(path):
+            return path
+    return ''
+
+
 def describe_chromium_env(env_prefix=None):
     """Diagnose the Chromium runtime env WITHOUT mutating anything.
 
@@ -392,6 +430,7 @@ def describe_chromium_env(env_prefix=None):
     system_fc = os.path.isdir('/etc/fonts')
     binaries = chromium_binaries()
     executable = chromium_executable()
+    headed = headed_chromium_executable()
     issues = []
     if not executable:
         issues.append(
@@ -413,4 +452,5 @@ def describe_chromium_env(env_prefix=None):
             'font-ttf-dejavu-sans-mono')
     return {'lib_dirs': lib_dirs, 'fontconfig': conf_file,
             'system_fontconfig': system_fc, 'executable': executable,
-            'binaries': binaries, 'issues': issues}
+            'headed_executable': headed, 'binaries': binaries,
+            'issues': issues}

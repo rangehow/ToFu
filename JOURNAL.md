@@ -28,6 +28,25 @@
 - **清除后 opus-5 仍在出流:** 23:53 两个任务在 `sankuai_key_1` 上 R9/R11 正常轮换,自动模式接管无感。
 - **事件至此全链路闭环:** 诊断(三 key 死因各异)→ 解锁(手动开 key)→ 政策(429 永不禁,c8e0ff98 已在线)→ 显示(账户命名空间记账在线 + fold 待下次重启收敛)→ 卫生(覆写清回自动,key_2 自然停)。
 
+### 2026-07-29(续·守卫指控无辜代码) — 自主派单接自己开的票,而**票面处方只对一半**:剥注释后仍然红,因为守卫断言的**命题本身错了**——它禁止「任何提及」,而不变量禁止的是「写」(`pt_852527ce031e4f93` DONE;commit `eec0d0c5`,2 文件 +150/-15;**NEUTER×5 双向全咬**;相邻环 **89 全绿**;产品文件零改动)
+
+- **★ 票面(我自己上一轮开的)说「走 strip_comments 剥注释后再断言」即可。实测剥完注释仍然红:** `_reconcileStuckActiveTaskPins` 里有一行**活代码** `const _busy = conv._authoritativeActiveTaskIds;`,而守卫断言的是 `'_authoritativeActiveTaskIds' not in body`。
+- **★ 真正的错是命题选错,而那个读是必需的:** hard constraint #3 禁止的是「成为 server-owned state 的第二个**写者**」。`/api/v1/chat/active` 按设计隐藏 autopilot VU carrier,**不读** reducer 的 carrier-inclusive busy 集合就是 carrier-blind,会给后端仍在生成的 turn 盖 `interrupted`(d6e8bdb3 缺陷)。所以断言收窄到写(赋值/复合赋值/delete/add/clear),并**补一条互补断言钉住那个读不许消失**——否则静默恢复 carrier-blind 无人发现。**判据:「禁止提及 X」几乎永远不等于「禁止写 X」,差别恰好落在合法的读上;剥注释是必要不充分,红灯剥完还红通常说明命题错了。**
+- **★ 同一文件里第二个同源缺陷(票面只提了一句"宜改",实测两处都在漏):** 两处守卫用 `src[start:start+4000]` 取函数体。实测 `_reconcileStuckActiveTaskPins` 真实体 **2999B ⇒ 溢出 1001B** 卷进 `_reconcileIntervalMs`+`_crossDeviceReconcile`;`applyConvStateSnapshot` 真实体 **3391B ⇒ 溢出 609B**。
+
+  | 方向 | 后果 | 可见性 |
+  |---|---|---|
+  | 溢出 | 邻居的用法被算到本函数头上 | 红灯,但指错人 |
+  | **截断** | 函数长过窗口后**尾部不再被扫描** | **不可见**,守卫只是安静下来 |
+
+  已实现共享 `tests/_source_scan.js_function_body`:大括号配对 + 剥注释 + **中和字符串/模板字面量**(否则字面量里的 `{` 会让计数失衡)+ **括号不平衡或函数缺失一律报错,拒绝返回部分体**(对部分体做「token 不在其中」的断言是空转)。放进共享模块而非本文件,正是为了不成为第四份手写拷贝。
+- **★ 顺手清掉本文件自己的第二份实现:** 该文件顶部有一对手写 `_strip_comments` 正则——这正是 charter #24 docstring 里 incident 3 的形状。已改为委派共享实现(保留薄别名以免改动全部调用点)。
+- **NEUTER×5,严格双向(charter #24 的要求就是这个):** ①注释里写一个假的写 → **保持绿**(注释不能违反);②真加一个写 → **红**(不能被"没有"满足);③删掉必需的读 → **红**;④把写放进**下一个函数** → **保持绿**(直接证明溢出已修);⑤括号不平衡 / 函数不存在 → 提取器**报错**而非返回部分体。
+- **改共享模块的自我约束:** 我的 diff 对 `tests/_source_scan.py` **零删除**(纯增量),并用 HEAD 版与工作树版**逐字节对比** `strip_comments`(js/shell/python × 4 个真实文件)与 `playwright_install_invocations` 的输出,确认既有行为未变——改共享模块必须先证明没动别人的地面。
+- **验收:** pytest 5/5 + 独立 runner(`python3 tests/...`)双跑绿;相邻环 89 全绿(p6_verdict / chat_active_consumer_census / chromium_binary_resolution / install_uv_fastpath / dispatch_stream / rev_clock_domain / staleness_selfheal)。**`cross_tab_sync.js` 与 `conv_state_reducer.js` 逐字节未动——这是守卫缺陷不是产品缺陷。**
+- **★ 剩余同族债务按 owner 惯例单独开票,不塞进本批:** 全库还有 **20 个测试文件各带一份手写 `_strip_comments`**、**5 处仍用固定字节切片**(800/1800/600/800)。已开 `pt_b95c6d396edd467d`,并在票面注明两件实测事实:①各拷贝语义**并不等价**(有的用 `re.S` 剥行内块注释,共享版刻意只剥整行),迁移前必须逐文件实测差异、不可假定等价;②优先改「负断言 + 固定切片」同时具备的那 4 处,它们同时有指控邻居与漏扫尾部两个失效方向。
+- **过程:** 提交撞上兄弟持有的 `index.lock`,沿用上一批的带重试原子 stage+commit(每轮重新计数断言,必须恰好 2 个文件)。
+
 ### 2026-07-29(续·面命名空间折叠) — 「key_stats 按面记账、UI 按账户渲染」定案:**合并早已修好源头,真正没修的是磁盘上那份孤儿状态**;共享 HEAD 三方纠缠(兄弟 quota 批一半搭过我的车、我的折叠冒烟提前写真文件)全部按 #26/#15 处理(`pt_782133699c6d4ac1`;commit `3e80e413`,5 文件;新套件 **12/12 失败先行**,**NEUTER×4 各咬各的**(9/1/1/9);相邻环 **83/83**)
 
 - **★ 先证伪票面的一半:** 票面说「面熔断对 UI 不可见」要修 UI;实测**账户/面合并(547827e1)落地后的下一次重启,记账就自然回到账户命名空间**(slot.provider_id=账户 id),UI 无需任何改动。真正的剩余缺口是**磁盘上已有的面命名空间条目**:按日熔断(重启即丢,要白烧一个 402/模型才重新学会)与**跨天持久的覆写**(今夜手动开启的两行,重启后变死状态——不生效也不显示)。

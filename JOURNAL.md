@@ -1,5 +1,16 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·logo 试戴开关) — 两次「批准后又推翻」的根因不是设计而是**验收方式**:把决定权从「看稿拍板」改成**在岗试戴的运行时开关**;顺带补上主 logo 从未有过的 cache-bust(owner 拍板;commit `4308a2df`,10 文件;新套件 **6/6 含 NEUTER×2 各咬各的方向**,相邻环 **35/35**;纯前端,**刷新即生效**)
+
+- **★ 根因判据(owner 的定性,我实测坐实):** A(+40% 版)与 A2 都是**先批准、上线后在真实欢迎屏被推翻**——A2 甚至过了 in-situ 无头截图闸。截图过目与「每天看着它工作」是两种暴露强度,所以**品牌资产的终审只能是在岗试用**,交稿-拍板这个回路本身有缺陷。落点因此不是再交一版稿,而是**把决定权做成开关**:候选是可穿戴皮肤,默认永远是原版,用户自己戴半天再决定,任何新设计都不必赌一次全量上线。
+- **cache-bust 是前提,不是附赠:** 图标响应头 `max-age=86400`,而主 logo 三处引用(favicon/欢迎屏/侧栏)**全是裸路径**——这正是昨天 A2 回滚后 owner 仍看到 A2 一整天、以为「怎么还没回滚」的机制。编排面图标早有 `?v=` 机制(`_ORCH_ICON_VER`),主 logo 反而没有。新模块 `core/brand_logo.js` 持有 `LOGO_VER` 作为唯一真源。
+- **落点(单一咽喉,六处引用全部改走它):** `logoUrl()` / `brandLogoImgAttrs(size)` 解析「当前皮肤 + 版本号」;`applyLogoSkin()` 重指所有 `img[data-brand-logo]` **与 favicon**;`setLogoSkin()` 落 localStorage 并即时应用。消费点:index.html 三处静态标记 + `ui/chat_render.js` / `main/main_conv_lifecycle.js` 两个欢迎屏渲染 + `settings/core_panel.js` 移动端入口 + `main.js` boot 应用。设置 UI 在「常规」页,选项**从注册表渲染而非手抄**(加一枚候选 = 注册表加一行)。
+- **两条不变量按 owner 要求钉死:** ①默认必须是原版——无存储值、**以及存了一个已被删除的皮肤 id**,都必须解析回 `tofu-welcome.svg`(后者是真实风险:候选下架后 localStorage 里的旧 id 会变成死路径);②候选文件缺失必须回落不能白屏——`onBrandLogoError` 换回默认 URL 且幂等(防错误循环)。NEUTER×2 各咬各的方向:摘掉注册表校验 → 未知 id 被原样采纳;摘掉回落赋值 → 坏图留在原地(白屏)。
+- **★ 实测差点误判成产品缺陷(记下来):** 真浏览器里换上候选后 `naturalWidth=0`、截图上两个状态看起来一样,我一度认为切换没真生效。**补测原版图片同样 TIMEOUT** —— 是本机无头环境静态资源加载慢的既有现象(`curl` 同 URL 稳定 200/2218B),与皮肤机制无关。**判据:判定「新功能坏了」之前,必须让对照组(原有功能)跑同一条探针**;否则环境噪声会被记成产品缺陷。切换逻辑本身实测成立:`skin/url/img src/favicon` 四者随切换同步改变。
+- **★ 共享 HEAD 三连(本批全程被兄弟写覆盖三次,全部由守卫/断言抓出,零静默):** ①`js_bundler.py` 的注册行被覆盖 → `bundle_manifest_parity` 报 `orphaned: core/brand_logo.js`(**守卫抓的是真事故不是笔误**);②`settings/core_panel.js` 我的改动被回退 → 提交前 grep 复核发现;③`chat_render.js` / `main_conv_lifecycle.js` 两处渲染改动被覆盖丢失 → **计数断言 `staged=8 ≠ 12` 当场 abort**(这正是上一批事故后落的硬纪律第一次真拦住东西)。另:`js_bundler.py` 与 `index.html` 的我方改动被兄弟连带提交进 HEAD(反向卷带),内容核对完整正确,不再为归属花提交。
+- **相邻套件一处红是被我有意反转的前提:** `test_frontend_mobile_client_entry` 断言 `tofu-welcome.svg` 字面量,而该处已改走 helper。重锚到「必须带 `data-brand-logo`(即经过共享 helper)」——比原断言更强:手写路径会同时丢掉 cache-bust 与皮肤,新断言两者都覆盖。
+- **验收边界(诚实分账):** ①纯前端,**刷新即生效,无需重启**;但运行中的服务器缓存着旧 bundle,新模块要等 bundle 重建或走 dev-fallback 才进页面(实测服务的 HTML 已带 `?v=20260729a`,函数需 bundle 更新);②候选目前只挂 A2 一枚,**它是被试戴的候选不是终稿**;③`_gen/logo-redesign/` 素材仍未提交,家族像素稿留盘待命。
+
 ### 2026-07-29(续·测试互毒) — owner 抓出:我上一批的守卫**自己就是我刚修完的那个缺陷**——快照/还原对把陈旧事实盖回去,毒死同进程后续每个测试(CI 真断;commit `e740887d`,4 文件;**结构守卫连错三版,每版错法不同,全部由 NEUTER 而非评审抓出**;验收单次调用含 `pack_serving` **111 passed / 0 failed**,干净 committed worktree 复验同数)
 
 - **★ 最该记住的一条:我犯了自己刚修完的同型错误。** `4b3398bf`/`05b55fbe` 修的正是「快照/还原对静默重置陈旧事实」;而我为它写的守卫 `test_i18n_pack_boot_floor.py` 里,恰好用 save-mutate-restore 去管 `js_bundler._pack_filenames` / `_bundle_includes_i18n`。

@@ -1,5 +1,15 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·三候选入表) — 试戴位从「一枚我已否过的稿」变成**三条真正分岔的路**;像素这一枚**跟生成器搏斗三轮后诚实改为手写**(owner 指令;commit `50db04ed`,9 文件;守卫 **7/7**(新增「注册皮肤的文件必须真存在」),五格布局实测 **2 行/最小宽 94px/无溢出**)
+
+- **owner 的判据(记下来):** 开关做完不等于目标达成——「让我戴一个我已经否过的东西,等于零进展」。机制层验收通过后,下一步是**填充候选而不是打磨开关**。
+- **三条路,方向真分岔(不是三个微调版):** ①**像素精修**——保留现款像素气质与手作感,只修 VTracer 的脏边/歪棱,造型语言不动;②**极简**——减法赌小尺寸辨识度,平色块+两眼+一条小嘴,砍掉渐变/高光/腮红/内部棱线,「只在 64px 才读得到的细节一律不要」;③**手绘感**(我自己的判断)——六轮否决里每一版几何重绘都得到同一句「干净但冷」,而 owner 反复回到的原版,其魅力恰恰是精确性会杀死的东西,所以这枚**故意把不完美放回去**:角不等长、描边按受光面/背光面分粗细、五官左右不对称、腮红溢出一点。赌的是**工艺的温度而非工艺的精度**。
+- **★ 像素这一枚:三轮改坐标全部失败,最后诚实改路子(过程自纠):** 复用 `gen_candidate_c.py` 的平面方程放五官,第一版脸贴左棱;按「列窗口」重排→仍偏;按实测 interior(x 4..14/每列 11 行)再排→**还是偏,且腮红穿到轮廓外**。判据浮现:**平面方程对「画立方体」是对的工具,对「摆一张脸」是错的工具**——「居中」在这里是对可见菱形的视觉判断,不是列集合的算术中点。故新起 `gen_pixel_refined.py`:立方体仍解析生成(阶梯规整正是这枚的卖点),**五官改为手写像素图**,并加一道 `cells.get(...)=='left'` 的落点校验,保证任何一笔都画不到轮廓或别的面上。
+- **五格排布(owner 预警的坑,实测确认会塌):** 主题选择器是 `repeat(3,1fr)` 固定三列——**主题永远是 3 个,而皮肤表会长**,5 项塞进 3 列会挤扁。给 `#logoSkinPicker` 自己的 `auto-fit + minmax(88px,1fr)`,不动主题选择器。420px 面板实测:5 格 → **2 行,最小宽 94px,scrollWidth 无溢出**。
+- **新增守卫一条(本轮最可能静默坏的地方):** 「注册表里每一枚皮肤的文件必须真实存在且非空」。缺了它,一个写错路径的候选会静默走 onerror 回落成原版——用户点了没反应,看起来像开关坏了,而不是像资产丢了。
+- **实测五枚全绿:** URL 两两不同(5/5 distinct),每一枚都同步应用到 `img[data-brand-logo]` **与 favicon**(applied_everywhere=True ×5)。
+- **验收边界:** ①候选资产**这次进了提交**(必须进,否则界面上点不到),但 `default` 仍是原版、且注册表 `default` 永远在首位;②纯前端,新模块进页面仍需 bundle 重建;③三枚都是**待试戴的候选,不是终稿**——由 owner 在岗试用后定夺。
+
 ### 2026-07-29(续·章程并发) — owner 顶回我的处方并给出反证:**append 在这个存储形态下会吞掉兄弟的决策且返回 ok=True**;我的「不需要锁」结论来自**串行探针**这个假形态(commits `6b0715fa` 后端 + `587e1d86` 前端;并发套件 **8/8 失败在前**,charter+attention **99 passed**,前端三套 **38 passed**,干净 committed 态 **85/85**;**共享 HEAD 上本批被兄弟抹掉一次,全量重做**)
 
 - **★ owner 证伪我上一轮的处方(我当时要摘掉 `expected_version`):** 我用**串行**探针(兄弟提交完 → 我再提交)看到 `[D0, SIBLING, MINE]` 三条都在,据此断言「append 天然幂等、锁是多余的」。owner 顶回来后我改用**交错**形态实测:在 `commit_charter` 的读写窗口里插入一次兄弟 append → 最终 `['D0','MINE']`,**兄弟那条被吞,而我的返回值是 `{'ok': True}`**。**判据:并发性质必须用交错探针验,串行探针在坏代码上也会过——它根本进不了窗口。** 这条已写进新套件的文件头,防止后人把交错「简化」回串行。

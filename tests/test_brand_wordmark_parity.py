@@ -198,8 +198,16 @@ def _stamp(theme: str) -> _Elem:
                  ancestors=[{'tofu-brand'}, {'welcome'}])
 
 
-# Properties that define the LETTERFORM. font-size is deliberately excluded:
-# 15/18px vs 24/42px is the legitimate difference between the two surfaces.
+# Properties that define the LETTERFORM.
+#
+# font-size is excluded from THIS tuple for ONE reason only: the two SURFACES
+# legitimately differ (sidebar 15/18px vs welcome 24/42px). That exemption is
+# about the surface axis and must NOT be read as exempting font-size generally —
+# across the THREE THEMES of a single surface the scale must be identical, and
+# that is asserted separately in section 6 (BRAND-AREA SCALE). An earlier
+# revision of this comment said only "font-size is deliberately excluded", and
+# under that wording the brand area shipped at 100px/42px on tofu but 64px/24px
+# on dark+light for weeks with every test green.
 _LETTERFORM_PROPS = ('font-family', 'font-weight', 'letter-spacing')
 
 # The per-letter class pairs (sidebar class, welcome class).
@@ -615,6 +623,207 @@ def test_nc_scoping_the_ground_shadow_to_tofu_regresses_other_themes(css_text):
         assert content != '""', (
             f'[{theme}] NC did not bite: the ground shadow survived being scoped '
             f'to tofu — this suite cannot detect the mascot floating again.')
+
+
+# ─────────────────── 6. BRAND-AREA SCALE (the third axis) ───────────────────
+# Form, colour, seal, shadow and motion were unified across themes over four
+# rounds; SCALE was in none of them, because `_LETTERFORM_PROPS` excludes
+# font-size for a SURFACE-axis reason and that exemption silently covered the
+# THEME axis too. Measured before this section existed: mascot 100px on tofu vs
+# 64px on dark/light, title 42px vs 24px, icon gap 24px vs 6px — i.e. the brand
+# moment only existed in one theme, and no assertion in either brand suite
+# mentioned mascotPx or the title font-size at all.
+#
+# The mobile ladder lives inside @media blocks, so these tests must NOT use
+# `_desktop()` (it strips them). `_cascade_at()` keeps the blocks whose condition
+# applies at a given viewport width and inlines their bodies in source order —
+# that is what makes the ladder observable, and it is also why the ladder had to
+# move to the end of styles.css (an earlier draft wrote 84px next to the desktop
+# scale, where the pre-existing global `.welcome-icon{52px}` — same specificity,
+# later in source — silently won; the browser resolved 52px).
+
+_BREAKPOINTS = (
+    ('desktop', 1280),
+    ('tablet', 700),    # <=768 ladder
+    ('phone', 420),     # <=480 ladder
+)
+
+
+def _media_applies(condition: str, width: int) -> bool:
+    """Whether a @media condition holds at *width* px, portrait, fine pointer.
+
+    Deliberately narrow: only the width features this suite's ladder uses. Any
+    condition mentioning a feature we do not model is treated as NOT applying,
+    so an unmodelled block can never silently satisfy a scale assertion.
+    """
+    cond = condition.lower()
+    if 'orientation:landscape' in cond or 'max-height' in cond:
+        return False          # portrait phone/desktop assumption
+    if 'prefers-reduced-motion' in cond or 'hover' in cond or 'pointer' in cond:
+        return False
+    if 'print' in cond:
+        return False
+    ok = None
+    for m in re.finditer(r'max-width\s*:\s*(\d+)px', cond):
+        ok = (width <= int(m.group(1))) if ok is None else (ok and width <= int(m.group(1)))
+    for m in re.finditer(r'min-width\s*:\s*(\d+)px', cond):
+        ok = (width >= int(m.group(1))) if ok is None else (ok and width >= int(m.group(1)))
+    return bool(ok)
+
+
+def _cascade_at(css_text: str, width: int) -> str:
+    """Flatten the stylesheet for a viewport *width*, preserving source order.
+
+    Blocks whose condition applies are inlined at their original position (so
+    later rules still win); blocks that do not apply are dropped.
+    """
+    text = re.sub(r'/\*.*?\*/', '', css_text, flags=re.DOTALL)
+    out = []
+    i = 0
+    n = len(text)
+    while i < n:
+        m = re.compile(r'@media([^{]*)\{').search(text, i)
+        if not m:
+            out.append(text[i:])
+            break
+        out.append(text[i:m.start()])
+        depth = 0
+        j = text.find('{', m.start())
+        body_start = j + 1
+        while j < n:
+            if text[j] == '{':
+                depth += 1
+            elif text[j] == '}':
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        if _media_applies(m.group(1), width):
+            out.append(text[body_start:j])
+        i = j + 1
+    return re.sub(r'\s*>\s*', ' ', ''.join(out))
+
+
+def _welcome_icon(theme: str) -> _Elem:
+    return _Elem('div', {'welcome-icon'}, theme=theme, ancestors=[{'welcome'}])
+
+
+# The scale properties, and which element carries each.
+_SCALE_PROBES = (
+    ('mascot width', _welcome_icon, 'width'),
+    ('mascot height', _welcome_icon, 'height'),
+    ('mascot gap', _welcome_icon, 'margin-bottom'),
+    ('title font-size', _welcome_wm, 'font-size'),
+    ('seal font-size', _stamp, 'font-size'),
+)
+
+
+@pytest.mark.parametrize('label,width', _BREAKPOINTS)
+def test_brand_area_scale_is_identical_across_themes(css_text, label, width):
+    """The brand area must be the SAME SIZE in every theme, at every breakpoint.
+
+    This is the axis `_LETTERFORM_PROPS` legitimately does not cover. Two
+    surfaces may differ in size; three themes of ONE surface may not.
+    """
+    for name, factory, prop in _SCALE_PROBES:
+        css = _seal_css(css_text) if factory is _stamp else _cascade_at(css_text, width)
+        if factory is _stamp:
+            # The seal needs the :not(.tofu-brand) exclusion modelled, and its
+            # size is a clamp() of the title em — resolve it on the flattened
+            # cascade with that exclusion applied.
+            css = ''.join(
+                c for c in re.split(r'(?<=\})', _cascade_at(css_text, width))
+                if ':not(.tofu-brand)' not in c.split('{', 1)[0])
+        values = {t: _resolve(css, factory(t), prop) for t in _THEMES}
+        assert values[_THEMES[0]] is not None, (
+            f'[{label}] {name} resolves to nothing at all — the probe is not '
+            f'reading a real rule.')
+        assert len(set(values.values())) == 1, (
+            f'[{label} @{width}px] brand-area {name} DIVERGED across themes: '
+            f'{values}. Scale is part of the brand form and belongs in the '
+            f'theme-agnostic base layer; a `[data-theme=...]`-only size override '
+            f'makes the brand moment exist in one theme only.')
+
+
+@pytest.mark.parametrize('label,width', _BREAKPOINTS)
+def test_the_mobile_ladder_actually_reaches_the_brand_mascot(css_text, label, width):
+    """The mascot must keep a BRAND size at every breakpoint, not fall back to
+    the generic icon size.
+
+    The generic mobile rules (52px @768, 40px landscape) predate the brand area
+    and still serve non-brand callers. If the brand ladder is ever written
+    earlier in source than they are, it becomes dead code and the mascot silently
+    collapses to the generic size — measured, that is exactly what happened to a
+    first draft of this ladder.
+    """
+    css = _cascade_at(css_text, width)
+    w = _resolve(css, _welcome_icon('tofu'), 'width')
+    assert w, f'[{label}] mascot width resolves to nothing'
+    px = float(re.match(r'([\d.]+)px', w).group(1))
+    floor = 100.0 if width > 768 else (84.0 if width > 480 else 68.0)
+    assert px == floor, (
+        f'[{label} @{width}px] mascot resolved {w} but the brand ladder calls '
+        f'for {floor:.0f}px. A generic rule later in source is winning — the '
+        f'brand ladder must sit after them in styles.css.')
+
+
+@pytest.mark.parametrize('theme', ('dark', 'light'))
+def test_nc_scoping_the_scale_to_tofu_regresses_the_other_themes(css_text, theme):
+    """NEUTER (in-memory): re-scope the base mascot size to `[data-theme="tofu"]`
+    — the shape that shipped — so dark/light must fall back to the generic 64px.
+
+    tofu keeps its size (it still matches), which is why this is parametrized
+    over the two victims only: an aggregate assertion would let the asymmetry
+    hide.
+    """
+    anchor = '\n.welcome-icon{\n  width:100px;height:100px;'
+    assert css_text.count(anchor) == 1, (
+        f'NC anchor not unique/found: count={css_text.count(anchor)}')
+    scoped = css_text.replace(
+        anchor, '\n[data-theme="tofu"] .welcome-icon{\n  width:100px;height:100px;', 1)
+    css = _cascade_at(scoped, 1280)
+    tofu_w = _resolve(css, _welcome_icon('tofu'), 'width')
+    victim_w = _resolve(css, _welcome_icon(theme), 'width')
+    assert tofu_w == '100px', (
+        f'NC setup wrong: tofu should keep 100px, got {tofu_w!r}')
+    assert victim_w != tofu_w, (
+        f'[{theme}] NC did not bite: with the scale scoped to tofu the mascot '
+        f'still resolved {victim_w!r} — this suite cannot detect the brand scale '
+        f'going tofu-only again.')
+
+
+def test_nc_the_title_scale_is_load_bearing(css_text):
+    """NEUTER (in-memory): scope the 42px title to tofu → dark/light drop back to
+    the generic `.welcome h2` 24px."""
+    anchor = '\n.welcome h2.tofu-brand{font-size:42px}'
+    assert css_text.count(anchor) == 1, (
+        f'NC anchor not unique/found: count={css_text.count(anchor)}')
+    scoped = css_text.replace(
+        anchor, '\n[data-theme="tofu"] .welcome h2.tofu-brand{font-size:42px}', 1)
+    css = _cascade_at(scoped, 1280)
+    sizes = {t: _resolve(css, _welcome_wm(t), 'font-size') for t in _THEMES}
+    assert len(set(sizes.values())) > 1, (
+        f'NC did not bite: title sizes still agree across themes ({sizes}) — the '
+        f'base-layer 42px is not what makes them agree.')
+
+
+def test_the_breakpoint_flattener_actually_selects_blocks(css_text):
+    """Guard the guard: `_cascade_at` must really include/exclude media blocks.
+
+    A flattener that dropped everything, or kept everything, would make the scale
+    assertions above pass vacuously (all themes equal because nothing resolves,
+    or because the same desktop rule always wins).
+    """
+    desktop = _cascade_at(css_text, 1280)
+    phone = _cascade_at(css_text, 420)
+    assert len(phone) > len(desktop), (
+        'the phone cascade is not larger than the desktop one — max-width blocks '
+        'are not being included')
+    d = _resolve(desktop, _welcome_icon('tofu'), 'width')
+    p = _resolve(phone, _welcome_icon('tofu'), 'width')
+    assert d != p, (
+        f'mascot width is {d} at 1280px and {p} at 420px — the flattener is not '
+        f'switching breakpoints, so the ladder assertions are vacuous.')
 
 
 # ─────────────────────────── 5. markup contract ─────────────────────────────

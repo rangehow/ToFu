@@ -275,14 +275,21 @@ def test_nc_reverting_landscape_to_500_only_regresses():
     original = _css()
     new_header = '@media(orientation:landscape) and (max-height:600px) and (max-width:900px){'
     old_header = '@media(max-height:500px) and (max-width:900px){'
-    # The same media CONDITION legitimately heads TWO blocks (the tofu
-    # welcome-brand breakpoint ladder ~:11262 and the landscape-phone layout
-    # block ~:18209) — their payloads are disjoint, so the CSS is correct and
-    # a bare-header count==1 can never hold. Scope the revert to the LAYOUT
-    # block via its first payload line; a replace(1) on the bare header would
-    # hit the tofu-brand block and the NC would revert the wrong thing.
+    # The same media CONDITION legitimately heads SEVERAL blocks (the tofu
+    # welcome-brand breakpoint ladder, the brand-area mobile scale ladder near
+    # the end of the file, and the landscape-phone layout block) — their payloads
+    # are disjoint, so the CSS is correct. Scope the revert to the LAYOUT block
+    # via its first payload line; a replace(1) on the bare header would hit one
+    # of the brand blocks and the NC would revert the wrong thing.
     layout_anchor = new_header + '\n  .topbar{'
     assert original.count(layout_anchor) == 1, 'landscape layout block not unique/found'
+    # DERIVED, not hardcoded: assert the revert consumes EXACTLY ONE occurrence.
+    # An earlier revision asserted `count == 1` outright, which turned into a
+    # false red the moment a legitimate third block shared this condition.
+    headers_before = original.count(new_header)
+    assert headers_before >= 2, (
+        f'expected the layout block plus at least one brand block to share this '
+        f'condition, found {headers_before}')
     try:
         with open(CSS, 'w', encoding='utf-8') as f:
             f.write(original.replace(layout_anchor, old_header + '\n  .topbar{', 1))
@@ -291,10 +298,12 @@ def test_nc_reverting_landscape_to_500_only_regresses():
             'NC setup failed: the LAYOUT block still anchors on orientation:landscape')
         assert old_header + '\n  .topbar{' in reverted, (
             'NC setup failed: the LAYOUT block was not reverted to 500-only')
-        # The tofu-brand block shares the media condition — it must remain
-        # untouched (the NC reverts ONLY the layout block).
-        assert reverted.count(new_header) == 1, (
-            'NC clobbered the tofu-brand occurrence — the anchor was not scoped')
+        # The brand blocks share the media condition — they must remain untouched
+        # (the NC reverts ONLY the layout block), i.e. exactly one fewer header.
+        assert reverted.count(new_header) == headers_before - 1, (
+            f'NC clobbered a brand-block occurrence — the anchor was not scoped: '
+            f'{headers_before} headers before, {reverted.count(new_header)} after '
+            f'(expected {headers_before - 1})')
     finally:
         with open(CSS, 'w', encoding='utf-8') as f:
             f.write(original)

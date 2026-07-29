@@ -1,6 +1,28 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-29(续·意图滞留补推) — 「opus 5 对话没头没尾结束」定案:**补推机制上线至今真实触发 0/4325,判据 A 有两个独立盲区**;而本案**修完仍不会被救回**,属另一个物种(owner 报障 `ms5i5ydigs9j9w`;commits `b409e720`(两个洞)+ `0524746c`(可见化);守卫 **9 + 14**,**NEUTER×7 全咬**,干净 committed worktree **43/43** 与 **67/67**;epic `pt_5303eb3c7afb44a8`)
+
+- **★ 先说结论里最反直觉的一条:这不是流被截断,是模型自己停下了。** app.log 铁证:`[R28] finish_reason=stop content=784chars tool_calls=0` + `SSE stream finished normally — 689 events sent in 854.8s`;`raw_sse_anomaly.log` 对该 trace **零记录**,7 个 SSE 检测器全沉默;`max_tool_rounds = 999_999_999`(R28 手里**仍然有工具**)。我中途一度怀疑「思考通道被切走」(记录里 `thinking:"I"` 只有一个字),**被日志证伪**——那是流式过程中的陈旧检查点残留,R28 的 `thinking=0chars` 本来就是空的。
+- **owner 的观感有数据背书:** `docs/INTENT_STALL_MEASUREMENT.md` 7 天全量(256 会话 / 962 条 assistant)测得 8 个真滞留里 **7 个是 opus-5(2.39%)**,4.8 只有 1 例(0.38%)。
+- **★ 而机制上线至今真实注入 0/4325(结构判定,不是子串扫描)。** 我第一版用 `LIKE '%TOOL CALL DID NOT RUN%'` 扫库报「触发过 2 次」,**owner 当场证伪:那两条是我们自己这场对话在讨论这个字符串**。改为结构判定(`role=='user'` 且正文以 `[SYSTEM: TOOL CALL DID NOT RUN]` **开头**,并排除讨论该关键词的元对话)后:真实注入 **0**。**判据:以关键词扫全库时,判定必须锚 role + 位置,且必须排除讨论该关键词的元对话——否则分析文本会把自己算成证据。这个错我犯在测量里,而它正是我上一轮警告过不要犯在实现里的同一个错。**
+- **★ 数据源同样差点搞错:本机 `TOFU_DB_BACKEND=postgres`,权威库是 PG 的 `tofu`(4,325 会话);`data/chatui.db` 是 5 月停更的 SQLite 回退副本(63 会话),连 `ms5i5ydigs9j9w` 本身都不在里面。** 判据已记:任何全库扫描先确认打到 PG。
+- **判据 A 的两个盲区(实测,非推断):**
+  - **洞①「错误当返回值写进正文」结构性失明。** `read_files(6171→6162)` 行号写反返回 `'Error: requested line range ...'` 作为**普通正文**,轮次仍被 `_finalize_tool_round` 无条件 stamp `status='done'`、badge=`'21961L'`、`results[0]` 无 `type`/`notRun`/`exitCode` ⇒ `_round_failed` 返回 **False**。
+  - **洞②选择器在并行批次内部抽签。** 同一 `llmRound` 是一次并行批次,原 `_last_tool_round` 对全部轮次 `sorted()[-1]`,**混合批次下失败能否被看见取决于谁排最后**。
+- **落点(洞① 在工具返回处结构化打标,不在下游猜):** `lib/tools/meta.build_project_tool_meta` 是唯一咽喉,新增 `_stamp_execution_error` 按**执行层自己生成的前缀**打 `type='error'`。该词汇是执行器异常路径**已在用**、`_round_failed` **已认**的,故零新消费者、探测器一行未改。
+  - **★ 判据锚在位置而非包含关系。** 「正文含 `Error:`」不可用:`read_files` 读 `logs/error.log`、`grep_search` 命中该词,正文全是 `Error:` 却都成功了。区分点是**位置**——成功结果必带执行层表头(`File: <p> (lines N-M)` / `grep "<pat>" — N matches:` / `$ <cmd>`),故只有失败才能以错误前缀开头。`run_command` 显式豁免(它有 `exitCode`/`notRun` 更强契约,且 stdout 合法可以任意开头)。
+- **★ 我自己造了两个缺陷,都是守卫抓的不是评审抓的:**
+  ①**第一版选择器是死代码**——从最新往回扫、遇成功即 `return None`,与「只看最后一轮」**完全等价**,NEUTER-2 首发**不咬**才暴露。真正的病根比票面更精确:批次内抽签,故改为**批次感知**(最后一个 `llmRound` 内任一失败即未被覆盖)。
+  ②**第一版守卫用手搓 `results` 夹具**,绕过了我刚改的 `build_project_tool_meta`,**会绿着放行**。已改为全部经真实生产路径构造。**这正是 owner 反复强调的那一类,我在同一批里踩了。**
+- **可见化三条契约(`0524746c`):** ①`[END_TURN: …]` 在 `_finalize` 唯一咽喉剥离(持久化行/done 事件/committedMessage/所有重载路径都读这一个值,按渲染点各剥必漏);**剥离比解析宽且必须宽**——`parse_end_turn_reason` 只信封闭集(防编造理由静默压掉补推),剥离器剥任何该形状标记(否则 `[END_TURN: banana]` 把笔误原样发布);②`SYNTHETIC_INBOX_MARKERS` 加 `_stallNudge` 成第四条车道——补推那行是 `role='user'` 但**无真人作者**,四条重建路径自动覆盖,用户重载后不会看到自己没发过的气泡;③phase 文案从硬编码中文改 `detailKey` + zh/en。
+- **NEUTER×7 全咬:** 摘错误标记→3 红、选择器退回只看最后一轮→1 红、标记改子串→3 红(两条误报样本各自开火)、剥离器空转→6 红、剥离器继承封闭集→1 红、摘 `_stallNudge`→1 红、文案退回中文→2 红。
+- **★ 测量否决了扩大判据(不开第二张票):** 权威库 12,365 个「纯文本 stop + 有工具轮」回合里,「读了但从未写」结构命中 **3,882(31.4% / 写入轮的 39.1%)**,校准样本 `ms5i5ydigs9j9w` 确实命中(未兑现文件正是 `static/styles.css`)。**但各模型率 22–43% 无数量级差异** ⇒ 它测的是「读文件而不改」这一普遍行为,不是滞留缺陷。**顺带纠正我自己一处 charter #17 同族错误:我先按绝对数说「opus-4.8 命中最多所以判据无效」,owner 指出除以各自分母后 kimi-k3 42.9% > opus-4.8 37.5%,结论方向相反——分模型对比一律先除分母。**
+- **★ 副产品(留给未来的「收工契约」票当正面证据):`[END_TURN` 已被证实可用**——`ms4b67gmthqc17` 发出过 `[END_TURN: done]`、`ms4nznuw0o0nyn` 发出过 `[END_TURN: awaiting_human]`,且这两个会话**从未被补推教过**。即模型在无人教的情况下自发用对了契约。未采纳,重开条件是拿到滞留的正样本集。
+- **诚实边界(不含糊):`ms5i5ydigs9j9w` 本身仍不会被补推救回。** 它的错误轮 R35 之后 **R36 重读成功**,紧挨终轮的工具活动是成功的;三种选择器(最后一轮 / 未被成功覆盖的最近失败 / 批次感知)**全部不满足判据 A**。它属「**成功之后的滞留**」——现有四判据结构上不管这个物种。本批交付的是「补推从永不触发变为会真的触发」,不是「本案被修好」。
+- **另一条边界:** `tests/test_inbox_inject_sidecar_wire_neutral.py` 2 条 NEUTER 守卫红,已 A/B 定责非本批(把 `_types.py` 换回 HEAD 版复现同样 2 红,且该文件 untracked、HEAD 上不存在)——属兄弟在飞 WIP:它 monkeypatch `_types` 上的 `is_synthetic_inbox_round`,而消费方现经 facade 解析该符号。
+- **验收:** 纯后端 + 一个 i18n 键,**运行中进程不带**,需重启才对新会话生效;i18n.js 含兄弟 `pet.*` hunk,按 charter #15 走 `git diff > patch` → 按 hunk 过滤 → `git apply --cached`(只写 index 不碰工作树),兄弟改动原样留在工作树未提交。
+
 ### 2026-07-29(续·发布并发) — owner 抓出**我自己改触发时放大的风险**:没有 concurrency group;而实测把他偏好的 `cancel-in-progress: true` **反向否决**——那个值会用新成因复现原始故障(commit `5f7075ac`,2 文件 +175;守卫 **25 → 28**,**NEUTER×4 各咬一条**,相邻环 **93/93**,干净 worktree **28/28**)
 
 - **★ owner 的定性成立,而且这是我改动的直接后果不是既有缺陷:** 旧触发 `refs/tags/v*` 一天最多跑一两次;换成 `push: branches:[main]` 后,**进入「VERSION 未发布」窗口的每一次 push 都拉起整套四平台构建**。实测本仓自 2026-07-28 起 **339 个提交、相邻间隔中位数 165s**,八个会话共享 HEAD ⇒ 窗口内多次 push 是常态。

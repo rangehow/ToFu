@@ -589,7 +589,10 @@ html[data-rail] .folder-quickadd{display:none}
 .debug-msg-block.open .debug-msg-body{display:block}
 .debug-msg-body pre{margin:0;padding:6px 8px;white-space:pre-wrap;word-break:break-all;font-size:10.5px;line-height:1.4;color:#ccc}
 .debug-msg-body pre .debug-key{color:#82aaff}.debug-msg-body pre .debug-str{color:#c3e88d}.debug-msg-body pre .debug-num{color:#f78c6c}.debug-msg-body pre .debug-null{color:#89ddff;font-style:italic}
-.debug-msg-summary{color:var(--text-tertiary);font-weight:400;margin-left:auto;font-size:10px}
+/* --text-secondary, NOT --text-tertiary: measured 3.55:1 (dark) / 3.05:1
+   (light) on the panel ground, i.e. below 4.5:1. This line carries the byte
+   and token counts — the numbers the panel is opened to read. */
+.debug-msg-summary{color:var(--text-secondary);font-weight:400;margin-left:auto;font-size:10px}
 .debug-tool-calls{color:#ffd54f;font-size:10px;padding:2px 8px 4px}
 .debug-compact-badge{display:inline-flex;align-items:center;gap:2px;padding:1px 6px;font-size:9.5px;font-weight:600;line-height:1.4;color:#ffb74d;background:rgba(255,183,77,0.12);border:1px solid rgba(255,183,77,0.35);border-radius:3px;letter-spacing:0.2px;cursor:help}
 .debug-loading{padding:16px 8px;color:var(--text-tertiary);font-size:11px;font-style:italic;text-align:center;opacity:0.8}
@@ -679,11 +682,11 @@ html[data-rail] .folder-quickadd{display:none}
 .ptool-row-ctl{display:inline-flex;align-items:center;gap:6px;margin-left:auto;flex-shrink:0}
 .ptool-row-ctl:empty{display:none}
 
-/* Debug entry per tool row — ONE control opening a panel with request /
-   post-tool-state tabs (they are two views of one round, not two
-   destinations). Always visible: a hover-only control is a control the
-   user never discovers. Quiet by default so it does not compete with
-   the tool content, full strength on hover/focus. */
+/* Debug entry per tool row — ONE control opening ONE view: the message state
+   right after that round's tools ran (a superset of the request that produced
+   them). Always visible: a hover-only control is a control the user never
+   discovers. Quiet by default so it does not compete with the tool content,
+   full strength on hover/focus. */
 .ri-tool-anchor{display:inline-flex;align-items:center;gap:3px;padding:1px 6px;font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:600;line-height:1.5;color:var(--text-tertiary);background:none;border:1px solid var(--border);border-radius:3px;cursor:pointer;flex-shrink:0;opacity:.6;transition:opacity .15s ease,color .15s ease,border-color .15s ease}
 .ri-tool-anchor:hover,.ri-tool-anchor:focus-visible{opacity:1;color:var(--accent);border-color:var(--accent)}
 .ri-tool-anchor svg{display:block}
@@ -692,21 +695,32 @@ html[data-rail] .folder-quickadd{display:none}
    right-aligned strip UNDER the panel — a real block in normal flow. */
 .ri-tool-anchor-row{display:flex;justify-content:flex-end;margin:2px 10px 4px}
 
-/* ── Tool-row debug panel (request | post-tool state tabs) ─────────────
+/* ── Tool-row debug panel (ONE view: the post-tool result state) ────────
    Mounted after a [data-prn] slot by openToolDebugPanel; renders through
    the shared debug renderer (renderDebugBlocksInto), so .debug-msg-* rules
-   apply unchanged inside .ri-state-body. Single instance, transient. */
+   apply unchanged inside .ri-state-body. Single instance, transient.
+
+   Type scale (owner, 2026-07-29: "font size a bit too small, contrast a bit
+   too low"): this panel is READ, not glanced at — it carries JSON payloads.
+   Head 11px and body monospace 11.5px/1.55, deliberately larger than the
+   10–10.5px the drawer's dense ROW LIST uses: a list is scanned for a match,
+   this is text parsed character by character. */
 .ri-state-panel{margin:4px 0 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-secondary,rgba(30,30,40,0.6));overflow:hidden}
-.ri-state-panel-head{display:flex;align-items:center;gap:6px;padding:5px 8px;border-bottom:1px solid var(--border);background:rgba(128,128,160,0.06)}
-.ri-panel-tabs{display:inline-flex;gap:2px;flex-shrink:0}
-.ri-panel-tab{padding:2px 9px;font-size:10px;font-weight:600;color:var(--text-tertiary);background:none;border:1px solid var(--border);border-radius:3px;cursor:pointer;transition:color .15s ease,border-color .15s ease,background .15s ease}
-.ri-panel-tab:hover{color:var(--text-secondary);border-color:var(--text-tertiary)}
-.ri-panel-tab.ri-sel{color:var(--accent);border-color:var(--accent);background:rgba(110,86,207,0.12)}
-.ri-state-panel-title{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:600;color:var(--text-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ri-state-panel-close{margin-left:auto;display:inline-flex;align-items:center;padding:2px;border-radius:3px;color:var(--text-tertiary);cursor:pointer}
+.ri-state-panel-head{display:flex;align-items:center;gap:8px;padding:6px 9px;border-bottom:1px solid var(--border);background:rgba(128,128,160,0.06)}
+/* Which axis the single view came from — the post-tool mirror, or the
+   producing request as a fallback for rounds that emitted no mirror (swarm
+   sub-agents). Named on screen so a fallback is never read as the mirror. */
+.ri-state-panel-kind{padding:1px 7px;font-size:10px;font-weight:600;line-height:1.6;color:var(--accent);background:var(--accent-subtle);border:1px solid var(--accent);border-radius:3px;flex-shrink:0;cursor:help}
+.ri-state-panel-kind:empty{display:none}
+.ri-state-panel-kind.ri-kind-fallback{color:var(--text-secondary);background:rgba(128,128,160,0.10);border-color:var(--border-light)}
+.ri-state-panel-title{font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:600;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ri-state-panel-close{margin-left:auto;display:inline-flex;align-items:center;padding:2px;border-radius:3px;color:var(--text-secondary);cursor:pointer}
 .ri-state-panel-close:hover{color:var(--accent);background:rgba(128,128,160,0.12)}
-.ri-state-body{max-height:420px;overflow-y:auto;padding:6px 8px}
-.ri-state-body .debug-msg-block{margin-bottom:4px}
+.ri-state-body{max-height:420px;overflow-y:auto;padding:7px 9px}
+.ri-state-body .debug-msg-block{margin-bottom:5px}
+.ri-state-body .debug-msg-header{font-size:11.5px;padding:5px 9px}
+.ri-state-body .debug-msg-summary{font-size:10.5px}
+.ri-state-body .debug-msg-body pre{font-size:11.5px;line-height:1.55}
 body.ri-open .chat-container{margin-right:min(780px,94vw);transition:margin-right .22s ease}
 @media (max-width:900px){
   body.ri-open .chat-container{margin-right:0}
@@ -6281,10 +6295,18 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 /* Model-fallback banner inside the streaming bubble — painted the moment the
    backend switches models (llm_fallback model_fallback SSE event). Amber warn
    variant of .proactive-banner; NOT a toast. */
-.fallback-banner{background:linear-gradient(135deg,rgba(245,158,11,0.10),rgba(245,158,11,0.04));border:1px solid rgba(245,158,11,0.35);border-radius:8px;padding:8px 12px;margin-bottom:8px;font-size:12px;display:flex;align-items:center;gap:8px}
-.fallback-banner .fb-icon{color:#f59e0b;display:inline-flex;align-items:center;flex:none}
-.fallback-banner .fb-text{color:var(--text-secondary);font-size:11px}
+.fallback-banner{background:linear-gradient(135deg,rgba(245,158,11,0.10),rgba(245,158,11,0.04));border:1px solid rgba(245,158,11,0.35);border-radius:8px;padding:8px 12px;margin-bottom:8px;font-size:12px;display:flex;align-items:flex-start;gap:8px}
+.fallback-banner .fb-icon{color:#f59e0b;display:inline-flex;align-items:center;flex:none;margin-top:1px}
+.fallback-banner .fb-text{color:var(--text-secondary);font-size:11px;min-width:0}
 .fallback-banner .fb-models{color:#f59e0b;font-weight:700}
+/* Visible cause row — the reason used to live ONLY in the title attribute,
+   which is unreachable on touch and easy to miss on desktop. Wraps instead of
+   truncating with ellipsis so a long upstream message stays selectable. */
+.fallback-banner .fb-reason{display:block;margin-top:3px;line-height:1.45;overflow-wrap:anywhere}
+.fallback-banner .fb-reason-label{color:var(--text-tertiary)}
+.fallback-banner .fb-reason-label::after{content:':';margin-right:4px}
+.fallback-banner .fb-kind{color:#f59e0b;font-weight:600;margin-right:5px}
+.fallback-banner .fb-detail{color:var(--text-secondary);font-family:var(--font-mono,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:10.5px}
 /* ── Network-latency signal indicator ──
    Lives INSIDE .topbar-tools, so it mirrors the .topbar-tool-btn shell
    (height/radius/border/typography) for a consistent control group; only the
@@ -7566,6 +7588,44 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   color: var(--text-secondary);
   font-family: inherit;
   font-size: 11px;
+}
+/* ★ Scannable QR recovered from terminal output (lib/qr.py → meta.qrImages).
+ * Deliberately OUTSIDE .ptool-cmd-output: that pane is `pre-wrap` +
+ * `break-all` (which is exactly what destroys block-art QR rows) and starts
+ * collapsed. A code the user must point a phone at has to be visible without
+ * expanding anything, and rendered as an image so no text wrapping applies.
+ * White plate + padding is not decoration — it supplies the quiet zone
+ * scanners require, and keeps the code readable under a dark theme where a
+ * transparent PNG would invert to unscannable. */
+.ptool-qr-strip {
+  margin: 6px 0 2px;
+}
+.ptool-qr-label {
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  margin-bottom: 4px;
+}
+.ptool-qr-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ptool-qr-tile {
+  margin: 0;
+  padding: 8px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  line-height: 0;
+}
+.ptool-qr-tile img {
+  width: 148px;
+  height: 148px;
+  display: block;
+  cursor: zoom-in;
+  /* Never smooth a QR: interpolated module edges are what make a scaled
+   * code undecodable. */
+  image-rendering: pixelated;
 }
 /* Live (streaming) output while a run_command is in-flight.
  * Always visible (no collapse), capped height with auto-scroll so the
@@ -10558,42 +10618,43 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   [data-theme="tofu"] .tofu-brand:hover>span{animation:none}
 }
 
-/* ── Sidebar wordmark — 粗几何无衬线;「o」是一块微歪的小豆腐,与吉祥物呼应;悬停挨个弹抖 ── */
-[data-theme="tofu"] .sidebar-header h1{font-family:var(--sans-body);font-size:18px;font-weight:800;letter-spacing:-0.015em}
-[data-theme="tofu"] .sidebar-brand{letter-spacing:-0.01em}
-[data-theme="tofu"] .sidebar-brand-t,
-[data-theme="tofu"] .sidebar-brand-o,
-[data-theme="tofu"] .sidebar-brand-f,
-[data-theme="tofu"] .sidebar-brand-u{
-  display:inline-block;transform-origin:50% 85%
+
+/* ══ TOFU wordmark — SINGLE SOURCE OF LETTERFORM ══════════════════════════
+   侧栏(18px)与欢迎屏(42px)是同一个字标的两个字号,不是两个设计。字身字体、
+   字重、字距、色彩四项在此一次性供给,两处共同消费;各自的 block 只允许再声明
+   字号与自己的悬停编排。这条合并规则就是「两处不再漂移」的机制本身——
+   2026-07-29 之前它们各写一套,结果侧栏停在旧工艺(::after 渐变方块 o)、欢迎屏
+   已走 owner 方案 A(真字母 o),同一品牌出现两套字标。守卫:
+   tests/test_brand_wordmark_parity.py 钉死「两处解析出的字形/色/字距必须相等」。
+   色彩纪律:字身走 --brand-ink(深陶土),比墨黑暖一度、与吉祥物奶油-琥珀同族;
+   不用主题 accent #C1794B(会与链接/按钮撞色,显不出品牌)。 */
+[data-theme="tofu"] .sidebar-brand,
+[data-theme="tofu"] .tofu-brand{
+  font-family:var(--sans-body);
+  font-weight:800;
+  letter-spacing:-0.03em;
+  text-transform:none
 }
-[data-theme="tofu"] .sidebar-brand-t,
-[data-theme="tofu"] .sidebar-brand-f,
-[data-theme="tofu"] .sidebar-brand-u{
+[data-theme="tofu"] .sidebar-brand>span,
+[data-theme="tofu"] .tofu-brand>span{
+  display:inline-block;
   background:none;
-  color:var(--brand-ink);-webkit-text-fill-color:currentColor
+  color:var(--brand-ink);-webkit-text-fill-color:currentColor;
+  transform:rotate(var(--brand-tilt,0deg));
+  transform-origin:50% 88%
 }
-/* 「o」字形留在 DOM(可选中/可复制),视觉由 ::after 的豆腐块接管 */
-[data-theme="tofu"] .sidebar-brand-o{
-  position:relative;background:none;
-  color:transparent;-webkit-text-fill-color:transparent
-}
-[data-theme="tofu"] .sidebar-brand-o::after{
-  content:"";position:absolute;left:50%;top:50%;
-  width:.58em;height:.58em;
-  transform:translate(-50%,-58%) rotate(-7deg);
-  border-radius:28%;
-  background:linear-gradient(148deg,#F9EDD6 10%,#EED3A5 52%,#E0AE6C 100%);
-  box-shadow:
-    inset 0 0 0 1px rgba(146,104,52,.32),
-    inset 1px 1px 2px rgba(255,252,244,.75),
-    inset -1px -2px 3px rgba(178,124,62,.38),
-    0 1px 2px rgba(92,72,44,.22);
-  transition:transform .3s cubic-bezier(.34,1.56,.64,1)
-}
-[data-theme="tofu"] .sidebar-header h1:hover .sidebar-brand-o::after{
-  transform:translate(-50%,-58%) rotate(9deg) scale(1.08)
-}
+/* 2026-07-28 owner 拍板方案 A:字标里不放扁平方块 o——欢迎屏上方已有具象立方体
+   吉祥物,再放一只是重复元素打架;o 是真字母,可选中可复制。此处显式清掉旧工艺的
+   ::after,让任何遗留/复制来的方块 o 规则都无法复活。 */
+[data-theme="tofu"] .sidebar-brand>span::after,
+[data-theme="tofu"] .tofu-brand>span::after{content:none}
+/* ── Sidebar wordmark — 与欢迎屏 .tofu-brand 同一字标,只差字号(18px vs 42px)。
+   2026-07-29:侧栏此前停留在旧工艺(o 由 ::after 渐变方块接管、字距 -0.01em),而欢迎屏
+   已按 owner 2026-07-28 方案 A 改为真字母 o + 字距 -0.03em ⇒ 同一品牌两套字标。
+   方案 A 的理由在两处同样成立(画面里已有具象立方体吉祥物,字标里再放一只扁平方块是
+   重复元素打架),故此处补齐漏改面而非另立设计。字身/字距/色彩三项由下方
+   `.sidebar-brand-*, .tofu-brand-*` 合并规则单一供给,禁止在此重复声明。 ── */
+[data-theme="tofu"] .sidebar-header h1{font-family:var(--sans-body);font-size:18px;font-weight:800}
 [data-theme="tofu"] .sidebar-header h1:hover .sidebar-brand-t{animation:tofuWobble .6s cubic-bezier(.34,1.56,.64,1)}
 [data-theme="tofu"] .sidebar-header h1:hover .sidebar-brand-o{animation:tofuWobble .6s cubic-bezier(.34,1.56,.64,1);animation-delay:.06s}
 [data-theme="tofu"] .sidebar-header h1:hover .sidebar-brand-f{animation:tofuWobble .6s cubic-bezier(.34,1.56,.64,1);animation-delay:.12s}
@@ -11120,9 +11181,9 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 }
 [data-theme="tofu"] .welcome-icon:hover img{transform:scale(1.06) rotate(-3deg)}
 /* Legacy SVG fallback */
-/* (retired) steam puffs */
+/* (retired) steam puffs — ::after stays retired; ::before is now the ground
+   shadow (see the brand-area block below), so it must NOT be blanked here. */
 [data-theme="tofu"] .welcome-icon::after{content:none;display:none}
-[data-theme="tofu"] .welcome-icon::before{content:none}
 
 /* ── Welcome text ── */
 [data-theme="tofu"] .welcome h2{
@@ -11162,48 +11223,53 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   border-color:var(--accent-subtle)
 }
 
-/* ── TOFU brand wordmark — 粗几何无衬线字身(--sans-body 800),与圆胖吉祥物同族;
-   「o」字形留在 DOM 但视觉由一块奶油→琥珀渐变、微歪 -7° 的小豆腐块接管,全标只有
-   这一个暖色口音;悬停字母挨个弹抖、豆腐块再转一下。色彩纪律:字身走 --brand-ink(深陶土),
-   比墨黑暖一度、与豆腐块同族;不用主题 accent #C1794B(会与链接/按钮撞色,显不出品牌) ── */
+/* ── TOFU brand wordmark(欢迎屏 42px 面)— 字身字体/字重/字距/色彩/字母倾角全部由
+   上方 `.sidebar-brand, .tofu-brand` 合并规则供给(单一字形真源);此处只声明这一面
+   独有的东西:横向编排(inline-flex + baseline)、外边距、悬停波浪的时序。
+   禁止在此重复声明 font-family / font-weight / letter-spacing / color —— 那正是
+   2026-07-29 之前侧栏与欢迎屏漂移成两套字标的原因。 ── */
 [data-theme="tofu"] .tofu-brand{
-  font-family:var(--sans-body);
   /* font-size 由上方 [data-theme="tofu"] .welcome h2(42px,特异性 0,2,1)决定,此处不再重复声明 */
-  font-weight:800;letter-spacing:-0.03em;text-transform:none;
   display:inline-flex;align-items:baseline;margin-bottom:10px;cursor:default
 }
-[data-theme="tofu"] .tofu-brand .tofu-brand-t,
-[data-theme="tofu"] .tofu-brand .tofu-brand-o1,
-[data-theme="tofu"] .tofu-brand .tofu-brand-f,
-[data-theme="tofu"] .tofu-brand .tofu-brand-u{
-  display:inline-block;transform:rotate(var(--brand-tilt,0deg));transform-origin:50% 88%
-}
-/* 字身深陶土 var(--brand-ink) — 比墨黑暖一度,与吉祥物奶油-琥珀豆腐块同族;
-   不用主题 accent #C1794B(会与链接/按钮撞色,显不出品牌) */
-[data-theme="tofu"] .tofu-brand .tofu-brand-t,
-[data-theme="tofu"] .tofu-brand .tofu-brand-o1,
-[data-theme="tofu"] .tofu-brand .tofu-brand-f,
-[data-theme="tofu"] .tofu-brand .tofu-brand-u{
-  background:none;
-  color:var(--brand-ink);-webkit-text-fill-color:currentColor
-}
-/* 2026-07-28 owner 拍板字标方案 A:摘掉 ::after 方块 o——欢迎屏上方已有具象
-   立方体吉祥物,字标里再放一只扁平方块是重复元素打架;o 回归真字母,
-   悬停 tofuWobble 抖动保留(动画打在 span 上,不依赖 ::after)。 */
 [data-theme="tofu"] .tofu-brand:hover .tofu-brand-t{animation:tofuWobble .72s cubic-bezier(.34,1.56,.64,1)}
 [data-theme="tofu"] .tofu-brand:hover .tofu-brand-o1{animation:tofuWobble .72s cubic-bezier(.34,1.56,.64,1);animation-delay:.07s}
 [data-theme="tofu"] .tofu-brand:hover .tofu-brand-f{animation:tofuWobble .72s cubic-bezier(.34,1.56,.64,1);animation-delay:.14s}
 [data-theme="tofu"] .tofu-brand:hover .tofu-brand-u{animation:tofuWobble .72s cubic-bezier(.34,1.56,.64,1);animation-delay:.21s}
+/* ── 品牌落款印 ——「豆腐」从飘在右侧的稀疏小字(letter-spacing .34em、opacity .9,
+   在 42px 主标旁读作漏排的说明文字)改为一枚微斜陶土印章:中文渊源与「奶油纸底 +
+   编辑气质」的主题一致,且给品牌区第二个视觉落点,不必新增任何图形资产。
+   三个数字是实拍定的,不是估的(static/icons/_gen/wordmark-preview/a3.png):
+   ① font-size 用 clamp 而非纯 em —— 纯 .30em 在移动 20px 主标下只有 6px,中文两字
+      糊成一团;纯 px(12.5)反过来在 20px 主标旁几乎与主标同高、比例失衡。
+      clamp(10.5px, .30em, 13px) 两端都实拍过:桌面取 12.6px、移动取 10.5px 下限。
+   ② padding 左右不等(.64em 左 / .50em 右)—— letter-spacing 会在末字「腐」后
+      多留一份字距,左右等距会看起来右边更空。
+   ③ margin-left .52em —— .36em 实拍贴住了 u 的右侧。
+   几何全部用 em,所以随 clamp 后的字号一起缩放,只有字号本身有下限。 ── */
 [data-theme="tofu"] .welcome h2.tofu-brand small{
-  font-family:var(--sans-body);font-size:12px;font-weight:600;
+  font-family:var(--sans-body);
+  font-size:clamp(10.5px,.30em,13px);
+  font-weight:700;
+  letter-spacing:.14em;line-height:1;
   /* 必须显式声明 fill —— 低优先级的 .welcome h2 small(0,2,2)把
      -webkit-text-fill-color 设成 #9C9178 且该属性可继承,不显式声明会被它穿透 */
-  color:var(--text-tertiary);-webkit-text-fill-color:var(--text-tertiary);
-  background:none;box-shadow:none;
-  letter-spacing:.34em;line-height:1;
-  padding:0;margin-left:14px;
-  border-radius:0;vertical-align:middle;opacity:.9;
-  transform:translateY(-1px)
+  color:#FCF8EE;-webkit-text-fill-color:#FCF8EE;
+  background:linear-gradient(150deg,#C8814F 0%,#A55F31 100%);
+  padding:.42em .50em .42em .64em;
+  border-radius:.52em;
+  margin-left:.52em;
+  vertical-align:middle;opacity:1;
+  transform:translateY(-.62em) rotate(-3.2deg);
+  box-shadow:0 .06em .16em rgba(92,72,44,.30),
+             inset 0 .06em 0 rgba(255,247,232,.30)
+}
+/* 吉祥物接地投影 —— 此前它悬在纸面上方(有 drop-shadow 但没有落影),读作贴图而非
+   放在纸上的物件;一片暖椭圆把它「托」住。纯装饰,不参与布局。 */
+[data-theme="tofu"] .welcome-icon::before{
+  content:"";position:absolute;left:50%;bottom:1px;transform:translateX(-50%);
+  width:72%;height:11px;border-radius:50%;display:block;
+  background:radial-gradient(ellipse at 50% 50%,rgba(140,100,52,.24),rgba(140,100,52,0) 70%)
 }
 
 /* ── Mobile breakpoints: tofu 主标恢复全局移动意图 — 42px 是桌面值(上方 0,2,1

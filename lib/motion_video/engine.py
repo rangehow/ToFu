@@ -267,6 +267,37 @@ def _reusable_manifest(audio_dir: str, scenes: list) -> dict | None:
     return m
 
 
+def _composition_contract_findings(html: str, scene_dir: str) -> list[str]:
+    """Contract violations that make an on-disk composition STALE, not merely
+    old — the things a re-run must not silently inherit.
+
+    ``_existing_composition`` used to ask only two questions: is this the
+    fallback card, and does the duration still match. Both are about the
+    composition's IDENTITY, neither about whether it still meets the quality
+    contract this pipeline enforces TODAY. So a composition authored before a
+    contract existed was adopted verbatim for ever, and the telemetry recorded
+    it as ``authored`` with no complaint.
+
+    Measured 2026-07-29 on the target film: five of six scenes were authored on
+    07-28, before the CJK font channel existed. They ship no ``@font-face``, so
+    their Chinese is drawn by whatever face the render host happens to own —
+    while the one scene re-authored today ships its own. One film, two
+    typographies, and ``job.json`` called it 6/6 clean.
+
+    Kept deliberately NARROW: only defects that (a) a re-author would actually
+    fix and (b) are invisible to the duration/marker checks. Cosmetic drift is
+    not a reason to re-spend an agent loop.
+    """
+    findings: list[str] = []
+    try:
+        from lib.motion_video._fonts import cjk_fallback_findings
+        findings += list(cjk_fallback_findings(html, scene_dir))
+    except Exception as e:
+        logger.warning('[MotionVideo] contract check (fonts) crashed: %s', e,
+                       exc_info=True)
+    return findings
+
+
 def _existing_composition(index_path: str, duration: float,
                           scene: dict | None = None, *,
                           width: int = 1080, height: int = 1440,
@@ -317,6 +348,17 @@ def _existing_composition(index_path: str, duration: float,
             return None
     except ValueError as _e:
         logger.debug('existing composition: unparseable (%s)', _e)
+        return None
+    # Identity is settled; now the CONTRACT. A composition authored before a
+    # quality contract existed is stale even though it is neither a fallback
+    # card nor mistimed — adopting it ships a film whose scenes disagree with
+    # each other (measured: 5 of 6 scenes with no CJK face beside one that has
+    # it, reported as 6/6 clean).
+    stale = _composition_contract_findings(html, os.path.dirname(index_path))
+    if stale:
+        logger.info('[MotionVideo] %s predates the current quality contract '
+                    '(%s) — re-authoring instead of adopting it',
+                    index_path, stale[0][:120])
         return None
     return html
 
@@ -583,6 +625,7 @@ def run_motion_task(task: dict) -> None:
             except Exception as e:
                 logger.warning('[MotionVideo] scene %s asset floor crashed: %s',
                                sc['id'], e, exc_info=True)
+            gate_findings += _composition_contract_findings(html, scene_dir)
             if gate_findings:
                 scene_gate_issues[sc['id']] = gate_findings
                 _emit(task, {'type': 'scene_gate', 'scene_id': sc['id'],

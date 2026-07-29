@@ -492,6 +492,15 @@ def _full_gate(html: str, scene_dir: str, *, abort_event=None,
         except Exception as e:
             logger.warning('[SceneAuthor] asset floor crashed: %s', e,
                            exc_info=True)
+        # Same channel again for CJK typography: a scene that ships no face of
+        # its own lets the render HOST pick, so the film is inconsistent by
+        # construction and the same file renders differently elsewhere.
+        try:
+            from lib.motion_video._fonts import cjk_fallback_findings
+            fill += list(cjk_fallback_findings(html, scene_dir))
+        except Exception as e:
+            logger.warning('[SceneAuthor] cjk fallback check crashed: %s', e,
+                           exc_info=True)
     try:
         from lib.motion_video._render import check_project, is_infra_category
         with open(os.path.join(scene_dir, 'index.html'), 'w',

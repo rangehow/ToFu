@@ -32,7 +32,9 @@ logger = get_logger(__name__)
 
 __all__ = ['CJK_SANS_FAMILY', 'ensure_cjk_sans', 'font_face_css',
            'declared_font_families', 'undeclared_font_families',
-           'installed_cjk_families', 'has_installed_cjk_sans']
+           'installed_cjk_families', 'has_installed_cjk_sans',
+           'has_cjk_text', 'self_supplied_cjk_families',
+           'cjk_fallback_findings']
 
 #: The family name a composition uses for Chinese text. Deliberately OUR OWN
 #: name rather than 'Noto Sans SC': the face is delivered by a scene-local
@@ -171,9 +173,17 @@ def _compile():
     if _FACE_FAMILY_RE is None:
         import re
         _FACE_FAMILY_RE = re.compile(
-            r'@font-face\s*\{[^}]*?font-family\s*:\s*([^;}]+)', re.IGNORECASE)
+            r'@font-face\s*\{[^}]*?font-family\s*:\s*([^;}"\']*(?:'
+            r'"[^"]*"|\'[^\']*\')?[^;}"\']*)', re.IGNORECASE)
+        # The value stops at ; } " ' or > — NOT just ; and }. Measured
+        # 2026-07-29: an inline `style="font-family: Inter, sans-serif"` with
+        # no trailing semicolon let `[^;}]+` run past the closing quote and
+        # swallow the rest of the document, so the whole tail was reported as
+        # one bogus "family" (`sans-serif">扩散语言模型</h1></div><script>…`).
+        # An attribute is a perfectly ordinary way to set a font, so the
+        # scanner has to terminate on the attribute delimiter too.
         _USE_FAMILY_RE = re.compile(
-            r'(?<!-)\bfont-family\s*:\s*([^;}]+)', re.IGNORECASE)
+            r'(?<!-)\bfont-family\s*:\s*([^;}"\'>]+)', re.IGNORECASE)
 
 
 def _split_families(blob: str) -> list[str]:
@@ -234,3 +244,79 @@ def undeclared_font_families(html: str) -> list[str]:
             if fam not in bad:
                 bad.append(fam)
     return bad
+
+
+#: Any CJK ideograph. Used to decide whether a composition even HAS Chinese
+#: text to worry about.
+_CJK_TEXT_RE = None
+
+
+def has_cjk_text(html: str) -> bool:
+    """True when the composition draws CJK ideographs.
+
+    Judged on the VISIBLE text only (script/style bodies never reach the
+    frame), so a Chinese comment or an identifier cannot make a Latin-only
+    composition look like it needs a Chinese face.
+    """
+    global _CJK_TEXT_RE
+    if _CJK_TEXT_RE is None:
+        import re as _re
+        _CJK_TEXT_RE = _re.compile(r'[\u4e00-\u9fff]')
+    from lib.motion_video._gates import visible_text
+    return any(_CJK_TEXT_RE.search(s) for s in visible_text(html or ''))
+
+
+def self_supplied_cjk_families(html: str) -> set[str]:
+    """Families the document declares via ``@font-face`` AND actually ships.
+
+    "Declared" is not enough: an ``@font-face`` whose ``src`` points at a file
+    that is not in the scene renders nothing, so the family is a promise the
+    document cannot keep. This returns only the families whose declaration is
+    backed by a reference — the caller pairs it with the asset-ref check that
+    proves the file exists.
+    """
+    return {f for f in declared_font_families(html) if f}
+
+
+def cjk_fallback_findings(html: str, scene_dir: str = '') -> list[str]:
+    """Findings when a CJK composition leans on the HOST's fallback face.
+
+    **What this is NOT** (measured 2026-07-29, correcting a plausible but
+    wrong reading of ``fc-match``): it is NOT "the glyphs are missing".
+    ``fc-match "Inter,system-ui,sans-serif:lang=zh"`` answers ``DejaVu Sans``,
+    which has no CJK coverage — but that query models the wrong thing. Chrome
+    resolves fallback PER GLYPH, not per pattern, so it finds the host's CJK
+    face for Chinese codepoints regardless of the family list. Measured in real
+    headless Chrome on a scene with no ``@font-face``: the string 「扩散语言模型」
+    renders 384 px wide with 6,744 ink pixels, and a deliberately BOGUS family
+    name produces a byte-identical raster. The Chinese is drawn, and it is
+    legible.
+
+    **What it IS**: the composition has no say in WHICH face draws its
+    Chinese. Whatever the host happens to have wins — on this host a single
+    ``Noto Serif CJK SC``. So a film mixing scenes that ship
+    :data:`CJK_SANS_FAMILY` with scenes that do not is typographically
+    inconsistent BY CONSTRUCTION, and every un-shipped scene silently inherits
+    whatever the next host provides. That is a reproducibility defect as much
+    as an aesthetic one: the same composition renders differently on two hosts.
+
+    Advisory, never a rejection: the zero-LLM template ships no face either, so
+    rejecting would degrade the scene into a card with the same defect — the
+    trap the fill gate and the asset floor both document.
+    """
+    if not has_cjk_text(html):
+        return []
+    declared = self_supplied_cjk_families(html)
+    if declared:
+        # A declared face still has to EXIST; verify_asset_refs owns that
+        # check, so a broken src is reported there rather than twice here.
+        return []
+    return [
+        f'this scene draws Chinese text but ships no font of its own, so the '
+        f'face is chosen by whatever the RENDER HOST happens to have '
+        f'(here: a serif). The glyphs do render — this is not a missing-glyph '
+        f'bug — but the composition has no say in its own typography and the '
+        f'same file renders differently on another host. Declare the staged '
+        f'CJK face with an @font-face and set it on your text: '
+        f"font-family: '{CJK_SANS_FAMILY}', Inter, sans-serif."]
+

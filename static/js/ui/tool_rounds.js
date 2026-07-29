@@ -2247,6 +2247,33 @@ function _renderSearchingRow(round, ctx) {
        </div>`;
 }
 
+// ★ Scannable QR recovered from terminal output (meta.qrImages, attached by
+//   lib/qr.py via the shared finalize chokepoint). A QR printed as block art
+//   is unscannable in the output <pre> — that pane is `white-space: pre-wrap`
+//   + `word-break: break-all`, which re-wraps the module rows and destroys
+//   the grid — so the backend reconstructs a real bitmap and we surface it
+//   here, ABOVE the collapsed output, because the whole point is that the
+//   user must be able to scan it without hunting for a toggle.
+function _renderQrStrip(meta) {
+  const qrs = Array.isArray(meta.qrImages)
+    ? meta.qrImages.filter((d) => d && d.uri) : [];
+  if (!qrs.length) return "";
+  const tiles = qrs.map((d) => {
+    const cap = escapeHtml(d.filename || "qr.png");
+    return `<figure class="ptool-qr-tile">
+             <img src="${escapeHtml(d.uri)}" alt="${cap}" loading="lazy"
+                  onclick="event.stopPropagation();_openImageFullscreen(this.src)" />
+           </figure>`;
+  }).join("");
+  const label = qrs.length > 1
+    ? `${qrs.length} ${escapeHtml(t("project.qrScanMulti", "scannable QR codes"))}`
+    : escapeHtml(t("project.qrScan", "Scannable QR code"));
+  return `<div class="ptool-qr-strip">
+           <div class="ptool-qr-label">${label}</div>
+           <div class="ptool-qr-grid">${tiles}</div>
+         </div>`;
+}
+
 // ★ run_command / code_exec: render as inline terminal block with collapsible output
 function _renderCmdDoneBlock(round, ctx) {
   const { svg, meta, cmdRootPill } = ctx;
@@ -2282,6 +2309,7 @@ function _renderCmdDoneBlock(round, ctx) {
   // For a not-run command the reason IS the message — surface it inline
   // (not hidden behind a collapse toggle) so the user sees why immediately.
   const reason = notRun ? (meta.reason || output || "") : "";
+  const qrStripHtml = _renderQrStrip(meta);
   let outputHtml = "";
   if (notRun && reason) {
     outputHtml = `<div class="ptool-cmd-reason">${escapeHtml(reason)}</div>`;
@@ -2300,7 +2328,7 @@ function _renderCmdDoneBlock(round, ctx) {
            ${_rowRightControls(round)}
          </div>
          <pre class="ptool-cmd-code"><code>$ ${cmd}</code></pre>
-         ${outputHtml}
+         ${qrStripHtml}${outputHtml}
        </div>`;
 }
 
@@ -3496,13 +3524,16 @@ function _renderToolSlot(r, allRounds) {
  * the request snapshot's `roundNum` is 1-based — so this row was PRODUCED by
  * request R(llmRound+1), and its result was carried INTO R(llmRound+2).
  *
- * ONE entry, not two. The former R (producing request) and S (post-tool state
- * mirror) buttons were two controls onto the same round; they are now tabs
- * INSIDE the panel the single entry opens, because "which request" and "what
- * the state looked like afterwards" are two views of one round, not two
- * destinations. (The separate verbatim "model view" button was removed on
- * 2026-07-28 per owner directive — the round-scoped records these tabs show
- * are the surviving way to inspect what a tool call saw and returned.)
+ * ONE entry, ONE view. The former R (producing request) and S (post-tool state
+ * mirror) buttons were two controls onto the same round; they briefly became
+ * two tabs inside one panel, and on 2026-07-29 the owner removed the second
+ * one outright ("we don't need both a request and a result status button") —
+ * correctly, because the mirror is captured AFTER the tool results are appended
+ * to the same message list the request was built from, so it is a SUPERSET of
+ * the request. The request axis survives only as a fallback for rounds that
+ * emitted no mirror. (The separate verbatim "model view" button was removed on
+ * 2026-07-28 per owner directive — the round-scoped record this entry shows is
+ * the surviving way to inspect what a tool call saw and returned.)
  *
  * `data-ri-state` addresses this row's state mirror so the drawer's state list
  * can find this slot for its inline jump.

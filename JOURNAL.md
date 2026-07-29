@@ -1,5 +1,11 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·logo 收官) — 家族 epic 以「前提蒸发」关闭:主 logo 回滚原版后 VTracer 家族与主 logo 工艺**重新自洽**,统一不再必要;像素精修版 11 枚留盘可一言重启;另实测主 logo 三处引用无 cache-bust 是真缺口
+
+- **收官逻辑:** 家族 epic(`pt_651bd5a3078e450d`)的前提是「主 logo 已精确几何化 → 两套工艺不齐」。owner 对家族票答「退回修改」后我按**像素精修**路线改完(保留现行血统与道具、严格 32 网格、22px 道具可辨,生成器 `gen_family_pixel.py`,in-situ 闸图 `_gen/logo-redesign/family-pixel-gate.png`)——但复盘确认:A2 回滚(`c69c7aec`)后,家族与主 logo **同为 VTracer 工艺,重新一致**,epic 的统一目标由「回滚主 logo」这一事件达成,上线新家族反而再次引入两套工艺。故**关闭而非上线**;11 枚像素精修稿 + 闸图全部留在 `_gen/logo-redesign/family-pixel/`,owner 一言可重启。
+- **暴露的真缺口(已报 owner 待决):** `tofu-welcome.svg` 三处引用(favicon/欢迎屏/侧栏)均无版本号,`max-age=86400` 让 owner 在 A2 回滚后仍看到缓存的 A2 一整天(「为什么还没回滚」的乌龙根因);编排面图标早有 `?v=` 机制,主 logo 反而没有。
+- **边界:** 字标 CSS 全程未碰(peer `pt_91be4876d7c64bbe` 已收口字标统一,见其条目);本批零线上文件变更。
+
 ### 2026-07-29(续·字标统一) — 「两处统一 + 品牌区创意重设计」:侧栏字标停在旧工艺**而代码里看不出任何异常**,因为两处各写一套完整声明、漂移天然不可见;顺带**自报一起共享 HEAD 误提交**(owner 截图圈出两处;epic `pt_91be4876d7c64bbe`;commit `4c3ad19a`,12 文件 +888/-87;新套件 **11/11 含 NEUTER×3 各咬各的方向**,相邻环 **46/46**,干净 committed worktree 复验 **30/30**)
 
 - **★ 根因不是「有人漏改了一个值」,是没有任何东西把两处绑在一起。** 侧栏与欢迎屏**各自持有一份完整的** font-family / font-weight / letter-spacing / color 声明,所以 owner 2026-07-28 拍板的方案 A 只落在欢迎屏、侧栏留在旧工艺,而两个 block 各自都是自洽的、**读代码看不出问题**。修法是提炼**单一字形真源**(`[data-theme="tofu"] .sidebar-brand, .tofu-brand` + 其 `>span` 子规则),两面共同消费,各面只许再声明自己的**字号**与悬停编排——不是把值手抄齐。

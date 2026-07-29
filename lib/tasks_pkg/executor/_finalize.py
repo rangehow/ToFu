@@ -18,6 +18,48 @@ from lib.tasks_pkg.manager import append_event
 logger = get_logger(__name__)
 
 
+#: Tools whose output is a terminal transcript that may contain a QR code a
+#: human is expected to SCAN (``gh auth login``, ``docker login``, wrangler,
+#: any ``qrcode.print_ascii`` caller). Scanned for QR art on finalize.
+_QR_SCAN_TOOLS = frozenset({'run_command', 'code_exec'})
+
+
+def _attach_terminal_qr(results: list) -> None:
+    """Promote QR codes drawn as terminal art into real inline images.
+
+    Terminal QR art cannot be scanned from the chat transcript: the output
+    pane (``.ptool-cmd-output``) is ``white-space: pre-wrap`` with
+    ``word-break: break-all``, so the module rows re-wrap at arbitrary
+    columns and the 2-D grid is destroyed. Restyling cannot fix it either,
+    because the user has to point a phone at it — it must become a bitmap.
+
+    Runs on the shared finalize path so ALL run_command surfaces (local
+    sandbox, remote worktree, project handler) are covered by one
+    implementation instead of three that drift apart.
+
+    Best-effort by construction: a failure here must never fail the tool
+    round, so the command's real result is always preserved.
+    """
+    for meta in results:
+        if not isinstance(meta, dict):
+            continue
+        if meta.get('toolName') not in _QR_SCAN_TOOLS:
+            continue
+        text = meta.get('output')
+        if not isinstance(text, str) or not text:
+            continue
+        try:
+            from lib.qr import terminal_qr_images
+            imgs = terminal_qr_images(text)
+        except Exception as e:
+            logger.warning('[QR] terminal QR scan failed (non-fatal): %s', e)
+            continue
+        if imgs:
+            meta['qrImages'] = imgs
+            logger.info('[QR] attached %d scannable QR image(s) to a %s round',
+                        len(imgs), meta.get('toolName'))
+
+
 def _finalize_tool_round(
     task: dict[str, Any],
     rn: int,
@@ -51,6 +93,11 @@ def _finalize_tool_round(
         Additional fields to merge into the SSE event payload
         (e.g. ``{'engineBreakdown': ...}``).
     """
+    # Must run BEFORE results are frozen onto the round + copied into the SSE
+    # event, so the live stream and any later replay/rehydration carry the
+    # same descriptors (a post-hoc mutation would reach only one of them).
+    if isinstance(results, list):
+        _attach_terminal_qr(results)
     round_entry['results'] = results
     round_entry['status'] = 'done'
     event = build_event(

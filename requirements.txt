@@ -152,3 +152,16 @@ sqlalchemy>=2.0
 # path works without it — shipping it makes voice input Just Work in Simplified.
 # Disable/retarget via TOFU_ASR_ZH_VARIANT (default zh-cn; empty/off = raw).
 zhconv>=1.4
+
+# qrcode — QR symbol encoder used by lib/qr.py to turn a scan-to-login URL
+# into a PNG the browser can render (the ask_human scan-to-login prompt).
+# Pure-Python, no native build step; Pillow (already declared above) does the
+# PNG write. SOFT dep at runtime: qr_png_data_uri() logs and returns '' on
+# ImportError, so the app runs without it — but the scan-to-login prompt then
+# has no code to show, and RECOVERY of QR codes printed as terminal art by
+# other CLIs (lib/qr.terminal_qr_images, which needs only Pillow) is the half
+# that keeps working. Declared because it was previously present only by
+# accident in this env: a clean install would have degraded generation
+# silently, which for a login prompt looks like a broken feature rather than a
+# missing optional extra.
+qrcode>=7.4

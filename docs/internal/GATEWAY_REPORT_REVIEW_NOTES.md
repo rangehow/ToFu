@@ -19,6 +19,63 @@ back together.
 
 ---
 
+## STATUS: DEFERRED by the owner — do not send yet
+
+**Decision (2026-07-29): 暂缓，等新流量积累.** Hold the report; let traffic
+accumulate under the corrected classifier first. Internal review is complete
+and the report is otherwise ready to go — this is a timing decision, not a
+correction.
+
+This resolves notes (1) and (2) below in the same stroke, since both said the
+weakness is that *this particular window* predates a fix:
+
+* (1) the CNY column prices every row at `--model`, and
+* (2) `ttl_expiry` reads empty because rounds keep the bucket label they were
+  stamped with.
+
+Both are artefacts of history, not of method, and both evaporate in a window
+drawn entirely after the fixes. Waiting buys a strictly stronger report rather
+than merely a later one.
+
+### Prerequisite the resume path depends on — MEASURED, NOT ASSUMED
+
+"Wait for new traffic" is necessary but **not sufficient**. Measured at the time
+of this decision:
+
+| | |
+|---|---|
+| rounds logged after the `model` fix commit `9aa72fe8` (19:42:48) | 252 |
+| of those, rounds carrying a `model` field | **0** |
+| serving process `python server.py` started | 10:51:27, i.e. **before** the fix |
+
+The emitter is correct and production genuinely passes a real value
+(`orchestrator/_run.py:754` calls `detect_cache_break(..., model=rs.model)`),
+but the long-lived server process still holds the pre-fix module. So new rounds
+keep landing **without** the field.
+
+**Therefore: the field starts populating only after the server is restarted.**
+Until then, waiting accumulates volume but not the exactness the wait is for,
+and a re-run would reproduce the same caveat with a bigger `n`.
+
+### Resume checklist
+
+1. Confirm the server has been restarted since `9aa72fe8` (a restart is a human
+   action — this is why it is written down rather than done here).
+2. Confirm the field is live:
+   `grep '\[CacheRoundRecord\]' logs/app.log | tail -1` must show a `"model"`
+   key. The report header also states it: "N rows priced from their OWN
+   recorded model" must be non-zero.
+3. Let traffic accumulate. For reference, the pinned report window held 47,227
+   rounds / 1,486 `upstream_identical`; the ~6 h after it held 1,751.
+4. Re-run with a window that STARTS after the restart, so no row falls back:
+   `python3 scripts/cache_waste_report.py --since '<restart time>'`
+5. Re-check notes (1) and (2): if the new window is clean, DELETE the caveat
+   paragraph from the report and quote CNY as a figure, and answer the
+   `ttl_expiry` question with real counts instead of "cannot separate".
+6. Then resume the sending checklist at the bottom of this file.
+
+---
+
 ## Review checklist — attack these first, not the prose
 
 ### 1. The CNY column is an upper bound. Checked; smaller than feared.
@@ -121,6 +178,11 @@ none of them asserts their cache is broken. Keep it that way.
 ---
 
 ## Sending checklist
+
+> **GATED — the owner deferred sending (see STATUS above).** Do not start at
+> step 1 until the resume checklist has cleared, in particular the server
+> restart that makes the `model` field start populating. Steps 1–4 below are
+> what to do WHEN it resumes.
 
 1. Reviewer reads the report and this file; raises corrections.
 2. Apply corrections; re-run the pinned command and confirm the numbers still

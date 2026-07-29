@@ -126,3 +126,53 @@ class TestInternalCompanionExists:
             assert needle in body, (
                 f'the internal companion no longer discusses {needle!r} — the '
                 'review checklist has been hollowed out')
+
+
+class TestTheDeferralSurvives:
+    """The owner deferred sending: 暂缓，等新流量积累 (hold, accumulate traffic).
+
+    A decision that lives only in a chat log is a decision that gets re-made by
+    the next person to open the file. These assert the deferral, its reason,
+    and — critically — its PREREQUISITE stay written down next to the checklist
+    they gate.
+
+    The prerequisite is the part that is easy to lose and expensive to lose:
+    "wait for new traffic" reads as self-executing, but it is not. The serving
+    process predates the ``model`` fix, so new rounds keep landing WITHOUT the
+    field (measured: 252 post-fix rounds, 0 with a model). Waiting alone
+    therefore accumulates volume without the exactness the wait exists to buy,
+    and whoever resumes would re-run into the identical caveat with a larger n
+    and no idea why.
+    """
+
+    def test_the_report_is_marked_deferred(self):
+        body = _read(_INTERNAL).lower()
+        assert 'deferred' in body and 'do not send yet' in body, (
+            'the deferral decision vanished from the internal notes — the next '
+            'reader will see a finished report plus a sending checklist and '
+            'reasonably conclude it is ready to forward')
+
+    def test_the_restart_prerequisite_is_recorded(self):
+        """The non-obvious half: waiting is necessary but NOT sufficient."""
+        body = _read(_INTERNAL).lower()
+        assert 'restart' in body, (
+            'the server-restart prerequisite is gone. Without it "wait for new '
+            'traffic" silently accumulates rows that still lack the model '
+            'field, and the re-run reproduces the same caveat at a bigger n')
+
+    def test_the_sending_checklist_is_gated_on_the_deferral(self):
+        """The two sections must not contradict each other."""
+        body = _read(_INTERNAL).lower()
+        i = body.find('## sending checklist')
+        assert i != -1, 'the sending checklist heading moved or was removed'
+        assert 'gated' in body[i:i + 400], (
+            'the sending checklist no longer states it is gated, so it reads '
+            'as the immediate next action despite the deferral above it')
+
+    def test_the_deferral_did_not_leak_into_the_sendable_report(self):
+        """COMPLEMENT: our internal scheduling is not their business."""
+        body = _read(_SENDABLE).lower()
+        for needle in ('deferred', 'do not send yet', '暂缓'):
+            assert needle not in body, (
+                f'internal scheduling state {needle!r} leaked into the file we '
+                f'forward to another org')

@@ -423,10 +423,23 @@ _try_uv_install() {
         info "Installing Playwright Chromium (best-effort)..."
         # --only-shell: a default `install chromium` fetches BOTH the full
         # Chromium build (175.4 MB) and chrome-headless-shell (113.2 MB) plus
-        # ffmpeg — measured 290.9 MB. Every consumer here launches headless
-        # (no headless=False / record_video / channel= call site exists) and
-        # lib/motion_video/_env.py already accepts the shell binary, so the
-        # full build is download nobody runs. Shell-only = 115.5 MB (-60%).
+        # ffmpeg — measured 290.9 MB. Shell-only = 115.5 MB (-60%).
+        #
+        # The trade-off, stated honestly (an earlier version of this comment
+        # claimed "no headless=False call site exists" — measured FALSE on
+        # 2026-07-29): there is EXACTLY ONE headed call site in the product,
+        # tofu_search/fetch/interactive_login.py (login-wall cookie capture).
+        # chrome-headless-shell has NO headed mode — it is a separate, smaller
+        # binary, not a flag — so shell-only means that ONE feature is
+        # unavailable. Everything else (all fetch/render/screenshot paths) is
+        # headless and fully served by the shell.
+        #
+        # We keep --only-shell: -60% download for every user, at the cost of a
+        # rare, user-initiated feature that now degrades HONESTLY instead of
+        # dying at launch — chromium_env.headed_chromium_executable() decides,
+        # and the caller returns reason='headed_unavailable' naming the fix.
+        # Users who need login-wall capture run:
+        #   python -m playwright install chromium     (adds the full build)
         "$_uvpy" -m playwright install --only-shell chromium >/dev/null 2>&1 \
             && ok "Playwright Chromium installed" \
             || warn "Playwright Chromium install skipped/failed — JS-rendered fetch disabled until you run it manually"
@@ -1881,8 +1894,10 @@ if [[ "$SKIP_PLAYWRIGHT" -eq 0 ]]; then
         warn "Manual recovery: conda activate ${ENV_NAME} && pip install 'playwright>=1.40' && python -m playwright install --only-shell chromium"
     else
         info "Downloading Chromium headless shell via playwright..."
-        # --only-shell: see the uv path above — skips the 175 MB full Chromium
-        # build that no consumer in this repo ever launches.
+        # --only-shell: see the uv path above for the full trade-off. Skips the
+        # 175 MB full Chromium build that no HEADLESS path needs — the single
+        # headed feature (login-wall capture) degrades with an actionable
+        # message and is recovered by `python -m playwright install chromium`.
         if python -m playwright install --only-shell chromium; then
             ok "Playwright Chromium installed"
         else

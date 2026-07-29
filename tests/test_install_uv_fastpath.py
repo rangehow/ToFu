@@ -434,23 +434,54 @@ def test_mirror_and_index_config_precede_the_backend_fork():
 def test_playwright_downloads_only_the_headless_shell():
     """Measured 2026-07-28: a default ``playwright install chromium`` fetches
     BOTH full Chromium (175.4 MB) AND chrome-headless-shell (113.2 MB) plus
-    ffmpeg (2.3 MB) = 290.9 MB. Every consumer in this repo launches headless
-    (zero ``headless=False`` / ``record_video`` / ``channel=`` call sites), and
-    ``lib/motion_video/_env.py::_playwright_chrome_candidates`` already accepts
-    ``chrome-headless-shell-linux64/chrome-headless-shell``. So the full build
-    is 175 MB of download nobody runs — ``--only-shell`` cuts the fetch to
-    115.5 MB (-60%).
+    ffmpeg (2.3 MB) = 290.9 MB. ``--only-shell`` cuts the fetch to 115.5 MB
+    (-60%), so this ratchet keeps every installer on the shell-only download.
 
-    Evidence this is sufficient, not a guess: the dev host carries ONLY
-    ``chromium_headless_shell-1223`` (no ``chromium-*`` dir at all) and every
-    screenshot path works, including the 40-test visual ring.
+    THE TRADE-OFF THIS RATCHET ENFORCES (read before widening or reverting it)
+    -------------------------------------------------------------------------
+    An earlier version of this docstring justified the flag with "zero
+    ``headless=False`` / ``record_video`` / ``channel=`` call sites". That was
+    measured FALSE on 2026-07-29 and is NOT why the flag is correct. The real
+    picture:
+
+      * There is EXACTLY ONE headed call site in the product:
+        ``tofu_search/fetch/interactive_login.py`` (login-wall cookie capture,
+        a rare, user-initiated action).
+      * ``chrome-headless-shell`` has NO headed mode — it is a separate,
+        smaller binary, not a flag on the full build. So on a shell-only
+        install that ONE feature genuinely cannot work; measured, a headed
+        launch fails with "Executable doesn't exist at
+        .../chromium-<rev>/chrome-linux64/chrome".
+      * Every OTHER browser path here (fetch, JS render, screenshots, the
+        video render chain, the visual test ring) is headless and fully served
+        by the shell.
+
+    So the flag buys -60% download for all users at the cost of one rare
+    feature — and that feature no longer DIES at launch: availability is
+    decided by ``chromium_env.headed_chromium_executable()`` and the caller
+    returns ``reason='headed_unavailable'`` naming the recovery command
+    (``python -m playwright install chromium``). Guards for that live in
+    tests/test_chromium_env.py.
+
+    Evidence the shell is sufficient for the headless paths: the dev host
+    carries ONLY ``chromium_headless_shell-1223`` (no ``chromium-*`` dir at
+    all), ``chromium_env.chromium_binaries`` resolves it, ``chrome_bin`` in
+    lib/motion_video/_env.py delegates to that resolver, and every screenshot
+    path works including the real-browser visual ring.
     """
     text = _install_sh()
-    # Match the browser-download subcommand only. `install-deps` is a DIFFERENT
-    # subcommand (it apt-installs system libs and takes no --only-shell), so it
-    # is excluded by requiring a following token that is not `-deps`.
+    # Scan REAL invocations only. Comment lines are stripped first: the
+    # recovery instruction we document for the one headed feature is literally
+    # `python -m playwright install chromium` (the full build, on purpose), and
+    # a guard that cannot tell a comment from a command would flag it. Same
+    # principle as elsewhere in this file — a comment must never satisfy OR
+    # violate a guard.
+    live = '\n'.join(ln for ln in text.splitlines()
+                     if not ln.lstrip().startswith('#'))
+    # `install-deps` is a DIFFERENT subcommand (it apt-installs system libs and
+    # takes no --only-shell), so it is excluded.
     installs = [m.group(0) for m in
-                re.finditer(r'playwright install(?!-deps)[^\n|&>]*', text)]
+                re.finditer(r'playwright install(?!-deps)[^\n|&>]*', live)]
     # Print the scan surface BEFORE asserting — a regex that silently matches
     # nothing would otherwise make this guard vacuously green (charter:
     # "verify the scan surface first").
@@ -463,6 +494,65 @@ def test_playwright_downloads_only_the_headless_shell():
             f'`{inv.strip()}` still pulls the full 175 MB Chromium '
             f'build that no consumer launches — pass --only-shell')
     _ok(f'all {len(installs)} playwright installs fetch only the headless shell')
+
+
+def test_docstrings_do_not_cite_deleted_symbols():
+    """A guard's REASONING must not cite symbols that no longer exist.
+
+    Found 2026-07-29: this file's ratchet cited a helper in
+    lib/motion_video/_env.py (the private ``_playwright_chrome_candidates``
+    enumerator, named here in prose rather than in ``module::symbol`` form so
+    this very docstring does not become the dangling citation it forbids) as
+    its evidence that the shell binary is accepted — but that function had been
+    DELETED when its logic moved into chromium_env (it became dead code after
+    the delegation). The assertions stayed green while the argument chain
+    pointed at
+    a symbol that was gone, so a reader auditing "why is --only-shell safe?"
+    would follow the citation into nothing.
+
+    That is the same failure mode as a stale premise: the conclusion may be
+    right, but the stated reason cannot be checked. So verify that any
+    ``module.py::symbol`` citation in this file's docstrings still resolves.
+    """
+    import ast
+    import re
+
+    with open(os.path.abspath(__file__), 'r', encoding='utf-8') as f:
+        own_src = f.read()
+
+    # Citations of the documented form `path/to/mod.py::symbol`.
+    # Placeholder spellings used to DESCRIBE the form (in this very docstring)
+    # are not citations of anything and must not be resolved.
+    _PLACEHOLDERS = {'path/to/mod.py', 'module.py'}
+    cites = {(rel, sym) for rel, sym in re.findall(r'([\w/]+\.py)::(\w+)', own_src)
+             if rel not in _PLACEHOLDERS}
+    print(f'\n    scanned {len(cites)} `module.py::symbol` citation(s):')
+    for rel, sym in sorted(cites):
+        print(f'      - {rel}::{sym}')
+    if not cites:
+        _ok('no module::symbol citations to verify')
+        return
+
+    dangling = []
+    for rel, sym in sorted(cites):
+        path = os.path.join(ROOT, rel)
+        if not os.path.isfile(path):
+            dangling.append(f'{rel}::{sym} (file missing)')
+            continue
+        with open(path, 'r', encoding='utf-8') as f:
+            tree = ast.parse(f.read(), filename=rel)
+        names = {n.name for n in ast.walk(tree)
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                   ast.ClassDef))}
+        names |= {t.id for n in ast.walk(tree)
+                  if isinstance(n, ast.Assign)
+                  for t in n.targets if isinstance(t, ast.Name)}
+        if sym not in names:
+            dangling.append(f'{rel}::{sym} (symbol deleted)')
+    assert not dangling, (
+        'these docstrings cite symbols that no longer exist, so the reasoning '
+        f'behind the assertions cannot be audited: {dangling}')
+    _ok(f'all {len(cites)} module::symbol citations still resolve')
 
 
 def test_browser_and_uv_caches_are_persistent_and_shared():
@@ -584,6 +674,7 @@ def main():
         test_healthcheck_probe_actually_launches_chromium,
         test_mirror_and_index_config_precede_the_backend_fork,
         test_playwright_downloads_only_the_headless_shell,
+        test_docstrings_do_not_cite_deleted_symbols,
         test_browser_and_uv_caches_are_persistent_and_shared,
         test_force_reinstall_is_conditional_not_unconditional,
         test_chromium_env_survives_the_export,

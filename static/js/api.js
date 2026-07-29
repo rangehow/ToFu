@@ -501,6 +501,19 @@
                              onError: 'null' }),
   };
 
+  // research (auto-research: direction → scored ideas) -------------
+  // DURABLE read path. `Api.tasks.get(taskId)` resolves against the in-memory
+  // task registry, so it 404s once the finished job is TTL-swept (7200s) or
+  // the server restarts. This is addressed by DIRECTION and served from
+  // paper_reports, so it keeps working forever — it is what makes a finished
+  // research job re-openable at all. `found:false` is a normal answer.
+  const research = {
+    lookup: (direction, lang) =>
+      get('/api/v1/research/lookup',
+          { query: { direction: direction || '', lang: lang || 'en' },
+            onError: 'null' }),
+  };
+
   // optimizer -------------------------------------------------------
   const optimizer = {
     proposals: (limit)        => get('/api/v1/optimizer/proposals', { query: { limit: limit || 60 } }),
@@ -1595,7 +1608,7 @@
     desktop,
     features, providers, dispatch, oauth, mcp, update, trading, authSources,
     privateHosts,
-    swarm, endpoint, logs, motion, tasks, users,
+    swarm, endpoint, logs, motion, tasks, users, research,
   };
 
   global.Api = Api;

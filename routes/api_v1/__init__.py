@@ -55,6 +55,7 @@ from .project import api_v1_project_bp
 from .translate import api_v1_translate_bp
 from .artifacts import api_v1_artifacts_bp
 from .paper import api_v1_paper_bp
+from .research import api_v1_research_bp
 from .paper_folders import api_v1_paper_folders_bp
 from .motion import api_v1_motion_bp
 from .uploads import api_v1_uploads_bp
@@ -72,6 +73,7 @@ ALL_V1_BLUEPRINTS = [
     api_v1_chat_bp,
     api_v1_chat_direct_bp,
     api_v1_tasks_bp,
+    api_v1_research_bp,
     api_v1_capabilities_bp,
     api_v1_keys_bp,
     api_v1_auth_mode_bp,

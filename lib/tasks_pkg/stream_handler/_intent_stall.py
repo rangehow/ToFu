@@ -35,6 +35,7 @@ count, rejection class, and an explicit self-reported end reason.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from lib.log import get_logger
@@ -59,6 +60,10 @@ END_TURN_BLOCKED = 'blocked'
 _VALID_END_REASONS = frozenset({
     END_TURN_AWAITING_HUMAN, END_TURN_DONE, END_TURN_BLOCKED,
 })
+
+# Display-hygiene pattern for strip_end_turn_marker: ANY token of this shape,
+# not just a valid reason (see that function's docstring for why the two differ).
+_END_TURN_TOKEN_RE = re.compile(r'\[END_TURN:[^\]]*\]')
 
 # Tools whose presence in the round means the model explicitly handed control
 # back to the human (D1's state probe).
@@ -110,6 +115,34 @@ def _ordered_rounds(task: dict[str, Any]) -> list:
     except Exception as e:  # pragma: no cover — defensive
         logger.debug('[IntentStall] tool-round ordering failed: %s', e)
         return rounds
+
+
+def strip_end_turn_marker(content: str) -> str:
+    """Remove the ``[END_TURN: …]`` control token from user-visible prose.
+
+    The nudge TEACHES this token (see ``NUDGE_TEXT``), so the moment the nudge
+    can fire, models start emitting it — and it is a MACHINE signal, not part of
+    the answer. Left in place the user reads a raw sentinel at the end of an
+    otherwise clean reply.
+
+    Deliberately broader than :func:`parse_end_turn_reason`: that reader only
+    TRUSTS a reason from the closed set (so an invented reason can never silently
+    suppress a nudge), but this stripper removes ANY token of this shape. The two
+    concerns are different — semantic trust must be strict, display hygiene must
+    be total, or a model that writes ``[END_TURN: banana]`` gets its typo
+    published verbatim.
+
+    Idempotent, and a no-op on content that never carried the marker (the
+    overwhelming majority of turns) — the fast substring check returns the SAME
+    string object, so the common path adds no allocation.
+    """
+    if not content or END_TURN_MARKER not in content:
+        return content
+    out = _END_TURN_TOKEN_RE.sub('', content)
+    # Collapse the blank line the token usually sat on, then strip the trailing
+    # whitespace it left behind — without touching interior formatting.
+    out = re.sub(r'\n{3,}', '\n\n', out)
+    return out.rstrip()
 
 
 def _last_tool_round(task: dict[str, Any]) -> dict | None:

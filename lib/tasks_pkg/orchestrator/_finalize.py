@@ -779,6 +779,33 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
         logger.info('[%s] Injected content_filter user-facing message (finish_reason=%s, loop_exit=%s)',
                     tid, last_finish_reason, _loop_exit_reason)
 
+    # ── Strip the END_TURN control token from the delivered answer ──
+    # The intent-stall nudge TEACHES `[END_TURN: <reason>]` so a model can
+    # declare *why* it stopped instead of being mistaken for an interrupted
+    # turn. That makes it a MACHINE signal on the same channel as the prose:
+    # the classifier reads it, then it must not reach the user. Stripped HERE,
+    # at the single point where task['content'] becomes the delivered answer,
+    # rather than at each render site — the persisted row, the done event, the
+    # committedMessage projection and every reload path all read this one
+    # value, so a per-renderer strip would inevitably miss one.
+    #
+    # Runs BEFORE the sources footer so a stripped trailing token can never
+    # sit between the prose and an appended footer.
+    try:
+        from lib.tasks_pkg.stream_handler._intent_stall import (
+            strip_end_turn_marker,
+        )
+        _pre_strip = task.get('content') or ''
+        if _pre_strip:
+            _stripped = strip_end_turn_marker(_pre_strip)
+            if _stripped != _pre_strip:
+                task['content'] = _stripped
+                logger.info('[%s] stripped [END_TURN:…] control token from the '
+                            'delivered answer (%d → %d chars)',
+                            tid, len(_pre_strip), len(_stripped))
+    except Exception as _et_e:  # never let display hygiene break finalization
+        logger.warning('[%s] END_TURN strip failed: %s', tid, _et_e)
+
     # ── Deterministic source-citation backstop (web-research turns) ──
     # If the model consulted web pages but cited none of them, append a compact
     # Sources footer of the URLs it actually opened. Pairs with the system-prompt

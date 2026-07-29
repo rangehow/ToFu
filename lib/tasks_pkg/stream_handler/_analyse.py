@@ -605,7 +605,9 @@ def analyse_stream_result(
                     'phase': 'intent_stall_nudge',
                     'attempt': _stall_nudges + 1,
                     'max': 1,
-                    'detail': '↻ 上一个工具未执行成功，提示模型继续…',
+                    'detail': '↻ Previous tool call did not run — nudging the '
+                              'model to continue…',
+                    'detailKey': 'stream.phase.intentStallNudge',
                 })
                 result['action'] = 'continue'
                 return result

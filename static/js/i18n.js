@@ -2745,6 +2745,13 @@ var _i18n = {
     zh: '已等待 {elapsed}s：{model} 尚未返回首个字节（{reason}）',
     en: 'Waiting {elapsed}s — no first byte from {model} yet ({reason})',
   },
+  // Intent-stall nudge (backend _analyse.py → intent_stall_nudge PHASE):
+  // the previous tool call did not run and the model answered with prose
+  // only, so the loop re-drives it ONCE. Transient status, not an error.
+  'stream.phase.intentStallNudge': {
+    zh: '↻ 上一个工具未执行成功，正在提示模型继续…',
+    en: '↻ Previous tool didn\'t run — nudging the model to continue…',
+  },
   'stream.phase.compactingWindow': {
     zh: '正在压缩早期上下文以适配窗口…',
     en: 'Compressing earlier context to fit the window…',

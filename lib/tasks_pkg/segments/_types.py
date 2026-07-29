@@ -33,16 +33,24 @@ SEG_TOOL_RESULT = 'tool_result'
 # reconstructors (_reconstruct_tool_call_messages, assemble_segments) skip any
 # round for which is_synthetic_inbox_round() is True. Adding a new inbox lane =
 # add its marker key here (single source of truth).
-SYNTHETIC_INBOX_MARKERS = ('_inboxInject', '_peerInject', '_userSteerInject')
+#
+# ``_stallNudge`` is the intent-stall lane: when criterion A∧B∧C∧D fires, the
+# orchestrator appends a ``role='user'`` nudge to the WIRE messages so the model
+# is re-driven. That injection is structurally identical to a human steer — same
+# role, same round-boundary placement — but it has NO human author, so it must
+# never be mistaken for something the user said. It gets a display-only chip and
+# is excluded from every replay projection, exactly like the other three.
+SYNTHETIC_INBOX_MARKERS = ('_inboxInject', '_peerInject', '_userSteerInject',
+                           '_stallNudge')
 
 
 def is_synthetic_inbox_round(round_dict) -> bool:
     """True iff ``round_dict`` is a frontend display-only inbox-inject row.
 
     Such rows carry a lane marker (``_inboxInject`` / ``_peerInject`` /
-    ``_userSteerInject``) and no real tool_call data. They must be excluded from
-    every wire-replay projection so the bytes sent to the model are identical
-    whether or not the chips are present.
+    ``_userSteerInject`` / ``_stallNudge``) and no real tool_call data. They must
+    be excluded from every wire-replay projection so the bytes sent to the model
+    are identical whether or not the chips are present.
     """
     if not isinstance(round_dict, dict):
         return False

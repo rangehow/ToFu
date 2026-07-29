@@ -1,5 +1,15 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·更正:trade P1 第一批的 A/B 数字作废) — **我上报的「收益下降 -0.362%/-0.532%」是噪声不是效应,owner 换一组种子当场符号翻转**;机制本身经确定性实测确认正确,但那张表必须撤(更正 `cfb6bd8` 的验收结论;方法论已入项目记忆)
+
+- **★ 撤回的内容:** `cfb6bd8` 提交信息里那张「same-bar vs T+1 open」A/B 表(ETF 0.852%→0.490%、个股 1.337%→0.805%,12 种子中 7 个下降),**不能作为「未来函数已消除」的证据**。
+- **★ 证伪过程(owner 实测,不是我自查出来的):** 同一 harness、唯一变量仍是成交价规则,换成**另外 16 组种子**重跑 → ETF **+0.106%**、个股 **+0.136%**,**符号与我报的相反**。逐种子 delta 的标准差 1.452% / 2.466%,标准误 **0.363% / 0.617%** —— **标准误比我报的效应量还大**,t≈0.29 / 0.22。
+- **★ 判据(这才是要记住的那半):** 我那「12 个种子里 7 个下降」与**掷 12 次硬币出 7 正 3 反没有区别**。更危险的是它被当成了验收通过的凭据——**如果有人把成交规则改坏,这个指标同样会给出「7/12 下降」的绿灯**,它对要验的那件事根本不敏感。一个看起来像证据的假数字,比没有数字更糟,因为下一个人会引用它。
+- **★ 根子在验收标准本身,不在执行:** 「零阿尔法序列上收益必须下降」这条标准**在统计上就不可能成立**——未来函数的收益增益本来就淹没在路径噪声里,除非跑几百组种子。owner 已收回该指令。
+- **正确的验收是确定性的,一次即可、无需统计:** 构造每根 K 线**开盘比前收高 5%** 的序列 → 决策日收盘 10.0、T+1 开盘 10.5,直接断言成交价 == **10.5**。实测通过(owner 与我各自独立跑过)。这比几百组种子的均值比较更强、更快、且不可能骗人。
+- **机制正确性不受影响(分账要清楚):** 112 项测试在干净 committed worktree 全绿;NEUTER×3 各咬各的(买入退回同根收盘 / 无 T+1 静默回落 / 停牌用收盘代替);owner 独立复跑 NEUTER 也真咬。**被撤的只是那张 A/B 表,不是 T+1 成交这个改动。**
+- **本轮补做:** ①`test_simulator_execution_timing.py` 模块 docstring 里的同一张表改写为确定性判据;②补 `TestDeterministicFillPrice` —— 四条成交路径(买入 / 主动卖出 / 止损 / 止盈)**逐一**断言成交价 == T+1 开盘,其中止损/止盈额外断言 **P&L 按成交价而非触发价计算**(改动最大却原本只有买入一条有价格断言);③方法论入项目记忆:**效应量小于测量噪声时,A/B 均值比较不是验收工具——先算标准误,t<2 就必须换确定性断言**。
+
 ### 2026-07-29(续·VU 可见性两批) — 「一直在生成而前端不知道在生成什么」定案:**VU carrier 跑了 282.6 秒 / 69 事件而 UI 显示对话已完成**;第一批修「可达」,owner 实测退回后第二批修「顺序」——**两个 ordering 各差一半**(owner 报障 `ms5j3qi7wd1g7u`;commits `d6e8bdb3` + `633b4fc3`;守卫 **10 + 11**,**NEUTER×5 咬**(另 1 发**证明不可咬,已明写不主张**);相邻环 **79/79** → **111/111**;tsc BASELINE=0)
 
 - **★ 先说最反直觉的一条:后端一秒没停,是前端结构上够不着它。** app.log 铁证:`15:00:50` VU carrier `da0717c8` 创建 → 跑 **282.6s / 69 events / 4 轮带工具的 LLM 调用** → `15:06:03` "SSE stream da0717c8 emitting carrier done"。owner **15:02:21** 报障,正卡在这个窗口中间。三张截图(完成态却带停止键 / 排队中不生成 / autopilot 用户消息无 agent 气泡)**是同一个根因的三个切片**,不是三个 bug。

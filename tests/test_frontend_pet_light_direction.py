@@ -231,40 +231,120 @@ def test_body_light_ordering_is_invariant_under_the_facing_flip():
 #  2. THE WALK CYCLE READS AS A WALK
 # ══════════════════════════════════════════════════════════════════════
 
-def test_walk_contact_beats_alternate_the_leading_foot():
-    """A stride needs a leading foot, and it must swap between contact beats.
-
-    The original cycle used ONE symmetric 'contact' pose for both contact
-    frames, so the legs only scissored — the "walks backwards" report.
-    """
+def _gait_offsets() -> dict[str, tuple[float, float]]:
+    """Parse the generator's (near, far) foot-offset table."""
     src = GEN.read_text(encoding="utf-8")
     block = re.search(r"offsets = \{(.*?)\n    \}", src, re.S)
     assert block, "could not locate the foot-offset table in the generator"
-    offsets = dict(
-        (m.group(1), (float(m.group(2)), float(m.group(3))))
+    return {
+        m.group(1): (float(m.group(2)), float(m.group(3)))
         for m in re.finditer(
             r"'([a-z_0-9]+)':\s*\(\s*(-?[\d.]+),\s*(-?[\d.]+)", block.group(1)
         )
-    )
+    }
+
+
+def _foot_positions(offsets: dict[str, tuple[float, float]], pose: str
+                    ) -> tuple[float, float]:
+    """Return (near_x, far_x) as the sprite ACTUALLY draws them.
+
+    `_feet` places each foot at ``cx + offset``. Reading the authored offsets
+    alone cannot answer "who leads": a magnitude says how far from centre a foot
+    sits, while the SIGN decides whether it is in front or behind. Every gait
+    assertion below is written against this resolved position.
+    """
+    FRONT_L, FRONT_R = 6.0, 22.0
+    cx = (FRONT_L + FRONT_R) / 2 + 1.0
+    near_off, far_off = offsets[pose]
+    return cx + near_off, cx + far_off
+
+
+def _leader(offsets: dict[str, tuple[float, float]], pose: str) -> str:
+    """Which foot is AHEAD (larger x) in this pose — 'near' or 'far'."""
+    near_x, far_x = _foot_positions(offsets, pose)
+    return "near" if near_x > far_x else "far"
+
+
+def test_walk_contact_beats_alternate_the_leading_foot():
+    """A stride needs a leading foot, and it must SWAP between contact beats.
+
+    Measured on RENDERED position (cx + offset), never on authored magnitude.
+    That distinction IS the test. An earlier version of this guard asserted
+    ``abs(near) > abs(far)`` and passed on a cycle where the far foot led all 8
+    frames by ~12 units: with near always negative and far always positive, the
+    feet only slid as a pair and the legs never scissored past each other —
+    precisely the "shuffling, not stepping" the owner reported, waved through by
+    a green guard. Magnitude is not position.
+    """
+    offsets = _gait_offsets()
     for pose in ("contact_a", "contact_b"):
         assert pose in offsets, (
             f"walk pose '{pose}' is gone. The contact beats must exist as a "
-            "near-leads / far-leads PAIR or no foot ever leads and the gait "
-            "reads as shuffling in place."
+            "near-leads / far-leads PAIR or no foot ever leads."
         )
-    near_a, far_a = offsets["contact_a"]
-    near_b, far_b = offsets["contact_b"]
-    # In contact_a the NEAR foot is ahead; in contact_b the FAR foot is.
-    assert abs(near_a) > abs(far_a), (
-        f"contact_a does not lead with the near foot ({near_a} vs {far_a})"
+    lead_a, lead_b = _leader(offsets, "contact_a"), _leader(offsets, "contact_b")
+    na, fa = _foot_positions(offsets, "contact_a")
+    nb, fb = _foot_positions(offsets, "contact_b")
+    assert lead_a != lead_b, (
+        "THE LEADING FOOT NEVER SWAPS between the two contact beats.\n"
+        f"  contact_a: near_x={na:.1f} far_x={fa:.1f} -> {lead_a} leads\n"
+        f"  contact_b: near_x={nb:.1f} far_x={fb:.1f} -> {lead_b} leads\n"
+        "Both beats put the same foot in front, so the feet slide as a pair and "
+        "the pet reads as shuffling in place. The offsets' SIGNS must swap "
+        "between beats, not merely their magnitudes."
     )
-    assert abs(far_b) > abs(near_b), (
-        f"contact_b does not lead with the far foot ({near_b} vs {far_b})"
+
+
+def test_walk_cycle_shows_both_feet_leading_across_the_stride():
+    """Over the full cycle, BOTH feet must take a turn in front.
+
+    The per-beat guard compares two poses; this asserts the property the eye
+    actually judges — across every frame the ticker plays, the set of "who
+    leads" contains both answers. A cycle that never shows the near foot in
+    front is a shuffle however the poses are named.
+    """
+    js = _js_code()
+    m = re.search(r"var WALK_FRAMES = \[(.*?)\];", js, re.S)
+    assert m, "WALK_FRAMES not found in tofu-pet.js"
+    frames = re.findall(r"'(walk\d+)'", m.group(1))
+    src = GEN.read_text(encoding="utf-8")
+    offsets = _gait_offsets()
+
+    leaders, detail = set(), []
+    for name in frames:
+        fm = re.search(rf"'{name}': dict\(feet='([a-z_0-9]+)'", src)
+        assert fm, f"{name} has no feet= pose in the generator's FRAMES table"
+        pose = fm.group(1)
+        near_x, far_x = _foot_positions(offsets, pose)
+        who = _leader(offsets, pose)
+        leaders.add(who)
+        detail.append(f"  {name:7} ({pose:10}) near_x={near_x:5.1f} "
+                      f"far_x={far_x:5.1f} -> {who} leads")
+
+    assert leaders == {"near", "far"}, (
+        "the walk cycle never alternates which foot is in front — only "
+        f"{sorted(leaders)} ever leads across all {len(frames)} frames:\n"
+        + "\n".join(detail)
+        + "\nA stride must show each foot out front once per cycle."
     )
-    assert offsets["contact_a"] != offsets["contact_b"], (
-        "the two contact beats are the SAME pose — this is exactly the "
-        "'walks backwards' bug: no foot ever leads."
-    )
+
+
+def test_swing_foot_gathers_under_the_body_on_the_passing_beat():
+    """On a passing beat the swinging foot travels THROUGH the planted one.
+
+    The passing pose is what makes a stride read as one leg overtaking the
+    other rather than two feet easing toward each other: the feet must be
+    CLOSER together at passing than at the contact beat it follows.
+    """
+    offsets = _gait_offsets()
+    for contact, passing in (("contact_a", "passing_a"), ("contact_b", "passing_b")):
+        cn, cf = _foot_positions(offsets, contact)
+        pn, pf = _foot_positions(offsets, passing)
+        assert abs(pn - pf) < abs(cn - cf), (
+            f"{passing} is not a passing beat: the feet are {abs(pn - pf):.1f} "
+            f"apart vs {abs(cn - cf):.1f} at {contact}. The swing foot must "
+            "gather under the body, not stay splayed."
+        )
 
 
 def test_walk_cycle_frames_all_exist_and_are_distinct():

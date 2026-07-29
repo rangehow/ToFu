@@ -209,16 +209,24 @@ def _feet(pose, cy=FOOT_Y):
     ring / wheel at 30px (measured); tucking it under the body turns the same
     shape into a foot emerging from the block.
 
-    THE STRIDE (why the poses come in near/far PAIRS)
-    ──────────────────────────────────────────────
-    A walk only reads as a WALK if the LEADING foot alternates: near foot swings
-    ahead, pass, far foot swings ahead, pass. The first cut of this cycle used a
-    single symmetric 'contact' pose for BOTH contact beats, so no foot ever led
-    — the legs merely scissored open and shut twice per cycle while the body
-    rocked, which reads as shuffling in place or sliding BACKWARDS (owner
-    report), never as stepping forward. Hence contact/passing/lift now exist in
-    an 'a'/'b' pair: the pair members swap which foot is forward, and the cycle
-    plays a → b so the gait actually alternates.
+    THE STRIDE (why the poses come in near/far PAIRS, and why the SIGNS matter)
+    ─────────────────────────────────────────────────────────────────────────────
+    A walk only reads as a WALK if the LEADING foot alternates: one foot swings
+    ahead, the pair passes, then the OTHER foot swings ahead. Two failures have
+    been measured here, and the second is subtler than the first:
+
+      1. The first cut used a single symmetric 'contact' pose for BOTH contact
+         beats, so the legs merely scissored open and shut twice per cycle.
+      2. The second cut split them into a pair but kept `near` NEGATIVE and
+         `far` POSITIVE in every pose. A foot's rendered position is
+         ``cx + offset``, so the SIGN — not the magnitude — decides who is in
+         front. With the signs pinned, the far foot led all 8 frames by ~12
+         units and the feet just slid as a pair: still a shuffle, and a guard
+         comparing |offset| magnitudes waved it through.
+
+    So the invariant is about SIGNS: in an 'a' beat the near foot is FORWARD
+    (positive) and the far foot TRAILS (negative); in a 'b' beat they swap. The
+    guards assert this on the RESOLVED position, never on the raw table.
 
     Each tuple is (near_x, far_x, near_y, far_y). The FAR foot also sits a touch
     higher and is drawn first, so it reads as the leg on the far side of the
@@ -227,14 +235,14 @@ def _feet(pose, cy=FOOT_Y):
     offsets = {
         'stand':     (-4.0, 4.2, 0.0, 0.0),
         # ─ contact: one foot planted ahead, the other trailing behind ─
-        'contact_a': (-6.8, 5.2, 0.5, -0.5),   # NEAR foot leads
-        'contact_b': (-4.6, 7.0, -0.5, 0.4),   # FAR foot leads
+        'contact_a': (6.0, -6.0, 0.5, -0.5),    # NEAR foot forward
+        'contact_b': (-6.0, 6.0, -0.5, 0.4),    # FAR foot forward
         # ─ passing: the swinging foot passes under the body, lifted ─
-        'passing_a': (-1.4, 3.0, 0.4, -1.5),   # far foot lifted, swinging through
-        'passing_b': (-3.0, 1.6, -1.5, 0.4),   # near foot lifted, swinging through
+        'passing_a': (1.8, -1.4, 0.4, -1.5),    # near still ahead, closing
+        'passing_b': (-1.4, 1.8, -1.5, 0.4),    # far still ahead, closing
         # ─ lift: push-off, both feet gathered under a rising body ─
-        'up_a':      (-5.6, 4.4, -0.9, -0.5),
-        'up_b':      (-4.4, 5.6, -0.5, -0.9),
+        'up_a':      (4.6, -4.2, -0.9, -0.5),
+        'up_b':      (-4.2, 4.6, -0.5, -0.9),
         'sit':       (-4.2, 4.4, 0.9, 0.9),
         'tip':       (-3.4, 3.6, 0.5, 0.5),
     }

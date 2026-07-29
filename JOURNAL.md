@@ -1,6 +1,6 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
-### 2026-07-29(续·context_limits 折叠) — 同族第三张牌:`model_context_limits` 以 slot.provider_id 为键,账户/面合并后 `sankuai_anthropic::*` 学习条目全部孤儿化——含今晚 opus-5 刚从一条 1.1M 成功提示学到的 expand,重启即丢(`pt_998336d4ec734207` DONE;commit 待填,3 文件;新套件 **10/10 失败先行**,**NEUTER×3 各咬各的**(6/1/2);相邻环 **75/75**)
+### 2026-07-29(续·context_limits 折叠) — 同族第三张牌:`model_context_limits` 以 slot.provider_id 为键,账户/面合并后 `sankuai_anthropic::*` 学习条目全部孤儿化——含今晚 opus-5 刚从一条 1.1M 成功提示学到的 expand,重启即丢(`pt_998336d4ec734207` DONE;commit `815f2cf1`,3 文件;新套件 **10/10 失败先行**,**NEUTER×3 各咬各的**(6/1/2);相邻环 **75/75**)
 
 - **★ 与 key_stats 折叠同型但有一处关键不同:这个文件被前端裸读。** `routes/config.py` 把 `model_context_limits` 原样发给 Settings UI,所以只做内存态折叠挡不住 UI 显示孤儿——`_load` 折叠后**立即持久化**;且持久化的 mutate 折的是**写时**的文件内容而非读时快照(跨进程并发 learn 不丢更新,复用 update_json_atomic 的 flock)。
 - **冲突规则:meta.ts 新者胜,平手账户赢。** 学习即证据,新证据描述的是当前上游窗口;账户是存活命名空间(新学习写向它)。

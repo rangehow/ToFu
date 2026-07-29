@@ -14773,7 +14773,15 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
    whenever the capability is already connected. */
 .lc-cap-setup:empty{display:none}
 .lc-cap-setup{margin:12px 0 0;padding-top:12px;border-top:1px dashed var(--border,#2a2a35)}
-.lc-step{font-size:12.5px;line-height:1.6;color:var(--text-secondary,#9898a8);margin:0 0 8px}
+/* Both instruction forms in this panel share ONE typography declaration.
+   .lc-substep used to set only `margin`, which looked correct by ACCIDENT:
+   each of its two uses wraps an <a class="lc-dl-link">, and that class sets
+   its own font-size — a child was covering for the parent. The first bare
+   text node placed inside it (the open-the-page result note) inherited the
+   modal's default size and rendered visibly larger than the .lc-step lines
+   beside it. One rule is what stops that recurring; .lc-substep differs in
+   MARGIN only, so only margin is overridden below. */
+.lc-step,.lc-substep{font-size:12.5px;line-height:1.6;color:var(--text-secondary,#9898a8);margin:0 0 8px}
 .lc-copy{position:relative;display:block;padding:8px 10px;border-radius:6px;word-break:break-all;font-size:12px;font-family:'JetBrains Mono',monospace;color:#a855f7;cursor:pointer;border:1px dashed rgba(168,85,247,0.4);background:rgba(168,85,247,0.06);transition:background-color .2s ease,box-shadow .2s ease}
 .lc-copy:hover{background:rgba(168,85,247,0.14);box-shadow:0 0 0 2px rgba(168,85,247,0.18)}
 .lc-copy::after{content:attr(data-tooltip);position:absolute;bottom:calc(100% + 6px);left:8px;font-size:11px;padding:3px 8px;border-radius:5px;background:#1e293b;color:#e2e8f0;white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .15s}

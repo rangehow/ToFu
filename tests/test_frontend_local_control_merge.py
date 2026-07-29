@@ -256,8 +256,13 @@ HARNESS = textwrap.dedent("""
     const browser = {{}};
     const bcases = {{
       connected:     {{ connected: true, clients: [{{client_id:'abcdef123'}}], secondsAgo: 2 }},
-      load_unpacked: {{ connected: false, extensionPath: '/srv/tofu/browser_extension' }},
-      download:      {{ connected: false }},
+      // 'load_unpacked' now needs BOTH the on-disk path AND the browser probe:
+      // a machine with no drivable browser must not render the open button
+      // (see tests/test_local_control_browser_probe.py).
+      load_unpacked: {{ connected: false, extensionPath: '/srv/tofu/browser_extension',
+                        localBrowser: {{ family:'chrome', name:'Chrome',
+                                        extensionsUrl:'chrome://extensions' }} }},
+      download:      {{ connected: false, localBrowser: null }},
     }};
     for (const k of Object.keys(bcases)) {{
       document.getElementById('lcBrowserSetup').innerHTML = '';
@@ -279,7 +284,9 @@ HARNESS = textwrap.dedent("""
     // copy the folder path AND ask the server to open the extensions page —
     // a page with no path, or a path with no page, is half an action.
     document.getElementById('lcBrowserSetup').innerHTML = '';
-    _lcRenderBrowser({{ connected: false, extensionPath: '/srv/tofu/browser_extension' }});
+    _lcRenderBrowser({{ connected: false, extensionPath: '/srv/tofu/browser_extension',
+                       localBrowser: {{ family:'chrome', name:'Chrome',
+                                       extensionsUrl:'chrome://extensions' }} }});
     const openBtn = document.getElementById('lcExtOpenBtn');
     if (openBtn) openBtn.onclick();
     const openClick = await new Promise((res) => setTimeout(() => res({{
@@ -415,15 +422,19 @@ def test_browser_row_picks_the_actionable_instruction():
     assert out["connected"]["steps"] == 0, (
         "a connected extension must show NO install instruction")
 
-    # extensionPath is only sent for a loopback peer (routes/api_v1/browser.py),
-    # i.e. exactly when the folder really is reachable from the user's Chrome.
+    # extensionPath is sent only when the peer is loopback AND this machine has
+    # a browser the server can drive — the folder is then genuinely reachable
+    # from the user's own browser. The probe half matters because the loopback
+    # half is a pure IP test that a same-host reverse proxy makes vacuously
+    # true (routes/api_v1/browser.py::browser_status).
     assert out["load_unpacked"]["steps"] == 1
     assert out["load_unpacked"]["hasPath"] is True, (
         "on-disk case must show the folder to load")
     assert out["load_unpacked"]["hasDownloadBtn"] is False, (
         "a download button here would be a second, redundant path")
 
-    # No path -> remote Chrome cannot load a server-side folder.
+    # No path (or no drivable browser here) -> the user's browser cannot load a
+    # server-side folder, so download-then-load is the only actionable path.
     assert out["download"]["steps"] == 1
     assert out["download"]["hasDownloadBtn"] is True
     assert out["download"]["hasPath"] is False
@@ -1048,8 +1059,14 @@ def _post_open_extensions(flask_client, monkeypatch, client_addr, *,
         return object()
 
     monkeypatch.setattr(_sp, 'Popen', _fake_popen)
-    monkeypatch.setattr(browser_routes, '_find_chrome_binary',
-                        lambda: chrome)
+    # The route now resolves the browser through a PROBE that also reports the
+    # family-specific extensions URL (chrome:// vs edge://) — the Chrome-only
+    # _find_chrome_binary this used to patch is gone. `chrome=None` still
+    # means "no browser on this machine".
+    monkeypatch.setattr(
+        browser_routes, '_detect_local_browser',
+        lambda: ({'binary': chrome, 'family': 'chrome', 'name': 'Chrome',
+                  'extensionsUrl': 'chrome://extensions'} if chrome else None))
     monkeypatch.setenv('TUNNEL_TOKEN', _ROUTE_TOKEN)
     resp = flask_client.post(
         '/api/v1/browser/open-extensions',

@@ -157,13 +157,30 @@ function _lcSetAbout(rowId, text) {
 
 /* Which ONE instruction the browser row shows.
  *
- * `extensionPath` is already the backend's own detected answer:
- * routes/api_v1/browser.py only fills it for a loopback peer, precisely
- * because a remote user's Chrome cannot load a server-side folder. So the
- * branch here consumes that decision rather than re-deriving it. */
+ * BOTH inputs come from the backend's own detection, and BOTH are required
+ * for the 'load_unpacked' branch:
+ *
+ *   - `extensionPath` — routes/api_v1/browser.py fills it only for a
+ *     loopback peer whose machine also has a drivable browser.
+ *   - `localBrowser` — the probe result: which Chromium-family browser this
+ *     machine actually has, or null.
+ *
+ * ── Why the probe and not the path alone ──
+ * This branch used to key off `extensionPath` only, and that is exactly how
+ * the dead button shipped. The path's own gate was a pure IP test, which a
+ * same-host reverse proxy makes vacuously true for public traffic, so a
+ * remote user got a button whose click opened a browser window on a headless
+ * server — three 404s in the log and no way for the user to tell why. The
+ * probe is a fact about the machine that no proxy can forge.
+ *
+ * Keeping the `&& localBrowser` conjunction here (rather than trusting the
+ * backend to have already ANDed them) is deliberate: it is the frontend's own
+ * statement of the rule this file exists to enforce, and it means a future
+ * payload that carries a path without a browser still cannot produce a button
+ * that has nothing to open. */
 function _lcBrowserSetupState(d) {
   if (d && d.connected) return 'connected';
-  if (d && d.extensionPath) return 'load_unpacked';
+  if (d && d.extensionPath && d.localBrowser) return 'load_unpacked';
   return 'download';
 }
 
@@ -209,18 +226,25 @@ function _lcRenderBrowser(d, err) {
   if (state === 'connected') { setup.innerHTML = ''; return; }
 
   if (state === 'load_unpacked') {
-    // Tofu runs on this machine — the unpacked extension is already on disk
-    // AND the server can open this machine's browser at the right page. One
-    // primary action: that button (it also copies the path). What remains —
-    // Developer mode, Load unpacked, paste — is inside Chrome's sandbox and
-    // no web page can do it for the user; the text says so instead of
-    // implying one click finishes the install.
+    // Tofu runs on this machine, this machine HAS a browser we can drive, and
+    // the unpacked extension is already on disk. One primary action: that
+    // button (it also copies the path). What remains — Developer mode, Load
+    // unpacked, paste — is inside the browser's sandbox and no web page can
+    // do it for the user; the text says so instead of implying one click
+    // finishes the install.
+    //
+    // The browser is named from the PROBE, never hardcoded: ordering an Edge
+    // user into Chrome is its own dead instruction.
+    var lb = d.localBrowser || {};
+    var bname = lb.name || 'Chrome';
     setup.innerHTML =
       '<button type="button" class="btn btn-primary btn-sm" id="lcExtOpenBtn">' +
         _lcEsc(_lcT('local.browserOpenPageBtn',
           '帮我打开扩展管理页（自动复制路径）')) + '</button>' +
-      '<p class="lc-step">' + _lcEsc(_lcT('local.browserLoadUnpacked',
-        '剩下的三步 Chrome 不允许网页代劳：① 打开右上角「开发者模式」→ ② 点「加载已解压的扩展程序」→ ③ 粘贴路径（已自动复制）选择这个文件夹：')) + '</p>' +
+      '<p class="lc-step">' + _lcEsc(
+        _lcT('local.browserLoadUnpacked',
+          '剩下的三步 {browser} 不允许网页代劳：① 打开右上角「开发者模式」→ ② 点「加载已解压的扩展程序」→ ③ 粘贴路径（已自动复制）选择这个文件夹：')
+        .replace('{browser}', bname)) + '</p>' +
       '<code class="lc-copy" id="lcExtPath" data-tooltip="' +
         _lcEsc(_lcT('browser.clickToCopy', '点击复制')) + '">' +
         _lcEsc(d.extensionPath) + '</code>' +
@@ -242,11 +266,17 @@ function _lcRenderBrowser(d, err) {
     return;
   }
 
-  // Remote server: the folder does not exist on the user's machine, so the
-  // only actionable path is download-then-load.
+  // The remaining case — either the folder does not exist on the user's
+  // machine (remote server), or this machine has no browser we could drive,
+  // which means the user is not sitting at it either. Both reduce to the same
+  // ONE actionable path: download the ZIP, then load it in YOUR browser.
+  //
+  // This branch is load-bearing beyond the remote case now: it is what the
+  // panel falls through to instead of rendering a button that can only 404.
+  // An empty panel would be worse than a wrong instruction.
   setup.innerHTML =
     '<p class="lc-step">' + _lcEsc(_lcT('local.browserDownload',
-      '下载扩展并解压，然后在 chrome://extensions/ 打开「开发者模式」→「加载已解压的扩展程序」→ 选择解压出的文件夹。')) + '</p>' +
+      '下载扩展并解压，然后在 Chrome / Edge 里打开扩展管理页 → 开启「开发者模式」→「加载已解压的扩展程序」→ 选择解压出的文件夹。')) + '</p>' +
     '<button type="button" class="btn btn-primary btn-sm" id="lcExtDownloadBtn">' +
       _lcEsc(_lcT('browser.stepDownloadBtn', '下载扩展 ZIP')) + '</button>';
   var btn = document.getElementById('lcExtDownloadBtn');
@@ -390,12 +420,17 @@ function _lcMintToken(serverUrl) {
 }
 
 /* The ONE action of the on-disk browser case: ask the server to open this
- * machine's Chrome at chrome://extensions, and copy the extension path from
+ * machine's browser at its extensions page, and copy the extension path from
  * the FRONTEND (navigator.clipboard — a headless server has no clipboard, so
- * this half must happen here). Both fire together; whichever one fails, the
- * note says what to do manually instead of leaving a dead button. The three
- * remaining clicks live inside Chrome's sandbox — the note never claims the
- * install is finished. */
+ * this half must happen here). Both fire together. The three remaining clicks
+ * live inside the browser's sandbox — the note never claims the install is
+ * finished.
+ *
+ * This handler is only reachable when the backend probe already found a
+ * drivable browser (see _lcBrowserSetupState), so "no browser installed" is
+ * no longer one of the outcomes it has to explain — that case never renders
+ * the button in the first place. What remains is a genuine launch failure, so
+ * the note says what to do by hand rather than guessing at a cause. */
 function _lcOpenExtensionsPage(path) {
   var btn = document.getElementById('lcExtOpenBtn');
   var note = document.getElementById('lcExtOpenNote');
@@ -416,7 +451,7 @@ function _lcOpenExtensionsPage(path) {
         '已在你的浏览器打开扩展管理页，路径已复制 —— 剩下三步只能你来点。');
     } else {
       note.textContent = _lcT('local.browserPageOpenFailed',
-        '没能替你打开（你不在本机，或服务器上没找到 Chrome）—— 请手动打开 chrome://extensions/，路径已复制。');
+        '没能替你打开 —— 请自己打开浏览器的扩展管理页，路径已复制。');
     }
   });
 }

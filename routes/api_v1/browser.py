@@ -42,8 +42,13 @@ api_v1_browser_bp = Blueprint('api_v1_browser', __name__)
         'Returns a snapshot of the extension bridge: ``connected``, '
         '``lastPoll`` (epoch seconds), ``secondsAgo``, the per-client '
         '``clients`` array, ``chromeMajor`` (highest Chromium major version '
-        'across connected clients, for LNA-prompt guidance), and '
-        'pending/total command counts.'
+        'across connected clients, for LNA-prompt guidance), '
+        'pending/total command counts, and ``localBrowser`` — the '
+        '``{family, name, extensionsUrl}`` of the Chromium-family browser '
+        'this machine can drive, or ``null``. The UI keys the guided-install '
+        'button off ``localBrowser``: with no browser to open there is no '
+        'button, because a control that cannot achieve what it claims must '
+        'not invite the click.'
     ),
     tags=['capabilities'],
 )
@@ -63,24 +68,40 @@ def browser_status():
     with _commands_lock:
         pending_count = sum(1 for c in _commands.values() if not c.get('picked_up'))
         total_count = len(_commands)
-    # Absolute on-disk path of the unpacked extension. Only meaningful when
-    # the browser viewing this UI is on the SAME machine as the server — a
-    # remote peer (LAN IP, Docker port-map, tunnel, cloud IDE) loads the
-    # extension into THEIR local Chrome, where this server-side path does not
-    # exist. So gate on _remote_is_loopback() (real socket peer, not a
-    # spoofable X-Forwarded-For); remote callers fall through to the
-    # download-and-unzip steps. Keep the isdir() check too.
+    # Absolute on-disk path of the unpacked extension, plus WHICH browser (if
+    # any) this machine can actually drive.
+    #
+    # Two independent facts must BOTH hold before the path is worth sending:
+    #
+    #   1. The peer is loopback — a remote peer (LAN IP, Docker port-map,
+    #      tunnel, cloud IDE) loads the extension into THEIR browser, where a
+    #      server-side path does not exist.
+    #   2. This machine actually HAS a Chromium-family browser. If it does
+    #      not, then nobody is viewing this UI from this machine either, so
+    #      the path is useless no matter what the socket says — and the
+    #      IP test alone cannot see that, because a same-host reverse proxy
+    #      (nginx / ngrok / cloudflared → 127.0.0.1, with ProxyFix unwired)
+    #      reports loopback for every public request.
+    #
+    # The probe is the fact a proxy cannot forge, so it backs up the IP test
+    # rather than trusting it alone. Failing (2) falls through to the
+    # download-and-unzip instruction, which IS actionable from anywhere.
     from .auth import _remote_is_loopback
     base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     ext_dir = os.path.join(base_dir, 'browser_extension')
+    local_browser = _detect_local_browser()
     extension_path = None
     if os.path.isdir(ext_dir):
-        if _remote_is_loopback():
-            extension_path = ext_dir
-        else:
+        if not _remote_is_loopback():
             logger.debug('[Browser] suppressing extensionPath for non-loopback '
-                         'peer %s — remote Chrome cannot load the server-side folder',
-                         request.remote_addr)
+                         'peer %s — remote browser cannot load the server-side '
+                         'folder', request.remote_addr)
+        elif not local_browser:
+            logger.debug('[Browser] suppressing extensionPath: no Chromium-'
+                         'family browser on this machine, so nobody is viewing '
+                         'this UI from it')
+        else:
+            extension_path = ext_dir
     return jsonify({
         'connected': connected,
         'lastPoll': _last_poll_time,
@@ -90,6 +111,12 @@ def browser_status():
         'totalCommands': total_count,
         'extensionPath': extension_path,
         'chromeMajor': chrome_major,
+        # Only what the UI renders. The binary's absolute path is server
+        # filesystem detail the browser has no use for.
+        'localBrowser': ({'family': local_browser['family'],
+                          'name': local_browser['name'],
+                          'extensionsUrl': local_browser['extensionsUrl']}
+                         if local_browser else None),
     })
 
 
@@ -155,56 +182,113 @@ def browser_test():
 # same lie as a bare token with no address.
 
 
-def _find_chrome_binary() -> str | None:
-    """Locate a Chrome-family executable for this platform, or None.
+# Chromium-family browsers that run this extension UNCHANGED.
+#
+# Edge is here because it is Chromium under the hood: same `chrome.*`
+# namespace, same MV3 service-worker background, same "Load unpacked" flow.
+#
+# Firefox is deliberately ABSENT, and not as an oversight to correct later:
+# it has no persistent unpacked-install path at all (Mozilla's own docs — an
+# `about:debugging` add-on lasts "until you remove it or restart Firefox",
+# and end users can only install add-ons Mozilla has signed). Listing it
+# would manufacture exactly the promise-we-cannot-keep this module was fixed
+# to stop making. Firefox support is a signing + distribution pipeline, not a
+# browser-launch table entry.
+#
+# Each family carries its OWN extensions URL: chrome://extensions is not
+# Edge's extensions page, and handing a browser another vendor's internal URL
+# lands the user nowhere useful.
+_BROWSER_FAMILIES = (
+    # (family, display name, extensions URL,
+    #  posix names, macOS app paths, windows path parts)
+    ('chrome', 'Chrome', 'chrome://extensions',
+     ('google-chrome', 'google-chrome-stable', 'chrome'),
+     ('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',),
+     (('Google', 'Chrome', 'Application', 'chrome.exe'),)),
+    ('edge', 'Edge', 'edge://extensions',
+     ('microsoft-edge', 'microsoft-edge-stable', 'msedge'),
+     ('/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',),
+     (('Microsoft', 'Edge', 'Application', 'msedge.exe'),)),
+    ('chromium', 'Chromium', 'chrome://extensions',
+     ('chromium', 'chromium-browser'),
+     ('/Applications/Chromium.app/Contents/MacOS/Chromium',),
+     (('Chromium', 'Application', 'chrome.exe'),)),
+)
 
-    The extension is Chrome-only, so falling back to the DEFAULT browser
-    (xdg-open / os.startfile) would be wrong whenever that default is
-    Firefox or Safari — better to report "not found" and let the UI keep
-    the manual instruction than to open a page that cannot help.
+
+def _detect_local_browser() -> dict | None:
+    """Probe THIS machine for a Chromium-family browser we can drive.
+
+    Returns ``{binary, family, name, extensionsUrl}`` for the first hit, or
+    ``None`` when this machine has no such browser.
+
+    This probe is the single source of truth for two separate UI decisions —
+    whether to offer the open-the-page button at all, and whether the
+    server-side unpacked-extension path is worth showing. It is a fact about
+    the machine, which is what makes it strictly stronger than the IP-based
+    loopback test it backs up: a same-host reverse proxy makes every public
+    request *look* loopback, but it cannot conjure a browser onto a headless
+    server.
+
+    Never falls back to the DEFAULT browser (xdg-open / os.startfile): on a
+    machine whose default is Firefox or Safari that opens a page which cannot
+    load this extension.
     """
-    if sys.platform == 'darwin':
-        for cand in (
-                '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-                '/Applications/Chromium.app/Contents/MacOS/Chromium'):
-            if os.path.isfile(cand):
-                return cand
-        return shutil.which('chrome')
-    if sys.platform == 'win32':
-        for env in ('LOCALAPPDATA', 'PROGRAMFILES', 'PROGRAMFILES(X86)'):
-            base = os.environ.get(env)
-            if base:
-                cand = os.path.join(
-                    base, 'Google', 'Chrome', 'Application', 'chrome.exe')
+    for (family, name, url, posix_names,
+         mac_paths, win_parts) in _BROWSER_FAMILIES:
+        binary = None
+        if sys.platform == 'darwin':
+            for cand in mac_paths:
                 if os.path.isfile(cand):
-                    return cand
-        return shutil.which('chrome')
-    for name in ('google-chrome', 'google-chrome-stable', 'chromium',
-                 'chromium-browser'):
-        hit = shutil.which(name)
-        if hit:
-            return hit
+                    binary = cand
+                    break
+        elif sys.platform == 'win32':
+            for env in ('LOCALAPPDATA', 'PROGRAMFILES', 'PROGRAMFILES(X86)'):
+                base = os.environ.get(env)
+                if not base:
+                    continue
+                for parts in win_parts:
+                    cand = os.path.join(base, *parts)
+                    if os.path.isfile(cand):
+                        binary = cand
+                        break
+                if binary:
+                    break
+        if binary is None:
+            for n in posix_names:
+                hit = shutil.which(n)
+                if hit:
+                    binary = hit
+                    break
+        if binary:
+            logger.debug('[Browser] probe: %s (%s) at %s', name, family, binary)
+            return {'binary': binary, 'family': family, 'name': name,
+                    'extensionsUrl': url}
+    logger.debug('[Browser] probe found no Chromium-family browser here')
     return None
 
 
 @api_v1_browser_bp.route('/api/v1/browser/open-extensions', methods=['POST'])
 @require_auth
 @api_meta(
-    summary='Open the local Chrome at chrome://extensions (loopback only)',
+    summary='Open the local Chromium-family browser at its extensions page',
     description=(
-        'Side effect: launches the server machine\'s Chrome-family browser '
-        'at the extensions page — one step of the guided extension install '
-        'in the Local Control modal. Gated on the request peer being '
-        'loopback, because the window opens on the SERVER machine, which '
-        'only helps when the user is browsing from that same machine. The '
-        'remaining steps (Developer mode → Load unpacked → pick the folder) '
-        'are Chrome-sandboxed and cannot be automated; the UI says so rather '
-        'than implying one click finishes the install.'
+        'Side effect: launches the server machine\'s Chromium-family browser '
+        '(Chrome / Edge / Chromium) at ITS OWN extensions page — one step of '
+        'the guided extension install in the Local Control modal. Gated on '
+        'the request peer being loopback, because the window opens on the '
+        'SERVER machine, which only helps when the user is browsing from that '
+        'same machine. Returns 404 when no such browser exists here; the UI '
+        'consumes ``localBrowser`` from /status and does not render the '
+        'button at all in that case, so this is a backstop rather than the '
+        'primary signal. The remaining steps (Developer mode → Load unpacked '
+        '→ pick the folder) are browser-sandboxed and cannot be automated; '
+        'the UI says so rather than implying one click finishes the install.'
     ),
     tags=['capabilities'],
 )
 def browser_open_extensions():
-    """Open THIS machine's Chrome at the extensions page — loopback only."""
+    """Open THIS machine's Chromium-family browser at its extensions page."""
     from .auth import _remote_is_loopback
     if not _remote_is_loopback():
         logger.warning('[Browser] open-extensions refused: peer %s is not '
@@ -213,18 +297,23 @@ def browser_open_extensions():
         return api_forbidden(
             'The extensions page can only be opened when you are browsing '
             'from the same machine the server runs on.')
-    binary = _find_chrome_binary()
-    if not binary:
-        logger.info('[Browser] open-extensions: no Chrome-family browser '
+    browser = _detect_local_browser()
+    if not browser:
+        logger.info('[Browser] open-extensions: no Chromium-family browser '
                     'found on this machine')
         return api_not_found(
-            'No Chrome-family browser was found on this machine — open '
-            'chrome://extensions/ manually instead.')
+            'No Chromium-family browser was found on this machine — open the '
+            'extensions page manually instead.')
+    binary = browser['binary']
+    # The URL travels WITH the browser the probe picked: edge://extensions is
+    # Edge's page and chrome://extensions is not. A second hardcoded copy of
+    # "which page is the extensions page" is how that silently regresses.
+    url = browser['extensionsUrl']
     try:
         kwargs = {}
         if sys.platform != 'win32':
             kwargs['start_new_session'] = True
-        subprocess.Popen([binary, 'chrome://extensions'],
+        subprocess.Popen([binary, url],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          **kwargs)
     except Exception as e:
@@ -232,11 +321,11 @@ def browser_open_extensions():
                      exc_info=True)
         return api_internal_error(e, context='routes.api_v1.browser',
                                   source='browser_open_extensions')
-    logger.info('[Browser] opened chrome://extensions via %s (loopback user)',
-                binary)
+    logger.info('[Browser] opened %s via %s (loopback user)', url, binary)
     audit_log('browser_extensions_page_opened', browser=binary,
-              peer=request.remote_addr)
-    return api_ok({'opened': 'chrome://extensions', 'browser': binary})
+              family=browser['family'], peer=request.remote_addr)
+    return api_ok({'opened': url, 'browser': binary,
+                   'browserName': browser['name']})
 
 
 __all__ = ['api_v1_browser_bp']

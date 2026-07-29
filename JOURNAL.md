@@ -75,6 +75,18 @@
 - **★ 顺带暴露两条测试基建缺陷(未修,属独立工作项):** 全量跑**两次被卡死打断**——`tests/test_paper_terminology_audit.py` 真的去打线上 LLM(栈停在 `dispatch_chat` → `time.sleep(0.3)` 重试循环)、`tests/test_recovery_merge_guards.py` + `test_recipe_sources_card_spoken.py` 真的连 DB 阻塞在 `_core.py:852 cursor.execute`。conftest 本已为 2026-06-28 删 2300 会话的事故强制 sqlite,但它自己的注释承认「Several tests deliberately write to the REAL database」——**这类测试在生产库被 8 个 agent 打满时必然挂起,使全量跑不可能一次跑完**。
 - **验收边界(诚实分账):** ①收集门 **11,878 用例 0 收集错误**,说明无 import 层断裂;②全量跑因上述卡死未能一次跑完,已分段覆盖 a-z(跳过 3 个卡死文件),失败清单完整;③两条修复的目标守卫 20/20 绿,相邻环唯一那条红(`test_export_js_sanitize_syntax`)**已在干净 HEAD 实测同样红**,非我引入;④纯前端静态资产改动,**刷新即生效,无需重启**。
 
+### 2026-07-29(续·语言包缺席) — owner 指出我只修了「过期」没修「缺席」:pack 模式下**一个 212KB 文件是整个 UI 的单点**,而三道防线各自失效——**其中能力检查是「构造上不可能失败」**(owner 复核 `4b3398bf` 后开的三条;commit `05b55fbe`,4 文件 +395;新套件 **7/7 含 NEUTER×4 各咬各的方向**,相邻环 **133 passed**)
+
+- **★ owner 的定性成立,我上一批的边界画错了:** `4b3398bf` 修的是过期 pack **如何解析**,对 pack **缺席**(404 / 代理截断 / 磁盘清掉 / 将来清理器再出 bug)完全无效。而 pack 模式**主动**把 i18n.js 移出核心 bundle,于是这一个文件成了全 UI 的单点故障——同样的灾难,另一条路。
+- **实测复现(node,修前):** 只装 index.html 那一行 `window.t` 兜底,然后跑真实代码 ⇒ `finish_info.js:189 -> ReferenceError: _i18nLang is not defined`,`translation.js:62 -> OK (guarded)`。**这条 ReferenceError 与生产日志一字不差**,说明它是一条独立可达路径,不需要经过我上一批修的重定向。
+- **★ 三道防线里最要命的一条是「构造上不可能失败」的:** `_loadBearingCaps` 断言 `typeof window['t'] === 'function'`——**而 index.html:80 自己就 stub 了 `window.t`**。也就是说字典整个消失时这条检查照样绿。**判据:对一个有兜底 stub 的符号做 typeof 存在性断言,等于没断言;必须断言它承载的数据(`_i18n` 非空),而不是它的壳。** 这正是「静默渲染键名」能走到用户面前的原因。另补一条守卫钉住「stub 确实存在」这个前提,防止将来 stub 被删后此断言退化成同义反复。
+- **三处落点:** ①`_i18nLang` 补 boot floor(从 `localStorage.tofu_ui_lang` 取种,用户选的语言在 pack 失败时也不丢);②`_onI18nPackError` 取代通用 handler——**重试一次**(有了 `4b3398bf`,过期哈希现在会 302 到当前 pack,一次重发就能救回常见情形),成功则调 `_applyI18n` 并计入 `_onScriptLoad`(否则 LoadGuard 会把它一直算作「还在下载」),**只有重试也失败才记错误**,所以救回来的 pack 不会误报红条;③能力检查改断言字典。
+- **★ 结构规则(本批真正的产出):当核心 bundle 排除某模块时,该模块拥有的、且被 bundle 裸引用的每一个符号都必须在 boot 层有地板。** 守卫扫**真实的 `_BUNDLE_FILES` 清单**而非手抄列表,所以下个月有人加第四处裸 `_i18nLang` 会直接红。`ui/finish_info.js:189` 是当时的存量违规,本批修掉。
+- **★ 我第一版扫描器造出两个假阳性,是它自己教我改的:** 逐行判断把 `error_envelope.js:121` 与 `translation.js:62` 也判违规——但前者被**函数开头的早退**保护、后者的 `typeof` 在**上一行**。**逐行检查会逼人去改本来正确的代码**,所以扫描器改为**去注释 + 按函数作用域**判断(函数体内任何位置有 typeof 即算受保护)。NEUTER-A 专门验证改完之后它**仍然**抓得到真违规,不是靠放宽换绿。
+- **NEUTER×4 各咬各的方向:** 还原裸引用 → 扫描器重新点名 `finish_info.js`;删掉 boot floor → 2 红(含那条真跑 node 的复现);handler 换回通用 → 只红自愈那条;能力检查换回只看 `typeof t` → 只红「构造性失明」那条。
+- **过程自纠一条:** NEUTER-C 首次执行时我在 heredoc 里的引号转义失效,替换根本没发生却报了「7 passed」——**看上去像守卫不咬,实际是我的实验没做成**。改用 `python3 -c` 直传后重做,精确红 1 条。**判据:NEUTER 报「全绿」时,先确认反转真的落盘了。**
+- **验收边界(诚实分账):** ①相邻环两条红(`test_i18n_boot_keys_discovery` / `test_frontend_i18n_key_coverage`,缺 `project.qrScan*` 键)**不是我的**——已实测证明它们在**我之前的兄弟提交 `6a5dec8d`** 上就已经红(该提交把 `static/js/ui/tool_rounds.js` 连同 `lib/qr.py` 一起夹带进了一个 journal 提交,而 `i18n.js` 里没有对应键);我的 `05b55fbe` 只含 4 个文件,未碰这两个文件。②`test_bundle_manifest_parity` 的 `private_hosts.js` 同为先存红,按 owner 指示不在本批处理。③**纯前端 + 后端标签改动,运行中进程(PID 1067797,起于 07-28 14:27)不带;需要重启才生效。**
+
 ### 2026-07-29(续·语言包自愈) — 「强刷后转圈很久 / 文案全变成变量名 / 选了中文却显示英文」是**同一个根因的三个面**:`_BUILT_BUNDLE_RE` 认三种产物,而分类器只分两种,于是每个过期语言包都被重定向到 **feature bundle**(owner 截图报障;commit `4b3398bf`,4 文件;新套件 **9/9 含 NEUTER×2 各咬各的方向**,相邻环 **86/86** 于干净 committed worktree 复验)
 
 - **★ 三个症状不是三个 bug,是一条链。** 服务端日志把根因写得一字不差:`[StaleBundle] Self-healing stale request: i18n-zh-9e07255b.js -> feature-92a75489.js`。`resolve_stale_bundle` 里是 `if filename.startswith('bundle-') … else: # 'feature-'`——**注释自己写着 else 分支是 feature,但正则早已扩容到接纳 `i18n-<lang>-<hash>.js`**,于是所有语言包落进 feature 分支。实测复现该分类:`i18n-zh-*.js` → `matches=True -> takes FEATURE-branch`。
@@ -218,6 +230,19 @@
   **判据:只加 `invalidate_cache()` 解决不了跨进程**——本进程调用影响不到另一进程的内存;真正的根因是**缓存没有失效依据**,所以有效性键必须锚在存储文件 **mtime**(任何进程写盘,其他进程下次读时自动发现并重载,不依赖任何一侧主动通知)。`_persist()` 后同步记录自身 mtime,避免自写触发无谓重读并保持 read-your-writes。`invalidate_cache()` 仍做成**公开接口并进 `__all__`**,定位是兜住 mtime 看不见的情形(同刻度覆写 / 手改 JSON / 测试换路径)——**禁止再从模块外扒 `_cache_loaded`**,验收脚本已改调公开接口。守卫 12 条,NEUTER×2 各咬各的(退回 load-once → 4 条跨进程红;摘 `__all__` → 公开性红)。
 
 - **★ 可复用判据(新旧 store 不对称已消除):** 修复前 `private_hosts` 有 `_resync()` 把变更推出去,而 `auth_sources` 连让别人重读的门都没有——这种不对称本身就是缺陷信号。**任何带模块级缓存的配置 store MUST 有失效依据**(mtime / 版本号 / 显式失效接口至少其一),否则它在多进程部署下必然读到陈旧值;新增此类 store 时先问「另一个进程改了盘,我怎么知道」。
+
+- **★★★ 最终根因(2026-07-29 追加,取代下方结账段里关于第三层的一切推测——**引用这一条**):cookie 搬运在原理上不可行,已实测定性。**
+  该站鉴权探针 `/sso/web/auth?clientId=<id>` 会在响应体里**回显它实际收到的 ssoid**,而我们无论怎么送,它都回显 `""`(空)、`msg:"ssoid 不存在"`。穷举验过 **5 种传输**:cookie 名 `ssoid` / `<clientId>_ssoid` / `SSOID` / `ssoId` 四种命名、host-only 与父域两种 scope、`sameSite=None`、以及手工拼 `Cookie:` 头绕过 cookiejar 域匹配 —— **服务端看到的都是空**。另一条实测补齐画面:**带不带 cookie,HTML 都返回同一份 6052 字节外壳**(HTML 层完全不鉴权,鉴权只发生在那个探针上)。
+  **⇒ 判定:DevTools Application 面板里的存储值 ≠ 页面线上实际发送的值**(该站页面 JS 在发送时重组票据——登录页里 `win.__client_id` / `win.__hmis` 那两行就是在做这件事)。**因此任何「从面板复制 cookie 搬到服务器」的方案在原理上就不可能成功,与 domain / sameSite / cookie 名 / 时效全部无关。**
+  **可行路径只有两条:**(a) **浏览器扩展**在用户已登录的真实页面上下文里抓取(凭证从不离开用户浏览器,票据由页面自己重组,天然成立);(b) 该站的 **API + 长期 token**。
+  **验收脚本已能 5 秒看清真相**(`tests/_acceptance_aigc_model_plaza.py`,commit `53a12220`):新增第四态 **`CREDENTIAL_UNUSABLE`(退出码 3)** —— 打一次鉴权探针读回显的 ssoid:空 ⇒ 凭证没送到(搬运不可行,重捕无用);非空但仍 401 ⇒ 送到了被判无效(重捕有用),保持 `LOGIN_WALL`(退出码 1)。**两者下一步完全相反,而旧版把它们报成同一句话,这正是本次排查绕了四轮的原因。**
+
+- **★★★ 三个被实测否掉的错误归因(记的是「为什么它们站不住」,不是结论本身——这一段比任何结论都值钱):**
+  1. **「PKCE 上下文绑定,凭证不能搬到另一个浏览器」——错。** 我据此宣布这是外部限制,而 owner 指出真 bug 就在我们自己代码里:`cookies_from_fields` 把每条 cookie 都无条件改写成父域,host-only 的 ssoid 因此永远送不到。**判据:在宣布「这是外部系统的限制」之前,必须先排除自己代码把输入改坏了。** 那条 domain 改写 bug 影响**所有**使用 host-only 会话 cookie 的站点,且 store 还照报「已连接」,比本目标重要得多(修复 `961810b9`)。
+  2. **「短时票据,复制粘贴追不上」——错,且是双方一起读错时区。** 我说「签发即过期」、owner 说「08:59 已过」,实际解出 `1785315569942 → 16:59:29`,而服务器时间 `08:35` —— **票据还有 8 小时有效**。**判据:凡以时间戳为论据,必须同时打印「解出的时刻」与「当下时刻」并让它们并排出现**;只报其中一个,时区错误无法被发现。也正因此第四态**不按时间戳判过期** —— 按时效判会给出「凭证还好着」的假阳性。
+  3. **我的 401 与 owner 的 200 分歧——不是机器差异,是我漏测了一半。** owner 用 devtools 原样 scope 注入得 200,我用被改写的父域 scope 得 401;修好 domain 后我复测**仍** 401,才暴露出更深一层的发送侧问题(面板值≠线上值)。**判据:两侧实测结论冲突时,先找「两次实测的输入差在哪一位」,不要先假设环境不同。**
+
+- **★ 同一形状第九次,这次在产品码里:`if auth_text: return auth_text` —— 非空 ≠ 成功。** SSO 登录墙本身是完整页面(实测 1918 字),所以认证重放拿到墙时被当成功返回,而**紧随其后的浏览器升级分支永远不可达** —— 本该救这种情形的兜底根本没机会运行。修法:按内容判定(`_looks_like_login_wall`,长度分级 + 需佐证:≤600 字命中任一即判、更长需 ≥2 个标记、>4000 字一律不判),命中则置空让升级可达(`reason=auth_source_login_wall`),浏览器也接不了时返回 typed diag `auth_replay_rejected` 并写明「重新粘贴 cookie 不可能解决」(commit tofu-search `c01b8a2`,守卫 9 条,NEUTER 咬顺序不变量)。**判据:凡「拿到了东西就算成功」的分支,都要问「这个东西是不是我要的那个」** —— 本轮九次同型的共同形状始终是**用一个易得的近似信号替代真正的判据**。
 
 - **★★ 结账(单一真源:这条链的最终状态,不必再拼前文):验收未达成——前两层已打通并有守卫,第三层「SSO 凭证获取」未完成。**
   - **① SSRF 私网守卫** ✅ 已打通:主机名白名单(地址会漂移,不能锚 IP),已落 Settings store `data/config/private_hosts.json`(非 env),守卫齐。

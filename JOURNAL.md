@@ -257,6 +257,19 @@
 - **端到端验收(真路由,不是 mock):** 1414 字提议 → 确认 **HTTP 200** → 落库 **1414 字完整** + summary 落库 → 提议**出待办队列** → `needsYou` 归零。
 - **验收边界(诚实分账):** 纯前后端改动,**运行中进程不带,需重启才对新会话生效**;本次未在真实浏览器里点过那颗按钮(jsdom 与真路由两段各自实测,中间的 `Api.project.commitCharter` 是 api.js 既有薄封装)。
 
+### 2026-07-29(续·最后一公里) — Edge 支持**到用户为止**才算发货 + 探测挂在 3s 轮询上没缓存(owner 复核 `7c150dd0` 抓出两条;commit `fd73bf9b`,4 文件 +310/-17;新守卫 **10 条 failing-first → 套件 25/25**,**NEUTER×4 各咬各的方向**,相邻环 **104/104**,干净 committed worktree **67/67**,**导出存活实测通过**)
+
+- **★ owner 的判据值得记下:「后端能驱动 Edge」和「Edge 用户能装上」是两件事。** 后端表里有 Edge,但 `README.md:348` / `README_CN.md:339` 仍写「打开 `chrome://extensions`」——**在 Edge 里输 `chrome://` 什么也打不开**,所以文档路径对刚刚被支持的那批用户是**死的**,与死按钮同型。CLAUDE.md 明写 README 是用户面产品文档、须中英同步,这条上一批漏了。
+- **文档落点:** 两个 README 各自点名 Chrome/Chromium 用 `chrome://extensions`、Edge 用 `edge://extensions`,并写明 Firefox 为何不支持(重启即失 + 只能装签名包),另指向本机控制的一键路径。`docs/README_EXTENSION.md` 整篇重写——它教三个**不存在**的脚本、指向已成 package 的 `lib/browser.py`/`lib/tools.py`、仍自称 "ChatUI"。
+- **★ 缓存的重点是 TTL 不是缓存:** `_detect_local_browser()` 挂在 `/status` 上,模态框开着就 **3s 一次**(`_LC_POLL_MS`),而**未命中才是贵的那条路**——没装浏览器时每个候选名都 miss、每个 miss 走完整 PATH。实测 **51 个 PATH 条目 / ~408 次 stat / ~6ms 每次**,而本项目部署在 FUSE 上只会更贵。复用 `lib/ttl_cache.TTLCache`(**禁自造**:它已解决 per-key 计算序列化,N 个标签页只走一次;并注册进 cgroup 内存压力回收)。**实测 20 次轮询 104.63ms → 5.05ms,21×。**
+  但**无过期的缓存会把原始投诉原样还给用户**——「Tofu 找不到我的浏览器」正是本模块要修的那句话,只不过这次探测是对的、缓存在撒谎。故 TTL=60s 并**用行为守卫钉死**:测试中途「装上」浏览器,断言 TTL 过后它必须被看见。
+- **★ 我自己造的两个守卫缺陷,都是自查抓出来的(没上线):**
+  ①文档守卫第一版**直接禁 `chrome://extensions` 子串**——那会**惩罚正确的修法**(把两种 scheme 并列写才是最有用的),把文档逼向含糊措辞。收窄为真缺陷:**`chrome://` 出现而附近没有 `edge://`**。
+  ②缺失脚本守卫第一版**按路径盯 `docs/README_EXTENSION.md`**——而该文件是 `160b6796` **有意 gitignore 且从未跟踪**的内部文档,守卫在干净检出上会**空转通过**(假绿)。先泛化到**所有已跟踪 `*.md`**,泛化后**立刻抓到一个假阳性**:`UNIFIED_DEVICE_BRIDGE_DESIGN.md` §2.4 点名这三个脚本恰恰是为了**报告它们不存在**。再收窄为**祈使式调用**(`./x.sh` / `$ x.sh`)——**守卫不能惩罚一份如实记录腐烂的审计**。
+- **★ 计数断言(charter #15)第二次救场:** 暂存 5 个文件却返回 4,因为 `git add docs/README_EXTENSION.md` 被 .gitignore 拒绝。**若无这条断言,我会以为那份重写发货了,而它永远到不了任何人手里。** 该文件因此是「盘上已重写、按设计不提交」——这点写进了 commit message,不留悬念。
+- **导出存活验收(charter #13,第一等目标):** 真跑 `export.py --mode opensource`,产物中 `README.md` / `README_CN.md` 各含 1 处 `edge://extensions` + 3 处 Edge、探测缓存 3 处 `TTLCache` 在位、`docs/README_EXTENSION.md` 被正确剥离。**Edge 指引确实活着到达用户。**
+- **验收边界:** 纯后端+文档,**运行中进程不带,需重启才对新会话生效**;我不自行重启。兄弟 WIP 50 项完好,提交不带 pathspec、零兄弟标记。
+
 ### 2026-07-29 — 「帮我打开扩展管理页」死按钮根修:**它不是没反应,是三次真 404;而判定「用户在不在本机」的那把尺子在隧道部署下恒为真**(owner 报障;commit `7c150dd0`,6 文件 +716/-94;新套件 **16/16 failing-first(14 红 2 绿)**,**NEUTER×3 各咬各的方向**,相邻环 **42/42 + 76**,干净 committed worktree **58/58**)
 
 - **★ 「点了没反应」是错觉,日志有铁证:** `logs/app.log` 三条 `POST /api/v1/browser/open-extensions → 404`,每条都跟着 `no Chrome-family browser found on this machine`。按钮、路由、鉴权全通,**死在最后一寸**。

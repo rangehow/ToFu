@@ -373,6 +373,7 @@ var _i18n = {
   'sidebar.errorState': { zh: '上次生成以错误结束', en: 'Last generation ended with an error' },
   'sidebar.incompleteTag': { zh: '未完成', en: 'Incomplete' },
   'sidebar.incompleteState': { zh: '上次生成被中断，未正常完成', en: 'Last generation was interrupted and did not finish' },
+  'sidebar.stateUnconfirmed': { zh: '实时连接中断，此状态可能不是最新的', en: 'Live connection is down — this state may be out of date' },
   'sidebar.copyConvId': { zh: '复制会话ID', en: 'Copy conversation ID' },
   'sidebar.refConv': { zh: '引用此对话', en: 'Reference this conversation' },
   'sidebar.moveToFolder': { zh: '移入文件夹', en: 'Move to folder' },

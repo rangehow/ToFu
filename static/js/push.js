@@ -57,6 +57,17 @@ const _push = (() => {
     // a reconnect is scheduled but never opens, no further emit occurs and the
     // last reading would otherwise display forever as if still live.
     const reading = { ms: _latencyMs, state: _latencyState, connected: _connected, at: Date.now() };
+    /* Feed the conv-state confidence latch (pt_cadaa70ffa6b468d). This is the
+     * ONLY producer of authoritative-channel health: the reducer must not
+     * re-derive it from a second signal, or "is my view fresh" would drift
+     * from "is the socket delivering" — the same two-truth-sources mistake
+     * this subsystem keeps paying for. Rides the existing latency emit rather
+     * than registering a listener, so health and latency can never disagree.
+     * typeof-guarded: bundle order does not guarantee the reducer is loaded. */
+    if (typeof markAuthoritativeChannelHealth === 'function') {
+      try { markAuthoritativeChannelHealth(_latencyState, _connected); }
+      catch (e) { console.debug('[Push] health latch failed:', e); }
+    }
     for (const fn of _latencyListeners) {
       try { fn(reading); }
       catch (e) { console.error('[Push] latency listener error:', e); }

@@ -440,7 +440,7 @@ async def apply_toolset(conv_id):
 _SYNC_DIGEST_MAX = 500
 
 
-def _log_divergence(conv_id: str, kind: str, client, server) -> None:
+def _log_divergence(conv_id: str, kind: str, client, server) -> dict | None:
     """Log a divergence at a severity that reflects whether it is a FAULT.
 
     P5 logged every inequality at WARNING. On a streaming conversation the
@@ -448,8 +448,13 @@ def _log_divergence(conv_id: str, kind: str, client, server) -> None:
     fired constantly and buried the real signal. The tracker distinguishes a
     client that is merely sampling late (moving) from one that is frozen while
     the server advances — only the latter is the "notify frame dropped, never
-    converges" hole. Severity is the ONLY thing that changes here; the
-    divergence is still recorded and still returned to the caller.
+    converges" hole.
+
+    Returns the tracker's verdict dict (or None when the tracker itself
+    failed) so the caller can act on a SUSTAINED stall instead of only
+    logging it — the observation/repair split of pt_cadaa70ffa6b468d. Logging
+    remains the only side effect HERE; this function still never mutates
+    either side's state.
     """
     try:
         from lib.conversations.drift_tracker import observe_divergence
@@ -460,7 +465,7 @@ def _log_divergence(conv_id: str, kind: str, client, server) -> None:
                      conv_id[:8], kind, e)
         logger.warning('[SyncDrift] conv=%s kind=%s client=%s server=%s',
                        conv_id[:8], kind, client, server)
-        return
+        return None
 
     if v['severity'] == 'warning':
         logger.warning(
@@ -476,6 +481,7 @@ def _log_divergence(conv_id: str, kind: str, client, server) -> None:
             'observations=%d stalled=%s direction=%s',
             conv_id[:8], kind, client, server, v['age'], v['observations'],
             v['stalled'], v['direction'])
+    return v
 
 
 def _log_agreement(conv_id: str, kind: str) -> None:
@@ -574,11 +580,18 @@ async def sync_digest():
     # Registry snapshot — the ONLY physical SSOT for "who is running".
     # Scope by the caller's tenant when auth carries a real user_id;
     # single-user default stays unscoped (byte-identical to P1's notify).
+    #
+    # ``_scope`` is resolved OUTSIDE the try: the repair block at the end of
+    # this function needs it to build a correctly-scoped snapshot, and a
+    # failure of the registry import must not leave it unbound (that would
+    # turn "registry unavailable" into a silent loss of the repair path — an
+    # exception swallowed by the repair block's own guard, i.e. exactly the
+    # kind of invisible degrade this whole workstream is about).
+    _auth = current_auth()
+    _uid = getattr(_auth, 'user_id', None) if _auth else None
+    _scope = '' if _uid in (None, '', 1, '1') else str(_uid)
     try:
         from lib.tasks_pkg.manager._registry import snapshot_running_by_conv
-        _auth = current_auth()
-        _uid = getattr(_auth, 'user_id', None) if _auth else None
-        _scope = '' if _uid in (None, '', 1, '1') else str(_uid)
         snap = snapshot_running_by_conv(user_id=_scope)
     except Exception as e:
         logger.warning('[SyncDrift] registry snapshot failed: %s', e)
@@ -588,6 +601,7 @@ async def sync_digest():
     from routes.common import DEFAULT_USER_ID
 
     divergences = []
+    verdicts = []
     checked = 0
     for d in digests:
         if not isinstance(d, dict):
@@ -604,7 +618,9 @@ async def sync_digest():
         if client_tids != server_tids:
             divergences.append({'convId': conv_id, 'kind': 'task_ids',
                                 'client': client_tids, 'server': server_tids})
-            _log_divergence(conv_id, 'task_ids', client_tids, server_tids)
+            _v = _log_divergence(conv_id, 'task_ids', client_tids, server_tids)
+            if _v:
+                verdicts.append(_v)
         else:
             _log_agreement(conv_id, 'task_ids')
 
@@ -643,11 +659,60 @@ async def sync_digest():
             if server_rev != client_rev:
                 divergences.append({'convId': conv_id, 'kind': 'rev',
                                     'client': client_rev, 'server': server_rev})
-                _log_divergence(conv_id, 'rev', client_rev, server_rev)
+                _v = _log_divergence(conv_id, 'rev', client_rev, server_rev)
+                if _v:
+                    verdicts.append(_v)
             else:
                 _log_agreement(conv_id, 'rev')
 
-    return api_ok(checked=checked, divergences=divergences)
+    # ── REPAIR: a detected stall must produce a correction, not just a log ──
+    # pt_cadaa70ffa6b468d. Everything above is observation; without this block
+    # the server knew exactly which socket was frozen and left the user to
+    # discover it by pressing F5.
+    #
+    # The frame sent is the ORDINARY conv_state_snapshot — the same one a fresh
+    # connection receives, built from the same registry projection, carrying
+    # the same server-minted frame-level rev. Reusing it (rather than inventing
+    # a "repair" frame type) means the client needs NO new handling: the reducer
+    # already applies it, already rev-gates each conv, and already treats an
+    # absent conv as CLEAR. A repair is therefore indistinguishable from a
+    # reconnect, which is exactly the property that makes it safe to send.
+    #
+    # Scoped to the reporting tenant so a repair can never leak sibling tasks,
+    # and delivered to THAT socket alone (see PushHub.deliver_to_socket).
+    # Best-effort throughout: a failed repair must never turn the probe — a
+    # read-only diagnostic — into a 500.
+    repaired = False
+    try:
+        socket_id = str(body.get('pushRid') or '')[:64]
+        from lib.conversations.drift_repair import (note_repair_attempt,
+                                                    should_repair)
+        if should_repair(socket_id, verdicts):
+            from lib.agent_core.push import build_conv_state_snapshot, hub
+            frame = build_conv_state_snapshot(user_id=_scope)
+            if hub.deliver_to_socket(socket_id, frame):
+                note_repair_attempt(socket_id)
+                repaired = True
+                logger.warning(
+                    '[SyncDrift] REPAIR sent to socket=%s (%d sustained '
+                    'divergence(s)) — pushing a corrective conv_state_snapshot '
+                    'covering %d running conv(s)',
+                    socket_id[:8],
+                    sum(1 for v in verdicts if v.get('sustained')),
+                    len(frame.get('convs') or {}))
+            else:
+                # Honest negative: the socket is not on THIS replica (or has
+                # already gone away). Not recording the attempt means the next
+                # probe retries rather than silently suppressing for the whole
+                # cooldown window.
+                logger.warning(
+                    '[SyncDrift] REPAIR needed for socket=%s but no such live '
+                    'socket on this replica — not marking cooldown',
+                    socket_id[:8] or '<none>')
+    except Exception as e:
+        logger.warning('[SyncDrift] repair attempt failed: %s', e)
+
+    return api_ok(checked=checked, divergences=divergences, repaired=repaired)
 
 
 __all__ = ['api_v1_conversations_bp']

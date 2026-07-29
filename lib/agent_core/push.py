@@ -258,6 +258,45 @@ class PushHub:
         for client in targets:
             client.enqueue(frame)
 
+    def deliver_to_socket(self, req_id: str, frame: dict) -> bool:
+        """Deliver a frame to ONE socket, identified by its ``req_id``.
+
+        The repair channel for the sync-drift probe (pt_cadaa70ffa6b468d). The
+        probe knows exactly WHICH client is stalled — it is the one that just
+        POSTed a frozen digest — so the correction must reach that socket and
+        no other.
+
+        WHY NOT ``broadcast`` / ``push_event``: both fan out to every
+        subscriber. A conv_state_snapshot is per-tenant scoped and rev-gated,
+        so a stray copy is harmless in itself, but fanning a repair to N tabs
+        because ONE is stalled turns a targeted correction into fleet-wide
+        traffic on a 60s cadence — and it would mask the very condition being
+        repaired, since a healthy tab absorbing the frame looks identical to a
+        stalled tab being fixed.
+
+        Returns True iff a matching LOCAL socket was found and enqueued.
+        Cross-replica is deliberately NOT attempted: the digest POST is an HTTP
+        request that, in a sticky-session deployment, lands on the replica
+        holding that socket; and when it does not, returning False lets the
+        caller log an honest "could not reach" rather than silently doing
+        nothing. Enqueue only — ``_sender`` stays the sole writer of the
+        WebSocket.
+        """
+        if not req_id:
+            return False
+        with self._lock:
+            targets = [c for c in self._clients
+                       if getattr(c, 'req_id', '') == req_id]
+        if not targets:
+            return False
+        loop = self._loop
+        if loop and loop.is_running():
+            loop.call_soon_threadsafe(self._deliver, set(targets), frame)
+        else:
+            for client in targets:
+                client.enqueue(frame)
+        return True
+
     def broadcast(self, channel: str, payload: dict):
         """Broadcast to ALL connected clients across the fleet.
 

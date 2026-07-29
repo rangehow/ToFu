@@ -415,6 +415,83 @@ function computeConvBusy(conv, activeStreamsRef) {
   return false;
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   CONFIDENCE — "how much should the UI trust what it is showing?"
+
+   THE HOLE THIS CLOSES (pt_cadaa70ffa6b468d; the second half of the reported
+   symptom). Every predicate above answers a BOOLEAN question: is this conv
+   busy, what may I attach to. None of them can express "the answer I just gave
+   you may be out of date" — so during a push outage the UI kept rendering a
+   stale busy/idle state as settled fact. The user's complaint was precisely
+   that: not only was the state behind, the frontend did not know it was behind.
+
+   ★ WHY THIS IS A SEPARATE DIMENSION AND NEVER FOLDED INTO computeConvBusy.
+   Busy-ness drives Stop buttons, send gating, reconnect and the composer. If a
+   dead socket started flipping busy to false, a genuinely-running conversation
+   would offer Send and hide Stop — inventing a WORSE bug (a lost abort handle)
+   than the one being fixed. Confidence must therefore DECORATE the answer, not
+   change it: busy stays exactly as authoritative as before, and the UI is told
+   separately how fresh that answer is. Owner constraint, and the reason
+   ``computeConvBusy`` is byte-identical to its pre-confidence form.
+
+   States:
+     'confirmed'   — trust it. Either this tab holds a LIVE local stream for
+                     the conv (bytes are arriving; nothing is more current than
+                     that), or the authoritative channel is healthy.
+     'unconfirmed' — the authoritative channel is not currently healthy, so
+                     the last server frame may be arbitrarily old. Render the
+                     busy indicator in a degraded form rather than as fact.
+
+   Deliberately NOT time-based on its own: a conv can sit legitimately
+   untouched for hours while the socket is perfectly healthy, so "no frame for
+   N seconds" is not evidence of staleness. Channel health is the signal, and
+   push.js already computes it (the 8s ping watchdog / latency state machine).
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* Last known health of the authoritative channel, fed by push.js. Starts
+ * 'unknown', which reads as HEALTHY: before the first reading exists we must
+ * not paint the whole sidebar as unconfirmed on a perfectly good page load.
+ * The degrade is opt-IN on positive evidence of trouble. */
+let _authChannelState = 'unknown';
+
+/* Record the authoritative channel's health.
+ *
+ * ``state`` is push.js's latency state ('good'|'ok'|'poor'|'timeout'|
+ * 'offline'|'unknown') and ``connected`` its socket flag. Only the states that
+ * mean FRAMES ARE NOT ARRIVING degrade confidence — 'poor' is a slow link that
+ * still delivers, so it stays confirmed (treating slow as stale would light
+ * the degraded UI on every mobile connection). */
+function markAuthoritativeChannelHealth(state, connected) {
+  if (connected === false) { _authChannelState = 'offline'; return; }
+  _authChannelState = (typeof state === 'string' && state) ? state : 'unknown';
+}
+
+/* Is the authoritative channel currently delivering? */
+function authoritativeChannelHealthy() {
+  return _authChannelState !== 'timeout' && _authChannelState !== 'offline';
+}
+
+/* Test seam — reset the module-level health latch. */
+function resetAuthoritativeChannelHealthForTests() {
+  _authChannelState = 'unknown';
+}
+
+/* Confidence in what ``computeConvBusy`` just returned for this conv.
+ *
+ * A live local stream in THIS tab outranks channel health: bytes are arriving
+ * on that very conversation, so its state cannot be stale no matter what the
+ * notify socket is doing. That ordering matters — the common case during a
+ * flaky tunnel is "my own generation is fine, the sidebar's view of OTHER
+ * convs is what went dark", and marking the actively-streaming conv as
+ * unconfirmed would be both wrong and the most visible possible false alarm. */
+function computeConvStateConfidence(conv, activeStreamsRef) {
+  if (!conv) return 'unconfirmed';
+  const streams = activeStreamsRef ||
+                  (typeof activeStreams !== 'undefined' ? activeStreams : null);
+  if (streams && streams.has && streams.has(conv.id)) return 'confirmed';
+  return authoritativeChannelHealthy() ? 'confirmed' : 'unconfirmed';
+}
+
 /* Reconnect target picker — when the click-open reconnect path needs a
  * task id to attach to, prefer THIS tab's own optimistic ``activeTaskId``
  * (that is our own send, natural target). Fall back to any tid in the
@@ -468,6 +545,88 @@ function pickVuCarrierForAttach(conv) {
   const set = conv._vuCarrierTaskIds;
   if (set && set.size > 0) return set.values().next().value;
   return null;
+}
+
+/* Follow-up routing verdict — "given this conv's pin, what should the
+ * queued/follow-up check DO?"  Four answers, never a boolean.
+ *
+ * THE HOLE THIS CLOSES (pt_f7a292dc13de47f0). ``_checkForQueuedTask`` opened
+ * with ``if (conv.activeTaskId || activeStreams.has(id)) return`` — reading a
+ * pin's mere PRESENCE as "someone else is driving this conv". That was true
+ * while a pin was short-lived. Cold attach now pins the VU CARRIER's id
+ * (connectToTask needs it as the accumulation slot / self-heal anchor) and the
+ * stale-pin sweep deliberately no longer clears a live carrier's pin
+ * (pt_d97f9098776c48e9 — clearing it stamped `interrupted` on live work). The
+ * pin therefore became DURABLE, the guard permanently satisfied, and the
+ * function returned BEFORE probing for the successor worker the backend had
+ * already spawned: the VU's user message on screen, generating server-side,
+ * and no Agent bubble — ever.
+ *
+ * ★ WHY NOT SIMPLY "CARRIER ⇒ NOT BUSY, LET THE PROBE THROUGH".
+ * That assumes the carrier is FINISHED. While the VU is still generating there
+ * is no successor yet, so the probe finds nothing, gives up, and the dead air
+ * comes back by a different route. ``_registry.py``'s own docstring states the
+ * real invariant: a carrier is not a PLAIN reconnect target, but it IS routable
+ * — through ``pickVuCarrierForAttach`` → ``connectToTask(..., {vuCarrier:true})``
+ * → ``_connectAutopilotKick`` (detached dummy assistant, so the VU's frames
+ * cannot render as a ghost second "Agent" bubble). "Is there a ROUTE for this
+ * pin" is the question; "is the pin absent" was never it.
+ *
+ * Verdicts:
+ *   'route-vu' + taskId + vuCarrier:true — pin names a LIVE carrier. Attach via
+ *                the VU connector. Do NOT probe: the successor does not exist
+ *                yet, and asking too early is what produces the dead air.
+ *   'probe'    — pin names a carrier that has gone TERMINAL, or a task the
+ *                projection has never heard of (stale pin across a server
+ *                restart). Either way the successor — if any — is what the user
+ *                is waiting for, and a pin nobody can route must never wedge.
+ *   'skip'     — pin names a plain worker, or this tab holds a live local
+ *                stream. This is the guard's REAL job (no double attach), and
+ *                it is preserved exactly.
+ *
+ * Derived from the REDUCER'S OWN sets (markers already stripped by
+ * ``_vuCarrierIdsFrom`` / ``_busyIdsFrom``) — this function never re-parses the
+ * ``#vu`` marker. A second marker parser drifting from the first is the split
+ * that produced this entire defect family.
+ *
+ * FAIL-SAFE: with NO projection at all (never fetched / endpoint down) we
+ * cannot tell a live carrier from a stale pin, so we return the legacy 'skip'
+ * and touch nothing. Guessing wrong in the other direction would attach to
+ * whatever the probe happened to find. */
+function computeFollowupRoute(conv, activeStreamsRef) {
+  if (!conv) return { action: 'probe', taskId: null, vuCarrier: false };
+  const streams = activeStreamsRef ||
+                  (typeof activeStreams !== 'undefined' ? activeStreams : null);
+  /* A live local stream outranks every projection reading: this tab is already
+   * driving the conv, so a second attach is the only real risk here. */
+  if (streams && streams.has && streams.has(conv.id)) {
+    return { action: 'skip', taskId: null, vuCarrier: false };
+  }
+  const pin = conv.activeTaskId;
+  if (!pin) return { action: 'probe', taskId: null, vuCarrier: false };
+
+  /* Has the projection ever spoken for this conv? ``_authoritativeActiveTaskIdsRev``
+   * is written by the reducer on every applied frame/snapshot, so its absence
+   * means "no authoritative reading exists", NOT "the server says idle". */
+  const projectionKnown = Array.isArray(conv._authoritativeActiveTaskIdsRev);
+  if (!projectionKnown) {
+    return { action: 'skip', taskId: null, vuCarrier: false };
+  }
+
+  const carriers = conv._vuCarrierTaskIds;
+  if (carriers && carriers.has && carriers.has(pin)) {
+    /* Case 1 — the carrier is LIVE. Route to the VU connector. */
+    return { action: 'route-vu', taskId: pin, vuCarrier: true };
+  }
+  const busy = conv._authoritativeActiveTaskIds;
+  if (busy && busy.has && busy.has(pin)) {
+    /* Case 3a — a plain worker the server still lists as running. */
+    return { action: 'skip', taskId: pin, vuCarrier: false };
+  }
+  /* Cases 2 and 4 — the server does not list this pin as running. Either the
+   * carrier went terminal (its successor is what the user awaits) or the pin
+   * is stale across a restart. Both must reach the probe; neither may wedge. */
+  return { action: 'probe', taskId: null, vuCarrier: false };
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -602,8 +761,14 @@ if (typeof window !== 'undefined') {
   window.pendingBusyStateSize = pendingBusyStateSize;
   window.resetPendingBusyStateForTests = resetPendingBusyStateForTests;
   window.computeConvBusy = computeConvBusy;
+  window.computeConvStateConfidence = computeConvStateConfidence;
+  window.markAuthoritativeChannelHealth = markAuthoritativeChannelHealth;
+  window.authoritativeChannelHealthy = authoritativeChannelHealthy;
+  window.resetAuthoritativeChannelHealthForTests =
+    resetAuthoritativeChannelHealthForTests;
   window.pickAuthoritativeTaskIdForReconnect = pickAuthoritativeTaskIdForReconnect;
   window.pickVuCarrierForAttach = pickVuCarrierForAttach;
+  window.computeFollowupRoute = computeFollowupRoute;
   window.buildSyncDigest = buildSyncDigest;
   window.reportSyncDigest = reportSyncDigest;
   window.startSyncDriftProbe = startSyncDriftProbe;

@@ -759,7 +759,7 @@ function renderConversationList() {
       filtered.map(c => `${c.id}|${c.title}|${c.updatedAt||""}|${c.folderId||""}|${(c.projectSummary && c.projectSummary.text) ? "S" : ""}`).join("\n");
     const _statusHash = filtered.map(c => {
       const f = _convStatusFlags(c);
-      return `${c.id===activeConvId?1:0}${f.streaming?1:0}${f.translating?1:0}${f.memoryPrefetching?1:0}${f.awaitingHuman?1:0}${f.errored?1:0}${f.incomplete?1:0}`;
+      return `${c.id===activeConvId?1:0}${f.streaming?1:0}${f.translating?1:0}${f.memoryPrefetching?1:0}${f.awaitingHuman?1:0}${f.errored?1:0}${f.incomplete?1:0}${f.unconfirmed?1:0}`;
     }).join(",");
     const _fullHash = `${_structHash}|||${_statusHash}`;
     if (_fullHash === _lastConvListHash) return;
@@ -1068,7 +1068,19 @@ function _convStatusFlags(c) {
       incomplete = !c.lastMsgHasOutput;
     }
   }
-  return { streaming, translating, memoryPrefetching, awaitingHuman, errored, incomplete };
+  /* ★ Freshness of the busy verdict (pt_cadaa70ffa6b468d). NOT a second
+   * busy-ness source: `streaming` above is unchanged and still authoritative.
+   * This only records whether the authoritative channel is currently
+   * DELIVERING, so a busy dot inherited from a frame that arrived before the
+   * socket went dark is rendered as "unconfirmed" rather than as settled fact.
+   * Only meaningful while `streaming` — an idle conv has no claim to soften. */
+  let unconfirmed = false;
+  if (streaming && typeof computeConvStateConfidence === 'function') {
+    try {
+      unconfirmed = computeConvStateConfidence(c, activeStreams) !== 'confirmed';
+    } catch (e) { unconfirmed = false; }
+  }
+  return { streaming, translating, memoryPrefetching, awaitingHuman, errored, incomplete, unconfirmed };
 }
 
 /**
@@ -1085,7 +1097,9 @@ function _convStatusHtml(f) {
   } else if (f.memoryPrefetching) {
     dotHtml = `<div class="conv-memprefetch-dot" title="${t('sidebar.memoryPrefetch')}"></div>`;
   } else if (f.streaming) {
-    dotHtml = '<div class="conv-streaming-dot"></div>';
+    dotHtml = f.unconfirmed
+      ? `<div class="conv-streaming-dot conv-state-unconfirmed" title="${t('sidebar.stateUnconfirmed')}"></div>`
+      : '<div class="conv-streaming-dot"></div>';
   } else if (f.errored) {
     dotHtml = `<div class="conv-error-dot" title="${t('sidebar.errorState')}"></div>`;
   } else if (f.incomplete) {
@@ -1097,7 +1111,9 @@ function _convStatusHtml(f) {
   } else if (f.memoryPrefetching) {
     statusTag = `<span class="conv-status-tag conv-status-memprefetch">${t('sidebar.memoryPrefetchTag')}</span>`;
   } else if (f.streaming) {
-    statusTag = `<span class="conv-status-tag conv-status-streaming">${t('sidebar.answering')}</span>`;
+    statusTag = f.unconfirmed
+      ? `<span class="conv-status-tag conv-status-streaming conv-state-unconfirmed" title="${t('sidebar.stateUnconfirmed')}">${t('sidebar.answering')}?</span>`
+      : `<span class="conv-status-tag conv-status-streaming">${t('sidebar.answering')}</span>`;
   } else if (f.errored) {
     statusTag = `<span class="conv-status-tag conv-status-error" title="${t('sidebar.errorState')}">${t('sidebar.errorTag')}</span>`;
   } else if (f.incomplete) {

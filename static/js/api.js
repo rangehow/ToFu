@@ -614,9 +614,18 @@
     // (currently {identityGateDegraded:true} — the multi-user identity
     // gate's fail-open tripwire, so the degrade reaches logs/app.log
     // instead of only a browser console).
-    reportSyncDigest: (digests, extra) =>
-      post('/api/v1/conversations/sync-digest',
-           Object.assign({ digests }, extra || {}), { onError: 'null' }),
+    // ``pushRid`` names THIS tab's push socket so a server-detected SUSTAINED
+    // stall can be repaired by pushing a corrective conv_state_snapshot back to
+    // this exact socket rather than broadcasting to the fleet
+    // (pt_cadaa70ffa6b468d). Omitted when the id is unavailable — the server
+    // then logs that it cannot target a repair instead of guessing at one.
+    reportSyncDigest: (digests, extra) => {
+      const _rid = (typeof pushSocketRequestId === 'function')
+        ? pushSocketRequestId() : '';
+      return post('/api/v1/conversations/sync-digest',
+                  Object.assign({ digests }, _rid ? { pushRid: _rid } : {},
+                                extra || {}), { onError: 'null' });
+    },
     // LLM-generated title. Returns parsed {ok, title} or null on failure.
     // `lang` ('zh'|'en') forces the title language to match the UI; defaults
     // to the current interface language.
@@ -1006,6 +1015,13 @@
            { onError: 'null' }),
     probeCellsStart:  (body)                            =>
       post('/api/v1/providers/probe-cells/start', body, { onError: 'null' }),
+    /* Which wire face does each model of THIS (possibly unsaved) provider
+     * dispatch over? Answered by the backend's resolve_face — the same
+     * resolver the dispatcher uses — so the Settings pills can never
+     * disagree with routing. Never re-implement the family rule here. */
+    resolveFaces:     (provider)                        =>
+      post('/api/v1/providers/resolve-faces', { provider },
+           { onError: 'null' }),
     probeCellsStatus: (providerId)                      =>
       get('/api/v1/providers/probe-cells/status?provider_id=' + encodeURIComponent(providerId),
           { onError: 'null' }),

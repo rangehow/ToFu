@@ -204,7 +204,8 @@ interface Window {
   _connToast: any;
   _connToastState: any;
   _contextPolicy: any;
-  _convTurnInFlight: any;
+  _convBusyAnyLane: any;
+  _convMainTurnInFlight: any;
   _currentUserId: any;
   _cvOnLanguageChange: any;
   _deriveChatModeFromFlags: any;
@@ -307,6 +308,7 @@ interface Window {
   assistantTailIsPriorTurn: any;
   attachCompactionMarkersToConversation: any;
   attachZipDropZone: any;
+  authoritativeChannelHealthy: any;
   brandLogoImgAttrs: any;
   buildSyncDigest: any;
   buildTurnCtxSnapshot: any;
@@ -322,6 +324,8 @@ interface Window {
   closeProjectBrain: any;
   closeSystemPromptEditor: any;
   computeConvBusy: any;
+  computeConvStateConfidence: any;
+  computeFollowupRoute: any;
   computeTurnSettlement: any;
   contextUsageSummary: any;
   continueButtonForSettlement: any;
@@ -363,6 +367,7 @@ interface Window {
   isTabletDrawerViewport: any;
   loadEarlierMessages: any;
   logoUrl: any;
+  markAuthoritativeChannelHealth: any;
   markConvPendingSync: any;
   markIdentityGateReported: any;
   mobileMediaQuery: any;
@@ -414,6 +419,7 @@ interface Window {
   replayPendingBusyState: any;
   reportIdentityGateUnavailable: any;
   reportSyncDigest: any;
+  resetAuthoritativeChannelHealthForTests: any;
   resetChatInnerOrderForTests: any;
   resetCurrentUserIdForTests: any;
   resetIdentityGateWarnedForTests: any;

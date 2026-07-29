@@ -18,51 +18,54 @@ prefix is re-billed as `cache_creation`.
 We are not asking you to accept a diagnosis. We are reporting a reproducible
 observation with per-request trace IDs so it can be checked against your side.
 
-**Fleet scale (all retained logs, 46,976 instrumented rounds):**
+**Fleet scale (all retained logs, 47,344 instrumented rounds):**
 
-Of 1,983 rounds that wrote >20k cache tokens and read back **zero**:
+Of 2,313 rounds that wrote >20k cache tokens and read back **zero**:
 
 | | |
 |---|---|
-| Rounds where the prefix was byte-identical and routing identical (`upstream_identical`) | **1,384** |
+| Rounds where the prefix was byte-identical and routing identical (`upstream_identical`) | **1,663** |
 | Gap since previous round on the same conversation — median | **38.5 s** |
-| Gap — p90 | **90.5 s** |
-| Fraction with a gap under 18 s (i.e. plausibly the write-visibility race) | **4.0 %** |
-| Tokens written that we believe should have been read back | **614,880,477** |
-| Cost of those writes at our contracted Opus-5 rate | **≈ 27,819 CNY** |
-| Cost had they been served from cache | **≈ 2,226 CNY** |
-| **Difference** | **≈ 25,593 CNY** |
+| Gap — p90 | **90.8 s** |
+| Fraction with a gap under 18 s (i.e. plausibly the write-visibility race) | **3.9 %** |
+| Tokens written that we believe should have been read back | **741,658,984** |
+| Cost of those writes at our contracted Opus-5 rate | **≈ 33,560 CNY** |
+| Cost had they been served from cache | **≈ 2,685 CNY** |
+| **Difference** | **≈ 30,875 CNY** |
 
-That difference is **88.9 %** of all avoidable cache spend we can measure, after
-excluding two classes that are **not** waste and which we are explicitly *not*
-reporting as a problem:
+That difference is **85.3 %** of all avoidable cache spend we can measure,
+after excluding two classes that are **not** waste and which we are explicitly
+*not* reporting as a problem:
 
-* **ordinary TTL expiry** — 83 rounds / ≈ 1,661 CNY, idle > 5 min, gap median
-  340 s. The entry expired on its own schedule and had to be rebuilt.
-* **cold starts** — 218 rounds / ≈ 1,919 CNY, first round of a conversation with
-  no preceding request, so there was nothing to read back.
+* **ordinary TTL expiry** — idle > 5 min, gap median 340 s. The entry expired
+  on its own schedule and had to be rebuilt.
+* **cold starts** — 242 rounds, first round of a conversation with no preceding
+  request, so there was nothing to read back.
 
-Full bucket breakdown of the 1,983 rounds:
+Full bucket breakdown:
 
-| bucket | n | wasted tok | paid CNY | recoverable CNY | share | gap p50 | gap p90 | % < 18 s |
-|---|---|---|---|---|---|---|---|---|
-| `upstream_identical` | 1,384 | 614,880,477 | 27,819 | **25,593** | **88.9 %** | 38.5 s | 90.5 s | 4.0 % |
-| `body_change` (our client) | 85 | 23,647,626 | 1,070 | 984 | 3.4 % | 12.7 s | 65.4 s | 54.1 % |
-| `cache_write_unsettled` | 106 | 23,453,945 | 1,061 | 976 | 3.4 % | 14.3 s | 17.6 s | 98.1 % |
-| `turn_boundary_rebill` | 37 | 15,010,386 | 679 | 625 | 2.2 % | — | — | — |
-| `other` | 30 | 9,999,200 | 452 | 416 | 1.4 % | 26.1 s | 74.9 s | 46.7 % |
-| `cache_mid_out_of_window` | 10 | 2,226,155 | 101 | 93 | 0.3 % | 18.6 s | 53.5 s | 40.0 % |
-| `ttl_flip` | 4 | 1,165,353 | 53 | 49 | 0.2 % | 33.1 s | 37.6 s | 0.0 % |
-| `cache_namespace_switch` | 1 | 514,308 | 23 | 21 | 0.1 % | 54.1 s | 54.1 s | 0.0 % |
-| `breakpoint_lost` | 2 | 501,064 | 23 | 21 | 0.1 % | 72.1 s | 309.6 s | 0.0 % |
-| *excluded — `ttl_expiry` (not waste)* | 83 | 39,899,804 | 1,805 | — | — | 340.0 s | 620.6 s | 0.0 % |
-| *excluded — cold start (not waste)* | 218 | — | — | — | — | 0 s | 0 s | — |
+| bucket | n | wasted tok | recoverable CNY | share | gap p50 | gap p90 | % < 18 s |
+|---|---|---|---|---|---|---|---|
+| `upstream_identical` | 1,663 | 741,658,984 | **30,875** | **85.3 %** | 38.5 s | 90.8 s | 3.9 % |
+| `body_change` (our client) | 146 | 54,942,920 | 2,287 | 6.3 % | 45.3 s | 365.4 s | 32.9 % |
+| `other` | 76 | 30,007,498 | 1,249 | 3.5 % | 314.6 s | 513.7 s | 18.9 % |
+| `cache_write_unsettled` | 123 | 27,432,999 | 1,142 | 3.2 % | 14.7 s | 17.6 s | 98.3 % |
+| `indeterminate` | 46 | 11,017,397 | 459 | 1.3 % | 12.8 s | 112.8 s | 50.0 % |
+| `cache_mid_out_of_window` | 10 | 2,226,155 | 93 | 0.3 % | 18.6 s | 53.5 s | 40.0 % |
+| `ttl_flip` | 4 | 1,165,353 | 49 | 0.1 % | 33.1 s | 37.6 s | 0.0 % |
+| `cache_namespace_switch` | 1 | 514,308 | 21 | 0.1 % | 54.1 s | 54.1 s | 0.0 % |
+| `breakpoint_lost` | 2 | 501,064 | 21 | 0.1 % | 72.1 s | 309.6 s | 0.0 % |
+| *excluded — `ttl_expiry` (not waste)* | — | — | — | — | 340.0 s | 620.6 s | 0.0 % |
+| *excluded — cold start (not waste)* | 242 | 54,119,937 | — | — | 0 s | 0 s | — |
+
+**Total recoverable: ≈ 36,196 CNY**, of which the byte-identical upstream class
+is 85.3 %.
 
 **The gap distribution separates the two candidate mechanisms cleanly**, which
 is the single most important row-pair in this report:
-`cache_write_unsettled` sits at p50 **14.3 s** with **98.1 %** under 18 s — a
+`cache_write_unsettled` sits at p50 **14.7 s** with **98.3 %** under 18 s — a
 textbook write-visibility race, and we handle it on our side.
-`upstream_identical` sits at p50 **38.5 s** with only **4.0 %** under 18 s.
+`upstream_identical` sits at p50 **38.5 s** with only **3.9 %** under 18 s.
 These are not the same phenomenon, and the second one is not a race we can win
 by waiting longer.
 
@@ -143,11 +146,12 @@ measured and excluded before writing this report:
 
 | Hypothesis | How it was excluded |
 |---|---|
-| **Our client mutated the cached prefix** | Wire-layer fingerprint identical (system hash, tools hash, per-message hashes, block-length vector). Rounds where the fingerprint *did* change are classified separately (`body_change`, n=85) and are **not** in the 1,384. |
+| **Our client mutated the cached prefix** | Wire-layer fingerprint identical (system hash, tools hash, per-message hashes, block-length vector). Rounds where the fingerprint *did* change are classified separately (`body_change`, n=146) and are **not** in the 1,663. |
 | **Cache-namespace switch** (key / `anthropic-beta` / endpoint changed between rounds) | Routing tuple recorded per round and verified identical. Rounds with a routing flip are a separate bucket (n=1). |
-| **Anthropic write-visibility race** (a freshly written entry is not readable for ~15–20 s) | Measured per round. Only **4.0 %** of the 1,384 have a gap under 18 s; median gap is 38.5 s. We *do* separately observe and handle this race — `cache_write_unsettled`, n=106, median gap 14.3 s, 98.1 % under 18 s — and those rounds are excluded from the 1,384. |
-| **Ordinary TTL expiry** (idle > 5 min, entry legitimately expired) | Excluded as a distinct bucket: 83 rounds / ≈ 1,661 CNY, median gap 340 s. These are *expected* rebuilds and we are **not** reporting them as a problem. |
-| **Cold start** (first round of a conversation) | Excluded: 218 rounds. No preceding request exists, so there is nothing to read back. |
+| **Anthropic write-visibility race** (a freshly written entry is not readable for ~15–20 s) | Measured per round. Only **3.9 %** of the 1,663 have a gap under 18 s; median gap is 38.5 s. We *do* separately observe and handle this race — `cache_write_unsettled`, n=123, median gap 14.7 s, 98.3 % under 18 s — and those rounds are excluded from the 1,663. |
+| **Ordinary TTL expiry** (idle > 5 min, entry legitimately expired) | Excluded as a distinct bucket, median gap 340 s. These are *expected* rebuilds and we are **not** reporting them as a problem. |
+| **Cold start** (first round of a conversation) | Excluded: 242 rounds. No preceding request exists, so there is nothing to read back. |
+| **Rounds we could not classify** | Reported honestly as `indeterminate` (n=46) rather than folded into the upstream claim. |
 | **Cross-conversation cache contention** | A/B tested previously: per-round `cache_read` is identical between solo and interleaved traffic (±0.0 %). Anthropic caches key on exact prefix bytes, so distinct conversations cannot evict each other. |
 | **Compaction / history rewrite on our side** | Rounds following a context compaction or a backend history edit are flagged and bucketed separately. |
 

@@ -118,3 +118,29 @@ class TestTheFixDoesNotSwallowNeighbours:
         cause = _cause(elapsed=_TTL_GAP_S, prefix_mutation_break=True,
                        prefix_culprits=['user:ab.content'])
         assert classify_verdict({'prefix_mutation': cause}) != BUCKET_TTL_EXPIRY
+
+
+class TestTheUnprovenHedgeIsNotAConfirmedExpiry:
+    """The no-fingerprint fallback MENTIONS TTL without concluding it.
+
+    Regression guard for a real defect: the first version of this fix matched
+    the bare substring 'ttl expiry', which also appears inside
+    ``prefix not reused — likely server-side miss or TTL expiry (UNPROVEN —
+    no wire fingerprint)``. That sentence is a HEDGE listing TTL as one
+    possibility, not a finding. Claiming it as a confirmed expiry moved real,
+    unexplained waste OUT of the recoverable total — the dangerous direction,
+    because it makes the upstream problem look smaller than it is.
+    """
+
+    def test_unproven_zero_read_fallback_is_not_ttl(self):
+        cause = _cause(cache_read=0, prefix_mutated=False,
+                       wire_proven_identical=False, elapsed=_FAST_GAP_S)
+        assert 'ttl expiry' in cause.lower(), (
+            'premise: the fallback really does mention TTL — that is why the '
+            'bare-substring match was wrong')
+        assert classify_verdict({'no_cache_reuse': cause}) != BUCKET_TTL_EXPIRY
+
+    def test_the_genuine_expiry_cause_still_buckets_as_ttl(self):
+        """COMPLEMENT — tightening the match must not break the real case."""
+        cause = _cause(elapsed=_TTL_GAP_S)
+        assert classify_verdict({'no_cache_reuse': cause}) == BUCKET_TTL_EXPIRY

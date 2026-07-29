@@ -385,12 +385,42 @@ BUCKET_TTL_FLIP = 'ttl_flip'
 #   A cache entry that expired on its own schedule HAD to be re-created; the
 #   honest bucket is what lets a cost view subtract it instead of chasing it.
 BUCKET_TTL_EXPIRY = 'ttl_expiry'
+# The EXACT wording _resolve_break_cause emits for a genuine >5min idle expiry,
+# lowercased for matching. Deliberately the full phrase: the no-fingerprint
+# fallback cause also contains the words "TTL expiry", but as one item in a
+# hedge ("likely server-side miss or TTL expiry (UNPROVEN ...)"). Matching the
+# bare substring mis-claimed those rounds as confirmed expiries and dropped
+# genuine waste out of the recoverable total.
+_TTL_EXPIRY_CAUSE = 'ttl expiry (>5min gap'
 BUCKET_BREAKPOINT_LOST = 'breakpoint_lost'
 BUCKET_MID_WINDOW = 'cache_mid_out_of_window'
 BUCKET_WRITE_UNSETTLED = 'cache_write_unsettled'
 BUCKET_UPSTREAM = 'upstream_identical'
 BUCKET_BODY_CHANGE = 'body_change'
 BUCKET_NO_BREAK = 'no_break'
+# ★ INDETERMINATE — the detector reached NO conclusion, which is NOT the same
+#   as concluding the cache was fine. `no_break` used to mean both, so a round
+#   that paid to rebuild a large prefix and read back nothing was filed
+#   alongside genuine cache hits.
+#
+#   Measured mechanism: all three break predicates in _classify_break carry
+#   `and not was_compaction`, so a COMPACTED round with a huge zero-read write
+#   is structurally exempt from every gate and falls through. The exemption is
+#   correct for the detector's RETURN value — a compaction legitimately
+#   rebuilds its prefix and must not be blamed on the gateway — but wrong for
+#   the LEDGER, where the tokens were really paid for.
+#
+#   NOT the mechanism (checked and disproved): a zero-read predecessor starving
+#   the gates. `prev_prefix_tokens` is prev_read + prev_write, so a miss
+#   predecessor with a large write still clears no_reuse's threshold — verified
+#   directly against _classify_break, which returns no_reuse=True on exactly
+#   that shape.
+#
+#   Deliberately NOT fixed by loosening a detection threshold: those gates stop
+#   a genuinely cold or legitimately-rebuilt prefix being reported as a miss.
+#   The defect is in how an unconcluded round is NAMED, so the fix is at the
+#   landing site.
+BUCKET_INDETERMINATE = 'indeterminate'
 BUCKET_OTHER = 'other'
 
 
@@ -407,6 +437,8 @@ def classify_verdict(verdict: dict | None) -> str:
     """
     if not verdict:
         return BUCKET_NO_BREAK
+    if BUCKET_INDETERMINATE in verdict:
+        return BUCKET_INDETERMINATE
     if BUCKET_NAMESPACE in verdict:
         return BUCKET_NAMESPACE
     if BUCKET_WRITE_UNSETTLED in verdict:
@@ -424,7 +456,15 @@ def classify_verdict(verdict: dict | None) -> str:
         # rebuild, not a client body change. Checked BEFORE the generic
         # body_change fallthrough below, which would otherwise accuse our own
         # client of mutating a prefix the wire fingerprint proved identical.
-        if 'ttl expiry' in _cause:
+        #
+        # ★ Anchored on the FULL genuine wording, not the bare substring 'ttl
+        #   expiry'. The no-fingerprint fallback cause reads "likely
+        #   server-side miss OR TTL expiry (UNPROVEN ...)" — a HEDGE listing
+        #   TTL as one possibility, not a finding. Matching the bare substring
+        #   claimed those unproven rounds as confirmed TTL and so REMOVED real
+        #   waste from the recoverable total, which is the more dangerous
+        #   direction: it makes the gateway problem look smaller than it is.
+        if _TTL_EXPIRY_CAUSE in _cause:
             return BUCKET_TTL_EXPIRY
         if 'lookback window' in _cause:
             return BUCKET_MID_WINDOW
@@ -443,8 +483,10 @@ def classify_verdict(verdict: dict | None) -> str:
     if 'ttl marker flipped' in _cause or 'new cache key' in _cause:
         return BUCKET_TTL_FLIP
     # Same reasoning as the client-keys branch above: an idle-expiry rebuild is
-    # its own honest verdict, not the `other` catch-all.
-    if 'ttl expiry' in _cause:
+    # its own honest verdict, not the `other` catch-all. Anchored on the full
+    # genuine wording so the UNPROVEN "server-side miss or TTL expiry" hedge is
+    # NOT claimed as a confirmed expiry.
+    if _TTL_EXPIRY_CAUSE in _cause:
         return BUCKET_TTL_EXPIRY
     if 'lookback window' in _cause:
         return BUCKET_MID_WINDOW
@@ -1088,9 +1130,18 @@ def detect_cache_break(
         _ttl_flip = '<ttl-flip>' in (_wire_culprits or [])
         _breakpoint_lost = '<breakpoint-lost>' in (_wire_culprits or [])
 
-        def _finish(v):
+        def _finish(v, record_as=None):
+            """Emit the per-round record, then return the DETECTOR's verdict.
+
+            ``record_as`` decouples what is RECORDED from what is RETURNED. A
+            round can be honestly bucketed as ``indeterminate`` in telemetry
+            while the function still returns ``None`` to its callers — the
+            return value is the confirmed-break signal that drives behaviour,
+            and an unconcluded round must NOT start claiming a confirmed break.
+            """
             _emit_round_record(
-                conv_id, prev.call_count, v,
+                conv_id, prev.call_count,
+                record_as if record_as is not None else v,
                 ns_switch=_ns_switch, ttl_flip=_ttl_flip,
                 breakpoint_lost=_breakpoint_lost,
                 body_identical=_wire_proven_identical,
@@ -1318,8 +1369,8 @@ def detect_cache_break(
                 prev_cache_read, cache_read, elapsed, cause_str,
             )
             return _finish({'server_side': cause_str})
-        # ── No confirmed break: still emit the per-round record (bucket
-        #    no_break) so the ledger has EVERY round, not only misses. ──
+        # ── No confirmed break: still emit the per-round record so the ledger
+        #    has EVERY round, not only misses. ──
         if client_changes:
             # Client-side changes detected but cache wasn't broken (or no
             # cache stats available) — log at debug level only.
@@ -1330,6 +1381,57 @@ def detect_cache_break(
                 ', '.join(f'{k}={v}' for k, v in client_changes.items()),
                 prev_cache_read, cache_read,
             )
+
+        # ── INDETERMINATE vs genuinely-no-break ──
+        # This round paid to write a substantial prefix and read back NOTHING,
+        # yet no break gate fired. That is not "the cache was reused fine" — it
+        # is "we could not tell", and recording both under `no_break` is what
+        # let real spend hide behind a healthy-looking bucket.
+        #
+        # THE ACTUAL SUPPRESSOR IS COMPACTION, measured — not gate starvation.
+        # All three break predicates carry `and not was_compaction`, so a
+        # compacted round with a huge zero-read write is structurally exempt
+        # from every gate and lands here. (An earlier version of this fix
+        # asserted the cause was a miss-predecessor starving the gates; that is
+        # FALSE — `prev_prefix_tokens` is prev_read + prev_write, so a
+        # zero-read predecessor with a large write still satisfies no_reuse's
+        # threshold. Verified directly against _classify_break.)
+        #
+        # The exemption is right for the RETURN value: a compaction legitimately
+        # rebuilds its prefix, so it is not a confirmed break and must not be
+        # blamed on the gateway. But it is wrong for the LEDGER: the tokens were
+        # really paid for, and filing them as `no_break` makes a rebuild look
+        # like a cache hit. Recording them as indeterminate keeps the spend
+        # visible and the cause honestly unresolved.
+        #
+        # Requires a genuine PREDECESSOR. ``prev.call_count`` has already been
+        # incremented for THIS round by the time we get here, so round 1 sees
+        # it as 1 — the guard must be > 1, not > 0, or every cold start is
+        # mislabelled as an unknown. A first round had nothing to read back.
+        _gates_starved = (
+            prev.call_count > 1
+            and cache_read == 0
+            and cache_write >= _MIN_NO_REUSE_TOKENS
+        )
+        if _gates_starved:
+            logger.warning(
+                '[CacheTrack] conv=%s call=%d INDETERMINATE: cache_write=%d '
+                'read=0 (gap=%.1fs, compaction=%s) but no break gate fired — '
+                'the spend is real but the cause is unresolved. Counted as '
+                'indeterminate, NOT as no_break: a zero-read rebuild must not '
+                'be filed alongside genuine cache hits.',
+                conv_id[:8], prev.call_count, cache_write, elapsed,
+                _was_compaction)
+            return _finish(None, record_as={
+                'indeterminate': (
+                    'zero read-back on a substantial write, but no break gate '
+                    'could fire'
+                    + (' because this round followed a compaction, which is '
+                       'structurally exempt from every break predicate'
+                       if _was_compaction else '')
+                    + '. The spend is real and counted here; the CAUSE is '
+                    'unresolved — this round is NOT evidence of a healthy '
+                    'cache.')})
         _finish(None)
 
     return None

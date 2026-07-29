@@ -925,7 +925,7 @@ function renderChat(conv, forceScroll) {
     } else {
       /* BASE_PATH is a trusted app constant (raw); the i18n subtitle is
        * escaped by default. */
-      inner.innerHTML = String(safeHtml`<div class="welcome" id="welcome"><div class="welcome-icon"><img src="${raw(BASE_PATH)}/static/icons/tofu-welcome.svg" alt="Tofu" width="64" height="64"></div><h2 class="tofu-brand"><span class="tofu-brand-t">T</span><span class="tofu-brand-o1">o</span><span class="tofu-brand-f">f</span><span class="tofu-brand-u">u</span><small>豆腐</small></h2><div class="feature-pills">${raw(_welcomePillsHtml())}</div></div>`);
+      inner.innerHTML = String(safeHtml`<div class="welcome" id="welcome"><div class="welcome-icon"><img ${raw(brandLogoImgAttrs(64))}></div><h2 class="tofu-brand"><span class="tofu-brand-t">T</span><span class="tofu-brand-o1">o</span><span class="tofu-brand-f">f</span><span class="tofu-brand-u">u</span><small>豆腐</small></h2><div class="feature-pills">${raw(_welcomePillsHtml())}</div></div>`);
     }
     _lastRenderedFingerprint = fp;
     buildTurnNav(conv);

@@ -1,5 +1,21 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·全库体检) — 「最近改动太多,还有没有残留 bug」的一次系统体检:**11,878 用例 / 3 条 CRITICAL / ~40 个失败文件里,只有 2 条是真缺陷,而两条同属我自己上一批漏的收尾**(commit `7d034057`,2 文件 +5;目标守卫 **20/20**,相邻环 **40/41**,于共享 HEAD 显式 pathspec 提交)
+
+- **方法:三条独立取证线并行,而不是只跑测试。** ①活体运行时日志(error.log + 8.7GB 的 app.log)②干净 HEAD worktree 全量测试(必须隔离——主树有 49→63 项兄弟会话 WIP,脏树跑测试全是误判)③对每条真红做三态定性(真 bug / 守卫腐烂 / 环境)。**结论:测试红得多≠缺陷多,~40 个失败文件里真缺陷只有 2 条。**
+- **★ 三条 `CRITICAL Uncaught exception — process is terminating` 全是噪声,而它们各自骗人的方式不同(这条最值得记):**
+  | 时间 | traceback 顶帧 | 真相 |
+  |---|---|---|
+  | 07-29 07:54 | `File "<string>", line 5` + `TypeError: 'AppContext' object does not support the context manager protocol` | **agent 自己跑的 `python -c` 子进程**报错,被日志系统记成"进程终止"。主库 `app_context` 只有 `server.py:2691` 一处且已是 `async with` |
+  | 07-28 14:46 | `server.py:3438 asyncio.run(_serve())` → `OSError: [Errno 98] Address already in use` | 重启时**旧进程未退新进程先起**,端口占用,非产品 bug |
+  | 07-27 21:52 | `File "<stdin>", line 2` | 同 ①,agent 的探测子进程 |
+
+  **判据:`<string>` / `<stdin>` 顶帧的 CRITICAL 是 agent 自己的子进程,不是服务崩溃——定责前先看 traceback 的第一帧是不是真文件。** 顺带证伪两条我一开始怀疑的:`POST /api/v1/browser/open-extensions` 线上 404 不是缺路由(`routes/api_v1/browser.py:190` 有),是**运行中进程比代码旧**;`app.log.2026-07-27` 8.7GB 也不是死循环,是 8 个 agent 满负荷一天的正常量(采样确认无超长行、无高频重复)。
+- **★ 两条真缺陷是同一个根因的两半,且都是 charter 明文规定的收尾步骤:** `5f9564fe`(allow_private_hosts)把 `settings/private_hosts.js` 加进了 `js_bundler._BUNDLE_FILES`,但漏了:①`index.html` 的 dev fallback `<script>` 标签——20 多个 settings 兄弟脚本都有,**只有它没有**;该文件导出 4 个 `window._privateHost*`(被 HTML `onclick` 直接调用),打包失败走逐文件回退时全部 `undefined`,私网白名单面板按钮**静默失效**。这与 2026-07-28「侧边栏会话全消失」是**同型坑**(清单与 fallback 不同步)。②`globals.generated.d.ts` 未重跑,直接违反 **charter #8**。修法就是那两步本该做的事;`gen_frontend_globals.py` 在主树产出的 diff **恰好只有我的 4 个符号**,兄弟的 `renderModelFallbackBannerHtml` 未混入。
+- **守卫腐烂 vs 真 bug 的分界(逐条实测,不按印象):** `test_code_quality` 报的 6 处"静默 catch"**全是误报**——守卫只按 AST 形状(`except` 后跟 `return`/`pass`)判定,看不懂返回值本身就是错误传达:`private_hosts.py:122` 是 `except ValueError: pass / else: raise` 的标准"探测 IP 字面量"惯用法(`pass` 是成功路径)、`_concat.py:381` 返回结构化 `{'ok':False,'category':'io','detail':…}`、`auth_sources.py:328` 的 `0.0` 是 docstring 明写的契约。同类:`test_events_use_single_round_key` 匹配到的是 EventSpec **docstring 里的示例** `{"round": 3}`(同块 `'roundNum'` 字段正确存在);`test_meituan_marketplace_models` 断言的是昨天 `90202d96` **故意移走**的 Claude 清单;`test_probe_nonchat_skip` 3 条是假函数签名少了新增的 `oauth` 形参;`test_export_js_sanitize_syntax` 自己的报错就写着「known offenders 不见了,请更新 sweep」。
+- **★ 顺带暴露两条测试基建缺陷(未修,属独立工作项):** 全量跑**两次被卡死打断**——`tests/test_paper_terminology_audit.py` 真的去打线上 LLM(栈停在 `dispatch_chat` → `time.sleep(0.3)` 重试循环)、`tests/test_recovery_merge_guards.py` + `test_recipe_sources_card_spoken.py` 真的连 DB 阻塞在 `_core.py:852 cursor.execute`。conftest 本已为 2026-06-28 删 2300 会话的事故强制 sqlite,但它自己的注释承认「Several tests deliberately write to the REAL database」——**这类测试在生产库被 8 个 agent 打满时必然挂起,使全量跑不可能一次跑完**。
+- **验收边界(诚实分账):** ①收集门 **11,878 用例 0 收集错误**,说明无 import 层断裂;②全量跑因上述卡死未能一次跑完,已分段覆盖 a-z(跳过 3 个卡死文件),失败清单完整;③两条修复的目标守卫 20/20 绿,相邻环唯一那条红(`test_export_js_sanitize_syntax`)**已在干净 HEAD 实测同样红**,非我引入;④纯前端静态资产改动,**刷新即生效,无需重启**。
+
 ### 2026-07-29(续·语言包自愈) — 「强刷后转圈很久 / 文案全变成变量名 / 选了中文却显示英文」是**同一个根因的三个面**:`_BUILT_BUNDLE_RE` 认三种产物,而分类器只分两种,于是每个过期语言包都被重定向到 **feature bundle**(owner 截图报障;commit `4b3398bf`,4 文件;新套件 **9/9 含 NEUTER×2 各咬各的方向**,相邻环 **86/86** 于干净 committed worktree 复验)
 
 - **★ 三个症状不是三个 bug,是一条链。** 服务端日志把根因写得一字不差:`[StaleBundle] Self-healing stale request: i18n-zh-9e07255b.js -> feature-92a75489.js`。`resolve_stale_bundle` 里是 `if filename.startswith('bundle-') … else: # 'feature-'`——**注释自己写着 else 分支是 feature,但正则早已扩容到接纳 `i18n-<lang>-<hash>.js`**,于是所有语言包落进 feature 分支。实测复现该分类:`i18n-zh-*.js` → `matches=True -> takes FEATURE-branch`。

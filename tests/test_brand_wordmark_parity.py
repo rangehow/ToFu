@@ -260,9 +260,12 @@ def test_nc_a_sidebar_only_gradient_breaks_colour_parity(css_text, theme):
             '{-webkit-text-fill-color:#8b6cf6}\n')
         drifted = re.sub(r'\s*>\s*', ' ', drifted)
     else:
+        # `light` now carries its own paired darker-amber override, so an
+        # unprefixed neuter loses to it and would silently no-op.
         prop = 'background-image'
+        prefix = f'[data-theme="{theme}"] ' if theme == 'light' else ''
         drifted = css + (
-            '\n.sidebar-brand-t'
+            f'\n{prefix}.sidebar-brand-t'
             '{background-image:linear-gradient(135deg,#8b6cf6,#a78bfa)}\n')
     side = _resolve(drifted, _sidebar_letter('sidebar-brand-t', theme), prop)
     welc = _resolve(drifted, _welcome_letter('tofu-brand-t', theme), prop)

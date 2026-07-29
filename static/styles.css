@@ -9998,9 +9998,20 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 
 /* Light: structural overrides */
 [data-theme="light"] .welcome-icon{background:transparent;box-shadow:none}
-/* （已删）light 主题曾有四条 .sidebar-brand-* 靓蓝渐变——那是只盖侧栏、不盖欢迎屏的
-   单边覆盖,正是两处字标漂移的一个来源。字母配色现由基础层单一真源同时供给两面;
-   若将来真需要按主题换色,必须同时写 .sidebar-brand-* 与 .tofu-brand-* 两侧。 */
+/* 字标在 light 下必须加深 —— 共用的奶油-琥珀金系是为深底调的,落到 light 的近白侧栏
+   (#f4f2ed)与白底欢迎屏上实测只有 1.00–2.35:1 —— 其中「o」的起点 #fdf2d7 在白底
+   上是 1.00:1,字面意义上看不见。此处只换明度、不换色相(仍是琥珀/陶土族),最差
+   3.26:1、多数 >4.5:1,四字的明暗层次与深底保持一致。
+   ★ 必须成对写两面(.sidebar-brand-* 与 .tofu-brand-*):只盖侧栏的单边覆盖正是之前
+   light 里那四条靓蓝渐变造成两套字标的原因;守卫按三主题钉死这一点。 */
+[data-theme="light"] .sidebar-brand-t,
+[data-theme="light"] .welcome h2.tofu-brand .tofu-brand-t{background-image:linear-gradient(135deg,#A06C1C,#85560F)}
+[data-theme="light"] .sidebar-brand-o,
+[data-theme="light"] .welcome h2.tofu-brand .tofu-brand-o1{background-image:linear-gradient(135deg,#B07C24,#96661A)}
+[data-theme="light"] .sidebar-brand-f,
+[data-theme="light"] .welcome h2.tofu-brand .tofu-brand-f{background-image:linear-gradient(135deg,#85560F,#6B430A)}
+[data-theme="light"] .sidebar-brand-u,
+[data-theme="light"] .welcome h2.tofu-brand .tofu-brand-u{background-image:linear-gradient(135deg,#A06C1C,#784C0D)}
 [data-theme="light"] .avatar.assistant{background:linear-gradient(135deg,#6366f1,#818cf8)}
 [data-theme="light"] .message-avatar img,[data-theme="light"] .message-avatar svg{filter:none}
 [data-theme="light"] .turn-nav{background:rgba(244,242,237,0.93);border-color:var(--border)}

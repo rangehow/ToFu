@@ -150,10 +150,13 @@ def test_wearing_a_candidate_repoints_every_surface_and_persists():
     out = _run(_source())
     assert len(out["skinIds"]) >= 2, "at least one candidate must be registered"
     assert out["wornSkin"] != "default", "the candidate must actually be worn"
+    # Derive the expected fragment from the REGISTRY, not a hardcoded filename:
+    # renaming an asset must not be able to make this guard vacuously pass.
+    worn_path = out["skinPaths"][out["skinIds"].index(out["wornSkin"])]
     for key in ("sideSrc", "welSrc", "favHref"):
-        assert "candidate-a2-soft" in out[key], (
-            f"{key} must repoint to the worn candidate (sidebar + welcome + favicon "
-            "all switch together)"
+        assert worn_path in out[key], (
+            f"{key} must repoint to the worn candidate's registered path "
+            f"{worn_path} (sidebar + welcome + favicon all switch together)"
         )
     assert out["persisted"] is True, "the choice must survive a reload"
     assert "tofu-welcome.svg" in out["backToDefaultUrl"], "switching back must restore the original"
@@ -183,6 +186,51 @@ def test_every_registered_skin_asset_exists_on_disk():
         if not p.is_file() or p.stat().st_size == 0:
             missing.append(f"{sid} -> {rel}")
     assert not missing, f"registered skins with no asset on disk: {missing}"
+
+
+@pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
+def test_skin_assets_live_in_a_product_dir_not_the_generator_scratch():
+    """Location invariant — stronger than "the file exists".
+
+    `static/icons/_gen/` is the generator workbench. Its sibling `_candidates`
+    is already stripped by ALL THREE export levels (export.py
+    PERSONAL_EXCLUDE_DIRS / ALWAYS_EXCLUDE_DIRS), so anything served out of
+    that neighbourhood is one cleanup — or one export-rule edit — away from
+    404'ing for every user. The skin would then silently fall back to the
+    original: the switch looks broken, and an existence check still passes
+    because the file is right there in the dev tree.
+
+    So: every registered skin MUST be served from a product asset directory.
+    """
+    out = _run(_source())
+    scratch = [f"{sid} -> {p}" for sid, p in zip(out["skinIds"], out["skinPaths"])
+               if "/_gen/" in p or "/_candidates/" in p]
+    assert not scratch, (
+        "skin assets must live in a product dir (e.g. static/icons/skins/), "
+        f"never under the generator scratch area: {scratch}"
+    )
+
+
+@pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
+def test_skin_assets_survive_every_export_level():
+    """The skins are product functionality now, so they must reach the user in
+    all three export tiers (charter #13/#14: what must arrive alive needs an
+    export survival guard, not an assumption)."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("export_mod", ROOT / "export.py")
+    export_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(export_mod)
+
+    out = _run(_source())
+    stripped = []
+    for sid, rel in zip(out["skinIds"], out["skinPaths"]):
+        relpath = rel.lstrip("/")
+        for mode in ("personal", "internal", "opensource"):
+            reason = export_mod._should_exclude(relpath, Path(relpath).name, mode)
+            if reason:
+                stripped.append(f"{sid} [{mode}] {relpath}: {reason}")
+    assert not stripped, f"skin assets stripped from an export tier: {stripped}"
 
 
 @pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")

@@ -23,6 +23,15 @@
    and every <img> gets an onerror that swaps in the default URL. A missing
    candidate file can therefore never leave a blank logo.
 
+   ASSET LOCATION IS AN INVARIANT: every skin file lives under
+   `static/icons/skins/` — a PRODUCT asset directory. It must NEVER point into
+   `static/icons/_gen/`, which is the generator scratch/workbench area: its
+   sibling `_candidates` is already stripped by all three export levels, so a
+   skin served from `_gen` is one cleanup (or one export-rule edit) away from
+   silently falling back to the original for every user — a failure the
+   "file exists" check cannot see. Enforced by
+   tests/test_frontend_brand_logo_skin.py.
+
    This file is concatenated by lib/js_bundler.py; symbols share the global
    window scope. No exports.
    ═══════════════════════════════════════════════════════════════════ */
@@ -45,7 +54,7 @@
     {
       id: 'a2-soft',
       label: 'settings.logoSkinA2',
-      path: '/static/icons/_gen/logo-redesign/candidate-a2-soft.svg',
+      path: '/static/icons/skins/a2-soft.svg',
     },
     {
       /* Pixel-refined: keep the current mascot's pixel character and
@@ -54,7 +63,7 @@
        * by hand — see gen_pixel_refined.py. */
       id: 'pixel-refined',
       label: 'settings.logoSkinPixel',
-      path: '/static/icons/_gen/logo-redesign/candidate-pixel-refined.svg',
+      path: '/static/icons/skins/pixel-refined.svg',
     },
     {
       /* Minimal: the subtraction bet. Flat block, two eyes, one small smile,
@@ -62,7 +71,7 @@
        * cut so the silhouette carries the identity at 16px. */
       id: 'minimal',
       label: 'settings.logoSkinMinimal',
-      path: '/static/icons/_gen/logo-redesign/candidate-minimal.svg',
+      path: '/static/icons/skins/minimal.svg',
     },
     {
       /* Hand-drawn: warmth over precision. Every geometric redraw read as
@@ -70,7 +79,7 @@
        * uneven corners, varying stroke weight, an asymmetric face. */
       id: 'handdrawn',
       label: 'settings.logoSkinHandDrawn',
-      path: '/static/icons/_gen/logo-redesign/candidate-handdrawn.svg',
+      path: '/static/icons/skins/handdrawn.svg',
     },
   ];
 

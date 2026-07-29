@@ -730,6 +730,172 @@ def test_convview_find_seam_is_identity_first():
         'resolve the WRONG node under index drift.')
 
 
+# ═══════════════════════════════════════════════════════════════════════
+#  Guard 6 — DRIFT × FAILURE: the rolled-back bubble must SURVIVE
+# ═══════════════════════════════════════════════════════════════════════
+#
+# THE SECOND HALF OF THE SAME ROOT CAUSE (owner-reproduced)
+# ---------------------------------------------------------
+# Guard 5 fixed the ENTRY (`_raiseContinueShell` resolves by `_msgId`). The EXIT
+# — rolling the shell back on a failed POST — still resolved by ARRAY POSITION,
+# so under the SAME drift the two ends disagreed and the bubble was destroyed:
+#
+#   `finalizeStreaming` takes `idx = _idxOf(conv, msg)` (drift ⇒ 1), renders
+#   `renderMessage(msg, 1)` — which stamps `id="msg-1"` — and swaps it in. But a
+#   REAL `msg-1` already exists in the DOM (the historical bubble). Two nodes now
+#   carry that id, and the identity sweep's keep-node was
+#   `getElementById('msg-' + idx)`, which returns the FIRST match — the
+#   HISTORICAL one. So `_evictByMsgId(inner, msg._msgId, keep=<wrong node>)`
+#   removed the bubble it had just restored.
+#
+# Net effect for the user: they click Continue, the network fails, and the turn
+# they wanted to resume DISAPPEARS from the screen — while a toast says "you can
+# retry". There is nothing left to retry. That is strictly worse than the
+# original defect.
+#
+# THE FIX: the sweep must keep the node it JUST created, held by reference
+# (`replaceWith` returns control of the node; `outerHTML` orphans `sm` and is
+# precisely why the old code had to re-find it by id). Then the keep-node is
+# correct regardless of whether the positional index is fresh.
+_BODY_DRIFT_FAILURE = _PROLOGUE.replace(
+    "targets: [process.argv[2]],",
+    "targets: [process.argv[4], process.argv[2]],",
+).replace(
+    """window.ConvView = global.ConvView = {""",
+    """/* ★ Guard 6 drives the REAL ConvView (conv_view.js is loaded as argv[4],
+ * BEFORE the target, so its IIFE installs window.ConvView). The stub below is
+ * therefore DELIBERATELY NOT installed — the whole point of this guard is the
+ * identity sweep inside the shipped finalizeStreaming. Overwriting it with a
+ * stub is what made an earlier revision of this guard pass vacuously. */
+const _REAL_CONVVIEW = window.ConvView;
+const _UNUSED_STUB = {""",
+) + r"""
+/* Restore the real seam (the stub object above is never wired in) + the
+ * renderMessage the sweep needs. Fail LOUDLY if conv_view.js did not load. */
+window.ConvView = global.ConvView = _REAL_CONVVIEW;
+if (!window.ConvView || typeof window.ConvView.finalizeStreaming !== 'function') {
+  console.log('FAIL real_convview_loaded conv_view.js did not install ConvView');
+}
+global.renderMessage = window.renderMessage = (m, i) =>
+  '<div class="message" id="msg-' + i + '" data-msg-id="' + m._msgId + '"'
+  + ' data-mfp="fp-restored"><div class="message-avatar"></div>'
+  + '<div class="message-content"><div class="message-header">'
+  + '<span class="message-role">Agent</span></div>'
+  + '<div class="message-body"><div class="md-content">interrupted tail prose</div>'
+  + '</div></div></div>';
+global.isNearBottom = window.isNearBottom = () => true;
+global._withInstantScroll = window._withInstantScroll = (el, fn) => fn();
+global._convRenderFingerprint = window._convRenderFingerprint = () => 'fp';
+global._lastRenderedFingerprint = window._lastRenderedFingerprint = '';
+""" + r"""
+(async () => {
+  check('real_convview_in_use',
+        !!window.ConvView && typeof window.ConvView.finalizeStreaming === 'function');
+
+  /* Same drifted scene as Guard 5 — but the POST FAILS. */
+  const inner = document.getElementById('chatInner');
+  inner.innerHTML =
+      staticUserHtml(0)
+    + staticAssistantHtml(1, 'a-old')
+    + staticAssistantHtml(2, 'a-tail');
+  inner.querySelector('[data-msg-id="a-old"]').querySelector('.md-content')
+      .textContent = 'HISTORICAL ANSWER';
+
+  conv = {
+    id: 'c1',
+    activeTaskId: null,
+    messages: [
+      { role: 'user', content: 'ask', _msgId: 'u1' },
+      {
+        role: 'assistant', _msgId: 'a-tail',
+        content: 'interrupted tail prose',
+        thinking: 'live thinking tail',
+        finishReason: 'interrupted',
+        toolRounds: [
+          { toolCallId: 'a', status: 'done', roundNum: 1, llmRound: 0 },
+          { toolCallId: 'b', status: 'done', roundNum: 2, llmRound: 1 },
+          { toolCallId: 'c', status: 'running', roundNum: 3, llmRound: 2 },
+        ],
+      },
+    ],
+  };
+  global.conversations = window.conversations = [conv];
+  global.activeStreams = window.activeStreams = new Map();
+  calls = {
+    sync: 0, continuePosts: 0, startAssistant: 0, finalize: 0, startStreaming: 0,
+    connect: [], replaceAll: [], updateStreamingUI: [], scrollToBottom: [],
+    forceScroll: [], toasts: [], debugLogs: [],
+    atBuildConfig: null, atSync: null, atPost: null,
+  };
+
+  api = () => { throw new Error('network down'); };
+  await continueAssistant();
+
+  /* ★ THE PIN: the turn the user asked to resume must STILL BE ON SCREEN. */
+  const tailEl = inner.querySelector('[data-msg-id="a-tail"]');
+  check('dxf_tail_bubble_survives', !!tailEl);
+  check('dxf_tail_not_a_live_shell',
+        !!tailEl && tailEl.id !== 'streaming-msg');
+  check('dxf_tail_has_no_pulse',
+        !!tailEl && tailEl.querySelectorAll('.stream-status .pulse').length === 0);
+  check('dxf_no_streaming_left', document.getElementById('streaming-msg') === null);
+
+  /* The historical bubble is collateral in the same sweep — pin it too. */
+  const oldEl = inner.querySelector('[data-msg-id="a-old"]');
+  check('dxf_historical_survives', !!oldEl);
+  check('dxf_historical_prose_intact',
+        !!oldEl && /HISTORICAL ANSWER/.test(oldEl.textContent));
+
+  /* Nothing may be lost OR duplicated by the rollback. */
+  check('dxf_msg_count_unchanged', inner.querySelectorAll('.message').length === 3);
+  check('dxf_no_tail_duplicate',
+        inner.querySelectorAll('[data-msg-id="a-tail"]').length === 1);
+
+  /* And the failure is still honest + retryable. */
+  check('dxf_visible_error', calls.toasts.length >= 1);
+  check('dxf_flag_cleared', !conv._continueInFlight);
+  check('dxf_no_task_bound', !conv.activeTaskId);
+  check('dxf_message_doc_intact',
+        conv.messages[1].toolRounds.length === 3
+        && conv.messages[1].finishReason === 'interrupted');
+""" + _EPILOGUE
+
+
+def test_failed_continue_keeps_the_bubble_under_index_drift():
+    run_harness(target_js=SRC_JS, body_js=_BODY_DRIFT_FAILURE, min_pass=13,
+                extra_targets=[os.path.join(JS_DIR, 'conv_view.js')],
+                label='continue-drift-x-failure')
+
+
+def test_finalize_streaming_keeps_the_node_it_just_created():
+    """Source-level complement to Guard 6 — pins the MECHANISM.
+
+    ``finalizeStreaming``'s identity sweep must keep the node it JUST wrote,
+    held by REFERENCE. Re-finding it via ``getElementById('msg-' + idx)`` is
+    unsafe: right after the swap TWO nodes can carry that positional id (the
+    freshly-finalized one and a stale bubble sitting at the same slot after an
+    index shift), and ``getElementById`` returns the FIRST — so the sweep keeps
+    the wrong node and evicts the one it just restored.
+    """
+    conv_view = os.path.join(JS_DIR, 'conv_view.js')
+    with open(conv_view, encoding='utf-8') as f:
+        src = f.read()
+    start = src.index('finalizeStreaming: function')
+    body = src[start:]
+    code = re.sub(r'/\*.*?\*/', '', body, flags=re.S)
+    code = re.sub(r'^\s*//.*$', '', code, flags=re.M)
+    # Bound to the sweep call itself.
+    i_sweep = code.index('_evictByMsgId(')
+    window = code[max(0, i_sweep - 400):i_sweep + 120]
+    assert "getElementById('msg-' + idx)" not in window, (
+        "finalizeStreaming's identity sweep still resolves its keep-node via "
+        "getElementById('msg-' + idx). Directly after the swap that id can match "
+        'TWO nodes (the just-finalized one and a stale bubble at the same slot '
+        'after an index shift), and getElementById returns the FIRST — so the '
+        'sweep evicts the bubble it just restored. Hold the new node by '
+        'reference instead (replaceWith).')
+
+
 def test_epilogue_marker_present_for_all_guards():
     """Cheap self-check that the harness prologue still exposes the three
     in-await DOM snapshots the twin-bubble pin depends on. Without them the

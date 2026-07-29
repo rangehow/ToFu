@@ -458,10 +458,38 @@
        *   streaming-bubble geometry is what we compare against. */
       const _wasNearBottom = (ct && typeof isNearBottom === 'function')
         ? isNearBottom(80) : false;
+      /* ★ Swap via replaceWith, NOT `sm.outerHTML = html`.
+       *
+       *   `outerHTML` ORPHANS `sm`, leaving no handle on the node just written
+       *   — which is the ONLY reason the identity sweep below used to re-find it
+       *   by `getElementById('msg-' + idx)`. That re-find is UNSAFE: straight
+       *   after the swap the positional id can match TWO nodes (the fresh one
+       *   plus a stale bubble still sitting at that slot after an index shift),
+       *   and `getElementById` returns the FIRST — so the sweep kept the WRONG
+       *   node and evicted the one it had just restored.
+       *
+       *   Observed (owner, 2026-07-29): a FAILED Continue rolled the shell back
+       *   and then deleted it, so the interrupted turn VANISHED from the screen
+       *   while the toast still offered a retry — nothing left to retry. Same
+       *   root cause as the Continue shell's entry-side positional lookup: one
+       *   end keyed on identity, the other on array position.
+       *
+       *   Parsing into a detached container and calling `replaceWith` keeps the
+       *   node BY REFERENCE, so the keep-node is right no matter how stale
+       *   `idx` is. */
+      let _finalEl = null;
       try {
-        sm.outerHTML = html;
+        const _holder = document.createElement('div');
+        _holder.innerHTML = html;
+        _finalEl = _holder.firstElementChild;
+        if (!_finalEl) {
+          console.error('[ConvView] finalizeStreaming: renderMessage produced no '
+            + 'element for msgId=' + (msg._msgId || '').slice(0, 12));
+          return false;
+        }
+        sm.replaceWith(_finalEl);
       } catch (e) {
-        console.error('[ConvView] finalizeStreaming outerHTML failed:', e && e.message);
+        console.error('[ConvView] finalizeStreaming swap failed:', e && e.message);
         return false;
       }
       /* ★ Identity sweep (belt-and-suspenders). The swap just turned
@@ -470,12 +498,12 @@
        *   insert path failed to evict), it would now coexist with the
        *   finalized node — the exact "two identical bubbles, one data entry"
        *   render duplicate. Evict every OTHER node carrying this msgId, keeping
-       *   only the just-finalized one (found by its stable msg-${idx} id). This
-       *   makes the invariant hold no matter which path inserted the twin. */
+       *   the node we just inserted BY REFERENCE — never by positional id (see
+       *   the swap note above for what that cost). Holds no matter which path
+       *   inserted the twin, and no matter whether `idx` is fresh. */
       if (msg && msg._msgId) {
         const _inner = document.getElementById('chatInner');
-        const _keep = document.getElementById('msg-' + idx);
-        _evictByMsgId(_inner, msg._msgId, _keep);
+        _evictByMsgId(_inner, msg._msgId, _finalEl);
       }
       /* ★ JUMP FIX — two parts:
        *   (1) The final `renderMessage` collapses the thinking block, drops the

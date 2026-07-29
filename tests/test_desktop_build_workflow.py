@@ -21,9 +21,18 @@ simply kept showing an old version while the operator built by hand.
      29927622183 (v0.15.1) and 30001088220 (v0.15.2): the ``macOS DMG
      (x86_64)`` job sat queued with ``runner=""`` for EXACTLY 24 h, GitHub
      auto-cancelled it, and since ``release`` has ``needs: build-macos`` the
-     release job went ``skipped``. Three versions built 3 of 4 platforms and
+     release job went ``skipped``. Those versions built 3 of 4 platforms and
      published nothing. ``timeout-minutes: 30`` did not help: it measures
      execution time, not queue time.
+
+  3. **A tag is a PRODUCT of releasing, not evidence of it.** The first fix
+     for (1) gated on ``git ls-remote --tags``, which is wrong in both
+     directions and left the reported symptom in place — see
+     ``test_an_orphan_tag_does_not_block_the_release``. Worse, an orphan tag
+     also mis-anchors the release itself: ``target_commitish`` is documented
+     as "Unused if the Git tag already exists", so a release created on a
+     stale tag ships binaries from one commit and Source-code archives from
+     another. See ``test_an_orphan_tag_is_moved_to_the_built_commit``.
 
 THE INVARIANTS PINNED HERE
 --------------------------
@@ -297,21 +306,21 @@ def test_an_orphan_tag_does_not_block_the_release():
     The gate used to ask ``git ls-remote --tags`` — "does the tag exist?" — as
     a proxy for "was this version released?". Measured on the real repo on
     2026-07-29, those two answers disagree for every version that matters:
-    v0.15.0 / v0.15.1 / v0.15.2 are all TAGGED on the remote and all three
-    return HTTP 404 from ``GET /releases/tags/{tag}`` — tagged, never
-    released, because the starved macOS leg skipped the release job.
+    v0.15.0 and v0.15.2 are both TAGGED on the remote and both return HTTP 404
+    from ``GET /releases/tags/{tag}`` — tagged, never released, because the
+    starved macOS leg skipped the release job.
 
     Under the tag predicate the current VERSION (0.15.2) resolved to
-    ``should_release=false``: the three versions the user reported as missing
-    could never be published, by construction. The predicate must ask about
-    the Release.
+    ``should_release=false``: the versions the user reported as missing could
+    never be published, by construction. The predicate must ask about the
+    Release.
     """
     got = _run_version_gate(http_code='404')
     assert got.get('should_release') == 'true', (
         f'A tagged-but-unreleased version must still build; got {got!r}. '
         f'Asking "does the tag exist?" instead of "was it released?" strands '
         f'every version whose release job was skipped — exactly the state '
-        f'v0.15.0-v0.15.2 are in.'
+        f'v0.15.0 and v0.15.2 are in.'
     )
     assert got.get('version') == '0.15.2'
 
@@ -431,4 +440,257 @@ def test_release_still_requires_every_platform_leg():
     needs = _workflow()['jobs']['release']['needs']
     assert {'build-windows', 'build-macos', 'build-linux'} <= set(needs), (
         f'release must depend on every platform build; got {needs}'
+    )
+
+
+# ══════════════════════════════════════════════════════════════════
+#  The release must be cut from the commit that was actually built
+# ══════════════════════════════════════════════════════════════════
+
+_BUILT_SHA = 'a' * 40
+_STALE_SHA = 'b' * 40
+
+
+def _retarget_step() -> dict:
+    """The step that moves an orphan tag onto the built commit."""
+    steps = _workflow()['jobs']['release']['steps']
+    hits = [s for s in steps
+            if 'refs/tags/' in str(s.get('run', ''))
+            and 'push' in str(s.get('run', ''))]
+    assert len(hits) == 1, (
+        f'expected exactly one tag-retarget step in the release job, found '
+        f'{len(hits)}. Without it, a release created on a pre-existing tag is '
+        f'anchored to that tag\'s commit — target_commitish is "Unused if the '
+        f'Git tag already exists" (GitHub REST docs).'
+    )
+    return hits[0]
+
+
+def _run_retarget(*, remote_sha: str | None, http_code: str | None,
+                  built_sha: str = _BUILT_SHA,
+                  tag_object_sha: str | None = None) -> list[str]:
+    """Execute the REAL retarget step; return the git commands it issued.
+
+    Asserting on the step's text cannot distinguish "moves an orphan tag" from
+    "moves any tag it finds" — and the difference between those two is a
+    rewritten published tag. So this runs the shipped shell with ``git`` and
+    ``curl`` stubs and reports what it actually tried to do.
+
+    The ls-remote fixtures are written to FILES and ``cat``-ed by the stub.
+    They must contain a real TAB: emitting them inline via Python ``repr``
+    produces a literal backslash-t, ``awk '{print $1}'`` then sees one
+    unsplittable field, and every SHA comparison in the step silently fails to
+    match — which made this harness report a push that the real step would not
+    have made.
+
+    Args:
+        remote_sha: the COMMIT the tag resolves to (the peeled ``^{}`` ref).
+            ``None`` means the tag does not exist on the remote at all.
+        http_code: status from the release probe. ``None`` = transport failure.
+        built_sha: the commit this run built (``GITHUB_SHA``).
+        tag_object_sha: for an ANNOTATED tag, the tag object's own SHA — what
+            the unpeeled ref reports, which is never the commit. ``None``
+            models a lightweight tag (both refs report the commit).
+
+    Returns:
+        Every ``git`` argv the step invoked, one space-joined string each.
+    """
+    body = _retarget_step()['run']
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        log = tmp / 'git.log'
+        bind = tmp / 'bin'
+        bind.mkdir()
+
+        peeled = tmp / 'ls_peeled'
+        plain = tmp / 'ls_plain'
+        if remote_sha is None:
+            peeled.write_text('', encoding='utf-8')
+            plain.write_text('', encoding='utf-8')
+        else:
+            peeled.write_text(f'{remote_sha}\trefs/tags/v0.15.2^{{}}\n',
+                              encoding='utf-8')
+            plain.write_text(
+                f'{tag_object_sha or remote_sha}\trefs/tags/v0.15.2\n',
+                encoding='utf-8')
+
+        # Logs every invocation; answers ls-remote from the fixtures, choosing
+        # the peeled or unpeeled file by which ref the step asked for. Any
+        # other subcommand (notably `push`) just succeeds — what matters is
+        # whether it was CALLED, not whether it reached a remote.
+        (bind / 'git').write_text(
+            '#!/bin/sh\n'
+            f'printf "%s\\n" "$*" >> {log}\n'
+            'if [ "$1" = "ls-remote" ]; then\n'
+            '  case "$*" in\n'
+            f'    *"^{{}}"*) cat {peeled} ;;\n'
+            f'    *)         cat {plain} ;;\n'
+            '  esac\n'
+            'fi\n'
+            'exit 0\n',
+            encoding='utf-8')
+        (bind / 'git').chmod(0o755)
+
+        if http_code is None:
+            curl_stub = '#!/bin/sh\nexit 7\n'
+        else:
+            curl_stub = f'#!/bin/sh\nprintf %s {http_code}\n'
+        (bind / 'curl').write_text(curl_stub, encoding='utf-8')
+        (bind / 'curl').chmod(0o755)
+
+        env = {
+            **os.environ,
+            'PATH': f'{bind}{os.pathsep}' + os.environ.get('PATH', ''),
+            'GITHUB_SHA': built_sha,
+            'GITHUB_REPOSITORY': 'rangehow/ToFu',
+            'GITHUB_API_URL': 'https://api.github.com',
+            'GH_TOKEN': 'stub-token',
+            'VER': '0.15.2',
+        }
+        proc = subprocess.run(['bash', '-c', body], cwd=tmp, env=env,
+                              capture_output=True, text=True, timeout=60)
+        assert proc.returncode == 0, (
+            f'retarget step exited {proc.returncode}\n'
+            f'stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}'
+        )
+        if not log.exists():
+            return []
+        return [ln for ln in log.read_text(encoding='utf-8').splitlines() if ln]
+
+
+def _pushes(cmds: list[str]) -> list[str]:
+    return [c for c in cmds if c.startswith('push')]
+
+
+def test_an_orphan_tag_is_moved_to_the_built_commit():
+    """THE DEFECT. An adopted orphan tag anchors the release to the OLD commit.
+
+    ``target_commitish`` is documented as "Unused if the Git tag already
+    exists", and action-gh-release looks for an existing RELEASE
+    (``findTagFromReleases``), not an existing git ref — so when the tag is
+    present with no release behind it, the action happily creates a release
+    ON THE STALE COMMIT. The installers come from ``github.sha``; the Source
+    code (zip/tar.gz) and the generated notes come from wherever the orphan
+    tag points. ``make_latest`` then hands that mismatch to every user, and
+    nothing anywhere errors.
+
+    Measured on the remote 2026-07-29: v0.15.0 and v0.15.2 are tagged and both
+    404 from the Releases API, so this is the state the very next push lands
+    in.
+    """
+    cmds = _run_retarget(remote_sha=_STALE_SHA, http_code='404')
+    pushes = _pushes(cmds)
+    assert pushes, (
+        f'an orphan tag (tag present, release 404) must be moved onto the '
+        f'built commit; the step issued no push at all. git calls: {cmds!r}'
+    )
+    assert any(_BUILT_SHA in p and 'refs/tags/v0.15.2' in p for p in pushes), (
+        f'the tag must be repointed at GITHUB_SHA ({_BUILT_SHA[:8]}…); '
+        f'got {pushes!r}'
+    )
+
+
+def test_a_published_tag_is_never_moved():
+    """THE COMPLEMENT, and the one that makes this safe to do automatically.
+
+    ``should_release`` is NOT authorisation to rewrite a tag:
+    ``workflow_dispatch`` sets it to true WITHOUT probing (the deliberate
+    re-release hatch), so a manual re-run on a shipped version reaches this
+    step. Moving the tag there would rewrite published history and break every
+    downstream pin — the exact thing ``export.py::_tag_push_action`` refuses to
+    do without an explicit human ``--force``. So the step must re-probe and
+    move only tags with NO release behind them.
+    """
+    cmds = _run_retarget(remote_sha=_STALE_SHA, http_code='200')
+    assert not _pushes(cmds), (
+        f'a tag with a real Release must NEVER be force-moved; the step '
+        f'pushed anyway: {_pushes(cmds)!r}'
+    )
+
+
+def test_an_unreadable_probe_does_not_move_the_tag():
+    """Here uncertainty must resolve toward NOT touching the tag.
+
+    This is deliberately the opposite of the version gate's fail-open: a
+    redundant build is cheap and reversible, whereas force-moving a tag that
+    turns out to have been published is destructive and hard to undo. So an
+    ambiguous probe declines and warns.
+    """
+    for code in ('403', '429', '500', None):
+        cmds = _run_retarget(remote_sha=_STALE_SHA, http_code=code)
+        assert not _pushes(cmds), (
+            f'probe HTTP {code!r} is not proof the tag is an orphan — the step '
+            f'must not move it, but it pushed: {_pushes(cmds)!r}'
+        )
+
+
+def test_a_tag_already_on_the_built_commit_is_left_alone():
+    """The `--bump` path: export.py just pushed this exact tag. No-op, no force."""
+    cmds = _run_retarget(remote_sha=_BUILT_SHA, http_code='404')
+    assert not _pushes(cmds), (
+        f'tag already points at the built commit — nothing to do, but the '
+        f'step pushed: {_pushes(cmds)!r}'
+    )
+
+
+def test_an_annotated_tag_is_compared_by_its_peeled_commit():
+    """``export.py`` creates ANNOTATED tags (``git tag -a``), and those do not
+    report a commit from the plain ref — they report the tag OBJECT's sha.
+
+    Comparing that object sha against ``GITHUB_SHA`` never matches, so a
+    correct-but-naive step would force-push on the `--bump` path every single
+    time: rewriting a tag that export.py had just placed correctly, on the one
+    path where it was already right. The step must peel with ``^{}`` first.
+    """
+    cmds = _run_retarget(remote_sha=_BUILT_SHA, http_code='404',
+                         tag_object_sha='c' * 40)
+    assert not _pushes(cmds), (
+        f'an annotated tag whose PEELED commit is already the built commit '
+        f'must be left alone; the step compared the tag object instead and '
+        f'pushed: {_pushes(cmds)!r}'
+    )
+
+
+def test_a_missing_tag_is_left_for_the_release_action_to_create():
+    """No tag yet: action-gh-release creates it, and target_commitish DOES apply."""
+    cmds = _run_retarget(remote_sha=None, http_code='404')
+    assert not _pushes(cmds), (
+        f'no tag exists yet, so there is nothing to move — the release action '
+        f'creates it from target_commitish; step pushed: {_pushes(cmds)!r}'
+    )
+
+
+def test_the_retarget_runs_before_the_release_is_created():
+    """Order is the whole point: after the release, the anchor is already wrong."""
+    steps = _workflow()['jobs']['release']['steps']
+    retarget = next(i for i, s in enumerate(steps)
+                    if 'refs/tags/' in str(s.get('run', ''))
+                    and 'push' in str(s.get('run', '')))
+    create = next(i for i, s in enumerate(steps)
+                  if 'action-gh-release' in str(s.get('uses', '')))
+    assert retarget < create, (
+        f'the tag must be repointed BEFORE the release is created (retarget at '
+        f'step {retarget}, release at step {create}). Afterwards the release is '
+        f'already anchored to the stale commit and moving the tag does not '
+        f're-cut its Source code archives.'
+    )
+
+
+def test_the_retarget_uses_the_built_sha_not_a_branch_name():
+    """``main`` moves; the built commit does not.
+
+    Sibling sessions push to this repo continuously, so by the time the
+    release job runs, ``main`` may already be several commits past what the
+    installers were built from. Anchoring the tag to the branch would
+    reintroduce the same source/binary mismatch this step exists to prevent.
+    """
+    body = _retarget_step()['run']
+    code = '\n'.join(ln for ln in body.splitlines()
+                     if not ln.lstrip().startswith('#'))
+    assert 'GITHUB_SHA' in code, (
+        'the retarget must use GITHUB_SHA (the exact commit the artifacts were '
+        'built from), not a branch ref that keeps moving'
+    )
+    assert not re.search(r'push\s+--force\s+origin\s+["\']?(main|HEAD)\b', code), (
+        'the retarget must not point the tag at a moving branch'
     )

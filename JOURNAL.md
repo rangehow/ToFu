@@ -1,5 +1,15 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·皮肤资产迁出 _gen) — owner 纠正:我把**用户能点到的产品资产**提交进了生成器工作台目录;而我的守卫只测「文件存在」,**测不出「文件放错地方」**(commit `da5742d0`,6 文件(4 个 R100 纯改名);守卫 **9/9**,新增位置不变量 + 导出存活守卫,**NEUTER 真咬**;新路径五枚实测全绿)
+
+- **★ owner 的判据(比我的守卫强一档):** `static/icons/_gen/` 名字就在说「这是临时产物」。将来任何人清理它、或把它加进导出剥离规则,五枚皮肤里的四枚会**静默回落成原版**——用户点了没反应,看起来像开关坏了;而「文件存在」这条断言在开发树上永远是绿的,看不见这类失效。
+- **实测坐实风险不是假设:** `export.py` 里 `_gen` 的同级兄弟 **`_candidates` 已被三级导出全部剥离**(`PERSONAL_EXCLUDE_DIRS` 与 `ALWAYS_EXCLUDE_DIRS` 都有它,注释写着「raw AI-gen asset candidates + proof strips (review-only, multi-MB)」)。`_gen` 今天恰好不在名单上——**是侥幸,不是安全**:它与已被剥离的目录同属一个语义家族。
+- **落点:** 四枚资产 `git mv` 到 `static/icons/skins/`(保留改名历史,diff 显示 **R100 内容零变化**),文件名去掉 `candidate-` 前缀(它们不再是候选稿,而是可选皮肤);注册表五个 `path:` 全部指向产品路径,`_gen` 只留生成器与草稿。模块头写明这是**不变量**而非偏好。
+- **两条新守卫(owner 点名那条 + 我自查补的一条):** ①**位置不变量**——任何注册皮肤的路径不得含 `/_gen/` 或 `/_candidates/`;②**导出存活**——直接 import `export.py` 的 `_should_exclude`,对每枚皮肤 × 三个导出档位逐一断言不被剥掉(charter #13/#14:「必须活着到达用户」的文件要有导出存活守卫,不能靠假设)。NEUTER 实测:把 `minimal` 的路径改回 `_gen` → 位置守卫立即红。
+- **★ 顺带修掉我自己一条脆断言(改名暴露出来的):** 原「切换后三个面同步」的守卫写死了文件名 `candidate-a2-soft`,改名后它红了。重锚为**从注册表取该皮肤的实际 path 再断言**——比原来强:以后任何改名都不会让这条守卫因为找不到字符串而假绿或假红。
+- **迁移后实测(真浏览器 + curl):** 新路径四枚全部 **200**(2218/8449/949/4794B),旧 `_gen` 路径 **404**(证明是迁移而非复制);五枚 URL 两两不同、`img[data-brand-logo]` 与 favicon 同步、**无一在 `_gen` 下**、缺失资产回落仍生效。
+- **验收边界:** 纯前端 + 资产改名,刷新即生效;新模块进页面仍需 bundle 重建;三枚候选仍是**待试戴状态**,`default` 永远是原版且排注册表首位。
+
 ### 2026-07-29(续·假 t() 盲区) — owner 实测抓出我上线的 QR 标签是**字面量 `project.qrScan`**;根因不止「忘了加 key」,而是**测试 harness 伪造的 `t()` 语义与真实现相反**,11 条渲染守卫全绿地放行了它(commit `bd8c63e0`,3 文件;守卫 **15/15**,**NEUTER×2 各咬 4 条**;干净 HEAD worktree:i18n 守卫 **8/8**(此前红)+ QR 全套 **66/66**)
 
 - **★ owner 的证伪(用真 i18n.js 实测):** `t("project.qrScan","Scannable QR code")` 返回的是 **`"project.qrScan"`**,不是那句英文。对照组 `t("common.cancel")` → `"取消"`。也就是用户在二维码上方看到的是一行**变量名**。

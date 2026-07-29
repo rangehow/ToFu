@@ -45,6 +45,7 @@ logger = get_logger(__name__)
 __all__ = ['GRAPHIC_EXTENSIONS', 'count_scene_graphics', 'scene_telemetry',
            'asset_floor_findings', 'film_quality_summary',
            'is_text_only_exempt', 'scene_grade', 'is_regression',
+           'required_asset_roles',
            'PRESERVED_SUBDIR', 'PRESERVED_FILENAME']
 
 #: Where a scene's LAST KNOWN-GOOD composition is kept while a re-run is in
@@ -147,9 +148,48 @@ def count_scene_graphics(html: str, scene_dir: str) -> dict:
     }
 
 
+def required_asset_roles(scene: dict | None) -> list[str]:
+    """Roles in this scene's brief that OBLIGE a real generated image file.
+
+    Reads the storyboard's ``assets`` brief (written by the recipe's script
+    stage). ``subject`` / ``diagram`` are imagery a composition cannot draw
+    itself, so they demand a file; ``background`` is texture and never does.
+
+    The brief is the ONLY source of the obligation. Inferring "this beat looks
+    like it wants a picture" from the prose would make the gate unpredictable
+    and un-actionable — the author would be failed for something nobody asked
+    of it.
+    """
+    if not isinstance(scene, dict):
+        return []
+    out: list[str] = []
+    for item in scene.get('assets') or []:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get('role') or '').strip().lower()
+        if role in ('subject', 'diagram') and role not in out:
+            out.append(role)
+    return out
+
+
 def asset_floor_findings(scene: dict, html: str, scene_dir: str, *,
                          mode: str = 'authored') -> list[str]:
-    """Findings when an AUTHORED scene ships with no real graphic.
+    """Findings when an AUTHORED scene ships less imagery than its beat needs.
+
+    TWO tiers, because "has a graphic" and "has the imagery this beat was
+    briefed for" are different questions:
+
+    1. **The generic floor** — every authored scene needs at least ONE real
+       graphic, where a painting inline SVG counts (a hand-drawn gauge beats a
+       stock backdrop, so counting only files would push authors to the worse
+       artefact).
+    2. **The role floor** — when the beat's brief declares a ``subject`` or
+       ``diagram`` asset, an inline SVG does NOT substitute: those roles exist
+       precisely for imagery the composition cannot draw itself. Measured
+       2026-07-29: with imagery merely permitted, ``generate_asset`` was called
+       **zero** times across every film ever produced and all 17 graphics of
+       the target film were inline SVG. The capability was not broken — image
+       generation answers in ~20s — it was simply never required.
 
     Scope is deliberate on both axes:
 
@@ -169,18 +209,32 @@ def asset_floor_findings(scene: dict, html: str, scene_dir: str, *,
     if exempt:
         return []
     counts = count_scene_graphics(html, scene_dir)
-    if counts['graphics'] > 0:
-        return []
-    return [
-        'this scene ships NO real graphic — no image/video asset and no '
-        'inline SVG that draws anything. A frame of text on a gradient is the '
-        'zero-LLM fallback, not an authored composition. Either call '
-        'generate_asset for the imagery this beat needs (illustration, '
-        'diagram, background texture) or build a real supporting graphic '
-        'inline (chart, gauge, drawn icon). If this beat genuinely must be '
-        'text-only (a hold or a transition), that is allowed — but it has to '
-        'be declared with a text_only_reason on the scene rather than left as '
-        'an accident.']
+    findings: list[str] = []
+    if counts['graphics'] <= 0:
+        findings.append(
+            'this scene ships NO real graphic — no image/video asset and no '
+            'inline SVG that draws anything. A frame of text on a gradient is '
+            'the zero-LLM fallback, not an authored composition. Either call '
+            'generate_asset for the imagery this beat needs (illustration, '
+            'diagram, background texture) or build a real supporting graphic '
+            'inline (chart, gauge, drawn icon). If this beat genuinely must be '
+            'text-only (a hold or a transition), that is allowed — but it has '
+            'to be declared with a text_only_reason on the scene rather than '
+            'left as an accident.')
+    roles = required_asset_roles(scene)
+    if roles and counts['asset_files'] <= 0:
+        briefs = [str(a.get('prompt') or '')[:90]
+                  for a in (scene.get('assets') or [])
+                  if isinstance(a, dict)
+                  and str(a.get('role') or '').lower() in ('subject', 'diagram')]
+        findings.append(
+            f'this beat was briefed for a real {"/".join(roles)} image and '
+            f'ships none — inline SVG does NOT substitute for it, because that '
+            f'role exists for imagery a composition cannot draw itself. Call '
+            f'generate_asset with the brief and reference the path it returns. '
+            f'Brief: ' + ' | '.join(briefs))
+    return findings
+
 
 
 def scene_telemetry(scene: dict, html: str, scene_dir: str, *,

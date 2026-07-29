@@ -526,6 +526,31 @@ def _build_prompt(scene: dict, *, width: int, height: int, duration: float,
     skeleton = _read_guide('skeleton.html', limit=6000)
     text = str(scene.get('text') or '').strip()
     visual = str(scene.get('visual') or '').strip()
+    # The ASSET BRIEF. Without this the prompt only ever OFFERED imagery
+    # ("REAL IMAGERY IS AVAILABLE — use it when the beat calls for it"), and
+    # measured across every film ever produced generate_asset was called ZERO
+    # times: the model always chose the cheaper inline SVG. A capability that
+    # nothing asks for is an unused capability, so the storyboard now NAMES
+    # what this beat needs and the floor checks it was delivered.
+    brief_block = ''
+    briefed = [a for a in (scene.get('assets') or []) if isinstance(a, dict)]
+    if briefed:
+        lines = []
+        for a in briefed:
+            role = str(a.get('role') or 'background').strip().lower()
+            prompt_txt = str(a.get('prompt') or '').strip()
+            must = ('REQUIRED — a real generated file, inline SVG does NOT '
+                    'substitute' if role in ('subject', 'diagram')
+                    else 'optional texture')
+            lines.append(f'  - role={role} ({must})\n    prompt: {prompt_txt}')
+        brief_block = (
+            '\n## Asset brief for THIS beat (from the storyboard)\n'
+            'Call generate_asset for each REQUIRED item below, then reference '
+            'the scene-relative path it returns. Refine the prompt if you can '
+            'make it better — but do not silently skip a required item and '
+            'draw an SVG instead: that role exists for imagery a composition '
+            'cannot draw itself.\n'
+            + '\n'.join(lines) + '\n')
     font_block = ''
     if font_rel:
         from lib.motion_video._fonts import CJK_SANS_FAMILY, font_face_css
@@ -551,6 +576,7 @@ def _build_prompt(scene: dict, *, width: int, height: int, duration: float,
         f'- frame: {width}x{height} px\n'
         f'- narration (spoken over this scene): {text or "(none)"}\n'
         + (f'- visual direction: {visual}\n' if visual else '')
+        + brief_block
         + font_block
         + '\n## Hard requirements\n'
         '1. Call write_composition with the COMPLETE document, then '

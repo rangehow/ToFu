@@ -255,6 +255,7 @@ def _timeline(beats: list[dict], *, chars_per_second: float,
             'text': spoken,
             'on_screen': beat['on_screen'],
             'visual': beat.get('visual', ''),
+            'assets': beat.get('assets') or [],
         })
         cursor = round(cursor + dur, 3)
     return scenes
@@ -397,6 +398,7 @@ def build_abstract_scenes(source_text: str, *,
             continue
         caption = str(beat.get('on_screen') or '').strip()
         visual = str(beat.get('visual') or '').strip()
+        assets = beat.get('assets') or []
         pieces = ([spoken] if len(spoken) <= absorb
                   else _split_balanced(spoken, _BEAT_CHAR_BUDGET))
         # A split beat is ONE beat continuing across two scenes, so its
@@ -411,7 +413,7 @@ def build_abstract_scenes(source_text: str, *,
                 piece, capacity, terms, index=len(bounded) + 1,
                 total=max_scenes, lang=lang)
             bounded.append({'text': piece, 'on_screen': cap,
-                            'visual': visual})
+                            'visual': visual, 'assets': assets})
         if len(bounded) >= max_scenes:
             break
     bounded = bounded[:max_scenes]

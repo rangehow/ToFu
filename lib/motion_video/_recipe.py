@@ -42,7 +42,8 @@ from lib.production.stages import Stage, run_stages
 logger = get_logger(__name__)
 
 __all__ = ['build_scenes_from_topic', 'RESEARCH', 'SCRIPT', 'TIMELINE',
-           'video_recipe_stages', 'script_stage_for_source']
+           'video_recipe_stages', 'script_stage_for_source',
+           'normalise_assets', 'ASSET_ROLES', 'ASSET_ROLES_REQUIRING_FILE']
 
 #: Hard ceilings (拍板 #3 — scene-count cap; no money cap here).
 _DEFAULT_MAX_SCENES = 8
@@ -297,21 +298,30 @@ def _build_source_beat_prompt(source_text: str, *, lang: str, max_scenes: int,
             f'你是科普短视频编导。把下面这份资料改写成一条短视频的分镜口播稿。\n\n'
             '严格要求:\n'
             f'1. 输出 JSON:{{"beats": [{{"text": "...", "on_screen": "...", '
-            f'"visual": "..."}}]}}。\n'
+            f'"visual": "...", "assets": [{{"role": "subject", "prompt": "..."}}]}}]}}。\n'
             f'2. beats 数量 3 到 {max_scenes} 个。\n'
             f'3. text = 该镜的口播旁白,**每条不超过 {char_budget} 字**,口语、'
             '连贯、可直接配音。\n'
             f'4. on_screen = 该镜画面上出现的短文案,**每条不超过 '
             f'{caption_capacity} 字**,是标题式短句而不是旁白全文。\n'
             '5. visual = 该镜的美术方向(构图/主体/动效意象),一句话。\n'
-            '6. 只依据资料,不得编造;只输出 JSON,不要解释或代码围栏。\n\n'
+            '6. assets = 该镜**必须真实生成的图像素材**清单,1~2 件。每件写 '
+            '{"role": "subject|diagram|background", "prompt": "..."}。\n'
+            '   - subject:该镜的主体插画(讲一个具体事物/场景时用);\n'
+            '   - diagram:解释性图示(讲机制/流程/对比时用);\n'
+            '   - background:仅作背景肌理,可选。\n'
+            '   prompt 用英文写,包含:主体 + 风格(flat vector / UI illustration / '
+            'paper-cut collage 等)+ 配色 + negative 约束。**不要写"图表"这类'
+            '可以用代码画出来的东西当 subject**——那应该由构图代码画。\n'
+            '   纯过渡/停顿镜可以给空数组 [],但必须在 visual 里说明它是过渡。\n'
+            '7. 只依据资料,不得编造;只输出 JSON,不要解释或代码围栏。\n\n'
             f'资料:\n{body}')
     return (
         'You are a science-explainer video writer. Rewrite the material below '
         'into the beats of a short video.\n\n'
         'Strict requirements:\n'
         '1. Output JSON: {"beats": [{"text": "...", "on_screen": "...", '
-        '"visual": "..."}]}.\n'
+        '"visual": "...", "assets": [{"role": "subject", "prompt": "..."}]}]}.\n'
         f'2. Between 3 and {max_scenes} beats.\n'
         f'3. text = spoken narration for that beat, AT MOST {char_budget} '
         'characters each, voice-over ready.\n'
@@ -320,8 +330,61 @@ def _build_source_beat_prompt(source_text: str, *, lang: str, max_scenes: int,
         'narration.\n'
         '5. visual = art direction for that beat (composition / subject / '
         'motion idea), one sentence.\n'
-        '6. Ground everything in the material; output ONLY the JSON.\n\n'
+        '6. assets = the image assets this beat MUST really generate, 1-2 of '
+        'them. Each is {"role": "subject|diagram|background", "prompt": "..."}.\n'
+        '   - subject: the hero illustration (a concrete thing or scene);\n'
+        '   - diagram: an explanatory graphic (a mechanism, flow, contrast);\n'
+        '   - background: texture only, optional.\n'
+        '   Write prompt in English: subject + style (flat vector / UI '
+        'illustration / paper-cut collage) + palette + negative constraints. '
+        'Do NOT ask for a bar chart as a subject — code draws those better.\n'
+        '   A pure transition/hold beat may use [], but its visual must say so.\n'
+        '7. Ground everything in the material; output ONLY the JSON.\n\n'
         f'Material:\n{body}')
+
+
+#: Asset roles a beat may declare, and what each one means for the floor.
+#:
+#: ``subject`` / ``diagram`` are IMAGERY the composition cannot draw itself, so
+#: the role-aware floor requires a real generated file for them. ``background``
+#: is texture: nice to have, never required, because a gradient or an inline
+#: SVG backdrop is a legitimate answer.
+ASSET_ROLES = ('subject', 'diagram', 'background')
+#: Roles that OBLIGE the scene to carry a real image file on disk.
+ASSET_ROLES_REQUIRING_FILE = ('subject', 'diagram')
+#: Longest asset prompt we keep (the image API caps at ~1500).
+_MAX_ASSET_PROMPT = 1200
+
+
+def normalise_assets(raw) -> list[dict]:
+    """Validate a beat's ``assets`` array into ``[{'role', 'prompt'}]``.
+
+    Roles are checked against :data:`ASSET_ROLES` rather than passed through:
+    an unrecognised role would flow into the floor, which decides whether a
+    real file is REQUIRED — so a typo or an invented role would silently
+    change what the gate demands. An unknown role degrades to ``background``
+    (the never-required tier) because inventing an obligation the author was
+    never told about is worse than under-asking.
+
+    A prompt-less entry is dropped: an asset request with no prompt cannot be
+    generated, and keeping it would create an obligation nothing can satisfy.
+    """
+    out: list[dict] = []
+    if not isinstance(raw, list):
+        return out
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        prompt = re.sub(r'\s+', ' ', str(item.get('prompt') or '')).strip()
+        if not prompt:
+            continue
+        role = str(item.get('role') or '').strip().lower()
+        if role not in ASSET_ROLES:
+            logger.info('[Recipe] asset role %r is not one of %s — treating it '
+                        'as background (never required)', role, ASSET_ROLES)
+            role = 'background'
+        out.append({'role': role, 'prompt': prompt[:_MAX_ASSET_PROMPT]})
+    return out[:3]
 
 
 def script_stage_for_source(source_text: str, *, lang: str = 'zh',
@@ -370,6 +433,7 @@ def script_stage_for_source(source_text: str, *, lang: str = 'zh',
                                 str(item.get('on_screen') or '')).strip(),
             'visual': re.sub(r'\s+', ' ',
                              str(item.get('visual') or '')).strip(),
+            'assets': normalise_assets(item.get('assets')),
         })
     if len(beats) < 2:
         raise ValueError(f'source-beat reply yielded {len(beats)} usable beat(s)')

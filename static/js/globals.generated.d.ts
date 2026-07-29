@@ -237,6 +237,9 @@ interface Window {
   _pmModelDocCloseBound: any;
   _prefetchConvCosts: any;
   _prefetchConvFileChanges: any;
+  _privateHostAdd: any;
+  _privateHostRemove: any;
+  _privateHostToggle: any;
   _promptInjectMode: any;
   _promptRenameConversation: any;
   _readerFontStep: any;
@@ -247,6 +250,7 @@ interface Window {
   _releaseBootLoad: any;
   _removeStreamingVuBubbleIfTail: any;
   _renderMsgInPlace: any;
+  _renderPrivateHosts: any;
   _renderStreamingTranslatePreview: any;
   _resolveContextLimit: any;
   _revalidateOnResume: any;

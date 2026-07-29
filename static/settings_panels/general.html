@@ -37,16 +37,10 @@
             </div>
           </div>
 
-          <div class="settings-divider"></div>
-          <div class="settings-section-needs-js" data-requires="listLogoSkins">
-            <div class="settings-section-title" data-i18n="settings.logoSkin">品牌图标</div>
-            <div class="settings-toggle-desc" data-i18n="settings.logoSkinDesc" style="margin-bottom:8px">试戴候选图标：切换后立即生效并保存，侧栏 / 欢迎屏 / 浏览器标签同步更换。默认为原版。</div>
-            <div class="theme-picker" id="logoSkinPicker"></div>
-            <!-- Shown INSTEAD of the picker when the module is missing (stale
-                 bundle / failed load). Never leave an empty box that looks
-                 like a usable control. -->
-            <div class="settings-section-js-missing" data-i18n="settings.sectionNeedsRestart">此功能需重启服务后生效。</div>
-          </div>
+          <!-- No brand-mascot picker here, on purpose (owner, 2026-07-29):
+               "I only want the original version … there is really no need to
+               switch." Third veto of mascot switching — see the note in
+               static/js/core/brand_logo.js before adding one back. -->
 
           <div class="settings-divider"></div>
           <div class="settings-section-title" data-i18n="settings.modelParams">模型参数</div>

@@ -1133,13 +1133,6 @@ var _i18n = {
   'settings.themeDark': { zh: '暗色', en: 'Dark' },
   'settings.themeLight': { zh: '亮色', en: 'Light' },
   'settings.themeTofu': { zh: '豆腐', en: 'Tofu' },
-  'settings.logoSkin': { zh: '品牌图标', en: 'Brand mascot' },
-  'settings.logoSkinDesc': { zh: '试戴候选图标：切换后立即生效并保存，侧栏 / 欢迎屏 / 浏览器标签同步更换。默认为原版。', en: 'Try a candidate mascot: applies instantly and persists across sidebar, welcome screen and browser tab. Default is the shipped original.' },
-  'settings.logoSkinDefault': { zh: '原版', en: 'Original' },
-  'settings.logoSkinA2': { zh: 'A2 柔边', en: 'A2 soft-edge' },
-  'settings.logoSkinPixel': { zh: '像素精修', en: 'Pixel refined' },
-  'settings.logoSkinMinimal': { zh: '极简', en: 'Minimal' },
-  'settings.logoSkinHandDrawn': { zh: '手绘感', en: 'Hand-drawn' },
   'settings.sectionNeedsRestart': { zh: '此功能需重启服务后生效。', en: 'This feature becomes available after restarting the server.' },
   'settings.modelParams': { zh: '模型参数', en: 'Model Parameters' },
   'settings.temperature': { zh: '温度 (Temperature)', en: 'Temperature' },
@@ -2117,6 +2110,31 @@ var _i18n = {
   'paper.research.survey': { zh: '综述与空白地图', en: 'Survey' },
   'paper.research.ideate': { zh: '创新点与新颖性闸', en: 'Ideate' },
   'paper.research.openFolder': { zh: '打开文献文件夹', en: 'Open paper folder' },
+  // The finished-panel artifact surface. The pipeline pays many LLM calls for
+  // these; before this they were fetched and then dropped by the renderer,
+  // which showed only three integers.
+  'paper.research.acceptedTitle': { zh: '通过闸的创新点', en: 'Ideas that cleared the gate' },
+  'paper.research.untitled': { zh: '(无标题)', en: '(untitled)' },
+  'paper.research.mechanism': { zh: '机理', en: 'Mechanism' },
+  'paper.research.novelty': { zh: '新颖性主张', en: 'Novelty claim' },
+  'paper.research.prediction': { zh: '可证伪预测', en: 'Falsifiable prediction' },
+  'paper.research.whyNotAB': { zh: '为何不是缝合', en: 'Why not A+B' },
+  'paper.research.noIdeas': { zh: '本次没有创新点通过闸 —— 宁缺毋滥,这是诚实的结果,不是故障。', en: 'No idea cleared the gate this run — an honest zero, not a failure.' },
+  // Collapsed by default: a 0-accepted / 6-rejected run must be legible at a
+  // glance without a wall of failures dominating the panel.
+  'paper.research.rejectedSummary': { zh: '{n} 个被淘汰(最高 {best} / 阈值 {threshold})', en: '{n} rejected (best {best} / threshold {threshold})' },
+  'paper.research.rejectReason': { zh: '淘汰理由', en: 'Reason' },
+  'paper.research.rejectStage': { zh: '淘汰于', en: 'Gate' },
+  'paper.research.surveyTitle': { zh: '综述全文', en: 'Full survey' },
+  'paper.research.gapsTitle': { zh: '空白地图', en: 'Open-gap map' },
+  // Past-research index. The persisted rows are keyed by a ONE-WAY hash of the
+  // direction, so without this list a user who forgot their exact wording
+  // could never reach their own artifacts again.
+  'paper.research.recentTitle': { zh: '最近的研究', en: 'Recent research' },
+  'paper.research.recentHint': { zh: '点击任意方向即可重新打开它的产物', en: 'Click any direction to reopen its artifacts' },
+  'paper.research.recentCounts': { zh: '{accepted} 个创新点 / {rejected} 个淘汰', en: '{accepted} ideas / {rejected} rejected' },
+  'paper.research.restoring': { zh: '正在读取已保存的研究…', en: 'Loading saved research…' },
+  'paper.research.restoreFailed': { zh: '没有找到该方向的已保存研究', en: 'No saved research found for this direction' },
   // A degraded job keeps status='done' by design, so this banner is the ONLY
   // honest signal that the pipeline misfired (e.g. the structural gate
   // rejected every idea before the expensive gates ever ran).

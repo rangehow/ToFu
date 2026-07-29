@@ -1369,11 +1369,6 @@ function _installViewportHeightGuard() {
   // ── Theme init ──
   applyTheme(_getCurrentTheme());
 
-  // ── Brand mascot skin init ──
-  // Static index.html markup ships the default logo; this repoints every
-  // marked <img> + the favicon if the user is wearing a candidate skin.
-  if (typeof applyLogoSkin === 'function') applyLogoSkin();
-
   // ── Toolbar layout: no overflow detection needed ──
   // CSS flex cascade (min-width:0 chain) handles truncation of .ps-label automatically.
   // .input-actions-scroll uses flex:0 1 auto to size-to-content without greedy fill.

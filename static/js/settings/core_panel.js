@@ -214,23 +214,6 @@ function openSettings() {
     el.classList.toggle("active", el.dataset.theme === ct);
   });
 
-  // Logo skin picker — rendered FROM the brand_logo.js registry, never a
-  // hand-copied list: adding a candidate is one entry in that registry.
-  var skinBox = document.getElementById('logoSkinPicker');
-  if (skinBox && typeof listLogoSkins === 'function') {
-    var _curSkin = (typeof getLogoSkin === 'function') ? getLogoSkin() : 'default';
-    var _bp = (typeof BASE_PATH !== 'undefined' && BASE_PATH) ? BASE_PATH : '';
-    skinBox.innerHTML = listLogoSkins().map(function (s) {
-      return '<div class="theme-option logo-skin-option' + (s.id === _curSkin ? ' active' : '')
-        + '" data-skin="' + s.id + '" onclick="setLogoSkin(\'' + s.id + '\')">'
-        + '<img src="' + _bp + s.path + '?v=' + (window.LOGO_VER || '') + '" alt="" '
-        + 'width="34" height="34" style="display:block;margin:2px auto 6px" '
-        + 'onerror="this.style.visibility=\'hidden\'">'
-        + '<span class="theme-option-label"><span data-i18n="' + s.label + '">'
-        + (typeof t === 'function' ? t(s.label) : s.id) + '</span></span></div>';
-    }).join('');
-  }
-
   switchSettingsTab('general');
   /* Degraded-section contract: hide the controls of any block whose JS
    * dependency is absent (stale bundle) and show its "needs restart" notice,

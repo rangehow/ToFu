@@ -28,9 +28,6 @@ logger = get_logger(__name__)
 from lib.llm import AbortedError
 from lib.tasks_pkg.attachments import compute_turn_attachments, inject_attachments
 from lib.tasks_pkg.cache_tracking import (
-    detect_cache_break,
-    get_prev_turn_cache_read,
-    log_round_cache_stats,
     sort_tool_results,
 )
 from lib.agent_core.events import EventType, build_event
@@ -84,7 +81,6 @@ from lib.tasks_pkg.orchestrator._finalize import (
     _emit_tool_round_phase,
     _finalize_and_emit_done,
     _maybe_auto_retry_turn,
-    _compute_write_breakdown,
 )
 
 # Startup helpers extracted 2026-07-23 (pt_03f4cdf1 slice 2) — the first
@@ -117,6 +113,9 @@ from lib.tasks_pkg.orchestrator._teardown import finalize_task_lane
 from lib.tasks_pkg.orchestrator._swarm_inbox import drain_and_inject_inbox
 from lib.tasks_pkg.orchestrator._deferred_inbox_flush import (
     flush_deferred_peer_and_steer,
+)
+from lib.tasks_pkg.orchestrator._cache_round_accounting import (
+    stamp_round_cache_accounting,
 )
 
 
@@ -747,71 +746,27 @@ def run_task(task: dict[str, Any]) -> None:
                     break
                 raise
 
-            # ★ Prompt cache break detection: track what changed between turns
-            #   to diagnose unexpected cost spikes.
-            #   Inspired by Claude Code's promptCacheBreakDetection.ts.
-            if task.get('convId') and rs.last_usage:
-                _cache_break = detect_cache_break(
-                    task['convId'], messages,
-                    tools=_tools_this_round, model=rs.model,
-                    usage=rs.last_usage,
-                )
-                # Stamp the break reason onto the round we just recorded so
-                # the frontend cost popover can explain WHY cache_read dropped
-                # (system-prompt change, tools change, TTL expiry, …). Guard on
-                # the round number so we don't mis-attribute when this round
-                # produced no usage and api_rounds[-1] is an earlier round.
-                if _cache_break and rs.api_rounds and rs.api_rounds[-1].get('round') == round_num + 1:
-                    rs.api_rounds[-1]['cacheBreak'] = _cache_break
-                # ★ Stamp WHAT the model did this round (the tool calls it
-                #   emitted). This is the causal driver of the NEXT round's
-                #   cache `write`: round N's assistant output (text + these
-                #   tool_calls) PLUS the tool results fed back get appended to
-                #   the prefix and cached on round N+1. Recording the tool
-                #   names lets the cost popover explain why a round that
-                #   "generated" only a few hundred output tokens leads to a
-                #   multi-thousand-token write next round.
-                if rs.api_rounds and rs.api_rounds[-1].get('round') == round_num + 1:
-                    try:
-                        _tcs = (rs.assistant_msg or {}).get('tool_calls') or []
-                        _names = [
-                            (tc.get('function') or {}).get('name') or '?'
-                            for tc in _tcs if isinstance(tc, dict)
-                        ]
-                        if _names:
-                            rs.api_rounds[-1]['toolCalls'] = _names
-                    except Exception as _te:
-                        logger.debug('[%s] tool-call stamp failed: %s', tid, _te)
-                    # ★ Stamp the EXACT decomposition of this round's `write`
-                    #   into {toolResults, prevOutput, envelope} computed from
-                    #   real recorded usage (see _compute_write_breakdown). The
-                    #   frontend renders these three sub-items — which sum to
-                    #   exactly `write` — instead of doing the arithmetic (and
-                    #   only proxying it) client-side.
-                    try:
-                        # On a turn's round-1 there is no within-turn predecessor
-                        # (api_rounds has one entry), so the breakdown has no read
-                        # baseline and would default the whole write to benign
-                        # contextWrite — even when the PREVIOUS turn's cached
-                        # prefix was partly evicted and re-billed this round. Feed
-                        # the cross-turn baseline (prior turn's final cached-prefix
-                        # read, recovered across the run_task thread boundary) so
-                        # round-1 classifies an evicted-tail re-bill as recacheBody.
-                        _prev_turn_read = (
-                            get_prev_turn_cache_read(task['convId'])
-                            if len(rs.api_rounds) < 2 else 0)
-                        _wb = _compute_write_breakdown(
-                            task, rs.api_rounds, round_num,
-                            prev_turn_cache_read=_prev_turn_read)
-                        if _wb:
-                            rs.api_rounds[-1]['writeBreakdown'] = _wb
-                    except Exception as _we:
-                        logger.debug('[%s] write-breakdown stamp failed: %s', tid, _we)
-                # ★ Per-round cache stats at INFO level for production visibility
-                log_round_cache_stats(
-                    task['convId'], round_num, rs.last_usage,
-                    model=rs.model, tid=task['id'],
-                )
+            # ── Per-round cache accounting (pt_03f4cdf1 slice 13) ──
+            #   Extracted to
+            #   lib.tasks_pkg.orchestrator._cache_round_accounting.
+            #   Detects cross-round prompt-cache breaks, stamps causal
+            #   metadata (cacheBreak / toolCalls / writeBreakdown) onto
+            #   rs.api_rounds[-1] so the frontend cost popover can
+            #   explain WHY cache_read dropped and WHERE next-round
+            #   cache `write` comes from, plus logs the per-round cache
+            #   stats at INFO for production visibility. Guarded by
+            #   ``convId + last_usage`` INTERNALLY — safe to call
+            #   unconditionally. All three stamps are round-match
+            #   protected (api_rounds[-1].round == round_num + 1) and
+            #   individually wrapped in try/except so a stamp bug on
+            #   one field never blocks the other two.
+            stamp_round_cache_accounting(
+                task,
+                round_num=round_num, tid=tid, model=rs.model,
+                tools=_tools_this_round, usage=rs.last_usage,
+                assistant_msg=rs.assistant_msg,
+                api_rounds=rs.api_rounds, messages=messages,
+            )
 
             # ★ Settle orphan early-announced rounds left by a discarded stream
             #   retry. stream_chat re-runs the SSE stream on a transient

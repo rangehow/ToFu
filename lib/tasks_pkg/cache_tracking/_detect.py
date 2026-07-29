@@ -328,7 +328,8 @@ def _resolve_break_cause(
 
 def _emit_round_record(conv_id, call_num, verdict, *, ns_switch, ttl_flip,
                        breakpoint_lost, body_identical, namespace_verified,
-                       cache_read, cache_write, elapsed, culprits=None):
+                       cache_read, cache_write, elapsed, culprits=None,
+                       model=''):
     """Emit ONE machine-readable per-round cache-verdict record (ALWAYS, every
     round — not only on a break).
 
@@ -355,6 +356,23 @@ def _emit_round_record(conv_id, call_num, verdict, *, ns_switch, ttl_flip,
             'cache_write': int(cache_write or 0),
             'gap_s': round(float(elapsed or 0), 1),
         }
+        # ★ The model this round ran on. Without it EVERY cost aggregation over
+        #   these records has to price the whole table at one rate, which is an
+        #   approximation nobody can bound: the real fleet spans two orders of
+        #   magnitude (Opus family 0.04525 vs gemini-3-flash 0.00109 CNY/1k
+        #   cache-write), so a single-rate total forced a paragraph of caveat
+        #   onto every outbound cost figure.
+        #
+        #   Recorded RAW — the wire/logical id exactly as handed to
+        #   detect_cache_break. Deliberately NOT alias-normalised here: that is
+        #   lib/llm_dispatch's job, and doing it at this seam would create a
+        #   second alias table to drift against the first.
+        #
+        #   Historical rows will never have this field (records are stamped at
+        #   write time), so every consumer MUST tolerate its absence and fall
+        #   back rather than dropping the row.
+        if model:
+            rec['model'] = str(model)
         # The RAW wire-culprit tokens (e.g. '<ttl-flip>', '<mid-out-of-window>',
         # 'assistant.content', '<hoisted>.system') that drove _wire_prefix_changed
         # this round. Emitted so a post-fix live A/B can see the ACTUAL driver of
@@ -1147,7 +1165,7 @@ def detect_cache_break(
                 body_identical=_wire_proven_identical,
                 namespace_verified=_ns_verified_same,
                 cache_read=cache_read, cache_write=cache_write,
-                elapsed=elapsed, culprits=_wire_culprits)
+                elapsed=elapsed, culprits=_wire_culprits, model=model)
             return v
 
         # ── Report ──

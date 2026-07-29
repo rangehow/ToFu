@@ -48,8 +48,18 @@ of magnitude, not a figure to the yuan. The argument does not depend on the
 money, and an over-precise number invites the discussion to become about our
 accounting instead of their cache.
 
-**Permanent fix filed:** `pt_778c55d4` — add `model` to the record. The value is
-already in scope at the emit site; one field deletes this whole caveat.
+**Permanent fix SHIPPED:** `pt_778c55d4` — the record now carries `model`, and
+`scripts/cache_waste_report.py` prices each row at its OWN model's rate. So for
+traffic logged from now on the CNY column is exact and this caveat disappears.
+
+**But it does not apply retroactively.** Records are stamped at write time, so
+every row in the window this report quotes predates the field and is still
+priced at the `--model` fallback — verified: the pinned table is byte-identical
+before and after the change, with `0 rows priced from their OWN recorded model,
+2,113 from --model fallback`. The recommendation above therefore stands FOR
+THIS REPORT. Re-running it in a few days will start showing exact per-model
+costs, and the report also now prints a per-model split, which answers "which
+model wastes the most cache" — previously unanswerable.
 
 ### 2. `ttl_expiry` reads empty, which looks like an omission.
 

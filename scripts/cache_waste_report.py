@@ -49,10 +49,14 @@ TWO LIMITATIONS YOU MUST READ BEFORE QUOTING A NUMBER
    second copy of the bucketing logic is exactly the drift this report exists
    to prevent. If you need history restated, replay the records through
    ``classify_verdict`` itself.
-2. **The records carry no model id, so ``--model`` prices every row.** A mixed
-   fleet is therefore approximated at one model's rate. Token counts and round
-   counts are exact; CNY is only as right as ``--model``. Opus-5 vs Opus-4.5
-   differ 3x, so passing the wrong one silently triples the answer.
+2. **Rows written before the ``model`` field are priced at ``--model``.** Each
+   record now carries the model it ran on, so those rows are priced EXACTLY at
+   their own rate and ``--model`` is only a fallback. But records are stamped at
+   write time, so rows logged before that field existed will never gain one —
+   for them ``--model`` still sets the price, and their CNY remains an
+   approximation. The header states how many rows fell back, so you can see at
+   a glance how much of a given table is exact. Token counts and round counts
+   are always exact regardless.
 """
 
 from __future__ import annotations
@@ -213,22 +217,70 @@ def bucket_of(rec: dict) -> str:
     return rec.get('bucket') or 'other'
 
 
+def _rate_cache(model_id, provider_id=None, _memo={}):
+    """Memoised (write, read) rate lookup, tolerant of unknown models.
+
+    Returns None when the model is absent from the pricing table so the caller
+    can fall back. This script is run over HISTORICAL logs, where a row may
+    name a model that has since been renamed or removed — dying on one row
+    would make the whole report unusable.
+    """
+    key = (model_id, provider_id)
+    if key in _memo:
+        return _memo[key]
+    try:
+        _memo[key] = derive_rates(model_id, provider_id)
+    except SystemExit:
+        _memo[key] = None
+    except Exception:
+        _memo[key] = None
+    return _memo[key]
+
+
 def build_report(records, min_write, w_rate, r_rate, model_id=''):
     rounds = [r for r in records
               if int(r.get('cache_read') or 0) == 0
               and int(r.get('cache_write') or 0) > min_write]
 
-    agg = defaultdict(lambda: {'n': 0, 'tok': 0, 'gaps': [], 'under18': 0})
+    def _rates_for(rec):
+        """Per-ROW rates. The record's own model wins; the CLI --model is the
+        fallback for rows written before the model field existed.
+
+        A single fleet-wide rate was an unbounded approximation: the real mix
+        spans two orders of magnitude, so per-row pricing is what turns the CNY
+        column from an estimate into a figure.
+        """
+        m = rec.get('model')
+        if m:
+            got = _rate_cache(m)
+            if got:
+                return got
+        return w_rate, r_rate
+
+    agg = defaultdict(lambda: {'n': 0, 'tok': 0, 'gaps': [], 'under18': 0,
+                               'paid': 0.0, 'recover': 0.0})
+    by_model = defaultdict(lambda: {'n': 0, 'tok': 0, 'paid': 0.0,
+                                    'recover': 0.0, 'priced': False})
     for r in rounds:
+        _w, _r = _rates_for(r)
+        tok = int(r.get('cache_write') or 0)
         a = agg[bucket_of(r)]
         a['n'] += 1
-        a['tok'] += int(r.get('cache_write') or 0)
+        a['tok'] += tok
+        a['paid'] += tok * _w
+        a['recover'] += tok * (_w - _r)
         gap = r.get('gap_s')
         if gap is not None:
             gap = float(gap)
             a['gaps'].append(gap)
             if gap < 18.0:
                 a['under18'] += 1
+        bm = by_model[r.get('model') or f'(unrecorded — priced as {model_id})']
+        bm['n'] += 1
+        bm['tok'] += tok
+        bm['paid'] += tok * _w
+        bm['recover'] += tok * (_w - _r)
+        bm['priced'] = bool(r.get('model'))
 
     rows = []
     for name, a in agg.items():
@@ -236,8 +288,8 @@ def build_report(records, min_write, w_rate, r_rate, model_id=''):
             'bucket': name,
             'n': a['n'],
             'wasted_tokens': a['tok'],
-            'paid_cny': a['tok'] * w_rate,
-            'recoverable_cny': a['tok'] * (w_rate - r_rate),
+            'paid_cny': a['paid'],
+            'recoverable_cny': a['recover'],
             'gap_p50': percentile(a['gaps'], 50),
             'gap_p90': percentile(a['gaps'], 90),
             'pct_under_18s': (100.0 * a['under18'] / len(a['gaps'])
@@ -253,11 +305,21 @@ def build_report(records, min_write, w_rate, r_rate, model_id=''):
             if x['is_waste'] and true_recoverable else None)
 
     _stamps = [r['_ts'] for r in records if r.get('_ts')]
+    _model_rows = sorted(
+        ({'model': m, 'n': v['n'], 'wasted_tokens': v['tok'],
+          'paid_cny': v['paid'], 'recoverable_cny': v['recover'],
+          'priced_from_record': v['priced']}
+         for m, v in by_model.items()),
+        key=lambda x: -x['recoverable_cny'])
+    _priced_n = sum(x['n'] for x in _model_rows if x['priced_from_record'])
     return {
         'records_scanned': len(records),
         'zero_readback_rounds': len(rounds),
         'min_write': min_write,
         'model': model_id,
+        'by_model': _model_rows,
+        'rows_priced_from_record': _priced_n,
+        'rows_priced_from_fallback': len(rounds) - _priced_n,
         'window_first': min(_stamps) if _stamps else '',
         'window_last': max(_stamps) if _stamps else '',
         'write_cny_per_1k': w_rate * 1000,
@@ -305,6 +367,23 @@ def print_report(rep):
     print(f"TRUE recoverable (waste buckets only) : {rep['true_recoverable_cny']:,.0f} CNY")
     print(f"excluded as NOT waste (TTL + cold)    : {rep['excluded_cny']:,.0f} CNY paid, "
           f"0 recoverable")
+
+    _bm = rep.get('by_model') or []
+    if _bm:
+        print()
+        _exact = rep.get('rows_priced_from_record', 0)
+        _fb = rep.get('rows_priced_from_fallback', 0)
+        print(f"per-model split — {_exact:,} rows priced from their OWN recorded "
+              f"model, {_fb:,} from --model fallback")
+        if _fb:
+            print(f"  └ fallback rows predate the model field; their CNY is an "
+                  f"approximation at the {rep['model']!r} rate.")
+        mh = f"  {'model':40s}{'n':>7s}{'wasted_tok':>15s}{'recover':>11s}"
+        print(mh)
+        print('  ' + '-' * (len(mh) - 2))
+        for m in _bm[:12]:
+            print(f"  {m['model'][:40]:40s}{m['n']:7d}{m['wasted_tokens']:15,d}"
+                  f"{m['recoverable_cny']:11,.0f}")
 
 
 def main(argv=None):

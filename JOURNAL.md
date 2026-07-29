@@ -25,6 +25,37 @@
 - **charter #8 已兑现:** 新增两个 `window.*` 导出 ⇒ 重跑 `gen_frontend_globals.py` 并提交(顺带把兄弟已提交的 `applySectionRequirements` 补进这份陈旧的生成物——已核实该文件在 HEAD 中受跟踪,故非误收)。typecheck ratchet 3/3、i18n key 覆盖 8/8、三档导出存活全绿。
 - **验收边界(诚实分账):** ①workflow 改动**下一次 push 到 main 才生效,无法追溯补发 v0.15.x**;`VERSION` 现为 0.15.2 且该 tag 已存在,故下次发版需**先 bump VERSION**(或手动 dispatch 用可用 runner 重建 0.15.2)。②`macos-15-intel` 是**最后一代 Intel 镜像(到 2027-08)**,之后 x86_64 macOS 必须放弃或迁出 GitHub 托管 runner。③前端半边是静态 HTML + JS:**刷新即可**,但 bundle 后台重建,新 JS 要**第二次加载**才拿到。④相邻噪声一条已定责非我方:`ci.yml` 的 CI 在每次 main 推送上都是红的(测试层面,与本批无关),本次**未**让发布依赖 CI,故不阻塞出包。
 
+### 2026-07-29(续·成本彻查修复) — 记账双计根修落地,**而 owner 抓出的第二半比第一半更重:两个成本面早已漂移 2.246 倍,两个模块的 docstring 各自宣称「can NEVER drift」**(commit `ebfd5464`,3 文件 +295/-3;新守卫 **9 条**,**NEUTER×3 各咬各的**(其中**一发首版完全不咬,暴露出真实调用点零覆盖**);干净 committed worktree **104/104**,收集门 **12,234 / 0 err**)
+
+- **★ owner 用同一组数字分别驱动两条真路,证伪了我报告里「钱包与显示共用同一引擎」那句话:**
+
+  | 面 | 结果 | 推出的未缓存 input |
+  |---|---|---|
+  | 显示 `compute_cost`(原始 dict) | **$48.56** | 5,562,791 |
+  | 钱包 `compute_request_cost`(标量) | **$21.62** | 174,983 |
+  | 真值(网关自己给的 `input_tokens`) | ~$21.6 | **162,854** |
+
+  也就是说**钱包那条路基本是对的,显示这条才是错的** —— 而我把两者当成同一个引擎汇报了。成因:`compute_request_cost` 走 `synthesize_usage`,它用算术规则 `cr+cw > inp` **重新判定** convention,`5,387,808 < 5,562,791` 于是正确读成 OpenAI 总量;`compute_cost` 拿原始 dict 时被 Anthropic 键抢先判成 residual。**两处 docstring 都写着「can NEVER drift」,实测在生产载荷上是假的** —— 与 charter 已记的「注释里的假保证」同族。
+- **落点(charter「单一真源」):修在 `split_input_tokens`,它的注释早已自称是 "the SINGLE source of this decision"。** 新增 `_anthropic_residual_input()`:判为 anthropic 时残差**必须**取 `input_tokens`,`prompt_tokens` 只作为「无原生键」那种反向混合形态的兜底。**刻意不动 `normalize_usage` 的全局别名顺序** —— 实测它有 **~28 个消费者**,而该顺序对每一种非混合载荷都是对的;改它等于用一个更大的洞换一个小洞。
+- **第二处落点是让钱包停止二次猜测:** `request_flow.py` 改为在缝上解析好残差再交标量,而不是把富 dict 拆成标量让 `synthesize_usage` 重猜一遍。这是根因层修法 —— 只要「convention 判定」还发生在两个地方,它们就会再次漂移。
+- **实测结果(单会话 + 全库):**
+
+  | 量 | 修前 | 修后 |
+  |---|---|---|
+  | `inputTokens` | 5,562,791 | **162,854** |
+  | `totalInputTokens` | 10,950,599 | **5,550,662**(缓存不再计两遍) |
+  | `costCny` | 351.60 | **156.12** |
+  | `inputCostCny` | 201.37 | **5.90** |
+  | 显示 vs 钱包 | $48.56 vs $21.62(**2.246×**) | **$21.5642 vs $21.5642** |
+  | 全库(2,868 轮 / 29 会话) | 51,308 CNY | **15,620 CNY**(−35,688) |
+
+- **★ NEUTER-3 首版完全不咬,而它暴露的洞比我修的那个更隐蔽:** 把 `request_flow` 的调用点退回 `_nu['input']`(即生产缺陷原样),`tests/test_billing.py` **22/22 全绿**。原因:**既有每一条 billing 守卫都用手写标量驱动 `compute_request_cost`,没有任何一条走真实调用点** —— 这正是本项目反复吃过的「测了 helper 不等于测了接线」。补 AST 接线守卫(断言真实 `Call` 节点的 `input_tokens` 实参不得是 `normalize_usage()['input']`,且模块内真的调用 `split_input_tokens`)后,NEUTER-3b **精确咬 1 条**。**判据:一发不咬的 NEUTER 不是「守卫多余」,而是「这条路径根本没人测」。**
+- **★ 夹具盲区的形状很具体,已写进测试文件头防复发:** `_anthropic_wire()` **刻意不含 `prompt_tokens`**,所以本文件里每一条 Anthropic 断言都跑在**纯**载荷上,真实网关形态从未进过任何守卫的扫描面 —— 这就是 72% 全库虚高能一路绿着的原因。既有 `test_hybrid_payload_with_impossible_cache_reads_as_residual` 只覆盖**反向**算术形态(cache > prompt_tokens),**结构上到不了**本缺陷。新 `_hybrid_gateway_wire()` 同时带两套拼写,并配一条「守卫的守卫」断言它**真的**是混合且满足实测恒等式 —— 否则有人把夹具「简化」成纯 Anthropic dict,底下每条断言仍会全绿而什么都没测。
+- **PARITY 守卫必须驱动两条真路,且不能只断言「一致」:** 一致可以被「两边一起错」满足,故同时断言**两者都等于按网关自己的残差算出的真值**;另加一条绝对地板(该轮必须 <200 CNY)。
+- **NEUTER×3 各咬各的方向:** ①退回 convention 解析 → 3 红;②**naive 修法**(无条件优先 `input_tokens`)→ **5 红**,其中我的 OpenAI 补集精确开火 —— `_openai_wire()` 带着 `input_tokens: 0` 这个残留字段,naive 修法会把每一个 OpenAI 轮的未缓存 input 解析成 0 并**少收费**,**比现状更糟**;③见上。
+- **★ 顺带实测出第三份 convention 拷贝,按 owner 惯例单开票不并入(`pt_85887a5b2f2d416f`):** `lib/cost_estimator.py:63` 的 `_split_tokens` 是**独立第三份**实现,用的正是 `usage_cache_convention` docstring 点名为「latent 10x BILLING BUG」的幅度启发式。实测:①全命中(prompt=82843/cached=82843)返回 uncached=**82843 应为 0** —— **10.4x 悬崖在这里原样存活**;②混合线返回 174,983 应为 162,854;③margin-of-one 正确(只在边界一侧错)。它喂 `check_budget` → `orchestrator/_run.py:872` 每轮预算闸,**即一个从未发生的成本可以中止任务**。既有 `TestSplitTokens` 只有 4 例且**从不触碰相等边界与混合形态**,所以悬崖绿着。
+- **验收边界(诚实分账):** ①**纯后端,运行中进程不带**(merged ≠ live)—— 重启后新会话的显示成本才走修复;**已落库的历史 `cost` 字段是当时算错的快照,本批未回填**(回填需单独决策:它会改写用户看过的数字);②`pt_7b850a669a074cec`(缓存真洗空,113 CNY)未动 —— 其中 12 轮需网关方带 `trace_id` 确认,不属我方可修;③共享 HEAD 纪律:精确 3 文件 pathspec + `git add` 后计数断言(=3),18 项兄弟 WIP 全部未被触碰(提交后逐项复核 `M` 列表原样)。
+
 ### 2026-07-29(续·成本彻查) — owner 报「5M tokens 花了 350 元」:**其中 195 元根本没花出去,是显示口径把「缓存含总量」当「未缓存残差」又计了一遍**;真实 156 元里又有 113 元是缓存真被洗空(纯诊断,零产品码;开票 `pt_28375442baa9487b` + `pt_7b850a669a074cec`)
 
 - **★ 两个独立缺陷叠在同一个数字上,必须分账 —— 否则修完一个会以为没效果:**

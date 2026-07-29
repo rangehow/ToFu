@@ -232,6 +232,11 @@ function openSettings() {
   }
 
   switchSettingsTab('general');
+  /* Degraded-section contract: hide the controls of any block whose JS
+   * dependency is absent (stale bundle) and show its "needs restart" notice,
+   * so no section can look usable while being dead. Runs AFTER the pickers
+   * above so a block that DID render is not wrongly degraded. */
+  if (typeof applySectionRequirements === 'function') applySectionRequirements();
   document.getElementById("settingsModal").classList.add("open");
   document.getElementById('settingsStatusHint').textContent = '';
 

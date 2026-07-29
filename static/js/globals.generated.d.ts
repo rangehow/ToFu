@@ -35,6 +35,7 @@ declare var ConvView: any;   // static/js/conv_view.js
 declare var CookieCaptureConsent: any;   // static/js/cookie_capture_consent.js
 declare var Icon: any;   // static/js/core/icons.js
 declare var IconDot: any;   // static/js/core/icons.js
+declare var LOGO_VER: any;   // static/js/core/brand_logo.js
 declare var MODEL_HEALTH_STALE_AFTER_S: any;   // static/js/core/model_health.js
 declare var ProjectBrain: any;   // static/js/project-brain.js
 declare var ProjectBrainAttention: any;   // static/js/project-brain-attention.js
@@ -83,26 +84,33 @@ declare var _uploadShrinkPolicy: any;   // static/js/main/main_toolbar_ui.js
 declare var _vlmParseEntry: any;   // static/js/upload.js
 declare var _welcomePillsHtml: any;   // static/js/core/icons.js
 declare var applyCapabilityTaxonomy: any;   // static/js/core/model_caps.js
+declare var applyLogoSkin: any;   // static/js/core/brand_logo.js
 declare var attachCompactionMarkersToConversation: any;   // static/js/compaction-viewer.js
+declare var brandLogoImgAttrs: any;   // static/js/core/brand_logo.js
 declare var buildTurnCtxSnapshot: any;   // static/js/info-rail.js
 declare var canonicalizeProjectionForCompare: any;   // static/js/ui/stream_reducer.js
 declare var closeCompactionViewer: any;   // static/js/compaction-viewer.js
 declare var closeProjectBrain: any;   // static/js/project-brain.js
 declare var contextUsageSummary: any;   // static/js/context-bar.js
+declare var defaultLogoUrl: any;   // static/js/core/brand_logo.js
 declare var emptyStreamState: any;   // static/js/ui/stream_reducer.js
 declare var flashGaugeForArchive: any;   // static/js/context-bar.js
 declare var foldProbeHealth: any;   // static/js/core/model_health.js
 declare var foldRuntimeHealth: any;   // static/js/core/model_health.js
 declare var getChatExcludedCaps: any;   // static/js/core/model_caps.js
+declare var getLogoSkin: any;   // static/js/core/brand_logo.js
 declare var initNetLatency: any;   // static/js/net-latency.js
 declare var initVoiceInput: any;   // static/js/voice.js
 declare var isChatModel: any;   // static/js/core/model_caps.js
+declare var listLogoSkins: any;   // static/js/core/brand_logo.js
 declare var locateRound: any;   // static/js/ui/stream_reducer.js
+declare var logoUrl: any;   // static/js/core/brand_logo.js
 declare var modelGroupBrandNames: any;   // static/js/core/model_group.js
 declare var modelGroupKey: any;   // static/js/core/model_group.js
 declare var modelGroupLabel: any;   // static/js/core/model_group.js
 declare var modelHealthLevelClass: any;   // static/js/core/model_health.js
 declare var modelHealthUsable: any;   // static/js/core/model_health.js
+declare var onBrandLogoError: any;   // static/js/core/brand_logo.js
 declare var openCompactionViewer: any;   // static/js/compaction-viewer.js
 declare var openMobileFlowPicker: any;   // static/js/mobile_panels.js
 declare var openMobileOptimizer: any;   // static/js/mobile_panels.js
@@ -126,6 +134,7 @@ declare var relayAdminTopup: any;   // static/js/relay-admin.js
 declare var relayAdminViewPayments: any;   // static/js/relay-admin.js
 declare var renderTurnCtxNote: any;   // static/js/info-rail.js
 declare var runManualCompaction: any;   // static/js/context-bar.js
+declare var setLogoSkin: any;   // static/js/core/brand_logo.js
 declare var toggleProjectBrain: any;   // static/js/project-brain.js
 declare var toggleVoiceInput: any;   // static/js/voice.js
 declare var updateContextBar: any;   // static/js/context-bar.js
@@ -158,6 +167,7 @@ interface Window {
   CookieCaptureConsent: any;
   Icon: any;
   IconDot: any;
+  LOGO_VER: any;
   MODEL_HEALTH_STALE_AFTER_S: any;
   ProjectBrain: any;
   ProjectBrainAttention: any;
@@ -288,6 +298,7 @@ interface Window {
   applyCapabilityTaxonomy: any;
   applyConvStateSnapshot: any;
   applyLogClean: any;
+  applyLogoSkin: any;
   applyRunningTaskIdsFrame: any;
   applySystemPromptEditor: any;
   applyToolsetNow: any;
@@ -295,6 +306,7 @@ interface Window {
   assistantTailIsPriorTurn: any;
   attachCompactionMarkersToConversation: any;
   attachZipDropZone: any;
+  brandLogoImgAttrs: any;
   buildSyncDigest: any;
   buildTurnCtxSnapshot: any;
   cancelAutopilotMarker: any;
@@ -318,6 +330,7 @@ interface Window {
   convHasPendingSync: any;
   convTitleById: any;
   convWindowParam: any;
+  defaultLogoUrl: any;
   detectLogNoise: any;
   dismissToolsetBanner: any;
   displayContent: any;
@@ -334,6 +347,7 @@ interface Window {
   foldRuntimeHealth: any;
   formatFileSize: any;
   getChatExcludedCaps: any;
+  getLogoSkin: any;
   hideLogCleanBanner: any;
   hydrateFullConversation: any;
   identityGateDegraded: any;
@@ -348,7 +362,9 @@ interface Window {
   isMobileViewport: any;
   isStalePartialTranslation: any;
   isTabletDrawerViewport: any;
+  listLogoSkins: any;
   loadEarlierMessages: any;
+  logoUrl: any;
   markConvPendingSync: any;
   markIdentityGateReported: any;
   mobileMediaQuery: any;
@@ -359,6 +375,7 @@ interface Window {
   modelHealthUsable: any;
   needsTranslation: any;
   normalizeErrorEnvelope: any;
+  onBrandLogoError: any;
   onProjectAttached: any;
   onProjectCleared: any;
   onToolsetDiverged: any;
@@ -409,6 +426,7 @@ interface Window {
   runWithConcurrency: any;
   scrollChatToBottom: any;
   setChatMode: any;
+  setLogoSkin: any;
   showAlert: any;
   showChoice: any;
   showConfirm: any;

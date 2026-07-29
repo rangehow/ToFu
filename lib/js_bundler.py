@@ -750,6 +750,12 @@ _BUNDLE_FILES = [
     'settings/provider_templates.js',
     'settings/auto_setup.js',
     'settings/local_endpoints.js',
+    # Degraded-section contract (2026-07-29): a settings block that depends on a
+    # JS symbol declares it via data-requires; when the symbol is absent (stale
+    # bundle after adding a module) the controls are hidden and a "needs
+    # restart" notice is shown, so a feature that cannot work never presents
+    # itself as usable. Must load BEFORE core_panel.js, which calls it.
+    'settings/section_requires.js',
     'settings/core_panel.js',
     'settings/provider_render.js',
     'settings/key_stats.js',

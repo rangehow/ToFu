@@ -1134,6 +1134,7 @@ var _i18n = {
   'settings.logoSkinPixel': { zh: '像素精修', en: 'Pixel refined' },
   'settings.logoSkinMinimal': { zh: '极简', en: 'Minimal' },
   'settings.logoSkinHandDrawn': { zh: '手绘感', en: 'Hand-drawn' },
+  'settings.sectionNeedsRestart': { zh: '此功能需重启服务后生效。', en: 'This feature becomes available after restarting the server.' },
   'settings.modelParams': { zh: '模型参数', en: 'Model Parameters' },
   'settings.temperature': { zh: '温度 (Temperature)', en: 'Temperature' },
   'settings.maxTokens': { zh: '最大 Token 数', en: 'Max Tokens' },

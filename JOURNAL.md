@@ -1,5 +1,23 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·工具顺序定案 + lxml 地板) — 两张 MCP 票各自以「**票面前提不成立**」收口:排序那条**未排序的路根本到不了 wire**,lxml 那条**旧地板 4.9 是死代码**;两票都不是「修一个 bug」,而是**补上真正缺的那条守卫**(`pt_fb13217744114156` + `pt_34c2239e862c4911` DONE;commits `a1c2bc68` test-only + `118c7d34`;NEUTER×4 各咬各的;相邻环 **86 / 71 passed**)
+
+- **★ 票面自己写了关闭条件,而实测正好落在那一条上:** 「`:1024` 那条若是唯一消费点则本票直接关闭」。实测:`lib/tools/registry/_build.py::_build_mcp` 是**唯一**把 MCP 工具喂进 LLM 工具表的地方,它调 `get_openai_tool_defs()`(sorted);而 `handle.tools`(服务器原序)在 `_bridge.py` 里**只有两个消费点**——`tools_count` 与 `tool_names`,**是诊断字段,不进请求体**。所以「顺序不稳会作废 prompt 缓存」这个风险**在我们这侧本来就不存在**,无需任何排序改动。
+- **★ 但缺的那半是真的,而且很具体:既有守卫钉的是 helper,不是路由。** `test_cache_schema_stability.py::TestMCPDeterministicOrdering` 直接驱动 `get_openai_tool_defs()`,所以**把消费方改指到 `handle.tools` 它照样全绿**。实测两发 NEUTER 的**不对称**正是本条的全部价值:
+  | NEUTER | 新守卫 | 既有守卫 |
+  |---|---|---|
+  | 摘掉 helper 里的 `sorted()` | 3 红 | **也红**(2 条) |
+  | 把 `_build_mcp` 改指 `handle.tools` | **4 红** | **全绿** |
+  第二行就是盲区的形状:**wire 走错了路,而所有既有断言都不会知道。**
+- **★ 我的第一版实测是空转的,且它「两条断言同时通过」:** 手搓的 bridge 少设 `_started`,于是 `connected` 为 False、`_build_mcp` 走 except 返回 `[]` —— 而**空列表天然「有序」也天然「两次相同」**,于是屏幕上打出「identical: True / sorted: True」看起来像证明。**判据:凡断言「两次结果一致」或「结果有序」,必须先断言结果非空;`_build_mcp` 对任何失败都返回 `[]`,那条捷径会让整组断言变成仪式。** 已把非空断言写进守卫本体,并配一条「两个夹具顺序必须真的不同、且都不是字母序」的守卫的守卫。
+- **★ lxml 那条的判据同样是「票面倾向」被实测改写:** 票面倾向 `>=5.3`(与 conda 对齐),方向对,但理由要换——真正的证据是**我们自己的依赖已经把地板抬上去了**:`trafilatura 2.0.0 → lxml>=5.3.0`、`justext 3.0.2 → lxml[html_clean]>=4.4.2`、`lxml_html_clean 0.4.5 → lxml>=6.1.1`。**任何解析器都不可能在 trafilatura 在场时发给我们 4.9**,所以旧地板不是一句「我们支持到 4.9」,而是**一段唯一效果就是与另一份清单不一致的死文本**。
+- **顺带更正一条方向说反的注释:** 原文写 justext「仍然 `from lxml.html.clean import Cleaner`,所以我们必须保证被拆出的包在场」。读安装好的 `lxml/html/clean.py` 实测:自 5.2 起它是**向后兼容 shim**,`from lxml_html_clean import *` 且缺包时抛 ImportError;justext 是通过 **`lxml[html_clean]` extra** 拉它。我们仍显式声明 `lxml_html_clean`,但理由是**「不依赖 justext 的 extras 不变」这个打包判断**,与地板无关——注释现在这么写。
+- **棘轮按设计自我兑现:** `_SPEC_DRIFT_EXEMPT` 里的 `'lxml'` 已删除,该集合**现在为空**;实测两份清单 15 个共有包**零漂移**。NEUTER×2:把 `>=4.9` 放回去 → 一致性守卫红;把 `'lxml'` 塞回豁免集(而它已不漂移)→ **自我删除棘轮红**,正是它存在的理由。
+- **运行时复验(不是只读 metadata):** 装好的栈上 `from lxml.html.clean import Cleaner` 可导入,`justext` / `trafilatura` 均可导入,lxml 6.1.1。
+- **★ 一处环境噪声差点被当成产品缺陷(记下来):** overleaf-mcp 套件在 tofu 解释器下崩在 `OSError: GL ES 2.0 library not found` —— 追进去是 **pytest 插件自动加载**把 conda env 里的 `napari` → `vispy` 拉了进来,与被测代码零关系。加 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`(本项目既有惯例)后 48+1 绿。**判据:import 期的崩溃先看它在谁的栈里——插件自动加载会把宿主环境里任何一个包变成你的 collection error。**
+- **`ping` 到期票(`pt_175e68aab6884318`)按 owner 指令未动**,已在板上标注为 owner 排序性 block,不与本轮 MCP 工作并批。
+- **验收边界:** 排序票 **零产品码**(纯守卫);lxml 票只动依赖声明与守卫,**运行中进程不带**,重启后新装机才按 `>=5.3` 解析——本机已装 6.1.1,行为无变化。
+
 ### 2026-07-29(续·清扫看不见 carrier) — **我自己的修复引进的缺陷,是我审计自己而不是 owner 报的**:25s stale-pin 清扫的活性判据只认 `/api/chat/active`(按设计排除 carrier)⇒ VU 仍在生成时给尾部内容盖 `interrupted` 并写下抑制恢复的戳 —— **本 objective 的病,由它的修复引进**(`pt_d97f9098776c48e9` DONE;8 条(5 条失败先行),**NEUTER×3 全咬**,相邻环 **91/91**;代码在 HEAD,但**署名在兄弟提交里**,见下)
 
 - **★ 根因是「必要」与「不可见」撞在一起,两边单独看都对:** `d6e8bdb3` 让冷接续写 `conv.activeTaskId = <carrierId>` —— 这是**必要的**,`connectToTask` 用它做 accumulation slot 与 self-heal 锚点;而 `/api/chat/active` **按设计**排除 carrier —— 这也是**必要的**,五个消费者把它喂给普通 `connectToTask` 路径,carrier 进去会生出永久卡住的「Waiting…」气泡。于是清扫看到一个「不在运行集合里」的 pin,判为陈旧。**判据:一个端点「按设计过滤掉某类东西」时,MUST 清点它的全部消费者——新增的那个消费者可能恰好需要被过滤掉的那类。**

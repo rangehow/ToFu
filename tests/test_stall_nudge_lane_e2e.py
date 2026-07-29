@@ -137,7 +137,14 @@ def test_the_record_carries_the_trigger_provenance():
         'can drift from NUDGE_TEXT'
     )
     assert rec['max'] == 1, 'the bound must be carried so the UI can state it'
-    assert rec['round'] == 19, '1-based, matching the peer/steer chip convention'
+    # round_num=18 was the prose-only round; the nudge it appended is consumed
+    # by round 19, and the frontend anchors above `round - 1`. So 20 — NOT the
+    # peer/steer +1, whose messages were injected before their round ran.
+    assert rec['round'] == 20, (
+        'the chip must be anchored to the round that CONSUMES the nudge; +1 '
+        'anchors it to the prose-only round, which owns no tools, so the chip '
+        'falls through to the tail of the panel'
+    )
 
 
 def test_a_normal_stop_produces_no_record():
@@ -345,6 +352,70 @@ def test_the_real_renderer_emits_a_chip_with_provenance_and_the_bound():
     assert 'sw-stall-bound' in html
     # And it must not be rendered as a user-authored bubble.
     assert 'sw-steer-row' not in html
+
+
+def test_the_chip_is_anchored_between_the_failure_and_the_retry():
+    """The chip must sit AFTER the failed tool and BEFORE the resumed one.
+
+    This is the whole point of the feature: show that the loop intervened *at
+    this moment*. Rendered after the resumed tool it reads as though the nudge
+    happened once the model had already recovered — the one position that
+    inverts the causality it exists to display.
+
+    WHY THIS NEEDS TWO REAL TOOL ROUNDS. Every other test in this file uses
+    zero or one, and at that size the bug is invisible: with nothing after the
+    anchor, ``_spliceInjectRow``'s tail fallback and the correct slot are the
+    SAME position. An off-by-one in the round stamp only becomes observable
+    once a later round exists for the chip to be wrongly pushed past. That
+    generalises — any inject lane's ordering is untested below two rounds.
+
+    Ground truth shape (conv ms34yw0k74o2lq): R17 blocked, R18 prose-only (the
+    nudge fires here), R19 the model resumes. R18 owns no tool rounds, which is
+    exactly why anchoring to it silently degrades to the tail.
+
+    Asserts RELATIVE order, never an index — the panel's markup may change.
+    """
+    sidecar = _sidecar_from_real_producer()
+    failed = _blocked_round() | {'toolCallId': 'call_17'}
+    resumed = {
+        'toolName': 'read_files', 'roundNum': 19, 'llmRound': 19,
+        'toolCallId': 'call_19', 'toolContent': 'File: x.py',
+        'status': 'done', 'results': [{'badge': '120L'}],
+    }
+    msg = {'_stallNudges': sidecar, 'toolRounds': [failed, resumed]}
+    segs = [
+        {'type': 'tool_use', 'id': 'call_17', 'llmRound': 17,
+         'content': 'blocked', 'status': 'blocked'},
+        {'type': 'tool_use', 'id': 'call_19', 'llmRound': 19,
+         'content': 'File: x.py', 'status': 'done'},
+    ]
+    probe = _run_js(
+        'const msg = ' + json.dumps(msg) + ';\n'
+        'const segs = ' + json.dumps(segs) + ';\n'
+        'const rows = getToolRoundsFromMsg(msg);\n'
+        # Row order: what every consumer of the rehydrated list sees.
+        'const rowSeq = rows.map(r => r._stallNudge ? "NUDGE" : "R" + r.llmRound);\n'
+        'const html = renderSegmentTimelineHTML(segs, msg, 0);\n'
+        # Document order via the markers the panel actually emits.
+        'const at = {NUDGE: html.indexOf("sw-stall-row"),\n'
+        '            R17: html.indexOf(\'data-llm-round="L17"\'),\n'
+        '            R19: html.indexOf(\'data-llm-round="L19"\')};\n'
+        'const segSeq = Object.keys(at).filter(k => at[k] >= 0)\n'
+        '  .sort((a, b) => at[a] - at[b]);\n'
+        'console.log(JSON.stringify({rowSeq, segSeq, html: html.length}));'
+    )
+
+    assert probe['html'], 'segment path bailed out — fixture no longer pairs'
+    expected = ['R17', 'NUDGE', 'R19']
+    assert probe['rowSeq'] == expected, (
+        f'rehydrated row order is {probe["rowSeq"]}, expected {expected}. '
+        'The chip is anchored to a round that owns no tools, so it fell '
+        'through to the tail — it now renders after the tool it caused.'
+    )
+    assert probe['segSeq'] == expected, (
+        f'segment-timeline document order is {probe["segSeq"]}, expected '
+        f'{expected} — the chip renders on the wrong side of the resumed tool.'
+    )
 
 
 def test_the_chip_copy_is_translated_not_a_raw_key():

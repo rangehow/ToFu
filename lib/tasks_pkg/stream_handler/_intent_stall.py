@@ -165,13 +165,37 @@ def build_stall_nudge_record(task: dict[str, Any], round_num: int) -> dict:
     ``max`` is carried so the UI can state the bound out loud. Without it a
     reader has no way to know the loop cannot nudge repeatedly, and "the system
     is re-driving my agent" reads like an unbounded spend risk.
+
+    THE ROUND STAMP IS ``round_num + 2``, NOT ``+ 1`` — DO NOT "FIX" IT
+    ------------------------------------------------------------------
+    Derivation, in the order the pieces actually happen:
+
+      1. This runs while analysing round ``round_num``, which came back
+         prose-only. The nudge is appended to ``messages`` AFTER that call
+         returned, so it is consumed by round ``round_num + 1``.
+      2. The frontend (``_rehydrateInjectRows`` in static/js/core.js) anchors
+         a chip above the round whose ``llmRound == chip.round - 1``.
+      3. To land above the CONSUMING round we need
+         ``chip.round - 1 == round_num + 1`` ⟹ ``chip.round = round_num + 2``.
+
+    The peer/steer lanes stamp ``round_num + 1`` and that is correct FOR THEM,
+    because their messages were injected BEFORE their round's LLM call and are
+    flushed once it returns — i.e. they were consumed by ``round_num`` itself.
+    Same formula, different injection point; copying their ``+ 1`` here is an
+    off-by-one that pushes the chip past the tool the nudge caused, so it reads
+    as though the loop intervened after the model had already recovered.
+
+    Guarded by ``test_the_chip_is_anchored_between_the_failure_and_the_retry``
+    (tests/test_stall_nudge_lane_e2e.py), which needs TWO real tool rounds to
+    see it — with zero or one round the tail and the correct slot coincide.
     """
     entry = _uncovered_failure(task) or {}
     results = entry.get('results') or []
     meta = results[0] if results and isinstance(results[0], dict) else {}
     return {
-        # 1-based, matching the peer/steer chip convention (round_num + 1).
-        'round': round_num + 1,
+        # 1-based, anchored to the round that CONSUMES the nudge. See the
+        # derivation above — this is deliberately +2, not the peer/steer +1.
+        'round': round_num + 2,
         'tool': (entry.get('toolName') or entry.get('tool') or ''),
         'failedRound': entry.get('roundNum'),
         'badge': (meta.get('badge') or ''),

@@ -1,6 +1,26 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-29(续·补推车道做完) — `_stallNudge` 从「注册了却没人产出的标记」做成真车道;而 owner 复核抓出**芯片渲染在它自己造成的那个工具之后**,根因是照抄 peer/steer 的 `+1` 而两者注入时刻不同(commits `3b4f1a94` + `8c685149` + `761a795a` + 本轮 round 修正;守卫 **14/14**,相邻环 **52/52**,**NEUTER 各咬各的**,干净 committed worktree 复验 **51/51**)
+
+- **★ owner 的第一击(我上一批交付的是半成品,而它读起来像成品):** 我在 `SYNTHETIC_INBOX_MARKERS` 注册了 `_stallNudge` 并宣称「第四条 wire 纯净车道」。实测全库只有 3 处引用,**全在 `_types.py` 里**(1 常量 + 2 docstring)——没有任何生产路径给 round 打这个标记,没有渲染器,没有 `_stallNudges` 侧车。**保护是空转的:** 排除机制过滤 `toolRounds`,而补推是 `messages.append({'role':'user',...})`,一条 wire 消息**永远不会变成 toolRound** ⇒ 「用户重载后不会看到自己没发过的气泡」这个效果成立,但**不是因为那个标记**,而是那条风险本来就不存在。另三条车道有生产方(前端真造合成行),所以它们需要这道过滤。
+- **★ 第二击更要紧:守卫是手搓 dict。** `is_synthetic_inbox_round({'_stallNudge': True, ...})` 证明的只是「常量里有这个字符串」——它在车道**完全没有生产方**的整段时间里全绿。**这正是同一批里我刚栽过一次、并且刚写进记忆家族的陷阱(夹具绕过生产路径),第二次。**
+- **落点按 owner 拍板「把车道做完,不要留一个注册了却没人产出的标记」:** ①生产方 `build_stall_nudge_record`(从**决策用的同一个 `_uncovered_failure` 条目**取值,故芯片不可能与「为什么补推」不一致)+ `_analyse.py` 在 `_do_nudge` 分支落 `_stallNudges` 侧车;②注册进 `INBOX_INJECT_SIDECAR_FIELDS` 走 `_userSteerInjects` 既有持久化路径,**永不进 toolRounds**;③`_rehydrateInjectRows` 重载重建(按 `stall:<round>` 幂等)+ `_renderStallNudgeRow` 自有琥珀色;④守卫端到端,零手搓 dict。
+- **★ 侧车在注入时刻落而不是延迟到下一次 LLM 确认消费(与 peer/steer 相反,理由写在代码里):** 那两条延迟是因为**中止时未送达的「真人」消息必须改道到持久队列**(never zero / never double);补推**没有真人作者、没有东西要救**,turn 死在这里补推就只是 moot,而「系统重新驱动了模型」这个事实在 append 的那一刻就是真的。
+- **★ 我自己漏掉的第三条渲染路径(不是 owner 指出的,是我扫的):** `renderSegmentTimelineHTML` 按名字抽合成行,而它的 walk 由 `segments` 驱动、`assemble_segments` **跳过**合成 round ⇒ 车道不在那份抽取集合里就会**流式期间显示、turn 一 settle 就消失**——对一个「留痕」功能是最坏的形态。已补,守卫用 `id` 把 tool_use 段与真实 round 配对(不配对时该函数会退回 legacy 路径,断言会**空过**)。
+- **★ owner 复核抓出的 off-by-one,以及为什么我的守卫看不见它:** 芯片渲染在**它自己造成的那个工具之后**,整个面板最底部——恰恰是唯一一个把因果读反的位置(看起来像模型已经恢复之后系统才介入)。实测两条渲染路径一致:
+
+  | 邮票 | 行序 / 文档序 |
+  |---|---|
+  | `round_num + 1`(上线态) | `R17 > R19 > NUDGE` ❌ |
+  | `round_num + 2`(修正) | `R17 > NUDGE > R19` ✅ |
+
+  **推导(按事情真实发生的顺序):** 补推在分析 round `round_num` 时 append,**由 round `round_num + 1` 消费**;前端锚在 `chip.round - 1` 之上;要落在消费轮之上就需要 `chip.round - 1 == round_num + 1` ⇒ **`+2`**。peer/steer 的 `+1` 对**它们**是对的——它们的消息在该轮 LLM 调用**之前**注入、调用返回后 flush,即由 `round_num` 自己消费。**同一个公式,不同的注入时刻。** 注释此前写着「matching the peer/steer convention」,那句话正是错误的来源,现已换成完整推导 + 显式禁止「为了一致性改回 +1」。
+- **★ 守卫全绿的原因是它测不到:每个夹具用的都是 `toolRounds: []` 或**单个** round。** 零个或一个真实 round 时**根本没有顺序可错**——`_spliceInjectRow` 的 tail 兜底与正确槽位是**同一个位置**;只有后面存在另一轮,芯片才可能被错误地推过去。新守卫用**两个**真实 round 跨越滞留(失败轮 / 空档 / 恢复轮),断言 `failed > NUDGE > resumed` 在**行序与渲染文档序两条路径**上同时成立,且**断相对位置不断索引**。**判据(可推广到每一条 inject 车道):任何 inject 车道的顺序在少于两个真实 round 时都是未测状态。**
+- **NEUTER 各咬各的:** 把邮票退回 `+1` → **精确 2 红**(顺序守卫 + 邮票断言),其余 12 绿;此前另 7 发分别咬生产方 / 持久化注册 / 重建器 / 渲染器分派 / wire 标记 / 单个 i18n key / segment 抽取。另把 `test_the_nudge_row_is_wire_excluded` 去夹具化:改由真实生产方 + 真实 `core.js` 重建那一行,实测「摘掉生产方 → 该条转红」,而手搓版**保持绿**。
+- **★ 一次分半提交事故(自报):** 第一个 commit 只带了渲染器/CSS/i18n/测试那半,生产方、record builder、持久化注册、前端重建**留在工作树** ⇒ **单看 HEAD 车道仍是「有标记无生产方」,而新守卫在干净 clone 上会红**。补 `8c685149`。**判据:跨语言/跨层的一条车道必须整条落库后用 `git archive HEAD` 复验,工作树全绿证明不了 HEAD 可用。**
+- **验收边界(诚实分账):** ①纯后端 + 前端静态,**运行中进程不带**,需重启才对新会话生效,bundle 后台重建、新 JS 要第二次加载;②`ms5i5ydigs9j9w` 本身仍不会被补推救回(它属「成功之后的滞留」,四判据结构上不管这个物种)——本批交付的是「补推从永不触发变为会真的触发,且触发后在时间线上留下正确位置的痕迹」。
+
 ### 2026-07-29(续·项目栏宠物换形 — i18n 收尾) — owner 复核美术后抓出**我测了形态和行为、没测「字」**:场景切换按钮与悬停气泡是**硬编码英文**,而更深的根因是一个 `_k()` 别名让**全部 pet.* key 对 boot-key 扫描器完全不可见**(实测 0 个,而字典里有 4 个);主题门重新审定为「刻意只限 tofu」;**全部改动随兄弟 b6e21c50 一并落库**(独立署名提交被扫走,已记 attribution 待兄弟补注;全套件 **145/145**,**NEUTER×2 各咬**,相邻环全绿)
 
 - **★ 真缺陷(英文)与真根因(不可见)是两件事,后者才是承重的:** `SCENE_LABELS = {meadow:'Meadow',…}`、场景 tooltip `'Scene: ' + name + ' · click to change'`、宠物自身 title `'Tofu — ' + greet` 全是 JS 里的英文常量——中文用户悬停看到的是英文。但根因在更深处:**`tofu-pet.js` 明明在核心 bundle 里,boot-key 扫描器却连一个 pet.* key 都收不到**。实测 `lib.i18n_boot_keys.discover_boot_keys()` 对 `pet.*` 返回 **0**——因为日报气泡走的是一个局部闭包 `_k(key,params,fb)`,而 `T_CALL_KEY_RE` 只匹配「以字面字符串为 t() 第一实参」的调用,**别名包裹的调用对扫描器是隐形的**,所以每个 pet.* key 都静默漏出了 boot pack。那个 `_k` 什么也没换来(t() 本来就会回退成 key),代价却是不可见。

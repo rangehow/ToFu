@@ -13,12 +13,13 @@ to stats (success/failure/429 counters, the ``exhausted`` flag) but NOT to
 manual overrides, so a key the user disabled yesterday stays disabled
 today.
 
-Rate-limit errors (HTTP 429) are tracked separately because provider 429
-messages are ambiguous — the SAME error body can mean "RPM overrun, retry in
-a moment" or "balance exhausted, give up forever". We therefore rely on a
-streak heuristic rather than trying to parse the body: a key that returns
-429 MAX_CONSECUTIVE_429 times IN A ROW without a single success is marked
-exhausted for the day. Any success or non-429 error resets the streak.
+Rate-limit errors (HTTP 429) are tracked separately (``rate_limited`` /
+``consecutive_429`` counters for the UI) because provider 429 messages are
+ambiguous — the SAME error body can mean "RPM overrun, retry in a moment" or
+"balance exhausted, give up forever". A 429 streak NEVER disables a key
+(owner policy 2026-07-29): 429 is backpressure, answered by the slot-local
+steering cooldown + RPM decay, so a key rejoins on its own the moment the
+upstream recovers. Only the explicit billing-stop below disables for the day.
 
 Quota/billing errors (HTTP 402 / 429-insufficient_quota) are recorded at
 **(key, model)** granularity (``exhausted_models``) whenever the observing
@@ -82,7 +83,6 @@ from lib.log import get_logger
 
 # ── Shared singletons + low-level helpers (BY REFERENCE — never duplicate) ──
 from lib.key_stats._state import (
-    MAX_CONSECUTIVE_429,
     MIN_ATTEMPTS,
     MIN_SUCCESS_RATE,
     _SIBLINGS_TTL_SEC,
@@ -140,7 +140,6 @@ __all__ = [
     'clear_key_override',
     'MIN_ATTEMPTS',
     'MIN_SUCCESS_RATE',
-    'MAX_CONSECUTIVE_429',
 ]
 
 

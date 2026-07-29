@@ -391,9 +391,15 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
             _is_quota = bool(getattr(e, 'is_quota', False))
             _is_gateway = bool(getattr(e, 'is_gateway', False))
             _is_contention = bool(getattr(e, 'is_shared_contention', False))
+            # HTTP 402 (account credit dead) → key-wide stop; 429-quota →
+            # per-model (see Slot.record_error is_account_quota).
+            _is_account_quota = bool(
+                _is_quota
+                and int(getattr(e, 'status_code', 0) or 0) == 402)
             _err_str = str(e)[:200]
             slot.record_error(is_rate_limit=True,
                               is_quota_exhausted=_is_quota,
+                              is_account_quota=_is_account_quota,
                               is_gateway=_is_gateway,
                               is_shared_contention=_is_contention,
                               error=_err_str if _is_quota else '')
@@ -434,22 +440,6 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
                 logger.info(
                     '%s 429 rate-limited on %s:%s (cycle #%d)',
                     log_prefix, slot.key_name, slot.model, _429_count)
-            # ★ If this 429 just tripped the consecutive-429 streak threshold,
-            #   the key was auto-marked as exhausted — exclude it explicitly
-            #   so the current retry loop moves on immediately.
-            try:
-                from lib.key_stats import is_key_enabled
-                if not is_key_enabled(slot.provider_id, slot.key_name,
-                                      model=slot.model):
-                    exclude_keys.add(slot.key_name)
-                    hard_attempts += 1
-                    logger.warning(
-                        '%s Key %s auto-exhausted after %d consecutive 429s '
-                        '— excluding for today',
-                        log_prefix, slot.key_name, _429_count)
-                    continue
-            except Exception as e:
-                logger.debug('%s is_key_enabled probe failed: %s', log_prefix, e)
             time.sleep(0.3)
             # ★ Don't increment hard_attempts — 429 retries are free
             continue
@@ -1031,11 +1021,6 @@ class _StreamRetryState:
         self.exclude_keys.add(slot.key_name)
         self.hard_attempts += 1
 
-    def note_auto_exhausted_key(self, slot):
-        """Key auto-exhausted after consecutive 429s — exclude key; hard attempt."""
-        self.exclude_keys.add(slot.key_name)
-        self.hard_attempts += 1
-
     def note_permission_pair(self, slot, dispatcher, capability, log_prefix):
         """Permission denied — exclude the (key, model) PAIR; escalate to a
         whole-key exclusion only if EVERY model for this key is now excluded."""
@@ -1488,6 +1473,11 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
             _is_quota = bool(getattr(e, 'is_quota', False))
             _is_gateway = bool(getattr(e, 'is_gateway', False))
             _is_contention = bool(getattr(e, 'is_shared_contention', False))
+            # HTTP 402 (account credit dead) → key-wide stop; 429-quota →
+            # per-model (see Slot.record_error is_account_quota).
+            _is_account_quota = bool(
+                _is_quota
+                and int(getattr(e, 'status_code', 0) or 0) == 402)
             _err_str = str(e)[:200]
             slot.record_error(is_rate_limit=True,
                               is_quota_exhausted=_is_quota,
@@ -1539,25 +1529,6 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
                 logger.info(
                     '%s 429 rate-limited on %s:%s (cycle #%d)',
                     log_prefix, slot.key_name, slot.model, state._429_count)
-            # ★ If the streak just tripped, the key is now flagged as
-            #   exhausted — exclude it so we don't cycle back to it.
-            try:
-                from lib.key_stats import is_key_enabled
-                if not is_key_enabled(slot.provider_id, slot.key_name,
-                                      model=slot.model):
-                    state.note_auto_exhausted_key(slot)
-                    logger.warning(
-                        '%s Key %s auto-exhausted after %d consecutive 429s '
-                        '— excluding for today',
-                        log_prefix, slot.key_name, state._429_count)
-                    if on_retry:
-                        on_retry(attempt=state.hard_attempts,
-                                 reason='Key auto-exhausted (consecutive 429s)',
-                                 status_code=429)
-                    _fire_attempt_restart('key auto-exhausted (consecutive 429s)')
-                    continue
-            except Exception as e:
-                logger.debug('%s is_key_enabled probe failed (stream): %s', log_prefix, e)
             if on_retry:
                 if _is_gateway:
                     # Upstream-outage class (gateway 5xx / vendor transient
@@ -1843,7 +1814,13 @@ async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
             _is_quota = bool(getattr(e, 'is_quota', False))
             _is_gateway = bool(getattr(e, 'is_gateway', False))
             _is_contention = bool(getattr(e, 'is_shared_contention', False))
+            # HTTP 402 (account credit dead) → key-wide stop; 429-quota →
+            # per-model (see Slot.record_error is_account_quota).
+            _is_account_quota = bool(
+                _is_quota
+                and int(getattr(e, 'status_code', 0) or 0) == 402)
             slot.record_error(is_rate_limit=True, is_quota_exhausted=_is_quota,
+                              is_account_quota=_is_account_quota,
                               is_gateway=_is_gateway,
                               is_shared_contention=_is_contention,
                               error=str(e)[:200] if _is_quota else '')

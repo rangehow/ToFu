@@ -11,7 +11,6 @@ import sys as _sys
 from lib.log import get_logger
 
 from lib.key_stats._state import (
-    MAX_CONSECUTIVE_429,
     MIN_ATTEMPTS,
     MIN_SUCCESS_RATE,
     _cache,
@@ -164,7 +163,6 @@ def get_all_stats() -> dict:
             'day': _cache['day'],
             'min_attempts': MIN_ATTEMPTS,
             'min_success_rate': MIN_SUCCESS_RATE,
-            'max_consecutive_429': MAX_CONSECUTIVE_429,
             'keys': keys_out,
         }
 

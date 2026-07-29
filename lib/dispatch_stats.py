@@ -222,7 +222,6 @@ def group_key_stats_by_provider(snapshot: dict) -> dict:
         'day': snapshot.get('day', ''),
         'min_attempts': snapshot.get('min_attempts', 5),
         'min_success_rate': snapshot.get('min_success_rate', 0.5),
-        'max_consecutive_429': snapshot.get('max_consecutive_429', 100),
         'providers': providers,
     }
 

@@ -38,7 +38,6 @@ function _loadKeyStats() {
           providers: data.providers || {},
           min_attempts: data.min_attempts || 5,
           min_success_rate: data.min_success_rate || 0.5,
-          max_consecutive_429: data.max_consecutive_429 || 100,
         };
       }
     })
@@ -91,9 +90,8 @@ function _keyStatsHelpText(isLocal) {
   var base = isLocal ? t('settings.apiKeysHintLocal') : t('settings.apiKeysHint');
   var day = _keyStatsCache && _keyStatsCache.day;
   if (!day) return base;
-  var max429 = _keyStatsCache.max_consecutive_429 || 100;
   var minSrPct = Math.round((_keyStatsCache.min_success_rate || 0.5) * 100);
-  return base + '\n\n' + t('settings.keyStatAutoDisablePolicy', { day: day, n: max429, pct: minSrPct });
+  return base + '\n\n' + t('settings.keyStatAutoDisablePolicy', { day: day, pct: minSrPct });
 }
 
 /** Render the stats sub-row HTML for one key card.
@@ -105,7 +103,6 @@ function _keyStatsHelpText(isLocal) {
  *  value set so the user can flip the override toggle pre-emptively. */
 function _renderKeyCardStatsHTML(provIdx, keyIdx) {
   var row = _getKeyStatRowFor(provIdx, keyIdx);
-  var max429 = _keyStatsCache.max_consecutive_429 || 100;
 
   var total = row ? (row.total || 0) : 0;
   var succ = row ? (row.success || 0) : 0;
@@ -122,12 +119,15 @@ function _renderKeyCardStatsHTML(provIdx, keyIdx) {
   if (row && row.override === false) badge = '<span class="stg-keystat-badge off">' + t('settings.keyStatOverrideOff') + '</span>';
   else if (row && row.override === true) badge = '<span class="stg-keystat-badge on">' + t('settings.keyStatOverrideOn') + '</span>';
   else if (lastResort) badge = '<span class="stg-keystat-badge warn" title="' + escapeHtml(t('settings.keyStatLastResortTip')) + '">' + t('settings.keyStatLastResort') + '</span>';
-  else if (exhausted) badge = '<span class="stg-keystat-badge warn" title="' + escapeHtml(t('settings.keyStatExhaustedTip', { n: max429 })) + '">' + t('settings.keyStatExhausted') + '</span>';
+  else if (exhausted) badge = '<span class="stg-keystat-badge warn" title="' + escapeHtml(t('settings.keyStatExhaustedTip')) + '">' + t('settings.keyStatExhausted') + '</span>';
   else if (autoOff) badge = '<span class="stg-keystat-badge warn">' + t('settings.keyStatAutoOff') + '</span>';
 
+  // Informational streak chip — 429s never disable the key (owner policy
+  // 2026-07-29), so there is no threshold to approach; ≥10 is just "worth
+  // telling the user the upstream is pushing back".
   var streakBadge = '';
-  if (!exhausted && cons429 >= Math.max(10, max429 / 2)) {
-    streakBadge = '<span class="stg-keystat-badge warn" title="' + escapeHtml(t('settings.keyStat429StreakTip', { max: max429 })) + '">' + t('settings.keyStat429Streak', { n: cons429 }) + '</span>';
+  if (!exhausted && cons429 >= 10) {
+    streakBadge = '<span class="stg-keystat-badge warn" title="' + escapeHtml(t('settings.keyStat429StreakTip')) + '">' + t('settings.keyStat429Streak', { n: cons429 }) + '</span>';
   }
 
   // Per-model billing-stops (aggregating-gateway isolation): a quota-dead
@@ -166,7 +166,7 @@ function _renderKeyCardStatsHTML(provIdx, keyIdx) {
       '<span class="stg-keystat-rate" title="' + rateTitle + '">' + srTxt + '</span>' +
       countChip +
       (fail > 0 ? '<span class="stg-keystat-fail" title="' + escapeHtml(t('settings.keyStatFailTip')) + '">' + t('settings.keyStatFail', { n: fail }) + '</span>' : '') +
-      (rl429 > 0 ? '<span class="stg-keystat-429" title="' + escapeHtml(t('settings.keyStat429Tip', { max: max429 })) + '">' + t('settings.keyStat429', { n: rl429 }) + '</span>' : '') +
+      (rl429 > 0 ? '<span class="stg-keystat-429" title="' + escapeHtml(t('settings.keyStat429Tip')) + '">' + t('settings.keyStat429', { n: rl429 }) + '</span>' : '') +
     '</span>' +
     streakBadge + emBadge + conflictBadge + badge + lastErr +
     '<span class="stg-keystat-actions">' +

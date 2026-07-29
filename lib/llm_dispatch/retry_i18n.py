@@ -43,7 +43,6 @@ RETRY_REASON_KEYS = {
     'Request timed out': 'stream.retryReason.requestTimedOut',
     'Waiting for model (rate-limited)': 'stream.retryReason.waitingForModel',
     'Key balance exhausted': 'stream.retryReason.keyBalanceExhausted',
-    'Key auto-exhausted (consecutive 429s)': 'stream.retryReason.keyAutoExhausted',
     'Upstream error': 'stream.retryReason.upstreamError',
     'Waiting for model (retry backoff)': 'stream.retryReason.waitingBackoff',
     'Waiting for model (shared project limit)': 'stream.retryReason.waitingSharedProject',

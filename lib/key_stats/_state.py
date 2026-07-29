@@ -48,14 +48,11 @@ def _pkg():
 MIN_ATTEMPTS = 5
 MIN_SUCCESS_RATE = 0.5
 
-# Consecutive-429 threshold. Provider 429 bodies are cryptic and ambiguous
-# (some paid keys say the exact same thing on RPM-overrun as on balance-out).
-# A key that returns 429 this many times IN A ROW without a single success is
-# effectively dead for the day — either it's out of balance or shared quota
-# is saturated; in both cases, stop wasting requests on it.
-#
-# Any success or non-429 error resets the counter to 0.
-MAX_CONSECUTIVE_429 = 100
+# NOTE (owner policy 2026-07-29): a 429 streak NEVER auto-disables a key.
+# 429 means backpressure — the slot-local steering cooldown + RPM decay are
+# the whole answer; only an explicit billing-stop (HTTP 402 /
+# quota-exhausted) may disable a key for the day. The consecutive_429
+# counter survives as pure UI telemetry.
 
 _STATS_PATH = config_path('key_stats.json')
 _lock = threading.Lock()

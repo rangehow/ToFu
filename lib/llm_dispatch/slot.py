@@ -325,7 +325,8 @@ class Slot:
 
     def record_error(self, is_rate_limit=False, error: str = '',
                      is_quota_exhausted: bool = False, is_gateway: bool = False,
-                     is_shared_contention: bool = False):
+                     is_shared_contention: bool = False,
+                     is_account_quota: bool = False):
         """Call after a failed request.
 
         Args:
@@ -338,12 +339,21 @@ class Slot:
                 billing/quota problem (insufficient balance, credits too low).
                 Such keys should be marked as exhausted for the rest of the day,
                 not briefly cooled down and retried.
+            is_account_quota: True when the quota signal is HTTP 402 Payment
+                Required — the gateway ACCOUNT's own credit pool is empty
+                (sankuai body: ext.error.source=AIGC, stage=validation), so
+                EVERY model on this key is dead and the honest stop is the
+                key-wide ``exhausted`` flag. Per-model convergence there
+                just burns one live 402 per remaining model (2026-07-29
+                sankuai_key_2: 12 of 43 model entries stopped, ~30 more
+                live 402s queued for real users). A 429+insufficient_quota
+                body stays VENDOR-AMBIGUOUS and keeps per-model granularity
+                (2026-07-28 aggregating-gateway contract).
             is_gateway: True when the failure is an UPSTREAM outage class
                 (gateway 502/503/504, or an upstream-vendor transient wrapped
-                in a 4xx) rather than per-key contention. Such errors must
-                NOT feed the consecutive-429 auto-exhaust streak in key_stats
-                (a sick upstream would auto-disable HEALTHY keys for the day);
-                they are still recorded as ordinary failures via
+                in a 4xx) rather than per-key contention. Such errors do not
+                feed the consecutive-429 telemetry streak in key_stats; they
+                are still recorded as ordinary failures via
                 record_outcome so the dead-key safety net (daily failure
                 stats) keeps working.
             is_shared_contention: True when the 429 names a PROJECT-LEVEL
@@ -400,39 +410,34 @@ class Slot:
         # Daily key-health tracker.
         #   - Quota-exhausted 429/402 (clear billing signal in body): immediately
         #     mark the key as exhausted so it's disabled for the rest of today.
-        #   - Generic 429 rate-limit: feed the consecutive-429 streak counter —
-        #     provider error bodies are ambiguous ("达到使用量上限" can mean either
-        #     RPM-overrun on a paid key OR a dead key), so we only auto-exhaust
-        #     after the streak crosses MAX_CONSECUTIVE_429. Any success or non-
-        #     429 error resets the streak.
+        #   - Generic 429 rate-limit: telemetry only (rate_limited /
+        #     consecutive_429 counters for the UI). A 429 streak NEVER
+        #     disables the key (owner policy 2026-07-29) — the brief steering
+        #     cooldown above is the whole answer, so the key rejoins on its
+        #     own the moment the upstream recovers.
         #   - Other errors: count as a regular failure for the success-rate column.
         if is_quota_exhausted:
             try:
                 from lib.key_stats import mark_key_exhausted
+                # HTTP 402 = account credit pool dead → key-wide stop;
+                # 429-quota = vendor-ambiguous → per-model stop.
                 mark_key_exhausted(self.provider_id, self.key_name,
                                    reason=error or 'quota exhausted (HTTP 402/429)',
-                                   model=self.model)
+                                   model='' if is_account_quota else self.model)
             except Exception as e:
                 logger.debug('[Slot] key_stats mark_key_exhausted failed: %s', e)
         elif is_shared_contention and not is_gateway:
             # External contention feeds NEITHER the consecutive-429
-            # auto-exhaust streak (a saturated shared project must not
-            # disable a healthy key for the day) NOR the daily failure
-            # stats (nothing failed — someone else's traffic filled the
-            # pipe). The slot-local contention_errors counter above keeps
-            # the volume visible on the model card.
+            # telemetry streak NOR the daily failure stats (nothing failed —
+            # someone else's traffic filled the pipe). The slot-local
+            # contention_errors counter above keeps the volume visible on
+            # the model card.
             pass
         elif is_rate_limit and not is_gateway:
             try:
                 from lib.key_stats import record_rate_limit
-                just_exhausted = record_rate_limit(
-                    self.provider_id, self.key_name,
-                    reason=error or 'HTTP 429')
-                if just_exhausted:
-                    # Streak threshold tripped — stop hammering this key for
-                    # an hour (the UI toggle / day rollover will revive it).
-                    self.cooldown_until = time.time() + 3600
-                    self.cooldown_reason = 'quota'
+                record_rate_limit(self.provider_id, self.key_name,
+                                  reason=error or 'HTTP 429')
             except Exception as e:
                 logger.debug('[Slot] key_stats record_rate_limit failed: %s', e)
         else:

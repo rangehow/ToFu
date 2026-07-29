@@ -70,7 +70,13 @@ css = open(css_path, encoding='utf-8').read()
 PAGE = """<!doctype html><html lang="zh" data-theme="%s"><head><meta charset="utf-8">
 <style>%s</style>
 <style>body{margin:0;background:inherit}
- *{animation:none!important;transition:none!important}
+ /* NOTE: `*` does NOT match pseudo-elements, so `*{animation:none}` alone left
+    the shadow's breathing animation running — the two screenshots then captured
+    different animation phases and the diff picked up unrelated motion. The
+    pseudo-element selectors are what actually freeze the shadow at its rest
+    state (scale 1 / opacity 1), which is what these frozen-frame assertions
+    about geometry assume. */
+ *,*::before,*::after{animation:none!important;transition:none!important}
  %s</style></head>
 <body><div class="welcome"><div class="welcome-icon">
 <img src="file://%s" width="64" height="64" alt="Tofu"></div>
@@ -112,6 +118,69 @@ d = ImageChops.difference(A, B)
 bbox = d.getbbox()
 px = sum(1 for q in d.getdata() if sum(q) > 3)
 print('RESULT' + json.dumps({'px': px, 'bbox': bbox, 'rect': rect, 'dpr': 2}))
+'''
+
+
+# ── animation-phase worker ───────────────────────────────────────────────────
+# The suite above FREEZES animations (`*{animation:none}`) so the diff is stable.
+# That makes it structurally blind to motion defects: the ground shadow was being
+# carried up and down by the mascot's float (measured: the icon's bottom edge —
+# the shadow's GROUND LINE — swung 3.48px), and every frozen-frame assertion
+# passed the whole time.
+#
+# This worker samples geometry at explicit ANIMATION PHASES. It does not sleep
+# and hope: it pauses every running animation and seeks `currentTime`, so the
+# rest phase (t=0) and the apex (t=half the 4s cycle) are exact and the test is
+# deterministic rather than timing-dependent.
+_ANIM_WORKER = r'''
+import json, os, sys
+from playwright.sync_api import sync_playwright
+
+css_path, icon_path, theme, outdir = sys.argv[1:5]
+css = open(css_path, encoding='utf-8').read()
+
+PAGE = """<!doctype html><html lang="zh" data-theme="%s"><head><meta charset="utf-8">
+<style>%s</style><style>body{margin:0}
+ .welcome{min-height:0;padding:40px 0;width:420px}</style></head>
+<body><div class="welcome"><div class="welcome-icon">
+<img src="file://%s" width="64" height="64" alt="Tofu"></div>
+<h2 class="tofu-brand"><span class="tofu-brand-t">T</span><span class="tofu-brand-o1">o</span><span
+ class="tofu-brand-f">f</span><span class="tofu-brand-u">u</span><small>豆腐</small></h2>
+</div></body></html>"""
+
+SEEK = """(ms) => {
+  const anims = document.getAnimations();
+  for (const a of anims) { a.pause(); a.currentTime = ms; }
+  return anims.length;
+}"""
+
+PROBE = """() => {
+  const ic = document.querySelector('.welcome-icon');
+  const im = ic.querySelector('img');
+  const ir = ic.getBoundingClientRect(), mr = im.getBoundingClientRect();
+  const pb = getComputedStyle(ic, '::before');
+  return {hostBottom: ir.bottom, hostTop: ir.top,
+          imgTop: mr.top, shadowOpacity: parseFloat(pb.opacity),
+          shadowTransform: pb.transform};
+}"""
+
+html = PAGE % (theme, css, icon_path)
+f = os.path.join(outdir, 'anim_%s.html' % theme)
+open(f, 'w', encoding='utf-8').write(html)
+
+out = {}
+with sync_playwright() as p:
+    b = p.chromium.launch(args=['--no-sandbox'])
+    pg = b.new_page(viewport={'width': 420, 'height': 300}, device_scale_factor=2)
+    pg.goto('file://' + f)
+    pg.wait_for_load_state('load')
+    pg.wait_for_timeout(400)
+    # 4s cycle: 0ms is the resting phase, 2000ms is the apex of the float.
+    for label, ms in (('rest', 0), ('apex', 2000)):
+        out['n_anims'] = pg.evaluate(SEEK, ms)
+        out[label] = pg.evaluate(PROBE)
+    b.close()
+print('RESULT' + json.dumps(out))
 '''
 
 
@@ -197,6 +266,139 @@ def test_ground_shadow_sits_under_the_mascot(theme, _worker_path):
         f'[{theme}] shadow bottom y={y1:.0f} is {abs(y1 - r["bottom"]):.0f}px '
         f'from the icon bottom ({r["bottom"]:.0f}) — it has drifted away from '
         f'the mascot, most likely anchoring to a different positioned ancestor.')
+
+
+# ── motion invariants: it is a SHADOW, not a sticker ─────────────────────────
+
+@pytest.fixture(scope='module')
+def _anim_worker_path():
+    fd, path = tempfile.mkstemp(suffix='_anim_worker.py')
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+        f.write(_ANIM_WORKER)
+    yield path
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def _anim_phases(theme: str, worker: str, css_path: str | None = None) -> dict:
+    """Geometry sampled at the rest phase and the float apex."""
+    env = dict(os.environ)
+    if _CONDA_LIB not in env.get('LD_LIBRARY_PATH', ''):
+        env['LD_LIBRARY_PATH'] = _CONDA_LIB + ':' + env.get('LD_LIBRARY_PATH', '')
+    with tempfile.TemporaryDirectory() as td:
+        r = subprocess.run([sys.executable, worker, css_path or CSS, ICON,
+                            theme, td],
+                           capture_output=True, text=True, env=env, timeout=180)
+    for line in (r.stdout or '').splitlines():
+        if line.startswith('RESULT'):
+            import json
+            return json.loads(line[len('RESULT'):])
+    pytest.skip(f'headless Chromium unavailable / anim worker failed: '
+                f'{(r.stderr or r.stdout or "")[-400:]}')
+
+
+@pytest.mark.parametrize('theme', _THEMES)
+def test_the_mascot_floats_in_every_theme(theme, _anim_worker_path):
+    """The mascot must actually move — and in EVERY theme.
+
+    The float used to be `[data-theme="tofu"]`-only, so dark/light users saw a
+    completely static mascot: the same "brand form pinned to one theme" defect as
+    the wordmark and the seal, applied to motion.
+    """
+    if not _chromium_available():
+        pytest.skip('playwright/chromium not available on this host')
+    res = _anim_phases(theme, _anim_worker_path)
+    assert res['n_anims'] > 0, (
+        f'[{theme}] no running animations at all — the brand motion is missing '
+        f'in this theme.')
+    travel = abs(res['apex']['imgTop'] - res['rest']['imgTop'])
+    assert travel > 1.0, (
+        f'[{theme}] the mascot moved {travel:.2f}px between the rest phase and '
+        f'the float apex — it is static. Brand motion must reach every theme, '
+        f'not just tofu.')
+
+
+@pytest.mark.parametrize('theme', _THEMES)
+def test_the_ground_line_never_moves(theme, _anim_worker_path):
+    """THE shadow invariant: the ground line stays put while the mascot rises.
+
+    This is what separates a shadow from a sticker. When the float sat on
+    `.welcome-icon`, its `::before` ground shadow was dragged along with the
+    parent — the icon's bottom edge swung 3.48px, so the "ground" floated. The
+    float therefore belongs on the mascot IMAGE, leaving the host still.
+    """
+    if not _chromium_available():
+        pytest.skip('playwright/chromium not available on this host')
+    res = _anim_phases(theme, _anim_worker_path)
+    drift = abs(res['apex']['hostBottom'] - res['rest']['hostBottom'])
+    travel = abs(res['apex']['imgTop'] - res['rest']['imgTop'])
+    assert drift < 1.0, (
+        f'[{theme}] the ground line moved {drift:.2f}px between phases while the '
+        f'mascot travelled {travel:.2f}px — the shadow is riding along with the '
+        f'mascot instead of staying on the ground, which reads as a sticker. '
+        f'The float must not be on `.welcome-icon` (the shadow\'s host); put it '
+        f'on `.welcome-icon img`.')
+
+
+@pytest.mark.parametrize('theme', _THEMES)
+def test_the_shadow_breathes_counter_phase(theme, _anim_worker_path):
+    """As the mascot rises, its contact shadow must shrink AND fade.
+
+    A ground line that merely holds still is not enough: a fixed-size, fixed-
+    opacity ellipse under a bobbing mascot still reads as a decal. Physically the
+    contact shadow diffuses as the object leaves the surface.
+    """
+    if not _chromium_available():
+        pytest.skip('playwright/chromium not available on this host')
+    res = _anim_phases(theme, _anim_worker_path)
+    rest_op = res['rest']['shadowOpacity']
+    apex_op = res['apex']['shadowOpacity']
+    assert apex_op < rest_op - 0.05, (
+        f'[{theme}] shadow opacity is {apex_op:.3f} at the mascot\'s apex vs '
+        f'{rest_op:.3f} at rest — it does not fade as the mascot lifts off.')
+
+    def _scale(matrix: str) -> float:
+        # 'matrix(a, b, c, d, e, f)' → a is the horizontal scale factor.
+        inner = matrix[matrix.find('(') + 1:matrix.rfind(')')]
+        return float(inner.split(',')[0]) if inner else 1.0
+
+    rest_s = _scale(res['rest']['shadowTransform'])
+    apex_s = _scale(res['apex']['shadowTransform'])
+    assert apex_s < rest_s - 0.05, (
+        f'[{theme}] shadow scale is {apex_s:.3f} at the apex vs {rest_s:.3f} at '
+        f'rest — it does not shrink as the mascot lifts off.')
+
+
+def test_nc_putting_the_float_back_on_the_host_breaks_the_ground_line(
+        _anim_worker_path):
+    """NEUTER (in-memory): move the float back onto `.welcome-icon` — exactly the
+    shape that shipped — and the ground line must start moving again.
+
+    Without this, `drift < 1.0` could be trivially satisfied by an entirely
+    static page, and the invariant would be worthless.
+    """
+    if not _chromium_available():
+        pytest.skip('playwright/chromium not available on this host')
+    css = open(CSS, encoding='utf-8').read()
+    anchor = '.welcome-icon img{animation:tofuMascotFloat 4s ease-in-out infinite}'
+    assert css.count(anchor) == 1, (
+        f'NC anchor not unique/found: count={css.count(anchor)}')
+    # Reproduce the defect: the float rides the shadow's host again.
+    broken = css.replace(
+        anchor,
+        '.welcome-icon{animation:tofuMascotFloat 4s ease-in-out infinite}', 1)
+    with tempfile.TemporaryDirectory() as td:
+        path = os.path.join(td, 'styles_float_on_host.css')
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(broken)
+        res = _anim_phases('tofu', _anim_worker_path, css_path=path)
+    drift = abs(res['apex']['hostBottom'] - res['rest']['hostBottom'])
+    assert drift > 1.0, (
+        f'NC did not bite: with the float back on `.welcome-icon` the ground '
+        f'line still moved only {drift:.2f}px, so '
+        f'test_the_ground_line_never_moves cannot detect the sticker defect.')
 
 
 def test_the_pixel_probe_can_actually_fail(_worker_path):

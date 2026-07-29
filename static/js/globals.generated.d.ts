@@ -252,6 +252,7 @@ interface Window {
   _privateHostToggle: any;
   _promptInjectMode: any;
   _promptRenameConversation: any;
+  _raiseContinueShell: any;
   _readerFontStep: any;
   _readerWidthCycle: any;
   _rebaseUnackedTail: any;
@@ -264,6 +265,7 @@ interface Window {
   _renderStreamingTranslatePreview: any;
   _resolveContextLimit: any;
   _revalidateOnResume: any;
+  _rollbackContinueShell: any;
   _runTerminalContinuation: any;
   _seedStreamTimerStart: any;
   _serverHasSegmentsLocalLacks: any;

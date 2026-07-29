@@ -192,8 +192,14 @@ def test_empty_guard_includes_toolrounds():
     with open(SRC_JS, encoding='utf-8') as f:
         src = f.read()
     fn_start = src.index('async function continueAssistant()')
-    # Bound the search to the empty-guard region (before the POST).
-    guard_region = src[fn_start:fn_start + 1200]
+    fn_body = src[fn_start:]
+    # Anchor the region on the GUARD ITSELF, not on a fixed byte window from the
+    # function start. The old `src[fn_start:fn_start + 1200]` slice broke the
+    # moment anything was added above the guard (the 2026-07-29 in-flight-gate
+    # comment pushed it to offset ~1146, so the 66-char match ran off the end)
+    # — a guard that goes red for a reason unrelated to what it asserts.
+    g = fn_body.index('if (!assistantMsg.content')
+    guard_region = fn_body[max(0, g - 600):g + 400]
     # The guard must consult tool rounds, not just content/thinking.
     assert 'getToolRoundsFromMsg(assistantMsg)' in guard_region, (
         'continueAssistant empty-guard does not consult toolRounds — a '

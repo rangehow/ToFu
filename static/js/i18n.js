@@ -281,6 +281,12 @@ var _i18n = {
   'sidebar.awaitingInput': { zh: '等待你的输入', en: 'Awaiting your input' },
   'sidebar.translating': { zh: '翻译中…', en: 'Translating…' },
   'sidebar.connecting': { zh: '连接中…', en: 'Connecting…' },
+  /* Continue (resume an interrupted turn) — POST failure. Surfaced as a toast
+   * because the message document is NOT mutated on this path: the interrupted
+   * turn keeps finishReason='interrupted' and its Continue button, so the
+   * action is retryable. Stamping msg.error instead would poison an otherwise
+   * continuable turn with a transient network fault. */
+  'continue.failed': { zh: '续接失败：{err} — 可重试', en: 'Continue failed: {err} — you can retry' },
   'sidebar.queued': { zh: '排队中', en: 'Queued' },
   'sidebar.translatingTag': { zh: '翻译中', en: 'Translating' },
   'sidebar.memoryPrefetch': { zh: '筛选记忆中…', en: 'Filtering memories…' },

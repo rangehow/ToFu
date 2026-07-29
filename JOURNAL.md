@@ -1,5 +1,59 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·桌面版不出包 + 安装提示空盒子) — owner 报两条:「版本号变了不自动 build」与「不管装没装都该直接显示安装提示」。第一条**不是没触发,是触发了然后饿死**:GitHub 已退役的 runner 标签**不报错、只是永不调度**,排队满 24h 被自动取消,`release` 因 `needs` 被 skip(commit `d604418a`,8 文件 +881/-19;新套件 **9 + 15**,**NEUTER×3 + 物理 NEUTER 咬 8 条**;相邻环 **90/90**,既有 local-control **67/67**,干净 worktree 复验通过)
+
+- **★ 第一条的根因是两个独立缺陷叠在同一个现象上,只修一个会以为没效果:**
+
+  | 层 | 实测证据 | 性质 |
+  |---|---|---|
+  | ①`--push` 不带 `--bump` **根本不产生 tag** | `export.py` 里 `is_release=bool(args.bump)`,而 workflow 只认 `refs/tags/v*` | 自动化依赖「人记得加参数」 |
+  | ②有 tag 时**构建饿死** | 真实 run **29632725079 / 29927622183 / 30001088220**(v0.15.0/1/2):`macOS DMG (x86_64)` 的 `runner=""`,排队**整整 24h** 后被 GitHub 自动取消 | 退役标签不报错,只是永不被调度 |
+
+- **★ owner 的表述与实测略有偏差,而偏差处正是关键:** 他说「不会自动触发 build」,实测**触发了**(`ev=push ref=v0.15.2`),但三个版本各自只构建 3/4 平台、**一个包都没发**,Releases 页一直停在 v0.14.2。原因是 `release` 有 `needs: build-macos`,矩阵里一条腿被取消 ⇒ 整个发布 **skipped**。**判据:`timeout-minutes: 30` 对此完全无效——它量的是执行时间,不是排队时间。**
+- **`macos-13` 已于 2025-12-08 退役**(actions/runner-images#13046)。为何 v0.14.2(2026-07-16)还能成功?因为**引入 x86_64 矩阵的那个提交 `57de6f1d` 就在同一天 15:05**,赶在容量彻底枯竭前跑过一次;07-18 起再没成功过。顺带发现 **arm64 腿用的 `macos-14` 是同一颗定时炸弹**(2026-07-06 起进入弃用,2026-11-02 停止支持),故一并前移到 `macos-15`。
+- **落点(按「让版本号本身成为信号」而非补参数):** 触发改为 `push: branches: [main]`,由 `VERSION` 决定要不要发——`v<VERSION>` 在远端还没有 tag ⇒ 构建并发布(手动 dispatch 永远构建,作为重建逃生门)。这样 `export.py --push` 无论有没有 `--bump` 都会出包,且**普通内容推送不会白烧四台 runner**。tag 由 `action-gh-release` 的 `tag_name` 自己建,两条入口(bump 推 tag / 分支推)收敛到同一个「每版本一次发布」。
+- **★ 新守卫的设计判据(这才是防复发的那一半):** 「标签是否还有效」只有 GitHub 调度器知道,离线测不出;但**退役日期是提前几个月公布的**。所以守卫把日期作为数据钉住,并在 **EOL 前 90 天就变红**——把「等到某次发布悄悄没发生才发现」变成「还有时间轮换时的一条红测试」。已知死标签(macos-13/14)也留在表里,这样有人回退到它们时,报错会直接说出原因。
+- **NEUTER×3 各咬各的:** 退回 `macos-13` → 退役守卫红;退回 tag-only 触发 → 分支触发守卫红;删掉 `tag_name` → 发布定位守卫红。
+- **★ 第二条是本项目明令禁止的那一类:功能可用,但界面先给你一个空盒子。** 与 07-29「死控件根修」同一形态。实测三个失效面,而**只有第一个是 owner 看见的那个**:
+  ①`openLocalControlModal` 先画界面再发两个异步请求,期间状态是 `local.checking`「正在检查…」、`#lcBrowserSetup` / `#lcDesktopSetup` **都是空 div**;
+  ②两个 renderer 的错误分支都写 `setup.innerHTML = ''`——**后端一抖就把唯一可执行的步骤擦掉**,恰恰在最需要它的时候;
+  ③`_lcRefresh` 开头 `if (typeof Api === 'undefined' …) return;` **静默早返回、完全不重绘**,于是「正在检查…」+ 空盒子会**永久停在那里**。
+- **落点=「检测只负责升级,不负责让指引出现」:** 下载扩展 / 安装桌面版这两条**不需要任何后端知识**,所以直接写进 `index.html`(它在任何 JS 解析前就已送达,这是「第一帧」能成立的前提),再由 `_lcPaintFloor()` 在打开时同步重绘;错误分支改为回落到 floor 而非清空。下载那段 markup **只写一份**(`_lcBrowserDownload`)——floor 与检测出的 `download` 态本就是同一条指令,写两份必然漂移,而漂移的 floor 就是「第一眼给出错指引」。
+- **★ 桌面版 floor 故意不带下载链接(这是取舍不是遗漏):** URL 来自后端 `UPDATE_REPO`(可用环境变量覆盖),在静态 HTML 里硬编码会让 fork 指向上游的 releases 页——**一个自信的错链接比「一句没有快捷方式的完整指令」更糟**。链接由 `_lcRenderDesktop` 稍后补上,并有守卫钉死 HTML 里不得出现 `href=`。
+- **物理 NEUTER(比断言级更强):** 直接改真文件——摘掉 `_lcPaintFloor()` 调用 + 把两个 setup div 清空 → **8 条真守卫变红**(含「Api 缺失仍可用」「错误不清空」「按钮真能点」);还原一律用 `cp` 备份回写,**绝不用 `git checkout`**(charter #15:后者不区分「我要撤销的实验」与「我还没提交的成果」)。
+- **★ 一处我自己造成的红,以及它暴露的 harness 契约:** 既有 `test_frontend_local_control_merge.py` 是**按函数名从生产源码里切片**的,不是整文件加载;我新增的 `_lcBrowserDownload` 不在 `_SHIPPED_SYMBOLS` 里,于是 24 条测试全炸在 `ReferenceError`。**这是我的漏改,不是既有失败**——把两个新符号加入切片表后 67/67 恢复。判据:**往这个文件加会被 renderer 调用的新函数,必须同步 `_SHIPPED_SYMBOLS`。**
+- **charter #8 已兑现:** 新增两个 `window.*` 导出 ⇒ 重跑 `gen_frontend_globals.py` 并提交(顺带把兄弟已提交的 `applySectionRequirements` 补进这份陈旧的生成物——已核实该文件在 HEAD 中受跟踪,故非误收)。typecheck ratchet 3/3、i18n key 覆盖 8/8、三档导出存活全绿。
+- **验收边界(诚实分账):** ①workflow 改动**下一次 push 到 main 才生效,无法追溯补发 v0.15.x**;`VERSION` 现为 0.15.2 且该 tag 已存在,故下次发版需**先 bump VERSION**(或手动 dispatch 用可用 runner 重建 0.15.2)。②`macos-15-intel` 是**最后一代 Intel 镜像(到 2027-08)**,之后 x86_64 macOS 必须放弃或迁出 GitHub 托管 runner。③前端半边是静态 HTML + JS:**刷新即可**,但 bundle 后台重建,新 JS 要**第二次加载**才拿到。④相邻噪声一条已定责非我方:`ci.yml` 的 CI 在每次 main 推送上都是红的(测试层面,与本批无关),本次**未**让发布依赖 CI,故不阻塞出包。
+
+### 2026-07-29(续·成本彻查) — owner 报「5M tokens 花了 350 元」:**其中 195 元根本没花出去,是显示口径把「缓存含总量」当「未缓存残差」又计了一遍**;真实 156 元里又有 113 元是缓存真被洗空(纯诊断,零产品码;开票 `pt_28375442baa9487b` + `pt_7b850a669a074cec`)
+
+- **★ 两个独立缺陷叠在同一个数字上,必须分账 —— 否则修完一个会以为没效果:**
+
+  | 层 | 金额 | 性质 |
+  |---|---|---|
+  | 界面显示 | 351.60 CNY | 记录里的原值 |
+  | 真实值 | 156.08 CNY | 按本项目价表重算 |
+  | **虚高** | **195.52 CNY(55.6%)** | **纯记账缺陷,钱没花出去** |
+  | 其中理想值 | 42.74 CNY | 若缓存正常命中 |
+  | **真实浪费** | **113.34 CNY(占真实账单 73%)** | **缓存真被洗空,钱真花了** |
+
+- **★ 缺陷一(记账双计)根因:「取值」与「判定」不同源,而 `normalize_usage` 的 XOR 假设被这个网关证伪。** `sankuai_anthropic` 发的是**混合载荷** —— 同时带 OpenAI 拼写 `prompt_tokens`(缓存**含**总量)与 Anthropic 拼写 `cache_*_input_tokens`(残差语义)。`lib/cost.py` 两半各自为政:
+  - `_USAGE_KEY_ALIASES['input'] = ('prompt_tokens','input_tokens')` —— **先取到总量** 5,562,791;
+  - `usage_cache_convention` 因 Anthropic 键在场,第一个分支就返回 `'anthropic'`(= input 是未缓存残差);
+  - 于是 `split_input_tokens` 返回 `(总量, 总量+read+write)`,**把整个前缀按未缓存价再计一遍**,`totalInputTokens` 也虚报成 10,950,599。
+
+  而 `normalize_usage` 的 docstring 明写「carries ONE convention only (OpenAI keys **XOR** Anthropic keys)… **the fallback order is immaterial**」——**这个 XOR 前提对该网关不成立,别名顺序因此从「无关」变成「决定性」。**
+- **实测(不是推断):** 真实未缓存只有 **162,854 tok**,却按 **5,562,791 tok** 计价 —— input 单项应 5.90 CNY 变成 **201.37 CNY**;把该 usage dict 原样喂 `compute_cost` **精确复现记录里的 351.6024**。逐轮取证:**28/28 轮**满足 `input_tokens + cache_read + cache_write == prompt_tokens`,即 `prompt_tokens` 就是缓存含总量,无一例外。
+- **★ 全库血径(比单会话严重):** 扫 470 个会话 → **27 个含该形态、2,740 轮命中、非混合形态 0 轮** —— 也就是**该网关每一轮 Anthropic 原生缓存请求都中**。显示总额 **51,308 CNY** vs 真实 **14,356 CNY**,**虚高 36,952 CNY = 界面所报的 72%**。
+- **既有守卫为何放行(盲区形状很具体):** `tests/test_cache_accounting_convention.py` 有一条 `test_hybrid_payload_with_impossible_cache_reads_as_residual`,但它只覆盖 `cache > prompt_tokens`(算术不可能)那个**反向**形态;而本例是 `cache < prompt_tokens` 的**正向**混合。根子在夹具:`_anthropic_wire()` 构造的是**纯** Anthropic dict、**不含 `prompt_tokens`** —— 真实网关形态从未进过测试。**判据:夹具漏掉一个键,就等于把一整类载荷排除在扫描面之外,而扫描面不会自己报错。**
+- **缺陷二(缓存真被洗空)是真花掉的那 113 元:** 15/28 轮 `cache_read=0` 且 `cache_write>20k`,累计**白写 2,732,435 tok**;按命中轮实测的 delta 写入比(均值 4.7% / 中位 2.6%)反事实计算,理想只需 42.74 CNY。写入按 1.25× 计价、读取 0.10×,**写比读贵 12.5 倍**,所以「写多于读」(2.97M > 2.42M)本身就是病征。
+- **★ 成因分账(两条独立,禁止混在一个验收里):**
+  - **3 轮**判 `cache_write_unsettled`(R2/R27/R28,间隔 11.8s / 11.2s / 14.8s)。`lib/llm_dispatch/cache_settle.py` 的 `settle_cold_enabled()` **默认 OFF**(实测本机无任何 `TOFU_CACHE_*` 环境变量),冷写后下一轮只等 **1500ms** 短窗,而冷条目可见性需 **15–20s** —— **短窗比所需窗口小一个数量级,必然穿透**。该默认值当初的理由写在 docstring 里:「a cold tool loop wastes only ~14k rewrite tokens (a fraction of a cent)」——**本例单会话白写 273 万 tok,这个前提已被证伪**。
+  - **12 轮**判 `server_side` / `no_cache_reuse`,而它们的间隔达 **12s–76s**,远超任何可见性窗口 ⇒ 属**网关侧未复用**,`cache_settle` 修不了。
+- **★ 我的「两条前缀交替」假说被自己的探针证伪(记下来防再犯):** 命中轮的 read 来源在 R14↔R19 之间跳了 5 轮,看起来像两条前缀交替互相踩。但实测 28 轮的 `_wire_region.system` 与 `tools` 哈希**全部相同**、`_wire_bytes` 块数**单调 1→56** ⇒ 前缀严格 append-only,只有一条谱系。**判据:「读回来的不是上一轮写的」不足以推出「有两条前缀」——先看 system/tools 哈希与块数单调性,那两个量直接否掉整类假说。**
+- **本部署是显示口径失真,不是真扣款:** `compute_request_cost`(钱包)与 `compute_cost`(显示)共用同一引擎,但 relay 计费由 `billing_enabled()` 闸住、只在多用户中继生效。**故本机 owner 看到的 350 是估算被放大,不是余额被多扣;但开了 relay 计费的部署会真的多扣。**
+- **验收边界(诚实分账):** 本批**纯诊断,零产品码** —— 两个缺陷的修法都涉及成本引擎/退避默认值的设计取舍,已按 owner 惯例分别开票(`pt_28375442baa9487b` 记账双计、`pt_7b850a669a074cec` 缓存洗空),等拍板后再动手。另:12 轮 `server_side` 需带 `trace_id` 找网关方确认是 per-request miss 还是 TTL 边界,**不属我方可修范围**。
+
 ### 2026-07-29(续·headless-shell 通道) — 「装了吗」这个问题有三个互相矛盾的答案;而**桌面端那个答案在检查一条安装器故意永不创建的路径**(owner 质疑「不是装过吗」;commit `92af42fc`,7 文件 +610/-58;新套件 **17/17**,**NEUTER×5 各咬各的**(其中**一发首版空转,因为我把被测函数改成了死代码**);相邻环 **119/119** + 真浏览器视觉环 **18/18**;干净 committed worktree **49/49**)
 
 - **★ owner 的质疑成立,而「缺 libatk」是条件性的不是缺失:** 裸跑 headless-shell 确实死在 `libatk-1.0.so.0`,但 10 个库**全部就在** conda env prefix 里(`describe_chromium_env()['issues']` 为空)。走 `ensure_chromium_env()` 后 `rc=0`、真出 DOM、Playwright 真截图 **8598 个墨迹像素 / 249 灰阶**。**缺的不是库,是 `LD_LIBRARY_PATH` 导出**——`chromium_env.py` 正为此存在。

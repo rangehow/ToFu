@@ -453,6 +453,33 @@ function _onConvNotifyPush(frame) {
           updateSendButton();
         }
       }
+      /* ★ ATTACH ON BUSY-STATE ARRIVAL — the F5 / new-tab ordering hole.
+       *
+       *   This handler used to light the busy lamp and stop. That is fine when
+       *   the client already knew about the work (the click-open path resolves
+       *   an attach target at open time), but the BOOT ordering is reversed:
+       *   loadConversation runs BEFORE the first frame lands, finds no live
+       *   worker, and correctly attaches nothing — and then nothing ever
+       *   retried once the frame revealed one. Net state: busy=true,
+       *   attachable=known-now, stream=none, until a manual refresh.
+       *
+       *   The other attach site (_verifyActiveConvFromServer below) cannot
+       *   cover this: it sits inside `if (changed)`, which needs a rev bump,
+       *   and an autopilot VU carrier runs with `_inline_messages=True` — hard
+       *   gated OUT of the conv DB sync path (manager/_sync.py,
+       *   manager/_persist.py) — so across a multi-minute VU turn the conv rev
+       *   never moves and that site is unreachable BY CONSTRUCTION, not by
+       *   timing.
+       *
+       *   So the arrival of busy state must itself be an attach trigger.
+       *   _reconnectServerTaskIfIdle re-guards on activeStreams internally, so
+       *   a frame burst collapses to one attach + cheap no-ops; it resolves a
+       *   VU carrier to the {vuCarrier:true} connector and a normal worker to
+       *   the plain path, so this cannot birth a ghost "Agent" bubble. */
+      if (typeof activeConvId !== "undefined" && frame.convId === activeConvId
+          && typeof _reconnectServerTaskIfIdle === "function") {
+        _reconnectServerTaskIfIdle(activeConvId);
+      }
       /* ★ Queued-dispatch discovery (streamless tab): when THIS tab queued
        *   a message behind a busy turn, the backend's post-completion
        *   auto-dispatch announces itself via THIS notify frame — without
@@ -1294,8 +1321,31 @@ function _wireConvSyncPush() {
         if (typeof renderConversationList === "function") {
           renderConversationList();
         }
+        /* ★ Resolve the OPEN conversation explicitly, exactly like the
+         *   conv_changed runningTaskIds branch above. This arm used to call a
+         *   bare updateSendButton() with no notion of which conv the snapshot
+         *   concerned — two handlers for the SAME signal disagreeing about
+         *   "current conversation" is how the next drift starts. One notion,
+         *   both handlers. */
+        const _snapConvs = (frame && typeof frame.convs === "object" && frame.convs) || {};
+        const _snapTouchesActive =
+          typeof activeConvId !== "undefined" && !!activeConvId
+          && Object.prototype.hasOwnProperty.call(_snapConvs, activeConvId);
         if (typeof updateSendButton === "function") {
           updateSendButton();
+        }
+        /* ★ ATTACH ON BUSY-STATE ARRIVAL — see the twin block in
+         *   _onConvNotifyPush for the full reasoning. The connect-time
+         *   snapshot is the FIRST thing a freshly-booted tab receives, so this
+         *   is the arm that closes the F5 / new-tab case specifically: boot
+         *   opened the conv before any state existed and attached nothing;
+         *   this frame is the moment a live worker (incl. a non-attachable-by-
+         *   the-plain-path VU carrier) first becomes known. Gated on the
+         *   snapshot actually naming the OPEN conv so we never bind a stream
+         *   for a conversation the user is not looking at; idempotent via the
+         *   seam's own activeStreams guard. */
+        if (_snapTouchesActive && typeof _reconnectServerTaskIfIdle === "function") {
+          _reconnectServerTaskIfIdle(activeConvId);
         }
       }
     }

@@ -107,8 +107,20 @@ def test_the_nudge_text_teaches_exactly_the_token_the_stripper_removes():
 # ── 2. The nudge row must not reach the wire ──
 
 def test_the_nudge_row_is_wire_excluded():
-    """A stall-nudge row is display-only, like the other three inbox lanes."""
-    assert is_synthetic_inbox_round({'_stallNudge': True, 'roundNum': 9_000_001})
+    """A stall-nudge row is display-only, like the other three inbox lanes.
+
+    Driven through the REAL producer + the REAL frontend rehydrator (see
+    ``tests/test_stall_nudge_lane_e2e.py``) rather than a hand-built dict: a
+    fixture literal would assert only that the marker string appears in a
+    constant, which stays green even when the lane has no producer at all —
+    exactly how this marker shipped dead the first time.
+    """
+    from tests.test_stall_nudge_lane_e2e import (
+        _rehydrate_via_shipped_js,
+        _sidecar_from_real_producer,
+    )
+    row = _rehydrate_via_shipped_js(_sidecar_from_real_producer())[0]
+    assert is_synthetic_inbox_round(row)
 
 
 def test_a_real_tool_round_is_not_wire_excluded():

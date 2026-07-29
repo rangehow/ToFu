@@ -80,11 +80,19 @@ def _read(path: str) -> str:
 
 
 def _scan_source(path: str) -> str:
-    """Read a source file with comments STRIPPED (charter #24)."""
+    """Read a JS source file with comments STRIPPED (charter #24).
+
+    NOTE the explicit ``lang='js'``: the shared helper defaults to
+    ``lang='shell'``, which does NOT strip ``/* … */`` blocks. Omitting it
+    silently leaves every JSDoc block in the scanned text, so an assertion like
+    "the gate must not mention computeConvBusy" would be satisfiable — or
+    violable — by a COMMENT. That is exactly the failure mode charter #24 was
+    written for (and which pt_852527ce031e4f93 tracks elsewhere).
+    """
     src = _read(path)
     try:
         from _source_scan import strip_comments  # type: ignore
-        return strip_comments(src)
+        return strip_comments(src, lang='js')
     except Exception:
         scan = re.sub(r'/\*.*?\*/', '', src, flags=re.S)
         return re.sub(r'^\s*//.*$', '', scan, flags=re.M)
@@ -317,6 +325,47 @@ def test_predicate_is_defined_before_stream_session_in_the_bundle():
         < seen.index('ui/stream_session.js'), (
         'bundle order broke: the liveness predicate must be defined before '
         f'stream_session.js. got order: {[(n, seen.index(n)) for n in seen if n in ("core/conv_state_reducer.js", "ui/chat_render.js", "ui/stream_session.js")]}')
+
+
+def test_comment_stripping_is_bidirectional(tmp_path):
+    """charter #24: the source scan must be satisfiable ONLY by code.
+
+    The shipped file legitimately MENTIONS `computeConvBusy` in a comment (to
+    explain why it is deliberately NOT used). If the stripper were not applied
+    with lang='js', that prose would VIOLATE the "must not route through the
+    conv-level union" assertion and the guard would be red for a correct file.
+    The mirror direction matters too: a comment must not SATISFY the positive
+    assertion either. Both directions are checked here against the real helper.
+    """
+    import sys
+    if HERE not in sys.path:
+        sys.path.insert(0, HERE)
+    from _source_scan import strip_comments  # type: ignore
+
+    # Direction A — a comment must not VIOLATE the negative assertion.
+    js_a = (
+        '/* explanatory: NOT the conv-level computeConvBusy / _convBusyAnyLane */\n'
+        'function setStreamPhase(convId, phase) {\n'
+        '  if (!streamSessions.has(convId) && !_convMainTurnInFlight(c)) return;\n'
+        '}\n'
+    )
+    scan_a = strip_comments(js_a, lang='js')
+    assert 'computeConvBusy' not in scan_a, (
+        'block comments are not being stripped — a comment can VIOLATE the '
+        'negative assertion and turn a correct file red.')
+    assert '_convMainTurnInFlight' in scan_a, 'real code was stripped away'
+
+    # Direction B — a comment must not SATISFY the positive assertion.
+    js_b = (
+        '/* we should use _convMainTurnInFlight here one day */\n'
+        'function setStreamPhase(convId, phase) {\n'
+        '  if (!activeStreams.has(convId)) return;\n'
+        '}\n'
+    )
+    scan_b = strip_comments(js_b, lang='js')
+    assert '_convMainTurnInFlight' not in scan_b, (
+        'a COMMENT satisfied the positive assertion — the guard would pass on '
+        'a file that never actually calls the predicate.')
 
 
 # ── COMPLEMENT: reclamation must survive (reverse-defect guard) ───────────

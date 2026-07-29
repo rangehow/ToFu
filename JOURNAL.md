@@ -1,5 +1,23 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·P0 费率票逐条复验关闭) — 实现早在 `818b3f8`+`d4eeb25`+`da64614` 落地,本轮是**按票面验收标准逐条实测复核后关票**(零新产品码);**一处刻意偏离票面并说明理由**:票面主张 `110022` 应归 fund,实测它是交易所可转债,按 fund 收 1.5% 赎回费对债券是 **60 倍错**(`pt_86e9ea617e1f47e8` DONE)
+
+- **逐条复验(全部在干净 committed worktree 上跑):**
+
+  | 票面验收项 | 实测结果 |
+  |---|---|
+  | grep 不到硬编码费率字面量 | **offenders: 0**(6 文件剥注释扫 `0.0015/0.005/0.015/short_sell_penalty/buy_fee_rate/sell_fee_rate`) |
+  | `metrics.final_value` == DB `total_pnl` | **9 次跨标的跨种子全部逐分一致** |
+  | 1 年期真实 10% 必须报 ≈10% | **+10.00% → 年化 +10.67%**(原 61.67%);-10% → **-10.61%**(原 -41.2%) |
+  | 零阿尔法 3000 次纯机制损耗 | 宽基 **-1.89%→+0.04%**、蓝筹 **-3.76%→-0.35%**、成长 **-5.50%→-0.24%**,均优于或接近票面目标(-0.24/-0.49/-1.21) |
+  | ①prompt 与账本同源 | system prompt 已无写死费率(`万2.5`/`0.05%印花税` 均为 False),两处 prompt 均由 `_describe_fees(config.fee_book)` 渲染 |
+  | 悬空 import 变响 | `meta_strategy.py:329/346` 与 `intel_backtest.py:77` 均已分离 `ModuleNotFoundError` |
+
+- **★ 一处刻意偏离票面(必须记,否则下一个人会以为是漏改):** 票面③写「`110022`→bond(**应为 fund**)」。实测 `110022` 是**交易所可转债**(11xxxx 段),在**场内按佣金交易**,不是场外基金。若按票面归 fund,三日卖出会被收 **1.5% 赎回费**,而真实是 0.025% —— **60 倍错**。故保持 bond 归类,并给 bond 单独配了「佣金 only、无印花税」的交易所档;真正的场外基金(`003003`)仍走分档赎回费且标 `confidence=default`。**判据:票面给的「正确答案」也要实测,它可能只是把一个错的方向换成另一个错的方向。**
+- **`161725` 判 etf 亦非缺陷:** 它是**场内 LOF**,确实按场内佣金交易,归 etf 正确。
+- **票面「禁止混入」三条已严格遵守:** 同根 K 线执行(`cfb6bd8`)、止损自适应(`c1ac232`)、`max_positions` 对齐(`c1ac232`)均在**独立提交**中,未混入本票范围。
+- **验收边界:** 本轮**零新产品码**,纯复验 + 关票。干净 committed worktree 全量 **257 passed**,余 2 条既有红(`test_simulator_migration_parity`,缺 `server.py`,宿主路径依赖,与本票无关)。
+
 ### 2026-07-29(续·MCP SDK 2.0 上界) — 「Anthropic 发了 MCP 2.0」这句话里**三件事各错一点**;真正会咬人的第五处 pin 在 **boot 之前**;而内网当前的安全**来自镜像缺包这个巧合**,不是任何约束(commits chatui `434bde89` + hope-mcp `7d06687`;守卫 **9+10+3**,**NEUTER×9 全咬**;相邻环 **161 passed**;overleaf-mcp v2 迁移在**真实 mcp 2.0.0** 上 **56+1 绿**)
 
 - **★ 先纠正前提,因为它决定了要检查什么:** ①它不是 Anthropic 发的——MCP 已移交 **AAIF** 治理;②「2.0」是 **Python SDK 版本号**,协议叫**修订 `2026-07-28`**;③真正会咬我们的是 **SDK 2.0.0**(pip 能装到),不是协议(没人要求我们说新协议)。把三者混成一句会让人去改协议层,而风险其实在**依赖解析**。

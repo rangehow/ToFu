@@ -147,11 +147,78 @@ def _sum_round_costs(rounds: list) -> dict | None:
     return out or None
 
 
+def _correct_message(m: dict, default_model: str, default_pid) -> tuple[int, bool, float, float]:
+    """Apply the corrected pricing to ONE assistant message, IN PLACE.
+
+    Returns ``(rounds_changed, turn_changed, turn_cost_before, turn_cost_after)``.
+
+    THE single implementation of the mutation — both the dry-run scan and the
+    apply path call it, so what the dry run reports is by construction what the
+    apply writes. A second hand-written copy in the writer is exactly how a
+    migration starts reporting one thing and doing another.
+    """
+    model = m.get('model') or default_model or ''
+    pid = m.get('provider_id') or default_pid
+    rounds = m.get('apiRounds') or []
+
+    n_rounds = 0
+    old_sum = new_sum = 0.0
+    touched = False
+    for ar in rounds:
+        u = ar.get('usage') or {}
+        if not _is_hybrid(u):
+            continue
+        fresh = _recompute(u, ar.get('model') or model,
+                           (u.get('_dispatch') or {}).get('provider_id') or pid)
+        if not fresh:
+            continue
+        old = _cny(ar.get('cost'))
+        new = _cny(fresh)
+        if abs(old - new) > 1e-9:
+            old_sum += old
+            new_sum += new
+            n_rounds += 1
+            touched = True
+        ar['cost'] = fresh
+
+    turn_changed = False
+    turn_old = turn_new = 0.0
+    if touched:
+        rebuilt = _sum_round_costs(rounds)
+        if rebuilt:
+            turn_old = _cny(m.get('cost'))
+            turn_new = _cny(rebuilt)
+            if abs(turn_old - turn_new) > 1e-9:
+                m['cost'] = rebuilt
+                turn_changed = True
+    return n_rounds, turn_changed, turn_old, turn_new
+
+
+def _correct_messages(msgs: list) -> tuple[int, int, float, float]:
+    """Apply the correction to every assistant message in a transcript, IN PLACE.
+
+    Returns ``(rounds_changed, turns_changed, turn_cost_before, turn_cost_after)``.
+    """
+    n_rounds = n_turns = 0
+    t_old = t_new = 0.0
+    for m in msgs:
+        if not isinstance(m, dict) or m.get('role') != 'assistant':
+            continue
+        r, tc, to, tn = _correct_message(m, m.get('model') or '',
+                                         m.get('provider_id'))
+        n_rounds += r
+        if tc:
+            n_turns += 1
+            t_old += to
+            t_new += tn
+    return n_rounds, n_turns, t_old, t_new
+
+
 def scan(verbose: bool = False):
     db = get_thread_db()
     cur = db.cursor()
     cur.execute(
-        "SELECT id, messages::text AS m, rev FROM conversations "
+        "SELECT id, messages::text AS m FROM conversations "
         "WHERE messages::text LIKE '%cache_creation_input_tokens%'")
     rows = cur.fetchall()
 
@@ -167,60 +234,102 @@ def scan(verbose: bool = False):
             logger.warning('[Backfill] conv=%s unparseable messages: %s', cid, e)
             continue
 
-        conv_old = conv_new = 0.0
-        conv_rounds = conv_turns = 0
-        changed = False
+        conv_rounds, conv_turns, conv_old, conv_new = _correct_messages(msgs)
 
-        for m in msgs:
-            if m.get('role') != 'assistant':
-                continue
-            model = m.get('model') or ''
-            pid = m.get('provider_id')
-            rounds = m.get('apiRounds') or []
-
-            touched_a_round = False
-            for ar in rounds:
-                u = ar.get('usage') or {}
-                if not _is_hybrid(u):
-                    continue
-                fresh = _recompute(u, ar.get('model') or model,
-                                   (u.get('_dispatch') or {}).get('provider_id') or pid)
-                if not fresh:
-                    continue
-                old = _cny(ar.get('cost'))
-                new = _cny(fresh)
-                if abs(old - new) > 1e-9:
-                    conv_old += old
-                    conv_new += new
-                    conv_rounds += 1
-                    changed = True
-                    touched_a_round = True
-                ar['cost'] = fresh
-
-            # Turn total is DERIVED from the corrected rounds, never priced from
-            # the drifted turn-level aggregate (see module docstring).
-            if touched_a_round:
-                rebuilt = _sum_round_costs(rounds)
-                if rebuilt:
-                    old_turn = _cny(m.get('cost'))
-                    new_turn = _cny(rebuilt)
-                    if abs(old_turn - new_turn) > 1e-9:
-                        conv_turns += 1
-                        changed = True
-                        m['cost'] = rebuilt
-                        tot_old += old_turn
-                        tot_new += new_turn
-
-        if changed:
+        if conv_rounds or conv_turns:
             n_rounds += conv_rounds
             n_turns += conv_turns
-            plan.append((cid, row['rev'], msgs, conv_rounds, conv_turns,
-                         conv_old, conv_new))
+            tot_old += conv_old
+            tot_new += conv_new
+            # NOTE: the mutated `msgs` is NOT carried to the writer. The apply
+            # path re-reads each conversation and replays the correction on the
+            # FRESH transcript (see main()), because this scan takes ~45s and a
+            # sibling session can legitimately append during it.
+            plan.append(cid)
             if verbose:
-                print('  %-18s rounds=%-4d turns=%-3d  round-cost %9.2f -> %9.2f'
+                print('  %-18s rounds=%-4d turns=%-3d  turn-cost %9.2f -> %9.2f'
                       % (cid, conv_rounds, conv_turns, conv_old, conv_new))
 
     return plan, tot_old, tot_new, n_rounds, n_turns
+
+
+def apply_plan(conv_ids, *, max_attempts: int = 5):
+    """Write the correction to each conversation, re-reading it FIRST.
+
+    Returns ``(written, skipped_noop, failed)``.
+
+    ★ WHY THIS RE-READS INSTEAD OF WRITING THE SCANNED COPY
+    -------------------------------------------------------
+    The scan is a ~45s full-table pass. A sibling session can legitimately
+    append to any of these conversations while it runs, so the transcript the
+    scan parsed is already potentially stale by the time the writer reaches it —
+    and so is any ``rev`` captured alongside it. Writing that copy back would
+    erase the sibling's append, which is precisely the incident
+    ``DefaultConversationStore.save_conversation_messages`` was built to make
+    unspellable (conv ms3sfyrmn31omb: 13 appends logged, 8 rows survived).
+
+    So the plan carries only conversation IDs. For each one the writer does
+    ``load_conversation_messages()`` — which returns ``(messages, updated_at,
+    rev)`` from ONE statement — replays the correction onto that FRESH
+    transcript, and CASes with the rev from that same read. The correction is
+    a pure per-message recompute derived from each round's own ``usage``, so
+    replaying it on newer data is well-defined: rounds the sibling added are
+    corrected too, and rounds already correct are no-ops.
+
+    A lost race is retried (the sibling wrote between our read and our write);
+    only a genuinely exhausted retry budget counts as a failure.
+    """
+    from lib.agent_core.store import get_conversation_store
+    from lib.tasks_pkg.persistence_store import ConcurrentWriteConflict
+
+    store = get_conversation_store()
+    written = skipped = failed = 0
+
+    for cid in conv_ids:
+        for attempt in range(1, int(max_attempts) + 1):
+            try:
+                loaded = store.load_conversation_messages(cid)
+                if loaded is None:
+                    logger.warning('[Backfill] conv=%s vanished before write', cid)
+                    skipped += 1
+                    break
+                messages, _updated_at, rev = loaded
+
+                n_rounds, n_turns, c_old, c_new = _correct_messages(messages)
+                if not (n_rounds or n_turns):
+                    # Already correct — a re-run after a previous apply, or the
+                    # sibling's newer rounds were priced by the fixed engine.
+                    skipped += 1
+                    break
+
+                store.save_conversation_messages(cid, messages, expected_rev=rev)
+                audit_log('hybrid_cost_backfill', conv_id=cid[:12],
+                          rounds=n_rounds, turns=n_turns,
+                          cost_before=round(c_old, 4), cost_after=round(c_new, 4),
+                          expected_rev=int(rev), attempt=attempt)
+                logger.info('[Backfill] conv=%s rewrote %d round(s) / %d turn(s) '
+                            '%.2f -> %.2f CNY (rev=%s)',
+                            cid[:8], n_rounds, n_turns, c_old, c_new, rev)
+                written += 1
+                break
+
+            except ConcurrentWriteConflict as e:
+                # A sibling wrote between our read and our write. Re-read and
+                # replay — never re-push the stale copy.
+                logger.debug('[Backfill] conv=%s lost the rev race '
+                             '(attempt %d/%d): %s', cid[:8], attempt,
+                             max_attempts, e)
+                if attempt == max_attempts:
+                    logger.warning('[Backfill] conv=%s gave up after %d CAS '
+                                   'attempts', cid[:8], max_attempts)
+                    failed += 1
+            except Exception as e:
+                logger.error('[Backfill] conv=%s write failed: %s', cid, e,
+                             exc_info=True)
+                failed += 1
+                break
+
+    return written, skipped, failed
 
 
 def main() -> int:
@@ -257,22 +366,10 @@ def main() -> int:
         print('\nDRY RUN — nothing written. Re-run with --apply to commit.')
         return 0
 
-    from lib.conversations import save_conversation_messages
+    ok, skipped, fail = apply_plan(plan)
 
-    ok = fail = 0
-    for cid, rev, msgs, cr, ct, co, cn in plan:
-        try:
-            save_conversation_messages(cid, msgs, expected_rev=rev)
-            audit_log('hybrid_cost_backfill', conv_id=cid[:12],
-                      rounds=cr, turns=ct,
-                      cost_before=round(co, 4), cost_after=round(cn, 4))
-            ok += 1
-        except Exception as e:
-            logger.error('[Backfill] conv=%s write failed: %s', cid, e,
-                         exc_info=True)
-            fail += 1
-
-    print('\nAPPLIED: %d conversations written, %d failed' % (ok, fail))
+    print('\nAPPLIED: %d conversations written, %d no-op, %d failed'
+          % (ok, skipped, fail))
     if fail:
         print('  (failures are CAS conflicts or write errors — safe to re-run;'
               ' the script is idempotent)')

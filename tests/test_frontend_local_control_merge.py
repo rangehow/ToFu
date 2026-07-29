@@ -122,6 +122,10 @@ _SHIPPED_SYMBOLS = (
     "_lcBrowserSetupState", "_lcRenderBrowser", "_lcRenderDesktop",
     "_lcMintToken", "_lcConnectLine", "_lcUpdateBadge",
     "_lcOpenExtensionsPage",
+    # The download instruction is authored ONCE and reached from three places
+    # (the pre-detection floor, a failed status call, the detected `download`
+    # state), so the renderers cannot be evaluated without it.
+    "_lcBrowserDownload", "_lcPaintFloor",
 )
 
 

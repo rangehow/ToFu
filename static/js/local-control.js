@@ -20,6 +20,29 @@
    BACKEND (`setup_state` on /api/v1/desktop/status) because only the server
    process can see `sys.frozen` — the frontend must not re-derive it.
 
+   ── …and the FLOOR that rule stands on ──
+   "Chosen by detected state" used to mean "rendered only after detection":
+   the modal opened showing `local.checking` ("正在检查…") over an EMPTY setup
+   box, and the install instructions appeared one or two network round-trips
+   later. Every user paid a wait to be told the thing that is true for almost
+   all of them — and the failure modes were worse than the wait: if the status
+   call errored the box was blanked back to empty, and if `Api` was not yet
+   defined `_lcRefresh` returned without painting anything at all, leaving
+   "正在检查…" and an empty box on screen permanently.
+
+   So detection now UPGRADES an instruction that is already on screen rather
+   than being the thing that puts one there. `_lcPaintFloor` runs
+   synchronously on open with the guidance that holds regardless of what the
+   probe finds (download the extension / install the desktop app), and the
+   renderers replace it with something MORE specific once the payload lands.
+   The floor is never "loading" and never empty, so the worst case is an
+   instruction that is merely generic — never one that is absent.
+
+   Corollary, and the reason the download markup lives in `_lcBrowserDownload`
+   rather than inline: the floor and the detected `download` state are the
+   SAME instruction, so they must be ONE authoring. Two copies of it would
+   drift, and a drifted floor is a wrong instruction shown first.
+
    This file is concatenated by lib/js_bundler.py — symbols share the same
    window scope as every other static/js/*.js file. No imports/exports.
    ═══════════════════════════════════════════════════════════════════ */
@@ -44,9 +67,38 @@ function openLocalControlModal() {
   var el = document.getElementById('localControlModal');
   if (!el) return;
   el.classList.add('open');
+  _lcPaintFloor();
   _lcRefresh();
   if (_lcPollTimer) clearInterval(_lcPollTimer);
   _lcPollTimer = setInterval(_lcRefresh, _LC_POLL_MS);
+}
+
+/* Put a real, followable instruction in BOTH rows before anything is fetched.
+ *
+ * Runs synchronously on open, so the first frame the user sees already tells
+ * them what to do. Everything here is derivable with ZERO backend knowledge:
+ * downloading the extension ZIP and installing the desktop app are the steps
+ * that hold whatever the probe later reports. The renderers then narrow this
+ * to the state-specific instruction (load-unpacked with the on-disk path, the
+ * tray toggle, the remote connect line) or clear it outright when connected.
+ *
+ * Status text is painted too. It reads "not installed" / "not running" rather
+ * than "checking": for a user who has not set this up — the only user who
+ * needs this dialog — that is both the honest answer and the one the poll is
+ * about to confirm, and it does not go stale if the poll never answers. */
+function _lcPaintFloor() {
+  _lcSetStatus('lcBrowserStatus', false, _lcT('local.notInstalled', '尚未安装'));
+  _lcSetStatus('lcDesktopStatus', false, _lcT('local.notRunning', '未运行'));
+  _lcBrowserDownload();
+  var d = document.getElementById('lcDesktopSetup');
+  if (d) {
+    // No download link yet: the URL comes from the backend's UPDATE_REPO and
+    // must not be re-derived here (a fork's build would get the wrong link).
+    // _lcRenderDesktop adds it a beat later. A named step with no shortcut is
+    // still actionable; a shortcut pointing at the wrong repo would not be.
+    d.innerHTML = '<p class="lc-step">' + _lcEsc(_lcT('local.desktopFloor',
+      '安装桌面版后，即可在系统托盘一键开启「Enable Computer Control」，让 AI 操作这台电脑。')) + '</p>';
+  }
 }
 
 function closeLocalControlModal() {
@@ -190,7 +242,11 @@ function _lcRenderBrowser(d, err) {
 
   if (err || !d) {
     _lcSetStatus('lcBrowserStatus', false, _lcT('local.unreachable', '无法连接服务器'));
-    if (setup) setup.innerHTML = '';
+    // Falls back to the download instruction, NOT an empty box. Losing the
+    // status call says nothing about whether the user needs the extension —
+    // and it is precisely when the backend is flaky that wiping the one
+    // followable step off the screen is least defensible.
+    _lcBrowserDownload();
     return;
   }
 
@@ -272,8 +328,22 @@ function _lcRenderBrowser(d, err) {
   // ONE actionable path: download the ZIP, then load it in YOUR browser.
   //
   // This branch is load-bearing beyond the remote case now: it is what the
-  // panel falls through to instead of rendering a button that can only 404.
+  // panel falls through to instead of rendering a button that can only 404,
+  // and what the pre-detection floor shows on open — hence one shared
+  // authoring in _lcBrowserDownload rather than markup inline here.
   // An empty panel would be worse than a wrong instruction.
+  _lcBrowserDownload();
+}
+
+/* The download-the-ZIP instruction — authored ONCE.
+ *
+ * Shown in three situations that are the same instruction: the pre-detection
+ * floor, a failed status call, and the detected `download` state. It needs no
+ * payload (downloadBrowserExtension is a pure frontend call), which is exactly
+ * what makes it usable as the floor. */
+function _lcBrowserDownload() {
+  var setup = document.getElementById('lcBrowserSetup');
+  if (!setup) return;
   setup.innerHTML =
     '<p class="lc-step">' + _lcEsc(_lcT('local.browserDownload',
       '下载扩展并解压，然后在 Chrome / Edge 里打开扩展管理页 → 开启「开发者模式」→「加载已解压的扩展程序」→ 选择解压出的文件夹。')) + '</p>' +
@@ -295,7 +365,8 @@ function _lcRenderDesktop(d, err) {
   var setup = document.getElementById('lcDesktopSetup');
   if (err || !d) {
     _lcSetStatus('lcDesktopStatus', false, _lcT('local.unreachable', '无法连接服务器'));
-    if (setup) setup.innerHTML = '';
+    // Keep whatever instruction is on screen (the floor, or the last good
+    // state) rather than blanking to an empty box — see _lcPaintFloor.
     return;
   }
 
@@ -534,6 +605,8 @@ if (typeof window !== 'undefined') {
   window.toggleDesktopFromLocalModal = toggleDesktopFromLocalModal;
   window._lcUpdateBadge = _lcUpdateBadge;
   window._lcBrowserSetupState = _lcBrowserSetupState;
+  window._lcPaintFloor = _lcPaintFloor;
+  window._lcBrowserDownload = _lcBrowserDownload;
   window._lcConnectLine = _lcConnectLine;
   window._lcSetAbout = _lcSetAbout;
   window._lcRenderBrowser = _lcRenderBrowser;

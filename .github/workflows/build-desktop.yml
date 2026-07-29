@@ -3,8 +3,22 @@
 # ═══════════════════════════════════════════════════════════════
 #
 #  Triggered on:
-#    - Push of a version tag (v*)
-#    - Manual dispatch (workflow_dispatch)
+#    - Push to main whose VERSION file names a version that has no release
+#      yet (the NORMAL path — `export.py --push` publishes main, and the
+#      version number alone decides whether an installer gets built)
+#    - Manual dispatch (workflow_dispatch), for a rebuild/re-release
+#
+#  ── Why VERSION and not a `v*` tag push ──
+#  This used to trigger ONLY on `refs/tags/v*`, which made a release depend on
+#  remembering `export.py --bump` (a plain `--push` creates no tag at all, so
+#  no installer was ever built). The VERSION file is already the project's
+#  single source of truth for the version, so it — not the operator's memory —
+#  is what gates a build. The release step creates the `v<VERSION>` tag if it
+#  does not already exist, so tags still mark every release.
+#
+#  Deliberately ONE trigger: adding `tags: v*` back would double-fire for a
+#  `--bump` push (which pushes the branch AND the tag), racing two runs to
+#  publish the same release.
 #
 #  Produces:
 #    - Windows: Tofu-Setup-x.y.z-win64.exe (Inno Setup installer)
@@ -19,8 +33,7 @@ name: Build Desktop
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
   workflow_dispatch:
     inputs:
       version_override:
@@ -41,12 +54,16 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.ver.outputs.version }}
+      should_release: ${{ steps.ver.outputs.should_release }}
     steps:
       - uses: actions/checkout@v4
       - id: ver
+        env:
+          VERSION_OVERRIDE: ${{ inputs.version_override }}
         run: |
-          if [ -n "${{ inputs.version_override }}" ]; then
-            VER="${{ inputs.version_override }}"
+          set -euo pipefail
+          if [ -n "${VERSION_OVERRIDE}" ]; then
+            VER="${VERSION_OVERRIDE}"
           else
             VER="$(cat VERSION | tr -d '[:space:]')"
           fi
@@ -59,11 +76,31 @@ jobs:
           echo "Resolved version: $VER"
           echo "version=$VER" >> "$GITHUB_OUTPUT"
 
+          # ── Should this run actually build + publish? ──
+          # A manual dispatch is explicit human intent: always build (this is
+          # the rebuild/re-release escape hatch).
+          # A push to main builds ONLY when VERSION names a version that has no
+          # v<VERSION> tag yet — i.e. the version number advanced. Ordinary
+          # content pushes (same VERSION) must not rebuild an installer that is
+          # already published, and must not burn four 30-minute runners.
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "Manual dispatch — building v$VER."
+          elif git ls-remote --exit-code --tags origin "refs/tags/v${VER}" >/dev/null 2>&1; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "v$VER is already tagged/released — nothing to build."
+            echo "::notice::VERSION is still $VER (already released). Bump VERSION to publish a new installer."
+          else
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "VERSION advanced to $VER and v$VER is unreleased — building."
+          fi
+
   # ── Windows ──────────────────────────────────────────────────
   build-windows:
     name: Windows Installer
     runs-on: windows-latest
     needs: version
+    if: needs.version.outputs.should_release == 'true'
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -205,8 +242,8 @@ jobs:
 
   # ── macOS ────────────────────────────────────────────────────
   # Build a NATIVE single-arch DMG per macOS architecture via a runner matrix:
-  #   - macos-14  → Apple Silicon (arm64)
-  #   - macos-13  → Intel (x86_64)
+  #   - macos-15        → Apple Silicon (arm64)
+  #   - macos-15-intel  → Intel (x86_64)
   # We deliberately do NOT use PyInstaller target_arch='universal2': the
   # setup-python interpreter on the runners is single-arch, and several C
   # extensions we bundle (psycopg2-binary, pymupdf, lxml, cryptography) do not
@@ -215,18 +252,37 @@ jobs:
   # built with arch-matching wheels, is the reliable path. Previously only the
   # arm64 DMG shipped (runs-on: macos-latest), so Intel Macs could not install
   # Tofu at all.
+  #
+  # ── Runner labels are PERISHABLE — this matrix already died once ──
+  # The legs were macos-14 (arm64) and macos-13 (x86_64). GitHub RETIRED
+  # macos-13 on 2025-12-08 (actions/runner-images#13046). A retired label does
+  # not fail — it is simply never scheduled: the x86_64 leg sat QUEUED with no
+  # runner for exactly 24 h, GitHub auto-cancelled it, and because `release`
+  # has `needs: build-macos`, the release job was SKIPPED. Net effect: v0.15.0,
+  # v0.15.1 and v0.15.2 each built three of four platforms and published
+  # NOTHING, while the Releases page still showed v0.14.2. `timeout-minutes`
+  # does NOT protect against this — it measures execution, not queue time.
+  # macos-14 is on the same path (deprecation began 2026-07-06, unsupported
+  # 2026-11-02), so it is moved off pre-emptively rather than after it starves.
+  #
+  # tests/test_desktop_build_workflow.py pins both labels against a dated
+  # allowlist and FAILS BEFORE each one's retirement date — so the next
+  # rotation is a red test on a normal working day, not a silent non-release.
+  # macos-15-intel is the LAST Intel image (available until 2027-08); after
+  # that, x86_64 macOS must be dropped or moved off GitHub-hosted runners.
   build-macos:
     name: macOS DMG (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     needs: version
+    if: needs.version.outputs.should_release == 'true'
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-14
+          - runner: macos-15
             arch: arm64
-          - runner: macos-13
+          - runner: macos-15-intel
             arch: x86_64
     steps:
       - uses: actions/checkout@v4
@@ -315,6 +371,7 @@ jobs:
     name: Linux Archive
     runs-on: ubuntu-latest
     needs: version
+    if: needs.version.outputs.should_release == 'true'
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -354,7 +411,7 @@ jobs:
     name: Create Release
     runs-on: ubuntu-latest
     needs: [version, build-windows, build-macos, build-linux]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: needs.version.outputs.should_release == 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -424,6 +481,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: Tofu v${{ needs.version.outputs.version }}
+          # The release is cut from the VERSION file on main, so it must carry
+          # its own tag: this run was triggered by a branch push, not by a tag.
+          # action-gh-release creates `tag_name` at `target_commitish` when it
+          # does not exist yet, and reuses it when it does (the `--bump` path
+          # pushes the tag itself, and a re-dispatch re-uses the same tag) — so
+          # both entry paths converge on one published release per version.
+          tag_name: v${{ needs.version.outputs.version }}
+          target_commitish: ${{ github.sha }}
           # Publish immediately. This was draft:true, which required a manual
           # "Publish release" click in the GitHub UI that never happened —
           # v0.12/v0.13/v0.14 all sat as invisible drafts while users at the

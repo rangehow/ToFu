@@ -1571,7 +1571,7 @@
           <strong data-i18n="local.browserName">浏览器标签页</strong>
           <span class="lc-cap-status" id="lcBrowserStatus">
             <span class="browser-status-dot disconnected"></span>
-            <span class="lc-status-text" data-i18n="local.checking">正在检查…</span>
+            <span class="lc-status-text" data-i18n="local.notInstalled">尚未安装</span>
           </span>
         </span>
         <button type="button" class="lc-switch" id="lcBrowserSwitch"
@@ -1580,7 +1580,18 @@
         </button>
       </div>
       <p class="lc-cap-about" id="lcBrowserAbout" data-i18n="local.browserAbout">读取你已打开的标签页内容，并代你点击、填表单、切换页面。</p>
-      <div class="lc-cap-setup" id="lcBrowserSetup"></div>
+      <!-- Setup FLOOR, shipped as static markup: the install instruction is on
+           screen in the very first paint, before any status call returns. It is
+           the SAME guidance the detected `download` state renders, so a user who
+           needs it never waits, and a status call that errors or never fires
+           leaves a followable step rather than an empty box. local-control.js
+           replaces this with a more specific instruction (load-unpacked with the
+           on-disk path) once detection lands, or empties it when connected.
+           The button is wired by _lcBrowserDownload() on modal open. -->
+      <div class="lc-cap-setup" id="lcBrowserSetup">
+        <p class="lc-step" data-i18n="local.browserDownload">下载扩展并解压，然后在 Chrome / Edge 里打开扩展管理页 → 开启「开发者模式」→「加载已解压的扩展程序」→ 选择解压出的文件夹。</p>
+        <button type="button" class="btn btn-primary btn-sm" id="lcExtDownloadBtn" data-i18n="browser.stepDownloadBtn">下载扩展 ZIP</button>
+      </div>
     </div>
 
     <!-- ══ Capability 2: this computer ══ -->
@@ -1591,7 +1602,7 @@
           <strong data-i18n="local.desktopName">这台电脑</strong>
           <span class="lc-cap-status" id="lcDesktopStatus">
             <span class="browser-status-dot disconnected"></span>
-            <span class="lc-status-text" data-i18n="local.checking">正在检查…</span>
+            <span class="lc-status-text" data-i18n="local.notRunning">未运行</span>
           </span>
         </span>
         <button type="button" class="lc-switch" id="lcDesktopSwitch"
@@ -1600,7 +1611,14 @@
         </button>
       </div>
       <p class="lc-cap-about" id="lcDesktopAbout" data-i18n="local.desktopAbout">浏览与读写本机文件、截屏、打开应用、运行命令（写入与执行需单独授权）。</p>
-      <div class="lc-cap-setup" id="lcDesktopSetup"></div>
+      <!-- Setup FLOOR (see the browser row above). No download LINK here: the
+           URL derives from the backend's UPDATE_REPO, so hardcoding one would
+           point a fork at the wrong releases page. _lcRenderDesktop adds the
+           real link a beat later; a named step with no shortcut is still
+           actionable, a shortcut to the wrong repo is not. -->
+      <div class="lc-cap-setup" id="lcDesktopSetup">
+        <p class="lc-step" data-i18n="local.desktopFloor">安装桌面版后，即可在系统托盘一键开启「Enable Computer Control」，让 AI 操作这台电脑。</p>
+      </div>
       <!-- Permissions are deny-by-default in the agent itself
            (lib/desktop_agent/_permissions.safe_default) and are granted in the
            tray's Permissions submenu. Stated as a fact, NOT rendered as

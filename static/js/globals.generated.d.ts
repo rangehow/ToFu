@@ -85,6 +85,7 @@ declare var _vlmParseEntry: any;   // static/js/upload.js
 declare var _welcomePillsHtml: any;   // static/js/core/icons.js
 declare var applyCapabilityTaxonomy: any;   // static/js/core/model_caps.js
 declare var applyLogoSkin: any;   // static/js/core/brand_logo.js
+declare var applySectionRequirements: any;   // static/js/settings/section_requires.js
 declare var attachCompactionMarkersToConversation: any;   // static/js/compaction-viewer.js
 declare var brandLogoImgAttrs: any;   // static/js/core/brand_logo.js
 declare var buildTurnCtxSnapshot: any;   // static/js/info-rail.js
@@ -222,8 +223,10 @@ interface Window {
   _isBootLoadHeld: any;
   _isErrorOnlyAssistant: any;
   _kickAutopilot: any;
+  _lcBrowserDownload: any;
   _lcBrowserSetupState: any;
   _lcConnectLine: any;
+  _lcPaintFloor: any;
   _lcRenderBrowser: any;
   _lcRenderDesktop: any;
   _lcSetAbout: any;
@@ -302,6 +305,7 @@ interface Window {
   applyLogClean: any;
   applyLogoSkin: any;
   applyRunningTaskIdsFrame: any;
+  applySectionRequirements: any;
   applySystemPromptEditor: any;
   applyToolsetNow: any;
   assertChatInnerOrder: any;

@@ -381,6 +381,74 @@ def _scene_already_rendered(mv, mp4_path: str, *, width: int, height: int,
         return False
 
 
+def _commit_scene_html(index_path: str, html: str, scene: dict,
+                       scene_dir: str, *, width: int, height: int,
+                       duration: float, scene_index: int,
+                       total_scenes: int) -> str:
+    """Write ``html`` to ``index_path`` unless doing so would LOSE quality.
+
+    Returns the HTML that is now on disk — the new one when it was committed,
+    the PRESERVED one when the new composition was a regression. The caller
+    must use the return value for its gates and telemetry, or it would report
+    a composition that is not the one the renderer will read.
+
+    The comparison is a single ordered grade (see
+    :func:`lib.motion_video._quality.scene_grade`), so "worse" means exactly
+    one thing everywhere rather than being re-derived per caller.
+
+    A rejected composition is NOT thrown away: it is kept as the scene's draft,
+    so the next attempt continues repairing it instead of starting from a blank
+    page — the same contract the author's own transient-fault path uses.
+    """
+    from lib.motion_video._quality import is_regression, scene_grade
+    from lib.motion_video._template import matches_template
+
+    new_mode = ('template' if matches_template(
+        html, scene, width=width, height=height, duration=duration,
+        scene_index=scene_index, total_scenes=total_scenes) else 'authored')
+    new_grade = scene_grade(html, scene_dir, mode=new_mode)
+
+    old_html = ''
+    if os.path.isfile(index_path):
+        try:
+            with open(index_path, encoding='utf-8') as f:
+                old_html = f.read()
+        except OSError as e:
+            logger.debug('[MotionVideo] cannot read %s for grading: %s',
+                         index_path, e)
+    if old_html:
+        # A stale composition (wrong duration) is not a candidate to preserve —
+        # it would render at the wrong length, which is worse than any grade.
+        import re as _re
+        m = _re.search(r'data-duration="([0-9.]+)"', old_html)
+        fresh = False
+        try:
+            fresh = bool(m) and abs(float(m.group(1)) - float(duration)) <= 0.01
+        except ValueError as _e:
+            logger.debug('[MotionVideo] old duration unparseable: %s', _e)
+        if fresh:
+            old_mode = ('template' if matches_template(
+                old_html, scene, width=width, height=height,
+                duration=duration, scene_index=scene_index,
+                total_scenes=total_scenes) else 'authored')
+            old_grade = scene_grade(old_html, scene_dir, mode=old_mode)
+            if is_regression(old_grade, new_grade):
+                logger.warning(
+                    '[MotionVideo] %s REFUSING to overwrite a %s composition '
+                    'with a %s one — keeping the known-good file and saving '
+                    'the new attempt as a draft',
+                    scene.get('id'), old_grade, new_grade)
+                try:
+                    from lib.motion_video._scene_author import save_draft
+                    save_draft(scene_dir, html)
+                except Exception as e:
+                    logger.warning('[MotionVideo] could not keep the rejected '
+                                   'composition as a draft: %s', e)
+                return old_html
+    _write(index_path, html)
+    return html
+
+
 def run_motion_task(task: dict) -> None:
     """Worker entry — drives the full pipeline for one motion task."""
     from lib import motion_video as mv
@@ -591,7 +659,19 @@ def run_motion_task(task: dict) -> None:
             if errs:
                 raise ValueError(f"template composition failed its own gate "
                                  f"for {sc['id']}: {' | '.join(errs)}")
-            _write(index_path, html)
+            # ── NO-REGRESSION COMMIT ──
+            # A re-run may only ever RAISE a scene's grade. Writing straight to
+            # index.html made every re-run of an already-good film a bet on the
+            # gateway: one exhausted credit or a run of 120s timeouts degraded
+            # the scene, the fallback card overwrote finished work, and the next
+            # concat baked it into final.mp4. Measured near-miss on the target
+            # film — four authored scenes (span 87.5-93.8%, 17 graphics) were
+            # already back in the author loop under HTTP 402 when the run was
+            # stopped by hand. Re-running must be SAFE, not a gamble.
+            html = _commit_scene_html(index_path, html, sc, scene_dir,
+                                      width=width, height=height,
+                                      duration=dur, scene_index=i,
+                                      total_scenes=total)
             # ONE fill measurement per scene, shared by the gate verdict and
             # the persisted telemetry. Measuring twice would double the browser
             # boots AND allow the two to disagree about one composition.

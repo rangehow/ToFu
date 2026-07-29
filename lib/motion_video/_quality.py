@@ -44,7 +44,15 @@ logger = get_logger(__name__)
 
 __all__ = ['GRAPHIC_EXTENSIONS', 'count_scene_graphics', 'scene_telemetry',
            'asset_floor_findings', 'film_quality_summary',
-           'is_text_only_exempt']
+           'is_text_only_exempt', 'scene_grade', 'is_regression',
+           'PRESERVED_SUBDIR', 'PRESERVED_FILENAME']
+
+#: Where a scene's LAST KNOWN-GOOD composition is kept while a re-run is in
+#: flight. A dot-subdirectory for the same reason the draft uses one: the
+#: renderer scans the project root and rejects it the moment a second
+#: composition-looking HTML file sits beside ``index.html``.
+PRESERVED_SUBDIR = '.tofu-preserved'
+PRESERVED_FILENAME = os.path.join(PRESERVED_SUBDIR, 'composition.html')
 
 #: Extensions that count as a real GRAPHIC for the floor. A strict subset of
 #: :data:`lib.motion_video._assets.ALLOWED_EXTENSIONS` — the font formats are
@@ -212,6 +220,59 @@ def scene_telemetry(scene: dict, html: str, scene_dir: str, *,
     if exempt:
         rec['text_only_exempt'] = exempt_reason
     return rec
+
+
+#: A scene grade, best first. The ONLY ordering used to decide whether a new
+#: composition may replace an existing one.
+#:
+#: ``authored_rich``   — authored AND carries a real graphic;
+#: ``authored_bare``   — authored but no graphic (or an exempt text-only beat);
+#: ``template``        — the zero-LLM fallback card.
+_GRADE_ORDER = ('template', 'authored_bare', 'authored_rich')
+
+
+def scene_grade(html: str, scene_dir: str, *, mode: str) -> str:
+    """A COMPARABLE quality grade for one composition.
+
+    Exists so "is the new composition worse than the one already on disk?" is a
+    single ordered comparison rather than an ad-hoc pile of field checks that
+    each caller re-derives (and gets subtly different).
+    """
+    if mode != 'authored':
+        return 'template'
+    counts = count_scene_graphics(html, scene_dir)
+    return 'authored_rich' if counts['graphics'] > 0 else 'authored_bare'
+
+
+def is_regression(old_grade: str, new_grade: str) -> bool:
+    """True when replacing ``old_grade`` with ``new_grade`` LOSES quality.
+
+    **Why this exists** (owner call, 2026-07-29, after a measured near-miss).
+    The compose stage wrote every composition straight to ``index.html``. So a
+    re-run of an ALREADY-GOOD film was a gamble on the gateway: the moment the
+    author loop degraded a scene — an exhausted credit, a 120 s read timeout,
+    three transient faults in a row — the fallback card overwrote finished work
+    that had already passed every gate, and the next concat baked it into
+    ``final.mp4``.
+
+    Measured on the target film: a re-run started while the LLM gateway was
+    returning HTTP 402 and 120 s timeouts had already re-entered the author
+    loop for four scenes whose ``index.html`` held authored compositions
+    (span 87.5–93.8%, 17 graphics, zero fallbacks). Had those four exhausted
+    their retries, a verified-good deliverable would have been destroyed in
+    place by a run that was supposed to IMPROVE it.
+
+    The rule: a re-run may only ever raise a scene's grade. A worse result is
+    kept as a draft for the next attempt and the known-good composition stays
+    on disk, so re-running is always safe and never a bet.
+    """
+    try:
+        return _GRADE_ORDER.index(new_grade) < _GRADE_ORDER.index(old_grade)
+    except ValueError:
+        # An unknown grade must never authorise an overwrite.
+        logger.warning('[MotionVideo] unknown scene grade(s): %r → %r',
+                       old_grade, new_grade)
+        return old_grade != new_grade
 
 
 def film_quality_summary(records: list) -> dict:

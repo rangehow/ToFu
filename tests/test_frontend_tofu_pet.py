@@ -52,6 +52,29 @@ global.cancelAnimationFrame = function(){};
 global.ResizeObserver = function(){ return { observe(){}, disconnect(){} }; };
 global.localStorage = { _d:{}, getItem(k){return this._d[k]||null;}, setItem(k,v){this._d[k]=v;} };
 global.Image = function(){ return { set src(v){}, get src(){return '';} }; };
+global.t = function (k, p) {
+  let text = k;
+  if (p) { for (const q in p) { if (Object.prototype.hasOwnProperty.call(p, q)) text = text.split('{' + q + '}').join(p[q]); } }
+  return text;   // passthrough — mirrors the page boot stub (index.html:80)
+};
+// t() is driven by the REAL i18n dictionary, read from the path in argv[1].
+// Production ALWAYS has t() (index.html:80 boot stub + i18n.js = _BUNDLE_FILES[0]),
+// so the pet calls it bare. The dictionary is ~3000 keys, so it rides in a temp
+// FILE rather than inlined into `node -e` (argv limit). A MISSING key returns
+// the key, exactly as production does — never a fallback-inventing fake.
+const _petDict = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
+global.t = function (key, params) {
+  const e = _petDict[key];
+  let text = (e && e.zh != null) ? e.zh : key;
+  if (params) {
+    for (const k in params) {
+      if (Object.prototype.hasOwnProperty.call(params, k)) {
+        text = text.split('{' + k + '}').join(params[k]);
+      }
+    }
+  }
+  return text;
+};
 let _mounted = null;
 function _fakeEl(){ return { _attrs:{}, tagName:'', className:'', alt:'', src:'', offsetWidth:30,
   setAttribute(k,v){this._attrs[k]=v;}, getAttribute(k){return this._attrs[k];},
@@ -102,6 +125,19 @@ process.exit(0);   // the pet's setInterval timers keep the event loop alive
 """
 
 
+def _i18n_dict():
+    """Scrape ``static/js/i18n.js`` into ``{key: {zh, en}}`` so the harness's
+    ``t()`` resolves exactly as production does (a missing key returns the key).
+    """
+    src = (REPO / "static" / "js" / "i18n.js").read_text(encoding="utf-8")
+    pat = re.compile(
+        r"""^[ \t]*'([\w.\-]+)':\s*\{\s*zh:\s*(['"])(.*?)\2\s*,"""
+        r"""\s*en:\s*(['"])(.*?)\4""",
+        re.MULTILINE)
+    return {m.group(1): {'zh': m.group(3), 'en': m.group(5)}
+            for m in pat.finditer(src)}
+
+
 def _run(hour=14, now=0, patch=None):
     """Boot the pet at a fixed hour with a state patch; return its resolved state."""
     src = PET_JS.read_text()
@@ -111,14 +147,23 @@ def _run(hour=14, now=0, patch=None):
               .replace("__HOUR__", str(hour))
               .replace("__NOW__", str(now))
               .replace("__PATCH__", json.dumps(patch or {})))
-    out = subprocess.run(["node", "-e", script], capture_output=True, text=True,
-                         cwd=str(REPO), timeout=20)
+    import tempfile
+    with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False) as fh:
+        json.dump(_i18n_dict(), fh)
+        dict_path = fh.name
+    try:
+        out = subprocess.run(["node", "-e", script, dict_path],
+                             capture_output=True, text=True,
+                             cwd=str(REPO), timeout=20)
+    finally:
+        os.unlink(dict_path)
     assert out.returncode == 0, f"node failed: {out.stderr}\n{out.stdout}"
     line = [ln for ln in out.stdout.strip().splitlines() if ln.strip().startswith("{")][-1]
     return json.loads(line)
 
 
 import json  # noqa: E402  (used inside _run)
+import os  # noqa: E402  (used inside _run)
 
 
 def _frame_path(rel_url):
@@ -320,6 +365,11 @@ global.BASE_PATH = '';
 global.ResizeObserver = function(){ return {observe(){}, disconnect(){}}; };
 global.localStorage = { _d:{}, getItem(k){return this._d[k]||null;}, setItem(k,v){this._d[k]=v;} };
 global.Image = function(){ return { set src(v){}, get src(){return '';} }; };
+global.t = function (k, p) {
+  let text = k;
+  if (p) { for (const q in p) { if (Object.prototype.hasOwnProperty.call(p, q)) text = text.split('{' + q + '}').join(p[q]); } }
+  return text;   // passthrough — mirrors the page boot stub (index.html:80)
+};
 // A stub scene with a critter parked mid-track that records spook() calls.
 let _spooks = 0;
 global.window.TofuScene = { critterX(){ return 150; }, spook(){ _spooks++; }, critterInfo(){ return {x:150}; } };
@@ -410,6 +460,11 @@ global.BASE_PATH = '';
 global.ResizeObserver = function(){ return {observe(){}, disconnect(){}}; };
 global.localStorage = { _d:{}, getItem(k){return this._d[k]||null;}, setItem(k,v){this._d[k]=v;} };
 global.Image = function(){ return { set src(v){}, get src(){return '';} }; };
+global.t = function (k, p) {
+  let text = k;
+  if (p) { for (const q in p) { if (Object.prototype.hasOwnProperty.call(p, q)) text = text.split('{' + q + '}').join(p[q]); } }
+  return text;   // passthrough — mirrors the page boot stub (index.html:80)
+};
 let _mounted=null; const _all=[];
 function _fakeEl(tag){ const el = { _attrs:{}, _ev:{}, tagName:tag||'', className:'', offsetWidth:30,
   set src(v){ this._src=v; }, get src(){ return this._src||''; },
@@ -489,6 +544,11 @@ global.BASE_PATH = '';
 global.ResizeObserver = function(){ return {observe(){}, disconnect(){}}; };
 global.localStorage = { _d:{}, getItem(k){return this._d[k]||null;}, setItem(k,v){this._d[k]=v;} };
 global.Image = function(){ return { set src(v){}, get src(){return '';} }; };
+global.t = function (k, p) {
+  let text = k;
+  if (p) { for (const q in p) { if (Object.prototype.hasOwnProperty.call(p, q)) text = text.split('{' + q + '}').join(p[q]); } }
+  return text;   // passthrough — mirrors the page boot stub (index.html:80)
+};
 let _mounted=null; const _all=[];
 function _fakeEl(tag){ const el = { _attrs:{}, _ev:{}, tagName:tag||'', className:'', offsetWidth:30,
   set src(v){ this._src=v; }, get src(){ return this._src||''; },
@@ -584,6 +644,11 @@ global.BASE_PATH = '';
 global.ResizeObserver = function(){ return {observe(){}, disconnect(){}}; };
 global.localStorage = { _d:{}, getItem(k){return this._d[k]||null;}, setItem(k,v){this._d[k]=v;} };
 global.Image = function(){ return { set src(v){}, get src(){return '';} }; };
+global.t = function (k, p) {
+  let text = k;
+  if (p) { for (const q in p) { if (Object.prototype.hasOwnProperty.call(p, q)) text = text.split('{' + q + '}').join(p[q]); } }
+  return text;   // passthrough — mirrors the page boot stub (index.html:80)
+};
 let _mounted=null;
 function _fakeEl(tag){ return { _attrs:{}, tagName:tag||'', offsetWidth:30,
   set src(v){}, get src(){return '';},
@@ -662,6 +727,11 @@ global.BASE_PATH = '';
 global.ResizeObserver = function(){ return {observe(){}, disconnect(){}}; };
 global.localStorage = { _d:{}, getItem(k){return this._d[k]||null;}, setItem(k,v){this._d[k]=v;} };
 global.Image = function(){ return { set src(v){}, get src(){return '';} }; };
+global.t = function (k, p) {
+  let text = k;
+  if (p) { for (const q in p) { if (Object.prototype.hasOwnProperty.call(p, q)) text = text.split('{' + q + '}').join(p[q]); } }
+  return text;   // passthrough — mirrors the page boot stub (index.html:80)
+};
 // No scene present → _critterX() returns null so chase never fires and the
 // histogram reflects the autonomous wander weights only.
 let _mounted=null;
@@ -761,6 +831,22 @@ global.cancelAnimationFrame = function(){};
 global.ResizeObserver = function(){ return {observe(){}, disconnect(){}}; };
 global.localStorage = { _d:{}, getItem(k){return this._d[k]||null;}, setItem(k,v){this._d[k]=v;} };
 global.Image = function(){ return { set src(v){}, get src(){return '';} }; };
+const _petDict = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
+global.t = function (key, params) {
+  // This harness asserts on the TRANSLATED button label, so t() must resolve
+  // like production — a passthrough would compare a raw key against it.
+  // Missing key → the key, exactly as production does.
+  const e = _petDict[key];
+  let text = (e && e.en != null) ? e.en : key;
+  if (params) {
+    for (const q in params) {
+      if (Object.prototype.hasOwnProperty.call(params, q)) {
+        text = text.split('{' + q + '}').join(params[q]);
+      }
+    }
+  }
+  return text;
+};
 // A fake scene-switch button carrying a label span.
 const _label = { textContent: '' };
 const _btn = { _attrs:{}, setAttribute(k,v){this._attrs[k]=v;}, getAttribute(k){return this._attrs[k];},
@@ -783,13 +869,21 @@ const now = TP.cycleDecor();      // meadow -> pool
 console.log(JSON.stringify({
   now, label:_label.textContent, scene:_btn.getAttribute('data-scene'),
   title:_btn.getAttribute('title'), start,
-  expectLabel: TP.SCENE_LABELS[now]
+  expectLabel: TP.sceneLabel(now)
 }));
 process.exit(0);
 '''
         script = harness.replace("__SRC__", src_text)
-        out = subprocess.run(["node", "-e", script], capture_output=True, text=True,
-                             cwd=str(REPO), timeout=20)
+        import tempfile
+        with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False) as fh:
+            json.dump(_i18n_dict(), fh)
+            dict_path = fh.name
+        try:
+            out = subprocess.run(["node", "-e", script, dict_path],
+                                 capture_output=True, text=True,
+                                 cwd=str(REPO), timeout=20)
+        finally:
+            os.unlink(dict_path)
         assert out.returncode == 0, f"node failed: {out.stderr}\n{out.stdout}"
         line = [ln for ln in out.stdout.strip().splitlines() if ln.strip().startswith("{")][-1]
         return json.loads(line)
@@ -854,6 +948,11 @@ global.BASE_PATH = '';
 global.ResizeObserver = function(){ return {observe(){}, disconnect(){}}; };
 global.localStorage = { _d:{}, getItem(k){return this._d[k]||null;}, setItem(k,v){this._d[k]=v;} };
 global.Image = function(){ return { set src(v){}, get src(){return '';} }; };
+global.t = function (k, p) {
+  let text = k;
+  if (p) { for (const q in p) { if (Object.prototype.hasOwnProperty.call(p, q)) text = text.split('{' + q + '}').join(p[q]); } }
+  return text;   // passthrough — mirrors the page boot stub (index.html:80)
+};
 let _mounted=null; const _seen=[];
 function _fakeEl(tag){ return { _attrs:{}, tagName:tag||'', offsetWidth:30,
   set src(v){ if(this.tagName==='img'){ _seen.push(v); } this._src=v; }, get src(){ return this._src||''; },
@@ -1105,8 +1204,15 @@ def test_neuter_breaks_night_sleep():
               .replace("__HOUR__", "2")
               .replace("__NOW__", "0")
               .replace("__PATCH__", json.dumps({"mood": 80, "energy": 90})))
-    out = subprocess.run(["node", "-e", script + "\nprocess.exit(0);"],
-                         capture_output=True, text=True, cwd=str(REPO), timeout=20)
+    import tempfile
+    with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False) as fh:
+        json.dump(_i18n_dict(), fh)
+        dict_path = fh.name
+    try:
+        out = subprocess.run(["node", "-e", script + "\nprocess.exit(0);", dict_path],
+                             capture_output=True, text=True, cwd=str(REPO), timeout=20)
+    finally:
+        os.unlink(dict_path)
     assert out.returncode == 0, f"node failed: {out.stderr}"
     line = [ln for ln in out.stdout.strip().splitlines() if ln.strip().startswith("{")][-1]
     expr = json.loads(line)["expr"]

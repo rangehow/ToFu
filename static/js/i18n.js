@@ -3434,6 +3434,28 @@ var _i18n = {
   'pet.dayBlocked': { zh: '· {n} 项受阻', en: '\u00b7 {n} blocked' },
   'pet.dayIdle': { zh: '今天还没有记录', en: 'Nothing logged yet today' },
   'pet.dayGreeting': { zh: '你好呀！', en: 'Hi there!' },
+  // Scene switcher + pet tooltip. The `pet.scene.` / `pet.greet.` / `pet.feel.`
+  // namespaces are read via DYNAMIC t('prefix.' + x) calls in tofu-pet.js, so
+  // lib/i18n_boot_keys.T_CALL_DYNAMIC_PREFIX_RE discovers each prefix and
+  // expands it to every matching key here (charter #18) — adding a scene or a
+  // mood tier needs no edit to any key list.
+  'pet.scene.meadow': { zh: '草地', en: 'Meadow' },
+  'pet.scene.pool': { zh: '水池', en: 'Pool' },
+  'pet.scene.sky': { zh: '天空', en: 'Sky' },
+  'pet.scene.off': { zh: '关闭', en: 'Off' },
+  'pet.sceneTooltip': { zh: '场景：{scene} · 点击切换', en: 'Scene: {scene} \u00b7 click to change' },
+  // Composed via a template key, NOT string concatenation: word order differs
+  // by language, and a hardcoded '—' separator would strand the zh reading.
+  'pet.title': { zh: '豆腐 — {greet} · {feel}', en: 'Tofu \u2014 {greet} \u00b7 {feel}' },
+  'pet.greet.deepNight': { zh: '睡得正香', en: 'fast asleep' },
+  'pet.greet.earlyMorning': { zh: '刚睡醒', en: 'waking up' },
+  'pet.greet.morning': { zh: '精神饱满', en: 'bright and early' },
+  'pet.greet.afternoon': { zh: '悠闲发呆', en: 'hanging out' },
+  'pet.greet.evening': { zh: '准备收工', en: 'winding down' },
+  'pet.greet.night': { zh: '有点困了', en: 'getting sleepy' },
+  'pet.feel.great': { zh: '心情很好', en: 'feeling great' },
+  'pet.feel.fine': { zh: '状态还行', en: 'doing fine' },
+  'pet.feel.blue': { zh: '有点低落', en: 'a bit blue' },
 
   // ══════════════════════════════════════
   //  Project Brain — cross-conversation Activity Feed (Pillar #1)

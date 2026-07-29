@@ -12217,9 +12217,22 @@ html:not([data-theme="tofu"]) .project-bar .tofu-scene-fg-canvas{display:none}
   [data-theme="tofu"] .tofu-pet-bubble{animation:none !important}
 }
 /* Non-tofu themes: the pet + garland are themed for tofu only. Hide the pet
-   element JS mounts so dark/light bars are byte-identical to before (their
-   base .project-bar keeps padding:8px 12px, and they have no ::before/::after
-   garland). */
+   DELIBERATELY — this is a decision, not an inherited leftover from when the
+   pet was an off-brand cat. Re-examined 2026-07-29 when the pet became the
+   mascot itself, and KEPT, because the pet is not a standalone sprite: it is
+   one actor in a diorama whose every other layer is tofu-scoped. Measured —
+   `tofu-scene.js:629` refuses to paint unless `data-theme === 'tofu'`, and the
+   ground (`--bar-scene`), the foreground occlusion canvas, the organic top
+   edge and the speech bubble are ALL `[data-theme="tofu"]` rules. So on
+   dark/light the pet would walk on a bare flat toolbar with no ground, no
+   scene lighting and no critter to chase — reading as a sticker pasted on a
+   bar, which is the exact "sprite, not inhabitant" failure the brand work
+   fought. To surface it on all three themes, port the diorama first (ground +
+   fg canvas + lightInfo), not just this one line.
+
+   Hidden via CSS rather than by skipping the mount, so dark/light bars stay
+   byte-identical to before (their base .project-bar keeps padding:8px 12px,
+   and they have no ::before/::after garland). */
 html:not([data-theme="tofu"]) .tofu-pet{display:none}
 [data-theme="tofu"] .project-bar:hover{
   transform:translateY(-2px);

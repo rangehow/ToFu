@@ -76,7 +76,18 @@
   // [data-decor="<style>"] rule + a scene-<style>.svg asset. ──
   var DECOR_STYLES = ['meadow', 'pool', 'sky', 'off'];
   // Human labels for the visible scene-switch button in the project bar.
-  var SCENE_LABELS = { meadow: 'Meadow', pool: 'Pool', sky: 'Sky', off: 'Off' };
+  // Resolved through t() at READ TIME, never cached: a cached label would
+  // freeze whatever language was active when this module first ran.
+  //
+  // The call is t('pet.scene.' + style) — a DYNAMIC prefix, which is exactly the
+  // shape lib/i18n_boot_keys.T_CALL_DYNAMIC_PREFIX_RE exists to catch
+  // (charter #18). The scanner sees the `pet.scene.` prefix and expands it to
+  // every matching key in the source dict, so the boot pack carries all four
+  // without anyone hand-copying a list. Writing a literal map here instead
+  // would put the English strings back in the JS and hide them from discovery.
+  function _sceneLabel(style) {
+    return t('pet.scene.' + style);
+  }
   var DEFAULT_DECOR = 'meadow';
   var _decor = DEFAULT_DECOR;
 
@@ -178,11 +189,11 @@
     var btns = document.querySelectorAll('.scene-switch-btn');
     for (var i = 0; i < btns.length; i++) {
       var b = btns[i];
-      var name = SCENE_LABELS[_decor] || _decor;
+      var name = _sceneLabel(_decor);
       var lbl = b.querySelector('.scene-switch-label');
       if (lbl) lbl.textContent = name;
       b.setAttribute('data-scene', _decor);
-      b.setAttribute('title', 'Scene: ' + name + ' \u00b7 click to change');
+      b.setAttribute('title', t('pet.sceneTooltip', { scene: name }));
     }
   }
   function setDecor(style) {
@@ -229,14 +240,20 @@
     return tb.expr;   // 'happy' (morning) or 'idle'
   }
 
-  var _greetWord = {
-    deepNight: 'fast asleep', earlyMorning: 'waking up', morning: 'bright and early',
-    afternoon: 'hanging out', evening: 'winding down', night: 'getting sleepy'
-  };
+  // The pet's hover tooltip. Both halves resolve through DYNAMIC t() prefixes
+  // (pet.greet. / pet.feel.), so lib/i18n_boot_keys expands each namespace into
+  // the boot pack automatically — add a time bucket or a mood tier and its key
+  // ships without touching any list. Composed via a template key rather than
+  // string concatenation, because word order differs by language.
+  function _feelTier() {
+    return S.mood >= 75 ? 'great' : S.mood >= 45 ? 'fine' : 'blue';
+  }
   function _title() {
     var tb = _timeBucket(new Date().getHours());
-    var feel = S.mood >= 75 ? 'feeling great' : S.mood >= 45 ? 'doing fine' : 'a bit blue';
-    return 'Tofu — ' + (_greetWord[tb.bucket] || 'here') + ' \u00b7 ' + feel;
+    return t('pet.title', {
+      greet: t('pet.greet.' + tb.bucket),
+      feel: t('pet.feel.' + _feelTier())
+    });
   }
 
   // ── DOM ──
@@ -380,18 +397,20 @@
   // see the CSS allowlist note) so it never reserves an in-flow flex slot. ──
   var _bubble = null, _bubbleTimer = null;
   function _dayReportText() {
-    var _tt = (typeof t === 'function') ? t : null;
-    var _k = function (key, params, fb) {
-      if (_tt) { var s = _tt(key, params); if (s && s !== key) return s; }
-      return fb;
-    };
-    if (!_day) return _k('pet.dayGreeting', null, 'Hi there!');
+    // Literal t('...') calls, NOT a local alias. A wrapper like
+    // `var _k = function (key, ...) { ... t(key) ... }` reads fine but is
+    // INVISIBLE to lib/i18n_boot_keys.T_CALL_KEY_RE, which only matches a
+    // literal string as t()'s first argument — so every pet.* key silently
+    // missed the boot pack (measured: 0 discovered while 4 were in the dict).
+    // t() already falls back to the key and interpolates params, so the
+    // wrapper bought nothing and cost discoverability.
+    if (!_day) return t('pet.dayGreeting');
     var done = (_day.streams.done || 0) + (_day.todos.done || 0);
     var total = (_day.streams.total || 0) + (_day.todos.total || 0);
     var blocked = _day.streams.blocked || 0;
-    if (total === 0) return _k('pet.dayIdle', null, 'Nothing logged yet today');
-    var base = _k('pet.dayReport', { done: done, total: total }, done + '/' + total + ' done today');
-    if (blocked > 0) base += ' ' + _k('pet.dayBlocked', { n: blocked }, '\u00b7 ' + blocked + ' blocked');
+    if (total === 0) return t('pet.dayIdle');
+    var base = t('pet.dayReport', { done: done, total: total });
+    if (blocked > 0) base += ' ' + t('pet.dayBlocked', { n: blocked });
     return base;
   }
   var _BUBBLE_SVG = '<svg viewBox="0 0 120 46" preserveAspectRatio="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><path d="M8 2h104a6 6 0 0 1 6 6v22a6 6 0 0 1-6 6H70l-9 11-3-11H8a6 6 0 0 1-6-6V8a6 6 0 0 1 6-6z"/></svg>';
@@ -963,7 +982,7 @@
     EXPRESSIONS: EXPRESSIONS,
     FRAME_ALIAS: FRAME_ALIAS,
     DECOR_STYLES: DECOR_STYLES,
-    SCENE_LABELS: SCENE_LABELS
+    sceneLabel: _sceneLabel
   };
 
   if (document.readyState === 'loading') {

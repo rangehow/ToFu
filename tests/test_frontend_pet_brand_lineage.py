@@ -274,6 +274,121 @@ def test_no_mascot_switcher_grows_back():
 
 
 # ── NEUTER: each guard above must be shown to BITE, on a COPY, never on disk ──
+def _pet_i18n_keys():
+    """Every ``pet.*`` key the boot-key scanner can reach, prefixes expanded.
+
+    Drives the REAL ``lib.i18n_boot_keys.discover_boot_keys`` — the same scanner
+    that builds the shipped boot pack — so this measures what actually gets sent
+    to the browser, not a re-derived guess.
+    """
+    import sys
+    sys.path.insert(0, str(REPO))
+    from lib.i18n_boot_keys import discover_boot_keys
+    dict_src = (REPO / "static" / "js" / "i18n.js").read_text(encoding="utf-8")
+    source_keys = set(re.findall(r"^\s*'([A-Za-z][A-Za-z0-9_.]*)':\s*\{",
+                                 dict_src, re.M))
+    found = discover_boot_keys(str(REPO), source_keys=source_keys)
+    return {k for k in found["union"] if k.startswith("pet.")}, source_keys
+
+
+def test_pet_strings_are_localised_not_hardcoded_english():
+    """The pet's user-visible text must go through t(), not sit in the JS.
+
+    The scene-switch button label and both tooltips were English literals
+    (``SCENE_LABELS = {meadow: 'Meadow', …}``, ``'Scene: ' + name + ' · click to
+    change'``, ``'Tofu — ' + greet``), so a Chinese user hovering the mascot read
+    English. Guard the RESULT — no user-facing English literal survives in the
+    module — rather than the mechanism, so a future refactor that keeps the
+    strings localised by another route still passes.
+    """
+    src = PET_JS.read_text(encoding="utf-8")
+    banned = ["'Meadow'", "'Pool'", "'Sky'", "'Off'",
+              "'Scene: '", "'Tofu \u2014 '", "'fast asleep'", "'feeling great'",
+              "'Hi there!'", "'Nothing logged yet today'"]
+    leaked = [s for s in banned if s in src]
+    assert not leaked, (
+        "user-visible English literals are back in tofu-pet.js — a zh user "
+        f"would read English on the pet: {leaked}"
+    )
+
+
+def test_every_pet_string_key_exists_in_the_dictionary():
+    """Each key the pet asks for must be DEFINED — t() renders the raw key name
+    otherwise, so a typo shows the user ``pet.scene.meadow`` verbatim."""
+    keys, source_keys = _pet_i18n_keys()
+    assert keys, "the boot-key scanner found no pet.* keys at all"
+    missing = sorted(k for k in keys if k not in source_keys)
+    assert not missing, f"pet keys referenced but never defined: {missing}"
+
+
+def test_pet_keys_are_bilingual():
+    """Both languages must be present. A zh-only entry renders Chinese in an
+    English UI (and trips the i18n.js missing-translation tripwire).
+
+    NOTE the line-scoped regex: an entry's VALUE legitimately contains braces
+    (``'今日完成 {done}/{total}'``), so a ``[^}]*`` body match truncates at the
+    first placeholder and reports perfectly good bilingual entries as missing
+    ``en``. That false positive was observed while writing this guard — the
+    instrument was wrong, not the dictionary.
+    """
+    keys, _ = _pet_i18n_keys()
+    dict_src = (REPO / "static" / "js" / "i18n.js").read_text(encoding="utf-8")
+    incomplete = []
+    for k in sorted(keys):
+        m = re.search(r"^\s*'" + re.escape(k) + r"':\s*(.+)$", dict_src, re.M)
+        if not m or "zh:" not in m.group(1) or "en:" not in m.group(1):
+            incomplete.append(k)
+    assert not incomplete, f"pet keys missing a zh or en translation: {incomplete}"
+
+
+def test_pet_keys_are_discoverable_by_the_boot_scanner():
+    """CHARTER #18: the boot pack is DERIVED by ``discover_boot_keys``, never
+    hand-copied — so a pet key it cannot see is a key the browser never gets,
+    and the pet renders raw key names on first paint.
+
+    This is a real measured failure, not a hypothetical: the day-report strings
+    were read through a local ``_k()`` wrapper, and because
+    ``T_CALL_KEY_RE`` only matches a literal string as ``t()``'s FIRST argument,
+    the scanner discovered **zero** ``pet.*`` keys while four sat in the dict.
+    Dynamic families must therefore be reached via ``t('prefix.' + x)`` so
+    ``T_CALL_DYNAMIC_PREFIX_RE`` can expand the whole namespace.
+    """
+    keys, _ = _pet_i18n_keys()
+    # The three dynamic families + the composed tooltip must all be reachable.
+    for expect in ("pet.scene.meadow", "pet.scene.off",
+                   "pet.greet.deepNight", "pet.feel.great",
+                   "pet.title", "pet.sceneTooltip",
+                   "pet.dayGreeting"):
+        assert expect in keys, (
+            f"{expect!r} is invisible to the boot-key scanner — it would be "
+            "absent from the boot pack and render as a raw key on first paint"
+        )
+
+
+def test_pet_never_aliases_t_behind_a_local_wrapper():
+    """STRUCTURAL: ban the specific shape that caused the blindness.
+
+    A helper like ``var _k = function (key, …) { … t(key) … }`` reads perfectly
+    well and is invisible to the scanner. Behaviour tests cannot see this
+    (``t()`` still works at runtime) — only a structural check can, and only
+    after comments are stripped so a comment *describing* the anti-pattern
+    does not trip it (charter #24).
+    """
+    import sys
+    sys.path.insert(0, str(REPO))
+    from tests._source_scan import strip_comments
+    code = strip_comments(PET_JS.read_text(encoding="utf-8"), lang="js")
+    # A wrapper assigns t (or a call to it) to a local name; the scanner only
+    # follows literal `t('...')`, so any such indirection hides keys.
+    aliases = re.findall(r"var\s+(_?\w+)\s*=\s*\(?\s*typeof\s+t\s*===?", code)
+    assert not aliases, (
+        "tofu-pet.js aliases t() behind a local name "
+        f"({aliases}) — keys reached through it are INVISIBLE to "
+        "lib/i18n_boot_keys and would be dropped from the boot pack"
+    )
+
+
+# ── NEUTER: each guard above must be shown to BITE, on a COPY, never on disk ──
 
 def test_NEUTER_offbrand_palette_is_caught():
     """Recolour a REAL frame off-brand (in memory) and drive the SHIPPED check.

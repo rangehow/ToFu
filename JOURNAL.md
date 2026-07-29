@@ -333,6 +333,18 @@
 - **端到端验收(真路由,不是 mock):** 1414 字提议 → 确认 **HTTP 200** → 落库 **1414 字完整** + summary 落库 → 提议**出待办队列** → `needsYou` 归零。
 - **验收边界(诚实分账):** 纯前后端改动,**运行中进程不带,需重启才对新会话生效**;本次未在真实浏览器里点过那颗按钮(jsdom 与真路由两段各自实测,中间的 `Api.project.commitCharter` 是 api.js 既有薄封装)。
 
+### 2026-07-29(续·Edge 商店入架) — owner 纠正优先级:**同包、零费用、个人账号可上的 Edge Add-ons 在套件里出现 0 次,而最贵的 Firefox 被写成退路**;顺带把「已跟踪文档指示运行一个被 gitignore 吞掉的脚本」这条死指令两道门都关上(自主派单 + owner 指令;commit `07f979d6`,10 文件 +502/-75;守卫 **23 passed**,**NEUTER×4 各咬各的方向**,干净 worktree **20 passed 零 skip** 且**真能跑出 zip**)
+
+- **★ owner 的判据(优先级是反的):** 目标后半句是「至少让 Edge、Firefox、Chrome 能直接装」,而实测三个浏览器**今天全都还是手动「加载已解压」**。唯一不要钱、今天就能走通的一键路是 **Edge Add-ons**:微软官方文档明写**无注册费**(Chrome $5)、**支持个人账号**(审核更短,只验 publisher 名可用)、且**接受同一份 MV3 包**。而 `docs/chrome-web-store/` 里 **Edge 出现 0 次**(唯一命中是 icon 的 "alpha-edge artifacts"),`REVIEW_RISKS.md` 的最坏情况阶梯却把退路写成 **Firefox AMO** —— 那是**最贵**的一条:需要真代码移植(没有 `chrome.debugger`,整页截图要重建为滚动拼接)**加**签名流水线(charter #20:Firefox 无持久 unpacked)。
+- **落点:** 新增 `EDGE_ADDONS.md`(Partner Center 路线 + 哪些原文复用 + Edge 独有差异:`Hidden` 对应 Chrome 的 Unlisted、**描述 250 字符下限**、logo 1:1 建议 300×300);阶梯重排为 **Chrome → Edge → Firefox**;README 重写为**双商店**套件;checklist 与 assets 带上差异。
+- **★ 但 Edge 不是免费通行证,这条我单独立了一条守卫:** 微软 MV3 原文 **"In Manifest V3, loading and executing remotely hosted code is not permitted."** —— 比 Chrome 的措辞**更绝对**,而我们 `browser_execute_js` 跑的正是服务器下发的 JS。所以 Edge **大概率同样需要 reduced build**。把 Edge 卖成「同包零成本、搞定」会让提交者**被同一个驳回打两次**,故加守卫:一旦这条 caveat 被删,测试报红。
+- **★ 死指令两道门(承接自开工单 `pt_d64220b406e841b2`):** `.gitignore:61` 的 `/scripts/*` 通配 + 仅 4 条 `!` 例外把 `package_extension.sh` 吞掉未跟踪,而**已跟踪的** checklist 却指示读者运行它。**关键实测:`docs/` 不被 opensource export 剥离** —— 也就是说公开树带着一份 checklist,而它唯一的构建命令**不在树里**。按 charter #14 两道门同时关:`!` 例外(git)+ `export._OPENSOURCE_KEEP_FILES`(export)。原先那 3 条「带理由 skip」的守卫**全部改为真断言**。
+- **★ 验收从反方向做,而不是查文件存在:** 干净 detached worktree 里**真跑** `bash scripts/package_extension.sh --store` → 产出 `tofu-browser-bridge-4.5.0-store.zip`(7 removed / 10 declared);同一套守卫在干净检出上 **20 passed、零 skip**(此前是 3 条 skip 或直接 `FileNotFoundError` 崩溃)。
+- **★ 我自己的守卫缺陷,被第 4 发 NEUTER 抓出:** 陈旧计数守卫只匹配**动词在前**的语序(「removes the 6 permissions」),于是它**一路绿着**,而套件 README 里「(6 unused permissions removed)」**数字在前**的那句安然存活。已改为两种语序都匹配。**判据:一条在它所指的缺陷仍在页面上时还能通过的守卫,比没有守卫更糟。**
+- **兄弟协作(peer ms5c1ydm 主动通报,含一个新实例):** ①它按 charter #15 用 `git reset HEAD -- <path>` 把我预暂存的脚本从**它的**提交里剔出,工作树未动;②它指出 `scripts/install_on_server.sh` **同型**——同样被通配吞掉,导致它的 `--only-shell` 修复(省 175MB,与 `install.sh:424/430` 既有决策一致)**根本进不了提交**。我独立复核该脚本无密钥/无内网/无绝对路径后一并纳入白名单;**它的修复随该文件被我这次提交带走了**,已通报勿重复提交。
+- **★ 共享 index 本轮被冲掉三次(教训已兑现为动作):** peer 的 reset 一次 + **两次兄弟提交恰好落在我的 `git add` 与 `git commit` 之间**,导致 pathspec 报 `did not match any file(s) known to git`(新文件在 index 里被清掉)。最终改为 **`git add && git commit` 单次 shell 调用原子完成**才成功。另:本轮**必须用显式 pathspec**而非惯常的 index-only 提交——因为共享 index 里躺着 6 个兄弟文件,不带 pathspec 会把它们卷进来;我逐 hunk 核对过这 10 个路径的每一处改动都是我的。
+- **验收边界:** 纯上架资产 + 文档 + 测试 + 仓库策略,**无任何运行时代码,不需要重启**。真正提交到商店需要 owner 的账号与身份,那一步不在代码侧;套件现在两条 Chromium 路都已备好。
+
 ### 2026-07-29(续·商店清单派生化) — 商店版少一个权限会让 `download` 命令**装上就炸**;而票里给的理由(「0 次调用」)对 `activeTab` **恰好是错的**——那个权限根本没有 API 面(自主派单;commit `f9aa375c`,5 文件 +468/-19;守卫 **9 条 failing-first → 15 passed/1 skipped**,**NEUTER×4 各咬各的方向**,相邻环 **32**,干净 committed worktree **13 passed/3 named-skip**,**真产物 zip 实测**)
 
 - **★ 根因是「两份手抄清单必须一致,而不一致只在商店审核之后才显形」。** `docs/chrome-web-store/manifest.store.json` 是 shipped manifest 的手工裁剪版,`package_extension.sh --store` 打包时换进去。实测漂移:`downloads` **缺失**,而 `background.js::cmdDownload` 真的调 `chrome.downloads.download`、`download` 又是扩展的 wire 命令之一 ⇒ **商店安装的用户一触发就抛错,静默且无从诊断**。

@@ -179,6 +179,7 @@ function replayPendingBusyState(conversations) {
       conv._authoritativeActiveTaskIds = new Set(_busyIdsFrom(parked.runningTaskIds));
       conv._authoritativeAttachableTaskIds =
         new Set(_attachableIdsFrom(parked.runningTaskIds));
+      conv._vuCarrierTaskIds = new Set(_vuCarrierIdsFrom(parked.runningTaskIds));
       conv._authoritativeActiveTaskIdsRev = parked.rev;
     }
   } catch (e) {
@@ -236,6 +237,37 @@ function _attachableIdsFrom(tids) {
   }
   return out;
 }
+/* VU-carrier set — ONLY the carriers, markers stripped.
+ *
+ * The third derived set, and the one that closes the cold-attach hole
+ * (owner-reported 2026-07-29, conv ms5j3qi7wd1g7u: a VU carrier ran 282.6s /
+ * 69 events while the UI showed a finished conversation stuck in Stop).
+ *
+ * WHY A CARRIER NEEDS ITS OWN SET RATHER THAN JOINING `attachable`.
+ * A carrier must never be handed to the PLAIN connectToTask path — that binds
+ * a real assistant placeholder to a stream emitting only the autopilot_vu_*
+ * contract, which renders the VU's frames as a ghost second "Agent" bubble.
+ * But it IS reachable: connectToTask(..., {vuCarrier:true}) routes to
+ * _connectAutopilotKick (detached dummy assistant, VU bubble born from the
+ * carrier's own seeded autopilot_vu_start). So the carrier is not
+ * "unattachable", it is "attachable by a DIFFERENT connector" — and a set that
+ * names it is what lets the cold path pick that connector.
+ *
+ * Before this, only the HOT hop could reach a carrier (the parent's terminal
+ * frame carries latestLiveTaskId + latestLiveTaskIsVu). Any client that was
+ * not attached at that instant — F5, click-away-and-back, another tab — had
+ * busy=true and attachable=∅, i.e. "generating" with nothing to attach to and
+ * no way to ever recover short of a manual refresh. */
+function _vuCarrierIdsFrom(tids) {
+  if (!Array.isArray(tids)) return [];
+  const out = [];
+  for (const t of tids) {
+    if (!_isVuMarked(t)) continue;
+    const s = _stripVuMarker(t);
+    if (s) out.push(s);
+  }
+  return out;
+}
 
 /* Consume a per-conv notify frame's server-authoritative half:
  *
@@ -262,6 +294,7 @@ function applyRunningTaskIdsFrame(conversations, frame) {
     if (!_revStrictlyGreater(nextRev, priorRev)) return;
     conv._authoritativeActiveTaskIds = new Set(_busyIdsFrom(raw));
     conv._authoritativeAttachableTaskIds = new Set(_attachableIdsFrom(raw));
+    conv._vuCarrierTaskIds = new Set(_vuCarrierIdsFrom(raw));
     conv._authoritativeActiveTaskIdsRev = nextRev;
   } catch (e) {
     if (typeof debugLog === 'function') {
@@ -319,6 +352,7 @@ function applyConvStateSnapshot(conversations, frame) {
          * rev to a fresh sentinel so no stale notify can un-clear it. */
         conv._authoritativeActiveTaskIds = new Set();
         conv._authoritativeAttachableTaskIds = new Set();
+        conv._vuCarrierTaskIds = new Set();
         /* Advance the rev to now-ish so a stale frame can't resurrect
          * the cleared state. Uses Date.now() * 1e6 as an ns proxy —
          * the server's monotonic_ns is process-relative, so on the
@@ -388,6 +422,32 @@ function pickAuthoritativeTaskIdForReconnect(conv) {
      * the SSE that carries all activity for the conv. */
     return set.values().next().value;
   }
+  return null;
+}
+
+/* Cold-attach carrier picker — the id of a live VU carrier for this conv, or
+ * null. THE COLD-PATH COMPLEMENT of pickAuthoritativeTaskIdForReconnect.
+ *
+ * Callers MUST route the returned id through
+ * ``connectToTask(convId, tid, 0, { vuCarrier: true })`` — never the plain
+ * path. The carrier's stream carries ONLY the autopilot_vu_* contract, so the
+ * plain path would bind a real assistant placeholder to it and render the VU's
+ * frames as a ghost second "Agent" bubble. That routing requirement is exactly
+ * why this is a SEPARATE picker rather than a fallback inside the plain one:
+ * the two answers demand two different connectors, so collapsing them would
+ * leave the call site unable to tell which kind of id it received.
+ *
+ * Consulted ONLY after the plain picker comes back empty — a conv with a real
+ * worker AND a carrier must attach to the worker.
+ *
+ * Safe against a carrier that is already finishing: connectToTask /
+ * _connectAutopilotKick re-guard on activeStreams, and a dead carrier settles
+ * through the same poll → 404 → finishStream self-heal any stale attach target
+ * takes. */
+function pickVuCarrierForAttach(conv) {
+  if (!conv) return null;
+  const set = conv._vuCarrierTaskIds;
+  if (set && set.size > 0) return set.values().next().value;
   return null;
 }
 
@@ -524,6 +584,7 @@ if (typeof window !== 'undefined') {
   window.resetPendingBusyStateForTests = resetPendingBusyStateForTests;
   window.computeConvBusy = computeConvBusy;
   window.pickAuthoritativeTaskIdForReconnect = pickAuthoritativeTaskIdForReconnect;
+  window.pickVuCarrierForAttach = pickVuCarrierForAttach;
   window.buildSyncDigest = buildSyncDigest;
   window.reportSyncDigest = reportSyncDigest;
   window.startSyncDriftProbe = startSyncDriftProbe;

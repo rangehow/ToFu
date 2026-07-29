@@ -203,20 +203,30 @@ def test_no_reconnect_without_active_task_id():
 
 @pytest.mark.skipif(not _node_available(), reason="node not installed")
 def test_neuter_strip_connect_regresses():
-    """NEUTER: strip the connectToTask call from the fn body → the running task
-    is never reconnected → the frozen-placeholder bug returns (no arm)."""
+    """NEUTER: strip the connectToTask call(s) from the fn body → the running
+    task is never reconnected → the frozen-placeholder bug returns (no arm).
+
+    The seam now attaches on EITHER of two branches: the plain worker attach
+    (``connectToTask(id, targetTid)``) and the VU-carrier fallback
+    (``connectToTask(id, _vuCarrierTid, 0, {vuCarrier:true})``). Neutering only
+    the plain one would leave the carrier branch calling connectToTask — and a
+    neuter that left ANY attach firing would not prove the reconnect is
+    load-bearing, so we strip BOTH and then assert neither fired."""
     src = _fn()
-    # Anchor on the connectToTask CALL, not its argument expression — the
-    # gate now picks a target tid via pickAuthoritativeTaskIdForReconnect,
-    # so `conv.activeTaskId` is no longer the literal call argument.
-    m = re.search(r"connectToTask\(id, [^)]+\);", src)
-    assert m, "connectToTask call not found in _reconnectServerTaskIfIdle"
-    neutered = src.replace(m.group(0),
-                           "/* connectToTask neutered */ void 0;", 1)
+    # Anchor on the connectToTask CALLS, not their argument expressions — the
+    # plain call resolves its tid via pickAuthoritativeTaskIdForReconnect and
+    # the carrier call passes a 3-arg (opts) form, so neither is a fixed
+    # 2-arg literal. Match any connectToTask(...) invocation regardless of
+    # arg count, but never the delegated definition elsewhere.
+    neutered, n = re.subn(r"connectToTask\(id, [^;]*\);",
+                          "/* connectToTask neutered */ void 0;", src)
+    assert n >= 1, f"no connectToTask call found in _reconnectServerTaskIfIdle"
     assert neutered != src, "neuter pattern did not match connectToTask call"
     r = _run(neutered, _running_conv(), "c1", behaviour="running")
-    assert r["calls"]["connectToTask"] == [], "neutered fn should not call connectToTask"
-    assert r["calls"]["twStart"] == [], f"neutered fn should not arm a stream: {r}"
+    assert r["calls"]["connectToTask"] == [], \
+        f"neutered fn should not call connectToTask ({n} sites stripped)"
+    assert r["calls"]["twStart"] == [], \
+        f"neutered fn should not arm a stream: {r}"
 
 
 def test_source_wires_reconnect_in_both_open_branches():

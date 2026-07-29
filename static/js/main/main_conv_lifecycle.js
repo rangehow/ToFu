@@ -119,8 +119,51 @@ function _reconnectServerTaskIfIdle(id) {
   const targetTid = (typeof pickAuthoritativeTaskIdForReconnect === 'function')
     ? pickAuthoritativeTaskIdForReconnect(conv)
     : (conv.activeTaskId || null);
-  if (!targetTid) return false;
   if (typeof connectToTask !== 'function') return false;
+  /* ★ VU-carrier fallback — the cold-attach half of the autopilot hop
+   *   (owner-reported 2026-07-29, conv ms5j3qi7wd1g7u).
+   *
+   *   A live autopilot VU carrier lights the busy dot (it IS the fact that
+   *   means "this conversation is working") but is deliberately absent from
+   *   the ATTACHABLE set, so `targetTid` above is null whenever the carrier is
+   *   the only live worker. Until now that ended the story: this seam returned
+   *   false, nothing attached, and the conversation static-rendered as
+   *   FINISHED while the composer showed Stop — measured at 282.6s / 69 events
+   *   / 4 tool-using LLM rounds of completely invisible generation. Worse, the
+   *   whole autopilot chain (VU → follow-up → next VU) is discovered by hopping
+   *   from one live terminal frame to the next, so a client that missed the one
+   *   hop frame stayed blind until a manual refresh.
+   *
+   *   The carrier is not unattachable — it is attachable by a DIFFERENT
+   *   connector. `{vuCarrier:true}` routes to _connectAutopilotKick, which
+   *   binds a DETACHED dummy assistant (never a real placeholder) and lets the
+   *   VU bubble be born from the carrier's own seeded `autopilot_vu_start`;
+   *   the SSE replay from cursor 0 then re-delivers the VU's accumulated
+   *   frames, so a cold attach mid-turn paints the same bubble the hot hop
+   *   would have. This is the SAME connector + same discipline the hot hop
+   *   uses (stream_lifecycle.js `_runTerminalContinuation`) — deliberately not
+   *   a second mechanism.
+   *
+   *   Order matters: consulted ONLY when no attachable worker exists, so a
+   *   conv with a real running task never gets routed through the VU
+   *   connector (that would suppress its real assistant bubble). */
+  const _vuCarrierTid = (!targetTid &&
+                         typeof pickVuCarrierForAttach === 'function')
+    ? pickVuCarrierForAttach(conv)
+    : null;
+  if (!targetTid && _vuCarrierTid) {
+    console.info(
+      `[loadConversation] 🤖 Reconnect-on-open (VU carrier) — conv=${id.slice(0,8)} ` +
+      `carrier=${_vuCarrierTid.slice(0,8)} (autopilot is generating; attaching ` +
+      `via the VU connector so the turn is visible instead of silently running)`
+    );
+    connectToTask(id, _vuCarrierTid, 0, { vuCarrier: true });
+    if (activeStreams.has(id) && typeof showStreamingUIForConv === 'function') {
+      showStreamingUIForConv(id);
+    }
+    return true;
+  }
+  if (!targetTid) return false;
   console.info(
     `[loadConversation] 🔗 Reconnect-on-open — conv=${id.slice(0,8)} ` +
     `taskId=${targetTid.slice(0,8)} (no live stream in this tab, ` +

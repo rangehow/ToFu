@@ -385,6 +385,7 @@ interface Window {
   openSystemPromptEditor: any;
   pendingBusyStateSize: any;
   pickAuthoritativeTaskIdForReconnect: any;
+  pickVuCarrierForAttach: any;
   pollWriteWouldClobberSettledTail: any;
   prefersReducedMotion: any;
   presenceRefresh: any;

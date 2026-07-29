@@ -64,23 +64,41 @@ def is_carrier_task(task: dict) -> bool:
     """True if ``task`` is a non-streaming CARRIER/HOLDER, not user-visible work.
 
     Some flows use ``create_task`` purely as a message container that runs a
-    synchronous sub-turn and NEVER streams a ``done`` event of its own:
+    synchronous sub-turn and is never a plain reconnect target:
 
       * the autopilot virtual-user (VU) sub-task (``_vu_subtask``), and
       * inline reporter / summarize holders (``_inline_messages``).
 
-    These are ``status='running'`` while they execute but are invisible to the
-    frontend by design: ``GET /api/chat/active`` hides them (reconnecting an SSE
-    that never completes would birth a stuck "Waiting…" bubble), the sidebar
-    never lights a dot for them (no ``activeTaskId`` / SSE), and they are
-    discarded from the registry the moment their synchronous run returns.
+    These are ``status='running'`` while they execute. ``GET /api/chat/active``
+    hides them and they are discarded from the registry the moment their
+    synchronous run returns.
 
-    This predicate is the SINGLE SOURCE OF TRUTH for "carrier, not real running
-    work". BOTH the reconnect endpoint (``routes/chat.py`` ``/api/chat/active``)
-    AND the self-update restart guard (``list_running_tasks``) consult it, so
-    the two can never again disagree about whether a carrier counts as a
-    running conversation — the exact divergence that made the restart dialog
-    report "N conversations running" while the sidebar showed none.
+    ⚠️ CAREFUL WITH THE REASON — it is narrower than it looks. The historical
+    justification was "a carrier never streams a ``done`` of its own, so
+    reconnecting would birth a stuck 'Waiting…' bubble". For the VU carrier that
+    is NO LONGER TRUE: ``lib.chat_dispatch._live_tick`` emits
+    ``build_carrier_terminal_done(task)`` for ``_vu_subtask`` and closes the
+    stream (observed live: conv ms5j3qi7wd1g7u task da0717c8, "emitting carrier
+    done (VU sub-task terminal)"). The real constraint is narrower: a VU
+    carrier's stream carries ONLY the ``autopilot_vu_*`` contract, so binding a
+    real assistant placeholder to it renders the VU's frames as a ghost second
+    "Agent" bubble. It must not be a PLAIN reconnect target — but it IS
+    reachable through the VU connector.
+
+    So a live VU carrier is deliberately visible-as-busy and reachable:
+    ``snapshot_running_by_conv`` surfaces it as ``<tid>#vu``, and the client
+    resolves it via ``pickVuCarrierForAttach`` → ``connectToTask(...,
+    {vuCarrier: true})`` → ``_connectAutopilotKick`` (detached dummy assistant).
+    Treating "carrier" as "must stay invisible" is what left cold attach with no
+    route at all and produced 282.6s of generation the UI reported as finished.
+
+    This predicate is the SINGLE SOURCE OF TRUTH for "carrier, not a plain
+    reconnect target". BOTH the reconnect endpoint (``routes/chat.py``
+    ``/api/chat/active``) AND the self-update restart guard
+    (``list_running_tasks``) consult it, so the two can never again disagree
+    about whether a carrier counts as a running conversation — the exact
+    divergence that made the restart dialog report "N conversations running"
+    while the sidebar showed none.
 
     The autopilot-KICK carrier (``_autopilot_kick``) is deliberately NOT a
     carrier here: it is a real UI-streaming task and must stay reconnectable.

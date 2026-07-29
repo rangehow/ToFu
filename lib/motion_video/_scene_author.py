@@ -411,14 +411,23 @@ def _full_gate(html: str, scene_dir: str, *, abort_event=None,
     the HTML in hand, so it is not swallowed by an ``env_missing`` outcome — a
     corrupted headline is corrupted with or without a toolchain.
 
-    ``advisory=True`` additionally reports **vertical fill**. This is the
-    author's FEEDBACK channel, not the accept/reject verdict, and the
-    distinction is load-bearing: the zero-LLM template itself measures 58%
-    span / 38% bottom dead-band, so treating under-fill as a rejection would
-    degrade a 58%-filled authored scene into a template that scores no
-    better — strictly worse output, plus a wasted agent loop. Under-fill is a
-    "make this better" signal; only a broken contract or a real renderer
-    error is a "do not ship this" signal.
+    ``advisory=True`` additionally reports **vertical fill** and the **asset
+    floor**. This is the author's FEEDBACK channel, not the accept/reject
+    verdict, and the distinction is load-bearing: the zero-LLM template itself
+    measures 58% span / 38% bottom dead-band and ships ZERO graphics, so
+    treating either as a rejection would degrade the scene into a card that
+    scores WORSE on the very same axis — strictly worse output, plus a wasted
+    agent loop. Both are "make this better" signals; only a broken contract or
+    a real renderer error is a "do not ship this" signal.
+
+    **Why the floor lives HERE and not only in the engine** (measured
+    2026-07-29): it was first written as an engine-side check, so the moment a
+    new author path appeared — the zero-spend draft adoption — that path
+    bypassed it silently and adopted a graphics-less draft for 0 tokens. A gate
+    that must be re-attached by every future caller WILL be forgotten. Putting
+    it in the author's single gate function means every author path
+    (write_composition, composition_check, the adoption pre-check, the final
+    verdict) inherits it by construction.
     """
     from lib.motion_video._gates import check_composition_html, check_text_fidelity
 
@@ -472,6 +481,16 @@ def _full_gate(html: str, scene_dir: str, *, abort_event=None,
             fill = list(check_composition_fill(html))
         except Exception as e:
             logger.warning('[SceneAuthor] fill gate crashed: %s', e,
+                           exc_info=True)
+        # The asset floor rides the SAME advisory channel, and it lives here
+        # rather than in the engine so that EVERY author path inherits it (see
+        # the docstring: an engine-only floor was bypassed by draft adoption).
+        try:
+            from lib.motion_video._quality import asset_floor_findings
+            fill += list(asset_floor_findings(scene or {}, html, scene_dir,
+                                              mode='authored'))
+        except Exception as e:
+            logger.warning('[SceneAuthor] asset floor crashed: %s', e,
                            exc_info=True)
     try:
         from lib.motion_video._render import check_project, is_infra_category
@@ -637,9 +656,16 @@ def author_scene(scene: dict, scene_dir: str, *, width: int, height: int,
         # while index.html carried a 2-node gradient card). If the draft passes
         # NOW, adopting it costs nothing; re-entering the loop would spend a
         # full agent round to re-derive a composition we are already holding.
+        #
+        # advisory=True is REQUIRED here, not a nicety: the plain verdict omits
+        # the asset floor, so the first version of this rescue adopted a
+        # graphics-less draft for 0 tokens and shipped a text-only frame the
+        # floor had just been written to reject. Adoption is the one place a
+        # composition reaches the film WITHOUT the author ever seeing feedback,
+        # so it must clear the STRICTER bar, not the looser one.
         try:
             pending = _full_gate(resumed, scene_dir, abort_event=abort_event,
-                                 scene=scene)
+                                 scene=scene, advisory=True)
         except Exception as e:
             logger.warning('[SceneAuthor] %s draft pre-check crashed: %s',
                            scene.get('id'), e, exc_info=True)
@@ -651,6 +677,9 @@ def author_scene(scene: dict, scene_dir: str, *, width: int, height: int,
                         scene.get('id'))
             return {'ok': True, 'mode': 'authored', 'html': resumed,
                     'rounds': 0, 'tokens': 0, 'detail': 'adopted draft'}
+        logger.info('[SceneAuthor] %s draft NOT adopted (%d finding(s), e.g. '
+                    '%.120s) — entering the repair loop with it as the seed',
+                    scene.get('id'), len(pending), pending[0])
 
     attempts = max(1, int(transient_attempts))
     total_tokens = 0

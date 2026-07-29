@@ -277,6 +277,102 @@ def test_gate_passing_draft_is_adopted_without_spending_a_round(monkeypatch,
         'an adopted draft must be cleared'
 
 
+def test_adoption_asks_for_the_advisory_verdict_not_the_plain_one():
+    """Adoption must clear the STRICTER bar.
+
+    Measured 2026-07-29: the first rescue used the plain verdict, which omits
+    the asset floor — so it adopted a graphics-less draft for 0 tokens and
+    shipped a text-only frame the floor had just been written to reject.
+    Adoption is the one place a composition reaches the film WITHOUT the
+    author ever seeing feedback, so the looser bar is the wrong one.
+    """
+    import inspect
+
+    from tests._source_scan import strip_comments
+    from lib.motion_video import _scene_author
+
+    src = inspect.getsource(_scene_author.author_scene)
+    doc = inspect.getdoc(_scene_author.author_scene) or ''
+    if doc:
+        src = src.replace(doc, '')
+    live = strip_comments(src, lang='python')
+    idx = live.find('_full_gate(resumed')
+    assert idx != -1, 'the adoption pre-check call was not found'
+    window = live[idx:idx + 220]
+    assert 'advisory=True' in window, (
+        'the adoption pre-check must run the ADVISORY gate — the plain '
+        'verdict omits the asset floor, which is how a graphics-less draft '
+        'got adopted for 0 tokens')
+
+
+def test_graphics_less_draft_is_not_adopted_and_seeds_the_repair(monkeypatch,
+                                                                 tmp_path):
+    """Behavioural complement: a bare draft must reach the repair loop.
+
+    This drives the REAL gate (only the browser/CLI layers are stubbed), so a
+    refactor that keeps `advisory=True` but stops feeding the floor into it
+    still fails here.
+    """
+    from lib.motion_video import _render, _scene_author
+
+    bare = _GOOD_DRAFT.replace('<svg><rect width="10" height="10"/></svg>', '')
+    assert '<svg' not in bare
+    _scene_author.save_draft(str(tmp_path), bare)
+
+    # Neutralise the infrastructure-dependent layers; the floor is pure Python.
+    monkeypatch.setattr(_render, 'check_project',
+                        lambda *a, **k: {'ok': True, 'category': '',
+                                         'errors': [], 'fix_hints': []})
+    monkeypatch.setattr(
+        'lib.motion_video._fill.check_composition_fill', lambda *a, **k: [])
+
+    seen = {}
+
+    def _fake_once(scene, scene_dir, **kw):
+        seen['seed'] = kw.get('seed_html')
+        return {'outcome': 'quality', 'html': '', 'rounds': 1, 'tokens': 7,
+                'detail': 'stub'}
+
+    monkeypatch.setattr(_scene_author, '_author_once', _fake_once)
+    res = _scene_author.author_scene(
+        {'id': 'scene-001', 'text': 'x'}, str(tmp_path), width=1080,
+        height=1440, duration=10.238, scene_index=1, total_scenes=6)
+
+    assert seen.get('seed') == bare, (
+        'a graphics-less draft must NOT be adopted — it must seed the repair '
+        'loop so the author gets a chance to add the imagery')
+    assert res['mode'] == 'template'
+
+
+def test_advisory_gate_carries_the_asset_floor(monkeypatch, tmp_path):
+    """The floor must live in the author's own gate, not only in the engine.
+
+    An engine-only floor is a gate every future author path has to remember to
+    re-attach — and the very next path (draft adoption) forgot it.
+    """
+    from lib.motion_video import _render, _scene_author
+
+    bare = _GOOD_DRAFT.replace('<svg><rect width="10" height="10"/></svg>', '')
+    monkeypatch.setattr(_render, 'check_project',
+                        lambda *a, **k: {'ok': True, 'category': '',
+                                         'errors': [], 'fix_hints': []})
+    monkeypatch.setattr(
+        'lib.motion_video._fill.check_composition_fill', lambda *a, **k: [])
+
+    advisory = _scene_author._full_gate(bare, str(tmp_path),
+                                        scene={'id': 'scene-001'},
+                                        advisory=True)
+    assert any('no real graphic' in f.lower() for f in advisory), (
+        'advisory=True must report the asset floor')
+
+    plain = _scene_author._full_gate(bare, str(tmp_path),
+                                     scene={'id': 'scene-001'})
+    assert not any('no real graphic' in f.lower() for f in plain), (
+        'the ACCEPT/REJECT verdict must NOT reject on the floor — that would '
+        'degrade the scene to a template with zero graphics, making the very '
+        'metric worse')
+
+
 def test_failing_draft_still_enters_the_loop_as_a_seed(monkeypatch, tmp_path):
     """Adoption is for drafts that PASS. A failing one is still repair fodder."""
     from lib.motion_video import _scene_author

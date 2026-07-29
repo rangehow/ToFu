@@ -812,12 +812,16 @@ def _quality_verdict(*, degraded_narration: bool, scene_gate_issues: dict,
     * **wholesale fallback** — ONE scene degrading to the template is the
       designed local degrade, but when authoring was requested and EVERY scene
       fell back, the user received the plain card deck that prompted this work.
-    * **an image-less film** — every authored scene shipped without a single
-      real graphic. Measured 2026-07-29: with imagery merely PERMITTED by the
-      prompt and required by nothing, the water-line was one background image
-      per scene and some scenes with none. "Materials are scarce" is a product
-      defect that no existing signal reported, because a text-only card is
-      perfectly well-formed.
+    * **an image-less authored scene** — ANY authored scene that shipped
+      without a single real graphic. Measured 2026-07-29: with imagery merely
+      PERMITTED by the prompt and required by nothing, the water-line was one
+      background image per scene and some scenes with none. This is judged
+      PER SCENE, not per film: the first version only fired when EVERY authored
+      scene was bare, so a film with one text-only frame among five rich ones
+      passed silently — which is precisely the "materials are scarce" defect
+      a viewer notices. A text-only beat is still allowed, but it has to be
+      DECLARED (``text_only_reason`` / the reserved ``sources`` marker) rather
+      than left as an accident.
 
     A pure function rather than an inline block so it can be driven with real
     inputs: while it lived inside ``run_motion_task`` the only way to check it
@@ -843,26 +847,23 @@ def _quality_verdict(*, degraded_narration: bool, scene_gate_issues: dict,
             f'boutique quality was requested but all {total} scene(s) fell '
             f'back to the plain template card — the film shipped, but not '
             f'at the quality asked for')
-    # The asset floor at FILM level. Judged only over authored scenes that are
-    # not declared text-only: a film of template fallbacks is already reported
-    # above, and repeating it here would bury the distinct signal that the
-    # authored scenes themselves carry no imagery.
-    bare = 0
-    eligible = 0
-    for rec in scene_records or []:
-        if rec.get('mode') != 'authored' or rec.get('text_only_exempt'):
-            continue
-        eligible += 1
-        if int(rec.get('graphics') or 0) == 0:
-            bare += 1
-    if eligible and bare == eligible:
+    # The asset floor at FILM level, judged PER SCENE. Only authored scenes
+    # that are not declared text-only are eligible: a template fallback is
+    # already reported above, and repeating it here would bury the distinct
+    # signal that the authored scenes themselves carry no imagery.
+    bare = [rec.get('scene_id') or '?' for rec in (scene_records or [])
+            if rec.get('mode') == 'authored'
+            and not rec.get('text_only_exempt')
+            and int(rec.get('graphics') or 0) == 0]
+    if bare:
         reasons.append(
-            f'all {eligible} authored scene(s) shipped with NO real graphic '
-            f'(no image/video asset, no inline SVG) — the film is a text-only '
-            f'card deck; imagery is available and was not used')
+            f'{len(bare)} authored scene(s) shipped with NO real graphic — no '
+            f'image/video asset and no inline SVG that draws anything '
+            f'({", ".join(sorted(bare))}). Imagery is available and was not '
+            f'used; a text-only beat must declare a text_only_reason')
     return {
         'degraded': bool(degraded_narration or scene_gate_issues
-                         or all_fell_back or (eligible and bare == eligible)),
+                         or all_fell_back or bare),
         'reason': ' | '.join(reasons),
     }
 

@@ -248,6 +248,32 @@ def test_verdict_flags_an_all_text_film():
     assert 'no real graphic' in v['reason'].lower()
 
 
+def test_verdict_flags_a_SINGLE_bare_scene_among_rich_ones():
+    """PER SCENE, not per film.
+
+    Measured 2026-07-29: the first version only fired when EVERY authored
+    scene was bare, so a rescue film with one text-only frame among five rich
+    ones reported clean on this axis while a viewer sees exactly the
+    "materials are scarce" defect. One bare authored scene is a defect.
+    """
+    from lib.motion_video.engine import _quality_verdict
+
+    records = [{'scene_id': 'scene-001', 'mode': 'authored', 'graphics': 0},
+               {'scene_id': 'scene-002', 'mode': 'authored', 'graphics': 4},
+               {'scene_id': 'scene-003', 'mode': 'authored', 'graphics': 4},
+               {'scene_id': 'scene-004', 'mode': 'authored', 'graphics': 1},
+               {'scene_id': 'scene-005', 'mode': 'authored', 'graphics': 1},
+               {'scene_id': 'scene-006', 'mode': 'authored', 'graphics': 2}]
+    v = _quality_verdict(degraded_narration=False, scene_gate_issues={},
+                         authoring=True, authored=6, total=6,
+                         scene_records=records)
+    assert v['degraded'] is True, (
+        'one bare authored scene among five rich ones is still a defect')
+    assert 'scene-001' in v['reason'], (
+        'the verdict must NAME the bare scene so it is actionable')
+    assert 'scene-002' not in v['reason'], 'must not blame the rich scenes'
+
+
 def test_verdict_clean_when_scenes_carry_imagery():
     from lib.motion_video.engine import _quality_verdict
 

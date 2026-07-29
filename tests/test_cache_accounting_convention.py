@@ -545,6 +545,141 @@ def test_the_production_billing_call_site_resolves_the_split_at_the_seam():
             'at the seam that owns it')
 
 
+# ── Defect 5b: the TELEMETRY axis of the very same double-count ─────────
+#
+# ★ WHY THIS SECTION EXISTS (owner-found coverage gap, 2026-07-29):
+#   `split_input_tokens` is not only the cost engine's helper — it is also the
+#   `total_input` source for BOTH cache-telemetry sites:
+#       lib/tasks_pkg/cache_tracking/_roi.py:251     (per-round hit=N% line)
+#       lib/tasks_pkg/cache_tracking/_detect.py:1005 (session total_input_tokens)
+#   So the hybrid-payload defect fixed above was ALSO halving every reported
+#   cache hit rate on this gateway. Measured on the live fleet BEFORE the fix:
+#       ms5i5ydigs9j9w session : 22.1% reported vs 43.6% true
+#       fleet, 3,181 hybrid rounds: 35.5% reported vs 70.4% true
+#   Per-round it is starker: a round reading 121,817 of 123,615 tokens back
+#   from cache reported `hit=49%` when the truth is `hit=98%`.
+#
+#   The defect-2 guards above (`test_hit_pct_reports_the_true_read_ratio` and
+#   siblings) drive `log_round_cache_stats` with `_openai_wire` / `_anthropic_wire`
+#   ONLY — neither can express the hybrid shape, so the telemetry axis had ZERO
+#   coverage for it. Cost had a guard, telemetry did not: change the meaning of
+#   `total_input` and the cost guards would go red while these stayed green.
+#
+#   This mirrors the file's own defect-2 story (the "physically impossible
+#   hit=50% cluster"): the same double-count survived by moving to another
+#   carrier. Do NOT delete these in favour of the cost guards — they pin a
+#   DIFFERENT consumer of the same helper.
+
+# Real R3 of ms5i5ydigs9j9w: read 121,817 of a 123,615-token prompt.
+# Pre-fix this logged hit=49%; the truth is 98%.
+_R3_UNCACHED = 2
+_R3_READ = 121817
+_R3_WRITE = 1796
+
+
+def test_hybrid_wire_hit_pct_is_not_halved(roi_log):
+    """A ~99% cache hit on the HYBRID wire must not be reported as ~49%.
+
+    The denominator must be the prompt the provider actually processed
+    (== prompt_tokens), NOT `prompt_tokens + cache_read + cache_write`, which
+    counts the cached tokens a second time on this wire.
+
+    121,817 / 123,615 = 98.5% -> rounds to 99. Pre-fix the same round logged
+    49%. The assertion is a BAND rather than the exact integer so a rounding
+    tweak cannot make it lie, while the halved value (49) is still excluded by
+    a wide margin.
+    """
+    from lib.tasks_pkg.cache_tracking._roi import log_round_cache_stats
+    u = _hybrid_gateway_wire(_R3_UNCACHED, _R3_READ, _R3_WRITE)
+    log_round_cache_stats('convhybrid1', 2, u, model='claude-opus-5', tid='t1234567')
+    assert roi_log.lines, 'no CacheStats line emitted for a hybrid-wire round'
+    line = roi_log.lines[-1]
+    pct = int(line.split('hit=')[1].split('%')[0])
+    assert pct >= 95, (
+        'expected ~99%% on a 121817/123615 round, got %d%% — a value near 49%% '
+        'means the cached tokens were counted twice: %s' % (pct, line))
+    # ...and the logged prompt size must be the gateway's own total.
+    assert 'input=%d' % u['prompt_tokens'] in line, (
+        'logged input size must equal prompt_tokens (%d); got: %s'
+        % (u['prompt_tokens'], line))
+
+
+def test_hybrid_wire_hit_pct_can_never_exceed_100(roi_log):
+    """Complement: a FULL hit must read 100%, not something impossible.
+
+    Guards the opposite failure direction — an under-counted denominator
+    (e.g. using only the uncached residual) would print hit>100%, which is the
+    `hit=15000%` shape this file already records for the inverse hybrid.
+    """
+    from lib.tasks_pkg.cache_tracking._roi import log_round_cache_stats
+    u = _hybrid_gateway_wire(0, 200000, 0)
+    log_round_cache_stats('convhybrid2', 0, u, model='claude-opus-5', tid='t1234567')
+    line = roi_log.lines[-1]
+    pct = int(line.split('hit=')[1].split('%')[0])
+    assert pct == 100, 'a fully-cached hybrid round must read hit=100%%; got %d%%' % pct
+
+
+def test_session_total_input_is_not_double_counted_on_the_hybrid_wire():
+    """`_detect.py`'s session accumulator must use the same corrected total.
+
+    The session-level `overall_hit_pct` divides by `state.total_input_tokens`.
+    Accumulating `prompt_tokens + cache_read + cache_write` there inflates the
+    denominator by exactly the cached tokens and halves the session rate — the
+    fleet-wide 35.5%-vs-70.4% gap measured before the fix.
+    """
+    from lib.cost import split_input_tokens as sit
+    rounds = [
+        _hybrid_gateway_wire(_R3_UNCACHED, _R3_READ, _R3_WRITE),
+        _hybrid_gateway_wire(2, 123613, 3245),
+        _hybrid_gateway_wire(162854, 2420002, 2967806),
+    ]
+    accumulated = sum(sit(u)[1] for u in rounds)
+    gateway_truth = sum(u['prompt_tokens'] for u in rounds)
+    assert accumulated == gateway_truth, (
+        'session total_input %d != the gateway-reported total %d — the cache '
+        'was counted twice into the hit-rate denominator'
+        % (accumulated, gateway_truth))
+    # The discriminating check is RELATIVE, not an absolute threshold: the
+    # session's true rate depends on the rounds chosen, but the double-counted
+    # denominator always inflates by exactly (cache_read + cache_write), so the
+    # reported rate is always materially lower. An absolute floor here would be
+    # a magic number that says nothing about the defect.
+    reads = sum(u['cache_read_input_tokens'] for u in rounds)
+    writes = sum(u['cache_creation_input_tokens'] for u in rounds)
+    hit_true = reads / accumulated * 100
+    hit_double = reads / (accumulated + reads + writes) * 100
+    assert hit_true > hit_double * 1.5, (
+        'corrected session hit %.1f%% is not materially above the '
+        'double-counted %.1f%% — the inflated denominator is back'
+        % (hit_true, hit_double))
+
+
+def test_both_telemetry_sites_resolve_the_prompt_size_through_the_shared_helper():
+    """WIRING: neither telemetry site may re-derive the total on its own.
+
+    Asserted on the AST so a comment mentioning `split_input_tokens` cannot
+    satisfy it. If a site ever goes back to computing
+    `prompt_tokens + cache_read + cache_write` inline, the cost guards stay
+    green while every logged hit rate silently halves again — which is exactly
+    how this defect survived its first fix.
+    """
+    import ast
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    for rel in ('lib/tasks_pkg/cache_tracking/_roi.py',
+                'lib/tasks_pkg/cache_tracking/_detect.py'):
+        tree = ast.parse((root / rel).read_text())
+        called = {
+            n.func.id for n in ast.walk(tree)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+        }
+        assert 'split_input_tokens' in called or '_split_input_tokens' in called, (
+            '%s no longer calls split_input_tokens — it is deriving the '
+            'prompt size itself, so the telemetry and the price can disagree '
+            'about how big the prompt was' % rel)
+
+
 # ── Complements: the two PURE wires must be byte-identical to before ────
 
 def test_pure_openai_wire_is_untouched_by_the_hybrid_fix():

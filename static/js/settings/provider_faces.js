@@ -79,9 +79,26 @@ async function _refreshFaceResolutions(provIdx) {
   var payload = {
     id: p.id, base_url: p.base_url || '', protocol: p.protocol || '',
     faces: p.faces || {},
+    /* The dispatcher skips a whole card before it ever resolves a face
+     * (provider disabled, or no usable key), and skips individual entries
+     * whose own toggle is off. The endpoint mirrors those filters, so the
+     * fields they read MUST travel — otherwise the skip branch is
+     * unreachable from the real UI and a model the user merely switched
+     * OFF gets blamed on a missing wire face.
+     *
+     * Credentials stay home: `api_key_count` is the smallest honest fact
+     * that answers "does this card have a usable key", and `brand` is
+     * needed because a keyless brand=='local' card still builds slots
+     * (one blank-key slot — dispatcher.py L401). */
+    enabled: p.enabled !== false,
+    brand: p.brand || '',
+    api_key_count: (p.api_keys || []).filter(function(k) {
+      return k && String(k).trim();
+    }).length,
     models: (p.models || []).map(function(m) {
       return {
         model_id: m.model_id, face: m.face || '',
+        enabled: m.enabled !== false,
         request_ids: m.request_ids || [], aliases: m.aliases || [],
       };
     }),
@@ -163,6 +180,13 @@ function _faceChipHTML(provIdx, m) {
   if (!r) return '';
   var names = _faceNamesFor(provIdx);
   var hasAlternates = names.length > 1;
+
+  /* The dispatcher never resolved this entry — it was filtered out before
+   * the resolver ran (card disabled / no usable key / model toggled off).
+   * It therefore has NO wire face, and any pill here would assert routing
+   * for something that is not routed. Silence is the accurate answer; the
+   * card's own disabled styling already tells the user why. */
+  if (r.skipped) return '';
 
   if (!r.ok) {
     return '<span class="stg-face-chip refused" title="' +

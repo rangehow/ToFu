@@ -725,6 +725,37 @@ def resolve_provider_faces():
     known = dual_face_hosts()
     faces = provider_faces(provider)
 
+    # ── The dispatcher's PRE-RESOLVE filters, mirrored ──
+    # ``_build_slots_from_providers`` skips these BEFORE it calls
+    # resolve_face, so a skipped entry can never appear in ``face_refusals``.
+    # Reporting a refusal for one would paint an amber "missing wire face"
+    # banner on a model the user simply switched off — an alarm naming the
+    # wrong cause. Charter #26: a new consumer of a filtered surface MUST
+    # inventory that filter.
+    #
+    # The card-level reason is computed once; ``effective_keys`` mirrors
+    # dispatcher.py L401 exactly — a brand=='local' provider with NO keys
+    # still builds (one blank-key slot), so keying this on ``api_keys``
+    # alone would wrongly blank the pills on every self-hosted deployment.
+    card_skip = ''
+    if provider.get('enabled', True) is False:
+        card_skip = 'provider_disabled'
+    else:
+        # The UI posts a COUNT, never the key strings (this endpoint promises
+        # credentials never travel to it). A saved provider dict passed
+        # straight in still has `api_keys`, so accept either shape.
+        if 'api_key_count' in provider:
+            n_keys = provider.get('api_key_count') or 0
+        else:
+            n_keys = len([k for k in (provider.get('api_keys') or [])
+                          if isinstance(k, str) and k.strip()])
+        # Mirrors dispatcher.py L401: a brand=='local' card with no keys is
+        # given ONE blank-key slot and does build, so `no_keys` must not fire
+        # for it. Keying this on key-count alone would blank the pills on
+        # every self-hosted deployment.
+        if not n_keys and provider.get('brand') != 'local':
+            card_skip = 'no_keys'
+
     resolutions = []
     for m in models:
         if not isinstance(m, dict):
@@ -732,6 +763,21 @@ def resolve_provider_faces():
         mid = (m.get('model_id') or '').strip()
         if not mid:
             continue
+
+        # Skipped entries are REPORTED (with the reason) rather than omitted:
+        # omitting them would be a cache miss on the client, and a miss
+        # renders nothing — the right pixels for the wrong reason. An
+        # explicit marker also lets the UI grow a real "disabled" state
+        # later without another round of backend archaeology.
+        skip = card_skip or ('model_disabled' if m.get('enabled') is False else '')
+        if skip:
+            resolutions.append({
+                'model_id': mid, 'skipped': skip, 'ok': True,
+                'face': DEFAULT_FACE, 'protocol': '', 'base_url': '',
+                'forced': False, 'error': '',
+            })
+            continue
+
         r = resolve_face(provider, m, dual_face_hosts=known)
         resolutions.append({
             'model_id': mid,
@@ -746,8 +792,10 @@ def resolve_provider_faces():
     from urllib.parse import urlparse
     host = (urlparse(provider.get('base_url') or '').hostname or '').lower()
 
-    logger.debug('[Face] resolved %d model(s) for provider %s (faces=%s)',
-                 len(resolutions), provider.get('id', '?'), sorted(faces))
+    n_skipped = sum(1 for r in resolutions if r.get('skipped'))
+    logger.debug('[Face] resolved %d model(s) for provider %s (faces=%s, '
+                 '%d skipped)', len(resolutions), provider.get('id', '?'),
+                 sorted(faces), n_skipped)
     return api_ok({
         'resolutions': resolutions,
         # The declared face names, default first — the UI's pin dropdown is

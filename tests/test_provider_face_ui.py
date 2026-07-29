@@ -96,25 +96,27 @@ def _src(path, lang='js'):
 # ═══════════════════════════════════════════════════════════
 
 def _resolve_payload(provider):
-    """Drive the endpoint's logic through the real resolver.
+    """POST to the REAL endpoint and return its JSON body.
 
-    The handler body is a thin loop over ``resolve_face``; we exercise that
-    same composition so the assertions below are about the CONTRACT the UI
-    consumes, not about Quart plumbing.
+    Deliberately NOT a re-implementation of the handler's loop. An earlier
+    version of this helper rebuilt the response from ``resolve_face``
+    directly, which made every assertion below blind to the handler itself:
+    the skip-semantics added for the dispatcher's pre-resolve filters live
+    in the HANDLER, so a local copy would have stayed green while the real
+    endpoint said something else. Charter #24's rule (one implementation of
+    the judgement) applies to test helpers too.
     """
-    from lib.llm_dispatch.provider_face import (
-        DEFAULT_FACE, dual_face_hosts, provider_faces, resolve_face,
-    )
-    known = dual_face_hosts()
-    faces = provider_faces(provider)
-    out = []
-    for m in provider.get('models', []):
-        r = resolve_face(provider, m, dual_face_hosts=known)
-        out.append({'model_id': m['model_id'], 'ok': r.ok, 'face': r.face_name,
-                    'protocol': r.protocol or '', 'base_url': r.base_url,
-                    'forced': r.forced, 'error': r.error or ''})
-    return {'resolutions': out,
-            'faces': [DEFAULT_FACE] + sorted(n for n in faces if n != DEFAULT_FACE)}
+    import asyncio
+
+    async def _go():
+        import server
+        client = server.app.test_client()
+        resp = await client.post('/api/v1/providers/resolve-faces',
+                                 json={'provider': provider})
+        assert resp.status_code == 200, resp.status_code
+        return await resp.get_json()
+
+    return asyncio.run(_go())
 
 
 def test_endpoint_reports_the_anthropic_face_for_claude():
@@ -140,6 +142,86 @@ def test_endpoint_surfaces_the_refusal_with_its_reason():
     the only place a user learns WHY the model vanished from the picker."""
     by = {r['model_id']: r for r in _resolve_payload(FACELESS)['resolutions']}
     rec = by['claude-opus-5']
+    assert rec['ok'] is False
+    assert 'anthropic' in rec['error'].lower()
+
+
+# ═══════════════════════════════════════════════════════════
+#  1b. ★ The endpoint must honour the dispatcher's PRE-RESOLVE filters
+#
+#  ``_build_slots_from_providers`` applies four semantic filters BEFORE it
+#  ever calls resolve_face (measured on lib/llm_dispatch/dispatcher.py):
+#
+#      L334  provider.enabled is False        → whole card skipped
+#      L399  effective_keys empty             → whole card skipped
+#      L408  model_id empty                   → entry skipped
+#      L414  model_entry.enabled is False     → entry skipped
+#
+#  A skipped entry never reaches the resolver, so it can never appear in
+#  ``face_refusals``. The endpoint is the SECOND consumer of resolve_face
+#  and must agree, or the UI paints an amber "not registered (missing wire
+#  face)" banner on a model the user simply switched OFF — an alarm whose
+#  stated cause is not the real one. Charter #26: a new consumer of a
+#  filtered surface MUST inventory that filter.
+#
+#  Note on L399: the predicate is ``effective_keys``, NOT "has api_keys" —
+#  a brand=='local' provider with no keys is given one blank-key slot and
+#  DOES build. Keying this on api_keys alone would wrongly mark every
+#  keyless local card as skipped.
+# ═══════════════════════════════════════════════════════════
+
+_CLAUDE_ON_FACELESS_GW = [{'model_id': 'claude-opus-5'}]
+
+
+def test_disabled_model_is_not_reported_as_face_refused():
+    """A model the USER turned off must not be blamed on a missing face."""
+    prov = {'id': 'p', 'base_url': OPENAI_URL, 'api_keys': ['k'],
+            'models': [{'model_id': 'claude-opus-5', 'enabled': False}]}
+    rec = _resolve_payload(prov)['resolutions'][0]
+    assert rec.get('skipped') == 'model_disabled', (
+        'a disabled model must be reported as SKIPPED, not resolved — the '
+        'dispatcher never resolves it (dispatcher.py L414)')
+    assert rec['ok'] is not False or rec.get('skipped'), (
+        'a disabled model must never surface as an unexplained refusal')
+
+
+def test_disabled_provider_skips_every_model():
+    """Whole-card off (dispatcher.py L334) — nothing on it is registered,
+    so nothing on it can be 'refused for a missing face'."""
+    prov = {'id': 'p', 'base_url': OPENAI_URL, 'enabled': False,
+            'api_keys': ['k'], 'models': _CLAUDE_ON_FACELESS_GW}
+    rec = _resolve_payload(prov)['resolutions'][0]
+    assert rec.get('skipped') == 'provider_disabled'
+
+
+def test_provider_without_usable_keys_skips_every_model():
+    """dispatcher.py L399 — the owner's inventory missed this one; measured
+    the same false-amber shape as the other two."""
+    prov = {'id': 'p', 'base_url': OPENAI_URL, 'api_keys': [],
+            'models': _CLAUDE_ON_FACELESS_GW}
+    rec = _resolve_payload(prov)['resolutions'][0]
+    assert rec.get('skipped') == 'no_keys'
+
+
+def test_keyless_LOCAL_provider_is_NOT_skipped():
+    """The complement, and the reason the predicate is `effective_keys`
+    rather than `api_keys`: a self-hosted vLLM/SGLang card runs without
+    auth and DOES build slots (dispatcher.py L401). Marking it skipped
+    would blank the pills on every local deployment."""
+    prov = {'id': 'p', 'base_url': 'http://10.0.0.5:8000/v1', 'brand': 'local',
+            'api_keys': [], 'models': [{'model_id': 'qwen3-32b'}]}
+    rec = _resolve_payload(prov)['resolutions'][0]
+    assert not rec.get('skipped'), (
+        'a keyless LOCAL provider builds slots — it must resolve normally')
+    assert rec['ok'] is True
+
+
+def test_a_genuinely_refused_model_is_still_reported():
+    """NEUTER-complement: the skip logic must not swallow the REAL refusal
+    it was built alongside. An ENABLED Claude entry on a faceless dual-face
+    gateway must still come back ok=False with a reason."""
+    rec = _resolve_payload(FACELESS)['resolutions'][0]
+    assert not rec.get('skipped'), 'this entry is enabled — nothing to skip'
     assert rec['ok'] is False
     assert 'anthropic' in rec['error'].lower()
 
@@ -302,6 +384,139 @@ def test_face_resolution_does_not_full_rerender():
 # ═══════════════════════════════════════════════════════════
 #  4. Registration + i18n (a control nobody can see is dead)
 # ═══════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════
+#  3b. ★ The skip semantics must survive the FRONTEND leg
+#
+#  The Python guards above POST a full provider dict straight to the
+#  endpoint. That is structurally BLIND to the payload-construction step:
+#  _refreshFaceResolutions builds its own object, and if it omits the
+#  fields the skip logic reads, the backend can never skip anything in
+#  production while every backend test stays green. Measured: that is
+#  exactly what happened — the first cut of this batch fixed the endpoint
+#  and shipped a payload with no `enabled` on it at all.
+#
+#  So these drive the REAL shipped JS, not a re-description of it.
+# ═══════════════════════════════════════════════════════════
+
+def _node_eval(js_body, extra_files=()):
+    """Run *js_body* after loading the real face JS into one shared scope.
+
+    Mirrors how lib/js_bundler.py concatenates these files (all globals in
+    one window scope), so the functions under test are the shipped ones.
+    """
+    parts = []
+    for path in (_FACES_JS,) + tuple(extra_files):
+        with open(path, encoding='utf-8') as f:
+            parts.append(f.read())
+    harness = '''
+// ── minimal global surface the face JS touches ──
+var window = globalThis;
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+function t(k, v) { return k + (v ? JSON.stringify(v) : ''); }
+function debugLog() {}
+function Icon() { return ''; }
+var document = { querySelector: function() { return null; },
+                 querySelectorAll: function() { return []; } };
+var _stgProviders = [];
+var Api = { providers: { resolveFaces: async function(p) {
+  globalThis.__sentPayload = p;
+  return { ok: true, resolutions: [], faces: ['default'], dual_face_host: false };
+} } };
+''' + '\n'.join(parts) + '\n' + js_body
+    proc = subprocess.run(['node', '--input-type=module', '-e', harness],
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, (
+        'node harness failed:\nSTDOUT:%s\nSTDERR:%s' % (proc.stdout, proc.stderr))
+    return proc.stdout
+
+
+def test_payload_carries_the_fields_the_skip_logic_reads():
+    """★ THE cross-leg guard.
+
+    The endpoint decides `skipped` from provider.enabled, the model's
+    `enabled`, and whether the card has usable keys. If the frontend does
+    not SEND those, the backend's skip branch is unreachable in production
+    and every user-visible symptom of this epic survives — with a fully
+    green backend suite.
+
+    Note the credential discipline: the endpoint promises it never receives
+    keys, so the payload carries a COUNT (plus brand, for the local
+    blank-key rule), never the key strings themselves.
+    """
+    out = _node_eval('''
+_stgProviders = [{
+  id: 'p', base_url: 'https://aigc.sankuai.com/v1/openai/native',
+  enabled: false, brand: 'cloud', api_keys: ['sk-SECRET-1', 'sk-SECRET-2'],
+  faces: {}, models: [{ model_id: 'claude-opus-5', enabled: false }],
+}];
+await _refreshFaceResolutions(0);
+const p = globalThis.__sentPayload;
+console.log(JSON.stringify({
+  providerEnabled: p.enabled,
+  modelEnabled: p.models[0].enabled,
+  keyCount: p.api_key_count,
+  brand: p.brand,
+  leaked: JSON.stringify(p).includes('SECRET'),
+}));
+''')
+    got = json.loads(out.strip().splitlines()[-1])
+    assert got['providerEnabled'] is False, (
+        "payload omits provider.enabled — the endpoint's provider_disabled "
+        'branch is unreachable from the real UI')
+    assert got['modelEnabled'] is False, (
+        "payload omits the model's enabled flag — the model_disabled branch "
+        'is unreachable from the real UI')
+    assert got['keyCount'] == 2, (
+        'payload must carry how many keys the card has (the no_keys branch '
+        'mirrors dispatcher.py L399)')
+    assert got['brand'] == 'cloud', (
+        'brand is required: a keyless brand==local card still builds slots, '
+        'so no_keys must not fire for it')
+    assert got['leaked'] is False, (
+        'API keys must NEVER travel to this endpoint — send a count')
+
+
+def test_chip_is_blank_for_a_skipped_model():
+    """A skipped entry builds no slot, so it has no wire face to report.
+
+    Rendering the resolver's placeholder verdict would put a routing label
+    on a model that is not routed at all — the same class of false claim as
+    the amber refusal this epic removes, just quieter.
+    """
+    out = _node_eval('''
+_stgProviders = [{ id: 'p', faces: { anthropic: {} }, models: [] }];
+_stgFaceResolutions[0] = { byModel: {
+  off:  { model_id: 'off',  skipped: 'model_disabled', ok: true,
+          face: 'default', protocol: '', base_url: '', forced: false, error: '' },
+  gone: { model_id: 'gone', skipped: 'provider_disabled', ok: false,
+          face: 'default', protocol: '', base_url: '', forced: false,
+          error: 'should not be shown' },
+  live: { model_id: 'live', ok: true, face: 'anthropic',
+          protocol: 'anthropic', base_url: 'https://x/v1/anthropic',
+          forced: false, error: '' },
+}, faces: ['default', 'anthropic'], dualFaceHost: true };
+console.log(JSON.stringify({
+  off:  _faceChipHTML(0, { model_id: 'off' }),
+  gone: _faceChipHTML(0, { model_id: 'gone' }),
+  live: _faceChipHTML(0, { model_id: 'live' }),
+}));
+''')
+    got = json.loads(out.strip().splitlines()[-1])
+    assert got['off'] == '', (
+        'a disabled model must render NO face chip — it builds no slot')
+    assert got['gone'] == '', (
+        'a model on a disabled card must render no chip, and above all no '
+        'refused chip: the amber alarm would name a cause that is not real')
+    assert 'refused' not in got['gone']
+    assert 'anthropic' in got['live'], (
+        'NEUTER-complement: a genuinely resolved model must still get its '
+        'pill — the skip branch must not blank everything')
+
 
 def test_provider_faces_js_is_bundled():
     """An unbundled file is invisible to users no matter how correct it is."""

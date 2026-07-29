@@ -326,12 +326,61 @@ def chat_conv_state():
     Scoped by the caller's tenant exactly like the push snapshot, so a poll can
     never leak a sibling tenant's tasks.
     """
+    # ── Frame-level rev on EVERY exit path (pt_781ae072d6ee4e84) ──────────
+    # ``{'convs': {...}}`` is not merely data: to the client reducer, a conv
+    # ABSENT from the projection means CLEAR. So an empty body is the maximally
+    # destructive frame this endpoint can emit — it extinguishes every busy dot
+    # the tab holds. A frame that says "clear everything" while carrying no rev
+    # is only HALF a frame: the client clears but cannot advance its gate, so
+    # nothing authoritative supersedes the clear and the correction waits for a
+    # later tick.
+    #
+    # Both failure branches below therefore ship a rev too. That needs the mint
+    # resolved BEFORE the import that can fail, hence this nested import with
+    # its own fallback: if even the mint is unreachable we emit no rev rather
+    # than a locally-invented one (the client's "no rev → clear but don't
+    # advance" branch is the correct conservative behaviour there, and is
+    # strictly better than shipping a value from a foreign clock domain).
     try:
         from lib.conversations.meta_cache import _running_task_ids_rev
+    except Exception as e:
+        logger.warning('[api_v1.chat] conv-state rev mint unavailable: %s', e)
+        _running_task_ids_rev = None
+
+    def _mint():
+        """Mint a rev, or None when the mint is unreachable.
+
+        Separating the mint import from the registry import (they used to share
+        one try block) means the mint can be absent while the projection still
+        works — so BOTH rev call sites must tolerate that. Routing both through
+        here is what keeps them from diverging: a bare
+        ``_running_task_ids_rev()`` at either site raises
+        ``'NoneType' is not callable`` and 500s the endpoint that exists
+        precisely to keep answering when everything else is broken.
+        """
+        if _running_task_ids_rev is None:
+            return None
+        try:
+            return _running_task_ids_rev()
+        except Exception as e:
+            logger.warning('[api_v1.chat] conv-state rev mint failed: %s', e)
+            return None
+
+    def _envelope(convs_payload):
+        """Wrap a projection in the wire envelope, always with a rev when one
+        can be minted. ONE construction site for every exit path so a future
+        edit cannot add another that forgets the rev."""
+        body = {'convs': convs_payload}
+        rev = _mint()
+        if rev is not None:
+            body['rev'] = rev
+        return api_ok(body)
+
+    try:
         from lib.tasks_pkg.manager._registry import snapshot_running_by_conv
     except Exception as e:
         logger.warning('[api_v1.chat] conv-state imports failed: %s', e)
-        return api_ok({'convs': {}})
+        return _envelope({})
 
     _auth = current_auth()
     _uid = getattr(_auth, 'user_id', None) if _auth else None
@@ -351,17 +400,18 @@ def chat_conv_state():
 
     convs = {}
     for conv_id, tids in raw.items():
-        convs[conv_id] = {
-            'runningTaskIds': list(tids),
-            'runningTaskIdsRev': _running_task_ids_rev(),
-        }
-    # Frame-level rev — the CLEAR branch's authoritative stamp
-    # (pt_781ae072d6ee4e84). MUST be present on this lane too: both transports
-    # feed the SAME reducer, so a projection missing it would leave the poll
-    # path unable to clear a conv without the client minting its own value —
-    # the cross-clock-domain bug this ticket removed. Minted after the per-conv
-    # revs so it dominates them.
-    return api_ok({'convs': convs, 'rev': _running_task_ids_rev()})
+        entry = {'runningTaskIds': list(tids)}
+        _per_conv_rev = _mint()
+        if _per_conv_rev is not None:
+            entry['runningTaskIdsRev'] = _per_conv_rev
+        convs[conv_id] = entry
+    # Frame-level rev is added by _envelope() — minted AFTER the per-conv revs
+    # above, so it dominates them (the projection is by construction the newest
+    # view of the registry). Both transports feed the SAME reducer, so this
+    # lane missing the rev would leave the poll path unable to clear a conv
+    # without the client minting its own value — the cross-clock-domain bug
+    # this ticket removed.
+    return _envelope(convs)
 
 
 @api_v1_chat_bp.route('/api/v1/chat/completions', methods=['POST'])

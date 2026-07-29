@@ -213,8 +213,51 @@ def test_server_rev_orders_across_replicas_by_real_time():
         % (rev_new_replica, rev_old_replica))
 
 
-def test_snapshot_and_poll_projection_carry_frame_level_rev():
-    """Face 4 — both transports must ship a server-minted frame-level ``rev``.
+def test_poll_lane_survives_an_unavailable_rev_mint():
+    """The last-resort channel must not 500 when the rev mint is unreachable.
+
+    SELF-INFLICTED REGRESSION, caught by writing the exit-path census. Making
+    the failure branches carry a rev required splitting the mint import out of
+    the registry import — which creates a state the old code could not reach:
+    mint ABSENT while the projection still WORKS. The per-conv loop still
+    called the mint unconditionally, so in that state it raised
+    ``'NoneType' object is not callable`` and 500'd the one endpoint whose
+    entire purpose is to keep answering when the push socket is down. Strictly
+    worse than the hole it was fixing.
+
+    Both rev call sites now route through one None-safe ``_mint``. A frame with
+    no rev at all is the correct degraded output: the client clears busy but
+    declines to advance the gate, which is exactly the conservative branch the
+    reducer already implements.
+    """
+    import asyncio
+
+    import lib.conversations.meta_cache as mc
+    from server import app
+
+    saved = mc._running_task_ids_rev
+    try:
+        def _boom():
+            raise RuntimeError('simulated mint outage')
+        mc._running_task_ids_rev = _boom
+
+        async def _call():
+            resp = await app.test_client().get('/api/v1/chat/conv-state')
+            return resp.status_code, await resp.get_json()
+
+        status, body = asyncio.run(_call())
+    finally:
+        mc._running_task_ids_rev = saved
+
+    assert status == 200, (
+        'a failing rev mint must NOT 500 the poll lane — it is the only '
+        'transport left when push is down; got %s' % status)
+    assert isinstance(body, dict) and 'convs' in body, (
+        'the projection must still be delivered without a rev')
+
+
+def test_push_snapshot_carries_frame_level_rev():
+    """Face 4a — the PUSH connect snapshot must ship a frame-level ``rev``.
 
     This is what lets the client's CLEAR branch stamp an AUTHORITATIVE value
     instead of synthesizing one. Without it the client has nothing to stamp
@@ -232,6 +275,154 @@ def test_snapshot_and_poll_projection_carry_frame_level_rev():
     drift = abs(time.time_ns() - snap['rev'][0])
     assert drift < 60 * 10 ** 9, (
         'frame-level rev must be wall-anchored like every other rev')
+
+
+def test_poll_projection_carries_frame_level_rev():
+    """Face 4b — the POLL lane must ship the same frame-level ``rev``.
+
+    THIS TEST EXISTS BECAUSE ITS PREDECESSOR DID NOT TEST IT. The original was
+    named ``test_snapshot_and_poll_projection_...`` but its body only imported
+    ``build_conv_state_snapshot`` — the poll path was never touched. Measured:
+    deleting the rev from ``routes/api_v1/chat.py`` left 18/18 tests GREEN. A
+    name that promises coverage the assertions do not deliver is worse than no
+    test at all, because it stops anyone from reading the assertion list.
+
+    The poll lane is not a redundant duplicate of push: when the push socket is
+    down it is the ONLY channel, so a rev-less projection there means "CLEAR
+    can never advance the gate for as long as push stays broken".
+
+    Drives the REAL view function through the app so the assertion covers the
+    shipped response body rather than a re-implementation of it.
+    """
+    import asyncio
+
+    from server import app
+
+    async def _call():
+        client = app.test_client()
+        resp = await client.get('/api/v1/chat/conv-state')
+        assert resp.status_code == 200, (
+            'poll lane must answer 200 (it is the last channel when push is '
+            'down); got %s' % resp.status_code)
+        return await resp.get_json()
+
+    body = asyncio.run(_call())
+    assert isinstance(body, dict), 'poll lane must return a JSON object'
+    assert 'convs' in body, 'poll lane must carry the projection'
+    assert 'rev' in body, (
+        'the poll projection MUST carry a top-level frame-level ``rev`` — it '
+        'feeds the SAME reducer as the push snapshot, and when push is down it '
+        'is the only transport that can advance the CLEAR gate')
+    rev = body['rev']
+    assert isinstance(rev, list) and len(rev) == 2, (
+        'poll rev must have the SAME [ns, replica] shape as the push rev so '
+        'one comparator handles both transports; got %r' % (rev,))
+    assert isinstance(rev[0], int) and isinstance(rev[1], str), (
+        'poll rev shape must be [int ns, str replica]; got %r' % (rev,))
+    drift = abs(time.time_ns() - rev[0])
+    assert drift < 60 * 10 ** 9, (
+        'poll frame-level rev must be WALL-ANCHORED like every other rev '
+        '(drift %.3e ns)' % drift)
+
+
+def test_poll_lane_ships_rev_on_every_exit_path():
+    """Face 4c — including the fail-empty branches.
+
+    ``{'convs': {}}`` is the most destructive frame this endpoint can emit: to
+    the reducer a conv ABSENT from the projection means CLEAR, so an empty body
+    extinguishes every busy dot the tab holds. Emitting that while carrying no
+    rev is half a frame — the client clears but cannot advance its gate, so
+    nothing authoritative supersedes the clear until a later tick.
+
+    Structural rather than behavioural: the failure branches require an import
+    to fail, which cannot be forced honestly without monkeypatching the module
+    under test into a shape production never has. Instead assert every
+    ``return`` goes through the single ``_envelope`` constructor, so a fourth
+    exit path cannot be added that forgets the rev. Comments are stripped first
+    (charter #24) so prose mentioning api_ok can neither satisfy nor violate
+    this.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    from routes.api_v1 import chat as chat_mod
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(chat_mod.chat_conv_state)))
+    view = tree.body[0]
+
+    # Collect returns belonging to the VIEW ITSELF, not to its nested helpers.
+    # An AST walk is used rather than a text slice because the view contains
+    # more than one nested def (_mint, _envelope) and a line-indent slicer has
+    # to be taught about each — the exact brittleness that made an earlier
+    # version of this census report _mint's internal `return None` as a
+    # violation. Descending only into non-function nodes is structural: any
+    # future helper is skipped automatically.
+    nested = {n for node in ast.walk(view)
+              if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+              and node is not view
+              for n in ast.walk(node)}
+
+    returns = [node for node in ast.walk(view)
+               if isinstance(node, ast.Return) and node not in nested]
+    assert returns, "could not locate the view's own return statements"
+
+    assert any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+               and n.name == '_envelope' for n in ast.walk(view)), (
+        'the conv-state view must funnel every exit path through a single '
+        '_envelope() constructor — it is missing, so each return is free to '
+        'forget the frame-level rev independently')
+
+    offenders = []
+    for node in returns:
+        val = node.value
+        ok = (isinstance(val, ast.Call)
+              and isinstance(val.func, ast.Name)
+              and val.func.id == '_envelope')
+        if not ok:
+            offenders.append(ast.unparse(node))
+    assert not offenders, (
+        'every exit path of the conv-state poll lane must go through '
+        '_envelope() so it always carries a frame-level rev. A bare api_ok '
+        'here ships a CLEAR-everything frame with no rev, which the client can '
+        'only apply half of. Offending returns:\n  ' + '\n  '.join(offenders))
+    assert len(returns) >= 2, (
+        'expected at least the 2 known exit paths (registry-import failure, '
+        'success). The projection-failure branch deliberately does NOT return '
+        '— it sets raw={} and falls through to the success return, so it is '
+        'covered by that same _envelope call. Found %d returns; if the shape '
+        'changed, re-check that each path carries a rev' % len(returns))
+
+
+def test_both_transports_agree_on_rev_shape():
+    """The two lanes must be interchangeable to ONE reducer.
+
+    Not a restatement of 4a/4b: those check each lane in isolation, this checks
+    the lanes against EACH OTHER. Divergent shapes is precisely how "busy" and
+    "attachable" drifted apart in this subsystem before, and the reducer has no
+    way to tell which lane a frame arrived on.
+    """
+    import asyncio
+
+    from lib.agent_core.push import build_conv_state_snapshot
+    from server import app
+
+    push_rev = build_conv_state_snapshot(user_id='')['rev']
+
+    async def _call():
+        resp = await app.test_client().get('/api/v1/chat/conv-state')
+        return await resp.get_json()
+
+    poll_rev = asyncio.run(_call())['rev']
+
+    assert type(push_rev) is type(poll_rev), (
+        'push and poll rev must be the same type')
+    assert len(push_rev) == len(poll_rev) == 2
+    assert type(push_rev[0]) is type(poll_rev[0]), 'ns component type differs'
+    assert type(push_rev[1]) is type(poll_rev[1]), 'replica component differs'
+    assert push_rev[1] == poll_rev[1], (
+        'both lanes run in THIS process, so the replica id must match; a '
+        'mismatch means a second replica-identity source leaked in')
 
 
 # ═══════════════════════════════════════════════════════════════════

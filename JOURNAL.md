@@ -1,6 +1,30 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-29(续·ping 到期) — 「保活/熔断/凭证探针」三层架在**新协议已删除的 `ping`** 上;实测一个合规服务器会让保活**每 45 秒重连一次一条完全健康的连接**,而凭证探针**永久停摆**(`pt_175e68aab6884318` DONE;commit `c775bf68`,3 文件;新套件 **18 条**,**NEUTER×4 各咬各的**,相邻环 **74 passed**;真 mcp 2.0.0 服务器端到端)
+
+- **★ 先验票面前提,而这次它成立且比票面更硬:** 票面说协议修订 2026-07-28 删除了 `ping`。对**权威 schema.ts** 实测:`ping` 出现 **0 次**、`PingRequest` 不存在;作为对照,`logging/setLevel` **仍在文件里**、只是带 `@deprecated` 标签和 12 个月窗口。**两者不是同一档处理——ping 是删除,不是弃用。** 顺带发现票面没提的一条:`initialize` 同样 **0 次**(整个握手都没了)。
+- **★ 而「SDK 仍保留 send_ping」不构成任何服务器义务(这层区分是本批的关键):** 实测 v2 的 `ClientSession.send_ping` 在、低层 `Server.__init__` 的 `on_ping` **默认值是 `_ping_handler` 而非 None**(即默认注册)。但那是 SDK 的兼容选择;SDK 自己的注释写着「Drop it from this list to opt out」。按它照做建一个**规范纯净**的 v2 服务器,实测:
+  ```
+  list_tools      : OK n=1
+  send_ping       : RAISED MCPError: Method not found
+  list_tools AFTER: OK n=1     <-- 传输仍然活着
+  ```
+  **这就是全部要害:对端答了 `-32601`,而传输毫发无损。**
+- **★ 用真 `_keepalive_loop` 驱动这个形态,两条验收标准同时复现(失败先行):**
+  | | 修前 |
+  |---|---|
+  | ping 尝试 | 12 |
+  | **触发重连** | **12** ← 重连风暴,而传输从未死过 |
+  | **凭证探针** | **0** ← 挂在 ping 成功分支下游,永久停摆 |
+- **★ 根因是一句话里的两个问题被当成了一个:「对端答了吗」与「对端答成功了吗」。** JSON-RPC 的**错误响应本身就是活性证明**——请求到达、被解析、回复走完全程。把两者混为一谈,才会让一个健康探针去重连一条健康的连接。故 `_is_peer_answered_error` 就编码这一条:**只有超时与传输层故障算死**。这个判据**对每一个协议修订都成立**,所以它没有自己的到期日——而这正是 ping 判据缺的东西。
+- **落点(按协议地位排序、按会话实际能力解析、按服务器记忆):** `discover()`(2026-07-28 **MUST 实现**)→ `send_ping`(对我们 `mcp<2` 钉住的那条线上的旧服务器才是对的)→ `list_tools`(每个修订都有,是地板)。收到 `-32601` 的含义是「**这个对端不实现这个方法**」而非「这个对端死了」,所以换下一个候选、并把记忆清掉;对端**已经用回答证明了自己活着**。
+- **判据锚在数字上而不是英文上:** `-32601` 归 **JSON-RPC 规范**所有,不像 `McpError`→`MCPError` 那样会被上游改名。两个 major 的构造签名不同(v1 收 `ErrorData`、v2 收 `code, message`),但**实测都把码落在 `.error.code`**,故一处读法跨越 pin 边界。
+- **★ 端到端实测抓出一个我自己的夹具掩盖的缺陷(本轮最值钱的一步):** 真 v2 上 `send_discover(version)` **要求一个参数**,裸调抛 `TypeError`,而我的首版把它当作「探测失败 ⇒ 对端死了」→ **重连一台健康服务器**。这**正是本批要消灭的那一类缺陷,被我自己重新引进**;我的 `_Session` 夹具把两个 discover 都写成零参,所以套件全绿。已改:探针**按元数检查**(只调零参可调的)、`TypeError` **永不构成活性判决**(那是我们调错了,不是对端的信息),夹具改为忠实复刻真实签名,并配一条守卫对**已安装的 ClientSession** 断言它仍然需要那个参数。
+- **NEUTER×4 各咬各的:** 判据退回「任何异常=死」→ **4 红**(含两条验收标准);凭证探针搬回 ping-成功之下 → 3 红;探针顺序删掉 discover → 1 红;摘掉数字锚点 → 1 红。
+- **★ 第四发首轮不咬,而原因值得记:** 我的夹具永远用英文 "Method not found",于是数字锚点与英文回退**行为完全重合**。补一条用**别的措辞**(`Unknown method` / 中文 / 空串)携带 `-32601` 的用例后才真咬 —— 规范固定的是**码**不是**文案**,一个本地化过的服务器会让文本匹配静默失灵。
+- **诚实边界:** ①`discover()` 在真 v2 上返回的是**另一种**协议错(该连接处于握手协议纪元),按新判据正确读作 alive、但不进记忆,故每次巡检仍付一次往返 —— 与旧 ping 同价,**正确性不受影响**;②纯后端,**运行中进程不带**,需重启;③本机 pin 仍是 `mcp<2`,故线上此刻走的是 `send_ping` 分支并正常应答 —— 本批修的是**解除 pin 那天不会静默炸掉**,今天行为不变。
+
 ### 2026-07-29(续·浏览器侧那一半) — 后端删完读超时只做了一半:**「我自己暂停」发生在浏览器里,而浏览器有自己的天花板**。owner 点出两处,ratchet 又扫出两处他和我都没看见的(commit 待填,7 文件;新套件 **14/14 失败先行**,**NEUTER×4 双向全咬**(1/2/1/1);相邻环 **78/78**)
 
 - **★ owner 的判据比我的实现更完整,而我漏的正是目标的字面落点:** 我把 `TTFT_TIMEOUT`/`read=300` 删净后就报完成,但 `abort` 这个动作**是在前端发生的**。前端还留着:

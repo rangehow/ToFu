@@ -1,5 +1,17 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·清扫看不见 carrier) — **我自己的修复引进的缺陷,是我审计自己而不是 owner 报的**:25s stale-pin 清扫的活性判据只认 `/api/chat/active`(按设计排除 carrier)⇒ VU 仍在生成时给尾部内容盖 `interrupted` 并写下抑制恢复的戳 —— **本 objective 的病,由它的修复引进**(`pt_d97f9098776c48e9` DONE;8 条(5 条失败先行),**NEUTER×3 全咬**,相邻环 **91/91**;代码在 HEAD,但**署名在兄弟提交里**,见下)
+
+- **★ 根因是「必要」与「不可见」撞在一起,两边单独看都对:** `d6e8bdb3` 让冷接续写 `conv.activeTaskId = <carrierId>` —— 这是**必要的**,`connectToTask` 用它做 accumulation slot 与 self-heal 锚点;而 `/api/chat/active` **按设计**排除 carrier —— 这也是**必要的**,五个消费者把它喂给普通 `connectToTask` 路径,carrier 进去会生出永久卡住的「Waiting…」气泡。于是清扫看到一个「不在运行集合里」的 pin,判为陈旧。**判据:一个端点「按设计过滤掉某类东西」时,MUST 清点它的全部消费者——新增的那个消费者可能恰好需要被过滤掉的那类。**
+- **后果两条,都是「显示不真实的状态」:** ① `_healStuckPlaceholder(convId, {background:true})` 不带 status ⇒ `_cleanDone` 为 false ⇒ 给尾部未 settle 的内容盖 `finishReason='interrupted'`,**用户读到「已中断」而后端 VU 正在生成**;② 写 `_activeTaskClearedAt`,该戳被 `conv_apply_settings.js` 解释为「永不再从服务端恢复 activeTaskId」——**一次误判永久生效**。
+- **落点:第二活性源,但**读 reducer 自己的输出**:** 给清扫加 conv-state 投影(`f80b0446`)作第二判据,取 `conv._authoritativeActiveTaskIds`(标记已剥)——**不做第二份 wire 解析**,因为重复解析会与 reducer 的标记处理漂移,**而那正是造出这一整族缺陷的裂缝**。任一源仍认识该 task,pin 就活。
+- **★ 顺序做成结构保证而非巧合:** 两个探针合成**一条 `Promise.all` 链**(先应用快照、后清扫)。若清扫抢跑,它读到的是**上一 tick** 的忙态集合 ⇒ 对本 tick 刚起的 carrier 依旧全盲。fail-safe 对称扩展:**任一探针不可用就什么都不碰**——缺了投影,清扫无法区分「陈旧」与「活 carrier」,而猜错的代价是给活的工作盖 interrupted。
+- **守卫含补集:** 「真陈旧的 pin MUST 仍被清掉」也在断言里——否则修完这半,「忙点比工作活得久」那半就回来了(即 `48aa84e4` 守的幽灵 Stop 键)。**NEUTER×3:** 摘 carrier 判据 → 2 红;摘投影 fail-safe → **1 红精确复现票面症状**(`finishReason='interrupted'`、`clearedStamp=True` 落在活的工作上);调用点只传一个源 → 1 红。三发均逐字节还原。
+- **★ 我自己的守卫又错了一次(同族第三次):** `#vu` 禁令**匹配到了清扫自己的解释性注释**——那段注释正是在说「为什么清扫不该解析这个标记」。已按 charter #24 先剥注释(走 `tests/_source_scan.py`)。本条工作线上同族三次:文本扫描被自己的 docstring 满足 → docstring 承诺了断言里没有的那一半 → **禁令被解释该禁令的注释触发**。**判据:扫描源码文本的守卫,注释是它的第一个假阳性来源,不是边缘情况。**
+- **★ 自报一起署名事故,并升级判据(本轮第三次同型):** `git add` 后计数断言读到 **staged=15** —— 兄弟(LLM 超时那条)把 13 个文件预暂存在共享 index 里,断言**正确 abort**;我按 charter #15 只写 index 剔除、核对兄弟工作树原样(` M`/`??` 保留),再单链重提;而在那个窗口里兄弟先提交了,**把我的两个文件一并带走**(`1db38585`)。不做历史手术——内容完整正确,revert 风险大于署名收益。**判据升级:共享 HEAD 上「我的改动进没进去」只能对 `git show HEAD:` / `git cat-file -e HEAD:` 断言,不能看自己的 commit 是否成功——它可能搭别人的车进去了。** 本轮据此实测:两文件均在 HEAD、sweep 符号计数 2、用 `git archive HEAD` 取出的 HEAD 内容跑守卫 **8/8 绿**。
+- **★ 一处流程自纠:** 我原打算「先不标 done,等 owner 确认署名怎么处理」—— 那是把**不需要人决定的事**挂在人身上:署名是记账,不改变票是否完成,而板上留着一张已完成的票**会让兄弟以为我还在做**。已自行收口。
+- **验收边界:** 纯前端 `static/js/core/cross_tab_sync.js`,**需 bundle 重建**;无新 window 导出,tsc BASELINE=0 未动。
+
 ### 2026-07-29(续·彻底去掉读超时) — owner:「除非崩了,有什么是不能等的?等不了我自己会暂停」。实测发现**他的兜底当时是失效的**:`abort_check` 只写在逐行循环体内,零字节挂死时那个循环一次都不迭代 ⇒ **按停止无人读**;而更隐蔽的是**读超时今天顺手挡住了 reaper**,删掉它 reaper 就接班当杀手(commit `9c4d1a52`,10 文件;新套件 **22/22 失败先行**,**NEUTER×3 各咬各的**(4/1/3),相邻环 **130/130**)
 
 - **★ 先证伪「我自己暂停」这个前提,再动手删——这一步救了整批:** 写探针把 `TTFT_TIMEOUT=0`(即 owner 要的「无首字节超时」),在 t=1.0s 模拟按下停止:

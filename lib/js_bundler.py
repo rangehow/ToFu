@@ -557,6 +557,15 @@ _BUNDLE_FILES = [
     # source extract (start of `_serverConvCount` → end of
     # `mergeServerConvShells`) still succeeds.
     'core/conv_merge_shells.js',
+    # ── conv_rescue_tail.js: `_rescuableLocalTail(localMsgs, serverMsgs)` —
+    # pure verdict that answers whether a server reply's shortfall is a
+    # legitimate delete (empty rescue → overwrite) or the signature of a
+    # lost-race whole-blob write (non-empty rescue → keep local, push back).
+    # ONE call site inside `loadConversationMessages` (conversations.js
+    # ~L1453). Load BEFORE conversations.js so the surviving call resolves
+    # via bundle-level window scope. Pure seam — no DOM, no globals, no
+    # state (pt_3879f00e slice 8).
+    'core/conv_rescue_tail.js',
     'core/conversations.js',
     # Shared SSE fetch-response read/decode/buffer loop (readSSEStream) —
     # extracted 2026-07-11 from branch.js / paper-reader.js / ui/sse_pipeline.js.

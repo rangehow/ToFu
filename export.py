@@ -429,6 +429,17 @@ _OPENSOURCE_KEEP_FILES = {
     # needs the tool too. Reads only tests/*.py + lib//routes source paths --
     # no secrets, no internal paths.
     'scripts/audit_tests.py',
+    # Builds the extension upload zip (dev or --store trimmed manifest). The
+    # docs/chrome-web-store/ kit SHIPS in the opensource export and its
+    # checklist step 2 is "bash scripts/package_extension.sh --store", so
+    # without this the public tree documents a command it does not contain.
+    # Pure REPO_ROOT-relative bash + zip -- no secrets, no internal paths.
+    'scripts/package_extension.sh',
+    # Server-side installer entry point. Same shape as the packaging script:
+    # a documented command a user is told to run, so it must exist in both a
+    # clean clone and the public tree. Pure bash -- no secrets, no internal
+    # paths, no absolute host paths.
+    'scripts/install_on_server.sh',
 }
 
 OPENSOURCE_EXTRA_EXCLUDE_FILES = OPENSOURCE_EXTRA_EXCLUDE_FILES | {

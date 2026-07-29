@@ -1,8 +1,14 @@
-# Submission checklist
+# Submission checklist — Chrome Web Store
 
 Work top to bottom. Items marked **[you]** require your account/identity and
 cannot be done from code. Items marked **[done]** are already prepared in this
 kit.
+
+> **Publishing to Microsoft Edge Add-ons instead / as well?** Steps 0–2 (decide
+> the build, package the zip) are shared verbatim — then switch to
+> `EDGE_ADDONS.md` for the Partner Center route. Edge has **no registration
+> fee** and takes the same zip, so it is worth starting in parallel rather
+> than keeping in reserve.
 
 ## 0. Decide the build (do this first)
 

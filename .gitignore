@@ -55,7 +55,12 @@ data/
 # tests/test_gitignore_covers_export_excludes.py asserts the two lists stay in
 # sync so this gap cannot silently reopen. Documented keepers stay tracked:
 #   scripts/gen_desktop_icons.py (CI icon gen), export.py, CLAUDE.md,
-#   static/provider_templates/meituan.json (functional internal template).
+#   static/provider_templates/meituan.json (functional internal template),
+#   scripts/package_extension.sh (builds the store upload zip; the SHIPPED
+#     docs/chrome-web-store/ kit tells the reader to run it, so a clean clone
+#     without it makes that instruction a dead end),
+#   scripts/install_on_server.sh (server-side installer; same shape — a
+#     documented entry point that must exist in a clean clone to be runnable).
 /benchmarks/
 /promo/
 /scripts/*
@@ -63,6 +68,8 @@ data/
 !/scripts/gen_frontend_globals.py
 !/scripts/gen_tool_inventory.py
 !/scripts/audit_tests.py
+!/scripts/package_extension.sh
+!/scripts/install_on_server.sh
 # debug/ = standalone scratch/benchmark scripts (never imported by the app);
 # tracked *.log already ignored above, this covers the .py/.json/.png/.md/.html too.
 /debug/

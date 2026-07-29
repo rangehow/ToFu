@@ -310,14 +310,25 @@ def test_the_removed_permissions_table_matches_reality():
 def test_no_document_states_a_hardcoded_removed_count():
     """A prose count ("removes 6 permissions") goes stale the moment the trim
     changes, and it already did. The table above is the single source of
-    truth; the prose must not restate a number that can drift from it."""
+    truth; the prose must not restate a number that can drift from it.
+
+    BOTH word orders are matched. The first version of this guard only caught
+    verb-first phrasing ("removes the 6 permissions") and stayed green while
+    the kit README said "(6 unused permissions removed)" — a guard that
+    passes while the defect it names is still on the page.
+    """
+    verb_first = re.compile(
+        r'(?:removes?|removed|dropp?e?d?|trims?|trimmed)\s+(?:the\s+)?'
+        r'(\d+)\s+(?:unused\s+)?permissions?', re.I)
+    count_first = re.compile(
+        r'(\d+)\s+(?:unused\s+)?permissions?\s+'
+        r'(?:removed|dropped|trimmed|are\s+removed)', re.I)
     offenders = {}
     for p in list(STORE_DIR.glob('*.md')) + [PACKAGE_SH]:
         if not p.exists():
             continue
         txt = p.read_text(encoding='utf-8')
-        hits = re.findall(r'(?:removes?|removed|dropp?e?d?)\s+(?:the\s+)?'
-                          r'(\d+)\s+(?:unused\s+)?permissions?', txt, re.I)
+        hits = verb_first.findall(txt) + count_first.findall(txt)
         if hits:
             offenders[p.name] = hits
     assert not offenders, (
@@ -325,6 +336,72 @@ def test_no_document_states_a_hardcoded_removed_count():
         f"count drifts whenever the trim changes (it already read 6 while the "
         f"real trim was 7). Say 'the permissions listed below' and let the "
         f"table be the source of truth.")
+
+
+def test_the_kit_documents_the_edge_addons_route():
+    """Edge Add-ons must be a first-class target, not an afterthought.
+
+    The backend drives Edge and the READMEs tell users it works, but a store
+    listing is the only path that gives a NON-developer one-click install —
+    and Edge is the one that costs nothing, accepts individual accounts, and
+    takes the exact same zip. A kit that documents only Chrome silently makes
+    the cheapest real route invisible.
+    """
+    edge = STORE_DIR / 'EDGE_ADDONS.md'
+    assert edge.exists(), (
+        'docs/chrome-web-store/EDGE_ADDONS.md is missing — the Edge Add-ons '
+        'submission route is undocumented, so the zero-fee path to one-click '
+        'install exists only in someone\'s head')
+    txt = edge.read_text(encoding='utf-8')
+    for needle, why in (
+            ('partner.microsoft.com', 'the Partner Center registration URL'),
+            ('Individual', 'that individual (non-company) accounts are supported'),
+            ('remote code', "Edge's stricter MV3 remote-code rule"),
+    ):
+        assert needle in txt, f'EDGE_ADDONS.md never states {why}'
+
+
+def test_the_edge_route_is_discoverable_from_the_kit_entry_points():
+    """A doc nobody is pointed at is a doc nobody reads. The kit README and
+    the Chrome checklist must both hand the reader the Edge route."""
+    for name in ('README.md', 'SUBMISSION_CHECKLIST.md'):
+        txt = (STORE_DIR / name).read_text(encoding='utf-8')
+        assert 'EDGE_ADDONS.md' in txt, (
+            f'{name} never links EDGE_ADDONS.md, so the Edge route is only '
+            f'findable by listing the directory')
+
+
+def test_the_fallback_ladder_puts_edge_before_firefox():
+    """Ordering is the whole point of the ladder.
+
+    Firefox needs a real code port (no `chrome.debugger`) AND a signing
+    pipeline, because it has no persistent unpacked install (charter #20).
+    Edge needs neither — same package, no fee. A ladder that names Firefox as
+    the next stop after Chrome sends the reader down the most expensive path
+    first, which is what this file used to do.
+    """
+    txt = (STORE_DIR / 'REVIEW_RISKS.md').read_text(encoding='utf-8')
+    ladder = txt[txt.index('## Realistic outcome ladder'):]
+    edge_at = ladder.find('Edge Add-ons')
+    ff_at = ladder.find('Firefox')
+    assert edge_at != -1, 'the outcome ladder never mentions Edge Add-ons'
+    assert ff_at != -1, 'the outcome ladder no longer mentions Firefox'
+    assert edge_at < ff_at, (
+        'the outcome ladder reaches Firefox before Edge Add-ons. Edge is the '
+        'same package with no fee; Firefox is a code port plus an AMO signing '
+        'pipeline. Order them by real cost.')
+
+
+def test_the_kit_does_not_sell_edge_as_a_free_pass_on_remote_code():
+    """Honesty guard, and the reason it is worth a test: it would be easy to
+    present Edge as "same package, zero cost, done". Microsoft's MV3 rule on
+    remotely hosted code is worded MORE absolutely than Chrome's, and this
+    extension runs server-sent JS. If the kit ever drops that caveat, whoever
+    submits will be blindsided by the same rejection twice."""
+    txt = (STORE_DIR / 'EDGE_ADDONS.md').read_text(encoding='utf-8')
+    assert 'not permitted' in txt or 'stricter' in txt.lower() or 'STRICTER' in txt, (
+        'EDGE_ADDONS.md no longer warns that Edge is stricter than Chrome on '
+        'remote code under MV3 — the kit now oversells the Edge route')
 
 
 def test_no_document_pins_a_stale_extension_version():
@@ -351,46 +428,51 @@ def test_no_document_pins_a_stale_extension_version():
 #  5. The packaging script must ship what we audited
 # ══════════════════════════════════════════════════════════
 #
-# ⚠️ `scripts/package_extension.sh` is currently NOT tracked by git —
-# `.gitignore` carries a blanket `/scripts/*` with four `!` exceptions, and
-# this script is not one of them. So in a clean clone the store build tool
-# does not exist, even though the TRACKED SUBMISSION_CHECKLIST.md tells the
-# reader to run it. That is a pre-existing repo-policy gap (a charter-#8
-# `scripts/` exception + export-whitelist decision), filed separately rather
-# than fixed inside this manifest batch. The guards below therefore report
-# that state instead of crashing on a missing file — a FileNotFoundError
-# would be a broken test rather than a finding.
+# `scripts/package_extension.sh` is the ONLY build path for the store zip, and
+# the kit that instructs the reader to run it SHIPS in the opensource export
+# (docs/ is not stripped). It therefore has to survive BOTH gates — git and
+# export — or the public tree documents a command it does not contain. It
+# previously survived neither: `.gitignore`'s blanket `/scripts/*` left it
+# untracked, so a clean clone could not build at all. Fixed by the same
+# convention the four sibling scripts use (a `!` exception plus an
+# export._OPENSOURCE_KEEP_FILES entry); the guards below are the ratchet that
+# keeps it that way, per charter #14's two-door rule.
 
 
-def test_the_store_build_tool_is_reachable_by_whoever_submits():
-    """The tracked checklist says "run scripts/package_extension.sh --store".
+def test_the_store_build_tool_survives_git_and_export():
+    """The shipped checklist says "run scripts/package_extension.sh --store".
 
-    If that script is not in the repo, the instruction is a dead end for
-    anyone working from a clean clone — the documentation form of a dead
-    button. Reported as a skip-with-reason (not a silent pass) while the
-    `/scripts/*` gitignore exception is decided in its own ticket.
+    Both doors are asserted because they fail independently and each one alone
+    still leaves the instruction dead: untracked → absent from a clean clone;
+    export-stripped → absent from the public tree that carries the checklist.
     """
+    rel = 'scripts/package_extension.sh'
     checklist = (STORE_DIR / 'SUBMISSION_CHECKLIST.md').read_text(encoding='utf-8')
-    if 'package_extension.sh' not in checklist:
-        pytest.skip('checklist no longer references the packaging script')
+    assert 'package_extension.sh' in checklist, (
+        'the checklist no longer references the packaging script — re-point '
+        'this guard at whatever the build step is now, do not delete it')
+
     tracked = subprocess.run(
-        ['git', 'ls-files', '--error-unmatch', 'scripts/package_extension.sh'],
+        ['git', 'ls-files', '--error-unmatch', rel],
         cwd=ROOT, capture_output=True, text=True, timeout=60).returncode == 0
-    if not tracked:
-        pytest.skip(
-            'KNOWN GAP (own ticket): SUBMISSION_CHECKLIST.md instructs the '
-            'reader to run scripts/package_extension.sh, but /scripts/* is '
-            'gitignored with no ! exception for it, so a clean clone cannot '
-            'run the store build at all.')
-    assert PACKAGE_SH.exists()
+    assert tracked, (
+        f'{rel} is not tracked by git, so a clean clone cannot run the store '
+        f'build the shipped checklist prescribes. Add a `!` exception to '
+        f'.gitignore next to the four sibling scripts.')
+
+    export = pytest.importorskip(
+        'export', reason='export.py is itself stripped from public trees')
+    assert rel in export._OPENSOURCE_KEEP_FILES, (
+        f'{rel} lives under the opensource-excluded scripts/ dir and is NOT in '
+        f'export._OPENSOURCE_KEEP_FILES, so the public tree ships a checklist '
+        f'whose build step is missing (charter #13: export artifacts are a '
+        f'first-class acceptance target).')
 
 
 def test_package_script_ships_exactly_the_files_we_scanned():
     """These guards scan background.js + popup.js. If the store build starts
     shipping another JS file, the permission scan above goes blind to it —
     so the file list is itself an invariant."""
-    if not PACKAGE_SH.exists():
-        pytest.skip('packaging script absent from this checkout (see above)')
     sh = PACKAGE_SH.read_text(encoding='utf-8')
     # Match the copy SOURCE only up to the filename — `\.js` alone also
     # matched inside `manifest.json`, inventing a `manifest.js` that does not
@@ -406,8 +488,6 @@ def test_package_script_ships_exactly_the_files_we_scanned():
 def test_package_script_swaps_in_the_audited_store_manifest():
     """The whole audit is worthless if --store does not actually use the file
     these tests check."""
-    if not PACKAGE_SH.exists():
-        pytest.skip('packaging script absent from this checkout (see above)')
     sh = PACKAGE_SH.read_text(encoding='utf-8')
     assert 'manifest.store.json' in sh, (
         "package_extension.sh no longer references manifest.store.json — the "

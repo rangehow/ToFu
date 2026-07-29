@@ -31,6 +31,7 @@ import re
 
 __all__ = [
     'strip_comments',
+    'js_function_body',
     'playwright_install_invocations',
 ]
 
@@ -104,6 +105,84 @@ def strip_comments(text, lang='shell'):
                 continue
         out.append('' if stripped.startswith(prefixes) else line)
     return '\n'.join(out)
+
+
+def js_function_body(text, name, lang='js'):
+    """Return the FULL body of JS ``function <name>`` by brace matching.
+
+    WHY THIS EXISTS (incident 4 of the family in the module docstring)
+    -----------------------------------------------------------------
+    Two guards in ``tests/test_conv_state_p6_verdict.py`` extracted a function
+    body as a FIXED ``src[start:start + 4000]`` byte slice. That is wrong in
+    both directions and silently so:
+
+      * OVERSHOOT — measured on the live tree, the 4000-byte window past
+        ``_reconcileStuckActiveTaskPins`` (real body 2999 B) swallowed 1001
+        bytes of ``_reconcileIntervalMs`` + ``_crossDeviceReconcile``, and the
+        window past ``applyConvStateSnapshot`` (real body 3391 B) swallowed 609
+        bytes of the next declaration. A guard asserting "token X must NOT
+        appear in this function" therefore fails on a NEIGHBOUR's use of X —
+        an accusation pointed at innocent code.
+      * TRUNCATION — the mirror failure once a function grows past the window:
+        the tail stops being scanned, so a real violation added at the end of a
+        long function is silently not seen. That direction is worse, because it
+        is invisible: the guard just goes quiet.
+
+    Brace matching removes the constant. Comments and string literals are
+    stripped/neutralised BEFORE counting so a ``{`` inside a comment or a
+    quoted string cannot unbalance the scan — the same discipline
+    :func:`strip_comments` exists to enforce, applied to a different question.
+
+    Args:
+        text: Full source text of the file.
+        name: Function name, as it appears after the ``function`` keyword.
+        lang: Comment family for the pre-strip (default ``'js'``).
+
+    Returns:
+        Source of the function from the ``function`` keyword through its
+        matching closing brace, comments blanked (line count preserved).
+
+    Raises:
+        AssertionError: if the function is absent, or its braces never balance
+            (a caller asserting on a body must never silently receive a
+            partial one).
+    """
+    live = strip_comments(text, lang=lang)
+    needle = 'function ' + name
+    start = live.find(needle)
+    assert start != -1, (
+        'function %s not found in the scanned source (it may have been '
+        'renamed or deleted — a guard must not silently scan nothing)' % name)
+
+    open_at = live.find('{', start)
+    assert open_at != -1, 'no opening brace after function %s' % name
+
+    # Neutralise string/template literals so braces inside them do not count.
+    # Comments are already blanked by strip_comments above.
+    depth = 0
+    i = open_at
+    quote = None
+    while i < len(live):
+        ch = live[i]
+        if quote:
+            if ch == '\\':
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+        elif ch in '"\'`':
+            quote = ch
+        elif ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                return live[start:i + 1]
+        i += 1
+    raise AssertionError(
+        'braces never balanced for function %s — refusing to return a partial '
+        'body, which would make any "token not in body" assertion vacuous'
+        % name)
 
 
 #: A real ``playwright install`` browser-download invocation.

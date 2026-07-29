@@ -1189,10 +1189,39 @@ function _startOfflineRecoveryPolling() {
  * error leaves every pin untouched, retried next sweep).
  *
  * @param {Array} activeTasks — the parsed ``/api/v1/chat/active`` array.
+ * @param {Object} convStateProjection — the parsed ``/api/v1/chat/conv-state``
+ *        body. REQUIRED as a second liveness source: ``/api/chat/active`` hides
+ *        autopilot VU carriers by design, and since the cold-attach fix a conv
+ *        can legitimately be pinned to one. Passing only ``activeTasks`` makes
+ *        the sweep carrier-blind (it then stamps ``interrupted`` on a turn the
+ *        backend is still generating).
  * @returns {number} count of stale pins reconciled.
  */
-function _reconcileStuckActiveTaskPins(activeTasks) {
+function _reconcileStuckActiveTaskPins(activeTasks, convStateProjection) {
   if (!Array.isArray(activeTasks)) return 0;  // probe failed → touch nothing
+  /* ★ CARRIER-AWARE LIVENESS (the defect d6e8bdb3 introduced).
+   *
+   *   Cold-attaching to a VU carrier sets ``conv.activeTaskId = <carrierId>``
+   *   — required, because connectToTask anchors its accumulation slot and its
+   *   self-heal on that pin. But ``/api/v1/chat/active`` EXCLUDES carriers,
+   *   and correctly so: it answers "what may I reconnect an SSE to?", and its
+   *   five consumers feed the result to the PLAIN connectToTask path where a
+   *   carrier births a permanently-stuck "Waiting…" bubble. So that endpoint
+   *   can never be the sole liveness source for a pin that may name a carrier.
+   *
+   *   Second source: the conv-state projection (``/api/v1/chat/conv-state``),
+   *   which DOES carry carriers as ``<tid>#vu``. We read it through the
+   *   REDUCER'S OWN output (``conv._authoritativeActiveTaskIds``, markers
+   *   already stripped) rather than re-parsing the wire here — a second parse
+   *   would drift from the reducer's marker handling, which is precisely the
+   *   split that produced this family of bugs.
+   *
+   *   FAIL-SAFE, and the direction matters: without the projection we cannot
+   *   distinguish "stale pin" from "live carrier", and guessing wrong stamps
+   *   `interrupted` on work the backend is still doing. So an unusable
+   *   projection means touch nothing — same posture the activeTasks guard
+   *   above already takes. */
+  if (!convStateProjection || typeof convStateProjection !== 'object') return 0;
   const _running = new Set();
   for (const t of activeTasks) {
     if (t && t.id && t.status === 'running' && !t.aborted) _running.add(t.id);
@@ -1208,6 +1237,11 @@ function _reconcileStuckActiveTaskPins(activeTasks) {
     // still in the running set is legitimately slow/alive — leave it (the
     // server reaper is the sole authority on "wedged", per its dual-clock gate).
     if (_running.has(taskId)) continue;
+    /* ★ …and the carrier-aware half: the reducer's busy set INCLUDES carriers,
+     *   so a pin naming a live VU carrier is proven alive here even though the
+     *   line above could not see it. */
+    const _busy = conv._authoritativeActiveTaskIds;
+    if (_busy && typeof _busy.has === 'function' && _busy.has(taskId)) continue;
     if (typeof _healStuckPlaceholder === 'function'
         && _healStuckPlaceholder(conv.id, { background: true })) {
       cleared++;
@@ -1265,38 +1299,38 @@ function _crossDeviceReconcile() {
      *   BACKGROUND orphan's sidebar busy-dot clears without a refresh. Runs
      *   independently of the list-load promise above (its own catch); a probe
      *   failure touches nothing (fail-safe). */
-    Promise.resolve(Api.chat.active({ signal: AbortSignal.timeout(8000) }))
-      .then((activeTasks) => {
-        if (typeof _reconcileStuckActiveTaskPins === 'function') {
-          _reconcileStuckActiveTaskPins(activeTasks);
-        }
-      })
-      .catch((e) => debugLog(`[stale-pin-sweep] active() probe failed: ${e && e.message}`, "warn"));
-    /* ★ POLL-LANE BUSY STATE — the socket-down half of the VU visibility fix.
+    /* ★ POLL-LANE BUSY STATE + carrier-aware stale-pin sweep.
      *
-     *   Everything above this line learns about running work from
-     *   /api/v1/chat/active, which deliberately EXCLUDES carriers (a carrier
-     *   handed to the plain connectToTask path births a permanently-stuck
-     *   "Waiting…" bubble). That exclusion is right for THAT question — "what
-     *   may I reconnect to?" — but it left this fallback structurally unable to
-     *   see an autopilot VU turn at all. So with the push socket down (a flaky
-     *   tunnel / VS Code port-forward), a multi-minute VU turn showed a
-     *   finished-looking conversation with no bubble and no stream until the
-     *   user refreshed by hand — the exact symptom the push-side fixes closed.
+     *   Two probes, ONE ordered chain — deliberately not two independent
+     *   promises. The stale-pin sweep needs the conv-state projection to tell a
+     *   stale pin from a live VU carrier, and it must read the sets AFTER the
+     *   reducer has applied that projection; racing them would leave the sweep
+     *   reading the previous tick's busy sets, which is exactly the
+     *   carrier-blind state that stamped `interrupted` on live work.
      *
-     *   Fix: fetch the SAME projection the push `conv_state_snapshot` frame
-     *   carries and run it through the SAME reducer and the SAME attach seam.
+     *   /api/v1/chat/active deliberately EXCLUDES carriers (a carrier on the
+     *   plain connectToTask path births a permanently-stuck "Waiting…" bubble),
+     *   which is right for THAT question — "what may I reconnect to?" — but it
+     *   left this fallback structurally unable to see an autopilot VU turn at
+     *   all. So the conv-state projection is the second source for BOTH jobs
+     *   here: attach-on-arrival, and pin liveness.
+     *
      *   One projection, one reducer, two transports — teaching this lane its
      *   own notion of "busy" is precisely how busy/attachable drifted apart in
      *   the first place.
      *
-     *   Fail-safe + idempotent: a probe error touches nothing (matching the
-     *   stale-pin sweep beside it), and the seam re-guards on activeStreams so
-     *   a poll landing on an already-attached conv is a cheap no-op. */
+     *   Fail-safe + idempotent: either probe failing means the sweep touches
+     *   nothing (it cannot prove a pin is stale), and the attach seam re-guards
+     *   on activeStreams so a poll landing on an already-attached conv is a
+     *   cheap no-op. */
     if (Api.chat && typeof Api.chat.convState === 'function') {
-      Promise.resolve(Api.chat.convState({ signal: AbortSignal.timeout(8000) }))
-        .then((projection) => {
-          if (!projection || typeof projection !== 'object') return;
+      Promise.all([
+        Promise.resolve(Api.chat.convState({ signal: AbortSignal.timeout(8000) }))
+          .catch((e) => { debugLog(`[poll-conv-state] probe failed: ${e && e.message}`, "warn"); return null; }),
+        Promise.resolve(Api.chat.active({ signal: AbortSignal.timeout(8000) }))
+          .catch((e) => { debugLog(`[stale-pin-sweep] active() probe failed: ${e && e.message}`, "warn"); return null; }),
+      ]).then(([projection, activeTasks]) => {
+        if (projection && typeof projection === 'object') {
           if (typeof applyConvStateSnapshot === 'function') {
             applyConvStateSnapshot(conversations, projection);
           }
@@ -1310,8 +1344,13 @@ function _crossDeviceReconcile() {
               && typeof _reconnectServerTaskIfIdle === 'function') {
             _reconnectServerTaskIfIdle(activeConvId);
           }
-        })
-        .catch((e) => debugLog(`[poll-conv-state] probe failed: ${e && e.message}`, "warn"));
+        }
+        /* Sweep LAST, with BOTH sources — the reducer has now written the
+         * carrier-aware busy sets this call depends on. */
+        if (typeof _reconcileStuckActiveTaskPins === 'function') {
+          _reconcileStuckActiveTaskPins(activeTasks, projection);
+        }
+      }).catch((e) => debugLog(`[poll-lane] chain failed: ${e && e.message}`, "warn"));
     }
   };
   if (typeof requestIdleCallback === "function")

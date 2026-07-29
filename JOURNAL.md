@@ -1,6 +1,28 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-29(续·陈旧感知闭环) — owner 抓出我**一半守卫是空的,且被测试名掩盖**:名字写着 and poll projection,函数体一行没碰那条路——摘掉 poll 的 rev,**18/18 全绿**;修完再做原始问题的后半句「前端不知道自己陈旧」(commits `28170cdf` + `5e04a13f`;**12 + 13 条守卫**,**NEUTER×6**(其中**一发首版空转,由我自查抓回**);相邻环 **101 + 22 全绿**;charter 不变量已提交)
+
+- **★ owner 的判据(第三次同族,换了个载体):** 上一轮是「docstring 承诺了断言里没有的那一半」,这一轮是**测试名**承诺了断言里没有的那一半。`test_snapshot_and_poll_projection_carry_frame_level_rev` 只 import 了 `build_conv_state_snapshot`。**判据:一个名实不符的守卫比没有守卫更糟——它让人不再去读断言列表。** 修完顺手把 12 条守卫的「名字 vs 函数体实际触碰的模块」逐条列表核对,无第二处。
+- **★ 这一半不是装饰:** poll 是 push 断线时的**唯一**通道,它丢 rev 等于「socket 挂着期间 CLEAR 永远推不动 gate」,回到本票要修的病根附近。
+- **fail-empty 早返回按 owner 判断补齐(我同意他的理由):** `{'convs': {}}` 对 reducer 语义是**全部清空**,是本端点能发出的**最具破坏性**的帧;带着它却不带 rev 就是**半个帧**——客户端清了但推不动 gate。现在三条出口全部走**唯一**的 `_envelope()`,并用 AST 普查钉死「不能再加第四条忘了 rev 的出口」。
+- **★ 我在做这件事的过程中自己造了一个更严重的缺陷,写守卫时抓回:** 把 mint 的 import 从 registry 的 import 里拆出来,制造了**旧代码到不了的状态**——mint 缺席而投影正常,于是 per-conv 循环 `None()` ⇒ **500 掉那个「专门用来在别的都坏了时还能应答」的端点**。比它要修的洞更糟。现在两个 rev 站点共用一个 None-safe `_mint()`,没有 rev 就不带(客户端保守分支正好接住)。
+- **★ 普查器我写坏了两版,第二版的错法更隐蔽:** 首版按行缩进切掉 `_envelope` 体,结果把 `_mint` 的内部 `return None` 当违规;**判据:切片式源码普查每新增一个嵌套 def 就要教它一次**,改成 AST 走树、结构性跳过所有嵌套函数,新增 helper 自动免疫。
+- **然后做后半句「前端不知道自己陈旧」——两个组件各自「已经知道」却什么都不做:**
+
+  | 组件 | 它已经知道 | 它做了什么 | 现在 |
+  |---|---|---|---|
+  | `drift_tracker` | 能判「server 动了 client 冻结」并标 sustained | **只挑日志级别** | 推一帧纠正快照回那个 socket |
+  | `push.js` | 8s ping 看门狗判出「帧没在到」 | **没有渲染消费者** | 喂 confidence,侧栏降级渲染 |
+
+- **★ 纠正帧刻意复用普通 `conv_state_snapshot`:** 同一投影、同一 server-minted frame-level rev(正好是上一批加的),使**「修复」与「重连」对客户端不可区分**——这正是它能安全发送的原因,也省掉一条新分支(新分支就是下一个漂移面)。
+- **★ 冷却是设计不是优化,且必须按「投递成功」起算:** 卡住的客户端每 60s 报一次,无冷却的修复会在传输**已经不健康**时每分钟发一帧;而若按「决定要修」起算,一次投递失败(socket 在别的副本)会把整个窗口静音。精确投递不广播:**健康 tab 吸收一帧修复,与卡住 tab 被修好,在日志上完全一样** ⇒ 广播会掩盖正被修复的那个状态。
+- **★ confidence 与 busy 严格并行,永不合并(这条最要紧):** 若让不健康通道把 busy 翻 false,正在生成的会话会**显示 Send、隐藏 Stop = 丢失中止手柄**,比被报的陈旧问题更严重。故 `computeConvBusy` 行为**逐字未变**,confidence 只修饰不改变。另:本 tab 活流优先于通道健康(正在收字节不可能陈旧)、`poor` 保持 confirmed(慢但在送达,把慢当陈旧会在每个移动网络上点亮降级 UI)、首读之前默认 confirmed(降级必须由**正面证据**触发)。
+- **★ 差点做成「看不见的管道」:** confidence 翻转**不改变任何其他 flag**,若不进 `_statusHash`,渲染快路径 early-return、侧栏永不重绘——**单测里像能用,浏览器里什么都不做**。已进 hash 并单列守卫。i18n key 与 CSS 规则同时补齐(项目里有过 `project.qrScan` 字面量上线的先例)。
+- **★ NEUTER 六发里有一发首版空转,我自己抓回来的,而且是同一家族第二次:** wiring 守卫首版只断言 repair 符号**出现在**函数里,于是把闸改成 `if False and should_repair(...)`(= 完整复原本 epic 要修的缺陷)后 **13/13 全绿**。**判据:结构性守卫断言「符号存在」≠ 断言「代码可达」**——必须同时钉①闸条件里没有常量短路、②投递与冷却在该分支**体内**。改完两种改法(禁用闸 / 把投递挪出闸)都精确咬红。
+- **诚实边界:** ①`5e04a13f` 的提交信息里有一处代码片段被 shell 的反引号吞掉(内容完整、仅那句少了主语);随后我用 `--amend` 想补,**HEAD 已被兄弟提交推进**,amend 落到了兄弟的 `aec81efa` 上——已逐条核验:兄弟信息**完整无损、我的文字零泄漏**(替换串未匹配,是 no-op),我的 `5e04a13f` 内容完好。**判据:共享 HEAD 上 `--amend` 的目标是「此刻的 HEAD」而不是「我刚才提交的那个」,补信息前必须先核对 HEAD 仍是自己的 commit。** ②纯后端 + 前端 bundle,**运行中进程不带**,需重启 + bundle 重建;修复路径要真正跑起来还需 sustained 阈值(默认 180s)与 60s 探针各满足一次。
+
+
 ### 2026-07-29(续·ping 到期) — 「保活/熔断/凭证探针」三层架在**新协议已删除的 `ping`** 上;实测一个合规服务器会让保活**每 45 秒重连一次一条完全健康的连接**,而凭证探针**永久停摆**(`pt_175e68aab6884318` DONE;commit `c775bf68`,3 文件;新套件 **18 条**,**NEUTER×4 各咬各的**,相邻环 **74 passed**;真 mcp 2.0.0 服务器端到端)
 
 - **★ 先验票面前提,而这次它成立且比票面更硬:** 票面说协议修订 2026-07-28 删除了 `ping`。对**权威 schema.ts** 实测:`ping` 出现 **0 次**、`PingRequest` 不存在;作为对照,`logging/setLevel` **仍在文件里**、只是带 `@deprecated` 标签和 12 个月窗口。**两者不是同一档处理——ping 是删除,不是弃用。** 顺带发现票面没提的一条:`initialize` 同样 **0 次**(整个握手都没了)。

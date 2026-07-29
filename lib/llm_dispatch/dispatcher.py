@@ -116,6 +116,7 @@ class LLMDispatcher:
 
         if has_saved:
             self._migrate_provider_extra_headers(saved_providers, fresh_config)
+            self._migrate_duplicate_account_faces(saved_providers)
             self._build_slots_from_providers(saved_providers)
         else:
             # ★ Non-default endpoint → auto-discover models from /v1/models
@@ -213,6 +214,51 @@ class LLMDispatcher:
             return {}
 
     _HEADER_MIGRATIONS = None  # lazy-loaded in _migrate_provider_extra_headers
+
+    def _migrate_duplicate_account_faces(self, providers):
+        """Fold pre-separation duplicate cards of ONE account into one card.
+
+        Before ``base_url``/``protocol`` became per-model, a gateway account
+        exposing two wire protocols had to be written as TWO provider entries
+        sharing one set of API keys (aigc.sankuai.com: ``/v1/openai/native``
+        + ``/v1/anthropic``). This collapses such a pair into a single card
+        whose alternate face lives under ``faces{}``.
+
+        Runs at load time for EVERY install rather than being a hand-edit of
+        one machine's config: otherwise other installs keep the duplicate
+        card AND, once the second template file is gone, that card can never
+        match a template again (``_findMatchingTemplate`` keys on exact
+        base_url), so "sync from template" silently dies for it.
+
+        Persists once, mirroring ``_migrate_provider_extra_headers``.
+        """
+        from lib.llm_dispatch.provider_face import merge_duplicate_account_faces
+
+        try:
+            changed = merge_duplicate_account_faces(providers)
+        except Exception as e:
+            logger.error('[Dispatch] account-face merge failed, leaving '
+                         'providers untouched: %s', e, exc_info=True)
+            return
+        if not changed:
+            return
+
+        try:
+            from lib import _SERVER_CONFIG_PATH
+            from lib.json_store import update_json_atomic
+
+            def _mutate(cfg):
+                if not isinstance(cfg, dict):
+                    cfg = {}
+                cfg['providers'] = providers
+                return cfg
+
+            update_json_atomic(_SERVER_CONFIG_PATH, _mutate, default={})
+            logger.info('[Dispatch] Persisted account-face merge to %s',
+                        _SERVER_CONFIG_PATH)
+        except Exception as e:
+            logger.warning('[Dispatch] Failed to persist account-face merge '
+                           '(in-memory merge still applied): %s', e)
 
     def _migrate_provider_extra_headers(self, providers, config):
         """Auto-inject extra_headers for known providers missing them.

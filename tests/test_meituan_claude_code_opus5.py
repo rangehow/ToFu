@@ -9,8 +9,10 @@ naming family as the existing ``yuju-claude-opus-4.8-evaDaily`` /
 
 Two registration surfaces are audited:
 
-  1. ``static/provider_templates/meituan_claude_code.json`` — the Settings-UI
-     template entry must mirror its 4.8 sibling (caps / rpm / cost).
+  1. ``static/provider_templates/meituan.json`` — the Settings-UI
+     template entry must mirror its 4.8 sibling (caps / rpm / cost). Since
+     2026-07-29 this is the MERGED template: one card, two wire faces, with
+     the Claude roster routed to ``faces.anthropic`` automatically.
   2. ``lib.model_info._family.is_claude_opus_47`` — the evaDaily alias is
      BARE-MAJOR (``opus-5-…``, no minor digit). The pre-fix regex required a
      ``opus-X.Y`` minor, so the new alias silently classified as Opus ≤4.6:
@@ -53,8 +55,18 @@ _DUMMY_MSGS = [{'role': 'user', 'content': 'hi'}]
 
 
 def _load_claude_code_template() -> dict:
+    """The merged Meituan template.
+
+    Until 2026-07-29 the Claude roster lived in its own
+    ``meituan_claude_code.json`` because ``protocol``/``base_url`` were
+    provider-level, so one gateway account could not express two wire faces.
+    With the account/face separation the roster moved into ``meituan.json``
+    (whose ``faces.anthropic`` carries the Anthropic-native wire) and the
+    second file was deleted. Only the SOURCE moved — every assertion below is
+    about registration and wire shape, which are unchanged.
+    """
     path = os.path.join(
-        _ROOT, 'static', 'provider_templates', 'meituan_claude_code.json')
+        _ROOT, 'static', 'provider_templates', 'meituan.json')
     with open(path, encoding='utf-8') as f:
         return json.load(f)
 
@@ -107,7 +119,7 @@ def test_template_carries_opus5_with_sibling_parity():
     tpl = _load_claude_code_template()
     violations = _template_violations(tpl.get('models') or [])
     assert not violations, (
-        'meituan_claude_code.json template violations:\n'
+        'meituan.json template violations:\n'
         + '\n'.join('  ' + v for v in violations))
 
 

@@ -4,48 +4,472 @@
   "category": "official",
   "name": "Meituan (AIGC Gateway)",
   "base_url": "https://aigc.sankuai.com/v1/openai/native",
+  "faces": {
+    "anthropic": {
+      "base_url": "https://aigc.sankuai.com/v1/anthropic",
+      "protocol": "anthropic"
+    }
+  },
   "extra_headers": {
     "M-TransferContext-INF-CELL": "gray-release-ai-gpt-test"
   },
   "thinking_format": "enable_thinking",
-  "_claude_note": "Claude/Fable models are DELIBERATELY absent here. This is the gateway's OpenAI-compatible face, whose upstream does not emit thinking-block signatures (measured 2026-07-28: 111 chunks, 33 reasoning_content, 0 signature). They live on the SAME gateway's Anthropic-native face — see meituan_claude_code.json (base_url .../v1/anthropic, protocol=anthropic), where signature_delta arrives intact. Re-adding a Claude entry here silently reverts that migration; tests/test_meituan_gateway_protocol_faces.py fails the build if you do.",
+  "_face_note": "ONE account, TWO wire faces. aigc.sankuai.com serves the same models over an OpenAI-compatible face (base_url, default) and an Anthropic-native face (faces.anthropic), sharing one set of API keys. Claude-family entries are routed to the anthropic face AUTOMATICALLY by lib/llm_dispatch/provider_face.resolve_face — they carry no per-model 'face' key, so a future opus-6/fable-6 is correct the day it is added. That face is the only one that emits thinking-block signature_delta (measured 2026-07-28: the OpenAI face streamed 111 chunks / 33 reasoning_content / 0 signature), and a thinking block replayed without its signature is rejected upstream. Do NOT delete faces.anthropic: a Claude entry with no anthropic face on this gateway is REFUSED at slot-build time rather than silently downgraded.",
   "models": [
-    { "model_id": "LongCat-Flash-Thinking-2601", "capabilities": ["text", "thinking", "cheap"],                       "rpm": 60,  "cost": 0.0 },
-    { "model_id": "LongCat-2.0",             "capabilities": ["text", "thinking"],                                    "rpm": 60,  "cost": 0.0 },
-    { "model_id": "gemini-2.5-pro",          "capabilities": ["text", "vision", "thinking", "cheap"],                 "rpm": 100, "cost": 0.005 },
-    { "model_id": "gemini-2.5-flash",        "capabilities": ["text", "vision", "cheap"],                    "rpm": 200, "cost": 0.001 },
-    { "model_id": "gemini-3.1-flash-lite-preview", "capabilities": ["text", "vision", "cheap"],              "rpm": 30,  "cost": 0.001 },
-    { "model_id": "gemini-3.1-pro-preview",  "capabilities": ["text", "vision", "thinking", "cheap"],                 "rpm": 5,   "cost": 0.006 },
-    { "model_id": "gemini-3-flash-preview",  "capabilities": ["text", "vision", "thinking", "cheap", "audio_chat"],   "rpm": 60,  "cost": 0.001 },
-    { "model_id": "LongCat-Flash-Omni-2603", "capabilities": ["text", "vision", "audio_chat"],                 "rpm": 60,  "cost": 0.0 },
-    { "model_id": "gemini-3.5-flash",        "capabilities": ["text", "vision", "thinking", "cheap"],                 "rpm": 30,  "cost": 0.005 },
-    { "model_id": "gemini-3.6-flash",        "capabilities": ["text", "vision", "thinking", "cheap"],                 "rpm": 20,  "cost": 0.005 },
-    { "model_id": "gemini-3.5-flash-lite",   "capabilities": ["text", "vision", "thinking", "cheap"],                 "rpm": 20,  "cost": 0.001 },
-    { "model_id": "qwen3.5-plus",            "capabilities": ["text", "vision", "thinking", "cheap"],                 "rpm": 60,  "cost": 0.001 },
-    { "model_id": "MiniMax-M3",              "capabilities": ["text", "vision", "thinking", "cheap"],                 "rpm": 60,  "cost": 0.002 },
-    { "model_id": "MiniMax-M2.7",            "capabilities": ["text", "cheap"],                                       "rpm": 90,  "cost": 0.001 },
-    { "model_id": "MiniMax-M2.5",            "capabilities": ["text", "thinking", "cheap"],                            "rpm": 60,  "cost": 0.001 },
-    { "model_id": "kimi-k3",                 "capabilities": ["text", "vision", "video", "thinking", "cheap"],           "rpm": 30,  "cost": 0.008 },
-    { "model_id": "gpt-4.1-mini",            "capabilities": ["text", "vision", "cheap"],                    "rpm": 60,  "cost": 0.001 },
-    { "model_id": "gpt-5.6-sol",             "capabilities": ["text", "vision", "thinking"],                 "rpm": 30,  "cost": 0.020 },
-    { "model_id": "gpt-5.6-terra",           "capabilities": ["text", "vision", "thinking", "cheap"],        "rpm": 30,  "cost": 0.009 },
-    { "model_id": "gpt-5.6-luna",            "capabilities": ["text", "vision", "thinking", "cheap"],        "rpm": 60,  "cost": 0.003 },
-    { "model_id": "glm-5.2",                "capabilities": ["text", "thinking"],              "rpm": 60,  "cost": 0.004 },
-    { "model_id": "glm-5.1",                 "request_ids": ["glm-5.1", "glm-5.1-huawei"], "capabilities": ["text", "thinking"],              "rpm": 60,  "cost": 0.004 },
-    { "model_id": "glm-5v-turbo",            "capabilities": ["text", "vision", "cheap"],                              "rpm": 60,  "cost": 0.002 },
-    { "model_id": "Doubao-Seed-2.0-pro",     "capabilities": ["text", "vision", "thinking", "cheap"],                 "rpm": 60,  "cost": 0.002 },
-    { "model_id": "Doubao-Seed-ASR-2.0",     "capabilities": ["transcription"],                                       "rpm": 60,  "cost": 0.001 },
-    { "model_id": "deepseek-v3.2",           "request_ids": ["deepseek-v3.2-tencent", "deepseek-v3.2-baidu", "deepseek-v3.2-huawei", "deepseek-v3.2-doubao"], "capabilities": ["text", "cheap"], "rpm": 60, "cost": 0.0006 },
-    { "model_id": "deepseek-v4-pro",         "capabilities": ["text", "thinking", "cheap"],                  "rpm": 30,  "cost": 0.003 },
-    { "model_id": "hy3-preview",              "capabilities": ["text", "thinking", "cheap"],                  "rpm": 30,  "cost": 0.002 },
-    { "model_id": "deepseek-v4-flash",       "request_ids": ["deepseek-v4-flash", "deepseek-v4-flash-huawei"], "capabilities": ["text", "thinking", "cheap"], "rpm": 60,  "cost": 0.0002 },
-    { "model_id": "gemini-2.5-flash-image",  "capabilities": ["image_gen"],                                  "rpm": 10,  "cost": 0.012 },
-    { "model_id": "gemini-3-pro-image-preview", "capabilities": ["image_gen"],                               "rpm": 10,  "cost": 0.134 },
-    { "model_id": "gemini-3.1-flash-image-preview", "capabilities": ["image_gen"],                            "rpm": 10,  "cost": 0.015 },
-    { "model_id": "gpt-image-1.5",           "capabilities": ["image_gen"],                                  "rpm": 10,  "cost": 0.043 },
-    { "model_id": "gpt-image-2",             "capabilities": ["image_gen"],                                  "rpm": 10,  "cost": 0.065 },
-    { "model_id": "text-embedding-v4",        "capabilities": ["embedding"],                                  "rpm": 100, "cost": 0.001 },
-    { "model_id": "text-embedding-3-small",   "capabilities": ["embedding"],                                  "rpm": 60,  "cost": 0.001 },
-    { "model_id": "text-embedding-3-large",   "capabilities": ["embedding"],                                  "rpm": 32,  "cost": 0.001 }
+    {
+      "model_id": "LongCat-Flash-Thinking-2601",
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 60,
+      "cost": 0.0
+    },
+    {
+      "model_id": "LongCat-2.0",
+      "capabilities": [
+        "text",
+        "thinking"
+      ],
+      "rpm": 60,
+      "cost": 0.0
+    },
+    {
+      "model_id": "gemini-2.5-pro",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 100,
+      "cost": 0.005
+    },
+    {
+      "model_id": "gemini-2.5-flash",
+      "capabilities": [
+        "text",
+        "vision",
+        "cheap"
+      ],
+      "rpm": 200,
+      "cost": 0.001
+    },
+    {
+      "model_id": "gemini-3.1-flash-lite-preview",
+      "capabilities": [
+        "text",
+        "vision",
+        "cheap"
+      ],
+      "rpm": 30,
+      "cost": 0.001
+    },
+    {
+      "model_id": "gemini-3.1-pro-preview",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 5,
+      "cost": 0.006
+    },
+    {
+      "model_id": "gemini-3-flash-preview",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap",
+        "audio_chat"
+      ],
+      "rpm": 60,
+      "cost": 0.001
+    },
+    {
+      "model_id": "LongCat-Flash-Omni-2603",
+      "capabilities": [
+        "text",
+        "vision",
+        "audio_chat"
+      ],
+      "rpm": 60,
+      "cost": 0.0
+    },
+    {
+      "model_id": "gemini-3.5-flash",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "cost": 0.005
+    },
+    {
+      "model_id": "gemini-3.6-flash",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 20,
+      "cost": 0.005
+    },
+    {
+      "model_id": "gemini-3.5-flash-lite",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 20,
+      "cost": 0.001
+    },
+    {
+      "model_id": "qwen3.5-plus",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 60,
+      "cost": 0.001
+    },
+    {
+      "model_id": "MiniMax-M3",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 60,
+      "cost": 0.002
+    },
+    {
+      "model_id": "MiniMax-M2.7",
+      "capabilities": [
+        "text",
+        "cheap"
+      ],
+      "rpm": 90,
+      "cost": 0.001
+    },
+    {
+      "model_id": "MiniMax-M2.5",
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 60,
+      "cost": 0.001
+    },
+    {
+      "model_id": "kimi-k3",
+      "capabilities": [
+        "text",
+        "vision",
+        "video",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "cost": 0.008
+    },
+    {
+      "model_id": "gpt-4.1-mini",
+      "capabilities": [
+        "text",
+        "vision",
+        "cheap"
+      ],
+      "rpm": 60,
+      "cost": 0.001
+    },
+    {
+      "model_id": "gpt-5.6-sol",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking"
+      ],
+      "rpm": 30,
+      "cost": 0.02
+    },
+    {
+      "model_id": "gpt-5.6-terra",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "cost": 0.009
+    },
+    {
+      "model_id": "gpt-5.6-luna",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 60,
+      "cost": 0.003
+    },
+    {
+      "model_id": "glm-5.2",
+      "capabilities": [
+        "text",
+        "thinking"
+      ],
+      "rpm": 60,
+      "cost": 0.004
+    },
+    {
+      "model_id": "glm-5.1",
+      "request_ids": [
+        "glm-5.1",
+        "glm-5.1-huawei"
+      ],
+      "capabilities": [
+        "text",
+        "thinking"
+      ],
+      "rpm": 60,
+      "cost": 0.004
+    },
+    {
+      "model_id": "glm-5v-turbo",
+      "capabilities": [
+        "text",
+        "vision",
+        "cheap"
+      ],
+      "rpm": 60,
+      "cost": 0.002
+    },
+    {
+      "model_id": "Doubao-Seed-2.0-pro",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 60,
+      "cost": 0.002
+    },
+    {
+      "model_id": "Doubao-Seed-ASR-2.0",
+      "capabilities": [
+        "transcription"
+      ],
+      "rpm": 60,
+      "cost": 0.001
+    },
+    {
+      "model_id": "deepseek-v3.2",
+      "request_ids": [
+        "deepseek-v3.2-tencent",
+        "deepseek-v3.2-baidu",
+        "deepseek-v3.2-huawei",
+        "deepseek-v3.2-doubao"
+      ],
+      "capabilities": [
+        "text",
+        "cheap"
+      ],
+      "rpm": 60,
+      "cost": 0.0006
+    },
+    {
+      "model_id": "deepseek-v4-pro",
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "cost": 0.003
+    },
+    {
+      "model_id": "hy3-preview",
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "cost": 0.002
+    },
+    {
+      "model_id": "deepseek-v4-flash",
+      "request_ids": [
+        "deepseek-v4-flash",
+        "deepseek-v4-flash-huawei"
+      ],
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 60,
+      "cost": 0.0002
+    },
+    {
+      "model_id": "gemini-2.5-flash-image",
+      "capabilities": [
+        "image_gen"
+      ],
+      "rpm": 10,
+      "cost": 0.012
+    },
+    {
+      "model_id": "gemini-3-pro-image-preview",
+      "capabilities": [
+        "image_gen"
+      ],
+      "rpm": 10,
+      "cost": 0.134
+    },
+    {
+      "model_id": "gemini-3.1-flash-image-preview",
+      "capabilities": [
+        "image_gen"
+      ],
+      "rpm": 10,
+      "cost": 0.015
+    },
+    {
+      "model_id": "gpt-image-1.5",
+      "capabilities": [
+        "image_gen"
+      ],
+      "rpm": 10,
+      "cost": 0.043
+    },
+    {
+      "model_id": "gpt-image-2",
+      "capabilities": [
+        "image_gen"
+      ],
+      "rpm": 10,
+      "cost": 0.065
+    },
+    {
+      "model_id": "text-embedding-v4",
+      "capabilities": [
+        "embedding"
+      ],
+      "rpm": 100,
+      "cost": 0.001
+    },
+    {
+      "model_id": "text-embedding-3-small",
+      "capabilities": [
+        "embedding"
+      ],
+      "rpm": 60,
+      "cost": 0.001
+    },
+    {
+      "model_id": "text-embedding-3-large",
+      "capabilities": [
+        "embedding"
+      ],
+      "rpm": 32,
+      "cost": 0.001
+    },
+    {
+      "model_id": "claude-opus-5",
+      "request_ids": [
+        "yuju-claude-opus-5-evaDaily"
+      ],
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking"
+      ],
+      "rpm": 30,
+      "cost": 0.045
+    },
+    {
+      "model_id": "claude-opus-4.8",
+      "request_ids": [
+        "aws.claude-opus-4.8",
+        "yuju-claude-opus-4.8-evaDaily"
+      ],
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking"
+      ],
+      "rpm": 30,
+      "cost": 0.045
+    },
+    {
+      "model_id": "claude-opus-4.7",
+      "request_ids": [
+        "aws.claude-opus-4.7",
+        "aws.claude-opus-4.7-nova04",
+        "yuju-claude-opus-4.7-evaDaily"
+      ],
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking"
+      ],
+      "rpm": 30,
+      "cost": 0.045
+    },
+    {
+      "model_id": "claude-opus-4.6",
+      "request_ids": [
+        "aws.claude-opus-4.6",
+        "aws.claude-opus-4.6-b",
+        "vertex.claude-opus-4.6"
+      ],
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking"
+      ],
+      "rpm": 30,
+      "cost": 0.045
+    },
+    {
+      "model_id": "claude-sonnet-4.6",
+      "request_ids": [
+        "aws.claude-sonnet-4.6"
+      ],
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking"
+      ],
+      "rpm": 50,
+      "cost": 0.009
+    },
+    {
+      "model_id": "claude-fable-5",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking"
+      ],
+      "rpm": 30,
+      "cost": 0.045
+    }
   ]
 }

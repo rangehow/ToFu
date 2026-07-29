@@ -72,6 +72,7 @@ __all__ = [
     'FaceResolution',
     'resolve_face',
     'dual_face_hosts',
+    'merge_duplicate_account_faces',
     'provider_faces',
     'DEFAULT_FACE',
 ]
@@ -274,3 +275,91 @@ def resolve_face(provider: dict, model_entry: dict,
     return FaceResolution(
         ok=True, base_url=default['base_url'], protocol=default['protocol'],
         face_name=DEFAULT_FACE)
+
+
+def _account_identity(provider: dict) -> tuple:
+    """What makes two provider entries THE SAME ACCOUNT.
+
+    Host + the exact key SET. Keys are compared as a set because a user may
+    reorder them freely, but a strict subset is a DIFFERENT account — two
+    tenants of one gateway must never be merged (it would cross-wire their
+    billing, quota and key-health history).
+    """
+    return (_host(provider.get('base_url') or ''),
+            frozenset(k for k in (provider.get('api_keys') or [])
+                      if isinstance(k, str) and k))
+
+
+def merge_duplicate_account_faces(providers: list) -> bool:
+    """Fold same-account provider cards that differ only by wire face.
+
+    Before the account/face separation, an account exposing two wire
+    protocols had to be written as two provider entries sharing one set of
+    API keys (the aigc.sankuai.com gateway: ``/v1/openai/native`` +
+    ``/v1/anthropic``). This collapses such a pair into ONE card whose
+    non-default face lives in ``faces{}``.
+
+    Mutates *providers* IN PLACE and returns True when anything changed, so
+    the caller can persist once (mirrors ``_migrate_provider_extra_headers``).
+
+    Merging requires SAME HOST **and** SAME KEY SET — see ``_account_identity``.
+    An anthropic card with no OpenAI sibling is left untouched: there is
+    nothing to merge into, and rewriting it would break a working config.
+    """
+    if not isinstance(providers, list) or len(providers) < 2:
+        return False
+
+    # Group by account, keeping list positions so we can rebuild in order.
+    by_account: dict = {}
+    for idx, p in enumerate(providers):
+        if not isinstance(p, dict):
+            continue
+        by_account.setdefault(_account_identity(p), []).append(idx)
+
+    drop: set = set()
+    changed = False
+
+    for (host, keys), idxs in by_account.items():
+        if not host or not keys or len(idxs) < 2:
+            continue
+
+        anchors = [i for i in idxs
+                   if (providers[i].get('protocol') or '') != 'anthropic']
+        secondaries = [i for i in idxs
+                       if (providers[i].get('protocol') or '') == 'anthropic']
+        if not anchors or not secondaries:
+            continue  # nothing to fold, or nothing to fold INTO
+
+        anchor = providers[anchors[0]]
+        faces = anchor.get('faces')
+        if not isinstance(faces, dict):
+            faces = {}
+
+        for si in secondaries:
+            sec = providers[si]
+            faces['anthropic'] = {
+                'base_url': sec.get('base_url') or '',
+                'protocol': 'anthropic',
+            }
+            # Carry the roster over. Entries already present on the anchor
+            # (matched on the logical id) are left as-is — the anchor is the
+            # surviving card and its user edits win.
+            have = {(m.get('model_id') or '')
+                    for m in (anchor.get('models') or [])}
+            for m in (sec.get('models') or []):
+                if (m.get('model_id') or '') not in have:
+                    anchor.setdefault('models', []).append(m)
+            drop.add(si)
+            changed = True
+
+        if changed:
+            anchor['faces'] = faces
+
+    if not changed:
+        return False
+
+    survivors = [p for i, p in enumerate(providers) if i not in drop]
+    providers[:] = survivors
+    logger.info('[Face] merged %d duplicate account face card(s) into their '
+                'primary provider', len(drop))
+    return True

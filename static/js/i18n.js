@@ -2913,6 +2913,24 @@ var _i18n = {
   'initiator.timer': { zh: '定时器', en: 'Timer' },
   'initiator.brain': { zh: '项目大脑', en: 'Project Brain' },
   'initiator.swarm': { zh: '自动续跑', en: 'Auto-continued' },
+  // In-timeline chip (tool_rounds.js _renderStallNudgeRow) marking an
+  // intent-stall nudge: the loop re-drove a model that said what it would do
+  // and then stopped. System-authored, so the copy must read as a SYSTEM
+  // action — never as something the user said.
+  'stall.injectRowLabel': { zh: '已提示模型继续', en: 'Nudged the model to continue' },
+  'stall.reasonWithTool': {
+    zh: '`{tool}` 未执行成功，而下一轮只有文字、没有工具调用——模型说了要做，然后停下了。',
+    en: '`{tool}` did not run, and the next round was text only — the model said what it would do, then stopped.',
+  },
+  'stall.reasonGeneric': {
+    zh: '上一个工具调用未执行成功，而下一轮只有文字。',
+    en: 'The previous tool call did not run, and the next round was text only.',
+  },
+  'stall.bound': {
+    zh: '每回合最多一次——若模型再次停下，就允许它结束。',
+    en: 'At most once per turn — if the model stalls again it is allowed to stop.',
+  },
+  'stall.promptLabel': { zh: '发给模型的内容', en: 'Sent to the model' },
   // In-timeline chip (tool_rounds.js _renderPeerInjectRow) for a peer message
   // delivered at a round boundary of a LIVE turn (Pillar #6 fast-path lane) —
   // distinct from the queue-lane .peer-msg-banner user bubble.

@@ -3419,6 +3419,13 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .paper-qa-send-btn:activ
    styling; a distinct left accent so it reads as "the operator", not a peer. */
 .sw-steer-row .sw-inbox-row-header .ptool-icon{color:#34d399}
 .sw-steer-card-item{border-left:2px solid rgba(16,185,129,0.35)}
+/* ═══ Intent-stall nudge row — the LOOP re-driving a stalled model. Amber
+   because this is an INTERCEPTION that recovered the turn: red would read as a
+   crash, green is already the operator's colour. Reuses .sw-inbox-row/.sw-card. */
+.sw-stall-row .sw-inbox-row-header .ptool-icon{color:#f59e0b}
+.sw-stall-card-item{border-left:2px solid rgba(245,158,11,0.35)}
+.sw-stall-reason{font-size:11px;color:var(--text-secondary);line-height:1.5;padding:2px 0}
+.sw-stall-bound{font-size:10px;color:var(--text-tertiary);line-height:1.5;padding:0 0 4px}
 /* ═══════════════════════════════════════════
    ★ Effort Toggle (input bar)
    ═══════════════════════════════════════════ */

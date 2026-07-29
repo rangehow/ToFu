@@ -812,6 +812,56 @@ function _renderUserSteerInjectRow(round) {
      </details>`;
 }
 
+/* ── Intent-stall nudge row (the loop re-driving a stalled model) ──
+ * Renders a synthetic toolRound (flagged `_stallNudge`) marking the moment the
+ * orchestrator detected an INTENT STALL — a tool call that did not run,
+ * followed by a prose-only round with no tool calls ("I'll do X" then nothing)
+ * — and injected a system instruction to re-drive the model.
+ *
+ * Distinct from the other three inject lanes in WHO wrote the injected text:
+ * swarm (`_inboxInject`) carries a sub-agent's result, peer (`_peerInject`)
+ * another conversation's message, steer (`_userSteerInject`) the operator's own
+ * words. This one is written by the LOOP ITSELF. That is exactly why it must be
+ * legible as a system action — a system-authored `role='user'` message must
+ * never read as something the user said.
+ *
+ * The header states the bound ("at most once per turn") because otherwise
+ * "the system re-drove my agent" reads as an unbounded spend risk; the body
+ * names the tool that failed and shows the VERBATIM instruction that was sent,
+ * so the user can judge the intervention instead of trusting a paraphrase. */
+function _renderStallNudgeRow(round) {
+  const _t = (typeof t === "function") ? t : (k, d) => d;
+  const label = _t("stall.injectRowLabel", "Nudged the model to continue");
+  const badge = _t("peer.injectRowBadge", "injected → context");
+  const tool = round.stallTool || "";
+  const reason = tool
+    ? _t("stall.reasonWithTool", "`{tool}` did not run, and the next round was "
+         + "text only — the model said what it would do, then stopped.")
+        .replace("{tool}", tool)
+    : _t("stall.reasonGeneric", "The previous tool call did not run, and the "
+         + "next round was text only.");
+  const boundTxt = _t("stall.bound", "At most once per turn — if the model "
+                      + "stalls again it is allowed to stop.");
+  const promptHtml = round.stallPrompt
+    ? `<div class="sw-card sw-stall-card-item">`
+      + `<div class="sw-card-head"><span class="sw-card-role">`
+      + `${escapeHtml(_t("stall.promptLabel", "Sent to the model"))}</span></div>`
+      + `<pre class="sw-card-raw-pre">${escapeHtml(round.stallPrompt)}</pre></div>`
+    : "";
+  return `<details class="sw-inbox-row sw-stall-row" data-rn="${round.roundNum}">
+       <summary class="ptool-line sw-inbox-row-header">
+         <span class="ptool-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:1em;height:1em"><path d="M3 2v6h6"/><path d="M3 8a9 9 0 1 0 3-5.7L3 8"/></svg></span>
+         <span class="ptool-text">${escapeHtml(label)}</span>
+         <span class="ptool-badge ptool-badge-info">${escapeHtml(badge)}</span>
+       </summary>
+       <div class="sw-inbox-row-body">
+         <div class="sw-stall-reason">${escapeHtml(reason)}</div>
+         <div class="sw-stall-bound">${escapeHtml(boundTxt)}</div>
+         ${promptHtml}
+       </div>
+     </details>`;
+}
+
 /* ── Vertical-domain card: HF Papers / Semantic Scholar / arXiv / etc. ──
  * Distinct from web results: renders one labeled card per domain that
  * carried structured items, ranked by upvotes (HF) or citations (S2).
@@ -1825,6 +1875,10 @@ function _renderUnifiedToolLine(round, isSearching) {
 
   if (round._userSteerInject) {
     return _renderUserSteerInjectRow(round);
+  }
+
+  if (round._stallNudge) {
+    return _renderStallNudgeRow(round);
   }
 
   // ★ Hallucinated / rejected tool — the model invented a tool that does not
@@ -3557,7 +3611,7 @@ function _renderToolSlot(r, allRounds) {
  * Rendered ONLY in debug mode, and only when we can name a task + round. */
 function _renderDebugEntry(r) {
   if (typeof _featureFlags === 'undefined' || !_featureFlags.debug_mode) return '';
-  if (!r || r._inboxInject || r._peerInject || r._userSteerInject) return '';
+  if (!r || r._inboxInject || r._peerInject || r._userSteerInject || r._stallNudge) return '';
   const taskId = r._taskId || (typeof _riTaskIdForRound === 'function'
     ? _riTaskIdForRound(r) : '');
   const lr = r.llmRound;
@@ -3788,9 +3842,10 @@ function renderSegmentTimelineHTML(segments, msg, idx) {
    *   structural matching (a turn may legitimately call the same tool twice). */
   const _supersededTcIds = new Set();
   for (const r of allRounds) {
-    if (r && (r._userSteerInject || r._peerInject || r._inboxInject)) {
+    if (r && (r._userSteerInject || r._peerInject || r._inboxInject || r._stallNudge)) {
       const injRound = r._userSteerInject ? r.steerRound
-        : (r._peerInject ? r.peerRound : r.inboxRound);
+        : (r._peerInject ? r.peerRound
+          : (r._stallNudge ? r.stallRound : r.inboxRound));
       const anchor = (injRound || 0) - 1;
       if (!_injByAnchor.has(anchor)) _injByAnchor.set(anchor, []);
       _injByAnchor.get(anchor).push(r);

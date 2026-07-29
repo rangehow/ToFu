@@ -131,6 +131,26 @@
 - **端到端验收(真路由,不是 mock):** 1414 字提议 → 确认 **HTTP 200** → 落库 **1414 字完整** + summary 落库 → 提议**出待办队列** → `needsYou` 归零。
 - **验收边界(诚实分账):** 纯前后端改动,**运行中进程不带,需重启才对新会话生效**;本次未在真实浏览器里点过那颗按钮(jsdom 与真路由两段各自实测,中间的 `Api.project.commitCharter` 是 api.js 既有薄封装)。
 
+### 2026-07-29 — 「帮我打开扩展管理页」死按钮根修:**它不是没反应,是三次真 404;而判定「用户在不在本机」的那把尺子在隧道部署下恒为真**(owner 报障;commit `7c150dd0`,6 文件 +716/-94;新套件 **16/16 failing-first(14 红 2 绿)**,**NEUTER×3 各咬各的方向**,相邻环 **42/42 + 76**,干净 committed worktree **58/58**)
+
+- **★ 「点了没反应」是错觉,日志有铁证:** `logs/app.log` 三条 `POST /api/v1/browser/open-extensions → 404`,每条都跟着 `no Chrome-family browser found on this machine`。按钮、路由、鉴权全通,**死在最后一寸**。
+- **三个缺陷叠加成一个静默 404:**
+  ①**开错机器**——`subprocess.Popen` 在**服务器**上开窗口,而用户的眼睛在自己电脑上;判据 `_remote_is_loopback()` 是纯 IP 判定,而同机反代/隧道(ProxyFix 未接线)让**每一个公网请求**都报 `127.0.0.1`。`docs/UNIFIED_DEVICE_BRIDGE_DESIGN.md` §3.2b 早把这条写成「缺陷被写成了特性」,这次它就是致病灶。
+  ②**没浏览器可开**——无头服务器实测四个二进制全 MISSING,即便用户真在本机也是 404。
+  ③**只认 Chrome**——Edge 同属 Chromium、跑同一份扩展,探测表却没有它。
+- **★ 根因不在「没装 Chrome」,在判据选错:** 改为 `_detect_local_browser()` 单一真源。它**严格强于 IP 判定**——反代能伪造地址,**但变不出一个浏览器到无头机器上**。**按钮与 `extensionPath` 同挂这一个探测**:本机没有任何浏览器 ⇒ 没人从这台机器看这个 UI ⇒ 那条服务端路径也无用,应退回下载 ZIP。
+- **落的是 local-control.js 自己写在文件头、却被这一处违反的规则:「一个无法达成其承诺的控件不得邀请点击」。** 探测不到 ⇒ **按钮根本不渲染**,而不是让用户点出 404;且必须退到**可执行的**指引(下载 ZIP),空面板比错指引更糟——这条单独立守卫。
+- **★ Firefox 不进表是决策不是遗漏(owner 实测纠正我的方案分档):** 我原把 Firefox 排成「档 B、代价中等」,**被推翻**。Mozilla 官方:`about:debugging` 的临时加载 **"stays installed until you remove it or restart Firefox"**,且明写 *"this is not how end-users should install add-ons"*;终端用户只能装**签名**包,自分发同样过签名+人工审核。**即便代码全移植好,用户重启一次浏览器扩展就没了**——那正是本批在修的同类「无法兑现的承诺」。次级阻塞(顺序在签名之后):`background.service_worker` Firefox 不支持(bug 1573659,6 年 NEW/P3,MDN 有双写法可解);`chrome.debugger` 根本不存在,我方 15 处调用全为整页截图,替代 `captureVisibleTab()` 只截可见区需自行拼接。
+- **「做成应用直连任意浏览器」永久关闭:** Chrome 136+ 对**默认数据目录**不再遵循 `--remote-debugging-port`,必须配非标准 `--user-data-dir`,而该目录**用不同加密密钥** ⇒ **拿不到登录态**(封禁理由正是防 cookie 窃取)。**扩展不是偷懒的选择,是目前唯一合法的登录态通道**。两条均已入 charter。
+- **烧字同族的第二刀:`.lc-substep` 只声明了 `margin`。** 裸文本失败提示因此继承模态框默认字号,比旁边 `.lc-step` 明显大一号。**它在别处「看起来正常」纯属意外**——另两处用法各包着 `<a class="lc-dl-link">`,而**子元素自带 font-size 替父元素兜住了**。合并为一条声明,两种形态都上断言。
+- **★ 我的守卫首版自己有 bug,是被自己的 NEUTER 抓出来的:** `_decl()` 读**单条规则字面**,于是我把两条规则并成分组选择器后它照样红——它断言的是**样式表的形状**而非**落地的值**。改为按文档序合并所有命中规则算**有效层叠**;顺带发现选择器正则会**吞掉前面的 CSS 注释**导致 `.lc-step` 匹配不到,补 strip 注释。**判据:CSS 守卫必须断言生效值,不能断言它写在哪条规则里。**
+- **★ 暂存期第二个自造 bug,被计数断言拦下:** 按 charter #15 过滤 hunk 时我用了 `-U3`,**我的注释插入与选择器改动落进了不同 hunk**,范围过滤只留下注释 ⇒ index 里是**一段描述某个修复的注释,而那个修复不在**。改 `-U0` 后每个改动行独立成 hunk。**判据:按行范围过滤 hunk 必须 `-U0`,否则上下文会把相邻改动黏进同一 hunk 或拆散同一处改动。**
+- **★ 事故与恢复(自报):** 我执行 `git reset -q HEAD` 后,**整批工作树改动连同新建测试文件一起消失**(mixed reset 不该有此效果,疑与共享 worktree 上并发操作叠加)。**未丢失**——`git apply --cached` 早已把内容写成真实 git object,全量扫描 16,348 个 blob 后按内容特征找回 4 个文件(`routes/api_v1/browser.py` 331L、新守卫 473L、`local-control.js` 541L、merge 套件 1121L),另两处小改动手工重做。**判据:`git apply --cached` 过的内容即便工作树被清也可从对象库找回;共享 HEAD 上任何 `git reset` 前应先确认无未落对象的改动。**
+- **兄弟协作两笔:** ①`static/styles.css` 被 peer(ms5bsx4s)占用,发协调消息后拿到 CONFIRMED CLEAR;②该 peer 同时**主动通报了自己刚踩的坑**:`git commit -- <pathspec>` **提交的是工作树而非你过滤好的 index**,它因此把另两个会话的未提交工作卷进了自己的 commit。本批据此**提交不带任何 pathspec**,只提交 index;事后核验兄弟 WIP 51 项完好、commit 恰好 6 文件、零兄弟标记。
+- **相邻环三条红全部有归属,非本批引入:** `project.qrScan` / `project.qrScanMulti` 未定义,出自兄弟会话(ms5bjrsk)的 `ui/tool_rounds.js`,零 `local.*` 牵涉。
+- **同批开票不夹带:** `docs/chrome-web-store/manifest.store.json` 权限 10 项**不含 `downloads`**,而 `background.js` 真的调用 `chrome.downloads.download` 且 `download` 是扩展 wire 命令之一 ⇒ **按现状提交商店版该命令必炸**。已单独立票 `pt_e1b353a3b06c4dea`(与运行时安装引导无代码耦合)。
+- **验收边界(诚实分账):** 四个原始问题中,①死按钮 ②提示不渲染 ③Edge 支持 已全部有实测证据(含真 app + 真探测的 E2E:本机 `extensionPath` 由完整路径变为 `None`);④Firefox/桌面合并 是**决策交付**而非代码交付,已入 charter。另:**纯后端+前端源码改动,运行中进程不带,需重启才对新会话生效**——我不自行重启。
+
 ### 2026-07-28(续·logo 再回滚) — **A2 上线当日被 owner 现场否决,全量回滚到原版**;in-situ 截图验收也不足以定品牌终审(方法论二次修正;家族 epic 前提动摇待 owner 三选一)
 
 - **经过:** A2(`13f8adee`,见下条「续·logo 定稿」)上线后 owner 在真实欢迎屏再次看到实物,决断「revert the welcome SVG to my original one」——第二次现场否决(第一次是 +40% 版 A)。本批把 `13f8adee` 的 6 个资产面(`tofu-welcome.svg`/`logo.png`/`manifest.json`/`apple-touch-icon`/README×2 的 `140×140`)全部 `git checkout 13f8adee~1` 还原 + `tofu.ico`/`icns` 重新生成;favicon link 本来指 `tofu-welcome.svg`,随文件自动还原;`tofu-favicon.svg` 保持旧手绘零引用未动;JOURNAL 历史保留(`13f8adee` 与其入账仍在链上,本批是它的回退执行而非历史抹除)。

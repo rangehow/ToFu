@@ -27,6 +27,9 @@
 - **收官逻辑:** 家族 epic(`pt_651bd5a3078e450d`)的前提是「主 logo 已精确几何化 → 两套工艺不齐」。owner 对家族票答「退回修改」后我按**像素精修**路线改完(保留现行血统与道具、严格 32 网格、22px 道具可辨,生成器 `gen_family_pixel.py`,in-situ 闸图 `_gen/logo-redesign/family-pixel-gate.png`)——但复盘确认:A2 回滚(`c69c7aec`)后,家族与主 logo **同为 VTracer 工艺,重新一致**,epic 的统一目标由「回滚主 logo」这一事件达成,上线新家族反而再次引入两套工艺。故**关闭而非上线**;11 枚像素精修稿 + 闸图全部留在 `_gen/logo-redesign/family-pixel/`,owner 一言可重启。
 - **暴露的真缺口(已报 owner 待决):** `tofu-welcome.svg` 三处引用(favicon/欢迎屏/侧栏)均无版本号,`max-age=86400` 让 owner 在 A2 回滚后仍看到缓存的 A2 一整天(「为什么还没回滚」的乌龙根因);编排面图标早有 `?v=` 机制,主 logo 反而没有。
 - **边界:** 字标 CSS 全程未碰(peer `pt_91be4876d7c64bbe` 已收口字标统一,见其条目);本批零线上文件变更。
+- **★ 自报共享 HEAD 卷带事故 + 一处误归属(两个错叠在一起):** 收官那条 journal 提交 `6a5dec8d` 的计数断言读数 **8 而非 1**,我**打印了却没有 abort**——`git add -- JOURNAL.md && echo "staged: $(...)" && git commit` 这个写法里计数只是回显,`&&` 链照常走到 commit。于是 QR 兄弟(conv ms5bjrsk)已暂存的 7 个文件(`lib/qr.py` 460L 新建 / `tasks_pkg/executor/_finalize.py` / `tools/human_guidance.py` / `ui/tool_rounds.js` / `requirements.txt` / 两个测试)被卷进一条 `docs(journal)` 提交。内容完好(对方独立复核:干净 detached worktree **50/50 绿**),不重置共享 HEAD(历史改写风险更大),双方一致同意**不为归属再花一次提交**——工作码在 HEAD 上比提交信息整齐更重要。
+- **★ 第二个错在我的事故通报里(对方纠正 + 我实测确认):** 我把工作树里 ` M` 的 `tests/_qr_login_capture.py` 说成「你剩下的未暂存文件,自己提交」。实测证伪:该文件 `git log` 溯源到 `31f3519f`(早已在库),当前是**第三方会话正在编辑**,QR 兄弟从未碰过它。若对方照我的话去提交,就会把第三方的活儿**再卷一次**。**判据:通知受害方时「哪些文件属于谁」也必须实测溯源(git log),不能按「同批出现在 git status 里」推断——否则事故通报本身会制造第二起事故。**
+- **★ 落成硬纪律(已存 project memory `shared-head-commit-count-assert-must-abort`):** 计数断言必须是**能让 shell 非零退出的真判断**(`[ "$n" -eq N ] || { git diff --cached --stat; exit 1; }`),不是 echo 一行给人眼看;任何无 pathspec 提交前 `git diff --cached --stat` 是强制预检——共享 index 里随时可能躺着别人的暂存。
 
 ### 2026-07-29(续·字标统一) — 「两处统一 + 品牌区创意重设计」:侧栏字标停在旧工艺**而代码里看不出任何异常**,因为两处各写一套完整声明、漂移天然不可见;顺带**自报一起共享 HEAD 误提交**(owner 截图圈出两处;epic `pt_91be4876d7c64bbe`;commit `4c3ad19a`,12 文件 +888/-87;新套件 **11/11 含 NEUTER×3 各咬各的方向**,相邻环 **46/46**,干净 committed worktree 复验 **30/30**)
 

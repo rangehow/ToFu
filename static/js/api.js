@@ -155,7 +155,7 @@
   //   json          object — JSON body, sets Content-Type
   //   body          raw body (string|FormData|Blob); used if json absent
   //   headers       extra headers
-  //   timeout       ms (default 30000, 0 = none)
+  //   timeout       ms (default 0 = none; a probe passes its own budget)
   //   parse         'json' (default) | 'text' | 'blob' | 'response' | 'none'
   //   signal        AbortSignal
   //   onError       'throw' (default) | 'null' — null returns null on failure
@@ -185,7 +185,24 @@
     const userSignal = opts.signal;
     let timeoutId = null;
     let ctrl = null;
-    const timeout = opts.timeout === 0 ? 0 : (opts.timeout || 30000);
+    /* ★ NO DEFAULT TIMEOUT (opts.timeout omitted => 0 => none).
+     *
+     * A blanket client-side ceiling is the browser-side twin of the read
+     * timeouts removed from the transport (lib/llm/_transport.py): it turns
+     * "slow" into "failed" for work the server is still doing, and reports it
+     * as code:'timeout' so the user is told the request died when it did not.
+     * The default being a ceiling was also demonstrably backwards — 22 call
+     * sites had to opt OUT with `timeout: 0` to be allowed to wait.
+     *
+     * The rule, same as the backend: a LIVENESS PROBE may bound itself, a
+     * WAIT may not. Probes therefore pass their own budget explicitly
+     * (health.check 3s/5s, backend_offline_monitor, cross_tab_sync 8s/15s
+     * — all via AbortSignal.timeout or an explicit `timeout:`), and are
+     * unaffected by this default. Anything that omits `timeout` is by
+     * definition not a probe, and waits until it answers or the user aborts.
+     *
+     * Pinned by tests/test_frontend_no_client_timeouts.py. */
+    const timeout = opts.timeout || 0;
     if (timeout > 0) {
       ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
       if (ctrl) {

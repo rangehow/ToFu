@@ -1,6 +1,32 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-29(续·浏览器侧那一半) — 后端删完读超时只做了一半:**「我自己暂停」发生在浏览器里,而浏览器有自己的天花板**。owner 点出两处,ratchet 又扫出两处他和我都没看见的(commit 待填,7 文件;新套件 **14/14 失败先行**,**NEUTER×4 双向全咬**(1/2/1/1);相邻环 **78/78**)
+
+- **★ owner 的判据比我的实现更完整,而我漏的正是目标的字面落点:** 我把 `TTFT_TIMEOUT`/`read=300` 删净后就报完成,但 `abort` 这个动作**是在前端发生的**。前端还留着:
+  | 位置 | 是什么 | 阈值 |
+  |---|---|---|
+  | `branch_stream.js:44` | 首字节超时(**与我刚删的 TTFT 同型**) | 45s(比原后端 180s **激进 4 倍**) |
+  | `api.js:188` | 所有非流式请求的总天花板 | 30s(比我刚删的后端 120s **更严**) |
+  | `image-gen.js:335` | 出图看门狗 | 150s |
+  
+  净效果:**后端删超时的收益被前端原样吃掉**,而且用户看到的是 `code:'timeout'`——「它死了」,可它没死。
+- **★ 「默认值是天花板」本身就是反的,而且可测量:** `api.js` 里有 **22 处**调用点必须写 `timeout: 0` 才**被允许等待**。一个需要 22 次显式豁免的默认值,说明默认站错了边。改为 `opts.timeout || 0`,探针继续显式带自己的预算(`health.check` 3s/5s、`backend_offline_monitor`、`cross_tab_sync` 8s/15s),**不受影响**。
+- **★ 规则一句话(两侧同一条):活性探针可以给自己设上限,等待不行。** 探针回答「服务器还在吗」,无上限的探针=卡死的 UI;等模型干活的一律无上限,由人来结束。
+- **★ ratchet 立刻抓出两处 owner 和我都没点到的(这是本轮最有价值的一步):**
+  - `translation.js:642` —— 按文本长度**分档 60s/90s/120s** 的 abort。翻译是 LLM 生成,与聊天轮同类;**分档本身就是在承认「正确值不可知」**,而超时文案是「服务器可能过载」,可服务器正在翻。
+  - `paper/pdf_viewer.js:66` —— PDF 字节下载 120s abort,大论文+慢链路会被报成「Failed to load PDF」,而下载还在走。
+  
+  **判据:守卫的价值不在于钉住已知的三处,而在于扫出第四第五处。** 我和 owner 各自用眼睛看,都只看到了自己找的那几个。
+- **★ 我自己造了两个测试缺陷,都被自己的 NEUTER/运行抓回:**
+  - 断言 `'Generation timed out' not in live` **过宽**:`_igClassifyError` 里那条是**服务端上报的** `error_type:'timeout'`,是上游事实不是客户端天花板;禁掉它等于禁止如实报告真超时。已收窄到客户端看门狗措辞。
+  - 断言 `'90000' not in translation.js` **误伤**:那是 `_AT_WATCHDOG_BUDGET_MS`——一个**轮询 DB 自愈**的看门狗(push 帧丢失时清掉卡住的转圈),它**不 abort 任何请求**。已改为直接扫 abort-timer 正则而非数字常量。**判据:扫「大数字」会把同一文件里语义完全不同的常量一起咬进来;要扫的是行为(abort),不是长得像超时的数。**
+- **★ 一处「留后门反而更糟」的取舍:** 我最初把两处改成 `timeoutMs ? setTimeout(...) : null`(留显式预算的口子)。但**实测无任何调用方传 `timeoutMs`** ⇒ 那是**死代码,却读起来像一个被认可的天花板**,而且 ratchet 无法区分「条件性」与「无条件」计时器。已整个删掉:要重新加边界,就得**显式地加**,并因此触发 ratchet 复审——这正是闸门该在的位置。
+- **诚实边界:** `api.js` 的行为级验证**降级为结构断言**(`if (timeout > 0)` 分支 + arming `setTimeout` 必须存活)。我写的 node/vm harness 驱动不起来这个浏览器 IIFE(它绑 `window` 并拉 DOM 全局),**与其留一个会飘的 harness,不如诚实地写结构断言**;「默认=0」与「>0 分支仍武装」两条配对,使两个方向都非空转(NEUTER 3 反向咬到)。
+- **NEUTER×4 双向:** 恢复 30000 默认 → 1 红;恢复 45s abort → **2 红**(含 ratchet);把 `if (timeout > 0)` 改成 `if (false)`(**反向:探针失去预算**)→ 1 红;把 ratchet 正则改成永不匹配(**反向:空转**)→ 1 红(反空转用例)。四发后 `diff -q` 全部逐字节还原。
+- **只读定责(charter #15,上一轮我在这里违规,这次没有):** `test_frontend_api_isolation::test_no_variable_url_api_fetches` 报 `tofu-pet.js` 一条 variable-URL fetch。用**纯只读**手段证明非我:该文件 `git status` 干净、HEAD 与工作树 fetch 计数**同为 1**、我的 `static/js` 改动清单里没有它。**属 HEAD 上既有红,按 owner 惯例另开票,不并入本批。**
+- **验收边界:** 纯前端,**运行中进程不带**,需重建 bundle;未做真浏览器实测。
+
 ### 2026-07-29(续·conv-state rev 时钟域根修) — owner 问的是「同步太慢」,实测**一毫秒都不是吞吐问题**:一个 `>` 比较拿两个不可比的时钟域相比,恒为 false;而我第一轮只找到三个症状里的**一个**,owner 补的另两个更常见(`pt_781ae072d6ee4e84` DONE;commit `3c38f85d`,5 文件 +605/-19;**8 条失败先行**,**NEUTER×3 各咬各的**(2/3/1);相邻环 **75 + 44 + 31 + 13 全绿**;charter 不变量已提交)
 
 - **★ 先纠正 owner 的前提,这决定了要不要做「全模块极致优化」:** 提问假设是「后端同步慢 + 前端不知道自己滞后」。实测同步链路**架构已经是 ChatGPT 那一类**——服务端权威注册表(唯一物理 SSOT)、每 conv 独立 rev、连接时全量快照、未知 conv 的 park-not-discard、跨副本总线、60s 漂移探针。**三个症状里没有一毫秒来自吞吐**,全部来自 `_revStrictlyGreater` 恒返回 false。故**全模块极致性能优化被否决**(owner 复核后同意),工程量全部投到正确性根因。

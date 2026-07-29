@@ -635,23 +635,19 @@ async function _runTranslationPipeline(conv, idx, msg, opts) {
   }
 }
 
-async function _callTranslateAPI(text, targetLang, sourceLang, timeoutMs) {
-  // Scale timeout with text length: large texts need more time for LLM to complete
-  if (!timeoutMs) timeoutMs = text.length > 6000 ? 120000 : text.length > 3000 ? 90000 : 60000;
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  let d;
-  try {
-    d = await Api.translate.run({ text, targetLang, sourceLang }, { signal: ctrl.signal });
-  } catch (fetchErr) {
-    clearTimeout(timer);
-    if (fetchErr.name === 'AbortError') {
-      throw new Error("Translation timed out — server may be overloaded");
-    }
-    throw fetchErr;
-  } finally {
-    clearTimeout(timer);
-  }
+async function _callTranslateAPI(text, targetLang, sourceLang) {
+  /* NO client-side timeout. Translation is an LLM GENERATION — the same class
+   * of wait as a chat turn, whose read timeout was removed from the transport
+   * (lib/llm/_transport.py). The old ceiling scaled 60s/90s/120s by text
+   * length, i.e. it conceded the right value is unknowable, and a long
+   * document that legitimately needed longer was reported to the user as
+   * "server may be overloaded" while the server was still translating.
+   *
+   * No `timeoutMs` escape hatch either: no caller passed one, so a dormant
+   * conditional timer would just be dead code that reads like a sanctioned
+   * ceiling. Re-adding a bound is a deliberate act — and trips the ratchet in
+   * tests/test_frontend_no_client_timeouts.py, which is the review gate. */
+  const d = await Api.translate.run({ text, targetLang, sourceLang });
   if (!d._ok) {
     const detail = (typeof errorEnvelopeMessage === 'function'
                     ? errorEnvelopeMessage(d.error) : '')

@@ -11,7 +11,6 @@ var _igSelectedCount = 1;           // 1 | 2 | 4 — batch count
 let _igGenerating = false;
 let _igAbortController = null;       // AbortController for single request
 let _igAbortControllers = [];        // AbortControllers for batch requests
-let _igUserCancelled = false;        // user hit Cancel (vs the 150s watchdog firing)
 
 // All available image gen models (order matches dropdown)
 const _IG_ALL_MODELS = [
@@ -330,9 +329,13 @@ async function generateImageDirect() {
     if (el) el.textContent = ((Date.now() - t0) / 1000).toFixed(0) + 's' + resLabel;
   }, 1000);
 
-  // ── AbortController with 150s timeout ──
+  // ── AbortController ──
+  // NO watchdog timer. Image generation is a WAIT, not a crash: a 2K
+  // multi-turn edit legitimately runs past any fixed ceiling, and the old
+  // 150s abort threw away an image the server was still rendering (and
+  // still billing) while telling the user it "timed out". The user ends it
+  // with Cancel, which calls _igCancelGeneration() -> abort().
   _igAbortController = new AbortController();
-  const abortTimer = setTimeout(() => _igAbortController?.abort(), 150_000);
 
   try {
     const reqBody = {
@@ -358,7 +361,6 @@ async function generateImageDirect() {
     }
 
     const data = await Api.images.generate(reqBody, { signal: _igAbortController.signal });
-    clearTimeout(abortTimer);
     clearInterval(timerInterval);
     const loadingEl = document.getElementById(loadingId);
 
@@ -418,28 +420,23 @@ async function generateImageDirect() {
     }
 
   } catch (err) {
-    clearTimeout(abortTimer);
     clearInterval(timerInterval);
     const loadingEl = document.getElementById(loadingId);
     const isAbort = err.name === 'AbortError';
-    const isUserCancel = isAbort && _igUserCancelled;
+    /* With the 150s watchdog gone, an abort can only be the user pressing
+     * Cancel (or a page teardown) — never a client-side timeout. */
+    const isUserCancel = isAbort;
     const errText = isUserCancel ? 'Cancelled by user.'
-                  : isAbort ? 'Request timed out (150s). The server may still be generating — please try again.'
-                            : (err.message || 'Failed to connect to server');
+                                 : (err.message || 'Failed to connect to server');
     if (loadingEl) loadingEl.remove();
     console.error('[ImageGen] Direct generation error:', err);
 
-    // Show timeout toast (never on a deliberate cancel)
-    if (isAbort && !isUserCancel) {
-      _igToast('⏱ Generation timed out (150s)', 'warning');
-    }
-
     // ★ CRITICAL: Always push an assistant error message to prevent orphaned user messages
-    const errTitle = isUserCancel ? 'Cancelled' : isAbort ? 'Generation timed out' : 'Network error';
-    const errType = isUserCancel ? 'cancelled' : isAbort ? 'timeout' : 'network';
-    const errMsg = { role: 'assistant', content: `${isUserCancel ? 'Image generation cancelled' : isAbort ? 'Image generation timed out' : 'Image generation network error'}: ${errText}`,
+    const errTitle = isUserCancel ? 'Cancelled' : 'Network error';
+    const errType = isUserCancel ? 'cancelled' : 'network';
+    const errMsg = { role: 'assistant', content: `${isUserCancel ? 'Image generation cancelled' : 'Image generation network error'}: ${errText}`,
                      timestamp: Date.now(), _isImageGen: true,
-                     _igError: { title: errTitle, text: errText, detail: '', errorType: errType, isTimeout: isAbort && !isUserCancel, isRateLimit: false, isContentBlocked: false } };
+                     _igError: { title: errTitle, text: errText, detail: '', errorType: errType, isTimeout: false, isRateLimit: false, isContentBlocked: false } };
     _ensureMsgId(errMsg);
     conv.messages.push(errMsg);
     if (conv.id === activeConvId) window.ConvView.replaceAll(conv.id, { forceScroll: true });
@@ -448,7 +445,6 @@ async function generateImageDirect() {
   } finally {
     _igGenerating = false;
     _igAbortController = null;
-    _igUserCancelled = false;
     if (genBtn) genBtn.disabled = false;
     if (conv.id === activeConvId && chatDiv) chatDiv.scrollTop = chatDiv.scrollHeight;
   }
@@ -467,7 +463,6 @@ function _igUpdateGenButton() {
 
 /** Cancel an in-flight image generation (single or batch) */
 function _igCancelGeneration() {
-  _igUserCancelled = true;  // read by the single-mode catch to NOT mislabel this as a 150s timeout
   if (_igAbortController) {
     _igAbortController.abort();
   }

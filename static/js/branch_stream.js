@@ -41,7 +41,14 @@ function _branchHandleWriteApproval(ev, assistantMsg) {
 async function _branchStreamSSE(conv, msgIdx, branchIdx, branch, assistantMsg, taskId, controller, bk) {
   let lastSave = Date.now();
   let gotData = false;
-  const sseTimeout = setTimeout(() => { if (!gotData) controller.abort(); }, 45000);
+  /* NO first-byte timeout. A branch stream is the same object as the main
+   * chat stream, which runs on Api.chat.streamResponse -> stream() ->
+   * timeout:0. This used to abort after 45s without a first byte, i.e. a
+   * client-side re-implementation of the very TTFT kill we removed from the
+   * transport (and 4x more aggressive than the 180s it replaced): the server
+   * kept generating and billing while the browser had already dropped to the
+   * poll fallback. Slow is not failed. The user ends a wait by pressing Stop,
+   * which aborts `controller` directly. */
 
   function _processEvent(ev) {
     gotData = true;
@@ -229,12 +236,9 @@ async function _branchStreamSSE(conv, msgIdx, branchIdx, branch, assistantMsg, t
       },
     });
   } catch (e) {
-    clearTimeout(sseTimeout);
     if (e.name === "AbortError") throw e;
     console.warn("Branch SSE failed, falling back to poll:", e.message);
     await _branchStreamPoll(conv, msgIdx, branchIdx, branch, assistantMsg, taskId, controller, bk);
-  } finally {
-    clearTimeout(sseTimeout);
   }
 }
 

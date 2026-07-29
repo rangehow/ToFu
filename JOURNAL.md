@@ -1,5 +1,16 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·VU 可见性第三条腿) — 前两批都只修了 **push** 一条传输;**socket 一断,原病症整段复发**,而修法差点选错(commit `f80b0446`,4 文件;新套件 **9/9**(6 条 failing-first),**NEUTER×2 咬**(其中**第二发第一次不咬,是我的守卫被自己的 docstring 满足**);相邻环 **124/124**;活体端点实测;tsc BASELINE=0)
+
+- **★ 缺口:`d6e8bdb3` + `633b4fc3` 全部活在 push 传输上,而 push 会断。** `_crossDeviceReconcile` 是 25s 轮询兜底、正是为断线设计的,但它**唯一的探针是 `/api/v1/chat/active`,而那个端点排除 carrier** ⇒ 轮询路径 attach 调用数**为 0**,VU 窗口里它连「这个会话在忙」都学不到。净效果:隧道抖动(VS Code port-forward,本项目常态)时,**原病症整段复发**——对话看起来已完成、无气泡、无流,直到手动刷新。
+- **★ 而我上一轮给 owner 的建议是错的那个(自我修正):** 我原本推荐「把 carrier 用同一个 `#vu` 标记暴露到 `/api/chat/active`」。实测审计后否决:**该端点有 5 个真实消费者**(`main_init_tasks` 启动恢复 / `_recoverOfflineConversations` / `_checkForQueuedTask` / `health_stream_timer` 卡流探测 / stale-pin 清扫),**其中多个把结果喂给普通 `connectToTask`**。carrier 到了那里会把真 assistant 占位符绑到只发 `autopilot_vu_*` 契约的流上 = **正是 carrier 过滤器当初要防的永久卡死「Waiting…」/ 鬼「Agent」气泡**。**判据:一个端点的过滤是否「错」,要看它回答的是哪个问题——`/chat/active` 回答「我能重连到什么」,排除 carrier 对它是对的;缺的是另一个问题「哪些会话在干活」没有端点回答。** 已补**补集守卫**钉死该排除不得被后人「顺手修掉」。
+- **落点:一份投影、一个 reducer、两条传输。** 新增只读 `GET /api/v1/chat/conv-state`,body 由 **`build_conv_state_snapshot` 用的同一个 `snapshot_running_by_conv`** 生成,字段与标记逐字相同(`runningTaskIds` 含 `<tid>#vu`)⇒ 轮询与 push 喂**同一个** `applyConvStateSnapshot` 与**同一个** attach 缝。给轮询另写一套「忙」的判定,正是 busy/attachable 当初漂移开的成因。
+- **★ 活体实测(不是只读源码):** 往真实 registry 注入一个 VU carrier + 一个普通 worker,`GET /api/v1/chat/conv-state` → **200**,`conv-A: ["t-vu#vu"]`(carrier 可见、标记完整)、`conv-B: ["t-worker"]`;同一时刻 `GET /api/v1/chat/active` 的返回里**没有** `t-vu`。两条契约同时成立。
+- **★ 我的守卫第一版是空的,而空法很值得记:** `assert 'snapshot_running_by_conv' in src` —— NEUTER 把真导入换掉后它**照常绿**,因为**该函数自己的 docstring 为了解释规则提了那个符号三次**;而端点则静默落到 `except → 返回空 projection`。**`strip_comments`(charter #24)救不了:它剥 `#` 与 `/* */`,不剥 docstring**(docstring 是真实的 `ast.Expr` 字面量)。改为**结构断言**(AST:该 handler 内 `imported` 且 `called`)后 NEUTER 精确咬红。**这条落在 charter #24 的字面之内、精神之外**,已入记忆家族。**更普遍的推论:文档写得越认真,文本扫描守卫越容易变空——一段解释「为什么必须调用 X」的 docstring,恰好为「X 已被删掉」提供掩护。**
+- **NEUTER 分账:** 摘 poll lane attach → 2 红;把共享投影换成手搓扫描 → 1 红(AST 版);两发均逐字节还原。
+- **共享 HEAD 定责(只读,charter #15):** `test_frontend_api_isolation::test_no_variable_url_api_fetches` 报 `tofu-pet.js` 一条 variable-URL fetch。**已证非我**:`git show HEAD:` 该文件**无任何 fetch**,而工作树 diff 里那行是 `+`(兄弟宠物票 `pt_220e8836a76c456c` 未提交 WIP);我的 `api.js` diff **新增 fetch 调用数 = 0**。全程未用工作树做中间态。另:JOURNAL 追加时被 freshness gate 拦下一次(兄弟刚追加了 trade P1 更正条目)——按提示重读、把本条目叠在其上,未覆盖任何兄弟内容。
+- **验收边界:** ①**运行中进程不带**——后端新路由需重启,前端需 bundle 重建;②三条腿(冷接续 / 帧到达 / 轮询)现已闭合,但仍是行为守卫 + 活体端点实测,**未做真浏览器像素实测**;③`pt_b46ad973a7ba4621`(大脑派单排队滞留)按 owner 惯例仍独立走票,未动。
+
 ### 2026-07-29(续·更正:trade P1 第一批的 A/B 数字作废) — **我上报的「收益下降 -0.362%/-0.532%」是噪声不是效应,owner 换一组种子当场符号翻转**;机制本身经确定性实测确认正确,但那张表必须撤(更正 `cfb6bd8` 的验收结论;方法论已入项目记忆)
 
 - **★ 撤回的内容:** `cfb6bd8` 提交信息里那张「same-bar vs T+1 open」A/B 表(ETF 0.852%→0.490%、个股 1.337%→0.805%,12 种子中 7 个下降),**不能作为「未来函数已消除」的证据**。

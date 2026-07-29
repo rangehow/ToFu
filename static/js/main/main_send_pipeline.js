@@ -1501,10 +1501,42 @@ async function _checkForQueuedTask(convId, _retryCount = 0) {
    *   non-release path is a retry reschedule (the chain continues there). */
   const _release = () => { _queuedCheckInFlight.delete(convId); };
   try {
-    // ★ Skip if the conversation already has an active task (user may have
-    //   already started a new send/regenerate since finishStream scheduled us)
+    /* ★ ROUTE the pin, don't merely test it (pt_f7a292dc13de47f0).
+     *   This guard used to read `_conv.activeTaskId || activeStreams.has(...)`
+     *   as "someone else is driving this conv". That stopped being true once
+     *   cold attach began pinning the VU CARRIER's id and the stale-pin sweep
+     *   deliberately stopped clearing a live carrier's pin — the pin became
+     *   DURABLE, so this guard was permanently satisfied and we returned
+     *   BEFORE probing for the successor worker the backend had already
+     *   spawned. Measured: carrier pin held → probes=0/attached=null; same
+     *   backend state with the pin cleared → probes=1/attached=<worker>. That
+     *   is the "VU user message on screen, nothing ever generates" report.
+     *
+     *   The verdict is a ROUTE with four cases (see computeFollowupRoute):
+     *   a LIVE carrier is attached through the VU connector rather than
+     *   probed for (its successor does not exist yet); a TERMINAL carrier or
+     *   a pin the projection never heard of falls through to the probe; a
+     *   plain worker or a live local stream still skips, which is this
+     *   guard's real job. */
     const _conv = conversations.find(c => c.id === convId);
-    if (_conv && (_conv.activeTaskId || activeStreams.has(convId))) {
+    const _route = (typeof computeFollowupRoute === 'function')
+      ? computeFollowupRoute(_conv, activeStreams)
+      /* Reducer missing (bundle-order miss) → legacy behaviour verbatim. */
+      : { action: (_conv && (_conv.activeTaskId || activeStreams.has(convId)))
+            ? 'skip' : 'probe', taskId: null, vuCarrier: false };
+    if (_route.action === 'route-vu') {
+      console.log(
+        `%c[Queue] ▶ Live VU carrier for conv=${convId.slice(0,8)} — routing to the ` +
+        `VU connector (task=${String(_route.taskId).slice(0,8)}) instead of probing`,
+        'color:#a78bfa;font-weight:bold');
+      _refreshServerQueue(convId);
+      _release();
+      if (typeof connectToTask === 'function') {
+        connectToTask(convId, _route.taskId, 0, { vuCarrier: true });
+      }
+      return;
+    }
+    if (_route.action === 'skip') {
       console.log(`%c[Queue] Skipping _checkForQueuedTask — conv=${convId.slice(0,8)} already has active task/stream`, 'color:#a78bfa');
       _refreshServerQueue(convId);
       _release();

@@ -46,7 +46,10 @@ happen" into "a test fails while there is still time to rotate".
 from __future__ import annotations
 
 import datetime as _dt
+import os
 import re
+import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -216,17 +219,172 @@ def test_the_version_file_is_what_decides_a_release():
     )
 
 
-def test_an_already_released_version_does_not_rebuild():
-    """Cost + correctness: re-publishing a shipped version must not happen.
+def _run_version_gate(*, http_code: str | None, event: str = 'push',
+                      version: str = '0.15.2') -> dict[str, str]:
+    """Execute the REAL ``version`` job body with a stubbed release probe.
 
-    Without this, every content push to main would spin four runners (~30 min
-    each, macOS billed at the highest rate) and race to re-publish a release
-    that already exists.
+    The gate's whole job is to turn an HTTP status into a build/skip verdict,
+    so asserting on the SCRIPT TEXT cannot tell a correct gate from a broken
+    one — that is precisely how the tag-based predicate survived review. This
+    runs the shipped shell with a ``curl`` stub earlier on PATH, and reads the
+    ``should_release`` it actually writes to ``$GITHUB_OUTPUT``.
+
+    Args:
+        http_code: what the stubbed probe prints as the status. ``None``
+            simulates a transport failure (curl exits non-zero, prints
+            nothing) — the case a naive ``set -e`` script would die on.
+        event: value of ``GITHUB_EVENT_NAME``.
+        version: contents of the VERSION file.
+
+    Returns:
+        The parsed ``key=value`` pairs the step wrote to ``$GITHUB_OUTPUT``.
     """
     body = _workflow()['jobs']['version']['steps'][-1]['run']
-    assert 'ls-remote' in body and 'refs/tags/v' in body, (
-        'version job must consult the remote tags to decide whether this '
-        'VERSION was already released'
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        (tmp / 'VERSION').write_text(version + '\n', encoding='utf-8')
+        out = tmp / 'gh_output'
+        out.touch()
+
+        bind = tmp / 'bin'
+        bind.mkdir()
+        if http_code is None:
+            # Transport failure: no stdout, non-zero exit.
+            stub = '#!/bin/sh\nexit 7\n'
+        else:
+            stub = f'#!/bin/sh\nprintf %s {http_code}\n'
+        (bind / 'curl').write_text(stub, encoding='utf-8')
+        (bind / 'curl').chmod(0o755)
+
+        # `git` is stubbed to report that the TAG EXISTS (ls-remote exits 0).
+        # This is not decoration: it reproduces the live state of this repo,
+        # where v0.15.0-v0.15.2 are all tagged on the remote. Without it a
+        # tag-based predicate would fail `ls-remote` here (no origin in a temp
+        # dir) and fall through to "build" by accident — which would let the
+        # broken predicate pass the orphan-tag test and make the whole NEUTER
+        # vacuous. With it, asking about tags gives the WRONG answer and the
+        # guard bites.
+        (bind / 'git').write_text('#!/bin/sh\nexit 0\n', encoding='utf-8')
+        (bind / 'git').chmod(0o755)
+
+        env = {
+            **os.environ,
+            'PATH': f'{bind}{os.pathsep}' + os.environ.get('PATH', ''),
+            'GITHUB_OUTPUT': str(out),
+            'GITHUB_EVENT_NAME': event,
+            'GITHUB_REPOSITORY': 'rangehow/ToFu',
+            'GITHUB_API_URL': 'https://api.github.com',
+            'GH_TOKEN': 'stub-token',
+            'VERSION_OVERRIDE': '',
+        }
+        proc = subprocess.run(['bash', '-c', body], cwd=tmp, env=env,
+                              capture_output=True, text=True, timeout=60)
+        assert proc.returncode == 0, (
+            f'version gate exited {proc.returncode}\n'
+            f'stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}'
+        )
+        parsed: dict[str, str] = {}
+        for line in out.read_text(encoding='utf-8').splitlines():
+            if '=' in line:
+                k, _, v = line.partition('=')
+                parsed[k] = v
+        return parsed
+
+
+def test_an_orphan_tag_does_not_block_the_release():
+    """THE REGRESSION THIS FILE PREVIOUSLY GUARDED THE WRONG SIDE OF.
+
+    The gate used to ask ``git ls-remote --tags`` — "does the tag exist?" — as
+    a proxy for "was this version released?". Measured on the real repo on
+    2026-07-29, those two answers disagree for every version that matters:
+    v0.15.0 / v0.15.1 / v0.15.2 are all TAGGED on the remote and all three
+    return HTTP 404 from ``GET /releases/tags/{tag}`` — tagged, never
+    released, because the starved macOS leg skipped the release job.
+
+    Under the tag predicate the current VERSION (0.15.2) resolved to
+    ``should_release=false``: the three versions the user reported as missing
+    could never be published, by construction. The predicate must ask about
+    the Release.
+    """
+    got = _run_version_gate(http_code='404')
+    assert got.get('should_release') == 'true', (
+        f'A tagged-but-unreleased version must still build; got {got!r}. '
+        f'Asking "does the tag exist?" instead of "was it released?" strands '
+        f'every version whose release job was skipped — exactly the state '
+        f'v0.15.0-v0.15.2 are in.'
+    )
+    assert got.get('version') == '0.15.2'
+
+
+def test_an_already_released_version_does_not_rebuild():
+    """Complement: a version with a real Release must NOT spin the runners.
+
+    Without this, "always build" would satisfy the test above, and every
+    content push to main would burn four runners (~30 min each, macOS at the
+    highest rate) racing to republish a shipped release.
+    """
+    got = _run_version_gate(http_code='200')
+    assert got.get('should_release') == 'false', (
+        f'HTTP 200 means the release exists — the gate must skip; got {got!r}'
+    )
+
+
+@pytest.mark.parametrize('code', ['403', '429', '500', '502', None])
+def test_an_unreadable_probe_builds_rather_than_skipping(code):
+    """Failure direction is asymmetric ON PURPOSE.
+
+    Rate limit, auth hiccup, 5xx, or a transport failure must all resolve
+    toward BUILDING. A redundant build costs four runners; a skipped one is a
+    silent non-release — the original defect. ``None`` is the transport-failure
+    case that also proves ``set -e`` does not abort the step.
+    """
+    got = _run_version_gate(http_code=code)
+    assert got.get('should_release') == 'true', (
+        f'probe HTTP {code!r} must fail OPEN (build), got {got!r}. '
+        f'Uncertainty resolving toward "skip" reproduces the silent '
+        f'non-release this workflow exists to prevent.'
+    )
+
+
+def test_manual_dispatch_always_builds():
+    """The rebuild/re-release escape hatch must not consult the probe at all."""
+    got = _run_version_gate(http_code='200', event='workflow_dispatch')
+    assert got.get('should_release') == 'true', (
+        f'workflow_dispatch is explicit human intent and must always build, '
+        f'even when a release already exists; got {got!r}'
+    )
+
+
+def test_the_gate_asks_the_release_api_not_the_tag_list():
+    """Pin the SHAPE of the question, not just today's verdicts.
+
+    A gate that happened to return the right answers while still consulting
+    tags would pass the behavioural tests above only by luck of the stub.
+
+    Comments are stripped before asserting: this step's own comment block
+    NAMES the rejected approaches (``ls-remote``, ``gh release view``) to
+    explain why they are wrong, so a raw substring scan would flag the very
+    documentation that prevents the regression — and, worse, could be silenced
+    by deleting that explanation.
+    """
+    body = _workflow()['jobs']['version']['steps'][-1]['run']
+    code = '\n'.join(
+        line for line in body.splitlines()
+        if not line.lstrip().startswith('#')
+    )
+    assert '/releases/tags/' in code, (
+        'the gate must query GET /repos/{owner}/{repo}/releases/tags/{tag}'
+    )
+    assert 'ls-remote' not in code, (
+        'the gate must not consult git tags: a tag exists BEFORE the release '
+        '(export.py pushes branch then tag back-to-back) and can outlive a '
+        'skipped release, so it answers a different question than the one '
+        'being asked'
+    )
+    assert 'gh release view' not in code, (
+        '`gh release view` exits 1 for BOTH "no such release" and "the API '
+        'call failed" (cli/cli#6024, undocumented), so it cannot express the '
+        'fail-open rule'
     )
 
 

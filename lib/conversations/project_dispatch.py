@@ -399,6 +399,65 @@ def _has_queued_kickoff(conv_id: str) -> bool:
         return False
 
 
+def _convs_holding_undrained_kickoffs(project_path: str, board: dict) -> set:
+    """Every conversation that may be holding an UNDRAINED brain kickoff.
+
+    THE SCAN SET, and the thing that must not be keyed on the epic's momentary
+    status. The obvious set — "convs owning a *claimed* epic" — has a hole with
+    a 30-minute fuse: ``_effective_status`` reclaims an expired soft lease AT
+    READ TIME, so once the lease lapses the epic reads ``open`` and its
+    ``owner_conv_id`` is blanked. The conv then vanishes from a claimed-keyed
+    scan, while its queue row is still sitting there. Measured in production
+    (2026-07-29): 7 ``workflow_step`` rows stranded across 3 idle conversations,
+    none of them reachable.
+
+    And the normal dispatch loop cannot rescue them either — it re-selects the
+    now-``open`` epic, but ``_epic_already_queued`` sees the surviving kickoff
+    and refuses to enqueue a second one. Both doors shut on the same row, which
+    is what made the strand permanent rather than merely slow.
+
+    So we take the union of two sources:
+
+      * the board's ``owner_conv_id`` for CLAIMED epics — covers a conv whose
+        lease is still live but whose drain chain broke; and
+      * every conv with a queued ``workflow_step`` row and a ``projectPath``
+        pointing at THIS project — covers the lease-expired case, keyed on the
+        durable fact (the queue row) instead of the expiring one (the lease).
+
+    Scoped to this project so a sweep never drains a sibling project's queue.
+    Best-effort: a probe failure degrades to the board-derived set, which is
+    the old behaviour — never an exception into the sweep.
+    """
+    convs = {t['owner_conv_id'] for t in board.get('tasks', [])
+             if t.get('status') == 'claimed' and t.get('owner_conv_id')}
+    try:
+        import json as _json
+
+        from lib.conversations.project_feed import normalize_project_path
+        from lib.database import DOMAIN_CHAT, get_thread_db
+        from lib.message_queue import KIND_WORKFLOW
+        want = normalize_project_path(project_path)
+        db = get_thread_db(DOMAIN_CHAT)
+        rows = db.execute(
+            'SELECT DISTINCT conv_id, config FROM message_queue WHERE kind=?',
+            (KIND_WORKFLOW,)).fetchall()
+        for r in rows:
+            cid = r['conv_id']
+            if not cid or cid in convs:
+                continue
+            try:
+                cfg = _json.loads(r['config'] or '{}')
+            except (TypeError, ValueError):
+                continue
+            row_proj = cfg.get('projectPath') or ''
+            if row_proj and normalize_project_path(row_proj) == want:
+                convs.add(cid)
+    except Exception as e:
+        logger.debug('[Dispatch] queued-kickoff scan failed proj=%.40r '
+                     '(falling back to board-derived set): %s', project_path, e)
+    return convs
+
+
 def _reconcile_stranded_kickoffs(project_path: str) -> int:
     """Re-drain idle conversations that still hold an UNDRAINED brain kickoff.
 
@@ -433,11 +492,11 @@ def _reconcile_stranded_kickoffs(project_path: str) -> int:
     try:
         from lib.conversations.project_board import read_board
         board = read_board(project_path)
-        # Only convs that OWN a claimed epic can be holding an undrained
-        # kickoff (select_dispatchable already excludes claimed epics, so the
-        # normal dispatch loop can NEVER re-drain these — that's the strand).
-        convs = {t['owner_conv_id'] for t in board['tasks']
-                 if t.get('status') == 'claimed' and t.get('owner_conv_id')}
+        # Convs that may hold an undrained kickoff. Keyed on the DURABLE fact
+        # (a queued workflow_step row) unioned with the board's claimed owners —
+        # never on the epic's momentary status, whose 30-min lease expiry used
+        # to make this scan blind to the strand (see the helper's docstring).
+        convs = _convs_holding_undrained_kickoffs(project_path, board)
         for conv_id in convs:
             if _conv_has_live_task(conv_id):
                 continue

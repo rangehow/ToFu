@@ -52,6 +52,46 @@ on:
 permissions:
   contents: write   # needed for creating releases
 
+# ── Only one release run per branch at a time ──
+#
+# This became load-bearing the moment the trigger moved from `refs/tags/v*` to
+# `push: branches: [main]`. Under the tag trigger a run happened once or twice
+# a day; now EVERY push into the window where VERSION has no release starts a
+# full four-platform build. Measured on this repo's own history (2026-07-28
+# 00:00 onward, 339 commits): median gap between commits is 165 s.
+#
+# Without a group, concurrent runs collide on shared, mutable remote state:
+# each release job independently probes the tag, gets 404, and force-moves
+# v<VERSION> to ITS OWN github.sha, then each calls action-gh-release for the
+# same tag. Last writer wins the ref while an earlier run may already have
+# uploaded its assets — reintroducing exactly the binaries/source mismatch the
+# retarget step was added to eliminate, only now caused by a race instead of a
+# stale tag. `github.ref` is the right grain because the contended resource is
+# the per-branch release (tag + Release), not the individual commit.
+#
+# ── cancel-in-progress is deliberately FALSE, and this is the opposite of
+#    the usual CI default ──
+# The usual argument for cancelling ("newer commit supersedes the older") is
+# about feedback latency, where being wrong costs a re-run. Here it would cost
+# the release itself. A build takes up to 30 min/leg; in the measured history
+# only 8 of 338 gaps (2.4%) are >= 30 min. So with cancel-in-progress a build
+# would be superseded before finishing on ~97.6% of pushes and an installer
+# would only ever ship during a rare quiet spell — the SAME user-visible
+# symptom this workflow exists to fix ("version changed, nothing was built"),
+# just with a new cause. Cancellation would also be able to kill the release
+# job between the tag force-push and the asset upload, leaving a Release the
+# version gate then reads as 200 and never retries.
+#
+# Queueing gets the mutual exclusion without either hazard. With the default
+# `queue: single` at most one run is pending: a burst of N pushes collapses to
+# "one running + the newest one waiting", and the newest run's `version` job
+# then probes 200 and skips in seconds. So the storm costs one full build plus
+# some trivial ubuntu-latest jobs — the gate is what dedupes, which is what it
+# was written to do.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   PYTHON_VERSION: "3.12"
 

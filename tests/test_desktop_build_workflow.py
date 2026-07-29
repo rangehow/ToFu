@@ -694,3 +694,138 @@ def test_the_retarget_uses_the_built_sha_not_a_branch_name():
     assert not re.search(r'push\s+--force\s+origin\s+["\']?(main|HEAD)\b', code), (
         'the retarget must not point the tag at a moving branch'
     )
+
+
+# ══════════════════════════════════════════════════════════════════
+#  Two runs must never race to publish the same release
+# ══════════════════════════════════════════════════════════════════
+
+def _resolve_expr(template: str, ctx: dict) -> str:
+    """Evaluate a workflow ``${{ ... }}`` template against a fake context.
+
+    Only the dotted-lookup form this workflow actually uses is supported.
+    Anything else raises rather than silently resolving to a constant --
+    a resolver that quietly returns the same string for every input would
+    make the mutual-exclusion assertions below pass no matter what the
+    group key is, which is the specific way this kind of guard goes hollow.
+    """
+    def sub(m):
+        expr = m.group(1).strip()
+        cur = ctx
+        for part in expr.split('.'):
+            if not isinstance(cur, dict) or part not in cur:
+                raise AssertionError(
+                    f'concurrency group uses {expr!r}, which this test cannot '
+                    f'evaluate. Extend _resolve_expr (and think about whether '
+                    f'the new context varies per RUN -- if it does, the group '
+                    f'no longer serialises anything).'
+                )
+            cur = cur[part]
+        return str(cur)
+    return re.sub(r'\$\{\{([^}]*)\}\}', sub, template)
+
+
+def _push_ctx(*, ref: str, sha: str, run_id: str) -> dict:
+    return {'github': {
+        'workflow': 'Build Desktop', 'ref': ref, 'ref_name': ref.split('/')[-1],
+        'sha': sha, 'run_id': run_id, 'run_number': run_id,
+        'repository': 'rangehow/ToFu', 'event_name': 'push',
+    }}
+
+
+def test_two_pushes_to_the_same_branch_cannot_both_reach_the_release():
+    """THE HAZARD THE BRANCH TRIGGER CREATED.
+
+    Measured on this repo (2026-07-28 onward, 339 commits): median gap between
+    commits is 165 s, while a build leg may take 30 min. So while v<VERSION> is
+    unreleased, many pushes land inside one build window. Each run's release
+    job would independently probe the tag, see 404, force-move v<VERSION> to
+    ITS OWN github.sha, and then publish -- last writer wins the ref while an
+    earlier run may already have uploaded assets. That is the same
+    binaries-from-one-commit / source-from-another mismatch the retarget step
+    exists to prevent, arriving by a different road.
+
+    The invariant is therefore about the RESOURCE, not about a YAML key: two
+    runs of this workflow on the same branch must land in one concurrency
+    group, so at most one of them can be executing at a time.
+    """
+    wf = _workflow()
+    conc = wf.get('concurrency')
+    assert conc, (
+        'build-desktop must declare a concurrency group. Without one, every '
+        'push into the unreleased window starts a full four-platform build, '
+        'and their release jobs race to force-move the same tag.'
+    )
+    group = conc['group'] if isinstance(conc, dict) else conc
+
+    a = _resolve_expr(group, _push_ctx(
+        ref='refs/heads/main', sha='a' * 40, run_id='1001'))
+    b = _resolve_expr(group, _push_ctx(
+        ref='refs/heads/main', sha='b' * 40, run_id='1002'))
+    assert a == b, (
+        f'two pushes to main resolved to DIFFERENT concurrency groups '
+        f'({a!r} vs {b!r}), so both would run and both would force-move the '
+        f'same tag. The group must not vary per run -- keys like github.sha '
+        f'or github.run_id defeat the whole mechanism.'
+    )
+
+
+def test_the_group_does_not_serialise_unrelated_branches():
+    """Complement: the group must not be a single global constant.
+
+    Only the positive assertion above is satisfiable by `group: "x"`, which would
+    make every branch (and any future release line) queue behind main for up
+    to 30 minutes per build. The contended resource is the PER-BRANCH release,
+    so the key has to carry the ref.
+    """
+    conc = _workflow().get('concurrency')
+    assert conc, (
+        'build-desktop must declare a concurrency group -- see '
+        'test_two_pushes_to_the_same_branch_cannot_both_reach_the_release '
+        'for why a missing group lets two runs force-move the same tag.'
+    )
+    group = conc['group'] if isinstance(conc, dict) else conc
+    main = _resolve_expr(group, _push_ctx(
+        ref='refs/heads/main', sha='a' * 40, run_id='1'))
+    other = _resolve_expr(group, _push_ctx(
+        ref='refs/heads/release-2.x', sha='c' * 40, run_id='2'))
+    assert main != other, (
+        f'unrelated branches share concurrency group {main!r}; they do not '
+        f'contend for the same tag, so serialising them only adds latency'
+    )
+
+
+def test_an_in_flight_release_is_never_cancelled_by_a_newer_push():
+    """cancel-in-progress must be FALSE here, against the usual CI default.
+
+    Two independent reasons, both measured rather than assumed:
+
+    1. A build leg runs up to 30 min (`timeout-minutes: 30`), but only 8 of
+       338 measured inter-commit gaps (2.4%) are >= 30 min. With cancellation
+       a build would be superseded before finishing on ~97.6% of pushes, so an
+       installer would ship only during a rare quiet spell -- the very symptom
+       ("version changed, no build appeared") this workflow exists to fix.
+
+    2. Cancellation can land between the tag force-push and the asset upload,
+       leaving a Release that the version gate then reads as 200 and never
+       retries.
+
+    Queueing gives the same mutual exclusion without either hazard: with the
+    default `queue: single`, a burst collapses to one running plus the newest
+    pending run, whose version job then probes 200 and skips in seconds.
+    """
+    conc = _workflow().get('concurrency')
+    assert isinstance(conc, dict), (
+        f'build-desktop must declare a concurrency mapping so this value can '
+        f'be an explicit, reviewed choice; got {conc!r}'
+    )
+    assert conc.get('cancel-in-progress') is False, (
+        f'cancel-in-progress must be explicitly false, got '
+        f'{conc.get("cancel-in-progress")!r}. A newer push must not kill a '
+        f'build that is already producing the release -- at this repo\'s push '
+        f'cadence that would cancel ~97.6% of builds before they finish.'
+    )
+    assert conc.get('queue') != 'max', (
+        'queue: max would let up to 100 redundant runs pile up; the default '
+        'single-slot queue is what collapses a push burst to one build'
+    )

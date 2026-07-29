@@ -1,14 +1,17 @@
 """Tofu pet mascot (static/js/tofu-pet.js) — behaviour + registration guards.
 
-The pet is an emoting cube-of-tofu mascot mounted into #projectBar. Each
-expression is a pre-rendered art frame (static/icons/pet/tofu-pet-<expr>.png);
-a small time-of-day / mood finite-state machine picks the frame (research-
-grounded resolution priority: activity > night-sleep > low-mood >
-low-energy/evening > recent-positive > time-default > idle).
+The pet is the Tofu brand mascot itself — the isometric cream block from
+static/icons/tofu-welcome.svg — mounted into #projectBar. Each expression is an
+SVG frame (static/icons/pet/tofu/tofu-<expr>.svg); a small time-of-day / mood
+finite-state machine picks the frame (research-grounded resolution priority:
+activity > night-sleep > low-mood > low-energy/evening > recent-positive >
+time-default > idle).
 
 These tests run the REAL shipped module under node with a minimal DOM/storage
 stub, drive its public `window.TofuPet` surface, and assert:
-  * every declared EXPRESSION resolves to an art frame that EXISTS on disk;
+  * every declared frame resolves — THROUGH THE MODULE'S OWN frameUrl() — to art
+    that EXISTS on disk (so the guard follows the shipped character, and cannot
+    become a stale second copy of the path rule);
   * the time/mood FSM resolves to the right expression at representative
     hours + moods (the core state logic);
   * loading activity wins over the clock (thinking), success celebrates;
@@ -75,10 +78,20 @@ if (typeof _patch.activity === 'string') { TP.setActivity(_patch.activity); dele
 // an empty setState would re-resolve and clobber a transient reaction (celebrate).
 if (Object.keys(_patch).length) TP.setState(_patch);
 const _expr = TP.getState().expr;
+// Resolve EVERY declared frame through the module's own frameUrl(), so the
+// python guards can check the engine's real answers instead of re-deriving the
+// directory/prefix/extension themselves (a second copy that would silently rot).
+const _allFrames = TP.EXPRESSIONS
+  .concat(TP.WALK_FRAMES, TP.GROOM_FRAMES, TP.SCRATCH_FRAMES)
+  .concat(Object.keys(TP.FRAME_ALIAS).map(k => TP.FRAME_ALIAS[k]));
+const _frameUrls = {};
+_allFrames.forEach(function (f) { _frameUrls[f] = TP.frameUrl(f); });
 console.log(JSON.stringify({
   expr: _expr,
   expressions: TP.EXPRESSIONS,
   frameUrl: TP.frameUrl((TP.FRAME_ALIAS[_expr] || _expr)),
+  frameUrls: _frameUrls,
+  FRAME_ALIAS: TP.FRAME_ALIAS,
   decorStyles: TP.DECOR_STYLES,
   decor: TP.getDecor(),
   walkFrames: TP.WALK_FRAMES,
@@ -108,14 +121,28 @@ def _run(hour=14, now=0, patch=None):
 import json  # noqa: E402  (used inside _run)
 
 
+def _frame_path(rel_url):
+    """Map a URL the SHIPPED module produced → the file it must resolve to.
+
+    The guards below deliberately do NOT hardcode a directory, prefix or
+    extension. They used to (``static/icons/pet/oneko/oneko-<e>.png``), which
+    made them a SECOND copy of the frame-resolution rule: re-pointing the pet at
+    new art meant hand-editing four tests, and a test that names the art it
+    expects can only ever confirm the art someone remembered to type. Deriving
+    the path from ``TofuPet.frameUrl()`` means these guards follow the shipped
+    resolver wherever it points — they check that the engine's OWN answer lands
+    on a real file.
+    """
+    return REPO / rel_url.lstrip("/")
+
+
 def test_expression_frames_exist_on_disk():
-    """Every declared expression must have its kitten art frame present in
-    static/icons/pet/oneko/ (a missing frame = a broken <img> in the bar). The
-    pet is now a single public-domain oneko cat (no swappable packs)."""
+    """Every declared expression must resolve to art that EXISTS on disk (a
+    missing frame = a broken <img> in the bar). Path comes from the module's own
+    frameUrl(), so this follows the shipped character rather than naming it."""
     r = _run()
-    pet_dir = REPO / "static" / "icons" / "pet" / "oneko"
     for e in r["expressions"]:
-        f = pet_dir / f"oneko-{e}.png"
+        f = _frame_path(r["frameUrls"][e])
         assert f.exists() and f.stat().st_size > 0, f"missing/empty art frame: {f}"
     # The canonical research-grounded set must all be present as expressions.
     for e in ("idle", "happy", "sleepy", "sleeping", "thinking",
@@ -123,25 +150,24 @@ def test_expression_frames_exist_on_disk():
         assert e in r["expressions"], f"missing expression: {e}"
 
 
-def test_extra_cat_pose_frames_exist_on_disk():
-    """The 'more forms' the owner asked for: the groom + wall-scratch pose
-    cycles must exist on disk so the cat has richer idle behaviour, not just
-    walk/sit."""
+def test_extra_pose_frames_exist_on_disk():
+    """The 'more forms' the owner asked for: the groom + stretch pose cycles must
+    exist on disk so the pet has richer idle behaviour, not just walk/sit."""
     r = _run()
-    pet_dir = REPO / "static" / "icons" / "pet" / "oneko"
     poses = list(r.get("groomFrames", [])) + list(r.get("scratchFrames", []))
     assert len(poses) >= 5, f"expected >=5 extra pose frames, got {poses}"
     for p in poses:
-        f = pet_dir / f"oneko-{p}.png"
+        f = _frame_path(r["frameUrls"][p])
         assert f.exists() and f.stat().st_size > 0, f"missing/empty pose frame: {f}"
 
 
 def test_curious_alias_resolves_to_a_real_frame():
     """'curious' has no own art — it must alias to an existing frame."""
     r = _run(hour=14, patch={})
-    # frameUrl for the resolved expr always points at a real file; assert the
-    # alias target (alert) exists so curious never yields a broken image.
-    assert (REPO / "static" / "icons" / "pet" / "oneko" / "oneko-alert.png").exists()
+    target = r["FRAME_ALIAS"].get("curious", "curious")
+    f = _frame_path(r["frameUrls"][target])
+    assert f.exists() and f.stat().st_size > 0, \
+        f"'curious' aliases to {target!r}, which has no art on disk: {f}"
 
 
 def test_decor_scene_assets_exist():
@@ -798,13 +824,12 @@ def test_project_bar_close_button_is_svg_not_glyph():
 
 def test_walk_cycle_has_four_keypose_frames_on_disk():
     """The walk is a real multi-frame cycle (contact/down/passing/up), NOT one
-    PNG sliding. All four keypose frames must exist on disk."""
+    image sliding. All four keypose frames must exist on disk."""
     r = _run()
-    pet_dir = REPO / "static" / "icons" / "pet" / "oneko"
     walk = r["walkFrames"]
     assert len(walk) >= 4, f"walk cycle must have >=4 keyposes, got {walk}"
     for w in walk:
-        f = pet_dir / f"oneko-{w}.png"
+        f = _frame_path(r["frameUrls"][w])
         assert f.exists() and f.stat().st_size > 0, f"missing/empty walk frame: {f}"
 
 
@@ -1089,7 +1114,7 @@ def test_neuter_breaks_night_sleep():
 
 
 if __name__ == "__main__":
-    for fn in [test_expression_frames_exist_on_disk, test_extra_cat_pose_frames_exist_on_disk,
+    for fn in [test_expression_frames_exist_on_disk, test_extra_pose_frames_exist_on_disk,
                test_curious_alias_resolves_to_a_real_frame,
                test_decor_scene_assets_exist, test_decor_css_wires_every_scene,
                test_control_lift_is_allowlist_not_denylist,

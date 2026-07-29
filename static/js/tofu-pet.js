@@ -1,33 +1,47 @@
 /*
- * tofu-pet.js — the little KITTEN that LIVES in the project bar.
+ * tofu-pet.js — the little TOFU that LIVES in the project bar.
  *
  * The project bar (tofu theme) is a tiny living DIORAMA: a procedural
- * Impressionist scene fills the bar (tofu-scene.js) and a pixel-art CAT roams
- * left-right along its baseline — walking, pausing, sitting, grooming,
- * scratching, napping, and CHASING a little scene critter (butterfly / fish /
+ * Impressionist scene fills the bar (tofu-scene.js) and the Tofu mascot itself
+ * roams left-right along its baseline — walking, pausing, sitting, grooming,
+ * stretching, napping, and CHASING a little scene critter (butterfly / fish /
  * bird) that drifts through the background. The classic desktop-pet wander
  * model (oneko / Shimeji), but coupled to the scene so the two interact. The
- * cat passes BEHIND the opaque control pills via z-index, so it can NEVER
- * block a hit target. Each pose is a public-domain 32px sprite frame in
- * static/icons/pet/oneko/oneko-<x>.png.
+ * pet passes BEHIND the opaque control pills via z-index, so it can NEVER
+ * block a hit target. Each pose is a 32px SVG frame in
+ * static/icons/pet/tofu/tofu-<x>.svg.
  *
- * CHARACTER: one cat, one look. (Earlier iterations had a swappable "pack"
- * registry with a tofu-block alternate + a switch button; per the owner we
- * keep ONLY the kitten and dropped the switcher — the wander/pose engine is
- * unchanged, it just always resolves oneko frames.)
+ * CHARACTER: one tofu, one look. The pet IS the brand mascot — the isometric
+ * cream block from static/icons/tofu-welcome.svg, same palette, same ω mouth,
+ * same blush — so the creature in the bar and the logo above it are provably
+ * the same character. (History: this bar first held a swappable "pack"
+ * registry, then a single borrowed pixel-art cat. Both the pack switcher and,
+ * later, a logo-skin picker were removed on owner instruction — mascot
+ * switching has been vetoed twice. Do NOT re-add a character registry, a
+ * picker, or a localStorage try-on: ship ONE character.)
+ *
+ * The 18 frames are GENERATED, not hand-drawn:
+ * static/icons/_gen/tofu-pet/gen_tofu_pet.py defines the body once and emits
+ * every frame from a pose spec, so the geometry and palette cannot drift
+ * between frames. Re-run it after any art change (it has a --check CI gate).
  *
  * MOTION is a real frame-by-frame WALK CYCLE: keyposes advanced by a frame
- * ticker on the rAF loop while walking (NOT one PNG sliding). Layers (so
- * transforms never fight): .tofu-pet owns POSITION (translateX, set by the
- * wander loop) · .tofu-pet-facing owns DIRECTION (scaleX ±1) · .tofu-pet-img
- * owns the swapped frame + idle breathe.
+ * ticker on the rAF loop while walking (NOT one image sliding). Because a
+ * cube has no limbs to articulate, every pose is carried by the property a
+ * block of tofu actually has — it is SOFT: squash on the down-beat, stretch
+ * on the up-beat, tilt for a wobble. (Arm nubs were built and removed: at the
+ * shipped 30px a raised nub reads as a mouse ear and a lowered one as a panel
+ * glued to the side, both of which wreck the cube silhouette that makes this
+ * the logo.) Layers (so transforms never fight): .tofu-pet owns POSITION
+ * (translateX, set by the wander loop) · .tofu-pet-facing owns DIRECTION
+ * (scaleX ±1) · .tofu-pet-img owns the swapped frame + idle breathe.
  *
  * PET ⋈ SCENE INTERACTION (owner ask — "interaction between the pet and the
  * background"): tofu-scene.js exposes the drifting critter's position
  * (TofuScene.critterX) and a spook() hook. The wander FSM has a 'chase' state:
- * when the critter drifts near, the cat perks (alert) then pursues it; on
+ * when the critter drifts near, the pet perks (alert) then pursues it; on
  * catch it pounces (surprised) and the critter darts away (scene.spook()). The
- * scene in turn glows softly under the cat (it reads TofuPet.getState().x). Both
+ * scene in turn glows softly under the pet (it reads TofuPet.getState().x). Both
  * couplings are OPTIONAL + guarded, so each module still works entirely alone.
  *
  * Public surface `window.TofuPet`:
@@ -45,7 +59,7 @@
  *   document.dispatchEvent(new CustomEvent('tofu:decor',    {detail:'pool'}))
  *
  * Accessibility (per WCAG 2.3.3 / 2.2.2 + oneko): under prefers-reduced-motion
- * the cat does NOT roam or chase (stands still, single frame); it pauses when
+ * the pet does NOT roam or chase (stands still, single frame); it pauses when
  * the tab is hidden; and it is aria-hidden + never focus/click-stealing.
  * mood/energy are best-effort persisted to localStorage. Nothing here touches
  * the chat/streaming pipeline.
@@ -66,23 +80,30 @@
   var DEFAULT_DECOR = 'meadow';
   var _decor = DEFAULT_DECOR;
 
-  // ── The kitten sprite frames live under static/icons/pet/oneko/ as
-  // oneko-<frame>.png (32px public-domain Neko art; see the LICENSE there).
+  // ── The pet's art: BRAND-NATIVE tofu frames at static/icons/pet/tofu/ as
+  // tofu-<frame>.svg. The character IS the Tofu mascot (the isometric cream
+  // block from static/icons/tofu-welcome.svg) rather than a borrowed cat, so
+  // the thing living in the bar and the logo above it are the same creature.
+  // The art is generated — static/icons/_gen/tofu-pet/gen_tofu_pet.py defines
+  // the body ONCE and emits all 18 frames from pose specs, so a palette tweak
+  // can never desynchronise them. SVG (not PNG): it is the brand's own format,
+  // it stays crisp at any DPR, and all 18 frames together are ~46KB vs ~85KB.
   // URL built with BASE_PATH (from core.js) so it stays correct behind a
   // base-path / VS Code proxy. ──
-  var PET_DIR = '/static/icons/pet/oneko';
-  var PET_PREFIX = 'oneko-';
+  var PET_DIR = '/static/icons/pet/tofu';
+  var PET_PREFIX = 'tofu-';
+  var PET_EXT = '.svg';
   var _base = (typeof BASE_PATH === 'string') ? BASE_PATH : '';
   function _frameUrl(frame) {
-    return _base + PET_DIR + '/' + PET_PREFIX + frame + '.png';
+    return _base + PET_DIR + '/' + PET_PREFIX + frame + PET_EXT;
   }
 
   // Resting expressions (the mood/time FSM resolves to one of these). Every
-  // name here must have an oneko-<name>.png on disk.
+  // name here must have a tofu-<name>.svg on disk.
   var EXPRESSIONS = ['idle', 'happy', 'sleepy', 'sleeping', 'thinking',
     'surprised', 'sad', 'celebrating', 'alert'];
-  // Poses that reuse another frame's art (a cat has poses, not emotions).
-  // 'curious' → the alert perk; nothing else needs remapping now.
+  // Poses that reuse another frame's art (the block has poses, not a separate
+  // drawing per mood). 'curious' → the alert perk; nothing else needs remapping.
   var FRAME_ALIAS = { curious: 'alert' };
 
   // The WALK CYCLE: four keyposes played in order while state==='walk'.
@@ -90,17 +111,19 @@
   var WALK_FRAME_MS = 150;   // per keypose → full ~600ms stride cycle
   var _walkIdx = 0, _walkAccum = 0;
 
-  // GROOM cycle (sit + lick paw) and WALL-SCRATCH cycle (stretch up) — the new
-  // "forms". Played frame-by-frame in their own states, same ticker as walk.
+  // GROOM cycle (a settling wobble) and STRETCH cycle (a full-body stretch) —
+  // the stationary "forms". Played frame-by-frame in their own states, same
+  // ticker as walk. A cube has no paw to lick, so grooming is a tidy-up wobble
+  // and scratching is the whole body stretching tall then settling wide.
   var GROOM_FRAMES = ['groom1', 'groom2', 'groom3'];
   var SCRATCH_FRAMES = ['scratch1', 'scratch2'];
   var POSE_FRAME_MS = 220;
   var _poseIdx = 0, _poseAccum = 0, _poseFrames = null;
 
-  // GAZE: a "sit and look around" beat — the cat stays put (alert pose, ears
-  // up) and periodically turns its head to the other side, as if watching the
-  // scene. No extra art (reuses the 'alert' frame + the facing flip). This is a
-  // distinct stationary ACTIVITY so the pet does more than pace the bar.
+  // GAZE: a "sit and look around" beat — the pet stays put (alert pose) and
+  // periodically turns to face the other side, as if watching the scene. No
+  // extra art (reuses the 'alert' frame + the facing flip). This is a distinct
+  // stationary ACTIVITY so the pet does more than pace the bar.
   var GAZE_TURN_MS = 1300;
   var _gazeAccum = 0;
   var _turnTimer = null;   // clears the transient 'pivot' pop after a facing flip
@@ -213,7 +236,7 @@
   function _title() {
     var tb = _timeBucket(new Date().getHours());
     var feel = S.mood >= 75 ? 'feeling great' : S.mood >= 45 ? 'doing fine' : 'a bit blue';
-    return 'Kitty — ' + (_greetWord[tb.bucket] || 'here') + ' \u00b7 ' + feel;
+    return 'Tofu — ' + (_greetWord[tb.bucket] || 'here') + ' \u00b7 ' + feel;
   }
 
   // ── DOM ──
@@ -773,11 +796,11 @@
   }
 
   // ══════════════════════════════════════════════════════════════════════
-  //  DRAG — pick the kitten up and move it along the bar. A press starts a
-  //  candidate drag; once the pointer moves past DRAG_SLOP the cat is "held"
+  //  DRAG — pick the tofu up and move it along the bar. A press starts a
+  //  candidate drag; once the pointer moves past DRAG_SLOP the pet is "held"
   //  (the wander FSM yields: _step early-returns while state==='drag', so the
   //  autonomous walk/chase never fights the finger). On release: a real drag
-  //  drops the cat where you let go (then it resumes wandering from there); a
+  //  drops it where you let go (then it resumes wandering from there); a
   //  press that never crossed the slop is treated as a plain CLICK → interact()
   //  (preserves the day-report bubble). Uses Pointer Events (mouse + touch) with
   //  capture so a fast drag that outruns the sprite still tracks. Guarded so a
@@ -850,7 +873,7 @@
     _el.id = MOUNT_ID;
     _el.setAttribute('role', 'img');
     _el.setAttribute('aria-hidden', 'true');
-    _el.setAttribute('data-pet', 'oneko');
+    _el.setAttribute('data-pet', 'tofu');
     _facing = document.createElement('span');
     _facing.className = 'tofu-pet-facing';
     _img = document.createElement('img');
@@ -860,7 +883,7 @@
     _img.setAttribute('draggable', 'false');
     _facing.appendChild(_img);
     _el.appendChild(_facing);
-    _wireDrag();   // press = click (interact); press+move = drag the kitten
+    _wireDrag();   // press = click (interact); press+move = drag the pet
     _el.addEventListener('contextmenu', function (e) { e.preventDefault(); e.stopPropagation(); cycleDecor(); react('happy', 1000); });
     _el.addEventListener('mouseenter', _onHover);
     bar.insertBefore(_el, bar.firstChild);

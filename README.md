@@ -619,7 +619,7 @@ When you want to explore a different direction without losing the current thread
 
 ### 🐾 Tofu Pet (just for fun)
 
-Switch to the **Tofu** theme and a little animated chibi-tofu mascot moves into the project bar. It wanders through a decorative scene with a real walk cycle and moods — thinking while a task loads, celebrating on success — and leaves interactive footstep effects (grass tufts, pool ripples, sky wisps). Use the **Scene** button (Meadow / Pool / Sky / Off) and **Pet** button (Tofu / Oneko) in the bar to customize it. It respects your OS "reduce motion" setting. Purely decorative — turn it off any time.
+Switch to the **Tofu** theme and the Tofu mascot itself moves into the project bar — the same isometric cream block as the app's logo, drawn in the same palette. It wanders through a decorative scene with a real walk cycle and moods — thinking while a task loads, celebrating on success, napping at night — and disturbs the scene as it goes (grass parts, the pool ripples, clouds stir). Because it's a block of tofu rather than a creature with limbs, it acts by being SOFT: it squashes as it lands, stretches as it rises, and wobbles when it settles. Drag it along the bar, or click it for a summary of your day. Use the **Scene** button (Meadow / Pool / Sky / Off) in the bar to change its world. It respects your OS "reduce motion" setting. Purely decorative — turn it off any time.
 
 ---
 

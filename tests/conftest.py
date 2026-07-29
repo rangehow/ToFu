@@ -1286,8 +1286,8 @@ def _attach_js_error_capture(pg):
       * ``console.error`` → hard UNLESS it matches :data:`_BENIGN_CONSOLE_ERRORS`.
       * ``requestfailed`` → hard unless ``ERR_ABORTED``, which is the browser
         cancelling an in-flight preload/navigation, not a missing asset.
-        (Verified: the one ERR_ABORTED seen at boot is `oneko-surprised.png`,
-        and that file EXISTS on disk — treating it as a 404 would be a false
+        (Verified: the ERR_ABORTED seen at boot is a pet sprite preload, and
+        that file EXISTS on disk — treating it as a 404 would be a false
         accusation of the kind the charter warns about.)
 
     Findings are attached to the page as ``pg._tofu_js_errors``; the

@@ -1,5 +1,28 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+
+### 2026-07-29(续·conv-state rev 时钟域根修) — owner 问的是「同步太慢」,实测**一毫秒都不是吞吐问题**:一个 `>` 比较拿两个不可比的时钟域相比,恒为 false;而我第一轮只找到三个症状里的**一个**,owner 补的另两个更常见(`pt_781ae072d6ee4e84` DONE;commit `3c38f85d`,5 文件 +605/-19;**8 条失败先行**,**NEUTER×3 各咬各的**(2/3/1);相邻环 **75 + 44 + 31 + 13 全绿**;charter 不变量已提交)
+
+- **★ 先纠正 owner 的前提,这决定了要不要做「全模块极致优化」:** 提问假设是「后端同步慢 + 前端不知道自己滞后」。实测同步链路**架构已经是 ChatGPT 那一类**——服务端权威注册表(唯一物理 SSOT)、每 conv 独立 rev、连接时全量快照、未知 conv 的 park-not-discard、跨副本总线、60s 漂移探针。**三个症状里没有一毫秒来自吞吐**,全部来自 `_revStrictlyGreater` 恒返回 false。故**全模块极致性能优化被否决**(owner 复核后同意),工程量全部投到正确性根因。
+- **★ 我只找到一半,而漏掉的那半更常见 —— 且我的第一次测量把它误报成「没事」:** 我报的是「客户端 CLEAR 自铸挂钟 rev ⇒ 假空闲」。owner 推同一个 reducer 又跑两格:
+
+  | 场景 | 症状 | 谁找到的 |
+  |---|---|---|
+  | snapshot-clear 中毒 | 永久**假空闲**(在生成却无显示) | 我 |
+  | **服务端重启** | 永久**假忙碌**(幽灵 Stop 键 + 404 attach) | **owner** |
+  | **多副本** | 后启动副本的状态永远进不来 | **owner** |
+
+  重启那格的陷阱:第一次量它显示 `busy=true`,**看起来正常**——但集合里留的是重启前的死任务 `t1` 而不是新任务 `t9`;继续推到 t9 结束、服务端报空闲,它**仍然** `busy=true`,`pickAuthoritativeTaskIdForReconnect` 交出 `t1` ⇒ 点开 attach 一个已死 task。**判据(已进 charter 不变量第 5 条):涉及 busy 的断言必须钉集合内容 + reconnect 目标,只钉布尔的守卫会对这个缺陷报绿。**
+- **★ 根因是同一句话的两半,而 charter 原文选错了那个 nanotime:** P1 定 `[time.monotonic_ns(), replica_id]`,monotonic_ns **自进程启动**计数;客户端 CLEAR 自铸 `Date.now()*1e6` 是**挂钟**。本机实测修前服务端值 **3.93e16**(≈455 天 uptime),客户端毒值 **1.785e18**,差 3 个数量级;而重启后新进程从 ~1e9 起步,与旧值差 **7 个数量级**。三个症状是这**一个**错误的三种投影,所以「把 `Date.now()*1e6` 换个常数」或「给 snapshot-clear 开特例」只压掉一个、留下另两个。
+- **落点(不特判 sentinel):** rev = `_BOOT_EPOCH_NS + time.monotonic_ns()`,`_BOOT_EPOCH_NS = time.time_ns() - time.monotonic_ns()` 在 import 期采样**恰好一次**。三条性质一次拿全:进程内严格递增(实测 20 万次连续铸造 **0 次非递增**,时钟分辨率 1ns)、**进程存续期免疫挂钟跳变**(锚不再读第二次 —— 这正是当初选 monotonic_ns 的理由,必须保留)、跨重启跨副本可比。三个上线点(notify / push 快照 / poll 投影)共用**唯一**铸造点。
+- **★ 客户端铸 rev 是被「废除」而不是「修正」:** 客户端拿不到服务端锚,**任何**本地铸造值按定义处于另一个时钟域 ⇒「在客户端正确地铸」是不可达状态,所以这是结构性禁令。快照两条传输都新增 server-minted frame-level `rev`,CLEAR 盖它;快照若没带 rev 则**清空 busy 但不推进 rev**——盖一个不可比的值严格劣于不盖(用一次罕见漏清换永久失聪)。
+- **★ 附带收益(实测):现网已中毒的 tab 会自愈,不需要 F5。** 新 rev 与旧毒值同处挂钟域,故下一帧就严格更大并落地。这是选挂钟锚而非「随便换个大常数」的额外理由。
+- **被否决的替代方案(实测,勿重开):** per-conv 持久化 DB 计数器正确,但把一次写+读放进每条 notify 帧的热路径——实测 **135us 中位 / 315us p95 vs 0.19us(≈720x)**,且让 DB 成为「最需要在降级条件下存活的信号」的硬依赖。挂钟锚零存储。
+- **★ 我自己造了两个测试缺陷,都在提交前自查到,方向相反:** ①harness 用 `node -e` 时 argv 少一位,我照抄 `argv[2]` ⇒ 崩在 path.join,**看起来像产品坏了**(判据同上一批:先分清「被测代码错」与「我没把被测代码装进来」)。②更危险的一个:首版 harness 喂的是**挂钟锚 rev**,于是客户端的 `Date.now()*1e6` 毒值落在**同一量级带**里,**A/B/C 三格对未修 reducer 全部报绿**——一个绿灯覆盖活体缺陷。改为喂**小量级**服务端域(既抽象表达「reducer 必须对服务端域透明」,也匹配修前 wire 上的真实量级),才真正咬住。
+- **NEUTER×3 各咬各的:** 服务端退回裸 monotonic_ns → **2 红**;客户端重新自铸 → **3 红**;摘掉 frame-level rev → **1 红**。另确认我写的解释性注释里出现的 `snapshot-clear` 字样**剥注释后为 0**(charter #24 的双向要求:注释既不能满足也不能违反守卫)。
+- **顺手发现但按 owner 惯例不并入本批的既有红灯:** `test_conv_state_p6_verdict.py:104` **自己就是 charter #24 违规**——扫 cross_tab_sync.js 原文不剥注释,而该函数注释里正写着 `_authoritativeActiveTaskIds`(在解释它为何不重复解析 wire,是正确的设计说明),于是守卫变红。`cross_tab_sync.js` 与 HEAD **逐字节相同**,故与本批无关。已开票 `pt_852527ce031e4f93`(同族第四份手写扫描;另注 4000 字节固定切片本身也脆)。
+- **验收边界:** 纯后端 + 前端 bundle,**运行中进程不带**,需重启 + bundle 重建才到用户面前。**「前端知道自己陈旧」那一半尚未做**——`drift_tracker` 现在只打日志从不纠正(服务端已经知道哪个客户端冻结了却不发纠正快照),owner 已明确要求作为第二步单独开工,不与本批混。
+
 ### 2026-07-29(续·工具顺序定案 + lxml 地板) — 两张 MCP 票各自以「**票面前提不成立**」收口:排序那条**未排序的路根本到不了 wire**,lxml 那条**旧地板 4.9 是死代码**;两票都不是「修一个 bug」,而是**补上真正缺的那条守卫**(`pt_fb13217744114156` + `pt_34c2239e862c4911` DONE;commits `a1c2bc68` test-only + `118c7d34`;NEUTER×4 各咬各的;相邻环 **86 / 71 passed**)
 
 - **★ 票面自己写了关闭条件,而实测正好落在那一条上:** 「`:1024` 那条若是唯一消费点则本票直接关闭」。实测:`lib/tools/registry/_build.py::_build_mcp` 是**唯一**把 MCP 工具喂进 LLM 工具表的地方,它调 `get_openai_tool_defs()`(sorted);而 `handle.tools`(服务器原序)在 `_bridge.py` 里**只有两个消费点**——`tools_count` 与 `tool_names`,**是诊断字段,不进请求体**。所以「顺序不稳会作废 prompt 缓存」这个风险**在我们这侧本来就不存在**,无需任何排序改动。

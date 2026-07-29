@@ -340,6 +340,249 @@ def test_hybrid_payload_with_impossible_cache_reads_as_residual():
     assert round(15000 / total * 100) <= 100, 'hit rate exceeded 100%'
 
 
+# ── Defect 5: the HYBRID wire, and the two surfaces drifting on it ──────
+#
+# ★ FIXTURE BLINDSPOT THIS SECTION EXISTS TO CLOSE (read before editing):
+#   Neither `_openai_wire()` nor `_anthropic_wire()` above can express the
+#   shape that actually broke. `_anthropic_wire()` deliberately omits
+#   `prompt_tokens` entirely, so every Anthropic-side assertion in this file
+#   runs against a PURE payload. The sankuai_anthropic gateway is not pure: it
+#   emits `prompt_tokens` (cache-INCLUSIVE total) *beside* the Anthropic
+#   `cache_*_input_tokens` residual keys. That real shape had therefore never
+#   entered the scan surface of ANY guard, which is why a 72% fleet-wide
+#   overstatement stayed green.
+#
+#   `test_hybrid_payload_with_impossible_cache_reads_as_residual` above covers
+#   only the INVERSE arithmetic case (cache > prompt_tokens). The live defect
+#   is cache < prompt_tokens, which that test cannot reach.
+#
+#   Do NOT "simplify" `_hybrid_gateway_wire()` by dropping `prompt_tokens` —
+#   that is precisely the omission that made this class of payload invisible.
+
+def _hybrid_gateway_wire(uncached: int, cache_read: int, cache_write: int) -> dict:
+    """The REAL sankuai_anthropic shape: BOTH conventions spelled at once.
+
+    Verbatim key set from conversation ms5i5ydigs9j9w. The defining property,
+    verified on 28/28 rounds of that turn, is the identity
+
+        input_tokens + cache_read + cache_write == prompt_tokens
+
+    i.e. `prompt_tokens` is the cache-INCLUSIVE total while `input_tokens`
+    carries the Anthropic uncached residual. Both are present and they mean
+    DIFFERENT things — the XOR assumption documented in `normalize_usage` does
+    not hold here, so the alias order stops being "immaterial".
+    """
+    return {
+        'input_tokens': uncached,
+        'output_tokens': 39580,
+        'completion_tokens': 39645,
+        'prompt_tokens': uncached + cache_read + cache_write,
+        'total_tokens': uncached + cache_read + cache_write + 39645,
+        'cached_tokens': 0,
+        'cache_read_tokens': 0,
+        'cache_write_tokens': 0,
+        'cache_read_input_tokens': cache_read,
+        'cache_creation_input_tokens': cache_write,
+    }
+
+
+# The exact turn the owner flagged: 5.5M "tokens" shown as ¥351.60.
+_LIVE_UNCACHED = 162854
+_LIVE_READ = 2420002
+_LIVE_WRITE = 2967806
+
+
+def test_hybrid_wire_fixture_really_is_hybrid():
+    """Guard-the-guard: the fixture must carry BOTH spellings and the identity.
+
+    Without this, someone "tidying" the fixture into a pure Anthropic dict
+    would leave every assertion below passing while testing nothing relevant.
+    """
+    u = _hybrid_gateway_wire(_LIVE_UNCACHED, _LIVE_READ, _LIVE_WRITE)
+    assert u.get('prompt_tokens'), 'fixture lost the OpenAI total spelling'
+    assert u.get('input_tokens'), 'fixture lost the Anthropic residual spelling'
+    assert u['input_tokens'] + u['cache_read_input_tokens'] \
+        + u['cache_creation_input_tokens'] == u['prompt_tokens'], (
+        'fixture violates the measured identity — prompt_tokens must be the '
+        'cache-INCLUSIVE total')
+    assert usage_cache_convention(u) == 'anthropic'
+
+
+def test_hybrid_residual_comes_from_the_anthropic_key_not_the_total():
+    """THE DEFECT: the residual must be `input_tokens`, never `prompt_tokens`.
+
+    Pre-fix, `normalize_usage`'s alias order resolved `input` to the 5,562,791
+    TOTAL while the structural detector said 'anthropic', so the whole prefix
+    was re-priced at the uncached rate (¥201.37 instead of ¥5.90) and
+    `totalInputTokens` double-counted the cache (10,950,599 vs 5,550,662).
+    """
+    u = _hybrid_gateway_wire(_LIVE_UNCACHED, _LIVE_READ, _LIVE_WRITE)
+    uncached, total = split_input_tokens(u)
+    assert uncached == _LIVE_UNCACHED, (
+        'uncached input must be the Anthropic residual %d, got %d — the '
+        'cache-inclusive total was billed at the uncached rate'
+        % (_LIVE_UNCACHED, uncached))
+    assert total == _LIVE_UNCACHED + _LIVE_READ + _LIVE_WRITE
+    # The cache must not be counted twice into the total.
+    assert total == u['prompt_tokens'], (
+        'total input must equal the gateway-reported prompt_tokens; got %d '
+        'vs %d — the cache was added on top of a total containing it'
+        % (total, u['prompt_tokens']))
+
+
+def test_the_two_cost_surfaces_agree_on_the_hybrid_wire():
+    """PARITY: display and wallet must price the SAME turn identically.
+
+    Both `lib/cost.py` and `lib/billing/cost.py` claim in their docstrings that
+    the two surfaces "can NEVER drift" because they share one engine. That was
+    FALSE on this payload: display resolved 5,562,791 uncached tokens while the
+    billing adapter's `synthesize_usage` re-inference resolved ~174,983 —
+    $48.56 displayed against $21.62 debited, a 2.246x divergence.
+
+    This drives BOTH real paths from ONE raw dict. A guard that exercised only
+    one side would stay green while they diverge — which is exactly how this
+    shipped.
+    """
+    from lib.billing.cost import MICRO_PER_USD, compute_request_cost
+    from lib.cost import normalize_usage as _nu_fn
+
+    u = _hybrid_gateway_wire(_LIVE_UNCACHED, _LIVE_READ, _LIVE_WRITE)
+    model = 'claude-opus-5'
+
+    cc = compute_cost(u, model_id=model, provider_id='sankuai_anthropic')
+    displayed = round((cc['inputCostUsd'] + cc['outputCostUsd']
+                       + cc['cacheWriteCostUsd'] + cc['cacheReadCostUsd'])
+                      * MICRO_PER_USD)
+
+    # Mirror the production call site (lib/billing/request_flow.py): resolve
+    # the split at the seam that owns the convention, then hand over scalars.
+    _n = _nu_fn(u)
+    _uncached, _ = split_input_tokens(u)
+    billed = compute_request_cost(
+        model, input_tokens=_uncached, output_tokens=_n['output'],
+        cache_read_tokens=_n['cache_read'],
+        cache_write_tokens=_n['cache_write'],
+        provider_id='sankuai_anthropic', margin=0.0)
+
+    assert billed.base_micro == displayed, (
+        'wallet %s != displayed %s (%.3fx) — the two cost surfaces drifted on '
+        'a real gateway payload'
+        % (billed.base_micro, displayed,
+           displayed / billed.base_micro if billed.base_micro else 0))
+
+    # ...and BOTH must equal the truth derived from the gateway's own residual.
+    truth = compute_cost(
+        {'input_tokens': _LIVE_UNCACHED, 'output_tokens': 39580,
+         'completion_tokens': 39645,
+         'cache_read_input_tokens': _LIVE_READ,
+         'cache_creation_input_tokens': _LIVE_WRITE},
+        model_id=model, provider_id='sankuai_anthropic')
+    assert abs(cc['costUsd'] - truth['costUsd']) < 0.01, (
+        'display $%.4f != pure-Anthropic truth $%.4f — agreement alone is not '
+        'enough, both surfaces could be wrong together'
+        % (cc['costUsd'], truth['costUsd']))
+
+
+def test_hybrid_round_is_not_overcharged_against_its_own_residual():
+    """Concrete floor: the flagged turn must price at ~¥156, not ¥351.60.
+
+    A pure parity assertion can be satisfied by BOTH surfaces being wrong in
+    the same direction, so pin the absolute number the gateway's own residual
+    implies.
+    """
+    u = _hybrid_gateway_wire(_LIVE_UNCACHED, _LIVE_READ, _LIVE_WRITE)
+    cc = compute_cost(u, model_id='claude-opus-5',
+                      provider_id='sankuai_anthropic')
+    assert cc['inputTokens'] == _LIVE_UNCACHED
+    assert cc['costCny'] < 200.0, (
+        'the flagged turn still prices at ¥%.2f — it was ¥351.60 pre-fix and '
+        'its true cost is ~¥156' % cc['costCny'])
+
+
+def test_the_production_billing_call_site_resolves_the_split_at_the_seam():
+    """WIRING: `request_flow` must hand `compute_request_cost` the RESIDUAL.
+
+    ★ Added because a NEUTER exposed this hole: reverting the real call site to
+    `_nu['input']` left `tests/test_billing.py` fully GREEN (22 passed). Every
+    existing billing guard drives `compute_request_cost` with hand-written
+    scalars, so NOTHING exercised the one line that decides which number the
+    wallet actually receives in production — the "tested the helper, not the
+    call site" failure this project has hit repeatedly.
+
+    Asserted on the AST, not by substring: a comment mentioning
+    `split_input_tokens` must not be able to satisfy this.
+    """
+    import ast
+    import pathlib
+
+    src = pathlib.Path(
+        __file__).resolve().parent.parent / 'lib' / 'billing' / 'request_flow.py'
+    tree = ast.parse(src.read_text())
+
+    calls = [n for n in ast.walk(tree)
+             if isinstance(n, ast.Call)
+             and isinstance(n.func, ast.Name)
+             and n.func.id == 'compute_request_cost']
+    assert calls, 'no compute_request_cost call found in request_flow.py'
+
+    for call in calls:
+        kw = {k.arg: k.value for k in call.keywords if k.arg}
+        assert 'input_tokens' in kw, 'call site stopped passing input_tokens'
+        node = kw['input_tokens']
+        # It must NOT be the raw normalize_usage alias — that is the defect.
+        if isinstance(node, ast.Subscript):
+            key = getattr(node.slice, 'value', None)
+            assert key != 'input', (
+                "billing passes normalize_usage()['input'] — on a HYBRID "
+                'payload that is the cache-INCLUSIVE total, so the wallet '
+                'diverges from the displayed cost (measured 2.246x)')
+        # ...and split_input_tokens must actually be called in this module.
+        assert any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                   and n.func.id == 'split_input_tokens'
+                   for n in ast.walk(tree)), (
+            'request_flow.py never calls split_input_tokens — the convention '
+            'decision is being re-guessed from scalars instead of resolved '
+            'at the seam that owns it')
+
+
+# ── Complements: the two PURE wires must be byte-identical to before ────
+
+def test_pure_openai_wire_is_untouched_by_the_hybrid_fix():
+    """COMPLEMENT: 'always read input_tokens' would break the OpenAI line.
+
+    `_openai_wire()` carries `input_tokens: 0` as a vestigial field while the
+    real total lives in `prompt_tokens`. A naive fix that unconditionally
+    preferred `input_tokens` would resolve the uncached input to 0 and
+    under-charge every OpenAI round. Only the 'anthropic' branch may consult
+    the native key.
+    """
+    u = _openai_wire(prompt_tokens=82843, cached=60000)
+    assert usage_cache_convention(u) == 'openai'
+    assert split_input_tokens(u) == (82843 - 60000, 82843)
+    cold = _openai_wire(prompt_tokens=5000, cached=0)
+    assert split_input_tokens(cold) == (5000, 5000)
+
+
+def test_pure_anthropic_wire_is_untouched_by_the_hybrid_fix():
+    """COMPLEMENT: payloads WITHOUT prompt_tokens must behave exactly as before."""
+    u = _anthropic_wire(uncached=2, cache_read=82841, cache_write=1200)
+    assert split_input_tokens(u) == (2, 2 + 82841 + 1200)
+    full_hit = _anthropic_wire(uncached=0, cache_read=82841)
+    assert split_input_tokens(full_hit) == (0, 82841)
+
+
+def test_prompt_tokens_residual_shape_still_falls_back():
+    """COMPLEMENT: the inverse hybrid (cache > prompt_tokens) keeps working.
+
+    That shape has NO `input_tokens` key at all, so the residual must fall back
+    to the normalized value rather than collapsing to 0.
+    """
+    u = {'prompt_tokens': 100, 'cache_write_tokens': 5000,
+         'cache_read_tokens': 15000}
+    assert usage_cache_convention(u) == 'anthropic'
+    assert split_input_tokens(u) == (100, 20100)
+
+
 # ── Defect 4: write-gated logic is inert ON THE OPENAI-COMPAT WIRE ─────
 
 def test_gateway_never_reports_cache_write_so_floor_collapse_cannot_fire():

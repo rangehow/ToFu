@@ -142,11 +142,21 @@ def settle_task(task: dict, *, user_id: str, model: str) -> Optional[dict]:
         # also maps vendor spellings (kimi cached_tokens, DeepSeek
         # prompt_cache_hit_tokens, nested prompt_tokens_details) onto the
         # canonical keys so those hits are billed at the read multiplier.
-        from lib.cost import normalize_usage
+        from lib.cost import normalize_usage, split_input_tokens
         _nu = normalize_usage(u)
+        # ★ Pass the UNCACHED RESIDUAL, not normalize_usage()['input'].
+        #   compute_request_cost takes loose SCALARS and has to re-infer the
+        #   convention from them (synthesize_usage). On a HYBRID payload that
+        #   re-inference lands somewhere else than the display engine does, and
+        #   the two surfaces drift — measured 2.246x apart ($48.56 displayed vs
+        #   $21.62 debited) on a real sankuai_anthropic turn, even though both
+        #   modules' docstrings claim they "can NEVER drift". Resolving the
+        #   split HERE, at the one seam that owns the convention decision,
+        #   removes the second guess entirely.
+        _uncached, _ = split_input_tokens(u)
         cost = compute_request_cost(
             model or '',
-            input_tokens=_nu['input'],
+            input_tokens=_uncached,
             output_tokens=_nu['output'],
             cache_read_tokens=_nu['cache_read'],
             cache_write_tokens=_nu['cache_write'],

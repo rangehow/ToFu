@@ -273,6 +273,44 @@ def _nested_cached(usage: dict) -> int:
     return 0
 
 
+def _anthropic_residual_input(usage: Optional[dict], normalized_input: int) -> int:
+    """Uncached RESIDUAL input for a payload already judged ``'anthropic'``.
+
+    ★ Exists because :func:`normalize_usage` and :func:`usage_cache_convention`
+    can disagree about WHICH KEY carries the input on a HYBRID payload — one
+    that spells BOTH conventions at once. ``normalize_usage`` documents the
+    assumption that a payload "carries ONE convention only (OpenAI keys XOR
+    Anthropic keys)", under which its alias order is explicitly "immaterial".
+    The sankuai_anthropic gateway violates that XOR: it emits ``prompt_tokens``
+    (the cache-INCLUSIVE total) *beside* ``cache_*_input_tokens`` (residual
+    semantics). The alias order then resolves ``input`` to the TOTAL while the
+    structural detector says ``'anthropic'`` — so the whole prefix was re-priced
+    at the uncached rate and ``totalInputTokens`` double-counted the cache.
+
+    Measured on conversation ms5i5ydigs9j9w (28/28 rounds satisfied
+    ``input_tokens + cache_read + cache_write == prompt_tokens``, i.e.
+    prompt_tokens really is the inclusive total): true uncached input was
+    162,854 tokens but 5,562,791 were billed — ¥201.37 instead of ¥5.90 on the
+    input component alone. Fleet-wide: 2,740 affected rounds across 27
+    conversations, displayed cost overstated by 72%.
+
+    So when the convention is Anthropic, the residual MUST come from the
+    Anthropic-native key. ``prompt_tokens`` is only accepted as a fallback for
+    the pure-hybrid case where the native key is absent entirely (the
+    ``prompt_tokens``-carries-residual-semantics shape pinned by
+    ``test_hybrid_payload_with_impossible_cache_reads_as_residual``).
+    """
+    if not isinstance(usage, dict):
+        return normalized_input
+    native = usage.get('input_tokens')
+    if native is not None:
+        try:
+            return int(native or 0)
+        except (TypeError, ValueError) as e:
+            logger.debug('[Cost] non-numeric input_tokens (->normalized): %s', e)
+    return normalized_input
+
+
 def split_input_tokens(usage: Optional[dict]) -> tuple[int, int]:
     """Return ``(uncached_input_tokens, total_input_tokens)`` for ``usage``.
 
@@ -291,7 +329,8 @@ def split_input_tokens(usage: Optional[dict]) -> tuple[int, int]:
         return inp, inp
     if usage_cache_convention(usage) == 'anthropic':
         # input_tokens is the uncached residual; cache sits beside it.
-        return inp, inp + cw + cr
+        return _anthropic_residual_input(usage, inp), \
+            _anthropic_residual_input(usage, inp) + cw + cr
     # OpenAI-compat: prompt_tokens is the total; cache is a subset of it.
     return max(0, inp - cw - cr), inp
 

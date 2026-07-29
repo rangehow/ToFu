@@ -105,6 +105,17 @@ class _Pinned:
     resolve_stale_bundle calls get_bundle_filename() to keep the pointer and
     the pack map coherent; here we pin BOTH so the assertions are about the
     classification branch, not about whether a real bundle can be built.
+
+    ★ TEARDOWN INVALIDATES, IT DOES NOT REPLAY A SNAPSHOT. The manifest
+    globals are PUBLISHED as a side effect of building, so restoring a
+    snapshot taken before a build stamps stale values over the real ones and
+    silently convinces the module that packs are inactive for the rest of the
+    process — poisoning every later test that asks for a pack tag. (That is
+    what an earlier version of the sibling boot-floor test did, and it broke
+    7 tests in test_i18n_pack_serving.py that neither file revealed alone.)
+    The monkeypatched FUNCTIONS are safe to restore verbatim; the DATA is not,
+    so it goes through reset_manifest_for_tests() and the next reader
+    rebuilds.
     """
 
     def __init__(self, packs, feature='feature-92a75489.js',
@@ -112,9 +123,10 @@ class _Pinned:
         self._packs, self._feature, self._core = packs, feature, core
 
     def __enter__(self):
-        self._saved = (js_bundler._pack_filenames, js_bundler._feature_filename,
-                       js_bundler._bundle_filename, js_bundler.get_bundle_filename,
-                       js_bundler.get_feature_bundle_filename)
+        # Only the FUNCTIONS are snapshot-restorable (they are not build
+        # side effects). The data globals are handled by the reset seam.
+        self._saved_fns = (js_bundler.get_bundle_filename,
+                           js_bundler.get_feature_bundle_filename)
         js_bundler._pack_filenames = self._packs
         js_bundler._feature_filename = self._feature
         js_bundler._bundle_filename = self._core
@@ -123,9 +135,9 @@ class _Pinned:
         return self
 
     def __exit__(self, *exc):
-        (js_bundler._pack_filenames, js_bundler._feature_filename,
-         js_bundler._bundle_filename, js_bundler.get_bundle_filename,
-         js_bundler.get_feature_bundle_filename) = self._saved
+        (js_bundler.get_bundle_filename,
+         js_bundler.get_feature_bundle_filename) = self._saved_fns
+        js_bundler.reset_manifest_for_tests()
         return False
 
 

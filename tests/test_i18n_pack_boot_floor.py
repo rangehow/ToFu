@@ -248,21 +248,32 @@ def test_boot_floor_actually_prevents_the_production_referenceerror():
 
 @_unit
 def test_pack_tag_uses_the_self_healing_error_handler():
-    """A lost pack must retry, not fall through the generic recorder."""
+    """A lost pack must retry, not fall through the generic recorder.
+
+    Asserts against the REAL built state, never hand-stamped globals.
+    ``get_i18n_pack_tag`` builds the bundle as a side effect and PUBLISHES
+    ``_pack_filenames`` / ``_bundle_includes_i18n``, so the earlier
+    save-mutate-restore version of this test captured its snapshot BEFORE that
+    build and then replayed the pre-build values over the real ones — leaving
+    the module convinced packs were inactive and silently returning None to
+    every later test in the process (7 cross-file failures in
+    test_i18n_pack_serving.py that neither file showed alone). Exactly the
+    stale-snapshot shape this module was just fixed for in production.
+    """
     import lib.js_bundler as jb
-    saved = (jb._pack_filenames, jb._bundle_includes_i18n)
-    try:
-        jb._pack_filenames = {'zh': 'i18n-zh-4fe3959f.js',
-                              'en': 'i18n-en-db74e770.js'}
-        jb._bundle_includes_i18n = False
-        tag = jb.get_i18n_pack_tag('zh')
-        assert tag, 'no pack tag emitted while packs are active'
-        assert '_onI18nPackError' in tag, (
-            f'pack tag still uses the generic handler: {tag}. The pack is the '
-            f'only copy of the dictionary — its failure needs a retry and an '
-            f'explicit banner, not a silent raw-key render.')
-    finally:
-        jb._pack_filenames, jb._bundle_includes_i18n = saved
+    name = jb.get_bundle_filename() or jb.build_bundle()
+    assert name, 'core bundle must build in the test env'
+    if jb._bundle_includes_i18n:
+        # Dual-bundle fallback (node/pack emission unavailable): the dictionary
+        # ships inside the bundle and there is no pack tag to check.
+        print('SKIP (packs inactive in this env)')
+        return
+    tag = jb.get_i18n_pack_tag('zh')
+    assert tag, 'no pack tag emitted while packs are active'
+    assert '_onI18nPackError' in tag, (
+        f'pack tag still uses the generic handler: {tag}. The pack is the '
+        f'only copy of the dictionary — its failure needs a retry and an '
+        f'explicit banner, not a silent raw-key render.')
 
 
 @_unit

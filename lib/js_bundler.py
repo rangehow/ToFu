@@ -407,6 +407,14 @@ _BUNDLE_FILES = [
     # touches window at load; server-config payload is applied at runtime.
     # See lib/model_info/capability_taxonomy.py for the SSOT.
     'core/model_caps.js',
+    # THE brand mascot URL (2026-07-29). Owns the cache-bust token (icons ship
+    # with max-age=86400, so a bare path made a logo change invisible for 24h —
+    # that is how a rollback once looked like it "didn't happen") AND the
+    # runtime try-on skin, so a candidate logo can be WORN in-product before
+    # anyone commits to shipping it. Consumed by ui/chat_render.js,
+    # main/main_conv_lifecycle.js, settings/core_panel.js and main.js boot —
+    # all load after this. Leaf module (window only at load).
+    'core/brand_logo.js',
     # THE model-availability judgment (2026-07-28, pt_464f2baf). A logical
     # model is served by a POOL of (wire id × key) slots and the dispatcher
     # rotates over all of them, so the ONLY correct rule is "any usable slot
@@ -1391,6 +1399,42 @@ def _schedule_background_rebuild():
 
     t = threading.Thread(target=_run, name='tofu-bundle-rebuild', daemon=True)
     t.start()
+
+
+def reset_manifest_for_tests():
+    """Drop the in-process bundle/pack manifest so the next read REBUILDS it.
+
+    ★ WHY THIS EXISTS — the save/restore trap.
+
+    ``_pack_filenames`` / ``_bundle_includes_i18n`` are PUBLISHED as a side
+    effect of building (see build_bundle), so a test that snapshots them,
+    mutates them, and replays the snapshot does NOT restore the world: its
+    snapshot was taken BEFORE the build it triggered, so replaying it stamps
+    the pre-build values (``{}`` / ``True``) over the real published state.
+    The module then reports "packs inactive" for the rest of the process and
+    every later test asking for a pack tag silently gets None — a
+    cross-file poisoning that NEITHER file reveals alone.
+
+    That is the same defect shape as the production bug this module was just
+    fixed for: a snapshot/restore pair reinstating a stale fact.
+
+    So the ONLY supported way to undo manifest mutation is to invalidate it
+    and let the next reader rebuild from the real sources. Tests MUST call
+    this instead of assigning the private globals back.
+
+    Cheap: the content-hash short-circuit means a rebuild re-publishes the
+    same filenames without rewriting any artifact.
+    """
+    global _bundle_filename, _feature_filename, _bundle_mtime
+    global _pack_filenames, _bundle_includes_i18n
+    with _build_lock():
+        _bundle_filename = None
+        _feature_filename = None
+        # 0 forces the staleness gate in get_bundle_filename* to miss, so a
+        # reader cannot be fooled into serving the cleared manifest.
+        _bundle_mtime = 0
+        _pack_filenames = {}
+        _bundle_includes_i18n = True
 
 
 def get_bundle_filename_nonblocking():

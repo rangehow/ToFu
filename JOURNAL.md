@@ -1,6 +1,17 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-29(续·科研产物读路径) — owner 抓出我**刚修完孤儿又造了一个孤儿**:产物落盘了,但 `load_research_artifacts` 全库零调用方;修法不是补一个函数,是把「按方向查」做成 tasks 端点结构上做不到的那条路(commit `ef09c6a5`,4 文件 +366/-1;新套件 **9/9 失败先行**,**NEUTER×4 各咬各的**;相邻环 **42/42**;干净 committed worktree 复验 **42/42**)
+
+- **★ 同一形态第三次出现,而这次是我造的:** 上一批我写进 JOURNAL 的判据是「函数被 export 进 facade 不等于它被用了,要数调用方」。然后我自己交付了 `load_research_artifacts`——写好、export、**零调用方**。owner 的话是对的:产物安全地躺在 `paper_reports` 里,而产品里没有一条路径能走到它,等于把东西换个地方埋起来。**判据升级:每加一个函数,配套守卫必须断言它有真实调用方且链路端到端通,而不是断言符号存在。**
+- **为什么不能复用 `GET /api/v1/tasks/<id>`(这是本批的设计核心,不是新造轮子):** ①它按 **task id** 寻址,而落盘行按**方向哈希**寻址、根本不带 task id;②它解析的是**进程内** TaskRuntime 注册表,`cleanup_stale()` 一扫或进程一重启就 404——**正是持久化要覆盖的那个窗口**。所以两者互补:活任务看进度/中止走 tasks,已完成的工作任何时候回看走 `/api/v1/research/lookup`。
+- **`found:false` 定为正常 200 而非 404:** 重贴附路径每次打开都会调它,「这个方向没研究过」是**信息不是错误**;若返回 404,前端就得把「真故障」和「没研究过」在同一个错误分支里猜。
+- **★ 守卫的决定性用例先清空 task 注册表再发 HTTP:** 因此只有产物**真从磁盘服务**才可能通过——mock 引擎或裸符号 import 都满足不了。另加两条反孤儿钉:路由模块必须真调 `load_research_artifacts`(走 `tests/_source_scan.strip_comments(lang='python')` 剥注释,charter #24,免得注释里出现该名字就算数)、`api.js` 必须真暴露该路径。NEUTER×4:摘蓝图注册 / 改成读内存注册表 / 丢 degraded 标志 / 摘 api.js 方法,四发分别咬中四条不同断言。
+- **★ 一个会让守卫「绿着空转」的坑,自己踩到并修掉:** 我最初用 `@pytest.mark.asyncio` 写 7 条异步用例。本套件跑在 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` 下,**pytest-asyncio 根本没加载**,该标记只会让用例静默跳过——`PytestUnknownMarkWarning` 淹在警告堆里,而摘要显示「passed」。改用 `asyncio.new_event_loop()` 显式驱动(照 `tests/test_agent_poll_routes.py:46` 既有惯例)。**判据:在禁用插件自动加载的套件里,`@pytest.mark.asyncio` 等于把测试关掉;异步路由守卫一律显式起 loop。**
+- **共享 HEAD 两起(均只动 index,兄弟工作树零影响):** ①`git add` 后计数断言报 9 个文件——兄弟把 4 个 `static/icons/skins/*.svg` + 1 个品牌守卫预暂存在共享 index;②执行 `git reset HEAD <他们的文件>` 后**再次断言仍漂移**,这次多出 5 个 `lib/motion_video/*`——**兄弟在我两条命令之间又写了 index**。结论:共享 index 上「reset 再 commit」本身也是竞态。改用 `git commit -F msg -o <我的4个文件>`(`-o/--only`)**绕过 index 直接按 pathspec 提交**,一步落地;实测 HEAD 恰好 4 文件。**判据:共享 HEAD 上提交已跟踪+新增混合文件集,`-o` 比「add + 计数 + commit」更安全,因为它不依赖 index 在两条命令之间保持不变。**
+- **相邻噪声一条已定责非我:** `lib/project_mod/read_tools.py` 工作树版有兄弟在飞的 WIP 语法错(重复 `def` 行 + 裸中文破折号行),使 `import server` 在工作树里整树失败。核实 `git show HEAD:` 版本 `ast.parse` 干净 ⇒ 属未提交 WIP,我未碰该文件,验证全部在干净 worktree 上做。
+- **验收边界(诚实分账):** ①**读路径通了,但前端仍然只显示三个数字**——结果面板(下一步)未做,这批只保证「数据可达」;②`Api.research.lookup` 已就位但**尚无 JS 调用方**,下一批画面板时接上(本批守卫只钉住 api.js 暴露了该路径,不谎称已被使用);③**运行中进程不带**,需重启;④入口移侧栏继续避让 `pt_3d487a30bd5e4a7e`。
+
 ### 2026-07-29(续·科研产物落盘) — owner 顶回我的排序:我打算先修前端渲染,但**产物根本没有持久层**,那样修出来的 re-attach 会忠实恢复出一个 404;根因是设计稿规定的持久化「建了一半、从未接线」(commit `749f3464`,3 文件 +619/-3;新套件 **18/18 失败先行**,**NEUTER×4 各咬各的**;相邻环 **40/40**;干净 committed worktree 复验 **28/28**)
 
 - **★ 我的入口诊断是对的,但优先级是错的,而 owner 的反驳可实测:** 我查出「入口不是没有,是入口后面那块屏幕只显示三个数字」——`_public_task` 是整字典透传(只剔 locks/messages),`result.accepted[]`、带四轴分数的 `rejected[]`、`survey_md`、`open_gaps` **早就在线上**,是前端 `_researchApplySnapshot` 只取 `.length` 扔掉的;`research.js` 里 `localStorage` **0 次**。四条属实。但 owner 指出第五条:**这些产物压根没落盘。**

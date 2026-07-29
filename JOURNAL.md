@@ -39,6 +39,27 @@
 - **票面「禁止混入」三条已严格遵守:** 同根 K 线执行(`cfb6bd8`)、止损自适应(`c1ac232`)、`max_positions` 对齐(`c1ac232`)均在**独立提交**中,未混入本票范围。
 - **验收边界:** 本轮**零新产品码**,纯复验 + 关票。干净 committed worktree 全量 **257 passed**,余 2 条既有红(`test_simulator_migration_parity`,缺 `server.py`,宿主路径依赖,与本票无关)。
 
+### 2026-07-29(续·工具注解与消费侧拼写) — owner 指出我把「25 个工具零注解」当可选优化放走了,而它**正在生效地**让 16 个读操作串行+逐个弹审批;追下去发现**真缺陷在消费侧不在供给侧**:Tofu 的提取器是 v1-only,v2 上会让全机队每个 server 的注解静默归零(commit chatui `d5b010cb`;overleaf 0.3.0 注解;守卫 **11 + 48**,**NEUTER×4 全咬**;相邻环 **154 passed**;wheel 级验收)
+
+- **★ owner 的判据比我原先写的强一档,而且可实测:** 我第一轮只写了「一个注解都没声明」并归进「不并入本批」。实测 `read_only_hint` **不是装饰字段**——唯一消费者 `lib/tasks_pkg/tool_dispatch/_flags.py:130` 拿它做**串行/并行分区 + 写审批闸**,注释明写「默认把每个 MCP 工具当写工具(serial + approval-eligible),只有 `readOnlyHint` 显式 True 才留在并行池」。而 `annotations=None → read_only_hint=False`,overleaf-mcp **25 个工具 0 个带 annotations** ⇒ 读一篇论文的每个动作都被当写操作。
+- **★ 而 owner 给的 16 条读清单里有 7 条实测不是读,这正是他自己警告的危险方向:** 规范原文是「the tool does not modify its **ENVIRONMENT**」——不是「不改远端项目」。逐个读 dispatch 分支:
+  - `compile_project` / `download_log` / `get_page_count` / `locate_in_pdf` / `section_page_map` **都真的在 Overleaf 上跑一次编译**(`layout._compile_with_editor_id` 镜像 `compile.compile_project`)。**「它返回信息」不等于它是读**——判据是它为了拿到信息做了什么。
+  - `download_pdf` / `download_source_zip` / `download_source` **写用户文件系统**到调用方给的路径,且 `download_source(overwrite=True)` 实测会**清掉非空目录**(`compile.py:235`)。本地磁盘也是 environment。
+  
+  这 7 条若标成 read-only,会**同时**进并行池并跳过审批——`delete_file` 那一类的隔壁。**判据:票面给的分类也要逐条按实现复核,「听起来像读」是最不可靠的信号。**
+- **★ 我自己的自动化启发式两个方向都错,已弃用:** 我写了个「不 compile 且无 output_path ⇒ 读」的脚本,它把 **`delete_file` 判成 READ-ONLY**、把 `list_projects` 判成 WRITE。分类只能逐工具按行为定。最终 **9 读 / 16 写**,写侧再按规范补 `destructiveHint`(仅在 `readOnlyHint=false` 时有意义)。
+- **★ 真正的根缺陷在消费侧,而它比供给侧的空缺严重得多:** `_extract_read_only_hint` 只读一个属性名 `readOnlyHint`。wire 名恒为 camelCase 所以看着安全,但**Python 属性名不是**:
+  | SDK | `getattr(ann,'readOnlyHint')` | `getattr(ann,'read_only_hint')` |
+  |---|---|---|
+  | v1 | **True** | ABSENT |
+  | v2 | ABSENT | **True** |
+  
+  v2 把模型字段全转 snake_case、camelCase 只留作序列化别名。于是单拼写查找在 v2 上**不报错,只是对每个 server 的每个工具都返回 False**;而 False 同时也是「这个 server 没声明注解」的诚实答案 ⇒ **坏状态与正常状态不可区分**。净效果:升级那天全机队所有 read-only 工具悄悄退出并行池、开始逐个要审批,日志里什么都没有。**与 `434bde89` 修的 `McpError`→`MCPError` 完全同型:判据锚在上游拥有的名字上,改名时不会 fail-loud。**
+- **端到端实测(这一步才是验收):** 在真实 mcp==2.0.0 venv 里用 **Tofu 自己的提取器**跑 overleaf-mcp 的 25 个工具——修前 read-only **0/9**,修后 **9/9**。我中途写过一个「复刻提取器」的替身,它报 9 而真提取器报 0;**替身正好掩盖了这个缺陷**,已弃用改为 import 真函数。
+- **落点:** 供给侧一张 `_READ_ONLY_TOOLS` / `_WRITE_TOOLS` 表 + `_apply_tool_annotations` 在 import 期对**未分类工具直接抛 RuntimeError**(默认值是「写」,静默降级会悄悄丢并行度);消费侧接受两种拼写 + 原始 dict wire 形态。
+- **NEUTER×4:** 读工具标 False → 精确 2 红(含端到端那条);`delete_file` 标 read-only(危险方向)→ **6 红**;摘掉整个注解 pass → 45 红;提取器退回单拼写 → v1 环境咬 snake_case 那条、**v2 环境精确复现生产影响**(host 解析出 0 个 read-only)。
+- **交付物:** `overleaf_mcp_plus-0.2.2`(pin-only 止血)与 `0.3.0`(v2 迁移 + 注解)两套 sdist/wheel 均已构建;**从 0.3.0 wheel 装进干净 venv 复验**:25/25 带注解、9 读、`delete_file` readOnly=False/destructive=True、两个 handler 就位、wire 仍是 `{"readOnlyHint": true}`。PyPI 上传按 owner 指令未执行。
+
 ### 2026-07-29(续·MCP SDK 2.0 上界) — 「Anthropic 发了 MCP 2.0」这句话里**三件事各错一点**;真正会咬人的第五处 pin 在 **boot 之前**;而内网当前的安全**来自镜像缺包这个巧合**,不是任何约束(commits chatui `434bde89` + hope-mcp `7d06687`;守卫 **9+10+3**,**NEUTER×9 全咬**;相邻环 **161 passed**;overleaf-mcp v2 迁移在**真实 mcp 2.0.0** 上 **56+1 绿**)
 
 - **★ 先纠正前提,因为它决定了要检查什么:** ①它不是 Anthropic 发的——MCP 已移交 **AAIF** 治理;②「2.0」是 **Python SDK 版本号**,协议叫**修订 `2026-07-28`**;③真正会咬我们的是 **SDK 2.0.0**(pip 能装到),不是协议(没人要求我们说新协议)。把三者混成一句会让人去改协议层,而风险其实在**依赖解析**。
@@ -51,7 +72,7 @@
 - **★ overleaf-mcp 是唯一「线上装就崩」的,已在真实 v2 复现:** `AttributeError: 'Server' object has no attribute 'list_tools'` at `server.py:590`,**import 期**崩(装饰器在模块作用域)。低层 `Server` 方法只剩 `__init__/run/add_request_handler/...`,**无 `__getattr__` 兜底**。按 owner 定的两步走:**0.2.2** 仅 pin `<2` 止血(零行为变化,v1 下 48+1 绿),**0.3.0** 迁到 `on_list_tools=`/`on_call_tool=`(v2 上 56+1 绿)。迁移面只有注册层——实测 v2 **仍接受 `inputSchema=` 别名**且 wire 仍是 camelCase,故 25 个 `Tool(...)` 定义**一行未改**。
 - **★ 两条容易踩空的语义,已写进守卫:** ①`get_request_handler` 按**方法字符串**(`"tools/list"`)查,传请求类返回 None——**读起来像「handler 根本没注册」**,我第一次就这么误判过;②v2 **不再**把逃逸异常转成 `is_error=True` 而是变 JSON-RPC 顶层错误,故 `_dispatch` 外的 try/except 在 v2 下**是承重的**;而 Tofu 的 overleaf 凭证探针**靠成功结果的正文**匹配 `overleaf_session` / `error fetching projects`,故 `is_error` 必须保持 False(已实测确认)。
 - **发现但按 owner 惯例不并入本批的既有缺陷:** `_dispatch` 的 `download_log` 分支**末尾没有 return**(AST 确认最后一句是 `text = r.text`),穿透到 `return f"Unknown tool: {name}"`,而 L1065-1067 的截断块**悬在 `section_page_map` 的 return 之后是死代码** ⇒ **`download_log` 线上一直返回「Unknown tool」**。0.2.1 即如此,0.3.0 不引进也不修复。另 `lxml` 在两份安装清单里 `>=5.3` vs `>=4.9` 漂移(新棘轮扫出,已豁免)。
-- **诚实边界(三条,不含糊):** ①**`overleaf-mcp` 不是 git 仓库**——我最初的 `git status` 只因吞了 stderr 才显示「干净」,那是我读错;改动只在磁盘上,0.2.2 源码快照留在 `/tmp/ov_releases/0.2.2_src`,**拿不到 commit hash**,发布与版本控制归属待 owner 定。②三张票 `project_board_post` **返回了 id**(`pt_175e68aa…`/`pt_fb132177…`/`pt_34c2239e…`),但随后 `project_board_read` 的 Open 车道**看不到它们**、PG 也连不上 ⇒ 按本项目「written ≠ posted」判据,**我不声称已开票**。③本批纯后端+依赖声明,**运行中进程不带**,需重启。
+- **诚实边界(三条,不含糊):** ①**`overleaf-mcp` 不是 git 仓库**——我最初的 `git status` 只因吞了 stderr 才显示「干净」,那是我读错;改动只在磁盘上,0.2.2 源码快照留在 `/tmp/ov_releases/0.2.2_src`,**拿不到 commit hash**,发布与版本控制归属待 owner 定。②三张票 `project_board_post` **返回了 id**(`pt_175e68aa…`/`pt_fb132177…`/`pt_34c2239e…`),而 owner 复核确认**三张全部在板上**——我当时回读看不到,是因为**它们被自动认领后从 Open 车道移进了 In-progress 车道,而我只扫了 Open**。**判据更正:「written ≠ posted」的谨慎是对的,但回读 MUST 扫全部车道(open / in-progress / waiting / done);只看一个车道会把「已落库且已认领」误判成「未落库」,而这个误判方向同样有害——它会让人去重复开票。** ③本批纯后端+依赖声明,**运行中进程不带**,需重启。
 
 ### 2026-07-29(续·run id 单一真源) — **秒级 id 撞 UNIQUE 列致模拟/autopilot 硬崩根修**:票面只列了 1 张表,扫描后实测是 **3 处 UNIQUE 列**(autopilot 同款硬故障票面未列);6 个铸造点里 **1 个原本就正确**、5 个漂移——漂移本身才是病根,故立单一真源模块而非逐个补 f-string(`pt_ca7e1be82b904c48`;commit `b460622`;守卫 **12**,**NEUTER×3 各咬**(7/5/1);全量 **257 passed**,xfail 归零)
 

@@ -60,6 +60,7 @@ from lib.project_mod.run_command import (  # noqa: E402,F401
 from lib.project_mod.read_tools import (  # noqa: E402,F401
     _extract_symbols,
     _merge_same_file_ranges,
+    _normalize_line_range,
     _python_grep,
     tool_find_files,
     tool_find_files_batch,
@@ -983,6 +984,9 @@ def project_tool_display(fn_name, fn_args):
                 continue
             p = r.get('path', '?')
             sl, el = r.get('start_line'), r.get('end_line')
+            # Mirror the reversed-range repair execute_tool applies, so the
+            # chip shows the range actually read rather than the raw one.
+            sl, el, _ = _normalize_line_range(sl, el)
             grouped.setdefault(p, [])
             if sl is not None and el is not None:
                 grouped[p].append(f'L{sl}-{el}')

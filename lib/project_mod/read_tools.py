@@ -416,6 +416,27 @@ def _read_project_file(base, rel_path, start_line=None, end_line=None):
         return f'Error reading {rel_path}: {e}'
 
 
+def _normalize_line_range(start_line, end_line):
+    """Return ``(start, end, swapped)`` with a reversed range corrected.
+
+    A range whose start exceeds its end (``start_line=6171,
+    end_line=6162``) is UNAMBIGUOUS — there is exactly one interval the
+    caller can mean, and an inverted interval is never a legitimate
+    request. Models emit these regularly (transposed digits, or naming a
+    grep hit bottom-up), so we repair rather than reject.
+
+    ONLY the reversed case is repaired. A range that is merely OUT OF
+    BOUNDS (lines 20000-20100 of a 9000-line file) is a real error and is
+    left untouched for the readers to report — swapping cannot rescue it,
+    and silently "fixing" it would mask a genuinely wrong request.
+    Single-sided (one bound ``None``) and equal bounds cannot be reversed
+    and pass through unchanged, so the helper is idempotent.
+    """
+    if start_line is None or end_line is None or start_line <= end_line:
+        return start_line, end_line, False
+    return end_line, start_line, True
+
+
 def _merge_same_file_ranges(reads):
     """Merge overlapping/adjacent ranges for the same file.
 
@@ -511,6 +532,24 @@ def tool_read_files(base, reads):
                 logger.debug('[Tools] read_files: dropping non-numeric %s=%r (%s)', k, v, e)
                 spec[k] = None
 
+    # ★ Repair reversed ranges (start > end) BEFORE merging. Order matters:
+    #   _merge_same_file_ranges sorts by (start, end) and coalesces within
+    #   GAP_THRESHOLD, so a reversed spec batched with another range for the
+    #   same file is absorbed by it and vanishes — the model then receives a
+    #   clean result for lines it never asked for, with NO error. Normalising
+    #   here fixes both that silent case and the lone-spec case (which merely
+    #   errored). Note the swap so the reader sees its call was malformed.
+    swapped_paths = []
+    for spec in reads:
+        if not isinstance(spec, dict):
+            continue
+        s, e_, was_swapped = _normalize_line_range(spec.get('start_line'), spec.get('end_line'))
+        if was_swapped:
+            spec['start_line'], spec['end_line'] = s, e_
+            swapped_paths.append(f'{spec.get("path", "?")} ({e_}→{s} read as {s}-{e_})')
+            logger.info('[Tools] read_files: reversed line range %s=%s-%s corrected to %s-%s',
+                        spec.get('path'), e_, s, s, e_)
+
     reads = _merge_same_file_ranges(reads)
 
     parts = []
@@ -597,6 +636,11 @@ def tool_read_files(base, reads):
         parts.append(result)
 
     text_result = '\n\n'.join(parts)
+
+    if swapped_paths:
+        text_result = ('[Note] read_files: reversed line range(s) auto-corrected — '
+                       + '; '.join(swapped_paths[:5])
+                       + '. start_line must be <= end_line.\n\n') + text_result
 
     # If any image results, return a mixed result with __batch_images__
     if image_results:

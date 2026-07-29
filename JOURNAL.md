@@ -54,6 +54,20 @@
 - **本部署是显示口径失真,不是真扣款:** `compute_request_cost`(钱包)与 `compute_cost`(显示)共用同一引擎,但 relay 计费由 `billing_enabled()` 闸住、只在多用户中继生效。**故本机 owner 看到的 350 是估算被放大,不是余额被多扣;但开了 relay 计费的部署会真的多扣。**
 - **验收边界(诚实分账):** 本批**纯诊断,零产品码** —— 两个缺陷的修法都涉及成本引擎/退避默认值的设计取舍,已按 owner 惯例分别开票(`pt_28375442baa9487b` 记账双计、`pt_7b850a669a074cec` 缓存洗空),等拍板后再动手。另:12 轮 `server_side` 需带 `trace_id` 找网关方确认是 per-request miss 还是 TTL 边界,**不属我方可修范围**。
 
+### 2026-07-29(续·第四份拷贝与 headed 前提) — owner 实测抓出两个洞:①我上一轮收编了 chromium_env docstring **点名在案的四份拷贝中的三份**,独漏用户最常撞的那份;②`--only-shell` 的决策依据「zero headless=False call sites」**是假的**(owner 复核;commits tofu-search `c61fa7d` + chatui `cb461f9d`;守卫 **17/17**,**NEUTER×4 各咬各的**(3/1/1/2);全环 **129/129**;干净 committed worktree **34/34**)
+
+- **★ owner 的第一击(我的漏项,不是新缺陷):** `tofu_search/fetch/playwright_pool.py` 的自愈仍只认 `$CONDA_PREFIX`——本机实测该变量**为空**。洗净 env 走生产池:`LD_LIBRARY_PATH` 保持 `''`、launch 抛 `TargetClosedError`。而 `chromium_env.py` 自己的 docstring **早就写着**它是四份漂移拷贝之一、且注明「measured: with it unset, its self-heal is a no-op」。我上一轮收编三份、留下这份,**而它恰是 `fetch_url`/JS 渲染抓取的唯一入口**。
+- **★ 守卫结构上看不见它:** `test_chromium_env.py` 的 ratchet 名单是**仓库相对路径**,而 tofu_search 是 out-of-tree 独立仓库——名单再长也覆盖不到。这个盲区正是它能活下来的原因。新守卫改为**按已安装包定位**(`import tofu_search.fetch` 取 `__file__`),缺失时诚实 skip。
+- **★ 我自己在修的过程中发现的第三个洞(比前两个更隐蔽):** 该池**完全没有 fontconfig 半边**(grep `FONTCONFIG` = 0 处)。本机无 `/etc/fonts`,实测 `measureText('tofu')` = **0**。也就是说:只修 `LD_LIBRARY_PATH` 会把「崩溃」换成「**静默抓回空白页**」——后者读起来像「网站没加载」,比崩溃难查得多。修完实测 **119.4**。判据已进守卫:池的字形守卫与 launch 守卫**必须并存**。
+- **★ owner 的第二击(前提被证伪):** 三处 `--only-shell` 的决策注释写着「zero headless=False call sites」——实测 `interactive_login.py:91` 就是 `headless=False`。带完整 env 实跑:`Executable doesn't exist at .../chromium-1223/chrome-linux64/chrome`。**headless shell 在架构上没有 headed 模式**(它是独立二进制,不是 flag)。更糟的是报错附带 Playwright 的「刚安装或更新过,请运行 playwright install」横幅——**而这条命令正是造成 shell-only 状态的那条**。
+- **落点(owner 定调:保住 -60% 收益,只让唯一需要 headed 的功能诚实降级):** 把「能否开窗」变成**可判定的事实**而非各调用方自猜——`chromium_env` 新增 `is_headless_shell()` / `headed_chromium_executable()`,`describe` 报告 `headed_executable`。**不改回装完整构建。**
+- **★ 根因比「文案不好」深一层:** `is_interactive_login_available()` 原本只查 `HAS_PLAYWRIGHT`——**对「只有 shell」这个真实失败原因构造上不可能失败**。所以它报告功能可用,然后在 launch 处死。现改为查 headed-capable 二进制,失败带 `reason='headed_unavailable'` + 正确命令。
+- **跨仓 seam 的形态(owner 要求不硬 import):** 池与登录墙都是**先委派**(`from chromium_env import ...`),**import 失败才回退**到内建实现;回退锚 `sys.prefix`、`$CONDA_PREFIX` 降为末位候选,且候选目录必须 **isfile 到 sentinel 库**才收(charter #13)。两条路径**分别实测**:委派路径与回退路径都是 `LD_LIBRARY_PATH` 非空 + launch OK + 字形 119.4。
+- **★ 我的回退守卫首版红了,而它是对的:** 报 `chromium_env WAS importable — fallback not exercised`。原因:`_run_probe` 用 `cwd=ROOT`,`python -c` 会把 cwd 放进 `sys.path`,所以清掉 `PYTHONPATH` 根本不够。改用中立 tmpdir 作 cwd 后才真正测到回退。**守卫拒绝在没真跑到被测路径时变绿——这正是它该有的行为。**
+- **★ NEUTER 第一轮结果不可信,已重做:** 我的 `run()` 里带了 `cd`,导致后续相对路径全部失效——只有 F 真正生效,G/H/I 的「3 failed」其实都是 F 残留。**判据:NEUTER 脚本里的路径一律用绝对路径,helper 内禁止 `cd`。** 重做后 F/G/H/I 各咬 3/1/1/2,方向互不相同,还原后 17/17。
+- **兄弟协作:** `scripts/install_on_server.sh` 的 `--only-shell` 修复被兄弟(ms5bbwg8)的白名单提交 `07f979d6` 一并带走,已核 `git diff` 为空、未重复提交;其 vertical/travel WIP 未被我卷入。
+- **验收边界:** ①两仓分别提交,**运行中进程不带**,需重启;②登录墙在 shell-only 装机上**仍不可用**——这是设计选择(保住 -60%),但现在它**诚实说明并给出正确命令**,而不是死在一条误导性报错上。
+
 ### 2026-07-29(续·headless-shell 通道) — 「装了吗」这个问题有三个互相矛盾的答案;而**桌面端那个答案在检查一条安装器故意永不创建的路径**(owner 质疑「不是装过吗」;commit `92af42fc`,7 文件 +610/-58;新套件 **17/17**,**NEUTER×5 各咬各的**(其中**一发首版空转,因为我把被测函数改成了死代码**);相邻环 **119/119** + 真浏览器视觉环 **18/18**;干净 committed worktree **49/49**)
 
 - **★ owner 的质疑成立,而「缺 libatk」是条件性的不是缺失:** 裸跑 headless-shell 确实死在 `libatk-1.0.so.0`,但 10 个库**全部就在** conda env prefix 里(`describe_chromium_env()['issues']` 为空)。走 `ensure_chromium_env()` 后 `rc=0`、真出 DOM、Playwright 真截图 **8598 个墨迹像素 / 249 灰阶**。**缺的不是库,是 `LD_LIBRARY_PATH` 导出**——`chromium_env.py` 正为此存在。

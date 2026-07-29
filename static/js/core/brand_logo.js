@@ -47,6 +47,31 @@
       label: 'settings.logoSkinA2',
       path: '/static/icons/_gen/logo-redesign/candidate-a2-soft.svg',
     },
+    {
+      /* Pixel-refined: keep the current mascot's pixel character and
+       * hand-made feel; fix ONLY the VTracer artefacts (ragged staircases,
+       * wobbling internal seams). Cube generated analytically, face laid out
+       * by hand — see gen_pixel_refined.py. */
+      id: 'pixel-refined',
+      label: 'settings.logoSkinPixel',
+      path: '/static/icons/_gen/logo-redesign/candidate-pixel-refined.svg',
+    },
+    {
+      /* Minimal: the subtraction bet. Flat block, two eyes, one small smile,
+       * no gradients / sheen / blush. Everything that only reads at 64px is
+       * cut so the silhouette carries the identity at 16px. */
+      id: 'minimal',
+      label: 'settings.logoSkinMinimal',
+      path: '/static/icons/_gen/logo-redesign/candidate-minimal.svg',
+    },
+    {
+      /* Hand-drawn: warmth over precision. Every geometric redraw read as
+       * "clean but cold", so this one puts the imperfection back on purpose —
+       * uneven corners, varying stroke weight, an asymmetric face. */
+      id: 'handdrawn',
+      label: 'settings.logoSkinHandDrawn',
+      path: '/static/icons/_gen/logo-redesign/candidate-handdrawn.svg',
+    },
   ];
 
   function _base() {

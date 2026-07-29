@@ -1131,6 +1131,9 @@ var _i18n = {
   'settings.logoSkinDesc': { zh: '试戴候选图标：切换后立即生效并保存，侧栏 / 欢迎屏 / 浏览器标签同步更换。默认为原版。', en: 'Try a candidate mascot: applies instantly and persists across sidebar, welcome screen and browser tab. Default is the shipped original.' },
   'settings.logoSkinDefault': { zh: '原版', en: 'Original' },
   'settings.logoSkinA2': { zh: 'A2 柔边', en: 'A2 soft-edge' },
+  'settings.logoSkinPixel': { zh: '像素精修', en: 'Pixel refined' },
+  'settings.logoSkinMinimal': { zh: '极简', en: 'Minimal' },
+  'settings.logoSkinHandDrawn': { zh: '手绘感', en: 'Hand-drawn' },
   'settings.modelParams': { zh: '模型参数', en: 'Model Parameters' },
   'settings.temperature': { zh: '温度 (Temperature)', en: 'Temperature' },
   'settings.maxTokens': { zh: '最大 Token 数', en: 'Max Tokens' },
@@ -2791,6 +2794,9 @@ var _i18n = {
   'project.hgUnanswered': { zh: '未回答', en: 'Unanswered' },
   'project.hgAnswered': { zh: '✓ 已回答', en: '✓ Answered' },
   'project.hgWaitingContinue': { zh: '等待 AI 继续…', en: 'Waiting for the AI to continue…' },
+  // ── Scannable QR recovered from terminal output (tool_rounds.js
+  //    _renderQrStrip). Shown above the code while a scan-to-login command
+  //    is still blocking for the scan. ──
   // ── Message action bar (chat_render.js .message-actions) ──
   'msgAction.copy': { zh: '复制', en: 'Copy' },
   'msgAction.copyTitle': { zh: '复制', en: 'Copy' },

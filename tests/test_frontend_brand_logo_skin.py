@@ -83,6 +83,7 @@ HARNESS = textwrap.dedent("""
     localStorage.removeItem('tofu_logo_skin');
     const skins = window.listLogoSkins();
     out.skinIds = skins.map(s => s.id);
+    out.skinPaths = skins.map(s => s.path);
     out.firstIsDefault = skins[0].id === 'default';
     const candidate = skins.find(s => s.id !== 'default');
     window.setLogoSkin(candidate.id);
@@ -167,6 +168,21 @@ def test_missing_candidate_file_falls_back_to_default_not_blank():
     assert out["afterSecondErrorSrc"] == out["defaultUrl"], (
         "the fallback must be idempotent (no error loop)"
     )
+
+
+@pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
+def test_every_registered_skin_asset_exists_on_disk():
+    """A registered skin whose file is missing would present the user a tile
+    that silently falls back to the original — the switch would look broken.
+    The registry and the filesystem must agree."""
+    out = _run(_source())
+    assert len(out["skinPaths"]) == len(out["skinIds"]), "every skin must carry a path"
+    missing = []
+    for sid, rel in zip(out["skinIds"], out["skinPaths"]):
+        p = ROOT / rel.lstrip("/")
+        if not p.is_file() or p.stat().st_size == 0:
+            missing.append(f"{sid} -> {rel}")
+    assert not missing, f"registered skins with no asset on disk: {missing}"
 
 
 @pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")

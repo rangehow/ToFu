@@ -9971,6 +9971,13 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 
 /* ── Theme Picker UI ── */
 .theme-picker{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+/* Logo-skin picker: its own auto-fit grid. The theme picker is a fixed 3-up
+   (always exactly 3 themes), but the skin list GROWS as candidates are added —
+   a fixed column count would squash the tiles once there are 4+. auto-fit +
+   minmax wraps to a second row instead, at any panel width. */
+#logoSkinPicker{grid-template-columns:repeat(auto-fit,minmax(88px,1fr))}
+#logoSkinPicker .theme-option{padding:8px 4px 6px;min-width:0}
+#logoSkinPicker .theme-option-label{font-size:11px;line-height:1.25;text-align:center;overflow-wrap:anywhere}
 .theme-option{display:flex;flex-direction:column;align-items:center;gap:5px;padding:8px 4px 6px;border:2px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;transition:border-color .2s,background-color .2s,transform .2s,box-shadow .2s;background:var(--bg-tertiary)}
 .theme-option:hover{border-color:var(--border-light);background:var(--bg-hover);transform:translateY(-1px)}
 .theme-option.active{border-color:var(--accent);background:var(--accent-subtle);box-shadow:0 0 0 1px var(--accent)}

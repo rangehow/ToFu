@@ -50,6 +50,7 @@ import re
 import shutil
 import subprocess
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -205,7 +206,7 @@ def test_probe_finds_edge_when_only_edge_is_installed(monkeypatch):
 
     monkeypatch.setattr(browser_routes.shutil, 'which',
                         lambda n: '/usr/bin/' + n if 'edge' in n else None)
-    got = browser_routes._detect_local_browser()
+    got = browser_routes._probe_local_browser()
     assert got, ("only Edge installed and the probe reported nothing — Edge "
                  "runs this extension unchanged")
     assert got['family'] == 'edge', f"misidentified Edge: {got!r}"
@@ -224,13 +225,13 @@ def test_edge_gets_its_own_extensions_url(monkeypatch):
 
     monkeypatch.setattr(browser_routes.shutil, 'which',
                         lambda n: '/usr/bin/' + n if 'edge' in n else None)
-    edge = browser_routes._detect_local_browser()
+    edge = browser_routes._probe_local_browser()
     assert edge['extensionsUrl'].startswith('edge://'), (
         f"Edge was given {edge['extensionsUrl']!r}")
 
     monkeypatch.setattr(browser_routes.shutil, 'which',
                         lambda n: '/usr/bin/' + n if 'chrom' in n else None)
-    chrome = browser_routes._detect_local_browser()
+    chrome = browser_routes._probe_local_browser()
     assert chrome['extensionsUrl'].startswith('chrome://'), (
         f"Chrome was given {chrome['extensionsUrl']!r}")
 
@@ -471,3 +472,249 @@ def test_the_dl_link_form_is_not_regressed():
     assert 'font-size' in _decl('.lc-dl-link'), (
         ".lc-dl-link lost its own font-size; it is nested in .lc-substep and "
         "both forms must render correctly")
+
+
+# ══════════════════════════════════════════════════════════
+#  The probe is CACHED — and the cache must not blind it
+# ══════════════════════════════════════════════════════════
+#
+# `_detect_local_browser` hangs off GET /status, which the Local Control modal
+# polls every 3s (`_LC_POLL_MS`). Uncached, the miss path is the expensive one:
+# with no browser installed, every candidate name misses and each miss walks
+# the WHOLE PATH. Measured on this host — 51 PATH entries, ~408 stat() calls
+# and ~6ms per probe, and that is a local disk; on the FUSE/dolphinfs mounts
+# this project actually deploys to, stat is markedly dearer.
+#
+# But a cache is itself a way to reinvent the bug this module was written to
+# kill. "Tofu can't find my browser" is the ORIGINAL complaint; a cache with
+# no expiry turns a user who installs Chrome mid-session into exactly that
+# report, and this time the probe would be right and the cache lying. So the
+# TTL is not a tuning knob — it is the guarantee that a newly-installed
+# browser becomes visible on its own, and it is pinned as a behaviour.
+
+def _cache():
+    from routes.api_v1 import browser as browser_routes
+    return browser_routes._BROWSER_PROBE_CACHE
+
+
+def test_repeated_status_calls_do_not_re_probe_the_filesystem(monkeypatch):
+    """The 3s poll must not pay for a full PATH walk every time.
+
+    Asserts the OBSERVABLE consequence — how many times the underlying probe
+    actually ran — rather than that some cache object exists.
+    """
+    from routes.api_v1 import browser as browser_routes
+
+    _cache().clear()
+    calls = []
+    monkeypatch.setattr(browser_routes, '_probe_local_browser',
+                        lambda: calls.append(1) or None)
+    for _ in range(20):
+        browser_routes._detect_local_browser()
+    assert len(calls) == 1, (
+        f"20 status polls triggered {len(calls)} filesystem probes — the "
+        f"modal polls every 3s and each miss walks the entire PATH, so this "
+        f"is a hot loop paid on every open modal")
+
+
+def test_a_newly_installed_browser_is_found_once_the_ttl_lapses(monkeypatch):
+    """THE anti-regression for the cache itself.
+
+    A user who installs Chrome while Tofu is running must NOT be stuck with
+    "no browser" forever — that is the original complaint wearing a cache as
+    a disguise. Drives real wall-clock expiry through the cache's own TTL
+    rather than reaching into its internals.
+    """
+    from routes.api_v1 import browser as browser_routes
+
+    _cache().clear()
+    monkeypatch.setattr(_cache(), 'ttl', 0.05)   # keep the test fast
+
+    state = {'installed': False}
+    monkeypatch.setattr(
+        browser_routes, '_probe_local_browser',
+        lambda: (_CHROME if state['installed'] else None))
+
+    assert browser_routes._detect_local_browser() is None
+    state['installed'] = True                     # user installs Chrome now
+    time.sleep(0.08)                              # TTL lapses
+    got = browser_routes._detect_local_browser()
+    assert got is not None, (
+        "a browser installed while Tofu was running stayed invisible after "
+        "the TTL lapsed — the cache has recreated the very 'Tofu can't find "
+        "my browser' bug this module exists to prevent")
+    assert got['family'] == 'chrome'
+
+
+def test_the_ttl_is_short_enough_to_self_heal():
+    """A 'cache' whose TTL outlives the session is a permanent wrong answer.
+
+    Bounded rather than pinned to one literal: the point is self-healing
+    within a human's patience, not a specific number.
+    """
+    ttl = _cache().ttl
+    assert 0 < ttl <= 120, (
+        f"probe cache TTL is {ttl}s — outside the self-healing window. Too "
+        f"long (or unbounded) means a browser installed mid-session may never "
+        f"be noticed; <=0 disables expiry entirely in TTLCache.")
+
+
+def test_the_cache_is_the_shared_one_not_a_hand_rolled_dict():
+    """Reuse `lib/ttl_cache.TTLCache` — it already solves per-key compute
+    serialisation, LRU bounds, and registration with the cgroup pressure
+    relief pass (`clear_all_caches`). A bespoke dict here would silently opt
+    out of memory-pressure reclaim."""
+    from lib.ttl_cache import TTLCache
+    assert isinstance(_cache(), TTLCache), (
+        f"probe cache is {type(_cache()).__name__}, not the shared TTLCache — "
+        f"a hand-rolled cache misses cgroup memory-pressure reclaim")
+
+
+def test_concurrent_missers_probe_the_filesystem_once(monkeypatch):
+    """Opening several tabs at once must not fan out into N PATH walks.
+
+    TTLCache.get_or_compute serialises per key; this pins that we actually
+    use that entry point instead of a get/set pair with a race between them.
+    """
+    import threading
+
+    from routes.api_v1 import browser as browser_routes
+
+    _cache().clear()
+    calls = []
+
+    def _slow_probe():
+        calls.append(1)
+        time.sleep(0.05)
+        return _CHROME
+
+    monkeypatch.setattr(browser_routes, '_probe_local_browser', _slow_probe)
+    threads = [threading.Thread(target=browser_routes._detect_local_browser)
+               for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(calls) == 1, (
+        f"8 concurrent pollers ran {len(calls)} probes — get/set with a gap "
+        f"between them lets every misser stampede the filesystem")
+
+
+# ══════════════════════════════════════════════════════════
+#  Docs: the user-facing install path must not be Chrome-only
+# ══════════════════════════════════════════════════════════
+#
+# The backend can drive Edge now, but that only reaches a user through the
+# docs they actually read. A README that says "go to chrome://extensions" is
+# not merely stale for an Edge user — typing chrome:// into Edge does not
+# open anything, so the documented path is a dead end in exactly the way the
+# dead button was. CLAUDE.md makes README.md/README_CN.md the user-facing
+# product docs and requires the pair stay in sync.
+
+_READMES = ('README.md', 'README_CN.md')
+
+
+def _readme_extension_section(name: str) -> str:
+    """The browser-extension section of a README, located by heading."""
+    txt = (ROOT / name).read_text(encoding='utf-8')
+    m = re.search(r'\n#{2,4} [^\n]*(?:Browser Extension|浏览器插件)[^\n]*\n',
+                  txt)
+    assert m, f"{name}: browser-extension section heading not found"
+    rest = txt[m.end():]
+    nxt = re.search(r'\n#{2,4} ', rest)
+    return rest[:nxt.start()] if nxt else rest
+
+
+def test_readmes_do_not_hardcode_one_vendors_extensions_url():
+    """`chrome://extensions` typed into Edge opens nothing, so it must never
+    be the ONLY address the reader is given.
+
+    Note what this does *not* forbid: naming both schemes side by side
+    ("`chrome://extensions` in Chrome, `edge://extensions` in Edge") is the
+    correct fix, and is strictly more useful than a vague "open the
+    extensions page". A guard that banned the substring outright would push
+    the docs toward that vaguer wording — so the defect pinned here is
+    'chrome:// with no edge:// anywhere near it', which is what actually
+    dead-ends an Edge user.
+    """
+    bad = {}
+    for n in _READMES:
+        sec = _readme_extension_section(n)
+        if 'chrome://extensions' in sec and 'edge://extensions' not in sec:
+            bad[n] = sec
+    assert not bad, (
+        f"{sorted(bad)} instruct users to open `chrome://extensions` without "
+        f"ever naming Edge's own `edge://extensions`. An Edge user cannot "
+        f"follow that — edge:// is its own scheme — so the documented install "
+        f"path dead-ends for every non-Chrome user the backend now supports.")
+
+
+def test_readmes_tell_the_user_edge_works():
+    """Edge support that no user is told about has not shipped."""
+    for n in _READMES:
+        sec = _readme_extension_section(n)
+        assert 'Edge' in sec, (
+            f"{n}: the browser-extension section never mentions Edge, so a "
+            f"user has no way to learn it is supported")
+
+
+def test_the_two_readmes_stay_in_sync_on_browser_support():
+    """CLAUDE.md requires the Chinese README track the English one. Drift here
+    means one language's users get worse instructions than the other's."""
+    en, zh = (_readme_extension_section(n) for n in _READMES)
+    for browser in ('Chrome', 'Edge'):
+        assert (browser in en) == (browser in zh), (
+            f"{browser} is documented in only one README — the pair must "
+            f"stay in sync")
+
+
+def test_no_tracked_doc_teaches_a_script_that_does_not_exist():
+    """No doc that actually SHIPS may hand the reader a command that fails.
+
+    ``docs/README_EXTENSION.md`` walked developers through three helper
+    scripts (``dev_extension.sh`` / ``install_extension.sh`` /
+    ``install_extension.bat``) that do not exist in the repo. It is now
+    gitignored and untracked (commit 160b6796 deliberately excluded the
+    internal dev summaries from both git and the opensource export), so it
+    reaches nobody and a guard aimed at that one path would pass VACUOUSLY on
+    a clean checkout — the exact shape of guard rot this suite exists to
+    avoid.
+
+    So the invariant is generalised to the population that can actually reach
+    a reader: every TRACKED markdown doc. A doc telling you to run a script
+    that was deleted costs you the time to discover it is gone, and that is
+    the same failure mode as the dead button — an instruction that looks
+    actionable and lands nowhere.
+    """
+    tracked = subprocess.run(
+        ['git', 'ls-files', '*.md'], cwd=ROOT,
+        capture_output=True, text=True, timeout=60).stdout.split()
+    assert tracked, "git ls-files returned nothing — scan surface is empty"
+
+    ghost_scripts = ('dev_extension.sh', 'install_extension.sh',
+                     'install_extension.bat')
+    # Only an IMPERATIVE mention counts — "run `./dev_extension.sh`". A doc
+    # that NAMES a script in order to report it is missing (as
+    # docs/UNIFIED_DEVICE_BRIDGE_DESIGN.md §2.4 does, auditing exactly this
+    # rot) is doing the right thing, and a guard that punished it would push
+    # the repo to delete its own findings. The distinguishing mark is the
+    # invocation form: a leading `./` or a shell-prompt `$`.
+    invocation = re.compile(
+        r'(?:\./|\$\s+)(' + '|'.join(re.escape(s) for s in ghost_scripts) + r')\b')
+    offenders = {}
+    for rel in tracked:
+        p = ROOT / rel
+        if not p.exists():
+            continue
+        try:
+            txt = p.read_text(encoding='utf-8')
+        except (OSError, UnicodeDecodeError):
+            continue
+        missing = sorted({m for m in invocation.findall(txt)
+                          if not (ROOT / m).exists()})
+        if missing:
+            offenders[rel] = missing
+    assert not offenders, (
+        f"tracked docs instruct the reader to run scripts that do not exist: "
+        f"{offenders}. Either restore the scripts or fix the docs — a command "
+        f"that cannot run is the documentation form of a dead button.")

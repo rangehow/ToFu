@@ -26,6 +26,7 @@ from lib.api_response import (
 )
 from lib.log import audit_log, get_logger
 from lib.openapi import api_meta
+from lib.ttl_cache import TTLCache
 
 from .auth import require_auth
 
@@ -216,19 +217,13 @@ _BROWSER_FAMILIES = (
 )
 
 
-def _detect_local_browser() -> dict | None:
-    """Probe THIS machine for a Chromium-family browser we can drive.
+def _probe_local_browser() -> dict | None:
+    """Walk the family table and return the first browser present, or None.
 
-    Returns ``{binary, family, name, extensionsUrl}`` for the first hit, or
-    ``None`` when this machine has no such browser.
-
-    This probe is the single source of truth for two separate UI decisions —
-    whether to offer the open-the-page button at all, and whether the
-    server-side unpacked-extension path is worth showing. It is a fact about
-    the machine, which is what makes it strictly stronger than the IP-based
-    loopback test it backs up: a same-host reverse proxy makes every public
-    request *look* loopback, but it cannot conjure a browser onto a headless
-    server.
+    The RAW probe — uncached, hits the filesystem every call. Callers should
+    use ``_detect_local_browser()`` instead; this exists separately so the
+    cache has something to memoise and so tests can exercise the platform
+    branches without a cache masking the result.
 
     Never falls back to the DEFAULT browser (xdg-open / os.startfile): on a
     machine whose default is Firefox or Safari that opens a page which cannot
@@ -266,6 +261,49 @@ def _detect_local_browser() -> dict | None:
                     'extensionsUrl': url}
     logger.debug('[Browser] probe found no Chromium-family browser here')
     return None
+
+
+# Whether this machine has a browser is a fact that changes at most a couple
+# of times in a machine's life, but the probe hangs off GET /status, which the
+# Local Control modal polls every 3s. The MISS path is the expensive one:
+# with nothing installed, every candidate name misses and each miss walks the
+# whole PATH — measured here at ~408 stat() calls / ~6ms per probe on local
+# disk, and this project deploys onto FUSE mounts where stat costs markedly
+# more.
+#
+# The TTL is the load-bearing part, not the caching. "Tofu can't find my
+# browser" is the ORIGINAL complaint this module was written to fix; an
+# unbounded cache would hand that same report back to any user who installs a
+# browser mid-session, except this time the probe would be right and the
+# cache lying. 60s keeps a fresh install visible well inside the user's own
+# retry patience while collapsing ~20 polls per minute into one filesystem
+# walk.
+#
+# TTLCache (not a hand-rolled dict) because it already solves the two things
+# that would otherwise be reinvented badly here: get_or_compute serialises
+# concurrent missers per key so N open tabs cause ONE walk rather than a
+# stampede, and every instance registers for the cgroup memory-pressure
+# relief sweep (lib.ttl_cache.clear_all_caches).
+_BROWSER_PROBE_CACHE = TTLCache(ttl=60, max_size=1, name='browser_probe')
+_BROWSER_PROBE_KEY = 'local'
+
+
+def _detect_local_browser() -> dict | None:
+    """Return this machine's drivable Chromium-family browser, or ``None``.
+
+    Cached for ``_BROWSER_PROBE_CACHE.ttl`` seconds; see that constant for
+    why the expiry is mandatory rather than a tuning knob.
+
+    This is the single source of truth for two separate UI decisions —
+    whether to offer the open-the-page button at all, and whether the
+    server-side unpacked-extension path is worth showing. It is a fact about
+    the machine, which is what makes it strictly stronger than the IP-based
+    loopback test it backs up: a same-host reverse proxy makes every public
+    request *look* loopback, but it cannot conjure a browser onto a headless
+    server.
+    """
+    return _BROWSER_PROBE_CACHE.get_or_compute(
+        _BROWSER_PROBE_KEY, _probe_local_browser)
 
 
 @api_v1_browser_bp.route('/api/v1/browser/open-extensions', methods=['POST'])

@@ -344,10 +344,14 @@ Already paying for **Claude Pro/Max** or a **ChatGPT** subscription? Log in with
 
 When you need the assistant to read pages that require login — internal dashboards, JIRA tickets, authenticated admin panels — the browser extension bridges your real browser session to Tofu.
 
+Works in **Chrome, Edge and Chromium** — they are all Chromium-family, so the same extension loads unchanged. (Firefox is not supported: it has no persistent "load unpacked" path — an `about:debugging` add-on is dropped when you restart the browser, and end users can only install add-ons Mozilla has signed.)
+
 **Setup:**
-1. Go to `chrome://extensions` → Enable Developer Mode
+1. Open your browser's extensions page — `chrome://extensions` in Chrome/Chromium, `edge://extensions` in Edge — and turn on Developer Mode
 2. Load unpacked → select the `browser_extension/` folder
 3. Click the extension icon → enter your Tofu server URL
+
+> Running Tofu on the same machine? Settings → Local Control detects which browser you have and offers a one-click button to open the right extensions page with the folder path already copied.
 
 **What it can do:**
 

@@ -335,10 +335,14 @@ cd clients/typescript && npm install
 
 当你需要助手阅读登录后才能看的页面 —— 内部仪表盘、JIRA 工单、需要认证的管理后台 —— 浏览器插件可以桥接你真实的浏览器会话到 Tofu。
 
+支持 **Chrome、Edge、Chromium** —— 它们同属 Chromium 系，同一份插件无需改动即可加载。（不支持 Firefox：它没有持久的"加载已解压扩展"路径 —— `about:debugging` 加载的扩展重启浏览器就会消失，终端用户只能安装经 Mozilla 签名的扩展包。）
+
 **安装：**
-1. 打开 `chrome://extensions` → 启用开发者模式
+1. 打开浏览器的扩展管理页 —— Chrome/Chromium 是 `chrome://extensions`，Edge 是 `edge://extensions` —— 并启用开发者模式
 2. 加载已解压的扩展程序 → 选择 `browser_extension/` 目录
 3. 点击插件图标 → 输入你的 Tofu 服务器地址
+
+> Tofu 就跑在你这台机器上？设置 → 本机控制会自动识别你装的是哪个浏览器，并提供一键按钮直接打开对应的扩展管理页，路径也已复制好。
 
 **可以做什么：**
 

@@ -13,6 +13,20 @@
 - **验收(owner 五条,逐条实测):** ①`static/provider_templates/` 只剩 `meituan.json`(43 模型),`brand` 从 `claude` 修回 `meituan`(旧值会让整卡掉进 Claude 分组,破坏 `model_group.js` 的收敛);②真解析器跑合并模板:**6 Claude → anthropic 面 / 37 → openai 面 / 0 拒绝**;③无 faces + Claude → fail-loud,NEUTER 真咬;④真实 `server_config.json` 经**加载时迁移代码**:`['sankuai','sankuai_anthropic']` → `['sankuai']`,同一 provider_id 产出 **11 个 anthropic slot + 57 个 openai slot**、共用同 3 把密钥、零拒绝;⑤干净 HEAD **149 passed / 5 skipped**,含既有红转绿。
 - **共享 HEAD 事故两起(均已恢复,无工作丢失):** ①`git add` 后计数对但**内容**错——兄弟的 `EDGE_ADDONS.md` 挤进来而我的模板删除掉出,故改为**集合精确断言**而非计数;②提交瞬间兄弟 reset 清空 index,commit 报「no changes added」。实测工作树内容完好(grep 逐文件确认),重新暂存并改用 `git commit -F 文件 -- <显式 pathspec>` 一次落地。**判据:计数断言不够,要断言集合;提交要带 pathspec。**
 - **验收边界(诚实分账):** ①后端半**需重启**才对新会话生效;②前端需**刷新**,且新模块进 bundle 需重建;③迁移在**下次加载时**才写盘——本轮只做了内存演练与备份(`/tmp/sc_pre_migration.json`),没有手改 owner 的线上配置;④合并后 Claude 的 `provider_id` 由 `sankuai_anthropic` 变 `sankuai`,**按 provider_id 存的密钥健康史与探测缓存会重置一次**(owner 已知悉并接受——两边密钥物理相同,合并后统计反而更准)。
+### 2026-07-29(续·发版判据选错) — owner 用线上真实状态证伪我上一批的修复:**tag 是发版的产物,不是发版的证据**;而这个代理在两个方向上都错,其中一个让「不带 --bump 也能出包」这个卖点在最正式的那条路上恰好失效(commit `5114cbca`,2 文件 +240/-24;守卫 **17/17**,**NEUTER 咬 7 条**,相邻环 **82/82**,干净 worktree 复验 **17/17**)
+
+- **★ owner 的证伪(线上实测,不是推断):** 我上一批用 `git ls-remote --tags` 回答「这个版本发过没有」。owner 指出这两件事在本仓**此刻正好是分裂的**——v0.15.0 / v0.15.1 / v0.15.2 **三个 tag 都在远端,而三个都没有 Release**。于是我的门对当前 `VERSION=0.15.2` 判定 `should_release=false`,**一个包都不会建**:修完之后,那三个饿死的版本仍然永远发不出来,而这恰恰是 owner 最初报的那个现象。**判据:「修复」必须拿它要修的那个故障态当输入验一遍,否则它可能在自己的靶子上恰好无效。**
+- **★ 第二个方向更要命,它让本批的卖点在最正式的路径上反向失效:** `export.py::_git_push` 里 `_push_branch` 与 `_push_tag` 在**同一个循环体内背靠背执行**,中间没有任何等待。所以 `--bump` 那条路上,tag 与分支几乎同时到达远端——workflow 被分支推送唤起、`version` job 跑 `ls-remote` 时 tag **大概率已经在了**,于是它判自己「已发布」直接躺下。而不带 `--bump` 时没有 tag、反而能建。**方向正好反了:越正式的发布路径越建不出来。** 这不是理论竞态,是 `--bump` 路径的默认结果。
+- **落点(问真正关心的那件事,不用等待或重试去躲竞态):** 判据换成 `GET /repos/{owner}/{repo}/releases/tags/v$VER`——200 已发布跳过,404 未发布就建。tag 早到、tag 由 `--bump` 先推、tag 是历史遗留,**三种情形全部不影响判定**,那三个 orphan tag 会在下一次 push 时自动补发。
+- **★ 为什么不用 `gh release view`(这条决定了实现形态):** 它对「没有这个 release」与「API 调用失败」**都返回 exit 1**,且该映射在 cli/cli#6024 里被明确记为**未文档化行为**。用它做判据**在结构上无法表达 fail-open 规则**——限流会被读成「已发布」而静默跳过发版。故走 REST 拿显式 HTTP 码。
+- **失败方向刻意不对称:** 任何不是明确 200 的结果都建(限流 / 403 / 5xx / 传输失败)。多建一次的代价是四台 runner;漏建一次是又一次静默不发版,**正是本轮在修的那个故障**。curl 上的 `|| true` 是必需的——`set -e` 会让一次网络抖动直接杀掉整个 step,连带杀掉本该发生的构建。
+- **orphan tag 在发布侧无需特殊处理(查证而非假设):** `action-gh-release` 解析目标时扫的是**已有 Release 列表**里的 `tag_name`(`findTagFromReleases`),不是 git tag——所以它会**采纳**已存在的 tag 并在其上创建 Release,而不是报错。
+- **★ 守卫从「断言文本」改成「执行真实 shell」,因为旧那条正是在给这个 bug 站岗:** 原 `test_an_already_released_version_does_not_rebuild` 断言 step body 里出现 `ls-remote` 与 `refs/tags/v` 两个字面量——**按 tag 判会让它永远绿**。现在拿 stub 的 `curl` 挂进 PATH、真跑那段 shell、读它真正写进 `$GITHUB_OUTPUT` 的 `should_release`。
+- **★ 第一发 NEUTER 没咬,而原因暴露了我 harness 的一个洞:** 退回 tag 判据后,headline 的 orphan-tag 测试**照样绿**——因为临时目录里没有 origin,`ls-remote` 失败,坏判据**恰好掉进了「建」这个正确结果**。**判据:harness 必须把故障态的前提也建模出来**(此处 = tag 真的存在),否则坏实现会因为一个不相干的失败而偶然通过,整发 NEUTER 变成空转。补上 `git` stub 后重跑,**7 条红**含 headline 那条。
+- **两条实证(owner 点名要的):** ①`VERSION=0.15.2` + tag 已存在 + 无 Release(线上实测 404)→ `should_release=true`;200 对照组 → `false`;403/429/500/502/传输失败 → 全部 `true`。②NEUTER 退回 tag 判据 → 7 条红,还原后逐字节一致、17/17 绿。
+- **★ 一处自伤(同族第二次):** 新写的 shape 守卫禁止 step body 出现 `ls-remote` / `gh release view`,而**该 step 自己的注释正是在讲「为什么不用这两个」**——守卫当场把这段解释判红。改为**先剥注释再断言**。如果反过来去删注释,就等于让守卫吃掉那份防止复发的文档。
+- **验收边界(诚实分账):** ①仍是**下一次 push 到 main 才生效**;但与上一批不同,这次 `VERSION=0.15.2` **不需要先 bump**——orphan tag 会被采纳并补发。②`macos-15-intel` 到 2027-08 的边界不变。③本批只动 workflow 与守卫,**不含运行时代码,不需要重启**。
+
 ### 2026-07-29(续·桌面版不出包 + 安装提示空盒子) — owner 报两条:「版本号变了不自动 build」与「不管装没装都该直接显示安装提示」。第一条**不是没触发,是触发了然后饿死**:GitHub 已退役的 runner 标签**不报错、只是永不调度**,排队满 24h 被自动取消,`release` 因 `needs` 被 skip(commit `d604418a`,8 文件 +881/-19;新套件 **9 + 15**,**NEUTER×3 + 物理 NEUTER 咬 8 条**;相邻环 **90/90**,既有 local-control **67/67**,干净 worktree 复验通过)
 
 - **★ 第一条的根因是两个独立缺陷叠在同一个现象上,只修一个会以为没效果:**

@@ -1,5 +1,14 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·run id 单一真源) — **秒级 id 撞 UNIQUE 列致模拟/autopilot 硬崩根修**:票面只列了 1 张表,扫描后实测是 **3 处 UNIQUE 列**(autopilot 同款硬故障票面未列);6 个铸造点里 **1 个原本就正确**、5 个漂移——漂移本身才是病根,故立单一真源模块而非逐个补 f-string(`pt_ca7e1be82b904c48`;commit `b460622`;守卫 **12**,**NEUTER×3 各咬**(7/5/1);全量 **257 passed**,xfail 归零)
+
+- **★ 缺陷面比票面宽(扫描出来的,不是票面给的):** 票面指 `trading_sim_sessions.session_id`。全仓扫 `%Y%m%d_%H%M%S` 得 6 个铸造点,其中**落在 `TEXT NOT NULL UNIQUE` 列的是 3 个**——`trading_autopilot_cycles.cycle_id` 有**两个入口**(`trading_autopilot/cycle.py:254`、`web/handlers/trading_tasks.py:288`)同样会崩,票面未列。实测秒级 id 连续两次完全相同(`sim_20260729_170815` ×2),第二次 INSERT 抛 `IntegrityError` 裸奔穿出整个函数。
+- **★ 判据(为什么建模块而不是补 5 处 f-string):** 6 个点里 `trading_tasks.py:116` **原本就带 `uuid4().hex[:6]`、是正确的**,另 5 个漂移了。**「同一个格式被手抄 6 份、其中 5 份漂移」本身就是病根**——逐个补只是把这次的 5 份对齐,下一个新增 id 会以同样方式再漂一次。按单一真源:格式只活在 `tofu_trading/run_ids.py:mint_run_id` 一处。
+- **格式 `{prefix}_{ts}_u{uid}_{uuid4[:8]}`:** 时间戳**保留但不承担唯一性**(这些 id 出现在 UI 与日志里,「这是哪次运行」要一眼可答),唯一性由 uuid4 承担;uid 段额外关掉**跨租户**碰撞——旧 id 不含 uid,故同一宿主两人同秒必撞,这条票面提到但旧格式无法表达。
+- **重试循环被明确否决(票面要求,判断正确):** 重试只缩小竞态窗口不消除它,还把确定性 bug 变成「在别人机器上才复现」的间歇 bug。守卫用 AST 断言无任何铸造点被 `while/for` + `IntegrityError` 包裹。
+- **★ 守卫刻意不止于「连调两次 id 不同」**——那种断言在熵只剩 1 位十六进制时照样绿。故同时:①**真跑 `run_simulation` 两次打同一个库**(真正崩过的场景);②把铸出的 id 灌进真 UNIQUE 列;③扫源码禁止任何点重建裸格式。**NEUTER×3**:退回秒级 id **咬 7 条**(票面自己定的判据)、熵削到 1 位**咬 5 条**、去掉 uid 段**咬 1 条**(跨租户)。
+- **★ `xfail(strict=True)` 兑现了它的设计意图:** 上一轮我把这个缺陷钉成 strict xfail,理由是「修好的那天它会自己变红逼人回来复核」。**这次修完全量立刻红**——它真的做到了。现已转为真断言,并把费率测试里「因为该缺陷所以隔离」的注释更正为「缺陷已修,隔离保留是为了可读性」。判据:**钉既有缺陷要用 strict xfail 而非 skip——skip 会烂成永久黄灯,strict 会在缺陷消失时主动叫你回来。**
+
 ### 2026-07-29(续·VU 可见性第三条腿) — 前两批都只修了 **push** 一条传输;**socket 一断,原病症整段复发**,而修法差点选错(commit `f80b0446`,4 文件;新套件 **9/9**(6 条 failing-first),**NEUTER×2 咬**(其中**第二发第一次不咬,是我的守卫被自己的 docstring 满足**);相邻环 **124/124**;活体端点实测;tsc BASELINE=0)
 
 - **★ 缺口:`d6e8bdb3` + `633b4fc3` 全部活在 push 传输上,而 push 会断。** `_crossDeviceReconcile` 是 25s 轮询兜底、正是为断线设计的,但它**唯一的探针是 `/api/v1/chat/active`,而那个端点排除 carrier** ⇒ 轮询路径 attach 调用数**为 0**,VU 窗口里它连「这个会话在忙」都学不到。净效果:隧道抖动(VS Code port-forward,本项目常态)时,**原病症整段复发**——对话看起来已完成、无气泡、无流,直到手动刷新。

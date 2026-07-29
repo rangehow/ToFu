@@ -1,6 +1,16 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-29(续·科研可发现) — owner 查存储时发现**单向哈希陷阱**:产物落盘了、读路径也通了,但要取回必须一字不差复现当初的方向措辞,想不起来就等于被删除(commit `945693ae`,6 文件 +806/-2;新套件 **12/12 失败先行**,**NEUTER×5**(其中**第五发首轮没咬,是我的夹具漏洞**);相邻环 **68/68**;干净 committed worktree 复验 **56/56**;epic `pt_a40dbd9569194b52` 关闭)
+
+- **★ owner 的发现比"少个列表"深:它让前两批在真实使用中失效。** 落盘行按 `sha256(归一化方向)[:32]` 寻址——**单向哈希**;而全库没有任何地方索引"研究过哪些方向"。于是:上周跑的方向,今天回来必须**一字不差**回忆当初输入的那句话,否则几十次 LLM 调用换来的产物永远够不着。**这与被 TTL 删掉的用户体感完全一致**,只是数据还躺在盘上——某种意义上更糟,因为它看起来是好的。
+- **修法很便宜,因为缺的只是"读出来":** `meta.direction` 早就存了方向原文(我直接从 DB 里读出来验证过)。新增 `list_research_directions()` + `GET /api/v1/research/list`:按 `lang LIKE 'survey:%' / 'ideate:%'` 前缀过滤(不泄漏同表的单篇论文报告),survey/ideate 两行折叠成一条,newest-first。落地页据此渲染「最近的研究」,点击即重开。
+- **★ 三个数字面板的根修:** 已完成视图此前只画 `N accepted / N rejected / N papers`,而每条 idea 的**标题、机理、新颖性主张、可证伪预测、四轴 rubric 分数、综述全文、空白地图全部被渲染层丢弃**。现改为 accepted 卡片 + rejected **默认折叠带一行摘要**(「N 个被淘汰(最高 X / 阈值 Y)」——按 owner 拍板,让诚实的 0 accepted 一眼可判「是闸太严还是 idea 太烂」)+ 综述与空白地图各自可折叠。零 accepted 渲染为「宁缺毋滥,这是诚实结果不是故障」,而不是一片空白。
+- **刷新可重建:** `_restoreResearchFromStore()` **完全不碰 task 注册表**,只走持久层,因此 TTL 逐出/重启后仍能重建整个面板。守卫的 restore 场景下从未启动任何任务,面板只能从持久层来。
+- **★ NEUTER 第五发首轮没咬,而错在我的夹具不在实现:** 「list 不得泄漏非科研行」的诱饵行 `meta` 是空的,于是它被「无方向文本」那条分支排除掉了——`WHERE 1=1` 的回归照样绿。把诱饵改成**格式良好、带 `direction` 字段**的 insight 行后,lang 前缀过滤成为唯一能排除它的机制,重跑真咬。**判据:测「非法数据被排除」时,诱饵必须只违反被测的那一条规则;多违反一条,守卫就可能因为错误的理由变绿。**
+- **共享 HEAD:** 提交后发现 `i18n.js` 与 `globals.generated.d.ts` 不在我的 commit 里——核查发现兄弟的 `cfd7fd54` 在我编辑与提交之间用宽 pathspec 把它们一并带走了,内容完整(27 个 `paper.research.*` 键全在 HEAD)。`-o` 因此看到无可暂存,属正确行为而非丢失。charter #8 的 `gen_frontend_globals.py` 已重跑(116 symbols),tsc BASELINE=0 保持。
+- **验收边界(诚实分账):** ①**运行中进程不带**,需重启;②「最近的研究」只列**持久化之后**产生的运行——此前被 TTL 扫掉的历史数据不存在,无法追认;③本批未做入口移侧栏(继续避让 `pt_3d487a30bd5e4a7e`),自动科研入口仍在落地页 describe 框下方;④面板样式类(`pm-idea-card` / `pm-recent-*` 等)沿用既有 `pm-*` 命名,未新增 CSS 文件——若视觉上需要单独调校,另开票。
+
 ### 2026-07-29(续·一个吉祥物,不再切换) — owner:「只要原版,其他都太丑,没必要切换」——**移除试戴机制,但把它里面唯一承重的那半(cache-bust)留下**;顺带补上一条移除才暴露的漂移缺口(commit `cfd7fd54`,17 文件;新 ratchet **11/11**,**NEUTER×3 各咬各的方向**,相邻环 **45/45**,干净 committed worktree **22/22**)
 
 - **★ 落点判据是「这个模块里有两件事,只有一件是 owner 要删的」:** `brand_logo.js` 同时装着**试戴机制**(皮肤注册表 + 设置选择器 + localStorage)与 **cache-bust**(`LOGO_VER`)。后者不是装饰——图标响应头 `max-age=86400`,裸路径会让一次改动 24h 不可见,**A2 回滚当天 owner 仍看到旧图一整天正是这个机制**。整个文件删掉会把那个 bug 原样请回来。故删前者、留后者,并在模块头写明**为什么不要再加回来**(而不是只写「已删除」)。

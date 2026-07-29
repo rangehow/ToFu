@@ -144,7 +144,18 @@ def derive_rates(model_id: str, provider_id: str | None = None):
     return w, r
 
 
-def load_records(pattern: str) -> list[dict]:
+def load_records(pattern: str, since: str = '', until: str = '') -> list[dict]:
+    """Collect ``[CacheRoundRecord]`` payloads, optionally bounded by log time.
+
+    ``since`` / ``until`` are compared as PREFIX strings against the log line's
+    leading ``YYYY-MM-DD HH:MM:SS`` stamp, so any left-anchored precision works
+    ('2026-07-29', '2026-07-29 14', '2026-07-29 14:30:00'). ``until`` is
+    INCLUSIVE of the whole prefix it names.
+
+    Why this exists: the log is live and still growing, so an unbounded run
+    reports a moving total. A report that quotes a figure MUST be reproducible
+    by whoever reads it, which means naming the window the figure came from.
+    """
     out = []
     for fn in sorted(_glob.glob(pattern)):
         try:
@@ -153,10 +164,26 @@ def load_records(pattern: str) -> list[dict]:
                     i = line.find(RECORD_MARKER)
                     if i == -1:
                         continue
+                    # Leading 'YYYY-MM-DD HH:MM:SS' written by lib/log.py.
+                    # A torn write during log rotation can leave NUL padding at
+                    # the head of a line; such a stamp sorts BELOW every real
+                    # date, so trusting it blanks the reported window and
+                    # silently widens any --since filter. Only a stamp that
+                    # actually looks like a date is usable.
+                    stamp = line[:19]
+                    if not (len(stamp) == 19 and stamp[:4].isdigit()
+                            and stamp[4] == '-' and stamp[10] == ' '):
+                        stamp = ''
+                    if since and (not stamp or stamp < since):
+                        continue
+                    if until and (not stamp or not stamp <= until + '\uffff'):
+                        continue
                     try:
-                        out.append(json.loads(line[i + len(RECORD_MARKER):].strip()))
+                        rec = json.loads(line[i + len(RECORD_MARKER):].strip())
                     except ValueError:
-                        pass
+                        continue
+                    rec['_ts'] = stamp
+                    out.append(rec)
         except OSError as e:
             print(f'warn: cannot read {fn}: {e}', file=sys.stderr)
     return out
@@ -225,11 +252,14 @@ def build_report(records, min_write, w_rate, r_rate, model_id=''):
             100.0 * x['recoverable_cny'] / true_recoverable
             if x['is_waste'] and true_recoverable else None)
 
+    _stamps = [r['_ts'] for r in records if r.get('_ts')]
     return {
         'records_scanned': len(records),
         'zero_readback_rounds': len(rounds),
         'min_write': min_write,
         'model': model_id,
+        'window_first': min(_stamps) if _stamps else '',
+        'window_last': max(_stamps) if _stamps else '',
         'write_cny_per_1k': w_rate * 1000,
         'read_cny_per_1k': r_rate * 1000,
         'true_recoverable_cny': true_recoverable,
@@ -244,6 +274,12 @@ def _fmt(v, spec, dash='-'):
 
 def print_report(rep):
     print(f"records scanned          : {rep['records_scanned']:,}")
+    if rep.get('window_first'):
+        print(f"observed window          : {rep['window_first']} → "
+              f"{rep['window_last']}")
+        print(f"  └ the log is LIVE; to reproduce THIS table exactly, pin the "
+              f"upper bound:\n    python3 scripts/cache_waste_report.py "
+              f"--until '{rep['window_last']}'")
     print(f"zero-readback rounds     : {rep['zero_readback_rounds']:,} "
           f"(cache_read==0 and cache_write>{rep['min_write']:,})")
     print(f"rates (from lib.cost)    : write {rep['write_cny_per_1k']:.5f} "
@@ -287,11 +323,18 @@ def main(argv=None):
                          'figure. Probe fails loudly on an unknown id rather '
                          'than falling back to a guess.')
     ap.add_argument('--provider', default=None)
+    ap.add_argument('--since', default='',
+                    help="only count records at/after this log stamp prefix "
+                         "(e.g. '2026-07-29' or '2026-07-29 14:00:00')")
+    ap.add_argument('--until', default='',
+                    help="only count records at/before this log stamp prefix — "
+                         "use it to REPRODUCE a published table exactly, since "
+                         "the log keeps growing")
     ap.add_argument('--json', action='store_true', help='emit JSON instead of a table')
     args = ap.parse_args(argv)
 
     w, r = derive_rates(args.model, args.provider)
-    records = load_records(args.glob)
+    records = load_records(args.glob, args.since, args.until)
     if not records:
         print(f'no {RECORD_MARKER} lines matched {args.glob!r}', file=sys.stderr)
         return 1

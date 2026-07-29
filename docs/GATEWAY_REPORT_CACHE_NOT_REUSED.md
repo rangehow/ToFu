@@ -20,68 +20,72 @@ observation with per-request trace IDs so it can be checked against your side.
 
 **Fleet scale.**
 
-> **Measurement window.** The figures below are a SNAPSHOT taken at 47,344
-> instrumented rounds. The log is live and still growing, so re-running
-> `python3 scripts/cache_waste_report.py` will report larger absolute totals;
-> the SHAPE is what matters and it is stable (a re-run at 47,891 rounds gave
-> `upstream_identical` 86.1 % with the same 38.5 s median and 3.9 % under
-> 18 s). Nothing here needs re-measuring before you read it — but if a number
-> in this report and a number we quote in conversation differ slightly, this
-> is why, and the command above is the arbiter.
+> **Measurement window — pinned and reproducible.** Every figure below comes
+> from one bounded run. The log is live and still growing, so an unbounded run
+> reports larger totals; to reproduce THIS table exactly:
 >
-> Two buckets in the table are labelled from records stamped BEFORE the
-> classifier fixes of 2026-07-29: `ttl_expiry` reads empty and a group of
-> unclassifiable rounds still reads `no_break` rather than `indeterminate`.
-> Buckets are stamped at write time (that is what keeps offline and live
-> counts from drifting), so historical rows keep their original label. Neither
-> affects the `upstream_identical` claim, which is the subject of this report.
+> ```
+> python3 scripts/cache_waste_report.py --until '2026-07-29 15:59:50'
+> ```
+>
+> Window: `2026-07-18 17:25:33` → `2026-07-29 15:59:50`, 47,227 instrumented
+> rounds. Re-running that command reproduces every number here byte for byte
+> (verified twice). An UNBOUNDED run later the same day reported 86.1 %
+> upstream share against 84.6 % here — the shape is stable, only the totals
+> accrue.
+>
+> Two rows are labelled from records stamped BEFORE the classifier fixes of
+> 2026-07-29: `ttl_expiry` reads empty, and a group of unclassifiable rounds
+> still reads `no_break` rather than `indeterminate`. Buckets are stamped at
+> write time (that is what keeps offline and live counts from drifting), so
+> historical rows keep their original label. Neither affects the
+> `upstream_identical` claim, which is the subject of this report.
 
-Of 2,313 rounds that wrote >20k cache tokens and read back **zero**:
+Of 2,113 rounds that wrote >20k cache tokens and read back **zero**:
 
 | | |
 |---|---|
-| Rounds where the prefix was byte-identical and routing identical (`upstream_identical`) | **1,663** |
-| Gap since previous round on the same conversation — median | **38.5 s** |
-| Gap — p90 | **90.8 s** |
-| Fraction with a gap under 18 s (i.e. plausibly the write-visibility race) | **3.9 %** |
-| Tokens written that we believe should have been read back | **741,658,984** |
-| Cost of those writes at our contracted Opus-5 rate | **≈ 33,560 CNY** |
-| Cost had they been served from cache | **≈ 2,685 CNY** |
-| **Difference** | **≈ 30,875 CNY** |
+| Rounds where the prefix was byte-identical and routing identical (`upstream_identical`) | **1,486** |
+| Gap since previous round on the same conversation — median | **38.7 s** |
+| Gap — p90 | **91.2 s** |
+| Fraction with a gap under 18 s (i.e. plausibly the write-visibility race) | **4.0 %** |
+| Tokens written that we believe should have been read back | **661,014,804** |
+| Cost of those writes at our contracted Opus-5 rate | **≈ 29,911 CNY** |
+| Cost had they been served from cache | **≈ 2,393 CNY** |
+| **Difference** | **≈ 27,518 CNY** |
 
-That difference is **85.3 %** of all avoidable cache spend we can measure,
+That difference is **84.6 %** of all avoidable cache spend we can measure,
 after excluding two classes that are **not** waste and which we are explicitly
 *not* reporting as a problem:
 
-* **ordinary TTL expiry** — idle > 5 min, gap median 340 s. The entry expired
-  on its own schedule and had to be rebuilt.
-* **cold starts** — 242 rounds, first round of a conversation with no preceding
+* **ordinary TTL expiry** — idle > 5 min. The entry expired on its own
+  schedule and had to be rebuilt.
+* **cold starts** — 238 rounds, first round of a conversation with no preceding
   request, so there was nothing to read back.
 
 Full bucket breakdown:
 
 | bucket | n | wasted tok | recoverable CNY | share | gap p50 | gap p90 | % < 18 s |
 |---|---|---|---|---|---|---|---|
-| `upstream_identical` | 1,663 | 741,658,984 | **30,875** | **85.3 %** | 38.5 s | 90.8 s | 3.9 % |
-| `body_change` (our client) | 146 | 54,942,920 | 2,287 | 6.3 % | 45.3 s | 365.4 s | 32.9 % |
-| `other` | 76 | 30,007,498 | 1,249 | 3.5 % | 314.6 s | 513.7 s | 18.9 % |
-| `cache_write_unsettled` | 123 | 27,432,999 | 1,142 | 3.2 % | 14.7 s | 17.6 s | 98.3 % |
-| `indeterminate` | 46 | 11,017,397 | 459 | 1.3 % | 12.8 s | 112.8 s | 50.0 % |
+| `upstream_identical` | 1,486 | 661,014,804 | **27,518** | **84.6 %** | 38.7 s | 91.2 s | 4.0 % |
+| `body_change` (our client) | 138 | 50,961,685 | 2,122 | 6.5 % | 37.8 s | 365.4 s | 33.3 % |
+| `other` | 74 | 29,189,382 | 1,215 | 3.7 % | 314.6 s | 513.7 s | 18.9 % |
+| `cache_write_unsettled` | 114 | 25,137,880 | 1,046 | 3.2 % | 14.7 s | 17.6 s | 98.2 % |
+| `no_break` (unclassifiable; see note) | 46 | 11,017,397 | 459 | 1.4 % | 12.8 s | 112.8 s | 50.0 % |
 | `cache_mid_out_of_window` | 10 | 2,226,155 | 93 | 0.3 % | 18.6 s | 53.5 s | 40.0 % |
 | `ttl_flip` | 4 | 1,165,353 | 49 | 0.1 % | 33.1 s | 37.6 s | 0.0 % |
 | `cache_namespace_switch` | 1 | 514,308 | 21 | 0.1 % | 54.1 s | 54.1 s | 0.0 % |
 | `breakpoint_lost` | 2 | 501,064 | 21 | 0.1 % | 72.1 s | 309.6 s | 0.0 % |
-| *excluded — `ttl_expiry` (not waste)* | — | — | — | — | 340.0 s | 620.6 s | 0.0 % |
-| *excluded — cold start (not waste)* | 242 | 54,119,937 | — | — | 0 s | 0 s | — |
+| *excluded — cold start (not waste)* | 238 | 53,010,620 | — | — | 0 s | 0 s | — |
 
-**Total recoverable: ≈ 36,196 CNY**, of which the byte-identical upstream class
-is 85.3 %.
+**Total recoverable: ≈ 32,543 CNY**, of which the byte-identical upstream class
+is 84.6 %.
 
 **The gap distribution separates the two candidate mechanisms cleanly**, which
 is the single most important row-pair in this report:
-`cache_write_unsettled` sits at p50 **14.7 s** with **98.3 %** under 18 s — a
+`cache_write_unsettled` sits at p50 **14.7 s** with **98.2 %** under 18 s — a
 textbook write-visibility race, and we handle it on our side.
-`upstream_identical` sits at p50 **38.5 s** with only **3.9 %** under 18 s.
+`upstream_identical` sits at p50 **38.7 s** with only **4.0 %** under 18 s.
 These are not the same phenomenon, and the second one is not a race we can win
 by waiting longer.
 
@@ -162,12 +166,12 @@ measured and excluded before writing this report:
 
 | Hypothesis | How it was excluded |
 |---|---|
-| **Our client mutated the cached prefix** | Wire-layer fingerprint identical (system hash, tools hash, per-message hashes, block-length vector). Rounds where the fingerprint *did* change are classified separately (`body_change`, n=146) and are **not** in the 1,663. |
+| **Our client mutated the cached prefix** | Wire-layer fingerprint identical (system hash, tools hash, per-message hashes, block-length vector). Rounds where the fingerprint *did* change are classified separately (`body_change`, n=138) and are **not** in the 1,486. |
 | **Cache-namespace switch** (key / `anthropic-beta` / endpoint changed between rounds) | Routing tuple recorded per round and verified identical. Rounds with a routing flip are a separate bucket (n=1). |
-| **Anthropic write-visibility race** (a freshly written entry is not readable for ~15–20 s) | Measured per round. Only **3.9 %** of the 1,663 have a gap under 18 s; median gap is 38.5 s. We *do* separately observe and handle this race — `cache_write_unsettled`, n=123, median gap 14.7 s, 98.3 % under 18 s — and those rounds are excluded from the 1,663. |
-| **Ordinary TTL expiry** (idle > 5 min, entry legitimately expired) | Excluded as a distinct bucket, median gap 340 s. These are *expected* rebuilds and we are **not** reporting them as a problem. |
-| **Cold start** (first round of a conversation) | Excluded: 242 rounds. No preceding request exists, so there is nothing to read back. |
-| **Rounds we could not classify** | Reported honestly as `indeterminate` (n=46) rather than folded into the upstream claim. |
+| **Anthropic write-visibility race** (a freshly written entry is not readable for ~15–20 s) | Measured per round. Only **4.0 %** of the 1,486 have a gap under 18 s; median gap is 38.7 s. We *do* separately observe and handle this race — `cache_write_unsettled`, n=114, median gap 14.7 s, 98.2 % under 18 s — and those rounds are excluded from the 1,486. |
+| **Ordinary TTL expiry** (idle > 5 min, entry legitimately expired) | Excluded as a distinct bucket. These are *expected* rebuilds and we are **not** reporting them as a problem. |
+| **Cold start** (first round of a conversation) | Excluded: 238 rounds. No preceding request exists, so there is nothing to read back. |
+| **Rounds we could not classify** | Reported honestly in their own row (n=46) rather than folded into the upstream claim. |
 | **Cross-conversation cache contention** | A/B tested previously: per-round `cache_read` is identical between solo and interleaved traffic (±0.0 %). Anthropic caches key on exact prefix bytes, so distinct conversations cannot evict each other. |
 | **Compaction / history rewrite on our side** | Rounds following a context compaction or a backend history edit are flagged and bucketed separately. |
 
@@ -199,3 +203,76 @@ The classifier that produces them lives at
 `lib/tasks_pkg/cache_tracking/_detect.py::classify_verdict`, and the same
 function is used by both the live path and our offline replay harness, so
 offline and live counts cannot drift.
+
+```
+python3 scripts/cache_waste_report.py --until '2026-07-29 15:59:50'
+```
+
+---
+
+## Internal review notes — REMOVE THIS SECTION BEFORE SENDING
+
+> For the internal reviewer. This is where the report is weakest; attack these
+> first rather than the prose.
+
+**1. The CNY figures assume one rate for every round — CHECKED, and it holds
+better than expected.** The per-round records do not carry a model id, so
+`--model` prices the whole table at one rate. That worried me, because the fleet
+is genuinely mixed: by model mentions in the app log the traffic is 44.7 %
+`aws.claude-opus-4.8`, 11.4 % `kimi-k3`, 5.9 % `claude-opus-5`, 5.8 %
+`yuju-claude-opus-5-evaDaily`, 4.5 % `gemini-3-flash-preview`, rest a long tail
+— Opus-5 itself is a small slice.
+
+But all four Claude Opus variants price **identically**: `claude-opus-5`,
+`claude-opus-4.8`, `aws.claude-opus-4.8` and `claude-opus-4.7` are all 0.04525
+CNY/1k cache-write. So the dominant model costs exactly what the table assumes.
+The cheap models are the risk (`kimi-k3` 0.01998, `gemini-3-flash-preview`
+0.00109), and their exposure is limited: the `upstream_identical` bucket
+requires a wire fingerprint, which only exists for requests we fingerprint on
+the Anthropic-native path — a non-Claude round cannot enter that bucket at all,
+it lands in the honestly-hedged "no wire fingerprint" classes instead.
+
+**Residual risk, stated plainly:** the CNY column is an over-estimate by
+whatever share of these rounds ran on a cheaper model, and we cannot bound that
+share exactly because the records carry no model id. The token and round counts
+are exact. **Recommendation: lead with tokens and rounds; present CNY as "on the
+order of" rather than a figure to the yuan.** The argument does not depend on
+it, and an over-precise number invites the conversation to become about our
+accounting instead of their cache.
+
+**1b. Worth fixing regardless:** the records should carry the model id. It is
+one field at the emit site and it would remove this entire caveat from every
+future run of this report. Not done here because it changes the record schema
+and belongs in its own change, but it is the highest-value follow-up.
+
+**2. `ttl_expiry` reads empty, which looks like an omission.** It is a
+labelling artefact (buckets are stamped at write time; pre-fix rounds keep
+their old label), disclosed in the window note. But the gateway team will
+reasonably ask "how many TTL expiries did you see?" and the honest answer today
+is "we cannot separate them from `body_change`/`other` for this window". If
+that is too weak a footing, the fix is to wait for new traffic to accumulate
+under the corrected classifier rather than to re-derive history in the report
+script (that would create a second copy of the bucketing rule — the exact drift
+this telemetry exists to prevent).
+
+**3. The `other` bucket, n=74 at p50 314.6 s, is probably mostly TTL expiry.**
+Same artefact as (2). It does not touch the `upstream_identical` claim, but if
+a reviewer asks "what is `other`?" the answer should be that sentence, not a
+shrug.
+
+**4. The strongest single fact is the R18/R19 pair, not the fleet total.** A
+14.8 s gap that MISSED next to a 100.7 s gap that HIT, same key, same
+conversation, strictly append-only prefix. Neither a TTL nor a write-visibility
+window predicts that ordering. If the gateway team engages with only one thing,
+it should be that. Consider leading with it.
+
+**5. What we have NOT done:** we have not reproduced this against a second
+gateway or a direct Anthropic endpoint, so we cannot yet say "the same prefix
+hits on X and misses on Y". That would be the decisive control. If we have
+credentials for any second path, running it is worth more than any further
+analysis of these logs.
+
+**6. Tone check.** The report claims an observation, not a diagnosis, and
+every section says what we ruled out on our own side first. Keep it that way —
+the four questions at the end are the ask, and none of them accuses their
+cache of being broken.

@@ -202,3 +202,91 @@ class TestMinWriteFilter:
             [_rec('no_break', call=9, gap=38.0, write=1_000_000, read=500_000)],
             min_write=20000, w_rate=0.001, r_rate=0.0001)
         assert rep['zero_readback_rounds'] == 0
+
+
+class TestTimeWindowMakesTheSnapshotReproducible:
+    """A published figure must be re-derivable by whoever reads it.
+
+    The log is live and still growing, so an unbounded run reports a moving
+    total: a reviewer who re-runs the command gets different numbers than the
+    document quotes and cannot tell whether that is drift or an error.
+    ``--until`` pins the upper bound so a table can be reproduced exactly.
+    """
+
+    @staticmethod
+    def _write_log(tmp_path, lines):
+        p = tmp_path / 'app.log'
+        p.write_text(''.join(lines))
+        return str(p)
+
+    @staticmethod
+    def _line(stamp, call=5, gap=30.0, write=999999, read=0):
+        import json as _json
+        body = _json.dumps({'bucket': 'upstream_identical', 'call': call,
+                            'gap_s': gap, 'cache_write': write,
+                            'cache_read': read})
+        return f'{stamp} [INFO] x: {cwr.RECORD_MARKER} {body}\n'
+
+    def test_until_excludes_later_records(self, tmp_path):
+        log = self._write_log(tmp_path, [
+            self._line('2026-07-29 10:00:00'),
+            self._line('2026-07-29 20:00:00'),
+        ])
+        assert len(cwr.load_records(log)) == 2
+        assert len(cwr.load_records(log, '', '2026-07-29 12:00:00')) == 1
+
+    def test_since_excludes_earlier_records(self, tmp_path):
+        log = self._write_log(tmp_path, [
+            self._line('2026-07-29 10:00:00'),
+            self._line('2026-07-29 20:00:00'),
+        ])
+        assert len(cwr.load_records(log, '2026-07-29 12:00:00', '')) == 1
+
+    def test_a_date_only_bound_is_inclusive_of_the_whole_day(self, tmp_path):
+        """Prefix semantics: '--until 2026-07-29' must keep 23:59, not drop it
+        because '2026-07-29' < '2026-07-29 23:59:00' as a plain string."""
+        log = self._write_log(tmp_path, [
+            self._line('2026-07-29 23:59:00'),
+            self._line('2026-07-30 00:01:00'),
+        ])
+        got = cwr.load_records(log, '', '2026-07-29')
+        assert len(got) == 1, 'the whole named day must be inside the bound'
+
+    def test_a_torn_nul_padded_line_never_becomes_the_window_bound(self, tmp_path):
+        """REGRESSION, measured on the real log: a rotation-torn write leaves
+        NUL bytes at the head of a line. Those sort BELOW every real date, so
+        trusting the stamp blanked the reported window and would silently
+        widen any --since filter to 'everything'.
+        """
+        log = self._write_log(tmp_path, [
+            '\x00' * 19 + f' [INFO] x: {cwr.RECORD_MARKER} '
+            '{"bucket": "upstream_identical", "call": 5, "gap_s": 30.0, '
+            '"cache_write": 999999, "cache_read": 0}\n',
+            self._line('2026-07-29 10:00:00'),
+        ])
+        recs = cwr.load_records(log)
+        stamps = [r.get('_ts') for r in recs]
+        assert '' in stamps, 'the malformed stamp must be rejected, not kept'
+        rep = cwr.build_report(recs, 20000, 0.001, 0.0001)
+        assert rep['window_first'] == '2026-07-29 10:00:00', (
+            f'a torn line poisoned the reported window: {rep["window_first"]!r}')
+
+    def test_a_torn_line_is_dropped_when_a_bound_is_given(self, tmp_path):
+        """COMPLEMENT — an undatable record cannot be placed in time, so it must
+        not be silently counted inside a window it may not belong to."""
+        log = self._write_log(tmp_path, [
+            '\x00' * 19 + f' [INFO] x: {cwr.RECORD_MARKER} '
+            '{"bucket": "upstream_identical", "call": 5, "gap_s": 30.0, '
+            '"cache_write": 999999, "cache_read": 0}\n',
+            self._line('2026-07-29 10:00:00'),
+        ])
+        assert len(cwr.load_records(log, '', '2026-07-29 23:00:00')) == 1
+
+    def test_window_bounds_are_reported(self, tmp_path):
+        log = self._write_log(tmp_path, [
+            self._line('2026-07-29 10:00:00'),
+            self._line('2026-07-29 20:00:00'),
+        ])
+        rep = cwr.build_report(cwr.load_records(log), 20000, 0.001, 0.0001)
+        assert rep['window_first'] == '2026-07-29 10:00:00'
+        assert rep['window_last'] == '2026-07-29 20:00:00'

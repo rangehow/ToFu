@@ -19,6 +19,10 @@ logger = get_logger(__name__)
 # without flooding the UI / log file.
 _MCP_STDERR_TAIL_BYTES = 8192
 
+#: Cache for :func:`_mcp_error_types` — None = not yet resolved, () = resolved
+#: but nothing found (the name fallback then carries classification).
+_MCP_ERROR_TYPES: tuple[type, ...] | None = None
+
 
 def _unwrap_exception_group(exc: BaseException) -> BaseException:
     """Return the deepest non-group leaf exception in a (possibly nested)
@@ -79,6 +83,48 @@ def _is_transport_dead_error(exc: BaseException) -> bool:
     return any(n in text for n in needles)
 
 
+def _mcp_error_types() -> tuple[type, ...]:
+    """Resolve the SDK's protocol-error class(es) for ``isinstance`` checks.
+
+    WHY THIS IS NOT A NAME COMPARISON
+    ---------------------------------
+    This used to be ``type(leaf).__name__ in ('TimeoutError', 'McpError')``.
+    That judgement is anchored to a string the UPSTREAM SDK owns: mcp 2.x
+    renamed the class ``McpError`` → ``MCPError`` (acronym consistency), and a
+    name comparison does not fail loudly on a rename — it simply stops matching
+    forever. What it gates is the call-level degraded-health circuit
+    (``MCP_DEGRADED_TIMEOUT_STREAK``), so a silent miss means Tofu goes back to
+    paying a FULL timeout on every call to a stalled server, with nothing in the
+    log to say the gate died.
+
+    Resolved once at import and cached. The tuple may be empty (SDK missing or
+    restructured); callers therefore keep a name-based fallback covering BOTH
+    spellings, so classification degrades rather than disappearing.
+    """
+    global _MCP_ERROR_TYPES
+    if _MCP_ERROR_TYPES is not None:
+        return _MCP_ERROR_TYPES
+    found: list[type] = []
+    try:
+        from mcp.shared import exceptions as _exc
+        for attr in ('McpError', 'MCPError'):
+            cls = getattr(_exc, attr, None)
+            if isinstance(cls, type) and issubclass(cls, BaseException):
+                found.append(cls)
+    except Exception as e:
+        # Never let diagnostics break the caller: an SDK that moved this module
+        # leaves us on the name fallback below, which is exactly the degraded
+        # (not broken) behaviour we want.
+        logger.debug('[MCP] could not resolve SDK error class for isinstance '
+                     'check, falling back to name match: %s', e)
+    _MCP_ERROR_TYPES = tuple(dict.fromkeys(found))
+    if not _MCP_ERROR_TYPES:
+        logger.warning('[MCP] SDK protocol-error class not resolvable '
+                       '(neither McpError nor MCPError) — call-timeout '
+                       'classification is running on the name fallback')
+    return _MCP_ERROR_TYPES
+
+
 def _is_call_timeout_error(exc: BaseException) -> bool:
     """True when ``exc`` is a tool-call timeout (transport read-timeout or the
     outer thread-future timeout), as opposed to a tool-level / transport-dead
@@ -87,13 +133,20 @@ def _is_call_timeout_error(exc: BaseException) -> bool:
     Matches:
       - ``concurrent.futures.TimeoutError`` / ``asyncio.TimeoutError`` /
         builtin ``TimeoutError`` raised by the outer ``future.result(...)``;
-      - mcp's ``McpError`` whose text reports "Timed out while waiting for
-        response" (the read_timeout_seconds path).
+      - the SDK's protocol error (``McpError`` in v1, ``MCPError`` in v2)
+        whose text reports "Timed out while waiting for response" (the
+        ``read_timeout_seconds`` path), matched by ``isinstance`` against the
+        real class rather than by its name — see :func:`_mcp_error_types`.
     """
     leaf = _unwrap_exception_group(exc)
     if isinstance(leaf, (TimeoutError, asyncio.TimeoutError)):
         return True
-    if type(leaf).__name__ in ('TimeoutError', 'McpError'):
+    sdk_types = _mcp_error_types()
+    # Name fallback keeps BOTH spellings so a resolution failure still
+    # classifies; 'TimeoutError' stays because a subclass may not be caught by
+    # the isinstance above when it comes from a different module object.
+    is_protocol_err = (isinstance(leaf, sdk_types) if sdk_types else False)
+    if is_protocol_err or type(leaf).__name__ in ('TimeoutError', 'McpError', 'MCPError'):
         text = (str(leaf) or '').lower()
         if 'timed out while waiting' in text or 'timeout' in text:
             return True

@@ -524,7 +524,10 @@ _CONDA_PYTHON_DEPS = [
     'python-pptx>=0.6.21',
     'lxml>=5.3',
     'lxml_html_clean>=0.4',
-    'mcp>=1.0',
+    # Upper bound is load-bearing — see requirements.txt. This list feeds the
+    # PRE-BOOT installer, so an unbounded spec here installs the breaking 2.x
+    # into Tofu's own interpreter before the app has even started.
+    'mcp>=1.0,<2',
 ]
 
 # Boot-critical packages the conda-forge repair path MUST cover — asserted by

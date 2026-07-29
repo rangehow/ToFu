@@ -90,7 +90,23 @@ python-docx>=1.0
 openpyxl>=3.1
 xlrd>=2.0
 olefile>=0.46
-mcp>=1.0
+# MCP Python SDK. THE UPPER BOUND IS LOAD-BEARING: `pip install mcp` now
+# resolves to 2.x, a breaking rework that lib/mcp/client/_bridge.py cannot
+# speak — `streamablehttp_client` was RENAMED to `streamable_http_client`
+# (ImportError) and yields a 2-tuple where we unpack 3 (ValueError), and model
+# fields moved to snake_case (isError → is_error, inputSchema → input_schema).
+#
+# This bound BUYS TIME FOR A MIGRATION; it is not a resting place. Measured:
+# the v1 line does NOT speak the 2026-07-28 protocol revision (1.29.0's
+# protocol constants stop at 2025-11-25 / 2025-03-26), v1 is a maintenance
+# line, and HTTP+SSE is already inside a 12-month deprecation window. Staying
+# on <2 forever means third-party servers that ship 2026-07-28-only will
+# eventually be unreachable.
+#
+# The FLOOR stays at the version actually deployed (1.27.2 satisfies >=1.0):
+# raising it to 1.28/1.29 would force an unverified upgrade that fixes nothing
+# about this failure mode. Enforced by tests/test_mcp_sdk_pin_bounded.py.
+mcp>=1.0,<2
 # orjson — fast C JSON encoder. REQUIRED (not optional): routes/chat.py's SSE
 # state snapshot serializes the ENTIRE conversation (content+thinking+toolRounds,
 # 10+ MB for long convs). Plain json.dumps holds the GIL for the whole call, so

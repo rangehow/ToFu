@@ -145,6 +145,41 @@ def strip_end_turn_marker(content: str) -> str:
     return out.rstrip()
 
 
+def build_stall_nudge_record(task: dict[str, Any], round_num: int) -> dict:
+    """Build the DISPLAY-ONLY chip record for a nudge that is being injected.
+
+    Returns the sidecar record the sync layer persists onto the settled assistant
+    message as ``_stallNudges`` (and that the frontend rebuilds the in-timeline
+    synthetic row from). Shape mirrors the swarm / peer / steer lanes so the
+    frontend rehydration and the persistence path are the SAME code, not a
+    fourth variant.
+
+    WHY the record carries the trigger provenance and not just a count: this
+    mechanism fires at most ONCE per task and, until now, had fired ZERO times
+    in production. When it finally does fire, "the system re-drove the model"
+    is not a useful thing to read on its own — the user needs to know WHICH tool
+    failed and WHAT the model was told, or the chip is just another opaque
+    status blip. ``prompt`` is the verbatim ``NUDGE_TEXT`` so the panel shows
+    exactly what was sent rather than a paraphrase that can drift from it.
+
+    ``max`` is carried so the UI can state the bound out loud. Without it a
+    reader has no way to know the loop cannot nudge repeatedly, and "the system
+    is re-driving my agent" reads like an unbounded spend risk.
+    """
+    entry = _uncovered_failure(task) or {}
+    results = entry.get('results') or []
+    meta = results[0] if results and isinstance(results[0], dict) else {}
+    return {
+        # 1-based, matching the peer/steer chip convention (round_num + 1).
+        'round': round_num + 1,
+        'tool': (entry.get('toolName') or entry.get('tool') or ''),
+        'failedRound': entry.get('roundNum'),
+        'badge': (meta.get('badge') or ''),
+        'prompt': NUDGE_TEXT,
+        'max': 1,
+    }
+
+
 def _last_tool_round(task: dict[str, Any]) -> dict | None:
     """The most recent tool round, ordered the way the orchestrator appends."""
     ordered = _ordered_rounds(task)

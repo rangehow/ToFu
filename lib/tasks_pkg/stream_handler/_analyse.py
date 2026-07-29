@@ -595,6 +595,24 @@ def analyse_stream_result(
             if _do_nudge:
                 task['_intent_stall_nudge_count'] = _stall_nudges + 1
                 messages.append({'role': 'user', 'content': _stall_text})
+                # DISPLAY-ONLY sidecar accumulation — the in-timeline chip.
+                # Unlike the peer / steer lanes this is emitted AT INJECTION
+                # rather than deferred until the next LLM call confirms
+                # consumption: those lanes defer because an abort must re-route
+                # an undelivered HUMAN message to the durable queue (never
+                # zero, never double). A nudge has no human author and nothing
+                # to salvage — if the turn dies here the nudge is simply moot,
+                # and the fact worth showing ('the system re-drove the model')
+                # is true the moment we append it.
+                from lib.tasks_pkg.stream_handler._intent_stall import (
+                    build_stall_nudge_record as _build_stall_record,
+                )
+                try:
+                    task.setdefault('_stallNudges', []).append(
+                        _build_stall_record(task, round_num))
+                except Exception as _sn_e:  # a chip must never break the loop
+                    logger.warning('[%s] stall-nudge chip record failed: %s',
+                                   tid, _sn_e)
                 logger.info(
                     '[%s] ↻ Intent-stall nudge at round %d: previous tool '
                     'round failed and this round was prose-only with no tool '

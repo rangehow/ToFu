@@ -536,7 +536,7 @@ function _spliceInjectRow(arr, row, anchorLlmRound) {
     for (let i = 0; i < arr.length; i++) {
       const r = arr[i];
       if (r && !r._userSteerInject && !r._peerInject && !r._inboxInject
-          && r.llmRound === anchorLlmRound) { at = i; break; }
+          && !r._stallNudge && r.llmRound === anchorLlmRound) { at = i; break; }
     }
   }
   if (at >= 0) arr.splice(at, 0, row);
@@ -550,7 +550,8 @@ function _rehydrateInjectRows(msg, base) {
   const swarm = Array.isArray(msg._inboxInjects) ? msg._inboxInjects : [];
   const peer = Array.isArray(msg._peerInjects) ? msg._peerInjects : [];
   const steer = Array.isArray(msg._userSteerInjects) ? msg._userSteerInjects : [];
-  if (!swarm.length && !peer.length && !steer.length) return base;
+  const stall = Array.isArray(msg._stallNudges) ? msg._stallNudges : [];
+  if (!swarm.length && !peer.length && !steer.length && !stall.length) return base;
   const out = base.slice();
   const _has = (pred) => out.some(pred);
   for (const s of swarm) {
@@ -591,6 +592,22 @@ function _rehydrateInjectRows(msg, base) {
       steerRound: rnd,
       steerCount: s.count || 0,
       steerPreviews: Array.isArray(s.previews) ? s.previews : [],
+    }, rnd - 1);
+  }
+  for (const s of stall) {
+    const rnd = s.round || 0;
+    if (_has(r => r._stallNudge && r._stallKey === "stall:" + rnd)) continue;
+    _spliceInjectRow(out, {
+      roundNum: 9000000 + out.length,
+      status: "done",
+      _stallNudge: true,
+      _stallKey: "stall:" + rnd,
+      stallRound: rnd,
+      stallTool: s.tool || "",
+      stallFailedRound: s.failedRound,
+      stallBadge: s.badge || "",
+      stallPrompt: s.prompt || "",
+      stallMax: s.max || 1,
     }, rnd - 1);
   }
   return out;

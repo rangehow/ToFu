@@ -45,8 +45,8 @@ from lib.tasks_pkg.manager._persist import (
 logger = get_logger(__name__)
 
 
-# ── Inbox-inject sidecar lanes (swarm / peer / user-steer) ───────────────────
-# The three async-inject lanes each stash a DISPLAY-ONLY record on the task under
+# ── Inbox-inject sidecar lanes (swarm / peer / user-steer / stall-nudge) ─────
+# The four async-inject lanes each stash a DISPLAY-ONLY record on the task under
 # its own underscore key. These are persisted VERBATIM onto the settled assistant
 # message under the SAME key (an underscore field, exactly like
 # ``_relatedConversations`` / ``_memoryPrefetch``). CRITICAL INVARIANT: they must
@@ -59,7 +59,15 @@ logger = get_logger(__name__)
 # fields — so persisting these is provably wire-neutral. The frontend rebuilds
 # the in-timeline inject chip from these at render time; the synthetic row is
 # NEVER written back into the DB ``toolRounds``.
-INBOX_INJECT_SIDECAR_FIELDS = ('_inboxInjects', '_peerInjects', '_userSteerInjects')
+#
+# ``_stallNudges`` is the intent-stall lane. It differs from the other three in
+# WHO authored the injected message: swarm/peer/steer all carry text a human or
+# another agent produced, while the nudge is text the LOOP ITSELF wrote. That is
+# precisely why it needs the same display-only treatment — a system-authored
+# ``role='user'`` message must be legible as a system action, never mistaken for
+# something the user said.
+INBOX_INJECT_SIDECAR_FIELDS = ('_inboxInjects', '_peerInjects',
+                              '_userSteerInjects', '_stallNudges')
 
 
 def _persist_inject_sidecars(task, last_msg):

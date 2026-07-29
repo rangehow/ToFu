@@ -1,6 +1,6 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
-### 2026-07-29(续·面命名空间折叠) — 「key_stats 按面记账、UI 按账户渲染」定案:**合并早已修好源头,真正没修的是磁盘上那份孤儿状态**;共享 HEAD 三方纠缠(兄弟 quota 批一半搭过我的车、我的折叠冒烟提前写真文件)全部按 #26/#15 处理(`pt_782133699c6d4ac1`;commit 待填,5 文件;新套件 **12/12 失败先行**,**NEUTER×4 各咬各的**(9/1/1/9);相邻环 **83/83**)
+### 2026-07-29(续·面命名空间折叠) — 「key_stats 按面记账、UI 按账户渲染」定案:**合并早已修好源头,真正没修的是磁盘上那份孤儿状态**;共享 HEAD 三方纠缠(兄弟 quota 批一半搭过我的车、我的折叠冒烟提前写真文件)全部按 #26/#15 处理(`pt_782133699c6d4ac1`;commit `3e80e413`,5 文件;新套件 **12/12 失败先行**,**NEUTER×4 各咬各的**(9/1/1/9);相邻环 **83/83**)
 
 - **★ 先证伪票面的一半:** 票面说「面熔断对 UI 不可见」要修 UI;实测**账户/面合并(547827e1)落地后的下一次重启,记账就自然回到账户命名空间**(slot.provider_id=账户 id),UI 无需任何改动。真正的剩余缺口是**磁盘上已有的面命名空间条目**:按日熔断(重启即丢,要白烧一个 402/模型才重新学会)与**跨天持久的覆写**(今夜手动开启的两行,重启后变死状态——不生效也不显示)。
 - **★ 落点:加载期折叠,不是 UI 补丁。** `key_stats._load_unlocked` 末尾(及日内滚转分支)把被吸收的面命名空间折进账户:计数器求和、consecutive_429 取 max、exhausted 取或、per-model 熔断取并、空 last_error 继承;覆写仅在账户无值时迁移(**账户的显式决定永远赢**——它是 UI 今天真正读写的命名空间)。映射唯一真源是 `provider_face.account_namespace_map`(charter #24 不许第二份面规则;merge 的锚点选择同步抽成 `_account_anchor` 共用),并覆盖「配置合并尚未持久化」的过渡形态(按 #23 账户同一性判据)——**启动顺序无关**。

@@ -128,11 +128,15 @@ class BootstrapCondaDepsCoverageTest(unittest.TestCase):
     #: and is tracked separately — not a licence to add more. The ratchet below
     #: asserts each exemption is STILL drifting, so a fixed one must be deleted
     #: from this set rather than lingering as dead cover for a future drift.
-    _SPEC_DRIFT_EXEMPT = {
-        # conda '>=5.3' vs requirements '>=4.9'. Pre-existing; unrelated to the
-        # MCP batch that added this guard. Tracked as its own ticket.
-        'lxml',
-    }
+    #:
+    #: Currently EMPTY, and that is the goal state: the only entry it ever had
+    #: (``lxml``: conda ``>=5.3`` vs requirements ``>=4.9``) was fixed by
+    #: aligning requirements.txt to ``>=5.3``, which is the floor our own
+    #: declared dependencies already impose (trafilatura 2.0.0 requires
+    #: ``lxml>=5.3.0``), so the old floor was dead text that only disagreed
+    #: with the other list. Per the ratchet below, the entry HAD to be deleted
+    #: the moment it stopped drifting.
+    _SPEC_DRIFT_EXEMPT: set[str] = set()
 
     def _shared_specs(self):
         """{pkg: (conda_spec, req_spec)} for packages present in BOTH lists."""

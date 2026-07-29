@@ -468,9 +468,13 @@ html[data-rail] .folder-quickadd{display:none}
    tofu 层顺手给了一个;不补的话落影会逃到最近的定位祖先上去。 */
 .welcome-icon{position:relative}
 .welcome-icon::before{
-  content:"";position:absolute;left:50%;bottom:1px;transform:translateX(-50%);
-  width:72%;height:11px;border-radius:50%;display:block;
-  background:radial-gradient(ellipse at 50% 50%,rgba(140,100,52,.24),rgba(140,100,52,0) 70%)
+  /* bottom 取负值：图片盒与图标盒完全重合(实测两者同为 84×84、imgTop=0),
+     落影若留在盒内就贴在贴图下沿、读不出「托住」的感觉;探出盒外才像地面。
+     这要求祖先不能裁切 —— .welcome-icon 本身无 overflow 设置(默认 visible),
+     守卫会按三主题钉住「差分像素必须出现在图标下缘」。 */
+  content:"";position:absolute;left:50%;bottom:-5px;transform:translateX(-50%);
+  width:78%;height:13px;border-radius:50%;display:block;
+  background:radial-gradient(ellipse at 50% 50%,rgba(140,100,52,.34),rgba(140,100,52,0) 72%)
 }
 /* ── 字母配色 — 两处共用同一套渐变。侧栏此前是紫渐变(#8b6cf6→#a78bfa)、欢迎屏是
    豆腐奶油-琥珀金渐变,dark 下实测就是「侧栏紫 Tofu + 欢迎屏金 Tofu」同一品牌两个
@@ -11388,13 +11392,13 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
    ★ 本区域的任何新增覆盖都不得再写几何/字号/倒角 —— 那正是把形态拆成三份、
    切主题就退化的根因;守卫按三主题参数化钉死。 ── */
 [data-theme="dark"] .welcome-icon::before{
-  background:radial-gradient(ellipse at 50% 50%,rgba(255,241,214,.10),rgba(255,241,214,0) 70%)
+  background:radial-gradient(ellipse at 50% 50%,rgba(255,241,214,.18),rgba(255,241,214,0) 72%)
 }
 [data-theme="light"] .welcome h2.tofu-brand small{
   background:linear-gradient(150deg,#9A5716 0%,#7C4210 100%)
 }
 [data-theme="light"] .welcome-icon::before{
-  background:radial-gradient(ellipse at 50% 50%,rgba(120,84,40,.30),rgba(120,84,40,0) 70%)
+  background:radial-gradient(ellipse at 50% 50%,rgba(120,84,40,.38),rgba(120,84,40,0) 72%)
 }
 
 /* ── Mobile breakpoints: tofu 主标恢复全局移动意图 — 42px 是桌面值(上方 0,2,1

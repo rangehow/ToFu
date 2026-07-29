@@ -1,5 +1,26 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·检视面板) — 工具行调试面板收敛为单视图 + **对比度缺陷不在这个面板,在它复用的共享渲染器**(owner「字号偏小、对比度偏低;请求按钮多余,直接只显示结果状态才对」;commit `4fa28c5c`,6 文件 +750/-142;新套件 **13 + 23 探针**,**NEUTER×3 + ×4 各咬各的**,干净 committed worktree **48/48**,真浏览器三主题像素验收 PASS)
+
+- **★ owner 的第二半判断在数据层就是对的,我先去验证了它才动手:** `tool_dispatch/_pipeline.py:857` 的 post-tool 镜像是在**工具结果已追加进同一条 messages 列表之后**拍的(同 roundNum 轴),所以「请求」载荷是「结果状态」的**严格前缀**。两个 tab = 点两次看同一批消息、第二次少了结果。收敛为单视图后**信息零损失**(守卫 `state_view_carries_request_content` 钉死)。
+- **★ 但「只显示结果状态」有一个会静默变成死面板的陷阱,是我查 swarm 侧才发现的:** `lib/swarm/agent.py:50` 的 `_emit_request_snapshot` **只发 kind='request'**,swarm 子代理从不产出 state 镜像。纯 state 面板会让**每一条子代理工具行**都显示「镜像已过期或不存在」。故请求轴保留为 **fallback 而非 tab**:`_riFetchRoundView` 先取镜像、取不到降级取请求,**并把取到的是哪根轴回报给调用方**,由新的 kind chip 在屏幕上写明——降级渲染绝不能被读成镜像。NEUTER-3 专咬这条(摘掉 fallback → 无镜像轮渲染空面板)。
+- **顺带修好一个被 tab 结构掩盖的交互:** 旧的 toggle 判据带 `&& !tab`,而 state 入口**永远传 tab**,所以同轮再点从不收起。单按钮后 toggle 语义唯一(`same_round_toggles_closed` + `other_round_replaces_panel` 两条各钉一个方向)。
+- **★ 对比度的真实根因不在这个面板的任何一条规则里,而在它复用的 `.debug-msg-*` 共享渲染器——角色标签**压根没有** light/tofu 覆盖。** 按各主题真实 `--bg-secondary` 实测:
+
+  | token | light | tofu |
+  |---|---|---|
+  | role-user / -assistant / -tool | 1.67–1.99 | 1.75–2.08 |
+  | debug-str / -num / -null | 3.69–4.26 | 2.75–3.40 |
+  | `.debug-msg-summary`(--text-tertiary) | 3.05 | (dark 3.55) |
+
+  即 tofu 纸底上的 `TOOL` 是 **2.08:1**——画出来了,但不可读。**这与 charter 已记的「同一份数据两套口径」同族,只是这次分叉的是「主题覆盖」:语义色/文字层历次都改过,角色标签从未进入任何一轮,因为它不在任何一张 token 表里。** 三主题按各自色系重挑至 ≥4.5:1(保色相),summary 移出 --text-tertiary,面板正文 10.5 → 11.5px/1.55(**它是被逐字读的 JSON,不是被扫的行列表**)。
+- **★ 本轮最值钱的一条:静态守卫全绿之后,真浏览器抓出了它结构上看不见的缺陷。** 我给面板新加的 kind chip 用了 `var(--accent)`——那是**填充色**(按钮底、1-2px 边框),当文字实测 **3.49 / 3.71 / 3.00:1**。静态守卫为什么没咬:**它只给「已存在的 token」评级,而一个新加元素继承了一个填充色,恰好落在它的输入集合之外**。改 `--ri-kind-ink` 分主题后真浏览器复测 **10.20 / 8.26 / 6.56:1**。随后把守卫扩到面板自身 chrome(含 fallback 态必须与镜像态视觉可分)。**判据:contrast 类守卫的失效点在「扫描面」,而扫描面不会自己报错——加了新的着色元素,必须同时把它加进评级集合。**
+- **量具本身两处缺陷,都是它自己抓出来的:** ①静态守卫的 dark 查找用裸选择器,会**子串命中**同名的 `[data-theme=...]` 规则,于是拿 tofu 的色去压 dark 底报假红——加固定宽度 lookbehind;②真浏览器探针必须**向上找第一个非透明底**再算,直接读元素自身 `backgroundColor` 会拿到 `rgba(0,0,0,0)`。
+- **NEUTER 共 7 发全咬:** 静态 4 发(摘 tofu 角色覆盖 / 还原 2.75:1 的 tofu num / summary 退回 tertiary / 摘面板字号)+ 行为 3 发(摘 kind='state' / 摘 round-scoping / 摘请求 fallback)。每发均确认落盘后再跑,回合结束 `cmp` 复原。
+- **★ 事故自报(两半,第一半是我自己):`cp` 恢复用的备份早于我最后一次编辑,把刚落地的 chip 修复一起冲掉了。** 备份取于 09:06:30,chip ink 改于 ~09:05 之后——`cmp` 报「IDENTICAL」是**相对那个陈旧备份**的一致,不是相对我的工作成果。**判据:NEUTER 的备份必须在每一发之前重新取,不能全程复用一份;`cmp` 通过只证明「回到了备份那一刻」,不证明「没丢东西」。** 第二半:同一时间窗内 `request_inspector.js` / `i18n.js` / p7 测试被回退到 HEAD(我从未 `cp` 过这三个),机制未查明——`git stash` 语义吻合(tracked 回退、我两个 untracked 新测试幸存)但 `stash show` 里没有我的内容,**故只记现象不下结论**。我一度按「兄弟 reset」通报,经对方举证(其 09:12:22 那次带 pathspec、只清 index)**确认我归因错误并已更正**。**判据:通报他人造成损失前,先把 reflog 条目的完整命令读完——带 pathspec 的 reset 不碰工作树。**
+- **归账(charter #15):** styles.css 4 hunk 中 3 个是我的(第 4 个是兄弟 local-control 排版)、i18n.js 4 hunk 中 1 个是我的(其余 11 个键属兄弟)——两文件均走 `git diff > patch` → 按内容标记过滤 → `git apply --cached`;`tool_rounds.js` **完全排除**(工作树里只剩兄弟的 QR 实现,我那条注释已随回退消失,不值得再争)。提交前逐文件核对暂存内容,确认零兄弟内容混入。
+- **验收边界(诚实分账):** ①纯前端,bundle 后台重建自动带,**刷新即生效,无需重启**;②真浏览器验收用的是**复刻 `_riMountToolPanel` 的静态 HTML**(生产 CSS + 生产 markup 形状),不是驱动真实 SSE 流——像素与级联是真的,数据链路未在浏览器里端到端跑;③`tests/_ri_panel_visual_check.py` 是**验收器具不是 pytest 用例**(需浏览器),已在 docstring 写明用法。
+
 ### 2026-07-29(续·扫码显示) — 后端二维码在前端可见:`run_command` 终端二维码「不是丑,是结构上不可扫」根因落地 + `ask_human` 扫码登录闸(新增 `lib/qr.py` 460L;新套件 **41 + 7**,**NEUTER×7 全咬**(其中**一发首版空转,是我自己的断言假**),干净 HEAD worktree **50/50**;wire-parity **2/2 无需重生基线**)
 
 - **需求:** owner「后端生成二维码,前端怎么看见?比如要我扫码登录某个东西」+ 追加「希望 `run command` 的结果里也能显示二维码」。

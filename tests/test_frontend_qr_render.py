@@ -31,8 +31,26 @@ pytestmark = pytest.mark.unit
 
 ROOT = Path(__file__).resolve().parent.parent
 TOOL_ROUNDS = ROOT / 'static' / 'js' / 'ui' / 'tool_rounds.js'
+I18N = ROOT / 'static' / 'js' / 'i18n.js'
 
 _URI = 'data:image/png;base64,QQQQ'
+
+
+def _i18n_dict() -> dict:
+    """Scrape ``static/js/i18n.js`` into ``{key: {zh, en}}``.
+
+    Parsing the REAL file (instead of hand-listing keys in the test) is what
+    makes the harness honest: a key absent from production is absent here too,
+    so ``t()`` returns the bare key in BOTH places and the guard can see it.
+    """
+    import re
+    src = I18N.read_text(encoding='utf-8')
+    pat = re.compile(
+        r"""^[ \t]*'([\w.\-]+)':\s*\{\s*zh:\s*(['"])(.*?)\2\s*,"""
+        r"""\s*en:\s*(['"])(.*?)\4""",
+        re.MULTILINE)
+    return {m.group(1): {'zh': m.group(3), 'en': m.group(5)}
+            for m in pat.finditer(src)}
 
 
 def _render(round_obj: dict) -> str:
@@ -43,7 +61,29 @@ def _render(round_obj: dict) -> str:
         global.escapeHtml = (s) => String(s == null ? '' : s)
           .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
           .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-        global.t = (k, d) => (d || k);
+        // ★ t() is driven by the REAL dictionary (injected as argv[3] JSON),
+        // not a fallback-inventing fake.
+        //
+        // Production signature is t(key, params), where params is a
+        // {placeholder} substitution map — NOT a default string. A harness
+        // written as `(k, d) => (d || k)` INVERTS that: it manufactures prose
+        // the real UI never produces, so a MISSING key looks fine in tests and
+        // ships to users as the raw key ("project.qrScan"). That exact blind
+        // spot let two undefined keys reach production while 11 render guards
+        // stayed green. Here a missing key returns the key, as production does.
+        const _dict = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
+        global.t = (key, params) => {
+          const e = _dict[key];
+          let text = e && e.en != null ? e.en : key;   // missing → the KEY
+          if (params) {
+            for (const k in params) {
+              if (Object.prototype.hasOwnProperty.call(params, k)) {
+                text = text.split('{' + k + '}').join(params[k]);
+              }
+            }
+          }
+          return text;
+        };
         global.Icon = (n, s) => '<ICON>';
         global.renderMarkdown = (s) => s;
         global._shortUrl = (u) => u;
@@ -62,10 +102,18 @@ def _render(round_obj: dict) -> str:
         process.stdout.write(_renderUnifiedToolLine(round, isSearching));
         process.exit(0);
     ''')
-    proc = subprocess.run(
-        ['node', '-e', harness, '--', str(TOOL_ROUNDS), json.dumps(round_obj)],
-        capture_output=True, text=True, timeout=60,
-    )
+    import tempfile
+    with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False) as fh:
+        json.dump(_i18n_dict(), fh)
+        dict_path = fh.name
+    try:
+        proc = subprocess.run(
+            ['node', '-e', harness, '--', str(TOOL_ROUNDS),
+             json.dumps(round_obj), dict_path],
+            capture_output=True, text=True, timeout=60,
+        )
+    finally:
+        os.unlink(dict_path)
     if proc.returncode != 0:
         raise AssertionError(f'render harness failed:\n{proc.stderr[:2000]}')
     return proc.stdout
@@ -89,6 +137,62 @@ def _running_round(**round_extra) -> dict:
          'results': []}
     r.update(round_extra)
     return r
+
+
+class TestQrLabelIsTranslated:
+    """The label above the code must be PROSE, never a raw i18n key.
+
+    This class exists because the first shipped version rendered the literal
+    string ``project.qrScan`` to users. Two mistakes compounded:
+
+    * ``t()``'s second argument is a ``{placeholder}`` params map, NOT a
+      default string, so ``t('project.qrScan', 'Scannable QR code')`` supplied
+      no fallback — it silently did nothing, and the key was never defined.
+    * The harness faked ``t`` as ``(k, d) => (d || k)``, INVERTING that
+      semantic and manufacturing prose the real UI never produced. Eleven
+      render guards passed against a function that does not exist.
+
+    The harness now reads the real dictionary, so these fail when the keys go
+    missing — which is exactly the state that shipped.
+    """
+
+    def test_single_code_label_is_real_prose(self):
+        html = _render(_cmd_round(qrImages=[
+            {'uri': _URI, 'format': 'png', 'filename': 'qr.png'}]))
+        assert 'project.qrScan' not in html, (
+            'the raw i18n key leaked into the UI — the key is undefined in '
+            'static/js/i18n.js (t() takes params, not a fallback string)'
+        )
+        assert 'Scannable QR code' in html
+
+    def test_multi_code_label_is_real_prose(self):
+        html = _render(_cmd_round(qrImages=[
+            {'uri': _URI, 'format': 'png', 'filename': 'qr.png'},
+            {'uri': 'data:image/png;base64,WWWW', 'format': 'png',
+             'filename': 'qr-2.png'}]))
+        assert 'project.qrScanMulti' not in html
+        assert 'scannable QR codes' in html
+
+    def test_label_never_looks_like_an_undefined_key(self):
+        """Generic net for FUTURE labels added to this component: the rendered
+        label must never be a bare ``namespace.camelCase`` token."""
+        import re
+        html = _render(_cmd_round(qrImages=[
+            {'uri': _URI, 'format': 'png', 'filename': 'qr.png'}]))
+        m = re.search(r'ptool-qr-label">([^<]*)<', html)
+        assert m, 'label element missing'
+        text = m.group(1).strip()
+        assert not re.fullmatch(r'\d*\s*\w+\.[a-z][A-Za-z0-9]*', text), (
+            f'label looks like an undefined i18n key: {text!r}')
+
+    def test_harness_really_loaded_the_dictionary(self):
+        """Guard the guard: if the scrape returned nothing, every key would
+        look missing and the assertions above would compare key-against-key.
+        A non-trivial dictionary with our keys present proves it parsed."""
+        d = _i18n_dict()
+        assert len(d) > 500, f'dictionary scrape looks broken: {len(d)} keys'
+        assert d.get('project.qrScan', {}).get('zh')
+        assert d.get('project.qrScanMulti', {}).get('en')
 
 
 class TestQrRendersWhileCommandStillRunning:

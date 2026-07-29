@@ -2797,6 +2797,8 @@ var _i18n = {
   // ── Scannable QR recovered from terminal output (tool_rounds.js
   //    _renderQrStrip). Shown above the code while a scan-to-login command
   //    is still blocking for the scan. ──
+  'project.qrScan': { zh: '可扫描的二维码', en: 'Scannable QR code' },
+  'project.qrScanMulti': { zh: '个可扫描的二维码', en: 'scannable QR codes' },
   // ── Message action bar (chat_render.js .message-actions) ──
   'msgAction.copy': { zh: '复制', en: 'Copy' },
   'msgAction.copyTitle': { zh: '复制', en: 'Copy' },

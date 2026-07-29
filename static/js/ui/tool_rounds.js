@@ -2278,9 +2278,12 @@ function _renderQrStrip(meta) {
                   onclick="event.stopPropagation();_openImageFullscreen(this.src)" />
            </figure>`;
   }).join("");
+  // NOTE: t()'s second argument is a PARAMS map for {placeholder} substitution,
+  // NOT a fallback string — passing prose there does nothing and the raw key
+  // ("project.qrScan") is what reaches the user when the key is undefined.
   const label = qrs.length > 1
-    ? `${qrs.length} ${escapeHtml(t("project.qrScanMulti", "scannable QR codes"))}`
-    : escapeHtml(t("project.qrScan", "Scannable QR code"));
+    ? `${qrs.length} ${escapeHtml(t("project.qrScanMulti"))}`
+    : escapeHtml(t("project.qrScan"));
   return `<div class="ptool-qr-strip">
            <div class="ptool-qr-label">${label}</div>
            <div class="ptool-qr-grid">${tiles}</div>

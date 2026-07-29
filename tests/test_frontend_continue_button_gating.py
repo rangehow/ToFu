@@ -90,10 +90,28 @@ const _TS_CLEAN_FINISH_REASONS = new Set(eval(cleanM[1]));
 function turnFinishedClean(finishReason) {
   return _TS_CLEAN_FINISH_REASONS.has(finishReason);
 }
-// The shipped gate also requires isLastAssistant; we hold that true here and
-// vary only the finish reason.
+// The shipped gate requires BOTH position+liveness (isLastAssistant) AND the
+// settlement verdict. `isLastAssistant` is NOT hardcoded: pinning it to a
+// constant `true` made this file structurally blind to the liveness half of the
+// gate (pt_ae8777b4eee04ef1 — a turn still being generated rendered Continue).
+// So drive the REAL predicate: a settled conv (no live stream, no task pin, no
+// authoritative busy set) on the tail assistant message.
+function isLastAssistantFor(conv, idx) {
+  // Mirrors chat_render.js: tail position AND the turn is not in flight.
+  const inFlight = !!(conv
+    && idx === conv.messages.length - 1
+    && (activeStreams.has(conv.id) || conv.activeTaskId
+        || (conv._authoritativeActiveTaskIds
+            && conv._authoritativeActiveTaskIds.size > 0)));
+  return !!(conv && idx === conv.messages.length - 1 && !inFlight);
+}
+const activeStreams = new Map();
+const _settledConv = {
+  id: 'convA', activeTaskId: null,
+  messages: [{ role: 'user' }, { role: 'assistant' }],
+};
 function showsContinue(finishReason) {
-  const isLastAssistant = true;
+  const isLastAssistant = isLastAssistantFor(_settledConv, 1);
   const _turnFinishedClean = turnFinishedClean(finishReason);
   return isLastAssistant && !_turnFinishedClean;
 }
@@ -148,7 +166,9 @@ def test_neuter_position_only_gate_shows_on_clean(tmp_path):
     neutered_harness = _HARNESS.replace(
         'return isLastAssistant && !_turnFinishedClean;',
         'return isLastAssistant;  // NEUTER: position-only gate')
-    assert neutered_harness != _HARNESS
+    assert neutered_harness != _HARNESS, (
+        'NEUTER substitution did not apply — the gate expression in _HARNESS '
+        'changed shape; update this replacement.')
     harness = tmp_path / '_continue_gate_neutered.js'
     harness.write_text(neutered_harness, encoding='utf-8')
     proc = subprocess.run(['node', str(harness), SETTLEMENT_JS],

@@ -204,6 +204,7 @@ interface Window {
   _connToast: any;
   _connToastState: any;
   _contextPolicy: any;
+  _convTurnInFlight: any;
   _currentUserId: any;
   _cvOnLanguageChange: any;
   _deriveChatModeFromFlags: any;
@@ -216,6 +217,7 @@ interface Window {
   _hashStr: any;
   _isBootLoadHeld: any;
   _isErrorOnlyAssistant: any;
+  _isTurnInFlight: any;
   _kickAutopilot: any;
   _lcBrowserDownload: any;
   _lcBrowserSetupState: any;

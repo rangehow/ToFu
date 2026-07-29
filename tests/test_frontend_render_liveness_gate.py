@@ -67,6 +67,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, '..'))
 CHAT_RENDER_JS = os.path.join(ROOT, 'static', 'js', 'ui', 'chat_render.js')
 SETTLEMENT_JS = os.path.join(ROOT, 'static', 'js', 'core', 'turn_settlement.js')
+REDUCER_JS = os.path.join(ROOT, 'static', 'js', 'core', 'conv_state_reducer.js')
 STYLES_CSS = os.path.join(ROOT, 'static', 'styles.css')
 
 
@@ -83,22 +84,46 @@ def _read(path: str) -> str:
         return f.read()
 
 
+def _scan_source(path: str) -> str:
+    """Read a source file with comments STRIPPED.
+
+    Project rule (charter #24): a guard that scans source text must strip
+    comments first and must not carry a second hand-written implementation of
+    the stripper — prefer the shared tests/_source_scan.py helper, falling back
+    to a local regex only where it is unavailable.
+    """
+    src = _read(path)
+    try:
+        from _source_scan import strip_comments  # type: ignore
+        return strip_comments(src)
+    except Exception:
+        scan = re.sub(r'/\*.*?\*/', '', src, flags=re.S)
+        return re.sub(r'^\s*//.*$', '', scan, flags=re.M)
+
+
 # ── The harness ───────────────────────────────────────────────────────────
-# Loads the REAL turn_settlement.js, then evaluates the liveness gate the way
-# renderMessage does. `isLastAssistant` is NOT hardcoded here — that is exactly
-# the flaw in tests/test_frontend_continue_button_gating.py:96, which pins it to
-# a constant `true` and therefore cannot see this defect at all.
+# Loads the REAL turn_settlement.js + the REAL conv_state_reducer.js, then
+# extracts the SHIPPED liveness predicates out of chat_render.js and evaluates
+# the gate exactly as renderMessage does.
+#
+# Nothing here is a hand-typed copy of a predicate: `_convTurnInFlight` /
+# `_isTurnInFlight` are sliced out of the shipped source, and the gate
+# expressions are rebuilt from those same functions. A guard that retypes the
+# logic it guards can only ever prove the copy is self-consistent — and this
+# whole defect family came from predicates drifting apart.
+#
+# `isLastAssistant` is deliberately NOT hardcoded — that is the flaw in
+# tests/test_frontend_continue_button_gating.py, which pinned it to a constant
+# `true` and was therefore structurally blind to the liveness half of the gate.
 _HARNESS = r"""
 const fs = require('fs');
 const settlementSrc = fs.readFileSync(process.argv[2], 'utf8');
-const scenario = JSON.parse(process.argv[3]);
+const reducerSrc = fs.readFileSync(process.argv[3], 'utf8');
+const renderSrc = fs.readFileSync(process.argv[4], 'utf8');
+const scenario = JSON.parse(process.argv[5]);
 
-global.window = {};
-(0, eval)(settlementSrc);
-const computeTurnSettlement = window.computeTurnSettlement;
-const continueButtonForSettlement = window.continueButtonForSettlement;
-
-// ── Reconstruct the render-time world ────────────────────────────────────
+// ── Reconstruct the render-time world FIRST (the shipped predicates close
+//    over `activeStreams` / `computeConvBusy` at call time). ──
 const conv = {
   id: 'convA',
   activeTaskId: scenario.activeTaskId,          // null | '<taskId>'
@@ -109,13 +134,43 @@ const msg = conv.messages[idx];
 const isUser = (msg.role === 'user' || msg.role === 'optimizer');
 
 // activeStreams: EMPTY in the live-carrier scenario (SSE down / poll-only lane).
-const activeStreams = new Map();
-for (const k of (scenario.activeStreamKeys || [])) activeStreams.set(k, {});
+global.activeStreams = new Map();
+for (const k of (scenario.activeStreamKeys || [])) global.activeStreams.set(k, {});
+if (scenario.authoritativeTaskIds) {
+  conv._authoritativeActiveTaskIds = new Set(scenario.authoritativeTaskIds);
+}
+global.window = {};
+global.getActiveConv = () => conv;
+
+// The REAL settlement verdict + the REAL busy union.
+(0, eval)(settlementSrc);
+const computeTurnSettlement = window.computeTurnSettlement;
+const continueButtonForSettlement = window.continueButtonForSettlement;
+(0, eval)(reducerSrc);
+if (typeof computeConvBusy === 'undefined' && window.computeConvBusy) {
+  global.computeConvBusy = window.computeConvBusy;
+}
+
+/* Slice the SHIPPED liveness predicates out of chat_render.js by brace
+ * matching — never a retyped copy. */
+function sliceFn(src, name) {
+  const i = src.indexOf('function ' + name + '(');
+  if (i < 0) throw new Error('predicate not found in chat_render.js: ' + name);
+  let depth = 0;
+  const open = src.indexOf('{', i);
+  for (let k = open; k < src.length; k++) {
+    if (src[k] === '{') depth++;
+    else if (src[k] === '}') { depth--; if (depth === 0) return src.slice(i, k + 1); }
+  }
+  throw new Error('unbalanced braces for ' + name);
+}
+(0, eval)(sliceFn(renderSrc, '_convTurnInFlight'));
+(0, eval)(sliceFn(renderSrc, '_isTurnInFlight'));
 
 /* ── The gate under test ────────────────────────────────────────────────
- * `GATE_SRC` is spliced in by the python side: either the expression pulled
- * verbatim out of the shipped chat_render.js, or a NEUTER variant. It must
- * define `isLastAssistant`, `canDelete` and `_isLiveTail`. */
+ * `GATE_SRC` is spliced in by the python side: either the shipped gate (built
+ * from the predicates above) or a NEUTER variant. It must define
+ * `isLastAssistant`, `canDelete` and `_isLiveTail`. */
 // >>>GATE<<<
 
 const _tsVerdict = computeTurnSettlement(msg, msg.model || null);
@@ -124,8 +179,11 @@ const _tsBtn = continueButtonForSettlement(_tsVerdict);
 const showsContinue = !!(isLastAssistant && _tsBtn.show);
 const showsDelete = !!canDelete;
 /* `_turnFailed` promotes the bar from an opacity:0 hover-reveal to always
- * visible (styles.css `.message.turn-failed .message-actions{opacity:1}`). */
-const _turnFailed = !isUser && (!!msg.error || msg.finishReason === 'interrupted');
+ * visible (styles.css `.message.turn-failed .message-actions{opacity:1}`).
+ * Shipped form excludes an in-flight turn — see chat_render.js. */
+const _turnFailed = !isUser
+  && (!!msg.error || msg.finishReason === 'interrupted')
+  && !_isTurnInFlight(conv, idx);
 
 console.log(JSON.stringify({
   outcome: _tsVerdict ? _tsVerdict.outcome : null,
@@ -141,18 +199,25 @@ console.log(JSON.stringify({
 }));
 """
 
-# The gate as SHIPPED today, lifted from chat_render.js:1718/1780/1810.
-# Kept as a literal so a NEUTER can mutate exactly one clause; the structural
-# test below proves it still matches the real source.
+# The gate as SHIPPED — expressed through the sliced predicates, so this stays
+# byte-faithful to chat_render.js without retyping the liveness logic.
 _GATE_SHIPPED = """
+const _isLiveTail = _isTurnInFlight(conv, idx);
+const isLastAssistant =
+  !isUser && conv && idx === conv.messages.length - 1
+  && !_isTurnInFlight(conv, idx);
+const canDelete = conv && !_convTurnInFlight(conv);
+"""
+
+# The PRE-FIX gate: position + this tab's activeStreams only. Used as the NEUTER
+# to prove these tests actually measure the liveness dimension.
+_GATE_POSITION_ONLY = """
 const _isLiveTail = !!(conv
   && idx === conv.messages.length - 1
   && (activeStreams.has(conv.id) || conv.activeTaskId));
 const isLastAssistant =
-  !isUser &&
-  conv &&
-  idx === conv.messages.length - 1 &&
-  !activeStreams.has(conv.id);
+  !isUser && conv && idx === conv.messages.length - 1
+  && !activeStreams.has(conv.id);
 const canDelete = conv && !activeStreams.has(conv.id) && !conv.activeTaskId;
 """
 
@@ -166,7 +231,8 @@ def _run(scenario: dict, gate: str = _GATE_SHIPPED) -> dict:
         path = fh.name
     try:
         proc = subprocess.run(
-            ['node', path, SETTLEMENT_JS, json.dumps(scenario)],
+            ['node', path, SETTLEMENT_JS, REDUCER_JS, CHAT_RENDER_JS,
+             json.dumps(scenario)],
             capture_output=True, text=True, timeout=60)
         assert proc.returncode == 0, f'node failed: {proc.stderr}\n{proc.stdout}'
         return json.loads(proc.stdout.strip().splitlines()[-1])
@@ -236,24 +302,33 @@ def test_premise_missing_finish_reason_reads_resumable():
 
 
 def test_premise_shipped_gate_matches_the_literal_under_test():
-    """PREMISE: the gate literal in this file is still what chat_render.js ships.
+    """PREMISE: all four gates in chat_render.js derive from the ONE shared
+    liveness predicate, and the harness can slice that predicate out.
 
     Comments are stripped first (project rule: a source-scanning guard must not
     be satisfiable by a comment) via the shared helper when available.
     """
-    src = _read(CHAT_RENDER_JS)
-    try:
-        from _source_scan import strip_comments  # type: ignore
-        scan = strip_comments(src)
-    except Exception:
-        scan = re.sub(r'/\*.*?\*/', '', src, flags=re.S)
-        scan = re.sub(r'^\s*//.*$', '', scan, flags=re.M)
-    assert '!activeStreams.has(conv_.id);' in scan.replace(' \n', '\n'), (
-        'The shipped isLastAssistant no longer ends on a bare '
-        '!activeStreams.has(...) — update the gate literal in this guard.')
-    assert 'const canDelete = conv_ && !activeStreams.has(conv_.id) ' \
-           '&& !conv_.activeTaskId;' in scan, (
-        'The shipped canDelete changed shape — update the gate literal.')
+    scan = _scan_source(CHAT_RENDER_JS)
+    assert 'function _convTurnInFlight(' in scan, (
+        'the shared conversation-liveness predicate _convTurnInFlight is gone '
+        '— the four gates have no single source to derive from.')
+    assert 'function _isTurnInFlight(' in scan, (
+        'the shared tail-liveness predicate _isTurnInFlight is gone.')
+    # It must delegate to the reducer's union, not grow a fifth private copy.
+    m = re.search(r'function _convTurnInFlight\(conv\)\s*\{(.*?)\n\}', scan,
+                  flags=re.S)
+    assert m and 'computeConvBusy' in m.group(1), (
+        '_convTurnInFlight no longer delegates to computeConvBusy — the render '
+        'gate and the composer Stop button can drift apart again.')
+    # And every one of the four consumers must read it.
+    for decl in ('const _isLiveTail', 'const isLastAssistant',
+                 'const canDelete', 'const _turnFailed'):
+        mm = re.search(re.escape(decl) + r'\s*=(.*?);', scan, flags=re.S)
+        assert mm, f'{decl} not found in chat_render.js'
+        expr = mm.group(1)
+        assert ('_isTurnInFlight' in expr or '_convTurnInFlight' in expr), (
+            f'{decl} does not derive from the shared liveness predicate '
+            f'— got: {expr.strip()!r}')
 
 
 # ── FAILING-FIRST: the defect ─────────────────────────────────────────────
@@ -301,13 +376,7 @@ def test_source_gate_reads_liveness():
     it accepts either the shared helper or a direct activeTaskId read, but NOT
     the current activeStreams-only form.
     """
-    src = _read(CHAT_RENDER_JS)
-    try:
-        from _source_scan import strip_comments  # type: ignore
-        scan = strip_comments(src)
-    except Exception:
-        scan = re.sub(r'/\*.*?\*/', '', src, flags=re.S)
-        scan = re.sub(r'^\s*//.*$', '', scan, flags=re.M)
+    scan = _scan_source(CHAT_RENDER_JS)
     m = re.search(r'const isLastAssistant\s*=(.*?);', scan, flags=re.S)
     assert m, 'isLastAssistant declaration not found in chat_render.js'
     expr = m.group(1)
@@ -328,13 +397,7 @@ def test_turn_failed_force_reveal_excludes_in_flight():
     ALWAYS VISIBLE. A turn that is still in flight but already carries a stamped
     `interrupted` (what the stale-pin sweep does) must NOT get that promotion —
     otherwise the bar is permanently on screen under live work."""
-    src = _read(CHAT_RENDER_JS)
-    try:
-        from _source_scan import strip_comments  # type: ignore
-        scan = strip_comments(src)
-    except Exception:
-        scan = re.sub(r'/\*.*?\*/', '', src, flags=re.S)
-        scan = re.sub(r'^\s*//.*$', '', scan, flags=re.M)
+    scan = _scan_source(CHAT_RENDER_JS)
     m = re.search(r'const _turnFailed\s*=(.*?);', scan, flags=re.S)
     assert m, '_turnFailed declaration not found in chat_render.js'
     expr = m.group(1)
@@ -378,11 +441,14 @@ def test_neuter_position_only_gate_leaks_continue():
     """NEUTER: with the gate reduced to today's activeStreams-only form, the
     in-flight scenario MUST leak Continue. If it does not, this guard is not
     actually measuring the liveness dimension."""
-    r = _run(_live_tail_scenario(), gate=_GATE_SHIPPED)
+    r = _run(_live_tail_scenario(), gate=_GATE_POSITION_ONLY)
     assert r['showsContinue'] is True, (
         'NEUTER did not bite: the activeStreams-only gate did NOT leak the '
         'Continue button on an in-flight turn, so these tests do not '
         f'discriminate liveness. got {r!r}')
+    assert r['isLiveTail'] and r['isLastAssistant'], (
+        'NEUTER did not reproduce the self-contradiction the fix removed. '
+        f'got {r!r}')
 
 
 @requires_node

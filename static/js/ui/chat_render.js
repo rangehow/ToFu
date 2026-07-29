@@ -211,7 +211,67 @@ function _hashStr(s) {
 function _convActionGate() {
   const conv = (typeof getActiveConv === 'function') ? getActiveConv() : null;
   if (!conv) return '';
-  return (activeStreams.has(conv.id) || conv.activeTaskId) ? 'B' : 'I';
+  return _convTurnInFlight(conv) ? 'B' : 'I';
+}
+
+/* ── THE liveness predicate for a conversation (pt_ae8777b4eee04ef1) ───────
+ * "Is this conversation still producing a turn?" — ONE answer, four consumers.
+ *
+ * WHY THIS EXISTS. renderMessage used to answer that question FOUR separate
+ * times, and they disagreed:
+ *     _isLiveTail     = activeStreams.has || conv.activeTaskId     (read the pin)
+ *     isLastAssistant = !activeStreams.has                         (did NOT)
+ *     canDelete       = !activeStreams.has && !conv.activeTaskId   (read the pin)
+ *     _turnFailed     = error || finishReason === 'interrupted'    (no liveness)
+ * With the SSE down but the conv still pinned to a running task — a cold attach
+ * to an autopilot VU carrier, a socket-down window, the poll-only lane — the
+ * first said IN FLIGHT (and correctly suppressed the finish bar) while the
+ * second said SETTLED, IN THE SAME RENDER PASS. The action bar and the Continue
+ * button then rendered under a turn the backend was still generating.
+ *
+ * The second half of that defect is the settlement verdict: the backend
+ * deliberately WITHHOLDS finishReason mid-stream, and computeTurnSettlement
+ * maps a MISSING reason to `interrupted` / resume:'checkpoint' (fail-open,
+ * which is right for a legacy or historical turn). So "no finishReason yet"
+ * reads as "interrupted and resumable" — correct ONLY once you know the turn
+ * has actually stopped. Liveness is that missing dimension; it can never be
+ * inferred from the absence of finishReason.
+ *
+ * SINGLE SOURCE. Delegates to core/conv_state_reducer.js `computeConvBusy`,
+ * the SAME union the composer's Stop button reads through convIsBusy
+ * (ui/send_button.js → ui/conversation_list.js). That is deliberate: the Stop
+ * button and the action bar answer the same question, so they must not be able
+ * to diverge again. computeConvBusy unions THREE sources — this tab's
+ * activeStreams, the optimistic `conv.activeTaskId` pin, and the
+ * server-authoritative `conv._authoritativeActiveTaskIds` (which INCLUDES VU
+ * carriers behind the `#vu` marker, the only way the poll lane can see a live
+ * autopilot turn) — plus the branch-stream key-prefix scan.
+ *
+ * Load order is pinned: core/conv_state_reducer.js is bundled before
+ * ui/chat_render.js (lib/js_bundler.py _BUNDLE_FILES). The inline fallback is a
+ * build-order canary for degenerate/partial bundles only — it must stay a
+ * strict subset of computeConvBusy, never a second opinion. */
+function _convTurnInFlight(conv) {
+  if (!conv) return false;
+  if (typeof computeConvBusy === 'function') {
+    return !!computeConvBusy(conv, activeStreams);
+  }
+  return !!(activeStreams.has(conv.id) || conv.activeTaskId
+    || (conv._authoritativeActiveTaskIds
+        && conv._authoritativeActiveTaskIds.size > 0));
+}
+
+/* Is the message at `idx` the TAIL of a conversation that is still working?
+ * The tail is the only message a live turn can be writing into, so every
+ * "has this turn settled?" gate in renderMessage is this one predicate. */
+function _isTurnInFlight(conv, idx) {
+  if (!conv || !Array.isArray(conv.messages)) return false;
+  if (idx !== conv.messages.length - 1) return false;
+  return _convTurnInFlight(conv);
+}
+if (typeof window !== "undefined") {
+  window._convTurnInFlight = _convTurnInFlight;
+  window._isTurnInFlight = _isTurnInFlight;
 }
 
 function _msgFingerprint(msg) {
@@ -1712,12 +1772,10 @@ function renderMessage(msg, idx) {
   if (!isUser) {
     /* Is this the still-running tail? The backend withholds finishReason/
      * usage mid-stream, so a model-only assistant message that is the last
-     * message of a conv with a live stream / active task is in progress —
-     * suppress its premature finish bar (see renderFinishInfo). */
+     * message of a conv still working is in progress — suppress its premature
+     * finish bar (see renderFinishInfo). Consumer #1 of _isTurnInFlight. */
     const _lvConv = getActiveConv();
-    const _isLiveTail = !!(_lvConv
-      && idx === _lvConv.messages.length - 1
-      && (activeStreams.has(_lvConv.id) || _lvConv.activeTaskId));
+    const _isLiveTail = _isTurnInFlight(_lvConv, idx);
     body += renderFinishInfo(msg, _isLiveTail);
   }
   const idAttr = typeof idx === "number" ? ` id="msg-${idx}"` : "";
@@ -1776,12 +1834,22 @@ function renderMessage(msg, idx) {
      *                  continueAssistant, which re-verifies against the
      *                  server's authoritative checkpoint scan and handles the
      *                  fallback. A missing finishReason (legacy / unknown)
-     *                  keeps the recovery path open exactly as before. */
+     *                  keeps the recovery path open exactly as before.
+     *
+     *   ★ LIVENESS (pt_ae8777b4eee04ef1). The verdict answers "how could this
+     *   turn be resumed", NEVER "has it stopped" — the backend withholds
+     *   finishReason mid-stream, so a turn that is still being generated
+     *   verdicts as interrupted/checkpoint and would offer Continue. This gate
+     *   therefore requires the turn to be OUT OF FLIGHT, via the same shared
+     *   predicate _isLiveTail and canDelete use (and the same union the
+     *   composer's Stop button reads). It used to be `!activeStreams.has(id)`,
+     *   which is only THIS TAB's SSE — so a cold-attached VU carrier or a
+     *   socket-down window rendered a live turn as settled. */
     const isLastAssistant =
       !isUser &&
       conv_ &&
       idx === conv_.messages.length - 1 &&
-      !activeStreams.has(conv_.id);
+      !_isTurnInFlight(conv_, idx);
     const _tsVerdict = (typeof computeTurnSettlement === 'function')
       ? computeTurnSettlement(msg, msg.model || (typeof serverModel !== 'undefined' ? serverModel : null))
       : null;
@@ -1807,7 +1875,10 @@ function renderMessage(msg, idx) {
     const exportImgH = !isUser
       ? `<button class="msg-action-btn msg-export-img-btn" onclick="event.stopPropagation();ExportImages.exportMessageWithPreview(_msgElIndex(this))" title="${escapeHtml(_mt('msgAction.exportTitle', 'Export as phone-screen images'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg> ${escapeHtml(_mt('msgAction.export', 'Export'))}</button>`
       : "";
-    const canDelete = conv_ && !activeStreams.has(conv_.id) && !conv_.activeTaskId;
+    /* Consumer #3: deleting a turn the backend is still writing would race the
+     * stream. Same shared predicate — but conversation-wide, not tail-only:
+     * NO message may be deleted while the conv is working. */
+    const canDelete = conv_ && !_convTurnInFlight(conv_);
     const deleteH = canDelete
       ? `<button class="msg-action-btn msg-delete-btn" onclick="event.stopPropagation();deleteTurn(_msgElIndex(this))" title="${escapeHtml(isUser ? _mt('msgAction.deleteTurnTitle', 'Delete this turn') : _mt('msgAction.deleteMsgTitle', 'Delete this message'))}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>`
       : "";
@@ -1947,8 +2018,21 @@ function renderMessage(msg, idx) {
    *   error envelope or a finishReason=interrupted, so the bottom-anchored
    *   Continue is always discoverable on precisely the turn that needs it.
    *   Scoped to assistant-lane turns; a settled/successful turn keeps the
-   *   quiet hover-reveal. */
-  const _turnFailed = !isUser && (!!msg.error || msg.finishReason === 'interrupted');
+   *   quiet hover-reveal.
+   *
+   *   ★ LIVENESS (pt_ae8777b4eee04ef1) — consumer #4 of _isTurnInFlight. A
+   *   turn can carry a stamped `interrupted` WHILE STILL RUNNING: the
+   *   client-side stale-pin sweep stamps it whenever its liveness source
+   *   cannot see the live task (a VU carrier is excluded from
+   *   /api/v1/chat/active by design). Without this exclusion that stamp
+   *   promotes the bar from a quiet hover-reveal to PERMANENTLY VISIBLE
+   *   underneath work the backend is still doing — which is how the reported
+   *   symptom read as "the action bar has already appeared" rather than
+   *   "appears on hover". A live turn keeps the quiet treatment; the reveal
+   *   applies once it has actually stopped. */
+  const _turnFailed = !isUser
+    && (!!msg.error || msg.finishReason === 'interrupted')
+    && !_isTurnInFlight(getActiveConv(), idx);
   const _failedCls = _turnFailed ? ' turn-failed' : '';
   /* Queued-pending: a cross-device queued user message that has landed in the
    *   body but is NOT yet dispatched (its turn runs after the current one

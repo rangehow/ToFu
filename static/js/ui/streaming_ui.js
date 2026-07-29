@@ -473,7 +473,22 @@ function updateStreamingUI(msg) {
     _phaseHtml = `<div class="stream-phase"><span class="stream-phase-text">${escapeHtml(_txt)}</span><span class="stream-phase-dots"><span>.</span><span>.</span><span>.</span></span></div>`;
   } else if (phase && phase.phase === "retrying") {
     const _txt = _phaseDetailText(phase) || t('stream.phase.retrying');
-    _phaseKey = "retry:" + (phase.attempt || 0);
+    /* ★ Key on the RESOLVED TEXT, not on `attempt` alone (layer 2 of
+     *   pt_1e7f6539b41c4d8f; layer 1 is `attempt` surviving the ingress
+     *   whitelists in sse_pipeline.js / streaming_render.js).
+     *
+     *   The status zone swaps innerHTML ONLY when `data-phase-key` changes, so
+     *   anything the key omits is invisible to the repaint no matter how the
+     *   text moves. `attempt` alone is not enough: the first-byte heartbeat
+     *   (lib/tasks_pkg/manager/_stream.py::_on_waiting) holds `detailKey`
+     *   CONSTANT and advances only `detailArgs.elapsed`, so "已等待 20s →
+     *   40s → 60s" recomputes `_txt` every beat and then throws it away —
+     *   the line freezes until a conv switch tears the bubble down. Folding
+     *   `_txt` in reduces the rule to "if the visible text changed, repaint",
+     *   which is the only thing the user can actually perceive. `attempt`
+     *   stays in front so two beats that resolve to the SAME string still
+     *   keep distinct identity. */
+    _phaseKey = "retry:" + (phase.attempt || 0) + ":" + _txt;
     _phaseHtml = `<div class="stream-phase stream-phase-retrying"><span class="stream-phase-icon">${Icon('refresh', 14)}</span><span class="stream-phase-text">${escapeHtml(_txt)}</span><span class="stream-phase-dots"><span>.</span><span>.</span><span>.</span></span></div>`;
   } else if (phase && phase.phase === "tool_exec" && !hasActiveSearch) {
     const _txt = _phaseDetailText(phase);

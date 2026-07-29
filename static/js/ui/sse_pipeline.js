@@ -1084,6 +1084,20 @@ function dispatchSSEEvent(line, ctx) {
          * remains the English fallback for headless / non-i18n clients. */
         detailKey: ev.detailKey || "",
         detailArgs: ev.detailArgs || null,
+        /* ★ LOAD-BEARING, not telemetry (pt_1e7f6539b41c4d8f). The retry
+         * banner's repaint key is `"retry:" + (phase.attempt || 0)`
+         * (streaming_ui.js), and the status zone only swaps innerHTML when
+         * `data-phase-key` CHANGES. Drop this field and every retry beat
+         * collapses to `retry:0`, so the banner FREEZES on the first
+         * attempt's text — "attempt 2 / 3 / 4…" can never appear even though
+         * the backend emits a fresh PHASE event for each one (measured:
+         * 3 beats → 3 distinct keys with the field, 1 key without).
+         * The backend sends it TOP-LEVEL on every retry / first-byte
+         * heartbeat beat (lib/tasks_pkg/manager/_stream.py::_on_waiting,
+         * lib/tasks_pkg/stream_handler/_analyse.py). `detailArgs.attempt`
+         * carries the same number for the i18n TEXT, but the repaint key
+         * reads the top-level field — the two are not interchangeable. */
+        attempt: ev.attempt || 0,
         tools: ev.tools || [],
         toolContext: ev.toolContext || "",
         round: ev.roundNum || 0,

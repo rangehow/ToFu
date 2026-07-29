@@ -138,6 +138,29 @@
   /* ── Public API ──────────────────────────────────────────────────── */
 
   const ConvView = {
+    /** Resolve the DOM node for a message — IDENTITY FIRST.
+     *
+     *  The public face of the private `_findMsgEl`: `data-msg-id` (stable
+     *  across index drift) wins, and the positional `msg-${idx}` handle is a
+     *  LEGACY fallback for messages that carry no `_msgId` yet.
+     *
+     *  WHY THIS IS PUBLIC: callers outside this module used to hand-roll
+     *  `document.getElementById('msg-' + idx)`, which silently resolves to a
+     *  DIFFERENT message whenever `conv.messages` changed length without a
+     *  repaint (a poll/merge/peer reconcile). `main_regen_continue.js`'s
+     *  Continue shell did exactly that and converted a HISTORICAL answer into
+     *  the live `Continuing…` bubble. The rule was already written down twice
+     *  (here and in `chat_render.js::_reconcileFindEl`) but had no reusable
+     *  seam — so exporting it is the root fix, not a third copy.
+     *
+     *  @param {Object} msg   - the message (its `_msgId` is the key).
+     *  @param {number} [idx] - legacy positional fallback index.
+     *  @returns {Element|null}
+     */
+    findMessageEl: function (msg, idx) {
+      return _findMsgEl(document.getElementById('chatInner'), msg, idx);
+    },
+
     /** THE single public DOM-apply entry (RENDER_CONTRACT Phase 3.5 §5).
      *
      *  Every CONTENT-DERIVED write to #chatInner routes through here so the

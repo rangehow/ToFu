@@ -169,6 +169,20 @@ const { check, report } = setup({
  * msg-N node again. That makes the rollback assertion a DOM fact, not a
  * stub-call count. */
 window.ConvView = global.ConvView = {
+  /* Mirrors the REAL conv_view.js seam VERBATIM (identity-first, positional
+   * fallback only for id-less rows). Faithful because the drift guard's whole
+   * point is which node gets resolved — a stub that just returned
+   * getElementById would test nothing. */
+  findMessageEl: (msg, idx) => {
+    const inner = document.getElementById('chatInner');
+    if (!inner) return null;
+    if (msg && msg._msgId) {
+      const byId = inner.querySelector('[data-msg-id="' + msg._msgId + '"]');
+      if (byId) return byId;
+    }
+    if (typeof idx === 'number') return document.getElementById('msg-' + idx);
+    return null;
+  },
   replaceAll: (cid, opts) => {
     calls.replaceAll.push(opts || {});
     return true;
@@ -532,6 +546,188 @@ def test_no_await_precedes_the_inflight_gate():
     assert 'await ' not in head, (
         'an await now precedes the in-flight gate — the dead-zone re-entry '
         'window it exists to close is reopened:\n' + head[-600:])
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Guard 5 — INDEX DRIFT: the shell must land on the message's OWN node
+# ═══════════════════════════════════════════════════════════════════════
+#
+# THE REGRESSION THIS PINS (owner-reproduced, introduced by the shell fix)
+# ------------------------------------------------------------------------
+# `_raiseContinueShell` looked the node up with
+# `document.getElementById('msg-' + lastIdx)` — a PURE POSITIONAL id.
+#
+# Before the shell fix that same positional lookup was SAFE, because it ran
+# AFTER `ConvView.replaceAll(...)`: that repaint had just re-stamped every
+# `msg-N`, so the positional id was guaranteed fresh. The shell fix deleted the
+# replaceAll AND moved the lookup ahead of ANY render — the precondition
+# vanished while the lookup did not change.
+#
+# So when `conv.messages` has changed length but no repaint has happened yet (a
+# poll/merge/peer reconcile dropping a mid-history row is the common case), the
+# positional slot `msg-{length-1}` belongs to a DIFFERENT, older message. The
+# result is strictly worse than the bug being fixed: a HISTORICAL answer is
+# rewritten in place into a `Continuing…` pulse (its prose destroyed by the
+# zone innerHTML), the genuinely-interrupted turn is never converted, and
+# `_shellUp` still returns true — so the success path skips its
+# "repaint-then-raise" fallback and streams into the WRONG node's zones.
+# Functionality broken while the UI presents it as working.
+#
+# This is not a new rule: `chat_render.js::_reconcileFindEl` already states that
+# a message WITH a `_msgId` must be matched by it ONLY — "after an index shift
+# that slot belongs to a DIFFERENT message — grabbing it would reuse the wrong
+# node" — and `conv_view.js::_findMsgEl` documents the same
+# `data-msg-id → msg-${idx}` priority.
+#
+# WHY THE OTHER GUARDS ARE BLIND TO IT: their fixture paints
+# `staticAssistantHtml(1, 'a1')` against a 2-message conv, so the positional id
+# is ALWAYS `length - 1`. Both lookup strategies behave identically there. Only
+# a drifted scene discriminates them.
+_BODY_DRIFT = _PROLOGUE + r"""
+(async () => {
+  /* Scene: the DOM was painted when the conv had THREE messages
+   *   msg-0 = user
+   *   msg-1 = an older assistant answer      (data-msg-id="a-old")
+   *   msg-2 = the INTERRUPTED tail           (data-msg-id="a-tail")
+   * then a reconcile dropped the middle row, so conv.messages is now
+   *   [user, a-tail]  — length 2, lastIdx 1 — and NO repaint has run.
+   * The positional slot `msg-1` therefore points at `a-old`. */
+  const inner = document.getElementById('chatInner');
+  inner.innerHTML =
+      staticUserHtml(0)
+    + staticAssistantHtml(1, 'a-old')
+    + staticAssistantHtml(2, 'a-tail');
+  /* Make the historical bubble's prose identifiable so we can prove it was not
+   * overwritten. */
+  const oldEl = inner.querySelector('[data-msg-id="a-old"]');
+  oldEl.querySelector('.md-content').textContent = 'HISTORICAL ANSWER';
+
+  conv = {
+    id: 'c1',
+    activeTaskId: null,
+    messages: [
+      { role: 'user', content: 'ask', _msgId: 'u1' },
+      {
+        role: 'assistant', _msgId: 'a-tail',
+        content: 'interrupted tail prose',
+        thinking: 'live thinking tail',
+        finishReason: 'interrupted',
+        toolRounds: [
+          { toolCallId: 'a', status: 'done', roundNum: 1, llmRound: 0 },
+          { toolCallId: 'b', status: 'done', roundNum: 2, llmRound: 1 },
+          { toolCallId: 'c', status: 'running', roundNum: 3, llmRound: 2 },
+        ],
+      },
+    ],
+  };
+  global.conversations = window.conversations = [conv];
+  global.activeStreams = window.activeStreams = new Map();
+  calls = {
+    sync: 0, continuePosts: 0, startAssistant: 0, finalize: 0, startStreaming: 0,
+    connect: [], replaceAll: [], updateStreamingUI: [], scrollToBottom: [],
+    forceScroll: [], toasts: [], debugLogs: [],
+    atBuildConfig: null, atSync: null, atPost: null,
+  };
+
+  api = okCheckpoint;
+  await continueAssistant();
+
+  const shell = document.getElementById('streaming-msg');
+  check('drift_shell_exists', !!shell);
+
+  /* ★ THE PIN: the shell must be the node bound to the message Continue is
+   * actually resuming — identity, never array position. */
+  check('drift_shell_is_the_target_msg',
+        !!shell && shell.getAttribute('data-msg-id') === 'a-tail');
+
+  /* ★ COMPLEMENT: the historical bubble must be untouched. Without this a fix
+   * that raises the shell on the RIGHT node but also clobbers the wrong one
+   * would still pass. */
+  const stillOld = inner.querySelector('[data-msg-id="a-old"]');
+  check('drift_historical_bubble_survives', !!stillOld);
+  check('drift_historical_prose_intact',
+        !!stillOld && /HISTORICAL ANSWER/.test(stillOld.textContent));
+  check('drift_historical_not_the_shell',
+        !!stillOld && stillOld.id !== 'streaming-msg');
+  check('drift_no_pulse_in_historical',
+        !!stillOld && stillOld.querySelectorAll('.stream-status .pulse').length === 0);
+
+  /* The turn still resumes normally end-to-end. */
+  check('drift_one_post', calls.continuePosts === 1);
+  check('drift_task_bound', conv.activeTaskId === 'T-new');
+""" + _EPILOGUE
+
+
+def test_continue_shell_lands_on_the_target_message_under_index_drift():
+    run_harness(target_js=SRC_JS, body_js=_BODY_DRIFT, min_pass=8,
+                label='continue-index-drift')
+
+
+def test_raise_shell_resolves_by_stable_id_not_position():
+    """Source-level complement to Guard 5.
+
+    The behavioural guard proves the OUTCOME; this pins the MECHANISM, so a
+    future edit cannot quietly reintroduce a positional-first lookup and rely on
+    some incidental repaint to keep the scene passing. Mirrors the rule already
+    stated in ``chat_render.js::_reconcileFindEl`` and
+    ``conv_view.js::_findMsgEl``: match on ``_msgId`` first; the positional
+    handle is a LEGACY fallback for id-less messages only.
+    """
+    with open(SRC_JS, encoding='utf-8') as f:
+        src = f.read()
+    start = src.index('function _raiseContinueShell(')
+    end = src.index('window._raiseContinueShell = _raiseContinueShell;')
+    body = src[start:end]
+    code = re.sub(r'/\*.*?\*/', '', body, flags=re.S)
+    code = re.sub(r'^\s*//.*$', '', code, flags=re.M)
+
+    assert ('findMessageEl' in code or '_msgId' in code
+            or 'data-msg-id' in code), (
+        '_raiseContinueShell resolves the bubble by array position alone — it '
+        'consults neither the stable _msgId nor the shared identity-first seam '
+        'ConvView.findMessageEl, so after an index shift it converts a '
+        'DIFFERENT (historical) message into the streaming shell.')
+
+    # If a positional lookup is present at all, the stable-id lookup must come
+    # FIRST (fallback-only semantics).
+    i_pos = code.find("getElementById('msg-")
+    if i_pos == -1:
+        i_pos = code.find('getElementById(`msg-')
+    if i_pos != -1:
+        i_id = min(
+            [i for i in (code.find('data-msg-id'), code.find('_findMsgEl'),
+                         code.find('findMessageEl')) if i != -1] or [-1])
+        assert i_id != -1 and i_id < i_pos, (
+            '_raiseContinueShell reaches for the positional `msg-N` handle '
+            'BEFORE (or instead of) the stable `_msgId` lookup — that is the '
+            'exact inversion chat_render.js::_reconcileFindEl forbids.')
+
+
+def test_convview_find_seam_is_identity_first():
+    """Guard-the-guard for Guard 5.
+
+    Guard 5 STUBS ``ConvView.findMessageEl``, and the shell now DELEGATES to it
+    — so if the shipped seam were positional-first, production would still be
+    broken while the harness stayed green. Pin the real one: it must be exposed,
+    and inside ``_findMsgEl`` the ``data-msg-id`` match must precede the
+    positional ``msg-`` fallback.
+    """
+    conv_view = os.path.join(JS_DIR, 'conv_view.js')
+    with open(conv_view, encoding='utf-8') as f:
+        src = f.read()
+    assert 'findMessageEl:' in src, (
+        'ConvView.findMessageEl is gone — _raiseContinueShell delegates to it, '
+        'so removing it silently drops the Continue shell to a null lookup '
+        '(shell never rises) or back to a positional one.')
+    start = src.index('function _findMsgEl(')
+    body = src[start:src.index('function _idxOf(')]
+    i_id = body.find('data-msg-id')
+    i_pos = body.find("getElementById('msg-")
+    assert i_id != -1, '_findMsgEl no longer matches on data-msg-id at all'
+    assert i_pos == -1 or i_id < i_pos, (
+        '_findMsgEl now reaches the positional msg-N handle before the stable '
+        'data-msg-id match — every caller (incl. the Continue shell) would '
+        'resolve the WRONG node under index drift.')
 
 
 def test_epilogue_marker_present_for_all_guards():

@@ -318,7 +318,25 @@ if (typeof window !== 'undefined') window._applyContinueCheckpoint = _applyConti
    ═══════════════════════════════════════════════════════════════════ */
 function _raiseContinueShell(conv, assistantMsg) {
   const lastIdx = conv.messages.length - 1;
-  const msgEl = document.getElementById(`msg-${lastIdx}`);
+  /* ★ IDENTITY-FIRST resolve (RENDER_CONTRACT Invariant 2). NOT
+   *   `getElementById('msg-' + lastIdx)`.
+   *
+   *   That positional lookup used to be safe HERE only because it ran AFTER
+   *   `ConvView.replaceAll(...)`, which had just re-stamped every `msg-N`. This
+   *   function deliberately runs BEFORE any render (that is the whole point —
+   *   feedback on the click frame), so the freshness precondition is gone: when
+   *   `conv.messages` shrank without a repaint (poll / merge / peer reconcile),
+   *   the slot `msg-{length-1}` belongs to an OLDER message, and converting it
+   *   would rewrite a HISTORICAL answer into the `Continuing…` pulse while the
+   *   genuinely-interrupted turn sat untouched — and still report success.
+   *
+   *   `ConvView.findMessageEl` is the shared identity-first seam
+   *   (`data-msg-id` → positional fallback for id-less legacy rows). Resolving
+   *   a MISS to `false` is load-bearing: the caller's "repaint, then raise"
+   *   fallback is what handles a tail evicted by the lazy window. */
+  const msgEl = (window.ConvView && typeof window.ConvView.findMessageEl === 'function')
+    ? window.ConvView.findMessageEl(assistantMsg, lastIdx)
+    : null;
   if (!msgEl) return false;
   msgEl.id = "streaming-msg";
   const hdr = msgEl.querySelector(".message-header");

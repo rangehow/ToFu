@@ -149,7 +149,7 @@ def _scene_gate_findings(mv, scene_dir: str, scene_id: str, *,
         return fidelity
     if res.get('ok'):
         return fidelity
-    if res.get('category') in ('env_missing', 'aborted', 'timeout', 'chrome'):
+    if mv.is_infra_category(res.get('category')):
         logger.info('[MotionVideo] scene %s real gates skipped (%s)',
                     scene_id, res.get('category'))
         return fidelity
@@ -498,6 +498,14 @@ def run_motion_task(task: dict) -> None:
             existing = _existing_composition(index_path, dur)
             if existing is not None:
                 html = existing
+                # A reused authored composition is STILL authored — the work
+                # was done in an earlier process. Leaving the counter at 0
+                # reports a fully-resumed film as "every scene fell back",
+                # which both the verdict and the panel then repeat. Measured:
+                # a rescue run with all six compositions intact printed
+                # authored 0/6 while shipping six authored frames.
+                if not is_template_composition(html):
+                    authored += 1
             elif authoring:
                 with heartbeat(task, lambda t, ev: _emit(t, ev), 'compose'):
                     res = author_scene(sc, scene_dir, width=width, height=height,

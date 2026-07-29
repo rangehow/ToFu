@@ -474,7 +474,7 @@ def _full_gate(html: str, scene_dir: str, *, abort_event=None,
             logger.warning('[SceneAuthor] fill gate crashed: %s', e,
                            exc_info=True)
     try:
-        from lib.motion_video._render import check_project
+        from lib.motion_video._render import check_project, is_infra_category
         with open(os.path.join(scene_dir, 'index.html'), 'w',
                   encoding='utf-8') as f:
             f.write(html)
@@ -482,7 +482,7 @@ def _full_gate(html: str, scene_dir: str, *, abort_event=None,
     except Exception as e:
         logger.warning('[SceneAuthor] real gates unavailable: %s', e)
         return fill
-    if res.get('category') in ('env_missing', 'aborted', 'timeout', 'chrome'):
+    if is_infra_category(res.get('category')):
         logger.info('[SceneAuthor] real gates skipped (%s)', res.get('category'))
         return fill
     out = [str(e) for e in res.get('errors', [])]
@@ -629,6 +629,28 @@ def author_scene(scene: dict, scene_dir: str, *, width: int, height: int,
     if resumed:
         logger.info('[SceneAuthor] %s resuming from a %d-char draft',
                     scene.get('id'), len(resumed))
+        # ZERO-SPEND RESCUE. A draft only survives on disk because the previous
+        # run ended without adopting it — and the most common reason for that
+        # was never the composition: an infrastructure verdict discarded work
+        # that was already finished (measured 2026-07-29: two scenes of a
+        # 6-scene film held 7.5 KB / 10.5 KB drafts that pass this very gate,
+        # while index.html carried a 2-node gradient card). If the draft passes
+        # NOW, adopting it costs nothing; re-entering the loop would spend a
+        # full agent round to re-derive a composition we are already holding.
+        try:
+            pending = _full_gate(resumed, scene_dir, abort_event=abort_event,
+                                 scene=scene)
+        except Exception as e:
+            logger.warning('[SceneAuthor] %s draft pre-check crashed: %s',
+                           scene.get('id'), e, exc_info=True)
+            pending = ['draft pre-check crashed']
+        if not pending:
+            clear_draft(scene_dir)
+            logger.info('[SceneAuthor] %s adopted its persisted draft — it '
+                        'passes the gate as written (0 rounds, 0 tokens)',
+                        scene.get('id'))
+            return {'ok': True, 'mode': 'authored', 'html': resumed,
+                    'rounds': 0, 'tokens': 0, 'detail': 'adopted draft'}
 
     attempts = max(1, int(transient_attempts))
     total_tokens = 0

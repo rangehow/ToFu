@@ -70,8 +70,12 @@ from lib.motion_video._quality import (
     scene_telemetry,
 )
 from lib.motion_video._render import (
+    ALL_CATEGORIES,
+    COMPOSITION_CATEGORIES,
+    INFRA_CATEGORIES,
     check_project,
     inspect_project,
+    is_infra_category,
     lint_project,
     render_project,
     validate_project,
@@ -140,6 +144,10 @@ __all__ = [
     'validate_project',
     'inspect_project',
     'check_project',
+    'is_infra_category',
+    'INFRA_CATEGORIES',
+    'COMPOSITION_CATEGORIES',
+    'ALL_CATEGORIES',
     'render_project',
     'concat_mp4s',
     'burn_in_subtitles',

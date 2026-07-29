@@ -11,10 +11,27 @@ agent's self-repair loop gets structured feedback:
 
     {'ok': bool, 'category': str, 'detail': str, ...}
 
-``category`` is one of: ``env_missing`` / ``lint`` / ``chrome`` /
-``timeout`` / ``aborted`` / ``io`` / ``unknown`` — the structured failure
+``category`` is one of :data:`ALL_CATEGORIES` — the structured failure
 diagnosis the design doc calls for (auto-motion leaves you reading raw
 logs; we classify).
+
+**The category taxonomy is a PARTITION with a single owner (this module).**
+Every category is either an INFRASTRUCTURE outcome (the toolchain, the host or
+the user stopped us — says nothing about the composition) or a COMPOSITION
+verdict (the frame is genuinely wrong). Consumers MUST ask
+:func:`is_infra_category` instead of hand-writing a tuple of strings.
+
+That rule is written in blood, twice. ``'infra'`` was added on 2026-07-28 to
+stop cgroup-memory noise being charged to the author — but it was added to the
+CLASSIFIER only, while both consumers
+(``engine._scene_gate_findings``, ``_scene_author._full_gate``) kept their own
+hand-copied ``('env_missing', 'aborted', 'timeout', 'chrome')``. So the new
+category existed and was exempted NOWHERE: measured 2026-07-29, 14 of 14 scene
+dirs on this host classified ``'infra'``, and two scenes of a 6-scene film had
+7.5 KB / 10.5 KB of finished, gate-clean authored work thrown away and replaced
+with a 2-node gradient card. A taxonomy split across three files always drifts;
+this module now owns it and :mod:`tests.test_motion_video_gate_categories`
+fails if a category is left unclassified.
 """
 
 from __future__ import annotations
@@ -31,7 +48,48 @@ from lib.log import get_logger
 logger = get_logger(__name__)
 
 __all__ = ['lint_project', 'validate_project', 'inspect_project',
-           'check_project', 'render_project']
+           'check_project', 'render_project', 'is_infra_category',
+           'INFRA_CATEGORIES', 'COMPOSITION_CATEGORIES', 'ALL_CATEGORIES']
+
+#: Failure categories that describe the ENVIRONMENT, not the composition.
+#:
+#: A consumer that judges composition quality must treat these as "no verdict
+#: available" and fall back to whatever it can compute itself — never as a
+#: reason to discard the author's work.
+#:
+#: ``'io'`` belongs here because the only way a gate call yields it is a failed
+#: ``Popen`` (the CLI could not be spawned at all).
+INFRA_CATEGORIES = frozenset({
+    'env_missing',   # hyperframes CLI / ffmpeg absent
+    'aborted',       # cooperative user stop
+    'timeout',       # wall-clock budget exceeded
+    'chrome',        # headless browser could not boot
+    'infra',         # cgroup memory pressure / OOM — host, not composition
+    'io',            # the CLI could not be spawned
+})
+
+#: Failure categories that DO name a composition defect.
+#:
+#: ``'unknown'`` is deliberately here rather than in the infra set: it means
+#: the CLI failed, named no finding, and matched no stderr heuristic. Treating
+#: an unexplained failure as "safe to ignore" would silently forgive real
+#: defects, so it stays a composition verdict until something identifies it.
+#: If it ever becomes common, classify it — do not move it wholesale.
+COMPOSITION_CATEGORIES = frozenset({'lint', 'unknown'})
+
+#: Every category this module can emit. The two sets above MUST partition it —
+#: a category in neither is a category some consumer will silently mishandle.
+ALL_CATEGORIES = INFRA_CATEGORIES | COMPOSITION_CATEGORIES
+
+
+def is_infra_category(category: str | None) -> bool:
+    """True when ``category`` is an infrastructure outcome, not a verdict.
+
+    The single predicate both gate consumers use. Passing an empty category
+    (a clean run) returns False — there is nothing to exempt.
+    """
+    return (category or '') in INFRA_CATEGORIES
+
 
 _TAIL = 1500
 

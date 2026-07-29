@@ -1,5 +1,16 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·面命名空间折叠) — 「key_stats 按面记账、UI 按账户渲染」定案:**合并早已修好源头,真正没修的是磁盘上那份孤儿状态**;共享 HEAD 三方纠缠(兄弟 quota 批一半搭过我的车、我的折叠冒烟提前写真文件)全部按 #26/#15 处理(`pt_782133699c6d4ac1`;commit 待填,5 文件;新套件 **12/12 失败先行**,**NEUTER×4 各咬各的**(9/1/1/9);相邻环 **83/83**)
+
+- **★ 先证伪票面的一半:** 票面说「面熔断对 UI 不可见」要修 UI;实测**账户/面合并(547827e1)落地后的下一次重启,记账就自然回到账户命名空间**(slot.provider_id=账户 id),UI 无需任何改动。真正的剩余缺口是**磁盘上已有的面命名空间条目**:按日熔断(重启即丢,要白烧一个 402/模型才重新学会)与**跨天持久的覆写**(今夜手动开启的两行,重启后变死状态——不生效也不显示)。
+- **★ 落点:加载期折叠,不是 UI 补丁。** `key_stats._load_unlocked` 末尾(及日内滚转分支)把被吸收的面命名空间折进账户:计数器求和、consecutive_429 取 max、exhausted 取或、per-model 熔断取并、空 last_error 继承;覆写仅在账户无值时迁移(**账户的显式决定永远赢**——它是 UI 今天真正读写的命名空间)。映射唯一真源是 `provider_face.account_namespace_map`(charter #24 不许第二份面规则;merge 的锚点选择同步抽成 `_account_anchor` 共用),并覆盖「配置合并尚未持久化」的过渡形态(按 #23 账户同一性判据)——**启动顺序无关**。
+- **★ 守卫先验货后修,而我的 fixture 又错了一次:** 12 条 failing-first 通过后,首版 `_seed` 用「未来日期 2099」防滚转——实测**双向不等都触发重置**,stats 被清、override 保留,失败恰好全落在 stats 断言上、override 测试全绿,模式本身指向 fixture。同族再记一次:先分清「被测代码错」与「我没把被测代码装好」。
+- **★ NEUTER×4 各咬各的:** 摘折叠调用 → 9 红;计数不求和 → 恰 1 红(合并那条);覆写规则反转 → 恰 1 红(规则那条);map 恒空 → 9 红。还原后 `diff -q` 逐字节一致。
+- **★ 真实冒烟(收敛性写盘,如实记录):** 对真 `key_stats.json` 跑加载,折叠后 namespaces=['sankuai']。该次写盘把迁移提前发生了一次;运行中进程仍持旧内存态、下次写回会暂时复活面命名空间——无害(last-writer-wins 且原子),重启后由新代码永久收敛。
+- **★ 纠缠记录:** 兄弟 quota 批(c8e0ff98)的 slot.py/_record.py/api.py hunks 曾搭我 e39a0fbf 的车进 HEAD,其 commit message 已按 #26 注明;本批与 pt_db4730d10104498e(resolve-faces 端点,兄弟在飞)同文件(provider_face.py)不同区,无冲突。
+- **★ 同族新票(不并票):** `model_context_limits` 以 slot.provider_id 为键,合并后 `sankuai_anthropic::*` 学习条目同样孤儿化——含今晚 1030851>1000000 刚学到的收缩,重启后 opus-5 会重新白烧 400 直到再次学会。已开 `pt_998336d4ec734207`。
+- **验收边界:** 纯后端,**需重启**;重启当刻完成收敛。UI 零改动。
+
 ### 2026-07-29(续·自愈的循环依赖) — owner 抓出**纠正帧走的正是它要修的那条坏路**:socket 好时不需要它、socket 坏时它到不了;而最坏那格不是「修不到」,是 `deliver_to_socket` **返回 True 却什么都没送到**(`pt_b8dcd3b96f684296` DONE;commit `0c708d4e`,4 文件 +492/-52;守卫 **13 → 17**,**3 条失败先行**,**NEUTER×4 各咬各的**;相邻环 **106 全绿**;charter 传输判据已修正)
 
 - **★ 循环依赖(owner 的判据,我实测复现):** 客户端被判 sustained-stalled 的**主因就是 notify 帧没送达** ⇒ push socket 不健康;而我把纠正帧从**同一条 socket** 发回去。三格实测:

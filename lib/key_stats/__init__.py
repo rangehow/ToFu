@@ -31,6 +31,16 @@ the key-wide ``exhausted`` flag. Manual overrides keep winning over BOTH
 (user supremacy); the Settings card surfaces the override-vs-stop conflict
 instead of letting a stale manual ON silently defeat a fresh billing-stop.
 
+Namespace fold (account/face separation, charter #23):
+  History may have been recorded under an absorbed duplicate face CARD
+  (``sankuai_anthropic::…``) while the UI renders one card per ACCOUNT
+  (``sankuai::…``). At every load, ``_fold_namespaces_unlocked`` folds such
+  namespaces into their account using
+  ``lib.llm_dispatch.provider_face.account_namespace_map`` — so a
+  billing-stop or a PERSISTENT manual override can never be orphaned onto
+  a namespace nothing reads and nothing renders (2026-07-29 invisible
+  total-outage).
+
 Last-resort guard:
   The auto-disable logic (exhausted flag + success-rate threshold) will NEVER
   leave a provider with zero usable keys.  If disabling a key would remove the

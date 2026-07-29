@@ -73,6 +73,7 @@ __all__ = [
     'resolve_face',
     'dual_face_hosts',
     'merge_duplicate_account_faces',
+    'account_namespace_map',
     'provider_faces',
     'DEFAULT_FACE',
 ]
@@ -277,6 +278,76 @@ def resolve_face(provider: dict, model_entry: dict,
         face_name=DEFAULT_FACE)
 
 
+def _account_anchor(group: list) -> dict | None:
+    """The card that survives a same-account fold: the first
+    non-anthropic-protocol card of the group, or None when there is no
+    anchor (a lone anthropic card has nothing to fold into).
+
+    Shared by :func:`merge_duplicate_account_faces` and
+    :func:`account_namespace_map` so the "which card wins" criterion lives
+    in exactly one place.
+    """
+    for p in group:
+        if isinstance(p, dict) and (p.get('protocol') or '') != 'anthropic':
+            return p
+    return None
+
+
+def account_namespace_map(providers: list) -> dict:
+    """Return ``{absorbed namespace: surviving account provider id}``.
+
+    Key-health history (``lib.key_stats``) may have been recorded under a
+    provider namespace that no longer names a Settings card:
+
+      1. the conventional ``f'{account_id}_{face_name}'`` shape the
+         historical duplicate face cards used (the Meituan gateway's
+         ``sankuai_anthropic`` = ``sankuai`` + the ``anthropic`` face) —
+         covered whether or not the config merge already persisted;
+      2. a duplicate card STILL present in config (the config merge has
+         not run yet — e.g. first boot after the upgrade): the card's own
+         id maps to its account anchor, by the SAME identity criterion
+         :func:`merge_duplicate_account_faces` folds with.
+
+    Consumed at key_stats load time to fold the history into the account
+    namespace — a namespace with no card renders nowhere in Settings, and
+    a PERSISTENT override orphaned there silently stops applying (the
+    2026-07-29 invisible-outage: the anthropic face's three stopped keys
+    showed 87–93% healthy green).
+    """
+    mapping: dict = {}
+    if not isinstance(providers, list):
+        return mapping
+
+    for p in providers:
+        if not isinstance(p, dict):
+            continue
+        pid = p.get('id')
+        if not pid:
+            continue
+        for face_name in provider_faces(p):
+            if face_name != DEFAULT_FACE:
+                mapping[f'{pid}_{face_name}'] = pid
+
+    by_account: dict = {}
+    for p in providers:
+        if isinstance(p, dict) and p.get('id'):
+            by_account.setdefault(_account_identity(p), []).append(p)
+    for (host, keys), group in by_account.items():
+        if not host or not keys or len(group) < 2:
+            continue
+        anchor = _account_anchor(group)
+        if anchor is None:
+            continue
+        for p in group:
+            # Mirror merge_duplicate_account_faces exactly: only the
+            # anthropic-protocol card of an account folds into the anchor.
+            if p is anchor:
+                continue
+            if (p.get('protocol') or '') == 'anthropic':
+                mapping[p['id']] = anchor['id']
+    return mapping
+
+
 def _account_identity(provider: dict) -> tuple:
     """What makes two provider entries THE SAME ACCOUNT.
 
@@ -323,20 +394,18 @@ def merge_duplicate_account_faces(providers: list) -> bool:
         if not host or not keys or len(idxs) < 2:
             continue
 
-        anchors = [i for i in idxs
-                   if (providers[i].get('protocol') or '') != 'anthropic']
-        secondaries = [i for i in idxs
-                       if (providers[i].get('protocol') or '') == 'anthropic']
-        if not anchors or not secondaries:
+        group = [providers[i] for i in idxs]
+        anchor = _account_anchor(group)
+        secondaries = [(i, p) for i, p in zip(idxs, group)
+                       if (p.get('protocol') or '') == 'anthropic']
+        if anchor is None or not secondaries:
             continue  # nothing to fold, or nothing to fold INTO
 
-        anchor = providers[anchors[0]]
         faces = anchor.get('faces')
         if not isinstance(faces, dict):
             faces = {}
 
-        for si in secondaries:
-            sec = providers[si]
+        for si, sec in secondaries:
             faces['anthropic'] = {
                 'base_url': sec.get('base_url') or '',
                 'protocol': 'anthropic',

@@ -560,12 +560,23 @@ def _build_prompt(scene: dict, *, width: int, height: int, duration: float,
 
 def author_scene(scene: dict, scene_dir: str, *, width: int, height: int,
                  duration: float, scene_index: int, total_scenes: int,
-                 max_rounds: int = _DEFAULT_MAX_ROUNDS,
-                 token_budget: int = _DEFAULT_TOKEN_BUDGET,
+                 max_rounds: int | None = None,
+                 token_budget: int | None = None,
                  model: str | None = None,
                  abort_event=None,
                  transient_attempts: int = _TRANSIENT_ATTEMPTS) -> dict:
     """Author one scene's composition with a bounded agent loop.
+
+    ``max_rounds`` / ``token_budget`` accept ``None`` meaning "use this
+    module's default", and that is the ONLY way a caller should express
+    "no preference". They used to carry the literals as defaults, so every
+    call site wrote its own copy — measured 2026-07-29: ``_DEFAULT_TOKEN_BUDGET``
+    was deliberately raised 60000 → 90000 after two scenes were cut off
+    mid-repair, but ``engine.py`` and ``routes/api_v1/motion.py`` both passed
+    ``or 60000`` explicitly, so the raise was DEAD on every production path and
+    the reading-mode panel (which passes neither knob) was silently capped at
+    the old ceiling. This is the same failure ``scene_author_enabled``'s
+    docstring warns about: a per-caller default is a copy that stops matching.
 
     Returns ``{'ok', 'html', 'mode', 'rounds', 'tokens', 'detail'}`` where
     ``mode`` is ``'authored'`` (the agent's composition passed the static gate)
@@ -592,6 +603,10 @@ def author_scene(scene: dict, scene_dir: str, *, width: int, height: int,
 
     from lib.agent_loop import AbortSignal, run_agent_loop
     from lib.motion_video._template import render_scene_html
+
+    max_rounds = _DEFAULT_MAX_ROUNDS if not max_rounds else int(max_rounds)
+    token_budget = (_DEFAULT_TOKEN_BUDGET if not token_budget
+                    else int(token_budget))
 
     def _fallback(detail: str, *, rounds: int = 0, tokens: int = 0) -> dict:
         logger.info('[SceneAuthor] %s → template fallback (%s)',

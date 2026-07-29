@@ -29,7 +29,7 @@ from lib.log import get_logger
 
 logger = get_logger(__name__)
 
-__all__ = ['check_composition_fill', 'measure_fill',
+__all__ = ['check_composition_fill', 'measure_fill', 'findings_for_fill',
            'MIN_VERTICAL_SPAN', 'MAX_BOTTOM_DEAD_BAND']
 
 #: Minimum share of frame HEIGHT that visible content must span.
@@ -171,16 +171,20 @@ def measure_fill(html: str, *, timeout_ms: int = 20000) -> dict | None:
     }
 
 
-def check_composition_fill(html: str, *, timeout_ms: int = 20000) -> list[str]:
-    """Reject a composition that leaves most of a tall frame empty.
+def findings_for_fill(m: dict | None) -> list[str]:
+    """Turn a :func:`measure_fill` result into findings. Pure — no browser.
 
-    Returns finding strings for the author's repair loop (empty = clean).
-    A measurement that could not be taken returns EMPTY: an absent browser is
-    an infrastructure outcome, and charging it to the composition would
-    degrade every scene on a host without Chromium -- the same rule the CLI
-    gates already follow for ``env_missing``.
+    Split out of :func:`check_composition_fill` so a caller that ALREADY holds
+    a measurement can derive the findings without paying a second headless
+    Chrome boot (~1.2s per scene). The engine needs both the findings (for the
+    quality axis) and the raw numbers (for per-scene telemetry) from ONE
+    measurement; before this split the only way to get both was to measure
+    twice, which is a real cost on a multi-scene film and — worse — could
+    return two DIFFERENT verdicts for one composition if a boot flaked.
+
+    ``None`` (measurement not takeable) yields no findings, matching the
+    infrastructure-is-not-a-defect rule the CLI gates already follow.
     """
-    m = measure_fill(html, timeout_ms=timeout_ms)
     if not m:
         return []
     findings: list[str] = []
@@ -199,3 +203,15 @@ def check_composition_fill(html: str, *, timeout_ms: int = 20000) -> list[str]:
             f'bottom-weighted dead space. Extend the layout downward or '
             f'rebalance the vertical rhythm.')
     return findings
+
+
+def check_composition_fill(html: str, *, timeout_ms: int = 20000) -> list[str]:
+    """Reject a composition that leaves most of a tall frame empty.
+
+    Returns finding strings for the author's repair loop (empty = clean).
+    A measurement that could not be taken returns EMPTY: an absent browser is
+    an infrastructure outcome, and charging it to the composition would
+    degrade every scene on a host without Chromium -- the same rule the CLI
+    gates already follow for ``env_missing``.
+    """
+    return findings_for_fill(measure_fill(html, timeout_ms=timeout_ms))

@@ -48,6 +48,7 @@ from lib.motion_video._fill import (
     MAX_BOTTOM_DEAD_BAND,
     MIN_VERTICAL_SPAN,
     check_composition_fill,
+    findings_for_fill,
     measure_fill,
 )
 from lib.motion_video._gates import (
@@ -59,6 +60,14 @@ from lib.motion_video._gates import (
     probe_video,
     verify_spec,
     visible_text,
+)
+from lib.motion_video._quality import (
+    GRAPHIC_EXTENSIONS,
+    asset_floor_findings,
+    count_scene_graphics,
+    film_quality_summary,
+    is_text_only_exempt,
+    scene_telemetry,
 )
 from lib.motion_video._render import (
     check_project,
@@ -114,9 +123,16 @@ __all__ = [
     'check_composition_html',
     'check_text_fidelity',
     'check_composition_fill',
+    'findings_for_fill',
     'measure_fill',
     'MIN_VERTICAL_SPAN',
     'MAX_BOTTOM_DEAD_BAND',
+    'GRAPHIC_EXTENSIONS',
+    'count_scene_graphics',
+    'asset_floor_findings',
+    'scene_telemetry',
+    'film_quality_summary',
+    'is_text_only_exempt',
     'visible_text',
     'probe_video',
     'verify_spec',

@@ -90,7 +90,8 @@ def _write(path: str, text: str) -> None:
 
 def _scene_gate_findings(mv, scene_dir: str, scene_id: str, *,
                          abort_event=None, scene: dict | None = None,
-                         html: str = '') -> list[str]:
+                         html: str = '',
+                         fill: dict | None = None) -> list[str]:
     """Run the REAL HyperFrames gates on one composed scene dir.
 
     ``check_composition_html`` is a regex pass over the contract fields and the
@@ -108,6 +109,11 @@ def _scene_gate_findings(mv, scene_dir: str, scene_id: str, *,
     because Chrome hit memory pressure on that attempt, which charged an
     infra flake to the author and degraded a good scene to the plain template.
 
+    ``fill`` is a measurement the caller already took (see
+    :func:`lib.motion_video._fill.measure_fill`); its findings are derived
+    purely, so the film boots ONE browser per scene rather than two and the
+    telemetry can never disagree with the verdict.
+
     Never raises -- a gate crash must not take down a job.
     """
     # Text fidelity is judged on the HTML we already hold, so unlike the CLI
@@ -124,13 +130,14 @@ def _scene_gate_findings(mv, scene_dir: str, scene_id: str, *,
         if fidelity:
             logger.warning('[MotionVideo] scene %s text fidelity: %.300s',
                            scene_id, ' | '.join(fidelity))
-    # Vertical fill is measured from the HTML we already hold, in its own
-    # browser boot, so like fidelity it is NOT swallowed by an env_missing /
-    # chrome outcome from the CLI gates. Its own measurement failure returns
-    # empty on the same infrastructure-vs-defect rule.
+    # Vertical fill rides the measurement the caller already took, so it is
+    # NOT swallowed by an env_missing / chrome outcome from the CLI gates. An
+    # unavailable measurement is None and yields no findings, on the same
+    # infrastructure-vs-defect rule.
     if html:
         try:
-            fidelity += list(mv.check_composition_fill(html))
+            from lib.motion_video._fill import findings_for_fill
+            fidelity += list(findings_for_fill(fill))
         except Exception as e:
             logger.warning('[MotionVideo] scene %s fill gate crashed: %s',
                            scene_id, e, exc_info=True)
@@ -190,6 +197,12 @@ _MANIFEST_FIELDS = (
     # re-attach reads job.json and NOTHING else — without it a degraded film
     # is laundered into a clean success by the next process restart.
     'artifact_quality', 'authored_scenes', 'total_scenes',
+    # Per-scene quality NUMBERS (span / bottom_dead / paint nodes / graphics /
+    # font faces) + their film-level roll-up. Persisted for the same reason the
+    # verdict is, plus one of its own: a verdict without the numbers behind it
+    # cannot be DIFFED across runs, so "did this film get better?" was only
+    # answerable by re-measuring every scene by hand in a browser.
+    'scene_quality', 'quality_summary',
 )
 
 
@@ -465,18 +478,21 @@ def run_motion_task(task: dict) -> None:
         # ── 4. compose (per-scene author when enabled, else zero-LLM template) ──
         from lib.motion_video._scene_author import (author_scene,
                                                     scene_author_enabled)
-        from lib.motion_video._template import render_scene_html
+        from lib.motion_video._template import (is_template_composition,
+                                                render_scene_html)
         _phase_started(task, phases, 'compose')
         authoring = scene_author_enabled(task)
         scene_dirs: list[str] = []
         authored = 0
         scene_gate_issues: dict[str, list[str]] = {}
+        scene_records: list[dict] = []
         total = len(scenes)
         for i, sc in enumerate(scenes, 1):
             dur = target_by_id.get(sc['id'], round(sc['end'] - sc['start'], 3))
             scene_dir = os.path.join(workdir, 'scenes', sc['id'])
             os.makedirs(scene_dir, exist_ok=True)
             index_path = os.path.join(scene_dir, 'index.html')
+            author_rounds = author_tokens = 0
             # Resume: a composition already on disk for this scene is kept —
             # never re-author (that would re-spend an agent loop per restart).
             existing = _existing_composition(index_path, dur)
@@ -487,17 +503,20 @@ def run_motion_task(task: dict) -> None:
                     res = author_scene(sc, scene_dir, width=width, height=height,
                                        duration=dur, scene_index=i,
                                        total_scenes=total,
-                                       max_rounds=int(task.get('author_rounds') or 4),
+                                       max_rounds=int(task.get('author_rounds') or 0)
+                                       or None,
                                        token_budget=int(task.get('author_token_budget')
-                                                        or 60000),
+                                                        or 0) or None,
                                        model=task.get('model') or None,
                                        abort_event=task.get('abort_event'))
                 html = res['html']
+                author_rounds = res.get('rounds', 0)
+                author_tokens = res.get('tokens', 0)
                 if res['mode'] == 'authored':
                     authored += 1
                 _emit(task, {'type': 'scene_authored', 'scene_id': sc['id'],
-                             'mode': res['mode'], 'rounds': res.get('rounds', 0),
-                             'tokens': res.get('tokens', 0),
+                             'mode': res['mode'], 'rounds': author_rounds,
+                             'tokens': author_tokens,
                              'detail': res.get('detail', '')[:200],
                              'done': i, 'total': total})
             else:
@@ -509,6 +528,15 @@ def run_motion_task(task: dict) -> None:
                 raise ValueError(f"template composition failed its own gate "
                                  f"for {sc['id']}: {' | '.join(errs)}")
             _write(index_path, html)
+            # ONE fill measurement per scene, shared by the gate verdict and
+            # the persisted telemetry. Measuring twice would double the browser
+            # boots AND allow the two to disagree about one composition.
+            fill = None
+            try:
+                fill = mv.measure_fill(html)
+            except Exception as e:
+                logger.warning('[MotionVideo] scene %s fill measure crashed: %s',
+                               sc['id'], e, exc_info=True)
             # The REAL gates (fonts/contract + runtime errors + WCAG contrast +
             # text overflow) — the regex gate above cannot see any of those,
             # and they are exactly the defects that read as "no formatting".
@@ -517,11 +545,35 @@ def run_motion_task(task: dict) -> None:
             # a film that would still play.
             gate_findings = _scene_gate_findings(
                 mv, scene_dir, sc['id'], abort_event=task.get('abort_event'),
-                scene=sc, html=html)
+                scene=sc, html=html, fill=fill)
+            # The asset floor. Judged on the composition that is about to
+            # render, and only for AUTHORED scenes — a template fallback owes
+            # its degrade to the quality axis already, and failing it here too
+            # would report one defect twice.
+            scene_mode = ('template' if is_template_composition(html)
+                          else 'authored')
+            try:
+                from lib.motion_video._quality import (asset_floor_findings,
+                                                       scene_telemetry)
+                gate_findings += list(asset_floor_findings(
+                    sc, html, scene_dir, mode=scene_mode))
+            except Exception as e:
+                logger.warning('[MotionVideo] scene %s asset floor crashed: %s',
+                               sc['id'], e, exc_info=True)
             if gate_findings:
                 scene_gate_issues[sc['id']] = gate_findings
                 _emit(task, {'type': 'scene_gate', 'scene_id': sc['id'],
                              'ok': False, 'findings': gate_findings[:6]})
+            try:
+                rec = scene_telemetry(sc, html, scene_dir, mode=scene_mode,
+                                      fill=fill, rounds=author_rounds,
+                                      tokens=author_tokens,
+                                      gate_findings=gate_findings)
+                scene_records.append(rec)
+                _emit(task, {'type': 'scene_quality', **rec})
+            except Exception as e:
+                logger.warning('[MotionVideo] scene %s telemetry crashed: %s',
+                               sc['id'], e, exc_info=True)
             sc['_duration'] = dur
             scene_dirs.append(scene_dir)
             _emit(task, {'type': 'progress', 'phase': 'compose',
@@ -667,6 +719,13 @@ def run_motion_task(task: dict) -> None:
             os.replace(video_final, final_path)
 
         probe = mv.probe_video(final_path)
+        try:
+            from lib.motion_video._quality import film_quality_summary
+            quality_summary = film_quality_summary(scene_records)
+        except Exception as e:
+            logger.warning('[MotionVideo] quality summary crashed: %s', e,
+                           exc_info=True)
+            quality_summary = {}
         result = {
             'final_path': final_path,
             'srt_path': sidecar,
@@ -678,6 +737,8 @@ def run_motion_task(task: dict) -> None:
             'workdir': workdir,
             'mode': 'engine',
             'gate_failed_scenes': sorted(scene_gate_issues),
+            'scene_quality': scene_records,
+            'quality_summary': quality_summary,
         }
         task['result'] = result
         # ★ Computed BEFORE the manifest write, not after: job.json is the ONLY
@@ -688,17 +749,21 @@ def run_motion_task(task: dict) -> None:
         _quality = _quality_verdict(
             degraded_narration=degraded_narration,
             scene_gate_issues=scene_gate_issues,
-            authoring=bool(authoring), authored=authored, total=total)
+            authoring=bool(authoring), authored=authored, total=total,
+            scene_records=scene_records)
         # Same shape TaskRuntime.finish() puts on the task, so the disk
         # fallback and the live poll hand the panel one field, not two.
         task['artifact_quality'] = _quality
         task['authored_scenes'] = authored
         task['total_scenes'] = total
+        task['scene_quality'] = scene_records
+        task['quality_summary'] = quality_summary
         write_job_manifest(task, kind=task.get('kind') or 'scenes',
                            state='done')
         _drop_page_cache(workdir)
         _emit(task, {'type': 'final', 'final_path': final_path,
-                     'duration': result['duration'], 'narrated': narration})
+                     'duration': result['duration'], 'narrated': narration,
+                     'quality_summary': quality_summary})
         _motion_runtime.finish(
             task_id, result=result,
             degraded=_quality['degraded'],
@@ -719,15 +784,16 @@ def run_motion_task(task: dict) -> None:
 
 
 def _quality_verdict(*, degraded_narration: bool, scene_gate_issues: dict,
-                     authoring: bool, authored: int, total: int) -> dict:
+                     authoring: bool, authored: int, total: int,
+                     scene_records: list | None = None) -> dict:
     """The film's PRODUCT-quality verdict: ``{'degraded': bool, 'reason': str}``.
 
     Separate from ``status`` on purpose (lib/agent_core/task_runtime.py): all
-    three inputs below describe a film that PLAYS, so the lifecycle is a
+    four inputs below describe a film that PLAYS, so the lifecycle is a
     legitimate 'done' — the question this answers is whether it is the film
     that was asked for.
 
-    Three ways a playable film is still a failed artifact:
+    Four ways a playable film is still a failed artifact:
 
     * **silent-degraded narration** — narration was REQUESTED but no TTS slot
       existed, so durations are char-estimated rather than measured from real
@@ -738,6 +804,12 @@ def _quality_verdict(*, degraded_narration: bool, scene_gate_issues: dict,
     * **wholesale fallback** — ONE scene degrading to the template is the
       designed local degrade, but when authoring was requested and EVERY scene
       fell back, the user received the plain card deck that prompted this work.
+    * **an image-less film** — every authored scene shipped without a single
+      real graphic. Measured 2026-07-29: with imagery merely PERMITTED by the
+      prompt and required by nothing, the water-line was one background image
+      per scene and some scenes with none. "Materials are scarce" is a product
+      defect that no existing signal reported, because a text-only card is
+      perfectly well-formed.
 
     A pure function rather than an inline block so it can be driven with real
     inputs: while it lived inside ``run_motion_task`` the only way to check it
@@ -763,9 +835,26 @@ def _quality_verdict(*, degraded_narration: bool, scene_gate_issues: dict,
             f'boutique quality was requested but all {total} scene(s) fell '
             f'back to the plain template card — the film shipped, but not '
             f'at the quality asked for')
+    # The asset floor at FILM level. Judged only over authored scenes that are
+    # not declared text-only: a film of template fallbacks is already reported
+    # above, and repeating it here would bury the distinct signal that the
+    # authored scenes themselves carry no imagery.
+    bare = 0
+    eligible = 0
+    for rec in scene_records or []:
+        if rec.get('mode') != 'authored' or rec.get('text_only_exempt'):
+            continue
+        eligible += 1
+        if int(rec.get('graphics') or 0) == 0:
+            bare += 1
+    if eligible and bare == eligible:
+        reasons.append(
+            f'all {eligible} authored scene(s) shipped with NO real graphic '
+            f'(no image/video asset, no inline SVG) — the film is a text-only '
+            f'card deck; imagery is available and was not used')
     return {
         'degraded': bool(degraded_narration or scene_gate_issues
-                         or all_fell_back),
+                         or all_fell_back or (eligible and bare == eligible)),
         'reason': ' | '.join(reasons),
     }
 

@@ -150,14 +150,18 @@ async def start_motion_task():
     scene_author = body.get('scene_author')
     if scene_author is not None:
         scene_author = bool(scene_author)
+    # 0 = "no preference": the default lives in ONE place
+    # (lib/motion_video/_scene_author._DEFAULT_*). Writing the literals here
+    # is what made the 60000 → 90000 raise dead on this path.
     try:
-        author_rounds = int(body.get('author_rounds') or 4)
-        author_token_budget = int(body.get('author_token_budget') or 60000)
+        author_rounds = int(body.get('author_rounds') or 0)
+        author_token_budget = int(body.get('author_token_budget') or 0)
     except (TypeError, ValueError):
         return api_bad_request('author_rounds / author_token_budget must be ints',
                                field='author_rounds')
-    author_rounds = max(1, min(author_rounds, 8))
-    author_token_budget = max(5000, min(author_token_budget, 400000))
+    author_rounds = min(max(author_rounds, 0), 8)
+    author_token_budget = (0 if author_token_budget <= 0
+                           else max(5000, min(author_token_budget, 400000)))
 
     # ── Dedup ──
     _cleanup_stale_motion_tasks()

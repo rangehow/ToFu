@@ -1,6 +1,19 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-29(续·一个吉祥物,不再切换) — owner:「只要原版,其他都太丑,没必要切换」——**移除试戴机制,但把它里面唯一承重的那半(cache-bust)留下**;顺带补上一条移除才暴露的漂移缺口(commit `cfd7fd54`,17 文件;新 ratchet **11/11**,**NEUTER×3 各咬各的方向**,相邻环 **45/45**,干净 committed worktree **22/22**)
+
+- **★ 落点判据是「这个模块里有两件事,只有一件是 owner 要删的」:** `brand_logo.js` 同时装着**试戴机制**(皮肤注册表 + 设置选择器 + localStorage)与 **cache-bust**(`LOGO_VER`)。后者不是装饰——图标响应头 `max-age=86400`,裸路径会让一次改动 24h 不可见,**A2 回滚当天 owner 仍看到旧图一整天正是这个机制**。整个文件删掉会把那个 bug 原样请回来。故删前者、留后者,并在模块头写明**为什么不要再加回来**(而不是只写「已删除」)。
+- **移除清单(全库 grep 零残留):** 皮肤注册表与 5 个符号(`listLogoSkins`/`setLogoSkin`/`getLogoSkin`/`applyLogoSkin`/`defaultLogoUrl`/`onBrandLogoError`)、设置→常规「品牌图标」区块、`core_panel.js` 的瓦片渲染、`main.js` 的开机应用调用、7 个 i18n 键、`#logoSkinPicker` CSS、4 枚候选 SVG、`index.html` 两处 `onerror`。charter #8 生成物重跑(116 符号,diff **恰好**是删掉的 6 个)。
+- **★ 旧守卫套件不是删掉而是改写成 ratchet,理由是它的一半断言仍然承重:** `test_frontend_brand_logo_skin.py` 的主题已不存在,但 cache-bust 不变量还在。故重写为 `test_brand_mascot_single.py`:**模块必须只解析出一个 URL、不得再导出皮肤注册表、markup/渲染器/字符串/CSS 四面都不得让选择器复活**。理由写进 docstring——**三次重设计都是看稿批准、上线后推翻**,第四次尝试应该让测试变红,而不是走到用户面前。
+- **★ 移除暴露了一个此前没人看守的漂移面(本轮真正的新发现):** `index.html` **手写**三处 `tofu-welcome.svg?v=<token>`,而 `brand_logo.js` 持有 `LOGO_VER` ——**没有任何东西检查它们一致**。bump 一处、漏另一处,cache-bust 就只生效一半:走 helper 的表面换新图,手写标签继续吃 24h 缓存。**这与本周连修四轮的「同一事实存在两份拷贝」完全同族**,补 parity 守卫钉死。
+- **NEUTER×3 各咬各的方向:** 重新导出一个皮肤符号 → ratchet 红;只 bump 模块 token → parity 红;把 picker 容器塞回 general.html → markup ratchet 红。
+- **★ 一个被保留的机制,以及为什么把「零消费者」写进它自己的头部:** `settings/section_requires.js`(JS 缺失时降级显示而非留空盒子)唯一的使用者就是本次删掉的区块 ⇒ **现在零消费者**。保留它,因为它是通用的、且它防的缺陷属于「JS 绘制的设置区块」这一类而非那一个 picker;但**把这个事实写在模块头部**,而不是留给下一个人 grep 之后自己发现。它的测试同步改为**合成 markup** 驱动——诚实标注「今天没有 shipped 主题」,好过让守卫指着一个已删除的区块。
+- **★ 共享 HEAD 上「计数断言」连救两次、又两次被兄弟清空 index(判据升级):** ①第一次 `staged=36`(兄弟塞进 19 个 pet 文件)②剔除后仍 `staged=23`。而 `git commit -- <pathspec>` **读工作树不读 index** —— 实测 `styles.css` 里混着兄弟的 pet CSS,pathspec 提交会把它一起带走。最终按 charter #15:styles.css 走 **blob 手术**(`git show HEAD:` + 只做我的两处删除 + `hash-object -w` + `update-index --cacheinfo`),其余 16 件常规暂存,**不带 pathspec** 提交。**判据:验收不能看 index(它随时被兄弟改写),只能对 `git show HEAD` 断言** —— 实测提交后恰好 17 文件、兄弟 pet CSS 计数 0 且原样留在他们的工作树。
+- **兄弟协调(与 `pt_3d487a30`,项目栏宠物):** 对方计划把宠物试戴建在这个注册表上 —— 已通报并确认停做(一个宠物,无选择器,并加了一条守卫防注册表复活)。**顺带纠正其调色板来源:** 它抄的是 `a2-soft.svg`(**被否决的候选,本批删除**),实测与已发布 logo 三项全不同(墨、腮红 `#FB9E96` vs `#FEABA3`、body 三面全异),已建议改从 `tofu-welcome.svg` 派生,并指出**把 hex 抄进生成器本身就是漂移机制**(对方随后加了一条「每个宠物颜色必须出现在 tofu-welcome.svg 里」的守卫,比我建议的更强)。
+- **★ 而对方反过来纠正了我一个数,我复核后确认它对、我错:** 我报主墨色是 `#14121C`,依据是**出现次数**(它出现 2 次、居首)。对方按**路径权重**(该 fill 所挂 path data 的总长度)测得 `#1F1C25` = **5299**,而 `#14121C` 仅 **865**。我独立复算确认:`#1F1C25` 才是吉祥物主轮廓,`#14121C` 只是 45 个描摹黑里的一个次要色。**判据:VTracer 描摹产物里「出现次数」与「视觉质量」几乎无关 —— 一个描边色可能只写一次却覆盖整条轮廓。取代表色必须按覆盖面积/路径权重,不能按 uniq -c。**
+- **验收边界:** 纯前端,**刷新即生效,无需重启**;`handdrawn-favicon.svg` 未跟踪且零引用,非我所有,原样留下。
+
 ### 2026-07-29(续·项目栏宠物换形) — owner 报「小猫和品牌调性不一致,也不够好看」;**真正的落点不是重画一只猫,而是让宠物就是 logo 本尊**——而既有 24 条行为守卫在它当猫的整段时间里全绿(commit `d06c87ae`,44 文件 +796/-121;新套件 **13/13** + 既有重锚 **38/38**,**NEUTER×6 各咬各的**(其中**一枚在提交过程中真的抓到一个未跟踪文件的实缺陷**);相邻环 **131/131**;干净 worktree 复验 **60/60**)
 
 - **★ 根因是「零共同语言」,而这在代码里完全看不出来:** 实测 `static/icons/pet/oneko/*.png` 是 18 帧公共领域猫咪像素画,与品牌形态**三项全不共享**——配色、描边、面部语言。而 `tofu-pet.js` 的引擎本身**是角色无关的**(只做 `frame → URL` 解析),所以换角色根本不需要动引擎。

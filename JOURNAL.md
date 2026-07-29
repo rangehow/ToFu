@@ -1,5 +1,19 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·假 t() 盲区) — owner 实测抓出我上线的 QR 标签是**字面量 `project.qrScan`**;根因不止「忘了加 key」,而是**测试 harness 伪造的 `t()` 语义与真实现相反**,11 条渲染守卫全绿地放行了它(commit `bd8c63e0`,3 文件;守卫 **15/15**,**NEUTER×2 各咬 4 条**;干净 HEAD worktree:i18n 守卫 **8/8**(此前红)+ QR 全套 **66/66**)
+
+- **★ owner 的证伪(用真 i18n.js 实测):** `t("project.qrScan","Scannable QR code")` 返回的是 **`"project.qrScan"`**,不是那句英文。对照组 `t("common.cancel")` → `"取消"`。也就是用户在二维码上方看到的是一行**变量名**。
+- **★ 根因是两层叠加,第二层才是真问题:**
+  ①`t()` 的签名是 `t(key, params)`,**第二参是 `{placeholder}` 替换表,不是缺省文案**——我按「fallback」写,它**语法上合法、语义上什么也没做**;而两个 key 从来没在 `static/js/i18n.js` 里定义过,于是 `t()` 走 `!entry → text = key` 分支吐出裸 key。
+  ②**我的 harness 把 `t` 伪造成 `(k, d) => (d || k)`**——这与真实现**语义相反**:它把第二参当兜底文案返回,凭空**制造出真 UI 永远不会产生的字符串**。所以「key 缺失」这个缺陷在测试里长得和「key 正常」一模一样,**11 条渲染守卫测的是一个不存在的函数**。这才是它能上线的原因。
+- **落点:** ①补 `project.qrScan` / `project.qrScanMulti` 两 key 的 zh+en;②调用点去掉那个假 fallback 参数,并留注释钉死「第二参是 params 不是缺省值」;③**harness 改为抓真字典**——Python 侧正则解析 `static/js/i18n.js` 成 `{key:{zh,en}}` 注入 node,`t()` 对缺失 key **返回 key,与生产一致**。
+- **★ 项目里本来就有一条守卫在喊,我没跑它:** `test_frontend_i18n_key_coverage.py::test_every_referenced_key_is_defined_all_namespaces` 在**干净 HEAD 上就是红的**,点名的正是 `ui/tool_rounds.js: project.qrScan` 与 `project.qrScanMulti`;我实测它在我第一次 QR 提交之前(`6a5dec8d~1`)是**绿的**,所以这是我引进的真回归。已按 owner 要求列入常跑项:**任何往 JS 加 `t('...')` 的批次都必须过它**。
+- **NEUTER×2 各咬 4 条:** 删掉两个 key(复现上线态)→ 4 红;把假 `t()` 装回去 → 同样 4 红(证明盲区确已消除,而非靠新加断言绕过)。另有一条「守卫的守卫」断言字典抓取真的解析出 >500 条且含这两个 key——否则「key 缺失」与「字典没解析」会同样通过,断言就是空转的。
+- **★ 我自己造成一次工作丢失(记下来防再犯):** NEUTER 还原时我用了 `git checkout -- tests/test_frontend_qr_render.py`,**把自己未提交的 harness 改造整个回滚**(charter #15 禁止「以工作树为中间态」正是这个)。i18n key 与调用点修复因不在该 pathspec 内幸存,harness 重做一遍。**判据:NEUTER 的备份/还原一律用 `cp` 到 /tmp,永不使用 `git checkout`——后者不区分「我要撤销的实验」与「我还没提交的成果」。**
+- **一处噪声已定责(非我的):** 该守卫现在只剩 `feature-92a75489.js` / `feature-dfd9ee59.js` 报 `paper.qaThinking`。这两个是 **gitignored 的本地陈旧 bundle**(`.gitignore:133`),源码里 grep 不到该 key,干净 HEAD worktree 里也不存在这两个文件——属兄弟在飞的 paper 改动的构建残留,不在本批范围。
+- **最终形态(真 t() 实测):** `project.qrScan → "可扫描的二维码"`,`project.qrScanMulti → "个可扫描的二维码"`。
+- **验收边界(仍未做的三条不变):** ①纯前端静态改动,**刷新即生效**(不需重启);②「扫完自动继续」仍只是积木;③二维码时效与清理未做。
+
 ### 2026-07-29(续·三候选入表) — 试戴位从「一枚我已否过的稿」变成**三条真正分岔的路**;像素这一枚**跟生成器搏斗三轮后诚实改为手写**(owner 指令;commit `50db04ed`,9 文件;守卫 **7/7**(新增「注册皮肤的文件必须真存在」),五格布局实测 **2 行/最小宽 94px/无溢出**)
 
 - **owner 的判据(记下来):** 开关做完不等于目标达成——「让我戴一个我已经否过的东西,等于零进展」。机制层验收通过后,下一步是**填充候选而不是打磨开关**。

@@ -1117,3 +1117,15 @@
 - **补集是承重的,不是装饰:** 「turn 真结束后迟到的 phase 仍必须被丢弃」——否则 `streamSessions` 永不回收、paint 读者永远读作「流存在」,那是把缺陷修成反向缺陷。NEUTER #3(删掉早退)精确咬这一条。
 - **★ 一处自纠,发在同一批:** 我的守卫调 `strip_comments(src)` 却**没传 `lang='js'`**,而该 helper 默认 `lang='shell'`、**不剥 `/* … */`**。后果是「剥注释后」的文本里仍留着整段 JSDoc——正是 charter #24 要防的形态,出现在**引用 charter #24 的那一批**里。且它咬的方向是**对正确文件误报红**:`stream_session.js` 的注释里**故意写着** `computeConvBusy`(解释为何不用它),未剥就违反守卫自己的「不得走 conv 级」断言。已改为显式 `lang='js'`,并补 `test_comment_stripping_is_bidirectional` 驱动**真** helper 双向验证(注释既不能违反否定断言、也不能满足肯定断言)。
 - **诚实边界:** ①`tests/test_frontend_stream_phase_heartbeat_live.py` 4/6 红是**既有缺陷**——把我的改动完全回滚后仍同样红,它扫的 `sse_pipeline.js` 我本批未碰(`attempt` 字段随兄弟提交 `f97fd317` 从 PHASE ingress 白名单消失),已单独开票 `pt_1e7f6539b41c4d8f` 并写明「先判定是守卫过期还是产品码回归,禁止不判定就二选一」。②纯前端改动,bundle 下次页面加载自重建、**不需重启**;但 `/api/v1/chat/conv-state` 仍 404(进程停在 10:51),故三源并集里的权威集合一源在重启前拿不到,`activeTaskId` 那一源已生效。重启时机归 owner。
+
+### 2026-07-29(续·心跳冻结两层) — 票面把「一个字段丢了」当全部,实测只有 1/10 检查真红,而真凶在票面**从未提到的另一层**;更要命的是那一层**从来没被实现过**,守卫却一直在断言它(`pt_1e7f6539b41c4d8f` DONE;commit `f34a82c8`,3 文件;守卫 **4/6 红 → 7/7 绿**;相邻环 **73 passed**)
+
+- **★ 先证伪自己开的票(本轮最值钱的一条):** 我上一轮开这张票时写的是「`attempt` 从 ingress 白名单消失」,把整件事框成「补一个字段」。实测跑守卫自己的检查:**9/10 通过,只有 1 条行为检查失败**。字段那半确实缺(HEAD 上 phase 分支 `attempt` 出现 **0** 次),但它**不是**用户看到的症状的成因——真凶在 `streaming_ui.js` 的重绘键,票面一个字都没提。**判据:票面描述的是「我当时以为的根因」,不是「实测的根因」;接票的第一件事是拿守卫的逐条结果去证伪票面,而不是照票面施工。**
+- **★ 层2 从来没被实现过,而守卫一直在断言它:** `git log -S'"retry:" + (phase.attempt || 0) + ":" + _txt'` 命中 **0 个 commit**——这半修复从未落地。守卫的 docstring 把它写成「THE FIX」的一部分并据此设了 NEUTER 臂,于是该守卫**自诞生起就是红的**。同族第二次:上次是守卫钉死实现字面量(产品码一改就失配),这次是守卫断言一个**不存在的实现**。
+- **两层各自的机制(为何缺一不可):**
+  - 层1 `sse_pipeline.js` ingress 丢 `attempt`:后端在**顶层**下发(`_stream.py::_on_waiting`、`stream_handler/_analyse.py`),而重绘键读的正是顶层字段;`detailArgs.attempt` 带的是同一个数字但供 i18n **文本**用,**两者不可互换**。
+  - 层2 `streaming_ui.js` 重绘键只认 `attempt`:首字节心跳把 `detailKey` **恒定**、只推进 `detailArgs.elapsed`,于是「已等待 20s→40s→60s」每拍都重算文本再丢掉——`data-phase-key` 不变 ⇒ `innerHTML` 永不换 ⇒ 冻在第一拍,**切换对话才「好」**(因为那会拆掉整个气泡重建)。修法是把**解析后的文本**折进键,规则退化为「看得见的文字变了就重绘」——这才是用户唯一能感知的判据。
+- **★ 顺手补掉守卫自己的盲区(它的名字在撒谎):** `test_vu_ingress_matches_worker_ingress_contract` 名字承诺 parity,断言里**只读 VU 一侧**,worker 侧丢光所有字段它照样绿。这不是假设——**worker 侧真的缺 `attempt`、VU 侧真的有,而这条「parity」守卫全程绿灯**。新增 `test_both_ingress_paths_carry_the_repaint_contract_fields`,从**同一份清单**对两侧同时断言;NEUTER 验证:摘掉 worker 的 `attempt` → 新守卫红、旧守卫仍绿。
+- **契约范围是实测划的,不是照抄票面/docstring:** 只钉 `{attempt, detailKey, detailArgs}`(各有活的消费者)。**刻意不钉** `statusCode`/`model`——VU 侧带着它们,但全前端扫描 `phase.statusCode` / `phase.model` **零读者**,钉进去等于把死重量当契约。同理没有「为对齐而给 worker 补上这两个字段」,那是投机而非修复。
+- **charter #24 再次生效在两侧:** 两个 ingress 处**都写着**点名这些字段的注释,不剥注释的扫描会被**注释**满足。已统一走 `strip_comments(..., lang='js')`。
+- **诚实边界:** ①该守卫此前**未被 git 跟踪**(只存在于工作树),这正是两层回归都没被 CI 拦住的原因,本次一并入库。②纯前端,bundle 下次页面加载自重建、**不需重启**。③未做真浏览器实测,证据是 JSDOM 驱动真 `updateStreamingUI` + 真 ingress 白名单切片。

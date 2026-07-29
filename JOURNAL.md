@@ -1,5 +1,13 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·死控件根修) — owner 去戴皮肤时发现**开关不在他手里**:标题+说明是静态 HTML 照常渲染,格子由缺失的 JS 填充,于是他看到「标题 + 说明 + 一个空盒子」;而我把「需重启」写在验收边界脚注里却让他现在去点——**两句话冲突,他按后者行动了**(commit `4546356f`,9 文件;新套件 **6/6 含 NEUTER 真咬**,相邻环 **44/44**;真浏览器实测降级形态)
+
+- **★ 缺陷形态(项目明令禁止的那一种):** 功能不可用,界面却把它呈现为可用。根因不是代码错——`brand_logo.js` 的 bundler 注册与 dev-fallback 标签**都在 HEAD 里**;而是**运行中的进程持有它启动时的打包清单**,新模块要等重启才进 bundle。于是「代码正确」与「界面诚实」是两件事:前者绿,后者是个假装可点的空盒子。
+- **★ owner 要的是根因层修法,不是 logo 一处特例:** 落点为**通用降级契约**——任何设置区块用 `data-requires="符号名"` 声明它的 JS 依赖(支持多符号空格分隔),`settings/section_requires.js` 在设置打开时逐一检查:全在 → 正常渲染;**任一缺失 → 加 `.degraded`,CSS 隐藏控件并显示「此功能需重启服务后生效。」**。新增一个 JS 依赖型区块从此是**一个属性**,不是一段新代码。
+- **★ 我的 9 条既有守卫为何全瞎(owner 的判据):** 它们**全部在测模块自身的行为**,而这个失效只在模块**不存在**时出现——没有一条测「模块不在时 UI 长什么样」。新套件正是补这一面:用**真实 shipped 面板切片**驱动(缺失→必须 degraded、存在→必须正常)、多符号形态、以及一条**CSS 生效断言**(class 翻了但样式表不响应,守卫会假绿而用户仍看到空盒子)。NEUTER:摘掉符号检查 → 缺模块的区块重新变成「看起来可用」,精确复现 owner 撞到的形态。
+- **真浏览器实测降级态(生产 CSS + 真实面板 markup):** `degraded=1`、**pickerVisible=False**(空盒子真的消失)、noticeVisible=True、文案「此功能需重启服务后生效。」
+- **验收边界:** 修复纯前端;`section_requires.js` 自身也是新模块,**同样要等重启才进 bundle**——但这次不再有欺骗性:重启前该区块整体降级并明说原因,而不是留个空盒子。重启后皮肤选择器与三枚候选即可点。
+
 ### 2026-07-29(续·皮肤资产迁出 _gen) — owner 纠正:我把**用户能点到的产品资产**提交进了生成器工作台目录;而我的守卫只测「文件存在」,**测不出「文件放错地方」**(commit `da5742d0`,6 文件(4 个 R100 纯改名);守卫 **9/9**,新增位置不变量 + 导出存活守卫,**NEUTER 真咬**;新路径五枚实测全绿)
 
 - **★ owner 的判据(比我的守卫强一档):** `static/icons/_gen/` 名字就在说「这是临时产物」。将来任何人清理它、或把它加进导出剥离规则,五枚皮肤里的四枚会**静默回落成原版**——用户点了没反应,看起来像开关坏了;而「文件存在」这条断言在开发树上永远是绿的,看不见这类失效。

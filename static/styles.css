@@ -467,6 +467,39 @@ html[data-rail] .folder-quickadd{display:none}
    position:relative 必须在此一并声明 —— 基础层 .welcome-icon 本来没有定位,之前只是
    tofu 层顺手给了一个;不补的话落影会逃到最近的定位祖先上去。 */
 .welcome-icon{position:relative}
+
+/* ══ BRAND-AREA SCALE — THEME-AGNOSTIC ═══════════════════════════════════════
+   品牌区的**尺度**(吉祥物大小、主标字号、图标与字标的间距)与形态/配色/动效同属
+   品牌形态,必须三主题同源。
+
+   2026-07-29 owner 实测退回(本家族第四次,前三次分别是字标/印章+落影/动效):基础层
+   `.welcome-icon{64px}` 与 `.welcome h2{24px}` 是早年的**通用**小尺寸,而放大值只写在
+   `[data-theme="tofu"]` 里 ⇒ 实测吉祥物 100px vs 64px、主标 42px vs 24px、图标下间距
+   24px vs 6px。也就是说 dark/light 下这块区域退化成「一个小图标配一行普通 h2」,
+   而不是品牌时刻。移动端阶梯(84/68px)同样只有 tofu 有,那两个主题在手机上连缩放
+   曲线都没有。
+
+   ★ 放大值锚在 `.welcome-icon` 与 `.welcome h2.tofu-brand`,**不动通用 `.welcome h2`**
+   —— 后者仍要服务非品牌的欢迎标题(空文件夹提示等),把它一起放大会波及无关表面。
+   `.welcome h2.tofu-brand` 是 (0,2,1),严格压过基础层 `.welcome h2`(0,1,1)。
+
+   ★ 尺度取 tofu 现值而非把 tofu 拉小:那是 owner 在岗看得最久、且本轮设计(落款印
+   几何、落影椭圆比例、字距补偿)全部围绕它求解的比例;反过来迁就旧通用值会让前三轮
+   的实测结论全部失效。
+
+   守卫 tests/test_brand_wordmark_parity.py 按 _THEMES 参数化钉死三主题尺度相等,
+   桌面与移动断点各测一次。 */
+.welcome-icon{
+  width:100px;height:100px;
+  border-radius:var(--radius-sm);
+  overflow:visible;
+  margin-bottom:24px
+}
+.welcome h2.tofu-brand{font-size:42px}
+/* 移动端阶梯不写在这里 —— 全局 `@media(max-width:768px){.welcome-icon{52px}}`(约 17031 行)
+   与横屏那条(约 18456 行)同为 (0,1,0) 且位置更靠后,写在此处会被它们压成死代码
+   (实测:此处写 84px,浏览器解析出 52px)。故品牌区的移动阶梯放在那两条之后,
+   见文件尾部 BRAND-AREA SCALE · MOBILE。 */
 .welcome-icon::before{
   /* bottom 取负值：图片盒与图标盒完全重合(实测两者同为 84×84、imgTop=0),
      落影若留在盒内就贴在贴图下沿、读不出「托住」的感觉;探出盒外才像地面。
@@ -11331,15 +11364,11 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 
 /* ── Welcome screen — pixel tofu block ── */
 [data-theme="tofu"] .welcome-icon{
-  width:100px;height:100px;border-radius:var(--radius-sm);
+  /* 尺度(100px / margin-bottom:24px / 倒角 / overflow)已上提到基础层 BRAND-AREA SCALE
+     三主题共用;此处只留 tofu 自己的口音。position:relative 同样在基础层。 */
   background:transparent;
   border:none;
-  box-shadow:none;
-  overflow:visible;position:relative;
-  /* 2026-07-29:此处原有 `animation:tofuFloat 4s` 已移除 —— 浮动挂在宿主上会把它的
-     ::before 落影一起带飞,地面线跟着动就读作贴纸而非影子。浮动现由基础层挂在
-     .welcome-icon img 上(见 tofuMascotFloat),宿主保持静止。 */
-  margin-bottom:24px
+  box-shadow:none
 }
 [data-theme="tofu"] .welcome-icon:hover{
   box-shadow:none
@@ -11358,10 +11387,12 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 
 /* ── Welcome text ── */
 [data-theme="tofu"] .welcome h2{
+  /* font-size 已上提到基础层 `.welcome h2.tofu-brand{42px}`(三主题共用);
+     此处只留 tofu 的颜色与字身口音。 */
   color:var(--text-primary);background:none;
   -webkit-text-fill-color:var(--text-primary);
   font-family:var(--sans-body);
-  font-size:42px;font-weight:800;letter-spacing:-0.03em;text-transform:none
+  font-weight:800;letter-spacing:-0.03em;text-transform:none
 }
 /* 非品牌的说明小字。必须排除 .tofu-brand —— 它与基础层的印章规则同为 (0,2,2)
    且位置在后,不排除就会把印面字拉回 Jakarta 500/13px(实测如此)。 */
@@ -11439,17 +11470,18 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   background:radial-gradient(ellipse at 50% 50%,rgba(120,84,40,.38),rgba(120,84,40,0) 72%)
 }
 
-/* ── Mobile breakpoints: tofu 主标恢复全局移动意图 — 42px 是桌面值(上方 0,2,1
-   规则),全局 .welcome h2 移动规则(0,1,1) specificity 不够被压死;以下三条与
-   全局断点一一对应并特异化到 (0,3,1)。新数字不发明:20/18px 即全局断点原值 ── */
+/* ── Mobile breakpoints: 品牌主标恢复全局移动意图 — 42px 是桌面值(基础层 BRAND-AREA
+   SCALE 里的 .welcome h2.tofu-brand,0,2,1),全局 .welcome h2 移动规则(0,1,1)
+   specificity 不够被压死;以下三条与全局断点一一对应。新数字不发明:20/18px 即全局
+   断点原值。**不带 [data-theme] 前缀** —— 尺度同属品牌形态,三主题共用。 ── */
 @media(max-width:768px){
-  [data-theme="tofu"] .welcome h2.tofu-brand{font-size:20px}
+  .welcome h2.tofu-brand{font-size:20px}
 }
 @media(max-width:380px){
-  [data-theme="tofu"] .welcome h2.tofu-brand{font-size:18px}
+  .welcome h2.tofu-brand{font-size:18px}
 }
 @media(orientation:landscape) and (max-height:600px) and (max-width:900px){
-  [data-theme="tofu"] .welcome h2.tofu-brand{font-size:18px}
+  .welcome h2.tofu-brand{font-size:18px}
 }
 
 /* ── Turn nav — a quiet pill (the beveled "pixel bar" read as a toy
@@ -14769,11 +14801,10 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
 
 /* ── Tofu responsive ── */
 @media (max-width:768px){
-  [data-theme="tofu"] .welcome-icon{width:84px;height:84px;border-radius:var(--radius-sm);margin-bottom:18px}
+  /* .welcome-icon 的移动阶梅已上提到基础层 BRAND-AREA SCALE(三主题共用) */
     [data-theme="tofu"] .md-content{font-size:14.5px}
 }
 @media (max-width:480px){
-  [data-theme="tofu"] .welcome-icon{width:68px;height:68px;border-radius:var(--radius-sm);margin-bottom:12px}
     [data-theme="tofu"] .md-content{font-size:13.5px}
 }
 
@@ -21959,3 +21990,21 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
 
 /* Model card — "via <endpoint>" placement chip */
 .stg-mcard-via { font-family: ui-monospace, monospace; }
+
+/* ══ BRAND-AREA SCALE · MOBILE ════════════════════════════════════════════════
+   品牌区移动阶梯。**必须放在文件尾部**:全局 `@media(max-width:768px){.welcome-icon
+   {52px}}` 与横屏那条同为 (0,1,0),写在基础层(约 470 行)会被它们按源序压成死代码
+   —— 实测在那里写 84px,浏览器解析出的仍是 52px。
+
+   桌面 100px 的品牌时刻在手机上按 84 → 68 收敛(与主标 42 → 20 → 18 同步),
+   而不是退回通用的 52/40px 图标——那正是 dark/light 此前的退化形态。
+   三主题共用,不带 [data-theme] 前缀。 */
+@media(max-width:768px){
+  .welcome-icon{width:84px;height:84px;margin-bottom:18px}
+}
+@media(max-width:480px){
+  .welcome-icon{width:68px;height:68px;margin-bottom:12px}
+}
+@media(orientation:landscape) and (max-height:600px) and (max-width:900px){
+  .welcome-icon{width:68px;height:68px;margin-bottom:12px}
+}

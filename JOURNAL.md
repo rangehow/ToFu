@@ -1,5 +1,26 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·派单滞留根修) — 「排队中却什么都不生成」的另一半:**epic 的 30 分钟租约一过期,那条 kickoff 就同时对两条路不可见**;实测扫描集 **0 vs 4**——board 上每一条真滞留都是旧扫描看不见的(`pt_b46ad973a7ba4621` DONE;commit `6d5a7e56`,2 文件;新增 3 条(2 条失败先行),**NEUTER 咬**;套件 **9/9**,相邻环 **68/68**;活体扫描集实测)
+
+- **★ 这是 VU 可见性那三批的**第二个症状**,不是无关缺陷:** owner 最初报的三张截图里,第二张就是「排队中,但什么都没在生成」。前三批修的是「在生成却看不见」,这一批修的是「真的没在生成」。同一个 objective 的两半。
+- **★ 根因是两扇门同时关在同一行上,而每扇门单独看都合理:**
+  - `_effective_status` 在**读取时**回收过期软租约 ⇒ 租约一过,epic 读作 `open`、`owner_conv_id` 被抹空;而 reconcile 扫描集是「拥有 **claimed** epic 的会话」⇒ **该会话整个从扫描集里消失**;
+  - 正常派单循环**确实**会重新选中这个 open epic,但 `_epic_already_queued` 看到那条还在的 kickoff,拒绝再入队。
+  
+  **两条路各自都在正确地执行自己的规则,而交集是空的** —— 这就是为什么它不是「慢」而是「永远」。
+- **★ 活体实测把「理论缺陷」变成「board 上正在发生的事」(本轮最值钱的一步):** 对真实 board 跑两种扫描集——
+  | 扫描集 | 结果 |
+  |---|---|
+  | claimed-only(旧) | **0 个会话** |
+  | 队列行驱动(新) | **4 个会话** |
+  | 新增可达 | **4 个,即全部** |
+  
+  也就是说**旧扫描在这块 board 上此刻的召回率是 0**。另跑一次无关项目路径 → 空集,跨项目隔离成立。
+- **落点(锚在耐久事实上,不是锚在会过期的那个):** `_convs_holding_undrained_kickoffs` = board 的 claimed owner **∪** 「持有 workflow_step 队列行且 config.projectPath 指向本项目」的会话。队列行是**耐久**的,租约是**会过期**的——判据要挂在前者上。探针失败时退回旧的 board 派生集(即老行为),绝不把异常抛进 sweep。
+- **★ 配套守卫钉的是「加宽扫描集」的反向风险,不只是正向修复:** 一个读作 `open` 的 epic **同时**是正常派单循环的合法目标 ⇒ 天真的加宽会让同一次 sweep 既排空旧 kickoff、又入队一条新的 = **同一个 epic 两个计费任务**。故补 `test_expired_lease_strand_does_not_double_dispatch`,断言恰好 1 次 spawn 且队列**没有被重新填上**。
+- **既有守卫为何看不见:** `test_sweep_reconciles_stranded_kickoff` 覆盖的是 **claimed** 那一种滞留,它在租约有效期内成立;**过期这一格从来没有夹具**。新用例显式先断言前置条件(`status=='open'` 且 `owner_conv_id` 为空)——把「为什么旧扫描找不到它」写成断言,而不是留给读者推断。
+- **验收边界:** 纯后端,**运行中进程不带**,需重启后 30s heartbeat 才按新扫描集跑;本批未回填历史滞留行(重启后首次 sweep 会自然排空它们)。
+
 ### 2026-07-29(续·P0 费率票逐条复验关闭) — 实现早在 `818b3f8`+`d4eeb25`+`da64614` 落地,本轮是**按票面验收标准逐条实测复核后关票**(零新产品码);**一处刻意偏离票面并说明理由**:票面主张 `110022` 应归 fund,实测它是交易所可转债,按 fund 收 1.5% 赎回费对债券是 **60 倍错**(`pt_86e9ea617e1f47e8` DONE)
 
 - **逐条复验(全部在干净 committed worktree 上跑):**

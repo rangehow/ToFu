@@ -82,6 +82,16 @@ def _generate_ideas(direction, open_gaps, *, lang, n_ideas, abort=None):
     return generate_ideas(direction, open_gaps, lang=lang, n_ideas=n_ideas, abort=abort)
 
 
+def _persist_survey(direction, lang, survey_md, open_gaps):
+    from lib.research.persistence import persist_survey
+    return persist_survey(direction, lang, survey_md, open_gaps)
+
+
+def _persist_ideate(direction, lang, artifact):
+    from lib.research.persistence import persist_ideate
+    return persist_ideate(direction, lang, artifact)
+
+
 # ── Stage: harvest ─────────────────────────────────────────────────────────
 
 def _run_harvest(ctx: dict) -> dict:
@@ -141,9 +151,16 @@ def _run_survey(ctx: dict) -> dict:
     if not res.get('ok'):
         # Surface as an exception so the stage retries / fails loudly.
         raise RuntimeError(f'survey failed: {res.get("error")}')
-    return {'open_gaps': res['open_gaps'], 'survey_md': res['survey_md'],
-            'inputs_used': res.get('inputs_used', 0),
-            'citation_audit': res.get('citation_audit')}
+    art = {'open_gaps': res['open_gaps'], 'survey_md': res['survey_md'],
+           'inputs_used': res.get('inputs_used', 0),
+           'citation_audit': res.get('citation_audit')}
+    # Durable BEFORE the checkpoint: the task registry is in-memory with a TTL,
+    # so without this the survey vanishes ~2h after the run (and instantly on a
+    # restart). Never raises — a storage fault must not discard a finished
+    # survey (see lib/research/persistence.py).
+    _persist_survey(ctx['direction'], ctx.get('lang', 'en'), art['survey_md'],
+                    art['open_gaps'])
+    return art
 
 
 def _gate_survey(ctx: dict, art: dict) -> list:
@@ -180,6 +197,10 @@ def _run_ideate(ctx: dict) -> dict:
         art['degraded'] = True
         art['degraded_reason'] = res.get('degraded_reason') or 'pipeline degraded'
         logger.error('[Research:ideate] DEGRADED — %s', art['degraded_reason'])
+    # Durable BEFORE the checkpoint. The rejection audit carried here is the
+    # calibration data for IDEATE_GATE_THRESHOLD, so losing it to a TTL sweep
+    # forfeits the ability to tune the gate from real runs.
+    _persist_ideate(ctx['direction'], ctx.get('lang', 'en'), art)
     return art
 
 

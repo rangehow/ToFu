@@ -775,6 +775,11 @@ _BUNDLE_FILES = [
     'settings/section_requires.js',
     'settings/core_panel.js',
     'settings/provider_render.js',
+    # Wire-face visibility + editing (2026-07-29). Must load BEFORE
+    # provider_render.js consumers run, but AFTER core_panel.js declares
+    # _stgProviders. Placed here so _faceChipHTML / _renderFacesSection
+    # exist by the time a provider card renders.
+    'settings/provider_faces.js',
     'settings/key_stats.js',
     'settings/balance.js',
     'settings/template_actions.js',

@@ -171,6 +171,14 @@ function _renderProvidersTab() {
 
       // ── Extra Headers (optional, for provider-specific gateway headers) ──
       html += _renderExtraHeadersSection(pi, p.extra_headers || {});
+
+      // ── Alternate wire faces (account/face separation, charter #23) ──
+      // ONE account, N faces. Until this editor existed the only writer of
+      // faces{} was "sync from template", so a self-built dual-face gateway
+      // could only be configured by hand-editing server_config.json.
+      if (typeof _renderFacesSection === 'function') {
+        html += _renderFacesSection(pi, p.faces || {});
+      }
     } else {
       // Local providers — show probe status pane (filled by _discoverLocalModels).
       html += '<div id="stgLocalStatus_' + pi + '" class="stg-auto-status" style="display:none;font-family:ui-monospace,monospace;font-size:12px;"></div>';
@@ -276,7 +284,8 @@ function _renderModelCard(provIdx, modelIdx, m) {
 
   // Model ID line
   html += '<div class="stg-mcard-main">' +
-    '<span class="stg-mcard-id">' + escapeHtml(m.model_id || '(unnamed)') + '</span>';
+    '<span class="stg-mcard-id">' + escapeHtml(m.model_id || '(unnamed)') + '</span>' +
+    (typeof _faceChipHTML === 'function' ? _faceChipHTML(provIdx, m) : '');
 
   html += '</div>';
 

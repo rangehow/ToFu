@@ -677,6 +677,86 @@ def update_provider_template():
     })
 
 
+@config_bp.route('/api/v1/providers/resolve-faces', methods=['POST'])
+@safe_route
+def resolve_provider_faces():
+    """Resolve which wire face every model of ONE provider dispatches over.
+
+    Body: ``{provider: {...}}`` — a provider dict shaped like a
+    ``config['providers'][i]`` entry. Only the routing-relevant fields are
+    read (``base_url`` / ``protocol`` / ``faces`` / ``models``); credentials
+    are never touched, so the Settings UI can post its UNSAVED working copy.
+
+    Returns ``{ok, resolutions: [{model_id, ok, face, protocol, base_url,
+    forced, error}], faces: [name, ...], dual_face_host: bool}``.
+
+    WHY THIS ENDPOINT EXISTS
+    ------------------------
+    The Settings panel edits a working copy that has not been saved yet, so
+    the ``face_refusals`` list computed at GET-time (dispatcher slot build)
+    goes STALE the moment the user pins a face, adds a Claude model or edits
+    ``faces{}``. Rendering a stale verdict is worse than rendering none: the
+    failure mode is a pill reading "anthropic" on a model that will actually
+    dispatch over the OpenAI wire — the silent signature-dropping shape
+    ``provider_face`` exists to prevent.
+
+    The alternative — re-implementing the family rule in JavaScript — is
+    barred by charter #12 (no hand-copied backend enums) and would drift in
+    exactly that direction. So the UI asks the SAME resolver the dispatcher
+    uses (``lib.llm_dispatch.provider_face.resolve_face``); there is one
+    implementation of "which wire does this model use", and the UI cannot
+    disagree with routing.
+
+    Stateless: reads no config file, mutates nothing, builds no slots.
+    """
+    from lib.llm_dispatch.provider_face import (
+        DEFAULT_FACE, dual_face_hosts, provider_faces, resolve_face,
+    )
+
+    data = parse_body()
+    provider = data.get('provider')
+    if not isinstance(provider, dict):
+        return api_bad_request('provider (object) is required')
+
+    models = provider.get('models')
+    if not isinstance(models, list):
+        models = []
+
+    known = dual_face_hosts()
+    faces = provider_faces(provider)
+
+    resolutions = []
+    for m in models:
+        if not isinstance(m, dict):
+            continue
+        mid = (m.get('model_id') or '').strip()
+        if not mid:
+            continue
+        r = resolve_face(provider, m, dual_face_hosts=known)
+        resolutions.append({
+            'model_id': mid,
+            'ok': r.ok,
+            'face': r.face_name,
+            'protocol': r.protocol or '',
+            'base_url': r.base_url,
+            'forced': r.forced,
+            'error': r.error or '',
+        })
+
+    from urllib.parse import urlparse
+    host = (urlparse(provider.get('base_url') or '').hostname or '').lower()
+
+    logger.debug('[Face] resolved %d model(s) for provider %s (faces=%s)',
+                 len(resolutions), provider.get('id', '?'), sorted(faces))
+    return api_ok({
+        'resolutions': resolutions,
+        # The declared face names, default first — the UI's pin dropdown is
+        # built from THIS, never from a hand-written list (charter #12).
+        'faces': [DEFAULT_FACE] + sorted(n for n in faces if n != DEFAULT_FACE),
+        'dual_face_host': host in known,
+    })
+
+
 @config_bp.route('/api/v1/providers/probe', methods=['POST'])
 def probe_provider_endpoint():
     """One-shot provider auto-setup: discover models, detect brand, find balance URL.

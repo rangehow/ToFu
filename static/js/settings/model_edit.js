@@ -144,6 +144,32 @@ function _editModel(provIdx, modelIdx) {
     '<label class="stg-toggle"><input type="checkbox" class="stg-edit-think"' + (m.thinking_default ? ' checked' : '') + '>' +
     '<span class="stg-toggle-track"><span class="stg-toggle-thumb"></span></span></label></div>';
 
+  /* ── Wire-face pin ──
+   * '' (auto) lets the backend family rule decide — that is what keeps a
+   * future opus-6 correct the day it is added, so it stays the default.
+   * A pin is the escape hatch AND the only way to force a Claude model
+   * onto a non-Anthropic wire, which drops thinking-block signatures; the
+   * warning under the select says so rather than leaving it to the log.
+   * Options come from _faceNamesFor (backend-derived), never hand-listed. */
+  if (typeof _faceNamesFor === 'function') {
+    var _names = _faceNamesFor(provIdx);
+    if (_names.length > 1) {
+      var _cur = (m.face || '');
+      html += '<div class="stg-field"><label>' + escapeHtml(t('settings.meFace')) +
+        ' <span class="stg-hint">' + escapeHtml(t('settings.meFaceHint')) + '</span></label>' +
+        '<select class="stg-edit-face" onchange="_onFacePinChange(this)">' +
+        '<option value=""' + (_cur === '' ? ' selected' : '') + '>' +
+          escapeHtml(t('settings.meFaceAuto')) + '</option>';
+      for (var fi = 0; fi < _names.length; fi++) {
+        html += '<option value="' + escapeHtml(_names[fi]) + '"' +
+          (_cur === _names[fi] ? ' selected' : '') + '>' + escapeHtml(_names[fi]) + '</option>';
+      }
+      html += '</select>' +
+        '<div class="stg-face-warn"' + (_cur ? '' : ' style="display:none"') + '>' +
+        escapeHtml(t('settings.meFacePinWarn')) + '</div></div>';
+    }
+  }
+
   html += '<div class="stg-edit-actions">' +
     '<button class="stg-btn-secondary" onclick="this.closest(\'.stg-edit-form\').remove()">' + escapeHtml(t('settings.cancel')) + '</button>' +
     '<button class="stg-btn-primary" onclick="_saveModelEdit(' + provIdx + ',' + modelIdx + ')">' + escapeHtml(t('settings.apply')) + '</button>' +
@@ -192,6 +218,19 @@ function _onModelPriceInput(el) {
   }
   var hintEl = form.querySelector('.stg-edit-cost-derived');
   if (hintEl) hintEl.style.display = both ? '' : 'none';
+}
+
+/** Live: pinning a face away from 'auto' shows the signature-drop warning.
+ *
+ *  The warning is not decoration — pinning a Claude model to a non-Anthropic
+ *  face is legal (the resolver allows a deliberate override) and silently
+ *  strips thinking-block signatures. The backend logs it; the user needs to
+ *  see it at the moment of choosing. */
+function _onFacePinChange(el) {
+  var form = el && el.closest ? el.closest('.stg-edit-form') : null;
+  if (!form) return;
+  var warn = form.querySelector('.stg-face-warn');
+  if (warn) warn.style.display = String(el.value || '').trim() ? '' : 'none';
 }
 
 function _saveModelEdit(provIdx, modelIdx) {
@@ -249,6 +288,16 @@ function _saveModelEdit(provIdx, modelIdx) {
   form.querySelectorAll('.stg-cap-btn.active').forEach(function(el) { caps.push(el.dataset.cap); });
   m.capabilities = caps;
 
+  /* Wire-face pin. Absent select (single-face provider) leaves any existing
+   * pin untouched — the form never showed it, so it must not silently drop
+   * a value the user set elsewhere. */
+  var _faceEl = form.querySelector('.stg-edit-face');
+  if (_faceEl) {
+    var _faceVal = String(_faceEl.value || '').trim();
+    if (_faceVal) m.face = _faceVal;
+    else delete m.face;
+  }
+
   var _aliasEl = form.querySelector('.stg-edit-aliases');
   var _saveField = (_aliasEl && _aliasEl.dataset.poolField) || 'aliases';
   var aliasStr = (_aliasEl ? _aliasEl.value || '' : '').trim();
@@ -279,9 +328,10 @@ function _saveModelEdit(provIdx, modelIdx) {
 
   _renderProvidersTab();
   _renderPresetsTab(_serverConfig);
+  // The pin may have just changed which wire this model dispatches over —
+  // re-ask the backend so the card's pill reflects the new verdict.
+  if (typeof _refreshFaceResolutions === 'function') _refreshFaceResolutions(provIdx);
 }
-
-// ── Wire-id pool CRUD (from model card chips) ──
 //
 // The card renders `request_ids` when the entry declares one (the wire pool of
 // the model-identity contract) and falls back to legacy `aliases` otherwise.

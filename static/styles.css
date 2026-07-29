@@ -22090,6 +22090,134 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
   .welcome-icon{width:68px;height:68px;margin-bottom:12px}
 }
 
+/* ══ Model card — wire-face chip ════════════════════════════════════════════
+   Which protocol line a model dispatches over. Rendered ONLY from a landed
+   backend resolution (POST /api/v1/providers/resolve-faces), never from a
+   client-side guess — see static/js/settings/provider_faces.js.
+
+   Three states, deliberately distinct: `anthropic` is tinted (it is the state
+   that carries thinking-block signatures, i.e. the one worth spotting at a
+   glance), `pinned` adds a dashed border because a manual override beat the
+   automatic family rule, and `refused` is amber because that model is NOT in
+   the picker at all. */
+.stg-face-chip{
+  display:inline-flex;
+  align-items:center;
+  gap:3px;
+  margin-left:7px;
+  padding:1px 6px;
+  border-radius:999px;
+  border:1px solid var(--s-border,rgba(0,0,0,0.14));
+  background:var(--s-bg-subtle,rgba(0,0,0,0.04));
+  color:var(--s-text-muted,#6b7280);
+  font-family:'JetBrains Mono',ui-monospace,monospace;
+  font-size:9.5px;
+  font-weight:700;
+  letter-spacing:0.02em;
+  text-transform:lowercase;
+  vertical-align:middle;
+  cursor:help;
+}
+.stg-face-chip.anthropic{
+  border-color:rgba(198,120,72,0.5);
+  background:rgba(198,120,72,0.12);
+  color:#a8552b;
+}
+.stg-face-chip.pinned{
+  border-style:dashed;
+  border-width:1.5px;
+}
+.stg-face-chip.refused{
+  border-color:rgba(217,119,6,0.5);
+  background:rgba(245,158,11,0.14);
+  color:#92400e;
+}
+[data-theme="dark"] .stg-face-chip,
+html:not([data-theme="light"]):not([data-theme="tofu"]) .stg-face-chip{
+  border-color:rgba(255,255,255,0.16);
+  background:rgba(255,255,255,0.06);
+  color:#9ca3af;
+}
+[data-theme="dark"] .stg-face-chip.anthropic,
+html:not([data-theme="light"]):not([data-theme="tofu"]) .stg-face-chip.anthropic{
+  border-color:rgba(214,150,110,0.55);
+  background:rgba(214,150,110,0.16);
+  color:#e0a882;
+}
+[data-theme="dark"] .stg-face-chip.refused,
+html:not([data-theme="light"]):not([data-theme="tofu"]) .stg-face-chip.refused{
+  border-color:rgba(251,191,36,0.5);
+  background:rgba(251,191,36,0.14);
+  color:#fbbf24;
+}
+
+/* ══ Model edit form — wire-face pin warning ════════════════════════════════
+   Pinning is LEGAL but consequential (a Claude model on a non-Anthropic face
+   silently loses thinking signatures). The backend logs the override; this is
+   the same fact at the moment of choosing. */
+.stg-face-warn{
+  margin-top:6px;
+  padding:6px 9px;
+  border-radius:var(--s-radius,6px);
+  border-left:3px solid #d97706;
+  background:rgba(245,158,11,0.10);
+  color:#92400e;
+  font-size:11px;
+  line-height:1.5;
+}
+[data-theme="dark"] .stg-face-warn,
+html:not([data-theme="light"]):not([data-theme="tofu"]) .stg-face-warn{
+  background:rgba(251,191,36,0.10);
+  color:#e5c07b;
+}
+
+/* ══ Provider card — alternate wire-faces editor ════════════════════════════
+   Mirrors the Custom Headers row editor: one row per declared face
+   (name + base_url + protocol). Until this existed the only writer of
+   faces{} was "sync from template", so a self-built dual-face gateway could
+   not be configured through the UI at all. */
+.stg-faces-header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  margin-bottom:6px;
+}
+.stg-faces-list{display:flex;flex-direction:column;gap:6px}
+.stg-face-row{display:flex;align-items:center;gap:6px}
+.stg-face-row .stg-face-name{flex:0 0 118px;min-width:0}
+.stg-face-row .stg-face-url{flex:1 1 auto;min-width:0}
+.stg-face-row .stg-face-proto{flex:0 0 104px}
+.stg-faces-btn{
+  flex:0 0 auto;
+  padding:4px 8px;
+  border-radius:var(--s-radius,6px);
+  border:1px solid var(--s-border,rgba(0,0,0,0.14));
+  background:transparent;
+  color:var(--s-text-muted,#6b7280);
+  cursor:pointer;
+  font-size:12px;
+  line-height:1;
+}
+.stg-faces-btn.danger:hover{
+  border-color:rgba(220,38,38,0.5);
+  background:rgba(220,38,38,0.08);
+  color:#dc2626;
+}
+.stg-faces-empty{
+  padding:7px 10px;
+  border-radius:var(--s-radius,6px);
+  background:var(--s-bg-subtle,rgba(0,0,0,0.03));
+  color:var(--s-text-muted,#6b7280);
+  font-size:11.5px;
+}
+[data-theme="dark"] .stg-faces-empty,
+html:not([data-theme="light"]):not([data-theme="tofu"]) .stg-faces-empty{
+  background:rgba(255,255,255,0.04);
+  color:#9ca3af;
+}
+
+/* ══ Provider card — wire-face refusal banner ═══════════════════════════════
 /* ══ Provider card — wire-face refusal banner ═══════════════════════════════
    The dispatcher REFUSES to register a model whose wire face can't be resolved
    safely (a Claude model on a dual-face gateway whose provider declares no

@@ -291,6 +291,10 @@ function openSettings() {
       // Fetch per-model runtime health (success rate / error-throttle
       // cooldowns) and keep it fresh while the panel is open.
       if (typeof _startModelHealthPolling === 'function') _startModelHealthPolling();
+      // Resolve each provider's wire faces (backend resolve_face — the SAME
+      // resolver the dispatcher uses) so the model cards can show which
+      // protocol each model actually dispatches over.
+      if (typeof _refreshAllFaceResolutions === 'function') _refreshAllFaceResolutions();
       // Auto-poll per-endpoint live metrics (TTFT/latency/throughput/success)
       // so local-deployment status stays fresh without manual probing.
       _startLocalMetricsPolling();

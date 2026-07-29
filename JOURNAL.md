@@ -1,5 +1,17 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·章程并发) — owner 顶回我的处方并给出反证:**append 在这个存储形态下会吞掉兄弟的决策且返回 ok=True**;我的「不需要锁」结论来自**串行探针**这个假形态(commits `6b0715fa` 后端 + `587e1d86` 前端;并发套件 **8/8 失败在前**,charter+attention **99 passed**,前端三套 **38 passed**,干净 committed 态 **85/85**;**共享 HEAD 上本批被兄弟抹掉一次,全量重做**)
+
+- **★ owner 证伪我上一轮的处方(我当时要摘掉 `expected_version`):** 我用**串行**探针(兄弟提交完 → 我再提交)看到 `[D0, SIBLING, MINE]` 三条都在,据此断言「append 天然幂等、锁是多余的」。owner 顶回来后我改用**交错**形态实测:在 `commit_charter` 的读写窗口里插入一次兄弟 append → 最终 `['D0','MINE']`,**兄弟那条被吞,而我的返回值是 `{'ok': True}`**。**判据:并发性质必须用交错探针验,串行探针在坏代码上也会过——它根本进不了窗口。** 这条已写进新套件的文件头,防止后人把交错「简化」回串行。
+- **★ 根因不是锁多锁少,是 read-modify-write 整列覆写这个原语:** `project_charter.decisions` 是单行里的一个 JSON 数组,commit 读出整列 → 内存 append → 无条件 upsert 写回整列。两个提交只要交错就互相覆盖。章程决策是要注入给每个兄弟会话的共享意图,**静默丢一条比报错严重得多**。
+- **落点按操作语义分锁(不按调用点):** append 与其它 append **可交换** ⇒ CAS 打在 `version` 上、miss 则重读并只重放**自己那一条**(有界 6 次),`expected_version` 降为建议值;overwrite(`content`)**不可交换** ⇒ 保持硬闸 409,且写入同样走 CAS 使检查不被读后竞态击穿。
+- **★ owner 抓出我方案里的真坑(不堵就会用新洞换旧洞):** `content` 与 `add_decision` **可以同传**(路由的门是 `content is None and not add_decision`,实测一次调用两者同时落库)。也就是说「这次是不是纯 append」**不是签名保证的,是调用方习惯**——CAS 重放会拿陈旧 `content` 覆盖兄弟刚改的北极星。现二者**互斥**(库+路由两道 `invalid_combination`),让纯 append **从参数即可判定**,重放安全才从「通常没事」变成「不可能出错」。补集守卫钉住:兄弟在窗口内改北极星 → 我 append 决策 → **北极星必须是兄弟的新值**。
+- **同一缺陷的第二个实例(owner 指出,我上一批只修了一个页签):** 章程页签把渲染时的 `data-ver` 钉进请求,兄弟自提交后必 **409 且提议仍卡在待办**;且 `project-brain.js` 的 **13 个 mutation catch 全部只有 `console.warn`**(整文件 `showToast` 出现 0 次)。`_reportFailure` 因此提为**唯一失败面**并导出、attention 页签改为委派,13 处全部接线;带 `quiet` 档只给用户没请求过的后台增益(悬停预览)——对那些弹 toast 同样会训练用户忽略这个面。
+- **守卫按后果不按行号:** 面板级不变量对**真实 catch 集合**(花括号配平解析全部 `.catch`)断言,新 handler 自动被覆盖;并断言解析器至少找到 10 个 handler,防止解析退化后对空集合断言而**假绿**。
+- **过程自纠三条:** ①我的长文本夹具以空格结尾而 `propose_amendment` 会 `strip()`,两条守卫首跑因**我的夹具**而红;②新助手函数插在 `commit_charter` **之前**,打断了 `test_propose_source_never_touches_charter_table` 的**源码切片锚点**——移到其后即复原(判据:在被切片守卫的文件里插函数,要先问「切片边界在哪」);③`test_charter_tab_commit_sends_no_expected_version` 首版匹配原文,被**修复自身的说明注释**绊倒(注释里就有这个词),改为剥注释后再断言。
+- **★ 共享 HEAD 事故(本批第二次):** 未提交的全批工作(CAS、路由互斥、13 处接线、前端守卫)被兄弟会话一次性抹掉,`git show HEAD` 核对后全量重做。教训已兑现为动作:**改为分段落地即提交**(后端 `6b0715fa` 先落,前端 `587e1d86` 随后),而不是攒一大批。另:i18n 五个新键被兄弟宽 `add` 卷进 `3772eeff`(逐字核对与我写入一致,故未重复提交);`git commit -F -` 的 heredoc 曾与兄弟提交竞态导致 index 被清空,改用 `-F 文件` 后成功。
+- **验收边界(诚实分账):** 后端半**需重启**才对新会话生效;JS 半边**免重启但需两次加载**——bundle 过期时先发旧包、后台重建,下一次加载才拿到新包。相邻红两条已查明归属:`paper.qaThinking` / `project.qrScan*` 缺键属兄弟会话(HEAD 上即缺,我未碰 `ui/tool_rounds.js`)。
+
 ### 2026-07-29(续·扫码时序) — owner 实测证伪我的「已完成」:**只在 finalize 出图对扫码登录等于没有**;二维码必须在命令**仍阻塞等扫**时就成像(commit `3b407958`,6 文件;套件 **49 + 11**,**NEUTER×3 咬**(其中**去重那发首版空转,原因是协程合并而非去重在起作用**),干净 HEAD worktree **62/62** + 端到端真解码;wire-parity **2/2 逐字节不变**)
 
 - **★ owner 的证伪(我上一轮交付的是「事后凭证展示」不是「扫码登录」):** `gh auth login` / device-code 这类流程的时序是**先打印二维码,然后阻塞等你扫**——命令此刻**没有结束**。而 `_attach_terminal_qr` 挂在 `_finalize_tool_round`,只在命令**跑完**才执行。所以在「用户真正需要扫」的那整个窗口里,二维码根本不是图片;等它出现时授权窗口早已关闭,或命令因等不到扫码而超时退出。**净效果 = 功能不存在。**

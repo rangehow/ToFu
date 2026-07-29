@@ -150,8 +150,32 @@ jobs:
           #     refuses to build. Asking about the Release has no such race,
           #     because the Release is created at the END of this workflow.
           #
-          # GET /releases/tags/{tag} answers the real question directly:
-          #   200 -> released, skip     404 -> not released, build
+          # GET /releases/tags/{tag} answers it, but the STATUS CODE ALONE does
+          # not: 200 proves a release OBJECT exists, not that a user can
+          # download an installer from it. action-gh-release creates the
+          # release first and uploads assets afterwards, so an interruption in
+          # between (cancelled run, dead runner, network blip, an internal
+          # failure in the action) leaves a release that is addressable,
+          # tagged, and EMPTY. A status-only gate then reads 200 forever and
+          # this version can NEVER rebuild — there is no self-heal path short
+          # of a human deleting the release or bumping VERSION.
+          #
+          # That is the tag defect one level down: the gate was upgraded from
+          # "does the tag exist?" to "does the Release exist?", which is the
+          # right direction but still a proxy for what a user actually needs —
+          # "can I download an installer for my platform?". Only the asset list
+          # answers that. So the verdict is:
+          #
+          #   200 + every required asset -> released, skip
+          #   200 + assets missing       -> PARTIAL release, rebuild to repair
+          #   404                        -> not released, build
+          #
+          # The expected-asset list is deliberately NOT written here. It lives
+          # once in scripts/release_assets.py, which the release job's own
+          # completeness gate also calls. Two copies would let a new platform
+          # be added to one gate and silently forgotten by the other — and
+          # both copies would keep passing on the platforms they still know
+          # about, so the drift would be invisible.
           #
           # `gh release view` is NOT usable here: it exits 1 for BOTH "no such
           # release" and "the API call failed" (cli/cli#6024, and that mapping
@@ -159,19 +183,22 @@ jobs:
           # rule below.
           #
           # ── Failure direction is deliberately asymmetric ──
-          # Any outcome that is not a definite 200 builds. Rate limit, network
-          # blip, 5xx, unparsable body — all build. Building once more costs
-          # four runners; NOT building is a silent non-release, which is the
-          # original defect. So uncertainty must resolve toward shipping.
+          # Only a definite "200 AND complete" skips. Rate limit, network blip,
+          # 5xx, unparsable body, partial assets — all build. Building once
+          # more costs four runners; NOT building is a silent non-release,
+          # which is the original defect. So uncertainty resolves toward
+          # shipping.
           if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
             echo "should_release=true" >> "$GITHUB_OUTPUT"
             echo "Manual dispatch — building v$VER."
           else
             api="${GITHUB_API_URL:-https://api.github.com}"
-            # `|| true` because `set -e` would abort the whole step on a
-            # transport failure — and a transport failure must FALL THROUGH to
-            # the build, not kill the run.
-            code="$(curl -sS -o /dev/null -w '%{http_code}' \
+            # Capture the BODY as well as the status: the asset list is the
+            # actual evidence. `|| true` because `set -e` would abort the whole
+            # step on a transport failure — and a transport failure must FALL
+            # THROUGH to the build, not kill the run.
+            body="$(mktemp)"
+            code="$(curl -sS -o "$body" -w '%{http_code}' \
                       -H "Authorization: Bearer ${GH_TOKEN}" \
                       -H "Accept: application/vnd.github+json" \
                       -H "X-GitHub-Api-Version: 2022-11-28" \
@@ -179,9 +206,22 @@ jobs:
                     || true)"
             echo "Release probe: GET /releases/tags/v${VER} -> HTTP ${code:-<none>}"
             if [ "$code" = "200" ]; then
-              echo "should_release=false" >> "$GITHUB_OUTPUT"
-              echo "v$VER is already released — nothing to build."
-              echo "::notice::VERSION is still $VER (already released). Bump VERSION to publish a new installer."
+              # Exit codes: 0 complete, 1 incomplete, 2 undetermined.
+              set +e
+              python3 scripts/release_assets.py --release-json "$body" --require-checksums
+              assets_rc=$?
+              set -e
+              if [ "$assets_rc" -eq 0 ]; then
+                echo "should_release=false" >> "$GITHUB_OUTPUT"
+                echo "v$VER is already released with a complete asset set — nothing to build."
+                echo "::notice::VERSION is still $VER (already released). Bump VERSION to publish a new installer."
+              elif [ "$assets_rc" -eq 1 ]; then
+                echo "should_release=true" >> "$GITHUB_OUTPUT"
+                echo "::warning::Release v$VER exists but is INCOMPLETE (see missing assets above) — rebuilding to repair it. This happens when a previous run was interrupted between creating the release and finishing the uploads."
+              else
+                echo "should_release=true" >> "$GITHUB_OUTPUT"
+                echo "::warning::Release v$VER returned 200 but its asset list could not be read. Building anyway — a missed release is worse than a redundant build."
+              fi
             elif [ "$code" = "404" ]; then
               echo "should_release=true" >> "$GITHUB_OUTPUT"
               echo "v$VER has no release yet — building."
@@ -189,6 +229,7 @@ jobs:
               echo "should_release=true" >> "$GITHUB_OUTPUT"
               echo "::warning::Release probe for v$VER returned HTTP ${code:-<none>} (expected 200 or 404). Building anyway — a missed release is worse than a redundant build."
             fi
+            rm -f "$body"
           fi
 
   # ── Windows ──────────────────────────────────────────────────
@@ -533,28 +574,17 @@ jobs:
           # So we assert every required per-platform / per-arch asset exists;
           # missing any one fails the whole release ("all four platforms, or a
           # loud failure — never a silent partial Latest").
-          cd release-assets
-          shopt -s nullglob
-          missing=0
-          require() {
-            local label="$1"; shift
-            local hits=( $@ )
-            if [ ${#hits[@]} -eq 0 ]; then
-              echo "::error::Missing required release asset: ${label}"
-              missing=1
-            else
-              echo "OK  ${label} -> ${hits[*]}"
-            fi
-          }
-          require "macOS arm64 DMG (Tofu-*-macos-arm64.dmg)" Tofu-*-macos-arm64.dmg
-          require "macOS x86_64 DMG (Tofu-*-macos-x86_64.dmg)" Tofu-*-macos-x86_64.dmg
-          require "Windows installer (Tofu-Setup-*-win64.exe)" Tofu-Setup-*-win64.exe
-          require "Linux archive (Tofu-*-linux*.tar.gz)" Tofu-*-linux*.tar.gz
-          if [ "$missing" -ne 0 ]; then
+          #
+          # The required-asset list is NOT inlined here. scripts/release_assets.py
+          # owns it, and the `version` job's gate calls the same script to judge
+          # an ALREADY-PUBLISHED release. Keeping one list is what stops a new
+          # platform from being added to one gate and silently missed by the
+          # other. --require-checksums is deliberately omitted: SHA256SUMS is
+          # generated by the NEXT step, so it cannot exist yet.
+          python3 scripts/release_assets.py --dir release-assets || {
             echo "::error::Refusing to publish an incomplete release. See missing assets above."
             exit 1
-          fi
-          echo "All required platform/arch assets present."
+          }
 
       - name: Generate SHA256SUMS
         shell: bash
@@ -644,7 +674,11 @@ jobs:
 
           echo "Tag ${tag} points at ${remote_sha}, but this run built ${GITHUB_SHA}."
           api="${GITHUB_API_URL:-https://api.github.com}"
-          code="$(curl -sS -o /dev/null -w '%{http_code}' \
+          # Capture the BODY too: on 200 the asset list decides whether this is
+          # a published release (leave the tag alone) or a partial one this run
+          # is repairing (the tag must follow the new commit).
+          body="$(mktemp)"
+          code="$(curl -sS -o "$body" -w '%{http_code}' \
                     -H "Authorization: Bearer ${GH_TOKEN}" \
                     -H "Accept: application/vnd.github+json" \
                     -H "X-GitHub-Api-Version: 2022-11-28" \
@@ -657,7 +691,36 @@ jobs:
             git push --force origin "${GITHUB_SHA}:refs/tags/${tag}"
             echo "Moved ${tag} -> ${GITHUB_SHA}."
           elif [ "$code" = "200" ]; then
-            echo "::notice::${tag} already has a Release — leaving the published tag where it is; the existing release will be updated in place."
+            # A release EXISTS — but "exists" is not "was published". If its
+            # asset set is incomplete, this run is a repair run: the version
+            # gate only let us get here because those installers are missing.
+            # Leaving the tag on the old commit would then hand users a release
+            # whose binaries come from GITHUB_SHA while its Source-code archives
+            # and notes come from ${remote_sha} — the very mismatch this step
+            # exists to prevent, arriving through the repair path instead of the
+            # orphan path. So a partial release's tag is treated like an orphan's.
+            #
+            # This branch became REACHABLE when the version gate learned to
+            # rebuild partial releases; before that, a 200 always meant "done"
+            # and no repair run could reach this step.
+            #
+            # Exit codes: 0 complete, 1 incomplete, 2 undetermined. Only a
+            # definite 1 moves the tag — an unreadable asset list is treated
+            # exactly like an unreadable probe below, because force-moving a tag
+            # that turns out to be published is destructive and hard to undo.
+            set +e
+            python3 scripts/release_assets.py --release-json "$body" --require-checksums
+            assets_rc=$?
+            set -e
+            if [ "$assets_rc" -eq 1 ]; then
+              echo "${tag} has a release, but it is INCOMPLETE (missing assets above) — this run is repairing it, so the tag must follow the commit that produced the new assets."
+              git push --force origin "${GITHUB_SHA}:refs/tags/${tag}"
+              echo "Moved ${tag} -> ${GITHUB_SHA}."
+            elif [ "$assets_rc" -eq 0 ]; then
+              echo "::notice::${tag} already has a COMPLETE Release — leaving the published tag where it is; the existing release will be updated in place."
+            else
+              echo "::warning::${tag} has a Release but its asset list could not be read, so it cannot be shown to be incomplete. NOT moving a possibly-published tag. The release may be cut from ${remote_sha} instead of ${GITHUB_SHA} — verify the Source code archives before announcing it."
+            fi
           else
             echo "::warning::Could not confirm whether ${tag} has a Release (HTTP ${code:-<none>}). NOT moving a possibly-published tag. The release may be cut from ${remote_sha} instead of ${GITHUB_SHA} — verify the Source code archives before announcing it."
           fi

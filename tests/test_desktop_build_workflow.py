@@ -326,15 +326,27 @@ def test_an_orphan_tag_does_not_block_the_release():
 
 
 def test_an_already_released_version_does_not_rebuild():
-    """Complement: a version with a real Release must NOT spin the runners.
+    """Complement: a version with a real, COMPLETE Release must NOT spin the
+    runners.
 
     Without this, "always build" would satisfy the test above, and every
     content push to main would burn four runners (~30 min each, macOS at the
     highest rate) racing to republish a shipped release.
+
+    RE-ANCHORED (partial-release fix): this used to pass a bare ``200``,
+    because at the time the status code WAS the whole verdict. It no longer
+    is — a release object can exist with zero assets, and treating that as
+    "shipped" is the defect ``test_a_partial_release_is_rebuilt`` covers. So
+    the fixture now has to supply a complete asset list, which is what "already
+    released" actually means. The invariant this test protects (a genuinely
+    shipped version must not rebuild) is unchanged; only the evidence required
+    to establish "shipped" got stricter.
     """
-    got = _run_version_gate(http_code='200')
+    got, log = _run_version_gate_body(
+        http_code='200', body_text=_release_json(_complete_names()))
     assert got.get('should_release') == 'false', (
-        f'HTTP 200 means the release exists — the gate must skip; got {got!r}'
+        f'a complete Release means the version shipped — the gate must skip; '
+        f'got {got!r}\nlog:\n{log}'
     )
 
 
@@ -828,4 +840,440 @@ def test_an_in_flight_release_is_never_cancelled_by_a_newer_push():
     assert conc.get('queue') != 'max', (
         'queue: max would let up to 100 redundant runs pile up; the default '
         'single-slot queue is what collapses a push burst to one build'
+    )
+
+
+# ══════════════════════════════════════════════════════════════════
+#  A release that EXISTS is not necessarily a release that SHIPPED
+# ══════════════════════════════════════════════════════════════════
+#
+# THE DEFECT. `action-gh-release` creates the release object first and uploads
+# assets afterwards. Anything that interrupts the gap — a cancelled run, a dead
+# runner, a network blip, an internal failure in the action — leaves a release
+# that is addressable, tagged, and EMPTY.
+#
+# The version gate used to read only the HTTP status, so from then on it saw
+# 200 and skipped forever: that version could never rebuild without a human
+# deleting the release or bumping VERSION. No self-heal path existed.
+#
+# This is the 5114cbca defect one level down ("a tag is a PRODUCT of releasing,
+# not evidence of it"): the gate was upgraded from asking about the tag to
+# asking about the Release, which is the right direction but still a proxy for
+# the thing a user needs — "can I download an installer for my platform?".
+
+import importlib.util as _ilu
+
+_ASSET_SCRIPT = _ROOT / 'scripts' / 'release_assets.py'
+
+
+def _asset_mod():
+    """Import scripts/release_assets.py (not a package, so load by path)."""
+    spec = _ilu.spec_from_file_location('_tofu_release_assets', _ASSET_SCRIPT)
+    assert spec and spec.loader, f'cannot load {_ASSET_SCRIPT}'
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _complete_names():
+    """A full asset set, built FROM the shared list rather than hand-typed.
+
+    Hand-typing them here would create exactly the second copy this epic
+    exists to forbid: the fixture would keep passing after a platform was
+    added to the script, so the new platform would go unguarded.
+    """
+    mod = _asset_mod()
+    out = []
+    for _label, pat in mod.REQUIRED_PLATFORM_ASSETS:
+        out.append(pat.replace('*', '0.15.2'))
+    out.append(mod.CHECKSUMS_ASSET)
+    return out
+
+
+def _release_json(names):
+    import json as _json
+    return _json.dumps({'tag_name': 'v0.15.2',
+                        'assets': [{'name': n} for n in names]})
+
+
+# ── the shared predicate itself ───────────────────────────────────
+
+def test_the_asset_list_lives_in_exactly_one_place():
+    """The expected-asset globs must not be inlined into the workflow.
+
+    Two copies would let a platform be added to one gate and silently missed
+    by the other — and both copies would keep passing on the platforms they
+    still know about, so the drift is invisible until someone's OS has no
+    installer.
+    """
+    mod = _asset_mod()
+    wf_text = _WORKFLOW.read_text(encoding='utf-8')
+    code = '\n'.join(ln for ln in wf_text.splitlines()
+                     if not ln.lstrip().startswith('#'))
+    leaked = [pat for _l, pat in mod.REQUIRED_PLATFORM_ASSETS if pat in code]
+    assert not leaked, (
+        f'These asset globs are written into the workflow as well as into '
+        f'scripts/release_assets.py: {leaked}. Keep ONE list — the workflow '
+        f'must call the script instead.'
+    )
+
+
+def test_an_empty_release_is_incomplete():
+    """The exact partial-release state: release object exists, zero assets."""
+    mod = _asset_mod()
+    gaps = mod.missing_assets([], require_checksums=True)
+    assert len(gaps) == len(mod.REQUIRED_PLATFORM_ASSETS) + 1, (
+        f'an empty release must be missing every required asset, got {gaps!r}'
+    )
+
+
+def test_a_full_release_is_complete():
+    """Complement — without it, "always incomplete" would satisfy the rest."""
+    mod = _asset_mod()
+    gaps = mod.missing_assets(_complete_names(), require_checksums=True)
+    assert gaps == [], f'a full asset set must be complete, got missing {gaps!r}'
+
+
+@pytest.mark.parametrize('drop', [0, 1, 2, 3])
+def test_dropping_any_single_platform_is_detected(drop):
+    """Every platform is load-bearing, not just the one someone tested."""
+    mod = _asset_mod()
+    names = _complete_names()
+    victim = names[drop]
+    remaining = [n for n in names if n != victim]
+    gaps = mod.missing_assets(remaining, require_checksums=True)
+    assert gaps, f'dropping {victim!r} must be detected; got no missing assets'
+
+
+def test_checksums_are_required_only_for_published_releases():
+    """SHA256SUMS is generated AFTER the local gate runs, so it cannot be
+    required there — but a published release without it is incomplete, because
+    users are told to verify downloads with `shasum -a 256 -c SHA256SUMS`."""
+    mod = _asset_mod()
+    platforms_only = [n for n in _complete_names() if n != mod.CHECKSUMS_ASSET]
+    assert mod.missing_assets(platforms_only, require_checksums=False) == [], (
+        'the local gate must pass on platform assets alone'
+    )
+    assert mod.missing_assets(platforms_only, require_checksums=True) != [], (
+        'a PUBLISHED release with no SHA256SUMS must be judged incomplete'
+    )
+
+
+def test_a_non_release_body_is_undetermined_not_empty():
+    """A truncated body or an error page must NOT read as "zero assets".
+
+    Treating it as empty would turn a transient API hiccup into a confident
+    "this release is broken" — and on the retarget path that verdict
+    force-moves a tag that may well be published.
+    """
+    mod = _asset_mod()
+    for body in ('', 'not json', '{"message": "Not Found"}', '[]', 'null'):
+        assert mod.names_from_release_json(body) is None, (
+            f'{body!r} is not a release object and must be UNDETERMINED'
+        )
+    assert mod.names_from_release_json(_release_json([])) == [], (
+        'a real release object with an empty assets array IS readable, and '
+        'means zero assets — that is the partial-release case, not an error'
+    )
+
+
+# ── the version gate, driven end-to-end ───────────────────────────
+
+def _run_version_gate_body(*, http_code, body_text, event='push',
+                           version='0.15.2'):
+    """Run the REAL version-gate shell with a curl stub that serves a BODY.
+
+    The gate now has to read the asset list, so the older helper (which only
+    stubs a status code) cannot exercise this path at all.
+    """
+    gate = _workflow()['jobs']['version']['steps'][-1]['run']
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        (tmp / 'VERSION').write_text(version + '\n', encoding='utf-8')
+        out = tmp / 'gh_output'
+        out.touch()
+
+        # The gate calls `python3 scripts/release_assets.py`, resolved relative
+        # to the checkout — so the REAL script must be reachable from cwd.
+        (tmp / 'scripts').mkdir()
+        (tmp / 'scripts' / 'release_assets.py').write_text(
+            _ASSET_SCRIPT.read_text(encoding='utf-8'), encoding='utf-8')
+
+        bind = tmp / 'bin'
+        bind.mkdir()
+        payload = tmp / 'payload.json'
+        payload.write_text(body_text or '', encoding='utf-8')
+        if http_code is None:
+            stub = '#!/bin/sh\nexit 7\n'
+        else:
+            # Honour curl's `-o <file>`: the gate writes the body there and
+            # then feeds that file to the script.
+            stub = (
+                '#!/bin/sh\n'
+                'dest=""\n'
+                'while [ $# -gt 0 ]; do\n'
+                '  case "$1" in -o) dest="$2"; shift 2 ;; *) shift ;; esac\n'
+                'done\n'
+                f'[ -n "$dest" ] && cat {payload} > "$dest"\n'
+                f'printf %s {http_code}\n'
+            )
+        (bind / 'curl').write_text(stub, encoding='utf-8')
+        (bind / 'curl').chmod(0o755)
+        (bind / 'git').write_text('#!/bin/sh\nexit 0\n', encoding='utf-8')
+        (bind / 'git').chmod(0o755)
+
+        env = {
+            **os.environ,
+            'PATH': f'{bind}{os.pathsep}' + os.environ.get('PATH', ''),
+            'GITHUB_OUTPUT': str(out),
+            'GITHUB_EVENT_NAME': event,
+            'GITHUB_REPOSITORY': 'rangehow/ToFu',
+            'GITHUB_API_URL': 'https://api.github.com',
+            'GH_TOKEN': 'stub-token',
+            'VERSION_OVERRIDE': '',
+        }
+        proc = subprocess.run(['bash', '-c', gate], cwd=tmp, env=env,
+                              capture_output=True, text=True, timeout=60)
+        assert proc.returncode == 0, (
+            f'version gate exited {proc.returncode}\n'
+            f'stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}'
+        )
+        parsed = {}
+        for line in out.read_text(encoding='utf-8').splitlines():
+            if '=' in line:
+                k, _, v = line.partition('=')
+                parsed[k] = v
+        return parsed, proc.stdout
+
+
+def test_a_partial_release_is_rebuilt():
+    """THE HEADLINE. 200 + a missing DMG must still build.
+
+    Without this the version is stranded forever: the gate reads 200, skips,
+    and the missing installer never appears.
+    """
+    mod = _asset_mod()
+    names = [n for n in _complete_names()
+             if not n.endswith('macos-x86_64.dmg')]
+    got, log = _run_version_gate_body(http_code='200',
+                                      body_text=_release_json(names))
+    assert got.get('should_release') == 'true', (
+        f'a release missing the Intel DMG must be rebuilt to repair it; got '
+        f'{got!r}\nlog:\n{log}'
+    )
+
+
+def test_an_empty_release_object_is_rebuilt():
+    """The literal interrupted-upload state: release created, nothing uploaded."""
+    got, log = _run_version_gate_body(http_code='200',
+                                      body_text=_release_json([]))
+    assert got.get('should_release') == 'true', (
+        f'an empty release must be rebuilt, got {got!r}\nlog:\n{log}'
+    )
+
+
+def test_a_complete_release_still_skips():
+    """THE COMPLEMENT that keeps this from becoming "always build".
+
+    Without it, the fix above would be satisfied by rebuilding on every push —
+    burning four runners per content push and republishing a shipped release.
+    """
+    got, log = _run_version_gate_body(http_code='200',
+                                      body_text=_release_json(_complete_names()))
+    assert got.get('should_release') == 'false', (
+        f'a complete release must still skip the build; got {got!r}\n'
+        f'log:\n{log}'
+    )
+
+
+def test_an_unreadable_asset_list_builds():
+    """200 with an unparsable body resolves toward building, like every other
+    uncertain outcome in this gate."""
+    got, log = _run_version_gate_body(http_code='200', body_text='<html>502</html>')
+    assert got.get('should_release') == 'true', (
+        f'an unreadable asset list must fail open toward building; got {got!r}\n'
+        f'log:\n{log}'
+    )
+
+
+# ── the retarget step on the repair path ──────────────────────────
+
+def _run_retarget_body(*, remote_sha, http_code, body_text,
+                       built_sha=_BUILT_SHA):
+    """Run the REAL retarget step with a body-serving curl stub."""
+    body = _retarget_step()['run']
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        log = tmp / 'git.log'
+        bind = tmp / 'bin'
+        bind.mkdir()
+        (tmp / 'scripts').mkdir()
+        (tmp / 'scripts' / 'release_assets.py').write_text(
+            _ASSET_SCRIPT.read_text(encoding='utf-8'), encoding='utf-8')
+
+        peeled = tmp / 'ls_peeled'
+        plain = tmp / 'ls_plain'
+        if remote_sha is None:
+            peeled.write_text('', encoding='utf-8')
+            plain.write_text('', encoding='utf-8')
+        else:
+            peeled.write_text(f'{remote_sha}\trefs/tags/v0.15.2^{{}}\n',
+                              encoding='utf-8')
+            plain.write_text(f'{remote_sha}\trefs/tags/v0.15.2\n',
+                             encoding='utf-8')
+
+        (bind / 'git').write_text(
+            '#!/bin/sh\n'
+            f'printf "%s\\n" "$*" >> {log}\n'
+            'if [ "$1" = "ls-remote" ]; then\n'
+            '  case "$*" in\n'
+            f'    *"^{{}}"*) cat {peeled} ;;\n'
+            f'    *)         cat {plain} ;;\n'
+            '  esac\n'
+            'fi\n'
+            'exit 0\n', encoding='utf-8')
+        (bind / 'git').chmod(0o755)
+
+        payload = tmp / 'payload.json'
+        payload.write_text(body_text or '', encoding='utf-8')
+        if http_code is None:
+            curl_stub = '#!/bin/sh\nexit 7\n'
+        else:
+            curl_stub = (
+                '#!/bin/sh\n'
+                'dest=""\n'
+                'while [ $# -gt 0 ]; do\n'
+                '  case "$1" in -o) dest="$2"; shift 2 ;; *) shift ;; esac\n'
+                'done\n'
+                f'[ -n "$dest" ] && cat {payload} > "$dest"\n'
+                f'printf %s {http_code}\n'
+            )
+        (bind / 'curl').write_text(curl_stub, encoding='utf-8')
+        (bind / 'curl').chmod(0o755)
+
+        env = {
+            **os.environ,
+            'PATH': f'{bind}{os.pathsep}' + os.environ.get('PATH', ''),
+            'GITHUB_SHA': built_sha,
+            'GITHUB_REPOSITORY': 'rangehow/ToFu',
+            'GITHUB_API_URL': 'https://api.github.com',
+            'GH_TOKEN': 'stub-token',
+            'VER': '0.15.2',
+        }
+        proc = subprocess.run(['bash', '-c', body], cwd=tmp, env=env,
+                              capture_output=True, text=True, timeout=60)
+        assert proc.returncode == 0, (
+            f'retarget exited {proc.returncode}\n'
+            f'stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}'
+        )
+        cmds = ([ln for ln in log.read_text(encoding='utf-8').splitlines() if ln]
+                if log.exists() else [])
+        return cmds, proc.stdout
+
+
+def test_a_partial_releases_tag_is_moved_to_the_built_commit():
+    """THE CONSEQUENCE OF OPENING THE GATE — reachable only now.
+
+    Before the version gate learned to rebuild partial releases, a 200 always
+    meant "done" and no repair run could reach this step. Now one can: the
+    release exists (200) while its tag still points at the older commit. If the
+    tag stayed put, action-gh-release would update that release in place with
+    installers built from GITHUB_SHA while its Source-code archives and notes
+    kept coming from the stale commit — the exact binaries/source mismatch this
+    step was created to prevent, arriving by the repair path instead of the
+    orphan path.
+    """
+    names = [n for n in _complete_names() if not n.endswith('win64.exe')]
+    cmds, log = _run_retarget_body(remote_sha=_STALE_SHA, http_code='200',
+                                   body_text=_release_json(names))
+    pushes = _pushes(cmds)
+    assert any(_BUILT_SHA in p and 'refs/tags/v0.15.2' in p for p in pushes), (
+        f'a PARTIAL release is being repaired by this run, so its tag must '
+        f'follow the commit that produced the new assets; pushes={pushes!r}\n'
+        f'log:\n{log}'
+    )
+
+
+def test_a_complete_releases_tag_is_still_never_moved():
+    """THE COMPLEMENT, and the reason this is safe to automate.
+
+    A genuinely published release has downstream pins. Only an INCOMPLETE one
+    may be retargeted; a complete one is left exactly where it is.
+    """
+    cmds, log = _run_retarget_body(remote_sha=_STALE_SHA, http_code='200',
+                                   body_text=_release_json(_complete_names()))
+    assert not _pushes(cmds), (
+        f'a COMPLETE published release must never have its tag force-moved; '
+        f'pushes={_pushes(cmds)!r}\nlog:\n{log}'
+    )
+
+
+def test_an_unreadable_asset_list_does_not_move_the_tag():
+    """Here uncertainty must resolve the OTHER way from the version gate.
+
+    A redundant build is cheap; force-moving a tag that turns out to have been
+    published is destructive and hard to undo. So "200 but I cannot read the
+    assets" declines to move.
+    """
+    cmds, log = _run_retarget_body(remote_sha=_STALE_SHA, http_code='200',
+                                   body_text='<html>502 Bad Gateway</html>')
+    assert not _pushes(cmds), (
+        f'an unreadable asset list is not proof of incompleteness — the tag '
+        f'must be left alone; pushes={_pushes(cmds)!r}\nlog:\n{log}'
+    )
+
+
+# ── both gates must actually call the shared script ───────────────
+
+@pytest.mark.parametrize('job,step_finder', [
+    ('version', lambda wf: wf['jobs']['version']['steps'][-1]['run']),
+    ('release', lambda wf: next(
+        s['run'] for s in wf['jobs']['release']['steps']
+        if 'Assert all platform assets' in str(s.get('name', '')))),
+])
+def test_both_gates_delegate_to_the_shared_predicate(job, step_finder):
+    """Neither gate may re-derive completeness on its own."""
+    code = '\n'.join(ln for ln in step_finder(_workflow()).splitlines()
+                     if not ln.lstrip().startswith('#'))
+    assert 'scripts/release_assets.py' in code, (
+        f'the {job} gate must call scripts/release_assets.py rather than '
+        f'carrying its own copy of the expected-asset list'
+    )
+
+
+def test_the_shared_script_survives_export_and_is_tracked():
+    """charter #13/#14: a file the pipeline needs must reach the repo that runs
+    it — through BOTH doors, export and git.
+
+    The workflow ships in the opensource export, so if the script it calls were
+    stripped (or left gitignored), the public tree would carry a release
+    pipeline that dies on a missing file the first time it runs.
+
+    Note the opensource mechanism, because it decides what to assert: all of
+    ``scripts/`` is excluded WHOLESALE and then specific files are copied back
+    by ``_restore_opensource_kept_files``. So for that mode the question is
+    membership in the keep-list — ``_should_exclude`` returning a verdict there
+    is expected and is NOT evidence of a problem.
+    """
+    import export as _export
+    rel = 'scripts/release_assets.py'
+    for mode in ('personal', 'internal'):
+        verdict = _export._should_exclude('scripts', 'release_assets.py', mode)
+        assert not verdict, (
+            f'scripts/release_assets.py is stripped from the {mode} export '
+            f'({verdict!r}), but build-desktop.yml calls it'
+        )
+    assert rel in _export._OPENSOURCE_KEEP_FILES, (
+        f'{rel} is not in _OPENSOURCE_KEEP_FILES. The opensource export drops '
+        f'all of scripts/ and restores only that list, so without an entry the '
+        f'public tree ships a build-desktop.yml that calls a file it does not '
+        f'contain — and the failure surfaces in CI, not locally.'
+    )
+    tracked = subprocess.run(
+        ['git', 'ls-files', '--error-unmatch', rel],
+        cwd=_ROOT, capture_output=True, text=True)
+    assert tracked.returncode == 0, (
+        'scripts/release_assets.py is not git-tracked — /scripts/* is '
+        'gitignored, so it needs an explicit ! exception or it will be absent '
+        'from a clean clone while both gates try to call it'
     )

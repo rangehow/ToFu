@@ -440,6 +440,12 @@ _OPENSOURCE_KEEP_FILES = {
     # clean clone and the public tree. Pure bash -- no secrets, no internal
     # paths, no absolute host paths.
     'scripts/install_on_server.sh',
+    # The single source of truth for "is a Tofu release complete?". Both gates
+    # in .github/workflows/build-desktop.yml call it, and that workflow ships
+    # in the opensource export — so without this the public tree would carry a
+    # release pipeline that dies on a missing file the first time it runs.
+    # Pure stdlib (argparse/fnmatch/json/pathlib), no secrets, no internal paths.
+    'scripts/release_assets.py',
 }
 
 OPENSOURCE_EXTRA_EXCLUDE_FILES = OPENSOURCE_EXTRA_EXCLUDE_FILES | {

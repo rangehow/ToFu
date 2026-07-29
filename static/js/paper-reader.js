@@ -710,8 +710,19 @@ function _showPaperLanding() {
             ' ' + escapeHtml(_tt('paper.research.startBtn')) +
           '</button>' +
         '</div>' +
+        // Past research index. Populated asynchronously by
+        // _renderRecentResearch(); stays EMPTY when nothing was ever
+        // researched, so the landing screen never grows a blank box.
+        '<div id="paperRecentResearch" class="pm-recent"></div>' +
       '</div>' +
     '</div>';
+  // The direction hash is one-way, so this list is the ONLY way back to a
+  // finished run whose exact wording the user no longer remembers.
+  if (typeof _renderRecentResearch === 'function') {
+    _renderRecentResearch().catch(function (e) {
+      console.debug('[Paper] recent research render failed:', e);
+    });
+  }
 }
 
 function _showPaperLandingForNew() {

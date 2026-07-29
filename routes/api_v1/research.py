@@ -78,4 +78,34 @@ def research_lookup():
     return api_ok(artifacts)
 
 
+@api_v1_research_bp.route('/api/v1/research/list', methods=['GET'])
+@require_auth
+@api_meta(
+    summary='List every research direction that has artifacts on disk',
+    description=(
+        'Newest first, with accepted/rejected counts. This exists because the '
+        'persisted rows are keyed by a ONE-WAY hash of the direction: without '
+        'this index a user who forgot their exact original wording could never '
+        'reach their own artifacts again, which is indistinguishable from the '
+        'data having been deleted. The original text is recovered from the '
+        'stored metadata.'),
+    tags=['research'],
+    parameters=[{'name': 'limit', 'in': 'query',
+                 'schema': {'type': 'integer', 'default': 50}}])
+def research_list():
+    """Serve the index of researched directions."""
+    try:
+        limit = max(1, min(int(request.args.get('limit') or 50), 200))
+    except (ValueError, TypeError):
+        limit = 50
+    try:
+        from lib.research.persistence import list_research_directions
+        items = list_research_directions(limit=limit)
+    except Exception as e:
+        logger.error('[api_v1.research] list failed: %s', e, exc_info=True)
+        return api_internal_error('internal_error')
+    logger.info('[api_v1.research] list → %d direction(s)', len(items))
+    return api_ok({'items': items, 'total': len(items)})
+
+
 __all__ = ['api_v1_research_bp']

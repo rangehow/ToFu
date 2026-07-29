@@ -58,7 +58,7 @@ from lib.log import get_logger
 logger = get_logger(__name__)
 
 __all__ = ['research_direction_hash', 'persist_survey', 'persist_ideate',
-           'load_research_artifacts']
+           'load_research_artifacts', 'list_research_directions']
 
 #: Namespace prefix for direction identities. Keeps a direction's hash in a
 #: different space from ``lib.paper.hashing._paper_hash`` (paper CONTENT), so a
@@ -198,6 +198,72 @@ def _ideate_digest(artifact: dict) -> str:
     if not acc:
         lines.append('_No idea cleared the gate._')
     return '\n'.join(lines)
+
+
+def list_research_directions(limit: int = 50) -> list:
+    """Every direction that has ever been researched, newest first.
+
+    WHY THIS IS NOT OPTIONAL. The persisted rows are keyed by
+    ``sha256(normalised direction)[:32]`` — a ONE-WAY hash. Without an index a
+    user had to reproduce their exact original wording to reach their own
+    artifacts; forget it and the work is unreachable, which is
+    indistinguishable from the TTL data loss this module was written to fix.
+    The direction TEXT is already stored in ``meta.direction``, so recovering
+    it costs nothing — only the read was missing.
+
+    Rows are matched on the composite ``lang`` prefixes (``survey:`` /
+    ``ideate:``) so per-paper reports sharing this table are never returned.
+    The two rows of one run are folded into a single entry.
+
+    Returns (never raises)::
+
+        [{'direction', 'lang', 'created_at', 'accepted', 'rejected',
+          'gate_reached', 'degraded', 'has_survey', 'has_ideas'}, ...]
+    """
+    try:
+        from lib.database import get_thread_db
+        rows = get_thread_db().execute(
+            "SELECT lang, meta, created_at FROM paper_reports "
+            "WHERE lang LIKE 'survey:%' OR lang LIKE 'ideate:%' "
+            'ORDER BY created_at DESC').fetchall()
+    except Exception as e:
+        logger.warning('[Research:Persist] list failed: %s', e)
+        return []
+
+    folded: dict = {}
+    for row in rows or []:
+        try:
+            meta = json.loads(row['meta'] or '{}')
+        except Exception as e:
+            logger.warning('[Research:Persist] unparseable meta on %s: %s',
+                           row['lang'], e)
+            continue
+        direction = (meta.get('direction') or '').strip()
+        if not direction:
+            # Pre-contract row with no recorded text: it cannot be addressed
+            # by a human, so listing it would only offer a dead link.
+            continue
+        lang_key = row['lang'] or ''
+        lang = lang_key.split(':', 1)[1] if ':' in lang_key else 'en'
+        entry = folded.setdefault((research_direction_hash(direction), lang), {
+            'direction': direction, 'lang': lang,
+            'created_at': int(row['created_at'] or 0),
+            'accepted': 0, 'rejected': 0, 'gate_reached': '',
+            'degraded': False, 'has_survey': False, 'has_ideas': False,
+        })
+        entry['created_at'] = max(entry['created_at'],
+                                  int(row['created_at'] or 0))
+        if meta.get('kind') == 'survey':
+            entry['has_survey'] = True
+        elif meta.get('kind') == 'ideate':
+            entry['has_ideas'] = True
+            entry['accepted'] = len(meta.get('accepted') or [])
+            entry['rejected'] = len(meta.get('rejected') or [])
+            entry['gate_reached'] = meta.get('gate_reached') or ''
+            entry['degraded'] = bool(meta.get('degraded'))
+
+    out = sorted(folded.values(), key=lambda e: e['created_at'], reverse=True)
+    return out[:max(1, int(limit or 50))]
 
 
 def load_research_artifacts(direction: str, lang: str = 'en') -> dict:

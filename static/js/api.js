@@ -512,6 +512,12 @@
       get('/api/v1/research/lookup',
           { query: { direction: direction || '', lang: lang || 'en' },
             onError: 'null' }),
+    // The direction INDEX. The persisted rows are keyed by a one-way hash of
+    // the direction, so without this a user who forgot their exact original
+    // wording could never address their own artifacts again.
+    list: (limit) =>
+      get('/api/v1/research/list',
+          { query: { limit: limit || 50 }, onError: 'null' }),
   };
 
   // optimizer -------------------------------------------------------

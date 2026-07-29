@@ -814,6 +814,18 @@
     // Active-tasks listing — used on init to reconnect SSE streams.
     active:       (opts)        => get('/api/v1/chat/active', Object.assign({ onError: 'null' }, opts || {})),
     activeResponse: (opts)      => request('/api/v1/chat/active', Object.assign({ method: 'GET', parse: 'response', onError: 'null' }, opts || {})),
+    // Per-conversation running-task PROJECTION — the poll transport's copy of
+    // the `conv_state_snapshot` push frame, same wire shape (`{convs:{id:
+    // {runningTaskIds, runningTaskIdsRev}}}`) so ONE client reducer
+    // (applyConvStateSnapshot) consumes both transports.
+    //
+    // NOT interchangeable with active() above: that answers "what may I
+    // reconnect an SSE to?" and EXCLUDES autopilot VU carriers (a carrier on
+    // the plain connectToTask path births a permanently-stuck "Waiting…"
+    // bubble). This answers "which convs are WORKING?" and INCLUDES carriers
+    // behind a non-attachable `#vu` marker — which is the only way the 25s
+    // poll fallback can see a live VU turn while the push socket is down.
+    convState:    (opts)        => get('/api/v1/chat/conv-state', Object.assign({ onError: 'null' }, opts || {})),
     // Tool-state PATCH — debounced settings flush from main.js.
     patchToolState: (convId, settings) =>
       request(`/api/v1/chat/tool-state/${encodeURIComponent(convId)}`,

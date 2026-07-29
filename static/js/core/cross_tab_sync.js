@@ -1272,6 +1272,47 @@ function _crossDeviceReconcile() {
         }
       })
       .catch((e) => debugLog(`[stale-pin-sweep] active() probe failed: ${e && e.message}`, "warn"));
+    /* ★ POLL-LANE BUSY STATE — the socket-down half of the VU visibility fix.
+     *
+     *   Everything above this line learns about running work from
+     *   /api/v1/chat/active, which deliberately EXCLUDES carriers (a carrier
+     *   handed to the plain connectToTask path births a permanently-stuck
+     *   "Waiting…" bubble). That exclusion is right for THAT question — "what
+     *   may I reconnect to?" — but it left this fallback structurally unable to
+     *   see an autopilot VU turn at all. So with the push socket down (a flaky
+     *   tunnel / VS Code port-forward), a multi-minute VU turn showed a
+     *   finished-looking conversation with no bubble and no stream until the
+     *   user refreshed by hand — the exact symptom the push-side fixes closed.
+     *
+     *   Fix: fetch the SAME projection the push `conv_state_snapshot` frame
+     *   carries and run it through the SAME reducer and the SAME attach seam.
+     *   One projection, one reducer, two transports — teaching this lane its
+     *   own notion of "busy" is precisely how busy/attachable drifted apart in
+     *   the first place.
+     *
+     *   Fail-safe + idempotent: a probe error touches nothing (matching the
+     *   stale-pin sweep beside it), and the seam re-guards on activeStreams so
+     *   a poll landing on an already-attached conv is a cheap no-op. */
+    if (Api.chat && typeof Api.chat.convState === 'function') {
+      Promise.resolve(Api.chat.convState({ signal: AbortSignal.timeout(8000) }))
+        .then((projection) => {
+          if (!projection || typeof projection !== 'object') return;
+          if (typeof applyConvStateSnapshot === 'function') {
+            applyConvStateSnapshot(conversations, projection);
+          }
+          if (typeof renderConversationList === 'function') renderConversationList();
+          if (typeof updateSendButton === 'function') updateSendButton();
+          /* Attach for the OPEN conv only — same gate as the push handlers, so
+           * we never bind a stream for a conversation the user is not viewing. */
+          const _convs = (projection && projection.convs) || {};
+          if (typeof activeConvId !== 'undefined' && activeConvId
+              && Object.prototype.hasOwnProperty.call(_convs, activeConvId)
+              && typeof _reconnectServerTaskIfIdle === 'function') {
+            _reconnectServerTaskIfIdle(activeConvId);
+          }
+        })
+        .catch((e) => debugLog(`[poll-conv-state] probe failed: ${e && e.message}`, "warn"));
+    }
   };
   if (typeof requestIdleCallback === "function")
     requestIdleCallback(_run, { timeout: 5000 });

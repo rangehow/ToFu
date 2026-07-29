@@ -1,6 +1,25 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-29(续·倒序行号) — owner 报「`read_files(6171→6162)` 报错,工具就不能自己修吗」;实测**报错那半是好的那半,真缺陷是批量里同一形态被静默吞掉、模型拿到它没要过的行**(commit `1cccd128`,3 文件 +225;新套件 **19/19**,**NEUTER×6 各咬各的**(其中**首发一枚完全不咬,原因是我把靶子造成了稻草人**);相邻环 119 passed;干净 committed worktree 复验 **19/19**)
+
+- **★ 报的现象与真缺陷不是同一个,而后者没有任何提示:** owner 只看到 `Error: requested line range 6171-6162 is empty or out of bounds`——吵,但**可见**,代价是一轮往返。实测同一形态进批量后完全变样:
+
+  | 形态 | 修前结果 |
+  |---|---|
+  | 单个倒序 `{6171→6162}` | 报错(可见,浪费一轮) |
+  | 倒序 + 同文件另一区间 `{100→50}` + `{60,70}` | **静默返回 60-70**,零提示 |
+
+  成因在 `_merge_same_file_ranges`:按 `(start, end)` 排序后 `(100,50)` 落到 `(60,70)` 之后,`100 <= 70+40`(GAP_THRESHOLD)于是被并进去、`end=max(70,50)=70`。**倒序那条整个蒸发,模型收到一份干净的、它没要过的行。** 这比报错糟——报错至少让模型知道要重试。
+- **落点(单一真源 + 顺序是承重的):** 新增 `_normalize_line_range()`,在 `tool_read_files` 漏斗上、**`_merge_same_file_ranges` 之前**调用。放在合并之后只能修可见那半(NEUTER-2 精确咬 1 条证明)。展示层 `project_tool_display` 复用**同一个** helper,避免第二份手写判定(charter #24 同族),否则工具行会显示 `L6171-6162` 而实际读的是 `6162-6171`。
+- **★ 刻意只修倒序,不碰越界——这是取舍不是遗漏:** 倒序**无歧义**(只有一个区间可解),越界(9000 行文件要 20000-20100)**是真错**,swap 救不了它,clamp 进合法范围等于把一个错误请求伪装成成功。NEUTER-3b 正是照着「过度修复」造的:把越界 start clamp 到 1 → 返回整个文件 9000 行、**2 条补集守卫开火**。
+- **★ 首发 NEUTER-3 完全不咬,而错在我的靶子:** 我把「naive 修法」写成 `sorted((start,end))`,但 `sorted` 对已正序区间是**恒等**——它与我的实现行为完全一致,等于拿稻草人当靶子跑了一发空转。**判据:NEUTER 必须造出与正确实现行为真正分岔的变体,否则「不咬」证明不了任何事,只证明我造错了靶子。** 重打的 3b/4b 才分别咬到过度修复与半修两个方向。
+- **NEUTER×6 各咬各的:** ①helper 退化为恒等 → **8 红**;②归一化挪到 merge 之后 → 1 红(静默那半);③b 越界 clamp 进范围 → 2 红(补集);④删掉修正提示 → 2 红;⑤b 只修单条、批量放行 → 1 红(实测输出 `6171-6185`,**正是修前的原病灶**);⑥展示层退回原始区间 → 1 红。
+- **修正保持可见:** 结果头部加一行 `[Note] read_files: reversed line range(s) auto-corrected — …`,并 `logger.info` 记一条。**不做静默改写**——本项目反复吃过「功能可用但没有痕迹」的亏;一行提示让模型知道自己的调用是畸形的,又不打断它拿结果。
+- **共享 HEAD 事故一起(已恢复,无工作丢失):** `git commit -- <pathspec>` 连报两次 `did not match any file(s) known to git`——查证是兄弟会话在我 `add` 与 `commit` 之间**反复重置 index**(暂存区从我的 3 项变成兄弟的 17 项、再变 23 项),新建文件的 index 条目每次被清掉。工作树内容始终完好(AST + grep 逐文件核实)。**判据:共享 HEAD 上 `add` 与 `commit` 必须在同一次 shell 调用内完成**,把竞态窗口关掉;分两次调用必然输给活跃的兄弟。提交后复核:本次只含我的 3 文件,兄弟 82 项改动原样未动。
+- **相邻噪声一条已定责非我方:** `test_project_tools.py::TestCleanCommandOutput::test_multi_device_startup_collapsed` 红——在**干净 HEAD worktree 上同样红**,属 `clean_command_output` 折叠逻辑的既有失败,与本批无关。收集门 **12,474 tests / 0 err**。
+- **验收边界(诚实分账):** 纯后端工具层,**运行中进程不带**——重启后新会话的 `read_files` 才走修复。
+
 ### 2026-07-29(续·科研产物读路径) — owner 抓出我**刚修完孤儿又造了一个孤儿**:产物落盘了,但 `load_research_artifacts` 全库零调用方;修法不是补一个函数,是把「按方向查」做成 tasks 端点结构上做不到的那条路(commit `ef09c6a5`,4 文件 +366/-1;新套件 **9/9 失败先行**,**NEUTER×4 各咬各的**;相邻环 **42/42**;干净 committed worktree 复验 **42/42**)
 
 - **★ 同一形态第三次出现,而这次是我造的:** 上一批我写进 JOURNAL 的判据是「函数被 export 进 facade 不等于它被用了,要数调用方」。然后我自己交付了 `load_research_artifacts`——写好、export、**零调用方**。owner 的话是对的:产物安全地躺在 `paper_reports` 里,而产品里没有一条路径能走到它,等于把东西换个地方埋起来。**判据升级:每加一个函数,配套守卫必须断言它有真实调用方且链路端到端通,而不是断言符号存在。**
@@ -35,11 +54,26 @@
 - **验收(owner 五条,逐条实测):** ①`static/provider_templates/` 只剩 `meituan.json`(43 模型),`brand` 从 `claude` 修回 `meituan`(旧值会让整卡掉进 Claude 分组,破坏 `model_group.js` 的收敛);②真解析器跑合并模板:**6 Claude → anthropic 面 / 37 → openai 面 / 0 拒绝**;③无 faces + Claude → fail-loud,NEUTER 真咬;④真实 `server_config.json` 经**加载时迁移代码**:`['sankuai','sankuai_anthropic']` → `['sankuai']`,同一 provider_id 产出 **11 个 anthropic slot + 57 个 openai slot**、共用同 3 把密钥、零拒绝;⑤干净 HEAD **149 passed / 5 skipped**,含既有红转绿。
 - **共享 HEAD 事故两起(均已恢复,无工作丢失):** ①`git add` 后计数对但**内容**错——兄弟的 `EDGE_ADDONS.md` 挤进来而我的模板删除掉出,故改为**集合精确断言**而非计数;②提交瞬间兄弟 reset 清空 index,commit 报「no changes added」。实测工作树内容完好(grep 逐文件确认),重新暂存并改用 `git commit -F 文件 -- <显式 pathspec>` 一次落地。**判据:计数断言不够,要断言集合;提交要带 pathspec。**
 - **验收边界(诚实分账):** ①后端半**需重启**才对新会话生效;②前端需**刷新**,且新模块进 bundle 需重建;③迁移在**下次加载时**才写盘——本轮只做了内存演练与备份(`/tmp/sc_pre_migration.json`),没有手改 owner 的线上配置;④合并后 Claude 的 `provider_id` 由 `sankuai_anthropic` 变 `sankuai`,**按 provider_id 存的密钥健康史与探测缓存会重置一次**(owner 已知悉并接受——两边密钥物理相同,合并后统计反而更准)。
+### 2026-07-29(续·孤儿 tag 锚错 commit) — 判据修对了,但**它救回来的那个 release 会把新二进制挂到旧源码上**:`target_commitish` 对已存在的 tag 是死参数(owner 复核 `5114cbca` 抓出;守卫 **17 → 25**,**NEUTER×4 各咬各的**,相邻环 **90/90**)
+
+- **★ owner 的判据(我把一件危险的事当成了好消息):** 我在上一批写「orphan tag 会被 action-gh-release 采纳并补发」,并据此认为无需特殊处理。三环拼起来结论正好相反:①`export.py:3059 _push_tag` 明写 "never silently MOVES a published tag",不带 `--force` 时**保留远端旧 tag**;②`findTagFromReleases` 扫的是**已有 Release 列表**,orphan tag 找不到匹配 → 走**创建**分支;③而 GitHub REST 文档对 `target_commitish` 的原话是 **"Unused if the Git tag already exists."** ⇒ Release 挂到旧 tag 所指的那个 commit 上。
+- **净效果(比不发版更难查):** 下一次 push 发出来的 v0.15.2,**安装包来自 `github.sha`(新树),而 Source code (zip/tar.gz) 与 `generate_release_notes` 来自旧 commit**,再被 `make_latest: true` 推给所有用户。**全程零报错。** 实测确证该状态就是下一次 push 会落进的状态:远端 v0.15.0 / v0.15.2 有 tag、`GET /releases/tags/` 双 404。
+- **落点(在创建 Release 之前把 tag 移到真正构建的那个 commit):** `release` job 新增一步,位置在完整性闸之后、`action-gh-release` 之前 —— 全部平台产物齐备才动 tag。四种判决镜像 `_tag_push_action`:**不存在** → 交给 action 创建(此时 `target_commitish` 才真正生效);**已指向 `GITHUB_SHA`** → 什么都不做;**指向别处且证实无 Release** → force 移动;**其余** → 不动并告警。
+- **★ owner 给的安全理由我实测发现不够,必须再收一道(这条是本批最关键的自查):** 票面写「`version` job 刚证明 404,所以是孤儿」。但 **`workflow_dispatch` 把 `should_release` 置 true 时根本不探测**(那是故意的重发逃生门)—— 于是**在已发布版本上手动重跑会走到这一步**,按票面写法就会 force 移动一个**已发布**的 tag,破坏每一个下游 pin。故该步**自己重探一次 Release API**,只移动**证实 404** 的 tag。**判据:「上游某个 job 已经检查过」不构成本步骤的授权,除非那条检查在本步骤所有可达路径上都必然发生。**
+- **失败方向与 version 门相反,也是刻意的:** 那道门对不确定**倾向于构建**(多烧四台 runner 而已);这一步对不确定**倾向于不动 tag** —— 移动一个可能已发布的 tag 是破坏性且难撤销的。探测拿不到明确 404 就只告警。
+- **★ 我第一版的 harness 自己在撒谎,而它报的是「产品有 bug」:** `test_a_tag_already_on_the_built_commit_is_left_alone` 首跑红,说本该静默的路径 force push 了。查明是 stub 用 Python `repr` 输出 ls-remote 夹具,**制表符被写成字面 `\t`**,`awk '{print $1}'` 看到的是**一个不可切分的字段** ⇒ 步骤里每一次 SHA 比较都无法匹配、直接掉进 push 分支。**判据:harness 里的夹具必须是真字节(写文件再 `cat`),用 `repr` 内联会把转义序列喂给被测 shell,坏的是量具而不是产品。**
+- **顺带钉住一个只在真实数据上才会犯的错(修 harness 时才可测):** `export.py` 建的是**带注释的 tag**,它的裸 ref 指向 **tag 对象**而非 commit —— 不先用 `^{}` 剥,`--bump` 路径上**每一次运行都会 force 移动一个本来就正确的 tag**。守卫 `test_an_annotated_tag_is_compared_by_its_peeled_commit` 用「peeled=已构建 commit、tag 对象 SHA 不同」的夹具钉死;实测远端 v0.15.2 正是这种形态。
+- **NEUTER×4 各咬各的方向:** ①删掉整步 → **8 红**;②授权换成 `should_release`(照票面写法)→ **精确 2 红**(已发布 + 探测不可读两条补集);③摘掉 `^{}` 剥离 → **精确 1 红**(注释 tag);④把该步移到 Release 之后 → **精确 1 红**(顺序)。
+- **守卫形态:** 断言**该步真正发出的 git 命令**(stub `git`/`curl`、跑真 shell、读调用日志),不是断言 YAML 文本 —— 「移动孤儿 tag」与「移动任何 tag」在文本上几乎一样,而两者的差别就是一次被改写的已发布 tag。
+- **两处措辞更正(owner 点名):** 远端**没有 v0.15.1**(实测 `git ls-remote --tags` 只有 v0.15.0 与 v0.15.2),工作流头部注释、`version` 门注释、守卫 docstring 与上一条日志里的同一句全部改准。
+- **验收边界(诚实分账):** ①仍是下一次 push 到 main 才生效;②本批只动 workflow 与守卫,**无运行时代码,不需要重启**;③`workflow_dispatch` 在**已发布**版本上重跑仍会重建产物并更新那个 Release(既有逃生门语义),但**不会**再移动它的 tag。
+
 ### 2026-07-29(续·发版判据选错) — owner 用线上真实状态证伪我上一批的修复:**tag 是发版的产物,不是发版的证据**;而这个代理在两个方向上都错,其中一个让「不带 --bump 也能出包」这个卖点在最正式的那条路上恰好失效(commit `5114cbca`,2 文件 +240/-24;守卫 **17/17**,**NEUTER 咬 7 条**,相邻环 **82/82**,干净 worktree 复验 **17/17**)
 
-- **★ owner 的证伪(线上实测,不是推断):** 我上一批用 `git ls-remote --tags` 回答「这个版本发过没有」。owner 指出这两件事在本仓**此刻正好是分裂的**——v0.15.0 / v0.15.1 / v0.15.2 **三个 tag 都在远端,而三个都没有 Release**。于是我的门对当前 `VERSION=0.15.2` 判定 `should_release=false`,**一个包都不会建**:修完之后,那三个饿死的版本仍然永远发不出来,而这恰恰是 owner 最初报的那个现象。**判据:「修复」必须拿它要修的那个故障态当输入验一遍,否则它可能在自己的靶子上恰好无效。**
+- **★ owner 的证伪(线上实测,不是推断):** 我上一批用 `git ls-remote --tags` 回答「这个版本发过没有」。owner 指出这两件事在本仓**此刻正好是分裂的**——**v0.15.0 与 v0.15.2 都在远端有 tag,而两个都没有 Release**(实测 `GET /releases/tags/` 双 404;最后一个有 Release 的是 v0.14.2)。于是我的门对当前 `VERSION=0.15.2` 判定 `should_release=false`,**一个包都不会建**:修完之后,那些饿死的版本仍然永远发不出来,而这恰恰是 owner 最初报的那个现象。**判据:「修复」必须拿它要修的那个故障态当输入验一遍,否则它可能在自己的靶子上恰好无效。**
+  - **★ 更正一句我没核过的测量(owner 复核抓出):** 我先前写「v0.15.0 / v0.15.1 / v0.15.2 三个 tag 都在远端」。实测 `git ls-remote --tags` **远端根本没有 v0.15.1**(它连 tag 都没走到),只有 v0.15.0 与 v0.15.2。工作流注释、守卫 docstring 与本条目里的同一句已一并改掉。**判据:引用具体清单前必须真的跑那条命令,「三个」这种数字最容易顺手写错并被后人当事实继承。**
 - **★ 第二个方向更要命,它让本批的卖点在最正式的路径上反向失效:** `export.py::_git_push` 里 `_push_branch` 与 `_push_tag` 在**同一个循环体内背靠背执行**,中间没有任何等待。所以 `--bump` 那条路上,tag 与分支几乎同时到达远端——workflow 被分支推送唤起、`version` job 跑 `ls-remote` 时 tag **大概率已经在了**,于是它判自己「已发布」直接躺下。而不带 `--bump` 时没有 tag、反而能建。**方向正好反了:越正式的发布路径越建不出来。** 这不是理论竞态,是 `--bump` 路径的默认结果。
-- **落点(问真正关心的那件事,不用等待或重试去躲竞态):** 判据换成 `GET /repos/{owner}/{repo}/releases/tags/v$VER`——200 已发布跳过,404 未发布就建。tag 早到、tag 由 `--bump` 先推、tag 是历史遗留,**三种情形全部不影响判定**,那三个 orphan tag 会在下一次 push 时自动补发。
+- **落点(问真正关心的那件事,不用等待或重试去躲竞态):** 判据换成 `GET /repos/{owner}/{repo}/releases/tags/v$VER`——200 已发布跳过,404 未发布就建。tag 早到、tag 由 `--bump` 先推、tag 是历史遗留,**三种情形全部不影响判定**,那两个 orphan tag 会在下一次 push 时自动补发。
 - **★ 为什么不用 `gh release view`(这条决定了实现形态):** 它对「没有这个 release」与「API 调用失败」**都返回 exit 1**,且该映射在 cli/cli#6024 里被明确记为**未文档化行为**。用它做判据**在结构上无法表达 fail-open 规则**——限流会被读成「已发布」而静默跳过发版。故走 REST 拿显式 HTTP 码。
 - **失败方向刻意不对称:** 任何不是明确 200 的结果都建(限流 / 403 / 5xx / 传输失败)。多建一次的代价是四台 runner;漏建一次是又一次静默不发版,**正是本轮在修的那个故障**。curl 上的 `|| true` 是必需的——`set -e` 会让一次网络抖动直接杀掉整个 step,连带杀掉本该发生的构建。
 - **orphan tag 在发布侧无需特殊处理(查证而非假设):** `action-gh-release` 解析目标时扫的是**已有 Release 列表**里的 `tag_name`(`findTagFromReleases`),不是 git tag——所以它会**采纳**已存在的 tag 并在其上创建 Release,而不是报错。

@@ -1,5 +1,33 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·字标统一) — 「两处统一 + 品牌区创意重设计」:侧栏字标停在旧工艺**而代码里看不出任何异常**,因为两处各写一套完整声明、漂移天然不可见;顺带**自报一起共享 HEAD 误提交**(owner 截图圈出两处;epic `pt_91be4876d7c64bbe`;commit `4c3ad19a`,12 文件 +888/-87;新套件 **11/11 含 NEUTER×3 各咬各的方向**,相邻环 **46/46**,干净 committed worktree 复验 **30/30**)
+
+- **★ 根因不是「有人漏改了一个值」,是没有任何东西把两处绑在一起。** 侧栏与欢迎屏**各自持有一份完整的** font-family / font-weight / letter-spacing / color 声明,所以 owner 2026-07-28 拍板的方案 A 只落在欢迎屏、侧栏留在旧工艺,而两个 block 各自都是自洽的、**读代码看不出问题**。修法是提炼**单一字形真源**(`[data-theme="tofu"] .sidebar-brand, .tofu-brand` + 其 `>span` 子规则),两面共同消费,各面只许再声明自己的**字号**与悬停编排——不是把值手抄齐。
+- **像素实证(生产 CSS + 真实 markup + 无头 Chrome,不是读源码):**
+  | | 侧栏 `.sidebar-brand-o` | 欢迎屏 `.tofu-brand-o1` |
+  |---|---|---|
+  | 计算色 | `rgba(0,0,0,0)` 透明 | `rgb(169,101,54)` |
+  | `o` 字形 | 隐藏,由 `::after` 渐变方块代画 | 真实字母 |
+  | letter-spacing | `-0.01em` | `-0.03em` |
+
+  `tofu` 是**默认主题**(index.html:33 兜底),所以两处都是每个用户的首屏。18px 下那块惨白方块读起来像**渲染故障**,不像字母。
+- **创意重设计:3 候选 in-situ 实拍 → A 三稿精修 → A3 落地。** B(竖排豆腐)42px 下逼仄、细规线不可见;C(暖光纸笺卡)**把 pills 挤成两行**——布局回归,直接否决。A 落地为**落款印**:「豆腐」从 `.34em` 稀疏小字(在 42px 主标旁读作漏排的说明文字)变成微斜陶土印章;吉祥物补一片接地投影(此前只有 drop-shadow、没有落影,读作贴图而非放在纸上的物件)。
+- **★ 印章字号必须是 `clamp(10.5px,.30em,13px)`,两个纯方案都被实拍否决(反直觉,记下来):**
+  | 方案 | 桌面 42px | 移动 20px | 结论 |
+  |---|---|---|---|
+  | 纯 `px`(12.5) | 正常 | 印章几乎与主标同高,比例失衡 | ❌ |
+  | 纯 `em`(.30) | 正常 | 解析为 **~6px**,中文两字糊成一团 | ❌ |
+  | `clamp` 三值 | 取 12.6px | 取 10.5px 下限,可读 | ✅ |
+
+  **判据:em 缩放看似「天然自适应」,但中文有绝对可读下限,纯比例缩放必然在小字号翻车。** 印章 padding 左右不等(.64em/.50em)同样是实拍定的——`letter-spacing` 会在末字「腐」后留一份字距,左右等距看起来右边更空。
+- **★ 守卫第一版「通过了,但理由是错的」(我自己 neuter 抓出来的,不是评审):** 共享特异性引擎 `_selector_matches` **只按空白切分选择器**,于是 `.tofu-brand>span` 被当成一个无法解析的复合选择器、**永远不匹配**;两边都解析出 `None`,而 `None == None` 让 parity 断言绿灯空转。修法:本套件内 `_desktop()` 把 `>` 归一化为后代组合器(`_specificity` 本来就把 `[>+~]` 折叠成空格,特异性不变),**不动共享引擎**——兄弟套件依赖它。
+- **★ 第一发 NEUTER 没咬,而原因是产品码比我以为的更稳:** 注入 `.sidebar-brand-o{color:transparent}` **(0,2,0)** 竟没让 o 变透明——共享 `>span` 规则是 **(0,2,1)**,多一个类型选择器压过它。这个差值正是「一条散落的单字母覆盖无法悄悄重开漂移」的承重结构,故补一条守卫钉住它,而不是让它继续当巧合。改用**忠实复刻上线前形态**的 NEUTER 1b(共享规则排除 o + 旧的透明 o & `::after` 方块)后,3 条守卫精确开火。
+- **顺带清掉一处矛盾对:** 旧的 `.welcome-icon::before{content:none}` 与新落影规则同特异性且位置在前,虽不影响结果,但留着就是下一次漂移的种子——删掉而非叠加。
+- **★ 自报事故:`git commit -- <pathspec>` 把两个兄弟会话的未提交 styles.css 工作扫进了我的 commit。** 我完整执行了 charter #15 的正解(diff → 按行号过滤 hunk → `git apply --cached` → 断言 index 中兄弟标记计数为 0 → 文件数计数 12,全部通过),然后在收尾 `git commit -F - -- static/styles.css ...` 上把它全部撤销——**pathspec 让 git 重新从磁盘读文件**,`.fallback-banner` 簇(~6281)与 `.ptool-qr-*` 簇(~7567)连同 ~592-719 若干 hunk 一起进了我的提交。
+  - **不 revert**:`git show HEAD:static/styles.css | grep -c` 核实各关键字 9/5/4/2、**内容完好无损**,这是**署名错误而非数据丢失**,revert 会真的删掉兄弟的活工作。
+  - **发现纯属偶然**:是 peer(`ms5bbwg8`)来问 `.lc-*` 边界、我顺手复查才看见的。**`git diff --cached` 全绿与 commit 是否干净没有因果关系**——前者读 index,pathspec-commit 读工作树,不同源;唯一权威的收尾断言是对 `git show HEAD` 而非对 index。已按此更正纪律,并把本项目**六条各自碎片化的同主题记忆合并成一条**(正因为碎成六份,它们谁都没在关键时刻浮出来)。
+- **验收边界:** 纯前端 CSS + 测试,**刷新即生效**,无需重启。字标 markup 与 i18n 未动;`tofu-welcome.svg` 未动(owner 已两次现场否决 logo 改动)。**未做 owner 在岗试用**——按 2026-07-28 的方法论修正,品牌资产终审只能是在岗长期观感,本批预设可回滚窗口(单 commit,`git revert 4c3ad19a` 前需先剔除误提交的兄弟 hunk)。
+
 ### 2026-07-29(续·全库体检) — 「最近改动太多,还有没有残留 bug」的一次系统体检:**11,878 用例 / 3 条 CRITICAL / ~40 个失败文件里,只有 2 条是真缺陷,而两条同属我自己上一批漏的收尾**(commit `7d034057`,2 文件 +5;目标守卫 **20/20**,相邻环 **40/41**,于共享 HEAD 显式 pathspec 提交)
 
 - **方法:三条独立取证线并行,而不是只跑测试。** ①活体运行时日志(error.log + 8.7GB 的 app.log)②干净 HEAD worktree 全量测试(必须隔离——主树有 49→63 项兄弟会话 WIP,脏树跑测试全是误判)③对每条真红做三态定性(真 bug / 守卫腐烂 / 环境)。**结论:测试红得多≠缺陷多,~40 个失败文件里真缺陷只有 2 条。**

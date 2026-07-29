@@ -131,6 +131,30 @@ def _desktop(css_text: str) -> str:
     return re.sub(r'\s*>\s*', ' ', text)
 
 
+def _seal_css(css_text: str) -> str:
+    """Desktop cascade with rules that a real browser EXCLUDES from the seal dropped.
+
+    The shared engine does not check the TAG on an ancestor compound, so
+    `.welcome h2:not(.tofu-brand) small` matches the seal in the model: the
+    `h2:not(.tofu-brand)` compound is satisfied by the `.welcome` ancestor (its
+    class set lacks `tofu-brand`), even though the seal's actual parent IS the
+    `h2.tofu-brand`. Chrome excludes that rule — measured: the seal resolves
+    font-weight 700, not the caption rule's 500.
+
+    Rather than edit the shared engine (sibling suites depend on it), drop the
+    rules whose selector carries `:not(.tofu-brand)` before resolving anything on
+    the seal. Those rules are BY CONSTRUCTION the ones that must not reach it, so
+    removing them models the browser instead of fighting the model.
+    """
+    kept = []
+    for chunk in re.split(r'(?<=\})', _desktop(css_text)):
+        head = chunk.split('{', 1)[0]
+        if ':not(.tofu-brand)' in head:
+            continue
+        kept.append(chunk)
+    return ''.join(kept)
+
+
 @pytest.fixture(scope='module')
 def css_text() -> str:
     """The shipped CSS, read ONCE. Nothing in this suite writes it back."""
@@ -161,6 +185,15 @@ def _welcome_wm(theme: str) -> _Elem:
 
 
 def _stamp(theme: str) -> _Elem:
+    """The 豆腐 seal: `<h2 class="tofu-brand"><small>豆腐</small></h2>`.
+
+    NOTE on the ancestor model: the shared engine evaluates a `:not(.x)` on an
+    ANCESTOR compound against that ancestor's class set, so the parent h2 must
+    carry `tofu-brand` for `.welcome h2:not(.tofu-brand) small` to be correctly
+    EXCLUDED. Chrome excludes it (measured: the seal resolves 700); an ancestor
+    set that omitted the class made the engine wrongly match that caption rule
+    and report 500 — a harness artefact, not a CSS defect.
+    """
     return _Elem('small', set(), theme=theme,
                  ancestors=[{'tofu-brand'}, {'welcome'}])
 
@@ -398,7 +431,7 @@ def test_no_pseudo_block_paints_the_o_on_either_surface(css_text):
 
 def test_welcome_stamp_is_a_clay_seal_not_loose_small_text(css_text):
     """`豆腐` is the clay stamp: filled background + a tilt (tofu theme)."""
-    css = _desktop(css_text)
+    css = _seal_css(css_text)
     bg = (_resolve(css, _stamp('tofu'), 'background') or '').lower()
     assert 'gradient' in bg, (
         f'welcome 豆腐 background resolved {bg!r} — expected the clay gradient '
@@ -416,7 +449,7 @@ def test_welcome_stamp_font_size_keeps_a_readable_floor(css_text):
     is nearly as tall as that 20px title). A bare `em` here is a real mobile
     defect, so the floor is load-bearing, not styling taste.
     """
-    css = _desktop(css_text)
+    css = _seal_css(css_text)
     size = (_resolve(css, _stamp('tofu'), 'font-size') or '').replace(' ', '').lower()
     assert size.startswith('clamp('), (
         f'welcome 豆腐 font-size resolved {size!r} — expected a clamp() with a '
@@ -434,7 +467,7 @@ def test_nc_dropping_the_clamp_floor_is_detected(css_text):
     anchor = 'font-size:clamp(10.5px,.30em,13px);'
     assert css_text.count(anchor) == 1, (
         f'NC anchor not unique/found: count={css_text.count(anchor)}')
-    neutered = _desktop(css_text.replace(anchor, 'font-size:.30em;', 1))
+    neutered = _seal_css(css_text.replace(anchor, 'font-size:.30em;', 1))
     size = (_resolve(neutered, _stamp('tofu'), 'font-size') or '').lower()
     assert not size.startswith('clamp('), (
         f'NC did not bite: font-size still resolves {size!r}')
@@ -444,7 +477,7 @@ def test_nc_blanking_the_ground_shadow_is_detected(css_text):
     """NEUTER (in-memory): restore the old
     `.welcome-icon::before{content:none}` (which sat LATER in source than the new
     ground shadow and would silently kill it) → the mascot loses its shadow."""
-    shadow_sel = '[data-theme="tofu"] .welcome-icon::before'
+    shadow_sel = '.welcome-icon::before'
 
     def _shadow_content(text: str) -> str:
         best = None
@@ -463,6 +496,125 @@ def test_nc_blanking_the_ground_shadow_is_detected(css_text):
     assert _shadow_content(neutered) == 'none', (
         'NC did not bite: a later content:none did not win, so this test cannot '
         'detect the shadow being blanked.')
+
+
+@pytest.mark.parametrize('theme', _THEMES)
+def test_seal_is_a_seal_in_every_theme(css_text, theme):
+    """豆腐 must be the clay SEAL in EVERY theme — filled + tilted + cream ink.
+
+    Owner caught this: the wordmark had been unified across themes but the brand
+    FORM was still tofu-only, so dark/light rendered 豆腐 as loose grey caption
+    text (11px/400/#6a6a7a and #868490) — i.e. the ORIGINAL defect this redesign
+    set out to fix, living on untouched in two of three themes.
+    """
+    css = _seal_css(css_text)
+    el = _stamp(theme)
+    bg = (_resolve(css, el, 'background') or '').lower()
+    bg_img = (_resolve(css, el, 'background-image') or '').lower()
+    assert 'gradient' in bg or 'gradient' in bg_img, (
+        f'[{theme}] 豆腐 has no seal fill (background={bg!r}, '
+        f'background-image={bg_img!r}) — it has reverted to loose caption text.')
+    transform = (_resolve(css, el, 'transform') or '').lower()
+    assert 'rotate' in transform, (
+        f'[{theme}] 豆腐 transform={transform!r} — the seal tilt is missing.')
+    weight = _resolve(css, el, 'font-weight')
+    assert weight == '700', (
+        f'[{theme}] 豆腐 font-weight={weight!r}; the seal ink is 700 in every '
+        f'theme. 400/500 means a generic caption rule is winning — that is '
+        f'exactly how `[data-theme="tofu"] .welcome h2 small` (0,2,2, later in '
+        f'source) was dragging the seal back to Jakarta 500/13px.')
+    fill = (_resolve(css, el, '-webkit-text-fill-color') or '').lower()
+    assert fill and 'tertiary' not in fill, (
+        f'[{theme}] 豆腐 ink={fill!r} — expected the explicit cream seal ink; a '
+        f'tertiary/grey value means the caption rule bled through.')
+
+
+@pytest.mark.parametrize('theme', _THEMES)
+def test_mascot_has_a_ground_shadow_in_every_theme(css_text, theme):
+    """The mascot must be grounded in every theme, not floating.
+
+    `.welcome-icon::before` was tofu-only, so dark/light kept the pre-redesign
+    floating mascot. Also asserts the positioning context: the BASE
+    `.welcome-icon` never had `position`, it was silently borrowing the tofu
+    layer's — without it the shadow anchors to the wrong ancestor.
+    """
+    css = _desktop(css_text)
+    icon = _Elem('div', {'welcome-icon'}, theme=theme, ancestors=[{'welcome'}])
+    assert _resolve(css, icon, 'position') == 'relative', (
+        f'[{theme}] .welcome-icon is not positioned — the ground shadow would '
+        f'anchor to the nearest positioned ancestor instead of the mascot.')
+    content, fill = None, None
+    for sel, _idx, decls in _iter_rules(css):
+        s = sel.replace(' ', '')
+        if not s.endswith('.welcome-icon::before'):
+            continue
+        if 'data-theme' in s and f'data-theme="{theme}"' not in s:
+            continue
+        if 'content' in decls:
+            content = decls['content'].strip().lower()
+        if 'background' in decls:
+            fill = decls['background'].strip().lower()
+    assert content == '""', (
+        f'[{theme}] mascot ground-shadow content={content!r} — expected \'""\'; '
+        f'the mascot is floating again.')
+    assert fill and 'gradient' in fill, (
+        f'[{theme}] mascot ground shadow has no gradient ({fill!r}).')
+
+
+@pytest.mark.parametrize('theme', _THEMES)
+def test_nc_scoping_the_seal_to_tofu_regresses_the_other_themes(css_text, theme):
+    """NEUTER (in-memory): re-scope the base seal rule to `[data-theme="tofu"]`
+    — precisely the shape that shipped — so dark/light must lose the seal.
+
+    Under `tofu` the seal legitimately SURVIVES (that theme still matches), so
+    this neuter is expected to bite on dark/light only. Asserting per-theme keeps
+    that asymmetry visible instead of averaging it into one aggregate green.
+    """
+    base_sel = '\n.welcome h2.tofu-brand small{'
+    assert css_text.count(base_sel) == 1, (
+        f'NC anchor not unique/found: count={css_text.count(base_sel)}')
+    scoped = css_text.replace(base_sel, '[data-theme="tofu"] ' + base_sel, 1)
+    # Drop the per-theme fill overrides too — otherwise they would still supply a
+    # gradient and the neuter would look like it failed for the wrong reason.
+    scoped = re.sub(
+        r'\[data-theme="(light|dark)"\] \.welcome h2\.tofu-brand small\{[^}]*\}',
+        '', scoped)
+    css = _seal_css(scoped)
+    bg = (_resolve(css, _stamp(theme), 'background') or '').lower()
+    bg_img = (_resolve(css, _stamp(theme), 'background-image') or '').lower()
+    has_seal = 'gradient' in bg or 'gradient' in bg_img
+    if theme == 'tofu':
+        assert has_seal, (
+            'NC setup wrong: tofu should KEEP the seal when the rule is scoped '
+            'to tofu — the neuter is not modelling the shipped defect.')
+    else:
+        assert not has_seal, (
+            f'[{theme}] NC did not bite: the seal survived a tofu-scoped rule '
+            f'(background={bg!r} background-image={bg_img!r}), so this suite '
+            f'cannot detect the brand form going tofu-only again.')
+
+
+def test_nc_scoping_the_ground_shadow_to_tofu_regresses_other_themes(css_text):
+    """NEUTER (in-memory): scope the base ground shadow to tofu → dark/light lose
+    it, which is exactly the state that shipped."""
+    anchor = '\n.welcome-icon::before{'
+    assert css_text.count(anchor) == 1, (
+        f'NC anchor not unique: count={css_text.count(anchor)}')
+    scoped = css_text.replace(anchor, '\n[data-theme="tofu"] .welcome-icon::before{', 1)
+    css = _desktop(scoped)
+    for theme in ('dark', 'light'):
+        content = None
+        for sel, _idx, decls in _iter_rules(css):
+            s = sel.replace(' ', '')
+            if not s.endswith('.welcome-icon::before'):
+                continue
+            if 'data-theme' in s and f'data-theme="{theme}"' not in s:
+                continue
+            if 'content' in decls:
+                content = decls['content'].strip()
+        assert content != '""', (
+            f'[{theme}] NC did not bite: the ground shadow survived being scoped '
+            f'to tofu — this suite cannot detect the mascot floating again.')
 
 
 # ─────────────────────────── 5. markup contract ─────────────────────────────

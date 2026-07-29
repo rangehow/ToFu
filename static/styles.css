@@ -33,7 +33,7 @@ html[data-rail="collapsed"] .sidebar{width:calc(var(--project-rail-w-collapsed) 
 html[data-rail] .folder-quickadd{display:none}
 .sidebar.collapsed{margin-left:-280px}
 .sidebar.has-rail.collapsed{margin-left:calc(-1 * (var(--project-rail-w) + var(--sidebar-list-min)))}
-.sidebar.has-rail.rail-collapsed.collapsed{margin-left:calc(-1 * (var(--project-rail-w-collapsed) + var(--sidebar-list-min)))}.sidebar-header{padding:16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px}.sidebar-header h1{font-size:15px;font-weight:700;letter-spacing:0.06em;flex:1;display:flex;align-items:center;gap:5px;font-family:'Pixelify Sans','Press Start 2P',cursive}.sidebar-brand{display:inline-flex;letter-spacing:0.04em}.sidebar-brand-t,.sidebar-brand-o,.sidebar-brand-f,.sidebar-brand-u{-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}.sidebar-brand-t{background-image:linear-gradient(135deg,#8b6cf6,#a78bfa)}.sidebar-brand-o{background-image:linear-gradient(135deg,#a78bfa,#c4b5fd)}.sidebar-brand-f{background-image:linear-gradient(135deg,#7c3aed,#8b6cf6)}.sidebar-brand-u{background-image:linear-gradient(135deg,#6d28d9,#7c3aed)}.sidebar-tofu-icon{flex-shrink:0;opacity:0.85}
+.sidebar.has-rail.rail-collapsed.collapsed{margin-left:calc(-1 * (var(--project-rail-w-collapsed) + var(--sidebar-list-min)))}.sidebar-header{padding:16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px}.sidebar-header h1{font-size:15px;font-weight:700;letter-spacing:0.06em;flex:1;display:flex;align-items:center;gap:5px;font-family:'Pixelify Sans','Press Start 2P',cursive}.sidebar-brand{display:inline-flex}.sidebar-brand-t,.sidebar-brand-o,.sidebar-brand-f,.sidebar-brand-u{-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}.sidebar-tofu-icon{flex-shrink:0;opacity:0.85}
 .sidebar-header-actions{display:flex;gap:2px;align-items:center}
 .sidebar-header-actions .action-btn{width:30px;height:30px}
 .sidebar-action-row{display:flex;gap:6px;padding:12px 16px;align-items:stretch}
@@ -398,8 +398,47 @@ html[data-rail] .folder-quickadd{display:none}
 .scroll-to-bottom-btn>svg{display:block}
 .scroll-to-bottom-btn.visible{opacity:1;pointer-events:auto;visibility:visible;transform:translateX(-50%) translateY(0)}
 .welcome{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:50vh;text-align:center;animation:fadeIn .5s ease;gap:2px}.welcome-icon{width:64px;height:64px;border-radius:0;background:transparent;display:flex;align-items:center;justify-content:center;font-size:28px;margin-bottom:6px;box-shadow:none;border:none;outline:none}.welcome-icon img{width:100%;height:100%;object-fit:contain;border-radius:0;border:none;outline:none;transition:transform 0.3s cubic-bezier(0.34,1.56,0.64,1)}.welcome-icon:hover img{transform:rotate(-5deg) scale(1.08)}.welcome-icon svg{filter:drop-shadow(0 2px 8px rgba(168,85,247,0.3))}.welcome h2 small{display:inline;font-family:'Jakarta Toolbar','Plus Jakarta Sans','Jakarta Fallback',sans-serif;font-size:11px;font-weight:400;color:var(--text-tertiary);letter-spacing:0.12em;margin-left:6px;vertical-align:middle;opacity:0.7}.welcome h2{font-size:24px;font-weight:600;margin-bottom:4px;letter-spacing:-0.03em}
-/* ── Vibrant gradient brand text (pixel font) ── */
-.tofu-brand{font-family:'Pixelify Sans','Press Start 2P',cursive;font-size:26px;font-weight:700;letter-spacing:0.08em;margin-bottom:6px}.tofu-brand .tofu-brand-t{background:linear-gradient(135deg,#f5d5a0,#e8b86d);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}.tofu-brand .tofu-brand-o1{background:linear-gradient(135deg,#fdf2d7,#f0dbb8);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}.tofu-brand .tofu-brand-f{background:linear-gradient(135deg,#dcc8a4,#c5a87e);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}.tofu-brand .tofu-brand-u{background:linear-gradient(135deg,#e8b86d,#d4a050);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}.welcome p{color:var(--text-secondary);font-size:13px;max-width:380px;line-height:1.5}.feature-pills{display:flex;gap:6px;margin-top:16px;flex-wrap:wrap;justify-content:center}.feature-pill{font-size:11px;padding:4px 12px;border-radius:20px;border:1px solid var(--border);color:var(--text-secondary);background:var(--bg-tertiary);display:flex;align-items:center;gap:5px}
+/* ══ TOFU wordmark — THEME-AGNOSTIC LETTERFORM SOURCE ══════════════════════
+   侧栏(15/18px)与欢迎屏(24/42px)是同一个字标的两个字号,在**每个主题下**都必须同源。
+   字族/字重/字距/结构在此一次性供给,两处共同消费;各主题只允许再覆盖颜色,各面
+   只允许再覆盖自己的字号与悬停编排。
+
+   为什么必须在基础层而不是 [data-theme] 层(2026-07-29 owner 实测退回):上一版共享
+   规则挂在 `[data-theme="tofu"]` 前缀上,于是 dark/light 下两处依旧各写一套——实测
+   侧栏 700 / +0.6px / 紫渐变,欢迎屏 600 / -0.72px / 金渐变,字距方向都相反。
+
+   而真因不止配色。`.tofu-brand`(0,1,0) 自己写的 font-weight:700 与
+   letter-spacing:0.08em 是**死代码**:通用 `.welcome h2`(0,1,1) 特异性更高,把它们压成
+   600 / -0.03em;而侧栏那份同样的意图却生效了。同一份声明在两处得出相反结果,源码
+   看上去两边却都写了 700/0.08em——这正是漂移能长期隐形的机制。故本规则刻意带上下文
+   (`.sidebar-header h1 .sidebar-brand` = 0,2,2 / `.welcome h2.tofu-brand` = 0,2,1),
+   两者都严格压过 `.welcome h2`(0,1,1),让「写下的就是生效的」。
+   守卫 tests/test_brand_wordmark_parity.py 按 tofu/dark/light 三主题参数化钉死。
+
+   字重 700 不是随手取的:Pixelify Sans 只随包提供 Bold 一个字面(见
+   static/vendor/google-fonts-local.css 仅 PixelifySans-Bold.woff2),700 是它唯一真实
+   可渲染的字重;写 600 只会让浏览器合成假粗体,不同字号下粗细还不一致。 */
+.sidebar-header h1 .sidebar-brand,
+.welcome h2.tofu-brand{
+  font-family:'Pixelify Sans','Press Start 2P',cursive;
+  font-weight:700;
+  letter-spacing:0.06em;
+  text-transform:none
+}
+.sidebar-header h1 .sidebar-brand>span,
+.welcome h2.tofu-brand>span{display:inline-block}
+/* ── 字母配色 — 两处共用同一套渐变。侧栏此前是紫渐变(#8b6cf6→#a78bfa)、欢迎屏是
+   豆腐奶油-琥珀金渐变,dark 下实测就是「侧栏紫 Tofu + 欢迎屏金 Tofu」同一品牌两个
+   颜色。保留金系(它是豆腐本身的颜色;紫是早年通用 accent 的遗留)。 ── */
+.sidebar-brand-t,.welcome h2.tofu-brand .tofu-brand-t{background-image:linear-gradient(135deg,#f5d5a0,#e8b86d)}
+.sidebar-brand-o,.welcome h2.tofu-brand .tofu-brand-o1{background-image:linear-gradient(135deg,#fdf2d7,#f0dbb8)}
+.sidebar-brand-f,.welcome h2.tofu-brand .tofu-brand-f{background-image:linear-gradient(135deg,#dcc8a4,#c5a87e)}
+.sidebar-brand-u,.welcome h2.tofu-brand .tofu-brand-u{background-image:linear-gradient(135deg,#e8b86d,#d4a050)}
+.welcome h2.tofu-brand>span{-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+/* `.tofu-brand` 原有的 font-family/font-size/font-weight/letter-spacing 已删除:后两项
+   是死代码(被 .welcome h2 压过),font-size 同样由 .welcome h2 的 24px 决定——留着只会
+   让下一个人以为它们生效。 */
+.tofu-brand{margin-bottom:6px}.welcome p{color:var(--text-secondary);font-size:13px;max-width:380px;line-height:1.5}.feature-pills{display:flex;gap:6px;margin-top:16px;flex-wrap:wrap;justify-content:center}.feature-pill{font-size:11px;padding:4px 12px;border-radius:20px;border:1px solid var(--border);color:var(--text-secondary);background:var(--bg-tertiary);display:flex;align-items:center;gap:5px}
 .cv-off .message{content-visibility:visible!important}.message{margin-bottom:24px;content-visibility:auto;contain-intrinsic-size:auto 120px;display:grid;grid-template-columns:auto minmax(0,1fr) var(--rail-w);column-gap:12px;align-items:flex-start;position:relative;grid-column:1 / -1}@keyframes slideUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}@keyframes fadeIn{from{opacity:0}to{opacity:1}}.message-new{animation:slideUp .3s ease;content-visibility:visible}
 .message-avatar{width:40px;height:40px;border-radius:0;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;flex-shrink:0;background:transparent;color:white;margin-top:2px;overflow:visible;box-shadow:none}.message-avatar img,.message-avatar svg{filter:brightness(0.82) saturate(0.85)}.message-avatar svg{image-rendering:pixelated}.message:not(.user-msg) .message-avatar{background:transparent;border-radius:0;box-shadow:none}.message.user-msg .message-avatar{width:40px;height:40px;background:transparent;color:#a5b4fc}
 /* ── READING MEASURE (single source of truth, theme-agnostic) ──────
@@ -9950,10 +9989,9 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 
 /* Light: structural overrides */
 [data-theme="light"] .welcome-icon{background:transparent;box-shadow:none}
-[data-theme="light"] .sidebar-brand-t{background-image:linear-gradient(135deg,#6366f1,#818cf8)}
-[data-theme="light"] .sidebar-brand-o{background-image:linear-gradient(135deg,#818cf8,#a5b4fc)}
-[data-theme="light"] .sidebar-brand-f{background-image:linear-gradient(135deg,#4f46e5,#6366f1)}
-[data-theme="light"] .sidebar-brand-u{background-image:linear-gradient(135deg,#4338ca,#4f46e5)}
+/* （已删）light 主题曾有四条 .sidebar-brand-* 靓蓝渐变——那是只盖侧栏、不盖欢迎屏的
+   单边覆盖,正是两处字标漂移的一个来源。字母配色现由基础层单一真源同时供给两面;
+   若将来真需要按主题换色,必须同时写 .sidebar-brand-* 与 .tofu-brand-* 两侧。 */
 [data-theme="light"] .avatar.assistant{background:linear-gradient(135deg,#6366f1,#818cf8)}
 [data-theme="light"] .message-avatar img,[data-theme="light"] .message-avatar svg{filter:none}
 [data-theme="light"] .turn-nav{background:rgba(244,242,237,0.93);border-color:var(--border)}
@@ -10628,17 +10666,17 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
    tests/test_brand_wordmark_parity.py 钉死「两处解析出的字形/色/字距必须相等」。
    色彩纪律:字身走 --brand-ink(深陶土),比墨黑暖一度、与吉祥物奶油-琥珀同族;
    不用主题 accent #C1794B(会与链接/按钮撞色,显不出品牌)。 */
-[data-theme="tofu"] .sidebar-brand,
-[data-theme="tofu"] .tofu-brand{
+[data-theme="tofu"] .sidebar-header h1 .sidebar-brand,
+[data-theme="tofu"] .welcome h2.tofu-brand{
   font-family:var(--sans-body);
   font-weight:800;
   letter-spacing:-0.03em;
   text-transform:none
 }
-[data-theme="tofu"] .sidebar-brand>span,
-[data-theme="tofu"] .tofu-brand>span{
+[data-theme="tofu"] .sidebar-header h1 .sidebar-brand>span,
+[data-theme="tofu"] .welcome h2.tofu-brand>span{
   display:inline-block;
-  background:none;
+  background:none;background-image:none;
   color:var(--brand-ink);-webkit-text-fill-color:currentColor;
   transform:rotate(var(--brand-tilt,0deg));
   transform-origin:50% 88%
@@ -10646,8 +10684,8 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 /* 2026-07-28 owner 拍板方案 A:字标里不放扁平方块 o——欢迎屏上方已有具象立方体
    吉祥物,再放一只是重复元素打架;o 是真字母,可选中可复制。此处显式清掉旧工艺的
    ::after,让任何遗留/复制来的方块 o 规则都无法复活。 */
-[data-theme="tofu"] .sidebar-brand>span::after,
-[data-theme="tofu"] .tofu-brand>span::after{content:none}
+[data-theme="tofu"] .sidebar-header h1 .sidebar-brand>span::after,
+[data-theme="tofu"] .welcome h2.tofu-brand>span::after{content:none}
 /* ── Sidebar wordmark — 与欢迎屏 .tofu-brand 同一字标,只差字号(18px vs 42px)。
    2026-07-29:侧栏此前停留在旧工艺(o 由 ::after 渐变方块接管、字距 -0.01em),而欢迎屏
    已按 owner 2026-07-28 方案 A 改为真字母 o + 字距 -0.03em ⇒ 同一品牌两套字标。

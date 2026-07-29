@@ -355,7 +355,13 @@ def chat_conv_state():
             'runningTaskIds': list(tids),
             'runningTaskIdsRev': _running_task_ids_rev(),
         }
-    return api_ok({'convs': convs})
+    # Frame-level rev — the CLEAR branch's authoritative stamp
+    # (pt_781ae072d6ee4e84). MUST be present on this lane too: both transports
+    # feed the SAME reducer, so a projection missing it would leave the poll
+    # path unable to clear a conv without the client minting its own value —
+    # the cross-clock-domain bug this ticket removed. Minted after the per-conv
+    # revs so it dominates them.
+    return api_ok({'convs': convs, 'rev': _running_task_ids_rev()})
 
 
 @api_v1_chat_bp.route('/api/v1/chat/completions', methods=['POST'])

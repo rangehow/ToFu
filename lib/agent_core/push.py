@@ -401,6 +401,21 @@ def build_conv_state_snapshot(user_id='') -> dict:
         'type': 'conv_state_snapshot',
         'userId': user_id,
         'convs': convs,
+        # ── pt_781ae072d6ee4e84: frame-level rev for the CLEAR branch ──
+        # A conv ABSENT from this snapshot must have its local busy state
+        # extinguished, and the client must advance that conv's rev so a
+        # reordered older notify cannot un-clear the dot. The client used to
+        # SYNTHESIZE that value from its own wall clock — a different clock
+        # domain from the server's rev, which poisoned the strict-greater gate
+        # and left the conv permanently deaf on both transports.
+        #
+        # Shipping the rev HERE is what makes client-side minting unnecessary
+        # (and therefore forbiddable): the clear is stamped with an
+        # authoritative value on the same timeline as every other rev, so
+        # "cleared" and "busy" are totally ordered against each other.
+        # Minted AFTER the per-conv revs above so it dominates them — the
+        # snapshot is by construction the newest view of the registry.
+        'rev': _running_task_ids_rev(),
     }
 
 

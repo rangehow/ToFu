@@ -305,7 +305,8 @@ function applyRunningTaskIdsFrame(conversations, frame) {
 
 /* Consume a connect-time full snapshot:
  *
- *   frame = { convs: { convId: {runningTaskIds, runningTaskIdsRev} }, userId? }
+ *   frame = { convs: { convId: {runningTaskIds, runningTaskIdsRev} },
+ *             rev: [ns, replica], userId? }
  *
  * Snapshot semantics: convs PRESENT in the frame are UPDATED (still
  * gated per-conv on rev); convs ABSENT are CLEARED. A server that no
@@ -313,6 +314,10 @@ function applyRunningTaskIdsFrame(conversations, frame) {
  * — that is the whole point of receiving a fresh full projection at
  * connect time. Best-effort per conv; a bad rev drops that conv's
  * update but does NOT abort the whole snapshot.
+ *
+ * ``frame.rev`` is the SERVER-MINTED frame-level rev the CLEAR branch stamps.
+ * Both transports ship it (push `conv_state_snapshot` and the
+ * `/api/v1/chat/conv-state` poll projection).
  */
 function applyConvStateSnapshot(conversations, frame) {
   try {
@@ -348,17 +353,31 @@ function applyConvStateSnapshot(conversations, frame) {
         /* CLEARED: not present in snapshot → server says NOT running.
          * The snapshot is more recent than any prior notify frame by
          * construction (it was built at connect time from the current
-         * registry), so we don't rev-gate the clear — we advance the
-         * rev to a fresh sentinel so no stale notify can un-clear it. */
+         * registry), so we don't rev-gate the clear — but we DO advance the
+         * rev so no stale in-flight notify can un-clear it.
+         *
+         * ★ THE ADVANCE MUST USE THE SERVER'S OWN rev (pt_781ae072d6ee4e84).
+         * This line used to synthesize `[Date.now() * 1e6, 'snapshot-clear']`.
+         * The client cannot mint a comparable rev — it has no access to the
+         * server's clock domain — so that value (~1.78e18 wall-clock ns) sat
+         * three orders of magnitude above every real server rev and made
+         * `_revStrictlyGreater` return false for EVERY subsequent frame. The
+         * conversation went permanently deaf on BOTH transports (push notify
+         * and the poll fallback share this reducer), and the 25s/90s reconcile
+         * could not heal it because the conversation-list endpoint carries no
+         * runningTaskIds by design. Only F5 recovered it.
+         *
+         * A snapshot with no frame-level rev leaves the prior rev in place:
+         * the busy state is still cleared (the visible fact the user needs),
+         * we simply decline to advance a gate we cannot advance honestly.
+         * Stamping an un-comparable value is strictly worse than stamping
+         * nothing — it trades a rare lost clear for permanent deafness. */
         conv._authoritativeActiveTaskIds = new Set();
         conv._authoritativeAttachableTaskIds = new Set();
         conv._vuCarrierTaskIds = new Set();
-        /* Advance the rev to now-ish so a stale frame can't resurrect
-         * the cleared state. Uses Date.now() * 1e6 as an ns proxy —
-         * the server's monotonic_ns is process-relative, so on the
-         * client we synthesize a rev whose ns dwarfs any prior server
-         * one to guarantee monotonicity of the CLEAR event. */
-        conv._authoritativeActiveTaskIdsRev = [Date.now() * 1e6, 'snapshot-clear'];
+        if (Array.isArray(frame.rev) && frame.rev.length === 2) {
+          conv._authoritativeActiveTaskIdsRev = frame.rev;
+        }
       }
     }
   } catch (e) {

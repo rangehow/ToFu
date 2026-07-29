@@ -1,5 +1,16 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·幽灵 Stop 键) — 自查抓出**我自己守卫里的散文承诺**:docstring 写着「must not resurrect a dot」而断言里根本没有这一半;它保护的正是本 objective 的**反面**——「看得见却没在生成」(commit `48aa84e4`,test-only 零产品码;套件 **10/10**,**NEUTER-F 精确咬 1 条**,相邻环 **56/56**)
+
+- **★ 这不是「测试不严谨」,它守的是我自己引进的风险面。** VU 可见性四批里**每一个修复都在让会话读作忙**,所以镜像风险是我造的:VU 轮次若在 push 断线期间结束,客户端最后的认知停在「carrier 在跑」⇒ **停止键永远亮着、什么都不生成**。与 owner 最初报的「在生成却看不见」是**同一种卡死状态,只是反过来**。
+- **★ 空守卫的形态(与本条线上一次的 docstring 陷阱同族,换了个方向):** `test_poll_fallback_idle_projection_attaches_nothing` 的 docstring 明写「**and must not resurrect a dot**」,而断言只有 `connectToTask == []`;**harness 甚至没有暴露忙态**,那半句是纯散文。上一次是「文本扫描被自己的 docstring 满足」(守卫读到了不该算数的东西),这次是「docstring 承诺了断言里没有的那一半」(守卫少读了该算数的东西)——**同一家族的两个方向,我在同一条工作线上各犯一次。**
+- **判据(已并入记忆家族):写在守卫里的承诺会被后人当成已验证。** 复核守卫时要**逐条把 docstring 的每句「must X」勾到对应的 assert**;没有对应断言的,要么补断言,要么删掉那句话——留着比没有更糟,因为它让人不再去看断言列表。
+- **★ 实测 → 断言,顺序不能反(本轮最关键的一步):** 先驱动**真** reducer 量这条路:carrier 到达 `busy=true / carrier='t'` → 轮询投影不含该会话 `busy=false / carrier=null`。**行为本来就是对的,缺的只是守卫**,所以钉的是**已验证的事实**;顺序若反过来就成了「写个断言然后祈祷它成立」。
+- **落点(不手写等价判断):** 把**真** `computeConvBusy` 提升进 harness——手写的忙态判断可能与 shipped 谓词分歧而**放行回归**;先验忙态用**真** `applyRunningTaskIdsFrame` 经 `__seedWire` 播种,不手搓集合。三层(wire → reducer → 观察谓词)全部走生产路径。
+- **NEUTER-F:** 摘掉 `applyConvStateSnapshot` 的 CLEAR 分支 → **恰好 1 条红**,报 `{'busy': True, 'carrier': 'da0717c8'}` —— 幽灵 Stop 键当场现形;逐字节还原。
+- **★ 一处过程自纠:** 首版把 `computeConvBusy` 漏出提升列表 ⇒ **6 条 ReferenceError 红**,而看起来像产品坏了。**判据:harness 报错要先分清「被测代码错」与「我没把被测代码装进来」**——前者改产品,后者改 harness,方向相反。
+- **验收边界:** test-only,**无产品行为变更**;前四批仍需重启 + bundle 重建才到用户面前。
+
 ### 2026-07-29(续·派单滞留根修) — 「排队中却什么都不生成」的另一半:**epic 的 30 分钟租约一过期,那条 kickoff 就同时对两条路不可见**;实测扫描集 **0 vs 4**——board 上每一条真滞留都是旧扫描看不见的(`pt_b46ad973a7ba4621` DONE;commit `6d5a7e56`,2 文件;新增 3 条(2 条失败先行),**NEUTER 咬**;套件 **9/9**,相邻环 **68/68**;活体扫描集实测)
 
 - **★ 这是 VU 可见性那三批的**第二个症状**,不是无关缺陷:** owner 最初报的三张截图里,第二张就是「排队中,但什么都没在生成」。前三批修的是「在生成却看不见」,这一批修的是「真的没在生成」。同一个 objective 的两半。

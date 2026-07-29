@@ -422,6 +422,52 @@ def test_stale_duration_draft_is_never_adopted(monkeypatch, tmp_path):
 # The authored counter must not read a resumed film as "all fell back"
 # ══════════════════════════════════════════════════════════
 
+def test_pre_marker_fallback_card_is_still_recognised_as_a_template():
+    """The marker was added 2026-07-29; every fallback card before it is
+    marker-LESS — including scene-004 of the film that started this effort.
+
+    A marker-only test cannot see the exact population the marker was
+    introduced to rescue: that 2,398-byte gradient card was adopted as a
+    finished authored composition on every re-run, pinning the scene forever.
+    """
+    from lib.motion_video._template import (is_template_composition,
+                                            matches_template,
+                                            render_scene_html)
+
+    scene = {'id': 'scene-004', 'start': 30.476, 'end': 40.714,
+             'text': '旁白', 'on_screen': 'LCS对齐:零成本自动生成编辑监督',
+             'visual': '两行文字上下对齐连线'}
+    card = render_scene_html(scene, duration=10.238, scene_index=4,
+                             total_scenes=6)
+    # Simulate a pre-marker card by stripping the marker the template stamps.
+    from lib.motion_video._template import TEMPLATE_MARKER
+    legacy = card.replace(TEMPLATE_MARKER, '')
+    assert not is_template_composition(legacy), \
+        'precondition: the legacy card carries no marker'
+    assert matches_template(legacy, scene, duration=10.238, scene_index=4,
+                            total_scenes=6), (
+        'a marker-less fallback card must still be recognised, or the resume '
+        'path adopts it as authored and pins the scene to the gradient')
+
+
+def test_matches_template_does_not_flag_a_genuine_composition():
+    """The complement: over-eager detection would re-author good scenes."""
+    from lib.motion_video._template import matches_template
+
+    scene = {'id': 'scene-005', 'start': 0.0, 'end': 5.0, 'text': 'x',
+             'on_screen': '标题'}
+    authored = (
+        '<!doctype html><html><body><div id="root" data-composition-id="main" '
+        'data-start="0" data-duration="5" data-width="1080" '
+        'data-height="1440"><div style="position:absolute;inset:0"></div>'
+        '<svg><rect width="10" height="10"/></svg>'
+        '<h1 id="t">标题</h1></div><script>window.__timelines={};'
+        'const tl=gsap.timeline({paused:true});'
+        "window.__timelines['main']=tl;</script></body></html>")
+    assert not matches_template(authored, scene, duration=5.0,
+                                scene_index=5, total_scenes=6)
+
+
 def test_resumed_authored_composition_counts_as_authored():
     """Measured: a rescue run with all six compositions intact printed
     authored 0/6 while shipping six authored frames, because the counter only

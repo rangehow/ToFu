@@ -36,7 +36,7 @@ logger = get_logger(__name__)
 
 __all__ = ['render_scene_html', 'on_screen_capacity', 'fit_font_px',
            'scene_on_screen', 'FONT_PX_STEPS', 'MIN_FONT_PX', 'CAPTION_FONT_PX',
-           'TEMPLATE_MARKER', 'is_template_composition']
+           'TEMPLATE_MARKER', 'is_template_composition', 'matches_template']
 
 #: Stamped into every template composition so a FALLBACK card is
 #: distinguishable from an authored one on disk. Without it the engine's
@@ -48,6 +48,49 @@ TEMPLATE_MARKER = 'data-tofu-composition="template-fallback"'
 def is_template_composition(html: str) -> bool:
     """True when ``html`` is the zero-LLM fallback card rather than authored."""
     return TEMPLATE_MARKER in (html or '')
+
+
+def _normalise_for_compare(html: str) -> str:
+    """Collapse whitespace and drop the marker so pre/post-marker cards match."""
+    import re as _re
+    out = (html or '').replace(TEMPLATE_MARKER, '')
+    return _re.sub(r'\s+', ' ', out).strip()
+
+
+def matches_template(html: str, scene: dict, *, width: int = 1080,
+                     height: int = 1440, duration: float | None = None,
+                     scene_index: int = 1, total_scenes: int = 1) -> bool:
+    """True when ``html`` IS this scene's fallback card, marker or not.
+
+    :func:`is_template_composition` only recognises cards that carry
+    :data:`TEMPLATE_MARKER` — and the marker was added on 2026-07-29, so every
+    fallback card written before that is invisible to it. That gap is not
+    cosmetic: measured on the film that prompted this whole effort, scene-004's
+    2,398-byte gradient card predates the marker, so ``_existing_composition``
+    adopted it as a finished authored composition and the scene was pinned to
+    the fallback FOREVER — re-running the job could never retry its authoring,
+    which is exactly the failure the marker was introduced to prevent.
+
+    The test is exact rather than heuristic: the template is a deterministic
+    function of (scene, geometry, duration, index, total), so we RE-RENDER it
+    and compare. No fingerprint to keep in sync, no false positives on a
+    genuinely minimal authored scene, and any future change to the template is
+    tracked automatically because the comparison uses the template itself.
+    """
+    if not html:
+        return False
+    if is_template_composition(html):
+        return True
+    try:
+        rebuilt = render_scene_html(scene, width=width, height=height,
+                                    duration=duration,
+                                    scene_index=scene_index,
+                                    total_scenes=total_scenes)
+    except Exception as e:
+        logger.warning('[MotionVideo] template re-render for comparison '
+                       'failed: %s', e)
+        return False
+    return _normalise_for_compare(html) == _normalise_for_compare(rebuilt)
 
 #: Candidate headline sizes, largest first. The chosen size is the biggest one
 #: whose measured capacity still holds the caption.

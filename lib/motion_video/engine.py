@@ -267,7 +267,10 @@ def _reusable_manifest(audio_dir: str, scenes: list) -> dict | None:
     return m
 
 
-def _existing_composition(index_path: str, duration: float) -> str | None:
+def _existing_composition(index_path: str, duration: float,
+                          scene: dict | None = None, *,
+                          width: int = 1080, height: int = 1440,
+                          scene_index: int = 1, total_scenes: int = 1) -> str | None:
     """Return an on-disk composition iff it matches this scene's duration.
 
     Resume path for the compose stage: a scene authored before a crash must
@@ -280,9 +283,15 @@ def _existing_composition(index_path: str, duration: float) -> str | None:
     composition from the zero-LLM template. A scene degraded by a transient
     network blip therefore had the gradient card written to ``index.html``, and
     every later resume/regen adopted it — pinning that scene to the fallback
-    FOREVER, so re-running the job could never retry its authoring. The
-    template stamps itself (see ``_template.TEMPLATE_MARKER``); that marker is
-    the honest signal that this scene still owes the user a real composition.
+    FOREVER, so re-running the job could never retry its authoring.
+
+    Detection is by :func:`lib.motion_video._template.matches_template`, NOT by
+    the marker alone. Measured 2026-07-29: the marker was introduced that day,
+    so every fallback card written before it is marker-LESS — including
+    scene-004 of the film that started this whole effort, whose 2,398-byte
+    gradient card was therefore adopted as a finished authored composition on
+    every re-run. A marker-only test cannot see the exact population it was
+    introduced to rescue.
     """
     if not os.path.isfile(index_path):
         return None
@@ -292,8 +301,10 @@ def _existing_composition(index_path: str, duration: float) -> str | None:
     except OSError as e:
         logger.debug('[MotionVideo] cannot read %s: %s', index_path, e)
         return None
-    from lib.motion_video._template import is_template_composition
-    if is_template_composition(html):
+    from lib.motion_video._template import matches_template
+    if matches_template(html, scene or {}, width=width, height=height,
+                        duration=duration, scene_index=scene_index,
+                        total_scenes=total_scenes):
         logger.info('[MotionVideo] %s holds a degraded fallback card — '
                     're-authoring instead of adopting it', index_path)
         return None
@@ -479,6 +490,7 @@ def run_motion_task(task: dict) -> None:
         from lib.motion_video._scene_author import (author_scene,
                                                     scene_author_enabled)
         from lib.motion_video._template import (is_template_composition,
+                                                matches_template,
                                                 render_scene_html)
         _phase_started(task, phases, 'compose')
         authoring = scene_author_enabled(task)
@@ -495,7 +507,9 @@ def run_motion_task(task: dict) -> None:
             author_rounds = author_tokens = 0
             # Resume: a composition already on disk for this scene is kept —
             # never re-author (that would re-spend an agent loop per restart).
-            existing = _existing_composition(index_path, dur)
+            existing = _existing_composition(
+                index_path, dur, sc, width=width, height=height,
+                scene_index=i, total_scenes=total)
             if existing is not None:
                 html = existing
                 # A reused authored composition is STILL authored — the work
@@ -558,8 +572,9 @@ def run_motion_task(task: dict) -> None:
             # render, and only for AUTHORED scenes — a template fallback owes
             # its degrade to the quality axis already, and failing it here too
             # would report one defect twice.
-            scene_mode = ('template' if is_template_composition(html)
-                          else 'authored')
+            scene_mode = ('template' if matches_template(
+                html, sc, width=width, height=height, duration=dur,
+                scene_index=i, total_scenes=total) else 'authored')
             try:
                 from lib.motion_video._quality import (asset_floor_findings,
                                                        scene_telemetry)

@@ -1,5 +1,57 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·自愈的循环依赖) — owner 抓出**纠正帧走的正是它要修的那条坏路**:socket 好时不需要它、socket 坏时它到不了;而最坏那格不是「修不到」,是 `deliver_to_socket` **返回 True 却什么都没送到**(`pt_b8dcd3b96f684296` DONE;commit `0c708d4e`,4 文件 +492/-52;守卫 **13 → 17**,**3 条失败先行**,**NEUTER×4 各咬各的**;相邻环 **106 全绿**;charter 传输判据已修正)
+
+- **★ 循环依赖(owner 的判据,我实测复现):** 客户端被判 sustained-stalled 的**主因就是 notify 帧没送达** ⇒ push socket 不健康;而我把纠正帧从**同一条 socket** 发回去。三格实测:
+
+  | 场景 | `deliver_to_socket` | 对端实际收到 | 后果 |
+  |---|---|---|---|
+  | **半开 socket**(队列满 1000) | **True** | **什么都没有** | 武断起算 **300s 冷却** ⇒ 最该被修的客户端拿到**假成功 + 五分钟静默** |
+  | **从未有过 socket**(WS 被企业代理封) | 恒 False | — | **永久不可修**,而这群人**没有 push 通道可自愈**,最需要它 |
+  | HTTP | — | — | stall 正是从一次**返回 200 的 POST** 检测出来的 ⇒ **自证可用** |
+
+- **★ 判据(已写进 charter,取代 #29 的传输那半):纠正 MUST 从「检测信号到达的那条通道」原路返回。** 落点:`sync_digest` 响应体带 `snapshot`,客户端用**既有 reducer** 应用;载荷仍是**普通** `conv_state_snapshot`(同投影、同 frame-level rev),使**修复与重连不可区分**——这正是「无条件应用它安全」的依据。push 投递降级为**可选加速器且返回值被显式忽略**。
+- **★ 「返回 True」不等于「事情发生了」:** 该布尔证明的是 **ENQUEUED**,不是 DELIVERED。队列有界 + 半开 socket 不抛错 ⇒ 最坏情况恰好落在**最需要正确的那一格**。冷却改按**同步 HTTP 200** 起算(响应到达客户端,否则请求失败)。
+- **★ 前提被证伪时,守卫要「反转并写明理由」而不是删掉:** 我原先的 `test_untargetable_repair_is_never_attempted`(无 socket id ⇒ 不修)在**旧传输模型下是正确的**,改走 HTTP 后它**变成了缺陷的守护者**——它会把 WS-blocked 人群永久锁在门外。已就地反转为 `test_socketless_client_is_still_repairable`,并在 docstring 记录旧前提为何失效。**删掉会让下一个人重新引进同一把锁。** 同时 `should_repair` 的「空 id ⇒ False」早退删除,无 id 并入共享冷却桶(限流变粗,优于永不修复)。
+- **★ 修复必须可证伪:** 发完就忘的机制,「一直在修但什么都没修好」与「根本没触发」在线上**完全同形**。新增 `note_repair_outcome` + `repair_stats` 记 attempted / converged / **ineffective**,由下一次探针裁决。三者里 **ineffective 是唯一能说明「在空转」的数**,`attempted` 再高也替代不了。
+- **★ 新写的 JS 守卫当场自己挣到了位置(本轮最值得记的一条):** 它红了,而我先怀疑是产品坏了——实测发现 `applyConvStateSnapshot` 单独调用完全正常。追下去是**兄弟会话并发重写了 `conv_state_reducer.js`,保留了我已提交的部分、静默丢掉了我这批未提交的 in-band 编辑**。`node --check` 通过、Python 层全绿,**任何 Python 断言都看不见这种丢失**;只有一条真正驱动 `reportSyncDigest` 端到端的 JS 守卫能抓到。**判据:共享工作树上,「我刚写的代码还在不在」和「它对不对」是两个独立问题,后者的守卫恰好能兼职回答前者——前提是它端到端驱动真实代码而不是只做静态扫描。**
+- **NEUTER×4 各咬各的:** 退回 push-only 投递 → 咬循环依赖那条;把冷却重新挂到 `deliver_to_socket` → 咬假送达那条;客户端收到但不应用 → 咬端到端那条(3 个 check 全红);恢复 socketless 锁 → 咬 WS-blocked 那条。
+- **过程自纠一处:** 我的 harness 把 `console.log` 也 stub 掉了,而它正是 harness 唯一的输出通道 ⇒ `TypeError: console.log is not a function`,**看起来像产品坏了**。同一家族第三次,判据不变:先分清「被测代码错」与「我没把被测代码/输出通道装好」。
+- **共享 HEAD 摩擦(两次,均已处理):** ①`git commit` 撞上兄弟持有的 `index.lock`;②暂存后索引被兄弟提交清空,`commit` 静默失败。已改为**带重试的原子化 stage+commit**,每轮重新计数断言(必须恰好 4 个文件),不符即 reset 重来。
+- **验收边界:** 纯后端 + 前端 bundle,**运行中进程不带**,需重启 + bundle 重建。自愈真正跑起来仍需 sustained 阈值(默认 180s)与 60s 探针各满足一次;`ineffective` 计数要在**下一次**探针才落定。
+
+
+### 2026-07-29(续·第三张截图:pin 有没有路由) — 「VU 用户消息在屏幕上、后端在生成、Agent 气泡永不出现」定案:**杀手比 owner 推断的还早一行**;而 owner 对**修法形状**的纠正避免了一个新回归(`pt_f7a292dc13de47f0` DONE;commit `85452a7f`,4 文件;守卫 **20 条失败先行**,**NEUTER×4 各咬各的**(6/5/1/1),相邻环 **104/104** 固定序)
+
+- **★ 先证伪推断的一半,再动手:** owner 指向 `_checkForQueuedTask` 探的是排除 carrier 的 `/api/v1/chat/active`,方向对但落点错。实测 `is_carrier_task`(`_registry.py:106`)只返回 `_inline_messages or _vu_subtask` ⇒ **后继 worker 是普通任务,端点看得见它**。真正的杀手在 `main_send_pipeline.js:1507`,比端点早一行:`if (_conv.activeTaskId || activeStreams.has(convId)) return` —— **它在探端点之前就 return,所以端点过不过滤根本不重要,这一格从来没走到过网络。**
+- **A/B 实测(node 驱动 shipped 函数,干净信号无异常):**
+
+  | 格 | 状态 | probeCalls | attached |
+  |---|---|---|---|
+  | A | `activeTaskId=carrierId` + 无本地 stream + 后端已起 worker | **0** | **null** |
+  | B | `activeTaskId=null`,后端状态完全相同 | 1 | worker |
+
+  唯一变量就是那个 pin;shipped 代码自己把分支名打了出来(`[Queue] Skipping — already has active task/stream`)。
+- **★ 本缺陷由前一批加剧,是同族第二例「两个正确决定叠出第三个缺陷」:** `d6e8bdb3` 让冷接续写 `activeTaskId=carrierId`(必要,`connectToTask` 用它做 accumulation slot 与 self-heal 锚点),批 6 又刻意让 sweep **不再清它**(必要,否则给活的 VU 盖 interrupted)⇒ **pin 变 durable ⇒ 前置闸被永久满足**。讽刺的是:**修批 6 之前,那个错误的 sweep 至少会误清 pin 从而意外解锁这条路;修完之后这条路彻底焊死。**
+- **★ owner 纠正了修法形状,而那一步避免了一个新回归:** 我原计划「carrier pin ⇒ 视作不忙,放行去探」。owner 指出 `_registry.py:76` 明写历史理由**已不成立**(`_live_tick` 会为 `_vu_subtask` 发 `build_carrier_terminal_done` 并关流,docstring 引用的正是**本对话** `ms5j3qi7wd1g7u` task `da0717c8`),真正的不变量是「carrier **不是普通重连目标,但它是可路由的**」。我的原计划**默认 carrier 已完成** ⇒ VU 仍在生成时探不到后继、放弃重试,**同样的死空气换条路回来**。
+- **落点:裁决是「路由」不是布尔,四格** —— 活 carrier ⇒ `route-vu` 走 VU 连接器(**不探**);终态 carrier ⇒ 探后继;普通 worker / 本地流在跑 ⇒ skip(这是该闸的真实职责);投影不认识的 pin(重启后陈旧)⇒ 探,**不得静默楔死**。全部由 reducer **自己的集合**派生(`_vuCarrierTaskIds` / `_authoritativeActiveTaskIds`,标记已剥),**call site 绝不第二次解析 `#vu`** —— 第二份标记解析器与第一份漂移正是造出这一整族的裂缝。fail-safe:完全无投影 ⇒ 退回旧 skip,什么都不碰。
+- **守卫含两条关键补集:** ①活 carrier 必须带 `{vuCarrier:true}` 走 `_connectAutopilotKick` —— **只断言「没去探」会放行幽灵第二个 Agent 气泡**,而 detached-dummy 连接器的存在就是为了防它;②无后继时不许造出永远转圈的占位气泡。**NEUTER×4 各咬各的:** 活 carrier 改走 probe → **6 红**(正是 owner 警告的回归);闸退回 pin 存在即 skip → 5 红;carrier 走普通连接器 → 1 红;fail-safe 改 probe → 1 红。
+- **★ 清点棘轮(charter #26 要的是清点,不是逐个补丁):** `tests/test_chat_active_consumer_census.py` 钉住 `is_carrier_task` 的全部后端调用点与 `Api.chat.active()` 的全部前端调用点,**新增消费者未申报 carrier 立场即红**;并钉住「重启闸与重连视图共用同一谓词」——`_registry.py` docstring 记录它们曾分歧,导致重启对话框报「N 个会话在跑」而侧栏一个都没有。
+- **★ 我的清点守卫第一版自己就错了(同族第四次):** 我加了一条「文件里不得出现 `_vu_subtask`」当作「禁止第二份谓词实现」,而 `routes/chat.py` **合法地**在 carrier-terminal-done 路径引用它 ⇒ 误判。已删掉那半。**判据:「禁止第二份实现」不能用关键词出现与否来近似——合法引用与重复实现在文本上不可区分。**
+- **★ 两处定责自纠:** ①相邻环首跑 `test_bundle_manifest_parity` 1 红,但单独跑绿、`git archive HEAD` 内容跑绿、固定序(`-p no:randomly`)跑 **104/104** 绿 ⇒ 随机序污染,非本批。**判据:红灯先分「我的改动坏了」与「跑法坏了」,换顺序/换内容复跑是只读手段。** ②`min_pass=12` 而我只写了 11 条 `check()` ⇒ 断言算术错,11 条全 PASS 却报失败;**改的是计数不是降门槛**。
+- **★ 署名再次被兄弟带走(本轮第四次,已按 #26 判据处理):** `conv_state_reducer.js` 的裁决函数被 `5e04a13f` 顺带提交。按 charter #26 只对 HEAD 内容断言:5 个文件全部 `git cat-file -e HEAD:` 通过、`computeFollowupRoute` 计数 2、用 `git archive HEAD` 取出的内容跑三套守卫 **5/5 绿**。不做历史手术。
+- **验收边界:** 纯前端,**需 bundle 重建**;无新全局符号变更,tsc BASELINE=0 未动。**未做真浏览器实测。**
+
+### 2026-07-29(续·429 连击不再自动禁用) — owner 定案:**连续 429 永不自动禁用 key,只有「没钱」(402/quota)才禁**。直接动因就是今晚 Opus 5 总停摆:上游厂商故障把自己包装成 429/403 下了 ~90 分钟雨,连击启发式把 sankuai_anthropic 三把 key 逐一共振判死(20:23 最后一把),一个瞬时上游事件变成全模型停摆,22:20 靠 owner 指令手动开 key 才解(commit 待填,14 文件;新套件 **9/9 失败先行**,**NEUTER×3 各咬各的**(3/1/2);HEAD 版相邻 **21/21**)
+
+- **判据一句话:429 是「减速」不是「死亡证明」。** 上游错误体天生歧义(「达到使用量上限」既是分钟限流也是欠费),用连击猜死因是把猜测当事实;唯一诚实的 kill 信号是提供商明说(402/insufficient_quota)。今晚的反例完美闭环:三把 key 全部「判死」后,上游故障一过,它们本来就是好的。
+- **三处全拆,而不是调阈值:** ①`key_stats.record_rate_limit` 永不置 exhausted(计数器保留为 UI 遥测,且永不盖掉真实 last_error);②调度回路两处「429 后探 is_key_enabled 排除」探针删除——picker 本来就过滤手动禁用/402,探针唯一独特功能就是接连击;③slot 层 429 冷却永远是 0.5s 转向冷却,不再升级 3600s quota 停放。
+- **保留的另一半用配对守卫钉住:** 402/quota 的 mark_key_exhausted(含 per-model 粒度、次日自动恢复、手动覆写 supremacy)原样不动——「429 免死」绝不能软化「没钱就停」。
+- **MAX_CONSECUTIVE_429 连同 UI 管线一起埋:** 快照字段、dispatch_stats 透传、i18n 五处「连续 n 次 429 自动停用」文案、HUD 死 token(keyAutoExhausted)全清;429 连击徽章降为 ≥10 的纯信息 chip。结构守卫按 charter #24 走剥注释扫描。
+- **顺手修一条既有红(不并票,同源编辑):** test_all_dispatcher_static_tokens_have_keys 期望集里的 'First byte timeout' 早已随超时拆除离开调度器(基线即红),本次与死 token 一并从期望集移除,该测试由红转绿。
+- **只读定责(共享工作树):** 回归环 4 条红全部锚在兄弟未提交的 account_scope quota WIP(lib/ 全库 0 引用;测试类仅存在于未提交 diff)。用 `git show HEAD:` 取出两份测试的 HEAD 版对我改过的 lib 跑 **21/21 绿**,证明本批零回归。
+- **验收边界:** 运行中进程不带此改动,**需重启**;前端需 bundle 重建。今晚手动开启的 key_0/key_1 覆写仍是持久态——明天若上游健康,应清回自动模式(API 已演示;UI 够不着 anthropic 面,见 pt_782133699c6d4ac1)。
+
 ### 2026-07-29(续·工具执行层那一层) — 前两批清完传输层与浏览器,**杀伤力最大的一层还在**:`run_command` 到点 SIGKILL 整棵进程树。owner 指出「读超时只是断连,这个是把我的构建杀了」——判据成立(7 文件;新套件 **17/17 失败先行**,**NEUTER×6 双向全咬**(2/1/1/2/1/1);相邻环 **85/85**)
 
 - **★ 三层同一条规则,这一层最狠:** ①`run_command.py:556` 按命令形态自动判 60s(FS-heavy)/300s,到点 `_kill_process_tree` 发 SIGTERM→SIGKILL,返回 `[Command timed out]`。全量测试、编译、`pip install`、大目录 grep **全部落在这个窗口里**。②`MCP_CALL_TIMEOUT = 120` 作为 `read_timeout_seconds` 传进 `session.call_tool` ——**字面意义的 read timeout**,只是在 MCP 通道上。

@@ -185,6 +185,19 @@
 - **共享 HEAD 纪律(本批两次):** ①`git add` 后计数断言读到 **staged=8 而非 7**,查出兄弟把 `scripts/package_extension.sh`(它自己 epic `pt_d64220b406e841b2` 的产物)预暂存在共享 index 里,按 charter #15 用 `git reset HEAD` 只写 index 剔除,复核其工作树 2618 字节原封不动;②`git commit -F /tmp/...` 的消息文件被兄弟活动清掉导致提交失败(JOURNAL 记过的同型竞态),改用 `.git/` 内文件成功。
 - **验收边界(诚实分账):** ①`scripts/install_on_server.sh` 的修复**在工作树里但没进提交**——`.gitignore:64` 的 `/scripts/*` 使它**未被 git 跟踪**,干净 clone 里根本没有这个文件。这与兄弟正在做的 `pt_d64220b406e841b2` 是同一个仓库策略缺口,已在提交信息与板上注明,不越界改 `.gitignore`;②纯后端 + 桌面端,**运行中进程不带**,需重启才对新会话生效;③相邻红一条已定责非我:`tests/test_brand_shadow_pixels.py` 有重复 `def _chromium_available` 的 IndentationError,属兄弟在飞 WIP,HEAD 版本语法正常,我未碰该文件。
 
+### 2026-07-29(续·Continue 回滚出口) — owner 实测退回:上一轮只把**入口**换成身份优先,**出口仍吃数组下标**——漂移×失败叠加时,要续接的那条回答从屏幕上消失,而 toast 还说「可重试」(改动随兄弟 `271916c2` 一并落库;守卫 **15 条(+2),failing-first 5 红**,**NEUTER×2 各咬 5+1**,干净 committed 树 **25/25** + 端到端双路径实证 FIXED)
+
+- **★ owner 的复现(两个条件叠加才暴露):** DOM 停 3 条态(`msg-0..msg-2`,中断气泡 `data-msg-id=a-tail` 在 `msg-2`)+ `conv.messages` 已变短 + POST 抛错 → `tail node present=false`(本该 true)、`msg count=2`(本该 3)。**用户点 Continue、网络一抖,要续接的那条回答就没了**;比上一轮「抬错节点」更严重——这次是把目标弄丢,而 toast 还在说可重试。
+- **机制(同一病根的另一半):** `finalizeStreaming` 用 `_idxOf` 拿**数组下标**(漂移下=1),`renderMessage(msg,1)` 渲出 `id=msg-1` 的静态节点换上去;可 DOM 里**已经有一个 `msg-1`**(历史气泡 `a-old`)⇒ 同 id 两份;紧接的 `_evictByMsgId(inner,'a-tail',keep=getElementById('msg-1'))` 里 `getElementById` **返回先出现的 `a-old`**,keep 指向错节点,刚恢复出的 `a-tail` 被当孪生体清掉。实测坐实:注入后 `[id=msg-1]` 计数=2、`getElementById` 取到 `a-old`。
+- **★ 真因不是「下标算错」,而是 `sm.outerHTML = html` 会 ORPHAN 掉 `sm`:** 交换后**没有任何句柄**指向新写入的节点——这正是当初只能用 `getElementById` 回捞的原因,而回捞在 id 撞车时必然取错。改为解析到游离容器后 `sm.replaceWith(_finalEl)`,**把新节点按引用握住**,清扫直接传 `_finalEl`,keep 从此与下标是否新鲜无关。**判据:凡是「写完再回头找自己刚写的东西」的代码,都要问一句——那个查找键在这一瞬间唯一吗。**
+- **按 owner 指令未走捷径:** 没有在 `_rollbackContinueShell` 里绕过公共缝另写第四份查找;修在 `finalizeStreaming` 本身,5 个调用文件(比票面写的 4 个多一处:`main_regen_continue` / `main_send_pipeline` / `sse_pipeline`×4 / `stream_lifecycle`×2 / `streaming_render`×2)一并受益。
+- **★ 守卫差点又假绿(harness 自纠):** Guard 6 首版仍在用 harness 的 ConvView **stub**,而缺陷在**真实** `conv_view.js` 的清扫里 ⇒ 全绿却什么都没测到。改为把 `conv_view.js` 作为 `argv[4]` **先于** target 加载、并**显式不安装 stub**,再加一条 `real_convview_in_use` 断言钉住「跑的确实是真缝」。**判据:守卫里凡 stub 了某个协作者,必须有一条断言证明被测路径没有走 stub。**
+- **NEUTER×2 各咬 5+1:** I 把 keep 改回 `getElementById('msg-'+idx)`;J 退回 `outerHTML` + 回捞。两发都精确复现 owner 报的形态。
+- **★ 顺带重锚一条兄弟脆守卫(而且它把缺陷编码进了断言):** `test_source_carries_identity_keyed_render_seam` 把局部变量名**逐字写死**成 `_evictByMsgId(_inner, msg._msgId, _keep)`,因本批改名而红——**行为没变**(清扫仍在且更正确)。更值得记的是:那串字面量里的 `_keep` **就是 `getElementById` 回捞本身**,等于把缺陷钉成了「必须保持」的契约。改为钉行为不变量(清扫按 `msg._msgId` 跑 + keep 不得由位置 id 回捞),并实测该断言**仍真咬**(不是靠放宽换绿)。
+- **端到端双路径实证(干净 committed 树):** 漂移×成功 → shell 落在 `a-tail`、历史气泡完好、节点数 3;漂移×失败 → 中断气泡存活且非 shell 形态、历史气泡完好、节点数 3、toast 在 ⇒ **BOTH PATHS FIXED**。
+- **共享 HEAD 事故(第三次,本轮两连):** 提交窗口内兄弟先塞进 16 个 `static/icons/pet/*` + 迁移脚本进共享 index(计数断言两次 abort 拦下),随后又清空 index;最终我的三个文件被兄弟的 `271916c2` **连同他自己的改动一起提交**。逐项核对:`replaceWith(_finalEl)` / `_evictByMsgId(..., _finalEl)` / Guard 6 / 兄弟守卫重锚 **四处全部完整在 HEAD 上**,旧的 `const _keep = getElementById` 计数为 0,工作树无残留。**判据:共享 HEAD 上「我的改动进没进去」不能看自己的 commit 是否成功,要按符号逐项 `git show HEAD:` 核对——它可能搭在别人的车上进去了。**
+- **验收边界:** 纯前端静态改动,刷新即生效;**未做真浏览器实测**——owner 明确表示待本条修完自行点验。`Continuing…` 硬编码英文仍按既有缺陷另开工单。
+
 ### 2026-07-29(续·Continue 外壳落错气泡) — owner 实测退回:**我上一批自己引进的回归,比它修的原 bug 更难看**——一条历史回答被就地改写成 `Continuing…` 脉冲,而真正的中断气泡毫无反应(commit `9295e7b9`,3 文件 +238/-1;守卫 **13 条(+3),failing-first 5 红**,**NEUTER×2 精确咬**,干净 committed worktree **21/21** + owner 复现脚本转 FIXED)
 
 - **★ 根因是「前置保证被拆掉而查找方式没跟着换」(不是简单写错):** `_raiseContinueShell` 用 `document.getElementById('msg-' + lastIdx)` 找节点。**改造前同样一行位置 id 是安全的**——它跑在 `ConvView.replaceAll(...)` **之后**,那次重绘刚把所有 `msg-N` 重新盖过,位置 id 必然新鲜。上一批(`b17ecd2e`)删掉 `replaceAll`(因塌缩已提前到点击帧,事后重绘不再需要)、又把查找提到**任何渲染之前**,于是「id 是新鲜的」这个隐式前置条件消失,而查找方式原样保留。**判据:删掉一个调用时,要问它除了表面职责还顺带保证了什么。**

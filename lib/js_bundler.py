@@ -1454,8 +1454,11 @@ def get_i18n_pack_tag(lang):
     pack = packs.get(lang) or packs.get('zh')
     if not pack:
         return None
+    # _onI18nPackError (index.html), NOT the generic _onScriptError: in pack
+    # mode this file is the only copy of the dictionary, so its failure gets a
+    # retry + an explicit banner rather than a silent wall of raw i18n keys.
     return (f'<script defer src="static/js/{pack}"'
-            f' onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>')
+            f' onload="_onScriptLoad()" onerror="_onI18nPackError(event)"></script>')
 
 
 def get_i18n_pack_urls():

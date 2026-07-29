@@ -79,6 +79,24 @@
   if (typeof t !== 'function') {
     window.t = function(key) { return key; };
   }
+  // ── i18n BOOT FLOOR (pack mode) ──
+  // When single-language packs are active the core bundle EXCLUDES i18n.js
+  // (lib/js_bundler.build_bundle), so the pack is the ONLY copy of _i18nLang.
+  // A pack that 404s / truncates therefore made every BARE reference to it
+  // throw mid-boot — observed in production as
+  // "ReferenceError: _i18nLang is not defined" out of ui/finish_info.js, which
+  // killed the rest of init and left the spinner up forever.
+  // t() has had a floor here since forever; the symbol beside it never did.
+  // INVARIANT: when the core bundle excludes a module, EVERY symbol that
+  // module owns and the bundle references bare needs a floor HERE.
+  // Enforced by tests/test_i18n_pack_boot_floor.py.
+  if (typeof _i18nLang === 'undefined') {
+    try {
+      window._i18nLang = localStorage.getItem('tofu_ui_lang') || 'zh';
+    } catch (e) {
+      window._i18nLang = 'zh';   // storage disabled — same default as i18n.js
+    }
+  }
   // ── Script load error tracker (defined early so onerror handlers can find it) ──
   var _scriptLoadErrors = [];
   var _scriptLoadCount = 0;   // incremented by onload handlers
@@ -89,6 +107,37 @@
     console.error('[LoadGuard] ❌ Failed to load script:', src);
   }
   function _onScriptLoad() { _scriptLoadCount++; }
+  // ── i18n pack load failure: LOUD + self-healing ──
+  // In pack mode the pack carries the entire dictionary, so losing it renders
+  // every string as its raw key with nothing surfaced to the user. Retry ONCE
+  // before giving up: a stale hash now 302s to the current pack
+  // (lib/js_bundler.resolve_stale_bundle), so one re-request recovers the
+  // common case. Only a retry that ALSO fails is recorded as a load error, so
+  // a recovered pack never raises a false banner.
+  var _i18nPackRetried = false;
+  function _onI18nPackError(e) {
+    var src = (e && e.target && e.target.src) || '';
+    console.error('[LoadGuard] ❌ i18n pack failed to load:', src || 'unknown');
+    if (_i18nPackRetried || !src) {
+      _scriptLoadErrors.push(src || 'i18n pack');
+      return;
+    }
+    _i18nPackRetried = true;
+    var s = document.createElement('script');
+    s.src = src + (src.indexOf('?') === -1 ? '?' : '&') + 'retry=1';
+    s.onload = function() {
+      // Account for the pack that eventually arrived, or _loadGuardCheck
+      // would keep counting it as "still downloading" and banner a recovery.
+      _onScriptLoad();
+      console.warn('[LoadGuard] i18n pack recovered on retry:', s.src);
+      if (typeof _applyI18n === 'function') _applyI18n();
+    };
+    s.onerror = function() {
+      _scriptLoadErrors.push(s.src);
+      console.error('[LoadGuard] ❌ i18n pack retry also failed:', s.src);
+    };
+    (document.head || document.documentElement).appendChild(s);
+  }
   // ── Catch script runtime errors (SyntaxError, ReferenceError, etc.) ──
   // These are NOT caught by onerror on <script> tags (which only fires on network errors).
   // A runtime error in core.js prevents all subsequent scripts from working properly.
@@ -2238,6 +2287,20 @@ function _capabilityCheck() {
     if (typeof window[_loadBearingCaps[i].fn] !== 'function') {
       missing.push(_loadBearingCaps[i].label);
     }
+  }
+  // ── i18n needs a VALUE assertion, not a typeof one ──
+  // `typeof t === 'function'` can NEVER fail: the boot block above stubs
+  // window.t (key => key), so a totally absent dictionary still looks healthy
+  // to the loop. That blindness is why a missing pack reached users as a
+  // silent wall of raw keys instead of this banner. Assert the DICTIONARY
+  // itself — the thing the pack actually carries.
+  try {
+    if (typeof _i18n === 'undefined' || !_i18n || typeof _i18n !== 'object'
+        || Object.keys(_i18n).length === 0) {
+      missing.push('translations (i18n language pack)');
+    }
+  } catch (e) {
+    missing.push('translations (i18n language pack)');
   }
   if (missing.length > 0) {
     console.error('[LoadGuard] ⚠️ App booted but load-bearing capabilities are missing:', missing);

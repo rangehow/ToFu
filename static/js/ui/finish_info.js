@@ -186,7 +186,13 @@ const _CACHE_CAUSE_PHRASES = [
  * never wrongly Sinicized. */
 function _translateCacheCause(s) {
   let out = String(s || '');
-  if (_i18nLang !== 'zh') return out;  // English UI: backend string is already English
+  // typeof-guarded: in pack mode the core bundle excludes i18n.js, so a failed
+  // pack load leaves _i18nLang undefined and a BARE read throws here — the
+  // exact ReferenceError that killed boot in production. 'zh' matches i18n.js's
+  // own default, so the guarded path is behaviour-identical when the pack is
+  // present. Enforced by tests/test_i18n_pack_boot_floor.py.
+  const lang = (typeof _i18nLang !== 'undefined' && _i18nLang) ? _i18nLang : 'zh';
+  if (lang !== 'zh') return out;  // English UI: backend string is already English
   for (const [en, zh] of _CACHE_CAUSE_PHRASES) {
     if (out.includes(en)) out = out.split(en).join(zh);
   }

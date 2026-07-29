@@ -470,18 +470,16 @@ def test_playwright_downloads_only_the_headless_shell():
     path works including the real-browser visual ring.
     """
     text = _install_sh()
-    # Scan REAL invocations only. Comment lines are stripped first: the
-    # recovery instruction we document for the one headed feature is literally
-    # `python -m playwright install chromium` (the full build, on purpose), and
-    # a guard that cannot tell a comment from a command would flag it. Same
-    # principle as elsewhere in this file — a comment must never satisfy OR
-    # violate a guard.
-    live = '\n'.join(ln for ln in text.splitlines()
-                     if not ln.lstrip().startswith('#'))
-    # `install-deps` is a DIFFERENT subcommand (it apt-installs system libs and
-    # takes no --only-shell), so it is excluded.
-    installs = [m.group(0) for m in
-                re.finditer(r'playwright install(?!-deps)[^\n|&>]*', live)]
+    # What counts as a REAL invocation is defined once in tests/_source_scan.py
+    # (comments stripped first). The recovery instruction we document for the
+    # one headed feature is literally `python -m playwright install chromium`
+    # (the full build, on purpose), and a scanner that cannot tell a comment
+    # from a command would flag it. A comment must never satisfy OR violate a
+    # guard. This logic was duplicated in test_chromium_binary_resolution.py;
+    # fixing it in only one place left the other red, hence the shared helper.
+    sys.path.insert(0, os.path.join(ROOT, 'tests'))
+    from _source_scan import playwright_install_invocations
+    installs = playwright_install_invocations(text, lang='shell')
     # Print the scan surface BEFORE asserting — a regex that silently matches
     # nothing would otherwise make this guard vacuously green (charter:
     # "verify the scan surface first").

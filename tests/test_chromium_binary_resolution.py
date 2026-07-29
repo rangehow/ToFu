@@ -52,6 +52,9 @@ pytestmark = pytest.mark.unit
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+# tests/ itself, so the shared source-scanning helpers (_source_scan) import
+# cleanly no matter which rootdir pytest was invoked from.
+sys.path.insert(0, os.path.join(ROOT, 'tests'))
 
 import chromium_env  # noqa: E402
 
@@ -147,23 +150,25 @@ def test_shell_only_is_the_shape_the_installer_produces(cache):
     assert the installers still ask for it. Scans EVERY shell script, not just
     install.sh: scripts/install_on_server.sh was found drifted (plain
     ``playwright install chromium``, pulling the 175 MB build nobody launches).
+
+    What counts as a REAL invocation is defined once in tests/_source_scan.py
+    (comments stripped first). It used to be a local regex here AND a second
+    local regex in test_install_uv_fastpath.py; fixing a comment-induced false
+    alarm in one left the other broken, which is exactly why the definition is
+    now shared rather than copied.
     """
     import glob
-    import re
+
+    from _source_scan import playwright_install_invocations
+
     scripts = ([os.path.join(ROOT, 'install.sh')]
                + sorted(glob.glob(os.path.join(ROOT, 'scripts', '*.sh'))))
     found = []
     for path in scripts:
         with open(path, encoding='utf-8', errors='ignore') as f:
             text = f.read()
-        # Require the real subcommand shape: `playwright install` followed by
-        # flags and/or a browser name. A bare `install` next to prose (the
-        # WARN line "playwright install failed; …") is NOT an invocation, and
-        # matching it made this guard red on correct code.
-        for m in re.finditer(
-                r'playwright install(?!-deps)((?:\s+-[^\s|&>]+)*)\s+chromium\b',
-                text):
-            found.append((os.path.relpath(path, ROOT), m.group(0).strip()))
+        for inv in playwright_install_invocations(text, lang='shell'):
+            found.append((os.path.relpath(path, ROOT), inv))
     print(f'\n  scanned {len(scripts)} script(s), '
           f'{len(found)} `playwright install` invocation(s):')
     for rel, inv in found:

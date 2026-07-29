@@ -144,17 +144,43 @@ def test_cooldown_suppresses_a_second_repair():
     assert should_repair('sock-2', v, now=1000.0 + 10) is True
 
 
-def test_untargetable_repair_is_never_attempted():
-    """Face 4 — no socket id ⇒ no repair, never a broadcast fallback.
+def test_socketless_client_is_still_repairable():
+    """Face 4 (INVERTED — the original premise was falsified by owner review).
 
-    Broadcasting a correction "somewhere in the fleet" would deliver it to
-    healthy tabs, where applying it is indistinguishable from a normal
-    reconnect — so the stalled tab might still be broken while the logs claim a
-    repair went out. An honest negative is strictly more useful.
+    This test used to assert the opposite: no socket id ⇒ never repair. That
+    was correct only while the correction travelled DOWN the push socket, where
+    an untargetable repair was genuinely undeliverable.
+
+    Once the correction rides the HTTP response, the premise collapses — and
+    keeping the lockout would have excluded exactly the population that needs
+    self-heal most: a client whose WebSocket is blocked by a corporate proxy or
+    tunnel has no socket id, no push channel to converge through, and therefore
+    no way to recover short of a manual refresh. It is the least able to help
+    itself, and the old rule refused it service.
+
+    Anonymous clients share one cooldown bucket — coarser rate-limiting for
+    clients we cannot tell apart, which is the right trade against never
+    repairing them at all.
     """
-    from lib.conversations.drift_repair import should_repair
-    assert should_repair('', [_verdict(True)]) is False
-    assert should_repair(None, [_verdict(True)]) is False
+    from lib.conversations.drift_repair import (note_repair_attempt,
+                                                repair_cooldown_sec,
+                                                should_repair)
+    v = [_verdict(True)]
+    assert should_repair('', v, now=1000.0) is True, (
+        'a client with no push socket MUST still be repairable — the '
+        'correction rides the HTTP response, which it just proved works by '
+        'reaching this endpoint')
+    assert should_repair(None, v, now=1000.0) is True
+
+    # The shared bucket still rate-limits.
+    note_repair_attempt('', now=1000.0)
+    assert should_repair('', v, now=1000.0 + 10) is False, (
+        'anonymous clients share one cooldown slot rather than bypassing the '
+        'rate limit entirely')
+    assert should_repair('', v, now=1000.0 + repair_cooldown_sec() + 1) is True
+
+    # A non-sustained divergence is still not a repair, socket or no socket.
+    assert should_repair('', [_verdict(False)], now=5000.0) is False
 
 
 def test_failed_delivery_does_not_burn_the_cooldown():
@@ -203,6 +229,254 @@ def test_hub_reports_unknown_socket_honestly():
     hub.register(PushClient(user_id='u1', req_id='rid-a'))
     assert hub.deliver_to_socket('rid-zzz', {'x': 1}) is False
     assert hub.deliver_to_socket('', {'x': 1}) is False
+
+
+def test_repair_does_not_depend_on_the_push_channel():
+    """★ THE CIRCULAR DEPENDENCY — the repair must not ride the broken path.
+
+    A client is judged sustained-stalled mostly BECAUSE notify frames stopped
+    arriving, i.e. because the push socket is unhealthy. Sending the correction
+    back over that same socket is therefore self-defeating: when the socket
+    works the repair is unnecessary, and when it is broken the repair cannot
+    land. Measured, three ways:
+
+      * HALF-OPEN SOCKET — the client object is still registered and
+        ``_ws.send`` never throws, so nothing errors; the queue simply fills
+        (bounded at 1000) and the peer receives nothing. ``deliver_to_socket``
+        still returned True, which the caller treated as DELIVERED and used to
+        arm a 300s cooldown. The client most in need of repair got a false
+        success plus five minutes of silence.
+      * NO SOCKET AT ALL — WebSocket blocked by a corporate proxy / tunnel.
+        ``deliver_to_socket`` returns False forever, so that population is
+        permanently unrepairable. It is also the population that needs the
+        repair most, since it has no push channel to self-heal through.
+      * HTTP IS PROVEN ALIVE — the stall is detected FROM a digest POST that
+        returned 200. At the exact moment we decide to repair, the HTTP path
+        has just demonstrated it works.
+
+    So the correction rides the HTTP RESPONSE: the channel the detection signal
+    arrived on is the channel the correction goes back on, and that channel is
+    self-evidently up.
+
+    This guard pins the property, not the implementation: given a hub with NO
+    live sockets whatsoever, the response must still carry a correction the
+    client can apply.
+    """
+    import asyncio
+
+    from lib.conversations import drift_repair
+    from lib.conversations import drift_tracker
+
+    from server import app
+
+    drift_repair.reset()
+    drift_tracker.reset()
+
+    conv_id = 'conv-circular-probe'
+
+    # Drive the tracker to a SUSTAINED stall: the client value frozen while the
+    # server's moves, observed repeatedly, past the threshold. Uses the real
+    # tracker rather than a fake verdict so the wiring under test is the
+    # production one.
+    t0 = 1000.0
+    thresh = drift_tracker.sustained_threshold_sec()
+    for i in range(4):
+        v = drift_tracker.observe_divergence(
+            conv_id, 'task_ids',
+            client=['frozen'],                 # client never moves
+            server=['moving-%d' % i],          # server advances
+            now=t0 + i * (thresh / 2))
+    assert v['sustained'], (
+        'precondition: the tracker must judge this a sustained stall; got %r' % v)
+
+    async def _call():
+        client = app.test_client()
+        # A pushRid that names NO live socket — exactly the WS-blocked client,
+        # and also what a half-open socket amounts to from the peer's side.
+        resp = await client.post(
+            '/api/v1/conversations/sync-digest',
+            json={'digests': [{'convId': conv_id, 'taskIds': ['frozen'],
+                               'rev': None}],
+                  'pushRid': 'no-such-socket-anywhere'})
+        return resp.status_code, await resp.get_json()
+
+    status, body = asyncio.run(_call())
+    drift_repair.reset()
+    drift_tracker.reset()
+
+    assert status == 200, 'the probe must stay a 200 diagnostic; got %s' % status
+    assert body.get('snapshot') is not None, (
+        'a sustained stall MUST return a corrective snapshot in the HTTP '
+        'RESPONSE BODY. Delivering only over the push socket is circular: the '
+        'socket is the thing that is broken, and a client behind a WS-blocking '
+        'proxy has no socket at all. Response keys: %r' % sorted(body))
+    snap = body['snapshot']
+    assert isinstance(snap, dict) and 'convs' in snap, (
+        'the correction must be the ORDINARY conv_state_snapshot shape so the '
+        'existing reducer consumes it unchanged; got %r' % (snap,))
+    assert isinstance(snap.get('rev'), list) and len(snap['rev']) == 2, (
+        'the correction must carry the server-minted frame-level rev, else the '
+        'client can clear but not advance its gate')
+
+
+def test_cooldown_is_not_armed_by_an_unproven_push_enqueue():
+    """The cooldown must never start on evidence that does not prove delivery.
+
+    ``PushHub.deliver_to_socket`` returns True when a frame is ENQUEUED. On a
+    half-open socket nothing drains that queue, so True means "accepted for
+    sending", not "the peer has it" — measured: with the queue at its 1000-frame
+    bound the enqueue still reports True while the peer receives nothing.
+
+    Arming a 300s cooldown on that reading is the worst possible combination:
+    the one client that genuinely needs repair is told it was repaired, and is
+    then silenced for five minutes.
+
+    A synchronous HTTP 200 IS proof of delivery — the response reached the
+    client or the request failed. So the cooldown must be keyed to the HTTP
+    path. Structural: assert the push enqueue's return value does not gate
+    ``note_repair_attempt``.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    from routes.api_v1 import conversations as conv_mod
+    from tests._source_scan import strip_comments
+
+    src = strip_comments(inspect.getsource(conv_mod.sync_digest), lang='python')
+    tree = ast.parse(textwrap.dedent(src))
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        test_src = ast.unparse(node.test)
+        if 'deliver_to_socket' not in test_src:
+            continue
+        body_src = '\n'.join(ast.unparse(s) for s in node.body)
+        assert 'note_repair_attempt' not in body_src, (
+            'note_repair_attempt must NOT be gated on deliver_to_socket: that '
+            'return value means ENQUEUED, not DELIVERED, so on a half-open '
+            'socket it arms a 300s cooldown for a repair the peer never got. '
+            'Branch:\n  if %s:\n%s' % (test_src, body_src))
+
+
+def test_repair_effectiveness_is_observable():
+    """A repair whose outcome is never checked cannot be known to work.
+
+    ``drift_repair`` sent and forgot: nothing recorded whether the correction
+    actually made the client converge. In production that is indistinguishable
+    from the mechanism silently doing nothing — the same "measured or it does
+    not exist" rule this project applies to capabilities.
+
+    The tracker already records convergence via ``observe_agreement``. The
+    repair module must expose a way to tell that a socket which was repaired
+    subsequently agreed, so the loop closes into evidence.
+    """
+    from lib.conversations import drift_repair
+
+    assert hasattr(drift_repair, 'note_repair_outcome'), (
+        'drift_repair must expose note_repair_outcome(socket_id, converged) so '
+        'a repair can be judged effective or not')
+    assert hasattr(drift_repair, 'repair_stats'), (
+        'drift_repair must expose repair_stats() — without an attempted/'
+        'converged tally there is no way to tell a working self-heal from one '
+        'that never fires')
+
+    drift_repair.reset()
+    drift_repair.note_repair_attempt('sock-eff', now=100.0)
+    drift_repair.note_repair_outcome('sock-eff', converged=True, now=160.0)
+    stats = drift_repair.repair_stats()
+    assert stats.get('attempted', 0) >= 1, 'attempts must be counted'
+    assert stats.get('converged', 0) >= 1, 'successful repairs must be counted'
+
+    drift_repair.reset()
+    drift_repair.note_repair_attempt('sock-bad', now=100.0)
+    drift_repair.note_repair_outcome('sock-bad', converged=False, now=160.0)
+    stats = drift_repair.repair_stats()
+    assert stats.get('ineffective', 0) >= 1, (
+        'a repair that did NOT converge must be counted separately — that is '
+        'the number that says the mechanism is spinning without effect')
+    drift_repair.reset()
+
+
+@pytest.mark.skipif(not _node_available(), reason='node not available')
+def test_client_applies_the_in_band_repair_snapshot():
+    """The correction must be APPLIED, not merely received.
+
+    Drives the REAL ``reportSyncDigest`` with a stubbed Api whose response
+    carries a repair snapshot, and asserts the conversation's authoritative
+    state actually changed. Without this the server could return a perfect
+    correction every 60s and the tab would stay just as stale — the exact
+    "detected but never fixed" shape this epic exists to remove, moved one hop
+    downstream.
+    """
+    harness = r"""
+const fs = require('fs');
+const path = require('path');
+global.window = global;
+global.debugLog = () => {};
+global.saveConversations = () => {};
+global.activeStreams = new Map();
+global._currentUserId = null;
+// Silence the reducer's diagnostics but KEEP console.log — it is this
+// harness's only output channel back to the test.
+const _log = console.log.bind(console);
+global.console = { log: _log, warn: () => {}, error: () => {}, debug: () => {} };
+
+const out = [];
+function check(name, cond, detail) {
+  out.push((cond ? 'PASS ' : 'FAIL ') + name + (cond ? '' : '  :: ' + (detail || '')));
+}
+
+const JS_DIR = process.argv[1];
+(0, eval)(fs.readFileSync(path.join(JS_DIR, 'core/conv_state_reducer.js'), 'utf8'));
+
+const WALL = Date.now() * 1e6;
+// A conv this tab believes is IDLE, holding an old rev — the frozen client.
+const conv = { id: 'c1', _serverRev: 5,
+               _authoritativeActiveTaskIds: new Set(),
+               _authoritativeAttachableTaskIds: new Set(),
+               _vuCarrierTaskIds: new Set(),
+               _authoritativeActiveTaskIdsRev: [WALL - 1e9, 'r1'] };
+global.conversations = [conv];
+
+let repainted = 0;
+global.renderConversationList = () => { repainted++; };
+global.updateSendButton = () => {};
+
+// Stub Api: the server judged us stalled and returns a corrective snapshot
+// saying c1 IS running t-live.
+global.Api = { conversations: { reportSyncDigest: async () => ({
+  ok: true, checked: 1, repaired: true,
+  divergences: [{ convId: 'c1', kind: 'task_ids', client: [], server: ['t-live'] }],
+  snapshot: { channel: 'notify', type: 'conv_state_snapshot', userId: '',
+              convs: { c1: { runningTaskIds: ['t-live'],
+                             runningTaskIdsRev: [WALL + 1e6, 'r1'] } },
+              rev: [WALL + 2e6, 'r1'] },
+}) } };
+
+reportSyncDigest(conversations).then(() => {
+  check('repair_snapshot_applied',
+        conv._authoritativeActiveTaskIds.has('t-live'),
+        'set=' + JSON.stringify([...conv._authoritativeActiveTaskIds]) +
+        ' — the tab must converge from the in-band correction, without F5');
+  check('busy_now_true', computeConvBusy(conv, activeStreams) === true);
+  check('sidebar_repainted', repainted >= 1,
+        'applying a correction that is never rendered leaves the user looking '
+        + 'at the same stale UI');
+  console.log(out.join('\n'));
+}).catch((e) => { console.log('FAIL harness_threw :: ' + (e && e.message)); });
+"""
+    proc = subprocess.run(['node', '-e', harness, JS_DIR],
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, (
+        'harness crashed (rc=%s)\nstdout:\n%s\nstderr:\n%s'
+        % (proc.returncode, proc.stdout, proc.stderr))
+    lines = proc.stdout.strip().splitlines()
+    failed = [ln for ln in lines if ln.startswith('FAIL')]
+    assert not failed, ('in-band repair application failed:\n  '
+                        + '\n  '.join(failed))
+    assert len(lines) >= 3, 'expected 3 checks, got:\n%s' % '\n'.join(lines)
 
 
 def test_probe_endpoint_wires_detection_to_repair():

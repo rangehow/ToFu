@@ -728,6 +728,43 @@ async function reportSyncDigest(conversations) {
       console.warn('[conv-state] sync drift: server reports %d divergence(s): %o',
                    divs.length, divs);
     }
+    /* ★ IN-BAND SELF-HEAL (pt_b8dcd3b96f684296).
+     *
+     * When the server judges this client SUSTAINED-STALLED it returns a
+     * corrective conv_state_snapshot right here, in the response body. Apply
+     * it and the tab converges without a refresh.
+     *
+     * WHY THE CORRECTION COMES BACK THIS WAY rather than over the push socket:
+     * a client is judged stalled largely BECAUSE notify frames stopped
+     * arriving, so the socket is the very thing that is broken. Pushing the
+     * repair down it was circular — it worked only when it was not needed.
+     * Measured: a half-open socket accepts the frame into a queue nobody
+     * drains (so the server saw a false success and armed a 5-minute cooldown
+     * for a repair the peer never got), and a client whose WebSocket is blocked
+     * by a corporate proxy has no socket to receive it on at all — that being
+     * the population least able to recover on its own. This response, by
+     * contrast, has just proven its channel works: we are reading it.
+     *
+     * The payload is the ORDINARY snapshot shape, so it goes through the SAME
+     * reducer as a connect-time snapshot — rev-gated per conv, absent conv
+     * means CLEAR. A repair is deliberately indistinguishable from a
+     * reconnect, which is what makes applying it unconditionally safe. */
+    if (resp && resp.snapshot && typeof applyConvStateSnapshot === 'function') {
+      try {
+        applyConvStateSnapshot(conversations, resp.snapshot);
+        if (typeof renderConversationList === 'function') renderConversationList();
+        if (typeof updateSendButton === 'function') updateSendButton();
+        if (typeof console !== 'undefined') {
+          console.warn('[conv-state] applied in-band repair snapshot from the '
+                       + 'drift probe (this tab had stopped converging)');
+        }
+      } catch (e) {
+        if (typeof debugLog === 'function') {
+          debugLog(`[conv-state-reducer] repair apply failed: ${e && e.message}`,
+                   'warn');
+        }
+      }
+    }
     return resp;
   } catch (e) {
     if (typeof debugLog === 'function') {

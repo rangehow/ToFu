@@ -682,37 +682,87 @@ async def sync_digest():
     # and delivered to THAT socket alone (see PushHub.deliver_to_socket).
     # Best-effort throughout: a failed repair must never turn the probe — a
     # read-only diagnostic — into a 500.
+    # ── REPAIR: a detected stall must produce a correction, not just a log ──
+    # pt_cadaa70ffa6b468d / pt_b8dcd3b96f684296. Everything above is
+    # observation; without this block the server knew exactly which client was
+    # frozen and left the user to discover it by pressing F5.
+    #
+    # ★ THE CORRECTION RIDES THE HTTP RESPONSE, NOT THE PUSH SOCKET.
+    # The first version pushed it down the socket, which is circular: a client
+    # is judged stalled largely BECAUSE notify frames stopped arriving, so the
+    # socket is the very thing that is broken. Measured, three ways:
+    #
+    #   * HALF-OPEN SOCKET — the client stays registered and ``send`` never
+    #     throws; the queue just fills (bounded at 1000) and the peer gets
+    #     nothing. ``deliver_to_socket`` still returns True, which the caller
+    #     read as DELIVERED and used to arm a 300s cooldown. The client most in
+    #     need of repair got a false success plus five minutes of silence.
+    #   * NO SOCKET AT ALL — WebSocket blocked by a corporate proxy/tunnel:
+    #     ``deliver_to_socket`` returns False forever, so that population was
+    #     permanently unrepairable — and it is the population with no push
+    #     channel to self-heal through, i.e. the one that needs this most.
+    #   * HTTP IS PROVEN ALIVE — this stall was detected FROM a digest POST
+    #     that is, right now, returning 200. The detection channel has just
+    #     demonstrated it works, so it is the honest channel for the answer.
+    #
+    # Rule: the correction goes back on the channel the detection arrived on.
+    #
+    # The payload is the ORDINARY conv_state_snapshot — same projection, same
+    # server-minted frame-level rev — so the client applies it with the reducer
+    # it already has and a repair stays indistinguishable from a reconnect.
+    # Scoped to the reporting tenant so it can never leak sibling tasks.
+    #
+    # Best-effort: a failed repair must never turn this read-only diagnostic
+    # into a 500.
     repaired = False
+    snapshot = None
     try:
         socket_id = str(body.get('pushRid') or '')[:64]
         from lib.conversations.drift_repair import (note_repair_attempt,
+                                                    note_repair_outcome,
                                                     should_repair)
+
+        # ── Effectiveness feedback (closes the loop) ──
+        # A repair whose outcome is never checked is indistinguishable from the
+        # mechanism silently not firing. This probe IS the observation: if the
+        # socket we repaired last round now reports no sustained divergence, the
+        # correction landed. Evaluated BEFORE this round's decision so a fresh
+        # attempt does not overwrite the pending verdict.
+        if socket_id:
+            _still_stalled = any(v.get('sustained') for v in verdicts)
+            note_repair_outcome(socket_id, converged=not _still_stalled)
+
+        # ``should_repair`` is keyed on the socket id only as an identity for
+        # rate-limiting; it does NOT require that socket to be live, because the
+        # correction no longer travels that way.
         if should_repair(socket_id, verdicts):
             from lib.agent_core.push import build_conv_state_snapshot, hub
-            frame = build_conv_state_snapshot(user_id=_scope)
-            if hub.deliver_to_socket(socket_id, frame):
-                note_repair_attempt(socket_id)
-                repaired = True
-                logger.warning(
-                    '[SyncDrift] REPAIR sent to socket=%s (%d sustained '
-                    'divergence(s)) — pushing a corrective conv_state_snapshot '
-                    'covering %d running conv(s)',
-                    socket_id[:8],
-                    sum(1 for v in verdicts if v.get('sustained')),
-                    len(frame.get('convs') or {}))
-            else:
-                # Honest negative: the socket is not on THIS replica (or has
-                # already gone away). Not recording the attempt means the next
-                # probe retries rather than silently suppressing for the whole
-                # cooldown window.
-                logger.warning(
-                    '[SyncDrift] REPAIR needed for socket=%s but no such live '
-                    'socket on this replica — not marking cooldown',
-                    socket_id[:8] or '<none>')
+            snapshot = build_conv_state_snapshot(user_id=_scope)
+            # Delivery is the HTTP response itself: returning 200 with this body
+            # IS the delivery, so the cooldown may be armed honestly here.
+            note_repair_attempt(socket_id)
+            repaired = True
+            logger.warning(
+                '[SyncDrift] REPAIR returned in-band to socket=%s (%d sustained '
+                'divergence(s)) — corrective conv_state_snapshot covering %d '
+                'running conv(s)',
+                socket_id[:8],
+                sum(1 for v in verdicts if v.get('sustained')),
+                len(snapshot.get('convs') or {}))
+            # OPTIONAL ACCELERATOR, never the delivery proof: if the socket
+            # does happen to be live and healthy, the same frame arriving over
+            # push lands a beat sooner. Its return value is deliberately
+            # IGNORED — treating an enqueue as delivery is the bug above.
+            try:
+                hub.deliver_to_socket(socket_id, snapshot)
+            except Exception as _pe:
+                logger.debug('[SyncDrift] optional push accelerator failed '
+                             '(the in-band copy is authoritative): %s', _pe)
     except Exception as e:
         logger.warning('[SyncDrift] repair attempt failed: %s', e)
 
-    return api_ok(checked=checked, divergences=divergences, repaired=repaired)
+    return api_ok(checked=checked, divergences=divergences,
+                  repaired=repaired, snapshot=snapshot)
 
 
 __all__ = ['api_v1_conversations_bp']

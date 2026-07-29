@@ -50,6 +50,8 @@ logger = get_logger(__name__)
 __all__ = [
     'should_repair',
     'note_repair_attempt',
+    'note_repair_outcome',
+    'repair_stats',
     'repair_cooldown_sec',
     'reset',
     'tracked_sockets',
@@ -67,8 +69,25 @@ _DEFAULT_COOLDOWN_SEC = 300.0
 #: memory. Oldest-touched entries are evicted first.
 _MAX_TRACKED = 2000
 
+#: Shared cooldown bucket for clients that report no socket id (WebSocket
+#: blocked by a proxy, or push not yet connected). They still get repaired —
+#: the correction rides HTTP — but share one rate-limit slot, since there is no
+#: identity to separate them by.
+_ANON_BUCKET = '<anon>'
+
 _lock = threading.Lock()
 _last_repair: dict[str, float] = {}
+
+#: Outcome tally. A repair whose effect is never checked is indistinguishable
+#: from the mechanism silently not firing at all — the same "measured or it does
+#: not exist" rule this project applies to capabilities. ``ineffective`` is the
+#: number that matters most: it says the self-heal is spinning without result,
+#: which no amount of ``attempted`` can reveal on its own.
+_stats: dict[str, int] = {'attempted': 0, 'converged': 0, 'ineffective': 0}
+
+#: Sockets awaiting an effectiveness verdict: socket_id -> attempt timestamp.
+#: Bounded by the same cap as the cooldown map.
+_pending_outcome: dict[str, float] = {}
 
 
 def repair_cooldown_sec() -> float:
@@ -86,14 +105,23 @@ def repair_cooldown_sec() -> float:
 
 
 def should_repair(socket_id: str, verdicts, now: float | None = None) -> bool:
-    """Decide whether to push a corrective snapshot to ``socket_id``.
+    """Decide whether to send a corrective snapshot to this reporting client.
 
     Args:
-        socket_id: The reporting client's push-socket correlation id. Empty
-            means the client did not tell us which socket it is — we cannot
-            target a repair, so the answer is always False. (Broadcasting
-            "somewhere in the fleet" instead would hit healthy tabs and hide
-            the condition; see PushHub.deliver_to_socket.)
+        socket_id: The reporting client's push-socket correlation id, used
+            ONLY as a rate-limiting identity — the correction travels on the
+            HTTP response, so this socket does not need to be live, or to
+            exist at all.
+
+            ★ An EMPTY id used to return False here, back when the repair was
+            pushed down the socket and an untargetable repair was undeliverable.
+            That premise is gone, and keeping the early return would have
+            locked out precisely the population that needs this most: a client
+            whose WebSocket is blocked by a corporate proxy has no socket id,
+            no push channel to self-heal through, and is therefore the LEAST
+            able to recover on its own. An empty id now falls back to a shared
+            cooldown bucket — slightly coarser rate-limiting for anonymous
+            clients, which is the correct trade against never repairing them.
         verdicts: The per-divergence verdict dicts from
             ``drift_tracker.observe_divergence``. A repair is warranted iff at
             least one is ``sustained`` — i.e. the client value is frozen while
@@ -103,11 +131,9 @@ def should_repair(socket_id: str, verdicts, now: float | None = None) -> bool:
     Returns:
         True iff a repair should be sent now (sustained stall AND out of
         cooldown). Does NOT record the attempt — call ``note_repair_attempt``
-        once the frame is actually delivered, so a delivery that fails (no
-        such socket on this replica) does not burn the window.
+        once the correction is genuinely delivered (an HTTP 200 carrying it).
     """
-    if not socket_id:
-        return False
+    key = socket_id or _ANON_BUCKET
     try:
         sustained = any(bool(v.get('sustained')) for v in (verdicts or [])
                         if isinstance(v, dict))
@@ -119,29 +145,79 @@ def should_repair(socket_id: str, verdicts, now: float | None = None) -> bool:
 
     ts = time.time() if now is None else now
     with _lock:
-        prev = _last_repair.get(socket_id)
+        prev = _last_repair.get(key)
     if prev is not None and (ts - prev) < repair_cooldown_sec():
         logger.debug('[DriftRepair] socket=%s still in cooldown (%.0fs ago)',
-                     socket_id[:8], ts - prev)
+                     key[:8], ts - prev)
         return False
     return True
 
 
 def note_repair_attempt(socket_id: str, now: float | None = None) -> None:
-    """Record that a repair frame was DELIVERED to ``socket_id``.
+    """Record that a repair was DELIVERED to ``socket_id``.
 
-    Separate from :func:`should_repair` on purpose: the cooldown must start
-    when a frame actually reached the socket, not when we merely decided to
-    try. A repair that could not be delivered (socket lives on another
-    replica) should be retried on the next probe rather than suppressed for
-    the whole window.
+    Call this only on evidence that actually proves delivery. A synchronous
+    HTTP 200 qualifies: the response body reached the client or the request
+    failed outright.
+
+    ``PushHub.deliver_to_socket`` does NOT qualify and must never gate this.
+    It returns True once a frame is ENQUEUED, and on a half-open socket nothing
+    drains that queue — measured: with the queue at its 1000-frame bound the
+    enqueue still reports True while the peer receives nothing. Arming the
+    cooldown on that reading tells the one client that genuinely needs repair
+    that it was repaired, then silences it for the whole window.
+
+    Also opens an effectiveness window: the next probe for this socket decides
+    whether the repair actually made it converge (see note_repair_outcome).
     """
     ts = time.time() if now is None else now
+    key = socket_id or _ANON_BUCKET
     with _lock:
-        if socket_id not in _last_repair and len(_last_repair) >= _MAX_TRACKED:
+        if key not in _last_repair and len(_last_repair) >= _MAX_TRACKED:
             oldest = min(_last_repair, key=_last_repair.get)
             _last_repair.pop(oldest, None)
-        _last_repair[socket_id] = ts
+            _pending_outcome.pop(oldest, None)
+        _last_repair[key] = ts
+        _pending_outcome[key] = ts
+        _stats['attempted'] += 1
+
+
+def note_repair_outcome(socket_id: str, converged: bool,
+                        now: float | None = None) -> bool:
+    """Record whether a repair sent to ``socket_id`` actually worked.
+
+    Closes the loop that made the self-heal unfalsifiable: without it, a
+    mechanism that fires constantly and fixes nothing looks exactly like one
+    that is quietly healing every stall.
+
+    Args:
+        socket_id: the socket a repair was previously delivered to.
+        converged: True iff that socket's digest has since AGREED with the
+            server — i.e. the correction landed and was applied.
+        now: epoch seconds; injectable for tests.
+
+    Returns:
+        True iff an outcome was actually recorded (a repair was pending for
+        this socket). A socket with nothing pending returns False so a caller
+        cannot inflate the tally by reporting agreement for sockets that were
+        never repaired.
+    """
+    key = socket_id or _ANON_BUCKET
+    with _lock:
+        pending = _pending_outcome.pop(key, None)
+        if pending is None:
+            return False
+        _stats['converged' if converged else 'ineffective'] += 1
+    logger.info('[DriftRepair] socket=%s repair %s',
+                key[:8],
+                'CONVERGED' if converged else 'DID NOT converge')
+    return True
+
+
+def repair_stats() -> dict:
+    """Attempted / converged / ineffective tallies. Diagnostics and tests."""
+    with _lock:
+        return dict(_stats)
 
 
 def tracked_sockets() -> int:
@@ -151,6 +227,9 @@ def tracked_sockets() -> int:
 
 
 def reset() -> None:
-    """Drop all cooldown state. Test-support only."""
+    """Drop all cooldown + outcome state. Test-support only."""
     with _lock:
         _last_repair.clear()
+        _pending_outcome.clear()
+        for k in _stats:
+            _stats[k] = 0

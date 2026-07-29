@@ -1,5 +1,12 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-29(续·429 事件收尾:覆写清回自动) — owner 指令把今晚的手动覆写**提前**清回自动模式(原条目写的是「明天若健康再清」);**owner 同时抓出 fold 的一个复活陷阱**:清除必须打两个命名空间——只清账户那两行的话,面命名空间的死覆写会在下次重启被 fold「账户无值则迁移」规则原样复活(运行时状态操作,零产品码)
+
+- **执行:** `key-override enabled=null` × 4(`sankuai::key_0/1` + `sankuai_anthropic::key_0/1`)。读回:磁盘 `overrides: {}`,fold 复活不可能;自动判定 key_0 **89%** / key_1 **94%** 成功率、exhausted=False,无需覆写自然启用。
+- **key_2 按 owner 预言自然重停:** 23:47 task f0182d8c 在 opus-5 上撞 402,运行中的 c8e0ff98 把 `sankuai::sankuai_key_2` 记为 **key-wide** 熔断——这次落在了**账户命名空间**(UI 可见),代价恰是设计值:一次 live 402。
+- **清除后 opus-5 仍在出流:** 23:53 两个任务在 `sankuai_key_1` 上 R9/R11 正常轮换,自动模式接管无感。
+- **事件至此全链路闭环:** 诊断(三 key 死因各异)→ 解锁(手动开 key)→ 政策(429 永不禁,c8e0ff98 已在线)→ 显示(账户命名空间记账在线 + fold 待下次重启收敛)→ 卫生(覆写清回自动,key_2 自然停)。
+
 ### 2026-07-29(续·面命名空间折叠) — 「key_stats 按面记账、UI 按账户渲染」定案:**合并早已修好源头,真正没修的是磁盘上那份孤儿状态**;共享 HEAD 三方纠缠(兄弟 quota 批一半搭过我的车、我的折叠冒烟提前写真文件)全部按 #26/#15 处理(`pt_782133699c6d4ac1`;commit `3e80e413`,5 文件;新套件 **12/12 失败先行**,**NEUTER×4 各咬各的**(9/1/1/9);相邻环 **83/83**)
 
 - **★ 先证伪票面的一半:** 票面说「面熔断对 UI 不可见」要修 UI;实测**账户/面合并(547827e1)落地后的下一次重启,记账就自然回到账户命名空间**(slot.provider_id=账户 id),UI 无需任何改动。真正的剩余缺口是**磁盘上已有的面命名空间条目**:按日熔断(重启即丢,要白烧一个 402/模型才重新学会)与**跨天持久的覆写**(今夜手动开启的两行,重启后变死状态——不生效也不显示)。

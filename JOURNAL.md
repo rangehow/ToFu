@@ -1,6 +1,30 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
 
+### 2026-07-29(续·成本回填收口) — 记账双计修完之后,**它静默改掉的第二样东西是缓存遥测,而那正是另一张票的立论依据**;回填脚本的 `--apply` 分支实测是死代码(owner 复核 `ebfd5464` 逐条抓出;commits `a6114ded`(遥测轴)+ `e8c56e65`(apply 根修+守卫);套件 **28/28 + 6/6**,**NEUTER×4 各咬各的**,干净 committed worktree 复验 **46/46**)
+
+- **★ owner 抓出的第一半:同一个 `split_input_tokens` 既喂成本也喂遥测,我只报了成本那一半。** `_roi.py:251` 与 `_detect.py:1005` 的 `total_input` 都来自它,所以修完之后:
+
+  | | 修前上报 | 修后真值 |
+  |---|---|---|
+  | ms5i5ydigs9j9w 会话命中率 | 22.1% | **43.6%** |
+  | 全库混合线(3,289 轮) | 35.5% | **68.9%** |
+  | 单轮 R3 | hit=49.3% | **hit=98.5%** |
+
+  也就是**这个网关上每一条 `[CacheStats]` 日志、每一个会话命中率,都把缓存少报了约一半** —— 而该测试文件开头第 2 条缺陷写的正是「physically impossible hit=50% cluster」。**同一个双计缺陷从来没被真正清干净,只是换了个载体活下来。**
+- **补的是遥测轴守卫(成本轴此前已补,遥测轴原样裸着):** 既有 `test_hit_pct_reports_the_true_read_ratio` 及其姊妹**全部用 `_openai_wire`/`_anthropic_wire`**,没有一条用 `_hybrid_gateway_wire` 驱动真实 `log_round_cache_stats`。新增 4 条(`_roi` 分母 + `_detect` 的 `total_input_tokens` 累加,后者用 AST 断言接线)。**NEUTER-T1** 把 `_roi` 分母退回 `pt+cr+cw` → **3 红,其中包括既有那条 openai-wire 守卫** —— 实证两条线共用同一缺陷;**NEUTER-T2** 退回 `_detect` 累加器 → 精确 1 红。
+- **★ 我的两条断言首跑红了,而错的是我不是产品:** ①121817/123615 四舍五入是 **99** 不是我写的 98;②「会话命中率 >50%」这个绝对下限本身是魔法数字(真实率取决于取哪几轮)。两条都改成有判别力的形式 —— 前者用区间(99 附近,49 被远远排除),后者用**相对不变量**(修正值必须显著高于双计值)。**判据:一条要靠「恰好这批轮次」才成立的绝对阈值,不是守卫而是巧合。**
+- **★ owner 抓出的第二半更硬:`--apply` 从来没被执行过一次。** 实测 `from lib.conversations import save_conversation_messages` 直接 `ImportError` —— 真实 CAS 写入器是 `lib/tasks_pkg/persistence_store.py` 里的**类方法**。**dry-run 天天绿,而唯一会写数据的那半是死代码** —— 与本轮开头那条「NEUTER-3 不咬暴露 billing 调用点零覆盖」完全同形。
+- **两个缺陷一起修,不止那个导入:** ②`expected_rev` 契约要求 rev 来自调用方**自己的** `load_conversation_messages()`(它返回 `(messages, updated_at, rev)` **同一条语句**,正是为了两者不可能错开),而我从扫描阶段那条 `SELECT` 里取 rev,中间隔着整个 ~45s 全表扫 —— **CAS 保护在那个窗口上本身就是打折的**。故 plan 只带会话 id,写入前**逐个重读**、在**新鲜**记录上重放修正、用**那次读**的 rev 做 CAS;抢跑失败就再重读一次,**永不重推扫描时那份副本**(那正是 store 存在的意义;`ms3sfyrmn31omb` 实测 13 次 append 只活下来 8 次)。重放在新数据上定义良好,因为修正是**逐条按各轮自己的 `usage` 纯重算**:兄弟新加的轮一并修好,已正确的轮是 no-op。
+- **★ NEUTER-B 首发不咬,而错在我的注入不是 clobber:** 我第一版注入的是「把刚读到的那份再写一遍」—— 那根本不是覆盖。改为**真正重推扫描时的陈旧副本**(绕过 CAS 直写)后精确红:`assert 'SIBLING APPEND' in ['hi']`,兄弟的追加被抹掉当场现形。**判据:NEUTER 必须造出与正确实现**行为真正分岔**的变体,「不咬」只证明靶子造错了。**
+- **守卫全部驱动真实 store 打真实行(替身会照样接受那个坏导入):** apply 真改盘上 cost / `usage` **两级逐字节不变**(它是本次推导的证据源)/ 二次运行 no-op **且不 bump rev** / 并发 append **存活**且修正仍落地 / store 符号 import 可解析(不是 grep 源码)/ scan 与 apply 共用同一 `_correct_messages`(AST 钉死,否则 dry-run 报的不是 apply 写的)。
+- **★ dry-run 自己抓出我第一版的定价错误(这条是本轮最值钱的实测):** 初版直接给 `messages[i].usage` 定价 → 只匹配到 **3 个** turn 且成本**涨 721%**。根因:turn 级 usage 是**聚合值,已经和它的轮次和漂移** —— 全库只有 **3/117** 满足严格恒等式,而 **115/117** 满足 `sum(round.prompt_tokens) == input+read+write`;owner 关心的那一轮 turn 级带 5,562,791 而轮次和是 5,550,662(多出的 12,129 是 merge 进来的 prefetch usage),最大单会话漂移 5,350 万。**严格恒等式恰好把投诉的那一轮排除在外**,而给那个虚高聚合定价会凭空造出没人花过的钱。改为**由修正后的逐轮 cost 求和推导** turn 总额(每轮 usage 都是单次逐字提供者载荷,可信),顺带让 turn 值与调试面板的逐轮值内部自洽。
+- **回填范围(实测后收窄,不是偷懒):** 命中率/遥测**没有任何持久化** —— `_roi` 只发日志行,`_detect` 的 `total_input_tokens` 活在进程内 `CacheState`;所以那一半没有东西可回填,重启后自然就是对的。`usage` 两级都不动。
+- **落库实测(读回 DB,不是 dry-run 内存):** 35 会话 / 3,675 轮 / 128 turn,turn 总额 **77,621.07 → 26,786.33 CNY**(去掉 50,834.74,65.5%);`ms5i5ydigs9j9w` **351.6024 → 156.1129**,`inputTokens` 5,562,791 → 162,854,`inputCostCny` 201.3730 → 5.8953,**逐轮 cost 求和 = 156.1129 与 turn 值逐分一致**,`usage` 四个键原样。
+- **票面数字重算(`pt_7b850a66` → 关闭并以 `pt_6af50c86` 取代):** 「命中率仅 13/28」是**轮次计数不是命中率**,真实 43.6%(token 加权)。**113.34 CNY 站得住** —— 它是逐轮按实价 `write×1.25 vs read×0.10` 推的,不依赖命中率分母。而 15 个 miss 轮比票面写的更严重:**138.79 CNY(真实账单的 89%)**,13 个 hit 轮仅 17.29(11%)。**全库尺度才是重点:774 个非首轮写>20k 零读回(23.5%),白写 2.95 亿 tok,实花 13,362 CNY,若都命中只需 1,069 ⇒ 上界可回收约 12,293 CNY。**
+- **共享 HEAD:** 每批精确 pathspec + `git add` 后计数断言(2 / 2),兄弟 30+ WIP 未触碰。
+- **验收边界(诚实分账):** ①`lib/cost.py` 修复**纯后端,运行中进程不带** —— 重启后新会话的显示成本与 `[CacheStats]` 日志才走修复;②回填**已落库**(历史快照已归位),但脚本本身是 `tests/_migrate_*` 器具、不进生产路径;③`pt_85887a5b`(cost_estimator 第三份 convention 拷贝,喂「按预算中止任务」的闸)按 owner 指令本批未动。
+
 ### 2026-07-29(续·科研可发现) — owner 查存储时发现**单向哈希陷阱**:产物落盘了、读路径也通了,但要取回必须一字不差复现当初的方向措辞,想不起来就等于被删除(commit `945693ae`,6 文件 +806/-2;新套件 **12/12 失败先行**,**NEUTER×5**(其中**第五发首轮没咬,是我的夹具漏洞**);相邻环 **68/68**;干净 committed worktree 复验 **56/56**;epic `pt_a40dbd9569194b52` 关闭)
 
 - **★ owner 的发现比"少个列表"深:它让前两批在真实使用中失效。** 落盘行按 `sha256(归一化方向)[:32]` 寻址——**单向哈希**;而全库没有任何地方索引"研究过哪些方向"。于是:上周跑的方向,今天回来必须**一字不差**回忆当初输入的那句话,否则几十次 LLM 调用换来的产物永远够不着。**这与被 TTL 删掉的用户体感完全一致**,只是数据还躺在盘上——某种意义上更糟,因为它看起来是好的。

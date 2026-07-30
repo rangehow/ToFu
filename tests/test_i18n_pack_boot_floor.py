@@ -83,40 +83,30 @@ def _strip_comments(src: str) -> str:
     Prose mentioning the symbol ("Maps _i18nLang to the language NAME…") is
     not a runtime read; counting it produced false positives that would have
     forced pointless edits to documentation.
+
+    Line numbering matters here, but be precise about HOW (an earlier draft of
+    this docstring overstated it): ``_bare_references`` indexes ``raw_lines`` by
+    the STRIPPED line index to report ``(lineno, raw_line)``. The VERDICT does
+    not depend on it — ``_enclosing_span`` re-derives the function span from the
+    stripped text, so it stays self-consistent even under a line-deleting
+    stripper. What breaks is the REPORTED LOCATION: measured on a fixture whose
+    bare read sits on source line 9, a line-deleting stripper reports line 5 and
+    quotes the wrong ``raw_line``, sending the reader to unrelated code. Pinned
+    by ``test_reported_line_number_points_at_the_real_source_line``.
+
+    Delegates to the SINGLE shared implementation (charter #24). MEASURED on the
+    six real i18n pack files this guard scans:
+      * line count preserved exactly (e.g. 3521 -> 3521), so the index zip holds;
+      * the bare-read LINE INDICES for ``_i18nLang`` — the only symbol this
+        guard actually looks for — are IDENTICAL under both implementations
+        ([10, 35, 3260, 3261, 3263, 3344, 3378, 3381, 3383]).
+    The raw identifier SETS do differ, but only because the shared pass keeps
+    string-literal contents (``localhost``, ``accent``, …) that the local one
+    blanked; those are not reads of the guarded symbol, so no verdict moves.
+    Pass ``strings=True`` if a future symbol needs literals neutralised too.
     """
-    out = []
-    i, n = 0, len(src)
-    in_block = in_line = False
-    while i < n:
-        c = src[i]
-        nxt = src[i + 1] if i + 1 < n else ''
-        if in_block:
-            if c == '*' and nxt == '/':
-                in_block = False
-                out.append('  ')
-                i += 2
-                continue
-            out.append('\n' if c == '\n' else ' ')
-        elif in_line:
-            if c == '\n':
-                in_line = False
-                out.append('\n')
-            else:
-                out.append(' ')
-        elif c == '/' and nxt == '*':
-            in_block = True
-            out.append('  ')
-            i += 2
-            continue
-        elif c == '/' and nxt == '/':
-            in_line = True
-            out.append('  ')
-            i += 2
-            continue
-        else:
-            out.append(c)
-        i += 1
-    return ''.join(out)
+    from tests._source_scan import strip_comments
+    return strip_comments(src, lang='js', inline=True)
 
 
 def _enclosing_span(lines, idx):
@@ -193,6 +183,45 @@ def test_no_core_bundle_file_bare_references_a_pack_owned_symbol():
         'load makes each of these throw ReferenceError mid-boot and the app '
         'never finishes initializing:\n  ' + '\n  '.join(violations)
         + '\nFix: read via `typeof X !== \'undefined\' ? X : <default>`.')
+
+
+@_unit
+def test_reported_line_number_points_at_the_real_source_line():
+    """Pin the property the shared stripper is chosen FOR: line preservation.
+
+    ``_bare_references`` reports ``(stripped_index + 1, raw_lines[stripped_index])``.
+    That mapping is only valid while the stripper BLANKS comment lines instead of
+    deleting them. Nothing pinned it, and the failure is quiet: the guard still
+    finds the right violations (``_enclosing_span`` re-derives spans from the same
+    stripped text, so the verdict stays correct) — it just names the wrong line
+    and quotes the wrong code, sending whoever reads the failure to unrelated
+    source.
+
+    The fixture separates the read from the top of the file by comment lines,
+    which is exactly what collapses under a deleting stripper.
+    """
+    src = (
+        'function guarded() {\n'      # 1
+        '  ok();\n'                   # 2
+        '}\n'                         # 3
+        '// c1\n'                     # 4
+        '// c2\n'                     # 5
+        '// c3\n'                     # 6
+        '// c4\n'                     # 7
+        'function bare() {\n'         # 8
+        '  use(_i18nLang);\n'         # 9  <- the bare read
+        '}\n'                         # 10
+    )
+    found = list(_bare_references(src, '_i18nLang'))
+    assert found, 'the fixture must contain exactly one detected bare read'
+    lineno, line = found[0]
+    assert lineno == 9, (
+        'reported line %d but the bare read is on SOURCE line 9 — the stripper '
+        'is deleting comment lines instead of blanking them, so every reported '
+        'location drifts by the number of comments above it' % lineno)
+    assert line == 'use(_i18nLang);', (
+        'the quoted source text (%r) is not the offending line — the raw_lines '
+        'index no longer lines up with the stripped index' % line)
 
 
 @_unit

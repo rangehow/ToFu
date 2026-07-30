@@ -38,10 +38,18 @@ def _strip_js_comments(src: str) -> str:
     """Remove /* block */ and // line comments so a substring assertion bites on
     EXECUTABLE code, not comment prose. (Round-1/round-4 lesson: a bare
     substring like "conversations[0]" also matches the explanatory comment next
-    to the statement, so the guard passes even when the statement is deleted.)"""
-    src = re.sub(r"/\*[\s\S]*?\*/", "", src)
-    src = re.sub(r"//[^\n]*", "", src)
-    return src
+    to the statement, so the guard passes even when the statement is deleted.)
+
+    Delegates to the SINGLE shared implementation (charter #24). MEASURED on the
+    two files this guard scans: the set of surviving code identifiers is
+    IDENTICAL, so every substring assertion here keeps its verdict. The swap
+    also fixes a latent defect — the local regexes DELETED comment lines rather
+    than blanking them (main.js 1519 -> 1162, main_init_tasks.js 584 -> 431), so
+    any future line-number reporting would have been badly off; the shared pass
+    returns the exact source line count.
+    """
+    from tests._source_scan import strip_comments
+    return strip_comments(src, lang='js', inline=True)
 
 
 def _hydrate_then_block(src: str, *, strip_comments: bool = False) -> str:

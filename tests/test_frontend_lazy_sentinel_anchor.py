@@ -558,12 +558,23 @@ def _js_files():
 def _strip_comments(src: str) -> str:
     """Blank out // and /* */ comments so prose describing the bug is not an
     offender, while PRESERVING line numbers (each removed line becomes empty)
-    so reported locations point at the real source line."""
-    def _blank(m):
-        return re.sub(r'[^\n]', '', m.group(0))
-    src = re.sub(r'/\*.*?\*/', _blank, src, flags=re.S)
-    src = re.sub(r'^\s*//.*$', '', src, flags=re.M)
-    return src
+    so reported locations point at the real source line.
+
+    Delegates to the SINGLE shared implementation (charter #24), and doing so is
+    a CORRECTNESS FIX rather than a lateral move: the local
+    ``re.sub(r'/\\*.*?\\*/', _blank, ...)`` this replaced BROKE the very promise
+    in the sentence above. Measured on this guard's largest target,
+    ``static/js/ui/chat_render.js`` (2097 source lines), the local pass returned
+    2093 — four lines short, so every reported location past that point named
+    the wrong source line. The shared ``inline=True`` pass returns exactly 2097.
+    On the other four scanned files the two agree line-for-line.
+
+    (The shared pass also had a trailing-line off-by-one, found while measuring
+    this; it is fixed in tests/_source_scan.py and pinned by
+    test_source_scan_primitives.py::test_inline_mode_preserves_line_count.)
+    """
+    from tests._source_scan import strip_comments
+    return strip_comments(src, lang='js', inline=True)
 
 
 def test_no_file_positionally_writes_chatinner_outside_the_primitive():

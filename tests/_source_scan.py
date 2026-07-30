@@ -111,7 +111,7 @@ def _resolve_lang(lang):
     return key
 
 
-def _strip_blocks_inline(text):
+def _strip_blocks_inline(text, strings=False):
     """Blank ``/* … */`` blocks INCLUDING ones opening after code.
 
     Line count is preserved (callers report source line numbers), and the code
@@ -122,6 +122,13 @@ def _strip_blocks_inline(text):
     String/template literals are respected, which is exactly what the module
     docstring says a half-correct parser must not get wrong: a ``/*`` inside a
     quoted string is DATA, and dropping from there would delete real code.
+
+    ``strings=True`` additionally EMPTIES each literal — the delimiters are kept
+    so the expression still parses to a reader, but the contents are dropped, so
+    an identifier-level scan cannot be satisfied (or violated) by a word that
+    only ever appears inside a message string. This reuses the quote tracking
+    already needed above rather than adding a second literal parser, which is
+    the whole point of it living here (charter #24).
     """
     out = []
     in_block = False
@@ -139,19 +146,27 @@ def _strip_blocks_inline(text):
                 i += 1
                 continue
             if quote:
-                buf.append(line[i])
+                # Inside a literal. With strings=True we emit nothing until the
+                # closing delimiter, so the literal collapses to '' / "" / ``.
                 if line[i] == '\\':
-                    if i + 1 < len(line):
-                        buf.append(line[i + 1])
-                        i += 2
-                        continue
-                elif line[i] == quote:
+                    if not strings:
+                        buf.append(line[i])
+                        if i + 1 < len(line):
+                            buf.append(line[i + 1])
+                    i += 2
+                    continue
+                if line[i] == quote:
+                    buf.append(line[i])          # closing delimiter
                     quote = None
+                    i += 1
+                    continue
+                if not strings:
+                    buf.append(line[i])
                 i += 1
                 continue
             if line[i] in '"\'`':
                 quote = line[i]
-                buf.append(line[i])
+                buf.append(line[i])              # opening delimiter
                 i += 1
                 continue
             if two == '//':
@@ -167,10 +182,22 @@ def _strip_blocks_inline(text):
         if quote in ('"', "'"):
             quote = None
         out.append(''.join(buf).rstrip())
+    # ``splitlines()`` on text ending in "\n" yields N entries, but joining N
+    # entries with "\n" produces text whose own ``splitlines()`` is N — the
+    # terminator is lost, and every caller that maps an output index back onto a
+    # source line number is off by one at the tail. Measured on
+    # static/js/core/escape_html.js: 20 source lines came back as 19, with lines
+    # 0-18 aligned and only the final empty line gone.
+    #
+    # Appending "\n" to the joined string does NOT fix it (that text still
+    # splitlines() to N). The input's trailing newline has to come back as an
+    # extra EMPTY ELEMENT before the join.
+    if text.endswith('\n'):
+        out.append('')
     return '\n'.join(out)
 
 
-def strip_comments(text, lang='shell', inline=False):
+def strip_comments(text, lang='shell', inline=False, strings=False):
     """Return ``text`` with comments removed, line count preserved.
 
     Lines are blanked rather than deleted so that any line-number arithmetic a
@@ -193,6 +220,13 @@ def strip_comments(text, lang='shell', inline=False):
     Measured on the real 22k-line ``static/styles.css``: the default pass leaves
     20 ``/*`` markers behind, ``inline=True`` leaves 0.
 
+    ``strings=True`` (implies the inline pass) additionally EMPTIES string and
+    template literals, keeping their delimiters. An identifier-level scan then
+    cannot be satisfied — or falsely tripped — by a word that only ever appears
+    inside a message string, which is the same class of false signal a comment
+    causes. Needed by guards that assert "this symbol does not appear in CODE",
+    where a user-facing string legitimately mentioning it must not count.
+
     Args:
         text: Full source text.
         lang: ``'shell'`` / ``'python'`` (both ``#``), ``'js'`` (``//``, ``*``
@@ -200,6 +234,8 @@ def strip_comments(text, lang='shell', inline=False):
             Aliases: ``py``, ``sh``, ``bash``, ``javascript``, ``mjs``.
             An unknown language RAISES rather than silently under-stripping.
         inline: Also strip block comments that open after code (JS/CSS only).
+        strings: Also empty string/template literals (JS/CSS only; implies
+            ``inline``).
 
     Returns:
         The text with comments removed, line count preserved.
@@ -211,13 +247,22 @@ def strip_comments(text, lang='shell', inline=False):
     prefixes = _LINE_COMMENT_PREFIXES[lang]
     strip_blocks = lang in _BLOCK_COMMENT_LANGS
 
-    if inline and strip_blocks:
-        text = _strip_blocks_inline(text)
+    if (inline or strings) and strip_blocks:
+        text = _strip_blocks_inline(text, strings=strings)
         if not prefixes:
             return text
-        return '\n'.join(
+        # Same trailing-line trap as in _strip_blocks_inline: this second pass
+        # must not undo the terminator the first one just preserved. CSS has no
+        # line-comment prefixes so it returns above and was unaffected, which is
+        # why the bug showed up only on JS (measured: 72 of 173 files off by one
+        # until this join was fixed too).
+        lines = [
             '' if line.lstrip().startswith(prefixes) else line
-            for line in text.splitlines())
+            for line in text.splitlines()
+        ]
+        if text.endswith('\n'):
+            lines.append('')
+        return '\n'.join(lines)
 
     out = []
     in_block = False
@@ -239,6 +284,14 @@ def strip_comments(text, lang='shell', inline=False):
                 out.append('')
                 continue
         out.append('' if (prefixes and stripped.startswith(prefixes)) else line)
+    # Same trailing-line trap as the inline path above, and PRE-EXISTING here
+    # (present in HEAD before the inline/strings modes were added — verified by
+    # running HEAD's copy: escape_html.js came back 20 -> 19). The module
+    # docstring promises "line count preserved", so this is the promise being
+    # kept rather than a behaviour change: a caller mapping an output index onto
+    # a source line number was silently off by one at the tail.
+    if text.endswith('\n'):
+        out.append('')
     return '\n'.join(out)
 
 

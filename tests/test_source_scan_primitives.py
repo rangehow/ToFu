@@ -45,7 +45,9 @@ This suite pins the primitives so that becomes safe:
      working.
   5. Comments can neither SATISFY nor VIOLATE a scan (charter #24, both
      directions), for every supported language.
-  6. String/template literals are not mistaken for comments.
+  6. String/template literals are not mistaken for comments — for BOTH markers
+     (``/*`` and ``//``). The ``//`` half is what a real guard got wrong: a
+     ``'http://'`` in a string was truncated as if it started a comment.
   7. ``js_function_body`` refuses partial bodies and ignores braces inside
      comments and strings.
 """
@@ -208,6 +210,45 @@ def test_string_literals_are_not_mistaken_for_comments():
     assert 'const s =' in out, 'the assignment must survive'
 
 
+def test_a_line_comment_marker_inside_a_literal_is_data():
+    """★ The ``//`` half of face 6 — the defect that made a guard blind.
+
+    The block-comment case above was pinned; this one was not, and it is the
+    one that actually bit. ``test_frontend_api_isolation`` carried
+    ``re.sub(r'//[^\\n]*', '', s)``, so this real line from ``static/js/api.js``::
+
+        if (path.startsWith('http://') || path.startsWith('https://')) return path;
+
+    was truncated to ``if (path.startsWith('http:`` — everything from the first
+    ``//`` onward deleted BEFORE the scan ran. A URL scheme inside a string is
+    DATA, exactly like ``/*`` is.
+
+    Why it is worth its own test rather than folding into the parametrised case:
+    the failure is SILENT and one-directional. Code vanishing early cannot make
+    a "must be absent" guard red, so nothing goes wrong visibly — the guard just
+    stops seeing part of the file and keeps reporting green. Measured across the
+    frontend tree, 27 of 171 JS files differ between the two strippers, and in
+    every one the shared tokenizer is the one that PRESERVES code (zero cases of
+    the reverse), so this property is what those 27 files' guards rest on.
+    """
+    src = ("if (path.startsWith('http://') || path.startsWith('https://')) "
+           "return path;\nreal();\n")
+    out = strip_comments(src, lang='js', inline=True)
+    assert 'https://' in out, (
+        "a '//' inside a string literal is a URL scheme, not a comment — "
+        'dropping from there deletes real code before the scan sees it')
+    assert 'return path;' in out, 'the statement after the literal must survive'
+    assert 'real();' in out, 'the following line must survive'
+
+    # Complement: a genuine trailing line comment on a line that ALSO contains a
+    # literal with '//' must still go, so this is not just "never strip //".
+    mixed = "const u = 'https://x'; // drop THIS_TOKEN\nkeep();\n"
+    out2 = strip_comments(mixed, lang='js', inline=True)
+    assert 'THIS_TOKEN' not in out2, 'a real line comment must still be stripped'
+    assert "'https://x'" in out2, 'the literal on the same line must survive'
+    assert 'keep();' in out2
+
+
 # ═══════════════════════════════════════════════════════════════════
 # 7. js_function_body invariants
 # ═══════════════════════════════════════════════════════════════════
@@ -304,6 +345,84 @@ def test_brace_block_handles_a_non_function_region():
     assert 'FORBIDDEN' not in body
     with pytest.raises(AssertionError):
         brace_block('nothing here', 'absent-anchor')
+
+
+def test_trailing_newline_never_costs_a_line():
+    """★ A file ending in a newline must not come back one line shorter.
+
+    ``splitlines()`` on text ending in ``"\\n"`` yields N entries, and joining N
+    entries with ``"\\n"`` produces text whose own ``splitlines()`` is also N —
+    the terminator is silently gone. Every caller that maps an output index back
+    onto a SOURCE LINE NUMBER is then off by one at the tail.
+
+    Found while migrating the two line-number-reporting guards
+    (``test_frontend_lazy_sentinel_anchor``, ``test_i18n_pack_boot_floor``):
+    measured on ``static/js/core/escape_html.js``, 20 source lines came back as
+    19, with lines 0-18 aligned and only the final empty line missing. It was
+    PRE-EXISTING in the default whole-line path (reproduced against HEAD's copy),
+    and the module docstring promises "line count preserved" — so this pins that
+    promise rather than a new behaviour.
+
+    Note the fix is NOT appending ``"\\n"`` to the joined string: that text still
+    ``splitlines()`` to N. The input's terminator has to return as an extra
+    EMPTY ELEMENT before the join. Both the block loop and the line-prefix pass
+    needed it — CSS returns before the second one, which is why the bug showed
+    up on JS only (72 of 173 files off by one until both were fixed).
+    """
+    for lang, sample in (
+        ('js', 'const a = 1;\n// c\nconst b = 2;\n'),
+        ('css', '.a{x:1}\n/* c */\n.b{y:2}\n'),
+        ('python', 'a = 1\n# c\nb = 2\n'),
+        ('shell', 'echo a\n# c\necho b\n'),
+    ):
+        modes = [{}]
+        if lang in ('js', 'css'):
+            modes += [{'inline': True}, {'strings': True}]
+        for kw in modes:
+            out = strip_comments(sample, lang=lang, **kw)
+            assert len(out.splitlines()) == len(sample.splitlines()), (
+                'lang=%s %r: %d source lines came back as %d — a caller mapping '
+                'an index onto a source line number is off by one at the tail'
+                % (lang, kw, len(sample.splitlines()), len(out.splitlines())))
+            assert out.endswith('\n') == sample.endswith('\n'), (
+                'lang=%s %r: trailing-newline presence changed' % (lang, kw))
+
+    # Complement: a file with NO trailing newline must not gain one.
+    for lang in ('js', 'css', 'python'):
+        sample = ('x = 1' if lang == 'python'
+                  else '.a{x:1}' if lang == 'css' else 'const a = 1;')
+        out = strip_comments(sample, lang=lang)
+        assert not out.endswith('\n'), (
+            'lang=%s: a file without a trailing newline must not gain one' % lang)
+
+
+def test_strings_mode_empties_literals_but_keeps_code():
+    """``strings=True`` — added for test_frontend_reducer_purity.
+
+    That guard asserts a reducer contains no side-effect SYMBOLS, so a forbidden
+    word appearing inside a user-facing message string must not count. Emptying
+    literals reuses the quote tracking the inline pass already needs, rather
+    than adding a second literal parser (charter #24).
+    """
+    src = ('const msg = "do not call saveConversations here";\n'
+           'const t = `also localStorage in a template`;\n'
+           'realCall();\n')
+
+    default = strip_comments(src, lang='js', inline=True)
+    assert 'saveConversations' in default, (
+        'the DEFAULT pass must leave literal contents alone — existing callers '
+        'depend on seeing class names and messages')
+
+    stripped = strip_comments(src, lang='js', strings=True)
+    assert 'saveConversations' not in stripped, (
+        'strings=True must empty literal contents so an identifier scan cannot '
+        'be tripped by a message string')
+    assert 'localStorage' not in stripped, 'template literals too'
+    assert 'realCall' in stripped, 'real code must survive'
+    assert 'const msg' in stripped and 'const t' in stripped, (
+        'the assignments themselves must survive — only the contents go')
+    assert len(stripped.splitlines()) == len(src.splitlines()), (
+        'strings=True must preserve line count like every other mode')
 
 
 def test_js_function_body_is_brace_matched_not_byte_sliced():

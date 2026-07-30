@@ -162,6 +162,24 @@
 - **活库闭环(owner 指定的验收):** ALTER 落库 → 用新路径把 owner 那条 goal 设为项目目标 → 注入块 **0 → 244 字节**且目标原文逐字在内;随后模拟在章程页改字,卡片正确翻成 `diverged(side=charter)`,还原后翻回 `active`。charter 承接本批 invariant 后注入块 533 字节,**目标位于 decisions 之上**——这正是 `content` 列存在的结构性理由。
 - **验收边界:** 后端已对活库生效(ALTER 幂等);前端与 i18n **需重启 + bundle 重建**。真浏览器未实测(node 驱动 shipped 函数 + 直接驱动后端)。
 
+### 2026-07-30(续·第 8 条 lane 与 round 自描述) — owner 复核抓出**我自己给 screenshot lane 写的「按设计留在 post-phase」理由是假的**;以及一条更普遍的:**skip lane 的 round 上没有 `tEnd`,而 poll/刷新读的正是 round**。本批最值得记的是 **NEUTER 连揭我三次守卫太弱**(commit `d2c165f5`,2 文件;守卫 **13 → 15**,**NEUTER×4 各咬各的**;相邻环 **175/175**;`git archive HEAD` 隔离副本 **50/50**)
+
+- **★ 我上一轮定了「用脚本枚举、不按票面条目修」,然后自己在最后一条上违反了它:** 8 条 `continue` 里我把 screenshot 归为「终态取决于模型视觉能力,要等 post-phase」。owner 实测证伪:`model` 是 `execute_tool_pipeline` 的**入参**,`model_supports_vision(model) -> bool` 是**纯函数**,派发时就能算;AST 检查那个分支**根本不碰 `_round_results_for_budget`**(唯一真需要屏障的东西)。真实事件序确实是 `tool_result(shot) → tool_result(slow) → tool_complete(slow) → tool_complete(shot)`。**判据:「按设计」这三个字必须能被实测支持,否则它就是一个没人再验的豁免。**
+- **★ 抽 `_screenshot_display_content(model, tool_content)`,并把 post-phase 的 `continue` 删掉:** 只有**保序的 `role:'tool'` 消息 append** 真正属于 post-phase;终态帧改由共享 settle 幂等发出。副产品:census 从 8 降到 7,并补一条断言「screenshot 不得再长出 `continue`」——**分类表与代码必须一致,否则守卫会替一个已消失的理由站岗**。
+- **★ 两个调用点都改读 `model` 形参而非 `task['model']`:** 编排器传的是 `rs.model`、之后才**镜像**到 task 上,所以镜像在中途 fallback 时可能是旧值。用形参直接消掉这一整类分叉。
+- **★★ round 不自描述:`_settle_tool_result` 只把 `tEnd` 算给事件,从不写回 round。** 实测被拒绝的 round:`status=rejected tStart=Y tEnd=N`。这不是装饰问题——**poll 车道(`/api/v1/chat/poll`)和每次刷新都是发整个 `toolRounds` 对象、从不重放事件**,所以对没有 SSE 的客户端、以及任何刷新过页面的用户,「执行段」永久缺失,而那正是三段里的第一段、也正是用户排查慢 turn 时会走的路。写回后 `tStart`/`tEnd` 都在 round 上;`or now_ms()` 在**反方向**承重:已经过 `_finalize_tool_round` 的 round 保住它的**真实**结束时刻。
+- **★★★ 本批最重要的一条:NEUTER 连揭我三次守卫太弱,三次形状各不相同。**
+
+  | NEUTER | 首版守卫为何没咬 | 修法 |
+  |---|---|---|
+  | 覆写真实 `tEnd` | 用了 450–3000ms **容差带**,而 600ms 工具被抹成 **718ms**,轻松穿过 | 捕获 finalize 记下的**精确时刻**并要求**相等** |
+  | screenshot 退回屏障后 | round-shape 守卫**对顺序结构性免疫**(post-phase settle 幂等,退回后 round 依然形状完好、只是晚) | 单独加一条**顺序**守卫 |
+  | post-phase 判决写死 | dispatch 的 settle **幂等地赢了**,14 条其余守卫全绿 | 断言**模型真正收到的那条 `role:'tool'` 消息**与 UI 判决一致 |
+
+  共同教训:**「绿」只说明我断言的那个命题成立,不说明缺陷不存在**。容差带、幂等覆盖、以及「只测事件不测 round」都能让一个真缺陷合法通过。
+- **★ 我自己的 fixture 又错一次(同族第三次,方向仍是「没把被测代码装好」):** `model_supports_vision` 对**未知**模型名默认返回 **True**(宽松),所以我编的 `'text-only-model'` 静默走了 vision 分支,**no-vision 那一路等于什么都没断言**。换成 `deepseek-chat`(能力表实测报告为 text-only)。判据:**造 fixture 用的常量也要实测,不能假定它落在我想要的那一格。**
+- **验收边界:** 本 commit 纯后端,**需重启**;真浏览器未实测。
+
 ### 2026-07-30(续·被漏掉的 6 条 skip lane) — owner 复核抓出**上一批只接了 dispatch 路,pre-phase 的 skip lane 全没接**;而其中「流式预取命中」是**零耗时**工具,反而成了全产品唯一仍被慢兄弟拖住的一类。**更要紧的是:天真地接上会把「被拒绝」画成「已完成」**(`pt_ac380e3dde2c4c69` DONE;commit `34cffd94`,3 文件 +717/-2;新套件 **11/11**(8 条失败先行),**NEUTER×6 各咬各的**(2/2/1/1/1/1,含 1 发反向);相邻环 **171/171**;`git archive HEAD` 隔离副本 **46/46**)
 
 - **★ 票面自己不全,判据是「用脚本枚举」而不是「按条目修」:** owner 点名 3 条 lane,AST 枚举 `execute_tool_pipeline` 的**全部** `continue` 实测 **8 条**——parse_err/幻觉工具、dedup+prefetch 命中、审批拒绝、abort 短路、pre-hook block、串行写 abort 跳过(6 条**都没接**)+ 长阻塞串行(已接)+ screenshot(自己发)。**这 6 条的共同点:工具根本没跑,耗时为零** ⇒ 恰恰是最该秒亮的那批,却等本轮最慢兄弟。已把「枚举 + 逐条分类」做成 census 守卫钉在 8,新增一条未分类的 `continue` 就红。

@@ -408,3 +408,109 @@ def test_single_query_emits_no_batch_progress(rec, fake_search):
     assert not batch_progress, (
         'a single-query web_search must not emit batch progress; got %r'
         % (batch_progress,))
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Face 8 — the progress actually RENDERS (backend → pixels)
+# ═══════════════════════════════════════════════════════════════════
+
+import os
+import shutil
+import subprocess
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.normpath(os.path.join(HERE, '..'))
+JS_DIR = os.path.join(ROOT, 'static', 'js')
+
+
+def _node_available() -> bool:
+    return bool(shutil.which('node'))
+
+
+def test_batch_progress_has_a_css_rule():
+    """★ A class that reaches the DOM with NO rule is invisible.
+
+    Learned the hard way in this very batch: a concurrent sibling rewrite of
+    styles.css silently dropped these rules, and NOTHING went red — the backend
+    emitted progress, the handler stored it, the renderer emitted the span, and
+    the user would have seen unstyled inline text (or, with no distinguishing
+    style at all, effectively nothing). Every Python guard stayed green because
+    none of them looked at the stylesheet.
+
+    This is the same shape as the project's earlier `.conv-state-unconfirmed`
+    lesson: semantic presence in the DOM is not visibility.
+    """
+    css_path = os.path.join(ROOT, 'static', 'styles.css')
+    with open(css_path, encoding='utf-8') as fh:
+        css = fh.read()
+    assert '.ptool-batch-progress' in css, (
+        'styles.css must style .ptool-batch-progress — the renderer emits that '
+        'class, so without a rule the batch counter reaches the DOM and changes '
+        'nothing the user can see')
+    assert '.ptool-batch-failed' in css, (
+        'the per-item FAILURE marker must be styled too, else a failed query is '
+        'indistinguishable from a pending one — the exact ambiguity this epic '
+        'removes')
+
+
+@pytest.mark.skipif(not _node_available(), reason='node not available')
+def test_renderer_emits_the_progress_only_for_a_real_batch():
+    """The renderer must show the counter for a batch and NOTHING for a single
+    call — driving the SHIPPED _renderBatchProgress.
+
+    A guard on the backend emit alone would stay green if the renderer ignored
+    the fields (the 'A-sends ≠ B-reads' gap). And the negative half matters just
+    as much: emitting a "1/1" pill on every ordinary single-query search would
+    add permanent noise to the most frequent tool in the product.
+    """
+    harness = r"""
+    const fs = require('fs');
+    const path = require('path');
+    global.window = global;
+    const _log = console.log.bind(console);
+    global.console = { log: _log, warn: () => {}, error: () => {}, debug: () => {} };
+    global.escapeHtml = (s) => String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    global.t = (k) => k;
+    global.document = { getElementById: () => null, querySelectorAll: () => [],
+                        addEventListener: () => {}, removeEventListener: () => {} };
+
+    const src = fs.readFileSync(path.join(process.argv[1], 'ui/tool_rounds.js'), 'utf8');
+    // Extract just the pure helper — loading the whole module would drag in the
+    // full render stack this check does not need.
+    const m = src.match(/function _renderBatchProgress\([\s\S]*?\n\}/);
+    if (!m) { console.log('FAIL helper_missing :: _renderBatchProgress not found'); process.exit(0); }
+    (0, eval)(m[0]);
+
+    const out = [];
+    function check(n, c, d) { out.push((c ? 'PASS ' : 'FAIL ') + n + (c ? '' : '  :: ' + (d || ''))); }
+
+    const batch = _renderBatchProgress({ _batchTotal: 3, _batchDone: 2 });
+    check('batch_renders_counter', batch.indexOf('2/3') >= 0
+          && batch.indexOf('ptool-batch-progress') >= 0,
+          'a 3-item batch at 2 done must render "2/3"; got ' + JSON.stringify(batch));
+
+    const failed = _renderBatchProgress({ _batchTotal: 3, _batchDone: 3, _batchFailed: 1 });
+    check('failure_is_marked', failed.indexOf('ptool-batch-failed') >= 0,
+          'a failed item must be visibly marked; got ' + JSON.stringify(failed));
+
+    check('single_call_renders_nothing', _renderBatchProgress({}) === ''
+          && _renderBatchProgress({ _batchTotal: 1, _batchDone: 1 }) === '',
+          'a non-batch (or 1-item) call must render NOTHING — a "1/1" pill on '
+          + 'every ordinary search would be permanent noise');
+
+    check('null_safe', _renderBatchProgress(null) === '',
+          'must not throw on a null round');
+
+    console.log(out.join('\n'));
+    """
+    proc = subprocess.run(['node', '-e', harness, JS_DIR],
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, (
+        'harness crashed (rc=%s)\nstdout:\n%s\nstderr:\n%s'
+        % (proc.returncode, proc.stdout, proc.stderr))
+    lines = [ln for ln in proc.stdout.strip().splitlines()
+             if ln.startswith(('PASS', 'FAIL'))]
+    failed = [ln for ln in lines if ln.startswith('FAIL')]
+    assert not failed, ('batch render faces failed:\n  ' + '\n  '.join(failed))
+    assert len(lines) >= 4, 'expected 4 checks, got %d:\n%s' % (len(lines), '\n'.join(lines))

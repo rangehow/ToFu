@@ -100,13 +100,12 @@ CONV_REF_TOOL_NAMES = {'list_conversations', 'get_conversation'}
 
 # ── Project Charter tools (Pillar #2 of the project brain) ──
 # The Charter is the shared "north star" of a project — read by every
-# conversation, so they coordinate around one intent. An agent may READ it,
-# PROPOSE amendments, and (2026-07-12, owner-directed) self-COMMIT a DECISION
-# (append implementation-level consensus) so shared intent advances without a
-# human in the loop. The agent path can ONLY append a decision — it can never
-# edit the north-star `content` (goal/direction stays human-owned), and a human
-# retains the corrective levers (edit/remove a decision, delete the charter).
-# Project-scoped, registered only in project mode (registry._build_conv_ref).
+# conversation, so they coordinate around one intent. An agent may READ it and
+# PROPOSE amendments. It may NOT commit: a charter always requires human review
+# (owner-directed 2026-07-30, reversing the 2026-07-12 self-commit de-gating).
+# Committing, editing and removing decisions are human actions on the REST
+# routes. Project-scoped, registered only in project mode
+# (registry._build_conv_ref).
 
 CHARTER_READ_TOOL = {
     "type": "function",
@@ -139,17 +138,20 @@ CHARTER_PROPOSE_TOOL = {
     "function": {
         "name": "project_charter_propose",
         "description": (
-            "PROPOSE an amendment to the project charter — a SUGGESTION you are "
-            "not yet ready to make binding. This does NOT change the charter and "
-            "nothing waits on it; work continues either way.\n"
-            "PREFER project_charter_commit for anything you have actually "
-            "decided: since agents self-commit decisions, a proposal that is "
-            "really a decision just adds an item to the human's review list "
-            "without advancing the project. Use propose ONLY when you genuinely "
-            "want a second opinion before the decision becomes shared intent — "
-            "e.g. it changes the project's DIRECTION (which is human-owned) "
-            "rather than its implementation. Be specific and actionable; anchor "
-            "the proposal to concrete evidence, not vague intent."
+            "PROPOSE an amendment to the project charter — the ONLY way an "
+            "agent can put something into the charter, and it takes effect only "
+            "after the HUMAN approves it. The charter is human-reviewed by "
+            "design: it is the shared north star every sibling conversation "
+            "reads, so nothing lands in it unilaterally.\n"
+            "Use this for a binding rule / architecture invariant you have "
+            "concluded and want other conversations to align to — state it as a "
+            "decision, not a musing, and anchor it to concrete measured "
+            "evidence. Your work does NOT wait on the review; continue, and "
+            "record what you actually did in JOURNAL.md.\n"
+            "For a methodology lesson (how to work, not what is true of this "
+            "codebase), prefer create_memory — it surfaces by relevance when a "
+            "conversation touches that topic, instead of growing the charter "
+            "every conversation pays for on every turn."
         ),
         "parameters": {
             "type": "object",
@@ -235,7 +237,24 @@ CHARTER_COMMIT_TOOL = {
     },
 }
 
-CHARTER_TOOLS = [CHARTER_READ_TOOL, CHARTER_PROPOSE_TOOL, CHARTER_COMMIT_TOOL]
+# The MODEL-FACING charter toolset: read + propose ONLY (owner-directed
+# 2026-07-30). project_charter_commit is NOT here — a charter always requires
+# human review, so an agent may raise a binding rule but never make it binding.
+#
+# This is a REVERSAL of the 2026-07-12 de-gating. What made that de-gating
+# survive unnoticed is instructive: registry/_build.py's comment claimed commit
+# "is NEVER exposed as an agent tool" while CHARTER_TOOLS shipped all three
+# names, so the code READ as safe. The comment is now true.
+#
+# CHARTER_COMMIT_TOOL itself is deliberately KEPT as a module symbol, and
+# 'project_charter_commit' stays in CHARTER_TOOL_NAMES, for two reasons:
+#   * execute_charter_tool must still RECOGNISE the name to refuse it with an
+#     explanation — a model that learned the tool from an older transcript gets
+#     told where the human gate is, instead of an opaque "unknown tool".
+#     Dropping the name would turn a clear refusal into a phantom-tool error.
+#   * historical tool rounds in existing conversations carry it and must still
+#     render (static/js/ui/tool_rounds.js::_CONV_META_TOOLS).
+CHARTER_TOOLS = [CHARTER_READ_TOOL, CHARTER_PROPOSE_TOOL]
 CHARTER_TOOL_NAMES = {'project_charter_read', 'project_charter_propose',
                       'project_charter_commit'}
 
@@ -345,9 +364,9 @@ BOARD_BLOCK_TOOL = {
             "production system, or knowledge that exists only in someone's head).\n"
             "Everything else you are expected to DECIDE YOURSELF. If one option is "
             "more robust, more general, or better for the long term — take it, even "
-            "when it costs more work — then record the choice with "
-            "project_charter_commit so siblings align to it and a human can "
-            "correct it later. A reversible decision made now beats a perfect "
+            "when it costs more work — then raise the choice with "
+            "project_charter_propose so a human can make it binding for siblings, "
+            "and record what you did in JOURNAL.md. A reversible decision made now beats a perfect "
             "decision made after a two-day stall; the human can always overrule a "
             "committed decision, but they cannot recover the time an epic spent "
             "parked waiting to be asked. 'I wasn't sure' is NOT a reason to "

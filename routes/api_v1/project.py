@@ -1259,9 +1259,13 @@ def project_brain_status_ask():
 
 # ── Project Brain: the human's WATCH lane (Pillar #7) ────────────────
 # The human authors watch items (concern|question|goal); the brain addresses
-# them on a recurring basis (append-only response trail). HUMAN-FACING ONLY —
-# the only bridge to sibling agents is /watch/promote (a human-gated charter
-# commit). All authoring is human-gated by definition (the human is the author).
+# them on a recurring basis (append-only response trail).
+#
+# A GOAL is injected into every sibling conversation's prompt just by existing
+# (lib.conversations.project_watch.render_goals_injection_block) — no promotion,
+# no charter copy. concern|question are HUMAN-FACING ONLY, and their one bridge
+# to agents is /watch/promote (a human-gated charter commit). All authoring is
+# human-gated by definition (the human is the author).
 
 @api_v1_project_bp.route('/api/v1/project/brain/watch', methods=['GET'])
 @require_auth
@@ -1398,23 +1402,22 @@ def project_brain_watch_address():
 @require_auth
 @rate_limit(limit=20, per=60)
 @api_meta(
-    summary='Promote a watch item into the charter (the ONLY bridge to agents)',
+    summary='Promote a concern/question into the charter (goals are refused)',
     description=(
-        'Body: ``{itemId, convId?, expectedVersion?}``. Bridges the item into '
-        'the charter via the HUMAN-GATED charter-commit path — the only way a '
-        'watch item reaches sibling agents. No new write path, no fan-out.\n\n'
-        'Routing depends on the item KIND. A ``goal`` is written to the '
-        "charter's north-star ``content`` column (a goal and the north star are "
-        'one concept; the column is never evicted, unlike the 20-entry '
-        'injection window / 100-entry FIFO decision list). That is a '
-        'REPLACEMENT of a single column, so ``expectedVersion`` is a HARD gate '
-        'there: send the version you rendered the preview from, and show the '
-        'human both the current and the new text BEFORE calling this. '
-        '``concern`` / ``question`` are appended as committed decisions '
-        '(kind=invariant + a one-line summary); appends commute, so the version '
-        'is only advisory on that path.\n\n'
-        'Returns ``{ok, version}`` or a 409 on version skew — on 409 re-read '
-        'the charter and re-present the comparison; never auto-retry.'),
+        'Body: ``{itemId, convId?, expectedVersion?}``. Appends a ``concern`` or '
+        '``question`` to the charter as a committed decision (kind=invariant + a '
+        'one-line summary) via the HUMAN-GATED charter-commit path — the only '
+        'way one of those reaches sibling agents. Appends commute, so '
+        '``expectedVersion`` is advisory here.\n\n'
+        'A ``goal`` is REFUSED with ``400 {error: "goal_not_promotable"}``. '
+        'Goals reach agents by EXISTING: every open goal is rendered into its '
+        'own ``[PROJECT GOALS]`` prompt block on every turn, so there is nothing '
+        'to promote and copying one into the charter would recreate the '
+        'duplication this design removed. Withdraw a goal by resolving or '
+        "deleting its card; edit the charter's own north star in the Charter "
+        'panel.\n\n'
+        'Returns ``{ok, version}``, 400 on a goal / bad item, or 409 on version '
+        'skew — on 409 re-read the charter and re-present; never auto-retry.'),
     tags=['project'],
 )
 def project_brain_watch_promote():

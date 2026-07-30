@@ -244,17 +244,18 @@ def _init_system_schema(conn):
         PROJECT_WATCH_ITEMS, PROJECT_WATCH_RESPONSES)
     create_if_absent(conn, PROJECT_WATCH_ITEMS, table_exists=_table_exists)
     create_if_absent(conn, PROJECT_WATCH_RESPONSES, table_exists=_table_exists)
-    # Migration: promotion-audit columns backing the COMPUTED three-state
-    # promotion verdict (goal_promotion_state). Pre-existing rows default to
-    # ''/0 → promoted_at=0 reads as "never promoted", so an old row can never
-    # fabricate a false "diverged" verdict. Added 2026-07.
-    for _pwi_col, _pwi_sql in {
-        'promoted_text': "ALTER TABLE project_watch_items ADD COLUMN promoted_text TEXT NOT NULL DEFAULT ''",
-        'promoted_at':   'ALTER TABLE project_watch_items ADD COLUMN promoted_at INTEGER NOT NULL DEFAULT 0',
-    }.items():
-        if not _column_exists(conn, 'project_watch_items', _pwi_col):
-            cur.execute(_pwi_sql)
-            logger.info('[DB] Migration: added column %s to project_watch_items', _pwi_col)
+    # NOTE (2026-07-30): the promoted_text / promoted_at columns added here in
+    # 2026-07 were DROPPED from the Core schema. They backed the three-state
+    # goal promotion verdict, and a goal is no longer copied into the charter at
+    # all (it injects directly from this lane), so divergence — the only thing
+    # those columns could diagnose — is not a reachable state.
+    #
+    # Deliberately NOT issuing a DROP COLUMN: on an already-migrated database
+    # the two columns are harmless (NOT NULL with defaults, and no code reads or
+    # writes them), whereas SQLite's DROP COLUMN is refused outright on a column
+    # that any index or view references and would turn a cosmetic tidy-up into a
+    # startup failure. Leaving them costs nothing; a future consolidating
+    # migration can reap them.
     cur.execute('CREATE INDEX IF NOT EXISTS idx_project_watch_items_path ON project_watch_items(project_path, updated_at DESC)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_project_watch_resp_item_seq ON project_watch_responses(item_id, seq DESC)')
 

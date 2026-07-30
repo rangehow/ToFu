@@ -18,7 +18,8 @@ decision-making"):
     ``project_charter`` table. Now optional — a suggestion the agent is not yet
     ready to make binding.
   • **commit** — an agent may now self-COMMIT a DECISION
-    (``commit_charter(add_decision=…)`` via the ``project_charter_commit``
+    (``commit_charter(add_decision=…)`` via the human REST route; the
+    ``project_charter_commit`` agent tool was withdrawn 2026-07-30
     tool): it bumps ``version`` under an optimistic lock so two concurrent
     commits can't silently clobber, and emits ONE ``decided`` event so the
     commit is auditable. The agent path is ``add_decision``-ONLY — it can never
@@ -98,11 +99,18 @@ _LESSON_AUTOFOLD_MIN_CONTAINMENT = 0.5
 # in its OWN column precisely so it can never be pushed out of the injected
 # window nor FIFO-evicted by decision churn — a goal committed as a decision
 # instead is subject to both, which is how one previously went invisible.
+# CRITICAL: this text must NOT contain the literal marker of any OTHER injected
+# block. `_refresh_tail_block` enforces idempotency by STRIPPING every block
+# whose text contains the marker it is placing — so when this notice spelled the
+# goals marker out in full, injecting the goals block DELETED the charter block.
+# Measured 2026-07-30: the log showed charter:656 built, then absent from the
+# messages. Guarded by test_no_block_text_contains_another_blocks_marker.
 _NO_GOAL_NOTICE = (
-    '(No north-star goal is set for this project yet — the committed decisions '
-    'below are implementation-level intent only, NOT the project goal. The '
-    'north star is human-owned: it is set through the Project Brain panel, not '
-    'by committing a decision.)')
+    '(No north-star statement is set in the charter — the committed decisions '
+    'below are implementation-level intent only. This does NOT mean the project '
+    'has no goals: the owner sets those in the Project Brain\'s Status & Focus '
+    'lane and they arrive as their own separate Project Goals reminder. The '
+    'charter\'s north star is human-owned and is edited in the Charter panel.)')
 
 # How many decisions the per-turn injection shows (the tail window). Single
 # source for BOTH renderers and the panel health strip's `injectedCount` —
@@ -841,7 +849,22 @@ def _topic_containment(query: str, memories: list) -> list:
 def _route_lesson_to_memory(project_path: str, lesson_text: str,
                             conv_id: str = '',
                             into_memory: str = '') -> dict:
-    """Route a kind=lesson commit to the PROJECT MEMORY system, not the charter.
+    """Route a lesson to the PROJECT MEMORY system, not the charter.
+
+    ⚠️ CURRENTLY UNREACHABLE (2026-07-30). Its only caller was the kind=lesson
+    branch of the ``project_charter_commit`` agent tool, which was withdrawn
+    when the charter became human-review-only. Agents still record lessons via
+    ``create_memory``, so the CAPABILITY survives — but the three-channel
+    dedup-into-an-existing-memory logic below does NOT run on that path, so
+    same-topic lessons will accumulate as separate files again.
+
+    Kept rather than deleted because the dedup measurement it encodes is the
+    expensive part and would have to be redone: real same-family lesson pairs
+    score ~0.10 lexical containment, which is why channel 2 exists at all.
+    Re-pointing ``create_memory`` at this helper is tracked as follow-up debt
+    (see the board epic for the goals-inject change) rather than folded into
+    that change, per the owner's rule about not fixing adjacent latent issues
+    inside another batch.
 
     Dedup (owner-directed "search same-topic first, fold, else create") is
     three-channel, because measurement showed lexical similarity alone cannot
@@ -926,13 +949,15 @@ def execute_charter_tool(fn_name: str, fn_args: dict, *,
                          project_path: str = '') -> str:
     """Execute a charter agent tool → human-readable string.
 
-    Exposes ``project_charter_read``, ``project_charter_propose`` and (since
-    2026-07-12, owner-directed) ``project_charter_commit``. The commit tool
-    calls ``commit_charter`` with ``add_decision`` ONLY — an agent can append a
-    committed DECISION (implementation-level shared intent) but can NEVER edit
-    the north-star ``content`` through this path. Editing/removing a committed
-    decision and deleting the charter stay human-only (the REST routes), as the
-    human's corrective levers.
+    Exposes ``project_charter_read`` and ``project_charter_propose`` ONLY.
+
+    ``project_charter_commit`` was WITHDRAWN from agents on 2026-07-30
+    (owner-directed, reversing the 2026-07-12 de-gating): a charter always
+    requires human review. The name is still recognised here so the call is
+    refused with an explanation pointing at ``project_charter_propose``, rather
+    than failing as an unknown tool for a model that learned it from an older
+    transcript. Committing, editing and removing decisions, and deleting the
+    charter, are human actions on the REST routes.
     """
     try:
         if not project_path:
@@ -942,9 +967,12 @@ def execute_charter_tool(fn_name: str, fn_args: dict, *,
             rec = read_charter(project_path)
             if not rec.get('exists') or not (rec['content'] or rec['decisions']):
                 return ('This project has no charter yet. If you reach a '
-                        'project-wide decision, commit it with '
-                        'project_charter_commit so every sibling conversation '
-                        'aligns to it (the human sets the north-star goal).')
+                        'project-wide binding rule, raise it with '
+                        'project_charter_propose for the human to approve — the '
+                        'charter is human-reviewed. Note the owner\'s GOALS are '
+                        'a separate surface and arrive in their own separate '
+                        'Project Goals reminder, so an empty charter does not '
+                        'mean the project has no stated intent.')
             idx = fn_args.get('index')
             if idx is not None and idx != '':
                 # Per-entry read: the detail half of the two-tier design. The
@@ -981,109 +1009,29 @@ def execute_charter_tool(fn_name: str, fn_args: dict, *,
                 project_path, current_conv_id, proposal,
                 title=(fn_args.get('title') or '').strip())
             if res.get('ok'):
-                return ('Proposal recorded (it appears in the project activity '
-                        'feed as a proposed decision). Note: you can COMMIT a '
-                        'decision directly with project_charter_commit — a '
-                        'proposal is only for suggestions you are not yet ready '
-                        'to make binding.')
+                return ('Proposal recorded — it appears in the project '
+                        'activity feed and in the human\'s review surface as a '
+                        'proposed decision. It is NOT yet binding: a human '
+                        'approves it, because the charter is human-reviewed by '
+                        'design. Do not wait on it — continue working, and '
+                        'record what you actually did in JOURNAL.md.')
             return f'Error: could not record proposal ({res.get("error", "unknown")}).'
         if fn_name == 'project_charter_commit':
-            # Agent self-commit of a DECISION (owner-directed 2026-07-12; the
-            # de-gating stands — invariants stay agent-committable). The SAME
-            # commit_charter the human REST route uses. add_decision-ONLY: the
-            # north-star `content` is NOT passed, so this tool can never edit
-            # the goal/direction (guarded by test).
-            #
-            # Kind routing (owner-directed 2026-07-28): every commit MUST
-            # declare its kind, and only INVARIANTS land in the charter —
-            # lessons route to project memory (relevance-gated, dedup-ed),
-            # reports are rejected to JOURNAL.md. The charter's per-turn
-            # injection renders each invariant's one-line `summary`; the full
-            # text is read back on demand via project_charter_read.
-            decision = (fn_args.get('decision') or '').strip()
-            if not decision:
-                return 'Error: decision text is required.'
-            kind = (fn_args.get('kind') or '').strip().lower()
-            if kind not in _DECISION_KINDS:
-                return ('Error: kind is required — one of:\n'
-                        '  invariant — a binding rule constraining FUTURE '
-                        'code/decisions (e.g. "credential redaction is a '
-                        'fail-closed whitelist"). Lands in the charter; '
-                        'requires summary.\n'
-                        '  lesson — a methodology experience note (e.g. '
-                        '"guards must assert results, not implementation"). '
-                        'Routed to PROJECT MEMORY (relevance-gated, dedup-ed), '
-                        'NOT the charter.\n'
-                        '  report — a completion/rejection record. Belongs in '
-                        'JOURNAL.md, NOT the charter.')
-            if kind == 'report':
-                return ('NOT committed — completion/rejection records do not '
-                        'belong in the charter: they constrain no future '
-                        'decision, and every conversation would pay for the '
-                        'text every turn. Append a dated entry to JOURNAL.md '
-                        'instead. If the text also contains a binding rule, '
-                        'commit THAT rule alone with kind=invariant.')
-            if kind == 'lesson':
-                routed = _route_lesson_to_memory(
-                    project_path, decision, current_conv_id,
-                    into_memory=(fn_args.get('into_memory') or ''))
-                if routed.get('ok'):
-                    action = routed.get('action')
-                    mid = routed.get('memory_id', '')
-                    if action == 'already_present':
-                        return (f'Already recorded — this lesson is already in '
-                                f'project memory \'{mid}\'. The charter was '
-                                'NOT grown. The memory surfaces via relevance '
-                                'prefetch when a conversation works on this '
-                                'topic.')
-                    if action == 'updated':
-                        return (f'Folded into existing project memory \'{mid}\' '
-                                f'({routed.get("via", "")}), NOT the charter. '
-                                'It surfaces via relevance prefetch when a '
-                                'conversation works on this topic.')
-                    resp = (f'Saved as new project memory \'{mid}\', NOT the '
-                            'charter. It surfaces via relevance prefetch when '
-                            'a conversation works on this topic.')
-                    cands = routed.get('candidates') or []
-                    if cands:
-                        listing = '; '.join(
-                            f"{c['name']!r} (id {c['id']})" for c in cands)
-                        resp += ('\n\nClosest existing project memories: '
-                                 + listing
-                                 + '. If this lesson IS a variant of one of '
-                                 'them, retry with into_memory=<id> to fold '
-                                 'it in instead of keeping a separate file.')
-                    return resp
-                return ('Error: could not route the lesson to project memory '
-                        f'({routed.get("error", "unknown")}).')
-            summary = (fn_args.get('summary') or '').strip()
-            if not summary:
-                return ('Error: an invariant commit requires `summary` — ONE '
-                        'line stating the binding rule itself (e.g. '
-                        '"Credential redaction is a fail-closed whitelist; '
-                        'never revert to name-based exclusion"). The per-turn '
-                        'injection renders ONLY the summary; `decision` keeps '
-                        'the full evidence.')
-            ev = fn_args.get('expected_version')
-            res = commit_charter(
-                project_path, add_decision=decision,
-                decision_kind='invariant', summary=summary,
-                updated_by_conv=current_conv_id,
-                expected_version=(int(ev) if isinstance(ev, (int, float))
-                                  or (isinstance(ev, str) and ev.isdigit())
-                                  else None),
-                resolves_proposal=(fn_args.get('resolves_proposal') or '').strip())
-            if res.get('ok'):
-                return (f'Invariant committed to the charter (version '
-                        f'{res.get("version")}). Every sibling conversation '
-                        f'now reads its summary line as shared intent; the '
-                        f'full text is available via project_charter_read. A '
-                        f'human can still edit or remove it later.')
-            if res.get('error') == 'version_conflict':
-                return ('NOT committed — the charter changed since you read it '
-                        f'(current version {res.get("current_version")}). '
-                        'Re-read it with project_charter_read and retry.')
-            return f'Error: could not commit decision ({res.get("error", "unknown")}).'
+            # HUMAN-ONLY since 2026-07-30 (owner-directed, reversing the
+            # 2026-07-12 de-gating): a charter always requires human review.
+            # The tool is no longer in CHARTER_TOOLS, so a well-formed turn
+            # cannot reach here — but a model that learned the name from an
+            # older transcript can still emit the call, and it deserves a
+            # reason rather than an opaque unknown-tool error.
+            return (
+                'project_charter_commit is no longer available to agents: the '
+                'charter is human-reviewed, so nothing lands in it '
+                'unilaterally. Use project_charter_propose to put this in front '
+                'of the human — the proposal is recorded and they approve it. '
+                'Your work does not wait on that; continue, and record what you '
+                'actually did in JOURNAL.md. For a methodology lesson (how to '
+                'work rather than a fact about this codebase), use '
+                'create_memory instead.')
         return f"Error: Unknown charter tool '{fn_name}'"
     except Exception as e:
         logger.warning('[Charter] tool %s failed: %s', fn_name, e, exc_info=True)

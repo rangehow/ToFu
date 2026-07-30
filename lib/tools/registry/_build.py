@@ -187,7 +187,10 @@ def _build_conv_ref(ctx: ToolContext) -> list[dict]:
         tools = list(CONV_REF_TOOLS)
         # Project Charter tools (Pillar #2): the shared north star. Only in
         # project mode (a charter is per-project) — read + propose. Commit is
-        # human-gated and is NEVER exposed as an agent tool.
+        # human-gated and is NEVER exposed as an agent tool. (Until 2026-07-30
+        # this comment was FALSE: CHARTER_TOOLS shipped the commit tool too,
+        # so the code read as safe while an agent could write shared intent
+        # unreviewed. CHARTER_TOOLS is now the enforcement point.)
         if ctx.project_enabled and ctx.project_path:
             from lib.tools import BOARD_TOOLS, CHARTER_TOOLS, PEER_TOOLS
             tools += list(CHARTER_TOOLS)
@@ -440,18 +443,17 @@ def _register_builtins() -> None:
         ToolSpec('conv_ref', _build_conv_ref, phase='base',
                  provides=frozenset({'list_conversations', 'get_conversation',
                                      'project_charter_read', 'project_charter_propose',
-                                     'project_charter_commit',
                                      'project_board_read', 'project_board_post',
                                      'project_board_claim', 'project_board_complete',
                                      'project_board_block',
                                      'project_peer_status', 'project_feed_read',
                                      'project_message', 'project_intervene'}),
-                 # project_charter_commit appends a decision that EVERY sibling
-                 # conversation of the project then reads as shared intent —
-                 # the widest-blast-radius write in this family, so it is
-                 # approval-eligible. propose/board/peer only queue advisory
-                 # items a human or peer can drop, so they stay parallel.
-                 write_tools=frozenset({'project_charter_commit'}),
+                 # No write_tools: every remaining tool in this family only
+                 # READS, or queues an advisory item a human/peer can drop.
+                 # project_charter_commit used to live here — it was the widest
+                 # blast radius in the family (every sibling reads a committed
+                 # decision as shared intent), and it is now human-only.
+                 write_tools=frozenset(),
                  idempotent_tools=frozenset({'list_conversations', 'get_conversation',
                                              'project_charter_read', 'project_board_read',
                                              'project_peer_status', 'project_feed_read'}),

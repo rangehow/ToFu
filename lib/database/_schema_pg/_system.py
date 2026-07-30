@@ -217,12 +217,13 @@ def _init_system_schema(conn):
         PROJECT_WATCH_ITEMS, PROJECT_WATCH_RESPONSES)
     create_if_absent(conn, PROJECT_WATCH_ITEMS, table_exists=_table_exists)
     create_if_absent(conn, PROJECT_WATCH_RESPONSES, table_exists=_table_exists)
-    # Migration: promotion-audit columns backing the COMPUTED three-state
-    # promotion verdict (goal_promotion_state). Pre-existing rows default to
-    # ''/0 → promoted_at=0 reads as "never promoted", so an old row can never
-    # fabricate a false "diverged" verdict. Added 2026-07.
-    cur.execute("ALTER TABLE project_watch_items ADD COLUMN IF NOT EXISTS promoted_text TEXT NOT NULL DEFAULT ''")
-    cur.execute('ALTER TABLE project_watch_items ADD COLUMN IF NOT EXISTS promoted_at BIGINT NOT NULL DEFAULT 0')
+    # NOTE (2026-07-30): the promoted_text / promoted_at columns added here in
+    # 2026-07 were DROPPED from the Core schema — they backed the three-state
+    # goal promotion verdict, and a goal is no longer copied into the charter
+    # (it injects directly from the watch lane), so divergence is not a
+    # reachable state. Deliberately NOT issuing a DROP COLUMN: on an
+    # already-migrated database they are inert (NOT NULL with defaults, no
+    # reader, no writer), and dropping columns on a live table buys nothing.
     cur.execute('CREATE INDEX IF NOT EXISTS idx_project_watch_items_path ON project_watch_items(project_path, updated_at DESC)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_project_watch_resp_item_seq ON project_watch_responses(item_id, seq DESC)')
 

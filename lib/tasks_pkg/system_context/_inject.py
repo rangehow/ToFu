@@ -703,6 +703,42 @@ Round N+3, a2's update lands. Synthesise the full picture for the user.
         else:
             _ctx_suppressed('charter', 'empty')
 
+    # ★ 4.455 Project GOALS (Status & Focus, Pillar #7) — the human's standing
+    #   intent, injected DIRECTLY from the watch lane.
+    #
+    #   Deliberately its OWN block rather than a copy inside the charter
+    #   (owner-directed 2026-07-30: "goals are goals, they should work without
+    #   being in the charter"). The morning's design promoted a goal into
+    #   charter.content, which meant TWO copies of one sentence and therefore a
+    #   diverged state, a replacement preview and a version gate to reconcile
+    #   them. One copy needs none of that.
+    #
+    #   Only kind='goal' + status='open' ships — concerns/questions remain
+    #   human-facing-only (see the source-grep guard in
+    #   tests/test_project_watch_lane.py). Empty lane ⇒ '' ⇒ zero prompt weight.
+    #   Rides the TRUE tail on the SAME cache-safe seam as the charter/board so
+    #   editing a goal never re-bills the cached system floor.
+    _GOALS_MARKER = '[PROJECT GOALS]'
+    if not (project_enabled and project_path):
+        _ctx_suppressed('goals', 'project_off')
+    elif _GOALS_MARKER in _existing:
+        _ctx_suppressed('goals', 'marker_present')
+    if project_enabled and project_path and _GOALS_MARKER not in _existing:
+        try:
+            from lib.conversations.project_watch import (
+                render_goals_injection_block)
+            _goals_block = render_goals_injection_block(project_path)
+        except Exception as e:
+            logger.debug('[Inject] goals build failed conv=%s: %s',
+                         (_cid or '?')[:8], e)
+            _goals_block = ''
+        if _goals_block:
+            _goals_spliced = _wrap_system_reminder(_goals_block)
+            _refresh_tail_block(messages, _goals_spliced, _GOALS_MARKER)
+            _ctx_injected('goals', len(_goals_spliced))
+        else:
+            _ctx_suppressed('goals', 'empty')
+
     # ★ 4.46 Project Board (auto-coordination — Pillar #3).
     #   The mechanism that makes conversations STOP colliding/duplicating: the
     #   board's open/claimed/done epics injected as their own cache block, with

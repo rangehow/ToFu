@@ -90,6 +90,41 @@ def _stub_push(monkeypatch):
 
 
 def _commit(flask_app, args):
+    """Commit through the HUMAN route — the only remaining charter writer.
+
+    RETARGETED 2026-07-30. This helper used to invoke the
+    ``project_charter_commit`` AGENT tool, which was withdrawn when the charter
+    became human-review-only. The STORAGE contract it exercised (kind + summary
+    land on the decision; the injection renders the summary; index= reads one
+    entry) is unchanged and still worth guarding, so those tests now drive
+    ``commit_charter`` directly.
+
+    The tool's POLICY layer — reject a missing kind, reject kind=report toward
+    JOURNAL.md, route kind=lesson to project memory — went away WITH the tool.
+    Those tests are reversed in place below to assert the refusal, and the
+    lesson-dedup measurement they encoded is preserved in
+    ``_route_lesson_to_memory``'s docstring against a future re-point of
+    ``create_memory`` (tracked as follow-up debt, not folded in here).
+    """
+    from lib.conversations.project_charter import commit_charter
+    kind = (args.get('kind') or '').strip().lower()
+    if kind and kind != 'invariant':
+        raise AssertionError(
+            f'_commit only drives the invariant/storage path; kind={kind!r} '
+            f'was a POLICY behaviour of the withdrawn agent tool')
+    with flask_app.app_context():
+        res = commit_charter(_PROJ, add_decision=args.get('decision'),
+                             decision_kind='invariant',
+                             summary=args.get('summary', ''),
+                             updated_by_conv='conv-test',
+                             resolves_proposal=args.get('resolves_proposal', ''))
+    if res.get('ok'):
+        return f'committed to the charter (version {res.get("version")})'
+    return f'Error: {res.get("error", "unknown")}'
+
+
+def _agent_commit_attempt(flask_app, args):
+    """Call the WITHDRAWN agent tool — used by the reversed policy tests."""
     from lib.conversations.project_charter import execute_charter_tool
     with flask_app.app_context():
         return execute_charter_tool('project_charter_commit', args,
@@ -203,151 +238,53 @@ def test_a_legacy_decision_without_summary_still_renders_a_headline(flask_app):
     assert 'x' * 600 not in inj
 
 
-def test_invariant_without_summary_is_rejected(flask_app):
-    resp = _commit(flask_app, {'kind': 'invariant', 'decision': _FULL_DECISION})
-    assert 'summary' in resp, resp
-    assert _decisions(flask_app) == []
+def test_the_kind_policy_layer_went_away_with_the_agent_tool(flask_app):
+    """REVERSED IN PLACE 2026-07-30 — replaces eleven tests of a withdrawn tool.
 
+    The kind-routing POLICY (2026-07-28) lived inside the
+    ``project_charter_commit`` agent tool: reject a commit with no ``kind``;
+    reject ``kind=report`` toward JOURNAL.md; route ``kind=lesson`` to project
+    memory with three-channel dedup; require ``summary`` on an invariant. All of
+    it was reachable ONLY from that tool, and the tool was withdrawn because a
+    charter always requires human review (owner-directed 2026-07-30).
 
-def test_missing_kind_is_rejected_with_guidance(flask_app):
-    resp = _commit(flask_app, {'decision': _FULL_DECISION, 'summary': _RULE})
-    assert 'invariant' in resp and 'lesson' in resp and 'report' in resp, resp
-    assert _decisions(flask_app) == []
+    So the eleven tests that drove it are collapsed here rather than kept green
+    against code no one can reach. What they asserted is recorded so it is not
+    lost:
 
+      * missing kind / missing summary / kind=report → rejected with guidance
+      * kind=lesson → project memory, never the charter, folding same-topic
+        variants into ONE memory (measured: real same-family lesson pairs score
+        ~0.10 lexical containment, which is WHY the explicit ``into_memory``
+        channel exists — a lexical threshold alone can never catch a semantic
+        family)
 
-# ── report path ──────────────────────────────────────────────────────────
+    The lesson path's measurement survives in ``_route_lesson_to_memory``'s
+    docstring, which is now unreachable and labelled as such. Agents still
+    record lessons via ``create_memory``; re-pointing that helper at the dedup
+    logic is follow-up debt, deliberately NOT folded into this change.
 
-def test_report_is_rejected_toward_journal(flask_app):
-    resp = _commit(flask_app, {'kind': 'report',
-                               'decision': 'TTFT 看门狗已落地 commit 69cd968c'})
-    assert 'JOURNAL' in resp, resp
-    assert _decisions(flask_app) == []
+    What this test pins is the only thing still true: the tool refuses, and it
+    refuses by NAME so the refusal cannot be mistaken for a crash."""
+    for args in (
+        {'decision': _FULL_DECISION, 'summary': _RULE},           # no kind
+        {'kind': 'invariant', 'decision': _FULL_DECISION},        # no summary
+        {'kind': 'report', 'decision': 'TTFT watchdog shipped.'},  # report
+        {'kind': 'lesson', 'decision': _LESSON_A},                # lesson
+    ):
+        out = _agent_commit_attempt(flask_app, args)
+        assert 'project_charter_propose' in out, (
+            f'the refusal must name the surviving route; got: {out!r}')
+        assert _decisions(flask_app) == [], (
+            f'a withdrawn-tool call must never grow the charter; args={args!r}')
 
-
-# ── lesson path ──────────────────────────────────────────────────────────
-
-def test_lesson_goes_to_memory_not_charter(flask_app):
-    resp = _commit(flask_app, {'kind': 'lesson', 'decision': _LESSON_A})
-    assert 'memory' in resp.lower(), resp
-    assert _decisions(flask_app) == [], 'a lesson MUST NOT grow the charter'
-    mems = _project_memories()
-    assert len(mems) == 1, f'expected exactly one project memory, got {len(mems)}'
-    assert _LESSON_A in (mems[0].get('body') or '')
-
-
-def test_lesson_is_searchable_after_routing(flask_app):
-    """Owner's write-then-verify order, as a standing guard: a routed lesson
-    must be findable by the SAME BM25 search the prefetch uses."""
-    _commit(flask_app, {'kind': 'lesson', 'decision': _LESSON_A})
-    from lib.memory.relevance._search import search_memories_scored
-    hits = search_memories_scored('守卫 断言 结果 实现', _PROJ, top_k=3)
-    proj = [m for sc, m in hits if m.get('scope') == 'project']
-    assert proj, 'the routed lesson is not searchable — it would be invisible'
-
-
-def test_same_family_lessons_fold_via_explicit_target(flask_app):
-    """THE dedup directive, primary channel: the model READ the family memory
-    (prefetch/search) while working, so when committing a new variant it
-    passes into_memory — even when the texts share almost no vocabulary
-    (measured: real same-family pairs score ~0.10 containment; a lexical
-    threshold can NEVER catch a semantic family)."""
-    _commit(flask_app, {'kind': 'lesson', 'decision': _LESSON_A})
-    family_id = _project_memories()[0]['id']
-    resp = _commit(flask_app, {'kind': 'lesson', 'decision': _LESSON_B,
-                               'into_memory': family_id})
-    assert 'folded' in resp.lower(), resp
-    mems = _project_memories()
-    assert len(mems) == 1, (f'same-family lessons must fold into ONE memory, '
-                            f'got {len(mems)} files')
-    body = mems[0].get('body') or ''
-    assert _LESSON_A in body and _LESSON_B in body
-
-
-def test_explicit_into_memory_also_accepts_the_memory_name(flask_app):
-    _commit(flask_app, {'kind': 'lesson', 'decision': _LESSON_A})
-    name = _project_memories()[0].get('name') or ''
-    assert name
-    resp = _commit(flask_app, {'kind': 'lesson', 'decision': _LESSON_B,
-                               'into_memory': name})
-    assert 'folded' in resp.lower(), resp
-    assert len(_project_memories()) == 1
-
-
-def test_unknown_into_memory_is_rejected_without_writing_anything(flask_app):
-    _commit(flask_app, {'kind': 'lesson', 'decision': _LESSON_A})
-    resp = _commit(flask_app, {'kind': 'lesson', 'decision': _LESSON_B,
-                               'into_memory': 'no-such-memory'})
-    assert 'no-such-memory' in resp, resp
-    mems = _project_memories()
-    assert len(mems) == 1
-    assert _LESSON_B not in (mems[0].get('body') or '')
-
-
-def test_near_duplicate_autofolds_without_an_explicit_target(flask_app):
-    """Channel 2: heavy vocabulary overlap (>= 0.5 containment) folds
-    automatically — verbatim-ish repeats never create a second file."""
-    _commit(flask_app, {'kind': 'lesson', 'decision': _LESSON_A})
-    almost_same = _LESSON_A + ' 补充:违者守卫会在实现重写后静默失效。'
-    resp = _commit(flask_app, {'kind': 'lesson', 'decision': almost_same})
-    assert 'folded' in resp.lower(), resp
-    mems = _project_memories()
-    assert len(mems) == 1
-    assert almost_same in (mems[0].get('body') or '')
-
-
-def test_create_response_advises_the_closest_candidates(flask_app):
-    """Channel 3: when a new memory IS created, the response names the
-    closest existing memories so the model can immediately fold explicitly —
-    a missed fold is self-correcting, not silent."""
-    _commit(flask_app, {'kind': 'lesson', 'decision': _LESSON_A})
-    resp = _commit(flask_app, {'kind': 'lesson', 'decision': _LESSON_B})
-    assert 'into_memory' in resp, resp
-
-
-def test_cross_topic_lesson_gets_its_own_memory(flask_app):
-    """COMPLEMENT: dedup must not become "everything merges into one file" —
-    a genuinely different topic creates a new memory."""
-    _commit(flask_app, {'kind': 'lesson', 'decision': _LESSON_A})
-    _commit(flask_app, {'kind': 'lesson', 'decision': _LESSON_C})
-    mems = _project_memories()
-    assert len(mems) == 2, (f'cross-topic lessons must stay separate, got '
-                            f'{len(mems)} files')
-
-
-def test_repeating_the_same_lesson_is_a_noop(flask_app):
-    _commit(flask_app, {'kind': 'lesson', 'decision': _LESSON_A})
-    resp = _commit(flask_app, {'kind': 'lesson', 'decision': _LESSON_A})
-    assert 'already' in resp.lower(), resp
-    mems = _project_memories()
-    assert len(mems) == 1
-    assert (mems[0].get('body') or '').count(_LESSON_A[:60]) == 1
+    # And nothing leaked into project memory either — the lesson route is gone,
+    # not silently still-running.
+    assert _LESSON_A not in '\n'.join(
+        (m.get('body') or '') for m in _project_memories())
 
 
 # ── Negative controls ────────────────────────────────────────────────────
-
-def test_NC1_short_circuiting_the_memory_route_breaks_the_lesson_test(flask_app):
-    """NEUTER the route body (return ok WITHOUT writing any memory) ->
-    test_lesson_goes_to_memory_not_charter's memory assertion must fail."""
-    def run(_mod=None):
-        resp = _commit(flask_app, {'kind': 'lesson', 'decision': _LESSON_A})
-        assert 'memory' in resp.lower()
-        mems = _project_memories()
-        assert not mems, (
-            'NC-1 did not bite: a memory exists even though the route was '
-            'short-circuited — the lesson test may be passing vacuously')
-
-    _patch_restore(
-        _CHARTER_SRC,
-        "    try:\n        from lib.memory.storage import (create_memory, "
-        "list_memories,\n"
-        "                                        update_memory)",
-        "    try:\n        return {'ok': True, 'action': 'created', "
-        "'memory_id': 'nc1-fake'}\n"
-        "        from lib.memory.storage import (create_memory, "
-        "list_memories,\n"
-        "                                        update_memory)",
-        run)
-
 
 def test_NC3_stripping_the_index_branch_breaks_per_entry_read(flask_app):
     """NEUTER the index branch (fall through to the default headline list)

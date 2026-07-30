@@ -715,22 +715,23 @@ PROJECT_STATUS_SNAPSHOTS = define_table(
 # (item_id). status: open|resolved.
 #
 # Promotion columns — AUDIT TRAIL ONLY, never the UI's source of truth:
-#   `promoted`      — a one-shot "a promotion was performed" marker. It is NOT
-#                     a live answer to "is this reaching agents right now": the
-#                     charter can be deleted, its north star re-edited, or a
-#                     committed decision FIFO-evicted, and this boolean would
+#   `promoted`      — a one-shot "a promotion was performed" marker for a
+#                     concern/question. It is NOT a live answer to "is this
+#                     reaching agents right now": the charter can be deleted or
+#                     a committed decision FIFO-evicted, and this boolean would
 #                     still read 1. (Measured: promoted=1 while read_charter()
-#                     reported exists=False.) The live three-state answer is
-#                     COMPUTED at read time by
-#                     project_watch.goal_promotion_state() — see that function.
-#   `promoted_text` — the exact text written into the charter at promotion time.
-#                     This is what makes DIVERGENCE diagnosable rather than
-#                     merely detectable: comparing it against both the current
-#                     item text and the current charter content says WHICH SIDE
-#                     was edited. Without it, "never promoted" and "promoted
-#                     then diverged" are textually indistinguishable.
-#   `promoted_at`   — epoch ms of that promotion (0 = never promoted; this is
-#                     the field that separates the two states above).
+#                     reported exists=False.) The live answer is COMPUTED at
+#                     read time by project_watch.promotion_state().
+#
+#                     A GOAL has no promotion at all: every OPEN goal is
+#                     injected into every sibling conversation's prompt by
+#                     project_watch.render_goals_injection_block(), so its
+#                     presence is decided by (kind, status) and nothing else.
+#                     The former `promoted_text` / `promoted_at` receipt columns
+#                     were DROPPED with that design (2026-07-30): they existed
+#                     solely to say WHICH SIDE moved when a goal's text and the
+#                     charter's copy of it diverged, and a goal is no longer
+#                     copied anywhere, so divergence is not a reachable state.
 #
 # HUMAN-FACING ONLY — never injected into sibling agent prompts. See
 # lib/conversations/project_watch.py.
@@ -742,8 +743,6 @@ PROJECT_WATCH_ITEMS = define_table(
     sa.Column('text', sa.Text, nullable=False, server_default=''),
     sa.Column('status', sa.Text, nullable=False, server_default='open'),
     sa.Column('promoted', sa.Integer, nullable=False, server_default=sa.text('0')),
-    sa.Column('promoted_text', sa.Text, nullable=False, server_default=''),
-    sa.Column('promoted_at', bigint_column(), nullable=False, server_default=sa.text('0')),
     sa.Column('response_fingerprint', sa.Text, nullable=False, server_default=''),
     sa.Column('created_by_conv', sa.Text, nullable=False, server_default=''),
     sa.Column('created_at', bigint_column(), nullable=False, server_default=sa.text('0')),

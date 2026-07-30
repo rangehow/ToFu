@@ -3563,6 +3563,25 @@ var _i18n = {
   'projectBrain.watchNotAddressed': { zh: '尚未回应', en: 'Not addressed yet' },
   'projectBrain.watchResolved': { zh: '已解决', en: 'resolved' },
   'projectBrain.watchPromoted': { zh: '已进章程', en: 'in charter' },
+  // Goal ↔ north-star convergence: a goal IS the project goal, so its badge
+  // says what actually happens (every conversation reads it) instead of naming
+  // the storage ("charter"). The three states are COMPUTED against the live
+  // charter — see project_watch.goal_promotion_state.
+  'projectBrain.watchIsNorthStar': { zh: '每个会话都在读它', en: 'every conversation reads this' },
+  'projectBrain.watchDiverged': { zh: '已分歧', en: 'diverged' },
+  'projectBrain.watchDivergedItem': { zh: '你改了这张卡片，章程里还是较早的文字。', en: 'You edited this card; the charter still holds the earlier text.' },
+  'projectBrain.watchDivergedCharter': { zh: '章程里的目标在别处被改过，这张卡片是较早的文字。', en: 'The charter was edited elsewhere; this card holds the earlier text.' },
+  'projectBrain.watchDivergedBoth': { zh: '自提升以来两边都被改过。', en: 'Both sides were edited since this was promoted.' },
+  'projectBrain.watchSetAsGoal': { zh: '设为项目目标', en: 'Set as project goal' },
+  'projectBrain.watchReadopt': { zh: '查看差异并重新采用', en: 'Review & re-adopt' },
+  'projectBrain.watchSetTitle': { zh: '设为项目目标？', en: 'Set as the project goal?' },
+  'projectBrain.watchReplaceTitle': { zh: '替换项目目标？', en: 'Replace the project goal?' },
+  'projectBrain.watchReplaceOld': { zh: '当前目标（将被替换）', en: 'Current goal (will be replaced)' },
+  'projectBrain.watchReplaceNew': { zh: '将变成', en: 'Will become' },
+  'projectBrain.watchSetNote': { zh: '本项目的每一个会话，每一轮都会读到它。', en: 'Every conversation in this project reads this on every turn.' },
+  'projectBrain.watchReplaceStale': { zh: '你确认期间章程被改动了。', en: 'The charter changed while you were deciding.' },
+  'projectBrain.watchRecompare': { zh: '重新比较', en: 'Re-compare' },
+  'projectBrain.watchCancel': { zh: '取消', en: 'Cancel' },
   'projectBrain.watchRefresh': { zh: '重新评估', en: 'Re-check' },
   'projectBrain.watchPromote': { zh: '提升为章程', en: 'Promote to charter' },
   'projectBrain.watchResolveBtn': { zh: '标记解决', en: 'Resolve' },

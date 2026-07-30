@@ -21308,6 +21308,30 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
 .pb-watch-kind-badge{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;padding:1px 8px;border-radius:999px;color:var(--text-secondary);background:var(--bg-tertiary);border:1px solid var(--border)}
 .pb-watch-promoted,.pb-watch-status-badge{font-size:10.5px;color:var(--text-tertiary);padding:1px 7px;border:1px solid var(--border);border-radius:999px}
 .pb-watch-promoted{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,var(--border))}
+/* Diverged: amber, deliberately a different HUE from the accent-coloured
+   "reaching agents" pill. If the two shared a colour the three-state verdict
+   would read as two, which is the whole point of computing it. */
+.pb-watch-diverged{font-size:10.5px;padding:1px 7px;border-radius:999px;cursor:help;color:#92400e;background:rgba(245,158,11,0.14);border:1px solid rgba(217,119,6,0.45)}
+[data-theme="dark"] .pb-watch-diverged,
+html:not([data-theme="light"]):not([data-theme="tofu"]) .pb-watch-diverged{color:#fbbf24;background:rgba(251,191,36,0.12);border-color:rgba(251,191,36,0.4)}
+/* goal → north-star REPLACEMENT preview. The charter's content column is a
+   single slot, so promoting a goal REPLACES rather than appends — the human
+   must see what is about to be overwritten BEFORE it happens. */
+.pb-watch-replace{display:flex;flex-direction:column;gap:9px;margin-top:8px;padding:11px 12px;background:var(--bg-tertiary);border:1px solid rgba(217,119,6,0.4);border-radius:var(--pb-radius)}
+.pb-watch-replace-title{font-size:12.5px;font-weight:700;color:var(--text-primary)}
+.pb-watch-replace-cols{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.pb-watch-replace-single{grid-template-columns:1fr}
+@media (max-width:640px){.pb-watch-replace-cols{grid-template-columns:1fr}}
+.pb-watch-replace-col{display:flex;flex-direction:column;gap:4px;min-width:0}
+.pb-watch-replace-col-head{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-tertiary)}
+.pb-watch-replace-col-body{font-size:12px;line-height:1.5;color:var(--text-primary);white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;padding:7px 9px;border-radius:var(--pb-radius-sm);background:var(--pb-card-bg);border:1px solid var(--border);max-height:150px;overflow-y:auto}
+.pb-watch-replace-old .pb-watch-replace-col-body{opacity:0.72}
+.pb-watch-replace-new .pb-watch-replace-col-body{border-color:color-mix(in srgb,var(--accent) 40%,var(--border))}
+.pb-watch-replace-note{font-size:11px;color:var(--text-tertiary)}
+.pb-watch-replace-actions{display:flex;align-items:center;gap:8px;justify-content:flex-end}
+.pb-watch-replace-msg{flex:1;font-size:11px;color:var(--text-tertiary);min-width:0}
+.pb-watch-btn-confirm{color:#fff;background:var(--accent);border-color:var(--accent)}
+.pb-watch-btn-confirm:hover{color:#fff;background:var(--accent-hover);border-color:var(--accent-hover)}
 .pb-watch-item-text{font-size:13px;line-height:1.5;color:var(--text-primary);white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;font-weight:600}
 .pb-watch-response{font-size:12.5px;line-height:1.55;color:var(--text-primary);white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;padding:8px 10px;background:color-mix(in srgb,var(--bg-tertiary) 40%,transparent);border-radius:var(--pb-radius-sm)}
 .pb-watch-response-pending{color:var(--text-tertiary);font-style:italic}

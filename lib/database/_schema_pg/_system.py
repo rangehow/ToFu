@@ -217,6 +217,12 @@ def _init_system_schema(conn):
         PROJECT_WATCH_ITEMS, PROJECT_WATCH_RESPONSES)
     create_if_absent(conn, PROJECT_WATCH_ITEMS, table_exists=_table_exists)
     create_if_absent(conn, PROJECT_WATCH_RESPONSES, table_exists=_table_exists)
+    # Migration: promotion-audit columns backing the COMPUTED three-state
+    # promotion verdict (goal_promotion_state). Pre-existing rows default to
+    # ''/0 → promoted_at=0 reads as "never promoted", so an old row can never
+    # fabricate a false "diverged" verdict. Added 2026-07.
+    cur.execute("ALTER TABLE project_watch_items ADD COLUMN IF NOT EXISTS promoted_text TEXT NOT NULL DEFAULT ''")
+    cur.execute('ALTER TABLE project_watch_items ADD COLUMN IF NOT EXISTS promoted_at BIGINT NOT NULL DEFAULT 0')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_project_watch_items_path ON project_watch_items(project_path, updated_at DESC)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_project_watch_resp_item_seq ON project_watch_responses(item_id, seq DESC)')
 

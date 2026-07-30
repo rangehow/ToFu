@@ -7,7 +7,7 @@ goals — that the brain ADDRESSES on a recurring basis, keeping an append-only
 trail of its responses per item so the human can see how the answer to a
 concern DRIFTS over time.
 
-Owner-locked decisions (2026-07-08):
+Owner-locked decisions (2026-07-08; goal/north-star convergence 2026-07-30):
   1. **Human-facing-only, with ONE explicit bridge.** A watch item is authored
      by the HUMAN and is NEVER injected into sibling agent prompts (same
      source-grep guard as the status memory). The ONLY way an item reaches
@@ -16,11 +16,35 @@ Owner-locked decisions (2026-07-08):
      HUMAN action on a HUMAN-authored item (the human decides to promote their
      own watch item), distinct from an agent self-committing a decision. No
      auto-steering, no new inter-conv write, no fan-out.
+  1b. **kind=goal promotes to the charter's north-star ``content`` column, NOT
+     to a committed decision** (2026-07-30). Every kind used to funnel through
+     ``add_decision``, which put a GOAL into the decision list — subject to the
+     20-entry injection window and the 100-entry FIFO cap, i.e. exactly the
+     failure ``project_charter._NO_GOAL_NOTICE`` documents ("a goal committed as
+     a decision instead is subject to both, which is how one previously went
+     invisible"). Measured on the live project: 20 committed decisions, ZERO
+     carrying the ``[Goal`` prefix. The north star has its own column precisely
+     so it can never be evicted, so that is where a goal belongs.
+
+     A goal and the north star are therefore ONE concept with two surfaces, not
+     two things the human must reconcile. **Single-north-star semantics fall out
+     of that for free:** the verdict is ``norm(item.text) == norm(content)`` and
+     ``content`` is a single column, so AT MOST ONE goal can be "the north star"
+     as a matter of text equality — no uniqueness constraint, no writing back to
+     sibling rows, hence nothing that can drift out of sync. Promoting a second
+     goal is an EXPLICIT REPLACEMENT (the caller previews both texts first);
+     the displaced goal simply becomes ``diverged``.
   2. **Append-only response trail per item** (bounded), not latest-only — the
      drift is the signal.
   3. **Cadence = on-tab-open + event-driven now** (reuse the staleness gate so a
      quiescent project costs nothing). The closed-panel scheduler cadence is a
      deliberately-deferred follow-up.
+  4. **The promotion verdict is COMPUTED, never stored.** The ``promoted``
+     column is a one-shot audit marker that cannot answer "is this reaching
+     agents right now" — measured: ``promoted=1`` while ``read_charter()``
+     reported ``exists=False``, i.e. the badge asserted something already
+     untrue. ``goal_promotion_state`` recomputes the verdict against the LIVE
+     charter on every read. See its docstring for the three states.
 
 All functions key STRICTLY on ``project_path`` / ``item_id`` — never a
 process-global. Best-effort throughout; the address generator never raises.
@@ -41,14 +65,23 @@ logger = get_logger(__name__)
 
 # Keep at most this many responses per item (bounded trail; pruned on insert).
 _RESPONSES_KEEP = 100
-# Soft cap on a human-authored item's text (keeps a row cheap; a watch item is
-# a prompt, not a document).
-_ITEM_TEXT_MAX = 2000
+# Soft cap on a human-authored item's text. Deliberately EQUAL to
+# project_charter._CONTENT_MAX_CHARS: a goal and the charter's north star are
+# one concept with two surfaces (see decision 1b), so two different ceilings on
+# the same text would mean the "adopt the charter's side" direction of a
+# diverged goal could silently truncate. Equal ceilings delete that branch
+# instead of handling it. Guarded by test_item_text_cap_matches_charter_content.
+_ITEM_TEXT_MAX = 8000
 # Bounded response length.
 _RESPONSE_MAX_CHARS = 2000
 
 VALID_KINDS = ('concern', 'question', 'goal')
 VALID_STATUSES = ('open', 'resolved')
+
+# The three COMPUTED promotion states (decision 4). Never persisted.
+PROMOTION_NONE = 'none'          # no promotion on record → offer "set as goal"
+PROMOTION_ACTIVE = 'active'      # item text IS the live charter text → in prompts
+PROMOTION_DIVERGED = 'diverged'  # promoted once, but the two sides no longer match
 
 # Serializes the read-max-then-insert of the per-item monotonic seq.
 _response_lock = threading.Lock()
@@ -116,12 +149,15 @@ def add_watch_item(project_path: str, kind: str, text: str, *,
               kind=kind)
     return {'ok': True, 'item': {
         'item_id': item_id, 'kind': kind, 'text': text, 'status': 'open',
-        'promoted': False, 'created_at': ts, 'updated_at': ts, 'responses': []}}
+        'promotedAudit': False, 'promotionState': PROMOTION_NONE,
+        'divergedSide': '', 'promoted_text': '', 'promoted_at': 0,
+        'created_at': ts, 'updated_at': ts, 'responses': []}}
 
 
 def _get_item_row(db, item_id: str):
     return db.execute(
         'SELECT item_id, project_path, kind, text, status, promoted, '
+        '       promoted_text, promoted_at, '
         '       response_fingerprint, created_by_conv, created_at, updated_at '
         'FROM project_watch_items WHERE item_id=?', (item_id,)).fetchone()
 
@@ -160,7 +196,15 @@ def edit_watch_item(item_id: str, *, text: str | None = None,
 
 
 def set_watch_status(item_id: str, status: str) -> dict:
-    """Mark an item open|resolved. Returns ``{'ok', 'error'?}``."""
+    """Mark an item open|resolved. Returns ``{'ok', 'error'?}``.
+
+    Deliberately does NOT touch the charter, even for a goal that is currently
+    the north star. ``resolved`` means "stop re-addressing this on the recurring
+    cadence" — orthogonal to "which text is the project's goal". Clearing the
+    north star here would force the human to lie about a goal being finished in
+    order to change it, and would silently delete shared intent as a side effect
+    of a bookkeeping action. The north star is human-owned; it changes only
+    through an explicit promotion or the Charter panel."""
     status = (status or '').strip().lower()
     if not item_id:
         return {'ok': False, 'error': 'no item'}
@@ -182,7 +226,13 @@ def set_watch_status(item_id: str, status: str) -> dict:
 
 
 def delete_watch_item(item_id: str) -> dict:
-    """Delete a watch item AND its response trail. Returns ``{'ok', 'error'?}``."""
+    """Delete a watch item AND its response trail. Returns ``{'ok', 'error'?}``.
+
+    Deliberately does NOT touch the charter. Deleting the tracking CARD must not
+    clear the project's north star: the charter column is human-owned and is
+    read by every sibling conversation, so removing a personal watch card would
+    otherwise silently strip shared intent from every prompt. Removing the goal
+    itself is done in the Charter panel."""
     if not item_id:
         return {'ok': False, 'error': 'no item'}
     try:
@@ -220,14 +270,109 @@ def _response_trail(db, item_id: str, limit: int = 20) -> list[dict]:
     return out
 
 
+# ══════════════════════════════════════════════════════════════════════
+#  The COMPUTED promotion verdict (decision 4)
+# ══════════════════════════════════════════════════════════════════════
+
+def _norm(text: str) -> str:
+    """Normalize text for promotion-equality comparison.
+
+    Strips outer whitespace and collapses every internal whitespace run
+    (including newlines) to one space, so a reflowed paragraph still counts as
+    the same goal. Case is deliberately PRESERVED — capitalization carries
+    meaning in a goal statement, and folding it would call two genuinely
+    different texts equal.
+    """
+    return ' '.join((text or '').split())
+
+
+def goal_promotion_state(item: dict, charter: dict) -> dict:
+    """Compute — never read — whether this item is currently reaching agents.
+
+    The stored ``promoted`` boolean cannot answer this: it records that a
+    promotion once happened, not that its effect survives. The charter can be
+    deleted, its north star re-edited from the Charter panel, or a committed
+    decision FIFO-evicted; in every one of those cases the boolean still reads 1
+    while nothing reaches the model. (Measured on the live project: promoted=1,
+    read_charter() exists=False, injection block 0 bytes.)
+
+    Three states, and the third is why ``promoted_at`` / ``promoted_text`` exist:
+    "never promoted" and "promoted, then one side was edited" are textually
+    identical (both are ``text != content``) — only a persisted promotion
+    RECEIPT separates them. Reporting a diverged goal as ``none`` would show the
+    human a "set as goal" button whose click silently overwrites the north star
+    they just edited elsewhere.
+
+    ``diverged_side`` names WHO moved, so the UI can say it rather than merely
+    reporting a mismatch:
+      ``item``    — the charter still holds what we promoted; the item text moved.
+      ``charter`` — the item still holds what we promoted; the charter moved.
+      ``both``    — neither side matches the receipt.
+
+    Returns ``{state, divergedSide, charterText}``. Pure; never raises.
+    """
+    kind = (item or {}).get('kind') or 'concern'
+    promoted_at = int((item or {}).get('promoted_at') or 0)
+    promoted_text = (item or {}).get('promoted_text') or ''
+    item_text = (item or {}).get('text') or ''
+    charter = charter or {}
+
+    # A goal's live counterpart is the north-star column; every other kind's is
+    # the committed-decision list.
+    if kind == 'goal':
+        live_texts = [charter.get('content') or '']
+    else:
+        live_texts = []
+        for d in (charter.get('decisions') or []):
+            txt = (d.get('text') if isinstance(d, dict) else str(d)) or ''
+            if txt:
+                live_texts.append(txt)
+
+    norm_item = _norm(item_text)
+    live_norms = [_norm(t) for t in live_texts if _norm(t)]
+    if norm_item and norm_item in live_norms:
+        return {'state': PROMOTION_ACTIVE, 'divergedSide': '',
+                'charterText': charter.get('content') or ''}
+
+    # Not currently live. Only a promotion receipt can distinguish "never
+    # promoted" from "promoted then diverged".
+    if not promoted_at:
+        return {'state': PROMOTION_NONE, 'divergedSide': '',
+                'charterText': charter.get('content') or ''}
+
+    norm_receipt = _norm(promoted_text)
+    charter_holds_receipt = bool(norm_receipt) and norm_receipt in live_norms
+    item_holds_receipt = bool(norm_receipt) and norm_receipt == norm_item
+    if charter_holds_receipt and not item_holds_receipt:
+        side = 'item'
+    elif item_holds_receipt and not charter_holds_receipt:
+        side = 'charter'
+    else:
+        side = 'both'
+    return {'state': PROMOTION_DIVERGED, 'divergedSide': side,
+            'charterText': charter.get('content') or ''}
+
+
 def _row_to_item(db, row, *, with_responses: bool = True,
-                 resp_limit: int = 20) -> dict:
+                 resp_limit: int = 20, charter: dict | None = None) -> dict:
     item = {
         'item_id': row['item_id'], 'kind': row['kind'], 'text': row['text'] or '',
-        'status': row['status'] or 'open', 'promoted': bool(row['promoted']),
+        'status': row['status'] or 'open',
+        # AUDIT ONLY — never render this. `promotionState` below is the live
+        # verdict; see goal_promotion_state. Kept in the payload (renamed from
+        # the bare `promoted` key it used to occupy) so a stale consumer that
+        # blindly renders a truthy flag fails loudly on a missing key instead of
+        # silently resurrecting the lying badge.
+        'promotedAudit': bool(row['promoted']),
+        'promoted_text': row['promoted_text'] if 'promoted_text' in row.keys() else '',
+        'promoted_at': int((row['promoted_at']
+                            if 'promoted_at' in row.keys() else 0) or 0),
         'created_at': int(row['created_at'] or 0),
         'updated_at': int(row['updated_at'] or 0),
     }
+    verdict = goal_promotion_state(item, charter or {})
+    item['promotionState'] = verdict['state']
+    item['divergedSide'] = verdict['divergedSide']
     if with_responses:
         item['responses'] = _response_trail(db, row['item_id'], limit=resp_limit)
     return item
@@ -236,14 +381,33 @@ def _row_to_item(db, row, *, with_responses: bool = True,
 def list_watch_items(project_path: str, *, include_resolved: bool = True,
                      resp_limit: int = 20) -> dict:
     """List watch items for a project (newest-updated-first) with their response
-    trails. Returns ``{'items': [...]}``; empty on no project / error."""
+    trails and their LIVE promotion verdict.
+
+    The charter is read ONCE here and threaded into every row, so the verdict is
+    computed against the same charter snapshot for the whole list (a per-row read
+    could straddle a concurrent charter edit and report two items as the north
+    star). Returns ``{'items': [...], 'charterVersion': int,
+    'charterContent': str}`` — the version is what the caller must echo back as
+    ``expectedVersion`` when promoting a goal, and the content is what the
+    replacement preview renders as the "will be replaced" side (no extra
+    round-trip). Empty on no project / error."""
     from lib.conversations.project_feed import normalize_project_path
     project_path = normalize_project_path(project_path)
     if not project_path:
-        return {'items': []}
+        return {'items': [], 'charterVersion': 0, 'charterContent': ''}
+    charter = {}
+    try:
+        from lib.conversations.project_charter import read_charter
+        charter = read_charter(project_path)
+    except Exception as e:
+        # Degrade to "no charter": every item then reads as never-promoted /
+        # diverged rather than falsely claiming to be live.
+        logger.warning('[Watch] charter read failed proj=%.40r: %s',
+                       project_path, e)
     try:
         db = get_thread_db(DOMAIN_CHAT)
         sql = ('SELECT item_id, project_path, kind, text, status, promoted, '
+               '       promoted_text, promoted_at, '
                '       response_fingerprint, created_by_conv, created_at, updated_at '
                'FROM project_watch_items WHERE project_path=?')
         params = [project_path]
@@ -253,8 +417,11 @@ def list_watch_items(project_path: str, *, include_resolved: bool = True,
         rows = db.execute(sql, tuple(params)).fetchall()
     except Exception as e:
         logger.warning('[Watch] list failed proj=%.40r: %s', project_path, e)
-        return {'items': []}
-    return {'items': [_row_to_item(db, r, resp_limit=resp_limit) for r in rows]}
+        return {'items': [], 'charterVersion': 0, 'charterContent': ''}
+    return {'items': [_row_to_item(db, r, resp_limit=resp_limit, charter=charter)
+                      for r in rows],
+            'charterVersion': int(charter.get('version') or 0),
+            'charterContent': charter.get('content') or ''}
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -423,13 +590,52 @@ def _address_open_items_blocking(project_path: str, trigger: str) -> None:
 #  Promote-to-charter — the ONE explicit bridge to agent awareness
 # ══════════════════════════════════════════════════════════════════════
 
+def _goal_summary(text: str) -> str:
+    """One-line summary for a committed decision (its first line, bounded).
+
+    ``commit_charter`` renders ONLY this line in the per-turn injection block
+    (via ``_decision_headline``), so omitting it — as this bridge used to — left
+    every promoted concern/question showing as a first line clipped mid-sentence
+    by the generic fallback. The charter owns the ceiling; we import it rather
+    than re-hardcoding 240.
+    """
+    from lib.conversations.project_charter import _SUMMARY_MAX_CHARS
+    first = (text or '').strip().split('\n', 1)[0].strip()
+    if len(first) > _SUMMARY_MAX_CHARS:
+        first = first[:_SUMMARY_MAX_CHARS].rstrip() + '…'
+    return first
+
+
 def promote_watch_item(item_id: str, *, updated_by_conv: str = '',
                        expected_version: int | None = None) -> dict:
-    """Bridge a watch item into the charter as a committed decision — the ONLY
-    path by which a watch item reaches sibling agents. Routes strictly through
-    ``commit_charter`` (no new write path, no fan-out) as a HUMAN action on a
-    HUMAN-authored item. Marks the item ``promoted``. Returns ``{'ok',
-    'version'?, 'error'?}``.
+    """Bridge a watch item into the charter — the ONLY path by which a watch
+    item reaches sibling agents. Routes strictly through ``commit_charter``
+    (no new write path, no fan-out) as a HUMAN action on a HUMAN-authored item.
+
+    **Dispatch on kind (owner-directed 2026-07-30):**
+
+    * ``goal`` → ``commit_charter(content=…)``, the north-star column. A goal
+      and the north star are one concept (see decision 1b); the column exists
+      precisely so the project's goal can never fall outside the 20-entry
+      injection window nor be FIFO-evicted at 100 decisions. Routing a goal
+      through ``add_decision`` — what every kind used to do — reproduces the
+      exact disappearance ``project_charter._NO_GOAL_NOTICE`` documents.
+
+      Because ``content`` is ONE column, this write is a REPLACEMENT, not an
+      append: ``expected_version`` is a HARD gate on that path, so a caller that
+      previewed the current north star is guaranteed either to replace exactly
+      what it showed the human or to be told ``version_conflict``. Callers MUST
+      preview both texts first — this function does not, and must not, silently
+      decide that replacing the goal is what the human meant.
+
+    * ``concern`` / ``question`` → ``commit_charter(add_decision=…)`` with
+      ``decision_kind='invariant'`` and a ``summary`` (see ``_goal_summary``).
+      Appends commute, so ``expected_version`` is only advisory there.
+
+    On success, records the promotion RECEIPT (``promoted_text`` = the exact
+    text written, ``promoted_at``) — that receipt is what later lets
+    ``goal_promotion_state`` tell "never promoted" apart from "promoted then
+    diverged". Returns ``{'ok', 'version'?, 'error'?}``.
     """
     if not item_id:
         return {'ok': False, 'error': 'no item'}
@@ -443,32 +649,43 @@ def promote_watch_item(item_id: str, *, updated_by_conv: str = '',
     if not row:
         return {'ok': False, 'error': 'not found'}
     project_path = row['project_path']
-    label = {'goal': 'Goal', 'concern': 'Concern', 'question': 'Question'}.get(
-        row['kind'], 'Watch item')
-    decision = f'[{label} — promoted by owner] {row["text"]}'
-    # The bridge: a charter commit invoked by a HUMAN promoting their own
-    # watch item. NOTHING here writes into the agent prompt path directly — the
-    # charter is the ambient-to-agents surface.
+    kind = row['kind'] or 'concern'
+    item_text = row['text'] or ''
+
     from lib.conversations.project_charter import commit_charter
-    res = commit_charter(project_path, add_decision=decision,
-                         updated_by_conv=updated_by_conv or '',
-                         expected_version=expected_version)
+    if kind == 'goal':
+        # The north-star column: a replacement, hard-gated on version.
+        promoted_text = item_text
+        res = commit_charter(project_path, content=item_text,
+                             updated_by_conv=updated_by_conv or '',
+                             expected_version=expected_version)
+    else:
+        label = {'concern': 'Concern', 'question': 'Question'}.get(
+            kind, 'Watch item')
+        promoted_text = f'[{label} — promoted by owner] {item_text}'
+        res = commit_charter(project_path, add_decision=promoted_text,
+                             decision_kind='invariant',
+                             summary=_goal_summary(item_text),
+                             updated_by_conv=updated_by_conv or '',
+                             expected_version=expected_version)
     if not res.get('ok'):
         return res
     try:
-        db.execute('UPDATE project_watch_items SET promoted=1, updated_at=? '
-                   'WHERE item_id=?', (_now_ms(), item_id))
+        db.execute('UPDATE project_watch_items SET promoted=1, promoted_text=?, '
+                   'promoted_at=?, updated_at=? WHERE item_id=?',
+                   (promoted_text, _now_ms(), _now_ms(), item_id))
         db.commit()
     except Exception as e:
         logger.debug('[Watch] promoted-flag update skipped item=%s: %s', item_id, e)
     audit_log('watch_item_promoted', project_path=project_path, item_id=item_id,
-              charter_version=res.get('version'))
+              kind=kind, charter_version=res.get('version'))
     return {'ok': True, 'version': res.get('version')}
 
 
 __all__ = [
     'add_watch_item', 'edit_watch_item', 'set_watch_status', 'delete_watch_item',
     'list_watch_items', 'generate_item_response', 'address_watch_item',
-    'address_open_items', 'promote_watch_item', 'VALID_KINDS', 'VALID_STATUSES',
-    '_RESPONSES_KEEP',
+    'address_open_items', 'promote_watch_item', 'goal_promotion_state',
+    'VALID_KINDS', 'VALID_STATUSES', 'PROMOTION_NONE', 'PROMOTION_ACTIVE',
+    'PROMOTION_DIVERGED', '_RESPONSES_KEEP',
 ]

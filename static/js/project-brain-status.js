@@ -549,8 +549,11 @@
   }
 
   /** Build one watch-item card: header (kind + status), text, latest response,
-   *  expandable response history, and the action row. Pure. */
-  function buildWatchItem(item) {
+   *  expandable response history, and the action row. Pure.
+   *  `ctx` carries the list-level charter snapshot ({charterVersion,
+   *  charterContent}) so a goal's replacement preview can be assembled without
+   *  a second fetch, and submitted with the version it was rendered from. */
+  function buildWatchItem(item, ctx) {
     item = item || {};
     var responses = item.responses || [];
     var card = document.createElement('div');
@@ -564,11 +567,27 @@
     kindBadge.className = 'pb-watch-kind-badge pb-watch-kind-badge-' + (item.kind || 'concern');
     kindBadge.textContent = _kindLabel(item.kind);
     head.appendChild(kindBadge);
-    if (item.promoted) {
+    // ── The promotion badge renders the COMPUTED state, never item.promotedAudit.
+    //    The stored boolean records that a promotion once happened; it stays true
+    //    after the charter is deleted or the decision FIFO-evicted, so rendering
+    //    it promises the human something already untrue. `promotionState` is
+    //    recomputed server-side against the live charter on every read.
+    var st = item.promotionState || 'none';
+    if (st === 'active') {
       var pr = document.createElement('span');
       pr.className = 'pb-watch-promoted';
-      pr.textContent = _t('projectBrain.watchPromoted', 'in charter');
+      pr.textContent = (item.kind === 'goal')
+        ? _t('projectBrain.watchIsNorthStar', 'every conversation reads this')
+        : _t('projectBrain.watchPromoted', 'in charter');
       head.appendChild(pr);
+    } else if (st === 'diverged') {
+      // NOT rendered as "not promoted": that would hand the human a button whose
+      // click silently overwrites whichever side they just edited.
+      var dv = document.createElement('span');
+      dv.className = 'pb-watch-diverged';
+      dv.textContent = _t('projectBrain.watchDiverged', 'diverged');
+      dv.title = _divergedHint(item.divergedSide);
+      head.appendChild(dv);
     }
     if (item.status === 'resolved') {
       var rs = document.createElement('span');
@@ -623,12 +642,131 @@
       card.appendChild(trail);
     }
 
-    card.appendChild(_buildWatchActions(item));
+    card.appendChild(_buildWatchActions(item, ctx));
     return card;
   }
 
-  /** Action row: refresh · promote-to-charter · resolve/reopen · delete. */
-  function _buildWatchActions(item) {
+  /** Tooltip naming WHICH side of a diverged pair moved. Pure. */
+  function _divergedHint(side) {
+    if (side === 'item') {
+      return _t('projectBrain.watchDivergedItem',
+        'You edited this card; the charter still holds the older text.');
+    }
+    if (side === 'charter') {
+      return _t('projectBrain.watchDivergedCharter',
+        'The charter was edited elsewhere; this card holds the older text.');
+    }
+    return _t('projectBrain.watchDivergedBoth',
+      'Both sides were edited since this was promoted.');
+  }
+
+  /**
+   * The goal → north-star REPLACEMENT confirm card.
+   *
+   * A goal writes the charter's single `content` column, so promoting is a
+   * REPLACEMENT, not an append: the human must see what is about to be
+   * overwritten BEFORE it happens. Assembled purely from data already in hand
+   * (list_watch_items returns charterContent + charterVersion), so the preview
+   * costs no extra round-trip.
+   *
+   * The rendered `charterVersion` is submitted as expectedVersion — a HARD gate
+   * on the content path — so we either replace exactly what was shown or get a
+   * 409 and re-present the comparison. Never auto-retries.
+   */
+  function _buildGoalReplaceCard(item, ctx, onDone) {
+    var wrap = document.createElement('div');
+    wrap.className = 'pb-watch-replace';
+    var current = (ctx && ctx.charterContent) || '';
+    var version = (ctx && ctx.charterVersion) | 0;
+
+    var title = document.createElement('div');
+    title.className = 'pb-watch-replace-title';
+    title.textContent = current
+      ? _t('projectBrain.watchReplaceTitle', 'Replace the project goal?')
+      : _t('projectBrain.watchSetTitle', 'Set as the project goal?');
+    wrap.appendChild(title);
+
+    var cols = document.createElement('div');
+    cols.className = 'pb-watch-replace-cols' + (current ? '' : ' pb-watch-replace-single');
+    function _col(labelKey, fallback, body, cls) {
+      var c = document.createElement('div');
+      c.className = 'pb-watch-replace-col ' + cls;
+      var h = document.createElement('div');
+      h.className = 'pb-watch-replace-col-head';
+      h.textContent = _t(labelKey, fallback);
+      c.appendChild(h);
+      var b = document.createElement('div');
+      b.className = 'pb-watch-replace-col-body';
+      b.textContent = body;
+      c.appendChild(b);
+      return c;
+    }
+    if (current) {
+      cols.appendChild(_col('projectBrain.watchReplaceOld',
+        'Current goal (will be replaced)', current, 'pb-watch-replace-old'));
+    }
+    cols.appendChild(_col('projectBrain.watchReplaceNew', 'Will become',
+      item.text || '', 'pb-watch-replace-new'));
+    wrap.appendChild(cols);
+
+    var note = document.createElement('div');
+    note.className = 'pb-watch-replace-note';
+    note.textContent = _t('projectBrain.watchSetNote',
+      'Every conversation in this project reads this on every turn.');
+    wrap.appendChild(note);
+
+    var actions = document.createElement('div');
+    actions.className = 'pb-watch-replace-actions';
+    var msg = document.createElement('span');
+    msg.className = 'pb-watch-replace-msg';
+    actions.appendChild(msg);
+    var cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'pb-watch-btn pb-watch-btn-cancel';
+    cancel.textContent = _t('projectBrain.watchCancel', 'Cancel');
+    cancel.addEventListener('click', function () {
+      if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
+    });
+    actions.appendChild(cancel);
+    var confirm = document.createElement('button');
+    confirm.type = 'button';
+    confirm.className = 'pb-watch-btn pb-watch-btn-confirm';
+    confirm.textContent = _t('projectBrain.watchSetAsGoal', 'Set as project goal');
+    actions.appendChild(confirm);
+    wrap.appendChild(actions);
+
+    confirm.addEventListener('click', function () {
+      var api = (typeof Api !== 'undefined' && Api.project) ? Api.project : null;
+      if (!api || typeof api.brainWatchPromote !== 'function') return;
+      confirm.disabled = true;
+      msg.className = 'pb-watch-replace-msg';
+      msg.textContent = '';
+      Promise.resolve(api.brainWatchPromote(item.item_id, _watchConvId(), version))
+        .then(function () {
+          if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
+          if (typeof onDone === 'function') onDone();
+        })
+        .catch(function (e) {
+          confirm.disabled = false;
+          // A 409 means the charter moved while this card was open. Do NOT
+          // retry: re-fetch, show the human the NEW text, make them re-decide.
+          msg.className = 'pb-watch-replace-msg pb-status-ask-status-err';
+          msg.textContent = _t('projectBrain.watchReplaceStale',
+            'The charter changed while you were deciding.');
+          confirm.textContent = _t('projectBrain.watchRecompare', 'Re-compare');
+          confirm.disabled = false;
+          confirm.onclick = function () {
+            if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
+            _refreshWatch(_displayedStatusPath(), false);
+          };
+          if (typeof console !== 'undefined') console.warn('[ProjectBrain] promote conflict', e);
+        });
+    });
+    return wrap;
+  }
+
+  /** Action row: refresh · set-as-goal/promote · resolve/reopen · delete. */
+  function _buildWatchActions(item, ctx) {
     var row = document.createElement('div');
     row.className = 'pb-watch-actions';
     var api = (typeof Api !== 'undefined' && Api.project) ? Api.project : null;
@@ -656,10 +794,31 @@
       _t('projectBrain.watchRefresh', 'Re-check'),
       function () { return api.brainWatchAddress(id); }));
 
-    if (item.status !== 'resolved' && !item.promoted) {
-      row.appendChild(_btn('pb-watch-btn-promote',
-        _t('projectBrain.watchPromote', 'Promote to charter'),
-        function () { return api.brainWatchPromote(id, _watchConvId()); }));
+    // Offer promotion unless it is ALREADY live. A diverged item still offers
+    // it (that is how the human re-adopts their side) — but for a goal it always
+    // routes through the replacement preview, never a silent overwrite.
+    var st = item.promotionState || 'none';
+    if (item.status !== 'resolved' && st !== 'active') {
+      if (item.kind === 'goal') {
+        var goalBtn = document.createElement('button');
+        goalBtn.type = 'button';
+        goalBtn.className = 'pb-watch-btn pb-watch-btn-promote';
+        goalBtn.textContent = (st === 'diverged')
+          ? _t('projectBrain.watchReadopt', 'Review & re-adopt')
+          : _t('projectBrain.watchSetAsGoal', 'Set as project goal');
+        goalBtn.addEventListener('click', function () {
+          var card = goalBtn.closest ? goalBtn.closest('.pb-watch-item') : null;
+          if (!card || card.querySelector('.pb-watch-replace')) return;
+          card.appendChild(_buildGoalReplaceCard(item, ctx, function () {
+            _refreshWatch(_displayedStatusPath(), false);
+          }));
+        });
+        row.appendChild(goalBtn);
+      } else {
+        row.appendChild(_btn('pb-watch-btn-promote',
+          _t('projectBrain.watchPromote', 'Promote to charter'),
+          function () { return api.brainWatchPromote(id, _watchConvId()); }));
+      }
     }
     if (item.status === 'resolved') {
       row.appendChild(_btn('pb-watch-btn-reopen',
@@ -693,7 +852,12 @@
     if (items.length) {
       var list = document.createElement('div');
       list.className = 'pb-watch-list';
-      for (var i = 0; i < items.length; i++) list.appendChild(buildWatchItem(items[i]));
+      // The charter snapshot the whole list was computed against — threaded into
+      // every card so a goal's replacement preview shows (and submits) exactly
+      // the version the verdicts were derived from.
+      var ctx = { charterVersion: data.charterVersion | 0,
+                  charterContent: data.charterContent || '' };
+      for (var i = 0; i < items.length; i++) list.appendChild(buildWatchItem(items[i], ctx));
       frag.appendChild(list);
     } else {
       var empty = document.createElement('div');

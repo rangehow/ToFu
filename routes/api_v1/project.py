@@ -1272,7 +1272,18 @@ def project_brain_status_ask():
         '(``refresh=1``, the fresh-on-tab-open cadence — cheap via the per-item '
         'staleness gate) then returns every item with its append-only response '
         'trail (newest-first). Returns ``{items: [{item_id, kind, text, status, '
-        'promoted, responses:[...]}]}``.'),
+        'promotionState, divergedSide, promotedAudit, responses:[...]}], '
+        'charterVersion, charterContent}``.\n\n'
+        '``promotionState`` is the COMPUTED live verdict — ``none`` (no '
+        'promotion on record), ``active`` (this text IS the live charter text, '
+        'i.e. it really is reaching every sibling prompt) or ``diverged`` '
+        '(promoted once, but one side has since been edited; ``divergedSide`` '
+        'names which). Render THAT, never ``promotedAudit``: the stored boolean '
+        'only records that a promotion once happened and stays 1 after the '
+        'charter is deleted or the decision FIFO-evicted. '
+        '``charterVersion`` is what a goal promotion must echo back as '
+        '``expectedVersion``; ``charterContent`` is the "will be replaced" side '
+        'of the replacement preview.'),
     tags=['project'],
 )
 def project_brain_watch_list():
@@ -1390,9 +1401,20 @@ def project_brain_watch_address():
     summary='Promote a watch item into the charter (the ONLY bridge to agents)',
     description=(
         'Body: ``{itemId, convId?, expectedVersion?}``. Bridges the item into '
-        'the charter as a committed decision via the HUMAN-GATED charter-commit '
-        'path — the only way a watch item reaches sibling agents. No new write '
-        'path, no fan-out. Returns ``{ok, version}`` or a 409 on version skew.'),
+        'the charter via the HUMAN-GATED charter-commit path — the only way a '
+        'watch item reaches sibling agents. No new write path, no fan-out.\n\n'
+        'Routing depends on the item KIND. A ``goal`` is written to the '
+        "charter's north-star ``content`` column (a goal and the north star are "
+        'one concept; the column is never evicted, unlike the 20-entry '
+        'injection window / 100-entry FIFO decision list). That is a '
+        'REPLACEMENT of a single column, so ``expectedVersion`` is a HARD gate '
+        'there: send the version you rendered the preview from, and show the '
+        'human both the current and the new text BEFORE calling this. '
+        '``concern`` / ``question`` are appended as committed decisions '
+        '(kind=invariant + a one-line summary); appends commute, so the version '
+        'is only advisory on that path.\n\n'
+        'Returns ``{ok, version}`` or a 409 on version skew — on 409 re-read '
+        'the charter and re-present the comparison; never auto-retry.'),
     tags=['project'],
 )
 def project_brain_watch_promote():

@@ -32,6 +32,8 @@ def _make_db():
         ' item_id TEXT PRIMARY KEY, project_path TEXT NOT NULL DEFAULT \'\','
         ' kind TEXT NOT NULL DEFAULT \'concern\', text TEXT NOT NULL DEFAULT \'\','
         ' status TEXT NOT NULL DEFAULT \'open\', promoted INTEGER NOT NULL DEFAULT 0,'
+        ' promoted_text TEXT NOT NULL DEFAULT \'\','
+        ' promoted_at INTEGER NOT NULL DEFAULT 0,'
         ' response_fingerprint TEXT NOT NULL DEFAULT \'\','
         ' created_by_conv TEXT NOT NULL DEFAULT \'\','
         ' created_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0)')
@@ -210,27 +212,98 @@ def test_editing_text_forces_readdress(db, monkeypatch):
 #  (c) Promote-to-charter bridge: calls charter commit, NOT the agent path
 # ════════════════════════════════════════════════════════════════════
 
-def test_promote_calls_charter_commit_not_agent_prompt(db, monkeypatch):
+def test_promote_goal_writes_the_north_star_column_not_a_decision(db, monkeypatch):
+    """REVERSED IN PLACE 2026-07-30. This test used to assert
+    ``calls['add_decision'].startswith('[Goal')`` — i.e. it CERTIFIED that a
+    goal is promoted as a committed DECISION.
+
+    Why that old premise was false: the charter's decision list is injected
+    tail-first through a 20-entry window (``_INJECTION_DECISION_WINDOW``) and
+    FIFO-capped at 100 (``_MAX_DECISIONS``), so a goal parked there silently
+    stops reaching the model as decisions accumulate. That is not a
+    hypothetical — ``project_charter._NO_GOAL_NOTICE``'s comment records it
+    happening once already ("a goal committed as a decision instead is subject
+    to both, which is how one previously went invisible"), and the live project
+    measured 20 committed decisions with ZERO carrying the ``[Goal`` prefix. The
+    north star has its own ``content`` column precisely because it must never be
+    evicted, so a goal belongs there.
+
+    The test is reversed rather than deleted: deleting it would let the next
+    person reintroduce the very routing this documents as broken."""
     calls = {}
 
-    def _fake_commit(project_path, *, add_decision=None, updated_by_conv='',
-                     expected_version=None):
+    def _fake_commit(project_path, *, content=None, add_decision=None,
+                     decision_kind='', summary='', updated_by_conv='',
+                     expected_version=None, resolves_proposal=''):
         calls['project_path'] = project_path
+        calls['content'] = content
         calls['add_decision'] = add_decision
+        calls['expected_version'] = expected_version
         return {'ok': True, 'version': 9}
 
     import lib.conversations.project_charter as pc
     monkeypatch.setattr(pc, 'commit_charter', _fake_commit)
 
     item_id = pw.add_watch_item('/proj/x', 'goal', 'Reach 95% agreement')['item']['item_id']
-    res = pw.promote_watch_item(item_id, updated_by_conv='convH')
+    res = pw.promote_watch_item(item_id, updated_by_conv='convH',
+                                expected_version=8)
     assert res['ok'] and res['version'] == 9
-    # The bridge routed through the charter-commit path with the item text.
     assert calls['project_path'] == '/proj/x'
-    assert 'Reach 95% agreement' in calls['add_decision']
-    assert calls['add_decision'].startswith('[Goal')
-    # The item is flagged promoted.
-    assert pw.list_watch_items('/proj/x')['items'][0]['promoted'] is True
+    # The north-star column carries the goal text VERBATIM — no '[Goal ...]'
+    # prefix, because it is not a decision entry.
+    assert calls['content'] == 'Reach 95% agreement'
+    # And it must NOT have taken the decision path (which would be evictable).
+    assert calls['add_decision'] is None
+    # The version is threaded through as the HARD gate for the content path.
+    assert calls['expected_version'] == 8
+
+
+def test_promote_concern_appends_decision_with_kind_and_summary(db, monkeypatch):
+    """A concern/question is NOT a goal: it keeps the committed-decision path.
+
+    Also pins the two fields this bridge used to omit — ``decision_kind`` and
+    ``summary``. The per-turn injection renders ONLY the summary line
+    (``_decision_headline``), so omitting it left every promoted concern showing
+    as a first line clipped by the generic fallback."""
+    calls = {}
+
+    def _fake_commit(project_path, *, content=None, add_decision=None,
+                     decision_kind='', summary='', updated_by_conv='',
+                     expected_version=None, resolves_proposal=''):
+        calls.update(content=content, add_decision=add_decision,
+                     decision_kind=decision_kind, summary=summary)
+        return {'ok': True, 'version': 4}
+
+    import lib.conversations.project_charter as pc
+    monkeypatch.setattr(pc, 'commit_charter', _fake_commit)
+
+    item_id = pw.add_watch_item('/proj/x', 'concern',
+                                'Artifacts may desync under load')['item']['item_id']
+    assert pw.promote_watch_item(item_id, updated_by_conv='convH')['ok']
+    assert calls['content'] is None, 'a concern must never overwrite the north star'
+    assert calls['add_decision'].startswith('[Concern')
+    assert 'Artifacts may desync under load' in calls['add_decision']
+    assert calls['decision_kind'] == 'invariant'
+    assert calls['summary'] == 'Artifacts may desync under load'
+
+
+def test_promote_records_the_receipt_for_divergence_diagnosis(db, monkeypatch):
+    """A successful promotion persists promoted_text + promoted_at.
+
+    Without that receipt, "never promoted" and "promoted then edited" are
+    textually identical (both are text != content) and the UI cannot tell them
+    apart — see goal_promotion_state."""
+    import lib.conversations.project_charter as pc
+    monkeypatch.setattr(pc, 'commit_charter',
+                        lambda *a, **k: {'ok': True, 'version': 2})
+    item_id = pw.add_watch_item('/proj/x', 'goal', 'Ship it')['item']['item_id']
+    pw.promote_watch_item(item_id)
+    row = db.execute('SELECT promoted, promoted_text, promoted_at '
+                     'FROM project_watch_items WHERE item_id=?',
+                     (item_id,)).fetchone()
+    assert row['promoted'] == 1
+    assert row['promoted_text'] == 'Ship it'
+    assert row['promoted_at'] > 0
 
 
 def test_promote_propagates_charter_version_conflict(db, monkeypatch):
@@ -241,8 +314,142 @@ def test_promote_propagates_charter_version_conflict(db, monkeypatch):
     item_id = pw.add_watch_item('/proj/x', 'concern', 'c')['item']['item_id']
     res = pw.promote_watch_item(item_id, expected_version=5)
     assert res['ok'] is False and res['error'] == 'version_conflict'
-    # A failed commit must NOT flag the item promoted.
-    assert pw.list_watch_items('/proj/x')['items'][0]['promoted'] is False
+    # A failed commit must NOT record a promotion receipt — otherwise the item
+    # would read as 'diverged' (implying it once reached agents) when in fact
+    # nothing was ever written.
+    row = db.execute('SELECT promoted, promoted_at FROM project_watch_items '
+                     'WHERE item_id=?', (item_id,)).fetchone()
+    assert row['promoted'] == 0 and row['promoted_at'] == 0
+    assert pw.list_watch_items('/proj/x')['items'][0]['promotionState'] == pw.PROMOTION_NONE
+
+
+# ════════════════════════════════════════════════════════════════════
+#  The COMPUTED three-state promotion verdict
+# ════════════════════════════════════════════════════════════════════
+
+def _goal(text, *, promoted_text=None, promoted_at=0):
+    return {'kind': 'goal', 'text': text,
+            'promoted_text': promoted_text if promoted_text is not None else '',
+            'promoted_at': promoted_at}
+
+
+def test_promotion_state_matrix(db):
+    """The three states + the whitespace-normalization boundaries."""
+    live = {'exists': True, 'version': 3, 'content': 'Ship the lane',
+            'decisions': []}
+    none_charter = {'exists': False, 'version': 0, 'content': '', 'decisions': []}
+
+    # ACTIVE — the item text IS the live north star.
+    v = pw.goal_promotion_state(_goal('Ship the lane'), live)
+    assert v['state'] == pw.PROMOTION_ACTIVE and v['divergedSide'] == ''
+
+    # ACTIVE survives reflowed whitespace / newlines (same goal, retyped).
+    assert pw.goal_promotion_state(
+        _goal('Ship   the\n lane  '), live)['state'] == pw.PROMOTION_ACTIVE
+
+    # Case is NOT folded — 'ship' is a different string, deliberately.
+    assert pw.goal_promotion_state(
+        _goal('ship the lane'), live)['state'] != pw.PROMOTION_ACTIVE
+
+    # NONE — never promoted (no receipt), regardless of mismatch.
+    assert pw.goal_promotion_state(
+        _goal('Something else'), live)['state'] == pw.PROMOTION_NONE
+
+    # DIVERGED / item — charter still holds the receipt; the item text moved.
+    v = pw.goal_promotion_state(
+        _goal('Ship the lane v2', promoted_text='Ship the lane', promoted_at=99),
+        live)
+    assert v['state'] == pw.PROMOTION_DIVERGED and v['divergedSide'] == 'item'
+
+    # DIVERGED / charter — item still holds the receipt; the charter moved.
+    v = pw.goal_promotion_state(
+        _goal('Ship the lane', promoted_text='Ship the lane', promoted_at=99),
+        {'exists': True, 'version': 4, 'content': 'A different north star',
+         'decisions': []})
+    assert v['state'] == pw.PROMOTION_DIVERGED and v['divergedSide'] == 'charter'
+
+    # DIVERGED / both — neither side matches the receipt.
+    v = pw.goal_promotion_state(
+        _goal('Mine now', promoted_text='Original', promoted_at=99),
+        {'exists': True, 'version': 4, 'content': 'Theirs now', 'decisions': []})
+    assert v['state'] == pw.PROMOTION_DIVERGED and v['divergedSide'] == 'both'
+
+    # The charter being DELETED is the case the stored boolean got wrong: a
+    # promoted item must read diverged (not active, not none).
+    v = pw.goal_promotion_state(
+        _goal('Ship the lane', promoted_text='Ship the lane', promoted_at=99),
+        none_charter)
+    assert v['state'] == pw.PROMOTION_DIVERGED
+
+
+def test_promotion_state_for_concern_reads_the_decision_list(db):
+    charter = {'exists': True, 'version': 2, 'content': 'North star',
+               'decisions': [{'text': '[Concern — promoted by owner] Desync'}]}
+    item = {'kind': 'concern',
+            'text': '[Concern — promoted by owner] Desync',
+            'promoted_text': '', 'promoted_at': 0}
+    assert pw.goal_promotion_state(item, charter)['state'] == pw.PROMOTION_ACTIVE
+    # A concern must NOT be satisfied by matching the north-star column.
+    item2 = {'kind': 'concern', 'text': 'North star',
+             'promoted_text': '', 'promoted_at': 0}
+    assert pw.goal_promotion_state(item2, charter)['state'] == pw.PROMOTION_NONE
+
+
+def test_at_most_one_goal_is_the_north_star(db, monkeypatch):
+    """Single-north-star semantics need NO uniqueness constraint: the verdict is
+    text equality against ONE column, so promoting a second goal necessarily
+    demotes the first to diverged."""
+    charter = {'exists': True, 'version': 1, 'content': '', 'decisions': []}
+
+    def _fake_commit(project_path, *, content=None, **kw):
+        charter['content'] = content
+        charter['version'] += 1
+        return {'ok': True, 'version': charter['version']}
+
+    import lib.conversations.project_charter as pc
+    monkeypatch.setattr(pc, 'commit_charter', _fake_commit)
+    monkeypatch.setattr(pc, 'read_charter', lambda p: dict(charter, exists=True))
+
+    a = pw.add_watch_item('/proj/x', 'goal', 'Goal A')['item']['item_id']
+    b = pw.add_watch_item('/proj/x', 'goal', 'Goal B')['item']['item_id']
+    pw.promote_watch_item(a)
+    states = {i['item_id']: i['promotionState']
+              for i in pw.list_watch_items('/proj/x')['items']}
+    assert states[a] == pw.PROMOTION_ACTIVE and states[b] == pw.PROMOTION_NONE
+
+    # Promoting B replaces the column → A is displaced, not silently still-active.
+    pw.promote_watch_item(b)
+    items = {i['item_id']: i for i in pw.list_watch_items('/proj/x')['items']}
+    assert items[b]['promotionState'] == pw.PROMOTION_ACTIVE
+    assert items[a]['promotionState'] == pw.PROMOTION_DIVERGED
+    assert items[a]['divergedSide'] == 'charter'
+    active = [i for i in items.values() if i['promotionState'] == pw.PROMOTION_ACTIVE]
+    assert len(active) == 1
+
+
+def test_delete_and_resolve_never_touch_the_charter(db, monkeypatch):
+    """Removing/resolving a tracking CARD must not clear shared intent."""
+    calls = []
+    import lib.conversations.project_charter as pc
+    monkeypatch.setattr(pc, 'commit_charter',
+                        lambda *a, **k: (calls.append(k) or {'ok': True, 'version': 1}))
+    monkeypatch.setattr(pc, 'delete_charter',
+                        lambda *a, **k: calls.append('delete'))
+    item_id = pw.add_watch_item('/proj/x', 'goal', 'G')['item']['item_id']
+    pw.promote_watch_item(item_id)
+    calls.clear()
+    pw.set_watch_status(item_id, 'resolved')
+    pw.delete_watch_item(item_id)
+    assert calls == [], 'resolve/delete must not write to the charter'
+
+
+def test_item_text_cap_matches_charter_content(db):
+    """A goal and the north star are one concept — so one ceiling, not two.
+
+    Unequal caps would mean adopting the charter's side of a diverged goal could
+    silently truncate the text being copied back."""
+    from lib.conversations.project_charter import _CONTENT_MAX_CHARS
+    assert pw._ITEM_TEXT_MAX == _CONTENT_MAX_CHARS
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -283,3 +490,51 @@ def test_watch_not_in_system_context_source():
             assert banned not in src, (
                 f'{rel} references {banned!r} — the watch lane must NOT '
                 f'be on the ambient prompt-injection path')
+
+
+def test_goal_reaches_agents_only_via_commit_charter():
+    """The COMPLEMENT of the source guard above.
+
+    That guard proves the watch lane is absent from the injection path. This one
+    proves the promotion bridge did not grow a SECOND route in the other
+    direction: the only way a watch item's text reaches an agent is
+    ``commit_charter`` (whose output the pre-existing
+    ``render_charter_injection_block`` already injects).
+
+    Asserted over the AST — the set of names promote_watch_item actually CALLS —
+    not over a substring scan of its source. A substring scan is the wrong
+    instrument for this claim twice over: it cannot tell a call from a mention,
+    and (unlike the whole-line-comment case the shared strip_comments handles) a
+    docstring is not a comment, so no amount of comment-stripping would make it
+    sound. The first version of this test failed on the word 'injection' inside
+    this function's own docstring — a correct tree reported red."""
+    import ast
+    import inspect
+    import textwrap
+    tree = ast.parse(textwrap.dedent(inspect.getsource(pw.promote_watch_item)))
+    called = set()
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            fn = node.func
+            if isinstance(fn, ast.Name):
+                called.add(fn.id)
+            elif isinstance(fn, ast.Attribute):
+                called.add(fn.attr)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                imported.add(alias.name)
+            if isinstance(node, ast.ImportFrom) and node.module:
+                imported.add(node.module)
+
+    assert 'commit_charter' in called, 'the charter bridge vanished'
+    assert 'commit_charter' in imported
+    for banned in ('push_event', 'send_peer_message', 'enqueue', 'dispatch_chat',
+                   'build_static_prompt', 'render_charter_injection_block'):
+        assert banned not in called and banned not in imported, (
+            f'promote_watch_item reaches {banned!r} — a goal must reach agents '
+            f'ONLY through commit_charter, never a second channel')
+    for mod in imported:
+        assert 'system_context' not in mod, (
+            f'promote_watch_item imports {mod!r} — the promotion bridge must '
+            f'never touch the prompt-injection package directly')

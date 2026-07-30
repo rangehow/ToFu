@@ -712,8 +712,26 @@ PROJECT_STATUS_SNAPSHOTS = define_table(
 # project_watch_items — the human's standing "things I care about" list (Pillar
 # #7 watch lane). The HUMAN authors each item (kind: concern|question|goal +
 # free text); the brain addresses it on a recurring basis. Single TEXT PK
-# (item_id). status: open|resolved. `promoted` marks an item bridged into the
-# charter (the ONLY path to agent awareness — a human-gated charter commit).
+# (item_id). status: open|resolved.
+#
+# Promotion columns — AUDIT TRAIL ONLY, never the UI's source of truth:
+#   `promoted`      — a one-shot "a promotion was performed" marker. It is NOT
+#                     a live answer to "is this reaching agents right now": the
+#                     charter can be deleted, its north star re-edited, or a
+#                     committed decision FIFO-evicted, and this boolean would
+#                     still read 1. (Measured: promoted=1 while read_charter()
+#                     reported exists=False.) The live three-state answer is
+#                     COMPUTED at read time by
+#                     project_watch.goal_promotion_state() — see that function.
+#   `promoted_text` — the exact text written into the charter at promotion time.
+#                     This is what makes DIVERGENCE diagnosable rather than
+#                     merely detectable: comparing it against both the current
+#                     item text and the current charter content says WHICH SIDE
+#                     was edited. Without it, "never promoted" and "promoted
+#                     then diverged" are textually indistinguishable.
+#   `promoted_at`   — epoch ms of that promotion (0 = never promoted; this is
+#                     the field that separates the two states above).
+#
 # HUMAN-FACING ONLY — never injected into sibling agent prompts. See
 # lib/conversations/project_watch.py.
 PROJECT_WATCH_ITEMS = define_table(
@@ -724,6 +742,8 @@ PROJECT_WATCH_ITEMS = define_table(
     sa.Column('text', sa.Text, nullable=False, server_default=''),
     sa.Column('status', sa.Text, nullable=False, server_default='open'),
     sa.Column('promoted', sa.Integer, nullable=False, server_default=sa.text('0')),
+    sa.Column('promoted_text', sa.Text, nullable=False, server_default=''),
+    sa.Column('promoted_at', bigint_column(), nullable=False, server_default=sa.text('0')),
     sa.Column('response_fingerprint', sa.Text, nullable=False, server_default=''),
     sa.Column('created_by_conv', sa.Text, nullable=False, server_default=''),
     sa.Column('created_at', bigint_column(), nullable=False, server_default=sa.text('0')),

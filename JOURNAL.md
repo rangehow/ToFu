@@ -36,6 +36,18 @@
 
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-30(文件里装的不是它自己的语言) — 接自己开的 CRITICAL 票,而**污染已被兄弟修掉**;真正剩下的缺口是票面那句「值得顺带查一下有没有守卫能防住这类路径错配」——**答案是没有,而且现成那条最接近的只管尺寸**(`pt_b62849184ede40d8` DONE;commit `a66fa6ea`,1 文件 +151;**NEUTER×5 双向全咬**;相邻环 **176 全绿**;产品文件零改动)
+
+- **★ 先确认票面前提是否还成立:** `static/styles.css` 现在 22430 行 / `data-theme` 1682 / 不再 `ast.parse` 通过 ⇒ **已恢复**。票面点名的 4 套复现器 **40/40 绿**。追溯到兄弟的 commit `6c09656c`「restore the CSS a concurrent rewrite dropped + guard the loss」——他恢复了自己那 16 行并为**自己的**类加了守卫。**所以恢复动作不需要我做,我也没有去覆写任何东西。**
+- **★ 剩下的真缺口,以及我差点误判它已被覆盖:** 全库搜到 `test_write_freshness_gate.py:308` 有 `assert getsize('static/styles.css') > 512*1024`。它**确实会咬住这次事故**(坏文件约 42KB),一度让我以为票面问题已解决。但读它自己的注释:*"Sanity the guard itself reads the real tree"* ——**它是 freshness 阈值的 fixture 自检,不是污染绊线**;而且只管尺寸,**「尺寸对、语言错」那一半直接穿过去**。实测:我造了一个 **1046627 字节**的 Python 文件,尺寸地板放行,只有新的形态断言咬住。**判据:一条恰好能咬住某次事故的断言,不等于针对那类事故的守卫——要读它的意图(注释/docstring),否则会把巧合当覆盖。**
+- **★ 事故的代价不在坏,而在「错误信息指向错误的地方」:** 87 个套件全部报「no `[data-theme=tofu] .folder-badge` rule found」——指向**缺了一条选择器**,于是排查从「谁删了 CSS 规则」开始。**没有任何一处说出更朴素的事实:这个文件已经不是 CSS 了。** 两个会话为此绕路,而且它还**静默作废了一次等价性对拍**(对拍双方都在读 Python 源码,却得出「仅差一个尾部换行」的真结论,见 `37c6a04e`)。
+- **落点(刻意窄:形态检查,不是 linter):** `.css` 必须含声明块且**不得解析为 Python 模块**;`styles.css` 必须**整体**保有主题层(>100 个 `data-theme`,比现存 ~1680 低一个数量级,合法重构几十条规则永不误报);两个最大 JS 入口同样查 Python 模块。**不做 CSS 语法校验**——`node --check` 与 bundler 守卫已覆盖 JS,而在这里手写半个 CSS parser 正是 charter #24 要防的「第二份实现」。
+- **★ `ast.parse` 成功不能单独当判据:** 它太宽松,很多 CSS 片段也能过。真正区分「被覆盖成模块」的是**顶层有 import 或 def/class**,所以判据是「解析成功 **且** 是个真模块」。
+- **NEUTER×5 双向:** 复现原始污染(Python pipeline 模块)→ 红;**同尺寸异语言**(专门打尺寸地板的盲区)→ 红;空/截断样式表 → 红;主题层整体丢失但仍是 CSS 形状 → 红;**CSS 注释里写满 Python 样子的散文** → **保持绿**(charter #24:注释不得违反守卫)。
+- **失败信息带恢复命令**,这是本条守卫存在的意义:「parses as a PYTHON MODULE … overwritten with source from another file … Recover with: `git checkout HEAD -- <path>`」。
+- **验收边界:** 纯测试基础设施,**产品文件零改动**,不需要重启。全部 NEUTER 在 `/tmp/shapeneuter` 隔离副本里做,真实 `static/styles.css` 逐字节未动。
+
+
 ### 2026-07-30(等价性证明验的是垃圾输入) — 票面要求「逐字节对拍、完全一致才替换」,我照做了、结论「仅差一个尾部换行」——**而我对拍的那份 styles.css 已经被覆盖成 Python 源码**;修正输入后真实答案是 3104 行差异(`pt_df2a951a07324e47`;commits `37c6a04e` 11 文件 + `a8470440` 2 文件;**NEUTER 双向全咬**;相邻环 **108 全绿**;产品文件零改动)
 
 - **★ 本轮最值得记的一条:等价性对拍必须先校验「输入是不是它声称的那个形态」。** 我第一轮拿 `static/styles.css` 对拍,得出「仅差一个尾部换行、零行级差异」——**结论为真且毫无价值**:它证明的是两个函数**对 Python 源码的处理一致**,不是对 CSS 的处理一致。因为那一刻该文件已被兄弟会话整体覆盖成 tool-execution pipeline 模块(22291 → 1048 行,`data-theme` 1680 → 0,`ast.parse` 通过)。迁移后 53 红。

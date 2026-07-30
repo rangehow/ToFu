@@ -48,6 +48,22 @@ function locateRound(rounds, ev) {
   return rounds.find(r => r && r.roundNum === rn) || null;
 }
 
+/* ── Terminal round VERDICTS (pt_ac380e3d) ──
+ *    A round in one of these states has been DECIDED: the tool was refused,
+ *    interrupted, or failed. A later `tool_complete` may attach content and
+ *    timings to it, but must NEVER promote it to 'done' — that would render a
+ *    write the user REFUSED as applied, or a Stopped tool as finished. 'done'
+ *    itself is listed so a settled round is not re-settled.
+ *
+ *    NOT terminal, deliberately: 'searching' / 'executing' are in-flight, and
+ *    'pending_approval' / 'awaiting_human' / 'awaiting_stdin' are WAITING on
+ *    input — for those a real completion legitimately means the wait resolved
+ *    and the tool then ran, so they must still be allowed to reach 'done'. */
+const _TERMINAL_ROUND_STATUS = {
+  done: true, rejected: true, aborted: true,
+  error: true, unanswerable: true,
+};
+
 /* Fresh empty projection state. */
 function emptyStreamState() {
   return { content: '', thinking: '', toolRounds: [] };
@@ -214,7 +230,19 @@ function reduceStreamState(state, ev) {
         if (ev.tEnd != null) r.tEnd = ev.tEnd;
         if (ev.emittedAt != null) r.emittedAt = ev.emittedAt;
         if (ev.receivedAt != null) r.receivedAt = ev.receivedAt;
-        if (r.status !== 'rejected') r.status = 'done';
+        /* ★ A terminal VERDICT must survive a later completion frame
+         * (pt_ac380e3d). This used to read `if (r.status !== 'rejected')`,
+         * protecting exactly ONE verdict — while `aborted`, `error` and
+         * `unanswerable` are all real round statuses the backend assigns. Any
+         * of those followed by a tool_complete was silently promoted to
+         * 'done', so a write the user REFUSED, or a tool a Stop interrupted,
+         * rendered as successfully completed. That is strictly worse than the
+         * latency the prompt settle removes, so the rule is now: the frame's
+         * own explicit status wins; otherwise a round already holding a
+         * terminal verdict keeps it; only a genuinely in-flight round settles
+         * to 'done'. */
+        if (ev.status) r.status = ev.status;
+        else if (!_TERMINAL_ROUND_STATUS[r.status]) r.status = 'done';
       }
       return state;
     }

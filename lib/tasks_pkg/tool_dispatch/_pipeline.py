@@ -57,6 +57,7 @@ def _settle_tool_result(
     cache: dict,
     tid: str,
     round_num: int,
+    terminal_status: str | None = None,
 ) -> Any:
     """Settle ONE tool call: budget its result, stamp the round, emit
     ``tool_complete``. Returns the final (budgeted) content for the message.
@@ -77,9 +78,21 @@ def _settle_tool_result(
     after the barrier and corrects an already-announced result with a
     ``tool_compacted`` event instead of delaying the first announcement.
 
+    ``terminal_status`` (pt_ac380e3d) carries a NON-SUCCESS verdict for the
+    lanes where the tool never actually ran — ``rejected`` (hallucinated call,
+    pre-hook block, user pressed Reject) or ``aborted`` (user pressed Stop).
+    Settling those lanes promptly is the whole point of this extension, but a
+    settle that reported success would be far worse than the latency it
+    removes: a write the user REFUSED would render as applied. So the verdict is
+    stamped on the round AND shipped on the wire, and the client is required
+    never to overwrite it (see ``stream_reducer.js``' tool_complete case).
+    Without this parameter such a round would sit at ``pending_approval`` /
+    ``searching`` until the end-of-task dangling sweep — i.e. spin for the rest
+    of the turn.
+
     Idempotent: a second call for the same ``tc_id`` is a no-op (returns the
     already-settled content), so the post-phase can call it unconditionally
-    without double-emitting for a tool the parallel loop already settled.
+    without double-emitting for a tool an earlier lane already settled.
     """
     _settled = task.setdefault('_settled_tool_results', {})
     if tc_id in _settled:
@@ -195,6 +208,17 @@ def _settle_tool_result(
             tStart=_t_start,
             tEnd=_t_end,
         )
+        # ★ Terminal verdict (pt_ac380e3d). A lane that never executed the tool
+        #   settles with a NON-SUCCESS verdict. Stamp it on the round so the
+        #   spinner stops NOW instead of at the end-of-task dangling sweep, and
+        #   carry it on the wire so the client does not promote it to 'done' —
+        #   rendering a refused write as applied is strictly worse than the
+        #   latency this settle removes.
+        _status = terminal_status or (round_entry or {}).get('status')
+        if terminal_status and round_entry is not None:
+            round_entry['status'] = terminal_status
+        if _status and _status not in ('done', 'searching', 'executing'):
+            _evt['status'] = _status
         if _tc_tokens > 0:
             _evt['toolTokens'] = _tc_tokens
         if round_entry and round_entry.get('compactionLayer'):
@@ -326,6 +350,16 @@ def execute_tool_pipeline(
                         query_override=round_entry.get('query', fn_name),
                     )
             tool_results[tc_id] = (_parse_err, False)
+            # ★ Settle NOW (pt_ac380e3d). This tool never ran, so the round is
+            #   knowably finished the instant it is inspected — deferring to the
+            #   post-phase made a zero-cost refusal wait for the round's slowest
+            #   REAL tool. The verdict rides along so the client cannot promote
+            #   a rejected hallucination to 'done'.
+            _settle_tool_result(
+                task, fn_name, tc_id, fn_args, rn, round_entry, _parse_err,
+                idempotent_tools=_idempotent_tools, cache=_cache, tid=tid,
+                round_num=round_num,
+                terminal_status=(round_entry or {}).get('status') or 'rejected')
             continue
 
         # ── Dedup check for idempotent tools ──
@@ -434,6 +468,17 @@ def execute_tool_pipeline(
                             query_override=round_entry.get('query', fn_name),
                         )
                 tool_results[tc_id] = (dedup_content, cached_is_search)
+                # ★ Settle NOW (pt_ac380e3d). A cache/prefetch hit costs ZERO
+                #   time: for a streaming-prefetch hit the tool already ran while
+                #   the model was still emitting tokens (StreamingToolExecutor
+                #   → inject_into_cache). Leaving it to the post-phase made the
+                #   FASTEST class of tool in the product the one that waited
+                #   longest — measured: tool_complete(cached) landed after
+                #   tool_complete(slow-sibling).
+                _settle_tool_result(
+                    task, fn_name, tc_id, fn_args, rn, round_entry,
+                    dedup_content, idempotent_tools=_idempotent_tools,
+                    cache=_cache, tid=tid, round_num=round_num)
                 continue
 
         # ── Write-approval gate (Manual mode) ──
@@ -460,6 +505,17 @@ def execute_tool_pipeline(
                 task, fn_name, fn_args, rn, round_entry, project_path, round_num, model)
             if not approved:
                 tool_results[tc_id] = (reject_content, False)
+                # ★ Settle NOW (pt_ac380e3d). The user ALREADY answered — the
+                #   round is settled at that instant. Without this it sat at
+                #   status='pending_approval' until the end-of-task dangling
+                #   sweep, i.e. spun for the rest of the turn. The 'rejected'
+                #   verdict is mandatory: a settle that reported success would
+                #   render a REFUSED write as applied.
+                _settle_tool_result(
+                    task, fn_name, tc_id, fn_args, rn, round_entry,
+                    reject_content, idempotent_tools=_idempotent_tools,
+                    cache=_cache, tid=tid, round_num=round_num,
+                    terminal_status='rejected')
                 continue
             # Approved → fall through to normal dispatch. The item is in
             # _write_tools, so the serial write-tool phase below executes it via
@@ -471,6 +527,17 @@ def execute_tool_pipeline(
         if task.get('aborted'):
             logger.info('[Task %s] Skipping tool %s (tc_id=%s) — task aborted', tid, fn_name, tc_id[:8])
             tool_results[tc_id] = ('Task aborted by user.', False)
+            # ★ Settle NOW with an ABORTED verdict (pt_ac380e3d). Previously the
+            #   round kept status='searching' until
+            #   orchestrator._finalize_dangling_tool_rounds swept it at task end
+            #   — so a Stop left a spinner turning on every not-yet-run tool for
+            #   the remainder of the turn. 'aborted' (never 'done') is what makes
+            #   the row render the static "interrupted" affordance instead.
+            _settle_tool_result(
+                task, fn_name, tc_id, fn_args, rn, round_entry,
+                'Task aborted by user.', idempotent_tools=_idempotent_tools,
+                cache=_cache, tid=tid, round_num=round_num,
+                terminal_status='aborted')
             continue
 
         # ── Serial-dispatch for long-blocking tools ──
@@ -560,6 +627,15 @@ def execute_tool_pipeline(
                         '[Task %s] tool_result (pre-hook block) emit failed for '
                         'tool=%s round=%s (non-fatal): %s',
                         tid, fn_name, rn, _blk_ev, exc_info=True)
+            # ★ Settle NOW (pt_ac380e3d). The hook refused the tool before it
+            #   ran, so this round costs zero time. It already carries
+            #   status='rejected' above; passing it through keeps the verdict on
+            #   the wire so the client cannot promote a BLOCKED tool to 'done'.
+            _settle_tool_result(
+                task, fn_name, tc_id, fn_args, rn, round_entry,
+                _blocked_content, idempotent_tools=_idempotent_tools,
+                cache=_cache, tid=tid, round_num=round_num,
+                terminal_status='rejected')
             continue
 
         parallel_items.append(item)
@@ -580,6 +656,12 @@ def execute_tool_pipeline(
         if task.get('aborted'):
             logger.info('[Task %s] Skipping serial write tool %s — task aborted', tid, fn_name)
             tool_results[tc_id] = ('Task aborted by user.', False)
+            # ★ Same abort contract as the pre-phase lane (pt_ac380e3d).
+            _settle_tool_result(
+                task, fn_name, tc_id, fn_args, rn, round_entry,
+                'Task aborted by user.', idempotent_tools=_idempotent_tools,
+                cache=_cache, tid=tid, round_num=round_num,
+                terminal_status='aborted')
             continue
         logger.debug('[Task %s] Serial write dispatch: %s at round %d', tid, fn_name, round_num)
         tc_id_ret, tool_content, is_search = _execute_tool_one(

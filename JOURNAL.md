@@ -187,6 +187,26 @@
 - **活库闭环(owner 指定的验收):** ALTER 落库 → 用新路径把 owner 那条 goal 设为项目目标 → 注入块 **0 → 244 字节**且目标原文逐字在内;随后模拟在章程页改字,卡片正确翻成 `diverged(side=charter)`,还原后翻回 `active`。charter 承接本批 invariant 后注入块 533 字节,**目标位于 decisions 之上**——这正是 `content` 列存在的结构性理由。
 - **验收边界:** 后端已对活库生效(ALTER 幂等);前端与 i18n **需重启 + bundle 重建**。真浏览器未实测(node 驱动 shipped 函数 + 直接驱动后端)。
 
+### 2026-07-30(续·Reading Mode 不止 report 一个引擎) — owner 指出目标句里的「paper reading mode report」覆盖的是**整个 Reading Mode**;脚本普查 5 个配了 push_channel 的 runtime,实测**另有 2 个面复刻了 report 修复前的同一张图**。本批把契约收敛成**一份共享实现**,并被既有守卫抓出**我自己的 2 处真回归**(`pt_f6aec3ad0efb40de` DONE;commit `da7ca59a`,6 文件 +636/-14;新套件 **7/7**(3 条失败先行),**NEUTER×6 各咬各的**;相邻环 **78/78**;`git archive HEAD` 隔离副本 **57/57**)
+
+- **★ 普查表(脚本枚举 `lib/paper/*runtime*.py` 的 push_channel × 前端消费者,不按票面列名):**
+
+  | runtime | channel | per-tool 事件 | 前端 | 判定 |
+  |---|---|---|---|---|
+  | report_runtime | paper | 有 | report.js | 上一批已修 |
+  | **qa_runtime** | paper | 有 | qa.js | **poll 700ms,pushSubscribe=0** |
+  | **recommend_runtime** | paper | 有(经 `recommend_task._on_tool_event` 转发) | arxiv.js | **poll 600ms,pushSubscribe=0** |
+  | podcast_runtime | paper | **无**(全部 `podcast_engine/*.py` 的 tool_start 计数 0) | podcast.js | 豁免 |
+  | translate_runtime | paper-translate | **无**(tool_start=0) | babel.js | 豁免 |
+
+  `video` 压根没有 push_channel,按构造不在范围内。**两条豁免是实测的、不是假定的**——它们只发阶段进度,订阅了也不承载本 epic 关心的东西。
+- **★ 判据升级:豁免声明必须会「过期」。** 普查守卫不只断言「谁没接」,还**反向断言豁免仍然为真**:一旦 podcast/translate 将来长出 `tool_start`,豁免自动失效变红。NEUTER 6 就是给 podcast 塞一个假的 `tool_start` ⇒ 精确咬普查那条。**一句「按设计不需要」如果没有会过期的机制,它就是一个没人再验的豁免**(上一批 screenshot 的教训直接搬过来)。
+- **★ 契约收敛成一份:`static/js/paper/push_transport.js`。** 抄 report.js 的内联助手去修第二、第三个消费者,会留下**三份近乎相同的同一契约**。共享模块只暴露三个函数:`paperIngestEvent`(seq 有序 exactly-once 闸)/ `paperAttachPush`(按 (state,taskId) 幂等 + `isCurrent` 弃用守卫 + 终态自动释放)/ `paperDetachPush`。
+- **★★ 加第二条传输的代价仍然是 exactly-once,而这两个面比 report 更脆:** `qa.js`/`arxiv.js` 原来**只有 cursor、没有 seq 闸**,裸接会把每个 delta 应用两遍(答案渲染两次)、并让 recommend 的 `candidate` 事件**重复持久化卡片**。所有 apply(push 与 poll 两侧)统一走共享 seq 闸。
+- **★ 释放必须在 `finally`,不能只靠终态帧:** abort 分支与 404/expired 分支**永远看不到终态帧**;而 **Q&A 每问一个问题铸一个新 task**,漏释放就是「每问一句泄漏一个常驻 handler」。两个消费者都改成 finally 释放。
+- **★★ 既有守卫抓出我自己的 2 处真回归(比新功能更值得记):** 新增一个进 bundle 的文件却**没在 `index.html` 补 `<script>` 标签** ⇒ **dev fallback(打包失败时改用逐个标签的那条路)会静默丢掉它**。`test_artifacts_bundle_registration` + `test_bundle_manifest_parity` 两条同时转红。用干净 HEAD archive 归属:14 条 bundle 失败里**恰好 2 条是我的**,其余 12 条在干净 HEAD 上同样红。**判据:新增 bundle 文件是「两处登记」——`_BUNDLE_FILES` 与 `index.html`,只做一处会在打包降级路径上无声失效。**
+- **验收边界:** 本 commit 纯前端,**需重启 + bundle 重建**;真浏览器未实测(node 端到端驱动 shipped `push_transport.js` + `qa.js`,12 项检查)。
+
 ### 2026-07-30(续·第 8 条 lane 与 round 自描述) — owner 复核抓出**我自己给 screenshot lane 写的「按设计留在 post-phase」理由是假的**;以及一条更普遍的:**skip lane 的 round 上没有 `tEnd`,而 poll/刷新读的正是 round**。本批最值得记的是 **NEUTER 连揭我三次守卫太弱**(commit `d2c165f5`,2 文件;守卫 **13 → 15**,**NEUTER×4 各咬各的**;相邻环 **175/175**;`git archive HEAD` 隔离副本 **50/50**)
 
 - **★ 我上一轮定了「用脚本枚举、不按票面条目修」,然后自己在最后一条上违反了它:** 8 条 `continue` 里我把 screenshot 归为「终态取决于模型视觉能力,要等 post-phase」。owner 实测证伪:`model` 是 `execute_tool_pipeline` 的**入参**,`model_supports_vision(model) -> bool` 是**纯函数**,派发时就能算;AST 检查那个分支**根本不碰 `_round_results_for_budget`**(唯一真需要屏障的东西)。真实事件序确实是 `tool_result(shot) → tool_result(slow) → tool_complete(slow) → tool_complete(shot)`。**判据:「按设计」这三个字必须能被实测支持,否则它就是一个没人再验的豁免。**

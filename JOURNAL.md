@@ -122,6 +122,18 @@
 - **活库闭环(owner 指定的验收):** ALTER 落库 → 用新路径把 owner 那条 goal 设为项目目标 → 注入块 **0 → 244 字节**且目标原文逐字在内;随后模拟在章程页改字,卡片正确翻成 `diverged(side=charter)`,还原后翻回 `active`。charter 承接本批 invariant 后注入块 533 字节,**目标位于 decisions 之上**——这正是 `content` 列存在的结构性理由。
 - **验收边界:** 后端已对活库生效(ALTER 幂等);前端与 i18n **需重启 + bundle 重建**。真浏览器未实测(node 驱动 shipped 函数 + 直接驱动后端)。
 
+### 2026-07-30(续·被漏掉的 6 条 skip lane) — owner 复核抓出**上一批只接了 dispatch 路,pre-phase 的 skip lane 全没接**;而其中「流式预取命中」是**零耗时**工具,反而成了全产品唯一仍被慢兄弟拖住的一类。**更要紧的是:天真地接上会把「被拒绝」画成「已完成」**(`pt_ac380e3dde2c4c69` DONE;commit `34cffd94`,3 文件 +717/-2;新套件 **11/11**(8 条失败先行),**NEUTER×6 各咬各的**(2/2/1/1/1/1,含 1 发反向);相邻环 **171/171**;`git archive HEAD` 隔离副本 **46/46**)
+
+- **★ 票面自己不全,判据是「用脚本枚举」而不是「按条目修」:** owner 点名 3 条 lane,AST 枚举 `execute_tool_pipeline` 的**全部** `continue` 实测 **8 条**——parse_err/幻觉工具、dedup+prefetch 命中、审批拒绝、abort 短路、pre-hook block、串行写 abort 跳过(6 条**都没接**)+ 长阻塞串行(已接)+ screenshot(自己发)。**这 6 条的共同点:工具根本没跑,耗时为零** ⇒ 恰恰是最该秒亮的那批,却等本轮最慢兄弟。已把「枚举 + 逐条分类」做成 census 守卫钉在 8,新增一条未分类的 `continue` 就红。
+- **★ 最刺眼的一格是流式预取:** `StreamingToolExecutor` 的存在意义就是**模型还在吐 token 时就把工具跑掉**(`inject_into_cache` 在 `orchestrator/_run.py` 真实调用),所以派发时答案早就在手。实测事件序 `tool_result(cached) → tool_result(slow) → tool_complete(slow) → tool_complete(cached)`——**零成本的那个最后结算**。修后 cached 在 slow 报告之前就全部收口。
+- **★★ 真正危险的是第二半,天真接线会引进比延迟严重得多的缺陷:** `stream_reducer.js` 的 tool_complete 分支原文是 `if (r.status !== 'rejected') r.status = 'done'`——**只保护了一个判决**。而 `aborted`/`error`/`unanswerable` 都是本库真实在用的 round 状态(实测赋值点 9/15/1 处),任何一个后面跟一帧 tool_complete 都会被**静默提升为 done** ⇒ **用户明确拒绝的写入渲染成「已应用」、被 Stop 打断的工具渲染成「已完成」**。两侧同时修:后端 `_settle_tool_result` 增 `terminal_status`(盖到 round 且随事件上线),前端改为「帧上显式 status 优先 → 否则已持终态判决者不许被提升 → 只有真在飞的才落 done」。`pending_approval`/`awaiting_human`/`awaiting_stdin` **刻意不算终态**——对它们来说一次真完成意味着「等待已解决、工具随后跑了」。
+- **★ 失败先行的输出还额外暴露了第三个缺陷(票面和我都没预料):** 被拒绝的写入 round 停在 `status='pending_approval'`、abort 跳过的停在 `'searching'`,一直到 `_finalize_dangling_tool_rounds` 在**任务末尾**才清扫 ⇒ **一次 Stop 或一次 Reject 会让转圈动画转完这一整轮剩余时间**。现在两者在被决定的当刻就带上终态判决。
+- **★ NEUTER 必须含反向那一发:** 摘 cache lane → 2 红;摘 reject lane → 2 红;去掉 aborted 判决 → 1 红;恢复旧的 rejected-only 客户端守卫 → 1 红;终态集合置空 → 1 红;**反向:把 status 完全冻结 → 1 红**(证明「不许覆盖终态」没有过度到「正常 round 也到不了 done」)。只做正向的话,一个「什么都不写 status」的实现会全绿。
+- **★ fixture 判据延续上一批的教训并前置执行:** 本套件的 round **一律用真实 `_build_tool_round_entry` 构造**——手工造 dict 会漏 `tStart`、让时长恒 0ms,那是 fixture 缺陷伪装成产品缺陷,上一批已被咬过一次。
+- **刻意不动的一处:** L630 screenshot lane 留在 post-phase——它的终态取决于**模型有没有视觉能力**,而那要等 post-phase 才决议;它本来就自己发 `tool_complete`,不是遗漏。
+- **顺带证伪一条既有红灯并单独开票(不塞进本批):** `test_events_round_key_unified` 在干净 HEAD 上就红,实测把两批改动全部回滚后仍红。根因是**守卫误报**:PHASE 的 `detailArgs` **描述文本**里含示例 `{"round": 3, ...}`,守卫在 fields 块里搜 `'round'` 命中了**文档字符串的值**而非字段名(PHASE 真字段是 `roundNum`,早已统一)。已开 `pt_174f89ef93ac41be`,倾向改守卫为只断言 fields 的 **key**——值里出现任何单词都不该让结构守卫转红,与 charter #24「负断言不能被散文满足」同源。
+- **验收边界:** 后端 + 前端 bundle,**运行中进程不带**,需重启 + bundle 重建;真浏览器未实测(node 端到端驱动 shipped reducer)。
+
 ### 2026-07-30(工具完成→前端停转) — owner 报「搜索完了转圈还在转,要等下一个工具的第一个 token 才更新,没法排查卡在哪」;实测**不是等下一个工具,而是等本轮全部工具**,而且是**三道互不相同的屏障** + 一个让任何修复都不可证伪的缺失量具(`pt_67ffc2b700094ce9` DONE;commits `bcaad758` 17 文件 +2795/-133、自审补救 `6c09656c`;新 4 套 **35 测试全部失败先行**(19 红:3 排序/4 批量/4 push/8 时钟),**NEUTER×7 各咬各的**(3/4/1/4/1/1/1);相邻环 **173/173**)
 
 - **★ owner 的推断偏早了一格,真相更宽:** 票面猜「等下一个工具的第一个 token」。实测 `tool_result`(停转圈那半)**本来就是即时的**——handler 在 worker 线程里就发了;真正被推迟的是 `tool_complete`(内容/token/预览芯片),它在 `pool.shutdown(wait=True)` **之后**的 post-phase 才发 ⇒ 一轮里 0.05s 的 `read_files` 要等 40s 的 `web_search`。**判据:先分清「哪一半慢」再动手,否则会去修本来就对的那半。**

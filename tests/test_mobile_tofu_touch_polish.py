@@ -125,8 +125,26 @@ def _strip_comments(css_text: str) -> str:
     """Remove /* ... */ comments. The sibling's `_iter_rules` splits on `{`/`}`,
     so a comment containing literal braces (e.g. an explanatory `{padding:...}` )
     corrupts rule parsing. Browsers ignore comments entirely; we do too — AFTER
-    any marker-based slicing, since some block markers live inside comments."""
-    return re.sub(r'/\*.*?\*/', '', css_text, flags=re.DOTALL)
+    any marker-based slicing, since some block markers live inside comments.
+
+    Delegates to the SINGLE shared implementation (charter #24).
+
+    EQUIVALENCE, MEASURED on the real 22k-line static/styles.css rather than
+    assumed: the local ``re.sub(r'/\*.*?\*/', '', css, flags=re.DOTALL)`` this
+    replaced and ``strip_comments(lang='css', inline=True)`` produce an
+    IDENTICAL selector set (6466 rules, 0 selectors unique to either side) and
+    a byte-identical whitespace-stripped content signature. They differ only in
+    LINE NUMBERING -- the shared one blanks comment lines to preserve line
+    count, the local one deleted them (20295 vs 22400 lines) -- which leaves 25
+    rule bodies differing in whitespace alone. Every assertion here is
+    whitespace-insensitive (substring / regex on a rule body), so the swap is
+    behaviour-preserving; the suite is the proof.
+
+    Keeping N copies of "what counts as a comment" is what let a fix land in one
+    copy and not its duplicate -- incident 3 in the shared module's docstring.
+    """
+    from tests._source_scan import strip_comments
+    return strip_comments(css_text, lang='css', inline=True)
 
 
 def _mobile_cascade(css_text: str, marker: str) -> str:

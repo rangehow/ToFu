@@ -940,6 +940,7 @@ _DEFERRED_FILES = [
     'task-mode.js',       # Task Mode viewer (openTaskMode) — reads _ORCH_* at runtime → AFTER orchestration.js
     # paper-reader.js decomposition (Epic E, 2026-07-11). Cohesive leaf siblings
     # load BEFORE paper-reader.js; all window-scope var (no load-time cross-read).
+    'paper/push_transport.js',  # shared push-vs-poll transport: paperAttachPush/paperDetachPush + the seq-gated exactly-once ingest (paperIngestEvent), used by report/qa/recommend → window-scope leaf, MUST load before every paper/* consumer
     'paper/reader_prefs.js',  # reader comfort prefs (text-size + width); leaf
     'paper/arxiv.js',     # arXiv search + describe-recommend + fetch; owns _recStream (read by core KaTeX hook at runtime) → load before paper-reader.js
     'paper/qa.js',        # Q&A tab render+send+poll; QA state + _ensurePaperText stay in core → load before paper-reader.js

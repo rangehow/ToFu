@@ -12023,9 +12023,11 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
    diorama, per the desktop-pet / oneko / Shimeji wander model). TWO nested
    layers so their transforms never fight: .tofu-pet owns POSITION (translateX,
    set inline by JS as it wanders) and .tofu-pet-img owns the per-frame LIFE
-   animation (breathe / walk-bob). DIRECTION is NOT a layer — it lives inside
-   the sprite on its [data-space="char"] groups (see --pet-face-flip below). It is clamped to a safe track between the left chip and the right
-   controls, and paints BELOW them (z1 < z2) so it never blocks a hit target.
+   animation (breathe / walk-bob). DIRECTION is NOT a layer — it lives on the
+   <img> frame elements themselves (scaleX(var(--pet-face-flip)), below), so
+   the mirror never fights the keyframes on their parent. The pet is clamped
+   to a safe track between the left chip and the right controls, and paints
+   BELOW them (z1 < z2) so it never blocks a hit target.
    Mounted regardless of theme; other themes hide it (neutraliser below). ── */
 .tofu-pet{
   position:absolute;
@@ -12050,8 +12052,10 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   --pet-shade-dx:0px;
   --pet-light-warm:0;
   --pet-bright:1;
-  /* ±1 — mirrors ONLY the sprite's character-space groups (face + feet).
-     The block's three faces stay in world space so the sun never moves. */
+  /* ±1 — mirrors the WHOLE frame (body + gaze + stride). Safe because the
+     AI-designed character is FRONT-FACING with soft symmetric shading: there
+     is no baked sun to drag around. REQUIRED for the same reason: the body
+     must turn with the stride, or the pet moonwalks (the 2026-07-30 report). */
   --pet-face-flip:1;
 }
 .tofu-pet[data-state="drag"]{cursor:grabbing}
@@ -12061,14 +12065,19 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
    airborne: it must rise ABOVE that near plane, not stay trapped behind the
    grass. Lift the held sprite above the fg canvas (z2) while dragging. */
 .tofu-pet[data-state="drag"]{z-index:5}
-/* DIRECTION lives INSIDE the sprite (--pet-face-flip, consumed by the frame's
-   [data-space="char"] groups), not on a wrapper around it. Mirroring the whole
-   sprite also mirrored the block's baked shading, so the sun appeared to jump
-   across the body on every turn while the cast shadow — derived from the REAL
-   scene sun — correctly stayed put. Still a bare property write with NO
-   transition: tweening the flip would pass the face through scaleX(0) and
-   smear it, the "flips like a sheet of paper" bug the old wrapper avoided. The
-   turn's motion is carried by the data-turning pivot pop below. */
+/* DIRECTION lives on the <img> FRAME ELEMENTS (--pet-face-flip, consumed by
+   the `.tofu-pet-img > img` rule below), NOT on the .tofu-pet-img layer: that
+   layer's transform is owned by the breathe/walk keyframes, and an animation
+   always wins over a static transform on the SAME element. The imgs are its
+   children, so their own transform is free. History: the isometric SVG body
+   could not be mirrored without moving its baked sun, so the flip was
+   confined to a character-space subgroup INSIDE the svg — which froze the
+   body's 3/4 orientation and made it moonwalk half the time. The front-facing
+   raster art has no baked sun, so the whole frame turns together. Still a
+   bare property write with NO transition: tweening the flip would pass the
+   face through scaleX(0) and smear it, the "flips like a sheet of paper" bug
+   the old wrapper avoided. The turn's motion is carried by the data-turning
+   pivot pop below. */
 /* A turn is a PIVOT, not a page-flip: tofu-pet.js stamps data-turning="1" for
    ~260ms whenever the facing flips, and this brief squash-hop makes the pet
    plant + spin. It composites over the breathe/walk anim (they own translate/
@@ -12081,10 +12090,10 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   height:100%;
   user-select:none;
   -webkit-user-drag:none;
-  /* the pet is a BRAND-NATIVE SVG frame (static/icons/pet/tofu/tofu-<x>.svg, a
-     32-unit viewBox rendered into this 30px box) → smooth scaling, crisp at any
-     DPR. pixelated/crisp-edges applies to native-resolution pixel art; here it
-     would only jag the vector outline into mud. */
+  /* the pet is an AI-designed transparent PNG frame (static/icons/pet/tofu/
+     tofu-<x>.png, ≤160px native rendered into this 30px box) → downscaling
+     keeps it crisp at any DPR. pixelated/crisp-edges applies to native-
+     resolution pixel art; here it would only jag the soft outline into mud. */
   image-rendering:auto;
   transform-origin:50% 92%;
   animation:tofuPetBreathe 3.8s ease-in-out infinite;
@@ -12099,15 +12108,27 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
     brightness(calc(var(--pet-bright,1) + var(--pet-light-warm,0) * 0.05))
     saturate(calc(1 + var(--pet-light-warm,0) * 0.14));
 }
-/* Every frame is parsed ONCE and kept as a live <svg> child; the engine toggles
-   which one is visible rather than rebuilding markup 13×/s. They stack in the
-   same box, so each fills the layer and only the current one is displayed. */
-.tofu-pet .tofu-pet-img > svg{
+/* Every frame is kept as a live <img> child; the engine toggles which one is
+   visible rather than re-decoding a PNG 13×/s. They stack in the same box, so
+   each fills the layer and only the current one is displayed. object-fit:
+   contain anchors each trimmed frame's own box, so the feet of every pose
+   share one baseline while squash/stretch poses keep their height contrast;
+   and it centres the art horizontally, which is what the facing mirror flips
+   about. The mirror (scaleX(var(--pet-face-flip))) lives HERE — a child of
+   the animated layer, so it never fights the keyframes (see the direction
+   note above). */
+.tofu-pet .tofu-pet-img > img{
   position:absolute;
   inset:0;
   width:100%;
   height:100%;
-  overflow:visible;
+  object-fit:contain;
+  /* bottom-ANCHOR, not the centre default: a wide squash pose (scratch2) is
+     shorter than the box, and centring would float its feet off the ground.
+     Every frame's trim bottom IS the foot line, so they all plant here. */
+  object-position:center bottom;
+  transform:scaleX(var(--pet-face-flip, 1));
+  -webkit-user-drag:none;
 }
 /* Walking → a gentle vertical BOUNCE synced to the ~600ms 8-frame stride. The
    FRAMES carry the squash/stretch + the gait; CSS only adds the up/down travel

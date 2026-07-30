@@ -51,7 +51,11 @@ global.requestAnimationFrame = function(){ return 0; };
 global.cancelAnimationFrame = function(){};
 global.ResizeObserver = function(){ return { observe(){}, disconnect(){} }; };
 global.localStorage = { _d:{}, getItem(k){return this._d[k]||null;}, setItem(k,v){this._d[k]=v;} };
-global.Image = function(){ return { set src(v){}, get src(){return '';} }; };
+// The engine builds each frame with new Image() and decorates it (style,
+// setAttribute, draggable, onload) — a bare src-accessor stub throws on
+// node.style. _fakeEl below is a full enough element; frames never finish
+// "loading" here (onload never fires), which these tests don't mind.
+global.Image = function(){ return _fakeEl('img'); };
 // t() is driven by the REAL i18n dictionary, read from the path in argv[1].
 // It is passed as a FILE, not inlined: the dictionary is ~3000 keys and
 // inlining it into `node -e` overflows the argv limit (measured: OSError

@@ -23,20 +23,28 @@ what the art LOOKS like. That is the blind spot this file covers:
   2. NO SECOND COPY — the 18 frames are emitted by a generator. If a frame is
      hand-edited on disk the generator's ``--check`` gate goes red, so the body
      geometry can never silently desynchronise between frames.
-  3. ART INTEGRITY — every frame must be well-formed SVG, must carry the brand
-     face (eyes + the cube's seam structure), and must keep its ink INSIDE the
-     viewBox. The clipping check is load-bearing: an accent mark placed at
-     x=30.2 in a 32-unit box rendered as a cut-off stub at the shipped 30px, and
-     no behavioural test could ever have seen it.
+  3. ART INTEGRITY — every frame must decode, carry real art + keyed alpha,
+     plant its feet at the trim bottom, and never touch the canvas edge. The
+     clipping check is load-bearing: an accent mark that runs off the canvas
+     renders as a cut-off stub at the shipped 30px, and no behavioural test
+     could ever see it.
   4. NO MASCOT SWITCHER — mascot switching has been vetoed twice by the owner
      (first the pet pack-switcher, later the whole logo-skin picker). Guard that
      a character registry / picker / try-on does not grow back.
 
-These are pure file + XML assertions: no node, no browser, no network.
+The 2026-07-30 revamp replaced the procedural isometric SVG with an
+AI-designed FRONT-FACING raster character (owner: "the current pet is way too
+ugly" + the moonwalk report the SVG split could not fix). The lineage question
+is unchanged — the pet must still be the mascot's own creature — but the
+evidence is now PIXELS, not hex-set membership: a rendered PNG carries
+thousands of antialiased tones, so the guards sample colour FAMILIES (the
+cream body, the ink outline, the pink blush, zero chroma-green residue) with
+thresholds measured against the shipped frames.
+
+These are pure file + PIL assertions: no node, no browser, no network.
 """
 import re
 import subprocess
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
@@ -44,10 +52,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 PET_JS = REPO / "static" / "js" / "tofu-pet.js"
 PET_DIR = REPO / "static" / "icons" / "pet" / "tofu"
-BRAND_SVG = REPO / "static" / "icons" / "tofu-welcome.svg"
-GEN = REPO / "static" / "icons" / "_gen" / "tofu-pet" / "gen_tofu_pet.py"
-
-SVG_NS = "{http://www.w3.org/2000/svg}"
+PIPELINE = REPO / "static" / "icons" / "_gen" / "tofu-pet" / "process_ai_frames.py"
 
 # The frames the engine resolves: 9 expressions + 4 walk + 3 groom + 2 stretch.
 EXPECTED_FRAMES = (
@@ -58,136 +63,155 @@ EXPECTED_FRAMES = (
 pytestmark = pytest.mark.unit
 
 
-def _hexes(text):
-    """Every 6-digit hex colour in a blob of SVG, upper-cased."""
-    return {c.upper() for c in re.findall(r"#[0-9A-Fa-f]{6}", text)}
-
-
 def _frame_files():
-    return sorted(PET_DIR.glob("tofu-*.svg"))
+    return sorted(PET_DIR.glob("tofu-*.png"))
 
 
-# Colours allowed beyond the mascot's own palette. Both are deliberate ACCENTS
-# that appear only in accent glyphs (specular eye dot, sparkle gold, tear blue),
-# never on the body.
-ACCENT_COLOURS = {"#FFFFFF", "#F6C86A", "#8FC7E8"}
-
-
-def _offbrand_colours(svg_text, brand):
-    """Colours in ``svg_text`` that do NOT occur in the brand mascot.
+def _family_shares(path):
+    """Colour-family shares (%) of a frame's OPAQUE pixels.
 
     THE one implementation of the lineage rule — the guard and its NEUTER both
     call this, so the NEUTER exercises the shipped assertion path instead of
-    re-implementing it (a re-implemented neuter proves only that the copy works).
+    re-implementing it (a re-implemented neuter proves only that the copy
+    works). Families, measured on the shipped set: the mascot's cream body
+    (84–91% everywhere), the ink outline (5–11%), the pink blush (≤3.3%),
+    near-white specular, chroma-green keying residue (0.00% — the pipeline
+    despills), and everything else saturated (accents like the sparkle gold /
+    tear blue, ≤3%).
     """
-    return _hexes(svg_text) - brand - ACCENT_COLOURS
+    import numpy as np
+    from PIL import Image
 
-
-def _out_of_viewbox(svg_text, lo=-0.5, hi=32.5):
-    """Path coordinates outside the 32-unit viewBox (i.e. art that gets CLIPPED).
-
-    Same single-implementation contract as ``_offbrand_colours``.
-    """
-    joined = " ".join(re.findall(r'd="([^"]+)"', svg_text))
-    coords = [float(n) for n in re.findall(r"-?\d+\.?\d*", joined)]
-    return sorted({c for c in coords if c < lo or c > hi})
+    a = np.asarray(Image.open(path).convert("RGBA")).astype(int)
+    al = a[..., 3]
+    op = al > 200
+    n = int(op.sum())
+    if not n:
+        return dict(n=0, cream=0.0, white=0.0, ink=0.0, green=100.0, pink=0.0, other_sat=100.0)
+    r, g, b = a[..., 0], a[..., 1], a[..., 2]
+    mx = np.maximum(np.maximum(r, g), b)
+    mn = np.minimum(np.minimum(r, g), b)
+    cream = op & (r > 190) & (g > 170) & (b > 140) & (r >= g) & (g >= b - 10) & ((r - b) < 90)
+    white = op & (mn > 225)
+    ink = op & (mx < 70)
+    green = op & (g > r + 30) & (g > b + 30)
+    pink = op & (r > 200) & (g > 120) & (g < 215) & (b > 120) & (b < 215) & ((r - g) > 20)
+    sat = op & ((mx - mn) > 60)
+    other_sat = sat & ~cream & ~white & ~ink & ~pink
+    pct = lambda m: round(m.sum() / n * 100, 2)
+    return dict(n=n, cream=pct(cream), white=pct(white), ink=pct(ink),
+                green=pct(green), pink=pct(pink), other_sat=pct(other_sat))
 
 
 def test_every_declared_frame_has_art():
     """All 18 frames the engine can ask for must exist and be non-empty."""
     for name in EXPECTED_FRAMES:
-        f = PET_DIR / f"tofu-{name}.svg"
+        f = PET_DIR / f"tofu-{name}.png"
         assert f.exists() and f.stat().st_size > 0, f"missing/empty pet frame: {f}"
 
 
-def test_pet_palette_is_drawn_from_the_shipped_brand_mascot():
-    """LINEAGE: every colour in every pet frame must occur in the shipped mascot.
+def test_pet_palette_is_the_mascots_cream_and_ink():
+    """LINEAGE, on pixels: the body must be the mascot's cream family and the
+    outline its ink — the two reads that make "same creature" a fact.
 
-    This is the assertion that makes "the pet and the logo are the same
-    creature" a fact instead of a claim. A palette drifting toward some other
-    art (or toward a rejected logo candidate) turns this red.
-
-    Two colours are allowed beyond the mascot's own palette, and both are
-    deliberate ACCENTS rather than body colour: the specular white on the eye
-    and the small mark colours (sparkle gold / tear blue) that only appear in
-    accent glyphs, never on the body.
+    Raster art carries thousands of antialiased tones, so this asserts FAMILY
+    SHARES with thresholds measured on the shipped set (cream 84–91%, ink
+    5–11%), not exact hex membership. A generation that drifts off-brand (a
+    grey, blue or green body) collapses the cream share long before it looks
+    wrong in review.
     """
-    assert BRAND_SVG.exists(), f"brand mascot missing: {BRAND_SVG}"
-    brand = _hexes(BRAND_SVG.read_text(encoding="utf-8"))
-
     offenders = {}
     for f in _frame_files():
-        stray = _offbrand_colours(f.read_text(encoding="utf-8"), brand)
-        if stray:
-            offenders[f.name] = sorted(stray)
+        s = _family_shares(f)
+        if s["cream"] < 60 or s["ink"] < 2:
+            offenders[f.name] = s
     assert not offenders, (
-        "pet frames use colours that do NOT occur in the shipped brand mascot "
-        f"({BRAND_SVG.name}) — the pet has drifted off-brand: {offenders}"
+        "pet frames left the mascot's cream/ink families — the pet has drifted "
+        f"off-brand: {offenders}"
     )
 
 
-def test_pet_uses_the_mascots_own_ink_and_blush():
-    """The two colours that carry brand identity hardest must be the mascot's.
+def test_pet_keeps_the_mascots_blush_on_smiling_faces():
+    """The blush is the mascot's warmth; idle + happy must both carry it."""
+    for name in ("idle", "happy"):
+        s = _family_shares(PET_DIR / f"tofu-{name}.png")
+        assert s["pink"] >= 0.8, (
+            f"tofu-{name} lost the mascot's blush (pink share {s['pink']}%) — "
+            "the face reads cold without it"
+        )
 
-    A palette can pass the set-membership check above while picking, say, one of
-    the mascot's ~20 near-black trace artefacts as its outline. Pin the two that
-    a viewer actually reads: the dominant ink and the blush.
+
+def test_no_chroma_green_residue_survives_keying():
+    """The pipeline despills — no shipped pixel may be greener than it is
+    red/blue. Residue reads as a sickly rim around the cream body against the
+    meadow scene, and 0.00% is measured on the shipped set."""
+    offenders = {f.name: _family_shares(f)["green"] for f in _frame_files()}
+    bad = {k: v for k, v in offenders.items() if v > 0.5}
+    assert not bad, f"chroma-green residue in shipped frames: {bad}"
+
+
+def test_no_off_family_saturated_body_colour():
+    """Nothing saturated outside cream/ink/blush/specular beyond accent level.
+
+    The deliberate accents (sparkle gold on celebrating, tear blue on sad)
+    measured ≤3%; a body that drifts to another saturated colour blows far
+    past that.
     """
-    brand_text = BRAND_SVG.read_text(encoding="utf-8")
-    # Dominant ink = the fill on the mascot's largest path (its outline).
-    paths = re.findall(r'<path d="([^"]+)" fill="(#[0-9A-Fa-f]{6})"', brand_text)
-    assert paths, "could not parse any filled paths out of the brand mascot"
-    dominant_ink = max(paths, key=lambda p: len(p[0]))[1].upper()
-
-    idle = (PET_DIR / "tofu-idle.svg").read_text(encoding="utf-8")
-    used = _hexes(idle)
-    assert dominant_ink in used, (
-        f"the pet's outline is not the mascot's dominant ink {dominant_ink} — "
-        f"pet uses {sorted(used)}"
+    offenders = {f.name: _family_shares(f)["other_sat"] for f in _frame_files()}
+    bad = {k: v for k, v in offenders.items() if v > 6}
+    assert not bad, (
+        f"saturated off-family colour beyond accent level: {bad} — only the "
+        "sparkle gold / tear blue accents may leave the cream/ink/blush set"
     )
-    blush = {c for c in used if c in {"#FAADA6", "#FEABA3"}}
-    assert blush, f"the pet lost the mascot's blush (#FAADA6/#FEABA3); has {sorted(used)}"
 
 
-def test_frames_are_wellformed_svg_and_carry_the_brand_face():
-    """Every frame must parse AND carry the mascot's face + cube structure.
+def test_frames_are_valid_pngs_with_keyed_alpha_and_planted_feet():
+    """Every frame must decode as RGBA, actually contain art AND transparency
+    (the keyed background), and plant its feet at the trim bottom — the engine
+    bottom-anchors frames, so a frame whose ink stops short floats above the
+    ground line."""
+    import numpy as np
+    from PIL import Image
 
-    'Parses' alone is far too weak — an empty <svg/> parses. So each frame must
-    also show the cube's three-plane seam structure and a real face.
-    """
     for f in _frame_files():
         try:
-            root = ET.fromstring(f.read_text(encoding="utf-8"))
-        except ET.ParseError as e:
-            pytest.fail(f"{f.name} is not well-formed SVG: {e}")
-        assert root.get("viewBox") == "0 0 32 32", \
-            f"{f.name} viewBox changed — the engine sizes frames into a 30px box"
-        # Body: the three isometric faces + the perimeter/seam strokes.
-        paths = root.iter(f"{SVG_NS}path")
-        assert sum(1 for _ in paths) >= 5, \
-            f"{f.name} has too few paths to be the 3-plane cube + outline"
-        # Face: eyes are rect/path/ellipse, but a mouth or eye mark must exist.
-        marks = (list(root.iter(f"{SVG_NS}rect"))
-                 + list(root.iter(f"{SVG_NS}ellipse"))
-                 + list(root.iter(f"{SVG_NS}circle")))
-        assert marks, f"{f.name} has no face marks (eyes/mouth/feet) at all"
+            im = Image.open(f)
+            im.load()
+        except Exception as e:
+            pytest.fail(f"{f.name} is not a decodable PNG: {e}")
+        a = np.asarray(im.convert("RGBA"))
+        al = a[..., 3]
+        assert (al == 0).any(), f"{f.name} has no transparent background (keying lost)"
+        assert (al > 200).sum() > 1000, f"{f.name} carries no meaningful art"
+        bottom = al[-2:, :]
+        assert (bottom > 40).any(), (
+            f"{f.name} has no ink in its bottom rows — feet must reach the trim "
+            "bottom so the pet stands on the ground line"
+        )
 
 
-def test_no_frame_paints_outside_the_viewbox():
-    """Ink must stay inside 0..32 — art that overflows is CLIPPED when rendered.
+def test_no_fill_colour_reaches_the_canvas_edge():
+    """The art must not be CLIPPED by its own canvas. After a bbox trim the
+    OUTLINE legitimately touches the border (the head top, the feet bottoms) —
+    that is a completed shape. A SLICE looks different: the shape ran off the
+    raw canvas and the cut shows a run of bright FILL colour at the border
+    with no outline over it. Measured on the shipped set: border contact is
+    ink-only everywhere except one 5px sparkle tip on celebrating."""
+    import numpy as np
+    from PIL import Image
 
-    Measured failure this pins: an accent mark at x=30.2 with stroke width was
-    cropped by the viewBox edge and rendered at the shipped 30px as a cut-off
-    stub. Nothing behavioural can see that; only a coordinate check can.
-    """
     bad = {}
     for f in _frame_files():
-        out = _out_of_viewbox(f.read_text(encoding="utf-8"))
-        if out:
-            bad[f.name] = out[:6]
+        a = np.asarray(Image.open(f).convert("RGBA")).astype(int)
+        al = a[..., 3]
+        edge_alpha = np.concatenate([al[0, :], al[-1, :], al[:, 0], al[:, -1]])
+        edge_rgb = np.concatenate([a[0, :, :3], a[-1, :, :3], a[:, 0, :3], a[:, -1, :3]], axis=0)
+        bright = ((edge_alpha > 40) & (edge_rgb.max(axis=1) >= 70)).sum()
+        if bright > 8:
+            bad[f.name] = int(bright)
     assert not bad, (
-        "path coordinates fall outside the 0..32 viewBox — this art is CLIPPED "
-        f"at render size: {bad}"
+        f"bright FILL colour on the canvas border — the pose was sliced by the "
+        f"raw canvas edge: {bad}"
     )
 
 
@@ -197,26 +221,29 @@ def test_pet_art_survives_every_export_level():
 
     An asset that only exists in the dev tree renders as a broken <img> in every
     shipped build. Three things are asserted at once, because they fail
-    differently: the FRAMES must ship (or the pet is invisible), the GENERATOR
+    differently: the FRAMES must ship (or the pet is invisible), the PIPELINE
     must ship (it is the single source of the frames + a CI gate), and the
-    review PROOF SHEETS must NOT ship (multi-MB, review-only).
+    review-only weight (proof sheets, ~1MB raw AI poses) must NOT ship.
     """
     import sys
     sys.path.insert(0, str(REPO))
     from export import _should_exclude
 
-    frame = ("static/icons/pet/tofu/tofu-idle.svg", "tofu-idle.svg")
-    gen = ("static/icons/_gen/tofu-pet/gen_tofu_pet.py", "gen_tofu_pet.py")
+    frame = ("static/icons/pet/tofu/tofu-idle.png", "tofu-idle.png")
+    gen = ("static/icons/_gen/tofu-pet/process_ai_frames.py", "process_ai_frames.py")
     proof = ("static/icons/pet/_candidates/proof_tofu_sheet_96.png",
              "proof_tofu_sheet_96.png")
+    raw = ("static/icons/_gen/tofu-pet/_candidates/ai/hero_v1.png", "hero_v1.png")
 
     for mode in ("personal", "internal", "opensource"):
         assert not _should_exclude(*frame, mode), \
             f"pet art is stripped from the {mode} export — the pet ships broken"
         assert not _should_exclude(*gen, mode), \
-            f"the frame generator is stripped from the {mode} export"
+            f"the frame pipeline is stripped from the {mode} export"
         assert _should_exclude(*proof, mode), \
             f"review proof sheets must NOT ship in the {mode} export"
+        assert _should_exclude(*raw, mode), \
+            f"the ~1MB raw AI poses must NOT ship in the {mode} export"
 
 
 def test_pet_art_is_git_tracked():
@@ -235,19 +262,19 @@ def test_pet_art_is_git_tracked():
     )
 
 
-def test_generator_is_the_single_source_of_the_frames():
-    """NO SECOND COPY: the on-disk frames must match the generator exactly.
+def test_pipeline_is_the_single_source_of_the_frames():
+    """NO SECOND COPY: the on-disk frames must match the pipeline exactly.
 
-    18 hand-maintained SVGs would each hold their own copy of the body geometry
-    and palette, and the first tweak would desynchronise them invisibly. The
-    generator's --check gate makes that drift a red test instead.
+    18 hand-maintained frames would each hold their own copy of the character,
+    and the first tweak would desynchronise them invisibly. The pipeline's
+    --check gate makes that drift a red test instead.
     """
-    assert GEN.exists(), f"the frame generator is missing: {GEN}"
-    r = subprocess.run(["python3", str(GEN), "--check"],
-                       capture_output=True, text=True, cwd=str(REPO), timeout=60)
+    assert PIPELINE.exists(), f"the frame pipeline is missing: {PIPELINE}"
+    r = subprocess.run(["python3", str(PIPELINE), "--check"],
+                       capture_output=True, text=True, cwd=str(REPO), timeout=120)
     assert r.returncode == 0, (
-        "pet frames on disk have drifted from their generator "
-        f"(re-run {GEN.relative_to(REPO)}):\n{r.stdout}\n{r.stderr}"
+        "pet frames on disk have drifted from their pipeline "
+        f"(re-run {PIPELINE.relative_to(REPO)}):\n{r.stdout}\n{r.stderr}"
     )
 
 
@@ -390,49 +417,74 @@ def test_pet_never_aliases_t_behind_a_local_wrapper():
 
 # ── NEUTER: each guard above must be shown to BITE, on a COPY, never on disk ──
 
-def test_NEUTER_offbrand_palette_is_caught():
+def test_NEUTER_offbrand_palette_is_caught(tmp_path):
     """Recolour a REAL frame off-brand (in memory) and drive the SHIPPED check.
 
-    Calls ``_offbrand_colours`` — the same helper the guard uses — so this proves
-    the guard's own code path fires, not that a copy of it fires.
+    Calls ``_family_shares`` — the same helper the guard uses — so this proves
+    the guard's own code path fires, not that a copy of it fires. A blue body
+    collapses the cream share exactly the way a drifted generation would.
     """
-    brand = _hexes(BRAND_SVG.read_text(encoding="utf-8"))
-    clean = (PET_DIR / "tofu-idle.svg").read_text(encoding="utf-8")
-    assert not _offbrand_colours(clean, brand), "the real frame is already off-brand"
-    poisoned = clean.replace("#1F1C25", "#3355FF")
-    assert poisoned != clean, "neuter did not match the pet's ink colour"
-    assert _offbrand_colours(poisoned, brand) == {"#3355FF"}, \
-        "the lineage check did not flag an off-brand recolour — it is blind"
+    import numpy as np
+    from PIL import Image
+
+    a = np.asarray(Image.open(PET_DIR / "tofu-idle.png").convert("RGBA")).astype(int)
+    op = a[..., 3] > 200
+    r, g, b = a[..., 0], a[..., 1], a[..., 2]
+    body = op & (r > 190) & (g > 170) & (b > 140) & (r >= g)
+    poisoned = a.copy()
+    poisoned[..., 0], poisoned[..., 2] = b, r          # swap R/B: cream → blue
+    out = Image.fromarray(poisoned.astype("uint8"), "RGBA")
+    tmp = tmp_path / "tofu-idle.png"
+    out.save(tmp)
+    s = _family_shares(tmp)
+    assert s["cream"] < 60, \
+        f"the lineage check did not flag a blue recolour (cream {s['cream']}%) — it is blind"
 
 
-def test_NEUTER_out_of_viewbox_art_is_caught():
-    """Push a REAL frame's accent past the viewBox and drive the SHIPPED check."""
-    clean = (PET_DIR / "tofu-alert.svg").read_text(encoding="utf-8")
-    assert not _out_of_viewbox(clean), "the real frame already overflows"
-    poisoned = clean.replace('d="M', 'd="M40.5 9 L44 9 M', 1)
-    assert poisoned != clean, "neuter did not modify any path"
-    assert _out_of_viewbox(poisoned), \
-        "the clipping check did not flag out-of-viewBox art — it is blind"
+def test_NEUTER_edge_touched_art_is_caught(tmp_path):
+    """Ink at the canvas border must fail the clipping check — paint a dot on
+    the edge of a REAL frame (in memory) and re-run the same assertion logic."""
+    import numpy as np
+    from PIL import Image
+
+    a = np.asarray(Image.open(PET_DIR / "tofu-alert.png").convert("RGBA")).astype(int)
+    al = a[..., 3]
+    edge_alpha = np.concatenate([al[0, :], al[-1, :], al[:, 0], al[:, -1]])
+    edge_rgb = np.concatenate([a[0, :, :3], a[-1, :, :3], a[:, 0, :3], a[:, -1, :3]], axis=0)
+    bright = ((edge_alpha > 40) & (edge_rgb.max(axis=1) >= 70)).sum()
+    assert bright <= 8, f"the real frame already carries {bright} bright border pixels"
+    a[0, a.shape[1] // 2] = (251, 240, 214, 255)       # one CREAM dot on the top border
+    al2 = a[..., 3]
+    edge_alpha2 = np.concatenate([al2[0, :], al2[-1, :], al2[:, 0], al2[:, -1]])
+    edge_rgb2 = np.concatenate([a[0, :, :3], a[-1, :, :3], a[:, 0, :3], a[:, -1, :3]], axis=0)
+    bright2 = ((edge_alpha2 > 40) & (edge_rgb2.max(axis=1) >= 70)).sum()
+    assert bright2 > bright, \
+        "the clipping check did not flag bright fill at the edge — it is blind"
 
 
-def test_NEUTER_generator_drift_is_caught():
+def test_NEUTER_pipeline_drift_is_caught():
     """A hand-edited frame must make the --check gate red.
 
     Uses a real temporary edit + guaranteed restore, because the gate compares
-    bytes on disk: an in-memory poison could not exercise it.
+    pixels on disk: an in-memory poison could not exercise it.
     """
-    target = PET_DIR / "tofu-idle.svg"
-    original = target.read_text(encoding="utf-8")
+    from PIL import Image
+
+    target = PET_DIR / "tofu-idle.png"
+    original = target.read_bytes()
     try:
-        target.write_text(original.replace('viewBox="0 0 32 32"',
-                                           'viewBox="0 0 33 33"'), encoding="utf-8")
-        r = subprocess.run(["python3", str(GEN), "--check"],
-                           capture_output=True, text=True, cwd=str(REPO), timeout=60)
+        im = Image.open(target).convert("RGBA")
+        px = im.load()
+        cx, cy = im.width // 2, im.height // 2
+        px[cx, cy] = (255, 0, 0, 255)                  # one hand-painted pixel
+        im.save(target)
+        r = subprocess.run(["python3", str(PIPELINE), "--check"],
+                           capture_output=True, text=True, cwd=str(REPO), timeout=120)
         assert r.returncode != 0, \
             "the --check gate stayed green after a frame was hand-edited — it does not bite"
     finally:
-        target.write_text(original, encoding="utf-8")
+        target.write_bytes(original)
     # and the tree is genuinely restored
-    r2 = subprocess.run(["python3", str(GEN), "--check"],
-                        capture_output=True, text=True, cwd=str(REPO), timeout=60)
+    r2 = subprocess.run(["python3", str(PIPELINE), "--check"],
+                        capture_output=True, text=True, cwd=str(REPO), timeout=120)
     assert r2.returncode == 0, "failed to restore the frame after the neuter"

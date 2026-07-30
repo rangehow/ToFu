@@ -8,47 +8,45 @@
  * bird) that drifts through the background. The classic desktop-pet wander
  * model (oneko / Shimeji), but coupled to the scene so the two interact. The
  * pet passes BEHIND the opaque control pills via z-index, so it can NEVER
- * block a hit target. Each pose is a 32px SVG frame in
- * static/icons/pet/tofu/tofu-<x>.svg.
+ * block a hit target. Each pose is a transparent PNG frame in
+ * static/icons/pet/tofu/tofu-<x>.png.
  *
- * CHARACTER: one tofu, one look. The pet IS the brand mascot — the isometric
- * cream block from static/icons/tofu-welcome.svg, same palette, same ω mouth,
- * same blush — so the creature in the bar and the logo above it are provably
- * the same character. (History: this bar first held a swappable "pack"
+ * CHARACTER: one tofu, one look. The pet IS the brand mascot — a front-facing
+ * cream tofu block in the mascot's palette, same ω mouth, same blush — so
+ * the creature in the bar and the logo above it are provably the same
+ * character. (History: this bar first held a swappable "pack"
  * registry, then a single borrowed pixel-art cat. Both the pack switcher and,
  * later, a logo-skin picker were removed on owner instruction — mascot
  * switching has been vetoed twice. Do NOT re-add a character registry, a
  * picker, or a localStorage try-on: ship ONE character.)
  *
- * The 18 frames are GENERATED, not hand-drawn:
- * static/icons/_gen/tofu-pet/gen_tofu_pet.py defines the body once and emits
- * every frame from a pose spec, so the geometry and palette cannot drift
- * between frames. Re-run it after any art change (it has a --check CI gate).
+ * The 22 frames are AI-DESIGNED raster art (2026-07-30 revamp), not the old
+ * procedural SVG: ai/hero_v1.png was drawn with the image tool and every other
+ * pose is an img2img edit of it, then
+ * static/icons/_gen/tofu-pet/process_ai_frames.py chroma-keys the green
+ * backdrop, trims, recentres and downscales each one to tofu-<frame>.png
+ * (it has a --check CI gate). One pipeline ⇒ the character cannot drift
+ * between frames.
  *
  * MOTION is a real frame-by-frame WALK CYCLE: keyposes advanced by a frame
- * ticker on the rAF loop while walking (NOT one image sliding). Because a
- * cube has no limbs to articulate, every pose is carried by the property a
- * block of tofu actually has — it is SOFT: squash on the down-beat, stretch
- * on the up-beat, tilt for a wobble. (Arm nubs were built and removed: at the
- * shipped 30px a raised nub reads as a mouse ear and a lowered one as a panel
- * glued to the side, both of which wreck the cube silhouette that makes this
- * the logo.) Layers (so transforms never fight): .tofu-pet owns POSITION
- * (translateX, set by the wander loop) · .tofu-pet-img owns the swapped frame +
- * idle breathe · and DIRECTION lives INSIDE the sprite, on its character-space
- * group, not on any wrapper.
+ * ticker on the rAF loop while walking (NOT one image sliding). Layers (so
+ * transforms never fight): .tofu-pet owns POSITION (translateX, set by the
+ * wander loop) · .tofu-pet-img owns the per-frame LIFE animation (breathe /
+ * walk-bob) · and DIRECTION lives on the individual <img> frame elements
+ * (scaleX(var(--pet-face-flip))) — a child of the animated layer, so the
+ * mirror never fights the keyframes.
  *
- * WHY DIRECTION IS NOT A WRAPPER MIRROR (the one-sun invariant): the block is an
- * isometric solid whose three faces and specular streak encode a sun in the
- * upper-left, and the scene lights the pet + its cast shadow from a sun that
- * really drifts (tofu-scene.js lightInfo). Mirroring the whole sprite to turn it
- * around therefore MOVED THE SUN: measured, the body's light/dark sides swapped
- * exactly (luminance 117 ↔ 183) on every turn while the cast shadow correctly
- * did not follow. The frames are now emitted in two groups —
- * [data-space="world"] (the solid + its lighting, never mirrored) and
- * [data-space="char"] (eyes/mouth/blush, the only things that flip) — and the
- * engine mirrors the second by setting --pet-face-flip. The sprite is INLINE
- * <svg> for the same reason: CSS custom properties cannot cross an <img>
- * boundary, so a sprite behind <img> can never be lit by the scene at all.
+ * WHY DIRECTION IS A WHOLE-SPRITE MIRROR AGAIN (the end of the one-sun split):
+ * the previous isometric body encoded a sun in its three faces, so mirroring
+ * was confined to a character-space subgroup (face+feet flipped, body never
+ * did). That kept the light consistent but meant the BODY's 3/4 orientation
+ * was frozen: half the time the cube's shaded depth face pointed against the
+ * direction of travel — the "walks backward / moonwalk" complaint, structural
+ * and unfixable while the body could not turn. The new character is
+ * FRONT-FACING with soft symmetric lighting, so mirroring the WHOLE frame is
+ * both safe (no baked sun to move) and complete (body, gaze and stride always
+ * agree with travel). The scene-sun coupling survives where it is
+ * art-independent: the cast shadow + the filter-based form light below.
  *
  * PET ⋈ SCENE INTERACTION (owner ask — "interaction between the pet and the
  * background"): tofu-scene.js exposes the drifting critter's position
@@ -106,18 +104,18 @@
   var _decor = DEFAULT_DECOR;
 
   // ── The pet's art: BRAND-NATIVE tofu frames at static/icons/pet/tofu/ as
-  // tofu-<frame>.svg. The character IS the Tofu mascot (the isometric cream
-  // block from static/icons/tofu-welcome.svg) rather than a borrowed cat, so
-  // the thing living in the bar and the logo above it are the same creature.
-  // The art is generated — static/icons/_gen/tofu-pet/gen_tofu_pet.py defines
-  // the body ONCE and emits all 18 frames from pose specs, so a palette tweak
-  // can never desynchronise them. SVG (not PNG): it is the brand's own format,
-  // it stays crisp at any DPR, and all 18 frames together are ~46KB vs ~85KB.
+  // tofu-<frame>.png. The character IS the Tofu mascot (a cream tofu block in
+  // the logo's palette) rather than a borrowed cat, so the thing living in the
+  // bar and the logo above it are the same creature. The art is AI-designed —
+  // static/icons/_gen/tofu-pet/process_ai_frames.py turns the raw poses into
+  // every shipped frame from one pipeline, so the character cannot
+  // desynchronise between frames. Transparent PNG + object-fit:contain: the
+  // squash/stretch poses keep their height contrast inside the fixed box.
   // URL built with BASE_PATH (from core.js) so it stays correct behind a
   // base-path / VS Code proxy. ──
   var PET_DIR = '/static/icons/pet/tofu';
   var PET_PREFIX = 'tofu-';
-  var PET_EXT = '.svg';
+  var PET_EXT = '.png';
   var _base = (typeof BASE_PATH === 'string') ? BASE_PATH : '';
   function _frameUrl(frame) {
     return _base + PET_DIR + '/' + PET_PREFIX + frame + PET_EXT;
@@ -287,22 +285,16 @@
   var _bar = null;        // .project-bar
   var _revertTimer = null;
 
-  // ── FRAME ART: each frame is INLINED into the DOM as a live <svg>, rather
-  // than pointed at with <img src>. That is a requirement, not a preference.
-  // The block's three faces are lit by the scene's sun through CSS custom
-  // properties (see _applyLight), and a custom property CANNOT cross an <img>
-  // boundary — inside an <img> the SVG is an isolated document, so every var()
-  // would collapse to its fallback and the pet would be welded to a frozen sun
-  // for ever. Inlining is also what lets the face mirror live INSIDE the sprite
-  // (see _face), keeping the body's shading in world space while the face turns.
-  //
-  // The 22 frames are fetched once, parsed once, and kept as live DOM. Frame
-  // changes then toggle which one is VISIBLE — no markup reparse, no node
-  // construction, nothing for the GC. Writing innerHTML per frame instead would
-  // rebuild the sprite's whole subtree 13 times a second, which is exactly the
-  // kind of per-frame churn that shows up as stutter on a busy page.
-  var _frameNode = Object.create(null);      // frame name → live <svg> element
-  var _frameFetching = Object.create(null);  // in-flight guard (fetch once)
+  // ── FRAME ART: each frame is an <img> kept live in the DOM. The 22 frames
+  // are created once and kept; frame changes then toggle which one is VISIBLE
+  // — no node construction, nothing for the GC. Rebuilding src per frame
+  // instead would re-decode a PNG 13 times a second, which is exactly the kind
+  // of per-frame churn that shows up as stutter on a busy page. (Raster art is
+  // what makes <img> safe here: the old SVG needed inlining so CSS vars could
+  // reach into it; the front-facing raster frames take their lighting from the
+  // filter chain on the parent layer, which works across an <img> boundary.)
+  var _frameNode = Object.create(null);      // frame name → live <img> element
+  var _frameFetching = Object.create(null);  // in-flight guard (create once)
   var _wantFrame = null;                     // last frame ASKED for
   var _curFrame = null;                      // frame currently visible
 
@@ -319,30 +311,27 @@
   function _loadFrame(name) {
     if (_frameNode[name] || _frameFetching[name]) return;
     _frameFetching[name] = 1;
-    fetch(_frameUrl(name)).then(function (r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.text();
-    }).then(function (txt) {
+    var node = new Image();
+    node.draggable = false;
+    node.alt = '';
+    node.style.display = 'none';
+    node.setAttribute('data-frame', name);
+    node.onload = function () {
       delete _frameFetching[name];
-      if (!_img || _frameNode[name]) return;
-      // Parse ONCE, here, and keep the element for the life of the page.
-      var holder = document.createElement('div');
-      holder.innerHTML = txt;
-      var svg = holder.querySelector('svg');
-      if (!svg) throw new Error('no <svg> in frame');
-      svg.style.display = 'none';
-      svg.setAttribute('data-frame', name);
-      _img.appendChild(svg);
-      _frameNode[name] = svg;
+      _frameNode[name] = node;
+      if (!_img) return;
+      _img.appendChild(node);
       // Paint only if this is still the frame we want — a walk cycle may have
-      // advanced several times while this fetch was in flight.
+      // advanced several times while this decode was in flight.
       if (_wantFrame === name) _paintFrame(name);
-    }).catch(function (e) {
+    };
+    node.onerror = function () {
       delete _frameFetching[name];
       // Same-origin static asset served by the same app that served this JS, so
       // this is not an expected state; surface it instead of failing silently.
-      console.warn('[TofuPet] frame art unavailable:', name, e && e.message);
-    });
+      console.warn('[TofuPet] frame art unavailable:', name);
+    };
+    node.src = _frameUrl(name);
   }
 
   // The ONE seam every pose path goes through, so "which art is on screen" has a
@@ -522,16 +511,25 @@
     tx.textContent = txt;
     b.appendChild(bg);
     b.appendChild(tx);
-    // Clamp the bubble's left within the bar so it never overflows the right
-    // edge (the callout is centred on the pet via translateX(-50%)).
+    _bar.appendChild(b);
+    _bubble = b;
+    _positionBubble();
+    _bubbleTimer = setTimeout(_hideBubble, 4200);
+  }
+  // The bubble is ANCHORED to the pet, not to the spot where the tap landed:
+  // a tap also STARTLES the pet into a flee dash, so a bubble positioned only
+  // once at show time was left hanging over empty floor while the pet scurried
+  // away (the "bubble doesn't follow" report). _place() calls this every frame
+  // while the bubble is alive, so it rides above the pet wherever it goes.
+  // Left is clamped inside the bar so the callout never overflows an edge (it
+  // is centred on the pet via translateX(-50%)).
+  function _positionBubble() {
+    if (!_bubble || !_bar) return;
     var petW = (_el && _el.offsetWidth) || 30;
     var barW = (_bar.getBoundingClientRect && _bar.getBoundingClientRect().width) || 0;
     var left = W.x + petW / 2;
     if (barW > 0) left = Math.max(40, Math.min(left, barW - 40));
-    b.style.left = Math.max(2, left).toFixed(1) + 'px';
-    _bar.appendChild(b);
-    _bubble = b;
-    _bubbleTimer = setTimeout(_hideBubble, 4200);
+    _bubble.style.left = Math.max(2, left).toFixed(1) + 'px';
   }
 
   // ══════════════════════════════════════════════════════════════════════
@@ -599,22 +597,16 @@
     if (pivot === undefined) pivot = true;
     var changed = (dir !== W.dir);
     W.dir = dir;
-    // ── THE MIRROR IS CHARACTER-SPACE ONLY ──
-    // Written as a custom property that the sprite's [data-space="char"] group
-    // consumes, so the eyes/mouth/blush turn while the block's three faces —
-    // which encode where the SUN is — stay in world space.
-    //
-    // This used to be scaleX(dir) on a wrapper around the WHOLE sprite, which
-    // mirrored the lighting too: measured, the body's light and dark sides
-    // swapped exactly (luminance 117 ↔ 183) on every turn, and the specular
-    // streak jumped from the top-left of the block to the top-right. Meanwhile
-    // the cast shadow is derived from the real scene sun and did NOT flip, so
-    // the body and its own shadow claimed two different suns and the pet read as
-    // a sticker rather than a solid standing in the diorama.
-    //
-    // Still a bare property write with no transition: tweening the flip would
-    // pass the face through scaleX(0) and smear it, the paper-flip the old
-    // wrapper was careful to avoid.
+    // ── THE MIRROR IS THE WHOLE FRAME, ON THE <img> ELEMENTS ──
+    // --pet-face-flip is consumed by the CSS on .tofu-pet-img > img — the
+    // CHILDREN of the animated layer, so the mirror never fights the breathe/
+    // walk keyframes on the parent. Whole-sprite mirroring is SAFE here
+    // because the character is front-facing with soft symmetric shading (there
+    // is no baked sun to drag around — see the header note), and it is
+    // REQUIRED for the same reason: the body must turn with the stride or the
+    // pet moonwalks. Still a bare property write with no transition: tweening
+    // the flip would pass the face through scaleX(0) and smear it, the
+    // paper-flip the old wrapper was careful to avoid.
     if (_el) _el.style.setProperty('--pet-face-flip', String(dir));
     // A real turn is a PIVOT, not a page-flip: overlay a brief squash-hop on the
     // sprite (CSS keyframe gated by data-turning) so the cat reads as planting
@@ -631,6 +623,7 @@
   }
   function _place() {
     if (_el) _el.style.transform = 'translateX(' + W.x.toFixed(1) + 'px)';
+    _positionBubble();   // the bubble rides above the pet, wherever it moved to
     // Subtle ground parallax: the scene drifts a fraction of the pet's travel
     // (opposite direction) for depth. The ground ::after reads --bar-scene-x.
     // Static under reduced-motion (the pet doesn't move → this never updates).
@@ -647,30 +640,16 @@
     }
   }
 
-  // ── LIGHTING: read the scene's live sun (TofuScene.lightInfo) and shade the
-  // sprite + point its cast shadow with the SAME source, so the pet is lit by
-  // the one sun that drifts over the diorama instead of reading as pasted on.
-  // Fully guarded: no scene / no light → reset to the neutral defaults (flat
-  // baked shading, centred shadow), so a scene-less or non-tofu pet is
-  // unchanged. Cheap: a few CSS var writes per frame, no layout.
-  // The two cream families the block's SIDE faces live between. Both are
-  // measured present in the shipped mascot (see the generator's palette note),
-  // and re-lighting only ever produces one of them or a blend of the two — so
-  // the pet cannot be lit off-brand into a colour the logo does not contain.
-  var FACE_LIT = ['#F6E3CB', '#E9D0AE'];    // front-facing plane, sunlit
-  var FACE_SHADE = ['#DFC4A3', '#E0C6A1'];  // the plane turned away
-
-  function _mixHex(a, b, t) {
-    function ch(s, i) { return parseInt(s.slice(i, i + 2), 16); }
-    function h2(n) { var s = Math.round(n).toString(16); return s.length < 2 ? '0' + s : s; }
-    var out = '#';
-    for (var i = 1; i < 7; i += 2) {
-      var av = ch(a, i), bv = ch(b, i);
-      out += h2(av + (bv - av) * t);
-    }
-    return out;
-  }
-
+  // ── LIGHTING: read the scene's live sun (TofuScene.lightInfo) and point
+  // the cast shadow + the filter-based form light with the SAME source, so
+  // the pet is lit by the one sun that drifts over the diorama instead of
+  // reading as pasted on. Both channels are art-independent (the ::after
+  // shadow ellipse + a CSS drop-shadow/brightness filter on the frame layer),
+  // so they work on the raster frames exactly as they did on the SVG — the
+  // per-face recolouring the SVG gradients allowed is gone with them, which
+  // is precisely why the front-facing art keeps its own soft symmetric
+  // shading. Fully guarded: no scene / no light → neutral defaults. Cheap: a
+  // few CSS var writes per frame, no layout.
   var _lastLightK = '';
   function _applyLight() {
     if (!_el) return;
@@ -680,7 +659,7 @@
         info = window.TofuScene.lightInfo();
       }
     } catch (e) { /* scene absent — flat shading, harmless */ }
-    var dx = 0, scale = 1, shade = 0, warm = 0, sunT = 0.5;
+    var dx = 0, scale = 1, shade = 0, warm = 0;
     if (info && typeof info.nx === 'number') {
       // Pet foot-centre as a 0..1 position along the bar, so "which side is the
       // sun on" is measured relative to the CAT, not the bar centre.
@@ -695,16 +674,11 @@
       // form shade sits on the anti-sun side of the body (same sign as shadow).
       shade = -rel * 0.7;                             // px drop-shadow x-offset
       warm = Math.max(0, Math.min(1, info.warm || 0)) * (1 - Math.abs(rel) * 0.4);
-      // ONE SUN, BOTH CHANNELS. The cast shadow above is already derived from
-      // `rel`; the block's OWN faces are now derived from the same number, so
-      // the body can no longer claim a different sun than its shadow does.
-      // 0 = sun fully to the pet's left · 1 = fully to its right.
-      sunT = (rel + 1) / 2;
     }
     // only touch the DOM when a rounded value actually changed (avoid per-frame
     // style churn when the cat + sun are momentarily static).
     var k = dx.toFixed(1) + '|' + scale.toFixed(2) + '|' + shade.toFixed(2) + '|' +
-      warm.toFixed(2) + '|' + sunT.toFixed(2);
+      warm.toFixed(2);
     if (k === _lastLightK) return;
     _lastLightK = k;
     var st = _el.style;
@@ -712,18 +686,6 @@
     st.setProperty('--pet-shadow-scale', scale.toFixed(2));
     st.setProperty('--pet-shade-dx', shade.toFixed(2) + 'px');
     st.setProperty('--pet-light-warm', warm.toFixed(2));
-    // Re-derive the two SIDE faces. The front face is lit when the sun is to the
-    // pet's left and shaded when it swings right; the right face does the
-    // opposite — so the pair swaps as the sun crosses over, which is what makes
-    // the solid look like it is standing under a moving light instead of wearing
-    // a painted-on one. The top face is left alone: the sun stays overhead
-    // (scene ny≈0.14), so the lit plane is lit from every sun position.
-    st.setProperty('--pet-front-a', _mixHex(FACE_LIT[0], FACE_SHADE[0], sunT));
-    st.setProperty('--pet-front-b', _mixHex(FACE_LIT[1], FACE_SHADE[1], sunT));
-    st.setProperty('--pet-right-a', _mixHex(FACE_SHADE[0], FACE_LIT[0], sunT));
-    st.setProperty('--pet-right-b', _mixHex(FACE_SHADE[1], FACE_LIT[1], sunT));
-    // Specular is strongest with the sun overhead and softens as it grazes.
-    st.setProperty('--pet-sheen', (0.52 - 0.22 * Math.abs(sunT * 2 - 1)).toFixed(2));
   }
 
   // Is there a scene critter close enough to chase? Reads TofuScene.critterX()

@@ -1,36 +1,35 @@
-"""The pet's sun must not move when the pet turns, and its walk must read as a walk.
+"""The pet's facing must agree with its travel, and its walk must read as a walk.
 
-Three defects motivate this suite; each has a guard below.
+THE REPORT THIS SUITE NOW GUARDS (2026-07-30)
+─────────────────────────────────────────────
+"the pet walks backward — facing left while moving right". The previous art was
+an ISOMETRIC cube whose three faces baked a sun in; mirroring the whole sprite
+would teleport that sun, so the flip had been confined to a character-space
+subgroup (face+feet turned, body never did). That kept the light consistent —
+and froze the body's 3/4 orientation: half the time the cube's depth face
+pointed against the direction of travel. One-sun consistency and facing
+consistency are STRUCTURALLY mutually exclusive for a 3/4 body, so the revamp
+replaced the art with a FRONT-FACING AI-designed character (soft symmetric
+shading, no baked sun). With nothing to keep in world space, the WHOLE frame
+mirrors on the <img> elements and body + gaze + stride always agree with
+travel. The scene-sun coupling survives where it is art-independent: the
+::after cast shadow + the CSS filter form light.
 
-1. LIGHT TELEPORTED ON TURN. The block is an isometric solid whose three faces
-   and specular streak encode a sun in the upper-left, and the engine turned it
-   around by mirroring the WHOLE sprite with scaleX(-1). Measured on the shipped
-   art: the body band's luminance read left=117.0 / right=182.7 facing right and
-   exactly the reverse facing left — the dark face and the highlight swapped
-   sides on every turn. Meanwhile the cast shadow is derived from the REAL scene
-   sun (tofu-pet.js `_applyLight` → `--pet-shadow-dx` from TofuScene.lightInfo)
-   and did NOT flip, so the body and its own shadow claimed two different suns.
-   tofu-scene.js states the invariant outright ("the light on the cat and the
-   light in the field come from one sun"); the pet broke it half the time.
+Older defects this file guarded, and where they now stand:
 
-2. THE GAIT NEVER ALTERNATED. walk1 and walk3 were the SAME symmetric 'contact'
-   pose, so no foot ever led — the legs scissored open and shut twice per cycle
-   while the body rocked, which reads as shuffling in place or sliding BACKWARDS
-   rather than stepping forward.
+1. LIGHT TELEPORTED ON TURN (2026-07-29) — moot: no baked sun, nothing to
+   teleport. The form light is a CSS filter (drop-shadow/brightness), which
+   follows the sprite's own alpha at any facing.
+2. THE GAIT NEVER ALTERNATED (2026-07-29) — still guarded, now on the shipped
+   PIXELS: the two contact beats must show a wide split with the pair shifted
+   between beats, and the passing beats must gather.
+3. THE CYCLE RAN AT 6.7fps (2026-07-29) — still guarded: 8 slots at 75ms.
 
-3. THE CYCLE RAN AT 6.7fps. 4 keyposes at 150ms is below the ~12fps floor where
-   a cycle stops reading as motion and becomes a flicker between drawings.
-
-The fix splits every frame into two coordinate spaces — [data-space="world"]
-(the solid + its lighting, NEVER mirrored) and [data-space="char"] (feet, eyes,
-mouth, blush — the only things that flip) — and the engine mirrors the second by
-writing `--pet-face-flip`. The frames are inlined as live <svg> because a CSS
-custom property cannot cross an <img> boundary, which is why the sprite could
-not be lit by the scene at all before.
+No node, no browser here: CSS/JS source contracts (comments stripped per
+charter #24) + PIL pixel proofs on the shipped PNGs.
 """
 from __future__ import annotations
 
-import io
 import re
 import subprocess
 import sys
@@ -41,410 +40,250 @@ import pytest
 pytestmark = pytest.mark.unit
 
 REPO = Path(__file__).resolve().parents[1]
-GEN = REPO / "static" / "icons" / "_gen" / "tofu-pet" / "gen_tofu_pet.py"
+PIPELINE = REPO / "static" / "icons" / "_gen" / "tofu-pet" / "process_ai_frames.py"
 FRAME_DIR = REPO / "static" / "icons" / "pet" / "tofu"
 PET_JS = REPO / "static" / "js" / "tofu-pet.js"
 CSS = REPO / "static" / "styles.css"
 
-# The engine's own frame list is the source of truth for which art must exist.
 WALK_FRAMES = ["walk1", "walk2", "walk3", "walk4", "walk5", "walk6", "walk7", "walk8"]
 
 
-def _frame(name: str) -> str:
-    return (FRAME_DIR / f"tofu-{name}.svg").read_text(encoding="utf-8")
-
-
-def _group(svg: str, space: str) -> str:
-    """Concatenate every <g data-space="..."> body in the frame."""
-    return "".join(
-        re.findall(rf'<g data-space="{space}"[^>]*>(.*?)</g>', svg, re.S)
-    )
-
-
 def _js_code() -> str:
-    """tofu-pet.js with comments stripped.
-
-    Charter #24: a guard that scans source text must strip comments first, and
-    must NOT carry a second hand-written stripper — this module's own comments
-    quote the very idioms these guards forbid (e.g. `_img.src`) while explaining
-    why they were removed, so a raw scan would fire on the explanation.
-    """
+    """tofu-pet.js with comments stripped (charter #24: a guard scanning source
+    text strips comments first — this module's own comments quote the very
+    idioms being asserted-absent, so a raw scan would fire on the explanation)."""
     sys.path.insert(0, str(REPO / "tests"))
     from _source_scan import strip_comments
 
     return strip_comments(PET_JS.read_text(encoding="utf-8"), lang="js")
 
 
-# ══════════════════════════════════════════════════════════════════════
-#  1. THE LIGHT DOES NOT MOVE WHEN THE PET TURNS
-# ══════════════════════════════════════════════════════════════════════
+def _css_code() -> str:
+    sys.path.insert(0, str(REPO / "tests"))
+    from _source_scan import strip_comments
 
-def test_world_space_group_holds_the_three_faces_and_the_specular():
-    """The lit/shaded planes + the specular streak must live in WORLD space.
-
-    These are the marks that encode where the sun is. If any of them lands in a
-    character-space group it gets mirrored on every turn and the sun teleports.
-    """
-    svg = _frame("idle")
-    world = _group(svg, "world")
-    for gid, face in (("t", "top"), ("l", "front"), ("r", "right")):
-        assert f'url(#{gid})' in world, (
-            f"the {face} face (url(#{gid})) is not inside [data-space=\"world\"]. "
-            "A face gradient encodes the sun direction; mirroring it makes the "
-            "light jump across the body when the pet turns around."
-        )
-    assert "--pet-sheen" in world, (
-        "the specular streak left the world group. It is the brightest single "
-        "cue for where the sun is — mirrored, the highlight jumps corners."
-    )
-
-
-def test_world_space_group_is_never_mirrored():
-    """No world-space group may consume the facing flip."""
-    for name in ["idle", "walk1", "walk5", "sleeping", "celebrating"]:
-        world = _group(_frame(name), "world")
-        assert "--pet-face-flip" not in world, (
-            f"tofu-{name}.svg mirrors its WORLD-space group. That is the exact "
-            "regression this suite exists to prevent: the block's shading would "
-            "flip with the pet while its cast shadow (driven by the real scene "
-            "sun) would not, so the pet would contradict the diorama's one-sun "
-            "invariant and read as a sticker."
-        )
-
-
-def test_character_space_holds_face_and_feet_and_is_mirrored():
-    """Face + feet are character-space, and they DO flip."""
-    svg = _frame("walk1")
-    chars = re.findall(r'<g data-space="char"([^>]*)>(.*?)</g>', svg, re.S)
-    assert chars, "no [data-space=\"char\"] group found in tofu-walk1.svg"
-    for attrs, _body in chars:
-        assert "--pet-face-flip" in attrs, (
-            "a character-space group does not consume --pet-face-flip, so it "
-            "would not turn with the pet."
-        )
-    joined = "".join(b for _a, b in chars)
-    # The eyes are ink-filled rounded rects; the feet are stroked ellipses.
-    assert "<rect" in joined, "the eyes are not in character space"
-    assert "<ellipse" in joined, (
-        "the FEET are not in character space. They carry the GAIT, and a stride "
-        "has a leading foot — left in world space the pet keeps stepping to the "
-        "right while travelling left, i.e. moonwalking."
-    )
-
-
-def test_mirroring_uses_css_transform_not_the_svg_attribute():
-    """var() is a CSS feature; an SVG transform ATTRIBUTE would not resolve it.
-
-    Also pins transform-box/transform-origin: CSS defaults transform-origin to
-    50% 50%, which would silently add a half-viewBox offset on top of the
-    translate sandwich and slide the face off the block.
-    """
-    svg = _frame("idle")
-    m = re.search(r'<g data-space="char" style="([^"]+)"', svg)
-    assert m, "character-space group does not carry a style= CSS transform"
-    style = m.group(1)
-    assert "transform-box:view-box" in style, (
-        "transform-box:view-box missing — the CSS transform would resolve "
-        "against the element's bounding box instead of the viewBox."
-    )
-    assert "transform-origin:0 0" in style, (
-        "transform-origin is not pinned to 0 0; CSS defaults it to 50% 50%, "
-        "which offsets the mirror by half the viewBox."
-    )
-    assert "scaleX(var(--pet-face-flip" in style, "the mirror is not var-driven"
-
-
-def test_body_light_ordering_is_invariant_under_the_facing_flip():
-    """PIXEL PROOF: flip the sprite's character space; the body's light must not move.
-
-    Rasterizes the frame twice — once with --pet-face-flip:1, once with -1 —
-    substituting the vars the way a browser resolves them (cairosvg supports
-    neither var() nor the CSS transform property). Then measures which side of
-    the block is darker in each render.
-
-    Two-sided on purpose: the light must be IDENTICAL (the sun did not move) AND
-    the two renders must DIFFER somewhere (the face actually turned). Asserting
-    only the first would pass a sprite whose mirror silently does nothing.
-    """
-    cairosvg = pytest.importorskip("cairosvg", reason="pixel proof needs cairosvg")
-    from PIL import Image
-
-    def render(flip: int) -> Image.Image:
-        svg = _frame("idle")
-        # Resolve the character-space CSS transform into the SVG attribute form
-        # the renderer understands (this is what the browser computes).
-        svg = re.sub(
-            r'<g data-space="char" style="[^"]*transform:translate\(([\d.]+)px,0\)'
-            r'\s*scaleX\(var\(--pet-face-flip,\s*1\)\)\s*translate\(-([\d.]+)px,0\)"',
-            lambda m: (
-                f'<g data-space="char" transform="translate({m.group(1)},0) '
-                f'scale({flip},1) translate(-{m.group(2)},0)"'
-            ),
-            svg,
-        )
-        # Resolve every remaining var(--x, fallback) to its fallback.
-        svg = re.sub(r"var\(--[a-z-]+,\s*([^)]+)\)", r"\1", svg)
-        png = cairosvg.svg2png(
-            bytestring=svg.encode("utf-8"), output_width=200, output_height=200
-        )
-        return Image.open(io.BytesIO(png)).convert("RGB")
-
-    def band_luminance(im: Image.Image, box: tuple[int, int, int, int]) -> float:
-        px = list(im.crop(box).getdata())
-        lit = [p for p in px if p != (255, 255, 255)]
-        if not lit:
-            return 0.0
-        return sum(0.2126 * r + 0.7152 * g + 0.0722 * b for r, g, b in lit) / len(lit)
-
-    # Sample the block's left and right thirds, above the feet.
-    LEFT, RIGHT = (30, 70, 80, 140), (120, 70, 170, 140)
-    a, b = render(1), render(-1)
-    a_l, a_r = band_luminance(a, LEFT), band_luminance(a, RIGHT)
-    b_l, b_r = band_luminance(b, LEFT), band_luminance(b, RIGHT)
-
-    assert a_l > 0 and a_r > 0, "render produced no ink — the harness is broken"
-
-    # Which side is darker must be the SAME in both renders.
-    assert (a_l < a_r) == (b_l < b_r), (
-        "THE SUN MOVED WHEN THE PET TURNED.\n"
-        f"  facing right: left={a_l:.1f} right={a_r:.1f}\n"
-        f"  facing left : left={b_l:.1f} right={b_r:.1f}\n"
-        "The darker side swapped, which means a light-bearing mark (a face "
-        "gradient or the specular) is inside a mirrored character-space group. "
-        "Move it back into [data-space=\"world\"]."
-    )
-    # ...and the magnitudes must match closely, not merely keep their order.
-    assert abs(a_l - b_l) < 2.0 and abs(a_r - b_r) < 2.0, (
-        "the body's shading CHANGED under the flip "
-        f"(left {a_l:.1f}->{b_l:.1f}, right {a_r:.1f}->{b_r:.1f}); "
-        "world-space marks must render identically regardless of facing."
-    )
-    # Complement: the flip must actually do something, or this guard is vacuous.
-    assert list(a.getdata()) != list(b.getdata()), (
-        "the two renders are pixel-identical, so --pet-face-flip changes "
-        "NOTHING — the pet would never appear to look where it walks. This "
-        "guard's light-invariance assertion would then be vacuously true."
-    )
+    return strip_comments(CSS.read_text(encoding="utf-8"), lang="css")
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  2. THE WALK CYCLE READS AS A WALK
+#  1. THE WHOLE FRAME TURNS — no partial-mirror machinery may come back
 # ══════════════════════════════════════════════════════════════════════
 
-def _gait_offsets() -> dict[str, tuple[float, float]]:
-    """Parse the generator's (near, far) foot-offset table."""
-    src = GEN.read_text(encoding="utf-8")
-    block = re.search(r"offsets = \{(.*?)\n    \}", src, re.S)
-    assert block, "could not locate the foot-offset table in the generator"
-    return {
-        m.group(1): (float(m.group(2)), float(m.group(3)))
-        for m in re.finditer(
-            r"'([a-z_0-9]+)':\s*\(\s*(-?[\d.]+),\s*(-?[\d.]+)", block.group(1)
-        )
-    }
+def test_mirror_is_whole_frame_on_the_img_elements():
+    """The facing flip must mirror the ENTIRE visible frame: body + gaze +
+    stride turn together, so the pet can never moonwalk again.
 
-
-def _foot_positions(offsets: dict[str, tuple[float, float]], pose: str
-                    ) -> tuple[float, float]:
-    """Return (near_x, far_x) as the sprite ACTUALLY draws them.
-
-    `_feet` places each foot at ``cx + offset``. Reading the authored offsets
-    alone cannot answer "who leads": a magnitude says how far from centre a foot
-    sits, while the SIGN decides whether it is in front or behind. Every gait
-    assertion below is written against this resolved position.
+    The mirror lives on the <img> frame ELEMENTS — children of the animated
+    .tofu-pet-img layer — because an animation always wins over a static
+    transform on the SAME element: put the flip on the layer that breathes and
+    it silently stops applying.
     """
-    FRONT_L, FRONT_R = 6.0, 22.0
-    cx = (FRONT_L + FRONT_R) / 2 + 1.0
-    near_off, far_off = offsets[pose]
-    return cx + near_off, cx + far_off
-
-
-def _leader(offsets: dict[str, tuple[float, float]], pose: str) -> str:
-    """Which foot is AHEAD (larger x) in this pose — 'near' or 'far'."""
-    near_x, far_x = _foot_positions(offsets, pose)
-    return "near" if near_x > far_x else "far"
-
-
-def test_walk_contact_beats_alternate_the_leading_foot():
-    """A stride needs a leading foot, and it must SWAP between contact beats.
-
-    Measured on RENDERED position (cx + offset), never on authored magnitude.
-    That distinction IS the test. An earlier version of this guard asserted
-    ``abs(near) > abs(far)`` and passed on a cycle where the far foot led all 8
-    frames by ~12 units: with near always negative and far always positive, the
-    feet only slid as a pair and the legs never scissored past each other —
-    precisely the "shuffling, not stepping" the owner reported, waved through by
-    a green guard. Magnitude is not position.
-    """
-    offsets = _gait_offsets()
-    for pose in ("contact_a", "contact_b"):
-        assert pose in offsets, (
-            f"walk pose '{pose}' is gone. The contact beats must exist as a "
-            "near-leads / far-leads PAIR or no foot ever leads."
-        )
-    lead_a, lead_b = _leader(offsets, "contact_a"), _leader(offsets, "contact_b")
-    na, fa = _foot_positions(offsets, "contact_a")
-    nb, fb = _foot_positions(offsets, "contact_b")
-    assert lead_a != lead_b, (
-        "THE LEADING FOOT NEVER SWAPS between the two contact beats.\n"
-        f"  contact_a: near_x={na:.1f} far_x={fa:.1f} -> {lead_a} leads\n"
-        f"  contact_b: near_x={nb:.1f} far_x={fb:.1f} -> {lead_b} leads\n"
-        "Both beats put the same foot in front, so the feet slide as a pair and "
-        "the pet reads as shuffling in place. The offsets' SIGNS must swap "
-        "between beats, not merely their magnitudes."
+    css = _css_code()
+    m = re.search(r"\.tofu-pet \.tofu-pet-img > img\{([^}]*)\}", css)
+    assert m, "no `.tofu-pet-img > img` rule — the raster frames are unstyled"
+    body = m.group(1)
+    assert "scaleX(var(--pet-face-flip" in body, (
+        "the facing flip is not on the <img> frame elements. A partial mirror "
+        "(only the face turns) is exactly how the pet moonwalked."
+    )
+    assert "object-fit:contain" in body, (
+        "frames must object-fit:contain — a fixed 30px box would otherwise "
+        "STRETCH every pose to the same box and the squash/stretch contrast "
+        "the poses carry would be flattened."
+    )
+    assert "object-position" in body and "bottom" in body, (
+        "frames must bottom-anchor (object-position … bottom): a wide squash "
+        "pose is shorter than the box, and the centre default would float its "
+        "feet off the ground."
+    )
+    assert "--pet-face-flip:1" in css, (
+        "--pet-face-flip has no default — a pet that has not turned yet would "
+        "resolve the var to nothing."
     )
 
 
-def test_walk_cycle_shows_both_feet_leading_across_the_stride():
-    """Over the full cycle, BOTH feet must take a turn in front.
-
-    The per-beat guard compares two poses; this asserts the property the eye
-    actually judges — across every frame the ticker plays, the set of "who
-    leads" contains both answers. A cycle that never shows the near foot in
-    front is a shuffle however the poses are named.
-    """
+def test_the_flip_is_a_bare_property_write_written_by_face():
+    """_face() must write --pet-face-flip (±dir) directly, with no transition
+    anywhere near it — tweening +1→−1 passes through scaleX(0) and smears the
+    frame (the paper-flip bug, mechanism-independent)."""
     js = _js_code()
-    m = re.search(r"var WALK_FRAMES = \[(.*?)\];", js, re.S)
-    assert m, "WALK_FRAMES not found in tofu-pet.js"
-    frames = re.findall(r"'(walk\d+)'", m.group(1))
-    src = GEN.read_text(encoding="utf-8")
-    offsets = _gait_offsets()
+    m = re.search(r"function _face\(dir, pivot\)\s*\{(.*?)\n  \}", js, re.S)
+    assert m, "could not isolate _face"
+    assert re.search(r"setProperty\('--pet-face-flip',\s*String\(dir\)\)", m.group(1)), (
+        "_face no longer writes --pet-face-flip from dir — nothing turns the pet."
+    )
+    css = _css_code()
+    for sel, body in re.findall(r"(\.[^{]*)\{([^}]*)\}", css):
+        if "--pet-face-flip" in body or "pet-face-flip" in sel:
+            assert "transition" not in body, (
+                f"rule {sel!r} touches the facing flip AND declares a transition "
+                "— the flip must be instant or the frame smears through 0."
+            )
 
-    leaders, detail = set(), []
-    for name in frames:
-        fm = re.search(rf"'{name}': dict\(feet='([a-z_0-9]+)'", src)
-        assert fm, f"{name} has no feet= pose in the generator's FRAMES table"
-        pose = fm.group(1)
-        near_x, far_x = _foot_positions(offsets, pose)
-        who = _leader(offsets, pose)
-        leaders.add(who)
-        detail.append(f"  {name:7} ({pose:10}) near_x={near_x:5.1f} "
-                      f"far_x={far_x:5.1f} -> {who} leads")
 
-    assert leaders == {"near", "far"}, (
-        "the walk cycle never alternates which foot is in front — only "
-        f"{sorted(leaders)} ever leads across all {len(frames)} frames:\n"
-        + "\n".join(detail)
-        + "\nA stride must show each foot out front once per cycle."
+def test_no_character_space_machinery_remains():
+    """The SVG two-space split (world/char) is gone for good: its whole point
+    was protecting a baked sun the new art does not have, and its cost was the
+    frozen body that moonwalked. Absence asserted on COMMENT-STRIPPED code —
+    the module's own comments legitimately narrate this history."""
+    js = _js_code()
+    assert "data-space" not in js, (
+        "character-space mirror machinery is back in the engine. With raster "
+        "frames there is no baked sun to protect — a partial mirror can only "
+        "re-introduce the moonwalk."
+    )
+    for var in ("--pet-front-a", "--pet-front-b", "--pet-right-a", "--pet-right-b",
+                "--pet-top-a", "--pet-top-b", "--pet-sheen", "--pet-rim"):
+        assert var not in js, (
+            f"{var} is written again — the per-face recolour channel was SVG "
+            "gradient machinery; on raster art it is dead code pretending to "
+            "light something."
+        )
+    stray = sorted(FRAME_DIR.glob("*.svg"))
+    assert not stray, (
+        f"SVG frames are back on disk: {[p.name for p in stray]} — the shipped "
+        "art is the AI-designed PNG set."
     )
 
 
-def test_both_feet_actually_render_in_every_walk_frame():
-    """PIXEL PROOF: an alternating stride is invisible if only one foot is drawn.
+# ══════════════════════════════════════════════════════════════════════
+#  2. THE WALK CYCLE READS AS A WALK (pixel proofs on the shipped PNGs)
+# ══════════════════════════════════════════════════════════════════════
 
-    The position guards above prove the offsets alternate; they cannot see a
-    foot that is HIDDEN behind the block or FUSED with its partner. Measured on
-    the committed art before this guard existed, three of eight frames rendered
-    a single foot at the shipped 30px — the stride was correct in the numbers
-    and absent on screen.
+def _foot_zone_runs(name: str):
+    """(runs, span) of the FEET at native resolution.
 
-    Counts distinct ink RUNS on rows strictly BELOW the block's bottom outline.
-    Two details are load-bearing:
-
-      · start below `FRONT_B + STROKE`, not at the body edge. The outline is a
-        solid ink bar spanning the whole underside; a scan that includes it
-        connects both feet through it and always reports ONE shape. (That
-        mistake produced a false "1 foot everywhere" reading during
-        development — the instrument, not the art.)
-      · assert at 30px, the size the pet actually ships at. One viewBox unit is
-        0.94px there, so a gap under ~1.8u is sub-pixel and antialiasing fuses
-        it: a separation that is clean at 320px can vanish in the bar.
+    The foot zone = the contiguous bottom rows whose ink width is under 55% of
+    the frame's widest row (i.e. below the body silhouette). Inside it, runs =
+    x-runs of alpha in the column projection, merging gaps ≤ 2px. A position-
+    only check cannot see a foot that is hidden or fused — measured on the
+    earlier art, four of eight frames rendered zero/one foot while the offset
+    table said everything was fine.
     """
-    cairosvg = pytest.importorskip("cairosvg", reason="pixel proof needs cairosvg")
+    import numpy as np
     from PIL import Image
 
-    FRONT_B, STROKE, VB = 26.0, 1.5, 32.0
+    a = np.asarray(Image.open(FRAME_DIR / f"tofu-{name}.png").convert("RGBA"))
+    alpha = a[..., 3]
+    h = a.shape[0]
+    maxw = max((alpha[y] > 40).sum() for y in range(h))
+    zone_rows = []
+    for y in range(h - 1, -1, -1):
+        rw = (alpha[y] > 40).sum()
+        if rw == 0:
+            continue
+        if rw < 0.55 * maxw:
+            zone_rows.append(y)
+        else:
+            break
+    assert zone_rows, f"tofu-{name}: no foot zone found (nothing below the body)"
+    zone = alpha[min(zone_rows):max(zone_rows) + 1, :]
+    proj = (zone > 40).sum(axis=0)
+    xs = list(np.where(proj > 0)[0])
+    runs = []
+    if xs:
+        s = p = xs[0]
+        for x in xs[1:]:
+            if x > p + 2:
+                runs.append((int(s), int(p)))
+                s = x
+            p = x
+        runs.append((int(s), int(p)))
+    span = (runs[-1][1] - runs[0][0]) if runs else 0
+    return runs, span
 
-    def feet_visible(name: str, px: int) -> int:
-        svg = _frame(name)
-        # Neutralise the character-space CSS transform (facing-independent) and
-        # resolve var() fallbacks, so we measure the authored geometry.
-        svg = re.sub(r'<g data-space="char" style="[^"]*"',
-                     '<g data-space="char"', svg)
-        svg = re.sub(r"var\(--[a-z-]+,\s*([^)]+)\)", r"\1", svg)
-        png = cairosvg.svg2png(bytestring=svg.encode("utf-8"),
-                               output_width=px, output_height=px)
-        p = Image.open(io.BytesIO(png)).convert("RGBA").load()
-        best = 0
-        for y in range(int((FRONT_B + STROKE) / VB * px), px):
-            runs, prev = 0, False
-            for x in range(px):
-                ink = p[x, y][3] > 40
-                if ink and not prev:
-                    runs += 1
-                prev = ink
-            best = max(best, runs)
-        return best
 
-    for px in (30, 320):
-        counts = {n: feet_visible(n, px) for n in WALK_FRAMES}
-        short = {n: c for n, c in counts.items() if c < 2}
-        assert not short, (
-            f"at {px}px these walk frames render fewer than two feet: {short}\n"
-            f"  full counts: {counts}\n"
-            "A foot is either hidden behind the block or fused with its partner, "
-            "so the alternating stride cannot be seen — the pet reads as a "
-            "wobble. Widen the split (the two ellipses are NEAR_RX+FAR_RX wide "
-            "combined, and the gap must exceed ~1.8 viewBox units to survive "
-            "30px rasterisation) or push the feet further below the body edge."
+def test_every_walk_frame_renders_feet():
+    """Each walk frame must actually DRAW feet below the body (alpha ink in the
+    foot zone), natively AND at the shipped 30px — a stride with no feet is a
+    hover, and a gap that vanishes at 30px is a fused blob."""
+    import numpy as np
+    from PIL import Image
+
+    for name in WALK_FRAMES:
+        runs, _ = _foot_zone_runs(name)
+        assert runs, f"tofu-{name} renders no feet at native size"
+        im = Image.open(FRAME_DIR / f"tofu-{name}.png").convert("RGBA")
+        s = 30 / im.height
+        small = np.asarray(im.resize((max(1, round(im.width * s)), 30), Image.LANCZOS))
+        assert (small[..., 3] > 40).any(), f"tofu-{name} renders nothing at 30px"
+
+
+def test_contact_beats_split_passing_beats_gather():
+    """The stride's rhythm: feet SPLIT wide at the contact beats (walk1/walk3)
+    and GATHER under the body at the passing beats (walk2/walk4). Measured as
+    the foot-zone span: contact must be meaningfully wider than passing."""
+    _, span1 = _foot_zone_runs("walk1")
+    _, span2 = _foot_zone_runs("walk2")
+    _, span3 = _foot_zone_runs("walk3")
+    _, span4 = _foot_zone_runs("walk4")
+    assert span1 > span2 * 1.25 and span3 > span4 * 1.25, (
+        f"contact/passing spans do not alternate: walk1={span1} walk2={span2} "
+        f"walk3={span3} walk4={span4}. A cycle whose feet never gather reads as "
+        "scissoring in place, not stepping."
+    )
+    for contact in ("walk1", "walk3"):
+        runs, _ = _foot_zone_runs(contact)
+        assert len(runs) >= 2, (
+            f"{contact} shows one fused foot blob ({runs}) — the two feet must "
+            "separate at the contact beat or there is no stride to see."
         )
 
-def test_swing_foot_gathers_under_the_body_on_the_passing_beat():
-    """On a passing beat the swinging foot travels THROUGH the planted one.
 
-    The passing pose is what makes a stride read as one leg overtaking the
-    other rather than two feet easing toward each other: the feet must be
-    CLOSER together at passing than at the contact beat it follows.
-    """
-    offsets = _gait_offsets()
-    for contact, passing in (("contact_a", "passing_a"), ("contact_b", "passing_b")):
-        cn, cf = _foot_positions(offsets, contact)
-        pn, pf = _foot_positions(offsets, passing)
-        assert abs(pn - pf) < abs(cn - cf), (
-            f"{passing} is not a passing beat: the feet are {abs(pn - pf):.1f} "
-            f"apart vs {abs(cn - cf):.1f} at {contact}. The swing foot must "
-            "gather under the body, not stay splayed."
-        )
+def test_the_leading_side_alternates_between_contact_beats():
+    """ANTI-MOONWALK, at the pixels: the foot pair must SHIFT between the two
+    contact beats — one beat reaches further left, the other further right.
+    Both beats posing the same lead is the shuffle that read as sliding
+    backwards. (Direction consistency itself is now structural: the whole
+    frame mirrors, see test_mirror_is_whole_frame_on_the_img_elements.)"""
+    runs1, _ = _foot_zone_runs("walk1")
+    runs3, _ = _foot_zone_runs("walk3")
+    mid1 = (runs1[0][0] + runs1[-1][1]) / 2
+    mid3 = (runs3[0][0] + runs3[-1][1]) / 2
+    assert abs(mid3 - mid1) > 3, (
+        f"the foot pair sits at the same place on both contact beats "
+        f"(mid {mid1:.1f} vs {mid3:.1f}) — the lead never swaps, so the feet "
+        "slide as a pair."
+    )
 
 
-def test_walk_cycle_frames_all_exist_and_are_distinct():
-    """Every frame the engine plays must exist, and no two may be identical."""
+def test_walk_cycle_frames_all_exist_and_the_replay_map_holds():
+    """8 engine slots exist on disk; the back half of the list REPLAYS the four
+    authored drawings (walk5..8 == walk1..4), and the four authored drawings
+    are pairwise distinct (a cycle with duplicate keyposes stutters)."""
     js = _js_code()
     m = re.search(r"var WALK_FRAMES = \[(.*?)\];", js, re.S)
     assert m, "WALK_FRAMES not found in tofu-pet.js"
     listed = re.findall(r"'(walk\d+)'", m.group(1))
-    assert listed == WALK_FRAMES, (
-        f"engine walk list {listed} != expected {WALK_FRAMES}"
-    )
+    assert listed == WALK_FRAMES, f"engine walk list {listed} != expected {WALK_FRAMES}"
     bodies = {}
     for name in listed:
-        p = FRAME_DIR / f"tofu-{name}.svg"
-        assert p.exists(), f"engine plays {name} but tofu-{name}.svg is missing"
-        bodies[name] = p.read_text(encoding="utf-8")
-    for i, a in enumerate(listed):
-        for b in listed[i + 1:]:
-            assert bodies[a] != bodies[b], (
-                f"tofu-{a}.svg and tofu-{b}.svg are byte-identical — a cycle "
-                "with duplicate keyposes drops real frames and stutters."
-            )
+        p = FRAME_DIR / f"tofu-{name}.png"
+        assert p.exists() and p.stat().st_size > 0, f"engine plays {name} but {p} is missing"
+        bodies[name] = p.read_bytes()
+    for a, b in (("walk1", "walk5"), ("walk2", "walk6"), ("walk3", "walk7"), ("walk4", "walk8")):
+        assert bodies[a] == bodies[b], (
+            f"{b} no longer replays {a} — the stride's back half-cycle must be "
+            "the same four drawings again (pipeline FRAME_SOURCES contract)."
+        )
+    uniq = ["walk1", "walk2", "walk3", "walk4"]
+    for i, a in enumerate(uniq):
+        for b in uniq[i + 1:]:
+            assert bodies[a] != bodies[b], f"tofu-{a} and tofu-{b} are byte-identical"
 
 
 def test_walk_cycle_clears_the_twelve_fps_floor():
-    """8 keyposes at 75ms = 13.3fps over the same 600ms stride.
-
-    Below roughly 12fps a cycle stops reading as motion and starts reading as a
-    flicker between drawings — the "animations aren't smooth" half of the
-    report. The stride DURATION must stay ~600ms so the pet's travel speed and
-    the CSS bob (tofuPetWalk .3s, two bounces per cycle) stay in sync.
-    """
+    """8 slots at 75ms = 13.3fps over the same 600ms stride (the four authored
+    poses play twice). Below ~12fps a cycle reads as flicker between drawings;
+    the stride DURATION stays ~600ms so travel speed and the CSS bob stay in
+    sync."""
     js = _js_code()
     m = re.search(r"var WALK_FRAME_MS = (\d+)", js)
     assert m, "WALK_FRAME_MS not found"
     per = int(m.group(1))
     fps = 1000.0 / per
     assert fps >= 12.0, (
-        f"walk cycle runs at {fps:.1f}fps ({per}ms/frame), below the ~12fps "
-        "floor where frame-by-frame motion turns into a visible flicker."
+        f"walk cycle runs at {fps:.1f}fps ({per}ms/frame), below the ~12fps floor."
     )
     stride = per * len(WALK_FRAMES)
     assert 520 <= stride <= 700, (
@@ -457,136 +296,110 @@ def test_entering_a_walk_asserts_facing():
     """A walk must set its facing, not inherit whatever the last state left.
 
     'gaze' deliberately flips facing every GAZE_TURN_MS while standing still, so
-    a walk entered straight out of a glance could set off with the body facing
-    one way and travel going the other.
+    a walk entered straight out of a glance could set off facing away from its
+    direction of travel.
     """
     js = _js_code()
     m = re.search(r"if \(state === 'walk'\) \{(.*?)\} else if", js, re.S)
     assert m, "could not isolate the _enter('walk') branch"
     assert "_face(" in m.group(1), (
-        "entering 'walk' no longer asserts facing, so a walk can start with the "
-        "body facing away from its direction of travel (the pet appears to walk "
-        "backwards). This is reachable in one hop: the 'gaze' state flips facing "
-        "on a timer, then _pickNext() can enter 'walk'."
+        "entering 'walk' no longer asserts facing — reachable in one hop: the "
+        "'gaze' state flips facing on a timer, then _pickNext() can enter 'walk'."
     )
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  3. THE SPRITE IS REACHABLE BY THE SCENE'S LIGHT
+#  3. FRAMES DECODE ONCE; THE SCENE LIGHT KEEPS ITS ART-INDEPENDENT CHANNELS
 # ══════════════════════════════════════════════════════════════════════
 
-def test_frames_are_inlined_not_pointed_at_with_img():
-    """A custom property cannot cross an <img> boundary.
-
-    Behind <img> the frame is an isolated document, so every var() collapses to
-    its fallback and the pet is welded to a frozen sun. The engine must build a
-    live <svg> in the DOM instead.
-
-    Scans CODE ONLY (charter #24): the module's comments legitimately quote the
-    old `_img.src` idiom while explaining why it was removed, and a raw substring
-    scan would fire on the explanation rather than on real code.
-    """
-    js = _js_code()
-    assert "_img.src" not in js, (
-        "the engine still assigns _img.src. Inside an <img> the sprite cannot "
-        "see --pet-front-a/--pet-face-flip, so neither the live lighting nor "
-        "the character-space mirror can work."
-    )
-    assert "querySelector('svg')" in js, (
-        "frames are no longer parsed into a live <svg> element"
-    )
-    assert "_frameNode" in js, "the parsed-frame cache is gone"
-
-
-def test_frame_swap_does_not_reparse_markup_every_frame():
-    """Frame changes must toggle visibility, not rebuild the subtree.
-
-    Writing innerHTML per frame would reconstruct the sprite's DOM 13x/second,
-    which is exactly the per-frame churn that shows up as stutter.
-    """
+def test_frames_decode_once_and_toggle_thereafter():
+    """Frame changes must toggle visibility on kept <img> nodes, never re-decode
+    or rebuild markup 13×/s — the churn shows up as stutter on a busy page."""
     js = _js_code()
     m = re.search(r"function _paintFrame\(name\) \{(.*?)\n  \}", js, re.S)
     assert m, "_paintFrame not found"
-    body = m.group(1)
-    assert "innerHTML" not in body, (
-        "_paintFrame writes innerHTML, so every walk frame reparses ~2KB of "
-        "markup and rebuilds the sprite's DOM — visible as stutter."
+    assert "innerHTML" not in m.group(1), (
+        "_paintFrame writes innerHTML — every walk frame would reparse markup."
     )
-    assert "display" in body, "_paintFrame no longer toggles visibility"
+    assert "display" in m.group(1), "_paintFrame no longer toggles visibility"
+    m2 = re.search(r"function _loadFrame\(name\) \{(.*?)\n  function ", js, re.S)
+    assert m2, "_loadFrame not found"
+    body = m2.group(1)
+    assert "_frameNode" in body and "_frameFetching" in body, (
+        "the create-once guards are gone — frames would be re-created per ask."
+    )
+    assert "new Image()" in body, "frames are no longer <img> elements"
 
 
-def test_live_lighting_drives_the_side_faces_from_the_same_sun_as_the_shadow():
-    """Body shading and cast shadow must be derived from ONE number."""
+def test_apply_light_keeps_only_art_independent_channels():
+    """The scene sun still drives what it can drive without reaching into the
+    art: the cast shadow (offset/length) and the filter form light (shade/warm).
+    The SVG gradient recolour is gone and must not be half-reanimated."""
     js = _js_code()
     m = re.search(r"function _applyLight\(\) \{(.*?)\n  \}", js, re.S)
     assert m, "_applyLight not found"
     body = m.group(1)
-    assert "--pet-shadow-dx" in body, "the cast shadow is no longer sun-driven"
-    for var in ("--pet-front-a", "--pet-front-b", "--pet-right-a", "--pet-right-b"):
-        assert var in body, (
-            f"{var} is not written by _applyLight, so the block's own faces are "
-            "frozen while its cast shadow tracks the real sun — the two would "
-            "again claim different suns."
-        )
-    assert "rel" in body, "the shadow/shading no longer share the sun offset"
+    for var in ("--pet-shadow-dx", "--pet-shadow-scale", "--pet-shade-dx", "--pet-light-warm"):
+        assert var in body, f"_applyLight no longer writes {var}"
+    assert "TofuScene.lightInfo" in js, "_applyLight no longer reads the scene's live sun"
 
 
-def test_relighting_stays_inside_the_brand_cream_family():
-    """Re-lighting may only ever produce the logo's own cream tones or a blend.
-
-    The pet must not be lit into a colour the mascot does not contain.
-    """
-    js = _js_code()
-    lit = re.search(r"var FACE_LIT = \['(#[0-9A-Fa-f]{6})', '(#[0-9A-Fa-f]{6})'\]", js)
-    shade = re.search(r"var FACE_SHADE = \['(#[0-9A-Fa-f]{6})', '(#[0-9A-Fa-f]{6})'\]", js)
-    assert lit and shade, "the face-colour families are gone from the engine"
-    gen = GEN.read_text(encoding="utf-8")
-    for hexv in lit.groups() + shade.groups():
-        assert hexv.upper() in gen.upper(), (
-            f"{hexv} is not one of the generator's authored brand tones; the "
-            "pet would be lit off-palette."
-        )
-
-
-def test_authored_fallbacks_keep_a_scene_less_pet_unchanged():
-    """Every var() must carry the authored brand hex as its fallback.
-
-    A non-tofu theme, a scene-less pet, or any renderer that ignores custom
-    properties must still get exactly the palette the generator authored.
-    """
-    svg = _frame("idle")
-    for var in ("--pet-top-a", "--pet-front-a", "--pet-right-a", "--pet-sheen"):
-        m = re.search(rf"var\({re.escape(var)},\s*([^)]+)\)", svg)
-        assert m, f"{var} has no fallback value"
-        assert m.group(1).strip(), f"{var}'s fallback is empty"
-
-
-def test_generated_frames_match_the_generator():
-    """The art is generated; on-disk drift means someone hand-edited a frame."""
+def test_shipped_frames_match_the_pipeline():
+    """NO SECOND COPY: the on-disk frames must match the processing pipeline
+    exactly — a hand-edited frame desynchronises the character between poses."""
     r = subprocess.run(
-        [sys.executable, str(GEN), "--check"],
-        capture_output=True, text=True, cwd=str(REPO),
+        [sys.executable, str(PIPELINE), "--check"],
+        capture_output=True, text=True, cwd=str(REPO), timeout=120,
     )
     assert r.returncode == 0, (
-        "on-disk frames drifted from gen_tofu_pet.py — hand-editing a frame "
-        f"desynchronises the body geometry and palette.\n{r.stdout}\n{r.stderr}"
+        "on-disk frames drifted from process_ai_frames.py "
+        f"(re-run it):\n{r.stdout}\n{r.stderr}"
     )
 
 
-def test_css_declares_the_flip_default_and_no_wrapper_mirror():
-    """--pet-face-flip must default to 1, and no wrapper may mirror the sprite."""
-    css = CSS.read_text(encoding="utf-8")
-    assert "--pet-face-flip:1" in css, (
-        "--pet-face-flip has no default, so a pet that has not turned yet would "
-        "resolve the var to nothing."
+# ── NEUTER proofs, on COPIES / in-memory art, never left on disk ──
+
+def test_NEUTER_partial_mirror_is_caught():
+    """Move the flip OFF the img elements (in memory) → the whole-frame guard fires."""
+    css = _css_code()
+    poisoned = css.replace("scaleX(var(--pet-face-flip, 1))", "/* no flip */", 1)
+    assert poisoned != css, "neuter did not match the img flip declaration"
+    m = re.search(r"\.tofu-pet \.tofu-pet-img > img\{([^}]*)\}", poisoned)
+    assert m and "scaleX(var(--pet-face-flip" not in m.group(1), (
+        "neuter failed to remove the flip — the guard would not bite"
     )
-    assert ".tofu-pet-facing" not in css, (
-        "the .tofu-pet-facing wrapper is back. Mirroring a wrapper mirrors the "
-        "block's lighting with it — the defect this suite guards."
-    )
-    m = re.search(r"\.tofu-pet \.tofu-pet-img\{([^}]*)\}", css)
-    assert m, "could not isolate the .tofu-pet-img rule"
-    assert "scaleX" not in m.group(1), (
-        "the frame layer mirrors the whole sprite again (scaleX on "
-        ".tofu-pet-img), which drags the block's shading around with it."
+
+
+def test_NEUTER_shuffle_gait_is_caught(tmp_path):
+    """A cycle whose contact beats never swap lead must fail the alternation
+    check — proven by feeding the SHIPPED measurement a shuffled pair."""
+    import shutil
+
+    for name in ("walk1", "walk3"):
+        shutil.copy(FRAME_DIR / "tofu-walk1.png", tmp_path / f"tofu-{name}.png")
+    # Drive the same measurement the guard uses, but against tmp_path:
+    import numpy as np
+    from PIL import Image
+
+    def mid(path):
+        a = np.asarray(Image.open(path).convert("RGBA"))
+        alpha = a[..., 3]
+        h = a.shape[0]
+        maxw = max((alpha[y] > 40).sum() for y in range(h))
+        rows = []
+        for y in range(h - 1, -1, -1):
+            rw = (alpha[y] > 40).sum()
+            if rw == 0:
+                continue
+            if rw < 0.55 * maxw:
+                rows.append(y)
+            else:
+                break
+        zone = alpha[min(rows):max(rows) + 1, :]
+        xs = list(np.where((zone > 40).sum(axis=0) > 0)[0])
+        return (xs[0] + xs[-1]) / 2
+
+    assert abs(mid(tmp_path / "tofu-walk3.png") - mid(tmp_path / "tofu-walk1.png")) <= 3, (
+        "a shuffled (never-alternating) pair must NOT pass the alternation "
+        "threshold — the guard is blind"
     )

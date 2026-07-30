@@ -51,7 +51,16 @@ global.requestAnimationFrame = function(){ return 0; };   // don't actually run 
 global.cancelAnimationFrame = function(){};
 global.ResizeObserver = function(){ return { observe(){}, disconnect(){} }; };
 global.localStorage = { _d:{}, getItem(k){return this._d[k]||null;}, setItem(k,v){this._d[k]=v;} };
-global.Image = function(){ return { set src(v){}, get src(){return '';} }; };
+// The engine builds each frame with new Image() and decorates it (style,
+// setAttribute, draggable, onload) — a bare src-accessor stub throws on
+// node.style. Frames never finish "loading" here (onload never fires),
+// which the behaviour tests don't mind.
+global.Image = function(){
+  return { _attrs:{}, draggable:false, alt:'', style:{},
+    setAttribute(k,v){ this._attrs[k]=v; }, getAttribute(k){ return this._attrs[k]; },
+    addEventListener(){}, appendChild(){},
+    set src(v){ this._src = v; }, get src(){ return this._src || ''; } };
+};
 global.t = function (k, p) {
   let text = k;
   if (p) { for (const q in p) { if (Object.prototype.hasOwnProperty.call(p, q)) text = text.split('{' + q + '}').join(p[q]); } }
@@ -364,7 +373,16 @@ global.window = { matchMedia(){ return {matches:false, addEventListener(){}, add
 global.BASE_PATH = '';
 global.ResizeObserver = function(){ return {observe(){}, disconnect(){}}; };
 global.localStorage = { _d:{}, getItem(k){return this._d[k]||null;}, setItem(k,v){this._d[k]=v;} };
-global.Image = function(){ return { set src(v){}, get src(){return '';} }; };
+// The engine builds each frame with new Image() and decorates it (style,
+// setAttribute, draggable, onload) — a bare src-accessor stub throws on
+// node.style. Frames never finish "loading" here (onload never fires),
+// which the behaviour tests don't mind.
+global.Image = function(){
+  return { _attrs:{}, draggable:false, alt:'', style:{},
+    setAttribute(k,v){ this._attrs[k]=v; }, getAttribute(k){ return this._attrs[k]; },
+    addEventListener(){}, appendChild(){},
+    set src(v){ this._src = v; }, get src(){ return this._src || ''; } };
+};
 global.t = function (k, p) {
   let text = k;
   if (p) { for (const q in p) { if (Object.prototype.hasOwnProperty.call(p, q)) text = text.split('{' + q + '}').join(p[q]); } }
@@ -459,7 +477,16 @@ global.window = { PointerEvent: function(){}, matchMedia(){ return {matches:fals
 global.BASE_PATH = '';
 global.ResizeObserver = function(){ return {observe(){}, disconnect(){}}; };
 global.localStorage = { _d:{}, getItem(k){return this._d[k]||null;}, setItem(k,v){this._d[k]=v;} };
-global.Image = function(){ return { set src(v){}, get src(){return '';} }; };
+// The engine builds each frame with new Image() and decorates it (style,
+// setAttribute, draggable, onload) — a bare src-accessor stub throws on
+// node.style. Frames never finish "loading" here (onload never fires),
+// which the behaviour tests don't mind.
+global.Image = function(){
+  return { _attrs:{}, draggable:false, alt:'', style:{},
+    setAttribute(k,v){ this._attrs[k]=v; }, getAttribute(k){ return this._attrs[k]; },
+    addEventListener(){}, appendChild(){},
+    set src(v){ this._src = v; }, get src(){ return this._src || ''; } };
+};
 global.t = function (k, p) {
   let text = k;
   if (p) { for (const q in p) { if (Object.prototype.hasOwnProperty.call(p, q)) text = text.split('{' + q + '}').join(p[q]); } }
@@ -543,7 +570,16 @@ global.window = { PointerEvent: function(){}, matchMedia(){ return {matches:fals
 global.BASE_PATH = '';
 global.ResizeObserver = function(){ return {observe(){}, disconnect(){}}; };
 global.localStorage = { _d:{}, getItem(k){return this._d[k]||null;}, setItem(k,v){this._d[k]=v;} };
-global.Image = function(){ return { set src(v){}, get src(){return '';} }; };
+// The engine builds each frame with new Image() and decorates it (style,
+// setAttribute, draggable, onload) — a bare src-accessor stub throws on
+// node.style. Frames never finish "loading" here (onload never fires),
+// which the behaviour tests don't mind.
+global.Image = function(){
+  return { _attrs:{}, draggable:false, alt:'', style:{},
+    setAttribute(k,v){ this._attrs[k]=v; }, getAttribute(k){ return this._attrs[k]; },
+    addEventListener(){}, appendChild(){},
+    set src(v){ this._src = v; }, get src(){ return this._src || ''; } };
+};
 global.t = function (k, p) {
   let text = k;
   if (p) { for (const q in p) { if (Object.prototype.hasOwnProperty.call(p, q)) text = text.split('{' + q + '}').join(p[q]); } }
@@ -643,7 +679,16 @@ global.window = { matchMedia(){ return {matches:false, addEventListener(){}, add
 global.BASE_PATH = '';
 global.ResizeObserver = function(){ return {observe(){}, disconnect(){}}; };
 global.localStorage = { _d:{}, getItem(k){return this._d[k]||null;}, setItem(k,v){this._d[k]=v;} };
-global.Image = function(){ return { set src(v){}, get src(){return '';} }; };
+// The engine builds each frame with new Image() and decorates it (style,
+// setAttribute, draggable, onload) — a bare src-accessor stub throws on
+// node.style. Frames never finish "loading" here (onload never fires),
+// which the behaviour tests don't mind.
+global.Image = function(){
+  return { _attrs:{}, draggable:false, alt:'', style:{},
+    setAttribute(k,v){ this._attrs[k]=v; }, getAttribute(k){ return this._attrs[k]; },
+    addEventListener(){}, appendChild(){},
+    set src(v){ this._src = v; }, get src(){ return this._src || ''; } };
+};
 global.t = function (k, p) {
   let text = k;
   if (p) { for (const q in p) { if (Object.prototype.hasOwnProperty.call(p, q)) text = text.split('{' + q + '}').join(p[q]); } }
@@ -726,7 +771,16 @@ global.window = { matchMedia(){ return {matches:false, addEventListener(){}, add
 global.BASE_PATH = '';
 global.ResizeObserver = function(){ return {observe(){}, disconnect(){}}; };
 global.localStorage = { _d:{}, getItem(k){return this._d[k]||null;}, setItem(k,v){this._d[k]=v;} };
-global.Image = function(){ return { set src(v){}, get src(){return '';} }; };
+// The engine builds each frame with new Image() and decorates it (style,
+// setAttribute, draggable, onload) — a bare src-accessor stub throws on
+// node.style. Frames never finish "loading" here (onload never fires),
+// which the behaviour tests don't mind.
+global.Image = function(){
+  return { _attrs:{}, draggable:false, alt:'', style:{},
+    setAttribute(k,v){ this._attrs[k]=v; }, getAttribute(k){ return this._attrs[k]; },
+    addEventListener(){}, appendChild(){},
+    set src(v){ this._src = v; }, get src(){ return this._src || ''; } };
+};
 global.t = function (k, p) {
   let text = k;
   if (p) { for (const q in p) { if (Object.prototype.hasOwnProperty.call(p, q)) text = text.split('{' + q + '}').join(p[q]); } }
@@ -830,7 +884,16 @@ global.requestAnimationFrame = function(){ return 0; };
 global.cancelAnimationFrame = function(){};
 global.ResizeObserver = function(){ return {observe(){}, disconnect(){}}; };
 global.localStorage = { _d:{}, getItem(k){return this._d[k]||null;}, setItem(k,v){this._d[k]=v;} };
-global.Image = function(){ return { set src(v){}, get src(){return '';} }; };
+// The engine builds each frame with new Image() and decorates it (style,
+// setAttribute, draggable, onload) — a bare src-accessor stub throws on
+// node.style. Frames never finish "loading" here (onload never fires),
+// which the behaviour tests don't mind.
+global.Image = function(){
+  return { _attrs:{}, draggable:false, alt:'', style:{},
+    setAttribute(k,v){ this._attrs[k]=v; }, getAttribute(k){ return this._attrs[k]; },
+    addEventListener(){}, appendChild(){},
+    set src(v){ this._src = v; }, get src(){ return this._src || ''; } };
+};
 const _petDict = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
 global.t = function (key, params) {
   // This harness asserts on the TRANSLATED button label, so t() must resolve
@@ -934,12 +997,10 @@ def test_walk_cycle_ADVANCES_frames_while_walking():
     drive several animation ticks, and assert the pet reports more than one
     distinct walk frame. A NEUTER (remove the advance) must break it.
 
-    Re-anchored 2026-07-29: this used to sniff `<img>.src` writes, but the
-    sprite is no longer an <img> — frames are inlined as live <svg> so the
-    scene's light can reach them through CSS custom properties (a custom
-    property cannot cross an <img> boundary). Sampling `TofuPet.getFrame()`
-    tests the same thing through the engine's own public seam, which survives
-    that change instead of encoding the old delivery mechanism."""
+    Re-anchored 2026-07-29: this used to sniff `<img>.src` writes; sampling
+    `TofuPet.getFrame()` tests the same thing through the engine's own public
+    seam, which survives a delivery-mechanism change (inline SVG then, <img>
+    PNG frames after the 2026-07-30 raster revamp)."""
     def frames_seen(src_text):
         harness = r'''
 'use strict';
@@ -954,13 +1015,17 @@ global.window = { matchMedia(){ return {matches:false, addEventListener(){}, add
 global.BASE_PATH = '';
 global.ResizeObserver = function(){ return {observe(){}, disconnect(){}}; };
 global.localStorage = { _d:{}, getItem(k){return this._d[k]||null;}, setItem(k,v){this._d[k]=v;} };
-global.Image = function(){ return { set src(v){}, get src(){return '';} }; };
-// The engine fetches each frame's SVG once and keeps the parsed node. Resolve
-// SYNCHRONOUSLY so a frame is available on the very next tick — an async stub
-// would leave every frame unpainted and the cycle would look static.
-global.fetch = function(url){
-  const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"></svg>';
-  return Promise.resolve({ ok:true, status:200, text(){ return Promise.resolve(svg); } });
+// Each frame is an <img> the engine creates once and keeps. The src setter
+// fires onload as a MICROTASK so a frame is available on the very next tick —
+// never firing it would leave every frame unpainted and the cycle would look
+// static, and a bare src-accessor stub throws on node.style.
+global.Image = function(){
+  const el = _fakeEl('img');
+  Object.defineProperty(el, 'src', {
+    set(v){ this._src = v; const self = this; Promise.resolve().then(function(){ if (self.onload) self.onload(); }); },
+    get(){ return this._src || ''; },
+  });
+  return el;
 };
 // The engine paints a frame from a .then() continuation, i.e. on a microtask.
 // Draining the microtask queue between rAF ticks is what lets a fetched frame
@@ -1026,6 +1091,116 @@ _seen.length = 0;
     broken = frames_seen(neut)
     assert broken["distinct"] <= 1, \
         f"neutered build still cycled (distinct={broken['distinct']}) — test does not bite"
+
+
+def test_bubble_follows_the_pet_every_frame():
+    """The click bubble is ANCHORED to the pet, not to the spot the tap landed.
+
+    A tap also STARTLES the pet into a flee dash, so a bubble positioned only
+    once at show time is left hanging over empty floor while the pet scurries
+    away — the owner's "the dialogue box doesn't follow the pet" report. The
+    fix: _place() re-anchors the bubble every frame while it is alive. Drive
+    the REAL module with reduced-motion OFF, interact(), pump the rAF loop and
+    assert the bubble's left tracks the pet's x tick by tick. A NEUTER that
+    drops the re-anchor call must leave the bubble behind.
+    """
+    def run(src_text):
+        harness = r'''
+'use strict';
+let _t = 0;
+const RealDate = Date;
+class FakeDate extends RealDate { static now(){ return _t; } getHours(){ return 14; } }
+global.Date = FakeDate;
+let _cbs = [];
+global.requestAnimationFrame = function(cb){ _cbs.push(cb); return _cbs.length; };
+global.cancelAnimationFrame = function(){};
+global.window = { matchMedia(){ return {matches:false, addEventListener(){}, addListener(){}}; }, addEventListener(){} };
+global.BASE_PATH = '';
+global.ResizeObserver = function(){ return {observe(){}, disconnect(){}}; };
+global.localStorage = { _d:{}, getItem(k){return this._d[k]||null;}, setItem(k,v){this._d[k]=v;} };
+global.Image = function(){
+  return { _attrs:{}, draggable:false, alt:'', style:{},
+    setAttribute(k,v){ this._attrs[k]=v; }, getAttribute(k){ return this._attrs[k]; },
+    addEventListener(){}, appendChild(){},
+    set src(v){ this._src = v; }, get src(){ return this._src || ''; } };
+};
+global.t = function (k, p) {
+  let text = k;
+  if (p) { for (const q in p) { if (Object.prototype.hasOwnProperty.call(p, q)) text = text.split('{' + q + '}').join(p[q]); } }
+  return text;
+};
+const _barChildren = [];
+function _fakeEl(tag){ return { _attrs:{}, tagName:tag||'', className:'', textContent:'', innerHTML:'',
+  offsetWidth:30, children:[], parentNode:null,
+  style:{ _p:{}, setProperty(k,v){ this._p[k]=v; }, removeProperty(k){ delete this._p[k]; } },
+  setAttribute(k,v){ this._attrs[k]=v; }, getAttribute(k){ return this._attrs[k]!==undefined?this._attrs[k]:null; },
+  addEventListener(){},
+  appendChild(c){ c.parentNode=this; this.children.push(c); return c; },
+  insertBefore(c){ c.parentNode=this; this.children.unshift(c); return c; },
+  removeChild(c){ const i=this.children.indexOf(c); if(i>=0) this.children.splice(i,1); c.parentNode=null; return c; },
+  querySelector(){ return null; }, querySelectorAll(){ return []; },
+  getBoundingClientRect(){ return {left:0,right:400,top:0,bottom:48,width:400,height:48}; },
+  firstChild:null }; }
+const _bar = _fakeEl('span');
+const _origAppend = _bar.appendChild.bind(_bar);
+_bar.appendChild = function(c){ _barChildren.push(c); return _origAppend(c); };
+const _origInsert = _bar.insertBefore.bind(_bar);
+_bar.insertBefore = function(c){ _barChildren.push(c); return _origInsert(c); };
+global.document = { readyState:'complete', hidden:false, addEventListener(){},
+  getElementById(id){ if(id==='projectBar') return _bar; return null; },
+  createElement(t){ return _fakeEl(t); },
+  querySelectorAll(){ return []; } };
+__SRC__
+const TP = window.TofuPet;
+(async () => {
+  // The tap: pops the bubble AND startles the pet into a flee dash.
+  TP.interact();
+  const bubble = _barChildren.find(c => c.className === 'tofu-pet-bubble');
+  const samples = [];
+  for (let k = 0; k < 14; k++){
+    _t += 160;
+    const cb = _cbs.shift();
+    if (cb) cb(_t);
+    await new Promise(r => setImmediate(r));
+    samples.push({ x: TP.getState().x, left: bubble ? (bubble.style.left || '') : '' });
+  }
+  console.log(JSON.stringify({ samples: samples }));
+  process.exit(0);
+})();
+'''
+        script = harness.replace("__SRC__", src_text)
+        out = subprocess.run(["node", "-e", script], capture_output=True, text=True,
+                             cwd=str(REPO), timeout=20)
+        assert out.returncode == 0, f"node failed: {out.stderr}\n{out.stdout}"
+        line = [ln for ln in out.stdout.strip().splitlines() if ln.strip().startswith("{")][-1]
+        return json.loads(line)["samples"]
+
+    src = PET_JS.read_text()
+    samples = run(src)
+    assert samples and all(s["left"] for s in samples), \
+        f"bubble never rendered or never got a left: {samples[:3]}"
+    xs = [s["x"] for s in samples]
+    lefts = [float(s["left"].replace("px", "")) for s in samples]
+    moved = max(xs) - min(xs)
+    assert moved > 15, f"the pet barely moved across 14 ticks ({moved:.1f}px) — harness broken"
+    drift = max(abs(l - (x + 15.0)) for l, x in zip(lefts, xs))
+    assert drift < 0.6, (
+        f"the bubble does NOT follow the pet: worst |bubbleLeft-(x+15)| = {drift:.1f}px "
+        f"across {len(samples)} ticks (pet moved {moved:.0f}px). "
+        "The bubble must be re-anchored every frame, not positioned once at show time.")
+
+    # NEUTER: drop the per-frame re-anchor from _place() → the bubble freezes
+    # at the tap spot while the pet runs off.
+    neut = src.replace("    _positionBubble();   // the bubble rides above the pet, wherever it moved to\n",
+                       "", 1)
+    assert neut != src, "neuter did not match the _place re-anchor call"
+    nsamples = run(neut)
+    nxs = [s["x"] for s in nsamples]
+    nlefts = [float(s["left"].replace("px", "")) for s in nsamples]
+    ndrift = max(abs(l - (x + 15.0)) for l, x in zip(nlefts, nxs))
+    assert max(nxs) - min(nxs) > 15, "neutered pet barely moved — harness broken"
+    assert ndrift > 5.0, (
+        f"neutered build still tracks the pet (drift {ndrift:.1f}px) — the guard does not bite")
 
 
 def test_wander_clamps_to_a_safe_track():

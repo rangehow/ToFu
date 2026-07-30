@@ -890,15 +890,39 @@
   }
 
   /** Replace a charter row's body with an inline textarea editor (Save /
-   *  Cancel). `onSave(newText)` performs the backend mutation. */
-  function _openInlineEditor(rowEl, bodySelector, originalText, onSave) {
+   *  Cancel). `onSave(newText, newSummary)` performs the backend mutation.
+   *
+   *  `opts.summarySelector` + `opts.summaryValue` add a SECOND, single-line
+   *  input above the body for the decision's summary. That field is not
+   *  decoration: the summary is the only line the per-turn injection renders,
+   *  so a body-only editor let a human "fix" a rule while every sibling
+   *  conversation kept reading the old one. When omitted (legacy entries with
+   *  no summary) the editor is body-only and `newSummary` is undefined. */
+  function _openInlineEditor(rowEl, bodySelector, originalText, onSave, opts) {
     if (!rowEl || rowEl.querySelector('.pb-inline-editor')) return;
     var body = rowEl.querySelector(bodySelector);
     var actions = rowEl.querySelector('.pb-charter-row-actions');
+    var summaryNode = (opts && opts.summarySelector)
+      ? rowEl.querySelector(opts.summarySelector) : null;
     if (body) body.style.display = 'none';
     if (actions) actions.style.display = 'none';
+    if (summaryNode) summaryNode.style.display = 'none';
     var ed = document.createElement('div');
     ed.className = 'pb-inline-editor';
+    var sumIn = null;
+    if (opts && opts.summarySelector) {
+      var sumLabel = document.createElement('div');
+      sumLabel.className = 'pb-inline-editor-label';
+      sumLabel.textContent = _t('projectBrain.summaryLabel',
+        'Rule line (this is what every conversation reads)');
+      sumIn = document.createElement('input');
+      sumIn.type = 'text';
+      sumIn.className = 'pb-inline-editor-summary';
+      sumIn.maxLength = 240;
+      sumIn.value = opts.summaryValue || '';
+      ed.appendChild(sumLabel);
+      ed.appendChild(sumIn);
+    }
     var ta = document.createElement('textarea');
     ta.className = 'pb-inline-editor-input';
     ta.value = originalText;
@@ -913,19 +937,21 @@
     btnRow.appendChild(save); btnRow.appendChild(cancel);
     ed.appendChild(ta); ed.appendChild(btnRow);
     rowEl.appendChild(ed);
-    try { ta.focus(); } catch (_e) { /* jsdom */ }
+    try { (sumIn || ta).focus(); } catch (_e) { /* jsdom */ }
     function close() {
       if (ed.parentNode) ed.parentNode.removeChild(ed);
       if (body) body.style.display = '';
       if (actions) actions.style.display = '';
+      if (summaryNode) summaryNode.style.display = '';
     }
     cancel.addEventListener('click', close);
     save.addEventListener('click', function () {
       var next = (ta.value || '').trim();
       if (!next) { close(); return; }
+      var nextSummary = sumIn ? (sumIn.value || '').trim() : undefined;
       save.disabled = true; cancel.disabled = true;
       save.textContent = _t('projectBrain.saving', 'Saving…');
-      Promise.resolve(onSave(next)).then(function () {
+      Promise.resolve(onSave(next, nextSummary)).then(function () {
         // refreshCharter re-renders the whole panel from the server, which
         // removes this editor implicitly; nothing more to do here.
       }).catch(function (e) {
@@ -956,7 +982,13 @@
         });
       });
     }
-    // Per-decision edit.
+    // Per-decision edit. Edits BOTH the summary and the body, because the
+    // summary is the ONE line the per-turn injection renders — editing the body
+    // alone rewrote the evidence while every sibling conversation kept reading
+    // the OLD rule, and the backend now refuses that (`summary_required`)
+    // instead of silently succeeding. An entry with no summary keeps the
+    // body-only editor: those render an abridged first line, so there is no
+    // second field to reconcile.
     var editBtns = el.querySelectorAll('.pb-decision-edit');
     for (var e = 0; e < editBtns.length; e++) {
       editBtns[e].addEventListener('click', function (ev) {
@@ -966,11 +998,21 @@
         var row = btn.closest('li[data-decision-idx]');
         if (!row || !api || typeof api.updateDecision !== 'function') return;
         var original = _charterSrcText(row, '.pb-decision-text');
-        _openInlineEditor(row, '.pb-decision-text', original, function (next) {
-          return Promise.resolve(api.updateDecision(path, idx, next, {
-            expected_version: ver,
-          })).then(function () { refreshCharter(path); });
-        });
+        var summaryNode = row.querySelector('.pb-decision-summary');
+        var hasSummary = !!summaryNode;
+        var originalSummary = hasSummary
+          ? _charterSrcText(row, '.pb-decision-summary') : '';
+        _openInlineEditor(row, '.pb-decision-text', original, function (next, nextSummary) {
+          var body = { expected_version: ver };
+          // Send the key ONLY when the entry has a summary: an absent key means
+          // "I said nothing about it" (refused), '' means "drop it".
+          if (hasSummary) body.summary = nextSummary;
+          return Promise.resolve(api.updateDecision(path, idx, next, body))
+            .then(function () { refreshCharter(path); });
+        }, hasSummary ? {
+          summarySelector: '.pb-decision-summary',
+          summaryValue: originalSummary,
+        } : null);
       });
     }
     // Per-decision delete (two-step inline confirm).

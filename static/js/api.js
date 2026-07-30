@@ -1269,6 +1269,12 @@
            Object.assign({ path, proposalId }, body || {})),
     // Human-gated edit / delete of a committed decision (by list index) and
     // deletion of the whole charter. All optimistic-locked (expected_version).
+    // NOTE on updateDecision: `summary` is the ONE line the per-turn injection
+    // renders (the body is read back on demand). Pass it in `body` whenever the
+    // entry has one — OMITTING it is refused with `summary_required`, because a
+    // silent keep would leave every sibling conversation reading the OLD rule
+    // while the panel showed the edit as saved. Send `summary: ''` to drop it
+    // deliberately and let the headline fall back to the fresh text.
     updateDecision: (path, index, text, body) =>
       post('/api/v1/project/charter/decision/update',
            Object.assign({ path, index, text }, body || {})),

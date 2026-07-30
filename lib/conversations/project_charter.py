@@ -417,7 +417,14 @@ def _persist_charter(db, project_path: str, content: str, decisions: list,
          updated_by_conv or '', int(time.time() * 1000), version))
 
 
+# Sentinel distinguishing "caller said nothing about the summary" from "caller
+# explicitly asked to clear it". `None` cannot carry that distinction, and the
+# difference is load-bearing: see update_decision's omission semantics.
+_SUMMARY_UNSET = object()
+
+
 def update_decision(project_path: str, index: int, text: str, *,
+                    summary=_SUMMARY_UNSET,
                     expected_version: int | None = None,
                     updated_by_conv: str = '') -> dict:
     """HUMAN-GATED edit of ONE committed decision, addressed by ``index``.
@@ -427,6 +434,34 @@ def update_decision(project_path: str, index: int, text: str, *,
     list is exactly what it rendered (the index can't silently address the wrong
     decision after a concurrent edit). Bumps ``version`` and emits a ``decided``
     event. Returns ``{'ok', 'version'?, 'error'?, 'current_version'?}``.
+
+    **``summary`` is what agents actually read.** ``_decision_headline`` prefers
+    the stored summary, and the per-turn injection renders ONLY that headline —
+    the body is one ``project_charter_read`` call away. Until 2026-07-30 this
+    function had no ``summary`` parameter at all, so a human correction rewrote
+    the body, returned ok=True, bumped the version, and left the one line every
+    sibling conversation reads unchanged FOREVER. Measured on the live project:
+    decision #0's body described the shipped design while its summary was still
+    broadcasting the design that design had replaced. The edit looked applied in
+    the panel and was inert in the prompt — the same shape as a badge asserting
+    something already untrue.
+
+    Omission semantics, chosen deliberately:
+
+    * entry HAS a summary and ``summary`` is omitted → **refused**
+      (``summary_required``). A caller rewriting the rule's body without saying
+      what the new rule line is has almost certainly hit the trap above. The two
+      safe answers are refuse or clear; the unsafe one is to keep broadcasting
+      the old line. Refusing is better than clearing because clearing silently
+      downgrades a curated one-liner to an abridged first line — a quiet loss
+      the human never asked for — whereas a refusal is a question they can
+      answer. A refused edit changes NOTHING, not even the version.
+    * ``summary=''`` → clear it, so the headline falls back to the fresh text.
+      That is an explicit instruction, not an omission.
+    * entry has NO summary and ``summary`` is omitted → edit proceeds. Legacy
+      (pre-summary) entries already render an abridged first line; demanding a
+      summary to touch them would make this a tax on every legacy edit instead
+      of a trap for the stale-summary case.
     """
     text = (text or '').strip()[:_DECISION_MAX_CHARS]
     if not project_path:
@@ -448,14 +483,32 @@ def update_decision(project_path: str, index: int, text: str, *,
             return {'ok': False, 'error': 'index_out_of_range',
                     'current_version': cur['version']}
         d = decisions[index]
+        had_summary = bool(
+            isinstance(d, dict) and (d.get('summary') or '').strip())
+        if summary is _SUMMARY_UNSET and had_summary:
+            # Refuse BEFORE any mutation: a rejected edit must leave the text,
+            # the summary and the version exactly as they were.
+            return {'ok': False, 'error': 'summary_required',
+                    'current_version': cur['version'],
+                    'current_summary': (d.get('summary') or '').strip()}
         if isinstance(d, dict):
             d = dict(d)
             d['text'] = text
+            if summary is not _SUMMARY_UNSET:
+                new_summary = (summary or '').strip()[:_SUMMARY_MAX_CHARS]
+                if new_summary:
+                    d['summary'] = new_summary
+                else:
+                    d.pop('summary', None)
             d['edited_by_conv'] = updated_by_conv or ''
             d['edited_at'] = int(time.time() * 1000)
         else:
             d = {'text': text, 'by_conv': updated_by_conv or '',
                  'ts': int(time.time() * 1000)}
+            if summary is not _SUMMARY_UNSET:
+                new_summary = (summary or '').strip()[:_SUMMARY_MAX_CHARS]
+                if new_summary:
+                    d['summary'] = new_summary
         decisions[index] = d
         new_version = cur['version'] + 1
         _persist_charter(db, project_path, cur['content'], decisions,

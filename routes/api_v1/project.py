@@ -970,9 +970,16 @@ def _parse_expected_version(data):
     summary='HUMAN-GATED edit of one committed charter decision',
     description=(
         'Edit a single committed decision by its list ``index``. Body: '
-        '``{path, index, text, expected_version?, updated_by_conv?}``. '
+        '``{path, index, text, summary?, expected_version?, updated_by_conv?}``. '
         'Optimistic-locked: a stale ``expected_version`` is rejected with '
-        '``version_conflict`` (409); an out-of-range index → 400.'),
+        '``version_conflict`` (409); an out-of-range index → 400.\n\n'
+        '``summary`` is the ONE line the per-turn injection renders — the body is '
+        'read back on demand. So editing ``text`` alone on an entry that HAS a '
+        'summary is refused with ``summary_required`` (400): otherwise the edit '
+        'would return ok, bump the version, and leave every sibling '
+        'conversation reading the OLD rule forever. Send ``summary: ""`` to '
+        'deliberately drop it and let the headline fall back to the fresh text. '
+        'Entries that never had a summary edit without ceremony.'),
     tags=['project'],
 )
 def project_charter_decision_update():
@@ -990,10 +997,16 @@ def project_charter_decision_update():
     expected_version, err = _parse_expected_version(data)
     if err is not None:
         return err
+    # ABSENT key vs empty string are different instructions and must stay
+    # distinguishable across the wire: absent = "I said nothing about the
+    # summary" (refused when one exists), '' = "drop it deliberately".
+    from lib.conversations.project_charter import _SUMMARY_UNSET
+    summary_arg = data['summary'] if 'summary' in data else _SUMMARY_UNSET
     try:
         from lib.conversations.project_charter import update_decision
         result = update_decision(
-            project_path, index, text, expected_version=expected_version,
+            project_path, index, text, summary=summary_arg,
+            expected_version=expected_version,
             updated_by_conv=(data.get('updated_by_conv') or '').strip())
         if not result.get('ok'):
             if result.get('error') == 'version_conflict':

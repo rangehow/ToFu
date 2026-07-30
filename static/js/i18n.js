@@ -3645,6 +3645,10 @@ var _i18n = {
   'projectBrain.deleteDecision': { zh: '删除决策', en: 'Delete decision' },
   'projectBrain.deleteCharter': { zh: '删除章程', en: 'Delete charter' },
   'projectBrain.save': { zh: '保存', en: 'Save' },
+  // The decision's summary IS the line the per-turn injection renders; the
+  // label says so, because a human editing only the body used to leave every
+  // sibling conversation reading the old rule.
+  'projectBrain.summaryLabel': { zh: '规则行（每个会话读到的就是这一行）', en: 'Rule line (this is what every conversation reads)' },
   'projectBrain.saving': { zh: '保存中…', en: 'Saving…' },
   'projectBrain.cancel': { zh: '取消', en: 'Cancel' },
   'projectBrain.confirmDelete': { zh: '确认删除？', en: 'Confirm?' },

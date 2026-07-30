@@ -543,6 +543,198 @@ def test_update_decision_edits_in_place(flask_app):
     assert 'decided' in _feed_kinds(flask_app, p)
 
 
+def test_editing_a_decision_changes_what_agents_ACTUALLY_READ(flask_app):
+    """THE headline guard. Editing a decision must change the injected line.
+
+    Why the existing edit test could not see this: it asserts ``d['text']``,
+    while the per-turn injection renders ``_decision_headline``, which prefers
+    the stored ``summary``. ``update_decision`` had no ``summary`` parameter at
+    all, so a human correction rewrote the body, returned ok=True, bumped the
+    version — and left the ONE line every sibling conversation reads untouched,
+    forever. Measured on the live project: decision #0's body described the
+    shipped design while its summary still broadcast the design it replaced.
+
+    That is the same failure shape as a badge asserting something already
+    untrue: the panel shows the edit applied and the prompt is inert.
+    """
+    from lib.conversations.project_charter import (
+        commit_charter, render_charter_injection_block, update_decision,
+    )
+    p = os.path.abspath('/p/edit-headline')
+    with flask_app.app_context():
+        commit_charter(p, add_decision='OLD BODY with its evidence chain',
+                       decision_kind='invariant',
+                       summary='OLD RULE that is now wrong',
+                       updated_by_conv='cA')
+        assert 'OLD RULE that is now wrong' in render_charter_injection_block(p)
+
+        r = update_decision(p, 0, 'NEW BODY: the corrected rule',
+                            summary='NEW RULE that is correct',
+                            updated_by_conv='human')
+        assert r['ok'], r
+        block = render_charter_injection_block(p)
+
+    assert 'NEW RULE that is correct' in block, (
+        'the human edited the decision and agents still read the old rule')
+    assert 'OLD RULE that is now wrong' not in block, (
+        'the stale summary survived the edit — this is the live defect')
+
+
+def test_omitting_summary_on_an_entry_that_has_one_is_REFUSED(flask_app):
+    """Silently keeping the old summary is the one behaviour that must not remain.
+
+    A caller that rewrites the body without saying what the new rule line is has
+    almost certainly hit the stale-summary trap. Two safe answers exist (refuse,
+    or clear so the headline falls back to the fresh text); the unsafe one is to
+    keep broadcasting the old line. We REFUSE, because clearing silently
+    downgrades a curated one-liner to an abridged first line — a quiet loss the
+    human never asked for — whereas a refusal is a question they can answer.
+
+    Passing ``summary=''`` EXPLICITLY is the escape hatch: that is an intentional
+    "drop the summary, render my text" instruction, not an omission.
+    """
+    from lib.conversations.project_charter import (
+        commit_charter, read_charter, render_charter_injection_block,
+        update_decision,
+    )
+    p = os.path.abspath('/p/edit-summary-required')
+    with flask_app.app_context():
+        commit_charter(p, add_decision='BODY', decision_kind='invariant',
+                       summary='THE RULE', updated_by_conv='cA')
+        before = read_charter(p)['version']
+
+        r = update_decision(p, 0, 'NEW BODY', updated_by_conv='human')
+        assert r['ok'] is False, 'omitting summary must not silently succeed'
+        assert r['error'] == 'summary_required', r
+        rec = read_charter(p)
+
+    # A refusal must change NOTHING — not the text, not the version.
+    assert rec['decisions'][0]['text'] == 'BODY'
+    assert rec['decisions'][0].get('summary') == 'THE RULE'
+    assert rec['version'] == before, 'a refused edit must not bump the version'
+
+    with flask_app.app_context():
+        cleared = update_decision(p, 0, 'NEW BODY explicitly unsummarised',
+                                  summary='', updated_by_conv='human')
+        assert cleared['ok'], cleared
+        block = render_charter_injection_block(p)
+    assert 'THE RULE' not in block, 'summary="" must really drop the summary'
+    assert 'NEW BODY explicitly unsummarised' in block, (
+        'after clearing, the headline must fall back to the fresh text')
+
+
+def test_a_legacy_entry_without_a_summary_edits_without_ceremony(flask_app):
+    """COMPLEMENT: the refusal must not spread to entries that have no summary.
+
+    Pre-summary entries (and anything committed without one) render an abridged
+    first line. Requiring a summary to edit those would make the guard above a
+    tax on every legacy edit rather than a trap for the stale-summary case.
+    """
+    from lib.conversations.project_charter import (
+        commit_charter, render_charter_injection_block, update_decision,
+    )
+    p = os.path.abspath('/p/edit-legacy')
+    with flask_app.app_context():
+        commit_charter(p, add_decision='LEGACY first line\nand a long tail',
+                       updated_by_conv='cA')
+        r = update_decision(p, 0, 'CORRECTED first line\nand a long tail',
+                            updated_by_conv='human')
+        assert r['ok'], r
+        block = render_charter_injection_block(p)
+    assert 'CORRECTED first line' in block
+    assert 'LEGACY first line' not in block
+
+
+def test_the_REST_route_can_change_what_agents_read(flask_app, flask_client):
+    """The library fix must not stop at the library boundary.
+
+    ``update_decision`` gained a ``summary`` parameter, but the panel reaches it
+    only through ``POST /charter/decision/update``. If that route does not pass
+    the field through, the human-facing surface is exactly as broken as before
+    while the unit tests are green — the shape this project keeps re-learning.
+
+    Also pins the wire-level distinction the sentinel exists for: an ABSENT key
+    is refused (400 summary_required) while ``summary: ''`` is honoured. Those
+    two are the same value in most serialisations, so if the route collapses
+    them the refusal silently becomes a clear.
+    """
+    from lib.conversations.project_charter import (
+        commit_charter, render_charter_injection_block,
+    )
+    p = os.path.abspath('/p/route-summary')
+    with flask_app.app_context():
+        commit_charter(p, add_decision='BODY', decision_kind='invariant',
+                       summary='OLD RULE via route', updated_by_conv='cA')
+
+    # 1) Omitted key → refused, nothing changed.
+    r = flask_client.post('/api/v1/project/charter/decision/update',
+                          json={'path': p, 'index': 0, 'text': 'NEW BODY'})
+    assert r.status_code == 400, r.get_data(as_text=True)
+    import json as _json
+    assert _json.loads(r.get_data(as_text=True)).get('error') == 'summary_required'
+    with flask_app.app_context():
+        assert 'OLD RULE via route' in render_charter_injection_block(p)
+
+    # 2) Explicit summary → the injected line really changes.
+    r = flask_client.post('/api/v1/project/charter/decision/update',
+                          json={'path': p, 'index': 0, 'text': 'NEW BODY',
+                                'summary': 'NEW RULE via route'})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    with flask_app.app_context():
+        block = render_charter_injection_block(p)
+    assert 'NEW RULE via route' in block
+    assert 'OLD RULE via route' not in block
+
+    # 3) Explicit empty string → cleared, headline falls back to the body.
+    r = flask_client.post('/api/v1/project/charter/decision/update',
+                          json={'path': p, 'index': 0,
+                                'text': 'BODY IS THE HEADLINE', 'summary': ''})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    with flask_app.app_context():
+        block = render_charter_injection_block(p)
+    assert 'BODY IS THE HEADLINE' in block
+    assert 'NEW RULE via route' not in block
+
+
+def test_the_panel_editor_offers_a_summary_field_when_one_exists():
+    """The deepest half: the human must be able to SEE and EDIT that line.
+
+    The panel already RENDERED the summary (``.pb-decision-summary``) while its
+    inline editor edited only the body — so the human could read the line agents
+    consume and had no control that changed it. With the backend now refusing a
+    body-only edit, a body-only editor would turn a silent-wrong-rule bug into a
+    dead Save button; both halves have to move together.
+
+    Asserted over the shipped source with comments stripped (charter #24): the
+    change that adds this necessarily explains it, and a raw substring scan is
+    then satisfied by its own explanation.
+    """
+    from tests._source_scan import strip_comments
+    js = os.path.join(ROOT, 'static', 'js', 'project-brain.js')
+    with open(js, encoding='utf-8') as f:
+        src = strip_comments(f.read(), lang='js')
+
+    assert 'pb-inline-editor-summary' in src, (
+        'the inline editor has no summary input — the human cannot change the '
+        'one line agents read')
+    assert 'summarySelector' in src, 'the editor is not wired for a summary field'
+    # The update call must be able to carry it, and must send the key ONLY when
+    # the entry has a summary (absent key = refused, which is the point).
+    assert 'body.summary = nextSummary' in src, (
+        'the panel never puts the edited summary on the request body')
+    assert 'hasSummary' in src, (
+        'the panel does not distinguish entries that HAVE a summary — it would '
+        'either refuse every legacy edit or send an empty summary blindly')
+
+    # A field with no stylesheet rule is the invisible-control defect.
+    css = os.path.join(ROOT, 'static', 'styles.css')
+    with open(css, encoding='utf-8') as f:
+        css_src = f.read()
+    assert '.pb-inline-editor-summary' in css_src, (
+        'the summary input has no CSS rule — it would render unstyled')
+    assert '.pb-inline-editor-label' in css_src
+
+
 def test_update_decision_optimistic_lock(flask_app):
     from lib.conversations.project_charter import commit_charter, update_decision
     p = os.path.abspath('/p/edit-lock')
@@ -655,9 +847,19 @@ def test_routes_charter_edit_delete_roundtrip(flask_app, flask_client):
                       json={'path': p, 'add_decision': 'D1', 'summary': 'D1'})
     ver = _json.loads(flask_client.get(
         '/api/v1/project/charter?path=' + p).get_data(as_text=True))['version']
-    # Edit decision 0 via route.
-    re = flask_client.post('/api/v1/project/charter/decision/update', json={
+    # Edit decision 0 via route. REVERSED IN PLACE 2026-07-30: this used to send
+    # `text` alone against an entry committed WITH a summary ('D0') and assert
+    # 200 — i.e. it certified the stale-summary trap, because the edit landed
+    # while the injected headline kept rendering the old 'D0'. A body-only edit
+    # on a summarised entry is now refused, and the caller must say what the new
+    # rule line is.
+    refused = flask_client.post('/api/v1/project/charter/decision/update', json={
         'path': p, 'index': 0, 'text': 'D0-edited', 'expected_version': ver})
+    assert refused.status_code == 400, refused.get_data(as_text=True)
+    assert _json.loads(refused.get_data(as_text=True))['error'] == 'summary_required'
+    re = flask_client.post('/api/v1/project/charter/decision/update', json={
+        'path': p, 'index': 0, 'text': 'D0-edited', 'summary': 'D0-edited',
+        'expected_version': ver})
     assert re.status_code == 200, re.get_data(as_text=True)
     ver = _json.loads(re.get_data(as_text=True))['version']
     # Delete decision 1 via route.

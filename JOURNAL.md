@@ -1,3 +1,20 @@
+### 2026-07-30(Goals 独立注入·方案 A) — owner 纠正我上午那批:「**目标就是目标,不用非得进章程才生效**」+「**不该让 LLM 直接改章程,章程永远需要人工审核**」。选 A 之后**删掉的机制比加上的多**——净 -2 行(`pt_b4b24a9df465426c` DONE;commit `6c28925c`,14 文件 +1039/-1041;守卫 **27/27 + 7/7**,**NEUTER×6 各咬各的**;相邻环 **215/216**;活库闭环:`charter.content` **清空**而目标仍在真提示里)
+
+- **★ 上午那批是过度设计,而 owner 的一句话把它整段删掉。** 三态药丸、diverged 判定、替换预览卡、CAS 版本门、`promoted_text`/`promoted_at` 两列——**全部只为一件事存在:目标被复制进了 `charter.content`**。一句话有两份拷贝就需要「哪边动了」的对账;**一份拷贝一个都不需要**。这是本轮最值得记的判断:选 A 不是「再加一条注入通道」,是**把上午引进的复杂度连根拔掉**。
+- **落点:** `render_goals_injection_block()` 把每条 **open 的 kind=goal** 渲成自己的 `[PROJECT GOALS]` 块,由 `_inject.py` 挂在**与章程/看板同一条** cache-stable 尾块缝上。目标的状态模型就是 `(kind, status)` 两个字段:**它存在、且未解决**。resolve/delete 即撤回,没有第二个「取消提升」步骤可忘。
+- **多目标是合法的,单目标性本来就是那一列的产物:** 上午之所以「至多一条 active」,是因为 `content` 只有一格。没有那格之后,几条目标全部注入,不需要唯一约束、不需要位移、不产生 diverged 同侪。
+- **`promote_watch_item` 对 goal 改为**明确拒绝**(`goal_not_promotable`)而不是静默 no-op:** 还在调它的调用方是照旧契约在跑,必须被告知,而不是让它以为自己设了北极星。
+- **章程回归人类专属:** `project_charter_commit` 从 `CHARTER_TOOLS` 与 registry 的 `provides`/`write_tools` 移除,agent 只剩 read + propose。**而这件事能活到今天的原因是一句假注释**:`registry/_build.py:196` 写着 commit「is NEVER exposed as an agent tool」,而 `CHARTER_TOOLS` **三个名字全在发**——代码**读起来**是安全的,于是今早我(一个 agent)就这么无审核地写进了 owner 的章程。那条注释现在是真的了。
+- **★ 工具名保留在 `CHARTER_TOOL_NAMES` 里,是为了让拒绝**指名道姓**:** 从旧 transcript 学到这个工具的模型仍会发起调用,它应该被告知「去用 `project_charter_propose`」,而不是收到一个不透明的 unknown-tool 错误。顺带清掉 **~96 行**因此不可达的 commit 分支体。
+- **★ 而删除那段分支体让 `_route_lesson_to_memory` 变成孤儿——如实记录而不是假装没事:** 它唯一的调用者就是被删的 `kind=lesson` 分支。agent 仍可用 `create_memory` 记教训,所以**能力没丢**;但那套「同主题折叠成一份记忆」的三通道去重**不再运行**。我在它的 docstring 顶部标注了不可达 + 为什么保留(那套去重的测量成本是贵的部分:真实同族教训对只有 ~0.10 词汇包含度,这正是显式 `into_memory` 通道存在的理由),并按 owner 惯例**不塞进本批**修。
+- **★ 本轮最有价值的一条:一个我自己引进的缺陷,是新守卫抓的,不是评审抓的。** `_refresh_tail_block` 靠「剥掉所有含该 marker 的块」实现幂等。而我给章程的空北极星提示里**逐字写下了 `[PROJECT GOALS]`** ⇒ 注入目标块时把**整个章程块连同决策一起删掉**,而日志照旧报告两个块都构建成功(`charter:656,goals:303`)。**这是一整类缺陷不是一个实例**,故守卫改为对**全部 marker** 断言「任何块的正文不得出现别的块的 marker」。
+- **NEUTER×6 各咬各的:** 摘掉 `_inject` 里的 goals 调用(复现原始缺陷)→ 2 红;goals 块连 concern 一起发 → 3 红;resolved 的目标继续注入 → 2 红;把 commit 工具放回 `CHARTER_TOOLS` → 1 红;恢复 marker 冲突 → 2 红;让 goal 又能提升进章程 → 1 红。六发后四个产品文件 `cmp` 逐字节还原。
+- **★ 陈旧套件一律**就地反转**,不删:** ①`test_project_charter.py` 8 条 agent-commit 测的是**存储性质**(版本递增 / 提议出队 / 滚动截断 / append 可交换),那些性质仍然成立、只是写入者变成人 ⇒ retarget 到 `commit_charter`,而「agent 不能写 content」那条**加强**成「agent 连 commit 工具都没有」;②kind-routing 的**策略层**(缺 kind 拒绝 / report 打回 JOURNAL / lesson 进记忆)随工具一起消失 ⇒ 11 条收敛成一条,把它们断言过什么**写在 docstring 里存档**;③前端三条替换预览测试**反转为断言那套机制不存在**,这样将来谁想重建 goal→charter 写入,必须先把这些符号加回来、而这条守卫会红。
+- **★ 而那条「断言机制已消失」的守卫第一版就犯了本项目记录在案的同型错误:** 它被**我自己写的解释性注释**咬红——那段注释必然要提到被禁的符号名。已改为先走共享 `strip_comments(lang='js')`。**判据:凡断言「某符号不存在」,注释是第一个假阳性来源,不是边缘情况。**
+- **活库闭环(owner 指定的验收):** 把 `charter.content` **清空**、并把今早那条 LLM 自写的 invariant #0 改写为 A 设计的规则(经 `update_decision`,人类 REST 路径);随后驱动**真** `_inject_system_contexts`:①目标原文在真提示里 ✅ ②`[PROJECT GOALS]` 块在 ✅ ③`[PROJECT CHARTER]` 块**也还在**(证明目标不是搭它的车进去的)✅。
+- **共享 HEAD:** `tool_rounds.js` 的 `_CONV_META_TOOLS` 条目与两个 `projectBrain.watchGoalLive*` i18n 键被兄弟提交(`433a07c3`/`461cd0e0`)顺带带进 HEAD——已逐字核验在库,故正确地不在本批 pathspec 内;计数门因此从 15 改为 14 并在提交信息里注明。另清掉一个 gitignored 的孤儿 bundle(`feature-3a97842b.js`,10:00 构建、已不在 manifest),它是 i18n 覆盖守卫唯一的红来源。
+- **验收边界:** 后端已对活库生效;前端与 i18n **需重启 + bundle 重建**。真浏览器未实测(node 驱动 shipped `buildWatchItem` + 直接驱动真注入路径)。唯一相邻红是 `tofu-pet.js` 的 variable-URL fetch——兄弟 epic 的既有失败,本批三个 JS 文件 `fetch(` 计数均为 0。
+
 ### 2026-07-30(Devices 设置页) — owner 问「这个设备设置面板是不是很丑」:实测**不是设计丑,是这个面板从来没有过样式**——9 个类在两张样式表里各 0 条规则;顺带证伪了「服务器打包再分发」的一半,只做对的那一半(`pt_ef4a5ac948824298` DONE;commit `433a07c3`,10 文件 +1437/-52;新套件 **32/32**(**23 条失败先行**),**NEUTER×6 各咬各的**;相邻环 **92/92**)
 
 - **★ 判据不是「丑」而是「不存在」:** `devices.html` + `settings/devices.js` 用了 `.stg-section`/`.stg-desc`/`.stg-row`/`.stg-table`/`.stg-dim`、**裸 `.stg-btn`** 和 4 个 `.devices-*`,实测 `styles.css` 与 `settings.css` **各 0 条**。于是浏览器兜底:裸 `<table>`(无内边距)、系统 `<button>`、只有默认 margin 的 `<p>`、两个 section 完全不分隔。**改法只能是补真规则,给现有规则「调样式」在结构上无从下手**。

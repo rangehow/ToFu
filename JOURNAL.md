@@ -74,6 +74,27 @@
 - **活库闭环(owner 指定的验收):** ALTER 落库 → 用新路径把 owner 那条 goal 设为项目目标 → 注入块 **0 → 244 字节**且目标原文逐字在内;随后模拟在章程页改字,卡片正确翻成 `diverged(side=charter)`,还原后翻回 `active`。charter 承接本批 invariant 后注入块 533 字节,**目标位于 decisions 之上**——这正是 `content` 列存在的结构性理由。
 - **验收边界:** 后端已对活库生效(ALTER 幂等);前端与 i18n **需重启 + bundle 重建**。真浏览器未实测(node 驱动 shipped 函数 + 直接驱动后端)。
 
+### 2026-07-30(工具完成→前端停转) — owner 报「搜索完了转圈还在转,要等下一个工具的第一个 token 才更新,没法排查卡在哪」;实测**不是等下一个工具,而是等本轮全部工具**,而且是**三道互不相同的屏障** + 一个让任何修复都不可证伪的缺失量具(`pt_67ffc2b700094ce9` DONE;commits `bcaad758` 17 文件 +2795/-133、自审补救 `6c09656c`;新 4 套 **35 测试全部失败先行**(19 红:3 排序/4 批量/4 push/8 时钟),**NEUTER×7 各咬各的**(3/4/1/4/1/1/1);相邻环 **173/173**)
+
+- **★ owner 的推断偏早了一格,真相更宽:** 票面猜「等下一个工具的第一个 token」。实测 `tool_result`(停转圈那半)**本来就是即时的**——handler 在 worker 线程里就发了;真正被推迟的是 `tool_complete`(内容/token/预览芯片),它在 `pool.shutdown(wait=True)` **之后**的 post-phase 才发 ⇒ 一轮里 0.05s 的 `read_files` 要等 40s 的 `web_search`。**判据:先分清「哪一半慢」再动手,否则会去修本来就对的那半。**
+- **★ 三道屏障形状不同,修一道不动另外两道:**
+
+  | 屏障 | 症状 | 落点 |
+  |---|---|---|
+  | 轮级线程池 | 快工具等最慢兄弟 | 抽 `_settle_tool_result`,在 `as_completed` 内即时结算(串行写/长阻塞两条道同样处理) |
+  | **批量内部** | `web_search(queries=[3])` 是**一个** round,N 次网络请求只有**一个**可观测跃迁(截图正是这格) | `run_batch_concurrent` 加 `on_item`,每条查询落地即发 per-item `tool_progress` |
+  | paper 传输 | 后端**早已**在 push 上广播,前端 `pushSubscribe` **零调用** | 补 `_attachReportPush`,**三处** attach 点全接(刷新后最常见的是 lookup 那条) |
+
+- **★ 「后端根因再同步前端」在 paper 这条恰好反过来:** `report_runtime` 早配了 `push_channel='paper'`、`tool_done` 工具一返回就 append——后端零缺陷,缺的是前端那条腿。`research.js:167` 是现成先例。**判据:先证伪「后端有病」这个前提,否则会去修一个健康的后端。**
+- **★ 加第二条传输的代价是 exactly-once,不是「更快」:** push 与 poll 送**同一批**事件,裸接会把每个 delta 应用两遍 ⇒ 报告正文渲染两次(该文件的 `delta_reset` 注释本身就是这个事故的疤)。落点:`_applyReportEvent` 升级为**按 `seq` 的有序 ingest 闸**(每个事件都带 `TaskRuntime.append_event` 分配的单调 seq),去重是**精确**而非启发式。
+- **★ 第 4 件事才是让前三件可验证的东西:** 四个工具 EventSpec **零时钟**,所以「慢在上游/慢在屏障/慢在浏览器丢渲染(`twFlush-skip` 真会丢)」三者同形,「我修好了延迟」不可证伪。补 `tStart`/`tEnd`/`emittedAt`(epoch **毫秒**,单一 `now_ms`;`emittedAt` 只在 `build_event` 一处盖、**只盖工具类型**,delta 热路径不加字节)+ ingress 盖 `receivedAt`。三段:执行=`tEnd-tStart`,传输=`receivedAt-emittedAt`,渲染=`painted-receivedAt`。
+- **★ `receivedAt` 为什么必须在 ingress 盖而不能在 reducer 里盖:** reducer 是**纯函数**,其 live fold 要与同一 turn 的 cold projection **逐字节相同**(parity 契约)。在里面写 `Date.now()` 会破坏该契约。所以 reducer 只**透传**时钟,`receivedAt` 作为**客户端本地遥测**从 parity canonicalizer 里排除(排除的是对比,不是生产)。**我第一版守卫断言「reducer 必须盖章」——命题本身与既有契约冲突,已就地反转并写明理由。**
+- **★ 我的 fixture 错了两次,方向都是「没把被测代码装好」:** ①手工构造 `round_entry` 不带 `tStart` ⇒ 时长恒 0ms,看起来像产品缺陷,实为 fixture 绕过了真实构造器(改用 `_build_tool_round_entry`);②harness 只加载 `report.js`,而 `_reportView` 住在 `paper-reader.js` ⇒ 报「符号缺失」。同族第 N 次,判据不变:**红灯先分清「被测代码错」与「我没装好它」。**
+- **★ 我自己引进的一处真回归,由基线守卫抓回:** 空插值 `${_renderBatchProgress(round)}` 给非批量行留下多余空白 ⇒ 冻结的工具行**逐字节基线** 2/41 不符。**选择收紧插值而不是重生成基线**——基线的价值就在于不被随手刷新。
+- **★★ 自审抓出比上面都严重的一件:提交后 `styles.css` 带了兄弟 +123 行 `.stg-*`、而我的 `.ptool-batch-progress` 一行没进去。** 兄弟在我插入与提交之间**并发重写**了该文件,保留了他的、静默丢了我的。**而全链路都「工作」:后端发进度、handler 存计数、渲染器吐出 span,只有让它可见的那条规则没了 ⇒ 像素上什么都没有,且没有一条 Python 守卫会红(它们都不读样式表)。** 与 `.conv-state-unconfirmed` 同型:**DOM 里有语义 ≠ 用户看得见。** 已补两条守卫(CSS 存在 + 驱动 shipped `_renderBatchProgress` 的正/反向),NEUTER 复刻那次覆盖 → 精确咬新守卫。
+- **刻意不做的两件(有实测理由):** ①轮**聚合**预算留在屏障后——它按定义需要全部结果才能定轮尺寸,改用 `tool_compacted` **增量纠正**已宣告的结果,而不是让首发事件等它;②单条(非批量)search **不发** per-item 进度——它本来就只有一次网络调用,`tool_result` 已是 per-item 信号,补一条只会给产品里最高频的工具凭空加一倍事件量。
+- **验收边界:** 后端 + 前端 bundle,**运行中进程不带**,需重启 + bundle 重建;真浏览器未实测(node 端到端驱动 shipped `dispatchSSEEvent` / `report.js`)。
+
 ### 2026-07-29(续·context_limits 折叠) — 同族第三张牌:`model_context_limits` 以 slot.provider_id 为键,账户/面合并后 `sankuai_anthropic::*` 学习条目全部孤儿化——含今晚 opus-5 刚从一条 1.1M 成功提示学到的 expand,重启即丢(`pt_998336d4ec734207` DONE;commit `815f2cf1`,3 文件;新套件 **10/10 失败先行**,**NEUTER×3 各咬各的**(6/1/2);相邻环 **75/75**)
 
 - **★ 与 key_stats 折叠同型但有一处关键不同:这个文件被前端裸读。** `routes/config.py` 把 `model_context_limits` 原样发给 Settings UI,所以只做内存态折叠挡不住 UI 显示孤儿——`_load` 折叠后**立即持久化**;且持久化的 mutate 折的是**写时**的文件内容而非读时快照(跨进程并发 learn 不丢更新,复用 update_json_atomic 的 flock)。

@@ -203,6 +203,15 @@
 - **活库闭环(owner 指定的验收):** ALTER 落库 → 用新路径把 owner 那条 goal 设为项目目标 → 注入块 **0 → 244 字节**且目标原文逐字在内;随后模拟在章程页改字,卡片正确翻成 `diverged(side=charter)`,还原后翻回 `active`。charter 承接本批 invariant 后注入块 533 字节,**目标位于 decisions 之上**——这正是 `content` 列存在的结构性理由。
 - **验收边界:** 后端已对活库生效(ALTER 幂等);前端与 i18n **需重启 + bundle 重建**。真浏览器未实测(node 驱动 shipped 函数 + 直接驱动后端)。
 
+### 2026-07-30(续·散文让结构守卫转红) — 自主派单接前两批顺手开的票:`test_events_round_key_unified` 在干净 HEAD 上已红,而**产品完全正确**——54 个 EventSpec 里裸 `round` 字段键**实测 0 个**,守卫报的那 1 条是 PHASE 描述文本里的示例(`pt_174f89ef93ac41be` DONE;commit `59e2cef6`,1 文件 test-only;守卫 **3 → 5**,**NEUTER×3 各咬各的**(3/1/1,含 1 发反向);隔离副本 **5/5**;相邻环 **94/94**)
+
+- **★ charter #24 的反方向,同一个病:** #24 说「负断言不能被**散文满足**」;这次是「结构断言不能被**散文推翻**」。旧守卫用正则扫 `fields={...}` 的**原文**:`re.search(r"['\"]round['\"]\s*:", block)`。而 dict 字面量的原文**同时包含键和值**,PHASE 的 `detailArgs` 值恰好用示例说明自己的形状——`'(e.g. {"round": 3, "model": "claude-4"})'`。于是**一段完全正确的文档**让守卫红了,并且是**在干净 HEAD 上红**,指控一个早已统一好的契约。
+- **★ 判据:关于「字段名」的结构断言,必须对着字段名求值。** 改为扫 `fields` 的 **KEY**。
+- **★★ 但「用 AST 取 keys」这个直觉修法有个盲区,是我实测才发现的:** 本 epic 前两批我给 4 个工具 spec 加了 `**_TOOL_CLOCK_FIELDS` / `**_TOOL_END_CLOCK_FIELD` 展开。`ast.Dict` 里展开项的 key 是 `None`,**朴素的 AST key 遍历会静默跳过恰好这 4 个 spec 的全部键** ⇒ 守卫靠「没看见」而变绿。所以主真源用**运行时注册表** `all_event_specs()`(展开已解析),AST 只作**独立交叉校验**并把展开项显式标记为 `'**'`(而不是当成干净)。**NEUTER 2 就是把 `round` 藏进 spread 里 ⇒ 注册表那条精确咬,证明这个盲区真的被堵上了。**
+- **★ 反向守卫(本批的关键一条):** 新增 `test_NC_prose_mentioning_round_is_NOT_flagged`,并**锚定到真实的 PHASE spec**——断言它不声明裸 `round` 字段、**同时**断言它的描述里仍然含 `round` 字样。这样将来有人把守卫退回原文扫描,这条会立刻红(NEUTER 3 实测:退回旧正则 ⇒ 1 红)。**只做正向的话,一个「重新扫原文」的回归会完全静默。**
+- **顺带把过期的 docstring 与 standalone runner 一起修了:** 文件头原本写着「TESTS-FIRST: RED on HEAD by design」——那句话在漂移修完之后就变成了**给假红打掩护的说明**,任何人看到红灯都会以为「本来就该红」。runner 也同步为 5 个 face,不再打印「RED (expected)」。
+- **验收边界:** 纯测试改动,**产品文件零改动**(`lib/agent_core/events.py` 逐字节未动),不需要重启。
+
 ### 2026-07-30(续·Reading Mode 不止 report 一个引擎) — owner 指出目标句里的「paper reading mode report」覆盖的是**整个 Reading Mode**;脚本普查 5 个配了 push_channel 的 runtime,实测**另有 2 个面复刻了 report 修复前的同一张图**。本批把契约收敛成**一份共享实现**,并被既有守卫抓出**我自己的 2 处真回归**(`pt_f6aec3ad0efb40de` DONE;commit `da7ca59a`,6 文件 +636/-14;新套件 **7/7**(3 条失败先行),**NEUTER×6 各咬各的**;相邻环 **78/78**;`git archive HEAD` 隔离副本 **57/57**)
 
 - **★ 普查表(脚本枚举 `lib/paper/*runtime*.py` 的 push_channel × 前端消费者,不按票面列名):**

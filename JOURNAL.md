@@ -1,5 +1,17 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-30(等价性证明验的是垃圾输入) — 票面要求「逐字节对拍、完全一致才替换」,我照做了、结论「仅差一个尾部换行」——**而我对拍的那份 styles.css 已经被覆盖成 Python 源码**;修正输入后真实答案是 3104 行差异(`pt_df2a951a07324e47`;commits `37c6a04e` 11 文件 + `a8470440` 2 文件;**NEUTER 双向全咬**;相邻环 **108 全绿**;产品文件零改动)
+
+- **★ 本轮最值得记的一条:等价性对拍必须先校验「输入是不是它声称的那个形态」。** 我第一轮拿 `static/styles.css` 对拍,得出「仅差一个尾部换行、零行级差异」——**结论为真且毫无价值**:它证明的是两个函数**对 Python 源码的处理一致**,不是对 CSS 的处理一致。因为那一刻该文件已被兄弟会话整体覆盖成 tool-execution pipeline 模块(22291 → 1048 行,`data-theme` 1680 → 0,`ast.parse` 通过)。迁移后 53 红。
+- **★ 定责必须只读、且必须排除「共享树被兄弟改坏」这一项:** ① `git archive HEAD` 纯净副本跑同样套件 → **40/40 绿**;②工作树 → 36 红;③**把我 11 个文件全部 `git checkout --` 还原后仍然 36 红** ⇒ 与我无关;④`git diff --stat` 显示 1048 insertions / 22291 deletions。随后在 `/tmp/mig_proof`(HEAD 内容 + 同一套迁移)复跑 **43/43 绿**,反证迁移正确。**判据:还原自己的改动后仍红 ⇒ 不是我;这是只读手段,而覆写别人的文件即使为了定责也被禁。**
+- **★ 被外部污染阻塞时不「先落地再说」:** 11 个待迁守卫全读那个坏文件 ⇒ 落库等于提交一批**工作树里无法验证**的改动。当时的正确动作是 block + 单独开票(`pt_b62849184ede40d8`),而不是覆写兄弟未提交的文件——他的改动没有第二份拷贝。兄弟随后自行恢复,我立刻复跑落地。
+- **修正输入后的真实等价性(CSS 半场,11 个):** 差异是 **3104 行**,但性质是**行号语义**:共享版把注释行**留空**以保持行数(22400 行),本地版**删除**它们(20295 行)。判据落在更高的抽象层:**选择器集合完全相同(各 6466 条、零独有)+ 空白无关内容签名逐字节相同**,仅 25 条规则体差在空白;而这些守卫的断言全是空白无关的(子串/正则)。迁移前后**同为 66/66**。
+- **★ JS 半场(2 个)不是等价而是 upgrade,必须说清:** 本地 `re.sub(r'//[^\n]*','',s)` 把**字符串字面量里的 `//`** 当注释——`api.js` 的 `path.startsWith('http://')` 从 `//` 起被整行删除,**真实代码在扫描前被吃掉**。171 个 JS 文件里 **27 个**因此不同,且**每一个都是共享版保住了本地版吃掉的代码**(零例反向丢失)⇒ 严格减少假阴性:扫描不再会被一个 URL 弄瞎。
+- **★ NEUTER 里我自己的探针错了一次:** 第一发「注释不得破坏守卫」显示 1 红,看起来像守卫缺陷。实测是**探针无效**——`test_NC_bevel_is_flagged` 本身是**自我 neuter**(注入坏规则、断言守卫咬),而我插入的注释复制了 `.folder-badge{` 这个锚点字符串,它的 `replace(...,1)` 于是命中了注释而非真规则。换成不与自我 neuter 锚点冲突的选择器后**保持绿**;另补一发「注释里含不配对大括号」也保持绿;删真规则 → **3 红**。
+- **刻意不迁的 6 个,各有实测理由(已开 `pt_6d03c27e2feb4777`):** `reducer_purity` 需要共享模块新增 `strings=True`;`lazy_sentinel_anchor` + `i18n_pack_boot_floor` 报告源码行号,行号语义承重需逐文件实测;`api_contract` + `boot_early_restore` + `convview_apply_guards` 是语义更强的单遍 tokenizer(后者 docstring 记录了 `streamSessions.get` 被吞的真实事故)。`api_isolation` **在纯净 HEAD 上已红**,单独开票 `pt_996d4a9a31e24af7`。
+- **验收边界:** 纯测试基础设施,**产品文件零改动**,不需要重启。
+
+
 ### 2026-07-30(守卫认定的机制已被删除) — 自主派单接自己开的票,判据落在 **(a) 守卫过期** 而非 (b) 产品缺陷;而定案靠的不是代码注释,是**四条独立证据**(`pt_e3809ce36b544975` DONE;commit `2c3eb6e0`,1 文件 +111/-25;**NEUTER×7 双向全咬**;相邻环 **21 + 59 全绿**;产品文件零改动)
 
 - **★ 票面要我在 (a) 守卫过期 / (b) 产品缺陷 之间判定,倾向「先查 `_igAbortController` 的所有 abort() 调用点」。照做,四条腿都指向 (a):**

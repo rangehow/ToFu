@@ -477,13 +477,19 @@ def test_resumed_authored_composition_counts_as_authored():
     import inspect
 
     from lib.motion_video import engine
+    from tests._source_scan import python_block
 
     src = inspect.getsource(engine.run_motion_task)
-    body = src
     # The resume branch must inspect whether the reused composition is the
     # fallback card before it can count it.
-    start = body.index('if existing is not None:')
-    branch = body[start:start + 600]
+    #
+    # Indent-matched, not a fixed 600-byte window (charter #24 / pt_b95c6d39).
+    # ``run_motion_task`` is ~16.7 KB, so the old window covered under 4% of it
+    # and stopped well short of this branch's end. This is a POSITIVE assertion,
+    # which is the dangerous polarity for a truncating window: it passes today
+    # only because the token happens to sit early in the branch, and would go
+    # quietly green if the check moved a few lines down.
+    branch = python_block(src, 'if existing is not None:')
     assert 'is_template_composition' in branch, (
         'the resume branch must ask whether the reused composition is the '
         'fallback card before counting it as authored — an authored resume '

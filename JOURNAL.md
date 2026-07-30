@@ -1,5 +1,19 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-30(Goals↔北极星单一概念) — owner 问「我在 Status & Focus 用 Goals 设的目标会进 LLM 上下文吗」——**问题的两个前提都被实测证伪**:不会进(零字节),而那枚「已进章程」药丸当时正在撒谎(`pt_bd42aad10a744014` DONE;commit `af297eb8`,10 文件 +1049/-61;守卫 **18/18 + 7/7**,**NEUTER×8 各咬各的**(后端 3/1/1/1、前端 2/3/1/1);相邻环 **103/103**;活库闭环:注入块 **0 → 244 字节**)
+
+- **★ 先证伪两个前提,再动手。** ①`lib/tasks_pkg/system_context/` 全包 grep `project_watch`/`project_status`/`status_line`:**零匹配**——而且不是漏做,`test_watch_not_in_system_context_source` 明确断言这些符号**不许出现**在注入路径里。②同一时刻实测:watch item `promoted=1`,而 `read_charter()` 返回 `exists=False`、注入块 **0 字节**。UI 正在为一件已经不成立的事背书。
+- **★ 真病根比「没接线」更糟:接了,但接到了会被淘汰的那一列。** `promote_watch_item` 无论 kind 一律走 `add_decision` ⇒ 目标落进 decision 列表,受 `_INJECTION_DECISION_WINDOW=20`(尾部窗口)+ `_MAX_DECISIONS=100`(FIFO)双重淘汰。这**正是 `_NO_GOAL_NOTICE` 自己的注释记录在案的旧事故**:「a goal committed as a decision instead is subject to both, which is how one previously went invisible」。实测佐证:线上 20 条 decision 里**零条**带 `[Goal` 前缀——它从来没活下来过。
+- **★ 单一北极星语义是推导出来的,不是维护出来的(本批最值得记的设计判断)。** 判据是 `norm(text)==norm(content)`,而 `content` 只有**一份** ⇒ 文本相等的数学性质本身保证**至多一条** goal 处于 active。所以:不需要 DB 唯一约束、不需要提升时反写同侪、**不存在可以不一致的东西**。owner 给的三个候选里,这是唯一没有可漂移状态的。
+- **★ 第三态 diverged 是正确性要求,不是打磨。** 「从未提升」与「提升后有一边被改」在文本上**完全同形**(都是 `text != content`),只有持久回执(`promoted_text`+`promoted_at`)能区分。把 diverged 显示成「未提升」= 递给用户一个按钮,一点就静默覆写他刚在另一边改的字。故新增两列不是为了好看,是为了让分歧**可诊断**(谁动的),而不只是可检测。
+- **★ 我自己的守卫第一版就犯了本项目记录在案的同型错误。** `test_goal_reaches_agents_only_via_commit_charter` 首版做子串扫描,结果被**它自己 docstring 里的「injection」一词**咬红——干净的树报红。判据:**docstring 不是注释**,`strip_comments` 剥不掉它;要断言「有没有 CALL x」就得走 AST 看真实调用名集合,子串扫描对这个命题结构性不适用。
+- **★ 就地反转而非删除既有守卫(第二次用同一纪律)。** `test_promote_calls_charter_commit_not_agent_prompt` 断言 `add_decision` 以 `[Goal` 开头——它**认证了错误路由**。拆成 goal/concern 两条并在 docstring 写明旧前提为何失效;删掉等于让下一个人重新引进同一条路。
+- **★ 两个上限描述同一样东西却不一致,当场对齐而非开票。** `_ITEM_TEXT_MAX` 2000 → 8000 与 `_CONTENT_MAX_CHARS` 相等。不等 ⇒ 分歧态「以章程为准」回写会静默截断;相等 ⇒ 那个分支**根本不存在**(owner 指令:这是本设计自己引入的路径,不是既有债务)。
+- **★ 只测 B 段的守卫对「A 段发的 ≠ B 段读的」结构性免疫——本批预先补了那条腿。** 缺陷完全落在前端分支逻辑上(`!item.promoted` 让 diverged 的 goal 把按钮拿回来),任何 Python 断言都看不见。新套件用 node 驱动**真** `project-brain-status.js` 的 `buildWatchItem`,4 发前端 NEUTER 全咬。
+- **零新增注入通道(明确声明):** `system_context/` 一个字节未改,human-facing-only 守卫一字未动;goal 到达 agent 的唯一路径仍是 `commit_charter` → 既有 `render_charter_injection_block`。
+- **活库闭环(owner 指定的验收):** ALTER 落库 → 用新路径把 owner 那条 goal 设为项目目标 → 注入块 **0 → 244 字节**且目标原文逐字在内;随后模拟在章程页改字,卡片正确翻成 `diverged(side=charter)`,还原后翻回 `active`。charter 承接本批 invariant 后注入块 533 字节,**目标位于 decisions 之上**——这正是 `content` 列存在的结构性理由。
+- **验收边界:** 后端已对活库生效(ALTER 幂等);前端与 i18n **需重启 + bundle 重建**。真浏览器未实测(node 驱动 shipped 函数 + 直接驱动后端)。
+
 ### 2026-07-29(续·context_limits 折叠) — 同族第三张牌:`model_context_limits` 以 slot.provider_id 为键,账户/面合并后 `sankuai_anthropic::*` 学习条目全部孤儿化——含今晚 opus-5 刚从一条 1.1M 成功提示学到的 expand,重启即丢(`pt_998336d4ec734207` DONE;commit `815f2cf1`,3 文件;新套件 **10/10 失败先行**,**NEUTER×3 各咬各的**(6/1/2);相邻环 **75/75**)
 
 - **★ 与 key_stats 折叠同型但有一处关键不同:这个文件被前端裸读。** `routes/config.py` 把 `model_context_limits` 原样发给 Settings UI,所以只做内存态折叠挡不住 UI 显示孤儿——`_load` 折叠后**立即持久化**;且持久化的 mutate 折的是**写时**的文件内容而非读时快照(跨进程并发 learn 不丢更新,复用 update_json_atomic 的 flock)。

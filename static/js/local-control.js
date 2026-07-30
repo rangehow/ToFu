@@ -107,6 +107,37 @@ function closeLocalControlModal() {
   if (_lcPollTimer) { clearInterval(_lcPollTimer); _lcPollTimer = null; }
 }
 
+/* The architecture THIS machine runs, as reported by the browser itself.
+ *
+ * `navigator.userAgentData.getHighEntropyValues(['architecture'])` is the only
+ * practical source of this fact. The UA string cannot supply it on macOS — an
+ * Apple Silicon Mac reports "Intel Mac OS X", Chrome and Safari alike — and
+ * the `Sec-CH-UA-Arch` request header is sent only AFTER a server has already
+ * answered once with an `Accept-CH` opt-in, so the very first page load (the
+ * one that renders the download button) would be arch-blind.
+ *
+ * `null` while unresolved and `''` when the browser refuses to say — both mean
+ * "do not narrow", and the backend then returns BOTH macOS DMGs. That ambiguous
+ * answer is CORRECT: guessing wrong hands the user a download that cannot open.
+ * Resolved once per page (the answer cannot change) and never awaited by the
+ * paint path, so a browser without the API costs nothing. */
+var _lcArch = null;
+
+function _lcResolveArch() {
+  if (_lcArch !== null) return Promise.resolve(_lcArch);
+  var uad = (typeof navigator !== 'undefined') ? navigator.userAgentData : null;
+  if (!uad || typeof uad.getHighEntropyValues !== 'function') {
+    _lcArch = '';
+    return Promise.resolve(_lcArch);
+  }
+  return Promise.resolve(uad.getHighEntropyValues(['architecture']))
+    .then(function (v) {
+      _lcArch = (v && v.architecture) ? String(v.architecture) : '';
+      return _lcArch;
+    })
+    .catch(function () { _lcArch = ''; return _lcArch; });
+}
+
 /* Fetch both capabilities' state and repaint. Each side is independent —
  * one backend hiccup must not blank the other row. */
 function _lcRefresh() {
@@ -114,9 +145,11 @@ function _lcRefresh() {
   Promise.resolve(Api.browser.status())
     .then(_lcRenderBrowser)
     .catch(function (e) { _lcRenderBrowser(null, e); });
-  Promise.resolve(Api.desktop.status())
-    .then(_lcRenderDesktop)
-    .catch(function (e) { _lcRenderDesktop(null, e); });
+  _lcResolveArch().then(function (arch) {
+    return Promise.resolve(Api.desktop.status(arch))
+      .then(_lcRenderDesktop)
+      .catch(function (e) { _lcRenderDesktop(null, e); });
+  });
 }
 
 function _lcT(key, fallback) {
@@ -417,11 +450,7 @@ function _lcRenderDesktop(d, err) {
       var dlSrc = (d.download_url || '').trim();
       setup.innerHTML = '<p class="lc-step">' + _lcEsc(_lcT('local.desktopSource',
         '当前 Tofu 以源码方式运行。安装桌面版后即可在系统托盘一键开启「Enable Computer Control」。')) + '</p>' +
-        (dlSrc
-          ? '<p class="lc-substep"><a class="lc-dl-link" id="lcDesktopDownloadSrc" href="' +
-              _lcEsc(dlSrc) + '" target="_blank" rel="noopener noreferrer">' +
-              _lcEsc(_lcT('local.desktopDownload', '下载桌面版 ↗')) + '</a></p>'
-          : '');
+        _lcDownloadLinks(d);
       return;
     }
 
@@ -436,11 +465,7 @@ function _lcRenderDesktop(d, err) {
       setup.innerHTML =
         '<p class="lc-step">' + _lcEsc(_lcT('local.desktopRemote',
           'Tofu 运行在远程服务器上。在你自己的电脑安装桌面版，再用下面这行把它连过来：')) + '</p>' +
-        (dl
-          ? '<p class="lc-substep"><a class="lc-dl-link" id="lcDesktopDownload" href="' +
-              _lcEsc(dl) + '" target="_blank" rel="noopener noreferrer">' +
-              _lcEsc(_lcT('local.desktopDownload', '下载桌面版 ↗')) + '</a></p>'
-          : '') +
+        _lcDownloadLinks(d) +
         '<button type="button" class="btn btn-primary btn-sm" id="lcMintBtn">' +
           _lcEsc(_lcT('local.mintToken', '生成连接命令')) + '</button>' +
         '<code class="lc-copy" id="lcTokenBox" style="display:none"></code>';
@@ -527,6 +552,63 @@ function _lcOpenExtensionsPage(path) {
   });
 }
 
+/* The download instruction — authored ONCE for both install branches.
+ *
+ * ── Why per-platform links instead of the releases page ──
+ * `download_url` alone points at `…/releases/latest`, a page carrying FIVE
+ * assets (two DMGs, an .exe, a .tar.gz, SHA256SUMS). Handing that to a user who
+ * asked "how do I install this" makes them identify their own OS and CPU
+ * architecture from a list of filenames. The backend already knows the OS from
+ * the request, so `downloads` carries the installer(s) this visitor can
+ * actually run, each with a direct-download URL.
+ *
+ * ── Why this may render TWO links, and why that is correct ──
+ * On macOS the architecture is genuinely unknowable unless the browser tells
+ * us: an Apple Silicon Mac reports "Intel Mac OS X" in its UA. When
+ * `getHighEntropyValues` is unavailable (Safari, older browsers) the backend
+ * returns BOTH DMGs, and each is labelled with its chip so the user can pick in
+ * one glance. Guessing one would give roughly half of Mac users a download
+ * that refuses to open — a silent dead end far worse than a two-item choice.
+ *
+ * Always keeps the releases-page link as a secondary "all downloads" escape
+ * hatch: it is the only thing that still works for an unrecognised platform, a
+ * release missing an asset, or an unreachable GitHub API. */
+function _lcDownloadLinks(d) {
+  var page = ((d && d.download_url) || '').trim();
+  var picks = (d && Array.isArray(d.downloads)) ? d.downloads : [];
+  var html = '';
+  if (picks.length) {
+    html += '<p class="lc-dl-row">';
+    for (var i = 0; i < picks.length; i++) {
+      var p = picks[i] || {};
+      if (!p.url) continue;
+      // The label names the CHIP, not just the OS — the whole point of the
+      // two-DMG case is telling the user which one is theirs.
+      html += '<a class="lc-dl-link lc-dl-direct" href="' + _lcEsc(p.url) +
+        '" target="_blank" rel="noopener noreferrer" title="' +
+        _lcEsc(p.filename || '') + '">' +
+        _lcEsc(_lcT('local.desktopDownloadFor', '下载桌面版') + ' · ' +
+               (p.label || p.arch || '')) + '</a>';
+    }
+    html += '</p>';
+    if (picks.length > 1) {
+      // Say WHY there are two, or the choice reads as a UI defect.
+      html += '<p class="lc-substep">' + _lcEsc(_lcT('local.desktopArchAmbiguous',
+        '浏览器没告诉我们这台 Mac 的芯片型号（Apple Silicon 也会自称 Intel）。' +
+        'Apple 芯片（M1/M2/M3…）选 arm64，Intel 芯片选 x86_64；' +
+        '在「关于本机」里可以看到。')) + '</p>';
+    }
+  }
+  if (page) {
+    html += '<p class="lc-substep"><a class="lc-dl-link" id="lcDesktopDownload" href="' +
+      _lcEsc(page) + '" target="_blank" rel="noopener noreferrer">' +
+      _lcEsc(picks.length
+        ? _lcT('local.desktopDownloadAll', '查看全部下载 ↗')
+        : _lcT('local.desktopDownload', '下载桌面版 ↗')) + '</a></p>';
+  }
+  return html;
+}
+
 /* Build the one line the user pastes into the desktop app's connect field.
  * Both halves are required — the server address is what makes the token
  * usable, so they travel together in a single copy. */
@@ -608,6 +690,8 @@ if (typeof window !== 'undefined') {
   window._lcPaintFloor = _lcPaintFloor;
   window._lcBrowserDownload = _lcBrowserDownload;
   window._lcConnectLine = _lcConnectLine;
+  window._lcDownloadLinks = _lcDownloadLinks;
+  window._lcResolveArch = _lcResolveArch;
   window._lcSetAbout = _lcSetAbout;
   window._lcRenderBrowser = _lcRenderBrowser;
   window._lcRenderDesktop = _lcRenderDesktop;

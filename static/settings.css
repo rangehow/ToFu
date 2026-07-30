@@ -1889,3 +1889,208 @@
 .auth-src-msg { font-size: 12px; margin-top: 8px; min-height: 1em; color: var(--s-ink-soft); font-weight: 600; }
 .auth-src-msg.ok  { color: var(--s-gold-dim); }
 .auth-src-msg.err { color: var(--s-blocked); }
+
+
+/* ══════════════════════════════════════════════════════
+   Devices page — desktop agents + bridge tokens
+
+   The page-specific half of the "this panel had no styles at all" fix. The
+   shared chrome it sits on (.stg-table / .stg-row / .stg-desc / .stg-dim /
+   bare .stg-btn) lives in styles.css; everything keyed to a DEVICE state
+   lives here, per the settings.css split that
+   tests/test_settings_panels_parity.py enforces.
+
+   Design intent: a device row must answer "is it reachable RIGHT NOW" before
+   it answers anything else — an offline agent that looks identical to a live
+   one is how a user concludes their bridge works when it does not. So online
+   is the loud state (solid gold pip, full-contrast text) and offline is
+   deliberately receded, rather than the two differing only by a word.
+   ══════════════════════════════════════════════════════ */
+
+.devices-agent-row td { font-weight: 600; }
+/* Offline agents recede, but stay READABLE — a dead row the user cannot read
+ * is a dead row they cannot debug. Hence dimmed text, not a dimmed opacity on
+ * the whole row (which would also wash out the status pip they need to see). */
+.devices-agent-row.devices-offline td { color: var(--s-ink-soft); }
+.devices-agent-row.devices-offline td:first-child { text-decoration: none; }
+/* The live pip. Solid + ringed so it reads as a state light rather than a
+ * bullet character, and stays legible on the row-hover wash. */
+.devices-online-dot {
+  color: #16a34a;
+  font-size: 13px;
+  line-height: 1;
+  vertical-align: -1px;
+  text-shadow: 0 0 0 currentColor;
+}
+
+/* ── Bridge-token rows ──
+ * A token is a live credential, so its row carries the same hard-edged block
+ * treatment as a provider card — it should not read as a throwaway list item
+ * the user scrolls past. */
+.devices-token-row {
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  margin-bottom: 6px;
+  border: var(--s-border-sm);
+  border-radius: var(--s-radius);
+  background: var(--s-white);
+  box-shadow: var(--s-shadow-xs);
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--s-ink);
+}
+.devices-token-row:last-child { margin-bottom: 0; }
+.devices-token-row .stg-dim { margin-left: 6px; }
+/* The revoke button carries .stg-btn-danger (red outline) already; this only
+ * tightens it for a dense list row and stops it stretching. */
+.devices-revoke-btn {
+  flex: none;
+  padding: 5px 12px;
+  font-size: 11px;
+}
+
+/* ── Load-failure state ──
+ * Distinct from the empty state ON PURPOSE. `Api.desktop.devices()` is
+ * declared {onError:'null'}, so an unreachable backend RESOLVES with null
+ * rather than rejecting — which is how "no devices yet" came to be shown to
+ * users whose agent was running fine. "We could not ask" and "you have none"
+ * are different facts and must not share a rendering. */
+.devices-load-failed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: var(--s-border-sm);
+  border-color: var(--s-blocked);
+  border-radius: var(--s-radius);
+  background: rgba(248, 113, 113, 0.07);
+  color: var(--s-ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+.devices-load-failed-icon { flex: none; color: var(--s-blocked); font-size: 13px; }
+.devices-load-failed-detail {
+  font-weight: 600;
+  color: var(--s-ink-soft);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  word-break: break-word;
+}
+
+/* ── Minted-token reveal ──
+ * Shown exactly once, so it must be impossible to miss and easy to select. */
+.devices-minted-box {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: var(--s-border-sm);
+  border-color: var(--s-gold-dim);
+  border-radius: var(--s-radius);
+  background: var(--s-gold-glow);
+}
+.devices-minted-token {
+  flex: 1;
+  min-width: 0;
+  word-break: break-all;
+  user-select: all;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--s-ink);
+  background: var(--s-white);
+  border: var(--s-border-sm);
+  border-radius: var(--s-radius);
+  padding: 7px 9px;
+}
+
+/* ══════════════════════════════════════════════════════
+   Remote-device picker (project folder browser)
+
+   The SAME feature's second surface: #remoteDevicesSection in index.html,
+   painted by project.js::_renderRemoteDevicesSection. Its classes were
+   unstyled for the same reason as the settings tab, so styling only the tab
+   would have left half the feature raw — the half a user meets while
+   attaching a remote worktree.
+   ══════════════════════════════════════════════════════ */
+
+.remote-devices-section {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(26, 24, 20, 0.18);
+}
+.remote-devices-title {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--s-ink-soft);
+  margin-bottom: 6px;
+}
+.remote-agent-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 7px 9px;
+  margin-bottom: 6px;
+  border: var(--s-border-sm);
+  border-radius: var(--s-radius);
+  background: var(--s-white);
+  box-shadow: var(--s-shadow-xs);
+}
+/* An offline agent's roots CANNOT be added (project.js omits the + button), so
+ * the row must look inert — otherwise the user waits for a click to work. */
+.remote-agent-row.remote-agent-offline {
+  background: var(--s-cream);
+  box-shadow: none;
+  color: var(--s-ink-soft);
+}
+.remote-agent-name {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--s-ink);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.remote-agent-offline .remote-agent-name { color: var(--s-ink-soft); }
+.remote-root-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 0 3px 14px;
+  font-size: 11.5px;
+  color: var(--s-ink);
+}
+.remote-root-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.remote-root-add {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: 14px;
+  font-weight: 900;
+  line-height: 1;
+  color: var(--s-ink);
+  background: var(--s-gold);
+  border: var(--s-border-sm);
+  border-radius: var(--s-radius);
+  cursor: pointer;
+  box-shadow: var(--s-shadow-xs);
+  transition: transform 0.1s, box-shadow 0.1s;
+}
+.remote-root-add:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0 var(--s-ink);
+}
+.remote-root-add:active { transform: translate(1px, 1px); box-shadow: none; }

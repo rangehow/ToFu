@@ -947,7 +947,14 @@
 
   // desktop bridge (RWA Devices page) ----------------------------------
   const desktop = {
-    status:      () => get('/api/v1/desktop/status', { onError: 'null' }),
+    /* `arch` is the architecture the CLIENT resolved for itself via
+     * navigator.userAgentData.getHighEntropyValues(['architecture']). It is
+     * threaded to the server because macOS cannot be narrowed any other way:
+     * an Apple Silicon Mac reports "Intel Mac OS X" in its UA, so without this
+     * the server must offer BOTH DMGs rather than guess wrong. Omit it and the
+     * ambiguous (correct, two-choice) answer comes back. */
+    status:      (arch) => get('/api/v1/desktop/status',
+                              { onError: 'null', query: arch ? { arch: arch } : {} }),
     devices:     () => get('/api/v1/desktop/devices', { onError: 'null' }),
     mintToken:   (name) => post('/api/v1/desktop/token', { name: name || '' }),
     revokeToken: (keyId) => del(`/api/v1/desktop/token/${encodeURIComponent(keyId)}`),

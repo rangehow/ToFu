@@ -18,6 +18,7 @@ from flask import Blueprint, jsonify
 
 from lib.log import audit_log, get_logger
 from lib.openapi import api_meta
+from lib.ttl_cache import TTLCache
 
 from .auth import require_auth
 
@@ -76,14 +77,265 @@ def _desktop_download_url() -> str:
     users to upstream. That module is NOT importable from a web route anyway —
     importing it creates directories, mutates ``sys.path`` and sets env vars at
     import time.
+
+    This stays as the FALLBACK for a platform we cannot identify (and as the
+    "see all downloads" escape hatch). The per-platform direct links are built
+    by :func:`_match_platform_assets`.
     """
+    repo = _update_repo()
+    return f'https://github.com/{repo}/releases/latest' if repo else ''
+
+
+def _update_repo() -> str:
+    """The ``owner/name`` slug releases are published under, or ''."""
     try:
         from lib.self_update import UPDATE_REPO
     except Exception as e:
         logger.debug('[Desktop] UPDATE_REPO unavailable, omitting '
                      'download url: %s', e)
         return ''
-    return f'https://github.com/{UPDATE_REPO}/releases/latest'
+    return UPDATE_REPO
+
+
+def _platform_assets():
+    """The (os, arch, label, glob) table from ``scripts/release_assets.py``.
+
+    That module is the SINGLE source of truth for which files a release must
+    contain — both build-desktop.yml gates already shell out to it, and
+    ``tests/test_desktop_build_workflow.py`` asserts the globs appear in no
+    other file. So this route reads them rather than owning a sixth copy:
+    a hand-typed list here would keep working today and silently miss the next
+    platform added, with nothing going red (the release gates only check the
+    platforms still on their own list).
+
+    ``scripts/`` is not a package, so it is loaded by path. Failure is
+    non-fatal: the caller degrades to the releases page, which is exactly the
+    behaviour that shipped before direct links existed.
+    """
+    import importlib.util
+    from pathlib import Path
+
+    global _PLATFORM_ASSETS_CACHE
+    if _PLATFORM_ASSETS_CACHE is not None:
+        return _PLATFORM_ASSETS_CACHE
+    script = Path(__file__).resolve().parents[2] / 'scripts' / 'release_assets.py'
+    try:
+        spec = importlib.util.spec_from_file_location(
+            '_tofu_release_assets_route', script)
+        if not spec or not spec.loader:
+            raise ImportError(f'cannot load {script}')
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _PLATFORM_ASSETS_CACHE = tuple(mod.PLATFORM_ASSETS)
+    except Exception as e:
+        logger.warning('[Desktop] release_assets.py unreadable, falling back '
+                       'to the releases page: %s', e)
+        _PLATFORM_ASSETS_CACHE = ()
+    return _PLATFORM_ASSETS_CACHE
+
+
+_PLATFORM_ASSETS_CACHE = None
+
+# Published asset names change only when a release is cut, so a long TTL is
+# right — but it must EXPIRE, or a server that happened to probe during a
+# GitHub blip would offer no direct link until restarted.
+_RELEASE_ASSET_CACHE = TTLCache(ttl=900, max_size=4)
+
+
+def _detect_os(user_agent: str) -> str:
+    """Map a UA string to one of our three OS keys, or '' when unsure.
+
+    Deliberately narrow. An unrecognised UA (a phone, a BSD, a bot) returns ''
+    and the caller offers no direct link — sending an iPhone user a Windows
+    installer is worse than showing them the releases page.
+
+    Order matters: 'Android' contains 'Linux', and Windows UAs on ARM still
+    say 'Windows NT', so the mobile checks come first.
+    """
+    ua = (user_agent or '').lower()
+    if not ua:
+        return ''
+    # Mobile / non-desktop first — several of these embed a desktop OS token.
+    if any(tok in ua for tok in ('android', 'iphone', 'ipad', 'ipod')):
+        return ''
+    if 'windows' in ua:
+        return 'windows'
+    if 'mac os x' in ua or 'macintosh' in ua:
+        return 'macos'
+    if 'linux' in ua or 'x11' in ua:
+        return 'linux'
+    return ''
+
+
+def _detect_arch(user_agent: str, arch_hint: str) -> str:
+    """Best-effort architecture, or '' when it genuinely cannot be known.
+
+    ``arch_hint`` is the ``Sec-CH-UA-Arch`` request header. It is the ONLY
+    honest source of this fact on macOS: an Apple Silicon Mac reports
+    ``Intel Mac OS X`` in its UA — Chrome and Safari both do — so the UA can
+    never distinguish the two DMGs. Chromium sends the hint only after an
+    ``Accept-CH`` opt-in and Safari never sends it, so '' is a NORMAL outcome
+    and the caller must handle it by offering both rather than guessing.
+
+    The header is a structured-header string, i.e. quoted: ``"arm"``.
+    """
+    hint = (arch_hint or '').strip().strip('"').lower()
+    if hint:
+        if hint in ('arm', 'arm64', 'aarch64'):
+            return 'arm64'
+        if hint in ('x86', 'x86_64', 'amd64', 'x64'):
+            return 'x86_64'
+    ua = (user_agent or '').lower()
+    # On Windows/Linux the UA does carry a usable token. Note 'arm64' must be
+    # tested before the x86 tokens: a Windows-on-ARM UA contains BOTH
+    # ('Windows NT 10.0; Win64; x64; ARM64'), and the ARM one is the truth.
+    if 'arm64' in ua or 'aarch64' in ua:
+        return 'arm64'
+    if 'x86_64' in ua or 'win64' in ua or 'x64' in ua or 'amd64' in ua:
+        return 'x86_64'
+    return ''
+
+
+def _latest_release_assets() -> list[str]:
+    """Real asset FILENAMES on the newest published release, or [].
+
+    ── Why this network call is unavoidable ──
+    ``PLATFORM_ASSETS`` holds GLOBS (the version is a ``*``) because the
+    ``*`` is the version, and the release gates only ever need to ask "does
+    something matching this exist?". A download link cannot use a glob:
+    GitHub's ``/releases/latest/download/<name>`` resolves the RELEASE for us
+    but not the FILENAME, so a URL with a ``*`` in it is a 404.
+
+    The two ways to avoid the call are both wrong:
+
+      * read the local ``VERSION`` file — that is the version THIS server runs,
+        which on a source checkout is routinely ahead of (or behind) the newest
+        published installer, so the link 404s exactly when a release is in
+        flight;
+      * hardcode a version — stale by construction.
+
+    So we ask the API and cache the answer. Failure is non-fatal and degrades
+    to the releases page: an unreachable api.github.com must not break the
+    settings panel.
+    """
+    cached = _RELEASE_ASSET_CACHE.get('names')
+    if cached is not None:
+        return cached
+    repo = _update_repo()
+    if not repo:
+        return []
+    names: list[str] = []
+    try:
+        from lib.http_client import http_get
+        resp = http_get(
+            f'https://api.github.com/repos/{repo}/releases/latest',
+            timeout=6,
+            headers={'Accept': 'application/vnd.github+json',
+                     'X-GitHub-Api-Version': '2022-11-28'})
+        if resp.status_code == 200:
+            for a in (resp.json() or {}).get('assets') or []:
+                if isinstance(a, dict) and isinstance(a.get('name'), str):
+                    names.append(a['name'])
+        else:
+            logger.warning('[Desktop] latest-release probe returned HTTP %s '
+                           'for %s — falling back to the releases page',
+                           resp.status_code, repo)
+    except Exception as e:
+        logger.warning('[Desktop] latest-release probe failed (%s) — falling '
+                       'back to the releases page', e)
+    # Cache even an empty result, so a flaky API cannot turn one settings-page
+    # open into a request storm. The TTL is what retries it.
+    _RELEASE_ASSET_CACHE.set('names', names)
+    return names
+
+
+def _match_platform_assets(user_agent: str, arch_hint: str = '',
+                           published: list[str] | None = None) -> list[dict]:
+    """The installers THIS visitor's machine can actually run.
+
+    Returns a list because ambiguity is a real state, not an error: when the
+    architecture is unknown on macOS both DMGs are returned so the user picks
+    between two clearly-labelled files. Guessing one would hand roughly half of
+    Mac users a download that will not open, which is strictly worse than
+    asking — see :func:`_detect_arch`.
+
+    Returns ``[]`` for an unrecognised platform, an unreachable release API, or
+    a release that genuinely lacks this platform's asset; the caller then shows
+    the releases page, which is what shipped before direct links existed.
+
+    Each entry: ``{os, arch, label, filename, url}`` where ``filename`` is the
+    REAL asset name resolved against the published release — never the glob,
+    which would 404.
+
+    ``published`` injects the release's asset names instead of probing GitHub.
+    Tests pass it so the platform logic is verified WITHOUT a network call —
+    otherwise the guard would silently depend on api.github.com being reachable
+    and would pass or fail for reasons unrelated to the code under test.
+    """
+    import fnmatch
+
+    repo = _update_repo()
+    assets = _platform_assets()
+    if not repo or not assets:
+        return []
+    os_key = _detect_os(user_agent)
+    if not os_key:
+        return []
+    published = (_latest_release_assets() if published is None
+                 else [str(n) for n in published])
+    if not published:
+        return []
+    arch = _detect_arch(user_agent, arch_hint)
+    rows = [a for a in assets if a[0] == os_key]
+    if arch:
+        narrowed = [a for a in rows if a[1] == arch]
+        # Only narrow when the detected arch actually has a build. An arm64
+        # Windows visitor has no arm64 installer, and offering nothing would be
+        # worse than offering the x86_64 one it runs fine under emulation.
+        if narrowed:
+            rows = narrowed
+    out = []
+    for _os, _arch, label, pattern in rows:
+        hit = next((n for n in published if fnmatch.fnmatch(n, pattern)), None)
+        if not hit:
+            # The release is missing this platform. Silently omitting it is
+            # right: the completeness gate already treats that as a broken
+            # release, and a link to a file that is not there helps nobody.
+            logger.debug('[Desktop] no published asset matches %s', pattern)
+            continue
+        out.append({
+            'os': _os,
+            'arch': _arch,
+            'label': label,
+            'filename': hit,
+            'url': f'https://github.com/{repo}/releases/latest/download/{hit}',
+        })
+    return out
+
+
+def _request_platform_downloads(arch_override: str = '') -> list[dict]:
+    """Per-platform direct links for the CURRENT request's visitor.
+
+    ``arch_override`` is the architecture the CLIENT resolved for itself via
+    ``navigator.userAgentData.getHighEntropyValues(['architecture'])`` and
+    passed explicitly. That JS API is the practical source of this fact:
+    the ``Sec-CH-UA-Arch`` request header is only sent after the server has
+    already answered once with an ``Accept-CH`` opt-in, so relying on the
+    header alone would leave the very first page load — the one that renders
+    the download button — permanently arch-blind.
+
+    The header is still consulted as a fallback for callers that cannot run the
+    JS (curl, the OpenAPI probe). When neither yields an answer the result is
+    ambiguous ON PURPOSE — see :func:`_match_platform_assets`.
+    """
+    from flask import request
+    try:
+        ua = request.user_agent.string or ''
+    except Exception:
+        ua = ''
+    hint = (arch_override or '').strip() \
+        or request.headers.get('Sec-CH-UA-Arch', '')
+    return _match_platform_assets(ua, arch_hint=hint)
 
 
 def _agent_server_url() -> str:
@@ -104,17 +356,27 @@ def _agent_server_url() -> str:
     summary='Desktop-agent connection status',
     description=(
         'Returns ``{connected, last_poll, pending_commands, setup_state, '
-        'download_url, server_url}`` so the UI can render a presence '
-        'indicator AND the single appropriate install instruction. '
+        'download_url, downloads, server_url}`` so the UI can render a '
+        'presence indicator AND the single appropriate install instruction. '
         'Connection is defined as a poll within the last 15 s. '
         '``setup_state`` is one of ``connected`` / ``tray`` / '
         '``local_source`` / ``remote``; the two URL fields let the remote '
         'case render a real download link and a complete, copy-paste-ready '
-        'connect line instead of a bare secret.'
+        'connect line instead of a bare secret. ``downloads`` is the list of '
+        'installers THIS visitor can run, each ``{os, arch, label, filename, '
+        'url}`` with a direct-download url resolved against the newest '
+        'release — so the user clicks one file instead of choosing among five. '
+        'It carries BOTH macOS DMGs when the architecture is unknown (an '
+        'Apple Silicon Mac reports "Intel Mac OS X" in its UA, so guessing '
+        'would hand half of Mac users a download that cannot open); pass '
+        '``?arch=arm64|x86_64`` — which the client reads from '
+        '``navigator.userAgentData.getHighEntropyValues`` — to narrow it to '
+        'one. Empty when the platform is unrecognised; use ``download_url``.'
     ),
     tags=['capabilities'],
 )
 async def desktop_status():
+    from flask import request
     from lib.desktop import (
         is_desktop_agent_connected,
         last_poll_time,
@@ -127,6 +389,11 @@ async def desktop_status():
             if _auth and getattr(_auth, 'user_id', '') else None)
     connected = is_desktop_agent_connected()
     _last = last_poll_time()
+    # The client resolves its own architecture via
+    # navigator.userAgentData.getHighEntropyValues(['architecture']) and passes
+    # it here; macOS cannot be narrowed any other way (an Apple Silicon Mac
+    # reports "Intel Mac OS X" in its UA).
+    _arch = (request.args.get('arch') or '').strip()[:16]
     return jsonify({
         'connected': connected,
         'last_poll': _last,
@@ -135,6 +402,7 @@ async def desktop_status():
         'agents': list_agents(user_id=_uid),
         'setup_state': _setup_state(connected),
         'download_url': _desktop_download_url(),
+        'downloads': _request_platform_downloads(_arch),
         'server_url': _agent_server_url(),
     })
 

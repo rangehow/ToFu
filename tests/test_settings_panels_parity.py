@@ -233,6 +233,14 @@ _SETTINGS_ONLY_CSS_PREFIXES = (
     r'\.stg-dropdown-visibility',           # preset / display (batch C)
     r'\.chip\b', r'\.auth-src',             # search / network (batch D)
     r'\.two-col',                           # settings row layout (batch D)
+    # devices — the agents table / token rows / load-failure state, plus the
+    # SAME feature's remote-device picker in the project folder browser. Added
+    # when the page got styles AT ALL: every one of these classes was used by
+    # the shipped markup with zero rules behind it, so the panel rendered as
+    # browser defaults (see tests/test_devices_panel_and_platform_download.py).
+    # The shared chrome it sits on (.stg-table / .stg-row / .stg-desc /
+    # .stg-dim / bare .stg-btn) stays in styles.css and is NOT listed here.
+    r'\.devices-', r'\.remote-agent', r'\.remote-root', r'\.remote-devices',
 )
 
 # Documented cascade-safety exceptions: rules that MUST stay in styles.css even

@@ -15,7 +15,14 @@ function _populateDevicesTab() {
   var agentsEl = document.getElementById('devicesAgentsList');
   var tokensEl = document.getElementById('devicesTokensList');
   if (!agentsEl || !tokensEl) return;
-  agentsEl.innerHTML = '<p class="stg-loading">' + t('settings.loading') + '</p>';
+  /* ── BOTH lanes change generation together ──
+   * One request feeds both lists, so they must never display two different
+   * answers to it. The old code reset ONLY the agents lane, which is exactly
+   * what the bug screenshot shows: "正在加载…" above an already-settled
+   * "还没有 bridge 令牌。" — a stale generation sitting under a live one. */
+  var loading = '<p class="stg-loading">' + escapeHtml(t('settings.loading')) + '</p>';
+  agentsEl.innerHTML = loading;
+  tokensEl.innerHTML = loading;
   var mintBtn = /** @type {any} */ (document.getElementById('devicesMintBtn'));
   if (mintBtn && !mintBtn._devicesWired) {
     mintBtn._devicesWired = true;
@@ -26,13 +33,49 @@ function _populateDevicesTab() {
     copyBtn._devicesWired = true;
     copyBtn.onclick = _devicesCopyMintedToken;
   }
-  Api.desktop.devices().then(function(d) {
-    _renderDeviceAgents((d && d.agents) || []);
-    _renderDeviceTokens((d && d.tokens) || []);
+  Promise.resolve(Api.desktop.devices()).then(function(d) {
+    /* ── A null payload is a FAILURE, not an empty inventory ──
+     * Api.desktop.devices() is declared {onError:'null'}, which api.js
+     * documents as "rejections become null". So an unreachable backend
+     * RESOLVES here with null and never reaches .catch — which had two
+     * consequences, both wrong:
+     *   1. the .catch branch below was structurally unreachable, so
+     *      "loading…" could stay on screen permanently; and
+     *   2. `(d && d.agents) || []` fed the EMPTY-state renderer, so a user
+     *      whose agent was running fine was told "暂无设备连接" and would
+     *      reasonably conclude it had died.
+     * "We could not ask" and "you have none" are different facts. */
+    if (!d) {
+      _renderDevicesLoadFailed(null);
+      return;
+    }
+    _renderDeviceAgents(d.agents || []);
+    _renderDeviceTokens(d.tokens || []);
   }).catch(function(e) {
-    agentsEl.innerHTML = '<p class="stg-empty">⚠ ' + escapeHtml(e && e.message || 'error') + '</p>';
-    tokensEl.innerHTML = '';
+    // Still reachable for a genuine throw (a caller that dropped onError, or a
+    // renderer bug). Both lanes report it — blanking one would silently claim
+    // "no tokens" when the truth is that we never got an answer.
+    _renderDevicesLoadFailed(e);
   });
+}
+
+/* Paint the SAME load-failure state into both lanes.
+ *
+ * Deliberately a distinct rendering from the empty state (.devices-load-failed
+ * vs .stg-empty), because the two say different things and the panel used to
+ * conflate them. */
+function _renderDevicesLoadFailed(err) {
+  var detail = (err && err.message) ? String(err.message) : '';
+  var html = '<div class="devices-load-failed">' +
+    '<span class="devices-load-failed-icon">⚠</span>' +
+    '<span>' + escapeHtml(t('devices.loadFailed')) +
+    (detail ? ' <span class="devices-load-failed-detail">' +
+       escapeHtml(detail) + '</span>' : '') +
+    '</span></div>';
+  var agentsEl = document.getElementById('devicesAgentsList');
+  var tokensEl = document.getElementById('devicesTokensList');
+  if (agentsEl) agentsEl.innerHTML = html;
+  if (tokensEl) tokensEl.innerHTML = html;
 }
 
 function _renderDeviceAgents(agents) {

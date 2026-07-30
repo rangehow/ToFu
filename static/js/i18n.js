@@ -1016,6 +1016,7 @@ var _i18n = {
   'devices.copied': { zh: '已复制', en: 'Copied' },
   'devices.empty': { zh: '暂无设备连接。在本机运行 desktop agent 后会出现在这里。', en: 'No devices yet. Run the desktop agent on a machine and it will appear here.' },
   'devices.noTokens': { zh: '还没有 bridge 令牌。', en: 'No bridge tokens yet.' },
+  'devices.loadFailed': { zh: '没能读取设备列表 —— 服务器未应答。这不代表你没有设备。', en: 'Could not load your devices — the server did not answer. This does NOT mean you have none.' },
   'devices.colDevice': { zh: '设备', en: 'Device' },
   'devices.colPlatform': { zh: '平台', en: 'Platform' },
   'devices.colRoots': { zh: '共享根', en: 'Share roots' },
@@ -1998,6 +1999,9 @@ var _i18n = {
   'local.desktopFloor': { zh: '安装桌面版后，即可在系统托盘一键开启「Enable Computer Control」，让 AI 操作这台电脑。', en: 'Install the desktop app, then switch on "Enable Computer Control" from the system tray to let the AI drive this computer.' },
   'local.desktopRemote': { zh: 'Tofu 运行在远程服务器上。在你自己的电脑安装桌面版，再用下面这行把它连过来：', en: 'Tofu runs on a remote server. Install the desktop app on your own machine, then connect it with the line below:' },
   'local.desktopDownload': { zh: '下载桌面版 ↗', en: 'Download the desktop app ↗' },
+  'local.desktopDownloadFor': { zh: '下载桌面版', en: 'Download' },
+  'local.desktopDownloadAll': { zh: '查看全部下载 ↗', en: 'See all downloads ↗' },
+  'local.desktopArchAmbiguous': { zh: '浏览器没告诉我们这台 Mac 的芯片型号（Apple Silicon 也会自称 Intel）。Apple 芯片（M1/M2/M3…）选 arm64，Intel 芯片选 x86_64；在「关于本机」里可以看到。', en: 'Your browser did not reveal this Mac’s chip (Apple Silicon reports itself as Intel too). Pick arm64 for Apple chips (M1/M2/M3…) and x86_64 for Intel — see “About This Mac”.' },
   'local.mintToken': { zh: '生成连接命令', en: 'Generate connect line' },
   'local.permNote': { zh: '写文件、运行命令、控制鼠标键盘默认全部关闭；需要时在托盘菜单的「Permissions」里单独授予。', en: 'Writing files, running commands and mouse/keyboard control are all OFF by default — grant them individually in the tray\'s "Permissions" menu when needed.' },
 
@@ -3563,30 +3567,39 @@ var _i18n = {
   'projectBrain.watchNotAddressed': { zh: '尚未回应', en: 'Not addressed yet' },
   'projectBrain.watchResolved': { zh: '已解决', en: 'resolved' },
   'projectBrain.watchPromoted': { zh: '已进章程', en: 'in charter' },
-  // Goal ↔ north-star convergence: a goal IS the project goal, so its badge
-  // says what actually happens (every conversation reads it) instead of naming
-  // the storage ("charter"). The three states are COMPUTED against the live
-  // charter — see project_watch.goal_promotion_state.
-  'projectBrain.watchIsNorthStar': { zh: '每个会话都在读它', en: 'every conversation reads this' },
-  'projectBrain.watchDiverged': { zh: '已分歧', en: 'diverged' },
-  'projectBrain.watchDivergedItem': { zh: '你改了这张卡片，章程里还是较早的文字。', en: 'You edited this card; the charter still holds the earlier text.' },
-  'projectBrain.watchDivergedCharter': { zh: '章程里的目标在别处被改过，这张卡片是较早的文字。', en: 'The charter was edited elsewhere; this card holds the earlier text.' },
-  'projectBrain.watchDivergedBoth': { zh: '自提升以来两边都被改过。', en: 'Both sides were edited since this was promoted.' },
-  'projectBrain.watchSetAsGoal': { zh: '设为项目目标', en: 'Set as project goal' },
-  'projectBrain.watchReadopt': { zh: '查看差异并重新采用', en: 'Review & re-adopt' },
-  'projectBrain.watchSetTitle': { zh: '设为项目目标？', en: 'Set as the project goal?' },
-  'projectBrain.watchReplaceTitle': { zh: '替换项目目标？', en: 'Replace the project goal?' },
-  'projectBrain.watchReplaceOld': { zh: '当前目标（将被替换）', en: 'Current goal (will be replaced)' },
-  'projectBrain.watchReplaceNew': { zh: '将变成', en: 'Will become' },
-  'projectBrain.watchSetNote': { zh: '本项目的每一个会话，每一轮都会读到它。', en: 'Every conversation in this project reads this on every turn.' },
-  'projectBrain.watchReplaceStale': { zh: '你确认期间章程被改动了。', en: 'The charter changed while you were deciding.' },
-  'projectBrain.watchRecompare': { zh: '重新比较', en: 'Re-compare' },
+  // A GOAL is injected because it EXISTS — it never travels through the charter
+  // (owner-directed 2026-07-30). So its badge states a fact, and there is no
+  // promote button, no diverged state, no replacement preview and no version
+  // gate: all of those existed only to reconcile two copies of one sentence.
+  // The keys for that machinery (watchDiverged*, watchSetAsGoal, watchReadopt,
+  // watchSetTitle, watchReplace*, watchRecompare, watchIsNorthStar) were
+  // removed with it.
+  'projectBrain.watchGoalLive': { zh: '每个会话都在读它', en: 'every conversation reads this' },
+  'projectBrain.watchGoalLiveHint': { zh: '未解决的目标会进入本项目每个会话的上下文。标记解决即可撤出。', en: 'Open goals are included in every conversation of this project. Resolve it to withdraw it.' },
   'projectBrain.watchCancel': { zh: '取消', en: 'Cancel' },
   'projectBrain.watchRefresh': { zh: '重新评估', en: 'Re-check' },
   'projectBrain.watchPromote': { zh: '提升为章程', en: 'Promote to charter' },
   'projectBrain.watchResolveBtn': { zh: '标记解决', en: 'Resolve' },
   'projectBrain.watchReopen': { zh: '重新打开', en: 'Reopen' },
   'projectBrain.watchDelete': { zh: '删除', en: 'Delete' },
+  // ── Tool display names for the project-brain family ──
+  // These render in the tool-round header. Without them the UI showed the raw
+  // snake_case identifier (e.g. "project_charter_commit"), which is an internal
+  // symbol leaking into the product surface.
+  'tool.project_charter_read': { zh: '读取项目章程', en: 'Read project charter' },
+  'tool.project_charter_propose': { zh: '提议章程修订', en: 'Propose charter amendment' },
+  'tool.project_charter_commit': { zh: '提交章程决策（已改为人工审核）', en: 'Commit charter decision (now human-reviewed)' },
+  'tool.project_board_read': { zh: '读取协作看板', en: 'Read project board' },
+  'tool.project_board_post': { zh: '发布看板任务', en: 'Post board epic' },
+  'tool.project_board_claim': { zh: '认领看板任务', en: 'Claim board epic' },
+  'tool.project_board_complete': { zh: '标记看板任务完成', en: 'Complete board epic' },
+  'tool.project_board_block': { zh: '标记看板任务受阻', en: 'Block board epic' },
+  'tool.project_peer_status': { zh: '查看兄弟会话状态', en: 'Peer conversation status' },
+  'tool.project_feed_read': { zh: '读取项目动态', en: 'Read project activity feed' },
+  'tool.project_message': { zh: '给兄弟会话发消息', en: 'Message a peer conversation' },
+  'tool.project_intervene': { zh: '干预兄弟会话', en: 'Intervene in a peer conversation' },
+  'tool.list_conversations': { zh: '列出历史会话', en: 'List conversations' },
+  'tool.get_conversation': { zh: '读取历史会话', en: 'Read a conversation' },
   'projectBrain.peersHere': { zh: '当前在场 {n} 个', en: '{n} here now' },
   'projectBrain.peerSubAgent': { zh: '子代理 {id}', en: 'sub-agent {id}' },
   'projectBrain.peerUntitled': { zh: '会话 {id}', en: 'conversation {id}' },

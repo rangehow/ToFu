@@ -63,6 +63,27 @@ function _handleToolProgress(ev, c) {
           // It's replaced wholesale by meta.output once tool_result arrives.
           if (typeof r._partialOutput !== "string") r._partialOutput = "";
           r._partialOutput += (ev.chunk || "");
+          /* ★ Batch per-item progress (pt_67ffc2b7). A batch call
+           * (web_search(queries=[…]) / fetch_url(urls=[…])) is ONE round, so
+           * its terminal tool_result is the round's only transition — a 2s
+           * query beside a 40s one is indistinguishable from three slow ones.
+           * The backend now reports each item as it settles; store the running
+           * tally so the row can render "2/3" with the item that just landed.
+           * Kept STRICTLY separate from _partialOutput above: that is
+           * run_command's terminal pane and is wiped by tool_result, so a
+           * search label routed through it would be printed in a terminal box
+           * and then silently lost. */
+          if (ev.batchTotal != null) {
+            r._batchTotal = ev.batchTotal;
+            if (ev.batchDone != null && (r._batchDone == null || ev.batchDone > r._batchDone)) {
+              r._batchDone = ev.batchDone;   // monotonic: never render backwards
+            }
+            if (ev.batchItem) {
+              if (!Array.isArray(r._batchItems)) r._batchItems = [];
+              r._batchItems.push({ item: ev.batchItem, ok: ev.batchOk !== false });
+            }
+            if (ev.batchOk === false) r._batchFailed = (r._batchFailed || 0) + 1;
+          }
           /* ★ Live QR: the backend recovers a scannable bitmap from terminal
            * block art WHILE the command is still running. That timing IS the
            * feature — a scan-to-login command blocks waiting for the scan, so

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from lib.agent_core.events import EventType, build_event
+from lib.agent_core.events import EventType, build_event, now_ms
 from lib.log import get_logger
 from lib.tasks_pkg.manager import append_event
 
@@ -100,12 +100,34 @@ def _finalize_tool_round(
         _attach_terminal_qr(results)
     round_entry['results'] = results
     round_entry['status'] = 'done'
+
+    # ★ Timing contract (pt_67ffc2b7). `tEnd` is stamped HERE — the shared
+    #   finalize seam every one of the ~44 handler call sites already funnels
+    #   through — so per-tool duration is measured in ONE place instead of 44
+    #   that would drift. `tStart` is carried forward from the round so the
+    #   terminal frame is SELF-DESCRIBING: a client that reconnected mid-turn
+    #   (or replays from a cursor) never saw the tool_start, and would
+    #   otherwise render a blank duration on exactly the path a user takes when
+    #   investigating a slow turn.
+    #   `tStart` may be absent when a round dict was hand-built by a secondary
+    #   surface (paper / swarm / timer); we then fall back to `tEnd` rather than
+    #   inventing a start, so a duration is either honest or zero — never
+    #   fabricated.
+    _t_end = now_ms()
+    round_entry['tEnd'] = _t_end
+    _t_start = round_entry.get('tStart')
+    if _t_start is None:
+        _t_start = _t_end
+        round_entry['tStart'] = _t_start
+
     event = build_event(
         EventType.TOOL_RESULT,
         roundNum=rn,
         toolCallId=round_entry.get('toolCallId', ''),
         query=query_override or round_entry['query'],
         results=results,
+        tStart=_t_start,
+        tEnd=_t_end,
     )
     # ★ Carry the harness self-repair descriptor onto the tool_result event.
     #   For early-announced rounds the original tool_start went out with the

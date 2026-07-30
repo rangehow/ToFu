@@ -149,6 +149,17 @@ function reduceStreamState(state, ev) {
                 : (state._currentRound != null) ? state._currentRound : null,
         _swarm: ev._swarm || false,
       };
+      /* ★ Timing (pt_67ffc2b7). The three BACKEND clocks + the client's
+       *   `receivedAt` are copied verbatim onto the round so the tool row can
+       *   attribute latency to execution / transport / render instead of
+       *   showing one undifferentiated spinner. The reducer NEVER mints a
+       *   clock itself: it is a pure function, and a `Date.now()` here would
+       *   make the live fold diverge from the cold projection of the same
+       *   settled turn (the byte-identical parity contract). `receivedAt` is
+       *   stamped at STREAM INGRESS and arrives on the event. */
+      if (ev.tStart != null) r.tStart = ev.tStart;
+      if (ev.emittedAt != null) r.emittedAt = ev.emittedAt;
+      if (ev.receivedAt != null) r.receivedAt = ev.receivedAt;
       if (ev.assistantContent) r.assistantContent = ev.assistantContent;
       if (ev._repaired) r._repaired = ev._repaired;
       if (ev._rejected) r._rejected = ev._rejected;
@@ -177,6 +188,13 @@ function reduceStreamState(state, ev) {
         if (ev.vertical) r.vertical = ev.vertical;
         if (ev.verticals) r.verticals = ev.verticals;
         if (ev._repaired) { r._repaired = ev._repaired; if (ev.query) r.query = ev.query; }
+        /* Terminal clocks: execution = tEnd - tStart, transport =
+         * receivedAt - emittedAt. Kept on the round so a settled row stays
+         * self-describing after a reload. */
+        if (ev.tStart != null) r.tStart = ev.tStart;
+        if (ev.tEnd != null) r.tEnd = ev.tEnd;
+        if (ev.emittedAt != null) r.emittedAt = ev.emittedAt;
+        if (ev.receivedAt != null) r.receivedAt = ev.receivedAt;
       }
       return state;
     }
@@ -192,6 +210,10 @@ function reduceStreamState(state, ev) {
           r.compactedFromChars = ev.compactedFromChars;
           r.compactedToChars = ev.compactedToChars;
         }
+        if (ev.tStart != null) r.tStart = ev.tStart;
+        if (ev.tEnd != null) r.tEnd = ev.tEnd;
+        if (ev.emittedAt != null) r.emittedAt = ev.emittedAt;
+        if (ev.receivedAt != null) r.receivedAt = ev.receivedAt;
         if (r.status !== 'rejected') r.status = 'done';
       }
       return state;
@@ -266,9 +288,19 @@ const _ROUND_KEY_ORDER = [
   '_swarm', '_repaired', '_rejected',
 ];
 
+/* CLIENT-LOCAL telemetry: stamped by this browser at stream ingress, so it can
+ * only ever exist on a LIVE fold — a cold snapshot replayed from the server has
+ * no such value. Excluded from the equivalence compare (NOT from production,
+ * where the render reads it) so the live-vs-cold parity contract still holds
+ * with the timing instrumentation in place. The BACKEND clocks (tStart / tEnd /
+ * emittedAt) are deliberately NOT excluded — they ride the server snapshot too,
+ * so they must match on both sides. */
+const _CLIENT_LOCAL_ROUND_KEYS = ['receivedAt'];
+
 function _canonRound(r) {
   const out = {};
   const seen = {};
+  for (const k of _CLIENT_LOCAL_ROUND_KEYS) seen[k] = true;
   for (const k of _ROUND_KEY_ORDER) {
     const v = r[k];
     seen[k] = true;

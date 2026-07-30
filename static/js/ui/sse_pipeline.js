@@ -617,6 +617,34 @@ function dispatchSSEEvent(line, ctx) {
     } catch {
       return false;
     }
+    /* ★ receivedAt (pt_67ffc2b7) — stamped HERE, at stream INGRESS, and only
+     * for tool frames. This is the client end of the timing contract:
+     *   execution = tEnd - tStart          (both backend clocks)
+     *   transport = receivedAt - emittedAt (backend → this line)
+     *   render    = painted  - receivedAt  (this line → pixels)
+     * Without it "the tool is slow" cannot be told apart from "the frame was
+     * slow to arrive" or "the browser dropped the paint" (health_stream_timer
+     * really does drop renders — see its [twFlush-skip] diagnostic).
+     *
+     * It is stamped at ingress rather than inside the reducer on purpose: the
+     * reducer is a PURE function whose live fold must stay byte-identical to
+     * the cold projection of the same turn, and a Date.now() in there would
+     * break that contract (and its purity guard). Scoped to tool frames so the
+     * delta hot path is untouched.
+     *
+     * NOTE the shape of the type check. Doing the typeof test directly against
+     * `ev.type` trips tests/test_event_registry.py's frontend scanner: it finds
+     * every event type this file handles by matching a strict-equality compare
+     * against the `.type` field, does NOT strip comments, and would read that
+     * form as a declaration that we handle an event type literally named after
+     * the typeof result — failing the registry drift guard. Reading the field
+     * into a local first keeps the guard honest without inventing a phantom
+     * event type. */
+    const _evType = ev && ev.type;
+    if (typeof _evType === 'string' && _evType.indexOf('tool_') === 0
+        && ev.receivedAt == null) {
+      ev.receivedAt = Date.now();
+    }
     // ★ Commit the resume cursor now: the paired data event has parsed and
     //   is applied SYNCHRONOUSLY below (dispatchSSEEvent has no await between
     //   here and its return), so once we advance _lastEventId the named event

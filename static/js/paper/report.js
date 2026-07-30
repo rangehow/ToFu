@@ -85,6 +85,7 @@ function _resetReportLocalState(view) {
   if (view.stream && view.stream.pollTimer) {
     clearTimeout(view.stream.pollTimer);
   }
+  if (view.stream) _detachReportPush(view.stream);
   view.stream = null;
   view.meta = null;  // drop stale finish tag from the previous paper/run
   // Review: drop the per-paper translated reading view so it never leaks
@@ -236,8 +237,119 @@ function _reportSegmentsForRender(s) {
   });
 }
 
-/** Apply a single event to the in-memory stream state. Returns dirty flag. */
+/** Bind the 'paper' push channel to a report stream (pt_67ffc2b7).
+ *
+ * ── The asymmetry this closes ──
+ * The BACKEND has always been ready: ``lib/paper/report_runtime.py`` builds its
+ * TaskRuntime with ``push_channel='paper'``, so every ``_append_report_event``
+ * is broadcast on the unified /api/push WebSocket the moment it is appended,
+ * and ``report_engine._execute_tool`` appends ``tool_done`` the instant the
+ * tool returns. The report view simply never listened: its only transport was
+ * ``setTimeout(_pollReportTask, 1200)``. So a search that finished at t=0 kept
+ * its spinner until somewhere in t+1.2s…t+3s for no reason other than that
+ * nobody subscribed to the channel already carrying the news.
+ *
+ * ``static/js/paper/research.js`` does exactly this on the same mechanism;
+ * this is the same layering: push is the ACCELERATOR, the poll stays as the
+ * floor (a WS-blocked client must still converge, so the poll is never
+ * removed).
+ *
+ * De-duplication between the two transports is the seq gate in
+ * ``_applyReportEvent`` — this function does not need to coordinate with the
+ * poll beyond handing frames to the same gate.
+ *
+ * Safe to call repeatedly for the same stream (idempotent per task id).
+ */
+function _attachReportPush(view, s) {
+  if (!view || !s || !s.taskId) return;
+  if (typeof pushSubscribe !== 'function') return;   // push module not loaded
+  if (s._pushTaskId === s.taskId) return;            // already bound
+  _detachReportPush(s);
+  var taskId = s.taskId;
+  try {
+    pushSubscribe('paper', taskId, function (ev) {
+      // Ignore frames for a stream this view has since replaced (paper switch,
+      // regenerate) — the same abandon guard the poll chain uses.
+      if (view.stream !== s) return;
+      if (!ev || !ev.type) return;
+      var dirty = _applyReportEvent(s, ev);
+
+      // Terminal frames settle the view AND release the subscription, so a
+      // long session does not accumulate live handlers for finished tasks.
+      if (ev.type === 'done' || ev.type === 'error' || ev.type === 'aborted') {
+        if (ev.type === 'done') {
+          s.status = 'done';
+          if (ev.report) s.fullText = ev.report;
+        } else if (ev.type === 'aborted') {
+          s.status = 'aborted';
+          if (typeof ev.partial === 'string' && ev.partial) {
+            s.fullText = ev.partial;
+            s.contentStarted = true;
+          }
+        } else {
+          s.status = 'error';
+        }
+        _detachReportPush(s);
+        // Let the poll do the authoritative terminal fetch (report body,
+        // meta, resolvedTitle, DB persistence side-effects). The push frame
+        // stops the spinner NOW; the poll fills in the rest.
+        if (typeof _pollReportTask === 'function') _pollReportTask(view);
+        dirty = true;
+      }
+      if (dirty && s.paperId === _activePaperId) _paintReportFromState(view);
+    });
+    s._pushTaskId = taskId;
+  } catch (e) {
+    // A failed subscription is NOT fatal: the poll floor still converges.
+    console.debug('[Paper:Report] push subscribe failed:', e);
+  }
+}
+
+/** Release a report stream's push subscription. */
+function _detachReportPush(s) {
+  if (!s || !s._pushTaskId) return;
+  try {
+    if (typeof pushUnsubscribe === 'function') pushUnsubscribe('paper', s._pushTaskId);
+  } catch (e) {
+    console.debug('[Paper:Report] push unsubscribe failed:', e);
+  }
+  s._pushTaskId = '';
+}
+
+
+/** Ordered, exactly-once ingest gate for report events (pt_67ffc2b7).
+ *
+ * ── Why this exists ──
+ * The report view now has TWO transports feeding the same state:
+ *   • the 'paper' push channel — frames arrive the instant the backend appends
+ *     them (report_runtime sets push_channel='paper'), and
+ *   • the 1.2s poll — the catch-up floor for a client whose WebSocket is
+ *     blocked by a proxy, and the reconnect path after a refresh.
+ * Both deliver the SAME events, so applying them naively would double-append
+ * every delta (the report body rendered twice) and re-push tool rounds.
+ *
+ * Every event carries a monotonic ``seq`` (assigned in TaskRuntime.append_event),
+ * which makes de-duplication exact rather than heuristic: apply an event only
+ * when its seq advances the stream's high-water mark. That also keeps the two
+ * transports ORDERED with respect to each other — a push frame that overtakes
+ * the poll is applied once, and the poll's later replay of it is a no-op.
+ *
+ * An event with no seq (defensive: an older server, or a synthetic frame) is
+ * applied unconditionally — dropping it would be worse than a rare duplicate.
+ */
 function _applyReportEvent(s, ev) {
+  if (!s || !ev) return false;
+  var seq = ev.seq;
+  if (typeof seq === 'number') {
+    if (s._seqSeen == null) s._seqSeen = -1;
+    if (seq <= s._seqSeen) return false;     // already applied by the other transport
+    s._seqSeen = seq;
+  }
+  return _applyReportEventRaw(s, ev);
+}
+
+/** Apply a single event to the in-memory stream state. Returns dirty flag. */
+function _applyReportEventRaw(s, ev) {
   switch (ev.type) {
     case 'status':
       s.status = ev.status || s.status;
@@ -1636,6 +1748,10 @@ async function _pollReportTask(view) {
       s.pollTimer = setTimeout(function() { _pollReportTask(view); }, 1200);
     } else {
       s.pollTimer = null;
+      // Terminal: the push subscription has no more work to do. Releasing here
+      // covers the path where the POLL observed the terminal status first
+      // (a WS-blocked client never gets the push frame that would release it).
+      if (s.status !== 'running') _detachReportPush(s);
     }
   } catch (e) {
     console.warn('[Paper:Report] Poll failed:', e);
@@ -1789,6 +1905,7 @@ async function _generatePaperReport(force, view) {
     _clearReportRegenIntent(view.regenIntentKey);
     view.stream = _makeReportStreamState(startPaperId, reportLang, data.task_id, view.kind);
     _syncReportToolbar(true, view);
+    _attachReportPush(view, view.stream);
     _pollReportTask(view);
     // Honour a Stop pressed before the task_id existed: now that we know the
     // id, abort the just-started task instead of silently dropping the intent.
@@ -2066,6 +2183,7 @@ async function _loadOrGenerateReport(view) {
   if (view.stream && view.stream.paperId === _activePaperId) {
     _paintReportFromState(view);
     if (view.stream.status === 'running' && !view.stream.pollTimer) {
+      _attachReportPush(view, view.stream);
       _pollReportTask(view);
     } else if (view.stream.status === 'done') {
       // Terminal English render on tab re-entry — re-apply a persisted Chinese
@@ -2129,6 +2247,7 @@ async function _loadOrGenerateReport(view) {
         if (container) _renderReportSkeleton(container, reportLang, view);
         view.stream = _makeReportStreamState(startPaperId, reportLang, lookupData.task_id, view.kind);
         _syncReportToolbar(true, view);
+        _attachReportPush(view, view.stream);
         _pollReportTask(view);
         return;
       }

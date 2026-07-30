@@ -65,6 +65,11 @@ const _CONV_META_TOOLS = new Set([
   "project_board_read", "project_board_post", "project_board_claim",
   "project_board_complete", "project_board_block",
   "project_charter_read", "project_charter_propose",
+  // Withdrawn from the agent toolset 2026-07-30 (the charter is human-reviewed
+  // — see lib/tools/conversation.py::CHARTER_TOOLS), but HISTORICAL rounds in
+  // existing conversations still carry it and must keep rendering their content
+  // instead of collapsing to a bare tool name.
+  "project_charter_commit",
   "list_conversations", "get_conversation",
   "project_peer_status", "project_feed_read",
   "project_message", "project_intervene",
@@ -2296,7 +2301,7 @@ function _renderSearchingRow(round, ctx) {
   if (_isRoundSearch(round)) {
     return `<div class="ptool-line ptool-active ptool-search-line">
            <span class="ptool-icon"><div class="search-orbit-container" style="width:16px;height:16px"><div class="search-orbit-center" style="inset:4px"></div><div class="search-orbit-dot" style="width:3px;height:3px;margin:-1.5px"></div><div class="search-orbit-dot" style="width:3px;height:3px;margin:-1.5px"></div><div class="search-orbit-dot" style="width:3px;height:3px;margin:-1.5px"></div></div></span>
-           <span class="ptool-text">${q}</span>
+           <span class="ptool-text">${q}</span>${_renderBatchProgress(round)}
            <span class="ptool-spinner"></span>
          </div>`;
   }
@@ -2304,9 +2309,31 @@ function _renderSearchingRow(round, ctx) {
          <span class="ptool-icon">${svg}</span>
          ${rootPill}
          <span class="ptool-text">${q}</span>
-         ${repairedBadge}
+         ${repairedBadge}${_renderBatchProgress(round)}
          <span class="ptool-spinner"></span>
        </div>`;
+}
+
+/* ★ Batch per-item progress pill (pt_67ffc2b7).
+ *
+ * A batch call — web_search(queries=[a,b,c]) / fetch_url(urls=[…]) — is ONE
+ * tool round, so before this the row showed "3 searches" + a spinner and
+ * nothing else until ALL of them returned. A 2s query sitting beside a 40s one
+ * was indistinguishable from three slow ones, which is precisely the "I can't
+ * tell where the lag is" complaint.
+ *
+ * Renders nothing for a non-batch call, so the single-query path (the
+ * overwhelmingly common one) is visually unchanged. */
+function _renderBatchProgress(round) {
+  if (!round || round._batchTotal == null) return "";
+  const total = Number(round._batchTotal) || 0;
+  if (total <= 1) return "";           // a 1-item "batch" adds no information
+  const done = Number(round._batchDone) || 0;
+  const failed = Number(round._batchFailed) || 0;
+  const failHtml = failed
+    ? `<span class="ptool-batch-failed" title="${escapeHtml(String(failed))} failed">${escapeHtml(String(failed))}✗</span>`
+    : "";
+  return `<span class="ptool-batch-progress" title="${escapeHtml(String(done))}/${escapeHtml(String(total))}">${escapeHtml(String(done))}/${escapeHtml(String(total))}${failHtml}</span>`;
 }
 
 // ★ Scannable QR recovered from terminal output (meta.qrImages, attached by

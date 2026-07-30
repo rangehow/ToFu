@@ -4347,6 +4347,115 @@ input.settings-mono {
   background: var(--s-white);
 }
 
+/* ── Shared settings chrome that was USED but never DEFINED ──
+ *
+ * `.stg-section` / `.stg-desc` / `.stg-row` / `.stg-dim` / `.stg-table` and the
+ * BARE `.stg-btn` were each measured at ZERO rules in styles.css AND zero in
+ * settings.css, while the Devices settings panel shipped markup relying on all
+ * of them. The page therefore rendered with browser defaults: a bare `<table>`
+ * with no padding, a system `<button>`, `<p>` carrying nothing but default
+ * margin, and two sections running together with no separation. That is why it
+ * looked broken — not a design that aged badly, but the ABSENCE of one.
+ *
+ * `.stg-btn` is the sharpest case: `.stg-btn-danger` / `-add` / `-icon` /
+ * `-balance` / `-link` all existed, so the name LOOKED defined and no reader
+ * would suspect it. The Devices page uses the bare class for its two primary
+ * buttons (mint / copy), and no bare rule was ever written. Variants that set
+ * their own background/border still win on source order (equal specificity,
+ * defined later in this file), so `.stg-btn.stg-btn-danger` keeps its red.
+ *
+ * `.stg-section` had exactly ONE consumer (this panel) — which is precisely
+ * why nobody noticed: a class with a single caller has no second page to look
+ * wrong on.
+ *
+ * These live here rather than in settings.css because they are shared chrome,
+ * not page-specific: tests/test_settings_panels_parity.py reserves settings.css
+ * for per-page prefixes and keeps `.stg-*` here.
+ */
+.stg-section {
+  margin-bottom: 22px;
+}
+.stg-section:last-child { margin-bottom: 0; }
+.stg-desc {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--s-ink-soft);
+  margin: 0 0 10px;
+  font-weight: 600;
+}
+.stg-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+/* Secondary/metadata text inside a row or cell (ids, platforms, dates).
+ * Sets `color` rather than `opacity` so a chip nested inside keeps a crisp
+ * border — opacity would fade the border too. */
+.stg-dim {
+  color: var(--s-ink-soft);
+  font-weight: 600;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+}
+/* Brutalist data table: hard 2px outer border + hard shadow instead of the
+ * browser's hairline default. */
+.stg-table {
+  width: 100%;
+  border-collapse: collapse;
+  border: var(--s-border);
+  border-radius: var(--s-radius);
+  box-shadow: var(--s-shadow-xs);
+  background: var(--s-white);
+  font-size: 12px;
+  overflow: hidden;
+}
+.stg-table thead th {
+  text-align: left;
+  padding: 8px 11px;
+  background: var(--s-cream);
+  border-bottom: var(--s-border-sm);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--s-ink-soft);
+  white-space: nowrap;
+}
+.stg-table tbody td {
+  padding: 9px 11px;
+  border-bottom: 1px solid rgba(26, 24, 20, 0.10);
+  color: var(--s-ink);
+  vertical-align: middle;
+}
+.stg-table tbody tr:last-child td { border-bottom: none; }
+.stg-table tbody tr:hover { background: rgba(201, 153, 63, 0.05); }
+.stg-btn {
+  padding: 7px 15px;
+  font-size: 12px;
+  font-weight: 700;
+  font-family: inherit;
+  line-height: 1;
+  color: var(--s-ink);
+  background: var(--s-white);
+  border: var(--s-border-sm);
+  border-radius: var(--s-radius);
+  box-shadow: var(--s-shadow-xs);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: transform 0.1s, box-shadow 0.1s, background 0.1s;
+}
+.stg-btn:hover:not(:disabled) {
+  background: var(--s-cream);
+  transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0 var(--s-ink);
+}
+.stg-btn:active:not(:disabled) {
+  transform: translate(1px, 1px);
+  box-shadow: none;
+}
+.stg-btn:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
+
 /* ── Section head with title + action buttons ── */
 .stg-section-head {
   display: flex;
@@ -15014,6 +15123,20 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
 .lc-dl-link:hover{color:#c084fc;border-bottom-color:#c084fc}
 [data-theme="light"] .lc-dl-link{color:#7e22ce;border-bottom-color:rgba(126,34,206,0.35)}
 [data-theme="light"] .lc-dl-link:hover{color:#6b21a8;border-bottom-color:#6b21a8}
+/* ── Per-platform download links ──
+   The row can legitimately hold TWO links: on macOS the CPU architecture is
+   unknowable from the UA (Apple Silicon reports "Intel Mac OS X"), so when the
+   browser will not disclose it the backend returns both DMGs rather than guess
+   — a wrong guess is a download that refuses to open. Hence a wrapping flex row
+   instead of a single inline link.
+   The direct links are the PRIMARY action, so they are buttons rather than
+   underlined text; the releases-page link below them keeps the plain
+   .lc-dl-link treatment as the secondary "all downloads" escape hatch. */
+.lc-dl-row{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 8px}
+.lc-dl-direct{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;font-size:12.5px;font-weight:600;border:1px solid rgba(168,85,247,0.45);border-bottom:1px solid rgba(168,85,247,0.45);border-radius:7px;background:rgba(168,85,247,0.10);white-space:nowrap;transition:background-color .15s ease,border-color .15s ease,color .15s ease}
+.lc-dl-direct:hover{background:rgba(168,85,247,0.20);border-color:#c084fc;border-bottom-color:#c084fc}
+[data-theme="light"] .lc-dl-direct{border-color:rgba(126,34,206,0.4);border-bottom-color:rgba(126,34,206,0.4);background:rgba(126,34,206,0.08)}
+[data-theme="light"] .lc-dl-direct:hover{background:rgba(126,34,206,0.16);border-color:#6b21a8;border-bottom-color:#6b21a8}
 
 [data-theme="light"] .lc-cap{border-color:rgba(0,0,0,0.09);background:rgba(0,0,0,0.012)}
 [data-theme="light"] .lc-cap-icon{background:rgba(126,34,206,0.1);color:#7e22ce}

@@ -13,7 +13,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
-from lib.agent_core.events import EventType, build_event
+from lib.agent_core.events import EventType, build_event, now_ms
 from lib.log import get_logger
 from lib.model_info import model_supports_vision
 from lib.tasks_pkg.compaction import (
@@ -42,6 +42,173 @@ from lib.tasks_pkg.tool_dispatch._heartbeat import (
 )
 
 logger = get_logger(__name__)
+
+
+def _settle_tool_result(
+    task: dict[str, Any],
+    fn_name: str,
+    tc_id: str,
+    fn_args: dict[str, Any],
+    rn: int,
+    round_entry: dict[str, Any] | None,
+    tool_content: Any,
+    *,
+    idempotent_tools: frozenset,
+    cache: dict,
+    tid: str,
+    round_num: int,
+) -> Any:
+    """Settle ONE tool call: budget its result, stamp the round, emit
+    ``tool_complete``. Returns the final (budgeted) content for the message.
+
+    ★ WHY THIS IS A FUNCTION (pt_67ffc2b7). This work used to live inline in the
+    post-phase loop, which runs AFTER ``pool.shutdown(wait=True)``. That made a
+    tool's completion unobservable until every SIBLING in the same round had
+    also finished: in a round with a 0.05s ``read_files`` and a 40s
+    ``web_search``, the fast tool's content/token chips landed 40 seconds after
+    it actually returned, and the user had no way to tell which of the two was
+    slow. Hoisting it into a function lets the ``as_completed`` loop settle each
+    tool AT ITS OWN completion instant, while the post-phase keeps ownership of
+    the one thing that genuinely must stay ordered — appending the
+    ``role:'tool'`` messages in the model's ORIGINAL tool-call order.
+
+    Everything here is PER-TOOL by construction. The round-AGGREGATE budget is
+    deliberately NOT here: it needs every result to size the round, so it stays
+    after the barrier and corrects an already-announced result with a
+    ``tool_compacted`` event instead of delaying the first announcement.
+
+    Idempotent: a second call for the same ``tc_id`` is a no-op (returns the
+    already-settled content), so the post-phase can call it unconditionally
+    without double-emitting for a tool the parallel loop already settled.
+    """
+    _settled = task.setdefault('_settled_tool_results', {})
+    if tc_id in _settled:
+        return _settled[tc_id]
+
+    # ★ Post-tool hooks: modify/enrich result after execution.
+    if isinstance(tool_content, str):
+        tool_content = run_post_hooks(fn_name, fn_args, tool_content, task)
+
+    # ★ Empty result marker: prevent models from misinterpreting
+    # empty tool results as conversation end.
+    if isinstance(tool_content, str):
+        tool_content = mark_empty_result(fn_name, tool_content)
+
+    # ★ Layer 0: Budget tool results before they enter context.
+    # Persists oversized results to disk (inspired by Claude Code's
+    # per-tool maxResultSizeChars + persistence).  Exempt tools
+    # (read_files) pass through unchanged.
+    # Layer 1 (micro_compact) will further compress these once
+    # they fall outside the hot tail.
+    _l0_pre_chars = len(tool_content) if isinstance(tool_content, str) else 0
+    if isinstance(tool_content, str):
+        _conv_id = task.get('convId', '') if task else ''
+        tool_content = budget_tool_result(fn_name, tool_content,
+                                          tool_use_id=tc_id,
+                                          conv_id=_conv_id)
+    # If budget_tool_result shrank the content (persisted to disk
+    # or fell back to head+tail truncation), stamp the round so
+    # the frontend can flag this tool call as L0-compacted. Any
+    # length reduction is a signal — budget_tool_result only
+    # mutates content when it exceeds the per-tool budget.
+    if (round_entry
+            and isinstance(tool_content, str)
+            and _l0_pre_chars > len(tool_content)):
+        round_entry['compactionLayer'] = 'L0'
+        round_entry['compactedFromChars'] = _l0_pre_chars
+        round_entry['compactedToChars'] = len(tool_content)
+
+    # ★ Layer 2: tool-agnostic hard ceiling — the LAST line of
+    # defence. Unlike Layer 0 (budget_tool_result) this has NO
+    # per-tool exemption, so it ALSO clamps read_files (which Layer 0
+    # skips). Makes the "opaque blob floods context" bug class
+    # unrepresentable: a relative-path PNG decoded as text, a str()'d
+    # image dict, or any future leak gets clamped to a survivable
+    # result instead of a fatal HTTP 400. See conv mqgfkmxy (2026-06).
+    if isinstance(tool_content, str):
+        _conv_id_hc = task.get('convId', '') if task else ''
+        tool_content = clamp_tool_result_text(
+            fn_name, tool_content, tc_id=tc_id, conv_id=_conv_id_hc)
+
+    # ★ Sync the budgeted/offloaded form back into the dedup cache.
+    # The cache entry was populated with the PRE-budget content (the
+    # parallel-phase writer / the streaming prefetch injector), while
+    # budgeting above only rewrote the local message copy. Left unsynced, the
+    # full result (e.g. a 680 KB web_search dump) lingers in
+    # ``_tool_result_cache`` — it serializes into the persisted ``raw_state``
+    # (state balloon) AND is replayed verbatim on a later dedup hit,
+    # re-flooding context with content the offloader had already spilled to
+    # disk. Rewrite content[0] to the budgeted string, preserving the rest of
+    # the entry (is_search / source / display / engine_breakdown / vertical)
+    # so the rich UI-replay path is unchanged.
+    if isinstance(tool_content, str) and fn_name in idempotent_tools:
+        _sync_key = _make_cache_key(fn_name, fn_args)
+        _cached_entry = cache.get(_sync_key)
+        if (_cached_entry is not None
+                and isinstance(_cached_entry, (tuple, list))
+                and len(_cached_entry) >= 1
+                and isinstance(_cached_entry[0], str)
+                and len(_cached_entry[0]) > len(tool_content)):
+            cache[_sync_key] = (tool_content, *tuple(_cached_entry)[1:])
+
+    # ★ Emit tool_complete AFTER budgeting so that toolContent
+    #   reflects the ACTUAL content given to the model (budgeted/
+    #   persisted form).  Preview must show what the model sees.
+    try:
+        if isinstance(tool_content, str):
+            tc_content_str = tool_content
+        else:
+            tc_content_str = json.dumps(tool_content, ensure_ascii=False)
+        if len(tc_content_str) > 50000:
+            tc_content_str = tc_content_str[:50000] + '\n... [truncated for continue context]'
+
+        # ★ Persist toolContent on round_entry so checkpoint writes
+        #   it to DB.  Without this, crash-recovery loses tool
+        #   context and Continue rolls back ALL tool rounds
+        #   (toolContent == null → incomplete).
+        if round_entry:
+            round_entry['toolContent'] = tc_content_str
+
+        # ★ Per-tool token count: gives the frontend an accurate
+        # measure of the cost the model actually pays for this
+        # result. Falls back to 0 on backend failure; the
+        # frontend then renders chars instead.
+        _tc_tokens = _safe_count_tokens(tc_content_str,
+                                        model=task.get('model', '') if task else '')
+        if round_entry and _tc_tokens > 0:
+            round_entry['toolTokens'] = _tc_tokens
+
+        # Timing: carry the round's own clocks onto the terminal frame so the
+        # row stays self-describing on a cold replay that never saw the
+        # tool_start (see _finalize_tool_round for the same contract).
+        _t_start = (round_entry or {}).get('tStart')
+        _t_end = (round_entry or {}).get('tEnd') or now_ms()
+        if _t_start is None:
+            _t_start = _t_end
+
+        _evt = build_event(
+            EventType.TOOL_COMPLETE,
+            roundNum=rn,
+            toolCallId=tc_id,
+            toolName=fn_name,
+            toolContent=tc_content_str,
+            tStart=_t_start,
+            tEnd=_t_end,
+        )
+        if _tc_tokens > 0:
+            _evt['toolTokens'] = _tc_tokens
+        if round_entry and round_entry.get('compactionLayer'):
+            _evt['compactionLayer'] = round_entry['compactionLayer']
+            _evt['compactedFromChars'] = round_entry.get('compactedFromChars')
+            _evt['compactedToChars'] = round_entry.get('compactedToChars')
+        append_event(task, _evt)
+    except Exception as e:
+        logger.warning(
+            '[Task %s] tool_complete event error for tool=%s at round %d (non-fatal): %s',
+            tid, fn_name, round_num, e, exc_info=True)
+
+    _settled[tc_id] = tool_content
+    return tool_content
 
 
 def execute_tool_pipeline(
@@ -324,6 +491,16 @@ def execute_tool_pipeline(
             tool_results[tc_id_ret] = (tool_content, is_search)
             logger.info('[Task %s] %s serial dispatch completed at round %d '
                         '(result_len=%d)', tid, fn_name, round_num, len(str(tool_content)))
+            # ★ Settle immediately (pt_67ffc2b7). These tools block for MINUTES
+            #   (ask_human waits on a human; timer_create polls). Holding their
+            #   settle until the post-phase meant the round they belong to could
+            #   not report ANY tool as finished until the human answered.
+            if not (isinstance(tool_content, dict)
+                    and tool_content.get('__screenshot__')):
+                _settle_tool_result(
+                    task, fn_name, tc_id_ret, fn_args, rn, round_entry,
+                    tool_content, idempotent_tools=_idempotent_tools,
+                    cache=_cache, tid=tid, round_num=round_num)
             continue
 
         # ── Pre-tool hooks: validate/block/modify before execution ──
@@ -412,6 +589,16 @@ def execute_tool_pipeline(
         )
         tool_results[tc_id_ret] = (tool_content, is_search)
         _invalidate_project_cache(_cache, trigger=fn_name)
+        # ★ Settle at THIS tool's own completion (pt_67ffc2b7) — a serial write
+        #   runs before the parallel pool even starts, so deferring its
+        #   settle to the post-phase made it wait for every read tool in the
+        #   round. Same barrier, different lane.
+        if not (isinstance(tool_content, dict)
+                and tool_content.get('__screenshot__')):
+            _settle_tool_result(
+                task, fn_name, tc_id_ret, fn_args, rn, round_entry,
+                tool_content, idempotent_tools=_idempotent_tools,
+                cache=_cache, tid=tid, round_num=round_num)
 
     # ══════════════════════════════════════════
     #  Main phase: Parallel execution (read-only tools)
@@ -508,6 +695,29 @@ def execute_tool_pipeline(
                                              'create_project',
                                              'code_exec', 'bash_exec', 'run_command'):
                             _invalidate_project_cache(_cache, trigger=fut_fn_name)
+
+                        # ★ SETTLE NOW, not after the barrier (pt_67ffc2b7).
+                        #   This tool is done; budget its result, stamp the
+                        #   round and emit tool_complete at THIS instant. The
+                        #   old code deferred all of that past
+                        #   pool.shutdown(wait=True), so a fast tool's content
+                        #   and token chips waited for the slowest sibling in
+                        #   the round — a 2s search kept spinning for as long
+                        #   as a 40s one beside it, with no way for the user to
+                        #   tell them apart. Screenshot dicts are skipped here:
+                        #   their completion depends on the model's vision
+                        #   capability, which the post-phase resolves.
+                        if not (isinstance(tool_content, dict)
+                                and tool_content.get('__screenshot__')):
+                            for _pi in parallel_items:
+                                if _pi[2] == ret_tc_id:
+                                    _settle_tool_result(
+                                        task, _pi[1], ret_tc_id, _pi[3],
+                                        _pi[4], _pi[5], tool_content,
+                                        idempotent_tools=_idempotent_tools,
+                                        cache=_cache, tid=tid,
+                                        round_num=round_num)
+                                    break
                     except Exception as e:
                         # UnknownWorkspaceRootError is the LLM's fault
                         # (bad root prefix); it's already logged at WARNING
@@ -649,125 +859,29 @@ def execute_tool_pipeline(
                     '[Task %s] tool_complete event error for tool=%s at round %d (non-fatal): %s',
                     tid, fn_name, round_num, e, exc_info=True)
         else:
-            # ★ Post-tool hooks: modify/enrich result after execution.
-            # Inspired by Claude Code's PostToolUse hooks.
-            if isinstance(tool_content, str):
-                tool_content = run_post_hooks(fn_name, fn_args, tool_content, task)
-
-            # ★ Empty result marker: prevent models from misinterpreting
-            # empty tool results as conversation end.
-            if isinstance(tool_content, str):
-                tool_content = mark_empty_result(fn_name, tool_content)
-
-            # ★ Layer 0: Budget tool results before they enter context.
-            # Persists oversized results to disk (inspired by Claude Code's
-            # per-tool maxResultSizeChars + persistence).  Exempt tools
-            # (read_files) pass through unchanged.
-            # Layer 1 (micro_compact) will further compress these once
-            # they fall outside the hot tail.
-            _l0_pre_chars = len(tool_content) if isinstance(tool_content, str) else 0
-            if isinstance(tool_content, str):
-                _conv_id = task.get('convId', '') if task else ''
-                tool_content = budget_tool_result(fn_name, tool_content,
-                                                  tool_use_id=tc_id,
-                                                  conv_id=_conv_id)
-            # If budget_tool_result shrank the content (persisted to disk
-            # or fell back to head+tail truncation), stamp the round so
-            # the frontend can flag this tool call as L0-compacted. Any
-            # length reduction is a signal — budget_tool_result only
-            # mutates content when it exceeds the per-tool budget.
-            if (round_entry
-                    and isinstance(tool_content, str)
-                    and _l0_pre_chars > len(tool_content)):
-                round_entry['compactionLayer'] = 'L0'
-                round_entry['compactedFromChars'] = _l0_pre_chars
-                round_entry['compactedToChars'] = len(tool_content)
-
-            # ★ Layer 2: tool-agnostic hard ceiling — the LAST line of
-            # defence. Unlike Layer 0 (budget_tool_result) this has NO
-            # per-tool exemption, so it ALSO clamps read_files (which Layer 0
-            # skips). Makes the "opaque blob floods context" bug class
-            # unrepresentable: a relative-path PNG decoded as text, a str()'d
-            # image dict, or any future leak gets clamped to a survivable
-            # result instead of a fatal HTTP 400. See conv mqgfkmxy (2026-06).
-            if isinstance(tool_content, str):
-                _conv_id_hc = task.get('convId', '') if task else ''
-                tool_content = clamp_tool_result_text(
-                    fn_name, tool_content, tc_id=tc_id, conv_id=_conv_id_hc)
-
-            # ★ Sync the budgeted/offloaded form back into the dedup cache.
-            # The cache entry was populated with the PRE-budget content (the
-            # parallel-phase writer at ~L1250 / the streaming prefetch
-            # injector), while budgeting above only rewrote the local
-            # message copy. Left unsynced, the full result (e.g. a 680 KB
-            # web_search dump) lingers in ``_tool_result_cache`` — it
-            # serializes into the persisted ``raw_state`` (state balloon) AND
-            # is replayed verbatim on a later dedup hit, re-flooding context
-            # with content the offloader had already spilled to disk. Rewrite
-            # content[0] to the budgeted string, preserving the rest of the
-            # entry (is_search / source / display / engine_breakdown /
-            # vertical) so the rich UI-replay path is unchanged.
-            if (isinstance(tool_content, str)
-                    and fn_name in _idempotent_tools):
-                _sync_key = _make_cache_key(fn_name, fn_args)
-                _cached_entry = _cache.get(_sync_key)
-                if (_cached_entry is not None
-                        and isinstance(_cached_entry, (tuple, list))
-                        and len(_cached_entry) >= 1
-                        and isinstance(_cached_entry[0], str)
-                        and len(_cached_entry[0]) > len(tool_content)):
-                    _cache[_sync_key] = (tool_content, *tuple(_cached_entry)[1:])
+            # ★ Settle this tool (idempotent). Tools dispatched through the
+            #   parallel pool / serial lanes already settled at their OWN
+            #   completion instant — this call returns their cached content
+            #   without re-emitting. Only tools that never went through a
+            #   dispatch lane (dedup cache hits, approval rejections,
+            #   pre-hook blocks, abort short-circuits, the missing-result
+            #   fallback) actually do work here.
+            #
+            #   The LOOP itself must stay: it walks ``parsed_tcs``, so the
+            #   ``role:'tool'`` messages enter the message list in the model's
+            #   ORIGINAL tool-call order regardless of completion order. An
+            #   out-of-order tool_call/tool_result pairing is a hard API error
+            #   on Anthropic — that ordering is the reason this phase exists,
+            #   and it is NOT what was making the UI wait.
+            tool_content = _settle_tool_result(
+                task, fn_name, tc_id, fn_args, rn, round_entry, tool_content,
+                idempotent_tools=_idempotent_tools, cache=_cache, tid=tid,
+                round_num=round_num)
 
             # Collect for aggregate budget check
             _round_results_for_budget.append((tc_id, tool_content, fn_name))
 
             messages.append({'role': 'tool', 'tool_call_id': tc_id, 'content': tool_content})
-
-            # ★ Emit tool_complete AFTER budgeting so that toolContent
-            #   reflects the ACTUAL content given to the model (budgeted/
-            #   persisted form).  Preview must show what the model sees.
-            try:
-                if isinstance(tool_content, str):
-                    tc_content_str = tool_content
-                else:
-                    tc_content_str = json.dumps(tool_content, ensure_ascii=False)
-                if len(tc_content_str) > 50000:
-                    tc_content_str = tc_content_str[:50000] + '\n... [truncated for continue context]'
-
-                # ★ Persist toolContent on round_entry so checkpoint writes
-                #   it to DB.  Without this, crash-recovery loses tool
-                #   context and Continue rolls back ALL tool rounds
-                #   (toolContent == null → incomplete).
-                if round_entry:
-                    round_entry['toolContent'] = tc_content_str
-
-                # ★ Per-tool token count: gives the frontend an accurate
-                # measure of the cost the model actually pays for this
-                # result. Falls back to 0 on backend failure; the
-                # frontend then renders chars instead.
-                _tc_tokens = _safe_count_tokens(tc_content_str,
-                                                model=task.get('model', '') if task else '')
-                if round_entry and _tc_tokens > 0:
-                    round_entry['toolTokens'] = _tc_tokens
-
-                _evt = build_event(
-                    EventType.TOOL_COMPLETE,
-                    roundNum=rn,
-                    toolCallId=tc_id,
-                    toolName=fn_name,
-                    toolContent=tc_content_str,
-                )
-                if _tc_tokens > 0:
-                    _evt['toolTokens'] = _tc_tokens
-                if round_entry and round_entry.get('compactionLayer'):
-                    _evt['compactionLayer'] = round_entry['compactionLayer']
-                    _evt['compactedFromChars'] = round_entry.get('compactedFromChars')
-                    _evt['compactedToChars'] = round_entry.get('compactedToChars')
-                append_event(task, _evt)
-            except Exception as e:
-                logger.warning(
-                    '[Task %s] tool_complete event error for tool=%s at round %d (non-fatal): %s',
-                    tid, fn_name, round_num, e, exc_info=True)
 
     # ══════════════════════════════════════════
     #  Per-round aggregate budget check

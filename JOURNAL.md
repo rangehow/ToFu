@@ -1,5 +1,33 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-30(共享扫描器补齐语言) — 自主派单接自己开的票,而**票面指令对 20 个文件里的 17 个是不安全的**:共享模块**根本没有 css 语言**,盲目迁移会静默削弱一打守卫(`pt_b95c6d396edd467d` DONE;commit `4bc60817`,5 文件 +683/-31;守卫 **0 → 19**(该模块此前零测试而有 28 个消费者);**NEUTER×5 各咬各的**;相邻环 **374 全绿**)
+
+- **★ 票面(我自己开的)说「20 个文件各有一份手写 `_strip_comments`,逐个换成共享版」。实测先证伪:**
+
+  | 事实 | 数字 |
+  |---|---|
+  | 消费 **CSS** 的文件 | **12/20** —— 而共享模块的 lang 表里**根本没有 css** |
+  | `lang='css'` 静默退化到 shell 默认后,真 styles.css 残留 `/*` | **1495 个**(等于没剥) |
+  | 需要剥**行内**块注释的 | **17/20** —— 共享版刻意只剥整行 |
+  | 同一文件上:本地实现残留 vs 共享版残留 | **0 个 vs 20 个** |
+
+  **判据:盲目迁移会「看起来成功」地拆掉 17 个守卫的牙齿——比它要消除的重复更糟。** 正确动作是**让共享模块能表达调用方真正需要的东西**,而不是把调用方按到一个更弱的原语上。
+- **★ 顺带发现一个真·静默 bug:** `test_chat_active_consumer_census.py` 两处传 `lang='py'`——**未注册**,一直靠「退化到 shell 而 shell 恰好也用 `#`」的巧合工作。已登记为显式别名,把巧合变成声明。
+- **落点(纯能力增量,零既有行为变更):** css 升为一等语言;`py`/`sh`/`bash`/`javascript`/`mjs` 注册别名;新增 `inline=True`(尊重字符串/模板字面量)而**默认行为逐字不变**;**未知 lang 改为硬报错**——正是这份静默让 css 空转藏了这么久。
+- **★ 切片站点重新实测,票面的定性也是错的:** 票面说这 4 处「同时具备指控邻居和漏扫尾部」。实测**没有一处溢出**,三处 Python 全是**截断**(真实构造 6424B/16684B/3692B vs 800/600/800 窗口),且**三处都是正向断言**——正向断言配截断窗口是最危险的组合:今天通过只因为 token 恰好靠前,代码一挪就**安静变绿**。已迁 3 处;第 4 处不迁,因为精确提取暴露它的前提已经是假的(见下)。
+- **★ 我自己的两个提取器各带一个 bug,都是新套件当场咬出来的,而且都属于「静默返回错误区域」——与固定切片同一失效类:**
+  - `python_block` 对 `fill_form_sequential` 返回 **164B**(真实体 ~6.4KB):**换行签名的右括号与 `def` 同列**,纯缩进规则在那里就判定块结束了。**一个「精确」提取器比它替换掉的 2000 字节窗口更错**——它把一条本来通过的守卫变红,是**修复造成的假警报**。
+  - `brace_block` 向**前**找 `{`,结果咬住内层对象字面量 `handle({ nested: true })`,返回的片段停在被断言 token 之前。改为向后回溯到**外层**块。
+  
+  两个都补了专门的回归守卫。
+- **NEUTER×5 各咬各的:** css 退回 shell(3 红)/ 未知 lang 静默退化(1 红)/ 关掉 inline(2 红)/ 复原换行签名 bug(1 红)/ brace_block 复原前向扫描(1 红)。
+- **★ 两条红灯经只读定责后确认不是我的,已各自开票不吞进本批:**
+  - `test_paper_report_push_transport.py` —— **未跟踪的兄弟 WIP**(为尚未实现的 `pushSubscribe` 写的失败先行)。用 HEAD 版与本批版 `_source_scan` 分别跑,结论**完全相同** ⇒ 与本批无关。
+  - `test_frontend_p0_small_batch.py` —— **干净树上已红**:`_igUserCancelled` 在 `image-gen.js` 里**一次都不出现**,`git archive HEAD` 取出的 HEAD 版同样不含。该文件 `_source_scan` 引用计数 **0**。已开 `pt_e3809ce36b544975`,并在票面写明关键判断:若超时路径也调 `AbortController.abort()`,则这是**产品缺陷**(超时被误标成「用户取消」)而非守卫过期。
+- **后续开票(依赖已解除):** `pt_df2a951a07324e47` —— 12 个 CSS + 5 个 JS 守卫现在**可以**安全迁移了。票面写明迁移纪律:**每个文件先做「本地 strip vs 共享 strip 逐字节对拍」,完全一致才替换**;`reducer_purity` 还额外中和字符串字面量(共享模块尚无该能力),`api_contract`/`boot_early_restore` 用的是 tokenizer 单遍扫描(语义比正则版强),这三个都要单独判断而不是照搬。
+- **验收边界:** 纯测试基础设施,**零产品文件改动**,不需要重启。
+
+
 ### 2026-07-30(Goals↔北极星单一概念) — owner 问「我在 Status & Focus 用 Goals 设的目标会进 LLM 上下文吗」——**问题的两个前提都被实测证伪**:不会进(零字节),而那枚「已进章程」药丸当时正在撒谎(`pt_bd42aad10a744014` DONE;commit `af297eb8`,10 文件 +1049/-61;守卫 **18/18 + 7/7**,**NEUTER×8 各咬各的**(后端 3/1/1/1、前端 2/3/1/1);相邻环 **103/103**;活库闭环:注入块 **0 → 244 字节**)
 
 - **★ 先证伪两个前提,再动手。** ①`lib/tasks_pkg/system_context/` 全包 grep `project_watch`/`project_status`/`status_line`:**零匹配**——而且不是漏做,`test_watch_not_in_system_context_source` 明确断言这些符号**不许出现**在注入路径里。②同一时刻实测:watch item `promoted=1`,而 `read_charter()` 返回 `exists=False`、注入块 **0 字节**。UI 正在为一件已经不成立的事背书。

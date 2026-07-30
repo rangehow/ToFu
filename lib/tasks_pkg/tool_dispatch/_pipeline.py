@@ -194,10 +194,25 @@ def _settle_tool_result(
         # Timing: carry the round's own clocks onto the terminal frame so the
         # row stays self-describing on a cold replay that never saw the
         # tool_start (see _finalize_tool_round for the same contract).
+        #
+        # ★ WRITE THEM BACK ONTO THE ROUND (pt_ac380e3d). Stamping only the
+        #   EVENT is not enough: the poll lane (/api/v1/chat/poll) and every
+        #   cold reload ship the whole ``toolRounds`` objects and never replay
+        #   the event stream, so a lane that settled here without writing back
+        #   left its round with a tStart and NO tEnd — the execution segment
+        #   unresolvable exactly on the recovery paths a user takes when
+        #   investigating a slow turn (and for any client with no SSE at all).
+        #   ``or now_ms()`` is load-bearing in the other direction: a round that
+        #   already went through ``_finalize_tool_round`` carries the REAL
+        #   completion instant, and overwriting it with a later "now" would
+        #   silently shrink a slow tool's measured duration toward zero.
         _t_start = (round_entry or {}).get('tStart')
         _t_end = (round_entry or {}).get('tEnd') or now_ms()
         if _t_start is None:
             _t_start = _t_end
+        if round_entry is not None:
+            round_entry['tStart'] = _t_start
+            round_entry['tEnd'] = _t_end
 
         _evt = build_event(
             EventType.TOOL_COMPLETE,
@@ -233,6 +248,41 @@ def _settle_tool_result(
 
     _settled[tc_id] = tool_content
     return tool_content
+
+
+def _screenshot_display_content(model: str, tool_content: dict) -> tuple[str, bool]:
+    """Resolve what a screenshot result should DISPLAY, and whether the active
+    model can actually see it.
+
+    Returns ``(display_text, is_no_vision)``.
+
+    ★ WHY THIS IS A FUNCTION (pt_ac380e3d). The screenshot branch used to live
+    entirely in the post-phase, justified as "the verdict depends on the model's
+    vision capability, which is resolved later". That reasoning was WRONG:
+    ``model`` is a parameter of ``execute_tool_pipeline`` and
+    ``model_supports_vision(model) -> bool`` is a pure function of it, so the
+    verdict is knowable the instant the tool returns. Measured consequence of
+    the old placement: a zero-cost screenshot beside a 1.2s ``web_search``
+    emitted its ``tool_complete`` AFTER the slow sibling — and a browser
+    screenshot is one of the calls a user is most likely to read as "stuck".
+
+    Only the MESSAGE side genuinely has to stay in the post-phase: appending the
+    multimodal / placeholder ``role:'tool'`` message must follow the model's
+    original tool-call order.
+    """
+    if model and not model_supports_vision(model):
+        # Text-only model: never build an image_url block (build_body would
+        # strip it later and leave a misleading "analyze it visually" text).
+        # Return a truthful result so the model knows the image is unreadable
+        # and stops re-rendering / re-reading images.
+        return (
+            '[Image not shown — the current model (%s) has no vision '
+            'support, so this image cannot be analyzed. Do not retry '
+            'reading images; rely on text, code, and test output '
+            'instead.]' % model,
+            True,
+        )
+    return (tool_content.get('_text_fallback', '') or 'Image captured.', False)
 
 
 def execute_tool_pipeline(
@@ -674,9 +724,18 @@ def execute_tool_pipeline(
         # ★ Settle at THIS tool's own completion (pt_67ffc2b7) — a serial write
         #   runs before the parallel pool even starts, so deferring its
         #   settle to the post-phase made it wait for every read tool in the
-        #   round. Same barrier, different lane.
-        if not (isinstance(tool_content, dict)
+        #   round. Same barrier, different lane. Screenshots included
+        #   (pt_ac380e3d) — see the parallel lane for why the vision verdict
+        #   needs no barrier.
+        if (isinstance(tool_content, dict)
                 and tool_content.get('__screenshot__')):
+            _shot_txt, _ = _screenshot_display_content(
+                model, tool_content)
+            _settle_tool_result(
+                task, fn_name, tc_id_ret, fn_args, rn, round_entry,
+                _shot_txt, idempotent_tools=_idempotent_tools,
+                cache=_cache, tid=tid, round_num=round_num)
+        else:
             _settle_tool_result(
                 task, fn_name, tc_id_ret, fn_args, rn, round_entry,
                 tool_content, idempotent_tools=_idempotent_tools,
@@ -786,20 +845,29 @@ def execute_tool_pipeline(
                         #   and token chips waited for the slowest sibling in
                         #   the round — a 2s search kept spinning for as long
                         #   as a 40s one beside it, with no way for the user to
-                        #   tell them apart. Screenshot dicts are skipped here:
-                        #   their completion depends on the model's vision
-                        #   capability, which the post-phase resolves.
-                        if not (isinstance(tool_content, dict)
-                                and tool_content.get('__screenshot__')):
-                            for _pi in parallel_items:
-                                if _pi[2] == ret_tc_id:
-                                    _settle_tool_result(
-                                        task, _pi[1], ret_tc_id, _pi[3],
-                                        _pi[4], _pi[5], tool_content,
-                                        idempotent_tools=_idempotent_tools,
-                                        cache=_cache, tid=tid,
-                                        round_num=round_num)
-                                    break
+                        #   tell them apart.
+                        #
+                        #   Screenshots settle here TOO (pt_ac380e3d): the
+                        #   display text depends only on
+                        #   model_supports_vision(model), a pure function of a
+                        #   parameter we already hold, so there is nothing to
+                        #   wait for. Only the multimodal MESSAGE append stays
+                        #   in the post-phase, where tool-call order lives.
+                        _is_shot = (isinstance(tool_content, dict)
+                                    and tool_content.get('__screenshot__'))
+                        for _pi in parallel_items:
+                            if _pi[2] == ret_tc_id:
+                                _settle_arg = tool_content
+                                if _is_shot:
+                                    _settle_arg, _ = _screenshot_display_content(
+                                        model, tool_content)
+                                _settle_tool_result(
+                                    task, _pi[1], ret_tc_id, _pi[3],
+                                    _pi[4], _pi[5], _settle_arg,
+                                    idempotent_tools=_idempotent_tools,
+                                    cache=_cache, tid=tid,
+                                    round_num=round_num)
+                                break
                     except Exception as e:
                         # UnknownWorkspaceRootError is the LLM's fault
                         # (bad root prefix); it's already logged at WARNING
@@ -888,58 +956,36 @@ def execute_tool_pipeline(
         if is_search:
             all_search_results_text.append(tool_content)
 
-        # Convert screenshot dict → image_url content block for vision models
+        # Convert screenshot dict → image_url content block for vision models.
+        # ★ The MESSAGE append is what genuinely belongs here (pt_ac380e3d):
+        #   the role:'tool' message must enter the list in the model's ORIGINAL
+        #   tool-call order. The tool_complete EVENT was already emitted at the
+        #   tool's own completion instant by the dispatch lane; the settle below
+        #   is idempotent, so it returns the cached content without re-emitting
+        #   (and still does the work for a screenshot that never reached a
+        #   dispatch lane at all).
         if isinstance(tool_content, dict) and tool_content.get('__screenshot__'):
-            _active_model = task.get('model', '') if task else ''
-            if _active_model and not model_supports_vision(_active_model):
-                # Text-only model: never build an image_url block (build_body
-                # would strip it later and leave a misleading "analyze it
-                # visually" text). Instead, return a truthful tool result AT
-                # the tool-call site so the model knows the image is unreadable
-                # and stops re-rendering / re-reading images.
-                tc_content_str = (
-                    '[Image not shown — the current model (%s) has no vision '
-                    'support, so this image cannot be analyzed. Do not retry '
-                    'reading images; rely on text, code, and test output '
-                    'instead.]' % _active_model)
+            # ``model`` (the PARAMETER) is authoritative: the orchestrator passes
+            # the round's resolved model and only MIRRORS it onto task['model']
+            # afterwards, so reading the mirror risks a stale value on a
+            # mid-turn model fallback — and the dispatch-time settle must reach
+            # the same verdict as this post-phase message append, or the UI text
+            # and the model's own tool message would disagree.
+            _shot_txt, _no_vision = _screenshot_display_content(
+                model, tool_content)
+            if _no_vision:
                 messages.append({'role': 'tool', 'tool_call_id': tc_id,
-                                 'content': tc_content_str})
+                                 'content': _shot_txt})
                 logger.info(
                     '[Task %s] conv=%s text-only model %s — image tool result '
                     'for tc=%s replaced with no-vision placeholder',
-                    tid, task.get('convId', '') if task else '', _active_model, tc_id)
-                if round_entry:
-                    round_entry['toolContent'] = tc_content_str
-                try:
-                    append_event(task, build_event(
-                        EventType.TOOL_COMPLETE,
-                        roundNum=rn,
-                        toolCallId=tc_id,
-                        toolName=fn_name,
-                        toolContent=tc_content_str,
-                    ))
-                except Exception as e:
-                    logger.warning(
-                        '[Task %s] tool_complete event error for tool=%s at round %d (non-fatal): %s',
-                        tid, fn_name, round_num, e, exc_info=True)
-                continue
-            _append_screenshot_message(messages, tc_id, tool_content)
-            # Emit tool_complete for screenshot with text fallback
-            try:
-                tc_content_str = tool_content.get('_text_fallback', '') or 'Image captured.'
-                if round_entry:
-                    round_entry['toolContent'] = tc_content_str
-                append_event(task, build_event(
-                    EventType.TOOL_COMPLETE,
-                    roundNum=rn,
-                    toolCallId=tc_id,
-                    toolName=fn_name,
-                    toolContent=tc_content_str,
-                ))
-            except Exception as e:
-                logger.warning(
-                    '[Task %s] tool_complete event error for tool=%s at round %d (non-fatal): %s',
-                    tid, fn_name, round_num, e, exc_info=True)
+                    tid, task.get('convId', '') if task else '', model, tc_id)
+            else:
+                _append_screenshot_message(messages, tc_id, tool_content)
+            _settle_tool_result(
+                task, fn_name, tc_id, fn_args, rn, round_entry, _shot_txt,
+                idempotent_tools=_idempotent_tools, cache=_cache, tid=tid,
+                round_num=round_num)
         else:
             # ★ Settle this tool (idempotent). Tools dispatched through the
             #   parallel pool / serial lanes already settled at their OWN

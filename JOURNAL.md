@@ -1,5 +1,25 @@
 <!-- pt_a4c9d33e CLOSED 2026-07-27: board flipped to done from a dispatch that DID carry project_board_* tools. The implementation was in HEAD (fbda6d98 + d12cd17f, CAS 5/5) the whole time — only the flip was missing, because the closing tool was absent from the autonomous toolset. That silent dead end is now a visible `tool_not_available` envelope (9abdcb22, epic pt_88791cb08cb2495c), so a task blocked this way reports the reason instead of settling as a success. -->
 
+### 2026-07-30(守卫认定的机制已被删除) — 自主派单接自己开的票,判据落在 **(a) 守卫过期** 而非 (b) 产品缺陷;而定案靠的不是代码注释,是**四条独立证据**(`pt_e3809ce36b544975` DONE;commit `2c3eb6e0`,1 文件 +111/-25;**NEUTER×7 双向全咬**;相邻环 **21 + 59 全绿**;产品文件零改动)
+
+- **★ 票面要我在 (a) 守卫过期 / (b) 产品缺陷 之间判定,倾向「先查 `_igAbortController` 的所有 abort() 调用点」。照做,四条腿都指向 (a):**
+
+  | 证据 | 实测 |
+  |---|---|
+  | 单图路径上的 `.abort()` 调用点 | **只有 1 个**,在 `_igCancelGeneration`(取消按钮)内 |
+  | 请求传入的 signal | 只有 `_igAbortController.signal`;**全文件无** `AbortSignal.timeout`、无 `setTimeout(...abort...)` |
+  | `Api.images.generate` | 显式钉 **`timeout: 0`** ⇒ 共享请求层也不产生 abort |
+  | git 考古 | `eb1ddee5`「Remove the browser-side timeout ceilings too」**把 150s 看门狗和标志位一并删除** |
+
+  标志位当初存在的**唯一**理由,就是把用户取消与那个看门狗区分开(两者都表现为 `AbortError`)。看门狗没了 ⇒ 没有第二个 AbortError 生产者可区分 ⇒ 标志位是死状态。**删得对。**
+- **★ 决定性佐证,也是「这是守卫缺陷而非产品缺陷」的最强证据:** `tests/test_frontend_no_client_timeouts.py:220` **早就断言 `_igUserCancelled` 必须不存在**——那是删看门狗的兄弟会话写的、钉住「已删除」的守卫。也就是说**两条守卫在直接互相矛盾**:一条要求这个标志位存在,一条禁止它存在。本轮之后两者一致。**判据:发现一条守卫红时,先搜同一符号的其他守卫——互相矛盾的一对里,必有一条的前提已经蒸发。**
+- **重写落点:钉「重构后仍然成立的用户可见属性」+「推断赖以成立的结构性前提」。** 前者双向(取消不得被标成网络错误 / 非 abort 失败不得被标成取消——没有后半句,「永远说取消」也能通过);后者是**绊线**:一旦有人重新引入客户端看门狗,超时就会以 AbortError 到达并被标成「用户已取消」(用户可见的谎),该测试立刻红并指名 `eb1ddee5`——那正是标志位必须回来的时刻。
+- **顺带拆掉固定字节切片:** 旧的 `src[catch_start:catch_start + 1800]` **溢出真实 820B catch 块约 1KB**、读进了邻居代码——这正是它在被断言的 token 早已从文件里删除之后**还能「通过」**的原因。改用 `tests/_source_scan.brace_block`(4bc60817 新增)。
+- **★ NEUTER 抓出我自己第一版断言的漏洞(本轮最值得记的一条):** 我写的 `'.abort()' in cancel_fn` 在**删掉单图 abort 之后依然为真**——因为同一函数里紧跟着的批量循环有 `ac.abort()`。**子串检查被同函数内的另一处调用满足**,NEUTER 不咬。已收窄到具体控制器(`_igAbortController...abort(`),并为批量那条补了互补断言。**判据:负/正断言都要问「有没有别的东西恰好也能满足它」,同一函数内的相似调用是最容易被忽略的那个。**
+- **NEUTER×7 双向全咬:** 注释里提 `AbortSignal.timeout`/150s 看门狗 → **保持绿**;真加 `setTimeout(...abort)` → 红;`AbortSignal.timeout` 变体 → 红;取消被悄悄标成网络错误 → 红;删单图 abort → 红;删批量 abort → 红;只在注释里留 abort 调用 → 红。
+- **验收边界:** 纯测试守卫,**`static/js/image-gen.js` 与 HEAD 逐字节相同**,不需要重启。
+
+
 ### 2026-07-30(共享扫描器补齐语言) — 自主派单接自己开的票,而**票面指令对 20 个文件里的 17 个是不安全的**:共享模块**根本没有 css 语言**,盲目迁移会静默削弱一打守卫(`pt_b95c6d396edd467d` DONE;commit `4bc60817`,5 文件 +683/-31;守卫 **0 → 19**(该模块此前零测试而有 28 个消费者);**NEUTER×5 各咬各的**;相邻环 **374 全绿**)
 
 - **★ 票面(我自己开的)说「20 个文件各有一份手写 `_strip_comments`,逐个换成共享版」。实测先证伪:**

@@ -448,8 +448,26 @@ def test_the_shared_list_carries_a_machine_readable_platform_key():
 # hand-typed — a hand-typed copy here would be the very drift the single-source
 # rule exists to prevent, and would keep passing after a platform was added.
 def _published():
+    """The release's assets in the shape the API returns them.
+
+    Each record carries its OWN pinned-tag URL next to the name. Deriving both
+    from one version string is deliberate: that IS the one-snapshot property
+    the production parser has to preserve, so a fixture allowing them to differ
+    would not exercise the real contract.
+    """
     mod = _asset_mod()
-    return [pat.replace('*', '0.15.2') for _o, _a, _l, pat in mod.PLATFORM_ASSETS]
+    out = []
+    for _o, _a, _l, pat in mod.PLATFORM_ASSETS:
+        name = pat.replace('*', _FIXTURE_VER)
+        out.append({
+            'name': name,
+            'url': ('https://github.com/rangehow/ToFu/releases/download/'
+                    f'v{_FIXTURE_VER}/{name}'),
+        })
+    return out
+
+
+_FIXTURE_VER = "0.15.2"
 
 
 @pytest.mark.parametrize("ua,expect_os", [
@@ -722,3 +740,177 @@ def test_every_new_download_string_is_translated():
     for key in sorted(keys):
         assert re.search(r"^\s*'%s':" % re.escape(key), i18n, re.M), (
             f"{key!r} is not defined in i18n.js — it renders as the literal key")
+
+
+# ══════════════════════════════════════════════════════════════════
+#  5. The URL and the FILENAME must come from ONE snapshot
+# ══════════════════════════════════════════════════════════════════
+#
+# THE DEFECT. The URL was assembled as
+# ``/releases/latest/download/<cached filename>`` — two halves with DIFFERENT
+# lifetimes glued together:
+#
+#   * the filename is cached here for 900 s;
+#   * ``latest`` is resolved by GitHub at click time.
+#
+# They agree at the instant the cache is filled and diverge the moment a new
+# release publishes: ``latest`` moves to the new tag, whose asset set does not
+# contain the old filename. Measured against the real repo:
+#
+#   latest/download/Tofu-Setup-0.14.2-win64.exe   -> 200  (in current latest)
+#   latest/download/Tofu-Setup-0.15.2-win64.exe   -> 404  (not in latest)
+#   latest/download/Tofu-Setup-0.13.0-win64.exe   -> 404  (older name)
+#   releases/download/v0.14.2/Tofu-Setup-...exe   -> 200  (tag pinned)
+#
+# The window is open RIGHT NOW: VERSION says 0.15.2 while the newest release is
+# v0.14.2, so the next publish must pass through it — handing 404s to everyone
+# who clicks in the following 15 minutes, i.e. exactly when a fresh release
+# draws the most downloads.
+#
+# Shortening the TTL cannot fix this (any window > 0 has the same failure), so
+# the invariant is structural: THE URL MUST BE PINNED TO THE SAME RELEASE THE
+# FILENAME CAME FROM. GitHub already hands us that URL — every asset in the
+# payload carries ``browser_download_url`` of the form
+# ``/releases/download/<tag>/<name>`` — so the fix is to stop discarding it.
+
+_VER_RE = re.compile(r"\d+\.\d+\.\d+")
+
+
+def _versions_in(text: str) -> list[str]:
+    return _VER_RE.findall(text or "")
+
+
+@pytest.mark.parametrize("ua", [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Safari/605",
+    "Mozilla/5.0 (X11; Linux x86_64) Chrome/120",
+])
+def test_the_download_url_is_pinned_to_the_filenames_own_release(ua):
+    """THE REGRESSION. A ``/releases/latest/download/`` URL is a time bomb.
+
+    ``latest`` is resolved when the user CLICKS, but the filename was resolved
+    when the server last probed. Pinning the URL to the release the filename
+    actually belongs to is the only construction where the two cannot drift.
+    """
+    mod = _platform_mod()
+    picks = mod._match_platform_assets(ua, arch_hint="",
+                                      published=_published())
+    assert picks, f"no asset matched for {ua!r}"
+    for p in picks:
+        url = p["url"]
+        assert "/releases/latest/download/" not in url, (
+            f"url {url!r} resolves 'latest' at CLICK time while its filename "
+            f"was resolved at PROBE time — the moment a release publishes "
+            f"inside the cache window, this 404s. Pin the URL to the release "
+            f"the filename came from (the API's browser_download_url)."
+        )
+        assert "/releases/download/" in url, (
+            f"url {url!r} is not a pinned-tag asset URL")
+
+
+@pytest.mark.parametrize("ua", [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Safari/605",
+    "Mozilla/5.0 (X11; Linux x86_64) Chrome/120",
+])
+def test_the_url_version_equals_the_filename_version(ua):
+    """The sharper form of the same invariant, and the one that survives.
+
+    Asserting merely "not /latest/" would be satisfied by any pinned URL, even
+    one pinned to the WRONG tag. What actually has to hold is that the release
+    the URL points at is the release the file belongs to — so the version in
+    the tag segment must equal the version in the filename.
+    """
+    mod = _platform_mod()
+    picks = mod._match_platform_assets(ua, arch_hint="",
+                                       published=_published())
+    assert picks, f"no asset matched for {ua!r}"
+    for p in picks:
+        fname, url = p["filename"], p["url"]
+        fv = _versions_in(fname)
+        assert fv, f"filename {fname!r} carries no version to compare"
+        # The tag segment is what sits between /releases/download/ and the
+        # trailing filename.
+        m = re.search(r"/releases/download/([^/]+)/", url)
+        assert m, f"url {url!r} has no pinned tag segment"
+        tag_v = _versions_in(m.group(1))
+        assert tag_v, f"tag {m.group(1)!r} in {url!r} carries no version"
+        assert tag_v[0] == fv[0], (
+            f"the URL points at release {tag_v[0]} while the file it names is "
+            f"from {fv[0]} ({fname!r} vs {url!r}). A file is only downloadable "
+            f"from the release it was uploaded to, so these must be equal."
+        )
+        assert url.endswith(fname), (
+            f"url {url!r} does not end with its own filename {fname!r}")
+
+
+def test_the_asset_url_comes_from_the_api_not_reassembled():
+    """Structural: the URL must be CARRIED with the name, not rebuilt from it.
+
+    Rebuilding is what allowed a stale name and a live ``latest`` to be paired
+    in the first place. When the URL travels in the same record as the name,
+    mismatching them stops being expressible — which is a stronger guarantee
+    than any assertion about the string.
+
+    Docstrings AND comments are stripped before scanning. The module's own
+    prose NAMES the rejected construction (``/releases/latest/download/``) in
+    order to explain why it is wrong, so a raw substring scan would flag the
+    very documentation that prevents the regression — and could be silenced by
+    deleting that explanation, which is exactly backwards.
+    """
+    import ast
+
+    src = (ROOT / "routes" / "api_v1" / "desktop.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    # Collect every docstring's exact text so it can be excised.
+    docs = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
+                             ast.ClassDef)):
+            d = ast.get_docstring(node, clean=False)
+            if d:
+                docs.append(d)
+    code = "\n".join(ln for ln in src.splitlines()
+                     if not ln.lstrip().startswith("#"))
+    for d in docs:
+        code = code.replace(d, "")
+    assert "browser_download_url" in code, (
+        "the route ignores the API's browser_download_url and builds its own "
+        "URL — that is the reassembly this invariant forbids")
+    assert "releases/latest/download" not in code, (
+        "the 'latest/download' construction is still present in EXECUTABLE "
+        "code; it pairs a probe-time filename with a click-time release")
+
+
+def test_an_asset_without_a_browser_url_still_pins_the_tag():
+    """The fallback must NOT reintroduce the defect.
+
+    If the API ever omits ``browser_download_url``, the replacement must be
+    built from the ``tag_name`` in that SAME payload — never from ``latest``,
+    which is precisely the drift being fixed. Verified by driving the real
+    payload parser with the field removed.
+    """
+    mod = _platform_mod()
+    payload = {
+        "tag_name": "v9.9.9",
+        "assets": [{"name": "Tofu-Setup-9.9.9-win64.exe"}],   # no url field
+    }
+    rows = mod._assets_from_release_payload(payload, "owner/repo")
+    assert rows, "the parser dropped an asset that has a name but no url"
+    url = rows[0]["url"]
+    assert "/releases/download/v9.9.9/" in url, (
+        f"fallback url {url!r} must pin the payload's own tag")
+    assert "latest" not in url, (
+        f"fallback url {url!r} fell back to 'latest' — the same drift again")
+
+
+def test_a_payload_with_no_tag_and_no_url_yields_nothing():
+    """Refuse to invent a URL. An asset we cannot address is omitted, and the
+    caller falls back to the releases page — a guessed URL would 404 silently
+    while looking authoritative."""
+    mod = _platform_mod()
+    rows = mod._assets_from_release_payload(
+        {"assets": [{"name": "Tofu-Setup-9.9.9-win64.exe"}]}, "owner/repo")
+    assert rows == [], (
+        f"with neither browser_download_url nor tag_name there is no honest "
+        f"URL to build, so the asset must be dropped; got {rows!r}")

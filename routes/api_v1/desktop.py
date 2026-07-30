@@ -196,35 +196,81 @@ def _detect_arch(user_agent: str, arch_hint: str) -> str:
     return ''
 
 
-def _latest_release_assets() -> list[str]:
-    """Real asset FILENAMES on the newest published release, or [].
+def _assets_from_release_payload(doc, repo: str) -> list[dict]:
+    """Turn a GitHub release payload into ``[{name, url}, …]``.
+
+    ── The URL travels WITH the name, and that is the whole point ──
+    Both facts are read out of ONE payload, so they describe one release by
+    construction. The previous shape returned names only and the caller
+    rebuilt a URL as ``/releases/latest/download/<name>`` — gluing a
+    probe-time filename to a click-time release. Measured on the real repo:
+    that URL is 200 while the cached name happens to be in ``latest`` and
+    **404** the moment a new release publishes, because the new release does
+    not contain the old filename. Returning the pair makes the mismatch
+    inexpressible rather than merely unlikely.
+
+    Preference order:
+      1. ``browser_download_url`` — GitHub's own pinned-tag URL for this exact
+         asset. Authoritative; nothing to assemble.
+      2. ``/releases/download/<tag_name>/<name>`` built from the SAME payload.
+         Used only if the field is absent, and still pinned — a fallback that
+         reached for ``latest`` would reintroduce the defect.
+      3. Nothing: the asset is dropped. With neither a URL nor a tag there is
+         no honest link to offer, and a guessed one would 404 while looking
+         authoritative — the caller degrades to the releases page instead.
+    """
+    if not isinstance(doc, dict):
+        return []
+    tag = doc.get('tag_name')
+    tag = tag.strip() if isinstance(tag, str) else ''
+    out: list[dict] = []
+    for a in doc.get('assets') or []:
+        if not isinstance(a, dict):
+            continue
+        name = a.get('name')
+        if not isinstance(name, str) or not name:
+            continue
+        url = a.get('browser_download_url')
+        url = url.strip() if isinstance(url, str) else ''
+        if not url and tag and repo:
+            url = (f'https://github.com/{repo}/releases/download/'
+                   f'{tag}/{name}')
+        if not url:
+            logger.warning('[Desktop] asset %s has no browser_download_url '
+                           'and the payload carries no tag_name — dropping it '
+                           'rather than guessing a URL', name)
+            continue
+        out.append({'name': name, 'url': url})
+    return out
+
+
+def _latest_release_assets() -> list[dict]:
+    """The newest published release's assets as ``[{name, url}, …]``, or [].
 
     ── Why this network call is unavoidable ──
-    ``PLATFORM_ASSETS`` holds GLOBS (the version is a ``*``) because the
-    ``*`` is the version, and the release gates only ever need to ask "does
-    something matching this exist?". A download link cannot use a glob:
-    GitHub's ``/releases/latest/download/<name>`` resolves the RELEASE for us
-    but not the FILENAME, so a URL with a ``*`` in it is a 404.
-
-    The two ways to avoid the call are both wrong:
+    ``PLATFORM_ASSETS`` holds GLOBS because the version is a ``*``, and the
+    release gates only ever need to ask "does something matching this exist?".
+    A download link cannot use a glob, and the two ways to avoid asking are
+    both wrong:
 
       * read the local ``VERSION`` file — that is the version THIS server runs,
-        which on a source checkout is routinely ahead of (or behind) the newest
-        published installer, so the link 404s exactly when a release is in
-        flight;
+        which on a source checkout is routinely ahead of the newest published
+        installer (measured: VERSION 0.15.2 vs latest release v0.14.2), so the
+        link would 404 exactly while a release is in flight;
       * hardcode a version — stale by construction.
 
-    So we ask the API and cache the answer. Failure is non-fatal and degrades
-    to the releases page: an unreachable api.github.com must not break the
-    settings panel.
+    So we ask the API and cache the answer. The name and its URL are cached
+    TOGETHER — caching the name alone is what let a stale name pair with a live
+    ``latest``. Failure is non-fatal and degrades to the releases page: an
+    unreachable api.github.com must not break the settings panel.
     """
-    cached = _RELEASE_ASSET_CACHE.get('names')
+    cached = _RELEASE_ASSET_CACHE.get('assets')
     if cached is not None:
         return cached
     repo = _update_repo()
     if not repo:
         return []
-    names: list[str] = []
+    rows: list[dict] = []
     try:
         from lib.http_client import http_get
         resp = http_get(
@@ -233,9 +279,7 @@ def _latest_release_assets() -> list[str]:
             headers={'Accept': 'application/vnd.github+json',
                      'X-GitHub-Api-Version': '2022-11-28'})
         if resp.status_code == 200:
-            for a in (resp.json() or {}).get('assets') or []:
-                if isinstance(a, dict) and isinstance(a.get('name'), str):
-                    names.append(a['name'])
+            rows = _assets_from_release_payload(resp.json(), repo)
         else:
             logger.warning('[Desktop] latest-release probe returned HTTP %s '
                            'for %s — falling back to the releases page',
@@ -245,12 +289,12 @@ def _latest_release_assets() -> list[str]:
                        'back to the releases page', e)
     # Cache even an empty result, so a flaky API cannot turn one settings-page
     # open into a request storm. The TTL is what retries it.
-    _RELEASE_ASSET_CACHE.set('names', names)
-    return names
+    _RELEASE_ASSET_CACHE.set('assets', rows)
+    return rows
 
 
 def _match_platform_assets(user_agent: str, arch_hint: str = '',
-                           published: list[str] | None = None) -> list[dict]:
+                           published: list | None = None) -> list[dict]:
     """The installers THIS visitor's machine can actually run.
 
     Returns a list because ambiguity is a real state, not an error: when the
@@ -263,14 +307,15 @@ def _match_platform_assets(user_agent: str, arch_hint: str = '',
     a release that genuinely lacks this platform's asset; the caller then shows
     the releases page, which is what shipped before direct links existed.
 
-    Each entry: ``{os, arch, label, filename, url}`` where ``filename`` is the
-    REAL asset name resolved against the published release — never the glob,
-    which would 404.
+    Each entry: ``{os, arch, label, filename, url}``. ``filename`` and ``url``
+    are copied from the SAME published-asset record, never recombined here —
+    see :func:`_assets_from_release_payload` for why that is the invariant.
 
-    ``published`` injects the release's asset names instead of probing GitHub.
-    Tests pass it so the platform logic is verified WITHOUT a network call —
-    otherwise the guard would silently depend on api.github.com being reachable
-    and would pass or fail for reasons unrelated to the code under test.
+    ``published`` injects the release's assets (``[{name, url}, …]``) instead of
+    probing GitHub. Tests pass it so the platform logic is verified WITHOUT a
+    network call — otherwise the guard would silently depend on api.github.com
+    being reachable and would pass or fail for reasons unrelated to the code
+    under test.
     """
     import fnmatch
 
@@ -281,8 +326,11 @@ def _match_platform_assets(user_agent: str, arch_hint: str = '',
     os_key = _detect_os(user_agent)
     if not os_key:
         return []
-    published = (_latest_release_assets() if published is None
-                 else [str(n) for n in published])
+    if published is None:
+        published = _latest_release_assets()
+    else:
+        published = [p for p in published
+                     if isinstance(p, dict) and p.get('name') and p.get('url')]
     if not published:
         return []
     arch = _detect_arch(user_agent, arch_hint)
@@ -296,7 +344,8 @@ def _match_platform_assets(user_agent: str, arch_hint: str = '',
             rows = narrowed
     out = []
     for _os, _arch, label, pattern in rows:
-        hit = next((n for n in published if fnmatch.fnmatch(n, pattern)), None)
+        hit = next((a for a in published
+                    if fnmatch.fnmatch(a['name'], pattern)), None)
         if not hit:
             # The release is missing this platform. Silently omitting it is
             # right: the completeness gate already treats that as a broken
@@ -307,8 +356,10 @@ def _match_platform_assets(user_agent: str, arch_hint: str = '',
             'os': _os,
             'arch': _arch,
             'label': label,
-            'filename': hit,
-            'url': f'https://github.com/{repo}/releases/latest/download/{hit}',
+            # Both fields come from ONE record, so they cannot name different
+            # releases — the drift this function used to create.
+            'filename': hit['name'],
+            'url': hit['url'],
         })
     return out
 

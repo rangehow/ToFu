@@ -80,6 +80,13 @@ _ALLOWED_VARIABLE_FETCHES = {
     # extracted conversations.js → conv_image_hydrate.js by Epic-E slice 4
     # (2ba63a12); the carve-out follows the code.
     'core/conv_image_hydrate.js': 1,
+    # Pet sprite loading: fetches `_base + '/static/icons/pet/tofu/tofu-' +
+    # frame + '.svg'` — a STATIC ASSET, and the file contains zero occurrences
+    # of `/api` (measured). It is here rather than routed through window.Api
+    # because Api is the /api/* business-call seam; a sprite is not a business
+    # call, and adding an Api method for it would put static-asset paths in the
+    # endpoint surface. Same class as the image-blob hydration above.
+    'tofu-pet.js': 1,
 }
 
 # Bundle output is generated; never count it.
@@ -106,10 +113,23 @@ def _count_legacy_calls(path: str) -> int:
 def _strip_comments(src: str) -> str:
     """Remove /* */ block and // line comments so a fetch( mentioned inside a
     comment (e.g. branch.js's documented 'silent violation' note) is not
-    counted. Not a full JS parser — good enough for this guard."""
-    src = re.sub(r'/\*.*?\*/', '', src, flags=re.DOTALL)
-    src = re.sub(r'//[^\n]*', '', src)
-    return src
+    counted.
+
+    Delegates to the SINGLE shared implementation (charter #24). This is an
+    UPGRADE over the local ``re.sub(r'//[^\\n]*', '', s)`` it replaced, not mere
+    parity: that regex treated the ``//`` inside a string literal as a comment,
+    so ``if (path.startsWith('http://')) return path;`` in api.js lost
+    everything from ``//`` onward — real code deleted before the scan saw it.
+    Measured across all frontend JS: 27 files differ for that reason, and in
+    every one the shared tokenizer preserves code the regex ate (zero cases of
+    the reverse).
+
+    Verified NOT to change THIS guard's verdict: the variable-URL fetch count is
+    identical under both strippers for every scanned file (0 files differ), so
+    the ratchet numbers below carry over unchanged.
+    """
+    from tests._source_scan import strip_comments
+    return strip_comments(src, lang='js', inline=True)
 
 
 def _scan_variable_fetches() -> dict[str, int]:

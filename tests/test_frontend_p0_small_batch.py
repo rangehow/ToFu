@@ -126,33 +126,119 @@ def test_boot_sites_use_safe_parse():
 
 
 # ── ② image-gen cancel vs timeout ─────────────────────────────────────────
+#
+# ★ REWRITTEN (pt_e3809ce36b544975). This pair asserted an implementation that
+# no longer exists and was RED on a byte-clean tree.
+#
+# The original mechanism was an explicit ``_igUserCancelled`` flag whose ONLY
+# job was to tell a user Cancel apart from a 150s client-side watchdog firing —
+# both surface as ``err.name === 'AbortError'``, so without the flag a timeout
+# would have been mislabelled "Cancelled by user".
+#
+# Commit eb1ddee5 ("Remove the browser-side timeout ceilings too") deleted the
+# watchdog and the flag TOGETHER, which is correct: with no watchdog there is
+# no second AbortError producer to disambiguate from, so the flag became dead
+# state. Verified on every leg rather than trusting the code comment:
+#
+#   * exactly ONE ``.abort()`` reaches the single-image request — inside
+#     ``_igCancelGeneration``, i.e. the Cancel button;
+#   * the request passes only ``_igAbortController.signal`` — no
+#     ``AbortSignal.timeout`` and no ``setTimeout(... abort ...)`` anywhere;
+#   * ``Api.images.generate`` pins ``timeout: 0``, so the shared request layer
+#     contributes no abort of its own either.
+#
+# So ``isAbort ⇒ user cancel`` is sound TODAY. The guard is rewritten to pin
+# the USER-VISIBLE property that still matters — a cancel must never be
+# labelled a network error, and a non-abort failure must never be labelled a
+# cancel — plus the structural precondition the inference rests on. The moment
+# someone reintroduces a watchdog, the precondition test fails and points here,
+# which is exactly when the explicit flag has to come back.
 
-def test_image_gen_cancel_distinguished_from_timeout():
+
+def test_image_gen_cancel_is_labelled_as_cancel_not_network_error():
+    """The user-visible outcome, independent of HOW cancel is detected.
+
+    Anchored on the real catch block via ``brace_block`` rather than a fixed
+    byte window: measured, the old ``src[catch_start:catch_start + 1800]``
+    slice overshot the true 820-byte block by ~1 KB and read into neighbouring
+    code, which is how it kept "passing" while the token it asserted on had
+    already been deleted from the file.
+    """
+    from tests._source_scan import brace_block
+
     src = _read(IMAGE_GEN_JS)
-    # Flag is set in the cancel path BEFORE aborting…
-    cancel_fn = re.search(r'function _igCancelGeneration\(\) \{.*?\n\}', src, re.DOTALL)
-    assert cancel_fn and '_igUserCancelled = true' in cancel_fn.group(0), (
-        '_igCancelGeneration does not set the user-cancel flag')
-    # …read by the single-mode catch…
-    catch_start = src.find("const isAbort = err.name === 'AbortError';")
-    assert catch_start != -1
-    catch_region = src[catch_start:catch_start + 1800]
-    assert '_igUserCancelled' in catch_region, (
-        'single-mode catch does not consult the user-cancel flag')
-    assert "'Cancelled by user.'" in catch_region
-    assert "errorType: errType" in catch_region or "'cancelled'" in catch_region
-    # …and cleared in finally (next generation starts clean).
-    finally_region = src[src.find('} finally {', catch_start):]
-    assert '_igUserCancelled = false;' in finally_region[:300]
+    catch = brace_block(src, "const isAbort = err.name === 'AbortError';")
+
+    # An abort must be classified as a cancel …
+    assert 'isUserCancel' in catch, (
+        'the catch block no longer derives a user-cancel verdict at all')
+    assert "'Cancelled by user.'" in catch, (
+        'a cancelled generation must say so, not report a network failure')
+    # … and drive BOTH the title and the machine-readable errorType.
+    assert "'Cancelled'" in catch, 'the error card title must read Cancelled'
+    assert "'cancelled'" in catch, (
+        "errorType must be 'cancelled' so the renderer picks the cancel style, "
+        "not the network-error style")
+    # A NON-abort failure must still be labelled a network error — the
+    # complement, without which "always say cancelled" would pass.
+    assert "'Network error'" in catch, (
+        'a genuine transport failure must still be labelled a network error')
+    assert "'network'" in catch, (
+        "errorType must stay 'network' for a non-abort failure")
+    # A cancel is NOT a timeout: isTimeout must not be set on this path.
+    assert 'isTimeout: false' in catch, (
+        'the cancel/network path must not claim isTimeout — there is no '
+        'client-side timeout on this path any more')
 
 
-def test_NEUTER_cancel_flag_absent_mislabels():
-    """NEUTER: strip the flag from the cancel fn — the scan must fire."""
-    src = _read(IMAGE_GEN_JS)
-    cancel_fn = re.search(r'function _igCancelGeneration\(\) \{.*?\n\}', src, re.DOTALL)
-    neutered_fn = cancel_fn.group(0).replace('_igUserCancelled = true;  // read by the single-mode catch to NOT mislabel this as a 150s timeout\n  ', '')
-    assert neutered_fn != cancel_fn.group(0)
-    assert '_igUserCancelled = true' not in neutered_fn
+def test_abort_implies_cancel_precondition_still_holds():
+    """The STRUCTURAL premise the inference above rests on.
+
+    ``isUserCancel = isAbort`` is only sound while the Cancel button is the
+    sole producer of an ``AbortError`` on this path. If anyone reintroduces a
+    client-side watchdog (``AbortSignal.timeout``, or a ``setTimeout`` that
+    calls ``abort()``), a timeout starts arriving as an AbortError and gets
+    mislabelled "Cancelled by user" — a user-visible lie. At that point the
+    explicit ``_igUserCancelled`` flag eb1ddee5 removed has to come back.
+
+    This test is the tripwire for that regression. Comments are stripped first
+    (charter #24) so the explanatory prose above — which necessarily mentions
+    the very constructs being forbidden — can neither satisfy nor violate it.
+    """
+    from tests._source_scan import js_function_body, strip_comments
+
+    live = strip_comments(_read(IMAGE_GEN_JS), lang='js', inline=True)
+
+    assert 'AbortSignal.timeout' not in live, (
+        'a client-side timeout signal reintroduces a SECOND AbortError '
+        'producer, so isAbort no longer implies user-cancel — restore an '
+        'explicit cancel flag (see eb1ddee5) before adding this')
+
+    # Any setTimeout whose body aborts is the same regression in another shape.
+    for m in re.finditer(r'setTimeout\s*\([^;]{0,200}', live, re.DOTALL):
+        assert 'abort' not in m.group(0), (
+            'a setTimeout that calls abort() is a watchdog by another name; it '
+            'makes a timeout indistinguishable from a user cancel. Offending '
+            'snippet: %r' % (m.group(0)[:120],))
+
+    # And the abort must still originate from the Cancel handler.
+    #
+    # Pinned on the SINGLE-image controller specifically. A bare
+    # ``'.abort()' in cancel_fn`` is too loose: the batch loop right below it
+    # calls ``ac.abort()``, so deleting the single-path abort entirely left
+    # that check satisfied — measured, the NEUTER did not bite. The
+    # single-image path is the one whose catch block this file's other test
+    # asserts on, so it is the one that has to keep producing the AbortError.
+    cancel_fn = js_function_body(_read(IMAGE_GEN_JS), '_igCancelGeneration')
+    assert re.search(r'_igAbortController\s*(?:\?)?\.abort\s*\(', cancel_fn), (
+        '_igCancelGeneration no longer aborts the SINGLE-image request '
+        '(_igAbortController) — the Cancel button is the thing that makes '
+        'isAbort mean "user cancel" on the path the catch-block test covers. '
+        'A batch-only abort does not substitute for it.')
+    assert re.search(r'_igAbortControllers\b[^\n]*abort', cancel_fn), (
+        'the batch controllers are no longer aborted — Cancel would leave '
+        'batch requests running')
+
 
 
 # ── ③ dead scheduler UI removed ───────────────────────────────────────────

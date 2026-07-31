@@ -179,6 +179,22 @@ check('createconv_absent_on_conflict',
       cards[2] && !cards[2].querySelector('[data-act="createConv"]'));
 if (convBtn) convBtn.click();
 
+// ── Focus channel (Board "go answer" deep-link): scroll + flash the card ──
+PBA.focusItem('pt_halted');
+check('focus_flashes_card',
+      !!(cards[0] && cards[0].classList.contains('pb-attn-flash')));
+// An id whose card is NOT rendered yet stays pending and is honored by the
+// NEXT render (the tab's data loads async — the deep-link must survive that).
+PBA.focusItem('pt_future');
+check('focus_not_flashed_before_render',
+      !body.querySelector('.pb-attn-card[data-attn-id="pt_future"].pb-attn-flash'));
+PBA.renderAttention({ blocking: 1, advisory: 0, needsYou: 1, waiting: 0,
+  items: [{ type: 'board_question', severity: 'blocking', id: 'pt_future',
+            title: 'A later epic', question: 'Which default?',
+            options: [], reason: '', blockCount: 1, tab: 'board' }] });
+check('focus_pending_honored_after_render',
+      !!body.querySelector('.pb-attn-card[data-attn-id="pt_future"].pb-attn-flash'));
+
 setTimeout(() => {
   const answered = _calls.find(c => c[0] === 'boardAnswer');
   check('answer_hits_boardAnswer', !!answered && answered[1] === 'pt_halted');
@@ -253,6 +269,8 @@ def test_attention_tab_renders_and_resolves_inline():
                  'PASS createconv_btn_on_epic', 'PASS createconv_absent_on_proposal',
                  'PASS createconv_absent_on_conflict', 'PASS createconv_delegates',
                  'PASS createconv_sends_original_title',
+                 'PASS focus_flashes_card', 'PASS focus_not_flashed_before_render',
+                 'PASS focus_pending_honored_after_render',
                  'PASS empty_state', 'PASS empty_mentions_waiting',
                  'PASS advisory_badge_calm'):
         assert must in output, output
@@ -323,6 +341,38 @@ def test_NC_createconv_delegation_is_load_bearing():
         assert 'FAIL createconv_delegates' in output, \
             ('NC: without the delegation, "New chat" must hand nothing to the '
              'launcher:\n' + output)
+    finally:
+        try:
+            os.remove(copy_path)
+        except OSError:
+            pass
+    with open(_ATTN_SRC, encoding='utf-8') as f:
+        assert f.read() == original, 'shipped project-brain-attention.js must be byte-identical'
+
+
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
+def test_NC_focus_pending_is_honored_by_render():
+    """NC: strip the render-time _applyFocus() in a COPY → a pending focus id
+    is never honored when the card arrives → focus_pending_honored_after_render
+    FAILS. Without the render hook the deep-link only works when the attention
+    data happens to be warm — an async race masquerading as a feature."""
+    with open(_ATTN_SRC, encoding='utf-8') as f:
+        original = f.read()
+    anchor = ('    // A Board deep-link may have asked for a specific card BEFORE this render\n'
+              '    // resolved — honor it now that the card exists.\n'
+              '    _applyFocus();')
+    assert anchor in original, 'render-focus anchor not found (source changed?)'
+    patched = original.replace(
+        anchor, '    // NC (render-time focus honor stripped)', 1)
+    copy_path = os.path.join(HERE, '_attn_nc_focus.js')
+    try:
+        with open(copy_path, 'w', encoding='utf-8') as f:
+            f.write(patched)
+        output = _write_and_run(_HARNESS, copy_path, 'ncfocus')
+        assert 'FAIL focus_pending_honored_after_render' in output, \
+            ('NC: without the render hook, a pending focus must never be '
+             'honored:\n' + output)
     finally:
         try:
             os.remove(copy_path)

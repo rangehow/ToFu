@@ -1332,26 +1332,41 @@
   /**
    * "Create conversation" for a board epic: close the panel, open a fresh
    *  chat and pre-fill the composer with a kickoff naming the epic id + title
-   *  (the same launch pattern myday's quick-action uses). NEVER auto-sends —
-   *  the human reviews and edits before the first token is spent.
+   *  + project path. NEVER auto-sends — the human reviews and edits before
+   *  the first token is spent.
+   *
+   * ORDER IS LOAD-BEARING: the composer is pre-filled BEFORE newChat()
+   * runs. newChat measures hasInput from the composer and, finding it EMPTY,
+   * clears the project attachment + tool config (_clearProjectStateLocal /
+   * _resetToolsToDefaults) — which is exactly the project the kickoff's
+   * project_board_read / project_board_claim resolve their path from. With
+   * the pre-fill already in place, newChat's own "pending input keeps the
+   * project armed" rule preserves it instead. (myday's quick-action has the
+   * same inverted order — tracked separately.)
    */
   function _openEpicConversation(taskId, title) {
     if (!taskId) return;
+    // Capture the project path FIRST: closeProjectBrain → closeFeed wipes
+    // _state.path.
+    var path = _state.path || _displayedProjectPath();
     closeProjectBrain();
+    var input = document.getElementById('userInput');
+    if (input) {
+      var short = String(title || '').replace(/\s+/g, ' ').trim().slice(0, 400);
+      input.value = _t('projectBrain.epicChatPrompt',
+        'Claim and advance this board epic: {id}\n{title}\nProject: {path}\n\n' +
+        'Read the full text with project_board_read, claim it with ' +
+        'project_board_claim, then start.')
+        .replace('{id}', taskId).replace('{title}', short)
+        .replace('{path}', path);
+    }
     if (typeof newChat === 'function') {
       try { newChat(); } catch (e) {
         _reportFailure('projectBrain.convCreateFailed',
           'Could not open a new chat', e);
       }
     }
-    var input = document.getElementById('userInput');
     if (input) {
-      var short = String(title || '').replace(/\s+/g, ' ').trim().slice(0, 400);
-      input.value = _t('projectBrain.epicChatPrompt',
-        'Claim and advance this board epic: {id}\n{title}\n\nRead the full ' +
-        'text with project_board_read, claim it with project_board_claim, ' +
-        'then start.')
-        .replace('{id}', taskId).replace('{title}', short);
       try {
         input.style.height = 'auto';
         input.style.height = input.scrollHeight + 'px';
@@ -1433,8 +1448,17 @@
       _openBlockNoteEditor(btn, taskId, path, convId);
       return;  // the inline editor owns the rest of the flow
     } else if (act === 'gotoAttention') {
-      // Deep-link: answering happens ONLY in the Needs-you tab (§D6).
+      // Deep-link: answering happens ONLY in the Needs-you tab (§D6). Focus
+      // THIS epic's card there — with several waiting items, landing on the
+      // tab top made the operator hunt for the card they clicked. The tab
+      // renders async, so the id travels through the attention module's
+      // pending-focus channel and is honored after render.
       _selectTab('attention');
+      if (typeof window.ProjectBrainAttention !== 'undefined' &&
+          window.ProjectBrainAttention &&
+          typeof window.ProjectBrainAttention.focusItem === 'function') {
+        window.ProjectBrainAttention.focusItem(taskId);
+      }
       return;
     } else if (act === 'createConv') {
       var task = _findBoardTask(taskId);

@@ -93,7 +93,7 @@ const T = {
   'projectBrain.awaitingAnswerMeta': 'waiting for your answer',
   'projectBrain.actGoAnswer': 'Go answer',
   'projectBrain.actCreateConv': 'New chat',
-  'projectBrain.epicChatPrompt': 'Claim and advance this board epic: {id}\n{title}',
+  'projectBrain.epicChatPrompt': 'Claim and advance this board epic: {id}\n{title}\nProject: {path}',
   'projectBrain.yourAnswer': 'Your answer',
   'projectBrain.blockReasonPrompt': 'Why is this blocked?',
   'projectBrain.blockNoteSubmit': 'Mark blocked',
@@ -114,7 +114,23 @@ win.prompt = global.prompt = () => { promptCalls++; return 'x'; };
 
 const now = Date.now();
 const calls = [];
-win.newChat = global.newChat = () => { calls.push({ fn: 'newChat' }); };
+// ORDER-SENSITIVE spy: the REAL newChat() clears the project attachment when
+// the composer is empty at call time, so the launcher MUST pre-fill before
+// invoking it. Record what the composer held at the moment newChat ran — a
+// spy that only counts invocations is exactly how this regression hid.
+let composerNonEmptyAtNewChat = null;
+win.newChat = global.newChat = () => {
+  if (composerNonEmptyAtNewChat === null) {
+    const inp = win.document.getElementById('userInput');
+    composerNonEmptyAtNewChat = !!(inp && (inp.value || '').trim());
+  }
+  calls.push({ fn: 'newChat' });
+};
+// The Board's deep-link delegates card-focus to the attention module (not
+// loaded in this unit) — stub its channel and record the hand-off.
+win.ProjectBrainAttention = global.ProjectBrainAttention = {
+  focusItem: (id) => { calls.push({ fn: 'focusItem', id: id }); },
+};
 const boardPayload = {
   open: 3, claimed: 0, done: 0,
   tasks: [
@@ -192,13 +208,15 @@ flush(8).then(() => {
   const gotoBtn = qCard ? qCard.querySelector('.pb-board-act[data-act="gotoAttention"]') : null;
   check('goto_attention_button', !!gotoBtn);
 
-  // ── 3. The deep-link lands the operator on the Needs-you tab ──
+  // ── 3. The deep-link lands the operator on the Needs-you tab, ON the card ──
   const attnTab = doc.querySelector('.pb-tab[data-pb-tab="attention"]');
   check('attention_tab_not_active_initially',
         !!attnTab && !attnTab.classList.contains('pb-tab-active'));
   if (gotoBtn) gotoBtn.click();
   check('goto_switches_attention',
         !!attnTab && attnTab.classList.contains('pb-tab-active'));
+  const focusCalls = calls.filter(c => c.fn === 'focusItem');
+  check('goto_focuses_card', focusCalls.length === 1 && focusCalls[0].id === 'pt_q');
 
   // ── 4. "New chat" — EVERY card carries it; clicking launches a seeded
   //       conversation (never auto-sends) ──
@@ -218,6 +236,12 @@ flush(8).then(() => {
   check('createconv_launches_chat', launches.length === 1);
   check('createconv_prefills_epic_id', !!input && input.value.indexOf('pt_q') !== -1);
   check('createconv_prefills_title', !!input && input.value.indexOf('QUESTION EPIC') !== -1);
+  check('createconv_prefills_project_path',
+        !!input && input.value.indexOf('/proj/real') !== -1);
+  // THE owner-caught regression: pre-fill must land BEFORE newChat runs, or
+  // newChat's empty-composer branch strips the very project the kickoff
+  // needs. The spy recorded the composer state at invocation time.
+  check('createconv_prefills_before_newchat', composerNonEmptyAtNewChat === true);
   check('createconv_closes_panel', !!overlay && overlay.hidden === true);
 
   // ── 5. Answered epic: NOT awaiting, carries the decision chip ──
@@ -311,7 +335,9 @@ _EXPECTED_PASSES = (
     'PASS open_card_has_createconv', 'PASS blocked_card_has_createconv',
     'PASS awaiting_card_has_createconv', 'PASS panel_open_before_launch',
     'PASS createconv_launches_chat', 'PASS createconv_prefills_epic_id',
-    'PASS createconv_prefills_title', 'PASS createconv_closes_panel',
+    'PASS createconv_prefills_title', 'PASS createconv_prefills_project_path',
+    'PASS createconv_prefills_before_newchat', 'PASS createconv_closes_panel',
+    'PASS goto_focuses_card',
     'PASS answered_epic_not_awaiting', 'PASS answered_chip_visible',
     'PASS blocked_card_single_clamp', 'PASS blocked_meta_unified',
     'PASS awaiting_card_single_clamp', 'PASS mdlite_bold', 'PASS mdlite_code',
@@ -423,6 +449,68 @@ def test_NC_FE_createconv_handler_is_load_bearing():
         assert 'FAIL createconv_launches_chat' in output, \
             ('NC-FE: without the handler, "New chat" must stop launching a '
              'conversation:\n' + output)
+    finally:
+        try:
+            os.remove(copy_path)
+        except OSError:
+            pass
+    with open(_BRAIN_SRC, encoding='utf-8') as f:
+        assert f.read() == original, 'shipped project-brain.js must be byte-identical'
+
+
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
+def test_NC_FE_prefill_must_land_before_newchat():
+    """NC: strip the pre-fill in a COPY (the degenerate form of the inverted
+    order — composer empty when newChat runs) → the order spy records an
+    EMPTY composer at newChat time → createconv_prefills_before_newchat FAILS.
+
+    This is the assertion that would have caught the owner-reported defect:
+    the launcher used to invoke newChat() first, whose empty-composer branch
+    clears the project attachment the kickoff's board tools resolve from."""
+    with open(_BRAIN_SRC, encoding='utf-8') as f:
+        original = f.read()
+    anchor = "      input.value = _t('projectBrain.epicChatPrompt',"
+    assert anchor in original, 'pre-fill anchor not found (source changed?)'
+    patched = original.replace(
+        anchor, "      if (false) input.value = _t('projectBrain.epicChatPrompt',  // NC", 1)
+    copy_path = os.path.join(HERE, '_pb_prefill_nc_copy.js')
+    try:
+        with open(copy_path, 'w', encoding='utf-8') as f:
+            f.write(patched)
+        output = _run(copy_path)
+        assert 'FAIL createconv_prefills_before_newchat' in output, \
+            ('NC-FE: without a pre-fill before newChat, the order spy must '
+             'record an empty composer:\n' + output)
+    finally:
+        try:
+            os.remove(copy_path)
+        except OSError:
+            pass
+    with open(_BRAIN_SRC, encoding='utf-8') as f:
+        assert f.read() == original, 'shipped project-brain.js must be byte-identical'
+
+
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
+def test_NC_FE_goto_focus_delegation_is_load_bearing():
+    """NC: strip the focusItem hand-off in a COPY → the deep-link switches
+    tabs but never says WHICH card → goto_focuses_card FAILS (the operator
+    lands on the tab top and hunts, the exact gap the focus channel closes)."""
+    with open(_BRAIN_SRC, encoding='utf-8') as f:
+        original = f.read()
+    anchor = '        window.ProjectBrainAttention.focusItem(taskId);'
+    assert anchor in original, 'focus-delegation anchor not found (source changed?)'
+    patched = original.replace(
+        anchor, '        // NC (focus hand-off stripped)', 1)
+    copy_path = os.path.join(HERE, '_pb_focus_nc_copy.js')
+    try:
+        with open(copy_path, 'w', encoding='utf-8') as f:
+            f.write(patched)
+        output = _run(copy_path)
+        assert 'FAIL goto_focuses_card' in output, \
+            ('NC-FE: without the hand-off, the focus channel must stay '
+             'silent:\n' + output)
     finally:
         try:
             os.remove(copy_path)

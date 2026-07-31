@@ -265,6 +265,35 @@
       '<div class="pb-attn-empty-sub">' + _esc(sub) + '</div></div>';
   }
 
+  // ── Pending-focus channel (Board deep-link) ─────────────────────
+  // The Board's compact awaiting card deep-links HERE with a specific epic
+  // id. This tab's data loads ASYNC (refreshAttention → brainAttention →
+  // renderAttention), so the focus request must survive until the card
+  // exists: focusItem stores the id, _applyFocus honors it now if the card
+  // is already rendered, and renderAttention retries it after every render.
+  var _pendingFocusId = '';
+
+  /** Scroll + flash the card for `id` (Board "go answer" deep-link). */
+  function focusItem(id) {
+    _pendingFocusId = String(id || '');
+    _applyFocus();
+  }
+
+  function _applyFocus() {
+    if (!_pendingFocusId) return;
+    var el = _bodyEl();
+    if (!el) return;
+    var card = el.querySelector('.pb-attn-card[data-attn-id="' +
+      _pendingFocusId.replace(/"/g, '') + '"]');
+    if (!card) return;   // not rendered yet — renderAttention will retry
+    _pendingFocusId = '';
+    try { card.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+    catch (_e) { /* jsdom / older browsers: best-effort */ }
+    card.classList.remove('pb-attn-flash');
+    void card.offsetWidth;   // reflow so re-adding re-triggers the animation
+    card.classList.add('pb-attn-flash');
+  }
+
   /**
    * Render the tab from the backend verdict. Pure renderer — `res` is the
    * brainAttention payload; the order of `res.items` is the server's and is
@@ -328,6 +357,9 @@
       try { ProjectBrainI18n.apply(el); } catch (_e) { /* best-effort */ }
     }
     _wireActions(el);
+    // A Board deep-link may have asked for a specific card BEFORE this render
+    // resolved — honor it now that the card exists.
+    _applyFocus();
   }
 
   /** Tab badge. `blocking` drives the alarm class so an advisory-only project
@@ -524,6 +556,7 @@
   window.ProjectBrainAttention = {
     renderAttention: renderAttention,
     refreshAttention: refreshAttention,
+    focusItem: focusItem,
     _card: _card,
     _sevPill: _sevPill,
     _setBadge: _setBadge,

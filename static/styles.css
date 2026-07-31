@@ -251,6 +251,9 @@ html[data-rail] .folder-quickadd{display:none}
 .conv-status-tag{font-size:9px;font-weight:600;padding:1px 5px;border-radius:6px;line-height:14px;margin-left:4px;white-space:nowrap;animation:statusTagFadeIn .3s ease}
 .conv-status-translating{color:#14b8a6;background:rgba(20,184,166,0.12)}
 .conv-status-memprefetch{color:#eab308;background:rgba(234,179,8,0.12)}
+/* Rate-limit — the SAME amber the in-bubble "限流中" chip / memprefetch uses;
+ * a live retry-state the user should notice, not an error. */
+.conv-status-ratelimit{color:#eab308;background:rgba(234,179,8,0.12)}
 .conv-status-streaming{color:var(--accent);background:var(--accent-subtle)}
 .conv-status-error{color:#ef4444;background:rgba(239,68,68,0.12)}
 .conv-status-incomplete{color:#f59e0b;background:rgba(245,158,11,0.12)}
@@ -275,6 +278,10 @@ html[data-rail] .folder-quickadd{display:none}
 /* ── Memory-prefetch dot — amber pulsing; matches the in-bubble chip color ── */
 .conv-memprefetch-dot{width:8px;height:8px;border-radius:50%;background:#eab308;flex-shrink:0;animation:memPrefetchDotPulse 1.2s ease-in-out infinite;box-shadow:0 0 5px rgba(234,179,8,0.4)}
 @keyframes memPrefetchDotPulse{0%,100%{opacity:1;transform:scale(1);box-shadow:0 0 5px rgba(234,179,8,0.4)}50%{opacity:0.5;transform:scale(0.8);box-shadow:0 0 2px rgba(234,179,8,0.2)}}
+/* ── Rate-limit dot — recolors the base streaming dot amber while the turn is
+ *   queued on a 429 (mirrors the in-bubble 限流中 chip). Kept as a modifier on
+ *   .conv-streaming-dot so it stays inside the existing DOM-reconcile selector. ── */
+.conv-streaming-dot.conv-ratelimit-dot{background:#eab308;box-shadow:0 0 5px rgba(234,179,8,0.4)}
 /* ── Awaiting-human dot — amber blinking, more prominent than streaming ── */
 .conv-awaiting-human-dot{width:9px;height:9px;border-radius:50%;background:#f59e0b;flex-shrink:0;animation:hgDotBlink 1s ease-in-out infinite;box-shadow:0 0 6px rgba(245,158,11,0.5)}
 @keyframes hgDotBlink{0%,100%{opacity:1;box-shadow:0 0 6px rgba(245,158,11,0.5)}50%{opacity:0.3;box-shadow:0 0 2px rgba(245,158,11,0.2)}}
@@ -11561,6 +11568,10 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   border-radius:50%;
   width:8px;height:8px;
   box-shadow:0 0 6px rgba(245,158,11,0.45)
+}
+[data-theme="tofu"] .conv-streaming-dot.conv-ratelimit-dot{
+  background:#eab308;
+  box-shadow:0 0 5px rgba(234,179,8,0.35)
 }
 
 /* ── Welcome screen — pixel tofu block ── */

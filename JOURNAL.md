@@ -1,3 +1,26 @@
+### 2026-07-31(倒计时的难点不是画它,是「切会话别从 0 重数」) — owner 要 `run_command` 的 timeout 实时倒计时且**必须持久化**;实测**三个各自独立的洞**都会让持久化失效,而**它们中任何一个都不会让 reducer 单测转红**(`pt_1a82ffb31f714eeb` DONE;commit `55ce90a3`,13 文件 +817/-52;新套件 **12/12**,**NEUTER×7 各咬各的**;真实树 **77/77**;A/B 失败集 **零新坏、修好 1 条既有红**)
+
+- **★ owner 的验收标准直接决定了测试形态:「持久化」是关于数据库的断言,所以 reducer 单测在原理上无法证伪它。** 三个洞逐条实测,每个都能让功能「看着能跑、切会话归零」:
+  | # | 洞 | 为何 reducer 测试看不见 |
+  |---|---|---|
+  | ① | `tool_progress` 是**唯一没有 reducer 分支**的工具帧 | 它承载的 `_partialOutput`/batch 计数/`qrImages`(以及 deadline)只活在 live 管线,`projectColdSnapshot` **完全看不见** |
+  | ② | 长命令期间**两个周期 checkpoint 都不触发** | orchestrator 的在「一轮工具做完之后」(`_run.py:1014`),stream 的在「content delta 到达时」(`_stream.py:128`)⇒ 运行中的轮子有没有落库是**竞态** |
+  | ③ | 两个 checkpoint 写者在 content+thinking 皆空时**早退** | 而「首个动作就是长 `run_command`」的轮次**整段都是空散文**,恰好被丢掉 |
+- **★ 修 ① 的关键是「委派」而不是「再加一条路」:** 补 reducer 分支后必须让 `_handleToolProgress` 删掉自己的私有写法——否则每个 chunk 被 reducer + handler **各写一次**,`_partialOutput` 双倍。NEUTER-4 恢复私有写法后守卫精确咬红(实测 `livePartial` 从 `'ab'` 变 `'abab'`)。
+- **★ 修 ③ 时我第一版写错了,是读源码而不是评审抓的:** 我原本复用项目级 `has_real_round`,理由是「终端路径已经在用同一个判据」。**但它要求 `status=='done'` 或有 results ⇒ 对运行中的轮子恒为 False**,那个闸是**空的**。而且**不能放宽它**:ghost sweep 与 tail classifier 依赖它表示「已结算」,放宽会让无内容气泡变得不可清扫。故新增 `_has_inflight_round` 作为**补集**谓词,并补一条守卫钉住 `has_real_round` 仍然只认已结算(否则下一个人会重走这条路)。
+- **★ `deadlineTs` 必须后端下发,这不是偏好而是算得出来的:** 有效预算 = 请求值 **经跨 DC 倍率(×3)+ `MAX_COMMAND_TIMEOUT` clamp** 之后的结果;远端桥接还有第三套公式(`handlers/project.py:74` `min(max(t+30,60),3660)`)。实测倍率场景:请求 10s → 发布 **30s**;前端若读 `toolArgs.timeout` 会**提前 20 秒**数到零而命令仍在正常跑。
+- **★ 另外 `tStart` 不是执行起点——这是最容易被漏掉的一条:** `tStart` 盖在 round **announce** 时(`_dispatch.py:223`),而写审批门/串行写等待可以卡在 announce 与 spawn 之间**数分钟**。故新增 `execStartTs`(真 `Popen` 之后),渲染优先用它;NEUTER-6 把锚点退回 `tStart` 后守卫咬红(构造用例会把 30s 误报成 10m)。
+- **默认无 timeout 是设计,不是缺陷 ⇒ 不加天花板:** `run_command.py:583` 解析为 `None`(`tests/test_no_backend_timeouts.py` 钉住)。兄弟会话(ms8dkd2k)也来信提醒别造 deadline。故**无 deadline 时显示正计时**——这才是绝大多数命令的常态;只上倒计时等于交付一个大部分时候看不见的功能。
+- **NEUTER×7 各咬各的:** ①删 reducer 分支 → 2 条红;②撤 `_sync_partial` 的 in-flight 闸 → DB 往返红;③撤 checkpoint 的 force/in-flight 闸 → DB 往返红(**两个闸各自独立承重**);④恢复 handler 私有写 → 双写守卫红;⑤到点显示负数 → 渲染守卫红;⑥锚点退回 `tStart` → 红;⑦撤 1Hz ticker → 红。七发后三个产品文件均 `cmp` 逐字节还原。
+- **★ 我自己的三条测试缺陷,全部由跑测试抓出而非自查:** ①源码扫描匹配到**我自己注释里**的 `_partialOutput`(改用共享 `_source_scan.strip_comments(strings=True)`,charter #24);②`NOW=1000000` 减 3.9M 为**负值**,被 `_cmdTimerAnchor` 正确判为「无时钟」⇒ 我测的是拒绝路径而不是小时格式化(改用真实 epoch 量级);③node harness 因我新装的 `setInterval` **挂死 60s**。
+- **★ 而第 ③ 条暴露了一个既有缺陷,值得单独记:** `test_frontend_timer_countdown_rollover` 的 harness 按**名字** `clearInterval(win._timerCountdownTicker)`——**新增任何 ticker 都会让它挂死**。修法不是补一行 clear 我的那个(下一个 ticker 又会中招),而是改为**显式 `process.exit(0)`**,与 `_tool_rounds_wire_parity_harness.js` 已记录的同一纪律。
+- **`globals.generated.d.ts` 陈旧,顺带净修好 8 个既有类型错误:** 按 `scripts/gen_frontend_globals.py` 重生成(不手改生成文件)。实测 **纯净 HEAD 9 个类型错误 / 我的树 1 个**——即该闸**在 HEAD 上已红**,我净减 8;剩下的 `local-control.js:128 userAgentData` 属既有漂移,按 owner 偏好另开票不混入本批。
+- **41-round 字节基线按其 docstring 流程重生成:** 仅 `cmd-running` 一条变化且**差异纯空白**(whitespace-insensitive 逐字相同)。基线仍确定性,因为**电池里 0 个 round 带时钟字段** ⇒ 计时芯片渲染为空字符串;墙钟渲染本身是无法被字节冻结的,这条性质是刻意保持的。
+- **★ 回归判据用失败集 diff,而我的第一次对照是无效的:** 首版 base 副本因**缺文件而 collection error 直接中止**,根本没跑套件(报 1 个 ERROR 却看起来像「基线只有 1 条红」)。且沙盒里另有 2 条**环境性**失败:globals 生成器需要 git repo(`/tmp` 不是),timeout 扫描需要外部 `tofu_search` 包——两条在真实树中均绿(22/22)。修正后两副本各建 git repo、跑**同一组 16 套**:**base 1 红 / mine 0 红**,即零新坏且修好一条。
+- **共享树纪律:** 提交时工作区有 69 个改动文件(含兄弟 WIP),按 pathspec + 计数门(`-eq 13`)提交;事后核对我的 13 个文件无残留 dirty、临时 harness 未入库、兄弟 52 个未提交文件一个不少。
+- **★ 一个共享 HEAD 的意外,记下来供后来者:** 我对 `lib/tasks_pkg/manager/_sync.py` 的 4 处改动被兄弟会话的 commit `6be8fa43` **一并带走**(`git diff` 为空而改动确实在 HEAD 中)。逐条核对四处均**完整无损**,故未回滚;但这说明在共享树上「`git diff` 为空」**不等于「我没改过」**,必须用 `git show HEAD:<file> | grep` 复核内容而不是只看 diff。
+- **验收边界:** 后端与守卫已生效;**前端需重启 + bundle 重建**(bundle 为 gitignored,服务器启动自构)。真浏览器未实测——证据为**真 DB 往返**(真 checkpoint 写入真 sqlite,冷读回来 deadline 仍在未来、剩余 ~258s)+ node 驱动 **shipped** reducer 与 shipped 渲染函数。
+
 ### 2026-07-31(一个可选能力的依赖坏了,却把整台服务器带走) — 自主派单接 `pt_5bcd06eb96e7477d`;票面要「读一条真实取证」,而**真实样本为零且不重启拿不到**,于是转做**不依赖触发源知识的那一半:炸半径**。四道门,**每关一道就露出下一道**,靠端到端实测一道一道找出来(`pt_5bcd06eb96e7477d` DONE;4 文件;套件 **11 → 14**,**NEUTER×3 各咬各的**;A/B 对拍 **零净新坏**)
 
 - **★ 先证伪票面的可执行前提:** 全部 4 条 LINKAGE 行**都是我自己的测试/NEUTER 产物**(`LD_PRELOAD=/lib64/libstdc++.so.6` 是我注入的 3 条;另 1 条 `LINKAGE: unavailable` 是 NEUTER-C 破坏捕获时产生)。真实崩溃(≤11:59:55)跑的是 `1766` 版,那一版取证**只走 stderr**、未挂崩溃记录 ⇒ 与已诊断的通道错配自洽。而活进程启动于 10:33:27,早于全部改动 ⇒ **不重启永远拿不到样本**。故本批不等触发源,改修与触发源无关的那一半。

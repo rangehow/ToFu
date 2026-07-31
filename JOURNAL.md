@@ -1,3 +1,11 @@
+### 2026-07-31(MCP 鲁棒性收口:第三个 server 的 pin 是无上界的,而「部署主路径」其实一直是好的) — owner 指令「最长期最鲁棒修复」;复核四个残留毛边,**抓到一个活的隐患 + 证伪了我自己的一个记录错误**(chatui `13342f1d` + xuecheng-mcp `4039268` + hope-mcp `017dc89`;守卫 **18/18**;xuecheng 真实 bridge **32 工具 8.2s**)
+
+- **★ 活的隐患:`xuecheng-mcp` 的 `mcp>=1.0.0` 无上界,而它的两个兄弟都钉了 `<2`。** 它用同一套 v1 装饰器 API,今天活着全靠 cutoff 压在 2.0.0 发布前一天 —— cutoff 一抬高就是 overleaf 同款 AttributeError。「三个 server 已隔离」的叙述里,第三个的 pin 从来没被核过:**「入口数 ≠ 实现数」在依赖声明上的复现**。实测钉后:cutoff 抬到 2026-08-01(2.0.0 发布之后)仍解析 **1.29.0** —— pin 独立承重,不再依赖 cutoff 的位置。
+- **★ 证伪我自己的记录错误:我之前写「bootstrap 的 pip 路径在纯内网机器装不上 mcp>=2」——不准。** 实测 bootstrap.py 与 install.sh 的 mcp 都走 **conda-forge** 而不是 pip;干跑 `conda create --dry-run 'mcp>=2,<3'` **完整解出全树**(mcp 2.0.0 + mcp-types 2.0.0 + httpx2 2.9.1 + httpcore2 2.9.1 + truststore)。镜像真正缺的(`mcp-types`/`httpx2`/`httpcore2` 三个 404)只影响「开发机手动 `pip install -r requirements.txt`」这一条路。**判据:先验证部署主路径,再决定加固哪条 —— 我差点加固了一条根本不会被走的路。**
+- **兄弟库注释同步修:** `../hope-mcp`(git 仓库,有他人 WIP —— 显式 pathspec 只提交 pyproject.toml,WIP 零触碰)与 `../llm-mcp`(非 git 仓库,仅改文件)的「pip-installed into TOFU'S OWN interpreter」过期教义,与 tools/ 快照同文替换。xuecheng-mcp 无此注释(它的问题是更实的那个:无上界)。
+- **vendor 管道天然覆盖:** `scripts/vendor_mcp.sh` 从 `VENDORED_LAUNCHERS` 派生 —— L2 把 xuecheng 注册进去后,`make vendor-mcp` 自动会把它收进 tools/ 快照,无需另改。
+- **仍未做(人门):** ①overleaf-mcp-plus **0.3.0 发 PyPI**(wheel 已备于 `../overleaf-mcp/dist_030/`;PyPI 上仍是带无上界 mcp 依赖的 0.2.1,cutoff 之外的任何消费者仍会踩)——发布不可逆且需要凭证,等 owner 一键;②**服务器重启** —— 在跑进程内存里仍是 v1 SDK + 旧代码。
+
 ### 2026-07-31(续·历史清扫已执行:16→14,验收①②全过) — owner 一键拍板「P+R 全做」;`pt_50c0ee26faac44fc` DONE(迁移 `6b38effb` + 执行 + 复扫;备份 `data/migration_backups/reaper_terminal_cleanup_1785500530.json`)
 
 - **执行账(与干跑逐条一致,零意外):** 6 条全部写入双存储 —— **R×4**(`030b3df9`/`f4482c27`/`d2805477`/`257f050d`:messages + mirror meta + task_results metadata 三处 `aborted→'error'`,error envelope 保留)+ **P×2**(`ae7bbe38`/`4fee9563`:messages + mirror meta 删 `error`,`finishReason='stop'` 不动;其 task_results 行本就干净,正确地未触碰)。

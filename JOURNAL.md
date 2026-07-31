@@ -87,6 +87,22 @@
 - **同批边界协调:** ms8x5blr(responses 第三协议迁移 codex 翻译区)发边界询问,已回复确认我不碰翻译区,并移交三条必须保留的契约(_parse_jwt_claims 三元组/refresh singleflight/_oauth_http_post 路由)。
 - **验收边界(如实):** 离线 fake-bridge 全绿;真机需 owner 起 `--allow-egress` agent + 重启 + bundle 重建。
 
+### 2026-08-01(续·pt_e4196e58 清剿完结:6 套 11 红**全部定类为漂移**,零产品缺陷;68/68 全环绿) — 接自己立的票逐套诊断;4 commits(6 文件);每套都有探针级证据
+
+- **定类结果(逐套实证,无一套是产品回归):**
+  | 套件 | 缺失叶子 | 形态 |
+  |---|---|---|
+  | conv_windowed_blob_slice(1) | conv_verify_visibility | 双文件 inline,`!cacheHit` 路径炸 |
+  | conv_model_identity(2) | conv_rescue_tail | 探针实证:`_applySettingsToConv` 在 A3 **从未被调用**——`_rescuableLocalTail` ReferenceError 被 loader 自己的 try/catch 吞,OVERWRITE 日志打了但设置应用从未发生 |
+  | merge_active_task_terminal_fields(2) | conv_verify_visibility | 双文件 inline |
+  | stale_cache_paint_gate(3) | conv_verify_visibility + conv_verify_retry **双缺** | 零 extras 裸 eval |
+  | translate_notify_adopt(1) | **锚形态**:`_mergeServerTranslations` 已在 conv_reducers.js(slice 12),断言还 grep 母文件 | 重锚三元组(leaf 委托/母文件无内联/on-open 路调 wrapper) |
+  | warm_open_adopts_reconciled_list(3) | conv_verify_visibility(`_openConvMayHoldOrphanGhost`) | 零 extras + **NC 锚同漂**(neuter 目标不在母文件了,重定向 leaf + override_extra) |
+- **方法论(四态诊断的实际价值):** 开票时我标注「drift-vs-product 未定,逐套读前不按类推断」是对的——conv_model_identity 的表面形状(OVERWRITE 分支日志打了、模型没落地)**极像真实产品回归**(idle 路不自愈),只有探针证明「设置函数从未被调用」才把它钉回漂移。若按类批处理,这个就会按产品缺陷去改 conversations.js,在无辜的代码上动刀。
+- **NC 锚漂移是第二高发形态(6 套中 2 套):** conv_verify_failure_reheal 的 NC2(此前批)与 warm_open 的 NC——**抽提不只要迁 harness 的 eval 列表,还要迁 NEUTER 的针**。`_run` 的 `override_extra` 参数由此诞生(换叶子而非换母文件)。
+- **全环验证:** 6 套本票 + 9 套已迁移 = **68/68 绿**,NC 咬合全部完整。
+- **教训(第三次同族,立档):** 这个家族的三形态现已齐全——①eval 列表漂移(缺叶子)②NEUTER 针漂移(目标已迁)③断言锚漂移(grep 母文件)。**「抽提完成」的验收从此必须带三形态核对单,缺一不可。**
+
 ### 2026-08-01(续·harness 漂移族大清缴:resolver + conv_family_sources 落地,9 套件迁移全绿,顺带抓回 2 套预存红) — owner 指令「清扫 20 个 inline-list harness 上解析器」;7 commits(helper+8 套件+convention);**35/35 绿**;12 个剩余 conv-driver 中再抓 **6 套 11 红**已立案
 
 - **打法(owner 推而广之):** reconcile 那次不是孤例——owner 数出 20 个手写 inline 模块列表的 harness,指令全迁 `_conv_bundle_sources` 解析器。实测分类:7 个 `extra_js=[` 直译目标 + 12 个 conv-driver 变体(含 1 个**零 extras 最劣变体**)。

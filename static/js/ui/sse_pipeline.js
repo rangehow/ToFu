@@ -676,6 +676,16 @@ function dispatchSSEEvent(line, ctx) {
         && ev.receivedAt == null) {
       ev.receivedAt = Date.now();
     }
+    /* ★ Stall watch feed (pt_e0ea29f2): EVERY dispatched event — live or
+     * Last-Event-ID replay — flows through this ONE seam, so the "no
+     * unannounced freeze" detector in ui/stall_watch.js sees the same
+     * evidence the user does. Self-tick heartbeat frames are graded there
+     * (they prove the dispatcher, not the tool). Best-effort: a watch
+     * failure must never take the stream down. */
+    if (typeof stallWatchFeed === 'function') {
+      try { stallWatchFeed(convId, taskId, ev); }
+      catch (_swErr) { console.debug('[stall-watch] feed failed: %s', _swErr); }
+    }
     // ★ Commit the resume cursor now: the paired data event has parsed and
     //   is applied SYNCHRONOUSLY below (dispatchSSEEvent has no await between
     //   here and its return), so once we advance _lastEventId the named event

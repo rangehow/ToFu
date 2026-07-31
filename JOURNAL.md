@@ -1,3 +1,23 @@
+### 2026-07-31(发版链条:同一个缺陷类的**五个实例**,而每一个都曾经全绿) — owner 问「exe 是不是最新版、发布流程自动吗」;线上 latest 停在 v0.14.2 而 VERSION=0.15.2,追下去不是一个 bug 而是**一条链**,且**其中三个是被前一个修复的成功暴露出来的**(commits `a4320287` `965436cf` `14e444a4` `80a917f4` `351770c2` `4c56b954` + tofu-search `a6dadf2`;新守卫 **6 套**,**NEUTER×14**;发版仍**待 owner 上传 0.5.3**)
+
+- **★ 贯穿全批的一句话:「我们校验的东西不是会发出去的东西」。** 五个实例形状完全相同,发现顺序就是被上一个修复逼出来的顺序:
+  | # | 校验的 | 实际跑/装的 | 后果 |
+  |---|---|---|---|
+  | ① | 本地 `build-desktop.yml` | GitHub 上 7-23 的旧副本 | 三次发版饿死在退役 `macos-13`,**32 条守卫全绿** |
+  | ② | 字节一致的 `requirements.txt` | 公共 PyPI 解不出 `tofu-search>=0.5.3` | 三条腿装依赖失败 |
+  | ③ | 资产**文件名** | 49MB 空壳 installer | 名字对、体积错,闸看不见 |
+  | ④ | 工作树里的 tofu-search | 干净检出 import 就炸 | 已坏 3 天,连自己的套件都 collect 不了 |
+  | ⑤ | 本地构建的 wheel | PyPI 将来实际服务的字节 | 半个上传/传错副本都静默 |
+- **★ ① 的根因不是标签过期,是我们自己强推覆盖掉了修复。** `128ad422`(macos-13→macos-15-intel)是**直接在下游仓库**写的,让 v0.14.2 成功发版,但从未回流。两条独立证据:`git merge-base --is-ancestor` 判否;`git fetch` 逐字打印 `+ 128ad422...59bc8254 main -> origin/main (forced update)`。`export.py` 是 re-`git init` + 非 ff 即 `--force` ⇒ **下游独有的修改不是「丢失」而是「被回滚」,零日志零告警**。分叉清点 66 个远端独有文件,**零需回流**(7 个测试逐个查到上游有意删除的 commit;`write_tools.py` 已重构为包;`openai.json` 被 `bootstrap.py:176` 取代)。
+- **★ ③ 比 owner 报的更深一层,而它是「运气救了我们」:** Windows 腿 `Install dependencies` **报告 success 而 pip 已经失败**——Windows 默认 shell 是 pwsh,多行 `run:` 里原生命令失败**不中止**,步骤取**最后一条**命令的退出码。于是 PyInstaller 打了一个依赖全缺的包:**48,960,018 vs 健康 115,822,886 字节**。三条腿一起挂才没发出去;若那三条是好的,完整性闸会数到四个资产然后 `make_latest` 把空壳钉成 Latest。**同一个不可满足的 pin,在三个平台响亮报错、在第四个平台静默产出损坏产物**——这个不对称才是缺陷。
+- **★ 我自己在这批里造了一个缺陷,是跑套件发现的,不是看 diff:** 给 `PLATFORM_ASSETS` 加 `min_bytes` 把行从 4 字段加宽到 5,**打断三个位置解包的消费者**。最坏的是 `routes/api_v1/desktop.py`——它的表加载包在 `except Exception` 里、降级到 releases 页,所以生产症状是「直连下载链接悄悄消失」,**而所有发布闸照常绿**。教训:**单一真源只有在每个消费者都同意它的形状时才是单一的**,位置解包让「形状」成为承重且不可见的契约。arity 现已对全部消费者钉住。
+- **守卫的自我约束(本批新形成的纪律):** 每条守卫都要回答「我测的是不是真正会生效的那个对象」——漂移守卫**同时覆盖两个发布远端**(`rangehow` + `NiuTrans`,实测都停在同一陈旧 sha);resolvability 守卫**硬编码 pypi.org、绝不走 pip**(本机 pip 指向内网镜像,走 pip 等于答另一个问题);import 守卫**子进程 + `PYTHONNOUSERSITE=1` + 断言 `__file__` 在导出目录内**(否则绿灯可能来自 site-packages 里那份 0.5.2);身份守卫读 PyPI 自己的 `digests.sha256`(pip 校验下载用的就是它)。**离线一律 skip 不 pass**——「没检查」报告成「一致」正是要消灭的那种谎言。
+- **★ 前提守卫必须建模完整变换链,不是一环:** 漂移守卫用「逐字节相等」的前提是导出不改写这些文件,而 opensource 导出跑的是**三段链**(`export.py:2488-2490`:restore keep-files → `ruff --fix --unsafe-fixes` → verify)。只建模 sanitizer 会让守卫**因正当理由长红 → 被静音 → 失明**,正是它自己 docstring 警告的那件事。另补白名单守卫:`scripts/` 是 opensource 排除目录,`release_assets.py` 只靠**手工白名单**一条进公共树——加第二个脚本忘了登记,发布出去的 workflow 就调用一个不存在的文件。
+- **★ NEUTER 的两次空转,都是变异无效而不是守卫失明:** ①把 `PYTHON_VERSION` 换成 `PYTHON_VERSIOX`,而 `ci.yml` 里该 token **出现 0 次** ⇒ 文件原样写回;②手打一个 hash 想验证正向路径,hash 本身是错的。**判据:NEUTER 不咬时先比 sha/证明变异真的改了行为,再谈守卫是否承重。** 14 发里其余 12 发各咬各的。
+- **④ 的处方被 owner 纠正,而纠正是对的:** 我原打算「只摘 `DOMAIN_META` 出来修好 HEAD,travel 留到 0.5.4」——**摘不出来**。缺的三个符号(`DOMAIN_META`/`available_types`/`describe_domains`)是同一次重写的产物:`DOMAIN_META` 字典体里直接写着 `travel` 条目,后两个围绕「按凭据可用性过滤域」的新语义。且「0.5.3 的干净版本」在 git 历史里**从来没存在过**(`ddbd504` 起 8 个提交全带这个洞,含 0.5.3 feature 提交本身),所以回滚是构造新东西而非恢复旧的。按 A 整体提交,全量套件 exit 0。
+- **验收边界(诚实记录):** **发版尚未完成**。0.5.3 产物已构建 + `twine check` PASSED + 隔离环境 import 实测通过,校验和 `0b840779…`(whl)/`e4d1120a…`(tar.gz),tag `v0.5.3` 已打,**上传需 owner 凭据**。上传后判据:resolvability **35/35** + 身份守卫 hash 匹配 → 再发版 → `/releases/latest` = v0.15.2 + 四平台 + SHA256SUMS + Windows 包过 81MB 闸。另开票 `pt_368a59cbbc1647b3`:**体积合理 ≠ 装上能启动**,hiddenimports 漏一项不影响体积也不影响退出码,只在用户双击那刻炸——按 owner 指令不塞进本批。
+- **Chrome 那一问已定性关闭(`pt_d30b63f98bfb4f70`):** Windows/macOS 外部安装的 `update_url` **必须指向应用商店**、本地 CRX **仅 Linux**;非商店 force_install **要求 AD 域**;`--load-extension` 在 **Chrome 137 已移除** ⇒ **要管理员权限也绕不过**。顺带修了真缺陷:`tofu.spec` 的 `datas` 缺 `browser_extension`,桌面版点「下载扩展 ZIP」必 404——**恰恰是那个最拿不到扩展的发行版**。
+
 ### 2026-07-31(续·闸修好了,但产品的入口够不着它) — 自主派单接**已 DONE** 的 `pt_d689f2016ecf4311`;票面前提「修完了」为真,而**实测发现那个修复在 HTTP 入口结构上不可达,同一缺陷在守卫落地后又复发了 2 次**(commit `920f83ae`,2 文件;新守卫 **4 条(2 条失败先行 + 2 条一开始就绿的补集)**,**NEUTER×3 各咬各的**(2/1/1);相邻环 **339 passed**;活库闭环 `needsYou 0→2`)
 
 - **★ 派单给我的 epic 已经是 DONE,但活库数据当场推翻了「已修复」:** 一致性闸 `9e2a0481` 确实在 HEAD 里(`question_required` 拒绝 + 短语表 + 响亮截断日志),可 `pt_3879f00e` 的 `block_count` 在**闸落地之后**从 4 涨到 **6** —— 仍然 `block_question=None`、`reason` 仍然**恰好 2000 字符**、散文里仍然逐字写着「STILL AWAITING owner one-click on the 4-option question card」。**一个已经上线的守卫,眼睁睁看着它要防的缺陷又发生了两次。**

@@ -2,10 +2,13 @@
 source resolution, snapshot staleness detection, and connect pre-warm.
 
 Internal MCP servers (hope-mcp, …) are private and not on PyPI, so a fresh
-Tofu checkout has no way to obtain them. We ship the source in-repo and
-pip-install it into Tofu's OWN interpreter on first connect. This module owns
-the discovery/hot-reload/staleness pieces of that flow; the actual pip run +
-async-job registry live in ``_install``.
+Tofu checkout has no way to obtain them. We ship the source next to the repo
+(sibling dev checkout, export ``vendor/`` bundle, or ``tools/`` snapshot) and
+launch each server ISOLATED via ``uv run --no-project --with-editable
+<source>`` — the server's dependency tree (its own ``mcp`` included) never
+touches Tofu's interpreter. This module owns the discovery / hot-reload /
+staleness / launch-resolution pieces of that flow; the async-job registry
+lives in ``_install``.
 
 Facade-routing: every access to a monkeypatchable name (state dicts,
 ``importlib`` / ``subprocess`` modules, ``_repo_root`` / ``_resolve_launcher``
@@ -465,7 +468,10 @@ def _check_snapshot_staleness(command: str) -> None:
     if not spec:
         return
     sources = spec.get('sources', [])
-    sibling_rel = next((s for s in sources if not s.startswith('tools/')), None)
+    # The DEV sibling is the only thing we could ever vendor FROM. ``vendor/``
+    # rows are export bundles, not dev checkouts — picking one here would make
+    # every export deployment warn 'snapshot missing' spuriously.
+    sibling_rel = next((s for s in sources if s.startswith('..')), None)
     snap_rel = next((s for s in sources if s.startswith('tools/')), None)
     if not sibling_rel or not snap_rel:
         return  # need BOTH a sibling source and a snapshot dest to compare
@@ -557,64 +563,105 @@ def is_vendored_launcher(command: str) -> bool:
     return _pkg()._find_vendored_source(command) is not None
 
 
-def prewarm_vendored_launcher(command: str) -> tuple[bool, str]:
-    """Ensure a vendored launcher is importable BEFORE connect.
+def vendored_launch_argv(command: str) -> list[str] | None:
+    """Resolve a vendored bare command to its ISOLATED launch argv.
 
-    Intended to run in a normal worker thread (e.g. the Flask request handler
-    for ``/catalog/install``), NOT on the MCP event loop — so the blocking
-    ``pip install`` here is fine and never freezes live MCP traffic.
+    Returns ``['uv', 'run', '--no-project', '--with-editable', <src>, command]``
+    when ``command`` names a registered vendored server whose source exists,
+    else ``None``. This is THE decoupling mechanism: the spawned process gets
+    its own resolved environment, so the server's ``mcp`` and Tofu's ``mcp``
+    are independent resolutions (a shared interpreter is the only thing that
+    ever coupled them).
 
-    Returns ``(ready, detail)``:
-      * ``(True, path)``  — launcher already resolvable, or pip install succeeded.
-      * ``(True, '')``    — already on PATH (nothing to do).
-      * ``(False, why)``  — install attempted and failed; ``why`` is the
-        captured pip stderr / reason (also stored in ``_install_last_error``).
+    ``--with-editable`` is load-bearing, not a preference. Measured
+    2026-07-31: ``uvx --from <dir>`` serves a cached wheel build, and neither
+    ``--refresh`` nor ``--reinstall`` picked up a NEW file added to the
+    source — the installed package simply lacked it. Editable links the source
+    tree instead, so sibling dev edits and freshly re-vendored snapshots are
+    live on the next connect.
 
-    Safe to call even for non-vendored commands: returns ``(True, '')`` so the
-    caller just proceeds to connect.
+    ``--no-project`` keeps uv from resolving the enclosing chatui project.
     """
-    import shutil as _shutil
+    if not command or os.sep in command or (os.altsep and os.altsep in command):
+        return None
+    found = _pkg()._find_vendored_source(command)
+    if not found:
+        return None
+    src, _editable = found
+    return ['uv', 'run', '--no-project', '--with-editable', src, command]
+
+
+def prewarm_vendored_launcher(command: str) -> tuple[bool, str]:
+    """Resolve a vendored server's isolated env BEFORE connect.
+
+    Intended to run in a normal worker thread (the install route's job worker
+    does exactly this), NOT on the MCP event loop — the subprocess here can
+    take a cold dependency-resolution hit and must never freeze live MCP
+    traffic.
+
+    Being on PATH is deliberately NOT a fast path anymore: the bridge launches
+    the isolated copy regardless of what console scripts exist in the shared
+    env, so the only warm that matters is the uv one.
+
+    Returns ``(ready, detail)`` — ``(True, launch argv)`` on success,
+    ``(False, reason)`` on failure (also stored in ``_install_last_error``).
+    Non-vendored commands return ``(True, '')`` so callers just proceed.
+    """
     pkg = _pkg()
     if not command or os.sep in command:
         return True, ''
-    if _shutil.which(command):
+    argv = pkg.vendored_launch_argv(command)
+    if argv is None:
+        # Not something we can warm — let connect surface the hint.
         return True, ''
-    resolved = pkg._resolve_launcher(command)
-    if resolved:
-        return True, resolved
-    if pkg._find_vendored_source(command) is None:
-        # Not something we can pip-install — let connect surface the hint.
-        return True, ''
-    resolved = pkg._try_autoinstall_launcher(command)
-    if resolved:
-        return True, resolved
+
+    env = dict(os.environ)
+    _ensure_writable_caches(env)
+    import_name = command.replace('-', '_')
+    warm = argv[:-1] + ['python', '-c', f'import {import_name}']
+    logger.info('[MCP] pre-warming vendored launcher %r: %s', command, ' '.join(warm))
+    try:
+        proc = pkg.subprocess.run(
+            warm, env=env, capture_output=True, text=True, timeout=300)
+    except (pkg.subprocess.TimeoutExpired, OSError) as e:
+        msg = f'uv warm did not complete: {e}'
+        logger.error('[MCP] pre-warm of %r failed: %s', command, e)
+        with pkg._install_lock:
+            pkg._install_last_error[command] = msg
+        return False, msg
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout or '').strip().splitlines()[-5:]
+        msg = f'uv warm exited {proc.returncode}: ' + ' | '.join(tail)
+        logger.error('[MCP] pre-warm of %r failed: %s', command, msg)
+        with pkg._install_lock:
+            pkg._install_last_error[command] = msg
+        return False, msg
     with pkg._install_lock:
-        why = pkg._install_last_error.get(command, '')
-    return False, why
+        pkg._install_last_error.pop(command, None)
+    logger.info('[MCP] pre-warm of %r OK', command)
+    return True, ' '.join(argv)
 
 
 def prewarm_all_vendored() -> dict[str, str]:
-    """Pip-install every registered vendored launcher that isn't resolvable yet.
+    """Warm the isolated env of every registered vendored launcher.
 
     Meant to run ONCE in a background thread at startup so the App-Store
-    "Install" click is normally just the sub-second MCP handshake instead of
-    a cold pip install. Blocking (pip) — never call from the event loop.
+    "Install" click (and boot auto-connect) is normally just the sub-second
+    MCP handshake instead of a cold dependency resolution. Blocking — never
+    call from the event loop.
 
-    Returns ``{command: 'ok' | reason}`` for the launchers that needed work
-    (already-resolvable ones are skipped silently).
+    Returns ``{command: 'ok' | reason}`` for the launchers that had a source
+    to warm.
     """
     pkg = _pkg()
     pkg._reload_vendored_if_changed()
     out: dict[str, str] = {}
     for command in list(pkg._VENDORED_LAUNCHERS.keys()):
         try:
-            import shutil as _shutil
-            if _shutil.which(command) or pkg._resolve_launcher(command):
-                continue
             if pkg._find_vendored_source(command) is None:
                 continue
             ready, detail = pkg.prewarm_vendored_launcher(command)
-            out[command] = 'ok' if ready else (detail or 'install failed')
+            out[command] = 'ok' if ready else (detail or 'warm failed')
         except Exception as e:  # never let pre-warm crash boot
             logger.warning('[MCP] pre-warm of %r failed: %s', command, e)
             out[command] = f'error: {e}'

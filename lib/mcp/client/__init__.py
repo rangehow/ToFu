@@ -53,9 +53,7 @@ from lib.mcp.client._state import (  # noqa: E402,F401
     _vendored_mod,
     _VENDORED_LAUNCHERS,
     _repo_root,
-    _install_attempted,
     _install_lock,
-    _install_cmd_locks,
     _install_last_error,
     _vendored_mtime,
     _vendored_reload_lock,
@@ -88,13 +86,12 @@ from lib.mcp.client._vendor import (  # noqa: E402,F401
     is_vendored_launcher,
     prewarm_vendored_launcher,
     prewarm_all_vendored,
+    vendored_launch_argv,
 )
 
 # ── Launcher resolution + first-connect auto-install ─────────────────────────
 from lib.mcp.client._install import (  # noqa: E402,F401
     _LAUNCHER_HINTS,
-    _try_autoinstall_launcher,
-    _run_pip_install,
     get_install_job,
     start_install_job,
     _resolve_launcher,
@@ -120,8 +117,7 @@ __all__ = [
     'start_install_job',
     '_resolve_launcher',
     '_launcher_install_hint',
-    '_try_autoinstall_launcher',
-    '_run_pip_install',
+    'vendored_launch_argv',
     '_find_vendored_source',
     '_reload_vendored_if_changed',
     '_check_snapshot_staleness',
@@ -129,7 +125,6 @@ __all__ = [
     '_reconcile_npx_cache',
     '_coerce_args_to_schema',
     '_extract_read_only_hint',
-    '_install_attempted',
     '_install_jobs',
     '_bridge_singleton',
 ]

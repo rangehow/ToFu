@@ -6,7 +6,7 @@ function-calling format, dispatches calls, and runs the keepalive /
 credential-health background sweeps.
 
 Facade-routing: the launcher/install/staleness functions that tests
-monkeypatch (``_resolve_launcher`` / ``_try_autoinstall_launcher`` /
+monkeypatch (``_resolve_launcher`` / ``vendored_launch_argv`` /
 ``_launcher_install_hint`` / ``_check_snapshot_staleness``) are resolved
 through ``_pkg()`` at call time so a patch on ``lib.mcp.client`` is honoured.
 """
@@ -726,33 +726,31 @@ class MCPBridge:
 
                     # Pre-flight: verify the launcher is resolvable. Without
                     # this we get a cryptic FileNotFoundError deep inside
-                    # mcp.client.stdio. If it's not on PATH, try to self-heal
-                    # by resolving a pip-installed console script that lives
-                    # next to the running interpreter (the common "installed
-                    # but not on the subprocess PATH" case) before giving up.
+                    # mcp.client.stdio.
+                    #
+                    # Vendored internal servers are translated FIRST: a bare
+                    # name like ``hope-mcp`` becomes
+                    # ``uv run --no-project --with-editable <src> hope-mcp``,
+                    # so the server resolves its own dependency tree into its
+                    # OWN environment and its ``mcp`` never couples to Tofu's
+                    # interpreter. This must happen before the PATH checks —
+                    # a stale pip-installed console script in the shared env
+                    # is precisely what we must NOT launch.
+                    launch_argv = _pkg().vendored_launch_argv(command)
+                    if launch_argv is not None:
+                        logger.info(
+                            '[MCP] %s: launching vendored server isolated: %s',
+                            name, ' '.join(launch_argv))
+                        command = launch_argv[0]
+                        args = launch_argv[1:] + list(args)
+
                     import shutil as _shutil
                     if not _shutil.which(command):
+                        # Not on PATH: try resolving a console script that
+                        # lives next to the running interpreter (the common
+                        # "installed but not on the subprocess PATH" case)
+                        # before giving up.
                         resolved = _pkg()._resolve_launcher(command)
-                        if not resolved:
-                            # Last resort: if this is a vendored internal
-                            # server, pip-install it into Tofu's own env now
-                            # so onboarding is zero-touch (no PATH edits, no
-                            # manual install). One attempt per process.
-                            #
-                            # CRITICAL: ``_try_autoinstall_launcher`` runs a
-                            # BLOCKING ``subprocess.run`` (pip, up to 300s). We
-                            # are on the shared MCP event loop here, so calling
-                            # it inline would freeze EVERY other server's
-                            # keepalive / tool-calls / connects for the whole
-                            # install. Offload to a worker thread (mirrors
-                            # ``_reconnect_server``'s ``run_in_executor``) so a
-                            # cold install never stalls the loop. Normally this
-                            # path isn't even reached — the install ROUTE
-                            # pre-warms the launcher in a Flask worker thread
-                            # first (see ``prewarm_vendored_launcher``).
-                            owner_loop = asyncio.get_running_loop()
-                            resolved = await owner_loop.run_in_executor(
-                                None, _pkg()._try_autoinstall_launcher, command)
                         if resolved:
                             command = resolved
                         else:

@@ -1,3 +1,13 @@
+### 2026-07-31(续·B2 curl 助手:渲染一份 bash 语法,却假定全世界都在 bash 里粘贴) — owner 实测把 OAuth 救命路径的命令粘进 Windows CMD:`'https:` 被当成 host(curl: (3) Bad hostname),每条续行变成「不是内部或外部命令」。修法不是「检测 Windows 换格式」,而是**三种 shell 全给、sniff 只决定谁排第一**(commit `dcd61e62`,3 文件 +459/-8;新套件 **9/9**,**NEUTER×2**,相邻环 26/26,tsc 闸 3/3)
+
+- **★ 为什么不做「平台感知」而做「全部给」:** 这条 B2 路径的存在前提就是浏览器和服务器都够不着 token 端点,只剩**用户自己的终端**能出去 —— 而自建部署下那个终端**经常和浏览器不在同一台机器**(远程服务器 + 本机浏览器、VS Code tunnel)。浏览器的 UA 对目标 shell **没有证据力**,sniff 错了连个切换的余地都没有。所以 `_renderCurl` 一份参数三份渲染 + 选择器,UA sniff 只决定默认显示哪份。这是对「platform-aware or both formats」二选一的第三种回答:**给出全部,让排序去猜。**
+- **★ 守卫先抓的是我自己渲染器里的真 bug,不是坏 fixture:** 第一版 CMD 转义写成「先把所有 `\` 加倍再转引号」,对抗 payload(`c'o\de$\`tick" end`)的 MSVCRT 回放实测**读出了 4 个反斜杠而正确值是 2 个** —— MSVCRT 的规则是「反斜杠只有在紧贴引号的串里才是转义符,其余位置是字面量」,所以**只有紧贴引号或结尾的反斜杠串才允许加倍**。盲加倍对 OAuth 的安全字符集是隐性正确的(那些字符根本不存在),测试就是为此带了一个不存在的字符集。**又一个「对抗输入才照得出」的实例:用真实字符集跑,这个 bug 在任何测试里都看不见。**
+- **★ harness 自己挂了两次,两次都是「node 不是浏览器」的同族:** ①node 有全局 `BroadcastChannel`,oauth.js 加载时就开了一个,channel 挂着 event loop **永不退出**,harness 全部 60s 超时 —— 而 3 条纯源码扫描的守卫照样绿,如果套件全是扫描型,这个挂法会无声通过;②node 21+ 有 getter-only 的全局 `navigator`,裸赋值静默 no-op,UA sniff 读到的是 `Node.js/…` 而不是我注入的 Windows UA。**在 node 里驱动浏览器模块,每次都要重新问一遍:这个全局在 node 里也存在吗?它的语义一样吗?**
+- **我自己的测试断言也错了一处:** form 变体断言拿默认 code 去对对抗 code 渲染出的串 —— 与 7-30「等价性证明验的是垃圾输入」同型:**构造输入的人必须和写断言的人对一遍参数。**
+- **证据分级如实收口:** bash 变体是**真执行**(stub curl 起 PATH,argv 逐字节回放,含单引号/反斜杠/美元/反引号 payload);CMD 是 **MSVCRT 规则仿真**(CommandLineToArgvW 的 Python 重实现);PowerShell 是**结构回环**(续行拼接 + 单引号字面量解析)—— 后两者本机跑不了真 shell,在套件 docstring 里写明了这个边界。bash 变体对无撇号 payload 与旧输出**逐字节一致**(回归锚),且新增的 `'\''` 惯用法让带撇号 payload 也能活。
+- **验收边界:** 纯前端(`oauth.js` + `settings.css` 一条 active 规则),**需重启 + bundle/css 重建**;真实 Windows CMD/PowerShell 未实测(证据为上述仿真与结构回环)。
+
+### 2026-07-31(续·B3 配对码:owner 拍板 D-关票,交付是把「决定不做」钉进设计稿的决策日志)
 ### 2026-07-31(续·B3 配对码:owner 拍板 D-关票,交付是把「决定不做」钉进设计稿的决策日志) — `pt_ea4dda44ec0e485a` DONE(关闭,非实现);`docs/UNIFIED_DEVICE_BRIDGE_DESIGN.md` §7 #3 + 路线图 B3 行已记推翻;与 `dd79cd28`(Chrome 不上架)同族:**一张「决定不做」的票,真产物是让下一个 agent 不会把已关闭的调查从头再跑一遍**
 
 - **★ 票面核心机制在 Chrome 上结构上不可能,这是关票的技术依据:** 设计稿拍板 3 写「同机托盘直写 `chrome.storage.local`」。实测 Chrome 对扩展外部只开两条通道 —— `externally_connectable` 声明的扩展/网页(经 runtime.sendMessage)与 `nativeMessaging`(经注册的 native host);**不存在外部进程直写扩展存储的机制**。托盘是本机 Python 进程,两种身份都不是 ⇒ 不是难做,是做不到。两个替代通道对本部署形态也不可达:`externally_connectable` 需固定扩展 ID(load-unpacked 每次安装 ID 随机)且 matches 无法枚举自建部署地址;`nativeMessaging` 需按平台注册 native host,源码运行用户不可用。

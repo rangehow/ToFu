@@ -1255,3 +1255,11 @@
 - **三态分诊(共享树纪律):** 环中 3 类红全部非本批 —— `test_frontend_streaming_perround_en_hide`(兄弟未提交 WIP 套件)、streaming_ui/stall_watch 的 tsc 错(兄弟 pt_e0ea29f2 停滞卡线在飞)、`test_frontend_send_failure_persists_message` 2 红(**pristine HEAD worktree 复现** = HEAD 原生,catch 分支 rescue 对形状守卫被兄弟 startup-stop 提交改坏)—— 已单独立票 `pt_ca1b3b2f53874ec8`,本批不扩面。HEAD+仅我的 diff 复跑:与 pristine HEAD 结果逐条一致,零回归。
 - **peer 协调:** 向 ms923f1d(duplicate-msgId 身份追查)发边界通报 —— adopt 分支是新增的 `_msgId` 写入点(收敛到后端同款 canonical id),命中请对线。
 - **验收边界:** 纯前端,**需重启 + bundle 重建生效**;重复占位的确切起源待 fix 3 的上报在真实复发时钉死(取证先行,与 GLIBCXX 票的处置同构)。
+
+### 2026-08-01(续·误卷事故处置 + 占位去重类别收口:owner 复核两连抓,都属实) — 撤销 `2b9b873f` + 收口 `0fbdfafb`(4 文件 +178/-18;守卫 **11/11**,相邻环 **67+**)
+
+- **误卷(owner 复核抓出,我报告里漏掉的回归):** `71e9c8fd` 整文件 `git add sse_pipeline.js` 把兄弟停滞卡 epic(pt_e0ea29f2)未提交的 dispatchSSEEvent 内 `stallWatchFeed` 8 行(typeof 闸、惰性)卷入——HEAD 一度带对未跟踪符号的悬空引用(tsc sse_pipeline.js:685-686 两处新增,此前我 grep 过滤后拿 `$?=0` 当 tsc 结论,**「过滤后的退出码不是证据」**)。处置按共享树先例不改写历史:外科手术提交 `2b9b873f` 从 HEAD 撤下正好那 8 行,再原样放回工作区为未提交内容(兄弟 WIP 一行不少,`git diff` 可见);tsc(sse_pipeline=0)与守卫 7/7 复验;已 project_message 通知 ms923f1d 照常提交。**教训复诵第三次:整文件 add 在共享树上就是会卷走兄弟;pathspec 精确到文件不够,提交前要 `git diff --cached` 扫外来 hunk。**
+- **类别收口(owner:「去重只覆盖了 send」):** 普查 9 个 assistant 占位推送点——可达 5 个全部路由进 `_adoptTaskPlaceholder`:send(上批)+ regenerateFromUser(canonical=_regenAssistantMsgId)+ saveEditAndResend(regen 孪生,canonical=_editAssistantMsgId)+ _recoverTimedOutChatTask/队列自动派发/autopilot 续跑(后三个无 canonical id,走 **no-restamp 变体**:candidate 不带 _msgId,采用不改铸——原 send 铸造的 id 不可知,改铸反而会把它从后端 slot 的身份上扯走)。不可达 2 个逐条证明:`startAssistantResponse` 占位在 POST **之前**推送(排序证明,迟到 attach 只能复用它);`initActiveTasks` 推送与 connect 在 boot 扫描内同步连续(构造证明,其后 attach 见 activeStreams 即退)。
+- **守卫账:** 新增 C4(no-restamp 行为钉:existing._msgId 保留)+ 3 条接线守卫(regen/edit/三路 no-restamp)失败先行 3 红;NEUTER-C4(恒改铸)→ C4 红、C2 锚绿。套件 7→**11/11**。
+- **三态分诊(再次):** 环中 `test_continue_lossless::...captures_signature` 红 —— `SSEAccumulator() got unexpected kwarg 'anthropic_translator'`,兄弟 responses 批构造签名收敛为 wire_translator 后的测试漂移,backend LLM 层与本批无关,立票 `pt_850e541fc3ce4aba`。
+- **验收边界:** 纯前端,**需重启 + bundle 重建生效**。

@@ -639,7 +639,18 @@ _BUNDLE_FILES = [
     'core/translation_model.js',
     'core/cache_stats.js',
     'core/markdown.js',
-    'core/health_stream_timer.js',
+    # core/health_stream_timer.js — MOVED to _DEFERRED_FILES 2026-08-01
+    # (Epic-E pt_3879f00e sub-part 3 slice B, 62KB out of the render-
+    # blocking core; see docs/EPIC_E_SIZE_LEDGER.md). Every external
+    # consumer is typeof-guarded: twUpdate/twStart call sites across the
+    # SSE handlers (60 guarded, census 2026-08-01), the 5 compound-line
+    # twStop abort-path sites gated in the same commit, streamHealth*
+    # (net-latency.js), _probeAllStuckStreamsOnWake (backend_offline_
+    # monitor.js), _seedStreamTimerStart (sse_poll_fallback.js). NO
+    # feature-loader stub by design: there is no one-time boot wiring to
+    # miss (unlike _wireConvSyncPush) — the module self-initializes per
+    # stream on first twStart, the idle prefetch lands it ~2s after boot,
+    # and the gates degrade to "no elapsed badge until then".
     'core/toast.js',
     'core/dialog.js',  # themed confirm/alert/prompt — after toast (same window scope)
     # Unified API client — owns every backend HTTP call. Depends on
@@ -1019,6 +1030,13 @@ _DEFERRED_FILES = [
     # loadConversationsFromServer, pushSubscribe, …) is in the core
     # bundle which always loads first. See the _BUNDLE_FILES moved-note.
     'core/cross_tab_sync.js',
+    # Stream health/elapsed timers (62KB) — deferred 2026-08-01 (Epic-E
+    # sub-part 3 slice B). Gates + idle prefetch only (no stub — see the
+    # _BUNDLE_FILES moved-note for the no-one-time-wiring argument). Its
+    # load-time side effects (visibilitychange/pageshow listeners, window
+    # exposes) touch only browser globals; every core symbol it reads is
+    # in the core bundle which always loads first.
+    'core/health_stream_timer.js',
 ]
 
 # The entry-point functions the feature bundle DEFINES. feature-loader.js

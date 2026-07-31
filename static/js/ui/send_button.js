@@ -177,7 +177,7 @@ function updateSendButton() {
         //   buffer — a late delta event arriving between abort() and the
         //   AbortError propagation would otherwise accumulate into a dead
         //   buffer. twStop is idempotent and safe to call twice.
-        try { twStop(activeConvId); }
+        try { if (typeof twStop === 'function') twStop(activeConvId); }
         catch (_e) { console.warn('[stopBtn] twStop threw:', _e); }
       } else if (conv && conv.activeTaskId) {
         // ★ Record aborted task ID

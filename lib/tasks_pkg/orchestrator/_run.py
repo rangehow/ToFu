@@ -49,7 +49,6 @@ from lib.tasks_pkg.model_config import (
     _assemble_tool_list,
     _resolve_model_config,
 )
-from lib.tasks_pkg.stream_handler import analyse_stream_result
 from lib.tasks_pkg.system_context import (
     _inject_system_contexts,
     _disabled_prompt_blocks,
@@ -136,6 +135,9 @@ from lib.tasks_pkg.orchestrator._abort_round_start import (
 )
 from lib.tasks_pkg.orchestrator._stream_acc_settle import (
     settle_stream_accumulator,
+)
+from lib.tasks_pkg.orchestrator._stream_decision import (
+    apply_stream_decision,
 )
 
 
@@ -744,20 +746,18 @@ def run_task(task: dict[str, Any]) -> None:
             #   cache-inject contracts.
             settle_stream_accumulator(_stream_acc, task, rs, tid=tid)
 
-            # ★ Post-stream analysis: premature close, abort, normal exit
-            stream_decision = analyse_stream_result(
-                rs.assistant_msg, rs.last_finish_reason, task, tid, rs.model,
-                round_num, _premature_retry_count, messages,
-                usage=rs.last_usage,
-            )
-            _premature_retry_count = stream_decision['premature_retry_count']
-            rs.last_finish_reason = stream_decision['last_finish_reason']
-            if stream_decision['abort_detected_phase']:
-                rs.abort_phase = stream_decision['abort_detected_phase']
-            if stream_decision['action'] == 'break':
-                rs.exit_reason = stream_decision['loop_exit_reason']
+            # ★ Post-stream analysis: premature close / abort / normal
+            #   exit. Extracted 2026-07-31 (pt_03f4cdf1 slice 25) to
+            #   lib.tasks_pkg.orchestrator._stream_decision — see that
+            #   module's docstring for the action taxonomy and the
+            #   chassis-owned premature_retry_count return contract.
+            _stream_action, _premature_retry_count = apply_stream_decision(
+                task, rs, round_num=round_num, tid=tid,
+                premature_retry_count=_premature_retry_count,
+                messages=messages)
+            if _stream_action == 'break':
                 break
-            if stream_decision['action'] == 'continue':
+            if _stream_action == 'continue':
                 continue
 
             # ── Per-round gates: per-round diagnostic + max_budget_usd

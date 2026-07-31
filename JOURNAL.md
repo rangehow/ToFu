@@ -1,3 +1,10 @@
+### 2026-07-31(续·mpDeleteFolder 乐观化:乐观 UI 系列收口 —— 最后一个已知 await-first 按钮) — owner 拍板「修,不扩面」;`pt_e8a166d6a4b64123`(3 文件;新套件 **3/3**,失败先行 **3 红**,**NEUTER×2 各咬各的**,相邻环+闸 **80/80**)
+
+- **最后一个残留的形状:** 确认框关掉后 `await Api.project.rmdir` 才重建列表,目录行在 RTT 内原地不动。而它同时是**全场最适合乐观删除的一个**:删除进 `.tofu_trash` 回收站、天然可恢复,乐观移除的误判成本为零。
+- **修法:** 确认同一任务内 —— `_browseState.dirs` splice + **新接缝 `_renderBrowseList()`** 同步重绘(行 HTML 从两份收一份,browseDirectory 尾部改走接缝,`filesCount` 入 `_browseState` 保全空态文案)+ `_mpFolders` staged 标签同步摘除;后台 rmdir → 成功 toast + 刷新;失败 → **`browseDirectory` 重拉(服务端真相恢复行)** + staged 标签按原位回插 + 既有 alert。回滚两条腿都过了行为级实测(行恢复 / 标签恢复)。
+- **守卫:** harness 驱动**真实** project.js(经真实 browse 播种再删):ok / fail / fail-staged 三 scenario;失败先行 3 红精确(row_removed_instantly×2 + restore_refetch×1 —— 旧代码失败路径连重拉都没有);NEUTER-J1(摘即时移除)→ row_removed_instantly×3 + tag_removed_instantly×1 红;NEUTER-J2(摘失败重拉)→ restore_refetch×1 红,回滚锚保持绿。相邻环 project 面板 7 套 + 闸共 **80/80**。
+- **系列总账(乐观 UI 四批 + 本批,owner 目标「所有按钮点击立即生效」):** ①删除家族(deleteConversation/_execDeleteTurn)②普查 5 个(translateMessage/updateFolder/deleteFolder/skills×2)③「连接中…」窗口可停止(三管线 + 共享 `_userStopDuringStartup`)④MCP/timer 面板(pending 映射挂渲染接缝)⑤本批。累计新/改套件 **33 条全绿**,每条修复均失败先行 + NEUTER 验证;`_browseState` 的 `let`  eval 作用域坑第三次出现,断言全程走用户可见契约。
+- **验收边界:** 纯前端,**需重启 + bundle 重建生效**。
 ### 2026-07-31(续·stalled 判决传到快照:「无结果」从此只留给「从未产出」) — owner 复核冒烟时核出最后语义洞:判决只活在日志;补上后**真死情形下面板也能回答「为什么」**(commit `b5900bfd` + i18n 键经 `0185d9a7` 落地,5 文件 +273/-1;守卫 29→**34**,**NEUTER×5 各咬各的**(3/3/1/1/1);相邻环 **120/120**)
 
 - **洞的形状(owner 核出,我复核属实):** `master.py:449` 对「terminated + 无 result」恒判 `unknown` → 前端 `phaseMap.unknown` = **无结果**;`master.py`/`snapshot.py` 里 `stalled` 一词命中 **0**。冒烟里 smoke-silence 是自己 1010s 回来兜住的;**真死了,卡片依然显示「无结果」** —— 用户最初问的就是「为什么无结果???」。

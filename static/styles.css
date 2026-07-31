@@ -7894,6 +7894,32 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* ── Live run_command timer chip (countdown when the call declared a
+ *   `timeout`, elapsed count-up otherwise). Tabular numerals so the width
+ *   does not jitter as the digits change once per second, and flex-shrink:0
+ *   so the description (which owns flex:1) truncates before the timer does —
+ *   the timer is the one thing on this row that must stay readable. */
+.ptool-cmd-timer {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--mono, ui-monospace, monospace);
+  color: var(--text-secondary);
+  opacity: 0.75;
+  white-space: nowrap;
+}
+/* Under 10s left — the command is about to be killed, so stop being quiet. */
+.ptool-cmd-timer-soon {
+  color: #d97706;
+  opacity: 1;
+}
+/* Past the deadline: the backend is SIGKILLing the process tree. */
+.ptool-cmd-timer-over {
+  color: #dc2626;
+  opacity: 1;
+}
 .ptool-cmd-code {
   margin: 0;
   padding: 3px 0 5px;

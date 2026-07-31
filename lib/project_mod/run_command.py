@@ -517,7 +517,7 @@ def _format_run_output(command, stdout, stderr, exit_code, timed_out=False, abor
 
 
 def tool_run_command(base, command, timeout=None, stdin_callback=None, task=None,
-                     on_chunk=None, cwd_sink=None):
+                     on_chunk=None, cwd_sink=None, on_spawn=None):
     """Execute a shell command with optional interactive stdin support.
 
     Args:
@@ -544,6 +544,18 @@ def tool_run_command(base, command, timeout=None, stdin_callback=None, task=None
             sees output incrementally instead of waiting for the command to
             finish.  Exceptions raised inside the callback are logged and
             swallowed — they must NOT abort the command.
+        on_spawn: Optional callback ``fn(exec_start_ms, deadline_ms|None)``
+            invoked ONCE, the instant the subprocess is actually spawned, with
+            the EFFECTIVE budget — i.e. after the cross-DC multiplier and the
+            ``MAX_COMMAND_TIMEOUT`` clamp have been applied. This is the only
+            point at which the real deadline exists: the caller's requested
+            ``timeout`` is NOT it (a DolphinFS path multiplies it ×3), and the
+            round's ``tStart`` is NOT the start (a write-approval gate can sit
+            minutes between announce and spawn). Both values are epoch
+            MILLISECONDS so they compare directly against the browser's
+            ``Date.now()``. ``deadline_ms`` is None when the command runs
+            unbounded, which is the DEFAULT. Exceptions are logged and
+            swallowed — telemetry must never abort the command.
     """
     if not command or not command.strip():
         return 'Error: Empty command.'
@@ -689,16 +701,36 @@ def tool_run_command(base, command, timeout=None, stdin_callback=None, task=None
     if not stdin_callback:
         try:
             return _run_command_simple(command, full_command, timeout, base, task=task,
-                                       on_chunk=on_chunk)
+                                       on_chunk=on_chunk, on_spawn=on_spawn)
         finally:
             _flush_cwd_capture()
 
     # ── Interactive path: Popen with stdin pipe + stdin detection ──
     try:
         return _run_command_interactive(command, full_command, timeout, base, stdin_callback,
-                                        on_chunk=on_chunk, task=task)
+                                        on_chunk=on_chunk, task=task, on_spawn=on_spawn)
     finally:
         _flush_cwd_capture()
+
+
+def _safe_on_spawn(on_spawn, timeout):
+    """Invoke ``on_spawn(exec_start_ms, deadline_ms)``, swallowing any exception.
+
+    Called at the ONE instant both facts are true: the subprocess exists, and
+    ``timeout`` already carries the effective budget (post cross-DC multiplier,
+    post clamp). ``deadline_ms`` is None for an unbounded command.
+
+    Mirrors ``_safe_on_chunk``: the callback comes from the SSE layer, and a
+    bug in event emission MUST NOT abort the subprocess.
+    """
+    if not on_spawn:
+        return
+    try:
+        now_ms = time.time() * 1000.0
+        deadline_ms = (now_ms + timeout * 1000.0) if timeout else None
+        on_spawn(now_ms, deadline_ms)
+    except Exception as e:
+        logger.debug('[run_command] on_spawn callback raised: %s', e)
 
 
 def _safe_on_chunk(on_chunk, stream, text):
@@ -729,7 +761,8 @@ def _safe_on_chunk(on_chunk, stream, text):
         logger.debug('[run_command] on_chunk callback raised: %s', e)
 
 
-def _run_command_simple(command, full_command, timeout, base, task=None, on_chunk=None):
+def _run_command_simple(command, full_command, timeout, base, task=None, on_chunk=None,
+                        on_spawn=None):
     """Execute command with abort-awareness + incremental output streaming.
 
     Reads stdout/stderr in non-blocking 64 KB chunks using ``safe_select_pipes``
@@ -765,6 +798,12 @@ def _run_command_simple(command, full_command, timeout, base, task=None, on_chun
         return (f'$ {command}\n\n'
                 f'Error starting command: {e}\n'
                 f'[exit code: -1]')
+
+    # ★ Spawn clock — the subprocess now EXISTS and `timeout` already holds the
+    #   effective budget, so this is the earliest and only point at which a
+    #   truthful deadline can be published. Fired before the read loop so the
+    #   countdown appears immediately rather than at the first heartbeat tick.
+    _safe_on_spawn(on_spawn, timeout)
 
     # Store PID on task so abort handler can kill it directly
     if task is not None:
@@ -1194,7 +1233,7 @@ def _collect_descendants(parent_pid):
 
 
 def _run_command_interactive(command, full_command, timeout, base, stdin_callback,
-                              on_chunk=None, task=None):
+                              on_chunk=None, task=None, on_spawn=None):
     """Popen-based execution with stdin detection and interactive input.
 
     When *task* is provided, the subprocess PID/PGID is stored on the task
@@ -1244,6 +1283,13 @@ def _run_command_interactive(command, full_command, timeout, base, stdin_callbac
     )
     if not nonblocking_ok:
         logger.warning('run_command: non-blocking pipe setup failed — falling back to polling I/O')
+
+    # ★ Spawn clock — same contract as _run_command_simple: the subprocess
+    #   exists and `timeout` already carries the effective budget, so this is
+    #   the earliest truthful deadline. Both runners must publish it, else an
+    #   interactive command (the ones that block LONGEST) would be the only
+    #   kind with no countdown.
+    _safe_on_spawn(on_spawn, timeout)
 
     # Store PID/PGID on task so the abort handler can kill it directly
     # (mirrors _run_command_simple) — the interactive path was previously

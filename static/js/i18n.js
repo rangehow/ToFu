@@ -510,6 +510,12 @@ var _i18n = {
   'timerBlock.waitingFirstPoll': { zh: '等待首次检查…', en: 'waiting for first check…' },
   'timerBlock.nextCheckIn': { zh: '约 {n}s 后进行下次检查…', en: 'Next check in ~{n}s…' },
   'timerBlock.nextCheckNow': { zh: '即将进行下次检查…', en: 'Next check due now…' },
+  // ── Live run_command timer chip (tool_rounds.js _cmdTimerState) ──
+  //    {n} is a PREFORMATTED duration (45s / 3m12s / 1h04m) substituted by the
+  //    caller's .replace(), so keep the placeholder verbatim. There is no key
+  //    for the count-up case: it renders the bare duration in every language.
+  'toolTimer.countdown': { zh: '剩余 {n}', en: '{n} left' },
+  'toolTimer.terminating': { zh: '已超时，正在终止…', en: 'timed out, terminating…' },
   'timerBlock.headTriggered': { zh: '经过 {n} 次检查后触发', en: 'Triggered after {n} poll{s}' },
   'timerBlock.headOrphaned': { zh: '任务已中断（{n} 次检查，定时器仍在后台运行）', en: 'Task interrupted ({n} poll{s}, timer still active in background)' },
   'timerBlock.headSkipSuffix': { zh: '，跳过 {n} 次', en: ', {n} skipped' },

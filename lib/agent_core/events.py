@@ -311,6 +311,21 @@ _SPECS: tuple[EventSpec, ...] = (
               'Streaming progress emitted by a long-running tool.',
               fields={'roundNum': 'round index', 'toolCallId': 'tool-call id',
                       'detail': 'progress text',
+                      'execStartTs': '(optional) epoch ms when the subprocess '
+                                     'was actually SPAWNED. Distinct from '
+                                     'tStart (round ANNOUNCE time): a write '
+                                     'approval or serial-write wait sits '
+                                     'between them, so an elapsed derived from '
+                                     'tStart over-reports execution',
+                      'deadlineTs': '(optional) epoch ms at which the backend '
+                                    'will SIGKILL this command. Absolute, and '
+                                    'authoritative: the client must NOT derive '
+                                    'it from the requested timeout, because '
+                                    'the effective budget is the requested one '
+                                    'AFTER the cross-DC multiplier, the '
+                                    'MAX_COMMAND_TIMEOUT clamp and the remote '
+                                    'bridge formula. Absent = no deadline '
+                                    '(the default: run_command has no ceiling)',
                       'batchItem': '(optional) the ONE item of a batch call '
                                    '(query string / URL) this frame reports',
                       'batchDone': '(optional) how many batch items have '

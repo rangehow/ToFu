@@ -34,7 +34,7 @@ from lib.tasks_pkg.llm_fallback import _llm_call_with_fallback
 from lib.tasks_pkg.manager import (
     _strip_base64_for_snapshot,  # noqa: F401  (re-exported by the package facade after slice 15)
     append_event,
-    checkpoint_task_partial,
+    checkpoint_task_partial,  # noqa: F401  (re-exported by the package facade)
     persist_task_result,
     stream_llm_response,  # noqa: F401  (re-exported by the package facade)
 )
@@ -127,6 +127,9 @@ from lib.tasks_pkg.orchestrator._round_message_hygiene import (
 )
 from lib.tasks_pkg.orchestrator._abort_before_tools import (
     handle_abort_before_tools,
+)
+from lib.tasks_pkg.orchestrator._round_checkpoint import (
+    run_round_checkpoint_and_close,
 )
 
 
@@ -885,27 +888,14 @@ def run_task(task: dict[str, Any]) -> None:
             else:
                 rs.consecutive_tool_timeouts = 0  # Reset on successful tool execution
 
-            # ══════════════════════════════════════════
-            #  ★ Crash-recovery checkpoint: persist partial state to DB
-            # ══════════════════════════════════════════
-            # After each tool execution round, save current content/thinking
-            # to task_results + conversation so data survives a server crash.
-            # Throttled to at most once every 10 seconds to avoid DB pressure.
-            _now = time.time()
-            if _now - rs.last_checkpoint_ts >= 5:
-                try:
-                    checkpoint_task_partial(task)
-                    rs.last_checkpoint_ts = _now
-                except Exception as e:
-                    logger.warning('[%s] Checkpoint after round %d failed (non-fatal): %s', tid, round_num + 1, e, exc_info=True)
-
-            # ★ RENDER_CONTRACT Phase 3: explicit round-end boundary for a round
-            #   that issued tool calls and is about to loop into the next round.
-            #   Reached only at the natural end of a tools-executed iteration
-            #   (an early `continue` for a premature-close retry does NOT reach
-            #   here, so it never emits a spurious end for a round being re-run).
-            append_event(task, build_event(EventType.ROUND_END,
-                                           roundNum=round_num, reason='tools'))
+            # ★ Crash-recovery checkpoint (throttled) + RENDER_CONTRACT
+            #   Phase 3 round close. Extracted 2026-07-31 (pt_03f4cdf1
+            #   slice 20) to
+            #   lib.tasks_pkg.orchestrator._round_checkpoint — see that
+            #   module's docstring for the 5s throttle / non-fatal /
+            #   ROUND_END(reason='tools') contracts.
+            run_round_checkpoint_and_close(task, rs,
+                                           round_num=round_num, tid=tid)
 
 
 

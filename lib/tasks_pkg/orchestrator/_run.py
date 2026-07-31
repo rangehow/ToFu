@@ -131,6 +131,9 @@ from lib.tasks_pkg.orchestrator._tool_timeout_breaker import (
 from lib.tasks_pkg.orchestrator._tool_dispatch_round import (
     run_tool_dispatch,
 )
+from lib.tasks_pkg.orchestrator._abort_round_start import (
+    handle_abort_at_round_start,
+)
 
 
 
@@ -538,19 +541,14 @@ def run_task(task: dict[str, Any]) -> None:
         #   Original for-loop was: range(max_tool_rounds + 1) = [0..max_tool_rounds].
         while round_num + 1 <= max_tool_rounds + _premature_retry_count:
             round_num += 1
-            if task['aborted']:
-                rs.abort_phase = f'loop_start_round_{round_num}'
-                rs.exit_reason = f'aborted_at_round_{round_num}'
-                _abort_ts = task.get('_abort_timestamp', 0)
-                _now = time.time()
-                _delay = f'{_now - _abort_ts:.1f}s ago' if _abort_ts else 'unknown'
-                logger.debug('[%s] Task aborted at START of round %d model=%s '
-                             '(abort signal arrived %s, content so far: %dchars)',
-                             tid, round_num, rs.model, _delay, len(task.get('content') or ''))
-                # ★ RENDER_CONTRACT Phase 3: explicit round-end boundary even on
-                #   the abort-at-start path (the round never opened, so no
-                #   round_start was emitted for it — close nothing here; the
-                #   PREVIOUS round's end was already emitted at its own exit).
+            # ── Abort-at-round-start gate ──
+            #   Extracted 2026-07-31 (pt_03f4cdf1 slice 23) to
+            #   lib.tasks_pkg.orchestrator._abort_round_start — see that
+            #   module's docstring for the abort-signal-age forensics and
+            #   the no-ROUND_END contract (the round never opened, so
+            #   there is nothing to pair). Returns True → break.
+            if handle_abort_at_round_start(task, rs,
+                                           round_num=round_num, tid=tid):
                 break
 
             # ★ RENDER_CONTRACT Phase 3: explicit ROUND boundary. Emitted at the

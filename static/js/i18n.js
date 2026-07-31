@@ -252,6 +252,8 @@ var _i18n = {
   'timer.empty': { zh: '暂无定时器。AI 可在任务中通过 timer_create 创建。', en: 'No timers. The AI can create one with timer_create during a task.' },
   'timer.jumpHint': { zh: '点击跳转到该定时器所在对话', en: 'Click to open this timer\'s conversation' },
   'timer.convMissing': { zh: '该定时器对应的对话不在本地列表中', en: 'This timer\'s conversation is not in your local list' },
+  'timer.cancelling': { zh: '取消中…', en: 'Cancelling…' },
+  'timer.triggering': { zh: '触发中…', en: 'Triggering…' },
   'timer.logTitle': { zh: '轮询日志', en: 'Poll Log' },
   'timer.logEmpty': { zh: '暂无轮询日志记录。', en: 'No poll log entries yet.' },
   'timer.logError': { zh: '获取轮询日志失败', en: 'Failed to load poll log' },
@@ -3013,6 +3015,8 @@ var _i18n = {
   'swarm.phase.running': { zh: '工作中…', en: 'Working…' },
   'swarm.phase.retrying': { zh: '重试中…', en: 'Retrying…' },
   'swarm.phase.noResult': { zh: '无结果', en: 'No result' },
+  'swarm.phase.stalled': { zh: '已停滞', en: 'Stalled' },
+  'swarm.phase.stalledSilent': { zh: '已停滞 · 静默 {seconds}s', en: 'Stalled · silent {seconds}s' },
   'swarm.autoContinue': { zh: '子智能体完成后自动继续', en: 'Continued automatically after sub-agents finished' },
 
   // ══════════════════════════════════════
@@ -3246,6 +3250,7 @@ var _i18n = {
   'mcp.purgeFailed': { zh: '清除失败: {err}', en: 'Clear failed: {err}' },
   // Connect / reconnect
   'mcp.connecting': { zh: '连接中…', en: 'Connecting…' },
+  'mcp.uninstalling': { zh: '卸载中…', en: 'Uninstalling…' },
   'mcp.connectFailed': { zh: '连接失败: {err}', en: 'Connect failed: {err}' },
   // Save custom server
   'mcp.needName': { zh: '请输入服务器名称', en: 'Please enter a server name' },

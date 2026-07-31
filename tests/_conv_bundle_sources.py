@@ -169,6 +169,38 @@ def sources_defining(*symbols, subtree=''):
     return [os.path.join(JS_DIR, f) for f in uniq]
 
 
+def conv_family_sources(*, override=None):
+    """``core/conversations.js`` + EVERY shipped conv-family leaf, in bundle
+    order — the correct eval scope for a harness that drives a top-level
+    conversations.js function.
+
+    Why a family closure, not symbol pins (2026-08-01, measured): driving
+    ``loadConversationMessages`` / ``loadConversationsFromServer`` touches a
+    WIDE reference surface, and every hand-picked pin list went stale at the
+    next decomposition slice — five measured instances in one day
+    (_serverConvCount → conv_merge_shells, _setCacheVerifying →
+    conv_verify_visibility, _scheduleConvVerifyRetry → conv_verify_retry,
+    …), each discovered one whack-a-mole layer at a time. The decomposition
+    invariant is that every ``core/conv_*`` leaf shares window scope with
+    conversations.js by construction, so the family closure is the only
+    list that cannot drift: a future conv_* leaf joins automatically via
+    the bundle manifest. ``core/pending_sync.js`` is included explicitly —
+    it belongs to the persist family despite the different prefix.
+
+    *override* maps a bundle-relative path to a substitute (the NEUTER
+    pattern: eval a mutated copy INSTEAD of the shipped file).
+    """
+    family = [f for f in bundle_files()
+              if f.startswith('core/conv') or f == 'core/pending_sync.js']
+    out = []
+    for rel in family:
+        if override and rel in override:
+            out.append(override[rel])
+        else:
+            out.append(os.path.join(JS_DIR, rel))
+    return out
+
+
 def source_argv(*symbols, override=None, subtree=''):
     """Ordered abs paths for ``node harness <paths...>``, with optional override.
 

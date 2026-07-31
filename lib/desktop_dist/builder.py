@@ -181,7 +181,13 @@ def _pipeline(workdir: str, version: str, sha: str, log_fh) -> str:
         log_fh)
     build_reqs = _requirements_without_tofu_search(
         os.path.join(src, 'requirements.txt'), workdir)
+    # --extra-index-url pypi.org: requirements.txt itself prescribes this
+    # fallback for packages the internal mirror does not carry (measured on
+    # build attempt 3: pymupdf_layout==1.27.2.3 — the file's own comment
+    # says "install it from pypi.org if your index lacks it"). The
+    # configured mirror stays primary; this only fills its gaps.
     _sh(f'{vpy} -m pip install --quiet -r {build_reqs} '
+        f'--extra-index-url https://pypi.org/simple '
         f'pyinstaller pystray pillow psycopg2-binary pyautogui pyperclip '
         f'psutil', log_fh, cwd=src)
 

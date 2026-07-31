@@ -1,3 +1,21 @@
+### 2026-07-31(swarm 里躺着三个互不知情的时钟,没有一个在看「活有没有在推进」) — owner 报「一个 agent 无结果、另一个只有 timeout」;判据一路推到**三个独立 deadline 全部用「多久了」冒充「还活着吗」**,而 owner 亲自抓出我漏掉的第三个(`pt_deb88a8f2eeb4a76`;commit `074ac2d3`,11 文件 +1229/-46;新套件 **16/16 失败先行(5 红)**,**NEUTER×5 各咬各的**(1/1/1/2/1);A/B 干净 HEAD 对拍 **零新坏**)
+
+- **★ 屏幕上两个症状,后端是同一类病:三个 deadline 都在问「你活了多久」,而唯一能正当杀掉工作的问题是「你还在产出吗」。** 墙钟分不清「跑了 40 分钟且一直在出活」和「卡死 40 分钟」,它只保证:**一件事越是合理地耗时久,就越确定会在交付前一刻被销毁**。
+  | # | 时钟 | 实测形状 | 历史命中 |
+  |---|---|---|---|
+  | 1 | driver 全场 600s | `master.py:745` 的 `iter_completions()` **不传参**,吃 `scheduler.py:280` 默认值;deadline 在**生成器启动那一刻**算死 ⇒ 10:48 才出生的第二波继承了 10:44 定的死线 | 56 次 |
+  | 2 | agent 墙钟 1800s | 只在 `before_round` 求值 ⇒ **卡在工具里的 agent 永远走不到下一轮开头** | 0 次(结构上到不了) |
+  | 3 | session TTL 1800s | `_state.py:231` 只在 spawn 写一次时间戳 ⇒ 量的是**年龄**不是闲置 | **105 次** |
+- **★ 第三个是 owner 抓的,而我漏掉它的原因值得记:我查完前两个就以为收敛了。** 它还有一层反讽:唯一的挡箭牌 `_key_is_live` 找的是「本会话有没有非终态 chat task」,而 fire-and-forget(主 turn 已 done)**恰恰就是没有** —— 挡箭牌在最需要它的场景失效。
+- **★ 谎言的传播链是可以逐跳复现的,这比「有个 bug」有用得多:** 600.0s 到点 → `_terminated=True` + `shutdown()` + 持久化 `settled:true` → ①`await_agents` 告诉模型这些 id **"will NEVER complete"**(而 orphans **21 分钟后正常交付** `elapsed=2023.1s`/109 万 token)②`_build_agent_snapshot` 把无 result 的 agent 强判 `unknown` → 前端 `phaseMap.unknown` → **「无结果」卡片配绿色 Complete 药丸**。
+- **`coder-tests` 的形状实测可见:** 它的日志停在 `10:46:34`,`grep -c "coder-tests.*Timeout"` = **0**;而它起的 `pytest`(PID 3575697)在我排查时**仍是 server 的活子进程,已 1h09m**。
+- **★ 收尾取代截断,理由是成本而不是美观:** `_extract_partial_answer` 把 16 轮、109 万 token 的调查压成「历史里最后一句话」+`[Partial —]` 前缀。**这些钱已经花掉了**,再补一次无工具的总结轮是零头,却把碎片变成可用报告。
+- **★ 工具级心跳是 (B) 能否成立的前提,不是附加项:** agent 级信号(轮次/token/工具返回)在**进入工具那一刻就全停**,所以纯 agent 级 beacon 会把正在健康打印测试结果的 build 判成停滞 —— **重新制造它要消灭的那个 bug**。落点选 `_safe_on_chunk`(两个 run 循环共同的输出漏斗),用 **contextvar** 而非改签名:工具完全不需要知道 swarm 存在,非 swarm 路径是 no-op。
+- **★ 两个缺陷是我自己的补集守卫抓的,不是评审:** ①空 beacon 被 `is_making_progress` 判成「活着」(该默认对 driver 是对的:启动窗口不能误杀)—— 但对 TTL 意味着**死会话永生**,等于拿泄漏换了误杀。修法是分清两个问题:`tracked_agents()` 为空 ≠ 未知 agent。②我的测试断言 `agents['slow']`,而 `add_specs` 只是 **submit**,满载时工厂还没被调用 ⇒ `KeyError`,**只在完整套件里红、单跑全绿**。
+- **两条旧守卫就地改判据,不删:** runaway guard 原本要求 `timeout_seconds != 0`,即**点名要墙钟**;而墙钟被实测双向证伪(抓不到它要抓的 hang,却砍掉 1809/1846/1903s 的健康 agent)。改为断言**性质**(默认 agent 必须有界:no-progress 断路器 + 停滞检查),任一未接线仍然红。
+- **★ 回归只认「干净 HEAD vs 干净 HEAD+我的文件」:** 我的树有 **83 个脏文件**(绝大多数是兄弟的)。基线 30 红 / 我 29 红,**失败集逐条 diff:零新坏**(唯一差异 `test_motion_video_p5` 是已知 flake)。
+- **★ 共享树上一次真实的误提交,以及它的成因(值得所有人记):** `git commit -- <pathspec>` 提交的是该路径的**工作区状态**,会**丢弃我精心暂存的部分索引** —— 我先用 `git apply --cached` 只暂存了自己那 14 行,`--numstat` 也确认 `14 0`,结果 commit 出来是 `65 5`,**把兄弟未提交的 `on_spawn`(epic pt_1a82ffb3,其测试当时还是红的)一起带走了**。修法:`git hash-object -w` 造出「HEAD~1 + 只有我的改动」的 blob → `git update-index --cacheinfo` → `--amend`,**工作区一字未动**(`cmp` 逐字节确认,兄弟 13 处 `on_spawn` 全在)。**判据:部分暂存后必须用 `git commit`(无 pathspec),pathspec 形式只在整文件都是自己的时候才安全。**
+
 ### 2026-07-31(续·30 分钟的暗雷:reaper 成了 run_command 事实上的超时天花板) — owner 报「内部错误只有一行,还让用户自己去看日志」;查下去**那根本不是一个错误,是我们自己误杀**,而修的过程中实测**推翻了模块自己写的一句承诺**(`pt_9f5a51ba45bd423c` DONE;commit `7aa67435`,3 文件 +518/-11;新套件 **9/9 失败先行(6 红)**,**NEUTER×4 各咬各的**(4/2/1/1);相邻环 **112/112**;A/B 实测本批贡献 **0** 个新红)
 
 - **★ owner 三问里第一问的前提就得纠正:** 红框不是 Overleaf MCP 的报错(那只是他贴进去的输入),是 stuck-task-reaper 把一个**正在干活**的任务当僵尸杀了。所以答案既不是「能自动解决」也不是「该弹给用户」——**它不该发生**。

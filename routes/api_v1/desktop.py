@@ -98,7 +98,7 @@ def _update_repo() -> str:
 
 
 def _platform_assets():
-    """The (os, arch, label, glob) table from ``scripts/release_assets.py``.
+    """The (os, arch, label, glob, min_bytes) table from ``scripts/release_assets.py``.
 
     That module is the SINGLE source of truth for which files a release must
     contain — both build-desktop.yml gates already shell out to it, and
@@ -107,6 +107,12 @@ def _platform_assets():
     a hand-typed list here would keep working today and silently miss the next
     platform added, with nothing going red (the release gates only check the
     platforms still on their own list).
+
+    ``min_bytes`` is the release-gate size floor; this route ignores it but
+    must still unpack it. Sharing a table means sharing its SHAPE — widening a
+    row upstream breaks every consumer that unpacks positionally, which is
+    exactly what happened when the floor was added, so
+    ``tests/test_release_asset_size_floor.py`` pins the arity for all consumers.
 
     ``scripts/`` is not a package, so it is loaded by path. Failure is
     non-fatal: the caller degrades to the releases page, which is exactly the
@@ -343,7 +349,7 @@ def _match_platform_assets(user_agent: str, arch_hint: str = '',
         if narrowed:
             rows = narrowed
     out = []
-    for _os, _arch, label, pattern in rows:
+    for _os, _arch, label, pattern, _min_bytes in rows:
         hit = next((a for a in published
                     if fnmatch.fnmatch(a['name'], pattern)), None)
         if not hit:

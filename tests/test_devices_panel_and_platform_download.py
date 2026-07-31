@@ -429,9 +429,17 @@ def test_the_shared_list_carries_a_machine_readable_platform_key():
     mod = _asset_mod()
     seen = set()
     for entry in mod.PLATFORM_ASSETS:
-        assert len(entry) == 4, (
-            f"expected (os, arch, label, glob) entries, got {entry!r}")
-        os_key, arch, _label, _glob = entry
+        # The arity is pinned because consumers unpack these rows POSITIONALLY
+        # (routes/api_v1/desktop.py, scripts/release_assets.py and the helpers
+        # in this file), so widening a row silently breaks them — the route's
+        # table load is wrapped in `except Exception` and degrades to the
+        # releases page, i.e. the symptom is "direct download links quietly
+        # disappeared", not a traceback. min_bytes joined the row when the
+        # release gate learned to reject a correctly-named but hollow
+        # installer; see tests/test_release_asset_size_floor.py.
+        assert len(entry) == 5, (
+            f"expected (os, arch, label, glob, min_bytes) entries, got {entry!r}")
+        os_key, arch, _label, _glob, _min_bytes = entry
         assert os_key in {"windows", "macos", "linux"}, os_key
         seen.add((os_key, arch))
     assert ("macos", "arm64") in seen and ("macos", "x86_64") in seen, seen
@@ -440,7 +448,7 @@ def test_the_shared_list_carries_a_machine_readable_platform_key():
     # list above, never maintained beside it — two hand-kept lists is the exact
     # drift scripts/release_assets.py exists to prevent.
     assert mod.REQUIRED_PLATFORM_ASSETS == tuple(
-        (label, glob) for _o, _a, label, glob in mod.PLATFORM_ASSETS), (
+        (label, glob) for _o, _a, label, glob, _min in mod.PLATFORM_ASSETS), (
         "REQUIRED_PLATFORM_ASSETS is not derived from PLATFORM_ASSETS")
 
 
@@ -457,7 +465,7 @@ def _published():
     """
     mod = _asset_mod()
     out = []
-    for _o, _a, _l, pat in mod.PLATFORM_ASSETS:
+    for _o, _a, _l, pat, _min in mod.PLATFORM_ASSETS:
         name = pat.replace('*', _FIXTURE_VER)
         out.append({
             'name': name,

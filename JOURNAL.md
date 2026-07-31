@@ -1,3 +1,17 @@
+### 2026-07-31(续·第三个铸造点:判决被**写进数据库**) — owner 抓出前两批只堵了两条**快照传输**,而第三处**写库**,所以刷新后从 DB 复现,比内存态顽固;**而它同时绕过我那两层**(commit `6be8fa43`,3 文件 +435/-20;新守卫 **6 条**(失败先行 5 红),**NEUTER×3 各咬各的**;262 套 A/B **零新坏零修好**)
+
+- **★ 为什么这一处比前两处严重:** `_sync_partial_to_conversation` 不是快照传输 —— 它**写 `conversations.messages`**。前两批的 `terminal_gate` 管的是「发出去什么」,管不到「存下来什么」。存下来的那一行会被下一次加载读回,所以**刷新不但不能自愈,反而是复现路径**。
+- **实测缺陷:** P1a 块的触发条件是 `if task.get('finishReason'):` —— 纯存在性。而 `_finalize.py` L843 打 finishReason、L954 才 `status='done'`,中间 **110 行**含阻塞的 `_generate_tool_summary`;**5 秒**检查点定时器常态落在窗口内 ⇒ 把「已落定」写进一条**还在生成**的消息行。
+- **★ 复合缺陷是 owner 抓出的那一半,也是真正致命的一半:这条路从不写 `_taskId`。** 全库只有 `_sync_result_to_conversation`(终态同步)写它。于是落库的是 `{finishReason:'stop', _taskId: 缺失}`。实测把这行喂给 `assistantTailIsPriorTurn`,**即使问的是它自己的 task 也返回 true** —— 身份臂缺锚不生效,reload-safe 臂照常开火。**我上一批新加的身份臂在这条路上结构性失效**,因为锚根本没被写下来。
+- **修法两半,各自独立承重:** ①触发条件改为 `is_terminal_status(status) or task['_finalize_started_at']`,复用 `terminal_gate`(**第三个消费者**),不再手写第三份时序假设。`_finalize_started_at` 在 **L953** 打 —— 正好在 110 行窗口**之后**、终态翻转**前一行** —— 精确接纳 P1a 真正要服务的场景,排除制造矛盾的那段。②携带判决时**原子写入 `_taskId`**。
+- **★ 我的首版守卫又是空的,而这次的错法比上次隐蔽:** 窗口内那条我写成「要么不带 finishReason,**要么**与 `_taskId` 同时出现」。NEUTER-2(退回 presence-only)**依然全绿** —— 因为 `_taskId` 那一半单独就能满足这个析取式,**时序闸看起来是装饰**。已拆成两条**独立命题**:窗口内**一律不落判决**(钉时序闸)+ 真 finalize 时**判决与锚同时落**(钉原子性)。**判据:一个 `A or B` 形式的断言,永远无法证明 A 和 B 各自承重 —— 两半修复必须两条测试。**
+- **NEUTER×3 各咬各的:** 去掉 `_taskId` 原子写 → 咬 2 条 carried_with_identity;退回 presence-only → **只**咬 midwindow;过宽(永不携带)→ 咬 2 条 complement(证明「永远不发」不能满足本批,否则 P1a 的存在意义被删)。
+- **陈旧套件就地反转 —— 这是第三个把缺陷当契约认证的:** `test_interrupted_turn_metadata.py::test_partial_sync_writes_finish_metadata` 的 fixture 正是 `status='running'` + `finishReason='stop'` + 无 latch,原断言**要求**判决被写进消息。三批下来同一形状出现三次(wire_parity / prior_turn_reducer / 本条),说明**「测试固化了当时的行为」在本项目是一类系统性风险,不是偶发**。
+- **★ 共享树纪律翻车一次,如实记录:** pathspec 是对的(3 个文件、计数门通过),但 `_sync.py` 在工作树里**已经带着兄弟会话 `ms8eg47r76ei3x` 的未提交改动**(`checkpoint_task_partial(force=)` + `_has_inflight_round`,属 `pt_1a82ffb31f714eeb`),于是它们**搭我的 commit message 上了车**。**pathspec 只能限定「哪些文件」,不能限定「这些文件里的哪些行」** —— 这是本项目纪律的一个真实缺口。事后处理:①不回滚(回滚等于删同事的活),②跑他们的相邻套件确认未损(22/22 全过),③`project_message` 告知对方代码已在 HEAD、勿重复应用,并说明我在同一函数里加的新约束。**下次:改共享热点文件前先 `git diff -- <file>` 看有没有别人的行。**
+- **回归:** 262 套 A/B 失败集 diff(纯净 HEAD vs 纯净 HEAD+我的 3 个文件)**零新坏零修好**,27 条基线红两侧逐条相同。
+- **顺带把 docstring 改成真话:** 原文写「Terminal-only fields are withheld while the turn is mid-stream」,而代码按存在性一律携带 —— 与 `finish_info.js` 那条同族的假注释,**本批是这个形状的第三次**。
+- **验收边界:** 后端已生效,数据库写路径**无需 bundle 重建**即刻生效。真浏览器未实测。
+
 ### 2026-07-31(取证行写对了,但写去了没人看的地方) — 自主派单接 `pt_f97a21c02bda4ab9`;票面说「等复发」,**实测复发已经发生 6 次**,而我上一批的取证**一次都没捕获到**——不是没生效,是**写进了一条会被丢弃的通道**(`pt_f97a21c02bda4ab9` DONE;2 文件;套件 **5 → 11**,**NEUTER×3 各咬各的**(2/1/1);相邻环 **58/58**)
 
 - **★ 第一步就把票面前提推翻了:** 票面写「等待下一次复发以确定触发源」。实测 `logs/error.log` 的 `Uncaught exception` 时间戳:**10:33:27 / 11:10:23 / 11:10:35 / 11:13:15 / 11:13:50 / 11:15:22 / 11:26:32** —— **7 次**,其中 6 次发生在原始那次之后,且 11:26:32 那次在取证 commit `95dabfd2`(11:23:32)**之后**。所以触发条件早就满足了,epic 却在等一个已经来过的事件。

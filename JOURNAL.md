@@ -1,3 +1,10 @@
+### 2026-08-01(续·owner 复核抓回:createConv 预填序反了,项目挂载被 newChat 清空——间谍只数次数正是盲区) — commit `dd2f04a0`(4 文件 +209/-14;两套件 **25/25**,环 **71/71**;NEUTER×2 各咬各的;epic `pt_a73148e95f50420d` DONE;myday 同病独立立案 `pt_3aa4dafc82364cdc`)
+
+- **缺陷(owner 实测定案,我第一批完全没看见):** `_openEpicConversation` 先 `newChat()` 后写 composer——`newChat` 的 `hasInput` 在预填**之前**测量(main_conv_lifecycle.js:71-75),空 composer 触发 `_clearProjectStateLocal` + `_resetToolsToDefaults`,新会话项目挂载当场被清;而 kickoff 第一句就是让 agent 用 `project_board_read`/`project_board_claim`——这两个工具的路径正从会话上下文解析。**功能在,地基没了。** 修法不是加恢复逻辑,是按 newChat 自己的契约（"pending input keeps the project armed"）把顺序倒回来:预填先行、newChat 殿后;kickoff 再带 `{path}` 槽(i18n 中英)做双保险。
+- **★ 测试为什么没看见(harness 设计缺陷,比产品缺陷更值得记):** 板面 harness 的 `newChat` 是个**只数调用次数的空间谍**——真 newChat 的副作用从未在测试里执行过,序反了自然全绿。间谍升级为 **ORDER-SENSITIVE**:记录 newChat 被调用那一刻 composer 是否已非空。这类「stub 吞掉了被测代码依赖的副作用」是 jsdom harness 的家族病,写 spy 时要问一句:被测代码的**时序依赖**我钉了吗?
+- **「去回答」深链补完:** 切 tab 只是第一步,多条待办时 operator 落在 tab 顶部还得自己找卡。补 pending-focus 通道:板面 `gotoAttention` 把 epic id 交给 `ProjectBrainAttention.focusItem`,渲染异步所以 id 由 `renderAttention` 末尾 `_applyFocus` 兑现(scrollIntoView + 一次性 accent 脉冲 `pb-attn-flash`)。判据:**深链的终点不是页面,是那个元素。**
+- **共享树卷走第四次(已立档为常态):** i18n.js/styles.css 又被兄弟 pt_e0ea29f2 批次的提交提前带入 HEAD,内容 `grep {path}`/`pb-attn-flash` 逐字节核实无损。教训固化:**先 grep HEAD 内容再判断「丢没丢」,别只看 git status**;且提交窗口要压到最短——本批从编辑到 commit 不足 20 分钟仍被卷。
+
 ### 2026-08-01(项目大脑「需要回答」面收口 + 每任务「新建对话」:同一问题不再两处渲染) — owner 截图报任务板与「待你处理」重复条目;commit `56190883`(5 文件 +399/-212;迁移套件 **22/22**,前端环 **71/71**,后端+bar 环 **103/104**——1 红证预存;**NEUTER×3 各咬各的**;epic `pt_5d9eee24af0043d0` DONE)
 
 - **定案一句话:** 停摆 epic 的问题 UI(选项 chips + 自由输入)曾同时渲染在任务板 awaiting 泳道与「待你处理」tab——operator 同一问题见两遍。答案面从此唯一:任务板改**紧凑卡**(徽标 + 单 clamp + 「去回答」深链切 tab),完整问题框只在「待你处理」(redesign §D6 deep-link-don't-duplicate 的真正落地)。

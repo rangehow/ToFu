@@ -1,3 +1,22 @@
+### 2026-07-31(续·30 分钟的暗雷:reaper 成了 run_command 事实上的超时天花板) — owner 报「内部错误只有一行,还让用户自己去看日志」;查下去**那根本不是一个错误,是我们自己误杀**,而修的过程中实测**推翻了模块自己写的一句承诺**(`pt_9f5a51ba45bd423c` DONE;commit `7aa67435`,3 文件 +518/-11;新套件 **9/9 失败先行(6 红)**,**NEUTER×4 各咬各的**(4/2/1/1);相邻环 **112/112**;A/B 实测本批贡献 **0** 个新红)
+
+- **★ owner 三问里第一问的前提就得纠正:** 红框不是 Overleaf MCP 的报错(那只是他贴进去的输入),是 stuck-task-reaper 把一个**正在干活**的任务当僵尸杀了。所以答案既不是「能自动解决」也不是「该弹给用户」——**它不该发生**。
+- **实测两例同型(logs/app.log,非推断):** task `38562f78`(conv ms8bx708)10:46:54 调 `run_command` → 11:17:40 判 WEDGED、`Killed process group pgid=3579005`、`finish=aborted`,**20 轮 ¥22.951 全废**;task `31d08c82`(conv ms8c54p5)同一分钟、**同样 1846s**、17 轮 ¥12.012。两例的沉默窗口里那条工作线程**一行日志都没有**——它在等子进程。
+- **★ 三层根因,第二层最阴:**
+  | 层 | 事实 | 为什么一直没被发现 |
+  |---|---|---|
+  | ① 串行**写**车道零心跳 | `_pipeline.py` 的 `_serial_write_items` 循环裸调 `_execute_tool_one`,而 `_start_tool_heartbeat` 只包了并行池 | 两个活性钟同时静默 = reaper 判据**恰好**成立 |
+  | ② `run_command` 默认 `timeout=None`(**故意的**,`test_no_backend_timeouts.py` 钉着) | reaper 的 1800s 于是成了它**事实上**的超时天花板 | 该天花板**不可见、不可配、不在工具契约里**——你以为在无限等待 |
+  | ③ MCP 非 readOnly 工具被 `_task_partitions` 默认归入 write 集合 | **全部 MCP 写工具**共享同一盲区 | 正是 owner 那个会话排查 MCP 时踩到的 |
+- **★ 修的过程中实测推翻了模块自己的注释——这条比原 bug 更值得记:** `_heartbeat.py:50-58` 声称 `_SERIAL_BLOCKING_TOOLS` 三个成员都被心跳保护、reaper 永不收割。逐个查:`ask_human` **真**(`human_guidance.py` 自己 bump)、`timer_create` **真**(每次 poll 发 `append_event`)、**`await_task` 假**——`lib/scheduler/executor/_await.py` 里 `_dispatch_heartbeat` 与 `append_event` **各 0 命中**,而它自己的等待上限 **3600s = 收割阈值的两倍**。**注释为一个不存在的保护背书**,与本项目记录在案的「守卫 docstring 替代码吹牛」同族。故本批覆盖**两条**串行车道,而非票面写的一条;并补了一条 AST 普查,断言 `execute_tool_pipeline` 内每个 `_execute_tool_one` 都必须坐在带 `_hb_stop` 的 `finally` 下,**让第三条车道无法再悄悄复发**。
+- **★ 一个我本打算问 owner 的问题,被代码里已有的裁决回答了:** 我上一轮问「心跳补上后串行工具对 reaper 永久免疫,要不要加个独立可见上限」。查到 `_heartbeat.py:50-58` 记着 **owner 2026-07-25 的既有裁决**(epic pt_1acd0bcdb2174566 F4, option A):免疫是**已接受**的权衡,且「**Do NOT "fix" this by capping the heartbeat;the cap question was decided as status-quo**」。⇒ 我倾向的那个方案**恰好是被明令禁止的**。**判据入库:提问前先搜代码里有没有已裁决的同题决定——本轮因此省掉一次 human gate。**
+- **文案层:reaper 用错了类别,而对的那个早就注册齐全。** `internal` 是 `retryable=False` + 提示「请查看服务器日志(logs/error.log)」;`worker_lost` 已在 `KINDS`/`_RETRYABLE_KINDS`/`_WARNING_KINDS`/`_TITLES` + 前端 chip + zh/en i18n **全部就位**,`TaskRuntime.reap_if_stalled` 一直在用,**只有 chat 主链路的 reaper 走了 `internal`**。后果不止难看:`retryable:False` 让前端**不显示重试**,而重试正是唯一正确动作。⇒ **零前端改动**(顺带避开兄弟正在改的 `i18n.js`)。
+- **NEUTER×4 各咬各的(4/2/1/1):** ①只回退写车道 → 3 条行为红 + AST 普查报**恰好 1** 个未保护点(长阻塞车道仍绿,隔离干净);②只回退长阻塞车道 → **互补**的 2 条红;③类别退回 `internal` → 仅信封那条红;④`finally` 里去掉 `_hb_stop.set()` → 仅「ticker 不得比工具活得久」那条红。三次事后 `cmp` 逐字节还原。
+- **★ 我自己的第一版夹具是假的,而它「通过」了:** `test_a_long_serial_write_is_not_reaped` 首版在**流水线返回后**取 reaper 判决——那时工具自己的 `tool_result`/`tool_complete` 已经把钟刷新了,**未修代码照样绿**。真正的采样点是**工具仍在阻塞的那一刻**(生产就是在那个窗口被收割的)。改成在 fake 工具体内取判决后该条转红。**判据:测一个「进行中」的性质,采样点必须在进行中,不能在事后。**
+- **回归用 A/B 而非票面数字:** 60 个消费者套件 845 passed / 14 failed。逐条查:1 个是兄弟**未跟踪**的新文件(`test_frontend_model_fallback_banner.py`,`??`);`test_messages_snapshot_kind` 的 3 条源自兄弟正在抽取 `orchestrator/_messages_snapshot.py`(未跟踪)+ `_run.py` 未提交。**决定性证据**:纯净 `git archive HEAD` 副本 **3 passed**,同一副本**只**嫁接我的 3 个文件仍 **3 passed** ⇒ 我的贡献**恰好 0**;其余 7 条在纯净 HEAD 上**已红**(charter/registry 族,与本批扫描面交集为 0)。相邻环 11 套 **112/112**。
+- **共享树纪律(charter #15):** 工作树有兄弟 84 个 WIP 文件,`git add -- <3 个路径>` + **计数门(=3)** 后用 pathspec 形式 `git commit -F msg -- <路径>` 落地;事后核对兄弟改动一个不少。
+- **验收边界:** 纯后端,**需重启生效**(当前活进程早于本改动)。生产复发验证需等下一条 >30min 的 `run_command`,判据:`logs/app.log` 里该任务出现 `tool_progress` 心跳且**不再**出现 `WEDGED — no event/dispatch progress`。
+
 ### 2026-07-31(续·第 4 个候选铸造点:判定「不是缺陷」,但**理由不是我以为的那个**) — owner 指定只做判定、不预先动手;结论是「不需要锚」,而**成立的理由是三个 caller 全在活路径之外,不是谓词自保** —— 谓词实测**会**对活跃轮开火(commit `b71e717a`,2 文件 +122/-1,reconcile.py **零行为改动**;守卫 **6 → 8**;**TRIPWIRE×2 各咬各的**;251 套 A/B **零新坏零修好**)
 
 - **★ 本条最该记的是判定过程,不是结论:** `reconcile.py` 的 `classify_ghost_tail == 'interrupt'` 与前三个铸造点**形状完全相同**(盖 `finishReason='interrupted'`、不写 `_taskId`)。直觉答案是「它只在崩溃恢复时跑,所以安全」。**而实测把这个直觉的依据换掉了**:

@@ -375,6 +375,19 @@ __REDUCERS_SRC__
   check('C3_foreign_msgid_untouched', foreign._msgId === 'F');
 }
 
+/* C4: the recover/queue/autopilot variant — a candidate WITHOUT _msgId must
+ * adopt WITHOUT re-stamping (those paths minted no canonical id, so the
+ * existing message's identity is the only one the backend knows). */
+{
+  const bound = { role: 'assistant', content: '', thinking: '', toolRounds: [], _msgId: 'KEEP', _taskId: 'T' };
+  const conv = { id: 'c4', messages: [
+    { role: 'user', content: 'q', _msgId: 'u1' }, bound] };
+  const cand = { role: 'assistant', content: '', thinking: '', toolRounds: [] };
+  const r = _adoptTaskPlaceholder(conv, 'T', cand);
+  check('C4_adopts_without_restamping', r && r.msg === bound && r.adopted === true);
+  check('C4_existing_msgid_preserved', bound._msgId === 'KEEP');
+}
+
 console.log(out.join('\n'));
 """
 
@@ -408,6 +421,22 @@ def test_neuter_helper_always_mints():
     assert 'PASS C1_mints_when_nothing_bound' in output, output
 
 
+@pytest.mark.skipif(not _node_available(), reason='node not installed')
+def test_neuter_helper_always_restamps():
+    """NEUTER-C4: force the re-stamp to fire even when the candidate has no id
+    → the recover/queue/autopilot variant loses the existing identity (C4 RED)."""
+    src = open(REDUCERS, encoding='utf-8').read()
+    fn = _extract_fn(src, '_adoptTaskPlaceholder')
+    neutered_fn = fn.replace(
+        'if (candidate && candidate._msgId) existing._msgId = candidate._msgId;',
+        'existing._msgId = candidate && candidate._msgId;')
+    assert neutered_fn != fn, 'neuter replacement did not land'
+    output = _part_c_results(src.replace(fn, neutered_fn))
+    assert 'FAIL C4_existing_msgid_preserved' in output, output
+    # The canonical re-stamp (C2) still works under this neuter:
+    assert 'PASS C2_restamps_canonical_msgid' in output, output
+
+
 def test_send_pipeline_routes_through_the_helper():
     """The send path's placeholder push must route through the shared helper —
     a re-inlined push re-opens the duplicate class this epic closes."""
@@ -415,3 +444,49 @@ def test_send_pipeline_routes_through_the_helper():
     assert '_adoptTaskPlaceholder(conv, taskId' in src, (
         'main_send_pipeline.js does not call _adoptTaskPlaceholder — '
         'the send path still pushes its placeholder unconditionally')
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  Part D — class closure: every reachable placeholder push routes the
+#  helper (owner directive 2026-08-01). Wiring asserts anchor on the
+#  behavior-producing call text (helper semantics are pinned in Part C).
+# ══════════════════════════════════════════════════════════════════════
+
+REGEN = os.path.join(ROOT, 'static', 'js', 'main', 'main_regen_continue.js')
+EDIT = os.path.join(ROOT, 'static', 'js', 'ui', 'edit_message.js')
+
+
+def test_regen_routes_through_helper_with_canonical_id():
+    """regenerateFromUser: adopt-dedupe with the canonical _regenAssistantMsgId
+    (shipped as config.assistantMsgId) — same class, same close as send."""
+    src = open(REGEN, encoding='utf-8').read()
+    assert '_adoptTaskPlaceholder(conv, taskId, _mintedPlaceholder)' in src, (
+        'regenerateFromUser pushes its placeholder unconditionally — '
+        'the duplicate class survives on the regen path')
+    assert '_msgId: _regenAssistantMsgId' in src, (
+        'regen candidate lost its canonical _regenAssistantMsgId — '
+        'adoption would re-stamp a wrong identity')
+
+
+def test_edit_resend_routes_through_helper_with_canonical_id():
+    """saveEditAndResend — regen's twin (same atomic endpoint + minted id)."""
+    src = open(EDIT, encoding='utf-8').read()
+    assert '_adoptTaskPlaceholder(conv, taskId, _mintedPlaceholder)' in src, (
+        'saveEditAndResend pushes its placeholder unconditionally — '
+        'the duplicate class survives on the edit-resend path')
+    assert '_msgId: _editAssistantMsgId' in src, (
+        'edit-resend candidate lost its canonical _editAssistantMsgId')
+
+
+def test_recover_queue_autopilot_attach_route_helper_no_restamp():
+    """_recoverTimedOutChatTask / queue-dispatch / autopilot follow-up attach:
+    route the helper with a candidate that carries NO _msgId (no canonical id
+    exists on these paths → adoption must not re-stamp)."""
+    src = open(SEND, encoding='utf-8').read()
+    assert '_adoptTaskPlaceholder(conv, task.id, _mintedPlaceholder)' in src, (
+        '_recoverTimedOutChatTask does not route the helper — '
+        'the recovery path still pushes unconditionally')
+    assert '_adoptTaskPlaceholder(conv, newTask.id, _mintedPlaceholder)' in src, (
+        'the queue-dispatch attach does not route the helper')
+    assert '_adoptTaskPlaceholder(conv, nextTaskId, _mintedPlaceholder)' in src, (
+        'the autopilot follow-up attach does not route the helper')

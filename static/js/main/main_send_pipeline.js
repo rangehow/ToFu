@@ -984,15 +984,25 @@ function _attachAutopilotFollowup(convId, payload) {
   }
 
   /* Empty assistant placeholder for the new task to stream into. */
-  const assistantMsg = {
+  const _mintedPlaceholder = {
     role: 'assistant',
     content: '',
     thinking: '',
     timestamp: Date.now(),
     toolRounds: [],
   };
-  _ensureMsgId(assistantMsg);
-  conv.messages.push(assistantMsg);
+  /* ★ Dedupe (pt_44e985ec): a conv-state attach lane may have discovered the
+   *   backend-spawned follow-up before this baton path ran and already created
+   *   its placeholder — adopt, never duplicate. No canonical id on this path
+   *   → no re-stamp (candidate carries no _msgId). */
+  const _ph = (typeof _adoptTaskPlaceholder === 'function')
+    ? _adoptTaskPlaceholder(conv, nextTaskId, _mintedPlaceholder)
+    : { msg: _mintedPlaceholder, adopted: false };
+  const assistantMsg = _ph.msg;
+  if (!_ph.adopted) {
+    _ensureMsgId(assistantMsg);
+    conv.messages.push(assistantMsg);
+  }
   conv.activeTaskId = nextTaskId;
   conv._needsLoad = false;
 
@@ -1507,13 +1517,30 @@ async function _recoverTimedOutChatTask(convId, opts = {}) {
     // been established in the meantime.
     if (activeStreams.has(convId)) return true;
 
-    const assistantMsg = {
+    const _mintedPlaceholder = {
       role: 'assistant', content: '', thinking: '',
       timestamp: Date.now(), toolRounds: [],
     };
-    if (opts.endpointMode) assistantMsg._isEndpointPlanner = true;
-    _ensureMsgId(assistantMsg);
-    conv.messages.push(assistantMsg);
+    if (opts.endpointMode) _mintedPlaceholder._isEndpointPlanner = true;
+    /* ★ Dedupe (pt_44e985ec): the original send attempt's own placeholder may
+     *   already be bound to this task — adopt it. NO id re-stamp on this
+     *   path: the canonical assistantMsgId was minted by the original (timed-
+     *   out) send and is unknowable here, so the candidate carries no _msgId
+     *   and the existing message's identity is preserved. */
+    const _ph = (typeof _adoptTaskPlaceholder === 'function')
+      ? _adoptTaskPlaceholder(conv, task.id, _mintedPlaceholder)
+      : { msg: _mintedPlaceholder, adopted: false };
+    const assistantMsg = _ph.msg;
+    if (_ph.adopted) {
+      console.info(
+        `[Recover] ♻ adopted existing placeholder bound to task=${task.id.slice(0,8)} ` +
+        `— no duplicate push for conv=${convId.slice(0,8)}`
+      );
+      if (opts.endpointMode) assistantMsg._isEndpointPlanner = true;
+    } else {
+      _ensureMsgId(assistantMsg);
+      conv.messages.push(assistantMsg);
+    }
     conv.activeTaskId = task.id;
     conv._needsLoad = false;
     if (activeConvId === convId) window.ConvView.replaceAll(convId);
@@ -1659,15 +1686,25 @@ async function _checkForQueuedTask(convId, _retryCount = 0) {
     await loadConversationMessages(convId);
 
     // Create the empty assistant message placeholder
-    const assistantMsg = {
+    const _mintedPlaceholder = {
       role: 'assistant',
       content: '',
       thinking: '',
       timestamp: Date.now(),
       toolRounds: [],
     };
-    _ensureMsgId(assistantMsg);
-    conv.messages.push(assistantMsg);
+    /* ★ Dedupe (pt_44e985ec): a conv-state attach lane may have discovered
+     *   the same auto-dispatched task during the reload await above and
+     *   already created its placeholder — adopt, never duplicate. No canonical
+     *   id exists on this path → no re-stamp (candidate carries no _msgId). */
+    const _ph = (typeof _adoptTaskPlaceholder === 'function')
+      ? _adoptTaskPlaceholder(conv, newTask.id, _mintedPlaceholder)
+      : { msg: _mintedPlaceholder, adopted: false };
+    const assistantMsg = _ph.msg;
+    if (!_ph.adopted) {
+      _ensureMsgId(assistantMsg);
+      conv.messages.push(assistantMsg);
+    }
     conv.activeTaskId = newTask.id;
     conv._needsLoad = false;
 

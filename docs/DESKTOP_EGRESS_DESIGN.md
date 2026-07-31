@@ -217,6 +217,12 @@ x-api-key，实测后收敛并删掉另一路。
 
 ### 6.1 新模块 `lib/desktop/egress.py`（路由层）
 
+**user_id 全链下穿（owner S2 补充③）**：`resolve_oauth_request` 加可选
+`user_id=''` 形参，沿 `get_valid_token → refresh → egress 路由` 全链下穿；
+遗留单用户部署（`user_id=''`）回落 legacy 语义——空 user_id 时允许任意一台
+egress-capable agent 服务（与 bridge v1/单用户世界一致），多用户部署才强制
+同租户。
+
 ```
 route_request(url, *, user_id)  -> 'direct' | EgressTarget | None(不可用)
   - 直连探测：host 级缓存（TTL 300s），5s 超时，**POST 真实端点（不带
@@ -248,7 +254,22 @@ egress_http_stream(url, ..., user_id) -> 迭代器(字节块) + 首帧 meta
 | # | 位置 | 改法 |
 |---|---|---|
 | A1 | `lib/oauth/claude.py::{claude_exchange_code, claude_refresh_token}`、`codex.py` 同名 | `http_post` 调用点前先 `route_request`；非 direct 则 `egress_http`，响应适配成 requests.Response 形态（或重构为统一返回 (status, json)） |
+
+**A1 旁挂（owner S2 补充①，不做会被生产咬）刷新 singleflight**：OpenAI 的
+refresh token 是一次性的。egress 让刷新 RTT 从 ~300ms 涨到 1~2s+，两个并发
+请求同时看到过期、同时经 agent 刷新的窗口被放大 4~6 倍——第二个刷新会烧掉
+第一个刚换的 refresh_token → `refresh_token_reused` → 订阅被强制登出。
+CLIProxyAPI 的 `codexRefreshGroup singleflight.Group`（+ Claude 侧
+blocked-until）就是为这个场景存在的。S2 必须给 claude/codex 刷新加进程内
+singleflight：同一 refresh_token 的并发刷新合并为一次（后到者等同一份结果），
+不是可选加固。
 | A2 | `lib/llm/stream.py` + `lib/llm/astream.py`（SSE 传输）、`lib/llm/chat.py`（非流式） | `RequestPlan` 增加 `egress` 标记；transport 分支：egress 时消费帧流喂给 `_sse_core` 既有行解析（解析器零改动）；非流式 `chat()` 走 `egress_http` 一次性往返 |
+
+**A2 禁忌（owner S2 补充②）**：`resolve_oauth_request → get_valid_token →
+refresh → egress_http` 是同步阻塞链，egress_http 要等 agent 一个 RTT（最坏
+TTL 120s）。sync stream.py 跑在线程池里无碍，但 **`astream.py` 的异步路径上
+任何 egress 阻塞调用都必须 `asyncio.to_thread` 包裹**——否则一次刷新就能
+冻住 Quart 事件循环、全站请求停摆。写死，不接受「实测应该碰不到」。
 | A3 | `lib/provider_probe.py` | 同 A1 的路由包装 |
 | A4 | 前端 OAuth 卡片 | 显示出口状态（直连/经桌面代理/不可用）+ 多 agent 时的选择器（写 `oauth_egress_agent_id`） |
 
@@ -333,7 +354,7 @@ token 只在请求的 headers 里由服务器注入）。
 | 片 | 内容 | 可独立验收 |
 |---|---|---|
 | S1 | §5 cloaking 移植（outbound.py）+ codex plan_type | 纯离线：单测断言请求体/头部形状（计费头指纹算法逐字节对拍 CLIProxyAPI 测试向量）；plan_type 解析与门控 |
-| S2 | `egress_http` + 路由层 + OAuth 交换/刷新接入（A1） | fake bridge（内存队列驱动假 agent）端到端：403 直连 → 走 agent → token 落库；白名单拒绝；TTL/超时 |
+| S2 | `egress_http` + 路由层 + OAuth 交换/刷新接入（A1）+ **登录顺序翻转**（§6.2 A4 的 `_completeLogin` 改「服务器交换→B1→curl」，JS 改动需 bundle 重建）+ 刷新 singleflight + user_id 下穿 | fake bridge（内存队列驱动假 agent）端到端：403 直连 → 走 agent → token 落库；白名单拒绝；TTL/超时；并发刷新合并 |
 | S3 | `egress_http_stream` + LLM 传输分支（A2）+ bridge TTL/get_frames | fake 帧流 → SSE 解析输出与直连路径逐字节一致；30min TTL；断流错误传播 |
 | S4 | provider_probe（A3）+ 前端卡片/选择器（A4） | 探测经 agent；卡片三态；多 agent 选择持久化 |
 

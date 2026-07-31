@@ -417,13 +417,17 @@ def is_oauth_provider(oauth: str) -> bool:
     return oauth in OAUTH_PROVIDERS
 
 
-def resolve_oauth_request(oauth: str, body: dict, extra_headers: dict | None):
+def resolve_oauth_request(oauth: str, body: dict, extra_headers: dict | None,
+                          user_id: str = ''):
     """Resolve the live token + identity headers for a slot.
 
     Args:
         oauth: ``'claude'`` or ``'codex'`` — the subscription kind.
         body: the OpenAI-shaped request body (pre-translation).
         extra_headers: caller headers to merge the identity headers onto.
+        user_id: caller's tenant — threaded through the token-refresh chain
+            into egress routing (desktop agent tenant scoping); ``''`` is the
+            legacy single-user fallback.
 
     Returns:
         ``(api_key, extra_headers, body)`` with the live token and merged
@@ -441,7 +445,7 @@ def resolve_oauth_request(oauth: str, body: dict, extra_headers: dict | None):
     if oauth == 'codex':
         from lib.oauth.codex import codex_get_valid_token
         from lib.oauth.token_store import load_token
-        token = codex_get_valid_token()
+        token = codex_get_valid_token(user_id=user_id)
         if not token:
             raise RuntimeError('Codex subscription not logged in '
                                '(no valid OAuth token)')
@@ -457,7 +461,7 @@ def resolve_oauth_request(oauth: str, body: dict, extra_headers: dict | None):
 
     if oauth == 'claude':
         from lib.oauth.claude import claude_get_valid_token
-        token = claude_get_valid_token()
+        token = claude_get_valid_token(user_id=user_id)
         if not token:
             raise RuntimeError('Claude subscription not logged in '
                                '(no valid OAuth token)')

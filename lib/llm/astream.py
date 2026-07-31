@@ -111,7 +111,13 @@ async def _async_stream_chat_once(body, *, on_thinking=None, on_content=None,
                                   extra_headers=None, api_protocol='openai',
                                   oauth='', on_first_byte_wait=None):
     """Single async attempt at a streaming chat completion (httpx transport)."""
-    plan = prepare_request(
+    # prepare_request is sync and CAN block for seconds: a subscription
+    # OAuth slot may refresh its token inside resolve_oauth_request, and
+    # under desktop-egress routing that refresh waits an agent RTT (design
+    # §6.2 A2). Running it on the event loop would freeze every concurrent
+    # request — move it to a worker thread.
+    plan = await asyncio.to_thread(
+        prepare_request,
         body, attempt=attempt, log_prefix=log_prefix,
         api_key=api_key, base_url=base_url, extra_headers=extra_headers,
         api_protocol=api_protocol, oauth=oauth)

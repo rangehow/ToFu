@@ -52,6 +52,26 @@ CODEX_OAUTH_CONFIG = {
 _TOKEN_REFRESH_BUFFER = 300  # 5 minutes
 
 
+def _oauth_http_post(url: str, payload: dict, *, timeout: float = 30,
+                     user_id: str = ''):
+    """Token-endpoint POST (form-encoded) — direct when reachable, desktop
+    egress otherwise. Mirrors lib/oauth/claude.py's helper; raises
+    ``EgressUnavailable`` when direct is blocked AND no agent is online."""
+    from lib.desktop import egress as _eg
+    route = _eg.route_request(url, user_id=user_id)
+    if route == 'direct':
+        return http_post(
+            url, data=payload,
+            headers={'Content-Type': 'application/x-www-form-urlencoded'},
+            timeout=timeout)
+    from urllib.parse import urlencode
+    return _eg.egress_http(
+        url, method='POST',
+        headers={'Content-Type': 'application/x-www-form-urlencoded'},
+        body=urlencode(payload).encode(),
+        timeout=timeout, user_id=user_id)
+
+
 def codex_build_auth_url() -> dict:
     """Build the Codex OAuth authorization URL with PKCE.
 
@@ -94,7 +114,8 @@ def codex_build_auth_url() -> dict:
     }
 
 
-def codex_exchange_code(code: str, pkce_verifier: str) -> dict | None:
+def codex_exchange_code(code: str, pkce_verifier: str,
+                        user_id: str = '') -> dict | None:
     """Exchange authorization code for Codex tokens.
 
     Args:
@@ -114,12 +135,8 @@ def codex_exchange_code(code: str, pkce_verifier: str) -> dict | None:
 
     try:
         token_url = CODEX_OAUTH_CONFIG['token_url']
-        resp = http_post(
-            token_url,
-            data=payload,
-            headers={'Content-Type': 'application/x-www-form-urlencoded'},
-            timeout=30,
-        )
+        resp = _oauth_http_post(token_url, payload, timeout=30,
+                                user_id=user_id)
 
         if resp.status_code != 200:
             logger.error('[Codex OAuth] Token exchange failed (HTTP %d): %.500s',
@@ -164,6 +181,10 @@ def codex_exchange_code(code: str, pkce_verifier: str) -> dict | None:
     except OAuthExchangeError:
         raise
     except Exception as e:
+        from lib.desktop.egress import EgressUnavailable
+        if isinstance(e, EgressUnavailable):
+            logger.error('[Codex OAuth] egress unavailable: %s', e)
+            raise OAuthExchangeError(str(e), status_code=0) from e
         logger.error('[Codex OAuth] Token exchange error: %s', e, exc_info=True)
         raise OAuthExchangeError(
             'Network error reaching OpenAI: %s' % e, status_code=0) from e
@@ -208,11 +229,13 @@ def codex_store_token(data: dict) -> dict:
     return token_data
 
 
-def codex_refresh_token(refresh_tok: str = None) -> dict | None:
+def codex_refresh_token(refresh_tok: str = None,
+                        user_id: str = '') -> dict | None:
     """Refresh the Codex access token.
 
     Args:
         refresh_tok: Refresh token. If None, loads from stored token.
+        user_id: caller's tenant for egress routing.
 
     Returns:
         Updated token dict or None.
@@ -228,6 +251,17 @@ def codex_refresh_token(refresh_tok: str = None) -> dict | None:
         logger.warning('[Codex OAuth] No refresh token available')
         return None
 
+    # Singleflight: refresh tokens are single-use — concurrent refreshes of
+    # the SAME token merge into one upstream call (see claude.py).
+    from lib.oauth.token_store import refresh_singleflight
+    return refresh_singleflight(
+        'codex', refresh_tok,
+        lambda rt: _codex_refresh_upstream(rt, user_id=user_id),
+        load=lambda: load_token('codex'))
+
+
+def _codex_refresh_upstream(refresh_tok: str, *, user_id: str = '') -> dict | None:
+    """The actual upstream refresh (called under the singleflight lock)."""
     payload = {
         'grant_type': 'refresh_token',
         'refresh_token': refresh_tok,
@@ -237,12 +271,8 @@ def codex_refresh_token(refresh_tok: str = None) -> dict | None:
     for attempt in range(3):
         try:
             token_url = CODEX_OAUTH_CONFIG['token_url']
-            resp = http_post(
-                token_url,
-                data=payload,
-                headers={'Content-Type': 'application/x-www-form-urlencoded'},
-                timeout=30,
-            )
+            resp = _oauth_http_post(token_url, payload, timeout=30,
+                                    user_id=user_id)
 
             if resp.status_code != 200:
                 logger.warning('[Codex OAuth] Refresh failed (HTTP %d, attempt %d): %.300s',
@@ -292,6 +322,10 @@ def codex_refresh_token(refresh_tok: str = None) -> dict | None:
             return stored
 
         except Exception as e:
+            from lib.desktop.egress import EgressUnavailable
+            if isinstance(e, EgressUnavailable):
+                logger.warning('[Codex OAuth] refresh egress unavailable: %s', e)
+                return None
             logger.warning('[Codex OAuth] Refresh error (attempt %d): %s', attempt + 1, e)
             if attempt < 2:
                 time.sleep(2 ** attempt)
@@ -299,7 +333,7 @@ def codex_refresh_token(refresh_tok: str = None) -> dict | None:
     return None
 
 
-def codex_get_valid_token() -> str | None:
+def codex_get_valid_token(user_id: str = '') -> str | None:
     """Get a valid Codex access token, refreshing if needed."""
     stored = load_token('codex')
     if not stored:
@@ -313,7 +347,8 @@ def codex_get_valid_token() -> str | None:
 
     if time.time() > expire - _TOKEN_REFRESH_BUFFER:
         logger.info('[Codex OAuth] Token expiring soon, refreshing…')
-        refreshed = codex_refresh_token(stored.get('refresh_token', ''))
+        refreshed = codex_refresh_token(stored.get('refresh_token', ''),
+                                        user_id=user_id)
         if refreshed:
             return refreshed.get('access_token')
         logger.warning('[Codex OAuth] Refresh failed, using potentially expired token')

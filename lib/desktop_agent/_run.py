@@ -100,6 +100,7 @@ def _build_agent_frame(agent_id, permissions, share_roots=None):
             'exec': bool(permissions.get('allow_exec')),
             'gui': bool(permissions.get('allow_gui')),
             'notification': bool(permissions.get('allow_notification')),
+            'egress': bool(permissions.get('allow_egress')),
         },
         'share_roots': list(share_roots or []),
     }
@@ -276,6 +277,10 @@ Examples:
     parser.add_argument('--allow-write', action='store_true', help='Allow file write/move operations')
     parser.add_argument('--allow-exec', action='store_true', help='Allow running commands and opening apps')
     parser.add_argument('--allow-gui', action='store_true', help='Allow GUI automation (mouse, keyboard, screenshot)')
+    parser.add_argument('--allow-egress', action='store_true',
+                        help='Allow relaying whitelisted subscription API requests '
+                             '(anthropic.com/openai.com/chatgpt.com) through this '
+                             'machine\'s network')
     parser.add_argument('--allow-all', action='store_true', help='Enable all permissions')
     parser.add_argument('--poll-interval', type=float, default=1.0, help='Polling interval in seconds')
     parser.add_argument('--bridge-secret', default='',
@@ -295,6 +300,7 @@ Examples:
         allow_write=args.allow_write,
         allow_exec=args.allow_exec,
         allow_gui=args.allow_gui,
+        allow_egress=args.allow_egress,
         allow_all=args.allow_all,
     )
 

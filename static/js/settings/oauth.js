@@ -109,10 +109,13 @@ function _storeBrowserToken(provider, tokenJson) {
     .then(function(r) { return r.json(); });
 }
 
-// ── Server-side token exchange (fallback path) ──
+// ── Server-side token exchange (primary path, S2) ──
 // POSTs the raw code to /api/oauth/callback so the SERVER does the exchange.
-// Used when browser-side exchange isn't possible or fails for a non-auth
-// reason (e.g. the server's egress isn't geo-blocked). Returns parsed JSON.
+// The server auto-routes direct OR through an egress-capable desktop agent,
+// so this path works even when the server's own egress is geo-blocked.
+// Rejection Error carries `_statusCode` from the server's error body
+// (403 geo-block / 0 network-or-egress-unavailable / 400-401 auth rejection)
+// so _completeLogin can classify whether a browser retry makes sense.
 function _serverExchange(provider, code, state) {
   var body = { provider: provider, code: code };
   if (state) body.state = state;
@@ -129,18 +132,25 @@ function _serverExchange(provider, code, state) {
     .then(function(r) {
       if (!r.ok) return r.text().then(function(t) {
         var j; try { j = JSON.parse(t); } catch (e) { j = null; }
-        throw new Error((j && j.error) || t.slice(0, 200));
+        var err = new Error((j && j.error) || t.slice(0, 200));
+        if (j && typeof j.status_code !== 'undefined') err._statusCode = j.status_code;
+        throw err;
       });
       return r.json();
     });
 }
 
-// ── Complete a login given an auth code: browser-first, server fallback ──
-// 1. Try the browser-side exchange (uses the user's VPN — bypasses the
-//    server's geo-blocked egress). On success, store via the server.
-// 2. If browser exchange can't run (no params) or fails with a NETWORK/CORS
-//    error (not a real auth rejection), fall back to the server exchange.
-//    A genuine auth rejection (4xx with an error body) is reported as-is.
+// ── Complete a login given an auth code: server → browser → curl ──
+// Order (owner 2026-07-31, desktop-egress era):
+// 1. Server exchange — auto-routes direct OR through an egress-capable
+//    desktop agent (S2), so it now works even when the server's own egress
+//    is geo-blocked, and has no CORS exposure. A genuine auth rejection
+//    (400/401: code expired/used) is surfaced as-is — the code is burned,
+//    retrying it anywhere else just fails again.
+// 2. Browser exchange (B1) — only when the server failed with a geo-block
+//    (403) / network error / egress-unavailable (status_code 0), i.e. the
+//    code is provably still unconsumed.
+// 3. curl helper (B2) — the user's own terminal as the last network.
 function _completeLogin(provider, code, state) {
   var capProvider = provider === 'codex' ? 'Codex' : 'Claude';
   _updateOAuthCard(provider, { status: 'exchanging' });
@@ -158,36 +168,39 @@ function _completeLogin(provider, code, state) {
     showAlert(t('settings.oauthTokenExchangeFailed', { msg: msg }));
   }
 
-  // Step 1: browser-side exchange → store via server.
-  _browserExchange(provider, code, state)
-    .then(function(tokenJson) {
-      console.log('[OAuth] Browser-side exchange succeeded for', provider);
-      return _storeBrowserToken(provider, tokenJson).then(function(data) {
-        if (!data || data.error) { _onError((data && data.error) || 'store failed'); return; }
-        _onSuccess(data);
-      });
-    })
-    .catch(function(e) {
-      // Browser exchange failed. If it was a genuine auth rejection from the
-      // provider (4xx with a body), surface it — retrying server-side won't
-      // help and would just hit the geo-block. Otherwise (CORS/network/no
-      // params), fall back to the server-side exchange.
-      var st = e && e._upstreamStatus;
-      if (st === 400 || st === 401) {
-        _onError(e.message.replace(/^exchange-failed: /, ''));
-        return;
-      }
-      console.warn('[OAuth] Browser exchange unavailable (%s) — falling back to server', e && e.message);
-      _serverExchange(provider, code, state)
-        .then(function(data) {
+  function _tryBrowser(reason) {
+    console.warn('[OAuth] Server exchange unavailable (%s) — trying browser exchange', reason);
+    _browserExchange(provider, code, state)
+      .then(function(tokenJson) {
+        console.log('[OAuth] Browser-side exchange succeeded for', provider);
+        return _storeBrowserToken(provider, tokenJson).then(function(data) {
           if (!data || data.error) {
-            // Both browser (CORS) and server (geo-block) failed → curl helper.
-            _showCurlHelper(provider, code, state, (data && data.error) || '');
+            _showCurlHelper(provider, code, state, (data && data.error) || 'store failed');
             return;
           }
           _onSuccess(data);
-        })
-        .catch(function(e2) { _showCurlHelper(provider, code, state, e2.message); });
+        });
+      })
+      .catch(function(e2) { _showCurlHelper(provider, code, state, (e2 && e2.message) || ''); });
+  }
+
+  _serverExchange(provider, code, state)
+    .then(function(data) {
+      if (!data || data.error) { _tryBrowser((data && data.error) || 'empty result'); return; }
+      _onSuccess(data);
+    })
+    .catch(function(e) {
+      var sc = e && e._statusCode;
+      if (sc === 400 || sc === 401) {
+        // Genuine auth rejection — the code is consumed/expired; don't burn
+        // it a second time from the browser.
+        _onError(e.message);
+        return;
+      }
+      // 403 geo-block / 0 network-or-egress-unavailable / unknown — the code
+      // was rejected at the edge BEFORE grant processing, so it is still
+      // redeemable from the browser's own network.
+      _tryBrowser(e.message);
     });
 }
 

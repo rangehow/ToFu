@@ -307,7 +307,7 @@ def _addressing_enqueue_error(target_agent_id, user_id=''):
 
 
 def send_desktop_command(cmd_type, params=None, timeout=30, target_agent_id=None,
-                         user_id='', cmd_id=None):
+                         user_id='', cmd_id=None, ttl=None):
     """Queue a command for the desktop agent. Blocks until result or timeout.
 
     ``target_agent_id`` (RWA P0) routes the command to one registered
@@ -315,7 +315,8 @@ def send_desktop_command(cmd_type, params=None, timeout=30, target_agent_id=None
     several agents online the command is REFUSED up front — never
     delivered to a lucky poller. ``user_id`` (RWA P4a) scopes the command
     to agents registered by the same bridge user; it stays INTERNAL (never
-    projected onto the wire).
+    projected onto the wire). ``ttl`` overrides the default 90s pickup
+    expiry (egress streams run far longer than 90s — design §4.3).
     """
     if _addressing_enabled():
         err = _addressing_enqueue_error(target_agent_id, user_id=user_id)
@@ -340,6 +341,8 @@ def send_desktop_command(cmd_type, params=None, timeout=30, target_agent_id=None
         cmd['target_agent_id'] = target_agent_id
     if user_id:
         cmd['user_id'] = str(user_id)
+    if ttl:
+        cmd['ttl'] = float(ttl)
 
     with command_queue_lock:
         command_queue[cmd_id] = cmd
@@ -391,7 +394,7 @@ def take_pending_commands(agent_id=None, v1=True, user_id='') -> list:
         for cmd_id, cmd in list(command_queue.items()):
             if cmd['event'].is_set():
                 continue  # already resolved
-            if now - cmd['created_at'] > _COMMAND_TTL_S:
+            if now - cmd['created_at'] > (cmd.get('ttl') or _COMMAND_TTL_S):
                 cmd['error'] = 'Command expired (stale cleanup)'
                 cmd['event'].set()
                 continue

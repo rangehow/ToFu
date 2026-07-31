@@ -1,3 +1,19 @@
+### 2026-07-31(一轮生成两个 Agent 气泡) — owner 报「第一个气泡生成中途停住,又新开一个继续」;定案落在**「非终态快照广播终态字段」**,而**判据第一步就把「后端重复写入」整类排除掉了**(commit `f9d3ef84`,5 文件 +565/-20;新套件 **7/7 失败先行**,**NEUTER×4 各咬各的、各一条**;A/B 失败集 diff **零新坏零修好**)
+
+- **★ 第一刀先证伪最省事的那个假设,后面所有取舍都靠它:** 拉 conv `ms8c0645hwl327` 的 DB 原始记录 —— assistant 消息**恰好 1 条**(`msg_count=2`,1 user + 1 assistant),而屏幕上**两个**气泡 ⇒ **这是渲染身份违约,不是后端重复写入**。这一条直接判掉了「去持久层加去重」这类修法:数据本来就只有一条。
+- **★ 而这台部署上「偶发」其实是 100%,量出来才知道:** 当天 3 个任务**全部**记录 `SSE ... DISCONNECTED PREMATURELY — 0 events sent in 0.1s`,即**全部流量跑在 1Hz poll 兜底上**(access.log:**925 次 poll vs 5 次 send**,`/chat/stream` 命中 **0**)。所以这个 bug 的触发面不是「网络抖动时偶尔」,而是**这台机器的常态路径**。
+- **★ 根因是一对互相矛盾的字段,而它的窗口宽度是可以数出来的:** `_finalize.py:843` 打 `task['finishReason']`,`status='done'` 要等到 `:954` —— **中间 111 行**,且含 `_finalize_dangling_tool_rounds` / 压缩用量折叠 / **`_generate_tool_summary`(一次阻塞 LLM 调用)**。而 `chat_poll` 的字段拷贝只有 `if task.get(key)`、**没有 status 闸** ⇒ 落在窗口内的 poll 返回 **`{status:'running', finishReason:'stop'}`**。窗口是**秒级**而非微秒级,这正是 1Hz poll 能反复采到它的原因 —— 「有没有 race」和「race 有多宽」是两个问题,只答前者会低估。
+- **前端那一环:陈旧终态字段压过身份。** `assistantTailIsPriorTurn` 把 `!!finishReason` 一律判成「上一轮」,**即使该 tail 正绑在当前 task 上**。`_pollFallback` 把矛盾字段拷到活跃消息 → 下一次 `connectToTask` 把**本任务自己的活跃气泡**判成别人的完成轮 → push 新 `_msgId` 占位符 → delta 全部转投新气泡,**原气泡再也没有写者(冻结在半句话)**,下一次重绘同时画出两个。
+- **★ 旧真理表不只是过期,它和自己的调用点互相矛盾 —— 这比「断言写错」重一档:** `sse_pipeline.js:258` 先按身份解析槽位,注释明写「Matching by identity … makes a second bubble for the same task **structurally impossible**」;而旧 reducer 紧接着**把这个解析丢掉**。也就是说**代码读起来是安全的**(和 7-30 那条假注释同族),测试还在为矛盾的那一半背书(`finishreason_same_task_is_prior === true`)。
+- **双层修法是刻意的,不是保险起见:** ①源头不再铸造矛盾(终态字段按**REPORTED status**设闸 —— 用真正发出去的那个值,不用另读一次 `task['status']`,否则两者仍可能不一致);②即使别的写者再铸造一次也不再承重(身份优先)。第二层有具体理由:`sse_pipeline.js:884` 的 `state` 处理器**同样**会把 `ev.finishReason` 拷到活跃消息 —— 只修 poll 会留下同形第二条路。
+- **★ 保留 `!!finishReason` 那一臂,是因为「更彻底」在这里恰好是错的:** 想让第一条测试变绿,最省事的是把该臂整条删掉。但 `_taskId` **不入库**,DB 载入的完成轮没有它 ⇒ 删掉会让「刷新后新任务把上一轮重播进新气泡」复活(Scenario D)。故收敛为**narrowing 而非 removal**,并补一发反方向 NEUTER 专钉这一点。
+- **★ 自查抓出我自己第一版守卫是空的:** poll 那两条最初写成**源码文本断言**(`'_TERMINAL_ONLY_KEYS' in src`)。NEUTER 时发现:**把真网关整段删掉,测试依然全绿** —— 因为常量还在。改为**行为断言**:真起 server、真打 `/api/v1/chat/poll/<id>`、断言响应体。改完后 NEUTER 才咬。**判据:凡断言「后端不会发某字段」,唯一可信的量具是响应体本身,常量名和注释都能满足源码断言。**
+- **NEUTER×4 各咬各的、各一条:** ①摘掉 reducer 身份臂(复现原缺陷)→ 只有 reducer 那条红;②删内存分支闸 → 只有 `withholds_finish_reason_while_running` 红;③删 DB 分支闸 → 只有 DB 那条红;④**过宽闸**(`_terminal_ok = False`,永远不发终态字段)→ 只有**补集**那条红(done 任务必须照发 finishReason/usage,否则轮次永不落定、finish bar 永久空白 —— 那会比原 bug 更糟)。四发后两个产品文件 `cmp` 逐字节还原。
+- **★ 陈旧套件就地反转,不删;而其中一条的旧 docstring 自己承认了问题:** `test_frontend_connecttotask_taskid_dedupe.py` Scenario A 旧契约断言「push 一个空占位符」,docstring 辩解它「stays EMPTY」所以无害。**并非无害** —— 完成回答后追加一个空 assistant 气泡,本身就是屏幕上多出来的气泡。新契约:**复用本 task 自己的槽位、不追加**(实测 A/B/D:`false / true / true`)。
+- **★ 回归判据用失败集 diff,不用票面数字 —— 这次尤其必要:** 首轮 131 套跑出 **21 红**,而纯净 HEAD 副本上同样 9 套是 **0 红**,看起来像我砸了一片。实测原因:**工作树有 60 个改动文件,其中 55 个是兄弟会话的**,且部分失败套件本身就是兄弟**未提交的新文件**(`??`,纯净 HEAD 里根本不存在,所以基线为 0 是取样假象)。于是把**我的 5 个文件嫁接到 `git archive HEAD` 副本**,与基线跑**同一组 127 套**:**零新坏、零修好**,失败集逐条相同(12 条基线红全部来自兄弟 WIP 与环境)。**「我的树 vs 纯净 HEAD」不是有效对照,唯一有效的是「纯净 HEAD vs 纯净 HEAD+我的文件」。**
+- **共享树纪律:** 提交前索引里已有兄弟的东西,故 `git add -- <5 个路径>` + 计数门(`-eq 5`)+ `git commit -F msg -- <5 个路径>`(pathspec 形式);事后核对我的 5 个文件无残留 dirty、兄弟 53 个未提交文件一个不少。
+- **验收边界:** 后端已生效;**前端需重启 + bundle 重建**(bundle 为 gitignored,服务器启动自构)。真浏览器未实测 —— 证据为**真 HTTP 往返**(poll 端点)+ node 驱动 **shipped** reducer。
+
 ### 2026-07-31(GLIBCXX 启动崩溃:三张票、两次诊断被实测证伪,最后交付的是**取证**而不是修复) — owner 连续两轮用实测顶回我的因果断言;真正的产出是「把不可回溯变成可诊断」的一行,以及一份**排除清单**(`pt_cc918d3e44554489` 认领中;server.py +66;新套件 **5/5**,**NEUTER×3 各咬各的**(5/1/2);相邻环 **29/29**)
 
 - **★ 本批最该记的不是结论,是我错了两次的形状 —— 两次都是「手里已有证伪证据却照旧写进票」:**

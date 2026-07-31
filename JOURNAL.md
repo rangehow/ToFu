@@ -5,7 +5,7 @@
 - **生产干跑账(全量 diff,零意外):** 恰好 6 条 —— **R×4**(`030b3df9`/`f4482c27`/`d2805477`/`257f050d`,aborted→error)+ **P×2**(`ae7bbe38`/`4fee9563`,删 error),UNKNOWN×0;与上一批的实测集逐条吻合。
 - **★ 第一发真实干跑崩了,而我的单测全绿 —— 同族教训又一次:** `plan_changes` 里 `after` 的三元表达式结合性写错(外层括号让 `if cls=='R' else None` 作用到整个 `(A if P else B)` 上 ⇒ P 类的 `after=None`),`run()` 从不读 `after` 所以单测看不见,**只有 main() 的打印路径会踩**。修法之外补的钉:单测现在断言 plan 里每个 `after` 的形状。**「迁移脚本的真实干跑」是任何单测替代不了的最后一道验收 —— 它跑的是打印、备份、真实数据形状这些单测不碰的路径。**
 - **决定挂回 owner(问题卡,非代码问题):** 两个候选都改写**用户可见历史**(P:两条成功回答摘掉死亡证明;R:四条「已停止」变「失败」),按自主规则属 (b) 产品取舍。选项:①P+R 全做 ②只做 P(最保守) ③不做(接受「只保证新写入收敛」,把判据限定为重启后新 reap 消息并关闭本票)。脚本与账已就位,owner 一键后执行是 30 秒的事。
-### 2026-07-31(续·矩阵「纯逻辑」判据:owner 用真实形态抓出两行同 ID —— 判据从「池非空」收敛为「没有任何池路由它」) — owner 复核 `9dc9cd3e` 时用 `deepseek-v4-flash` 形态(model_id **本身就在**自己的 `request_ids` 池里,真实配置有 3 个)构造渲染,抓出**同一个 data-id 渲染两行**:一行 `is-logical` 头 + 一行 `is-alias` 线上行(commit 待补,2 文件;套件新增 **9 钉**,复现脚本实测修复后每 ID 恰好一行,相邻环 **7 套件 57/57**)
+### 2026-07-31(续·矩阵「纯逻辑」判据:owner 用真实形态抓出两行同 ID —— 判据从「池非空」收敛为「没有任何池路由它」) — owner 复核 `9dc9cd3e` 时用 `deepseek-v4-flash` 形态(model_id **本身就在**自己的 `request_ids` 池里,真实配置有 3 个)构造渲染,抓出**同一个 data-id 渲染两行**:一行 `is-logical` 头 + 一行 `is-alias` 线上行(commit `443a01d9`,3 文件 +61/-8;套件新增 **9 钉**,复现脚本实测修复后每 ID 恰好一行,相邻环 **7 套件 57/57**)
 
 - **★ 我犯的错是把「前提」写成了「形态」:** 逻辑头行的存在前提是「model_id 永不上线」,而我写成了「`request_ids` 非空」。池里**含** model_id 时它是真线上 ID,头行与线上行重复渲染 —— 前提与形态的差距恰好是那 3 个真实条目。**判据必须直接表达前提:纯逻辑 ⇔ 没有任何池(条目池或任意 key 的 cell 池)路由 model_id。**
 - **收敛方式按 owner 处方:一处判定,两处消费。** 新 `_modelIsPureLogical(m)`(`_modelRowIds(m).indexOf(model_id) < 0` —— 并集里没有它,才是纯逻辑)同时喂渲染循环(头行 vs legacy 行集)与 `_renderMatrixRow` 的 `underHead` 行号判定 —— 这两处原来是两份手写,正是下一个漂移点。连带覆盖一个更偏的形态:cell 池把 model_id 加回来(条目池不含、某 key 的 cell 含)时同样判为真线上 ID。
@@ -19,7 +19,7 @@
 - **发现的潜伏（按纪律不夹修，已记录）：** 清单编辑若落在 build 的 refresh 之后、`_bundle_mtime` 盖章之前的窗口内，会把旧名单产物盖成新鲜——**修复前就存在的竞态**，本批未改变其概率，量级为一次编辑换一代陈旧，下次任意文件触碰自愈。
 - **验收边界：** 后端改动**需重启生效**；重启后这类「加文件必须重启才生效」本身即消失——这正是根因修复的红利。线上 pid 3459968 仍在服务缺两个文件的 bundle（含 108 调用点的 `saveConversations`），重启前发送路径必抛 ReferenceError。
 
-### 2026-07-31(续·访问矩阵探测的是「只用于预设」的逻辑名,55 个真实线上 ID 一个没测) — owner 截图指出矩阵的列「不应只是 model_id,那只是预设用的,应该测所有真实请求的 ID(别名)」;实测确认**三处 `[model_id]+aliases` 与 dispatcher 的 `resolve_request_ids` 契约漂移**,矩阵对每个显式池条目都在测一个生产上永远不会发出的 (key × id) 对(commit 待补,8 文件;新套件 **8 后端 + 3 前端**(NEUTER×2),相邻环 **9 套件 76/76**)
+### 2026-07-31(续·访问矩阵探测的是「只用于预设」的逻辑名,55 个真实线上 ID 一个没测) — owner 截图指出矩阵的列「不应只是 model_id,那只是预设用的,应该测所有真实请求的 ID(别名)」;实测确认**三处 `[model_id]+aliases` 与 dispatcher 的 `resolve_request_ids` 契约漂移**,矩阵对每个显式池条目都在测一个生产上永远不会发出的 (key × id) 对(commit `9dc9cd3e`,9 文件 +653/-51;新套件 **8 后端 + 3 前端**(NEUTER×2),相邻环 **9 套件 76/76**)
 
 - **★ 根因与「入口数 ≠ 实现数」同族:行/探测的枚举面有三个手写拷贝,没有一个走 dispatcher 的契约函数。** `model_id` 在模型身份契约(`lib/llm_dispatch/model_entry.py`)里是**预设身份** —— 显式 `request_ids` 存在时它永不上线;真实线上 ID 池是 `resolve_request_ids()` 的返回值。而访问矩阵在三层各自枚举 `[model_id]+aliases`:前端 `_modelRowIds`(行)、前端探测请求体(只发 `model_id/aliases/capabilities`)、后端 `build_probe_work`(探测面)。实测 owner 的 sankuai 提供商:43 模型中 9 个显式池条目(恰是 claude/deepseek 这些网关改名部署的模型),修复前探测列表里躺着 `claude-opus-5` 而**从未**出现 `yuju-claude-opus-5-evaDaily` —— 网关对逻辑名 404 → `not_found` + `recommend_disable=True`,一次「应用推荐」就会把跑得正好的模型禁掉;而真实承载流量的 55 个线上 ID 的可达性是**零覆盖**。
 - **修法是收敛到契约函数,不是再抄一份:** 后端 `build_probe_work` 改为**逐密钥** `resolve_request_ids(entry, cell)`(先 pop `disabled_ids` —— 被禁 ID 一旦解禁就路由,所以保留探测);前端新增 `_modelKeyPool`(同一契约的 JS 镜像,含 legacy `cell.aliases` 覆盖分支),`_modelRowIds` = 各密钥池**并集**(给受限 ID 留行)。前后端共用一份语义,探测集合与 dispatcher 的 slot 集合逐一对齐 —— 实测 3 密钥 × 55 线上 ID = 165 格,逻辑名**零泄漏**。

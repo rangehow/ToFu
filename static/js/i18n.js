@@ -3812,6 +3812,18 @@ var _i18n = {
   'projectBrain.infMineHead': { zh: '你正在推进的任务', en: 'Epics you are advancing' },
   'projectBrain.infAvoidHead': { zh: '避免重复 —— 其他对话正在推进', en: 'Avoid duplicating — advanced by a sibling' },
   'projectBrain.infOpenHead': { zh: '待认领 —— 你可以接手', en: 'Open — you could claim' },
+  // The two channels: what is really in the prompt vs. what needs a tool call.
+  'projectBrain.infChannelInjected': { zh: '已注入本轮上下文 —— 模型必定读到', en: 'Injected into this turn’s context' },
+  'projectBrain.infChannelTools': { zh: '不在上下文 —— 模型需要主动调用工具', en: 'Not in context — the model must call a tool' },
+  'projectBrain.infChars': { zh: '{n} 字符', en: '{n} chars' },
+  'projectBrain.infGoals': { zh: '{n} 项目标', en: '{n} owner goal(s)' },
+  'projectBrain.infGoalsHead': { zh: '负责人目标（状态与关注）', en: 'Owner goals (Status & Focus)' },
+  'projectBrain.infPendingHead': { zh: '待你决策 —— 未提交前不会到达任何智能体', en: 'Awaiting you — not reaching agents until committed' },
+  'projectBrain.infAbridgedNote': { zh: '任务板条目以缩略形式（仅标题）进入上下文；这里显示的完整正文需模型调用 project_board_read 才能读到。', en: 'Epics ship to the model abridged (headline only) — the full text shown here is reachable via project_board_read.' },
+  'projectBrain.infToolBoardFull': { zh: '任务板每条 epic 的完整正文', en: 'Each epic’s full text' },
+  'projectBrain.infToolCharterFull': { zh: '章程决策的完整正文（上下文里只有摘要行）', en: 'A decision’s full text (context has headlines only)' },
+  'projectBrain.infToolFeed': { zh: '跨对话动态流', en: 'Cross-conversation activity feed' },
+  'projectBrain.infToolPeer': { zh: '兄弟对话的实时状态', en: 'Live sibling-conversation status' },
 };
 
 /* ── Missing-translation tripwire ──────────────────────────────────────

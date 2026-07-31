@@ -1655,22 +1655,53 @@
       '<span>' + _esc(label) + '</span></span>';
   }
 
-  /** Render one board epic row inside an influence group. */
+  /** Render one board epic row inside an influence group.
+   *  The title goes through _clampBlock for the SAME reason the board column
+   *  does: an epic title is stored in full (measured up to 1.6k chars on the
+   *  live board) and rendering it raw made the lens a wall of text with no way
+   *  to see the rows below it. The full text stays the expandable source. */
   function _influenceEpicRow(t, cls) {
     var owner = t.owner
       ? '<button type="button" class="pb-conv-chip" data-conv-id="' + _esc(t.owner) + '">' +
         _esc(t.owner) + '</button>'
       : '';
+    var raw = t.title || t.id || '';
     return '<div class="pb-inf-epic ' + (cls || '') + '">' +
-      '<span class="pb-inf-epic-title">' + _esc(t.title || t.id) + '</span>' +
+      '<span class="pb-inf-epic-title">' + _clampBlock(_mdLite(raw), raw) + '</span>' +
       owner + '</div>';
+  }
+
+  /** One lane header for the INJECTED channel: name + measured prompt cost.
+   *  The char count is the backend's measurement of the REAL block, never a
+   *  frontend estimate — "in your context" without a size is a claim the
+   *  human cannot check. */
+  function _injLaneHead(labelKey, fallback, chars, cls) {
+    var size = chars
+      ? ' <span class="pb-inf-cost">' +
+        _esc(_t('projectBrain.infChars', '{n} chars')
+          .replace('{n}', String(chars))) + '</span>'
+      : '';
+    return '<div class="pb-inf-group-head ' + (cls || '') + '">' +
+      _esc(_t('projectBrain.' + labelKey, fallback)) + size + '</div>';
   }
 
   /**
    * Render the per-conversation influence lens from the backend verdict.
-   * `inf` is the build_conv_influence dict. Renders NOTHING (hides the banner)
-   * when the brain has no effect on this conversation (no charter + empty
-   * board + no pending) — so a solo/empty project adds no visual noise.
+   * `inf` is the build_conv_influence dict.
+   *
+   * The body is split into TWO CHANNELS, because "the model has already read
+   * this" and "the model could go look this up" are different facts and a
+   * merged list silently upgrades the second into the first:
+   *   ① INJECTED — charter headlines, open goals, the abridged board. Each
+   *     lane shows the backend's MEASURED block size, so the prompt cost is
+   *     reported rather than implied.
+   *   ② TOOL-VISIBLE — reachable only if the model spends a tool round; costs
+   *     zero context until then.
+   * Pending proposals sit outside both: they reach agents only once a HUMAN
+   * commits them (charter #0).
+   *
+   * Renders NOTHING (hides the banner) when the brain has no effect on this
+   * conversation — a solo/empty project adds no visual noise.
    */
   function renderInfluence(inf) {
     var banner = document.getElementById('projectBrainInfluence');
@@ -1679,17 +1710,21 @@
     if (!banner || !body) return;
     inf = inf || {};
     var charter = inf.charter || {};
+    var goals = inf.goals || {};
     var board = inf.board || {};
     var mine = board.mine || [];
     var avoid = board.avoid || [];
     var open = board.open || [];
     var pending = inf.pendingDecisions || [];
+    var toolVisible = inf.toolVisible || [];
+    var goalItems = goals.items || [];
     var charterActive = !!charter.injected &&
       (!!charter.content || (charter.decisions || []).length);
+    var goalsActive = !!goals.injected && goalItems.length > 0;
 
     // Nothing influences this conversation → hide the banner entirely.
-    if (!charterActive && !mine.length && !avoid.length && !open.length &&
-        !pending.length) {
+    if (!charterActive && !goalsActive && !mine.length && !avoid.length &&
+        !open.length && !pending.length) {
       banner.hidden = true;
       body.innerHTML = '';
       if (convEl) convEl.textContent = '';
@@ -1714,6 +1749,8 @@
         (charter.decisions || []).length || 1, 'infCharterBound',
         'bound by charter', 'pb-inf-chip-charter');
     }
+    chips += _influenceChip('compass', goalItems.length, 'infGoals',
+      '{n} owner goal(s)', 'pb-inf-chip-goals');
     chips += _influenceChip('package', mine.length, 'infOwns',
       '{n} owned by you', 'pb-inf-chip-mine');
     chips += _influenceChip('alertTriangle', avoid.length, 'infAvoid',
@@ -1724,12 +1761,29 @@
     var parts = [];
     if (chips) parts.push('<div class="pb-inf-chips">' + chips + '</div>');
 
+    // ══ Channel ①: what is SPLICED INTO THIS TURN'S PROMPT ══
+    var inj = [];
+
+    // Goals first: it is the human's own directive, and the reported bug was
+    // that this lane did not appear at all.
+    if (goalsActive) {
+      var gparts = ['<div class="pb-inf-group pb-inf-group-goals">'];
+      gparts.push(_injLaneHead('infGoalsHead', 'Owner goals', goals.chars));
+      gparts.push('<ul class="pb-inf-decisions">');
+      for (var g = 0; g < goalItems.length; g++) {
+        var _gTxt = (goalItems[g] && goalItems[g].text) || '';
+        gparts.push('<li>' + _clampBlock(_mdLite(_gTxt), _gTxt) + '</li>');
+      }
+      gparts.push('</ul></div>');
+      inj.push(gparts.join(''));
+    }
+
     // Charter this conversation is bound by (the shared north star + the
     // committed decisions the prompt actually injects).
     if (charterActive) {
       var cparts = ['<div class="pb-inf-group pb-inf-group-charter">'];
-      cparts.push('<div class="pb-inf-group-head">' +
-        _esc(_t('projectBrain.infCharterHead', 'Bound by the charter')) + '</div>');
+      cparts.push(_injLaneHead('infCharterHead', 'Bound by the charter',
+        charter.chars));
       if (charter.content) {
         cparts.push('<div class="pb-inf-northstar">' +
           _clampBlock(_mdLite(charter.content), charter.content) + '</div>');
@@ -1750,34 +1804,81 @@
         cparts.push('</ul>');
       }
       cparts.push('</div>');
-      parts.push(cparts.join(''));
+      inj.push(cparts.join(''));
     }
 
-    // Board influence — what THIS conv owns vs. must not redo.
+    // Board influence — what THIS conv owns vs. must not redo. The board is
+    // injected ABRIDGED, so the rows below show more than the model got; say
+    // so once for the whole board rather than per row.
+    var boardChars = board.injected ? board.chars : 0;
     if (mine.length) {
-      parts.push('<div class="pb-inf-group pb-inf-group-mine">' +
-        '<div class="pb-inf-group-head">' +
-        _esc(_t('projectBrain.infMineHead', 'Epics you are advancing')) + '</div>' +
+      inj.push('<div class="pb-inf-group pb-inf-group-mine">' +
+        _injLaneHead('infMineHead', 'Epics you are advancing', boardChars) +
         mine.map(function (t) { return _influenceEpicRow(t, 'pb-inf-mine'); }).join('') +
         '</div>');
+      boardChars = 0;  // cost belongs to the board block, counted once
     }
     if (avoid.length) {
-      parts.push('<div class="pb-inf-group pb-inf-group-avoid">' +
-        '<div class="pb-inf-group-head">' +
-        _esc(_t('projectBrain.infAvoidHead',
-          'Avoid duplicating — advanced by a sibling')) + '</div>' +
+      inj.push('<div class="pb-inf-group pb-inf-group-avoid">' +
+        _injLaneHead('infAvoidHead',
+          'Avoid duplicating — advanced by a sibling', boardChars) +
         avoid.map(function (t) { return _influenceEpicRow(t, 'pb-inf-avoid'); }).join('') +
         '</div>');
+      boardChars = 0;
     }
     if (open.length) {
-      parts.push('<div class="pb-inf-group pb-inf-group-open">' +
-        '<div class="pb-inf-group-head">' +
-        _esc(_t('projectBrain.infOpenHead', 'Open — you could claim')) + '</div>' +
+      inj.push('<div class="pb-inf-group pb-inf-group-open">' +
+        _injLaneHead('infOpenHead', 'Open — you could claim', boardChars) +
         open.slice(0, 6).map(function (t) {
           return _influenceEpicRow(t, 'pb-inf-open');
         }).join('') +
         '</div>');
     }
+    if (board.abridgedInPrompt && (mine.length || avoid.length || open.length)) {
+      inj.push('<div class="pb-inf-note">' +
+        _esc(_t('projectBrain.infAbridgedNote',
+          'Epics ship to the model abridged (headline only) — the full text ' +
+          'shown here is reachable via project_board_read.')) + '</div>');
+    }
+
+    if (inj.length) {
+      parts.push('<div class="pb-inf-channel pb-inf-channel-injected">' +
+        '<div class="pb-inf-channel-head">' +
+        _esc(_t('projectBrain.infChannelInjected',
+          'Injected into this turn\u2019s context')) + '</div>' +
+        inj.join('') + '</div>');
+    }
+
+    // ══ Channel ②: reachable ONLY by spending a tool round ══
+    if (toolVisible.length) {
+      var tRows = toolVisible.map(function (tv) {
+        return '<div class="pb-inf-tool"><code>' + _esc(tv.tool) + '</code>' +
+          '<span>' + _esc(_t('projectBrain.' + tv.labelKey, tv.tool)) +
+          '</span></div>';
+      }).join('');
+      parts.push('<div class="pb-inf-channel pb-inf-channel-tools">' +
+        '<div class="pb-inf-channel-head">' +
+        _esc(_t('projectBrain.infChannelTools',
+          'Not in context — the model must call a tool')) + '</div>' +
+        tRows + '</div>');
+    }
+
+    // Pending proposals: neither channel — they reach agents only after a
+    // HUMAN commits them, so showing them as "influence" would be false.
+    if (pending.length) {
+      parts.push('<div class="pb-inf-group pb-inf-group-pending">' +
+        '<div class="pb-inf-group-head">' +
+        _esc(_t('projectBrain.infPendingHead',
+          'Awaiting you — not reaching agents until committed')) + '</div>' +
+        pending.map(function (p) {
+          var txt = p.summary || p.title || p.proposalId || '';
+          return '<div class="pb-inf-epic pb-inf-pending">' +
+            '<span class="pb-inf-epic-title">' +
+            _clampBlock(_mdLite(txt), txt) + '</span></div>';
+        }).join('') +
+        '</div>');
+    }
+
     body.innerHTML = parts.join('');
     _wireClampToggles(body);
     _applyContentI18n(body);

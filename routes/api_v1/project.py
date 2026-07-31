@@ -1513,11 +1513,13 @@ def project_brain_peers():
         'chat: the charter it is bound by, the board epics it OWNS (a live '
         'claim), the epics it must AVOID (a sibling holds an unexpired lease), '
         'the open epics it could pick up, and the decisions awaiting a human. '
-        'Query: ``path`` (REQUIRED) + ``convId`` (REQUIRED). The two '
-        '``injected`` flags mirror the actual system-context injection gate '
-        'exactly (computed from the SAME render_charter_injection_block / '
-        'render_board_block the prompt uses), so the panel can never drift '
-        'from what the model really sees.'),
+        'Query: ``path`` (REQUIRED) + ``convId`` (REQUIRED). Each lane carries '
+        '``injected`` + the MEASURED ``chars`` of the real prompt block, '
+        'computed from the SAME renderers the injection uses '
+        '(render_charter_injection_block / render_goals_injection_block / '
+        'render_board_injection_block), so the panel can never drift from what '
+        'the model really sees. ``toolVisible`` names the brain surfaces that '
+        'reach the model only via a tool round (zero context until called).'),
     tags=['project'],
 )
 def project_brain_influence():

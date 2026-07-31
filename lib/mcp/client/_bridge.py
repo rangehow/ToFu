@@ -319,7 +319,7 @@ class MCPBridge:
                     tool_name=tool.name,
                     namespaced_name=ns_name,
                     description=tool.description or '',
-                    input_schema=tool.inputSchema or {'type': 'object', 'properties': {}},
+                    input_schema=tool.input_schema or {'type': 'object', 'properties': {}},
                     openai_def=self._tool_to_openai(name, tool),
                     read_only_hint=_extract_read_only_hint(tool),
                 )
@@ -701,9 +701,19 @@ class MCPBridge:
                     url = resolve_url(srv_cfg, server_name=name)
                     hdrs = resolve_headers(srv_cfg, server_name=name)
                     if transport == STREAMABLE_HTTP:
-                        from mcp.client.streamable_http import streamablehttp_client
-                        read, write, _get_sid = await stack.enter_async_context(
-                            streamablehttp_client(url, headers=hdrs or None)
+                        # v2 signature: headers no longer go to the transport
+                        # directly — they ride on an httpx2.AsyncClient built
+                        # by the SDK's own factory. We provide the client (so
+                        # the transport will NOT close it) and enter it into
+                        # OUR stack so its lifecycle matches the session's.
+                        from mcp.client.streamable_http import (
+                            create_mcp_http_client,
+                            streamable_http_client,
+                        )
+                        http_client = create_mcp_http_client(headers=hdrs or None)
+                        await stack.enter_async_context(http_client)
+                        read, write = await stack.enter_async_context(
+                            streamable_http_client(url, http_client=http_client)
                         )
                     elif transport == SSE:
                         from mcp.client.sse import sse_client
@@ -838,7 +848,7 @@ class MCPBridge:
                 # Tofu's or the launcher's). This comes from the MCP
                 # handshake — see mcp.types.Implementation.
                 try:
-                    srv_info = getattr(init_result, 'serverInfo', None)
+                    srv_info = getattr(init_result, 'server_info', None)
                     if srv_info is not None:
                         handle.server_name = str(getattr(srv_info, 'name', '') or '')
                         handle.server_version = str(getattr(srv_info, 'version', '') or '')
@@ -1049,7 +1059,7 @@ class MCPBridge:
         # Prefix description with server name for disambiguation
         tagged_desc = f'[MCP:{server_name}] {desc}'
         # Clean up the input schema: ensure it has required fields
-        schema = dict(tool.inputSchema) if tool.inputSchema else {'type': 'object', 'properties': {}}
+        schema = dict(tool.input_schema) if tool.input_schema else {'type': 'object', 'properties': {}}
         if 'type' not in schema:
             schema['type'] = 'object'
 
@@ -1310,7 +1320,7 @@ class MCPBridge:
         )
 
         # Extract text from the MCP CallToolResult
-        if result.isError:
+        if result.is_error:
             # MCP reports an error from the tool
             error_text = self._extract_text(result)
             return f'MCP Error: {error_text}'

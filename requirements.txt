@@ -103,23 +103,21 @@ python-docx>=1.0
 openpyxl>=3.1
 xlrd>=2.0
 olefile>=0.46
-# MCP Python SDK. THE UPPER BOUND IS LOAD-BEARING: `pip install mcp` now
-# resolves to 2.x, a breaking rework that lib/mcp/client/_bridge.py cannot
-# speak — `streamablehttp_client` was RENAMED to `streamable_http_client`
-# (ImportError) and yields a 2-tuple where we unpack 3 (ValueError), and model
-# fields moved to snake_case (isError → is_error, inputSchema → input_schema).
+# MCP Python SDK, client side: v2 line. The 2026-07-28 protocol revision is
+# only spoken by mcp>=2 (v1's protocol constants stop at 2025-11-25), and the
+# client bridge (lib/mcp/client/_bridge.py) was migrated to the v2 API
+# (streamable_http_client + 2-tuple transport, snake_case model fields).
 #
-# This bound BUYS TIME FOR A MIGRATION; it is not a resting place. Measured:
-# the v1 line does NOT speak the 2026-07-28 protocol revision (1.29.0's
-# protocol constants stop at 2025-11-25 / 2025-03-26), v1 is a maintenance
-# line, and HTTP+SSE is already inside a 12-month deprecation window. Staying
-# on <2 forever means third-party servers that ship 2026-07-28-only will
-# eventually be unreachable.
+# Why this is SAFE for servers that still run v1: a 2x2 wire-interop matrix
+# (v1/v2 client x v1/v2 server, real stdio handshakes) negotiates 2025-11-25
+# in ALL four quadrants — SDK major version is not a wire boundary. And why
+# no server's pin can break this client anymore: vendored internal servers
+# launch isolated via `uv run --with-editable` (lib/mcp/client/_vendor), each
+# resolving its own mcp into its own env.
 #
-# The FLOOR stays at the version actually deployed (1.27.2 satisfies >=1.0):
-# raising it to 1.28/1.29 would force an unverified upgrade that fixes nothing
-# about this failure mode. Enforced by tests/test_mcp_sdk_pin_bounded.py.
-mcp>=1.0,<2
+# The bound stays major-bounded (<3) because the next rework is unknowable.
+# Enforced by tests/test_mcp_sdk_pin_bounded.py.
+mcp>=2,<3
 # orjson — fast C JSON encoder. REQUIRED (not optional): routes/chat.py's SSE
 # state snapshot serializes the ENTIRE conversation (content+thinking+toolRounds,
 # 10+ MB for long convs). Plain json.dumps holds the GIL for the whole call, so

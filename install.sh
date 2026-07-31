@@ -1056,10 +1056,10 @@ CONDA_PKGS=(
     "openpyxl>=3.1"
     "xlrd>=2.0"
     "olefile>=0.46"
-    # Bounded deliberately: conda-forge carries mcp 2.0.0, which renamed the
-    # client transport and moved model fields to snake_case — the Tofu bridge
-    # cannot speak it. Enforced by tests/test_mcp_sdk_pin_bounded.py.
-    "mcp>=1.0,<2"
+    # Bounded on both sides: Tofu's client was migrated to the mcp v2 API
+    # (>=2,<3). Vendored servers carry their own pins in isolated envs.
+    # Enforced by tests/test_mcp_sdk_pin_bounded.py.
+    "mcp>=2,<3"
     # orjson — fast JSON encoder; imported by routes/chat.py for chat
     # snapshot serialisation. Hard dep: the server won't boot without it.
     "orjson>=3.9"

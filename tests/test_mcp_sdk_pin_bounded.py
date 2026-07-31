@@ -1,56 +1,36 @@
 """tests/test_mcp_sdk_pin_bounded.py — every MCP SDK dependency spec is bounded.
 
-WHY THIS GUARD EXISTS (measured, 2026-07-29)
---------------------------------------------
-The MCP Python SDK shipped **2.0.0** on 2026-07-28, the same day as the
-``2026-07-28`` protocol revision. It is a breaking rework of the library, and
-every declaration in this repo said ``mcp>=1.0`` with NO upper bound. Measured
-consequences, verified against the real 2.0.0 wheel:
+WHY THIS GUARD EXISTS (measured, 2026-07-29; updated 2026-07-31)
+----------------------------------------------------------------
+The MCP Python SDK shipped **2.0.0** on 2026-07-28, a breaking rework of the
+library (transport renamed, tuple arity changed, model fields moved to
+snake_case, the low-level ``Server`` decorator API replaced by constructor
+kwargs). At the time every declaration in this repo said ``mcp>=1.0`` with NO
+upper bound, so this guard was born to force a bound everywhere.
 
-  * ``mcp.client.streamable_http.streamablehttp_client`` was RENAMED to
-    ``streamable_http_client`` — ``lib/mcp/client/_bridge.py`` imports the old
-    name, so a v2 resolve is an **ImportError** at first remote connect.
-  * The transport yields ``(read_stream, write_stream)``; ``_bridge.py`` unpacks
-    THREE values (``GetSessionIdCallback`` is gone) — **ValueError**.
-  * Model fields moved to snake_case (``isError`` → ``is_error``,
-    ``inputSchema`` → ``input_schema``, ``serverInfo`` → ``server_info``).
-  * The low-level ``Server`` decorator API (``@server.list_tools()`` /
-    ``@server.call_tool()``) was replaced by ``on_list_tools=`` /
-    ``on_call_tool=`` constructor parameters, with NO ``__getattr__`` fallback
-    — every vendored server under ``tools/`` registers via the decorators.
+The doctrine CHANGED on 2026-07-31. A 2x2 wire-interop matrix (v1/v2 client
+x v1/v2 server, real stdio handshakes) negotiated the protocol in ALL four
+quadrants — SDK major version is NOT a wire boundary. What ever coupled a
+server's SDK to Tofu's was the SHARED INTERPRETER (vendored servers were
+pip-installed into it); that coupling is gone (they launch isolated via
+``uv run --with-editable``). And the Tofu client itself was migrated to the
+v2 API, because v1 structurally cannot speak the 2026-07-28 protocol
+revision while a v2 client negotiates down correctly.
 
-The pin sites are NOT one file. They span three install layers, and the most
-dangerous one had no guard at all:
+So the guard now enforces a SPLIT, not a single range:
 
-  1. ``requirements.txt``        — the normal install path.
-  2. ``bootstrap.py``            — ``_CONDA_DEPS``, the PRE-BOOT installer. An
-     unbounded spec here installs the breaking 2.x into Tofu's own interpreter
-     *before the app starts*. ``test_bootstrap_conda_deps_coverage.py`` only
-     asserted PRESENCE of ``_CRITICAL_BOOT_PACKAGES``, so this site was
-     invisible to every existing guard.
-  3. ``tools/*/pyproject.toml``  — vendored servers, pip-installed into TOFU'S
-     OWN interpreter by ``lib/mcp/client/_install.py``. An unbounded spec here
-     upgrades the SDK out from under the Tofu client.
-
-  4. The SIBLING dev checkouts (``../hope-mcp``, ``../llm-mcp``, …) that
-     ``tools/`` is vendored FROM. ``/tools/`` is gitignored, so the snapshots
-     are not tracked here and re-running ``make vendor-mcp`` overwrites them
-     from the sibling — fixing only the snapshot is therefore temporary. This
-     guard can only see what is inside THIS repo, so the sibling pins are
-     fixed at their source and the staleness detector in
-     ``lib/mcp/client/_vendor.py`` reports snapshot drift.
-
-WHY IT SCANS BY RESOURCE RATHER THAN A HARD-CODED FILE LIST
-------------------------------------------------------------
-``tools/*/pyproject.toml`` is GLOBBED, not enumerated. A hard-coded list is a
-second copy of "which servers exist" that drifts the moment someone vendors a
-new server — and the new server would inherit exactly the unbounded spec this
-guard exists to forbid, while the guard stayed green. Discovery is the point.
+  * Tofu client sites (``requirements.txt`` / ``bootstrap.py`` /
+    ``install.sh``) must declare ``mcp>=2,<3`` — the client speaks the v2
+    API, and stays major-bounded because the NEXT rework is unknowable.
+  * Vendored server sites (``tools/*/pyproject.toml``) must be BOUNDED, but
+    the range is each server's own business (they pin ``<2`` today for the
+    v1 decorator API they register with — valid forever inside their
+    isolated envs).
 
 Comments are stripped first via ``tests/_source_scan.strip_comments`` (charter
-#24): this very file's prose contains the string ``mcp>=1.0`` as an example of
-the FORBIDDEN shape, and a naive scanner would either flag the documentation or
-be satisfied by it. Both directions are failures.
+#24): this very file's prose contains spec-like strings as examples, and a
+naive scanner would either flag the documentation or be satisfied by it.
+Both directions are failures.
 """
 
 import os
@@ -67,12 +47,17 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 pytestmark = pytest.mark.unit
 
 #: A dependency spec naming the MCP SDK, in either quoting style:
-#:   requirements.txt →  mcp>=1.0
-#:   pyproject/py     →  "mcp>=1.0.0"  /  'mcp>=1.0'
+#:   requirements.txt →  mcp>=2,<3
+#:   pyproject/py     →  "mcp>=1.0.0,<2"  /  'mcp>=1.0'
 #: The name must be EXACTLY ``mcp`` (not ``mcp-types``, not ``hope-mcp``), so
 #: the boundary is anchored on both sides.
 _MCP_SPEC_RE = re.compile(
     r'''(?<![\w.-])mcp\s*(?P<spec>(?:[<>=!~]=?\s*[0-9][^"'\s,\]]*\s*,?\s*)+)''')
+
+#: Sites that declare the TOFU CLIENT's own SDK — these must be on the v2
+#: line (the bridge was migrated to the v2 API). Vendored servers pin their
+#: own mcp independently inside their isolated envs.
+_TOFU_CLIENT_SITES = ('requirements.txt', 'bootstrap.py', 'install.sh')
 
 
 def _pin_sites():
@@ -190,12 +175,80 @@ def test_mcp_spec_has_upper_bound(label, path, lang):
     for spec in _specs_in(path, lang):
         assert _has_upper_bound(spec), (
             f'{label}: MCP SDK spec "mcp{spec}" has no upper bound. '
-            f'`pip install mcp` resolves to 2.x, which renamed '
-            f'streamablehttp_client and changed the transport tuple arity — '
-            f'the Tofu bridge raises ImportError/ValueError on first connect. '
-            f'Use "mcp>=1.0,<2" (keep the existing floor; do NOT raise it — '
-            f'the v1 line does not speak the 2026-07-28 revision either way).'
+            f'An unbounded resolve pulls the NEXT breaking major the day it '
+            f'lands. Tofu client sites use "mcp>=2,<3" (the bridge speaks the '
+            f'v2 API); a vendored server picks its own bound for the API IT '
+            f'registers with — it lives in an isolated env.'
         )
+
+
+def test_bridge_source_uses_the_v2_api_names():
+    """``_bridge.py`` must not reference a v1-only SDK name.
+
+    The pin alone does not migrate the client: ``requirements.txt`` saying
+    ``mcp>=2,<3`` while the bridge still imports ``streamablehttp_client``
+    (removed in v2) is an ImportError on the first remote connect. This is the
+    code-side ratchet for the migration — cheap, and red the moment anyone
+    reintroduces a v1 spelling:
+
+      * ``streamablehttp_client``  (renamed ``streamable_http_client``)
+      * ``.inputSchema``           (renamed ``.input_schema``)
+      * ``.isError``               (renamed ``.is_error``)
+      * ``'serverInfo'`` getattr   (renamed ``server_info``)
+
+    Anchored to the bridge's OWN source (not a repo-wide grep) so prose,
+    comments, and other modules' legitimate uses cannot satisfy or trip it.
+    """
+    import inspect
+
+    from lib.mcp.client import _bridge as bridge_mod
+
+    src = inspect.getsource(bridge_mod)
+    for dead in ('streamablehttp_client', '.inputSchema', '.isError',
+                 "'serverInfo'"):
+        assert dead not in src, (
+            f'_bridge.py references v1-only SDK name {dead!r} — removed in '
+            f'mcp 2.x, this is an ImportError/AttributeError at runtime'
+        )
+    # And the live v2 names must be present, so this test cannot go green on
+    # an emptied/rewritten module.
+    for live in ('streamable_http_client', '.input_schema', '.is_error',
+                 "'server_info'"):
+        assert live in src, (
+            f'_bridge.py no longer uses {live!r} — the v2 migration regressed'
+        )
+
+
+def test_tofu_client_sites_are_on_the_v2_line():
+    """The Tofu client's own pin must be ``mcp>=2,<3``.
+
+    Both halves are load-bearing:
+
+      * floor >= 2: the bridge uses the v2 API (``streamable_http_client``,
+        snake_case fields). A floor of 1.x lets a resolver hand us a v1 SDK
+        the code cannot speak — and the v1 line structurally cannot speak
+        the 2026-07-28 protocol revision.
+      * ceiling < 3: the NEXT breaking rework is unknowable. This guard was
+        born the day an unbounded spec pulled 2.0.0 into production.
+
+    A regression here fights the migration in the worst way: some future
+    agent "fixes" the red by re-pinning ``<2`` and silently reverts the
+    client to a line that cannot reach 2026-07-28-only servers.
+    """
+    for label, path, lang in _pin_sites():
+        if label not in _TOFU_CLIENT_SITES:
+            continue
+        specs = _specs_in(path, lang)
+        assert specs, f'{label}: no mcp spec found at a Tofu client site'
+        for spec in specs:
+            assert re.search(r'>=\s*2', spec), (
+                f'{label}: "mcp{spec}" floors below 2 — the bridge uses the '
+                f'v2 API and would ImportError on a v1 resolve'
+            )
+            assert re.search(r'<\s*3', spec), (
+                f'{label}: "mcp{spec}" has no major ceiling — the exact '
+                f'shape that pulled a breaking 2.0.0 into production before'
+            )
 
 
 def test_upper_bound_predicate_rejects_bare_floor():

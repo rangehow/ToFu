@@ -1,3 +1,17 @@
+### 2026-07-31(MCP L2+L3 根治:拆掉共享解释器,客户端迁 v2 —— 以及两个只有实测才能抓到的东西) — owner 拍板「现在做 L2+L3 全量根治」并追加三条验收约束;**L2 用物理实验证明隔离,L3 的两个真缺陷都是测试抓的而不是审计抓的**(commits `5471ba32` L2 + `4ecfa02e` L3;守卫:L2 新套件 7 + 重写 7、L3 pin 套件 16→**18**;**NEUTER×10 各咬各的**;相邻环 **188 passed**;真实 bridge 在 **mcp 2.0.0** 下 **7 OK / 0 FAIL**)
+
+- **★ L2 的落点不是「再装一遍」,是删掉一个安装域。** hope/llm/xuecheng 三个 vendored server 原先经 `_install.py:99` pip 装进 `sys.executable`(install.sh:1488 部署期再装一次)⇒ 它们的 mcp 与 Tofu 客户端的 mcp 是同一次解析。改为 **`uv run --no-project --with-editable <源>`**:`vendored_launch_argv()` 单点翻译,bridge 在 PATH 检查**之前**先翻,旧的 pip 机器(`_try_autoinstall_launcher`/`_run_pip_install`/`_install_attempted`/`_install_cmd_locks`)**物理删除**——留着的死路就是下一次耦合的入口。
+- **★ 为什么是可编辑而不是 `uvx --from`:实测 uv 的本地目录构建缓存激进到 `--refresh` 和 `--reinstall` 都拿不回新鲜度** —— 在源码里新建一个文件,装出来的包里没有它。这类「跑的不是你以为的那份」正是本周咬过两次的缺陷类。`--with-editable` 把源码树链接进环境,兄弟库编辑与 `make vendor-mcp` 后的快照都在下一次连接即生效。
+- **★ 隔离的证明是物理的,不是日志的:** `pip uninstall hope-mcp llm-mcp xuecheng-mcp` 从共享环境抹掉三者(附 `PIP_REQUIRE_VIRTUALENV=false` 这个老陷阱),随后全量 **7 OK / 0 FAIL** —— 它们还能跑,证明跑的从来不是共享环境那份。install-route 链路(`start_install_job → ready`)实测 1.5–2.0s 存活;**并修了一个顺带的语义错:vendored 命令「在 PATH 上」不再算 ready**(那可能是 pip 时代的耦合拷贝)。
+- **★ xuecheng-mcp 之前根本没注册在 `vendored.py`**(只有 install.sh 知道它)——「入口数 ≠ 实现数」的又一个实例:隔离机制若只管注册表里的两个,第三个永远在共享环境里。
+- **★ L3 的两个真缺陷都是测试抓的,审计只给了 5 个迁移点:**
+  1. **v2 的 `streamable_http_client` 连签名都换了**(不止改名/元组数):**根本没有 `headers` kwarg**,headers 要走 `create_mcp_http_client()` 造 `httpx2.AsyncClient` 传入。靠 rollinggo 真实端点探活抓到(带 Authorization 头连通,3 个工具)——审计的 5 处清单里没有这一条。
+  2. **v2 的 `MCPError.__str__` 要解引用 `.error`**,畸形实例会让**超时分类器在分类时自己抛错** —— 「诊断绝不允许弄坏调用方」这个模块自己的戒律被 v2 打破。加 `_safe_text`(退回 `.args`)统一三处分类点,error-classify 套件在 2.0.0 下转绿。
+- **★ pin 守卫的教义反转:** 它上一版写着「do NOT raise the floor」——那是对的昨天,是错的今天。现在它断言 **Tofu 客户端站点必须 `>=2,<3`**、vendored server 在各自隔离环境里自选上界,另加 `_bridge.py` v2 API 名的结构棘轮。NEUTER 专咬「未来 agent 把 pin 修回 `<2` 静默回滚」那一发。
+- **★ 部署面实测一个坑(如实记):** mcp 2.0.0 依赖 **httpx2**,内网 pip 镜像**没有**(404),conda-forge(2.7.0)与 pypi.org 都有。install.sh 的 conda 路径没事;**bootstrap 的 pip 路径在纯内网机器会装不上**,需要 `--index-url https://pypi.org/simple`(本机即如此安装)。这条已写进 commit message。
+- **验收边界(如实):** 共享环境已装 mcp 2.0.0;**在跑的服务器内存里仍是 v1 + 旧代码,需重启**才落到新代码+新 SDK。重启前它的 vendored 重连会走老路 pip 重装回共享环境(自愈),重启后永不再发生。`tools/` 是 gitignored,其 pyproject 注释修正只对本机生效,兄弟仓库需要同样的修正(各自仓库,不在本批)。
+- **NEUTER 明细:** L2×6(bridge 不翻译 / helper 返回 None / 丢 --with-editable / 死 pip 路径复活 / prewarm 空转 / install.sh 退回 pip),L3×4(pin 退回 <2 / 无上界 / v1 传输名复活 / .isError 复活),每发各咬一条,事后文件 `cmp` 逐字节还原。
+
 ### 2026-07-31(续·乐观 UI 全面普查:5 个 await-first 按钮收敛,修法在共享接缝而非处理器) — owner 复核后指令「系统性普查,不要逐个抓」;普查 **24 个动作 handler** 按「首个网络 await 之前用户能看到什么」分类,5 个真 await-first 全部修复(`pt_77ba3f17dedf4b65`;6 文件;新套件 **9/9**,失败先行 **9 红**,**NEUTER×3 各咬各的**,相邻环 **63/63** + 本族+闸 **25/25**)
 
 - **已即时的 19 个(按机制归类,不再动手):** 停止生成(同步 abort+预置 finishReason+twStop)、Continue(点击帧 `_raiseContinueShell`)、regen/edit-resend(同步截断本身就是反馈)、saveEditOnly(同步 ConvView.apply)、删除会话/删除消息(上一批)、memory toggle(本已乐观+回滚)/memory delete(确认后立淡出)、skills 安装(按钮即时 disabled+「安装中」)、文件夹创建(disabled+「创建中」)、移入文件夹/切换文件夹视图(同步渲染+后台 PATCH/拉取)、会话重命名(同步应用+PATCH 后台)、copy(剪贴板后打勾)。

@@ -736,6 +736,13 @@ def execute_tool_pipeline(
         #   run_command, process group killed, ¥22.95 + ¥12.01 of completed
         #   rounds discarded. Aliveness is proven by BEATING, never by
         #   not-timing-out.
+        # ★ EVIDENCE GRADING (pt_8524e0ec, same day, same incident family):
+        #   the beat must be EVIDENCE, not self-rescue. For ordinary tools
+        #   this tick is marked ``_selfTick`` and keeps ONLY the transport
+        #   alive; the reaper clocks are fed by real stdout chunks instead
+        #   (a producing command never goes stale). A command silent >30min
+        #   IS reaped now — wedged by definition; the ratified human-wait
+        #   exemption covers only ask_human / await_task(wait) / timer_create.
         _hb_stop, _hb_thread = _start_tool_heartbeat(task, [item], tid)
         try:
             tc_id_ret, tool_content, is_search = _execute_tool_one(
@@ -786,15 +793,16 @@ def execute_tool_pipeline(
         # ── Item 3: long-tool heartbeat ──────────────────────────────────
         # A single blocking tool (a slow web_search on dead hosts, a hung MCP
         # call, a stalled browser action) emits NO delta while it runs, so the
-        # SSE stream goes silent — a buffering proxy idle-times-out, and BOTH
-        # reaper liveness clocks would go stale, risking a false reap of a
-        # genuinely-alive-but-slow tool. This daemon ticker fires every
-        # TOOL_HEARTBEAT_INTERVAL seconds while the pool wait blocks: it (a)
-        # refreshes ``_dispatch_heartbeat`` (positive-liveness clock) and (b)
-        # emits a ``tool_progress`` for each still-active round — which bumps
-        # ``_t_last_event`` via append_event AND keeps the stream non-silent so
-        # the UI shows "Searching… (Ns)". Fast tools finish before the first
-        # tick, so they never emit a heartbeat.
+        # SSE stream goes silent — a buffering proxy idle-times-out. This
+        # daemon ticker fires every TOOL_HEARTBEAT_INTERVAL seconds while the
+        # pool wait blocks, emitting a ``tool_progress`` per still-active
+        # round so the UI shows "Searching… (Ns)". Fast tools finish before
+        # the first tick, so they never emit a heartbeat.
+        # ★ EVIDENCE GRADING (pt_8524e0ec): for ordinary tools these ticks are
+        #   marked ``_selfTick`` and do NOT feed the reaper liveness clocks —
+        #   liveness must come from REAL output (stdout chunks / results).
+        #   Only ratified human-wait tools (ask_human / await_task(wait) /
+        #   timer_create) keep the reaper exemption. See _heartbeat.py.
         _hb_stop, _hb_thread = _start_tool_heartbeat(task, parallel_items, tid)
         try:
             futures = {

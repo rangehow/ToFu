@@ -334,6 +334,12 @@ _SPECS: tuple[EventSpec, ...] = (
                       'batchOk': '(optional) False when THIS item failed — a '
                                  'failed item must still advance the counter, '
                                  'else the row looks stuck on a dead query',
+                      '_selfTick': '(optional) True when this frame is the '
+                                   'tool-heartbeat pinging ITSELF (transport '
+                                   'keepalive, NOT evidence the tool is alive '
+                                   '— pt_8524e0ec). The reaper ignores it for '
+                                   'liveness; the frontend stalled-card reads '
+                                   'it to tell self-ticks from real output',
                       **_TOOL_CLOCK_FIELDS}),
     EventSpec(EventType.TOOL_RESULT, _C.TOOL,
               'A tool produced a (possibly partial) result payload.',

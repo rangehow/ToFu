@@ -233,7 +233,15 @@ def _pipeline(workdir: str, version: str, sha: str, log_fh) -> str:
     for residue in ('data', 'logs', 'uploads', 'project_sessions'):
         shutil.rmtree(os.path.join(dist, 'Tofu', residue),
                       ignore_errors=True)
-    return dist
+    # Tar from a PRIVATE STAGING copy, not the live dist tree. Measured on
+    # build 6: even with every straggler reaped, the smoke child's final
+    # shutdown writes raced tar's traversal ('tar: Tofu: file changed as we
+    # read it') on this shared FUSE box; the identical tar on a quiesced
+    # tree passes. A staging copy is the deterministic form of "quiesced".
+    staging = os.path.join(workdir, 'staging')
+    shutil.copytree(os.path.join(dist, 'Tofu'),
+                    os.path.join(staging, 'Tofu'))
+    return staging
 
 
 def _record_built_artifact(dist: str, version: str, sha: str, log_fh) -> None:

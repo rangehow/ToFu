@@ -306,6 +306,16 @@ class MasterOrchestrator:
         #: what abandoned a running agent at 600s while it went on to finish.
         self._beacon = ProgressBeacon()
 
+        #: spec_id → {'silent_seconds', 'note'} for agents the beacon JUDGED
+        #: stalled when the driver exited. Harvested once in the driver's
+        #: finally, consumed by ``_build_agent_snapshot`` so the panel can say
+        #: "已停滞 · 静默 Ns" instead of coercing a judged agent into the
+        #: 'unknown' → 无结果 bucket (which is now reserved for "never
+        #: started / never produced"). Entries are dropped on completion —
+        #: a stalled agent that comes back self-heals to done (measured in
+        #: production: the smoke agent returned at 1010s and completed).
+        self._stalled_agents: dict[str, dict] = {}
+
         # Rehydration: agent_id → persisted ``messages`` array. When set
         # (by ``rehydrate_in_background``), ``_make_agent`` seeds the new
         # SubAgent's conversation from this checkpoint instead of building a
@@ -436,7 +446,17 @@ class MasterOrchestrator:
                 # Coerce to 'aborted' when the swarm was explicitly aborted,
                 # else 'unknown'. Only a still-live swarm reflects running/pending.
                 if terminated:
-                    live = 'aborted' if self._aborted else 'unknown'
+                    # Precedence: an explicit ABORT outranks a stall verdict
+                    # (the user killed it — that is the honest label), and a
+                    # stall verdict outranks 'unknown' (the beacon JUDGED it;
+                    # 'unknown' → 无结果 is now reserved for "never started /
+                    # never produced", so the panel can always say WHY).
+                    if self._aborted:
+                        live = 'aborted'
+                    elif spec.id in self._stalled_agents:
+                        live = 'stalled'
+                    else:
+                        live = 'unknown'
                 elif spec.id in running_ids:
                     live = 'running'
                 elif spec.id in pending_ids:
@@ -467,6 +487,14 @@ class MasterOrchestrator:
                     #   there is no honest instant to report.
                     'startedAt':     (_epoch_ms(started_at.get(spec.id))
                                       if live == 'running' else None),
+                    # Stall evidence (only meaningful when live == 'stalled'):
+                    # the panel renders 「已停滞 · 静默 Ns」 from these.
+                    'stallSilentSeconds': (
+                        self._stalled_agents[spec.id]['silent_seconds']
+                        if live == 'stalled' else None),
+                    'stallNote': (
+                        self._stalled_agents[spec.id].get('note') or ''
+                        if live == 'stalled' else ''),
                 })
 
         # ── Monotonic version key (#2) ──
@@ -639,6 +667,14 @@ class MasterOrchestrator:
             self._results_by_id[spec.id] = (spec, result)
             running = self._scheduler.running_count if self._scheduler else 0
             pending = self._scheduler.pending_count if self._scheduler else 0
+            # A result EXISTS for this agent now — it was never stuck, just
+            # slow. Drop the stall verdict so the next snapshot self-heals to
+            # done (production smoke: judged stalled at 900s, completed at
+            # 1010s, card became a real completion).
+            if self._stalled_agents.pop(spec.id, None) is not None:
+                logger.info('[Master:%s] agent %s recovered after a stall '
+                            'verdict — snapshot self-heals to done',
+                            self.task_id, spec.id)
         self._completion_event.set()
 
         # 3) Push <swarm-update> to the model inbox so the main agent sees it
@@ -792,6 +828,30 @@ class MasterOrchestrator:
                         '%s marking terminated with %d agent(s) still in '
                         'flight (wedged past the shutdown wait) — beacon: %s',
                         log_prefix, _still, self._beacon.describe())
+
+                # ── Verdict propagation (measured smoke test, swarm 797036b8):
+                # the stall verdict used to live ONLY in the log line above,
+                # while ``_build_agent_snapshot`` coerced the same agents to
+                # 'unknown' → the panel's 无结果 bucket — so for an agent that
+                # genuinely never came back the panel still could not answer
+                # "why no result?". Record the judgement HERE (before
+                # _terminated flips the snapshot's live/terminated branch) so
+                # the final snapshot says 'stalled' WITH its evidence.
+                try:
+                    for _aid, _silent, _note in self._beacon.stalled_agents():
+                        self._stalled_agents[_aid] = {
+                            'silent_seconds': round(_silent),
+                            'note': _note,
+                        }
+                    if self._stalled_agents:
+                        logger.info(
+                            '%s stall verdict recorded for %d agent(s): %s',
+                            log_prefix, len(self._stalled_agents),
+                            {k: v['silent_seconds']
+                             for k, v in self._stalled_agents.items()})
+                except Exception as e:
+                    logger.warning('%s stalled-agents harvest failed: %s',
+                                   log_prefix, e)
 
                 self._terminated = True
                 self._completion_event.set()

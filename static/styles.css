@@ -6333,6 +6333,11 @@ input.settings-mono {
 .sw-agent.sw-a-running{border-color:rgba(96,165,250,0.45);background:linear-gradient(135deg,rgba(96,165,250,0.10),rgba(96,165,250,0.04)),var(--bg-tertiary)}
 .sw-agent.sw-a-done,.sw-agent.sw-a-completed{border-color:rgba(74,222,128,0.40);background:var(--bg-tertiary)}
 .sw-agent.sw-a-failed,.sw-agent.sw-a-error{border-color:rgba(248,113,113,0.45);background:linear-gradient(135deg,rgba(248,113,113,0.08),rgba(248,113,113,0.03)),var(--bg-tertiary)}
+/* Stalled: judged silent by the liveness beacon — amber (distinct from
+   failed-red: the agent may still come back, and did in the smoke test). */
+.sw-agent.sw-a-stalled{border-color:rgba(251,191,36,0.45);background:linear-gradient(135deg,rgba(251,191,36,0.08),rgba(251,191,36,0.03)),var(--bg-tertiary)}
+.sw-a-stalled .sw-a-status-icon{color:#fbbf24}
+.sw-a-stalled .sw-a-role-tag{background:rgba(251,191,36,0.10);border-color:rgba(251,191,36,0.25);color:#fcd34d}
 .sw-agent.sw-a-pending{opacity:0.5}
 /* Agent card header (always visible) */
 .sw-a-header{display:flex;align-items:center;gap:8px;padding:10px 12px;cursor:pointer;user-select:none}

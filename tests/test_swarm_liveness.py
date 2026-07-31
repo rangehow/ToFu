@@ -890,3 +890,188 @@ def test_the_ratchet_actually_catches_the_broken_form():
         'ratchet must not flag a plain-literal task-id read'
     assert not minting.search("id=agent_def.get('id') or str(uuid.uuid4())[:8],"), \
         'ratchet must accept the CORRECT or-form'
+
+
+# ═══════════════════════════════════════════════════════
+#  9. The stall verdict must reach the SNAPSHOT, not just the log
+# ═══════════════════════════════════════════════════════
+#
+# The smoke test (conv ms8c68l0ppwfcw follow-up, swarm 797036b8) proved the
+# driver-level stall verdict fires correctly at exactly 900s. But the verdict
+# lived ONLY in logs: `_build_agent_snapshot` had no 'stalled' status at all,
+# so a terminated + resultless agent still coerced to 'unknown' — the panel's
+# "no result" bucket. smoke-silence only escaped because it came back at
+# 1010s; had it genuinely died, its card would still read 无结果 and the panel
+# could not answer the user's original question "why no result???".
+#
+# So the verdict must propagate: driver exit on stall → snapshot status
+# 'stalled' (+ measured silence + last activity note) → panel shows
+# "已停滞 · 静默 Ns". And the self-heal property the smoke proved (a late
+# completion flips the card to done) must survive.
+
+
+def _drive_stalled_master(stall_timeout=0.5, shutdown_timeout=2.0):
+    """Run a REAL MasterOrchestrator whose single agent never shows life.
+
+    Returns (master, gate) once the driver has terminated on the stall.
+    The gate stays CLOSED so the agent thread remains in flight until the
+    caller is done asserting (release it in a finally).
+    """
+    from unittest.mock import patch
+
+    from lib.swarm.master import MasterOrchestrator
+
+    gate = threading.Event()
+    agents = {}
+
+    def factory(spec, **kw):
+        a = _SilentAgent(spec, gate=gate)
+        agents[spec.id] = a
+        return a
+
+    m = MasterOrchestrator(task_id='t-stall-snap', conv_id='c1',
+                           specs=[_spec('wedged')])
+    # Small stall window BEFORE the scheduler is built (run_in_background reads
+    # self._beacon when constructing it).
+    m._beacon = ProgressBeacon(stall_timeout=stall_timeout)
+    with patch('lib.swarm.master._build_sub_agent', side_effect=factory):
+        m.run_in_background()
+        # Bound the driver's shutdown wait so a wedged test agent doesn't hold
+        # the suite for the production 30s.
+        if m._scheduler is not None:
+            _orig_sd = m._scheduler.shutdown
+            m._scheduler.shutdown = (
+                lambda wait=True, timeout=30.0: _orig_sd(wait=wait,
+                                                         timeout=shutdown_timeout))
+        deadline = time.time() + 20
+        while not m.is_terminated and time.time() < deadline:
+            time.sleep(0.05)
+    assert m.is_terminated, 'driver must terminate on a stalled swarm'
+    return m, gate
+
+
+def test_driver_stall_writes_stalled_into_the_snapshot():
+    """Driver exit on stall → snapshot says 'stalled', never 'unknown'.
+
+    'unknown' → 无结果 is reserved for "never started / never produced". An
+    agent the beacon JUDGED silent must carry that verdict to the panel.
+    """
+    m, gate = _drive_stalled_master()
+    try:
+        snap = m._build_agent_snapshot()
+        assert snap['settled'] is True
+        a = next(x for x in snap['agents'] if x['id'] == 'wedged')
+        assert a['status'] == 'stalled', (
+            f"stall verdict did not reach the snapshot — got {a['status']!r} "
+            "(the panel would render 无结果 for a judged-stalled agent)")
+        assert a['status'] != 'unknown'
+        assert snap['doneCount'] == 0, \
+            'a stalled agent is NOT done — it must not inflate the count'
+    finally:
+        gate.set()
+
+
+def test_stall_verdict_carries_silence_and_last_activity():
+    """The panel needs the EVIDENCE, not just the label: silent seconds + note."""
+    m, gate = _drive_stalled_master()
+    try:
+        snap = m._build_agent_snapshot()
+        a = next(x for x in snap['agents'] if x['id'] == 'wedged')
+        assert a['status'] == 'stalled'
+        assert isinstance(a.get('stallSilentSeconds'), (int, float)), \
+            'snapshot must carry how LONG the agent was silent'
+        assert a['stallSilentSeconds'] >= 0.4, \
+            f"silence measured {a.get('stallSilentSeconds')}s — verdict fired early?"
+        # scheduler._run_one seeds every agent with note='agent_start'; a
+        # never-active agent's last activity is exactly that.
+        assert a.get('stallNote'), 'snapshot must carry the last activity kind'
+    finally:
+        gate.set()
+
+
+def test_stalled_snapshot_self_heals_on_late_completion():
+    """A stalled agent that comes BACK must flip the snapshot to done.
+
+    This is the exact smoke-test shape: driver released the pool at 900s, the
+    sleep returned at 1010s, AGENT_COMPLETE landed, and the card became a real
+    completion. The stalled status must not be sticky.
+    """
+    m, gate = _drive_stalled_master()
+    try:
+        snap1 = m._build_agent_snapshot()
+        assert next(x for x in snap1['agents'] if x['id'] == 'wedged')['status'] == 'stalled'
+        v1 = snap1['version']
+
+        # The late completion, through the REAL master callback (this is what
+        # fired in production at 18:41:45).
+        spec = m.specs[0]
+        result = SubAgentResult(status=SubAgentStatus.COMPLETED.value,
+                                final_answer='late report', elapsed_seconds=1010.7)
+        m._on_agent_complete_callback(spec, result)
+
+        assert spec.id not in m._stalled_agents, \
+            'a completed agent must be dropped from the stalled registry'
+        snap2 = m._build_agent_snapshot()
+        a2 = next(x for x in snap2['agents'] if x['id'] == 'wedged')
+        assert a2['status'] == 'done', \
+            f"late completion must self-heal the card, got {a2['status']!r}"
+        assert snap2['doneCount'] == 1
+        assert snap2['version'] > v1, \
+            'self-heal must yield a NEWER snapshot or the CAS layer rejects it'
+    finally:
+        gate.set()
+
+
+def test_aborted_swarm_still_says_aborted_not_stalled():
+    """Precedence: an explicit abort must not be relabelled as a stall."""
+    m, gate = _drive_stalled_master()
+    try:
+        m._aborted = True     # abort flag set before the snapshot is built
+        snap = m._build_agent_snapshot()
+        a = next(x for x in snap['agents'] if x['id'] == 'wedged')
+        assert a['status'] == 'aborted', \
+            f"abort semantics regressed: got {a['status']!r}"
+    finally:
+        gate.set()
+
+
+def test_panel_maps_the_stalled_status_end_to_end():
+    """Frontend wiring: status 'stalled' → amber card + i18n label, not 无结果.
+
+    Source-level on purpose (this project's frontend guards are): the phase
+    map, the status-override, the CSS class, and BOTH locale entries must all
+    exist — a missing any-one silently falls back to the noResult bucket.
+    """
+    import re
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    panel = open(os.path.join(root, 'static/js/ui/streaming_swarm_panel.js'),
+                 encoding='utf-8').read()
+    i18n = open(os.path.join(root, 'static/js/i18n.js'), encoding='utf-8').read()
+    css = open(os.path.join(root, 'static/styles.css'), encoding='utf-8').read()
+
+    assert re.search(r'stalled:\s*t\("swarm\.phase\.stalled"', panel), \
+        'phaseMap does not map stalled — falls through to noResult'
+    # Anchor the WHOLE branch line, not the substring: a 'false &&' neuter
+    # keeps the substring alive while killing the behaviour (measured — the
+    # first draft of this guard stayed green under exactly that neuter).
+    assert re.search(r'else if \(a\.status === "stalled"\) \{', panel), \
+        'the status-override (which wins for terminated agents) lacks stalled'
+    assert 'stallSilentSeconds' in panel, \
+        'the silent-seconds label is not rendered'
+    # Recovery path: a reloaded panel must carry the backend's stall evidence
+    # out of the persisted snapshot, or F5 silently loses the 「静默 Ns」.
+    recovery = panel[panel.index('function _recoverSwarmAgents'):
+                     panel.index('function _buildSwarmPanelHTML')]
+    assert re.search(r'\?\s*a\.stallSilentSeconds', recovery), \
+        '_recoverSwarmAgents drops the stallSilentSeconds MAPPING — a reload ' \
+        'loses the 「静默 Ns」 label (substring checks stay green: the ' \
+        'identifier survives even when the mapping is neutered to undefined)'
+    assert 'sw-a-stalled' in panel and '.sw-a-stalled' in css, \
+        'no visual class for a stalled card'
+    assert "'swarm.phase.stalled'" in i18n and '已停滞' in i18n, \
+        'i18n key swarm.phase.stalled missing (zh)'
+    assert "'swarm.phase.stalledSilent'" in i18n and '{seconds}' in i18n, \
+        'i18n key swarm.phase.stalledSilent missing (carries the seconds)'
+    assert re.search(r"swarm\.phase\.stalled[^}]*en:\s*'[^']*[Ss]tall", i18n), \
+        'i18n key swarm.phase.stalled missing (en)'

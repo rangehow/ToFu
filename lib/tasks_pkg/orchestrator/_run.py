@@ -41,9 +41,6 @@ from lib.tasks_pkg.commit_round import (  # noqa: E402
     derive_round_modified_files,  # noqa: F401  (re-exported by the facade)
 )
 from lib.tasks_pkg.message_builder import inject_tool_history
-from lib.tasks_pkg.model_config import (
-    _resolve_model_config,
-)
 from lib.tasks_pkg.system_context import (
     _inject_system_contexts,
     _disabled_prompt_blocks,
@@ -132,6 +129,9 @@ from lib.tasks_pkg.orchestrator._round_request_prep import (
 )
 from lib.tasks_pkg.orchestrator._tool_assembly_prep import (
     assemble_round_tools,
+)
+from lib.tasks_pkg.orchestrator._config_resolution import (
+    resolve_and_seed_model_config,
 )
 
 
@@ -278,18 +278,13 @@ def run_task(task: dict[str, Any]) -> None:
         set_conv_affinity(task.get('convId') or '')
 
         # ── Section 1: Config & Model Resolution ──
-        mcfg = _resolve_model_config(cfg, task['id'])
+        #   _resolve_model_config + immediate task['model'] seed (the
+        #   floor for first-call dispatch failures — epic
+        #   pt_8f6cbc753855415e). Extracted 2026-07-31 (pt_03f4cdf1
+        #   slice 30) to lib.tasks_pkg.orchestrator._config_resolution.
+        #   The 17-field unpack below stays inline as local binding.
+        mcfg = resolve_and_seed_model_config(cfg, task)
         model           = mcfg['model']
-        # ★ Seed the resolved model on the task IMMEDIATELY (epic
-        #   pt_8f6cbc753855415e). The loop tail stamps it again after each
-        #   successful round, but a first-call DISPATCH failure (revoked-OAuth
-        #   401, all keys cooling, endpoint-unreachable exhaustion) raises
-        #   BEFORE any round succeeds — the error row then persisted with
-        #   metadata.model NULL (40 such rows in 14 days), invisible to
-        #   per-model failure stats. The post-round stamp still tracks
-        #   fallback swaps; this seed is the floor.
-        if model:
-            task['model'] = model
         thinking_enabled = mcfg['thinking_enabled']
         thinking_depth  = mcfg['thinking_depth']
         preset          = mcfg['preset']

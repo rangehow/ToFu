@@ -70,6 +70,9 @@ from lib.mcp.client._state import (  # noqa: E402,F401
 # ── Vendored-launcher discovery + prewarm ────────────────────────────────────
 from lib.mcp.client._vendor import (  # noqa: E402,F401
     _ensure_writable_caches,
+    _NPX_CUTOFF_MARKER,
+    _reconcile_npx_cache,
+    reconcile_for_connect,
     _vendored_path,
     _reload_vendored_if_changed,
     _VENDOR_EXCLUDE_DIRS,
@@ -121,6 +124,8 @@ __all__ = [
     '_find_vendored_source',
     '_reload_vendored_if_changed',
     '_check_snapshot_staleness',
+    'reconcile_for_connect',
+    '_reconcile_npx_cache',
     '_coerce_args_to_schema',
     '_extract_read_only_hint',
     '_install_attempted',

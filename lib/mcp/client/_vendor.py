@@ -207,13 +207,51 @@ def _ensure_writable_caches(env: dict[str, str]) -> None:
         # uv wants an RFC3339 instant; npm's --before takes a plain date.
         env.setdefault('UV_EXCLUDE_NEWER', cutoff)
         env.setdefault('npm_config_before', cutoff.split('T', 1)[0])
-        # An npx slot whose lock predates the cutoff makes npm abort with
-        # ECOMPROMISED, so the cutoff must also migrate trees resolved under
-        # the old rules -- see _reconcile_npx_cache.
-        try:
-            _reconcile_npx_cache(env['npm_config_cache'], cutoff)
-        except Exception as e:  # cache hygiene must never break a connect
-            logger.warning('[MCP] npx cache reconcile failed: %s', e)
+        # NOTE: npx-cache reconciliation deliberately does NOT happen here.
+        # This function runs INSIDE the readiness timer (the owner task builds
+        # its env just before spawning), so an eviction here forces the cold
+        # rebuild to compete with the handshake for the same 65s budget --
+        # measured 58.6s / 65.0s / 63.8s across three trials, i.e. a coin flip.
+        # Reconciliation is a cache-MIGRATION concern, not a per-spawn one, so
+        # it belongs in connect_server's pre-flight; see reconcile_for_connect.
+
+
+def reconcile_for_connect() -> int:
+    """Pre-flight cache migration. Returns how many npx slots were evicted.
+
+    Called from ``connect_server`` BEFORE the readiness timer starts, and the
+    return value tells the caller whether a cold dependency download is now
+    unavoidable for this connect.
+
+    WHY THE RETURN VALUE MATTERS (measured 2026-07-31)
+    ---------------------------------------------------
+    Evicting a slot is correct -- npm would otherwise abort with ECOMPROMISED
+    against the pre-cutoff lock -- but the rebuild it forces is not free. The
+    FIRST connect after an eviction was measured at 58.6s / 65.0s / 63.8s
+    across three trials against a readiness ceiling of
+    ``MCP_CONNECT_TIMEOUT * 2 + 5`` = 65s. That is a coin flip, and the losing
+    side surfaces as ``BrokenResourceError`` -- indistinguishable from a server
+    that genuinely crashed. Trading a deterministic failure for a
+    nondeterministic one is a bad trade even though the average improves.
+
+    So the eviction is REPORTED rather than hidden: the caller widens the
+    readiness budget for exactly this connect. That keeps the ordinary ceiling
+    (a server that never comes up is still a fast, honest failure -- the
+    distinction lib/mcp/types.py:18-25 insists on) while giving the one state
+    we can positively identify -- "a dependency download is pending because we
+    just deleted the tree" -- the time it actually needs.
+    """
+    env: dict[str, str] = {}
+    _ensure_writable_caches(env)
+    cutoff = env.get('UV_EXCLUDE_NEWER', '')
+    cache = env.get('npm_config_cache', '')
+    if not cutoff or not cache:
+        return 0  # cutoff disabled, or cache dir unusable -- nothing to migrate
+    try:
+        return _reconcile_npx_cache(cache, cutoff)
+    except Exception as e:  # cache hygiene must never break a connect
+        logger.warning('[MCP] npx cache reconcile failed: %s', e)
+        return 0
 
 
 # ── Hot-reload of the vendored registry ──────────────────

@@ -27,6 +27,7 @@ from lib.mcp.types import (
     MCP_BREAKER_MAX_BACKOFF,
     MCP_CALL_TIMEOUT,
     MCP_CONNECT_TIMEOUT,
+    MCP_COLD_INSTALL_TIMEOUT,
     MCP_CRED_PROBE_INTERVAL,
     MCP_DEGRADED_TIMEOUT_STREAK,
     MCP_KEEPALIVE_INTERVAL,
@@ -76,6 +77,7 @@ class _MCPServerHandle:
         '_closed_future',    # asyncio.Future[None] — resolved when owner task exits
         '_owner_task',       # asyncio.Task — the owner coroutine handle
         '_stderr_file',      # tempfile.SpooledTemporaryFile capturing child stderr (stdio transport only)
+        '_cold_install',     # True when connect_server just evicted this launcher's dep tree
     )
 
     def __init__(self, name: str, config: dict):
@@ -90,6 +92,7 @@ class _MCPServerHandle:
         self._closed_future = None
         self._owner_task = None
         self._stderr_file = None
+        self._cold_install = False
 
 
 class MCPBridge:
@@ -272,6 +275,20 @@ class MCPBridge:
         except Exception as e:
             logger.debug('[MCP] snapshot staleness check skipped: %s', e)
 
+        # Migrate npx cache slots resolved under a previous supply cutoff.
+        # Deliberately BEFORE the readiness timer: npm aborts with
+        # ECOMPROMISED against a pre-cutoff lock, so the eviction is required,
+        # but the rebuild it forces was measured at 58.6-65.0s against a 65s
+        # readiness ceiling -- a coin flip whose losing side looks exactly like
+        # a crashed server. Doing it here means the download is not racing the
+        # handshake, and `evicted` tells _async_start_owner that a cold
+        # dependency fetch is now unavoidable for THIS connect.
+        evicted = 0
+        try:
+            evicted = _pkg().reconcile_for_connect()
+        except Exception as e:
+            logger.debug('[MCP] npx cache reconcile skipped: %s', e)
+
         # Tear down any existing server with the same name BEFORE taking
         # the lock for the new registration. The disconnect itself hits
         # the async loop; holding self._lock across it would freeze every
@@ -289,7 +306,8 @@ class MCPBridge:
                 logger.warning('[MCP] Error disconnecting old %s: %s', name, e)
 
         with log_context(f'mcp_connect:{name}', logger=logger):
-            handle, tools = self._run_async(self._async_start_owner(name, srv_cfg))
+            handle, tools = self._run_async(
+                self._async_start_owner(name, srv_cfg, cold_install=bool(evicted)))
 
         with self._lock:
             self._servers[name] = handle
@@ -580,15 +598,26 @@ class MCPBridge:
             with self._lock:
                 return self._servers[name]
 
-    async def _async_start_owner(self, name: str, srv_cfg: dict):
+    async def _async_start_owner(self, name: str, srv_cfg: dict,
+                                 cold_install: bool = False):
         """Async: spawn the owner task for a server and await readiness.
 
         The owner task holds the ``AsyncExitStack`` open for the lifetime
         of the server (see ``_server_owner``). We return only after the
         session is initialized and the tool list has been fetched.
+
+        ``cold_install`` widens the readiness budget for the ONE case we can
+        positively identify: the caller just evicted this launcher's dependency
+        tree (stale supply cutoff), so a full download must finish before the
+        server can even speak. Measured: an npx rebuild takes 27-65s while a
+        warm start is 4-8s, so the ordinary ceiling turns that migration into a
+        coin flip. The default ceiling is deliberately NOT raised -- a server
+        that never comes up must still fail fast (lib/mcp/types.py:18-25:
+        a handshake that never completes is a crash, not a wait).
         """
         loop = asyncio.get_running_loop()
         handle = _MCPServerHandle(name, srv_cfg)
+        handle._cold_install = cold_install
         handle._shutdown_event = asyncio.Event()
         handle._ready_future = loop.create_future()
         handle._closed_future = loop.create_future()
@@ -602,12 +631,20 @@ class MCPBridge:
         # ``asyncio.shield`` prevents our wait_for timeout from cancelling
         # the owner task itself — if readiness hangs, we still want the
         # owner to complete its own cleanup cycle.
+        # Readiness ceiling: connect handshake + list_tools each have their
+        # own MCP_CONNECT_TIMEOUT inside the owner. When a dependency tree was
+        # just evicted, the download is serialized ahead of the handshake, so
+        # the budget is widened for that identified case only.
+        ready_budget = (MCP_COLD_INSTALL_TIMEOUT if cold_install
+                        else MCP_CONNECT_TIMEOUT * 2 + 5)
+        if cold_install:
+            logger.info('[MCP] %s: dependency tree was just migrated — '
+                        'allowing %ds for the cold download instead of %ds',
+                        name, ready_budget, MCP_CONNECT_TIMEOUT * 2 + 5)
         try:
             tools = await asyncio.wait_for(
                 asyncio.shield(handle._ready_future),
-                # Generous readiness ceiling: connect handshake + list_tools
-                # each have their own MCP_CONNECT_TIMEOUT inside the owner.
-                timeout=MCP_CONNECT_TIMEOUT * 2 + 5,
+                timeout=ready_budget,
             )
         except asyncio.TimeoutError:
             # Readiness stalled — tell the owner to shut down and re-raise
@@ -619,7 +656,7 @@ class MCPBridge:
                 name,
                 TimeoutError(
                     f'connection handshake did not complete within '
-                    f'{MCP_CONNECT_TIMEOUT * 2 + 5}s'
+                    f'{ready_budget}s'
                 ),
                 stderr_tail,
             )
@@ -785,8 +822,18 @@ class MCPBridge:
                 session = await stack.enter_async_context(
                     ClientSession(read, write)
                 )
+                # Handshake budget. When this launcher's dependency tree was
+                # just evicted, npx must finish DOWNLOADING before the spawned
+                # process answers a single JSON-RPC byte — so the wait lands
+                # here, on initialize(), not on process spawn. Measured: the
+                # outer readiness budget alone was NOT sufficient (a trial
+                # still failed at 67.5s with 300s granted outside), because
+                # this inner 30s timer fired first.
+                handshake_budget = (MCP_COLD_INSTALL_TIMEOUT
+                                    if getattr(handle, '_cold_install', False)
+                                    else MCP_CONNECT_TIMEOUT)
                 init_result = await asyncio.wait_for(
-                    session.initialize(), timeout=MCP_CONNECT_TIMEOUT
+                    session.initialize(), timeout=handshake_budget
                 )
                 # Harvest serverInfo.name / serverInfo.version so the UI
                 # can surface the upstream MCP server's own version (not
@@ -807,7 +854,7 @@ class MCPBridge:
 
                 # Discover tools
                 response = await asyncio.wait_for(
-                    session.list_tools(), timeout=MCP_CONNECT_TIMEOUT
+                    session.list_tools(), timeout=handshake_budget
                 )
 
                 handle.session = session

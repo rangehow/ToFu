@@ -417,34 +417,153 @@ def test_stale_npx_slot_is_reconciled_against_the_cutoff(tmp_path):
     assert (stale / _NPX_CUTOFF_MARKER).exists()
 
 
-def test_reconcile_is_wired_into_the_launcher_env(monkeypatch, tmp_path):
-    """The reconciler must run on the REAL connect path, not just exist.
+def test_reconcile_runs_before_the_readiness_timer_not_inside_it(monkeypatch, tmp_path):
+    """Eviction must happen in connect PRE-FLIGHT, never while building the env.
 
-    A correct ``_reconcile_npx_cache`` that nothing calls would leave the
-    production regression fully intact while the unit test above stayed green
-    -- the exact shape of "tested but not wired" this project has been bitten
-    by before. So drive the seam every stdio launcher passes through and assert
-    the reconciliation actually happened against the cache dir it hands out.
+    THE SECOND REGRESSION THIS PINS (measured 2026-07-31)
+    -----------------------------------------------------
+    The first fix called the reconciler from ``_ensure_writable_caches``. That
+    function runs inside the owner task, i.e. INSIDE the readiness timer, so the
+    cold rebuild it forces competed with the handshake for one 65s budget
+    (``MCP_CONNECT_TIMEOUT * 2 + 5``). Measured across three trials, the FIRST
+    connect after an eviction took **58.6s / 65.0s / 63.8s** — one of them over
+    the ceiling. That turned a DETERMINISTIC failure (ECOMPROMISED every time)
+    into a NONDETERMINISTIC one surfacing as ``BrokenResourceError``, which is
+    indistinguishable from a server that genuinely crashed. For diagnosis that
+    is strictly worse, even though the average got better.
+
+    Eviction is a cache-MIGRATION concern that happens once per cutoff change,
+    not a per-spawn concern. Hence two separate assertions here:
+
+      * building the launcher env must NOT evict (or the download races the
+        handshake again, and the race is invisible to a fake-slot unit test);
+      * the pre-flight entry point must evict, and must REPORT it, so the
+        caller can widen the budget for the one identified state.
     """
-    from lib.mcp.client._vendor import _NPX_CUTOFF_MARKER, _ensure_writable_caches
+    from lib.mcp.client._vendor import (
+        _NPX_CUTOFF_MARKER,
+        _ensure_writable_caches,
+        reconcile_for_connect,
+    )
 
     cache_root = tmp_path / 'mcp-cache'
-    stale = cache_root / 'npm' / '_npx' / 'deadbeefcafe0004'
-    stale.mkdir(parents=True)
-    (stale / 'package-lock.json').write_text('{"lockfileVersion": 3}')
-    (stale / 'node_modules').mkdir()
+    slot = cache_root / 'npm' / '_npx' / 'deadbeefcafe0004'
+    slot.mkdir(parents=True)
+    (slot / 'package-lock.json').write_text('{"lockfileVersion": 3}')
+    (slot / 'node_modules').mkdir()
 
     monkeypatch.setenv('TOFU_MCP_CACHE_DIR', str(cache_root))
     monkeypatch.delenv('TOFU_MCP_SUPPLY_CUTOFF', raising=False)
 
+    # (1) Building the env must leave the tree ALONE — it runs inside the timer.
     env = {}
     _ensure_writable_caches(env)
-
-    assert not (stale / 'node_modules').exists(), (
-        'building the launcher env did NOT reconcile the npx cache -- the '
-        'stale slot survives and npm aborts with ECOMPROMISED at spawn'
+    assert (slot / 'node_modules').exists(), (
+        'building the launcher env evicted a slot. That call happens inside the '
+        'readiness timer, so the forced rebuild races the handshake — measured '
+        '58.6/65.0/63.8s against a 65s ceiling, i.e. a coin flip that surfaces '
+        'as BrokenResourceError.'
     )
-    assert (stale / _NPX_CUTOFF_MARKER).read_text().strip() == env['UV_EXCLUDE_NEWER']
+
+    # (2) The pre-flight entry point must evict AND report it.
+    evicted = reconcile_for_connect()
+    assert evicted == 1, (
+        f'pre-flight reconcile evicted {evicted} slots, expected 1. Returning 0 '
+        f'means the caller cannot know a cold download is now unavoidable, so '
+        f'it will apply the ordinary budget and lose the race.'
+    )
+    assert not (slot / 'node_modules').exists()
+    assert (slot / _NPX_CUTOFF_MARKER).read_text().strip() == env['UV_EXCLUDE_NEWER']
+
+    # Idempotent: a second pre-flight reports NO eviction, so a routine connect
+    # is never mistaken for a migration and never gets the wide budget.
+    assert reconcile_for_connect() == 0
+
+
+def test_cold_install_gets_its_own_budget_without_relaxing_the_crash_ceiling():
+    """A known-pending download may wait; an unidentified stall may not.
+
+    ``lib/mcp/types.py`` draws a deliberate line: a handshake that never
+    completes means the server never came up, which is a CRASH and must fail
+    fast — that is why ``MCP_CALL_TIMEOUT`` is None while
+    ``MCP_CONNECT_TIMEOUT`` deliberately stays. Simply raising the global
+    ceiling to cover a 65s npx rebuild would erase that line and make every
+    genuinely-dead server take minutes to report.
+
+    So the wide budget is granted ONLY for the state we can positively identify
+    (we just deleted this launcher's dependency tree). Both halves are pinned:
+    the cold budget must actually exceed the measured rebuild range, and the
+    ordinary ceiling must NOT have been widened.
+    """
+    import inspect
+
+    from lib.mcp.client._bridge import MCPBridge
+    from lib.mcp.types import MCP_COLD_INSTALL_TIMEOUT, MCP_CONNECT_TIMEOUT
+
+    ordinary = MCP_CONNECT_TIMEOUT * 2 + 5
+    assert ordinary == 65, (
+        f'the ordinary readiness ceiling moved to {ordinary}s. If that was '
+        f'deliberate, re-derive the measurements in this test; if it was a '
+        f'workaround for cold installs, use the cold budget instead.'
+    )
+    # 65.0s was an observed FAILURE, and a clean-cache cold start measured
+    # 55.4s, so the cold budget has to clear those with real headroom.
+    assert MCP_COLD_INSTALL_TIMEOUT > 65, (
+        'the cold-install budget does not exceed the ordinary ceiling, so the '
+        'measured 58.6-65.0s rebuild is still a coin flip'
+    )
+
+    # The seam must actually accept the flag — a budget nothing can select is
+    # dead weight, and the production race would be untouched.
+    sig = inspect.signature(MCPBridge._async_start_owner)
+    assert 'cold_install' in sig.parameters, (
+        '_async_start_owner takes no cold_install flag, so the wide budget is '
+        'unreachable from connect_server'
+    )
+    assert sig.parameters['cold_install'].default is False, (
+        'cold_install must default to False — a routine connect must keep the '
+        'fast crash ceiling'
+    )
+
+    # And connect_server must be the thing that sets it, from the reconcile
+    # result. Asserting on the source keeps this honest without spawning a
+    # real server (which is what made the original 58-65s window invisible).
+    src = inspect.getsource(MCPBridge.connect_server)
+    assert 'reconcile_for_connect' in src, (
+        'connect_server does not run the pre-flight reconcile'
+    )
+    assert 'cold_install=' in src, (
+        'connect_server never passes cold_install, so an eviction it just '
+        'performed does not widen the budget for the rebuild it caused'
+    )
+
+    # ── The INNER timer is the one that actually binds ──────────────────
+    # Measured: granting 300s on the OUTER readiness wait was NOT enough — a
+    # trial still failed at 67.5s, because ``session.initialize()`` carries its
+    # own MCP_CONNECT_TIMEOUT. The npx download finishes only AFTER the process
+    # is spawned, so the wait lands on initialize(), not on spawn. Both timers
+    # must honour the cold budget or the outer one is decorative.
+    owner_src = inspect.getsource(MCPBridge._server_owner)
+    assert 'MCP_COLD_INSTALL_TIMEOUT' in owner_src, (
+        'the owner task still hard-codes MCP_CONNECT_TIMEOUT for the handshake. '
+        'Measured: a 300s outer budget with a 30s initialize() timer still '
+        'failed at 67.5s — the inner timer fires first.'
+    )
+    assert 'timeout=handshake_budget' in owner_src, (
+        'initialize()/list_tools() do not use the selected handshake budget'
+    )
+
+    # The flag must survive onto the handle, or the owner cannot see it.
+    # __slots__ is declared on _MCPServerHandle, so a missing slot would raise
+    # AttributeError at runtime rather than silently defaulting.
+    from lib.mcp.client._bridge import _MCPServerHandle
+    handle = _MCPServerHandle('probe', {})
+    assert handle._cold_install is False, (
+        '_cold_install must default False so a routine connect keeps the fast '
+        'crash ceiling'
+    )
+    handle._cold_install = True  # must not raise despite __slots__
+    assert handle._cold_install is True
 
 
 def test_scanner_ignores_commented_and_unrelated_names():

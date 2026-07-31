@@ -330,6 +330,56 @@ jobs:
           }
           echo "Built: $(ls -l dist/Tofu/Tofu.exe)"
 
+      # ── Smoke: the binary must actually START, not merely exist ──
+      #
+      # The gates above prove the artifact exists and (at release time) is of a
+      # plausible size. Neither can see a MISSING HIDDEN IMPORT: tofu.spec
+      # declares 48 of them, and dropping one changes no byte count and no
+      # PyInstaller exit code — it fails at the instant a user double-clicks,
+      # with a ModuleNotFoundError nobody is there to read. Size is sensitive
+      # to a whole missing dependency TREE (measured: 49 MB hollow vs 115 MB
+      # healthy) and blind to one absent module.
+      #
+      # TOFU_SMOKE=1 makes the launcher import `server` — which builds the
+      # Quart app and runs routes.register_all() at module level — then exit.
+      # One import therefore exercises the blueprint tree and the transitive
+      # graph the hiddenimports exist to preserve.
+      #
+      # THE VERDICT IS THE EXIT CODE PLUS THE ABSENCE OF A TRACEBACK. "The
+      # process stayed up for N seconds" would be a green light by construction
+      # here: the build is console=False, so a windowed binary detaches and
+      # lingers whether or not anything imported. Asserting on liveness would
+      # measure the wrong thing entirely.
+      #
+      # It is NOT "stderr is empty" either, and that was MEASURED rather than
+      # assumed: a healthy boot writes diagnostics to fd 2 on purpose (the
+      # mlockall notice, the `[boot]` progress lines, and the libstdc++ soname
+      # forensics line that another epic added precisely so a crash is
+      # diagnosable). Demanding empty stderr would fail every healthy build —
+      # a permanently-red gate, which is how a suite gets muted.
+      - name: Smoke test the built binary
+        shell: bash
+        env:
+          TOFU_SMOKE: '1'
+        run: |
+          set -uo pipefail
+          rc=0
+          ./dist/Tofu/Tofu.exe > /tmp/smoke.out 2> /tmp/smoke.err || rc=$?
+          echo "── stdout ──"; cat /tmp/smoke.out || true
+          echo "── stderr ──"; cat /tmp/smoke.err || true
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::The built Tofu.exe failed to start (exit $rc). A user double-clicking this installer would get the same failure."
+            exit 1
+          fi
+          if grep -qE 'Traceback \(most recent call last\)|ModuleNotFoundError|ImportError' /tmp/smoke.err; then
+            echo "::error::Tofu.exe exited 0 but its stderr carries a traceback — something failed and was swallowed."
+            exit 1
+          fi
+          grep -q 'TOFU_SMOKE_OK' /tmp/smoke.out || {
+            echo "::error::Tofu.exe exited 0 without emitting TOFU_SMOKE_OK — the smoke branch did not run, so this proved nothing."
+            exit 1
+          }
+
       - name: Create Inno Setup script
         shell: bash
         env:
@@ -591,6 +641,33 @@ jobs:
 
       - name: Build with PyInstaller
         run: pyinstaller tofu.spec
+
+      # Same contract as the Windows leg — see the comment there for why the
+      # verdict is exit-code + no-traceback (never liveness, and never "stderr
+      # is empty": a healthy boot writes diagnostics to fd 2 by design). Runs
+      # BEFORE the archive step so a bundle that cannot boot is never packaged.
+      - name: Smoke test the built binary
+        shell: bash
+        env:
+          TOFU_SMOKE: '1'
+        run: |
+          set -uo pipefail
+          rc=0
+          ./dist/Tofu/Tofu > /tmp/smoke.out 2> /tmp/smoke.err || rc=$?
+          echo "── stdout ──"; cat /tmp/smoke.out || true
+          echo "── stderr ──"; cat /tmp/smoke.err || true
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::The built Tofu binary failed to start (exit $rc)."
+            exit 1
+          fi
+          if grep -qE 'Traceback \(most recent call last\)|ModuleNotFoundError|ImportError' /tmp/smoke.err; then
+            echo "::error::Tofu exited 0 but its stderr carries a traceback — something failed and was swallowed."
+            exit 1
+          fi
+          grep -q 'TOFU_SMOKE_OK' /tmp/smoke.out || {
+            echo "::error::Tofu exited 0 without emitting TOFU_SMOKE_OK — the smoke branch did not run, so this proved nothing."
+            exit 1
+          }
 
       - name: Create archive
         env:

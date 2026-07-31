@@ -430,6 +430,11 @@ async function saveEditAndResend(idx) {
     _editAbortReason = 'timeout';
     _editAbortCtrl.abort();
   }, 90000);
+  /* ★ Startup-stop affordance (pt_fa32a2351b3840ad): the connecting POST
+   *   window shows a STOP button; a click owner-tags conv._genStartStop with
+   *   THIS controller and aborts it — the catch below matches that tag. */
+  conv._genStartCtrl = _editAbortCtrl;
+  conv._genStartStop = null;
   const _editWillTranslate = _regenConfig.autoTranslate && /[\u4e00-\u9fff\u3400-\u4dbf]/.test(t);
   if (_editWillTranslate) {
     conv._translating = true;
@@ -445,6 +450,8 @@ async function saveEditAndResend(idx) {
      *   NOTE: `t` is shadowed here by the edited text (const t = ta.value.trim);
      *   use the global i18n helper via window.t. */
     _renderTranslatingBubble(window.t('sidebar.connecting'));
+    /* ★ Flip the composer to a STOP button for the connecting window. */
+    updateSendButton();
   }
 
   try {
@@ -506,14 +513,11 @@ async function saveEditAndResend(idx) {
     connectToTask(convId, taskId);
 
   } catch (e) {
-    const _userClickedStop = !!conv._translateAborted;
-    if (e.name === 'AbortError' && _editWillTranslate && _userClickedStop) {
-      console.log('%c[saveEditAndResend] ✗ Aborted during translation by user', 'color:#f59e0b;font-weight:bold');
-      _removeTranslatingBubble();
-      saveConversations(convId);
-      syncConversationToServer(conv, { allowTruncate: true });
-      buildTurnNav(conv);
-      Api.chat.abortConv(convId);
+    const _userClickedStop = !!conv._translateAborted
+      || conv._genStartStop === _editAbortCtrl;
+    if (e.name === 'AbortError' && _userClickedStop) {
+      console.log('%c[saveEditAndResend] ✗ Aborted during startup by user', 'color:#f59e0b;font-weight:bold');
+      await _userStopDuringStartup(conv, convId, { syncOpts: { allowTruncate: true } });
     } else if (e.name === 'AbortError' && _editAbortReason === 'timeout'
                && typeof _recoverTimedOutChatTask === 'function'
                && await _recoverTimedOutChatTask(convId, { endpointMode: _regenConfig.endpointMode })) {
@@ -551,6 +555,11 @@ async function saveEditAndResend(idx) {
     }
   } finally {
     clearTimeout(_editTimeout);
+    /* ★ Identity-guarded startup-marker cleanup (only OURS). */
+    if (conv._genStartCtrl === _editAbortCtrl || conv._genStartStop === _editAbortCtrl) {
+      conv._genStartCtrl = null;
+      conv._genStartStop = null;
+    }
     // ★ Fix ①: teardown the pre-POST placeholder unconditionally (rendered
     //   whether or not we translated). Idempotent once the success path
     //   swapped it for the streaming bubble.
@@ -559,9 +568,12 @@ async function saveEditAndResend(idx) {
       conv._translating = false;
       conv._translateAborted = false;
       conv._translateAbortCtrl = null;
-      updateSendButton();
       renderConversationList();
     }
+    /* ★ Unconditional re-eval (startup-stop affordance): the connecting
+     *   window paints a STOP button; generic-error exits must not strand it. */
+    updateSendButton();
+    if (_editWillTranslate) renderConversationList();
   }
 }
 

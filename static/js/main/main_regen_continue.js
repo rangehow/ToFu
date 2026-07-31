@@ -93,6 +93,11 @@ async function regenerateFromUser(idx) {
     _regenAbortReason = 'timeout';
     _regenAbortCtrl.abort();
   }, 90000);
+  /* ★ Startup-stop affordance (pt_fa32a2351b3840ad): the connecting POST
+   *   window shows a STOP button; a click owner-tags conv._genStartStop with
+   *   THIS controller and aborts it — the catch below matches that tag. */
+  conv._genStartCtrl = _regenAbortCtrl;
+  conv._genStartStop = null;
   const _regenText = msg.content || '';
   const _regenWillTranslate = _regenConfig.autoTranslate && /[\u4e00-\u9fff\u3400-\u4dbf]/.test(_regenText);
   if (_regenWillTranslate) {
@@ -107,6 +112,8 @@ async function regenerateFromUser(idx) {
      *   assistant side is not blank during the synchronous /api/chat/regenerate
      *   POST. Upgraded in place to the streaming bubble on taskId. */
     _renderTranslatingBubble(t('sidebar.connecting'));
+    /* ★ Flip the composer to a STOP button for the connecting window. */
+    updateSendButton();
   }
 
   try {
@@ -173,14 +180,11 @@ async function regenerateFromUser(idx) {
     connectToTask(convId, taskId);
 
   } catch (e) {
-    const _userClickedStop = !!conv._translateAborted;
-    if (e.name === 'AbortError' && _regenWillTranslate && _userClickedStop) {
-      console.log('%c[regenerateFromUser] ✗ Aborted during translation by user', 'color:#f59e0b;font-weight:bold');
-      _removeTranslatingBubble();
-      saveConversations(convId);
-      syncConversationToServer(conv, { allowTruncate: true });
-      buildTurnNav(conv);
-      Api.chat.abortConv(convId);
+    const _userClickedStop = !!conv._translateAborted
+      || conv._genStartStop === _regenAbortCtrl;
+    if (e.name === 'AbortError' && _userClickedStop) {
+      console.log('%c[regenerateFromUser] ✗ Aborted during startup by user', 'color:#f59e0b;font-weight:bold');
+      await _userStopDuringStartup(conv, convId, { syncOpts: { allowTruncate: true } });
     } else if (e.name === 'AbortError' && _regenAbortReason === 'timeout'
                && typeof _recoverTimedOutChatTask === 'function'
                && await _recoverTimedOutChatTask(convId, { endpointMode: _regenConfig.endpointMode })) {
@@ -218,6 +222,11 @@ async function regenerateFromUser(idx) {
     }
   } finally {
     clearTimeout(_regenTimeout);
+    /* ★ Identity-guarded startup-marker cleanup (only OURS). */
+    if (conv._genStartCtrl === _regenAbortCtrl || conv._genStartStop === _regenAbortCtrl) {
+      conv._genStartCtrl = null;
+      conv._genStartStop = null;
+    }
     // ★ Fix ①: teardown the pre-POST placeholder unconditionally (it is now
     //   rendered whether or not we translated). Idempotent once the success
     //   path swapped it for the streaming bubble.
@@ -226,9 +235,12 @@ async function regenerateFromUser(idx) {
       conv._translating = false;
       conv._translateAborted = false;
       conv._translateAbortCtrl = null;
-      updateSendButton();
       renderConversationList();
     }
+    /* ★ Unconditional re-eval (startup-stop affordance): the connecting
+     *   window paints a STOP button; generic-error exits must not strand it. */
+    updateSendButton();
+    if (_regenWillTranslate) renderConversationList();
   }
 }
 

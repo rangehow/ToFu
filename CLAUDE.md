@@ -94,6 +94,14 @@ lib/                   — Core business logic
     astream.py         — Async SSE streaming variant
     _sse_core.py       — Shared SSE parsing + tool-call accumulation core
     anthropic_outbound.py — Anthropic-native outbound request builder
+    responses_outbound/ — OpenAI Responses API boundary (protocol #3):
+                         _to_responses (canonical body→/responses, profiles
+                         default/codex) · _sse (ResponsesSSETranslator —
+                         item_id routing, reasoning_text, failed→error map)
+                         · _from_responses (non-stream) · _url.
+                         Extracted from lib/oauth/codex.py (2026-07-31);
+                         codex.py keeps re-export facades. Wire gate is
+                         api_protocol=='responses' alone (single gate).
     diagnostics.py     — RawSSEDumper (anomaly ring buffer + opt-in transcript)
     _transport.py      — Retry config, headers(), chat_url(), abortable_sleep()
   llm_errors.py        — Exception classes + HTTP error classifier

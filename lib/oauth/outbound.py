@@ -14,9 +14,9 @@ holds that spec in one place; the request pre-flight
 ``internal/runtime/executor/claude_executor_*.go``):
 
 * **Codex** → ``POST https://chatgpt.com/backend-api/codex/responses``
-  (Responses API; the body translation is handled separately by
-  :func:`lib.oauth.codex.codex_translate_request`, auto-triggered by the
-  base URL). Token rides ``Authorization: Bearer``. The backend whitelists
+  (Responses API; the body translation lives in
+  ``lib/llm/responses_outbound`` and is gated on the provider's
+  ``protocol='responses'`` — this spec writes exactly that). Token rides ``Authorization: Bearer``. The backend whitelists
   first-party ``originator`` values, so ``originator: codex_cli_rs`` AND a
   matching ``User-Agent`` are BOTH required or it answers 403. The
   ChatGPT account id (parsed from the id_token JWT at login) goes in
@@ -575,7 +575,10 @@ _MANAGED_SPECS = {
         'id': 'oauth_codex',
         'name': 'ChatGPT (Codex subscription)',
         'base_url': 'https://chatgpt.com/backend-api/codex',
-        'protocol': 'openai',
+        # The Codex backend speaks ONLY the Responses API — a fact of the
+        # backend, not a user setting (epic pt_b7a29ea7: the wire gate in
+        # lib/llm/_sse_core.py is api_protocol alone).
+        'protocol': 'responses',
         # Models are resolved per plan tier at provision time
         # (_codex_tier_models); this placeholder is never written out.
         'models': [],

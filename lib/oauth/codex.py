@@ -3,9 +3,12 @@
 OAuth flow is identical to Claude, but the API usage is different:
   • URL: chatgpt.com/backend-api/codex/responses (NOT api.openai.com/v1)
   • Format: Responses API (NOT Chat Completions)
-  • Requires request/response format translation
 
-The translator converts between Chat Completions ↔ Responses API formats.
+The Chat Completions ↔ Responses API translation layer was EXTRACTED to
+``lib/llm/responses_outbound/`` (2026-07-31, epic pt_b7a29ea7) — this module
+keeps only the OAuth flow + re-export facades for the legacy names
+(``codex_translate_request`` / ``CodexSSETranslator`` /
+``codex_translate_sse_event``).
 """
 
 import base64
@@ -358,288 +361,43 @@ def codex_get_valid_token(user_id: str = '') -> str | None:
 
 # ══════════════════════════════════════════════════════════
 #  Request Translator: Chat Completions → Responses API
-#  Based on CLIProxyAPI v6.9.10 translator
+#  EXTRACTED to lib/llm/responses_outbound/ (2026-07-31, epic pt_b7a29ea7)
+#  — the shared boundary for EVERY Responses-speaking provider. The Codex
+#  OAuth path is now just the ``profile='codex'`` caller; these re-exports
+#  keep the legacy import surface working. Semantics changes belong in
+#  lib/llm/responses_outbound/, NOT here.
 # ══════════════════════════════════════════════════════════
+
+from lib.llm.responses_outbound import (  # noqa: E402  (re-export facade)
+    ResponsesSSETranslator as CodexSSETranslator,
+    openai_body_to_responses,
+)
+
 
 def codex_translate_request(body: dict) -> dict:
     """Translate Chat Completions request body to Responses API format.
 
-    Args:
-        body: Standard OpenAI Chat Completions request body.
-
-    Returns:
-        Responses API request body for chatgpt.com/backend-api/codex/responses.
+    Back-compat wrapper — the implementation lives in
+    ``lib.llm.responses_outbound.openai_body_to_responses``
+    (``profile='codex'``).
     """
-    out = {
-        'instructions': '',
-        'stream': True,
-        'store': False,
-        'model': body.get('model', ''),
-        'parallel_tool_calls': True,
-        'reasoning': {
-            'effort': body.get('reasoning_effort', 'medium'),
-            'summary': 'auto',
-        },
-        'include': ['reasoning.encrypted_content'],
-    }
-
-    # NOTE: Codex does NOT support temperature, top_p, max_tokens — omit them
-
-    # ── Convert messages[] → input[] ──
-    messages = body.get('messages', [])
-    input_items = []
-
-    for msg in messages:
-        role = msg.get('role', '')
-        content = msg.get('content', '')
-
-        if role == 'tool':
-            # Tool result → function_call_output
-            input_items.append({
-                'type': 'function_call_output',
-                'call_id': msg.get('tool_call_id', ''),
-                'output': content if isinstance(content, str) else json.dumps(content),
-            })
-            continue
-
-        # Regular message
-        resp_role = 'developer' if role == 'system' else role
-        content_parts = []
-
-        if isinstance(content, str) and content:
-            part_type = 'output_text' if role == 'assistant' else 'input_text'
-            content_parts.append({'type': part_type, 'text': content})
-        elif isinstance(content, list):
-            for block in content:
-                if not isinstance(block, dict):
-                    continue
-                btype = block.get('type', '')
-                if btype == 'text':
-                    part_type = 'output_text' if role == 'assistant' else 'input_text'
-                    content_parts.append({'type': part_type, 'text': block.get('text', '')})
-                elif btype == 'image_url' and role == 'user':
-                    url = block.get('image_url', {}).get('url', '')
-                    if url:
-                        content_parts.append({'type': 'input_image', 'image_url': url})
-
-        # Don't emit empty assistant messages when only tool_calls present
-        if role != 'assistant' or content_parts:
-            input_items.append({
-                'type': 'message',
-                'role': resp_role,
-                'content': content_parts,
-            })
-
-        # Handle tool_calls on assistant messages → top-level function_call items
-        tool_calls = msg.get('tool_calls', [])
-        for tc in tool_calls:
-            if tc.get('type') == 'function':
-                func = tc.get('function', {})
-                name = func.get('name', '')
-                # Shorten long MCP tool names (Codex limit: 64 chars)
-                if len(name) > 64:
-                    name = name[:64]
-                input_items.append({
-                    'type': 'function_call',
-                    'call_id': tc.get('id', ''),
-                    'name': name,
-                    'arguments': func.get('arguments', '{}'),
-                })
-
-    out['input'] = input_items
-
-    # ── Convert tools[] (flatten function wrapper) ──
-    tools = body.get('tools', [])
-    if tools:
-        resp_tools = []
-        for tool in tools:
-            if tool.get('type') != 'function':
-                resp_tools.append(tool)
-                continue
-            func = tool.get('function', {})
-            name = func.get('name', '')
-            if len(name) > 64:
-                name = name[:64]
-            t = {'type': 'function', 'name': name}
-            if func.get('description'):
-                t['description'] = func['description']
-            if func.get('parameters'):
-                t['parameters'] = func['parameters']
-            if func.get('strict') is not None:
-                t['strict'] = func['strict']
-            resp_tools.append(t)
-        out['tools'] = resp_tools
-
-    # ── Map tool_choice ──
-    tc = body.get('tool_choice')
-    if tc:
-        if isinstance(tc, str):
-            out['tool_choice'] = tc
-        elif isinstance(tc, dict) and tc.get('type') == 'function':
-            name = tc.get('function', {}).get('name', '')
-            out['tool_choice'] = {'type': 'function', 'name': name}
-
-    return out
+    return openai_body_to_responses(body, profile='codex', stream=True)
 
 
 # ══════════════════════════════════════════════════════════
 #  Response Translator: Responses API SSE → Chat Completions SSE
-#  Converts streaming events from chatgpt.com back to standard format
+#  EXTRACTED to lib/llm/responses_outbound/_sse.py — see the note above.
 # ══════════════════════════════════════════════════════════
-
-class CodexSSETranslator:
-    """Stateful translator for Codex Responses API SSE → Chat Completions format.
-
-    Usage::
-
-        translator = CodexSSETranslator(model='gpt-5.2-codex')
-        for raw_line in sse_stream:
-            for translated_line in translator.translate(raw_line):
-                yield translated_line
-    """
-
-    def __init__(self, model: str = ''):
-        self.model = model
-        self._tool_calls = {}  # index → {id, name, arguments}
-        self._tc_index = 0
-        self._finished = False
-
-    def translate(self, raw_line: str) -> list[str]:
-        """Translate a single SSE line from Codex format to Chat Completions.
-
-        Args:
-            raw_line: Raw SSE data line (after "data: " prefix).
-
-        Returns:
-            List of translated SSE data strings (may be 0, 1, or multiple).
-        """
-        if not raw_line or raw_line.strip() == '[DONE]':
-            return ['[DONE]']
-
-        try:
-            event = json.loads(raw_line)
-        except (json.JSONDecodeError, TypeError) as e:
-            logger.debug('[Codex SSE] Unparseable line: %.200s — %s', raw_line, e)
-            return []
-
-        event_type = event.get('type', '')
-        results = []
-
-        if event_type == 'response.output_text.delta':
-            # Text content delta
-            delta_text = event.get('delta', '')
-            if delta_text:
-                results.append(self._make_chunk(
-                    delta={'role': 'assistant', 'content': delta_text}
-                ))
-
-        elif event_type == 'response.reasoning_summary_text.delta':
-            # Reasoning/thinking content delta
-            delta_text = event.get('delta', '')
-            if delta_text:
-                results.append(self._make_chunk(
-                    delta={'role': 'assistant', 'reasoning_content': delta_text}
-                ))
-
-        elif event_type == 'response.output_item.added':
-            # New output item — could be function_call
-            item = event.get('item', {})
-            if item.get('type') == 'function_call':
-                idx = self._tc_index
-                self._tool_calls[idx] = {
-                    'id': item.get('call_id', ''),
-                    'name': item.get('name', ''),
-                    'arguments': '',
-                }
-                results.append(self._make_chunk(
-                    delta={
-                        'role': 'assistant',
-                        'tool_calls': [{
-                            'index': idx,
-                            'id': item.get('call_id', ''),
-                            'type': 'function',
-                            'function': {
-                                'name': item.get('name', ''),
-                                'arguments': '',
-                            },
-                        }],
-                    }
-                ))
-                self._tc_index += 1
-
-        elif event_type == 'response.function_call_arguments.delta':
-            # Tool call arguments delta
-            delta_args = event.get('delta', '')
-            if delta_args and self._tool_calls:
-                idx = self._tc_index - 1  # current tool call
-                if idx in self._tool_calls:
-                    self._tool_calls[idx]['arguments'] += delta_args
-                    results.append(self._make_chunk(
-                        delta={
-                            'tool_calls': [{
-                                'index': idx,
-                                'function': {'arguments': delta_args},
-                            }],
-                        }
-                    ))
-
-        elif event_type == 'response.completed':
-            # Stream complete
-            resp = event.get('response', {})
-            finish_reason = 'stop'
-            if resp.get('output', []):
-                for item in resp['output']:
-                    if item.get('type') == 'function_call':
-                        finish_reason = 'tool_calls'
-                        break
-
-            usage = resp.get('usage', {})
-            chunk = self._make_chunk(
-                delta={},
-                finish_reason=finish_reason,
-                usage={
-                    'prompt_tokens': usage.get('input_tokens', 0),
-                    'completion_tokens': usage.get('output_tokens', 0),
-                    'total_tokens': usage.get('total_tokens',
-                                              usage.get('input_tokens', 0) + usage.get('output_tokens', 0)),
-                } if usage else None,
-            )
-            results.append(chunk)
-            self._finished = True
-
-        # Ignore other event types (response.created, response.in_progress, etc.)
-        return results
-
-    def _make_chunk(self, delta: dict, finish_reason: str = None,
-                    usage: dict = None) -> str:
-        """Build a Chat Completions SSE chunk."""
-        chunk = {
-            'id': 'chatcmpl-codex',
-            'object': 'chat.completion.chunk',
-            'created': int(time.time()),
-            'model': self.model,
-            'choices': [{
-                'index': 0,
-                'delta': delta,
-                'finish_reason': finish_reason,
-            }],
-        }
-        if usage:
-            chunk['usage'] = usage
-        return json.dumps(chunk, ensure_ascii=False)
 
 
 def codex_translate_sse_event(raw_line: str, translator: CodexSSETranslator) -> list[str]:
-    """Convenience wrapper around CodexSSETranslator.translate().
+    """Convenience wrapper around ResponsesSSETranslator.translate().
 
-    Args:
-        raw_line: Raw SSE data line.
-        translator: Stateful translator instance.
-
-    Returns:
-        List of translated SSE data strings.
+    The unified translator emits chunk DICTS; this wrapper preserves the
+    legacy string-returning contract for external callers.
     """
-    return translator.translate(raw_line)
+    return [json.dumps(c, ensure_ascii=False) if isinstance(c, dict) else c
+            for c in translator.translate(raw_line)]
 
 
 # ── Internal helpers ──

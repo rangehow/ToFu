@@ -259,7 +259,7 @@ in the 59.
 | `desktop/` | Desktop-agent server-side support (pairs with the top-level `desktop_agent.py` / `desktop_tools.py`) |
 | `feishu/` | `_state` · conversation · messaging · pipeline · commands · events · startup |
 | `file_history/` | api · store — per-file copy-backup undo |
-| `llm/` | `body` · `chat` · `stream` · `astream` · `_sse_core` · `cache` · `anthropic_outbound` · `diagnostics` · `_transport` (split from the former `llm_client.py`) |
+| `llm/` | `body` · `chat` · `stream` · `astream` · `_sse_core` · `cache` · `anthropic_outbound` · `responses_outbound` · `diagnostics` · `_transport` (split from the former `llm_client.py`) |
 | `llm_dispatch/` | api · config · discovery · dispatcher · factory · slot (multi-key × multi-model) |
 | `longform/` | Long-form research reports — recipe (research → outline → sections×N → assemble) · engine · runtime. Rides `production/`'s stage graph; the stage list is DATA-dependent (one per outline section) |
 | `mcp/` | client · registry · config · project_names · types |

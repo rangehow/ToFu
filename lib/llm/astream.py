@@ -150,11 +150,10 @@ async def _async_stream_chat_once(body, *, on_thinking=None, on_content=None,
                                       log_prefix=log_prefix, raw_dumper=plan.raw_dumper)
 
             acc = SSEAccumulator(
-                plan.body, plan.trace_id, plan.raw_dumper, plan.codex_translator,
+                plan.body, plan.trace_id, plan.raw_dumper, plan.wire_translator,
                 plan.t0, url=plan.url, log_prefix=log_prefix,
                 on_thinking=on_thinking, on_content=on_content,
-                on_tool_call_ready=on_tool_call_ready,
-                anthropic_translator=plan.anthropic_translator)
+                on_tool_call_ready=on_tool_call_ready)
 
             # ── Idle watchdog (async idiom) ──
             # Mirrors the sync StreamIdleWatchdog in lib/llm/_transport.py:

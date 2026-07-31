@@ -286,7 +286,22 @@ TTL 120s）。sync stream.py 跑在线程池里无碍，但 **`astream.py` 的�
 任何 egress 阻塞调用都必须 `asyncio.to_thread` 包裹**——否则一次刷新就能
 冻住 Quart 事件循环、全站请求停摆。写死，不接受「实测应该碰不到」。
 | A3 | `lib/provider_probe.py` | 同 A1 的路由包装 |
-| A4 | 前端 OAuth 卡片 | 显示出口状态（直连/经桌面代理/不可用）+ 多 agent 时的选择器（写 `oauth_egress_agent_id`） |
+| A4 | 前端 OAuth 卡片 + 状态接口 | 见下方三点 S4 修订（owner 拍板） |
+
+**A4 三点修订（owner S4 拍板）：**
+1. **状态接口绝不同步探测**：页面加载路径上只读探测缓存（300s TTL 内的既有
+   判决），无缓存返回 `unknown` 并**异步**触发后台探测；「重新检测」按钮才走
+   同步探测（用户已预期等待）。否则设置页打开会卡最坏 5s 白屏。另加一个可辨
+   状态：`agent_present_but_capability_off`（agent 在线但
+   `capabilities.egress=false`）——这是默认态，卡片须明说「重启 agent 加
+   `--allow-egress`」。
+2. **Codex 探测从 SKIPPED 升级为流式真探测**：S3 的 `open_stream` 让
+   `chatgpt.com/backend-api/codex/responses` 的 1-token 请求成为可能（请求体
+   过 `codex_translate_request` 翻译），按状态码分类——全链路
+   （cloaking+翻译+egress）端到端验证。
+3. **选择器端点**：`GET/POST /api/v1/oauth/egress-agent` 读写
+   `data/config/oauth_egress_agents.json`（即 `_pinned_agent` 读的那份，
+   键 user_id），不另起存储。
 
 **登录链路顺序（owner 拍板，定死）**：`_completeLogin` 的交换优先级改为
 **① 服务器交换（内部自动路由 直连/经 agent）→ ② B1 浏览器交换 → ③ curl 手工兜底**。

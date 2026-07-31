@@ -396,6 +396,80 @@ def cancel_stream(cmd_id: str, agent_id: str, user_id: str = ''):
         logger.debug('[Egress] cancel enqueue failed for %s: %s', cmd_id[:8], err)
 
 
+# ══════════════════════════════════════════════════════════
+#  Status surface (S4): page-load-safe egress state per host
+# ══════════════════════════════════════════════════════════
+
+import threading
+
+_probe_bg_lock = threading.Lock()
+_probe_bg_fired: set = set()
+
+
+def _spawn_background_probe(host: str) -> None:
+    """Fire-and-forget a probe so the NEXT status poll has a cached verdict.
+
+    The status surface must never probe inline (a direct-connect timeout is
+    up to 5s of white screen on the settings page), so the first sight of a
+    host just warms the cache on a daemon thread.
+    """
+    with _probe_bg_lock:
+        if host in _probe_bg_fired:
+            return
+        _probe_bg_fired.add(host)
+
+    def _run():
+        try:
+            url = f'https://{host}/'
+            # Reuse the real probe (it writes the cache).
+            _probe_host(url)
+        except Exception as e:
+            logger.debug('[Egress] background probe of %s failed: %s', host, e)
+        finally:
+            with _probe_bg_lock:
+                _probe_bg_fired.discard(host)
+
+    threading.Thread(target=_run, daemon=True,
+                     name=f'egress-probe-{host[:20]}').start()
+
+
+def egress_status(host: str, *, user_id: str = '') -> dict:
+    """Non-blocking egress state for a provider host (design §6.2 A4).
+
+    States:
+      ``direct``              — cached probe says the server reaches the host
+      ``agent``               — blocked, and an egress-capable agent is online
+      ``agent_no_capability`` — agent(s) online but NONE with --allow-egress
+      ``unavailable``         — blocked and no suitable agent online
+      ``unknown``             — no cached verdict (a background probe is
+                                fired so the next poll knows)
+
+    NEVER probes inline — reads the 300s probe cache only.
+    """
+    verdict = _probe_cache.get(host) or ''
+    if not verdict:
+        _spawn_background_probe(host)
+        return {'state': 'unknown', 'verdict': '', 'agents': []}
+    if verdict == 'ok':
+        return {'state': 'direct', 'verdict': verdict, 'agents': []}
+    from lib.desktop import online_agents
+    all_agents = online_agents()
+    capable = [a for a in all_agents
+               if (a.get('capabilities') or {}).get('egress')
+               and (not user_id or (a.get('user_id') or '') == user_id)]
+    if capable:
+        return {'state': 'agent', 'verdict': verdict,
+                'agents': [{'agent_id': a['agent_id'], 'name': a.get('name', '')}
+                           for a in capable]}
+    scoped_any = [a for a in all_agents
+                  if not user_id or (a.get('user_id') or '') == user_id]
+    if scoped_any:
+        return {'state': 'agent_no_capability', 'verdict': verdict,
+                'agents': [{'agent_id': a['agent_id'], 'name': a.get('name', '')}
+                           for a in scoped_any]}
+    return {'state': 'unavailable', 'verdict': verdict, 'agents': []}
+
+
 def egress_http(url: str, *, method: str = 'POST', headers: dict = None,
                 body: bytes = b'', timeout: float = 30,
                 user_id: str = '') -> EgressResponse:

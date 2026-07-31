@@ -162,6 +162,32 @@
   margin: 4px 0 10px;
   line-height: 1.5;
 }
+.oauth-provider-desc {
+  font-size: 12px;
+  color: var(--s-muted);
+  margin: 4px 0 10px;
+  line-height: 1.5;
+}
+/* Desktop-egress status line (S4) */
+.oauth-egress-line {
+  font-size: 12px;
+  margin: 2px 0 8px;
+  line-height: 1.5;
+}
+.oauth-egress-ok { color: #1e7e34; }
+.oauth-egress-warn { color: #b8860b; }
+.oauth-egress-bad { color: #b02a37; }
+.oauth-egress-pending { color: var(--s-muted); }
+.oauth-egress-pin {
+  margin-left: 6px;
+  font-size: 12px;
+  padding: 1px 4px;
+  border: var(--s-border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--s-ink);
+  max-width: 180px;
+}
 .oauth-provider-info {
   font-size: 12px;
   color: var(--s-ink);

@@ -1386,6 +1386,11 @@ var _i18n = {
   'settings.oauthManagedNoteTitle': { zh: '这是 {name} 订阅登录自动生成的服务商', en: 'This provider was auto-created from your {name} subscription login' },
   'settings.oauthManagedNoteDesc': { zh: '它使用你登录的 {name} 订阅额度，令牌每次请求实时获取，无需填写 API Key。要移除它，请点下方「退出登录」——只删这张卡片不会清除登录凭证，下次刷新令牌时它会重新出现。', en: 'It uses your logged-in {name} subscription — the token is fetched live per request, so no API key is needed. To remove it, use “Log out” below: deleting only this card leaves the login token on disk, so it reappears on the next token refresh.' },
   'settings.oauthLogoutRemove': { zh: '退出登录', en: 'Log out' },
+  'settings.egressDirect': { zh: '出口：服务器直连', en: 'Egress: direct from server' },
+  'settings.egressViaAgent': { zh: '出口：经桌面代理（{name}）', en: 'Egress: via desktop agent ({name})' },
+  'settings.egressAgentNoCap': { zh: '桌面代理在线但未开启 --allow-egress，请重启代理并加上该参数', en: 'Desktop agent online but --allow-egress is off — restart the agent with that flag' },
+  'settings.egressUnavailable': { zh: '出口不可用：服务器被封锁且无可用桌面代理', en: 'Egress unavailable: server blocked and no desktop agent online' },
+  'settings.egressProbing': { zh: '出口检测中…', en: 'Probing egress…' },
   'settings.modelList': { zh: '模型列表', en: 'Model List' },
   'settings.autoDiscover': { zh: '自动发现', en: 'Auto Discover' },
   'settings.addModel': { zh: '+ 添加模型', en: '+ Add Model' },
@@ -1954,6 +1959,8 @@ var _i18n = {
   'settings.meFaceAuto': { zh: '自动（按模型家族，推荐）', en: 'Automatic (by model family — recommended)' },
   'settings.meFacePinWarn': { zh: '⚠️ 手动钉选会覆盖自动规则。把 Claude 模型钉到非 Anthropic 面会丢失思考块签名，导致多轮对话被上游拒绝。', en: '⚠️ A manual pin overrides the automatic rule. Pinning a Claude model to a non-Anthropic face drops thinking-block signatures, which upstream rejects on later turns.' },
   'settings.wireFaces': { zh: '备用协议面', en: 'Alternate wire faces' },
+  'settings.protocol': { zh: '协议', en: 'Protocol' },
+  'settings.protocolHint': { zh: '默认面线路协议；responses 用于 Responses API 端点（DeepSeek-V4-Flash / Codex）', en: 'Default-face wire protocol; use responses for Responses API endpoints (DeepSeek-V4-Flash, Codex)' },
   'settings.wireFacesHint': { zh: '同一套密钥、另一条协议线；留空即单面网关', en: 'same keys, another protocol endpoint; empty = single-face gateway' },
   'settings.addFace': { zh: '+ 协议面', en: '+ Face' },
   'settings.addFaceTitle': { zh: '新增一条备用协议面', en: 'Add an alternate wire face' },
@@ -2784,6 +2791,18 @@ var _i18n = {
   'stream.phase.waitingFirstByteReason': {
     zh: '已等待 {elapsed}s：{model} 尚未返回首个字节（{reason}）',
     en: 'Waiting {elapsed}s — no first byte from {model} yet ({reason})',
+  },
+  // Stall-watch banner (pt_e0ea29f2): the ONLY frames arriving are
+  // heartbeat self-ticks — the tool has produced nothing for {n}s. This is
+  // the "no unannounced freeze" card: it announces the wedge (amber) and
+  // offers Stop; a real output event flips it back off by itself.
+  'stream.stalled.banner': {
+    zh: '已停滞 · 静默 {n}s — 期间仅有心跳，无新产出',
+    en: 'Stalled · silent {n}s — heartbeats only, no new output',
+  },
+  'stream.stalled.stop': {
+    zh: '停止',
+    en: 'Stop',
   },
   // Mid-stream stall heartbeat: the model already sent text and then went
   // quiet. There is no read timeout, so this wait is unbounded by design —
@@ -3685,6 +3704,13 @@ var _i18n = {
   'projectBrain.laneAwaiting': { zh: '需要你的回答', en: 'Awaiting your answer' },
   'projectBrain.needsYourDecision': { zh: '需要你的决定', en: 'Your decision needed' },
   'projectBrain.awaitingAnswerMeta': { zh: '等待你的回答', en: 'waiting for your answer' },
+  'projectBrain.actGoAnswer': { zh: '去回答', en: 'Go answer' },
+  'projectBrain.actCreateConv': { zh: '新建对话', en: 'New chat' },
+  // The composer pre-fill for a task's "New chat" action. {id} and {title}
+  // are substituted at click time; the kickoff names the read/claim tools so
+  // the agent's first move is grounded in the board, not in the title alone.
+  'projectBrain.epicChatPrompt': { zh: '请认领并推进任务板上的这个 epic：{id}\n{title}\n\n先 project_board_read 读取完整描述，再 project_board_claim 认领后开始工作。', en: 'Claim and advance this board epic: {id}\n{title}\n\nRead the full text with project_board_read, claim it with project_board_claim, then start.' },
+  'projectBrain.convCreateFailed': { zh: '无法打开新对话', en: 'Could not open a new chat' },
   'projectBrain.answerPlaceholder': { zh: '输入你的回答（或直接点上方选项）…', en: 'Type your answer (or pick an option above)…' },
   'projectBrain.answerSubmit': { zh: '提交回答', en: 'Submit answer' },
   'projectBrain.yourAnswer': { zh: '你的回答', en: 'Your answer' },

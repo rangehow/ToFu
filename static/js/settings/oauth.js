@@ -360,9 +360,65 @@ function _loadOAuthStatus() {
     });
 }
 
+// ── Desktop-egress status line + pin selector (S4) ──
+// Renders the server-computed egress state per card. NEVER probes inline —
+// the server's status payload carries a cached verdict only.
+function _renderEgressLine(provider, egress) {
+  var capProvider = provider === 'codex' ? 'Codex' : 'Claude';
+  var el = document.getElementById('oauth' + capProvider + 'Egress');
+  if (!el) return;
+  if (!egress || !egress.state) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = '';
+  var agents = egress.agents || [];
+  var html = '';
+  var cls = 'oauth-egress-line';
+  switch (egress.state) {
+    case 'direct':
+      html = '<span class="oauth-egress-ok">' + t('settings.egressDirect') + '</span>';
+      break;
+    case 'agent':
+      html = '<span class="oauth-egress-ok">' + t('settings.egressViaAgent', { name: (agents[0] && agents[0].name) || agents[0].agent_id }) + '</span>';
+      break;
+    case 'agent_no_capability':
+      cls += ' oauth-egress-warn';
+      html = '<span class="oauth-egress-warn">' + t('settings.egressAgentNoCap') + '</span>';
+      break;
+    case 'unavailable':
+      cls += ' oauth-egress-bad';
+      html = '<span class="oauth-egress-bad">' + t('settings.egressUnavailable') + '</span>';
+      break;
+    default: // unknown — 探测已在后台触发
+      html = '<span class="oauth-egress-pending">' + t('settings.egressProbing') + '</span>';
+  }
+  // Pin selector when several egress-capable agents are online.
+  if (agents.length > 1 && egress.state === 'agent') {
+    html += ' <select class="oauth-egress-pin" id="oauth' + capProvider + 'EgressPin">';
+    agents.forEach(function(a) {
+      html += '<option value="' + escapeHtml(a.agent_id) + '">' +
+              escapeHtml(a.name || a.agent_id) + '</option>';
+    });
+    html += '</select>';
+  }
+  el.className = cls;
+  el.innerHTML = html;
+  var sel = document.getElementById('oauth' + capProvider + 'EgressPin');
+  if (sel) {
+    sel.onchange = function() {
+      Api.oauth.egressAgentSet(this.value).then(function() {
+        _loadOAuthStatus();
+      });
+    };
+    // Pre-select the currently pinned agent.
+    Api.oauth.egressAgentGet().then(function(d) {
+      if (d && d.pinned) sel.value = d.pinned;
+    });
+  }
+}
+
 function _updateOAuthCard(provider, status) {
   if (!status) return;
   var capProvider = provider === 'codex' ? 'Codex' : 'Claude';
+  _renderEgressLine(provider, status.egress);
   var badge = document.getElementById('oauth' + capProvider + 'Status');
   var info = document.getElementById('oauth' + capProvider + 'Info');
   var email = document.getElementById('oauth' + capProvider + 'Email');

@@ -62,6 +62,7 @@ from lib.project_mod.command_analysis import (  # noqa: F401
     _line_fingerprint,
     _mask_quoted_literals,
     _split_pipeline,
+    _unbounded_recursive_scan_target,
 )
 
 logger = get_logger(__name__)
@@ -607,6 +608,28 @@ def tool_run_command(base, command, timeout=None, stdin_callback=None, task=None
                 f"top-level path '{_cat}'. Deleting filesystem roots or "
                 f"first-level directories (e.g. /mnt, /home, /data) is not "
                 f"permitted. Delete only specific paths inside your workspace.")
+
+    # ★ Unbounded recursive-scan guard (pt_8524e0ec B2). A recursive scan of a
+    #   workspace ANCESTOR or a FUSE mount root can crawl for hours on network
+    #   filesystems — measured 2026-07-31: `grep -rn "mcp>=1.0.0" ../` ran
+    #   2.5h with zero output and wedged task 96c56840 (no timeout existed to
+    #   end it). Refused ONLY when the call itself is unbounded (no explicit
+    #   `timeout` arg) and the scan segment is not self-bounding (coreutils
+    #   `timeout` wrapper). In-workspace scans, sibling dirs and bounded
+    #   scans are all legitimate and stay open. TOFU_RUN_SCAN_GUARD=0 opts out.
+    if timeout is None and os.environ.get('TOFU_RUN_SCAN_GUARD', '1') != '0':
+        _scan = _unbounded_recursive_scan_target(command, base)
+        if _scan is not None:
+            logger.error('[run_command] BLOCKED unbounded recursive scan '
+                         'target=%r (cwd=%s): %.200s', _scan, base, command)
+            return (f"Error: Command blocked for safety: unbounded recursive "
+                    f"scan of '{_scan}'. Recursive scans of a workspace "
+                    f"ancestor or a FUSE mount root can crawl for hours on "
+                    f"network filesystems and hang the whole task (measured: "
+                    f"2.5h on `grep -rn … ../`). Narrow it: (1) scan a "
+                    f"specific subdirectory instead; (2) pass an explicit "
+                    f"`timeout` to run_command; or (3) wrap the scan with "
+                    f"coreutils `timeout <secs>`.")
 
     # ★ Cross-DC timeout adjustment — multiply timeout for remote DolphinFS clusters
     try:

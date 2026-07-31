@@ -19,8 +19,10 @@ subscription access token — this module logs only method/host/status/ms.
 from __future__ import annotations
 
 import base64
+import json
 import os
 import subprocess
+import threading
 import time
 from urllib.parse import urlparse
 
@@ -151,6 +153,167 @@ def _do_request(method, url, headers, body, timeout_s, proxies):
         'body_b64': base64.b64encode(content).decode('ascii'),
         'elapsed_ms': elapsed_ms,
     }
+
+
+# ══════════════════════════════════════════════════════════
+#  Streamed variant (egress_http_stream) + in-flight cancel (S3)
+# ══════════════════════════════════════════════════════════
+
+#: In-flight streamed requests: stream_id → live ``requests.Response``.
+#: ``egress_cancel`` closes the response, which makes the agent's own read
+#: loop raise and unwind — the upstream stops generating (and billing).
+_INFLIGHT: dict = {}
+_INFLIGHT_LOCK = threading.Lock()
+#: Cancelled-or-finished stream ids — frames arriving after this point are
+#: dropped (a cancel can race the tail of a finishing stream).
+_SETTLED: set = set()
+
+_FRAME_BYTES = 64 * 1024  # 64 KB per body frame (design §4.2)
+
+
+def cancel_inflight(stream_id: str) -> bool:
+    """Abort a live streamed request. Idempotent + silent on unknown ids
+    (the stream may already have finished)."""
+    if not stream_id:
+        return False
+    with _INFLIGHT_LOCK:
+        resp = _INFLIGHT.pop(stream_id, None)
+        _SETTLED.add(stream_id)
+    if resp is None:
+        logger.info('[Egress] cancel for unknown/finished stream %s',
+                    stream_id[:8])
+        return False
+    try:
+        resp.close()
+        logger.info('[Egress] cancelled in-flight stream %s', stream_id[:8])
+    except Exception as e:
+        logger.debug('[Egress] cancel close failed for %s: %s', stream_id[:8], e)
+    return True
+
+
+def _emit(on_chunk, stream_id, seq, stream, data, done=False):
+    """Push one frame unless the stream is already settled (cancelled)."""
+    with _INFLIGHT_LOCK:
+        if stream_id in _SETTLED and not done:
+            return False
+    on_chunk(seq, stream, data)
+    return True
+
+
+def start_egress_stream(params: dict, on_chunk, on_exit):
+    """Stream an HTTP response back through frames (off the poll loop).
+
+    ``on_chunk(seq, stream, data)`` per frame: ``meta`` first (status +
+    headers JSON), then ``body`` (base64 chunks ≤64 KB), ``error`` on a
+    mid-stream network failure. ``on_exit(outcome)`` fires exactly once
+    with the final stats (or a refusal ``{'error': …}``).
+
+    Runs on the CALLER's thread — the poll loop hands it a daemon thread
+    (``_start_egress_stream_streamed``), exactly like project_run_command.
+    """
+    url = str((params or {}).get('url') or '')
+    stream_id = str(params.get('stream_id') or '')
+    seq = [0]
+
+    def _seq():
+        seq[0] += 1
+        return seq[0]
+
+    def _refuse(msg):
+        logger.warning('[Egress] stream refused: %s', msg[:120])
+        on_exit({'error': msg})
+
+    if not _host_allowed(url):
+        return _refuse('egress host not in agent whitelist')
+    if not stream_id:
+        return _refuse('missing stream_id')
+    method = str(params.get('method') or 'POST').upper()
+    if method not in ('GET', 'POST'):
+        return _refuse(f'unsupported method: {method}')
+    try:
+        body = base64.b64decode(params.get('body_b64') or '')
+    except Exception as e:
+        return _refuse(f'bad body_b64: {e}')
+    if len(body) > _MAX_BODY_BYTES:
+        return _refuse(f'request body too large ({len(body)} bytes)')
+    headers = params.get('headers') or {}
+    timeout_s = min(max(int(params.get('timeout_ms') or 600000) / 1000.0, 30), 600)
+    mode = str(params.get('proxy_mode') or 'env')
+    host = urlparse(url).hostname or '?'
+    t0 = time.monotonic()
+    total_bytes = 0
+    status = 0
+
+    try:
+        resp = requests.request(
+            method, url, headers=headers, data=body,
+            timeout=(min(timeout_s, 60), timeout_s), proxies=_resolve_proxies(mode),
+            stream=True)
+    except Exception as e:
+        logger.warning('[Egress] stream connect %s failed: %s', host, e)
+        on_chunk(_seq(), 'error',
+                 json.dumps({'message': f'{type(e).__name__}: {e}',
+                             'where': 'connect'}))
+        on_exit({'error': str(e), 'status': 0})
+        return
+
+    status = resp.status_code
+    with _INFLIGHT_LOCK:
+        _INFLIGHT[stream_id] = resp
+    try:
+        meta = json.dumps({
+            'status': status,
+            'headers': {k: v for k, v in resp.headers.items()
+                        if k.lower() != 'set-cookie'},
+        })
+        if not _emit(on_chunk, stream_id, _seq(), 'meta', meta):
+            return
+        logger.info('[Egress] stream %s %s → %s (id=%s)',
+                    method, host, status, stream_id[:8])
+        for chunk in resp.iter_content(_FRAME_BYTES):
+            if not chunk:
+                continue
+            with _INFLIGHT_LOCK:
+                if stream_id in _SETTLED:
+                    logger.info('[Egress] stream %s dropped (cancelled)',
+                                stream_id[:8])
+                    on_exit({'status': status, 'bytes': total_bytes,
+                             'cancelled': True})
+                    return
+            total_bytes += len(chunk)
+            if not _emit(on_chunk, stream_id, _seq(), 'body',
+                         base64.b64encode(chunk).decode('ascii')):
+                on_exit({'status': status, 'bytes': total_bytes,
+                         'cancelled': True})
+                return
+    except Exception as e:
+        with _INFLIGHT_LOCK:
+            cancelled = stream_id in _SETTLED
+        if cancelled:
+            on_exit({'status': status, 'bytes': total_bytes,
+                     'cancelled': True})
+            return
+        logger.warning('[Egress] stream %s mid-read failed: %s',
+                       stream_id[:8], e)
+        _emit(on_chunk, stream_id, _seq(), 'error',
+              json.dumps({'message': f'{type(e).__name__}: {e}',
+                          'where': 'read'}))
+        on_exit({'error': str(e), 'status': status})
+        return
+    finally:
+        with _INFLIGHT_LOCK:
+            _INFLIGHT.pop(stream_id, None)
+            _SETTLED.add(stream_id)
+        try:
+            resp.close()
+        except Exception as e:
+            logger.debug('[Egress] stream close failed: %s', e)
+
+    logger.info('[Egress] stream %s done: %s bytes in %.1fs',
+                stream_id[:8], total_bytes, time.monotonic() - t0)
+    on_exit({'status': status,
+             'bytes': total_bytes,
+             'elapsed_ms': int((time.monotonic() - t0) * 1000)})
 
 
 def cmd_egress_http(params: dict) -> dict:

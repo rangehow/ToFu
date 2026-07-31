@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import base64
 import json
+import time
+import uuid
 from urllib.parse import urlparse
 
 from lib.json_store import read_json
@@ -161,6 +163,12 @@ def route_request(url: str, *, user_id: str = '') -> str:
         EgressUnavailable: direct is blocked AND no suitable agent is
             online (or several are and none is pinned).
     """
+    # Only subscription-provider hosts are egress-eligible at all. Probing
+    # (let alone rerouting) arbitrary gateways would waste a request per
+    # host and could bend internal traffic to an agent that whitelists only
+    # these seven domains — everything else is direct, always, unprobed.
+    if not host_allowed(url):
+        return 'direct'
     if _probe_host(url) == 'ok':
         return 'direct'
     agents = _online_egress_agents(user_id)
@@ -177,6 +185,215 @@ def route_request(url: str, *, user_id: str = '') -> str:
     raise EgressUnavailable(
         f'{len(agents)} egress-capable agents are online; pin one in Settings '
         '(oauth_egress_agent_id) instead of letting the server guess')
+
+
+# ══════════════════════════════════════════════════════════
+#  Streaming (S3): open_stream / EgressStreamReader / cancel_stream
+# ══════════════════════════════════════════════════════════
+
+#: egress_http_stream bridge-command TTL (design §4.3: 30-min LLM streams).
+_EGRESS_STREAM_TTL_S = 1800
+#: How long open_stream waits for the agent's meta (headers) frame.
+_META_TIMEOUT_S = 60
+#: Consumer poll cadence for new frames.
+_CONSUME_POLL_S = 0.2
+#: Half-open watchdog: no new frame for this long AND the agent has dropped
+#: out of the online registry → declare the stream dead (design §4.3).
+_STALL_S = 30
+
+
+class EgressStreamReader:
+    """``requests.Response``-shaped reader over a desktop-egress stream.
+
+    Consumes ``{seq, stream, data}`` frames from the bridge stream store:
+    ``meta`` (status/headers), ``body`` (base64 chunks), ``error``
+    (mid-stream failure). Presents the subset of the Response surface the
+    sync LLM transport uses: ``.status_code`` / ``.headers`` /
+    ``.iter_lines(decode_unicode=True)`` / ``.close()`` (+ arbitrary
+    attribute assignment like ``.encoding``).
+    """
+
+    def __init__(self, cmd_id: str, agent_id: str, user_id: str = ''):
+        self._cmd_id = cmd_id
+        self._agent_id = agent_id
+        self._user_id = user_id
+        self._seq = 0
+        self._buf = b''
+        self._drained: list = []
+        self._done = False
+        self._closed = False
+        self._last_frame_at = time.monotonic()
+        self.status_code = 0
+        self.headers: dict = {}
+
+    # ── frame intake ────────────────────────────────────────────
+
+    def _poll_frames(self):
+        """Pull new frames into the buffer. Raises EgressUnavailable on a
+        vanished entry (swept / agent died) or an agent-side error frame."""
+        from lib.desktop import get_frames
+        got = get_frames(self._cmd_id, since_seq=self._seq)
+        if got is None:
+            if self._done:
+                return
+            raise EgressUnavailable(
+                f'egress stream {self._cmd_id[:8]} vanished mid-flight '
+                '(swept or agent died)')
+        frames, done = got
+        for seq, stream, data in frames:
+            self._seq = max(self._seq, seq)
+            self._last_frame_at = time.monotonic()
+            if stream == 'meta' and data:
+                try:
+                    meta = json.loads(data)
+                except (json.JSONDecodeError, TypeError) as e:
+                    logger.debug('[Egress] bad meta frame: %s', e)
+                    continue
+                self.status_code = int(meta.get('status') or 0)
+                self.headers = meta.get('headers') or {}
+            elif stream == 'body':
+                try:
+                    chunk = base64.b64decode(data)
+                except Exception as e:
+                    logger.debug('[Egress] bad body frame: %s', e)
+                    continue
+                self._buf += chunk
+                self._drained.append(chunk)
+            elif stream == 'error':
+                raise EgressUnavailable(f'agent stream error: {data}')
+        if done:
+            self._done = True
+
+    def _agent_online(self) -> bool:
+        from lib.desktop import online_agents
+        return any(a.get('agent_id') == self._agent_id
+                   for a in online_agents())
+
+    def _check_watchdog(self):
+        if self._done:
+            return
+        idle = time.monotonic() - self._last_frame_at
+        if idle >= _STALL_S and not self._agent_online():
+            raise EgressUnavailable(
+                f'egress stream {self._cmd_id[:8]} stalled {idle:.0f}s and '
+                f'agent {self._agent_id[:8]} is offline — declaring dead')
+
+    # ── Response surface ────────────────────────────────────────
+
+    def wait_headers(self, timeout: float = _META_TIMEOUT_S):
+        """Block until the agent's meta frame lands (status/headers set)."""
+        deadline = time.monotonic() + timeout
+        while self.status_code == 0:
+            self._poll_frames()
+            if self.status_code:
+                return
+            if time.monotonic() > deadline:
+                raise EgressUnavailable(
+                    f'agent produced no response headers within {timeout:.0f}s')
+            time.sleep(_CONSUME_POLL_S)
+
+    def _next_line(self):
+        """One decoded line from the buffer, or None when no full line yet."""
+        idx = self._buf.find(b'\n')
+        if idx < 0:
+            return None
+        raw = self._buf[:idx]
+        self._buf = self._buf[idx + 1:]
+        if raw.endswith(b'\r'):
+            raw = raw[:-1]
+        return raw.decode('utf-8', errors='replace')
+
+    def iter_lines(self, decode_unicode=True):
+        """Yield decoded lines as they arrive (requests.iter_lines shape)."""
+        while True:
+            self._poll_frames()
+            line = self._next_line()
+            if line is not None:
+                yield line
+                continue
+            if self._done:
+                # Drain a trailing partial line (no final newline).
+                if self._buf:
+                    tail, self._buf = self._buf, b''
+                    yield tail.decode('utf-8', errors='replace')
+                return
+            self._check_watchdog()
+            time.sleep(_CONSUME_POLL_S)
+
+    def read_all_text(self) -> str:
+        """Drain the stream to done and return the whole body (error path)."""
+        while not self._done:
+            self._poll_frames()
+            if not self._done:
+                self._check_watchdog()
+                time.sleep(_CONSUME_POLL_S)
+        return b''.join(self._drained).decode('utf-8', errors='replace')
+
+    def close(self):
+        """Best-effort cancel: tell the agent to abort the upstream request
+        (idempotent — the transport calls this from its finally block)."""
+        if self._closed:
+            return
+        self._closed = True
+        self._done = True
+        try:
+            cancel_stream(self._cmd_id, self._agent_id, self._user_id)
+        except Exception as e:
+            logger.debug('[Egress] cancel on close failed for %s: %s',
+                         self._cmd_id[:8], e)
+
+
+def open_stream(url: str, *, method: str = 'POST', headers: dict = None,
+                body: bytes = b'', agent_id: str = None, user_id: str = '',
+                log_prefix: str = '') -> EgressStreamReader:
+    """Open a streamed request through the caller's desktop agent.
+
+    Enqueues ``egress_http_stream`` (TTL 1800s) and waits for the agent's
+    meta frame. Returns the :class:`EgressStreamReader` once response
+    headers are known (mirroring connect-phase semantics).
+
+    Raises:
+        EgressUnavailable: host not whitelisted / no agent / no meta frame
+            within the connect window.
+    """
+    if not host_allowed(url):
+        raise EgressUnavailable(
+            f'egress host not in whitelist: {urlparse(url).hostname or url!r}')
+    if agent_id is None:
+        agent_id = route_request(url, user_id=user_id)
+    cmd_id = uuid.uuid4().hex
+    params = {
+        'url': url,
+        'method': (method or 'POST').upper(),
+        'headers': dict(headers or {}),
+        'body_b64': base64.b64encode(body or b'').decode('ascii'),
+        'timeout_ms': _EGRESS_STREAM_TTL_S * 1000,
+        'proxy_mode': 'env',
+        'stream_id': cmd_id,
+    }
+    from lib.desktop import enqueue_desktop_command
+    enq_id, err = enqueue_desktop_command(
+        'egress_http_stream', params,
+        target_agent_id=agent_id, user_id=user_id,
+        cmd_id=cmd_id, ttl=_EGRESS_STREAM_TTL_S)
+    if err:
+        raise EgressUnavailable(f'failed to enqueue egress stream: {err}')
+    logger.info('%s[Egress] stream %s %s via agent %s (cmd=%s)',
+                log_prefix, params['method'], urlparse(url).hostname,
+                agent_id[:8], cmd_id[:8])
+    reader = EgressStreamReader(cmd_id, agent_id, user_id)
+    reader.wait_headers()
+    return reader
+
+
+def cancel_stream(cmd_id: str, agent_id: str, user_id: str = ''):
+    """Fire-and-forget cancel for an in-flight stream (design §4.2)."""
+    from lib.desktop import enqueue_desktop_command
+    enq_id, err = enqueue_desktop_command(
+        'egress_cancel', {'cmd_id': cmd_id},
+        target_agent_id=agent_id, user_id=user_id)
+    if err:
+        logger.debug('[Egress] cancel enqueue failed for %s: %s', cmd_id[:8], err)
 
 
 def egress_http(url: str, *, method: str = 'POST', headers: dict = None,

@@ -85,47 +85,48 @@ class TestRouteRequest(unittest.TestCase):
     def test_network_fail_also_routes_to_agent(self):
         with mock.patch.object(egress, '_probe_host', return_value='network_fail'), \
              self._agents([_agent(user_id='u1')]):
-            self.assertEqual(egress.route_request('https://x/v1', user_id='u1'), 'a1')
+            self.assertEqual(egress.route_request('https://api.anthropic.com/v1/x', user_id='u1'), 'a1')
 
     def test_non_egress_agent_not_selected(self):
         with mock.patch.object(egress, '_probe_host', return_value='geo_blocked'), \
              self._agents([_agent(egress_cap=False)]):
             with self.assertRaises(EgressUnavailable):
-                egress.route_request('https://x/v1', user_id='u1')
+                egress.route_request('https://api.anthropic.com/v1/x', user_id='u1')
 
     def test_tenant_isolation(self):
         # u2's agent must not serve u1's egress.
         with mock.patch.object(egress, '_probe_host', return_value='geo_blocked'), \
              self._agents([_agent(user_id='u2')]):
             with self.assertRaises(EgressUnavailable):
-                egress.route_request('https://x/v1', user_id='u1')
+                egress.route_request('https://api.anthropic.com/v1/x', user_id='u1')
 
     def test_legacy_empty_user_any_agent(self):
         with mock.patch.object(egress, '_probe_host', return_value='geo_blocked'), \
              self._agents([_agent(user_id='')]):
-            self.assertEqual(egress.route_request('https://x/v1', user_id=''), 'a1')
+            self.assertEqual(egress.route_request('https://api.anthropic.com/v1/x', user_id=''), 'a1')
 
     def test_probe_result_cached_per_host(self):
         # Unique host per run — the module cache is process-global. The cache
         # lives INSIDE _probe_host, so count the http calls, not the wrapper.
         ok_resp = mock.Mock(status_code=401)
+        egress._probe_cache.invalidate('api.anthropic.com')
         with mock.patch('lib.http_client.http_post', return_value=ok_resp) as hp:
-            egress.route_request('https://cache-probe-host-x.test/a', user_id='')
-            egress.route_request('https://cache-probe-host-x.test/b', user_id='')
+            egress.route_request('https://api.anthropic.com/a', user_id='')
+            egress.route_request('https://api.anthropic.com/b', user_id='')
         self.assertEqual(hp.call_count, 1)
 
     def test_multi_agent_requires_pinned_choice(self):
         with mock.patch.object(egress, '_probe_host', return_value='geo_blocked'), \
              self._agents([_agent('a1', 'u1'), _agent('a2', 'u1', name='box2')]), \
              mock.patch.object(egress, '_pinned_agent', return_value='a2'):
-            self.assertEqual(egress.route_request('https://x/v1', user_id='u1'), 'a2')
+            self.assertEqual(egress.route_request('https://api.anthropic.com/v1/x', user_id='u1'), 'a2')
 
     def test_multi_agent_unpinned_raises_with_guidance(self):
         with mock.patch.object(egress, '_probe_host', return_value='geo_blocked'), \
              self._agents([_agent('a1', 'u1'), _agent('a2', 'u1', name='box2')]), \
              mock.patch.object(egress, '_pinned_agent', return_value=''):
             with self.assertRaises(EgressUnavailable) as ctx:
-                egress.route_request('https://x/v1', user_id='u1')
+                egress.route_request('https://api.anthropic.com/v1/x', user_id='u1')
         self.assertIn('oauth_egress_agent_id', str(ctx.exception))
 
 

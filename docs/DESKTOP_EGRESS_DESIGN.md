@@ -155,6 +155,15 @@ stdout/stderr 分通道拼帧——**需要扩展为保留帧列表**（见 §6.
 `send_desktop_command` 的阻塞语义不用于流式——路由层用「入队即返 cmd_id +
 轮询帧 + 等 done」的消费循环。
 
+**`egress_cancel` —— 中途取消通道（owner S3 补充①，不做则「可停止」在
+egress 路径上是假的）**：bridge 原本没有取消概念，用户 Stop 后服务器
+消费端停读，但 agent 会继续烧订阅配额拉到自然结束。协议：消费端中止时
+（abort/看门狗/异常）入队 `egress_cancel {cmd_id}`（同一 bridge 通道、同一
+agent 寻址）；agent 侧维护在飞流注册表 `cmd_id → 运行句柄`，收到取消即
+关闭对应 requests session 中断上游。取消是 best-effort：命令可能已完成
+（注册表无记录 → 静默忽略），取消帧可能与尾部帧乱序（agent 先记取消标记，
+后到的该 cmd 帧一律丢弃）。
+
 ### 4.3 延迟与 TTL 预算
 
 - 命令下行：长轮询即时（`take_pending_commands_async`，秒级内）。
@@ -175,6 +184,12 @@ stdout/stderr 分通道拼帧——**需要扩展为保留帧列表**（见 §6.
   TTL。`consume_stream` 轮询循环内：距上一新帧超过 30s **且**该 agent 已不在
   `online_agents()` → 主动以 `EgressUnavailable` 断开（错误语义同中途断流），
   让 dispatcher 走模型回退，而不是挂半小时。
+- **流帧清扫语义（owner S3 补充②，不做则长 thinking 的流被误杀）**：
+  `_sweep_streams_locked` 原来一律按全局 `_COMMAND_TTL_S=90s` 清帧，而 LLM 的
+  thinking 块可能连续几分钟无帧——静默期超 90s 帧条目被扫掉，流悄悄死透。
+  定死两条：(a) 清扫尊重命令自身 ttl（`egress_http_stream` 1800s，取
+  `command_queue[cmd_id].ttl` 兜底全局值）；(b) 消费端把「done=false 但帧条目
+  已消失」判为流异常终止（EgressUnavailable），绝不继续干等。
 
 ---
 
@@ -355,7 +370,7 @@ token 只在请求的 headers 里由服务器注入）。
 |---|---|---|
 | S1 | §5 cloaking 移植（outbound.py）+ codex plan_type | 纯离线：单测断言请求体/头部形状（计费头指纹算法逐字节对拍 CLIProxyAPI 测试向量）；plan_type 解析与门控 |
 | S2 | `egress_http` + 路由层 + OAuth 交换/刷新接入（A1）+ **登录顺序翻转**（§6.2 A4 的 `_completeLogin` 改「服务器交换→B1→curl」，JS 改动需 bundle 重建）+ 刷新 singleflight + user_id 下穿 | fake bridge（内存队列驱动假 agent）端到端：403 直连 → 走 agent → token 落库；白名单拒绝；TTL/超时；并发刷新合并 |
-| S3 | `egress_http_stream` + LLM 传输分支（A2）+ bridge TTL/get_frames | fake 帧流 → SSE 解析输出与直连路径逐字节一致；30min TTL；断流错误传播 |
+| S3 | `egress_http_stream` + LLM 传输分支（A2）+ bridge TTL/get_frames + `egress_cancel` + 流帧清扫语义 | fake 帧流 → SSE 解析输出与直连路径逐字节一致；30min TTL；断流错误传播；Stop 后 agent 不再烧配额；长 thinking（>90s 无帧）不被误杀 |
 | S4 | provider_probe（A3）+ 前端卡片/选择器（A4） | 探测经 agent；卡片三态；多 agent 选择持久化 |
 
 测试纪律：按项目惯例 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`、`@pytest.mark.unit`、

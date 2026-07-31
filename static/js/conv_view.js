@@ -135,6 +135,28 @@
     return inner.lastElementChild;
   }
 
+  /* Ship a ConvView forensic line to the server over the EXISTING
+   * client-error beacon (Api.clientError.report → POST /api/client-error →
+   * app.log) — the same channel chatinner_dom.js's order-violation report
+   * rides. A bare console line is invisible to the user and lost on reload;
+   * the live-task twin guard's whole point is that the NEXT recurrence
+   * names its writer in the server log. Fire-and-forget; a transport
+   * failure leaves the console line as the last resort. Never throws. */
+  function _beaconConvView(msg, extra) {
+    try {
+      if (typeof Api === 'undefined' || !Api.clientError ||
+          typeof Api.clientError.report !== 'function') return false;
+      Api.clientError.report({
+        message: String(msg).slice(0, 2000),
+        url: (typeof location !== 'undefined' && location.href) || '',
+        extra: extra || {},
+      });
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
   /* ── Public API ──────────────────────────────────────────────────── */
 
   const ConvView = {
@@ -240,14 +262,20 @@
           if (_stream && _stream.assistantMsg
               && document.getElementById('streaming-msg')) {
             if (msg === _stream.assistantMsg) {
-              console.error('[ConvView] apply REFUSED (live-task twin) — the ' +
+              const _refuseMsg = '[ConvView] apply REFUSED (live-task twin) — the ' +
                 'message being statically appended IS the object the live ' +
                 'stream is bound to (msgId=' + (msg._msgId || '').slice(0, 12) +
                 ' idx=' + idx + ' conv=' + String(convId).slice(0, 8) + '). ' +
                 'A static twin of the live bubble must never be appended; ' +
                 'route live-turn updates through updateStreamingUI / ' +
                 'startStreaming / finalizeStreaming.\n' +
-                (new Error('live-task twin trace')).stack);
+                (new Error('live-task twin trace')).stack;
+              console.error(_refuseMsg);
+              _beaconConvView(_refuseMsg, {
+                site: 'ConvView.apply', kind: 'live-task-twin-refused',
+                convId: String(convId), taskId: String(_stream.taskId || ''),
+                msgId: String(msg._msgId || ''), idx: idx,
+              });
               return false;
             }
             if (msg._taskId && _stream.taskId && msg._taskId === _stream.taskId) {
@@ -256,12 +284,18 @@
                * turn. Not refused (endpoint/VU lanes legitimately re-apply
                * settled messages of the live task) — but logged with a stack
                * so the drift is diagnosable from the client-error report. */
-              console.warn('[ConvView] apply appending a NON-bound object of ' +
+              const _driftMsg = '[ConvView] apply appending a NON-bound object of ' +
                 'the LIVE task (msgId=' + (msg._msgId || '').slice(0, 12) +
                 ' taskId=' + String(msg._taskId).slice(0, 8) + ' conv=' +
                 String(convId).slice(0, 8) + ') — twin risk; if a duplicate ' +
                 'bubble appears, this trace names the writer.\n' +
-                (new Error('same-task drift trace')).stack);
+                (new Error('same-task drift trace')).stack;
+              console.warn(_driftMsg);
+              _beaconConvView(_driftMsg, {
+                site: 'ConvView.apply', kind: 'same-task-drift-warn',
+                convId: String(convId), taskId: String(msg._taskId || ''),
+                msgId: String(msg._msgId || ''), idx: idx,
+              });
             }
           }
         }

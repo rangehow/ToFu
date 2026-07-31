@@ -65,6 +65,7 @@ const { setup } = require(process.env.JSDOM_HARNESS);
 
 const conversations = [];
 const activeStreams = new Map();
+const beaconCalls = [];
 
 const globals = {
   conversations, activeStreams, AbortController,
@@ -78,7 +79,8 @@ const globals = {
   getToolRoundsFromMsg: (m) => (m && m.toolRounds) || [],
   _ensureMsgId: (m) => { if (!m._msgId) m._msgId = 'tmp_' + Math.random().toString(36).slice(2); return m._msgId; },
   twUpdate: () => {}, twStop: () => {}, twStart: () => {},
-  Api: { chat: { poll: async () => null }, conversations: { get: async () => null }, post: async () => ({ ok: true }) },
+  Api: { chat: { poll: async () => null }, conversations: { get: async () => null }, post: async () => ({ ok: true }),
+         clientError: { report: (p) => { beaconCalls.push(p); return true; } } },
   EventSource: class { constructor() {} close() {} },
   fetch: async () => ({ ok: true, json: async () => ({}) }),
   _reportClientError: () => {}, _checkServerHealth: async () => true,
@@ -178,6 +180,11 @@ check('twin repro: no static msg-4 node appeared', !document.getElementById('msg
 check('twin repro: live bubble intact', !!document.getElementById('streaming-msg'));
 check('twin repro: forensic error logged with live-task-twin marker',
       errLog.some((l) => l.includes('live-task twin')));
+check('twin repro: forensic line BEACONS to the server (client-error report)',
+      beaconCalls.length === 1
+      && beaconCalls[0].extra && beaconCalls[0].extra.kind === 'live-task-twin-refused'
+      && String(beaconCalls[0].message).includes('live-task twin trace')
+      && beaconCalls[0].extra.site === 'ConvView.apply');
 
 // ── positive control: replace-in-place of a settled message still works ──
 settled.content = 'a1-answer-v2';
@@ -194,6 +201,10 @@ const appended = window.ConvView.apply(convId, 5, serverCopy);
 check('same-task non-bound object: append allowed (endpoint/VU-safe lane)', appended === true);
 check('same-task non-bound object: drift warn logged',
       warnLog.some((l) => l.includes('same-task drift trace') || l.includes('twin risk')));
+check('same-task non-bound object: drift warn BEACONS too',
+      beaconCalls.length === 2
+      && beaconCalls[1].extra && beaconCalls[1].extra.kind === 'same-task-drift-warn'
+      && String(beaconCalls[1].message).includes('same-task drift trace'));
 
 report();
 """
@@ -212,10 +223,24 @@ _NEUTER_BODY = _BODY.replace(
     "      errLog.some((l) => l.includes('live-task twin')));",
     "",
 ).replace(
+    "check('twin repro: forensic line BEACONS to the server (client-error report)',\n"
+    "      beaconCalls.length === 1\n"
+    "      && beaconCalls[0].extra && beaconCalls[0].extra.kind === 'live-task-twin-refused'\n"
+    "      && String(beaconCalls[0].message).includes('live-task twin trace')\n"
+    "      && beaconCalls[0].extra.site === 'ConvView.apply');",
+    "check('NEUTER: no beacon without the guard after the twin apply',\n"
+    "      beaconCalls.length === 0);",
+).replace(
     "check('same-task non-bound object: drift warn logged',\n"
     "      warnLog.some((l) => l.includes('same-task drift trace') || l.includes('twin risk')));",
     "check('NEUTER: drift warn is part of the guard and is gone too',\n"
     "      !warnLog.some((l) => l.includes('same-task drift trace') || l.includes('twin risk')));",
+).replace(
+    "check('same-task non-bound object: drift warn BEACONS too',\n"
+    "      beaconCalls.length === 2\n"
+    "      && beaconCalls[1].extra && beaconCalls[1].extra.kind === 'same-task-drift-warn'\n"
+    "      && String(beaconCalls[1].message).includes('same-task drift trace'));",
+    "check('NEUTER: still no beacon after the drift append', beaconCalls.length === 0);",
 )
 
 

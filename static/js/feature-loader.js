@@ -129,6 +129,11 @@ const _DEFERRED_ENTRY_POINTS = [
   // openers — projectBrainRefresh (conv-switch) + closeProjectBrain (overlay
   // onclick) are intentionally NOT here so conv-switch never loads the bundle.
   'openProjectBrain', 'toggleProjectBrain', 'openProjectBrainInfluence',
+  // Cross-tab sync boot wiring (deferred 2026-07-31, Epic-E sub-part 3
+  // slice A). main.js calls _wireConvSyncPush typeof-guarded at boot —
+  // this stub loads the feature bundle and dispatches to the real fn, so
+  // the conv-sync push subscription still wires right after boot.
+  '_wireConvSyncPush',
 ];
 _DEFERRED_ENTRY_POINTS.forEach(_installFeatureStub);
 window._DEFERRED_ENTRY_POINTS = _DEFERRED_ENTRY_POINTS;

@@ -458,7 +458,9 @@ async function deleteConversation(id, e) {
   conversations = conversations.filter((c) => c.id !== id);
   /* ★ Remove from IndexedDB cache */
   ConvCache.remove(id);
-  _broadcastToTabs("conv_deleted", { convId: id });
+  /* cross_tab_sync.js is DEFERRED (Epic-E sub-part 3 slice A) — typeof-guard
+   * so a delete in the pre-load window can't ReferenceError. */
+  if (typeof _broadcastToTabs === 'function') _broadcastToTabs("conv_deleted", { convId: id });
   if (wasActive) {
     if (conversations.length > 0) loadConversation(conversations[0].id);
     else newChat();
@@ -546,7 +548,9 @@ function _restoreDeletedConversation(snapshot, origIndex, wasActive) {
     syncConversationToServer(restored).catch(err =>
       debugLog(`[deleteConv] restore sync failed: ${err && err.message}`, 'warn'));
   }
-  _broadcastToTabs("conv_restored", { convId: restored.id });
+  /* cross_tab_sync.js is DEFERRED (Epic-E sub-part 3 slice A) — typeof-guard
+   * so a restore in the pre-load window can't ReferenceError. */
+  if (typeof _broadcastToTabs === 'function') _broadcastToTabs("conv_restored", { convId: restored.id });
   if (wasActive) loadConversation(restored.id);
   else renderConversationList();
   if (typeof showToast === "function") showToast(t('sidebar.convRestored'), 'success');

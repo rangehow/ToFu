@@ -39,7 +39,11 @@ function saveConversations(changedConvId) {
   }
   /* ★ DB-first: in-memory array is truth for this tab, DB across tabs/sessions. */
   conversations.sort(_convSorter);
-  _broadcastToTabs("conv_saved", { convId: changedConvId });
+  /* cross_tab_sync.js is DEFERRED (Epic-E sub-part 3 slice A) — absent in
+   * the pre-load window; typeof-guard so an early save can't ReferenceError.
+   * A missed broadcast here only delays another tab's refresh until the
+   * module lands (the reconcile poll + push notify cover the gap). */
+  if (typeof _broadcastToTabs === 'function') _broadcastToTabs("conv_saved", { convId: changedConvId });
 
   /* ── Throttled sidebar refresh during streaming ──
    * During active streaming, saveConversations is called every ~3s but

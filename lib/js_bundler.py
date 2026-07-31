@@ -501,7 +501,17 @@ _BUNDLE_FILES = [
     # BOTH consumers so the bare-name call resolves via bundle-level
     # window scope. Pure helper: reads settings, writes onto conv.
     'core/conv_apply_settings.js',
-    'core/cross_tab_sync.js',
+    # core/cross_tab_sync.js — MOVED to _DEFERRED_FILES 2026-07-31 (Epic-E
+    # pt_3879f00e sub-part 3 slice A, 53KB out of the render-blocking core).
+    # Its core prerequisites (conv_apply_settings / conv_state_reducer /
+    # async_pool / current_user) all stay here and therefore always load
+    # first; its window-exposed entry point _wireConvSyncPush is stubbed by
+    # feature-loader.js (see _DEFERRED_ENTRY_POINTS) so main.js's
+    # typeof-guarded boot call still wires the conv-sync push subscription.
+    # The 3 hot-path _broadcastToTabs call sites (conv_save.js,
+    # main_conv_lifecycle.js ×2) are typeof-guarded at their call sites.
+    # Option A relocation (BroadcastChannel listener owned by the module
+    # itself) landed earlier — test_frontend_cross_tab_sync_deferrable.py.
     # Pure conversation reducers extracted 2026-07-25 from
     # core/conversations.js (pt_3879f00e sub-part 2, slice 1):
     # convAutoTranslate / assistantTailIsPriorTurn /
@@ -999,6 +1009,16 @@ _DEFERRED_FILES = [
     'project-brain-peers.js',
     'project-brain-status.js',
     'project-brain-i18n.js',
+    # Cross-tab/cross-device sync (53KB) — deferred 2026-07-31 (Epic-E
+    # pt_3879f00e sub-part 3 slice A). Boot wiring survives via the
+    # _wireConvSyncPush feature-loader stub (main.js calls it
+    # typeof-guarded at boot); the module's own load-time side effects
+    # (BroadcastChannel creation + listener, _scheduleNextReconcile()
+    # self-start, window exposes) only touch browser globals / window,
+    # and every core symbol it reads (conversations, ConvCache,
+    # loadConversationsFromServer, pushSubscribe, …) is in the core
+    # bundle which always loads first. See the _BUNDLE_FILES moved-note.
+    'core/cross_tab_sync.js',
 ]
 
 # The entry-point functions the feature bundle DEFINES. feature-loader.js
@@ -1021,6 +1041,12 @@ _DEFERRED_ENTRY_POINTS = (
     # conv-switch, negating the deferral. They are typeof-guarded at their call
     # sites and safely no-op until the panel is first opened.
     'openProjectBrain', 'toggleProjectBrain', 'openProjectBrainInfluence',
+    # Cross-tab sync boot wiring (deferred 2026-07-31, Epic-E sub-part 3
+    # slice A). main.js calls _wireConvSyncPush typeof-guarded at boot;
+    # the stub loads the feature bundle and dispatches to the real fn, so
+    # the conv-sync push subscription wires right after boot instead of
+    # never. Keep in sync with feature-loader.js's _DEFERRED_ENTRY_POINTS.
+    '_wireConvSyncPush',
 )
 
 # ── Bundle-manifest freshness (2026-07-24 / 2026-07-31 incident class) ──

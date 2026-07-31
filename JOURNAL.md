@@ -1,3 +1,19 @@
+### 2026-07-31(续·stalled 判决传到快照:「无结果」从此只留给「从未产出」) — owner 复核冒烟时核出最后语义洞:判决只活在日志;补上后**真死情形下面板也能回答「为什么」**(commit `b5900bfd` + i18n 键经 `0185d9a7` 落地,5 文件 +273/-1;守卫 29→**34**,**NEUTER×5 各咬各的**(3/3/1/1/1);相邻环 **120/120**)
+
+- **洞的形状(owner 核出,我复核属实):** `master.py:449` 对「terminated + 无 result」恒判 `unknown` → 前端 `phaseMap.unknown` = **无结果**;`master.py`/`snapshot.py` 里 `stalled` 一词命中 **0**。冒烟里 smoke-silence 是自己 1010s 回来兜住的;**真死了,卡片依然显示「无结果」** —— 用户最初问的就是「为什么无结果???」。
+- **修法(backend):** 新增 `_stalled_agents` 登记簿;driver finally 在 `_terminated` 之前收割 `beacon.stalled_agents()`(id → 静默秒数 + 最后活动 note);快照优先级 **aborted > stalled > unknown**(用户杀的叫 aborted,被判决的叫 stalled,只剩「从未启动/从未产出」才落 unknown);快照带 `stallSilentSeconds` + `stallNote`。
+- **★ 自愈性质必须保住,而它是结构给的:** 完成回调 pop 登记 + result 分支优先 ⇒ 生产实测的形状(900s 判停滞 → 1010s 迟到完成)卡片自动从 stalled 翻成 done;且 stalled **不计入** doneCount ⇒ 迟到完成使 version 单调上升,CAS 必然接受新快照。
+- **前端:** phaseMap + status 覆盖分支 + 琥珀卡片类(`sw-a-stalled`,区别于 failed 红 —— 它可能回来);标签 `已停滞 · 静默 {seconds}s`(t() 插值,实测占位符语法);**reload 恢复路径必须显式携带 `stallSilentSeconds`,否则 F5 丢标签**。
+- **★ 两发 NEUTER 没咬,咬出我自己守卫的两处子串盲:** ①`else if (false && a.status === "stalled")` —— 子串还在、行为已死,断言却绿 ⇒ 锚定**整行分支**;②恢复映射被改成 `stallSilentSeconds: undefined` —— 标识符还在、映射已死 ⇒ 锚定**映射表达式** `? a.stallSilentSeconds`。**这是本仓第 N 次同型教训:凡「某内容必须被提及」类断言,锚的必须是「产生行为的那一段文本」,不是关键词本身。**
+- **★ 共享索引又咬了一次,这次是反方向:** 我 stage 的 i18n.js(两个 stalled 键)被兄弟的 `git commit`(无 pathspec)**卷进了他们的提交 `0185d9a7`**(与他们的 optimistic-UI 键同车)。净结果正确(键在 HEAD、我的 `b5900bfd` 有其于四文件),但**归因错位**。处理:共享树上不改写历史,在此如实记录。**判据重申:在这棵树上 stage 之后要立刻 commit,任何窗口期都够兄弟的 commit 把你的暂存卷走 —— 与我此前误卷兄弟 on_spawn 是同一面镜子的两边。**
+
+### 2026-07-31(研究·CLIProxyAPI 订阅机制拆解 + 「服务器连不上、客户端代理能连」的出路) — owner 要求研究 CLIProxyAPI 如何提取 Claude/OpenAI 订阅并给出方案;仓库已克隆至 chatui 同级 `../CLIProxyAPI`;**服务器网络实测推翻「可能连不上」——是「确定连不上」**(研究票 `pt_63f2569d6e814c30`,纯调研无代码)
+
+- **实测(容器内):** 直连四个端点(anthropic×2/openai×2)**DNS 都解析不了**(curl code 6,容器无直连外网能力);走公司代理 `10.229.18.27:8412` 网络通但全部 **HTTP 403 `Request not allowed`**(geo/ASN 封锁,含 chatgpt.com 的 Cloudflare 拦截页)。
+- **CLIProxyAPI 机制四要点:** ①Codex 订阅计划从 id_token JWT 的 `https://api.openai.com/auth` claim 解出(`chatgpt_plan_type` + `chatgpt_account_id`),驱动分 plan 模型清单——**Tofu 的 `_parse_jwt_claims` 没提取 plan_type**;②**「订阅配额查询」这个 API 根本不存在**,它只统计自身 token 量 + 429 冷却——之前想查订阅剩余量的方向是错的;③请求伪装已是 2026 军备竞赛:uTLS Chrome 指纹(Claude+Codex 都用)、system[0] 计费头 `x-anthropic-billing-header: cc_version=...; cch=...`、完整 Claude Code 提示词注入、用户 system 挪进首条 user 消息、工具名改成官方命名——**Tofu outbound.py 全面落后,就算网络通了也可能被风控挡**;④Codex 的 originator/UA/account-id 三件套 Tofu 已对齐。
+- **失败链三层,此前只修了第一层:** 登录交换 403(有 B1 浏览器兜底但 token 端点 CORS 存疑)→ **token 刷新 403(Claude token ~8h 必死,最隐蔽)** → API 调用 403(完全没修)。
+- **方案(已呈 owner 待拍板):** 0.办公机 Clash 开 Allow LAN、Tofu 代理指办公机(5 分钟验证通路);1.浏览器 WS 中继(零安装但 chatgpt.com 无 CORS,Codex 走不了);2.**伴随代理反向隧道(根治)**:客户端脚本主动出站拨 WS 注册为出口节点,绕开 NAT 方向问题,curl_cffi 补 TLS 指纹 + 移植 cloaking。CLIProxyAPI 本身是监听型服务器,方向相反不能直接复用。
+- **机制细节已存 memory:** `cliproxyapi_订阅机制与_tofu_oauth_失败根因`(含计费头指纹算法 salt、头部清单等实现级参数)。
 ### 2026-07-31(续·乐观 UI 最后一面:MCP 面板(全应用最长死窗口)+ 计时器面板,修法是「pending 映射挂在渲染接缝上」) — owner 实测四个 MCP handler + 两个 timer handler 全 await-first;修复 `pt_2bf8e5c85d8f4b2e`(5 文件;新套件 **8/8**,失败先行 **8 红**,**NEUTER×2 各咬各的**,相邻环+闸 **49/49**)
 
 - **死窗口实测:** `_mcpReconnect` 点击后整卡原地不动等 `connectOne` + 全量 repopulate —— **MCP 冷启动 27~55s(JOURNAL 实测),全应用最长**;`_mcpUninstall`/`_mcpPurge` 确认后静默等 RTT(与修前 `_skillsUninstall` 同型);`_mcpQuickInstall` 只有 debugPanel 一行日志,卡片零反馈到轮询结束;`_cancelTimer`/`_triggerTimer` 行内按钮无任何切换等 RTT+全量刷新。

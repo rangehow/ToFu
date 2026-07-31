@@ -3702,7 +3702,6 @@ var _i18n = {
   'projectBrain.blockedRetry': { zh: '自动重试于', en: 'auto-retry in' },
   'projectBrain.blockedCount': { zh: '已阻塞 %d 次', en: 'blocked %d×' },
   'projectBrain.laneAwaiting': { zh: '需要你的回答', en: 'Awaiting your answer' },
-  'projectBrain.needsYourDecision': { zh: '需要你的决定', en: 'Your decision needed' },
   'projectBrain.awaitingAnswerMeta': { zh: '等待你的回答', en: 'waiting for your answer' },
   'projectBrain.actGoAnswer': { zh: '去回答', en: 'Go answer' },
   'projectBrain.actCreateConv': { zh: '新建对话', en: 'New chat' },

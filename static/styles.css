@@ -11940,6 +11940,34 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 [data-theme="tofu"] .stream-phase-text{
   opacity:1
 }
+[data-theme="tofu"] .stream-phase-text{
+  opacity:1
+}
+/* ── Stall-watch banner (pt_e0ea29f2) — amber, distinct from retrying:
+ *   the tool has produced NOTHING for Ns (heartbeat self-ticks only).
+ *   Announces the wedge and carries a Stop affordance; self-heals off. */
+[data-theme="tofu"] .stream-phase-stalled{
+  background:rgba(196,120,40,0.12);
+  border-color:rgba(196,120,40,0.38);
+  color:#9A5A10;
+  display:inline-flex;
+  align-items:center;
+  gap:8px
+}
+[data-theme="tofu"] .stream-stalled-stop{
+  font:inherit;
+  font-size:10.5px;
+  font-weight:600;
+  color:#9A5A10;
+  background:rgba(196,120,40,0.16);
+  border:1px solid rgba(196,120,40,0.45);
+  border-radius:8px;
+  padding:1px 10px;
+  cursor:pointer
+}
+[data-theme="tofu"] .stream-stalled-stop:hover{
+  background:rgba(196,120,40,0.28)
+}
 
 /* ── Log clean banner — readable on ivory ── */
 [data-theme="tofu"] .log-clean-banner{
@@ -21746,27 +21774,30 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .pb-watch-diverged{color
 .pb-board-act.pb-btn-primary{background:var(--accent);color:#fff;border-color:var(--accent)}
 .pb-board-act.pb-btn-primary:hover{background:var(--accent-hover);color:#fff;border-color:var(--accent-hover)}
 .pb-board-act:focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 60%,transparent);outline-offset:1px}
-/* Awaiting-answer lane + card — the ONE place the operator must act. */
+/* Awaiting-answer lane + card — COMPACT (2026-07-31 consolidation): the
+   question UI lives only in the Needs-you tab, so this card keeps the gated
+   state visible (accent rail + a whisper of accent wash) and deep-links. */
 .pb-board-lane-awaiting .pb-board-lane-head{color:var(--accent)}
 .pb-board-lane-awaiting .pb-board-count{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 34%,transparent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
-.pb-board-card.pb-board-awaiting{border-left:3px solid var(--accent)}
-/* Structured question panel — the decision is the primary content, not a
-   blob buried under a wall of English reason text. */
-.pb-question{margin-top:10px;padding:10px 12px;border:1px solid color-mix(in srgb,var(--accent) 30%,transparent);border-radius:var(--pb-radius-sm);background:color-mix(in srgb,var(--accent) 6%,transparent)}
-.pb-question-label{display:flex;align-items:center;gap:5px;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--accent);margin-bottom:6px}
-.pb-question-label svg{display:block}
-.pb-question-q{font-size:12.5px;line-height:1.6;color:var(--text-primary);overflow-wrap:anywhere;word-break:break-word}
-.pb-question-q code{font-family:var(--font-mono,monospace);font-size:11.5px;background:var(--bg-tertiary);padding:1px 5px;border-radius:4px}
+.pb-board-card.pb-board-awaiting{border-left:3px solid var(--accent);background:color-mix(in srgb,var(--accent) 4%,var(--pb-card-bg))}
+.pb-board-card.pb-board-awaiting:hover{background:color-mix(in srgb,var(--accent) 7%,var(--pb-card-hover));--pb-fade-to:color-mix(in srgb,var(--accent) 7%,var(--pb-card-hover))}
+.pb-board-badge-awaiting{background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 34%,transparent)}
+.pb-board-badge-awaiting svg{width:11px;height:11px}
+.pb-board-awaiting-meta{font-size:10.5px;color:var(--text-tertiary)}
+/* Forward actions on a board card — deep-link to the answering surface, or
+   open a fresh chat about the epic. Accent family so the eye separates them
+   from the neutral lifecycle controls (complete/block/reopen). */
+.pb-board-act.pb-board-act-goto{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 34%,transparent);background:var(--accent-subtle)}
+.pb-board-act.pb-board-act-goto:hover{color:var(--accent-hover);border-color:color-mix(in srgb,var(--accent) 50%,transparent);background:color-mix(in srgb,var(--accent) 16%,transparent)}
+.pb-board-act.pb-board-act-createConv{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 34%,transparent);background:transparent}
+.pb-board-act.pb-board-act-createConv:hover{color:var(--accent-hover);border-color:color-mix(in srgb,var(--accent) 50%,transparent);background:var(--accent-subtle)}
 .pb-chip-row{display:flex;flex-wrap:wrap;gap:7px;margin-top:9px}
 .pb-chip{display:inline-flex;align-items:center;gap:4px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-light);border-radius:var(--pb-radius-chip);padding:5px 12px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;transition:background var(--transition),border-color var(--transition),transform 0.1s ease}
 .pb-chip:hover{background:var(--bg-hover);border-color:var(--accent)}
 .pb-chip:active{transform:scale(0.97)}
 .pb-chip:disabled{opacity:0.55;cursor:default}
-.pb-answer-input-row{display:flex;gap:7px;margin-top:9px}
-.pb-answer-text{flex:1;min-width:0;background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--pb-radius-sm);padding:6px 10px;font-size:12px;color:var(--text-primary);font-family:inherit}
-.pb-answer-text:focus{outline:none;border-color:var(--accent)}
-/* Inline note editor (replaces window.prompt for Block) — same family as the
-   answer input row so every in-panel prompt looks + behaves identically. */
+/* Inline note editor (replaces window.prompt for Block) — the in-panel
+   prompt family shared with the Needs-you tab's answer input. */
 .pb-note-editor{display:flex;gap:7px;margin-top:9px;padding-top:9px;border-top:1px dashed var(--border)}
 .pb-note-text{flex:1;min-width:0;background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--pb-radius-sm);padding:6px 10px;font-size:12px;color:var(--text-primary);font-family:inherit}
 .pb-note-text:focus{outline:none;border-color:var(--accent)}
@@ -21801,8 +21832,8 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .pb-watch-diverged{color
 .pb-attn-title{font-size:13.5px;font-weight:600;line-height:1.5;color:var(--text-primary);overflow-wrap:anywhere;word-break:break-word}
 .pb-attn-body{font-size:12.5px;line-height:1.6;color:var(--text-secondary);overflow-wrap:anywhere;word-break:break-word}
 .pb-attn-meta{font-size:11.5px;color:var(--text-tertiary);margin-top:8px;overflow-wrap:anywhere}
-/* The question IS the content on a halted epic — same treatment as the Board's
-   .pb-question so answering feels identical in both places. */
+/* The question IS the content on a halted epic — and after the 2026-07-31
+   consolidation this is the ONLY place it renders (the Board deep-links here). */
 .pb-attn-q{margin-top:9px;padding:10px 12px;border:1px solid color-mix(in srgb,var(--pb-red) 26%,transparent);border-radius:var(--pb-radius-sm);background:color-mix(in srgb,var(--pb-red) 6%,transparent);font-size:12.5px;line-height:1.6;color:var(--text-primary);overflow-wrap:anywhere;word-break:break-word}
 .pb-attn-input-row{display:flex;gap:7px;margin-top:9px}
 .pb-attn-answer{flex:1;min-width:0;background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--pb-radius-sm);padding:6px 10px;font-size:12px;color:var(--text-primary);font-family:inherit}
@@ -21815,6 +21846,10 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .pb-watch-diverged{color
 .pb-attn-act:disabled{opacity:0.55;cursor:default}
 .pb-attn-act.pb-btn-primary{background:var(--accent);color:#fff;border-color:var(--accent)}
 .pb-attn-act.pb-btn-primary:hover{background:var(--accent-hover);color:#fff;border-color:var(--accent-hover)}
+/* Create-conversation on a halted-epic card — accent outline, same family as
+   the Board's createConv/goto forward actions (one vocabulary panel-wide). */
+.pb-attn-act.pb-attn-act-conv{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 34%,transparent);background:transparent}
+.pb-attn-act.pb-attn-act-conv:hover{color:var(--accent-hover);border-color:color-mix(in srgb,var(--accent) 50%,transparent);background:var(--accent-subtle)}
 .pb-attn-goto{display:inline-flex;align-items:center;gap:5px;background:transparent;color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 30%,transparent);border-radius:var(--pb-radius-sm);padding:5px 10px;font-size:11.5px;font-weight:600;font-family:inherit;cursor:pointer;transition:background var(--transition)}
 .pb-attn-goto:hover{background:var(--accent-subtle)}
 .pb-attn-goto svg{display:block}
@@ -22415,6 +22450,11 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .pb-watch-diverged{color
   background:rgba(198,120,72,0.12);
   color:#a8552b;
 }
+.stg-face-chip.responses{
+  border-color:rgba(14,116,144,0.5);
+  background:rgba(14,116,144,0.12);
+  color:#0e7490;
+}
 .stg-face-chip.pinned{
   border-style:dashed;
   border-width:1.5px;
@@ -22435,6 +22475,12 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .stg-face-chip.anthropic
   border-color:rgba(214,150,110,0.55);
   background:rgba(214,150,110,0.16);
   color:#e0a882;
+}
+[data-theme="dark"] .stg-face-chip.responses,
+html:not([data-theme="light"]):not([data-theme="tofu"]) .stg-face-chip.responses{
+  border-color:rgba(94,196,220,0.5);
+  background:rgba(94,196,220,0.15);
+  color:#7fd4e8;
 }
 [data-theme="dark"] .stg-face-chip.refused,
 html:not([data-theme="light"]):not([data-theme="tofu"]) .stg-face-chip.refused{

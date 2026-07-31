@@ -58,6 +58,65 @@ import pytest
 
 pytestmark = [pytest.mark.auth_mode('open'), pytest.mark.unit]
 
+# The PRODUCTION js dir, captured at import BEFORE the autouse fixture
+# below redirects js_bundler.JS_DIR to the symlink farm. Guard 6
+# snapshots this dir around a build to prove the suite leaves it
+# untouched.
+from lib import js_bundler as _jb_at_import
+_REAL_JS_DIR = _jb_at_import.JS_DIR
+
+
+@pytest.fixture(autouse=True)
+def _build_in_symlink_farm(monkeypatch, tmp_path):
+    """Redirect every bundle build in this suite into a THROWAWAY
+    symlink farm — never the production ``static/js`` tree.
+
+    Why (2026-08-01 incident): guards 1/2/5 call ``build_bundle()``
+    directly. Before this fixture, the builds ran against the REAL
+    ``js_bundler.JS_DIR``: they published new-shape bundles into the
+    served directory AND ``_clean_old_bundles`` deleted the artifacts
+    the live server was currently advertising
+    (``feature-8204ccdc.js`` → 404 for every deferred feature until a
+    manual rebuild re-emitted it). A test run must be able to break
+    NOTHING in production serving.
+
+    The farm symlinks each manifest entry (+ i18n.js for the pack
+    emitter) so reads resolve to the real sources, while every WRITE
+    (bundle publish, pack emit, old-bundle sweep, build lock) lands in
+    ``tmp_path``. ``_BUILD_LOCK_PATH`` is a module-level constant, so
+    it is redirected explicitly alongside ``JS_DIR``.
+    """
+    from lib import js_bundler
+
+    real_dir = js_bundler.JS_DIR
+    farm = tmp_path / 'jsfarm'
+    farm.mkdir()
+    entries = set(js_bundler._BUNDLE_FILES) | set(js_bundler._DEFERRED_FILES)
+    entries.add('i18n.js')
+    for entry in entries:
+        src = os.path.join(real_dir, entry)
+        if not os.path.exists(src):
+            continue
+        dst = farm / entry
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.symlink_to(src)
+    monkeypatch.setattr(js_bundler, 'JS_DIR', str(farm))
+    monkeypatch.setattr(js_bundler, '_BUILD_LOCK_PATH',
+                        str(tmp_path / '.bundle-build.lock'))
+    yield
+
+
+def _production_bundle_set():
+    """The set of built artifacts currently in the PRODUCTION js dir
+    (bundle-*/feature-*/i18n-*.js). Guard 6 asserts a suite build
+    leaves it byte-for-byte untouched."""
+    from lib import js_bundler
+    out = set()
+    for name in os.listdir(_REAL_JS_DIR):
+        if js_bundler._BUILT_BUNDLE_RE.match(name):
+            out.add(name)
+    return out
+
 
 def _disk_manifest():
     """The manifest as the NEXT process import will see it — parsed from
@@ -196,6 +255,27 @@ def test_every_manifest_entry_leaves_fingerprint_in_built_artifacts():
         'manifest entries that left no fingerprint in the built artifact '
         '(stale-manifest / silent-drop class): '
         + ', '.join(f'{e} ({r})' for e, r in missing[:10]))
+
+
+# ── Guard 6: a suite build never touches the production tree ════════════
+
+def test_build_never_touches_production_js_dir():
+    """The 2026-08-01 incident, pinned: a suite-run build must publish
+    NOTHING into the production js dir and delete NOTHING from it. The
+    symlink-farm fixture (autouse) is what makes this pass; without it,
+    ``build_bundle()`` publishes into static/js and _clean_old_bundles
+    deletes the artifacts the live server is currently advertising —
+    the feature-bundle 404 chain."""
+    from lib import js_bundler
+
+    before = _production_bundle_set()
+    name = js_bundler.build_bundle()
+    assert name, 'build_bundle() returned None'
+    after = _production_bundle_set()
+    assert after == before, (
+        'a suite build mutated the production js dir '
+        f'(added={sorted(after - before)}, removed={sorted(before - after)}) '
+        '— the symlink-farm fixture must redirect ALL build writes')
 
 
 # ── Guard 3: the gate half of the class ═════════════════════════════════

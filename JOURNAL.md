@@ -1,3 +1,23 @@
+### 2026-07-31(发版体检 → 「什么都不需要你」是假的) — 为 0.15.2 发版做全面体检时,实测抓出 board 上**两个 epic 静默停摆 ~19h**,而注意力面正报告 `needsYou:0`;根因不是数据脏,是 `block_task` 的 API **允许「有问题但没登记问题」这个状态**(`pt_d689f2016ecf4311` DONE;commit `9e2a0481`,2 文件;守卫 **7/7 失败先行**,**NEUTER×5 各咬各的**(3/2/1/2/1);相邻环 **148 + 614**;活库闭环 `needsYou 0→1`)
+
+- **★ 病症的判据比「有个 bug」重一档:面板逐字告诉 owner「没有任何事需要你」,而两条工作流已经停了 19 小时。** 而 `pt_3879f00e` 的 `block_reason` 里**逐字写着**「STILL AWAITING owner one-click on the 4-option question card」——**它点名的那张卡从来不存在**(`block_question` 为 `None`)。
+- **★ 双向失明,这才是它能活 19 小时的原因:**
+  | 面 | 判据 | 后果 |
+  |---|---|---|
+  | 对人 | `project_attention._board_questions` 按 **`block_question` 列**建 blocking 项;散文里的 `[human-gated]` 前缀**全库从不匹配**(该模块 docstring 自己写明了) | 不进「Needs you」 |
+  | 对机器 | `select_dispatchable` **只**跳过 `block_question` 已设的行 | cooldown 一过就重新可派单 |
+  ⇒ 这个 epic **既没到达人,也没真的停下**:每次心跳都可能烧一个 billed turn 去重新发现同一个没人能答的门。实测 `pt_03f4cdf1` 已 **blocked 10 次**、累计休眠到 ~23.6h。
+- **★ 第二半:两条 `block_reason` 长度**恰好都是 2000**(=`_TITLE_MAX_CHARS`),被截断在词中间("no early ex" / "(exten")——作者枚举的选项正落在被砍掉的那一段里,而**没有任何日志记录发生过截断**。静默截断把「我写了选项」变成「选项不存在」,且不留任何可诊断的痕迹。
+- **根因是 API 形状,不是这一条数据:** `reason` 是自由文本、`question` 是可选 kwarg,**二者无一致性约束**。修法沿用 `update_decision` 的 `summary_required` 先例:散文声称有卡而未登记 ⇒ **在任何 mutation 之前**拒绝(`question_required`)。拒绝优于静默接受——把工作停在一个不存在的控件后面,是唯一不可留的行为。
+- **★ 而我第一版的短语表被自己的「过度触发」补集当场咬红,这是本轮最有价值的一条:** 我把 `awaiting owner` / `awaiting the owner` 放进了声称短语表,结果它咬中**合法**的 `[sibling] path=lib/x.py awaiting the owner of that file`——那里的 "owner" 指的是**文件的属主**,不是要做决定的人。**一个同时描述普通兄弟协作的短语,不能承载这条拒绝**。已删除该短语,并给 `[sibling]` 加了构造性豁免(它按定义不可能有人类问题)。判据:凡新增「禁止某种措辞」的守卫,必须先写补集,否则你只是在惩罚合法用法。
+- **NEUTER×5 各咬各的(3/2/1/2/1):** 摘掉拒绝(复现原始缺陷)→ 3 红;先 mutate 再拒绝(半应用)→ 2 红;静默截断 → 1 红;**过度触发**(拒绝每一个无问题的阻塞)→ 2 红;删掉 `[sibling]` 豁免 → 1 红。五发后产品文件 `cmp` 逐字节还原。
+- **回归判据用干净 HEAD A/B,不用票面数字:** 相邻环 5 个红灯**全部先于本批存在**——`git archive HEAD` 隔离副本上跑同一组套件得到**逐条同名的 5 个失败**,嫁接我的 2 个文件后**仍是同一份名单、+7 passed**。其中 `test_project_board_autonomy_rule` 那 2 条是 charter #0(agent 不再持有 `project_charter_commit`)留下的**陈旧守卫**,按 owner 偏好不在本批顺手修,已如实留在票上。
+- **活库闭环(本 epic 的另一半):** 用**结构化通道**(即本次修复强制的那条路)把那个从未被问出口的问题真正问给 owner——`pt_03f4cdf1` 现在带 3 个选项出现在「Needs you」,实测 `needsYou 0→1`、`blocking=1`,且它**已从 `select_dispatchable` 中排除**(不再空转派单)。`pt_3879f00e` 已由兄弟会话 `mrxinirv0t6n6v` 认领推进,其问题自然消解,故未一并处理。
+- **发版体检的其余结论(未动手,已开票/留证):** VERSION=0.15.2 而最新 release 仍是 v0.14.2 ⇒ 该版从未发布;`CHANGELOG.md` 最新条目是 `[0.10.0]`,**0.11.0–0.15.2 共 9 个版本零条目**、91 行滞留在 `[Unreleased]`;`docs/ARCHITECTURE.md` 自述「Last re-scanned 2026-07-18 / VERSION 0.13.0」;README 的 Project Structure **37 条路径里 7 条已不存在**(`lib/fetch`、`lib/search` 已外迁,`endpoint.py`/`executor.py`/`image_gen.py`/`mt_provider.py` 已 .py→包);`pyproject.toml:7` 仍是 0.13.0 但**运行时无人读**(`lib/version.py` 读 VERSION 文件)⇒ 仅整洁问题。发布工作流实测健康:VERSION 驱动而非 tag 驱动,runner 标签 `ubuntu/windows-latest` + `macos-15`/`macos-15-intel` 全部在役,下载直链已钉 tag(88 tests green)。
+- **★ 一条方法论自纠:** 我曾用 `grep 'lib/fetch' README.md` 得到 0 命中,据此判定「README 没有这个陈旧路径」——**错了**。README 用制表符画树(`├── fetch/`),路径里根本不含 `lib/` 前缀。**负向 grep 结果是弱证据**;后来用 `ls -d` 逐条实测才拿到真实的 7 条。
+- **`git stash@{0}` 判定为可安全丢弃(未执行,留给 owner):** 内容是 `lib/llm_sanitize/_gateway.py` 的**半完成删除**(19 行,删掉了 `_GATEWAY_BLOCKED_TERMS = {` 开括号),实测 `py_compile` **仍然 IndentationError**;其功能已由 `fd885a7e` 的 ZWSP 机制取代且更强;`.git/logs` 与 stash reflog **均存在**(此前一份只读结论说「无 reflog、丢了不可恢复」,已被实测证伪)⇒ 丢弃可恢复。
+- **验收边界:** 后端已对活库生效;本批**零前端改动**,无需重启或重建 bundle。全量 13182 测试**收集零错误**,但整套跑被中断,故**未**给出全绿断言。
+
 ### 2026-07-31(宠物「抖动」的根因在管线不在美术) — owner 报「宠物动起来像在抖,而且有点丑」;**实测证伪了「丑」这个前提:美术是无辜的,是管线把它抖坏的**,而 owner 复核又补上我漏掉的第二个成因(`pt_4857e21b2ac6447d` DONE;commit `5c26fdb0`,26 文件 +771/-64;宠物守卫 **82 → 94**,**NEUTER×4 各咬各的**(3/1/2/2);场景环 **111/111**)
 
 - **★ 三个缺陷,同一个根:`process_ai_frames.py` 对**每帧独立** trim 到自己的 alpha bbox、再缩放到自己的最长边 = MAX_SIDE ⇒ **缩放系数是姿态的函数**(0.1837–0.2319,26% 跨度)。于是:

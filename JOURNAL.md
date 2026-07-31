@@ -1,3 +1,12 @@
+### 2026-07-31(续·kimi-k3「text content is empty」:一条 400 日志背后是两层独立 bug,R1 wire 快照一句话定案) — owner 贴日志问根因;commit `63ee1fb8`(8 文件 +436/-20;新套件 **21** 失败先行 ImportError 红;**NEUTER×2 各咬各的**(strip→7 红/veto→3 红);相邻环 **403+** 绿)
+
+- **事故账(日志实数):** 同一确定性 400 在两个任务上自旋 —— `93b60577` 循环 **3753** 次、`76d686cb` **583** 次,横跨 4+ 小时且当时**仍在转**;每次都是 ~100KB prompt 的重发,前端 HUD 全程撒谎显示「429 rate-limited」。
+- **定案证据链(不猜,看 wire):** task_events 里 `93b60577` 的 **R1 pre-LLM messages_snapshot** 显示最后一条 user 消息 content 是 6 块列表,**block[0] = `{'text':'','type':'text'}`**,后接 5 块 system-reminder —— VU 虚拟用户行 `content=''`(DB 实测,`_isVirtualUser`)被 volatile-tail 注入接缝包成 `[{text:''}]` 再追加提醒块;`_fix_empty_user_messages` 只在**整列表皆空**时出手,混合列表漏网。同快照里 26 条 assistant(tool_calls,无 content 键)是 `build_assistant_tool_call_message` 的既有合法形状,**不是**被告。
+- **两层独立 bug:** ①四个注入接缝(`_refresh_tail_block`/`_refresh_detail_block`/`_append_user_profile_block`/`inject_relevant_memories`)无条件把 `content` 包成 `[{text:content}]`,空串也变幽灵块;②`_is_upstream_vendor_transient` 见 `source:UPSTREAM_VENDOR` 标记就判瞬态 —— **标记只说「错误来自供应商」,不说「它是瞬态」**,上游 `upstreamStatus:400` 的确定性载荷拒绝被当成「稍后再试」换了 4337 次 key。
+- **修法三层:** ①新增 `_strip_empty_text_blocks` 进 `build_body`(在整内容愈合器**之前**),剥掉空 text 块;剥空后带 tool_calls 的删 content 键(已验证形状)、其余塌缩成 `''` 交既有愈合器 —— 一处 chokepoint 治所有现在与未来的生产者;②四个接缝加「空不包」守卫;③分类器加确定性否决:`upstreamStatus` 非 408/429 的 <500、或 `type=invalid_request_error` → BadRequestError 快速失败;短语层优先不变(toio 07-26 各形状全保),瞬态状态码(408/429/5xx)照旧轮换。
+- **判据重申(本仓第 N+1 次):「某内容必须被提及」类断言锚的必须是产生行为的那段文本** —— 本批 NEUTER 两次都咬得准,因为套件测的是 wire 形状与异常类型这些用户可见契约,不是关键词存在性。以及**共享树教训:我这次 `git stash -u` 把兄弟的 20+ 未提交文件一起卷进去又 pop 回来** —— 操作成功零损失,但共享 HEAD 上 stash 全家桶是高危动作,下次验证「预存失败」改用 `git stash push -- <只我的文件>` 或直接临时 revert 单文件。
+- **验收边界:** 纯后端,**需重启生效**;重启后两个仍在自旋的任务(93b60577 至 22:22 仍被前端轮询)随进程消失,同形 VU 空 turn 上线即自愈;`test_live_retry_preserves_task_id` 在干净 HEAD 上同样红(dispatcher.slots 预存破损,与本批无关,未动)。
+
 ### 2026-07-31(续·S1 落地:cloaking 移植 + codex plan_type,静态提示词对拍抓回两处我自己的字节漂移) — commit `cd10f301`(9 文件 +1270/-79;新套件 **24** + 更新 10,相邻环 **109/109**;失败先行 ImportError 收集红;**NEUTER×3 各咬各的**(计费头/改名表/门控);还原 cmp 逐字节验证)
 
 - **落地的关键架构决定:cloak 在 anthropic 边界单点拥有 system 结构。** `resolve_oauth_request` 从此不动 messages(原 `_prepend_claude_identity` 删除),`apply_claude_cloak` 统一作用于 `openai_body_to_anthropic` 输出——流式(`_sse_core`)、非流式(`chat.py`)、未来的探测路(A3)都是同一个接缝,身份块/计费头/静态提示词/用户 system 挪移只有一个 owner,不可能双注入。

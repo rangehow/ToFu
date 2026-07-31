@@ -1275,3 +1275,9 @@
 - **判定(红先问产品错还是测试错):** 逐分支核查耐久语义——①用户停止分支的 rescue 对被 startup-stop 重构(pt_fa32a235)**合法移进**共享 helper `_userStopDuringStartup({rescue:true})`(send_button.js 内有 `await _syncP` + `markConvPendingSync` + `_sendInFlight` 先行清除);②通用错误分支内联对在 main_send_pipeline.js:841-842 完好、clear 先行。**耐久不变量完好,旧守卫钉的是重构前「内联片段恰好 2 处」的形状 —— 测试漂移,不是产品错。**
 - **重写后反而更强:** 机制 harness 不动;分支形状断言更新(内联对×1 + helper rescue:true 调用,均 clear 先行;helper 内含 opts.rescue 门控对);**新增行为级 harness 驱动真实 `_userStopDuringStartup`** —— rescue+同步失败→标 pendingSync、rescue+成功→不标、无 rescue+失败→best-effort 吞掉(含 throwing sync)、syncOpts 透传、abortConv 必达;**三重 NEUTER 各咬各的**(摘内联对→计数 0;门掉 helper rescue 臂→行为红;摘 rescue:true→接线红)。
 - **顺带核查(不扩面):** regen/edit 的 `_userStopDuringStartup` 不带 rescue 是**正确的** —— 它们的截断态在 POST 前已 allowTruncate 预同步,服务器已有耐久副本;rescue 只需要在 send 路(用户消息可能只有乐观副本)。环中 `test_continue_lossless` 1 红仍为 `pt_850e541fc3ce4aba`(SSEAccumulator kwarg 漂移),与本案无关。
+
+### 2026-08-01(续·pt_850e541f 核销:SSEAccumulator kwarg 漂移,同族第二票) — 修复 `154d49fc`(1 文件 +1/-2;套件 **43/43**,相邻环 **73/73**)
+
+- **判定:** 兄弟 responses 批把 SSEAccumulator 双 translator 字段收敛为 `wire_translator`(构造第 4 位位置参数,刻意架构决定);测试仍按 `None + anthropic_translator=` 旧形状构造 → TypeError。**测试漂移**:签名捕获意图由 wire_translator 同一对象完整承载,改位置参数直传。
+- **行为钉未弱化:** `msg['thinking_signature']=='ErcBSIG=='` 只在翻译器真接线时成立(None 会走 OpenAI 解析路径以另一方式失败)。全仓 `anthropic_translator` 引用归零(grep 实证)。
+- **同族两票的共同教训:** 重构方的「调用点迁移清单」两次漏掉测试点(pt_ca1b3b2f 是形状断言过期、本票是构造 kwarg 过期)——**签名/形状变化的爆炸半径清点要含 tests/ 目录,且以全仓 grep 归零为验收**。

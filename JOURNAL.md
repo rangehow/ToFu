@@ -36,6 +36,15 @@
 - **同批边界协调:** ms8x5blr(responses 第三协议迁移 codex 翻译区)发边界询问,已回复确认我不碰翻译区,并移交三条必须保留的契约(_parse_jwt_claims 三元组/refresh singleflight/_oauth_http_post 路由)。
 - **验收边界(如实):** 离线 fake-bridge 全绿;真机需 owner 起 `--allow-egress` agent + 重启 + bundle 重建。
 
+### 2026-08-01(续·Epic-E 记分牌 + sub-3B 落地:health_stream_timer 62KB 降级,以及共享树第三次「卷走」的镜像面) — owner 指令「先建分类账再拆」;commits 记分牌 → `6baf1083` 主体 → ledger 行;新套件 **7** + deferrable 2 绿;NEUTER×2 各咬各的;农场构建 7 项物理检查全 PASS
+
+- **分类账(owner 拍板的打法修正):** `docs/EPIC_E_SIZE_LEDGER.md` —— 基线(core 1,550,424B / feature 470,760B / pack ~222KB)+ top-20 逐文件判定 + 每片必记流水。实测 core 源 **4123KB/144 文件**,已完成的两个 deferral 合计仅 ~2.8% —— **之前按「好拆」选,今后按「大」选**:候选 #1 `ui/tool_rounds.js` **261KB**(全仓最大非 i18n),#2 `tofu-scene.js` 96KB + `tofu-pet.js` 65KB(**160KB 纯装饰**),第三梯队 finish_info/project/myday/swarm_panel/access_matrix。目标线暂定 core ≤1.2MB。
+- **sub-3B(health_stream_timer 62KB):** 普查推倒审计旧账(~40 处→实测 60 已闸/**仅 5 处真未闸**,全是 abort 路径 compound 行 twStop);5 处闸 + manifest move。**零 stub 设计**(与 _wireConvSyncPush 不同:无一次性 boot 接线可丢,模块按流自举,idle prefetch ~2s 落,gates 退化为「暂无计时徽标」)——每呼叫 stub 会给每个 SSE 帧加微任务跳,零收益,套件里专门一条 `test_no_tw_stub_entries` 钉死。
+- **共享树第三次「卷走」,这次是反方向:** 我工作区里 sse_pipeline.js 的两处闸被兄弟 stream-render 提交 `71e9c8fd`(01:19:54)卷走 —— count-assertion 闸当场拦下(staged=4≠5),实测两处闸确在其 commit 内,净结果正确、归因错位;按不重写历史惯例在 commit message 里如实记录,恢复兄弟未提交的 stall_watch hunk **逐字节一致**(cmp 验证)。**教训重申:在这棵树上改了就要立刻 stage+commit,窗口期即事故期。**
+- **我自己的 NEUTER-restore 脚本第三次咬我:** 恢复串的 `anchor.replace` 把 `# The entry-point functions` 注释尾吞掉,js_bundler.py SyntaxError——测试红得莫名其妙的真实原因不是守卫而是文件碎了。**规矩第三次立下:脚本化改写后、跑测试前,先 `ast.parse` 验证语法。**
+- **农场构建物理验证(同构构建器口径):** core 排除 `function twStart(`/`_streamTimers`、保留 `typeof twStart` 闸点;feature 含定义;sub-3A 形态保持。同口径 2,289,664→2,275,757(−13.9KB 净,兄弟新增抵销);生产字节数随重启进账。
+- **验收边界:** 生产(pid 3276652 冻结清单)重启前仍含 health_stream_timer;重启后三项实测(core 不含 `function twStart(` / feature 含 / 无 tw stub)通过才算 shipped。
+
 ### 2026-08-01(续·凌晨事故链:混合形态 clobber + 测试卫生双根修,生产已愈合并实测) — 顺着 owner 的 curl 实测继续挖,挖出两条比我原以为更深的根;commits `c0cb85ef`(journal)→ stub 根修 → `a2187a4e`(测试卫生);生产实测 core:200 + feature:200
 
 - **事故链全貌(全部实证):** ①(上一条)部署差——旧进程冻结清单重建;②**混合形态 clobber(新抓的根):** 服务的 core(old shape,cross_tab_sync 内联 ⇒ 真 `_wireConvSyncPush` 已定义)+ 新 feature-loader(stub 名单已含它)⇒ `_installFeatureStub` 把真函数**覆盖**成惰性 stub——它的「不覆盖真函数」注释只实现了 dev-fallback 一半,守卫只查 `__FEATURE_BUNDLE_SRC__`;③**feature bundle 404(我自己造成的):** 我 00:12 跑 freshness 套件,guards 直接 `build_bundle()` 进**真实** static/js,`_clean_old_bundles` 把线上正在广告的 `feature-8204ccdc.js` 删了 ⇒ stub 加载 404 ⇒ **conv-sync push 订阅生产死亡**。

@@ -117,6 +117,9 @@ from lib.tasks_pkg.orchestrator._deferred_inbox_flush import (
 from lib.tasks_pkg.orchestrator._cache_round_accounting import (
     stamp_round_cache_accounting,
 )
+from lib.tasks_pkg.orchestrator._sanitize_tool_call_args import (
+    sanitize_malformed_tool_call_args,
+)
 
 
 
@@ -941,64 +944,13 @@ def run_task(task: dict[str, Any]) -> None:
 
             # ── Phase 1b: Sanitize tool_calls in messages so the next API
             #   round doesn't carry malformed JSON args back to the gateway.
-            #
-            #   Background: when a model emits ``tool_calls=[{arguments: '...'}]``
-            #   where ``arguments`` is invalid JSON (common with weaker models
-            #   that mis-escape backslashes in regex args, e.g. ``\d`` instead
-            #   of ``\\d``), parse_tool_calls() catches the JSONDecodeError and
-            #   builds an error tool_result.  But the assistant message we
-            #   already appended at line ~1361 still contains the RAW bad args.
-            #
-            #   On the next round, server_message_store / orchestrator replays
-            #   ``assistant(tool_calls=[..bad args..]) + tool(error_msg)`` to
-            #   the upstream gateway, which validates the JSON-string itself
-            #   and rejects with HTTP 400 ``invalid function arguments json
-            #   string``.  The whole conversation gets stuck — model never
-            #   sees the error tool_result, can't recover, task ends in
-            #   ``finishReason=error``.
-            #
-            #   Fix: walk parsed_tcs and any tc with non-None ``_args_parse_error``
-            #   gets its ``arguments`` overwritten to ``'{}'`` in messages[-1].
-            #   The error tool_result still teaches the model what went wrong;
-            #   the gateway sees valid JSON and lets the next round through.
-            #   See May 2026 incident memory.
-            for tc, fn_name, tc_id, fn_args, rn, round_entry, args_parse_err in parsed_tcs:
-                if not args_parse_err:
-                    continue
-                # Find the matching tool_call in messages[-1] by tc_id and
-                # rewrite its arguments to a syntactically valid empty JSON.
-                last_msg = messages[-1] if messages else {}
-                for live_tc in last_msg.get('tool_calls', []) or []:
-                    if live_tc.get('id') != tc_id:
-                        continue
-                    fn = live_tc.get('function') or {}
-                    bad_args = fn.get('arguments', '')
-                    fn['arguments'] = '{}'
-                    logger.info(
-                        '[%s] conv=%s Sanitized malformed tool_call args for '
-                        'tool=%s tc_id=%s (was %d chars) — error fed back to '
-                        'model in matching tool_result; gateway sees valid JSON',
-                        tid, task.get('convId', ''), fn_name, tc_id[:12],
-                        len(bad_args) if isinstance(bad_args, str) else 0)
-                    # ★ Keep the RAW args text, not just its length. It is the
-                    #   decisive cross-check on how a malformed call was
-                    #   produced (2026-07-27 concatenated-tool-name inquiry):
-                    #     * two concatenated valid JSON objects
-                    #       (``{...}{...}``) ⇒ two calls merged into one slot
-                    #       by the SSE accumulator (see the tool_calls-shape
-                    #       observation logs in lib/llm/_sse_core.py)
-                    #     * one single malformed object ⇒ model-side output,
-                    #       nothing for us to fix in parsing
-                    #   Truncated: args carry user/file content, and this line
-                    #   is INFO on a hot path.
-                    if isinstance(bad_args, str) and bad_args:
-                        logger.info(
-                            '[%s] conv=%s   ↳ raw malformed args for tc_id=%s '
-                            'model=%s: %r%s',
-                            tid, task.get('convId', ''), tc_id[:12],
-                            rs.model, bad_args[:600],
-                            '…(truncated)' if len(bad_args) > 600 else '')
-                    break
+            #   Extracted 2026-07-31 (pt_03f4cdf1 slice 14) into
+            #   lib.tasks_pkg.orchestrator._sanitize_tool_call_args — see
+            #   that module's docstring for the HTTP-400 recovery rationale
+            #   and the RAW-args log-line evidence trail.
+            sanitize_malformed_tool_call_args(
+                parsed_tcs, messages,
+                tid=tid, conv_id=task.get('convId', ''), model=rs.model)
 
             # ── Phase 2: Emit execution phase event ──
             emit_tool_exec_phase(task, parsed_tcs)

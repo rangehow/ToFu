@@ -126,6 +126,15 @@ olefile>=0.46
 # manual `pip install -r requirements.txt` against the internal mirror fails;
 # use `pip install --index-url https://pypi.org/simple -r requirements.txt`.
 mcp>=2,<3
+# httpx — the async HTTP client the LLM transport imports UNCONDITIONALLY at
+# module top (lib/llm/_transport.py, plus lib/llm/astream.py and the guarded
+# async branch of lib/http_client.py). Undeclared for months because this env
+# happened to carry it transitively; the desktop_dist builder's clean venv
+# proved the gap: PyInstaller packed a binary whose boot smoke dies on
+# ModuleNotFoundError: httpx (2026-08-01, desktop build attempt 4). NOTE the
+# name: mcp 2.x pulls the httpx2 FORK, which does NOT provide the `httpx`
+# module — the two are different distributions.
+httpx>=0.28
 # orjson — fast C JSON encoder. REQUIRED (not optional): routes/chat.py's SSE
 # state snapshot serializes the ENTIRE conversation (content+thinking+toolRounds,
 # 10+ MB for long convs). Plain json.dumps holds the GIL for the whole call, so

@@ -1060,6 +1060,13 @@ CONDA_PKGS=(
     # (>=2,<3). Vendored servers carry their own pins in isolated envs.
     # Enforced by tests/test_mcp_sdk_pin_bounded.py.
     "mcp>=2,<3"
+    # httpx — lib/llm/_transport.py imports it UNCONDITIONALLY at module top
+    # (the LLM async transport). NOTE the name: mcp 2.x pulls the httpx2
+    # FORK, which does NOT provide the `httpx` module — they are different
+    # distributions, and httpx2's presence must not satisfy this entry.
+    # Declared in requirements.txt after the desktop_dist clean-venv build
+    # proved the gap (boot smoke: ModuleNotFoundError httpx, 2026-08-01).
+    "httpx>=0.28"
     # orjson — fast JSON encoder; imported by routes/chat.py for chat
     # snapshot serialisation. Hard dep: the server won't boot without it.
     "orjson>=3.9"

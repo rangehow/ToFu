@@ -26,9 +26,6 @@ logger = get_logger(__name__)
 
 
 from lib.llm import AbortedError  # noqa: F401  (re-exported by the package facade)
-from lib.tasks_pkg.cache_tracking import (
-    sort_tool_results,
-)
 from lib.agent_core.events import EventType, build_event
 from lib.tasks_pkg.manager import (
     _strip_base64_for_snapshot,  # noqa: F401  (re-exported by the package facade after slice 15)
@@ -58,13 +55,6 @@ from lib.tasks_pkg.server_message_store import (
 from lib.tasks_pkg.tool_dispatch import (
     tool_label,  # noqa: F401  (re-exported by the package facade)
 )
-
-
-
-# Resolve the REBINDABLE ``build_body`` binding THROUGH the package facade
-# at CALL time (never bind at import): a test/consumer that reassigns
-# ``orchestrator.build_body`` MUST steer this loop.
-import lib.tasks_pkg.orchestrator as _o
 
 # Per-turn / finalize helpers live in the sibling ``_finalize`` module.
 from lib.tasks_pkg.orchestrator._finalize import (
@@ -104,9 +94,6 @@ from lib.tasks_pkg.orchestrator._swarm_inbox import drain_and_inject_inbox
 from lib.tasks_pkg.orchestrator._cache_round_accounting import (
     stamp_round_cache_accounting,
 )
-from lib.tasks_pkg.orchestrator._messages_snapshot import (
-    emit_messages_snapshot_event,
-)
 from lib.tasks_pkg.orchestrator._tool_call_prelude import (
     append_assistant_tool_call_message,
 )
@@ -140,6 +127,9 @@ from lib.tasks_pkg.orchestrator._llm_round_call import (
 )
 from lib.tasks_pkg.orchestrator._db_conn_release import (
     release_db_conn_checkpoint,
+)
+from lib.tasks_pkg.orchestrator._round_request_prep import (
+    build_round_request,
 )
 
 
@@ -594,46 +584,22 @@ def run_task(task: dict[str, Any]) -> None:
             drain_and_inject_inbox(task=task, messages=messages,
                                    round_num=round_num, tid=tid)
 
-            _tools_this_round = tool_list if (tool_list and round_num < max_tool_rounds) else None
-
-            # ★ Cache-aware tool result ordering: sort consecutive tool results
-            #   by tool_call_id so the prefix is deterministic across rounds
-            #   (important for automatic prefix caching on OpenAI/Qwen).
-            sort_tool_results(messages, conv_id=task.get('convId', ''))
-
-            # ★ Emit messages snapshot for the debug panel (AFTER sort_tool_results
-            #   so the panel reflects the real outbound ordering). Extracted
-            #   2026-07-31 (pt_03f4cdf1 slice 15) into
-            #   lib.tasks_pkg.orchestrator._messages_snapshot — see that
-            #   module's docstring for the wire-sanitize / kind='request' /
-            #   endpoint-phase contracts and the best-effort try/except that
-            #   ensures an inspector failure never breaks the LLM round.
-            emit_messages_snapshot_event(
-                task, messages,
-                tid=tid, round_num=round_num, model=rs.model,
-                thinking_enabled=rs.thinking_enabled,
-                thinking_depth=thinking_depth,
-                preset=rs.preset,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                response_format=response_format,
-                tools=_tools_this_round,
+            # ★ Round-request preamble: gate the tool list for this
+            #   round → cache-aware tool-result sort → messages-snapshot
+            #   debug event → late-bound facade build_body → attach
+            #   body['_task_id'] (cache-TTL latch). Extracted 2026-07-31
+            #   (pt_03f4cdf1 slice 28) to
+            #   lib.tasks_pkg.orchestrator._round_request_prep — see that
+            #   module's docstring for the step ordering and the
+            #   late-binding contract. Returns (_tools_this_round, body);
+            #   the tool list is still needed by the round checkpoint.
+            _tools_this_round, body = build_round_request(
+                task, rs, messages, tool_list,
+                round_num=round_num, tid=tid,
+                max_tool_rounds=max_tool_rounds,
+                thinking_depth=thinking_depth, temperature=temperature,
+                max_tokens=max_tokens, response_format=response_format,
             )
-
-            body = _o.build_body(
-                rs.model, messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                thinking_enabled=rs.thinking_enabled,
-                preset=rs.preset,
-                thinking_depth=thinking_depth,
-                tools=_tools_this_round,
-                response_format=response_format,
-                stream=True,
-            )
-            # ★ Attach task_id for session-stable TTL latch in
-            #   add_cache_breakpoints (prevents mid-session cache key shift).
-            body['_task_id'] = task['id']
 
             # ★ Streaming tool execution: pre-execute read-only tools while
             #   the model is still generating subsequent tool calls.

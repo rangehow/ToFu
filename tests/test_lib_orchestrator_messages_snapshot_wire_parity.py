@@ -39,6 +39,15 @@ RUN_PY = ROOT / 'lib' / 'tasks_pkg' / 'orchestrator' / '_run.py'
 LEAF_PY = (
     ROOT / 'lib' / 'tasks_pkg' / 'orchestrator' /
     '_messages_snapshot.py')
+# Slice 28 (2026-07-31) moved the snapshot call site out of _run.py into
+# the round-request-prep leaf: the snapshot runs as step 3 of the
+# preamble cluster (sort → snapshot → build_body), and the whole
+# cluster now lives in _round_request_prep.build_round_request —
+# _run.py delegates the whole cluster. The two wiring guards below
+# therefore assert on the prep leaf, not _run.py.
+PREP_PY = (
+    ROOT / 'lib' / 'tasks_pkg' / 'orchestrator' /
+    '_round_request_prep.py')
 
 
 # ---------------------------------------------------------------------------
@@ -80,23 +89,28 @@ def test_helper_signature_is_keyword_only():
 # 3. _run.py imports + delegates to the extracted helper
 # ---------------------------------------------------------------------------
 def test_run_py_imports_helper():
-    src = RUN_PY.read_text()
+    """The round-request-prep leaf imports emit_messages_snapshot_event
+    at module scope. (Was _run.py before slice 28 moved the preamble
+    cluster.)"""
+    src = PREP_PY.read_text()
     assert (
         'from lib.tasks_pkg.orchestrator._messages_snapshot import'
         in src), (
-        '_run.py must import the extracted helper — '
+        '_round_request_prep.py must import the extracted helper — '
         'expected a `from lib.tasks_pkg.orchestrator._messages_snapshot '
         'import ...` line at module scope')
     assert 'emit_messages_snapshot_event' in src
 
 
 def test_run_task_delegates_to_helper():
-    """The stream loop's snapshot emission must be a single call to
+    """The preamble's snapshot emission must be a single call to
     ``emit_messages_snapshot_event(task, messages, ...)`` — no inline
-    body left behind."""
-    src = RUN_PY.read_text()
+    body left behind. (Call site moved from _run.py's run_task to
+    _round_request_prep.build_round_request in slice 28.)"""
+    src = PREP_PY.read_text()
     assert 'emit_messages_snapshot_event(' in src, (
-        '_run.py must call emit_messages_snapshot_event in the stream loop')
+        '_round_request_prep.py must call emit_messages_snapshot_event '
+        'as preamble step 3 (after sort_tool_results, before build_body)')
 
 
 # ---------------------------------------------------------------------------

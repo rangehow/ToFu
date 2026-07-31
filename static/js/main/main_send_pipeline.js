@@ -709,7 +709,7 @@ async function sendMessage() {
 
     // Push empty assistant msg + connect to task SSE
     const taskId = result.taskId;
-    const assistantMsg = {
+    const _mintedPlaceholder = {
       role: "assistant", content: "", thinking: "",
       timestamp: Date.now(), toolRounds: [],
       model: _sendConfig.model || serverModel,
@@ -719,9 +719,37 @@ async function sendMessage() {
       _msgId: _assistantMsgId,
     };
     // ★ Endpoint mode: mark as planner so SSE reconnection identifies it correctly
-    if (_sendConfig.endpointMode) assistantMsg._isEndpointPlanner = true;
-    _ensureMsgId(assistantMsg);  // no-op when _msgId already set
-    conv.messages.push(assistantMsg);
+    if (_sendConfig.endpointMode) _mintedPlaceholder._isEndpointPlanner = true;
+    /* ★ Dedupe (pt_44e985ec): an early attach during the POST window may
+     *   already have created + bound this task's placeholder — pushing a
+     *   second one splits the lanes (they write the bound message) from the
+     *   render projection (which reads the tail): the 等待中…↔推理中 flip-flop.
+     *   Adopt + re-stamp the canonical id instead of pushing a duplicate. */
+    const _ph = (typeof _adoptTaskPlaceholder === 'function')
+      ? _adoptTaskPlaceholder(conv, taskId, _mintedPlaceholder)
+      : { msg: _mintedPlaceholder, adopted: false };
+    const assistantMsg = _ph.msg;
+    if (_ph.adopted) {
+      console.warn(
+        `[sendMessage] ♻ adopted existing placeholder bound to task=${taskId.slice(0,8)} ` +
+        `(canonical msgId re-stamped) — no duplicate push for conv=${convId.slice(0,8)}`
+      );
+      if (typeof _reportClientError === 'function') {
+        _reportClientError(
+          `[sendMessage] adopted existing task placeholder instead of pushing a duplicate ` +
+          `conv=${convId.slice(0,8)} task=${taskId.slice(0,8)}`);
+      }
+      if (_sendConfig.endpointMode) assistantMsg._isEndpointPlanner = true;
+      /* The adopted placeholder was minted by the early attach under a
+       * different _msgId (the helper just re-stamped the canonical one) —
+       * re-key the live streaming bubble so identity resolution + translation
+       * frames keep landing on the SAME message. */
+      const _smEl = (activeConvId === convId) ? document.getElementById('streaming-msg') : null;
+      if (_smEl && _assistantMsgId) _smEl.setAttribute('data-msg-id', _assistantMsgId);
+    } else {
+      _ensureMsgId(assistantMsg);  // no-op when _msgId already set
+      conv.messages.push(assistantMsg);
+    }
     conv.activeTaskId = taskId;
     saveConversations(convId);
 

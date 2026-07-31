@@ -124,6 +124,7 @@ from lib.tasks_pkg.orchestrator._messages_snapshot import (
 from lib.tasks_pkg.orchestrator._tool_call_prelude import (
     append_assistant_tool_call_message,
 )
+from lib.tasks_pkg.orchestrator._round_gates import check_round_gates
 
 
 
@@ -793,56 +794,17 @@ def run_task(task: dict[str, Any]) -> None:
             if stream_decision['action'] == 'continue':
                 continue
 
-            # ── Per-round diagnostic: log finish_reason for every tool round ──
-            _round_content = len((rs.assistant_msg or {}).get('content', '') or '')
-            _round_tcs = len((rs.assistant_msg or {}).get('tool_calls', []))
-            logger.info('[%s] conv=%s Round %d result: finish_reason=%s model=%s '
-                        'content=%dchars tool_calls=%d → proceeding to tool execution',
-                        tid, task.get('convId', ''), round_num + 1, rs.last_finish_reason, rs.model,
-                        _round_content, _round_tcs)
-
-            # ── max_budget_usd gate (Claude Agent SDK parity) ──
-            # Hard $ ceiling on accumulated cost.  0 / unset disables.
-            _max_budget = float(cfg.get('maxBudgetUsd') or 0.0)
-            if _max_budget > 0:
-                from lib.cost_estimator import check_budget
-                _exceeded, _cost, _reason = check_budget(
-                    task, rs.accumulated_usage, rs.model, _max_budget,
-                    round_num=round_num,
-                )
-                if _exceeded:
-                    rs.last_finish_reason = 'budget_exceeded'
-                    from lib.error_envelope import make_envelope as _make_env
-                    task['error'] = _make_env(
-                        'budget_exceeded',
-                        detail=_reason,
-                        model=rs.model,
-                        context='budget-gate',
-                        source='orchestrator',
-                        raw=f'cost_usd={_cost:.6f} max={_max_budget:.6f}',
-                    )
-                    rs.exit_reason = f'budget_exceeded_round_{round_num}_${_cost:.4f}'
-                    append_event(task, build_event(EventType.ROUND_END,
-                                                   roundNum=round_num, reason='budget'))
-                    break
-
-            # ── Tool round budget check ──
-            if round_num >= max_tool_rounds:
-                # Safety ceiling: tool round budget exhausted
-                rs.last_finish_reason = 'tool_rounds_exhausted'
-                from lib.error_envelope import make_envelope as _make_env
-                task['error'] = _make_env(
-                    'tool_rounds_exhausted',
-                    detail=f'Tool call limit reached ({max_tool_rounds} rounds).',
-                    model=rs.model,
-                    context='tool-budget',
-                    source='orchestrator',
-                    raw=f'max_tool_rounds={max_tool_rounds}',
-                )
-                logger.warning('[Task %s] conv=%s ⚠️ Tool rounds exhausted at round %d/%d', task['id'][:8], task.get('convId', ''), round_num+1, max_tool_rounds)
-                rs.exit_reason = f'tool_rounds_exhausted_{round_num}'
-                append_event(task, build_event(EventType.ROUND_END,
-                                               roundNum=round_num, reason='budget'))
+            # ── Per-round gates: per-round diagnostic + max_budget_usd
+            #   ceiling + tool-rounds ceiling. Extracted 2026-07-31
+            #   (pt_03f4cdf1 slice 17) to
+            #   lib.tasks_pkg.orchestrator._round_gates.check_round_gates —
+            #   see that module's docstring for the gate ordering and the
+            #   ROUND_END(reason='budget') / error-envelope contracts.
+            #   Returns True when a gate fired (task['error'] stamped,
+            #   rs.exit_reason set, ROUND_END emitted) and the loop must
+            #   break.
+            if check_round_gates(task, rs, round_num=round_num, tid=tid,
+                                 max_tool_rounds=max_tool_rounds, cfg=cfg):
                 break
 
             rs.tool_call_happened = True

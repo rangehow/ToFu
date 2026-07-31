@@ -329,6 +329,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # tofu-search FIRST from the bundled wheel: the requirements floor
+          # (>=0.5.3) is on no public index (PyPI tops at 0.5.1), so the
+          # export bundles the verified wheel under vendor/. Installing it
+          # first lets pip see the floor as already satisfied. If the wheel
+          # is absent AND the index lacks the floor, the requirements
+          # install below fails LOUD — never a hollow build (run 30601806258).
+          if ls vendor/tofu_search-*.whl >/dev/null 2>&1; then
+            pip install --no-deps vendor/tofu_search-*.whl
+          fi
           pip install -r requirements.txt
           pip install pyinstaller pystray pillow psycopg2-binary pyautogui pyperclip psutil
 
@@ -569,6 +578,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # tofu-search FIRST from the bundled wheel: the requirements floor
+          # (>=0.5.3) is on no public index (PyPI tops at 0.5.1), so the
+          # export bundles the verified wheel under vendor/. Installing it
+          # first lets pip see the floor as already satisfied. If the wheel
+          # is absent AND the index lacks the floor, the requirements
+          # install below fails LOUD — never a hollow build (run 30601806258).
+          if ls vendor/tofu_search-*.whl >/dev/null 2>&1; then
+            pip install --no-deps vendor/tofu_search-*.whl
+          fi
           pip install -r requirements.txt
           pip install pyinstaller pystray pillow psycopg2-binary pyautogui pyperclip psutil
 
@@ -662,6 +680,15 @@ jobs:
 
       - name: Install dependencies
         run: |
+          # tofu-search FIRST from the bundled wheel: the requirements floor
+          # (>=0.5.3) is on no public index (PyPI tops at 0.5.1), so the
+          # export bundles the verified wheel under vendor/. Installing it
+          # first lets pip see the floor as already satisfied. If the wheel
+          # is absent AND the index lacks the floor, the requirements
+          # install below fails LOUD — never a hollow build (run 30601806258).
+          if ls vendor/tofu_search-*.whl >/dev/null 2>&1; then
+            pip install --no-deps vendor/tofu_search-*.whl
+          fi
           pip install -r requirements.txt
           pip install pyinstaller pystray pillow psycopg2-binary pyautogui pyperclip psutil
 

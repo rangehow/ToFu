@@ -60,6 +60,14 @@ psutil>=5.9
 # tofu-search does not crash, it just never reaches the browser on shell outcomes
 # (the aigc.sankuai.com failure shape). Deployed-package acceptance:
 # tests/_acceptance_fetch_identity_fallback.py.
+# >=0.5.3: `allow_private_hosts` — the hostname-anchored SSRF exemption.
+# HARD floor, same shape as 0.5.0: lib/search_bridge.py::sync_search_config
+# passes `allow_private_hosts` (and `block_private_addresses` /
+# `allow_insecure_ssl_fallback`) to tofu_search.configure() UNCONDITIONALLY,
+# and server.py calls install_search_bridge() at boot with no guard, so an
+# older configure() raises TypeError on the unknown kwarg and the server
+# dies at startup. Do not lower this floor without first making the bridge
+# pass the security-posture kwargs defensively.
 tofu-search>=0.5.3
 trafilatura>=1.6
 # playwright is optional — powers the JS-rendered fallback in tofu_search.fetch.

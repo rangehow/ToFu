@@ -1907,19 +1907,20 @@ def _bundle_internal_mcp_repos(dest: Path, mode: str):
 def _bundle_tofu_search_wheel(dest: Path, mode: str):
     """Copy the prebuilt ``tofu-search`` wheel into ``<dest>/vendor/``.
 
-    ``tofu-search`` IS published on public PyPI, but corp-network installs
-    point pip at an internal mirror that does not carry it. Bundling the
-    wheel lets ``install.sh`` ``pip install`` it offline/behind the firewall
-    without depending on either mirror. Opensource exports skip this — a
-    vanilla host reaches public PyPI fine, so install.sh installs it from
-    there.
+    Bundled for EVERY mode, opensource included. The previous opensource
+    skip rested on "a vanilla host reaches public PyPI fine" — measured
+    false since the floor moved to 0.5.3: public PyPI tops at 0.5.1, so an
+    opensource export's ``pip install -r requirements.txt`` (and the CI
+    legs' identical step) could not resolve at all. The wheel is this
+    project's own MIT artifact, so shipping it is license-clean; once a
+    floor-satisfying release IS published the bundle is simply redundant.
+    ``tests/test_requirements_public_resolvable.py`` is the guard that
+    keeps the publish honest in the meantime.
 
     The wheel is sourced from the sibling repo's ``dist/`` directory
     (``<ROOT>/../tofu-search/dist/tofu_search-*.whl``). Skips cleanly if the
     sibling repo or a built wheel isn't present.
     """
-    if mode not in ('personal', 'internal'):
-        return
 
     import shutil
 

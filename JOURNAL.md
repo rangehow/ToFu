@@ -1,3 +1,11 @@
+### 2026-07-31(续·B3 配对码:owner 拍板 D-关票,交付是把「决定不做」钉进设计稿的决策日志) — `pt_ea4dda44ec0e485a` DONE(关闭,非实现);`docs/UNIFIED_DEVICE_BRIDGE_DESIGN.md` §7 #3 + 路线图 B3 行已记推翻;与 `dd79cd28`(Chrome 不上架)同族:**一张「决定不做」的票,真产物是让下一个 agent 不会把已关闭的调查从头再跑一遍**
+
+- **★ 票面核心机制在 Chrome 上结构上不可能,这是关票的技术依据:** 设计稿拍板 3 写「同机托盘直写 `chrome.storage.local`」。实测 Chrome 对扩展外部只开两条通道 —— `externally_connectable` 声明的扩展/网页(经 runtime.sendMessage)与 `nativeMessaging`(经注册的 native host);**不存在外部进程直写扩展存储的机制**。托盘是本机 Python 进程,两种身份都不是 ⇒ 不是难做,是做不到。两个替代通道对本部署形态也不可达:`externally_connectable` 需固定扩展 ID(load-unpacked 每次安装 ID 随机)且 matches 无法枚举自建部署地址;`nativeMessaging` 需按平台注册 native host,源码运行用户不可用。
+- **★ 而现状已非票面假设的形态:** B0 落地后(`tests/test_browser_user_scope.py` 12/12)每用户 token 由 `POST /api/v1/desktop/token` 一键 mint(scope `agents:bridge`),`autoDetectServer()` 自动发现 serverUrl ⇒ 当前 UX = 一键 mint + 粘贴一次、持久化生效。owner 判定为一次性步骤建配对码基础设施不划算。
+- **★ 我自己在本票上犯过一次「读一层就下结论」,值得记下:** 早前我在问题卡里写「默认部署 `_check_bridge_auth` 未设 secret 时 `return True` ⇒ 已零粘贴」。这只读了 `routes/browser.py` 一层 —— 全局中间件 `routes/api_v1/auth.py::_bridge_credential_ok` 在更前面,**无凭据一律拒绝**,与 `TOFU_BRIDGE_SECRET` 是否设置无关(行为守卫 12/12 实测)。**与设计稿 §3.2 的自我推翻完全同型:读的那个函数之外还有 before_request 会改变结局。** 该错误选项虽未被选中,但若被选中,决策将建立在不成立的前提上。
+- **关票的交付形态(与 dd79cd28 同一判据):** 推翻记录在**读者会读到的位置** —— 设计稿 §7 决策日志 #3(agent 把拍板当权威输入,不标记就会被当成待办重新发起)+ 路线图 B3 行(配对码半划线取消,`launcher.py` 配置面半**仍开放**,那是独立的另一半)。理由必须点名证伪的机制(`chrome.storage.local` 直写不可能),否则「我们决定不做」会退化成传说。**未加测试守卫**:设计稿决策日志是人类策展的散文,对散文断言存在性的守卫正是本批记录过的假阳性来源(chrome-store 那次是因为有可执行套件,性质不同)。
+- **验收边界:** 纯文档 + 票关闭,零产品码改动,无需重启。
+
 ### 2026-07-31(续·倒计时的「完成」里躺着第二个没接的入口) — owner 复核 `55ce90a3` 时实测:`lib/tasks_pkg/handlers/project.py` 项目模式的 kwargs 里 **没有 `on_spawn`**(grep 命中 0)⇒ 挂 project 的**常态路径**上 deadlineTs 与强制 checkpoint 从未发生,功能在最重要的一条路上静默失效(commit `3a59c8ea`,2 文件;套件 12→**15**,**NEUTER 2 红各自独立**;相邻环 **117/117**)
 
 - **★ 与宠物拖拽是同一个缺陷类,只是换了个地方。** 「入口数 ≠ 实现数」:`run_command` 有**三个**派发点(standalone 无项目 / 项目模式 / 远端桥接),我只接了一个 —— 而且接的是**最少用**的那个。owner 的原话:「这个仓库本身就是挂着 project 跑的,你这一整轮对话里的每一次 run_command 走的都是这条路。」**验收标准的含义是「常态路径上成立」,不是「某条路径上成立」** —— 12 条全绿的守卫只测了库函数和 standalone,所以这个洞在绿灯下存活了一整批。

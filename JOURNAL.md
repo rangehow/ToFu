@@ -1,3 +1,23 @@
+### 2026-07-31(GLIBCXX 启动崩溃:三张票、两次诊断被实测证伪,最后交付的是**取证**而不是修复) — owner 连续两轮用实测顶回我的因果断言;真正的产出是「把不可回溯变成可诊断」的一行,以及一份**排除清单**(`pt_cc918d3e44554489` 认领中;server.py +66;新套件 **5/5**,**NEUTER×3 各咬各的**(5/1/2);相邻环 **29/29**)
+
+- **★ 本批最该记的不是结论,是我错了两次的形状 —— 两次都是「手里已有证伪证据却照旧写进票」:**
+  | 票 | 我的诊断 | 证伪它的实测 |
+  |---|---|---|
+  | `pt_6f61d968a438476f` | server 继承 `LD_LIBRARY_PATH=/lib64:...` 遮蔽 conda libstdc++ | 我自己的复现 **3/3 全过**。`readelf -d` 实测 `lxml/etree*.so` 与 `bin/python3.12` 都带 **RPATH**(非 RUNPATH),而搜索序 **RPATH > LD_LIBRARY_PATH** ⇒ `/lib64` 排首位也永远赢不了。**处方(前置 conda lib 进 LD_LIBRARY_PATH + re-exec)是空操作**:改一个 RPATH 已压制的变量,会关票而 bug 还活着 |
+  | `pt_68afc413b948401b` | soname 抢占,触发源=平台注入的 dolphinfs preload | 该 preload 配真实 LD_LIBRARY_PATH **10/10 全过零崩溃**,soname 赢家仍是 conda 6.0.34 |
+- **★ 「谁先映射 soname 谁占有」这句话本身就过强,而这是 owner 顶回来的第二刀:** 实测 `ctypes.CDLL('/lib64/libstdc++.so.6', RTLD_GLOBAL)` 之后再 import trafilatura → **OK**,maps 里 conda 6.0.34 与 /usr/lib64 版**同时存在**;经 NEEDED 链拖入(`CDLL(libjvm.so)`,其 ldd 明确指向 /lib64)→ 同样 **OK**。**ld.so 允许两份 libstdc++ 并存**;该性质**只对显式 LD_PRELOAD 成立**。所以「加载顺序」这个说法对 dlopen/NEEDED 是假的。
+- **已实测排除的候选触发源(这是本批最贵的产出,防止下一个人重走):** ①平台 preload(`/etc/profile.d/pc_env.sh:15` 无条件 export)10/10 干净 ②RTLD_GLOBAL dlopen ③NEEDED 链(libjvm) ④`/etc/ld.so.preload` **不存在** ⑤`restart_15000.sh` 里 `grep -c LD_PRELOAD` = **0** ⑥模拟 libicuuc 的 RPATH 命中失败(复制到无 libstdc++ 的目录)确实产生 GLIBCXX 错误,但**报错主语不同**(`./libicuuc.so.75.1:` vs 生产的 `/lib64/libstdc++.so.6:`)⇒ 排除。
+- **唯一能复现的形状:** `LD_PRELOAD=/lib64/libstdc++.so.6 python -c "import trafilatura"` —— **10/10 崩,对照组 10/10 过**;且其错误串与生产**逐字节相同**(`cmp` 两份 219 字节文件 IDENTICAL)。据此可定形态:报错主语是 `/lib64/libstdc++.so.6` 而 `required by` 是 conda 下的 libicuuc ⇒ **libicuuc 自身 RPATH 解析正常**,坏的只是 libstdc++ 这一个 soname 的归属。
+- **★ 而当前环境里没有任何东西这么做 ⇒ 触发源至今未知。** 崩溃进程 3459833 已消失,`ImportError` 属正常退出**不产 core**(`core_pattern` 虽配置也取不到)⇒ **环境不可回溯**。故 owner 拍板:**先取证,不修复**——re-exec 与 preload 加固都押后,等拿到真实触发源的证据再谈。
+- **交付物就是一行 stderr**(与既有 `[boot]` 行同通道,watchdog 重定向进 `server_15000.log`):记录 `/proc/self/maps` 里 libstdc++ 的解析路径 + `LD_PRELOAD` + `LD_LIBRARY_PATH`。实测现状 `grep -c 'LD_PRELOAD|LD_LIBRARY_PATH' server_15000.log` = **0**,即下次复发仍将从同一个起跑线重查。
+- **★ 而我写的第一版诊断行有一个真缺陷,是新守卫抓的、不是评审抓的:** 无任何 preload 时(裸部署)libstdc++ **此刻尚未映射**,那一版会记录 `not-yet-mapped` —— **在最需要它的那类部署上恰好是空的**(生产恒有平台 preload 所以看不出来,我最初只测了生产形态)。修法不是放宽测试,而是让未绑定时**主动用 ctypes 探测 loader 会选哪一份**,输出区分 `mapped=` / `would-resolve=` 两态(「还没人认领」与「这一份拥有它」是两个不同的事实,不能压平)。三形态实测均有值:生产=`mapped=<conda>`、裸部署=`would-resolve=<conda>`、崩溃形态=`mapped=/usr/lib64`。
+- **顺序是这条诊断的全部意义,故单列一条守卫:** 实测崩溃形态下诊断行在**第 3 行**、ImportError 在**第 28 行**。NEUTER-2 把诊断块移到 `search_bridge` import 之后 ⇒ **精确只咬 ordering 那条**(其余 3 条照绿),这正是「重构把它挪下去而其他断言全绿」的失明场景。
+- **NEUTER×3 各咬各的:** ①删掉整个诊断块 → **5 条全红**(复现原始盲点);②挪到重依赖 import 之后 → ordering + 判别 2 条红;③撤销探测回退退回 `not-yet-mapped` → 判别 + 新增的「不得退化为占位符」2 条红。三发后 `server.py` 均 `cmp` 逐字节还原。
+- **顺带更正两条被我夸大的事实:** `server_15000.log` 里 2 条 GLIBCXX 是**同一次崩溃打印两遍**(stderr + CRITICAL handler,时间戳去重后仅 `2026-07-31 10:33:27` **一个**);2026-07-28 14:39–14:44 的 4 次连续 DIED **与本 bug 无关**(该窗口 `grep -c GLIBCXX`=**0**,全是 98–99.5% 的 cgroup OOM 挤压)⇒ 真实影响是**单次**启动崩溃,不是重启风暴。
+- **同批日志普查的其余结论(各自开票,不混入本批):** ①`pt_36e7854ac6094079` cgroup relief **量具在撒谎**——341 次触发、usage 92.1%→99.9% 从未下降,而日志每次都报 `log_pages=57 files/10775.6MB`(那是 **apparent size 之和**,不是回收量);干净对照证明 fadvise 机制本身是好的(读进 0.06GiB → cache +0.06,fadvise → -0.06),只是瞄错目标:真正大头是 kmem 45–126GiB + 共享 cgroup 的兄弟进程,tofu 自己 RSS 仅 0.16–9.9GiB。②9.1GB 的 `app.log.2026-07-27` 是一个失控 swarm agent(`Round 12301341/∞`,0.0s/轮),**53.36M/53.79M 行 = 99.2%**;断路器已在事后落地。③SSE `DISCONNECTED PREMATURELY` 实测 3/3 都是 `0 events in 0.1s` 且都有 `Falling back to polling`、任务最终 `closed after done` ⇒ 真降级但无数据丢失,归既有传输 epic。
+- **共享 HEAD 纪律:** 提交前 `git status` 显示 7 个兄弟会话的未提交文件;`git diff --stat -- server.py` 确认该文件**只有我的 66 行插入、单一 hunk**,故按 pathspec 提交 `server.py` + 新测试 + JOURNAL 三个路径。写 JOURNAL 时被新鲜度闸拦下(兄弟刚提交了发布批次),重读后把本条插在其上方。
+- **验收边界:** 诊断行**需重启才生效**(当前活进程 3459968 启动于修改之前);真实触发源仍未知,本批**不宣称已诊断**。
+
 ### 2026-07-31(守卫校验的文件不是真正在跑的那个文件) — owner 问「exe 是不是最新版、发布流程自动吗」;三次发版全失败而 **32 条发布守卫全绿**,因为它们读的是本地文件、GitHub 跑的是另一份;而那份差异**是我们自己的导出流程造成的**(commit `a4320287`,3 文件 +391;新守卫 **9 条**(4 条失败先行),**NEUTER×5 各咬各的**,相邻环 **122/122**;**未推送**——分叉清点待 owner 拍板)
 
 - **★ owner 点出的那一层比我诊断的更深,而它解释了「为什么没人发现」:** `tests/test_desktop_build_workflow.py` 的 `_WORKFLOW = _ROOT / '.github/workflows/build-desktop.yml'` 读**本地**文件。本地从 7-29 起就是对的 ⇒ 30+ 条守卫**结构上永远绿**;而 GitHub 实际执行的是 7-23 的旧副本(`on: push tags: v*` + 已退役的 `macos-13`)。**根因类别不是「标签过期」,是「本地真源与已部署产物之间没有任何一致性检查」。**

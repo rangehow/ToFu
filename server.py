@@ -672,6 +672,72 @@ try:
 except OSError:
     pass
 
+
+# ── Native-linkage forensics: which libstdc++ owns the soname? ──
+# On 2026-07-31 10:33:27 a boot died with
+#   ImportError: /lib64/libstdc++.so.6: version `GLIBCXX_3.4.30' not found
+#       (required by .../lxml/../../.././libicuuc.so.75)
+# The system /lib64 copy (2019) exports no GLIBCXX_3.4.30; the conda copy does.
+# The crash is therefore "the libstdc++.so.6 soname was bound to the system copy
+# before libicuuc loaded", and it is NOT reproducible from the environment we
+# can still observe: the platform's own LD_PRELOAD (dolphinfs client, set by
+# /etc/profile.d/pc_env.sh) was measured clean 10/10, as were an RTLD_GLOBAL
+# dlopen of the system copy and a NEEDED-chain pull via libjvm — the loader
+# happily maps two libstdc++ copies side by side. Only an explicit LD_PRELOAD
+# of the system copy reproduces it.
+#
+# The failing process died before anything recorded its environment, so the
+# trigger is still unknown and cannot be recovered after the fact (ImportError
+# is a clean exit, so no core is written). This line closes that gap: the
+# binding is already decided HERE — measured, the healthy boot shows the conda
+# path and the failing shape shows /usr/lib64, both before any heavy import —
+# so recording it now makes the next occurrence diagnosable instead of a
+# standing start. Diagnostic only: it changes no behaviour.
+#
+# Note on the two-branch read: whether libstdc++ is ALREADY mapped this early
+# depends on whether something preloaded it. Under the platform's own preload
+# (production always has it — /etc/profile.d/pc_env.sh exports it
+# unconditionally) it is mapped, and so it is in the failing shape. With no
+# preload at all it is not yet mapped, and reporting a bare "not-yet-mapped"
+# would record nothing about the binding that is about to be chosen. So when
+# it is absent we resolve the soname the way the loader will (ctypes, which
+# performs the same search) and label the value as resolved-not-yet-bound. The
+# distinction is kept in the output rather than flattened, because "nothing had
+# claimed the soname yet" and "this copy owns it" are different facts.
+try:
+    _stdcxx_paths = []
+    with open('/proc/self/maps', 'r') as _mf:
+        for _line in _mf:
+            if 'libstdc++' in _line:
+                _p = _line.rsplit(' ', 1)[-1].strip()
+                if _p and _p not in _stdcxx_paths:
+                    _stdcxx_paths.append(_p)
+    if _stdcxx_paths:
+        _stdcxx_state = 'mapped=' + ','.join(_stdcxx_paths)
+    else:
+        # Not yet bound — ask the loader which copy it WOULD pick.
+        try:
+            import ctypes as _fx_ctypes
+            _fx_ctypes.CDLL('libstdc++.so.6')
+            _probe = [l.rsplit(' ', 1)[-1].strip()
+                      for l in open('/proc/self/maps') if 'libstdc++' in l]
+            _seen = []
+            for _p in _probe:
+                if _p and _p not in _seen:
+                    _seen.append(_p)
+            _stdcxx_state = ('would-resolve=' + ','.join(_seen)) if _seen \
+                else 'unresolvable'
+        except Exception as _fx_e:
+            _stdcxx_state = 'probe-failed:%s' % (str(_fx_e)[:80],)
+    os.write(2, ('[boot] libstdc++ soname -> %s | LD_PRELOAD=%s | LD_LIBRARY_PATH=%s\n' % (
+        _stdcxx_state,
+        (os.environ.get('LD_PRELOAD') or '<unset>'),
+        (os.environ.get('LD_LIBRARY_PATH') or '<unset>'),
+    )).encode(errors='replace'))
+except Exception:
+    # Forensics must never be able to break a boot it only observes.
+    pass
+
 # ── Auto-activate conda env (reuse server.py logic) ──
 # This must happen before any third-party imports.
 _PROJ_DIR = os.path.dirname(os.path.abspath(__file__))

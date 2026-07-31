@@ -25,12 +25,11 @@ from lib.log import get_logger, set_req_id
 logger = get_logger(__name__)
 
 
-from lib.llm import AbortedError
+from lib.llm import AbortedError  # noqa: F401  (re-exported by the package facade)
 from lib.tasks_pkg.cache_tracking import (
     sort_tool_results,
 )
 from lib.agent_core.events import EventType, build_event
-from lib.tasks_pkg.llm_fallback import _llm_call_with_fallback
 from lib.tasks_pkg.manager import (
     _strip_base64_for_snapshot,  # noqa: F401  (re-exported by the package facade after slice 15)
     append_event,
@@ -102,9 +101,6 @@ from lib.tasks_pkg.orchestrator._post_loop import (
 )
 from lib.tasks_pkg.orchestrator._teardown import finalize_task_lane
 from lib.tasks_pkg.orchestrator._swarm_inbox import drain_and_inject_inbox
-from lib.tasks_pkg.orchestrator._deferred_inbox_flush import (
-    flush_deferred_peer_and_steer,
-)
 from lib.tasks_pkg.orchestrator._cache_round_accounting import (
     stamp_round_cache_accounting,
 )
@@ -138,6 +134,9 @@ from lib.tasks_pkg.orchestrator._stream_acc_settle import (
 )
 from lib.tasks_pkg.orchestrator._stream_decision import (
     apply_stream_decision,
+)
+from lib.tasks_pkg.orchestrator._llm_round_call import (
+    run_llm_call_with_fallback,
 )
 
 
@@ -668,52 +667,19 @@ def run_task(task: dict[str, Any]) -> None:
                 logger.debug('[Task:%s] per-round release_connection failed at '
                              'round %d: %s', tid, round_num, _rel_err)
 
-            # ★ LLM call with automatic fallback to Opus on failure
-            try:
-                llm_result = _llm_call_with_fallback(
-                    task, body, rs.model, round_num, max_tokens,
-                    rs.tool_call_happened, tool_list, max_tool_rounds,
-                    messages, rs.preset, rs.thinking_enabled,
-                    rs.accumulated_usage, rs.api_rounds,
-                    on_tool_call_ready=_stream_acc.on_tool_call_ready,
-                )
-                rs.assistant_msg = llm_result['assistant_msg']
-                rs.last_finish_reason = llm_result['finish_reason']
-                rs.last_usage = llm_result['usage'] or rs.last_usage
-                rs.model = llm_result['model']
-                rs.preset = llm_result['preset']
-                rs.thinking_enabled = llm_result['thinking_enabled']
-
-                # ── Flush DEFERRED peer + steer inbox (pt_03f4cdf1 slice 12) ──
-                #   Extracted to
-                #   lib.tasks_pkg.orchestrator._deferred_inbox_flush.
-                #   The LLM call above just succeeded, so the peer and
-                #   human-steer messages injected into ``messages`` earlier
-                #   this round WERE consumed by the model. The helper emits
-                #   the PEER_INBOX_INJECT / USER_STEER_INJECT chips, records
-                #   display-only sidecars on the task, and de-dups the
-                #   durable message_queue rows so dispatch_next_queued can't
-                #   later re-dispatch them as a redundant fresh turn.
-                #   Never-zero-and-never-double invariants preserved.
-                flush_deferred_peer_and_steer(task, round_num=round_num, tid=tid)
-
-                # Surface the resolved model on the task AS SOON as it's known
-                # (was only set at task finalization), so per-round telemetry
-                # emitted during tool dispatch — e.g. report_hallucinated's
-                # `tool_hallucinated` audit — records the real model instead of
-                # an empty string and the optimizer can cluster by model.
-                if rs.model:
-                    task['model'] = rs.model
-
-                if llm_result['_loop_action'] == 'break':
-                    rs.exit_reason = llm_result['_loop_exit_reason']
-                    break
-            except Exception as e:
-                if isinstance(e, AbortedError):
-                    logger.info('[%s] ✋ User abort caught at round %d', tid, round_num)
-                    rs.exit_reason = 'user_abort'
-                    break
-                raise
+            # ★ LLM call with automatic fallback + deferred-inbox flush +
+            #   early model surface + abort handling. Extracted 2026-07-31
+            #   (pt_03f4cdf1 slice 26) to
+            #   lib.tasks_pkg.orchestrator._llm_round_call — see that
+            #   module's docstring for the writeback / flush / early-model /
+            #   break-action / AbortedError contracts. Returns 'break'
+            #   (fallback-requested break or user abort) → break.
+            if run_llm_call_with_fallback(
+                    task, rs, body, messages, tool_list, _stream_acc,
+                    round_num=round_num, tid=tid,
+                    max_tokens=max_tokens,
+                    max_tool_rounds=max_tool_rounds) == 'break':
+                break
 
             # ── Per-round cache accounting (pt_03f4cdf1 slice 13) ──
             #   Extracted to

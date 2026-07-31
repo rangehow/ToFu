@@ -131,6 +131,9 @@ from lib.tasks_pkg.orchestrator._abort_before_tools import (
 from lib.tasks_pkg.orchestrator._round_checkpoint import (
     run_round_checkpoint_and_close,
 )
+from lib.tasks_pkg.orchestrator._tool_timeout_breaker import (
+    handle_tool_timeout_circuit_breaker,
+)
 
 
 
@@ -854,39 +857,18 @@ def run_task(task: dict[str, Any]) -> None:
             task.pop('_compact_messages', None)
 
             # ── Phase 4b: Consecutive tool-timeout circuit breaker ──
-            if _tool_timed_out:
-                rs.consecutive_tool_timeouts += 1
-                logger.warning(
-                    '[%s] conv=%s Tool timeout at round %d (%d/%d consecutive) model=%s',
-                    tid, task.get('convId', ''), round_num + 1, rs.consecutive_tool_timeouts,
-                    _MAX_CONSECUTIVE_TOOL_TIMEOUTS, rs.model)
-                if rs.consecutive_tool_timeouts >= _MAX_CONSECUTIVE_TOOL_TIMEOUTS:
-                    logger.error(
-                        '[%s] conv=%s ⚠️ FORCE STOP: %d consecutive tool timeouts — breaking loop to prevent runaway task. model=%s',
-                        tid, task.get('convId', ''), rs.consecutive_tool_timeouts, rs.model)
-                    from lib.error_envelope import make_envelope as _make_env
-                    task['error'] = _make_env(
-                        'tool_timeout',
-                        detail=f'{rs.consecutive_tool_timeouts} consecutive tool execution timeouts.',
-                        model=rs.model,
-                        context='tool-loop',
-                        source='orchestrator',
-                        raw=f'consecutive_tool_timeouts={rs.consecutive_tool_timeouts}',
-                    )
-                    rs.exit_reason = f'consecutive_tool_timeouts_{rs.consecutive_tool_timeouts}'
-                    # ★ RENDER_CONTRACT Phase 3: close THIS round's boundary —
-                    #   the FORCE-STOP break otherwise strands the ROUND_START
-                    #   emitted at this round's top with no pairing ROUND_END
-                    #   (the ONLY exit path that skipped it: budget x2 /
-                    #   aborted / tools all pair). The frontend reducer does
-                    #   not read `reason` (stream_reducer.js round_end case),
-                    #   so the new 'tool_timeout' value is wire-safe.
-                    append_event(task, build_event(
-                        EventType.ROUND_END,
-                        roundNum=round_num, reason='tool_timeout'))
-                    break
-            else:
-                rs.consecutive_tool_timeouts = 0  # Reset on successful tool execution
+            #   Extracted 2026-07-31 (pt_03f4cdf1 slice 21) to
+            #   lib.tasks_pkg.orchestrator._tool_timeout_breaker — see that
+            #   module's docstring for the FORCE-STOP envelope / exit_reason
+            #   / ROUND_END(reason='tool_timeout') contracts. Returns True
+            #   (ceiling reached: task['error'] stamped, ROUND_END emitted)
+            #   → break; False on success (counter reset) or below-ceiling
+            #   timeout (counter incremented, round proceeds).
+            if handle_tool_timeout_circuit_breaker(
+                    task, rs, round_num=round_num, tid=tid,
+                    tool_timed_out=_tool_timed_out,
+                    max_consecutive_tool_timeouts=_MAX_CONSECUTIVE_TOOL_TIMEOUTS):
+                break
 
             # ★ Crash-recovery checkpoint (throttled) + RENDER_CONTRACT
             #   Phase 3 round close. Extracted 2026-07-31 (pt_03f4cdf1

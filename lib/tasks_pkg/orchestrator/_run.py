@@ -134,6 +134,9 @@ from lib.tasks_pkg.orchestrator._tool_dispatch_round import (
 from lib.tasks_pkg.orchestrator._abort_round_start import (
     handle_abort_at_round_start,
 )
+from lib.tasks_pkg.orchestrator._stream_acc_settle import (
+    settle_stream_accumulator,
+)
 
 
 
@@ -732,33 +735,14 @@ def run_task(task: dict[str, Any]) -> None:
                 api_rounds=rs.api_rounds, messages=messages,
             )
 
-            # ★ Settle orphan early-announced rounds left by a discarded stream
-            #   retry. stream_chat re-runs the SSE stream on a transient
-            #   mid-stream error while reusing the same on_tool_call_ready
-            #   callback, so a tool call whose args streamed far enough on an
-            #   EARLIER attempt already got a 'searching' round + tool_start —
-            #   but only the FINAL attempt's tool calls survive into
-            #   assistant_msg. Any announced round whose tc_id isn't in the
-            #   final message is orphaned at 'searching' forever (a permanently
-            #   spinning tool row, live AND after reload). Reconcile here — the
-            #   per-round complement of the task-end dangling sweep — BEFORE
-            #   parse_tool_calls so the orphan never reaches the render/persist
-            #   path unsettled.
-            _stream_acc.reconcile_announced_rounds(rs.assistant_msg)
-
-            # ★ Read back updated tool_round_num from streaming accumulator
-            #   (tool_start events emitted during streaming already consumed
-            #   round numbers, so parse_tool_calls must start from here).
-            if _stream_acc.announced_tc_map:
-                rs.tool_round_num = _stream_acc.tool_round_num
-
-            # ★ Inject pre-computed streaming tool results into dedup cache.
-            #   execute_tool_pipeline will find these and skip re-execution.
-            if _stream_acc.submitted_count > 0:
-                _prefetch_hits = _stream_acc.inject_into_cache(task)
-                if _prefetch_hits:
-                    logger.info('[%s] Streaming tool exec: %d results pre-computed '
-                                'and injected into cache', tid, _prefetch_hits)
+            # ★ Post-LLM streaming-accumulator settle: reconcile orphan
+            #   early-announced rounds + read back tool_round_num + inject
+            #   pre-computed results into the dedup cache. Extracted
+            #   2026-07-31 (pt_03f4cdf1 slice 24) to
+            #   lib.tasks_pkg.orchestrator._stream_acc_settle — see that
+            #   module's docstring for the orphan-retry / round-readback /
+            #   cache-inject contracts.
+            settle_stream_accumulator(_stream_acc, task, rs, tid=tid)
 
             # ★ Post-stream analysis: premature close, abort, normal exit
             stream_decision = analyse_stream_result(

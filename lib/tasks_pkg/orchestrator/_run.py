@@ -76,7 +76,6 @@ import lib.tasks_pkg.orchestrator as _o
 
 # Per-turn / finalize helpers live in the sibling ``_finalize`` module.
 from lib.tasks_pkg.orchestrator._finalize import (
-    _discard_pretool_prose,
     _emit_tool_round_phase,
     _finalize_and_emit_done,
     _maybe_auto_retry_turn,
@@ -121,6 +120,9 @@ from lib.tasks_pkg.orchestrator._sanitize_tool_call_args import (
 )
 from lib.tasks_pkg.orchestrator._messages_snapshot import (
     emit_messages_snapshot_event,
+)
+from lib.tasks_pkg.orchestrator._tool_call_prelude import (
+    append_assistant_tool_call_message,
 )
 
 
@@ -844,45 +846,16 @@ def run_task(task: dict[str, Any]) -> None:
                 break
 
             rs.tool_call_happened = True
-            # ★ SINGLE SOURCE: assemble the live-tail assistant/tool_call
-            #   message through build_assistant_tool_call_message — the SAME
-            #   function the replay path (_reconstruct_tool_call_messages) uses.
-            #   This makes the live tail and every replay path emit byte-
-            #   identical fields for the turn, structurally: content is STRIPPED
-            #   (the pre-tool prose snapshot assistantContent is persisted
-            #   stripped; a raw↔stripped flip was a WIRE PREFIX CHANGED miss),
-            #   reasoning_content is carried whenever thinking is present, and
-            #   the thinking-block signature only when present (so the NEXT
-            #   tool-loop turn replays a signed thinking block). All those gates
-            #   now live in ONE place, so a future field can never re-diverge
-            #   between the two paths. See build_assistant_tool_call_message.
-            from lib.tasks_pkg.conv_message_builder import (
-                build_assistant_tool_call_message)
-            clean_msg = build_assistant_tool_call_message(
-                tool_calls=rs.assistant_msg['tool_calls'],
-                content=rs.assistant_msg.get('content'),
-                reasoning_content=rs.assistant_msg.get('reasoning_content'),
-                thinking_signature=rs.assistant_msg.get('thinking_signature'))
-            messages.append(clean_msg)
-
-            # ★ Discard the inter-round narration this round streamed before
-            #   its tool calls (backend reset + client DELTA_RESET). See
-            #   _discard_pretool_prose for the full rationale.
-            _discard_pretool_prose(task, round_num)
-
-            # ★ Incremental auto-translate: this round's prose segment is now
-            #   self-contained (the model finished its commentary and is about
-            #   to call tools). Translate it in the background so it's ready by
-            #   task end instead of one big translation stall. Gated + isolated
-            #   inside the helper; a no-op when autoTranslate is off.
-            try:
-                from lib.translate import submit_round_segment
-                submit_round_segment(task, round_num, rs.assistant_msg.get('content') or '')
-            except Exception as _ite:
-                logger.debug('[%s] incremental translate submit failed (non-fatal): %s', tid, _ite)
-
-            # ★ Expose live messages to context_compact tool handler
-            task['_compact_messages'] = messages
+            # ★ Assemble the live-tail assistant/tool_call message + discard
+            #   pre-tool prose + submit incremental auto-translate. Extracted
+            #   2026-07-31 (pt_03f4cdf1 slice 16) to
+            #   lib.tasks_pkg.orchestrator._tool_call_prelude — see that
+            #   module's docstring for the SINGLE SOURCE / DELTA_RESET /
+            #   best-effort translate contracts.
+            append_assistant_tool_call_message(
+                task, messages,
+                round_num=round_num, tid=tid,
+                assistant_msg=rs.assistant_msg)
 
             # ══════════════════════════════════════════
             #  Tool Execution Pipeline (delegated to tool_dispatch)

@@ -818,16 +818,35 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
     # ── Determine final finish reason ──
     if task['aborted']:
         _pre_abort_finish = last_finish_reason
-        last_finish_reason = 'aborted'
-        if _abort_detected_phase:
-            logger.debug('[%s] Abort was detected INSIDE loop at: %s model=%s '
-                         '(original finish_reason was "%s")',
-                         tid, _abort_detected_phase, model, _pre_abort_finish)
+        if task.get('_abort_reason') == 'stuck_no_progress':
+            # ★ SYSTEM REAP, not a user Stop (pt_bf93496e98b9441e). The
+            #   stuck-task reaper already settled this task's verdict —
+            #   finishReason='error' + a worker_lost envelope — BEFORE the
+            #   wedged worker thread unwound and reached this finalize. The
+            #   unconditional 'aborted' collapse did two kinds of harm: it
+            #   rendered a server-side kill as "已停止" (user Stop), hiding
+            #   the one event that needs investigation; and because the
+            #   reaper's own conv sync had already written 'error', the two
+            #   terminal writers RACED — measured 4 'error' / 2 'aborted' on
+            #   6 same-path reaps, the winner decided purely by timing.
+            #   Converge on the reaper's verdict so BOTH writers land the
+            #   same terminal state regardless of ordering.
+            last_finish_reason = 'error'
+            logger.warning('[%s] REAPED task reached finalize (system kill, '
+                           '_abort_reason=stuck_no_progress) — settling '
+                           'finishReason=error, NOT aborted. Loop exit was '
+                           '"%s" model=%s.', tid, _loop_exit_reason, model)
         else:
-            logger.warning('[%s] LATE ABORT: loop exited normally (%s) model=%s '
-                           'but task["aborted"] is True. Original finish_reason was "%s". '
-                           'The user likely clicked Stop AFTER the model finished but BEFORE the response was fully rendered.',
-                           tid, _loop_exit_reason, model, _pre_abort_finish)
+            last_finish_reason = 'aborted'
+            if _abort_detected_phase:
+                logger.debug('[%s] Abort was detected INSIDE loop at: %s model=%s '
+                             '(original finish_reason was "%s")',
+                             tid, _abort_detected_phase, model, _pre_abort_finish)
+            else:
+                logger.warning('[%s] LATE ABORT: loop exited normally (%s) model=%s '
+                               'but task["aborted"] is True. Original finish_reason was "%s". '
+                               'The user likely clicked Stop AFTER the model finished but BEFORE the response was fully rendered.',
+                               tid, _loop_exit_reason, model, _pre_abort_finish)
     elif last_finish_reason in ('tool_use', 'tool_calls') and not task.get('error'):
         last_finish_reason = 'error'
         from lib.error_envelope import make_envelope as _make_env

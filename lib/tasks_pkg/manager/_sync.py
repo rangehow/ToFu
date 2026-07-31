@@ -152,6 +152,21 @@ def _merge_segments_preserving_translations(fresh_segs, backend_segs):
     return backend_segs
 
 
+def _find_own_assistant_slot(messages, task_id):
+    """Last assistant message OWNED by ``task_id`` (provenance scan), else None.
+
+    Used when the tail no longer belongs to this task: the slot must be
+    located by WHO produced it, never by position (pt_bf93496e98b9441e).
+    """
+    if not task_id:
+        return None
+    for _m in reversed(messages):
+        if (isinstance(_m, dict) and _m.get('role') == 'assistant'
+                and _m.get('_taskId') == task_id):
+            return _m
+    return None
+
+
 def _merge_terminal_fields(fresh_tail, terminal_msg):
     """Graft the backend-OWNED terminal fields from ``terminal_msg`` onto the
     fresh DB tail IN PLACE (RENDER_CONTRACT Phase 4 §2.2).
@@ -168,6 +183,13 @@ def _merge_terminal_fields(fresh_tail, terminal_msg):
     for _f in _TERMINAL_OWNED_FIELDS:
         if _f in terminal_msg:
             fresh_tail[_f] = terminal_msg[_f]
+    # 'error' is OWNED, so its ABSENCE in ``terminal_msg`` is itself the
+    # verdict (the turn settled clean): a stale error on ``fresh_tail`` must
+    # converge to the verdict rather than survive the graft
+    # (pt_bf93496e98b9441e — a clean answer measured wearing another task's
+    # reaper error).
+    if 'error' not in terminal_msg:
+        fresh_tail.pop('error', None)
     if 'segments' in _TERMINAL_MERGE_EXCLUDED and 'segments' in terminal_msg:
         fresh_tail['segments'] = _merge_segments_preserving_translations(
             fresh_tail.get('segments'), terminal_msg.get('segments'))
@@ -709,9 +731,21 @@ def _sync_result_to_conversation(task, meta):
             if _by_id is not None and _by_id.get('role') == 'assistant':
                 last_msg = _by_id
         if last_msg is None:
-            last_msg = messages[-1]
+            # ★ PROVENANCE GUARD (pt_bf93496e98b9441e): a tail bubble carrying
+            #   a DIFFERENT task's _taskId belongs to that task — filling it
+            #   grafts THIS task's terminal state onto the other task's
+            #   tombstone. Measured live: a reaped task's error bubble
+            #   (appended one turn late) was adopted by the NEXT task's
+            #   successful sync, which inherited the stale error onto its
+            #   clean 'stop' answer. A client-minted placeholder carries NO
+            #   _taskId, so the legacy fill path is unaffected.
+            _tail = messages[-1]
+            if (_tail.get('role') == 'assistant'
+                    and not (_tail.get('_taskId')
+                             and _tail.get('_taskId') != task['id'])):
+                last_msg = _tail
 
-        if last_msg.get('role') != 'assistant':
+        if last_msg is None:
             # ── Guard: an aborted/superseded task must NOT append a new
             #   assistant slot ──
             # When the user clicks Stop → Regenerate, the regen handler
@@ -724,34 +758,58 @@ def _sync_result_to_conversation(task, meta):
             # doubled-context bug. Aborted tasks may only FILL an existing
             # trailing assistant slot, never create one.
             _abort_reason = task.get('_abort_reason', '')
-            if (task.get('aborted') or _abort_reason) and _abort_reason != 'stuck_no_progress':
+            if _abort_reason == 'stuck_no_progress':
+                # ── EXCEPTION: a reaper-wedged task OWNS its trailing user
+                #   turn ONLY while that turn is still the tail. If the conv
+                #   has moved on (a newer turn's prompt landed after the reap
+                #   but before this sync), appending here lands the error
+                #   bubble on the WRONG turn — and the next task's sync then
+                #   adopts the foreign bubble (pt_bf93496e98b9441e, the
+                #   ce514dce → ae7bbe38 error copy). Prefer this task's OWN
+                #   settled slot (an earlier sync of the same reap may already
+                #   have written it); append ONLY when the trailing user
+                #   message is still this task's own prompt; otherwise DROP —
+                #   the task_results terminal floor still resolves polls, and
+                #   no bubble beats a bubble on the wrong turn. The narrow
+                #   'stuck_no_progress' scope is asserted by
+                #   test_NC_reaped_task_guard_still_blocks_regenerate_truncation.
+                last_msg = _find_own_assistant_slot(messages, task['id'])
+                if last_msg is None:
+                    _imc = task.get('_initial_msg_count')
+                    if (messages[-1].get('role') == 'user'
+                            and (not isinstance(_imc, int)
+                                 or len(messages) == _imc)):
+                        logger.info('%s conv=%s reaped wedged task — appending '
+                                    'assistant error bubble for the unanswered '
+                                    'trailing turn', pfx, conv_id)
+                        last_msg = _new_assistant_slot(task)
+                        messages.append(last_msg)
+                    else:
+                        logger.warning('%s conv=%s reaped wedged task\'s trailing '
+                                       'turn is no longer the tail (msgs=%d, '
+                                       'initial=%s) — NOT appending the error '
+                                       'bubble onto a newer turn; the '
+                                       'task_results terminal floor still '
+                                       'resolves polls',
+                                       pfx, conv_id, len(messages), _imc)
+                        return
+            elif task.get('aborted') or _abort_reason:
                 logger.info('%s conv=%s Last message is role=%s and this task is '
                             'aborted (reason=%s) — dropping stale write instead of '
                             'appending a new assistant (prevents truncated-turn '
                             'resurrection)',
-                            pfx, conv_id, last_msg.get('role'),
+                            pfx, conv_id, messages[-1].get('role'),
                             _abort_reason or 'aborted')
                 return
-            # ── EXCEPTION: a reaper-wedged task (reason='stuck_no_progress')
-            #   OWNS its trailing user turn (it never got a reply) and is still
-            #   this conv's latest task (freshness guard above passed). This is
-            #   NOT a Stop→Regenerate truncation, so it MUST be allowed to
-            #   append an assistant error bubble answering that turn — otherwise
-            #   the conv shows a perpetual "waiting" with no error. The narrow
-            #   'stuck_no_progress' scope is asserted by
-            #   test_NC_reaped_task_guard_still_blocks_regenerate_truncation.
-            if _abort_reason == 'stuck_no_progress':
-                logger.info('%s conv=%s reaped wedged task — appending assistant '
-                            'error bubble for the unanswered trailing turn',
-                            pfx, conv_id)
-            # No trailing assistant message — append one. Build the slot via
-            # _new_assistant_slot so it ADOPTS the client-shipped
-            # _assistantMsgId as its _msgId (divergent-id duplicate-bubble
-            # root fix — see RENDER_CONTRACT §2.3 identity alignment).
-            logger.info('%s conv=%s Last message is role=%s, appending new assistant message',
-                       pfx, conv_id, last_msg.get('role'))
-            last_msg = _new_assistant_slot(task)
-            messages.append(last_msg)
+            else:
+                # No trailing assistant message — append one. Build the slot via
+                # _new_assistant_slot so it ADOPTS the client-shipped
+                # _assistantMsgId as its _msgId (divergent-id duplicate-bubble
+                # root fix — see RENDER_CONTRACT §2.3 identity alignment).
+                logger.info('%s conv=%s Last message is role=%s, appending new assistant message',
+                           pfx, conv_id, messages[-1].get('role'))
+                last_msg = _new_assistant_slot(task)
+                messages.append(last_msg)
 
         # ── Guard: don't overwrite with LESS content ──
         # The frontend may have already synced a fuller version via PUT
@@ -851,6 +909,14 @@ def _sync_result_to_conversation(task, meta):
                 last_msg['thinking'] = thinking
             if error:
                 last_msg['error'] = error
+            else:
+                # ★ A task settling with NO error must not leave a stale error
+                #   on its own message (pt_bf93496e98b9441e): the slot can
+                #   carry a transient mid-stream envelope, or — measured —
+                #   ANOTHER task's verdict that rode in via a shared bubble.
+                #   Terminal state is backend-authoritative: absence of an
+                #   error IS the verdict.
+                last_msg.pop('error', None)
 
         # Copy metadata fields that the frontend would normally set.
         # Terminal metadata is backend-authoritative — once the task reaches
@@ -1108,7 +1174,14 @@ def _sync_result_to_conversation(task, meta):
             if not _fresh_messages:
                 break
             _fresh_tail = _fresh_messages[-1]
-            if (_fresh_tail.get('role') == 'assistant'
+            # ★ PROVENANCE (pt_bf93496e98b9441e): a fresh tail carrying a
+            #   DIFFERENT task's _taskId is that task's bubble — it is
+            #   neither a "frontend won" for THIS task nor a legal graft
+            #   target (grafting would graft this task's verdict onto the
+            #   other task's tombstone).
+            _fresh_tail_foreign = bool(_fresh_tail.get('_taskId')) \
+                and _fresh_tail.get('_taskId') != task['id']
+            if (_fresh_tail.get('role') == 'assistant' and not _fresh_tail_foreign
                     and len(_fresh_tail.get('content') or '') >= new_content_len
                     and len(_fresh_tail.get('thinking') or '') >= new_thinking_len
                     and not _is_floor_retry_residue(task, _fresh_tail)):
@@ -1123,13 +1196,31 @@ def _sync_result_to_conversation(task, meta):
                             pfx, conv_id, _cas_attempt + 1, MAX_TERMINAL_CAS)
                 break
             # Flaky-network case: updated_at moved but content did NOT win —
-            # graft our assembled assistant onto the fresh tail and retry.
-            # MERGE (not whole-dict replace): copy only the backend-OWNED
+            # graft our assembled assistant onto OUR slot in the fresh row and
+            # retry. MERGE (not whole-dict replace): copy only the backend-OWNED
             # terminal fields so a translation (translatedContent /
             # segments[].translatedText) committed onto the fresh tail in our
             # read→write window survives (RENDER_CONTRACT Phase 4 §2.2).
-            if _fresh_tail.get('role') == 'assistant':
-                _merge_terminal_fields(_fresh_tail, last_msg)
+            _graft = None
+            if _fresh_tail.get('role') == 'assistant' and not _fresh_tail_foreign:
+                _graft = _fresh_tail
+            elif _amid:
+                from lib.tasks_pkg.manager._events import find_message_by_id as _fmid
+                _gi, _gm = _fmid(_fresh_messages, _amid)
+                if _gm is not None and _gm.get('role') == 'assistant':
+                    _graft = _gm
+            if _graft is None:
+                _graft = _find_own_assistant_slot(_fresh_messages, task['id'])
+            if _graft is not None:
+                _merge_terminal_fields(_graft, last_msg)
+            elif task.get('_abort_reason') == 'stuck_no_progress':
+                # A reaped task whose own slot vanished between retries must
+                # NOT append its error bubble onto a moved-on tail (the same
+                # wrong-turn defect the first pass guards).
+                logger.warning('%s conv=%s reaped task found no own slot in the '
+                               'fresh row — not grafting/appending onto a '
+                               'foreign tail', pfx, conv_id)
+                break
             else:
                 _fresh_messages.append(last_msg)
             messages = _fresh_messages

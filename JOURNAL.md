@@ -1210,3 +1210,22 @@
 - **我自己的断言坑(又一次):** provider 级下拉的源码断言连错两发——第一发正则 `\{?pi\}?` 对不上字符串拼接形状,第二发 `'protocol'` 对不上 JS 转义 `\'protocol\'`。**「锚产生行为的那段文本」先要逐字节看清楚再写断言。**
 - **守卫:** 新 6 条进 test_provider_face_ui.py(Node harness 驱动真实 provider_faces.js):三选项+未知保留/HTML 戳记/collect 保留+weak-DOM 回落/provider 级下拉存在性/chip 样式与 i18n;失败先行 5 红(collect 透传条作为 complement 绿);NEUTER-A(摘未知追加)→ 1 红精确;NEUTER-B(摘 orig 回落)→ 1 红精确。
 - **验收边界:** 纯前端,**需重启 + bundle 重建生效**。至此 responses 三协议「wire 验证 + UI 可配且不毁」闭环:S1 提取泛化(`95ac28a1`)+ S2 DeepSeek 实测 8/8 + S3 本批。
+
+### 2026-07-31(续·responses 两张潜伏票收口:截断反向映射真修 + failed 静默核销) — 脑派回票,owner 拍板「一核销一真修」;commit `ab5f5cd1`(8 文件 +166/-40;守卫 +6 条,失败先行 **5 红**,**NEUTER×2 各咬各的**(1+2),套件 **42/42**,相邻环 **75/75**)
+
+- **pt_6d749150(failed 静默)→ 核销,证据先行:** codex 路径 S1 起骑 `ResponsesSSETranslator`,failed→错误分类是**构造性治愈**;补的证明钉的是**门面路径**(`from lib.oauth.codex import CodexSSETranslator` → 喂 response.failed(429) → RateLimitError)——这条按预期**即绿**,它是治愈的证据而非新修。
+- **pt_1e1b2d32(64 字符截断无反向映射)→ 真修,且定性升级:** 它不是 codex 私有,是**新协议的现役缺陷**(DeepSeek 同受 64 字符规范限制,MCP 长名必踩)。修法照 `apply_claude_cloak` 的 per-request reverse-map:`openai_body_to_responses` 改返回 `(body, reverse_map)`,三处截断点(tools/tool_choice/assistant tool_calls)统一走 `_truncate_name`(first-original-wins);流式在 `output_item.added` 还原、非流式 `responses_response_to_openai(tool_name_reverse=)` 还原。门面 `codex_translate_request` 解包后保持 body-only,兄弟消费面零影响(已 peer CONFIRM)。
+- **签名变化的爆炸半径清点:** 转换器调用点 4 处生产(_sse_core/chat.py/codex 门面/probe)+ 9 处测试,全部同批迁移;`reverse` 不走 body 私有键(会污染 wire,`_task_id` 战争的前科),走元组——与 cloak 同形。
+- **NEUTER 精确:** 摘流式还原→1 红;摘截断记录→2 红(tools+assistant 两处)。
+- **至此 responses 目标全链:** S1 提取泛化 `95ac28a1` + S2 DeepSeek 实测 8/8 + S3 前端闭环 `ff214775` + 本批两票 `ab5f5cd1`。板上 responses 相关票清零。
+
+### 2026-08-01(续·首轮思考「等待中…↔推理中N字符」跳变根治:phase 机骨架无辜,占位唯一性才是根因;WS/SSE 在隧道下都保不住的实测定案) — owner 两连问「是不是设计 bug」「WS 能不能活」;修复 `71e9c8fd`(5 文件 +549/-6;新套件 **7/7**,失败先行 6 红,**NEUTER×3 各咬各的**;相邻环 **130+ 全绿**)
+
+- **实测定案(transport 问题先行核销):** 全天 33MB access.log 里 `/api/push` 升级完成数 = **0**、PushHub 客户端注册数 = **0** —— 经 VS Code 端口转发 + 公司代理,**WS 与 SSE 都活不下来**;app 侧教科书级手段(15s `: keepalive` 注释、Last-Event-ID 续传、有界 resume)对存储转发型代理是结构性无效。能物理通过的只有短 GET —— 所以修的是「让唯一活着的 poll 车道渲染自洽」,不是跟代理搏斗。真正的传输解在兄弟的 desktop-egress 线。
+- **事故链(日志+截图+代码三方互证):** 22:53 任务 a0b0d9d2 同秒开两个 SSE reader(gen 1→2 supersede)+ 0.1s 后「Falling back to polling」—— **SSE delta 车道与 poll 车道并发**;截图 2「推理中 2.5k 字符」下方**没有思考块**是决定性证据:`_thinkingLen` 计数器只由 SSE delta 分支写(sse_pipeline.js:991),与被投影消息的 `thinking` 是**两个独立通道** —— 计数在涨、投影却是空的 ⟹ 车道写的不是尾部那条,而 `_streamFrameArg` 按**位置**读尾部空占位。poll 每拍 `phase=null` 把它打回「等待中…」,下一帧 SSE 的 thinking_active 又拉回「推理中」—— 按轮询节奏(~1.5s)跳变。
+- **jsdom 复现(真实 updateStreamingUI 驱动,非模拟):** 三场景对拍 —— A 仅 poll 车道(稳定推理中+思考块,**不跳**)/ B 双车道同对象(内部 key 切换但视觉一致,**不跳**)/ C 车道写 P、尾部躺空占位 Q(**逐像素复现两张截图**,思考区恒空)。机制类就此钉死;重复占位的确切推手因 connectToTask 的占位日志只在 console 而无法钉死 —— 这正是 fix 3 存在的原因。
+- **三层修法(1 治本 + 2 通用保险 + 3 取证):** ①connectToTask 同 conv+task 早退守卫(消灭第二 reader ⇒ supersede⇒poll 混战的起源);②发送管线 `_adoptTaskPlaceholder` 采用已绑定占位并改铸 canonical `_msgId`(与 config.assistantMsgId/后端 `_new_assistant_slot` 同一身份,杜绝 DB 双份);③`_streamFrameArg` 按 activeStreams 绑定身份投影(_msgId 活解析),尾部只作兜底 —— endpoint-review 尾部(critic 道)与 VU 载体哑引用实测维持原状(A3/A4 锚);④两处占位 push + 抑制事件接 `_reportClientError`。
+- **守卫账:** 新套件 7 条(A 投影身份×4、B connect 守卫+上报×3、C helper×3),失败先行 6 红(A1/A2、B1×2、B3 上报、C 全红);NEUTER×3:摘身份块→A1/A2 红、摘早退→B1 红、helper 恒铸新→C2 红,锚全绿。**harness 自己的坑(同族又一次):** `_trySSE` 桩被文件内真实定义遮蔽,首个连接「ran_sse」恒假 —— 改桩 `Api.chat.streamResponse`(真实 _trySSE  await 的传输点)才对上。B2 的精确计数钉在 NEUTER 下不独立,已改注而非强断。
+- **三态分诊(共享树纪律):** 环中 3 类红全部非本批 —— `test_frontend_streaming_perround_en_hide`(兄弟未提交 WIP 套件)、streaming_ui/stall_watch 的 tsc 错(兄弟 pt_e0ea29f2 停滞卡线在飞)、`test_frontend_send_failure_persists_message` 2 红(**pristine HEAD worktree 复现** = HEAD 原生,catch 分支 rescue 对形状守卫被兄弟 startup-stop 提交改坏)—— 已单独立票 `pt_ca1b3b2f53874ec8`,本批不扩面。HEAD+仅我的 diff 复跑:与 pristine HEAD 结果逐条一致,零回归。
+- **peer 协调:** 向 ms923f1d(duplicate-msgId 身份追查)发边界通报 —— adopt 分支是新增的 `_msgId` 写入点(收敛到后端同款 canonical id),命中请对线。
+- **验收边界:** 纯前端,**需重启 + bundle 重建生效**;重复占位的确切起源待 fix 3 的上报在真实复发时钉死(取证先行,与 GLIBCXX 票的处置同构)。

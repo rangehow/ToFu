@@ -21805,6 +21805,12 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .pb-watch-diverged{color
 .pb-board-badge-answered{background:color-mix(in srgb,var(--pb-green,#3fb950) 12%,transparent);color:var(--pb-green,#3fb950);border:1px solid color-mix(in srgb,var(--pb-green,#3fb950) 30%,transparent)}
 .pb-board-badge-answered svg{width:11px;height:11px}
 
+/* Focus flash: a Board deep-link ("go answer") lands the operator on THIS
+   attention card, not the tab top — a brief one-shot accent pulse so the eye
+   follows (finite animation, no reduced-motion concern). */
+.pb-attn-card.pb-attn-flash{animation:pbAttnFlash 1.4s ease}
+@keyframes pbAttnFlash{0%{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 26%,transparent)}100%{box-shadow:0 0 0 0 transparent}}
+
 /* collab-bar conflict styling (shares this block's ownership). */
 .collab-seg-conflict{color:var(--pb-red);font-weight:600}
 .collab-bar-inner.collab-has-conflicts{border-color:color-mix(in srgb,var(--pb-red) 40%,transparent)}

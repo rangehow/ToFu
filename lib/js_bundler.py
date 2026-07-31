@@ -724,6 +724,13 @@ _BUNDLE_FILES = [
     # thinking,toolRounds} projection all four apply paths fold through. Pure
     # (no DOM/globals); load BEFORE the handlers + pipeline that consume it.
     'ui/stream_reducer.js',
+    # Stall watch (pt_e0ea29f2): grades heartbeat self-ticks vs real progress
+    # and drives the "no unannounced freeze" banner. Leaf module (document/
+    # window only); load BEFORE the pipeline (feed seam) + streaming_ui
+    # (render seam) that consume it. NOTE: streaming_ui.js sits ABOVE this
+    # list — the render seam resolves stallWatchState lazily at runtime via
+    # window.*, so load order is intent-only, not a hard dependency.
+    'ui/stall_watch.js',
     # Property-only SSE handlers extracted from dispatchSSEEvent (2026-06).
     # Plain hoisted functions taking (ev, ctx-snapshot); the dispatcher in
     # sse_pipeline.js calls them. Load BEFORE sse_pipeline.js for clear intent.

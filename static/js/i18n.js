@@ -3705,10 +3705,11 @@ var _i18n = {
   'projectBrain.awaitingAnswerMeta': { zh: '等待你的回答', en: 'waiting for your answer' },
   'projectBrain.actGoAnswer': { zh: '去回答', en: 'Go answer' },
   'projectBrain.actCreateConv': { zh: '新建对话', en: 'New chat' },
-  // The composer pre-fill for a task's "New chat" action. {id} and {title}
+  // The composer pre-fill for a task's "New chat" action. {id}/{title}/{path}
   // are substituted at click time; the kickoff names the read/claim tools so
-  // the agent's first move is grounded in the board, not in the title alone.
-  'projectBrain.epicChatPrompt': { zh: '请认领并推进任务板上的这个 epic：{id}\n{title}\n\n先 project_board_read 读取完整描述，再 project_board_claim 认领后开始工作。', en: 'Claim and advance this board epic: {id}\n{title}\n\nRead the full text with project_board_read, claim it with project_board_claim, then start.' },
+  // the agent's first move is grounded in the board, and the project path so
+  // it can re-attach even if the conversation's project link is ever lost.
+  'projectBrain.epicChatPrompt': { zh: '请认领并推进任务板上的这个 epic：{id}\n{title}\n项目：{path}\n\n先 project_board_read 读取完整描述，再 project_board_claim 认领后开始工作。', en: 'Claim and advance this board epic: {id}\n{title}\nProject: {path}\n\nRead the full text with project_board_read, claim it with project_board_claim, then start.' },
   'projectBrain.convCreateFailed': { zh: '无法打开新对话', en: 'Could not open a new chat' },
   'projectBrain.answerPlaceholder': { zh: '输入你的回答（或直接点上方选项）…', en: 'Type your answer (or pick an option above)…' },
   'projectBrain.answerSubmit': { zh: '提交回答', en: 'Submit answer' },

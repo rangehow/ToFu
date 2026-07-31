@@ -1,3 +1,10 @@
+### 2026-07-31(续·历史清扫票:迁移脚本备妥 + 干跑出账,改写用户可见历史的决定交回 owner) — `pt_50c0ee26faac44fc` 交付物齐(迁移脚本 + 单测 + 生产干跑账),commit `6b38effb`;**执行与否已挂问题卡**
+
+- **交付物(与本票「先干跑出全量 diff 供 owner 过目」的票面严格对齐):** `tests/_migrate_reaper_terminal_cleanup.py`(干跑默认 / `--apply` 才写、写前 JSON 备份、幂等)+ `tests/test_migrate_reaper_terminal_cleanup.py` **2/2**(四类消息 + 干跑不写 + 二次 apply 空转)。覆盖面:双存储(`conversations.messages` + `conversation_messages.meta` —— 实测镜像行带同样的污染,只清 JSON 列会留一半)+ R 类的 `task_results.metadata`(poll 回退路径的一致性,不清它恢复时会把 `'aborted'` 重新物化)+ 尾部 sidecar(`settings.lastFinishReason/lastMsgError`);`updated_at` **刻意不动**(元数据修复不该重排用户的会话列表)。
+- **分类器刻意保守:** P 类(可证明的归属违规:`fr='stop'` 的成功回答带着别人的死亡证明,`error` 删除)与 R 类(自带 reaper envelope 却 `fr='aborted'`,restamp 为 `'error'`)才动;`fr='error'` 的墓碑与任何未知形态**一律不碰** —— 那 7 条 `_taskId` 不在日志窗口 reap 名单里的 `fr='error'` 消息,窗口外的旧 reap 无法证伪,「envelope 在身上」即为所有权的表面证据。
+- **生产干跑账(全量 diff,零意外):** 恰好 6 条 —— **R×4**(`030b3df9`/`f4482c27`/`d2805477`/`257f050d`,aborted→error)+ **P×2**(`ae7bbe38`/`4fee9563`,删 error),UNKNOWN×0;与上一批的实测集逐条吻合。
+- **★ 第一发真实干跑崩了,而我的单测全绿 —— 同族教训又一次:** `plan_changes` 里 `after` 的三元表达式结合性写错(外层括号让 `if cls=='R' else None` 作用到整个 `(A if P else B)` 上 ⇒ P 类的 `after=None`),`run()` 从不读 `after` 所以单测看不见,**只有 main() 的打印路径会踩**。修法之外补的钉:单测现在断言 plan 里每个 `after` 的形状。**「迁移脚本的真实干跑」是任何单测替代不了的最后一道验收 —— 它跑的是打印、备份、真实数据形状这些单测不碰的路径。**
+- **决定挂回 owner(问题卡,非代码问题):** 两个候选都改写**用户可见历史**(P:两条成功回答摘掉死亡证明;R:四条「已停止」变「失败」),按自主规则属 (b) 产品取舍。选项:①P+R 全做 ②只做 P(最保守) ③不做(接受「只保证新写入收敛」,把判据限定为重启后新 reap 消息并关闭本票)。脚本与账已就位,owner 一键后执行是 30 秒的事。
 ### 2026-07-31(续·矩阵「纯逻辑」判据:owner 用真实形态抓出两行同 ID —— 判据从「池非空」收敛为「没有任何池路由它」) — owner 复核 `9dc9cd3e` 时用 `deepseek-v4-flash` 形态(model_id **本身就在**自己的 `request_ids` 池里,真实配置有 3 个)构造渲染,抓出**同一个 data-id 渲染两行**:一行 `is-logical` 头 + 一行 `is-alias` 线上行(commit 待补,2 文件;套件新增 **9 钉**,复现脚本实测修复后每 ID 恰好一行,相邻环 **7 套件 57/57**)
 
 - **★ 我犯的错是把「前提」写成了「形态」:** 逻辑头行的存在前提是「model_id 永不上线」,而我写成了「`request_ids` 非空」。池里**含** model_id 时它是真线上 ID,头行与线上行重复渲染 —— 前提与形态的差距恰好是那 3 个真实条目。**判据必须直接表达前提:纯逻辑 ⇔ 没有任何池(条目池或任意 key 的 cell 池)路由 model_id。**

@@ -1,3 +1,10 @@
+### 2026-07-31(续·pt_5ed41c99 Anthropic 边界幽灵块根治:防御不在「调用」而在「发射」) — 接脑派回我自己立的票;commit 见下(2 文件 +128/-5;新测试类 **6** 失败先行 **5 红**(锚 1 绿);**NEUTER×2 各咬各的**(发射闸→3 红/fallback→2 红);相邻环 cache+wire+Claude 家族 **295 + 102** 绿;`test_live_retry_preserves_task_id` 为已证预存红,签名与上批逐字相同)
+
+- **机制选择(本批唯一的设计决定):** 票面写「把 `_strip_empty_text_blocks` 的防御延伸到 Anthropic 边界」,落地**不是**在 `openai_body_to_anthropic` 里调用那个 OpenAI 侧函数,而是把闸门钉进 `_convert_content_blocks` 的**发射缝** —— str 与 list 两条路在「块出生」的那一刻统一拦截空/纯空白 text 块。这比调用式防御**严格更强**:它不可被任何调用方绕过(chat.py 非流式 / `_sse_core` 流式 / oauth cloak / 未来探测路都过这一个转换器),且不碰调用方的 OpenAI body(无原位突变)。函数式接缝,不是补丁。
+- **两个 `not blocks` fallback 的形状决定:placeholder 而不是删消息。** assistant 幽灵 → `[empty response]`、user 空 → `[empty message]`(与 `_fix_empty_user_messages` 同一词汇)。**为什么不能删**:删掉一条 assistant/user 会让两条同角色消息相邻,Anthropic 的角色交替校验同样 400 —— 「删」是把一个 400 换成另一个 400。fallback 触发即 warning(§2:触发本身就意味着上游愈合器被绕过,这是诊断信号不是常态)。
+- **实测抓的既有事实(回源核对):** 现有套件里 `assistant content='' + tool_calls → [tool_use]` 早就是绿的(零幽灵),既有测试两处分句的 `'text': ''` 全是 SSE **入站**形状与出站转换器无关 —— 改动零契约破坏,295 条 cache/wire 字节一致性环全绿佐证。
+- **验收边界:** 纯后端转换层,**需重启生效**;今天该 fallback 在生产上不可达(build_body 愈合器先行),本批是把「第二个藏身点」从结构上拆掉,使绕过 build_body 的未来调用者也造不出幽灵块。
+
 ### 2026-07-31(续·kimi-k3 收尾:strip 日志带位置 + Anthropic 边界同类隐患独立立案) — owner 复核三点要求;commit 见下(3 文件;新断言失败先行 1 红→绿;相邻环 **108/108**)
 
 - **日志增强:** `_strip_empty_text_blocks` 的 warning 从「只记数量」升级为「逐块点名」(`#<消息index>/<role>/block<块index>`,前 8 条封顶)—— §2 第一纪律:下一个生产者出现时一条 grep 定位,不再靠猜;`76d686cb` 生产者未证实正是为了这个。

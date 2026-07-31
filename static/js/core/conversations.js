@@ -1118,24 +1118,11 @@ async function loadConversationMessages(convId) {
      *   server has the Chinese ready.  Matches by index + role identity +
      *   content equality to avoid resurrecting stale translations.
      */
-    /* Delegates the per-message field work to the SHARED reducer
-     * core/conv_reducers.js::_mergeTranslationFields — the same one the
-     * event-driven notify path (_verifyActiveConvFromServer) uses. The field
-     * list (deliverable translatedContent + display flags, per-round
-     * segments[].translatedText, the _translatePartialByRound sidecar) and the
-     * same-turn identity guard live there ONCE, so the on-open lane and the
-     * no-refresh lane can never drift apart the way the terminal-metadata list
-     * did before _mergeTerminalTurnFields. This wrapper keeps the array-level
-     * alignment + the merged count for the log line below. */
-    const _mergeServerTranslations = (sourceMsgs, destMsgs) => {
-      if (!Array.isArray(sourceMsgs) || !Array.isArray(destMsgs)) return 0;
-      const overlap = Math.min(sourceMsgs.length, destMsgs.length);
-      let merged = 0;
-      for (let i = 0; i < overlap; i++) {
-        merged += _mergeTranslationFields(destMsgs[i], sourceMsgs[i]);
-      }
-      return merged;
-    };
+    /* Array-level wrapper _mergeServerTranslations was extracted 2026-07-31
+     * to core/conv_reducers.js (pt_3879f00e sub-part 2 slice 12) — same file
+     * that owns the per-message primitive _mergeTranslationFields. The three
+     * surviving call sites below resolve at CALL time via bundle-level window
+     * scope. */
 
     if (localHasUnsynced) {
       console.warn(`[loadConvMsgs] ⚠️ KEPT local data for conv=${convId.slice(0,8)} — ` +

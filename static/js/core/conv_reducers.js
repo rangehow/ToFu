@@ -349,3 +349,35 @@ function _mergeTranslationFields(lm, sm) {
   return n;
 }
 if (typeof window !== 'undefined') window._mergeTranslationFields = _mergeTranslationFields;
+
+/* ═══════════════════════════════════════════════════════════════════
+   _mergeServerTranslations(sourceMsgs, destMsgs) — array-level wrapper
+   over _mergeTranslationFields.
+
+   Extracted 2026-07-31 (pt_3879f00e sub-part 2 slice 12) from a nested
+   closure inside conversations.js::loadConversationMessages (~L1130).
+   The closure had drifted into a private helper of a 754L function
+   while its per-message primitive (_mergeTranslationFields, above)
+   lived here in the reducer family — this promotion completes the
+   family and gives the array-level wrapper one reusable home instead
+   of a closure that could shard if a fourth consumer emerges.
+
+   Behaviour is byte-identical to the original closure: iterate only
+   over the OVERLAP of the two arrays (a longer local tail is preserved
+   unchanged — the extra local messages have no server counterpart to
+   merge from), delegate every per-message merge to
+   _mergeTranslationFields, and return the total field count merged so
+   callers can gate their log line / repaint flag.
+
+   Pure reducer over two arrays; no DOM, no globals, load-order-safe.
+   ═══════════════════════════════════════════════════════════════════ */
+function _mergeServerTranslations(sourceMsgs, destMsgs) {
+  if (!Array.isArray(sourceMsgs) || !Array.isArray(destMsgs)) return 0;
+  const overlap = Math.min(sourceMsgs.length, destMsgs.length);
+  let merged = 0;
+  for (let i = 0; i < overlap; i++) {
+    merged += _mergeTranslationFields(destMsgs[i], sourceMsgs[i]);
+  }
+  return merged;
+}
+if (typeof window !== 'undefined') window._mergeServerTranslations = _mergeServerTranslations;

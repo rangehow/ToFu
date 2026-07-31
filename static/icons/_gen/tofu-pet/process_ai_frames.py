@@ -14,9 +14,14 @@ image tool, one img2img edit per pose off ai/hero_v1.png — see JOURNAL
   ways, all measured on the shipped frames:
 
     · SIZE WOBBLE. Scale spanned 0.1837–0.2319 (26%). A rigid facial feature
-      (blush cheek-to-cheek span) therefore varied 34.5% across the 22 frames
-      and 9.7% within walk1..4 alone — i.e. the character breathed a tenth of
-      its own width 13 times a second while walking. Read as "glitching".
+      (blush cheek-to-cheek span) therefore varied 16.5% across the frames that
+      share the character's stance, and 9.7% within walk1..4 alone — i.e. the
+      character breathed a tenth of its own width 13 times a second while
+      walking. Read as "glitching". (Same-stance is the population that matters:
+      scratch1/scratch2 are deliberate stretch/squash extremes whose size SHOULD
+      differ. Over all 22 frames the figure was 73.8% before / 50.0% after, but
+      most of that is pose amplitude the artist drew, not wobble — see the
+      scale-fidelity note below.)
     · LATERAL TELEPORT. Re-centring on the INK bbox means asymmetric FX (the
       thinking bubble, alert/celebrating sparkles) shove the BODY sideways: the
       body centre sat −2.20..+0.06 px off sprite centre, an 8%-of-width jump
@@ -27,6 +32,15 @@ image tool, one img2img edit per pose off ai/hero_v1.png — see JOURNAL
   The raw masters are NOT at fault and must not be redrawn: body width across
   walk1..4 varies only 1.2% in the raws vs 6.4% shipped. The defect was 100%
   downstream, so the fix is here.
+
+  THE CORRECTNESS CRITERION IS SCALE FIDELITY, NOT SIZE EQUALITY. Poses are
+  allowed to differ in size — the artist drew scratch1 turned/compressed and
+  scratch2 squashed wide. What must hold is that every shipped frame is its
+  master times the SAME constant: measured shipped/master body-width ratio is
+  0.17113..0.17288 against S=0.171674 (max 0.70% deviation), and the two
+  extreme poses deviate +0.10% / -0.31% — LESS than the ordinary frames — so
+  their 0.56 and 1.56 aspect ratios are handled correctly rather than being
+  mangled. Any size difference that survives this check is the drawings'.
 
   Both fixes are one idea: measure the CHARACTER, not the ink. For every frame
   we locate the BODY (the largest opaque connected component — the tofu cube,

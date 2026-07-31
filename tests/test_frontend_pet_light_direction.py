@@ -414,9 +414,15 @@ def test_entering_a_walk_asserts_facing():
 #  so ITS OWN longest side hit MAX_SIDE. The scale factor was therefore a
 #  FUNCTION OF THE POSE (0.1837–0.2319, a 26% spread), which broke the
 #  character three ways at once:
-#    · SIZE WOBBLE — blush cheek-to-cheek span varied 34.5% across frames and
-#      9.7% within walk1..4, i.e. the pet breathed a tenth of its own width 13
-#      times a second while walking. This is what "glitching out" looked like.
+#    · SIZE WOBBLE — blush cheek-to-cheek span varied 16.5% across the frames
+#      that share the character's stance, and 9.7% within walk1..4, i.e. the pet
+#      breathed a tenth of its own width 13 times a second while walking. This
+#      is what "glitching out" looked like. (Population matters: over all 22
+#      frames the figure was 73.8% before / 50.0% after, but scratch1/scratch2
+#      are deliberate stretch/squash extremes whose size SHOULD differ — they
+#      are excluded from the stance set below for exactly that reason, and
+#      test_the_pipeline_scales_every_frame_by_the_SAME_factor covers all 22
+#      with the criterion that actually applies to them.)
 #    · LATERAL TELEPORT — re-centring on the INK bbox let asymmetric FX
 #      (thinking bubble, sparkles) shove the BODY sideways by up to 2.27px on a
 #      30px sprite: an 8%-of-width jump fired by a MOOD change, nothing moving.

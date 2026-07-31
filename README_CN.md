@@ -54,6 +54,11 @@ Tofu 是一个**完全自托管的 AI 助手**，一条命令即可启动。它�
 > **macOS —— 想要点开即用的桌面应用？** 不走上面的 `install.sh`，可到[最新 Release](https://github.com/rangehow/ToFu/releases/latest)下载 `.dmg`，并按你的芯片选择：
 > Apple 芯片（M1/M2/M3…）选 **`Tofu-*-macos-arm64.dmg`**，Intel Mac 选 **`Tofu-*-macos-x86_64.dmg`**。
 
+> **给已运行的服务器再添一台机器？** 完全不用回到 GitHub：运行中的 Tofu 服务器自己就能托管安装包。
+> 在应用里打开**本地控制**（桌面版那一行），下载按钮会直接从你的服务器给出匹配这台机器的安装包 ——
+> 由后台镜像自最新 Release（Windows/macOS），或在服务器上直接构建（Linux，从已提交的代码树经
+> `POST /api/v1/desktop/build`）。文件相同，但不再依赖公网 GitHub 链路。
+
 就这一步。每个方式都会自动处理运行时、依赖、数据库、浏览器引擎，并启动服务器 —— 无需任何参数，无需后续操作。Linux/macOS 上安装器默认走 [uv](https://github.com/astral-sh/uv) 快速路径（预编译 wheel，约 1–2 分钟），在较旧系统（glibc < 2.28）上自动回退到 conda；可用 `--use-conda` 强制走 conda。数据库默认使用 **SQLite**（零配置）；仅当你需要 PostgreSQL 的更高并发（100+ 用户）时，才在命令后加 `--with-postgres`。
 
 > 想预设 API 密钥、改端口、或安装失败需要恢复？所有可选参数和故障排查方案都在 **[docs/INSTALL.md](docs/INSTALL.md)**。

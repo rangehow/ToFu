@@ -1,3 +1,8 @@
+### 2026-07-31(续·历史清扫已执行:16→14,验收①②全过) — owner 一键拍板「P+R 全做」;`pt_50c0ee26faac44fc` DONE(迁移 `6b38effb` + 执行 + 复扫;备份 `data/migration_backups/reaper_terminal_cleanup_1785500530.json`)
+
+- **执行账(与干跑逐条一致,零意外):** 6 条全部写入双存储 —— **R×4**(`030b3df9`/`f4482c27`/`d2805477`/`257f050d`:messages + mirror meta + task_results metadata 三处 `aborted→'error'`,error envelope 保留)+ **P×2**(`ae7bbe38`/`4fee9563`:messages + mirror meta 删 `error`,`finishReason='stop'` 不动;其 task_results 行本就干净,正确地未触碰)。
+- **验收复扫(票面判据,按消息终态):** ①全库 `error.context='stuck-task-reaper'` 剩 14 条,`finishReason` 分布 **`{'error': 14}`** —— 一律系统 reap 语义,零例外;②两条前 P 消息逐条核验 `error` 已删且 `'stop'` 完整 —— 归属违规 **9→0**(另 7 条 `fr='error'` 带 envelope 者按保守分类即为其自身墓碑,日志窗口外不可证伪的不碰);4 个 R 任务的 task_results 同步复核全 PASS;二次 apply 空转(幂等)。
+- **由此,pt_bf93496e98b9441e 的全链验收闭环:** 代码(F1/F2/F3,`3bb877f4`)保证**新**终态写入收敛 + 本迁移把**存量**改成同一语义 ⇒ 「复扫全库不许有例外」对存量与增量同时成立。剩余唯一挂起项仍是 B(`7aa67435` run_command 心跳修复未上线)等 owner 重启验证。
 ### 2026-07-31(续·「连接中…」窗口可停止:启动停止 affordance 三管线收敛 + 回滚语义泛化进共享 helper) — owner 实测抓出最后死角:生成启动 POST 窗口 busy 谓词全假 ⇒ 按钮是发送形态且空输入 early-return = **死点击**;修复 `pt_fa32a2351b3840ad`(5 文件;新套件 **7/7**,失败先行 **7 红**,**NEUTER×2 各咬各的**,相邻环 **58/58** + 全族+闸 **30/30**)
 
 - **死角的精确形状(证据链):** 非翻译路径渲染「连接中…」后,POST 要等 `_buildConvSettings` + `Api.chat.send` 两个串行 RTT 才注册 activeStreams/activeTaskId ⇒ `updateSendButton` 谓词全假 ⇒ 发送形态按钮;而输入框已清空,`sendMessage` 对空输入 early-return —— **服务器最慢的那几秒、用户最想反悔的那几秒,点按钮毫无反应**。`_sendAbortCtrl` 明明存在却只接了 90s 超时。regenerate / edit-resend 的「连接中…」窗口同型。

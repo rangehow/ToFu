@@ -278,8 +278,13 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
         anthropic_translator = AnthropicSSETranslator(model=_model_name)
         url = anthropic_messages_url(base_url)
         if oauth == 'claude':
-            from lib.oauth.outbound import claude_oauth_url
+            from lib.oauth.outbound import apply_claude_cloak, claude_oauth_url
             url = claude_oauth_url(url)
+            # 2026 cloaking (billing header / static prompt / tool rename) at
+            # the Anthropic-body boundary; the per-request reverse map rides
+            # the translator so response tool names are restored.
+            body, _cloak_reverse = apply_claude_cloak(body)
+            anthropic_translator.tool_name_reverse = _cloak_reverse
         logger.debug('%s [Anthropic] Translated request for Messages API', log_prefix)
     else:
         # OpenAI path serialises `body` verbatim (session.post(json=body)), so

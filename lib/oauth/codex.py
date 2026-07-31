@@ -141,8 +141,8 @@ def codex_exchange_code(code: str, pkce_verifier: str) -> dict | None:
             raise OAuthExchangeError(
                 'OpenAI returned no access_token', status_code=resp.status_code)
 
-        # Parse JWT to get account info
-        email, account_id = _parse_jwt_claims(id_token)
+        # Parse JWT to get account info + subscription plan
+        email, account_id, plan_type = _parse_jwt_claims(id_token)
 
         token_data = {
             'type': 'codex',
@@ -151,6 +151,7 @@ def codex_exchange_code(code: str, pkce_verifier: str) -> dict | None:
             'id_token': id_token,
             'account_id': account_id,
             'email': email,
+            'plan_type': plan_type,
             'expire': time.time() + expires_in,
             'expires_in': expires_in,
         }
@@ -189,7 +190,7 @@ def codex_store_token(data: dict) -> dict:
             status_code=0, detail=json.dumps(data)[:300])
     id_token = data.get('id_token', '')
     expires_in = data.get('expires_in', 3600)
-    email, account_id = _parse_jwt_claims(id_token)
+    email, account_id, plan_type = _parse_jwt_claims(id_token)
     token_data = {
         'type': 'codex',
         'access_token': access_token,
@@ -197,6 +198,7 @@ def codex_store_token(data: dict) -> dict:
         'id_token': id_token,
         'account_id': account_id,
         'email': email,
+        'plan_type': plan_type,
         'expire': time.time() + expires_in,
         'expires_in': expires_in,
     }
@@ -260,20 +262,32 @@ def codex_refresh_token(refresh_tok: str = None) -> dict | None:
                 logger.error('[Codex OAuth] No access_token in refresh response')
                 return None
 
-            email, account_id = _parse_jwt_claims(id_token)
+            email, account_id, plan_type = _parse_jwt_claims(id_token)
 
             stored = load_token('codex') or {}
+            old_plan = stored.get('plan_type', '')
             stored.update({
                 'access_token': access_token,
                 'refresh_token': new_refresh,
                 'id_token': id_token,
                 'account_id': account_id or stored.get('account_id', ''),
                 'email': email or stored.get('email', ''),
+                'plan_type': plan_type or old_plan,
                 'expire': time.time() + expires_in,
                 'expires_in': expires_in,
                 'last_refresh': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
             })
             save_token('codex', stored)
+            if plan_type and plan_type != old_plan:
+                # Plan changed on refresh (upgrade/downgrade) — re-gate the
+                # managed provider's model table (idempotent).
+                try:
+                    from lib.oauth.outbound import provision_oauth_provider
+                    provision_oauth_provider('codex', plan_type=plan_type)
+                    logger.info('[Codex OAuth] Plan changed %s → %s, re-provisioned',
+                                old_plan or '?', plan_type)
+                except Exception as e:
+                    logger.warning('[Codex OAuth] plan-change re-provision failed: %s', e)
             logger.info('[Codex OAuth] Token refreshed (expires_in=%ds)', expires_in)
             return stored
 
@@ -627,25 +641,29 @@ def _explain_exchange_failure(status: int, body: str, provider: str) -> str:
     return 'Token exchange failed (HTTP %d: %s).' % (status, upstream or 'unknown error')
 
 
-def _parse_jwt_claims(id_token: str) -> tuple[str, str]:
-    """Parse JWT ID token to extract email and account_id.
+def _parse_jwt_claims(id_token: str) -> tuple[str, str, str]:
+    """Parse JWT ID token to extract email, account_id and subscription plan.
 
     Returns:
-        (email, account_id) tuple.
+        (email, account_id, plan_type) triple — plan_type is OpenAI's
+        ``chatgpt_plan_type`` claim (free/plus/pro/team/business/…), '' when
+        absent. Drives the managed provider's model gating (CLIProxyAPI
+        parity).
     """
     if not id_token:
-        return '', ''
+        return '', '', ''
     try:
         parts = id_token.split('.')
         if len(parts) < 2:
-            return '', ''
+            return '', '', ''
         payload = parts[1] + '=' * (4 - len(parts[1]) % 4)
         claims = json.loads(base64.urlsafe_b64decode(payload))
         email = claims.get('email', '')
         # OpenAI stores account info in custom claim
         auth_info = claims.get('https://api.openai.com/auth', {})
         account_id = auth_info.get('chatgpt_account_id', claims.get('sub', ''))
-        return email, account_id
+        plan_type = auth_info.get('chatgpt_plan_type', '')
+        return email, account_id, plan_type
     except Exception as e:
         logger.debug('[Codex OAuth] Failed to parse JWT: %s', e)
-        return '', ''
+        return '', '', ''

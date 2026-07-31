@@ -1,3 +1,11 @@
+### 2026-07-31(续·desktop egress 设计稿落地：复用既有桥,自审抓回两个规格错误) — owner 拍板「方案 2 收敛为 desktop_agent 新增 egress 命令」;设计稿 `docs/DESKTOP_EGRESS_DESIGN.md`(epic `pt_4ea6bf05deaa46f0`,claimed)
+
+- **架构一句话:** 新增 `lib/desktop/egress.py` 路由层(直连探测→选 agent→bridge 命令) + agent 侧 `_egress.py` 两个命令(`egress_http` 一次性 / `egress_http_stream` 复用 RWA P2 流帧通道),其余全部走既有接缝(bridge 用户作用域/注册帧/拼帧去重)。
+- **自审抓回的两个规格错误(都是回源核对才发现的):** ①计费头 CCH 我写成了 sha256(payload) 前 5 位——回读 `generateBillingHeader` 才发现 **OAuth token 走签名分支固定 `cch=00000`**,payload-hash 只用于 API-key 路(`useCCHSigning := oauthToken || …`);②探测方式从「GET 根路径」改为「POST 真实端点不带 auth」——根路径 403 是 WAF 噪音,**401 才是「应用活着只是没认证」的硬证据**。
+- **真实环境约束(不写进设计就会在实施时咬人):** ①bridge `_COMMAND_TTL_S=90s` 对 30 分钟 LLM 流是真杀手,必须按命令类型覆盖 TTL(stream 1800s);②agent 流执行必须像 `_start_project_run_streamed` 一样脱离 poll 线程,否则 15s 心跳窗后判离线;③**Clash 系统代理不写 env 变量,Python requests 读不到** —— agent 代理发现必须加 OS 层(Windows 注册表/macOS scutil),否则方案在用户机器上空转;④token 是全局存储不属任何用户,egress 的 user_id 只能取调用方会话上下文。
+- **cloaking 移植规格(§5)逐项回源核对过:** 9 个 beta 旗标、14 项工具名 TitleCase 映射(响应侧按每请求 reverseMap 恢复,CLIProxyAPI 注释警告全局反映射会误伤)、X-Stainless 套件、伪 user_id。开放问题四个(O1 Bearer vs x-api-key 矛盾 / O2 Tofu 自有工具名是否在风控白名单 / O3 curl_cffi 对 chatgpt.com 是否必需 / O4 rush 轮询)全部标注「实现时实测定案」。
+- **分片:** S1 cloaking+plan_type(纯离线可验)→ S2 egress_http+登录刷新闭环 → S3 流式+TTL → S4 探测+前端。等 owner 审设计稿后动工。
+
 ### 2026-07-31(续·重启脚本实例锁竞态:端口空了 ≠ 旧进程死了) — 接脑派回给我自己的票 `pt_0c1d75f7eb824467`;**票是白天真实事故留下的:我 18:10 的重启就被这个竞态咬死过一次**(commit `217255e4`,2 文件 +252/-16;新套件 **6/6**,失败先行 **4 红**,**NEUTER×2 各咬各的**(2/2))
 
 - **事故原样:** 旧进程 285 线程,优雅关闭比「端口释放」慢 ~10s;脚本 [2/5] 只等端口 ⇒ [3/5] 18:10:15 拉起 ⇒ 18:10:19 撞实例锁(`[Lock] instance lock held by a LIVE local server pid=3459968`)⇒ 新实例死,**脚本不重试**,重启静默失败(最终由别的路径在 18:12:45 拉起)。**「端口空了」只是「不再 accept」,不是「资源已还」。**

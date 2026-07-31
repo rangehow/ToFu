@@ -127,9 +127,13 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
                 else:
                     extra_headers['anthropic-beta'] = _ttl_beta
 
+    _cloak_reverse = None
     if _anthropic:
         from lib.llm.anthropic_outbound import openai_body_to_anthropic
         body = openai_body_to_anthropic(body)
+        if oauth == 'claude':
+            from lib.oauth.outbound import apply_claude_cloak
+            body, _cloak_reverse = apply_claude_cloak(body)
 
     if log_prefix:
         logger.debug('%s POST %s model=%s msgs=%d', log_prefix, url, model, len(messages))
@@ -223,6 +227,11 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
     if _anthropic:
         from lib.llm.anthropic_outbound import anthropic_response_to_openai
         data = anthropic_response_to_openai(data)
+        if _cloak_reverse:
+            from lib.oauth.outbound import restore_claude_tool_names
+            for _ch in data.get('choices') or []:
+                restore_claude_tool_names(
+                    (_ch.get('message') or {}).get('tool_calls'), _cloak_reverse)
     choices = data.get('choices') or []
     if not choices:
         raise Exception(

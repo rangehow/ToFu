@@ -450,6 +450,43 @@ _SCALE_FIDELITY_PX = 0.35
 _RIGID_TOL_PX = 1.0
 
 
+# ── The MASTERS are private, so master-dependent guards must degrade to a skip ──
+# The raw 1024² poses live under a `_candidates` path segment, which export.py
+# lists in ALWAYS_EXCLUDE_DIRS ("raw AI-gen asset candidates, review-only,
+# multi-MB"). They are deliberately NOT published: 5.7MB of review art that the
+# public build has no use for, since it ships the finished frames.
+#
+# But tests/ IS published, and so is the pipeline. A guard that re-derives the
+# global scale from the masters therefore has no subject in the exported tree
+# and raised FileNotFoundError there — 3 hard failures introduced by the very
+# batch that added them (measured: 1 pre-existing failure before, 4 after).
+#
+# The masters cannot simply be shipped (that reverses a deliberate size/privacy
+# decision) and the guards must not be deleted (they are the anti-regression
+# bound for the whole size-constancy fix). So the split is by SUBJECT
+# AVAILABILITY: assertions that read only the SHIPPED frames run everywhere;
+# assertions that need the masters run wherever the masters exist — which is
+# every private checkout, i.e. every place the pipeline can actually be re-run
+# and thus every place the invariant could be broken.
+def _require_masters():
+    """Skip when the raw masters are absent (an exported tree).
+
+    NOT a blanket try/except: it checks the ONE precondition and says why. A
+    guard silently passing on a tree where its subject is missing would be the
+    worse outcome — that is how a green suite stops meaning anything.
+    """
+    sys.path.insert(0, str(PIPELINE.parent))
+    import process_ai_frames as P
+
+    if not P.RAW_DIR.is_dir() or not any(P.RAW_DIR.glob("*.png")):
+        pytest.skip(
+            f"raw masters absent ({P.RAW_DIR}) — export.py strips `_candidates` "
+            "from every published build, so this master-derived assertion has "
+            "no subject here. It runs in every private checkout, which is "
+            "everywhere the pipeline can be re-run.")
+    return P
+
+
 def _body_mask(path):
     """The BODY as a boolean mask: the largest opaque connected component.
 
@@ -551,8 +588,7 @@ def test_the_pipeline_scales_every_frame_by_the_SAME_factor():
     from PIL import Image
     from scipy import ndimage
 
-    sys.path.insert(0, str(PIPELINE.parent))
-    import process_ai_frames as P
+    P = _require_masters()
 
     def body_width(a):
         solid = a[..., 3] > 60
@@ -717,8 +753,7 @@ def test_NEUTER_per_frame_normalisation_is_caught(tmp_path):
     from PIL import Image
     from scipy import ndimage
 
-    sys.path.insert(0, str(PIPELINE.parent))
-    import process_ai_frames as P
+    P = _require_masters()
 
     def old_style(name):
         raw, deg = P.FRAME_SOURCES[name]
@@ -755,8 +790,7 @@ def test_NEUTER_ink_centred_frames_are_caught(tmp_path):
     from PIL import Image
     from scipy import ndimage
 
-    sys.path.insert(0, str(PIPELINE.parent))
-    import process_ai_frames as P
+    P = _require_masters()
 
     keyed, metrics = {}, {}
     for name in ("idle", "thinking", "alert", "celebrating"):
@@ -895,7 +929,14 @@ def test_apply_light_keeps_only_art_independent_channels():
 
 def test_shipped_frames_match_the_pipeline():
     """NO SECOND COPY: the on-disk frames must match the processing pipeline
-    exactly — a hand-edited frame desynchronises the character between poses."""
+    exactly — a hand-edited frame desynchronises the character between poses.
+
+    Master-dependent: `--check` re-renders every frame from the raw poses, so it
+    cannot run where export.py stripped them (see _require_masters). This one
+    failed in exported trees even BEFORE the size-constancy batch — it is the
+    original instance of the same subject-availability problem.
+    """
+    _require_masters()
     r = subprocess.run(
         [sys.executable, str(PIPELINE), "--check"],
         capture_output=True, text=True, cwd=str(REPO), timeout=120,

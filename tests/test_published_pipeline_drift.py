@@ -41,21 +41,22 @@ instead of three unreleased versions later.
 
 WHY BYTE-EQUALITY IS THE RIGHT ASSERTION
 ----------------------------------------
-Only because it was measured to be achievable. ``export.py``'s sanitizer is run
-against each guarded path here and returns the input unchanged:
+Only because it was measured to be achievable. An opensource export applies a
+CHAIN of transforms (``export.py`` 2488-2490): restore whitelisted keep-files,
+then ``ruff check --fix --unsafe-fixes`` over the whole tree, then verify. The
+composed chain was measured to be the IDENTITY on every guarded path, and
+``test_guarded_paths_survive_the_whole_export_transform_chain`` keeps it that
+way — modelling only the sanitizer would miss ruff, which really does get a vote
+on ``scripts/release_assets.py``.
 
-    _sanitize_source_opensource(open(p).read(), p) == open(p).read()   # all True
-
-for ``.github/workflows/build-desktop.yml``, ``.github/workflows/ci.yml`` and
-``scripts/release_assets.py`` — they contain no secret, endpoint or internal
-path to scrub. So "published == local" is a real invariant for these files, not
-an approximation, and any weaker comparison (parse-and-compare-fields) would
+So "published == local" is a real invariant for these files, not an
+approximation, and any weaker comparison (parse-and-compare-fields) would
 re-admit the exact bug: a field nobody thought to compare.
 
-Do NOT extend ``_GUARDED_PATHS`` to a file the sanitizer rewrites — this test
-would then be permanently red for a legitimate reason, and a permanently-red
-guard gets muted, which is how a suite goes blind. Add such a file only with a
-sanitize-then-compare variant.
+Do NOT extend ``_GUARDED_PATHS`` to a file the export rewrites — this test would
+then be permanently red for a legitimate reason, and a permanently-red guard
+gets muted, which is how a suite goes blind. Add such a file only with a
+transform-then-compare variant.
 
 WHY BOTH REMOTES
 ----------------
@@ -179,14 +180,8 @@ def test_published_release_pipeline_matches_local_source(_network, repo, branch,
         )
 
 
-def test_guarded_paths_survive_the_export_sanitizer():
-    """Byte-equality above is only a valid invariant for unsanitized files.
-
-    export.py rewrites secrets / endpoints / internal paths on the way out. If a
-    guarded file ever starts being rewritten, the drift test above would go red
-    for a legitimate reason and get muted. This pins the precondition instead,
-    so the failure names the real cause.
-    """
+def _load_export():
+    """Import export.py as a module (it is not on the import path)."""
     import importlib.util
 
     spec = importlib.util.spec_from_file_location('_export_mod', _ROOT / 'export.py')
@@ -195,15 +190,111 @@ def test_guarded_paths_survive_the_export_sanitizer():
         spec.loader.exec_module(mod)
     except SystemExit:
         pass
+    return mod
 
+
+def test_guarded_paths_survive_the_whole_export_transform_chain():
+    """Byte-equality above is only valid for files the export does not rewrite.
+
+    The precondition is NOT "the sanitizer leaves it alone" — that models only
+    the first of the transforms an opensource export applies. ``export.py``
+    (2488-2490) runs, in order:
+
+        _restore_opensource_kept_files(dest)   # copy whitelisted files back
+        _run_ruff_autofix(dest)                # ruff check --fix --unsafe-fixes
+        _verify_opensource(dest)
+
+    ``scripts/release_assets.py`` is a ``.py`` file sitting under that autofix,
+    so ruff — not just the sanitizer — decides whether its published bytes match
+    the local ones. Modelling only the sanitizer would leave the drift test able
+    to go red for a LEGITIMATE reason (ruff reformatted the shipped copy), and a
+    guard that is red for a legitimate reason gets muted, which is exactly the
+    blindness this module exists to prevent.
+
+    So this asserts the composed transform is the identity. The ``.yml`` files
+    are unaffected by ruff, which is why they pass trivially — but they are
+    still run through the chain rather than special-cased, so the day ruff (or
+    any future step) grows a YAML formatter, this fails instead of the drift
+    test.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+
+    mod = _load_export()
     sanitize = getattr(mod, '_sanitize_source_opensource', None)
     assert sanitize is not None, 'export.py no longer exposes _sanitize_source_opensource'
 
+    # Mirror _run_ruff_autofix's real argv — in particular --unfixable F401,F811,
+    # which is load-bearing there (it stops ruff deleting facade re-exports).
+    ruff_argv = ['python', '-m', 'ruff', 'check', '--fix', '--unsafe-fixes',
+                 '--unfixable', 'F401,F811']
+
     for path in _GUARDED_PATHS:
         original = (_ROOT / path).read_text(encoding='utf-8')
-        assert sanitize(original, path) == original, (
-            f'{path} is now REWRITTEN by the export sanitizer, so its published '
-            'copy can never be byte-identical to the local one. Either drop it '
-            'from _GUARDED_PATHS or compare the sanitized text instead of the '
-            'raw text.'
+
+        # Stage 1 — sanitizer.
+        staged = sanitize(original, path)
+        assert staged == original, (
+            f'{path} is REWRITTEN by the export sanitizer, so its published copy '
+            'can never be byte-identical to the local one. Either drop it from '
+            '_GUARDED_PATHS or compare the sanitized text instead of raw text.'
+        )
+
+        # Stage 2 — ruff autofix, run on a real temp copy at the same relative
+        # path so per-file-ignores in ruff.toml resolve the way they do on the
+        # exported tree.
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(staged, encoding='utf-8')
+            shutil.copy2(_ROOT / 'ruff.toml', Path(td) / 'ruff.toml')
+            try:
+                subprocess.run(ruff_argv + [str(target)], cwd=td,
+                               capture_output=True, timeout=120)
+            except (OSError, subprocess.SubprocessError) as e:
+                pytest.skip(f'ruff unavailable ({e}) — transform chain NOT verified')
+            after = target.read_text(encoding='utf-8')
+
+        assert after == original, (
+            f'{path} is REWRITTEN by _run_ruff_autofix during the opensource '
+            'export, so the published bytes will never equal the local bytes and '
+            'the drift test above would be permanently red for a LEGITIMATE '
+            'reason.\n'
+            'Fix the source so ruff has nothing to change, or compare the '
+            'post-transform text instead of the raw text. Do NOT mute the drift '
+            'test.'
+        )
+
+
+def test_guarded_paths_are_actually_published_by_the_export():
+    """A guarded file that the export never ships is a guard that can only fail.
+
+    ``scripts/`` is an opensource-excluded DIRECTORY (it holds benchmark scripts
+    with internal paths). ``scripts/release_assets.py`` reaches the public tree
+    only because it is listed by hand in ``_OPENSOURCE_KEEP_FILES`` and copied
+    back by ``_restore_opensource_kept_files``.
+
+    That whitelist has no guard of its own. Add a second script the pipeline
+    depends on, forget the list entry, and the published workflow calls a file
+    that is not there — the same silent break as the stale workflow, one level
+    down. This closes it by asserting every guarded path is genuinely reachable
+    in the published tree: either not excluded at all, or excluded-but-restored.
+    """
+    mod = _load_export()
+    should_exclude = getattr(mod, '_should_exclude', None)
+    keep_files = getattr(mod, '_OPENSOURCE_KEEP_FILES', None)
+    assert should_exclude is not None, 'export.py no longer exposes _should_exclude'
+    assert keep_files is not None, 'export.py no longer exposes _OPENSOURCE_KEEP_FILES'
+
+    for path in _GUARDED_PATHS:
+        reason = should_exclude(path, os.path.basename(path), 'opensource')
+        if reason is None:
+            continue  # shipped directly
+        assert path in keep_files, (
+            f'{path} is EXCLUDED from the opensource export ({reason}) and is NOT '
+            'in _OPENSOURCE_KEEP_FILES, so it will never appear in the published '
+            'tree. The drift guard above would then report it missing forever, '
+            'and — more importantly — the published release pipeline would call '
+            'a file that does not exist. Add it to _OPENSOURCE_KEEP_FILES.'
         )

@@ -2521,6 +2521,7 @@ var _i18n = {
   'folderDrop.addRootConfirm': { zh: '「{dir}」尚未加入工作区。要将其添加为项目文件夹并保存到这里吗？', en: '“{dir}” isn’t in your workspace yet. Add it as a project folder and save here?' },
   'folderDrop.addAndSave': { zh: '添加并保存', en: 'Add & save' },
   'folder.renameTitle': { zh: '重命名文件夹', en: 'Rename Folder' },
+  'folder.renameFailed': { zh: '重命名失败，已恢复原名称', en: 'Rename failed — restored' },
   'folder.ok': { zh: '确定', en: 'OK' },
   'folder.deleteTitle': { zh: '删除文件夹', en: 'Delete Folder' },
   'folder.deleteConfirm': { zh: '确定删除文件夹', en: 'Delete folder' },

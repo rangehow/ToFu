@@ -366,6 +366,16 @@ async function translateMessage(idx) {
   msg._translateDone = false;
   const text = msg.content || "";
   if (!text.trim()) return;
+  /* ★ INSTANT-UI (owner directive 2026-07-31, pt_77ba3f17dedf4b65): paint the
+   *   "翻译中…" indicator on the CLICK FRAME. _isAlreadyChinese below is a
+   *   server round-trip and nothing re-rendered the message until the
+   *   pipeline started after it, so the click read as dead for a whole RTT.
+   *   `_translateDone === false` + no 译文 yet is exactly the state
+   *   translation_indicator.js keys on. */
+  if (activeConvId === conv.id) {
+    const _tmEl = document.getElementById(`msg-${idx}`);
+    if (_tmEl) window.ConvView.apply(conv.id, idx, msg);
+  }
   // Detect target language server-side: if the source is already
   // predominantly Chinese → translate to English, otherwise → Chinese.
   // The CJK-ratio threshold is backend policy (lib/text_lang.py

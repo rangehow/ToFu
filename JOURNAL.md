@@ -1,3 +1,12 @@
+### 2026-07-31(续·S1 落地:cloaking 移植 + codex plan_type,静态提示词对拍抓回两处我自己的字节漂移) — commit `cd10f301`(9 文件 +1270/-79;新套件 **24** + 更新 10,相邻环 **109/109**;失败先行 ImportError 收集红;**NEUTER×3 各咬各的**(计费头/改名表/门控);还原 cmp 逐字节验证)
+
+- **落地的关键架构决定:cloak 在 anthropic 边界单点拥有 system 结构。** `resolve_oauth_request` 从此不动 messages(原 `_prepend_claude_identity` 删除),`apply_claude_cloak` 统一作用于 `openai_body_to_anthropic` 输出——流式(`_sse_core`)、非流式(`chat.py`)、未来的探测路(A3)都是同一个接缝,身份块/计费头/静态提示词/用户 system 挪移只有一个 owner,不可能双注入。
+- **对拍抓回的两处字节漂移:** 静态提示词我凭记忆写,脚本与 CLIProxyAPI 原文逐字节 diff 抓回 ①Intro「helping you」→「helping **the user**」②System「limited to」→「limited **by**」——指纹规格里这类漂移就是被检测面,**凭记忆抄「应该一样的文本」必然漂,对拍是唯一可信路径**。
+- **指纹算法冻结向量:** sha256(salt+t[4]+t[7]+t[20]+version)[:3] 五组向量(`2ca`/`0b1`/`257`/`257`/`fda`)进套件;Python 字符串 codepoint 语义与 Go rune 一致,「短」与空串同值 `257` 交叉印证填充分支。
+- **测试自己抓自己的一处 fixture 坑:** `test_preexisting_titlecase_not_in_reverse_map` 首跑红——fixture 的 `tool_choice.name='bash'` 没清,反向表正确地记了一笔,测试意图与 fixture 不符;实现无辜,fixture 补一行。**「红先问是产品错还是测试错」的又一例。**
+- **codex 侧:** plan_type 进 token 记录,provision 按 free/team/plus/pro 门控(business/go→team,未知→pro),刷新时 plan 变化幂等重 provision;旧表 gpt-5.2/5.1/5-codex 全部退役(CLIProxyAPI v7 registry 同步 2026-07-31)。
+- **验收边界(如实):** 本批是「请求形状」改造,离线全绿;O1(Bearer vs x-api-key)、O2(Tofu 自有工具名是否被风控标记)、O3(curl_cffi 必要性)仍需 S2 真 token 实测定案。服务器重启前旧代码仍在跑。
+
 ### 2026-07-31(续·desktop egress 设计稿落地：复用既有桥,自审抓回两个规格错误) — owner 拍板「方案 2 收敛为 desktop_agent 新增 egress 命令」;设计稿 `docs/DESKTOP_EGRESS_DESIGN.md`(epic `pt_4ea6bf05deaa46f0`,claimed)
 
 - **架构一句话:** 新增 `lib/desktop/egress.py` 路由层(直连探测→选 agent→bridge 命令) + agent 侧 `_egress.py` 两个命令(`egress_http` 一次性 / `egress_http_stream` 复用 RWA P2 流帧通道),其余全部走既有接缝(bridge 用户作用域/注册帧/拼帧去重)。

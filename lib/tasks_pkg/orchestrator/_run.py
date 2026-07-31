@@ -125,6 +125,9 @@ from lib.tasks_pkg.orchestrator._round_gates import check_round_gates
 from lib.tasks_pkg.orchestrator._round_message_hygiene import (
     run_round_message_hygiene,
 )
+from lib.tasks_pkg.orchestrator._abort_before_tools import (
+    handle_abort_before_tools,
+)
 
 
 
@@ -802,25 +805,14 @@ def run_task(task: dict[str, Any]) -> None:
             # ══════════════════════════════════════════
 
             # ── Abort check before tool execution ──
-            if task['aborted']:
-                rs.abort_phase = f'before_tool_exec_round_{round_num}'
-                rs.exit_reason = f'aborted_before_tools_round_{round_num}'
-                # ★ Remove the assistant message with tool_calls that we just
-                #   appended (line ~879) — since we're skipping tool execution,
-                #   leaving it creates orphaned tool_use blocks without matching
-                #   tool_result.  This causes HTTP 400 on the next turn when
-                #   server_message_store replays the full message history.
-                if messages and messages[-1].get('tool_calls'):
-                    _popped = messages.pop()
-                    logger.info('[%s] Removed trailing tool_calls message (abort) — '
-                                'prevents orphaned tool_use in stored history', tid)
-                    # If it had content alongside tool_calls, keep just the content
-                    if _popped.get('content'):
-                        messages.append({'role': 'assistant', 'content': _popped['content']})
-                        logger.debug('[%s] Re-added assistant content without tool_calls', tid)
-                logger.info('[%s] Task aborted before tool execution at round %d — skipping all tools', tid, round_num)
-                append_event(task, build_event(EventType.ROUND_END,
-                                               roundNum=round_num, reason='aborted'))
+            #   Extracted 2026-07-31 (pt_03f4cdf1 slice 19) to
+            #   lib.tasks_pkg.orchestrator._abort_before_tools — see that
+            #   module's docstring for the orphaned-tool_use HTTP-400
+            #   rationale and the prose-content re-append contract.
+            #   Returns True (task aborted: trailing tool_calls message
+            #   popped, ROUND_END(reason='aborted') emitted) → break.
+            if handle_abort_before_tools(task, rs, messages,
+                                         round_num=round_num, tid=tid):
                 break
 
             # ── Phase 1: Parse all tool_calls ──

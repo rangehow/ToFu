@@ -150,6 +150,46 @@ class TestStripEmptyTextBlocks:
         assert _strip_empty_text_blocks([]) == []
         assert _strip_empty_text_blocks(None) is None
 
+    def test_warning_log_names_block_locations(self, monkeypatch):
+        """§2 logging discipline: when the strip fires, the log must name WHERE
+        each phantom block lived (message index + role + block index) — the
+        NEXT producer must be findable with one grep, not a guess. (Task
+        76d686cb's producer was never directly proven — no snapshot — so
+        location logging is the only way the next occurrence identifies its
+        seam.)"""
+        import lib.llm_sanitize._messages as _m
+
+        class _Rec:
+            def __init__(self):
+                self.records = []
+
+            def warning(self, fmt, *a, **k):
+                self.records.append(fmt % a if a else fmt)
+
+            def info(self, *a, **k):
+                pass
+
+            def debug(self, *a, **k):
+                pass
+
+        rec = _Rec()
+        monkeypatch.setattr(_m, 'logger', rec)
+        msgs = [
+            {'role': 'system', 'content': 'sys'},
+            {'role': 'user', 'content': [
+                {'type': 'text', 'text': ''},
+                {'type': 'text', 'text': 'reminder'}]},
+            {'role': 'assistant',
+             'content': [{'type': 'text', 'text': ''}],
+             'tool_calls': [{'id': 't', 'type': 'function',
+                             'function': {'name': 'f', 'arguments': '{}'}}]},
+        ]
+        _strip_empty_text_blocks(msgs)
+        joined = '\n'.join(rec.records)
+        assert '#1/user/block0' in joined, f'user location missing: {joined}'
+        assert '#2/assistant/block0' in joined, (
+            f'assistant location missing: {joined}')
+
 
 # ══════════════════════════════════════════════════════════
 #  Layer 2 — build_body end-to-end on the production wire

@@ -122,15 +122,23 @@ def _strip_empty_text_blocks(messages: list) -> list:
         return messages
 
     stripped = 0
-    for msg in messages:
+    locations = []
+    for i, msg in enumerate(messages):
+        role = msg.get('role')
         content = msg.get('content')
         if not isinstance(content, list) or not content:
             continue
         kept = []
-        for block in content:
+        for j, block in enumerate(content):
             if (isinstance(block, dict) and block.get('type') == 'text'
                     and not (block.get('text') or '').strip()):
                 stripped += 1
+                # §2 logging discipline: name WHERE each phantom block lived
+                # (message index + role + block index) so the next producer is
+                # one grep away, not a guessing session (task 76d686cb's
+                # producer was never directly proven — no wire snapshot).
+                if len(locations) < 8:
+                    locations.append(f'#{i}/{role}/block{j}')
                 continue
             kept.append(block)
         if len(kept) == len(content):
@@ -146,8 +154,10 @@ def _strip_empty_text_blocks(messages: list) -> list:
 
     if stripped:
         logger.warning('[build_body] Stripped %d empty text block(s) from '
-                       'message content — strict providers HTTP 400 on them '
-                       '(Kimi: "text content is empty")', stripped)
+                       'message content at %s%s — strict providers HTTP 400 '
+                       'on them (Kimi: "text content is empty")',
+                       stripped, ', '.join(locations),
+                       ' …' if stripped > len(locations) else '')
     return messages
 
 

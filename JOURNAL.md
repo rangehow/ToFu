@@ -1,3 +1,31 @@
+### 2026-07-31(续·真实 swarm 冒烟:三个 commit 第一次在生产上成立,而且停滞腿的收尾超出了预期) — owner 批准后重启生效(新 pid 3276652,18:12:45 启动,晚于全部 commit),两腿冒烟全过;**sleep 自然返回后 agent 照常完成,迟到的 AGENT_COMPLETE 被 master 回调如实记录 —— 与修复前「will NEVER complete」是逐点对立的两条时间线**
+
+- **重启本身就有两个值得记的形状。** ①`restart_15000.sh` 的 self-plug-pull 防护按 PPID 祖先链检测,detached 不够(setsid 只换 session 不换祖先);解法是 `nohup setsid bash -c 'sleep 10; exec …'` —— 本 shell 退出后脚本被 **re-parent 到 init**,祖先链自然干净,防护照原样生效而不是被绕过。②**实例锁竞态真的咬了我们一次**:脚本 18:10:15 重启的新实例在 18:10:19 撞上旧进程的实例锁(旧进程 285 线程,优雅关闭比「端口释放」慢 ~10 秒)而死;pid 3276652 是 18:12:45 由别的路径(非我的脚本)拉起的。**脚本对「旧进程关闭中」没有重试**,已立案。
+- **(b) 长命令完整输出:** `AGENT_COMPLETE agent-coder-smoke-ticker status=completed elapsed=88.1s tokens=11164 rounds=2`(60s 持续输出,30/30 行,exit=0)。对照组:orphans 同形状曾被截成 `[Partial —]`。
+- **(a) 无「无结果」卡片的结构性证据:** 三个死亡签名全程零命中 —— `iter_completions timed out`=0、`Session expired after`=0、`will NEVER complete`=0;driver 在 ticker 完成后**继续**在 silence 上等待(修复前会即刻宣告全场结束)。
+- **(c) 停滞判决,逐行实测的时间线(这是修复后语义的全貌):**
+  | 时刻 | 事件 |
+  |---|---|
+  | 18:24:59 | smoke-silence 进入 `run_command sleep 1000`(零输出) |
+  | **18:39:59** | `[StreamingScheduler] swarm stalled — no activity for 900s (stall_at=900s); still running=['smoke-silence'], quiet agents=[('smoke-silence', 900)]` —— **判决精确落在 900s**,点名谁、多久、为什么 |
+  | 18:40:29 | `shutdown: 1 agent(s) still running after 30s — releasing pool anyway`(有界等待 + 响亮放行) |
+  | 18:40:29 | `marking terminated with 1 agent(s) still in flight (wedged past the shutdown wait) — beacon: agents=1 quiet_for=930s` —— **诚实的终止标记**,不再默默撒谎 |
+  | 18:40:29 | `Driver done — elapsed=935.1s`(修复前恒为 600.0s) |
+  | **18:41:45** | `AGENT_COMPLETE agent-coder-smoke-silence status=completed elapsed=1010.7s` —— sleep 自然返回后 agent 正常写报告(610 字符,自报「not interrupted, exit 0」) |
+- **★ 最有价值的一条不是「判决出现了」,而是「判决没有杀死它」。** shutdown 释放的是**池的调度权**,不是线程;agent 的工具返回后照常走 round 2、写收尾、被 master 回调记录为 completed。修复前的同一点位:`_terminated` + `settled:true` + 「will NEVER complete」+ 面板 `unknown` → 无结果。**「stalled」是判决,不是死刑** —— 这正是 owner 要区分的两件事。
+- **★ 一个诚实的边界,写在这里免得被误读:** 卡在工具里的 agent 永远走不到 agent 级 `before_round`,所以它的 stalled 分支(agent.py 的 `_finalize_with_wrapup`)**结构上不会为它触发** —— 工具阻塞形状由 **driver 级**判决承接(本次实测即此),wrap-up 只对「还在轮询循环里」的停滞 agent 发生。两条腿各自的生效面与当初设计一致,但文档没写清,这里补上。
+- **残留事项:** ①重启脚本的实例锁竞态(旧进程关闭慢 ⇒ 新实例锁冲突死,无重试)已立案;②面板对 stalled agent 的展示仍靠「迟到完成自愈」,没有独立的「已停滞(静默 Ns)」状态 —— 本次靠 agent 自己 1010s 完成兜住了底,若它真死了,卡片语义仍待一张票。
+
+### 2026-07-31(续·终态竞态修复落地:三方写者收敛为同一裁决 + 错误按 _taskId 归属) — `pt_bf93496e98b9441e` DONE;3 处修 + 新套件 7 条,NEUTER×5 各咬各的,相邻环 95/95
+
+- **修复的不是「谁赢」,而是「两个写者写同一个答案」。** 竞态的根治不是定优先级,是让 reaper 与迟到的 `_finalize` **落笔一致** ⇒ 时序从此无关:
+  - **F1 `_finalize.py`**:`task['aborted']` 时先读 `_abort_reason` —— `'stuck_no_progress'` ⇒ `finishReason='error'`(reaper 已写好的裁决,含 `worker_lost` envelope),不再压成 `'aborted'`;用户 Stop 仍旧 `'aborted'`(窄域,套件里有专门的 scope 守卫)。
+  - **F2 `_sync.py`**:reaper 的错误气泡只许答**自己的**尾轮。会话已前进(尾轮是别人的 prompt)时,先按 `_taskId` 扫描收敛到自己已有的气泡(实测里 reaper 线程的第一次 sync 通常已立好墓碑),找不到则**丢弃**(task_results 终态地板仍保 poll 可解),绝不把错误气泡挂到别人的轮次上。判别器是 `_initial_msg_count`:尾部长度 ≠ 任务创建时的消息数 ⇒ 尾部不是自己的 prompt。
+  - **F3 `_sync.py`**:错误按 `_taskId` 归属。①尾部气泡带**别的** `_taskId` ⇒ 那是别人的墓碑,永不填充(legacy 前端占位没有 `_taskId`,不受影响);②正常路径 `if error:` 补了 else —— 无错误结算的任务**清除**自己气泡上的陈旧 error(这正是 idx=15 那条成功回答挂着别人死亡证明的机制:`_sync.py:852` 原先只写不清);③`_merge_terminal_fields` 对 `'error'` 补删除语义 —— 它在 `_TERMINAL_OWNED_FIELDS` 里,缺席本身即裁决,CAS 嫁接必须收敛而不是让陈旧 error 存活;④CAS 重试的嫁接目标同样过归属闸(foreign tail 既不是「frontend 赢了」也不是合法嫁接目标)。
+- **★ 我自己的第一发 NEUTER-C 咬错了测试,根因是「还原」不忠实:** 我只把尾部回退成盲取 `messages[-1]`,却留着我重构后的 `if last_msg is None:` 闸 ⇒ user 尾部**跳过**追加闸直接落到写入路径,把 error 写进了 user 消息 —— 一种**从未存在过的第三种坏行为**,把 T3/T4 也咬红了。忠实的旧行为需要**两处**一起回(盲取尾部 + 旧的 role 检查),改后 NEUTER-C2 精确只咬 T5。**与「构造输入的人必须和写断言的人对一遍参数」同族:NEUTER 也是一种输入构造 —— 它必须还原的是旧行为,不是「看起来像旧代码的文本」。**
+- **验证矩阵(全部在一次性克隆内,共享树零污染):** 无修复基线 6 红 1 绿(绿的那条正是 user-stop scope 守卫);NEUTER×5 隔离测量 —— A(F1)→T1、B(F2)→T3+T4、C2(F3a)→T5、D(F3b)→T6、E(F3-merge)→T7,各咬各的;全绿克隆 7/7。相邻环 95/95(test_stuck_task_reaper / queue_redispatch / billing_settle / abort_* / checkpoint_identity / duplicate_bubble / migration 等 12 套)。**三处基线已红、与本批无关,如实记录:** ①`tests/test_abort_fragment_finish_reason.py`(兄弟未提交 WIP,6 红,等 `_stamp_aborted_fragment_finish_reason` 落地)②`test_rev_cas_migration::test_terminal_owned_fields_cover_all_writes`(干净 HEAD 即红,兄弟的 `_stallNudges` 在途)③`test_chat_manager_migration::test_append_event_phase_tracking`(干净 HEAD 即红)。
+- **验收边界:** 后端改动,**需重启**;重启后按消息终态复扫全库(`error.context='stuck-task-reaper'` ⇒ ①finishReason 一律 `'error'` ②error 归属与 `_taskId` 一致)是票面的最终判据 —— 库里既有的 16 条(4/10/2 分布 + 9 条归属违规)是历史遗留,本修复只保证**新**终态收敛;旧数据清扫若要做需单独立票。B(run_command 心跳修复 `7aa67435` 未上线)仍在等 owner 重启验证。
+
 ### 2026-07-31(续·P2-B:删两行定价数据的爆炸半径,和「按谁的时间计价」) — 自主派单接我自己立的票;两半各自独立交付:退役名三面清理 + 峰时 2× 定价机制**惰性上线**(commit `cd7bc944`,10 文件 +370/-19;新套件 **21/21**(失败先行 **19 红 / 锚 2 绿**),**NEUTER×5 各咬各的**,相邻环 **278/278**)
 
 - **★ 删一行表数据的爆炸半径不止这张表:`model_supports_vision` 的第二级回退读的就是 `DEFAULT_SLOT_CONFIGS`**(`_capabilities.py:244`)。天真删掉 `'deepseek-chat'` 行后,`test_tool_settle_all_lanes` 的视觉前提锚会落入它注释里自己点名防过的陷阱 —— 未知名 permissive-default **True**,no-vision 分支再也测不到。**清理票的第一课:先数这个键在几张表里有读者,再谈删。** 故前提锚换用活着的 `deepseek-v3.2`(同 text-only),另两处引用(cache freeze / continue lossless)实测只走名称谓词,不碰。

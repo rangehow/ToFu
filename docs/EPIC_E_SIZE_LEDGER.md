@@ -14,9 +14,9 @@
 | i18n pack（单语） | `i18n-zh-fa9b8307.js` | 220,982（en 223,102） |
 | core 源总账 | 144 文件 | **4,123 KB**（i18n.js 404KB 已拆出，不在服务 core 内） |
 
-已完成降级（占 core 源 ~2.7%）：`core/cross_tab_sync.js` 53KB（sub-3A,
-`8aa9a1c6`）。**打法教训：先拆的不是最大的——按「好拆」选 vs 按「大」选，
-本表把一切改为按账排。**
+已完成降级：`core/cross_tab_sync.js` 53KB（sub-3A, `8aa9a1c6`）+
+`core/health_stream_timer.js` 62KB（sub-3B, `6baf1083`），合计 115KB（core 源 ~2.8%）。
+**打法教训：先拆的不是最大的——按「好拆」选 vs 按「大」选，本表把一切改为按账排。**
 
 ## `_BUNDLE_FILES` 尺寸 top-20 降级判定（2026-08-01 实测）
 
@@ -36,7 +36,7 @@
 | 12 | ui/conversation_list.js | 71,066 | boot-critical | 侧栏即首屏本体 |
 | 13 | ui/streaming_ui.js | 65,522 | boot-critical | 流式渲染热路径 |
 | 14 | tofu-pet.js | 64,763 | **可降级（与 #6 同族）** | 宠物本体；装饰 160KB 的另一半 |
-| 15 | core/health_stream_timer.js | 61,573 | **降级中（本批）** | sub-3B：5 处闸 + entry-point + manifest move |
+| 15 | core/health_stream_timer.js | 61,573 | **已降级（sub-3B）** | 零 stub（无一次性接线）；闸 + idle prefetch |
 | 16 | ui/streaming_render.js | 57,383 | boot-critical | 流式渲染热路径 |
 | 17 | myday.js | 56,261 | 可降级（第三梯队） | My Day 面板，用户动作触发 |
 | 18 | ui/streaming_swarm_panel.js | 54,946 | 可降级（第三梯队） | swarm 面板，非首屏 |
@@ -48,10 +48,11 @@
 | 日期 | 分片 | commit | 降级文件 | core 压缩态 | feature 压缩态 | 备注 |
 |---|---|---|---|---|---|---|
 | 2026-07-31 | sub-3A | `8aa9a1c6` | cross_tab_sync.js (53KB) | 1,550,424 | 470,760 | stub + 3 闸；事故链见 JOURNAL 2026-08-01 |
+| 2026-08-01 | sub-3B | `6baf1083` | health_stream_timer.js (62KB) | 生产重启前不变（冻结清单） | 同左 | 5 闸 + 零 stub 设计；农场同构构建 2,289,664→2,275,757（−13.9KB 净额，同期兄弟新增 stall_watch 等抵销部分）；生产字节数随重启更新 |
 
 ## 目标线与当前差距
 
 - **目标（暂定）**：core 压缩态 ≤ **1.2 MB**（待 owner 确认）。
 - **当前**：1,550,424 B ⇒ 差距 ~350 KB。
-- **已排队**：health_stream_timer 62KB + tofu-scene+tofu-pet 160KB +
-  tool_rounds 261KB（若普查可行）⇒ 理论可释放 ~480KB，目标可达。
+- **已排队**：tofu-scene+tofu-pet 160KB +
+  tool_rounds 261KB（若普查可行）⇒ 理论可释放 ~420KB，目标可达。

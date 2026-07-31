@@ -1,3 +1,14 @@
+### 2026-08-01(项目大脑「需要回答」面收口 + 每任务「新建对话」:同一问题不再两处渲染) — owner 截图报任务板与「待你处理」重复条目;commit `56190883`(5 文件 +399/-212;迁移套件 **22/22**,前端环 **71/71**,后端+bar 环 **103/104**——1 红证预存;**NEUTER×3 各咬各的**;epic `pt_5d9eee24af0043d0` DONE)
+
+- **定案一句话:** 停摆 epic 的问题 UI(选项 chips + 自由输入)曾同时渲染在任务板 awaiting 泳道与「待你处理」tab——operator 同一问题见两遍。答案面从此唯一:任务板改**紧凑卡**(徽标 + 单 clamp + 「去回答」深链切 tab),完整问题框只在「待你处理」(redesign §D6 deep-link-don't-duplicate 的真正落地)。
+- **「新建对话」的形:** 每张任务卡(open/claimed/blocked/awaiting/done + 待你处理停摆卡)动作行首位挂 messagePlus 钮 → 关面板 → newChat → 预填「epic id + 标题 + read/claim 工具提示」的 kickoff,**绝不自动发送**(沿用 myday quick-action 的既有启动模式,零后端改动)。
+- **顺带抓的潜伏缺口:** attention 深链按钮一直 `Icon('arrowRight')`,而该名**从未在 icons.js 注册表**——Icon() 对未知名静默返 `''`,按钮图标从来没出现过。补 messagePlus 时一并补 arrowRight。
+- **不挂死按钮的判据:** attention 模块的 createConv 钮**条件渲染**——`ProjectBrain._openEpicConversation` 缺席时不画钮(单元 harness 无 project-brain.js 时同样成立),绝不渲染一个点了没反应的东西。
+- **测试迁移(契约变更同 commit):** 板面套件 36 断言改写为「紧凑卡无问题 UI + 深链切 tab + 每卡有新建对话 + 预填内容正确 + 面板关闭」;NEUTER×3 各咬各的(partition 回退→漏 open 泳道红 / 摘 goto 处理器→tab 不切红 / 摘 createConv 委托→newChat 零调用红);新静态守卫钉死 `.pb-question`/`.pb-answer-*`/`answerOpt`/`answerSubmit` 不得回潮(CSS+JS 双查)。
+- **★ 共享树新事故类(立档):我的未提交改动被兄弟的 add-all 提交提前卷走。** styles.css 与 i18n.js 的改动在 `ff214775`/`d8934fa0`(兄弟 epic 的提交)里被发现——内容逐字节无损,git status 因此显示这两个文件「干净」。教训双向:兄弟侧违反 explicit-pathspec 纪律(`git commit -a` 类);我这侧的教训是**提交窗口要压到最短**,长批次里源文件越早单独提交越安全。核对方法:`git show HEAD:<file> | grep <my-key>` 比对内容而非只看 git status。
+- **预存红(独立立案,不在本批修):** `test_live_feed_and_charter_resolve_trailing_slash` 干净 HEAD worktree 同红(feed trailing-slash 查询解析不到已播种事件 + DB 报 no such table),与本批零交集,票 `pt_5b4cb4e1f77e4b59`。
+- **验收边界:** 纯前端,**需重启 + bundle 重建生效**(`_BUNDLE_FILES` 无新增文件,manifest freshness 门会自动触发重建)。
+
 ### 2026-08-01(S4 落地:出口状态面 + codex 流式真探测,epic 代码侧闭环;真机验收清单已就位) — commit S4(10 文件 +657/-3;新套件 **16**(14 后端 + 2 前端 harness),相邻环 **250**;**NEUTER×3 各咬各的**,还原 cmp 逐字节验证)
 
 - **owner 三点坑(先入稿再动工):** ①状态接口绝不同步探测(否则设置页打开卡 5s 白屏)——`egress_status` 只读 300s 探测缓存,无缓存返回 unknown + 后台 warm-up;`agent_no_capability`(agent 在线但没开 --allow-egress)单独可辨——那是默认态,卡片必须明说「重启 agent 加该参数」,否则用户会以为方案坏了;②codex 探测从 SKIPPED 升级为流式真探测(`open_stream` 发 1-token Responses 请求按状态分类——全链路 cloaking+翻译+egress 端到端验证);③pin 选择器端点直接读写 `_pinned_agent` 的 `oauth_egress_agents.json`,不另起存储。
@@ -1190,3 +1201,12 @@
 - **网络事实(owner 实测提供):** api.deepseek.com 从本机直连/代理均 401(活着),与 anthropic/openai 端点(DNS 失败/403)完全不同——S2 不需要等 egress 线。
 - **遗留:** codex 订阅路径的端到端验证需真实 codex token(owner 门);S3 候选=DeepSeek provider 模板/前端 protocol 下拉、web_search 内置工具透传、parallel_tool_calls 实测。两个潜伏 bug 已立票(pt_1e1b2d32 工具名截断无反向映射 / pt_6d749150 codex 存量路径 failed 静默——后者对新协议已修,存量 codex 路径随本批一起骑上新翻译器,实际已一并治愈,待 owner 核销票)。
 - **验收边界:** 服务器重启前旧代码仍在跑;responses 协议需在 provider 配置 protocol='responses' 后生效。
+
+### 2026-07-31(续·responses S3 前端闭环:设置面能表示且不再静默改写第三协议) — owner 复核抓出「后端通了、UI 会主动毁配置」;commit `ff214775`(5 文件 +248/-21;守卫 +6 条,失败先行 **5 红**,**NEUTER×2 各咬各的**(1+1),套件 **30/30**,相邻环 **50/50**)
+
+- **缺口(owner 实测抓出):** `provider_faces.js` 的 face 协议下拉写死 `['anthropic','openai']`——`responses` face 的 select 报首项 'anthropic',`_collectFacesFromDom` 的 `|| 'anthropic'` 兜底把它写回配置 ⇒ 用户在设置页碰任何字段再保存,**工作的 responses provider 被静默翻转到 /messages**。「入口数 ≠ 实现数」同型。
+- **两层根因修法(不是加选项就完事):** ①`_renderFaceRow` 三协议选项 + **未知存量值追加为选中项**(未来第四协议不再踩同坑);②行上加 `data-orig-protocol` 戳记,collect 回落链改为 `select.value → orig 戳记 → 'openai'`(无信息新行才默认)——**「保留原值」代替「坍缩成硬编码」**。
+- **provider 级排查结论:** 保存路径是 `_stgProviders` 整体批发(save_export.js:180),provider.protocol 天然逐字节往返,无毁损;真正的缺口是**默认面 protocol 在 UI 根本没有编辑器**(此前只能模板/provision/手改 JSON)——provider_render.js 补上三协议下拉(同款未知值保留)。
+- **我自己的断言坑(又一次):** provider 级下拉的源码断言连错两发——第一发正则 `\{?pi\}?` 对不上字符串拼接形状,第二发 `'protocol'` 对不上 JS 转义 `\'protocol\'`。**「锚产生行为的那段文本」先要逐字节看清楚再写断言。**
+- **守卫:** 新 6 条进 test_provider_face_ui.py(Node harness 驱动真实 provider_faces.js):三选项+未知保留/HTML 戳记/collect 保留+weak-DOM 回落/provider 级下拉存在性/chip 样式与 i18n;失败先行 5 红(collect 透传条作为 complement 绿);NEUTER-A(摘未知追加)→ 1 红精确;NEUTER-B(摘 orig 回落)→ 1 红精确。
+- **验收边界:** 纯前端,**需重启 + bundle 重建生效**。至此 responses 三协议「wire 验证 + UI 可配且不毁」闭环:S1 提取泛化(`95ac28a1`)+ S2 DeepSeek 实测 8/8 + S3 本批。

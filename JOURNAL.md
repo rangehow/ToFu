@@ -1,3 +1,20 @@
+### 2026-08-01(子夜·stale-manifest 第三次实测发生:这次是在「修复已存在但未部署」的进程里) — owner curl 生产实测抓出 sub-3A 未生效;根因定案 = **部署差**,不是新 bug(Epic-E `pt_3879f00e`,claimed)
+
+- **事故原样(全部实测取证):** owner curl 线上发现:服务的 core bundle(`bundle-a46a7f0b.js`,**23:58:35** 构建)仍含 `_handleCrossTabMsg` 函数体/`claude_dialogue_sync`/`conv-notify`(old shape),feature bundle(`feature-8204ccdc.js`)停在 **14:29** 且不含 cross_tab_sync。而我 23:46:32 改的 manifest(deferral 落地)、23:47:14 改的 feature-loader.js —— **重建发生在 manifest 修改 12 分钟后,用的却是旧清单**。
+- **根因链(时间戳全部核实):** ①服务器 **pid 3276652 启动于 18:12:45**;②freshness 修复 `00e9de0a`(build_bundle 首行 `_refresh_manifest()`)落地于 **18:59:34 —— 晚 47 分钟**,运行进程没有它;③我 23:47 的 .js 编辑使 `_source_max_mtime` 门在 23:58 某次请求**正确触发**重建;④旧进程按 **18:12:45 import 期冻结的清单**组装 → core 含 cross_tab_sync(新 hash a46a7f0b);feature 清单在冻结态下内容不变 → **content-hash 短路** → feature 文件名不变、文件不重写(所以停在 14:29)。每个环节都对上了。
+- **这是 2026-07-24 事故类的第三次实测发生,但性质不同:** 前两次(7-24 model_caps / 7-31 早 conv_save)暴露的是「没有重读机制」,根修是 `00e9de0a`;**这一次暴露的是「修复存在但进程早于修复」——部署差**。HEAD 上什么都不缺:choke point 已在(`build_bundle()` 首行 `_refresh_manifest()`),回归守卫已在且 28/28 绿(`test_bundle_manifest_freshness.py` 第 1 条就是「长跑进程+清单编辑→重建→产物必须反映新清单」的逐点重放)。**零新代码需要写。**
+- **危险窗口(owner 点出的下一步风险,必须记录在案):** 在旧进程下,任何请求触发的重建都只复现旧形态(core 含、feature 不含)。若某天进程换到含 `00e9de0a` 的代码而 feature bundle 又因 content-hash 短路不重写……不会发生——新进程 import 时 manifest 已含 deferral,首次构建两个 bundle 都按新形态产出。**真正的风险是「只重启一半」:本批必须随下次重启一次性带上 `00e9de0a` + `8aa9a1c6`,重启后立刻三项端到端实测(core 不含 `_handleCrossTabMsg` / feature 含 / feature-loader stub 含 `_wireConvSyncPush`)。**
+- **方法论教训(owner 身教):** 我此前用「临时树真实构建」验证的是**源码正确性**,并在报告里写了「需重启 + bundle 重建生效」;owner 直接 curl 生产验证的是**部署事实**。两者都必要,但只有后者能回答「用户现在跑的是什么」。本批的验收边界已按此重写。
+- **状态:** sub-3A(`8aa9a1c6`)源码正确但生产未生效;等 owner 批准重启(restart_15000.sh,带实例锁竞态修复 `217255e4` 后的脚本),重启后我跑三项端到端实测方可关闭。
+
+### 2026-07-31(续·ms8bx7089s3268「卡住」定案:真僵尸 + VU 循环复活;止血完成,根治票已立) — owner 复核全部成立;执行 A:abort 96c56840(API 走完整终结器,SIGTERM 杀进程组 pgid=174473)+ **disarm 自动驾驶**(关键:光 abort 载体不够,锚任务 752273db 未 aborted,17s 后又 spawn 91cb4ff6——abort 检查看的是锚不是载体,这就是复活机制)+ abort 91cb4ff6;752273db 行已被终结器顺带落 done(我的 UPDATE 0 行=已翻)
+
+- **事故链三层定案(全部实测):** ①VU 续跑任务 96c56840 的 run_command 里 `grep -rn "mcp>=1.0.0" ../` 递归扫整个父目录(FUSE,含 8GB dump/pgdata/7392 swarm 目录),跑 2h33m;②`timeout=unlimited + interactive` 自身永不超时;③tool_dispatch 心跳每 15s 同时喂 reaper 双钟 ⇒ stuck-reaper 永不收割(owner 2026-07-25 的人等特点豁免只点了 ask_human/await_task/timer_create,run_command 是被误伤)。前端 1050 events/6202s 几乎全是心跳自 tick——**用户盯着僵尸看恰好一直在喂它的活性钟**。
+- **止血终态(实测):** conv 无 running 任务(abort-conv 扫描=0);752273db=done、96c56840/91cb4ff6=aborted;autopilotEnabled=false;runConcluded(runId=ar-562a873a04fb, reason=stopped);进程树消失;poll 91cb4ff6 终态可解。**残留(已记票):** settings.activeTaskId 仍指向已 aborted 的 91cb4ff6——VU 载体 abort 路径没像 reaper finalize 那样清 pin(终态家族又一例,记入 pt_5f0262fc)。
+- **票:** B 根治 pt_8524e0ec(活性证据分级+递归扫描守卫,claimed)/ B3 终态写入缺失 pt_5f0262fc / C 前端停滞卡 pt_e0ea29f2 / D VU 人门误判调查 pt_841eb73c(critic 对仅剩人门项的 objective 判 CONTINUE 且无人值守派工——事故第一因)。
+- **附带实测:** conv 里 idx1(fr=aborted)/idx2(fr=stop)共享同一 tmp_196fedef msgId(中止重试未换 id),22:22:22 前端 RENDER ORDER VIOLATION 实锤;前端渲染异常属 C 票。
+- **注意:** 服务器在跑进程仍是旧代码,B/C 代码修复需重启生效。
+
 ### 2026-07-31(续·pt_5ed41c99 Anthropic 边界幽灵块根治:防御不在「调用」而在「发射」) — 接脑派回我自己立的票;commit 见下(2 文件 +128/-5;新测试类 **6** 失败先行 **5 红**(锚 1 绿);**NEUTER×2 各咬各的**(发射闸→3 红/fallback→2 红);相邻环 cache+wire+Claude 家族 **295 + 102** 绿;`test_live_retry_preserves_task_id` 为已证预存红,签名与上批逐字相同)
 
 - **机制选择(本批唯一的设计决定):** 票面写「把 `_strip_empty_text_blocks` 的防御延伸到 Anthropic 边界」,落地**不是**在 `openai_body_to_anthropic` 里调用那个 OpenAI 侧函数,而是把闸门钉进 `_convert_content_blocks` 的**发射缝** —— str 与 list 两条路在「块出生」的那一刻统一拦截空/纯空白 text 块。这比调用式防御**严格更强**:它不可被任何调用方绕过(chat.py 非流式 / `_sse_core` 流式 / oauth cloak / 未来探测路都过这一个转换器),且不碰调用方的 OpenAI body(无原位突变)。函数式接缝,不是补丁。

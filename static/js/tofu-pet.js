@@ -129,20 +129,51 @@
   // drawing per mood). 'curious' → the alert perk; nothing else needs remapping.
   var FRAME_ALIAS = { curious: 'alert' };
 
-  // The WALK CYCLE: eight keyposes played in order while state==='walk'.
+  // The WALK CYCLE: eight slots played in order while state==='walk'. Slots
+  // 5..8 REPLAY the four authored drawings (the stride's second half-cycle is
+  // the same art), so there are 8 slots but WALK_DISTINCT=4 real keyposes.
   //
-  // EIGHT, not four, and 75ms, not 150ms — both halves of that matter:
-  //   · The old cycle reused ONE symmetric contact pose for both contact beats,
-  //     so no foot ever led and the gait read as shuffling in place / sliding
-  //     BACKWARDS. A stride only reads as walking if the leading foot
-  //     alternates, which needs a near-leads and a far-leads pose.
-  //   · 4 frames at 150ms is 6.7fps. Below roughly 12fps a cycle stops reading
-  //     as motion and starts reading as a flicker between drawings — the
-  //     "animation isn't smooth" half of the same report. 8 at 75ms is 13.3fps
-  //     over the SAME 600ms stride, so the pet's speed is unchanged.
+  // FOUR authored poses, not one symmetric contact pose reused twice: the old
+  // cycle reused ONE contact pose for both contact beats, so no foot ever led
+  // and the gait read as shuffling in place / sliding BACKWARDS. A stride only
+  // reads as walking if the leading foot alternates, which needs a near-leads
+  // AND a far-leads pose.
   var WALK_FRAMES = ['walk1', 'walk2', 'walk3', 'walk4',
     'walk5', 'walk6', 'walk7', 'walk8'];
-  var WALK_FRAME_MS = 75;    // per keypose → full ~600ms stride cycle at 13.3fps
+  var WALK_DISTINCT = 4;     // authored keyposes per gait cycle (5..8 replay 1..4)
+
+  // ── STRIDE ⋈ SPEED: THE FRAME INTERVAL IS DERIVED, NEVER A LITERAL ──
+  //
+  // STRIDE_PX is a MEASUREMENT OF THE ART: how far one foot travels from
+  // leading to trailing across a half gait cycle, in rendered px of the 30px
+  // sprite (walk1's lead foot vs walk3's trail foot). The guard in
+  // tests/test_frontend_pet_light_direction.py re-measures it from the shipped
+  // PNGs, so this number cannot silently rot away from the drawings.
+  //
+  // WHY DERIVED: a fixed WALK_FRAME_MS made the gait's cadence independent of
+  // how fast the body actually travelled, so the two silently disagreed — the
+  // feet churned 1.62× faster than the pet moved (measured 2026-07-31), the
+  // textbook foot-slip / "hummingbird legs on a sliding body" read. And ONE
+  // constant cannot be right for THREE speeds anyway: walk 41, chase 82, flee
+  // 120 px/s. So the interval is computed from the live speed:
+  //
+  //     per-keypose ms = STRIDE_PX / speed * 1000 / WALK_DISTINCT
+  //
+  // At the walk speed that lands on ~75ms (13.3fps), clearing the ~12fps floor
+  // below which a keypose cycle reads as a flicker between drawings rather than
+  // motion; a chase/flee correctly plays faster because the pet IS moving
+  // faster. Being a computation rather than two hand-tuned numbers, a future
+  // speed change cannot reintroduce slip.
+  var STRIDE_PX = 12.28;
+  var WALK_FPS_FLOOR = 12;   // below this a keypose cycle reads as flicker
+  // Fastest cadence worth painting: ~2 display frames at 60Hz. A flee at
+  // 120px/s would otherwise ask for ~26ms, finer than the rAF tick can honour,
+  // which just drops keyposes unevenly.
+  var MIN_FRAME_MS = 33;
+  function _gaitMs(speed) {
+    if (!(speed > 0)) return 1000 / WALK_FPS_FLOOR;
+    return Math.max(MIN_FRAME_MS, STRIDE_PX / speed * 1000 / WALK_DISTINCT);
+  }
   var _walkIdx = 0, _walkAccum = 0;
 
   // GROOM cycle (a settling wobble) and STRETCH cycle (a full-body stretch) —
@@ -351,6 +382,20 @@
     _walkIdx = ((i % WALK_FRAMES.length) + WALK_FRAMES.length) % WALK_FRAMES.length;
     _setFrameArt(WALK_FRAMES[_walkIdx]);
   }
+  // THE ONE gait advancer, shared by walk / chase / flee. It takes the LIVE
+  // speed of the leg that is running, so the cadence is always tied to actual
+  // travel: the same drawings play faster during a chase and faster still
+  // during a flee, because the body really is covering ground faster. Three
+  // copies of this loop against one hard-coded interval is how the feet came to
+  // churn 1.62x faster than the pet moved (see _gaitMs).
+  function _advanceGait(dt, speed) {
+    var per = _gaitMs(speed);
+    _walkAccum += dt * 1000;
+    if (_walkAccum < per) return;
+    var adv = Math.floor(_walkAccum / per);
+    _walkAccum -= adv * per;
+    _setWalkFrame(_walkIdx + adv);
+  }
   // Advance a generic pose cycle (groom / scratch), used by the sit/scratch
   // states. Mirrors _setWalkFrame but over the active pose frame list.
   function _setPoseFrame(i) {
@@ -547,7 +592,7 @@
     state: 'idle',
     until: 0,         // ms timestamp when the current state ends
     min: 8, max: 200, // safe-track bounds (recomputed from layout)
-    speed: 34,        // px/s while walking
+    speed: 41,        // px/s while walking — _gaitMs(41) lands at ~75ms/13.3fps
     chaseSpeed: 82,   // px/s while chasing the critter (a quick dash)
     fleeSpeed: 120,   // px/s while fleeing a poke (a quick startled scramble)
     fleeDir: 1,
@@ -817,12 +862,7 @@
     var d = target - W.x;
     _face(d >= 0 ? 1 : -1);
     W.x += (d >= 0 ? 1 : -1) * Math.min(Math.abs(d), W.chaseSpeed * dt);
-    _walkAccum += dt * 1000;
-    if (_walkAccum >= WALK_FRAME_MS) {
-      var adv = Math.floor(_walkAccum / WALK_FRAME_MS);
-      _walkAccum -= adv * WALK_FRAME_MS;
-      _setWalkFrame(_walkIdx + adv);
-    }
+    _advanceGait(dt, W.chaseSpeed);
     _place();
     if (Math.abs(target - W.x) <= 5) {   // caught it → pounce + spook
       try { if (window.TofuScene && window.TofuScene.spook) window.TofuScene.spook(); } catch (e) { /* harmless */ }
@@ -842,13 +882,7 @@
 
     if (W.state === 'walk') {
       W.x += W.dir * W.speed * dt;
-      // Advance the walk-cycle frame in step with travel (the actual animation).
-      _walkAccum += dt * 1000;
-      if (_walkAccum >= WALK_FRAME_MS) {
-        var adv = Math.floor(_walkAccum / WALK_FRAME_MS);
-        _walkAccum -= adv * WALK_FRAME_MS;
-        _setWalkFrame(_walkIdx + adv);
-      }
+      _advanceGait(dt, W.speed);
       if (W.x <= W.min) { W.x = W.min; _enter('turn'); _face(1); }
       else if (W.x >= W.max) { W.x = W.max; _enter('turn'); _face(-1); }
       _place();
@@ -856,12 +890,7 @@
       _chaseStep(dt);
     } else if (W.state === 'flee') {
       W.x += W.fleeDir * W.fleeSpeed * dt;
-      _walkAccum += dt * 1000;
-      if (_walkAccum >= WALK_FRAME_MS) {
-        var fadv = Math.floor(_walkAccum / WALK_FRAME_MS);
-        _walkAccum -= fadv * WALK_FRAME_MS;
-        _setWalkFrame(_walkIdx + fadv);
-      }
+      _advanceGait(dt, W.fleeSpeed);
       if (W.x <= W.min) { W.x = W.min; W.fleeDir = 1; _face(1); }
       else if (W.x >= W.max) { W.x = W.max; W.fleeDir = -1; _face(-1); }
       _place();

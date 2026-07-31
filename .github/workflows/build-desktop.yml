@@ -232,6 +232,37 @@ jobs:
             rm -f "$body"
           fi
 
+      # ── Is this version DOCUMENTED? ──
+      #
+      # Every other release invariant here was long ago moved out of a human's
+      # memory and into a gate: the tag is not trusted, the Release object is
+      # not trusted, the asset list is checked, the asset SIZES are checked.
+      # "Remember to write the CHANGELOG" was the one that stayed in memory,
+      # and it drifted for NINE consecutive versions — measured 2026-07-31,
+      # CHANGELOG.md's newest heading was [0.10.0] while VERSION said 0.15.2,
+      # with 91 lines stranded under [Unreleased] — without a single failure
+      # anywhere, because NOTHING in the repo referenced CHANGELOG.md
+      # (`grep -rl CHANGELOG tests/ scripts/` returned nothing).
+      #
+      # That is worse than ordinary doc drift because releasing here is a
+      # TRIGGER, not a deliberate act: this workflow fires on any push to main
+      # whose VERSION lacks a complete release, and the release step sets
+      # make_latest=true. So an undocumented version does not wait for anyone
+      # to decide to ship it — it becomes the release users SEE, on the next
+      # push by anyone, and retracting a published Latest is far more
+      # expensive than the one commit that would have documented it.
+      #
+      # Gated on should_release so an already-published version is never
+      # re-litigated. The rule itself lives in scripts/changelog_gate.py, NOT
+      # inline here, for exactly the reason release_assets.py exists: two
+      # copies of a release rule drift, and both keep passing on the cases they
+      # still know about.
+      - name: Require a CHANGELOG entry for this version
+        if: steps.ver.outputs.should_release == 'true'
+        run: |
+          set -euo pipefail
+          python3 scripts/changelog_gate.py --version "${{ steps.ver.outputs.version }}"
+
   # ── Windows ──────────────────────────────────────────────────
   build-windows:
     name: Windows Installer

@@ -446,6 +446,12 @@ _OPENSOURCE_KEEP_FILES = {
     # release pipeline that dies on a missing file the first time it runs.
     # Pure stdlib (argparse/fnmatch/json/pathlib), no secrets, no internal paths.
     'scripts/release_assets.py',
+    # The single source of truth for "is this VERSION documented?". The version
+    # gate in that same workflow calls it before any build, so it ships for the
+    # same reason as release_assets.py above: the public tree would otherwise
+    # carry a release pipeline that dies on a missing file the first time it
+    # runs. Pure stdlib (argparse/re/pathlib), no secrets, no internal paths.
+    'scripts/changelog_gate.py',
 }
 
 OPENSOURCE_EXTRA_EXCLUDE_FILES = OPENSOURCE_EXTRA_EXCLUDE_FILES | {

@@ -787,8 +787,12 @@ def project_board_complete():
 @api_meta(
     summary='HUMAN flags a board epic as blocked',
     description=(
-        'Body: ``{path, taskId, convId, reason?}``. Emits a ``blocked`` feed '
-        'event (a signal, not a status change). Audit-logged.'),
+        'Body: ``{path, taskId, convId, reason?, question?, options?}``. Emits '
+        'a ``blocked`` feed event (a signal, not a status change). Pass '
+        '``question`` (and ``options`` when the choice is enumerable) to raise '
+        'a structured human gate the board panel renders with answer controls; '
+        'a ``reason`` whose prose claims such a card while ``question`` is '
+        'omitted is refused with 400 ``question_required``. Audit-logged.'),
     tags=['project'],
 )
 def project_board_block():
@@ -801,9 +805,18 @@ def project_board_block():
         return api_bad_request('taskId is required', field='taskId')
     conv_id = _board_conv_id(data)
     reason = (data.get('reason') or '').strip()
+    # question/options carry the STRUCTURED human gate. Forwarding them is what
+    # makes block_task's consistency refusal reachable over HTTP at all: with a
+    # bare 4-positional call the only block an HTTP caller could construct was a
+    # question-less one, so a reason whose prose promised an answer card parked
+    # the epic behind a control that was never created (measured on the live
+    # board — pt_3879f00e took two further blocks after the gate shipped).
+    question = (data.get('question') or '').strip()
+    options = data.get('options')
     try:
         from lib.conversations.project_board import block_task
-        result = block_task(project_path, conv_id, task_id, reason)
+        result = block_task(project_path, conv_id, task_id, reason,
+                            question=question, options=options)
         if not result.get('ok'):
             return jsonify(result), 400
         logger.info('[Project.v1] board/block proj=%.40r task=%s',

@@ -32,6 +32,95 @@ logger = get_logger(__name__)
 #: instead of something that happens to whoever resolves next.
 _SUPPLY_CUTOFF_DEFAULT = '2026-07-27T00:00:00Z'
 
+#: Marker file written into each npm ``_npx/<hash>/`` slot recording the
+#: cutoff its ``package-lock.json`` was resolved under.
+_NPX_CUTOFF_MARKER = '.tofu-supply-cutoff'
+
+
+def _reconcile_npx_cache(npm_cache: str, cutoff: str) -> int:
+    """Evict ``_npx`` slots whose lock was resolved under a DIFFERENT cutoff.
+
+    WHY THIS IS REQUIRED, NOT DEFENSIVE (measured 2026-07-31)
+    ---------------------------------------------------------
+    npm caches each ``npx -y <pkg>`` invocation as a slot under
+    ``$npm_config_cache/_npx/<hash>/`` holding a ``package.json`` +
+    ``package-lock.json``. When a later run supplies ``--before`` (our
+    cutoff), npm reconciles the request against that EXISTING lock; because
+    the lock was resolved with no cutoff it can name versions published after
+    it, npm judges the lock untrustworthy and aborts:
+
+        npm error code ECOMPROMISED
+        npm error Lock compromised
+
+    Measured on the same cache dir: cutoff ON -> ECOMPROMISED on 3/3 runs;
+    cutoff OFF -> the server starts. Deleting the slot and retrying WITH the
+    cutoff also starts cleanly, which isolates the stale lock as the cause.
+    ``npm cache verify`` does NOT repair it (it garbage-collected 86 corrupt
+    content entries and the failure persisted) because the slot is not
+    content-addressed cache -- it is a materialised install tree.
+
+    The blast radius is the worst possible shape: a machine that has NEVER run
+    Tofu is fine (no slots), while every EXISTING deployment breaks on every
+    npx-launched server the moment the cutoff ships. So the cutoff is only
+    correct if it also owns the migration of trees resolved under the old
+    rules -- otherwise "reproducible" is a property of empty disks only.
+
+    npm does not record ``before`` in the lock, so staleness cannot be read
+    back out of npm's own metadata. We therefore stamp our own marker beside
+    the lock and treat a missing/differing marker as stale. That makes the
+    check EXACT rather than heuristic: no version parsing, no date comparison
+    against publish times, and slots already reconciled are left untouched, so
+    this is a one-time cost per slot rather than a wipe on every connect.
+
+    Deleting a slot is safe: it is a cache npm rebuilds on demand (measured --
+    the wiped 12306 slot rebuilt and the server started).
+
+    Returns the number of slots evicted.
+    """
+    npx_root = os.path.join(npm_cache, '_npx')
+    if not os.path.isdir(npx_root):
+        return 0
+    import shutil as _shutil
+
+    evicted = 0
+    try:
+        slots = os.listdir(npx_root)
+    except OSError as e:
+        logger.debug('[MCP] cannot list npx cache %s: %s', npx_root, e)
+        return 0
+
+    for slot in slots:
+        slot_dir = os.path.join(npx_root, slot)
+        lock = os.path.join(slot_dir, 'package-lock.json')
+        # No lock => nothing for npm to reconcile against => cannot trigger
+        # ECOMPROMISED. Leave it alone.
+        if not os.path.isfile(lock):
+            continue
+        marker = os.path.join(slot_dir, _NPX_CUTOFF_MARKER)
+        try:
+            with open(marker, encoding='utf-8') as f:
+                stamped = f.read().strip()
+        except OSError:
+            stamped = ''
+        if stamped == cutoff:
+            continue  # already reconciled under the active cutoff
+        try:
+            _shutil.rmtree(slot_dir)
+            os.makedirs(slot_dir, exist_ok=True)
+            with open(marker, 'w', encoding='utf-8') as f:
+                f.write(cutoff)
+            evicted += 1
+        except OSError as e:
+            # Never fail a connect over cache hygiene -- npm would merely
+            # re-raise ECOMPROMISED, which is no worse than before.
+            logger.warning('[MCP] could not evict stale npx slot %s: %s', slot_dir, e)
+
+    if evicted:
+        logger.info('[MCP] evicted %d npx cache slot(s) resolved under a '
+                    'different supply cutoff (now %s) -- npm would otherwise '
+                    'abort with ECOMPROMISED', evicted, cutoff)
+    return evicted
+
 
 def _ensure_writable_caches(env: dict[str, str]) -> None:
     """Redirect launcher caches AND data dirs to a project-local dir when
@@ -118,6 +207,13 @@ def _ensure_writable_caches(env: dict[str, str]) -> None:
         # uv wants an RFC3339 instant; npm's --before takes a plain date.
         env.setdefault('UV_EXCLUDE_NEWER', cutoff)
         env.setdefault('npm_config_before', cutoff.split('T', 1)[0])
+        # An npx slot whose lock predates the cutoff makes npm abort with
+        # ECOMPROMISED, so the cutoff must also migrate trees resolved under
+        # the old rules -- see _reconcile_npx_cache.
+        try:
+            _reconcile_npx_cache(env['npm_config_cache'], cutoff)
+        except Exception as e:  # cache hygiene must never break a connect
+            logger.warning('[MCP] npx cache reconcile failed: %s', e)
 
 
 # ── Hot-reload of the vendored registry ──────────────────

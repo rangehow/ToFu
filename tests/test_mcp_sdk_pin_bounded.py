@@ -328,6 +328,125 @@ def test_supply_cutoff_is_operator_overridable_and_optional():
             _os.environ['TOFU_MCP_SUPPLY_CUTOFF'] = prev
 
 
+def test_stale_npx_slot_is_reconciled_against_the_cutoff(tmp_path):
+    """A cache resolved under the OLD rules must be migrated, not left to break.
+
+    THE REGRESSION THIS PINS (measured 2026-07-31, introduced by the cutoff)
+    ------------------------------------------------------------------------
+    npm caches each ``npx -y <pkg>`` run as a slot under
+    ``$npm_config_cache/_npx/<hash>/`` containing a ``package-lock.json``. Once
+    the supply cutoff shipped, npm began reconciling new requests against those
+    PRE-EXISTING locks; a lock resolved with no cutoff can name versions
+    published after it, so npm declares it untrustworthy and aborts:
+
+        npm error code ECOMPROMISED
+        npm error Lock compromised
+
+    Same cache dir, measured: cutoff ON -> ECOMPROMISED on 3/3 runs; cutoff OFF
+    -> the server starts normally. ``npm cache verify`` does NOT repair it (it
+    collected 86 corrupt entries and the failure persisted) because the slot is
+    a materialised install tree, not content-addressed cache.
+
+    The blast radius made this worse than the bug it was fixing: a machine that
+    had never run Tofu was fine (no slots), while every EXISTING deployment
+    broke on every npx-launched server the instant the cutoff landed. A change
+    that alters resolution therefore OWNS the migration of trees resolved under
+    the previous rules -- otherwise "reproducible" is only true of empty disks.
+
+    WHY A MARKER FILE RATHER THAN INSPECTING THE LOCK
+    --------------------------------------------------
+    npm does not record ``before`` anywhere in ``package-lock.json`` (verified
+    by grep), so staleness cannot be read back out of npm's own metadata. The
+    reconciler stamps its own marker beside the lock, which makes the check
+    exact instead of heuristic -- no version parsing, no comparing publish
+    dates -- and lets already-reconciled slots be skipped, so the cost is
+    one-time per slot rather than a wipe on every connect.
+    """
+    from lib.mcp.client._vendor import _NPX_CUTOFF_MARKER, _reconcile_npx_cache
+
+    cutoff = '2026-07-27T00:00:00Z'
+    npx = tmp_path / '_npx'
+
+    # (a) the broken shape: a lock with NO marker == resolved before the cutoff
+    stale = npx / 'deadbeefcafe0001'
+    stale.mkdir(parents=True)
+    (stale / 'package-lock.json').write_text('{"lockfileVersion": 3}')
+    (stale / 'package.json').write_text('{"dependencies":{"12306-mcp":"^0.3.10"}}')
+    (stale / 'node_modules').mkdir()
+
+    # (b) a slot ALREADY reconciled under the active cutoff -- must survive, or
+    #     every connect would re-pay a full npx cold install (measured ~55s).
+    fresh = npx / 'deadbeefcafe0002'
+    fresh.mkdir(parents=True)
+    (fresh / 'package-lock.json').write_text('{"lockfileVersion": 3}')
+    (fresh / _NPX_CUTOFF_MARKER).write_text(cutoff)
+    (fresh / 'node_modules').mkdir()
+
+    # (c) a slot with no lock at all -- nothing for npm to reconcile against, so
+    #     it cannot raise ECOMPROMISED and must not be touched.
+    lockless = npx / 'deadbeefcafe0003'
+    lockless.mkdir(parents=True)
+    (lockless / 'package.json').write_text('{}')
+
+    evicted = _reconcile_npx_cache(str(tmp_path), cutoff)
+
+    assert evicted == 1, (
+        f'expected exactly the one stale slot to be evicted, got {evicted}. '
+        f'Evicting 0 leaves npm to abort with ECOMPROMISED on every existing '
+        f'deployment; evicting more re-pays a cold npx install needlessly.'
+    )
+    assert not (stale / 'node_modules').exists(), (
+        'the stale tree survived -- npm will still reconcile against its '
+        'pre-cutoff lock and abort with ECOMPROMISED'
+    )
+    assert not (stale / 'package-lock.json').exists()
+    assert (stale / _NPX_CUTOFF_MARKER).read_text().strip() == cutoff, (
+        'an evicted slot must be stamped with the cutoff it was reconciled '
+        'under, or it is re-evicted on every single connect'
+    )
+    assert (fresh / 'node_modules').exists(), (
+        'an already-reconciled slot was wiped -- reconcile must be idempotent, '
+        'not a cache purge on every connect'
+    )
+    assert (lockless / 'package.json').exists(), (
+        'a slot with no lock cannot trigger ECOMPROMISED and must be left alone'
+    )
+
+    # Idempotence, stated as a property: re-running changes nothing.
+    assert _reconcile_npx_cache(str(tmp_path), cutoff) == 0
+    assert (stale / _NPX_CUTOFF_MARKER).exists()
+
+
+def test_reconcile_is_wired_into_the_launcher_env(monkeypatch, tmp_path):
+    """The reconciler must run on the REAL connect path, not just exist.
+
+    A correct ``_reconcile_npx_cache`` that nothing calls would leave the
+    production regression fully intact while the unit test above stayed green
+    -- the exact shape of "tested but not wired" this project has been bitten
+    by before. So drive the seam every stdio launcher passes through and assert
+    the reconciliation actually happened against the cache dir it hands out.
+    """
+    from lib.mcp.client._vendor import _NPX_CUTOFF_MARKER, _ensure_writable_caches
+
+    cache_root = tmp_path / 'mcp-cache'
+    stale = cache_root / 'npm' / '_npx' / 'deadbeefcafe0004'
+    stale.mkdir(parents=True)
+    (stale / 'package-lock.json').write_text('{"lockfileVersion": 3}')
+    (stale / 'node_modules').mkdir()
+
+    monkeypatch.setenv('TOFU_MCP_CACHE_DIR', str(cache_root))
+    monkeypatch.delenv('TOFU_MCP_SUPPLY_CUTOFF', raising=False)
+
+    env = {}
+    _ensure_writable_caches(env)
+
+    assert not (stale / 'node_modules').exists(), (
+        'building the launcher env did NOT reconcile the npx cache -- the '
+        'stale slot survives and npm aborts with ECOMPROMISED at spawn'
+    )
+    assert (stale / _NPX_CUTOFF_MARKER).read_text().strip() == env['UV_EXCLUDE_NEWER']
+
+
 def test_scanner_ignores_commented_and_unrelated_names():
     """Comments must neither satisfy nor violate the guard, and sibling
     packages whose names merely CONTAIN 'mcp' must not be scanned.

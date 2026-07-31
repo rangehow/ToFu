@@ -1,3 +1,10 @@
+### 2026-08-01(S4 落地:出口状态面 + codex 流式真探测,epic 代码侧闭环;真机验收清单已就位) — commit S4(10 文件 +657/-3;新套件 **16**(14 后端 + 2 前端 harness),相邻环 **250**;**NEUTER×3 各咬各的**,还原 cmp 逐字节验证)
+
+- **owner 三点坑(先入稿再动工):** ①状态接口绝不同步探测(否则设置页打开卡 5s 白屏)——`egress_status` 只读 300s 探测缓存,无缓存返回 unknown + 后台 warm-up;`agent_no_capability`(agent 在线但没开 --allow-egress)单独可辨——那是默认态,卡片必须明说「重启 agent 加该参数」,否则用户会以为方案坏了;②codex 探测从 SKIPPED 升级为流式真探测(`open_stream` 发 1-token Responses 请求按状态分类——全链路 cloaking+翻译+egress 端到端验证);③pin 选择器端点直接读写 `_pinned_agent` 的 `oauth_egress_agents.json`,不另起存储。
+- **本批测试自抓三坑(全部立档):** ①函数内 import 的 mock 必须打源模块(第三次复发:`lib.provider_probe.http_post` AttributeError);②**测试污染会跨文件咬人**:我的套件把 `api.anthropic.com=geo_blocked` 留在进程级探测缓存里,兄弟套件的 `captured['url']` 直接 KeyError——套件缓存一律快照/恢复;③apply_diff 把常量插进装饰器与函数体之间 → 装饰器挂到 dict 上 SyntaxError,把五个 API 套件全部带崩——**插入位置要想到装饰器归属**。
+- **边界协调续:** responses 迁移方(95ac28a1)把我的 provider_probe.py S4 探测块一并卷入其 commit(明示让我基于 HEAD);我确认内容无损后继续。其顺带把 codex SKIPPED 的旧测试改写为对齐 S4 语义(not_logged_in 中性判)。
+- **epic 状态:S1-S4 全部落地,代码侧闭环。** 真机验收清单(按序):①重启服务器(S1-S4 后端全要)②bundle 重建(oauth.js 登录翻转 + 出口行)③办公机 `python -m lib.desktop_agent --server <tofu> --allow-egress` ④Claude 登录(应走 agent 交换,卡片出口行显示「经桌面代理」)⑤Claude 聊天(S3 流式)⑥Codex 登录+聊天(**给 O3 定案**:chatgpt.com Cloudflare 若拒裸 Python TLS,curl_cffi 从可选升必选)。
+
 ### 2026-08-01(桌面版下载服务器化:「这个面板为什么总是慢」的根修 + 服务器直供/自建安装包) — owner 两问:①面板为什么总比别的慢 ②下载按钮改为服务器自建。commits `e6bbb08f` 主体 + `d7ba7fcb` 干净 venv + `abc6e793` README(13+1+2 文件;新套件 **25/25**(失败先行 + **NEUTER×3 各咬各的**);merge 套修复后 **43/43**;相邻环 **92/92** + api_v1 desktop 3/3 + api_isolation 5/5)
 
 - **慢的根因(实测,不是猜测):** `Api.desktop.status` 的 `downloads` 字段背后是 `_latest_release_assets()` —— **在 async 路由里同步调 api.github.com**(timeout 6s、TTLCache 900s)。每次缓存过期就有一个请求把事件循环堵最多 6s;本机实测经代理 ~0.74s/次,且模态框每 3s 轮询。浏览器行走本地状态瞬时返回,桌面行自然「总是更慢」。修法不是加缓存,是**请求路径零网络**:`downloads` 改读本地 artifact store,GitHub 流量整体下沉到镜像线程(单飞、6h TTL、失败 60s 退避、stale-while-revalidate)。

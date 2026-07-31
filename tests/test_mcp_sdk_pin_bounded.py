@@ -465,19 +465,19 @@ def test_reconcile_runs_before_the_readiness_timer_not_inside_it(monkeypatch, tm
         'as BrokenResourceError.'
     )
 
-    # (2) The pre-flight entry point must evict AND report it.
-    evicted = reconcile_for_connect()
-    assert evicted == 1, (
-        f'pre-flight reconcile evicted {evicted} slots, expected 1. Returning 0 '
+    # (2) The pre-flight entry point must evict AND report the pending rebuild.
+    #     It reports OUTSTANDING rebuilds rather than "what I just evicted" —
+    #     eviction is global, the budget is per-connect. The lifecycle of that
+    #     counter (clears once npm restores the lock) is pinned separately by
+    #     test_pending_rebuild_is_visible_to_every_connect_not_just_the_evictor.
+    pending = reconcile_for_connect()
+    assert pending == 1, (
+        f'pre-flight reconcile reported {pending}, expected 1. Returning 0 '
         f'means the caller cannot know a cold download is now unavoidable, so '
         f'it will apply the ordinary budget and lose the race.'
     )
     assert not (slot / 'node_modules').exists()
     assert (slot / _NPX_CUTOFF_MARKER).read_text().strip() == env['UV_EXCLUDE_NEWER']
-
-    # Idempotent: a second pre-flight reports NO eviction, so a routine connect
-    # is never mistaken for a migration and never gets the wide budget.
-    assert reconcile_for_connect() == 0
 
 
 def test_cold_install_gets_its_own_budget_without_relaxing_the_crash_ceiling():
@@ -564,6 +564,97 @@ def test_cold_install_gets_its_own_budget_without_relaxing_the_crash_ceiling():
     )
     handle._cold_install = True  # must not raise despite __slots__
     assert handle._cold_install is True
+
+
+def test_pending_rebuild_is_visible_to_every_connect_not_just_the_evictor(tmp_path, monkeypatch):
+    """Eviction is GLOBAL, so the wide budget cannot be per-evictor.
+
+    THE THIRD REGRESSION THIS PINS (measured 2026-07-31)
+    ----------------------------------------------------
+    ``_reconcile_npx_cache`` clears EVERY stale slot in one pass, but the first
+    version of the budget fix handed the wide budget only to the connect that
+    happened to trigger that pass. With two stale slots in a fleet sweep:
+
+        github      evicted BOTH, took the 300s budget, finished in 43.1s
+        12306-train connected next with the ORDINARY budget against a tree that
+                    was still empty -> FAIL at 31.4s (the narrow 30s handshake)
+
+    i.e. 6 OK / 1 FAIL, and the surviving failure was *caused* by another
+    server's migration. So "did I just evict something" is the wrong question.
+    The right one is "is a rebuild still outstanding for anybody", which is what
+    ``reconcile_for_connect`` must report.
+
+    The signal is deliberately on-disk rather than in memory: an evicted slot is
+    a directory holding ONLY the marker, and npm restores the lock when it
+    rebuilds. "marker present, lock absent" is therefore exact, survives a
+    process restart, and self-clears — all of which matter because the fleet
+    sweep and a later manual reconnect are different call stacks.
+    """
+    from lib.mcp.client._vendor import _NPX_CUTOFF_MARKER, _npx_rebuild_pending
+
+    cutoff = '2026-07-27T00:00:00Z'
+    npx = tmp_path / '_npx'
+
+    # Evicted-and-not-yet-rebuilt: marker, no lock. Counts as pending.
+    emptied = npx / 'aaaa0001'
+    emptied.mkdir(parents=True)
+    (emptied / _NPX_CUTOFF_MARKER).write_text(cutoff)
+
+    # Rebuilt: npm restored the lock. Must stop counting, or every connect
+    # forever gets the wide budget and a genuinely dead server stops failing
+    # fast.
+    rebuilt = npx / 'aaaa0002'
+    rebuilt.mkdir(parents=True)
+    (rebuilt / _NPX_CUTOFF_MARKER).write_text(cutoff)
+    (rebuilt / 'package-lock.json').write_text('{"lockfileVersion": 3}')
+    (rebuilt / 'node_modules').mkdir()
+
+    # Never touched by us: no marker. Two shapes, and the SECOND is the one
+    # that actually discriminates — a foreign slot that still HAS a lock is
+    # skipped by the lock check regardless, so it cannot tell whether the
+    # marker check exists. A foreign slot with NO lock (npm mid-install, or a
+    # dir some other tool made) is only excluded BY the marker check, so it is
+    # what proves the two conditions are independent rather than redundant.
+    foreign = npx / 'aaaa0003'
+    foreign.mkdir(parents=True)
+    (foreign / 'package-lock.json').write_text('{"lockfileVersion": 3}')
+
+    foreign_nolock = npx / 'aaaa0004'
+    foreign_nolock.mkdir(parents=True)
+    (foreign_nolock / 'package.json').write_text('{}')
+
+    assert _npx_rebuild_pending(str(tmp_path), cutoff) == 1, (
+        'pending-rebuild detection is wrong. Counting 0 means a server that '
+        'did not perform the eviction connects with the narrow budget against '
+        'an empty tree — measured as a 31.4s failure; counting the rebuilt or '
+        'foreign slots means the wide budget never expires.'
+    )
+
+    # Simulate npm finishing the rebuild -> nothing pending -> narrow budget
+    # returns, which is what keeps a dead server failing fast.
+    (emptied / 'package-lock.json').write_text('{"lockfileVersion": 3}')
+    assert _npx_rebuild_pending(str(tmp_path), cutoff) == 0
+
+    # And the pre-flight entry point must surface OUTSTANDING work, not merely
+    # what it evicted on this call: a second pre-flight (which evicts nothing)
+    # still has to report the rebuild left over from the first.
+    from lib.mcp.client._vendor import reconcile_for_connect
+
+    cache_root = tmp_path / 'mcp-cache'
+    stale = cache_root / 'npm' / '_npx' / 'bbbb0001'
+    stale.mkdir(parents=True)
+    (stale / 'package-lock.json').write_text('{"lockfileVersion": 3}')
+    (stale / 'node_modules').mkdir()
+    monkeypatch.setenv('TOFU_MCP_CACHE_DIR', str(cache_root))
+    monkeypatch.delenv('TOFU_MCP_SUPPLY_CUTOFF', raising=False)
+
+    assert reconcile_for_connect() == 1, 'first pre-flight must report the rebuild'
+    assert reconcile_for_connect() == 1, (
+        'the SECOND pre-flight evicted nothing but the rebuild is still '
+        'outstanding — it must still report 1, or the next server in a fleet '
+        'sweep gets the narrow budget against an empty tree (the measured '
+        '31.4s failure)'
+    )
 
 
 def test_scanner_ignores_commented_and_unrelated_names():

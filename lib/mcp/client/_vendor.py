@@ -216,30 +216,77 @@ def _ensure_writable_caches(env: dict[str, str]) -> None:
         # it belongs in connect_server's pre-flight; see reconcile_for_connect.
 
 
+def _npx_rebuild_pending(npm_cache: str, cutoff: str) -> int:
+    """Count slots we evicted that npm has NOT rebuilt yet.
+
+    WHY THIS EXISTS (measured 2026-07-31 — a real flaw in the first fix)
+    -------------------------------------------------------------------
+    Eviction is GLOBAL: one pass clears every stale slot in the cache. But the
+    wide budget was handed only to the connect that happened to trigger that
+    pass. With two stale slots, ``github`` connected first, evicted BOTH, took
+    the 300s budget for itself and finished in 43.1s — then ``12306-train``
+    connected with the ORDINARY budget against a tree that was still empty and
+    failed at **31.4s**, i.e. on the narrow 30s handshake timer. 6 OK / 1 FAIL.
+
+    So "did I just evict something" is the wrong question; the right one is
+    "is a rebuild still outstanding for anyone". An evicted slot is left as a
+    directory containing ONLY the marker (``_reconcile_npx_cache`` removes the
+    tree, recreates the dir, writes the marker), and npm repopulates
+    ``package.json``/``package-lock.json``/``node_modules`` when it next runs
+    that package. That makes "marker present, lock absent" an exact, durable,
+    self-clearing signal — it survives process restarts and needs no in-memory
+    bookkeeping, which matters because a fleet connect sweep and a later manual
+    reconnect are different call stacks.
+    """
+    npx_root = os.path.join(npm_cache, '_npx')
+    if not os.path.isdir(npx_root):
+        return 0
+    pending = 0
+    try:
+        slots = os.listdir(npx_root)
+    except OSError as e:
+        logger.debug('[MCP] cannot list npx cache %s: %s', npx_root, e)
+        return 0
+    for slot in slots:
+        slot_dir = os.path.join(npx_root, slot)
+        marker = os.path.join(slot_dir, _NPX_CUTOFF_MARKER)
+        if not os.path.isfile(marker):
+            continue
+        # A slot we emptied has the marker but no lock yet. Once npm rebuilds
+        # it the lock reappears and this stops counting.
+        if not os.path.isfile(os.path.join(slot_dir, 'package-lock.json')):
+            pending += 1
+    return pending
+
+
 def reconcile_for_connect() -> int:
-    """Pre-flight cache migration. Returns how many npx slots were evicted.
+    """Pre-flight cache migration. Returns how many npx rebuilds are OUTSTANDING.
 
-    Called from ``connect_server`` BEFORE the readiness timer starts, and the
-    return value tells the caller whether a cold dependency download is now
-    unavoidable for this connect.
+    Called from ``connect_server`` BEFORE the readiness timer starts. A non-zero
+    return means a cold dependency download is unavoidable for this connect, so
+    the caller widens the readiness budget.
 
-    WHY THE RETURN VALUE MATTERS (measured 2026-07-31)
-    ---------------------------------------------------
+    The value counts OUTSTANDING rebuilds, not just evictions performed by THIS
+    call, because eviction is global while the budget is per-connect — see
+    ``_npx_rebuild_pending`` for the measured failure that distinction fixes
+    (a 31.4s failure on the narrow timer for the second server in a sweep).
+
+    WHY THE BUDGET IS REPORTED RATHER THAN HIDDEN (measured 2026-07-31)
+    -------------------------------------------------------------------
     Evicting a slot is correct -- npm would otherwise abort with ECOMPROMISED
     against the pre-cutoff lock -- but the rebuild it forces is not free. The
     FIRST connect after an eviction was measured at 58.6s / 65.0s / 63.8s
-    across three trials against a readiness ceiling of
-    ``MCP_CONNECT_TIMEOUT * 2 + 5`` = 65s. That is a coin flip, and the losing
-    side surfaces as ``BrokenResourceError`` -- indistinguishable from a server
-    that genuinely crashed. Trading a deterministic failure for a
-    nondeterministic one is a bad trade even though the average improves.
+    against a readiness ceiling of ``MCP_CONNECT_TIMEOUT * 2 + 5`` = 65s. That
+    is a coin flip, and the losing side surfaces as ``BrokenResourceError`` --
+    indistinguishable from a server that genuinely crashed. Trading a
+    deterministic failure for a nondeterministic one is a bad trade even though
+    the average improves.
 
-    So the eviction is REPORTED rather than hidden: the caller widens the
-    readiness budget for exactly this connect. That keeps the ordinary ceiling
-    (a server that never comes up is still a fast, honest failure -- the
-    distinction lib/mcp/types.py:18-25 insists on) while giving the one state
-    we can positively identify -- "a dependency download is pending because we
-    just deleted the tree" -- the time it actually needs.
+    Reporting it keeps the ordinary ceiling intact (a server that never comes up
+    is still a fast, honest failure -- the distinction lib/mcp/types.py:18-25
+    insists on) while giving the one state we can positively identify -- "a
+    dependency download is pending because we deleted the tree" -- the time it
+    actually needs.
     """
     env: dict[str, str] = {}
     _ensure_writable_caches(env)
@@ -248,7 +295,8 @@ def reconcile_for_connect() -> int:
     if not cutoff or not cache:
         return 0  # cutoff disabled, or cache dir unusable -- nothing to migrate
     try:
-        return _reconcile_npx_cache(cache, cutoff)
+        _reconcile_npx_cache(cache, cutoff)
+        return _npx_rebuild_pending(cache, cutoff)
     except Exception as e:  # cache hygiene must never break a connect
         logger.warning('[MCP] npx cache reconcile failed: %s', e)
         return 0

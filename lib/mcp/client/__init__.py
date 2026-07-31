@@ -72,6 +72,7 @@ from lib.mcp.client._vendor import (  # noqa: E402,F401
     _ensure_writable_caches,
     _NPX_CUTOFF_MARKER,
     _reconcile_npx_cache,
+    _npx_rebuild_pending,
     reconcile_for_connect,
     _vendored_path,
     _reload_vendored_if_changed,

@@ -1232,23 +1232,47 @@ class SubAgent:
                 'content': result,
             })
         else:
-            # Multiple tool calls — run in parallel
-            results = {}
+            # Multiple tool calls — run in parallel.
+            #
+            # Results are keyed by the tool call's POSITION, never by its id.
+            # Keying by ``tc.get('id', uuid4())`` was silently lossy, because
+            # the SSE accumulator creates every tool-call slot with
+            # ``'id': ''`` (lib/llm/_sse_core.py:854/922) — the KEY always
+            # exists, so the uuid fallback never fires and cannot de-collide
+            # anything:
+            #   * two parallel calls that both kept ``id=''`` collapse onto ONE
+            #     dict key, so the first tool is fed the SECOND tool's output —
+            #     silently, with no error anywhere (verified);
+            #   * had the fallback ever fired it would mint a DIFFERENT uuid at
+            #     execution and at lookup, yielding the literal string
+            #     ``(no result)`` as that tool's content.
+            # Position is intrinsic to the batch and cannot collide, so the
+            # mapping is total by construction.
+            results: dict[int, str] = {}
             max_workers = min(len(tool_calls), MAX_PARALLEL_TOOLS)
             with ThreadPoolExecutor(
                 max_workers=max_workers,
                 thread_name_prefix=f'{self.agent_id}-tools',
             ) as pool:
                 futures = {}
-                for tc in tool_calls:
+                for idx, tc in enumerate(tool_calls):
                     future = pool.submit(self._execute_single_tool, tc, round_num)
-                    futures[future] = tc
+                    futures[future] = idx
 
                 for future in as_completed(futures):
-                    tc = futures[future]
-                    tc_id = tc.get('id', str(uuid.uuid4())[:8])
+                    idx = futures[future]
+                    tc = tool_calls[idx]
                     try:
-                        result = future.result(timeout=300)
+                        # NO timeout. ``as_completed`` only ever yields futures
+                        # that are ALREADY done (measured: done=True at every
+                        # yield, including a 2.0s task read with timeout=0.01),
+                        # so the former ``result(timeout=300)`` could not fire —
+                        # it was unreachable, not a live 300s cap. Keeping a
+                        # number there implied a bound that did not exist; a
+                        # genuinely slow tool is bounded by the liveness beacon,
+                        # which asks whether output is still arriving rather
+                        # than how long the work has taken.
+                        result = future.result()
                     except Exception as e:
                         fn_name = tc.get('function', {}).get('name', '?')
                         logger.warning(
@@ -1257,15 +1281,26 @@ class SubAgent:
                             exc_info=True)
 
                         result = f'Tool execution error ({fn_name}): {type(e).__name__}: {e}'
-                    results[tc_id] = result
+                    results[idx] = result
 
-            # Append results in original order (important for reproducibility)
-            for tc in tool_calls:
-                tc_id = tc.get('id', str(uuid.uuid4())[:8])
+            # Append results in original order (important for reproducibility).
+            # ``tool_call_id`` still carries the wire id the model sent (that is
+            # what the gateway matches on) — only the internal RESULT lookup is
+            # position-keyed. A blank id is repaired here too: two tool results
+            # sharing '' is a malformed turn on the wire. A missing position
+            # would be a real internal bug, so it is logged loudly instead of
+            # quietly degrading to '(no result)'.
+            for idx, tc in enumerate(tool_calls):
+                if idx not in results:
+                    logger.error(
+                        '[%s] Round %d: no result recorded for tool %s at '
+                        'position %d — internal bookkeeping bug, not a tool '
+                        'failure', self.agent_id, round_num,
+                        tc.get('function', {}).get('name', '?'), idx)
                 self.messages.append({
                     'role': 'tool',
-                    'tool_call_id': tc_id,
-                    'content': results.get(tc_id, '(no result)'),
+                    'tool_call_id': tc.get('id') or str(uuid.uuid4())[:8],
+                    'content': results.get(idx, '(no result)'),
                 })
 
     def _known_tool_names(self) -> set[str]:

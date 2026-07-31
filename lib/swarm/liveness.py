@@ -152,7 +152,20 @@ class ProgressBeacon:
         except Exception as e:
             # Fail OPEN: a broken beacon must not become a new way to kill a
             # healthy swarm — the exact failure mode this module replaces.
-            logger.warning('[Beacon] liveness probe failed (assuming alive): %s', e)
+            #
+            # But fail-open has a cost that MUST be visible. While this
+            # predicate is broken every agent reads as alive forever, so the
+            # driver never terminates, ``run_until_idle`` never returns and the
+            # TTL sweep never reaps — all three consumers silently lose their
+            # only stopping condition, which is strictly worse than the
+            # premature-abort bug this module fixed. Hence ERROR + traceback
+            # rather than a quiet warning, and the message names the
+            # CONSEQUENCE instead of just echoing the exception: anything
+            # reaching here is a bug in the beacon itself.
+            logger.error('[Beacon] LIVENESS PROBE BROKEN (%s) — assuming alive; '
+                         'while this persists NO agent can be judged stalled '
+                         'and the swarm has NO stopping condition', e,
+                         exc_info=True)
             return True
 
     def stalled_agents(self) -> list[tuple[str, float, str]]:

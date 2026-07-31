@@ -207,16 +207,26 @@ class StreamingScheduler:
             self._launch_ready_locked()
             return list(specs)
 
-    def run_until_idle(self, timeout: float = 600.0) -> list[tuple[SubTaskSpec, SubAgentResult]]:
+    def run_until_idle(self, timeout: float | None = None) -> list[tuple[SubTaskSpec, SubAgentResult]]:
         """Block until there are no pending or running specs.
 
         Returns the list of ``(spec, result)`` pairs completed during
         this call (i.e. **not** all-time results, just this batch).
+
+        ``timeout=None`` (default) = **no fixed whole-swarm budget**, the same
+        contract as ``iter_completions``. This default used to be 600.0: no
+        in-tree caller reaches it today, but leaving the exact constant that
+        abandoned running agents sitting in a sibling entry point is how the
+        defect returns the first time someone wires this method up.
+        Termination is decided by the liveness beacon (genuine silence), so a
+        slow-but-producing swarm is never cut off; an explicit finite
+        ``timeout`` is still honoured for callers that want a hard ceiling.
         """
-        logger.info('[Scheduler] run_until_idle START timeout=%.0fs pending=%d running=%d completed=%d',
-                     timeout, len(self._pending), len(self._running), len(self._completed))
+        logger.info('[Scheduler] run_until_idle START timeout=%s pending=%d running=%d completed=%d',
+                     (f'{timeout:.0f}s' if timeout else 'liveness-governed'),
+                     len(self._pending), len(self._running), len(self._completed))
         batch: list[tuple[SubTaskSpec, SubAgentResult]] = []
-        deadline = time.monotonic() + timeout
+        deadline = (time.monotonic() + timeout) if timeout and timeout > 0 else None
         t0 = time.monotonic()
 
         while True:
@@ -226,14 +236,32 @@ class StreamingScheduler:
                 logger.debug('[Scheduler] run_until_idle: idle state reached')
                 break
 
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                logger.warning('[Scheduler] run_until_idle TIMEOUT after %.1fs, pending=%d running=%d',
-                               time.monotonic() - t0, len(self._pending), len(self._running))
+            # Liveness, not elapsed time, decides when to give up on a
+            # still-running swarm (mirrors iter_completions).
+            if not self._beacon.is_making_progress():
+                logger.warning(
+                    '[Scheduler] run_until_idle: swarm stalled — no activity '
+                    'for %.0fs (stall_at=%.0fs), pending=%d running=%d',
+                    self._beacon.seconds_since_activity(),
+                    self._beacon.stall_timeout,
+                    len(self._pending), len(self._running))
                 break
 
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    logger.warning('[Scheduler] run_until_idle hit the caller-'
+                                   'supplied %.0fs ceiling after %.1fs, '
+                                   'pending=%d running=%d', timeout,
+                                   time.monotonic() - t0,
+                                   len(self._pending), len(self._running))
+                    break
+                wait_for = min(remaining, 2.0)
+            else:
+                wait_for = 2.0
+
             try:
-                item = self._results_queue.get(timeout=min(remaining, 2.0))
+                item = self._results_queue.get(timeout=wait_for)
                 spec, result = item
                 logger.debug('[Scheduler] run_until_idle: got result agent=%s status=%s elapsed=%.1fs',
                              spec.id, result.status, time.monotonic() - t0)
@@ -641,7 +669,8 @@ class AsyncStreamingScheduler:
                  default_retries: int = 1,
                  on_agent_complete: Callable | None = None,
                  on_agent_start: Callable | None = None,
-                 on_retry: Callable | None = None):
+                 on_retry: Callable | None = None,
+                 progress_beacon: ProgressBeacon | None = None):
         self._sync_scheduler = StreamingScheduler(
             agent_factory=agent_factory,
             rate_limiter=rate_limiter,
@@ -651,6 +680,7 @@ class AsyncStreamingScheduler:
             on_agent_complete=on_agent_complete,
             on_agent_start=on_agent_start,
             on_retry=on_retry,
+            progress_beacon=progress_beacon,
         )
 
     async def add_specs(self, specs: list[SubTaskSpec], inject_deps: bool = True):
@@ -658,21 +688,29 @@ class AsyncStreamingScheduler:
         import asyncio
         await asyncio.to_thread(self._sync_scheduler.add_specs, specs, inject_deps)
 
-    async def run_until_idle(self, timeout: float = 600.0) -> list[tuple[SubTaskSpec, SubAgentResult]]:
-        """Block asynchronously until the scheduler is idle."""
+    async def run_until_idle(self, timeout: float | None = None) -> list[tuple[SubTaskSpec, SubAgentResult]]:
+        """Block asynchronously until the scheduler is idle.
+
+        ``None`` = liveness-governed, matching the sync scheduler.
+        """
         import asyncio
         return await asyncio.to_thread(self._sync_scheduler.run_until_idle, timeout)
 
     async def iter_completions(self, poll_interval: float = 0.5,
-                                timeout: float = 600.0):
+                                timeout: float | None = None):
         """Async generator yielding ``(spec, result)`` as agents complete.
 
         Internally polls the synchronous scheduler's ``_results_queue``
         with short timeouts, yielding control back to the asyncio event
         loop between polls.
+
+        ``timeout=None`` (default) = liveness-governed, the same contract as
+        the sync ``iter_completions``. It used to default to 600.0 — the exact
+        constant that abandoned running agents on the sync path.
         """
         import asyncio
-        deadline = time.monotonic() + timeout
+        deadline = (time.monotonic() + timeout) if timeout and timeout > 0 else None
+        _beacon = self._sync_scheduler._beacon
 
         while True:
             # Drain and check idle atomically via the sync scheduler
@@ -695,15 +733,26 @@ class AsyncStreamingScheduler:
             if idle and drained:
                 continue
 
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            if not _beacon.is_making_progress():
+                logger.warning(
+                    '[AsyncScheduler] swarm stalled — no activity for %.0fs '
+                    '(stall_at=%.0fs)', _beacon.seconds_since_activity(),
+                    _beacon.stall_timeout)
                 return
+
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return
+                wait_for = min(remaining, poll_interval)
+            else:
+                wait_for = poll_interval
 
             # Non-blocking wait: sleep briefly then try queue
             try:
                 item = await asyncio.to_thread(
                     self._sync_scheduler._results_queue.get,
-                    timeout=min(remaining, poll_interval),
+                    timeout=wait_for,
                 )
                 yield item
             except queue.Empty:

@@ -468,3 +468,227 @@ def test_run_command_emits_the_heartbeat_on_real_output():
     with thread_progress_sink(beacon, 'a1'):
         _safe_on_chunk(None, 'stdout', '')      # empty chunk = no evidence
     assert beacon.seconds_since_activity('a1') < 0.2
+
+
+# ═══════════════════════════════════════════════════════
+#  6. Parallel-tool result addressing  (the 4th-clock hunt's real find)
+# ═══════════════════════════════════════════════════════
+#
+# `future.result(timeout=300)` in the parallel branch of _execute_tool_calls
+# LOOKS like a fourth wall clock. MEASURED: it could never fire — `as_completed`
+# yields only futures that are ALREADY done (done=True at every yield, verified
+# including a 2.0s task read with timeout=0.01), so the 300 was dead weight, not
+# a live cap. It is gone anyway: a number implying a bound that does not exist
+# is a trap for the next reader.
+#
+# The same block held a REAL and worse defect. Results were keyed by
+# `tc.get('id', str(uuid.uuid4())[:8])`, and lib/llm/_sse_core.py:854/922
+# creates every tool-call slot with `'id': ''` — the KEY ALWAYS EXISTS, so the
+# uuid fallback is unreachable and cannot de-collide anything:
+#   * two parallel calls that both keep id='' collapse onto ONE dict key, so
+#     the first tool is fed the SECOND tool's output — silently, no error;
+#   * had the fallback fired it would mint DIFFERENT uuids at execution and at
+#     lookup, feeding the model the literal string '(no result)'.
+# Both are now impossible: results are keyed by POSITION in the batch.
+
+
+class _IdCollisionAgent:
+    """Minimal harness driving the REAL _execute_tool_calls parallel branch."""
+
+    def __init__(self, tool_calls, outputs):
+        from lib.swarm.agent import SubAgent
+        spec = SubTaskSpec(id='collide', role='coder', objective='o')
+        self.agent = SubAgent(
+            spec, parent_task={}, all_tools=[], model='m',
+            thinking_enabled=False,
+            build_body_fn=lambda **kw: dict(kw),
+            dispatch_stream_fn=lambda *a, **k: ({}, 'stop', {}),
+        )
+        self._outputs = outputs
+        self.tool_calls = tool_calls
+        self.agent._execute_single_tool = self._exec
+
+    def _exec(self, tc, round_num):
+        # Identify by object IDENTITY — the harness must not rely on ids
+        # either, since ids are exactly what is under test.
+        for i, cand in enumerate(self.tool_calls):
+            if cand is tc:
+                return self._outputs[i]
+        raise AssertionError('unknown tool_call')
+
+
+def _tc_no_id(cmd):
+    """A tool call shaped like the SSE accumulator emits: 'id' present but ''."""
+    return {'id': '', 'function': {'name': 'run_command',
+                                   'arguments': '{"command":"' + cmd + '"}'}}
+
+
+def test_parallel_tools_with_blank_ids_do_not_swap_results():
+    """Two blank-id parallel calls must each receive THEIR OWN output.
+
+    Pre-fix both collapsed onto the key '' and the first tool was handed the
+    second's output — no error, no log, just a wrong tool result fed to the
+    model. This is the shape `coder-tests` ran: it dispatched two parallel
+    run_commands in round 1.
+    """
+    calls = [_tc_no_id('pytest'), _tc_no_id('git status')]
+    outputs = ['PYTEST-OUTPUT-12610-CHARS', 'GIT-STATUS-OUTPUT']
+    h = _IdCollisionAgent(calls, outputs)
+    before = len(h.agent.messages)
+    h.agent._execute_tool_calls(calls, round_num=1)
+    appended = [m for m in h.agent.messages[before:] if m.get('role') == 'tool']
+
+    assert len(appended) == 2, f'expected 2 tool results, got {len(appended)}'
+    contents = [m['content'] for m in appended]
+    assert contents == outputs, (
+        f'parallel tool results are mis-addressed: {contents!r} != {outputs!r} '
+        '— a blank/duplicate id collapsed two results onto one key')
+
+
+def test_parallel_tool_results_are_never_literally_no_result():
+    """No tool call may be handed the placeholder '(no result)'.
+
+    With the old uuid fallback the execution-time id and the lookup-time id
+    were different strings, so the lookup missed and the model was told
+    '(no result)' — the exact words that appeared on screen.
+    """
+    calls = [_tc_no_id('a'), _tc_no_id('b'), _tc_no_id('c')]
+    outputs = ['OUT-A', 'OUT-B', 'OUT-C']
+    h = _IdCollisionAgent(calls, outputs)
+    h.agent._execute_tool_calls(calls, round_num=1)
+    tool_msgs = [m for m in h.agent.messages if m.get('role') == 'tool']
+    assert len(tool_msgs) == 3
+    for m in tool_msgs:
+        assert m['content'] != '(no result)', \
+            'a real tool output was replaced by the (no result) placeholder'
+    assert [m['content'] for m in tool_msgs] == outputs
+
+
+def test_parallel_tool_call_ids_stay_unique_on_the_wire():
+    """`tool_call_id` must stay unique even when the model sent blank ids.
+
+    The gateway matches assistant tool_calls to tool results by id, so two
+    results sharing '' is a malformed turn. Position-keying fixes the internal
+    lookup; the WIRE field needs repairing too.
+    """
+    calls = [_tc_no_id('x'), _tc_no_id('y')]
+    h = _IdCollisionAgent(calls, ['OX', 'OY'])
+    h.agent._execute_tool_calls(calls, round_num=1)
+    ids = [m['tool_call_id'] for m in h.agent.messages if m.get('role') == 'tool']
+    assert len(ids) == 2
+    assert all(i for i in ids), f'blank tool_call_id on the wire: {ids!r}'
+    assert len(set(ids)) == 2, f'duplicate tool_call_id on the wire: {ids!r}'
+
+
+def test_real_ids_are_preserved_verbatim():
+    """Complement: when the model DID send ids they must reach the wire as-is."""
+    calls = [
+        {'id': 'toolu_01', 'function': {'name': 'run_command', 'arguments': '{}'}},
+        {'id': 'toolu_02', 'function': {'name': 'grep_search', 'arguments': '{}'}},
+    ]
+    h = _IdCollisionAgent(calls, ['R1', 'R2'])
+    h.agent._execute_tool_calls(calls, round_num=1)
+    tool_msgs = [m for m in h.agent.messages if m.get('role') == 'tool']
+    assert [m['tool_call_id'] for m in tool_msgs] == ['toolu_01', 'toolu_02']
+    assert [m['content'] for m in tool_msgs] == ['R1', 'R2']
+
+
+def test_a_raising_tool_does_not_lose_its_siblings_results():
+    """One tool raising must not corrupt the addressing of the others."""
+    calls = [_tc_no_id('ok1'), _tc_no_id('boom'), _tc_no_id('ok2')]
+
+    class _H(_IdCollisionAgent):
+        def _exec(self, tc, round_num):
+            for i, cand in enumerate(self.tool_calls):
+                if cand is tc:
+                    if i == 1:
+                        raise RuntimeError('tool exploded')
+                    return self._outputs[i]
+            raise AssertionError('unknown tool_call')
+
+    h = _H(calls, ['GOOD-1', None, 'GOOD-2'])
+    h.agent._execute_tool_calls(calls, round_num=1)
+    contents = [m['content'] for m in h.agent.messages if m.get('role') == 'tool']
+    assert len(contents) == 3
+    assert contents[0] == 'GOOD-1'
+    assert 'RuntimeError' in contents[1] and 'tool exploded' in contents[1]
+    assert contents[2] == 'GOOD-2'
+
+
+# ═══════════════════════════════════════════════════════
+#  7. No residual whole-swarm budget in sibling entry points
+# ═══════════════════════════════════════════════════════
+
+def test_no_scheduler_entry_point_defaults_to_a_finite_budget():
+    """Every completion-draining entry point must be liveness-governed.
+
+    `iter_completions` was fixed first, but `run_until_idle` (sync + async) and
+    `AsyncStreamingScheduler.iter_completions` still carried the SAME 600.0
+    constant. No in-tree caller reaches them today — which is exactly why
+    leaving the constant there is how the defect comes back.
+    """
+    import inspect
+
+    from lib.swarm.scheduler import AsyncStreamingScheduler, StreamingScheduler
+
+    targets = [
+        (StreamingScheduler.iter_completions,
+         'StreamingScheduler.iter_completions'),
+        (StreamingScheduler.run_until_idle,
+         'StreamingScheduler.run_until_idle'),
+        (AsyncStreamingScheduler.iter_completions,
+         'AsyncStreamingScheduler.iter_completions'),
+        (AsyncStreamingScheduler.run_until_idle,
+         'AsyncStreamingScheduler.run_until_idle'),
+    ]
+    for fn, name in targets:
+        default = inspect.signature(fn).parameters['timeout'].default
+        assert default is None or default <= 0 or default == float('inf'), (
+            f'{name} still defaults to a finite {default}s whole-swarm budget')
+
+
+def test_async_scheduler_shares_the_master_beacon():
+    """The async wrapper must not create a 4th private liveness record."""
+    import inspect
+
+    from lib.swarm.scheduler import AsyncStreamingScheduler
+    assert 'progress_beacon' in inspect.signature(
+        AsyncStreamingScheduler.__init__).parameters, \
+        'AsyncStreamingScheduler cannot be handed the shared beacon'
+
+    beacon = ProgressBeacon(stall_timeout=1.0)
+    sched = AsyncStreamingScheduler(agent_factory=lambda spec: None,
+                                    progress_beacon=beacon)
+    try:
+        assert sched._sync_scheduler._beacon is beacon, \
+            'async wrapper built its own beacon instead of sharing'
+    finally:
+        sched.shutdown()
+
+
+def test_broken_beacon_is_logged_loudly(caplog):
+    """A broken liveness probe fails OPEN but must scream.
+
+    Fail-open is correct (never invent a reason to kill work), but while it is
+    active nothing can ever be judged stalled — the swarm loses its ONLY
+    stopping condition, which is strictly worse than the bug it replaced. That
+    must not be a quiet warning.
+    """
+    import logging
+
+    beacon = ProgressBeacon(stall_timeout=1.0)
+    beacon.touch('a1')
+
+    def _boom(*_a, **_k):
+        raise RuntimeError('probe exploded')
+
+    original = ProgressBeacon.seconds_since_activity
+    try:
+        ProgressBeacon.seconds_since_activity = _boom
+        with caplog.at_level(logging.ERROR):
+            assert beacon.is_making_progress('a1') is True, \
+                'must fail OPEN — never kill work because the probe broke'
+        assert any(r.levelno >= logging.ERROR for r in caplog.records), \
+            'a broken liveness probe was not logged at ERROR'
+    finally:
+        ProgressBeacon.seconds_since_activity = original

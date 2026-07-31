@@ -1,3 +1,13 @@
+### 2026-08-01(S3 落地:流式出口全链通,以及一次「路由白名单前置」的自伤抓回) — commit `6a0aa7d5`(11 文件 +1049/-37;新套件 **22** 全绿,失败先行;相邻环 **316**;**NEUTER×3 各咬各的**(清扫/看门狗/取消),还原 cmp 逐字节验证)
+
+- **owner 两点坑(先入稿再动工):** ①`egress_cancel` 取消通道——bridge 原本没有取消概念,用户 Stop 后 agent 会继续烧订阅配额拉到自然结束;②流帧清扫误杀——`_sweep_streams_locked` 按全局 90s 清帧,LLM thinking 静默期超 90s 流悄悄死透,改为尊重命令自身 ttl + 消费端「done=false 但条目消失」判死。
+- **全链路:** bridge `get_frames` + 非阻塞 `enqueue_desktop_command`;agent `start_egress_stream`(meta 首帧/64KB b64 帧/脱 poll 循环保心跳)+ 在飞流注册表 `cancel_inflight`(close 中断上游,迟到帧丢弃);服务器 `EgressStreamReader`(requests.Response 同形:iter_lines 重组/read_all_text/close 触发 cancel/看门狗);sync `stream.py` connect 阶段路由分支 + `chat.py` 非流式分支;`EgressUnavailable → EndpointUnreachableError`(provider-down 走模型回退)。
+- **★ 自伤抓回(传输层测试最先报警):** 我把 `route_request` 放在 `_stream_chat_once` 无条件调用,sse_core_parity 14 个测试瞬间全红——**路由没做白名单前置,对任意 URL(内网网关/测试桩)都真探测,探测失败就尝试改道**。改为「非订阅域一律 direct 不探测不改道」;conftest 的 `LLM_BASE_URL=api.openai.com/v1` 恰是白名单域,parity 套件钉住路由接缝为 direct(传输壳与路由分层,各有套件)。**「接入点无条件化」必然炸半径过大,白名单前置是这类路由的默认形态。**
+- **NEUTER 的一次自我修正(立档):** 第一发看门狗 NEUTER(整体禁掉判死)让测试**挂死**——消费循环空转,NEUTER 没跑完。**禁「判死」类机制的 NEUTER 要用反向形态**(让判死在该静默时乱判:agent 活着也判死 → 锚 test_quiet_when_agent_alive 精确红,另一钉保持绿),不能让它产生无限等待。
+- **传输选择实测:** `async_dispatch_stream` docstring 自述「RESERVED-BY-DESIGN — NO PRODUCTION CALLER TODAY」——生产唯一承重是 sync `stream.py`(spawn_task→to_thread→dispatch_stream→stream_chat),astream 分支不在本批(非流式 chat.py 已同步接)。
+- **同批边界协调:** ms8x5blr(responses 第三协议迁移 codex 翻译区)发边界询问,已回复确认我不碰翻译区,并移交三条必须保留的契约(_parse_jwt_claims 三元组/refresh singleflight/_oauth_http_post 路由)。
+- **验收边界(如实):** 离线 fake-bridge 全绿;真机需 owner 起 `--allow-egress` agent + 重启 + bundle 重建。
+
 ### 2026-08-01(子夜·stale-manifest 第三次实测发生:这次是在「修复已存在但未部署」的进程里) — owner curl 生产实测抓出 sub-3A 未生效;根因定案 = **部署差**,不是新 bug(Epic-E `pt_3879f00e`,claimed)
 
 - **事故原样(全部实测取证):** owner curl 线上发现:服务的 core bundle(`bundle-a46a7f0b.js`,**23:58:35** 构建)仍含 `_handleCrossTabMsg` 函数体/`claude_dialogue_sync`/`conv-notify`(old shape),feature bundle(`feature-8204ccdc.js`)停在 **14:29** 且不含 cross_tab_sync。而我 23:46:32 改的 manifest(deferral 落地)、23:47:14 改的 feature-loader.js —— **重建发生在 manifest 修改 12 分钟后,用的却是旧清单**。

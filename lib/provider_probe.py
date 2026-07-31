@@ -1,9 +1,13 @@
 """Access-matrix cell-probe engine — server-owned background reachability test.
 
 Moved out of ``routes/config.py`` (2026-06). Sends a 1-token completion to
-every (key × concrete-model-id) cell of a provider to learn which pairs the
-gateway actually routes. Because each alias on a gateway can route to a
-genuinely DIFFERENT upstream model, every alias is probed independently.
+every (key × wire-id) SLOT of a provider to learn which pairs the gateway
+actually routes. The probed (key, id) set is the dispatcher's own slot set
+each key's pool resolved through ``resolve_request_ids`` (an explicit
+``request_ids`` pool, possibly replaced per key by ``key_access``, else
+``[model_id] + aliases``) — because each wire id on a gateway can route to
+a genuinely DIFFERENT upstream model, and a (key, id) pair the dispatcher
+never routes is not worth a verdict.
 
 The probe is a long-running fan-out: it runs in a background thread and its
 progress is persisted to disk (``data/config/probe_cache/``) as a secret-free
@@ -476,10 +480,26 @@ _PROBE_DISABLE_STATUSES = {'rate_limited', 'unauthorized', 'not_found', 'unavail
 
 
 def build_probe_work(provider: dict, models: list, api_keys: list) -> list:
-    """Build the probe work list: one item per (key × concrete id).
+    """Build the probe work list: one item per (key × wire id) SLOT —
+    exactly the pairs the dispatcher can route.
 
     Each item is ``(key_idx, api_key, root_id, wire_id, caps, base_url,
-    protocol)``. The last two are resolved PER MODEL via
+    protocol)``. ``root_id`` is the LOGICAL model id (row grouping +
+    recommend-disable attribution); ``wire_id`` is what actually goes on
+    the wire for THAT key, resolved per key through the dispatcher's own
+    contract (:func:`lib.llm_dispatch.model_entry.resolve_request_ids`)
+    — never re-derived here, so the probe can never test a different id
+    set than the dispatcher sends:
+
+      * an explicit ``request_ids`` pool wins (a ``key_access`` cell
+        REPLACES the pool for its key), so the logical ``model_id`` of an
+        explicit-pool entry — a preset-facing identity no real request
+        carries — is never probed;
+      * ``disabled_ids`` is popped before resolving: a disabled id still
+        routes the moment the user re-enables it, so it keeps its verdict
+        (the matrix shows the pip on its toggleable row).
+
+    The last two tuple items are resolved PER MODEL via
     :func:`lib.llm_dispatch.provider_face.resolve_face`, because one account
     can expose several wire faces — probing a Claude cell on the OpenAI face
     of a dual-face gateway returns a false ``not_found`` and the matrix then
@@ -493,6 +513,7 @@ def build_probe_work(provider: dict, models: list, api_keys: list) -> list:
     still gets probed on the provider default: the matrix reports
     reachability, and the refusal itself is surfaced by the dispatcher.
     """
+    from lib.llm_dispatch.model_entry import resolve_request_ids
     from lib.llm_dispatch.provider_face import resolve_face
 
     base_url = provider.get('base_url') or ''
@@ -507,7 +528,11 @@ def build_probe_work(provider: dict, models: list, api_keys: list) -> list:
             face = resolve_face(provider, m)
             cell_url = face.base_url if (face.ok and face.base_url) else base_url
             cell_proto = (face.protocol if face.ok else protocol) or 'openai'
-            for mid in [root] + [a for a in (m.get('aliases') or []) if a]:
+            cell = (m.get('key_access') or {}).get(str(key_idx))
+            probe_cell = dict(cell) if isinstance(cell, dict) else None
+            if probe_cell:
+                probe_cell.pop('disabled_ids', None)
+            for mid in resolve_request_ids(m, probe_cell):
                 work.append((key_idx, api_key, root, mid, caps,
                              cell_url, cell_proto))
     return work

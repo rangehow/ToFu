@@ -1434,6 +1434,7 @@ var _i18n = {
   'settings.matrixIdMany': { zh: '线上 ID', en: 'wire ids' },
   'settings.matrixPresetBadge': { zh: '预设', en: 'preset' },
   'settings.matrixPresetHint': { zh: '逻辑名：仅供预设/模型选择器使用，从不在线上发出；每个线上 ID 都有自己的行', en: 'Logical name: used by presets and the model picker only, never sent on the wire; each wire id has its own row' },
+  'settings.matrixNotRoutedHint': { zh: '此密钥的请求池不含该 ID（调度器从不经此密钥路由它），点击首行的 ✎ 可编辑该密钥的请求池', en: 'This key\'s request pool does not include this id (the dispatcher never routes it through this key); use ✎ on the first wire row to edit the key\'s pool' },
   'settings.matrixAttempts': { zh: '探测次数', en: 'Attempts' },
   'settings.matrixAttemptsHint': { zh: '每个格子探测多次以过滤偶发的假 429；任一次成功即视为可用', en: 'Probe each cell several times to filter out false 429s; a single success counts as reachable' },
   'settings.matrixApplied': { zh: '已应用：禁用了 {n} 个格子', en: 'Applied: disabled {n} cell(s)' },

@@ -1376,6 +1376,38 @@
   border: 1.5px solid var(--s-ink); background: var(--s-cream); color: var(--s-ink);
   vertical-align: 1px;
 }
+/* ── Logical header row (model-identity contract): the preset-facing model_id
+   of an explicit request_ids pool. It is never a wire id, so its per-key
+   cells are intentionally empty (nothing to grant/deny/probe). ── */
+.stg-mx-row.is-logical .stg-mx-model.root {
+  background: linear-gradient(90deg, rgba(0,0,0,0.035), transparent 55%);
+}
+.stg-mx-cell.logical {
+  background: rgba(0,0,0,0.03);
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.04);
+}
+/* ── Not-routed cell: the row's wire id exists (some key routes it) but THIS
+   key's pool doesn't — the dispatcher can never send that pair. No toggle,
+   no probe; a faint hollow dot keeps the grid aligned. ── */
+.stg-mx-cell.noroute {
+  background: repeating-linear-gradient(45deg, transparent, transparent 6px, rgba(0,0,0,0.025) 6px, rgba(0,0,0,0.025) 12px);
+}
+.stg-mx-cell.noroute::after {
+  content: '';
+  display: inline-block;
+  width: 8px; height: 8px; border-radius: 50%;
+  border: 1.5px dashed var(--s-ink-soft);
+  opacity: 0.45;
+}
+.stg-mx-preset {
+  margin-left: 6px;
+  font-size: 8px; font-weight: 800; line-height: 1;
+  text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 1px 5px; border-radius: 3px;
+  border: 1.5px dashed var(--s-ink-soft); color: var(--s-ink-soft);
+  background: none;
+  vertical-align: 1px;
+}
 /* ── Alias rows: a concrete id mapping to a distinct upstream model ── */
 .stg-mx-row.is-alias .stg-mx-model.alias {
   padding-left: 14px !important;

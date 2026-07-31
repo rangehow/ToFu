@@ -23,7 +23,7 @@
 | # | 文件 | 字节 | 判定 | 一句话理由 |
 |---|---|---|---|---|
 | 1 | i18n.js | 404,150 | **已拆出** | pack 模式在服（sub-1）；源仍在清单内、构建期按 pack 替换 |
-| 2 | ui/tool_rounds.js | 260,719 | **可降级（候选 #1）** | 全仓最大非 i18n 文件；工具气泡渲染，首屏无轮次时不必需——先普查调用点 |
+| 2 | ui/tool_rounds.js | 260,719 | **boot-critical（实测定案 2026-08-01）** | 首屏恢复含工具轮的会话走 `chat_render.js:1499 → renderToolRoundsHTML`（裸调用，非闸）——整体 move 会让工具气泡首屏空白；只能走「冷渲染子集留 core + 交互增强（审批钮/计时器/QR/inspect）降级」的拆分，工作量大于普通 deferral，排期在装饰族之后 |
 | 3 | ui/chat_render.js | 136,701 | boot-critical | 消息渲染即首屏本体 |
 | 4 | ui/sse_pipeline.js | 116,042 | boot-critical | 聊天流主管道 |
 | 5 | api.js | 99,249 | boot-critical | 统一 API 客户端，`_CRITICAL_FILES` 成员 |
@@ -54,5 +54,4 @@
 
 - **目标（暂定）**：core 压缩态 ≤ **1.2 MB**（待 owner 确认）。
 - **当前**：1,550,424 B ⇒ 差距 ~350 KB。
-- **已排队**：tofu-scene+tofu-pet 160KB +
-  tool_rounds 261KB（若普查可行）⇒ 理论可释放 ~420KB，目标可达。
+- **已排队**：tofu-scene+tofu-pet 160KB（下一片）+ tool_rounds 拆分（冷渲染子集留 core 后可释放大头，需先设计拆分缝）⇒ 目标可达但路径在拆分不在整体 move。

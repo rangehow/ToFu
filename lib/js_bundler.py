@@ -591,6 +591,16 @@ _BUNDLE_FILES = [
     # remains in conversations.js — it calls into the still-unextracted
     # _verifyActiveConvFromServer path.
     'core/conv_verify_visibility.js',
+    # ── conv_verify_retry.js: bounded self-heal retry cluster
+    # (_CONV_VERIFY_RETRY_DELAYS_DEFAULT + _convVerifyRetryTimers +
+    # _convVerifyRetryDelays + _scheduleConvVerifyRetry).  Load BEFORE
+    # conversations.js so its three surviving call sites inside
+    # loadConversationMessages resolve via bundle-level window scope
+    # (pt_3879f00e slice 11).  The cluster REACHES BACK into
+    # conversations.js's `_verifyActiveConvFromServer` at CALL time via
+    # bundle-level window scope — the typeof guard makes the reference
+    # safe when hot-reloaded out of order.
+    'core/conv_verify_retry.js',
     'core/conversations.js',
     # Shared SSE fetch-response read/decode/buffer loop (readSSEStream) —
     # extracted 2026-07-11 from branch.js / paper-reader.js / ui/sse_pipeline.js.

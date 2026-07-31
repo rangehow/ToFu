@@ -797,42 +797,12 @@ async function loadConversationsFromServer(prefetchId) {
  *   (adopt-on-change only, no cache repaint, no scroll reset). Bounded: once
  *   the delays are exhausted we leave _needsLoad=true + the verifying dim,
  *   and the next manual open re-verifies. */
-const _CONV_VERIFY_RETRY_DELAYS_DEFAULT = [4000, 12000];
-const _convVerifyRetryTimers = {};
-
-function _convVerifyRetryDelays() {
-  /* Test seam: a harness may shorten the backoff via a window override. */
-  const d = (typeof window !== 'undefined') ? window._CONV_VERIFY_RETRY_DELAYS : null;
-  return (Array.isArray(d) && d.length) ? d : _CONV_VERIFY_RETRY_DELAYS_DEFAULT;
-}
-
-function _scheduleConvVerifyRetry(convId) {
-  if (convId !== activeConvId) return;   /* only the OPEN conv self-heals in place */
-  if (typeof _verifyActiveConvFromServer !== 'function') return;
-  const conv = conversations.find((c) => c.id === convId);
-  if (!conv) return;
-  const delays = _convVerifyRetryDelays();
-  const attempt = conv._verifyRetryCount || 0;
-  if (attempt >= delays.length) return;
-  clearTimeout(_convVerifyRetryTimers[convId]);
-  _convVerifyRetryTimers[convId] = setTimeout(() => {
-    delete _convVerifyRetryTimers[convId];
-    const c = conversations.find((x) => x.id === convId);
-    if (!c || convId !== activeConvId) return;
-    if (activeStreams.has(convId) || _editingMsgIdx !== null || c.activeTaskId) return;
-    c._verifyRetryCount = attempt + 1;
-    Promise.resolve(_verifyActiveConvFromServer(convId)).then((adopted) => {
-      if (adopted !== null && adopted !== undefined) {
-        /* Verify landed (with or without changes) — the paint is server-true. */
-        c._verifyRetryCount = 0;
-        delete c._cacheKnownStale;
-        _setCacheVerifying(convId, false);
-      } else {
-        _scheduleConvVerifyRetry(convId);
-      }
-    }).catch(() => _scheduleConvVerifyRetry(convId));
-  }, delays[attempt]);
-}
+/* ── cache-verify self-heal retry cluster: extracted 2026-07-31 to
+ *   core/conv_verify_retry.js (pt_3879f00e sub-part 2 slice 11).
+ *   _convVerifyRetryDelays + _scheduleConvVerifyRetry + the retry-schedule
+ *   const + the active-timer map all live there; the three call sites
+ *   inside loadConversationMessages / _finishLoadFromServer resolve via
+ *   bundle-level window scope at call time. */
 
 /* ── _rescuableLocalTail: extracted 2026-07-29 to core/conv_rescue_tail.js
  *   (pt_3879f00e sub-part 2 slice 8). The one call site inside
@@ -1455,8 +1425,7 @@ async function loadConversationMessages(convId) {
       conv._needsLoad = false;
       /* ★ Verify landed — cancel any pending self-heal retry for this conv. */
       conv._verifyRetryCount = 0;
-      clearTimeout(_convVerifyRetryTimers[convId]);
-      delete _convVerifyRetryTimers[convId];
+      _clearConvVerifyRetryTimer(convId);
       /* ★ Windowed-read truncation guard: when the server served only the tail
        *   window (N msgs) of a longer conversation, stamp the sync baseline
        *   from the AUTHORITATIVE full count (data.totalCount), NOT the window

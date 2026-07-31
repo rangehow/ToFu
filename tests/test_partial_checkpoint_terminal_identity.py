@@ -245,6 +245,99 @@ def test_partial_docstring_matches_behaviour():
         'implement; it must name the actual gate condition.')
 
 
+def test_reconcile_interrupt_branch_is_never_reached_on_a_live_turn():
+    """The 4th CANDIDATE mint site — adjudicated NOT a defect; premise pinned here.
+
+    ``lib/conversations/reconcile.py`` has the same *shape* as the three real
+    mint sites: ``classify_ghost_tail() == 'interrupt'`` stamps
+    ``tail['finishReason'] = 'interrupted'`` and writes NO ``_taskId``.
+
+    MEASURED: the PURE predicate DOES fire on a live turn's shape — a
+    thinking-phase tail (empty content + streaming thinking + no settled round)
+    classifies as 'interrupt', and ``reconcile_conversation_messages`` stamps it
+    (see the companion test below). So the predicate ALONE is not the safety.
+
+    What makes it safe is that all THREE callers sit structurally off the live
+    path, verified individually:
+
+      1. ``routes/conversations.py`` (GET / warm-open) — guarded by an explicit
+         ``if _conv_has_live_task(conv_id): return <unreconciled>`` at BOTH
+         entries, with the reason written down in-source: "a pending/running
+         task's empty placeholder is indistinguishable from a ghost tail".
+      2. ``lib/tasks_pkg/manager/_sync.py`` — called ONLY from
+         ``_sync_result_to_conversation`` (the TERMINAL sync), inside its
+         "nothing to persist" branch and behind a latest-task gate. At that
+         point the task is settled by definition, so its own tail cannot still
+         be streaming.
+      3. ``lib/tasks_pkg/manager/_recovery.py`` — inside
+         ``recover_stale_tasks_on_startup``; the turns it touches are dead by
+         construction (their process is gone).
+
+    Hence NO identity anchor is required here: the tail it stamps is never a
+    live turn's own bubble, so ``assistantTailIsPriorTurn`` is never asked about
+    it while that task is connecting. It is also semantically CORRECT —
+    ``interrupted`` is the true terminal state of a turn whose process died.
+
+    THIS TEST IS THE TRIPWIRE. The safety is caller-side, not predicate-side, so
+    it is exactly the property a refactor breaks silently: moving the reconcile
+    onto a hot path (a mid-stream self-heal, a checkpoint-time sweep) would
+    resurrect the duplicate-bubble bug in its most durable form. Asserting the
+    gates exist makes that move fail loudly instead.
+    """
+    conv_src = open(os.path.join(REPO, 'routes', 'conversations.py'),
+                    encoding='utf-8').read()
+    # Gate 1: the GET path must refuse to reconcile a conv with a live task.
+    assert conv_src.count('if _conv_has_live_task(conv_id):') >= 2, (
+        'the GET-path live-task gate around reconcile is gone — a mid-stream '
+        "reconcile can now stamp finishReason=interrupted onto the LIVE turn's "
+        'own tail (no _taskId), which reads back as a prior turn and mints a '
+        'duplicate assistant bubble.')
+
+    sync_src = open(os.path.join(REPO, 'lib', 'tasks_pkg', 'manager', '_sync.py'),
+                    encoding='utf-8').read()
+    # Gate 2: the settle-time reconcile must stay inside the TERMINAL sync.
+    assert '_reconcile_orphan_placeholder_on_settle' in sync_src, (
+        'the settle-time reconcile helper vanished — re-derive this premise.')
+    _term_fn = sync_src.split('def _sync_result_to_conversation(')[-1]
+    _partial_fn = sync_src.split('def _sync_partial_to_conversation(')[-1]
+    assert '_reconcile_orphan_placeholder_on_settle(task)' in _term_fn, (
+        'the settle-time reconcile is no longer called from the TERMINAL sync.')
+    assert '_reconcile_orphan_placeholder_on_settle(task)' not in _partial_fn, (
+        'the ghost reconcile is now called from the PARTIAL (mid-stream) '
+        'checkpoint — that puts the un-anchored finishReason=interrupted stamp '
+        'ON THE LIVE PATH. It must then be gated through '
+        'lib/chat/terminal_gate.py and write _taskId atomically, exactly like '
+        'the P1a block.')
+
+    rec_src = open(os.path.join(REPO, 'lib', 'tasks_pkg', 'manager', '_recovery.py'),
+                   encoding='utf-8').read()
+    # Gate 3: the startup reconcile must stay in the startup recovery function.
+    _startup_fn = rec_src.split('def recover_stale_tasks_on_startup(')[-1]
+    assert 'reconcile_conversation_messages' in _startup_fn, (
+        'the startup ghost reconcile moved out of recover_stale_tasks_on_startup '
+        '— if it now runs anywhere a task can still be streaming, the '
+        'un-anchored interrupted stamp is back on the live path.')
+
+
+def test_reconcile_interrupt_predicate_does_fire_on_a_live_shape():
+    """The other half of the premise, stated explicitly so nobody "simplifies"
+    the caller gates away believing the predicate is self-guarding.
+
+    It is NOT: a live thinking-phase tail classifies as 'interrupt'. Recording
+    that measured fact here is what makes the gates above visibly load-bearing.
+    """
+    from lib.conversations.reconcile import classify_ghost_tail
+    live_thinking_tail = {
+        'role': 'assistant', 'content': '',
+        'thinking': 'Let me analyse the logs...', 'toolRounds': [],
+    }
+    assert classify_ghost_tail(live_thinking_tail) == 'interrupt', (
+        'classify_ghost_tail no longer fires on a live thinking-phase tail. If '
+        'the predicate became live-aware on its own, the caller-side gates are '
+        'now belt-and-braces rather than load-bearing — update the premise in '
+        'test_reconcile_interrupt_branch_is_never_reached_on_a_live_turn.')
+
+
 if __name__ == '__main__':
     from tests._standalone_guard import guard_standalone_db
     guard_standalone_db('test_partial_checkpoint_terminal_identity.__main__',
@@ -254,7 +347,9 @@ if __name__ == '__main__':
                test_terminal_status_verdict_is_carried_with_identity,
                test_plain_midstream_checkpoint_is_unchanged,
                test_partial_sync_routes_through_the_shared_gate,
-               test_partial_docstring_matches_behaviour):
+               test_partial_docstring_matches_behaviour,
+               test_reconcile_interrupt_branch_is_never_reached_on_a_live_turn,
+               test_reconcile_interrupt_predicate_does_fire_on_a_live_shape):
         fn()
         print(f'  ✓ {fn.__name__}')
     print('all green')

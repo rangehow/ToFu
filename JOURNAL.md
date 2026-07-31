@@ -1269,3 +1269,9 @@
 - **守卫账:** 新增 C4(no-restamp 行为钉:existing._msgId 保留)+ 3 条接线守卫(regen/edit/三路 no-restamp)失败先行 3 红;NEUTER-C4(恒改铸)→ C4 红、C2 锚绿。套件 7→**11/11**。
 - **三态分诊(再次):** 环中 `test_continue_lossless::...captures_signature` 红 —— `SSEAccumulator() got unexpected kwarg 'anthropic_translator'`,兄弟 responses 批构造签名收敛为 wire_translator 后的测试漂移,backend LLM 层与本批无关,立票 `pt_850e541fc3ce4aba`。
 - **验收边界:** 纯前端,**需重启 + bundle 重建生效**。
+
+### 2026-08-01(续·pt_ca1b3b2f 核销:send-failure 守卫 2 红判定为测试漂移,重写为钉语义+helper 行为级) — 接我自己立的票;修复 `d218c8eb`(1 文件 +203/-60;套件 **4/4**,相邻环 **68 绿**)
+
+- **判定(红先问产品错还是测试错):** 逐分支核查耐久语义——①用户停止分支的 rescue 对被 startup-stop 重构(pt_fa32a235)**合法移进**共享 helper `_userStopDuringStartup({rescue:true})`(send_button.js 内有 `await _syncP` + `markConvPendingSync` + `_sendInFlight` 先行清除);②通用错误分支内联对在 main_send_pipeline.js:841-842 完好、clear 先行。**耐久不变量完好,旧守卫钉的是重构前「内联片段恰好 2 处」的形状 —— 测试漂移,不是产品错。**
+- **重写后反而更强:** 机制 harness 不动;分支形状断言更新(内联对×1 + helper rescue:true 调用,均 clear 先行;helper 内含 opts.rescue 门控对);**新增行为级 harness 驱动真实 `_userStopDuringStartup`** —— rescue+同步失败→标 pendingSync、rescue+成功→不标、无 rescue+失败→best-effort 吞掉(含 throwing sync)、syncOpts 透传、abortConv 必达;**三重 NEUTER 各咬各的**(摘内联对→计数 0;门掉 helper rescue 臂→行为红;摘 rescue:true→接线红)。
+- **顺带核查(不扩面):** regen/edit 的 `_userStopDuringStartup` 不带 rescue 是**正确的** —— 它们的截断态在 POST 前已 allowTruncate 预同步,服务器已有耐久副本;rescue 只需要在 send 路(用户消息可能只有乐观副本)。环中 `test_continue_lossless` 1 红仍为 `pt_850e541fc3ce4aba`(SSEAccumulator kwarg 漂移),与本案无关。

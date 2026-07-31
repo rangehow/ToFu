@@ -13,23 +13,25 @@ still passes, and the release ships undocumented anyway. That is the same
 shape as the defect this project already hit twice: an instrument that is
 present but carries no information.
 
-The step cannot be exercised end-to-end from here (dispatching a real
-GitHub Actions run needs credentials this environment does not have), so this
-suite closes the reachable part of that gap:
+The step cannot be dispatched to a real GitHub runner from here (that needs
+credentials this environment does not have), so this suite closes every part
+of the gap that IS decidable locally:
 
-  * the ``if:`` expression is EVALUATED against the three real dispatch
-    contexts, rather than eyeballed;
+  * the ``if:`` expression is EVALUATED against the real dispatch contexts,
+    rather than eyeballed;
   * the step is pinned to run BEFORE any build job could consume the version;
-  * the interpreter/path shape is pinned to match the sibling gate in the same
-    job (``python3 scripts/…`` from the checkout root), which is the shape
-    already proven on real runners by ``release_assets.py``.
+  * the shipped step body is EXECUTED verbatim against a clean ``git archive``
+    checkout — which is what proves the script and ``CHANGELOG.md`` are really
+    committed (not just present locally), that the relative paths resolve at
+    the checkout root, and that a failure propagates through ``set -e``.
 
-What remains genuinely unverified after this suite: the runner-side execution
-itself. That is recorded on the board rather than asserted here, because a
-test that claimed it would be the very thing this file exists to prevent.
+What remains genuinely unverified: the runner-side execution itself. That is
+recorded on the board rather than asserted here, because a test that claimed
+it would be the very thing this file exists to prevent.
 """
 
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -194,6 +196,101 @@ def test_gate_invocation_matches_the_shape_proven_on_real_runners():
     assert 'set -e' in gate_run, (
         f'without set -e the step could report success on a failed gate; '
         f'run:\n{gate_run}')
+
+
+def _clean_checkout(tmp_path: Path) -> Path:
+    """Materialise HEAD into a temp dir — what `actions/checkout@v4` produces.
+
+    Crucially this holds ONLY committed content, so a file that exists in the
+    working tree but was never committed is ABSENT here exactly as it would be
+    on a runner. That is a failure this project already hit once:
+    ``/scripts/*`` is deny-by-default in `.gitignore`, so a new gate script is
+    invisible to git until an explicit ``!`` exception is added — and the
+    workflow would then call a file that does not exist in CI while working
+    perfectly on the author's machine.
+    """
+    dest = tmp_path / 'ci-sim'
+    dest.mkdir()
+    archive = subprocess.run(['git', 'archive', 'HEAD'], cwd=_ROOT,
+                             capture_output=True, check=True).stdout
+    subprocess.run(['tar', '-x', '-C', str(dest)], input=archive, check=True)
+    return dest
+
+
+def _gate_body(version: str) -> str:
+    """The shipped step body with the workflow expression resolved."""
+    return _gate_step()['run'].replace(
+        '${{ steps.ver.outputs.version }}', version)
+
+
+def test_the_gate_and_its_inputs_survive_a_clean_checkout(tmp_path):
+    """Everything the step touches must be COMMITTED, not merely present locally.
+
+    The sibling-precedent argument (``release_assets.py`` proves python3 is
+    reachable in this job) covers the interpreter but NOT this: the changelog
+    gate carries a file dependency the sibling does not have — it reads
+    ``CHANGELOG.md`` on every release run, whereas ``release_assets.py`` runs
+    only inside the HTTP-200 branch and is handed its payload.
+    """
+    root = _clean_checkout(tmp_path)
+    for rel in ('scripts/changelog_gate.py', 'CHANGELOG.md', 'VERSION'):
+        assert (root / rel).is_file(), (
+            f'{rel} is missing from a clean checkout of HEAD, so the release '
+            f'workflow would fail on a runner while working fine locally')
+
+
+def test_the_gate_passes_when_run_exactly_as_the_workflow_runs_it(tmp_path):
+    """Execute the shipped shell verbatim, from the checkout root.
+
+    Asserting on the workflow's TEXT cannot distinguish a step that works from
+    one that dies on a missing file or a bad relative path. This runs the real
+    step body in a real clean checkout and requires exit 0 for the version the
+    repo is actually about to release.
+    """
+    root = _clean_checkout(tmp_path)
+    version = (root / 'VERSION').read_text(encoding='utf-8').strip()
+    proc = subprocess.run(['bash', '-c', _gate_body(version)], cwd=str(root),
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, (
+        f'the workflow step FAILS on a clean checkout for VERSION {version}.\n'
+        f'stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}')
+    assert 'DOCUMENTED' in proc.stdout
+
+
+def test_an_undocumented_version_aborts_the_step(tmp_path):
+    """THE ONE THAT MATTERS: proving it PASSES is not proving it is a gate.
+
+    Mirrors `workflow_dispatch` with `version_override` set to a version the
+    CHANGELOG does not mention. The step must exit non-zero — that is what
+    makes GitHub mark it failed, fail the ``version`` job, and (via
+    ``needs: version``) keep every build job from ever starting.
+    """
+    root = _clean_checkout(tmp_path)
+    proc = subprocess.run(['bash', '-c', _gate_body('0.99.0')], cwd=str(root),
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode != 0, (
+        'an undocumented version did NOT abort the step, so the release would '
+        f'proceed and publish it as Latest.\nstdout:\n{proc.stdout}')
+    assert 'UNDOCUMENTED' in proc.stdout
+
+
+def test_a_wrong_working_directory_blocks_rather_than_passing(tmp_path):
+    """If the gate ever loses its cwd, it must fail CLOSED.
+
+    The step relies on GitHub's default working directory being the checkout
+    root. Should that ever change, the honest outcome is a blocked release
+    (UNDETERMINED), never a silent pass — the asymmetry this gate is designed
+    around, and deliberately the opposite of ``release_assets.py``'s
+    fail-open rule.
+    """
+    root = _clean_checkout(tmp_path)
+    proc = subprocess.run(
+        ['bash', '-c',
+         'set -euo pipefail\npython3 changelog_gate.py --version 0.16.0'],
+        cwd=str(root / 'scripts'), capture_output=True, text=True, timeout=60)
+    assert proc.returncode != 0, (
+        'run from the wrong directory the gate PASSED, which would let an '
+        f'undocumented release ship on any cwd change.\nstdout:\n{proc.stdout}')
 
 
 def test_the_version_job_declares_the_runner_that_provides_python3():

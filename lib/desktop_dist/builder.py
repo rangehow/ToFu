@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -165,10 +166,22 @@ def _pipeline(workdir: str, version: str, sha: str, log_fh) -> str:
     #    first real run), and PyInstaller would bundle whatever cruft its
     #    analysis reaches into the installer. A clean venv reproduces the
     #    CI inputs bit-for-bit and eliminates that whole drift class.
+    #
+    #    tofu-search is EXEMPT from the requirements solve — the same split
+    #    install.sh makes (its _EXEMPT list): no pip index carries the
+    #    requirements floor (measured 2026-08-01: public PyPI tops at 0.5.1,
+    #    the internal mirror carries none), so a naive solve dies on it.
+    #    install.sh's own order is honoured: sibling checkout → vendor wheel
+    #    → index name (works wherever the floor IS published).
     venv = os.path.join(workdir, 'venv')
     vpy = os.path.join(venv, 'bin', 'python')
     _sh(f'{sys.executable} -m venv {venv}', log_fh)
-    _sh(f'{vpy} -m pip install --quiet -r requirements.txt '
+    ts_src = _tofu_search_source()
+    _sh(f'{vpy} -m pip install --quiet --no-deps {shlex.quote(ts_src)}',
+        log_fh)
+    build_reqs = _requirements_without_tofu_search(
+        os.path.join(src, 'requirements.txt'), workdir)
+    _sh(f'{vpy} -m pip install --quiet -r {build_reqs} '
         f'pyinstaller pystray pillow psycopg2-binary pyautogui pyperclip '
         f'psutil', log_fh, cwd=src)
 
@@ -210,6 +223,58 @@ def _record_built_artifact(dist: str, version: str, sha: str, log_fh) -> None:
                 name, size, sha256)
 
 
+def _tofu_search_source() -> str:
+    """Where this server gets tofu-search from, in install.sh's order.
+
+    A sibling checkout (the deploy reality here — the running env's own
+    tofu-search is an editable install of it), then a bundled vendor wheel,
+    then the bare package name for hosts whose index DOES carry the floor.
+    """
+    import glob
+    sibling = os.path.join(_REPO_ROOT, '..', 'tofu-search')
+    if os.path.isfile(os.path.join(sibling, 'pyproject.toml')):
+        return os.path.abspath(sibling)
+    wheels = sorted(glob.glob(
+        os.path.join(_REPO_ROOT, 'vendor', 'tofu_search-*.whl')))
+    if wheels:
+        return wheels[-1]
+    return 'tofu-search'
+
+
+def _requirements_without_tofu_search(req_path: str, workdir: str) -> str:
+    """A copy of requirements.txt minus the tofu-search line.
+
+    The pin IS the product's requirement — we do not loosen it, we install
+    the package separately from a source that satisfies it (see
+    _tofu_search_source), exactly like install.sh's _EXEMPT split. Fails
+    loud when the line is absent, so a rename never silently un-exempts it.
+    """
+    out_path = os.path.join(workdir, 'requirements.build.txt')
+    # The exemption names ONE package, not the prefix family: after
+    # 'tofu-search' must come a version/extras boundary or EOL — a
+    # 'tofu-search-extra' lookalike is NOT exempt (measured by the test
+    # that caught a naive startswith dropping it).
+    import re
+    line_re = re.compile(r'^\s*tofu-search(?:\s|\[|<|>|=|!|~|;|$)', re.I)
+    kept, dropped = [], []
+    with open(req_path, encoding='utf-8') as f:
+        for line in f:
+            if line.strip().startswith('#'):
+                kept.append(line)
+            elif line_re.match(line):
+                dropped.append(line.rstrip())
+            else:
+                kept.append(line)
+    if not dropped:
+        raise RuntimeError(
+            f'no tofu-search line found in {req_path} — the exemption list '
+            'is out of sync with requirements.txt')
+    with open(out_path, 'w', encoding='utf-8') as f:
+        f.writelines(kept)
+    logger.info('[DesktopDist] requirements filter dropped: %s', dropped)
+    return out_path
+
+
 def _read_version() -> str:
     with open(os.path.join(_REPO_ROOT, 'VERSION'), encoding='utf-8') as f:
         v = f.read().strip()
@@ -229,7 +294,6 @@ def _git(*args) -> str:
 def _sh(cmd: str, log_fh, *, cwd: str | None = None, env: dict | None = None,
         shell: bool = False, check: bool = True):
     """One pipeline step with its output in build.log (never silent)."""
-    import shlex
     logger.info('[DesktopDist] build step: %s', cmd)
     out = subprocess.run(
         cmd if shell else shlex.split(cmd),

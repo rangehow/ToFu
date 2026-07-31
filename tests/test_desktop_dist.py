@@ -438,6 +438,59 @@ def test_build_is_single_flight(tmp_store, monkeypatch):
 
 
 @pytest.mark.unit
+def test_tofu_search_source_prefers_the_sibling_checkout(tmp_store,
+                                                         monkeypatch):
+    """install.sh's order: sibling checkout → vendor wheel → index name.
+
+    Pinned because the floor (>=0.5.3) is on NO index (measured: public
+    PyPI tops at 0.5.1, the internal mirror carries none), so getting this
+    resolution wrong is a build that can never solve its requirements.
+    """
+    from lib.desktop_dist import builder
+    root = tmp_store / 'root'
+    root.mkdir()
+    monkeypatch.setattr(builder, '_REPO_ROOT', str(root))
+    # Sibling checkout present → it wins.
+    sib = tmp_store / 'tofu-search'
+    sib.mkdir()
+    (sib / 'pyproject.toml').write_text('[project]')
+    assert builder._tofu_search_source() == os.path.abspath(sib)
+    # No sibling checkout → vendor wheel; none → bare name.
+    sib.rename(tmp_store / 'not-tofu-search')
+    vendor = root / 'vendor'
+    vendor.mkdir()
+    whl = vendor / 'tofu_search-0.5.3-py3-none-any.whl'
+    whl.write_bytes(b'x')
+    assert builder._tofu_search_source() == str(whl)
+    whl.unlink()
+    vendor.rmdir()
+    assert builder._tofu_search_source() == 'tofu-search'
+
+
+@pytest.mark.unit
+def test_requirements_filter_drops_exactly_the_tofu_search_line(tmp_store):
+    from lib.desktop_dist import builder
+    req = tmp_store / 'requirements.txt'
+    req.write_text('# comment\nflask>=3\ntofu-search>=0.5.3\n'
+                   '  tofu-search-extra>=1\nrequests\n')
+    out = builder._requirements_without_tofu_search(str(req),
+                                                    str(tmp_store))
+    text = open(out).read()
+    assert 'tofu-search>=0.5.3' not in text
+    # The exemption is ONE line, not a family: an unrelated lookalike stays.
+    assert 'tofu-search-extra>=1' in text
+    assert 'flask>=3' in text and 'requests' in text
+    # A requirements file that lost its tofu-search pin must fail LOUD —
+    # otherwise the exemption silently stops exempting and the build dies
+    # on an unsatisfiable public solve.
+    req2 = tmp_store / 'requirements2.txt'
+    req2.write_text('flask>=3\n')
+    with pytest.raises(RuntimeError):
+        builder._requirements_without_tofu_search(str(req2),
+                                                  str(tmp_store))
+
+
+@pytest.mark.unit
 def test_the_build_route_is_authenticated():
     """Static pin (same shape as the devices-endpoints guard): a build is
     minutes of CPU, so the kick must never sit behind an open route."""

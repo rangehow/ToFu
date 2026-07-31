@@ -192,6 +192,7 @@
   var GAZE_TURN_MS = 1300;
   var _gazeAccum = 0;
   var _turnTimer = null;   // clears the transient 'pivot' pop after a facing flip
+  var _landTimer = null;   // clears the landing squash after a drop
 
   // Transient expressions auto-return to the resolved state after their beat.
   var TRANSIENT = { happy: 1, celebrating: 1, surprised: 1, curious: 1, alert: 1 };
@@ -588,6 +589,15 @@
   // ══════════════════════════════════════════════════════════════════════
   var W = {
     x: 30,            // px from bar's left content edge
+    // HEIGHT above the baseline, in px (positive = lifted off the ground).
+    // The pet is normally planted (y === 0); only a DRAG lifts it. This lives
+    // on the POSITION layer next to x because .tofu-pet owns exactly ONE
+    // transform — see _place(), which writes translateX and translateY in a
+    // SINGLE declaration. Writing Y from anywhere else (or as a second
+    // transform on the same element) would silently replace the X the wander
+    // loop just wrote: `transform` is one property, not two channels.
+    y: 0,
+    vy: 0,            // px/s vertical velocity, only while state==='fall'
     dir: 1,           // +1 right, -1 left
     state: 'idle',
     until: 0,         // ms timestamp when the current state ends
@@ -667,7 +677,19 @@
     }
   }
   function _place() {
-    if (_el) _el.style.transform = 'translateX(' + W.x.toFixed(1) + 'px)';
+    // ONE transform declaration carrying BOTH axes. translateY is negative
+    // because W.y is "height above the ground" and screen Y grows downward.
+    if (_el) {
+      _el.style.transform = 'translateX(' + W.x.toFixed(1) + 'px) translateY(' +
+        (-W.y).toFixed(1) + 'px)';
+      // The CAST SHADOW is what sells the lift: a raised object's shadow
+      // shrinks, softens and separates. Driven by HEIGHT rather than by a
+      // static [data-state="drag"] rule so it tracks continuously while the
+      // pointer moves AND during the release fall (which is NOT the drag
+      // state) — the old two-state version popped back to full size mid-air.
+      var lift = Math.max(0, Math.min(1, W.y / LIFT_MAX_PX));
+      _el.style.setProperty('--pet-lift', lift.toFixed(3));
+    }
     _positionBubble();   // the bubble rides above the pet, wherever it moved to
     // Subtle ground parallax: the scene drifts a fraction of the pet's travel
     // (opposite direction) for depth. The ground ::after reads --bar-scene-x.
@@ -851,6 +873,36 @@
     _setExpr(_resolve());
   }
 
+  // ── DROP: the third beat of "lift → carry → land" ──────────────────────
+  // Releasing a held pet must not teleport it to the floor: an object that
+  // vanishes from height to ground never reads as having been HELD — the same
+  // single-frame-jump problem as picking it up with no rise. So the drop is
+  // integrated under gravity in _step and ends with a landing squash, which is
+  // what makes the weight legible.
+  var FALL_GRAVITY = 520;   // px/s² — a short, snappy drop at this scale
+  function _enterFall() {
+    if (W.y <= 0.5) { W.y = 0; W.last = 0; _place(); _enter('idle'); return; }
+    W.vy = 0;
+    W.last = 0;              // don't integrate the gap since the last rAF tick
+    _enter('fall');
+  }
+  function _landed() {
+    W.y = 0; W.vy = 0;
+    _place();
+    // The squash rides the FRAME layer (data-landing) so it composites with the
+    // position layer's transform instead of overwriting it.
+    if (_el && !W.reduced) {
+      _el.setAttribute('data-landing', '1');
+      if (_landTimer) clearTimeout(_landTimer);
+      _landTimer = setTimeout(function () {
+        _landTimer = null;
+        if (_el) _el.removeAttribute('data-landing');
+      }, 240);
+    }
+    W.last = 0;
+    _enter('idle');
+  }
+
   // Chase step: dash toward the critter's live x; on catch, pounce + spook it.
   function _chaseStep(dt) {
     var cx = _critterX();
@@ -888,6 +940,12 @@
       _place();
     } else if (W.state === 'chase') {
       _chaseStep(dt);
+    } else if (W.state === 'fall') {
+      // integrate the drop; land exactly on the ground plane
+      W.vy += FALL_GRAVITY * dt;
+      W.y -= W.vy * dt;
+      if (W.y <= 0) { _landed(); }
+      else { _place(); }
     } else if (W.state === 'flee') {
       W.x += W.fleeDir * W.fleeSpeed * dt;
       _advanceGait(dt, W.fleeSpeed);
@@ -913,7 +971,13 @@
         _face(-W.dir, false);   // glance only — instant mirror, no plant-and-hop
       }
     }
-    if (W.state !== 'turn' && W.state !== 'chase' && _now() >= W.until && W.state !== 'react') {
+    // 'fall' is excluded like 'turn'/'chase': it ends on a GEOMETRIC condition
+    // (touching the ground), not on a timer. _enter('fall') sets no `until`, so
+    // without this exclusion the stale `until` left by the state before the drag
+    // is already in the past and _pickNext() fires on the very first airborne
+    // frame — stranding the pet mid-air with y > 0 and no leg to bring it down.
+    if (W.state !== 'turn' && W.state !== 'chase' && W.state !== 'fall' &&
+        _now() >= W.until && W.state !== 'react') {
       _pickNext();
     } else if (W.state === 'react' && _now() >= W.until) {
       _pickNext();
@@ -958,8 +1022,22 @@
   //  (preserves the day-report bubble). Uses Pointer Events (mouse + touch) with
   //  capture so a fast drag that outruns the sprite still tracks. Guarded so a
   //  browser without PointerEvent falls back to the plain click handler. ──
-  var D = { active: false, moved: false, id: null, startX: 0, offX: 0, prevState: 'idle' };
+  var D = { active: false, moved: false, id: null, startX: 0, offX: 0,
+            startY: 0, baseY: 0, prevState: 'idle' };
   var DRAG_SLOP = 4;   // px of pointer travel before a press becomes a drag
+
+  // ── HOW HIGH THE PET CAN BE HELD ────────────────────────────────
+  // The bar sets `overflow:visible` precisely so overlay children (the speech
+  // bubble) may poke above its rim, so a held pet may legitimately rise past
+  // the top edge. Capped anyway: an unbounded lift lets a fast flick fling the
+  // sprite far up the page, where it reads as a bug rather than as carrying.
+  var LIFT_MAX_PX = 34;
+  // The "snatched up" impulse applied the moment a press becomes a drag.
+  // WITHOUT it, height could only come from the pointer's own rise — so a
+  // purely SIDEWAYS drag would still skate the pet along the floor, which is
+  // exactly the reported defect. A grab is a lift even when the hand moves
+  // horizontally, so this is asserted on state entry, not derived from motion.
+  var LIFT_GRAB_PX = 12;
 
   function _barLeft() {
     return (_bar && _bar.getBoundingClientRect) ? _bar.getBoundingClientRect().left : 0;
@@ -968,6 +1046,7 @@
     if (e.button != null && e.button !== 0) return;   // left/primary only
     D.active = true; D.moved = false; D.id = e.pointerId;
     D.startX = e.clientX;
+    D.startY = e.clientY;
     // grab offset so the cat doesn't jump its left edge to the cursor
     D.offX = e.clientX - (_barLeft() + W.x);
     D.prevState = W.state;
@@ -983,10 +1062,20 @@
       W.state = 'drag';
       if (_el) _el.setAttribute('data-state', 'drag');
       _setExpr('surprised');   // startled at being picked up
+      // SNATCH: assert an immediate lift so a purely horizontal drag still
+      // reads as carrying rather than sliding. Reduced-motion keeps it planted.
+      D.baseY = W.reduced ? 0 : LIFT_GRAB_PX;
     }
     _measure();
     var x = (e.clientX - _barLeft()) - D.offX;
     W.x = Math.max(W.min, Math.min(W.max, x));
+    // VERTICAL: follow the pointer's own rise/fall on top of the grab lift.
+    // Measured from where the press STARTED (not from the sprite's box), so the
+    // pet stays under the finger instead of jumping to it.
+    if (!W.reduced) {
+      var rise = D.startY - e.clientY;          // up is positive
+      W.y = Math.max(0, Math.min(LIFT_MAX_PX, D.baseY + rise));
+    }
     // face the direction of motion for a bit of life
     if (e.movementX) _face(e.movementX >= 0 ? 1 : -1);
     _place();
@@ -1000,8 +1089,8 @@
     // dropped after a real drag → settle here, resume autonomous life
     S.lastInteraction = Date.now();
     S.mood = Math.min(100, S.mood + 3); _save();
-    if (W.reduced) { _enter('idle'); _setExpr(_resolve()); _place(); }
-    else { W.last = 0; _enter('idle'); }              // idle a beat, then _pickNext resumes
+    if (W.reduced) { W.y = 0; _enter('idle'); _setExpr(_resolve()); _place(); }
+    else { _enterFall(); }   // fall back to the ground, land, THEN resume
   }
   function _wireDrag() {
     if (!_el) return;

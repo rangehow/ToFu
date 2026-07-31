@@ -1,3 +1,15 @@
+### 2026-07-31(续·验收清单第①条本身就是我在修的那个缺陷) — 自主派单接 `pt_58a88295d4024055`;票面要求「首次发版人工盯 run 日志三条」,而**第①条「确认这步是 success 不是 skipped」正是一条活在人的记忆里的不变量——与本 epic 修的东西同型**(commit `1b0b8a5f`,2 文件;新守卫 **5/5 失败先行**,**NEUTER×4 各咬各的**(4/1/1/1);相邻环 **87 passed**)
+
+- **★ 先确认真做不到再谈别的:** `gh` 未安装、无 `~/.git-credentials`、无 `credential.helper`、`GITHUB_TOKEN`/`GH_TOKEN` 均未设;直接 `POST /actions/workflows/.../dispatches` 实测 **401**。所以「触发一次真实 run」在本环境结构上不可达,这一条只能开票。
+- **★ 但票面把三条并列是错的分类,拆开后第①条根本不需要人:** ②③(闸对 0.16.0 输出 DOCUMENTED、传 0.99.0 能红)已由上一批的干净 checkout 端到端测试覆盖——那些测试**真的执行**了 shipped step body。剩下的第①条「这步是 success 不是 skipped」**是 workflow 可以自己回答的**,把它留给人眼等于给这个 epic 留了一个它自己在批判的东西。
+- **★ 为什么 skipped 是最坏的一格(这决定了修法必须是断言而不是文档):** GitHub 把 skipped 步骤渲染成**灰色**排在绿色旁边,**job 依然成功**。于是一个 `if:` 不再匹配的闸(输出被改名、`version` job 被重构、条件被写反)会**无声退化成零**,没有任何红点,而发版照旧发出去、run 日志**看起来完全正常**。静态可达性套件求值 `if:` 表达式,能抓住「今天写错」;抓不住「语法没问题但运行时不匹配」。
+- **落点:** 闸加 `id: changelog_gate`,后置一步比对 `steps.changelog_gate.outcome` 是否为 `skipped`(以及空值),命中则 `::error` 注解 + `exit 1` ⇒ `version` job 红 ⇒ 所有 build job 因 `needs: version` 结构上无法启动。
+- **★ 自检必须与被检者同条件,这一条是 NEUTER-C 逼出来的:** 若自检的 `if:` 比闸更窄(比如只在 `workflow_dispatch` 时跑),就会存在**闸可以无人观察地 skip 的发版运行**——一个作用域小于被检对象的检查器。守卫直接断言两者条件字符串相等。
+- **NEUTER×4 各咬各的:** 删掉自检(复现原始缺口)→ **4 红**;`exit 1` 改成 echo 警告 → 1 红;自检条件收窄成 `event_name` → 1 红;摘掉闸的 `id`(outcome 变得不可观测)→ 1 红。四发后 workflow 均 `cmp` 逐字节还原。
+- **一个自己抓回来的 harness 缺陷:** 排序守卫用 `s is _selfcheck_step()` 比对象身份,而两次 `yaml.safe_load` 产出的是**不同对象** ⇒ 它因与产品无关的原因失败。改为按内容定位。**又一次:先确认守卫是因为真缺陷而红。**
+- **仍然缺口(如实留票):** runner 侧那一次真实执行。票面已更新为**只剩第③条需要人**(传 `version_override=0.99.0` 确认 build job 不启动),①已机器化、②本地已端到端验过。
+- **验收边界:** 纯 CI 配置 + 测试,**零产品码、零前端改动**,无需重启。GitHub Actions 未实跑。
+
 ### 2026-07-31(MCP 供应链可复现 + 我自己引进的 ECOMPROMISED 回归) — owner 报「overleaf `'Server' object has no attribute 'list_tools'`,而且不只这一个」;**真因不是 pin 漏了一处,是 MCP server 的依赖树从来没有任何锁定**;而我的第一版修复**修好 uv 侧的同时打挂了 npx 侧**,是 owner 实测抓回来的(commits `0c93162d` + `dae51563`;守卫 9→**14**,**NEUTER×10 各咬各的**;相邻环 **182 passed**;真实 bridge **7 OK / 0 FAIL**)
 
 - **★ 先证伪自己的第一诊断,它决定了整个方案形状。** 我起初打算给 `mcp_servers.json` 的 overleaf 规格加 `--with 'mcp<2'`。构造 v1/v2 各一个真 server + 版本无关 client 跑 **2×2 真进程互通矩阵**:**四格全绿**,v1 客户端↔v2 服务器**双向** `tools/list` + `tools/call` 均通,协议一律协商到 `2025-11-25`。⇒ **SDK major 不是 wire 兼容边界**,`mcp<2` 保护的东西在协议层根本不存在。

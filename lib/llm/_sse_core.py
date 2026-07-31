@@ -275,8 +275,12 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
         # dropped sampling params); every other Responses provider gets
         # the generic profile.
         _profile = 'codex' if oauth == 'codex' else 'default'
-        body = openai_body_to_responses(body, profile=_profile, stream=True)
+        body, _resp_reverse = openai_body_to_responses(
+            body, profile=_profile, stream=True)
         wire_translator = ResponsesSSETranslator(model=body.get('model', ''))
+        # Truncated (64-char) tool names echo back from the model — the
+        # per-request reverse map restores them before tool dispatch.
+        wire_translator.tool_name_reverse = _resp_reverse
         url = responses_url(base_url)
         logger.debug('%s [Responses] Translated request for Responses API '
                      '(profile=%s)', log_prefix, _profile)

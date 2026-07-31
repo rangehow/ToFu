@@ -68,8 +68,19 @@ RESPONSES_PROFILES: dict = {
 _MAX_TOOL_NAME = 64
 
 
+def _truncate_name(name: str, reverse: dict) -> str:
+    """Clamp a tool name to the 64-char limit, recording the mapping so
+    the response side can restore the model's echo (first-original wins,
+    mirroring CLIProxyAPI recordRename semantics)."""
+    if len(name) <= _MAX_TOOL_NAME:
+        return name
+    truncated = name[:_MAX_TOOL_NAME]
+    reverse.setdefault(truncated, name)
+    return truncated
+
+
 def openai_body_to_responses(body: dict, *, profile: str = 'default',
-                             stream: bool = False) -> dict:
+                             stream: bool = False) -> tuple:
     """Translate a Chat Completions request body to Responses API format.
 
     Args:
@@ -80,7 +91,11 @@ def openai_body_to_responses(body: dict, *, profile: str = 'default',
         stream: value for the ``stream`` field.
 
     Returns:
-        A Responses API request body for ``POST …/responses``.
+        ``(responses_body, tool_name_reverse)`` — the Responses API request
+        body, plus the per-request reverse map ``{truncated: original}``
+        for tool names shortened to the 64-char function-name limit. The
+        map must ride the response-side translator so echoed names are
+        restored before tool dispatch (mirrors ``apply_claude_cloak``).
     """
     prof = RESPONSES_PROFILES.get(profile)
     if prof is None:
@@ -126,19 +141,21 @@ def openai_body_to_responses(body: dict, *, profile: str = 'default',
     if prof['include']:
         out['include'] = list(prof['include'])
 
-    out['input'] = _messages_to_input(body.get('messages') or [])
+    reverse: dict = {}  # truncated tool name → original (response side restores)
+
+    out['input'] = _messages_to_input(body.get('messages') or [], reverse)
 
     tools = body.get('tools')
     if tools:
-        out['tools'] = _convert_tools(tools)
+        out['tools'] = _convert_tools(tools, reverse)
     choice = body.get('tool_choice')
     if choice:
-        out['tool_choice'] = _convert_tool_choice(choice)
+        out['tool_choice'] = _convert_tool_choice(choice, reverse)
 
-    return out
+    return out, reverse
 
 
-def _messages_to_input(messages: list) -> list:
+def _messages_to_input(messages: list, reverse: dict) -> list:
     """OpenAI messages[] → Responses input[] items."""
     items: list = []
     for msg in messages:
@@ -190,19 +207,16 @@ def _messages_to_input(messages: list) -> list:
             if tc.get('type') != 'function':
                 continue
             func = tc.get('function') or {}
-            name = func.get('name', '')
-            if len(name) > _MAX_TOOL_NAME:
-                name = name[:_MAX_TOOL_NAME]
             items.append({
                 'type': 'function_call',
                 'call_id': tc.get('id', ''),
-                'name': name,
+                'name': _truncate_name(func.get('name', ''), reverse),
                 'arguments': func.get('arguments', '{}'),
             })
     return items
 
 
-def _convert_tools(tools: list) -> list:
+def _convert_tools(tools: list, reverse: dict) -> list:
     """Chat-Completions tools[] → Responses tools[] (flattened function).
 
     Non-function tools pass through untouched (server-side built-ins like
@@ -218,10 +232,8 @@ def _convert_tools(tools: list) -> list:
             converted.append(tool)
             continue
         func = tool.get('function') or {}
-        name = func.get('name', '')
-        if len(name) > _MAX_TOOL_NAME:
-            name = name[:_MAX_TOOL_NAME]
-        t: dict = {'type': 'function', 'name': name}
+        t: dict = {'type': 'function',
+                   'name': _truncate_name(func.get('name', ''), reverse)}
         if func.get('description'):
             t['description'] = func['description']
         if func.get('parameters'):
@@ -232,12 +244,11 @@ def _convert_tools(tools: list) -> list:
     return converted
 
 
-def _convert_tool_choice(choice):
+def _convert_tool_choice(choice, reverse: dict):
     if isinstance(choice, str):
         return choice
     if isinstance(choice, dict) and choice.get('type') == 'function':
-        name = (choice.get('function') or {}).get('name', '')
-        if len(name) > _MAX_TOOL_NAME:
-            name = name[:_MAX_TOOL_NAME]
-        return {'type': 'function', 'name': name}
+        return {'type': 'function',
+                'name': _truncate_name(
+                    (choice.get('function') or {}).get('name', ''), reverse)}
     return choice

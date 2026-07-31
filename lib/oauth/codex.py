@@ -379,9 +379,12 @@ def codex_translate_request(body: dict) -> dict:
 
     Back-compat wrapper — the implementation lives in
     ``lib.llm.responses_outbound.openai_body_to_responses``
-    (``profile='codex'``).
+    (``profile='codex'``). Returns the body ONLY; callers needing the
+    truncation reverse map call the underlying converter directly.
     """
-    return openai_body_to_responses(body, profile='codex', stream=True)
+    out, _reverse = openai_body_to_responses(body, profile='codex',
+                                             stream=True)
+    return out
 
 
 # ══════════════════════════════════════════════════════════

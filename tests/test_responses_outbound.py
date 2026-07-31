@@ -99,7 +99,7 @@ class TestRequestConversion:
         body = {'model': 'deepseek-v4-flash',
                 'messages': [{'role': 'user', 'content': 'hi'}],
                 'temperature': 0.7, 'top_p': 0.9, 'max_tokens': 512}
-        out = openai_body_to_responses(body, profile='default', stream=True)
+        out, _rev = openai_body_to_responses(body, profile='default', stream=True)
         assert out['temperature'] == 0.7
         assert out['top_p'] == 0.9
         assert out['max_output_tokens'] == 512
@@ -114,7 +114,7 @@ class TestRequestConversion:
                 'messages': [{'role': 'user', 'content': 'hi'}],
                 'temperature': 0.7, 'top_p': 0.9, 'max_tokens': 512,
                 'reasoning_effort': 'high'}
-        out = openai_body_to_responses(body, profile='codex', stream=True)
+        out, _rev = openai_body_to_responses(body, profile='codex', stream=True)
         assert 'temperature' not in out
         assert 'top_p' not in out
         assert 'max_tokens' not in out and 'max_output_tokens' not in out
@@ -127,11 +127,11 @@ class TestRequestConversion:
     def test_default_reasoning_effort_without_summary(self):
         body = {'model': 'deepseek-v4-flash', 'messages': [],
                 'reasoning_effort': 'low'}
-        out = openai_body_to_responses(body, profile='default')
+        out, _rev = openai_body_to_responses(body, profile='default')
         assert out['reasoning'] == {'effort': 'low'}   # DeepSeek: no summary
 
     def test_codex_reasoning_defaults_medium(self):
-        out = openai_body_to_responses(
+        out, _rev = openai_body_to_responses(
             {'model': 'gpt-5.2-codex', 'messages': []}, profile='codex')
         assert out['reasoning'] == {'effort': 'medium', 'summary': 'auto'}
 
@@ -144,7 +144,7 @@ class TestRequestConversion:
              'tool_calls': [{'id': 'call_1', 'type': 'function',
                              'function': {'name': 'read_files',
                                           'arguments': '{"path":"a.py"}'}}]}]}
-        out = openai_body_to_responses(body, profile='default')
+        out, _rev = openai_body_to_responses(body, profile='default')
         inp = out['input']
         assert inp[0] == {'type': 'message', 'role': 'assistant',
                           'content': [{'type': 'output_text',
@@ -165,7 +165,7 @@ class TestRequestConversion:
             {'role': 'tool', 'tool_call_id': 'call_1', 'content': 'FILE'},
             {'role': 'user', 'content': 'and?'},
         ]}
-        out = openai_body_to_responses(body, profile='default')
+        out, _rev = openai_body_to_responses(body, profile='default')
         inp = out['input']
         assert inp[0] == {'type': 'message', 'role': 'developer',
                           'content': [{'type': 'input_text', 'text': 'be terse'}]}
@@ -189,7 +189,7 @@ class TestRequestConversion:
                                         'parameters': {'type': 'object'}}}],
                 'tool_choice': {'type': 'function',
                                 'function': {'name': 'grep_search'}}}
-        out = openai_body_to_responses(body, profile='default')
+        out, _rev = openai_body_to_responses(body, profile='default')
         assert out['tools'] == [{'type': 'function', 'name': 'grep_search',
                                  'description': 'search',
                                  'parameters': {'type': 'object'}}]
@@ -199,7 +199,7 @@ class TestRequestConversion:
         body = {'model': 'm', 'messages': [{'role': 'user', 'content': [
             {'type': 'text', 'text': 'what is this?'},
             {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,AA'}}]}]}
-        out = openai_body_to_responses(body, profile='default')
+        out, _rev = openai_body_to_responses(body, profile='default')
         parts = out['input'][0]['content']
         assert parts[0] == {'type': 'input_text', 'text': 'what is this?'}
         assert parts[1] == {'type': 'input_image',
@@ -207,7 +207,7 @@ class TestRequestConversion:
 
     def test_internal_keys_never_leak(self):
         body = {'model': 'm', 'messages': [], '_task_id': 't123'}
-        out = openai_body_to_responses(body, profile='default')
+        out, _rev = openai_body_to_responses(body, profile='default')
         assert '_task_id' not in out
 
 
@@ -403,6 +403,95 @@ class TestFromResponses:
         assert out['choices'][0]['finish_reason'] == 'length'
 
 
+# ──────────────────────────────────────────────────────────────
+#  Tool-name truncation reverse map (pt_1e1b2d3215e14c54)
+#
+#  64 chars is the OpenAI function-name limit — EVERY Responses
+#  upstream enforces it, so long MCP tool names are truncated on the
+#  way out. Without a per-request reverse map the model echoes the
+#  TRUNCATED name and the executor's tool lookup misses — the exact
+#  shape the anthropic cloak path already solves with
+#  ``tool_name_reverse``. Mirrors that pattern: the converter records
+#  {truncated: original}, the map rides the translator, names are
+#  restored on the response side (stream AND non-stream).
+# ──────────────────────────────────────────────────────────────
+
+_LONG_TOOL = 'mcp__some_mcp_server__' + 'x' * 60   # 78 chars > 64
+
+
+class TestToolNameReverseMap:
+    def test_converter_records_truncation_in_reverse_map(self):
+        body = {'model': 'm', 'messages': [],
+                'tools': [{'type': 'function', 'function': {
+                    'name': _LONG_TOOL, 'description': 'd',
+                    'parameters': {'type': 'object'}}}],
+                'tool_choice': {'type': 'function',
+                                'function': {'name': _LONG_TOOL}}}
+        out, rev = openai_body_to_responses(body, profile='default')
+        truncated = out['tools'][0]['name']
+        assert len(truncated) == 64
+        assert out['tool_choice']['name'] == truncated
+        assert rev == {truncated: _LONG_TOOL}
+
+    def test_short_names_yield_empty_map(self):
+        _out, rev = openai_body_to_responses(
+            {'model': 'm', 'messages': [],
+             'tools': [{'type': 'function',
+                        'function': {'name': 'read_files'}}]},
+            profile='default')
+        assert rev == {}
+
+    def test_assistant_tool_call_names_recorded(self):
+        body = {'model': 'm', 'messages': [
+            {'role': 'assistant', 'content': '', 'tool_calls': [{
+                'id': 'c1', 'type': 'function',
+                'function': {'name': _LONG_TOOL, 'arguments': '{}'}}]}]}
+        out, rev = openai_body_to_responses(body, profile='default')
+        fc = out['input'][0]
+        assert len(fc['name']) == 64
+        assert rev[fc['name']] == _LONG_TOOL
+
+    def test_stream_translator_restores_truncated_name(self):
+        tr = ResponsesSSETranslator(model='m')
+        truncated = _LONG_TOOL[:64]
+        tr.tool_name_reverse = {truncated: _LONG_TOOL}
+        acc = _acc(tr)
+        _feed(acc, [
+            _fn_added('call_1', truncated, item_id='fc_1'),
+            _fn_args('{}', item_id='fc_1'),
+            _completed(),
+        ])
+        msg, finish, _u = acc.finalize()
+        assert finish == 'tool_calls'
+        assert msg['tool_calls'][0]['function']['name'] == _LONG_TOOL
+
+    def test_nonstream_restores_truncated_name(self):
+        truncated = _LONG_TOOL[:64]
+        data = {'status': 'completed', 'output': [
+            {'type': 'function_call', 'call_id': 'c1',
+             'name': truncated, 'arguments': '{}'}]}
+        out = responses_response_to_openai(
+            data, tool_name_reverse={truncated: _LONG_TOOL})
+        tc = out['choices'][0]['message']['tool_calls'][0]
+        assert tc['function']['name'] == _LONG_TOOL
+
+    def test_codex_facade_failed_event_maps_to_typed_error(self):
+        """pt_6d749150 close-out proof: the CODEX FACADE path (not just the
+        new class) maps response.failed to the typed error ladder."""
+        from lib.oauth.codex import CodexSSETranslator as FacadeTranslator
+        acc = _acc(FacadeTranslator(model='gpt-5.2-codex'))
+        with pytest.raises(RateLimitError):
+            _feed(acc, [
+                {'type': 'response.failed',
+                 'response': {'status': 'failed',
+                              'error': {'code': 'rate_limit_exceeded',
+                                        'message': 'Too many requests'}}},
+            ])
+
+
+# ──────────────────────────────────────────────────────────────
+#  URL + codex facade
+# ──────────────────────────────────────────────────────────────
 # ──────────────────────────────────────────────────────────────
 #  URL + codex facade
 # ──────────────────────────────────────────────────────────────

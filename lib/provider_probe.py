@@ -206,7 +206,7 @@ def probe_one_cell(base_url, api_key, model_id, extra_headers, timeout,
         headers = {'Authorization': 'Bearer %s' % api_key} if api_key else {}
         if extra_headers:
             headers.update(extra_headers)
-        payload = openai_body_to_responses(
+        payload, _rev = openai_body_to_responses(
             {'model': model_id,
              'messages': [{'role': 'user', 'content': 'hi'}],
              'max_tokens': 16},

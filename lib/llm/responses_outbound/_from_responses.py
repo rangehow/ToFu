@@ -26,8 +26,13 @@ logger = get_logger(__name__)
 __all__ = ['responses_response_to_openai']
 
 
-def responses_response_to_openai(data: dict) -> dict:
-    """Convert a Responses API response object to chat.completion shape."""
+def responses_response_to_openai(data: dict,
+                                  tool_name_reverse: dict | None = None) -> dict:
+    """Convert a Responses API response object to chat.completion shape.
+
+    ``tool_name_reverse`` (the request converter's second return value)
+    restores truncated tool names on echoed function_call items.
+    """
     if not isinstance(data, dict):
         return {'error': {'message': 'non-dict responses payload',
                           'type': 'invalid_response'}}
@@ -65,10 +70,13 @@ def responses_response_to_openai(data: dict) -> dict:
                 if isinstance(cont, dict) and cont.get('text'):
                     reasoning_parts.append(cont['text'])
         elif itype == 'function_call':
+            name = item.get('name', '')
+            if tool_name_reverse:
+                name = tool_name_reverse.get(name, name)
             tool_calls.append({
                 'id': item.get('call_id', ''),
                 'type': 'function',
-                'function': {'name': item.get('name', ''),
+                'function': {'name': name,
                              'arguments': item.get('arguments', '')},
             })
 

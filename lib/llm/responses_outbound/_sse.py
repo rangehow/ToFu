@@ -88,6 +88,12 @@ class ResponsesSSETranslator:
         # routing argument deltas of PARALLEL calls.
         self._tc_count = 0
         self._item_slot: dict = {}
+        # Per-request {truncated: original} tool-name map, stamped by the
+        # caller from the request converter's second return value — the
+        # model echoes the TRUNCATED name and the executor's lookup would
+        # miss without the restore (mirrors AnthropicSSETranslator's
+        # ``tool_name_reverse``).
+        self.tool_name_reverse: dict = {}
 
     # ──────────────────────────────────────────────────────────
 
@@ -152,11 +158,14 @@ class ResponsesSSETranslator:
                 item_id = item.get('id') or ''
                 if item_id:
                     self._item_slot[item_id] = slot
+                name = item.get('name', '')
+                if self.tool_name_reverse:
+                    name = self.tool_name_reverse.get(name, name)
                 out.append(self._chunk(delta={'tool_calls': [{
                     'index': slot,
                     'id': item.get('call_id', ''),
                     'type': 'function',
-                    'function': {'name': item.get('name', ''),
+                    'function': {'name': name,
                                  'arguments': ''}}]}))
 
         elif etype == 'response.function_call_arguments.delta':

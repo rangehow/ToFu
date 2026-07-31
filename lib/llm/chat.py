@@ -132,9 +132,10 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
                     extra_headers['anthropic-beta'] = _ttl_beta
 
     _cloak_reverse = None
+    _resp_reverse = None
     if _responses:
         from lib.llm.responses_outbound import openai_body_to_responses
-        body = openai_body_to_responses(
+        body, _resp_reverse = openai_body_to_responses(
             body, profile='codex' if oauth == 'codex' else 'default',
             stream=False)
     elif _anthropic:
@@ -254,7 +255,8 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
         ) from e
     if _responses:
         from lib.llm.responses_outbound import responses_response_to_openai
-        data = responses_response_to_openai(data)
+        data = responses_response_to_openai(
+            data, tool_name_reverse=_resp_reverse)
         if 'error' in data:
             # status:'failed' — classify through the same HTTP-error ladder
             # (500 → RetryableAPIError) instead of manufacturing an empty turn.

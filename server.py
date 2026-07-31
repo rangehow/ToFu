@@ -1790,8 +1790,48 @@ app.teardown_appcontext(close_db)
 
 # ── Install the tofu-search bridge (LLM + browser + auth seams) ──
 # Must run before any search/fetch call; idempotent, re-synced on config reload.
-from lib.search_bridge import install_search_bridge
-install_search_bridge()
+#
+# DEGRADE, don't die. This import pulls in tofu_search → trafilatura → lxml →
+# libicuuc, and on 2026-07-31 that chain raised
+#   ImportError: /lib64/libstdc++.so.6: version `GLIBCXX_3.4.30' not found
+# eight times. Being a bare module-level import, it took the WHOLE SERVER down
+# each time — chat, projects, the scheduler and every other subsystem died for
+# a fault confined to web search. That blast radius is wrong regardless of what
+# triggers the linkage fault: search is one optional capability, not a boot
+# prerequisite.
+#
+# Scope check before narrowing this: three modules import tofu_search at module
+# level (here, lib/paper/tools.py, lib/tasks_pkg/executor/_summary.py) and all
+# three are on the boot chain, but THIS one is reached first — measured, it is
+# the frame that actually raises. The other ten consumers import lazily inside
+# functions and already fail per-call. So guarding here removes the only
+# whole-process kill; if a future refactor removes this import, the next
+# module-level one inherits the hazard (tests/test_startup_stdcxx_forensics.py
+# asserts the guard stays).
+#
+# The bridge only INSTALLS seams (LLM/browser/auth) into tofu_search; without it
+# the search tools still import fine and fail per-call instead, which is the
+# degradation we want. The linkage forensics captured at boot are logged with
+# the failure so the cause is diagnosable rather than a mystery.
+try:
+    from lib.search_bridge import install_search_bridge
+    install_search_bridge()
+except ImportError as _sb_err:
+    _sb_msg = str(_sb_err)
+    _sb_linkage = ''
+    if 'GLIBCXX' in _sb_msg or 'libstdc++' in _sb_msg or 'symbol' in _sb_msg:
+        _sb_linkage = ' | LINKAGE: %s' % (
+            globals().get('_TOFU_LINKAGE_FORENSICS', 'unavailable'),)
+    logging.getLogger('server').error(
+        'Web search/fetch is DISABLED for this process — the tofu-search bridge '
+        'could not be imported: %s%s. Every other subsystem is unaffected; '
+        'search tools will fail per-call instead of taking down the server.',
+        _sb_msg, _sb_linkage, exc_info=True)
+except Exception as _sb_err:
+    logging.getLogger('server').error(
+        'Web search/fetch is DISABLED for this process — the tofu-search bridge '
+        'failed to install: %s. Every other subsystem is unaffected.',
+        _sb_err, exc_info=True)
 
 # ── Register all Blueprints ──
 from routes import register_all

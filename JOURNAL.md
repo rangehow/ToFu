@@ -1,3 +1,17 @@
+### 2026-07-31(一个可选能力的依赖坏了,却把整台服务器带走) — 自主派单接 `pt_5bcd06eb96e7477d`;票面要「读一条真实取证」,而**真实样本为零且不重启拿不到**,于是转做**不依赖触发源知识的那一半:炸半径**。四道门,**每关一道就露出下一道**,靠端到端实测一道一道找出来(`pt_5bcd06eb96e7477d` DONE;4 文件;套件 **11 → 14**,**NEUTER×3 各咬各的**;A/B 对拍 **零净新坏**)
+
+- **★ 先证伪票面的可执行前提:** 全部 4 条 LINKAGE 行**都是我自己的测试/NEUTER 产物**(`LD_PRELOAD=/lib64/libstdc++.so.6` 是我注入的 3 条;另 1 条 `LINKAGE: unavailable` 是 NEUTER-C 破坏捕获时产生)。真实崩溃(≤11:59:55)跑的是 `1766` 版,那一版取证**只走 stderr**、未挂崩溃记录 ⇒ 与已诊断的通道错配自洽。而活进程启动于 10:33:27,早于全部改动 ⇒ **不重启永远拿不到样本**。故本批不等触发源,改修与触发源无关的那一半。
+- **★ 真正的用户可见缺陷不是崩溃本身,是炸半径:** 8 次崩溃全部死在**模块级 import 链**(`server.py` → `search_bridge` → `tofu_search` → trafilatura → lxml → libicuuc)。因为是裸顶层 import,**一个只影响网页搜索的故障把整台服务器带走**——chat、项目、scheduler、全部子系统一起死。这与触发源是什么无关:搜索是一个**可选能力**,不是启动前提。
+- **★ 四道门,每关一道露出下一道——这是本批的方法论要点:** ①`server.py:1793` search_bridge(实测是**首个**到达 tofu_search 的帧);关掉后 → ②`lib/tasks_pkg/executor/_summary.py:10`;再关 → ③`lib/tasks_pkg/handlers/search/`(3 个文件共享依赖,故在 `handlers/__init__.py` 的**包级缝**上一次守住);再关 → ④`lib/paper/tools.py:30` 直接 import `handlers.search`,**绕过了包级守卫**。全库枚举 `^from tofu_search|^import tofu_search` 得 6 处、分属 4 个入口,与实测逐帧结果一致。**教训:此类修复不能靠推理列清单,必须每关一道就重跑一次端到端。**
+- **★ 而我的第一版惰性化打破了 6 个 paper 测试——是回归跑抓的,不是评审:** 测试 `monkeypatch.setattr(lib.paper.tools._web_search_one, …)`,而函数内局部 import **对该补丁不可见**(`AttributeError: module 'lib.paper.tools' has no attribute '_web_search_one'`)。**测试是对的,我打破了一条真实的缝**。改用 **PEP 562 模块级 `__getattr__`**(项目既有先例 `lib/agent_core/__init__.py`):导入延迟到首次**属性访问**,而名字仍在模块命名空间解析 ⇒ 惰性与可 monkeypatch 两者兼得。
+- **★ 但 PEP 562 有一个我起初假设错的边界,实测才发现:** 模块 `__getattr__` **不覆盖函数体内的裸全局名**(`NameError: name '_web_search_one' is not defined`)。故函数体内改为经模块对象解析(`sys.modules[__name__]._web_search_one`),这样既走 `__getattr__` 又尊重 monkeypatch。
+- **★ 第二个实测才发现的陷阱:`tofu_search.search` 是一个函数,遮蔽了同名子模块。** `from tofu_search import search` 拿到的是**搜索函数**,于是 `getattr(那个函数, 'format_search_for_tool_response')` 报 `'function' object has no attribute …`。改用 `importlib.import_module('tofu_search.search')` 显式取模块。
+- **NEUTER×3 各咬各的,且刻意断言「结果」而非「某个守卫存在」:** 因为失败模式恰恰是「每道门单独看都对、进程照旧死在下一道」,所以新守卫 `test_linkage_fault_degrades_search_instead_of_killing_the_server` 断言**端到端存活**——**关三留一也过不了**。实测:①撤 server.py 守卫 → 2 红;②撤 handlers 包级守卫 → 1 红;③把 paper/tools.py 放回顶层 → 1 红。三个产品文件事后 `cmp` 逐字节还原。补集 `test_healthy_boot_still_installs_search_fully` 防「try/except 把健康路径也降级了」(否则整批 try 包裹可以静默关掉所有部署的搜索而全绿)。
+- **回归用 A/B 同树对拍,不用票面数字:** 把我的 4 个文件换成 HEAD 版再跑同一命令 —— **两侧失败集完全相同(各 16 条)** ⇒ 我**零净新坏**;那 16 条是兄弟未提交 WIP(`project_charter_commit` 未声明 provides / paper 路由 sync / conv_ref paging),与本批无关。注:期间我一度用 `/tmp` 隔离副本做基线,但它 collect 到 0 个测试(缺 pyproject 配置)⇒ **那个基线是无效的**,换成同树 A/B 才可比。
+- **降级语义明确:** bridge 装不上 ⇒ 搜索工具仍可导入、改为**逐次调用失败**;handlers.search 注册不上 ⇒ `web_search`/`fetch_url` 报 unknown tool。两条都**显式 ERROR 日志说明搜索已禁用**(新守卫 `test_search_degradation_is_announced_not_silent` 钉住)——静默少一个能力比崩溃更坏。
+- **刻意不做:** 票面的 `LD_PRELOAD` 前置加固**仍不落**。触发源依旧未知;本批修的是「故障影响面」,不是「猜一个原因去堵」。
+- **验收边界:** 需重启生效;真实触发源仍未拿到,**不宣称已诊断**。
+
 ### 2026-07-31(续·发版的终点从「产物合理」推到「装上能启动」) — 自主派单接**我自己开的票**;两条看起来天经地义的判据**一条恒绿一条恒红**,而恒红那条是我自己写下、靠**真跑一次**才发现的(`pt_368a59cbbc1647b3` DONE;commit `14a51feb`,3 文件 +349;新套件 **11/11**,**NEUTER×5 各咬各的**,相邻环 **117/117**)
 
 - **★ 缺口的形状:两道已有的闸对「少一个 hiddenimport」结构性免疫。** `tofu.spec` 声明 **48** 个 hiddenimports,漏掉任意一个:①**体积几乎不变**——体积对「整棵依赖树缺失」敏感(实测 48,960,018 空壳 vs 115,822,886 健康),对「单个模块缺失」不敏感;②**PyInstaller 退出码不变**,构建成功;③只在**用户双击那一刻**炸出 `ModuleNotFoundError`,而那时没人在看日志。

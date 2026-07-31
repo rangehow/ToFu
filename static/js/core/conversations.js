@@ -133,55 +133,10 @@ async function syncConversationToServer(conv, { allowTruncate = false } = {}) {
     console.info(`[syncToServer] conv=${conv.id.slice(0,8)} msgs=${conv.messages.length} lastRole=${lastMsg?.role} ` +
       `contentLen=${lastMsg?.content?.length||0} thinkingLen=${lastMsg?.thinking?.length||0} hasError=${!!lastMsg?.error} ` +
       `activeTaskId=${_convTaskId?.slice(0,8)||'null'} foreignMsgCount=${_foreignMsgCount}`);
-    const lightMsgs = conv.messages.map((m) => {
-      let r = m;
-      if (m.images?.length > 0)
-        r = {
-          ...r,
-          images: m.images.map((img) => {
-            const o = { mediaType: img.mediaType, sizeKB: img.sizeKB };
-            if (img.url) {
-              // Persist the canonical '/api/images/<f>' url unchanged, but the
-              // preview is a render src — prefix with apiUrl() so it resolves
-              // through the reverse-proxy base path.
-              o.url = img.url;
-              o.preview = (img.url.charAt(0) === "/" && typeof apiUrl === "function")
-                ? apiUrl(img.url) : img.url;
-            } else {
-              o.preview = (img.preview || "").slice(0, 200) + "...";
-            }
-            if (img.pdfPage) o.pdfPage = img.pdfPage;
-            if (img.pdfTotal) o.pdfTotal = img.pdfTotal;
-            if (img.pdfName) o.pdfName = img.pdfName;
-            if (img.caption) o.caption = img.caption;
-            return o;
-          }),
-        };
-      if (m.pdfTexts?.length > 0)
-        r = {
-          ...r,
-          pdfTexts: m.pdfTexts.map((p) => ({
-            name: p.name,
-            pages: p.pages,
-            textLength: p.textLength,
-            isScanned: p.isScanned,
-            method: p.method,
-            text: p.text || "",
-          })),
-        };
-      /* ★ `_pendingSync` is a CLIENT-ONLY durability marker (set when a send
-       *   failed on a poor network so a refresh keeps the message and a retry
-       *   re-attempts the PUT). It must NEVER be persisted to the server —
-       *   otherwise it echoes back on the next load and could wrongly trigger
-       *   the KEEP_LOCAL reconcile. Clone-and-strip (don't mutate the live
-       *   message — the local marker stays until this PUT actually succeeds). */
-      if (r._pendingSync) { r = { ...r }; delete r._pendingSync; }
-      /* ★ Drop transient bloat (usage._wire_fp diagnostics, done-round
-       *   _partialOutput) so a client PUT never re-inflates the DB payload
-       *   the server-side sanitizer just trimmed. See _trimMsgForPersist. */
-      r = _trimMsgForPersist(r);
-      return r;
-    });
+    /* Per-message WIRE reducer _lightMessageForSync extracted 2026-07-31
+     * (pt_3879f00e sub-part 2 slice 14) to core/conv_persist_helpers.js — same
+     * file that owns _trimMsgForPersist. Resolves via bundle-level window scope. */
+    const lightMsgs = conv.messages.map(_lightMessageForSync);
     const settings = {
       preset: conv.model || conv.preset,
       model: conv.model || conv.preset,

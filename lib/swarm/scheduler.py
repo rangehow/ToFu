@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from lib.log import get_logger
 from lib.swarm.agent import SubAgent
+from lib.swarm.liveness import ProgressBeacon
 from lib.swarm.protocol import (
     SubAgentResult,
     SubAgentStatus,
@@ -61,7 +62,8 @@ class StreamingScheduler:
                  default_retries: int = 1,
                  on_agent_complete: Callable | None = None,
                  on_agent_start: Callable | None = None,
-                 on_retry: Callable | None = None):
+                 on_retry: Callable | None = None,
+                 progress_beacon: ProgressBeacon | None = None):
         """
         Parameters
         ----------
@@ -78,6 +80,12 @@ class StreamingScheduler:
         on_agent_complete : callable(spec, result), optional
         on_agent_start : callable(spec), optional
         on_retry : callable(spec, attempt, error_msg), optional
+        progress_beacon : ProgressBeacon, optional
+            Shared liveness fact (see ``lib/swarm/liveness.py``). Supplied by
+            the master so the scheduler, every SubAgent and the session TTL
+            sweep read the SAME record of who is still producing. When omitted
+            a private beacon is created, so a standalone scheduler still has a
+            working stall check rather than none at all.
         """
         self._factory = agent_factory
         self._rate_limiter = rate_limiter
@@ -86,6 +94,7 @@ class StreamingScheduler:
         self._on_complete = on_agent_complete
         self._on_start = on_agent_start
         self._on_retry = on_retry
+        self._beacon = progress_beacon or ProgressBeacon()
 
         self._pool = ThreadPoolExecutor(
             max_workers=max_parallel,
@@ -288,7 +297,7 @@ class StreamingScheduler:
             return dict(self._started_at)
 
     def iter_completions(self, poll_interval: float = 0.5,
-                         timeout: float = 600.0) -> Generator:
+                         timeout: float | None = None) -> Generator:
         """Yield ``(spec, result)`` one at a time as agents complete.
 
         Unlike ``run_until_idle`` which blocks until everything is done,
@@ -301,8 +310,24 @@ class StreamingScheduler:
         ``_lock`` (since ``_results_queue.put()`` is also under
         ``_lock`` in ``_run_one``) so no result can slip through
         between the drain and the idle check.
+
+        ``timeout`` defaults to ``None`` = **no fixed whole-swarm budget**.
+        It used to default to 600.0, and because ``master._start_driver``
+        calls this with no argument, that default WAS the ceiling on an
+        entire swarm: the deadline was computed once when the generator
+        started, so agents launched by a later wave inherited a clock set
+        before they existed. At 600.0s the driver abandoned still-running
+        agents, set ``_terminated``, shut the pool down and persisted
+        ``settled:true`` — after which ``await_agents`` reported those ids
+        as "will NEVER complete" and the panel painted them "no result",
+        while one of them went on to finish normally 21 minutes later.
+
+        Termination is now decided by PRODUCTION, not by elapsed time: the
+        loop exits when the swarm goes silent past the beacon's stall window
+        (see ``lib/swarm/liveness.py``). A caller may still pass an explicit
+        finite ``timeout`` as a hard ceiling; nothing in-tree does.
         """
-        deadline = time.monotonic() + timeout
+        deadline = (time.monotonic() + timeout) if timeout and timeout > 0 else None
         while True:
             # ── Atomic drain + idle check ────────────────────────
             drained: list[tuple[SubTaskSpec, SubAgentResult]] = []
@@ -333,14 +358,31 @@ class StreamingScheduler:
                 continue
 
             # ── Not idle — block-wait for next result ─────────────
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                logger.warning('[StreamingScheduler] iter_completions timed out')
+            # A running agent is only abandoned when it has gone SILENT past
+            # the beacon's stall window — never merely because time passed.
+            if not self._beacon.is_making_progress():
+                stalled = self._beacon.stalled_agents()
+                logger.warning(
+                    '[StreamingScheduler] swarm stalled — no activity for '
+                    '%.0fs (stall_at=%.0fs); still running=%s, quiet agents=%s',
+                    self._beacon.seconds_since_activity(),
+                    self._beacon.stall_timeout,
+                    sorted(self._running),
+                    [(a, round(s)) for a, s, _n in stalled])
                 return
 
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    logger.warning('[StreamingScheduler] iter_completions hit '
+                                   'the caller-supplied %.0fs ceiling', timeout)
+                    return
+                wait_for = min(remaining, poll_interval)
+            else:
+                wait_for = poll_interval
+
             try:
-                item = self._results_queue.get(
-                    timeout=min(remaining, poll_interval))
+                item = self._results_queue.get(timeout=wait_for)
                 yield item
             except queue.Empty:
                 if self._abort_check():
@@ -356,8 +398,36 @@ class StreamingScheduler:
             self._pending.clear()
             return cancelled
 
-    def shutdown(self):
-        """Shutdown the thread pool (best-effort)."""
+    def shutdown(self, wait: bool = True, timeout: float = 30.0):
+        """Shut the pool down, by default WAITING for in-flight agents.
+
+        This used to be ``shutdown(wait=False)``, which returned while agents
+        were still running. Two concrete failures followed:
+
+          * a late completion calls ``_launch_ready_locked`` to unblock its
+            dependents, and submitting to a shut-down pool raises
+            ``RuntimeError: cannot schedule new futures after shutdown``
+            (verified on this interpreter) — killing the dependent inside
+            ``_run_one``;
+          * the driver's ``finally`` ran ``shutdown()`` then set
+            ``_terminated``, so ``await_agents`` told the model that agents
+            which were STILL EXECUTING "will NEVER complete".
+
+        Waiting makes termination mean what it says. ``timeout`` bounds the
+        wait so a wedged tool thread cannot hang teardown forever; the pool is
+        then released regardless, matching the old non-blocking behaviour only
+        in that genuinely-stuck corner.
+        """
+        if not wait:
+            self._pool.shutdown(wait=False)
+            return
+        deadline = time.monotonic() + max(0.0, timeout)
+        while self.running_count > 0 and time.monotonic() < deadline:
+            time.sleep(0.05)
+        still = self.running_count
+        if still:
+            logger.warning('[Scheduler] shutdown: %d agent(s) still running '
+                           'after %.0fs — releasing pool anyway', still, timeout)
         self._pool.shutdown(wait=False)
 
     # ── Internal helpers ─────────────────────────────
@@ -431,6 +501,11 @@ class StreamingScheduler:
 
         logger.debug('[Scheduler] _run_one START agent=%s role=%s objective=%.80s retries=%d',
                       spec.id, spec.role, spec.objective, effective_retries)
+
+        # Seed the liveness record the moment the agent is handed a thread, so
+        # a swarm is never judged "silent" during the window between launch and
+        # the agent's first token.
+        self._beacon.touch(spec.id, 'agent_start')
 
         # Notify start
         if self._on_start:
@@ -521,6 +596,9 @@ class StreamingScheduler:
             # elapsed, so the live start clock is no longer needed (and must
             # not accumulate across a long-lived swarm).
             self._started_at.pop(spec.id, None)
+            # Same for the liveness record: a settled agent must not keep the
+            # swarm-wide "still producing" verdict alive for its siblings.
+            self._beacon.forget(spec.id)
             logger.debug('[Scheduler] Queue state after agent=%s: pending=%d running=%s completed=%d',
                          spec.id, len(self._pending),
                          list(self._running.keys()), len(self._completed))

@@ -706,7 +706,21 @@ def _safe_on_chunk(on_chunk, stream, text):
 
     The callback is user-supplied (comes from the SSE layer).  A bug in the
     frontend-event emission MUST NOT abort the subprocess.
+
+    Also the LIVENESS heartbeat for long commands. Both run loops funnel every
+    output chunk through here, so it is the one place that proves "this
+    subprocess is still producing" — the signal a swarm sub-agent has no other
+    way to emit while blocked inside a tool (measured: a ``pytest`` child ran
+    >1h and the agent looked silent the whole time). The heartbeat is a no-op
+    outside a swarm, and deliberately sits ABOVE the ``on_chunk`` guard below:
+    output proves life whether or not anyone subscribed to it.
     """
+    if text:
+        try:
+            from lib.swarm.liveness import notify_tool_progress
+            notify_tool_progress('subprocess_output')
+        except Exception as e:
+            logger.debug('[run_command] liveness heartbeat skipped: %s', e)
     if not on_chunk or not text:
         return
     try:

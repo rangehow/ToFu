@@ -39,6 +39,7 @@ from lib.swarm.protocol import (
     SubTaskSpec,
 )
 from lib.swarm.rate_limiter import RateLimiter
+from lib.swarm.liveness import ProgressBeacon
 from lib.swarm.scheduler import StreamingScheduler
 
 logger = get_logger(__name__)
@@ -297,6 +298,14 @@ class MasterOrchestrator:
         self._driver_thread: threading.Thread | None = None
         self._terminated = False  # set when driver thread exits
 
+        #: THE shared liveness fact for this swarm (lib/swarm/liveness.py).
+        #: Handed BY REFERENCE to the scheduler and to every SubAgent, and read
+        #: by the session-TTL sweep via the ``progress_beacon`` property below,
+        #: so all four components answer "is this still working?" from ONE
+        #: record. Three private clocks that never compared notes is exactly
+        #: what abandoned a running agent at 600s while it went on to finish.
+        self._beacon = ProgressBeacon()
+
         # Rehydration: agent_id → persisted ``messages`` array. When set
         # (by ``rehydrate_in_background``), ``_make_agent`` seeds the new
         # SubAgent's conversation from this checkpoint instead of building a
@@ -346,6 +355,10 @@ class MasterOrchestrator:
             agent.messages = list(resume)
             logger.info('[Master:%s] Rehydrated agent %s from checkpoint (%d msgs)',
                         self.task_id, spec.id, len(resume))
+        # Share THE liveness record with this agent: every token / tool call it
+        # makes must land on the same beacon the driver and the TTL sweep read,
+        # otherwise we would just have created a fourth private clock.
+        agent.progress_beacon = self._beacon
         with self._lock:
             self._agents[spec.id] = agent
         return agent
@@ -587,8 +600,16 @@ class MasterOrchestrator:
                     result.total_tokens, result.rounds_used)
         # 1) UI event (kept identical to legacy schema for the swarm panel)
         # ``objective`` is the agent-card body — full text, no truncation.
-        # ``summary`` is the per-card preview line, capped at 200 chars
-        # because that's what fits visually before the user clicks open.
+        # ``summary`` is the agent card's RESULT body. It carries the FULL
+        # final answer, for the same reason ``_build_agent_snapshot`` does:
+        # the panel is a debugging surface and CSS owns the visual bounding
+        # (``.sw-a-preview`` scrolls), not a backend slice. A cap here was the
+        # live/reload divergence users hit — the durable snapshot showed the
+        # whole answer after F5 while the LIVE panel stopped mid-sentence,
+        # which reads as "the sub-agent produced a truncated result".
+        # Wire economy does not argue for a cap: this fires ONCE per agent
+        # (unlike the per-tool-call frame, which stays bounded by
+        # ``agent._SSE_TOOL_PREVIEW_CHARS`` because it fires per call).
         modified_files = _count_file_writes(result.tool_log)
         if self.on_progress:
             self.on_progress({
@@ -601,7 +622,7 @@ class MasterOrchestrator:
                 'status':    result.status,
                 'elapsed':   round(result.elapsed_seconds, 1),
                 'tokens':    result.total_tokens,
-                'summary':   (result.final_answer or '')[:600],
+                'summary':   (result.final_answer or ''),
                 # ★ Number of file-mutating tool calls this agent made.
                 #   Surfaced in the UI so agents that edited the workspace
                 #   are flagged for closer review.
@@ -672,6 +693,7 @@ class MasterOrchestrator:
             on_agent_start=self._on_agent_start_callback,
             on_agent_complete=self._on_agent_complete_callback,
             on_retry=self._on_retry_callback,
+            progress_beacon=self._beacon,
         )
 
     # ── Non-blocking entry point ─────────────────────
@@ -740,10 +762,37 @@ class MasterOrchestrator:
             except Exception as e:
                 logger.error('%s Driver loop crashed: %s', log_prefix, e, exc_info=True)
             finally:
+                # ORDER MATTERS. This block used to shut the pool down and set
+                # ``_terminated`` while agents were STILL EXECUTING, because
+                # the loop above could exit on a fixed 600s budget. Two lies
+                # followed: ``await_agents`` told the model those ids "will
+                # NEVER complete" (one delivered 21 minutes later), and
+                # ``_build_agent_snapshot`` coerced them to ``unknown`` under
+                # ``settled:true`` — the "no result" cards next to a green
+                # "Complete" pill.
+                #
+                # So drain first: ``shutdown()`` now WAITS for in-flight
+                # agents, and only once nothing is running may we claim the
+                # swarm has terminated.
                 try:
                     self._scheduler.shutdown()
                 except Exception as e:
                     logger.debug('%s scheduler shutdown error: %s', log_prefix, e)
+
+                _still = 0
+                try:
+                    _still = self._scheduler.running_count
+                except Exception as e:
+                    logger.debug('%s running_count probe failed: %s', log_prefix, e)
+                if _still:
+                    # Only reachable when shutdown's bounded wait expired on a
+                    # wedged tool thread. Say so loudly rather than silently
+                    # publishing "settled" over live work.
+                    logger.warning(
+                        '%s marking terminated with %d agent(s) still in '
+                        'flight (wedged past the shutdown wait) — beacon: %s',
+                        log_prefix, _still, self._beacon.describe())
+
                 self._terminated = True
                 self._completion_event.set()
 
@@ -1334,6 +1383,16 @@ class MasterOrchestrator:
     @property
     def is_terminated(self) -> bool:
         return self._terminated
+
+    @property
+    def progress_beacon(self) -> ProgressBeacon:
+        """The shared liveness record — read by ``_session_is_producing``.
+
+        Exposed as a property so the session-TTL sweep asks THIS swarm whether
+        its agents are still producing, instead of inferring death from the
+        session's age (which is what aborted 105 sessions).
+        """
+        return self._beacon
 
     @property
     def pending_count(self) -> int:

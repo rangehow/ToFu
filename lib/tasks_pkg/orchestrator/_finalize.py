@@ -1377,6 +1377,21 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
             logger.warning('[Task %s] pre-emit conv sync failed: %s — '
                            'terminal event will fall back to transient buffer',
                            tid, _pre_emit_err, exc_info=True)
+    # ── Persist the parent's TERMINAL record BEFORE the autopilot hook ──
+    #   (pt_5f0262fc). The VU sub-task runs INLINE inside maybe_run_autopilot
+    #   (_run_single_turn on THIS thread) and can hang on ANYTHING — a wedged
+    #   tool, a stalled LLM. Measured 2026-07-31: task 752273db finished at
+    #   20:38:27 (message committed fr=stop, status='done' since line ~973)
+    #   but its task_results row stayed 'running' for 2h57m because the VU
+    #   sub-task sat in a run_command crawling a FUSE parent dir — the
+    #   persist below the hook never ran. Everything the parent owes the
+    #   world (terminal row, conv sync, queue drain, proactive status) must
+    #   land BEFORE the VU can hang. The baton's own assumption comment
+    #   ("persist_task_result runs _dispatch_queued_message before our hook
+    #   fires") already expected this order — the code disagreed. The
+    #   heavy-state release is deferred past the hook (the VU inherits
+    #   task['messages']); it runs below, right after append_event(done_evt).
+    persist_task_result(task, _defer_heavy_release=True)
     try:
         from lib.tasks_pkg.autopilot import maybe_run_autopilot
         maybe_run_autopilot(task)
@@ -1479,7 +1494,12 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
     # synthesis. Clearing is safe even if a reader missed every event (the
     # task is terminal and the latch is gone → LATE done resumes its role).
     task.pop('_finalize_started_at', None)
-    persist_task_result(task)
+    # persist_task_result already ran BEFORE the autopilot hook (see above);
+    # the heavy-state release was deferred because the VU inherits
+    # task['messages'] — release it here, at the same point the old trailing
+    # persist would have released.
+    from lib.tasks_pkg.manager._persist import _release_heavy_task_state
+    _release_heavy_task_state(task)
 
     _spawn_async_commit_round(task, project_enabled, project_path)
 

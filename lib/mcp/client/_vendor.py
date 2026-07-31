@@ -23,6 +23,15 @@ from lib.mcp.client._state import _pkg
 
 logger = get_logger(__name__)
 
+#: Default supply-chain cutoff for MCP launcher dependency resolution.
+#:
+#: Everything an MCP server needs was on the index by this date, so the floor
+#: costs nothing today while making every cold resolve reproducible. RAISE IT
+#: DELIBERATELY (a dated, reviewed bump) to adopt newer server releases —
+#: that is the whole point: upgrades become an explicit edit with a diff,
+#: instead of something that happens to whoever resolves next.
+_SUPPLY_CUTOFF_DEFAULT = '2026-07-27T00:00:00Z'
+
 
 def _ensure_writable_caches(env: dict[str, str]) -> None:
     """Redirect launcher caches AND data dirs to a project-local dir when
@@ -60,6 +69,31 @@ def _ensure_writable_caches(env: dict[str, str]) -> None:
         logger.warning('[MCP] cannot create launcher cache dir %s: %s', cache_root, e)
         return
 
+    # ── Supply-chain cutoff: make a FLOATING launcher spec reproducible ──
+    #
+    # Measured (2026-07-31): the frozen spec
+    # ``uvx --from 'overleaf-mcp-plus[compile]>=0.1.3'`` produced FIVE
+    # different ``mcp`` versions across the 30 envs in data/mcp-cache —
+    # 1.27.2 / 1.28.0 / 1.28.1 / 1.29.0 and, three times, the breaking
+    # **2.0.0** that crashes the server at import. The server's own version
+    # never moved (0.2.1 every time): 100% of the drift was TRANSITIVE. So
+    # pinning launcher specs cannot fix this, and neither can isolating the
+    # environments — each cold resolve is an independent lottery against
+    # whatever is on the index at that instant.
+    #
+    # A date cutoff fixes the whole tree at once, without touching the 50
+    # floating specs in the catalog. Measured: two cold resolves with the same
+    # cutoff produced byte-identical dependency trees; ``--before`` on npm
+    # likewise pinned the transitive tree (zod 3.24.1 vs an unconstrained
+    # 3.25.76 + 4.4.3). Both knobs are read from the environment, so this one
+    # seam — which every launcher subprocess already passes through — covers
+    # uv/uvx and npm/npx alike.
+    #
+    # ``setdefault`` semantics apply as everywhere else here: an operator who
+    # exports their own value keeps it, and TOFU_MCP_SUPPLY_CUTOFF='' disables
+    # the floor entirely (opting back in to floating resolution).
+    cutoff = os.environ.get('TOFU_MCP_SUPPLY_CUTOFF', _SUPPLY_CUTOFF_DEFAULT).strip()
+
     # uv / uvx, npm / npx, generic XDG, and pip caches + data dirs.
     defaults = {
         # ── caches ──
@@ -79,6 +113,11 @@ def _ensure_writable_caches(env: dict[str, str]) -> None:
     }
     for key, path in defaults.items():
         env.setdefault(key, path)
+
+    if cutoff:
+        # uv wants an RFC3339 instant; npm's --before takes a plain date.
+        env.setdefault('UV_EXCLUDE_NEWER', cutoff)
+        env.setdefault('npm_config_before', cutoff.split('T', 1)[0])
 
 
 # ── Hot-reload of the vendored registry ──────────────────

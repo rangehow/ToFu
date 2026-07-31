@@ -85,6 +85,11 @@ def _pin_sites():
     sites = [
         ('requirements.txt', os.path.join(REPO, 'requirements.txt'), 'shell'),
         ('bootstrap.py', os.path.join(REPO, 'bootstrap.py'), 'python'),
+        # install.sh's CONDA_PKGS array is a REAL install spec: it is fed to
+        # `conda install -c conda-forge` for a fresh public deploy. Measured
+        # 2026-07-31: conda-forge already carries mcp 2.0.0, and this site
+        # carried a bare `mcp>=1.0` that no guard scanned.
+        ('install.sh', os.path.join(REPO, 'install.sh'), 'shell'),
     ]
     tools_dir = os.path.join(REPO, 'tools')
     if os.path.isdir(tools_dir):
@@ -205,6 +210,122 @@ def test_upper_bound_predicate_rejects_bare_floor():
     assert _has_upper_bound('>=1.0,<2')
     assert _has_upper_bound('==2.0.0')
     assert _has_upper_bound('~=1.27')
+
+
+def test_launcher_resolution_is_reproducible():
+    """Every MCP launcher subprocess must inherit a supply-chain cutoff.
+
+    WHY THIS IS A DIFFERENT DEFECT CLASS FROM THE UPPER BOUND ABOVE
+    ---------------------------------------------------------------
+    Bounding ``mcp`` protects ONE package that we happen to know broke. It does
+    nothing for the other ~30 packages in a server's tree. Measured 2026-07-31
+    against the real ``data/mcp-cache`` on this host: the FROZEN spec
+    ``uvx --from 'overleaf-mcp-plus[compile]>=0.1.3'`` had materialised FIVE
+    different ``mcp`` versions across 30 environments —
+
+        1.28.1 ×16   1.28.0 ×5   1.27.2 ×5   2.0.0 ×3   1.29.0 ×1
+
+    — while the server's own version was 0.2.1 in every single one. So 100% of
+    the drift was TRANSITIVE, and neither pinning the launcher spec nor
+    isolating the environment can fix it: each cold resolve is an independent
+    draw against whatever the index holds at that instant. That is what makes
+    the failure random and unreproducible, which is strictly worse than a
+    failure that is merely frequent.
+
+    A date cutoff fixes the entire tree at once without editing the 50 floating
+    specs in the catalog. Measured: two cold resolves under the same cutoff
+    produced byte-identical dependency trees, and the reported crash
+    (``mcp 2.0.0`` → ``AttributeError: 'Server' object has no attribute
+    'list_tools'``) becomes ``mcp 1.28.1`` + a clean import.
+
+    WHY IT ASSERTS ON THE INJECTION SEAM, NOT ON A FILE
+    ----------------------------------------------------
+    The obvious guard — "every spec in mcp_servers.json names an exact
+    version" — was rejected on evidence. That file is GITIGNORED user data
+    (.gitignore:31, not tracked by git), so on a fresh clone the guard would
+    scan nothing and pass vacuously; and the catalog it is populated from has
+    50 floating entries and 0 pinned ones, so the assertion would demand 50
+    hand-maintained pins that drift the moment upstream publishes. Both shapes
+    fail for the same reason: they police the DECLARATIONS instead of the one
+    place resolution actually happens.
+
+    So this asserts the invariant where it is load-bearing: the env dict handed
+    to every launcher subprocess. ``_ensure_writable_caches`` is on the stdio
+    path (``_bridge.py`` calls it on the env passed to
+    ``StdioServerParameters``), so covering it covers uv/uvx and npm/npx at
+    once, including servers that do not exist yet.
+    """
+    from lib.mcp.client._vendor import _ensure_writable_caches
+
+    env = {}
+    _ensure_writable_caches(env)
+
+    assert env.get('UV_EXCLUDE_NEWER'), (
+        'MCP launcher env carries no UV_EXCLUDE_NEWER. Without it every cold '
+        'uvx resolve re-draws the whole transitive tree from the live index — '
+        'measured: one frozen spec produced 5 different mcp versions, one of '
+        'them the 2.0.0 that crashes the server at import.'
+    )
+    assert env.get('npm_config_before'), (
+        'MCP launcher env carries no npm_config_before. npx servers resolve '
+        '`-y <pkg>` against the live registry on every spawn; measured, '
+        '--before pins the transitive tree (zod 3.24.1 vs an unconstrained '
+        '3.25.76 + 4.4.3).'
+    )
+    # npm's --before takes a plain date; uv wants an RFC3339 instant. A cutoff
+    # that npm cannot parse would be silently ignored, re-opening the drift on
+    # the npx half while this guard stayed green.
+    assert re.fullmatch(r'\d{4}-\d{2}-\d{2}', env['npm_config_before']), (
+        f'npm_config_before={env["npm_config_before"]!r} is not a plain '
+        f'YYYY-MM-DD date — npm would ignore it and npx resolution would '
+        f'float again.'
+    )
+    assert env['UV_EXCLUDE_NEWER'].startswith(env['npm_config_before']), (
+        'The uv and npm cutoffs disagree. Two ecosystems pinned to different '
+        'instants means "reproducible" is only half true, and which half '
+        'depends on which launcher a server happens to use.'
+    )
+
+
+def test_supply_cutoff_is_operator_overridable_and_optional():
+    """The cutoff must be a FLOOR, not a cage.
+
+    Two directions, both load-bearing:
+
+      * An operator who exports their own ``UV_EXCLUDE_NEWER`` keeps it. This
+        is how a deployment adopts a newer server without waiting for us —
+        without it, the floor would be a hard ceiling on everyone's ability to
+        upgrade, which is the failure mode that gets guards deleted.
+      * ``TOFU_MCP_SUPPLY_CUTOFF=''`` opts out entirely, restoring floating
+        resolution for someone who genuinely wants the newest tree.
+
+    Pinned in both directions because a cutoff that cannot be overridden and a
+    cutoff that cannot be disabled are each worse than no cutoff at all.
+    """
+    import os as _os
+
+    from lib.mcp.client._vendor import _ensure_writable_caches
+
+    env = {'UV_EXCLUDE_NEWER': '2030-01-01T00:00:00Z'}
+    _ensure_writable_caches(env)
+    assert env['UV_EXCLUDE_NEWER'] == '2030-01-01T00:00:00Z', (
+        'an operator-supplied cutoff was overwritten — the floor became a cage'
+    )
+
+    prev = _os.environ.get('TOFU_MCP_SUPPLY_CUTOFF')
+    _os.environ['TOFU_MCP_SUPPLY_CUTOFF'] = ''
+    try:
+        opted_out = {}
+        _ensure_writable_caches(opted_out)
+        assert 'UV_EXCLUDE_NEWER' not in opted_out, (
+            'TOFU_MCP_SUPPLY_CUTOFF="" must disable the cutoff entirely'
+        )
+        assert 'npm_config_before' not in opted_out
+    finally:
+        if prev is None:
+            _os.environ.pop('TOFU_MCP_SUPPLY_CUTOFF', None)
+        else:
+            _os.environ['TOFU_MCP_SUPPLY_CUTOFF'] = prev
 
 
 def test_scanner_ignores_commented_and_unrelated_names():

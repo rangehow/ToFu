@@ -669,22 +669,27 @@ vim .env   # 填入你的值
 │   ├── llm_dispatch/          多密钥多模型智能调度器
 │   ├── database/              双后端—— SQLite 默认，PostgreSQL 通过 --with-postgres 开启
 │   ├── tasks_pkg/             任务编排与上下文压缩
-│   │   ├── orchestrator.py    LLM ↔ 工具主循环
-│   │   ├── executor.py        工具执行引擎
-│   │   ├── endpoint.py        Planner → Worker → Critic 循环
+│   │   ├── orchestrator/      LLM ↔ 工具主循环（包）
+│   │   ├── executor/          工具执行引擎（包）
+│   │   ├── endpoint/          Planner → Worker → Critic 循环（包）
 │   │   └── compaction/        3 层上下文压缩（包）
 │   ├── tools/                 工具定义与 Schema
 │   ├── swarm/                 多智能体编排
-│   ├── fetch/                 内容抓取与提取
-│   ├── search/                多引擎网页搜索
+│   ├── search_bridge.py      对接外部 `tofu_search` 包的接缝（网页搜索与抓取）
+│   ├── research/             自动科研流水线（检索 → 综述 → 选题）
+│   ├── longform/             长篇研究报告
+│   ├── motion_video/         动画视频流水线
+│   ├── production/           生产基座（阶段图、崩溃续跑）
+│   ├── tts/                  语音合成 / 旁白
+│   ├── skills/               用户安装的技能包（AgentSkills 格式）
 │   ├── browser/               浏览器插件桥接
 │   ├── project_mod/           项目协作（扫描、编辑、撤销）
 │   ├── memory/                记忆积累系统
 │   ├── mcp/                   模型上下文协议桥接
 │   ├── feishu/                飞书机器人集成
 │   ├── scheduler/             任务调度（cron、主动代理）
-│   ├── image_gen.py           图片生成（多模型调度）
-│   ├── mt_provider.py         机器翻译服务商适配（小牛翻译、自定义）
+│   ├── image_gen/            图片生成（多模型调度）
+│   ├── mt_provider/          机器翻译服务商适配（小牛翻译、自定义）
 │   ├── desktop_agent/         桌面自动化代理（本地桥）
 │   └── ...
 │

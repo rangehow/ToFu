@@ -688,22 +688,27 @@ The `.env.example` file documents all supported variables. Key ones:
 │   ├── llm_dispatch/          Multi-key multi-model smart dispatcher
 │   ├── database/              Dual backend — SQLite default, PostgreSQL opt-in via --with-postgres
 │   ├── tasks_pkg/             Task orchestration & context compaction
-│   │   ├── orchestrator.py    Main LLM ↔ tool loop
-│   │   ├── executor.py        Tool execution engine
-│   │   ├── endpoint.py        Planner → Worker → Critic loop
+│   │   ├── orchestrator/      Main LLM ↔ tool loop (package)
+│   │   ├── executor/          Tool execution engine (package)
+│   │   ├── endpoint/          Planner → Worker → Critic loop (package)
 │   │   └── compaction/        3-layer context compaction (package)
 │   ├── tools/                 Tool definitions & schemas
 │   ├── swarm/                 Multi-agent orchestration
-│   ├── fetch/                 Content fetching & extraction
-│   ├── search/                Multi-engine web search
+│   ├── search_bridge.py      Seam to the external `tofu_search` package (web search + fetch)
+│   ├── research/             Auto-research pipeline (harvest → survey → ideate)
+│   ├── longform/             Long-form research reports
+│   ├── motion_video/         Motion-graphics video pipeline
+│   ├── production/           Production substrate (stage graph, crash-resume)
+│   ├── tts/                  Text-to-speech / narration
+│   ├── skills/               User-installed skill packages (AgentSkills format)
 │   ├── browser/               Browser extension bridge
 │   ├── project_mod/           Project co-pilot (scan, edit, undo)
 │   ├── memory/                Memory accumulation system
 │   ├── mcp/                   Model Context Protocol bridge
 │   ├── feishu/                Feishu bot integration
 │   ├── scheduler/             Task scheduling (cron, proactive agents)
-│   ├── image_gen.py           Image generation (multi-model dispatch)
-│   ├── mt_provider.py         Machine translation providers (NiuTrans, custom)
+│   ├── image_gen/            Image generation (multi-model dispatch)
+│   ├── mt_provider/          Machine translation providers (NiuTrans, custom)
 │   ├── desktop_agent/         Desktop automation agent (local bridge)
 │   └── ...
 │

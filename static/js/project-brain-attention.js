@@ -164,6 +164,18 @@
         .replace('%d', item.blockCount));
     }
     if (item.reason) meta.push(item.reason);
+    // "Create conversation" — open a fresh chat about this epic (delegates to
+    // project-brain.js's launcher). Rendered ONLY when that shared launcher
+    // is actually loaded: a button whose handler is absent is a dead button.
+    var convBtn = (window.ProjectBrain &&
+        typeof window.ProjectBrain._openEpicConversation === 'function')
+      ? '<button type="button" class="pb-attn-act pb-attn-act-conv"' +
+        ' data-act="createConv" title="' +
+        _esc(_t('projectBrain.actCreateConv', 'New chat')) + '">' +
+        ((typeof Icon === 'function') ? Icon('messagePlus', 12) : '') +
+        '<span>' + _esc(_t('projectBrain.actCreateConv', 'New chat')) +
+        '</span></button>'
+      : '';
     return _card(item,
       '<div class="pb-attn-head">' + _sevPill(item.severity) +
         '<span class="pb-attn-kind">' +
@@ -181,7 +193,8 @@
         '<span>' + _esc(_t('projectBrain.answerSubmit', 'Submit answer')) +
         '</span></button>' +
       '</div>' +
-      (meta.length ? '<div class="pb-attn-meta">' + _esc(meta.join(' · ')) + '</div>' : ''));
+      (meta.length ? '<div class="pb-attn-meta">' + _esc(meta.join(' · ')) + '</div>' : '') +
+      (convBtn ? '<div class="pb-attn-actions">' + convBtn + '</div>' : ''));
   }
 
   /** A pending charter proposal — commit / reject inline (same routes the
@@ -409,6 +422,21 @@
       var input = card.querySelector('.pb-attn-answer');
       var text = input ? (input.value || '').trim() : '';
       if (text) _submitAnswer(api, path, id, convId, text, btn);
+      return;
+    }
+    if (act === 'createConv') {
+      var launcher = window.ProjectBrain &&
+        window.ProjectBrain._openEpicConversation;
+      if (typeof launcher !== 'function') return;
+      // The ORIGINAL title (data-pb-src), never the translation overlay — the
+      // same source-of-truth rule the commit path holds.
+      var titleEl = card.querySelector('.pb-attn-title [data-pb-src]') ||
+                    card.querySelector('.pb-attn-title');
+      var ttl = titleEl
+        ? (titleEl.getAttribute('data-pb-src') != null
+            ? titleEl.getAttribute('data-pb-src') : (titleEl.textContent || ''))
+        : '';
+      launcher(id, ttl);
       return;
     }
     if (act === 'commit') {

@@ -1201,7 +1201,11 @@
     //   • reopen on claimed (break a stuck live claim) AND done (revive)
     // (There is no park/shelve control — the project pushes every open epic
     //  forward at full speed rather than holding work pending a human decision.)
-    var acts = [];
+    // "Create conversation" leads every card's action row — opening a fresh
+    // chat about the epic is the human's forward action; the lifecycle
+    // controls follow it.
+    var acts = [_boardActionBtn('createConv', 'messagePlus',
+      'projectBrain.actCreateConv', 'New chat')];
     if (t.status === 'open' || t.status === 'claimed') {
       acts.push(_boardActionBtn('complete', 'check', 'projectBrain.actComplete', 'Done'));
       acts.push(_boardActionBtn('block', 'ban', 'projectBrain.actBlock', 'Block'));
@@ -1273,6 +1277,8 @@
     var headText = String(t.title || '') + (reason ? '\n\n' + reason : '');
     var headHtml = _clampBlock(_mdLite(headText), headText);
     var acts = [
+      _boardActionBtn('createConv', 'messagePlus',
+        'projectBrain.actCreateConv', 'New chat'),
       _boardActionBtn('reopen', 'refresh', 'projectBrain.actReopen', 'Reopen'),
       _boardActionBtn('complete', 'check', 'projectBrain.actComplete', 'Done'),
     ];
@@ -1283,64 +1289,82 @@
       '<div class="pb-board-card-actions">' + acts.join('') + '</div></div>';
   }
 
-  /** Render one AWAITING-ANSWER epic card (Pillar #3 — the ask_human-style
-   *  closure for board work). A [human-gated] block with a structured
-   *  question renders the QUESTION as the primary content with one-click
-   *  option chips + a free-text input; submitting calls board/answer, which
-   *  clears the gate and IMMEDIATELY re-dispatches the epic with the answer
-   *  in its kickoff. Reopen/Done stay available as secondary lifecycle
-   *  controls. ONE clamp per card (title+reason combined). */
-  function _answerCard(t) {
-    var q = (t.block_question && typeof t.block_question === 'object')
-      ? t.block_question : { q: '', options: [] };
-    var opts = Array.isArray(q.options) ? q.options : [];
-    var chips = opts.map(function (o, i) {
-      var label = (o && o.label) ? String(o.label) : '';
-      if (!label) return '';
-      var desc = (o && o.description) ? String(o.description) : '';
-      return '<button type="button" class="pb-chip pb-board-act" data-act="answerOpt"'
-        + ' data-idx="' + i + '"'
-        + (desc ? ' title="' + _esc(desc) + '"' : '')
-        + ' data-pb-src="' + _esc(label) + '">' + _mdLite(label) + '</button>';
-    }).join('');
-    var inputRow = '<div class="pb-answer-input-row">'
-      + '<input type="text" class="pb-answer-text" placeholder="'
-      + _esc(_t('projectBrain.answerPlaceholder',
-                'Type your answer (or pick an option above)…')) + '">'
-      + '<button type="button" class="pb-board-act pb-board-act-answer pb-btn-primary"'
-      + ' data-act="answerSubmit">'
-      + ((typeof Icon === 'function') ? Icon('check', 12) : '')
-      + '<span>' + _esc(_t('projectBrain.answerSubmit', 'Submit answer')) + '</span></button>'
-      + '</div>';
-    var questionBox = '<div class="pb-question">'
-      + '<div class="pb-question-label">'
-      + ((typeof Icon === 'function') ? Icon('alertTriangle', 12) : '')
-      + _esc(_t('projectBrain.needsYourDecision', 'Your decision needed')) + '</div>'
-      + '<div class="pb-question-q" data-pb-src="' + _esc(q.q || '') + '">'
-      + _mdLite(q.q || '') + '</div>'
-      + (chips ? '<div class="pb-chip-row">' + chips + '</div>' : '')
-      + inputRow + '</div>';
-    var cnt = Number(t.block_count || 0);
-    var meta = _esc(_t('projectBrain.awaitingAnswerMeta', 'waiting for your answer'))
-      + (cnt ? ' · ' + _esc(_t('projectBrain.blockedCount', 'blocked %d×')
-                            .replace('%d', cnt)) : '');
+  /** Render one AWAITING-ANSWER epic card — COMPACT (2026-07-31
+   *  consolidation). The answering UI (question, option chips, free-text
+   *  input) lives ONLY in the Needs-you tab: the same epic rendered in BOTH
+   *  places made the operator meet the identical question twice. This card
+   *  keeps the board honest — the epic is visibly gated, never "claim me" —
+   *  and DEEP-LINKS into the attention tab, the single surface where answers
+   *  are given (redesign §D6: deep-link, don't duplicate). Reopen/Done stay
+   *  available as secondary lifecycle controls. ONE clamp per card. */
+  function _awaitingCard(t) {
     var reason = (t.block_reason || '').trim();
     var headText = String(t.title || '') + (reason ? '\n\n' + reason : '');
     var headHtml = _clampBlock(_mdLite(headText), headText);
+    var cnt = Number(t.block_count || 0);
+    var meta = '<span class="pb-board-badge pb-board-badge-awaiting">' +
+      ((typeof Icon === 'function') ? Icon('alertTriangle', 11) : '') +
+      '<span>' + _esc(_t('projectBrain.laneAwaiting', 'Awaiting your answer')) +
+      '</span></span>' +
+      '<span class="pb-board-awaiting-meta">' +
+      _esc(_t('projectBrain.awaitingAnswerMeta', 'waiting for your answer')) +
+      (cnt ? ' · ' + _esc(_t('projectBrain.blockedCount', 'blocked %d×')
+                          .replace('%d', cnt)) : '') + '</span>';
     var acts = [
+      '<button type="button" class="pb-board-act pb-board-act-goto"' +
+        ' data-act="gotoAttention" title="' +
+        _esc(_t('projectBrain.actGoAnswer', 'Answer in Needs you')) + '">' +
+        ((typeof Icon === 'function') ? Icon('arrowRight', 12) : '') +
+        '<span>' + _esc(_t('projectBrain.actGoAnswer', 'Answer in Needs you')) +
+        '</span></button>',
+      _boardActionBtn('createConv', 'messagePlus',
+        'projectBrain.actCreateConv', 'New chat'),
       _boardActionBtn('reopen', 'refresh', 'projectBrain.actReopen', 'Reopen'),
       _boardActionBtn('complete', 'check', 'projectBrain.actComplete', 'Done'),
     ];
     return '<div class="pb-board-card pb-board-awaiting" data-task-id="' +
       _esc(t.id) + '">' +
       '<div class="pb-board-title">' + headHtml + '</div>' +
-      questionBox +
       '<div class="pb-board-card-meta pb-board-block-meta">' + meta + '</div>' +
       '<div class="pb-board-card-actions">' + acts.join('') + '</div></div>';
   }
 
-  /** Look up a task on the last-rendered board snapshot (answer acts need the
-   *  structured question's option labels). */
+  /**
+   * "Create conversation" for a board epic: close the panel, open a fresh
+   *  chat and pre-fill the composer with a kickoff naming the epic id + title
+   *  (the same launch pattern myday's quick-action uses). NEVER auto-sends —
+   *  the human reviews and edits before the first token is spent.
+   */
+  function _openEpicConversation(taskId, title) {
+    if (!taskId) return;
+    closeProjectBrain();
+    if (typeof newChat === 'function') {
+      try { newChat(); } catch (e) {
+        _reportFailure('projectBrain.convCreateFailed',
+          'Could not open a new chat', e);
+      }
+    }
+    var input = document.getElementById('userInput');
+    if (input) {
+      var short = String(title || '').replace(/\s+/g, ' ').trim().slice(0, 400);
+      input.value = _t('projectBrain.epicChatPrompt',
+        'Claim and advance this board epic: {id}\n{title}\n\nRead the full ' +
+        'text with project_board_read, claim it with project_board_claim, ' +
+        'then start.')
+        .replace('{id}', taskId).replace('{title}', short);
+      try {
+        input.style.height = 'auto';
+        input.style.height = input.scrollHeight + 'px';
+        input.focus();
+      } catch (_e) { /* jsdom / detached */ }
+    }
+    if (typeof updateSendButton === 'function') {
+      try { updateSendButton(); } catch (_e) { /* best-effort */ }
+    }
+  }
+
+  /** Look up a task on the last-rendered board snapshot (the create-conv
+   *  action resolves the epic's full title from it). */
   function _findBoardTask(taskId) {
     var tasks = (_state.board && _state.board.tasks) || [];
     for (var i = 0; i < tasks.length; i++) {
@@ -1408,20 +1432,14 @@
     } else if (act === 'block' && typeof api.boardBlock === 'function') {
       _openBlockNoteEditor(btn, taskId, path, convId);
       return;  // the inline editor owns the rest of the flow
-    } else if (act === 'answerOpt' && typeof api.boardAnswer === 'function') {
+    } else if (act === 'gotoAttention') {
+      // Deep-link: answering happens ONLY in the Needs-you tab (§D6).
+      _selectTab('attention');
+      return;
+    } else if (act === 'createConv') {
       var task = _findBoardTask(taskId);
-      var q = (task && task.block_question) || {};
-      var opts = Array.isArray(q.options) ? q.options : [];
-      var opt = opts[Number(btn ? btn.getAttribute('data-idx') : -1)];
-      var optLabel = (opt && opt.label) ? String(opt.label).trim() : '';
-      if (!optLabel) return;
-      call = api.boardAnswer(path, taskId, convId, optLabel);
-    } else if (act === 'answerSubmit' && typeof api.boardAnswer === 'function') {
-      var cardEl = btn && btn.closest ? btn.closest('.pb-board-card') : null;
-      var input = cardEl ? cardEl.querySelector('.pb-answer-text') : null;
-      var freeText = input ? (input.value || '').trim() : '';
-      if (!freeText) { if (input && input.focus) input.focus(); return; }
-      call = api.boardAnswer(path, taskId, convId, freeText);
+      if (task) _openEpicConversation(task.id, task.title);
+      return;
     }
     if (!call) return;
     if (btn) btn.disabled = true;
@@ -1521,8 +1539,8 @@
       }
       (cols[t.status] || cols.open).push(t);
     }
-    // Board badge = live epics needing attention (open + claimed), not done,
-    // blocked (waiting on a gate), or path leases.
+    // Board badge = live epics needing attention (open + claimed +
+    // awaiting-answer), not done, blocked (waiting on a gate), or path leases.
     _setTabCount('pbTabCountBoard',
       cols.open.length + cols.claimed.length + cols.awaiting.length);
     function lane(key, labelKey) {
@@ -1570,7 +1588,8 @@
         blockedCards + '</div>';
     }
     // Awaiting-answer lane (pending human questions) — TOP of the board,
-    // the one place the operator is asked to ACT.
+    // COMPACT: each card deep-links into the Needs-you tab, the single
+    // answering surface (the question UI itself is no longer duplicated here).
     var awaitingLane = '';
     if (cols.awaiting.length) {
       awaitingLane = '<div class="pb-board-lane pb-board-lane-awaiting">' +
@@ -1578,7 +1597,7 @@
         ((typeof Icon === 'function') ? Icon('alertTriangle', 12) : '') +
         ' ' + _esc(_t('projectBrain.laneAwaiting', 'Awaiting your answer')) +
         ' <span class="pb-board-count">' + cols.awaiting.length + '</span></div>' +
-        cols.awaiting.map(_answerCard).join('') + '</div>';
+        cols.awaiting.map(_awaitingCard).join('') + '</div>';
     }
     el.innerHTML =
       '<div class="pb-board-toolbar">' + newBtn + '</div>' +
@@ -1603,18 +1622,7 @@
     // "＋ New epic"
     var nb = el.querySelector('#pbBoardNewBtn');
     if (nb && !nb.disabled) nb.addEventListener('click', _boardPostNew);
-    // Answer inputs: Enter submits (same as clicking 提交回答).
-    var answerInputs = el.querySelectorAll('.pb-answer-text');
-    for (var ai = 0; ai < answerInputs.length; ai++) {
-      answerInputs[ai].addEventListener('keydown', function (/** @type {KeyboardEvent} */ ev) {
-        if (ev.key !== 'Enter') return;
-        ev.preventDefault();
-        var card = ev.currentTarget.closest ? ev.currentTarget.closest('.pb-board-card') : null;
-        var submit = card ? card.querySelector('.pb-board-act[data-act="answerSubmit"]') : null;
-        if (submit) submit.click();
-      });
-    }
-    // Per-card human lifecycle actions (complete / block / reopen).
+    // Per-card human actions (create-conversation / lifecycle / goto-answer).
     var actBtns = el.querySelectorAll('.pb-board-act');
     for (var a = 0; a < actBtns.length; a++) {
       actBtns[a].addEventListener('click', function (ev) {
@@ -1631,7 +1639,7 @@
     var api = (typeof Api !== 'undefined' && Api.project) ? Api.project : null;
     if (!api || !path || typeof api.board !== 'function') return;
     Promise.resolve(api.board(path)).then(function (board) {
-      _state.board = board || {};  // answer acts resolve option labels from it
+      _state.board = board || {};  // create-conv resolves epic titles from it
       renderBoard(board || {});
     }).catch(function (e) {
       _reportFailure('projectBrain.loadFailed', 'Loading the project brain failed', e);
@@ -2151,6 +2159,7 @@
     _onPush: _onPush,
     _state: _state,
     _boardConvId: _boardConvId,
+    _openEpicConversation: _openEpicConversation,
     // Shared primitives the Needs-you tab (project-brain-attention.js) reuses
     // so the panel has ONE clamp/markdown/tab-switch grammar, not two.
     _clampBlock: _clampBlock,

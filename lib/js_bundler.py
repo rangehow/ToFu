@@ -509,6 +509,17 @@ _BUNDLE_FILES = [
     # state); load BEFORE core/conversations.js so downstream reads
     # inside its heavier functions still resolve the bare names.
     'core/conv_reducers.js',
+    # Local-persistence primitives extracted 2026-07-31 from
+    # core/conversations.js (pt_3879f00e sub-part 2, slice 13):
+    # saveConversations (with the LOAD-BEARING flicker guard against
+    # active streams + 2s sidebar-refresh throttle) +
+    # syncConversationToServerDebounced (rapid-toggle coalescer) +
+    # the private _syncDebounceTimers map. Reads conversations /
+    # activeStreams / _convSorter / _broadcastToTabs /
+    # renderConversationList / syncConversationToServer at CALL time
+    # via bundle-level window scope. Load BEFORE core/conversations.js
+    # so its heavier functions can call these bare names at runtime.
+    'core/conv_save.js',
     # Pending-sync retry cluster extracted 2026-07-25 from
     # core/conversations.js (pt_3879f00e sub-part 2, slice 2):
     # markConvPendingSync / _clearPendingSyncMarkers / convHasPendingSync

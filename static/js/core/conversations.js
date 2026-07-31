@@ -16,64 +16,16 @@
    the bare names still resolve at runtime.
    ═══════════════════════════════════════════════════════════════════ */
 
-function saveConversations(changedConvId) {
-  const now = Date.now();
-  if (changedConvId) {
-    const c = conversations.find((x) => x.id === changedConvId);
-    /* ── Don't bump updatedAt during periodic streaming saves ──
-     * When multiple conversations stream simultaneously, each calls
-     * saveConversations every ~3s.  Bumping updatedAt each time makes
-     * them compete for the top sort position, causing the sidebar to
-     * flicker as conversations constantly swap order.
-     * Fix: only bump updatedAt when the conversation is NOT actively
-     * streaming.  The timestamp is already set when the user sends a
-     * message (before streaming starts) and again in finishStream()
-     * (after activeStreams.delete, so the guard passes). */
-    if (c && !activeStreams.has(changedConvId)) c.updatedAt = now;
-  }
-  /* ★ DB-first: in-memory array is truth for this tab, DB across tabs/sessions. */
-  conversations.sort(_convSorter);
-  _broadcastToTabs("conv_saved", { convId: changedConvId });
-
-  /* ── Throttled sidebar refresh during streaming ──
-   * During active streaming, saveConversations is called every ~3s but
-   * renderConversationList was NEVER called — so the sidebar sort order
-   * and streaming dot were stale until the stream finished or user clicked
-   * another conversation.  We now refresh the sidebar on a 2s throttle
-   * so users see the active conversation bubble to the top promptly. */
-  if (changedConvId && activeStreams.size > 0) {
-    const _now = Date.now();
-    const _sc = /** @type {any} */ (saveConversations);
-    if (!_sc._lastSidebarRefresh || _now - _sc._lastSidebarRefresh > 2000) {
-      _sc._lastSidebarRefresh = _now;
-      requestAnimationFrame(() => {
-        if (typeof renderConversationList === 'function') renderConversationList();
-      });
-    }
-  }
-}
-
+/* saveConversations + syncConversationToServerDebounced + the debounce-timer
+ * map extracted 2026-07-31 to core/conv_save.js (pt_3879f00e sub-part 2
+ * slice 13). The leaf loads BEFORE this file via _BUNDLE_FILES; every call
+ * site resolves via bundle-level window scope. */
 
 /* _hydrateImageBase64 extracted 2026-07-26 to core/conv_image_hydrate.js
    (pt_3879f00e sub-part 2 slice 4). Loaded via _BUNDLE_FILES BEFORE this
    file so the two remaining CALL sites (loadConversationMessages
    initial-hydration branch, and its post-refresh path) still resolve the
    bare name at runtime via bundle-level window scope. */
-
-
-// ── Debounced sync: coalesces rapid settings toggles into one request ──
-// finishStream() calls syncConversationToServer() directly (immediate).
-// Settings/toggle changes call syncConversationToServerDebounced() which
-// waits 1.5s for additional changes before firing.
-const _syncDebounceTimers = new Map();  // convId → timeoutId
-function syncConversationToServerDebounced(conv, delayMs = 1500) {
-  const existing = _syncDebounceTimers.get(conv.id);
-  if (existing) clearTimeout(existing);
-  _syncDebounceTimers.set(conv.id, setTimeout(() => {
-    _syncDebounceTimers.delete(conv.id);
-    syncConversationToServer(conv);
-  }, delayMs));
-}
 
 /* ═══════════════════════════════════════════════════════════════════
    Persist helpers (_stripUsageTransient / _trimMsgForPersist /

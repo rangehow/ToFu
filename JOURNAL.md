@@ -1,3 +1,25 @@
+### 2026-07-31(续·倒计时的「完成」里躺着第二个没接的入口) — owner 复核 `55ce90a3` 时实测:`lib/tasks_pkg/handlers/project.py` 项目模式的 kwargs 里 **没有 `on_spawn`**(grep 命中 0)⇒ 挂 project 的**常态路径**上 deadlineTs 与强制 checkpoint 从未发生,功能在最重要的一条路上静默失效(commit `3a59c8ea`,2 文件;套件 12→**15**,**NEUTER 2 红各自独立**;相邻环 **117/117**)
+
+- **★ 与宠物拖拽是同一个缺陷类,只是换了个地方。** 「入口数 ≠ 实现数」:`run_command` 有**三个**派发点(standalone 无项目 / 项目模式 / 远端桥接),我只接了一个 —— 而且接的是**最少用**的那个。owner 的原话:「这个仓库本身就是挂着 project 跑的,你这一整轮对话里的每一次 run_command 走的都是这条路。」**验收标准的含义是「常态路径上成立」,不是「某条路径上成立」** —— 12 条全绿的守卫只测了库函数和 standalone,所以这个洞在绿灯下存活了一整批。
+- **修法是把入口收敛到一份实现,不是再写一份:** 项目模式补 `'on_spawn': _make_run_command_spawn_cb(...)` —— **复用** code_exec.py 的同一个工厂。在 project.py 里重写第二份就是把下一次漂移种下去。
+- **★ 第三个入口(远端桥接)的判定是「刻意不做」,而「不做」必须写成产物:** `bridge_timeout` 只是**服务器等结果的预算**(`send_desktop_command` 的 event.wait),进程跑在**用户的机器**上、服务器没有 kill 句柄 ⇒ 在那里下发 deadlineTs 会渲染一个**永不发生的倒计时** —— 比没有倒计时更糟。把这条写成 `_execute_remote_run_command` 里的注释钉住,免得下一个 agent 看到「这里能发而没发」又当成洞补上。正计时不受影响(芯片锚 execStartTs 回退 tStart,远端轮带 tStart)。
+- **★ 结构棘轮的第一版只盖得住一种调用形态,是我自己复审时抓的:** 初版正则匹配 `'on_chunk':`(dict 字面量),实测全仓只有 project.py 一处这么写 —— code_exec.py 走的是**裸关键字** `on_chunk=progress_cb`,完全不在网里。改为**文件级共现**:对 `lib/tasks_pkg/**/*.py`,凡用 `_make_run_command_progress_cb` 的模块必须也用 `_make_run_command_spawn_cb`。新增第四个派发点、接了流式输出却忘接 spawn 时钟时转红。NEUTER(摘掉项目模式 on_spawn)后**行为守卫 + 结构棘轮同时 2 红**,各自独立。
+- **★ 我的项目模式验收测试第一版也是错的:** 用裸 dict 当 task,`_finalize_tool_round` 内部要 `task['events_lock']` ⇒ KeyError。改用 `create_task` 造真实任务 dict。**教训与 7-30 同源:验收要跑「真实调用路径」,而真实路径的第一公里就是任务对象的形状。**
+- **守卫全绿时的正确读法:** 15/15 不是「功能在常态路径上工作」,是「被测的路径上工作」。owner 这次的复核方法值得固化:**对每个声称「完成」的功能,先数它有几个入口,再逐个问「这个入口测了吗」。**
+
+### 2026-07-31(续·终态三字段竞态 —— 按消息终态验，不按日志验) — 调查 Continue 按钮消失根因时挖出三个独立缺陷；票 `pt_bf93496e98b9441e` 立，B 等 owner 重启验证 `7aa67435` 是否生效
+
+- **原问题（Continue 按钮为何消失）答案：正常行为，非缺陷**。该消息 idx=6 / 末条 idx=15，恢复窗口在用户发下一条消息时就关闭了 —— 按钮是被「非末条」这一条单独否掉的（`chat_render.js:1878` 的 `isLastAssistant && btn.show` 闸），和 settlement 无关。`turn_settlement.js` 实跑该消息返回 `{show:true, kind:'continue', keptRounds:55}`，判决层面系统同意它可恢复。
+- **但调查过程挖出三个独立缺陷**，分两张票：
+  
+  **票 A（已立 `pt_bf93496e98b9441e`）— 终态三字段竞态 + 错误归属破裂**：一个被 reaper 判死的任务，其 `finishReason` / `error` / 归属由三个互不知情的写者先后落笔，谁最后到谁说了算 —— ① reaper 写 `'error'`；② `_finalize.py:821` 无条件覆盖成 `'aborted'`（它读不到 reaper 已写好的 `_abort_reason='stuck_no_progress'`，所以把「系统判死」和「用户 Stop」压成同一值）；③ reaper 错误气泡追加路径。
+  
+  实测（**按消息终态，不按 persist 日志行** —— 这是验收判据的核心）：8 次 reap 的日志 8/8 都是 `finishReason=aborted`，但能定位到的 6 条消息终态是 **4 `error` / 2 `aborted`** —— 时序即胜者：`ce514dce` finalize 14:53:50、reaper 气泡追加 14:53:51（晚 1 秒）⇒ reaper 赢；`d2805477` 反之 ⇒ `_finalize` 赢。库全量 16 条分布 4/10/2，这个混合分布本身就是竞态的证据。
+  
+  **错误归属违规 9 条**（消息带 `error.context='stuck-task-reaper'`，但其 `_taskId` 对应的任务从未被 reap）：其中 2 条 `fr='stop'` 形态最坏 —— `ae7bbe38`/`4fee9563` 均为成功完成（15:01:55 / 11:13:16 `■ DONE`，从未被 reap），`finishReason='stop'` **正确**；错的是身上挂着别人的死亡证明（idx=15 那条 `detail='1858 seconds'` 实测出自 `ce514dce`）。机制：reaper 14:53:51 追加只带 error 的助手气泡，下一个任务 `ae7bbe38` 已于 14:53:52（相差 1 秒）创建，随后把 content/finishReason 写进同一个气泡；`_sync.py:852` 是 `if error:`，**无 else 清除** ⇒ 前任 error 原地留存 ⇒ 用户看到 ✓ 绿勾 +「内部错误：卡死 1858 秒」。
+  
+  **票 B（不立，等 owner 重启验证）— run_command 通道无心跳导致的误杀**：根因已由 `7aa67435 fix(tool-lifecycle): heartbeat BOTH serial dispatch lanes` 修复，但**未上线** —— 在跑的 `pid 3459968` 启动于 10:33:27，早于 13:26:20 的提交，故 `df7d7617`(13:40)/`ce514dce`(14:53)/`257f050d`(15:25) 三次跑的仍是旧代码（三次全部卡在 `run_command`，与修复针对的通道吻合）。不写任何代码，等 owner 重启后验「`run_command` 超 30 分钟的轮次不再 WEDGED」。B 一旦成立，A 的部分样本会自然消失，但 A 的竞态与归属破裂不会因此消失，仍需独立修。
+
 ### 2026-07-31(续·上架案的真产物是「不上架」这个决定本身) — owner 拍板**不上架、维持 load-unpacked**;而复核发现**票面两项前置阻塞早已被兄弟修完**,本批真正的交付是**把一个「决定不做」钉在读者会读到的位置**(`pt_d30b63f98bfb4f70` DONE;commit `dd79cd28`,2 文件 +145;parity 套件 **24/24**,**NEUTER×3 各咬各的**,相邻环 **41 passed**)
 
 - **★ 票面的两项前置阻塞逐条复核,全部已不成立** —— 由兄弟 commit `f9aa375c` 清除,我按「不引用票面数字」的纪律独立重测:

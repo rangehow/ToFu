@@ -1,3 +1,15 @@
+### 2026-07-31(取证行写对了,但写去了没人看的地方) — 自主派单接 `pt_f97a21c02bda4ab9`;票面说「等复发」,**实测复发已经发生 6 次**,而我上一批的取证**一次都没捕获到**——不是没生效,是**写进了一条会被丢弃的通道**(`pt_f97a21c02bda4ab9` DONE;2 文件;套件 **5 → 11**,**NEUTER×3 各咬各的**(2/1/1);相邻环 **58/58**)
+
+- **★ 第一步就把票面前提推翻了:** 票面写「等待下一次复发以确定触发源」。实测 `logs/error.log` 的 `Uncaught exception` 时间戳:**10:33:27 / 11:10:23 / 11:10:35 / 11:13:15 / 11:13:50 / 11:15:22 / 11:26:32** —— **7 次**,其中 6 次发生在原始那次之后,且 11:26:32 那次在取证 commit `95dabfd2`(11:23:32)**之后**。所以触发条件早就满足了,epic 却在等一个已经来过的事件。
+- **★ 而真正的发现是:取证行一次都没捕获到,原因是通道错配。** `grep -c 'libstdc++ soname' server_15000.log` = **0**。追下去:`server_15000.log` 的 mtime 停在 **10:33:27**,而崩溃发生在 11:10–11:26 ⇒ **那些 boot 根本不是 watchdog 拉起的**。取证行走 `os.write(2)`(stderr),而 watchdog 是唯一把 stderr 重定向进 `server_15000.log` 的角色;非 watchdog 启动的进程,stderr 去了终端或管道,**没人留存**。与此同时崩溃记录本身走的是 **logging → `logs/error.log`**(7 条 GLIBCXX 都在那里)。**两条通道从不相交:操作员会去读的那份报告里,恰恰没有取证。**
+- **判据澄清(避免下一个人误判):** 取证行**本身是对的**,顺序也是对的(实测崩溃形态下取证在第 3 行、ImportError 在第 28 行)。坏的只是**耐久性**——`stderr` 不是耐久通道。所以修法不是重写取证,是让链接状态**搭上崩溃记录本身**。
+- **落点:** ①把取证结果留在模块级 `_TOFU_LINKAGE_FORENSICS`;②`_crash_excepthook` 对**链接类** ImportError(消息含 `GLIBCXX`/`libstdc++`/`symbol`)追加 ` | LINKAGE: …`。端到端实测:崩溃形态跑真 `server.py`,`logs/error.log` 里出现 `Uncaught exception — process is terminating | LINKAGE: libstdc++ soname -> mapped=/usr/lib64/libstdc++.so.6 | LD_PRELOAD=… | LD_LIBRARY_PATH=…`。**选择性**也实测:`ValueError` 与 `ImportError('No module named foo')` 均**不**附加。
+- **★ 本批第二个自我发现:我写的第一版守卫有盲点,是 NEUTER 打空暴露的。** NEUTER-C(把 `_TOFU_LINKAGE_FORENSICS` 改名 = 破坏捕获)**10/10 全绿**。查下去:钩子用 `globals().get(..., 'unavailable')` 兜底,于是崩溃记录退化成一句 **`LINKAGE: unavailable`**——注解还在、信息没了,而静态断言(grep 到 `LINKAGE`/`_TOFU_LINKAGE_FORENSICS` 字样)与 hook-shape 测试**照旧全绿**。**这与本 epic 修的是同一族缺陷:一个存在但不携带信息的仪器。** 补 `test_real_crash_writes_a_usable_binding_into_the_log`——真跑崩溃形态、读 error.log、断言不得含 `unavailable` 且必须点名 `lib64`。重跑 NEUTER-C:**精确只咬这一条**。
+- **★ 而这条新守卫第一次跑是 SKIP,差点变成一条永远不执行的装饰:** 它去读 `<repo>/logs/error.log`,而 `tests/conftest.py` 为日志隔离把 `TOFU_DATA_DIR` 指到临时目录(那段注释正是 2026-07-27「app.log 一天涨到 9.1GB」后加的)⇒ 子进程写的是隔离副本,repo 的 error.log 零新增 ⇒ 判据落到 `pytest.skip`。**2.16s 就跳过是线索:真崩溃要 1.4s 启动**。改为按 `TOFU_DATA_DIR` 定位日志后 **11/11 无跳过**。**判据:一条 skip 掉的守卫和一条不存在的守卫等价,必须确认它真的执行过。**
+- **NEUTER×3 各咬各的:** ①崩溃钩子退回原样(复现本轮缺口)→ 2 红;②去掉选择性、无条件附加 → 1 红(`test_linkage_attachment_is_selective`);③破坏捕获 → 1 红(新端到端守卫)。三发后 `server.py` 均 `cmp` 逐字节还原。
+- **刻意不做:** 票面列的防御性加固(`LD_PRELOAD` 前置 conda libstdc++ + 新 re-exec)**仍不落**。触发源依旧未知——本批修的是「下次能不能拿到证据」,不是「猜一个原因去堵」。加固处方与其边界条件已在票面存档,等真实取证到手再判。
+- **验收边界:** 需重启生效;当前活进程(10:33:27 启动)早于两批改动。
+
 ### 2026-07-31(续·终态信号闸收口) — owner 顶回上一批:**「你把 SSE 那条写进 commit message 当作第二层的理由,但它是源头」**;而「第二层挡得住」这个前提**本身就是假的**,有第二个消费者根本不过 reducer(commit `c6989082`,6 文件 +416/-18;守卫 **9→12 全行为断言**,**NEUTER×4 各咬各的**;200 套 A/B **零新坏零修好**)
 
 - **★ owner 的纠正比「还有一处漏了」重一档:** 我上一批**知道** `lib/chat_dispatch.py` 也会把 `finishReason` 拷进快照 —— 我把它写进了 commit message,当作「所以要做第二层防御」的**论据**。这是本末倒置:它不是「下游需要挡住的风险」,它是**和 poll 并列的第三、第四个铸造点**。按项目目标(根因,不打补丁)它必须一起修。**手里已有的证据被用来论证「不修」,是我这两批里最该记的那个形状。**

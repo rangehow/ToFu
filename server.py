@@ -738,6 +738,22 @@ except Exception:
     # Forensics must never be able to break a boot it only observes.
     pass
 
+# Retained so the crash hook can attach it to the CRITICAL record. stderr alone
+# is NOT enough: measured 2026-07-31, seven GLIBCXX crashes landed in
+# logs/error.log (written by the logging handlers) while server_15000.log — the
+# only file the watchdog redirects stderr into — had not been touched since
+# 10:33. Boots started by anything other than the watchdog send stderr to a
+# terminal or pipe that nobody keeps, so a stderr-only forensic line is absent
+# from precisely the crash reports an operator actually reads.
+try:
+    _TOFU_LINKAGE_FORENSICS = (
+        'libstdc++ soname -> %s | LD_PRELOAD=%s | LD_LIBRARY_PATH=%s' % (
+            _stdcxx_state,
+            (os.environ.get('LD_PRELOAD') or '<unset>'),
+            (os.environ.get('LD_LIBRARY_PATH') or '<unset>')))
+except Exception:
+    _TOFU_LINKAGE_FORENSICS = 'libstdc++ soname -> unavailable'
+
 # ── Auto-activate conda env (reuse server.py logic) ──
 # This must happen before any third-party imports.
 _PROJ_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1339,8 +1355,19 @@ def _crash_excepthook(exc_type, exc_value, exc_tb):
     # Ctrl-C is a normal shutdown path, not a crash — don't scream about it.
     if not issubclass(exc_type, KeyboardInterrupt):
         try:
+            # A dynamic-linker failure is unreadable without knowing WHICH copy
+            # of the library won the soname and what injected it. The boot-time
+            # forensics went to stderr, which is discarded on any boot the
+            # watchdog did not start — so attach it to the crash record itself,
+            # where it lands in logs/error.log next to the traceback.
+            _extra = ''
+            if issubclass(exc_type, ImportError):
+                _msg = str(exc_value)
+                if 'GLIBCXX' in _msg or 'libstdc++' in _msg or 'symbol' in _msg:
+                    _extra = ' | LINKAGE: %s' % (
+                        globals().get('_TOFU_LINKAGE_FORENSICS', 'unavailable'),)
             logging.getLogger('server').critical(
-                'Uncaught exception — process is terminating',
+                'Uncaught exception — process is terminating%s' % _extra,
                 exc_info=(exc_type, exc_value, exc_tb))
         except Exception:
             pass  # logging must never mask the original crash

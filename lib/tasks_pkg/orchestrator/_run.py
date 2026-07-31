@@ -26,12 +26,10 @@ logger = get_logger(__name__)
 
 
 from lib.llm import AbortedError
-from lib.tasks_pkg.attachments import compute_turn_attachments, inject_attachments
 from lib.tasks_pkg.cache_tracking import (
     sort_tool_results,
 )
 from lib.agent_core.events import EventType, build_event
-from lib.tasks_pkg.compaction import run_compaction_pipeline
 from lib.tasks_pkg.llm_fallback import _llm_call_with_fallback
 from lib.tasks_pkg.manager import (
     _strip_base64_for_snapshot,  # noqa: F401  (re-exported by the package facade after slice 15)
@@ -55,7 +53,6 @@ from lib.tasks_pkg.stream_handler import analyse_stream_result
 from lib.tasks_pkg.system_context import (
     _inject_system_contexts,
     _disabled_prompt_blocks,
-    inject_search_addendum_to_user,
 )
 from lib.tasks_pkg.server_message_store import (
     save_messages as _save_messages_to_store,
@@ -125,6 +122,9 @@ from lib.tasks_pkg.orchestrator._tool_call_prelude import (
     append_assistant_tool_call_message,
 )
 from lib.tasks_pkg.orchestrator._round_gates import check_round_gates
+from lib.tasks_pkg.orchestrator._round_message_hygiene import (
+    run_round_message_hygiene,
+)
 
 
 
@@ -558,40 +558,18 @@ def run_task(task: dict[str, Any]) -> None:
             # ★ Emit phase event so the frontend knows what's happening
             _emit_tool_round_phase(task, rs.assistant_msg if round_num > 0 else {}, round_num)
 
-            # ★ Context compaction: two-layer pipeline
-            #   L1: micro-compact cold tool results (every round, zero LLM cost)
-            #   L2: smart summary as synthetic tool result (on context overflow)
-            run_compaction_pipeline(messages, round_num, task=task)
-
-            # ★ Per-turn attachments: dynamic context injection
-            #   Inspired by Claude Code's getAttachments() — injects session
-            #   memory, file reminders, tool discovery deltas each turn.
-            #   Wrapped defensively: attachment building is advisory and must
-            #   never crash an otherwise-healthy task. Any bug here (e.g. a
-            #   malformed tool_call arg from the model) degrades to "no
-            #   attachments this round" rather than aborting the task.
-            if round_num > 0:  # skip round 0 (system contexts just injected)
-                try:
-                    _attachments = compute_turn_attachments(
-                        messages, task, round_num,
-                        conv_id=task.get('convId', ''),
-                        project_path=project_path,
-                        project_enabled=project_enabled,
-                    )
-                    if _attachments:
-                        inject_attachments(messages, _attachments,
-                                            conv_id=task.get('convId') or None)
-                except Exception as e:
-                    logger.error('[Task:%s] compute_turn_attachments failed '
-                                 'round=%d: %s — continuing without attachments',
-                                 tid, round_num, e, exc_info=True)
-
-            # ★ Legacy cleanup: strip old "Current date and time:" from user
-            #   messages.  Date is now injected in the system prompt (step 4.5)
-            #   as date-only format.  This just ensures conversations with
-            #   old-format timestamps get cleaned up for proper cache prefix.
-            inject_search_addendum_to_user(messages, search_enabled,
-                                           round_num=round_num)
+            # ★ Per-round message hygiene: two-layer compaction +
+            #   per-turn attachments + legacy search-addendum cleanup.
+            #   Extracted 2026-07-31 (pt_03f4cdf1 slice 18) to
+            #   lib.tasks_pkg.orchestrator._round_message_hygiene — see that
+            #   module's docstring for the step ordering and the advisory
+            #   (never-fatal) attachments contract.
+            run_round_message_hygiene(
+                task, messages,
+                round_num=round_num, tid=tid,
+                project_path=project_path, project_enabled=project_enabled,
+                search_enabled=search_enabled,
+            )
 
             # ★ Drain swarm inbox (pt_03f4cdf1 slice 11):
             #   Extracted to lib.tasks_pkg.orchestrator._swarm_inbox.

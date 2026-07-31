@@ -43,6 +43,24 @@
 | 19 | settings/providers/access_matrix.js | 54,558 | 可降级（第三梯队） | 设置面板；settings 族应整族评估 |
 | 20 | main/main_toolbar_ui.js | 54,496 | boot-critical | 顶栏即首屏本体 |
 
+## tofu-scene + tofu-pet 普查（2026-08-01，sub-3C 工作单）
+
+160KB 装饰族的 deferral 可行性实测结论（**近乎零改动可降级**）：
+
+| 检查项 | 结果 |
+|---|---|
+| window 暴露 | 每模块恰好 1 个：`window.TofuScene` / `window.TofuPet`（IIFE 单命名空间） |
+| 外部 JS 调用方 | **0**（grep 全仓，含 main.js / settings / preferences） |
+| 唯一外部引用 | `index.html:787` `onclick="window.TofuPet&&window.TofuPet.cycleDecor()"` — **已天然 absence-safe**（`&&` 短路，模块缺席零 ReferenceError） |
+| 自举方式 | 两个 IIFE 均 `DOMContentLoaded → _boot()`（已解析则立即 boot）——**无一次性 boot 接线可丢，无需 stub**（比照 health_stream_timer 判例） |
+| 挂载目标 | `#projectBar`（index.html:779，默认 `display:none`，显隐由 project.js 驱动与宠物无关）；DOM 全部 _boot 时自建 |
+| 布局位移风险 | **低**：bar 自身 `display:none` 起步 + `animation:fadeIn .3s`，晚到 ~2s 的宠物随 bar 淡入，无容器预留需求 |
+
+**工作单：** 纯 manifest move（`_BUNDLE_FILES` → `_DEFERRED_FILES`），零闸零 stub；
+配套 deferred 套件（manifest 双断言 + index.html onclick absence-safe 钉 + 无 stub 钉）
++ 农场物理验证（core 排除 TofuScene/TofuPet、feature 含）+ 本表流水行。
+
+## 分片流水（每片一行，含生产实测字节数）
 ## 分片流水（每片一行，含生产实测字节数）
 
 | 日期 | 分片 | commit | 降级文件 | core 压缩态 | feature 压缩态 | 备注 |

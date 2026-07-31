@@ -1,3 +1,11 @@
+### 2026-07-31(续·S2 落地:desktop egress 出口命令 + 订阅流量经客户端代理路由,owner 四点坑全部入稿入码) — commit S2(18 文件;新套件 **34**(28 egress + 6 login order),相邻环 **255 + 41 + 168** 全绿;失败先行;**NEUTER×3 各咬各的**(白名单/singleflight/TTL),还原 cmp 逐字节验证)
+
+- **owner 推演抓的四个坑(全部先补进设计稿再动工):** ①刷新竞态被 agent RTT 放大 4-6×——refresh token 一次性,无 singleflight 必然 refresh_token_reused 强退;②astream 在事件循环里直接调 prepare_request,refresh/egress 阻塞一次冻全站 → 移 `asyncio.to_thread`;③user_id 从 resolve_oauth_request 签名下穿全链;④登录翻转是 S2 范围不是 S4,否则 egress 路由在登录链路根本走不到。
+- **实现账:** `lib/desktop/egress.py` 路由层(精确白名单/POST 真端点探测 401=通 403=geo 300s 缓存/租户选 agent)+ agent 侧 `_egress.py`(白名单二次强制 + **OS 代理发现**:Windows 注册表 + macOS scutil——Clash 系统代理不进 env 变量,没有这层整个方案在用户机器上空转)+ `token_store.refresh_singleflight`(同 token 并发刷新合并,后到者复用赢家结果)+ bridge 按命令 ttl + oauth.js 翻转为「服务器交换(自动路由)→B1→curl」。
+- **测试自己抓的三个坑:** ①函数内 `from X import Y` 的 mock 目标必须打在**源模块**上,打在使用方模块名上会 AttributeError——S1 学到的 mock 形状问题在本批复发两次后立档;②winreg.QueryValueEx 真实返回 (value,type) 元组,fake 一开始返回裸值让被测代码静默走 except 分支——**fake 的形状错会让测试把「实现静默失败」当成「实现正确」**;③进程级 TTLCache 与 oauth.js 的 console.log 都会跨用例/跨管道污染,隔离方式分别为唯一 host 与 harness 内重定向 stderr。
+- **既有套件更新(契约变更,非回归):** 权限四层加 allow_egress(默认关)、注册帧 capabilities 加 egress、exchange_errors 四个 403/400 解释层测试对探测层打 direct 桩(路由层归新套件管)。
+- **验收边界(如实):** 全链离线 fake-bridge 绿;真机验收需要 owner 在有网机器上 `python -m lib.desktop_agent --server <tofu> --allow-egress` 起 agent + 重启服务器 + bundle 重建;O1/O2/O3 实测定案仍在真 token 冒烟时进行。
+
 ### 2026-07-31(续·kimi-k3「text content is empty」:一条 400 日志背后是两层独立 bug,R1 wire 快照一句话定案) — owner 贴日志问根因;commit `63ee1fb8`(8 文件 +436/-20;新套件 **21** 失败先行 ImportError 红;**NEUTER×2 各咬各的**(strip→7 红/veto→3 红);相邻环 **403+** 绿)
 
 - **事故账(日志实数):** 同一确定性 400 在两个任务上自旋 —— `93b60577` 循环 **3753** 次、`76d686cb` **583** 次,横跨 4+ 小时且当时**仍在转**;每次都是 ~100KB prompt 的重发,前端 HUD 全程撒谎显示「429 rate-limited」。

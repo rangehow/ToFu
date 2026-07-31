@@ -241,8 +241,17 @@ def reap_stuck_running_tasks() -> int:
             t['status'] = 'error'
             t['_reap_had_output'] = had_output
             from lib.error_envelope import make_envelope as _make_env
+            # ★ worker_lost, NOT internal (pt_9f5a51ba). 'internal' is
+            #   retryable=False and its entire hint is "go read
+            #   logs/error.log" — for an event the user did not cause, cannot
+            #   diagnose, and whose only correct recovery (re-run) that
+            #   envelope actively HIDES by suppressing the retry affordance.
+            #   'worker_lost' is the kind this exact situation was registered
+            #   for (TaskRuntime.reap_if_stalled already uses it): warning
+            #   severity, retryable=True, and a hint that leads with "re-running
+            #   is safe; partial output may be lost".
             t['error'] = _make_env(
-                'internal',
+                'worker_lost',
                 detail=('Task made no progress for %d seconds and was '
                         'terminated as wedged.' % int(min(event_silent, dispatch_silent))),
                 model=(t.get('config') or {}).get('model', '') or '',

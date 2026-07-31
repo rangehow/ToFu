@@ -1,3 +1,10 @@
+### 2026-08-01(脑派第四票闭环:superseded-fragment 标记接线进终态 sync) — 接自己立的 `pt_e736a797660f443f`;commit `fec6b46b`(1 文件 +16;目标套件 **2/2** 含自带 NEUTER,家族环 **45/45**、终态写入/CAS 环 **59/59**)
+
+- **定案:不是测试漂移,是产品缺口。** 测试 v0.15.0 作为 failing-first 守卫落库,但 `mark_superseded_incomplete_fragments` 在 `lib/tasks_pkg/` 下的调用**零历史**——helper 自己的 docstring 早就写明设计:「TWO call sites share this ONE implementation:GET/startup reconcile **AND the terminal sync write of the SUPERSEDING task**」。接线从未落,守卫红了两个版本。
+- **真实用户后果:** Stop→Regenerate 时,被中止任务的 partial-checkpoint 碎片(content 有、finishReason=None)落库后,regenerate 的终态写从不标记它 ⇒ 截断的部分回答以**完整完成态铬框**渲染,直到某次 GET reconcile 碰巧自愈。
+- **修法:** `_sync_result_to_conversation` 的终态 CAS 环**顶部**跑标记(每次 attempt,因为 CAS-miss graft 会用 fresh row 替换 `messages`,需要同样标记)。只标记不删/不重排 ⇒ cache-prefix 中性、CAS 载荷形状不变。谓词本身就是窄闸(同 user turn、相邻、settled sibling 带 finishReason),普通 settle 无条件调用安全。NEUTER 由套件自带测试充当(no-op helper ⇒ husk 存活),证明接线承重。
+- **判据重申:** 「某 helper 只在 reconcile/GET 自愈路径有调用,docstring 却声明了写入路径调用点」是「设计已承诺、接线未落」的指纹——git log -S 零历史即实锤,按产品缺口修而非按测试漂移改断言。
+
 ### 2026-08-01(脑派第三票闭环:duplicate _msgId 写入源全链定案 + 持久化腿根治) — 接自己立的 `pt_93ff22bdb56146c6`;commit `46895774`(2 文件;新套件 **5** 检查,**NEUTER×1** 精确,既有 parity 6/6 不破,会话环 **12/12**)
 
 - **写入源三段链(全部日志实证):** ①10:35 任务 `38562f78` 往气泡 `tmp_196fedef` 流了 3625 字,30 分钟 reaper 在 11:17 强杀(pt_9f5a51ba 的 ¥22.95 受害者,idx1 的 cost 字段至今就是 22.9513);②11:45 用户点「继续」——`POST /api/v1/chat/continue`,kept=38 rounds、preserved=3625、任务 25c1815a 以**同一 _msgId** 续跑;两条 SSE 读者竞速(gen 1→2 supersede),其中一条 0 事件早夭 ⇒ **fall back to polling ⇒ 旧位置投影把续写画进了孪生气泡**(ms43foj3 同族,兄弟 `pt_44e985ec82014e6d` 已根治:去重连接早退 + 身份投影 + 占位按 taskId 采用,套件 7/7);③本地变成 [user0, 残骸(带 _continue* 标记, aborted), 答案(stop)] 同 id 两条目,13:21:50 救援合并(🛟 KEEPING local)把尾巴行判成「服务器缺失」整体 PUT 回写 ⇒ **idx1 落库**,Reconcile 顺手标 fr=aborted,22:22 RENDER ORDER VIOLATION。

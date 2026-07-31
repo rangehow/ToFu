@@ -15255,6 +15255,11 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
 .lc-dl-direct:hover{background:rgba(168,85,247,0.20);border-color:#c084fc;border-bottom-color:#c084fc}
 [data-theme="light"] .lc-dl-direct{border-color:rgba(126,34,206,0.4);border-bottom-color:rgba(126,34,206,0.4);background:rgba(126,34,206,0.08)}
 [data-theme="light"] .lc-dl-direct:hover{background:rgba(126,34,206,0.16);border-color:#6b21a8;border-bottom-color:#6b21a8}
+/* Provenance badge: marks an artifact served by THIS server (mirrored or
+   built on-box) rather than fetched from the public GitHub network — the
+   fast/reliable path, so it gets the success hue, not the accent one. */
+.lc-dl-hosted{display:inline-flex;align-items:center;padding:3px 8px;font-size:10.5px;font-weight:600;border-radius:999px;white-space:nowrap;color:#15803d;border:1px solid rgba(22,163,74,0.35);background:rgba(22,163,74,0.08)}
+[data-theme="light"] .lc-dl-hosted{color:#166534;border-color:rgba(21,128,61,0.4);background:rgba(21,128,61,0.10)}
 
 [data-theme="light"] .lc-cap{border-color:rgba(0,0,0,0.09);background:rgba(0,0,0,0.012)}
 [data-theme="light"] .lc-cap-icon{background:rgba(126,34,206,0.1);color:#7e22ce}

@@ -2017,6 +2017,7 @@ var _i18n = {
   'local.desktopRemote': { zh: 'Tofu 运行在远程服务器上。在你自己的电脑安装桌面版，再用下面这行把它连过来：', en: 'Tofu runs on a remote server. Install the desktop app on your own machine, then connect it with the line below:' },
   'local.desktopDownload': { zh: '下载桌面版 ↗', en: 'Download the desktop app ↗' },
   'local.desktopDownloadFor': { zh: '下载桌面版', en: 'Download' },
+  'local.desktopHosted': { zh: '服务器直连', en: 'server-hosted' },
   'local.desktopDownloadAll': { zh: '查看全部下载 ↗', en: 'See all downloads ↗' },
   'local.desktopArchAmbiguous': { zh: '浏览器没告诉我们这台 Mac 的芯片型号（Apple Silicon 也会自称 Intel）。Apple 芯片（M1/M2/M3…）选 arm64，Intel 芯片选 x86_64；在「关于本机」里可以看到。', en: 'Your browser did not reveal this Mac’s chip (Apple Silicon reports itself as Intel too). Pick arm64 for Apple chips (M1/M2/M3…) and x86_64 for Intel — see “About This Mac”.' },
   'local.mintToken': { zh: '生成连接命令', en: 'Generate connect line' },

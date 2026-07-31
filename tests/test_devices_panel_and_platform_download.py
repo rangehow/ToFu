@@ -868,7 +868,11 @@ def test_the_asset_url_comes_from_the_api_not_reassembled():
     """
     import ast
 
-    src = (ROOT / "routes" / "api_v1" / "desktop.py").read_text(encoding="utf-8")
+    # The URL assembly moved with the 2026-07 extraction
+    # (pt_a859c11e75d142d1) from routes/api_v1/desktop.py to
+    # lib/desktop_dist/platforms.py — scan its real home, not the re-export.
+    src = (ROOT / "lib" / "desktop_dist" / "platforms.py").read_text(
+        encoding="utf-8")
     tree = ast.parse(src)
     # Collect every docstring's exact text so it can be excised.
     docs = []

@@ -134,14 +134,31 @@ def test_every_consumer_agrees_on_the_row_shape():
             'together.'
         )
 
-    route_src = (_ROOT / 'routes' / 'api_v1' / 'desktop.py').read_text(encoding='utf-8')
-    assert 'for _os, _arch, label, pattern, _min_bytes in rows:' in route_src, (
-        'routes/api_v1/desktop.py no longer unpacks PLATFORM_ASSETS rows with '
-        '5 fields. If the table changed shape, every consumer must change with '
-        'it — that route degrades SILENTLY (its table load is wrapped in '
-        'except Exception), so a mismatch shows up as missing download links, '
-        'not as an error.'
+    # The positional consumer moved with the 2026-07 extraction
+    # (pt_a859c11e75d142d1): routes/api_v1/desktop.py now RE-EXPORTS the
+    # matcher from lib/desktop_dist/platforms.py, so that is where the
+    # 5-field unpack must be pinned. The re-export is asserted too — a
+    # second hand-typed unpacker in the route is exactly the drift class
+    # this guard exists to catch.
+    import re as _re
+    lib_src = (_ROOT / 'lib' / 'desktop_dist' / 'platforms.py').read_text(
+        encoding='utf-8')
+    assert _re.search(
+        r'for _os, _arch, label, pattern, _min_bytes in ', lib_src), (
+        'lib/desktop_dist/platforms.py no longer unpacks PLATFORM_ASSETS rows '
+        'with 5 fields. If the table changed shape, every consumer must '
+        'change with it — the table load degrades SILENTLY (wrapped in '
+        'except Exception), so a mismatch shows up as missing download '
+        'links, not as an error.'
     )
+    route_src = (_ROOT / 'routes' / 'api_v1' / 'desktop.py').read_text(
+        encoding='utf-8')
+    assert 'from lib.desktop_dist.platforms import' in route_src, (
+        'routes/api_v1/desktop.py lost the re-export — did a second '
+        'positional unpacker grow back?')
+    assert 'for _os, _arch, label, pattern' not in route_src, (
+        'a SECOND positional unpacker appeared in the route — the whole '
+        'point of the extraction is one consumer of the row shape')
 
 
 def test_derived_label_glob_view_still_matches_the_table():

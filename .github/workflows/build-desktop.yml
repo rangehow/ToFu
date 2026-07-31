@@ -247,8 +247,28 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
 
+      # ── shell: bash is LOAD-BEARING on Windows, not a style choice ──
+      #
+      # Measured on run 30601806258: this step reported SUCCESS while
+      # `pip install -r requirements.txt` had FAILED. Windows runners default to
+      # pwsh, which does not abort a multi-line `run:` when a native command
+      # exits non-zero — only the LAST command's exit code becomes the step
+      # result. So line 1 failed (tofu-search>=0.5.3 is unsatisfiable on public
+      # PyPI), line 2 succeeded, and the step went green.
+      #
+      # The build then continued with the project's dependencies MISSING and
+      # still produced an installer: 48,960,018 bytes, against 115,342,167 for
+      # the last good v0.14.2 build. A 49 MB "Tofu installer" containing
+      # essentially none of Tofu was uploaded as a release artifact. Linux and
+      # macOS use bash (`set -e` semantics), which is why they failed honestly
+      # in 2 seconds while Windows shipped a hollow binary.
+      #
+      # This is strictly worse than the missing package: an unsatisfiable pin is
+      # loud everywhere except here, where it became a silent corrupt artifact.
       - name: Install dependencies
+        shell: bash
         run: |
+          set -euo pipefail
           pip install -r requirements.txt
           pip install pyinstaller pystray pillow psycopg2-binary pyautogui pyperclip psutil
 
@@ -429,8 +449,16 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
 
+      # shell pinned for the same reason as the Windows leg: `runs-on` here is
+      # `${{ matrix.runner }}`, so the shell this step gets is decided by a
+      # matrix value rather than by anything visible at this line. Today both
+      # legs are macOS (bash), but the matrix is the part of this workflow that
+      # has already been re-pointed once, and a Windows leg added later would
+      # silently inherit pwsh's discard-earlier-failures semantics.
       - name: Install dependencies
+        shell: bash
         run: |
+          set -euo pipefail
           pip install -r requirements.txt
           pip install pyinstaller pystray pillow psycopg2-binary pyautogui pyperclip psutil
 
@@ -465,10 +493,14 @@ jobs:
       #     echo "signing configured"
 
       - name: Create DMG
+        shell: bash
         env:
           APP_VERSION: ${{ needs.version.outputs.version }}
           ARCH: ${{ matrix.arch }}
         run: |
+          # No `set -e` here on purpose: the create-dmg invocation below is
+          # deliberately paired with a `|| { ... }` zip fallback, and the whole
+          # point is that its failure is HANDLED rather than fatal.
           brew install create-dmg || true
           create-dmg \
             --volname "Tofu" \

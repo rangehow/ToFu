@@ -642,6 +642,18 @@
     W.max = Math.max(W.min + 1, rightPx - petW);
     if (W.x < W.min) W.x = W.min;
     if (W.x > W.max) W.x = W.max;
+    // CEILING: how far the pet may be lifted before its top leaves the bar.
+    // The sprite already sits `bottom` px off the floor and is petH tall, so the
+    // headroom left inside the band is (barHeight - bottom - petH). Derived here
+    // rather than hard-coded so re-padding the bar or resizing the sprite cannot
+    // silently re-open an overhang. Floored at LIFT_MIN_CEIL_PX: on a bar too
+    // short to give any headroom, a lift that rounds to zero would take the
+    // owner's reported defect straight back, so a small overhang is the lesser
+    // evil there — but on the real bar the derived value is what applies.
+    var petH = (_el.offsetHeight || 30);
+    var bottomPx = 1;                       // .tofu-pet { bottom:1px }
+    LIFT_MAX_PX = Math.max(LIFT_MIN_CEIL_PX,
+                           Math.round(br.height - bottomPx - petH));
   }
 
   // pivot defaults to TRUE: a LOCOMOTION turn (wall bounce / chase / flee) is a
@@ -1025,19 +1037,29 @@
   var D = { active: false, moved: false, id: null, startX: 0, offX: 0,
             startY: 0, baseY: 0, prevState: 'idle' };
   var DRAG_SLOP = 4;   // px of pointer travel before a press becomes a drag
-
   // ── HOW HIGH THE PET CAN BE HELD ────────────────────────────────
-  // The bar sets `overflow:visible` precisely so overlay children (the speech
-  // bubble) may poke above its rim, so a held pet may legitimately rise past
-  // the top edge. Capped anyway: an unbounded lift lets a fast flick fling the
-  // sprite far up the page, where it reads as a bug rather than as carrying.
-  var LIFT_MAX_PX = 34;
+  // DERIVED from the bar's measured height, never a hand-written constant.
+  //
+  // The pet must stay inside the bar's visual band while held. It is a
+  // GRABBABLE element lifted to z-index 5, so an overhang paints over whatever
+  // sits above the bar and can cover a hit target — unlike the speech bubble,
+  // which also pokes above the rim but is `pointer-events:none` and therefore
+  // cannot steal a click. `overflow:visible` on the bar means nothing clips it,
+  // so the clamp is the ONLY thing keeping the pet in its own furniture.
+  //
+  // A literal ceiling was measured wrong exactly once: 34px against a ~46px bar
+  // with the sprite already 31px off the floor put its top ~19px ABOVE the rim.
+  // Deriving it from the live box means re-padding the bar, or resizing the
+  // sprite, cannot silently re-open that overhang.
+  var LIFT_MAX_PX = 15;      // recomputed in _measure(); this is only a floor-safe default
+  var LIFT_MIN_CEIL_PX = 10; // never clamp so hard that the lift stops reading as a lift
   // The "snatched up" impulse applied the moment a press becomes a drag.
   // WITHOUT it, height could only come from the pointer's own rise — so a
   // purely SIDEWAYS drag would still skate the pet along the floor, which is
   // exactly the reported defect. A grab is a lift even when the hand moves
   // horizontally, so this is asserted on state entry, not derived from motion.
-  var LIFT_GRAB_PX = 12;
+  // Kept BELOW the derived ceiling so a grab alone can never clip.
+  var LIFT_GRAB_PX = 9;
 
   function _barLeft() {
     return (_bar && _bar.getBoundingClientRect) ? _bar.getBoundingClientRect().left : 0;
@@ -1081,16 +1103,63 @@
     _place();
     if (e.cancelable) e.preventDefault();
   }
-  function _onPointerUp(e) {
-    if (!D.active) return;
+  // ── THE ONE TERMINATION PATH ──────────────────────────────────
+  // Every way a drag can END routes through here. There are THREE of them and
+  // only one used to do the right thing:
+  //   · pointerup            — the normal release
+  //   · pointercancel        — NOT an error path: the browser fires it on
+  //     touch-scroll, on window blur / alt-tab mid-drag, and whenever the OS
+  //     takes over the gesture. On a touch device it is a ROUTINE way for a
+  //     drag to end. It used to reset only D.active/D.moved, leaving the pet at
+  //     its held height in state 'drag' — and because _step early-returns on
+  //     'drag', nothing could ever bring it down again: frozen in mid-air, with
+  //     the whole wander loop dead, until a page reload.
+  //   · lostpointercapture   — was not wired at all. setPointerCapture is inside
+  //     a try/catch, so when capture is refused or lost, a pointerup landing
+  //     outside the element never reaches us and the drag hangs the same way.
+  //
+  // Measured before this fix — settled state after each terminator:
+  //   pointerup          ty=0    lift=0      idle    OK
+  //   pointercancel      ty=-12  lift=0.353  drag    STUCK
+  //   lostpointercapture ty=-12  lift=0.353  drag    STUCK (no handler)
+  //
+  // Hence ONE function rather than a `W.y = 0` bolted onto the cancel handler:
+  // with three entry points and one implementation, a fourth cannot drift.
+  // `settled` distinguishes a deliberate release (mood credit, day interaction)
+  // from an interruption — the pet still has to LAND either way, because
+  // landing is about not stranding it, not about rewarding the user.
+  function _endDrag(settled) {
+    // NOT load-bearing, and measured as such: with this line removed, both
+    // "pointerup then pointercancel" and "press then cancel twice" behave
+    // identically (mood unchanged, pet lands, state idle), because settled=false
+    // already withholds the tap credit and _enterFall() is a no-op once y is 0.
+    // Kept as a cheap explicit statement that re-entry is expected — browsers do
+    // emit both terminators in some gesture hand-offs — rather than leaving the
+    // next reader to re-derive that it happens to be harmless.
+    if (!D.active && !D.moved) return;
+    var wasDrag = D.moved;
     D.active = false;
-    try { if (_el.releasePointerCapture && D.id != null) _el.releasePointerCapture(D.id); } catch (_e) { /* harmless */ }
-    if (!D.moved) { interact(); return; }             // never crossed slop → a click
-    // dropped after a real drag → settle here, resume autonomous life
-    S.lastInteraction = Date.now();
-    S.mood = Math.min(100, S.mood + 3); _save();
-    if (W.reduced) { W.y = 0; _enter('idle'); _setExpr(_resolve()); _place(); }
+    D.moved = false;
+    try {
+      if (_el && _el.releasePointerCapture && D.id != null) _el.releasePointerCapture(D.id);
+    } catch (_e) { /* capture already gone — harmless */ }
+    D.id = null;
+    if (!wasDrag) {
+      // never crossed the slop → a plain click, but ONLY when the user actually
+      // let go. An interrupted press is not a tap and must not pop the bubble.
+      if (settled) interact();
+      return;
+    }
+    if (settled) {
+      S.lastInteraction = Date.now();
+      S.mood = Math.min(100, S.mood + 3); _save();
+    }
+    if (W.reduced) { W.y = 0; _place(); _enter('idle'); _setExpr(_resolve()); }
     else { _enterFall(); }   // fall back to the ground, land, THEN resume
+  }
+
+  function _onPointerUp(e) {
+    _endDrag(true);
   }
   function _wireDrag() {
     if (!_el) return;
@@ -1098,7 +1167,11 @@
       _el.addEventListener('pointerdown', _onPointerDown);
       _el.addEventListener('pointermove', _onPointerMove);
       _el.addEventListener('pointerup', _onPointerUp);
-      _el.addEventListener('pointercancel', function () { D.active = false; D.moved = false; });
+      // Both interruption paths land the pet too — see _endDrag. Passing
+      // settled=false marks them as "the gesture was taken away" rather than
+      // "the user let go", so they land without crediting a tap.
+      _el.addEventListener('pointercancel', function () { _endDrag(false); });
+      _el.addEventListener('lostpointercapture', function () { _endDrag(false); });
     } else {
       // no Pointer Events (very old browser) → plain click keeps the bubble.
       _el.addEventListener('click', function (e) { e.stopPropagation(); interact(); });

@@ -342,6 +342,166 @@ def test_a_long_hold_still_lands_when_the_previous_state_expires():
         f"the pet is stuck in {at['settled']['state']!r} after landing")
 
 
+@pytest.mark.skipif(_NODE is None, reason="node not installed")
+@pytest.mark.parametrize("terminator,label", [
+    ("_listeners.pointercancel({ pointerId:1 });", "pointercancel"),
+    ("_listeners.lostpointercapture({ pointerId:1 });", "lostpointercapture"),
+])
+def test_an_interrupted_drag_still_lands(terminator, label):
+    """EVERY way a drag can end must put the pet back on the ground.
+
+    ``pointercancel`` is NOT an error path. The browser fires it on
+    touch-scroll, on window blur / alt-tab mid-drag, and whenever the OS takes
+    over the gesture — on a touch device it is a ROUTINE way for a drag to end.
+    ``lostpointercapture`` fires when capture is taken away, which matters here
+    because setPointerCapture sits inside a try/except: if capture is refused,
+    a pointerup landing outside the element never reaches the handler.
+
+    Measured BEFORE the fix, settled state after each terminator:
+
+        pointerup           ty=0    lift=0      idle    OK
+        pointercancel       ty=-12  lift=0.353  drag    STUCK
+        lostpointercapture  ty=-12  lift=0.353  drag    STUCK (not even wired)
+
+    Stuck is permanent, not transient: _step early-returns while the state is
+    'drag', so no later frame can bring the pet down AND the whole wander loop
+    is dead too. The pet hangs in the air until the page is reloaded — strictly
+    worse than the missing-lift defect this feature set out to fix.
+
+    Parametrized rather than written twice because the POINT is that the
+    behaviour is identical across entry points: they share one implementation
+    (_endDrag), so a future fourth entry point cannot quietly diverge.
+    """
+    src = PET_JS.read_text(encoding="utf-8")
+    code = (_HARNESS
+            .replace("_listeners.pointerup({ pointerId:1, clientX:180, clientY:40 });",
+                     terminator)
+            .replace("__SRC__", src)
+            .replace("__REDUCED__", "false"))
+    r = subprocess.run([_NODE, "-e", code], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, f"harness failed:\n{r.stderr[:2000]}"
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+    at = {s["at"]: s for s in out["samples"]}
+
+    assert at["after_grab"]["ty"] < 0, "the pet was never lifted — precondition failed"
+    assert at["settled"]["ty"] == 0.0, (
+        f"after {label} the pet settled at translateY={at['settled']['ty']} in "
+        f"state {at['settled']['state']!r} — it is stranded in mid-air with no "
+        "leg left to bring it down, recoverable only by reloading the page")
+    assert at["settled"]["state"] != "drag", (
+        f"after {label} the pet is still in the drag state, so _step keeps "
+        "early-returning and the wander loop never resumes")
+    assert at["settled"]["lift"] == 0.0, (
+        f"after {label} --pet-lift is {at['settled']['lift']}, so the shadow "
+        "still paints detached under a pet that is back on the ground")
+
+
+@pytest.mark.skipif(_NODE is None, reason="node not installed")
+def test_ending_a_drag_twice_is_harmless():
+    """A cancel arriving AFTER a normal release must not re-trigger anything.
+
+    Browsers do emit both (pointerup then pointercancel) in some gesture
+    hand-offs, and _endDrag is reachable from three listeners, so it has to be
+    idempotent — otherwise the second call would credit a second interaction or
+    restart a fall the pet already finished.
+    """
+    src = PET_JS.read_text(encoding="utf-8")
+    code = (_HARNESS
+            .replace("_listeners.pointerup({ pointerId:1, clientX:180, clientY:40 });",
+                     "_listeners.pointerup({ pointerId:1, clientX:180, clientY:40 });\n"
+                     "_listeners.pointercancel({ pointerId:1 });")
+            .replace("__SRC__", src)
+            .replace("__REDUCED__", "false"))
+    r = subprocess.run([_NODE, "-e", code], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, f"harness failed:\n{r.stderr[:2000]}"
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+    at = {s["at"]: s for s in out["samples"]}
+    assert at["settled"]["ty"] == 0.0 and at["settled"]["state"] != "drag", (
+        "a duplicate terminator left the pet airborne or stuck in drag")
+
+
+def test_every_drag_terminator_routes_through_one_release_path():
+    """STRUCTURAL: three listeners, ONE implementation.
+
+    The defect was not that pointercancel had the wrong body — it was that a
+    second entry point existed with its OWN body, which did half the job. Any
+    future fourth entry point must reuse the same function rather than
+    re-deriving what "the drag ended" means.
+    """
+    js = _js_code()
+    assert re.search(r"function _endDrag\(", js), (
+        "_endDrag is gone — the release semantics have been inlined again")
+    for ev in ("pointerup", "pointercancel", "lostpointercapture"):
+        assert f"'{ev}'" in js, f"the {ev} listener is not wired at all"
+    m = re.search(r"function _wireDrag\(\) \{(.*?)\n  \}", js, re.S)
+    assert m, "could not isolate _wireDrag"
+    body = m.group(1)
+    for ev in ("pointercancel", "lostpointercapture"):
+        seg = re.search(re.escape(ev) + r"'.*?\}\s*\)", body, re.S)
+        assert seg and "_endDrag" in seg.group(0), (
+            f"the {ev} listener does not route through _endDrag — it is "
+            "re-implementing termination and will drift out of sync again")
+
+
+@pytest.mark.skipif(_NODE is None, reason="node not installed")
+def test_a_held_pet_cannot_be_lifted_out_of_its_own_bar():
+    """The lift ceiling must keep the sprite inside the bar's visual band.
+
+    The pet is a GRABBABLE element raised to z-index 5 while held, and the bar
+    is `overflow:visible`, so nothing clips it — an overhang paints over
+    whatever sits above the bar and can cover a hit target. (The speech bubble
+    also pokes above the rim, but it is `pointer-events:none` and therefore
+    cannot steal a click; the pet is not.)
+
+    Measured with the previous hand-written ceiling of 34px: the sprite's top
+    reached 65px against a ~46-48px bar — roughly 19px of overhang, purely as
+    an accident of an untested constant. The ceiling is now DERIVED in
+    _measure() from the bar's own height, so re-padding the bar or resizing the
+    sprite cannot silently re-open it.
+
+    Driven by yanking the pointer far above the bar, which is what a real flick
+    does.
+    """
+    src = PET_JS.read_text(encoding="utf-8")
+    code = (_HARNESS
+            .replace("clientX:160, clientY:25", "clientX:160, clientY:-400")
+            .replace("__SRC__", src)
+            .replace("__REDUCED__", "false"))
+    r = subprocess.run([_NODE, "-e", code], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, f"harness failed:\n{r.stderr[:2000]}"
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+    at = {s["at"]: s for s in out["samples"]}
+
+    lift = -at["carried_up"]["ty"]
+    assert lift > 0, "the pet did not lift at all when yanked upward"
+    # harness bar rect: height 48; .tofu-pet { bottom:1px; height:30px }
+    bar_h, bottom, pet_h = 48, 1, 30
+    top = bottom + pet_h + lift
+    assert top <= bar_h, (
+        f"a hard upward flick lifts the sprite's top to {top}px against a "
+        f"{bar_h}px bar — {top - bar_h}px of overhang, painted at z-index 5 over "
+        "whatever sits above the project bar")
+
+
+def test_the_lift_ceiling_is_derived_not_hand_written():
+    """STRUCTURAL: the ceiling must come from the measured box.
+
+    A literal was measured wrong exactly once (34px against a ~46px bar). The
+    behavioural test above only catches that after someone runs it against the
+    harness's bar size; asserting the mechanism keeps the intent visible in the
+    source, where the next person editing the padding will see it.
+    """
+    js = _js_code()
+    m = re.search(r"function _measure\(\) \{(.*?)\n  \}", js, re.S)
+    assert m, "could not isolate _measure"
+    assert "LIFT_MAX_PX =" in m.group(1), (
+        "LIFT_MAX_PX is no longer recomputed in _measure() — it has gone back "
+        "to being a constant that cannot track the bar it is supposed to fit")
+    assert re.search(r"LIFT_MAX_PX\s*=\s*Math\.max\(", m.group(1)), (
+        "the derived ceiling lost its floor; on a very short bar the lift would "
+        "round to zero and the original 'no vertical change' defect returns")
+
+
 def test_position_layer_has_exactly_one_transform_writer():
     """Both axes must be written in ONE declaration.
 

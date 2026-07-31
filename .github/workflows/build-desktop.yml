@@ -258,10 +258,39 @@ jobs:
       # copies of a release rule drift, and both keep passing on the cases they
       # still know about.
       - name: Require a CHANGELOG entry for this version
+        id: changelog_gate
         if: steps.ver.outputs.should_release == 'true'
         run: |
           set -euo pipefail
           python3 scripts/changelog_gate.py --version "${{ steps.ver.outputs.version }}"
+
+      # ── Did that gate actually RUN? ──
+      #
+      # A skipped step is SILENT: GitHub renders it grey next to the green ones
+      # and the job still succeeds. So a gate whose `if:` stops matching — a
+      # renamed output, a refactor of this job, an inverted condition — decays
+      # into nothing without a single red mark, and the release publishes
+      # undocumented exactly as before while the run log looks fine.
+      #
+      # The acceptance checklist for this gate originally said "a human
+      # confirms in the run log that the step is success, not skipped". That is
+      # the same shape as the defect the gate itself exists to fix: an
+      # invariant kept in someone's memory instead of in a check. So the
+      # workflow asserts it on its own.
+      #
+      # Scoped to the SAME condition as the gate: a checker with a narrower
+      # domain than the thing it checks would leave release runs where the gate
+      # could skip unobserved.
+      - name: Assert the CHANGELOG gate actually ran
+        if: steps.ver.outputs.should_release == 'true'
+        run: |
+          set -euo pipefail
+          outcome="${{ steps.changelog_gate.outcome }}"
+          echo "changelog gate outcome: ${outcome:-<empty>}"
+          if [ "$outcome" = "skipped" ] || [ -z "$outcome" ]; then
+            echo "::error::The CHANGELOG gate did NOT run on a release build (outcome=${outcome:-<empty>}). A skipped gate is indistinguishable from no gate — refusing to publish. Check the step's if: condition against steps.ver.outputs.should_release."
+            exit 1
+          fi
 
   # ── Windows ──────────────────────────────────────────────────
   build-windows:

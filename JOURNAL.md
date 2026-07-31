@@ -18,6 +18,16 @@
 - **同批边界协调:** ms8x5blr(responses 第三协议迁移 codex 翻译区)发边界询问,已回复确认我不碰翻译区,并移交三条必须保留的契约(_parse_jwt_claims 三元组/refresh singleflight/_oauth_http_post 路由)。
 - **验收边界(如实):** 离线 fake-bridge 全绿;真机需 owner 起 `--allow-egress` agent + 重启 + bundle 重建。
 
+### 2026-08-01(续·凌晨事故链:混合形态 clobber + 测试卫生双根修,生产已愈合并实测) — 顺着 owner 的 curl 实测继续挖,挖出两条比我原以为更深的根;commits `c0cb85ef`(journal)→ stub 根修 → `a2187a4e`(测试卫生);生产实测 core:200 + feature:200
+
+- **事故链全貌(全部实证):** ①(上一条)部署差——旧进程冻结清单重建;②**混合形态 clobber(新抓的根):** 服务的 core(old shape,cross_tab_sync 内联 ⇒ 真 `_wireConvSyncPush` 已定义)+ 新 feature-loader(stub 名单已含它)⇒ `_installFeatureStub` 把真函数**覆盖**成惰性 stub——它的「不覆盖真函数」注释只实现了 dev-fallback 一半,守卫只查 `__FEATURE_BUNDLE_SRC__`;③**feature bundle 404(我自己造成的):** 我 00:12 跑 freshness 套件,guards 直接 `build_bundle()` 进**真实** static/js,`_clean_old_bundles` 把线上正在广告的 `feature-8204ccdc.js` 删了 ⇒ stub 加载 404 ⇒ **conv-sync push 订阅生产死亡**。
+- **根修 1(stub 不覆盖):** `_installFeatureStub` 增加 `if (typeof window[name] === 'function') return;` —— 新形态(name 缺席 ⇒ stub 安装)与 dev fallback 均不受影响。新套件 4 条:3 source guards + **node 行为级 harness**(真函数存活 / 缺席名被 stub)。failing-first 3 红→4 绿;NEUTER 摘守卫→精确 2 红。
+- **根修 2(测试卫生):** freshness 套件加 autouse **symlink-farm fixture** —— `JS_DIR`+`_BUILD_LOCK_PATH` 重定向到 per-test tmp 农场(读经符号链接命中真源,写全部落 tmp),新增守卫 6:`build_bundle()` 前后生产 bundle 集**逐字节不变**。7/7 绿。**NEUTER 由现实执行过**:00:12 未修时的运行删了 feature-8204ccdc 并实测 404——故意再跑一次会再破生产,故手工 NEUTER 免跑并如实记录理由。
+- **生产愈合(无需重启,实测):** stub 根修提交后 feature-loader.js mtime 触发线上重建(00:35)——`feature-8204ccdc.js` 重新发射(200),新 core `bundle-a3a3a443.js` 含 `_handleCrossTabMsg`(真接线在)+ 压缩态 skip-guard(`typeof window[e]=="function"`);curl 实测 core:200 + feature:200。**当前生产形态:old shape + 不覆盖守卫,conv-sync 正常。**
+- **宽带回归环一个红灯,查清是兄弟的:** `stall_watch.js:139`(ms923f1d7d5r8j 的未跟踪 WIP)裸语句 `twUpdate(w.convId);` 触犯 deferrability 绊线——typeof 在 if 条件里而绊线要调用行自带闸。**我没动兄弟的 WIP**,已 project_message 给出精确一行修法并说明规则(这是 deferral 前置不变量,他们提交前必须修)。
+- **顺带普查修正(审计文档已过期):** 实测全仓 tw* 调用点 **60 已闸 / 仅 5 处真未闸**(全是 abort 路径的 compound 行 twStop:`send_button.js:180` / `sse_pipeline.js:138,532` / `sse_poll_fallback.js:205,208`)——审计的 ~40 处是 7-23 的旧账;health_stream_timer 降级前只需这 5 处 + `swarm_push.js` 一处注释清理,清扫量比预期小一个数量级。
+- **教训(记给自己):** ①「源码正确」≠「生产正确」,owner 的 curl 是这轮的 North Star;②**套件能破生产**是一类从未想过的炸半径——build 类测试的输出目录必须默认隔离;③混合形态是每次 deferral 的必经中间态,stub 机制必须对它安全,而不是只对目标形态安全。
+
 ### 2026-08-01(子夜·stale-manifest 第三次实测发生:这次是在「修复已存在但未部署」的进程里) — owner curl 生产实测抓出 sub-3A 未生效;根因定案 = **部署差**,不是新 bug(Epic-E `pt_3879f00e`,claimed)
 
 - **事故原样(全部实测取证):** owner curl 线上发现:服务的 core bundle(`bundle-a46a7f0b.js`,**23:58:35** 构建)仍含 `_handleCrossTabMsg` 函数体/`claude_dialogue_sync`/`conv-notify`(old shape),feature bundle(`feature-8204ccdc.js`)停在 **14:29** 且不含 cross_tab_sync。而我 23:46:32 改的 manifest(deferral 落地)、23:47:14 改的 feature-loader.js —— **重建发生在 manifest 修改 12 分钟后,用的却是旧清单**。

@@ -157,13 +157,20 @@ def _pipeline(workdir: str, version: str, sha: str, log_fh) -> str:
     _sh(f'git -C {_REPO_ROOT} archive HEAD | tar -x -C {src}', log_fh,
         shell=True)
 
-    # 2. Build venv that SEES the server's own environment: every runtime
-    #    dependency is already installed there, so only PyInstaller itself
-    #    needs fetching (from the configured mirror).
+    # 2. Clean venv + the CI's EXACT pip recipe (build-desktop.yml's
+    #    "Install dependencies" step, both lines). Measured reason for NOT
+    #    using --system-site-packages: the server's own env carries extra
+    #    packages (e.g. django) whose PyInstaller hooks then fail the build
+    #    (ImportErrorWhenRunningHook on hook-django.db.backends, hit on the
+    #    first real run), and PyInstaller would bundle whatever cruft its
+    #    analysis reaches into the installer. A clean venv reproduces the
+    #    CI inputs bit-for-bit and eliminates that whole drift class.
     venv = os.path.join(workdir, 'venv')
     vpy = os.path.join(venv, 'bin', 'python')
-    _sh(f'{sys.executable} -m venv --system-site-packages {venv}', log_fh)
-    _sh(f'{vpy} -m pip install --quiet pyinstaller', log_fh)
+    _sh(f'{sys.executable} -m venv {venv}', log_fh)
+    _sh(f'{vpy} -m pip install --quiet -r requirements.txt '
+        f'pyinstaller pystray pillow psycopg2-binary pyautogui pyperclip '
+        f'psutil', log_fh, cwd=src)
 
     # 3. Icons (hard requirement of the build — CI fails fast without them).
     _sh(f'{vpy} scripts/gen_desktop_icons.py', log_fh, cwd=src)

@@ -117,6 +117,14 @@ olefile>=0.46
 #
 # The bound stays major-bounded (<3) because the next rework is unknowable.
 # Enforced by tests/test_mcp_sdk_pin_bounded.py.
+#
+# INSTALL-CHANNEL NOTE (measured 2026-07-31): mcp 2.x pulls mcp-types /
+# httpx2 / httpcore2, which the internal pip mirror does NOT carry (404).
+# The deploy paths are unaffected — bootstrap.py and install.sh install this
+# dep via conda-forge, which solves the full tree (verified by dry-run:
+# mcp 2.0.0 + mcp-types 2.0.0 + httpx2 2.9.1 + httpcore2 2.9.1). Only a
+# manual `pip install -r requirements.txt` against the internal mirror fails;
+# use `pip install --index-url https://pypi.org/simple -r requirements.txt`.
 mcp>=2,<3
 # orjson — fast C JSON encoder. REQUIRED (not optional): routes/chat.py's SSE
 # state snapshot serializes the ENTIRE conversation (content+thinking+toolRounds,

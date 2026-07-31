@@ -1228,7 +1228,11 @@ class SubAgent:
             result = self._execute_single_tool(tc, round_num)
             self.messages.append({
                 'role': 'tool',
-                'tool_call_id': tc.get('id', str(uuid.uuid4())[:8]),
+                # ``or``, NOT ``get('id', default)``: the SSE accumulator always
+                # SETS the key (to ''), so a default-arg fallback is
+                # unreachable and a blank id would reach the wire verbatim — a
+                # malformed turn the gateway cannot match to its tool_call.
+                'tool_call_id': tc.get('id') or str(uuid.uuid4())[:8],
                 'content': result,
             })
         else:
@@ -1584,7 +1588,7 @@ class SubAgent:
             '_tool_env': self.parent_task.get('_tool_env'),
         }
 
-        tc_id = tool_call.get('id', str(uuid.uuid4())[:8])
+        tc_id = tool_call.get('id') or str(uuid.uuid4())[:8]
 
         # Build a round_entry stub (executor expects this for side-effects)
         round_entry = {

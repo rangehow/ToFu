@@ -692,3 +692,201 @@ def test_broken_beacon_is_logged_loudly(caplog):
             'a broken liveness probe was not logged at ERROR'
     finally:
         ProgressBeacon.seconds_since_activity = original
+
+
+# ═══════════════════════════════════════════════════════
+#  8. The blank-id idiom, swept across EVERY swarm minting site
+# ═══════════════════════════════════════════════════════
+#
+# Fixing the parallel branch only fixed ONE of four sites that shared the same
+# broken idiom. `d.get('id', <fallback>)` guards against a MISSING KEY, but the
+# producers here always SET the key (to ''), so the fallback is unreachable at
+# all four. Swept and repaired:
+#
+#   agent.py single-tool branch  — blank id reached the WIRE verbatim;
+#   agent.py _execute_single_tool — blank tc_id drove the SSE callId, so two
+#                                   parallel tool rows shared one call id;
+#   _tools.py spawn spec id      — WORST: two agents whose model-supplied
+#                                   `"id": ""` collapse onto ONE key in
+#                                   master._results_by_id, so the first agent's
+#                                   entry holds the SECOND's result and its own
+#                                   id can never be resolved → await_agents
+#                                   reports "never produced a result". That is
+#                                   the "no result" card from a SECOND root
+#                                   cause, independent of the parallel-tool one.
+#
+# The main chat path was never vulnerable: lib/tasks_pkg/tool_dispatch/_parse.py
+# uses `tc.get('id') or f'call_{uuid4}'` — the `or` form, which handles the
+# empty string. Swarm bypasses parse_tool_calls and re-derived it by hand.
+
+
+def test_single_tool_branch_never_emits_a_blank_wire_id():
+    """The 1-tool fast path must repair a blank id too.
+
+    It is a DIFFERENT branch from the parallel one and was missed by the first
+    fix: `len(tool_calls) == 1` skips the thread pool entirely.
+    """
+    calls = [_tc_no_id('pytest')]
+    h = _IdCollisionAgent(calls, ['SINGLE-OUTPUT'])
+    h.agent._execute_tool_calls(calls, round_num=1)
+    tool_msgs = [m for m in h.agent.messages if m.get('role') == 'tool']
+    assert len(tool_msgs) == 1
+    assert tool_msgs[0]['tool_call_id'], \
+        'blank tool_call_id reached the wire from the single-tool branch'
+    assert tool_msgs[0]['content'] == 'SINGLE-OUTPUT'
+
+
+def test_spawn_specs_with_blank_ids_get_distinct_ids():
+    """Two agents whose model-supplied id is '' must NOT share one id.
+
+    `master._results_by_id` is keyed on spec.id, so a collision makes one
+    agent's result permanently unreachable and `await_agents` declares it
+    resultless — a second, independent producer of the "no result" card.
+    """
+    from lib.swarm.integration._tools import _handle_spawn_agents
+
+    captured = {}
+
+    class _StubSession:
+        is_terminated = False
+
+        def __init__(self, **kw):
+            captured['specs'] = kw.get('specs') or []
+            self.conv_id = kw.get('conv_id', '')
+            self.specs = captured['specs']
+            self.artifact_store = None
+
+        def run_in_background(self):
+            pass
+
+    import lib.swarm.integration._tools as _t
+    _orig = _t.MasterOrchestrator
+    try:
+        _t.MasterOrchestrator = _StubSession
+        _handle_spawn_agents(
+            {'agents': [
+                {'id': '', 'objective': 'audit TEST SUITE health', 'role': 'coder'},
+                {'id': '', 'objective': 'triage untracked ORPHANS', 'role': 'coder'},
+            ]},
+            task_id='t-blank-ids', task={'id': 't-blank-ids'}, cfg={},
+            all_tools=[], model='m', thinking_enabled=False,
+            project_path='', abort_check=None, on_event=None,
+        )
+    finally:
+        _t.MasterOrchestrator = _orig
+        from lib.swarm.integration._state import _remove_session
+        try:
+            _remove_session('t-blank-ids')
+        except Exception:
+            pass
+
+    ids = [s.id for s in captured.get('specs', [])]
+    assert len(ids) == 2, f'expected 2 specs, got {ids!r}'
+    assert all(ids), f'a spec kept a blank id: {ids!r}'
+    assert len(set(ids)) == 2, (
+        f'two agents share one id {ids!r} — their results collide in '
+        '_results_by_id and one is reported as having produced no result')
+
+
+def test_explicit_spawn_ids_are_preserved():
+    """Complement: model-supplied ids must survive untouched.
+
+    The fix must repair only the blank case — rewriting good ids would break
+    `depends_on` wiring and every await_agents(ids=[...]) call.
+    """
+    from lib.swarm.integration._tools import _handle_spawn_agents
+
+    captured = {}
+
+    class _StubSession:
+        is_terminated = False
+
+        def __init__(self, **kw):
+            captured['specs'] = kw.get('specs') or []
+            self.conv_id = ''
+            self.specs = captured['specs']
+            self.artifact_store = None
+
+        def run_in_background(self):
+            pass
+
+    import lib.swarm.integration._tools as _t
+    _orig = _t.MasterOrchestrator
+    try:
+        _t.MasterOrchestrator = _StubSession
+        _handle_spawn_agents(
+            {'agents': [
+                {'id': 'tests', 'objective': 'o1', 'role': 'coder'},
+                {'id': 'orphans', 'objective': 'o2', 'role': 'coder'},
+            ]},
+            task_id='t-real-ids', task={'id': 't-real-ids'}, cfg={},
+            all_tools=[], model='m', thinking_enabled=False,
+            project_path='', abort_check=None, on_event=None,
+        )
+    finally:
+        _t.MasterOrchestrator = _orig
+        from lib.swarm.integration._state import _remove_session
+        try:
+            _remove_session('t-real-ids')
+        except Exception:
+            pass
+
+    assert [s.id for s in captured.get('specs', [])] == ['tests', 'orphans']
+
+
+def test_no_swarm_site_uses_the_unreachable_get_default_idiom():
+    """RATCHET: no swarm module may MINT an id via `get('id', <minted fallback>)`.
+
+    Source-level on purpose — this is a class of bug, not one instance, and the
+    point is that a NEW site written in the broken form is caught before it can
+    silently collide. `get(k, default)` fires only on a MISSING key; every
+    producer here sets the key to '', so the correct form is `get(k) or default`.
+
+    Scoped to MINTING (a uuid / random / generated fallback). Reading a task id
+    with a plain literal default — `task.get('id', 'unknown')` — is a different
+    thing: it labels a log line, it does not become a dict key that two records
+    can collide on. Flagging those made the first draft of this test fire on 6
+    innocent lines, which would have taught the next reader to silence it.
+    """
+    import re
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # `.get('id', ...)` whose fallback MINTS a value (uuid4 / short_id / token…)
+    minting = re.compile(r"\.get\(\s*'id'\s*,[^)]*(uuid|short_id|token_hex|randint|urandom)")
+    bad = []
+    for dirpath, _dirs, files in os.walk(os.path.join(root, 'lib', 'swarm')):
+        if '__pycache__' in dirpath:
+            continue
+        for fn in files:
+            if not fn.endswith('.py'):
+                continue
+            p = os.path.join(dirpath, fn)
+            with open(p, encoding='utf-8') as fh:
+                for n, line in enumerate(fh, 1):
+                    if line.lstrip().startswith('#'):
+                        continue          # a comment quoting the old form
+                    if minting.search(line):
+                        bad.append(f'{os.path.relpath(p, root)}:{n}: {line.strip()}')
+    assert not bad, (
+        'an id is MINTED with the unreachable default-arg idiom — the producer '
+        "always sets the key, so use `.get('id') or <fallback>`:\n  "
+        + '\n  '.join(bad))
+
+
+def test_the_ratchet_actually_catches_the_broken_form():
+    """NEUTER-proof for the ratchet above: it must fire on the real shape.
+
+    A regex guard that matches nothing is worse than no guard, so pin that it
+    recognises the exact line the fix removed AND stays silent on the innocent
+    task-id reads it must not flag.
+    """
+    import re
+    minting = re.compile(r"\.get\(\s*'id'\s*,[^)]*(uuid|short_id|token_hex|randint|urandom)")
+
+    assert minting.search("id=agent_def.get('id', str(uuid.uuid4())[:8]),"), \
+        'ratchet blind to the exact broken form it exists to catch'
+    assert minting.search("tc_id = tool_call.get('id', str(uuid.uuid4())[:8])")
+    assert not minting.search("task_id = task.get('id', 'unknown')"), \
+        'ratchet must not flag a plain-literal task-id read'
+    assert not minting.search("id=agent_def.get('id') or str(uuid.uuid4())[:8],"), \
+        'ratchet must accept the CORRECT or-form'

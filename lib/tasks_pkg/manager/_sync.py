@@ -1132,6 +1132,22 @@ def _sync_result_to_conversation(task, meta):
         _cas_succeeded = False
         search_text = build_search_text(messages)
         for _cas_attempt in range(MAX_TERMINAL_CAS):
+            # Stop→Regenerate self-heal: a superseded content-bearing fragment
+            # (no terminal reason) adjacent to this settle's answer must be
+            # stamped finishReason='aborted' here — not only on the next GET —
+            # or the aborted partial renders in completed chrome. Runs per
+            # attempt because a CAS-miss graft REPLACES `messages` with the
+            # fresh row, which needs the same mark. Mark-only (no delete /
+            # reindex), so it is cache-prefix-neutral.
+            if len(messages) >= 2:
+                from lib.conversations.reconcile import (
+                    mark_superseded_incomplete_fragments,
+                )
+                messages, _frags_marked = mark_superseded_incomplete_fragments(messages)
+                if _frags_marked:
+                    logger.info('%s conv=%s Marked %d superseded incomplete fragment(s) '
+                                'finishReason=aborted at terminal sync',
+                                pfx, conv_id, _frags_marked)
             messages_json = json_dumps_pg(messages)
             search_text = build_search_text(messages)
             now_ms = int(time.time() * 1000)

@@ -200,13 +200,39 @@ def _pipeline(workdir: str, version: str, sha: str, log_fh) -> str:
         f'--workpath {os.path.join(workdir, "tmp")} --noconfirm',
         log_fh, cwd=src)
 
-    # 5. Boot smoke — the CI's own verdict: exit code + no traceback +
-    #    the explicit OK marker (see build-desktop.yml for why all three).
-    env = dict(os.environ, TOFU_SMOKE='1')
+    # 5. Boot smoke — the CI's own verdict: exit code + the explicit OK
+    #    marker + NO traceback in stderr (see build-desktop.yml for why all
+    #    three; an earlier draft of this builder checked only the first two
+    #    and let a numpy-crashing child through to tar, measured 2026-08-01).
+    #
+    #    HERMETIC on purpose: TOFU_SMOKE=1's import is read-only, but the
+    #    launcher ALSO spawns a re-exec'd server child that runs the FULL
+    #    startup — including _init_database. With this host's env that child
+    #    connects to the PRODUCTION PostgreSQL and runs DDL against it (it
+    #    deadlock-crashed against the live server, measured). Strip PG_* so
+    #    it falls back to a scratch SQLite, and kill any leftover child
+    #    before tar reads the tree (a lingering child writing logs/data next
+    #    to the exe is what made tar report "file changed as we read it").
+    env = {k: v for k, v in os.environ.items() if not k.startswith('PG')}
+    env['TOFU_SMOKE'] = '1'
+    env['TOFU_DB_PATH'] = os.path.join(workdir, 'smoke.db')
     out = _sh(f'{dist}/Tofu/Tofu', log_fh, env=env, check=False)
-    if out.returncode != 0 or b'TOFU_SMOKE_OK' not in (out.stdout or b''):
+    _kill_stragglers(dist)
+    err = (out.stderr or b'').decode('utf-8', 'replace')
+    import re as _re
+    if (out.returncode != 0
+            or b'TOFU_SMOKE_OK' not in (out.stdout or b'')
+            or _re.search(r'Traceback|ModuleNotFoundError|ImportError',
+                          err)):
         raise RuntimeError(
             f'boot smoke failed (rc={out.returncode}) — see build.log')
+    # The smoke child writes its runtime state (data/, logs/, uploads/)
+    # NEXT TO the exe in a frozen layout — that residue must not ship in
+    # the artifact (the CI's own tarballs carry it; we are better than CI
+    # here deliberately).
+    for residue in ('data', 'logs', 'uploads', 'project_sessions'):
+        shutil.rmtree(os.path.join(dist, 'Tofu', residue),
+                      ignore_errors=True)
     return dist
 
 
@@ -313,6 +339,28 @@ def _sh(cmd: str, log_fh, *, cwd: str | None = None, env: dict | None = None,
     if check and out.returncode != 0:
         raise RuntimeError(f'step failed (rc={out.returncode}): {cmd}')
     return out
+
+
+def _kill_stragglers(dist: str) -> None:
+    """Kill any smoke child still running from ``dist`` before tar reads it.
+
+    The launcher's re-exec'd server child detaches from the smoke parent —
+    subprocess.run only waits for the parent. Anchored to the EXACT binary
+    path so it can never hit the production server (different path) or a
+    sibling build (different workdir).
+    """
+    binary = os.path.join(dist, 'Tofu', 'Tofu')
+    for _ in range(20):
+        alive = subprocess.run(['pgrep', '-f', binary],
+                               capture_output=True).returncode == 0
+        if not alive:
+            return
+        subprocess.run(['pkill', '-TERM', '-f', binary], capture_output=True)
+        time.sleep(0.5)
+    logger.warning('[DesktopDist] smoke straggler survived 10s of TERM — '
+                   'escalating to KILL')
+    subprocess.run(['pkill', '-KILL', '-f', binary], capture_output=True)
+    time.sleep(0.5)
 
 
 def _sha256_file(path: str) -> str:

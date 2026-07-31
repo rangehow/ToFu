@@ -73,6 +73,16 @@
 - **同批边界协调:** ms8x5blr(responses 第三协议迁移 codex 翻译区)发边界询问,已回复确认我不碰翻译区,并移交三条必须保留的契约(_parse_jwt_claims 三元组/refresh singleflight/_oauth_http_post 路由)。
 - **验收边界(如实):** 离线 fake-bridge 全绿;真机需 owner 起 `--allow-egress` agent + 重启 + bundle 重建。
 
+### 2026-08-01(续·harness 漂移族大清缴:resolver + conv_family_sources 落地,9 套件迁移全绿,顺带抓回 2 套预存红) — owner 指令「清扫 20 个 inline-list harness 上解析器」;7 commits(helper+8 套件+convention);**35/35 绿**;12 个剩余 conv-driver 中再抓 **6 套 11 红**已立案
+
+- **打法(owner 推而广之):** reconcile 那次不是孤例——owner 数出 20 个手写 inline 模块列表的 harness,指令全迁 `_conv_bundle_sources` 解析器。实测分类:7 个 `extra_js=[` 直译目标 + 12 个 conv-driver 变体(含 1 个**零 extras 最劣变体**)。
+- **关键设计升级(打地鼠逼出来的):** 符号钉(pin)照样过期——`boot_early_active_paint` 迁移中连挖三层(`_serverConvCount`→`_setCacheVerifying`→`_scheduleConvVerifyRetry`),证明**驱动 conversations.js 顶层函数的 harness 需要的是整个 conv_* 家族闭包而不是任何钉选子集**。落成 `conv_family_sources()`:conversations.js + 全部 `core/conv_*` 叶子 + pending_sync.js,按 bundle 清单序——分解不变量(叶子与母文件共享 window 域)使闭包成为**唯一不可能漂移的列表**。
+- **顺带抓回 2 套预存红(owner 以为「它们今天绿」,实测不然):** ①`boot_early_active_paint` 迁移前 stash 实测 3/3 全红(verify_visibility/verify_retry 两片叶子抽走后 extras 未跟进,游离在所有常驻环之外无人发现);②`list_merge_rev_authority` **零 extras 裸 eval**,叶子引用在 loader 自己的 try/catch 里炸 → merge 静默降级 6 红。两套迁移后全绿、NC 咬合完整。
+- **同类漂移的第三形态(NC 锚也漂):** `conv_verify_failure_reheal` 的 NC2 还在 conversations.js 里找 `_scheduleConvVerifyRetry`(slice 11 已抽去 conv_verify_retry.js)——重定向到 leaf + `_run` 学会 `override_extra` 换叶子;`pending_sync_durability` 的 strip 断言锚在 conversations.js(slice 14 已抽去 persist_helpers)——重锚 + 行为级 (B) 钉兜底。
+- **惯例已写入 docstring(owner 指令):** 新 harness 一律走解析器(conv-driver→`conv_family_sources`,单主题→`sources_defining`/`eval_prelude`,NEUTER→override 换而非加)。迁移清单 9 套全绿(35/35)。
+- **剩余立案:** 12 个 conv-driver 变体中 6 套 11 红(conv_windowed_blob_slice / conv_model_identity / merge_active_task_terminal_fields / stale_cache_paint_gate / translate_notify_adopt / warm_open_adopts_reconciled_list)——**drift-vs-product 未定**,逐套读前不许按类推断(解析器的四态诊断正是为分不清这两者而存在的)。
+- **机制教训(记给全项目):** 这个家族一周内第 9、10、11 次复发,根因恒定——**「harness 锚定路径而非符号」**。任何「抽提完成」的报告若不带 harness 迁移核对,都是在给两周后的自己埋红。
+
 ### 2026-08-01(续·Epic-E 记分牌 + sub-3B 落地:health_stream_timer 62KB 降级,以及共享树第三次「卷走」的镜像面) — owner 指令「先建分类账再拆」;commits 记分牌 → `6baf1083` 主体 → ledger 行;新套件 **7** + deferrable 2 绿;NEUTER×2 各咬各的;农场构建 7 项物理检查全 PASS
 
 - **分类账(owner 拍板的打法修正):** `docs/EPIC_E_SIZE_LEDGER.md` —— 基线(core 1,550,424B / feature 470,760B / pack ~222KB)+ top-20 逐文件判定 + 每片必记流水。实测 core 源 **4123KB/144 文件**,已完成的两个 deferral 合计仅 ~2.8% —— **之前按「好拆」选,今后按「大」选**:候选 #1 `ui/tool_rounds.js` **261KB**(全仓最大非 i18n),#2 `tofu-scene.js` 96KB + `tofu-pet.js` 65KB(**160KB 纯装饰**),第三梯队 finish_info/project/myday/swarm_panel/access_matrix。目标线暂定 core ≤1.2MB。

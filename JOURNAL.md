@@ -1,3 +1,8 @@
+### 2026-07-31(续·矩阵「纯逻辑」判据:owner 用真实形态抓出两行同 ID —— 判据从「池非空」收敛为「没有任何池路由它」) — owner 复核 `9dc9cd3e` 时用 `deepseek-v4-flash` 形态(model_id **本身就在**自己的 `request_ids` 池里,真实配置有 3 个)构造渲染,抓出**同一个 data-id 渲染两行**:一行 `is-logical` 头 + 一行 `is-alias` 线上行(commit 待补,2 文件;套件新增 **9 钉**,复现脚本实测修复后每 ID 恰好一行,相邻环 **7 套件 57/57**)
+
+- **★ 我犯的错是把「前提」写成了「形态」:** 逻辑头行的存在前提是「model_id 永不上线」,而我写成了「`request_ids` 非空」。池里**含** model_id 时它是真线上 ID,头行与线上行重复渲染 —— 前提与形态的差距恰好是那 3 个真实条目。**判据必须直接表达前提:纯逻辑 ⇔ 没有任何池(条目池或任意 key 的 cell 池)路由 model_id。**
+- **收敛方式按 owner 处方:一处判定,两处消费。** 新 `_modelIsPureLogical(m)`(`_modelRowIds(m).indexOf(model_id) < 0` —— 并集里没有它,才是纯逻辑)同时喂渲染循环(头行 vs legacy 行集)与 `_renderMatrixRow` 的 `underHead` 行号判定 —— 这两处原来是两份手写,正是下一个漂移点。连带覆盖一个更偏的形态:cell 池把 model_id 加回来(条目池不含、某 key 的 cell 含)时同样判为真线上 ID。
+- **守卫按「同一 data-id 全表唯一」钉,而不是钉新判据的代码形状:** harness 新增 in-pool fixture,断言 ①无 `is-logical` 行 ②根行带 `_toggleIdAccess` + 全局开关 ③其余池成员作子行 ④全表 `<tr data-id>` 无重复;另加谓词三元钉(显式池排除 → true / legacy → false / 池内含 → false)。owner 的复现脚本(node 直驱真实 access_matrix.js)修复后输出每个 ID 恰好一行。
 ### 2026-07-31(续·同一个缺陷类第二次开火：清单原地不动，读法改了) — `saveConversations is not defined`（108 个调用点）实测定性为 **2026-07-24 model_caps 事故的原样复发**：`_BUNDLE_FILES` import 期冻结，长跑进程（pid 3459968，10:33 启动）重建门正确开火、却拿 142 条旧名单打包，12:00/13:46 才进清单的 `conv_save.js` + `conv_verify_retry.js`（第二颗未引爆的雷）双双不在产物里(commit `00e9de0a`,3 文件 +397/-0;新套件 **6/6**,**NEUTER 精确 2 红**;相邻环 **66+70**)
 
 - **★ 上次的处方失效方式正是本类的教训：按实例写守卫。** 7-24 的修复把 `window.isChatModel` 等两个签名**硬编码**进 `_MODEL_CAPS_SIGNATURES`，今天它依然全绿——因为它压根不知道 `conv_save.js` 存在。**白名单覆盖面恒小于清单本身**；而 Epic-E 今天一天就往清单里加了 5 个新 leaf。这次的守卫改为**从清单自身派生**：每个条目的指纹（col-0 顶层 `function` / `window.X=` / `var` 声明，两种 minify 路径都存活）从它自己的源码抽取，167 个条目全覆盖、未来条目零新增守卫行。

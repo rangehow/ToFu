@@ -107,6 +107,12 @@ _stgProviders[0] = {
                            disabled_ids: ['aws.claude-x'] } } },
     // Legacy entry: no request_ids → pool is [model_id] + aliases.
     { model_id: 'm-leg', aliases: ['m-leg-fast'], capabilities: ['text'] },
+    // In-pool entry: model_id IS one of its own request_ids (the
+    // deepseek-v4-flash shape) → it is a genuine wire id, NOT a pure
+    // logical name — it must render as the root wire row, never as BOTH a
+    // logical header AND a wire row with the same data-id.
+    { model_id: 'ds-flash', request_ids: ['ds-flash', 'ds-flash-huawei'],
+      capabilities: ['text'] },
   ],
 };
 _stgMatrixProbeAttached[0] = true;   // skip the resume-from-disk timer
@@ -129,6 +135,14 @@ check('key_pool_inherits_entry_when_cell_has_none',
 check('key_pool_entry_level_when_null',
       JSON.stringify(_modelKeyPool(_stgProviders[0].models[0], null)) ===
       '["aws.claude-x","vertex.claude-x"]');
+
+// ── THE shared judgment: pure-logical iff NO pool routes model_id ──
+check('pure_logical_true_for_explicit_pool_excluding_model_id',
+      _modelIsPureLogical(_stgProviders[0].models[0]) === true);
+check('pure_logical_false_for_legacy_entry',
+      _modelIsPureLogical(_stgProviders[0].models[1]) === false);
+check('pure_logical_false_when_model_id_in_own_pool',
+      _modelIsPureLogical(_stgProviders[0].models[2]) === false);
 
 // ── RENDER: logical header + wire rows ────────────────────────────────
 const html = _renderAccessMatrix(0);
@@ -175,6 +189,19 @@ check('legacy_root_row_is_wire_row',
       /data-id="m-leg"[\s\S]{0,1400}_toggleIdAccess\(0,1,0,&quot;m-leg&quot;\)/.test(html));
 check('legacy_alias_row_kept',
       html.indexOf('data-id="m-leg-fast"') >= 0);
+
+// ── IN-POOL model_id: genuine wire id → root wire row, NO logical header,
+//    and exactly ONE row carries the data-id in the whole table. ──
+check('in_pool_no_logical_row',
+      !/<tr class="stg-mx-row[^"]*is-logical[^"]*"[^>]*data-id="ds-flash"/.test(html));
+check('in_pool_root_row_carries_toggle',
+      /data-id="ds-flash"[\s\S]{0,1400}_toggleIdAccess\(0,2,0,&quot;ds-flash&quot;\)/.test(html));
+check('in_pool_root_row_keeps_global_toggle',
+      /data-id="ds-flash"[\s\S]{0,900}_toggleModelEnabled\(0,2\)/.test(html));
+check('in_pool_other_pool_ids_render_as_subrows',
+      html.indexOf('data-id="ds-flash-huawei"') >= 0);
+const dupRows = html.match(/<tr class="stg-mx-row[^"]*"[^>]*data-id="ds-flash"/g) || [];
+check('no_duplicate_data_id_rows', dupRows.length === 1);
 
 // ── PAYLOAD: request_ids + key_access ride along ─────────────────────
 _postedBodies.length = 0;

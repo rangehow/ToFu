@@ -326,6 +326,25 @@ function _modelRowIds(m) {
   return _mxDedupe(union);
 }
 
+/** THE single judgment behind the logical-header rendering: ``model_id`` is
+ *  a PURE preset identity only when NO pool routes it — it appears in
+ *  neither the entry's wire pool nor any key's cell pool. Only then does it
+ *  get a header row (global toggle + count, no per-key cells): rendering a
+ *  toggle/probe for it would fake a (key × id) pair that cannot occur.
+ *
+ *  When ``model_id`` IS in a pool — the common ``request_ids: [model_id,
+ *  ...deployments]`` shape (deepseek-v4-flash), or a cell pool that adds it
+ *  back — it is a genuine wire id and MUST render as the root wire row
+ *  (legacy shape, with cells). A `request_ids`-nonempty check is NOT
+ *  equivalent: it used to render BOTH a header and a wire row with the same
+ *  data-id for exactly that shape.
+ *
+ *  Consumed by BOTH the render loop (header vs legacy row set) and
+ *  _renderMatrixRow (wire-row numbering) — keep it the only copy. */
+function _modelIsPureLogical(m) {
+  return _modelRowIds(m).indexOf(((m && m.model_id) || '').trim()) < 0;
+}
+
 /** True when this key currently serves this concrete id. */
 function _isIdEnabled(m, keyIdx, id) {
   var cell = _getCell(m, keyIdx);
@@ -440,10 +459,12 @@ function _renderAccessMatrix(provIdx) {
     var m = models[mi];
     var ids = _modelRowIds(m);
     var groupOpen = ids.length > 1; // only bracket models that HAVE a pool
-    // Model-identity contract: an explicit wire pool means model_id itself is
-    // a logical/preset name, not a wire id — it gets a header row (global
-    // toggle + count, no per-key cells) ABOVE the wire-id rows.
-    var logicalHead = _mxDedupe(m.request_ids || []).length > 0;
+    // Model-identity contract: a model_id no pool routes is a pure
+    // logical/preset name — it gets a header row (global toggle + count,
+    // no per-key cells) ABOVE the wire-id rows. When it IS in a pool it is
+    // a genuine wire id and renders as the root wire row like any legacy
+    // entry — one row per data-id, never two.
+    var logicalHead = _modelIsPureLogical(m);
     if (logicalHead) {
       html += _renderMatrixRow(provIdx, mi, m, m.model_id, -1, ids.length, keys, groupOpen);
       for (var li = 0; li < ids.length; li++) {
@@ -475,10 +496,10 @@ function _renderAccessMatrix(provIdx) {
 function _renderMatrixRow(provIdx, modelIdx, m, id, rowPos, rowCount, keys, grouped) {
   var isLogicalHead = (rowPos === -1);
   var isAlias = rowPos > 0;
-  // Under a logical header wire rows are numbered 1..rowCount; a legacy
-  // entry (no explicit pool) numbers its rows 0..rowCount-1 with model_id
-  // itself as the root row.
-  var underHead = _mxDedupe(m.request_ids || []).length > 0;
+  // Under a logical header wire rows are numbered 1..rowCount; otherwise
+  // (legacy entry, or a model_id that IS in its pool) rows are numbered
+  // 0..rowCount-1 with the first pool id as the root row.
+  var underHead = _modelIsPureLogical(m);
   var isLastInGroup = underHead ? (rowPos === rowCount) : (rowPos === rowCount - 1);
   var globallyOff = (m.enabled === false);
   var brand = (typeof _detectBrand === 'function') ? _detectBrand(id) : '';

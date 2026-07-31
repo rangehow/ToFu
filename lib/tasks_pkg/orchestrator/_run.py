@@ -34,7 +34,7 @@ from lib.agent_core.events import EventType, build_event
 from lib.tasks_pkg.compaction import run_compaction_pipeline
 from lib.tasks_pkg.llm_fallback import _llm_call_with_fallback
 from lib.tasks_pkg.manager import (
-    _strip_base64_for_snapshot,
+    _strip_base64_for_snapshot,  # noqa: F401  (re-exported by the package facade after slice 15)
     append_event,
     checkpoint_task_partial,
     persist_task_result,
@@ -57,7 +57,6 @@ from lib.tasks_pkg.system_context import (
     _disabled_prompt_blocks,
     inject_search_addendum_to_user,
 )
-from lib.tasks_pkg.wire_messages import apply_wire_sanitize
 from lib.tasks_pkg.server_message_store import (
     save_messages as _save_messages_to_store,
 )
@@ -119,6 +118,9 @@ from lib.tasks_pkg.orchestrator._cache_round_accounting import (
 )
 from lib.tasks_pkg.orchestrator._sanitize_tool_call_args import (
     sanitize_malformed_tool_call_args,
+)
+from lib.tasks_pkg.orchestrator._messages_snapshot import (
+    emit_messages_snapshot_event,
 )
 
 
@@ -608,49 +610,23 @@ def run_task(task: dict[str, Any]) -> None:
             sort_tool_results(messages, conv_id=task.get('convId', ''))
 
             # ★ Emit messages snapshot for the debug panel (AFTER sort_tool_results
-            #   so the panel reflects the real outbound ordering). The snapshot is
-            #   the WIRE-FORM view — apply_wire_sanitize on an INDEPENDENT copy
-            #   reproduces build_body's OpenAI-form tail (strip/sanitize/orphan/
-            #   merge/empty-fix) without mutating `messages` (build_body re-runs
-            #   these on its own copy at request time). See lib/tasks_pkg/wire_messages.py.
-            try:
-                _wire = apply_wire_sanitize(
-                    messages, conv_id=task.get('convId', ''),
-                    provider_id=task.get('provider_id') or '')
-                snapshot = _strip_base64_for_snapshot(_wire)
-                snap_evt = build_event(
-                    EventType.MESSAGES_SNAPSHOT,
-                    # Request Inspector contract (docs/DEBUG_PANEL_REDESIGN.md
-                    # §3): this is the ONLY kind='request' emission — the
-                    # payload the model is about to receive. The other three
-                    # snapshot sites (post-tool / final / fallback) are
-                    # kind='state' (NOT LLM requests).
-                    kind='request',
-                    model=rs.model,
-                    # Endpoint turns (Planner/Worker/Critic) each re-run
-                    # run_task with their OWN round numbering — tag the
-                    # driver's phase so the Request Inspector can tell
-                    # same-numbered rounds apart (epic pt_e3dc7198e7e34bb1).
-                    # '' for normal (non-endpoint) tasks.
-                    turn=task.get('_endpoint_phase') or '',
-                    params={
-                        'maxTokens': max_tokens,
-                        'temperature': temperature,
-                        'thinkingEnabled': rs.thinking_enabled,
-                        'thinkingDepth': thinking_depth,
-                        'preset': rs.preset,
-                        'responseFormat': response_format,
-                        'stream': True,
-                    },
-                    roundNum=round_num + 1,
-                    label=f'Round {round_num + 1} 请求前 · {len(snapshot)}条',
-                    messages=snapshot,
-                )
-                if _tools_this_round:
-                    snap_evt['tools'] = _tools_this_round
-                append_event(task, snap_evt)
-            except Exception:
-                logger.warning('[Task %s] messages_snapshot failed at round %d model=%s', tid, round_num + 1, rs.model, exc_info=True)
+            #   so the panel reflects the real outbound ordering). Extracted
+            #   2026-07-31 (pt_03f4cdf1 slice 15) into
+            #   lib.tasks_pkg.orchestrator._messages_snapshot — see that
+            #   module's docstring for the wire-sanitize / kind='request' /
+            #   endpoint-phase contracts and the best-effort try/except that
+            #   ensures an inspector failure never breaks the LLM round.
+            emit_messages_snapshot_event(
+                task, messages,
+                tid=tid, round_num=round_num, model=rs.model,
+                thinking_enabled=rs.thinking_enabled,
+                thinking_depth=thinking_depth,
+                preset=rs.preset,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format=response_format,
+                tools=_tools_this_round,
+            )
 
             body = _o.build_body(
                 rs.model, messages,

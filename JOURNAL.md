@@ -1,3 +1,25 @@
+### 2026-07-31(续·第 4 个候选铸造点:判定「不是缺陷」,但**理由不是我以为的那个**) — owner 指定只做判定、不预先动手;结论是「不需要锚」,而**成立的理由是三个 caller 全在活路径之外,不是谓词自保** —— 谓词实测**会**对活跃轮开火(commit `b71e717a`,2 文件 +122/-1,reconcile.py **零行为改动**;守卫 **6 → 8**;**TRIPWIRE×2 各咬各的**;251 套 A/B **零新坏零修好**)
+
+- **★ 本条最该记的是判定过程,不是结论:** `reconcile.py` 的 `classify_ghost_tail == 'interrupt'` 与前三个铸造点**形状完全相同**(盖 `finishReason='interrupted'`、不写 `_taskId`)。直觉答案是「它只在崩溃恢复时跑,所以安全」。**而实测把这个直觉的依据换掉了**:
+  ```
+  classify_ghost_tail({content:'', thinking:'Let me analyse...', toolRounds:[]}) => 'interrupt'
+  ```
+  **thinking 阶段的活跃轮在形态上与 ghost tail 不可区分** —— 空 content + 有 thinking + 无已结算轮,正是「模型正在想」的样子。所以**谓词根本不自保**;它甚至对带 `status:'searching'` 运行中工具轮的 tail 也返回 `interrupt`。
+- **真正的安全来自三道 caller 侧闸,逐个实测:** ①`routes/conversations.py`(GET/warm-open)两个入口都有 `if _conv_has_live_task(conv_id): return <未 reconcile>`,源码注释已写明理由;②`_sync.py:L502` **只**在 `_sync_result_to_conversation`(**终态**同步)的「无内容可写」分支里调用,且前置 latest-task 闸 —— 该点任务按定义已 settle;③`_recovery.py:L544` 在 `recover_stale_tasks_on_startup` 内,所碰轮次按构造已死。⇒ 它盖的 tail **永远不是活跃轮自己的气泡**,`assistantTailIsPriorTurn` 不会在该 task 连接期间被问到它;且 `interrupted` 正是「进程已死的轮次」的**真终态**。故**无需锚**,与前三处的判定相反而理由自洽。
+- **★ 而「安全性在 caller 侧」恰恰是最容易被静默破坏的那种性质** —— 它不在被审计的那个文件里。所以按 owner 要求把前提钉成**可执行 tripwire**(不是注释):
+  - `test_reconcile_interrupt_branch_is_never_reached_on_a_live_turn` 断言三道闸存在,并**特别**断言 `_reconcile_orphan_placeholder_on_settle` **不出现在** partial(mid-stream)同步里 —— 那正是把它挪上热路径的最短路径。
+  - `test_reconcile_interrupt_predicate_does_fire_on_a_live_shape` 把「谓词不自保」这**半个前提**显式记下来。**没有这一条,后人会以为谓词自带保护而把 caller 闸当冗余删掉** —— 这是本条真正防的东西。
+- **TRIPWIRE×2 验证(模拟真实回归形态,不是形式扰动):** N1 把 GET 路径的 `_conv_has_live_task` 闸改成 `if False:` → 红;N2 把 ghost reconcile 挪进 `_sync_partial_to_conversation`(活路径)→ 红。两发后两个产品文件 `cmp` 逐字节还原。
+- **共享树纪律(上一批教训已应用):** 提交前先 `git diff -- <目标文件>` 核对这 2 个文件里有没有兄弟的行(`reconcile.py` 的改动全是注释,零行为)。上一批正是漏了这一步才把 `ms8eg47r76ei3x` 的 `checkpoint_task_partial(force=)` 卷进我的 commit。
+- **★ 至此 duplicate-bubble 这一类的全部铸造面清点完毕(脚本枚举,不是人工找):**
+  | 面 | 数量 | 处置 |
+  |---|---|---|
+  | wire 快照(poll×2 / SSE state×2) | 4 | 全部经 `terminal_gate` |
+  | DB 写(partial checkpoint P1a) | 1 | 经 `terminal_gate` + 原子 `_taskId` |
+  | `done` 事件 | 2 | **刻意豁免**(它本就是终态信号) |
+  | reconcile interrupt 分支 | 1 | 判定无需锚,前提由 tripwire 钉住 |
+- **验收边界:** 本批零行为改动(注释 + 测试),无需重启。真浏览器未实测。
+
 ### 2026-07-31(续·守卫看不见打包在一行里的键) — 自主派单接自己开的票 `pt_715f5283c34d4294`,而**我自己的票面诊断是错的**;真正的缺陷比票面描述的那个严重,且**修的过程中我第一版又造了第三个洞,是 NEUTER「没咬」抓出来的**(commit `f781094a`,1 文件 +125/-14;本文件 5 passed/1 **FAILED** → **6 passed/1 skipped**;导出环 **48/49**;**NEUTER×3 各咬各的**)
 
 - **★ 先证伪自己的票:** 票面写「`branding.js` 与 `visibility_defaults.js` **已不存在于工作树**(被兄弟移走)」。实测:**两个都在**(316/548 行),而且那两条参数化测试**都是 PASSED**。我上一批开票时把断言的**报错文案**当成了事实——那句 "the known offenders went missing" 是**守卫的猜测**,不是证据。**判据入库:开票前必须验证报错文案里的事实主张,报错消息是嫌疑而非结论。**

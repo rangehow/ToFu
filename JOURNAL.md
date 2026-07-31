@@ -1,3 +1,10 @@
+### 2026-08-01(脑派第三票闭环:duplicate _msgId 写入源全链定案 + 持久化腿根治) — 接自己立的 `pt_93ff22bdb56146c6`;commit `46895774`(2 文件;新套件 **5** 检查,**NEUTER×1** 精确,既有 parity 6/6 不破,会话环 **12/12**)
+
+- **写入源三段链(全部日志实证):** ①10:35 任务 `38562f78` 往气泡 `tmp_196fedef` 流了 3625 字,30 分钟 reaper 在 11:17 强杀(pt_9f5a51ba 的 ¥22.95 受害者,idx1 的 cost 字段至今就是 22.9513);②11:45 用户点「继续」——`POST /api/v1/chat/continue`,kept=38 rounds、preserved=3625、任务 25c1815a 以**同一 _msgId** 续跑;两条 SSE 读者竞速(gen 1→2 supersede),其中一条 0 事件早夭 ⇒ **fall back to polling ⇒ 旧位置投影把续写画进了孪生气泡**(ms43foj3 同族,兄弟 `pt_44e985ec82014e6d` 已根治:去重连接早退 + 身份投影 + 占位按 taskId 采用,套件 7/7);③本地变成 [user0, 残骸(带 _continue* 标记, aborted), 答案(stop)] 同 id 两条目,13:21:50 救援合并(🛟 KEEPING local)把尾巴行判成「服务器缺失」整体 PUT 回写 ⇒ **idx1 落库**,Reconcile 顺手标 fr=aborted,22:22 RENDER ORDER VIOLATION。
+- **持久化腿(当时仍活)的根治:** 救援裁决 `_rescuableLocalTail` 此前只看「本地比服务器长 + 尾部有 id」——真正丢失的行其 id 必不在服务器上,所以**按服务器 id 集合去重**:尾部行的 _msgId 已在服务器存在 ⇒ 是重复不是遗失,不救。此后任何来源的同 id 孪生都无法再经这条路落库。新套件 5 检查(事故形状不救/真丢失救/草稿不救/VU 行救/服务器更长不救);NEUTER 摘去重 → 事故检查红;既有 wire-parity 含行为矩阵 6/6 不破。
+- **爆炸半径实测:** 全库 4374 会话中 **86 个**带重复 _msgId(top: 5/4/3 组)。下次写入由 `db10bf32` 的 `_assign_message_ids` 去重自愈;**全量一次性改写留给 owner 决定**(沿用 reaper 历史清扫票的惯例——改写用户可见历史是人门)。
+- **判据重申:** 同 id 两条目=「孪生创建(兄弟已修) × 持久化回写(本批修)」两条腿,缺一不可犯;查写入源先看端点日志(access.log 的 continue vs regenerate vs send),再看消息字段的家族标记(_continue* 是 continue 流的指纹)。
+
 ### 2026-08-01(脑派自票闭环:tofu-search 0.5.3 无索引可解 —— 发布链自主修复 + 发布本身挂人门) — 接我自己在 desktop-dist 批立的票 `pt_84e6828ee5f44a7c`;commit `e0049305`(4 文件 +237/-8;新套件 **8/8**,**NEUTER×3 各咬各的**;相邻环 **131** 绿;4 条 published-drift 红 = 预期的「已验证未导出」态,非缺陷)
 
 - **定案链(全部实测):** ①`lib/search_bridge.py` 无条件传 `allow_private_hosts` 给 `configure()` ⇒ **0.5.3 是 HARD 下限**(旧库 boot 即 TypeError,与 0.5.0 deadline kwargs 同型),降 pin 永远不是解;②公网 PyPI 最高 0.5.1、内网镜像无此包、`rangehow/tofu-search` 远端 tag 最高 v0.5.1 —— **0.5.3 的源码+v0.5.3 tag 只存在于本机检出**;③既有守卫 `test_requirements_public_resolvable[tofu-search]` 当前即红,且它自己写明唯一正解是发布;④`../tofu-search/dist/` 的 0.5.3 wheel+sdist 与 `test_published_dependency_identity._EXPECTED_DIGESTS` **逐字节一致**(产物已验证,发布前置工作兄弟批早已备好)。

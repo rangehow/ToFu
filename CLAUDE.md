@@ -530,6 +530,15 @@ verb model):
 
 > **Every new top-level `static/js/*.js` file MUST be added to `_BUNDLE_FILES`
 > in `lib/js_bundler.py`. Otherwise it loads as a silent no-op in production.**
+>
+> **Manifest freshness contract (2026-07-31):** `build_bundle()` re-reads
+> `_BUNDLE_FILES` / `_DEFERRED_FILES` / `_DEFERRED_ENTRY_POINTS` /
+> `_CRITICAL_FILES` from DISK on every build (`_refresh_manifest()`), so a
+> long-running server picks up edits WITHOUT a restart. The four assignments
+> MUST stay plain module-level literals (no concat / comprehension /
+> conditional) — `_extract_manifest_from_source()` parses them with
+> `ast.literal_eval` and anything clever fails LOUDLY (ERROR log +
+> last-known-good kept). Guarded by `tests/test_bundle_manifest_freshness.py`.
 
 `routes/common.py` rewrites `index.html` on every `GET /` and replaces all
 individual `<script defer src="static/js/*.js">` tags with a single

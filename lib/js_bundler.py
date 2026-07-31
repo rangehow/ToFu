@@ -18,6 +18,7 @@ unchanged, so a bare ``python server.py`` (e.g. a Mac with no node) is byte-for
 script-mode esbuild never renames the top-level globals index.html's inline
 ``onclick=`` handlers depend on, and never tree-shakes a top-level definition).
 """
+import ast
 import contextlib
 import hashlib
 import os
@@ -1022,6 +1023,98 @@ _DEFERRED_ENTRY_POINTS = (
     'openProjectBrain', 'toggleProjectBrain', 'openProjectBrainInfluence',
 )
 
+# ── Bundle-manifest freshness (2026-07-24 / 2026-07-31 incident class) ──
+# The four manifests above are bound ONCE at import. A long-running server
+# whose manifest file changes AFTER process start (a deploy, a sibling edit)
+# used to keep rebuilding from that import-time-frozen binding: the rebuild
+# gate (_source_max_mtime stats THIS file) correctly fired, but the build
+# then assembled the OLD list — silently dropping every newly-added file
+# from the shipped bundle (2026-07-24 core/model_caps.js → every model
+# picker threw ReferenceError; 2026-07-31 core/conv_save.js → ReferenceError
+# at 108 call sites, with core/conv_verify_retry.js missing from the same
+# artifact). The fix: build_bundle() re-reads the manifests from DISK via
+# _refresh_manifest() below, so the build can never lag the file. Keep the
+# four assignments PLAIN module-level literals: _extract_manifest_from_source
+# parses them with ast.literal_eval, and a smarter expression (concat /
+# comprehension / conditional import) makes the refresh fail LOUDLY (ERROR
+# log + last-known-good kept), never silently. Guarded by
+# tests/test_bundle_manifest_freshness.py.
+def _extract_manifest_from_source(path):
+    """Re-parse the four bundle manifests from this module's on-disk source.
+
+    Uses ast (never exec), so refreshing can never re-run module-level side
+    effects. Returns ``(bundle_files, deferred_files, entry_points,
+    critical_files)`` as fresh container objects. Raises (loudly) when any
+    of the four is not a plain literal assignment.
+    """
+    with open(path, encoding='utf-8') as f:
+        tree = ast.parse(f.read(), filename=path)
+    wanted = ('_BUNDLE_FILES', '_DEFERRED_FILES', '_DEFERRED_ENTRY_POINTS',
+              '_CRITICAL_FILES')
+    found = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name) or target.id not in wanted:
+            continue
+        value = node.value
+        if target.id == '_CRITICAL_FILES':
+            # frozenset({...}) — peel the call, literal-eval the set body.
+            if (not isinstance(value, ast.Call)
+                    or not isinstance(value.func, ast.Name)
+                    or value.func.id != 'frozenset' or len(value.args) != 1):
+                raise ValueError(
+                    '_CRITICAL_FILES must stay a plain frozenset({...}) literal')
+            found[target.id] = frozenset(ast.literal_eval(value.args[0]))
+        else:
+            found[target.id] = ast.literal_eval(value)
+    missing = [w for w in wanted if w not in found]
+    if missing:
+        raise ValueError(
+            f'{path}: manifest assignment(s) missing or no longer plain '
+            f'module-level literals: {missing}')
+    return (list(found['_BUNDLE_FILES']), list(found['_DEFERRED_FILES']),
+            tuple(found['_DEFERRED_ENTRY_POINTS']), found['_CRITICAL_FILES'])
+
+
+try:
+    _manifest_source_mtime = os.path.getmtime(__file__)
+except OSError:  # module file unreadable at import — refresh keeps retrying
+    _manifest_source_mtime = 0.0
+
+
+def _refresh_manifest():
+    """Re-bind the four manifests from disk when this file changed.
+
+    mtime-gated: a no-op when nothing changed, so callers on hot paths pay
+    one stat. Fail-safe: any read/parse error keeps the last-known-good
+    lists (a stale-but-working bundle beats no bundle) and logs ERROR.
+    Returns True when the manifests were actually re-read.
+    """
+    global _BUNDLE_FILES, _DEFERRED_FILES, _DEFERRED_ENTRY_POINTS, _CRITICAL_FILES
+    global _manifest_source_mtime
+    try:
+        current = os.path.getmtime(__file__)
+    except OSError as e:
+        logger.warning('[Bundle] cannot stat %s (%s) — keeping last-known-good manifest',
+                       __file__, e)
+        return False
+    if current <= _manifest_source_mtime:
+        return False
+    try:
+        fresh = _extract_manifest_from_source(__file__)
+    except Exception as e:
+        logger.error('[Bundle] manifest re-parse failed: %s — keeping last-known-good manifest',
+                     e, exc_info=True)
+        return False
+    _BUNDLE_FILES, _DEFERRED_FILES, _DEFERRED_ENTRY_POINTS, _CRITICAL_FILES = fresh
+    _manifest_source_mtime = current
+    logger.info('[Bundle] bundle manifests re-read from disk: %d core + %d deferred files, %d entry points',
+                len(fresh[0]), len(fresh[1]), len(fresh[2]))
+    return True
+
+
 # Global state
 _bundle_filename = None    # e.g. 'bundle-a3f8b2c1.js'  (core)
 _feature_filename = None   # e.g. 'feature-b7c1d2e3.js' (deferred; None if empty/failed)
@@ -1349,6 +1442,14 @@ def build_bundle():
     t0 = time.time()
 
     with _build_lock():
+        # Re-read the manifest from disk BEFORE anything in this build can
+        # consume it (pack extraction below reads _BUNDLE_FILES per call via
+        # lib/i18n_boot_keys). Without this, a long-running process whose
+        # module was imported before the last manifest edit assembles the
+        # import-time-frozen list — the rebuild gate fires, yet the shipped
+        # bundle silently lacks every file added since process start.
+        _refresh_manifest()
+
         # i18n single-language packs (Epic-E sub-part 1 slice 2) — emit FIRST,
         # before assembling the core bundle, so the bundle's shape (with vs
         # without i18n.js) can be decided by whether packs exist. FAIL-OPEN:

@@ -42,6 +42,9 @@ MODEL_PRICING = {
     # row: cost keys on the WIRE id, the picker's display name on the LOGICAL
     # one — see lib/llm_dispatch/model_entry.py.
     'claude-opus-5':             {'input': 5.0,   'output': 25.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Opus 5'},
+    # Sonnet 5 (2026-06-30, 1M ctx native): PROMO $2/$10 until 2026-08-31,
+    # then $3.0/$15.0 — update this row on 09-01.
+    'claude-sonnet-5':           {'input': 2.0,   'output': 10.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Sonnet 5'},
     'claude-opus-4.8':           {'input': 5.0,   'output': 25.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Opus 4.8'},
     'claude-opus-4.7':           {'input': 5.0,   'output': 25.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Opus 4.7'},
     'claude-opus-4.6':           {'input': 5.0,   'output': 25.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Opus 4.6'},

@@ -25,6 +25,10 @@ DEFAULT_SLOT_CONFIGS = {
     # Meituan-gateway name for Fable 5 (Jul 2026 marketplace) — pricier tier
     # than the public API (¥72/¥360 per 1M ≈ $9.94/$49.72).
     'claude-fable-5':                {'caps': {'text', 'vision', 'thinking'},      'rpm': 30,  'latency': 5000, 'cost': 0.030},
+    # ── Claude (Anthropic — 5th gen: Sonnet 5, Jun 2026) ──
+    # Promo price $2/$10 until 2026-08-31, then $3/$15 — at $3 input the
+    # derived 'cheap' tag no longer applies; drop it when the price row moves.
+    'claude-sonnet-5':               {'caps': {'text', 'vision', 'thinking', 'cheap'}, 'rpm': 50,  'latency': 2000, 'cost': 0.009},
     # ── Claude (Anthropic — current gen: 4.8 flagship, May 2026) ──
     'claude-opus-4-8':               {'caps': {'text', 'vision', 'thinking'},      'rpm': 30,  'latency': 5000, 'cost': 0.015},
     # ── Claude (Anthropic — 4.7 family, Apr 2026) ──

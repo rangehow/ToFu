@@ -196,9 +196,57 @@ function _completeLogin(provider, code, state) {
 // fetch is preflight-blocked; and the server's egress is geo-blocked. The
 // one network that CAN reach them is the user's own terminal (with VPN), so
 // we hand them the exact curl and accept the token JSON they paste back.
-function _buildCurlCommand(provider, code, state) {
+// The command is rendered for a CHOSEN shell, and all renderings are offered
+// rather than one being sniffed. The reason is not that sniffing is fragile
+// (though it is — navigator.platform is deprecated and userAgentData is
+// Chromium-only): it is that the browser's platform is not evidence of the
+// TARGET shell. This path exists because neither the browser nor the server
+// can reach the token endpoint, so the terminal the user pastes into is
+// routinely on a different machine than this page (self-hosted server +
+// remote browser, VS Code tunnel, WSL). A sniff would hand those users a
+// command that cannot run, with no way to switch. The sniff below therefore
+// only decides which variant is shown FIRST.
+var _CURL_SHELLS = ['bash', 'powershell', 'cmd'];
+var _CURL_SHELL_LABELS = { bash: 'bash / zsh', powershell: 'PowerShell', cmd: 'CMD' };
+
+function _curlDefaultShell() {
+  var ua = '';
+  try { ua = (navigator && navigator.userAgent) || ''; } catch (e) { ua = ''; }
+  return /Windows/i.test(ua) ? 'powershell' : 'bash';
+}
+
+// Render one curl invocation with the quoting + continuation rules of `shell`.
+function _renderCurl(shell, url, contentType, body) {
+  if (shell === 'cmd') {
+    // CMD groups arguments with double quotes ONLY, and has no line
+    // continuation that survives a quoted payload — hence one long line.
+    // Inner characters follow the MSVCRT rules curl.exe itself parses with,
+    // and those rules are precise about backslashes: a backslash is LITERAL
+    // unless it sits in a run immediately before a quote. So doubling every
+    // backslash is WRONG (a payload `\` would arrive as `\\`) — only a run
+    // that precedes a quote, or the end of the payload (the wrapper quote
+    // follows it), may double. Quotes themselves escape as `\"`.
+    var cmdBody = body.replace(/\\+(?="|$)/g, function (m) { return m + m; })
+                      .replace(/"/g, '\\"');
+    return 'curl "' + url + '" -H "Content-Type: ' + contentType + '" --data-raw "' + cmdBody + '"';
+  }
+  if (shell === 'powershell') {
+    // `curl` is an ALIAS for Invoke-WebRequest in PowerShell, which does not
+    // accept -H / --data-raw — the real binary must be named explicitly.
+    // Backtick is the continuation character; single-quoted strings are
+    // literal (no interpolation), with `'` escaped by doubling.
+    var psBody = body.replace(/'/g, "''");
+    return "curl.exe '" + url + "' `\n  -H 'Content-Type: " + contentType + "' `\n  --data-raw '" + psBody + "'";
+  }
+  // POSIX shells: single-quoted literal, closed/re-opened around any quote.
+  var shBody = body.replace(/'/g, "'\\''");
+  return "curl '" + url + "' \\\n  -H 'Content-Type: " + contentType + "' \\\n  --data-raw '" + shBody + "'";
+}
+
+function _buildCurlCommand(provider, code, state, shell) {
   var ex = _oauthExchangeParams[provider];
   if (!ex || !ex.token_url || !ex.code_verifier) return '';
+  var contentType, body;
   if (ex.style === 'form') {
     var p = new URLSearchParams();
     p.set('grant_type', 'authorization_code');
@@ -206,18 +254,23 @@ function _buildCurlCommand(provider, code, state) {
     p.set('redirect_uri', ex.redirect_uri);
     p.set('client_id', ex.client_id);
     p.set('code_verifier', ex.code_verifier);
-    return "curl '" + ex.token_url + "' \\\n  -H 'Content-Type: application/x-www-form-urlencoded' \\\n  --data-raw '" + p.toString() + "'";
+    contentType = 'application/x-www-form-urlencoded';
+    body = p.toString();
+  } else {
+    contentType = 'application/json';
+    body = JSON.stringify({
+      grant_type: 'authorization_code', code: code, state: state || ex.state || '',
+      redirect_uri: ex.redirect_uri, client_id: ex.client_id, code_verifier: ex.code_verifier,
+    });
   }
-  var body = JSON.stringify({
-    grant_type: 'authorization_code', code: code, state: state || ex.state || '',
-    redirect_uri: ex.redirect_uri, client_id: ex.client_id, code_verifier: ex.code_verifier,
-  });
-  return "curl '" + ex.token_url + "' \\\n  -H 'Content-Type: application/json' \\\n  --data-raw '" + body + "'";
+  var use = _CURL_SHELLS.indexOf(shell) >= 0 ? shell : _curlDefaultShell();
+  return _renderCurl(use, ex.token_url, contentType, body);
 }
 
 function _showCurlHelper(provider, code, state, reason) {
   var capP = provider === 'codex' ? 'Codex' : 'Claude';
-  var curl = _buildCurlCommand(provider, code, state);
+  var shell = _curlDefaultShell();
+  var curl = _buildCurlCommand(provider, code, state, shell);
   if (!curl) {
     _updateOAuthCard(provider, { status: 'error' });
     showAlert(t('settings.oauthTokenExchangeNoCmd', { reason: (reason || '') }));
@@ -236,14 +289,31 @@ function _showCurlHelper(provider, code, state, reason) {
     helper.style.marginTop = '10px';
     if (manualDiv) manualDiv.appendChild(helper);
   }
+  var tabs = _CURL_SHELLS.map(function(s) {
+    return '<button class="btn-small oauth-curl-shell' + (s === shell ? ' active' : '') +
+      '" data-shell="' + s + '" style="margin-right:4px">' +
+      escapeHtml(_CURL_SHELL_LABELS[s]) + '</button>';
+  }).join('');
   helper.innerHTML =
     '<p class="oauth-manual-hint" style="color:#e0a030">' +
     t('settings.oauthCurlHelp') + '</p>' +
+    '<div style="margin-bottom:6px">' + tabs + '</div>' +
     '<textarea readonly class="oauth-manual-input" id="oauth' + capP + 'Curl" ' +
     'style="width:100%;height:104px;font-family:monospace;font-size:11px;white-space:pre"></textarea>' +
     '<button class="btn-small" id="oauth' + capP + 'CurlCopy" style="margin-top:6px">' + escapeHtml(t('settings.oauthCopyCmd')) + '</button>';
   var ta = document.getElementById('oauth' + capP + 'Curl');
   if (ta) ta.value = curl;
+  // Re-render into the SAME textarea on switch, so the copy button below
+  // always carries whatever variant is currently displayed.
+  helper.querySelectorAll('.oauth-curl-shell').forEach(function(btn) {
+    btn.onclick = function() {
+      var s = this.getAttribute('data-shell');
+      if (ta) ta.value = _buildCurlCommand(provider, code, state, s);
+      helper.querySelectorAll('.oauth-curl-shell').forEach(function(b) {
+        b.classList.toggle('active', b === btn);
+      });
+    };
+  });
   var copyBtn = document.getElementById('oauth' + capP + 'CurlCopy');
   if (copyBtn) {
     copyBtn.onclick = function() {

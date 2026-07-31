@@ -209,6 +209,13 @@
   background: var(--s-white);
   color: var(--s-ink);
 }
+/* Active shell tab in the curl helper: without a visible "current" marker the
+   user can copy a command meant for a shell they did not intend. Equal
+   specificity to the plain-button rule above — must stay BELOW it to win. */
+.oauth-manual-fallback .btn-small.oauth-curl-shell.active {
+  background: var(--s-ink);
+  color: var(--s-white);
+}
 .oauth-notes {
   font-size: 12px;
   color: var(--s-muted);

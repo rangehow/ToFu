@@ -1,3 +1,19 @@
+### 2026-07-31(守卫校验的文件不是真正在跑的那个文件) — owner 问「exe 是不是最新版、发布流程自动吗」;三次发版全失败而 **32 条发布守卫全绿**,因为它们读的是本地文件、GitHub 跑的是另一份;而那份差异**是我们自己的导出流程造成的**(commit `a4320287`,3 文件 +391;新守卫 **9 条**(4 条失败先行),**NEUTER×5 各咬各的**,相邻环 **122/122**;**未推送**——分叉清点待 owner 拍板)
+
+- **★ owner 点出的那一层比我诊断的更深,而它解释了「为什么没人发现」:** `tests/test_desktop_build_workflow.py` 的 `_WORKFLOW = _ROOT / '.github/workflows/build-desktop.yml'` 读**本地**文件。本地从 7-29 起就是对的 ⇒ 30+ 条守卫**结构上永远绿**;而 GitHub 实际执行的是 7-23 的旧副本(`on: push tags: v*` + 已退役的 `macos-13`)。**根因类别不是「标签过期」,是「本地真源与已部署产物之间没有任何一致性检查」。**
+- **★ 而那份旧副本不是「忘了推」,是被我们**强推覆盖**的——这是本批最值得记的一条:** commit `128ad422`(「fix Intel leg — macos-13 → macos-15-intel」)是**直接在下游仓库**写的,它让 v0.14.2 成功发版,但从未回流。实测两条独立证据:①`git merge-base --is-ancestor 128ad422 HEAD` 判否;②`git fetch` 逐字打印 `+ 128ad422...59bc8254 main -> origin/main (forced update)`。`export.py` 以 re-`git init` + 非 ff 即 `--force` 的方式发布 ⇒ **下游独有的修改不是「丢失」而是「被回滚」,且全程零日志零告警**。三次发版(v0.15.0/0.15.1/0.15.2)因此各自饿死在同一个退役标签上:x86_64 腿排队**恰好 24h** 被自动取消,`release` 因 `needs:` 被 skip。
+- **★ 第二个发布远端此前没人提过:** `_GIT_REPOS['opensource']` 配了**两个** remote——`rangehow/ToFu` 与 `NiuTrans/ToFu`,实测**两者都停在同一个陈旧 sha `59bc8254`**。只覆盖第一个的守卫会在半个机队陈旧时报告「干净」,故新守卫对两个远端各跑一遍。
+- **落点 `tests/test_published_pipeline_drift.py`:** 拉已发布副本与本地**逐字节**对拍(`.github/workflows/{build-desktop,ci}.yml` + `scripts/release_assets.py`)。
+  - **为什么敢用「逐字节」而不是解析比字段:** 因为**实测**过前提——用 export.py 真实的 `_sanitize_source_opensource` 跑这三个文件,输出与输入**完全相同**(三个 True)。故这是真不变量而非近似。且更弱的比较会重新招回同一个 bug:**某个没人想到要比的字段**。
+  - **配套钉住这个前提**(`test_guarded_paths_survive_the_export_sanitizer`):若将来某个受保护文件开始被净化改写,漂移守卫就会因**正当理由**长红 ⇒ 被静音 ⇒ 套件失明。所以把前提做成独立断言,让失败信息指名真因,而不是让人去猜。
+  - **离线 SKIP 而非 PASS:** 证据在网络上,网络不可达意味着**没检查**;把「没检查」报告成「一致」正是本模块要消灭的那种谎言。
+- **NEUTER×5 各咬各的:** ①对**当前绿**的 `ci.yml` 改一个字符 → 它那两条(两个远端)红,还原后 sha 回到 `3bbef34f`;②注入一个会被净化的字面量 → **只有**前提测试红;③`TOFU_SKIP_NETWORK_TESTS=1` 与真死代理(`127.0.0.1:9`)两种方式 → **6 skipped,零 pass**;④撤销 spec 那一行 → 2 红;⑤dest 改成 `'.'` → **只有**落点测试红。
+- **★ 第一发 NEUTER 打空,而正确反应是先查变异有效性再下结论:** 我最初把 `PYTHON_VERSION` 换成 `PYTHON_VERSIOX`,守卫不咬。查 `grep -c` 实测 `ci.yml` 里该 token **出现 0 次** ⇒ 文件被原样写回,**变异本身是 no-op**,不是守卫失明。换成真实存在的 `name: CI` 后精确咬红。**判据:NEUTER 空转时,先证明变异真的改了字节(比 sha),再谈守卫是否承重。**
+- **`tofu.spec` 的真缺陷(随本版发):** `datas` 里 `browser_extension` 零命中,而 `routes/browser.py:171` 是**请求时**现场 walk `BASE_DIR/browser_extension` 打包、目录不存在即 404;`routes/api_v1/browser.py:91` 同源读出 `extensionPath`。⇒ **桌面版恰恰是那个「用户拿不到扩展」的发行版**,而它的用户最没有「clone 仓库加载文件夹」这条退路。守卫断言的是**行为**不是字面量:执行 spec 真实的 datas 构造逻辑(含它自己的 `os.path.exists` 过滤——正是这个过滤让遗漏变静默)并检查存活条目,同时钉住两个 handler 的路径推导,因为**包对了而 handler 算出别的路径同样是 404**。
+- **分叉清点(owner 指定的发版前置,66 个远端独有文件,零未分类):** promo/ 构建产物 26、`static/icons/pet/oneko/` 19(已被 7-30 宠物重设计取代)、egg-info 5、uploads fixtures 4、**tests/ 7 个(逐个查到上游有意删除的 commit:`aa6f7ea6`/`38ec59b6`×2/`364a7f4a`/`62f685b7`×2/`5892fdb3`)**、`write_tools.py`(本地已重构为**包**:`__init__/_ops/_paths/_text`)、`scheduler.js`(被 `lib/scheduler/*` 取代)、两个 provider 模板(`meituan_claude_code.json` 由 `22e6003a` 合并;`openai.json` 由 `bootstrap.py:176` 的代码内目录取代)、`data/config/.gitkeep`。**结论:没有一个是需要回流的下游独有修改** —— 唯一那个(`128ad422`)的内容**已被本地 7-29 那批以更完整的形式覆盖**(实测远端独有的 27 行非注释内容全部被本地版取代)。
+- **Chrome 那一问已定性关闭(不是「难」是「不允许」),开票 `pt_d30b63f98bfb4f70`:** Windows/macOS 外部安装的 `update_url` **必须指向应用商店**、本地 CRX **仅 Linux**;非商店 force_install **要求 AD 域**;`--load-extension` 在 **Chrome 137 已移除**(139 又移除 `--disable-extensions-except`)⇒ **要管理员权限也绕不过**。唯一出路是上架,前置两项本仓已记录的真缺陷:权限 17→10、`manifest.store.json` 漏 `downloads`(而 `background.js:1966` 真在调用)。
+- **验收边界:** 漂移守卫的 4 条红是**当前真实状态**,推送后自动转绿——它们现在就是那份「待发布」的量具。**本批未推送**,按 owner 指令等分叉清单签字。共享 HEAD 有兄弟 7 个文件 WIP,已用精确 pathspec + 计数门(=3)提交,事后核对兄弟改动一个不少。
+
 ### 2026-07-30(续·收口收出两条从来没人钉过的性质) — charter #24 最后 5 个手写剥离器迁完;但**本批真正的产出不是迁移,而是两发 NEUTER 打空**——它们打空的那一刻证明了这两个守卫赖以成立的性质**根本没有测试**(`pt_6d03c27e2feb4777` DONE;commit `1a759db4`,5 文件 +171/-148;5 套 **27/27**;**NEUTER×4 各咬各的、各一条**;全消费者环 **585/585**)
 
 - **★ 票面把 6 个文件按「为什么不能盲迁」分了三组,而三组的答案都得靠实测,不能靠推理:**

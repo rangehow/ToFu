@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -130,6 +131,122 @@ def test_a_raising_spawn_callback_never_breaks_the_command():
 
     out = rc.tool_run_command('/tmp', 'echo survived', on_spawn=_boom)
     assert 'survived' in out and 'exit code: 0' in out
+
+
+# ══════════════════════════════════════════════════════════════════
+#  1b. The PROJECT-mode dispatch wires the spawn callback
+# ══════════════════════════════════════════════════════════════════
+#
+# Owner review (2026-07-31) caught that the first landing only wired the
+# STANDALONE path (_handle_code_exec), while project mode — the common case —
+# passed no on_spawn, so neither the deadline frame nor the forced checkpoint
+# ever happened exactly where they mattered. The same shape as the pet-drag
+# lesson recorded in JOURNAL: N entrances, N-1 implementations.
+
+def test_project_mode_run_command_publishes_deadline_and_checkpoints():
+    """Drive the REAL project-mode handler with a real subprocess and assert
+    the two things the owner demands: (1) the round ends up carrying
+    deadlineTs (from the spawn frame), (2) a checkpoint was forced."""
+    import lib.tasks_pkg.handlers.code_exec as ce
+    from lib.tasks_pkg.handlers.project import _handle_project_tool
+    from lib.tasks_pkg.manager import create_task
+
+    events = []
+    orig_append = ce.append_event
+    ce.append_event = lambda task, ev: events.append(dict(ev))
+    checkpoints = []
+    import lib.tasks_pkg.manager as mgr
+    orig_ckpt = mgr.checkpoint_task_partial
+    mgr.checkpoint_task_partial = lambda task, force=False: checkpoints.append(force)
+    try:
+        round_entry = {'query': 'run_command', 'toolCallId': 'tc-proj-1',
+                       'status': 'searching'}
+        # A REAL task dict — the checkpoint/event machinery reaches for
+        # events_lock etc., which a bare dict does not have.
+        task = create_task('conv-proj-spawn',
+                           [{'role': 'user', 'content': 'run it'}], {})
+        _handle_project_tool(
+            task, {}, 'run_command', 'tc-proj-1',
+            {'command': 'echo proj-ok', 'timeout': 9}, 1, round_entry,
+            None, '/tmp', True)
+    finally:
+        ce.append_event = orig_append
+        mgr.checkpoint_task_partial = orig_ckpt
+
+    assert 'proj-ok' in (round_entry.get('results') or [{}])[0].get('output', ''), (
+        'sanity: the project-mode command did not actually run')
+    assert round_entry.get('deadlineTs'), (
+        'THE BUG THE OWNER CAUGHT: project mode published no deadlineTs — '
+        'the spawn callback was never wired into _handle_project_tool, so the '
+        'common case (a conversation WITH a project) rendered no countdown.')
+    assert round_entry.get('execStartTs'), (
+        'execStartTs missing on the project-mode round — the elapsed chip '
+        'would anchor on tStart (round ANNOUNCE) and over-report execution.')
+    spawn_evs = [e for e in events
+                 if e.get('type') == 'tool_progress' and e.get('deadlineTs')]
+    assert spawn_evs, 'no tool_progress frame carried the deadline on the wire'
+    assert any(checkpoints), (
+        'no forced checkpoint fired at spawn — switching conversations '
+        'mid-command is still a race in project mode.')
+
+
+def test_every_run_command_dispatch_point_wires_the_spawn_callback():
+    """Structural ratchet for the NEXT entrance.
+
+    The suite above proves the two known dispatch points work today. This
+    guard answers "what if someone adds a third dispatch point and forgets":
+    every callsite that passes on_chunk into a run_command execution must
+    also pass on_spawn — the two callbacks are one contract, never half.
+
+    Implemented as a FILE-LEVEL co-occurrence rule over lib/tasks_pkg: any
+    module that drives run_command's live output through
+    ``_make_run_command_progress_cb`` must ALSO wire the spawn clock through
+    ``_make_run_command_spawn_cb``. File level (not callsite level) because
+    the two call shapes differ — project mode builds a kwargs DICT
+    (``'on_chunk': _progress_cb``) while the standalone handler passes plain
+    keywords (``on_chunk=progress_cb``); a callsite regex would silently
+    cover only one. A new dispatch point in ANY file that wires the first
+    factory but not the second turns this red.
+    """
+    import glob
+
+    from tests._source_scan import strip_comments
+
+    offenders = []
+    pattern = os.path.join(ROOT, 'lib', 'tasks_pkg', '**', '*.py')
+    for path in glob.glob(pattern, recursive=True):
+        with open(path, encoding='utf-8') as fh:
+            live = strip_comments(fh.read(), lang='python', inline=True)
+        if '_make_run_command_progress_cb(' in live and \
+                '_make_run_command_spawn_cb(' not in live:
+            offenders.append(os.path.relpath(path, ROOT))
+    assert not offenders, (
+        'these modules stream run_command output but publish no spawn clock '
+        '— a countdown would silently never appear on their path (the exact '
+        'project-mode gap the owner caught):\n  ' + '\n  '.join(offenders))
+
+
+def test_remote_path_deliberately_publishes_no_deadline():
+    """Pins the DECISION (owner instruction 2), not an accident: the remote
+    bridge timeout bounds the server's WAIT for a result — it does not kill
+    the process on the user's machine. A deadlineTs there would render a
+    countdown to an event that never happens."""
+    path = os.path.join(ROOT, 'lib/tasks_pkg/handlers/project.py')
+    with open(path, encoding='utf-8') as fh:
+        src = fh.read()
+    # Strip comments BEFORE slicing: the function's own docstring-style
+    # comment explains WHY there is no deadlineTs — a naive substring check
+    # would match that prose and report the exact opposite of the truth
+    # (the same trap this suite's pipeline guard documents).
+    from tests._source_scan import strip_comments
+    live = strip_comments(src, lang='python', inline=True)
+    start = live.index('def _execute_remote_run_command')
+    body = live[start:live.index('\ndef ', start + 10)]
+    assert 'deadlineTs' not in body, (
+        'the remote bridge path must NOT publish deadlineTs — the server '
+        'cannot kill a process on the user machine, so the countdown would '
+        'be a lie')
+    assert 'bridge_timeout' in body  # sanity: we are reading the right fn
 
 
 # ══════════════════════════════════════════════════════════════════

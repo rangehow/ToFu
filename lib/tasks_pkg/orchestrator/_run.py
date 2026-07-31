@@ -58,9 +58,6 @@ from lib.tasks_pkg.server_message_store import (
     save_messages as _save_messages_to_store,
 )
 from lib.tasks_pkg.tool_dispatch import (
-    emit_tool_exec_phase,
-    execute_tool_pipeline,
-    parse_tool_calls,
     tool_label,  # noqa: F401  (re-exported by the package facade)
 )
 
@@ -112,9 +109,6 @@ from lib.tasks_pkg.orchestrator._deferred_inbox_flush import (
 from lib.tasks_pkg.orchestrator._cache_round_accounting import (
     stamp_round_cache_accounting,
 )
-from lib.tasks_pkg.orchestrator._sanitize_tool_call_args import (
-    sanitize_malformed_tool_call_args,
-)
 from lib.tasks_pkg.orchestrator._messages_snapshot import (
     emit_messages_snapshot_event,
 )
@@ -133,6 +127,9 @@ from lib.tasks_pkg.orchestrator._round_checkpoint import (
 )
 from lib.tasks_pkg.orchestrator._tool_timeout_breaker import (
     handle_tool_timeout_circuit_breaker,
+)
+from lib.tasks_pkg.orchestrator._tool_dispatch_round import (
+    run_tool_dispatch,
 )
 
 
@@ -821,40 +818,20 @@ def run_task(task: dict[str, Any]) -> None:
                                          round_num=round_num, tid=tid):
                 break
 
-            # ── Phase 1: Parse all tool_calls ──
-            #   Pass early_announced so parse_tool_calls skips re-emitting
-            #   tool_start events that were already sent during streaming.
-            parsed_tcs, rs.tool_round_num = parse_tool_calls(
-                rs.assistant_msg, task, round_num, rs.tool_round_num, project_enabled,
-                early_announced=_stream_acc.announced_tc_map,
+            # ── Per-round tool dispatch: parse → sanitize → emit →
+            #   heartbeat → execute → pop live ref. Extracted 2026-07-31
+            #   (pt_03f4cdf1 slice 22) to
+            #   lib.tasks_pkg.orchestrator._tool_dispatch_round — see that
+            #   module's docstring for the early_announced / reaper-
+            #   heartbeat / timeout-flag contracts. Returns the pipeline's
+            #   _tool_timed_out flag for the circuit breaker below.
+            _tool_timed_out = run_tool_dispatch(
+                task, rs, messages, all_search_results_text,
+                round_num=round_num, tid=tid,
+                cfg=cfg, project_path=project_path,
+                project_enabled=project_enabled, tool_list=tool_list,
+                announced_tc_map=_stream_acc.announced_tc_map,
             )
-
-            # ── Phase 1b: Sanitize tool_calls in messages so the next API
-            #   round doesn't carry malformed JSON args back to the gateway.
-            #   Extracted 2026-07-31 (pt_03f4cdf1 slice 14) into
-            #   lib.tasks_pkg.orchestrator._sanitize_tool_call_args — see
-            #   that module's docstring for the HTTP-400 recovery rationale
-            #   and the RAW-args log-line evidence trail.
-            sanitize_malformed_tool_call_args(
-                parsed_tcs, messages,
-                tid=tid, conv_id=task.get('convId', ''), model=rs.model)
-
-            # ── Phase 2: Emit execution phase event ──
-            emit_tool_exec_phase(task, parsed_tcs)
-
-            # ── Phase 3: Execute tools (approval + parallel + result append) ──
-            # ★ Reaper heartbeat: a long tool run (or a human-guidance/approval
-            #   block inside it) emits no delta, so refresh the positive-
-            #   liveness clock before entering the pipeline. See
-            #   manager.reap_stuck_running_tasks.
-            task['_dispatch_heartbeat'] = time.time()
-            _tool_timed_out = execute_tool_pipeline(
-                task, parsed_tcs, cfg, project_path, project_enabled,
-                tool_list, messages, all_search_results_text, round_num, rs.model,
-            )
-
-            # Clean up live messages ref after tool execution
-            task.pop('_compact_messages', None)
 
             # ── Phase 4b: Consecutive tool-timeout circuit breaker ──
             #   Extracted 2026-07-31 (pt_03f4cdf1 slice 21) to

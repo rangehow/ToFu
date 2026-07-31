@@ -80,6 +80,27 @@ if (typeof window !== 'undefined') window.convAutoTranslate = convAutoTranslate;
 function assistantTailIsPriorTurn(msg, activeTaskId) {
   if (!msg || msg.role !== 'assistant') return false;
   const _staleTaskId = !!(msg._taskId && msg._taskId !== activeTaskId);
+  /* ★ IDENTITY WINS over a terminal field (2026-07-31, conv ms8c0645hwl327).
+   *   A tail explicitly BOUND to the task now connecting is that task's own
+   *   bubble — never "a prior turn" — no matter what `finishReason` says.
+   *
+   *   Why the extra arm is load-bearing: `finishReason` is NOT reliably
+   *   terminal on the wire. The orchestrator stamps task['finishReason']
+   *   ~111 lines before it flips task['status']='done' (_finalize.py), and
+   *   that window contains the blocking `_generate_tool_summary` LLM call —
+   *   seconds, not microseconds. A poll landing inside it copies a
+   *   finishReason onto a message whose turn is still generating. Treating
+   *   that as "prior turn" made connectToTask push a fresh placeholder with a
+   *   NEW _msgId; the deltas moved there, the original bubble froze
+   *   mid-sentence, and the next repaint painted BOTH — two bubbles for ONE
+   *   conv.messages entry.
+   *
+   *   The `!!finishReason` arm is deliberately KEPT for tails NOT bound to
+   *   this task: `_taskId` is not persisted, so a DB-loaded completed tail has
+   *   none and must still be preceded by a fresh placeholder (the reload-safe
+   *   case pinned by test_frontend_connecttotask_taskid_dedupe.py Scenario D).
+   *   Narrowing to "identity wins" keeps that; DROPPING the arm would not. */
+  if (msg._taskId && activeTaskId && msg._taskId === activeTaskId) return false;
   const _isCompletedTurn = !!msg.finishReason;
   return _staleTaskId || _isCompletedTurn;
 }

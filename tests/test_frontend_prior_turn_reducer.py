@@ -115,11 +115,35 @@ check('current_task_empty_not_prior',
 // 2. tail owned by a DIFFERENT task → prior (push fresh)
 check('different_task_is_prior',
   f({ role: 'assistant', _taskId: 'T1', content: 'old' }, 'T2') === true);
-// 3. tail already has finishReason (completed) → prior even if same/no taskId
+// 3. tail already has finishReason (completed) but is NOT bound to this task
+//    → prior (push fresh). This is the RELOAD-SAFE arm: `_taskId` is not
+//    persisted, so a DB-loaded completed tail has none.
 check('finishreason_is_prior',
   f({ role: 'assistant', finishReason: 'stop', content: 'done' }, 'T2') === true);
-check('finishreason_same_task_is_prior',
-  f({ role: 'assistant', _taskId: 'T2', finishReason: 'stop' }, 'T2') === true);
+// 3b. ★ ROW INVERTED 2026-07-31 — IDENTITY BEATS A TERMINAL FIELD.
+//     This row used to assert `=== true`: a tail bound to THIS task was still
+//     called a prior turn whenever it carried a finishReason. That assertion
+//     WAS the duplicate-bubble bug, for two reasons:
+//
+//     (a) It contradicted its own call site. sse_pipeline.js resolves the slot
+//         bound to this taskId FIRST (_resolveAssistantByTaskId) and its
+//         comment claims that makes "a second bubble for the same task
+//         structurally impossible" — then this reducer threw that resolution
+//         away and pushed a fresh placeholder anyway.
+//     (b) `finishReason` is NOT reliably terminal on the wire. The orchestrator
+//         stamps task['finishReason'] ~111 lines before it flips
+//         task['status']='done' (lib/tasks_pkg/orchestrator/_finalize.py), and
+//         that window contains the blocking `_generate_tool_summary` LLM call.
+//         A poll landing inside it copied a terminal field onto a STILL-LIVE
+//         turn; this row then declared the live bubble a prior turn, the deltas
+//         moved to a new placeholder, and the first bubble froze mid-sentence
+//         while both rendered. Measured 2026-07-31 on conv ms8c0645hwl327: the
+//         DB held ONE assistant message while the screen showed TWO bubbles.
+//
+//     A tail explicitly bound to the task now connecting is that task's own
+//     bubble. Full chain: tests/test_duplicate_bubble_midturn_finish_reason.py.
+check('finishreason_same_task_is_not_prior',
+  f({ role: 'assistant', _taskId: 'T2', finishReason: 'stop' }, 'T2') === false);
 // 4. no _taskId, no finishReason (fresh in-flight placeholder) → NOT prior
 check('no_facts_not_prior',
   f({ role: 'assistant', content: '' }, 'T2') === false);
@@ -181,6 +205,33 @@ def test_prior_turn_reducer_neuter_drops_stale_taskid():
         'NC (stale-taskId disabled) should fail different_task_is_prior:\n' + out
     # finishReason path is unaffected by this neuter.
     assert 'PASS finishreason_is_prior' in out, out
+
+
+@pytest.mark.skipif(not _node_available(), reason='node not installed')
+def test_prior_turn_reducer_neuter_drops_own_task_arm():
+    """NEUTER: remove the identity-wins arm → a tail bound to THIS task that
+    carries a (possibly non-terminal) finishReason is misclassified as a prior
+    turn again. That misclassification is the duplicate-bubble bug, so this
+    proves the arm is load-bearing and not decorative.
+
+    The complement must keep passing under the same neuter: the reload-safe
+    `!!finishReason` arm is untouched, so the fix is a NARROWING rather than a
+    removal of the completed-turn decision.
+    """
+    reducer = _shipped_reducer()
+    neutered = reducer.replace(
+        '  if (msg._taskId && activeTaskId && msg._taskId === activeTaskId) return false;\n',
+        '', 1)
+    assert neutered != reducer, (
+        'neuter did not modify the reducer — the identity-wins arm is gone or '
+        'was reworded; re-derive this guard.')
+    out = _run(neutered, 'neuter_own')
+    assert 'FAIL finishreason_same_task_is_not_prior' in out, (
+        'removing the identity-wins arm no longer reproduces the '
+        'duplicate-bubble misclassification:\n' + out)
+    # The reload-safe arm must survive the neuter (different failure reason).
+    assert 'PASS finishreason_is_prior' in out, out
+    assert 'PASS different_task_is_prior' in out, out
 
 
 @pytest.mark.skipif(not _node_available(), reason='node not installed')

@@ -43,6 +43,28 @@ from lib.chat.persistence import extract_db_meta as _extract_db_meta
 
 logger = get_logger(__name__)
 
+# ── Terminal-field gate (2026-07-31, conv ms8c0645hwl327) ────────────────
+# `finishReason` (and the terminal metadata that travels with it) is a
+# TERMINAL signal: the frontend reads it as "this turn is over". But the
+# orchestrator stamps ``task['finishReason']`` ~111 lines BEFORE it flips
+# ``task['status']='done'`` (lib/tasks_pkg/orchestrator/_finalize.py), and that
+# window contains the blocking ``_generate_tool_summary`` LLM call — so it is
+# seconds wide, not microseconds. Polls landing inside it used to receive the
+# self-contradictory pair ``{status:'running', finishReason:'stop'}``.
+#
+# The frontend acts on that: `_pollFallback` copies `finishReason` onto the live
+# message, and `assistantTailIsPriorTurn` then classifies the task's OWN live
+# bubble as a PRIOR turn — so `connectToTask` pushes a fresh placeholder, the
+# deltas move to it, the first bubble freezes mid-sentence and BOTH render.
+# One conv.messages entry, two agent bubbles.
+#
+# Fix the SOURCE: a non-terminal snapshot never advertises terminal fields.
+# Everything else on the wire (content / thinking / toolRounds / phase /
+# progress chips) is explicitly still shipped while running — this withholds
+# only the fields that MEAN "finished".
+_TERMINAL_STATUSES = frozenset({'done', 'error', 'aborted', 'interrupted'})
+_TERMINAL_ONLY_KEYS = frozenset({'finishReason', 'usage', 'preset'})
+
 
 @api_v1_chat_bp.route('/api/v1/chat/abort-conv/<conv_id>', methods=['POST'], endpoint='ui_chat_abort_conv')
 @require_scope('chat')
@@ -164,10 +186,18 @@ def chat_poll(task_id):
             r['createdAt'] = int(_created * 1000)
         # Field list MUST mirror chat_poll's DB-path loop and
         # _extract_task_meta. See _extract_task_meta docstring.
+        # ★ Terminal fields are withheld until the REPORTED status is terminal
+        #   (see _TERMINAL_ONLY_KEYS above) so a running task can never ship a
+        #   `finishReason` — the contradiction that minted duplicate bubbles.
+        #   Keyed on `_reported_status` (the value actually shipped) so the
+        #   status and the terminal fields cannot disagree.
+        _terminal_ok = _reported_status in _TERMINAL_STATUSES
         for key in ('error', 'toolRounds', 'finishReason', 'usage', 'preset',
                      'toolSummary', 'phase', 'modifiedFiles', 'modifiedFileList',
                      'model', 'provider_id', 'thinkingDepth', 'apiRounds',
                      'compactionUsage'):
+            if key in _TERMINAL_ONLY_KEYS and not _terminal_ok:
+                continue
             if task.get(key):
                 r[key] = task[key]
         if task.get('id'):
@@ -321,9 +351,16 @@ def chat_poll(task_id):
         # _extract_task_meta. provider_id was previously dropped here
         # even though persist_task_result writes it into meta_json,
         # silently round-tripping through the DB.
+        # ★ Same terminal-field gate as the in-memory branch: under the sharded
+        #   reconnect verdict `effective_status` stays 'running' while the
+        #   persisted meta may already carry a finishReason, so gating only the
+        #   other branch would leave the identical contradiction reachable here.
+        _db_terminal_ok = effective_status in _TERMINAL_STATUSES
         for key in ('finishReason', 'usage', 'preset', 'toolSummary',
                      'model', 'provider_id', 'thinkingDepth', 'apiRounds',
                      'modifiedFiles', 'modifiedFileList'):
+            if key in _TERMINAL_ONLY_KEYS and not _db_terminal_ok:
+                continue
             if _db_meta.get(key):
                 r[key] = _db_meta[key]
         # ★ Endpoint mode: the in-memory task that held _endpoint_turns has

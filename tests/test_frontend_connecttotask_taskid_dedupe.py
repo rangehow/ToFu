@@ -27,10 +27,18 @@ THE FIX (identity-first, matched here against the shipped source):
      reconnect resolves by identity.
 
 What actually collapses the duplicate is (1)+(3): a LIVE stream re-targets its
-own slot by stable id (Scenario A2). On a reconnect to an ALREADY-finished task
-there is no stream left to accumulate into, so the fresh placeholder pushed by
-(2) stays EMPTY and the completed reply is preserved untouched — that is the
-contract asserted for Scenario A.
+own slot by stable id (Scenario A2). Since 2026-07-31 the reducer also makes
+IDENTITY BEAT a terminal field — a tail bound to THIS task is never a "prior
+turn", however `finishReason` reads — so a reconnect to an already-finished task
+re-targets that task's own slot and appends NOTHING (Scenario A). That extra arm
+exists because `finishReason` is not reliably terminal on the wire: the
+orchestrator stamps it ~111 lines before it flips `status='done'`, so a poll
+landing in that window put a terminal field on a still-LIVE turn and minted a
+second bubble. See tests/test_duplicate_bubble_midturn_finish_reason.py.
+
+The `!!finishReason` arm is PRESERVED for tails NOT bound to this task — that is
+the reload-safe case (Scenario D: a DB-loaded completed tail has no persisted
+`_taskId`), and narrowing it any further regresses it.
 
 NEUTERs: dropping the `_staleTaskId` arm makes a foreign task's still-open slot
 get reused; the rejected `_taskId &&` gate on the completed-turn arm makes a
@@ -164,14 +172,24 @@ function assistantCount(conv) { return conv.messages.filter(m => m.role === 'ass
  *    completed assistant (finishReason + _taskId=T), activeStreams already
  *    cleared by finishStream.
  *
- *    The DUPLICATE-BUBBLE bug was never about reusing this slot: the shipped
- *    reducer treats ANY completed tail as a prior turn (`!!finishReason`),
- *    which is the RELOAD-SAFE form (Scenario D). What actually prevents the
- *    second bubble is the identity-first resolver plus the fact that a
- *    reconnect to a finished task has no live stream to accumulate into.
- *    So the contract asserted here is the one the code really has: the
- *    placeholder is pushed, and it is EMPTY — the old turn's content is never
- *    replayed into it (that replay was the user-visible symptom). ── */
+ *    ★ CONTRACT REVERSED 2026-07-31 (pt duplicate-bubble root fix). This block
+ *    used to assert that a fresh EMPTY placeholder was pushed ahead of the
+ *    task's own completed reply, and the docstring conceded that placeholder
+ *    was merely harmless ("stays EMPTY"). It was not harmless: an empty
+ *    assistant bubble appended after a finished reply is itself a stray
+ *    bubble, and the same misclassification on a still-LIVE own-task tail is
+ *    the reported duplicate-bubble bug — the backend advertises a
+ *    `finishReason` while `status` is still 'running' (the ~111-line
+ *    finalize window around the blocking `_generate_tool_summary` call in
+ *    lib/tasks_pkg/orchestrator/_finalize.py), `_pollFallback` copies it onto
+ *    the LIVE message, and the reducer then declares the task's own live
+ *    bubble a "prior turn".
+ *
+ *    `assistantTailIsPriorTurn` now makes IDENTITY win: a tail bound to THIS
+ *    task is never a prior turn. So the correct contract is: re-target the
+ *    task's OWN slot, append NOTHING. The old turn is still never streamed
+ *    over, because a reconnect to a finished task has no live stream.
+ *    Scenarios B and D below pin that the protective arms are untouched. ── */
 function scenarioConv() {
   return { id: 'c1', messages: [
     { role: 'user', content: 'hi', _msgId: 'u1' },
@@ -185,8 +203,10 @@ function scenarioConv() {
   // The prior completed reply is preserved untouched — never streamed over.
   const old = conv.messages.find(m => m._msgId === 'a1');
   check('fixed_reconnect_preserves_old_reply', !!old && old.content === 'done reply');
-  check('fixed_reconnect_target_is_empty', r.target && (r.target.content || '') === '');
-  check('fixed_reconnect_target_not_old_slot', r.target && r.target._msgId !== 'a1');
+  // ★ REVERSED: the task's OWN slot is re-targeted, not shadowed by an empty twin.
+  check('fixed_reconnect_reuses_own_slot', r.target && r.target._msgId === 'a1');
+  check('fixed_reconnect_appends_nothing', r.appended === false);
+  check('fixed_reconnect_single_assistant', assistantCount(conv) === 1);
 })();
 
 // ── Scenario A2: a LIVE stream for this task re-targets its own slot by
@@ -314,10 +334,13 @@ def test_taskid_dedupe_collapses_duplicate_and_preserves_append():
     assert 'PASS neuter_stale_target_is_foreign' in output, output
     # … while the shipped reducer pushes fresh for that same slot.
     assert 'PASS fixed_foreign_open_slot_appends' in output, output
-    # Reconnect to a just-finished task: the prior reply is preserved and the
-    # new target is EMPTY — the old content is never replayed into it.
+    # Reconnect to a just-finished task: the prior reply is preserved AND the
+    # task's own slot is re-targeted rather than shadowed by an empty twin
+    # (contract reversed 2026-07-31 — see the Scenario A note in the harness).
     assert 'PASS fixed_reconnect_preserves_old_reply' in output, output
-    assert 'PASS fixed_reconnect_target_is_empty' in output, output
+    assert 'PASS fixed_reconnect_reuses_own_slot' in output, output
+    assert 'PASS fixed_reconnect_appends_nothing' in output, output
+    assert 'PASS fixed_reconnect_single_assistant' in output, output
     # A LIVE stream re-targets its own slot by stable id — no second bubble.
     assert 'PASS fixed_live_stream_no_append' in output, output
     assert 'PASS fixed_live_stream_single_assistant' in output, output

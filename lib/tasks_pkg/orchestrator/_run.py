@@ -31,7 +31,7 @@ from lib.tasks_pkg.manager import (
     _strip_base64_for_snapshot,  # noqa: F401  (re-exported by the package facade after slice 15)
     append_event,
     checkpoint_task_partial,  # noqa: F401  (re-exported by the package facade)
-    persist_task_result,
+    persist_task_result,  # noqa: F401  (re-exported by the package facade after slice 34)
     stream_llm_response,  # noqa: F401  (re-exported by the package facade)
 )
 from lib.tasks_pkg.commit_round import (  # noqa: E402
@@ -82,6 +82,7 @@ from lib.tasks_pkg.orchestrator._memory_prefetch import (
 from lib.tasks_pkg.orchestrator._resume_state import apply_resume_state
 from lib.tasks_pkg.orchestrator._post_loop import (
     finalize_after_loop,
+    handle_task_base_exception,
     handle_task_fatal,
 )
 from lib.tasks_pkg.orchestrator._teardown import finalize_task_lane
@@ -688,34 +689,12 @@ def run_task(task: dict[str, Any]) -> None:
         if handle_task_fatal(task, e):
             return
     except BaseException as be:
-        # ── Non-Exception fatal: cancel / kill / interpreter shutdown ──
-        # KeyboardInterrupt, SystemExit, and asyncio.CancelledError derive from
-        # BaseException, NOT Exception, so they slip past the handler above and
-        # would otherwise leave the task NON-TERMINAL forever — stranding its
-        # admission slot AND (on the headless API) its billing reservation
-        # until the slot TTL / janitor reclaims them. Emit the terminal
-        # DONE(error) so the terminal-callback chain (release slot + settle
-        # billing via on_terminal) still fires, then RE-RAISE so the
-        # cancel/shutdown semantics are preserved for the caller.
-        logger.error('[Orchestrator] run_task FATAL BaseException task=%s: %s',
-                     task.get('id', '?')[:8], type(be).__name__, exc_info=True)
-        try:
-            from lib.error_envelope import make_envelope as _make_env
-            task['error'] = _make_env(
-                'internal', detail=f'Task terminated: {type(be).__name__}',
-                model=task.get('config', {}).get('model', ''),
-                context='task-fatal-base', source='orchestrator', raw=str(be))
-            task['status'] = 'error'
-            task['finishReason'] = 'error'
-            if not task.get('_endpoint_managed'):
-                append_event(task, build_event(
-                    EventType.DONE, error=task['error'], finishReason='error'))
-                persist_task_result(task)
-        except Exception as _fin_err:
-            logger.error('[Orchestrator] BaseException terminal-finalize failed '
-                         'task=%s: %s', task.get('id', '?')[:8], _fin_err,
-                         exc_info=True)
-        raise
+        # ── Non-Exception fatal (cancel / kill / interpreter shutdown) —
+        # delegated to _post_loop.handle_task_base_exception (pt_03f4cdf1
+        # slice 34): stamps the internal envelope + terminal DONE + persist
+        # (endpoint-managed skips) so the admission slot + billing settle,
+        # then re-raises `be` itself (cancel/shutdown semantics preserved).
+        handle_task_base_exception(task, be)
     finally:
         # 5-step teardown lane extracted to
         # lib.tasks_pkg.orchestrator._teardown.finalize_task_lane

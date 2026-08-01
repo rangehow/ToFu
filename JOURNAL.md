@@ -1375,3 +1375,9 @@
 - **★ 共享树外科手术(第五种形态):** 兄弟 ms8xezn6(loopback fallback 批)的未提交 hunk 与我的改动**同文件交织**(oauth.js 6 hunk 中 3 个是他的、i18n.js 2 hunk 中 1 个是他的)。解法:`git diff -U2` 按标记词过滤 hunk → `git apply --cached` 只暂存我方 hunk → 全路径 add 独占文件 → **`git commit` 不带 pathspec**(此时暂存区本身已精选,带 pathspec 反而会按工作区全量提交)。提交后实测:兄弟 hunk 在工作区零损失(grep 计数核对),已 project_message 交接。**判据:「commit -- <paths> 防卷走」在「单文件内交织」时失效——pathspec 的粒度是文件不是 hunk,交织时必须降到 patch 粒度。** 另:globals.generated.d.ts 的 generator 用 `git ls-files` 扫源,**新文件必须先 git add 再 regen**,否则符号进不了 d.ts。
 - **预存红独立立案 `pt_3b4ad38957dd478e`:** tsc 棘轮(BASELINE=0)4 错全为 HEAD 原生——stall_watch.js×3(aaf42a87 C1 批)+oauth.js:136 _statusCode(egress S2 批);本批零新增 tsc 错。
 - **验收边界:** 前端+ bundler Python 清单变更,**需重启 + bundle 重建生效**(manifest freshness 门自动触发重建,但 _BUNDLE_FILES 是 server 端 Python,进程要重启才会读新清单)。
+
+### 2026-08-01(tsc 棘轮归零:4 错全为真行为,修法是「沿用已有 widening 先例」而非各点打补丁) — 脑派自票闭环 `pt_3b4ad38957dd478e`(我自己立案);commit `806b4e0f`(2 文件 +13/-2;tsc **4→0**,棘轮 2/2、globals 守卫 6/6、stall_watch 7/7、undef-symbols 10/10、egress+向导 17/17)
+
+- **三错三根因,全不是「类型写错」而是「类型系统看不见的真行为」:** ①oauth.js:136 `err._statusCode`——egress S2 的服务端错误码透传,`_completeLogin` 重试分类器真在读它;而**同文件早有先例**:`interface Error { _upstreamStatus }`(浏览器交换同款透传)——扩那一行,**oauth.js 零改动**,与在途 loopback epic(ms9ow2ttm0gnu0)零交集;②`window._STALL_WATCH_THRESHOLD_S`——测试缝覆盖,生产从不赋值,按 `Navigator.userAgentData?` 先例声明为**可选**(可选本身在表达「缺席是常态」);③`unref×2`——`_stallTimer` 双形态属实(DOM number / node Timeout),绑定处标 `any` 带 why 注释,胜过两处丑陋 cast。
+- **判据:widening 文件的注释即档案。** `globals.d.ts` 每条 interface 扩展都写着「为什么这是真行为不是 bug」——新增条目必须自带出处(谁赋值、谁读取、哪个测试缝),否则审查者无法区分「scoped loosening」和「悄悄放水」。守卫 `test_ambient_dom_widening_stays_scoped_not_blanket` 只挡 index signature,注释纪律靠人。
+- **自己的坑(立档):** commit message 里的反引号被 sh 当命令替换执行,`interface Error`/`any` 两处被吞、消息残废——**含反引号的提交消息一律 `git commit -F <file>`**,heredoc 写文件不走 shell 二次解释。amend 前已核 HEAD 仍是己提交(共享树 amend 的铁律:兄弟可能已在上面叠了提交)。

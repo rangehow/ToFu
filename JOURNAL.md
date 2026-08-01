@@ -1,3 +1,10 @@
+### 2026-08-01(api-contract 批 9:conversations.py 10 站点清零——两处裸数组的「后端单方」协调迁移) — epic `pt_931e16c4` 切片 9;commit 见下(4 文件);环 **128/128**;NEUTER×2 各咬一支
+
+- **关键判点(裸数组判例补完):** L374/L382 是 GET /api/v1/conversations 的 ?full=1 与默认 metadata 两个**裸数组**分支。与 orchestrations 不同——这里**无第一方消费方**(UI 走 ?meta=1 ETag 通道或 ?before 信封;HEADLESS_API.md 未钉形状,且该默认形状本就无版本演变过一次:全体消息→metadata)。判:后端单方包 `api_ok({'items': convs})`,commit 明文标注「对假想外部裸数组读者是刻意形状变更」。**契约 §4 判例完整化:有第一方消费→双侧协调(orchestrations);无第一方消费且形状未对外钉死→后端单方 + 明文公告。**
+- **NEUTER-2 新形态:** 不只是回注 jsonify——把包装解回 `api_ok(convs)`(保留信封但丢 items 键,list 非 dict 时 api_ok 直接**丢整个数组**)→ `'items': convs` needle 精确咬。证明闸的不只是「jsonify 回来了」,还有「包装形状退化」。
+- **纪律:** failing-first 精确 1 红;NEUTER×2 cmp 还原;导入冒烟;环 **128/128**。幽灵连续第五批零干预。
+- **进度账:** 272→**148 站点 24 文件**(134 已清零,49.3%——过半在即)。剩余:paper.py 47(拆分路线图)、common.py 14(兄弟 WIP)、chat.py 11、config.py 8、oauth.py 7、translate.py 7、artifacts.py 7、api_v1/oauth 5、motion 5、browser 5、auth 4、push 3(兄弟)、conv_search 3、chat_queue 3(裸数组族)、swarm 3、paper_folders 3、folders 3、conv_compaction 2、chat_poll_abort 2、endpoint 2、translate 1、_task_routes 1、desktop 1、audio 1。下一批 config.py(8)。
+
 ### 2026-08-01(播客切 Tab 掉进度根修:lookup 重挂被 dedup 键的 model/voice 分量拒之门外) — owner 报「点生成播客后切 Tab 立刻回到未生成态」;后端修复经共享树卷入兄弟 commit `a5f8f19d`(逐 hunk 复核与我规范逐字节一致),回归测试 commit `04ad575f`;播客套件 **17/17**、paper_media_ux 24/24,NEUTER 精确
 
 - **定案(前后端联合持久化缺口的真根):** 播客 dedup 索引键 = `(paper_hash, mode, lang, voice, model)`(model 分量是 cache-key-skew 护栏,防 B 模型请求加入 A 模型的活任务)。而面板的重挂 lookup 只发 `(paper_hash, mode, lang)`——**重挂的使命正是发现「那个在跑的任务是用什么 model/voice 起的」,调用方不可能预先报名**。于是 `_model=None`→键分量 `''`,与 start 注册的 `(…, 'kimi-k3')` 必然错配 → lookup miss → 无缓存 → `found:False` → `_initPodcastTab` 落 idle 渲染生成卡,后端 worker 却一直在跑。任何选了具体模型的播客 100% 复现;模型选择器上线前 start 也不带 model(`''==''` 恰好命中),所以这是模型进 dedup 键那天引入的回归。

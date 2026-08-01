@@ -4,7 +4,7 @@ import json
 import time
 
 import sqlite3
-from flask import Response, jsonify, request
+from flask import Response, request
 
 from lib.database import (
     DOMAIN_CHAT,
@@ -306,7 +306,7 @@ async def list_convs():
                 "WHERE user_id=? AND json_extract(settings,'$.folderId')=?",
                 (DEFAULT_USER_ID, folder_id), domain=DOMAIN_CHAT)
             envelope['totalCount'] = (cnt['c'] if cnt else 0)
-        return jsonify(envelope)
+        return api_ok(envelope)
 
     meta_only = request.args.get('meta') == '1'
     prefetch_id = request.args.get('prefetch', '').strip()
@@ -371,7 +371,10 @@ async def list_convs():
             'SELECT id, title, messages, created_at, updated_at, settings, rev FROM conversations WHERE user_id=? ORDER BY updated_at DESC',
             (DEFAULT_USER_ID,), domain=DOMAIN_CHAT)
         convs = [_conv_row_to_dict(r) for r in rows]
-        return jsonify(convs)
+        # Coordinated bare-array migration (contract §4, batch 9): the
+        # array moves under ``items``. No first-party consumer (the UI
+        # lists via ?meta=1 / ?before envelope); documented shape change.
+        return api_ok({'items': convs})
 
     # Metadata-only: skip the messages column entirely (msg_count is a stored
     # column, so we still report message counts without deserializing bodies).
@@ -379,7 +382,8 @@ async def list_convs():
         'SELECT id, title, msg_count, created_at, updated_at, settings, rev FROM conversations WHERE user_id=? ORDER BY updated_at DESC',
         (DEFAULT_USER_ID,), domain=DOMAIN_CHAT)
     convs = [_conv_row_to_meta_dict(r) for r in rows]
-    return jsonify(convs)
+    # Same bare-array migration as the ?full=1 branch above.
+    return api_ok({'items': convs})
 
 
 def _conv_has_live_task(conv_id):
@@ -1078,7 +1082,7 @@ async def get_conv(conv_id):
                     _schedule_reconcile_persist(conv_id, cleaned_full, sd,
                                                 expected_rev=_row_rev(r))
                 _maybe_backfill_narration_on_open(conv_id, served)
-                return jsonify(served)
+                return api_ok(served)
             except Exception as e:
                 logger.warning('[get_conv] windowed read failed conv=%s: %s — '
                                'failing open to full-blob path', conv_id[:8], e)
@@ -1093,7 +1097,7 @@ async def get_conv(conv_id):
     if _conv_has_live_task(conv_id):
         _served = _conv_row_to_dict(r)
         _maybe_backfill_narration_on_open(conv_id, _served)
-        return jsonify(_served)
+        return api_ok(_served)
 
     try:
         served, changed, cleaned, settings_dict = await run_pooled(
@@ -1106,13 +1110,13 @@ async def get_conv(conv_id):
             _schedule_reconcile_persist(conv_id, cleaned, settings_dict,
                                         expected_rev=_row_rev(r))
         _maybe_backfill_narration_on_open(conv_id, served)
-        return jsonify(served)
+        return api_ok(served)
     except Exception as e:
         logger.warning('[get_conv] GET-path reconcile failed for conv=%s: %s — '
                        'serving unreconciled row', conv_id[:8], e, exc_info=True)
         _served = _conv_row_to_dict(r)
         _maybe_backfill_narration_on_open(conv_id, _served)
-        return jsonify(_served)
+        return api_ok(_served)
 
 
 @conversations_bp.route('/api/v1/conversations/<conv_id>/preview', methods=['GET'])
@@ -1217,7 +1221,7 @@ async def debug_messages(conv_id):
         except Exception as e:
             logger.warning('[debug_messages] strip_base64 failed for conv=%s: %s — '
                            'returning raw messages', conv_id[:8], e)
-        return jsonify({'messages': messages, 'count': len(messages), 'approx': True})
+        return api_ok({'messages': messages, 'count': len(messages), 'approx': True})
     except Exception as e:
         logger.error('[debug_messages] Failed for conv=%s: %s', conv_id[:8], e, exc_info=True)
         return api_internal_error('internal_error')
@@ -2074,7 +2078,7 @@ async def patch_message(conv_id, msg_idx):
     if unknown:
         logger.warning('[patch_msg] conv=%s idx=%d REJECTED non-whitelisted keys: %s',
                        conv_id[:8], msg_idx, unknown)
-        return jsonify({'error': 'unsupported_keys', 'keys': unknown}), 400
+        return api_error('unsupported_keys', status=400, keys=unknown)
 
     return _finish(await run_pooled(lambda db: _patch_message_blocking(db, conv_id, msg_idx, data)))
 
@@ -2221,7 +2225,7 @@ async def patch_message_by_id(conv_id, msg_id):
     if unknown:
         logger.warning('[patch_msg_id] conv=%s id=%s REJECTED non-whitelisted keys: %s',
                        conv_id[:8], msg_id[:8], unknown)
-        return jsonify({'error': 'unsupported_keys', 'keys': unknown}), 400
+        return api_error('unsupported_keys', status=400, keys=unknown)
 
     return _finish(await run_pooled(lambda db: _patch_message_by_id_blocking(db, conv_id, msg_id, data)))
 

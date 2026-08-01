@@ -2912,7 +2912,13 @@ async def start_video_abstract_task():
     scene_author = data.get('scene_author')
     if scene_author is not None:
         scene_author = bool(scene_author)
-    res = start_video_abstract(
+    # Off-loop: start_video_abstract is a fully sync pipeline (PG report
+    # probe → FUSE source-file reads → a blocking LLM beat-writing call,
+    # tens of seconds). Run inline it froze the event loop for the whole
+    # request (2026-08-01: 39.6s stall → LoopWatch trip at
+    # lib/http_client.py — every SSE/WS connection dropped).
+    res = await asyncio.to_thread(
+        start_video_abstract,
         phash, lang=lang, voice=(data.get('voice') or '').strip(),
         speed=data.get('speed'), alignment=alignment,
         narration=bool(data.get('narration', True)),
@@ -3155,6 +3161,27 @@ async def lookup_podcast():
     from lib import tts as _tts
     eff_voice = voice or _tts.default_voice()
     tid = _podcast_index_get(phash, mode, lang, eff_voice, _model)
+    if not tid:
+        # Re-attach fallback: a LOOKUP caller cannot name the model/voice the
+        # RUNNING task was started with — discovering them is the lookup's
+        # job (the panel adopts the returned model). START dedup stays
+        # exact-key (a model-B start must never join model-A's task), but on
+        # an exact-key miss the lookup scans live tasks for (paper_hash,
+        # mode, lang), newest wins — the video-abstract lookup's semantics.
+        # Without it a run started with any concrete model was invisible to
+        # the re-attach and the tab regressed to the idle card mid-run.
+        best = None
+        with _podcast_tasks_lock:
+            for _t in _podcast_tasks.values():
+                if (_t.get('status') in ('pending', 'running')
+                        and _t.get('paper_hash') == phash
+                        and _t.get('mode') == mode
+                        and _t.get('lang') == lang
+                        and (best is None or _t.get('created_at', 0)
+                             > best.get('created_at', 0))):
+                    best = _t
+        if best is not None:
+            tid = best['task_id']
     if tid:
         # ★ The re-attach frame lands BEFORE the first poll, so it must carry
         #   the start clock too — otherwise a refreshed panel paints 0:00 for

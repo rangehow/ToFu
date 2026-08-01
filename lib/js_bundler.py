@@ -792,7 +792,15 @@ _BUNDLE_FILES = [
     # See feature-loader.js.
     # paper-reader.js — MOVED to _DEFERRED_FILES (lazy-loaded on first Paper
     # Reader open; ~54KB gzip). See feature-loader.js.
-    'project.js',
+    # project.js — SPLIT 2026-08-01 (Epic-E pt_3879f00e sub-7): the STATE
+    # subset (conv-project path helpers, _applyProjectData SSE entry,
+    # loadProjectStatus boot restore, project-bar render + bar
+    # interactions) lives in project_state.js BELOW (core); the PANEL
+    # (folder modal, browser, recent, apply-code, drop zones,
+    # approval/stdin/HG submit handlers) moved to _DEFERRED_FILES as
+    # project.js with 13 feature-loader stubs (openProjectModal and the
+    # chat-rendered approval/stdin/HG/undo/apply handlers).
+    'project_state.js',
     'memory.js',
     # Skill-package (.zip) drag/drop install (extracted from memory.js 2026-07).
     'memory_skill_install.js',
@@ -1109,6 +1117,14 @@ _DEFERRED_FILES = [
     # — myday_tasks.js shares its state object.
     'myday.js',
     'myday_tasks.js',
+    # Project PANEL (67KB after the sub-7 split) — deferred 2026-08-01.
+    # The state subset stays in core as project_state.js (loaded at the
+    # panel's old position, far above). The panel calls the state subset
+    # at RUNTIME via window scope; the two reverse bare calls from the
+    # state subset (saveRecentProject / closeProjectModal / _mpFolders
+    # reset) are typeof-guarded. Entry-point stubs cover the bar's
+    # openProjectModal and every chat-rendered submit handler.
+    'project.js',
 ]
 
 # The entry-point functions the feature bundle DEFINES. feature-loader.js
@@ -1142,6 +1158,17 @@ _DEFERRED_ENTRY_POINTS = (
     # closeDailyReport + _mydayTriggerGenerate are only reachable inside
     # the open modal, stubbed for defense-in-depth (image-gen precedent).
     'openDailyReport', 'closeDailyReport', '_mydayTriggerGenerate',
+    # Project panel (deferred 2026-08-01, Epic-E sub-7). openProjectModal
+    # is the always-visible project-bar opener; the rest are
+    # chat-rendered interactive handlers (write-approval buttons, stdin
+    # input/EoF, human-guidance choice/free-text, undo/redo modification
+    # cards, apply-code modal) — a click while the panel is in flight
+    # must load the bundle and dispatch, never ReferenceError.
+    'openProjectModal', 'closeProjectModal',
+    'resolveWriteApproval', 'submitStdinInput', 'submitStdinEof',
+    'submitHumanGuidanceChoice', 'submitHumanGuidanceFreeText',
+    'undoConvModifications', 'undoAllModifications', 'redoConvModifications',
+    'openApplyModal', 'closeApplyModal', 'confirmApplyCode',
 )
 
 # ── Bundle-manifest freshness (2026-07-24 / 2026-07-31 incident class) ──

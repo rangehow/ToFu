@@ -146,6 +146,16 @@ const _DEFERRED_ENTRY_POINTS = [
   // the real entry (always-visible topbar button); the other two are
   // defense-in-depth (only clickable inside the open modal).
   'openDailyReport', 'closeDailyReport', '_mydayTriggerGenerate',
+  // Project panel (deferred 2026-08-01, Epic-E sub-7). openProjectModal is
+  // the always-visible project-bar opener; the rest are chat-rendered
+  // interactive handlers (write-approval, stdin, human-guidance, undo/redo
+  // modification cards, apply-code modal) — a click while the panel is in
+  // flight must load the bundle and dispatch, never ReferenceError.
+  'openProjectModal', 'closeProjectModal',
+  'resolveWriteApproval', 'submitStdinInput', 'submitStdinEof',
+  'submitHumanGuidanceChoice', 'submitHumanGuidanceFreeText',
+  'undoConvModifications', 'undoAllModifications', 'redoConvModifications',
+  'openApplyModal', 'closeApplyModal', 'confirmApplyCode',
 ];
 _DEFERRED_ENTRY_POINTS.forEach(_installFeatureStub);
 window._DEFERRED_ENTRY_POINTS = _DEFERRED_ENTRY_POINTS;

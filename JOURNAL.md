@@ -1,3 +1,10 @@
+### 2026-08-01(自更新后台化 + 下载完成通知询问重启;下载慢根因实测=56MB tarball×GitHub 波动带宽) — owner 三问(后台完成/为什么这么慢/完成后通知再问重启);epic `pt_9fb04efc37a04fce` DONE;commit `1ec7f47f`(3 文件 +366/−26);新套件 **18 检查全绿 + NEUTER×2**;邻接环 update 家族+i18n 覆盖 **39/39**、i18n pack 家族 **70/70**
+
+- **下载慢根因(实测,非猜测):** v0.16.0 源码 tarball **55.8MB**(3392 文件),其中 **promo/ ≈26MB**(17.8MB NotoSansSC.ttf + 12 张幻灯片 PNG≈8.5MB)、**static/images/ ≈14MB**(文章封面 7.2MB/海报等)——**~72% 是营销资产不是服务器代码**;本机到 GitHub 吞吐实测 **0.05–1.8MB/s 剧烈波动**(同链路三次采样 51KB/s、350KB/s、1.79MB/s)→ 非 git 部署每次更新 3–15 分钟全耗在下载上。release assets(192MB linux 包等)不在源码更新路径内,无关。瘦身属 export 侧决策(promo/ 移出仓或转 release assets),已报 owner 未定夺,本批不动 export.py。
+- **前端缺口(比预想更基础):** 后端早已后台线程跑 apply + push 帧;缺口全在前端——①中途再开弹窗会重跑版本检查,「checking…」spinner 把活 stepper 冲掉(_updateStageEls 指向游离节点,进度全隐形);②done 帧在弹窗关闭时把重启卡渲进隐藏 DOM,**用户永远不知道下载完了**;③关弹窗无任何「仍在继续」反馈。
+- **修法(update.js 纯前端):** `_updateStageState` 逐 stage 记账→再开弹窗重放重建 stepper;`_updateDoneResult` 停泊终态→再开弹窗直渲重启卡;done/失败/超时帧在弹窗关闭时补 **可点 toast**(点成功 toast=直接走 restartServer 审批流,点失败 toast=开弹窗看详情);关弹窗中途补 info toast「后台继续」;`_runUpdateCheck` 守卫加 `_updateBusy`(镜像 `_restartActive` 判例);stepper 加「可关闭,后台继续」提示行。i18n 新增 7 键(zh+en)。
+- **纪律:** node --check 双 JS 过;新套件 NEUTER×2 各咬一支(摘 bg-done toast 调用→通知断言红;摘 `_updateDoneResult = r;`→再开弹窗重启卡断言红);显式 pathspec 提交,共享树兄弟脏文件零触碰。
+
 ### 2026-08-01(api-contract 批 10:config.py 8 站点清零——裸数组判例第三种形态「三方协调」) — epic `pt_931e16c4` 切片 10;commit 见下(6 文件);环 **131/131**;NEUTER×2 各咬一侧;**142/272=52.2% 过半**
 
 - **裸数组判例完整谱系(本批封版):** ①有第一方消费且 api.js 已解析(orchestrations)→ 双侧:后端包 + seam 解包,调用方零改;②无第一方消费且形状未对外钉死(conversations)→ 后端单方包 + commit 明文公告;③有第一方消费但 api.js 返回的是 **Response 未解析**(config templates)→ **三方**:后端包 + seam 改解析并解包(留 Array.isArray 回落)+ **唯一调用方**(provider_templates.js,其 Array.isArray 守卫恰是现成退化缝)改直消费。谱系三态齐全,契约 §4 从「一条规则」长成「一棵判定树」。

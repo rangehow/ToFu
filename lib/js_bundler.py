@@ -808,22 +808,36 @@ _BUNDLE_FILES = [
     # project.js with 13 feature-loader stubs (openProjectModal and the
     # chat-rendered approval/stdin/HG/undo/apply handlers).
     'project_state.js',
-    'memory.js',
+    # memory.js — MOVED to _DEFERRED_FILES 2026-08-01 (Epic-E sub-9,
+    # settings-panel six-pack ~123KB; full census note below at timer.js).
     # Skill-package (.zip) drag/drop install (extracted from memory.js 2026-07).
     'memory_skill_install.js',
-    'skills.js',
+    # skills.js — MOVED to _DEFERRED_FILES 2026-08-01 (Epic-E sub-9).
     # Skills-tab zip drag/drop + upload transport (extracted from skills.js 2026-07).
     'skills_install.js',
-    'preferences.js',
+    # preferences.js — MOVED to _DEFERRED_FILES 2026-08-01 (Epic-E sub-9).
     # orchestration.js + task-mode.js — MOVED to _DEFERRED_FILES (lazy-loaded
     # on first Orchestration Studio / Task Mode open; ~48KB gzip combined).
     # task-mode.js reads _ORCH_ICONS from orchestration.js only at RUNTIME
     # (typeof-guarded), and both load together in the feature bundle, so the
     # ordering constraint is preserved within _DEFERRED_FILES. See
     # feature-loader.js.
-    'optimizer.js',
-    'update.js',
-    'timer.js',
+    # optimizer.js + update.js + timer.js (+ memory.js / skills.js /
+    # preferences.js above) — MOVED to _DEFERRED_FILES 2026-08-01 (Epic-E
+    # pt_3879f00e sub-9, ~123KB of user-triggered settings panels out of
+    # the render-blocking core). Census: every panel opens via topbar
+    # badge / settings tab / mobile sheet; ZERO boot-path bare calls —
+    # settings/core_panel.js typeof-gates the three tab populates, and
+    # with stubs installed the gates DISPATCH (gate+stub composition).
+    # Boot-wiring hazards fixed in the same slice: update.js's version
+    # check rides _onReady (a deferred module lands AFTER window 'load',
+    # so the old listener would never fire); timer/optimizer polling
+    # self-arms at bundle land; mobile_panels.js's toggle wraps are
+    # re-runnable + identity-tracked and re-wrap on
+    # 'tofu:feature-bundle-loaded' (the real toggle clobbers the wrapper
+    # installed over the stub); skills_install.js's post-install
+    # _populateSkillsTab is typeof-gated. Suite:
+    # tests/test_frontend_settings_panels_deferred.py.
     # myday.js + myday_tasks.js — MOVED to _DEFERRED_FILES 2026-08-01
     # (Epic-E pt_3879f00e sub-6, 65KB out of the core). Census: ZERO
     # external JS callers (openDailyReport/closeDailyReport/
@@ -1137,6 +1151,16 @@ _DEFERRED_FILES = [
     # _BUNDLE_FILES moved-note); legacy embedded content wins when
     # present (mixed-shape bundles safe).
     'ui/finish_info_rich.js',
+    # Settings-panel six-pack (123KB) — deferred 2026-08-01 (Epic-E
+    # sub-9). All user-triggered (topbar badge / settings tab / mobile
+    # sheet); see the _BUNDLE_FILES moved-note for the boot-wiring fixes
+    # (_onReady conversion / mobile re-wrap / install gate).
+    'memory.js',
+    'skills.js',
+    'preferences.js',
+    'optimizer.js',
+    'update.js',
+    'timer.js',
 ]
 
 # The entry-point functions the feature bundle DEFINES. feature-loader.js
@@ -1185,6 +1209,17 @@ _DEFERRED_ENTRY_POINTS = (
     # chat-rendered on every assistant message, so its onclick must load
     # the feature bundle and build+show the popover, never ReferenceError.
     '_toggleCostPopover',
+    # Settings-panel six-pack (deferred 2026-08-01, Epic-E sub-9).
+    # Badge/tab/mobile-sheet entries + the three settings-core-panel tab
+    # populates (gate+stub: the typeof gate passes on the stub, which
+    # loads the bundle and dispatches instead of silently skipping the
+    # tab fill). The memory-modal pair is defense-in-depth (reachable
+    # only inside the open modal, myday precedent).
+    'openUpdateDialog', 'toggleTimerPanel', 'toggleOptimizerPanel',
+    'toggleMemory', 'openMemoryModal', 'closeMemoryModal',
+    'toggleMemoryAddForm', 'toggleMemoryFromModal',
+    '_populateSkillsTab', '_populatePreferencesTab',
+    '_renderSettingsUpdatePill',
 )
 
 # ── Bundle-manifest freshness (2026-07-24 / 2026-07-31 incident class) ──

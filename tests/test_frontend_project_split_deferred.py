@@ -106,9 +106,13 @@ def test_panel_not_in_core_state_not_deferred():
 def test_state_loads_at_panel_old_position():
     bundle, _df, _ep, _crit = _manifest()
     si = bundle.index('project_state.js')
-    assert bundle.index('memory.js') > si, (
+    # Anchor re-pointed 2026-08-01 (Epic-E sub-9): memory.js left core —
+    # the next surviving core file after project_state.js is now
+    # memory_skill_install.js. The invariant is unchanged: every core
+    # consumer below the panel's old slot must still resolve.
+    assert bundle.index('memory_skill_install.js') > si, (
         'project_state.js must sit at the panel\'s old position (before '
-        'memory.js) so every core consumer below it resolves')
+        'the memory family) so every core consumer below it resolves')
 
 
 # ---------------------------------------------------------------------------

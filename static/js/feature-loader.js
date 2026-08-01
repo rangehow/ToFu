@@ -166,6 +166,16 @@ const _DEFERRED_ENTRY_POINTS = [
   // every assistant message with cost info; click loads the bundle, then
   // builds + shows the popover from the _costCtxByMsg stash.
   '_toggleCostPopover',
+  // Settings-panel six-pack (deferred 2026-08-01, Epic-E sub-9).
+  // Badge/tab/mobile-sheet entries + the three settings-core-panel tab
+  // populates (gate+stub: the typeof gate passes on the stub, which
+  // loads the bundle and dispatches). The memory-modal pair is
+  // defense-in-depth (reachable only inside the open modal).
+  'openUpdateDialog', 'toggleTimerPanel', 'toggleOptimizerPanel',
+  'toggleMemory', 'openMemoryModal', 'closeMemoryModal',
+  'toggleMemoryAddForm', 'toggleMemoryFromModal',
+  '_populateSkillsTab', '_populatePreferencesTab',
+  '_renderSettingsUpdatePill',
 ];
 _DEFERRED_ENTRY_POINTS.forEach(_installFeatureStub);
 window._DEFERRED_ENTRY_POINTS = _DEFERRED_ENTRY_POINTS;

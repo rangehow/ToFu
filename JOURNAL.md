@@ -1,3 +1,10 @@
+### 2026-08-01(egress 真机验收:三次「agent 上线」全是 watcher 误报——timer condition_command 在本环境对退出码的观测不可靠;agent 从未连上的物理根因=服务器只听 127.0.0.1)
+
+- **铁证三连:** ①注册表 `GET /api/v1/oauth/egress-agent` 恒 `agents:[]`（`list_agents(user_id=None)` 无时间过滤，空=从未注册）;②access.log 全程**零** `POST /api/desktop/poll`（9MB 日志穷举所有 desktop POST 路径）;③自带日志的诊断 watcher 在触发那一拍记录的就是 `agents:[]`——谓词必退 1，框架却报 exit 0。三个「exit 0 触发」对 201+ 次「exit 1」轮询，误报定案。教训已立 memory `timer-watcher-false-positive-guard`:**本环境停用 timer condition_command 守候外部事件;谓词必须自带证据落盘,触发先验日志。**
+- **agent 连不上的物理根因:** 服务器(pid 2351494)仅监听 `127.0.0.1:15000`,办公机唯二可达途径是 VS Code 代理 `https://5665bc99-279b-4edf-8553-c7b7804c6e02-vscode-zw05.mlp.sankuai.com/proxy/15000`(access.log referer 实证用户浏览器就走它)。若 agent 按老 runbook 连 `http://<host>:15000` 必 Connection refused,`Cannot reach server, retrying` 死循环。agent 端 URL 拼接是裸字符串 concat(`_run.py:176`),base path 代理 URL 兼容。服务器未设 `TOFU_BRIDGE_SECRET`(environ 实测),免 `--bridge-secret`。
+- **正确启动命令(已挂板「Needs you」):** `python -m lib.desktop_agent --server https://5665bc99-279b-4edf-8553-c7b7804c6e02-vscode-zw05.mlp.sankuai.com/proxy/15000 --allow-egress`
+- **HEAD 守卫状态:** 兄弟 ms9ow2tt 的 loopback 双批(a7389194+d523797a)落在我的 07c216ca 之上后,egress 全族 **85/85** 绿(PYTEST_DISABLE_PLUGIN_AUTOLOAD=1——vispy 插件自动加载在本环境炸 collection,惯例);三契约点逐字未动,边界确认已回。epic pt_4ea6bf05 挂 [human-gated] 等 agent 上线,三键选项(已启动/报错贴输出/换打包端)。
+
 ### 2026-08-01(脑派自票 pt_c31cd8f3 闭环:charter-commit 注册断裂 = 撤销后测试漂移 ×2 守卫互搏,顺带抓出一处真指引文本 bug) — 3 commits(见下);SSOT **55/55**、自治 **8/8**、环 **226/226**;NEUTER×2 各咬各的(还原 cmp 字节级);**零 schema 改动**
 
 - **定案:不是注册断裂,是两个守卫互相矛盾。** SSOT 棘轮(0cc0aee1,较老)钉「commit 必须在 provides + write_tools」;撤销批的验收守卫(6c28925c,较新,owner 拍板 charter human-only)在同 epic 的 test_project_watch_lane 里钉「commit 必须**不在** provides **也不在** write_tools」——**两个守卫不可能同时绿**,4 红就是矛盾的可见臂。判胜据:撤销是 owner 拍板的更新设计,且其守卫还钉了「provides 是模型可见的广告面(phantom-tool trap)」这一理由。SSOT 侧纯漂移修:STATE_CHANGING_EXPECTATIONS 摘 commit(handler 只拒绝、零状态变更)、`test_charter_commit_is_declared` **反转**(v3 式,docstring 载考古)为 stays_undeclared、EXEMPT 加 commit(结构性豁免:拒绝 stub,理由写全)。**产品零改动。**

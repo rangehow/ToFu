@@ -1,4 +1,14 @@
 ### 2026-08-01(S2 落地:winbuilder.py 真建 Windows payload——六连陷阱全实测破解,双 payload 双 SHA 复现) — commit `704641fe`(2 源文件 + 1 新套件 **16/16**);**live 终验:81acff59 与 d887b685 两个 HEAD 各产出一个真 payload(152.7MB / 3316 文件 win_amd64 .pyd,`TOFU_SMOKE_OK version=0.16.0 blueprints=57`——冻结 Windows 应用在 wine 下真启动并导完全部蓝图树)**
+### 2026-08-01(续·刷新后逃生口消失:redirect_mode 收进服务端 flow 并经 status 投影) — owner 复核 `d523797a` 抓出「可达性依赖会话连续性」;修复 `be418f64`(4 文件;后端 25 + 前端 13,全环 **89/89**;**NEUTER×3 各咬各的**;epic `pt_0529eeedd91c484b`)
+
+- **owner 的证据链(我复核全部成立):** `get_oauth_status` 只投影 provider/status/error/email/authenticated/expire——**没有 redirect_mode 也没有 auth_url**;`#oauthClaudeManual` 默认 `display:none`;`_oauthApplyRedirectMode` 唯一调用点在登录回调(oauth.js:664)。桌面用户在 loopback 流程卡住后**第一个自然动作就是刷新** ⇒ 卡片从 status 重放成 waiting + 「取消并重试」,重试走同一自动判定 ⇒ 逃生口要打的无限循环,在最典型的用户路径上原样复现。
+- **根因比票面更深一层:** mode 在 `start_oauth_flow` 里是在 flow **存储之后**才算出来的——存储天然拿不到它,这不是「忘了投影」,是**计算顺序决定了它只能活在返回值里**。修法把计算前移到存储之前并收进 `_active_flows`,`get_oauth_status` 再投影 mode+auth_url。**判据:凡是「页面刷新后还要用」的决策,都必须收进服务端可投影的状态,不能只活在一次性响应里。**
+- **前端缝:** `_updateOAuthCard` waiting 分支在 status 带 mode 时恢复手工盒+应用 mode;**合成 waiting 态(exchange 中、curl 助手)无 mode 一律不动**——守卫 `test_synthetic_waiting_state_without_mode_leaves_box_alone` 专门钉这条,防恢复块误踩 curl 助手的手工盒。
+- **NEUTER×3:** 摘前端恢复块→精确 3 红(刷新类,合成态守卫保持绿);摘 status 投影→精确 3 红;flow 存储不带 mode→精确 2 红。还原一律 cp/cmp(不再用会连带清掉未提交编辑的 git checkout——上批已记入的教训,本批执行)。
+- **★ 锚点事故第四例(同族最刁形态):** `insert_content(position='before', anchor='class X:')` 的 content **尾部自带了锚点行** ⇒ 类声明行重复,两文件各一处 IndentationError。**教训补全:before 插入时 content 绝不能重复锚点任何一行——before 语义是「锚点保留在原位,内容贴到它前面」,content 里再写锚点就是复写。**
+- **边界:** 刷新后浏览器端 `_oauthExchangeParams` 丢失(预存,codex 同病)——逃生口重发会重新 stash,loopback 完成走服务端兑换不受影响,立此存照不扩面。真实 Anthropic 授权往返仍留真机打包版验收。
+
+### 2026-08-01(S2 落地:winbuilder.py 真建 Windows payload——六连陷阱全实测破解,双 payload 双 SHA 复现) — commit `704641fe`(2 源文件 + 1 新套件 **16/16**);**live 终验:81acff59 与 d887b685 两个 HEAD 各产出一个真 payload(152.7MB / 3316 文件 win_amd64 .pyd,`TOFU_SMOKE_OK version=0.16.0 blueprints=57`——冻结 Windows 应用在 wine 下真启动并导完全部蓝图树)**
 
 - **流水线(CI Windows 腿逐字):** git archive HEAD → nuget CPython(nupkg 纯 zip 完整 Python+pip,**绕开 32 位安装器问题**)→ pip(CI 逐字配方)→ gen_icons → PyInstaller → TOFU_SMOKE → payload 按 (git_sha, deps_stamp) 缓存(为 S3 每客户端 wrapper 省掉慢的一半)。
 - **六连陷阱(每个都有实测签名,全部钉进套件):** ①**wine 吞退出码**(摘 preloader 后直启路径 `sys.exit(3)`→0,proot 原生保真对照)⇒ 全部 wine 步走 `cmd /c "<inner> && echo 哨兵"`,判决只看 stdout 哨兵;②**宿主 python env 投毒**(`PIP_REQUIRE_VIRTUALENV=1` 透传杀首演,且被①隐藏)⇒ allowlist env 清洗;③**proot 解析 `env` 命令要 PATH**(清洗过头 `$PATH=(null)`)⇒ 最小 guest PATH;④**pip 构建隔离子 pip 只继承 env 不继承 CLI** ⇒ PIP_INDEX_URL 族以 env 桥接宿主镜像配置;⑤**wine 的 DNS 解析器对域名全挂**(guest 原生 getent 5/5 正常,wine 全族 FAIL;/etc/hosts 条目秒解)⇒ pip 索引域名钉进 guest /etc/hosts(标记块幂等);⑥**镜像有缺口**(pymupdf_layout==1.27.2.3 只认 pypi.org,代理 MITM 证书)⇒ pypi.org 保持 extra-index + trusted-host(与宿主 pip.conf 同姿势)。

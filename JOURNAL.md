@@ -1,3 +1,9 @@
+### 2026-08-01(脑派票闭环:podcast 五 handler 转 async——paper.py 预存红根治,carve-out 白名单保持「只说真话」) — 接我自己在 error.log 审计批立的 `pt_4c93d91c51724f1e`;commit `f4c33f8c`(1 文件 +15/-8;integrity **24/24**(原 1 红)、podcast 邻接 33/33、paper migration+import smoke 17/17、media-clocks 验收 PASS;**NEUTER**:回退一个 handler 为 sync → carve-out 守卫精确红,cp/cmp 还原);epic DONE
+
+- **定性:** Stage-4 native-async 大迁移时 podcast 家族 5 个 handler(`podcast_status`/`lookup_video_abstract`/`poll_podcast_task`/`get_podcast_script`/`serve_podcast_audio`)被留在 sync——不是「忘了加白名单」,是漏迁。修法选型关键:**3 个白名单成员用的是 send_file shim(转 async 会在 `run_coroutine_threadsafe().result()` 上死锁),而 serve_podcast_audio 用的是自实现 `_stream_file_response`(sync 生成器 + 手工 Range),Quart 在 Response 构造期就用 `run_sync_iterable` 包装 sync 可迭代体(wrappers/response.py:100 实证)——块读永远走 executor,与 handler 形态无关 ⇒ 5 个全部可转,白名单一行不用动,其「转换会死锁」的注释继续只对 send_file 家族为真。**
+- **判据(比票面深一层):** 三个 handler 经 `has_report`/`load_cached_podcast` 发起 `get_thread_db` 同步 PG 往返——裸转 async 会把 FUSE 上的 DB 调用搬上事件环(正是今天 daily_report 批修的缺陷类)。转换必须带 `asyncio.to_thread` 卸载,integrity 套件的 blocking-scan 同样覆盖此形态。
+- **顺手核实:** `test_code_quality`×4 红为干净 HEAD 原生(stash 实证,与相邻文件无关,保持另案);`TestNoBlockingCallsInAsyncHandlers` 对转换后文件保持绿(to_thread 传参形态不算 direct call)。
+
 ### 2026-08-01(脑派票闭环:tofu-search 0.5.4——pdf_extract 改走 classic pymupdf_rag 缝,RapidOCR 失配根治) — 接我自己在 error.log 审计批立的 `pt_7a80c4bb68364129`;**tofu-search 仓 commit `f58915c`**(4 文件;新套件 **3/3**,NEUTER 精确 2 红 cp/cmp 还原;全仓 **457 passed / 6 skipped**);epic DONE
 
 - **根因三层全部离线实证(每层都堵死一条懒路):** ①pymupdf4llm ≥1.26 顶层 `to_markdown` 在 `pymupdf.layout` 可导入时(本环境装了 trio 1.27.2.3)路由进新版 layout/OCR 流水线;②其 OCR 适配器(rapidtess/paddletess `exec_ocr:189`)调 `RapidOCR.text_detector`——拆 wheel 实证 **1.3.24 与 1.4.4 都叫 `text_det`**,该属性只存在于 ≤1.2,**降版本救不了**;③拆上游 1.28.0 wheel 实证同一调用还在(只是换成更响的 RuntimeError),**升版本也救不了**。触发闸是 analyze_page 按坏字符/高方差边缘图像投票 needs_ocr——纯色合成图不触发(方差≈0),噪声图实测触发同一 AttributeError。

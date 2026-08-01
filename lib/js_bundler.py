@@ -897,17 +897,19 @@ _BUNDLE_FILES = [
     # globals declared in core.js + main.js, so they MUST come after main.js).
     'compaction-viewer.js',
     'context-bar.js',
-    # The Tofu pet — a self-driven mascot mounted into #projectBar (tofu theme
-    # only via CSS). Queries the DOM + reads localStorage at RUNTIME only, so
-    # it can load anytime after main.js. No app-pipeline dependency; exposes
-    # window.TofuPet + listens on the 'tofu:activity'/'tofu:react' event seam.
-    'tofu-pet.js',
-    # The procedural Impressionist canvas backdrop for the project bar (tofu
-    # theme only via CSS). Asset-free brush-dab painter; reads the bar's
-    # [data-decor] (set by tofu-pet.js) + the app theme at RUNTIME only, no
-    # pipeline dependency, so it can load anytime after main.js. Exposes
-    # window.TofuScene; listens on the same 'tofu:decor' event seam.
-    'tofu-scene.js',
+    # tofu-pet.js + tofu-scene.js — MOVED to _DEFERRED_FILES 2026-08-01
+    # (Epic-E pt_3879f00e sub-part 3 slice C, the ~160KB decorative
+    # family out of the render-blocking core; see docs/EPIC_E_SIZE_LEDGER.md).
+    # Zero gates needed: the pair has ZERO external JS callers (the only
+    # cross-references are between the two and all window-guarded), the
+    # sole external reference (index.html sceneSwitchBtn onclick) is
+    # natively absence-safe (window.TofuPet&&…), the app→pet signal seam
+    # is fire-and-forget dispatchEvent (absent listeners = no-op), and
+    # both IIFEs self-boot through the readyState guard whenever the
+    # feature bundle lands. NO feature-loader stub by design (same
+    # no-one-time-wiring argument as health_stream_timer). The idle
+    # prefetch lands the pair ~2s after boot; the mount target
+    # #projectBar starts display:none, so no layout shift.
     # Cross-conversation live-presence strip — pure render subscriber on the
     # 'presence' push channel. Reads activeConvId / conversations /
     # getActiveConv (main.js) + _getConvProjectPath (project.js) + t (i18n.js)
@@ -1050,6 +1052,13 @@ _DEFERRED_FILES = [
     # exposes) touch only browser globals; every core symbol it reads is
     # in the core bundle which always loads first.
     'core/health_stream_timer.js',
+    # The decorative pet family (~160KB) — deferred 2026-08-01 (Epic-E
+    # sub-part 3 slice C). Zero gates + zero stubs (see the _BUNDLE_FILES
+    # moved-note for the census); tofu-pet.js first to preserve the
+    # core-bundle relative order, though every cross-reference between
+    # the two is window-guarded so the order is free.
+    'tofu-pet.js',
+    'tofu-scene.js',
 ]
 
 # The entry-point functions the feature bundle DEFINES. feature-loader.js

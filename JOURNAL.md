@@ -432,6 +432,13 @@
 - **生产实测挂起(非我故障):** runbook 扩 sub-5 六项后实测服务器 curl 000×3——进程活着(42.6% CPU、14.3GB RSS)但事件环停摆(cgroup 95.6% 反复 relief + FUSE 上 8s 慢查询,正是 pt_afbaf3d7/pt_ef42c2a1 两兄弟 epic 在修的「假离线」族)。**绝不重启(本会话自己的 run_task 就在该进程里跑)**;timer 追服务器恢复后自动补跑 runbook 并回写分类账。
 - **累计:** core 1,550,424 → 农场 1,418,722(−132KB 压缩态),距 1.2MB ~219KB;已降级源码 443KB。下一片:myday 面板对(先拆 `_mydayScheduleReminder` load-time 副作用)+ project.js 拆分(37 调用点,比照 tool_rounds「状态子集留 core」)。
 
+### 2026-08-02(Epic-E **COMPLETE**:core 1,550,424→1,045,274 B(−32.6%),12 片全账,终审三独立复核) — 脑派发 `pt_3879f00e` DONE;slice 35 顺带落地(_run.py 689 L)
+
+- **终审(我,claim-holder,三项独立复核非转述):** ①生产 runbook **52 项 ALL GREEN**,core `bundle-40dde573.js` **1,045,274 B**(余量 ~183KB,基线 −505KB);②ledger 12 行流水片片含 commit/字节/NEUTER/runbook 证据链;③deferral 套件家族 **143/143** 全绿(14 套件含 sub-10 的 branding 留 core + LoadGuard 摘钉双钉)。**判读:complete。**
+- **12 片流水(三种范式+双协作):** sub-1/2 i18n 拆包+conversations 分解(早期);sub-3A/3B/3C 整体降级 275KB;sub-4 tool_rounds 拆分(冷渲染留 core);sub-5A/5B/6 面板族降级;sub-7 project 状态拆分;sub-8 成本泡懒建;sub-9 设置面板六件;sub-10 mcp/oauth+终扫 403KB(兄弟落地)。feature bundle 1,012,457 B(~core 97%)——**下一战场是 feature 自身分层**(兄弟已自提名 Epic-F 普查),不属本 epic 口径。
+- **协作形态记账:** 本会话与 msagblke 的「普查先行+写集互斥+runbook/ledger 归片主」分工在 sub-8/9/10 三片跑通,零冲突双 blind 窗口;sub-8 一次真重叠(双方同开一片)以「写集零字节+stand-down」化解,立为后续协作判例。
+- **遗留小票:** `pt_248c41b0`(LoadGuard 含 openDailyReport,sub-6 我加错方向)未关,下一 dispatch 顺手摘。
+
 ### 2026-08-01(pt_03f4cdf1 四连发 slice 31-34:_run.py 776→707 L(−71.8%),owner 剩余三块全部落地) — 4 commits 各带 failing-first+NEUTER×2+sweep;sweep 328→336 全绿
 
 - **slice 31 `_provider_binding.py`(776→762):** provider-pin + conv-affinity(owner 点名块)。leaf 保原文惰性函数内 import ⇒ 行为测试须 patch 源模块(provider_pin/conv_affinity)而非 leaf 命名空间(与 sub-8「const 在 eval 词法域」同族但反向:此处是 `from X import f` 在函数内,X.f 在调用时解析)。

@@ -859,27 +859,35 @@ _BUNDLE_FILES = [
     # The 15 files below were extracted from settings.js (4755 LOC).
     # Concatenated in load order; symbols share window scope.
     # See `.tofu/memories/frontend-settings-decomposition.md`.
+    # settings/branding.js — STAYS IN CORE 2026-08-02 (Epic-E sub-10
+    # boundary fix): it is NOT settings-only. main.js:88 + main.js:349
+    # call _modelShortName() BARE on the boot/model-switch path
+    # (_applyModelUI) — deferring branding breaks the boot model paint
+    # with ReferenceError. Its brand helpers (_detectBrand/_brandSvg/
+    # _providerDisplayName/…) are also consumed by the deferred family
+    # (visibility_defaults ×12, local_endpoints, template_actions) —
+    # deferred→core is the safe direction. finish_info.js's cold
+    # finish-bar calls are typeof-gated but hot-path; keeping branding
+    # core keeps them always-satisfied.
     'settings/branding.js',
-    'settings/provider_templates.js',
-    'settings/auto_setup.js',
-    'settings/local_endpoints.js',
-    # Degraded-section contract (2026-07-29): a settings block that depends on a
-    # JS symbol declares it via data-requires; when the symbol is absent (stale
-    # bundle after adding a module) the controls are hidden and a "needs
-    # restart" notice is shown, so a feature that cannot work never presents
-    # itself as usable. Must load BEFORE core_panel.js, which calls it.
-    'settings/section_requires.js',
-    'settings/core_panel.js',
-    'settings/provider_render.js',
-    # Wire-face visibility + editing (2026-07-29). Must load BEFORE
-    # provider_render.js consumers run, but AFTER core_panel.js declares
-    # _stgProviders. Placed here so _faceChipHTML / _renderFacesSection
-    # exist by the time a provider card renders.
-    'settings/provider_faces.js',
-    'settings/key_stats.js',
-    'settings/balance.js',
-    'settings/template_actions.js',
-    'settings/model_edit.js',
+    # ── ENTIRE settings/ subpackage + widgets/chip_input.js — MOVED to
+    # _DEFERRED_FILES 2026-08-01 (Epic-E pt_3879f00e sub-10, ~455KB out
+    # of the core, the line-closer slice). Census: the whole family
+    # renders ONLY inside the user-triggered Settings modal; boot config
+    # load (_loadServerConfigAndPopulate, main_toolbar_ui.js:391) calls
+    # ZERO settings/ functions (one-way dependency);
+    # visibility_defaults.js has no load-time side effects and no boot
+    # callers (branding.js DOES — main.js:88/349 bare — so it STAYS);
+    # oauth/key_stats have no boot readers; every programmatic
+    # openSettings/switchSettingsTab caller is typeof-guarded
+    # (onboarding.js:271, main_toolbar_ui.js:382/537,
+    # skills_install.js:70) — gate+stub composition (sub-9 pattern).
+    # settings.js (the head above) STAYS: var _serverConfig /
+    # _keyStatsCache / _keyStatsLoading are read by
+    # main_input_handling.js. 4 stubs (openSettings/closeSettings/
+    # saveSettings/switchSettingsTab); local_endpoints.js's metrics
+    # setInterval self-arms on land. Suite:
+    # tests/test_frontend_settings_family_deferred.py.
     # settings/providers/access_matrix.js — MOVED to _DEFERRED_FILES
     # 2026-08-01 (Epic-E pt_3879f00e sub-5A, 55KB out of the core). All
     # three external call sites are already typeof-guarded
@@ -888,17 +896,6 @@ _BUNDLE_FILES = [
     # moves with it (read guarded), and its only load-time side effect
     # is a self-contained window-resize IIFE — zero new guards, zero
     # stubs. Suite: tests/test_frontend_access_matrix_deferred.py.
-    'settings/visibility_defaults.js',
-    'widgets/chip_input.js',
-    'settings/other_tabs.js',
-    'settings/speech.js',
-    'settings/auth_sources.js',
-    'settings/private_hosts.js',
-    'settings/save_export.js',
-    'settings/system_prompt_editor.js',
-    'settings/oauth.js',
-    'settings/mcp.js',
-    'settings/devices.js',
     # relay-admin.js intentionally NOT bundled — it loads only on the
     # standalone /admin page (static/admin.html), not in index.html.
     # ── main/ subpackage (split 2026-05-28 from monolithic main.js) ──
@@ -1161,6 +1158,36 @@ _DEFERRED_FILES = [
     'optimizer.js',
     'update.js',
     'timer.js',
+    # ENTIRE settings/ subpackage (~455KB) — deferred 2026-08-01 (Epic-E
+    # sub-10, the line-closer). Renders only inside the user-triggered
+    # Settings modal (see the _BUNDLE_FILES moved-note for the census);
+    # settings.js head + settings/branding.js STAY in core (see the
+    # _BUNDLE_FILES boundary note: main.js:88/349 boot callers).
+    # Order preserved from the core manifest (section_requires before
+    # core_panel; provider_faces before provider_render; chip_input
+    # before its two consumers).
+    'settings/provider_templates.js',
+    'settings/auto_setup.js',
+    'settings/local_endpoints.js',
+    'settings/section_requires.js',
+    'settings/core_panel.js',
+    'settings/provider_faces.js',
+    'settings/provider_render.js',
+    'settings/key_stats.js',
+    'settings/balance.js',
+    'settings/template_actions.js',
+    'settings/model_edit.js',
+    'settings/visibility_defaults.js',
+    'widgets/chip_input.js',
+    'settings/other_tabs.js',
+    'settings/speech.js',
+    'settings/auth_sources.js',
+    'settings/private_hosts.js',
+    'settings/save_export.js',
+    'settings/system_prompt_editor.js',
+    'settings/oauth.js',
+    'settings/mcp.js',
+    'settings/devices.js',
 ]
 
 # The entry-point functions the feature bundle DEFINES. feature-loader.js
@@ -1209,6 +1236,13 @@ _DEFERRED_ENTRY_POINTS = (
     # chat-rendered on every assistant message, so its onclick must load
     # the feature bundle and build+show the popover, never ReferenceError.
     '_toggleCostPopover',
+    # Settings modal (deferred 2026-08-01, Epic-E sub-10) — openSettings is
+    # the genuine early entry (sidebar gear / mobile sheet / onboarding /
+    # toolbar flows); switchSettingsTab follows it in every flow (same
+    # window); closeSettings + saveSettings are defense-in-depth
+    # (image-gen precedent). Modal-internal handlers (system-prompt
+    # editor, _mcp*) deliberately NOT stubbed (Project Brain precedent).
+    'openSettings', 'closeSettings', 'saveSettings', 'switchSettingsTab',
     # Settings-panel six-pack (deferred 2026-08-01, Epic-E sub-9).
     # Badge/tab/mobile-sheet entries + the three settings-core-panel tab
     # populates (gate+stub: the typeof gate passes on the stub, which

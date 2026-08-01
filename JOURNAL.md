@@ -1099,3 +1099,12 @@
 - **NEUTER 新形态（manifest NEUTER memory 首践）**: 影子树（/tmp/nc8，lib 除 js_bundler.py 全 symlink + 真实清单副本）——sanity 先绿、NEUTER1 摘 deferred 项精确 1 红、NEUTER2 摘 rich 模块精确 2 红；活树零触碰。modes 套件自带行为 NC（stash 摘出处方副本→懒建断供）随批过。
 - **生产实测**: runbook 扩至 39 项 **ALL GREEN**；core `bundle-4f0fc8ba.js` **1,273,849 B**（含兄弟增量，累计 −277KB 压缩态），feature 782,274 B。**距 1.2MB 目标 ~74KB**。
 - **settings/ 普查（sub-9/10 交接 msagblke）**: boot 配置加载 `_loadServerConfigAndPopulate` 在 main_toolbar_ui.js:391（core）——只读 data 写字段、**不调用任何 settings/ 子包函数**（依赖方向单向：面板运行时读 core 态）；三个嫌疑件实测：section_requires.js 有 load-time IIFE(:45)；local_endpoints.js 有模块级 `setInterval(_refreshLocalEndpointMetrics,10s)`(:61，晚到自起)；visibility_defaults.js 仅函数内 setTimeout——**子包 20 件目测纯面板族，可整族普查后一次性降级**。
+
+## 2026-08-02 Epic-E sub-10 联席落地（在树待提交）——settings/ 整族 455KB 降级，农场 core **1,045,275 B 已破 1.2MB 线**；branding 边界（msagblke 抓回）+ 自我撞车第三起幸免
+
+- **联席形态（诚实记录）**: 本会话另一平行轮已把 sub-10 执行让给 msagblke（feed 实证），本轮的我不知情完成了普查+套件+manifest 全家迁移；msagblke 同期在树内落了自己的边界修正与套件。最终树=**双方 hunk 无冲突联席**：我的全家迁移 + 他们的 branding 留 core 修正 + 双套件（我的 `test_frontend_settings_family_deferred.py` 12 检查 + 他们的 `test_frontend_mcp_oauth_deferred.py` 10 检查）22/22 绿。**规矩再验一条：feed 自查要在动手「前」，不是撞线「后」。**
+- **★branding 边界（他们抓回的我普查漏网）**: `main.js:88/349` 在 boot/换模型路径**裸调** `_modelShortName()`（`_applyModelUI`）——branding.js 一旦降级，boot 模型名牌 ReferenceError。我的普查 grep 词表（applyBranding 系）漏了真调用名。branding 留 core（~52KB），家族的 brand-helper 读取属安全方向（deferred→core）。我的套件已采纳该边界（FAMILY 摘 branding + 新增 `test_branding_stays_core` 钉 main.js 裸调 ≥2）。
+- **验证链**: 双套件 22/22；影子树 NEUTER 精确（摘 core_panel→2 红，sanity 先绿）；农场 15/15（core 排除 openSettings/switchSettingsTab/mcp 全家、feature 全含、branding/settings.js 头留 core、stub 双表、sub-4/6/8 旧形态保持）；真构建 `bundle-40dde573.js` 过语法闸。
+- **数字**: 农场 core **1,045,275 B**（sub-9 生产 1,274,221 → −229KB 压缩态），feature 1,012,458 B。**Epic-E 验收线 core ≤1.2MB 在农场已达成**——待提交 + 生产实测后按判读 complete。
+- **第三者插曲**: 提交前构建连环红两次——第一次是我自己 insert_content 又双写锚点（feature-loader.js 数组 `];` 重复，今日同类第六次，规矩：insert 的 content 绝不含锚文本与闭合符）；第二次 `ui/tool_rounds.js` 被第三方在飞编辑截断（3701 行 EOF 于块注释中），node --check 定位后等其完成自愈，非我文件零触碰。
+- **待办（msagblke 收尾）**: 联席提交（manifest+feature-loader+双套件）、runbook sub-10 段、账本行、生产实测 → Epic-E complete 判读。

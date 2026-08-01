@@ -64,6 +64,12 @@ function _loadFeatureBundle() {
       s.async = false;   // preserve execution order relative to any sibling injected scripts
       s.onload = () => {
         if (typeof debugLog === 'function') debugLog('[feature-loader] feature bundle loaded', 'success');
+        /* Notify wrappers that captured a STUB while the bundle was in
+         * flight (mobile_panels.js's identity-tracked _wrapOne listens for
+         * this to re-wrap the REAL functions — without the event the
+         * wrapper would hold the dead stub forever). */
+        try { document.dispatchEvent(new CustomEvent('tofu:feature-bundle-loaded')); }
+        catch (e) { if (typeof debugLog === 'function') debugLog('[feature-loader] loaded-event dispatch failed: ' + (e && e.message), 'warn'); }
         resolve(true);
       };
       s.onerror = () => {

@@ -622,14 +622,23 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
                 _total_prompt_tokens = _prompt_tokens + _cw + _cr
             else:
                 _total_prompt_tokens = _prompt_tokens
-        if conv_id and _prompt_tokens > 0:
+        if conv_id and _total_prompt_tokens > 0:
             from lib.token_counter import record_usage
             # ``body['messages']`` is the exact list we sent. Recording it
             # lets the cache detect edit/regenerate (prefix changed →
             # invalidate) vs append-only (reuse + delta).
+            # ★ Record the FULL normalized prompt, NOT the raw input figure:
+            #   on Anthropic-convention wires input_tokens EXCLUDES the cache
+            #   (a 99%-hit warm round reports only the ~2K residual), so
+            #   recording ``_prompt_tokens`` left the usage_cache tier — and
+            #   with it the proactive compaction gate — reading ~2K forever
+            #   on exactly the warm conversations that need it (the
+            #   "context ball at 100% yet compaction never fires" class).
+            #   ``_total_prompt_tokens`` is the same normalization the cost
+            #   engine and the context-ball already agree on.
             record_usage(
                 conv_id,
-                prompt_tokens=_prompt_tokens,
+                prompt_tokens=_total_prompt_tokens,
                 model=model,
                 message_count=len(body.get('messages') or []),
                 messages=body.get('messages'),

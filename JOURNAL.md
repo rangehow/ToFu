@@ -1,3 +1,12 @@
+### 2026-08-01(压缩闸门标尺根修落地:F0 record_usage 残量 bug + F1 真实锚点钳制/地板限倍;20:10 误伤在本修复下不复现) — 脑派发接我自票 `pt_18e9f7a6db664ff3`;commit 见下(6 文件);新套件 **11/11**,回归环 **486 绿**(压缩/token/cache 家族 19+5 套件);**NEUTER×2 各咬各的**(cmp 逐字节还原)
+
+- **F0(新发现的潜伏 bug,比上报的更严重):** `manager/_stream.py` 的 `record_usage` 传的是 `_prompt_tokens`(未归一化)——Anthropic 规约下 `input_tokens` 不含缓存,99% 命中的暖轮只记到 ~2K 残量 ⇒ usage_cache 精确档对 Anthropic 规约服务商**永久低计 ~50×**,暖会话的主动压缩闸门永不触发——这正是 07-20「上下文球 100% 为什么没压缩」(mrt66hte4vpmf6)的病根。修:改传 `_total_prompt_tokens`(成本引擎同款归一化,OpenAI 规约下字节等价无行为变化)。测试精确复现:修复前录到 1809,修复后 75281。
+- **F1(误伤总闸):** `_count_tokens_authoritative` 重构为单流程 + 双护栏——①**地板限倍**:heuristic floor 上限 = 估值档计数 × `heuristic_floor_max_ratio()`(默认 1.7,依据=地板注释自带的实测 0.66× 低估 ⇒ 1/0.66≈1.52 留边际;env `TOFU_COMPACT_FLOOR_MAX_RATIO`,FAIL-OPEN 钳 [1.0,5.0]);②**真实锚点钳制**(仅估值档):新模块 `_real_anchor.real_prompt_anchor` 取会话最近一次**服务商实测** prompt 总量(内存 usage_cache 原始条目——故意跳过前缀签名验证,重写后签名永不匹配但记录值是真实测量,陈旧方向只会偏高=安全;持久 `settings.lastTurnCacheRead` 兜底防重启),计数钳到 `anchor × (1 + real_anchor_slack())`(默认 0.5,env `TOFU_COMPACT_ANCHOR_SLACK`,钳 [0,3])。**只钳下不抬上**:过触发不可逆毁上下文,欠触发被下一轮真实用量与 L3 兜底。
+- **生产实证(本修复下 20:10 不复现):** mrxinirv 的 settings 实测有 `lastTurnCacheRead=433152`——即使内存档失效,持久锚点也会把 219 万钳到 433K×1.5=650K < 777.6K 阈值 → 不触发。§10.1 两个新超参已按 FAIL-OPEN env 模式落地,JOURNAL 备案待 owner 批准。
+- **纪律:** failing-first 精确(F0 测试红在 1809 vs 75281 原数;锚点套件 10 红);实现后 11/11;**NEUTER×2**:回注 record_usage 残量→精确 F0 单红;阉割锚点钳制分支→精确复现+wiring 双红;均 cmp 逐字节还原。回归环 486 绿(压缩家族 357 + stream/usage_cache 邻接 129)。导入冒烟过。
+- **审计条目补记:** 上一轮的审计条目已被兄弟批 13(`636fb7b0`)收编提交(幽灵共编第四次,这次是好结果:无内容失真,条目完整)。
+- **余项(不夹本批,板上已记):** F3 learned-shrink 治理(真 owner 决策)、F4 相位胶囊任务域化(前端渲染缝)、B3 球闸 learned 覆盖——实证 routes/config.py 已透传 provider_id,resolve 正确(claude-opus-5→1,110,553),无需另修。
+
 ### 2026-08-01(api-contract 批 19:folders+paper_folders 3+3 同族合批清零——api_meta 形状诚实性顺手修) — epic `pt_931e16c4` 切片 19;commit 见下(6 文件);环 **153/153**;NEUTER×2 各咬一支
 
 - **判点:** 双文件同构 3 站点;list 均为裸数组,api.js 两 seam 本是 `(await get(...)) || []`(orchestrations 式 `|| []` 契约直用)。**顺手抓的诚实性问题:@api_meta 的 responses schema 钉的是 `'type':'array'`——包装后 OpenAPI 文档会说谎(契约 §6-5「@api_meta 保持 openapi.json 诚实」)。两处 api_meta 同步改为 object{ok, items}——形状迁移必须连文档元数据一起迁,这是此前批次没遇到的维度(前几个裸数组端点没钉 api_meta 响应形状)。**

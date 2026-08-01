@@ -8,14 +8,14 @@ registry + the per-facet tables — nothing here is hand-maintained.
 Third-party plugin tools vary per deployment and are listed in the
 diagnostic section at the end, which `--check` ignores.
 
-Built-in tools: **89**
+Built-in tools: **88**
 
 ## Gaps
 
 | gap | count | meaning |
 |---|---|---|
 | write tool with no approval enricher | 0 | the approval dialog renders a bare tool name — the user approves blind, which the approval module itself calls "worse than not prompting at all" |
-| no UI label | 75 | the raw tool name is shown in the activity line |
+| no UI label | 74 | the raw tool name is shown in the activity line |
 | no reachable handler | 0 | schema advertised to the model but nothing executes it |
 | description cannot disambiguate | 6 | the model cannot tell this tool apart from its neighbours and picks the wrong one |
 | confusable tool pairs | 3 | two same-category tools open with near-identical sentences, so the model picks the wrong one |
@@ -66,7 +66,6 @@ Confusable same-category tool pairs (first-sentence overlap >= 0.5):
 | project_board_complete | conversation | conv_ref | SET |  |  |  |  |  |  |  |  |  | ✓ |
 | project_board_post | conversation | conv_ref | SET |  |  |  |  |  |  |  |  |  | ✓ |
 | project_board_read | conversation | conv_ref | SET |  | ✓ |  |  |  |  |  |  |  | ✓ |
-| project_charter_commit | conversation | conv_ref | SET | ✓ |  |  | ✓ |  |  |  |  |  | ✓ |
 | project_charter_propose | conversation | conv_ref | SET |  |  |  |  |  |  |  |  |  | ✓ |
 | project_charter_read | conversation | conv_ref | SET |  | ✓ |  |  |  |  |  |  |  | ✓ |
 | project_feed_read | conversation | conv_ref | SET |  | ✓ |  |  |  |  |  |  |  | ✓ |

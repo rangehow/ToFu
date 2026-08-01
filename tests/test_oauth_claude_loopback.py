@@ -330,6 +330,11 @@ class TestStatusProjectionFeedsTheReload(unittest.TestCase):
         self.assertEqual(st['status'], 'started')
         self.assertEqual(st['redirect_mode'], 'loopback')
         self.assertEqual(st['auth_url'], res['auth_url'])
+        # The browser exchange is the ONLY path when the desktop server is
+        # geo-blocked — its params must survive a reload via this projection.
+        self.assertEqual(st['exchange']['token_url'], res['exchange']['token_url'])
+        self.assertEqual(st['exchange']['code_verifier'],
+                         res['exchange']['code_verifier'])
 
     def test_console_flow_projects_console_mode(self):
         with mock.patch('lib.oauth.manager._flow._loopback_callback_ok',
@@ -346,6 +351,7 @@ class TestStatusProjectionFeedsTheReload(unittest.TestCase):
             st = mgr.get_oauth_status('claude')
         self.assertIsNone(st['redirect_mode'])
         self.assertIsNone(st['auth_url'])
+        self.assertIsNone(st['exchange'])
 
 
 class TestLoginRouteCarriesTheFlag(unittest.TestCase):

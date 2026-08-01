@@ -84,8 +84,17 @@ global.clearInterval = () => {};
 global.setTimeout = (f) => { try { f(); } catch (e) {} return 0; };
 global.BroadcastChannel = function () { this.onmessage = null; };
 global.t = (k) => k;
+global.fetch = (url, opts) => {
+  calls.push({ verb: 'fetch', url: String(url),
+               body: opts && opts.body ? String(opts.body) : '' });
+  const payload = JSON.stringify({ access_token: 'sk-browser-x', expires_in: 3600 });
+  return Promise.resolve({ ok: true, status: 200,
+    text: () => Promise.resolve(payload),
+    json: () => Promise.resolve(JSON.parse(payload)) });
+};
+global.alert = (m) => { calls.push({ verb: 'alert', msg: String(m) }); };
 global.escapeHtml = (s) => String(s);
-global.showAlert = () => {};
+global.showAlert = (m) => { calls.push({ verb: 'showAlert', msg: String(m) }); };
 global.showConfirm = async () => true;
 global.debugLog = () => {};
 global._loadServerConfig = () => {};
@@ -93,6 +102,7 @@ global._safeClipboardWrite = () => Promise.resolve();
 
 const LOGIN_RESPONSE = %(login_response)s;
 const STATUS_RESPONSE = %(status_response)s;
+const CALLBACK_RESPONSE = %(callback_response)s;
 global.Api = {
   oauth: {
     loginPost: (provider, preferConsole) => {
@@ -110,6 +120,14 @@ global.Api = {
       return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
     },
     status: () => Promise.resolve(STATUS_RESPONSE),
+    callbackPost: (body) => {
+      calls.push({ verb: 'callbackPost', provider: body && body.provider });
+      return Promise.resolve(CALLBACK_RESPONSE);
+    },
+    storeToken: (provider, token) => {
+      calls.push({ verb: 'storeToken', provider });
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    },
     egressAgentGet: () => Promise.resolve({}),
   },
 };
@@ -122,11 +140,13 @@ eval(src);
 '''
 
 
-def _harness(body: str, login_response: dict, status_response=None) -> dict:
+def _harness(body: str, login_response: dict, status_response=None,
+             callback_response=None) -> dict:
     return _run_node(_HARNESS % {
         'oauth_js': json.dumps(str(_OAUTH_JS)),
         'login_response': json.dumps(login_response),
         'status_response': json.dumps(status_response),
+        'callback_response': json.dumps(callback_response),
         'body': body,
     })
 
@@ -330,6 +350,88 @@ class TestReloadRestoresTheEscapeHatch(unittest.TestCase):
         logins = [c for c in v['calls'] if c['verb'].startswith('login')]
         self.assertEqual(len(logins), 1)
         self.assertTrue(logins[0]['preferConsole'])
+
+
+class TestReloadRestoresExchangeParams(unittest.TestCase):
+    """The exchange params are login-response state too — the reload kills them.
+
+    On the desktop build the SERVER is the user's machine, so a geo-blocked
+    server exchange leaves the BROWSER exchange as the only path. After a
+    reload the frontend's ``_oauthExchangeParams`` is empty: the browser
+    exchange rejects with no-exchange-params and the curl helper cannot even
+    build its command — an unburned code with no path to redemption.
+    """
+
+    _EXCHANGE = {'token_url': 'https://token.test/oauth/token',
+                 'client_id': 'cid',
+                 'redirect_uri': 'http://localhost:54545/callback',
+                 'code_verifier': 'VERIFIER_FROM_STATUS',
+                 'state': 'st', 'style': 'json'}
+    _WAIT_WITH_EXCHANGE = {'claude': {'status': 'waiting_callback',
+                                      'redirect_mode': 'loopback',
+                                      'auth_url': 'https://claude.ai/oauth/authorize?x=1',
+                                      'authenticated': False, 'egress': None},
+                           'codex': {'status': 'not_started', 'authenticated': False}}
+
+    def _waiting(self, with_exchange=True):
+        import copy
+        st = copy.deepcopy(self._WAIT_WITH_EXCHANGE)
+        if with_exchange:
+            st['claude']['exchange'] = dict(self._EXCHANGE)
+        return st
+
+    # The geo-block response needs a callable text(); inject it via a small
+    # prelude rather than json.
+    _PRELUDE = """
+    const GEO = { ok: false, status: 403,
+                  text: () => Promise.resolve('access_denied: region blocked') };
+    Api.oauth.callbackPost = (body) => {
+      calls.push({ verb: 'callbackPost', provider: body && body.provider });
+      return Promise.resolve(GEO);
+    };
+    """
+
+    def test_reload_then_403_still_reaches_the_browser_exchange(self):
+        """No _oauthLogin ran in this 'session' — the status projection is
+        the ONLY source of exchange params."""
+        st = self._waiting(with_exchange=True)
+        v = _harness(
+            self._PRELUDE + """
+            document.getElementById('oauthClaudeManual').style.display = 'none';
+            await _loadOAuthStatus();
+            await new Promise(r => setImmediate(r));
+            await _completeLogin('claude', 'THECODE', '');
+            await new Promise(r => setImmediate(r));
+            console.log(JSON.stringify({ calls: calls }));
+            """, _LOOPBACK_RESP, st)
+        fetches = [c for c in v['calls'] if c['verb'] == 'fetch']
+        self.assertEqual(len(fetches), 1,
+                         'the browser exchange must fire after a reload — '
+                         'params restored from the status projection')
+        self.assertEqual(fetches[0]['url'], 'https://token.test/oauth/token')
+        self.assertIn('VERIFIER_FROM_STATUS', fetches[0]['body'],
+                      'the verifier must come from the PROJECTION, not a '
+                      'prior login click that never happened')
+        self.assertTrue(any(c['verb'] == 'storeToken' for c in v['calls']))
+        self.assertFalse(any(c['verb'] == 'showAlert' for c in v['calls']),
+                         'no dead-end error dialog may appear')
+
+    def test_without_projection_the_dead_end_returns(self):
+        """Control: strip exchange from the projection and the OLD failure
+        comes back — this proves the positive test can tell the two apart."""
+        st = self._waiting(with_exchange=False)
+        v = _harness(
+            self._PRELUDE + """
+            await _loadOAuthStatus();
+            await new Promise(r => setImmediate(r));
+            await _completeLogin('claude', 'THECODE', '');
+            await new Promise(r => setImmediate(r));
+            console.log(JSON.stringify({ calls: calls }));
+            """, _LOOPBACK_RESP, st)
+        self.assertEqual([c for c in v['calls'] if c['verb'] == 'fetch'], [],
+                         'no params → the browser exchange cannot fire')
+        self.assertTrue(any(c['verb'] == 'showAlert' for c in v['calls']),
+                        'the old dead end surfaces as an error dialog')
 
 
 class TestWiringRatchet(unittest.TestCase):

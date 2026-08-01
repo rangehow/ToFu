@@ -133,6 +133,12 @@ def start_oauth_flow(provider: str, prefer_console: bool = False) -> dict:
             # exact string or the token endpoint answers invalid_grant.
             'redirect_uri': flow.get('redirect_uri', ''),
             'redirect_mode': redirect_mode,
+            # Browser-side exchange params (token_url / code_verifier / …).
+            # Same rule as redirect_mode: on the desktop build the SERVER is
+            # the user's machine, so a geo-blocked server exchange leaves the
+            # BROWSER exchange as the only path — and a reload wipes the
+            # frontend's copy unless it can be restored from this projection.
+            'exchange': flow.get('exchange'),
         }
 
     # Start the relay thread for providers whose callback lands on localhost:
@@ -196,6 +202,13 @@ def get_oauth_status(provider: str) -> dict:
         # callback decision); without the URL it cannot re-open the popup.
         'redirect_mode': flow.get('redirect_mode'),
         'auth_url': flow.get('auth_url'),
+        # Lets the reloaded page restore _oauthExchangeParams — without these,
+        # the browser exchange rejects with no-exchange-params and the curl
+        # helper cannot even build its command, leaving an unburned code with
+        # no path to redemption. The code_verifier is no new exposure: it was
+        # already handed to this same browser in the login response, and the
+        # status endpoint is same-origin on the same auth surface.
+        'exchange': flow.get('exchange'),
     }
 
 

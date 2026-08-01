@@ -532,6 +532,15 @@ function _updateOAuthCard(provider, status) {
       }
       _oauthApplyRedirectMode(provider, status.redirect_mode);
     }
+    // Exchange params are the OTHER piece of login-response state a reload
+    // destroys. On the desktop build the SERVER is the user's machine, so a
+    // geo-blocked server exchange leaves the BROWSER exchange as the only
+    // path — and without these params it rejects with no-exchange-params
+    // while the curl helper cannot even build its command. Restoring them
+    // from the status projection keeps both backstops alive after a reload.
+    if (status.exchange) {
+      _oauthExchangeParams[provider] = status.exchange;
+    }
   } else if (status.status === 'error') {
     badge.textContent = t('settings.oauthError');
     badge.className = 'oauth-status-badge error';

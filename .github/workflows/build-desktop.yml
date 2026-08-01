@@ -347,14 +347,21 @@ jobs:
       - name: Verify build inputs
         shell: bash
         run: |
-          # The Inno SetupIconFile is a HARD requirement — a missing icon aborts
-          # the compile. Fail here with a clear message instead of a cryptic
-          # ISCC error later.
+          # The Inno SetupIconFile + WizardImageFile / WizardSmallImageFile
+          # are HARD requirements — a missing asset aborts the compile. Fail
+          # here with a clear message instead of a cryptic ISCC error later.
           test -f static/icons/tofu.ico || {
             echo "::error::static/icons/tofu.ico not generated — gen_desktop_icons.py failed."
             exit 1
           }
           echo "Icon present: $(ls -l static/icons/tofu.ico)"
+          for bmp in wizard-large.bmp wizard-small.bmp; do
+            test -f "static/icons/installer/$bmp" || {
+              echo "::error::static/icons/installer/$bmp not generated — gen_desktop_icons.py failed."
+              exit 1
+            }
+          done
+          echo "Wizard bitmaps present: $(ls -l static/icons/installer/)"
 
       - name: Build with PyInstaller
         run: pyinstaller tofu.spec
@@ -460,6 +467,8 @@ jobs:
           SetupIconFile=static\\icons\\tofu.ico
           PrivilegesRequired=lowest
           WizardStyle=modern
+          WizardImageFile=static\\icons\\installer\\wizard-large.bmp
+          WizardSmallImageFile=static\\icons\\installer\\wizard-small.bmp
 
           [Files]
           Source: "dist\\Tofu\\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs

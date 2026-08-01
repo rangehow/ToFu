@@ -251,6 +251,7 @@ dist/
 installer_output/
 static/icons/tofu.ico
 static/icons/tofu.icns
+static/icons/installer/
 .icon-backups/
 # AI assistant evolution journal (per-developer, not source)
 JOURNAL.md

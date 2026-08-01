@@ -1297,3 +1297,123 @@ def test_the_shared_script_survives_export_and_is_tracked():
         'gitignored, so it needs an explicit ! exception or it will be absent '
         'from a clean clone while both gates try to call it'
     )
+
+
+# ══════════════════════════════════════════════════════════════════
+#  Inno Setup wizard branding
+# ══════════════════════════════════════════════════════════════════
+#
+# The installer's welcome/finish pages are the FIRST screens a Windows user
+# ever sees of the product, and they shipped with Inno's DEFAULT blank art —
+# the only unbranded surface left in the install flow (the web UI and the
+# tk dialogs are fully branded). The fix lives in three places that must
+# agree with each other, which is exactly what these pins enforce:
+#
+#   scripts/gen_desktop_icons.py  — PRODUCES wizard-large.bmp (164×314) and
+#                                   wizard-small.bmp (55×58), the two sizes
+#                                   Inno's `modern` style hard-requires.
+#   .github/workflows/build-desktop.yml — the .iss heredoc REFERENCES them
+#                                   (WizardImageFile / WizardSmallImageFile)
+#                                   and the preflight REQUIRES them (the
+#                                   same fail-early contract as the icon).
+#
+# A drift between any pair (generator stops emitting, .iss points elsewhere,
+# preflight stops checking) turns the branded installer back into a default
+# one — or worse, aborts the compile in ISCC with a cryptic error — with no
+# test noticing. The parity test below runs the REAL generator and compares
+# its output set against the paths the .iss references, so neither side can
+# move without this suite going red.
+
+_WIZARD_REFS = (
+    ('WizardImageFile', 'wizard-large.bmp', (164, 314)),
+    ('WizardSmallImageFile', 'wizard-small.bmp', (55, 58)),
+)
+
+
+def _icons_mod():
+    """Import scripts/gen_desktop_icons.py (not a package, so load by path)."""
+    spec = _ilu.spec_from_file_location(
+        '_tofu_gen_desktop_icons', _ROOT / 'scripts' / 'gen_desktop_icons.py')
+    assert spec and spec.loader, 'cannot load scripts/gen_desktop_icons.py'
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_inno_script_references_brand_wizard_images():
+    """Ratchet: the .iss heredoc must carry BOTH Wizard*File directives
+    pointing into static\\icons\\installer\\ (neuter either line → red)."""
+    text = _WORKFLOW.read_text(encoding='utf-8')
+    for directive, bmp, _size in _WIZARD_REFS:
+        ref = f'{directive}=static\\\\icons\\\\installer\\\\{bmp}'
+        assert ref in text, (
+            f'{ref} missing from the installer.iss heredoc — the wizard '
+            f'falls back to Inno default blank art'
+        )
+
+
+def test_preflight_requires_wizard_bitmaps():
+    """Ratchet: the Verify-build-inputs step must require both BMPs with a
+    fail-early message (neuter the loop → red), mirroring the SetupIconFile
+    contract that turns a cryptic ISCC abort into a readable CI error.
+
+    Anchored to text that exists ONLY in the preflight — a bare `bmp in
+    text` is also satisfied by the .iss WizardImageFile line, which let a
+    neutered preflight pass (measured NEUTER-miss 2026-08-01)."""
+    text = _WORKFLOW.read_text(encoding='utf-8')
+    assert 'wizard-large.bmp wizard-small.bmp' in text, (
+        'the preflight for-loop no longer names both bitmaps'
+    )
+    assert 'icons/installer/$bmp' in text, (
+        'the preflight no longer tests static/icons/installer/$bmp — a '
+        'missing bitmap surfaces as an ISCC abort instead of a clear message'
+    )
+
+
+def test_generator_emits_exactly_the_referenced_bitmaps(tmp_path):
+    """Parity, the strong pin: run the REAL generator into a temp icons dir
+    and require that (a) every bitmap the .iss references is produced, and
+    (b) each carries Inno's exact contract dimensions and BMP format. This
+    bites in BOTH drift directions — a renamed output and a resized canvas
+    are equally red."""
+    Image = pytest.importorskip('PIL.Image', reason='Pillow required')
+    mod = _icons_mod()
+    mod.ICONS_DIR = str(tmp_path)  # redirect outputs; SOURCE_PNG stays real
+    mod.main()
+    for directive, bmp, size in _WIZARD_REFS:
+        out = tmp_path / 'installer' / bmp
+        assert out.is_file(), (
+            f'generator did not produce installer/{bmp}, but the .iss '
+            f'references it as {directive} — ISCC would abort on the missing '
+            f'file'
+        )
+        with Image.open(str(out)) as im:
+            assert im.format == 'BMP', f'{bmp}: ISCC needs BMP, got {im.format}'
+            assert im.size == size, (
+                f'{bmp}: Inno modern style requires {size}, got {im.size}'
+            )
+
+
+def test_wizard_logo_has_real_transparency_cutout():
+    """The brand cube must FLOAT on the wizard gradient, not sit in a white
+    square: logo.png is RGBA but fully opaque (alpha 255 everywhere), so the
+    generator must cut out the exterior background. NEUTER target: removing
+    _cut_out_background turns the large bitmap's border pixels white — this
+    test reads the actual generated BMP and goes red."""
+    Image = pytest.importorskip('PIL.Image', reason='Pillow required')
+    mod = _icons_mod()
+    src = Image.open(mod.SOURCE_PNG).convert('RGBA')
+    cut = mod._cut_out_background(src)
+    alpha = cut.getchannel('A')
+    # Corners are exterior background → must be transparent after the cutout.
+    for xy in ((0, 0), (src.width - 1, 0), (0, src.height - 1),
+               (src.width - 1, src.height - 1)):
+        assert alpha.getpixel(xy) == 0, (
+            f'corner {xy} is still opaque — the flood-fill cutout is broken '
+            f'(or removed), and the wizard logo renders as a white square'
+        )
+    # The cube's centre must stay opaque (the cutout removes ONLY the
+    # exterior; an over-eager global threshold would punch the interior).
+    assert alpha.getpixel((src.width // 2, src.height // 2)) == 255, (
+        'cube centre went transparent — the cutout leaks into the interior'
+    )

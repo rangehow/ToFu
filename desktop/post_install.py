@@ -13,9 +13,12 @@ check if it's installed, how to install itself, and its approximate size.
 """
 
 import os
+import queue
 import subprocess
 import sys
 import threading
+
+from desktop import _tk_theme as theme
 
 # Resolve base directory
 if getattr(sys, 'frozen', False):
@@ -58,7 +61,8 @@ def _diag(msg: str) -> None:
 class Component:
     """Base class for an optional downloadable component."""
 
-    name: str = ''
+    key: str = ''        # i18n lookup key: desktop.comp.<key>.name/.desc
+    name: str = ''       # English fallback (logs + terminal prompt)
     description: str = ''
     size_hint: str = ''  # e.g. "~150 MB"
     recommended: bool = False
@@ -72,6 +76,7 @@ class Component:
 
 
 class PlaywrightChromium(Component):
+    key = 'chromium'
     name = 'Browser Engine (Chromium)'
     description = (
         'Enables advanced web page fetching, JavaScript rendering, '
@@ -141,6 +146,7 @@ class PlaywrightChromium(Component):
 
 
 class PostgreSQL(Component):
+    key = 'postgresql'
     name = 'PostgreSQL Database'
     description = (
         'High-performance database for multi-user deployments. '
@@ -201,37 +207,39 @@ OPTIONAL_COMPONENTS: list[Component] = [
 #  UI — First-launch prompt (cross-platform)
 # ═══════════════════════════════════════════════════════════════
 
-def _prompt_gui(components: list[Component]) -> list[Component]:
-    """Show a GUI dialog asking which components to install.
+def _prompt_gui(components: list[Component]) -> list[tuple]:
+    """Show the component manager: select → install WITH VISIBLE PROGRESS → results.
 
-    Returns the list of components the user selected.
-    Falls back to terminal prompt if no GUI available.
+    Returns a list of (name, success, message) tuples for the components the
+    user chose to install (empty when they skipped). Falls back to the
+    terminal prompt when tkinter is unavailable.
+
+    ── Why the dialog stays OPEN during install ──
+    The old flow closed the window on "Install Selected" and ran ~165 MB of
+    downloads on a daemon thread whose only output was a log file. The user
+    got no progress, no failure notice, nothing. That pipe (progress_callback)
+    existed but was never wired to UI. Here the SAME window swaps to a
+    progress view: one status row per component, an overall progress bar,
+    and per-component failure messages — all driven by a worker thread whose
+    events are marshalled onto the tk thread via a queue polled by after()
+    (tk is not thread-safe; worker threads must never touch widgets).
     """
     try:
         import tkinter as tk
         from tkinter import ttk
     except ImportError:
-        return _prompt_terminal(components)
+        return _prompt_terminal_gui_fallback(components)
 
-    # Per-monitor DPI awareness so the dialog isn't bitmap-stretched (blurry)
-    # on HiDPI Windows displays. No-op elsewhere / on older Windows.
-    if sys.platform.startswith('win'):
-        try:
-            import ctypes
-            try:
-                ctypes.windll.shcore.SetProcessDpiAwareness(2)
-            except Exception:
-                ctypes.windll.user32.SetProcessDPIAware()
-        except Exception:
-            pass
+    theme.ensure_dpi_awareness(_diag)
+    lang = theme.detect_lang()
 
-    selected = []
+    holder: dict = {'results': []}
     root = tk.Tk()
-    root.title('Tofu — Optional Components')
-    root.geometry('520x400')
+    p = theme.apply_theme(root)
+    root.title('Tofu — %s' % theme.t('desktop.components.title', lang))
+    root.geometry('560x560')
     root.resizable(False, False)
 
-    # Try to set icon
     try:
         icon_path = os.path.join(BASE_DIR, 'static', 'icons', 'tofu.ico')
         if os.path.isfile(icon_path):
@@ -239,51 +247,194 @@ def _prompt_gui(components: list[Component]) -> list[Component]:
     except Exception:
         pass
 
-    frame = ttk.Frame(root, padding=20)
-    frame.pack(fill='both', expand=True)
+    outer = ttk.Frame(root, style='Tofu.TFrame', padding=22)
+    outer.pack(fill='both', expand=True)
 
-    ttk.Label(frame, text='Optional Components', font=('', 14, 'bold')).pack(anchor='w')
-    ttk.Label(frame, text=(
-        'The following components can be downloaded now or later.\n'
-        'Recommended components are pre-selected.'
-    ), wraplength=480).pack(anchor='w', pady=(5, 15))
+    # ── Header: brand logo + title + subtitle ──
+    header = ttk.Frame(outer, style='Tofu.TFrame')
+    header.pack(fill='x')
+    photo = theme.load_logo_photo(root, size=52)
+    if photo is not None:
+        ttk.Label(header, image=photo, style='Tofu.TLabel').pack(
+            side='left', padx=(0, 14))
+    head_text = ttk.Frame(header, style='Tofu.TFrame')
+    head_text.pack(side='left', fill='x', expand=True)
+    ttk.Label(head_text, text=theme.t('desktop.components.title', lang),
+              style='Tofu.Title.TLabel').pack(anchor='w')
+    ttk.Label(head_text, text=theme.t('desktop.components.subtitle', lang),
+              style='Tofu.Sub.TLabel', wraplength=400,
+              justify='left').pack(anchor='w', pady=(4, 0))
 
-    vars_map: dict[int, tk.BooleanVar] = {}
-    for i, comp in enumerate(components):
-        var = tk.BooleanVar(value=comp.recommended and not comp.is_installed())
-        vars_map[i] = var
+    body = ttk.Frame(outer, style='Tofu.TFrame')
+    body.pack(fill='both', expand=True, pady=(18, 0))
 
-        comp_frame = ttk.Frame(frame)
-        comp_frame.pack(fill='x', pady=3)
+    # ── Selection view: one card per component ──
+    select_frame = ttk.Frame(body, style='Tofu.TFrame')
+    select_frame.pack(fill='both', expand=True)
 
-        status = ' (installed)' if comp.is_installed() else f' ({comp.size_hint})'
-        cb = ttk.Checkbutton(
-            comp_frame,
-            text=f'{comp.name}{status}',
-            variable=var,
-            state='disabled' if comp.is_installed() else 'normal'
-        )
+    rows: list[tuple] = []  # (comp, var)
+    for comp in components:
+        installed = comp.is_installed()
+        var = tk.BooleanVar(value=comp.recommended and not installed)
+        card = theme.card_frame(select_frame, p)
+        card.pack(fill='x', pady=4)
+        inner = ttk.Frame(card, style='Card.TFrame', padding=(12, 10))
+        inner.pack(fill='x')
+        name = theme.t('desktop.comp.%s.name' % comp.key, lang)
+        status = (' · %s' % theme.t('desktop.components.installed', lang)
+                  if installed else ' · %s' % comp.size_hint)
+        cb = ttk.Checkbutton(inner, text='%s%s' % (name, status),
+                             variable=var, style='Tofu.TCheckbutton',
+                             state='disabled' if installed else 'normal')
         cb.pack(anchor='w')
+        desc = theme.t('desktop.comp.%s.desc' % comp.key, lang)
+        ttk.Label(inner, text=desc, style='CardSub.TLabel', wraplength=450,
+                  justify='left').pack(anchor='w', padx=(22, 0), pady=(2, 0))
+        rows.append((comp, var))
 
-        ttk.Label(comp_frame, text=f'    {comp.description}',
-                  wraplength=460, foreground='gray').pack(anchor='w')
+    # ── Progress view (hidden until Install) ──
+    progress_frame = ttk.Frame(body, style='Tofu.TFrame')
+    prog_status: list = []   # per-component status StringVar
+    prog_style: list = []    # per-component status LABEL (color flips ok/err)
+    prog_msg: list = []      # per-component failure-message StringVar
+    bar = ttk.Progressbar(progress_frame, style='Tofu.Horizontal.TProgressbar',
+                          mode='determinate')
+    summary_var = tk.StringVar(value='')
+    summary = ttk.Label(progress_frame, textvariable=summary_var,
+                        style='Tofu.Sub.TLabel', wraplength=480,
+                        justify='left')
 
-    def on_install():
-        for i, comp in enumerate(components):
-            if vars_map[i].get() and not comp.is_installed():
-                selected.append(comp)
-        root.destroy()
+    # ── Buttons ──
+    btns = ttk.Frame(outer, style='Tofu.TFrame')
+    btns.pack(fill='x', pady=(18, 0))
 
     def on_skip():
         root.destroy()
 
-    btn_frame = ttk.Frame(frame)
-    btn_frame.pack(fill='x', pady=(20, 0))
-    ttk.Button(btn_frame, text='Skip for now', command=on_skip).pack(side='left')
-    ttk.Button(btn_frame, text='Install Selected', command=on_install).pack(side='right')
+    skip_btn = ttk.Button(btns, text=theme.t('desktop.components.skip', lang),
+                          style='Tofu.TButton', command=on_skip)
+    skip_btn.pack(side='left')
+
+    close_btn = ttk.Button(btns, text=theme.t('desktop.components.close', lang),
+                           style='Tofu.Accent.TButton', command=root.destroy,
+                           state='disabled')
+
+    events: queue.Queue = queue.Queue()
+
+    def _drain():
+        """Pump worker events onto the tk thread (the only thread allowed
+        to touch widgets). Stops polling once 'finished' arrives."""
+        try:
+            while True:
+                kind, idx, payload = events.get_nowait()
+                if kind == 'start':
+                    prog_status[idx].set(
+                        theme.t('desktop.components.installing', lang))
+                elif kind == 'status':
+                    prog_status[idx].set(payload)
+                elif kind == 'done':
+                    success, msg = payload
+                    bar['value'] = bar['value'] + 1
+                    if success:
+                        prog_status[idx].set(
+                            theme.t('desktop.components.installed', lang))
+                        prog_style[idx].configure(style='Status.Ok.TLabel')
+                    else:
+                        prog_status[idx].set(
+                            theme.t('desktop.components.failed', lang))
+                        prog_style[idx].configure(style='Status.Err.TLabel')
+                        prog_msg[idx].set(str(msg)[:240])
+                elif kind == 'finished':
+                    results = payload
+                    holder['results'] = results
+                    failed = sum(1 for _n, ok, _m in results if not ok)
+                    summary_var.set(
+                        theme.t('desktop.components.summaryOk', lang) if not failed
+                        else theme.t('desktop.components.summaryFail', lang)
+                        .replace('{n}', str(failed)))
+                    close_btn.configure(state='normal')
+                    return  # stop polling
+        except queue.Empty:
+            pass
+        try:
+            root.after(80, _drain)
+        except Exception:
+            pass  # window closed mid-install; worker is a daemon, results logged nowhere
+
+    def on_install():
+        selected = [c for c, v in rows if v.get() and not c.is_installed()]
+        if not selected:
+            root.destroy()
+            return
+        # Swap selection → progress view.
+        select_frame.pack_forget()
+        skip_btn.pack_forget()
+        install_btn.pack_forget()
+        close_btn.pack(side='right')
+
+        for comp in selected:
+            card = theme.card_frame(progress_frame, p)
+            card.pack(fill='x', pady=4)
+            inner = ttk.Frame(card, style='Card.TFrame', padding=(12, 8))
+            inner.pack(fill='x')
+            head = ttk.Frame(inner, style='Card.TFrame')
+            head.pack(fill='x')
+            name = theme.t('desktop.comp.%s.name' % comp.key, lang)
+            ttk.Label(head, text=name, style='CardName.TLabel').pack(side='left')
+            sv = tk.StringVar(value=theme.t('desktop.components.pending', lang))
+            sl = ttk.Label(head, textvariable=sv, style='CardSub.TLabel')
+            sl.pack(side='right')
+            mv = tk.StringVar(value='')
+            ml = ttk.Label(inner, textvariable=mv, style='Status.Err.TLabel',
+                           wraplength=450, justify='left')
+            ml.pack(anchor='w', pady=(2, 0))
+            prog_status.append(sv)
+            prog_style.append(sl)
+            prog_msg.append(mv)
+
+        bar.configure(maximum=len(selected), value=0)
+        bar.pack(fill='x', pady=(12, 0))
+        summary.pack(anchor='w', pady=(8, 0))
+        progress_frame.pack(fill='both', expand=True)
+
+        def _worker():
+            results = []
+            for i, comp in enumerate(selected):
+                events.put(('start', i, None))
+                ok, msg = comp.install(
+                    progress_callback=lambda _n, txt, i=i:
+                        events.put(('status', i, txt)))
+                results.append((comp.name, ok, msg))
+                events.put(('done', i, (ok, msg)))
+            events.put(('finished', -1, results))
+
+        threading.Thread(target=_worker, daemon=True,
+                         name='component-installer').start()
+        root.after(80, _drain)
+
+    install_btn = ttk.Button(
+        btns, text=theme.t('desktop.components.install', lang),
+        style='Tofu.Accent.TButton', command=on_install)
+    install_btn.pack(side='right')
 
     root.mainloop()
-    return selected
+    return holder['results']
+
+
+def _prompt_terminal_gui_fallback(components: list[Component]) -> list[tuple]:
+    """No-tkinter path: terminal selection, then install with plain prints.
+
+    Kept separate from _prompt_terminal (which only SELECTS, for __main__'s
+    manual flow) so the GUI entry point's contract — returns install RESULTS,
+    not selections — holds on headless machines too.
+    """
+    selected = _prompt_terminal(components)
+    results = []
+    for comp in selected:
+        ok, msg = comp.install(lambda n, txt: print(f'  … {txt}'))
+        results.append((comp.name, ok, msg))
+        print(f"  [{'OK' if ok else 'FAIL'}] {comp.name}: {msg}")
+    return results
 
 
 def _prompt_terminal(components: list[Component]) -> list[Component]:
@@ -350,19 +501,13 @@ def run_first_launch_prompt():
         mark_prompted()
         return
 
-    selected = _prompt_gui(not_installed)
+    # The dialog itself now hosts the install with visible progress and
+    # returns the RESULTS; nothing installs on an invisible thread anymore.
+    results = _prompt_gui(not_installed)
     mark_prompted()
-
-    if selected:
-        def _bg_install():
-            results = _install_components(selected)
-            for name, success, msg in results:
-                status = '[OK]' if success else '[FAIL]'
-                _diag(f'{status} {name}: {msg}')
-
-        thread = threading.Thread(target=_bg_install, daemon=True,
-                                  name='component-installer')
-        thread.start()
+    for name, success, msg in results:
+        status = '[OK]' if success else '[FAIL]'
+        _diag(f'{status} {name}: {msg}')
 
 
 def get_uninstalled_components() -> list[Component]:
@@ -376,9 +521,8 @@ if __name__ == '__main__':
     if not not_installed:
         print('All optional components are already installed.')
     else:
-        selected = _prompt_gui(not_installed)
-        if selected:
-            results = _install_components(selected)
+        results = _prompt_gui(not_installed)
+        if results:
             for name, success, msg in results:
                 status = '[OK]' if success else '[FAIL]'
                 print(f'  {status} {name}: {msg}')

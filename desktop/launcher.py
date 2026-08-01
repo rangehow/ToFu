@@ -106,33 +106,12 @@ def _log(msg: str) -> None:
 def _enable_dpi_awareness() -> None:
     """Mark the process per-monitor DPI-aware so HiDPI rendering is crisp.
 
-    Must run before any window is created. No-op off Windows. Tries the
-    newest API first and degrades gracefully on older Windows versions.
+    Must run before any window is created. No-op off Windows. The 3-level
+    fallback lives in desktop._tk_theme (single theme source) — this used to
+    be one of TWO private copies and the post_install one lacked the v2 level.
     """
-    if not sys.platform.startswith('win'):
-        return
-    try:
-        import ctypes
-    except Exception as e:  # pragma: no cover - ctypes always present on win
-        _log('DPI awareness unavailable: %s' % e)
-        return
-    # Per-Monitor v2 (Windows 10 1703+): DPI_AWARENESS_CONTEXT = -4
-    try:
-        if ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
-            return
-    except Exception:
-        pass
-    # PROCESS_PER_MONITOR_DPI_AWARE = 2 (Windows 8.1+)
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
-        return
-    except Exception:
-        pass
-    # System-DPI aware (Vista+) — last resort, still far better than none.
-    try:
-        ctypes.windll.user32.SetProcessDPIAware()
-    except Exception as e:
-        _log('Could not set DPI awareness: %s' % e)
+    from desktop import _tk_theme as theme
+    theme.ensure_dpi_awareness(_log)
 
 
 def _find_free_port(preferred: int = DEFAULT_PORT) -> int:
@@ -376,30 +355,39 @@ def _prompt_connect_line(current_url: str = ''):
     except ImportError as e:
         _log('Connect dialog unavailable (no tkinter): %s' % e)
         return None
+    from desktop import _tk_theme as theme
 
+    lang = theme.detect_lang()
     result = {'value': None}
     root = tk.Tk()
-    root.title('Connect to remote Tofu')
+    theme.apply_theme(root)
+    root.title(theme.t('desktop.connect.title', lang))
     root.resizable(False, False)
-    frame = ttk.Frame(root, padding=16)
+    frame = ttk.Frame(root, style='Tofu.TFrame', padding=20)
     frame.grid(sticky='nsew')
 
-    ttk.Label(frame, text='Connect this computer to a remote Tofu',
-              font=('', 11, 'bold')).grid(row=0, column=0, columnspan=2,
-                                          sticky='w')
-    ttk.Label(frame, wraplength=430, justify='left',
-              text=('In Tofu, open Local Control \u2192 This computer and press '
-                    '"Generate connect line". Paste the whole line here.')
-              ).grid(row=1, column=0, columnspan=2, sticky='w', pady=(6, 10))
+    header = ttk.Frame(frame, style='Tofu.TFrame')
+    header.grid(row=0, column=0, columnspan=2, sticky='w')
+    photo = theme.load_logo_photo(root, size=40)
+    if photo is not None:
+        ttk.Label(header, image=photo, style='Tofu.TLabel').grid(
+            row=0, column=0, padx=(0, 10))
+    ttk.Label(header, text=theme.t('desktop.connect.heading', lang),
+              style='Tofu.Title.TLabel').grid(row=0, column=1, sticky='w')
+    ttk.Label(frame, wraplength=430, justify='left', style='Tofu.Sub.TLabel',
+              text=theme.t('desktop.connect.instructions', lang)
+              ).grid(row=1, column=0, columnspan=2, sticky='w', pady=(8, 12))
 
-    entry = ttk.Entry(frame, width=58)
+    entry = ttk.Entry(frame, width=58, style='Tofu.TEntry')
     entry.grid(row=2, column=0, columnspan=2, sticky='we')
     if current_url:
-        ttk.Label(frame, foreground='#666',
-                  text='Currently attached to: %s' % current_url
-                  ).grid(row=3, column=0, columnspan=2, sticky='w', pady=(6, 0))
-    err = ttk.Label(frame, foreground='#b00', wraplength=430, justify='left')
-    err.grid(row=4, column=0, columnspan=2, sticky='w', pady=(6, 0))
+        ttk.Label(frame, style='Tofu.Sub.TLabel',
+                  text=theme.t('desktop.connect.current', lang)
+                  .replace('{url}', current_url)
+                  ).grid(row=3, column=0, columnspan=2, sticky='w', pady=(8, 0))
+    err = ttk.Label(frame, style='Tofu.Err.TLabel', wraplength=430,
+                    justify='left')
+    err.grid(row=4, column=0, columnspan=2, sticky='w', pady=(8, 0))
 
     def _ok(*_a):
         try:
@@ -415,11 +403,13 @@ def _prompt_connect_line(current_url: str = ''):
         result['value'] = None
         root.destroy()
 
-    btns = ttk.Frame(frame)
-    btns.grid(row=5, column=0, columnspan=2, sticky='e', pady=(12, 0))
-    ttk.Button(btns, text='Cancel', command=_cancel).grid(row=0, column=0,
-                                                          padx=(0, 8))
-    ttk.Button(btns, text='Connect', command=_ok).grid(row=0, column=1)
+    btns = ttk.Frame(frame, style='Tofu.TFrame')
+    btns.grid(row=5, column=0, columnspan=2, sticky='e', pady=(14, 0))
+    ttk.Button(btns, text=theme.t('desktop.connect.cancel', lang),
+               style='Tofu.TButton', command=_cancel).grid(row=0, column=0,
+                                                           padx=(0, 8))
+    ttk.Button(btns, text=theme.t('desktop.connect.connect', lang),
+               style='Tofu.Accent.TButton', command=_ok).grid(row=0, column=1)
     entry.bind('<Return>', _ok)
     root.bind('<Escape>', _cancel)
     entry.focus_set()
@@ -487,22 +477,20 @@ def _run_tray(port: int, proc: subprocess.Popen):
         webbrowser.open(_RELEASES_PAGE)
 
     def on_components(icon, item):
-        """Launch the component installer dialog."""
+        """Launch the component manager (select + progress-visible install)."""
         try:
-            from desktop.post_install import (OPTIONAL_COMPONENTS, _prompt_gui,
-                                              _install_components)
+            from desktop.post_install import OPTIONAL_COMPONENTS, _prompt_gui
         except Exception as e:
             _log('Component installer unavailable: %s' % e)
             return
         not_installed = [c for c in OPTIONAL_COMPONENTS if not c.is_installed()]
         if not not_installed:
             return
-        selected = _prompt_gui(not_installed)
-        if selected:
-            def _bg():
-                for name, success, msg in _install_components(selected):
-                    _log('%s %s: %s' % ('OK' if success else 'FAIL', name, msg))
-            threading.Thread(target=_bg, daemon=True).start()
+        # The dialog hosts the install itself (progress rows + bar) and
+        # returns the results; nothing downloads invisibly anymore.
+        results = _prompt_gui(not_installed)
+        for name, success, msg in results:
+            _log('%s %s: %s' % ('OK' if success else 'FAIL', name, msg))
 
     def _attached_url() -> str:
         """The remote server this app is attached to, or '' when local-only."""

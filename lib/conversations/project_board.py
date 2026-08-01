@@ -1162,8 +1162,9 @@ def execute_board_tool(fn_name: str, fn_args: dict, *,
                         'yourself — reversible, and a matter of engineering '
                         'judgement rather than taste, policy or credentials — '
                         'reopen it, pick the most robust long-term option, and '
-                        'record the choice with project_charter_commit instead '
-                        'of leaving the epic parked.')
+                        'record the choice with project_charter_propose instead '
+                        'of leaving the epic parked (a proposal is the ONLY '
+                        'agent path into the charter — commit is human-only).')
             return f'Error reporting block: {res.get("error", "unknown")}.'
         return f"Error: Unknown board tool '{fn_name}'"
     except Exception as e:

@@ -18,6 +18,7 @@ any snapshot test:
     node tests/_tool_rounds_wire_parity_harness.js \
         static/js/ui/tool_rounds.js \
         tests/_tool_rounds_wire_parity_rounds.json \
+        static/js/ui/tool_rounds_rich.js \
         > tests/_tool_rounds_wire_parity_baseline.json
 
 Skips cleanly when node is unavailable.
@@ -34,6 +35,7 @@ import pytest
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 TOOL_ROUNDS = ROOT / 'static' / 'js' / 'ui' / 'tool_rounds.js'
+TOOL_ROUNDS_RICH = ROOT / 'static' / 'js' / 'ui' / 'tool_rounds_rich.js'
 HARNESS = HERE / '_tool_rounds_wire_parity_harness.js'
 ROUNDS = HERE / '_tool_rounds_wire_parity_rounds.json'
 BASELINE = HERE / '_tool_rounds_wire_parity_baseline.json'
@@ -45,7 +47,7 @@ def _run_harness() -> list[dict]:
     if shutil.which('node') is None:
         pytest.skip('node is required for the tool_rounds wire-parity gate')
     proc = subprocess.run(
-        ['node', str(HARNESS), str(TOOL_ROUNDS), str(ROUNDS)],
+        ['node', str(HARNESS), str(TOOL_ROUNDS), str(ROUNDS), str(TOOL_ROUNDS_RICH)],
         capture_output=True, text=True, timeout=60,
     )
     if proc.returncode != 0:
@@ -101,6 +103,8 @@ def test_battery_covers_every_branch_helper():
         'apply_diffs',          # _renderBatchEditsBlock
         'compactionLayer',      # _renderCompactionLabel
         'toolTokens',           # _computeToolBadgeHtml token branch
+        'project_board_read',   # _renderConvMetaBlock (rich, tool_rounds_rich.js)
+        '_timerPolls',          # _renderTimerWatcherBlock (rich, tool_rounds_rich.js)
     ]
     missing = [m for m in required_markers if m not in battery]
     assert not missing, (

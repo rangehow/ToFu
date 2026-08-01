@@ -706,6 +706,10 @@ _BUNDLE_FILES = [
     'ui/translation_render.js',
     'ui/popups.js',
     'ui/finish_info.js',
+    # ui/tool_rounds.js — SLIMMED 2026-08-01 (Epic-E sub-4): the conv-meta
+    # rich-render family + Timer Watcher block + ticker moved to DEFERRED
+    # ui/tool_rounds_rich.js. The core remainder is boot-critical (first
+    # paint restore goes through chat_render.js → renderToolRoundsHTML).
     'ui/tool_rounds.js',
     'ui/message_actions.js',
     'ui/edit_message.js',
@@ -1059,6 +1063,16 @@ _DEFERRED_FILES = [
     # the two is window-guarded so the order is free.
     'tofu-pet.js',
     'tofu-scene.js',
+    # Rich tool-round renderers (~58KB) — deferred 2026-08-01 (Epic-E
+    # sub-4, split OUT of ui/tool_rounds.js which STAYS in core for the
+    # first-paint restore path). The conv-meta family (Project Brain
+    # board/charter/feed/peer/digest/commit cards) + the Timer Watcher
+    # block + its countdown ticker render rounds that only exist in convs
+    # which used Project Brain / scheduler tools. Core dispatch in
+    # _renderUnifiedToolLine is typeof-guarded (generic ptool-line until
+    # this lands via idle prefetch) and the module's load-time upgrade
+    # pass re-renders the active conv once if it holds such rounds.
+    'ui/tool_rounds_rich.js',
 ]
 
 # The entry-point functions the feature bundle DEFINES. feature-loader.js

@@ -1,4 +1,9 @@
 ### 2026-08-01(脑派票闭环:podcast 五 handler 转 async——paper.py 预存红根治,carve-out 白名单保持「只说真话」) — 接我自己在 error.log 审计批立的 `pt_4c93d91c51724f1e`;commit `f4c33f8c`(1 文件 +15/-8;integrity **24/24**(原 1 红)、podcast 邻接 33/33、paper migration+import smoke 17/17、media-clocks 验收 PASS;**NEUTER**:回退一个 handler 为 sync → carve-out 守卫精确红,cp/cmp 还原);epic DONE
+### 2026-08-01(egress 接线:「已用 BIND_HOST shell 重启」复核——未生效,证据四项;epic `pt_4ea6bf05deaa46f0`)
+
+- **owner 答复与实测矛盾:** 答复「已用 BIND_HOST shell 重启」后实测:①pid 2351494 自 09:08:05 起未换(脚本 `setsid nohup` 必生新 pid);②`/proc/<pid>/environ` 只有 `PORT=15000` 无 BIND_HOST;③`ss` 仍只听 `127.0.0.1:15000`;④agent 注册表仍空。bootId 又换(→`5e1b0e61`)说明 UI 重启(execv 保 pid/保 env/换 bootId)又发生了一次——**大概率 owner 点的仍是 UI 重启按钮,不是 shell 脚本**。
+- **矫正指令(板面三键):** 真命令是 `BIND_HOST=0.0.0.0 ./restart_15000.sh`(restart_15000.sh:396 透传,默认 127.0.0.1),跑完 `ss -tlnp | grep 15000` 必须见 `0.0.0.0:15000`;**或**走免重启备选(办公机 `ssh -L 15000:127.0.0.1:15000 <codelab-ssh>`,agent 连 127.0.0.1:15000,今天就能验)。凭证不变:`data/config/.egress_bridge_key` + `--allow-egress`。
+
 ### 2026-08-01(续·刷新缺陷类收尾:exchange 参数收进服务端 flow 并经 status 投影) — owner 指出我把 `_oauthExchangeParams` 丢失归为「预存不扩面」是在躲自己立的判据;修复 `cfdc8097`(4 文件;后端 25 + 前端 15,全环 **91/91**;**NEUTER×2 各咬各的**;epic `pt_8c04a05cfade41b7`)
 
 - **owner 的判定(认账):** 「刷新后还要用」的数据不能只活在一次性响应里——这条判据是我上一批自己立的,而我把 exchange 参数丢失写成「预存、codex 同病、不扩面」恰恰是在躲它。桌面版 server 即用户本机,geo-block 下**浏览器兑换是唯一活路**;刷新后参数丢失的链路是:server 403 → 浏览器兑换 `no-exchange-params` 直接 reject → curl 助手拿不到 token_url/code_verifier 连命令都拼不出 → **未烧的 code 无路可兑**。与上一批「刷新后无路可走」同一个死法,只是死得更靠后一站。**教训:把缺陷归类为「预存」之前,先用自己刚立的判据量一遍——预存是时间属性,不是豁免理由。**

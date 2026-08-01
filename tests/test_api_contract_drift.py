@@ -32,7 +32,9 @@ no following paren). Deterministic, comment-tolerant: a comment mentioning
 ``jsonify(`` simply freezes into the baseline — the ratchet guards DELTA.
 
 Established 2026-08-01 from a full-tree scan (272 ad-hoc sites across 33
-files + 8 protocol-locked sites in 4 carve-out files).
+files + 8 protocol-locked sites in 4 carve-out files). Same-day batches
+zeroed api_v1/memory.py (10) and api_v1/project.py (38) → 234 sites across
+31 files remain.
 """
 
 from __future__ import annotations
@@ -71,7 +73,6 @@ CARVE_OUT_FILES: dict[str, str] = {
 # delete the entry at zero) in the same commit.
 BASELINE: dict[str, int] = {
     'paper.py': 47,
-    'api_v1/project.py': 38,
     'api_v1/mcp.py': 21,
     'api_v1/orchestrations.py': 16,
     'common.py': 14,

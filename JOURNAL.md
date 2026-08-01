@@ -1,3 +1,12 @@
+### 2026-08-01(api-contract 切片 2:api_payload 透传原语 + project.py 38 站点清零 + 两兄弟已收到棘轮通报) — epic `pt_931e16c4` 批 2;owner 三指令(通报兄弟/避拆分与在改文件/从 project.py 起按 §7 分类迁移)全执行
+
+- **协调先行:** msabaslv 回执 CONFIRM——亲跑棘轮 5/5 绿,其 ①②③ 批对 push.py(基线 3)/common.py(14) 零计数改动,规则接收「改计数必同 commit 更新 BASELINE」;msab0zlx 通报已投递未回(不阻塞)。paper.py 按 owner 指示让位(架构评审拆分路线图),push.py/common.py 待 push epic 落地。
+- **原语先行:** project.py 38 站点分类=零裸数组,全 dict;其中错误透传族(lib 层 result 自带 {ok,error},路由只补状态码)套 api_error 会把 result 嵌进 error 键破线形——新增 `api_payload(payload, status)`(lib/api_response.py):ok 在场保留、缺席按 status<400 默认、≥400 附 request_id、payload 键逐字节顶层存活。契约文档 §2.2/§7 同步收录——此原语是 paper.py/common.py 同族的批量解锁件。
+- **迁移与验证:** project.py 38 站点→api_ok/api_payload;`tests/test_api_contract_project_parity.py` 三层(helper 契约×3 + 17 形态 parity + shipped-source + 防嵌套钉)。failing-first 精确(仅 shipped-source 预迁移红)。**NEUTER×2 各咬各的:** 摘除 api_payload→5 红(契约×3+parity+防嵌套);回注 jsonify 站点→精确 shipped-source 1 红;均 cmp 字节还原。全环 **110/110**(+6 vs 切片 1)。棘轮基线同批收紧(38→0 删条目,实测 drift 环绿)。
+- **执行层异常记一笔(已核实内容零失真):** apply_diffs 批量遭「部分重放」——project.py 编辑报 9/10 失败但文件已是我规范的精确替换(含我新命名的 api_payload),drift 基线删除亦先行落地;逐 hunk 对 HEAD 复核全与我批规范一致,零外来内容。教训复用 owner 既有判据:**快照/回报会撒谎,runtime 验证(git diff 逐 hunk + 测试环)才是事实源**。
+- **预存漂移立案不夹修(owner 规则):** `pt_2d6eb6a0f919469f`——project_brain_influence except 无 return,其 return 被错置文件尾 peer_abort 之后成死代码(出错退化框架级 500,丢 source 诊断)。
+- **下一批(owner 定序):** api_v1/mcp.py(21)→ api_v1/orchestrations.py(16)。
+
 ### 2026-08-01(溯源 chip 铺到提案卡:「待你处理」页全部决策卡统一署名 + 共享树四方缠卷实录) — owner 复核第一批后指名「提案卡也是要我决策的,同样没署名」;commits `4682455d`(后端,**blob 级暂存**)+ `95ce2ee2`(前端+测试,兄弟落地后整文件);attention **39/39**、终态全环 **93/93**
 
 - **修法:** `_charter_proposals` 复用 `_conv_titles` 输出 `askedByConvId/askedByTitle`(与停摆卡同形);前端把 from-chip 从 `_questionCard` 抽成**共享 `_fromChip(item)`** 挂进 `_proposalCard` 头——两份手写拷贝必漂移,chip 只有部分决策卡有就等于没有。NC 升级:一次阉割 `_fromChip` 的 fromId 取值,**双卡 chip 同时消失**(证明同源)。

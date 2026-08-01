@@ -61,6 +61,14 @@ Emitted by `api_error(err, status=…)` and its named wrappers:
 `api_payload_too_large` (413), `api_internal_error` (500, auto-logs traceback),
 `api_service_unavailable` (503, sets `Retry-After`).
 
+**Result passthrough:** when a lib-layer function already returned
+`{ok, error, ...}` and the route only chooses the HTTP status, use
+`api_payload(result, status)` — it preserves the result's top-level shape
+(`api_error` would WRONGLY nest it under a single `error` key), keeps a
+present `ok`, defaults `ok = status < 400` when absent, and attaches
+`request_id` on 4xx/5xx. This is the idiom behind the Project Brain routes'
+`if not result.get('ok'): return api_payload(result, 409|400)`.
+
 `error` is a **string** for legacy-compatible sites (the frontend reads
 `data.error` as a string at >80 places) and an **envelope dict** when the route
 passes one or when the boundary converts an exception via
@@ -162,8 +170,9 @@ pins the gate).
 1. Route lives in `routes/api_v1/<domain>.py` (the canonical surface; legacy
    `routes/*.py` is maintained, not extended, except UI-only conveniences).
 2. `parse_body()` + `require_*`/`optional_*` for input; never `get_json` digs.
-3. Return via `api_ok` / `api_created` / `api_error` family; raise
-   `BadRequest` for validation. No bare `jsonify`, no hand-rolled 500.
+3. Return via `api_ok` / `api_created` / `api_payload` / `api_error`
+   family; raise `BadRequest` for validation. No bare `jsonify`, no
+   hand-rolled 500.
 4. Arrays wrapped: `api_ok({'items': …})`, never a bare top-level array.
 5. `@api_meta(...)` so `GET /api/openapi.json` stays truthful.
 6. Streaming → `sse_response(gen, …)`; binary → document the carve-out (§4).
@@ -185,6 +194,10 @@ allows it to shrink. To convert a file:
 
 1. Classify each site: envelope-able (dict payloads, `api_ok(data)` is
    additive) vs bare-array/binary/protocol (carve-out, document it).
+   A lib-result passthrough (`return jsonify(result), <status>` where
+   `result` came from a `lib.*` call) converts to `api_payload(result,
+   <status>)`, NEVER `api_error(result, …)` — the latter nests the whole
+   result under `error` and breaks every consumer.
 2. Convert; add a parity test in the style of
    `tests/test_api_response_route_conversions.py` — legacy keys must survive
    byte-identical; the ONLY additions allowed are `ok` (always) and

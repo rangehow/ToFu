@@ -102,7 +102,14 @@ def _request_platform_downloads(arch_override: str = '') -> list[dict]:
     flight), the row is omitted and the mirror is kicked — the releases-page
     escape hatch stays, and the modal's 3 s poll pops the direct link in once
     the file lands. URLs are ABSOLUTE, built from the request's own host — an
-    address the user demonstrably reaches (see _agent_server_url).
+    address the user demonstrably reaches (see _agent_server_url). Under a
+    path-prefixed cloud-IDE proxy (…/proxy/<port>/) the host alone is NOT
+    enough — the proxy strips the prefix before forwarding, so the backend
+    structurally cannot see it, and the click dies on the gateway's default
+    route without ever reaching Tofu. The client therefore re-bases the
+    canonical ``/api/...`` tail onto its live ``BASE_PATH`` before rendering
+    (local-control.js ``_lcResolveDlUrl`` — the same seam as pdf_viewer.js
+    ``_resolvePaperPdfUrl``).
 
     ``arch_override`` is the architecture the CLIENT resolved for itself via
     ``navigator.userAgentData.getHighEntropyValues(['architecture'])`` — the

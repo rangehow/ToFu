@@ -560,6 +560,25 @@ function _lcFmtSize(bytes) {
   return (mb >= 100 ? Math.round(mb) : Math.round(mb * 10) / 10) + ' MB';
 }
 
+/* Re-base a server-built same-origin URL onto the CURRENT proxy base path.
+ *
+ * `downloads[].url` is built by the backend from request.host_url — which
+ * under a path-prefixed cloud-IDE proxy (…/proxy/15000/) is the origin
+ * WITHOUT the prefix: the proxy strips the prefix before forwarding, so the
+ * backend structurally cannot see it. Clicking such a link hits the
+ * gateway's default route and returns "not found" without the request ever
+ * reaching Tofu (the access log shows zero /desktop/download hits). Same
+ * failure class as the paper PDF URL (pdf_viewer.js _resolvePaperPdfUrl):
+ * strip back to the canonical /api/... tail and re-apply the LIVE base path
+ * via apiUrl(). URLs with no /api/ marker (the releases-page escape hatch)
+ * pass through untouched, and so does everything when apiUrl is absent. */
+function _lcResolveDlUrl(url) {
+  if (!url || typeof apiUrl !== 'function') return url;
+  var i = url.indexOf('/api/');
+  if (i < 0) return url;
+  return apiUrl(url.slice(i));
+}
+
 /* The download instruction — authored ONCE for both install branches.
  *
  * ── Why per-platform links instead of the releases page ──
@@ -593,7 +612,8 @@ function _lcDownloadLinks(d) {
       // The label names the CHIP, not just the OS — the whole point of the
       // two-DMG case is telling the user which one is theirs. Size goes in
       // the label: a 100+ MB installer with no size shown is a bad surprise.
-      html += '<a class="lc-dl-link lc-dl-direct" href="' + _lcEsc(p.url) +
+      html += '<a class="lc-dl-link lc-dl-direct" href="' +
+        _lcEsc(_lcResolveDlUrl(p.url)) +
         '" target="_blank" rel="noopener noreferrer" title="' +
         _lcEsc(p.filename || '') + '">' +
         _lcEsc(_lcT('local.desktopDownloadFor', '下载桌面版') + ' · ' +

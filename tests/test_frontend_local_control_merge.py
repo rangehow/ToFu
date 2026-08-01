@@ -131,6 +131,10 @@ _SHIPPED_SYMBOLS = (
     # splice drifted when the helper was extracted and the whole suite went
     # red on ReferenceError, which is exactly the drift it exists to catch.
     "_lcDownloadLinks", "_lcFmtSize",
+    # Re-bases the backend's absolute download URL onto the live BASE_PATH
+    # (cloud-IDE proxy prefix) — _lcDownloadLinks calls it, so the splice
+    # needs it or every test here goes red on ReferenceError.
+    "_lcResolveDlUrl",
 )
 
 
@@ -238,6 +242,7 @@ HARNESS = textwrap.dedent("""
                          download_url: DL, server_url: SRV, downloads: DLS }});
       const el = document.getElementById('lcDesktopSetup');
       const dlA = el.querySelector('a[href]');
+      const pageA = el.querySelector('a#lcDesktopDownload');
       const dsw = document.getElementById('lcDesktopSwitch');
       const hostedEl = el.querySelector('.lc-dl-hosted');
       desktop[st] = {{
@@ -246,6 +251,8 @@ HARNESS = textwrap.dedent("""
         hasMintButton: !!el.querySelector('#lcMintBtn'),
         // A real, clickable link the user can follow — not prose.
         downloadHref: dlA ? dlA.getAttribute('href') : '',
+        // The releases-page escape hatch — external, must never be re-based.
+        pageHref: pageA ? pageA.getAttribute('href') : '',
         // The per-platform direct links (vs the releases-page escape hatch).
         directCount: el.querySelectorAll('a.lc-dl-direct').length,
         hostedText: hostedEl ? hostedEl.textContent.trim() : '',
@@ -324,6 +331,22 @@ HARNESS = textwrap.dedent("""
 def _run(shipped: str) -> dict:
     script = HARNESS.format(shipped=shipped,
                             html=MODAL_HTML.replace("`", "\\`"))
+    proc = subprocess.run([_node(), "-e", script], cwd=ROOT,
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, f"node failed: {proc.stderr}"
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+def _run_proxied(shipped: str) -> dict:
+    """``_run`` with a live base path: ``apiUrl()`` rebases onto
+    ``/proxy/15000``, simulating a path-prefixed cloud-IDE proxy deployment
+    (``BASE_PATH`` = the page's own prefix, exactly what core.js computes)."""
+    script = HARNESS.format(shipped=shipped,
+                            html=MODAL_HTML.replace("`", "\\`"))
+    anchor = "global.window = dom.window;"
+    assert script.count(anchor) == 1, "harness window-anchor drifted"
+    script = script.replace(
+        anchor, anchor + "\nglobal.apiUrl = (p) => '/proxy/15000' + p;")
     proc = subprocess.run([_node(), "-e", script], cwd=ROOT,
                           capture_output=True, text=True)
     assert proc.returncode == 0, f"node failed: {proc.stderr}"
@@ -620,6 +643,37 @@ def test_a_server_hosted_entry_shows_where_the_file_comes_from():
         "cannot tell it downloads from this server rather than GitHub")
     assert "MB" in out["remote"]["text"], (
         "the artifact size must appear next to the download")
+
+
+@pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
+def test_the_direct_link_is_rebased_onto_the_live_proxy_prefix():
+    """The reported 404: the backend builds downloads[].url from
+    request.host_url, which under a path-prefixed cloud-IDE proxy
+    (…/proxy/15000/) LACKS the prefix — the click died on the gateway's
+    default route and never reached Tofu (zero /desktop/download hits in
+    access.log). With a live base path the rendered href must carry it; the
+    releases-page escape hatch (no /api/ marker) must pass through
+    untouched."""
+    out = _run_proxied(_shipped())["desktop"]
+    href = out["remote"]["downloadHref"]
+    assert href == ('/proxy/15000/api/v1/desktop/download/'
+                    'Tofu-Setup-0.15.2-win64.exe'), href
+    assert out["remote"]["pageHref"] == (
+        'https://github.com/rangehow/ToFu/releases/latest'), (
+        'the escape hatch is external — rebasing it would break it')
+
+
+@pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
+def test_NEUTER_rendering_the_server_url_verbatim_is_caught():
+    """Strip the rebase (render p.url verbatim) → the prefix-less absolute
+    URL goes straight into the href: the exact reported 404 shape."""
+    out = _run_proxied(_shipped(
+        lambda s: s.replace("_lcResolveDlUrl(p.url)", "p.url")
+    ))["desktop"]
+    href = out["remote"]["downloadHref"]
+    assert not href.startswith('/proxy/15000/'), (
+        'NEUTER did not remove the rebase — the href still carries the '
+        'live prefix')
 
 
 @pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")

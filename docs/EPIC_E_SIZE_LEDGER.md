@@ -77,9 +77,10 @@
 | 2026-08-01 | sub-5B | 见 HEAD | streaming_swarm_panel.js (55KB) | 同上（与 5A 同批生效） | 同上 | 7 调用点装闸 + 通用行退化；注册套件重锚 deferred 不变量；NEUTER×2 精确；农场 10/10；e2e(visual+slow) 的 `_buildSwarmPanelHTML` 断言现依赖 idle prefetch 落地，已标记 |
 | 2026-08-01 | sub-6 | `9b10125c` | myday.js + myday_tasks.js (65KB) | **1,384,317**（`bundle-f53ca113.js`，同日实测；与农场**同 hash**） | **666,260**（`feature-1cade5e9.js`） | 零闸 + 3 stub（openDailyReport/closeDailyReport/_mydayTriggerGenerate，py+js 双表）；零外部 JS 调用方（comm 实证）、`_myday` 态私有于双文件、boot 块 readyState 分支晚载安全；NEUTER×2 精确；农场 13/13；runbook 31 项 ALL GREEN |
 | 2026-08-01 | sub-7 | 见 HEAD | project.js 拆分（state 24KB 留 core + panel 67KB 降级） | **1,351,102**（`bundle-c0d727ec.js`，同日实测） | **702,323**（`feature-c4756610.js`） | 第二个「状态留 core+面板降级」拆分；反向裸调 typeof 闸 ×3；13 stub；harness 双文件重指向 ×2（state-first + 响亮失败）；NEUTER×2 精确；环 106/106；runbook 34 项 ALL GREEN |
+| 2026-08-01 | sub-8 | `48c1651f` | finish_info.js 拆分（cost-popover 族 24KB 降级为懒构建） | **1,273,849**（`bundle-4f0fc8ba.js`，同日实测，含兄弟增量） | **782,274**（`feature-2a61875f.js`） | 首个「懒构建」拆分：renderFinishInfo 不再内嵌预建 popover，改 stash `_costCtxByMsg`（var 非 const——跨 bundle 缝钉）+ 空占位，`_toggleCostPopover` stub 首击懒建；cache-break 短语族留 core（折叠栏 tooltip 冷渲）；modes harness 双模态行为证 + 自带 NC；影子树 NEUTER×2（1红/2红）；两 cache 套件重锚随批；runbook 39 项 ALL GREEN |
 
 ## 目标线与当前差距
 
 - **目标（暂定）**：core 压缩态 ≤ **1.2 MB**（待 owner 确认）。
-- **当前（2026-08-01 生产实测）**：**1,351,102 B**（`bundle-c0d727ec.js`，八片全部生效，runbook 34 项 ALL GREEN）⇒ 差距 ~151 KB（基线 1,550,424 → 累计 −199 KB 压缩态，含兄弟增量）。
-- **已排队**：累计已降级源码 573KB（53+62+160+58+55+55+65+67）。下一片：finish_info.js 90KB——`renderFinishInfo`/`renderFileChangesBar` 裸调用在 chat_render.js:1833/1848 首屏渲染路径，比照 tool_rounds sub-4 拆「冷渲染留 core + 富内容（cost popover/file-changes 富渲染）降级」。**Epic-E 完成判读：core ≤1.2MB 后 complete；剩余缺口 ~151KB，finish_info 拆分（预释 ~50-60KB）后需再评一至两件（候选：conversation_list 71KB 侧栏冷渲染子集 / sse_pipeline 116KB poll-fallback 族 / api.js 99KB 冷端点族）。**
+- **当前（2026-08-01 生产实测）**：**1,273,849 B**（`bundle-4f0fc8ba.js`，九片全部生效，runbook 39 项 ALL GREEN）⇒ 差距 **~74 KB**（基线 1,550,424 → 累计 −277 KB 压缩态，含兄弟增量）。
+- **已排队**：累计已降级源码 597KB（53+62+160+58+55+55+65+67+24）。下一片：**settings 面板族六件**（update 48.7K / skills 21.5K / memory 16.9K / optimizer 13.9K / timer 13.6K / preferences 8.1K ≈ 123KB 源，msagblke 认领 sub-9，预释压缩态 ~40-60KB——单片即可基本合上缺口）；settings/ 子包 508KB 普查（本会话已起：boot 必需=_loadServerConfigAndPopulate 族 vs 纯面板）作为 sub-10 候选池。

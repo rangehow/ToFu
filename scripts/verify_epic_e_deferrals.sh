@@ -7,7 +7,9 @@
 # (sub-3C) + ui/tool_rounds_rich.js (sub-4, rich conv-meta + timer-watcher
 # renderers split out of tool_rounds.js) + access_matrix.js (sub-5A) +
 # streaming_swarm_panel.js (sub-5B) + myday.js/myday_tasks.js (sub-6) +
-# project.js split (sub-7, state core + panel deferred):
+# project.js split (sub-7, state core + panel deferred) +
+# ui/finish_info_rich.js (sub-8, lazy cost popover) +
+# settings-panel six-pack (sub-9, update/skills/memory/optimizer/timer/preferences):
 #
 #     bash scripts/verify_epic_e_deferrals.sh [base_url]
 #
@@ -35,7 +37,13 @@
 #               _updateProjectUI / _applyProjectData) + reverse guard
 #         17. served feature INCLUDES the panel defs (openProjectModal /
 #               browseDirectory); zero state defs in feature
-#   ledger 18. prints measured byte counts for docs/EPIC_E_SIZE_LEDGER.md
+#   sub-8  18. served core EXCLUDES the popover defs but KEEPS
+#               _cacheBreakReason + the ctx stash + the stub entry
+#         19. served feature INCLUDES _buildCostPopover; zero phrase-family dup
+#   sub-9  20. served core EXCLUDES the six-pack defs but KEEPS the stub
+#               entries + the tofu:feature-bundle-loaded dispatch
+#         21. served feature INCLUDES the six-pack defs
+#   ledger 22. prints measured byte counts for docs/EPIC_E_SIZE_LEDGER.md
 #
 # Exit 0 = all green; exit 1 = at least one failure (details on stdout).
 
@@ -198,6 +206,61 @@ printf '%s' "$CORE_BODY" | grep -q '"openProjectModal"' \
   && pass "sub-7.17d core feature-loader carries the openProjectModal stub" \
   || fail "sub-7.17d core feature-loader MISSING the openProjectModal stub"
 
+# ── sub-8 (finish_info cost-popover lazy split) ──
+printf '%s' "$CORE_BODY" | grep -q 'function _buildCostPopover(' \
+  && fail "sub-8.18 core still contains the _buildCostPopover def" \
+  || pass "sub-8.18 core excludes the _buildCostPopover def"
+printf '%s' "$CORE_BODY" | grep -q 'function _toggleCostPopover(' \
+  && fail "sub-8.18b core still contains the _toggleCostPopover def" \
+  || pass "sub-8.18b core excludes the _toggleCostPopover def"
+printf '%s' "$CORE_BODY" | grep -q 'function _cacheBreakReason(' \
+  && pass "sub-8.18c core keeps _cacheBreakReason (cold phrase family)" \
+  || fail "sub-8.18c core LOST _cacheBreakReason (warn tooltip breaks)"
+printf '%s' "$CORE_BODY" | grep -q '_costCtxByMsg.set(' \
+  && pass "sub-8.18d core keeps the ctx stash" \
+  || fail "sub-8.18d core lost the _costCtxByMsg stash"
+printf '%s' "$CORE_BODY" | grep -q '"_toggleCostPopover"' \
+  && pass "sub-8.18e core keeps the _toggleCostPopover stub entry" \
+  || fail "sub-8.18e core lost the _toggleCostPopover stub entry"
+printf '%s' "$FEAT_BODY" | grep -q 'function _buildCostPopover(' \
+  && pass "sub-8.19 feature includes the _buildCostPopover def" \
+  || fail "sub-8.19 feature MISSING the _buildCostPopover def"
+printf '%s' "$FEAT_BODY" | grep -q 'function _cacheBreakReason(' \
+  && fail "sub-8.19b feature DUPLICATES _cacheBreakReason" \
+  || pass "sub-8.19b feature has no _cacheBreakReason duplication"
+
+# ── sub-9 (settings-panel six-pack deferral) ──
+printf '%s' "$CORE_BODY" | grep -q 'function openUpdateDialog(' \
+  && fail "sub-9.20 core still contains the openUpdateDialog def" \
+  || pass "sub-9.20 core excludes the openUpdateDialog def"
+printf '%s' "$CORE_BODY" | grep -q 'function toggleTimerPanel(' \
+  && fail "sub-9.20b core still contains the toggleTimerPanel def" \
+  || pass "sub-9.20b core excludes the toggleTimerPanel def"
+printf '%s' "$CORE_BODY" | grep -q 'function toggleOptimizerPanel(' \
+  && fail "sub-9.20c core still contains the toggleOptimizerPanel def" \
+  || pass "sub-9.20c core excludes the toggleOptimizerPanel def"
+printf '%s' "$CORE_BODY" | grep -q 'function openMemoryModal(' \
+  && fail "sub-9.20d core still contains the openMemoryModal def" \
+  || pass "sub-9.20d core excludes the openMemoryModal def"
+printf '%s' "$CORE_BODY" | grep -q 'function _populateSkillsTab(' \
+  && fail "sub-9.20e core still contains the _populateSkillsTab def" \
+  || pass "sub-9.20e core excludes the _populateSkillsTab def"
+printf '%s' "$CORE_BODY" | grep -q '"toggleTimerPanel"' \
+  && pass "sub-9.20f core keeps the toggleTimerPanel stub entry" \
+  || fail "sub-9.20f core lost the toggleTimerPanel stub entry"
+printf '%s' "$CORE_BODY" | grep -q 'tofu:feature-bundle-loaded' \
+  && pass "sub-9.20g core keeps the land-event dispatch + mobile re-wrap" \
+  || fail "sub-9.20g core lost the tofu:feature-bundle-loaded mechanics"
+printf '%s' "$FEAT_BODY" | grep -q 'function openUpdateDialog(' \
+  && pass "sub-9.21 feature includes the openUpdateDialog def" \
+  || fail "sub-9.21 feature MISSING the openUpdateDialog def"
+printf '%s' "$FEAT_BODY" | grep -q 'function toggleTimerPanel(' \
+  && pass "sub-9.21b feature includes the toggleTimerPanel def" \
+  || fail "sub-9.21b feature MISSING the toggleTimerPanel def"
+printf '%s' "$FEAT_BODY" | grep -q 'function openMemoryModal(' \
+  && pass "sub-9.21c feature includes the openMemoryModal def" \
+  || fail "sub-9.21c feature MISSING the openMemoryModal def"
+
 # ── ledger measurements ──
 CORE_BYTES=$(printf '%s' "$CORE_BODY" | wc -c)
 FEAT_BYTES=$(printf '%s' "$FEAT_BODY" | wc -c)
@@ -208,7 +271,7 @@ say "feature $FEAT  $FEAT_BYTES bytes"
 
 say ""
 if [ "$FAILS" -eq 0 ]; then
-  say "ALL GREEN — Epic-E deferrals sub-3A/3B/3C/4/5A/5B/6/7 verified live."
+  say "ALL GREEN — Epic-E deferrals sub-3A/3B/3C/4/5A/5B/6/7/8/9 verified live."
   exit 0
 else
   say "$FAILS FAILURE(S) — deferrals NOT verified; do not mark shipped."

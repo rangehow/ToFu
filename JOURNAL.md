@@ -1,3 +1,10 @@
+### 2026-08-01(续·error.log 审计四指令全收:同类普查揪出 3 处真隐患 + AST 守卫 + 扩展 401 退避 + 三案上板) — commits `2c3f9cd2`(修复+守卫)+ `1bdecfef`(扩展)+ `589bb685`(runbook);**NEUTER×3 各咬各的**(全 cp/cmp 字节还原)
+
+- **①同类普查(owner 指令,先出账后修):** 自写 AST 扫描器过全部 `routes/` 138 个 async handler——**真隐患 3 处**(同类「daily_report 型」):`list_branches`/`create_branch` 在环上解析整段 messages blob(tens of MB),`get_compaction` 在环上解析多 MB 归档;**假阳性 4 处**(`list_convs` 的 `_meta_branch` 闭包、paper.py 三个闭包早已 to_thread——扫描器对「闭包传参」形态失明);fetch_arxiv_stream 同步分块下载在 async generator 内,按读有界、无实测停摆,记账不修。3 处真隐患同批修掉(`_branch_persist_payload` 一跳带双活)。
+- **②AST 守卫(owner 指名参照 agent_loop 模式):** `tests/test_loop_blocking_routes_guard.py` 3 检查——daily_report 五个重 helper 在 async def 内只允许出现在 `asyncio.to_thread` 首参位(AST 规则)+ 两个兄弟文件的 source-token 钉 + 防空扫描下限。**NEUTER:** 摘一处 to_thread→精确 1 红;还原 `_branch_persist_payload`→精确 1 红。**顺手抓回预存红:** `test_async_handler_integrity[routes/paper.py]`(5 个 podcast sync handler 不在白名单)与 `test_code_quality`×4,均 stash 实证干净 HEAD 原生,已立案 `pt_4c93d91c51724f1e`。
+- **③扩展 401 退避(实测 3104 条/日、单日最大告警源):** 固定 9 秒硬轮改为**指数退避 9s→5min 封顶 + 连续 5 次进入 needs-repair 态**(橙色 KEY 徽标 + 重新配对文案 + 5 分钟慢探自保活)+ 任意成功即复位 + **`_scheduleNextPoll` 单定时器不变量**(顺带修掉潜伏的双轮询环隐患)+ 改密钥/改服务器立即取消驻车探针秒连。守卫 `test_browser_bridge_auth_backoff.py` 7 钉,NEUTER:退回固定重试→精确 2 红。
+- **④三案上板:** PG 播种 `pt_4d321fb8f1c2400c`(附 runbook `docs/PG_LOCAL_SEED_RUNBOOK.md`——预检/执行/验收/回退四环,机制已对照 `_pg_seed.py` 源码核实:幂等、verify-before-canonical、失败自动 quarantine;挂人门问题卡,owner 定窗口)、tofu-search RapidOCR 失配 `pt_7a80c4bb68364129`(独立工作流)、podcast 预存红 `pt_4c93d91c51724f1e`。
+- **方法论记一笔:** 「闭包传参给 to_thread」会让按词法 span 的审计扫描器产生假阳性——审计同类缺陷时,span 豁免必须额外认「函数名作为 to_thread 首参」形态;本项目 `list_convs`/paper.py 全用这种形态,恰恰是最规范的写法。
 ### 2026-08-01(续·死点击第二半:停止级联尾分支空操作——权威集 busy 时请求根本没离开浏览器) — owner 复核 `92055d60` 抓回同症状家族漏网;commit `1dbefc8f`(2 文件 +251;新 JSDOM harness **14 检查**,失败先行 4 红,**NEUTER×2 各咬各的**;前端 harness 家族环 31、bundle 清单/新鲜度环 33 全绿)
 
 - **owner 的证据链(成立):** `updateSendButton` 的 busy 谓词是 convIsBusy 并集(本地流 / activeTaskId / `_authoritativeActiveTaskIds`),但停止级联只有前两支——busy 仅来自权威集时(兄弟设备在此会话生成 / 本标签流句柄丢失)Priority-3 两支全空,处理器**连一个 abort 请求都不发**。`92055d60` 只保证「abort 到达服务器后世界即刻可知」,而这一支是「abort 永远发不出」。

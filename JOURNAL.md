@@ -1,3 +1,9 @@
+### 2026-08-01(egress epic 按 owner 指示停驻:「稍后手动烟,先挂着」) — epic `pt_4ea6bf05deaa46f0` [human-gated] 无问题停驻,升级冷却;服务器侧就绪账已全部落完,剩余只有 owner 办公机的一个动作
+
+- **owner 决策:** 四选项问题卡答「稍后手动烟,先挂着」——不烟、不关票、纯停驻。板上 reason 已带完整自助烟 runbook(正确启动命令 = VS Code 代理 URL + `--allow-egress`,验收路径,排障取证点位),owner 随时手动烟后可凭板面一键 reopen 即重派。
+- **停驻时状态账(全部实测):** 服务器 09:08 进程载 S1-S4 后端;bundle 12:50 最新;代理 URL 存活;agent 注册表全天为空(零 poll 记录);timer watcher 在本环境不可信(memory `timer-watcher-false-positive-guard`),**未再设任何守候**——owner 手动烟后直接在板上 reopen 或对话里喊一声即可。
+- **遗留小账(不阻塞):** d523797a(登录逃生口后端)不在 09:08 进程,仅当标准登录失败需 console 兜底时才值得二次重启;tsc 棘轮 oauth.js:136 `_statusCode` 已另立 `pt_3b4ad38957dd478e`,归其自然属主。
+
 ### 2026-08-01(孤儿套件定案:不是未收尾,是被取代——删草稿 + 修两处说谎的 docstring) — 接自己立的 `pt_58781f06406e4502`;commit 见下(reconcile.py 注释修正 + JOURNAL;草稿移 `.tofu_trash/` 可恢复;碎片/reconcile 家族环 **18/18**)
 
 - **定性(三层证据):** ①孤儿 `tests/test_abort_fragment_finish_reason.py`(未跟踪,07-31 23:09)期望 `_sync._stamp_aborted_fragment_finish_reason(task)`——按 `_assistantMsgId` 定位中止任务自己的碎片并打标;②同一设计的草稿实现躺在 `lib/.project_sessions/90b433e4264a/modifications.json` 里(从未落盘 lib/);③当夜终稿 pt_e736a797(fec6b46b)+ pt_93ff22bdb56146c6(46895774)改走**结构谓词**路线(`reconcile.mark_superseded_incomplete_fragments`,接进 superseding settle 的 CAS 环 + GET/startup reconcile),其 docstring 明写「TWO call sites share this ONE implementation」——id 键草稿是被**有意取代**的,不是忘收尾。

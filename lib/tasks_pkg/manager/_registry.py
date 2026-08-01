@@ -656,6 +656,42 @@ def snapshot_running_by_conv(user_id: str = '') -> dict[str, list[str]]:
     return out
 
 
+def notify_terminal_busy_state(task) -> None:
+    """Push the authoritative busy projection for ``task``'s conversation AT
+    the task's terminal seam (epic pt_3ea0e045).
+
+    Before this, the busy channel's CLEAR signal rode only the NEXT incidental
+    conversation write (a checkpoint sync / a client PUT), and for the ~30s
+    the ``_finalize_started_at`` latch was held even those frames were forced
+    to say busy. Measured on conv ms91b45tva0sym (2026-08-01): the turn
+    settled at 09:20:43 (message fr=stop, footer painted) yet the sidebar
+    showed 回答中 and the composer showed Stop for 103s+, and every
+    click-open attached to the DEAD task and replayed its done — the exact
+    "finish tag vs generating" contradiction the owner reported. On a tab
+    busy with other conversations the designed fallback (the
+    ``_crossDeviceReconcile`` conv-state poll, gated on
+    ``activeStreams.size === 0``) starves, so without a frame the stale
+    badge survived until F5.
+
+    Called from the orchestrator's ``_finalize_and_emit_done`` (after the
+    latch pop — the autopilot hook has concluded by then, so a spawned VU
+    carrier is registered and projects itself as ``<tid>#vu``, and an
+    ordinary settle projects as IDLE) and from the endpoint loop's
+    ``_finalize`` (which holds no latch). ``rev=None`` deliberately: the
+    client applies the reducer half of a rev-less frame (busy update only)
+    without triggering a body refetch.
+    """
+    try:
+        conv_id = (task or {}).get('convId') or ''
+        if not conv_id:
+            return
+        from lib.conversations import notify_conv_changed
+        notify_conv_changed(conv_id, rev=None, user_id=task_user_id(task))
+    except Exception as e:
+        logger.debug('[Manager] terminal busy notify failed task=%s: %s',
+                     ((task or {}).get('id') or '?')[:8], e)
+
+
 def abort_running_tasks_for_conv(conv_id: str, exclude_task_id: str | None = None) -> int:
     """Abort all running tasks for a conversation, except the excluded one.
 

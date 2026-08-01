@@ -1,3 +1,12 @@
+### 2026-08-01(「为什么被中断」定案:429 无限循环锁死 75 分钟——一根导火索引爆三个独立 bug;设计稿已出待审) — owner 截图报 ms9ow2tt「空泡+未完成」;epic `pt_a21cd6ebda4d4c8d`(claimed);设计稿 `docs/429_SATURATION_CONTROL_PLANE_DESIGN.md`
+
+- **表象定案:** 对话没有被中断——msg 9 正常完成(finishReason=stop);空泡是 Autopilot 下一轮 VU carrier `fb6d1f8d` 在 opus-5 上 **429 循环 ~75 分钟、3900+ 次、零 token、零回退尝试**(16:54:56→~18:14 自愈流出,18:20:35 VU 完成 done 1236 字)。根因两半:`lib/llm_dispatch/api.py:276` 明文「429 loops forever」(429 不占 hard_attempts)+ `strict_model=True` 把循环钉死在单模型 slot 池——402 能换模型是因为它冒泡到 llm_fallback,429 永远不冒泡。**旁证出系统性死结:stuck-reaper 的 `_dispatch_heartbeat` 在 dispatch 期间持续刷新(设计如此)⇒ reaper 永不杀 429 循环 ⇒ 「无限重试 × 心跳豁免」组合出永生幽灵。**
+- **bug #2(owner 预言命中):** Autopilot 续跑**不读会话当前模型**——owner 16:58 已把会话切到 kimi-k3,turn 4 worker `7ddbc751` 依然走 opus-5 并再次 429 循环。代码根:`lib/tasks_pkg/autopilot_baton.py:371` `cfg = dict(task.get('config'))` 从父任务 config 拷贝,从不重解析 settings.model(服务器自己在 quota 回退后持久化了 kimi-k3,链却不用)。
+- **bug #3(执行中新发现,最严重):** 两个活任务(fb6d1f8d carrier、7ddbc751 普通 worker)**在运行中从内存注册表蒸发**:abort 404×2、abort-conv=0、conv-state 投影 ABSENT、reaper 不可见、py-spy(172/201 线程)找不到幽灵线程。全仓唯一 pop 点 `discard_task` 的 finally 当时未执行(无 settle 日志,直到 18:20:35 自然完成才出现);单注册表(`tasks`=`_chat_runtime._tasks` 别名)与双注册表假设均已证伪;终态父任务 4a233472(TTL 内)同样提前消失。**蒸发路径未定案**,设计稿交付③按「观测性先行 → poll 止血 → DB 兜底 abort 通道」三步走。
+- **我自己的二次伤害(立此存照):** 两次 poll 触发「absent=crashed」启发式,把两个**活**任务的 DB 行误翻 `interrupted`(靠后续 checkpoint 自愈);另一次 `find .` 在 FUSE 工作区卡死 1804s 被 stall-watchdog 打断——宽 find 禁跑已是旧教训,复发一次。
+- **重试投影实测纠偏:** 事件生产与转发**已存在**(carrier 循环期间写了 7154+ 条 `autopilot_vu_event` 包装相位帧,`phase` 在 `_VU_FORWARD_TYPES` 白名单)——断的是**前端渲染**(dummy assistant/VU 气泡不画这些帧),交付②收窄为前端 harness 修复。
+- **下一步:** owner 审设计稿(三交付 + bug #2 修复,实施顺序已列);turn 4 仍在 429 循环(18:30 cycle #1136),窗口实测会间歇打开,先任其自愈;杀幽灵三选项(等窗口/重启/key 禁用)已报 owner 备案。
+
 ### 2026-08-01(续·error.log 审计四指令全收:同类普查揪出 3 处真隐患 + AST 守卫 + 扩展 401 退避 + 三案上板) — commits `2c3f9cd2`(修复+守卫)+ `1bdecfef`(扩展)+ `589bb685`(runbook);**NEUTER×3 各咬各的**(全 cp/cmp 字节还原)
 
 - **①同类普查(owner 指令,先出账后修):** 自写 AST 扫描器过全部 `routes/` 138 个 async handler——**真隐患 3 处**(同类「daily_report 型」):`list_branches`/`create_branch` 在环上解析整段 messages blob(tens of MB),`get_compaction` 在环上解析多 MB 归档;**假阳性 4 处**(`list_convs` 的 `_meta_branch` 闭包、paper.py 三个闭包早已 to_thread——扫描器对「闭包传参」形态失明);fetch_arxiv_stream 同步分块下载在 async generator 内,按读有界、无实测停摆,记账不修。3 处真隐患同批修掉(`_branch_persist_payload` 一跳带双活)。

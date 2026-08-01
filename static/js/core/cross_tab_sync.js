@@ -289,13 +289,90 @@ async function _verifyActiveConvFromServer(convId) {
   const conv = conversations.find((c) => c.id === convId);
   if (!conv) return null;
   let data;
+  /* ★ Windowed tail read (pt_afbaf3d7 ③). This verify fires on EVERY
+   * genuinely-newer-rev conv_changed frame for the open conv (and on every
+   * push-reconnect catch-up) — against a 176.8 MB conversation each full GET
+   * cost ~7s of event-loop time, and 5-6 of them in 25s fed the 2026-08-01
+   * congestion collapse. Everything this function needs (new-turn detection,
+   * trailing-turn growth, tail translations) lives in the TAIL window; the
+   * envelope's totalCount carries the authoritative length. When windowing
+   * is disabled (TOFU_CONV_WINDOW=0) or the server answers with a full body
+   * (live-task gate / fail-open), the legacy full-array path runs verbatim.
+   * An anchor miss escalates to ONE full read — correctness never depends
+   * on the window size. */
+  const _wp = (typeof convWindowParam === 'function') ? convWindowParam() : '';
   try {
-    data = await Api.conversations.get(convId);
+    data = await Api.conversations.get(convId, _wp ? { query: { window: _wp } } : undefined);
   } catch (e) {
     debugLog(`[conv-notify] active verify GET failed: ${e && e.message}`, "warn");
     return null;
   }
   if (!data) return null;
+
+  let changed;
+  if (data.windowed === true) {
+    changed = _verifyAdoptWindowedTail(conv, data);
+    if (changed === 'escalate') {
+      try {
+        data = await Api.conversations.get(convId, { query: { window: '0' } });
+      } catch (e) {
+        debugLog(`[conv-notify] active verify escalate GET failed: ${e && e.message}`, "warn");
+        return null;
+      }
+      if (!data) return null;
+      changed = _adoptVerifiedServerConv(conv, data);
+    }
+  } else {
+    changed = _adoptVerifiedServerConv(conv, data);
+  }
+
+  /* Advance the CAS base from the authoritative GET on EVERY outcome — even a
+   *   no-op — so this frame's rev is now "known" and won't re-trigger. */
+  if (typeof data.rev === "number") conv._serverRev = data.rev;
+
+  if (changed === true) {
+    conv._needsLoad = false;
+    const keepPinned = conv.pinned, keepPinnedAt = conv.pinnedAt;
+    _applySettingsToConv(conv, data.settings);
+    conv.pinned = keepPinned; conv.pinnedAt = keepPinnedAt;
+    saveConversations(convId);
+    try { ConvCache.put(conv); } catch (e) { debugLog(`[conv-notify] cache put skipped: ${e && e.message}`, "warn"); }
+    if (activeConvId === convId) {
+      /* ★ Cross-device LIVE-TURN attach — the adopted settings may have just
+       *   restored ``activeTaskId`` for a turn STILL generating on the origin
+       *   device / server. Without reconnecting, this viewing tab holds no
+       *   ``activeStreams`` entry and no pinned live task, so ``convIsBusy``
+       *   reports idle: the composer reverts to the Send arrow (looks
+       *   clickable) with no live phase text even though generation is
+       *   ongoing — the reported symptom. Reuse the SAME server-authoritative
+       *   reconnect the click-open path uses (_reconnectServerTaskIfIdle →
+       *   connectToTask): it re-attaches the SSE (restoring phase text +
+       *   streaming UI) or self-heals to finishStream if the task already
+       *   ended. Idempotent — no-ops once a stream is live in this tab (and
+       *   _onConvNotifyPush then suppresses further frames while it streams).
+       *   When it reconnects it repaints via showStreamingUIForConv, so skip
+       *   the static renderChat to avoid a double paint (mirrors
+       *   loadConversation). */
+      const _reconnected = (typeof _reconnectServerTaskIfIdle === "function")
+        && _reconnectServerTaskIfIdle(convId);
+      if (!_reconnected) {
+        window.ConvView.replaceAll(conv.id, { forceScroll: false });
+        if (typeof _restoreConvToolState === "function") _restoreConvToolState(conv);
+      }
+      /* Refresh the composer Send/Stop button so a still-running server task
+       *   shows Stop (■) on this device, not the misleading Send arrow. */
+      if (typeof updateSendButton === "function") updateSendButton();
+    }
+  }
+  return changed === true;
+}
+
+/* FULL-ARRAY adoption — the legacy byte-equivalent path (windowing disabled,
+ *   the server answered a full body, or the windowed anchor missed and the
+ *   caller escalated). Translation merge across the aligned prefix + Case 1
+ *   (server longer → wholesale adopt) + Case 2 (equal count → trailing-turn
+ *   in-place growth via the shared helper). Returns changed. */
+function _adoptVerifiedServerConv(conv, data) {
   const serverMsgs = data.messages || [];
   const localMsgs = conv.messages || [];
   let changed = false;
@@ -340,80 +417,120 @@ async function _verifyActiveConvFromServer(convId) {
     changed = true;
   } else if (serverMsgs.length === localMsgs.length && serverMsgs.length > 0) {
     /* Case 2: equal count — did the trailing assistant turn grow in place? */
-    const serverLast = serverMsgs[serverMsgs.length - 1];
-    const am = localMsgs[localMsgs.length - 1];
-    if (serverLast && am && serverLast.role === "assistant" && am.role === "assistant") {
-      /* ★ Terminal turn fields land INDEPENDENT of the growth gate below.
-       *   A settled turn's content usually no longer grows, so gating the
-       *   merge on "server longer" stranded apiRounds/_taskId/cost on the
-       *   viewing tab forever — the degraded cost-bar class (aggregate
-       *   rows only, no per-round table, no Task ID row). Single source
-       *   of the field list: core/conv_reducers.js. Fill-if-missing, so
-       *   the growth-gated server-wins lines below still own their
-       *   fields when they do fire. */
-      if (_mergeTerminalTurnFields(am, serverLast) > 0) {
-        conv.updatedAt = data.updatedAt || data.updated_at || conv.updatedAt;
-        changed = true;
-      }
-      const sc = serverLast.content?.length || 0, lc = am.content?.length || 0;
-      const st = serverLast.thinking?.length || 0, lt = am.thinking?.length || 0;
-      const sr = Array.isArray(serverLast.toolRounds) ? serverLast.toolRounds.length : 0;
-      const lr = Array.isArray(am.toolRounds) ? am.toolRounds.length : 0;
-      /* Adopt when the server's trailing turn is genuinely larger in ANY of
-       *   content / thinking / toolRounds, AND is NOT shorter in content
-       *   (keep-longer: never shrink a locally-longer answer). */
-      if ((sc > lc || st > lt || sr > lr) && sc >= lc) {
-        am.content = serverLast.content;
-        if (st >= lt && serverLast.thinking !== undefined) am.thinking = serverLast.thinking;
-        if (sr >= lr && serverLast.toolRounds) am.toolRounds = serverLast.toolRounds;
-        if (serverLast.usage) am.usage = serverLast.usage;
-        if (serverLast.model) am.model = serverLast.model;
-        if (serverLast.finishReason) am.finishReason = serverLast.finishReason;
-        if (serverLast.modifiedFiles) am.modifiedFiles = serverLast.modifiedFiles;
-        if (serverLast.modifiedFileList) am.modifiedFileList = serverLast.modifiedFileList;
-        conv.updatedAt = data.updatedAt || data.updated_at || conv.updatedAt;
-        changed = true;
-      }
+    if (_adoptTailGrowthFromServer(conv, localMsgs[localMsgs.length - 1],
+                                   serverMsgs[serverMsgs.length - 1], data)) {
+      changed = true;
     }
   }
+  return changed;
+}
 
-  /* Advance the CAS base from the authoritative GET on EVERY outcome — even a
-   *   no-op — so this frame's rev is now "known" and won't re-trigger. */
-  if (typeof data.rev === "number") conv._serverRev = data.rev;
+/* Trailing-turn in-place adoption, shared by the legacy full-array Case 2 and
+ *   the windowed anchor pair: terminal turn fields land INDEPENDENT of the
+ *   growth gate (a settled turn's content usually no longer grows, so gating
+ *   the merge on "server longer" stranded apiRounds/_taskId/cost on the
+ *   viewing tab forever — the degraded cost-bar class; single source of the
+ *   field list: core/conv_reducers.js, fill-if-missing), then the
+ *   server-wins growth adopt (keep-longer: never shrink a locally-longer
+ *   answer). Returns true when anything changed. */
+function _adoptTailGrowthFromServer(conv, am, serverLast, data) {
+  if (!serverLast || !am || serverLast.role !== "assistant" || am.role !== "assistant") {
+    return false;
+  }
+  let changed = false;
+  if (_mergeTerminalTurnFields(am, serverLast) > 0) {
+    conv.updatedAt = data.updatedAt || data.updated_at || conv.updatedAt;
+    changed = true;
+  }
+  const sc = serverLast.content?.length || 0, lc = am.content?.length || 0;
+  const st = serverLast.thinking?.length || 0, lt = am.thinking?.length || 0;
+  const sr = Array.isArray(serverLast.toolRounds) ? serverLast.toolRounds.length : 0;
+  const lr = Array.isArray(am.toolRounds) ? am.toolRounds.length : 0;
+  /* Adopt when the server's trailing turn is genuinely larger in ANY of
+   *   content / thinking / toolRounds, AND is NOT shorter in content
+   *   (keep-longer: never shrink a locally-longer answer). Guarded field
+   *   adoption is what makes a TRIMMED windowed payload safe: a missing
+   *   toolRounds simply keeps the local copy instead of clobbering it. */
+  if ((sc > lc || st > lt || sr > lr) && sc >= lc) {
+    am.content = serverLast.content;
+    if (st >= lt && serverLast.thinking !== undefined) am.thinking = serverLast.thinking;
+    if (sr >= lr && serverLast.toolRounds) am.toolRounds = serverLast.toolRounds;
+    if (serverLast.usage) am.usage = serverLast.usage;
+    if (serverLast.model) am.model = serverLast.model;
+    if (serverLast.finishReason) am.finishReason = serverLast.finishReason;
+    if (serverLast.modifiedFiles) am.modifiedFiles = serverLast.modifiedFiles;
+    if (serverLast.modifiedFileList) am.modifiedFileList = serverLast.modifiedFileList;
+    conv.updatedAt = data.updatedAt || data.updated_at || conv.updatedAt;
+    changed = true;
+  }
+  return changed;
+}
 
-  if (changed) {
-    conv._needsLoad = false;
-    const keepPinned = conv.pinned, keepPinnedAt = conv.pinnedAt;
-    _applySettingsToConv(conv, data.settings);
-    conv.pinned = keepPinned; conv.pinnedAt = keepPinnedAt;
-    saveConversations(convId);
-    try { ConvCache.put(conv); } catch (e) { debugLog(`[conv-notify] cache put skipped: ${e && e.message}`, "warn"); }
-    if (activeConvId === convId) {
-      /* ★ Cross-device LIVE-TURN attach — the adopted settings may have just
-       *   restored ``activeTaskId`` for a turn STILL generating on the origin
-       *   device / server. Without reconnecting, this viewing tab holds no
-       *   ``activeStreams`` entry and no pinned live task, so ``convIsBusy``
-       *   reports idle: the composer reverts to the Send arrow (looks
-       *   clickable) with no live phase text even though generation is
-       *   ongoing — the reported symptom. Reuse the SAME server-authoritative
-       *   reconnect the click-open path uses (_reconnectServerTaskIfIdle →
-       *   connectToTask): it re-attaches the SSE (restoring phase text +
-       *   streaming UI) or self-heals to finishStream if the task already
-       *   ended. Idempotent — no-ops once a stream is live in this tab (and
-       *   _onConvNotifyPush then suppresses further frames while it streams).
-       *   When it reconnects it repaints via showStreamingUIForConv, so skip
-       *   the static renderChat to avoid a double paint (mirrors
-       *   loadConversation). */
-      const _reconnected = (typeof _reconnectServerTaskIfIdle === "function")
-        && _reconnectServerTaskIfIdle(convId);
-      if (!_reconnected) {
-        window.ConvView.replaceAll(conv.id, { forceScroll: false });
-        if (typeof _restoreConvToolState === "function") _restoreConvToolState(conv);
-      }
-      /* Refresh the composer Send/Stop button so a still-running server task
-       *   shows Stop (■) on this device, not the misleading Send arrow. */
-      if (typeof updateSendButton === "function") updateSendButton();
+/* Windowed-tail adoption (pt_afbaf3d7 ③). `data` is the windowed envelope
+ *   (windowed:true, totalCount, messages=[tail N], firstLoadedSeq/
+ *   lastLoadedSeq/hasMore). The local tail's _msgId is the ANCHOR: found in
+ *   the server tail → everything after it is new (append, never replace);
+ *   the anchor pair itself gets the same in-place growth adoption as legacy
+ *   Case 2; translations merge over the aligned window BY _msgId (index
+ *   alignment is meaningless between a full local array and a tail window).
+ *   Returns true (adopted) / false (no change) / 'escalate' (anchor missing
+ *   — the tail window does not reach our last local message, so the caller
+ *   refetches ONE full body and runs the legacy path). */
+function _verifyAdoptWindowedTail(conv, data) {
+  const serverMsgs = data.messages || [];
+  const localMsgs = conv.messages || [];
+  let anchorIdx = -1;
+  const lastLocal = localMsgs[localMsgs.length - 1];
+  if (lastLocal && lastLocal._msgId) {
+    for (let i = serverMsgs.length - 1; i >= 0; i--) {
+      if (serverMsgs[i] && serverMsgs[i]._msgId === lastLocal._msgId) { anchorIdx = i; break; }
     }
+  }
+  if (localMsgs.length > 0 && anchorIdx < 0) {
+    return 'escalate';
+  }
+  let changed = false;
+  {
+    const byId = new Map();
+    for (const m of localMsgs) { if (m && m._msgId) byId.set(m._msgId, m); }
+    let trMerged = 0;
+    for (const sm of serverMsgs) {
+      const lm = (sm && sm._msgId) ? byId.get(sm._msgId) : null;
+      if (lm) trMerged += _mergeTranslationFields(lm, sm);
+    }
+    if (trMerged > 0) {
+      conv.updatedAt = data.updatedAt || data.updated_at || conv.updatedAt;
+      changed = true;
+    }
+  }
+  if (anchorIdx >= 0
+      && _adoptTailGrowthFromServer(conv, lastLocal, serverMsgs[anchorIdx], data)) {
+    changed = true;
+  }
+  const newOnes = serverMsgs.slice(anchorIdx + 1);
+  if (newOnes.length > 0) {
+    /* Append the new suffix — NEVER `conv.messages = serverMsgs` here: the
+     *   server array is only the tail window, assigning it would truncate
+     *   the local history view. */
+    conv.messages = localMsgs.concat(newOnes);
+    conv.title = data.title || conv.title;
+    conv.updatedAt = data.updatedAt || data.updated_at || conv.updatedAt;
+    changed = true;
+  }
+  conv._serverMsgCount = (typeof data.totalCount === 'number')
+    ? data.totalCount : serverMsgs.length;
+  /* Windowed payloads may arrive heavy-field-trimmed; arm the hydrate
+   *   affordance so expanding a trimmed message refills on demand. */
+  if (data.trimmed === true) conv._trimmed = true;
+  if (localMsgs.length === 0 && typeof recordWindowState === 'function') {
+    /* A shell conv now holds EXACTLY the response tail — stamp the
+     *   pagination envelope so scroll-up paging works against it. */
+    recordWindowState(conv, data);
+  } else if (conv._windowed) {
+    /* The conv was already paginated and keeps its own (older) head
+     *   boundary — only the totals move. */
+    conv._totalCount = data.totalCount;
+    conv._lastLoadedSeq = data.lastLoadedSeq;
   }
   return changed;
 }

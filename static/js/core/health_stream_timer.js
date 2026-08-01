@@ -392,7 +392,11 @@ function _healStuckPlaceholder(convId, probe) {
       `${_cleanDone ? 'finished cleanly server-side — adopting authoritative result (no stamp)' : 'gone/interrupted server-side — clearing stale busy pin'}.`
     );
     if (_cleanDone && typeof Api !== 'undefined' && Api.conversations) {
-      Promise.resolve(Api.conversations.get(convId)).then((data) => {
+      /* Tail-window read (pt_afbaf3d7 ③): only the trailing assistant turn
+       *   is adopted below — a full-blob fetch is pure waste on long convs.
+       *   Degrades to the legacy full GET when windowing is disabled. */
+      const _wpA = (typeof convWindowParam === 'function') ? convWindowParam() : '';
+      Promise.resolve(Api.conversations.get(convId, _wpA ? { query: { window: _wpA } } : undefined)).then((data) => {
         if (!data || !Array.isArray(data.messages) || data.messages.length === 0) return;
         const sl = data.messages[data.messages.length - 1];
         const cur = conv.messages[conv.messages.length - 1];

@@ -584,6 +584,19 @@ def run_virtual_user(task: dict, vu_msg_id: str | None = None) -> dict | None:
                     tid, sub_task.get('id', '?')[:8])
         return None
 
+    # A PLAIN user Stop lands on the CARRIER, not the parent: while the VU
+    # thinks, the client is attached to the carrier stream, so the stop
+    # button aborts the sub-task itself. Falling through here reads the
+    # corpse's empty content as a valid "keep going" reply — an EMPTY VU
+    # row got appended and a follow-up spawned on top of it, forcing the
+    # user to stop THAT task too (ms9ow2tt 2026-08-01, 19 convs affected).
+    # An aborted sub-task is a failed sub-task: stop the run. The marker
+    # stays armed, same semantics as the parent-abort branch below.
+    if sub_task.get('aborted'):
+        logger.info('[Autopilot %s] VU sub-task %s aborted (user stop) — '
+                    'stopping the run', tid, sub_task.get('id', '?')[:8])
+        return None
+
     if task.get('aborted'):
         logger.info('[Autopilot %s] Aborted during VU sub-task — stopping', tid)
         return None
@@ -991,6 +1004,18 @@ def _maybe_run_autopilot_inner(task: dict) -> dict | None:
         _preserve_unsent_vu_and_conclude(
             task, conv_id, run_id, vu_msg_id, vu_text_clean,
             reason='aborted_mid_vu')
+        _emit_vu_lifecycle_frame(task, build_event(
+            EventType.AUTOPILOT_VU_CANCEL, vuMsgId=vu_msg_id))
+        return None
+
+    # An empty cleaned text must never become a turn: appending it persists
+    # a ghost empty VU row (the visible "empty Autopilot bubble" — there is
+    # NO cleanup path for it) and the follow-up it spawns carries an empty
+    # user query, which strict providers hard-400. The marker stays armed —
+    # an empty reply is a transient degenerate, not a disarm signal.
+    if not vu_text_clean.strip():
+        logger.info('[Autopilot %s] VU reply is empty after token strip — '
+                    'standing down instead of appending a ghost row', tid)
         _emit_vu_lifecycle_frame(task, build_event(
             EventType.AUTOPILOT_VU_CANCEL, vuMsgId=vu_msg_id))
         return None

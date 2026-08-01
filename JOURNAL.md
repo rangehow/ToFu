@@ -1,3 +1,12 @@
+### 2026-08-01(Epic-E sub-9:settings 面板族六件 123KB 整批降级——生产 core 1,273,895 B,距 1.2MB 仅剩 ~45KB) — epic `pt_3879f00e`;主体 commit `9a50c00f`(7 文件);**update.js+runbook 两件被 mrxinirv 的 049b51d6 先行扫入**(共享树 commit 清扫又一次,内容零失真,归属记账于此);套件 **11/11**,环 **77/77**,runbook **42 项 ALL GREEN**
+
+- **普查定案(六件全用户触发):** update 48.7K / skills 21.5K / memory 16.9K / optimizer 13.9K / timer 13.6K / preferences 8.1K——badge/设置 tab/移动 sheet 三条入口,**boot 路径零裸调**(settings/core_panel 对三个 tab populate 早已 typeof 闸)。
+- **boot 接线三修(同批夹带,缺一即降级即事故):** ①update.js 版本检查挂 `window 'load'`——**deferral 后 bundle 晚于 load 落地,监听器永不触发,检查静默消失**;改挂 `_onReady`(feature-loader,core)。②timer/optimizer 自举(top-level `_startTimerPolling`/`_startOptimizerPolling`/badge bind IIFE)实测晚载安全(readyState 分支直燃,随包落地即起,idle prefetch ~2s 内自愈)。③**mobile_panels 包覆捕获灾难**:它 load 时按值捕获 `window.toggleTimerPanel`——deferral 后捕到的是 stub,真函数落地时**clobber 掉它的移动底单包覆**(移动端面板永久退回 display:none 徽标内=不可见)。修:包覆改**可重跑+恒等追踪**(`_capturedImpl`/`_installedWrap` 双表),feature-loader 落地时派发 `tofu:feature-bundle-loaded`(mrxinirv 看到共享树上我未提交的包覆重构,主动在 sub-8 提交里配套了派发——跨会话结对);pre-land 移动点击 kick 加载+落地回填,永不死端。
+- **gate+stub 组合(本片新图案):** settings tab 三 populate(`_populateSkillsTab`/`_populatePreferencesTab`/`_renderSettingsUpdatePill`)装 stub 后,core_panel 的 typeof 闸**从「静默跳过空 tab」变「经 stub 加载并派发」**——闸不再只是防摔,还是触发器。11 stub py+js 双表(memory 模态双键 defense-in-depth)。
+- **纪律:** failing-first 精确 5 红(manifest×2+stub 双表×2+land 事件);NEUTER×2(回注 timer.js→out_of_core 精确 1 红;摘 toggleTimerPanel→loader 表精确 1 红,均 cmp 字节还原);sub-7 位置锚 harness 随批重锚(memory.js→memory_skill_install.js,我的切片打断的锚我自己修);农场 16/16;生产实测 core `bundle-cab4b778.js` 1,273,895 / feature 782,236。**测量纠缠诚实账:sub-8 行(1,273,849)实测时本批 manifest 已在共享树,两批同形态差 46B;六件独立净额 ≈64KB 压缩态。**
+- **协作意外记一笔:** 批 20 兄弟(api-contract)与我同刻提交,我的 `git add`+`git commit -- <paths>` 之间 update.js/runbook 被 049b51d6 的提交机器扫入(它的 stat 含两文件 69 行 diff)——**快照/回报会撒谎,runtime 验证(git show HEAD 逐文件复核)才是事实源**(第五次同教训)。
+- **下一片即收官:** settings/ 子包 20 件 508KB,mrxinirv 普查定案「纯面板族、依赖单向、可整族降级」(section_requires load-time IIFE/local_endpoints setInterval 晚到自起均安全)——单片 ~45KB 缺口合线后 complete epic。
+
 ### 2026-08-01(api-contract 批 20:小文件清扫 15 站点 8 文件清零 + desktop.py 桥协议正确入册——剩余只有四座大山) — epic `pt_931e16c4` 切片 20;commit 见下(11 文件);环 **156/156**;NEUTER×2 各咬一支
 
 - **清扫账:** conv_search 3(裸数组,`|| []` 契约直用)+ swarm 3(api_meta「UI 裸 SDK 包」描述同步诚实化——批 19 规则第二次应用)+ audio 1 + translate 1 + endpoint 2(两处「bare shape」注释同步)+ conv_compaction 2 + chat_poll_abort 2 + _task_routes 1(通用工厂 `jsonify(resp), status_code` → api_payload,runtime.poll 的 canonical 形状逐字节保)。

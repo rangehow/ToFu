@@ -36,7 +36,7 @@ import re
 import threading
 import time
 
-from flask import Blueprint, jsonify
+from flask import Blueprint
 
 from lib.api_response import api_bad_request, api_error, api_not_found, api_ok
 from lib.daily_report import (  # noqa: F401  — back-compat re-exports
@@ -139,7 +139,7 @@ async def generate_daily_report():
             'persona': _pick_persona({}),
             'stats': {'totalConversations': 0},
         }
-        return jsonify(empty_result)
+        return api_ok(empty_result)
 
     # Manual-state preservation (status overrides, TODO check-offs, manual
     # TODOs, legacy _todo tasks) is centralized in _analyse_conversations →
@@ -158,7 +158,7 @@ async def generate_daily_report():
                 '(%d done, %d open), error=%s',
                 target_date, elapsed, len(convs), stream_count, done_count,
                 stream_count - done_count, result.get('error', 'none'))
-    return jsonify(result)
+    return api_ok(result)
 
 
 @api_v1_daily_report_bp.route('/api/v1/daily-report/<date_str>')
@@ -178,8 +178,8 @@ async def get_cached_report(date_str):
                          date_str, len(today_todos))
             # Off-loop: full-day messages scan + json.loads (see get_conv_count).
             conv_count = await asyncio.to_thread(_count_convs_for_date, date_str)
-            return jsonify({
-                'ok': True, 'streams': [], 'tomorrow': [],
+            return api_ok({
+                'streams': [], 'tomorrow': [],
                 'today_todos': today_todos,
                 'tasks': [],
                 'stats': {'totalConversations': conv_count},
@@ -217,10 +217,10 @@ async def backfill_report(date_str):
     # Off-loop: heavy messages scan/parse + synchronous LLM analysis (see POST).
     convs = await asyncio.to_thread(_extract_convs_for_date, date_str)
     if not convs:
-        return jsonify({'ok': True, 'tasks': [],
-                        'quote': random.choice(_QUOTES),
-                        'persona': _pick_persona({}),
-                        'stats': {'totalConversations': 0}})
+        return api_ok({'tasks': [],
+                       'quote': random.choice(_QUOTES),
+                       'persona': _pick_persona({}),
+                       'stats': {'totalConversations': 0}})
 
     result = await asyncio.to_thread(_analyse_conversations, convs, date_str)
 
@@ -232,7 +232,7 @@ async def backfill_report(date_str):
     logger.info('[DailyReport] Backfill %s completed in %.1fs: %d convs → %d streams, error=%s',
                 date_str, elapsed, len(convs), stream_count,
                 result.get('error', 'none'))
-    return jsonify(result)
+    return api_ok(result)
 
 
 def _conv_days_from_rows(rows, ms_start, ms_end):
@@ -699,8 +699,8 @@ async def start_generation():
     job = _get_job(target_date)
     if job and job.get('status') == 'generating':
         logger.debug('[DailyReport] Generate %s: already running', target_date)
-        return jsonify({'ok': True, 'status': 'generating',
-                        'progress': job.get('progress', {})})
+        return api_ok({'status': 'generating',
+                       'progress': job.get('progress', {})})
 
     # Check cache (unless forced)
     if not force:
@@ -720,8 +720,8 @@ async def start_generation():
     logger.info('[DailyReport] Background generation launched for %s (force=%s)',
                 target_date, force)
 
-    return jsonify({'ok': True, 'status': 'generating',
-                    'progress': {'stage': 'starting', 'message': '正在启动…'}})
+    return api_ok({'status': 'generating',
+                   'progress': {'stage': 'starting', 'message': '正在启动…'}})
 
 
 @api_v1_daily_report_bp.route('/api/v1/daily-report/status/<date_str>')
@@ -752,8 +752,8 @@ async def get_generation_status(date_str):
         if today_todos:
             # Off-loop: full-day messages scan + json.loads (see get_conv_count).
             conv_count = await asyncio.to_thread(_count_convs_for_date, date_str)
-            return jsonify({
-                'ok': True, 'status': 'done',
+            return api_ok({
+                'status': 'done',
                 'report': {
                     'streams': [], 'tomorrow': [], 'tasks': [],
                     'today_todos': today_todos,
@@ -775,8 +775,8 @@ async def get_generation_status(date_str):
         _clear_job(date_str)
         return api_ok({'status': 'error', 'error': error_msg})
     # Still generating
-    return jsonify({'ok': True, 'status': 'generating',
-                    'progress': job.get('progress', {})})
+    return api_ok({'status': 'generating',
+                   'progress': job.get('progress', {})})
 
 
 __all__ = ['api_v1_daily_report_bp']

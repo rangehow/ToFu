@@ -1,3 +1,9 @@
+### 2026-08-01(api-contract 批 7:daily_report.py 9 站点清零——全 api_ok 快批) — epic `pt_931e16c4` 切片 7;commit 见下(4 文件);环 **123/123**;NEUTER×2 各咬一支
+
+- **判点:** 9 站点全 api_ok 形;「status」在此是 body 字段但 api_ok 无 kwarg 冲突(与 api_error 不同),平凡成功转换。空报告/继承/生成状态等 body 本带 ok:True ⇒ 逐字节等价;分析结果透传 `jsonify(result)` 仅在 lib 缺 ok 时 +ok。
+- **纪律:** failing-first 精确 1 红;NEUTER×2 各咬 shipped-source 的不同闸支(调用点回注 / import 行回注);cmp 还原;导入冒烟;环 **123/123**。幽灵本批零干预。
+- **进度账:** 272→**168 站点 26 文件**(114 已清零,41.9%)。剩余大头:paper.py 47(拆分路线图)、common.py 14(兄弟 WIP)、chat.py 11、upload.py 10、conversations.py 10、config.py 8、oauth.py 7。下一批 upload.py(10)。
+
 ### 2026-08-01(api-contract 批 6:skills.py 9 站点清零——413 消息保真判据) — epic `pt_931e16c4` 切片 6;commit 见下(4 文件);环 **121/121**;NEUTER×2 精确
 
 - **判点:** 9 站点全 dict;两处 413 超容字面量**不用** api_payload_too_large(该 helper 自排消息格式,legacy 文本「File exceeds 25 MB limit」可能被消费方正则匹配)→ api_error(msg, status=413) 原文保真。uninstall 双分支同 memory.py 判例(200→api_ok(deleted=True),404→api_not_found(…, deleted=False) 保兼容键)。

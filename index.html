@@ -415,6 +415,12 @@
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="7 8 3 12 7 16"/><polyline points="17 8 21 12 17 16"/><line x1="3" y1="12" x2="21" y2="12"/></svg>
                 <span class="paper-reader-width-label" data-i18n="paper.readerWidthComfortable">Comfortable</span>
               </button>
+              <!-- Skim mode (reading-xp P2): collapse each section to its first
+                   paragraph + callouts; the xp tutor cards stay visible. -->
+              <button type="button" class="paper-reader-set-btn paper-skim-btn" onclick="_paperXpSkimToggle()" data-i18n-title="paper.xpSkimTitle" title="Skim read" aria-pressed="false">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M3 12h12"/><path d="M3 18h7"/></svg>
+                <span class="paper-skim-label" data-i18n="paper.xpSkim">Skim</span>
+              </button>
             </div>
             <div class="paper-report-lang-toggle" id="reportLangToggle" data-i18n-title="paper.reportLangTitle" title="Report language">
               <button type="button" class="paper-report-lang-opt" data-lang="en" onclick="_setReportLang('en','report')">EN</button>

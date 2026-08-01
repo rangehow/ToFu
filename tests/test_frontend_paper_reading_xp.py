@@ -95,6 +95,11 @@ eval(fs.readFileSync(process.argv[3], 'utf8'));  // real paper/reading_xp.js
 eval(fs.readFileSync(process.argv[5], 'utf8'));  // real paper/qa.js
 const _realPaperAskQuestion = _paperAskQuestion;  // qa.js 真入口,§7 覆盖后 §8 恢复
 
+// Capture the REAL glossary helpers before the stub block replaces them —
+// §10 exercises the analogy column through the real implementation.
+const _realExtractGlossary = _extractGlossary;
+const _realDecorateGlossaryTerms = _decorateGlossaryTerms;
+
 // Stub layout/enrichment helpers (jsdom has no layout; the functions under
 // test run for real).
 _decorateCallouts = () => {};
@@ -294,6 +299,116 @@ check('qa_entry_seeds_input',
       input.value === 'Is attention actually necessary?');
 check('qa_entry_sends', qaCalls.some((c) => c[0] === 'send'));
 
+// ── (9) P2: checkpoint flip cards at section ends ──
+view._xpCheckpoints = { items: [
+  { section: 'Method — How It Works', anchor_idx: 2,
+    question: 'Why does removing recurrence unlock parallelism?',
+    answer: 'Because the O(n) sequential dependency is gone.' },
+  { section: 'Experimental Analysis', anchor_idx: 3,
+    question: 'What does 54.2% mean?', answer: 'Resolve-rate on SWE-Bench Verified.' },
+] };
+window._paperXpDistributeCheckpoints(article, view);
+const flips = article.querySelectorAll('.paper-xp-flip');
+check('flip_cards_rendered', flips.length === 2);
+// Section-end placement: the first flip sits between heading 2's section and
+// heading 3 (i.e. right before the next h2/h3 in document order).
+const flip1 = flips[0];
+const nextAfterFlip = flip1 && flip1.nextElementSibling;
+check('flip_card_at_section_end',
+      !!nextAfterFlip && /^H[23]$/.test(nextAfterFlip.tagName || ''));
+check('flip_front_shows_question',
+      !!flip1 && flip1.querySelector('.paper-xp-flip-q')
+      && flip1.querySelector('.paper-xp-flip-q').textContent.indexOf('removing recurrence') !== -1);
+// Click flips to the answer face (document delegation).
+flip1.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+check('flip_toggles', flip1.classList.contains('is-flipped'));
+const backA = flip1.querySelector('.paper-xp-flip-a');
+check('flip_back_has_answer',
+      !!backA && backA.textContent.indexOf('O(n)') !== -1);
+// Idempotent re-distribution.
+window._paperXpDistributeCheckpoints(article, view);
+check('flip_idempotent', article.querySelectorAll('.paper-xp-flip').length === 2);
+// Live event: stash + distribute + replay guard.
+const s4 = { kind: 'report' };
+const cpHandled = window._paperXpHandleCheckpointsEvent(s4, {
+  type: 'checkpoints', items: view._xpCheckpoints.items }, view);
+check('checkpoints_event_handled', cpHandled === true && !!s4._xpCheckpoints);
+check('checkpoints_replay_guard',
+      window._paperXpHandleCheckpointsEvent(s4, {
+        type: 'checkpoints', items: view._xpCheckpoints.items }, view) === true
+      && article.querySelectorAll('.paper-xp-flip').length === 2);
+
+// ── (10) P2: glossary analogy column → hover card ──
+const gArt = document.createElement('article');
+gArt.innerHTML =
+  '<table><thead><tr><th>Term</th><th>Definition</th><th>Why</th><th>Analogy</th></tr></thead>' +
+  '<tbody><tr><td>KV cache</td><td>Saved K/V tensors per layer.</td><td>Speed</td>' +
+  '<td>leaving the meeting notes on the table</td></tr>' +
+  '<tr><td>Dropout</td><td>Randomly zeroed activations.</td><td>Reg</td><td>—</td></tr>' +
+  '</tbody></table>' +
+  '<h2>Method</h2><p>The KV cache avoids recomputation. Dropout regularizes.</p>';
+document.body.appendChild(gArt);
+const gloss = _realExtractGlossary(gArt);
+check('glossary_reads_analogy',
+      gloss.length === 2 && gloss[0].analogy === 'leaving the meeting notes on the table');
+check('glossary_dash_analogy_empty', gloss[1].analogy === '');
+_realDecorateGlossaryTerms(gArt, gloss);
+const termSpan = gArt.querySelector('.paper-term');
+const anEl = termSpan && termSpan.querySelector('.paper-term-card-analogy');
+check('hover_card_shows_analogy',
+      !!anEl && anEl.textContent.indexOf('meeting notes') !== -1);
+const spans = gArt.querySelectorAll('.paper-term');
+let dropoutCard = null;
+for (let si = 0; si < spans.length; si++) {
+  if (spans[si].textContent.indexOf('Dropout') !== -1) dropoutCard = spans[si];
+}
+check('hover_card_without_analogy_when_dash',
+      !!dropoutCard && !dropoutCard.querySelector('.paper-term-card-analogy'));
+// Legacy 3-column table still works (analogy simply absent).
+const g3 = document.createElement('article');
+g3.innerHTML = '<table><thead><tr><th>Term</th><th>Def</th></tr></thead>' +
+  '<tbody><tr><td>RL</td><td>Reward-driven learning.</td></tr></tbody></table>' +
+  '<p>RL appears later.</p>';
+document.body.appendChild(g3);
+const gloss3 = _realExtractGlossary(g3);
+check('legacy_3col_glossary_ok', gloss3.length === 1 && gloss3[0].analogy === '');
+
+// ── (11) P2: skim mode (deterministic collapse) ──
+// Re-render fresh (undo the flip/mutation state), then toggle skim on.
+_renderFinalReport(c, REPORT, { model: 'm1' }, view);
+const art2 = c.querySelector('.paper-report-article');
+// Inject a blockquote callout into the Method section for the keep-check.
+const heads2 = art2.querySelectorAll('h2');
+let methodH = null;
+for (let hi = 0; hi < heads2.length; hi++) {
+  if (heads2[hi].textContent.indexOf('Method') !== -1) methodH = heads2[hi];
+}
+const bq = document.createElement('blockquote');
+bq.textContent = 'Key takeaway: x';
+methodH.insertAdjacentElement('afterend', bq);
+// The section's REAL first paragraph stays first; extraP lands after it.
+let realFirstP = methodH.nextElementSibling;
+while (realFirstP && realFirstP.tagName !== 'P') realFirstP = realFirstP.nextElementSibling;
+const extraP = document.createElement('p');
+extraP.textContent = 'second para should hide';
+realFirstP.insertAdjacentElement('afterend', extraP);
+_paperXpSkimToggle();
+check('skim_on_class', c.classList.contains('paper-xp-skim-on'));
+check('skim_hides_second_para', extraP.classList.contains('xp-skim-hidden'));
+check('skim_keeps_blockquote', !bq.classList.contains('xp-skim-hidden'));
+const methodFirstP = methodH.nextElementSibling;
+check('skim_keeps_callout_first',
+      methodFirstP === bq || !methodFirstP.classList.contains('xp-skim-hidden'));
+// xp tutor cards stay visible in skim.
+const skimConn = art2.querySelector('.paper-xp-card.xp-conn');
+check('skim_keeps_xp_cards', !!skimConn && !skimConn.classList.contains('xp-skim-hidden'));
+const skimBtn = document.querySelector('.paper-skim-btn');
+// (button lives in index.html, absent in harness — toggle function tolerates)
+_paperXpSkimToggle();
+check('skim_off_restores',
+      !c.classList.contains('paper-xp-skim-on')
+      && !extraP.classList.contains('xp-skim-hidden'));
+
 console.log(out.join('\n'));
 process.exit(0);
 """
@@ -326,7 +441,7 @@ def test_reading_xp_distribution_and_events():
     assert proc.returncode == 0, f'node failed: {proc.stderr}\n{out}'
     fails = [ln for ln in out.splitlines() if ln.startswith('FAIL')]
     assert not fails, 'reading-xp rail failures:\n' + out
-    assert out.count('PASS') >= 32, f'expected >=32 PASS lines, got:\n{out}'
+    assert out.count('PASS') >= 49, f'expected >=49 PASS lines, got:\n{out}'
 
 
 @pytest.mark.skipif(not _node_deps_available(),

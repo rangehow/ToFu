@@ -178,6 +178,22 @@ PERSONAL_CAPABILITIES: dict[str, PersonalCapability] = {
             'this registry entry only guarantees the headless fail-closed '
             'stamp. Its own engine gates it, so prompt_block is empty.'),
         prompt_block=''),
+    'paperCheckpointsEnabled': PersonalCapability(
+        cfg_key='paperCheckpointsEnabled',
+        headless_default=False,
+        ui_default=True,
+        summary=(
+            'The Paper Reading-Mode checkpoint second pass: one bounded '
+            'no-tool LLM call per generated report that writes per-section '
+            'self-test flip cards (active recall). Injects no operator '
+            'state, but SILENTLY BILLS an LLM call per report, so it must '
+            'fail closed on headless / BYO surfaces unless the caller opts '
+            'in. ON by default for the interactive reader (owner decision '
+            '2026-08-02, docs/PAPER_READING_EXPERIENCE_DESIGN.md P2); the '
+            'interactive chain lives in '
+            'checkpoint_engine.checkpoints_enabled. Its own engine gates '
+            'it, so prompt_block is empty.'),
+        prompt_block=''),
     'paperTermfillEnabled': PersonalCapability(
         cfg_key='paperTermfillEnabled',
         headless_default=False,

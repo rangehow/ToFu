@@ -203,12 +203,149 @@ function _paperXpDistribute(article, view) {
   }
 }
 
-/* ── Seams (consumed by report.js) ────────────────────────────────────── */
+/* ── Checkpoint flip cards (P2 易懂:主动回忆) ─────────────────────────── */
 
+function _xpCheckpointCardHtml(item) {
+  var title = (typeof t === 'function') ? t('paper.xpCheckpointTitle') : 'Checkpoint';
+  var hint = (typeof t === 'function') ? t('paper.xpFlipHint') : 'tap to reveal the answer';
+  return '<div class="paper-xp-flip" role="button" tabindex="0" '
+    + 'aria-label="' + escapeHtml(item.question) + '">' +
+    '<div class="paper-xp-flip-face paper-xp-flip-front">' +
+      '<div class="paper-xp-card-head">🧠' +
+      '<span class="paper-xp-card-title">' + escapeHtml(title) + '</span>' +
+      '<span class="paper-xp-flip-hint">' + escapeHtml(hint) + '</span></div>' +
+      '<div class="paper-xp-flip-q">' + escapeHtml(item.question) + '</div>' +
+    '</div>' +
+    '<div class="paper-xp-flip-face paper-xp-flip-back">' +
+      '<div class="paper-xp-card-head">✅' +
+      '<span class="paper-xp-card-title">' + escapeHtml(title) + '</span></div>' +
+      '<div class="paper-xp-flip-a">' + escapeHtml(item.answer) + '</div>' +
+    '</div></div>';
+}
+
+/** Insert checkpoint flip cards at the END of their anchored sections
+ *  (right before the next h2/h3 — the natural pause point). Idempotent. */
+function _paperXpDistributeCheckpoints(article, view) {
+  if (!article || !view) return;
+  var payload = view._xpCheckpoints;
+  var items = payload && payload.items;
+  // Clear only prior flip cards (the insight cards/section are cleared by
+  // their own distributor).
+  var old = article.querySelectorAll('.paper-xp-flip');
+  for (var i = 0; i < old.length; i++) {
+    if (old[i].parentNode) old[i].parentNode.removeChild(old[i]);
+  }
+  if (!Array.isArray(items) || !items.length) return;
+  var headings = article.querySelectorAll('h2, h3');
+  for (var k = 0; k < items.length; k++) {
+    var it = items[k];
+    if (!it || typeof it.anchor_idx !== 'number' || !headings[it.anchor_idx]) continue;
+    var h = headings[it.anchor_idx];
+    // Section end = right before the next heading sibling (or the article end).
+    var boundary = h.nextElementSibling;
+    while (boundary && !/^H[23]$/.test(boundary.tagName || '')) {
+      boundary = boundary.nextElementSibling;
+    }
+    var card = _xpCheckpointCardHtml(it);
+    if (boundary) boundary.insertAdjacentHTML('beforebegin', card);
+    else article.insertAdjacentHTML('beforeend', card);
+  }
+}
+
+/** Live 'checkpoints' event: stash + distribute (replay-guarded). */
+
+function _paperXpHandleCheckpointsEvent(s, ev, view) {
+  if (!ev || ev.type !== 'checkpoints' || !Array.isArray(ev.items)) return false;
+  if (s._checkpointsApplied) return true;
+  s._checkpointsApplied = true;
+  s._xpCheckpoints = { items: ev.items };
+  if (view) view._xpCheckpoints = s._xpCheckpoints;
+  try {
+    var container = view && document.getElementById(view.containerId);
+    var article = container && container.querySelector('.paper-report-article');
+    if (article) _paperXpDistributeCheckpoints(article, view);
+  } catch (e) {
+    console.warn('[Paper:XP] live checkpoint distribute failed (non-fatal):', e);
+  }
+  return true;
+}
+
+/* ── Skim mode (P2 易懂:零 LLM 确定性折叠) ───────────────────────────────
+ * Each section collapses to its FIRST paragraph + callout blockquotes + the
+ * reading-xp cards (the tutor layer stays visible in skim — it is the
+ * highest-signal content per pixel). Deterministic DOM surgery, no model.
+ */
+
+function _xpSkimApply(article, on) {
+  if (!article) return;
+  var kids = article.children;
+  var seenParaInSection = false;
+  for (var i = 0; i < kids.length; i++) {
+    var el = kids[i];
+    var tag = el.tagName || '';
+    if (/^H[23]$/.test(tag)) {
+      seenParaInSection = false;
+      el.classList.remove('xp-skim-hidden');
+      continue;
+    }
+    // xp cards / sections / recap / finish tag / flip cards always stay.
+    if (el.classList && (el.classList.contains('paper-xp-card')
+        || el.classList.contains('paper-xp-section')
+        || el.classList.contains('paper-xp-recap')
+        || el.classList.contains('paper-xp-flip')
+        || el.classList.contains('paper-report-finish-tag')
+        || el.classList.contains('paper-terminology-audit')
+        || el.classList.contains('paper-citation-audit'))) {
+      el.classList.remove('xp-skim-hidden');
+      continue;
+    }
+    if (!on) {
+      el.classList.remove('xp-skim-hidden');
+      continue;
+    }
+    var keep = false;
+    if (tag === 'P' && !seenParaInSection) { keep = true; seenParaInSection = true; }
+    else if (tag === 'BLOCKQUOTE') keep = true;
+    el.classList.toggle('xp-skim-hidden', !keep);
+  }
+}
+
+/** Toolbar toggle: collapse the report to a skim read / restore full text. */
+function _paperXpSkimToggle() {
+  var container = document.getElementById('paperReportContent');
+  if (!container) return;
+  var article = container.querySelector('.paper-report-article');
+  if (!article) return;
+  var on = !container.classList.contains('paper-xp-skim-on');
+  container.classList.toggle('paper-xp-skim-on', on);
+  _xpSkimApply(article, on);
+  // Sync every skim button label/state (report toolbar).
+  var label = on
+    ? ((typeof t === 'function') ? t('paper.xpSkimFull') : 'Full')
+    : ((typeof t === 'function') ? t('paper.xpSkim') : 'Skim');
+  var btns = document.querySelectorAll('.paper-skim-btn');
+  for (var i = 0; i < btns.length; i++) {
+    btns[i].classList.toggle('is-on', on);
+    var lab = btns[i].querySelector('.paper-skim-label');
+    if (lab) lab.textContent = label;
+    btns[i].setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
+}
+
+/** Re-apply skim after a re-render (the article was rebuilt from scratch). */
+function _paperXpSkimReapply(container) {
+  if (!container || !container.classList.contains('paper-xp-skim-on')) return;
+  var article = container.querySelector('.paper-report-article');
+  if (article) _xpSkimApply(article, true);
+}
+
+/** End-of-render seam: distribute when a payload is attached to the view. */
 /** End-of-render seam: distribute when a payload is attached to the view. */
 function _paperXpAfterRender(article, container, view) {
   try {
     if (view && view._xpInsight) _paperXpDistribute(article, view);
+    if (view && view._xpCheckpoints) _paperXpDistributeCheckpoints(article, view);
+    _paperXpSkimReapply(container);
   } catch (e) {
     console.warn('[Paper:XP] after-render distribute failed (non-fatal):', e);
   }
@@ -285,6 +422,10 @@ if (typeof window !== 'undefined') {
   window._paperXpHandleInsightEvent = _paperXpHandleInsightEvent;
   window._paperXpApplyMetaEvent = _paperXpApplyMetaEvent;
   window._paperXpDistribute = _paperXpDistribute;
+  window._paperXpDistributeCheckpoints = _paperXpDistributeCheckpoints;
+  window._paperXpHandleCheckpointsEvent = _paperXpHandleCheckpointsEvent;
+  window._paperXpSkimToggle = _paperXpSkimToggle;
+  window._paperXpSkimApply = _xpSkimApply;
   window._paperXpCostBreakdown = _paperXpCostBreakdown;
 
   // Card action delegation (P1 启发): one document-level listener routes
@@ -293,15 +434,22 @@ if (typeof window !== 'undefined') {
   if (!window._paperXpClickWired) {
     window._paperXpClickWired = true;
     document.addEventListener('click', function (ev) {
+      // Checkpoint flip cards: click anywhere on the card flips it (the
+      // action buttons inside other cards are handled below and win).
+      var flip = ev.target && ev.target.closest
+        ? ev.target.closest('.paper-xp-flip') : null;
       var btn = ev.target && ev.target.closest
         ? ev.target.closest('.paper-xp-act') : null;
-      if (!btn) return;
-      var text = btn.getAttribute('data-text') || '';
-      if (btn.classList.contains('xp-act-debate')) {
-        if (typeof _paperAskQuestion === 'function') _paperAskQuestion(text);
-      } else if (btn.classList.contains('xp-act-ideate')) {
-        if (typeof _startResearchJob === 'function') _startResearchJob(text);
+      if (btn) {
+        var text = btn.getAttribute('data-text') || '';
+        if (btn.classList.contains('xp-act-debate')) {
+          if (typeof _paperAskQuestion === 'function') _paperAskQuestion(text);
+        } else if (btn.classList.contains('xp-act-ideate')) {
+          if (typeof _startResearchJob === 'function') _startResearchJob(text);
+        }
+        return;
       }
+      if (flip) flip.classList.toggle('is-flipped');
     });
   }
 }

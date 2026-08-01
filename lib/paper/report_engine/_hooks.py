@@ -200,6 +200,53 @@ def _maybe_run_insight(task, phash, ui_lang, report_md, *, truncated_paper, mode
                     phash, result.get('fired'), result.get('baseline'))
 
 
+def _maybe_run_checkpoints(task, phash, ui_lang, report_md, *, model):
+    """Run the gated checkpoint second-pass after a report completes (best-effort).
+
+    Skips unless the four-level chain allows it (design §3.4 — per-request
+    cfg stamp > server_config > env > interactive default ON) and this is a
+    plain report (never Review Mode). Emits a ``checkpoints`` event with the
+    anchored items (flip cards distributed client-side), folds the call's
+    usage into meta.secondPasses, persists under ``checkpoints:<ui>``.
+    Fully wrapped — a failure here must NEVER taint the emitted report.
+    """
+    from ..checkpoint_engine import checkpoints_enabled, run_report_checkpoints
+    from ..review import is_review_family
+
+    if not checkpoints_enabled(task.get('config')):
+        return
+    if is_review_family(task.get('lang') or ''):
+        return
+    if not (report_md or '').strip():
+        return
+
+    abort_event = task.get('abort_event')
+
+    def _abort():
+        return bool(abort_event and abort_event.is_set())
+
+    logger.info('[Paper:Checkpoints] Starting gated pass — hash=%s ui_lang=%s',
+                phash, ui_lang)
+    result = run_report_checkpoints(report_md, ui_lang, phash=phash, model=model,
+                                    abort=_abort)
+    _merge_second_pass(task, phash, 'checkpoints', {
+        'cards': len(result.get('items') or []),
+        'usage': result.get('usage'),
+    }, model=model)
+    if result.get('items'):
+        task['checkpoints'] = result['items']
+        _append_report_event(task, {
+            'type': 'checkpoints', 'paperHash': phash,
+            'items': result['items'], 'lang': ui_lang,
+        })
+        logger.info('[Paper:Checkpoints] Emitted — hash=%s %d cards',
+                    phash, len(result['items']))
+    else:
+        _append_report_event(task, {'type': 'checkpoints_skipped',
+                                    'paperHash': phash})
+        logger.info('[Paper:Checkpoints] No cards surfaced — hash=%s', phash)
+
+
 def _maybe_run_termfill(task, phash, ui_lang, report_md, report_meta, *, model):
     """Run the gated definition-backfill second pass (best-effort, additive).
 

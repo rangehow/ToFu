@@ -230,6 +230,31 @@ async def _load_cached_insight_payload(phash, lang):
             'lang': ui_lang}
 
 
+async def _load_cached_checkpoints_payload(phash, lang):
+    """Load the persisted checkpoint items for this paper+lang, else None.
+
+    Read-path only — never regenerates. The frontend distributes flip cards
+    from the structured items; nothing merges into the report body.
+    """
+    if is_review_lang(lang):
+        return None
+    ui_lang = parse_report_lang(lang)['ui_lang']
+    try:
+        from lib.paper.checkpoint_engine import checkpoints_lang_key
+        row = await async_fetchone(
+            "SELECT meta FROM paper_reports WHERE paper_hash = ? AND lang = ?",
+            (phash, checkpoints_lang_key(ui_lang)), domain=DOMAIN_CHAT,
+        )
+    except Exception as e:
+        logger.warning('[Paper:Report] Cached-checkpoints lookup failed hash=%s: %s',
+                       phash, e)
+        return None
+    meta = _parse_insight_row_meta(row) if row else None
+    if not isinstance(meta, dict) or not isinstance(meta.get('items'), list):
+        return None
+    return {'items': meta['items'], 'lang': ui_lang}
+
+
 async def _append_cached_insight(body, phash, lang):
     """Merge the sibling persisted ``insight:<ui>`` row into a cached report body.
 
@@ -615,6 +640,9 @@ async def start_report_task():
                 }
                 if _insight_payload:
                     _resp['insight'] = _insight_payload
+                _cp_payload = await _load_cached_checkpoints_payload(phash, lang)
+                if _cp_payload:
+                    _resp['checkpoints'] = _cp_payload
                 return api_ok(_resp)
         except Exception as e:
             logger.warning('[Paper:Report] DB cache lookup failed (will start task): %s', e)
@@ -1246,6 +1274,9 @@ async def get_report_cache():
                      'meta': _cache_meta}
             if _insight_payload:
                 _resp['insight'] = _insight_payload
+            _cp_payload = await _load_cached_checkpoints_payload(phash, lang)
+            if _cp_payload:
+                _resp['checkpoints'] = _cp_payload
             return api_ok(_resp)
     except Exception as e:
         logger.warning('[Paper:Report:Cache] Lookup failed: %s', e)

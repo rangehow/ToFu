@@ -405,6 +405,8 @@ def get_server_config():
     try:
         from lib.paper.insight_engine import insight_enabled as _ie_enabled
         paper_info['reading_experience']['insight'] = _ie_enabled()
+        from lib.paper.checkpoint_engine import checkpoints_enabled as _cp_enabled
+        paper_info['reading_experience']['checkpoints'] = _cp_enabled()
     except Exception as e:
         logger.warning('[ServerConfig] paper reading_experience resolve failed: %s', e)
 

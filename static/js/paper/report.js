@@ -475,6 +475,18 @@ function _applyReportEventRaw(s, ev) {
       s._insightRunning = false;
       return true;
 
+    case 'checkpoints':
+      // Per-section self-test flip cards (P2) — the reading-xp rail inserts
+      // them at section ends. No body change.
+      if (typeof window._paperXpHandleCheckpointsEvent === 'function'
+          && window._paperXpHandleCheckpointsEvent(s, ev, _reportView(s.kind))) {
+        return true;
+      }
+      return true;
+
+    case 'checkpoints_skipped':
+      return true;
+
     case 'report_meta':
       // Second-pass cost landed after `done` (design §3.3) — the reading-xp
       // rail swaps the finish tag for one carrying the secondPasses breakdown.
@@ -707,7 +719,14 @@ function _extractGlossary(article) {
       // Skip the prompt's own placeholder rows: "(term)", "（术语）", "...".
       if (/^[(（].*[)）]$/.test(term) || term === '...' || term === '…') continue;
       if (defText.length > 260) defText = defText.slice(0, 257) + '…';
-      out.push({ term: term, def: defText, defHtml: defHtml });
+      // Optional 4th column (reading-xp P2): the everyday analogy. Tolerated
+      // by every parser when absent (3-column legacy reports render as before).
+      var analogy = '';
+      if (cells.length >= 4) {
+        analogy = _cellPlainText(cells[3]);
+        if (analogy === '—' || analogy === '-' || analogy === '–') analogy = '';
+      }
+      out.push({ term: term, def: defText, defHtml: defHtml, analogy: analogy });
     }
     return out;  // only the first matching table
   }
@@ -762,7 +781,8 @@ function _decorateGlossaryTerms(article, glossary) {
     for (var j = 0; j < al.length; j++) {
       var key = al[j].toLowerCase();
       if (map[key]) continue;       // first row to claim an alias keeps it
-      map[key] = { row: r, def: glossary[r].def, defHtml: glossary[r].defHtml };
+      map[key] = { row: r, def: glossary[r].def, defHtml: glossary[r].defHtml,
+                   analogy: glossary[r].analogy || '' };
       aliases.push(al[j]);
     }
   }
@@ -796,7 +816,8 @@ function _decorateGlossaryTerms(article, glossary) {
       if (headLatin && idx > 0 && /[A-Za-z0-9]/.test(text.charAt(idx - 1))) continue;
       if (tailLatin && /[A-Za-z0-9]/.test(text.charAt(idx + matched.length))) continue;
       if (idx < pos) continue;       // overlaps a prior pick
-      picks.push({ idx: idx, len: matched.length, text: matched, def: entry.def, defHtml: entry.defHtml });
+      picks.push({ idx: idx, len: matched.length, text: matched, def: entry.def,
+                   defHtml: entry.defHtml, analogy: entry.analogy });
       seen[entry.row] = true;
       pos = idx + matched.length;
     }
@@ -816,8 +837,19 @@ function _decorateGlossaryTerms(article, glossary) {
       var card = document.createElement('span');
       card.className = 'paper-term-card';
       card.setAttribute('aria-hidden', 'true');   // aria-label on the span already carries the def
-      if (pk.defHtml) card.innerHTML = pk.defHtml;
-      else card.textContent = pk.def;
+      // Analogy first (reading-xp P2): the reader remembers the comparison
+      // before the definition — it heads the hover card when present.
+      if (pk.analogy) {
+        var an = document.createElement('span');
+        an.className = 'paper-term-card-analogy';
+        an.textContent = '💡 ' + pk.analogy;
+        card.appendChild(an);
+      }
+      var defBody = document.createElement('span');
+      defBody.className = 'paper-term-card-def';
+      if (pk.defHtml) defBody.innerHTML = pk.defHtml;
+      else defBody.textContent = pk.def;
+      card.appendChild(defBody);
       span.appendChild(card);
       frag.appendChild(span);
       cursor = pk.idx + pk.len;
@@ -1933,6 +1965,7 @@ async function _generatePaperReport(force, view) {
       // v2 insight payload (structured items with anchor_idx) — the
       // reading-xp rail distributes it in _renderFinalReport's after seam.
       view._xpInsight = data.insight || null;
+      view._xpCheckpoints = data.checkpoints || null;
       if (data.paper_hash) _paperHash = data.paper_hash;
       _rememberReportSnapshot(view, data.report, data.meta);
       _persistGeneratedReviewVenue(view, langKey, startPaperId);
@@ -2312,6 +2345,7 @@ async function _loadOrGenerateReport(view) {
       view.cache = cacheData.report;
       view.meta = cacheData.meta || null;
       view._xpInsight = cacheData.insight || null;
+      view._xpCheckpoints = cacheData.checkpoints || null;
       if (cacheData.paper_hash) _paperHash = cacheData.paper_hash;
       _rememberReportSnapshot(view, cacheData.report, cacheData.meta);
       _persistGeneratedReviewVenue(view, langKey, startPaperId);
@@ -2348,6 +2382,7 @@ async function _loadOrGenerateReport(view) {
         view.cache = otherData.report;
         view.meta = otherData.meta || null;
         view._xpInsight = otherData.insight || null;
+        view._xpCheckpoints = otherData.checkpoints || null;
         if (otherData.paper_hash) _paperHash = otherData.paper_hash;
         _rememberReportSnapshot(view, otherData.report, otherData.meta);
         _saveActivePaperState();

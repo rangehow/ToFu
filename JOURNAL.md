@@ -1,3 +1,9 @@
+### 2026-08-01(api-contract 批 15:api_v1/oauth.py 5 站点清零——「ok 键变假 provider」隐患的实证排除) — epic `pt_931e16c4` 切片 15;commit 见下(4 文件);环 **144/144**;NEUTER×2 各咬一支
+
+- **新隐患类(加入迁移判据):** oauth/status 的 body 按 provider 名 keyed(`{claude:{…}, codex:{…}}`)——顶层加 ok 若在「键枚举」消费方手里会冒出一个**假 provider 卡片**。迁移前先实证消费形态:settings/oauth.js 按名读 `data.claude/data.codex`,无 Object.keys/for-in 枚举 ⇒ api_ok 安全。parity 套件新增 `test_consumer_reads_providers_by_name` 把「消费方禁枚举」钉成闸。**判据推广:+ok 增量只对「按名读字段」的消费方安全;键枚举消费方 = 视同形状锁定,须登记或先改消费方。**
+- **纪律:** failing-first 精确 1 红;NEUTER×2 各咬一支(回注 jsonify→shipped-source;**把消费方改成键枚举→consumer 闸红**——证明闸咬的是真回归方向);oauth.js 用 git checkout -- path 还原(此处意图就是回滚到 HEAD,非历史读取,JOURNAL 禁令不违);导入冒烟;环 **144/144**。
+- **进度账:** 272→**103 站点 18 文件**(169 已清零,62.1%)。下一批 api_v1/motion.py(5)。
+
 ### 2026-08-01(api-contract 批 14:translate.py 7 站点清零——body-status 碰撞第二例 + 探针 null 保持第二例) — epic `pt_931e16c4` 切片 14;commit 见下(5 文件);环 **141/141**;NEUTER×2 各咬一支
 
 - **两个已知形态复用(判例开始收租):** poll-404 body 自带 `'status':'not_found'` 键 → api_payload(mcp shape D 判例直用);poll-batch 裸数组的消费方 translation.js 把 `!Array.isArray(data)` 当探针失败回落(合成逐 id 错误行)→ null 保持解包(chat.active 判例直用)。mt-test 的 `api_error(..., status=200)` 刻意例外原样不动(契约钉住)。

@@ -46,7 +46,9 @@ backend wrap + api.js unwrap + caller consumes directly)
 and chat.py (11 — /chat/active bare-array, null-PRESERVING unwrap:
 probe consumers distinguish zero-tasks from probe-failed)
 , api_v1/artifacts.py (7) , oauth.py (7) and api_v1/translate.py (7 — poll-batch bare
-array, null-preserving unwrap; poll-404 body-status collision via api_payload) → 108 sites across 19 files remain.
+array, null-preserving unwrap; poll-404 body-status collision via api_payload)
+and api_v1/oauth.py (5 — provider-keyed status body verified
+consumer-by-name before api_ok) → 103 sites across 18 files remain.
 """
 
 from __future__ import annotations
@@ -103,7 +105,6 @@ CARVE_OUT_SITES: dict[str, dict[str, str]] = {
 BASELINE: dict[str, int] = {
     'paper.py': 47,
     'common.py': 14,
-    'api_v1/oauth.py': 5,
     'api_v1/motion.py': 5,
     'api_v1/browser.py': 5,
     'api_v1/auth.py': 4,

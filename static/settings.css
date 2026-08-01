@@ -1776,6 +1776,21 @@
 .auth-src-name { font-weight: 800; font-size: 14px; color: var(--s-ink); display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .auth-src-domain { color: var(--s-ink-soft); font-size: 12px; font-weight: 600; }
 .auth-src-state-text { color: var(--s-ink-soft); font-size: 12px; margin-top: 3px; font-weight: 600; }
+/* Per-site account-risk note (e.g. XHS 风控提醒) — shown on the card and
+   atop the connect panel. Gold tint matches the neo-brutalist palette's
+   warning register (same role as the paused state). */
+.auth-src-risk-note {
+  margin-top: 6px;
+  padding: 7px 10px;
+  border: var(--s-border-sm);
+  border-radius: var(--s-radius);
+  background: color-mix(in srgb, var(--s-gold) 18%, var(--s-white));
+  color: var(--s-ink);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.auth-src-panel .auth-src-risk-note { margin: 0 0 10px; }
 .auth-src-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
 
 .auth-src-btn {

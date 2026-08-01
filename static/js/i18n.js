@@ -1772,6 +1772,7 @@ var _i18n = {
   'settings.authSrcSaved': { zh: '已连接', en: 'Connected' },
   'settings.authSrcSaveFail': { zh: '保存失败: ', en: 'Save failed: ' },
   'settings.authSrcDisconnectConfirm': { zh: '断开并清除该来源的 Cookie？', en: 'Disconnect and clear this source\'s cookies?' },
+  'settings.authSrcRiskXhs': { zh: '⚠️ 风控提醒：小红书对自动化访问管控严格，搜索会携带登录态高频请求，账号可能被限流、强制验证甚至封禁。请使用闲置小号连接，切勿使用常用主账号；配置代理可进一步降低风险。', en: '⚠️ Account-risk notice: Xiaohongshu strictly polices automated access. Searches replay your logged-in session at high frequency and can get the account throttled, verification-challenged, or banned. Connect a spare / idle account — never your main one; a proxy further reduces the risk.' },
 
   // ══════════════════════════════════════
   //  Settings — Translation Tab
@@ -3602,10 +3603,8 @@ var _i18n = {
   'projectBrain.attnAdvisory': { zh: '可选', en: 'Advisory' },
   'projectBrain.attnKindEpic': { zh: '任务停摆', en: 'Epic halted' },
   'projectBrain.attnKindProposal': { zh: '提议中的决策', en: 'Proposed decision' },
-  'projectBrain.attnKindConflict': { zh: '文件冲突', en: 'File conflict' },
   'projectBrain.attnLeadBlocking': { zh: '{n} 项停摆', en: '{n} stopped' },
   'projectBrain.attnLeadAdvisory': { zh: '{n} 项可选', en: '{n} advisory' },
-  'projectBrain.attnOpenTeam': { zh: '去看团队', en: 'Open Team' },
   'projectBrain.attnEmpty': { zh: '没有需要你处理的事', en: 'Nothing needs you' },
   'projectBrain.attnEmptySub': { zh: '所有工作流都在自行推进。', en: 'Every workstream is moving on its own.' },
   'projectBrain.attnEmptyWaiting': { zh: '{n} 项在等待自己的门禁 — 无需你动手', en: '{n} waiting on their own gates — no action needed' },

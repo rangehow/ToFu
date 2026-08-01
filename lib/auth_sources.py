@@ -126,6 +126,13 @@ DEFAULT_SOURCES: list[dict] = [
     {'domain': 'xiaohongshu.com', 'label': 'Xiaohongshu / RED',
      'aliases': ['xhslink.com'],
      'login_url': 'https://www.xiaohongshu.com/explore',
+     # Account-risk note shown in the Settings connect flow. XHS polices
+     # automated access aggressively (限流/滑块/封号), and every web search
+     # replays this logged-in session — the user MUST connect with a spare
+     # account, not their main one. Carried as an i18n KEY (not text) so the
+     # wording lives with the other UI strings in static/js/i18n.js while the
+     # per-site fact ("this site is risky") stays server-side.
+     'risk_note_key': 'settings.authSrcRiskXhs',
      'fields': [
          {'name': 'web_session', 'importance': 'required'},
          {'name': 'a1', 'importance': 'recommended'},
@@ -453,6 +460,7 @@ def _redact(row: dict) -> dict:
     spec = source_spec(out.get('domain', ''))
     out['login_url'] = spec.get('login_url', '')
     out['fields'] = [dict(f) for f in (spec.get('fields') or [])]
+    out['risk_note_key'] = spec.get('risk_note_key', '')
     return out
 
 

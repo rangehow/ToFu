@@ -79,6 +79,7 @@ function _authSourceCardHtml(src) {
         <div class="auth-src-meta">
           <div class="auth-src-name">${src.label || dom}<span class="auth-src-domain">${dom}</span></div>
           <div class="auth-src-state-text">${stateText}</div>
+          ${raw(_authSourceRiskNote(src))}
         </div>
         <label class="auth-src-switch" title="${t('settings.authSrcToggle') || '启用 / 停用'}">
           <input type="checkbox" ${raw(enabled ? 'checked' : '')} ${raw(connected ? '' : 'disabled')}
@@ -136,6 +137,7 @@ function _authSourceConnectPanel(src, dom, id) {
 
   return safeHtml`
     <div class="auth-src-panel" id="authSrcPanel_${raw(id)}" style="display:none">
+      ${raw(_authSourceRiskNote(src))}
       <ol class="auth-src-steps">
         ${raw(step1)}
         <li>${t('settings.authSrcStep2Fields') || '打开开发者工具 (F12) → Application → Cookies，找到下面每个 Cookie，逐个复制它的 Value'}</li>
@@ -155,6 +157,18 @@ function _authSourceConnectPanel(src, dom, id) {
         </button>
       </div>
     </div>`;
+}
+
+/** Per-site account-risk note (e.g. XHS 风控). The SITE KNOWLEDGE lives
+ *  server-side (``risk_note_key`` on the catalog row, projected by
+ *  lib/auth_sources.py); this renders whatever i18n key the server names —
+ *  the JS still hardcodes no per-site text of its own. Shown on the card
+ *  (always visible) AND atop the connect panel, because the moment that
+ *  matters is BEFORE the user logs in with their main account. */
+function _authSourceRiskNote(src) {
+  var key = (src && src.risk_note_key) || '';
+  if (!key) return '';
+  return String(safeHtml`<div class="auth-src-risk-note">${t(key)}</div>`);
 }
 
 /** DOM-id-safe version of a domain (non-alnum → underscore). */

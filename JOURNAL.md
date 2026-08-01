@@ -15,6 +15,15 @@
 - **方法论记一笔:** 这轮把「wine 下跑真实构建」从不可行拆成六层各自独立的 syscall/协议层问题,每层修法都是「实测定位 → 钉进测试 → 才许进模块」。**两次 apply_diffs 都出过 search/replace 写反删伤代码的事故——教训:多 edit 批量后必须 diff 复核,流水线步骤序已钉测试(`pip-requirements` 缺席即红)。**
 - **验收边界:** S3(iscc wrapper)未做——悬停的版本号要等 S3 出 `.exe` 才翻转;32 位 iscc 在新 WoW64 无 preloader 下能否跑仍是开放实测项(备选:conda-forge 原生 NSIS,代价是第二份安装器模板)。
 
+### 2026-08-01(S3 落地+约定闭环:真 Windows 安装包出炉并接管供给——NSIS-native 备选分支按设计触发,悬停从此显示自建 0.16.0) — commits `619a0118`(S3 主体)+ `8a25a8ad`(构建路由);套件环 **58/58**;**live 终验:`Tofu-Setup-0.16.0-win64.exe` 152,886,953 B(7z 验 NSIS-3 Unicode,内含 preseed_server.json)入 store,`find_for_platform('windows')` 实测改选 built**
+
+- **32 位闸门定案(设计稿备选分支触发):** Inno 官方安装器 + innounp 两个 32 位应用在新 WoW64 无 preloader 下**全部挂死**(wine 11.14,64 位正常);7-Zip 23.01 解不开 Inno 7 容器;iscc 因此「拿不到也跑不了」。按设计稿预留分支切 **NSIS-native**(conda-forge makensis,Linux 原生——不碰 wine/显示器,构建确定性最高)。CI 的 Inno authoring 保留,`tests/test_installer_parity.py` 钉两 authorings 的语义契约(安装目录/权限级/双快捷方式/启动即跑/命名/载荷形态/向导资产/preseed)——**契约是单一真源,工具不是**。
+- **真实端到端:** payload(d887b685,缓存命中)→ 解包 → 预植(代理 URL)→ 渲染模板 → makensis → store(source='built',preseed 元数据)。选择器 0.16.0>0.14.2 自动偏好,**本机控制面板的悬停在下一次 3s 轮询即翻转为自建**——约定(original directive)的「built directly on the server based on client metadata」至此闭环。
+- **平行写入者定案(共享树又一课):** 本批中途发现 winbuilder Half B / launcher 预植 / parity 测试在盘上「不是我写的」——协调面板的 lease 记录显示是**本会话被压缩掉的早前轮**所写(写集外文件注记实证),peer_status 无活跃兄弟。采纳 + 用真构建裁决了与早前轮的分歧(parity 断言的反斜杠形态 vs 我 posix 模板——152MB/3316 文件真件证明 posix 对 linux makensis 唯一正确)。**判据:发现「不是自己的好代码」先查 lease 记录与 peer_status,再用端到端实测裁决分歧,最后 commit + JOURNAL 留下坐标。**
+- **Launcher 预植(零粘贴首连):** `_import_preseed()`——one-shot 即删、绝不覆盖既有 attachment、非密(仅 URL)、坏件容错;`tests/test_launcher_preseed.py` 5 条钉死四规则 + main() 接线。
+- **构建路由:** `POST /api/v1/desktop/build {"os":"windows","server_url":...}` → `start_installer` 单飞全链(payload 缓存→wrapper);GET 报双 builder 状态;api_meta 写明 macOS 永久边界。
+- **epic `pt_ce4261579c1b4c64` 完成判据复核:** ①服务器真建 Windows ✓(真件在 store)②按客户端元数据 ✓(UA/arch 选择器 + 版本货币 + server_url 预植)③取代 GitHub 镜像供给 Windows ✓(选择器实测改选)④macOS 镜像永久立档 ✓(设计稿 §7 + api_meta)。**未做(诚实边界):** Phase 2 token 级每用户个性化(独立 epic 候选);真实 Windows 机器上的安装烟(需要图形 Windows——与 .deb 同型边界)。
+
 ### 2026-08-01(egress 接线补验:容器内全链 E2E 首通 + 设计稿 §11 主备双路径定案) — 承接当日「鉴权层定案」「续·重启三项」两条;epic `pt_4ea6bf05deaa46f0`
 
 - **本批新增（前轮两条已定的不再复述）:** ①第二把等价 key `k_2a687bc6`（egress-bridge-office，agents:bridge，user_id=''）经 `POST /api/v1/keys` 在服务器进程内铸成，明文落 `data/config/.egress_bridge_key`（0600）——与在册 `k_d1adfa20` 等价并存（两把都可用，不清理以免误伤已拷贝者）。②**容器内全链 E2E 首通**：poll 三态（对 key 200 `{"commands":[]}` / 错 key 401 / 无 key 401）；容器内真实 agent `--allow-egress --bridge-secret` 注册上线、`capabilities.egress=true`；`/api/v1/oauth/status` 五态机首查 `unknown`（后台探测）→ 复核 `state=agent` + `verdict=geo_blocked` + agent 在列——**S4 状态面真机首验**。自测 agent 已停（留着会与办公机 agent 构成多在线 → route_request 拒绝）。③`user_id=''` 匹配链显式钉死（open 模式合成 ctx `''` × stream.py:170 硬编码 `''` × `_deliverable` fail-closed 相等——key 带真实租户 id 则命令永不可投递）。④进程外铸 key 不可见坑（`_ensure_loaded` 每进程一次）以 401 实测复现并立档。

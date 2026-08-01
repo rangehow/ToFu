@@ -642,6 +642,28 @@ def wrap_payload(payload_tar: str, version: str, sha: str, log_fh, *,
     return dest
 
 
+_installer_lock = threading.Lock()
+_installer: threading.Thread | None = None
+
+
+def start_installer(reason: str = 'manual', server_url: str = '') -> dict:
+    """Kick build_installer in the background (single-flight).
+
+    start() covers the payload half only; the route needs the FULL
+    payload→wrapper orchestration without blocking the request.
+    """
+    global _installer
+    with _installer_lock:
+        if _installer and _installer.is_alive():
+            return state()
+        _installer = threading.Thread(
+            target=lambda: build_installer(reason, server_url),
+            name='desktop-wininstaller', daemon=True)
+        _installer.start()
+    return state()
+
+
+def build_installer(reason: str = 'manual', server_url: str = '') -> dict:
 def build_installer(reason: str = 'manual', server_url: str = '') -> dict:
     """Full S2+S3 orchestration: payload (cached when possible) → wrapper.
 

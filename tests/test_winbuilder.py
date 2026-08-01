@@ -253,6 +253,105 @@ def test_pip_index_env_falls_back_to_pypi_without_config(monkeypatch):
 
 
 # ═══════════════════════════════════════════════════════════════════
+#  Half B — the NSIS wrapper
+# ═══════════════════════════════════════════════════════════════════
+
+def test_render_nsi_substitutes_every_placeholder():
+    text = wb._render_nsi('0.16.0', '/tmp/payload', '/tmp/out.exe')
+    for p in wb._NSI_PLACEHOLDERS:
+        assert p not in text, f'{p} left unrendered'
+    assert 'Tofu-Setup' not in text or '0.16.0' in text
+
+
+def test_wrap_payload_records_a_built_windows_artifact(isolated,
+                                                       monkeypatch,
+                                                       tmp_path):
+    """makensis is faked (writes a canned exe); untar + recording are real."""
+    payload_dir = tmp_path / 'payload-src'
+    (payload_dir / 'Tofu').mkdir(parents=True)
+    (payload_dir / 'Tofu' / 'Tofu.exe').write_text('exe')
+    (payload_dir / 'Tofu' / 'preseed_marker.txt').write_text('x')
+    payload_tar = tmp_path / 'payload.tar.gz'
+    import tarfile
+    with tarfile.open(payload_tar, 'w:gz') as tf:
+        tf.add(payload_dir / 'Tofu', arcname='Tofu')
+
+    makensis_out = {}
+
+    def _sh(cmd, log_fh, *, shell=False, timeout=9999):
+        if 'makensis' in cmd or '/makensis' in cmd:
+            out = isolated / 'wrap' / 'Tofu-Setup-0.16.0-win64.exe'
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b'NSIS-INSTALLER-BYTES')
+            makensis_out['ran'] = True
+            return None
+        import subprocess as sp
+        return sp.run(cmd if shell else cmd.split(), shell=shell,
+                      capture_output=True, timeout=timeout)
+
+    monkeypatch.setattr(wb, '_sh', _sh)
+    monkeypatch.setattr(wb, '_ensure_makensis', lambda log: '/fake/makensis')
+    with _fake_log(isolated) as log:
+        dest = wb.wrap_payload(str(payload_tar), '0.16.0', 'a' * 40, log,
+                               server_url='https://tofu.example.com/p/15000',
+                               workdir=str(isolated / 'wrap'))
+    assert makensis_out.get('ran'), 'makensis step never ran'
+    assert os.path.basename(dest) == 'Tofu-Setup-0.16.0-win64.exe'
+    e = wb.store.artifacts()['Tofu-Setup-0.16.0-win64.exe']
+    assert e['source'] == 'built' and e['os'] == 'windows'
+    assert e['version'] == '0.16.0' and e['size'] > 0
+    assert e['preseed']['url'] == 'https://tofu.example.com/p/15000'
+    # The preseed file must have landed next to Tofu.exe pre-pack.
+    assert os.path.isfile(
+        os.path.join(str(isolated / 'wrap'), 'payload',
+                     'preseed_server.json'))
+
+
+def test_wrap_without_a_server_url_writes_no_preseed(isolated, monkeypatch,
+                                                     tmp_path):
+    payload_dir = tmp_path / 'payload-src'
+    (payload_dir / 'Tofu').mkdir(parents=True)
+    (payload_dir / 'Tofu' / 'Tofu.exe').write_text('exe')
+    payload_tar = tmp_path / 'payload.tar.gz'
+    import tarfile
+    with tarfile.open(payload_tar, 'w:gz') as tf:
+        tf.add(payload_dir / 'Tofu', arcname='Tofu')
+    def _sh(cmd, log_fh, *, shell=False, timeout=9999):
+        if 'makensis' in cmd:
+            return None        # produces NOTHING — wrap must fail loud
+        import subprocess as sp
+        return sp.run(cmd if shell else cmd.split(), shell=shell,
+                      capture_output=True, timeout=timeout)
+
+    monkeypatch.setattr(wb, '_sh', _sh)
+    monkeypatch.setattr(wb, '_ensure_makensis', lambda log: '/fake/makensis')
+    # makensis faked to no-op → out_file missing → wrap must fail LOUD.
+    with _fake_log(isolated) as log:
+        with pytest.raises(RuntimeError, match='produced no'):
+            wb.wrap_payload(str(payload_tar), '0.16.0', 'a' * 40, log,
+                            workdir=str(isolated / 'wrap'))
+    assert not os.path.exists(
+        os.path.join(str(isolated / 'wrap'), 'payload',
+                     'preseed_server.json'))
+
+
+def test_NEUTER_dropping_the_preseed_is_caught():
+    """wrap_payload MUST call _write_preseed — a wrap that "forgets" it
+    silently degrades every install to the paste-the-token flow, and the
+    artifact records nothing. Pin the call site (source), not a vibe."""
+    import inspect
+    src = inspect.getsource(wb.wrap_payload)
+    assert '_write_preseed(payload_dir, server_url)' in src, (
+        'wrap_payload no longer writes the preseed — the per-client '
+        'half of the build is gone')
+    # And the recorded artifact must carry it when a url is given.
+    rec = inspect.getsource(wb.wrap_payload)
+    assert "'preseed': {'url': server_url}" in rec, (
+        'the preseed url must be visible in the artifact record — the '
+        'download route and audits read it from there')
+
+
+# ═══════════════════════════════════════════════════════════════════
 #  _ensure_guest_hosts — wine's resolver must never see DNS
 # ═══════════════════════════════════════════════════════════════════
 

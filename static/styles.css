@@ -6130,13 +6130,26 @@ input.settings-mono {
   margin-bottom: 4px;
   box-shadow: var(--s-shadow-xs);
 }
+/* Uniform 2-column grid (redesign 2026-08-01): the old 1fr/auto/auto made
+ * every row a different width — the price section looked misaligned because
+ * it WAS. Model ID spans the full first row; the four numeric fields share
+ * two equal columns below it. */
 .stg-edit-grid {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: 1fr 1fr;
   gap: 10px;
   margin-bottom: 10px;
 }
 .stg-edit-grid .stg-field { margin-bottom: 0; }
+.stg-edit-grid .stg-field-wide { grid-column: 1 / -1; }
+/* The Model ID is an identifier, not prose — monospace + slightly larger
+ * so a long id (aws.claude-opus-4.6…) reads at a glance. */
+.stg-edit-mid {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.01em;
+}
 .stg-cap-toggles { display: flex; gap: 5px; flex-wrap: wrap; }
 .stg-cap-btn {
   padding: 4px 10px;
@@ -6156,6 +6169,73 @@ input.settings-mono {
   color: var(--s-ink);
   box-shadow: var(--s-shadow-xs);
 }
+/* ── Tag editor (wire pool / aliases in the model edit form) ──
+ * One id = one chip; the border box IS the input (click anywhere to type).
+ * The inner input must defeat the .stg-field input chrome (border, shadow,
+ * focus transform) — it borrows the editor's frame instead. */
+.stg-tag-editor {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+  padding: 6px 8px;
+  background: #fff;
+  border: var(--s-border);
+  border-radius: var(--s-radius);
+  box-shadow: var(--s-shadow-xs);
+  cursor: text;
+  transition: transform 0.1s, box-shadow 0.1s, background 0.1s;
+}
+.stg-tag-editor:focus-within {
+  transform: translate(1px, 1px);
+  box-shadow: 1px 1px 0 var(--s-ink);
+  background: #fffef5;
+}
+.stg-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 3px 8px;
+  border: 1px solid var(--s-ink);
+  background: var(--s-cream);
+  color: var(--s-ink);
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 600;
+  border-radius: var(--s-radius);
+  white-space: nowrap;
+}
+.stg-tag-x { cursor: pointer; opacity: 0.4; font-size: 12px; line-height: 1; }
+.stg-tag-x:hover { opacity: 1; color: var(--s-blocked); }
+.stg-field .stg-tag-editor .stg-tag-input {
+  flex: 1;
+  min-width: 150px;
+  width: auto;
+  padding: 4px 2px;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+}
+.stg-field .stg-tag-editor .stg-tag-input:focus {
+  transform: none;
+  box-shadow: none;
+  background: transparent;
+  outline: none;
+}
+
+/* ── Face auto-note: which wire the family rule ACTUALLY picked ── */
+.stg-face-auto-note { margin-top: 6px; font-size: 11px; line-height: 1.5; }
+.stg-face-auto-note:empty { display: none; }
+.stg-face-auto-pick { color: #15803d; font-weight: 700; }
+.stg-face-auto-pending { color: var(--s-ink-soft); opacity: 0.75; }
+.stg-face-auto-refused { color: #dc2626; font-weight: 600; }
+[data-theme="dark"] .stg-face-auto-pick,
+html:not([data-theme="light"]):not([data-theme="tofu"]) .stg-face-auto-pick { color: #4ade80; }
+[data-theme="dark"] .stg-face-auto-refused,
+html:not([data-theme="light"]):not([data-theme="tofu"]) .stg-face-auto-refused { color: #f87171; }
+
 .stg-edit-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
 
 /* ══════════════════════════════════════

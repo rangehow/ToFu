@@ -1,3 +1,11 @@
+### 2026-08-01(脑派票闭环:tofu-search 0.5.4——pdf_extract 改走 classic pymupdf_rag 缝,RapidOCR 失配根治) — 接我自己在 error.log 审计批立的 `pt_7a80c4bb68364129`;**tofu-search 仓 commit `f58915c`**(4 文件;新套件 **3/3**,NEUTER 精确 2 红 cp/cmp 还原;全仓 **457 passed / 6 skipped**);epic DONE
+
+- **根因三层全部离线实证(每层都堵死一条懒路):** ①pymupdf4llm ≥1.26 顶层 `to_markdown` 在 `pymupdf.layout` 可导入时(本环境装了 trio 1.27.2.3)路由进新版 layout/OCR 流水线;②其 OCR 适配器(rapidtess/paddletess `exec_ocr:189`)调 `RapidOCR.text_detector`——拆 wheel 实证 **1.3.24 与 1.4.4 都叫 `text_det`**,该属性只存在于 ≤1.2,**降版本救不了**;③拆上游 1.28.0 wheel 实证同一调用还在(只是换成更响的 RuntimeError),**升版本也救不了**。触发闸是 analyze_page 按坏字符/高方差边缘图像投票 needs_ocr——纯色合成图不触发(方差≈0),噪声图实测触发同一 AttributeError。
+- **修法不是补丁是「采用已验证的缝」:** chatui 自己的 `lib/pdf_parser/text.py` 早就为同一崩溃绕过该流水线(直导 `pymupdf4llm.helpers.pymupdf_rag`,注释里逐字写着这个 AttributeError)——tofu-search 的 pdf_extract 却还在调顶层。**真实样本 arXiv 1706.03762 实测:修复前 → rapidtess_api.py:189 崩 → 39,512 字符 raw;修复后 → 40,608 字符富 markdown + 35 表格行,与 chatui 生产测量逐字一致。**
+- **套件:** hermetic needs_ocr 触发件(噪声图合成 PDF,实测修复前顶层调用必崩)保富 markdown 且无 raw 回退警告 + 缝行为钉(顶层调用即红)+ source pin。NEUTER:调用点改回顶层 → 精确 2 红。
+- **生效路径:** 可编辑安装(`pip show tofu-search` Editable → 本仓),代码已在仓,运行中进程的旧模块对象重启后自然换血;PyPI 0.5.4 发布留 owner 凭证链(同 0.5.3 发布链人门),不阻塞本票。tofu-search 的 JOURNAL.md 在该仓 gitignored——条目照写(本地盘,其仓规如此)。
+- **方法论记一笔:** 「上游新版本会修」是最贵的假设——拆 wheel 两分钟证伪;以及同一缺陷在自家两个仓的修复可以相差一个月:chatui 绕过它的注释已经成了别人仓里的路标,定期跨仓对拍注释里的「崩溃签名」能提前拦截同族票。
+
 ### 2026-08-01(「为什么被中断」定案:429 无限循环锁死 75 分钟——一根导火索引爆三个独立 bug;设计稿已出待审) — owner 截图报 ms9ow2tt「空泡+未完成」;epic `pt_a21cd6ebda4d4c8d`(claimed);设计稿 `docs/429_SATURATION_CONTROL_PLANE_DESIGN.md`
 
 - **表象定案:** 对话没有被中断——msg 9 正常完成(finishReason=stop);空泡是 Autopilot 下一轮 VU carrier `fb6d1f8d` 在 opus-5 上 **429 循环 ~75 分钟、3900+ 次、零 token、零回退尝试**(16:54:56→~18:14 自愈流出,18:20:35 VU 完成 done 1236 字)。根因两半:`lib/llm_dispatch/api.py:276` 明文「429 loops forever」(429 不占 hard_attempts)+ `strict_model=True` 把循环钉死在单模型 slot 池——402 能换模型是因为它冒泡到 llm_fallback,429 永远不冒泡。**旁证出系统性死结:stuck-reaper 的 `_dispatch_heartbeat` 在 dispatch 期间持续刷新(设计如此)⇒ reaper 永不杀 429 循环 ⇒ 「无限重试 × 心跳豁免」组合出永生幽灵。**

@@ -1547,6 +1547,14 @@
       post('/api/v1/paper/report/lookup', { paper_hash: paperHash, lang }, Object.assign({ onError: 'null' }, opts || {})),
     reportCache:    (cacheBody)           => post('/api/v1/paper/report/cache', cacheBody, { onError: 'null' }),
     reportAbort:    (taskId)              => post(`/api/v1/paper/report/abort/${encodeURIComponent(taskId)}`, {}, { onError: 'null', parse: 'none' }),
+    // Deepen (on-demand section depth, reading-xp P3). Start has no client
+    // deadline (same reasoning as reportStart); poll rides the GENERIC
+    // task-routes factory shape ({ok, events, next_cursor, status}).
+    deepenStart:    (body, opts)          => post('/api/v1/paper/deepen/start', body, Object.assign({ timeout: 0 }, opts || {})),
+    deepenPoll:     (taskId, cursor)      =>
+      request(`/api/v1/paper/deepen/poll/${encodeURIComponent(taskId)}`,
+              { method: 'GET', query: { cursor }, parse: 'response', onError: 'null' }),
+    deepenAbort:    (taskId)              => post(`/api/v1/paper/deepen/abort/${encodeURIComponent(taskId)}`, {}, { onError: 'null', parse: 'none' }),
     // Review Mode reuses ALL the report endpoints above — the report `lang`
     // arg carries the composite cache key ``review:<venue>:<uilang>`` opaquely.
     // Only the venue list needs its own (read-only) endpoint.

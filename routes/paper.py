@@ -122,6 +122,7 @@ from lib.paper import (  # noqa: F401  — back-compat re-exports
     _qa_latest_for,
     _qa_runtime,
     _run_qa_task,
+    _deepen_runtime,
     build_qa_messages,
     _paper_hash,
     resolve_paper_hash,
@@ -3409,3 +3410,74 @@ register_task_routes(api_v1_paper_bp, _translate_runtime,
                      url_prefix='/api/v1/paper/translate', enable_poll=False)
 register_task_routes(api_v1_paper_bp, _podcast_runtime,
                      url_prefix='/api/v1/paper/podcast', enable_poll=False)
+
+
+# ── Deepen (on-demand section depth, reading-xp P3) ──
+# POLL + ABORT both ride the generic factory — a first for the paper family:
+# the deepen drawer replays the event log and takes the content from the
+# `done` event, so no engine-specific poll keys are needed (the report/QA
+# polls stay custom for their legacy keys).
+register_task_routes(api_v1_paper_bp, _deepen_runtime,
+                     url_prefix='/api/v1/paper/deepen', enable_poll=True)
+
+
+@api_v1_paper_bp.route('/api/v1/paper/deepen/start', methods=['POST'])
+async def start_deepen_task():
+    """Start (or join) an on-demand section-deepening task.
+
+    Body JSON:
+        paper_hash: str (required)
+        section_idx: int (required) — h2/h3 index in the stored report body
+        mode: 'deeper' | 'derive' | 'eli5' (required)
+        lang: str (optional, default 'en') — the report's language key
+        paper_text: str (optional) — parsed paper text for context
+        model: str (optional)
+
+    Returns {ok, cached, content} on a fresh cache hit (never re-bills), or
+    {ok, task_id, running} for a live task to poll via the generic
+    /api/v1/paper/deepen/poll/<task_id>.
+    """
+    from lib.paper.deepen_engine import start_deepen
+
+    data = await async_parse_body()
+    phash = (data.get('paper_hash') or '').strip()
+    mode = (data.get('mode') or '').strip()
+    lang = (data.get('lang') or 'en').strip() or 'en'
+    paper_text = data.get('paper_text') or ''
+    model = (data.get('model') or '').strip() or None
+    try:
+        section_idx = int(data.get('section_idx'))
+    except (TypeError, ValueError):
+        section_idx = -1
+    if not phash:
+        return api_bad_request('No paper_hash provided')
+    if not mode:
+        return api_bad_request('No mode provided')
+
+    ui_lang = parse_report_lang(lang)['ui_lang']
+    result = await asyncio.to_thread(
+        start_deepen, phash, lang, mode, section_idx, paper_text,
+        model=model, ui_lang=ui_lang)
+
+    if 'error' in result:
+        msg, status = result['error']
+        logger.info('[Paper:Deepen] start rejected — hash=%s mode=%s sec=%s: %s',
+                    phash, mode, section_idx, msg)
+        return api_error(msg, status=status)
+    if result.get('cached'):
+        logger.info('[Paper:Deepen] cache hit — hash=%s mode=%s sec=%d',
+                    phash, mode, section_idx)
+        return api_ok({
+            'cached': True,
+            'content': result['content'],
+            'usage': result.get('usage'),
+            'section': result.get('section'),
+            'mode': mode, 'sectionIdx': section_idx,
+        })
+    task = result.get('joined') or result.get('task')
+    return api_ok({
+        'task_id': task['task_id'], 'paper_hash': phash,
+        'running': task['status'] in ('pending', 'running'),
+        'existed': bool(result.get('joined')),
+        'mode': mode, 'sectionIdx': section_idx,
+    })

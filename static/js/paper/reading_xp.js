@@ -345,6 +345,11 @@ function _paperXpAfterRender(article, container, view) {
   try {
     if (view && view._xpInsight) _paperXpDistribute(article, view);
     if (view && view._xpCheckpoints) _paperXpDistributeCheckpoints(article, view);
+    // On-demand depth buttons (P3) — deepen.js loads after this file and
+    // registers its seam on window; absent → no buttons, no error.
+    if (typeof window._paperDeepenAfterRender === 'function') {
+      window._paperDeepenAfterRender(article, container, view);
+    }
     _paperXpSkimReapply(container);
   } catch (e) {
     console.warn('[Paper:XP] after-render distribute failed (non-fatal):', e);

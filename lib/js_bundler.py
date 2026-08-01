@@ -1056,6 +1056,7 @@ _DEFERRED_FILES = [
     'paper/pdf_responsive.js',  # draggable divider + foldable/tablet responsive-crossing IIFE (self-contained; self-inits on DOMContentLoaded)
     'paper/report.js',    # Report + Review Mode (task/poll/render/export + 7 load-time listeners); report/review STATE stays in core → load before paper-reader.js
     'paper/reading_xp.js',  # Reading-experience rail (anchored insight cards / recap / cost breakdown); seams INTO report.js via window._paperXp* → load AFTER report.js, before paper-reader.js
+    'paper/deepen.js',      # On-demand section depth (P3): heading/formula deepen buttons + drawer; hooked from reading_xp's after-render seam → load AFTER reading_xp.js
     'paper/babel.js',     # Babel PDF-translation tab; owns _babelTranslatedPages (read by core library-persist at runtime) → load before paper-reader.js
     'paper/library.js',   # Paper Library (bookshelf) cache+CRUD+render; owns _paperLibrary state (extracted from paper-reader.js 2026-07) → runtime cross-refs, order free; before paper-reader.js
     'paper/podcast.js',   # Paper Podcast tab (player + transcript + sleep timer); reads _paperHash/Api.paper.podcast* at RUNTIME only → before paper-reader.js

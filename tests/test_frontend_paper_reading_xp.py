@@ -35,6 +35,7 @@ ROOT = os.path.normpath(os.path.join(HERE, '..'))
 REPORT_JS = os.path.join(ROOT, 'static', 'js', 'paper', 'report.js')
 XP_JS = os.path.join(ROOT, 'static', 'js', 'paper', 'reading_xp.js')
 QA_JS = os.path.join(ROOT, 'static', 'js', 'paper', 'qa.js')
+DEEPEN_JS = os.path.join(ROOT, 'static', 'js', 'paper', 'deepen.js')
 
 
 def _node_deps_available() -> bool:
@@ -93,6 +94,7 @@ global._i18nLang = win._i18nLang = 'en';
 eval(fs.readFileSync(process.argv[2], 'utf8'));  // real paper/report.js
 eval(fs.readFileSync(process.argv[3], 'utf8'));  // real paper/reading_xp.js
 eval(fs.readFileSync(process.argv[5], 'utf8'));  // real paper/qa.js
+eval(fs.readFileSync(process.argv[6], 'utf8'));  // real paper/deepen.js
 const _realPaperAskQuestion = _paperAskQuestion;  // qa.js 真入口,§7 覆盖后 §8 恢复
 
 // Capture the REAL glossary helpers before the stub block replaces them —
@@ -409,8 +411,62 @@ check('skim_off_restores',
       !c.classList.contains('paper-xp-skim-on')
       && !extraP.classList.contains('xp-skim-hidden'));
 
-console.log(out.join('\n'));
-process.exit(0);
+// ── (12) P3: deepen buttons + drawer (async) ──
+(async () => {
+  // Re-render fresh so the after-render seam injects the buttons.
+  _renderFinalReport(c, REPORT, { model: 'm1' }, view);
+  const art3 = c.querySelector('.paper-report-article');
+  const deepBtns = art3.querySelectorAll('.paper-deepen-btn[data-mode="deeper"]');
+  check('deepen_btns_per_report_heading', deepBtns.length === 4);
+  // xp-internal headings (the 💡 end section) get NO deepen button.
+  const xpSecH = art3.querySelector('.paper-xp-section h2, .paper-xp-section h3');
+  check('xp_section_has_no_deepen_btn',
+        !xpSecH || !xpSecH.querySelector('.paper-deepen-btn'));
+  // Derive button on a display-math block, assigned to the containing section.
+  const math = document.createElement('span');
+  math.className = 'katex-display';
+  const heads3 = art3.querySelectorAll('h2');
+  heads3[2].insertAdjacentElement('afterend', math);
+  window._paperDeepenAfterRender(art3, c, view);   // re-inject (idempotent)
+  const deriveBtn = art3.querySelector('.paper-deepen-btn[data-mode="derive"]');
+  check('derive_btn_on_math', !!deriveBtn);
+  check('derive_btn_sec_idx',
+        !!deriveBtn && deriveBtn.getAttribute('data-sec-idx') === '2');
+  check('reinjection_idempotent',
+        art3.querySelectorAll('.paper-deepen-btn[data-mode="deeper"]').length === 4);
+
+  // Click → start → cached content renders instantly (no re-bill).
+  global._paperHash = 'h-deepen';
+  const calls = [];
+  global.Api = win.Api = { paper: {
+    deepenStart: async (body) => { calls.push(body);
+      return { ok: true, cached: true, content: '## DEEP', usage: { prompt_tokens: 10, completion_tokens: 5 } }; },
+    deepenPoll: async () => ({ ok: true, json: async () => ({ ok: true, events: [], status: 'done' }) }),
+    deepenAbort: async () => ({}),
+    reportCache: async () => ({ ok: true, meta: null }),
+  } };
+  // The re-injection above REPLACED the buttons — re-query live ones
+  // (clicking a detached node never reaches the document listener).
+  const liveBtns = art3.querySelectorAll('.paper-deepen-btn[data-mode="deeper"]');
+  liveBtns[2].dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 20));
+  check('deepen_start_params',
+        calls.length === 1 && calls[0].section_idx === 2
+        && calls[0].mode === 'deeper' && calls[0].paper_hash === 'h-deepen');
+  const drawer = art3.querySelector('.paper-deepen-drawer');
+  check('drawer_rendered_cached',
+        !!drawer && drawer.innerHTML.indexOf('DEEP') !== -1);
+  check('drawer_shows_usage',
+        !!drawer && drawer.innerHTML.indexOf('tok') !== -1);
+  // Second click toggles the drawer away (no double-bill).
+  liveBtns[2].dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 20));
+  check('second_click_closes_no_rebill',
+        calls.length === 1 && !art3.querySelector('.paper-deepen-drawer'));
+
+  console.log(out.join('\n'));
+  process.exit(0);
+})();
 """
 
 
@@ -424,7 +480,7 @@ def _write_harness() -> str:
 def _run(report_js: str) -> subprocess.CompletedProcess:
     harness = _write_harness()
     try:
-        return subprocess.run(['node', harness, report_js, XP_JS, ROOT, QA_JS],
+        return subprocess.run(['node', harness, report_js, XP_JS, ROOT, QA_JS, DEEPEN_JS],
                               capture_output=True, text=True, timeout=60)
     finally:
         try:
@@ -441,7 +497,7 @@ def test_reading_xp_distribution_and_events():
     assert proc.returncode == 0, f'node failed: {proc.stderr}\n{out}'
     fails = [ln for ln in out.splitlines() if ln.startswith('FAIL')]
     assert not fails, 'reading-xp rail failures:\n' + out
-    assert out.count('PASS') >= 49, f'expected >=49 PASS lines, got:\n{out}'
+    assert out.count('PASS') >= 58, f'expected >=58 PASS lines, got:\n{out}'
 
 
 @pytest.mark.skipif(not _node_deps_available(),

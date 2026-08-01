@@ -4,7 +4,8 @@
 # ONE-COMMAND post-restart verification (owner directive 2026-08-01). Run
 # AFTER the server restarts with a manifest that defers cross_tab_sync.js
 # (sub-3A) + health_stream_timer.js (sub-3B) + tofu-pet.js/tofu-scene.js
-# (sub-3C):
+# (sub-3C) + ui/tool_rounds_rich.js (sub-4, rich conv-meta + timer-watcher
+# renderers split out of tool_rounds.js):
 #
 #     bash scripts/verify_epic_e_deferrals.sh [base_url]
 #
@@ -21,7 +22,10 @@
 #         8. served feature INCLUDES both assigns
 #         (needles are space-free: esbuild collapses 'window.X = {' to 'window.X={')
 #   packs   9. advertised i18n pack serves 200
-#   ledger 10. prints measured byte counts for docs/EPIC_E_SIZE_LEDGER.md
+#   sub-4  10. served core EXCLUDES the rich renderer defs but KEEPS the
+#               typeof guards + _localizeInspectOps (cross-boundary stay)
+#         11. served feature INCLUDES the rich renderer defs
+#   ledger 12. prints measured byte counts for docs/EPIC_E_SIZE_LEDGER.md
 #
 # Exit 0 = all green; exit 1 = at least one failure (details on stdout).
 
@@ -101,6 +105,26 @@ else
   say "SKIP  packs.9 (dual-language bundle mode — no pack advertised)"
 fi
 
+# ── sub-4 ──
+printf '%s' "$CORE_BODY" | grep -q 'function _renderConvMetaBlock(' \
+  && fail "sub-4.10 core still contains the _renderConvMetaBlock def" \
+  || pass "sub-4.10 core excludes the _renderConvMetaBlock def"
+printf '%s' "$CORE_BODY" | grep -q 'function _renderTimerWatcherBlock(' \
+  && fail "sub-4.10b core still contains the _renderTimerWatcherBlock def" \
+  || pass "sub-4.10b core excludes the _renderTimerWatcherBlock def"
+printf '%s' "$CORE_BODY" | grep -q 'typeof _renderConvMetaBlock' \
+  && pass "sub-4.10c core keeps the conv-meta typeof guard" \
+  || fail "sub-4.10c core lost the conv-meta typeof guard"
+printf '%s' "$CORE_BODY" | grep -q 'function _localizeInspectOps(' \
+  && pass "sub-4.10d core keeps _localizeInspectOps (cross-boundary stay)" \
+  || fail "sub-4.10d core lost _localizeInspectOps (image tiles break)"
+printf '%s' "$FEAT_BODY" | grep -q 'function _renderConvMetaBlock(' \
+  && pass "sub-4.11 feature includes the _renderConvMetaBlock def" \
+  || fail "sub-4.11 feature MISSING the _renderConvMetaBlock def"
+printf '%s' "$FEAT_BODY" | grep -q 'function _renderTimerWatcherBlock(' \
+  && pass "sub-4.11b feature includes the _renderTimerWatcherBlock def" \
+  || fail "sub-4.11b feature MISSING the _renderTimerWatcherBlock def"
+
 # ── ledger measurements ──
 CORE_BYTES=$(printf '%s' "$CORE_BODY" | wc -c)
 FEAT_BYTES=$(printf '%s' "$FEAT_BODY" | wc -c)
@@ -111,7 +135,7 @@ say "feature $FEAT  $FEAT_BYTES bytes"
 
 say ""
 if [ "$FAILS" -eq 0 ]; then
-  say "ALL GREEN — Epic-E deferrals sub-3A + sub-3B + sub-3C verified live."
+  say "ALL GREEN — Epic-E deferrals sub-3A + sub-3B + sub-3C + sub-4 verified live."
   exit 0
 else
   say "$FAILS FAILURE(S) — deferrals NOT verified; do not mark shipped."

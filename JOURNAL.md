@@ -1,7 +1,30 @@
+### 2026-08-01(脑派票闭环:identity_gate_parity 漂移——方向对齐而非代码迁就) — owner 指令「别搞开关,直接改测试」,接 `pt_5f25b1d17c9048f1`;commit `f838e0ad`(1 测试文件 +109/-45;套件 **16/16**(原 1 红),邻接环 54/54;**NEUTER**:重引「消费者降级即违规」→ 精确 2 红,cp/cmp 还原);epic DONE
+
+- **先实证后动刀(证据链写进 commit):** 红的根不是产品 bug,是测试把**安全方向**判死——①降级消费者的帧入口由模块自己接线:main.js 启动调用落到 feature-loader 桩,桩先 `_loadFeatureBundle()` 再分发真 `_wireConvSyncPush`,pushSubscribe/BroadcastChannel 都在模块内部 ⇒ 模块未加载时**零帧可达**,无 accept-all 窗口;②谓词 `_frameIsOurs` 在 eager core 束(conv_state_reducer.js,启动时同步执行、先于 main.js)⇒ 谓词恒先于首帧存在;③真正的危险方向是**谓词降级/缺席 + 消费者 eager**(入口已接线而谓词 undefined → fail-open 全收)。
+- **修法(纯测试侧,产品代码零开关):** 不变量抽成纯函数 `_build_order_violations(bundle, deferred)`——谓词缺席/降级、eager 序违规照旧判红;「消费者在 deferred」显式放行并内联方向安全性论证。新增 `test_build_order_direction_neuter`(NEUTER-by-data):合成列表驱动——sub-3A 真实形态必须过(旧逻辑恰恰死在这格)、谓词降级必须红、谓词排消费者之后必须红。
+- **方法论记一笔:** 「测试红 ≠ 产品错」——不变量若把方向搞反,会把**正确的设计**钉成红的;修漂移前先沿「帧从哪来、何时可达」走一遍物理链,证据齐了再决定改哪侧。
+
+### 2026-08-01(桌面桥鉴权全链实测 + 铸电脑控制 token:闸→路由两层定位,代理路再证死,ssh -L 成唯一通道) — owner 追问桌面版/开关/订阅三连;token `k_241a5d61` 已交付用户粘贴
+
+- **两层鉴权定位法(实证):** 全局 `before_request` 闸(`routes/api_v1/auth.py`)对 `/api/desktop|browser/poll` **永远要凭证**(`open_when_unset=False`——TOFU_BRIDGE_SECRET 未设、loopback 裸轮询照样 401);过了闸,路由层才是 open-legacy。两层的 401 信封文本不同(闸的 hint 含「agents:bridge-scoped API key」),可用来定位死在哪一层。
+- **进程外铸 key 的坑(实证):** `lib/api_keys/_store._ensure_loaded` 每进程只加载一次——外部 `create_key` 铸的 `k_70271155` 对运行中服务器不可见(轮询 401),且被服务器下一次 `_persist()` 用自家 cache 整文件覆盖**静默抹掉**(grep 实证已消失)。正确姿势:读 `data/config/.first_run_token`(bootstrap admin)走 `POST /api/v1/desktop/token` **进程内**铸——得 `k_241a5d61`(scopes=agents:bridge),实测直连长轮询从「秒回 401」变「挂起等待」= 鉴权通过(long-poll 无命令时挂起是设计,401 才是秒回)。
+- **代理路再证死(与 egress 案互证):** mlp/codelab 代理对无 cookie 的 API 调用一律 401 `{"error":"Unauthorized"}`(**带 agents:bridge token 也一样**),浏览器能用是因为带 SSO/tofu cookie ⇒ agent 只能走 `ssh -L 15000:127.0.0.1:15000` 连 `http://127.0.0.1:15000`——与 owner 已为 egress 拍板的转发路是同一条,**一次转发,电脑控制与 egress 两功能共用**。
+- **留在用户 PC 上的三动作(agent 无法代劳):** 确认/建立 ssh -L(浏览器开 127.0.0.1:15000 能见到自己会话即已存在——这大概率正是桌面版被挤到 4149 的原因)→ 托盘「Connect to remote Tofu…」粘贴连接行 → 勾「Enable Computer Control」。本机控制面板开关锁是**设计**(连接前禁用,`_lcSetSwitch` 单向闸);write/exec/GUI 维持 deny-by-default(已向用户说明理由);托盘 enabled/perms **重启 App 即重置**(只活内存)——持久化改进已向用户提议,待拍板后出货+重建安装包。
+- **memory:** `desktop-bridge-auth-playbook` 已存(两层闸定位/进程内铸 token/代理墙/长轮询成功信号/托盘已知边界)。
+
 ### 2026-08-01(egress 接线:owner 拍板「改走免重启转发路」,agent 尚未上线——挂注册表 watcher) — epic `pt_4ea6bf05deaa46f0`
 
 - **状态:** 主路径(BIND_HOST shell 重启)放弃,走备选:办公机 `ssh -L 15000:127.0.0.1:15000 <codelab-ssh>` + agent 连 `http://127.0.0.1:15000`。答复后实测注册表仍空、egress 五态 unknown——agent 尚未起。**watcher 形态修正(吸收 7-31 误报教训):不用 condition_command 退出码(本环境观测不可靠),改 check_command 输出注册表 JSON 由 poll LLM 读内容判定**——`agents` 非空且含 `egress=true` 才算 ready,空表/缺能力位不触发。60s×30 轮(30 分钟窗口),耗尽则挂板请 owner 贴 agent 控制台输出。
 - **agent 上线后验收序:** 能力位 → oauth/status 翻 `state=agent`+`verdict=geo_blocked` → Claude 登录(服务器交换优先序) → 流式聊天(egress_http_stream 全链) → Codex O3(curl_cffi 是否必需)定案。
+
+### 2026-08-01(Epic-E sub-4:tool_rounds.js 261KB 拆分落地——「冷渲染留 core + 富渲染降级」首例,生产 core 1,460,290 B) — commit `fcddc420`(10 文件;新套件 12+2 行为,wire-parity 闸升级 43 轮;NEUTER×2 精确;环 81/81;runbook 20 项 ALL GREEN)
+
+- **普查定案(为什么不是 move 是 split):** 公开面(renderToolRoundsHTML/renderSegmentTimelineHTML/三个 hint 渲染器)全部被首屏路径裸调(chat_render.js:1438-1499、streaming_ui.js、branch 两文件)——整体降级不可能。字节归因后选定两个内聚簇:conv-meta 富渲染族 40KB(仅 Project Brain 工具轮才有)+ Timer Watcher 块 18KB(仅调度器工具轮),各自**恰好一个派发点**且 `_renderConvMetaBlock` 的控制流本来就 `if(html) return` 落空回通用行——退化缝现成。
+- **关键普查发现:** `_localizeInspectOps` 表面在 conv-meta 行区间内,实际被 core 图像瓦片渲染器(L2798)调用——**跨边界依赖,必须留 core**;不逐函数查调用点就会把它搬走,首屏图像瓦片 ReferenceError。`_cmdTimerTicker` 同理留(run_command 倒计时是 core 冷渲染),只有 `_timerCountdownTicker` 随块走。
+- **wire-parity 闸升级而非漂移(吸取 conv-harness 家族教训):** 抽到一半先查既有 harness——`test_frontend_tool_rounds_wire_parity.py` 逐字节基线闸果然只 eval 单文件。升 harness(core+rich 双 eval)+ **实证 41 轮旧单体 vs 新 core+rich 逐字节零 diff** + 电池补 2 个确定性轮(conv-meta/timer-watcher——**这两个分支此前从来没被闸渲染过**,coverage 标记缺口顺手补上)+ 基线重冻(两跑确定性验证)。
+- **行为 harness(双模态):** degraded(core 独跑)两型轮不抛且出通用行;rich 出富卡;NC 摘 typeof 闸→degraded 精确 ReferenceError。NEUTER×2:删 rich 文件→精确 5 红;还原未拆分 core→精确 4 红。
+- **农场与生产再次同 hash:** farm `bundle-827d3641.js`(1,460,291 B)≡ 生产实测(1,460,290 B,wc/getsize 差 1B 惯例);累计 core 1,550,424→1,460,290(−90KB 压缩态),距 1.2MB ~260KB。下一片:第三梯队面板族(myday 的 load-time 自跑副作用需先拆)。
+- **方法论立档:** 字节归因表是拆分的导航图——top 函数榜第一 `_renderTimerWatcherBlock` 18KB 就是本刀的一半;**「查调用点时不只按行区间归属,按符号全仓反查」**是本次避免事故的关键动作。
 
 ### 2026-08-01(续·sub-3C 收尾两事:预存红立案 + 一次 git 操作险肇自伤) — 附记于 sub-3C 批
 

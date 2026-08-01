@@ -23,7 +23,7 @@
 | # | 文件 | 字节 | 判定 | 一句话理由 |
 |---|---|---|---|---|
 | 1 | i18n.js | 404,150 | **已拆出** | pack 模式在服（sub-1）；源仍在清单内、构建期按 pack 替换 |
-| 2 | ui/tool_rounds.js | 260,719 | **boot-critical（实测定案 2026-08-01）** | 首屏恢复含工具轮的会话走 `chat_render.js:1499 → renderToolRoundsHTML`（裸调用，非闸）——整体 move 会让工具气泡首屏空白；只能走「冷渲染子集留 core + 交互增强（审批钮/计时器/QR/inspect）降级」的拆分，工作量大于普通 deferral，排期在装饰族之后 |
+| 2 | ui/tool_rounds.js | 260,719→**206,246** | **拆分落地（sub-4, `fcddc420`）** | 首屏冷渲染子集留 core（实测定案）；conv-meta 富渲染族（40KB）+ Timer Watcher 块+ticker（18KB）拆出为 deferred `ui/tool_rounds_rich.js`（60KB）；派发 typeof 闸降级通用行 + 到达升级 pass |
 | 3 | ui/chat_render.js | 136,701 | boot-critical | 消息渲染即首屏本体 |
 | 4 | ui/sse_pipeline.js | 116,042 | boot-critical | 聊天流主管道 |
 | 5 | api.js | 99,249 | boot-critical | 统一 API 客户端，`_CRITICAL_FILES` 成员 |
@@ -72,9 +72,10 @@
 | 2026-07-31 | sub-3A | `8aa9a1c6` | cross_tab_sync.js (53KB) | 1,532,269（2026-08-01 实测，`bundle-cc0b5197.js`） | 511,266（`feature-5f804ab4.js`） | stub + 3 闸；事故链见 JOURNAL 2026-08-01；生产数字为 sub-3A+3B 落地后实测 |
 | 2026-08-01 | sub-3B | `6baf1083` | health_stream_timer.js (62KB) | 同上（与 3A 同批生效） | 同上 | 5 闸 + 零 stub 设计；农场同构构建 −13.9KB 净额（兄弟增量抵销部分） |
 | 2026-08-01 | sub-3C | `df664a2d` | tofu-pet.js + tofu-scene.js (160KB) | **1,493,217**（`bundle-5c05d29b.js`，同日实测） | **549,924**（`feature-53a9cd44.js`） | 零闸零 stub（普查复核）；农场与生产**同 hash** 验证；runbook ALL GREEN（sub-3A+3B+3C 三片 14 项全过） |
+| 2026-08-01 | sub-4 | `fcddc420` | tool_rounds.js 拆分（−58KB 源） | **1,460,290**（`bundle-827d3641.js`，同日实测） | **584,415**（`feature-f33bbae5.js`） | 拆分非 move：冷渲染留 core + conv-meta/timer-watcher 降级；行为 harness 双模态 + 升级后 wire-parity 闸 43 轮字节级（41 轮新旧逐字节一致）；农场与生产**同 hash**；runbook 20 项 ALL GREEN |
 
 ## 目标线与当前差距
 
 - **目标（暂定）**：core 压缩态 ≤ **1.2 MB**（待 owner 确认）。
-- **当前（2026-08-01 生产实测）**：**1,493,217 B** ⇒ 差距 ~293 KB（基线 1,550,424 → 累计 −57,207 B 压缩态；三片 deferral 已全部生产实测生效，runbook `scripts/verify_epic_e_deferrals.sh` 14 项 ALL GREEN）。
-- **已排队**：累计已降级源码 275KB（53+62+160）。下一片：tool_rounds 拆分（冷渲染子集留 core 后可释放大头，需先设计拆分缝）；第三梯队（finish_info 90KB / project 89KB / myday 56KB / swarm_panel 55KB / access_matrix 55KB——用户动作面板族，比照 Project Brain 判例）⇒ 目标可达。
+- **当前（2026-08-01 生产实测）**：**1,460,290 B** ⇒ 差距 ~260 KB（基线 1,550,424 → 累计 −90,134 B 压缩态；四片全部生产实测生效，runbook 20 项 ALL GREEN）。
+- **已排队**：累计已降级源码 333KB（53+62+160+58）。下一片：第三梯队（finish_info 90KB / project 89KB / myday 56KB / swarm_panel 55KB / access_matrix 55KB——用户动作面板族，比照 Project Brain 判例逐个普查；myday 有 load-time 自跑 `_mydayScheduleReminder()` 需先拆副作用）。

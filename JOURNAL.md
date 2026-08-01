@@ -432,6 +432,13 @@
 - **生产实测挂起(非我故障):** runbook 扩 sub-5 六项后实测服务器 curl 000×3——进程活着(42.6% CPU、14.3GB RSS)但事件环停摆(cgroup 95.6% 反复 relief + FUSE 上 8s 慢查询,正是 pt_afbaf3d7/pt_ef42c2a1 两兄弟 epic 在修的「假离线」族)。**绝不重启(本会话自己的 run_task 就在该进程里跑)**;timer 追服务器恢复后自动补跑 runbook 并回写分类账。
 - **累计:** core 1,550,424 → 农场 1,418,722(−132KB 压缩态),距 1.2MB ~219KB;已降级源码 443KB。下一片:myday 面板对(先拆 `_mydayScheduleReminder` load-time 副作用)+ project.js 拆分(37 调用点,比照 tool_rounds「状态子集留 core」)。
 
+### 2026-08-02(pt_03f4cdf1 **COMPLETE**:run_task 函数体 332 L ≤ owner 350 线——38 片切片 + 注释指针化收官,356→358 sweep 全绿) — 脑派发 epic DONE;slice 35-38 四连发
+
+- **完成评估(五判据全过):** ①run_task 函数体 **332 L** ≤ 350(文件 488 L,~160 行 import 头是 facade 再导出契约,不可压);②每个 phase 都是 delegation——29 wire-parity 套件 + spine-shape 棘轮钉死(38 个「slice N → _leaf」箭头指针);③功能性 run_task 套件 ×5(prefill_resume/turn_auto_retry/error_metadata/keep_tool_history/narrator)全绿;④`import server` 子进程冒烟(30 叶 delegation 链重启安全);⑤facade `__init__.py` 零改动,再导出契约完整。
+- **本批四片:** slice 35 task-open 簇(707→689)、36 continue-toolHistory+drift 守卫并入 `_tool_history.py`(689→678)、37 VU 闭包工厂(678→658;**自抓 scoping 雷**:内层 `def _vu_phase` 使 `_impl = _vu_phase` 读 UnboundLocalError——def 即赋值,遮蔽从作用域顶生效;11 个功能套件失败全是我自己的不是兄弟的,行为测试逮住)、38 **delegation 注释指针化**(658→489;30 个 4-11 行注释块→1-2 行箭头指针,leaf docstring 是契约之家)+ spine-shape 棘轮(箭头/叶路径形注释块 ≤3 行 + 函数体 ≤350 双钉;NEUTER 首次不咬——箭头过滤器漏了旧式无箭头冗长形,NEUTER 自己抓出,补 `orchestrator._` 形后精确 1 红)。
+- **epic 字面偏差记档:** 票面写「`_run/` 子包 mirroring endpoint/」,落地形态是既有 `orchestrator/` 包内平铺 leaf(orchestrator/ 本身就是那个子包,结构早已镜像 endpoint/)——意图(phase seams 全部抽出)完整达成,容器选择是既有包。
+- **方法论两条立档:** ①「def 即赋值」作用域雷——闭包工厂里同名 inner def 会从作用域顶遮蔽模块级函数,工厂要么改名(inner `_bound`)要么 `globals()[...]`;②**NEUTER 不咬是过滤器缺陷的一等公民信号**——棘轮/守卫写完必须 NEUTER 一次,不咬就修过滤器再 NEUTER。
+
 ### 2026-08-02(Epic-E **COMPLETE**:core 1,550,424→1,045,274 B(−32.6%),12 片全账,终审三独立复核) — 脑派发 `pt_3879f00e` DONE;slice 35 顺带落地(_run.py 689 L)
 
 - **终审(我,claim-holder,三项独立复核非转述):** ①生产 runbook **52 项 ALL GREEN**,core `bundle-40dde573.js` **1,045,274 B**(余量 ~183KB,基线 −505KB);②ledger 12 行流水片片含 commit/字节/NEUTER/runbook 证据链;③deferral 套件家族 **143/143** 全绿(14 套件含 sub-10 的 branding 留 core + LoadGuard 摘钉双钉)。**判读:complete。**

@@ -1,3 +1,8 @@
+### 2026-08-01(release-chain 批爆炸半径闭环:dep-list 守卫改为按 CI 安装**步骤**聚合) — 兄弟 ms9oms9z 实测干净 HEAD:`test_desktop_agent.py` 双守卫被我 `e0049305` 的 vendor-wheel 行打红;立案 `pt_0720694046c042e6`,兄弟先认领、边界协调后**移交给我**按其也认可的 aggregate-by-line 修复。commit `274b7cae`(1 文件 +95/-25;套件 **40/40**,环 **104/104**;NEUTER:真实 workflow 摘一条腿的 psutil ⇒ 双守卫精确红,已还原)
+
+- **修法(语义修正不是豁免):** 守卫旧形「每条 pip install 行都携带运行时依赖」假定所有安装行同类;vendor 行 `--no-deps` 是刻意无依赖(其 deps 由紧随的 requirements.txt 求解供给,加回会让 pip 抢在冻结求解前从索引拉版本)。真语义=「该腿环境装完该步骤所有行后集齐依赖」⇒ 解析改为每「Install dependencies」步骤一份包集合(步骤内全部 pip 行的并集),按步骤断言覆盖;步骤数 sanity==3 防空解析恒绿。测试名保留作历史句柄,docstring 载修正语义;两条合成文本钉:步骤内含无依赖 pip 行**不得**误红(正是被打红的形状)、丢失显式依赖行的腿**必须**红(只有 vendor 行永远凑不齐运行时依赖)。
+- **我的漏(同上一条,不改一字):** 本批相邻环没含 test_desktop_agent.py——CI 行级棘轮的爆炸半径永远是「读这份 YAML 的全部测试」,下次改 workflow 先 grep 全部读它的套件再定环。
+
 ### 2026-08-01(桌面版下载「not found」:请求从未到 Tofu —— 前缀代理丢前缀,前端重基修复) — owner 报「本机控制面板显示这是被控电脑,但点下载还是 not found」;commit `93d1cc64`(3 文件 +83/-2;两套件 **45/45 + 27/27**;NEUTER×1 精确)
 
 - **owner 三问的定案:** ①**从来不是实时编译**——mirror(lib/desktop_dist/mirror.py)把 GitHub 已发布 release 的安装包抓一次进本地 store(`data/desktop_dist/`),客户端元数据(UA + userAgentData arch)只用来从**已存在**的文件里挑匹配平台的;服务器物理上只能自建 Linux(PyInstaller 不能交叉编译),Windows/macOS 永远来自已发布 release。②**0.14.2 之谜**=mirror 镜像「最新已发布 release」,而发版链断在 v0.14.2(2026-07-31 发版链条批定案:树内 VERSION 已 0.16.0,GitHub latest 停 v0.14.2)——Windows 用户在新 release 发布前只能拿到 0.14.2,Linux 用户由自建 0.16.0 顶上。③**not found 真身**:access.log 里 `desktop/status` 一片 200、`desktop/download` **零命中**——请求根本没到 Tofu,是 code-server 网关自己 404。

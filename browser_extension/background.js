@@ -18,6 +18,14 @@ const FETCH_TIMEOUT    = 12000;   // Abort fetch after 12s (server long-polls 8s
 const POLL_INTERVAL    = 100;     // ms between polls (server blocks, so no busy-loop)
 const POLL_RETRY_DELAY = 3000;    // ms to wait after an error before retrying
 const COMMAND_TIMEOUT  = 25000;   // Per-command execution timeout
+// 401 handling: a wrong/missing bridge secret will NEVER succeed, so retrying
+// at a fixed cadence just floods the server's auth log (measured ~400 401s per
+// hour on 2026-08-01 from this very loop). Back off exponentially and park at a
+// slow probe — the parked probe keeps self-healing alive for the case where the
+// secret is fixed server-side, without the log spam.
+const AUTH_RETRY_BASE_DELAY = 9000;    // first 401 retry (~POLL_RETRY_DELAY × 3)
+const AUTH_RETRY_MAX_DELAY  = 300000;  // parked probe cadence (5 min)
+const AUTH_GIVE_UP_AFTER    = 5;       // consecutive 401s → needs-re-pair state
 // Some commands can legitimately take longer than the default; override here.
 const COMMAND_TIMEOUT_OVERRIDES = {
   screenshot_tab: 55000,  // full-page CDP capture + lazy-load wait
@@ -33,6 +41,9 @@ let BRIDGE_SECRET = '';           // Optional: matches server TOFU_BRIDGE_SECRET
 let pollActive = false;
 let connected = false;
 let lastError = '';
+let authFailures = 0;             // consecutive 401s (reset on any success)
+let needsRepair = false;          // parked: user must re-pair the bridge secret
+let _retryTimer = null;           // pending setTimeout(poll) handle (cancelable)
 
 // Chromium major version (parsed once at load). Reported to the server on every
 // poll so the Tofu UI can surface Chrome 142+ "Local Network Access" prompt
@@ -102,6 +113,13 @@ function setBridgeSecret(secret) {
   BRIDGE_SECRET = (secret || '').trim();
   chrome.storage.local.set({ bridgeSecret: BRIDGE_SECRET });
   console.log('[Bridge] Bridge secret', BRIDGE_SECRET ? 'set' : 'cleared');
+  // The user may have just fixed a wrong secret: drop the backoff and cancel
+  // a parked 5-minute probe so the new credentials are tried NOW.
+  _resetAuthBackoff();
+  if (pollActive) {
+    if (_activePollController) { try { _activePollController.abort(); } catch (_) {} }
+    _scheduleNextPoll(0);
+  }
 }
 
 function buildHeaders() {
@@ -142,6 +160,7 @@ function setServer(url) {
   SERVER_URL = url;
   console.log('[Bridge] Server:', SERVER_URL);
   chrome.storage.local.set({ serverUrl: url });
+  _resetAuthBackoff();
   stopPolling();
   startPolling();
 }
@@ -149,6 +168,22 @@ function setServer(url) {
 // ══════════════════════════════════════════
 //  Polling — Single Endpoint
 // ══════════════════════════════════════════
+
+// Single pending-timer invariant: every path that schedules the next poll
+// goes through here, so two timers can never coexist (a pre-existing double-
+// loop hazard) and a user action (new secret / new server) can cancel a parked
+// 5-minute probe and reconnect instantly.
+function _scheduleNextPoll(delay) {
+  if (_retryTimer) { clearTimeout(_retryTimer); _retryTimer = null; }
+  if (pollActive) {
+    _retryTimer = setTimeout(() => { _retryTimer = null; poll(); }, delay);
+  }
+}
+
+function _resetAuthBackoff() {
+  authFailures = 0;
+  needsRepair = false;
+}
 
 function startPolling() {
   if (pollActive) return;
@@ -161,6 +196,7 @@ function startPolling() {
 function stopPolling() {
   if (!pollActive) return;
   pollActive = false;
+  if (_retryTimer) { clearTimeout(_retryTimer); _retryTimer = null; }
   console.log('[Bridge] Polling stopped');
 }
 
@@ -193,11 +229,18 @@ async function poll() {
         // Bridge auth misconfigured — no point hammering the server.
         // Hold the results so they're not lost when the user fixes the secret.
         _resultQueue.unshift(...resultsToSend);
+        authFailures += 1;
         connected = false;
-        lastError = 'Bridge auth failed (401) — set the Bridge Secret in the popup';
-        updateBadge('error');
+        needsRepair = authFailures >= AUTH_GIVE_UP_AFTER;
+        lastError = needsRepair
+          ? `Bridge auth failed (401) ×${authFailures} — re-pair needed: set the Bridge Secret in the popup (probing every 5 min)`
+          : 'Bridge auth failed (401) — set the Bridge Secret in the popup';
+        updateBadge(needsRepair ? 'repair' : 'error');
         console.warn(`[Bridge] ${lastError}`);
-        if (pollActive) setTimeout(poll, POLL_RETRY_DELAY * 3);
+        const delay = Math.min(
+          AUTH_RETRY_BASE_DELAY * (2 ** (authFailures - 1)),
+          AUTH_RETRY_MAX_DELAY);
+        _scheduleNextPoll(delay);
         return;
       }
       if (resp.status >= 500) {
@@ -205,7 +248,7 @@ async function poll() {
         _resultQueue.unshift(...resultsToSend);
         console.warn(`[Bridge] Server/proxy returned ${resp.status}, retrying...`);
         connected = true;
-        if (pollActive) setTimeout(poll, POLL_RETRY_DELAY);
+        _scheduleNextPoll(POLL_RETRY_DELAY);
         return;
       }
       throw new Error(`HTTP ${resp.status}`);
@@ -214,6 +257,7 @@ async function poll() {
     const data = await resp.json();
     connected = true;
     lastError = '';
+    _resetAuthBackoff();
     updateBadge('on');
 
     // Fire-and-forget: do NOT await command execution
@@ -227,7 +271,7 @@ async function poll() {
       }
     }
 
-    if (pollActive) setTimeout(poll, POLL_INTERVAL);
+    _scheduleNextPoll(POLL_INTERVAL);
 
   } catch (err) {
     if (timeoutId) clearTimeout(timeoutId);
@@ -240,12 +284,12 @@ async function poll() {
         // Restore the in-flight poll's drained results so none are lost.
         _flushPending = false;
         if (resultsToSend.length) _resultQueue.unshift(...resultsToSend);
-        if (pollActive) setTimeout(poll, 0);
+        _scheduleNextPoll(0);
         return;
       }
       // Fetch timeout — normal (server long-poll returned nothing), just reconnect
       connected = true;
-      if (pollActive) setTimeout(poll, POLL_INTERVAL);
+      _scheduleNextPoll(POLL_INTERVAL);
       return;
     }
 
@@ -253,7 +297,7 @@ async function poll() {
     lastError = err.message || 'Connection failed';
     updateBadge('error');
     console.warn(`[Bridge] Poll error: ${lastError}`);
-    if (pollActive) setTimeout(poll, POLL_RETRY_DELAY);
+    _scheduleNextPoll(POLL_RETRY_DELAY);
   }
 }
 
@@ -1998,8 +2042,8 @@ function isBinaryAssetUrl(url) {
 }
 
 function updateBadge(state) {
-  const colors = { on: '#4CAF50', error: '#f44336', off: '#9E9E9E' };
-  const texts = { on: 'ON', error: 'ERR', off: 'OFF' };
+  const colors = { on: '#4CAF50', error: '#f44336', off: '#9E9E9E', repair: '#FF9800' };
+  const texts = { on: 'ON', error: 'ERR', off: 'OFF', repair: 'KEY' };
   try {
     chrome.action.setBadgeBackgroundColor({ color: colors[state] || '#9E9E9E' });
     chrome.action.setBadgeText({ text: texts[state] || '' });
@@ -2019,6 +2063,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       hasBridgeSecret: !!BRIDGE_SECRET,
       pollActive,
       lastError,
+      authFailures,
+      needsRepair,
       inflight: _inflight.size,
       resultQueue: _resultQueue.length,
       commandsExecuted,

@@ -1490,7 +1490,8 @@ function renderMessage(msg, idx) {
        so historical messages still tell the user "this turn received
        async sub-agent updates before the model's reply".               */
     if (msg._inboxInjects && msg._inboxInjects.length) {
-      body += _buildSwarmInboxChipsHTML(msg._inboxInjects);
+      body += (typeof _buildSwarmInboxChipsHTML === 'function')
+        ? _buildSwarmInboxChipsHTML(msg._inboxInjects) : '';  // module DEFERRED (Epic-E sub-5B)
     }
     /* Pass segments so the grouped panel renders per-round narration
      * (translated-in-place) adjacent to each round's tools — the toggle-OFF /

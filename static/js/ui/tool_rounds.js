@@ -2726,9 +2726,9 @@ function _renderTurnHead(size, rno) {
  * — and only they — still get a standalone entry appended after the panel. */
 function _renderToolSlot(r, allRounds) {
   const isSwarm = _isRoundSwarm(r);
-  const inner = isSwarm
+  const inner = (isSwarm && typeof _buildSwarmPanelHTML === 'function')
     ? _buildSwarmPanelHTML(r, allRounds)
-    : _renderUnifiedToolLine(r, r.status === "searching");
+    : _renderUnifiedToolLine(r, r.status === "searching");  // panel DEFERRED: generic line (Epic-E sub-5B)
   const swarmAttr = isSwarm ? ' data-prn-kind="swarm"' : '';
   const trailing = isSwarm ? _renderStandaloneDebugEntry(r) : '';
   return `<div data-prn="${r.roundNum}"${swarmAttr}>${inner}${trailing}</div>`;

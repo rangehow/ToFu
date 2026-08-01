@@ -718,7 +718,14 @@ _BUNDLE_FILES = [
     # extracted from ui/streaming_ui.js (2026-06-27). Leaf cluster; its
     # builders are called from streaming_ui.js + tool_rounds.js via shared
     # window scope. Load BEFORE streaming_ui.js for clear intent.
-    'ui/streaming_swarm_panel.js',
+    # ui/streaming_swarm_panel.js — MOVED to _DEFERRED_FILES 2026-08-01
+    # (Epic-E pt_3879f00e sub-5B, 55KB out of the core). The seven call
+    # sites (streaming_ui.js ×5, chat_render.js, tool_rounds.js) are all
+    # typeof-guarded in the same commit: absence degrades swarm rounds to
+    # _renderUnifiedToolLine's generic line and drops the inbox chips;
+    # the panel self-heals on the next SSE event once the idle prefetch
+    # lands. Its two tickers only touch DOM the module itself rendered.
+    # Suite: tests/test_frontend_swarm_panel_deferred.py.
     'ui/streaming_ui.js',
     # RENDER_CONTRACT Phase 3.5 §7 live stream session — the phase home
     # (convId-keyed runtime slice; replaces streamBufs). Zero deps; load
@@ -1085,6 +1092,10 @@ _DEFERRED_FILES = [
     # Providers after a user toggle; every external call site was already
     # typeof-guarded (see the _BUNDLE_FILES moved-note).
     'settings/providers/access_matrix.js',
+    # Swarm panel (55KB) — deferred 2026-08-01 (Epic-E sub-5B). Renders
+    # only for convs with swarm activity; guarded generic-line fallback
+    # until it lands (see the _BUNDLE_FILES moved-note).
+    'ui/streaming_swarm_panel.js',
 ]
 
 # The entry-point functions the feature bundle DEFINES. feature-loader.js

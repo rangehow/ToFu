@@ -123,7 +123,8 @@ function updateStreamingUI(msg) {
   const _swarmInboxZone = zones.swarmInbox;
   if (_swarmInboxZone) {
     const injects = msg._inboxInjects || [];
-    const html = _buildSwarmInboxChipsHTML(injects);
+    const html = (typeof _buildSwarmInboxChipsHTML === 'function')
+      ? _buildSwarmInboxChipsHTML(injects) : '';  // module DEFERRED (Epic-E sub-5B)
     /* Use a fingerprint to avoid pointless DOM rewrites */
     let fp = 0;
     for (const inj of injects) {
@@ -923,9 +924,9 @@ function _syncToolRoundsDOM(container, rounds) {
          *   Swarm panels are also tall and re-render frequently — same treatment. */
         const _isInteractive = round.status === "awaiting_human" || round.status === "awaiting_stdin"
           || round.status === "pending_approval";
-        const _renderRow = (r, active) => _isRoundSwarm(r)
+        const _renderRow = (r, active) => (_isRoundSwarm(r) && typeof _buildSwarmPanelHTML === 'function')
           ? _buildSwarmPanelHTML(r, toolRounds)
-          : _renderUnifiedToolLine(r, active);
+          : _renderUnifiedToolLine(r, active);  // panel DEFERRED: generic line until it lands (Epic-E sub-5B)
         /* ★ Data-driven completion: the slot remembers the status it was
          *   last rendered at (`data-rendered-status`). The "settle this
          *   slot to done" decision below keys off a status MISMATCH, not
@@ -953,7 +954,11 @@ function _syncToolRoundsDOM(container, rounds) {
           groupEl.appendChild(slot);
           if (_isSwarm) {
             slot.style.contentVisibility = "visible";
-            _morphSwarmSlot(slot, _buildSwarmPanelHTML(round, toolRounds));
+            if (typeof _morphSwarmSlot === 'function' && typeof _buildSwarmPanelHTML === 'function') {
+              _morphSwarmSlot(slot, _buildSwarmPanelHTML(round, toolRounds));
+            } else {
+              slot.innerHTML = _renderRow(round, isActive);  // panel DEFERRED: generic line
+            }
           }
         } else if (_isSwarm) {
           /* Swarm rounds change frequently (per-agent phase / preview / tool-call
@@ -963,7 +968,11 @@ function _syncToolRoundsDOM(container, rounds) {
            * `swarmBorderPulse` animation from 0% every event → visible flicker,
            * and collapsed any agent card the user had expanded. */
           slot.style.contentVisibility = "visible";
-          _morphSwarmSlot(slot, _buildSwarmPanelHTML(round, toolRounds));
+          if (typeof _morphSwarmSlot === 'function' && typeof _buildSwarmPanelHTML === 'function') {
+            _morphSwarmSlot(slot, _buildSwarmPanelHTML(round, toolRounds));
+          } else {
+            slot.innerHTML = _renderRow(round, isActive);  // panel DEFERRED: generic line
+          }
         } else if (isActive || round.status === "pending_approval") {
           if (_isInteractive) slot.style.contentVisibility = "visible";
           slot.innerHTML = _renderUnifiedToolLine(round, isActive);

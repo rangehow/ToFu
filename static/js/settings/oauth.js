@@ -348,16 +348,51 @@ function _handleOAuthCode(provider, code, state) {
   _completeLogin(provider, code, state);
 }
 
-function _loadOAuthStatus() {
+function _loadOAuthStatus(fromRepoll) {
+  if (!fromRepoll) _egressRepollAttempts = 0;  // fresh load → fresh budget
   Api.oauth.status()
     .then(function(data) {
       if (!data) return;
       _updateOAuthCard('claude', data.claude);
       _updateOAuthCard('codex', data.codex);
+      // Resolved verdicts free the re-poll budget for the next cold cache.
+      var probing = [data.claude, data.codex].some(function(s) {
+        return s && s.egress && s.egress.state === 'unknown';
+      });
+      if (!probing) _egressRepollAttempts = 0;
     })
     .catch(function(e) {
       console.warn('[OAuth] Failed to load status:', e);
     });
+}
+
+// ── 'unknown' re-poll ──
+// The status endpoint NEVER probes inline: a cold probe cache answers
+// 'unknown' and warms the verdict on a background thread (~1s observed;
+// the cache TTL is 300s and probes are fired only BY status polls, so
+// virtually every settings-open starts cold). Without a re-poll the
+// 出口检测中 label is TERMINAL — the verdict lands in the server cache a
+// second later but the open panel never re-fetches it. Re-poll on a short
+// cadence, bounded, and only while the settings modal is open; each poll
+// is a cache read server-side, so the cadence costs nothing.
+var _egressRepollTimer = null;
+var _egressRepollAttempts = 0;
+var _EGRESS_REPOLL_MS = 2000;
+var _EGRESS_REPOLL_MAX = 5;   // probe worst case: 5s connect timeout + slack
+
+function _scheduleEgressRepoll() {
+  if (_egressRepollTimer) return;  // one chain at a time
+  if (_egressRepollAttempts >= _EGRESS_REPOLL_MAX) return;
+  _egressRepollAttempts++;
+  _egressRepollTimer = setTimeout(function() {
+    _egressRepollTimer = null;
+    var modal = document.getElementById('settingsModal');
+    if (!modal || !modal.classList.contains('open')) {
+      _egressRepollAttempts = 0;  // modal closed mid-chain — drop it
+      return;
+    }
+    _loadOAuthStatus(true);
+  }, _EGRESS_REPOLL_MS);
 }
 
 // ── Desktop-egress status line + pin selector (S4) ──
@@ -397,6 +432,7 @@ function _renderEgressLine(provider, egress) {
       break;
     default: // unknown — 探测已在后台触发
       html = '<span class="oauth-egress-pending">' + t('settings.egressProbing') + '</span>';
+      _scheduleEgressRepoll();
   }
   // Pin selector when several egress-capable agents are online.
   if (agents.length > 1 && egress.state === 'agent') {

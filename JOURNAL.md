@@ -1,3 +1,9 @@
+### 2026-08-01(「待你处理」决策卡全员署名:提案卡补齐同款溯源 chip) — owner 复核上批后点名「同一页里提案卡也没有来源标识」;commits `4682455d`(后端)+ `95ce2ee2`(前端+测试,兄弟代收尾);HEAD 复测 attention **39/39**
+
+- **交付(停摆卡那套延伸过来,一处不差):** 后端 `_charter_proposals` 复用 `_conv_titles` 把提案作者解析成 `askedByConvId/askedByTitle`(与 board_question 同形);前端把 from-chip 抽成**唯一共享** `_fromChip(item)`(两份手抄必漂移,且「只有部分决策卡署名」等于没署名),`_questionCard`/`_proposalCard` 头部同挂,点击 `loadConversation` 跳进发起会话。测试:后端 +1(真会话行→标题解析+mine),harness +2(提案卡渲染 chip 且点击跳转),NC 升级为一箭双雕——一次阉割 `fromId` 取值,**两张卡的 chip 同灭**,从此证死共享 builder 而非两份拷贝。
+- **共享树协同记一笔(本场正戏):** 动工中途撞上兄弟 msac37jx 的 owner 指令批「冲突退出本面」——同 4 文件、hunk 级交缠(他把 _openTabBtn 删在我插 _fromChip 的位置,测试夹具同区)。我先走 `git diff→hunk 过滤→apply --cached` 的拆 patch 路线,**在上下文逐字匹配下莫名失败**(根因未定,弃);兄弟 peer 消息对齐「我先 blob 级 selective(hash-object + update-index,工作区零触碰),你再整文件 add」后路线反转:`4682455d` 先带我的后端 hunk,`7ad6524e` 落他们的 removal,`95ce2ee2` 再把我的残余 3 文件整文件代收尾——全程零覆盖、零 reset 事故。**惯例再证:同文件 hunk 交缠时,先消息定序、后 blob 级暂存,比各拆 patch 稳。**
+- **顺带实证(无需动作,owner 已知):** 停摆卡完整溯源(blocked_by 列 + askedBy 投影)等重启进进程生效;本批提案卡的后端标题解析同属进程内代码,一并随重启生效;前端 chip/分区刷新即生效。
+
 ### 2026-08-01(文件冲突退出「待你处理」面:notify-only 状态不配占用行动面) — owner 指令「既然不需要我处理,就别显示在这」;commit `7ad6524e`(7 文件 +96/−172);失败先行 RED→GREEN;纯净 commit 划痕 worktree 验证 **44/44 + 16/16**,交织工作区环 148/148、i18n 环 31/31
 
 - **定案(判据就是该面自己的入场券):** 「待你处理」面的契约是「一切真正在等人类的事」。文件冲突三项全不合格——notify-only(系统故意不加锁)、**自清**(presence 注册表重算,一方 idle 25s 即消失)、**无解决控件**(卡片只有「去看团队」深链,operator 唯一能做的是"看着办")。owner 一句「不需要我处理就别显示」把它请出;`build_attention_items` 摘掉 conflict 源,needsYou/advisory 计数经同一 SSOT 自动同步到协作条。**检测本身零触碰**:lib/presence/conflict.py 的公告 + `[presence-overlap]` 遥测照常,summary.conflictMessages 仍喂协作条实时明细行,团队页不变——owner 只是不让它待在行动面,不是不让它存在。

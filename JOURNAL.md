@@ -16,6 +16,14 @@
 - **共享树纪律再执行:** i18n.js 混入兄弟未提交 hunk(projectBrain 键删除),按 hunk 拆 patch 只暂存我的 1 行(2 hunks→1),兄弟工作零触碰;tofu-search 树同样只提自己 3 文件(content_filter/orchestrator 是兄弟在飞件)。
 - **未做(备查清单):** CDP 连用户真实 Chrome(共识①的最完美形态,我们服务器远程无头,可行路径是借既有浏览器扩展通道,大特性另案);代理输入框 UI 已有,住宅代理属用户侧配置;养号/实名属用户侧动作。**生效需重启**(引擎为进程内 import;前端走 bundle 自愈)。
 
+### 2026-08-01(假离线根修收口:③ 后半——verify 窗口化带锚点升级,峰值风暴成员全清零) — epic `pt_afbaf3d7b9be4f91` 全部四层交付齐;commit `d3f9078e`(4 文件 +478/−73);新套件 **15 检查 + NEUTER**,合并终环 28 套件 **174/174**
+
+- **前情(本票的奇特历程):** 脑派发时工作区里已躺着「本会话上一轮」的未提交实现(① 服务端 pong 优先道 + ② health 解耦 + ③ 去重的半成品),复核后以 `959fd1c9`/`3d51d9a1` 落定;我接手的是③的收尾——**最热的风暴成员 `_verifyActiveConvFromServer`**:每个 conv_changed 帧(打开会话)+ 每次 push_reconnect 追平都全量拉 176.8MB。
+- **设计(路由器 + 三个单一职责采用器):** `_verifyAdoptWindowedTail`——以本地尾消息 `_msgId` 为**锚点**:锚在服务端尾窗内 ⇒ 其后全部为新消息**追加**(绝不 `conv.messages = 尾窗`,那会截断本地历史视图);锚点对本身走共享的 Case-2 原地生长采用;翻译按 `_msgId` 对齐合并(全量本地数组与尾窗之间**按索引对齐是错的**,套件 D 项用「尾窗仅 1 条」形态实证不错位);裁剪重字段安全(守卫式采用,缺席即保留本地;`_trimmed` 置位留给 hydrate-on-expand);壳会话走 `recordWindowState` 盖章,已分页会话只推进 totalCount/lastLoadedSeq。**锚点缺失 ⇒ 精确一次升级全量读**(window:'0')走 legacy 路径——正确性永远不依赖窗口尺寸。`_adoptVerifiedServerConv` 保留 legacy 全量语义逐字节;`_adoptTailGrowthFromServer` 是两条路径共享的 Case-2 本体。Case F(main_init_tasks)+ 后台 done-adopt(health_stream_timer)只看尾消息 ⇒ 同改尾窗读。**刻意保留全量**的两处:Case B 强制恢复(整体替换 messages 的防御性路径)与 `_translationOnlyVerify`(全数组译文扫掠),都罕见且经③在飞去重兜底。
+- **工程事故一次(立此存照):** 对 1458 行文件做函数体重组时,第二个 apply_diff 的下刀边界把 `_adoptVerifiedServerConv` 的函数头与共享持久化块切成了两处孤儿——`node --check` 立刻现形,按「读现状→两刀移位修复」归位。**教训:大函数拆分式重组,先想清楚三段(头/共享块/新函数)的最终物理顺序再下刀,apply_diff 不是 move 语义。**
+- **共享树缠斗又两则:** ①兄弟会话在 20:54 把②③连同测试提交(`3d51d9a1`)——我的「未提交实现」其实是它;② add 与 commit 之间被兄弟 `git reset` 抢跑一次索引(status 全绿却 commit 空),重试即过。规则照旧:add+commit 同命令零间隔,显式 pathspec。
+- **peer 移交闭环:** msab0zlx 的 `pt_ef42c2a1e9f946f3` 两根靶(windowed 恢复 + ping 健康感知)与移交项(同 conv 全量 GET 在飞去重,验收「并发同形态 GET ≤1」)全部落在本票三个 commit 里,其票待其复核后自关。
+
 ### 2026-08-01(假离线根修三层全落地:WS 保活三修 + health 与 DB 解耦 + 恢复路径窗口化/去重) — epic `pt_afbaf3d7b9be4f91` DONE;commits `959fd1c9`(①,兄弟 msab0zlx 落地含其精修)+ `3d51d9a1`(②③,5 文件 +449);新套件 4+3,**NEUTER×4 各咬各的**(pong 排序/存活证据/自适应/merge-removal+窗口钉);环 **114/114**(20 套件)+ 契约/隔离/清单/async/冒烟 **47/47**
 
 - **起源:** owner 问「后端正常前端却显示离线,能不能从根上增强 WebSocket」——答案是 WS 只是报警器,根修要三层。立案后兄弟 msab0zlx(硬刷新断连定案会话)主动 OVERLAP 合并:他的 pt_ef42c2a1e9f946f3 两靶并入,并移交第四项需求「同 conv 全量 GET in-flight 去重(验收:并发全量 GET ≤1)」。

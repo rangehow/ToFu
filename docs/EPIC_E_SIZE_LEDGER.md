@@ -66,16 +66,15 @@
 精确：全回退 4 红、仅回退 pet 精确 2 红——逐文件鉴别力实证）。
 
 ## 分片流水（每片一行，含生产实测字节数）
-## 分片流水（每片一行，含生产实测字节数）
 
 | 日期 | 分片 | commit | 降级文件 | core 压缩态 | feature 压缩态 | 备注 |
 |---|---|---|---|---|---|---|
-| 2026-07-31 | sub-3A | `8aa9a1c6` | cross_tab_sync.js (53KB) | 1,550,424 | 470,760 | stub + 3 闸；事故链见 JOURNAL 2026-08-01 |
-| 2026-08-01 | sub-3B | `6baf1083` | health_stream_timer.js (62KB) | 生产重启前不变（冻结清单） | 同左 | 5 闸 + 零 stub 设计；农场同构构建 2,289,664→2,275,757（−13.9KB 净额，同期兄弟新增 stall_watch 等抵销部分）；生产字节数随重启更新 |
-| 2026-08-01 | sub-3C | `df664a2d` | tofu-pet.js + tofu-scene.js (160KB) | 生产重启前不变（冻结清单） | 同左 | 零闸零 stub（普查复核）；农场构建 core 1,493,218 B（含同期兄弟增量）、feature 549,925 B，8/8 PASS；生产字节数随重启更新 |
+| 2026-07-31 | sub-3A | `8aa9a1c6` | cross_tab_sync.js (53KB) | 1,532,269（2026-08-01 实测，`bundle-cc0b5197.js`） | 511,266（`feature-5f804ab4.js`） | stub + 3 闸；事故链见 JOURNAL 2026-08-01；生产数字为 sub-3A+3B 落地后实测 |
+| 2026-08-01 | sub-3B | `6baf1083` | health_stream_timer.js (62KB) | 同上（与 3A 同批生效） | 同上 | 5 闸 + 零 stub 设计；农场同构构建 −13.9KB 净额（兄弟增量抵销部分） |
+| 2026-08-01 | sub-3C | `df664a2d` | tofu-pet.js + tofu-scene.js (160KB) | **1,493,217**（`bundle-5c05d29b.js`，同日实测） | **549,924**（`feature-53a9cd44.js`） | 零闸零 stub（普查复核）；农场与生产**同 hash** 验证；runbook ALL GREEN（sub-3A+3B+3C 三片 14 项全过） |
 
 ## 目标线与当前差距
 
 - **目标（暂定）**：core 压缩态 ≤ **1.2 MB**（待 owner 确认）。
-- **当前**：1,550,424 B ⇒ 差距 ~350 KB。
-- **已排队**：~~tofu-scene+tofu-pet 160KB（下一片）~~ **已降级（sub-3C）**；累计已降级源码 275KB（53+62+160）。下一片：tool_rounds 拆分（冷渲染子集留 core 后可释放大头，需先设计拆分缝）⇒ 目标可达但路径在拆分不在整体 move。
+- **当前（2026-08-01 生产实测）**：**1,493,217 B** ⇒ 差距 ~293 KB（基线 1,550,424 → 累计 −57,207 B 压缩态；三片 deferral 已全部生产实测生效，runbook `scripts/verify_epic_e_deferrals.sh` 14 项 ALL GREEN）。
+- **已排队**：累计已降级源码 275KB（53+62+160）。下一片：tool_rounds 拆分（冷渲染子集留 core 后可释放大头，需先设计拆分缝）；第三梯队（finish_info 90KB / project 89KB / myday 56KB / swarm_panel 55KB / access_matrix 55KB——用户动作面板族，比照 Project Brain 判例）⇒ 目标可达。

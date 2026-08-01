@@ -4,7 +4,8 @@
 - **零闸零 stub 设计(与 sub-3B 同判据):** 无一次性 boot 接线可丢 ⇒ 不装 feature-loader stub(装了反而给装饰性点击加一次无收益取包);idle prefetch ~2s 落地,bar 自身 fadeIn 覆盖晚到挂载,无布局位移。套件第 3 节专门钉「TofuPet/TofuScene/cycleDecor/setDecor 永不在 entry points」防未来误加。
 - **NEUTER 新形态——逐文件鉴别力:** NEUTER1 全回退→精确 4 红;NEUTER2 仅把 tofu-pet 拉回 core→**精确 2 红且 scene 双断言保持绿**——证明套件按文件分辨,不是「一动全红」的粗绊线。
 - **农场实测:** core 排除 `window.TofuPet=`/`window.TofuScene=`、feature 含两者;prior 形态(cross_tab/tw*/i18n pack)全保持;farm core 1,493,218 B(含兄弟增量)。**自己抓回一次脚本断言写错:esbuild 把 `window.X = {` 压成 `window.X={`,空格针失配——构建期验证的 needle 必须按压缩后形态写**(第三次同教训:验证脚本先跑通再下结论)。
-- **下一步(按账排):** tool_rounds.js 261KB 只能走「冷渲染子集留 core + 交互增强降级」拆分(首屏恢复路径 chat_render.js:1499 裸调用实测定案,非整体 move 件);第三梯队 finish_info/project/myday/streaming_swarm_panel/access_matrix。生产字节数随重启更新(runbook `scripts/verify_epic_e_deferrals.sh` 待扩 sub-3C 项)。
+- **生产实测(当日,服务器已带 freshness 修复):** runbook 扩 sub-3C 四项后先跑出**精确 4  FAIL**(旧形态鉴别力实证),一次 GET / 触发后台重建后 **14 项 ALL GREEN**——sub-3A/3B/3C 三片全部生效,服务 core `bundle-5c05d29b.js`(1,493,217 B)与我的农场构建**同 hash**(可复现构建顺带实证);累计 core 1,550,424→1,493,217(−57KB 压缩态),距 1.2MB 目标线 ~293KB。
+- **下一步(按账排):** tool_rounds.js 261KB 只能走「冷渲染子集留 core + 交互增强降级」拆分(首屏恢复路径 chat_render.js:1499 裸调用实测定案,非整体 move 件);第三梯队 finish_info/project/myday/streaming_swarm_panel/access_matrix。
 
 ### 2026-08-01(脑派票闭环:podcast 五 handler 转 async——paper.py 预存红根治,carve-out 白名单保持「只说真话」) — 接我自己在 error.log 审计批立的 `pt_4c93d91c51724f1e`;commit `f4c33f8c`(1 文件 +15/-8;integrity **24/24**(原 1 红)、podcast 邻接 33/33、paper migration+import smoke 17/17、media-clocks 验收 PASS;**NEUTER**:回退一个 handler 为 sync → carve-out 守卫精确红,cp/cmp 还原);epic DONE
 ### 2026-08-01(egress 接线:「已用 BIND_HOST shell 重启」复核——未生效,证据四项;epic `pt_4ea6bf05deaa46f0`)

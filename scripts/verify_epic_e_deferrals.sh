@@ -3,7 +3,8 @@
 #
 # ONE-COMMAND post-restart verification (owner directive 2026-08-01). Run
 # AFTER the server restarts with a manifest that defers cross_tab_sync.js
-# (sub-3A) + health_stream_timer.js (sub-3B):
+# (sub-3A) + health_stream_timer.js (sub-3B) + tofu-pet.js/tofu-scene.js
+# (sub-3C):
 #
 #     bash scripts/verify_epic_e_deferrals.sh [base_url]
 #
@@ -16,8 +17,11 @@
 #   sub-3B  4. served core EXCLUDES the twStart DEFINITION + _streamTimers
 #         5. served feature INCLUDES the twStart DEFINITION + streamHealthSubscribe
 #         6. served core KEEPS the typeof-guarded call sites (gates intact)
-#   packs   7. advertised i18n pack serves 200
-#   ledger  8. prints measured byte counts for docs/EPIC_E_SIZE_LEDGER.md
+#   sub-3C  7. served core EXCLUDES window.TofuPet=/window.TofuScene= assigns
+#         8. served feature INCLUDES both assigns
+#         (needles are space-free: esbuild collapses 'window.X = {' to 'window.X={')
+#   packs   9. advertised i18n pack serves 200
+#   ledger 10. prints measured byte counts for docs/EPIC_E_SIZE_LEDGER.md
 #
 # Exit 0 = all green; exit 1 = at least one failure (details on stdout).
 
@@ -74,13 +78,27 @@ printf '%s' "$CORE_BODY" | grep -q 'typeof twStart' \
   && pass "sub-3B.6 core keeps the typeof-guarded call sites" \
   || fail "sub-3B.6 core lost the typeof-guarded call sites"
 
+# ── sub-3C ──
+printf '%s' "$CORE_BODY" | grep -q 'window.TofuPet=' \
+  && fail "sub-3C.7 core still contains the window.TofuPet assign" \
+  || pass "sub-3C.7 core excludes the window.TofuPet assign"
+printf '%s' "$CORE_BODY" | grep -q 'window.TofuScene=' \
+  && fail "sub-3C.7b core still contains the window.TofuScene assign" \
+  || pass "sub-3C.7b core excludes the window.TofuScene assign"
+printf '%s' "$FEAT_BODY" | grep -q 'window.TofuPet=' \
+  && pass "sub-3C.8 feature includes the window.TofuPet assign" \
+  || fail "sub-3C.8 feature MISSING the window.TofuPet assign"
+printf '%s' "$FEAT_BODY" | grep -q 'window.TofuScene=' \
+  && pass "sub-3C.8b feature includes the window.TofuScene assign" \
+  || fail "sub-3C.8b feature MISSING the window.TofuScene assign"
+
 # ── packs ──
 if [ -n "$PACK_URLS" ] && [ -n "$PACK" ]; then
   RC=$(code "$BASE/static/js/$PACK")
-  [ "$RC" = "200" ] && pass "packs.7 zh pack serves 200 ($PACK)" \
-                    || fail "packs.7 zh pack HTTP $RC ($PACK)"
+  [ "$RC" = "200" ] && pass "packs.9 zh pack serves 200 ($PACK)" \
+                    || fail "packs.9 zh pack HTTP $RC ($PACK)"
 else
-  say "SKIP  packs.7 (dual-language bundle mode — no pack advertised)"
+  say "SKIP  packs.9 (dual-language bundle mode — no pack advertised)"
 fi
 
 # ── ledger measurements ──
@@ -93,7 +111,7 @@ say "feature $FEAT  $FEAT_BYTES bytes"
 
 say ""
 if [ "$FAILS" -eq 0 ]; then
-  say "ALL GREEN — Epic-E deferrals sub-3A + sub-3B verified live."
+  say "ALL GREEN — Epic-E deferrals sub-3A + sub-3B + sub-3C verified live."
   exit 0
 else
   say "$FAILS FAILURE(S) — deferrals NOT verified; do not mark shipped."

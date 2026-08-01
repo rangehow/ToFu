@@ -10,10 +10,12 @@ Browser-centric flow:
   7. POST /api/oauth/logout   → delete tokens
 """
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, request
 
 from lib.log import get_logger
-from lib.api_response import api_bad_request, api_error, api_internal_error
+from lib.api_response import (
+    api_bad_request, api_error, api_internal_error, api_ok, api_payload,
+)
 from lib.request_parser import parse_body
 
 logger = get_logger(__name__)
@@ -68,9 +70,9 @@ def oauth_login():
         result = start_oauth_flow(provider, prefer_console=prefer_console)
 
         if 'error' in result:
-            return jsonify(result), 400
+            return api_payload(result, 400)
 
-        return jsonify(result)
+        return api_ok(result)
 
     except Exception as e:
         logger.error('[OAuth API] Login failed: %s', e, exc_info=True)
@@ -124,8 +126,8 @@ def oauth_callback():
         result = exchange_code(provider, code, state=state)
 
         if 'error' in result:
-            return jsonify(result), 400
-        return jsonify(result)
+            return api_payload(result, 400)
+        return api_ok(result)
 
     except Exception as e:
         logger.error('[OAuth API] Callback failed: %s', e, exc_info=True)
@@ -157,8 +159,8 @@ def oauth_store_token():
 
         result = store_token(provider, token_response)
         if 'error' in result:
-            return jsonify(result), 400
-        return jsonify(result)
+            return api_payload(result, 400)
+        return api_ok(result)
 
     except Exception as e:
         logger.error('[OAuth API] store-token failed: %s', e, exc_info=True)
@@ -193,7 +195,7 @@ def oauth_logout():
             return api_bad_request('Invalid provider')
 
         result = logout_oauth(provider)
-        return jsonify(result)
+        return api_ok(result)
 
     except Exception as e:
         logger.error('[OAuth API] Logout failed: %s', e, exc_info=True)

@@ -1,3 +1,16 @@
+### 2026-08-01(api-contract 批 13:oauth.py 7 站点清零——result 透传族第二批) — epic `pt_931e16c4` 切片 13;commit 见下(4 文件);环 **138/138**;NEUTER×2 精确
+
+- 7 站点全 `if 'error' in result: jsonify(result),400 / jsonify(result)` 透传族——api_payload(400)/api_ok 判例与 project.py 同源。failing-first 精确 1 红;NEUTER×2(回注 jsonify/摘 api_payload——paren needle);cmp 还原;导入冒烟。幽灵连续第九批零干预。
+- **进度账:** 272→**115 站点 20 文件**(157 已清零,57.7%)。下一批 api_v1/translate.py(7)——注意其 mt-test「200 报逻辑失败」是契约钉住的刻意例外,parity 须保 200+ok:False 形态。
+
+### 2026-08-01(压缩误触发全链定案:「球 19% 却压缩」= 闸门 heuristic floor 对 CJK 会话过计 ~10×,实测 219万 vs 真实 21.5万) — owner 截图报「发信息前球是这个状态,发后 19% 又触发压缩」;纯审计批,零产品代码;板票 `pt_18e9f7a6db664ff3`;记忆 `compaction-gate-yardstick-split-2026-08-01`
+
+- **用户现象复核(双证据否证「22:22 有新压缩」):** 截图会话=mrxinirv0t6n6v(架构体检,唯一 today-archives>1 的会话,18 份);DB task_events 26h 内最后一条 compacting 相位=20:10:18,app.log 今日唯一 Force-compact TRIGGERED 同为 20:10:18——22:22 的「正在压缩」胶囊是 20:10 事件在长寿/重放气泡上的**陈旧残留**;球面 19%=真实 186K/1.0M(162c0e58 CacheStats 22:03-22:05 实证),球没坏。
+- **但 20:10 那次压缩本身是误伤(根修级证据):** 闸门计数 **2,198,193**(via tiktoken+heuristic_floor)> 阈值 777,600 → 5119 条压到 33 条;同一分钟相邻任务 e50fda9a 的**真实 input=215,552(hit=100%)**——真实用量仅 22%,闸门过计 **~10×**。机制:新任务冷启动/上次压缩使前缀失效 → usage_cache 不可用 → 退 tiktoken → **heuristic floor 取 max**(1 token/CJK 字符 + 历史 reasoning_content 全计入) → 中文重会话放大一个量级;floor 的 max 语义必然选中过计侧。压缩还把 R1 缓存打断(cache_r 仅 48K/79K=62%)。
+- **同批确认的同族病灶:** ①7-27 learned shrink `213000`(瞬时网关错误两击即持久化 7 天)致 8+ 会话在真实 68-165K(球面 7-17%)被压一上午——条目今已消失,机制随时复发;glm5.1=192614 无 meta 遗产条目永不过期。②球闸双标尺:球=静态窗口+真实用量,闸=learned 窗口+启发式+工具模式;server-config per_model 用 provider_id='' 解析,永远匹配不到 `sankuai::` 键(今日 claude-opus-5:闸 1,110,553 vs 球 1,000,000)。③相位胶囊无任务域无时效。④闸门/执行日志两把尺自相矛盾(135K vs 95K)。
+- **行业镜鉴(researcher 调研,URL 已核):** Claude Code 95% 硬阈值(已知「贴顶死锁」「100% 不触发」双 bug)、OpenHands 事件数 120 触发+滚动摘要、Aider 真实 tokenizer+递归二分 depth>3 防循环、Cline 0.9 比率+压缩互斥锁+摘要请求自身预算投影、Goose 截断 3 次硬失败。共性:触发必须用真实计数、防重复压缩要深度/互斥上限。
+- **修复菜单(待 owner 拍板,§10.1 超参签准):** F1 闸门冷启动改用同会话持久化真实 input+增量估算(根治);F2 球闸同源(learned 覆盖+触发线下发);F3 shrink 治理(stated_max/更多敲击/遗产条目补 meta);F4 相位胶囊任务域化+完成即收;F5 日志同报双尺。
+
 ### 2026-08-01(api-contract 批 12:artifacts.py 7 站点清零) — epic `pt_931e16c4` 切片 12;commit 见下(4 文件);环 **136/136**;NEUTER×2 各咬一支
 
 - 7 站点全 api_ok 形,二进制/HTML carve-out(routes/artifacts.py raw/view/export)维持 §4 不动。failing-first 精确 1 红;NEUTER×2(调用点回注/import 行回注)各咬 shipped-source 不同闸支;cmp 还原;导入冒烟。幽灵连续第八批零干预。

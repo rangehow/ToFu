@@ -122,6 +122,17 @@ function _handleCompaction(ev, c) {
           marker.reductionPct = ev.reductionPct;
           marker.status = 'done';
         }
+        /* ★ Fold the live phase HUD (pt_f222e9ed): the 'compacting' stream
+         * phase has NO later lifecycle event of its own — live, it is only
+         * replaced when the NEXT round happens to emit a phase, and a tab
+         * that misses that round keeps showing "compressing context…" for
+         * HOURS (user report 2026-08-01: 20:10's pill still up at 22:22).
+         * Fold it the moment the compaction's own terminal lands, through
+         * the module-owned conditional fold — never clobbers an unrelated
+         * live phase, never creates a session entry. */
+        if (typeof foldStreamPhaseIf === 'function') {
+          foldStreamPhaseIf(convId, 'compacting');
+        }
       }
       /* Bind the gauge to the compaction event the moment it fires.
        * 'compaction' arrives before the LLM summary call and carries

@@ -1,3 +1,11 @@
+### 2026-08-02(压缩相位胶囊生命周期闭环:终态事件/compaction_done 退休相位快照 + 前端模块自有折叠;「压完两小时还显示正在压」根治) — 脑派发接我自票 `pt_f222e9ed288a44b3`;commit 见下(6 文件);新套件后端 **6/6** + 前端 JSDOM **2/2**(含 NEUTER 模式);NEUTER×2 磁盘级精确(cmp 逐字节还原);环 **53 过 1 预存红**
+
+- **病灶定案(三层证据):** ①`manager/_events.py` 的 `task['phase']` **只在 delta 事件清除**——任务在相位挂着时终结(摘要调用中途被杀/出错),轮询道/冷重放就永远拿到这个「活相位」;②compaction_done(压缩自己的终态)不折叠相位,快乐路径下 HUD 也活到下一轮相位事件才来;③前端 `_handleCompaction` 收到 compaction_done 只升级标记不清 session。实测:20:10 的 compacting 相位 22:22 仍显示,DB 证明两小时无任何新压缩。
+- **修法(零新线面):** 后端 `_events.py`——done/error/aborted 终态清快照 + compaction_done 且当前相位是 compacting 时折叠(不相关的活相位永不误伤);前端 `sse_handlers_misc.js`——compaction_done 经 `foldStreamPhaseIf(convId,'compacting')` 折叠。**架构要点:折叠收口为 stream_session 模块自有 API(读留在模块内),RENDER_CONTRACT 钉死的 reader/writer 面零扩张**——convview 守卫两个面(读 3 文件/写 3 文件)一字未改全绿。
+- **守卫卫生(同批):** convview 守卫 6 处扫描豁免补 `feature-<8hex>.js`(.gitignore:163-167 已钉的 Epic-E 内容散列构建产物,与 bundle-* 同类)——兄弟 Epic-E 在本地构建留下的未跟踪产物此前让守卫误红 3 项。
+- **纪律:** failing-first 精确(后端 3 红 + 前端 harness 精确 1 FAIL);NEUTER×2 磁盘级(阉终态分支→精确 2 红;阉折叠分支→精确 1 红;均 cmp 逐字节还原);前端 harness 自带 scratch 阉割模式(与 stream_phase_i18n 同制)。环 53/54:**唯一红=test_full_repaints_route_through_replaceAll 预存红**(tool_rounds_rich.js 在 Epic-E sub-4 `fcddc420` 就有的 bare renderChat(,HEAD 复现、文件零未提交 diff)——按 owner 规则独立立案 `pt_3f84ebfc876a4da8` 不夹修。i18n 双测批跑偶红、隔离/复跑全绿,按惯例记 flake。
+- **教训记一笔:** 相位类 HUD 必须有成对的生命周期——「开始事件」若没有「结束事件」,就必然在断开/重放/终态边界上变成说谎的常驻标签。加相位时先问:它的终态在哪。
+
 ### 2026-08-01(api-contract 收尾挂问题卡:只剩 paper.py 的排序权交回 owner + 契约文档同步至批 21 现实) — epic `pt_931e16c4` [human-gated] 问题卡已上板
 
 - **状态:** 21 批 225/272 站点清零(82.7%),基线只剩 paper.py 47。避让指令的前提实证不成立(拆分无 epic、无人认领、文件零 WIP),但不擅自绕开 owner 明令——问题卡三选项上板:**(a) 先迁后拆[我推荐]**(迁移后 api_* 行对按行搬的拆分完全等价,假想冲突不存在)/(b) 等拆分落地/(c) 我先拆后迁。人答即续。

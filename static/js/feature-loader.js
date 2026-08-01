@@ -142,6 +142,10 @@ const _DEFERRED_ENTRY_POINTS = [
   // this stub loads the feature bundle and dispatches to the real fn, so
   // the conv-sync push subscription still wires right after boot.
   '_wireConvSyncPush',
+  // My Day modal (deferred 2026-08-01, Epic-E sub-6). openDailyReport is
+  // the real entry (always-visible topbar button); the other two are
+  // defense-in-depth (only clickable inside the open modal).
+  'openDailyReport', 'closeDailyReport', '_mydayTriggerGenerate',
 ];
 _DEFERRED_ENTRY_POINTS.forEach(_installFeatureStub);
 window._DEFERRED_ENTRY_POINTS = _DEFERRED_ENTRY_POINTS;

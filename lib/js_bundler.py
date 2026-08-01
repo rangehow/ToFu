@@ -809,11 +809,17 @@ _BUNDLE_FILES = [
     'optimizer.js',
     'update.js',
     'timer.js',
-    'myday.js',
-    # My Day TODO/stream mutation handlers (extracted from myday.js 2026-07).
-    # Window-scope siblings; invoked at runtime from onclick in myday.js render
-    # fns, share the _myday state object → load order free (after myday.js).
-    'myday_tasks.js',
+    # myday.js + myday_tasks.js — MOVED to _DEFERRED_FILES 2026-08-01
+    # (Epic-E pt_3879f00e sub-6, 65KB out of the core). Census: ZERO
+    # external JS callers (openDailyReport/closeDailyReport/
+    # _mydayTriggerGenerate are referenced only from index.html inline
+    # onclicks — they become feature-loader stubs); the _myday state is
+    # private to the two modules (they move together, order preserved);
+    # both load-time boot blocks branch on document.readyState so they
+    # fire directly when the feature bundle lands after DOMContentLoaded
+    # (the digest boot is setTimeout(2500) by design — deferral aligns
+    # with the module's own 'never competes with first paint' intent).
+    # Suite: tests/test_frontend_myday_deferred.py.
     # settings.js is now a slim head (var _serverConfig = null;
     # var _keyStatsCache = {...}; var _keyStatsLoading = false;) followed
     # by a pointer comment. It MUST come BEFORE the settings/ subpackage
@@ -1096,6 +1102,13 @@ _DEFERRED_FILES = [
     # only for convs with swarm activity; guarded generic-line fallback
     # until it lands (see the _BUNDLE_FILES moved-note).
     'ui/streaming_swarm_panel.js',
+    # My Day report modal (65KB) — deferred 2026-08-01 (Epic-E sub-6).
+    # Opens only via the topbar button (stub: openDailyReport); zero
+    # external JS callers, _myday state private to the pair, boot blocks
+    # late-load-safe (see the _BUNDLE_FILES moved-note). myday.js FIRST
+    # — myday_tasks.js shares its state object.
+    'myday.js',
+    'myday_tasks.js',
 ]
 
 # The entry-point functions the feature bundle DEFINES. feature-loader.js
@@ -1124,6 +1137,11 @@ _DEFERRED_ENTRY_POINTS = (
     # the conv-sync push subscription wires right after boot instead of
     # never. Keep in sync with feature-loader.js's _DEFERRED_ENTRY_POINTS.
     '_wireConvSyncPush',
+    # My Day modal (deferred 2026-08-01, Epic-E sub-6). openDailyReport is
+    # the genuine entry (topbar button = always-visible static HTML);
+    # closeDailyReport + _mydayTriggerGenerate are only reachable inside
+    # the open modal, stubbed for defense-in-depth (image-gen precedent).
+    'openDailyReport', 'closeDailyReport', '_mydayTriggerGenerate',
 )
 
 # ── Bundle-manifest freshness (2026-07-24 / 2026-07-31 incident class) ──

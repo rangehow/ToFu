@@ -137,3 +137,15 @@ def test_dev_fallback_script_tags_kept():
         'index.html must carry the myday.js dev-fallback <script> tag')
     assert 'static/js/myday_tasks.js' in html, (
         'index.html must carry the myday_tasks.js dev-fallback <script> tag')
+
+
+def test_loadguard_stub_list_covers_opener():
+    """The pre-boot LoadGuard stub list (index.html inline) must include
+    openDailyReport — the topbar My Day button is always-visible static
+    HTML, clickable in the sub-second window before the core bundle
+    executes and feature-loader installs its stub; the LoadGuard stub
+    turns that click into 'please wait' instead of a ReferenceError."""
+    html = INDEX_HTML.read_text()
+    m = re.search(r'var stubs = \[(.*?)\];', html, re.S)
+    assert m and "'openDailyReport'" in m.group(1), (
+        "index.html's LoadGuard stub list must include 'openDailyReport'")

@@ -151,6 +151,32 @@ def chat_abort(task_id):
         except (OSError, ProcessLookupError) as e:
             logger.debug('[Chat] Task %s — subprocess kill skipped: %s', task_id[:8], e)
 
+    # ── User-Stop busy-projection broadcast ──
+    # The busy projection (snapshot_running_by_conv → conv_has_work_in_flight)
+    # already EXCLUDES an aborted task by design ("aborted always wins: the
+    # instant the user presses Stop the conversation must read idle"), but a
+    # frame only leaves the server when someone EMITS it — and this seam
+    # never did. Without it the originating tab's authoritative busy Set
+    # still holds this tid after finishStream cleared the local handles
+    # (activeStreams + conv.activeTaskId): convIsBusy keeps the composer in
+    # Stop shape while Priority-3 of the stop cascade has no handle left, so
+    # every further click is a silent no-op until the task fully unwinds and
+    # the TERMINAL frame lands (up to a whole tool call later) — the "Stop
+    # takes several clicks" report. This is the third emit site of the SAME
+    # broadcast: the supersede sweep (manager/_registry.py P3) and
+    # notify_terminal_busy_state already carry the other two.
+    # Unconditional: a duplicate abort re-asserts the idle projection for a
+    # client that missed the first frame. Fail-open: a notify/import error
+    # must never break the abort path (notify_conv_changed is fail-open too).
+    if _conv_id and _conv_id != '?':
+        try:
+            from lib.conversations.meta_cache import notify_conv_changed
+            from lib.tasks_pkg.manager._registry import task_user_id
+            notify_conv_changed(_conv_id, rev=None, user_id=task_user_id(task))
+        except Exception as _ne:
+            logger.warning('[Chat] Task %s abort busy-notify failed: %s',
+                           task_id[:8], _ne)
+
     return api_ok()
 
 

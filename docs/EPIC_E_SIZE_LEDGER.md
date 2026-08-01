@@ -73,11 +73,12 @@
 | 2026-08-01 | sub-3B | `6baf1083` | health_stream_timer.js (62KB) | 同上（与 3A 同批生效） | 同上 | 5 闸 + 零 stub 设计；农场同构构建 −13.9KB 净额（兄弟增量抵销部分） |
 | 2026-08-01 | sub-3C | `df664a2d` | tofu-pet.js + tofu-scene.js (160KB) | **1,493,217**（`bundle-5c05d29b.js`，同日实测） | **549,924**（`feature-53a9cd44.js`） | 零闸零 stub（普查复核）；农场与生产**同 hash** 验证；runbook ALL GREEN（sub-3A+3B+3C 三片 14 项全过） |
 | 2026-08-01 | sub-4 | `fcddc420` | tool_rounds.js 拆分（−58KB 源） | **1,460,290**（`bundle-827d3641.js`，同日实测） | **584,415**（`feature-f33bbae5.js`） | 拆分非 move：冷渲染留 core + conv-meta/timer-watcher 降级；行为 harness 双模态 + 升级后 wire-parity 闸 43 轮字节级（41 轮新旧逐字节一致）；农场与生产**同 hash**；runbook 20 项 ALL GREEN |
-| 2026-08-01 | sub-5A | 见 HEAD | access_matrix.js (55KB) | **1,384,317**（`bundle-f53ca113.js`，同日实测，含兄弟增量） | **666,260**（`feature-1cade5e9.js`） | **零新闸零 stub**（3 调用点全部早已 typeof 闸，`_stgMatrixOpen` 随模块走）；NEUTER×2 精确；农场 9/9；runbook 26 项 ALL GREEN |
+| 2026-08-01 | sub-5A | 见 HEAD | access_matrix.js (55KB) | **1,384,317**（`bundle-f53ca113.js`，同日实测，含兄弟增量 + 在飞 sub-6） | **666,260**（`feature-1cade5e9.js`） | **零新闸零 stub**（3 调用点全部早已 typeof 闸，`_stgMatrixOpen` 随模块走）；NEUTER×2 精确；农场 9/9；runbook 26 项 ALL GREEN |
 | 2026-08-01 | sub-5B | 见 HEAD | streaming_swarm_panel.js (55KB) | 同上（与 5A 同批生效） | 同上 | 7 调用点装闸 + 通用行退化；注册套件重锚 deferred 不变量；NEUTER×2 精确；农场 10/10；e2e(visual+slow) 的 `_buildSwarmPanelHTML` 断言现依赖 idle prefetch 落地，已标记 |
+| 2026-08-01 | sub-6 | `9b10125c` | myday.js + myday_tasks.js (65KB) | **1,384,317**（`bundle-f53ca113.js`，同日实测；与农场**同 hash**） | **666,260**（`feature-1cade5e9.js`） | 零闸 + 3 stub（openDailyReport/closeDailyReport/_mydayTriggerGenerate，py+js 双表）；零外部 JS 调用方（comm 实证）、`_myday` 态私有于双文件、boot 块 readyState 分支晚载安全；NEUTER×2 精确；农场 13/13；runbook 31 项 ALL GREEN |
 
 ## 目标线与当前差距
 
 - **目标（暂定）**：core 压缩态 ≤ **1.2 MB**（待 owner 确认）。
-- **当前（2026-08-01 生产实测）**：**1,384,317 B**（`bundle-f53ca113.js`，六片全部生效，runbook 26 项 ALL GREEN）⇒ 差距 ~184 KB（基线 1,550,424 → 累计 −166 KB 压缩态，含兄弟增量）。
-- **已排队**：累计已降级源码 443KB（53+62+160+58+55+55）。下一片：myday.js+myday_tasks.js 面板对（load-time 自跑 `_mydayScheduleReminder()` 需先拆副作用）+ project.js 拆分（37 调用点，比照 tool_rounds 走「状态子集留 core + 面板 UI 降级」）；finish_info.js 90KB 与 tool_rounds 同属「首屏渲染族」，需拆分非 move。
+- **当前（2026-08-01 生产实测）**：**1,384,317 B**（`bundle-f53ca113.js`，七片全部生效，runbook 31 项 ALL GREEN）⇒ 差距 ~184 KB（基线 1,550,424 → 累计 −166 KB 压缩态，含兄弟增量）。
+- **已排队**：累计已降级源码 508KB（53+62+160+58+55+55+65）。下两片都是**拆分非 move**（普查定案 2026-08-01）：project.js 89KB——`_restoreConvProject` 裸调用在 conv 切换路径（main_conv_lifecycle.js:392），拆「状态恢复子集留 core + 面板 UI 降级」；finish_info.js 90KB——`renderFinishInfo`/`renderFileChangesBar` 裸调用在 chat_render.js:1833/1848 首屏渲染路径，比照 tool_rounds sub-4 拆「冷渲染留 core + 富内容（cost popover/file-changes 富渲染）降级」。

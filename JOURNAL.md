@@ -813,3 +813,13 @@
 - **纪律**: failing-first 8 红→12 绿；NEUTER×2 精确（删 rich 模块→5 红含行为；un-split core→精确 4 红）；cp/cmp 字节还原；农场物理验证 13/13（core 排除三 def / feature 含 / `_localizeInspectOps` 不重复 / tofu+i18n 旧形态保持）；全环 81/81。
 - **生产实测**: 重建后 runbook 20 项 ALL GREEN；服务 core `bundle-827d3641.js` 与农场**同 hash**（可复现构建再证）。core 1,493,217→**1,460,290 B**（−32,927 压缩态；基线累计 −90,134）。
 - **gap**: 距 1.2MB 目标 ~260KB。下一片第三梯队面板族（finish_info 90KB / project 89KB / myday 56KB / swarm_panel 55KB / access_matrix 55KB，逐个普查；myday 有 load-time 自跑 `_mydayScheduleReminder()` 需先拆副作用）。
+
+## 2026-08-01 Epic-E sub-6 — myday.js+myday_tasks.js（65KB）降级 `9b10125c`，七片全绿 + 一次 NEUTER 窗口生产泄漏
+
+- **普查定案（全部 grep 实证，套件 docstring 存证）**: 零外部 JS 调用方（index.html 全量 onclick ∩ 两模块定义 = 恰好 openDailyReport/closeDailyReport/_mydayTriggerGenerate 三个）；`_myday` 态私有于双文件（随同迁移、_DEFERRED_FILES 内保序）；两个 load-time boot 块都走 readyState 分支（feature bundle 晚到时直接执行——digest boot 本就 setTimeout 2500，降级与设计意图同向）；无 push/SSE/cross-tab 耦合。
+- **设计**: 零闸 + 3 stub（py+js 双表 parity）。openDailyReport 是真早点击入口（topbar 静态常显钮）；另两个 image-gen 判例防御性 stub。index.html 零改动（dev-fallback 标签原有）。
+- **纪律**: failing-first 5 红→8 绿；NEUTER×2 精确（摘 myday.js 出 deferred→精确 2 红；摘 py stub 项→精确 1 红），cp/cmp 字节还原；农场 13/13（含 esbuild 引号归一化修正——stub 名单在压缩态是双引号）；Epic-E 环 95/95（12 套件）。
+- **生产实测**: runbook 扩至 31 项 **ALL GREEN**（顺带坐实 sub-5A/5B——此前服务器停摆挂起项）；core `bundle-f53ca113.js` 1,384,317 B 与农场**同 hash**（可复现构建第四次成立）。七片累计降级源码 508KB，基线 1,550,424 → 累计 −166KB 压缩态，距 1.2MB 目标 ~184KB。
+- **★事故（自伤，立此存照）**: NEUTER 1 窗口（myday.js 摘出 deferred 的 ~2 分钟）被生产 freshness 重建捕获 → 服务过 feature-63a9709e.js（缺 myday.js）→ 第一次 runbook 精确 1 红（sub-6.15 feature MISSING openDailyReport）抓个正着。**根因比 NEUTER 更深：freshness 重建盯的是活工作树，任何未提交编辑（含 NEUTER 窗口）都会泄漏进生产产物**——ef83bd9f（兄弟 21:44 验 5A/5B）实测的 bundle-f53ca113 其实已含我当时未提交的 sub-6 清单（账本已补注「含在飞 sub-6」）。修法：manifest 类 NEUTER 今后在农场副本上做；落地后立即触发重建回归（本次已做）。
+- **★纪律自抓**: apply_diff 的 search/replace 写反今天三次（同一错型），第三次起改用 insert_content 规避；规矩——replace 必须是新文本，写前先默念。
+- **下两片（普查已定案，拆分非 move）**: project.js 89KB（`_restoreConvProject` 裸调用 main_conv_lifecycle.js:392 conv 切换路径——拆状态恢复子集留 core）；finish_info.js 90KB（renderFinishInfo/renderFileChangesBar 裸调用 chat_render.js:1833/1848 首屏路径——比照 sub-4 拆冷渲染/富渲染）。

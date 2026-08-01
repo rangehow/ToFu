@@ -6,7 +6,7 @@
 # (sub-3A) + health_stream_timer.js (sub-3B) + tofu-pet.js/tofu-scene.js
 # (sub-3C) + ui/tool_rounds_rich.js (sub-4, rich conv-meta + timer-watcher
 # renderers split out of tool_rounds.js) + access_matrix.js (sub-5A) +
-# streaming_swarm_panel.js (sub-5B):
+# streaming_swarm_panel.js (sub-5B) + myday.js/myday_tasks.js (sub-6):
 #
 #     bash scripts/verify_epic_e_deferrals.sh [base_url]
 #
@@ -28,7 +28,9 @@
 #         11. served feature INCLUDES the rich renderer defs
 #   sub-5  12. served core EXCLUDES _renderAccessMatrix + _buildSwarmPanelHTML defs
 #         13. served feature INCLUDES both; core KEEPS both typeof guards
-#   ledger 14. prints measured byte counts for docs/EPIC_E_SIZE_LEDGER.md
+#   sub-6  14. served core EXCLUDES the myday defs but KEEPS the stub entries
+#         15. served feature INCLUDES the myday defs
+#   ledger 16. prints measured byte counts for docs/EPIC_E_SIZE_LEDGER.md
 #
 # Exit 0 = all green; exit 1 = at least one failure (details on stdout).
 
@@ -145,6 +147,26 @@ printf '%s' "$CORE_BODY" | grep -q 'typeof _buildSwarmPanelHTML' \
   && pass "sub-5B.13c core keeps the swarm-panel typeof guards" \
   || fail "sub-5B.13c core lost the swarm-panel typeof guards"
 
+# ── sub-6 (myday + myday_tasks) ──
+printf '%s' "$CORE_BODY" | grep -q 'function openDailyReport(' \
+  && fail "sub-6.14 core still contains the openDailyReport def" \
+  || pass "sub-6.14 core excludes the openDailyReport def"
+printf '%s' "$CORE_BODY" | grep -q 'function _mydayScheduleReminder(' \
+  && fail "sub-6.14b core still contains the _mydayScheduleReminder def" \
+  || pass "sub-6.14b core excludes the _mydayScheduleReminder def"
+printf '%s' "$CORE_BODY" | grep -q '"openDailyReport"' \
+  && pass "sub-6.14c core keeps the openDailyReport stub entry" \
+  || fail "sub-6.14c core lost the openDailyReport stub entry"
+printf '%s' "$CORE_BODY" | grep -q '"_mydayTriggerGenerate"' \
+  && pass "sub-6.14d core keeps the _mydayTriggerGenerate stub entry" \
+  || fail "sub-6.14d core lost the _mydayTriggerGenerate stub entry"
+printf '%s' "$FEAT_BODY" | grep -q 'function openDailyReport(' \
+  && pass "sub-6.15 feature includes the openDailyReport def" \
+  || fail "sub-6.15 feature MISSING the openDailyReport def"
+printf '%s' "$FEAT_BODY" | grep -q 'function _mydayToggleTodo(' \
+  && pass "sub-6.15b feature includes the myday_tasks def" \
+  || fail "sub-6.15b feature MISSING the myday_tasks def"
+
 # ── ledger measurements ──
 CORE_BYTES=$(printf '%s' "$CORE_BODY" | wc -c)
 FEAT_BYTES=$(printf '%s' "$FEAT_BODY" | wc -c)
@@ -155,7 +177,7 @@ say "feature $FEAT  $FEAT_BYTES bytes"
 
 say ""
 if [ "$FAILS" -eq 0 ]; then
-  say "ALL GREEN — Epic-E deferrals sub-3A + sub-3B + sub-3C + sub-4 + sub-5A/5B verified live."
+  say "ALL GREEN — Epic-E deferrals sub-3A + sub-3B + sub-3C + sub-4 + sub-5A/5B + sub-6 verified live."
   exit 0
 else
   say "$FAILS FAILURE(S) — deferrals NOT verified; do not mark shipped."

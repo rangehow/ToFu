@@ -54,7 +54,6 @@ from lib.tasks_pkg.tool_dispatch import (
 
 # Per-turn / finalize helpers live in the sibling ``_finalize`` module.
 from lib.tasks_pkg.orchestrator._finalize import (
-    _emit_tool_round_phase,
     _finalize_and_emit_done,
     _maybe_auto_retry_turn,
 )
@@ -135,6 +134,10 @@ from lib.tasks_pkg.orchestrator._config_resolution import (
 )
 from lib.tasks_pkg.orchestrator._provider_binding import (
     bind_provider_and_affinity,
+)
+from lib.tasks_pkg.orchestrator._round_open import (
+    build_stream_accumulator,
+    emit_round_open,
 )
 
 
@@ -475,16 +478,11 @@ def run_task(task: dict[str, Any]) -> None:
                                            round_num=round_num, tid=tid):
                 break
 
-            # ★ RENDER_CONTRACT Phase 3: explicit ROUND boundary. Emitted at the
-            #   TOP of every round the model actually runs — INCLUDING a
-            #   prose-only round (no tool calls) which previously had NO signal
-            #   the client could key round attribution off. The reducer opens
-            #   the round here off the canonical roundNum instead of inferring
-            #   it from the first tool_start / llmRound grouping.
-            append_event(task, build_event(EventType.ROUND_START, roundNum=round_num))
-
-            # ★ Emit phase event so the frontend knows what's happening
-            _emit_tool_round_phase(task, rs.assistant_msg if round_num > 0 else {}, round_num)
+            # ★ Per-round open (pt_03f4cdf1 slice 32): ROUND_START boundary
+            #   (RENDER_CONTRACT Phase 3 — including prose-only rounds) +
+            #   phase emit ({} anchor on round 0). Extracted to
+            #   lib.tasks_pkg.orchestrator._round_open.
+            emit_round_open(task, rs, round_num)
 
             # ★ Per-round message hygiene: two-layer compaction +
             #   per-turn attachments + legacy search-addendum cleanup.
@@ -528,17 +526,12 @@ def run_task(task: dict[str, Any]) -> None:
                 max_tokens=max_tokens, response_format=response_format,
             )
 
-            # ★ Streaming tool execution: pre-execute read-only tools while
-            #   the model is still generating subsequent tool calls.
-            #   Also emits tool_start events immediately during streaming so
-            #   the frontend shows "Searching…" / "Running…" without delay.
-            from lib.tasks_pkg.streaming_tool_executor import StreamingToolAccumulator
-            _stream_acc = StreamingToolAccumulator(
-                task, project_path=cfg.get('projectPath'),
-                tool_round_num=rs.tool_round_num,
-                round_num=round_num,
-                project_enabled=project_enabled,
-            )
+            # ★ Streaming-accumulator construction (pt_03f4cdf1 slice 32):
+            #   pre-executes read-only tools mid-stream + immediate
+            #   tool_start events. Extracted to _round_open (its project
+            #   path deliberately reads cfg.get('projectPath')).
+            _stream_acc = build_stream_accumulator(
+                task, rs, cfg, round_num, project_enabled)
 
             # ★ Per-round DB-connection checkpoint release. Extracted
             #   2026-07-31 (pt_03f4cdf1 slice 27) to

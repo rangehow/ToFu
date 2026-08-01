@@ -1,3 +1,18 @@
+### 2026-08-02(api-contract 终批:paper.py 47 站点清零——272→0 MIGRATION COMPLETE,棘轮从此是纯防御) — owner 指令(「先判闸后动手」)接 epic `pt_931e16c4`;commit `06f80cfc`(3 文件);parity **2/2**,环 **30/30 + 16/16 + 37/37**,NEUTER×2 精确
+
+- **判闸(owner 规则先执行):** 板+peer+三日 JOURNAL 实证无兄弟在拆 paper.py(近三天仅 2 个 async 化小 commit);「拆分路线图避让」与 chat.py/conversations.py 同型——临时防撞闸非永久禁令,且 **migrate-first 是更稳序**(信封助手随后来的拆分随 handler 走)。
+- **分类账(47 站点六形):** ~21 个 ok:True dict→api_ok;9 个 resp 透传→api_payload(resp, 200);4 个裸 `{'ok': False}` 200→api_payload 逐字节(request_id 只在 ≥400 附);3 个 custom-200 错误 dict(report_required 族 + 200|409 report 状态)→api_payload(..., N);4 个显式 400→api_bad_request(**元组包裹站保留外层括号变 `(api_bad_request(...))` ——(resp,status) 元组形状不变**);5 个显式 404→api_not_found;1 个 `jsonify(report), status`→api_payload(report, status)。
+- **变换器两次自伤复盘(教训立档):** ①ok 条目同行折叠站(`'ok': True, 'cached': True` 一行两键)漏配——按「ok 条目必在最宽形态出现」改行内剥除;②元组包裹 400 站(`(jsonify(...), 400)`)被正则吃掉闭括号——AST 闸当轮抓回,改「只换内层 span 保留外围括号」。**脚本变换后 AST parse 是硬闸,不是可选项。**
+- **纪律:** failing-first 精确 1 红(shipped-source);NEUTER×2(回注 jsonify→shipped-source 红;摘 api_payload→needle 红,均 cmp 字节还原);漂移棘轮 BASELINE 清空 + 头注记「迁移完成,棘轮从此纯防御(test_no_new_jsonify_files)」;server import smoke(标准闸)过;paper 行为套件 37/37、迁移套件 16/16、契约环 30/30。
+- **epic 账:** 272 站点 33 文件 → **0**(21 批 + 终批;另有 5 文件入册 carve-out 协议豁免)。pt_931e16c4 关票。
+
+### 2026-08-01(阅读体验设计稿落盘:五目标机制 → `docs/PAPER_READING_EXPERIENCE_DESIGN.md`;epic `pt_08894d6112bf4c68` 已上板;实现未开工待 owner 审) — owner 指令把脑暴落成正式设计稿并补四个核实缺口
+
+- **脑暴轮定案:** 瓶颈不是报告质量而是「静态交付物」——insight 引擎(A/B 验证过)默认 OFF、ideate 1639 行无单论文路由、QA 划词已在线。设计稿 = 把已建引擎群接进阅读流。
+- **owner 核实后补进设计的四缺口(全部落稿):** ①**成本可见性 P0**——二遍 token 用量目前不落任何 meta(`_usage_total` 只累计报告轮次),meta 持久化先于二遍,设计 secondPasses 合并 + meta 二次持久化 + finish tag 分解;②**anchor_section 确定性解析**——prompt 提名节标题、代码定址(精确→token 重叠 0.6→回退文末),锚随 insight 行持久化,`finalize_review_body` 先例第三次应用;③**深度路线裁定**——`:::deep` 围栏 vs 零 LLM 后切分+按需深挖,按「prompt 要求+确定性兜底」屋内风格选后者,主 prompt 零改动、深度成本只在点击时支付;④**多语言不翻倍**——`<kind>:<ui_lang>` 键位纪律,只为用户实际生成的语言生产体验产物。
+- **owner 纠正的一处误判已吸收:** `_append_cached_insight`(routes/paper.py:186)已在读路径合并缓存 insight,P0 增量只有「锚定分发+默认开」;另核实 `_askAboutPaperSelection` 划词问句已在线(深挖走它的系统化版)。
+- **分期:** P0 获得感+成本可见(纯接线)→ P1 启发(provocation→QA、open_problem→research 预填)→ P2 易懂(checkpoint 二遍+术语类比+速览折叠)→ P3 深度(克隆 qa 机架的 deepen_engine)→ P4 沉浸(专注模式+paper_notes 表+会话小结);每期 failing-first+NEUTER 验收表已写进稿子;新路由全 api_ok 原生,明确避开 api-contract 兄弟批的 paper.py 迁移面(新端点落 routes/api_v1/paper.py)。
+
 ### 2026-08-02(压缩相位胶囊生命周期闭环:终态事件/compaction_done 退休相位快照 + 前端模块自有折叠;「压完两小时还显示正在压」根治) — 脑派发接我自票 `pt_f222e9ed288a44b3`;commit 见下(6 文件);新套件后端 **6/6** + 前端 JSDOM **2/2**(含 NEUTER 模式);NEUTER×2 磁盘级精确(cmp 逐字节还原);环 **53 过 1 预存红**
 
 - **病灶定案(三层证据):** ①`manager/_events.py` 的 `task['phase']` **只在 delta 事件清除**——任务在相位挂着时终结(摘要调用中途被杀/出错),轮询道/冷重放就永远拿到这个「活相位」;②compaction_done(压缩自己的终态)不折叠相位,快乐路径下 HUD 也活到下一轮相位事件才来;③前端 `_handleCompaction` 收到 compaction_done 只升级标记不清 session。实测:20:10 的 compacting 相位 22:22 仍显示,DB 证明两小时无任何新压缩。

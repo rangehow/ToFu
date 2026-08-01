@@ -47,7 +47,7 @@ import time
 from urllib.parse import unquote
 
 import requests as _requests
-from flask import Blueprint, Response, jsonify, request, send_file
+from flask import Blueprint, Response, request, send_file
 
 from lib.api_response import (
     api_bad_request,
@@ -55,6 +55,7 @@ from lib.api_response import (
     api_internal_error,
     api_not_found,
     api_ok,
+    api_payload,
     safe_route,
 )
 from lib.database import (
@@ -390,7 +391,7 @@ async def openreview_autofill():
                 phash, report.get('ok'), report.get('stage'),
                 len(report.get('filled', [])), report.get('submit_controls_detected', 0))
     status = 200 if report.get('ok') else 409
-    return jsonify(report), status
+    return api_payload(report, status)
 
 
 @api_v1_paper_bp.route('/api/v1/paper/extract-images', methods=['POST'])
@@ -547,8 +548,8 @@ async def start_report_task():
                     except Exception as e:
                         logger.warning('[Paper:Report] Cache-path title backfill failed '
                                        'hash=%s: %s', phash, e)
-                return jsonify({
-                    'ok': True, 'cached': True,
+                return api_ok({
+                    'cached': True,
                     'report': enriched, 'paper_hash': phash,
                     'meta': _cached_meta,
                     'resolvedTitle': resolved_title,
@@ -561,8 +562,8 @@ async def start_report_task():
     if existing and not force and existing['status'] in ('pending', 'running', 'done'):
         logger.info('[Paper:Report] Joining existing task %s (status=%s) — hash=%s lang=%s',
                     existing['task_id'], existing['status'], phash, lang)
-        return jsonify({
-            'ok': True, 'task_id': existing['task_id'], 'paper_hash': phash,
+        return api_ok({
+            'task_id': existing['task_id'], 'paper_hash': phash,
             'running': existing['status'] in ('pending', 'running'), 'existed': True,
         })
 
@@ -683,8 +684,8 @@ async def start_report_task():
                     'rebuttal_len=%d hash=%s', task_id, parsed['venue'], model, ui_lang,
                     len(author_rebuttal), phash)
         _report_runtime.spawn(task_id, _run_report_task, task, messages, images)
-        return jsonify({
-            'ok': True, 'task_id': task_id, 'paper_hash': phash,
+        return api_ok({
+            'task_id': task_id, 'paper_hash': phash,
             'running': True, 'existed': False,
         })
 
@@ -710,8 +711,8 @@ async def start_report_task():
                     'text_len=%d hash=%s', task_id, parsed['venue'], model, ui_lang,
                     len(paper_text), phash)
         _report_runtime.spawn(task_id, _run_report_task, task, messages, images)
-        return jsonify({
-            'ok': True, 'task_id': task_id, 'paper_hash': phash,
+        return api_ok({
+            'task_id': task_id, 'paper_hash': phash,
             'running': True, 'existed': False,
         })
 
@@ -774,8 +775,8 @@ async def start_report_task():
                 task_id, model, lang, len(paper_text), phash)
     _report_runtime.spawn(task_id, _run_report_task, task, messages, images)
 
-    return jsonify({
-        'ok': True, 'task_id': task_id, 'paper_hash': phash,
+    return api_ok({
+        'task_id': task_id, 'paper_hash': phash,
         'running': True, 'existed': False,
     })
 
@@ -844,7 +845,7 @@ async def poll_report_task():
         resp['partial'] = task.get('full_text', '')
     if task['status'] == 'error':
         resp['error'] = task.get('error', '')
-    return jsonify(resp)
+    return api_payload(resp, 200)
 
 
 @api_v1_paper_bp.route('/api/v1/paper/review/venues', methods=['GET'])
@@ -855,7 +856,7 @@ async def list_review_venues():
     frontend uses this to populate the venue dropdown; the single source of
     truth is ``REVIEW_VENUES`` in ``lib/paper/review.py``.
     """
-    return jsonify({'ok': True, 'venues': list_venues()})
+    return api_ok({'venues': list_venues()})
 
 
 @api_v1_paper_bp.route('/api/v1/paper/report/lookup', methods=['POST'])
@@ -876,13 +877,12 @@ async def lookup_report_task():
         return api_bad_request('paper_hash required')
     task = _report_index_get(phash, lang)
     if task:
-        return jsonify({
-            'ok': True,
+        return api_ok({
             'task_id': task['task_id'],
             'status': task['status'],
             'paper_hash': phash,
         })
-    return jsonify({'ok': False})
+    return api_payload({'ok': False}, 200)
 
 
 @api_v1_paper_bp.route('/api/v1/paper/report/export', methods=['GET'])
@@ -1184,7 +1184,7 @@ async def get_report_cache():
     except Exception as e:
         logger.warning('[Paper:Report:Cache] Lookup failed: %s', e)
 
-    return jsonify({'ok': False})
+    return api_payload({'ok': False}, 200)
 
 
 # ══════════════════════════════════════════════════════
@@ -1262,8 +1262,8 @@ async def start_qa_task():
                 diag['n_sections_total'], diag['report_present'], question)
     _qa_runtime.spawn(task_id, _run_qa_task, task, messages)
 
-    return jsonify({
-        'ok': True, 'task_id': task_id, 'paper_hash': phash,
+    return api_ok({
+        'task_id': task_id, 'paper_hash': phash,
         'running': True, 'reportPresent': diag['report_present'],
     })
 
@@ -1305,7 +1305,7 @@ async def poll_qa_task():
         resp['answer'] = task.get('full_text', '')
     if task['status'] == 'error':
         resp['error'] = task.get('error', '')
-    return jsonify(resp)
+    return api_payload(resp, 200)
 
 
 @api_v1_paper_bp.route('/api/v1/paper/translate/start', methods=['POST'])
@@ -1405,7 +1405,7 @@ async def poll_translate_task():
         resp['text'] = task.get('full_text', '')
     if task['status'] == 'error':
         resp['error'] = task.get('error', '')
-    return jsonify(resp)
+    return api_payload(resp, 200)
 
 
 @api_v1_paper_bp.route('/api/v1/paper/translate/lookup', methods=['POST'])
@@ -1419,7 +1419,7 @@ async def lookup_translate_task():
     if task:
         return api_ok({'task_id': task['task_id'],
                         'status': task['status'], 'paper_hash': phash})
-    return jsonify({'ok': False})
+    return api_payload({'ok': False}, 200)
 
 
 @api_v1_paper_bp.route('/api/v1/paper/translate/cache', methods=['POST'])
@@ -1443,7 +1443,7 @@ async def get_translate_cache():
             return api_ok({'text': row['text'], 'paper_hash': phash})
     except Exception as e:
         logger.warning('[Paper:Translate:Cache] Lookup failed: %s', e)
-    return jsonify({'ok': False})
+    return api_payload({'ok': False}, 200)
 
 
 @api_v1_paper_bp.route('/api/v1/paper/search-arxiv', methods=['POST'])
@@ -1560,7 +1560,7 @@ async def start_recommend_task():
                 task_id, max_results, description)
     _recommend_runtime.spawn(task_id, _run_recommend_task, task)
 
-    return jsonify({'ok': True, 'task_id': task_id, 'running': True})
+    return api_ok({'task_id': task_id, 'running': True})
 
 
 @api_v1_paper_bp.route('/api/v1/paper/recommend/poll', methods=['GET'])
@@ -1602,7 +1602,7 @@ async def poll_recommend_task():
     if task['status'] == 'error':
         resp['error'] = task.get('error', '')
         resp['llmError'] = bool(task.get('llmError'))
-    return jsonify(resp)
+    return api_payload(resp, 200)
 
 
 @api_v1_paper_bp.route('/api/v1/paper/recommend/abort', methods=['POST'])
@@ -1648,8 +1648,7 @@ async def fetch_arxiv():
     if os.path.exists(filepath) and os.path.getsize(filepath) > 1000:
         file_size = os.path.getsize(filepath)
         logger.info('[Paper:arXiv] Cache hit for %s — %d bytes at %s', arxiv_id, file_size, filepath)
-        return jsonify({
-            'ok': True,
+        return api_ok({
             'pdf_url': f'/api/paper/pdf/{filename}',
             'arxiv_id': arxiv_id,
             'cached': True,
@@ -1692,8 +1691,7 @@ async def fetch_arxiv():
 
     try:
         file_size = await asyncio.to_thread(_download)
-        return jsonify({
-            'ok': True,
+        return api_ok({
             'pdf_url': f'/api/paper/pdf/{filename}',
             'arxiv_id': arxiv_id,
             'file_size': file_size,
@@ -2144,8 +2142,7 @@ async def reparse_paper():
 
     try:
         text, total_pages, text_length = await asyncio.to_thread(_reparse)
-        return jsonify({
-            'ok': True,
+        return api_ok({
             'text': text,
             'total_pages': total_pages,
             'text_length': text_length,
@@ -2456,7 +2453,7 @@ def upload_paper():
     }
     if parse_error:
         resp['parse_error'] = parse_error
-    return jsonify(resp)
+    return api_payload(resp, 200)
 
 
 # ══════════════════════════════════════════════════════
@@ -2777,8 +2774,7 @@ async def podcast_status():
     """Feature status: is a TTS slot configured, which models, mode bands."""
     from lib import tts as _tts
     available = _tts.tts_available()
-    return jsonify({
-        'ok': True,
+    return api_ok({
         'tts_available': available,
         'models': _tts.list_tts_models() if available else [],
         'default_voice': _tts.default_voice() if available else '',
@@ -2798,15 +2794,15 @@ def _resolve_podcast_request(data):
         phash = _paper_hash(paper_text)
     if not phash:
         return None, None, None, None, None, None, (
-            jsonify({'ok': False, 'error': 'paper_hash or paper_text required'}), 400)
+            api_bad_request('paper_hash or paper_text required'))
     mode = (data.get('mode') or 'short').strip() or 'short'
     lang = (data.get('lang') or 'zh').strip() or 'zh'
     if mode not in PODCAST_MODES:
         return None, None, None, None, None, None, (
-            jsonify({'ok': False, 'error': f'unknown mode: {mode}'}), 400)
+            api_bad_request(f'unknown mode: {mode}'))
     if lang not in ('zh', 'en'):
         return None, None, None, None, None, None, (
-            jsonify({'ok': False, 'error': f'unsupported lang: {lang}'}), 400)
+            api_bad_request(f'unsupported lang: {lang}'))
     voice = (data.get('voice') or '').strip()
     model = (data.get('model') or '').strip() or None
     force = bool(data.get('force'))
@@ -2829,16 +2825,16 @@ async def start_podcast_task():
     if err:
         return err
     if not has_report(phash):
-        return jsonify({'ok': False, 'report_required': True,
+        return api_payload({'ok': False, 'report_required': True,
                         'report_lang': lang,
                         'error': 'a report is required before a podcast can '
-                                 'be generated'})
+                                 'be generated'}, 200)
     from lib import tts as _tts
     eff_voice = voice or _tts.default_voice()
 
     tid = _podcast_index_get(phash, mode, lang, eff_voice, model)
     if tid:
-        return jsonify({'ok': True, 'task_id': tid, 'reused': True})
+        return api_ok({'task_id': tid, 'reused': True})
 
     cached = load_cached_podcast(phash, mode, lang, eff_voice)
     # The cache row is ONE slot per (paper_hash, mode, lang, voice) — and
@@ -2851,8 +2847,8 @@ async def start_podcast_task():
     if (cached and not force
             and not (model and (cached.get('model') or '') != model)):
         status = cached.get('status') or ''
-        return jsonify({
-            'ok': True, 'cached': True, 'status': status,
+        return api_ok({
+            'cached': True, 'status': status,
             'script': cached.get('script_json') or {},
             'meta': cached.get('meta') or {},
             'scriptOnly': status == 'script_only',
@@ -2866,7 +2862,7 @@ async def start_podcast_task():
     _podcast_index_register(phash, mode, lang, eff_voice, model, task_id)
     task = _new_podcast_task(task_id, phash, mode, lang, eff_voice, model)
     _podcast_runtime.spawn(task_id, _run_podcast_task, task)
-    return jsonify({'ok': True, 'task_id': task_id})
+    return api_ok({'task_id': task_id})
 
 
 @api_v1_paper_bp.route('/api/v1/paper/video/start', methods=['POST'])
@@ -2928,10 +2924,10 @@ async def start_video_abstract_task():
         model=(data.get('model') or '').strip() or None,
         force=bool(data.get('force', False)))
     if not res.get('ok'):
-        return jsonify({'ok': False, 'report_required':
+        return api_payload({'ok': False, 'report_required':
                         res.get('reason') == 'report_required',
-                        'error': res.get('reason')})
-    return jsonify(res)
+                        'error': res.get('reason')}, 200)
+    return api_payload(res, 200)
 
 
 @api_v1_paper_bp.route('/api/v1/paper/video/lookup', methods=['GET'])
@@ -2982,7 +2978,7 @@ async def lookup_video_abstract():
         # identically.
         if best.get('artifact_quality'):
             resp['artifact_quality'] = best['artifact_quality']
-        return jsonify(resp)
+        return api_payload(resp, 200)
 
     # P-UX4: memory missed — fall back to the on-disk job manifests so a
     # finished video survives a server restart (and an interrupted one is
@@ -2992,7 +2988,7 @@ async def lookup_video_abstract():
         resp.update(disk)
     else:
         resp['found'] = False
-    return jsonify(resp)
+    return api_payload(resp, 200)
 
 
 def _lookup_paper_video_on_disk(phash: str) -> dict | None:
@@ -3108,7 +3104,7 @@ async def poll_podcast_task():
     with _podcast_tasks_lock:
         t = _podcast_tasks.get(task_id)
     if not t:
-        return jsonify({'ok': False, 'error': 'Task not found'}), 404
+        return api_not_found('Task not found')
     # ★ Go through the shared throat rather than re-deriving the reply here.
     #   runtime.poll() owns the stall reap AND the server-authoritative clocks
     #   (createdAt / updatedAt, epoch ms) that let a refreshed client continue
@@ -3148,7 +3144,7 @@ async def poll_podcast_task():
                 if ev.get('reason'):
                     resp['reason'] = ev['reason']
                 break
-    return jsonify(resp)
+    return api_payload(resp, 200)
 
 
 @api_v1_paper_bp.route('/api/v1/paper/podcast/lookup', methods=['POST'])
@@ -3188,7 +3184,7 @@ async def lookup_podcast():
         #   one frame before the first poll corrects it (a visible flash).
         from lib.agent_core.task_runtime import _epoch_ms
         _lt = _podcast_runtime.get(tid) or {}
-        return jsonify({'ok': True, 'found': True, 'running': True,
+        return api_ok({'found': True, 'running': True,
                         'task_id': tid, 'model': _lt.get('model') or '',
                         'createdAt': _epoch_ms(_lt.get('created_at')),
                         'updatedAt': _epoch_ms(_lt.get('updated_at')
@@ -3196,8 +3192,8 @@ async def lookup_podcast():
     cached = load_cached_podcast(phash, mode, lang, eff_voice)
     if cached:
         status = cached.get('status') or ''
-        return jsonify({
-            'ok': True, 'found': True, 'cached': True, 'status': status,
+        return api_ok({
+            'found': True, 'cached': True, 'status': status,
             'script': cached.get('script_json') or {},
             'meta': cached.get('meta') or {},
             'scriptOnly': status == 'script_only',
@@ -3210,9 +3206,9 @@ async def lookup_podcast():
     # was cut by a server restart. Surface it honestly (regenerate button).
     from lib.paper.podcast_engine import load_interrupted_podcast
     if load_interrupted_podcast(phash, mode, lang, eff_voice):
-        return jsonify({'ok': True, 'found': True, 'interrupted': True,
+        return api_ok({'found': True, 'interrupted': True,
                         'report_available': has_report(phash)})
-    return jsonify({'ok': True, 'found': False,
+    return api_ok({'found': False,
                     'tts_available': _tts.tts_available(),
                     'report_available': has_report(phash)})
 
@@ -3225,16 +3221,15 @@ async def get_podcast_script():
     lang = (request.args.get('lang') or 'zh').strip() or 'zh'
     voice = (request.args.get('voice') or '').strip()
     if not phash or not _safe_hash_dir(phash):
-        return jsonify({'ok': False, 'error': 'paper_hash required'}), 400
+        return api_bad_request('paper_hash required')
     from lib import tts as _tts
     eff_voice = voice or _tts.default_voice()
     # Off-loop: load_cached_podcast is a sync PG read (get_thread_db).
     cached = await asyncio.to_thread(
         load_cached_podcast, phash, mode, lang, eff_voice)
     if not cached:
-        return jsonify({'ok': False, 'error': 'Podcast not found'}), 404
-    return jsonify({
-        'ok': True,
+        return api_not_found('Podcast not found')
+    return api_ok({
         'script': cached.get('script_json') or {},
         'meta': cached.get('meta') or {},
         'scriptOnly': (cached.get('status') or '') == 'script_only',
@@ -3259,7 +3254,7 @@ async def serve_podcast_audio(paper_hash, mode, lang, voice):
     from lib.paper.hashing import PAPER_DIR as _PAPER_DIR
 
     if not _safe_hash_dir(paper_hash):
-        return jsonify({'ok': False, 'error': 'invalid paper_hash'}), 400
+        return api_bad_request('invalid paper_hash')
     voice = unquote(voice or '')
     if voice == '-':
         voice = ''
@@ -3269,16 +3264,16 @@ async def serve_podcast_audio(paper_hash, mode, lang, voice):
         load_cached_podcast, paper_hash, mode, lang, voice)
     fpath = (cached or {}).get('file_path') or ''
     if not cached or not fpath:
-        return jsonify({'ok': False, 'error': 'Podcast audio not found'}), 404
+        return api_not_found('Podcast audio not found')
     root = _os.path.abspath(_os.path.join(_PAPER_DIR, 'podcast', paper_hash))
     real = _os.path.abspath(fpath)
     if not real.startswith(root + _os.sep):
         logger.warning('[Paper:Podcast] audio path escapes podcast dir: %s', fpath)
-        return jsonify({'ok': False, 'error': 'Podcast audio not found'}), 404
+        return api_not_found('Podcast audio not found')
     if not _os.path.exists(real):
         logger.warning('[Paper:Podcast] audio file missing on disk (stale row): '
                        '%s', real)
-        return jsonify({'ok': False, 'error': 'Podcast audio file missing'}), 404
+        return api_not_found('Podcast audio file missing')
     ext = real.rsplit('.', 1)[-1].lower() if '.' in real else ''
     mime = {'mp3': 'audio/mpeg', 'wav': 'audio/wav',
             'bin': 'application/octet-stream'}.get(ext, 'application/octet-stream')

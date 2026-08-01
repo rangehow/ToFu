@@ -57,8 +57,14 @@ and the batch-20 small sweep (15 sites / 8 files: conv_search bare
 array coordinated, swarm/audio/translate/endpoint/compaction/poll_abort
 plain, _task_routes api_payload; desktop.py bridge -> CARVE_OUT_FILES)
 and batch 21 (push 3 + common 14 + chat_queue 3 — dispatch aggregates
-verified nested-by-name before api_ok; queue bare array coordinated).
-ONLY paper.py (47, split-roadmap) remains in the baseline → 47 sites across 1 file remain.
+verified nested-by-name before api_ok; queue bare array coordinated)
+and the FINAL batch (paper.py 47 — the split-roadmap hold lifted after
+verifying no sibling was splitting it; ~21 api_ok / 9 resp-passthrough
+api_payload / 4 bare-ok:False api_payload / 3 custom-200 api_payload /
+4 api_bad_request / 5 api_not_found / 1 api_payload(report, status)).
+MIGRATION COMPLETE: BASELINE is now EMPTY — every route file is either
+enveloped or a registered carve-out. The ratchet's job from here is
+purely defensive (test_no_new_jsonify_files).
 """
 
 from __future__ import annotations
@@ -116,7 +122,6 @@ CARVE_OUT_SITES: dict[str, dict[str, str]] = {
 # Do NOT raise a value here; when you migrate a file, lower its count (or
 # delete the entry at zero) in the same commit.
 BASELINE: dict[str, int] = {
-    'paper.py': 47,
 }
 
 _TOKEN = 'jsonify('

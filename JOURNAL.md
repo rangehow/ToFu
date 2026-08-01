@@ -1,3 +1,13 @@
+### 2026-08-01(小红书风控双管齐下:连接流「用闲置小号」警示 + 引擎三件套护栏) — owner 报「小红书搜索触发系统账号风控」;chatui `0c3f701c`(6 文件)+ tofu-search `d3055df`(3 文件);chatui 44/44、tofu-search 全量 **482 passed**、NEUTER×2 各咬各的
+
+- **现状定位(根因一句话):** XHS 引擎挂在 perform_web_search 并行池里,连着账号时**每一次聊天搜索都打一发登录态页面加载**——聊天频率直接变成对账号的请求频率,引擎零节流零缓存零退避,这就是风控扳机。「只读搜索」不等于「无害」:风控看的是**请求形态**,不是发帖动作。
+- **市面调研 6 项目(xiaohongshu-mcp/MediaCrawler/ReaJason-xhs/Spider_XHS 等):** 共识五条——①真实浏览器通道(CDP 连本地 Chrome/stealth 注入)②登录态缓存+失效重登③单账号固定、签名环境与 cookie 的 a1 一致④住宅代理 IP⑤失败退避+拟人随机延迟;搜索专项:限 QPS、同关键词缓存、养号。
+- **chatui 侧(警示,owner 明要求「一定要提醒」):** 目录条目加 `risk_note_key`(i18n 键而非文案——站点知识留服务端、文案留 i18n.js,单源真理),`_redact` 投影;卡片(常显)+连接面板(登录前)双点位渲染「请使用闲置小号,切勿用常用主账号」;jsdom NEUTER-by-data 对照(无键行→零警示块)证明 JS 无私藏站点文案;NEUTER 摘卡片渲染行→精确红,cp/cmp 字节还原。
+- **tofu-search 侧(引擎护栏 `_RiskGuard` 三件套,对齐共识③⑤+搜索专项):** 节流+抖动(默认 5s,等待超 6s 预算则跳过本轮不拖管线)、同关键词 TTL 缓存(默认 600s,**空结果不缓存**——空是退避信号不是可复用资产)、连续 3 次空刮退避冷却 1800s(风控墙/滑块/Cookie 失效的形态就是零笔记卡片,继续打只会加重账号标记,日志指路设置面板);三旋钮进 SearchConfig(env/kwarg/default 三通道实测)。新套件 10 测试;NEUTER 短路缓存查找→精确 1 红;全量 482 passed(mcp smoke/tool_calls 两文件预存红,**stash 仅我的文件实证与我无关**)。
+- **踩坑一记:** 进程级护栏状态让 chatui 老套件变顺序依赖(test_respects_max_results 被前一测试的节流戳跳过返 [])——fixture 里 `_GUARD.reset()` 与 reset auth source 是同一种卫生,进程全局状态的测试必须成对复位。
+- **共享树纪律再执行:** i18n.js 混入兄弟未提交 hunk(projectBrain 键删除),按 hunk 拆 patch 只暂存我的 1 行(2 hunks→1),兄弟工作零触碰;tofu-search 树同样只提自己 3 文件(content_filter/orchestrator 是兄弟在飞件)。
+- **未做(备查清单):** CDP 连用户真实 Chrome(共识①的最完美形态,我们服务器远程无头,可行路径是借既有浏览器扩展通道,大特性另案);代理输入框 UI 已有,住宅代理属用户侧配置;养号/实名属用户侧动作。**生效需重启**(引擎为进程内 import;前端走 bundle 自愈)。
+
 ### 2026-08-01(假离线根修三层全落地:WS 保活三修 + health 与 DB 解耦 + 恢复路径窗口化/去重) — epic `pt_afbaf3d7b9be4f91` DONE;commits `959fd1c9`(①,兄弟 msab0zlx 落地含其精修)+ `3d51d9a1`(②③,5 文件 +449);新套件 4+3,**NEUTER×4 各咬各的**(pong 排序/存活证据/自适应/merge-removal+窗口钉);环 **114/114**(20 套件)+ 契约/隔离/清单/async/冒烟 **47/47**
 
 - **起源:** owner 问「后端正常前端却显示离线,能不能从根上增强 WebSocket」——答案是 WS 只是报警器,根修要三层。立案后兄弟 msab0zlx(硬刷新断连定案会话)主动 OVERLAP 合并:他的 pt_ef42c2a1e9f946f3 两靶并入,并移交第四项需求「同 conv 全量 GET in-flight 去重(验收:并发全量 GET ≤1)」。

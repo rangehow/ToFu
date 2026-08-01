@@ -1,3 +1,8 @@
+### 2026-08-01(api-contract 批 16:motion.py 5 站点清零) — epic `pt_931e16c4` 切片 16;commit 见下(4 文件);环 **146/146**;NEUTER×2 各咬一支
+
+- 5 站点全 api_ok 形;MP4/SRT send_file 维持 §4 carve-out。failing-first 精确 1 红;NEUTER×2(调用点/import 行)各咬一支;cmp 还原;导入冒烟。幽灵连续第十一批零干预。
+- **进度账:** 272→**98 站点 17 文件**(174 已清零,64.0%)。下一批 api_v1/browser.py(5)。
+
 ### 2026-08-01(api-contract 批 15:api_v1/oauth.py 5 站点清零——「ok 键变假 provider」隐患的实证排除) — epic `pt_931e16c4` 切片 15;commit 见下(4 文件);环 **144/144**;NEUTER×2 各咬一支
 
 - **新隐患类(加入迁移判据):** oauth/status 的 body 按 provider 名 keyed(`{claude:{…}, codex:{…}}`)——顶层加 ok 若在「键枚举」消费方手里会冒出一个**假 provider 卡片**。迁移前先实证消费形态:settings/oauth.js 按名读 `data.claude/data.codex`,无 Object.keys/for-in 枚举 ⇒ api_ok 安全。parity 套件新增 `test_consumer_reads_providers_by_name` 把「消费方禁枚举」钉成闸。**判据推广:+ok 增量只对「按名读字段」的消费方安全;键枚举消费方 = 视同形状锁定,须登记或先改消费方。**

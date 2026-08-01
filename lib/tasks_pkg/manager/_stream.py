@@ -354,12 +354,20 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
     # dispatch_stream at module top-level, making it patchable on `manager`).
     import lib.tasks_pkg.manager as _mgr_facade
     _dispatch_stream = getattr(_mgr_facade, 'dispatch_stream', dispatch_stream)
+    # ★ pt_a21cd6eb ③-3: the abort_check now ALSO consumes the tombstone
+    #   channel (in-memory set + throttled DB mark), so an abort that arrived
+    #   while this task was missing from the registry still reaches the loop.
+    #   Facade-resolved like everything else; falls back to the bare flag when
+    #   the facade predates the factory (partial bundle / legacy tests).
+    _mk_abort_check = getattr(_mgr_facade, 'make_task_abort_check', None)
+    _abort_check = (_mk_abort_check(task) if callable(_mk_abort_check)
+                    else (lambda: task.get('aborted', False)))
     msg, finish_reason, usage = _dispatch_stream(
         body,
         on_thinking=_on_thinking,
         on_content=_on_content,
         on_tool_call_ready=on_tool_call_ready,
-        abort_check=lambda: task.get('aborted', False),
+        abort_check=_abort_check,
         prefer_model=model,
         log_prefix=pfx,
         # ★ User-facing request: the user explicitly chose this model in
@@ -443,7 +451,7 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
                         body,
                         on_thinking=None, on_content=None,
                         on_tool_call_ready=None,
-                        abort_check=lambda: task.get('aborted', False),
+                        abort_check=_abort_check,
                         prefer_model=model, log_prefix=f'{pfx}[floor-retry{_fr_i+1}]',
                         strict_model=True, on_retry=_on_retry,
                         avoid_pairs=_avoid_pairs,

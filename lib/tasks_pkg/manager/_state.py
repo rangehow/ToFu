@@ -52,6 +52,19 @@ tasks_lock = _chat_runtime._lock  # type: ignore[attr-defined]
 _conv_latest_task = {}   # conv_id → task_id
 _conv_latest_task_lock = threading.Lock()
 
+# ── Abort tombstones (pt_a21cd6eb ③-3) ──
+# An abort that arrives while the target task is MISSING from ``tasks`` (the
+# 2026-08-01 evaporation: live carrier/worker unreachable by every abort
+# endpoint — 404 / aborted:0 while the thread kept cycling) is recorded here
+# instead of being dropped. The running task's abort_check
+# (``make_task_abort_check``) consults this set every retry cycle, so the
+# abort signal reaches the worker even when the registry lost it. Ids are
+# uuids — no reuse — and tombstones are only minted on registry-miss aborts,
+# so the set stays tiny; a hard cap guards the pathological case.
+_abort_tombstones = set()   # task_id
+_abort_tombstones_lock = threading.Lock()
+_ABORT_TOMBSTONES_CAP = 1024
+
 # ── Cross-replica supersede index (Epic C §4.3) ──
 # The freshness guard's "newest task for this conv" must be authoritative
 # ACROSS replicas so a stale task on replica A recognises that replica B

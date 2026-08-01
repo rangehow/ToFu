@@ -15,6 +15,9 @@ from lib.error_envelope import to_json as _err_to_json
 from lib.log import get_logger
 
 from lib.tasks_pkg.manager._state import (
+    _abort_tombstones,
+    _abort_tombstones_lock,
+    _ABORT_TOMBSTONES_CAP,
     _chat_runtime,
     _conv_latest_task,
     _conv_latest_task_lock,
@@ -423,6 +426,175 @@ def discard_task(task_id: str, conv_id: str | None = None) -> None:
     logger.info('[Manager] discard_task: task=%s conv=%s popped=%s caller=%s',
                 (task_id or '?')[:8], (conv_id or '')[:8],
                 bool(_popped), _caller)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Abort tombstone channel (pt_a21cd6eb ③-3)
+# ═══════════════════════════════════════════════════════════════════════════
+
+_DB_TOMBSTONE_POLL_S = 5.0  # abort_check 回读 DB tombstone 的最小间隔
+
+
+def _db_abort_tombstoned(task_id: str) -> bool:
+    """True when the task_results row carries an ``_abort_requested`` mark."""
+    if not task_id:
+        return False
+    try:
+        from lib.database import DOMAIN_CHAT, get_thread_db
+        db = get_thread_db(DOMAIN_CHAT)
+        row = db.execute(
+            'SELECT metadata FROM task_results WHERE task_id=?',
+            (task_id,)).fetchone()
+        if not row:
+            return False
+        meta = json.loads(row['metadata'] or '{}')
+        return bool(meta.get('_abort_requested'))
+    except Exception as e:
+        logger.debug('[Manager] db tombstone probe failed task=%s: %s',
+                     task_id[:8], e)
+        return False
+
+
+def _write_abort_tombstone_row(task_id: str, source: str) -> bool:
+    """Best-effort DB half of the tombstone (cross-process visibility).
+
+    RACES (accepted): the running checkpoint upsert is last-writer-wins on the
+    whole row, so a concurrent checkpoint can drop this metadata mark — the
+    in-memory set is the authoritative same-process channel; this write exists
+    so a SECOND process / future replica can see the request too. Content is
+    never touched (metadata-only UPDATE), so a lost race costs the mark, not
+    data.
+    """
+    try:
+        from lib.database import DOMAIN_CHAT, get_thread_db
+        db = get_thread_db(DOMAIN_CHAT)
+        row = db.execute(
+            'SELECT metadata, status FROM task_results WHERE task_id=?',
+            (task_id,)).fetchone()
+        if not row:
+            return False
+        if row['status'] != 'running':
+            return False
+        try:
+            meta = json.loads(row['metadata'] or '{}')
+        except (json.JSONDecodeError, TypeError):
+            meta = {}
+        meta['_abort_requested'] = int(time.time() * 1000)
+        meta['_abort_source'] = source
+        db.execute('UPDATE task_results SET metadata=? WHERE task_id=?',
+                   (json.dumps(meta, ensure_ascii=False), task_id))
+        db.commit()
+        return True
+    except Exception as e:
+        logger.debug('[Manager] abort tombstone row write failed task=%s: %s',
+                     task_id[:8], e)
+        return False
+
+
+def plant_abort_tombstone(task_id: str, *, source: str) -> bool:
+    """Record an abort request for a task the registry has lost.
+
+    Returns True only when a LIVE (status='running') task_results row exists
+    — the endpoint uses that to distinguish “signal planted” from a genuine
+    404 (no such task / already terminal).
+    """
+    if not task_id:
+        return False
+    live = _write_abort_tombstone_row(task_id, source)
+    if not live:
+        return False
+    with _abort_tombstones_lock:
+        if len(_abort_tombstones) >= _ABORT_TOMBSTONES_CAP:
+            logger.warning('[Manager] abort tombstone set at cap %d — clearing '
+                           'before insert (pathological volume)',
+                           _ABORT_TOMBSTONES_CAP)
+            _abort_tombstones.clear()
+        _abort_tombstones.add(task_id)
+    logger.info('[Manager] ⚠️ abort tombstone planted for task=%s (source=%s) — '
+                'registry lost this task; the live worker consumes the mark '
+                'at its next abort poll', task_id[:8], source)
+    try:
+        from lib.log import audit_log as _audit
+        _audit('task_abort_tombstone', task_id=task_id, source=source)
+    except Exception as _ae:
+        logger.debug('[Manager] tombstone audit failed: %s', _ae)
+    return True
+
+
+def plant_abort_tombstones_for_conv(conv_id: str, *, source: str) -> int:
+    """Tombstone every running DB row for ``conv_id`` the registry has lost.
+
+    Rows still IN the registry are skipped — the plain supersede/abort sweep
+    already flags them cooperatively.
+    """
+    if not conv_id:
+        return 0
+    try:
+        from lib.database import DOMAIN_CHAT, get_thread_db
+        db = get_thread_db(DOMAIN_CHAT)
+        rows = db.execute(
+            "SELECT task_id FROM task_results WHERE conv_id=? AND status='running'",
+            (conv_id,)).fetchall()
+    except Exception as e:
+        logger.warning('[Manager] conv tombstone scan failed conv=%s: %s',
+                       conv_id[:8], e)
+        return 0
+    n = 0
+    with tasks_lock:
+        live_ids = set(tasks.keys())
+    for r in rows:
+        tid = r['task_id'] if hasattr(r, 'keys') else r[0]
+        if tid and tid not in live_ids:
+            if plant_abort_tombstone(tid, source=source):
+                n += 1
+    if n:
+        logger.info('[Manager] conv=%s tombstoned %d registry-lost running '
+                    'task(s)', conv_id[:8], n)
+    return n
+
+
+def has_abort_tombstone(task_id: str) -> bool:
+    with _abort_tombstones_lock:
+        return task_id in _abort_tombstones
+
+
+def make_task_abort_check(task: dict):
+    """Build the abort_check closure for dispatch/stream retry loops.
+
+    ANDs three channels (pt_a21cd6eb ③-3):
+      1. the cooperative in-memory flag ``task['aborted']`` — the normal path;
+      2. the in-process tombstone set — an abort that arrived while the task
+         was MISSING from the registry (the 2026-08-01 evaporation family);
+      3. a throttled (>= ``_DB_TOMBSTONE_POLL_S``) read-back of the
+         task_results metadata tombstone — the cross-process leg.
+    The dispatch loop polls this every 429/retry cycle, so a tombstoned ghost
+    dies at its next cycle with the normal AbortedError unwind.
+    """
+    task_id = (task or {}).get('id', '')
+    _st = {'hit': False, 'last_db': 0.0}
+
+    def _check() -> bool:
+        if _st['hit']:
+            return True
+        if task.get('aborted'):
+            return True
+        with _abort_tombstones_lock:
+            if task_id in _abort_tombstones:
+                _st['hit'] = True
+                logger.info('[Task %s] abort tombstone consumed (in-memory '
+                            'channel) — aborting', task_id[:8])
+                return True
+        now = time.monotonic()
+        if now - _st['last_db'] >= _DB_TOMBSTONE_POLL_S:
+            _st['last_db'] = now
+            if _db_abort_tombstoned(task_id):
+                _st['hit'] = True
+                logger.info('[Task %s] abort tombstone consumed (db channel) '
+                            '— aborting', task_id[:8])
+                return True
+        return False
+
+    return _check
     if conv_id:
         with _conv_latest_task_lock:
             if _conv_latest_task.get(conv_id) == task_id:

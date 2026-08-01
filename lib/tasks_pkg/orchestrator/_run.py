@@ -133,6 +133,9 @@ from lib.tasks_pkg.orchestrator._tool_assembly_prep import (
 from lib.tasks_pkg.orchestrator._config_resolution import (
     resolve_and_seed_model_config,
 )
+from lib.tasks_pkg.orchestrator._provider_binding import (
+    bind_provider_and_affinity,
+)
 
 
 
@@ -252,30 +255,13 @@ def run_task(task: dict[str, Any]) -> None:
             _set_active_client(_browser_client_id)
             logger.debug('[Task %s] Browser client routed to %s', tid, _browser_client_id[:12])
 
-        # ── Hard provider pin (multi-tenant isolation) ──
-        # When this task was created from an inline `provider` block or a
-        # registered @prov_xxx BYO endpoint, bind THIS worker thread to that
-        # provider so every LLM dispatch on it (main solve, L2/advanced
-        # compaction summaries, endpoint replan turns) can only pick that
-        # provider's slot — never silently falling back to an operator key
-        # and eating a 429. Cleared in the finally block because worker
-        # threads are pooled and reused. See lib/llm_dispatch/provider_pin.py.
-        from lib.llm_dispatch.provider_pin import set_pinned_provider
-        _pinned_provider_id = task.get('_pinned_provider_id') or ''
-        if _pinned_provider_id:
-            set_pinned_provider(_pinned_provider_id)
-            logger.info('[Task %s] Provider-pinned to %s (hard isolation)',
-                        tid, _pinned_provider_id)
-
-        # ── Conversation-sticky routing ──
-        # Bind this worker thread to the conversation so every LLM dispatch on
-        # it prefers the API key that last served this conv — keeping the
-        # Anthropic per-key prompt cache warm across rounds. Soft preference:
-        # the picker still falls back to a healthy key if the sticky one is
-        # cooled down. Cleared in the finally block (pooled threads).
-        # See lib/llm_dispatch/conv_affinity.py.
-        from lib.llm_dispatch.conv_affinity import set_conv_affinity
-        set_conv_affinity(task.get('convId') or '')
+        # ── Provider binding (pt_03f4cdf1 slice 31): hard provider pin
+        #    (multi-tenant isolation, when _pinned_provider_id is set) +
+        #    conversation-sticky routing (UNCONDITIONAL — empty convId
+        #    clears stale pooled-thread affinity). Both thread-local,
+        #    cleared in the finally block. Extracted to
+        #    lib.tasks_pkg.orchestrator._provider_binding.
+        bind_provider_and_affinity(task, tid)
 
         # ── Section 1: Config & Model Resolution ──
         #   _resolve_model_config + immediate task['model'] seed (the

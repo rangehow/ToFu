@@ -1366,3 +1366,12 @@
 - **NEUTER×3 各咬各的:** 摘桌面门控(无条件 loopback)→ 1 红;忽略 bind 结果(端口被占仍宣告 loopback)→ 1 红精确咬「busy 降级」那条;exchange 不回显 flow 的 redirect → 2 红。三发后 `cmp` 逐字节还原。
 - **真 socket 端到端(非 mock):** bind OK → 起 relay 线程 → 打真 HTTP 回调 → relay 页携带 code + postMessage、flow 转 `waiting_callback`、线程服务一次后退出;随后占住端口再 bind → 返回 None(降级)。
 - **验收边界:** 纯后端,**需重启生效**;真实 Anthropic 授权往返未实测(证据为上游同 client_id 的 loopback 用法 + 本地 relay 全链路)。**远程部署行为逐字节不变**——非 frozen 一律 console+手工粘贴,`_bind_relay` 在该路径上根本不被调用(守卫 `test_non_desktop_never_binds_and_keeps_console` 钉死「不碰共享服务器的端口」)。
+
+### 2026-08-01(订阅登录「出口不可用」引导按钮 + 首次安装新手向导) — owner 截图提需求;commit `c369a597`(10 文件 +1073/-2;新套件 10+5,**NEUTER×4 各咬各的**;兄弟 egress-line 套件 2/2 不破;相邻环 **96+16** 全绿;epic `pt_bd29c74aa9bb40c8` DONE)
+
+- **两条线都走「深链到既有面,不另起炉灶」:** ①出口行(unavailable 态)追加「获取桌面代理」按钮——本机控制面板(_lcRenderDesktop/_lcDownloadLinks/_lcMintToken)早就是唯一安装面,按钮只做深链 openLocalControlModal + 面板打开期间每 3s 轮询(缓存态,零探测)让出口行自愈翻转到「经桌面代理」,关面板即清 interval + 末次刷新;其余四态无按钮(「恰好一个下一步」纪律)。②新手向导取代「裸开设置页」:`_maybeAutoOpenSettings` 改挂 maybeShowOnboarding(?setup=1 强制/noKeys 尊重跳过旗标),选路后 API 路径 probe→server-config 部分合并追加 provider(热重载免设置会话)→完成步;订阅路径一键=关向导+开设置 oauth tab+自动 _oauthLogin(接力弹窗/手粘/curl 三保险全流程,向导零重实现)。
+- **e2e 契约钉死:** 向导 overlay 必须携带 `.modal-overlay open`——conftest `_dismiss_onboarding_modals` 只剥这一个选择器(12-failure 点击拦截族的出处),写进套件第 1 钉 + onboarding.js 文件头。
+- **顺手修正(不另立案):** 旧 fallback 的 `switchSettingsTab('providers')` 是不存在的 tab id(真实为 'api'),原本 dead-branch 一行,重写函数时按真实 id 落。
+- **★ 共享树外科手术(第五种形态):** 兄弟 ms8xezn6(loopback fallback 批)的未提交 hunk 与我的改动**同文件交织**(oauth.js 6 hunk 中 3 个是他的、i18n.js 2 hunk 中 1 个是他的)。解法:`git diff -U2` 按标记词过滤 hunk → `git apply --cached` 只暂存我方 hunk → 全路径 add 独占文件 → **`git commit` 不带 pathspec**(此时暂存区本身已精选,带 pathspec 反而会按工作区全量提交)。提交后实测:兄弟 hunk 在工作区零损失(grep 计数核对),已 project_message 交接。**判据:「commit -- <paths> 防卷走」在「单文件内交织」时失效——pathspec 的粒度是文件不是 hunk,交织时必须降到 patch 粒度。** 另:globals.generated.d.ts 的 generator 用 `git ls-files` 扫源,**新文件必须先 git add 再 regen**,否则符号进不了 d.ts。
+- **预存红独立立案 `pt_3b4ad38957dd478e`:** tsc 棘轮(BASELINE=0)4 错全为 HEAD 原生——stall_watch.js×3(aaf42a87 C1 批)+oauth.js:136 _statusCode(egress S2 批);本批零新增 tsc 错。
+- **验收边界:** 前端+ bundler Python 清单变更,**需重启 + bundle 重建生效**(manifest freshness 门自动触发重建,但 _BUNDLE_FILES 是 server 端 Python,进程要重启才会读新清单)。

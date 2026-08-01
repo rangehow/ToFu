@@ -59,15 +59,12 @@ from lib.tasks_pkg.orchestrator._finalize import (
 )
 
 # Startup helpers extracted 2026-07-23 (pt_03f4cdf1 slice 2) — the first
-# real source movement out of run_task's 1813-line body. Kept as module-
-# level callables so tests can drive them directly instead of via the
-# whole run_task orchestration. ``_vu_phase`` is imported under an
-# ``_extracted_vu_phase`` alias because run_task also defines a local
-# ``_vu_phase(detail)`` closure adapter (its call sites in the loop keep
-# the closure-style single-arg call).
+# real source movement out of run_task's 1813-line body. The VU closure
+# adapter moved to make_vu_phase (slice 37); call sites keep the
+# closure-style single-arg call.
 from lib.tasks_pkg.orchestrator._vu_startup import (
     _probe_external_edits,  # noqa: F401  (imported for wire-parity guard + back-compat)
-    _vu_phase as _extracted_vu_phase,
+    make_vu_phase,
     setup_project_context,
     start_external_edit_probe,  # noqa: F401  (also invoked indirectly via setup_project_context)
 )
@@ -186,29 +183,12 @@ def run_task(task: dict[str, Any]) -> None:
     try:
         cfg = task['config']
 
-        # ── Autopilot VU startup attribution ──
-        #   The VU sub-task carries ``_vu_event_transform`` (the append_event
-        #   facade seam), so any PHASE emitted here is wrapped as
-        #   ``autopilot_vu_event`` and lands in the synthetic-user bubble on
-        #   BOTH the carrier's own stream and the parent's. The
-        #   pre-stream prep window (tool assembly → tool-history rebuild →
-        #   system-context injection → FUSE memory/project prefetch) is
-        #   otherwise SILENT for up to tens of seconds on a large conversation
-        #   (measured 2.9–4.7s typical, ~26s on a 3000-event conv), leaving the
-        #   bubble on a vague placeholder. Naming each real sub-step keeps the
-        #   display honest. Gated on ``_vu_subtask`` so the ordinary
-        #   worker/endpoint startup path stays byte-identical (no new events).
-        _vu_startup = bool(task.get('_vu_subtask'))
-
-        # Local shim: preserves the closure-style call sites throughout
-        # run_task while delegating to the extracted module-level
-        # ``_extracted_vu_phase``. Zero-cost — the closure just forwards
-        # its args. The captured ``task`` + ``_vu_startup`` are stable
-        # across the whole run_task invocation (no rebind), so a per-call
-        # re-read is semantically identical to the previous inline
-        # closure.
-        def _vu_phase(detail):
-            _extracted_vu_phase(task, detail, vu_startup=_vu_startup)
+        # ── Autopilot VU startup attribution (pt_03f4cdf1 slice 37):
+        #   the _vu_subtask gate + closure adapter now bind once in
+        #   _vu_startup.make_vu_phase; call sites keep the closure-style
+        #   single-arg call. Ordinary worker/endpoint turns stay
+        #   byte-identical (no new events).
+        _vu_phase = make_vu_phase(task)
 
         # ── Turn prelude (pt_03f4cdf1 slice 33): swarm autocontinue reset
         #    on human turns + capability profile merge (returns the

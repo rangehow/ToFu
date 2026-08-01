@@ -1,3 +1,8 @@
+### 2026-08-01(续·sub-3C 收尾两事:预存红立案 + 一次 git 操作险肇自伤) — 附记于 sub-3C 批
+
+- **预存红立案 `pt_5f25b1d17c9048f1`:** 终扫扩环时发现 `test_frontend_identity_gate_parity::test_predicate_loads_before_every_delegating_consumer` 红——与 sub-3C 零交集,实证自 sub-3A(`8aa9a1c6`)起红:套件把「consumer deferred + predicate eager」也判违规,但该方向**安全**(core 恒先于 feature 加载;预加载窗口消费者根本没接线,零帧可达)。真正的不变量只有反向(predicate deferred + consumer eager)。sub-3A 的 moved-note 恰好就是按「谓词留 eager」设计的——套件不变量落后于设计,按 owner 惯例另案不夹修。
+- **自己的操作险肇(立此存照):** 排查时用 `git checkout <old-sha> -- lib/js_bundler.py` 取旧版做对比,忘了它会**同时改写工作区与暂存区**——差点把刚提交的 sub-3C manifest move 静默回退。靠 NEUTER 纪律留下的 `/tmp/sub3c_bundler.bak` 立刻 cmp 验证还原。规则:**取历史版本只用 `git show <sha>:<path> > /tmp/…`,绝不用 checkout -- path**(除非就是要回退)。
+
 ### 2026-08-01(Epic-E sub-3C:tofu-pet+tofu-scene 160KB 装饰族移出 core——**首个按账选的大件**,零闸零 stub) — commit `df664a2d`(2 文件;新套件 12 检查 failing-first 4 红,NEUTER×2 精确,bundle 环 64/64);ledger 流水已记
 
 - **打法转变的首个执行例:** 前两个 deferral(cross_tab 53KB + health_stream_timer 62KB)是「按好拆选」合计仅占 core 源 2.8%;本批起按 `docs/EPIC_E_SIZE_LEDGER.md` 尺寸账选件——tofu 装饰族 160KB 是 top-20 里最大的非 boot-critical 整件,普查结论「近乎零改动可降级」切片时逐项复核成立(单 window 命名空间/外部 JS 调用方为零/onclick 天然 absence-safe/dispatchEvent 火忘缝/readyState 自举/挂载目标 display:none 起步)。

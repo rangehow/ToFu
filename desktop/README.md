@@ -116,9 +116,17 @@ This runs `.github/workflows/build-desktop.yml` which produces:
 - `Tofu-Setup-<ver>-win64.exe` — Windows installer (Inno Setup)
 - `Tofu-<ver>-macos-arm64.dmg` — macOS disk image, Apple Silicon (built on `macos-14`)
 - `Tofu-<ver>-macos-x86_64.dmg` — macOS disk image, Intel (built on `macos-13`)
-- `Tofu-<ver>-linux-x86_64.tar.gz` — Linux portable archive (includes
-  `install.sh` — per-user, no sudo — which registers an application-menu entry
-  and themed icon; run it once after extracting)
+- `Tofu-<ver>-linux-x86_64.deb` — **primary Linux installer** (Debian/Ubuntu):
+  installs to `/opt/Tofu` with a system-wide menu entry and icon; user data
+  lives in `~/.local/share/Tofu` (the app never writes into `/opt`).
+  Install with `sudo apt install ./Tofu-<ver>-linux-x86_64.deb`.
+  (Evaluated against AppImage, which lost on three axes: dpkg-deb ships in
+  the CI base image — no downloaded tooling; no FUSE at build time; and no
+  FUSE at RUN time, whereas type-2 AppImages need `libfuse2`, which
+  Ubuntu 22.04+ no longer installs by default.)
+- `Tofu-<ver>-linux-x86_64.tar.gz` — Linux portable archive, the no-sudo /
+  non-Debian fallback (includes `install.sh` — per-user — which registers an
+  application-menu entry and themed icon; run it once after extracting)
 - `SHA256SUMS` — checksums covering all of the above
 
 The release is **published immediately and promoted to Latest** (`draft: false` +

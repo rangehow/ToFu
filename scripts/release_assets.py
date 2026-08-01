@@ -122,6 +122,10 @@ PLATFORM_ASSETS: tuple[tuple[str, str, str, str, int], ...] = (
     ('macos',   'x86_64', 'macOS x86_64 DMG',  'Tofu-*-macos-x86_64.dmg', 121_000_000),
     ('windows', 'x86_64', 'Windows installer', 'Tofu-Setup-*-win64.exe',   81_000_000),
     ('linux',   'x86_64', 'Linux archive',     'Tofu-*-linux*.tar.gz',    135_000_000),
+    # The primary Linux installer (pt_a64216b959694605). Same content as the
+    # tarball, so it shares the hollow-build floor rationale (~70% of the
+    # measured healthy size).
+    ('linux',   'x86_64', 'Linux .deb installer', 'Tofu-*-linux-x86_64.deb', 130_000_000),
 )
 
 # The (label, glob) view the two release gates consume. DERIVED, never

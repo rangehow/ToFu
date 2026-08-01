@@ -1600,3 +1600,130 @@ def test_install_linux_script_end_to_end(tmp_path):
     assert icon.is_file(), 'no themed icon was installed'
     # Nothing may escape the fake HOME (the per-user contract, enforced).
     assert not (tmp_path / 'Tofu' / '.local').exists()
+
+
+# ══════════════════════════════════════════════════════════════════
+#  Linux .deb installer (pt_a64216b959694605)
+# ══════════════════════════════════════════════════════════════════
+#
+# Evaluated .deb vs AppImage for the "double-click install" Linux format;
+# .deb won on every axis that survives contact with a real machine:
+# dpkg-deb ships in the CI base image (zero downloaded tooling — appimagetool
+# would be a third-party binary fetched every build), no FUSE at build time
+# (mksquashfs is absent on the dev host, measured 2026-08-01), and — the
+# decisive one — no FUSE at RUN time: type-2 AppImages need libfuse2, which
+# Ubuntu 22.04+ no longer installs by default, turning "double-click" into
+# "sudo apt install libfuse2 first". The tarball stays as the no-sudo /
+# non-Debian fallback; the two formats are complements.
+#
+# The .deb is a REQUIRED release asset (scripts/release_assets.py owns the
+# list), so it flows into BOTH completeness gates and the in-app download
+# surface from one row — these pins cover the build step, the pipeline
+# plumbing, the shared-list row, and the script's real output.
+
+_BUILD_DEB = _ROOT / 'desktop' / 'build-deb.sh'
+
+
+def test_linux_leg_builds_and_uploads_deb():
+    """Ratchet: the Linux leg must run build-deb.sh and upload the .deb
+    alongside the tarball (neuter either → red)."""
+    text = _WORKFLOW.read_text(encoding='utf-8')
+    assert 'desktop/build-deb.sh dist/Tofu' in text, (
+        'no build-deb step — the Linux leg ships no .deb'
+    )
+    assert 'Tofu-*.deb' in text, 'the .deb is not uploaded as an artifact'
+
+
+def test_release_pipeline_ships_deb():
+    """Ratchet: the .deb must be checksummed AND attached to the release —
+    an asset that is built but not shipped is invisible to users."""
+    text = _WORKFLOW.read_text(encoding='utf-8')
+    assert '*.deb' in text.split('SHA256SUMS')[0] or 'files=( *.exe *.dmg *.zip *.tar.gz *.deb )' in text, (
+        'SHA256SUMS does not cover *.deb'
+    )
+    assert 'release-assets/**/*.deb' in text, (
+        'the release action does not attach *.deb'
+    )
+
+
+def test_deb_is_a_required_release_asset():
+    """Behavioural: the shared completeness list must (a) contain the deb
+    row, and (b) judge an old-style 4-asset release INCOMPLETE — that is
+    what makes the next build repair-ship the deb through BOTH gates."""
+    mod = _asset_mod()
+    deb_rows = [a for a in mod.PLATFORM_ASSETS
+                if a[0] == 'linux' and a[3].endswith('.deb')]
+    assert deb_rows, 'no linux .deb row in PLATFORM_ASSETS'
+    old_style = ['Tofu-0.15.2-macos-arm64.dmg',
+                 'Tofu-0.15.2-macos-x86_64.dmg',
+                 'Tofu-Setup-0.15.2-win64.exe',
+                 'Tofu-0.15.2-linux-x86_64.tar.gz',
+                 'SHA256SUMS']
+    gaps = mod.missing_assets(old_style, require_checksums=True)
+    assert any('.deb' in g for g in gaps), (
+        f'an asset set without the deb was judged COMPLETE: {gaps}'
+    )
+    undersized = mod.undersized_assets(
+        {'Tofu-0.15.2-linux-x86_64.deb': 49_000_000})
+    assert undersized, 'a hollow 49 MB deb was not flagged'
+
+
+def test_build_deb_script_contract():
+    """build-deb.sh: syntax-clean, dpkg-deb-driven, /opt layout, postinst
+    hook, no sudo (code lines only — comments legitimately discuss it)."""
+    text = _BUILD_DEB.read_text(encoding='utf-8')
+    code = '\n'.join(ln for ln in text.splitlines()
+                     if not ln.lstrip().startswith('#'))
+    assert 'sudo' not in code, 'build-deb.sh must not need root'
+    for needle in ('dpkg-deb --build', '/opt/Tofu', 'postinst',
+                   'usr/share/applications', '__INSTALL_DIR__'):
+        assert needle in text, f'build-deb.sh is missing {needle}'
+    bash = subprocess.run(['bash', '-n', str(_BUILD_DEB)],
+                          capture_output=True, text=True)
+    assert bash.returncode == 0, f'bash syntax check failed: {bash.stderr}'
+
+
+def test_build_deb_end_to_end(tmp_path):
+    """Run the REAL script on a simulated bundle and inspect the package
+    with dpkg-deb itself: metadata, payload paths, and the rendered menu
+    entry. Skipped where dpkg-deb is unavailable (non-Debian hosts) — the
+    CI runners always have it."""
+    import shutil
+    if shutil.which('dpkg-deb') is None:
+        pytest.skip('dpkg-deb not available on this host')
+    bundle = tmp_path / 'Tofu'
+    (bundle / '_internal' / 'static' / 'icons').mkdir(parents=True)
+    (bundle / 'Tofu').write_text('#!/bin/sh\n', encoding='utf-8')
+    (bundle / 'Tofu').chmod(0o755)
+    shutil.copy(_ROOT / 'static' / 'icons' / 'logo.png',
+                bundle / '_internal' / 'static' / 'icons' / 'logo.png')
+
+    r = subprocess.run(
+        ['bash', str(_BUILD_DEB), str(bundle), '9.9.9', str(tmp_path)],
+        capture_output=True, text=True)
+    assert r.returncode == 0, f'build-deb.sh failed: {r.stderr}'
+
+    deb = tmp_path / 'Tofu-9.9.9-linux-x86_64.deb'
+    assert deb.is_file(), f'no .deb produced: {r.stdout} {r.stderr}'
+
+    info = subprocess.run(['dpkg-deb', '--info', str(deb)],
+                          capture_output=True, text=True)
+    assert info.returncode == 0, info.stderr
+    for field in ('Package: tofu', 'Version: 9.9.9', 'Architecture: amd64'):
+        assert field in info.stdout, f'{field} missing from control:\n{info.stdout}'
+
+    contents = subprocess.run(['dpkg-deb', '--contents', str(deb)],
+                              capture_output=True, text=True)
+    assert contents.returncode == 0, contents.stderr
+    for path in ('./opt/Tofu/Tofu',
+                 './usr/share/applications/tofu.desktop',
+                 './usr/share/icons/hicolor/512x512/apps/tofu.png'):
+        assert path in contents.stdout, f'{path} missing from payload'
+
+    fsys = subprocess.run(
+        f"dpkg-deb --fsys-tarfile '{deb}' | tar -xO ./usr/share/applications/tofu.desktop",
+        shell=True, capture_output=True, text=True)
+    assert fsys.returncode == 0, fsys.stderr
+    assert 'Exec=/opt/Tofu/Tofu' in fsys.stdout, (
+        f'__INSTALL_DIR__ not rendered to /opt/Tofu:\n{fsys.stdout}'
+    )

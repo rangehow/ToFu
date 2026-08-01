@@ -765,11 +765,21 @@ jobs:
           cd dist
           tar czf "../Tofu-${APP_VERSION}-linux-x86_64.tar.gz" Tofu/
 
+      - name: Build .deb package
+        env:
+          APP_VERSION: ${{ needs.version.outputs.version }}
+        # The PRIMARY Linux installer (pt_a64216b959694605): dpkg-deb ships
+        # in the runner base image, no FUSE at build or run time, native apt
+        # lifecycle. The tarball stays as the no-sudo / non-Debian fallback.
+        run: bash desktop/build-deb.sh dist/Tofu "$APP_VERSION" .
+
       - name: Upload Linux archive
         uses: actions/upload-artifact@v4
         with:
           name: linux-archive
-          path: Tofu-*.tar.gz
+          path: |
+            Tofu-*.tar.gz
+            Tofu-*.deb
           retention-days: 30
 
   # ── Release ──────────────────────────────────────────────────
@@ -821,7 +831,7 @@ jobs:
           set -euo pipefail
           cd release-assets
           shopt -s nullglob
-          files=( *.exe *.dmg *.zip *.tar.gz )
+          files=( *.exe *.dmg *.zip *.tar.gz *.deb )
           if [ ${#files[@]} -eq 0 ]; then
             echo "::error::No release assets found to checksum — build jobs produced nothing."
             exit 1
@@ -984,4 +994,5 @@ jobs:
             release-assets/**/*.dmg
             release-assets/**/*.zip
             release-assets/**/*.tar.gz
+            release-assets/**/*.deb
             release-assets/SHA256SUMS

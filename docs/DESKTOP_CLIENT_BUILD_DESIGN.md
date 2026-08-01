@@ -34,6 +34,9 @@ honest permanent boundary (§7).
 | **The container's seccomp profile blocks the legacy `access(2)` syscall** (host `Seccomp: 2`; proot trace shows `access() = ENOSYS`). Ubuntu dash's `test -r` / `[ ! -r ]` issues `access(2)` (bash and glibc `os.access` use `faccessat`, which is allowed — that asymmetry is why the host looks healthy while guest shell scripts silently take the "not readable" branch) | Noble `apt-key --readonly`'s `[ ! -r "$FORCED_KEYRING" ]` misfires → forced keyring rewritten to `/dev/null` → `gpgv --keyring /dev/null` → apt `NO_PUBKEY` on keys that ARE in the keyring (gpgv itself verifies fine — measured). Fix: a one-line documented patch to the guest's apt-key, applied at provision time |
 | Guest rootfs and build trees live on a local disk (`/tmp`, md0p1, 5.8 TB) — FUSE only holds the download cache and the final artifact | Faster builds, and no exotic-fs participation in the toolchain |
 | proot static (gitlab.io), ubuntu-base 24.04, archive.ubuntu.com, python.org, github.com all reachable via the corporate proxy | Userspace toolchain is provisionable unattended |
+| **proot does not translate `faccessat2` paths** (its syscall table predates the syscall) — a guest path reaches the host kernel verbatim → ENOENT. Wine's loader checks its own dir exactly that way (`faccessat2("/opt/wine/bin/", F_OK, AT_EACCESS)`) and ntdll.so issues raw syscalls, so **LD_PRELOAD cannot interpose** | The **host-mirror-path trick**: the wine tree lives at an independent HOST path (`/tmp/wine-k`, hardlink copy) bound at the IDENTICAL guest path — untranslated syscalls then hit the real host file (measured: `wine-11.14` prints) |
+| **The container's seccomp SIGSYS-kills `wine-preloader`** (both bitnesses) — silent exit 255 with zero wine diagnostics after ntdll loads (strace: `+++ killed by SIGSYS +++` on the preloader execve) | Delete both preloader binaries from the tree; the loader falls back to direct exec — measured: `wineboot --init` exit 0, `Python 3.12.10` from a Windows python.exe |
+| **PROBE VERDICT (2026-08-01): the toolchain WORKS.** Full recipe pinned in project memory `userspace-wine-toolchain-recipe` | S1 (`wintoolchain.py`) is a packaging exercise, not research |
 | 8.2 PB free on FUSE, 5.8 TB on /tmp, 63 cores, 220 GB RAM | Build resources are a non-issue |
 
 ## 3. What "based on the client's metadata" actually compiles in
@@ -68,18 +71,31 @@ data/desktop_dist/                 final artifacts + manifest (FUSE, served)
 
 ### 4.1 Toolchain provisioning — `lib/desktop_dist/wintoolchain.py`
 
-Idempotent `provision()` → a `Wine` runner object:
+Idempotent `provision()` → a `Wine` runner object. The recipe below is the
+PROBE-PROVEN one (2026-08-01); each step answers a measured trap (see §2),
+not a hypothetical:
 
 - proot static binary (gitlab.io) — pinned URL + sha256.
-- ubuntu-base 24.04 guest on `/tmp/tofu_win_tc/rootfs` — tarball cached on
-  FUSE; rootfs re-extracted when missing (volatile disk is fine, it is a
-  cache not state).
-- `apt-get install wine64` (+ `xvfb` for the smoke run) inside the guest
-  under `proot -0` with `WINEPREFIX=/tmp/wineprefix`.
+- ubuntu-base 24.04 guest on `/tmp/tofu_win_tc/rootfs` (LOCAL disk) —
+  tarball cached on FUSE; rootfs re-extracted when missing (a cache, not
+  state). Guest `apt-key` patched idempotently (TOFU-TOOLCHAIN-PATCH).
+- proot invocation: bare `-r` + explicit binds (`/dev /proc /sys
+  /etc/resolv.conf`) — NEVER `-R` (host /etc/group poison).
+- **Kron4ek wine tarball** (version-pinned, sha256-pinned), hardlink-copied
+  to an independent host path (`/tmp/wine-k`) and bound at the IDENTICAL
+  guest path; both `wine-preloader` binaries renamed away. Wine commands
+  are exec'd by that mirrored absolute path — the only arrangement where
+  the loader's untranslated `faccessat2` hits a real file.
+- `WINEPREFIX` on a path existing on both sides (`/tmp/wineprefix`).
+- `xvfb` via guest apt for the smoke run (a windowed binary needs a
+  display even to import-and-exit).
 - Every step is resumable: a killed provision re-runs cleanly (each stage
-  checks its own artifact before doing work).
-- The runner executes guest commands as `wine64 <args>` with host paths
-  translated (`Z:\…`) — one seam, no per-call-site path math.
+  checks its own artifact first).
+- The runner executes guest commands with host paths translated (`Z:\…`)
+  — one seam, no per-call-site path math. **Open measurement for S2:**
+  32-bit Windows apps (iscc, the python.org installer's bootstrapper) under
+  the new WoW64 without the preloader — if that fails, iscc moves to
+  NSIS (conda-forge native) or the payload ships with a zip+script fallback.
 
 ### 4.2 The two-half build — `lib/desktop_dist/winbuilder.py`
 

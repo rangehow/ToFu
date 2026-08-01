@@ -113,7 +113,7 @@ function _editModel(provIdx, modelIdx) {
   var html = '<div class="stg-edit-form" data-prov="' + provIdx + '" data-model="' + modelIdx + '">';
   html += '<div class="stg-edit-grid">' +
     '<div class="stg-field stg-field-wide"><label>' + escapeHtml(t('settings.meModelId')) + '</label>' +
-      '<input type="text" class="stg-edit-mid" value="' + escapeHtml(m.model_id || '') + '" placeholder="' + escapeHtml(t('settings.meModelIdPlaceholder')) + '" spellcheck="false" autocomplete="off"></div>' +
+      '<input type="text" class="stg-edit-mid" value="' + escapeHtml(m.model_id || '') + '" placeholder="' + escapeHtml(t('settings.meModelIdPlaceholder')) + '" spellcheck="false" autocomplete="off" oninput="_onModelIdDraftInput(this)"></div>' +
     '<div class="stg-field"><label>' + escapeHtml(t('settings.meRpm')) + '</label>' +
       '<input type="number" class="stg-edit-rpm" value="' + (m.rpm || 30) + '" min="1"></div>' +
     '<div class="stg-field"><label>' + escapeHtml(t('settings.meCost')) + ' <span class="stg-hint">' + escapeHtml(t('settings.meCostHint')) + '</span>' +
@@ -303,18 +303,26 @@ function _faceAutoNoteHTML(provIdx, m) {
       escapeHtml(t('settings.meFaceAutoRefused', { error: r.error || '' })) +
       '</span>';
   }
+  /* 'default' is the resolver's name for the provider's own face —
+   * localize it; raw 'default 面' is jargon in a zh UI. */
+  var _faceLabel = (r.face === 'default')
+    ? t('settings.meFaceDefaultFace') : r.face;
   return '<span class="stg-face-auto-pick" title="' +
     escapeHtml(r.base_url || '') + '">' +
     escapeHtml(t('settings.meFaceAutoResolved', {
-      protocol: r.protocol || 'openai', face: r.face })) + '</span>';
+      protocol: r.protocol || 'openai', face: _faceLabel })) + '</span>';
 }
 
 /** Patch the auto-note of the OPEN edit form for one provider, in place.
  *
- *  Called by provider_faces.js after a resolution lands (the round-trip
- *  is async; the form is already on screen) and by _onFacePinChange when
- *  the user flips the pin back to 'automatic'. Never triggers a refresh
- *  itself — _refreshFaceResolutions calls this, so that would recurse. */
+ *  THE single channel every path goes through: the resolution landing
+ *  (provider_faces.js hook), the pin flipping back to 'automatic', and
+ *  Model ID draft edits. DRAFT-AWARE: the cached verdict was resolved for
+ *  the SAVED id, so while the mid input names a different id that verdict
+ *  is a wrong claim — a renamed kimi→claude draft must NOT keep showing
+ *  'openai'. A mismatch flips the note to an honest 'resolves on save'
+ *  pending line; matching again restores the cached verdict. Never fires
+ *  a backend request itself — _refreshFaceResolutions calls this. */
 function _repaintFaceAutoNote(provIdx) {
   var form = document.querySelector(
     '.stg-edit-form[data-prov="' + provIdx + '"]');
@@ -329,8 +337,26 @@ function _repaintFaceAutoNote(provIdx) {
   var mi = parseInt(form.getAttribute('data-model'), 10);
   var p = _stgProviders[provIdx];
   var m = (p && p.models) ? p.models[mi] : null;
-  note.innerHTML = _faceAutoNoteHTML(provIdx, m);
+  var _midEl = form.querySelector('.stg-edit-mid');
+  var _draft = _midEl ? String(_midEl.value || '').trim()
+                      : ((m && m.model_id) || '');
+  if (_draft !== ((m && m.model_id) || '')) {
+    note.innerHTML = '<span class="stg-face-auto-pending">' +
+      escapeHtml(t('settings.meFaceAutoDraft')) + '</span>';
+  } else {
+    note.innerHTML = _faceAutoNoteHTML(provIdx, m);
+  }
   note.style.display = '';
+}
+
+/** Live: editing the Model ID invalidates the auto-note's verdict. All
+ *  the logic lives in _repaintFaceAutoNote (the single channel); this is
+ *  just the trigger. */
+function _onModelIdDraftInput(el) {
+  var form = el && el.closest ? el.closest('.stg-edit-form') : null;
+  if (!form) return;
+  var provIdx = parseInt(form.getAttribute('data-prov'), 10);
+  if (!isNaN(provIdx)) _repaintFaceAutoNote(provIdx);
 }
 
 function _saveModelEdit(provIdx, modelIdx) {

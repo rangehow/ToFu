@@ -58,6 +58,7 @@ STYLES_CSS = os.path.join(ROOT, 'static', 'styles.css')
 _HTML = ('<!DOCTYPE html><body><div id="list">'
          '<div class="stg-mcard" data-prov="0" data-model="0"></div>'
          '<div class="stg-mcard" data-prov="0" data-model="1"></div>'
+         '<div class="stg-mcard" data-prov="0" data-model="2"></div>'
          '</div></body>')
 
 _BODY = r'''
@@ -301,6 +302,56 @@ try {
   check('refresh_patches_open_form',
     hookNote.textContent.indexOf('settings.meFaceAutoResolved') >= 0);
 
+  // ══ 6. Draft-aware note: a renamed id must NEVER show the old verdict ══
+  // (The cached resolution answers for the SAVED id. Showing it for a
+  // draft that says something else is a wrong claim — worse than none.)
+  seedProviders();
+  seedResolutions();
+  form = openForm(0);
+  const midEl = form.querySelector('.stg-edit-mid');
+  const draftNote = form.querySelector('.stg-face-auto-note');
+  check('warm_verdict_before_rename',
+    draftNote.textContent.indexOf('settings.meFaceAutoResolved') >= 0);
+  window._resolveCalls = 0;
+  midEl.value = 'claude-opus-5';
+  _onModelIdDraftInput(midEl);
+  check('rename_hides_stale_verdict',
+    draftNote.textContent.indexOf('settings.meFaceAutoResolved') < 0);
+  check('rename_shows_draft_pending',
+    draftNote.textContent.indexOf('settings.meFaceAutoDraft') >= 0);
+  check('draft_typing_fires_no_backend', window._resolveCalls === 0);
+  midEl.value = 'claude-opus-4.6';
+  _onModelIdDraftInput(midEl);
+  check('restore_id_restores_verdict',
+    draftNote.textContent.indexOf('settings.meFaceAutoResolved') >= 0);
+
+  // default face is LOCALIZED (no raw 'default' jargon in the zh UI)
+  global._stgFaceResolutions = window._stgFaceResolutions = { 0: {
+    byModel: { 'claude-opus-4.6': { model_id: 'claude-opus-4.6', ok: true,
+      face: 'default', protocol: 'openai',
+      base_url: 'https://gw/v1/openai/native', forced: false, error: '' } },
+    faces: ['default', 'anthropic'], dualFaceHost: true } };
+  _repaintFaceAutoNote(0);
+  check('default_face_localized',
+    draftNote.textContent.indexOf('settings.meFaceDefaultFace') >= 0);
+
+  // New model (empty saved id): typing an id shows the honest pending line
+  _stgProviders[0].models.push({ model_id: '', aliases: [],
+    capabilities: ['text'], rpm: 30, cost: 0.01 });
+  seedResolutions();
+  window._resolveCalls = 0;
+  form = openForm(2);
+  const newNote = form.querySelector('.stg-face-auto-note');
+  check('new_model_no_verdict_yet',
+    newNote.textContent.indexOf('settings.meFaceAutoResolved') < 0);
+  check('new_model_open_fires_no_backend', window._resolveCalls === 0);
+  const newMid = form.querySelector('.stg-edit-mid');
+  newMid.value = 'claude-opus-5';
+  _onModelIdDraftInput(newMid);
+  check('new_model_typing_shows_pending',
+    newNote.textContent.indexOf('settings.meFaceAutoDraft') >= 0);
+  check('new_model_still_no_backend', window._resolveCalls === 0);
+
   // ══ NEUTER 1: drop the auto-note from the edit form → no verdict ══
   {
     const n = ME_SRC.replace(
@@ -352,6 +403,26 @@ try {
     indirectEval(PF_SRC);   // restore
     indirectEval(ME_SRC);
   }
+
+  // ══ NEUTER 4: blind the draft check → the stale verdict SURVIVES a
+  // rename (the exact wrong-claim failure the draft branch prevents) ══
+  {
+    const n = ME_SRC.replace(
+      "if (_draft !== ((m && m.model_id) || '')) {",
+      'if (false) {');
+    check('N4_applied', n !== ME_SRC);
+    indirectEval(n);
+    seedProviders();
+    seedResolutions();
+    const f = openForm(0);
+    const mEl = f.querySelector('.stg-edit-mid');
+    mEl.value = 'claude-opus-5';
+    _onModelIdDraftInput(mEl);
+    const nn = f.querySelector('.stg-face-auto-note');
+    check('N4_stale_verdict_survives',
+      nn.textContent.indexOf('settings.meFaceAutoResolved') >= 0);
+    indirectEval(ME_SRC);   // restore
+  }
 } catch (e) {
   check('harness_threw: ' + (e && e.message), false);
 } finally {
@@ -367,7 +438,7 @@ def test_model_edit_redesign():
         target_js=MODEL_EDIT_JS,
         body_js=body,
         extra_targets=[PROVIDER_FACES_JS],
-        min_pass=40,
+        min_pass=52,
         label='model-edit-redesign',
     )
 
@@ -413,6 +484,7 @@ def test_new_i18n_keys_have_both_languages():
     keys = [
         'settings.meFaceAutoResolved', 'settings.meFaceAutoPending',
         'settings.meFaceAutoRefused', 'settings.meFaceAutoSkipped',
+        'settings.meFaceAutoDraft', 'settings.meFaceDefaultFace',
     ]
     missing = []
     for k in keys:

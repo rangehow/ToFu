@@ -1999,6 +1999,8 @@ var _i18n = {
   'settings.meFaceAutoPending': { zh: '自动选择结果解析中…', en: 'Resolving the automatic selection…' },
   'settings.meFaceAutoRefused': { zh: '⚠️ 自动规则无法路由该模型：{error}', en: '⚠️ The automatic rule cannot route this model: {error}' },
   'settings.meFaceAutoSkipped': { zh: '（该模型当前不参与路由，无协议面）', en: '(this model is not currently routed — no wire face)' },
+  'settings.meFaceAutoDraft': { zh: '模型 ID 已修改——保存后将按新 ID 重新解析', en: 'Model ID changed — the automatic selection will be re-resolved on save' },
+  'settings.meFaceDefaultFace': { zh: '默认面', en: 'default face' },
   'settings.wireFaces': { zh: '备用协议面', en: 'Alternate wire faces' },
   'settings.protocol': { zh: '协议', en: 'Protocol' },
   'settings.protocolHint': { zh: '默认面线路协议；responses 用于 Responses API 端点（DeepSeek-V4-Flash / Codex）', en: 'Default-face wire protocol; use responses for Responses API endpoints (DeepSeek-V4-Flash, Codex)' },

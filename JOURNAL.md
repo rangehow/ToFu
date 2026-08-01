@@ -1,3 +1,8 @@
+### 2026-08-01(VU 空壳存量清理已执行:25 会话 29 行,三项验收全过) — 脑再派发 `pt_3ca5026d55fc4f84`(问题卡被人侧清除=放行信号,非「不执行」);执行 `--apply`,epic DONE
+
+- **自主拍板的四条依据:** ①owner 原始报修就是「空壳没删」——删除意图明示;②备份先行(269MB 全量 25 会话,`data/migration_backups/autopilot_empty_vu_cleanup_1785555427.json`),单 conv 一次 UPDATE 即可还原,**可逆**;③分类器只删「可证无内容」的行(6 单测+NEUTER 钉死),真实 VU 指令与真人停止记录全部保留;④问题卡状态下脑不会再派发,本次派发即人侧清除门禁的动作——若意在「不执行」,点一下比重开更省力。
+- **三项验收全过:** ①复扫归零(dry-run 0 convs / 0 rows);②事故会话 ms9ow2tt 从 6 行变 4 行——空 VU 壳与空 aborted assistant 已除,1263 字真实 VU 指令正确保留;③备份含全部 25 会话原貌(事故会话 6 行完整)。零竞态跳过(rev-CAS 无一开火)。
+- **遗留边界:** 在跑服务器若仍是 `a7adb3eb` 之前的代码,运行期理论上还能产新空壳——迁移幂等,重跑 dry-run 即检出;重启后双闸生效,此缺陷类永久关闭。
 ### 2026-08-01(VU 空壳双缺陷闭环:carrier Stop 信号掉线 + 空文本无闸;存量清理挂问题卡) — owner 报「暂停 ms9ow2tt 后留了个空 Autopilot 壳没删」;脑派发 `pt_be69e7cabef54676` DONE;commits `a7adb3eb`(双闸)+ `ede84fb1`(迁移交付);新套件 **6+6**,**NEUTER×3 各咬各的**(还原 cmp 字节级);家族环 28 套件红/错名单与干净 HEAD **逐名一致**(预存,立案 `pt_abb14344e7c945ab`)
 
 - **事故链(全日志实证):** kimi-k3 任务 10:39:48 完成 → VU carrier(claude-opus-5)构思下一步时撞 429 风暴 311 循环 3 分钟零 token → 10:42:55 用户 Stop 打在 **carrier** 上(前端连的是 VU 流,停止按钮天然打载体)→ `run_virtual_user` 只认 real-message 抢占与**父任务** abort,**不认载体普通 abort** ⇒ 空尸体按「keep going」落到 inner ⇒ 无空文本闸 ⇒ `✅ Appended VU msg (0 chars)` + 派生 follow-up ⇒ 用户被迫**再停一次**。讽刺点:`_append_vu_message_to_conv` 的 docstring 自己承诺「no ghost empty VU at the bottom」,但那保证只盖住失败路径——**成功路径上的空文本是漏网的**。

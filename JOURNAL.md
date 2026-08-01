@@ -1,3 +1,10 @@
+### 2026-08-02(预存红清剿:tool_rounds_rich.js 的 bare renderChat( 迁移进 ConvView seam——全树零裸调用复归) — 脑派发接我自票 `pt_3f84ebfc876a4da8`;commit 见下(2 文件);守卫 18/18 转绿;NEUTER 精确(cmp 逐字节还原);邻接环 **38/38**
+
+- **病灶:** Epic-E sub-4(`fcddc420`)引入的 `_upgradeDegradedToolRounds` IIFE(deferred 富渲染包落地后给降级的 conv-meta/timer 轮做升级重渲染)用了裸 `renderChat(conv)`——`test_full_repaints_route_through_replaceAll` 的全树零裸调用契约当场抓住(step-5 后豁免注册表本已清零,这一处是 sub-4 的新增漏网)。
+- **修法:** 改走 `window.ConvView.replaceAll(conv.id, { forceScroll: false })`(全仓 15+ 处同款成语);forceScroll:false 对后台静默升级更优(不拽用户滚动条);`typeof renderChat` 守卫一并退役(seam 由 boot 硬检查保底,守卫明确禁止 typeof-guard 回潮)。
+- **纪律:** 红→绿(守卫精确红在 1 处裸调用);NEUTER 回注裸调用→守卫精确 1 红,cmp 逐字节还原;邻接环 38/38(含 Epic-E 自家 rich split/modes/wire parity——seam 迁移对 deferred 渲染契约零失真)。
+- **方法记一笔:** 预存红清剿三步仍是铁律——先证 HEAD 可复现(文件零未提交 diff ⇒ 非兄弟 WIP、非我回归)、再按原契约的意图修(不是登记豁免,step-5 的精神是「无物可免」)、NEUTER 用守卫本身当验尸官。
+
 ### 2026-08-02(run_command 命令体默认折叠进标题:描述即开关,长命令不再刷屏) — owner 指令「代码默认折叠在标题里,用户反正不看代码」;commit `e53ba261`(5 文件);新套件 **2/2**(failing-first 精确 2 红);wire-parity 基线 43→45 **零既有轮失真**;邻接环 **38/38**
 
 - **形态:** run_command/code_exec 卡片的 `$ 命令` <pre> 默认折叠——判据=有 description 且命令为多行或 >100 字符(短单行如 `npm test` 保持可见=一瞥即读;无 description 保持可见=命令是卡片唯一身份,折叠即匿名)。**描述本身成为开关**(chevron `▸` 前缀,点击原地展开/收起),正合 owner「折叠在标题里」的原话;展开态按 toolCallId 持久(`_cmdBodyExpanded` Set),运行中 tool_progress 每次重渲染不塌回、时间线同步/换会话后仍记得。

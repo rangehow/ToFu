@@ -1069,13 +1069,18 @@ if (typeof window !== 'undefined' && !window._timerCountdownTicker) {
  * exist (the common case — the feature bundle idle-prefetches every boot). */
 (function _upgradeDegradedToolRounds() {
   try {
-    if (typeof getActiveConv !== 'function' || typeof renderChat !== 'function') return;
+    if (typeof getActiveConv !== 'function') return;
     const conv = getActiveConv();
     if (!conv || !conv.messages) return;
     if (typeof activeStreams !== 'undefined' && activeStreams && activeStreams.has(conv.id)) return;
     const hasRich = conv.messages.some((m) => m && Array.isArray(m.toolRounds) && m.toolRounds.some((r) =>
       r && ((r._timerPolls && r._timerPolls.length) || r._timerSkipCount ||
         (typeof _isRoundConvMeta === 'function' && _isRoundConvMeta(r)))));
-    if (hasRich) renderChat(conv);
+    /* Full-tree contract (test_full_repaints_route_through_replaceAll): every
+     * whole-conv repaint routes through the ConvView seam — bare renderChat(
+     * is globally zero outside conv_view.js / chat_render.js. forceScroll:
+     * false because this is a silent background upgrade — never yank the
+     * user's scroll position for it. */
+    if (hasRich) window.ConvView.replaceAll(conv.id, { forceScroll: false });
   } catch (e) { /* best-effort upgrade — the next natural render fixes it */ }
 })();

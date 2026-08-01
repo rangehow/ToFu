@@ -156,6 +156,10 @@ const _DEFERRED_ENTRY_POINTS = [
   'submitHumanGuidanceChoice', 'submitHumanGuidanceFreeText',
   'undoConvModifications', 'undoAllModifications', 'redoConvModifications',
   'openApplyModal', 'closeApplyModal', 'confirmApplyCode',
+  // Cost popover (deferred 2026-08-01, Epic-E sub-8) — chat-rendered on
+  // every assistant message with cost info; click loads the bundle, then
+  // builds + shows the popover from the _costCtxByMsg stash.
+  '_toggleCostPopover',
 ];
 _DEFERRED_ENTRY_POINTS.forEach(_installFeatureStub);
 window._DEFERRED_ENTRY_POINTS = _DEFERRED_ENTRY_POINTS;

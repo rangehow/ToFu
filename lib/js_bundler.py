@@ -705,6 +705,13 @@ _BUNDLE_FILES = [
     # chat_render.js; consumed by translation.js, so load BEFORE it.
     'ui/translation_render.js',
     'ui/popups.js',
+    # ui/finish_info.js — SLIMMED 2026-08-01 (Epic-E sub-8): the
+    # cost-popover family (_buildCostPopover + interaction cluster,
+    # ~24KB) moved to DEFERRED ui/finish_info_rich.js and builds LAZILY
+    # on first open from the _costCtxByMsg stash (renderFinishInfo no
+    # longer embeds pre-built popover HTML per message). The cache-break
+    # phrase family stays (the collapsed bar's warn tooltip renders at
+    # paint). _toggleCostPopover is a feature-loader entry point.
     'ui/finish_info.js',
     # ui/tool_rounds.js — SLIMMED 2026-08-01 (Epic-E sub-4): the conv-meta
     # rich-render family + Timer Watcher block + ticker moved to DEFERRED
@@ -1125,6 +1132,11 @@ _DEFERRED_FILES = [
     # reset) are typeof-guarded. Entry-point stubs cover the bar's
     # openProjectModal and every chat-rendered submit handler.
     'project.js',
+    # Cost popover (24KB) — deferred 2026-08-01 (Epic-E sub-8). Builds
+    # lazily on first open from the _costCtxByMsg stash (see the
+    # _BUNDLE_FILES moved-note); legacy embedded content wins when
+    # present (mixed-shape bundles safe).
+    'ui/finish_info_rich.js',
 ]
 
 # The entry-point functions the feature bundle DEFINES. feature-loader.js
@@ -1169,6 +1181,10 @@ _DEFERRED_ENTRY_POINTS = (
     'submitHumanGuidanceChoice', 'submitHumanGuidanceFreeText',
     'undoConvModifications', 'undoAllModifications', 'redoConvModifications',
     'openApplyModal', 'closeApplyModal', 'confirmApplyCode',
+    # Cost popover (deferred 2026-08-01, Epic-E sub-8) — the cost tag is
+    # chat-rendered on every assistant message, so its onclick must load
+    # the feature bundle and build+show the popover, never ReferenceError.
+    '_toggleCostPopover',
 )
 
 # ── Bundle-manifest freshness (2026-07-24 / 2026-07-31 incident class) ──

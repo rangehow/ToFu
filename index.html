@@ -72,7 +72,11 @@
       'toggleBrowser','toggleSwarm','toggleAutoTranslate',
       'toggleAutoApply','selectThinkingDepth','cycleSearchMode','enterImageGenMode',
       'toggleSidebarSearch','closeSidebarSearch','togglePaperMode',
-      'openOrchestration','openTaskMode','openDailyReport'];
+      /* 'openDailyReport' REMOVED 2026-08-02 (pt_248c41b0): deferred in
+         sub-6 — the LoadGuard _notReady stub makes feature-loader skip
+         the lazy stub, so the My Day button toasted "please wait" and
+         never loaded the bundle before the prefetch landed. */
+      'openOrchestration','openTaskMode'];
     for (var i = 0; i < stubs.length; i++) {
       (function(name) {
         window[name] = function() { _notReady(); };

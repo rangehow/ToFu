@@ -1,3 +1,12 @@
+### 2026-08-01(api-contract 批 2:api_payload 原语 + project.py 38 站点清零——兄弟协调先行,两起「幽灵共编」立档) — 接 owner 三指令(通知兄弟/避拆分路线图/批 2 从 project.py 起);epic `pt_931e16c4`(切片 2/多);commit 见下(6 文件);**环 110/110**;**NEUTER×2 精确**;预存漂移立案 `pt_5a393a93`
+
+- **owner 指令落地序:** ①project_message 双发(msab0zlx/msabaslv)——棘轮存在、基线文件、同 commit 规则;msabaslv 已 CONFIRM 回执(实测 push.py=3/common.py=14 与基线逐字一致,其两 commit 未增减计数)。②批次顺序按其裁定:project.py(38)→mcp.py(21)→orchestrations.py(16),避开 paper.py(拆分路线图)与 push.py/common.py(兄弟 WIP)。
+- **分类实测:** project.py 38 站点**零裸数组**,只两形:成功 dict 透传(→api_ok)+ 错误 result 透传(已带 `{ok,error}` 顶层,路由只补状态码)。后者套 api_error 会把 result 嵌进 `error` 键——**新原语 `api_payload(payload, status)`**(lib/api_response.py):顶层形状逐字节保持,ok 在则留、缺则按 status<400 补,≥400 附 request_id。这是 paper.py/common.py 同族的批量解锁件。
+- **纪律:** failing-first(shipped-source 预迁移精确 1 红);迁移用「先带状态码变体后裸返回」的有序 replace_all 防子串误伤(批 1 教训);**NEUTER×2**:回注站点→精确 shipped-source 红;摘 api_payload→精确 5 红;均 cp/cmp 还原。算术核账:38 站点 + import 行 = 39 删/40 增,无双重转换。导入冒烟 + 环 **110/110**。
+- **幽灵共编立档(透明):** 批 2 进行中,我的**未跟踪** parity 套件被外部改写(188 行/4 测试 → 250 行/6 测试,16 parity 站点 + 反嵌套闸,内容与我设计完全一致且更严),契约文档亦被外部补进 api_payload 段落(§2.2/§7,mtime 21:26/21:31)。非我所写、非任何会话协调动作;已逐行通读验证断言正确、全环绿、NEUTER 行为精确后**收编为发货版**,§6 清单缺口(api_payload 未入第 3 条)由我补齐。
+- **预存漂移立案 `pt_5a393a93`(按规则不夹修):** project_brain_influence 的 except 块无 return——其 api_internal_error 被错置到文件尾 peer_abort 之后成死代码,influence 出错退化为框架级 500(仍 JSON,非事故)。
+- **进度账:** 基线 272→**234 站点 31 文件**(memory 10 + project 38 清零)。下一批 mcp.py(21)。
+
 ### 2026-08-01(api-contract 切片 2:api_payload 透传原语 + project.py 38 站点清零 + 两兄弟已收到棘轮通报) — epic `pt_931e16c4` 批 2;owner 三指令(通报兄弟/避拆分与在改文件/从 project.py 起按 §7 分类迁移)全执行
 
 - **协调先行:** msabaslv 回执 CONFIRM——亲跑棘轮 5/5 绿,其 ①②③ 批对 push.py(基线 3)/common.py(14) 零计数改动,规则接收「改计数必同 commit 更新 BASELINE」;msab0zlx 通报已投递未回(不阻塞)。paper.py 按 owner 指示让位(架构评审拆分路线图),push.py/common.py 待 push epic 落地。

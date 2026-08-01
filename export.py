@@ -457,6 +457,18 @@ _OPENSOURCE_KEEP_FILES = {
 OPENSOURCE_EXTRA_EXCLUDE_FILES = OPENSOURCE_EXTRA_EXCLUDE_FILES | {
     'meituan.json',             # internal provider template with corp gateway URL
     'setup_bashrc.sh',          # per-host .bashrc helper (hardcoded corp proxy IP)
+    # Unreferenced marketing assets in static/images/ (~12.4MB total) — the
+    # runtime UI uses static/icons/ (onigiri.svg etc.); NOTHING references
+    # these (verified 2026-08-01: zero project-wide hits for the filenames /
+    # 'images/<name>' paths). Dead weight in every source tarball and clone.
+    'tofu-cache-article-cover.png',
+    'tofu-cache-article-cover-zh.png',
+    'tofu-poster-core-strength.png',
+    'tofu-poster-v2.png',
+    'attach-icon.png',
+    'attach-icon.svg',
+    'onigiri-icon.png',
+    'onigiri-icon.svg',
 }
 
 
@@ -2335,6 +2347,70 @@ def _print_export_summary(dest: Path, mode: str, stats: dict,
     print()
 
 
+# Runtime/operator state that may exist in a dest doubling as a live
+# install — preserved even by the opensource mirror cleanup. Everything else
+# the export excludes is CONTENT (promo/, overleaf_cache/, workdirs, caches):
+# content must not linger in a published mirror.
+_OPENSOURCE_DEST_PRESERVE = {
+    '.git',          # VCS metadata — required by the push flow itself
+    'data',          # chat DB / configs (a dest doubling as a live install)
+    'uploads',       # user uploads
+    '.tofu',         # memories / skills / file-history (user data)
+    '.chatui',       # legacy agent state (user data)
+    'pgdata',        # PostgreSQL cluster (chat history)
+    'pg_backups',    # SQL dumps (chat history)
+    'logs',          # runtime diagnostics
+}
+
+# Per-host files that must NEVER survive into a re-exported dest, even though
+# they're not in the source tree (so the source-name check would otherwise
+# skip them). .tofu_env.json pins an absolute interpreter path; if a stale
+# one from another host/user lingers, server.py re-execs into the WRONG conda
+# env (missing deps → ModuleNotFoundError). It's in ALWAYS_EXCLUDE_FILES so
+# it's never copied — the cleanup actively strips a pre-existing one.
+_FORCE_STRIP_FROM_DEST = {'.tofu_env.json'}
+
+
+def _dest_cleanup_targets(dest: Path, mode: str, source_names: set) -> list:
+    """Top-level items of ``dest`` to delete before the tar copy.
+
+    Non-opensource dests are LIVE INSTALLS: preserve user data AND every
+    export-excluded dir (rm -rf'ing a 5k-file workdir is 100% wasted FUSE
+    I/O — the next tar copy wouldn't put anything back there anyway), plus
+    anything not in source (the user may have created it post-export).
+
+    An opensource dest is a PUBLISH MIRROR of the export set, not a live
+    install: preserve ONLY operator/runtime state
+    (:data:`_OPENSOURCE_DEST_PRESERVE`); every other top-level item —
+    including export-EXCLUDED content dirs (promo/, overleaf_cache/) and
+    stale entries no longer in source — is deleted so the published tree
+    equals the export set. Without this, excluded content committed once
+    rides every subsequent ``git add -A`` forever: this is exactly how
+    promo/ (~26MB) stayed on GitHub years after entering
+    ALWAYS_EXCLUDE_DIRS (2026-06-10), doubling the update tarball.
+    """
+    if mode == 'opensource':
+        preserve = _OPENSOURCE_DEST_PRESERVE
+        mirror_delete = True
+    else:
+        preserve = ({'.git', 'data', 'uploads'} | ALWAYS_EXCLUDE_DIRS
+                    | OPENSOURCE_EXTRA_EXCLUDE_DIRS
+                    | _TOP_LEVEL_ONLY_EXCLUDE_DIRS)
+        mirror_delete = False
+    targets = []
+    for item in dest.iterdir():
+        if item.name in preserve:
+            continue
+        if item.name in _FORCE_STRIP_FROM_DEST:
+            targets.append(item)
+            continue
+        if not mirror_delete and item.name not in source_names:
+            # Not in source → tar won't write here → no need to delete.
+            continue
+        targets.append(item)
+    return targets
+
+
 # ═══════════════════════════════════════════════════════════
 #  Main export logic
 # ═══════════════════════════════════════════════════════════
@@ -2361,51 +2437,15 @@ def export_project(mode: str, dest: Path, dry_run: bool = False,
         print(f"  {C_CYAN}\U0001f4be Destination .git/, data/, and uploads/ will be preserved{C_END}")
         if not dry_run:
             # ── Selective cleanup: delete everything EXCEPT preserved dirs ──
-            #
-            # Preserves three categories of top-level items:
-            #   1. User data:       .git/, data/, uploads/  (chat history, DB, files)
-            #   2. Excluded-by-export dirs: anything tar wouldn't copy from source
-            #      anyway (swebench_workdir, paper, .chatui, .project_sessions, …).
-            #      Cleaning these is 100% wasted FUSE I/O — rm -rf'ing a 5k-file
-            #      swebench_rerun_workdir can take 5+ MINUTES on a remote cluster
-            #      and the next tar copy wouldn't put anything back there anyway.
-            #   3. Anything not in source (the user may have created it post-export
-            #      — leave it alone; tar won't overwrite it either way).
-            #
-            # Net effect: we only remove items the next tar copy will write
-            # over, e.g. lib/, routes/, static/, *.py — small, cheap to delete.
-            _preserve_user_data = {'.git', 'data', 'uploads'}
-            _preserve_excluded = (ALWAYS_EXCLUDE_DIRS | OPENSOURCE_EXTRA_EXCLUDE_DIRS
-                                   | _TOP_LEVEL_ONLY_EXCLUDE_DIRS)
-            # Source top-level entries — anything in dest that's not in source
-            # won't be touched by tar copy, so no need to delete it.
+            # The preserve/delete policy lives in _dest_cleanup_targets (mode-
+            # aware): live-install dests preserve user data + excluded dirs +
+            # non-source items; an opensource publish dest is a MIRROR of the
+            # export set and keeps only _OPENSOURCE_DEST_PRESERVE.
             try:
                 source_names = {p.name for p in ROOT.iterdir()}
             except OSError:
                 source_names = set()
-
-            # Per-host files that must NEVER survive into a re-exported dest,
-            # even though they're not in the source tree (so the loop below
-            # would otherwise skip them). .tofu_env.json pins an absolute
-            # interpreter path; if a stale one from another host/user lingers,
-            # server.py re-execs into the WRONG conda env (missing deps →
-            # ModuleNotFoundError). It's in ALWAYS_EXCLUDE_FILES so it's never
-            # copied — this actively strips a pre-existing one.
-            _force_strip_from_dest = {'.tofu_env.json'}
-
-            targets = []
-            for item in dest.iterdir():
-                if item.name in _preserve_user_data:
-                    continue
-                if item.name in _force_strip_from_dest:
-                    targets.append(item)
-                    continue
-                if item.name in _preserve_excluded:
-                    continue
-                if item.name not in source_names:
-                    # Not in source → tar won't write here → no need to delete.
-                    continue
-                targets.append(item)
+            targets = _dest_cleanup_targets(dest, mode, source_names)
 
             if targets:
                 print(f"  {C_DIM}Cleaning {len(targets)} stale items from prior export…{C_END}")
@@ -2431,8 +2471,8 @@ def export_project(mode: str, dest: Path, dry_run: bool = False,
                                 t.unlink(missing_ok=True)
                         except OSError as e:
                             logger.warning('Failed to remove %s: %s', t, e)
-            logger.info('Cleanup: removed %d items (skipped %s + excluded-from-export + non-source)',
-                        len(targets), _preserve_user_data)
+            logger.info('Cleanup: removed %d items from dest (mode=%s)',
+                        len(targets), mode)
 
     print(f"\n{C_BOLD}{'\u2550'*64}{C_END}")
     print(f"{C_BOLD}  \U0001f4e6 Tofu Export \u2014 Mode: {mode.upper()}  (v{_read_version()}){C_END}")

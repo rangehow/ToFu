@@ -23,16 +23,56 @@ var _updateDoneResult = null; // terminal apply result awaiting the restart deci
 // Ordered stages of an apply run, rendered as the live stepper.
 var _UPDATE_STAGES = ['fetch', 'pull', 'deps'];
 
-/** Silent background check — called once at boot. Populates the badge. */
+var _pendingRestartToastFor = null;  // version already toasted (once per page load)
+
+/** Silent background check — called once at boot. Populates the badge.
+ *  ALSO the reload-robust completion path: a download outlives the page, so
+ *  the server persists the apply outcome — a landed update awaiting restart
+ *  toasts the restart offer here even if the original page is long gone, and
+ *  a still-running download gets its push subscription re-attached so the
+ *  terminal frame still fires (and toasts) without the user re-opening the
+ *  dialog. */
 async function _updateBootCheck() {
   try {
     const r = await Api.update.check();
     if (!r || !r.ok) return;
     _updateState = r;
     _renderUpdateBadge();
+    if (r.pending_restart && r.pending_restart.new_version) {
+      _updateDoneResult = _doneResultFromPending(r.pending_restart);
+      if (_pendingRestartToastFor !== r.pending_restart.new_version) {
+        _pendingRestartToastFor = r.pending_restart.new_version;
+        showToast('✅', t('update.bgDoneTitle').replace('%s', 'v' + r.pending_restart.new_version),
+          t('update.bgDoneBody'), 30000,
+          { hint: t('update.bgDoneHint'), onClick: function () { restartServer(); } });
+      }
+      return;
+    }
+    if (r.apply_in_progress && r.apply_in_progress.task_id && !_updateBusy) {
+      _updateBusy = true;
+      _updateTaskId = r.apply_in_progress.task_id;
+      _subscribeUpdateProgress(r.apply_in_progress.task_id);
+    }
   } catch (e) {
     if (typeof debugLog === 'function') debugLog('[Update] boot check failed: ' + (e && e.message), 'warning');
   }
+}
+
+/** Shape a /update/check pending_restart projection into the done-frame
+ *  result dict the terminal-card renderer already understands. */
+function _doneResultFromPending(p) {
+  const depsFailed = !!(p.deps_changed && !p.deps_installed);
+  return { ok: !depsFailed, changed: true, needs_restart: true,
+           new_version: p.new_version || '', old_version: p.old_version || '',
+           deps_changed: !!p.deps_changed, deps_installed: !!p.deps_installed,
+           error: p.error || '', detail: p.detail || '' };
+}
+
+/** Render the terminal apply card: restart-to-apply on success, the
+ *  deps-failed variant when code landed but pip install failed. */
+function _renderDoneCard(r) {
+  if (!r.ok) { _renderDepsFailed(r); return; }
+  _renderUpdateDone(r);
 }
 
 /** Toggle the "update available" dot on the topbar button. */
@@ -78,7 +118,7 @@ async function openUpdateDialog() {
   }
   if (_updateDoneResult) {
     _ensureUpdateScaffold();
-    _renderUpdateDone(_updateDoneResult);
+    _renderDoneCard(_updateDoneResult);
     return;
   }
   _runUpdateCheck();
@@ -234,6 +274,32 @@ function _updateHeroHtml(r) {
 function _renderUpdateDialogBody(r) {
   const body = document.getElementById('updateModalBody');
   if (!body) return;
+
+  // Server-persisted apply outcomes outrank the fresh-check view: a landed
+  // update awaiting restart shows the restart card; a download still running
+  // (started before a page reload) re-attaches the live stepper — otherwise
+  // the user would be offered a SECOND, duplicate 50MB+ download.
+  if (r.pending_restart && r.pending_restart.new_version) {
+    _updateDoneResult = _doneResultFromPending(r.pending_restart);
+    body.innerHTML =
+      _updateHeroHtml(r) +
+      '<div class="upd-action" id="updateActionArea"></div>' +
+      '<div id="updateLifecycleApprovals" style="display:none"></div>';
+    _renderDoneCard(_updateDoneResult);
+    return;
+  }
+  if (r.apply_in_progress && r.apply_in_progress.task_id && !_updateBusy) {
+    _updateBusy = true;
+    _updateStageState = {};
+    _updateDoneResult = null;
+    body.innerHTML =
+      _updateHeroHtml(r) +
+      '<div class="upd-action" id="updateActionArea"></div>' +
+      '<div id="updateLifecycleApprovals" style="display:none"></div>';
+    _renderUpdateStepper();
+    _subscribeUpdateProgress(r.apply_in_progress.task_id);
+    return;
+  }
 
   let actionHtml = '';
   if (!r.update_available) {
@@ -1047,8 +1113,11 @@ function closeUpdateModal() {
 }
 
 // Boot check shortly after load (don't block first paint / chat boot).
+// _onReady (feature-loader.js, core) — NOT window 'load': a deferred module
+// lands AFTER the load event fired, so a load listener would never run and
+// the update check would silently never happen (Epic-E sub-9).
 if (typeof window !== 'undefined') {
-  window.addEventListener('load', function () {
+  _onReady(function () {
     setTimeout(_updateBootCheck, 3000);
   });
 }

@@ -153,6 +153,8 @@
 - **状态:** 主路径(BIND_HOST shell 重启)放弃,走备选:办公机 `ssh -L 15000:127.0.0.1:15000 <codelab-ssh>` + agent 连 `http://127.0.0.1:15000`。答复后实测注册表仍空、egress 五态 unknown——agent 尚未起。**watcher 形态修正(吸收 7-31 误报教训):不用 condition_command 退出码(本环境观测不可靠),改 check_command 输出注册表 JSON 由 poll LLM 读内容判定**——`agents` 非空且含 `egress=true` 才算 ready,空表/缺能力位不触发。60s×30 轮(30 分钟窗口),耗尽则挂板请 owner 贴 agent 控制台输出。
 - **agent 上线后验收序:** 能力位 → oauth/status 翻 `state=agent`+`verdict=geo_blocked` → Claude 登录(服务器交换优先序) → 流式聊天(egress_http_stream 全链) → Codex O3(curl_cffi 是否必需)定案。
 
+### 2026-08-01(续·sub-5A/5B 生产实测补齐:服务器恢复后 runbook 26 项 ALL GREEN,core 1,384,317 B) — timer tmr_3cb93f4a 追 35 轮(~35min)服务器 HTTP 200 恢复后自动补验;生产 `bundle-f53ca113.js` 1,384,317 B(比农场更小——含兄弟 b1b1a4e2/959fd1c9/3d51d9a1 等增量,hash 不同属预期);累计基线 −166KB 压缩态,距 1.2MB ~184KB;分类账流水已回写实测值。期间一次共享树虚惊:我的 JOURNAL 条目被兄弟 `6c3d494f` 连同其假离线条目原样代提(净结果正确),LEDGER/runbook 两文件后由我补提;另有 3 个兄弟 staged 文件被 count-assertion 拦下逐出。
+
 ### 2026-08-01(Epic-E sub-5A+5B:第三梯队双连发——access_matrix 零改动降级 + swarm_panel 七闸降级,农场 core 1,418,722 B) — commits sub-5A `见 git log` + sub-5B(6 文件);两套件 8+10 检查,NEUTER×4 全精确;环 46/46;生产实测因服务器事件环停摆挂起(timer 追)
 
 - **sub-5A(access_matrix.js 55KB,普查结论「零改动可降级」):** 三个外部调用点**全部早已 typeof 闸**(core_panel.js:108、provider_render.js:261、canMatrix 门 227-243——矩阵开关钮本身只在模块在场时渲染,内联 onclick 永不射空);`_stgMatrixOpen` 声明在模块内随包走;唯一 load-time 副作用是自足 resize IIFE。这是「旧代码本来就写对了」的免费降级——普查先于改动再次兑现。

@@ -1,3 +1,9 @@
+### 2026-08-01(api-contract 收尾挂问题卡:只剩 paper.py 的排序权交回 owner + 契约文档同步至批 21 现实) — epic `pt_931e16c4` [human-gated] 问题卡已上板
+
+- **状态:** 21 批 225/272 站点清零(82.7%),基线只剩 paper.py 47。避让指令的前提实证不成立(拆分无 epic、无人认领、文件零 WIP),但不擅自绕开 owner 明令——问题卡三选项上板:**(a) 先迁后拆[我推荐]**(迁移后 api_* 行对按行搬的拆分完全等价,假想冲突不存在)/(b) 等拆分落地/(c) 我先拆后迁。人答即续。
+- **顺手收口(不依赖答案的部分):** 契约文档同步到批 21 现实——§4 桥行补 routes/desktop.py(批 20 注册的倒影)、裸数组行从「chat_queue 冻结于基线」(已被批 21 证伪)改写为「八族全部已迁 + 三种解包契约(|| [] / null 保持 / 调用方自解)」、§5 表补 21 个批 parity 套件行。幽灵的 §4 裸数组退休路径改写在先(增益收编),我补其三处未跟进的漂移。
+- **全天总账:** 272 站点 33 文件 → 47 站点 1 文件;新原语 api_payload;裸数组判定树四态封版;「+ok 仅对按名读消费方安全」与「形状迁移连 api_meta/注释/契约文档一起迁」两条新判据入档;幽灵共编 3 次(增益×2、削弱×1,全部逐行复核后收编或并集加固)。
+
 ### 2026-08-01(Epic-E sub-9 收尾:HEAD 自洽四修 + 6 防御 stub——共享树「先验后修」判例第五起;生产 core 1,274,221 B) — epic `pt_3879f00e`;commit `05da24cd`(10 文件);环 **94/94**;NEUTER×2 精确;runbook **42/42 ALL GREEN**(农场/生产同 hash `b9c7fb1f`)
 
 - **定性:联合批的「悬空半边」由本会话补齐。** sub-9 主体(9a50c00f)落地时,生产重建携带了树内四处未提交修复通过 runbook 42 项——干净 HEAD 却缺它们:①**`_esc` 提级**(普查抓出的隐藏耦合:memory.js 的顶层 `_esc` 是全仓唯一顶层定义,artifacts 9/compaction-viewer 36/toast 3/log-clean 8/streaming_ui 2/translation_render 4 共 ~62 调用点经 window 解析到它;降级即首渲染 ReferenceError)——提级 core/escape_html.js(位置 8,先于全部消费方)+ 删副本;②**LoadGuard 摘 'toggleMemory'**(deferred 入口被 `_notReady` 预装 ⇒ `_installFeatureStub` 的 `typeof window[name]==='function'` 跳过 ⇒ 懒 stub 永不安装,工具栏记忆钮永久死态;兄弟背书「core 函数才进 LoadGuard」,sub-6 openDailyReport 是同坑遗留,按 owner 惯例单独立票不夹修);③main.js `_applyMemoryUI` 对 `_updateMemoryModalBtn` 裸调装闸(boot 工具态路径);④+6 防御 stub(静态面板 onclick 全覆盖:closeUpdateModal/_skillsSetScope/_skillsFilter/openMemoryCreateForm/refreshPreferences/savePreferences,image-gen 先例)。

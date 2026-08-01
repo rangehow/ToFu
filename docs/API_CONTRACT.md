@@ -133,11 +133,11 @@ legal only if it appears here AND in `tests/test_api_contract_drift.py`'s
 |---|---|---|
 | OpenAI compat | `routes/compat_openai.py` | Emulates the OpenAI wire protocol; an `ok` key corrupts protocol fidelity for third-party SDKs |
 | Anthropic compat | `routes/compat_anthropic.py` | Same — Anthropic protocol shape |
-| Desktop-agent bridge | `routes/browser.py`, `routes/_bridge_caller.py` | Long-poll protocol parsed by an external binary (the desktop client); shape is locked outside this repo |
+| Desktop-agent bridge | `routes/browser.py`, `routes/_bridge_caller.py`, `routes/desktop.py` | Long-poll protocol parsed by an external binary (the desktop client); shape is locked outside this repo |
 | SSE streams | chat stream, agent-run, translate stream, compat streams | `text/event-stream` framing; use `sse_response()` for the canonical headers, never hand-set them |
 | Binary / raw payloads | artifact raw/view/export, paper PDF serving, image bytes, podcast audio | Typed bytes with `Content-Disposition` / Range; JSON envelope impossible |
 | Multipart uploads | `/api/images/upload`, `/api/paper/upload`, `/api/pdf/parse`, … | FormData in, but the *response* still follows the envelope |
-| Bare-array legacy payloads | `GET /api/v1/chat/queue/<conv>` returns `[]` (frozen in the drift baseline) | Enveloping an array (`{ok, items}`) changes the top-level type — never additive. The retirement path is the **coordinated front+back migration**, first executed on `GET /api/v1/orchestrations` (2026-08-01): backend `api_ok({'items': …})` + `Api.<domain>.list` unwraps `.items` with an `Array.isArray(d)` fallback for rolling-deploy skew (pinned by `tests/test_api_contract_orchestrations_parity.py`). Sites that cannot migrate yet register in the drift suite's `CARVE_OUT_SITES` with a reason — never a silent baseline remainder. New endpoints MUST wrap arrays in `api_ok({'items': …})` |
+| Bare-array legacy payloads | ALL known instances migrated 2026-08-01 (orchestrations / conversations list / providers-templates / chat active / translate poll-batch / folders ×2 / conv search / chat queue) | Enveloping an array (`{ok, items}`) changes the top-level type — never additive. The retirement path is the **coordinated front+back migration**: backend `api_ok({'items': …})` + the `Api.<domain>` seam unwraps `.items` with an `Array.isArray(d)` fallback for rolling-deploy skew. Unwrap semantics follow the CONSUMER: `|| []` for list UIs (orchestrations/folders/queue/search), **null-preserving** for probes that must distinguish “zero results” from “probe failed” (chat active, translate poll-batch), caller-side unwrap for Response-returning seams (config templates, chat activeResponse). Sites that genuinely cannot migrate register in the drift suite's `CARVE_OUT_SITES` with a reason — never a silent baseline remainder. New endpoints MUST wrap arrays in `api_ok({'items': …})` |
 
 Adding a carve-out requires: (1) a row in this table, (2) an entry in the
 drift test with the same reason, (3) a commit message explaining why the
@@ -151,6 +151,7 @@ envelope is impossible (not merely inconvenient).
 |---|---|
 | `tests/test_frontend_api_isolation.py` | Any `fetch('/api/…')` outside `api.js` (incl. variable-URL bypasses); per-file count may only decrease |
 | `tests/test_api_contract_drift.py` | Any ad-hoc `jsonify(` in `routes/**` outside the carve-out registry; per-file count may only decrease; stale baselines must be tightened in the same commit |
+| `tests/test_api_contract_*_parity.py` (21 batch suites) | Per-batch wire parity (legacy keys byte-identical; additions only +ok/+error/+request_id) + shipped-source tripwires + front/back coordination anchors for every bare-array migration |
 | `tests/test_api_response_route_conversions.py` | The 22 already-converted error sites stay converted (shipped-source tripwire + wire parity) |
 | `tests/test_api_response_safe_route_rollout.py` | `@safe_route` rollout state; documents the handlers that must NOT be decorated (side-effecting except blocks) |
 | `tests/test_request_parser.py` | `BadRequest` → 400 mapping, typed extractors |

@@ -615,6 +615,48 @@ def _run_tray(port: int, proc: subprocess.Popen):
     _shutdown()
 
 
+def _import_preseed() -> None:
+    """Import a server-baked ``preseed_server.json`` into the attachment.
+
+    A server-built installer (lib/desktop_dist/winbuilder.py) bakes the
+    address of the server it was built FROM next to the exe, so the first
+    run attaches without the user pasting anything. Rules:
+
+      * ONE-SHOT — the file is deleted after any attempt, so a stale
+        preseed never overrides an attachment the user has since made.
+      * NEVER overrides an existing attachment — the user's own connect
+        wins over the install-time default.
+      * NON-SECRET (the URL only) — the token still comes from the minted
+        connect line or the tray dialog.
+      * Any failure is logged and the file removed — a bad preseed must
+        never wedge first run.
+    """
+    path = os.path.join(_EXE_DIR, 'preseed_server.json')
+    if not os.path.isfile(path):
+        return
+    try:
+        import json
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f)
+        url = str(data.get('url') or '').strip()
+        if not url.startswith(('http://', 'https://')):
+            raise ValueError('preseed has no http(s) url')
+        from lib.desktop_agent.config import remote_server, \
+            save_remote_server
+        existing, _secret = remote_server()
+        if existing:
+            _log('Preseed ignored (already attached to %s)' % existing)
+        else:
+            save_remote_server(url, '')
+            _log('Preseeded remote attachment from installer: %s' % url)
+    except Exception as e:
+        _log('Preseed import failed (ignored): %s' % e)
+    try:
+        os.remove(path)
+    except OSError as e:
+        _log('Could not remove preseed file: %s' % e)
+
+
 def main():
     # ── Server mode (frozen self-relaunch) ──
     # When this executable is started with TOFU_RUN_SERVER=1 it IS the server:
@@ -719,7 +761,14 @@ def main():
     threading.Thread(target=_open_when_ready, daemon=True,
                      name='tofu-open-browser').start()
 
-    # ── First-launch: offer optional component downloads ──
+    # ── First-launch: import a server-baked preseed (if any), then offer
+    #    optional component downloads. Preseed first: it decides WHICH
+    #    server this machine attaches to, and the component prompt is
+    #    unrelated to it.
+    try:
+        _import_preseed()
+    except Exception as e:
+        _log('Preseed import skipped: %s' % e)
     try:
         from desktop.post_install import is_first_launch, run_first_launch_prompt
         if is_first_launch():

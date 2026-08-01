@@ -38,6 +38,15 @@ Two traps measured while building this (2026-08-01), both pinned by tests:
 Payload cache: ``<data_root>/desktop_toolchain/payloads/`` — the FUSE store
 for cross-boot reuse; the WORK tree lives under the toolchain's local root
 (local disk, see wintoolchain.py).
+
+Half B (the wrapper) is NSIS, not Inno: EVERY 32-bit Windows app measured
+(Inno's own installer, innounp) HANGS under the new WoW64 without the
+preloader, and Inno 7's container resists 7-Zip 23.01 — iscc is
+unobtainable AND unrunnable here (measured 2026-08-01). makensis runs
+natively on Linux (conda-forge nsis): no wine, no display, deterministic.
+The two installer authorings (CI's Inno .iss, our .nsi) are bound by
+tests/test_installer_parity.py — the semantic contract, not the tool, is
+the single source of truth.
 """
 
 from __future__ import annotations
@@ -523,5 +532,136 @@ def _sh(cmd: str, log_fh, *, shell: bool = False,
     return out
 
 
+# ── Half B: the per-client wrapper (NSIS, native) ─────────────────────
+
+_NSI_TEMPLATE = os.path.join(_REPO_ROOT, 'desktop', 'installer.nsi.tmpl')
+_NSI_PLACEHOLDERS = ('@APP_VERSION@', '@PAYLOAD_DIR@', '@OUT_FILE@',
+                     '@ASSET_DIR@')
+
+
+def _ensure_makensis(log_fh) -> str:
+    """Locate makensis: env override, then the provisioned tools prefix.
+
+    Provisioned ONCE from conda-forge (native binary — no wine, no
+    display). conda/mamba comes from the host env; the tools prefix lives
+    in the download cache so it survives /tmp wipes.
+    """
+    override = os.environ.get('TOFU_MAKENSIS', '').strip()
+    if override:
+        return override
+    exe = os.path.join(wintoolchain.cache_dir(), 'tools', 'bin', 'makensis')
+    if os.path.isfile(exe):
+        return exe
+    conda = shutil.which('mamba') or shutil.which('conda')
+    if not conda:
+        raise RuntimeError('makensis not provisioned and no conda/mamba '
+                           'to install nsis with')
+    prefix = os.path.join(wintoolchain.cache_dir(), 'tools')
+    # `create`, not `install`: mamba refuses install into a prefix that is
+    # not yet a conda env ("Environment must first be created", measured).
+    _sh(f'{conda} create -y -p {prefix} -c conda-forge nsis', log_fh,
+        timeout=1800)
+    if not os.path.isfile(exe):
+        raise RuntimeError(f'makensis missing after provision: {exe}')
+    return exe
+
+
+def _render_nsi(version: str, payload_dir: str, out_file: str) -> str:
+    """Render the NSIS template; every placeholder MUST be substituted."""
+    with open(_NSI_TEMPLATE, encoding='utf-8') as f:
+        text = f.read()
+    asset_dir = os.path.join(_REPO_ROOT, 'static', 'icons')
+    text = (text.replace('@APP_VERSION@', version)
+                .replace('@PAYLOAD_DIR@', payload_dir)
+                .replace('@OUT_FILE@', out_file)
+                .replace('@ASSET_DIR@', asset_dir))
+    missing = [p for p in _NSI_PLACEHOLDERS if p in text]
+    if missing:
+        raise RuntimeError(f'NSI placeholders left unrendered: {missing}')
+    return text
+
+
+def _write_preseed(payload_dir: str, server_url: str) -> str | None:
+    """preseed_server.json next to Tofu.exe — the launcher's first-run
+    import contract (desktop/launcher.py). Non-secret: the URL only."""
+    if not server_url:
+        return None
+    import json
+    dest = os.path.join(payload_dir, 'preseed_server.json')
+    with open(dest, 'w', encoding='utf-8') as f:
+        json.dump({'v': 1, 'url': server_url.rstrip('/')}, f)
+    logger.info('[WinBuild] preseeded server url into payload')
+    return dest
+
+
+def wrap_payload(payload_tar: str, version: str, sha: str, log_fh, *,
+                 server_url: str = '', workdir: str | None = None) -> str:
+    """Half B: payload tarball → Tofu-Setup-<ver>-win64.exe in the store.
+
+    Native steps only (untar / makensis) — the whole point of NSIS is
+    that this half needs no wine. Recorded as source='built' so the
+    selector prefers it over the mirrored release (built wins ties, and
+    our version is newer anyway).
+    """
+    workdir = workdir or os.path.join(
+        wintoolchain.rootfs_dir(), 'work', f'wrap-{int(time.time())}')
+    payload_dir = os.path.join(workdir, 'payload')
+    os.makedirs(payload_dir, exist_ok=True)
+    _sh(f'tar xzf {payload_tar} -C {payload_dir} --strip-components=1',
+        log_fh)
+    if not os.path.isfile(os.path.join(payload_dir, 'Tofu.exe')):
+        raise RuntimeError(f'payload has no Tofu.exe: {payload_tar}')
+    _write_preseed(payload_dir, server_url)
+
+    name = f'Tofu-Setup-{version}-win64.exe'
+    out_file = os.path.join(workdir, name)
+    nsi = _render_nsi(version, payload_dir, out_file)
+    script = os.path.join(workdir, 'installer.nsi')
+    with open(script, 'w', encoding='utf-8') as f:
+        f.write(nsi)
+    makensis = _ensure_makensis(log_fh)
+    _sh(f'{makensis} -V2 {script}', log_fh, timeout=3600)
+    if not os.path.isfile(out_file):
+        raise RuntimeError(f'makensis produced no {name}')
+
+    dest = os.path.join(store._store_dir(), name)
+    shutil.copy2(out_file, dest)
+    size = os.path.getsize(dest)
+    h = hashlib.sha256()
+    with open(dest, 'rb') as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b''):
+            h.update(chunk)
+    store.record_artifact({
+        'os': 'windows', 'arch': 'x86_64', 'label': 'Windows installer',
+        'filename': name, 'size': size, 'sha256': h.hexdigest(),
+        'source': 'built', 'version': version,
+        'fetched_at': time.time(), 'git_sha': sha,
+        **({'preseed': {'url': server_url}} if server_url else {}),
+    })
+    logger.info('[WinBuild] installer built: %s (%d bytes)', name, size)
+    return dest
+
+
+def build_installer(reason: str = 'manual', server_url: str = '') -> dict:
+    """Full S2+S3 orchestration: payload (cached when possible) → wrapper.
+
+    The wrapper re-runs even when the payload is cached — it is the cheap
+    half, and the preseed may differ per client.
+    """
+    _run(reason)
+    st = state()
+    if st.get('state') != 'ok':
+        return st
+    version = st['version']
+    sha = st['git_sha']
+    log_path = os.path.join(_payloads_dir(), 'winbuild.log')
+    with open(log_path, 'a', encoding='utf-8') as log_fh:
+        dest = wrap_payload(st['payload'], version, sha, log_fh,
+                            server_url=server_url)
+    _set_state(installer=dest, wrapped_at=time.time())
+    return state()
+
+
 __all__ = ['start', 'state', 'is_running', 'cached_payload',
-           'payload_path', 'deps_stamp']
+           'payload_path', 'deps_stamp', 'build_installer',
+           'wrap_payload']

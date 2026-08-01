@@ -118,14 +118,24 @@ template (§4.3) with `/DAppVersion` → `iscc` under wine → record artifact
 `source='built'`, `os='windows'`, `arch='x86_64'`, plus `preseed: {url}`
 metadata.
 
-### 4.3 ONE installer authoring — `desktop/installer.iss.tmpl`
+### 4.3 TWO installer authorings, ONE contract — NSIS on the server
 
-Today the Inno script is a heredoc inside `.github/workflows/build-desktop.yml`
-(line ~451): the server reproducing it would be a second copy of the same
-rules. Extract it to `desktop/installer.iss.tmpl` (placeholders
-`@APP_VERSION@`); CI renders it with bash, the server with str.replace —
-one authoring, two renderers, and a drift test asserting the workflow
-references the template.
+The plan WAS to share one Inno template with CI. Measured verdict
+(2026-08-01, S3 gate): **iscc is unobtainable AND unrunnable on this
+box.** Every 32-bit Windows app measured — Inno's own installer (7.0.2
+x64) and innounp alike — HANGS under the preloader-less WoW64 (the
+container's seccomp SIGSYS-kills the preloader; the direct-exec fallback
+runs 64-bit apps fine but 32-bit ones never return), and Inno 7's
+installer container resists 7-Zip 23.01 extraction, so there is no
+installerless way to even GET iscc.
+
+So the wrapper is **NSIS** (`desktop/installer.nsi.tmpl`): makensis runs
+NATIVELY on Linux (conda-forge), no wine, no display, seconds per wrap.
+The CI keeps its Inno authoring. The drift defence is NOT one file — it
+is `tests/test_installer_parity.py`, which pins the semantic contract
+both authorings must honour (app name, install dir, privilege level,
+shortcuts, launch-after-install, output naming, wizard assets, payload
+shape). The contract, not the tool, is the single source of truth.
 
 ### 4.4 Launcher preseed import — `desktop/launcher.py`
 
@@ -183,16 +193,21 @@ build mirrored" question has a citation instead of a re-investigation.
 
 - **S1** `wintoolchain.py` — provisioning + wine runner. Tests: staged
   provisioning with faked downloads; the REAL probe transcript (this
-  investigation) pinned as the acceptance evidence.
+  investigation) pinned as the acceptance evidence. **LANDED 2026-08-01
+  (`b454be27`)** — live provision ~180 s, wine-11.14 runs.
 - **S2** `winbuilder.py` Half A — payload build + sha/deps cache. Tests
   fake the pipeline, drive the real recording; cache-hit logic NEUTER-tested.
-- **S3** `installer.iss.tmpl` extraction + CI rewiring + Half B wrapper +
-  build route extension (`os:"windows"`). Drift test for the template.
-- **S4** launcher preseed import + serving wiring + README/JOURNAL.
-  Tests: preseed import (present/absent/malformed), selector preference,
-  download-route user guard (Phase-2-ready shape).
-- **Phase 2** (separate epic): per-user token-baked installers — store
-  `user_id` semantics, route guard enforcement, per-user build queue.
+  **LANDED 2026-08-01 (`704641fe`)** — two REAL payloads on two HEADs
+  (152.7 MB, 3316 files, `TOFU_SMOKE_OK version=0.16.0 blueprints=57`).
+- **S3** ~~`installer.iss.tmpl` extraction + CI rewiring~~ **PIVOTED to
+  NSIS** (see §4.3 — the 32-bit measurement is the reason): Half B
+  wrapper + launcher preseed + parity suite. **LANDED 2026-08-01
+  (`619a0118` + `0048f28a` + route wiring `8a25a8ad`)** — real
+  `Tofu-Setup-0.16.0-win64.exe` (152,886,951 B) recorded `source='built'`;
+  `find_for_platform('windows')` prefers it over the mirrored 0.14.2.
+- **S4** serving wiring: build route `{os:'windows'}` (`8a25a8ad`) +
+  status autobuild gate (same env var as Linux). Phase 2 (per-user
+  token-baked installers) stays a separate epic.
 
 ## 9. Acceptance
 

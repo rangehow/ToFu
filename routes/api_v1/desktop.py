@@ -142,6 +142,16 @@ def _request_platform_downloads(arch_override: str = '') -> list[dict]:
             from lib.desktop_dist import builder as _dist_builder
             if not _dist_builder.is_running():
                 _dist_builder.start(reason='autobuild')
+    # Same opt-in for Windows: no built installer → kick the Wine-toolchain
+    # build (payload cached per (git_sha, deps), then the NSIS wrapper).
+    # macOS never gets one — the documented permanent boundary.
+    if (os_key == 'windows'
+            and not any(e.get('source') == 'built' for e in rows)):
+        import os as _os
+        if _os.environ.get('TOFU_DESKTOP_DIST_AUTOBUILD') == '1':
+            from lib.desktop_dist import winbuilder as _win_builder
+            if not _win_builder.is_running():
+                _win_builder.start_installer(reason='autobuild')
     base = (request.host_url or '').rstrip('/')
     out = []
     for e in rows:

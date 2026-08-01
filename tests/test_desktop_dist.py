@@ -582,6 +582,44 @@ def test_the_download_route_refuses_anything_but_a_manifest_key(
         assert r.status_code == 404, (bad, r.status_code)
 
 
+@pytest.mark.api
+def test_the_windows_autobuild_gate(tmp_store, flask_client, monkeypatch):
+    """The Windows autobuild is env-gated, single-flight, and only kicks
+    when NO built installer exists — the same shape as the Linux gate."""
+    from lib.desktop_dist import winbuilder
+    kicks = []
+    monkeypatch.setattr(winbuilder, 'start_installer',
+                        lambda *a, **k: kicks.append((a, k)) or
+                        {'state': 'running'})
+    monkeypatch.setattr(winbuilder, 'is_running', lambda: False)
+
+    # No built artifact + gate ON → kicked.
+    monkeypatch.setenv('TOFU_DESKTOP_DIST_AUTOBUILD', '1')
+    r = flask_client.get('/api/v1/desktop/status',
+                         headers={**_bearer(), 'User-Agent': _UA_WIN})
+    assert r.status_code == 200
+    assert kicks, 'no built artifact + gate on must kick the build'
+    assert kicks[0][1].get('reason') == 'autobuild' or \
+        (kicks[0][0] and kicks[0][0][0] == 'autobuild')
+
+    # Gate OFF → no kick even with an empty store.
+    kicks.clear()
+    monkeypatch.delenv('TOFU_DESKTOP_DIST_AUTOBUILD')
+    r = flask_client.get('/api/v1/desktop/status',
+                         headers={**_bearer(), 'User-Agent': _UA_WIN})
+    assert r.status_code == 200
+    assert not kicks, 'the gate must be opt-in, never implicit'
+
+    # A BUILT artifact present → no kick even with the gate on.
+    monkeypatch.setenv('TOFU_DESKTOP_DIST_AUTOBUILD', '1')
+    _seed(tmp_store, 'Tofu-Setup-0.16.0-win64.exe', source='built',
+          version='0.16.0')
+    r = flask_client.get('/api/v1/desktop/status',
+                         headers={**_bearer(), 'User-Agent': _UA_WIN})
+    assert r.status_code == 200
+    assert not kicks, 'a built artifact already there must not rebuild'
+
+
 @pytest.mark.unit
 def test_the_route_keeps_the_extracted_names_importable():
     """The helpers moved to lib/desktop_dist/platforms; the route re-exports

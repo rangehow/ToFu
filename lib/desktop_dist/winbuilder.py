@@ -685,4 +685,4 @@ def build_installer(reason: str = 'manual', server_url: str = '') -> dict:
 
 __all__ = ['start', 'state', 'is_running', 'cached_payload',
            'payload_path', 'deps_stamp', 'build_installer',
-           'wrap_payload']
+           'start_installer', 'wrap_payload']

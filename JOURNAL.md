@@ -1,3 +1,11 @@
+### 2026-08-01(S3 落地:32 位死刑判决 → NSIS-native 转正,第一个服务器自建 Windows 安装包诞生;共享树虚惊一场) — commits `619a0118`(主体 5 文件)+ `0048f28a`(wrapper 测试 + mamba create 修)+ `8a25a8ad`(路由接线,teammate)+ 本批 autobuild 闸;**真件:`Tofu-Setup-0.16.0-win64.exe` 152,886,951 B,7z 验 Tofu.exe+preseed_server.json 在包内,`find_for_platform('windows')` 已偏好 built**
+
+- **32 位开放问题定案(iscc 死刑):** Inno 自家安装器(x64 包)与 innounp 两个 32 位应用在新 WoW64 无 preloader 下**一致挂死**(64 位 python.exe 正常);7-Zip 23.01 解不开 Inno 7 容器 ⇒ **iscc 不可得亦不可跑**。设计稿预案转正:makensis(conda-forge 原生)接管 wrapper——无 wine 无显示,每次 wrap 秒级。漂移防御从「单一模板」改「语义契约 parity 套件」(`test_installer_parity.py`:安装目录/权限/双快捷方式/启动项/命名/资产/载荷形状,workflow heredoc vs installer.nsi.tmpl 双反斜杠形态差如实钉)。
+- **launcher 预植闭环:** `_import_preseed` —— 一次性(任何尝试后删除)、永不覆盖既有挂载、非密(仅 URL)、坏文件不挡首启;套件 5/5。
+- **共享树虚惊(方法论记一笔):** 我自己的 commit 只落了 2 文件时以为兄弟 reset 了我的 index,查下去是**一个看不见的 teammate 会话把我未提交的 5 文件原样提交进 `619a0118`(工作区与 HEAD 零差异),还补了 start_installer + 路由 {os:'windows'} 接线(`8a25a8ad`)**。判据:在共享树上「我的活被别人提交了」先 diff 工作区 vs HEAD 再定性——零差异 = 内容被原样代提,不是覆盖。
+- **autobuild 闸补齐:** 状态端点 Windows 无 built 且 `TOFU_DESKTOP_DIST_AUTOBUILD=1` 时踢 `start_installer`(与 linux 同构,三路测试:闸开踢/闸关不踢/有 built 不踢)。
+- **验收边界:** 面板悬停从此显示 `Tofu-Setup-0.16.0-win64.exe · 服务器直连`(built 胜镜像,已在 store);首次安装后托盘已附着预植 server_url,token 仍走既有 mint 流程。macOS 永久镜像(设计稿 §7 立档)。Phase 2(每用户 token 级安装包)独立 epic。
+
 ### 2026-08-01(error.log 全天审计:19 次 LoopWatch 事件环停摆根修 + PG 跑在 FUSE 上的迁移悬置定案) — owner 指令「查后端 Warning/Error 日志看有什么要修」;commit `ae2a390e`(1 文件 +47/-22;daily_report **50/50**、api_v1_integration **81/81**、server import smoke **1/1**)
 
 - **停摆根因(实测证据链):** 今日 19 次 `event loop STALLED ~5s` 里 11 次 top_frame=`lib/utils.py:32 safe_json`(json.loads)。对照 dump 定案:daily-report 三个端点是 `async def` 却直接在事件环上跑 `_count_convs_for_date`——为出一个**计数**把当天全部会话的 messages 整列 fetch+json.loads(实测当日 72 会话 **295.8MB**,全表 4394 会话 2.9GB,最大单会话 61.4MB)。`_db_safe` 只捕异常不挪线程,Quart 的线程池只罩 sync handler——**判据:async handler 里的重同步活必须自己 `await asyncio.to_thread`**。一处停摆(11:25:54)直接抓到 `daily_report/conversations.py:244` 现行。

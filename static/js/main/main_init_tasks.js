@@ -62,7 +62,12 @@ async function initActiveTasks() {
       _ensureNewest();
       return;
     }
-    const serverTasks = await activeResp.json();
+    // Backend wraps the array as {ok, items} (batch-11 coordination);
+    // unwrap with an Array.isArray fallback for a pre-migration server.
+    const _activeBody = await activeResp.json();
+    const serverTasks = (_activeBody && Array.isArray(_activeBody.items))
+      ? _activeBody.items
+      : (Array.isArray(_activeBody) ? _activeBody : []);
     // ★ Exclude aborted tasks — they are winding down and should not be reconnected to
     const runIds = new Set(
       serverTasks.filter((t) => t.status === "running" && !t.aborted).map((t) => t.id),

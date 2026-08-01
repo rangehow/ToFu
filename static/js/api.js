@@ -887,7 +887,16 @@
     kickAutopilot: (convId, config) => post('/api/v1/chat/autopilot/kick',
                                             { convId, config }),
     // Active-tasks listing — used on init to reconnect SSE streams.
-    active:       (opts)        => get('/api/v1/chat/active', Object.assign({ onError: 'null' }, opts || {})),
+    // Coordinated bare-array migration (batch 11): backend wraps {ok,
+    // items}; unwrap with fallback — PRESERVING null: callers distinguish
+    // "server says zero tasks" ([]) from "probe failed" (null), and
+    // null→[] would fake the former into static-adopt decisions.
+    active:       async (opts)  => {
+      const d = await get('/api/v1/chat/active', Object.assign({ onError: 'null' }, opts || {}));
+      if (d == null) return null;
+      if (Array.isArray(d.items)) return d.items;
+      return Array.isArray(d) ? d : null;
+    },
     activeResponse: (opts)      => request('/api/v1/chat/active', Object.assign({ method: 'GET', parse: 'response', onError: 'null' }, opts || {})),
     // Per-conversation running-task PROJECTION — the poll transport's copy of
     // the `conv_state_snapshot` push frame, same wire shape (`{convs:{id:

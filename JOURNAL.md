@@ -1,3 +1,10 @@
+### 2026-08-01(api-contract 批 11:chat.py 11 站点清零——裸数组判例第四态「探针语义 null 保持」) — epic `pt_931e16c4` 切片 11;commit 见下(6 文件);环 **134/134 + chat 邻接 43/43**;NEUTER×2 各咬一支
+
+- **裸数组判定树第四态(最险的一态):** /chat/active 的消费方是**探针**——cross_tab_sync 的 static-adopt 与 send-pipeline 的重连判决区分「服务器说零任务」([])与「探测失败」(null)。若解包把 null 抹成 [],一次网络抖动就会伪装成「零任务」喂给收养判决。解包契约:**null 保持 null**,仅 `.items` 解包 + Array.isArray 回落。activeResponse(返回裸 Response 由调用方查 .ok)走第二通道:唯一调用方 main_init_tasks 自行解包 + 回落。**同一只裸数组,三种解包契约(orchestrations 的 `|| []` / chat.active 的 null 保持 / activeResponse 的调用方自解)——解包语义跟着消费方性质走,不是一刀切。**
+- **其余 10 站点:** 透传 dict→api_ok;admission 503 与 SSE 429(带类型信封 dict)→ api_error(dict, status=N);429 的手工 `Retry-After: 5` 头保留(api_service_unavailable 是 503 语义,不混用),shipped-source needle 钉住。
+- **纪律:** failing-first 精确 2 红;NEUTER×2(还原后端包装→shipped-source;摘 seam 解包→coordination)各咬一支;cmp 还原;node --check 双 JS;chat 邻接套件(routes_chat_wire_parity + chat_mode_parity)43/43;导入冒烟;环 **134/134**。幽灵连续第七批零干预。
+- **进度账:** 272→**129 站点 22 文件**(143 已清零,52.6%)。剩余:paper.py 47(拆分路线图)、common.py 14(兄弟 WIP)、oauth.py 7、translate.py 7、artifacts.py 7、api_v1/oauth 5、motion 5、browser 5、auth 4、六个 ≤3、四个 ≤2。下一批 artifacts.py(7)。
+
 ### 2026-08-01(播客联合持久化第二半:mode/lang 持久化——刷新级重挂闭环;video 面板实证干净并钉守卫) — owner 复核上批后核出同族缺口「整页刷新仍丢非默认 mode 的在跑任务」;commit `32984800`(3 文件 +144/−2);环 **60/60**(前端播客 11 + 前端视频 8 + 播客 API 17 + media UX 24);NEUTER 精确
 
 - **缺口定性:** 路由侧扫描(a5f8f19d)按 `(paper_hash, mode, lang)` 精确重挂,但面板只持久化 model——整页刷新后 mode 重置 `'short'`,「完整深读」的在跑任务对刷新后的 lookup 依然不可见。切 Tab 修复只完成了一半的「前后端联合持久化」。

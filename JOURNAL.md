@@ -1,3 +1,8 @@
+### 2026-08-01(脑派回我自票 pt_2d6eb6a0:influence 错置 return 归位) — api-contract 批 2 立案的预存漂移,独立工作流修复;commit 见下(2 文件 +87/−3)
+
+- **修复:** `project_brain_influence` except 块补回 `return api_internal_error(e, source='api_v1.project.brain_influence')`,peer_abort except 后的死代码 stray 删除——出错路径从「框架级 500 无 source」恢复为「路由级 500 带诊断字段」。板上重复票 `pt_5a393a93`(同一 bug 二次立案)一并关。
+- **守卫:** `tests/test_project_influence_except_return.py` 三闸——influence 自有 return 在场 / peer_abort 无 influence stray / source 串全文件 exactly-once(防「复制而非移动」)。failing-first 精确 2 红(once 闸绿——stray 在但错置),修复后 3 绿;**NEUTER 复现错置**→同样精确 2 红,cmp 字节还原;环 14/14(守卫 3+project parity 6+drift 5)+ 导入冒烟。
+
 ### 2026-08-01(api-contract 批 2:api_payload 原语 + project.py 38 站点清零——兄弟协调先行,两起「幽灵共编」立档) — 接 owner 三指令(通知兄弟/避拆分路线图/批 2 从 project.py 起);epic `pt_931e16c4`(切片 2/多);commit 见下(6 文件);**环 110/110**;**NEUTER×2 精确**;预存漂移立案 `pt_5a393a93`
 
 - **owner 指令落地序:** ①project_message 双发(msab0zlx/msabaslv)——棘轮存在、基线文件、同 commit 规则;msabaslv 已 CONFIRM 回执(实测 push.py=3/common.py=14 与基线逐字一致,其两 commit 未增减计数)。②批次顺序按其裁定:project.py(38)→mcp.py(21)→orchestrations.py(16),避开 paper.py(拆分路线图)与 push.py/common.py(兄弟 WIP)。

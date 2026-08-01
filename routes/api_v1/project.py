@@ -1538,6 +1538,9 @@ def project_brain_influence():
     except Exception as e:
         logger.error('[Project.v1] brain influence failed for %s conv=%s: %s',
                      project_path, (conv_id or '')[:8], e, exc_info=True)
+        return api_internal_error(e, source='api_v1.project.brain_influence')
+
+
 @api_v1_project_bp.route('/api/v1/project/brain/peer-message', methods=['POST'])
 @require_auth
 @rate_limit(limit=20, per=60)
@@ -1641,9 +1644,6 @@ def project_brain_peer_abort():
         logger.error('[Project.v1] peer-abort failed for %s: %s',
                      project_path, e, exc_info=True)
         return api_internal_error(e, source='api_v1.project.brain_peer_abort')
-
-
-        return api_internal_error(e, source='api_v1.project.brain_influence')
 
 
 # ── Direct file write (Apply Code button) ────────────────────────────

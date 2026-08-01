@@ -1,3 +1,10 @@
+### 2026-08-01(续·持久化重建链全验:安装包出炉含修复 + 死锁自愈 + 一条运维警告) — 接 `497454b4` 批
+
+- **安装包落地并上架:** 出世构建完成,`Tofu-Setup-0.16.0-win64.exe`(152,936,260 B,`source=built`)已 record 进 store;Windows UA 实测 `/api/v1/desktop/status` 的 downloads 返回它(`hosted=server`)——用户面板下载按钮现在给的就是含持久化修复的新包。**载荷内容核验方法论:别扫 payload tar 散文件——PyInstaller 把纯 py 模块全打进 PYZ;正确姿势是在 git archive 源层 grep**(实证 `959fd1c9` 源:launcher.py `_persist_cc_state`×3、config.py `load_computer_control` 在)。
+- **死锁自愈但隐患仍在:** 服务器未重启自行恢复(future-wait 最终超时),pid 2351494 仍是 09:08 旧进程——**重启前任何人再 `POST /api/v1/desktop/build` 会再次自死锁事件环**;HEAD 已是 async 原生,重启即根治。运维规则:这台服务器 HTTP 000 → 先 py-spy 看环,绝不盲重试。
+- **注册表 watcher×2(45min×2)均耗尽:** 用户尚未做 Windows 侧三步,agent 未上线;不再续挂(避免空转烧轮次),待用户操作后随时可验。
+
+### 2026-08-01(api-contract 批 9:conversations.py 10 站点清零——两处裸数组的「后端单方」协调迁移) — epic `pt_931e16c4` 切片 9;commit 见下(4 文件);环 **128/128**;NEUTER×2 各咬一支
 ### 2026-08-01(api-contract 批 9:conversations.py 10 站点清零——两处裸数组的「后端单方」协调迁移) — epic `pt_931e16c4` 切片 9;commit 见下(4 文件);环 **128/128**;NEUTER×2 各咬一支
 
 - **关键判点(裸数组判例补完):** L374/L382 是 GET /api/v1/conversations 的 ?full=1 与默认 metadata 两个**裸数组**分支。与 orchestrations 不同——这里**无第一方消费方**(UI 走 ?meta=1 ETag 通道或 ?before 信封;HEADLESS_API.md 未钉形状,且该默认形状本就无版本演变过一次:全体消息→metadata)。判:后端单方包 `api_ok({'items': convs})`,commit 明文标注「对假想外部裸数组读者是刻意形状变更」。**契约 §4 判例完整化:有第一方消费→双侧协调(orchestrations);无第一方消费且形状未对外钉死→后端单方 + 明文公告。**

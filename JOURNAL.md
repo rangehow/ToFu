@@ -1,3 +1,11 @@
+### 2026-08-01(api-contract 批 3:mcp.py 21 站点清零——首个「字节级等价」批) — epic `pt_931e16c4`;commit 见下(3 文件);全环 **115/115**
+
+- **分类:** 21 站点零裸数组;与 project.py 的差异是**每个 legacy 体都显式带 ok 键** ⇒ 转换无增量键,parity 断言收紧为「除 request_id 外零新增」。三类:ok 字面量→api_ok;error 字面量→api_error(额外键经 **extras 透传);202 自定义状态 / 体带 status 键(api_error kwargs 撞名)→api_payload。
+- **执行层重放再袭(第二次):** 我写完 parity 套件时发现 mcp.py 迁移与基线删除已先行落地(报文失败但内容是我规范);逐 hunk 对 HEAD 复核=21 站点全等语义、零外来内容;漂移 diff=恰好一行。**回溯 failing-first 补做:git show HEAD 版→精确 shipped-source 1 红→cmp 字节还原**——红绿证据链完整,不因重放跳过纪律。
+- **既有钉兼容:** route_conversions 套件的 mcp new_src 钉(install_status 的 api_error 单行)在迁移后仍在(install 处是 api_not_found 形态,钉只断言存在性),该套件环内绿。
+- **NEUTER:** 回注 upsert 站点→精确 shipped-source 1 红,cmp 还原;导入冒烟 ok。
+- **下一批(owner 定序):** api_v1/orchestrations.py(16)。
+
 ### 2026-08-01(脑派回我自票 pt_2d6eb6a0:influence 错置 return 归位) — api-contract 批 2 立案的预存漂移,独立工作流修复;commit 见下(2 文件 +87/−3)
 
 - **修复:** `project_brain_influence` except 块补回 `return api_internal_error(e, source='api_v1.project.brain_influence')`,peer_abort except 后的死代码 stray 删除——出错路径从「框架级 500 无 source」恢复为「路由级 500 带诊断字段」。板上重复票 `pt_5a393a93`(同一 bug 二次立案)一并关。

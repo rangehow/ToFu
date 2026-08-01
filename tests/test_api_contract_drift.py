@@ -73,7 +73,6 @@ CARVE_OUT_FILES: dict[str, str] = {
 # delete the entry at zero) in the same commit.
 BASELINE: dict[str, int] = {
     'paper.py': 47,
-    'api_v1/mcp.py': 21,
     'api_v1/orchestrations.py': 16,
     'common.py': 14,
     'chat.py': 11,

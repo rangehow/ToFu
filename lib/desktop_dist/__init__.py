@@ -28,6 +28,12 @@ This package makes the SERVER the download origin:
               access(2), proot -R /etc/group bind, untranslated
               faccessat2, preloader SIGSYS) are baked into its recipe and
               pinned by tests/test_wintoolchain.py.
+  winbuilder — the WINDOWS frozen-payload build (Half A): git-archive →
+              nuget CPython → pip (CI recipe) → PyInstaller → boot smoke,
+              cached per (git_sha, deps stamp). Its own two measured
+              traps (wine swallows exit codes → sentinel protocol; host
+              python env is poison → scrubbed allowlist) are pinned by
+              tests/test_winbuilder.py.
 
 The request path performs ZERO network: it reads the store. All network
 happens in the mirror's single-flight background thread.

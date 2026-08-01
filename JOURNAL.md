@@ -1,3 +1,16 @@
+### 2026-08-01(api-contract 批 14:translate.py 7 站点清零——body-status 碰撞第二例 + 探针 null 保持第二例) — epic `pt_931e16c4` 切片 14;commit 见下(5 文件);环 **141/141**;NEUTER×2 各咬一支
+
+- **两个已知形态复用(判例开始收租):** poll-404 body 自带 `'status':'not_found'` 键 → api_payload(mcp shape D 判例直用);poll-batch 裸数组的消费方 translation.js 把 `!Array.isArray(data)` 当探针失败回落(合成逐 id 错误行)→ null 保持解包(chat.active 判例直用)。mt-test 的 `api_error(..., status=200)` 刻意例外原样不动(契约钉住)。
+- **纪律:** failing-first 精确 2 红;NEUTER×2(还原后端包装→shipped-source;摘 seam 解包→coordination)各咬一支;cmp 还原;node --check;导入冒烟;环 **141/141**。幽灵连续第十批零干预。
+- **进度账:** 272→**108 站点 19 文件**(164 已清零,60.3%)。剩余:paper.py 47(拆分路线图)、common.py 14(兄弟 WIP)、api_v1/oauth 5、motion 5、browser 5、auth 4、push 3(兄弟)、conv_search 3、chat_queue 3(裸数组族)、swarm 3、paper_folders 3、folders 3、conv_compaction 2、chat_poll_abort 2、endpoint 2、translate 1、_task_routes 1、desktop 1、audio 1。下一批 api_v1/oauth.py(5)。
+
+### 2026-08-01(脑派自票闭环:易变注入块跨轮冻结——turn_boundary_rebill 主耗类根修) — 接我自己在 LLM 审计批立的 `pt_62ed8cce25324eb2`;commit `55520f14`(3 文件 +785/-3;新套件 **6/6**,NEUTER 精确 4 红 cmp 还原;server import 冒烟绿;注入环 332 绿)
+
+- **定案(证据链):** 44 条 turn_boundary 里 ~25 条真 gap<300s,主因不是 TTL 而是**易变注入块每轮重渲染**:①CLAUDE.md/journal `_isMeta` 载体(index 1,缓存前缀内部,journal 一日数变——60881→59598 实测);②系统层 memory 计数提示(每次 CRUD 变);③上一轮尾部块(digest/board/date 等)持久化被剥离,下一任务重建出裸消息=深前缀突变。头部任一字节漂移 re-key 整个前缀。旁证:DB 实测存储消息**零注入块**(_isMeta/board/date/pref 全不持久化)。
+- **修法(owner 方案一):** 新模块 `system_context/_freeze.py`——暖缓存窗口内(头标记 TTL,本部署 extended=1h)注入字节冻结的头部渲染(载体 body+memory 提示),窗口外一律新鲜渲染(缓存已死重记账免费,模型永不看超 TTL 陈旧内容);尾部块旁车按裸内容 hash 逐条还原到历史用户消息(幂等,endpoint 重入安全;编辑重发 hash 失配不还原)。附带收益:暖复用时 FUSE 上的 CLAUDE.md 加载整个跳过。
+- **验证:** e2e 边界字节对等(头部+历史消息逐字节一致,仅最新用户消息带新鲜尾部块=免费区)/窗口闸/提示冻结/重入幂等/编辑禁还原/NEUTER-by-data 六项;NEUTER 摘除接线精确 4 红 cmp 还原。>300s 的 5min 尾锚 TTL 类(19/44)是 2026-07-08 有主的 P5 票,不在本 epic。生效需重启(人门)。
+- **共享树事故(自伤一次,已还原):** 验证预存红时 `git stash push` 因含未跟踪路径**整体失败**(stash 未创建),后续裸 `git stash pop` 误弹**兄弟代为保管的 gateway stash**(pt_871a26c7),`_gateway.py` 冲突 UU。还原:`checkout --ours` + `restore --staged` + 确认兄弟 stash 仍在。**纪律已存 memory `shared-tree-stash-discipline`:pop 前必 stash list 确认栈顶是自己的;NEUTER 一律 cp+cmp 不走 stash。**
+- **另案记账(零交集,不夹修):** ①`test_inbox_inject_sidecar_wire_neutral` 2 红=兄弟**未提交** NC 测试与现行 `_reconstruct_tool_call_messages` 双重过滤形态漂移;②orchestrator 大环 31 红全为 api-contract 兄弟批(pt_931e16c)jsonify NameError 在途。
 ### 2026-08-01(api-contract 批 13:oauth.py 7 站点清零——result 透传族第二批) — epic `pt_931e16c4` 切片 13;commit 见下(4 文件);环 **138/138**;NEUTER×2 精确
 
 - 7 站点全 `if 'error' in result: jsonify(result),400 / jsonify(result)` 透传族——api_payload(400)/api_ok 判例与 project.py 同源。failing-first 精确 1 红;NEUTER×2(回注 jsonify/摘 api_payload——paren needle);cmp 还原;导入冒烟。幽灵连续第九批零干预。

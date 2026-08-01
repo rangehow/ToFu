@@ -825,7 +825,16 @@
       if (!resp.ok) return { status: 'error', error: `HTTP ${resp.status}` };
       try { return await resp.json(); } catch (e) { return { status: 'error', error: e.message }; }
     },
-    pollBatch: (taskIds)      => post('/api/v1/translate/poll-batch', { taskIds }, { onError: 'null' }),
+    // Coordinated bare-array migration (batch 14): backend wraps {ok,
+    // items}; unwrap null-preservingly — translation.js's
+    // !Array.isArray(data) branch synthesizes per-id error rows and must
+    // keep firing on a failed (null) probe.
+    pollBatch: async (taskIds)  => {
+      const d = await post('/api/v1/translate/poll-batch', { taskIds }, { onError: 'null' });
+      if (d == null) return null;
+      if (Array.isArray(d.items)) return d.items;
+      return Array.isArray(d) ? d : null;
+    },
     // Settings → MT-config probe. Backend returns {ok, translated, error?}.
     mtTest:    (mtConfig, text) => post('/api/v1/translate/mt-test', { mt_config: mtConfig, text }, { onError: 'null' }),
   };

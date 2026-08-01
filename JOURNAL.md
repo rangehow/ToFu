@@ -1,3 +1,11 @@
+### 2026-08-01(播客联合持久化第二半:mode/lang 持久化——刷新级重挂闭环;video 面板实证干净并钉守卫) — owner 复核上批后核出同族缺口「整页刷新仍丢非默认 mode 的在跑任务」;commit `32984800`(3 文件 +144/−2);环 **60/60**(前端播客 11 + 前端视频 8 + 播客 API 17 + media UX 24);NEUTER 精确
+
+- **缺口定性:** 路由侧扫描(a5f8f19d)按 `(paper_hash, mode, lang)` 精确重挂,但面板只持久化 model——整页刷新后 mode 重置 `'short'`,「完整深读」的在跑任务对刷新后的 lookup 依然不可见。切 Tab 修复只完成了一半的「前后端联合持久化」。
+- **修法(完全镜像既有 paperPodcastModel 模式,零新机制):** `paperPodcastMode`/`paperPodcastLang` 两个键;`_pcSeedOptions()`(读时校验,非法落默认)在 `_initPodcastTab` 的 lookup **之前**播种;写回两处——`_pmPick` 选项卡选中时(hook 进共享选择器,podcast.js 与 video.js 两份拷贝保持**逐字节一致**,已脚本验证)与 `_podcastGenerate` 读 select 时。会话内行为零变化(localStorage 恒与最后一次选择同步),只有刷新路径被改变。
+- **video 面板同查结论=干净(实证非口头):** 其 lookup body 仅 `paper_hash`(lang/mode 无关,后端按 paper_hash 扫描),刷新不可能因陈旧 lang 藏住在跑任务;静态守卫钉死该契约防回归。video 侧「下一次运行的 lang/voice 选择刷新即丢」属 UX 小节,非任务持久化断,不扩面。
+- **纪律:** jsdom harness Case F×8 检查(选卡即持久化+隐藏 select 同步 / 模拟刷新后 lookup body 携带持久化 full/en / 重挂生成态+控制台渲染 / 服务器时钟收编);NEUTER(绝育 `_pcSeedOptions()` 调用)精确只翻 `reload_lookup_body_options`;静态闸(seed 在 lookup 前 + 两键在场 + video paper_hash-only 钉);两文件 `_pmPick` 逐字节一致脚本验证;node --check 双过。
+- **生效路径:** 纯前端走 bundle 首请求自愈;路由半边(a5f8f19d)需进程重启,窗口 owner 自留。
+
 ### 2026-08-01(自更新后台化 + 下载完成通知询问重启;下载慢根因实测=56MB tarball×GitHub 波动带宽) — owner 三问(后台完成/为什么这么慢/完成后通知再问重启);epic `pt_9fb04efc37a04fce` DONE;commit `1ec7f47f`(3 文件 +366/−26);新套件 **18 检查全绿 + NEUTER×2**;邻接环 update 家族+i18n 覆盖 **39/39**、i18n pack 家族 **70/70**
 
 - **下载慢根因(实测,非猜测):** v0.16.0 源码 tarball **55.8MB**(3392 文件),其中 **promo/ ≈26MB**(17.8MB NotoSansSC.ttf + 12 张幻灯片 PNG≈8.5MB)、**static/images/ ≈14MB**(文章封面 7.2MB/海报等)——**~72% 是营销资产不是服务器代码**;本机到 GitHub 吞吐实测 **0.05–1.8MB/s 剧烈波动**(同链路三次采样 51KB/s、350KB/s、1.79MB/s)→ 非 git 部署每次更新 3–15 分钟全耗在下载上。release assets(192MB linux 包等)不在源码更新路径内,无关。瘦身属 export 侧决策(promo/ 移出仓或转 release assets),已报 owner 未定夺,本批不动 export.py。

@@ -1,3 +1,9 @@
+### 2026-08-01(续·「已重启+网段通+agent 已起」三项只成立一项:UI 重启给不了 BIND_HOST,execv 保留 09:08 旧环境) — owner 答复后实测:bootId 已换(重启真发生),但进程 env 无 BIND_HOST、ss 仍只听 127.0.0.1、注册表无真实 agent、全天只有我本人的 curl 探测(epic `pt_4ea6bf05deaa46f0`)
+
+- **定案证据链:** ①`bootId` 从 `f2addb06` 变为 `b919d848`——重启真发生过(os.execv 同 pid 换新 bootId,boot_identity 机制);②`/proc/2351494/environ` 只有 `PORT=15000` **无 BIND_HOST**——UI 重启按钮 execv 保留 09:08 旧环境,restart_15000.sh 默认 `BIND_HOST=127.0.0.1`;③`ss` 实测仍只听 `127.0.0.1:15000`;④注册表只有我自己的 verify-probe(已离线),access.log 全天唯一 poll 是我 14:22 的 curl 探测。**owner 口中的「网段通」大概率验的是浏览器(带 SSO cookie 走 MLP 网关),「agent 已起」是进程起了但连不上,在 Connection refused 重试循环。**
+- **方法论记一笔:重启方式决定环境来源。** UI 重启(os.execv)继承旧进程全部 env,任何「这次重启要加个环境变量」的诉求**必须走 shell 脚本**(`BIND_HOST=0.0.0.0 ./restart_15000.sh`,396 行已透传)。agent 无需重启——它的 `--server http://10.128.175.30:15000` 在服务器绑对后的下次 poll 自动恢复。
+- **挂板三键:** 已用 BIND_HOST 重启(我去验)/ agent 输出贴给你 / 先挂着。
+
 ### 2026-08-01(egress 鉴权层定案:401 不是 Tofu 签发的,是 MLP 网关;代理路死、直绑路通——凭证链已实测 200) — owner 复核抓出 runbook 致命前提;**早前「代理 URL 可用」的 runbook 作废**(epic `pt_4ea6bf05deaa46f0`)
 
 - **owner 的复核(成立):** 经代理打 `POST /api/desktop/poll` 401 秒拒——我早前把 `{"error":"Unauthorized"}` 误读为「隧道通」,实际那是鉴权层在拒。

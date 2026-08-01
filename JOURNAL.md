@@ -1520,3 +1520,19 @@
 - **三错三根因,全不是「类型写错」而是「类型系统看不见的真行为」:** ①oauth.js:136 `err._statusCode`——egress S2 的服务端错误码透传,`_completeLogin` 重试分类器真在读它;而**同文件早有先例**:`interface Error { _upstreamStatus }`(浏览器交换同款透传)——扩那一行,**oauth.js 零改动**,与在途 loopback epic(ms9ow2ttm0gnu0)零交集;②`window._STALL_WATCH_THRESHOLD_S`——测试缝覆盖,生产从不赋值,按 `Navigator.userAgentData?` 先例声明为**可选**(可选本身在表达「缺席是常态」);③`unref×2`——`_stallTimer` 双形态属实(DOM number / node Timeout),绑定处标 `any` 带 why 注释,胜过两处丑陋 cast。
 - **判据:widening 文件的注释即档案。** `globals.d.ts` 每条 interface 扩展都写着「为什么这是真行为不是 bug」——新增条目必须自带出处(谁赋值、谁读取、哪个测试缝),否则审查者无法区分「scoped loosening」和「悄悄放水」。守卫 `test_ambient_dom_widening_stays_scoped_not_blanket` 只挡 index signature,注释纪律靠人。
 - **自己的坑(立档):** commit message 里的反引号被 sh 当命令替换执行,`interface Error`/`any` 两处被吞、消息残废——**含反引号的提交消息一律 `git commit -F <file>`**,heredoc 写文件不走 shell 二次解释。amend 前已核 HEAD 仍是己提交(共享树 amend 的铁律:兄弟可能已在上面叠了提交)。
+
+### 2026-08-01(MCP 体检 + 两包版本对拍:tofu-search 三方同步;overleaf-mcp 0.3.0 本地孤岛——GitHub/PyPI 均未发布,且 PyPI 0.2.1 对新用户已坏) — 诊断批,零代码改动
+
+- **MCP 运行态健康:** 09:08 启动(pid 2351494)7/7 启用服务器全部连接成功(github 26 + github-batch 2 + hope 50 + overleaf 21 + xuecheng 32 + llm 43 + 12306 8 = 182 tools;rollinggo-flight 配置禁用)。overleaf credprobe 每 ~15min list_projects 全绿(最新 13:43,1.1s);全天零 MCP ERROR。仅 3 条 vendor 快照警告(hope/llm stale、xuecheng 缺快照);实证 tools/ 整体被 gitignore(快照本就设计为本机可重建物,`make vendor-mcp` 重同步即可),运行时走 sibling 仓库 --with-editable,不受影响。
+- **tofu-search = 最新:** 本地 0.5.3(HEAD a6dadf2 == annotated tag v0.5.3)== GitHub main(a6dadf2,tag peel 一致)== PyPI 0.5.3(当日发布)。三方全同步。
+- **overleaf-mcp-plus ≠ 最新(三处落差):** 本地 0.3.0(MCP SDK v2 移植 + tofu-search>=0.4.0 依赖 + verify_citations);GitHub main(1e6c39ea)停在 0.2.1;PyPI 最新也是 0.2.1(0.2.2/0.3.0 均不存在)。dist_030/ 里 7/29 就构建好了 wheel+sdist,从未上传。
+- **高危推论:PyPI 上的 0.2.1 对新用户是坏的。** 其依赖 `mcp>=1.0.0` 无上限,而 MCP SDK v2.0.0 已转正为默认线(`pip install mcp` 装 2.x),v2 删除 v1 装饰器 API——新用户装完启动即炸 `'Server' object has no attribute 'list_tools'`(正是当日修过的那个事故)。本机服务器幸免只因 mcp_servers.json 手写了 `--with mcp<2` 兜底。解药早备好但没发布:0.2.2(v1 维护 pin,pyproject 注释里已承诺)与 0.3.0(v2 移植)。
+- **两个本地卫生坑:** ①overleaf-mcp 目录**没有 .git**——0.3.0 全部工作只存在单机上,无 VCS 备份;②本地 .venv 是 stale 的(mcp 1.27.0 + 6/30 旧 uv.lock),直接跑测试收集即 ImportError(ServerRequestContext,48 collected + 2 collection errors)——0.3.0 发布前需在 mcp>=2 干净环境重验。③服务器 conda env 的 tofu-search 是 editable 安装但 dist-info 停在 0.5.2(代码实为 0.5.3,仅元数据谎报,`pip install -e` 重装即愈)。
+- **下一步(待 owner 拍板,涉对外可见动作):** 0.3.0 纳入 git → 干净环境验证 → GitHub 推送 + PyPI 发 0.2.2/0.3.0 → 重装服务器 tofu-search 元数据。已立案 pt_f1d1330c7a7a40fa。
+
+### 2026-08-01(「出口检测中…」永驻定案:后端探测一直健康,是前端把一次性瞬态画成了终态) — owner 截图问订阅登录卡出口行为何一直卡;commit `5414ff1c`(2 文件 +156;egress-line 套件 **4/4**,oauth 家族环 **119/119**)
+
+- **根因(两半,日志铁证):** ①后端 `egress_status` 永不内联探测——冷缓存答 `unknown` 并后台探测(~1s 落缓存,TTL 300s,且探测只由 status 轮询触发 ⇒ 几乎每次开设置页都是冷缓存);②前端 `_renderEgressLine` 把 `unknown` 画成「出口检测中…」**就再也不重取**——全文件唯一重轮询(3s)只挂在 'unavailable' 态的按钮流上。判定于是终局:裁决 ~1s 后就躺在服务器缓存里(今日 8 对探测日志全部 1s 内完成,13:51 那对 geo_blocked 恰好对上 13:53 的截图),开着的面板却永远不知道;关上重开?缓存又过期了,循环重演。**用户从未见过裁决。**
+- **修法:** unknown 渲染即挂有界重轮询(2s 节奏 × 最多 5 次,设置弹窗关闭即弃链,裁决落定/用户重开即重置预算);每轮只是服务器侧一次缓存读,成本为零。_bundle 已重建(7b4093e0),但**在跑进程仍服务旧 tag(3ed8e6b1)——重启后生效**。
+- **方法论记一笔:** 「unknown 是瞬态」是后端的设计假设,但瞬态要成立必须有人负责把它推走——前端没有重取,瞬态就退化成了终态。画 pending 态的地方,永远追问一句「谁来让它翻页」。
+- **顺带:** 本批提交 JOURNAL.md 时携带了兄弟 ms9y68d7 的未提交 MCP 体检条目(已完稿,零风险),特此注明。

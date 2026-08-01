@@ -1,3 +1,11 @@
+### 2026-08-01(api-contract 批 3:mcp.py 21 站点清零 + body-status 键冲突专项;「幽灵共编」定性升级——会删测试,必须逐行复核) — epic `pt_931e16c4` 切片 3;commit 见下(5 文件);环 **109/109**;NEUTER 复咬精确
+
+- **迁移:** mcp.py 21 站点全 dict 字面量,四形:ok 字面量(→api_ok)/定状错误(→api_not_found/api_bad_request)/带诊断 500(→api_error(status=500),站点已 logger.error,不用 api_internal_error 防双重打栈)/**shape D**——202 installing 与 body 自带 `status` 键的 500:`api_error(msg, status=500, **{'status':'error'})` 是 TypeError(重复 kwarg),唯 `api_payload(body, N)` 可表达。failing-first 精确 1 红;NEUTER×2(回注 jsonify/摘 api_payload 用法)各咬 shipped-source;cmp 还原;导入冒烟。
+- **幽灵共编第二次,性质变了:** 批 3 进行中我的 mcp parity 套件被外部改写(mtime 21:44:13)—— parity 站点 16→20、零增量判据收紧(真改进),但**删掉了两件事**:`test_status_body_field_survives`(碰撞的可执行证明,本批最锐的闸)与 shipped-source 的 api_payload 用法断言(「摘除原语」回归从此隐形)。**与第一次(纯增益)不同,这次是实质性削弱。** 处置=并集加固而非回滚:保留其 20 站点与零增量判据,恢复两个被删守卫。
+- **自己抓回的 needle 缺陷(立档):** 我恢复的断言 `'api_payload' in src` 被 import 行(`api_payload,` 无括号)虚假满足,NEUTER 复咬**没红**——证据是早前 NEUTER-2 能咬是靠幽灵 v1 的更强断言。修:needle 一律带括号 `'api_payload('`,同族三套件(mcp/project/memory)一并加固。教训:**守卫的 needle 必须按「会被误满足的最宽形态」写,NEUTER 复咬不是礼仪是验尸。**
+- **批 2 提交链补记:** 幽灵以 `21edd79a` 先行提交批 2 全部内容(我的 `91e6478c` 仅剩 JOURNAL);历史里还见其 `2c9dc999`「shared-tree entanglement postmortem」——共享树共编已是被命名登记的现象。
+- **进度账:** 272→**213 站点 30 文件**。下一批 orchestrations.py(16)。
+
 ### 2026-08-01(api-contract 批 3:mcp.py 21 站点清零——首个「字节级等价」批) — epic `pt_931e16c4`;commit 见下(3 文件);全环 **115/115**
 
 - **分类:** 21 站点零裸数组;与 project.py 的差异是**每个 legacy 体都显式带 ok 键** ⇒ 转换无增量键,parity 断言收紧为「除 request_id 外零新增」。三类:ok 字面量→api_ok;error 字面量→api_error(额外键经 **extras 透传);202 自定义状态 / 体带 status 键(api_error kwargs 撞名)→api_payload。

@@ -213,7 +213,10 @@ def test_shipped_source_converted():
     assert not re.search(r'from flask import[^\n]*\bjsonify\b', src), (
         'routes/api_v1/project.py still imports jsonify from flask — '
         'drop the dead import after converting')
-    assert 'api_payload' in src, 'expected api_payload usage in project.py'
+    assert 'api_payload(' in src, (
+        'expected api_payload CALLS in project.py — the passthrough '
+        'branches require it; needle carries the paren so the bare import '
+        'line cannot satisfy the guard')
 
 
 def test_no_error_site_nests_under_error_key():

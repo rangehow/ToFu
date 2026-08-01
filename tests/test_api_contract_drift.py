@@ -30,11 +30,14 @@ Counts LINES containing the substring ``jsonify(`` (same as ``grep -c``),
 which intentionally excludes import lines (``from flask import jsonify`` has
 no following paren). Deterministic, comment-tolerant: a comment mentioning
 ``jsonify(`` simply freezes into the baseline — the ratchet guards DELTA.
+A line matching a ``CARVE_OUT_SITES`` snippet is SUBTRACTED from its file's
+count (site-level carve-out: the one legal bare site inside an otherwise
+migrated file — never a silent baseline remainder).
 
 Established 2026-08-01 from a full-tree scan (272 ad-hoc sites across 33
 files + 8 protocol-locked sites in 4 carve-out files). Same-day batches
-zeroed api_v1/memory.py (10) and api_v1/project.py (38) → 234 sites across
-31 files remain.
+zeroed api_v1/memory.py (10), api_v1/project.py (38) and api_v1/mcp.py (21)
+→ 213 sites across 30 files remain.
 """
 
 from __future__ import annotations
@@ -67,13 +70,30 @@ CARVE_OUT_FILES: dict[str, str] = {
         'bridge caller helper — same external protocol as browser.py',
 }
 
+# ── Site-level carve-out registry ────────────────────────────────────
+# Individual jsonify( SITES that legally stay bare inside otherwise-migrated
+# files. Keyed file → {unique snippet: reason}. A registered line is
+# subtracted from the file's ad-hoc count by the scanner; every snippet MUST
+# still exist in its file (stale entries fail test_carve_out_sites_valid),
+# and each entry needs a matching row in docs/API_CONTRACT.md §4.
+CARVE_OUT_SITES: dict[str, dict[str, str]] = {
+    'api_v1/orchestrations.py': {
+        'return jsonify(_read_all())':
+            'bare-array legacy payload — GET /api/v1/orchestrations returns '
+            'the definitions array bare and Api.orchestrations.list reads the '
+            'body AS an array (``|| []``); enveloping changes the top-level '
+            'type (contract §4 bare-array class — needs a coordinated '
+            'front+back migration, not an additive conversion)',
+    },
+}
+
 # ── Per-file ratchet baseline ────────────────────────────────────────
 # Established 2026-08-01. Numbers MUST monotonically decrease toward {}.
 # Do NOT raise a value here; when you migrate a file, lower its count (or
 # delete the entry at zero) in the same commit.
 BASELINE: dict[str, int] = {
     'paper.py': 47,
-    'api_v1/orchestrations.py': 16,
+    'api_v1/orchestrations.py': 15,
     'common.py': 14,
     'chat.py': 11,
     'api_v1/desktop.py': 11,
@@ -119,9 +139,13 @@ def _scan_all() -> dict[str, int]:
             rel = os.path.relpath(path, ROUTES_DIR).replace(os.sep, '/')
             if rel in CARVE_OUT_FILES:
                 continue
+            registered = CARVE_OUT_SITES.get(rel, {})
             try:
                 with open(path, 'r', encoding='utf-8') as f:
-                    count = sum(1 for line in f if _TOKEN in line)
+                    count = sum(
+                        1 for line in f
+                        if _TOKEN in line
+                        and not any(snip in line for snip in registered))
             except OSError:
                 continue
             if count > 0:
@@ -189,6 +213,26 @@ def test_carve_out_registry_valid():
             f'reason ({reason!r}) is stale; remove the registry entry and '
             f'the docs/API_CONTRACT.md §4 row, and keep it under BASELINE '
             f'watch if new ad-hoc sites remain')
+
+
+def test_carve_out_sites_valid():
+    """Every registered site snippet must still exist in its file — a stale
+    site entry hides new drift behind an outdated reason (and a file-level
+    registry cannot see it, since the file still has other jsonify lines).
+    """
+    for rel, sites in CARVE_OUT_SITES.items():
+        path = os.path.join(ROUTES_DIR, rel)
+        assert os.path.isfile(path), (
+            f'carve-out site file routes/{rel} vanished — remove its '
+            f'CARVE_OUT_SITES entry AND the docs/API_CONTRACT.md §4 row')
+        with open(path, 'r', encoding='utf-8') as f:
+            src = f.read()
+        for snip, reason in sites.items():
+            assert snip in src, (
+                f'registered carve-out site {snip!r} no longer exists in '
+                f'routes/{rel} — its reason ({reason!r}) is stale; remove '
+                f'the registry entry and the contract §4 row (the site was '
+                f'converted or deleted)')
 
 
 def test_baseline_and_carve_out_disjoint():

@@ -202,11 +202,12 @@ def test_shipped_source_converted():
         'convert per docs/API_CONTRACT.md §7')
     assert not re.search(r'from flask import[^\n]*\bjsonify\b', src), (
         'routes/api_v1/mcp.py still imports jsonify from flask')
-    assert 'api_payload' in src, (
-        'routes/api_v1/mcp.py no longer uses api_payload — shape D (202 and '
+    assert 'api_payload(' in src, (
+        'routes/api_v1/mcp.py no longer CALLS api_payload — shape D (202 and '
         'the body-status-collision 500) REQUIRE it; an api_ok/api_error '
         'substitute either loses the 202 status or TypeErrors on the '
-        'duplicate status kwarg')
+        'duplicate status kwarg. Needle carries the paren: the bare import '
+        'line must NOT satisfy this guard')
 
 
 if __name__ == '__main__':

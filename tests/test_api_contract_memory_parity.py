@@ -131,8 +131,10 @@ def test_shipped_source_converted():
     assert not re.search(r'from flask import[^\n]*\bjsonify\b', src), (
         'routes/api_v1/memory.py still imports jsonify from flask — '
         'drop the dead import after converting')
-    for needle in ('api_ok', 'api_created'):
-        assert needle in src, f'expected {needle} usage in memory.py'
+    for needle in ('api_ok(', 'api_created('):
+        assert needle in src, (
+            f'expected {needle} CALLS in memory.py — the paren keeps the '
+            f'bare import line from satisfying the guard')
 
 
 def test_status_codes_preserved():

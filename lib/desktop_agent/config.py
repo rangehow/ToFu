@@ -23,6 +23,11 @@ _DEFAULT_CONFIG = {
     # server", which is the packaged app's default and must stay that way —
     # a tray user never touches this.
     'remote_server': {},
+    # Tray-persisted computer-control state: {enabled: bool, perms: {...}}.
+    # ABSENT (empty dict) = the user never chose = fresh-install default
+    # OFF — deny-by-default is preserved; only an explicit user choice is
+    # ever restored.
+    'computer_control': {},
 }
 
 
@@ -94,6 +99,44 @@ def save_remote_server(url, secret):
         cfg['remote_server'] = {}
     save_config(cfg)
     return cfg['remote_server']
+
+
+def load_computer_control():
+    """Return ``(enabled, perms)`` for the tray's launch-time restore.
+
+    ``(False, {})`` when the user never toggled anything (or the blob is
+    malformed) — a fresh install must come up deny-by-default. ``perms``
+    carries only the canonical tier keys that were actually persisted;
+    the caller merges it over its own deny-all baseline so tiers added
+    later still default OFF for old config files.
+    """
+    cfg = load_config()
+    cc = cfg.get('computer_control')
+    if not isinstance(cc, dict):
+        return False, {}
+    raw = cc.get('perms')
+    perms = {}
+    if isinstance(raw, dict):
+        from lib.desktop_agent._permissions import PERMISSION_KEYS
+        perms = {k: bool(raw[k]) for k in PERMISSION_KEYS if k in raw}
+    return bool(cc.get('enabled')), perms
+
+
+def save_computer_control(enabled, perms):
+    """Persist the tray's computer-control state so it survives restarts.
+
+    Lives in the same agent config file as ``agent_id`` / ``remote_server``.
+    Only ever called from an explicit user action (the tray enable toggle
+    or a permission-tier click) — never from startup/quit paths, so a
+    crash or a normal Quit cannot erase the user's choice.
+    """
+    cfg = load_config()
+    cfg['computer_control'] = {
+        'enabled': bool(enabled),
+        'perms': {str(k): bool(v) for k, v in (perms or {}).items()},
+    }
+    save_config(cfg)
+    return cfg['computer_control']
 
 
 def config_path():

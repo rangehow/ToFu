@@ -431,6 +431,48 @@ def _stop_computer_control(state: dict) -> None:
     _log('Computer control DISABLED')
 
 
+def _persist_cc_state(state: dict) -> None:
+    """Write the tray's computer-control state to the agent config.
+
+    Called ONLY from explicit user clicks (the enable toggle, a permission
+    tier) — never from quit/startup paths, so a crash or a normal Quit
+    cannot erase what the user chose. Failures are logged, never fatal:
+    a read-only config dir must not break the toggle itself.
+    """
+    try:
+        from lib.desktop_agent.config import save_computer_control
+        save_computer_control(bool(state.get('enabled')),
+                              state.get('perms') or {})
+    except Exception as e:
+        _log('Could not persist computer-control state: %s' % e)
+
+
+def _restore_cc_state(state: dict) -> bool:
+    """Load the persisted computer-control state into *state*.
+
+    Returns whether the agent should be auto-started. A fresh install (or
+    a malformed blob) yields False and leaves *state* untouched —
+    deny-by-default is the floor this restore never lowers. Saved perms
+    are merged over the deny-all baseline so a tier added by a future
+    version still defaults OFF for old config files.
+    """
+    try:
+        from lib.desktop_agent.config import load_computer_control
+        enabled, saved_perms = load_computer_control()
+    except Exception as e:
+        _log('Could not read computer-control state: %s' % e)
+        return False
+    if saved_perms:
+        try:
+            from lib.desktop_agent._permissions import safe_default
+            perms = safe_default()
+            perms.update(saved_perms)
+            state['perms'] = perms
+        except Exception as e:
+            _log('Could not merge saved permissions: %s' % e)
+    return enabled
+
+
 def _run_tray(port: int, proc: subprocess.Popen):
     """Run the system tray icon (blocks on the main thread)."""
     url = f'http://127.0.0.1:{port}'
@@ -439,6 +481,12 @@ def _run_tray(port: int, proc: subprocess.Popen):
     # agent loop; the per-tier toggles mutate it in place.
     _cc_state: dict = {'enabled': False, 'thread': None, 'stop': None,
                        'error': None, 'perms': None}
+
+    # Restore the user's persisted choice: an agent they explicitly enabled
+    # comes back up on every launch; a fresh install stays OFF.
+    if _restore_cc_state(_cc_state):
+        _log('Computer control was enabled at last exit — restoring')
+        _start_computer_control(port, _cc_state)
 
     def _shutdown():
         if proc.poll() is None:
@@ -531,6 +579,7 @@ def _run_tray(port: int, proc: subprocess.Popen):
             _stop_computer_control(_cc_state)
         else:
             _start_computer_control(port, _cc_state)
+        _persist_cc_state(_cc_state)
         try:
             icon.update_menu()
         except Exception as e:
@@ -545,6 +594,7 @@ def _run_tray(port: int, proc: subprocess.Popen):
                 return
             perms[key] = not perms.get(key)
             _log('Computer control tier %s -> %s' % (key, perms[key]))
+            _persist_cc_state(_cc_state)
             try:
                 icon.update_menu()
             except Exception as e:

@@ -1,3 +1,8 @@
+### 2026-08-01(api-contract 批 17:api_v1/browser.py 5 站点清零——body-status 碰撞第三例) — epic `pt_931e16c4` 切片 17;commit 见下(4 文件);环 **148/148**;NEUTER×2 精确
+
+- 桥测试出口的 503/502 body 自带 `'status'` 键(桥状态快照)→ api_payload(shape D 第三例,判例持续收租)。原始扩展长轮询 RPC 维持桥协议 carve-out。failing-first 精确 1 红;NEUTER×2(回注 jsonify/摘 api_payload——paren needle);cmp 还原;导入冒烟。幽灵连续第十二批零干预。
+- **进度账:** 272→**93 站点 16 文件**(179 已清零,65.8%)。下一批 api_v1/auth.py(4)。
+
 ### 2026-08-01(api-contract 批 16:motion.py 5 站点清零) — epic `pt_931e16c4` 切片 16;commit 见下(4 文件);环 **146/146**;NEUTER×2 各咬一支
 
 - 5 站点全 api_ok 形;MP4/SRT send_file 维持 §4 carve-out。failing-first 精确 1 红;NEUTER×2(调用点/import 行)各咬一支;cmp 还原;导入冒烟。幽灵连续第十一批零干预。

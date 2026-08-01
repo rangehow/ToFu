@@ -19,10 +19,10 @@ import subprocess
 import sys
 import time
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, request
 
 from lib.api_response import (
-    api_forbidden, api_internal_error, api_not_found, api_ok,
+    api_forbidden, api_internal_error, api_not_found, api_ok, api_payload,
 )
 from lib.log import audit_log, get_logger
 from lib.openapi import api_meta
@@ -103,7 +103,7 @@ def browser_status():
                          'this UI from it')
         else:
             extension_path = ext_dir
-    return jsonify({
+    return api_ok({
         'connected': connected,
         'lastPoll': _last_poll_time,
         'secondsAgo': round(time.time() - _last_poll_time, 1) if _last_poll_time else None,
@@ -134,7 +134,7 @@ def browser_status():
 )
 def browser_clients():
     from lib.browser import get_connected_clients
-    return jsonify({'clients': get_connected_clients()})
+    return api_ok({'clients': get_connected_clients()})
 
 
 @api_v1_browser_bp.route('/api/v1/browser/test', methods=['GET'])
@@ -165,11 +165,14 @@ def browser_test():
         status['pendingCommands'] = len(_commands)
         status['commandIds'] = list(_commands.keys())[:5]
     if not is_extension_connected(client_id):
-        return jsonify({'status': status, 'error': 'Extension not connected'}), 503
+        return api_payload({'status': status,
+                            'error': 'Extension not connected'}, 503)
     result, error = send_browser_command('list_tabs', timeout=10, client_id=client_id)
     if error:
-        return jsonify({'status': status, 'result': result, 'error': error}), 502
-    return jsonify({'status': status, 'result': result, 'error': error})
+        return api_payload({'status': status, 'result': result,
+                            'error': error}, 502)
+    return api_ok({'status': status, 'result': result,
+                   'error': error})
 
 
 # ── Guided extension install: open the extensions page (loopback only) ──

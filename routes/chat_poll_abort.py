@@ -25,8 +25,6 @@ from __future__ import annotations
 import json
 import time
 
-from flask import jsonify
-
 from lib.api_response import api_not_found, api_ok
 from lib.database import DOMAIN_CHAT, get_db
 from lib.log import audit_log, get_logger
@@ -365,7 +363,7 @@ def chat_poll(task_id):
             r['endpointIteration'] = task.get('_endpoint_iteration', 0)
             if task.get('_endpoint_stop_reason'):
                 r['endpointStopReason'] = task['_endpoint_stop_reason']
-        return jsonify(r)
+        return api_ok(r)
 
     logger.debug('[Chat] Poll %s — not in memory, checking DB', task_id[:8])
     db = get_db(DOMAIN_CHAT)
@@ -520,7 +518,7 @@ def chat_poll(task_id):
                 r['fallbackReason'] = _db_meta['fallbackReason']
             if _db_meta.get('fallbackKind'):
                 r['fallbackKind'] = _db_meta['fallbackKind']
-        return jsonify(r)
+        return api_ok(r)
 
     logger.warning('[Chat] Poll %s — NOT FOUND in memory or DB! Task may have been cleaned up. '
                    'Client will receive 404 and may lose accumulated content.',

@@ -1,3 +1,10 @@
+### 2026-08-01(api-contract 批 20:小文件清扫 15 站点 8 文件清零 + desktop.py 桥协议正确入册——剩余只有四座大山) — epic `pt_931e16c4` 切片 20;commit 见下(11 文件);环 **156/156**;NEUTER×2 各咬一支
+
+- **清扫账:** conv_search 3(裸数组,`|| []` 契约直用)+ swarm 3(api_meta「UI 裸 SDK 包」描述同步诚实化——批 19 规则第二次应用)+ audio 1 + translate 1 + endpoint 2(两处「bare shape」注释同步)+ conv_compaction 2 + chat_poll_abort 2 + _task_routes 1(通用工厂 `jsonify(resp), status_code` → api_payload,runtime.poll 的 canonical 形状逐字节保)。
+- **desktop.py 的正确归宿(分类纠偏):** 初扫把它算进可迁 16 站点,读文件实证 `/api/desktop/poll` 是**桌面代理桥协议**(外部客户端解析 `{'commands':…}`,与 browser.py 同族)——不是债务是豁免:从 BASELINE 移入 CARVE_OUT_FILES 附理由,`test_carve_out_registry_valid` 持续盯守。**基线表从此只剩真债务。**
+- **纪律:** failing-first 精确 2 红;NEUTER×2(还原 conv_search 包装→shipped-source;摘 seam 解包→coordination);cmp 还原;node --check;8 文件导入冒烟全过;环 **156/156**。幽灵连续第十五批零干预。
+- **进度账:** 272→**67 站点 5 文件**(205 已清零,75.4%)。**只剩四座山:** paper.py 47(待拆分路线图)、common.py 14(兄弟 WIP)、chat_queue.py 3(裸数组族,chat_queue_get 的 `[]` 需消费方分析)、push.py 3(兄弟 WIP)。全部有主或有判例,收尾路线清晰。
+
 ### 2026-08-01(自更新二轮根修:导出镜像清理漏删排除项根修 + apply 终态服务端持久化,刷新页面照样收「下载完成是否重启」) — owner 复核第一轮后两指令(「不要只报告,要修」+ 刷新失效是主场景缺口);epics `pt_d5828b575b404bac` + `pt_3cca755141404a66` DONE;commit `9bf9592b`(10 文件 +849/−49);新套件 7+9+12 检查全绿(各含 NEUTER);全邻接环 18 套件 **95 过 1 跳**
 
 - **导出漏删根因(owner 验证时挖出,比我第一轮的诊断更深一层):** `promo` 早在 2026-06-10 就进了 `ALWAYS_EXCLUDE_DIRS`,可 26MB 至今还在 GitHub——`export.py` 的目的地清理把「导出排除目录」当「保留目录」跳过删除(本意是给活体安装 dest 省 FUSE I/O),排除内容一旦落进发布副本就随每次 `git add -A` 永生。修:`_dest_cleanup_targets` 按模式分流——personal/internal(活体安装)维持旧保留语义;**opensource(发布镜像)只保留 `_OPENSOURCE_DEST_PRESERVE`(.git/data/uploads/.tofu/pgdata/logs 等算子数据),排除目录与源已删条目一律删**,发布树从此=导出集。附带:`static/images/` 8 个零引用营销资产(~12.4MB,运行时图标走 static/icons/)进 `OPENSOURCE_EXTRA_EXCLUDE_FILES`。下次发布后 tarball 56MB→~30MB。
@@ -356,6 +363,14 @@
 - **sub-5B(streaming_swarm_panel.js 55KB):** 3 符号 7 调用点原本全裸(含 `_syncToolRoundsDOM` 热路径与 chat_render 首屏恢复),同批装闸——退化契约与 sub-4 完全一致:缺席回 `_renderUnifiedToolLine` 通用行,下一个 SSE 事件自愈。双 ticker 只摸自己渲染的 DOM,随包走。**顺带重锚预存红**:`test_streaming_swarm_panel_registered` 的「eager 排序」断言与降级直接矛盾,改为 deferred 不变量(在 _DEFERRED_FILES/不在 _BUNDLE_FILES/dev-fallback 签保留);e2e(visual+slow)的 `_buildSwarmPanelHTML` typeof 断言现依赖 idle prefetch,已标记。
 - **生产实测挂起(非我故障):** runbook 扩 sub-5 六项后实测服务器 curl 000×3——进程活着(42.6% CPU、14.3GB RSS)但事件环停摆(cgroup 95.6% 反复 relief + FUSE 上 8s 慢查询,正是 pt_afbaf3d7/pt_ef42c2a1 两兄弟 epic 在修的「假离线」族)。**绝不重启(本会话自己的 run_task 就在该进程里跑)**;timer 追服务器恢复后自动补跑 runbook 并回写分类账。
 - **累计:** core 1,550,424 → 农场 1,418,722(−132KB 压缩态),距 1.2MB ~219KB;已降级源码 443KB。下一片:myday 面板对(先拆 `_mydayScheduleReminder` load-time 副作用)+ project.js 拆分(37 调用点,比照 tool_rounds「状态子集留 core」)。
+
+### 2026-08-01(Epic-E sub-8:finish_info.js 成本泡懒建——第三种拆分范式,生产 core 1,343,908→1,273,857 B(sub-9 在飞),距 1.2MB ~74KB) — commit `48c1651f`(9 文件)+ 兄弟协补 `var 化 + 套件钉 + ledger 行 + runbook 段`;runbook **41 项 ALL GREEN**;事件派发 `24e3273a`
+
+- **范式三「懒建」(与前两种并列):** sub-4/5B 是「缺席降级通用行」,sub-7 是「状态留 core+面板降级」,sub-8 是「**builder 降级 + ctx 注册 + 点击才建**」——renderFinishInfo 旧制把 19KB `_buildCostPopover` 的完整 HTML 内嵌进**每条**消息(`<span class=cost-popover-data hidden>`),paint 即付构建费,但泡只在点击时开。新契约:core 存 ctx 进 `_costCtxByMsg` WeakMap + 空占位符,`_toggleCostPopover`(stub)点击载包→从 stash 建进同一占位→legacy 内嵌优先(混合形态 bundle 安全)。**冷渲染可见像素零变化。**
+- **cache-break 短语族(19KB 表)留 core 的判据:** 折叠栏 warn tooltip 在 paint 时就调 `_cacheBreakReason`(兄弟符号反查独立同判)——把它降级=首屏 tooltip 退化。「44KB 全拆」(兄弟初稿)与「24KB 保守拆」(落地)的差别就在这张表。
+- **兄弟协补(var 化):** `_costCtxByMsg` 从 const 改 `var`——var 落全局对象属性(任何 script/eval 域可达),const 只落共享词法环境(生产可用,naive harness eval 域不可见)。严格更稳,采纳;其理由「deferred bundle 不可见」只对 naive harness 成立(生产同 realm 词法环境本就共享),我已用「单次 eval 拼接镜像生产」在 harness 解决同族问题。
+- **事件派发补上(sub-9D 前置):** mobile_panels 的 `_wrapOne` 身份重包监听 `tofu:feature-bundle-loaded`——**该派发从未存在**(兄弟 HANDOFF 实证),sub-9D 降级 timer/optimizer 即激活断链;`24e3273a` 三行补上(fail-open)。
+- **下一片:** 兄弟 sub-9 设置面板族六件(~130KB)在飞;**1.2MB 目标线触手可及,sub-9 落地后复核账面评估 complete**。
 
 ### 2026-08-01(Epic-E sub-7:project.js 89KB 拆分——第二个「状态留 core+面板降级」,生产 core 1,351,102 B,差距进 151KB) — commit `fee2bb73`(8 文件);新套件 12 检查 + harness 双文件重指向 ×2;NEUTER×2 精确;环 106/106;runbook **34 项 ALL GREEN**
 

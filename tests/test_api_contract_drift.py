@@ -52,7 +52,10 @@ consumer-by-name before api_ok)
 , api_v1/motion.py (5) , api_v1/browser.py (5) and api_v1/auth.py (4 — the
 GLOBAL GATE rejection envelopes; 429 keeps post-build apply_headers)
 and api_v1/folders.py + api_v1/paper_folders.py (3+3 twin batch —
-bare-array lists wrapped; api_meta response schemas corrected to match) → 83 sites across 13 files remain.
+bare-array lists wrapped; api_meta response schemas corrected to match)
+and the batch-20 small sweep (15 sites / 8 files: conv_search bare
+array coordinated, swarm/audio/translate/endpoint/compaction/poll_abort
+plain, _task_routes api_payload; desktop.py bridge -> CARVE_OUT_FILES) → 67 sites across 5 files remain.
 """
 
 from __future__ import annotations
@@ -83,6 +86,9 @@ CARVE_OUT_FILES: dict[str, str] = {
         'desktop client binary, shape locked outside this repo',
     '_bridge_caller.py':
         'bridge caller helper — same external protocol as browser.py',
+    'desktop.py':
+        'desktop-agent bridge long-poll (/api/desktop/poll) — parsed by '
+        'the external desktop client, same protocol family as browser.py',
 }
 
 # ── Site-level carve-out registry ────────────────────────────────────
@@ -110,16 +116,7 @@ BASELINE: dict[str, int] = {
     'paper.py': 47,
     'common.py': 14,
     'push.py': 3,
-    'conversations_search.py': 3,
     'chat_queue.py': 3,
-    'api_v1/swarm.py': 3,
-    'conversations_compaction.py': 2,
-    'chat_poll_abort.py': 2,
-    'api_v1/endpoint.py': 2,
-    'translate.py': 1,
-    '_task_routes.py': 1,
-    'desktop.py': 1,
-    'api_v1/audio.py': 1,
 }
 
 _TOKEN = 'jsonify('

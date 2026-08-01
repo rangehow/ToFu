@@ -8,7 +8,7 @@ same ``conversations_bp`` Blueprint via side-effect import in
 import asyncio
 import json
 
-from flask import jsonify, request
+from flask import request
 
 from lib.database import DOMAIN_CHAT, async_fetchall, async_fetchone
 from lib.log import get_logger
@@ -87,7 +87,7 @@ async def list_compactions(conv_id):
         })
     logger.info('[Compactions] conv=%s returned %d archives',
                 conv_id[:8], len(out))
-    return jsonify({'compactions': out, 'count': len(out)})
+    return api_ok({'compactions': out, 'count': len(out)})
 
 
 @conversations_bp.route('/api/v1/conversations/<conv_id>/compactions/<int:archive_id>',
@@ -158,7 +158,7 @@ async def get_compaction(conv_id, archive_id):
     logger.info('[Compaction] conv=%s archive=%d messages=%d size=%dKB',
                 conv_id[:8], archive_id, len(messages),
                 len(r['messages_json'] or '') // 1024)
-    return jsonify({'archive': archive_meta, 'messages': messages})
+    return api_ok({'archive': archive_meta, 'messages': messages})
 
 
 # Map the engine's error codes → HTTP status (design §4.2).

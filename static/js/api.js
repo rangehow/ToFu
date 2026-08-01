@@ -715,9 +715,14 @@
     // Full-text + title search across the user's conversations. Returns
     // an array of {id, matchField, matchSnippet, matchRole} or [] on
     // error/timeout. Pass {signal} for cancellation.
-    search: (query, opts) =>
-      get('/api/v1/conversations/search',
-          Object.assign({ query: { q: query } }, opts || {})),
+    // Coordinated bare-array migration (batch 20): backend wraps {ok,
+    // items}; unwrap with fallback (list-UI || [] semantics).
+    search: async (query, opts) => {
+      const d = await get('/api/v1/conversations/search',
+          Object.assign({ query: { q: query } }, opts || {}));
+      if (d && Array.isArray(d.items)) return d.items;
+      return Array.isArray(d) ? d : [];
+    },
     // Targeted message PATCH. by-id is preferred (id-stable across rebuilds);
     // falls back to index addressing on 404. Returns parsed JSON or null on
     // error. Caller passes {msgId, msgIdx} (msgIdx required for fallback).

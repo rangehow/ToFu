@@ -23,6 +23,11 @@ This package makes the SERVER the download origin:
               platforms this server cannot build itself).
   builder   — native on-server build for the platform the server CAN
               build (its own), wired in a later slice.
+  wintoolchain — userspace Wine toolchain (proot + ubuntu guest) for the
+              WINDOWS build: the four measured container traps (seccomp
+              access(2), proot -R /etc/group bind, untranslated
+              faccessat2, preloader SIGSYS) are baked into its recipe and
+              pinned by tests/test_wintoolchain.py.
 
 The request path performs ZERO network: it reads the store. All network
 happens in the mirror's single-flight background thread.

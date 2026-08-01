@@ -1,3 +1,10 @@
+### 2026-08-01(自更新二轮根修:导出镜像清理漏删排除项根修 + apply 终态服务端持久化,刷新页面照样收「下载完成是否重启」) — owner 复核第一轮后两指令(「不要只报告,要修」+ 刷新失效是主场景缺口);epics `pt_d5828b575b404bac` + `pt_3cca755141404a66` DONE;commit `9bf9592b`(10 文件 +849/−49);新套件 7+9+12 检查全绿(各含 NEUTER);全邻接环 18 套件 **95 过 1 跳**
+
+- **导出漏删根因(owner 验证时挖出,比我第一轮的诊断更深一层):** `promo` 早在 2026-06-10 就进了 `ALWAYS_EXCLUDE_DIRS`,可 26MB 至今还在 GitHub——`export.py` 的目的地清理把「导出排除目录」当「保留目录」跳过删除(本意是给活体安装 dest 省 FUSE I/O),排除内容一旦落进发布副本就随每次 `git add -A` 永生。修:`_dest_cleanup_targets` 按模式分流——personal/internal(活体安装)维持旧保留语义;**opensource(发布镜像)只保留 `_OPENSOURCE_DEST_PRESERVE`(.git/data/uploads/.tofu/pgdata/logs 等算子数据),排除目录与源已删条目一律删**,发布树从此=导出集。附带:`static/images/` 8 个零引用营销资产(~12.4MB,运行时图标走 static/icons/)进 `OPENSOURCE_EXTRA_EXCLUDE_FILES`。下次发布后 tarball 56MB→~30MB。
+- **刷新失效根修:** apply 结果曾只活在 push 帧+内存 JS——下载 5-15 分钟用户必切走/刷新,刷新后没人问重启,`/update/check` 还会诱导再下一次 56MB。worker 现落 `update_apply_state.json`(running→done/failed);`/update/check` 投影 `pending_restart`(落地版≠运行版,重启后自清)与 `apply_in_progress`(仅线程实证存活;陈旧 running 标记一次性改写 interrupted)。前端 boot check 裸加载即弹重启 toast(每版本一次)+ 弹窗直渲重启卡 + 在途下载重连 push 订阅(done 帧照样弹)。附带清障:worker 终态写入先于注册表摘除(防并发 check 把 done 误判 interrupted)。
+- **harness 漂移顺手修(兄弟 Epic-E sub-9 把 boot 块换成 `_onReady`,4 个 update 老 harness 载入即崩):** 各补 stub。教训复用既有判例:共享树上批跑失败先怀疑「脚下的文件在动」,再怀疑代码。
+- **测试:** test_export_dest_cleanup.py(7:镜像删排除/保运行态/旧语义对照/force_strip/接线针+图片排除双模式)、test_update_pending_restart.py(9:投影四态+路由级+NEUTER 绕过)、test_frontend_update_pending_restart.py(12 检查:boot toast/一次一版/重启卡/重连订阅/NEUTER)。
+
 ### 2026-08-01(压缩闸门标尺根修落地:F0 record_usage 残量 bug + F1 真实锚点钳制/地板限倍;20:10 误伤在本修复下不复现) — 脑派发接我自票 `pt_18e9f7a6db664ff3`;commit 见下(6 文件);新套件 **11/11**,回归环 **486 绿**(压缩/token/cache 家族 19+5 套件);**NEUTER×2 各咬各的**(cmp 逐字节还原)
 
 - **F0(新发现的潜伏 bug,比上报的更严重):** `manager/_stream.py` 的 `record_usage` 传的是 `_prompt_tokens`(未归一化)——Anthropic 规约下 `input_tokens` 不含缓存,99% 命中的暖轮只记到 ~2K 残量 ⇒ usage_cache 精确档对 Anthropic 规约服务商**永久低计 ~50×**,暖会话的主动压缩闸门永不触发——这正是 07-20「上下文球 100% 为什么没压缩」(mrt66hte4vpmf6)的病根。修:改传 `_total_prompt_tokens`(成本引擎同款归一化,OpenAI 规约下字节等价无行为变化)。测试精确复现:修复前录到 1809,修复后 75281。

@@ -13,11 +13,12 @@ time so a reassignment of ``orchestrator.build_body`` steers the loop.
 
 from __future__ import annotations
 
-import time
 # NOTE: ``import threading`` was removed 2026-07-23 (pt_03f4cdf1 slice 2).
 # The only usage inside run_task was the daemon-thread spawn of the
 # external-edit probe, which now lives in
 # lib.tasks_pkg.orchestrator._vu_startup.start_external_edit_probe.
+# NOTE: ``import time`` was removed 2026-08-01 (pt_03f4cdf1 slice 35).
+# The queue-wait timing moved to _task_open.log_task_open.
 from typing import Any
 
 from lib.log import get_logger, set_req_id
@@ -141,6 +142,11 @@ from lib.tasks_pkg.orchestrator._round_open import (
     emit_round_open,
 )
 from lib.tasks_pkg.orchestrator._turn_prelude import run_turn_prelude
+from lib.tasks_pkg.orchestrator._task_open import (
+    check_autopilot_kick,
+    log_task_open,
+    snapshot_turn_input,
+)
 
 
 
@@ -166,39 +172,15 @@ def run_task(task: dict[str, Any]) -> None:
     # pooled background thread where req_id() would otherwise be empty, leaving
     # every audit line and swallowed-exception trace un-attributable.
     set_req_id(tid)
-    # ★ Autopilot kick-from-idle: a carrier task that runs ONLY the virtual-user
-    #   hook (no worker LLM turn).  The conversation already ended and the last
-    #   message is the agent's reply, so the simulated user answers it directly.
-    #   See lib.tasks_pkg.autopilot._run_autopilot_kick.
-    if task.get('_autopilot_kick'):
-        from lib.tasks_pkg.autopilot import _run_autopilot_kick
-        _run_autopilot_kick(task)
+    # ★ Task open (pt_03f4cdf1 slice 35): autopilot kick-from-idle (carrier
+    #   runs ONLY the virtual-user hook → early return), pristine turn-input
+    #   snapshot (auto-retry restore source, once-only, endpoint-managed skip),
+    #   queue_wait timing + ▶ START bracket (FULL task id). Extracted to
+    #   lib.tasks_pkg.orchestrator._task_open.
+    if check_autopilot_kick(task):
         return
-    # ★ Pristine turn-input snapshot for turn-level auto-retry.
-    #   run_task mutates a LOCAL copy of messages (system-context injection,
-    #   tool-history rebuild, completed tool rounds) and writes it back to
-    #   task['messages'] on exit — so on a transient-error re-run we must
-    #   restore the ORIGINAL input first, or the re-run would double-inject
-    #   system blocks and replay a half-finished round. Captured ONCE and
-    #   preserved across every retry attempt (see _maybe_auto_retry_turn).
-    if not task.get('_endpoint_managed') and '_turn_input_messages' not in task:
-        task['_turn_input_messages'] = list(task.get('messages') or [])
-    # ★ Timing: thread picked the task up. Compare against '_t_created'
-    #   (set in create_task) to measure how long the user "waited" before the
-    #   background worker even started — i.e. thread-pool / queue latency.
-    _t_run_start = time.time()
-    _t_created = task.get('_t_created')
-    if _t_created:
-        logger.info('[Timing:%s] queue_wait=%.3fs (create→run_task)',
-                    tid, _t_run_start - _t_created)
-    # ★ Task START bracket — logged with the FULL task id (not the 8-char
-    #   prefix) so a user can copy the id from the cost popover and grep the
-    #   whole turn's lifecycle. Pairs with the '[Task:%s] ■ DONE' summary at
-    #   completion. Every per-round line in between is tagged [<tid8>] via the
-    #   thread-local req_id set just above.
-    logger.info('[Task:%s] ▶ START conv=%s msgs=%d',
-                task['id'], task.get('convId', '') or '-',
-                len(task.get('messages') or []))
+    snapshot_turn_input(task)
+    _t_run_start = log_task_open(task, tid)
     try:
         cfg = task['config']
 

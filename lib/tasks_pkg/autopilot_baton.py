@@ -389,6 +389,37 @@ def _start_followup_task(task: dict, conv_id: str) -> str | None:
     ):
         cfg.pop(stale_key, None)
 
+    # ★ pt_a21cd6eb bug#2: the model is the CONVERSATION'S LIVE choice, not
+    #   the run's launch-time pin. cfg is inherited from the task that
+    #   STARTED the run, so an owner switching models mid-run (or the quota
+    #   fallback persisting a working model into settings) never reached the
+    #   follow-ups — measured 2026-08-01: conv switched to kimi-k3 at 16:58,
+    #   the 18:20 follow-up still launched on the parent's claude-opus-5 and
+    #   walked straight back into the same 429 wall. Re-resolve ONLY
+    #   model/preset from the conv's current settings; every other key stays
+    #   inherited (turn-scoped state).
+    try:
+        from lib.database import DOMAIN_CHAT, get_thread_db
+        _db = get_thread_db(DOMAIN_CHAT)
+        _row = _db.execute(
+            'SELECT settings FROM conversations WHERE id=? AND user_id=1',
+            (conv_id,)).fetchone()
+        if _row:
+            _live = json.loads(_row['settings'] or '{}')
+            _lm = (_live.get('model') or '').strip()
+            _lp = (_live.get('preset') or '').strip()
+            if _lm and _lm != cfg.get('model'):
+                logger.info('[Autopilot] follow-up model re-resolved from '
+                            'conv settings: %s → %s (the run inherited the '
+                            'launch-time pin; the live choice wins)',
+                            cfg.get('model'), _lm)
+                cfg['model'] = _lm
+                if _lp:
+                    cfg['preset'] = _lp
+    except Exception as _me:
+        logger.debug('[Autopilot] conv model re-resolve failed — inheriting '
+                     'parent model: %s', _me)
+
     api_messages = build_api_messages_from_db(conv_id, cfg)
     if not api_messages:
         logger.warning('[Autopilot] conv=%s build_api_messages returned '

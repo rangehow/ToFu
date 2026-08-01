@@ -1,3 +1,11 @@
+### 2026-08-01(S1 落地:wintoolchain.py 配方打包 + live 终验;预存红×2 定责为兄弟 .deb 表漂移并立案) — commit `b454be27`(2 源文件 + 1 新套件 **12/12**,**NEUTER×2**);live provision **~180s 端到端 ok**;相邻环 desktop_dist 27/27
+
+- **S1 形态:** `lib/desktop_dist/wintoolchain.py` —— `provision()` 幂等七步(proot/rootfs/apt-key 补丁/guest libs/Kron4ek wine 树/前缀/冒烟),每步对应一个实测陷阱并在 docstring + 测试里钉死;wine runner 带宿主镜像绑定(`-b tree:tree`)+ `guest_z()` 路径映射(出 rootfs 即 ValueError);状态记 manifest `wintc` 键。套件四陷阱守卫 + 幂等(第二次 provision 零下载零 guest 命令)+ NEUTER×2(摘镜像绑定 / 摘 apt-key 补丁各咬各的)。
+- **live 终验的超额收获:** 精简 apt 包表(14 个 lib,非 wine64 全家桶 ~1.3GB)实测**足够** —— provision 从零(仅缓存复用)到 `wine-11.14` 可跑 180s,工具链体积假设被实测收紧。
+- **预存红定责(零交集实证):** `test_release_asset_size_floor` 2 红 = 兄弟 `ac1e598c`(.deb epic)在 `release_assets.py:128` 加了 Linux .deb 行而 floor 套件资产集未跟随(grep 实证测试文件零 'deb');本批与 release_assets 零接触。**立案 `pt_6d81d2470a5a49b3`,本批不修**(owner 偏好:预存问题独立工作流)。
+- **方法论记一笔(测试自修两条):** ①fixture 的 cache_dir 是惰性创建,直接往路径写文件先 makedirs;②`'apt-get' in argv_list` 是成员判断不是子串——argv 元素是 `/usr/bin/apt-get`,过滤要用 `any('apt-get' in a for a in r)`。
+- **下一步:** S2 `winbuilder.py` —— git archive HEAD 快照 → wine 下 Windows Python + pip(CI 逐字配方)→ PyInstaller → smoke → payload 按 (git_sha, deps) 缓存;开放实测项:32 位 iscc/python 安装器在新 WoW64 无 preloader 下能否跑(失败则 NSIS 原生接管)。
+
 ### 2026-08-01(egress epic 按 owner 指示停驻:「稍后手动烟,先挂着」) — epic `pt_4ea6bf05deaa46f0` [human-gated] 无问题停驻,升级冷却;服务器侧就绪账已全部落完,剩余只有 owner 办公机的一个动作
 
 - **owner 决策:** 四选项问题卡答「稍后手动烟,先挂着」——不烟、不关票、纯停驻。板上 reason 已带完整自助烟 runbook(正确启动命令 = VS Code 代理 URL + `--allow-egress`,验收路径,排障取证点位),owner 随时手动烟后可凭板面一键 reopen 即重派。

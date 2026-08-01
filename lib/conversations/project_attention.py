@@ -187,6 +187,11 @@ def _charter_proposals(project_path: str) -> list[dict]:
     ``_DECISION_MAX_CHARS`` — the same bound the commit route applies.
     """
     from lib.conversations.project_charter import pending_proposals
+    props = pending_proposals(project_path)
+    # The author is the card's provenance ("which conversation proposed
+    # this?") — the same askedBy* shape the board-question card carries, so
+    # every decision the panel shows wears ONE provenance chip.
+    titles = _conv_titles([p.get('conv_id', '') for p in props])
     return [{
         'type': 'charter_proposal',
         'severity': 'advisory',
@@ -194,9 +199,11 @@ def _charter_proposals(project_path: str) -> list[dict]:
         'title': (p.get('title') or '')[:_TEXT_MAX],
         'text': p.get('summary') or '',
         'convId': p.get('conv_id', ''),
+        'askedByConvId': p.get('conv_id', ''),
+        'askedByTitle': titles.get(p.get('conv_id', ''), ''),
         'ts': int(p.get('ts') or 0),
         'tab': 'charter',
-    } for p in pending_proposals(project_path)]
+    } for p in props]
 
 
 def _conflicts(project_path: str) -> list[dict]:

@@ -139,6 +139,7 @@ from lib.tasks_pkg.orchestrator._round_open import (
     build_stream_accumulator,
     emit_round_open,
 )
+from lib.tasks_pkg.orchestrator._turn_prelude import run_turn_prelude
 
 
 
@@ -224,39 +225,11 @@ def run_task(task: dict[str, Any]) -> None:
         def _vu_phase(detail):
             _extracted_vu_phase(task, detail, vu_startup=_vu_startup)
 
-        # ── Reset swarm auto-continue chain on HUMAN turns ──
-        # A human-initiated turn (NOT itself a swarm auto-continuation) means
-        # the user is back in the loop, so the consecutive-auto-continue
-        # ceiling should start fresh. Auto-continue turns carry
-        # ``_swarmAutoContinue`` and must NOT reset the counter (that's what
-        # bounds a runaway unattended loop). See lib/swarm/integration.py.
-        if not cfg.get('_swarmAutoContinue'):
-            try:
-                from lib.swarm.integration import (reset_autocontinue_chain,
-                                                    swarm_key_for)
-                reset_autocontinue_chain(swarm_key_for(task))
-            except Exception as _e:
-                logger.debug('[Task %s] autocontinue chain reset failed: %s', tid, _e)
-
-        # ── Capability profile: merge named profile defaults UNDER the
-        #    explicit cfg (explicit caller values always win).  No-op when
-        #    cfg has no 'profile' key or selects the empty 'default'.  Applied
-        #    here — before model resolution + tool assembly — so every
-        #    downstream consumer sees the merged values.
-        from lib.agent_core.profiles import apply_profile, resolve_profile_name
-        _profile_name = resolve_profile_name(cfg)
-        if _profile_name != 'default':
-            cfg = apply_profile(cfg)
-            task['config'] = cfg
-
-        # ── Per-client browser routing: set thread-local client ID so all
-        #    browser commands (tools, fetch fallback, search fallback) from
-        #    this task thread route to the correct device's extension. ──
-        _browser_client_id = cfg.get('browserClientId')
-        if _browser_client_id:
-            from lib.browser import _set_active_client
-            _set_active_client(_browser_client_id)
-            logger.debug('[Task %s] Browser client routed to %s', tid, _browser_client_id[:12])
+        # ── Turn prelude (pt_03f4cdf1 slice 33): swarm autocontinue reset
+        #    on human turns + capability profile merge (returns the
+        #    rebound cfg) + per-client browser routing. Extracted to
+        #    lib.tasks_pkg.orchestrator._turn_prelude.
+        cfg = run_turn_prelude(task, cfg, tid)
 
         # ── Provider binding (pt_03f4cdf1 slice 31): hard provider pin
         #    (multi-tenant isolation, when _pinned_provider_id is set) +

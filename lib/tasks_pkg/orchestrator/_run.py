@@ -41,7 +41,6 @@ from lib.tasks_pkg.commit_round import (  # noqa: E402
     _spawn_async_profile_consolidation,  # noqa: F401  (re-exported by the facade)
     derive_round_modified_files,  # noqa: F401  (re-exported by the facade)
 )
-from lib.tasks_pkg.message_builder import inject_tool_history
 from lib.tasks_pkg.system_context import (
     _inject_system_contexts,
     _disabled_prompt_blocks,
@@ -76,6 +75,9 @@ from lib.tasks_pkg.orchestrator._prefetch import start_prefetches
 from lib.tasks_pkg.orchestrator._context_inject import inject_context_and_emit_chips  # noqa: E501
 from lib.tasks_pkg.orchestrator._round_state import RoundState
 from lib.tasks_pkg.orchestrator._tool_history import restore_tool_history
+from lib.tasks_pkg.orchestrator._tool_history import (
+    inject_continue_tool_history,
+)
 from lib.tasks_pkg.orchestrator._memory_prefetch import (
     await_memory_prefetch,
     maybe_run_memory_prefetch,
@@ -362,27 +364,14 @@ def run_task(task: dict[str, Any]) -> None:
         #  last_finish_reason / last_usage / assistant_msg / accumulated_usage
         #  / api_rounds — now live on `rs`, constructed above; slice 1)
 
-        # ★ Inject toolHistory from continue — restore interrupted tool call context
-        _injected_tool_calls = inject_tool_history(messages, cfg, task, model)
-        if _injected_tool_calls:
-            rs.tool_call_happened = True
-            rs.tool_round_num = _injected_tool_calls  # offset so new roundNums don't conflict
-
-        # ── Section 3.5 ── the memory prefetch was SPAWNED above, before
-        #   Section 3, so it overlaps context injection. It is joined by
-        #   await_memory_prefetch() just before the stream loop.
-        #
-        #   Parity guard: the spawn passed len(cfg['toolHistory']) as the
-        #   eligibility input; assert it matches what inject_tool_history
-        #   actually injected, so a future change to that function's counting
-        #   cannot silently flip the prefetch's skip decision.
-        if bool(_injected_tool_calls) != bool(cfg.get('toolHistory') or []):
-            logger.warning(
-                '[%s] memory-prefetch eligibility drift: injected=%s but '
-                'cfg[toolHistory]=%s — the early spawn used the latter; '
-                'inject_tool_history no longer derives its count from that '
-                'key alone', tid, _injected_tool_calls,
-                len(cfg.get('toolHistory') or []))
+        # ★ Continue-toolHistory injection + eligibility drift guard
+        #   (pt_03f4cdf1 slice 36): restores interrupted tool-call context;
+        #   on a non-zero count stamps rs.tool_call_happened + offsets
+        #   rs.tool_round_num; warns when the injected count disagrees
+        #   with cfg['toolHistory'] (the early spawn's eligibility input).
+        #   Extracted to lib.tasks_pkg.orchestrator._tool_history.
+        _injected_tool_calls = inject_continue_tool_history(
+            task=task, rs=rs, messages=messages, cfg=cfg, model=model, tid=tid)
 
         # ── Resume-state hydration ── (pt_03f4cdf1 slice 10)
         #   Extracted to lib.tasks_pkg.orchestrator._resume_state. Applies

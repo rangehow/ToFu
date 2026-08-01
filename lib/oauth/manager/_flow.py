@@ -6,6 +6,8 @@ providers) spawns the relay server thread. ``get_oauth_status`` /
 BY REFERENCE from ``._state``; the relay entrypoint from ``._relay``.
 """
 
+import os
+import sys
 import threading
 import time
 
@@ -16,7 +18,7 @@ from lib.oauth.manager._state import (
     _flows_lock,
     _FLOW_TIMEOUT,
 )
-from lib.oauth.manager._relay import _run_relay_server
+from lib.oauth.manager._relay import _run_relay_server, _bind_relay
 
 logger = get_logger(__name__)
 
@@ -24,6 +26,34 @@ logger = get_logger(__name__)
 # ══════════════════════════════════════════════════════════
 #  Public API
 # ══════════════════════════════════════════════════════════
+
+def _loopback_callback_ok() -> bool:
+    """Whether a loopback ``redirect_uri`` can reach THIS process's relay.
+
+    True only for the packaged desktop app. The relay binds 127.0.0.1 on the
+    SERVER, so a loopback callback only resolves when the browser runs on
+    that same machine — guaranteed in the desktop build (launcher.py pins
+    ``BIND_HOST=127.0.0.1`` and opens the browser itself), and not knowable
+    otherwise.
+
+    ``sys.frozen`` is the load-bearing signal rather than the peer address,
+    for the reason ``routes.api_v1.desktop._setup_state`` already documents:
+    a same-host reverse proxy makes every public request present as
+    loopback, so the peer address cannot distinguish "the user is on this
+    box" from "the user is behind nginx". A frozen process IS the tray app
+    by construction. Guessing wrong here is expensive in one direction
+    only — a remote user would be sent to a localhost URL on THEIR machine,
+    where nothing is listening — so the default stays console+paste.
+
+    ``TOFU_OAUTH_LOOPBACK=1|0`` forces the decision for operators who run a
+    source checkout on their own laptop (1) or front the desktop build with
+    a proxy (0).
+    """
+    override = (os.environ.get('TOFU_OAUTH_LOOPBACK') or '').strip()
+    if override in ('0', '1'):
+        return override == '1'
+    return bool(getattr(sys, 'frozen', False))
+
 
 def start_oauth_flow(provider: str) -> dict:
     """Start an OAuth login flow.
@@ -38,9 +68,28 @@ def start_oauth_flow(provider: str) -> dict:
     Returns:
         dict with 'auth_url', 'status', 'provider', 'callback_port'.
     """
+    # ── Claude: bind BEFORE building the URL, because the bind decides it ──
+    # Claude accepts either the console callback (user copies code#state back)
+    # or the loopback callback the relay can capture silently. The loopback is
+    # only advertisable if we actually own the port, and only meaningful if the
+    # browser is on this machine — so the bind is attempted first and its
+    # RESULT picks the redirect. A failed bind degrades to the console flow,
+    # which is exactly the behaviour every non-desktop deployment already has.
+    relay_server = None
     if provider == 'claude':
+        from lib.oauth.claude import CLAUDE_OAUTH_CONFIG
         from lib.oauth.claude import claude_build_auth_url
-        flow = claude_build_auth_url()
+        if _loopback_callback_ok():
+            relay_server = _bind_relay('claude',
+                                       CLAUDE_OAUTH_CONFIG['callback_port'],
+                                       '')
+            if relay_server is None:
+                logger.info('[OAuth] claude loopback port busy — using the '
+                            'console callback (manual code paste)')
+        flow = claude_build_auth_url(use_loopback=relay_server is not None)
+        if relay_server is not None:
+            # _bind_relay could not know the state before the URL existed.
+            relay_server.RequestHandlerClass.expected_state = flow['state']
     elif provider == 'codex':
         from lib.oauth.codex import codex_build_auth_url
         flow = codex_build_auth_url()
@@ -57,15 +106,20 @@ def start_oauth_flow(provider: str) -> dict:
             'started_at': time.time(),
             'error': None,
             'email': None,
+            # The redirect actually advertised — the exchange MUST echo this
+            # exact string or the token endpoint answers invalid_grant.
+            'redirect_uri': flow.get('redirect_uri', ''),
         }
 
-    # Start relay server in background thread (only for providers that
-    # redirect to localhost — Claude redirects to console.anthropic.com,
-    # so the user must manually copy the code#state back)
-    if provider != 'claude':
+    # Start the relay thread for providers whose callback lands on localhost:
+    # codex always, claude only when the loopback bind above succeeded.
+    # Claude on the console callback has no relay to run — the code is shown
+    # on Anthropic's page and pasted back by hand.
+    if provider != 'claude' or relay_server is not None:
         thread = threading.Thread(
             target=_run_relay_server,
             args=(provider, flow['callback_port'], flow['state']),
+            kwargs={'server': relay_server},
             daemon=True,
             name=f'oauth-relay-{provider}',
         )

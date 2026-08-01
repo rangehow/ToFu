@@ -1,3 +1,10 @@
+### 2026-08-01(api-contract 批 21:push 3 + common 14 + chat_queue 3 清零——基线只剩 paper.py 一座山) — epic `pt_931e16c4` 切片 21;commit 见下(7 文件);环 **159/159**;NEUTER×2 各咬一支
+
+- **解锁前提(实证):** push 双 epic(pt_afbaf3d7 ①②③)已以 `959fd1c9`/`3d51d9a1` 落定,common.py/push.py/chat_queue.py 当前零兄弟 WIP——批 2 时通知过的协调纪律收到完整闭环。
+- **判点三则:** ①push.py 三个 debug-presence dict 本带 ok:True ⇒ 逐字节等价;②**批 15 判据第二次救命**:common.py 四个 dispatch 聚合端点(quota/endpoint-metrics/model-health/key-stats)先验证键控地图全部**嵌在命名外层键下**(`{models:{…}}`/`{endpoints:{…}}`/`{providers:{…}}`)才转 api_ok——顶层 +ok 不会造出假 model/provider 卡片,parity 套件把这四个形状原样钉住;③chat_queue 裸数组(queue GET + 降级空队列)走 `|| []` 协调,queueClear 的 `{cleared}` 平凡转。`_db_safe` 的 503 字面量 → api_error('database_busy', status=503, message=…, retryAfter=2)。
+- **纪律:** failing-first 精确 2 红;NEUTER×2(还原 queue 包装→shipped-source;摘 seam 解包→coordination);cmp 还原;node --check;三文件导入冒烟;环 **159/159**。幽灵连续第十六批零干预。
+- **进度账:** 272→**47 站点 1 文件**(225 已清零,82.7%)。**基线只剩 paper.py——它同时是拆分路线图上 3944 行的待拆单体,迁移与拆分必须排一次序**(先拆后迁,还是迁完再拆)。
+
 ### 2026-08-01(Epic-E sub-9:settings 面板族六件 123KB 整批降级——生产 core 1,273,895 B,距 1.2MB 仅剩 ~45KB) — epic `pt_3879f00e`;主体 commit `9a50c00f`(7 文件);**update.js+runbook 两件被 mrxinirv 的 049b51d6 先行扫入**(共享树 commit 清扫又一次,内容零失真,归属记账于此);套件 **11/11**,环 **77/77**,runbook **42 项 ALL GREEN**
 
 - **普查定案(六件全用户触发):** update 48.7K / skills 21.5K / memory 16.9K / optimizer 13.9K / timer 13.6K / preferences 8.1K——badge/设置 tab/移动 sheet 三条入口,**boot 路径零裸调**(settings/core_panel 对三个 tab populate 早已 typeof 闸)。

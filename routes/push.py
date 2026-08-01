@@ -20,10 +20,10 @@ Protocol:
 import asyncio
 import os
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, request
 from quart import websocket
 
-from lib.api_response import api_error
+from lib.api_response import api_error, api_ok
 from lib.log import get_logger, resolve_inbound_rid
 from lib.push import PushClient, hub
 
@@ -65,7 +65,7 @@ def debug_presence():
         presence.depart(root, 'dbg-swarm', agent_id='agent-coder-1')
         presence.depart(root, 'dbg-swarm', agent_id='agent-coder-2')
         presence.depart(root, 'dbg-swarm')
-        return jsonify({'ok': True, 'action': 'clear', 'root': root})
+        return api_ok({'action': 'clear', 'root': root})
     if action == 'subagents':
         # ONE conversation, TWO sub-agents clobbering the SAME file → a
         # within-conversation conflict advisory + nested rows on the strip.
@@ -82,8 +82,8 @@ def debug_presence():
         snap = presence.snapshot(root)
         logger.info('[Push] debug presence SUB-AGENT scenario fired root=%s peers=%d',
                     root, len(snap.get('peers') or []))
-        return jsonify({'ok': True, 'action': 'subagents', 'root': root,
-                        'activePeers': len(snap.get('peers') or [])})
+        return api_ok({'action': 'subagents', 'root': root,
+                       'activePeers': len(snap.get('peers') or [])})
     # scenario: two peers, a shared-file conflict, both left active.
     presence.announce(root, 'dbg-peer-1', task_id='dbg-task-1',
                       title='Refactor the parser', objective='make it ship',
@@ -98,8 +98,8 @@ def debug_presence():
     snap = presence.snapshot(root)
     logger.info('[Push] debug presence scenario fired root=%s peers=%d',
                 root, len(snap.get('peers') or []))
-    return jsonify({'ok': True, 'action': 'scenario', 'root': root,
-                    'activePeers': len(snap.get('peers') or [])})
+    return api_ok({'action': 'scenario', 'root': root,
+                   'activePeers': len(snap.get('peers') or [])})
 
 
 @push_bp.websocket('/api/push')

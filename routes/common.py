@@ -15,7 +15,7 @@ import time
 from functools import wraps
 
 import sqlite3
-from flask import Blueprint, Response, jsonify, make_response, request, send_from_directory
+from flask import Blueprint, Response, make_response, request, send_from_directory
 
 import lib as _lib  # module ref for hot-reload
 from lib.css_bundler import (
@@ -58,11 +58,10 @@ def _db_safe(fn):
         if 'database is locked' in err_msg:
             logger.warning('[%s] DB locked during %s %s — returning 503: %s',
                            fn.__name__, request.method, request.path, e)
-            return jsonify({
-                'error': 'database_busy',
-                'message': 'Database temporarily busy, please retry.',
-                'retryAfter': 2,
-            }), 503
+            return api_error(
+                'database_busy', status=503,
+                message='Database temporarily busy, please retry.',
+                retryAfter=2)
         logger.error('[%s] DB error during %s %s: %s',
                      fn.__name__, request.method, request.path, e, exc_info=True)
         raise e
@@ -220,7 +219,7 @@ def log_compress():
             content = re.sub(r'^```[^\n]*\n', '', content)
             content = re.sub(r'\n```\s*$', '', content)
             content = content.strip()
-        return jsonify({'compressed': content, 'usage': usage})
+        return api_ok({'compressed': content, 'usage': usage})
     except Exception as e:
         logger.error('[LogCompress] Error: %s', e, exc_info=True)
         return api_internal_error('internal_error')
@@ -234,14 +233,14 @@ def log_compress():
 @api_v1_common_bp.route('/api/v1/pricing/data', methods=['GET'])
 def pricing_data():
     from lib.pricing import get_pricing_data
-    return jsonify(get_pricing_data())
+    return api_ok(get_pricing_data())
 
 @api_v1_common_bp.route('/api/v1/pricing/refresh', methods=['POST'])
 def pricing_refresh():
     from lib.pricing import get_pricing_data, refresh_pricing_async
     logger.info('[pricing_refresh] Triggered pricing data refresh')
     refresh_pricing_async()
-    return jsonify(get_pricing_data())
+    return api_ok(get_pricing_data())
 
 
 # ══════════════════════════════════════════════════════
@@ -268,10 +267,10 @@ def dispatch_quota():
         slots = d.get_slots_info()
     except Exception as e:
         logger.warning('[dispatch/quota] Failed to get dispatcher info: %s', e)
-        return jsonify({'models': {}, 'total_requests_5h': 0, 'total_requests_all': 0})
+        return api_ok({'models': {}, 'total_requests_5h': 0, 'total_requests_all': 0})
 
     from lib.dispatch_stats import aggregate_quota_by_model
-    return jsonify(aggregate_quota_by_model(slots))
+    return api_ok(aggregate_quota_by_model(slots))
 
 
 # ══════════════════════════════════════════════════════
@@ -317,10 +316,10 @@ def dispatch_endpoint_metrics():
         slots = d.get_slots_info()
     except Exception as e:
         logger.warning('[dispatch/endpoint-metrics] Failed: %s', e, exc_info=True)
-        return jsonify({'endpoints': {}, 'ts': time.time()})
+        return api_ok({'endpoints': {}, 'ts': time.time()})
 
     from lib.dispatch_stats import aggregate_endpoint_metrics
-    return jsonify(aggregate_endpoint_metrics(slots))
+    return api_ok(aggregate_endpoint_metrics(slots))
 
 
 @api_v1_common_bp.route('/api/v1/dispatch/model-health', methods=['GET'])
@@ -339,10 +338,10 @@ def dispatch_model_health():
         slots = d.get_slots_info()
     except Exception as e:
         logger.warning('[dispatch/model-health] Failed: %s', e, exc_info=True)
-        return jsonify({'providers': {}, 'ts': time.time()})
+        return api_ok({'providers': {}, 'ts': time.time()})
 
     from lib.dispatch_stats import aggregate_model_health
-    return jsonify(aggregate_model_health(slots))
+    return api_ok(aggregate_model_health(slots))
 
 
 @api_v1_common_bp.route('/api/v1/dispatch/key-stats', methods=['GET'])
@@ -371,11 +370,11 @@ def dispatch_key_stats():
         snapshot = get_all_stats()
     except Exception as e:
         logger.warning('[dispatch/key-stats] Failed: %s', e, exc_info=True)
-        return jsonify({'day': '', 'providers': {},
+        return api_ok({'day': '', 'providers': {},
                         'min_attempts': 5, 'min_success_rate': 0.5})
 
     from lib.dispatch_stats import group_key_stats_by_provider
-    return jsonify(group_key_stats_by_provider(snapshot))
+    return api_ok(group_key_stats_by_provider(snapshot))
 
 
 @api_v1_common_bp.route('/api/v1/dispatch/key-override', methods=['POST'])
@@ -720,7 +719,7 @@ def features():
             out[f.json_key] = bool(getattr(_lib, f.env_key, f.default))
     except Exception as e:
         logger.debug('[features] plugin flags unavailable: %s', e)
-    return jsonify(out)
+    return api_ok(out)
 
 
 @api_v1_common_bp.route('/api/v1/features', methods=['POST'])
@@ -864,7 +863,7 @@ def health_check():
             result['cross_dc'] = cross_dc
     except Exception as e:
         logger.debug('[Health] cross_dc status unavailable: %s', e)
-    return jsonify(result)
+    return api_ok(result)
 
 @common_bp.route('/favicon.ico')
 @common_bp.route('/favicon.svg')

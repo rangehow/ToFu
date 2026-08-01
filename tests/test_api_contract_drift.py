@@ -55,7 +55,10 @@ and api_v1/folders.py + api_v1/paper_folders.py (3+3 twin batch —
 bare-array lists wrapped; api_meta response schemas corrected to match)
 and the batch-20 small sweep (15 sites / 8 files: conv_search bare
 array coordinated, swarm/audio/translate/endpoint/compaction/poll_abort
-plain, _task_routes api_payload; desktop.py bridge -> CARVE_OUT_FILES) → 67 sites across 5 files remain.
+plain, _task_routes api_payload; desktop.py bridge -> CARVE_OUT_FILES)
+and batch 21 (push 3 + common 14 + chat_queue 3 — dispatch aggregates
+verified nested-by-name before api_ok; queue bare array coordinated).
+ONLY paper.py (47, split-roadmap) remains in the baseline → 47 sites across 1 file remain.
 """
 
 from __future__ import annotations
@@ -114,9 +117,6 @@ CARVE_OUT_SITES: dict[str, dict[str, str]] = {
 # delete the entry at zero) in the same commit.
 BASELINE: dict[str, int] = {
     'paper.py': 47,
-    'common.py': 14,
-    'push.py': 3,
-    'chat_queue.py': 3,
 }
 
 _TOKEN = 'jsonify('

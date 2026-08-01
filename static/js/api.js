@@ -892,7 +892,13 @@
     // back to the model. NOT fire-and-forget: the caller needs the verdict
     // ({interrupted:true} or {interrupted:false, reason}) to paint the button.
     interruptCommand: (taskId)  => post(`/api/v1/chat/interrupt-command/${encodeURIComponent(taskId)}`, undefined, { onError: 'null' }),
-    queueGet:     (convId)      => get(`/api/v1/chat/queue/${encodeURIComponent(convId)}`),
+    // Coordinated bare-array migration (batch 21): backend wraps {ok,
+    // items}; unwrap with fallback (list-UI || [] semantics).
+    queueGet:     async (convId) => {
+      const d = await get(`/api/v1/chat/queue/${encodeURIComponent(convId)}`);
+      if (d && Array.isArray(d.items)) return d.items;
+      return Array.isArray(d) ? d : [];
+    },
     queueRemove:  (convId, qId) => del(`/api/v1/chat/queue/${encodeURIComponent(convId)}/${encodeURIComponent(qId)}`,
                                        { parse: 'response', onError: 'null' }),
     queueClear:   (convId)      => del(`/api/v1/chat/queue/${encodeURIComponent(convId)}`,

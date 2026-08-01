@@ -5,6 +5,7 @@ same ``conversations_bp`` Blueprint via side-effect import in
 ``routes/__init__.py``.
 """
 
+import asyncio
 import json
 
 from flask import jsonify, request
@@ -122,7 +123,10 @@ async def get_compaction(conv_id, archive_id):
         return api_not_found('Not found')
 
     try:
-        messages = json.loads(r['messages_json']) if r['messages_json'] else []
+        # Off-loop: this archive payload is megabytes by design (see docstring)
+        # — parsing it on the event loop stalls every other request.
+        messages = (await asyncio.to_thread(json.loads, r['messages_json'])
+                    if r['messages_json'] else [])
     except (json.JSONDecodeError, TypeError) as e:
         logger.warning('[Compaction] Invalid messages_json in archive id=%s: %s',
                        archive_id, e)
@@ -189,8 +193,6 @@ async def compact_conversation(conv_id):
     Success 200: ``{ok, archiveId, tokensBefore, tokensAfter, msgsBefore,
     msgsAfter, reductionPct, summaryPreview}``.
     """
-    import asyncio
-
     if _conv_has_live_task(conv_id):
         logger.info('[ManualCompact] conv=%s refused — task active', conv_id[:8])
         return api_conflict('task_active', error_code='task_active')

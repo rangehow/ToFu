@@ -1,3 +1,8 @@
+### 2026-08-01(api-contract 批 12:artifacts.py 7 站点清零) — epic `pt_931e16c4` 切片 12;commit 见下(4 文件);环 **136/136**;NEUTER×2 各咬一支
+
+- 7 站点全 api_ok 形,二进制/HTML carve-out(routes/artifacts.py raw/view/export)维持 §4 不动。failing-first 精确 1 红;NEUTER×2(调用点回注/import 行回注)各咬 shipped-source 不同闸支;cmp 还原;导入冒烟。幽灵连续第八批零干预。
+- **进度账:** 272→**122 站点 21 文件**(150 已清零,55.1%)。下一批 oauth.py(7)。
+
 ### 2026-08-01(api-contract 批 11:chat.py 11 站点清零——裸数组判例第四态「探针语义 null 保持」) — epic `pt_931e16c4` 切片 11;commit 见下(6 文件);环 **134/134 + chat 邻接 43/43**;NEUTER×2 各咬一支
 
 - **裸数组判定树第四态(最险的一态):** /chat/active 的消费方是**探针**——cross_tab_sync 的 static-adopt 与 send-pipeline 的重连判决区分「服务器说零任务」([])与「探测失败」(null)。若解包把 null 抹成 [],一次网络抖动就会伪装成「零任务」喂给收养判决。解包契约:**null 保持 null**,仅 `.items` 解包 + Array.isArray 回落。activeResponse(返回裸 Response 由调用方查 .ok)走第二通道:唯一调用方 main_init_tasks 自行解包 + 回落。**同一只裸数组,三种解包契约(orchestrations 的 `|| []` / chat.active 的 null 保持 / activeResponse 的调用方自解)——解包语义跟着消费方性质走,不是一刀切。**

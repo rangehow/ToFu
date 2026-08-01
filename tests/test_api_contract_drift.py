@@ -44,7 +44,8 @@ bare-array list branches — wrapped backend-only, no first-party consumer)
 and config.py (8 — templates bare-array via THREE-way coordination:
 backend wrap + api.js unwrap + caller consumes directly)
 and chat.py (11 — /chat/active bare-array, null-PRESERVING unwrap:
-probe consumers distinguish zero-tasks from probe-failed) → 129 sites across 22 files remain.
+probe consumers distinguish zero-tasks from probe-failed)
+and api_v1/artifacts.py (7) → 122 sites across 21 files remain.
 """
 
 from __future__ import annotations
@@ -103,7 +104,6 @@ BASELINE: dict[str, int] = {
     'common.py': 14,
     'oauth.py': 7,
     'api_v1/translate.py': 7,
-    'api_v1/artifacts.py': 7,
     'api_v1/oauth.py': 5,
     'api_v1/motion.py': 5,
     'api_v1/browser.py': 5,

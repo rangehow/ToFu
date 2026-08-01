@@ -1,3 +1,10 @@
+### 2026-08-02(run_command 命令体默认折叠进标题:描述即开关,长命令不再刷屏) — owner 指令「代码默认折叠在标题里,用户反正不看代码」;commit `e53ba261`(5 文件);新套件 **2/2**(failing-first 精确 2 红);wire-parity 基线 43→45 **零既有轮失真**;邻接环 **38/38**
+
+- **形态:** run_command/code_exec 卡片的 `$ 命令` <pre> 默认折叠——判据=有 description 且命令为多行或 >100 字符(短单行如 `npm test` 保持可见=一瞥即读;无 description 保持可见=命令是卡片唯一身份,折叠即匿名)。**描述本身成为开关**(chevron `▸` 前缀,点击原地展开/收起),正合 owner「折叠在标题里」的原话;展开态按 toolCallId 持久(`_cmdBodyExpanded` Set),运行中 tool_progress 每次重渲染不塌回、时间线同步/换会话后仍记得。
+- **覆盖双态:** done 块(`_renderCmdDoneBlock`)与 running 块(`_renderSearchingRow`)同判据——运行中折叠后实时输出/QR 条上移立即可见(两者本就在折叠 pre 之外)。审批卡/stdin 等待卡不动(那都是「必须看清命令」的场景)。顺带实证:styles.css:8242 早有一段「Collapsible command line (done state)」的**空头注释**(只有注释没有规则,规划了未实现),本次就在原址补全。
+- **测试:** 新套件 tests/test_frontend_cmd_collapse.py(JSDOM 25 检查:折叠标记/开关/命令仍在 DOM/输出开关不受累/双态/code_exec 同族/展开-重渲染-再折叠全链 + CSS 静态闸)。**坑一记:eval 进来的脚本里 `const` 不挂全局**,harness 直接引用 `_cmdBodyExpanded` 吃 ReferenceError——改行为式断言(重渲染恢复态)反而更强。wire-parity 电池 +2 轮(长命令 done/running),基线重生成**43 轮既有零 diff、纯增量 2 轮**——阈值判据没惊扰任何短命令既有渲染。
+- **事故自记:** insert_content 把锚点两行也写进了插入内容,造成 `_renderCmdDoneBlock` 头部复制、花括号失衡吞掉文件尾部(node --check: Unexpected end of input)——锚点文本不该在 content 里重复;逐行读区修复后 JS_OK。
+
 ### 2026-08-02(api-contract 终批:paper.py 47 站点清零——272→0 MIGRATION COMPLETE,棘轮从此是纯防御) — owner 指令(「先判闸后动手」)接 epic `pt_931e16c4`;commit `06f80cfc`(3 文件);parity **2/2**,环 **30/30 + 16/16 + 37/37**,NEUTER×2 精确
 
 - **判闸(owner 规则先执行):** 板+peer+三日 JOURNAL 实证无兄弟在拆 paper.py(近三天仅 2 个 async 化小 commit);「拆分路线图避让」与 chat.py/conversations.py 同型——临时防撞闸非永久禁令,且 **migrate-first 是更稳序**(信封助手随后来的拆分随 handler 走)。

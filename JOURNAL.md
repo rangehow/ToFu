@@ -1,3 +1,11 @@
+### 2026-08-01(桌面版下载「not found」:请求从未到 Tofu —— 前缀代理丢前缀,前端重基修复) — owner 报「本机控制面板显示这是被控电脑,但点下载还是 not found」;commit `93d1cc64`(3 文件 +83/-2;两套件 **45/45 + 27/27**;NEUTER×1 精确)
+
+- **owner 三问的定案:** ①**从来不是实时编译**——mirror(lib/desktop_dist/mirror.py)把 GitHub 已发布 release 的安装包抓一次进本地 store(`data/desktop_dist/`),客户端元数据(UA + userAgentData arch)只用来从**已存在**的文件里挑匹配平台的;服务器物理上只能自建 Linux(PyInstaller 不能交叉编译),Windows/macOS 永远来自已发布 release。②**0.14.2 之谜**=mirror 镜像「最新已发布 release」,而发版链断在 v0.14.2(2026-07-31 发版链条批定案:树内 VERSION 已 0.16.0,GitHub latest 停 v0.14.2)——Windows 用户在新 release 发布前只能拿到 0.14.2,Linux 用户由自建 0.16.0 顶上。③**not found 真身**:access.log 里 `desktop/status` 一片 200、`desktop/download` **零命中**——请求根本没到 Tofu,是 code-server 网关自己 404。
+- **根因:** `_request_platform_downloads` 用 `request.host_url` 拼绝对 URL,而路径前缀代理(`/proxy/15000/`)在转发前剥掉前缀 ⇒ 后端**结构上永远看不见前缀**,拼出无前缀 URL ⇒ 点击命中网关默认路由。这是 codebase 已有判据的事故类(pdf_viewer.js:28 注释逐字写着「root-relative drops the prefix → gateway 404」)。**修法沿同一判据:** 后端绝对 URL 契约不动(被测试钉着、非前缀部署下正确),前端 `_lcResolveDlUrl` 剥到 `/api/` 尾巴 + `apiUrl()` 重基到 live BASE_PATH——页面自己知道前缀,后端永远不可能知道。
+- **测试:** 新 `_run_proxied` harness(注入 `apiUrl = '/proxy/15000' + p`)钉重基后 href 带前缀 + escape hatch(GitHub releases,无 /api/ 标记)原样不动;NEUTER(verbatim `p.url`)在 proxied harness 下精确红;`_SHIPPED_SYMBOLS` 补 `_lcResolveDlUrl`(harness 自身注释早警告:helper 抽取不补符号表 = 全套件 ReferenceError)。
+- **同类潜伏实例(未修,立此存照):** `_agent_server_url()`(remote 连接命令的 server_url)同病——minted connect line 给 agent 的也是无前缀 URL,前缀代理下 agent poll 同样会 404。修法不同(agent 需要绝对 URL,正解是客户端渲染连接行时用 `location.origin + BASE_PATH`),影响面是 remote 安装路径,留给下批。
+- **验收边界:** 纯前端修复,**需重启 + bundle 重建生效**(在跑 pid 2351494 是 09:08 旧代码);用户在重启前的即时绕行:手工把 `/proxy/15000` 插进 URL(`/proxy/15000/api/v1/desktop/download/...`)——文件在盘上,现有服务器即可服务。
+
 ### 2026-08-01(脑派自票收官:tofu-search 0.5.3 全链发布完成 —— 凭证找回 + 三步推送 + 三守卫 48/48 全绿) — 接 `pt_84e6828ee5f44a7c` 的人门答复(「凭证找一下,持久化到环境变量」);epic **DONE**
 
 - **凭证找回(两条线都中):** PyPI token 早在 2026-06 的 mq7u1cemkh3rs6 对话里就由 owner 提供过并被该对话持久化到 `~/../.secrets/{pypirc,env.sh}`(FUSE 持久路径,chmod 600;`~/.bashrc` 权限拒绝 + $HOME 易失是当时的定论);GitHub PAT 在 `data/config/mcp_servers.json`(github MCP 项,与 `export.py::_GH_TOKEN` 同一把)。按 owner 要求把 TWINE_USERNAME/TWINE_PASSWORD 追加进 `.secrets/env.sh`(环境变量形态持久化),并存 project memory `pypi-github-publish-credentials`(只记位置不记值)。

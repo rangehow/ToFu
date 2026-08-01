@@ -1,3 +1,10 @@
+### 2026-08-01(error.log 全天审计:19 次 LoopWatch 事件环停摆根修 + PG 跑在 FUSE 上的迁移悬置定案) — owner 指令「查后端 Warning/Error 日志看有什么要修」;commit `ae2a390e`(1 文件 +47/-22;daily_report **50/50**、api_v1_integration **81/81**、server import smoke **1/1**)
+
+- **停摆根因(实测证据链):** 今日 19 次 `event loop STALLED ~5s` 里 11 次 top_frame=`lib/utils.py:32 safe_json`(json.loads)。对照 dump 定案:daily-report 三个端点是 `async def` 却直接在事件环上跑 `_count_convs_for_date`——为出一个**计数**把当天全部会话的 messages 整列 fetch+json.loads(实测当日 72 会话 **295.8MB**,全表 4394 会话 2.9GB,最大单会话 61.4MB)。`_db_safe` 只捕异常不挪线程,Quart 的线程池只罩 sync handler——**判据:async handler 里的重同步活必须自己 `await asyncio.to_thread`**。一处停摆(11:25:54)直接抓到 `daily_report/conversations.py:244` 现行。
+- **修法(随该文件 `_get_monthly_costs` 既有惯例):** conv-count×3 端点 + POST/backfill 的 `_extract_convs_for_date`/`_analyse_conversations`(含同步 LLM 调用)+ calendar 整月 messages 解析(抽纯 CPU helper `_conv_days_from_rows`)全部 to_thread。
+- **更大的悬置账(不修只立):** PG 数据目录 21GB 就在 FUSE 上(`data/pgdata`)——本地盘主备分离已 ENGAGED 但种子迁移从未跑,每次启动都念 db_paths 警告。这是今日 171 条慢查询(DELETE task_events 2.5-3.6s×118,表 6.6GB/513 万行)+ 2 次 `PG appears dead: timeout expired` + `GET /api/v1/timer/list` 500 的共同温床。修法=停机 `TOFU_DB_SEED_LOCAL=1` 一次性播种(/tmp 余量 5.8T 充足),属 owner 级停机动作,已写进 memory `loopwatch-stall-triage-playbook`。
+- **其余定类(只报不修):** sankuai key 日内额度耗尽(运营)、翻译 no-op 6 模型各自重试后放弃(引擎已容错)、小红书引擎超时+Bing 解析 0 结果块(外部反爬)、pymupdf4llm 与 RapidOCR 版本失配 `'RapidOCR' object has no attribute 'text_detector'`×21(tofu-search 侧依赖漂移,每次 PDF 必踩)、Playwright 启动失败 ×80(本容器沙箱)、MCP vendor 快照 STALE×3(`make vendor-mcp xuecheng-mcp llm-mcp hope-mcp` 待跑)、`/api/browser/poll` 401 风暴 3104 条(扩展无凭证每 9s 轮询不停)、CRITICAL 实例锁 1 次(09:07 重启撞上活实例,正常拦截)。
+
 ### 2026-08-01(S2 落地:winbuilder.py 真建 Windows payload——六连陷阱全实测破解,双 payload 双 SHA 复现) — commit `704641fe`(2 源文件 + 1 新套件 **16/16**);**live 终验:81acff59 与 d887b685 两个 HEAD 各产出一个真 payload(152.7MB / 3316 文件 win_amd64 .pyd,`TOFU_SMOKE_OK version=0.16.0 blueprints=57`——冻结 Windows 应用在 wine 下真启动并导完全部蓝图树)**
 ### 2026-08-01(续·刷新后逃生口消失:redirect_mode 收进服务端 flow 并经 status 投影) — owner 复核 `d523797a` 抓出「可达性依赖会话连续性」;修复 `be418f64`(4 文件;后端 25 + 前端 13,全环 **89/89**;**NEUTER×3 各咬各的**;epic `pt_0529eeedd91c484b`)
 

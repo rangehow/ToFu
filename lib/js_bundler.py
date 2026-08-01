@@ -838,7 +838,14 @@ _BUNDLE_FILES = [
     'settings/balance.js',
     'settings/template_actions.js',
     'settings/model_edit.js',
-    'settings/providers/access_matrix.js',
+    # settings/providers/access_matrix.js — MOVED to _DEFERRED_FILES
+    # 2026-08-01 (Epic-E pt_3879f00e sub-5A, 55KB out of the core). All
+    # three external call sites are already typeof-guarded
+    # (core_panel.js / provider_render.js ×2; the matrix toggle button
+    # itself only renders when the module is present), _stgMatrixOpen
+    # moves with it (read guarded), and its only load-time side effect
+    # is a self-contained window-resize IIFE — zero new guards, zero
+    # stubs. Suite: tests/test_frontend_access_matrix_deferred.py.
     'settings/visibility_defaults.js',
     'widgets/chip_input.js',
     'settings/other_tabs.js',
@@ -1073,6 +1080,11 @@ _DEFERRED_FILES = [
     # this lands via idle prefetch) and the module's load-time upgrade
     # pass re-renders the active conv once if it holds such rounds.
     'ui/tool_rounds_rich.js',
+    # Access matrix (55KB) — deferred 2026-08-01 (Epic-E sub-5A). The
+    # per-provider model×key health grid renders only inside Settings →
+    # Providers after a user toggle; every external call site was already
+    # typeof-guarded (see the _BUNDLE_FILES moved-note).
+    'settings/providers/access_matrix.js',
 ]
 
 # The entry-point functions the feature bundle DEFINES. feature-loader.js

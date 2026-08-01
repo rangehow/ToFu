@@ -1,3 +1,10 @@
+### 2026-08-01(前后端统一接口契约层落地:契约文档 + 后端漂移棘轮 + memory.py 样板迁移) — 接 owner「全面优化前后端与集成,统一接口、标准化每次调用」指令;epic `pt_931e16c4`(我认领,切片 1/多);charter 提案「路由层唯一信封规则」已上人审
+
+- **先普查后动刀(实测账):** 后端 650 handler 中 ad-hoc `return jsonify(` 292 处、api_* 已 891 用、@safe_route 26、parse_body 325 vs 裸 get_json 仅 3;前端 api.js 隔离闸满分(仅 2 白名单变量 fetch)。**与兄弟架构评审(mrxinirv)分工:巨型文件拆分/性能归其 Epic-E 与 pt_03f4cdf1,我取无人认领的「接口契约层」。** 关键实证纠偏:server.py 的 500/503 边界**已**对 /api/* 返 JSON 信封(非 HTML)——「未捕获异常形状不统一」是误报,真缺口只剩信封漂移无棘轮与契约无单文档。
+- **交付(4 新/改文件 + CLAUDE.md 指针):** ①`docs/API_CONTRACT.md`——五层地图(api.js 唯一缝→X-Request-ID 相关→parse_body→api_response 信封→server.py 边界)、信封/状态码表、错误双形(字符串|信封)与 ApiError 映射、**carve-out 注册表**(compat_openai/compat_anthropic/desktop-bridge=协议锁定;SSE/二进制/裸数组=类型不可增量)、新增端点清单、迁移工作流;②`tests/test_api_contract_drift.py`——前端隔离闸的后端镜像:逐文件基线 272 站点 33 文件只降不升 + 新文件零容忍 + 过期基线强制收紧 + carve-out 有效性闸;③`tests/test_api_contract_memory_parity.py`——11 站点 wire-parity(legacy 键逐字节存活,仅允许 +ok/+error/+request_id)+ shipped-source 闸;④`routes/api_v1/memory.py` 10 处 jsonify→api_ok/api_created/api_not_found(delete 404 分支保 `deleted:False` 兼容键)。
+- **纪律:** failing-first——parity shipped-source 预迁移红、迁移后绿;棘轮基线一次写准(33 文件计数与 grep 实测逐文件相符)。**NEUTER×2 各咬各的:** chat_queue 注入 jsonify 探针→精确 `test_counts_only_decrease` 1 红;memory 回注站点→精确 `test_shipped_source_converted` 1 红;均 cp/cmp 字节还原。全环 **104/104**(新两套件 + api_response 三环 + request_parser + 前端隔离闸)。**自抓一处:harness 解包 `_resolve` 返回序写反导致误红;replace_all 波及 create 分支造成 `api_ok(mem), 201` 嵌套元组——两刀都在提交前抓回。**
+- **下一步(板上排):** paper.py 47 / api_v1_project 38 / mcp 21 / orchestrations 16 / common 14 按 §7 工作流分批,每批 parity + 同 commit 收紧基线;裸数组端点(chat_queue 族)需前后端协调迁移,另议。
+
 ### 2026-08-01(「待你处理」卡片可读性:blocked_by 溯源列落地 + 背景/选项描述上卡) — owner 截图报决策卡「看不出是哪个会话发的、背景不完整」;commits `7ea40621`(主体 15 文件)+ `d7470552`(工具描述);新测试后端 +4、前端 +6+1NC;环:attention 23、前端 attention 16、board 家族 154、parity+selfheal+brain/dispatch 147、bundle/i18n 48、前端 brain 家族 51、CSS 27 全绿
 
 - **根因两层:** ①「谁问的」在行级**根本没存**——`block_task` 收到 conv_id 只写进 feed/audit,而 `owner_conv_id` 对 blocked epic 恒投影 ''(它不是 claimed);②「背景」被塞在 meta 尾行纯转义文本(600 字符截断),选项的 description 只有 hover tooltip。

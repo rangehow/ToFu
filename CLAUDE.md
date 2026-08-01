@@ -31,7 +31,9 @@ lib/                   — Core business logic
   log.py               — Centralized logging utilities (get_logger, log_exception, audit_log, log_context)
   # ── Shared infrastructure (used everywhere; see §4.6) ──
   api_response.py      — Unified jsonify helpers: api_ok / api_error / api_not_found /
-                         @safe_route — replaces 446 ad-hoc `return jsonify(...)` patterns
+                         @safe_route — replaces 446 ad-hoc `return jsonify(...)` patterns.
+                         The binding contract + carve-out registry + drift ratchet live in
+                         docs/API_CONTRACT.md (+ tests/test_api_contract_drift.py)
   request_parser.py    — Typed JSON body extraction: parse_body / require_str / require_int /
                          optional_list / etc. — raises BadRequest auto-converted to 400
   http_client.py       — Sync (requests) + async (httpx) HTTP with auto-applied proxy.

@@ -17,6 +17,8 @@ var _updateState = null;   // last /update/check payload
 var _updateBusy = false;
 var _updateTaskId = null;  // current apply task; push frames keyed on it
 var _updateStageEls = null;// {fetch, pull, deps} → <li> step elements
+var _updateStageState = {};   // stage → last frame seen (replays on modal re-open)
+var _updateDoneResult = null; // terminal apply result awaiting the restart decision
 
 // Ordered stages of an apply run, rendered as the live stepper.
 var _UPDATE_STAGES = ['fetch', 'pull', 'deps'];
@@ -58,13 +60,49 @@ function _renderSettingsUpdatePill() {
   pill.style.display = (_updateState && _updateState.update_available) ? '' : 'none';
 }
 
-/** Open the update dialog. Re-checks live so the dialog is never stale. */
+/** Open the update dialog. Re-checks live so the dialog is never stale.
+ *  EXCEPTION: an in-flight apply or a finished download awaiting the restart
+ *  decision owns the modal body — restore THAT card instead of re-running the
+ *  check, which would clobber the live stepper / restart prompt with the
+ *  "checking…" spinner (the apply itself keeps running server-side, so the
+ *  user would lose all visibility into it). */
 async function openUpdateDialog() {
   const modal = document.getElementById('updateModal');
   if (!modal) return;
   modal.classList.add('open');
+  if (_updateBusy) {
+    _ensureUpdateScaffold();
+    _renderUpdateStepper();
+    _replayUpdateStageState();
+    return;
+  }
+  if (_updateDoneResult) {
+    _ensureUpdateScaffold();
+    _renderUpdateDone(_updateDoneResult);
+    return;
+  }
   _runUpdateCheck();
   _renderPendingLifecycleApprovals();
+}
+
+/** True when the update modal is currently visible. */
+function _updateModalOpen() {
+  const m = document.getElementById('updateModal');
+  return !!(m && m.classList.contains('open'));
+}
+
+/** Ensure #updateModalBody carries the action-area scaffold the stepper and
+ *  the done card render into. Closing the modal only hides it (the scaffold
+ *  survives), but a fresh page or an interim re-render may have removed it —
+ *  recreate it so a re-opened dialog never goes blank mid-apply /
+ *  pending-restart. */
+function _ensureUpdateScaffold() {
+  const body = document.getElementById('updateModalBody');
+  if (!body || document.getElementById('updateActionArea')) return;
+  body.innerHTML =
+    (_updateState ? _updateHeroHtml(_updateState) : '') +
+    '<div class="upd-action" id="updateActionArea"></div>' +
+    '<div id="updateLifecycleApprovals" style="display:none"></div>';
 }
 
 /** Run the version check with a visible spinner + bounded timeout.
@@ -75,9 +113,10 @@ async function openUpdateDialog() {
 async function _runUpdateCheck() {
   const body = document.getElementById('updateModalBody');
   if (!body) return;
-  // A restart owns the modal body — re-opening the dialog (or a retry click)
-  // must not paint the "checking…" spinner over the live progress card.
-  if (_restartActive) return;
+  // A restart or an in-flight apply owns the modal body — re-opening the
+  // dialog (or a retry click) must not paint the "checking…" spinner over
+  // the live progress card.
+  if (_restartActive || _updateBusy) return;
   body.innerHTML =
     '<div class="upd-checking-wrap"><span class="upd-big-spin"></span><span>' +
     escapeHtml(t('update.checking')) + '</span></div>';
@@ -250,7 +289,8 @@ function _renderUpdateStepper() {
       '<span class="upd-step-label">' + escapeHtml(labels[stage]) + '</span>' +
       '<span class="upd-step-detail"></span></li>';
   }).join('');
-  area.innerHTML = '<ul class="upd-stepper">' + items + '</ul>';
+  area.innerHTML = '<ul class="upd-stepper">' + items + '</ul>' +
+    '<p class="upd-hint">' + escapeHtml(t('update.bgHint')) + '</p>';
   _updateStageEls = {};
   _UPDATE_STAGES.forEach(function (stage) {
     _updateStageEls[stage] = area.querySelector('.upd-step[data-stage="' + stage + '"]');
@@ -264,6 +304,9 @@ function _renderUpdateStepper() {
  *  long-running stage NEVER looks frozen: determinate fills to pct, otherwise
  *  it shows an animated indeterminate sweep. */
 function _applyStageFrame(frame) {
+  // Remember the last frame per stage so the stepper can be rebuilt exactly
+  // when the modal is closed mid-apply and re-opened later.
+  if (frame && frame.stage) _updateStageState[frame.stage] = frame;
   if (!_updateStageEls) return;
   const el = _updateStageEls[frame.stage];
   if (!el) return;
@@ -322,13 +365,26 @@ function _setStepBar(el, pct, indeterminate) {
   }
 }
 
+/** Re-render a freshly-built stepper to the last known state of every
+ *  stage (used when the dialog re-opens mid-apply). */
+function _replayUpdateStageState() {
+  _UPDATE_STAGES.forEach(function (stage) {
+    const fr = _updateStageState[stage];
+    if (fr) _applyStageFrame(fr);
+  });
+}
+
 /** Kick off the update. The backend runs it in a background thread and
  *  streams stage progress over the 'update' push channel; we render a live
  *  stepper and act on the terminal 'done' frame. This keeps the modal
- *  responsive no matter how long git pull / pip install takes. */
+ *  responsive no matter how long git pull / pip install takes. The modal may
+ *  be CLOSED at any point — the download continues server-side regardless and
+ *  the terminal frame raises a toast (see _onUpdateDone). */
 async function applyUpdate() {
   if (_updateBusy) return;
   _updateBusy = true;
+  _updateStageState = {};
+  _updateDoneResult = null;
 
   // Swap the action area to the live stepper immediately so the UI never
   // appears frozen between the click and the first push frame.
@@ -368,21 +424,22 @@ function _subscribeUpdateProgress(taskId) {
     return;
   }
   // Safety net: if no frame ever lands (server died / channel wedged),
-  // surface a timeout instead of an eternal spinner.
-  let watchdog = setTimeout(function () {
+  // surface a timeout instead of an eternal spinner. When the modal is closed
+  // the in-dialog error is invisible — raise a toast as well.
+  const _onWatchdog = function () {
     _finishUpdateSub(taskId);
     _showUpdateError(t('update.applyTimeout'));
+    if (!_updateModalOpen()) {
+      showToast('⚠️', t('update.bgFailTitle'), t('update.applyTimeout'), 8000);
+    }
     _updateBusy = false;
-  }, 15 * 60 * 1000);
+  };
+  let watchdog = setTimeout(_onWatchdog, 15 * 60 * 1000);
 
   const handler = function (frame) {
     if (!frame || frame.taskId !== taskId) return;
     clearTimeout(watchdog);
-    watchdog = setTimeout(function () {
-      _finishUpdateSub(taskId);
-      _showUpdateError(t('update.applyTimeout'));
-      _updateBusy = false;
-    }, 15 * 60 * 1000);
+    watchdog = setTimeout(_onWatchdog, 15 * 60 * 1000);
 
     if (frame.type === 'stage') {
       _applyStageFrame(frame);
@@ -407,15 +464,25 @@ function _finishUpdateSub(taskId) {
   _updateActiveHandler = null;
 }
 
-/** Terminal 'done' frame — mirror the apply_update() result dict. */
+/** Terminal 'done' frame — mirror the apply_update() result dict.
+ *  The modal may be closed (background apply): the restart decision is then
+ *  surfaced as a toast whose click fires the same restart flow the in-dialog
+ *  button would, and the result is kept in _updateDoneResult so re-opening
+ *  the dialog still shows the restart card. */
 function _onUpdateDone(r) {
   const area = document.getElementById('updateActionArea');
+  _updateStageState = {};   // terminal — no live frames left to replay
   if (!r.ok) {
     // Code WAS pulled but pip install failed → still offer a restart.
     if (r.changed && r.deps_changed && !r.deps_installed) {
+      _updateDoneResult = r;
       _renderDepsFailed(r);
     } else {
       _showUpdateError(r.error || t('update.applyFailed'), r.detail || r.deps_detail || '');
+    }
+    if (!_updateModalOpen()) {
+      showToast('⚠️', t('update.bgFailTitle'), (r.error || t('update.applyFailed')),
+        8000, { hint: t('update.bgFailHint'), onClick: function () { openUpdateDialog(); } });
     }
     if (typeof debugLog === 'function') {
       debugLog('[Update] apply failed: ' + (r.error || ''), 'error');
@@ -435,20 +502,32 @@ function _onUpdateDone(r) {
   }
 
   // Pulled new code — needs an explicit restart to take effect.
+  _updateDoneResult = r;
+  _renderUpdateDone(r);
+  if (!_updateModalOpen()) {
+    showToast('✅', t('update.bgDoneTitle').replace('%s', 'v' + (r.new_version || '')),
+      t('update.bgDoneBody'), 30000,
+      { hint: t('update.bgDoneHint'), onClick: function () { restartServer(); } });
+  }
+}
+
+/** Render the post-download "restart to apply" card (shared by the live done
+ *  frame and a re-opened dialog). */
+function _renderUpdateDone(r) {
+  const area = document.getElementById('updateActionArea');
+  if (!area) return;
   const depsNote = (r.deps_changed && r.deps_installed)
     ? '<p class="upd-uptodate">' + escapeHtml(t('update.depsInstalled')) + '</p>'
     : '';
-  if (area) {
-    area.innerHTML =
-      '<p class="upd-ready">' + escapeHtml(t('update.pulled').replace('%s', 'v' + (r.new_version || ''))) + '</p>' +
-      depsNote +
-      '<button class="upd-apply-btn" id="updateRestartBtn" onclick="restartServer()">' +
-      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
-      'stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/>' +
-      '<path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>' +
-      escapeHtml(t('update.restartBtn')) + '</button>' +
-      '<p class="upd-hint">' + escapeHtml(t('update.restartHint')) + '</p>';
-  }
+  area.innerHTML =
+    '<p class="upd-ready">' + escapeHtml(t('update.pulled').replace('%s', 'v' + (r.new_version || ''))) + '</p>' +
+    depsNote +
+    '<button class="upd-apply-btn" id="updateRestartBtn" onclick="restartServer()">' +
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+    'stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/>' +
+    '<path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>' +
+    escapeHtml(t('update.restartBtn')) + '</button>' +
+    '<p class="upd-hint">' + escapeHtml(t('update.restartHint')) + '</p>';
 }
 
 /** Build a full, scrollable log block with a "copy" button.
@@ -960,6 +1039,11 @@ function closeUpdateModal() {
   if (_restartActive) return;
   const modal = document.getElementById('updateModal');
   if (modal) modal.classList.remove('open');
+  // Closing mid-apply must not read as a cancel: the download keeps running
+  // server-side and the completion toast will offer the restart. Say so once.
+  if (_updateBusy) {
+    showToast('ℹ️', t('update.bgRunningToast'), '', 5000);
+  }
 }
 
 // Boot check shortly after load (don't block first paint / chat boot).

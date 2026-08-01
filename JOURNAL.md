@@ -1,3 +1,11 @@
+### 2026-08-01(播客切 Tab 掉进度根修:lookup 重挂被 dedup 键的 model/voice 分量拒之门外) — owner 报「点生成播客后切 Tab 立刻回到未生成态」;后端修复经共享树卷入兄弟 commit `a5f8f19d`(逐 hunk 复核与我规范逐字节一致),回归测试 commit `04ad575f`;播客套件 **17/17**、paper_media_ux 24/24,NEUTER 精确
+
+- **定案(前后端联合持久化缺口的真根):** 播客 dedup 索引键 = `(paper_hash, mode, lang, voice, model)`(model 分量是 cache-key-skew 护栏,防 B 模型请求加入 A 模型的活任务)。而面板的重挂 lookup 只发 `(paper_hash, mode, lang)`——**重挂的使命正是发现「那个在跑的任务是用什么 model/voice 起的」,调用方不可能预先报名**。于是 `_model=None`→键分量 `''`,与 start 注册的 `(…, 'kimi-k3')` 必然错配 → lookup miss → 无缓存 → `found:False` → `_initPodcastTab` 落 idle 渲染生成卡,后端 worker 却一直在跑。任何选了具体模型的播客 100% 复现;模型选择器上线前 start 也不带 model(`''==''` 恰好命中),所以这是模型进 dedup 键那天引入的回归。
+- **修法(后端,语义分界):** START 去重保持精确键不动(B 模型的 start 永不并入 A 的任务,`test_dedup_index_separates_models` 继续钉死);LOOKUP 在精确键 miss 后回退到**活跃任务扫描**——`(paper_hash, mode, lang)` 精确、voice/model 无关、最新者胜,与 `lookup_video_abstract` 的扫描语义同形。响应沿用 index-hit 分支(task_id/model/createdAt/updatedAt),前端既有 `_pmAdoptModel('podcast', look.model)` 自动把选择器收编到任务的真实模型。
+- **纪律:** failing-first——新测试(start 带 model+voice、lookup 不带)精确 RED 复现生产 bug;修复后 17/17;NEUTER(扫描谓词绝育)仅该测试转红、lookup/dedup 邻域保持绿(证明绝育是外科手术级、既有精确键路径无损);cmp 逐字节还原。
+- **共享树卷走第四次立档:** 我的 routes/paper.py 未提交修复被兄弟的事件循环根修批(`a5f8f19d`,22:24:50)整卷进其 commit;按既有判例处置=逐 hunk 对 HEAD 复核(与我规范逐字节一致、零外来内容)→ 收编,我仅补交测试半边。教训复用:快照会撒谎,git show 逐 hunk + 测试环才是事实源。
+- **生效路径:** routes/paper.py 需进程重启,重启窗口 owner 自留。
+
 ### 2026-08-01(api-contract 批 8:upload.py 10 站点清零——image-gen 变量状态码走 api_payload) — epic `pt_931e16c4` 切片 8;commit 见下(4 文件);环 **125/125**;NEUTER×2 精确
 
 - **判点:** 10 站点全 dict;image-gen 错误出口的状态码是**运行时变量**(400 client_error / 503 rate_limited / 500)→ api_payload(errbody, status_code)(body 本带 ok:False ⇒ 逐字节等价,前端 `_status` HTTP 面不变)。pdf/doc parse 的 `{'success': True, …}` body 无 ok 键 ⇒ +ok 纯增量。multipart 请求侧维持 §4 carve-out(响应全信封)。

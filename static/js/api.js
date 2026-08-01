@@ -346,7 +346,13 @@
 
   // folders ---------------------------------------------------------
   const folders = {
-    list:   async ()           => (await get('/api/v1/folders', { onError: 'null' })) || [],
+    // Coordinated bare-array migration (batch 19): backend wraps {ok,
+    // items}; unwrap with fallback (list-UI || [] semantics).
+    list:   async ()           => {
+      const d = await get('/api/v1/folders', { onError: 'null' });
+      if (d && Array.isArray(d.items)) return d.items;
+      return Array.isArray(d) ? d : [];
+    },
     create: (name, color)      => post('/api/v1/folders', { name, color: color || '' }, { onError: 'null' }),
     update: (id, updates)      => put(`/api/v1/folders/${encodeURIComponent(id)}`, updates, { onError: 'null' }),
     remove: async (id)         => {
@@ -369,7 +375,12 @@
 
   // paper-folders (Reading-mode library folders — same shape as `folders`) ---
   const paperFolders = {
-    list:   async ()           => (await get('/api/v1/paper-folders', { onError: 'null' })) || [],
+    // Same bare-array coordination as folders.list above.
+    list:   async ()           => {
+      const d = await get('/api/v1/paper-folders', { onError: 'null' });
+      if (d && Array.isArray(d.items)) return d.items;
+      return Array.isArray(d) ? d : [];
+    },
     create: (name, color)      => post('/api/v1/paper-folders', { name, color: color || '' }, { onError: 'null' }),
     update: (id, updates)      => put(`/api/v1/paper-folders/${encodeURIComponent(id)}`, updates, { onError: 'null' }),
     remove: async (id)         => {

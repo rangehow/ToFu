@@ -50,7 +50,9 @@ array, null-preserving unwrap; poll-404 body-status collision via api_payload)
 and api_v1/oauth.py (5 — provider-keyed status body verified
 consumer-by-name before api_ok)
 , api_v1/motion.py (5) , api_v1/browser.py (5) and api_v1/auth.py (4 — the
-GLOBAL GATE rejection envelopes; 429 keeps post-build apply_headers) → 89 sites across 15 files remain.
+GLOBAL GATE rejection envelopes; 429 keeps post-build apply_headers)
+and api_v1/folders.py + api_v1/paper_folders.py (3+3 twin batch —
+bare-array lists wrapped; api_meta response schemas corrected to match) → 83 sites across 13 files remain.
 """
 
 from __future__ import annotations
@@ -111,8 +113,6 @@ BASELINE: dict[str, int] = {
     'conversations_search.py': 3,
     'chat_queue.py': 3,
     'api_v1/swarm.py': 3,
-    'api_v1/paper_folders.py': 3,
-    'api_v1/folders.py': 3,
     'conversations_compaction.py': 2,
     'chat_poll_abort.py': 2,
     'api_v1/endpoint.py': 2,

@@ -1,3 +1,9 @@
+### 2026-08-01(api-contract 批 19:folders+paper_folders 3+3 同族合批清零——api_meta 形状诚实性顺手修) — epic `pt_931e16c4` 切片 19;commit 见下(6 文件);环 **153/153**;NEUTER×2 各咬一支
+
+- **判点:** 双文件同构 3 站点;list 均为裸数组,api.js 两 seam 本是 `(await get(...)) || []`(orchestrations 式 `|| []` 契约直用)。**顺手抓的诚实性问题:@api_meta 的 responses schema 钉的是 `'type':'array'`——包装后 OpenAPI 文档会说谎(契约 §6-5「@api_meta 保持 openapi.json 诚实」)。两处 api_meta 同步改为 object{ok, items}——形状迁移必须连文档元数据一起迁,这是此前批次没遇到的维度(前几个裸数组端点没钉 api_meta 响应形状)。**
+- **纪律:** failing-first 精确 2 红;NEUTER×2(还原后端包装→shipped-source;摘 seam 解包→coordination)各咬一支;cmp 还原;node --check;双文件导入冒烟(api_meta 括号平衡实证);环 **153/153**。幽灵连续第十四批零干预。
+- **进度账:** 272→**83 站点 13 文件**(189 已清零,69.5%)。剩余:paper.py 47(拆分路线图)、common.py 14(兄弟 WIP)、push 3(兄弟)、conv_search 3、chat_queue 3(裸数组族)、swarm 3、conv_compaction 2、chat_poll_abort 2、endpoint 2、translate 1、_task_routes 1、desktop 1、audio 1。下一批 conv_search 3 + swarm 3 + audio 1 + desktop 1 + translate 1 + _task_routes 1 + endpoint 2 + conv_compaction 2 + chat_poll_abort 2(小文件合批策略,逐族判点)。
+
 ### 2026-08-01(api-contract 批 18:api_v1/auth.py 4 站点清零——全局闸门的拒绝信封) — epic `pt_931e16c4` 切片 18;commit 见下(4 文件);环 **150/150**;NEUTER×2 各咬一支
 
 - **特殊地位:** 这 4 个站点不是路由是**中间件拒绝面**(bridge 401/坏 token 401/无凭证 401/rate 429),被全客户端类(含外部 SDK)消费。形状本带 ok:False+类型信封 ⇒ api_error(dict, status=N) 逐字节等价(+request_id);429 的 `apply_headers(resp, decision)` 后置于信封构建(针头针住)。flask jsonify 导入清除。

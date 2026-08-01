@@ -1546,3 +1546,19 @@
 - **修法:** unknown 渲染即挂有界重轮询(2s 节奏 × 最多 5 次,设置弹窗关闭即弃链,裁决落定/用户重开即重置预算);每轮只是服务器侧一次缓存读,成本为零。_bundle 已重建(7b4093e0),但**在跑进程仍服务旧 tag(3ed8e6b1)——重启后生效**。
 - **方法论记一笔:** 「unknown 是瞬态」是后端的设计假设,但瞬态要成立必须有人负责把它推走——前端没有重取,瞬态就退化成了终态。画 pending 态的地方,永远追问一句「谁来让它翻页」。
 - **顺带:** 本批提交 JOURNAL.md 时携带了兄弟 ms9y68d7 的未提交 MCP 体检条目(已完稿,零风险),特此注明。
+
+### 2026-08-01(overleaf-mcp 发布链闭环:0.3.0 结束单机孤岛——GitHub 双线 + PyPI 双版齐发,生产启动行实测免疫) — 接脑派 `pt_f1d1330c7a7a40fa`;overleaf-mcp repo  commits `408b82d`(0.3.0@main)+ `94e449b`(0.2.2@maint-1.x);tags v0.3.0/v0.2.2 已推;PyPI 0.2.2/0.3.0 已上线
+
+- **止血第一:** overleaf-mcp 目录此前**无 .git**(0.3.0 全部工作只存在单机)。用 `git init + fetch + git reset origin/main` 无损纳管——工作树原样、0.2.1→0.3.0  delta 变成可审 diff(7 改 + layout.py 959L/verify.py 145L/首个测试套件);`.gitignore` 补 .chatui/dist_030/promo(sdist allowlist 同口径:作者明示不发布的物料不进仓);uv.lock 重新生成钉 mcp 2.0.0(旧锁停在 mcp 1.27 + 已删的 `mcp>=1.0.0` 要求)。
+- **发布门(实测才发):** 干净 venv(mcp 2.0.0 + tofu-search 0.5.3)全套 **109/109**;stdio 握手冒烟 initialize=0.3.0、25 tools、新 4 件(get_page_count/locate_in_pdf/section_page_map/verify_citations)全在。
+- **0.2.2 维护版不是礼貌,是生产的保命符:** mcp_servers.json 的 overleaf 启动行是 `uvx --from 'overleaf-mcp-plus[compile]>=0.1.3' --with 'mcp<2'`——0.3.0 成为 latest 后,若无 0.2.2,uvx 求解「latest(需 mcp>=2)× --with mcp<2」**不可满足,下次重连即启动失败**;有了 0.2.2(同功能+mcp<2 pin),求解器回退到 0.2.2。冷解析实测(--refresh):prod-spec → 0.2.2 + mcp 1.29.0,握手 21 tools ✅;v2-spec → 0.3.0 + mcp 2.0.0,握手 25 tools ✅;PyPI simple 索引三版齐(0.2.1/0.2.2/0.3.0)。**从此 PyPI 0.2.1 对新用户的 list_tools 必炸有了官方逃生通道。**
+- **凭证(按 owner 此前指示的持久化位置):** GitHub PAT 取自 mcp_servers.json(今日推过 tofu-search 同一把);PyPI 用 `.secrets/env.sh` 的 TWINE_*。均零落盘新拷贝。
+- **排掉的假警报(教训):** 首次 uvx 验证报 ImportError,以为是包坏——实为**本会话 shell 的 PYTHONPATH 泄漏**(`/mnt/.../overleaf-mcp/src` 被 export,uvx venv 继承后本地 0.3.0 源码遮蔽了已解析的 0.2.2)。生产服务器进程(pid 2351494)environ 实测**无此泄漏**(只有 Spark PYTHONPATH),09:08 启动干净。**判据:uvx/venv 里出现「本不该在场的本地路径」,先 `env -u PYTHONPATH` 复测再下结论。**
+- **顺手:** 服务器 conda env 的 tofu-search dist-info 0.5.2→0.5.3(editable 重装 --no-deps,代码路径未动,运行中进程无感)。
+- **留给 owner 的决策(未做):** 服务器 overleaf MCP 迁 0.3.0/SDK v2 = 从 mcp_servers.json 删掉 `--with mcp<2`(当前 0.2.2 路径实测健康,无迫切性);chatui 桥对 protocol 2026-07-28 的容忍未测,迁移前建议先烟。
+
+### 2026-08-01(勘误:egress 修复不需要重启——「重建 bundle 后 curl 一次看到旧 tag」是设计窗口,不是 stale-manifest) — 兄弟 ms8xezn6 实测纠正;本人复测成立(第二次 curl 已发 7b4093e0)
+
+- **机制(`get_bundle_filename_nonblocking`,请求路径):** 每请求 `_source_max_mtime()` 重 stat ⇒ 源变更后**第一个请求发旧 tag + 后台重建**,内容哈希同源 ⇒ 与独立 `build_bundle()` 同名文件,秒级自愈。**全程无重启。**我 14:11 的 curl 恰好命中「发旧+触发重建」那一拍,误判成「在跑进程不捡新 bundle」。
+- **与历史事故的区别:** 07-24/07-31 的 stale-manifest 是 `_BUNDLE_FILES` 列表 import 期冻结(已修),文件名解析这条链从来不需要重启。**验证手法:curl 两次、间隔几秒;报「需重启」之前必须看到第二次仍不翻。**已存 memory `bundle-rebuild-no-restart-needed`。
+- **对用户的实际影响:** egress 重轮询修复已在生产生效,刷新页面即可;上一轮「你需要重启」的指示作废。

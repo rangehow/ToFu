@@ -684,6 +684,15 @@ PROJECT_TASKS = define_table(
     # project_board.py::answer_task. Added 2026-07.
     sa.Column('block_question', sa.Text, nullable=False, server_default=''),
     sa.Column('human_answer', sa.Text, nullable=False, server_default=''),
+    # blocked_by: PROVENANCE of the last block — the conversation that called
+    # block_task. The operator's first question on a halted-epic card is
+    # "which chat asked me this?" and before this column the answer existed
+    # only in the feed/audit trail, not on the row (owner_conv_id projects ''
+    # for a blocked epic because it is not claimed). Written on EVERY block
+    # (superseded like block_reason); deliberately NOT cleared by
+    # answer/complete/reopen — it records who blocked LAST, nothing reads it
+    # once the block state is gone. Added 2026-08.
+    sa.Column('blocked_by', sa.Text, nullable=False, server_default=''),
     sa.Column('created_at', bigint_column(), nullable=False, server_default=sa.text('0')),
     sa.Column('updated_at', bigint_column(), nullable=False, server_default=sa.text('0')),
 )

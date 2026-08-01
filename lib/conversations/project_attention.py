@@ -71,6 +71,12 @@ _TYPE_RANK = {
 # field a resolving control submits back (see _charter_proposals).
 _TEXT_MAX = 600
 
+# The block REASON is the card's background section ("why did this stop?") —
+# the operator's whole complaint when it is missing context. It renders
+# through the clamp (collapsible), so a longer allowance costs no screen
+# space; cap only against pathological payloads.
+_REASON_MAX = 2000
+
 
 def _empty_attention(project_path: str = '') -> dict:
     return {
@@ -83,6 +89,34 @@ def _empty_attention(project_path: str = '') -> dict:
     }
 
 
+def _conv_titles(conv_ids: list) -> dict:
+    """Map ``convId -> title`` for the attention items' provenance chips.
+
+    The operator's first question on a halted-epic card is "which chat asked
+    me this?" — a bare conv id answers nothing. One bounded IN query over the
+    conversations table; best-effort (a failure degrades to id-only chips,
+    never blanks the surface).
+    """
+    ids = []
+    for c in conv_ids or []:
+        c = str(c or '').strip()
+        if c and c not in ids:
+            ids.append(c)
+    if not ids:
+        return {}
+    try:
+        from lib.database import DOMAIN_CHAT, get_thread_db
+        db = get_thread_db(DOMAIN_CHAT)
+        marks = ','.join('?' * len(ids))
+        rows = db.execute(
+            f'SELECT id, title FROM conversations WHERE id IN ({marks})',
+            tuple(ids)).fetchall()
+        return {r['id']: (r['title'] or '') for r in rows}
+    except Exception as e:
+        logger.debug('[Attention] conv title lookup failed: %s', e)
+        return {}
+
+
 def _board_questions(project_path: str) -> list[dict]:
     """Epics halted on a structured human question — the ONLY item type that
     stops a workstream indefinitely.
@@ -92,9 +126,15 @@ def _board_questions(project_path: str) -> list[dict]:
     block this never resolves on its own. Uses the same partition predicate as
     ``render_board_block``'s pending-question lane and the frontend's awaiting
     lane, so the three can never drift.
+
+    Provenance: ``blocked_by`` (who raised the block) is projected as
+    ``askedByConvId`` (+ resolved ``askedByTitle``), falling back to
+    ``created_by_conv`` for rows blocked before the column existed. The same
+    id also fills ``convId`` so ``build_attention_items``' ``mine`` marking
+    works for board questions exactly as it does for proposals.
     """
     from lib.conversations.project_board import read_board
-    out = []
+    rows = []
     board = read_board(project_path)
     for t in board.get('tasks', []) or []:
         if t.get('kind') == 'lease':
@@ -104,6 +144,13 @@ def _board_questions(project_path: str) -> list[dict]:
         q = t.get('block_question')
         if not q or (t.get('human_answer') or '').strip():
             continue
+        rows.append((t, q))
+    titles = _conv_titles([
+        (t.get('blocked_by') or t.get('created_by_conv') or '')
+        for t, _q in rows])
+    out = []
+    for t, q in rows:
+        asked_by = (t.get('blocked_by') or t.get('created_by_conv') or '')
         out.append({
             'type': 'board_question',
             'severity': 'blocking',
@@ -111,9 +158,12 @@ def _board_questions(project_path: str) -> list[dict]:
             'title': (t.get('title') or '')[:_TEXT_MAX],
             'question': str(q.get('q') or '')[:_TEXT_MAX],
             'options': q.get('options') if isinstance(q.get('options'), list) else [],
-            'reason': (t.get('block_reason') or '')[:_TEXT_MAX],
+            'reason': (t.get('block_reason') or '')[:_REASON_MAX],
             'blockCount': int(t.get('block_count') or 0),
             'ownerConvId': t.get('owner_conv_id') or '',
+            'convId': asked_by,
+            'askedByConvId': asked_by,
+            'askedByTitle': titles.get(asked_by, ''),
             'ts': int(t.get('updated_at') or 0),
             # Where the resolving control lives, for the panel's deep-link.
             'tab': 'board',

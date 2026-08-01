@@ -21956,6 +21956,21 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .pb-watch-diverged{color
 /* The question IS the content on a halted epic — and after the 2026-07-31
    consolidation this is the ONLY place it renders (the Board deep-links here). */
 .pb-attn-q{margin-top:9px;padding:10px 12px;border:1px solid color-mix(in srgb,var(--pb-red) 26%,transparent);border-radius:var(--pb-radius-sm);background:color-mix(in srgb,var(--pb-red) 6%,transparent);font-size:12.5px;line-height:1.6;color:var(--text-primary);overflow-wrap:anywhere;word-break:break-word}
+/* Section label — names the block that follows (Why it stopped / Your call),
+   so a decision card reads as labelled parts, not one dense wall. */
+.pb-attn-label{margin-top:10px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-tertiary)}
+/* The background block: the block reason promoted out of the meta tail into
+   its own quiet panel (clamp-rendered, so a long reason collapses). */
+.pb-attn-reason{margin-top:4px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--pb-radius-sm);background:color-mix(in srgb,var(--bg-tertiary) 30%,transparent);font-size:12px;line-height:1.6;color:var(--text-secondary);overflow-wrap:anywhere;word-break:break-word}
+/* Provenance chip in the card head — pushed right so the severity/kind pills
+   keep their lead position; reuses the panel-wide pb-conv-chip look. */
+.pb-attn-from{margin-left:auto;max-width:55%}
+.pb-attn-from-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Option chip with its description ON the card (was hover-only): the choice
+   and what it means read together, stacked. */
+.pb-attn-opt{flex-direction:column;align-items:flex-start;gap:2px}
+.pb-attn-opt-label{font-weight:600}
+.pb-attn-opt-desc{font-size:10.5px;font-weight:400;color:var(--text-tertiary);line-height:1.45;white-space:normal;text-align:left}
 .pb-attn-input-row{display:flex;gap:7px;margin-top:9px}
 .pb-attn-answer{flex:1;min-width:0;background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--pb-radius-sm);padding:6px 10px;font-size:12px;color:var(--text-primary);font-family:inherit}
 .pb-attn-answer:focus{outline:none;border-color:var(--accent)}

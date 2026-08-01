@@ -150,20 +150,58 @@
    */
   function _questionCard(item) {
     var opts = Array.isArray(item.options) ? item.options : [];
+    // An option's description is the consequence the operator is choosing
+    // BETWEEN — it must be READABLE ON THE CARD, not hidden behind a hover
+    // tooltip (the 2026-08 owner complaint: the card asked for a decision
+    // without showing what each choice meant).
     var chips = opts.map(function (o, i) {
       var label = (o && o.label) ? String(o.label) : '';
       if (!label) return '';
       var desc = (o && o.description) ? String(o.description) : '';
-      return '<button type="button" class="pb-chip pb-attn-act" data-act="answerOpt"' +
-        ' data-idx="' + i + '"' + (desc ? ' title="' + _esc(desc) + '"' : '') +
-        ' data-pb-src="' + _esc(label) + '">' + _esc(label) + '</button>';
+      return '<button type="button" class="pb-chip pb-attn-act pb-attn-opt" data-act="answerOpt"' +
+        ' data-idx="' + i + '" data-pb-src="' + _esc(label) + '">' +
+        '<span class="pb-attn-opt-label">' + _esc(label) + '</span>' +
+        (desc ? '<span class="pb-attn-opt-desc">' + _esc(desc) + '</span>' : '') +
+        '</button>';
     }).join('');
+    // Provenance chip — "which conversation asked me this?". The backend
+    // resolves the title (askedByTitle); the chip deep-links INTO that chat.
+    var fromId = item.askedByConvId || item.convId || '';
+    var fromChip = '';
+    if (fromId) {
+      var fromName = item.askedByTitle || fromId;
+      fromChip = '<button type="button" class="pb-conv-chip pb-attn-from pb-attn-act"' +
+        ' data-act="openConv" data-conv-id="' + _esc(fromId) + '" title="' +
+        _esc(_t('projectBrain.attnOpenConv',
+                'Open the conversation that raised this')) + '">' +
+        ((typeof Icon === 'function') ? Icon('messageSquare', 11) : '') +
+        '<span class="pb-attn-from-name">' +
+        _esc(_t('projectBrain.attnFrom', 'from')) + ' ' + _esc(fromName) +
+        '</span></button>';
+    }
     var meta = [];
     if (item.blockCount) {
       meta.push(_t('projectBrain.blockedCount', 'blocked %d×')
         .replace('%d', item.blockCount));
     }
-    if (item.reason) meta.push(item.reason);
+    // When it stopped — the same relative-time grammar the feed uses.
+    var rel = '';
+    try {
+      if (window.ProjectBrain &&
+          typeof window.ProjectBrain._relTime === 'function') {
+        rel = window.ProjectBrain._relTime(item.ts);
+      }
+    } catch (_e) { rel = ''; }
+    if (rel) meta.push(rel);
+    // The reason is the card's BACKGROUND section ("why did this stop?") —
+    // promoted out of the one-line meta tail into its own labeled,
+    // clamp-rendered block so the operator gets the context the decision
+    // needs instead of a dense escaped footnote.
+    var reasonHtml = item.reason
+      ? '<div class="pb-attn-label">' +
+        _esc(_t('projectBrain.attnWhyStopped', 'Why it stopped')) + '</div>' +
+        '<div class="pb-attn-reason">' + _rich(item.reason) + '</div>'
+      : '';
     // "Create conversation" — open a fresh chat about this epic (delegates to
     // project-brain.js's launcher). Rendered ONLY when that shared launcher
     // is actually loaded: a button whose handler is absent is a dead button.
@@ -179,8 +217,12 @@
     return _card(item,
       '<div class="pb-attn-head">' + _sevPill(item.severity) +
         '<span class="pb-attn-kind">' +
-        _esc(_t('projectBrain.attnKindEpic', 'Epic halted')) + '</span></div>' +
+        _esc(_t('projectBrain.attnKindEpic', 'Epic halted')) + '</span>' +
+        fromChip + '</div>' +
       '<div class="pb-attn-title">' + _rich(item.title) + '</div>' +
+      reasonHtml +
+      '<div class="pb-attn-label">' +
+        _esc(_t('projectBrain.attnYourCall', 'Your call')) + '</div>' +
       '<div class="pb-attn-q" data-pb-src="' + _esc(item.question) + '">' +
         _esc(item.question) + '</div>' +
       (chips ? '<div class="pb-chip-row">' + chips + '</div>' : '') +
@@ -454,6 +496,13 @@
       var input = card.querySelector('.pb-attn-answer');
       var text = input ? (input.value || '').trim() : '';
       if (text) _submitAnswer(api, path, id, convId, text, btn);
+      return;
+    }
+    if (act === 'openConv') {
+      // The provenance chip — jump into the conversation that raised the
+      // question so the operator can read the full backstory there.
+      var cid = btn.getAttribute('data-conv-id') || '';
+      if (cid && typeof loadConversation === 'function') loadConversation(cid);
       return;
     }
     if (act === 'createConv') {

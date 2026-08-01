@@ -24,6 +24,7 @@ Plus a source-level negative control: no-op the severity sort → the
 from __future__ import annotations
 
 import os
+import time
 
 import pytest
 
@@ -34,6 +35,7 @@ pytestmark = pytest.mark.unit
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, '..'))
 _ATTN_SRC = os.path.join(ROOT, 'lib', 'conversations', 'project_attention.py')
+_BOARD_SRC = os.path.join(ROOT, 'lib', 'conversations', 'project_board.py')
 
 
 @pytest.fixture(scope='module', autouse=True)
@@ -458,5 +460,117 @@ def test_NC_proposal_text_cap_would_truncate_a_committed_decision(flask_app):
         _ATTN_SRC,
         "        'text': p.get('summary') or '',",
         "        'text': (p.get('summary') or '')[:_TEXT_MAX],  # NC (cap restored)",
+        run,
+    )
+
+
+# ════════════════════════════════════════════════════════════════════
+#  Provenance + background on a halted-epic card (2026-08 owner complaint:
+#  "I can't tell which conversation asked me this, and the background is
+#  incomplete"). Before blocked_by, the asker existed only in the feed /
+#  audit trail — owner_conv_id projects '' for a blocked epic because it
+#  is not claimed.
+# ════════════════════════════════════════════════════════════════════
+
+def _insert_conv(db, conv_id, title):
+    """Minimal conversations row so the title lookup resolves for real."""
+    now = int(time.time() * 1000)
+    db.execute(
+        'INSERT INTO conversations (id, user_id, title, messages, created_at, '
+        'updated_at, settings, msg_count, search_text, rev) '
+        'VALUES (?, 1, ?, ?, ?, ?, ?, 0, ?, ?)',
+        (conv_id, title, '[]', now, now, '{}', '', 1))
+    db.commit()
+
+
+def test_blocked_by_is_surfaced_with_title_and_mine(flask_app):
+    """The card must answer 'which conversation asked me this?' from the ROW:
+    blocked_by → askedByConvId + the resolved title, and the same id drives
+    `mine` marking exactly like a proposal's author."""
+    from lib.conversations.project_attention import build_attention_items
+    from lib.conversations.project_board import post_task
+    from lib.database import DOMAIN_CHAT, get_thread_db
+    p = os.path.abspath('/tmp/attn-provenance')
+    with flask_app.app_context():
+        db = get_thread_db(DOMAIN_CHAT)
+        _insert_conv(db, 'attn-asker-1', 'Egress 出口调研')
+        t = post_task(p, 'cA', 'Halted epic')['id']
+        _block_with_question(p, 'attn-asker-1', t, 'Which way?')
+        a = build_attention_items(p, 'attn-asker-1')
+    item = a['items'][0]
+    assert item['askedByConvId'] == 'attn-asker-1', item
+    assert item['askedByTitle'] == 'Egress 出口调研', item
+    assert item.get('mine') is True, 'the asker id must drive mine marking'
+
+
+def test_blocked_by_falls_back_to_created_by_conv(flask_app):
+    """Rows blocked BEFORE the column existed (blocked_by='') still get a
+    provenance chip — from the epic's poster, never nothing."""
+    from lib.conversations.project_attention import build_attention_items
+    from lib.conversations.project_board import post_task
+    from lib.database import DOMAIN_CHAT, get_thread_db
+    p = os.path.abspath('/tmp/attn-legacy-block')
+    with flask_app.app_context():
+        t = post_task(p, 'cA', 'Halted epic')['id']
+        _block_with_question(p, 'cB', t, 'Which way?')
+        db = get_thread_db(DOMAIN_CHAT)
+        db.execute("UPDATE project_tasks SET blocked_by='' WHERE id=?", (t,))
+        db.commit()
+        item = build_attention_items(p)['items'][0]
+    assert item['askedByConvId'] == 'cA', item
+    assert item['askedByTitle'] == '', 'no conv row → id-only chip, never blank id'
+
+
+def test_reason_uses_the_background_allowance(flask_app):
+    """The reason is the card's BACKGROUND section — it must arrive WHOLE
+    past the display-only 600-char cap (the 'incomplete background'
+    complaint), bounded only by _REASON_MAX (= the storage cap)."""
+    from lib.conversations.project_attention import _TEXT_MAX, build_attention_items
+    from lib.conversations.project_board import block_task, post_task
+    p = os.path.abspath('/tmp/attn-longreason')
+    # (block_task .strip()s the reason — build the fixture without a tail space)
+    reason = ('[human-gated] needs a call. ' + ('evidence ' * 90)).strip()
+    assert _TEXT_MAX < len(reason) <= 2000, 'fixture must exceed the display cap'
+    with flask_app.app_context():
+        t = post_task(p, 'cA', 'Halted epic')['id']
+        block_task(p, 'cA', t, reason, question='Which way?')
+        item = build_attention_items(p)['items'][0]
+    assert item['reason'] == reason, \
+        'the background must not be truncated at the display-only cap'
+
+
+def test_NC_blocked_by_write_is_load_bearing(flask_app):
+    """NC: strip the blocked_by=? write from block_task → the asker is LOST
+    (the chip falls back to the epic's poster) → the provenance assertions
+    FAIL. Proves the column write, not some incidental read, carries the
+    answer to 'who asked me this?'."""
+    def run(mod):
+        p = os.path.abspath('/tmp/attn-nc-prov')
+        with flask_app.app_context():
+            from lib.database import DOMAIN_CHAT, get_thread_db
+            db = get_thread_db(DOMAIN_CHAT)
+            db.execute('DELETE FROM project_tasks WHERE project_path=?', (p,))
+            db.commit()
+            t = mod.post_task(p, 'cA', 'Halted epic')['id']
+            mod.block_task(p, 'attn-asker-2', t, '[human-gated] needs a call',
+                           question='Which way?')
+            from lib.conversations.project_attention import build_attention_items
+            item = build_attention_items(p)['items'][0]
+        assert item['askedByConvId'] != 'attn-asker-2', \
+            'NC: with the blocked_by write neutered the asker must be lost'
+        assert item['askedByConvId'] == 'cA', \
+            'NC: the fallback to the poster is what remains'
+
+    _patch_restore(
+        _BOARD_SRC,
+        "            'block_reason=?, block_question=?, human_answer=?, blocked_by=?, '\n"
+        "            'updated_at=? '\n"
+        "            'WHERE id=? AND project_path=?',\n"
+        "            (blocked_until, new_count, reason, question_json, '', conv_id,\n"
+        "             now, task_id, project_path))",
+        "            'block_reason=?, block_question=?, human_answer=?, updated_at=? '\n"
+        "            'WHERE id=? AND project_path=?',\n"
+        "            (blocked_until, new_count, reason, question_json, '', now,\n"
+        "             task_id, project_path))  # NC (blocked_by write stripped)",
         run,
     )

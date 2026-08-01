@@ -3606,6 +3606,12 @@ var _i18n = {
   'projectBrain.attnEmptySub': { zh: '所有工作流都在自行推进。', en: 'Every workstream is moving on its own.' },
   'projectBrain.attnEmptyWaiting': { zh: '{n} 项在等待自己的门禁 — 无需你动手', en: '{n} waiting on their own gates — no action needed' },
   'projectBrain.attnWaiting': { zh: '{n} 项在等待自己的门禁 — 无需你动手', en: '{n} waiting on their own gates — no action needed' },
+  // Provenance + background on a halted-epic card (2026-08 owner complaint:
+  // the card asked for a decision without saying WHO was asking or WHY).
+  'projectBrain.attnFrom': { zh: '来自', en: 'from' },
+  'projectBrain.attnOpenConv': { zh: '打开发起这个问题的会话', en: 'Open the conversation that raised this' },
+  'projectBrain.attnWhyStopped': { zh: '为什么停下', en: 'Why it stopped' },
+  'projectBrain.attnYourCall': { zh: '需要你决定', en: 'Your call' },
   'projectBrain.board': { zh: '任务板', en: 'Board' },
   'projectBrain.activity': { zh: '动态', en: 'Activity' },
   'projectBrain.team': { zh: '团队', en: 'Team' },

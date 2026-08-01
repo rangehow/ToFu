@@ -88,6 +88,8 @@ win.ProjectBrain = global.ProjectBrain = {
   _state: { path: '/proj/real' },
   _selectTab: (n) => { _selectedTab = n; },
   _wireClampToggles: () => {},
+  // The shared relative-time grammar (the REAL one lives in project-brain.js).
+  _relTime: (ts) => (ts ? '2h ago' : ''),
   // The shared epic→conversation launcher (the REAL one lives in
   // project-brain.js, bundled before this module). The stub records the
   // delegation so the test can assert id + ORIGINAL title are handed over.
@@ -96,6 +98,8 @@ win.ProjectBrain = global.ProjectBrain = {
 // Record every API call so the tests can assert WHICH backend route a control
 // hits (the "one contract per action" invariant — no reimplementation).
 const _calls = [];
+// The provenance chip deep-links into the originating conversation.
+win.loadConversation = global.loadConversation = (id) => { _calls.push(['loadConversation', id]); };
 win.Api = global.Api = { project: {
   boardAnswer: (p, id, conv, ans) => { _calls.push(['boardAnswer', id, ans]); return Promise.resolve({}); },
   commitCharter: (p, body) => { _calls.push(['commitCharter', body.resolves_proposal, body.add_decision]); return Promise.resolve({}); },
@@ -120,8 +124,10 @@ PBA.renderAttention({
   items: [
     { type: 'board_question', severity: 'blocking', id: 'pt_halted',
       title: 'Migrate the schema', question: 'Postgres or SQLite?',
-      options: [{ label: 'Postgres' }, { label: 'SQLite' }],
-      reason: '[human-gated] needs a call', blockCount: 3, tab: 'board' },
+      options: [{ label: 'Postgres', description: 'full power, more ops' },
+                { label: 'SQLite', description: 'zero ops, single box' }],
+      reason: '[human-gated] needs a call', blockCount: 3, tab: 'board',
+      askedByConvId: 'conv-asker', askedByTitle: 'Egress 调研', ts: 1754000000000 },
     { type: 'charter_proposal', severity: 'advisory', id: 'prop_1',
       text: 'Adopt the new parser', tab: 'charter' },
     { type: 'conflict', severity: 'advisory', id: 'src/shared.py',
@@ -146,6 +152,22 @@ check('question_rendered', html.indexOf('Postgres or SQLite?') !== -1);
 check('option_chips', body.querySelectorAll('.pb-attn-act[data-act="answerOpt"]').length === 2);
 check('answer_input', !!body.querySelector('.pb-attn-answer'));
 check('answer_submit', !!body.querySelector('.pb-attn-act[data-act="answerSubmit"]'));
+// ── Provenance + background (2026-08 owner complaint): WHO asked, WHY it
+//    stopped, WHEN, and what each option MEANS — all ON the card. ──
+const fromChip = cards[0] ? cards[0].querySelector('.pb-attn-from[data-conv-id="conv-asker"]') : null;
+check('from_chip_rendered', !!fromChip && fromChip.textContent.indexOf('Egress 调研') !== -1);
+check('reason_section', !!cards[0].querySelector('.pb-attn-reason') &&
+      cards[0].querySelector('.pb-attn-reason').textContent.indexOf('[human-gated] needs a call') !== -1);
+check('yourcall_label', html.indexOf('projectBrain.attnYourCall') !== -1 ||
+      html.indexOf('Your call') !== -1);
+const chipRowText = (cards[0].querySelector('.pb-chip-row') || {}).textContent || '';
+check('option_desc_visible', cards[0].querySelectorAll('.pb-attn-opt-desc').length === 2 &&
+      chipRowText.indexOf('zero ops') !== -1 && chipRowText.indexOf('full power') !== -1);
+check('rel_time_rendered', !!cards[0].querySelector('.pb-attn-meta') &&
+      cards[0].querySelector('.pb-attn-meta').textContent.indexOf('2h ago') !== -1);
+if (fromChip) fromChip.click();
+check('from_chip_loads_conv',
+      !!_calls.find(c => c[0] === 'loadConversation' && c[1] === 'conv-asker'));
 // The proposal renders commit + reject inline.
 check('commit_btn', !!body.querySelector('.pb-attn-act[data-act="commit"]'));
 check('reject_btn', !!body.querySelector('.pb-attn-act[data-act="reject"]'));
@@ -261,6 +283,9 @@ def test_attention_tab_renders_and_resolves_inline():
     for must in ('PASS three_cards', 'PASS blocking_card_first',
                  'PASS blocking_is_the_epic', 'PASS question_rendered',
                  'PASS option_chips', 'PASS answer_submit',
+                 'PASS from_chip_rendered', 'PASS from_chip_loads_conv',
+                 'PASS reason_section', 'PASS yourcall_label',
+                 'PASS option_desc_visible', 'PASS rel_time_rendered',
                  'PASS commit_btn', 'PASS reject_btn',
                  'PASS conflict_deeplink', 'PASS waiting_footnote',
                  'PASS waiting_not_a_card', 'PASS badge_blocking_class',
@@ -312,6 +337,38 @@ def test_NC_server_order_is_preserved():
         assert 'FAIL blocking_card_first' in output, \
             ('NC: a client-side re-sort must break the server-order '
              'contract:\n' + output)
+    finally:
+        try:
+            os.remove(copy_path)
+        except OSError:
+            pass
+    with open(_ATTN_SRC, encoding='utf-8') as f:
+        assert f.read() == original, 'shipped project-brain-attention.js must be byte-identical'
+
+
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
+def test_NC_provenance_chip_is_load_bearing():
+    """NC: drop the provenance lookup in a COPY → the card renders without the
+    from-chip → from_chip_rendered FAILS.
+
+    The 2026-08 owner complaint was precisely "no indication of which
+    conversation sent this". This proves the chip is produced by the
+    askedByConvId wiring, not by some incidental render of the payload."""
+    with open(_ATTN_SRC, encoding='utf-8') as f:
+        original = f.read()
+    anchor = "    var fromId = item.askedByConvId || item.convId || '';"
+    assert anchor in original, 'fromId anchor not found (source changed?)'
+    patched = original.replace(
+        anchor, "    var fromId = '';  // NC (provenance dropped)", 1)
+    copy_path = os.path.join(HERE, '_attn_nc_from.js')
+    try:
+        with open(copy_path, 'w', encoding='utf-8') as f:
+            f.write(patched)
+        output = _write_and_run(_HARNESS, copy_path, 'ncfrom')
+        assert 'FAIL from_chip_rendered' in output, \
+            ('NC: dropping the provenance lookup must remove the from-chip:\n'
+             + output)
     finally:
         try:
             os.remove(copy_path)

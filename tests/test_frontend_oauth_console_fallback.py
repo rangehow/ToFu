@@ -92,6 +92,7 @@ global._loadServerConfig = () => {};
 global._safeClipboardWrite = () => Promise.resolve();
 
 const LOGIN_RESPONSE = %(login_response)s;
+const STATUS_RESPONSE = %(status_response)s;
 global.Api = {
   oauth: {
     loginPost: (provider, preferConsole) => {
@@ -108,7 +109,7 @@ global.Api = {
       calls.push({ verb: 'logoutPost', provider });
       return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
     },
-    status: () => Promise.resolve(null),
+    status: () => Promise.resolve(STATUS_RESPONSE),
     egressAgentGet: () => Promise.resolve({}),
   },
 };
@@ -121,10 +122,11 @@ eval(src);
 '''
 
 
-def _harness(body: str, login_response: dict) -> dict:
+def _harness(body: str, login_response: dict, status_response=None) -> dict:
     return _run_node(_HARNESS % {
         'oauth_js': json.dumps(str(_OAUTH_JS)),
         'login_response': json.dumps(login_response),
+        'status_response': json.dumps(status_response),
         'body': body,
     })
 
@@ -236,6 +238,98 @@ class TestFlowIsDescribedTruthfully(unittest.TestCase):
         self.assertEqual(len(logins), 1)
         self.assertFalse(logins[0]['preferConsole'],
                          'the default must stay the automatic decision')
+
+
+class TestReloadRestoresTheEscapeHatch(unittest.TestCase):
+    """A RELOADED page renders from _loadOAuthStatus, never from _oauthLogin.
+
+    The escape hatch shipped in the previous batch was wired only in the
+    login click handler — so the single most natural action of a stuck user
+    (reload the page) silently removed it again: the card re-rendered from
+    /api/v1/oauth/status showed only cancel-and-retry, which re-runs the
+    same callback decision that just failed.
+    """
+
+    _WAIT_LOOPBACK = {'claude': {'status': 'waiting_callback',
+                                 'redirect_mode': 'loopback',
+                                 'auth_url': 'https://claude.ai/oauth/authorize?x=1',
+                                 'authenticated': False, 'egress': None},
+                      'codex': {'status': 'not_started', 'authenticated': False}}
+    _WAIT_CONSOLE = {'claude': {'status': 'waiting_callback',
+                                'redirect_mode': 'console',
+                                'auth_url': 'https://claude.ai/oauth/authorize?x=2',
+                                'authenticated': False, 'egress': None},
+                     'codex': {'status': 'not_started', 'authenticated': False}}
+
+    def test_reload_with_waiting_loopback_restores_box_and_hatch(self):
+        v = _harness(
+            """
+            // The real card markup starts hidden — reproduce that.
+            document.getElementById('oauthClaudeManual').style.display = 'none';
+            await _loadOAuthStatus();
+            await new Promise(r => setImmediate(r));
+            console.log(JSON.stringify({
+              manual: document.getElementById('oauthClaudeManual').style.display,
+              authUrl: document.getElementById('oauthClaudeAuthUrl').value,
+              hatch: document.getElementById('oauthClaudeConsoleFallbackRow').style.display,
+              wired: typeof document.getElementById('oauthClaudeConsoleFallbackBtn').onclick === 'function',
+              note: document.getElementById('oauthClaudeLoopbackNote').style.display,
+              paste: document.getElementById('oauthClaudePasteRow').style.display,
+            }));
+            """, _LOOPBACK_RESP, self._WAIT_LOOPBACK)
+        self.assertNotEqual(v['manual'], 'none',
+                            'the reloaded card must re-offer the manual box')
+        self.assertEqual(v['authUrl'], 'https://claude.ai/oauth/authorize?x=1',
+                         'the reloaded card must be able to re-open the popup')
+        self.assertNotEqual(v['hatch'], 'none',
+                            'the escape hatch must survive a reload')
+        self.assertTrue(v['wired'])
+        self.assertNotEqual(v['note'], 'none')
+        self.assertEqual(v['paste'], 'none')
+
+    def test_reload_with_waiting_console_keeps_paste_hides_hatch(self):
+        v = _harness(
+            """
+            document.getElementById('oauthClaudeManual').style.display = 'none';
+            await _loadOAuthStatus();
+            await new Promise(r => setImmediate(r));
+            console.log(JSON.stringify({
+              manual: document.getElementById('oauthClaudeManual').style.display,
+              hatch: document.getElementById('oauthClaudeConsoleFallbackRow').style.display,
+              paste: document.getElementById('oauthClaudePasteRow').style.display,
+            }));
+            """, _CONSOLE_RESP, self._WAIT_CONSOLE)
+        self.assertNotEqual(v['manual'], 'none')
+        self.assertNotEqual(v['paste'], 'none')
+        self.assertEqual(v['hatch'], 'none')
+
+    def test_synthetic_waiting_state_without_mode_leaves_box_alone(self):
+        """The curl helper drives a synthetic waiting_callback with NO mode —
+        the restore path must not clobber its manual box."""
+        v = _harness(
+            """
+            document.getElementById('oauthClaudeManual').style.display = 'none';
+            _updateOAuthCard('claude', { status: 'waiting_callback' });
+            console.log(JSON.stringify({
+              manual: document.getElementById('oauthClaudeManual').style.display,
+            }));
+            """, _LOOPBACK_RESP)
+        self.assertEqual(v['manual'], 'none')
+
+    def test_hatch_click_after_reload_still_carries_the_flag(self):
+        """The whole point: reload, click the hatch, flag on the wire."""
+        v = _harness(
+            """
+            document.getElementById('oauthClaudeManual').style.display = 'none';
+            await _loadOAuthStatus();
+            await new Promise(r => setImmediate(r));
+            document.getElementById('oauthClaudeConsoleFallbackBtn').onclick();
+            await new Promise(r => setImmediate(r));
+            console.log(JSON.stringify({ calls: calls }));
+            """, _LOOPBACK_RESP, self._WAIT_LOOPBACK)
+        logins = [c for c in v['calls'] if c['verb'].startswith('login')]
+        self.assertEqual(len(logins), 1)
+        self.assertTrue(logins[0]['preferConsole'])
 
 
 class TestWiringRatchet(unittest.TestCase):

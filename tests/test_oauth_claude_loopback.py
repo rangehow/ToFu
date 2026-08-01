@@ -305,6 +305,49 @@ class TestPreferConsoleEscapeHatch(unittest.TestCase):
         self.assertEqual(res['redirect_mode'], 'loopback')
 
 
+class TestStatusProjectionFeedsTheReload(unittest.TestCase):
+    """get_oauth_status is the ONLY input a reloaded page renders from.
+
+    A mode/auth_url that lives only in the login RESPONSE dies with it: the
+    reloaded card re-renders from this projection, so without them it can
+    neither restore the truthful instructions + escape hatch nor re-open the
+    popup.
+    """
+
+    def setUp(self):
+        mgr._active_flows.pop('claude', None)
+
+    def test_active_loopback_flow_projects_mode_and_url(self):
+        fake_server = mock.MagicMock()
+        with mock.patch('lib.oauth.manager._flow._loopback_callback_ok',
+                        return_value=True), \
+             mock.patch('lib.oauth.manager._flow._bind_relay',
+                        return_value=fake_server), \
+             mock.patch('threading.Thread'), \
+             mock.patch('lib.oauth.token_store.load_token', return_value=None):
+            res = mgr.start_oauth_flow('claude')
+            st = mgr.get_oauth_status('claude')
+        self.assertEqual(st['status'], 'started')
+        self.assertEqual(st['redirect_mode'], 'loopback')
+        self.assertEqual(st['auth_url'], res['auth_url'])
+
+    def test_console_flow_projects_console_mode(self):
+        with mock.patch('lib.oauth.manager._flow._loopback_callback_ok',
+                        return_value=True), \
+             mock.patch('threading.Thread'), \
+             mock.patch('lib.oauth.token_store.load_token', return_value=None):
+            mgr.start_oauth_flow('claude', prefer_console=True)
+            st = mgr.get_oauth_status('claude')
+        self.assertEqual(st['redirect_mode'], 'console')
+        self.assertTrue(st['auth_url'])
+
+    def test_no_flow_projects_no_mode(self):
+        with mock.patch('lib.oauth.token_store.load_token', return_value=None):
+            st = mgr.get_oauth_status('claude')
+        self.assertIsNone(st['redirect_mode'])
+        self.assertIsNone(st['auth_url'])
+
+
 class TestLoginRouteCarriesTheFlag(unittest.TestCase):
     """The flag has to survive BOTH transports the frontend uses.
 

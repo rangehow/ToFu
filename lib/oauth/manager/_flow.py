@@ -110,6 +110,15 @@ def start_oauth_flow(provider: str, prefer_console: bool = False) -> dict:
     else:
         return {'error': f'Unknown provider: {provider}'}
 
+    # Which callback the user is actually about to walk — decided HERE, BEFORE
+    # the flow is stored, because the STATUS projection reads it back out of
+    # the stored flow: a page reload mid-flow re-renders the card from
+    # get_oauth_status, never from this function's return value. A mode that
+    # only lives in the login response dies with that response.
+    redirect_mode = 'loopback'
+    if provider == 'claude':
+        redirect_mode = 'loopback' if relay_server is not None else 'console'
+
     # Store flow state
     with _flows_lock:
         _active_flows[provider] = {
@@ -123,6 +132,7 @@ def start_oauth_flow(provider: str, prefer_console: bool = False) -> dict:
             # The redirect actually advertised — the exchange MUST echo this
             # exact string or the token endpoint answers invalid_grant.
             'redirect_uri': flow.get('redirect_uri', ''),
+            'redirect_mode': redirect_mode,
         }
 
     # Start the relay thread for providers whose callback lands on localhost:
@@ -143,12 +153,6 @@ def start_oauth_flow(provider: str, prefer_console: bool = False) -> dict:
     else:
         logger.info('[OAuth] Started %s flow — auth URL ready (manual code paste required)',
                      provider)
-    # Which callback the user is actually about to walk. Codex has exactly one
-    # registered redirect (the loopback); Claude's depends on the bind above.
-    redirect_mode = 'loopback'
-    if provider == 'claude':
-        redirect_mode = 'loopback' if relay_server is not None else 'console'
-
     return {
         'auth_url': flow['auth_url'],
         'status': 'started',
@@ -186,6 +190,12 @@ def get_oauth_status(provider: str) -> dict:
         'email': flow.get('email') or (stored.get('email', '') if stored else ''),
         'authenticated': authenticated,
         'expire': stored.get('expire') if stored else None,
+        # A page reload mid-flow re-renders the card from THIS payload alone.
+        # Without the mode the UI cannot restore truthful instructions or the
+        # console escape hatch (the cancel/retry button re-runs the SAME
+        # callback decision); without the URL it cannot re-open the popup.
+        'redirect_mode': flow.get('redirect_mode'),
+        'auth_url': flow.get('auth_url'),
     }
 
 

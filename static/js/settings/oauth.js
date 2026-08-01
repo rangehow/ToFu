@@ -516,6 +516,22 @@ function _updateOAuthCard(provider, status) {
       loginBtn.onclick = function() { _oauthCancelAndRetry(provider); };
     }
     if (logoutBtn) { logoutBtn.style.display = 'none'; }
+    // A page reload mid-flow lands HERE — not in _oauthLogin's callback —
+    // re-rendered from the status projection alone. Restore the manual box,
+    // its truthful instructions, and the escape hatch from that projection,
+    // or the reloaded page silently offers nothing but a retry that re-runs
+    // the same (possibly broken) callback decision — the exact loop the
+    // hatch exists to break. Synthetic waiting states (exchange in flight,
+    // curl helper) carry no redirect_mode and are left untouched.
+    if (status.redirect_mode && status.status !== 'exchanging') {
+      var flowManual = document.getElementById('oauth' + capProvider + 'Manual');
+      if (flowManual) {
+        flowManual.style.display = '';
+        var flowUrl = document.getElementById('oauth' + capProvider + 'AuthUrl');
+        if (flowUrl && status.auth_url) flowUrl.value = status.auth_url;
+      }
+      _oauthApplyRedirectMode(provider, status.redirect_mode);
+    }
   } else if (status.status === 'error') {
     badge.textContent = t('settings.oauthError');
     badge.className = 'oauth-status-badge error';

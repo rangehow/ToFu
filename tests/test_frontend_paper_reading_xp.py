@@ -34,6 +34,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, '..'))
 REPORT_JS = os.path.join(ROOT, 'static', 'js', 'paper', 'report.js')
 XP_JS = os.path.join(ROOT, 'static', 'js', 'paper', 'reading_xp.js')
+QA_JS = os.path.join(ROOT, 'static', 'js', 'paper', 'qa.js')
 
 
 def _node_deps_available() -> bool:
@@ -91,6 +92,8 @@ global._i18nLang = win._i18nLang = 'en';
 
 eval(fs.readFileSync(process.argv[2], 'utf8'));  // real paper/report.js
 eval(fs.readFileSync(process.argv[3], 'utf8'));  // real paper/reading_xp.js
+eval(fs.readFileSync(process.argv[5], 'utf8'));  // real paper/qa.js
+const _realPaperAskQuestion = _paperAskQuestion;  // qa.js 真入口,§7 覆盖后 §8 恢复
 
 // Stub layout/enrichment helpers (jsdom has no layout; the functions under
 // test run for real).
@@ -242,6 +245,55 @@ const bd = window._paperXpCostBreakdown(meta2);
 check('breakdown_text', bd.indexOf('Report') !== -1 && bd.indexOf('Insight') !== -1);
 check('breakdown_empty_without_passes', window._paperXpCostBreakdown({ model: 'm' }) === '');
 
+// ── (7) P1: action buttons on cards ──
+// NOTE: §2/§3 re-distributed, so §1's node refs are detached — re-query the
+// LIVE tree (a click on a detached node never reaches the document listener).
+const liveProvCard = article.querySelector('.paper-xp-card.xp-prov');
+const provBtn = liveProvCard && liveProvCard.querySelector('.paper-xp-act.xp-act-debate');
+check('prov_card_has_debate_btn', !!provBtn);
+check('prov_btn_data_text',
+      !!provBtn && provBtn.getAttribute('data-text') === 'Is attention actually necessary?');
+// The open problem renders as an action card (not a markdown list item).
+const openCard = article.querySelector('.paper-xp-section .paper-xp-card.xp-open');
+check('open_problem_card_present', !!openCard);
+const ideateBtn = openCard && openCard.querySelector('.paper-xp-act.xp-act-ideate');
+check('open_card_has_ideate_btn', !!ideateBtn);
+check('ideate_btn_data_text',
+      !!ideateBtn && ideateBtn.getAttribute('data-text') === 'Test at 100k-token context.');
+// Click routing: the document-level delegation routes debate → _paperAskQuestion
+// and ideate → _startResearchJob.
+const routed = [];
+_paperAskQuestion = (t) => routed.push(['debate', t]);
+_startResearchJob = (t) => routed.push(['ideate', t]);
+provBtn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+ideateBtn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+check('debate_click_routes_to_qa',
+      routed.length >= 1 && routed[0][0] === 'debate'
+      && routed[0][1] === 'Is attention actually necessary?');
+check('ideate_click_routes_to_research',
+      routed.length >= 2 && routed[1][0] === 'ideate'
+      && routed[1][1] === 'Test at 100k-token context.');
+
+// ── (8) P1: _paperAskQuestion (real qa.js entry) seeds + sends ──
+_paperAskQuestion = _realPaperAskQuestion;   // restore the real qa.js entry
+global._paperActiveTab = 'report';   // paper-reader.js core state (not loaded)
+const qaCalls = [];
+const input = document.createElement('textarea');
+input.id = 'paperQAInput';
+document.body.appendChild(input);
+_switchPaperTab = (tab) => qaCalls.push(['tab', tab]);
+_setPaperMobileView = () => {};
+_sendPaperQuestion = () => qaCalls.push(['send']);
+// Run the deferred send synchronously.
+const _st = global.setTimeout;
+global.setTimeout = (f) => { f(); return 0; };
+_paperAskQuestion('Is attention actually necessary?');
+global.setTimeout = _st;
+check('qa_entry_switches_tab', qaCalls.some((c) => c[0] === 'tab' && c[1] === 'qa'));
+check('qa_entry_seeds_input',
+      input.value === 'Is attention actually necessary?');
+check('qa_entry_sends', qaCalls.some((c) => c[0] === 'send'));
+
 console.log(out.join('\n'));
 process.exit(0);
 """
@@ -257,7 +309,7 @@ def _write_harness() -> str:
 def _run(report_js: str) -> subprocess.CompletedProcess:
     harness = _write_harness()
     try:
-        return subprocess.run(['node', harness, report_js, XP_JS, ROOT],
+        return subprocess.run(['node', harness, report_js, XP_JS, ROOT, QA_JS],
                               capture_output=True, text=True, timeout=60)
     finally:
         try:
@@ -274,7 +326,7 @@ def test_reading_xp_distribution_and_events():
     assert proc.returncode == 0, f'node failed: {proc.stderr}\n{out}'
     fails = [ln for ln in out.splitlines() if ln.startswith('FAIL')]
     assert not fails, 'reading-xp rail failures:\n' + out
-    assert out.count('PASS') >= 22, f'expected >=22 PASS lines, got:\n{out}'
+    assert out.count('PASS') >= 32, f'expected >=32 PASS lines, got:\n{out}'
 
 
 @pytest.mark.skipif(not _node_deps_available(),

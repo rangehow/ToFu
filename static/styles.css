@@ -1838,6 +1838,9 @@ textarea::placeholder{color:var(--text-tertiary)}
 .paper-xp-recap-head{font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:8px;letter-spacing:.02em}
 .paper-xp-recap-row{font-size:13px;line-height:1.65;color:var(--text-secondary);margin:5px 0}
 .paper-xp-recap-row b{color:var(--text-primary)}
+.paper-xp-actions{margin-top:8px;display:flex;gap:8px}
+.paper-xp-act{padding:4px 12px;border:1px solid color-mix(in srgb,var(--accent) 35%,var(--border));border-radius:8px;background:transparent;color:var(--accent);font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;transition:background .12s,border-color .12s}
+.paper-xp-act:hover{background:color-mix(in srgb,var(--accent) 12%,transparent);border-color:var(--accent)}
 .paper-report-content img,.paper-report-body img{display:block;max-width:100%;height:auto;margin:14px auto;border:1px solid var(--border);border-radius:6px;background:#fff;padding:4px;box-shadow:0 2px 8px rgba(0,0,0,.15);cursor:zoom-in}
 .paper-report-content p:has(> img:only-child),.paper-report-body p:has(> img:only-child){text-align:center;margin:14px 0}
 .paper-report-content p > img + em,.paper-report-body p > img + em{display:block;text-align:center;font-size:12px;color:var(--text-tertiary);margin-top:4px}

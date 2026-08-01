@@ -2470,6 +2470,9 @@ var _i18n = {
   // Reading-experience rail (paper/reading_xp.js)
   'paper.xpConnTitle': { zh: '与你读过的工作的联系', en: 'Connections to your reading' },
   'paper.xpProvTitle': { zh: '停下来想一想', en: 'Pause and think' },
+  'paper.xpOpenTitle': { zh: '值得你周一动手', en: 'Worth your Monday' },
+  'paper.xpDebate': { zh: '和 AI 辩这个', en: 'Debate this' },
+  'paper.xpIdeate': { zh: '展开成研究提案', en: 'Turn into a proposal' },
   'paper.xpRecapTitle': { zh: '你带走了什么', en: 'What you are taking away' },
   'paper.xpCostBody': { zh: '报告', en: 'Report' },
   'paper.xpPassInsight': { zh: '洞察', en: 'Insight' },

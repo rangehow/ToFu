@@ -51,10 +51,30 @@ function _xpConnectionCardHtml(item) {
   return _xpCard('xp-conn', '🔗', label, body);
 }
 
+function _xpActionBtn(kind, text, i18nKey, fallback) {
+  var label = (typeof t === 'function') ? t(i18nKey) : fallback;
+  return '<button type="button" class="paper-xp-act xp-act-' + kind +
+    '" data-text="' + escapeHtml(text) + '">' + escapeHtml(label) + '</button>';
+}
+
 function _xpProvocationCardHtml(item) {
   var label = (typeof t === 'function') ? t('paper.xpProvTitle') : 'Pause and think';
   var text = (typeof item === 'string') ? item : (item.text || '');
-  return _xpCard('xp-prov', '💭', label, '<div class="paper-xp-prov">' + escapeHtml(text) + '</div>');
+  return _xpCard('xp-prov', '💭', label,
+    '<div class="paper-xp-prov">' + escapeHtml(text) + '</div>' +
+    '<div class="paper-xp-actions">' +
+      _xpActionBtn('debate', text, 'paper.xpDebate', 'Debate this') +
+    '</div>');
+}
+
+function _xpOpenProblemCardHtml(op) {
+  var label = (typeof t === 'function') ? t('paper.xpOpenTitle') : 'Worth your Monday';
+  var text = (op && op.text) || '';
+  return _xpCard('xp-open', '🧭', label,
+    '<div class="paper-xp-open">' + escapeHtml(text) + _xpRefLink(op && op.grounded_by) + '</div>' +
+    '<div class="paper-xp-actions">' +
+      _xpActionBtn('ideate', text, 'paper.xpIdeate', 'Turn into a proposal') +
+    '</div>');
 }
 
 /** Remove every xp node we previously inserted (idempotent re-distribution). */
@@ -135,26 +155,29 @@ function _paperXpDistribute(article, view) {
       md.push('');
     }
     if (opinion) md.push('### ' + H.opinion, '', opinion, '');
-    if (ops.length) {
-      md.push('### ' + H.open, '');
-      for (var m = 0; m < ops.length; m++) {
-        md.push('- ' + ops[m].text.trim() +
-          (ops[m].grounded_by && ops[m].grounded_by.arxiv_id
-            ? ' ([' + (ops[m].grounded_by.title || ops[m].grounded_by.arxiv_id) + '](' +
-              (ops[m].grounded_by.abs_url || ('https://arxiv.org/abs/' + ops[m].grounded_by.arxiv_id)) + '))'
-            : ''));
-      }
-      md.push('');
-    }
-    if (endProvs.length) {
-      md.push('### ' + H.prov, '');
-      for (var n = 0; n < endProvs.length; n++) md.push('- ' + endProvs[n].trim());
-      md.push('');
-    }
     var sec = document.createElement('div');
     sec.className = 'paper-xp-section';
     sec.innerHTML = (typeof renderMarkdown === 'function')
       ? renderMarkdown(md.join('\n')) : escapeHtml(md.join('\n'));
+    // Open problems + unanchored provocations render as ACTION cards (debate
+    // / ideate buttons), not static markdown list items — P1 启发:每个念头
+    // 都有一个可以按下去的按钮.
+    if (ops.length) {
+      var opsTitle = document.createElement('h3');
+      opsTitle.textContent = H.open;
+      sec.appendChild(opsTitle);
+      for (var m = 0; m < ops.length; m++) {
+        sec.insertAdjacentHTML('beforeend', _xpOpenProblemCardHtml(ops[m]));
+      }
+    }
+    if (endProvs.length) {
+      var provTitle = document.createElement('h3');
+      provTitle.textContent = H.prov;
+      sec.appendChild(provTitle);
+      for (var n = 0; n < endProvs.length; n++) {
+        sec.insertAdjacentHTML('beforeend', _xpProvocationCardHtml(endProvs[n]));
+      }
+    }
     article.appendChild(sec);
   }
 
@@ -263,4 +286,22 @@ if (typeof window !== 'undefined') {
   window._paperXpApplyMetaEvent = _paperXpApplyMetaEvent;
   window._paperXpDistribute = _paperXpDistribute;
   window._paperXpCostBreakdown = _paperXpCostBreakdown;
+
+  // Card action delegation (P1 启发): one document-level listener routes
+  // every .paper-xp-act button — debate → QA tab (prefilled), ideate → the
+  // auto-research console. No inline onclick, so no LoadGuard registration.
+  if (!window._paperXpClickWired) {
+    window._paperXpClickWired = true;
+    document.addEventListener('click', function (ev) {
+      var btn = ev.target && ev.target.closest
+        ? ev.target.closest('.paper-xp-act') : null;
+      if (!btn) return;
+      var text = btn.getAttribute('data-text') || '';
+      if (btn.classList.contains('xp-act-debate')) {
+        if (typeof _paperAskQuestion === 'function') _paperAskQuestion(text);
+      } else if (btn.classList.contains('xp-act-ideate')) {
+        if (typeof _startResearchJob === 'function') _startResearchJob(text);
+      }
+    });
+  }
 }

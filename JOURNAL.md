@@ -1,3 +1,13 @@
+### 2026-08-01(egress 鉴权层定案:401 不是 Tofu 签发的,是 MLP 网关;代理路死、直绑路通——凭证链已实测 200) — owner 复核抓出 runbook 致命前提;**早前「代理 URL 可用」的 runbook 作废**(epic `pt_4ea6bf05deaa46f0`)
+
+- **owner 的复核(成立):** 经代理打 `POST /api/desktop/poll` 401 秒拒——我早前把 `{"error":"Unauthorized"}` 误读为「隧道通」,实际那是鉴权层在拒。
+- **401 签发者定案(决定性实验):** 从容器内经代理打 `/api/health` 与 `/api/desktop/poll` 均 401,**access.log 零记录**——请求从未到 Tofu;连 `favicon.ico`(公共静态)也 401;响应头带 MLP 网关的 CORS 白名单。**401 是 MLP cloud-IDE 网关(SSO 会话)签发,与 Tofu 的 auth 中间件无关。** 浏览器能过是因为带着 sankuai.com SSO cookie;agent 没有任何机器级凭证可带(本机无 MLP token 文件),借浏览器 cookie 是过期即死的补丁路,弃。
+- **poll 端点到底接受什么(代码链查清):** gate(`routes/api_v1/auth.py::_bridge_credential_ok`)→ `lib/bridge_auth.resolve_bridge_credential` 三链:TOFU_BRIDGE_SECRET(未设)/ loopback 进程 token(仅打包托盘用)/ **`agents:bridge` 范围的 API key(可用)**。
+- **凭证链实测全通(loopback):** 经运行中服务器铸 `egress-agent-office`(id `k_d1adfa20`,prefix `tofu_live_1b1513`,scope 仅 agents:bridge)→ 带 `X-Bridge-Secret` POST `/api/desktop/poll` → **HTTP 200 + probe agent 注册成功 + 15s 后自然离线**。凭证这半个命令已闭环。
+- **修正后的通路(直绑,取代代理):** 服务器只听 127.0.0.1(eth0 自路由实测 000 铁证)⇒ 重启时 `BIND_HOST=0.0.0.0`(restart_15000.sh:396 已支持该 env),办公机直连 `http://10.128.175.30:15000` + 同一把 bridge key。open 模式下 gate 对非 loopback 拒绝合成 admin(代码核实),暴露面=公共端点 + 凭证路径,可接受。**唯一未验环节=办公机→容器网段**(同公司内网,浏览器能直联 MLP 平台,几乎必通;重启后 owner 一条 curl 五秒定案)。
+- **顺手勘误(已回 peer):** ms9ygmgh 说「不重启出口行永远卡检测中」——实测服务器已按请求重读 manifest 派 **7b4093e0**(14:10 建),**其修复已在服,无需为此重启**。
+- **待 owner 的两个动作:** ①`BIND_HOST=0.0.0.0` 重启(顺带捎上 d523797a 逃生口后端)②办公机 `curl http://10.128.175.30:15000/api/health` 验网段后起 agent(完整命令在板面 reason)。
+
 ### 2026-08-01(S1 落地:wintoolchain.py 配方打包 + live 终验;预存红×2 定责为兄弟 .deb 表漂移并立案) — commit `b454be27`(2 源文件 + 1 新套件 **12/12**,**NEUTER×2**);live provision **~180s 端到端 ok**;相邻环 desktop_dist 27/27
 
 - **S1 形态:** `lib/desktop_dist/wintoolchain.py` —— `provision()` 幂等七步(proot/rootfs/apt-key 补丁/guest libs/Kron4ek wine 树/前缀/冒烟),每步对应一个实测陷阱并在 docstring + 测试里钉死;wine runner 带宿主镜像绑定(`-b tree:tree`)+ `guest_z()` 路径映射(出 rootfs 即 ValueError);状态记 manifest `wintc` 键。套件四陷阱守卫 + 幂等(第二次 provision 零下载零 guest 命令)+ NEUTER×2(摘镜像绑定 / 摘 apt-key 补丁各咬各的)。

@@ -96,8 +96,13 @@ STATE_CHANGING_EXPECTATIONS = {
     'update_memory':        'rewrites a memory file',
     'delete_memory':        'deletes a memory file',
     'merge_memories':       'deletes N memories, writes 1',
-    # project brain — charter commit is shared project-wide intent
-    'project_charter_commit': 'appends a decision every sibling conv reads',
+    # project_charter_commit was REMOVED from this map 2026-08-01 (drift
+    # repair, pt_c31cd8f3): the tool was WITHDRAWN from agents 2026-07-30
+    # (charter is human-only, 6c28925c) — its handler now REFUSES and mutates
+    # nothing, so it is no longer state-changing, and the withdrawal guard
+    # (test_project_watch_lane::test_the_agent_toolset_cannot_write_the_charter)
+    # pins it OUT of provides/write_tools. Listing it here made this suite
+    # contradict that ratified guard.
 }
 
 #: Read-only counterparts that must NOT be dragged into the write partition —
@@ -125,9 +130,24 @@ class TestProvidesCoverage:
     def test_memory_spec_declares_its_tools(self):
         assert _memory_names() <= _declared_provides()
 
-    def test_charter_commit_is_declared(self):
-        """project_charter_commit has a handler but was in no provides set."""
-        assert 'project_charter_commit' in _declared_provides()
+    def test_withdrawn_charter_commit_stays_undeclared(self):
+        """REVERSED IN PLACE 2026-08-01 (pt_c31cd8f3 — drift, not product).
+
+        v1 (0cc0aee1) asserted commit IS in provides — correct while the tool
+        was live. The 2026-07-30 withdrawal (6c28925c, owner-ratified: the
+        charter is human-reviewed) deliberately undeclared it EVERYWHERE:
+        not in the schema (CHARTER_TOOLS), not in provides, not in
+        write_tools. The handler survives ONLY as a refusal stub so a model
+        that learned the name from an old transcript gets redirected to
+        project_charter_propose instead of a phantom-tool error — and the
+        withdrawal guard (test_project_watch_lane::test_the_agent_toolset_
+        cannot_write_the_charter) already pins both exclusions, because
+        provides feeds the collision-check / inventory surfaces the model
+        can see. The full-coverage ratchet carries the one structural
+        exemption (EXEMPT below) so the refusal stub stays legal.
+        """
+        assert 'project_charter_commit' not in _declared_provides()
+        assert 'project_charter_commit' not in _declared_write_tools()
 
     def test_no_spec_declares_a_name_twice(self):
         """Two specs claiming one name makes the owning spec ambiguous."""
@@ -168,6 +188,14 @@ class TestFullCoverageRatchet:
         # so it is not a tool name the model can call. See
         # ToolSpec.handler_special / @tool_registry.special.
         '__code_exec__',
+        # WITHDRAWN 2026-07-30 (human-only charter, owner-ratified): the
+        # handler is kept ONLY as a refusal stub — old-transcript calls get
+        # redirected to project_charter_propose instead of a phantom-tool
+        # error. Declaration is deliberately FORBIDDEN by the withdrawal
+        # guard (test_project_watch_lane), so this name can never satisfy
+        # the ratchet; exempting it here is what keeps the two guards from
+        # contradicting each other.
+        'project_charter_commit',
     }
 
     def test_every_handler_is_declared(self):

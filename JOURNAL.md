@@ -1,3 +1,12 @@
+### 2026-08-01(脑派自票 pt_c31cd8f3 闭环:charter-commit 注册断裂 = 撤销后测试漂移 ×2 守卫互搏,顺带抓出一处真指引文本 bug) — 3 commits(见下);SSOT **55/55**、自治 **8/8**、环 **226/226**;NEUTER×2 各咬各的(还原 cmp 字节级);**零 schema 改动**
+
+- **定案:不是注册断裂,是两个守卫互相矛盾。** SSOT 棘轮(0cc0aee1,较老)钉「commit 必须在 provides + write_tools」;撤销批的验收守卫(6c28925c,较新,owner 拍板 charter human-only)在同 epic 的 test_project_watch_lane 里钉「commit 必须**不在** provides **也不在** write_tools」——**两个守卫不可能同时绿**,4 红就是矛盾的可见臂。判胜据:撤销是 owner 拍板的更新设计,且其守卫还钉了「provides 是模型可见的广告面(phantom-tool trap)」这一理由。SSOT 侧纯漂移修:STATE_CHANGING_EXPECTATIONS 摘 commit(handler 只拒绝、零状态变更)、`test_charter_commit_is_declared` **反转**(v3 式,docstring 载考古)为 stays_undeclared、EXEMPT 加 commit(结构性豁免:拒绝 stub,理由写全)。**产品零改动。**
+- **关键判据(差点选错方向):** 起手想用 swarm 先例「handler 可达即声明」把 commit 加回 provides 修 2 红——grep `.provides` 消费者时撞见 test_project_watch_lane:613 的反向守卫,才知道 provides 在撤销语义里是**广告面**不是审计面。**教训:provides 的消费者决定它的语义,改它之前先枚举全部读者(test_env 碰撞检查/inventory 生成/watch-lane 守卫),不要只看 ratchet 的报错信息。**
+- **顺手抓出的真产品 bug(比票面值更大的收获):** 环内 `test_project_board_autonomy_rule` 3 红同为撤销余波,其中两条是测试漂移(自治规则文本钉「用 commit 记录决定」——撤回后照做的 agent 会吃到拒绝),但第三条引出**源文本 bug**:`project_board.py` block 结果文本「record the choice with project_charter_commit instead」在产品里把 agent 指向一个**永远拒绝的工具**。修:源文本改指 propose(唯一 agent 路径,且注明 commit human-only);自治套件 v3 反转(propose 是唯一路径 + human-ratified + 不挡进度);`docs/TOOL_INVENTORY.md` 按守卫指引重生成(diff 恰好就是 commit 行 89→88,零噪音)。
+- **NEUTER×2:** F(模拟回 declarations 回归:provides 加回 commit)→ SSOT 反转测试 + watch-lane 守卫**双红**(两守卫从此互证而非互搏);G(还原 block 结果旧文本)→ 自治守卫精确 1 红。均 cmp 字节级还原复绿。
+- **验收边界:** 无运行时行为变更(schema/注册表/分区全部未动);唯一产品面变更是 block 结果文本措辞,重启生效。
+
+### 2026-08-01(预存红清剿 pt_abb14344:21 条里 20 条是兄弟脏文件,1 条是 reload 污染;以及我自己的一次归因事故)
 ### 2026-08-01(预存红清剿 pt_abb14344:21 条里 20 条是兄弟脏文件,1 条是 reload 污染;以及我自己的一次归因事故) — commit `6ed131a5`(2 测试文件 +59/-12;NEUTER 矩阵四象限全跑;28 套件环 **260/260**)
 
 - **定案两条线:** ①立案时的 5F+16E 中 **4F+16E=20 条是兄弟 ms9ratgpr3y928 当时未提交的 `routes/chat_poll_abort.py` 破损**(IndentationError 污染路由级 fixture)——我上批的「干净 HEAD 逐名一致」对照**只还原了 autopilot.py 一个文件**,兄弟脏文件还在工作区,两次跑的都是脏树,归因被带偏;兄弟修复后 20 条自然转绿。**教训(第三族同型):共享树上「干净 HEAD 对照」必须整树干净,单文件 `git show HEAD:file` 还原不是对照——`git status` 的 M 列表必须先清零再谈 HEAD 原生。** ②剩 1 条真环内污染:`test_disarm_calls_conclude_run_via_module_scope_binding` 的 `importlib.reload(ap_markers)` 不恢复 ⇒ markers 函数 gen-2、门面仍持 gen-1 ⇒ markers_extraction 的 `is` 恒等检查恰好崩在 markers 自定义的三个符号上(conclude_run 属叶子模块 reload 不动,所以永不在失配名单——失配名单就是定义地的指纹)。

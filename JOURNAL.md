@@ -1,3 +1,10 @@
+### 2026-08-01(脑派自票收官:tofu-search 0.5.3 全链发布完成 —— 凭证找回 + 三步推送 + 三守卫 48/48 全绿) — 接 `pt_84e6828ee5f44a7c` 的人门答复(「凭证找一下,持久化到环境变量」);epic **DONE**
+
+- **凭证找回(两条线都中):** PyPI token 早在 2026-06 的 mq7u1cemkh3rs6 对话里就由 owner 提供过并被该对话持久化到 `~/../.secrets/{pypirc,env.sh}`(FUSE 持久路径,chmod 600;`~/.bashrc` 权限拒绝 + $HOME 易失是当时的定论);GitHub PAT 在 `data/config/mcp_servers.json`(github MCP 项,与 `export.py::_GH_TOKEN` 同一把)。按 owner 要求把 TWINE_USERNAME/TWINE_PASSWORD 追加进 `.secrets/env.sh`(环境变量形态持久化),并存 project memory `pypi-github-publish-credentials`(只记位置不记值)。
+- **三步发布(全部成功):** ①tofu-search `git push` main(8b096d9..a6dadf2,10 提交含 0.5.3 feature)+ v0.5.3 tag —— 远端 tag 从 v0.5.1 追平;②`twine upload` 0.5.3 wheel+sdist —— <https://pypi.org/project/tofu-search/0.5.3/> 上线;③chatui `export.py --mode opensource --push` —— rangehow/ToFu + NiuTrans/ToFu 双远端推送成功,本批 CI/export 修复与 vendor wheel 到达公开仓(导出时 secret 扫描的 3 条「leak」是 `.git/worktrees/*/gitdir` 本地路径指针,不随 push 发出,非泄漏)。
+- **守卫验收(全绿,不再「设计性红」):** `test_requirements_public_resolvable` 36/36(tofu-search 案转绿 = 0.5.3 公网可解)、`test_published_dependency_identity` 4/4(PyPI 上 wheel+sdist 与 `_EXPECTED_DIGESTS` 逐字节一致)、`test_published_pipeline_drift` 8/8(本地 workflow + release_assets.py 与双远端追平)。**注意:此前 desktop-dist 批修的 tofu-search 无索引可解,至此连公网路径也通 —— vendor wheel 从此是冗余保险而非唯一路径,CI 的 wheel-first 顺序保持不变(离线/镜像部署仍需要)。**
+- **方法论记一笔:** 「凭证去哪了」类问题先查历史对话(list_conversations 关键词)再查文件——本次两条凭证都已在历史中留痕,检索 2 分钟解决,差点又去麻烦 owner 重发。
+
 ### 2026-08-01(脑派第四票闭环:superseded-fragment 标记接线进终态 sync) — 接自己立的 `pt_e736a797660f443f`;commit `fec6b46b`(1 文件 +16;目标套件 **2/2** 含自带 NEUTER,家族环 **45/45**、终态写入/CAS 环 **59/59**)
 
 - **定案:不是测试漂移,是产品缺口。** 测试 v0.15.0 作为 failing-first 守卫落库,但 `mark_superseded_incomplete_fragments` 在 `lib/tasks_pkg/` 下的调用**零历史**——helper 自己的 docstring 早就写明设计:「TWO call sites share this ONE implementation:GET/startup reconcile **AND the terminal sync write of the SUPERSEDING task**」。接线从未落,守卫红了两个版本。

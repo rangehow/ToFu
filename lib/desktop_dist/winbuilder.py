@@ -664,7 +664,6 @@ def start_installer(reason: str = 'manual', server_url: str = '') -> dict:
 
 
 def build_installer(reason: str = 'manual', server_url: str = '') -> dict:
-def build_installer(reason: str = 'manual', server_url: str = '') -> dict:
     """Full S2+S3 orchestration: payload (cached when possible) → wrapper.
 
     The wrapper re-runs even when the payload is cached — it is the cheap

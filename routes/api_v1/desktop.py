@@ -236,14 +236,19 @@ async def desktop_status():
 @api_v1_desktop_bp.route('/api/v1/desktop/build', methods=['GET', 'POST'])
 @require_auth
 @api_meta(
-    summary='Inspect (GET) or kick (POST) a native on-server desktop build',
+    summary='Inspect (GET) or kick (POST) an on-server desktop build',
     description=(
         'POST starts a single-flight background build of the desktop app '
         'from the COMMITTED tree (git archive HEAD → PyInstaller → boot '
-        'smoke → tar), recorded in the artifact store with '
-        '``source == "built"``. Only the server\'s own platform can be built '
-        'natively (PyInstaller cannot cross-compile); Windows/macOS are '
-        'served by the mirror. GET returns the persisted build state.'
+        'smoke), recorded in the artifact store with ``source == "built"``. '
+        'The default (or ``{"os": "linux"}``) builds the server\'s own '
+        'platform natively. ``{"os": "windows"}`` drives the userspace Wine '
+        'toolchain (lib/desktop_dist/winbuilder.py — payload cached per '
+        '(git_sha, deps), then the NSIS wrapper; optional '
+        '``{"server_url": ...}`` pre-seeds the remote attachment into the '
+        'installer). macOS cannot be built on Linux (documented permanent '
+        'boundary — the mirror serves it). GET returns both builders\' '
+        'persisted states.'
     ),
     tags=['capabilities'],
 )
@@ -251,11 +256,26 @@ async def desktop_build():
     from flask import request
     from lib.desktop_dist import builder as _dist_builder
     if request.method == 'POST':
+        body = {}
+        try:
+            body = await request.get_json(silent=True) or {}
+        except Exception as e:
+            logger.debug('desktop_build: non-JSON body ignored: %s', e)
+        os_key = str(body.get('os') or 'linux').strip().lower()
+        if os_key == 'windows':
+            from lib.desktop_dist import winbuilder as _win_builder
+            url = str(body.get('server_url') or '').strip()
+            st = _win_builder.start_installer(reason='api', server_url=url)
+            audit_log('desktop_build_kicked', os='windows',
+                      state=st.get('state'), version=st.get('version'))
+            return jsonify(st), 202
         st = _dist_builder.start(reason='api')
         audit_log('desktop_build_kicked', state=st.get('state'),
                   version=st.get('version'))
         return jsonify(st), 202
-    return jsonify(_dist_builder.state())
+    from lib.desktop_dist import winbuilder as _win_builder
+    return jsonify({'linux': _dist_builder.state(),
+                    'windows': _win_builder.state()})
 
 
 @api_v1_desktop_bp.route('/api/v1/desktop/download/<path:filename>',

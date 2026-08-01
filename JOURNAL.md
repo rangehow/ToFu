@@ -1,3 +1,8 @@
+### 2026-08-01(egress 接线:owner 拍板「改走免重启转发路」,agent 尚未上线——挂注册表 watcher) — epic `pt_4ea6bf05deaa46f0`
+
+- **状态:** 主路径(BIND_HOST shell 重启)放弃,走备选:办公机 `ssh -L 15000:127.0.0.1:15000 <codelab-ssh>` + agent 连 `http://127.0.0.1:15000`。答复后实测注册表仍空、egress 五态 unknown——agent 尚未起。**watcher 形态修正(吸收 7-31 误报教训):不用 condition_command 退出码(本环境观测不可靠),改 check_command 输出注册表 JSON 由 poll LLM 读内容判定**——`agents` 非空且含 `egress=true` 才算 ready,空表/缺能力位不触发。60s×30 轮(30 分钟窗口),耗尽则挂板请 owner 贴 agent 控制台输出。
+- **agent 上线后验收序:** 能力位 → oauth/status 翻 `state=agent`+`verdict=geo_blocked` → Claude 登录(服务器交换优先序) → 流式聊天(egress_http_stream 全链) → Codex O3(curl_cffi 是否必需)定案。
+
 ### 2026-08-01(续·sub-3C 收尾两事:预存红立案 + 一次 git 操作险肇自伤) — 附记于 sub-3C 批
 
 - **预存红立案 `pt_5f25b1d17c9048f1`:** 终扫扩环时发现 `test_frontend_identity_gate_parity::test_predicate_loads_before_every_delegating_consumer` 红——与 sub-3C 零交集,实证自 sub-3A(`8aa9a1c6`)起红:套件把「consumer deferred + predicate eager」也判违规,但该方向**安全**(core 恒先于 feature 加载;预加载窗口消费者根本没接线,零帧可达)。真正的不变量只有反向(predicate deferred + consumer eager)。sub-3A 的 moved-note 恰好就是按「谓词留 eager」设计的——套件不变量落后于设计,按 owner 惯例另案不夹修。

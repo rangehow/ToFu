@@ -1,3 +1,9 @@
+### 2026-08-01(api-contract 批 5:desktop.py 11 站点清零——202 建造态走 api_payload) — 脑派续 epic `pt_931e16c4` 切片 5;commit 见下(4 文件);环 **119/119**;NEUTER×2 精确;本批幽灵零干预
+
+- **分类与判点:** 11 站点全 dict:状态大 dict(→api_ok,前端 desktop.status 读名字段,+ok 纯增量)/两个 202 builder-state(→api_payload,非标状态码,状态机键顶层保真)/mint 201(→api_created)/三个 `{'error':'not_found','message':…}` 404 字面量(→api_not_found('not_found', message=…),error+message 键存活,+ok:False 增量)。二进制下载 send_file 维持 §4 carve-out。
+- **纪律:** failing-first 精确 1 红;NEUTER×2(回注 jsonify / 摘 api_payload——paren needle 咬精准);cmp 还原;导入冒烟;环 **119/119**。本批全程无幽灵干预,freshness 闸零触发。
+- **进度账:** 272→**186 站点 28 文件**(96 已清零)。下一批 skills.py(9)。
+
 ### 2026-08-01(api-contract 批 4 收口:orchestrations.py 16 清零 + 首个「协调式裸数组迁移」+ 幽灵共编全审计) — epic `pt_931e16c4`;幽灵 commit `412d8954`(5 文件),我补契约 §4 收尾 commit(见下);HEAD 全环独立复跑 **120/120** + 导入冒烟
 
 - **批 4 内容:** 15 dict 站点→api_ok/api_created;第 16 站点(GET /api/v1/orchestrations 裸数组)未按原计划登记 CARVE_OUT_SITES,而是**直接执行了契约 §4 的协调式退休路径**:后端 `api_ok({'items': _read_all()})` + 前端 `Api.orchestrations.list` 解包 `.items` 并保留 `Array.isArray(d)` 回退(滚动部署偏斜下旧服务端仍可用,三处调用方零改动)——比登记豁免更好的终态,elimination beats preservation。

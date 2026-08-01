@@ -37,9 +37,9 @@ migrated file — never a silent baseline remainder).
 Established 2026-08-01 from a full-tree scan (272 ad-hoc sites across 33
 files + 8 protocol-locked sites in 4 carve-out files). Same-day batches
 zeroed api_v1/memory.py (10), api_v1/project.py (38), api_v1/mcp.py (21)
-and api_v1/orchestrations.py (16 — its bare-array list site was MIGRATED
+, api_v1/orchestrations.py (16 — its bare-array list site was MIGRATED
 via the contract §4 coordinated front+back path, the first executed
-instance, not registered as debt) → 197 sites across 29 files remain.
+instance, not registered as debt) and api_v1/desktop.py (11) → 186 sites across 28 files remain.
 """
 
 from __future__ import annotations
@@ -97,7 +97,6 @@ BASELINE: dict[str, int] = {
     'paper.py': 47,
     'common.py': 14,
     'chat.py': 11,
-    'api_v1/desktop.py': 11,
     'upload.py': 10,
     'conversations.py': 10,
     'api_v1/skills.py': 9,

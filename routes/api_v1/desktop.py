@@ -14,8 +14,11 @@ from __future__ import annotations
 import sys
 import time
 
-from flask import Blueprint, jsonify
+from flask import Blueprint
 
+from lib.api_response import (
+    api_created, api_not_found, api_ok, api_payload,
+)
 from lib.log import audit_log, get_logger
 from lib.openapi import api_meta
 
@@ -230,7 +233,7 @@ async def desktop_status():
     # it here; macOS cannot be narrowed any other way (an Apple Silicon Mac
     # reports "Intel Mac OS X" in its UA).
     _arch = (request.args.get('arch') or '').strip()[:16]
-    return jsonify({
+    return api_ok({
         'connected': connected,
         'last_poll': _last,
         'secondsAgo': (round(time.time() - _last, 1) if _last else None),
@@ -278,14 +281,14 @@ async def desktop_build():
             st = _win_builder.start_installer(reason='api', server_url=url)
             audit_log('desktop_build_kicked', os='windows',
                       state=st.get('state'), version=st.get('version'))
-            return jsonify(st), 202
+            return api_payload(st, 202)
         st = _dist_builder.start(reason='api')
         audit_log('desktop_build_kicked', state=st.get('state'),
                   version=st.get('version'))
-        return jsonify(st), 202
+        return api_payload(st, 202)
     from lib.desktop_dist import winbuilder as _win_builder
-    return jsonify({'linux': _dist_builder.state(),
-                    'windows': _win_builder.state()})
+    return api_ok({'linux': _dist_builder.state(),
+                   'windows': _win_builder.state()})
 
 
 @api_v1_desktop_bp.route('/api/v1/desktop/download/<path:filename>',
@@ -309,8 +312,8 @@ def desktop_download(filename):
     from quart import send_file
     path = _dist_store.resolve_file(filename)
     if path is None:
-        return jsonify({'error': 'not_found',
-                        'message': 'no such artifact'}), 404
+        return api_not_found('not_found',
+                             message='no such artifact')
     return send_file(path, as_attachment=True,
                      attachment_filename=filename, conditional=True)
 
@@ -327,9 +330,9 @@ async def desktop_stream(cmd_id):
     from lib.desktop import get_command_stream
     stream = get_command_stream(cmd_id)
     if stream is None:
-        return jsonify({'error': 'not_found',
-                        'message': 'unknown or expired command stream'}), 404
-    return jsonify(stream)
+        return api_not_found(
+            'not_found', message='unknown or expired command stream')
+    return api_ok(stream)
 
 
 # ── RWA P4b:Devices 页(拍板 5A)—— agents + bridge tokens 一屏 ──
@@ -358,7 +361,7 @@ async def desktop_devices():
         if _BRIDGE_SCOPE in (k.get('scopes') or [])
         and (k.get('user_id') or '') == uid
     ]
-    return jsonify({
+    return api_ok({
         'agents': list_agents(user_id=uid),
         'tokens': tokens,
     })
@@ -384,8 +387,8 @@ async def desktop_token_mint():
     row, token = create_key(name, scopes=[_BRIDGE_SCOPE], user_id=uid)
     audit_log('desktop_bridge_token_minted', key_id=row.get('id'),
               name=name, user_id=uid)
-    return jsonify({'id': row.get('id'), 'name': name, 'token': token,
-                    'scopes': [_BRIDGE_SCOPE]}), 201
+    return api_created({'id': row.get('id'), 'name': name,
+                        'token': token, 'scopes': [_BRIDGE_SCOPE]})
 
 
 @api_v1_desktop_bp.route('/api/v1/desktop/token/<key_id>', methods=['DELETE'])
@@ -403,11 +406,11 @@ async def desktop_token_revoke(key_id):
     row = get_key_by_id(key_id)
     if (not row or _BRIDGE_SCOPE not in (row.get('scopes') or [])
             or (row.get('user_id') or '') != uid):
-        return jsonify({'error': 'not_found',
-                        'message': 'bridge token not found'}), 404
+        return api_not_found('not_found',
+                             message='bridge token not found')
     revoke_key(key_id)
     audit_log('desktop_bridge_token_revoked', key_id=key_id, user_id=uid)
-    return jsonify({'revoked': key_id})
+    return api_ok({'revoked': key_id})
 
 
 __all__ = ['api_v1_desktop_bp']

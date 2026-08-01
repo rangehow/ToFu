@@ -1,3 +1,18 @@
+### 2026-08-01(溯源 chip 铺到提案卡:「待你处理」页全部决策卡统一署名 + 共享树四方缠卷实录) — owner 复核第一批后指名「提案卡也是要我决策的,同样没署名」;commits `4682455d`(后端,**blob 级暂存**)+ `95ce2ee2`(前端+测试,兄弟落地后整文件);attention **39/39**、终态全环 **93/93**
+
+- **修法:** `_charter_proposals` 复用 `_conv_titles` 输出 `askedByConvId/askedByTitle`(与停摆卡同形);前端把 from-chip 从 `_questionCard` 抽成**共享 `_fromChip(item)`** 挂进 `_proposalCard` 头——两份手写拷贝必漂移,chip 只有部分决策卡有就等于没有。NC 升级:一次阉割 `_fromChip` 的 fromId 取值,**双卡 chip 同时消失**(证明同源)。
+- **共享树缠卷实录(方法论记一笔):** ①兄弟 msac37jx 的 owner 指令批(冲突项撤出「待你处理」)与我同改 4 文件、**hunk 级混合**(同一 `@@` 块里既有我的 + 行又有他的 − 行);②手工过滤 patch + `git apply --cached` 分离——**教训:手写 hunk 头行号必须按 HEAD 算,按工作区算会让 git 从错起点前向搜索永不命中**(连错两次后改用 `hash-object -w` + `update-index --cacheinfo` 的 blob 级暂存,一次到位);③**共享 index 是公用跑道**——Epic-E 兄弟的 commit 机器用 `git reset`/`read-tree` 清 index 时把我已暂存的 3 个过滤 patch 清空(工作区无损),且 index 里一度混入他家的 2 个已暂存文件(`git reset HEAD -- <path>` 弹出);④最终按兄弟的边界信使约定排序:他先 selective commit(`7ad6524e`),我整文件暂存余下纯我的 diff 落地——**顺序化比 hunk 手术干净**,peer message 一次边界确认省掉全部竞态。
+- **i18n 键覆盖套件批跑红、单跑绿:** 批跑期间兄弟正在写 i18n.js/attention.js(共享工作区文件在测试脚下变动),树静后 93/93——共享树上的批跑失败先怀疑「脚下的文件在动」,再怀疑代码。
+
+### 2026-08-01(断连环票关票:兄弟三 commit 全覆盖两靶+去重件,复核 79/79 绿) — epic `pt_ef42c2a1e9f946f3` **DONE**;交付=`959fd1c9`(①保活)+ `3d51d9a1`(②健康解耦+③a去重+③b recover 窗口化)+ `d3f9078e`(③后半:verify/Case F 窗口化),均为兄弟 msabaslvudobum 落地,我侧零产品代码(挂牌→移交→复核→关票)
+
+- **靶②(ping 超时健康感知)以强于票面的形态交付:** 不是「force-close 前问健康」,而是直接拆掉饿死根——服务端 pong 走有界 control 通道(`PushClient.enqueue_control`,drain 优先于批量帧,曾为 pong 排在 MB 级事件帧后饿死);客户端改 proof-of-life 判决(**任意入站帧即存活**,parse 前记账——负载致慢不再误杀,真正死亡=入站全静默);8s 超时改自适应 clamp(4×RTT, 8s, 30s);`getLatency` 暴露 `lastInboundAt`。负载下 socket 不再掉 ⇒ 无重连 ⇒ 无追平重拉,环从两端同时斩断。
+- **靶①(恢复路径窗口化+去重)覆盖核实(逐路径对当前树,非听自报):** notify 验证 `_verifyActiveConvFromServer` → convWindowParam 尾窗 + `_verifyAdoptWindowedTail`,tail 裁决不了才有界升级为 window=0;Case F → 窗口化(TOFU_CONV_WINDOW=0 时显式降级全量);offline recover worker → `?window=3`(只看尾消息,O(3));去重 `_convGetDeduped`(api.js)——signal-less 同 conv 同形态在飞 GET 合一,按 conv+window+before_seq 键控,settle 自清。**有意偏差接受:** 带 signal 调用绕过合并(10s/15s 探针预算不可共享/互消;昨晚风暴源全是 signal-less,验收措辞「并发全量 GET ≤1」的实质达成)。
+- **两处有意不修(复核时判定,非漏网):** ①Case B 零消息兜底全量 GET(main_init_tasks.js:248)——最后救命网必须与刚失败的窗口化首读**形态不同**才有意义,且 signal-less 受去重合并;②`_translationOnlyVerify` 全量——译文车道非恢复路径,译文可落任意消息本就需全量,按事件触发非按启动触发。
+- **环:** 新套件+push+api-contract 棘轮 **21/21**(test_health_liveness_decoupled 4 / conv_get_dedup 3 / push_half_open 3 / push_latency 6 / contract_drift 5)+ 相邻 windowed/sync/resume/offline-monitor 12 套件 **58/58**;msaby5jg 的 jsonify 棘轮对 routes/common.py(14)/push.py(3)基线对齐无暴露。
+- **生效路径:** 前端件走 bundle 首请求自愈;`routes/push.py`(pong 通道)+ `routes/common.py`(健康解耦)需进程重启——重启窗口 owner 自留(与 `a1f2883f` 429 修复同批生效)。
+- **方法论记一笔:** 多会话协作的「移交-复核」范式跑通全程:立案(证据数字)→ 发现判据级重叠 → 挂牌+移交独有件(带验收口径)→ 对方 CONFIRM 接管 → SHA 回执 → **复核对当前树逐路径核实而非听自报** → 关票。复核的真价值在两头:确认覆盖(verify/caseF 窗口化来自我没被告知的第三个 commit `d3f9078e`,不查树就会误判缺口)与识别有意残余(两个全量 GET 是设计不是漏网)。
+
 ### 2026-08-01(LLM 内容过滤「慢到不可用」根修:整页重写 → 只判相关性,step5 模拟 96.7s→0.82s(117×);归属定案=不搬家) — owner 两问:①该功能该不该拆进 tofu-search ②过滤慢到不可用求优化;tofu-search `cd7a708`(0.6.0,6 文件)+ chatui `78550b8b`(8 文件);tofu-search 全仓 **482 passed/6 skipped**(含新 15)、chatui 四环 **83 绿**(新 6+桥 3+装配/cache-schema/approval/import-smoke 40+capabilities 12+timer/paper 22)
 
 - **归属定案(不用搬):** 现状即教科书式正确分层——**机制**在 tofu-search(LLM-agnostic,只声明 `llm_function` 回调,`fetch/content_filter.py`),**策略与 LLM 访问**在 chatui(设置项 `search.llm_content_filter` → `lib/search_bridge.py:334` 注入 `dispatch_chat` 包装的 `_chatui_llm`)。洗碗机不该自己拉电线;库不管策略、应用不管机制。「LLM 在 tofu、搜索在 tofu-search」的两难早已被依赖注入解开。

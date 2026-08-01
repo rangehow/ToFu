@@ -1,3 +1,12 @@
+### 2026-08-01(「待你处理」卡片可读性:blocked_by 溯源列落地 + 背景/选项描述上卡) — owner 截图报决策卡「看不出是哪个会话发的、背景不完整」;commits `7ea40621`(主体 15 文件)+ `d7470552`(工具描述);新测试后端 +4、前端 +6+1NC;环:attention 23、前端 attention 16、board 家族 154、parity+selfheal+brain/dispatch 147、bundle/i18n 48、前端 brain 家族 51、CSS 27 全绿
+
+- **根因两层:** ①「谁问的」在行级**根本没存**——`block_task` 收到 conv_id 只写进 feed/audit,而 `owner_conv_id` 对 blocked epic 恒投影 ''(它不是 claimed);②「背景」被塞在 meta 尾行纯转义文本(600 字符截断),选项的 description 只有 hover tooltip。
+- **修法:** schema 加 `project_tasks.blocked_by`(Core + PG/SQLite ALTER、版本 43→44、双端 `_CRITICAL_COLUMNS`、parity LIVE 串);`block_task` 每次 block 覆写,answer/complete/reopen **刻意不清**(最后一次 block 的溯源,block 态没了就没人读,且保住三条清态 UPDATE 的字节稳定、零 NC 锚点漂移)。attention SSOT 投影 `askedByConvId`+`askedByTitle`(一条 IN 查询解析标题;迁移前旧行回退 `created_by_conv`),同 id 填 `convId` 让 `mine` 标记对 board question 也成立;reason 展示上限 600→2000(与存储上限一致,clamp 折叠不占屏)。
+- **卡片重构:** 头部加来源 chip(显示会话标题,点击 `loadConversation` 跳进发起会话)——**自己抓回一处:chip 漏挂 `pb-attn-act` 类,`_wireActions` 没绑点击,harness 抓的**;reason 提升为带「为什么停下」标签的 clamp 分区;问题加「需要你决定」标签;选项描述从 tooltip 改为卡上可见;meta 加相对时间(复用 `_relTime`)。
+- **工具描述同步(`lib/tools/conversation.py`):** reason 的读者是「不在你会话里的忙碌人类」——自含、白话、file:line 考据留 JOURNAL;option description 写「选了会怎样」。
+- **NC 各咬各的:** 后端 NEUTER 摘 `blocked_by=?` 写入 → 溯源丢失回退 poster;前端 NEUTER 摘 `fromId` 取值 → chip 消失。另两处自己测试写错被抓:fixture 尾随空格 vs block_task 的 strip;`querySelector` 返回**第一个** desc span(Postgres 的),断言 'zero ops' 应查整个 chip 行。
+- **生效路径:** 后端列+投影需重启进进程;前端走 bundle 按请求重建即时生效。迁移前已存在的待答卡(如 egress 那张)走 `created_by_conv` 回退显示,新 block 起全程带溯源。
+
 ### 2026-08-01(断连环票按重复立案挂起:pt_ef42c2a1 两根靶已被 pt_afbaf3d7 ①③覆盖,去重件移交) — 脑派发认领 `pt_ef42c2a1e9f946f3` 后查实重叠,未写一行产品代码
 
 - **重叠核实(动手前必查板):** 兄弟 msabaslvudobum(live,「慢查询卡事件环致前端误报离线」)的 `pt_afbaf3d7b9be4f91` ①WS 保活增强(pong 优先出队+任意入站帧即存活+8s 按 RTT 自适应)⊃ 本票靶②(ping 超时健康感知);③恢复路径(reconnect 追平/Case B/F)全量 GET 改窗口化 tail-N = 本票靶①,且引用同一「重连→拉 176MB→停摆→再超时」自喂养环——同根因两票,撞 push.js/cross_tab_sync.js/main_init_tasks.js 同三文件。

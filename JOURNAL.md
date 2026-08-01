@@ -1,3 +1,9 @@
+### 2026-08-01(api-contract 批 8:upload.py 10 站点清零——image-gen 变量状态码走 api_payload) — epic `pt_931e16c4` 切片 8;commit 见下(4 文件);环 **125/125**;NEUTER×2 精确
+
+- **判点:** 10 站点全 dict;image-gen 错误出口的状态码是**运行时变量**(400 client_error / 503 rate_limited / 500)→ api_payload(errbody, status_code)(body 本带 ok:False ⇒ 逐字节等价,前端 `_status` HTTP 面不变)。pdf/doc parse 的 `{'success': True, …}` body 无 ok 键 ⇒ +ok 纯增量。multipart 请求侧维持 §4 carve-out(响应全信封)。
+- **纪律:** failing-first 精确 1 红;NEUTER×2(回注 jsonify / 摘 api_payload——paren needle);cmp 还原;导入冒烟;环 **125/125**。幽灵本批零干预(连续第四批)。
+- **进度账:** 272→**158 站点 25 文件**(114→124 已清零,45.6%)。剩余:paper.py 47(拆分路线图)、common.py 14(兄弟 WIP)、chat.py 11、conversations.py 10、config.py 8、oauth.py 7、translate.py 7、artifacts.py 7、oauth/api_v1 5、motion 5、browser(api_v1) 5、auth 4、六个 ≤3。下一批 conversations.py(10)。
+
 ### 2026-08-01(paper 视频起点把事件循环堵死 39.6s:一次「视频生成引发全员断连」的根修) — owner 报「现在很容易突然断连,是不是我刚请求生成视频」;commit `a5f8f19d`(1 文件 +7/-1);motion_p3 22 + paper_media_ux 24 + async_integrity 24 全绿
 
 - **定案:是视频请求引起的,根因是同步重活跑在事件循环上。** `/api/v1/paper/video/start` 自诞生(ef56bd5e)就是 async def,却内联调用全同步的 `start_video_abstract()`——PG has_report 探测、FUSE 读源文、**一次阻塞数十几秒的 LLM 写旁白稿调用**(`build_abstract_scenes → _llm_beats → script_stage_for_source`)。整条流水线冻住事件循环 39.6s:22:13:33 LoopWatch 摊牌主线程停在 `lib/http_client.py:127 http_request`(LLM 调用的 sync requests),循环解冻瞬间(22:14:07)三个任务的 SSE 集体进 premature-close resume 风暴(1/6→2/6),客户端同时弹「网络延迟:探测超时」。时间轴逐秒吻合:请求 22:13:27 起、39.604s、85B 响应。

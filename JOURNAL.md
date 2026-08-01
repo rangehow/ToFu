@@ -1,3 +1,10 @@
+### 2026-08-01(paper 视频起点把事件循环堵死 39.6s:一次「视频生成引发全员断连」的根修) — owner 报「现在很容易突然断连,是不是我刚请求生成视频」;commit `a5f8f19d`(1 文件 +7/-1);motion_p3 22 + paper_media_ux 24 + async_integrity 24 全绿
+
+- **定案:是视频请求引起的,根因是同步重活跑在事件循环上。** `/api/v1/paper/video/start` 自诞生(ef56bd5e)就是 async def,却内联调用全同步的 `start_video_abstract()`——PG has_report 探测、FUSE 读源文、**一次阻塞数十几秒的 LLM 写旁白稿调用**(`build_abstract_scenes → _llm_beats → script_stage_for_source`)。整条流水线冻住事件循环 39.6s:22:13:33 LoopWatch 摊牌主线程停在 `lib/http_client.py:127 http_request`(LLM 调用的 sync requests),循环解冻瞬间(22:14:07)三个任务的 SSE 集体进 premature-close resume 风暴(1/6→2/6),客户端同时弹「网络延迟:探测超时」。时间轴逐秒吻合:请求 22:13:27 起、39.604s、85B 响应。
+- **修法:** `await asyncio.to_thread(start_video_abstract, ...)`——与本文件既有 14 处 Off-loop 惯例同形(`lookup_video_abstract` 的 has_report 就是先例),响应契约零变化。渲染本来就不在请求里(引擎在 worker 线程),搬下循环的只是「查库+读文件+写稿」这段准备期。
+- **同族残余(立档不夹修):** `start_podcast_task` 内联做了两个同步 PG 读(has_report/load_cached_podcast),正常亚秒级,FUSE 抖动时可秒级——同类轻量隐患,证据今日未实测到事故,按规则不扩面。
+- **加重因素(非元凶):** PG-on-FUSE 的 8.7s UPDATE conversations(run_task 线程,已立案 pt_4d321fb8f1c2400c 待 owner 播种);既有视频 206 分段下载每个 3-7ms,无阻塞。
+- **生效路径:** routes/paper.py 需进程重启,重启窗口 owner 自留。
 ### 2026-08-01(api-contract 批 7:daily_report.py 9 站点清零——全 api_ok 快批) — epic `pt_931e16c4` 切片 7;commit 见下(4 文件);环 **123/123**;NEUTER×2 各咬一支
 
 - **判点:** 9 站点全 api_ok 形;「status」在此是 body 字段但 api_ok 无 kwarg 冲突(与 api_error 不同),平凡成功转换。空报告/继承/生成状态等 body 本带 ok:True ⇒ 逐字节等价;分析结果透传 `jsonify(result)` 仅在 lib 缺 ok 时 +ok。

@@ -818,6 +818,11 @@
     // Abort + queue management — fire-and-forget, swallow errors.
     abortTask:    (taskId)      => post(`/api/v1/chat/abort/${encodeURIComponent(taskId)}`, undefined, { onError: 'null', parse: 'none' }),
     abortConv:    (convId)      => post(`/api/v1/chat/abort-conv/${encodeURIComponent(convId)}`, undefined, { onError: 'null', parse: 'none' }),
+    // Per-command interrupt (pt_232244fb): kill ONLY the task's running
+    // run_command subprocess — the turn CONTINUES with the partial output fed
+    // back to the model. NOT fire-and-forget: the caller needs the verdict
+    // ({interrupted:true} or {interrupted:false, reason}) to paint the button.
+    interruptCommand: (taskId)  => post(`/api/v1/chat/interrupt-command/${encodeURIComponent(taskId)}`, undefined, { onError: 'null' }),
     queueGet:     (convId)      => get(`/api/v1/chat/queue/${encodeURIComponent(convId)}`),
     queueRemove:  (convId, qId) => del(`/api/v1/chat/queue/${encodeURIComponent(convId)}/${encodeURIComponent(qId)}`,
                                        { parse: 'response', onError: 'null' }),

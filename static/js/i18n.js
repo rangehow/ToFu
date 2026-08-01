@@ -522,6 +522,14 @@ var _i18n = {
   //    for the count-up case: it renders the bare duration in every language.
   'toolTimer.countdown': { zh: '剩余 {n}', en: '{n} left' },
   'toolTimer.terminating': { zh: '已超时，正在终止…', en: 'timed out, terminating…' },
+  /* Per-command interrupt button (pt_232244fb, tool_rounds.js
+   * _renderCmdInterruptBtn) — kills ONLY the running command; the task
+   * continues with the partial output fed back to the model. */
+  'toolCmd.interrupt': { zh: '中断', en: 'Interrupt' },
+  'toolCmd.interrupting': { zh: '中断中…', en: 'Interrupting…' },
+  'toolCmd.interruptTip': { zh: '只终止这条命令——任务携带已产出的部分结果继续运行', en: 'Stop this command only — the task continues with the partial output' },
+  'toolCmd.interruptNone': { zh: '命令已结束，无需中断', en: 'Nothing to interrupt — the command already finished' },
+  'toolCmd.interruptedBadge': { zh: '⏸ 已中断', en: '⏸ interrupted' },
   'timerBlock.headTriggered': { zh: '经过 {n} 次检查后触发', en: 'Triggered after {n} poll{s}' },
   'timerBlock.headOrphaned': { zh: '任务已中断（{n} 次检查，定时器仍在后台运行）', en: 'Task interrupted ({n} poll{s}, timer still active in background)' },
   'timerBlock.headSkipSuffix': { zh: '，跳过 {n} 次', en: ', {n} skipped' },

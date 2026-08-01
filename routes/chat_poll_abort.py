@@ -152,6 +152,47 @@ def chat_abort(task_id):
             logger.debug('[Chat] Task %s — subprocess kill skipped: %s', task_id[:8], e)
 
     return api_ok()
+
+
+@api_v1_chat_bp.route('/api/v1/chat/interrupt-command/<task_id>', methods=['POST'],
+                      endpoint='ui_chat_interrupt_command')
+@require_scope('chat')
+def chat_interrupt_command(task_id):
+    """Interrupt the task's CURRENTLY-RUNNING run_command — WITHOUT aborting
+    the task (owner directive 2026-08-01, pt_232244fb).
+
+    Sets ``task['_cmd_interrupt']``; the run_command read loop (which polls
+    every ~0.2s) consumes it, kills the process tree, and returns the
+    PARTIAL output plus the interruption marker as an ordinary tool result —
+    so the model sees what the command produced before being stopped and the
+    turn continues. This is the per-command counterpart of
+    ``/api/v1/chat/abort/<task_id>`` (which stops the WHOLE turn).
+
+    Response shapes (all 200 except a missing task):
+      * ``{'interrupted': True, 'pid': N}``                  — flag planted
+      * ``{'interrupted': False, 'reason': 'task_not_running'}``
+      * ``{'interrupted': False, 'reason': 'no_active_command'}`` — the task
+        is not inside a run_command right now (nothing to interrupt)
+    """
+    with tasks_lock:
+        task = tasks.get(task_id)
+    if not task:
+        return api_not_found('Not found')
+    if task.get('status') != 'running' or task.get('aborted'):
+        return api_ok({'interrupted': False, 'reason': 'task_not_running'})
+    pid = task.get('_subprocess_pid')
+    if not pid:
+        return api_ok({'interrupted': False, 'reason': 'no_active_command'})
+    task['_cmd_interrupt'] = {'source': 'user', 'ts': time.time(), 'note': '',
+                              'pid': pid}
+    audit_log('api_chat_interrupt_command',
+              key_id=(current_auth().key_id if current_auth() else ''),
+              task_id=task_id)
+    logger.info('[Chat] Task %s — user interrupt requested for run_command pid=%s',
+                task_id[:8], pid)
+    return api_ok({'interrupted': True, 'pid': pid})
+
+
 @api_v1_chat_bp.route('/api/v1/chat/poll/<task_id>', methods=['GET'], endpoint='ui_chat_poll')
 @require_scope('chat')
 def chat_poll(task_id):

@@ -2319,6 +2319,53 @@ function _renderCmdTimerChip(round) {
     + ` data-cmd-deadline="${dl}">${escapeHtml(st.txt)}</span>`;
 }
 
+/* ── Per-command interrupt button (pt_232244fb) ──────────────────────────
+ * The whole-task Stop button kills the TURN; this kills only the command.
+ * The server plants task._cmd_interrupt, the run_command read loop consumes
+ * it within ~0.2s, kills the process tree, and the partial output + the
+ * interruption marker go back to the model as an ordinary tool result — the
+ * turn CONTINUES. Rendered only while the round is searching (a settled
+ * round has nothing to interrupt) and only when we can name the task — an
+ * interrupt that cannot resolve its taskId is worse than no button. */
+function _renderCmdInterruptBtn(round) {
+  if (!round || round.toolName !== 'run_command') return '';
+  const taskId = round._taskId || (typeof _riTaskIdForRound === 'function'
+    ? _riTaskIdForRound(round) : '');
+  if (!taskId) return '';
+  const _tf = (typeof t === 'function') ? t : (k, d) => d;
+  return `<button type="button" class="ptool-cmd-interrupt"`
+    + ` data-cmd-task="${escapeHtml(String(taskId))}"`
+    + ` title="${escapeHtml(_tf('toolCmd.interruptTip', 'Stop this command only — the task continues with the partial output'))}"`
+    + ` onclick="_cmdInterruptClick(this,event)">${escapeHtml(_tf('toolCmd.interrupt', 'Interrupt'))}</button>`;
+}
+
+/* Click → POST the interrupt, optimistically paint "interrupting…". The row
+ * settles itself when the tool_result SSE lands (the same event that would
+ * have landed on a natural exit), so the success path leaves the button
+ * disabled — the re-render removes it. Only a refusal (nothing to interrupt)
+ * or a network failure restores it. */
+async function _cmdInterruptClick(btn, ev) {
+  if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+  if (!btn || btn.disabled) return;
+  const taskId = btn.getAttribute('data-cmd-task') || '';
+  if (!taskId) return;
+  const _tf = (typeof t === 'function') ? t : (k, d) => d;
+  btn.disabled = true;
+  btn.textContent = _tf('toolCmd.interrupting', 'Interrupting…');
+  let r = null;
+  try {
+    r = (typeof Api !== 'undefined' && Api.chat)
+      ? await Api.chat.interruptCommand(taskId) : null;
+  } catch (_e) { r = null; }
+  if (r && r.interrupted === true) return;   /* terminal frame on its way */
+  btn.disabled = false;
+  btn.textContent = _tf('toolCmd.interrupt', 'Interrupt');
+  if (typeof showToast === 'function') {
+    showToast(_tf('toolCmd.interruptNone',
+      'Nothing to interrupt — the command already finished'));
+  }
+}
+
 // In-flight ("searching") states: running command with live output, search
 // orbit animation, or the generic active row.
 function _renderSearchingRow(round, ctx) {
@@ -2363,7 +2410,7 @@ function _renderSearchingRow(round, ctx) {
              ${cmdRootPill}
              ${descInlineHtml}
              <span class="ptool-cmd-label">Running...</span>
-             ${_renderCmdTimerChip(round)}
+             ${_renderCmdTimerChip(round)}${_renderCmdInterruptBtn(round)}
              <span class="ptool-spinner"></span>
            </div>
            <pre class="ptool-cmd-code"><code>$ ${cmdText}</code></pre>
@@ -2459,22 +2506,31 @@ function _renderCmdDoneBlock(round, ctx) {
   //   There is no real exit code — show the cause, never the cryptic "exit ?".
   const notRun = meta.notRun === true || exitCode === "not-run";
   const isOk = !notRun && (exitCode === "0" || exitCode === 0);
+  /* ★ Per-command interrupt (pt_232244fb): the command was killed by the
+   * user button / stall watchdog but the task CONTINUED — an amber neutral
+   * stop (like not-run), never the red "✗ exit -1" error frame. */
+  const interrupted = meta.interrupted === true;
   const statusCls = notRun
     ? "ptool-cmd-notrun"
-    : timedOut
-      ? "ptool-cmd-timeout"
-      : isOk
-        ? "ptool-cmd-ok"
-        : "ptool-cmd-err";
+    : interrupted
+      ? "ptool-cmd-interrupted"
+      : timedOut
+        ? "ptool-cmd-timeout"
+        : isOk
+          ? "ptool-cmd-ok"
+          : "ptool-cmd-err";
   const notRunBadge = meta.badge && meta.badge !== `exit ${exitCode}`
     ? meta.badge : "not run";
+  const _tfCmd = (typeof t === 'function') ? t : (k, d) => d;
   const statusLabel = notRun
     ? `⊘ ${escapeHtml(notRunBadge)}`
-    : timedOut
-      ? "timeout"
-      : isOk
-        ? "✓ done"
-        : `✗ exit ${exitCode}`;
+    : interrupted
+      ? escapeHtml(_tfCmd('toolCmd.interruptedBadge', '⏸ interrupted'))
+      : timedOut
+        ? "timeout"
+        : isOk
+          ? "✓ done"
+          : `✗ exit ${exitCode}`;
   // For a not-run command the reason IS the message — surface it inline
   // (not hidden behind a collapse toggle) so the user sees why immediately.
   const reason = notRun ? (meta.reason || output || "") : "";

@@ -58,6 +58,13 @@ _V0142_SIZES = {
     'Tofu-0.14.2-macos-arm64.dmg': 170_577_117,
     'Tofu-0.14.2-macos-x86_64.dmg': 173_626_347,
     'Tofu-0.14.2-linux-x86_64.tar.gz': 193_972_205,
+    # .deb is NOT in v0.14.2 (the format shipped after the release line
+    # stalled). Measured 2026-08-01 by running desktop/build-deb.sh on the
+    # REAL 0.16.0 PyInstaller payload from the local store (the same
+    # payload the next release packs) — 175,975,798 bytes. Anchors the
+    # headroom band for the floor ac1e598c added at 130 MB (73.9% — in
+    # band), observed reality rather than an estimate.
+    'Tofu-0.16.0-linux-x86_64.deb': 175_975_798,
 }
 _HOLLOW_WINDOWS_BYTES = 48_960_018
 

@@ -1417,3 +1417,79 @@ def test_wizard_logo_has_real_transparency_cutout():
     assert alpha.getpixel((src.width // 2, src.height // 2)) == 255, (
         'cube centre went transparent — the cutout leaks into the interior'
     )
+
+
+# ══════════════════════════════════════════════════════════════════
+#  DMG window branding
+# ══════════════════════════════════════════════════════════════════
+#
+# The macOS installer shipped as a DEFAULT WHITE FINDER WINDOW: no
+# --background at all, so nothing told the user the one thing a DMG window
+# exists to say — drag the app onto Applications. The artwork (warm paper
+# gradient + brand cube + a drag arrow) is drawn BETWEEN the two icon
+# positions, which makes the arrow's coordinates and create-dmg's --icon /
+# --app-drop-link coordinates ONE fact stored in two places: move an icon
+# on only one side and the arrow points at empty space. The alignment test
+# below compares the workflow's parsed coordinates against the generator's
+# constants, so neither side can drift alone.
+
+_DMG_BG_REF = '--background "static/icons/installer/dmg-background.png"'
+
+
+def test_dmg_step_uses_brand_background():
+    """Ratchet: create-dmg must carry --background with the generated art
+    (neuter the flag → red; the default white Finder window comes back)."""
+    text = _WORKFLOW.read_text(encoding='utf-8')
+    assert _DMG_BG_REF in text, (
+        'create-dmg lost its --background — the DMG renders as an unbranded '
+        'white Finder window again'
+    )
+
+
+def test_dmg_step_preflights_the_background():
+    """Ratchet: a missing artwork file is a BUILD error (icon step broke),
+    and must fail loudly BEFORE create-dmg — not fall through to the zip
+    fallback with an unbranded window (neuter the check → red)."""
+    text = _WORKFLOW.read_text(encoding='utf-8')
+    assert 'icons/installer/dmg-background.png not generated' in text, (
+        'no fail-early check on the DMG artwork — a missing file degrades '
+        'silently into the zip fallback'
+    )
+
+
+def test_generator_emits_dmg_backgrounds(tmp_path):
+    """Parity: the generator must produce BOTH the 1x artwork the workflow
+    references and the @2x retina sibling create-dmg picks up automatically,
+    at exactly window size ×1/×2."""
+    Image = pytest.importorskip('PIL.Image', reason='Pillow required')
+    mod = _icons_mod()
+    mod.ICONS_DIR = str(tmp_path)
+    mod.main()
+    for name, size in (('dmg-background.png', mod.DMG_BG_SIZE),
+                       ('dmg-background@2x.png',
+                        (mod.DMG_BG_SIZE[0] * 2, mod.DMG_BG_SIZE[1] * 2))):
+        out = tmp_path / 'installer' / name
+        assert out.is_file(), f'generator did not produce installer/{name}'
+        with Image.open(str(out)) as im:
+            assert im.format == 'PNG', f'{name}: create-dmg needs PNG'
+            assert im.size == size, f'{name}: expected {size}, got {im.size}'
+
+
+def test_dmg_artwork_arrow_matches_icon_coordinates():
+    """Alignment pin: the workflow's --icon / --app-drop-link coordinates
+    must equal the generator's DMG_APP_ICON_POS / DMG_DROP_ICON_POS — the
+    arrow in the artwork is drawn between those two points, so a one-sided
+    edit makes the art point at empty space (and only this test notices)."""
+    text = _WORKFLOW.read_text(encoding='utf-8')
+    app = re.search(r'--icon "Tofu\.app" (\d+) (\d+)', text)
+    drop = re.search(r'--app-drop-link (\d+) (\d+)', text)
+    assert app and drop, 'create-dmg icon coordinates not found in workflow'
+    mod = _icons_mod()
+    assert (int(app.group(1)), int(app.group(2))) == mod.DMG_APP_ICON_POS, (
+        f'--icon says {app.groups()} but the artwork is drawn for '
+        f'{mod.DMG_APP_ICON_POS}'
+    )
+    assert (int(drop.group(1)), int(drop.group(2))) == mod.DMG_DROP_ICON_POS, (
+        f'--app-drop-link says {drop.groups()} but the artwork is drawn for '
+        f'{mod.DMG_DROP_ICON_POS}'
+    )

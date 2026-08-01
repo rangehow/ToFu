@@ -9,6 +9,8 @@ Outputs:
     static/icons/tofu.icns  — macOS icon (16–512px @1x/@2x)
     static/icons/installer/wizard-large.bmp — Inno Setup left panel (164×314)
     static/icons/installer/wizard-small.bmp — Inno Setup inner page (55×58)
+    static/icons/installer/dmg-background.png    — DMG window art (600×400)
+    static/icons/installer/dmg-background@2x.png — retina variant (1200×800)
 """
 
 import os
@@ -136,6 +138,70 @@ def gen_wizard_images(src: Image.Image, out_dir: str):
     print(f'  ✓ {small_path} ({os.path.getsize(small_path) // 1024} KB)')
 
 
+# DMG window geometry. The icon COORDINATES are pinned here AND in
+# build-desktop.yml's create-dmg invocation (--icon / --app-drop-link) — the
+# arrow in the artwork is drawn between these two points, so a coordinate
+# changed on only one side makes the art point at empty space. The parity
+# test in tests/test_desktop_build_workflow.py compares both sides.
+DMG_BG_SIZE = (600, 400)
+DMG_APP_ICON_POS = (150, 190)
+DMG_DROP_ICON_POS = (450, 190)
+
+# Warm paper ramp (static/styles.css [data-theme="light"] --bg-primary/-secondary).
+_PAPER_TOP = (0xf4, 0xf2, 0xed)
+_PAPER_BOTTOM = (0xe3, 0xe1, 0xda)
+_DMG_ACCENT = (0x63, 0x66, 0xf1)  # light-theme --accent
+
+
+def _dmg_background(src: Image.Image, scale: int) -> Image.Image:
+    """Render the DMG window art at ``scale`` (1 or 2 for retina).
+
+    Warm paper gradient + the brand cube + a drag-guidance arrow pointing
+    from the app-icon position to the Applications-drop position — the ONE
+    instruction a DMG window exists to give, previously implied by nothing
+    (the default white Finder window left users to guess the drag).
+    """
+    w, h = DMG_BG_SIZE[0] * scale, DMG_BG_SIZE[1] * scale
+    img = Image.new('RGBA', (w, h))
+    px = img.load()
+    for y in range(h):
+        t = y / (h - 1)
+        row = tuple(round(_PAPER_TOP[i] + (_PAPER_BOTTOM[i] - _PAPER_TOP[i]) * t)
+                    for i in range(3)) + (255,)
+        for x in range(w):
+            px[x, y] = row
+
+    draw = ImageDraw.Draw(img)
+    app_x, app_y = DMG_APP_ICON_POS[0] * scale, DMG_APP_ICON_POS[1] * scale
+    drop_x, drop_y = DMG_DROP_ICON_POS[0] * scale, DMG_DROP_ICON_POS[1] * scale
+
+    # Drag arrow between the two icon centres (clear of the 100px icons).
+    x0, x1, ay = app_x + 80 * scale, drop_x - 90 * scale, app_y
+    width = max(2, 3 * scale)
+    draw.line([(x0, ay), (x1, ay)], fill=_DMG_ACCENT + (255,), width=width)
+    head = 10 * scale
+    draw.polygon([(x1, ay - head), (x1, ay + head), (x1 + head * 2, ay)],
+                 fill=_DMG_ACCENT + (255,))
+
+    # Brand cube above the arrow, centred between the icons.
+    logo = _cut_out_background(src).resize((72 * scale, 72 * scale),
+                                           Image.LANCZOS)
+    img.paste(logo, ((app_x + drop_x) // 2 - 36 * scale,
+                     ay - 120 * scale), logo)
+    return img
+
+
+def gen_dmg_background(src: Image.Image, out_dir: str):
+    """Emit dmg-background.png and its @2x retina sibling (create-dmg picks
+    the @2x file up automatically when it sits next to the 1x file)."""
+    os.makedirs(out_dir, exist_ok=True)
+    for scale, name in ((1, 'dmg-background.png'),
+                        (2, 'dmg-background@2x.png')):
+        path = os.path.join(out_dir, name)
+        _dmg_background(src, scale).convert('RGB').save(path, format='PNG')
+        print(f'  ✓ {path} ({os.path.getsize(path) // 1024} KB)')
+
+
 def main():
     if not os.path.isfile(SOURCE_PNG):
         print(f'ERROR: Source logo not found: {SOURCE_PNG}')
@@ -154,6 +220,7 @@ def main():
         print(f'  ! ICNS generation failed ({e}) — run on macOS or use iconutil')
 
     gen_wizard_images(src, os.path.join(ICONS_DIR, 'installer'))
+    gen_dmg_background(src, os.path.join(ICONS_DIR, 'installer'))
 
 
 if __name__ == '__main__':

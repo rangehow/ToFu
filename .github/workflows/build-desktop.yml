@@ -638,10 +638,20 @@ jobs:
           # No `set -e` here on purpose: the create-dmg invocation below is
           # deliberately paired with a `|| { ... }` zip fallback, and the whole
           # point is that its failure is HANDLED rather than fatal.
+          #
+          # The window art is a GENERATED input (gen_desktop_icons.py), so a
+          # missing file means the icon step broke — that is a build error,
+          # not a create-dmg failure, and must fail loudly here rather than
+          # fall through to the zip fallback with an unbranded window.
+          test -f static/icons/installer/dmg-background.png || {
+            echo "::error::static/icons/installer/dmg-background.png not generated — gen_desktop_icons.py failed."
+            exit 1
+          }
           brew install create-dmg || true
           create-dmg \
             --volname "Tofu" \
             --volicon "static/icons/tofu.icns" \
+            --background "static/icons/installer/dmg-background.png" \
             --window-pos 200 120 \
             --window-size 600 400 \
             --icon-size 100 \

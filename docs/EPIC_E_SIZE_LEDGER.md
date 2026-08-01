@@ -27,7 +27,7 @@
 | 3 | ui/chat_render.js | 136,701 | boot-critical | 消息渲染即首屏本体 |
 | 4 | ui/sse_pipeline.js | 116,042 | boot-critical | 聊天流主管道 |
 | 5 | api.js | 99,249 | boot-critical | 统一 API 客户端，`_CRITICAL_FILES` 成员 |
-| 6 | tofu-scene.js | 95,830 | **可降级（候选 #2）** | 宠物场景，纯装饰；与 tofu-pet.js 同族合计 160KB，首屏零必要 |
+| 6 | tofu-scene.js | 95,830 | **已降级（sub-3C, `df664a2d`）** | 宠物场景，纯装饰；与 tofu-pet.js 同族合计 160KB 已出 core |
 | 7 | ui/finish_info.js | 90,090 | 可降级（第三梯队） | 轮尾信息卡；首屏无可渲染轮次时不必需 |
 | 8 | project.js | 89,198 | 可降级（第三梯队） | 项目/设置面板，owner 指定第三梯队 |
 | 9 | core/conversations.js | 88,735 | boot-critical | 会话数据核心（sub-2 已 −41%，收尾中） |
@@ -35,7 +35,7 @@
 | 11 | main.js | 74,539 | boot-critical | boot orchestrator，`_CRITICAL_FILES` 成员 |
 | 12 | ui/conversation_list.js | 71,066 | boot-critical | 侧栏即首屏本体 |
 | 13 | ui/streaming_ui.js | 65,522 | boot-critical | 流式渲染热路径 |
-| 14 | tofu-pet.js | 64,763 | **可降级（与 #6 同族）** | 宠物本体；装饰 160KB 的另一半 |
+| 14 | tofu-pet.js | 64,763 | **已降级（sub-3C, `df664a2d`）** | 宠物本体；装饰 160KB 的另一半 |
 | 15 | core/health_stream_timer.js | 61,573 | **已降级（sub-3B）** | 零 stub（无一次性接线）；闸 + idle prefetch |
 | 16 | ui/streaming_render.js | 57,383 | boot-critical | 流式渲染热路径 |
 | 17 | myday.js | 56,261 | 可降级（第三梯队） | My Day 面板，用户动作触发 |
@@ -60,6 +60,11 @@
 配套 deferred 套件（manifest 双断言 + index.html onclick absence-safe 钉 + 无 stub 钉）
 + 农场物理验证（core 排除 TofuScene/TofuPet、feature 含）+ 本表流水行。
 
+**已落地（sub-3C, `df664a2d`）：** 普查切片时复核全部成立；农场构建实测 core 排除
+`window.TofuPet=`/`window.TofuScene=`、feature 含两者（8/8 PASS，prior 形态保持）；
+套件 `test_frontend_tofu_pet_scene_deferred.py` 12 检查（failing-first 4 红 / NEUTER×2
+精确：全回退 4 红、仅回退 pet 精确 2 红——逐文件鉴别力实证）。
+
 ## 分片流水（每片一行，含生产实测字节数）
 ## 分片流水（每片一行，含生产实测字节数）
 
@@ -67,9 +72,10 @@
 |---|---|---|---|---|---|---|
 | 2026-07-31 | sub-3A | `8aa9a1c6` | cross_tab_sync.js (53KB) | 1,550,424 | 470,760 | stub + 3 闸；事故链见 JOURNAL 2026-08-01 |
 | 2026-08-01 | sub-3B | `6baf1083` | health_stream_timer.js (62KB) | 生产重启前不变（冻结清单） | 同左 | 5 闸 + 零 stub 设计；农场同构构建 2,289,664→2,275,757（−13.9KB 净额，同期兄弟新增 stall_watch 等抵销部分）；生产字节数随重启更新 |
+| 2026-08-01 | sub-3C | `df664a2d` | tofu-pet.js + tofu-scene.js (160KB) | 生产重启前不变（冻结清单） | 同左 | 零闸零 stub（普查复核）；农场构建 core 1,493,218 B（含同期兄弟增量）、feature 549,925 B，8/8 PASS；生产字节数随重启更新 |
 
 ## 目标线与当前差距
 
 - **目标（暂定）**：core 压缩态 ≤ **1.2 MB**（待 owner 确认）。
 - **当前**：1,550,424 B ⇒ 差距 ~350 KB。
-- **已排队**：tofu-scene+tofu-pet 160KB（下一片）+ tool_rounds 拆分（冷渲染子集留 core 后可释放大头，需先设计拆分缝）⇒ 目标可达但路径在拆分不在整体 move。
+- **已排队**：~~tofu-scene+tofu-pet 160KB（下一片）~~ **已降级（sub-3C）**；累计已降级源码 275KB（53+62+160）。下一片：tool_rounds 拆分（冷渲染子集留 core 后可释放大头，需先设计拆分缝）⇒ 目标可达但路径在拆分不在整体 move。

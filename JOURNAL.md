@@ -1,3 +1,11 @@
+### 2026-08-01(Epic-E sub-3C:tofu-pet+tofu-scene 160KB 装饰族移出 core——**首个按账选的大件**,零闸零 stub) — commit `df664a2d`(2 文件;新套件 12 检查 failing-first 4 红,NEUTER×2 精确,bundle 环 64/64);ledger 流水已记
+
+- **打法转变的首个执行例:** 前两个 deferral(cross_tab 53KB + health_stream_timer 62KB)是「按好拆选」合计仅占 core 源 2.8%;本批起按 `docs/EPIC_E_SIZE_LEDGER.md` 尺寸账选件——tofu 装饰族 160KB 是 top-20 里最大的非 boot-critical 整件,普查结论「近乎零改动可降级」切片时逐项复核成立(单 window 命名空间/外部 JS 调用方为零/onclick 天然 absence-safe/dispatchEvent 火忘缝/readyState 自举/挂载目标 display:none 起步)。
+- **零闸零 stub 设计(与 sub-3B 同判据):** 无一次性 boot 接线可丢 ⇒ 不装 feature-loader stub(装了反而给装饰性点击加一次无收益取包);idle prefetch ~2s 落地,bar 自身 fadeIn 覆盖晚到挂载,无布局位移。套件第 3 节专门钉「TofuPet/TofuScene/cycleDecor/setDecor 永不在 entry points」防未来误加。
+- **NEUTER 新形态——逐文件鉴别力:** NEUTER1 全回退→精确 4 红;NEUTER2 仅把 tofu-pet 拉回 core→**精确 2 红且 scene 双断言保持绿**——证明套件按文件分辨,不是「一动全红」的粗绊线。
+- **农场实测:** core 排除 `window.TofuPet=`/`window.TofuScene=`、feature 含两者;prior 形态(cross_tab/tw*/i18n pack)全保持;farm core 1,493,218 B(含兄弟增量)。**自己抓回一次脚本断言写错:esbuild 把 `window.X = {` 压成 `window.X={`,空格针失配——构建期验证的 needle 必须按压缩后形态写**(第三次同教训:验证脚本先跑通再下结论)。
+- **下一步(按账排):** tool_rounds.js 261KB 只能走「冷渲染子集留 core + 交互增强降级」拆分(首屏恢复路径 chat_render.js:1499 裸调用实测定案,非整体 move 件);第三梯队 finish_info/project/myday/streaming_swarm_panel/access_matrix。生产字节数随重启更新(runbook `scripts/verify_epic_e_deferrals.sh` 待扩 sub-3C 项)。
+
 ### 2026-08-01(脑派票闭环:podcast 五 handler 转 async——paper.py 预存红根治,carve-out 白名单保持「只说真话」) — 接我自己在 error.log 审计批立的 `pt_4c93d91c51724f1e`;commit `f4c33f8c`(1 文件 +15/-8;integrity **24/24**(原 1 红)、podcast 邻接 33/33、paper migration+import smoke 17/17、media-clocks 验收 PASS;**NEUTER**:回退一个 handler 为 sync → carve-out 守卫精确红,cp/cmp 还原);epic DONE
 ### 2026-08-01(egress 接线:「已用 BIND_HOST shell 重启」复核——未生效,证据四项;epic `pt_4ea6bf05deaa46f0`)
 

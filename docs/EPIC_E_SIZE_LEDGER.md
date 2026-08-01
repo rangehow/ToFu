@@ -29,7 +29,7 @@
 | 5 | api.js | 99,249 | boot-critical | 统一 API 客户端，`_CRITICAL_FILES` 成员 |
 | 6 | tofu-scene.js | 95,830 | **已降级（sub-3C, `df664a2d`）** | 宠物场景，纯装饰；与 tofu-pet.js 同族合计 160KB 已出 core |
 | 7 | ui/finish_info.js | 90,090 | 可降级（第三梯队） | 轮尾信息卡；首屏无可渲染轮次时不必需 |
-| 8 | project.js | 89,198 | 可降级（第三梯队） | 项目/设置面板，owner 指定第三梯队 |
+| 8 | project.js→**project_state.js 23,958 + panel 67,114** | 89,198 | **拆分落地（sub-7）** | 状态子集留 core（boot/SSE/bar 全裸调用实测定案）+ 面板 67KB 降级 + 13 stub；反向裸调 typeof 闸 ×3 |
 | 9 | core/conversations.js | 88,735 | boot-critical | 会话数据核心（sub-2 已 −41%，收尾中） |
 | 10 | main/main_send_pipeline.js | 88,658 | boot-critical | 发送管道 |
 | 11 | main.js | 74,539 | boot-critical | boot orchestrator，`_CRITICAL_FILES` 成员 |
@@ -38,7 +38,7 @@
 | 14 | tofu-pet.js | 64,763 | **已降级（sub-3C, `df664a2d`）** | 宠物本体；装饰 160KB 的另一半 |
 | 15 | core/health_stream_timer.js | 61,573 | **已降级（sub-3B）** | 零 stub（无一次性接线）；闸 + idle prefetch |
 | 16 | ui/streaming_render.js | 57,383 | boot-critical | 流式渲染热路径 |
-| 17 | myday.js | 56,261 | 可降级（第三梯队） | My Day 面板，用户动作触发 |
+| 17 | myday.js | 56,261 | **已降级（sub-6, `9b10125c`）** | My Day 面板；3 stub + 零外部调用方 + boot 块晚载安全 |
 | 18 | ui/streaming_swarm_panel.js | 54,946 | **已降级（sub-5B）** | swarm 面板，非首屏；7 调用点装闸 + 通用行退化（同 sub-4 契约） |
 | 19 | settings/providers/access_matrix.js | 54,558 | **已降级（sub-5A）** | 设置面板；3 调用点全部早已 typeof 闸——零改动可降级 |
 | 20 | main/main_toolbar_ui.js | 54,496 | boot-critical | 顶栏即首屏本体 |
@@ -76,9 +76,10 @@
 | 2026-08-01 | sub-5A | 见 HEAD | access_matrix.js (55KB) | **1,384,317**（`bundle-f53ca113.js`，同日实测，含兄弟增量 + 在飞 sub-6） | **666,260**（`feature-1cade5e9.js`） | **零新闸零 stub**（3 调用点全部早已 typeof 闸，`_stgMatrixOpen` 随模块走）；NEUTER×2 精确；农场 9/9；runbook 26 项 ALL GREEN |
 | 2026-08-01 | sub-5B | 见 HEAD | streaming_swarm_panel.js (55KB) | 同上（与 5A 同批生效） | 同上 | 7 调用点装闸 + 通用行退化；注册套件重锚 deferred 不变量；NEUTER×2 精确；农场 10/10；e2e(visual+slow) 的 `_buildSwarmPanelHTML` 断言现依赖 idle prefetch 落地，已标记 |
 | 2026-08-01 | sub-6 | `9b10125c` | myday.js + myday_tasks.js (65KB) | **1,384,317**（`bundle-f53ca113.js`，同日实测；与农场**同 hash**） | **666,260**（`feature-1cade5e9.js`） | 零闸 + 3 stub（openDailyReport/closeDailyReport/_mydayTriggerGenerate，py+js 双表）；零外部 JS 调用方（comm 实证）、`_myday` 态私有于双文件、boot 块 readyState 分支晚载安全；NEUTER×2 精确；农场 13/13；runbook 31 项 ALL GREEN |
+| 2026-08-01 | sub-7 | 见 HEAD | project.js 拆分（state 24KB 留 core + panel 67KB 降级） | **1,351,102**（`bundle-c0d727ec.js`，同日实测） | **702,323**（`feature-c4756610.js`） | 第二个「状态留 core+面板降级」拆分；反向裸调 typeof 闸 ×3；13 stub；harness 双文件重指向 ×2（state-first + 响亮失败）；NEUTER×2 精确；环 106/106；runbook 34 项 ALL GREEN |
 
 ## 目标线与当前差距
 
 - **目标（暂定）**：core 压缩态 ≤ **1.2 MB**（待 owner 确认）。
-- **当前（2026-08-01 生产实测）**：**1,384,317 B**（`bundle-f53ca113.js`，七片全部生效，runbook 31 项 ALL GREEN）⇒ 差距 ~184 KB（基线 1,550,424 → 累计 −166 KB 压缩态，含兄弟增量）。
-- **已排队**：累计已降级源码 508KB（53+62+160+58+55+55+65）。下两片都是**拆分非 move**（普查定案 2026-08-01）：project.js 89KB——`_restoreConvProject` 裸调用在 conv 切换路径（main_conv_lifecycle.js:392），拆「状态恢复子集留 core + 面板 UI 降级」；finish_info.js 90KB——`renderFinishInfo`/`renderFileChangesBar` 裸调用在 chat_render.js:1833/1848 首屏渲染路径，比照 tool_rounds sub-4 拆「冷渲染留 core + 富内容（cost popover/file-changes 富渲染）降级」。
+- **当前（2026-08-01 生产实测）**：**1,351,102 B**（`bundle-c0d727ec.js`，八片全部生效，runbook 34 项 ALL GREEN）⇒ 差距 ~151 KB（基线 1,550,424 → 累计 −199 KB 压缩态，含兄弟增量）。
+- **已排队**：累计已降级源码 573KB（53+62+160+58+55+55+65+67）。下一片：finish_info.js 90KB——`renderFinishInfo`/`renderFileChangesBar` 裸调用在 chat_render.js:1833/1848 首屏渲染路径，比照 tool_rounds sub-4 拆「冷渲染留 core + 富内容（cost popover/file-changes 富渲染）降级」。**Epic-E 完成判读：core ≤1.2MB 后 complete；剩余缺口 ~151KB，finish_info 拆分（预释 ~50-60KB）后需再评一至两件（候选：conversation_list 71KB 侧栏冷渲染子集 / sse_pipeline 116KB poll-fallback 族 / api.js 99KB 冷端点族）。**

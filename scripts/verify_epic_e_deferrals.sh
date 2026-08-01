@@ -6,7 +6,8 @@
 # (sub-3A) + health_stream_timer.js (sub-3B) + tofu-pet.js/tofu-scene.js
 # (sub-3C) + ui/tool_rounds_rich.js (sub-4, rich conv-meta + timer-watcher
 # renderers split out of tool_rounds.js) + access_matrix.js (sub-5A) +
-# streaming_swarm_panel.js (sub-5B) + myday.js/myday_tasks.js (sub-6):
+# streaming_swarm_panel.js (sub-5B) + myday.js/myday_tasks.js (sub-6) +
+# project.js split (sub-7, state core + panel deferred):
 #
 #     bash scripts/verify_epic_e_deferrals.sh [base_url]
 #
@@ -30,7 +31,11 @@
 #         13. served feature INCLUDES both; core KEEPS both typeof guards
 #   sub-6  14. served core EXCLUDES the myday defs but KEEPS the stub entries
 #         15. served feature INCLUDES the myday defs
-#   ledger 16. prints measured byte counts for docs/EPIC_E_SIZE_LEDGER.md
+#   sub-7  16. served core KEEPS the state defs (loadProjectStatus /
+#               _updateProjectUI / _applyProjectData) + reverse guard
+#         17. served feature INCLUDES the panel defs (openProjectModal /
+#               browseDirectory); zero state defs in feature
+#   ledger 18. prints measured byte counts for docs/EPIC_E_SIZE_LEDGER.md
 #
 # Exit 0 = all green; exit 1 = at least one failure (details on stdout).
 
@@ -167,6 +172,32 @@ printf '%s' "$FEAT_BODY" | grep -q 'function _mydayToggleTodo(' \
   && pass "sub-6.15b feature includes the myday_tasks def" \
   || fail "sub-6.15b feature MISSING the myday_tasks def"
 
+# ── sub-7 (project split: state core + panel deferred) ──
+printf '%s' "$CORE_BODY" | grep -q 'function loadProjectStatus(' \
+  && pass "sub-7.16 core keeps the loadProjectStatus def (state)" \
+  || fail "sub-7.16 core LOST the loadProjectStatus def — boot bar restore breaks"
+printf '%s' "$CORE_BODY" | grep -q 'function _updateProjectUI(' \
+  && pass "sub-7.16b core keeps the _updateProjectUI def (state)" \
+  || fail "sub-7.16b core LOST the _updateProjectUI def"
+printf '%s' "$CORE_BODY" | grep -q 'function _applyProjectData(' \
+  && pass "sub-7.16c core keeps the _applyProjectData def (SSE entry)" \
+  || fail "sub-7.16c core LOST the _applyProjectData def"
+printf '%s' "$CORE_BODY" | grep -q 'typeof saveRecentProject' \
+  && pass "sub-7.16d core keeps the saveRecentProject reverse guard" \
+  || fail "sub-7.16d core lost the saveRecentProject reverse guard"
+printf '%s' "$FEAT_BODY" | grep -q 'function openProjectModal(' \
+  && pass "sub-7.17 feature includes the openProjectModal def (panel)" \
+  || fail "sub-7.17 feature MISSING the openProjectModal def"
+printf '%s' "$FEAT_BODY" | grep -q 'function browseDirectory(' \
+  && pass "sub-7.17b feature includes the browseDirectory def (panel)" \
+  || fail "sub-7.17b feature MISSING the browseDirectory def"
+printf '%s' "$FEAT_BODY" | grep -q 'function loadProjectStatus(' \
+  && fail "sub-7.17c feature DUPLICATES loadProjectStatus (double state)" \
+  || pass "sub-7.17c feature has no loadProjectStatus duplication"
+printf '%s' "$CORE_BODY" | grep -q '"openProjectModal"' \
+  && pass "sub-7.17d core feature-loader carries the openProjectModal stub" \
+  || fail "sub-7.17d core feature-loader MISSING the openProjectModal stub"
+
 # ── ledger measurements ──
 CORE_BYTES=$(printf '%s' "$CORE_BODY" | wc -c)
 FEAT_BYTES=$(printf '%s' "$FEAT_BODY" | wc -c)
@@ -177,7 +208,7 @@ say "feature $FEAT  $FEAT_BYTES bytes"
 
 say ""
 if [ "$FAILS" -eq 0 ]; then
-  say "ALL GREEN — Epic-E deferrals sub-3A + sub-3B + sub-3C + sub-4 + sub-5A/5B + sub-6 verified live."
+  say "ALL GREEN — Epic-E deferrals sub-3A/3B/3C/4/5A/5B/6/7 verified live."
   exit 0
 else
   say "$FAILS FAILURE(S) — deferrals NOT verified; do not mark shipped."

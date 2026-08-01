@@ -427,6 +427,15 @@
 - **生产实测挂起(非我故障):** runbook 扩 sub-5 六项后实测服务器 curl 000×3——进程活着(42.6% CPU、14.3GB RSS)但事件环停摆(cgroup 95.6% 反复 relief + FUSE 上 8s 慢查询,正是 pt_afbaf3d7/pt_ef42c2a1 两兄弟 epic 在修的「假离线」族)。**绝不重启(本会话自己的 run_task 就在该进程里跑)**;timer 追服务器恢复后自动补跑 runbook 并回写分类账。
 - **累计:** core 1,550,424 → 农场 1,418,722(−132KB 压缩态),距 1.2MB ~219KB;已降级源码 443KB。下一片:myday 面板对(先拆 `_mydayScheduleReminder` load-time 副作用)+ project.js 拆分(37 调用点,比照 tool_rounds「状态子集留 core」)。
 
+### 2026-08-01(pt_03f4cdf1 四连发 slice 31-34:_run.py 776→707 L(−71.8%),owner 剩余三块全部落地) — 4 commits 各带 failing-first+NEUTER×2+sweep;sweep 328→336 全绿
+
+- **slice 31 `_provider_binding.py`(776→762):** provider-pin + conv-affinity(owner 点名块)。leaf 保原文惰性函数内 import ⇒ 行为测试须 patch 源模块(provider_pin/conv_affinity)而非 leaf 命名空间(与 sub-8「const 在 eval 词法域」同族但反向:此处是 `from X import f` 在函数内,X.f 在调用时解析)。
+- **slice 32 `_round_open.py`(762→755):** ROUND_START + phase(round-0 `{}` 锚分支,行为钉)+ StreamingToolAccumulator 构造——**`cfg.get('projectPath')` 而非解析后 `project_path` 局部量,逐字节保留**(原文就读 cfg,这类「看似可顺手统一」的读法恰是 wire-parity 陷阱)。顺手剪死 import `_emit_tool_round_phase`。
+- **slice 33 `_turn_prelude.py`(755→728):** swarm 链重置/profile 合并(返回重绑 cfg)/browser 路由三合一,全行为钉(auto-continue 不重置/default 同对象)。
+- **slice 34 `_post_loop.handle_task_base_exception`(728→707):** BaseException 终态(envelope+DONE+persist 仅非 endpoint-managed,fail-open,`raise be` 保取消语义)。`persist_task_result` 在 _run.py 只剩 facade 再导出职责,标 noqa:F401。
+- **距 owner ≤350L 线 ~357L:** 剩余候选——task-open 簇(autopilot kick+turn_input+timing logs)、inject_tool_history+drift 守卫(并入既有 `_tool_history.py`)、VU 闭包评估、**delegation 注释压缩**(现行每个 delegation 带 4-8 行注释头,脊柱指针化可再释 ~100L,属 DONE 定义内「skeleton」形态收敛)。
+- **方法论立档:** 共享环境下 sweep 偶发「1F+1E 兄弟污染」——单跑过 + 复跑绿才放行,不误报自己切片。
+
 ### 2026-08-01(Epic-E sub-8:finish_info.js 成本泡懒建——第三种拆分范式,生产 core 1,343,908→1,273,857 B(sub-9 在飞),距 1.2MB ~74KB) — commit `48c1651f`(9 文件)+ 兄弟协补 `var 化 + 套件钉 + ledger 行 + runbook 段`;runbook **41 项 ALL GREEN**;事件派发 `24e3273a`
 
 - **范式三「懒建」(与前两种并列):** sub-4/5B 是「缺席降级通用行」,sub-7 是「状态留 core+面板降级」,sub-8 是「**builder 降级 + ctx 注册 + 点击才建**」——renderFinishInfo 旧制把 19KB `_buildCostPopover` 的完整 HTML 内嵌进**每条**消息(`<span class=cost-popover-data hidden>`),paint 即付构建费,但泡只在点击时开。新契约:core 存 ctx 进 `_costCtxByMsg` WeakMap + 空占位符,`_toggleCostPopover`(stub)点击载包→从 stash 建进同一占位→legacy 内嵌优先(混合形态 bundle 安全)。**冷渲染可见像素零变化。**

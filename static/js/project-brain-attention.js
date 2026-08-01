@@ -133,6 +133,27 @@
   }
 
   /**
+   * The provenance chip — "which conversation raised this?". ONE builder
+   * shared by every decision card (halted epic, charter proposal): two
+   * hand-copies would drift, and the chip is meaningless if only SOME
+   * decisions carry it. The backend resolves the title (askedByTitle); the
+   * chip deep-links INTO that chat via the 'openConv' action.
+   */
+  function _fromChip(item) {
+    var fromId = item.askedByConvId || item.convId || '';
+    if (!fromId) return '';
+    var fromName = item.askedByTitle || fromId;
+    return '<button type="button" class="pb-conv-chip pb-attn-from pb-attn-act"' +
+      ' data-act="openConv" data-conv-id="' + _esc(fromId) + '" title="' +
+      _esc(_t('projectBrain.attnOpenConv',
+              'Open the conversation that raised this')) + '">' +
+      ((typeof Icon === 'function') ? Icon('messageSquare', 11) : '') +
+      '<span class="pb-attn-from-name">' +
+      _esc(_t('projectBrain.attnFrom', 'from')) + ' ' + _esc(fromName) +
+      '</span></button>';
+  }
+
+  /**
    * A halted epic. Renders the question as the primary content with the same
    * one-click option chips + free-text input the Board's awaiting lane has,
    * because answering IS the resolution — making the operator hop to another
@@ -154,21 +175,6 @@
         (desc ? '<span class="pb-attn-opt-desc">' + _esc(desc) + '</span>' : '') +
         '</button>';
     }).join('');
-    // Provenance chip — "which conversation asked me this?". The backend
-    // resolves the title (askedByTitle); the chip deep-links INTO that chat.
-    var fromId = item.askedByConvId || item.convId || '';
-    var fromChip = '';
-    if (fromId) {
-      var fromName = item.askedByTitle || fromId;
-      fromChip = '<button type="button" class="pb-conv-chip pb-attn-from pb-attn-act"' +
-        ' data-act="openConv" data-conv-id="' + _esc(fromId) + '" title="' +
-        _esc(_t('projectBrain.attnOpenConv',
-                'Open the conversation that raised this')) + '">' +
-        ((typeof Icon === 'function') ? Icon('messageSquare', 11) : '') +
-        '<span class="pb-attn-from-name">' +
-        _esc(_t('projectBrain.attnFrom', 'from')) + ' ' + _esc(fromName) +
-        '</span></button>';
-    }
     var meta = [];
     if (item.blockCount) {
       meta.push(_t('projectBrain.blockedCount', 'blocked %d×')
@@ -208,7 +214,7 @@
       '<div class="pb-attn-head">' + _sevPill(item.severity) +
         '<span class="pb-attn-kind">' +
         _esc(_t('projectBrain.attnKindEpic', 'Epic halted')) + '</span>' +
-        fromChip + '</div>' +
+        _fromChip(item) + '</div>' +
       '<div class="pb-attn-title">' + _rich(item.title) + '</div>' +
       reasonHtml +
       '<div class="pb-attn-label">' +
@@ -243,7 +249,8 @@
     return _card(item,
       '<div class="pb-attn-head">' + _sevPill(item.severity) +
         '<span class="pb-attn-kind">' +
-        _esc(_t('projectBrain.attnKindProposal', 'Proposed decision')) + '</span></div>' +
+        _esc(_t('projectBrain.attnKindProposal', 'Proposed decision')) + '</span>' +
+        _fromChip(item) + '</div>' +
       '<div class="pb-attn-body">' + _rich(item.text) + '</div>' +
       '<div class="pb-proposal-summary-row">' +
         '<input type="text" class="pb-proposal-summary" maxlength="240" placeholder="' +

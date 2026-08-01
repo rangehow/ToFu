@@ -516,6 +516,24 @@ def test_reason_uses_the_background_allowance(flask_app):
         'the background must not be truncated at the display-only cap'
 
 
+def test_proposal_carries_author_provenance(flask_app):
+    """The charter-proposal card is a decision awaiting the human too — it
+    must wear the SAME askedBy* provenance as the halted-epic card: the
+    author's conv id + the resolved conversation title."""
+    from lib.conversations.project_attention import build_attention_items
+    from lib.conversations.project_charter import propose_amendment
+    from lib.database import DOMAIN_CHAT, get_thread_db
+    p = os.path.abspath('/tmp/attn-prop-prov')
+    with flask_app.app_context():
+        db = get_thread_db(DOMAIN_CHAT)
+        _insert_conv(db, 'attn-proposer-1', '架构决策讨论')
+        propose_amendment(p, 'attn-proposer-1', 'Adopt the new parser')
+        item = build_attention_items(p)['items'][0]
+    assert item['type'] == 'charter_proposal', item
+    assert item['askedByConvId'] == 'attn-proposer-1', item
+    assert item['askedByTitle'] == '架构决策讨论', item
+
+
 def test_NC_blocked_by_write_is_load_bearing(flask_app):
     """NC: strip the blocked_by=? write from block_task → the asker is LOST
     (the chip falls back to the epic's poster) → the provenance assertions

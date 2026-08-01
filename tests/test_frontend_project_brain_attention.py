@@ -131,7 +131,9 @@ PBA.renderAttention({
       reason: '[human-gated] needs a call', blockCount: 3, tab: 'board',
       askedByConvId: 'conv-asker', askedByTitle: 'Egress 调研', ts: 1754000000000 },
     { type: 'charter_proposal', severity: 'advisory', id: 'prop_1',
-      text: 'Adopt the new parser', tab: 'charter' },
+      text: 'Adopt the new parser', tab: 'charter',
+      convId: 'conv-proposer', askedByConvId: 'conv-proposer',
+      askedByTitle: '架构决策讨论' },
   ],
 });
 
@@ -165,6 +167,13 @@ check('rel_time_rendered', !!cards[0].querySelector('.pb-attn-meta') &&
 if (fromChip) fromChip.click();
 check('from_chip_loads_conv',
       !!_calls.find(c => c[0] === 'loadConversation' && c[1] === 'conv-asker'));
+// The SAME provenance chip on the proposal card — every decision the panel
+// shows must carry its author, not only the blocking one.
+const propChip = cards[1] ? cards[1].querySelector('.pb-attn-from[data-conv-id="conv-proposer"]') : null;
+check('proposal_from_chip', !!propChip && propChip.textContent.indexOf('架构决策讨论') !== -1);
+if (propChip) propChip.click();
+check('proposal_from_loads_conv',
+      !!_calls.find(c => c[0] === 'loadConversation' && c[1] === 'conv-proposer'));
 // The proposal renders commit + reject inline.
 check('commit_btn', !!body.querySelector('.pb-attn-act[data-act="commit"]'));
 check('reject_btn', !!body.querySelector('.pb-attn-act[data-act="reject"]'));
@@ -272,6 +281,7 @@ def test_attention_tab_renders_and_resolves_inline():
                  'PASS blocking_is_the_epic', 'PASS question_rendered',
                  'PASS option_chips', 'PASS answer_submit',
                  'PASS from_chip_rendered', 'PASS from_chip_loads_conv',
+                 'PASS proposal_from_chip', 'PASS proposal_from_loads_conv',
                  'PASS reason_section', 'PASS yourcall_label',
                  'PASS option_desc_visible', 'PASS rel_time_rendered',
                  'PASS commit_btn', 'PASS reject_btn',
@@ -337,12 +347,14 @@ def test_NC_server_order_is_preserved():
 @pytest.mark.skipif(not _node_deps_available(),
                     reason='node + jsdom dev-deps not installed (run npm install)')
 def test_NC_provenance_chip_is_load_bearing():
-    """NC: drop the provenance lookup in a COPY → the card renders without the
-    from-chip → from_chip_rendered FAILS.
+    """NC: drop the provenance lookup in a COPY → BOTH decision cards render
+    without the from-chip → from_chip_rendered AND proposal_from_chip FAIL.
 
     The 2026-08 owner complaint was precisely "no indication of which
-    conversation sent this". This proves the chip is produced by the
-    askedByConvId wiring, not by some incidental render of the payload."""
+    conversation sent this". The shared `_fromChip` builder is what makes
+    the chip impossible to lose on ONE card while keeping the other — this
+    neuter proves both cards draw it from the SAME wiring, not from two
+    hand-copies that could drift apart."""
     with open(_ATTN_SRC, encoding='utf-8') as f:
         original = f.read()
     anchor = "    var fromId = item.askedByConvId || item.convId || '';"
@@ -355,8 +367,11 @@ def test_NC_provenance_chip_is_load_bearing():
             f.write(patched)
         output = _write_and_run(_HARNESS, copy_path, 'ncfrom')
         assert 'FAIL from_chip_rendered' in output, \
-            ('NC: dropping the provenance lookup must remove the from-chip:\n'
-             + output)
+            ('NC: dropping the provenance lookup must remove the from-chip '
+             'from the halted-epic card:\n' + output)
+        assert 'FAIL proposal_from_chip' in output, \
+            ('NC: the SAME neuter must remove it from the proposal card too '
+             '— one builder, not two copies:\n' + output)
     finally:
         try:
             os.remove(copy_path)

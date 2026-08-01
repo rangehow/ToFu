@@ -58,11 +58,20 @@ class RateLimitError(Exception):
             the entire KEY as exhausted for the day instead of cycling to it
             again after a brief cooldown.
         reason: Short human-readable reason (first ~200 chars of the error body).
+
+        is_saturation: True when the dispatch layer gave up after EVERY
+            candidate slot stayed 429-saturated past the bounded escalation
+            budget (TOFU_429_SATURATION_SECS). Deliberately separate from
+            ``is_quota``: the keys are HEALTHY (merely contended), so this
+            flag must never feed the key-exhausted-for-today channel — it
+            exists so callers (llm_fallback) can tell "swap models" apart
+            from "top up the key".
     """
     def __init__(self, msg='', *, is_quota=False, is_gateway=False, reason='',
-                 status_code=0, is_shared_contention=False):
+                 status_code=0, is_shared_contention=False, is_saturation=False):
         super().__init__(msg)
         self.is_quota = bool(is_quota)
+        self.is_saturation = bool(is_saturation)
         # True when this is NOT a real per-key 429 but a gateway 5xx
         # (502/503/504) — or an upstream-vendor transient wrapped in a 4xx —
         # mapped onto the slot-rotation path. Real 429s reflect

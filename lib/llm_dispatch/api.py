@@ -14,6 +14,7 @@ import threading
 import time
 from collections import defaultdict
 
+from lib.llm_errors import RateLimitError
 from lib.log import get_logger
 
 from .factory import get_dispatcher
@@ -51,6 +52,50 @@ except (ValueError, TypeError) as e:
     logger.debug('[Dispatch] TOFU_GATEWAY_OUTAGE_BUDGET_S parse failed, '
                  'using default: %s', e)
     _GATEWAY_OUTAGE_BUDGET_S = 120.0
+
+
+def _saturation_budget_secs() -> float:
+    """Bounded-escalation budget (seconds) for continuous all-slot 429
+    saturation (pt_a21cd6eb 交付①).
+
+    ``TOFU_429_SATURATION_SECS`` (default 120). 0 disables the escalation
+    and restores the legacy infinite-rotation behaviour byte-for-byte.
+    Read per call so tests / ops can toggle without a restart.
+    """
+    try:
+        return float(os.environ.get('TOFU_429_SATURATION_SECS', '') or '120')
+    except (ValueError, TypeError):
+        return 120.0
+
+
+def _saturation_escalate(log_prefix, label, *, elapsed_s, budget_s, cycles,
+                         model):
+    """Raise the bounded 429-saturation escalation (pt_a21cd6eb 交付①).
+
+    Fires once per dispatch call when EVERY candidate slot has been
+    continuously rate-limited past the budget — the caller (llm_fallback)
+    treats it as a model-swap trigger. ``is_saturation`` keeps it OUT of
+    the key-exhausted-for-today channel: the keys are healthy, merely
+    contended (2026-08-01 incident: a VU carrier spun 3900+ cycles / 75min
+    on a saturated shared-key model while a fallback model sat idle).
+    """
+    logger.warning(
+        '%s %s: 429 saturation — every candidate slot continuously '
+        'rate-limited for %.0fs (budget %.0fs, %d cycles, model=%s) — '
+        'escalating to caller for model fallback',
+        log_prefix, label, elapsed_s, budget_s, cycles, model or '?')
+    try:
+        from lib.log import audit_log as _audit
+        _audit('llm_429_saturation', model=model or '',
+               elapsed_s=round(elapsed_s, 1), cycles=cycles,
+               budget_s=budget_s)
+    except Exception as _ae:
+        logger.debug('%s saturation audit_log failed: %s', log_prefix, _ae)
+    raise RateLimitError(
+        f'429 saturation: all candidate slots continuously rate-limited for '
+        f'{elapsed_s:.0f}s (budget {budget_s:.0f}s, {cycles} cycles)',
+        is_saturation=True, status_code=429,
+        reason=f'saturation:{elapsed_s:.0f}s')
 
 
 def _raise_dispatch_exhausted(last_err, *, max_retries, capability,
@@ -278,9 +323,22 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
     _429_count = 0
     _last_exclusion_reset = time.monotonic()  # ★ track when we last reset hard-error exclusions
     _EXCLUSION_RESET_INTERVAL = 60  # reset exclude_pairs every 60s during 429 cycling
+    # Bounded 429-saturation escalation clock (pt_a21cd6eb) — set on the
+    # first genuine-429 starvation signal, checked at the loop top.
+    _sat_start = None
 
     while hard_attempts < max_retries:
         total_attempts = hard_attempts + _429_count
+
+        # ★ Bounded 429-saturation escalation (mirror of dispatch_stream).
+        _sat_budget = _saturation_budget_secs()
+        if _sat_budget > 0 and _sat_start is not None \
+                and (time.monotonic() - _sat_start) > _sat_budget:
+            _saturation_escalate(
+                log_prefix, 'dispatch_chat',
+                elapsed_s=time.monotonic() - _sat_start,
+                budget_s=_sat_budget, cycles=_429_count,
+                model=prefer_model)
 
         # ★ Periodically reset hard-error exclusions during 429 cycling.
         #   502/timeout errors may be transient (gateway restart), but
@@ -326,6 +384,8 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
             if _429_count > 0 or _slots_exist:
                 time.sleep(0.3)
                 _429_count += 1
+                if _sat_start is None:
+                    _sat_start = time.monotonic()
                 if _429_count % 20 == 0:
                     logger.info(
                         '%s dispatch_chat: still cycling (slots cooling, %d times), '
@@ -422,6 +482,8 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
                     log_prefix, slot.key_name, slot.model, _err_str)
                 continue
             _429_count += 1
+            if _sat_start is None and not _is_gateway:
+                _sat_start = time.monotonic()
             # ★ Don't exclude anything — slot.record_error() sets a 0.5s
             #   cooldown which naturally steers pick_and_reserve to another
             #   slot.  After cooldown the slot is eligible again.
@@ -923,6 +985,12 @@ class _StreamRetryState:
         # cleared by any real per-key 429 or a success. Used to bound a
         # whole-upstream outage without capping genuine per-key contention.
         self._gateway_streak_start = None
+        # Monotonic timestamp of the FIRST genuine-429 starvation signal in
+        # this dispatch call (None = not starving). Feeds the bounded
+        # saturation escalation (pt_a21cd6eb): real per-key/contention 429s
+        # and 429-equivalent cooldown cycles start the clock; gateway 5xx
+        # has its own streak budget above and never starts this one.
+        self._saturation_start = None
 
     @property
     def total_attempts(self):
@@ -1007,14 +1075,30 @@ class _StreamRetryState:
                 self._gateway_streak_start = time.monotonic()
         else:
             self._gateway_streak_start = None
+            if self._saturation_start is None:
+                self._saturation_start = time.monotonic()
 
     def note_success(self):
         """A slot answered — clear any active gateway-outage streak."""
         self._gateway_streak_start = None
+        self._saturation_start = None
+
+    def saturation_exceeded(self, budget_s):
+        """True when every slot has been 429-starved for > ``budget_s``.
+
+        ``budget_s <= 0`` disables the cap (legacy infinite-rotation
+        behaviour). Requires an active starvation clock — a dispatch that
+        never saw a genuine 429 (e.g. hard-error churn) is not 'saturated'.
+        """
+        if budget_s <= 0 or self._saturation_start is None:
+            return False
+        return (time.monotonic() - self._saturation_start) > budget_s
 
     def note_cooldown_cycle(self):
         """All slots in transient cooldown (slot is None, 429-equivalent)."""
         self._429_count += 1
+        if self._saturation_start is None:
+            self._saturation_start = time.monotonic()
 
     def note_quota_key(self, slot):
         """Quota-exhausted 429 — disable the key for this dispatch; hard attempt."""
@@ -1190,6 +1274,19 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
             raise state.last_err or RuntimeError(
                 'Gateway outage: no slot reachable for %.0fs'
                 % _GATEWAY_OUTAGE_BUDGET_S)
+
+        # ★ Bounded 429-saturation escalation (pt_a21cd6eb 交付①). A real
+        #   per-key/contention 429 rotates forever BY DESIGN — but when EVERY
+        #   slot for the requested model stays saturated past the budget, the
+        #   wait is indistinguishable from quota exhaustion for the user, so
+        #   escalate to the caller (llm_fallback swaps models). 0 disables.
+        _sat_budget = _saturation_budget_secs()
+        if state.saturation_exceeded(_sat_budget):
+            _saturation_escalate(
+                log_prefix, 'dispatch_stream',
+                elapsed_s=time.monotonic() - state._saturation_start,
+                budget_s=_sat_budget, cycles=state._429_count,
+                model=prefer_model)
 
         # Log available slots at start of each attempt for debugging
         logger.debug(
@@ -1728,6 +1825,16 @@ async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
                 % _GATEWAY_OUTAGE_BUDGET_S)
 
         state.maybe_reset_exclusions(log_prefix, 'async_dispatch_stream')
+
+        # ★ Bounded 429-saturation escalation (lockstep with sync
+        #   dispatch_stream — pt_a21cd6eb 交付①).
+        _sat_budget = _saturation_budget_secs()
+        if state.saturation_exceeded(_sat_budget):
+            _saturation_escalate(
+                log_prefix, 'async_dispatch_stream',
+                elapsed_s=time.monotonic() - state._saturation_start,
+                budget_s=_sat_budget, cycles=state._429_count,
+                model=prefer_model)
 
         slot = dispatcher.pick_and_reserve(
             capability=capability, prefer_model=prefer_model,

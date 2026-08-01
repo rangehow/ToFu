@@ -408,8 +408,21 @@ def discard_task(task_id: str, conv_id: str | None = None) -> None:
     entry it claimed, so the carrier is invisible to every reconnect path. Safe
     to call unconditionally (idempotent, best-effort).
     """
+    # Observability (pt_a21cd6eb ③-1): this is the ONLY registry pop for
+    # non-terminal chat tasks. A live task that vanished from the registry
+    # while its worker thread kept running (fb6d1f8d / 7ddbc751, 2026-08-01)
+    # left zero fingerprints — log every pop with the caller so the next
+    # evaporation leaves a trail. Rare path; the frame read is cheap enough.
+    try:
+        import sys as _sys
+        _caller = _sys._getframe(1).f_code.co_name
+    except Exception:
+        _caller = '?'
     with tasks_lock:
-        tasks.pop(task_id, None)
+        _popped = tasks.pop(task_id, None)
+    logger.info('[Manager] discard_task: task=%s conv=%s popped=%s caller=%s',
+                (task_id or '?')[:8], (conv_id or '')[:8],
+                bool(_popped), _caller)
     if conv_id:
         with _conv_latest_task_lock:
             if _conv_latest_task.get(conv_id) == task_id:

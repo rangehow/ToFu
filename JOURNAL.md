@@ -1,3 +1,20 @@
+### 2026-08-01(假离线根修三层全落地:WS 保活三修 + health 与 DB 解耦 + 恢复路径窗口化/去重) — epic `pt_afbaf3d7b9be4f91` DONE;commits `959fd1c9`(①,兄弟 msab0zlx 落地含其精修)+ `3d51d9a1`(②③,5 文件 +449);新套件 4+3,**NEUTER×4 各咬各的**(pong 排序/存活证据/自适应/merge-removal+窗口钉);环 **114/114**(20 套件)+ 契约/隔离/清单/async/冒烟 **47/47**
+
+- **起源:** owner 问「后端正常前端却显示离线,能不能从根上增强 WebSocket」——答案是 WS 只是报警器,根修要三层。立案后兄弟 msab0zlx(硬刷新断连定案会话)主动 OVERLAP 合并:他的 pt_ef42c2a1e9f946f3 两靶并入,并移交第四项需求「同 conv 全量 GET in-flight 去重(验收:并发全量 GET ≤1)」。
+- **①WS 保活三修(`959fd1c9`,兄弟代提交含其精修):** ①a 服务端 pong 走 PushClient 控制通道(deque maxlen=64,drain 优先于数据积压,空闲时 ctl_waiter 即时唤醒)——旧 FIFO 下 pong 排在 MB 级事件帧后,活 socket 被 8s 看门狗误杀;①b 任意入站帧即存活证据(兄弟精修:ledger 前置到 JSON.parse 之前,畸形帧也算数;getLatency 暴露 lastInboundAt);①c 超时按观测 RTT 自适应 `clamp(4×RTT, 8s, 30s)`——慢但活的链路不再被强关进「重连→全量重拉→停摆→再超时」自喂养环。
+- **②/api/health 存活与 DB 解耦(`3d51d9a1`):** 旧实现内联 `SELECT 1`——PG-on-FUSE 抖动(实测 4~7s Slow query)把健康应答推出前端 3s/4s 探针预算 → 红横幅误报。改为 TTL 后台 daemon 探测缓存;唯一阻塞窗是 2s 冷启动有界 join(≪3s,保住 healthcheck.py --runtime 的首判真实性);**cached DB 失败只降级 db_responsive,永不翻 ok**——进程存活与 DB 通畅是两轴。
+- **③恢复路径(`3d51d9a1`):** ③a api.js conversations.get 加 per-conv in-flight Promise 合并(8-01 断连环实测同一 176.8MB 会话 25s 内被全量 GET 6 次);**有意偏差:signalled 调用绕过合并**(10s/15s 探针预算不可互相取消)——已写进代码注释并回报移交方;③b recover worker 全量 GET→`?window=3` 尾窗(normalized row store O(3),trimmed 重字段因 adopt 行全 guard 而自然保本地副本)。
+- **协作形态记一笔:** 兄弟在我改完 push.js 后做了语义保持的精修并代提交①+同步 NEUTER 针——共享树下「提交撞车」的最优解:针失配红一出即发现,重读后直接采纳,零返工。提交时一次 `git commit -- <paths> -m` 语序错误(pathspec 吞了 -m)导致首试失败,惯例再证:**message 在前、`-- paths` 在后**;兄弟暂存文件用 `git reset HEAD <path>` 弹出后他们自己会重新 add,互不干扰。
+- **验收路径:** ①③ 前端走 bundle 首请求自愈;② 需进程重启生效(与 PG 播种人门票同窗口即可,不单独要求重启)。
+
+### 2026-08-01(托盘状态持久化落地 + 一次自伤事故与营救:重建路由在陈旧进程上死锁事件环,构建改走出世路径) — commit `497454b4`(3 文件 +244;新套件 **10/10**,邻接环 preseed+CLI+agent **70/70**;**NEUTER×2 各咬各的**);构建后台出世运行中(磁盘态 running)
+
+- **持久化交付(owner 拍板,deny-by-default 边界不动):** 托盘「Enable Computer Control」+ write/exec/gui 三档原先只活在 launcher 内存 `_cc_state`,重启 App 即重置——这正是 owner「没开的全开」诉求背后的真实烦点。修法=记住选择而非默认全开:`lib/desktop_agent/config.py` 增 `computer_control {enabled, perms}`;persist **只接在两个显式点击处理器**(enable 开关+权限档),quit/startup 路径一律不写(否则每次 Quit 抹掉选择);`_restore_cc_state` 启动时把已存 perms 合并在 deny-all 基线上(未来新档对老配置仍默认 OFF)并自动拉起 agent;**全新安装仍 OFF**。套件 10 钉(往返/bool 强转/未知键丢弃/畸形 blob/字段保全/基线合并/全新安装不动/wiring pin persist-exactly-2);NEUTER:掏空 `load_computer_control`→精确 5 红,摘一路 persist→pin 精确 1 红,cp/cmp 字节还原。
+- **自伤事故(立此存照):** 踢重建 `POST /api/v1/desktop/build` 把 09:08 启动的陈旧进程**自死锁**——旧版代码在事件环线程上的 async 路由里调 `_sync_safe_get_json`→`_await_coro_on_loop`,等一个只有环自己能 resolve 的 future(py-spy 实证 MainThread 永久停在 `desktop_build(desktop.py:271)` 的 `result()`,Recv-Q 积到 34)。**HEAD 已是 async 原生**(`await request.get_json`,我全文读过),死锁是陈旧进程 artifact,owner 的 PG 播种重启顺带根治。我的二次伤害:首个 000 后未诊断,又补一发同路由 POST 正中同一地雷,再 12 次重试把队列越积越长。**规则:这台服务器 HTTP 000 先 py-spy 看环,绝不盲重试 POST。**
+- **营救与顺手:** ①构建改走出世路径——`setsid nohup` 直调 `winbuilder.build_installer`(git archive HEAD=`959fd1c9`,已实证 `497454b4` 是其祖先;与死锁服务器零交互;状态落同一 store manifest,服务器恢复后 status 端点自然可见);②杀掉一颗失控 wineserver(16:14 起空转 ~240 CPU 分钟,无任何子进程、构建日志 5 小时未写;wineserver 下次 wine 调用自动重生,可逆)。
+- **watchers×2 已挂:** ①agent 注册表 45min——用户做完三步(ssh -L → 粘贴连接行 → 勾 Enable)后 `connected=true` 且 agents 非空即触发验收(死锁期 000 按未就绪容忍);②构建完成 60min——读磁盘 manifest,installer 落地或 state=error 均触发。
+
+### 2026-08-01(前后端统一接口契约层落地:契约文档 + 后端漂移棘轮 + memory.py 样板迁移) — 接 owner「全面优化前后端与集成,统一接口、标准化每次调用」指令;epic `pt_931e16c4`(我认领,切片 1/多);charter 提案「路由层唯一信封规则」已上人审
 ### 2026-08-01(前后端统一接口契约层落地:契约文档 + 后端漂移棘轮 + memory.py 样板迁移) — 接 owner「全面优化前后端与集成,统一接口、标准化每次调用」指令;epic `pt_931e16c4`(我认领,切片 1/多);charter 提案「路由层唯一信封规则」已上人审
 
 - **先普查后动刀(实测账):** 后端 650 handler 中 ad-hoc `return jsonify(` 292 处、api_* 已 891 用、@safe_route 26、parse_body 325 vs 裸 get_json 仅 3;前端 api.js 隔离闸满分(仅 2 白名单变量 fetch)。**与兄弟架构评审(mrxinirv)分工:巨型文件拆分/性能归其 Epic-E 与 pt_03f4cdf1,我取无人认领的「接口契约层」。** 关键实证纠偏:server.py 的 500/503 边界**已**对 /api/* 返 JSON 信封(非 HTML)——「未捕获异常形状不统一」是误报,真缺口只剩信封漂移无棘轮与契约无单文档。
@@ -56,6 +73,13 @@
 
 - **状态:** 主路径(BIND_HOST shell 重启)放弃,走备选:办公机 `ssh -L 15000:127.0.0.1:15000 <codelab-ssh>` + agent 连 `http://127.0.0.1:15000`。答复后实测注册表仍空、egress 五态 unknown——agent 尚未起。**watcher 形态修正(吸收 7-31 误报教训):不用 condition_command 退出码(本环境观测不可靠),改 check_command 输出注册表 JSON 由 poll LLM 读内容判定**——`agents` 非空且含 `egress=true` 才算 ready,空表/缺能力位不触发。60s×30 轮(30 分钟窗口),耗尽则挂板请 owner 贴 agent 控制台输出。
 - **agent 上线后验收序:** 能力位 → oauth/status 翻 `state=agent`+`verdict=geo_blocked` → Claude 登录(服务器交换优先序) → 流式聊天(egress_http_stream 全链) → Codex O3(curl_cffi 是否必需)定案。
+
+### 2026-08-01(Epic-E sub-5A+5B:第三梯队双连发——access_matrix 零改动降级 + swarm_panel 七闸降级,农场 core 1,418,722 B) — commits sub-5A `见 git log` + sub-5B(6 文件);两套件 8+10 检查,NEUTER×4 全精确;环 46/46;生产实测因服务器事件环停摆挂起(timer 追)
+
+- **sub-5A(access_matrix.js 55KB,普查结论「零改动可降级」):** 三个外部调用点**全部早已 typeof 闸**(core_panel.js:108、provider_render.js:261、canMatrix 门 227-243——矩阵开关钮本身只在模块在场时渲染,内联 onclick 永不射空);`_stgMatrixOpen` 声明在模块内随包走;唯一 load-time 副作用是自足 resize IIFE。这是「旧代码本来就写对了」的免费降级——普查先于改动再次兑现。
+- **sub-5B(streaming_swarm_panel.js 55KB):** 3 符号 7 调用点原本全裸(含 `_syncToolRoundsDOM` 热路径与 chat_render 首屏恢复),同批装闸——退化契约与 sub-4 完全一致:缺席回 `_renderUnifiedToolLine` 通用行,下一个 SSE 事件自愈。双 ticker 只摸自己渲染的 DOM,随包走。**顺带重锚预存红**:`test_streaming_swarm_panel_registered` 的「eager 排序」断言与降级直接矛盾,改为 deferred 不变量(在 _DEFERRED_FILES/不在 _BUNDLE_FILES/dev-fallback 签保留);e2e(visual+slow)的 `_buildSwarmPanelHTML` typeof 断言现依赖 idle prefetch,已标记。
+- **生产实测挂起(非我故障):** runbook 扩 sub-5 六项后实测服务器 curl 000×3——进程活着(42.6% CPU、14.3GB RSS)但事件环停摆(cgroup 95.6% 反复 relief + FUSE 上 8s 慢查询,正是 pt_afbaf3d7/pt_ef42c2a1 两兄弟 epic 在修的「假离线」族)。**绝不重启(本会话自己的 run_task 就在该进程里跑)**;timer 追服务器恢复后自动补跑 runbook 并回写分类账。
+- **累计:** core 1,550,424 → 农场 1,418,722(−132KB 压缩态),距 1.2MB ~219KB;已降级源码 443KB。下一片:myday 面板对(先拆 `_mydayScheduleReminder` load-time 副作用)+ project.js 拆分(37 调用点,比照 tool_rounds「状态子集留 core」)。
 
 ### 2026-08-01(Epic-E sub-4:tool_rounds.js 261KB 拆分落地——「冷渲染留 core + 富渲染降级」首例,生产 core 1,460,290 B) — commit `fcddc420`(10 文件;新套件 12+2 行为,wire-parity 闸升级 43 轮;NEUTER×2 精确;环 81/81;runbook 20 项 ALL GREEN)
 

@@ -1000,7 +1000,20 @@ async function _recoverOfflineConversations(trigger) {
       return;
     }
     try {
-      const data = await Api.conversations.get(conv.id, { signal: AbortSignal.timeout(10000) });
+      /* ★ Windowed tail read (pt_afbaf3d7 ③): this path inspects ONLY the
+       *   trailing message (content length / finishReason / usage). After an
+       *   overnight sleep HUNDREDS of offline convs each fetched their FULL
+       *   blob here — the reconnect thundering herd (one 176.8 MB conv was
+       *   served 6× in 25s on 2026-08-01). ?window=3 reads O(3) rows from
+       *   the normalized store instead of detoasting the whole history; the
+       *   trailing ghost/husk reconcile runs within the tail window, so the
+       *   verdict is identical. Heavy fields (toolRounds/segments) arrive
+       *   trimmed — the adopt lines below are all guarded, so a missing
+       *   toolRounds simply keeps the local copy instead of clobbering it. */
+      const data = await Api.conversations.get(conv.id, {
+        signal: AbortSignal.timeout(10000),
+        query: { window: '3' },
+      });
       if (!data) return;
       const serverMsgs = data.messages || [];
       if (serverMsgs.length === 0) return;

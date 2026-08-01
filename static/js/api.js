@@ -561,6 +561,45 @@
   // get: parsed JSON or null on 4xx/network error. Pass {signal} to abort.
   // getResponse: raw Response — for callers that need to inspect status
   //   codes (e.g. distinguish 503 retryable from 404 ghost).
+  /* ── Per-conv in-flight merge (pt_afbaf3d7 ③, hand-off from
+   *   pt_ef42c2a1e9f946f3). The 2026-08-01 hard-refresh congestion collapse
+   *   served the SAME 176.8 MB conversation 6× in 25s because the boot load,
+   *   the notify verify, the push-reconnect catch-up and the Case-F recovery
+   *   each issued their OWN full GET — runWithConcurrency caps parallelism
+   *   but does not dedupe. Identical in-flight GETs now share ONE Promise;
+   *   the acceptance invariant is: concurrent same-shape GETs for the same
+   *   conv ≤ 1 on the wire.
+   *
+   *   Scoped to SIGNAL-LESS callers: a caller that passes an AbortSignal owns
+   *   an explicit probe budget (recover worker 10s, translation verify 15s),
+   *   and sharing the underlying fetch would let one caller's abort cancel
+   *   everyone else's read. Those stay one-request-per-call — the storm
+   *   sources above are all signal-less.
+   *
+   *   Keyed by conv + the windowing shape (?window / ?before_seq), so a
+   *   full read, a tail-window read and a scroll-up page never collide.
+   *   getResponse (raw Response) is NOT deduped — a parsed-JSON Promise
+   *   cannot be shared with a caller that needs the raw stream. */
+  const _convGetInflight = new Map(); // key → Promise
+  function _convGetDeduped(convId, opts) {
+    if (opts && opts.signal) {
+      return get(`/api/v1/conversations/${encodeURIComponent(convId)}`,
+                 Object.assign({ onError: 'null' }, opts));
+    }
+    const q = (opts && opts.query) || {};
+    const key = convId + '|' + (q.window || '') + '|' + (q.before_seq || '');
+    const hit = _convGetInflight.get(key);
+    if (hit) return hit;
+    const p = get(`/api/v1/conversations/${encodeURIComponent(convId)}`,
+                  Object.assign({ onError: 'null' }, opts || {}));
+    _convGetInflight.set(key, p);
+    const clear = () => {
+      if (_convGetInflight.get(key) === p) _convGetInflight.delete(key);
+    };
+    p.then(clear, clear);
+    return p;
+  }
+
   // patchSettings: targeted settings PATCH — fire-and-forget; returns
   //   Response for callers who care, but typically chained as a fire-
   //   and-forget promise.
@@ -568,9 +607,7 @@
   //   read status (200 / 409 stale-checkpoint / etc.) and parse the body.
   // getDebugMessages: server-side rendered message list with system prompt.
   const conversations = {
-    get: (convId, opts) =>
-      get(`/api/v1/conversations/${encodeURIComponent(convId)}`,
-          Object.assign({ onError: 'null' }, opts || {})),
+    get: (convId, opts) => _convGetDeduped(convId, opts),
     getResponse: (convId, opts) =>
       request(`/api/v1/conversations/${encodeURIComponent(convId)}`,
               Object.assign({ method: 'GET', parse: 'response', onError: 'null' }, opts || {})),

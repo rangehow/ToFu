@@ -380,7 +380,14 @@
 
   // orchestrations --------------------------------------------------
   const orchestrations = {
-    list:     async ()        => (await get('/api/v1/orchestrations', { onError: 'null' })) || [],
+    // Coordinated bare-array migration (docs/API_CONTRACT.md §4): the
+    // backend now wraps the array as {ok, items}; unwrap here with an
+    // Array.isArray fallback so a pre-migration server still works.
+    list:     async ()        => {
+      const d = await get('/api/v1/orchestrations', { onError: 'null' });
+      if (d && Array.isArray(d.items)) return d.items;
+      return Array.isArray(d) ? d : [];
+    },
     get:      (id)            => get(`/api/v1/orchestrations/${encodeURIComponent(id)}`, { onError: 'null' }),
     create:   (def)           => post('/api/v1/orchestrations', def, { parse: 'response' }),
     update:   (id, def)       => put(`/api/v1/orchestrations/${encodeURIComponent(id)}`, def, { parse: 'response' }),

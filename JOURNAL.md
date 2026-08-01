@@ -1,3 +1,10 @@
+### 2026-08-01(api-contract 批 4:orchestrations.py 16 站点清零 + **契约 §4 裸数组协调迁移首次执行**;与幽灵的正面对峙定案——消除 > 登记) — epic `pt_931e16c4` 切片 4;commit 见下(5 文件);环 **117/117**;NEUTER×2 各咬一侧
+
+- **正面对峙(设计分歧,值得立案的判例):** 幽灵本轮改了策略——它转完 orchestrations 15 个 dict 站点后**故意留下裸数组**,并在漂移套件里发明 `CARVE_OUT_SITES`(站点级注册表,机制本身是好东西,chat_queue 族未来正需要)+ 更新基线,即「冻结债务」路线。我按 owner 指令与契约 §4 原文(「协调前后端迁移,非增量转换」)走了**消除债务**路线:后端 `api_ok({'items': _read_all()})` + api.js `list()` 内解包 `.items` 并留 `Array.isArray(d)` 回落(滚动部署斜率下新老服务器通吃),**调用方零改动**(mobile_panels/studio 拿到的仍是数组)。两路线直接冲突:我的迁移使幽灵注册表条目指向不存在的代码,`test_carve_out_sites_valid` 精确红。定案:移除该条目(机制保留)、头注改述「消除优先于登记」——注册是迁移不能时的退路,不是默认姿势。
+- **幽灵版转码复核(这次信不过必须逐行):** 其 15 站点转换全部正确(api_created 用在两个 201、kwargs/dict 混形但线等价、flask import 已加 api_created),导入冒烟过——收编。但**教训已两次成立:它的编辑可以是增益(批 2/3 站点扩列)也可以是削弱(批 3 删碰撞证明),复核是硬性动作。**
+- **纪律:** failing-first 三红(parity/coordination/shipped-source,parity 红是我自己的断言 bug——lib 透传 verdict 自带 ok:False,ok 断言改为「legacy 有 ok 随 legacy」);NEUTER×2 各咬一侧:摘后端包装→shipped-source 红;摘前端 unwrap→coordination 锚红;cmp 还原;node --check api.js 过;环 **117/117**。
+- **进度账:** 272→**197 站点 29 文件**(memory 10 + project 38 + mcp 21 + orchestrations 16 = 85 已清零)。剩余大头:paper.py 47(待拆分路线图落地)、common.py 14(兄弟 WIP)、chat.py 11、desktop.py 11、upload/conversations 各 10。下一批候选 api_v1/desktop.py(11)或 skills.py(9)。
+
 ### 2026-08-01(LLM 调用失败全谱审计:L1 微压缩护栏迟滞化根修「单轮 miss 引爆自喂养重记账环」+ gap_s 遥测修复 + durable floor 静默失守可观测化) — owner 指令「细查近期 LLM 调用失败案例,逐一分析修复,客户端 bug 绝不容忍」;commit `8c9a7210`(5 文件 +315/-14;新套件 **14/14**,NEUTER 精确 3 红 cmp 还原;环 **992**(cache 家族 199+434+149+196+196)全绿,2 红干净 HEAD 原生 stash 实证另案)
 
 - **失败谱全账(今日 error.log + CacheRoundRecord 4050 条实测):** ①422 配额(您的 Credit 已耗尽)×80 —— 提供方侧,key 日禁 + 回退 kimi-k3 工作正常,非我方 bug;②`read timeout=10.0` ×4 —— 全链 traceback 实证是 **TLS 握手超时**(connect 阶段,`_ssl.c:993`),urllib3 `_raise_timeout` 把 connect 超时误标为 read timeout;10s 连接界是设计(慢网关快速失败),回退已生效,非 bug;③PREMATURE STREAM CLOSE ×2 —— 载荷完整(tool_calls=1)照走工具执行 + slot 软冷却,处理正确;④无签名 reasoning_content 剥离 ×40/日 —— OpenAI-compat 面永不下发签名的既有缓解(provider_face 实测钉死),签名重建路径今日 83 次,设计内;⑤**前缀突变 ×~20 —— 唯一的真客户端 bug 族,本批根修**。

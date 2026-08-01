@@ -36,8 +36,10 @@ migrated file — never a silent baseline remainder).
 
 Established 2026-08-01 from a full-tree scan (272 ad-hoc sites across 33
 files + 8 protocol-locked sites in 4 carve-out files). Same-day batches
-zeroed api_v1/memory.py (10), api_v1/project.py (38) and api_v1/mcp.py (21)
-→ 213 sites across 30 files remain.
+zeroed api_v1/memory.py (10), api_v1/project.py (38), api_v1/mcp.py (21)
+and api_v1/orchestrations.py (16 — its bare-array list site was MIGRATED
+via the contract §4 coordinated front+back path, the first executed
+instance, not registered as debt) → 197 sites across 29 files remain.
 """
 
 from __future__ import annotations
@@ -77,14 +79,14 @@ CARVE_OUT_FILES: dict[str, str] = {
 # still exist in its file (stale entries fail test_carve_out_sites_valid),
 # and each entry needs a matching row in docs/API_CONTRACT.md §4.
 CARVE_OUT_SITES: dict[str, dict[str, str]] = {
-    'api_v1/orchestrations.py': {
-        'return jsonify(_read_all())':
-            'bare-array legacy payload — GET /api/v1/orchestrations returns '
-            'the definitions array bare and Api.orchestrations.list reads the '
-            'body AS an array (``|| []``); enveloping changes the top-level '
-            'type (contract §4 bare-array class — needs a coordinated '
-            'front+back migration, not an additive conversion)',
-    },
+    # The machinery is kept for FUTURE site-level carve-outs (e.g. the
+    # chat_queue bare-array family when that file is migrated). Its first
+    # entry — api_v1/orchestrations.py's ``return jsonify(_read_all())`` —
+    # was NOT left registered: it was MIGRATED 2026-08-01 via the contract
+    # §4 coordinated front+back path (backend api_ok({'items': …}) +
+    # Api.orchestrations.list unwraps with an Array.isArray fallback),
+    # the first executed instance of that path. Registration is for sites
+    # that CANNOT migrate; elimination beats preservation wherever one can.
 }
 
 # ── Per-file ratchet baseline ────────────────────────────────────────
@@ -93,7 +95,6 @@ CARVE_OUT_SITES: dict[str, dict[str, str]] = {
 # delete the entry at zero) in the same commit.
 BASELINE: dict[str, int] = {
     'paper.py': 47,
-    'api_v1/orchestrations.py': 15,
     'common.py': 14,
     'chat.py': 11,
     'api_v1/desktop.py': 11,

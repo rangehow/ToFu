@@ -25,8 +25,6 @@
    Resolving controls are the SAME calls the owning tabs make
    (Api.project.boardAnswer / commitCharter / dismissProposal), so there is one
    backend contract per action, not a second implementation that can drift.
-   Items that cannot be resolved in two clicks (a file conflict) render a
-   deep-link INTO the owning tab instead of a copy of it.
 
    Bundled by lib/js_bundler.py (_DEFERRED_FILES, after project-brain.js —
    reads window.ProjectBrain._state at runtime). Strings live under
@@ -132,14 +130,6 @@
     return '<span class="pb-attn-sev pb-attn-sev-' + _esc(severity) + '">' +
       ((typeof Icon === 'function') ? Icon(glyph, 11) : '') +
       '<span>' + _esc(label) + '</span></span>';
-  }
-
-  /** A "go to the tab that owns this" link (used when the item is not
-   *  resolvable inline — we deep-link rather than duplicate the surface). */
-  function _openTabBtn(tab, labelKey, fallback) {
-    return '<button type="button" class="pb-attn-goto" data-goto-tab="' + _esc(tab) + '">' +
-      ((typeof Icon === 'function') ? Icon('arrowRight', 12) : '') +
-      '<span>' + _esc(_t(labelKey, fallback)) + '</span></button>';
   }
 
   /**
@@ -269,24 +259,9 @@
       '</div>');
   }
 
-  /** A live file-overlap. Not resolvable by a button — the operator decides
-   *  whether to intervene — so this deep-links into Team rather than cloning
-   *  the peer controls. */
-  function _conflictCard(item) {
-    return _card(item,
-      '<div class="pb-attn-head">' + _sevPill(item.severity) +
-        '<span class="pb-attn-kind">' +
-        _esc(_t('projectBrain.attnKindConflict', 'File conflict')) + '</span></div>' +
-      '<div class="pb-attn-body">' + _esc(item.text) + '</div>' +
-      '<div class="pb-attn-actions">' +
-        _openTabBtn('peers', 'projectBrain.attnOpenTeam', 'Open Team') +
-      '</div>');
-  }
-
   var _RENDERERS = {
     board_question: _questionCard,
     charter_proposal: _proposalCard,
-    conflict: _conflictCard,
   };
 
   /**
@@ -428,17 +403,6 @@
   }
 
   function _wireActions(el) {
-    // Deep-links into an owning tab.
-    var gotos = el.querySelectorAll('.pb-attn-goto');
-    for (var g = 0; g < gotos.length; g++) {
-      gotos[g].addEventListener('click', function (ev) {
-        var tab = ev.currentTarget.getAttribute('data-goto-tab');
-        if (tab && window.ProjectBrain &&
-            typeof window.ProjectBrain._selectTab === 'function') {
-          window.ProjectBrain._selectTab(tab);
-        }
-      });
-    }
     // Enter in an answer input submits (mirrors the Board lane).
     var inputs = el.querySelectorAll('.pb-attn-answer');
     for (var n = 0; n < inputs.length; n++) {

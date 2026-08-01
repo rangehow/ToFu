@@ -117,10 +117,12 @@ check('module_exposed', !!(PBA && typeof PBA.renderAttention === 'function'));
 const body = win.document.getElementById('projectBrainAttentionBody');
 check('real_panel_element_exists', !!body);
 
-// ── Scenario: one blocking epic + one advisory proposal + one conflict,
-//    in the SERVER's priority order (blocking first), plus 2 on cooldown. ──
+// ── Scenario: one blocking epic + one advisory proposal, in the SERVER's
+//    priority order (blocking first), plus 2 on cooldown. (A live file
+//    conflict is deliberately NOT an attention item — 2026-08-01 owner
+//    directive — so none appears in this fixture.) ──
 PBA.renderAttention({
-  blocking: 1, advisory: 2, needsYou: 3, waiting: 2,
+  blocking: 1, advisory: 1, needsYou: 2, waiting: 2,
   items: [
     { type: 'board_question', severity: 'blocking', id: 'pt_halted',
       title: 'Migrate the schema', question: 'Postgres or SQLite?',
@@ -130,23 +132,18 @@ PBA.renderAttention({
       askedByConvId: 'conv-asker', askedByTitle: 'Egress 调研', ts: 1754000000000 },
     { type: 'charter_proposal', severity: 'advisory', id: 'prop_1',
       text: 'Adopt the new parser', tab: 'charter' },
-    { type: 'conflict', severity: 'advisory', id: 'src/shared.py',
-      path: 'src/shared.py',
-      text: 'conv A and conv B are concurrently editing src/shared.py',
-      tab: 'peers' },
   ],
 });
 
 const html = body.innerHTML;
 const cards = body.querySelectorAll('.pb-attn-card');
-check('three_cards', cards.length === 3);
+check('two_cards', cards.length === 2);
 // SERVER ORDER PRESERVED — the blocking card is first. The module must not
 // re-sort; the backend already ordered it (that is the SSOT contract).
 check('blocking_card_first', cards[0] && cards[0].classList.contains('pb-attn-blocking'));
 check('blocking_is_the_epic', cards[0] && cards[0].getAttribute('data-attn-type') === 'board_question');
-check('advisory_cards_follow',
-  cards[1] && cards[1].classList.contains('pb-attn-advisory') &&
-  cards[2] && cards[2].classList.contains('pb-attn-advisory'));
+check('advisory_card_follows',
+  cards[1] && cards[1].classList.contains('pb-attn-advisory') && !cards[2]);
 // The halted epic renders its question + INLINE resolving controls.
 check('question_rendered', html.indexOf('Postgres or SQLite?') !== -1);
 check('option_chips', body.querySelectorAll('.pb-attn-act[data-act="answerOpt"]').length === 2);
@@ -171,16 +168,13 @@ check('from_chip_loads_conv',
 // The proposal renders commit + reject inline.
 check('commit_btn', !!body.querySelector('.pb-attn-act[data-act="commit"]'));
 check('reject_btn', !!body.querySelector('.pb-attn-act[data-act="reject"]'));
-// The conflict is NOT resolvable by a button — it deep-links into Team.
-check('conflict_deeplink', !!body.querySelector('.pb-attn-goto[data-goto-tab="peers"]'));
-check('conflict_text_verbatim', html.indexOf('src/shared.py') !== -1);
 // Cooldown epics are a muted reassurance FOOTNOTE, never cards (they need
 // nothing from the human — listing them would devalue the surface).
 check('waiting_footnote', !!body.querySelector('.pb-attn-waiting'));
-check('waiting_not_a_card', cards.length === 3);
+check('waiting_not_a_card', cards.length === 2);
 // Tab badge reflects the count AND the blocking alarm.
 const badge = win.document.getElementById('pbTabCountAttention');
-check('badge_count', badge && badge.textContent === '3' && badge.hidden === false);
+check('badge_count', badge && badge.textContent === '2' && badge.hidden === false);
 check('badge_blocking_class', badge && badge.classList.contains('pb-tab-count-blocking'));
 
 // ── Clicking an option chip must call boardAnswer with the option label ──
@@ -189,16 +183,11 @@ if (chip) chip.click();
 // ── Reject must call dismissProposal with the proposal id ──
 const reject = body.querySelector('.pb-attn-act[data-act="reject"]');
 if (reject) reject.click();
-// ── The deep-link must switch the panel tab ──
-const goto = body.querySelector('.pb-attn-goto[data-goto-tab="peers"]');
-if (goto) goto.click();
 // ── "New chat" on the halted-epic card delegates to the shared launcher ──
 const convBtn = cards[0] ? cards[0].querySelector('.pb-attn-act[data-act="createConv"]') : null;
 check('createconv_btn_on_epic', !!convBtn);
 check('createconv_absent_on_proposal',
       cards[1] && !cards[1].querySelector('[data-act="createConv"]'));
-check('createconv_absent_on_conflict',
-      cards[2] && !cards[2].querySelector('[data-act="createConv"]'));
 if (convBtn) convBtn.click();
 
 // ── Focus channel (Board "go answer" deep-link): scroll + flash the card ──
@@ -223,7 +212,6 @@ setTimeout(() => {
   check('answer_sends_option_label', !!answered && answered[2] === 'SQLite');
   const dismissed = _calls.find(c => c[0] === 'dismissProposal');
   check('reject_hits_dismissProposal', !!dismissed && dismissed[1] === 'prop_1');
-  check('deeplink_switches_tab', _selectedTab === 'peers');
   const launched = _calls.find(c => c[0] === 'createConv');
   check('createconv_delegates', !!launched && launched[1] === 'pt_halted');
   check('createconv_sends_original_title',
@@ -280,19 +268,19 @@ def test_attention_tab_renders_and_resolves_inline():
     output = _write_and_run(_HARNESS, _ATTN_SRC, 'main')
     fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
     assert not fails, 'attention-tab failures:\n' + output
-    for must in ('PASS three_cards', 'PASS blocking_card_first',
+    for must in ('PASS two_cards', 'PASS blocking_card_first',
                  'PASS blocking_is_the_epic', 'PASS question_rendered',
                  'PASS option_chips', 'PASS answer_submit',
                  'PASS from_chip_rendered', 'PASS from_chip_loads_conv',
                  'PASS reason_section', 'PASS yourcall_label',
                  'PASS option_desc_visible', 'PASS rel_time_rendered',
                  'PASS commit_btn', 'PASS reject_btn',
-                 'PASS conflict_deeplink', 'PASS waiting_footnote',
+                 'PASS waiting_footnote',
                  'PASS waiting_not_a_card', 'PASS badge_blocking_class',
                  'PASS answer_hits_boardAnswer', 'PASS answer_sends_option_label',
-                 'PASS reject_hits_dismissProposal', 'PASS deeplink_switches_tab',
+                 'PASS reject_hits_dismissProposal',
                  'PASS createconv_btn_on_epic', 'PASS createconv_absent_on_proposal',
-                 'PASS createconv_absent_on_conflict', 'PASS createconv_delegates',
+                 'PASS createconv_delegates',
                  'PASS createconv_sends_original_title',
                  'PASS focus_flashes_card', 'PASS focus_not_flashed_before_render',
                  'PASS focus_pending_honored_after_render',

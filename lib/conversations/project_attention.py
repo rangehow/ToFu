@@ -31,6 +31,15 @@ What is deliberately NOT an attention item:
     gates"), never as a task.
   • **Watch items** — the human's own standing concerns (their outbox, not
     their inbox). They live in the Status tab.
+  • **A live file conflict** (two active peers touching the same file).
+    Notify-only and SELF-CLEARING — it is recomputed from the presence
+    registry and vanishes when a peer goes idle — and it has no resolving
+    control: the system deliberately never locks, the operator decides
+    whether to intervene. Owner directive 2026-08-01: an item that needs
+    nothing from the human must not occupy this surface. The overlap stays
+    visible where LIVE STATUS belongs — the collab bar's detail lines
+    (``summary.conflictMessages``) and the Team tab, both fed by
+    ``lib.presence.conflict.detect_overlaps`` directly.
   • **A peer hard-abort approval** — a LIVE, synchronous
     ``request_human_guidance`` prompt, not durable state; there is nothing to
     enumerate after the fact.
@@ -62,13 +71,12 @@ _SEVERITY_RANK = {'blocking': 0, 'advisory': 1}
 # rather than dependent on which sub-read finished first.
 _TYPE_RANK = {
     'board_question': 0,
-    'conflict': 1,
-    'charter_proposal': 2,
+    'charter_proposal': 1,
 }
 
-# A conflict message is a fully-formed backend string; cap it so one pathological
-# advisory can't dominate the panel. DISPLAY-ONLY fields: never apply it to a
-# field a resolving control submits back (see _charter_proposals).
+# Cap for DISPLAY-ONLY short fields (e.g. an epic title) so one pathological
+# value can't dominate the panel. Never apply it to a field a resolving
+# control submits back (see _charter_proposals).
 _TEXT_MAX = 600
 
 # The block REASON is the card's background section ("why did this stop?") —
@@ -206,52 +214,6 @@ def _charter_proposals(project_path: str) -> list[dict]:
     } for p in props]
 
 
-def _conflicts(project_path: str) -> list[dict]:
-    """Live file-set overlaps between two active conversations.
-
-    Recomputed from the SAME ``detect_overlaps`` judgment the live conflict
-    broadcast uses — no second mirror, no stored state. Advisory: both
-    conversations keep running; the human decides whether to intervene.
-    """
-    from lib.presence.conflict import detect_overlaps
-    from lib.presence.registry import snapshot
-    peers = snapshot(project_path).get('peers', []) or []
-    if not peers:
-        return []
-    out = []
-    # detect_overlaps returns {'path', 'peers': [composite keys], 'message'} —
-    # the message is backend-formed and rendered VERBATIM (the frontend never
-    # composes conflict text). The contended path is the natural stable id.
-    for a in detect_overlaps(peers):
-        msg = (a.get('message') or '').strip()
-        path = a.get('path') or ''
-        if not msg:
-            continue
-        # A peer key is 'convId' or 'convId#agentId' — project the conversation
-        # half so a caller can mark "this involves the conv I'm looking at".
-        keys = a.get('peers', []) or []
-        conv_ids = []
-        for k in keys:
-            cid = str(k).split('#', 1)[0]
-            if cid and cid not in conv_ids:
-                conv_ids.append(cid)
-        out.append({
-            'type': 'conflict',
-            'severity': 'advisory',
-            'id': path or msg[:64],
-            'path': path,
-            'text': msg[:_TEXT_MAX],
-            'convIds': conv_ids,
-            'peers': keys,
-            # detect_overlaps carries no timestamp (it is recomputed live, not
-            # stored) — 0 sorts it last within its type, which is right: a
-            # conflict is defined by its path, not its age.
-            'ts': 0,
-            'tab': 'peers',
-        })
-    return out
-
-
 def _waiting_count(project_path: str) -> int:
     """Epics on a self-expiring cooldown — informational reassurance only.
 
@@ -290,8 +252,7 @@ def build_attention_items(project_path: str, conv_id: str = '') -> dict:
 
     items: list[dict] = []
     for label, source in (('board', _board_questions),
-                          ('charter', _charter_proposals),
-                          ('conflict', _conflicts)):
+                          ('charter', _charter_proposals)):
         try:
             items.extend(source(project_path))
         except Exception as e:
@@ -303,8 +264,6 @@ def build_attention_items(project_path: str, conv_id: str = '') -> dict:
             owner = it.get('ownerConvId') or it.get('convId') or ''
             if owner:
                 it['mine'] = owner == conv_id
-            elif it.get('convIds'):
-                it['mine'] = conv_id in it['convIds']
 
     items.sort(key=lambda it: (
         _SEVERITY_RANK.get(it.get('severity'), 9),

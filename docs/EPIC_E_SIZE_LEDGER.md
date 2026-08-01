@@ -39,8 +39,8 @@
 | 15 | core/health_stream_timer.js | 61,573 | **已降级（sub-3B）** | 零 stub（无一次性接线）；闸 + idle prefetch |
 | 16 | ui/streaming_render.js | 57,383 | boot-critical | 流式渲染热路径 |
 | 17 | myday.js | 56,261 | 可降级（第三梯队） | My Day 面板，用户动作触发 |
-| 18 | ui/streaming_swarm_panel.js | 54,946 | 可降级（第三梯队） | swarm 面板，非首屏 |
-| 19 | settings/providers/access_matrix.js | 54,558 | 可降级（第三梯队） | 设置面板；settings 族应整族评估 |
+| 18 | ui/streaming_swarm_panel.js | 54,946 | **已降级（sub-5B）** | swarm 面板，非首屏；7 调用点装闸 + 通用行退化（同 sub-4 契约） |
+| 19 | settings/providers/access_matrix.js | 54,558 | **已降级（sub-5A）** | 设置面板；3 调用点全部早已 typeof 闸——零改动可降级 |
 | 20 | main/main_toolbar_ui.js | 54,496 | boot-critical | 顶栏即首屏本体 |
 
 ## tofu-scene + tofu-pet 普查（2026-08-01，sub-3C 工作单）
@@ -73,9 +73,11 @@
 | 2026-08-01 | sub-3B | `6baf1083` | health_stream_timer.js (62KB) | 同上（与 3A 同批生效） | 同上 | 5 闸 + 零 stub 设计；农场同构构建 −13.9KB 净额（兄弟增量抵销部分） |
 | 2026-08-01 | sub-3C | `df664a2d` | tofu-pet.js + tofu-scene.js (160KB) | **1,493,217**（`bundle-5c05d29b.js`，同日实测） | **549,924**（`feature-53a9cd44.js`） | 零闸零 stub（普查复核）；农场与生产**同 hash** 验证；runbook ALL GREEN（sub-3A+3B+3C 三片 14 项全过） |
 | 2026-08-01 | sub-4 | `fcddc420` | tool_rounds.js 拆分（−58KB 源） | **1,460,290**（`bundle-827d3641.js`，同日实测） | **584,415**（`feature-f33bbae5.js`） | 拆分非 move：冷渲染留 core + conv-meta/timer-watcher 降级；行为 harness 双模态 + 升级后 wire-parity 闸 43 轮字节级（41 轮新旧逐字节一致）；农场与生产**同 hash**；runbook 20 项 ALL GREEN |
+| 2026-08-01 | sub-5A | 见 HEAD | access_matrix.js (55KB) | 农场 1,440,036（生产待实测） | 农场 607,894 | **零新闸零 stub**（3 调用点全部早已 typeof 闸，`_stgMatrixOpen` 随模块走）；NEUTER×2 精确；农场 9/9 |
+| 2026-08-01 | sub-5B | 见 HEAD | streaming_swarm_panel.js (55KB) | 农场 1,418,722（生产待实测） | 农场 629,604 | 7 调用点装闸 + 通用行退化；注册套件重锚 deferred 不变量；NEUTER×2 精确；农场 10/10；e2e(visual+slow) 的 `_buildSwarmPanelHTML` 断言现依赖 idle prefetch 落地，已标记 |
 
 ## 目标线与当前差距
 
 - **目标（暂定）**：core 压缩态 ≤ **1.2 MB**（待 owner 确认）。
-- **当前（2026-08-01 生产实测）**：**1,460,290 B** ⇒ 差距 ~260 KB（基线 1,550,424 → 累计 −90,134 B 压缩态；四片全部生产实测生效，runbook 20 项 ALL GREEN）。
-- **已排队**：累计已降级源码 333KB（53+62+160+58）。下一片：第三梯队（finish_info 90KB / project 89KB / myday 56KB / swarm_panel 55KB / access_matrix 55KB——用户动作面板族，比照 Project Brain 判例逐个普查；myday 有 load-time 自跑 `_mydayScheduleReminder()` 需先拆副作用）。
+- **当前**：生产 1,460,290 B（sub-4 实测）⇒ 差距 ~260 KB；农场含 sub-5A/5B **1,418,722 B** ⇒ 差距 ~219 KB（生产实测待服务器恢复后补）。
+- **已排队**：累计已降级源码 443KB（53+62+160+58+55+55）。下一片：myday.js+myday_tasks.js 面板对（load-time 自跑 `_mydayScheduleReminder()` 需先拆副作用）+ project.js 拆分（37 调用点，比照 tool_rounds 走「状态子集留 core + 面板 UI 降级」）；finish_info.js 90KB 与 tool_rounds 同属「首屏渲染族」，需拆分非 move。

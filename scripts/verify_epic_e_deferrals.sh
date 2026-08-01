@@ -5,7 +5,8 @@
 # AFTER the server restarts with a manifest that defers cross_tab_sync.js
 # (sub-3A) + health_stream_timer.js (sub-3B) + tofu-pet.js/tofu-scene.js
 # (sub-3C) + ui/tool_rounds_rich.js (sub-4, rich conv-meta + timer-watcher
-# renderers split out of tool_rounds.js):
+# renderers split out of tool_rounds.js) + access_matrix.js (sub-5A) +
+# streaming_swarm_panel.js (sub-5B):
 #
 #     bash scripts/verify_epic_e_deferrals.sh [base_url]
 #
@@ -25,7 +26,9 @@
 #   sub-4  10. served core EXCLUDES the rich renderer defs but KEEPS the
 #               typeof guards + _localizeInspectOps (cross-boundary stay)
 #         11. served feature INCLUDES the rich renderer defs
-#   ledger 12. prints measured byte counts for docs/EPIC_E_SIZE_LEDGER.md
+#   sub-5  12. served core EXCLUDES _renderAccessMatrix + _buildSwarmPanelHTML defs
+#         13. served feature INCLUDES both; core KEEPS both typeof guards
+#   ledger 14. prints measured byte counts for docs/EPIC_E_SIZE_LEDGER.md
 #
 # Exit 0 = all green; exit 1 = at least one failure (details on stdout).
 
@@ -125,6 +128,23 @@ printf '%s' "$FEAT_BODY" | grep -q 'function _renderTimerWatcherBlock(' \
   && pass "sub-4.11b feature includes the _renderTimerWatcherBlock def" \
   || fail "sub-4.11b feature MISSING the _renderTimerWatcherBlock def"
 
+# ── sub-5 (access_matrix + streaming_swarm_panel) ──
+printf '%s' "$CORE_BODY" | grep -q 'function _renderAccessMatrix(' \
+  && fail "sub-5A.12 core still contains the _renderAccessMatrix def" \
+  || pass "sub-5A.12 core excludes the _renderAccessMatrix def"
+printf '%s' "$FEAT_BODY" | grep -q 'function _renderAccessMatrix(' \
+  && pass "sub-5A.13 feature includes the _renderAccessMatrix def" \
+  || fail "sub-5A.13 feature MISSING the _renderAccessMatrix def"
+printf '%s' "$CORE_BODY" | grep -q 'function _buildSwarmPanelHTML(' \
+  && fail "sub-5B.12b core still contains the _buildSwarmPanelHTML def" \
+  || pass "sub-5B.12b core excludes the _buildSwarmPanelHTML def"
+printf '%s' "$FEAT_BODY" | grep -q 'function _buildSwarmPanelHTML(' \
+  && pass "sub-5B.13b feature includes the _buildSwarmPanelHTML def" \
+  || fail "sub-5B.13b feature MISSING the _buildSwarmPanelHTML def"
+printf '%s' "$CORE_BODY" | grep -q 'typeof _buildSwarmPanelHTML' \
+  && pass "sub-5B.13c core keeps the swarm-panel typeof guards" \
+  || fail "sub-5B.13c core lost the swarm-panel typeof guards"
+
 # ── ledger measurements ──
 CORE_BYTES=$(printf '%s' "$CORE_BODY" | wc -c)
 FEAT_BYTES=$(printf '%s' "$FEAT_BODY" | wc -c)
@@ -135,7 +155,7 @@ say "feature $FEAT  $FEAT_BYTES bytes"
 
 say ""
 if [ "$FAILS" -eq 0 ]; then
-  say "ALL GREEN — Epic-E deferrals sub-3A + sub-3B + sub-3C + sub-4 verified live."
+  say "ALL GREEN — Epic-E deferrals sub-3A + sub-3B + sub-3C + sub-4 + sub-5A/5B verified live."
   exit 0
 else
   say "$FAILS FAILURE(S) — deferrals NOT verified; do not mark shipped."

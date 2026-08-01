@@ -2773,7 +2773,7 @@ from lib.paper.podcast_engine import (
 
 
 @api_v1_paper_bp.route('/api/v1/paper/podcast/status', methods=['GET'])
-def podcast_status():
+async def podcast_status():
     """Feature status: is a TTS slot configured, which models, mode bands."""
     from lib import tts as _tts
     available = _tts.tts_available()
@@ -2929,7 +2929,7 @@ async def start_video_abstract_task():
 
 
 @api_v1_paper_bp.route('/api/v1/paper/video/lookup', methods=['GET'])
-def lookup_video_abstract():
+async def lookup_video_abstract():
     """Re-attach a paper's video-abstract task on tab open.
 
     Scans the motion runtime for the newest task tagged with this
@@ -2948,7 +2948,9 @@ def lookup_video_abstract():
             if t.get('paper_hash') == phash:
                 if best is None or t.get('created_at', 0) > best.get('created_at', 0):
                     best = t
-    resp = {'ok': True, 'report_available': has_report(phash)}
+    # Off-loop: has_report is a sync PG probe (get_thread_db).
+    resp = {'ok': True,
+            'report_available': await asyncio.to_thread(has_report, phash)}
     if best:
         from lib.agent_core.task_runtime import _epoch_ms
         resp.update({
@@ -3088,7 +3090,7 @@ def _lookup_paper_video_on_disk(phash: str) -> dict | None:
 
 
 @api_v1_paper_bp.route('/api/v1/paper/podcast/poll', methods=['GET'])
-def poll_podcast_task():
+async def poll_podcast_task():
     """Poll podcast events. Same cursor protocol as the report poll; on done
     the response flattens script / audioUrl / durationSec / scriptOnly."""
     task_id = request.args.get('task_id', '')
@@ -3189,7 +3191,7 @@ async def lookup_podcast():
 
 
 @api_v1_paper_bp.route('/api/v1/paper/podcast/script', methods=['GET'])
-def get_podcast_script():
+async def get_podcast_script():
     """Return the cached spoken script + meta (transcript tab, md export)."""
     phash = (request.args.get('paper_hash') or '').strip()
     mode = (request.args.get('mode') or 'short').strip() or 'short'
@@ -3199,7 +3201,9 @@ def get_podcast_script():
         return jsonify({'ok': False, 'error': 'paper_hash required'}), 400
     from lib import tts as _tts
     eff_voice = voice or _tts.default_voice()
-    cached = load_cached_podcast(phash, mode, lang, eff_voice)
+    # Off-loop: load_cached_podcast is a sync PG read (get_thread_db).
+    cached = await asyncio.to_thread(
+        load_cached_podcast, phash, mode, lang, eff_voice)
     if not cached:
         return jsonify({'ok': False, 'error': 'Podcast not found'}), 404
     return jsonify({
@@ -3215,7 +3219,7 @@ def get_podcast_script():
 
 @api_v1_paper_bp.route('/api/v1/paper/podcast/audio/<paper_hash>/<mode>/<lang>/<voice>',
                        methods=['GET'])
-def serve_podcast_audio(paper_hash, mode, lang, voice):
+async def serve_podcast_audio(paper_hash, mode, lang, voice):
     """Stream the podcast audio with HTTP Range support (seekable player).
 
     Path containment mirrors _safe_paper_file: the persisted file_path must
@@ -3232,7 +3236,10 @@ def serve_podcast_audio(paper_hash, mode, lang, voice):
     voice = unquote(voice or '')
     if voice == '-':
         voice = ''
-    cached = load_cached_podcast(paper_hash, mode, lang, voice)
+    # Off-loop: sync PG read; the streaming body itself is a sync generator,
+    # which Quart iterates via run_sync_iterable (executor) either way.
+    cached = await asyncio.to_thread(
+        load_cached_podcast, paper_hash, mode, lang, voice)
     fpath = (cached or {}).get('file_path') or ''
     if not cached or not fpath:
         return jsonify({'ok': False, 'error': 'Podcast audio not found'}), 404

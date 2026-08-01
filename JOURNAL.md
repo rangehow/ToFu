@@ -1,3 +1,10 @@
+### 2026-08-01(api-contract 批 6:skills.py 9 站点清零——413 消息保真判据) — epic `pt_931e16c4` 切片 6;commit 见下(4 文件);环 **121/121**;NEUTER×2 精确
+
+- **判点:** 9 站点全 dict;两处 413 超容字面量**不用** api_payload_too_large(该 helper 自排消息格式,legacy 文本「File exceeds 25 MB limit」可能被消费方正则匹配)→ api_error(msg, status=413) 原文保真。uninstall 双分支同 memory.py 判例(200→api_ok(deleted=True),404→api_not_found(…, deleted=False) 保兼容键)。
+- **自抓 harness bug(第二次同类):** parity 增量键允许集漏了 error 分支的 `+error`(memory 套件早有的规则,desktop/orchestrations 因其 404 字面量自带 error 键而没暴露)——uninstall-404 的 legacy body 只有 deleted:False,api_not_found 加 ok+error 两个键,误红。修:allowed = {'ok','error'} if is_error else {'ok'}。**同族断言三套件(mcp 幽灵版/desktop/orchestrations)已核:它们的 error 站点 legacy 均自带 error 键,无此隐患。**
+- **纪律:** failing-first 精确 1 红;NEUTER×2(回注 jsonify / 摘 api_created——paren needle);cmp 还原;导入冒烟;环 **121/121**。幽灵本批零干预。
+- **进度账:** 272→**177 站点 27 文件**(105 已清零,38.6%)。下一批 daily_report.py(9)。
+
 ### 2026-08-01(api-contract 批 5:desktop.py 11 站点清零——202 建造态走 api_payload) — 脑派续 epic `pt_931e16c4` 切片 5;commit 见下(4 文件);环 **119/119**;NEUTER×2 精确;本批幽灵零干预
 
 - **分类与判点:** 11 站点全 dict:状态大 dict(→api_ok,前端 desktop.status 读名字段,+ok 纯增量)/两个 202 builder-state(→api_payload,非标状态码,状态机键顶层保真)/mint 201(→api_created)/三个 `{'error':'not_found','message':…}` 404 字面量(→api_not_found('not_found', message=…),error+message 键存活,+ok:False 增量)。二进制下载 send_file 维持 §4 carve-out。

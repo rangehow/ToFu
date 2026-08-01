@@ -1,4 +1,9 @@
-### 2026-08-02(预存红清剿:tool_rounds_rich.js 的 bare renderChat( 迁移进 ConvView seam——全树零裸调用复归) — 脑派发接我自票 `pt_3f84ebfc876a4da8`;commit 见下(2 文件);守卫 18/18 转绿;NEUTER 精确(cmp 逐字节还原);邻接环 **38/38**
+### 2026-08-02(Epic-E sub-10 收尾:settings/ 整族 403KB 降级落地——生产 core 1,045,274 B,**1.2MB 验收线生产达成**) — epic `pt_3879f00e`;commit `503859b9`(5 文件,联席)+ runbook 52 项 ALL GREEN;ledger 行+判读已更
+
+- **破线数字:** 基线 1,550,424 → 生产 **1,045,274 B**(`bundle-40dde573.js`,农场/生产同 hash),累计 **−505KB 压缩态 / −32.6%**;较 1.2MB(≈1,228,800)余量 ~183KB。feature 1,012,457 B(下一战场,不属本 epic 口径)。十二片流水片片有账(commit/字节/NEUTER/runbook 证据链)。
+- **联席形态(共享树第四次共舞,首次按剧本走):** 兄弟会话(mrxinirv)全家迁移在飞期间,本会话以「普查独立反查」连抓两枚真坑并补丁在树,最终零冲突联席提交:①**branding.js 绝不能降级**——其普查「no boot callers」是错的:main.js:88/349 在 `_applyModelUI` **裸调** `_modelShortName()`(boot 模型绘制),降级即 boot ReferenceError;已还原留 core(家族对它 14 处调用全是 deferred→core 安全向),其套件与我套件各钉一根边界钉,NEUTER 双红互证独立鉴别力。②**'openSettings' 在 LoadGuard stub 表**——toggleMemory 同坑(sub-9C 判例),已摘除。两坑若随原普查出厂,分别是「boot 即破」与「设置齿轮裸窗死态」。
+- **纪律:** 双套件 22 检查 failing-first(4 红起点)+ NEUTER×2 精确(branding→双红 / 摘 openSettings stub→精确 1 红,cmp 字节还原);环 **96/96**;runbook 扩 sub-10 十项后 **52 项 ALL GREEN**(农场失败一次实证为第三方在飞截断 tool_rounds.js,自愈后重建同 hash——快照会撒谎,构建才是事实源)。
+- **收尾账(待 claim-holder 终审):** Epic-E 验收口径=core ≤1.2MB ✅ + 每片有账 ✅,ledger 已按「验收线已达成」改写,complete 判读归 mrxinirv(分工约定)。api-contract 兄弟同晚收官(paper.py 47 清零,272 站点全清零,契约棘轮值守)。
 
 - **病灶:** Epic-E sub-4(`fcddc420`)引入的 `_upgradeDegradedToolRounds` IIFE(deferred 富渲染包落地后给降级的 conv-meta/timer 轮做升级重渲染)用了裸 `renderChat(conv)`——`test_full_repaints_route_through_replaceAll` 的全树零裸调用契约当场抓住(step-5 后豁免注册表本已清零,这一处是 sub-4 的新增漏网)。
 - **修法:** 改走 `window.ConvView.replaceAll(conv.id, { forceScroll: false })`(全仓 15+ 处同款成语);forceScroll:false 对后台静默升级更优(不拽用户滚动条);`typeof renderChat` 守卫一并退役(seam 由 boot 硬检查保底,守卫明确禁止 typeof-guard 回潮)。

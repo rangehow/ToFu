@@ -9,7 +9,9 @@
 # streaming_swarm_panel.js (sub-5B) + myday.js/myday_tasks.js (sub-6) +
 # project.js split (sub-7, state core + panel deferred) +
 # ui/finish_info_rich.js (sub-8, lazy cost popover) +
-# settings-panel six-pack (sub-9, update/skills/memory/optimizer/timer/preferences):
+# settings-panel six-pack (sub-9, update/skills/memory/optimizer/timer/preferences) +
+# settings/ family (sub-10, the line-closer — branding.js STAYS core, boot
+# caller main.js:88/349):
 #
 #     bash scripts/verify_epic_e_deferrals.sh [base_url]
 #
@@ -43,7 +45,11 @@
 #   sub-9  20. served core EXCLUDES the six-pack defs but KEEPS the stub
 #               entries + the tofu:feature-bundle-loaded dispatch
 #         21. served feature INCLUDES the six-pack defs
-#   ledger 22. prints measured byte counts for docs/EPIC_E_SIZE_LEDGER.md
+#   sub-10 22. served core EXCLUDES the settings-family defs (openSettings /
+#               _renderProvidersTab) but KEEPS branding's _modelShortName
+#               (boot caller main.js:88/349) + the entry stubs
+#         23. served feature INCLUDES the settings-family defs
+#   ledger 24. prints measured byte counts for docs/EPIC_E_SIZE_LEDGER.md
 #
 # Exit 0 = all green; exit 1 = at least one failure (details on stdout).
 
@@ -261,6 +267,38 @@ printf '%s' "$FEAT_BODY" | grep -q 'function openMemoryModal(' \
   && pass "sub-9.21c feature includes the openMemoryModal def" \
   || fail "sub-9.21c feature MISSING the openMemoryModal def"
 
+# ── sub-10 (settings family deferral; branding boundary stays core) ──
+printf '%s' "$CORE_BODY" | grep -q 'function openSettings(' \
+  && fail "sub-10.22 core still contains the openSettings def" \
+  || pass "sub-10.22 core excludes the openSettings def"
+printf '%s' "$CORE_BODY" | grep -q 'function _renderProvidersTab(' \
+  && fail "sub-10.22b core still contains the _renderProvidersTab def" \
+  || pass "sub-10.22b core excludes the _renderProvidersTab def"
+printf '%s' "$CORE_BODY" | grep -q 'function _populateMcpTab(' \
+  && fail "sub-10.22c core still contains the _populateMcpTab def" \
+  || pass "sub-10.22c core excludes the _populateMcpTab def"
+printf '%s' "$CORE_BODY" | grep -q 'function _modelShortName(' \
+  && pass "sub-10.22d core keeps _modelShortName (branding boundary — boot caller main.js:88/349)" \
+  || fail "sub-10.22d core LOST _modelShortName — branding wrongly deferred, boot model paint ReferenceError"
+printf '%s' "$CORE_BODY" | grep -q '"openSettings"' \
+  && pass "sub-10.22e core keeps the openSettings stub entry" \
+  || fail "sub-10.22e core lost the openSettings stub entry"
+printf '%s' "$CORE_BODY" | grep -q '"switchSettingsTab"' \
+  && pass "sub-10.22f core keeps the switchSettingsTab stub entry" \
+  || fail "sub-10.22f core lost the switchSettingsTab stub entry"
+printf '%s' "$FEAT_BODY" | grep -q 'function openSettings(' \
+  && pass "sub-10.23 feature includes the openSettings def" \
+  || fail "sub-10.23 feature MISSING the openSettings def"
+printf '%s' "$FEAT_BODY" | grep -q 'function _renderProvidersTab(' \
+  && pass "sub-10.23b feature includes the _renderProvidersTab def" \
+  || fail "sub-10.23b feature MISSING the _renderProvidersTab def"
+printf '%s' "$FEAT_BODY" | grep -q 'function _populateMcpTab(' \
+  && pass "sub-10.23c feature includes the _populateMcpTab def" \
+  || fail "sub-10.23c feature MISSING the _populateMcpTab def"
+printf '%s' "$FEAT_BODY" | grep -q 'function _modelShortName(' \
+  && fail "sub-10.23d feature DUPLICATES _modelShortName (double branding)" \
+  || pass "sub-10.23d feature has no _modelShortName duplication"
+
 # ── ledger measurements ──
 CORE_BYTES=$(printf '%s' "$CORE_BODY" | wc -c)
 FEAT_BYTES=$(printf '%s' "$FEAT_BODY" | wc -c)
@@ -271,7 +309,7 @@ say "feature $FEAT  $FEAT_BYTES bytes"
 
 say ""
 if [ "$FAILS" -eq 0 ]; then
-  say "ALL GREEN — Epic-E deferrals sub-3A/3B/3C/4/5A/5B/6/7/8/9 verified live."
+  say "ALL GREEN — Epic-E deferrals sub-3A/3B/3C/4/5A/5B/6/7/8/9/10 verified live."
   exit 0
 else
   say "$FAILS FAILURE(S) — deferrals NOT verified; do not mark shipped."

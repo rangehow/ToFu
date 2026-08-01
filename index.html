@@ -62,7 +62,12 @@
     // Stub critical handlers that users can trigger immediately
     var stubs = ['handleKeyDown','sendMessage','newChat','togglePresetDropdown',
       'cycleTheme','toggleDebug','closeDebug','toggleSidebar','openSettings','toggleCodeExec',
-      'toggleBrowser','toggleMemory','toggleSwarm','toggleAutoTranslate',
+      /* 'toggleMemory' REMOVED 2026-08-01 (Epic-E sub-9): memory.js is
+         DEFERRED — a LoadGuard _notReady stub here makes feature-loader's
+         _installFeatureStub skip the lazy stub (it refuses to clobber an
+         existing function), leaving the toolbar button dead until the
+         bundle lands. Deferred entry points never belong in this list. */
+      'toggleBrowser','toggleSwarm','toggleAutoTranslate',
       'toggleAutoApply','selectThinkingDepth','cycleSearchMode','enterImageGenMode',
       'toggleSidebarSearch','closeSidebarSearch','togglePaperMode',
       'openOrchestration','openTaskMode','openDailyReport'];

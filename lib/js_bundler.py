@@ -1220,6 +1220,13 @@ _DEFERRED_ENTRY_POINTS = (
     'toggleMemoryAddForm', 'toggleMemoryFromModal',
     '_populateSkillsTab', '_populatePreferencesTab',
     '_renderSettingsUpdatePill',
+    # Defense-in-depth close-out (same slice): static panel onclicks
+    # clickable in the settings-open → bundle-land window — updateModal
+    # overlay closer, skills scope tabs + search, memory create form,
+    # preferences reload/save (image-gen precedent: stub every control
+    # reachable from server-spliced static panel HTML).
+    'closeUpdateModal', '_skillsSetScope', '_skillsFilter',
+    'openMemoryCreateForm', 'refreshPreferences', 'savePreferences',
 )
 
 # ── Bundle-manifest freshness (2026-07-24 / 2026-07-31 incident class) ──

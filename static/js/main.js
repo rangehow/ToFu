@@ -450,7 +450,10 @@ function _applyMemoryUI(enabled) {
   document
     .getElementById("memoryBadge")
     ?.classList.toggle("visible", memoryEnabled);
-  _updateMemoryModalBtn();
+  /* memory.js is DEFERRED (Epic-E sub-9): the modal button painter is
+   * absent until the feature bundle lands — gate, or the tool-state
+   * application path throws ReferenceError. */
+  if (typeof _updateMemoryModalBtn === 'function') _updateMemoryModalBtn();
 }
 function _applyImageGenToolUI(enabled) {
   imageGenEnabled = !!enabled;
